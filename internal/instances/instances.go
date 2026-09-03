@@ -1,4 +1,4 @@
-// Package instances plans, launches, supervises, and routes running models.
+// Package instances plans, launches, supervises, records, recovers, and routes running models.
 package instances
 
 import (
@@ -9,12 +9,17 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
+	"os"
 	"path"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/calibrate"
+	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/tasks"
@@ -36,15 +41,21 @@ const (
 	kindRun      = "run"
 	historyMax   = 100
 	bindHost     = "127.0.0.1"
-	measureKey   = "device.used"
 	closeTimeout = 30 * time.Second
+	probeTimeout = 2 * time.Second
+	restartNote  = "daemon restarted"
 )
 
-// Returned when an instance id or name is not known
-var ErrUnknownInstance = errors.New("unknown instance")
+var (
+	// Returned when an instance id or name is not known
+	ErrUnknownInstance = errors.New("unknown instance")
+	errStopped         = errors.New("stopped before ready")
+)
 
 // Owns every instance of this daemon
 type Manager struct {
+	DB          *db.DB
+	Dir         string
 	Store       *store.Store
 	Runtimes    *runtime.Registry
 	Installs    *installs.Manager
@@ -61,11 +72,22 @@ type Manager struct {
 }
 
 type instance struct {
-	mu   sync.Mutex
-	rec  *v1.Instance
-	rt   *runtime.Runtime
-	proc *launch.Process
-	log  *launch.Log
+	mgr      *Manager
+	mu       sync.Mutex
+	rec      *v1.Instance
+	rt       *runtime.Runtime
+	proc     launch.Handle
+	log      *launch.Log
+	exited   chan struct{}
+	exitOnce sync.Once
+}
+
+func (m *Manager) newInstance(rec *v1.Instance, rt *runtime.Runtime) *instance {
+	in := &instance{mgr: m, rec: rec, rt: rt, exited: make(chan struct{})}
+	if terminal(rec.GetState()) {
+		in.exitOnce.Do(func() { close(in.exited) })
+	}
+	return in
 }
 
 func (in *instance) snapshot() *v1.Instance {
@@ -74,10 +96,42 @@ func (in *instance) snapshot() *v1.Instance {
 	return proto.Clone(in.rec).(*v1.Instance)
 }
 
+// Applies fn, writes the record, and releases stop waiters once terminal
 func (in *instance) update(fn func(*v1.Instance)) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	fn(in.rec)
+	if err := in.mgr.DB.PutInstance(context.Background(), in.rec); err != nil {
+		in.mgr.Log.Warn("instance record write failed", "id", in.rec.GetId(), "err", err)
+	}
+	if terminal(in.rec.GetState()) {
+		in.exitOnce.Do(func() { close(in.exited) })
+	}
+}
+
+func (in *instance) grace() time.Duration {
+	if in.rt != nil {
+		return in.rt.StopGrace()
+	}
+	return runtime.DefaultStopGrace
+}
+
+func (in *instance) stopRequested() bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.rec.GetState() == v1.InstanceState_INSTANCE_STATE_STOPPING || in.rec.GetState() == v1.InstanceState_INSTANCE_STATE_STOPPED
+}
+
+func (in *instance) handle() launch.Handle {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.proc
+}
+
+func (in *instance) attach(proc launch.Handle) {
+	in.mu.Lock()
+	in.proc, in.log = proc, proc.Log()
+	in.mu.Unlock()
 }
 
 // Plans and launches a stored model, returning the record and its startup task
@@ -95,9 +149,9 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 	}
 	var install *v1.Install
 	if req.GetInstallId() != "" {
-		install, err = m.Installs.Get(req.GetInstallId())
+		install, err = m.Installs.Get(ctx, req.GetInstallId())
 	} else {
-		install, err = m.Installs.Default(rt.Manifest.GetId())
+		install, err = m.Installs.Default(ctx, rt.Manifest.GetId())
 	}
 	if err != nil {
 		return nil, nil, err
@@ -106,7 +160,7 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 	if name == "" {
 		name = path.Base(stored.GetRepo()) + ":" + stored.GetGroup()
 	}
-	if _, taken := m.Route(name); taken || m.starting(name) {
+	if m.live(name) != nil {
 		return nil, nil, fmt.Errorf("%w: instance %q is already running", runtime.ErrParam, name)
 	}
 	descriptor, err := m.describe(ctx, stored)
@@ -158,26 +212,32 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 	if err != nil {
 		return nil, nil, err
 	}
-	in := &instance{rt: rt, rec: &v1.Instance{
-		Id:        newID(),
-		Name:      name,
-		SourceId:  stored.GetSourceId(),
-		Repo:      stored.GetRepo(),
-		Group:     stored.GetGroup(),
-		RuntimeId: rt.Manifest.GetId(),
-		InstallId: install.GetId(),
-		Params:    stringParams(params),
-		Command:   append([]string{rendered.Command}, rendered.Args...),
-		Endpoint:  fmt.Sprintf("http://%s:%d", bindHost, port),
-		State:     v1.InstanceState_INSTANCE_STATE_STARTING,
-		CreatedAt: timestamppb.Now(),
-		Plan:      plan,
-	}}
+	in := m.newInstance(&v1.Instance{
+		Id:             newID(),
+		Name:           name,
+		SourceId:       stored.GetSourceId(),
+		Repo:           stored.GetRepo(),
+		Group:          stored.GetGroup(),
+		RuntimeId:      rt.Manifest.GetId(),
+		InstallId:      install.GetId(),
+		Params:         rendered.Params,
+		Command:        append([]string{rendered.Command}, rendered.Args...),
+		Endpoint:       fmt.Sprintf("http://%s:%d", bindHost, port),
+		State:          v1.InstanceState_INSTANCE_STATE_STARTING,
+		CreatedAt:      timestamppb.Now(),
+		Plan:           plan,
+		Request:        proto.Clone(req).(*v1.RunRequest),
+		DesiredRunning: true,
+	}, rt)
 	m.mu.Lock()
+	if m.liveLocked(name) != nil {
+		m.mu.Unlock()
+		return nil, nil, fmt.Errorf("%w: instance %q is already running", runtime.ErrParam, name)
+	}
 	m.list = append(m.list, in)
 	m.pruneLocked()
 	m.mu.Unlock()
-	task := m.Tasks.Start(kindRun, "run "+name, map[string]string{"instance": in.rec.Id, "name": name}, func(ctx context.Context, h *tasks.Handle) error {
+	task := m.Tasks.Start(kindRun, "run "+name, map[string]string{"instance": in.rec.GetId(), "name": name}, func(ctx context.Context, h *tasks.Handle) error {
 		return m.start(ctx, h, in, rendered, install, descriptor, profile)
 	})
 	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })
@@ -188,72 +248,126 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 	rec := in.snapshot()
 	h.Logf("command: %s", strings.Join(rec.GetCommand(), " "))
 	h.Progress(0, 0, "launching")
-	proc, err := m.Launcher.Launch(ctx, launch.Spec{Command: rendered.Command, Args: rendered.Args, Env: rendered.Env, Dir: install.GetDir()})
+	proc, err := m.Launcher.Launch(ctx, launch.Spec{Command: rendered.Command, Args: rendered.Args, Env: rendered.Env, Dir: install.GetDir(), LogPath: m.logPath(rec.GetId())})
 	if err != nil {
 		in.update(func(r *v1.Instance) {
+			if terminal(r.State) {
+				return
+			}
 			r.State = v1.InstanceState_INSTANCE_STATE_FAILED
 			r.Error = err.Error()
 			r.StoppedAt = timestamppb.Now()
 		})
 		return err
 	}
-	in.mu.Lock()
-	in.proc, in.log = proc, proc.Log()
-	in.rec.Pid = int32(proc.Pid())
-	in.mu.Unlock()
+	in.attach(proc)
+	var stopping bool
+	in.update(func(r *v1.Instance) {
+		r.Pid = int32(proc.Pid())
+		stopping = r.State == v1.InstanceState_INSTANCE_STATE_STOPPING
+	})
 	go m.supervise(in)
-	health := in.rt.Manifest.GetLaunch().GetHealth()
-	url := rec.GetEndpoint() + health.GetPath()
-	h.Message("waiting for " + url)
-	err = launch.WaitHealthy(ctx, proc, url, time.Duration(health.GetIntervalMs())*time.Millisecond, time.Duration(health.GetTimeoutMs())*time.Millisecond)
-	if err != nil {
-		hits := m.fail(in, err)
-		for _, hit := range hits {
-			h.Logf("triage %s: %s. %s", hit.GetId(), hit.GetSummary(), hit.GetHint())
-		}
-		if ctx.Err() == nil {
-			proc.Stop(in.rt.StopGrace())
-		}
-		if len(hits) > 0 {
-			return fmt.Errorf("%s: %s", hits[0].GetSummary(), hits[0].GetHint())
-		}
+	if stopping {
+		h.Logf("stop requested before the runtime was ready")
+		proc.Stop(in.grace())
+		return errStopped
+	}
+	if err := m.waitReady(ctx, h, in, proc); err != nil {
 		return err
 	}
+	proc.Sync()
 	measurements := in.rt.Measure(proc.Log().Tail(0))
 	if after, perr := m.Host.Profile(ctx, true); perr == nil {
 		used := deviceFree(before) - deviceFree(after)
 		if used > 0 {
-			measurements = append(measurements, &v1.Measurement{Key: measureKey, Bytes: uint64(used)})
+			measurements = append(measurements, &v1.Measurement{Key: estimate.DeviceUsedKey, Bytes: uint64(used)})
 			if rec.GetPlan() != nil {
-				if cerr := m.Calibration.Record(in.rt.Manifest.GetId(), d.GetArchitecture(), uint64(used), estimate.PlannedDevice(rec.GetPlan())); cerr != nil {
+				if cerr := m.Calibration.Record(ctx, in.rt.Manifest.GetId(), d.GetArchitecture(), uint64(used), estimate.PlannedDevice(rec.GetPlan())); cerr != nil {
 					m.Log.Warn("calibration write failed", "err", cerr)
 				}
 			}
 		}
 	}
+	m.ready(h, in, measurements)
+	return nil
+}
+
+// Polls health, and on failure records triage, stops the process, and returns the reason
+func (m *Manager) waitReady(ctx context.Context, h *tasks.Handle, in *instance, proc launch.Handle) error {
+	health := in.rt.Manifest.GetLaunch().GetHealth()
+	url := in.snapshot().GetEndpoint() + health.GetPath()
+	h.Message("waiting for " + url)
+	err := launch.WaitHealthy(ctx, proc, url, time.Duration(health.GetIntervalMs())*time.Millisecond, time.Duration(health.GetTimeoutMs())*time.Millisecond)
+	if err == nil {
+		return nil
+	}
+	if in.stopRequested() {
+		h.Logf("stop requested before the runtime was ready")
+		proc.Stop(in.grace())
+		return errStopped
+	}
+	hits := m.fail(in, err)
+	proc.Stop(in.grace())
+	for _, hit := range hits {
+		h.Logf("triage %s: %s. %s", hit.GetId(), hit.GetSummary(), hit.GetHint())
+	}
+	if len(hits) > 0 {
+		return fmt.Errorf("%s: %s", hits[0].GetSummary(), hits[0].GetHint())
+	}
+	return err
+}
+
+// Marks an instance ready unless a stop arrived meanwhile and reports measurements on the task
+func (m *Manager) ready(h *tasks.Handle, in *instance, measurements []*v1.Measurement) {
+	var rec *v1.Instance
 	in.update(func(r *v1.Instance) {
 		if r.State == v1.InstanceState_INSTANCE_STATE_STARTING {
 			r.State = v1.InstanceState_INSTANCE_STATE_READY
 			r.ReadyAt = timestamppb.Now()
 		}
-		r.Measurements = measurements
+		r.Measurements = mergeMeasurements(r.Measurements, measurements)
+		rec = proto.Clone(r).(*v1.Instance)
 	})
 	for _, ms := range measurements {
 		h.Logf("%s %s", ms.GetKey(), estimate.Human(ms.GetBytes()))
 	}
 	h.Progress(1, 1, "ready at "+rec.GetEndpoint())
 	h.Logf("ready %s at %s", rec.GetName(), rec.GetEndpoint())
-	return nil
 }
 
-// Marks an instance failed and returns triage hits
+// Replaces measurements by key, keeping ones only the old set has
+func mergeMeasurements(old, fresh []*v1.Measurement) []*v1.Measurement {
+	if len(fresh) == 0 {
+		return old
+	}
+	seen := map[string]bool{}
+	for _, m := range fresh {
+		seen[m.GetKey()] = true
+	}
+	out := append([]*v1.Measurement(nil), fresh...)
+	for _, m := range old {
+		if !seen[m.GetKey()] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// Marks an instance failed unless already terminal and returns its triage hits
 func (m *Manager) fail(in *instance, err error) []*v1.TriageHit {
 	var hits []*v1.TriageHit
-	if in.log != nil {
-		hits = m.Triage.Scan(in.rt.Manifest.GetTriage(), in.log.Tail(0))
+	in.mu.Lock()
+	log, proc := in.log, in.proc
+	in.mu.Unlock()
+	if proc != nil {
+		proc.Sync()
+	}
+	if log != nil && in.rt != nil {
+		hits = m.Triage.Scan(in.rt.Manifest.GetTriage(), log.Tail(0))
 	}
 	in.update(func(r *v1.Instance) {
-		if r.State == v1.InstanceState_INSTANCE_STATE_STOPPING || r.State == v1.InstanceState_INSTANCE_STATE_STOPPED {
+		if terminal(r.State) || r.State == v1.InstanceState_INSTANCE_STATE_STOPPING {
+			hits = r.Triage
 			return
 		}
 		r.State = v1.InstanceState_INSTANCE_STATE_FAILED
@@ -265,8 +379,9 @@ func (m *Manager) fail(in *instance, err error) []*v1.TriageHit {
 }
 
 func (m *Manager) supervise(in *instance) {
-	<-in.proc.Done()
-	exitErr := in.proc.Err()
+	proc := in.handle()
+	<-proc.Done()
+	exitErr := proc.Err()
 	in.mu.Lock()
 	state := in.rec.State
 	in.mu.Unlock()
@@ -334,32 +449,53 @@ func (m *Manager) find(id string) (*instance, error) {
 	return match, nil
 }
 
-// Stops an instance and waits for it to exit
+func (m *Manager) live(name string) *instance {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.liveLocked(name)
+}
+
+func (m *Manager) liveLocked(name string) *instance {
+	for _, in := range m.list {
+		rec := in.snapshot()
+		if rec.GetName() == name && !terminal(rec.GetState()) {
+			return in
+		}
+	}
+	return nil
+}
+
+// Stops an instance by request, clearing its relaunch intent, and waits for exit
 func (m *Manager) Stop(ctx context.Context, id string) (*v1.Instance, error) {
 	in, err := m.find(id)
 	if err != nil {
 		return nil, err
 	}
-	in.mu.Lock()
-	proc := in.proc
-	if !terminal(in.rec.State) {
-		in.rec.State = v1.InstanceState_INSTANCE_STATE_STOPPING
-	}
-	in.mu.Unlock()
-	if proc != nil {
-		proc.Stop(in.rt.StopGrace())
-		select {
-		case <-proc.Done():
-		case <-ctx.Done():
-			return in.snapshot(), ctx.Err()
-		}
-	}
+	return m.stop(ctx, in, true)
+}
+
+func (m *Manager) stop(ctx context.Context, in *instance, byRequest bool) (*v1.Instance, error) {
+	var wasTerminal bool
 	in.update(func(r *v1.Instance) {
-		if !terminal(r.State) || r.State == v1.InstanceState_INSTANCE_STATE_STOPPING {
-			r.State = v1.InstanceState_INSTANCE_STATE_STOPPED
-			r.StoppedAt = timestamppb.Now()
+		if byRequest {
+			r.DesiredRunning = false
+		}
+		wasTerminal = terminal(r.State)
+		if !wasTerminal {
+			r.State = v1.InstanceState_INSTANCE_STATE_STOPPING
 		}
 	})
+	if wasTerminal {
+		return in.snapshot(), nil
+	}
+	if proc := in.handle(); proc != nil {
+		proc.Stop(in.grace())
+	}
+	select {
+	case <-in.exited:
+	case <-ctx.Done():
+		return in.snapshot(), ctx.Err()
+	}
 	return in.snapshot(), nil
 }
 
@@ -369,9 +505,7 @@ func (m *Manager) Logs(ctx context.Context, id string, follow bool, tail int, se
 	if err != nil {
 		return err
 	}
-	in.mu.Lock()
-	log := in.log
-	in.mu.Unlock()
+	log := m.logOf(in)
 	if log == nil {
 		return nil
 	}
@@ -383,6 +517,35 @@ func (m *Manager) Logs(ctx context.Context, id string, follow bool, tail int, se
 		return send(lines)
 	}
 	return log.Follow(ctx, tail, send)
+}
+
+// Returns the live log or loads the output file a finished instance left behind
+func (m *Manager) logOf(in *instance) *launch.Log {
+	in.mu.Lock()
+	log, proc := in.log, in.proc
+	id := in.rec.GetId()
+	in.mu.Unlock()
+	if log != nil {
+		if proc != nil {
+			proc.Sync()
+		}
+		return log
+	}
+	lines, err := launch.ReadTail(m.logPath(id), 0)
+	if err != nil {
+		return nil
+	}
+	saved := launch.NewLog(max(len(lines), 1))
+	for _, line := range lines {
+		saved.Write(line)
+	}
+	saved.Close()
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.log == nil {
+		in.log = saved
+	}
+	return in.log
 }
 
 // Returns the endpoint of a ready instance by name
@@ -406,29 +569,159 @@ func (m *Manager) Ready() []*v1.Instance {
 	return out
 }
 
-func (m *Manager) starting(name string) bool {
-	for _, rec := range m.List(true) {
-		if rec.GetName() == name {
-			return true
-		}
-	}
-	return false
-}
-
-// Stops every live instance
+// Stops every live instance for shutdown, keeping their relaunch intent
 func (m *Manager) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer cancel()
 	var wg sync.WaitGroup
 	for _, rec := range m.List(true) {
+		in, err := m.find(rec.GetId())
+		if err != nil {
+			continue
+		}
 		wg.Add(1)
-		go func(id string) {
+		go func(in *instance) {
 			defer wg.Done()
-			m.Stop(ctx, id)
-		}(rec.GetId())
+			m.stop(ctx, in, false)
+		}(in)
 	}
 	wg.Wait()
 }
+
+// Loads the store, adopts runtimes still alive, marks the rest stopped, and relaunches wanted ones
+func (m *Manager) Recover(ctx context.Context) error {
+	loaded, err := m.load(ctx)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.list = loaded
+	m.pruneLocked()
+	m.mu.Unlock()
+	var wg sync.WaitGroup
+	wanted := map[string]*instance{}
+	for _, in := range loaded {
+		rec := in.snapshot()
+		if !terminal(rec.GetState()) {
+			alive := launch.Running(int(rec.GetPid()), rec.GetCommand())
+			switch {
+			case alive && in.rt != nil:
+				m.adopt(ctx, in)
+				continue
+			case alive:
+				m.Log.Warn("stopping instance whose runtime manifest is gone", "name", rec.GetName(), "runtime", rec.GetRuntimeId(), "pid", rec.GetPid())
+				wg.Add(1)
+				go func(pid int, grace time.Duration) {
+					defer wg.Done()
+					launch.Terminate(pid, grace)
+				}(int(rec.GetPid()), in.grace())
+			}
+			in.update(func(r *v1.Instance) {
+				r.State = v1.InstanceState_INSTANCE_STATE_STOPPED
+				r.Error = restartNote
+				r.StoppedAt = timestamppb.Now()
+			})
+		}
+		if rec.GetDesiredRunning() && rec.GetState() != v1.InstanceState_INSTANCE_STATE_FAILED {
+			wanted[rec.GetName()] = in
+		}
+	}
+	wg.Wait()
+	var relaunch []*instance
+	for name, in := range wanted {
+		if m.live(name) == nil {
+			relaunch = append(relaunch, in)
+		}
+	}
+	sort.Slice(relaunch, func(i, j int) bool {
+		return relaunch[i].snapshot().GetCreatedAt().AsTime().Before(relaunch[j].snapshot().GetCreatedAt().AsTime())
+	})
+	if len(relaunch) > 0 {
+		go m.relaunch(ctx, relaunch)
+	}
+	return nil
+}
+
+// Takes over a runtime the previous daemon left running, routing it once it answers health
+func (m *Manager) adopt(ctx context.Context, in *instance) {
+	rec := in.snapshot()
+	proc := launch.Adopt(int(rec.GetPid()), m.logPath(rec.GetId()))
+	in.attach(proc)
+	go m.supervise(in)
+	health := in.rt.Manifest.GetLaunch().GetHealth()
+	url := rec.GetEndpoint() + health.GetPath()
+	if rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY && launch.Healthy(&http.Client{Timeout: probeTimeout}, url) {
+		proc.Sync()
+		measurements := in.rt.Measure(proc.Log().Tail(0))
+		in.update(func(r *v1.Instance) { r.Measurements = mergeMeasurements(r.Measurements, measurements) })
+		m.Log.Info("adopted running instance", "name", rec.GetName(), "pid", rec.GetPid(), "endpoint", rec.GetEndpoint())
+		return
+	}
+	in.update(func(r *v1.Instance) {
+		r.State = v1.InstanceState_INSTANCE_STATE_STARTING
+		r.ReadyAt = nil
+	})
+	m.Log.Info("adopted instance still starting", "name", rec.GetName(), "pid", rec.GetPid())
+	task := m.Tasks.Start(kindRun, "adopt "+rec.GetName(), map[string]string{"instance": rec.GetId(), "name": rec.GetName()}, func(ctx context.Context, h *tasks.Handle) error {
+		h.Logf("adopted pid %d left running by the previous daemon", rec.GetPid())
+		if err := m.waitReady(ctx, h, in, proc); err != nil {
+			return err
+		}
+		proc.Sync()
+		m.ready(h, in, in.rt.Measure(proc.Log().Tail(0)))
+		return nil
+	})
+	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })
+}
+
+// Relaunches one instance at a time so each plans around the last
+func (m *Manager) relaunch(ctx context.Context, list []*instance) {
+	for _, old := range list {
+		if ctx.Err() != nil {
+			return
+		}
+		rec := old.snapshot()
+		req := rec.GetRequest()
+		if req == nil {
+			m.Log.Warn("cannot relaunch, record has no request", "name", rec.GetName())
+			continue
+		}
+		m.Log.Info("relaunching", "name", rec.GetName())
+		_, task, err := m.Run(ctx, req)
+		if err != nil {
+			m.Log.Warn("relaunch failed", "name", rec.GetName(), "err", err)
+			old.update(func(r *v1.Instance) { r.Error = "relaunch failed: " + err.Error() })
+			continue
+		}
+		old.update(func(r *v1.Instance) { r.DesiredRunning = false })
+		m.Tasks.Watch(ctx, task.GetId(), func(*v1.WatchTaskResponse) error { return nil })
+	}
+}
+
+func (m *Manager) load(ctx context.Context) ([]*instance, error) {
+	records, err := m.DB.ListInstances(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*instance, 0, len(records))
+	for _, rec := range records {
+		rt, err := m.Runtimes.Get(rec.GetRuntimeId())
+		if err != nil {
+			rt = nil
+		}
+		out = append(out, m.newInstance(rec, rt))
+	}
+	return out, nil
+}
+
+func (m *Manager) forget(id string) {
+	if err := m.DB.DeleteInstance(context.Background(), id); err != nil {
+		m.Log.Warn("instance record delete failed", "id", id, "err", err)
+	}
+	os.Remove(m.logPath(id))
+}
+
+func (m *Manager) logPath(id string) string { return filepath.Join(m.Dir, id+".log") }
 
 func (m *Manager) pruneLocked() {
 	finished := 0
@@ -438,8 +731,10 @@ func (m *Manager) pruneLocked() {
 		}
 	}
 	for i := 0; i < len(m.list) && finished > historyMax; i++ {
-		if terminal(m.list[i].snapshot().GetState()) {
+		in := m.list[i]
+		if terminal(in.snapshot().GetState()) {
 			m.list = append(m.list[:i], m.list[i+1:]...)
+			m.forget(in.rec.GetId())
 			finished--
 			i--
 		}
@@ -502,14 +797,6 @@ func freePort() (int, error) {
 	}
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port, nil
-}
-
-func stringParams(params map[string]any) map[string]string {
-	out := make(map[string]string, len(params))
-	for k, v := range params {
-		out[k] = fmt.Sprint(v)
-	}
-	return out
 }
 
 func terminal(s v1.InstanceState) bool {

@@ -5,18 +5,78 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/db"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-func manager() *Manager {
-	return New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+func openStore(t *testing.T) *db.DB {
+	t.Helper()
+	store, err := db.Open(filepath.Join(t.TempDir(), "nebu.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
+}
+
+func manager(t *testing.T) *Manager {
+	return New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), openStore(t))
+}
+
+func TestHistorySurvivesManager(t *testing.T) {
+	store := openStore(t)
+	first := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), store)
+	done := first.Start("pull", "pull x", map[string]string{"repo": "x"}, func(ctx context.Context, h *Handle) error {
+		h.Logf("one")
+		h.Logf("two")
+		return nil
+	})
+	stuck := first.Start("run", "run y", nil, func(ctx context.Context, h *Handle) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	first.Watch(context.Background(), done.GetId(), func(*v1.WatchTaskResponse) error { return nil })
+	second := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), store)
+	task, logs, err := second.Get(done.GetId())
+	if err != nil || task.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED || len(logs) != 2 || logs[1] != "two" || task.GetLabels()["repo"] != "x" {
+		t.Fatalf("stored task %v %v %v", task, logs, err)
+	}
+	if list := second.List(false); len(list) != 2 || list[0].GetId() != stuck.GetId() {
+		t.Fatalf("history list %v", list)
+	}
+	if list := second.List(true); len(list) != 0 {
+		t.Fatalf("stored tasks are never active in a new manager: %v", list)
+	}
+	sent := 0
+	if err := second.Watch(context.Background(), done.GetId(), func(r *v1.WatchTaskResponse) error {
+		sent++
+		if len(r.GetLogs()) != 2 {
+			t.Fatalf("watch of a stored task should carry its logs: %v", r)
+		}
+		return nil
+	}); err != nil || sent != 1 {
+		t.Fatalf("watch stored %v %d", err, sent)
+	}
+	if err := second.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	task, _, _ = second.Get(stuck.GetId())
+	if task.GetState() != v1.TaskState_TASK_STATE_FAILED || task.GetError() != restartNote {
+		t.Fatalf("unfinished task should be failed on recover: %v", task)
+	}
+	if _, _, err := second.Get("nope"); !errors.Is(err, ErrUnknownTask) {
+		t.Fatalf("missing task %v", err)
+	}
+	first.Cancel(stuck.GetId())
+	first.Drain(context.Background())
 }
 
 func TestLifecycleAndWatch(t *testing.T) {
-	m := manager()
+	m := manager(t)
 	release := make(chan struct{})
 	task := m.Start("pull", "pull x", map[string]string{"repo": "x"}, func(ctx context.Context, h *Handle) error {
 		h.Progress(0, 100, "starting")
@@ -68,7 +128,7 @@ func TestLifecycleAndWatch(t *testing.T) {
 }
 
 func TestFailureCancelAndPanic(t *testing.T) {
-	m := manager()
+	m := manager(t)
 	failed := m.Start("x", "fail", nil, func(ctx context.Context, h *Handle) error { return errors.New("boom") })
 	waitState(t, m, failed.GetId(), v1.TaskState_TASK_STATE_FAILED)
 	got, _, _ := m.Get(failed.GetId())

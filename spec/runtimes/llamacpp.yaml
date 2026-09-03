@@ -114,6 +114,11 @@ params:
     default: '{{.name}}'
     flag: --alias
     description: Model name reported in responses, the instance name by default
+  - name: log_verbosity
+    type: PARAM_TYPE_INT
+    default: '4'
+    flag: --log-verbosity
+    description: Log threshold, 4 prints the allocation lines the report rules read, 3 is the runtime default
 estimate:
   groups:
     - kind: TENSOR_GROUP_KIND_EMBEDDING
@@ -152,12 +157,12 @@ report:
   - key: device.weights
     match: '(?:CUDA|ROCm|HIP|Vulkan|Metal|SYCL|OpenCL)\d* model buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
   - key: host.weights
-    match: '(?:CPU|CPU_Mapped|CPU_REPACK|CUDA_Host)\w* model buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
+    match: '(?:CPU\w*|\w+_Host) model buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
   - key: device.cache
     match: '(?:CUDA|ROCm|HIP|Vulkan|Metal|SYCL|OpenCL)\d* KV buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
   - key: host.cache
-    match: '(?:CPU|CUDA_Host)\w* KV buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
+    match: '(?:CPU\w*|\w+_Host) KV buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
   - key: device.compute
     match: '(?:CUDA|ROCm|HIP|Vulkan|Metal|SYCL|OpenCL)\d* compute buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
   - key: host.compute
-    match: '(?:CPU|CUDA_Host)\w* compute buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
+    match: '(?:CPU\w*|\w+_Host) compute buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'

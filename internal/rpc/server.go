@@ -64,7 +64,9 @@ func NewHandler(d Deps) http.Handler {
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))
-	d.Gateway.Mount(mux)
+	if d.Gateway != nil {
+		d.Gateway.Mount(mux)
+	}
 	return h2c.NewHandler(mux, &http2.Server{})
 }
 

@@ -376,6 +376,9 @@ func capacity(pl *v1.MemoryPool, free bool) uint64 {
 	return pl.GetTotalBytes()
 }
 
+// Measurement key for device memory taken by a running instance
+const DeviceUsedKey = "device.used"
+
 // Sums bytes planned onto device class pools
 func PlannedDevice(plan *v1.MemoryPlan) uint64 {
 	var total uint64

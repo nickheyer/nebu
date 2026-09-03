@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/calibrate"
+	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/doctor"
 	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/internal/inspect"
@@ -47,6 +49,7 @@ const (
 // Running set of managers behind one handler
 type Daemon struct {
 	Config    *v1.Config
+	DB        *db.DB
 	Catalog   *spec.Catalog
 	Host      *host.Prober
 	Sources   *sources.Registry
@@ -62,6 +65,7 @@ type Daemon struct {
 	Log       *slog.Logger
 	handler   http.Handler
 	cancel    context.CancelFunc
+	closeOnce sync.Once
 	addr      string
 }
 
@@ -109,15 +113,24 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
+	store, err := db.Open(filepath.Join(cfg.GetDataDir(), "nebu.db"))
+	if err != nil {
+		return nil, err
+	}
+	if err := store.ImportLegacy(context.Background(), cfg.GetDataDir(), log); err != nil {
+		store.Close()
+		return nil, err
+	}
 	base, cancel := context.WithCancel(context.Background())
 	d := &Daemon{
 		Config:   cfg,
+		DB:       store,
 		Catalog:  catalog,
 		Host:     prober,
 		Sources:  srcs,
 		Runtimes: runtimes,
 		Store:    blobStore,
-		Tasks:    tasks.New(base, log),
+		Tasks:    tasks.New(base, log, store),
 		Log:      log,
 		cancel:   cancel,
 	}
@@ -142,7 +155,7 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		Log:       log,
 	}
 	d.Installs = &installs.Manager{
-		Dir:         filepath.Join(cfg.GetDataDir(), "installs"),
+		DB:          store,
 		RuntimesDir: filepath.Join(cfg.GetDataDir(), "runtimes"),
 		Runtimes:    runtimes,
 		Host:        prober,
@@ -152,13 +165,17 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	}
 	matcher, err := triage.New(catalog.Triage)
 	if err != nil {
+		store.Close()
 		return nil, err
 	}
-	calibration, err := calibrate.Open(filepath.Join(cfg.GetDataDir(), "calibration.json"))
+	calibration, err := calibrate.Open(context.Background(), store)
 	if err != nil {
+		store.Close()
 		return nil, err
 	}
 	d.Instances = &instances.Manager{
+		DB:          store,
+		Dir:         filepath.Join(cfg.GetDataDir(), "instances"),
 		Store:       blobStore,
 		Runtimes:    runtimes,
 		Installs:    d.Installs,
@@ -171,6 +188,11 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		Log:         log,
 	}
 	d.Gateway = gateway.New(d.Instances, log)
+	// The gateway shares the API listener unless config gives it its own address
+	var shared *gateway.Gateway
+	if cfg.GetGateway().GetListen() == "" {
+		shared = d.Gateway
+	}
 	d.Doctor = &doctor.Doctor{Host: prober, Runtimes: runtimes, Sources: srcs, Store: blobStore, Installs: d.Installs, MinFree: cfg.GetMinFreeBytes()}
 	d.handler = rpc.NewHandler(rpc.Deps{
 		Host:      prober,
@@ -183,16 +205,24 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		Tasks:     d.Tasks,
 		Installs:  d.Installs,
 		Instances: d.Instances,
-		Gateway:   d.Gateway,
+		Gateway:   shared,
 		Log:       log,
 	})
 	return d, nil
 }
 
-// Stops instances and background tasks
+// Stops instances and background tasks, then closes the store
 func (d *Daemon) Close() {
-	d.Instances.Close()
-	d.cancel()
+	d.closeOnce.Do(func() {
+		d.Instances.Close()
+		d.cancel()
+		drain, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		d.Tasks.Drain(drain)
+		if err := d.DB.Close(); err != nil {
+			d.Log.Warn("store close failed", "err", err)
+		}
+	})
 }
 
 // Returns the bound API address once serving
@@ -217,9 +247,23 @@ func (d *Daemon) ListenAndServe(ctx context.Context) error {
 	return d.Serve(ctx, ln, gatewayLn)
 }
 
-// Serves the API on ln and optionally the gateway alone on gatewayLn
+// Recovers instances, then serves the API on ln and the gateway alone on gatewayLn when given
 func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 	d.addr = ln.Addr().String()
+	if err := d.Tasks.Recover(ctx); err != nil {
+		ln.Close()
+		if gatewayLn != nil {
+			gatewayLn.Close()
+		}
+		return err
+	}
+	if err := d.Instances.Recover(ctx); err != nil {
+		ln.Close()
+		if gatewayLn != nil {
+			gatewayLn.Close()
+		}
+		return err
+	}
 	servers := []*http.Server{{Handler: d.handler, ReadHeaderTimeout: readHeaderTimeout}}
 	listeners := []net.Listener{ln}
 	if gatewayLn != nil {

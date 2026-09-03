@@ -37,6 +37,12 @@ func TestRenderAndMeasure(t *testing.T) {
 	if strings.Contains(args, "--n-cpu-moe") || strings.Contains(args, "--mmproj") {
 		t.Fatalf("unsolved and empty params must be omitted: %s", args)
 	}
+	if out.Params["alias"] != "qwen" || out.Params["n_ctx"] != "4096" {
+		t.Fatalf("rendered params should carry final values: %v", out.Params)
+	}
+	if _, ok := out.Params["mmproj"]; ok {
+		t.Fatalf("omitted params must not be reported: %v", out.Params)
+	}
 	params["mmproj"] = "{{index .artifacts \"projector\"}}"
 	out, err = rt.Render(RenderInput{Params: params, Artifacts: map[string]string{"weights": "w", "projector": "/store/mmproj.gguf"}, Install: map[string]string{"path": "x"}})
 	if err != nil || !strings.Contains(strings.Join(out.Args, " "), "--mmproj /store/mmproj.gguf") {

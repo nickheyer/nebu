@@ -2,41 +2,33 @@
 package calibrate
 
 import (
-	"errors"
-	"os"
-	"path/filepath"
+	"context"
 	"sync"
 
+	"github.com/nickheyer/nebu/internal/db"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const smoothing = 0.3
 
-// Corrections keyed by runtime and architecture, persisted as JSON
+// Corrections keyed by runtime and architecture, held in memory and written through to the store
 type Table struct {
-	path  string
-	mu    sync.Mutex
-	table *v1.CalibrationTable
+	store   *db.DB
+	mu      sync.Mutex
+	entries map[string]*v1.Calibration
 }
 
-// Loads the table from path when it exists
-func Open(path string) (*Table, error) {
-	t := &Table{path: path, table: &v1.CalibrationTable{Entries: map[string]*v1.Calibration{}}}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return t, nil
-	}
+// Loads every correction from the store
+func Open(ctx context.Context, store *db.DB) (*Table, error) {
+	rows, err := store.ListCalibrations(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := protojson.Unmarshal(data, t.table); err != nil {
-		return nil, err
-	}
-	if t.table.Entries == nil {
-		t.table.Entries = map[string]*v1.Calibration{}
+	t := &Table{store: store, entries: map[string]*v1.Calibration{}}
+	for _, r := range rows {
+		t.entries[Key(r.RuntimeID, r.Architecture)] = r.Calibration
 	}
 	return t, nil
 }
@@ -50,22 +42,22 @@ func Key(runtimeID, architecture string) string {
 func (t *Table) Delta(runtimeID, architecture string) float64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if c, ok := t.table.Entries[Key(runtimeID, architecture)]; ok {
+	if c, ok := t.entries[Key(runtimeID, architecture)]; ok {
 		return c.GetOverheadDelta()
 	}
 	return 0
 }
 
-// Folds one measured versus planned device total into the table
-func (t *Table) Record(runtimeID, architecture string, measured, planned uint64) error {
+// Folds one measured versus planned device total into the table and stores it
+func (t *Table) Record(ctx context.Context, runtimeID, architecture string, measured, planned uint64) error {
 	observed := float64(measured) - float64(planned)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	key := Key(runtimeID, architecture)
-	c, ok := t.table.Entries[key]
+	c, ok := t.entries[key]
 	if !ok {
 		c = &v1.Calibration{}
-		t.table.Entries[key] = c
+		t.entries[key] = c
 	}
 	if c.Samples == 0 {
 		c.OverheadDelta = observed
@@ -74,27 +66,16 @@ func (t *Table) Record(runtimeID, architecture string, measured, planned uint64)
 	}
 	c.Samples++
 	c.UpdatedAt = timestamppb.Now()
-	return t.saveLocked()
+	return t.store.PutCalibration(ctx, runtimeID, architecture, c)
 }
 
-// Returns a copy of the table
+// Returns a copy of every correction
 func (t *Table) Snapshot() *v1.CalibrationTable {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return proto.Clone(t.table).(*v1.CalibrationTable)
-}
-
-func (t *Table) saveLocked() error {
-	data, err := protojson.MarshalOptions{Multiline: true, Indent: "  "}.Marshal(t.table)
-	if err != nil {
-		return err
+	out := &v1.CalibrationTable{Entries: map[string]*v1.Calibration{}}
+	for k, c := range t.entries {
+		out.Entries[k] = proto.Clone(c).(*v1.Calibration)
 	}
-	if err := os.MkdirAll(filepath.Dir(t.path), 0o755); err != nil {
-		return err
-	}
-	tmp := t.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, t.path)
+	return out
 }

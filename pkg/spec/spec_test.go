@@ -12,6 +12,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/host/probes"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/runtime"
+	"github.com/nickheyer/nebu/pkg/triage"
 	specfs "github.com/nickheyer/nebu/spec"
 )
 
@@ -20,7 +21,7 @@ func TestEmbeddedSpecsCompile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Probes) == 0 || len(c.Formats) == 0 || len(c.Archs) == 0 || len(c.Runtimes) == 0 {
+	if len(c.Probes) == 0 || len(c.Formats) == 0 || len(c.Archs) == 0 || len(c.Runtimes) == 0 || len(c.Triage) == 0 {
 		t.Fatalf("catalog incomplete: %+v", c)
 	}
 	for _, p := range c.Probes {
@@ -36,6 +37,20 @@ func TestEmbeddedSpecsCompile(t *testing.T) {
 	}
 	if _, err := runtime.New(c.Runtimes); err != nil {
 		t.Error(err)
+	}
+	if _, err := triage.New(c.Triage); err != nil {
+		t.Error(err)
+	}
+	ids := map[string]bool{}
+	for _, tr := range c.Triage {
+		ids[tr.GetId()] = true
+	}
+	for _, rt := range c.Runtimes {
+		for _, id := range rt.GetTriage() {
+			if !ids[id] {
+				t.Errorf("runtime %s references missing triage set %s", rt.GetId(), id)
+			}
+		}
 	}
 }
 

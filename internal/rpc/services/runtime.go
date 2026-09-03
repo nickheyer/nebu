@@ -50,7 +50,7 @@ func (s *RuntimeService) GetRuntime(ctx context.Context, req *connect.Request[v1
 }
 
 func (s *RuntimeService) ListInstalls(ctx context.Context, req *connect.Request[v1.ListInstallsRequest]) (*connect.Response[v1.ListInstallsResponse], error) {
-	list, err := s.installs.List(req.Msg.GetRuntimeId())
+	list, err := s.installs.List(ctx, req.Msg.GetRuntimeId())
 	if err != nil {
 		return nil, wrap(err)
 	}
@@ -74,7 +74,7 @@ func (s *RuntimeService) InstallPrebuilt(ctx context.Context, req *connect.Reque
 }
 
 func (s *RuntimeService) RemoveInstall(ctx context.Context, req *connect.Request[v1.RemoveInstallRequest]) (*connect.Response[v1.RemoveInstallResponse], error) {
-	in, err := s.installs.Remove(req.Msg.GetId())
+	in, err := s.installs.Remove(ctx, req.Msg.GetId())
 	if err != nil {
 		return nil, wrap(err)
 	}

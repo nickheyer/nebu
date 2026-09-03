@@ -31,6 +31,10 @@ rules:
     match: '(?i)(error loading model|failed to load model|unable to load model)'
     summary: the model failed to load
     hint: verify the store with nebu store verify, then check the lines above this one
+  - id: bad-flag
+    match: '(?i)(error: (?:invalid|unknown|unrecognized) argument|error while handling argument "(?P<flag>[^"]+)")'
+    summary: this build rejected a flag nebu passed
+    hint: check the line for the flag, override that param with a value this build accepts, or adopt a newer runtime
   - id: missing-file
     match: '(?i)(no such file or directory|failed to open)'
     summary: a file the runtime needs is missing

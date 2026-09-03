@@ -91,7 +91,7 @@ func (d *Doctor) Run(ctx context.Context) (*v1.DoctorReport, error) {
 			add(id, v1.CheckStatus_CHECK_STATUS_WARN, "needs "+strings.Join(unmet, ", "), "")
 			continue
 		}
-		list, err := d.Installs.List(rt.Manifest.GetId())
+		list, err := d.Installs.List(ctx, rt.Manifest.GetId())
 		switch {
 		case err != nil:
 			add(id, v1.CheckStatus_CHECK_STATUS_FAIL, err.Error(), "check permissions on the data directory")

@@ -1,4 +1,4 @@
-// Package tasks runs long operations and streams their progress.
+// Package tasks runs long operations, streams their progress, and keeps their history.
 package tasks
 
 import (
@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/db"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -22,18 +23,20 @@ const (
 	historyMax     = 200
 	logMax         = 2000
 	notifyInterval = 100 * time.Millisecond
+	restartNote    = "daemon restarted"
 )
 
 // Returned when a task id is not known
 var ErrUnknownTask = errors.New("unknown task")
 
-// Runs tasks and fans progress out to watchers
+// Runs tasks, fans progress out to watchers, and writes every task through to the store
 type Manager struct {
-	base context.Context
-	log  *slog.Logger
-	mu   sync.Mutex
-	byID map[string]*entry
-	list []*entry
+	base  context.Context
+	log   *slog.Logger
+	store *db.DB
+	mu    sync.Mutex
+	byID  map[string]*entry
+	list  []*entry
 }
 
 type entry struct {
@@ -50,13 +53,26 @@ type entry struct {
 
 // Lets a running task report progress and logs
 type Handle struct {
+	m    *Manager
 	e    *entry
 	done atomic.Uint64
 }
 
-// Builds a manager whose tasks outlive individual requests
-func New(base context.Context, log *slog.Logger) *Manager {
-	return &Manager{base: base, log: log, byID: map[string]*entry{}}
+// Builds a manager whose tasks outlive individual requests and survive in the store
+func New(base context.Context, log *slog.Logger, store *db.DB) *Manager {
+	return &Manager{base: base, log: log, store: store, byID: map[string]*entry{}}
+}
+
+// Marks tasks a previous daemon left unfinished as failed
+func (m *Manager) Recover(ctx context.Context) error {
+	n, err := m.store.FailUnfinishedTasks(ctx, restartNote, time.Now())
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		m.log.Info("marked unfinished tasks from the previous daemon as failed", "tasks", n)
+	}
+	return nil
 }
 
 // Starts a task in the background and returns its snapshot
@@ -81,7 +97,8 @@ func (m *Manager) Start(kind, title string, labels map[string]string, run func(c
 	m.list = append(m.list, e)
 	m.prune()
 	m.mu.Unlock()
-	h := &Handle{e: e}
+	m.save(e)
+	h := &Handle{m: m, e: e}
 	go m.execute(ctx, e, h, run)
 	return e.snapshot()
 }
@@ -91,6 +108,7 @@ func (m *Manager) execute(ctx context.Context, e *entry, h *Handle, run func(con
 		t.State = v1.TaskState_TASK_STATE_RUNNING
 		t.StartedAt = timestamppb.Now()
 	}, true)
+	m.save(e)
 	err := runSafely(ctx, h, run)
 	e.update(func(t *v1.Task) {
 		t.FinishedAt = timestamppb.Now()
@@ -106,6 +124,7 @@ func (m *Manager) execute(ctx context.Context, e *entry, h *Handle, run func(con
 			t.Error = err.Error()
 		}
 	}, true)
+	m.save(e)
 	if err != nil {
 		m.log.Warn("task ended", "id", e.task.Id, "kind", e.task.Kind, "err", err)
 	} else {
@@ -113,6 +132,13 @@ func (m *Manager) execute(ctx context.Context, e *entry, h *Handle, run func(con
 	}
 	e.cancel()
 	close(e.done)
+}
+
+// Writes the task row, logging rather than failing the task on a store error
+func (m *Manager) save(e *entry) {
+	if err := m.store.PutTask(context.Background(), e.snapshot()); err != nil {
+		m.log.Warn("task record write failed", "id", e.task.Id, "err", err)
+	}
 }
 
 func runSafely(ctx context.Context, h *Handle, run func(context.Context, *Handle) error) (err error) {
@@ -124,30 +150,57 @@ func runSafely(ctx context.Context, h *Handle, run func(context.Context, *Handle
 	return run(ctx, h)
 }
 
-// Returns a task snapshot and its log tail
+// Returns a task snapshot and its logs, from memory while live and from the store after
 func (m *Manager) Get(id string) (*v1.Task, []string, error) {
 	e, err := m.entry(id)
 	if err != nil {
-		return nil, nil, err
+		return m.stored(id)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return proto.Clone(e.task).(*v1.Task), append([]string(nil), e.logs...), nil
 }
 
-// Lists tasks newest first
+func (m *Manager) stored(id string) (*v1.Task, []string, error) {
+	t, logs, err := m.store.GetTask(context.Background(), id)
+	if db.IsNotFound(err) {
+		return nil, nil, fmt.Errorf("%w %q", ErrUnknownTask, id)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return t, logs, nil
+}
+
+// Lists tasks newest first, live ones from memory and history from the store
 func (m *Manager) List(activeOnly bool) []*v1.Task {
 	m.mu.Lock()
 	entries := append([]*entry(nil), m.list...)
 	m.mu.Unlock()
+	seen := map[string]bool{}
 	var out []*v1.Task
 	for i := len(entries) - 1; i >= 0; i-- {
 		t := entries[i].snapshot()
+		seen[t.GetId()] = true
 		if activeOnly && terminal(t.GetState()) {
 			continue
 		}
 		out = append(out, t)
 	}
+	if activeOnly {
+		return out
+	}
+	stored, err := m.store.ListTasks(context.Background(), historyMax)
+	if err != nil {
+		m.log.Warn("task history read failed", "err", err)
+		return out
+	}
+	for _, t := range stored {
+		if !seen[t.GetId()] {
+			out = append(out, t)
+		}
+	}
+	SortNewest(out)
 	return out
 }
 
@@ -155,7 +208,8 @@ func (m *Manager) List(activeOnly bool) []*v1.Task {
 func (m *Manager) Cancel(id string) (*v1.Task, error) {
 	e, err := m.entry(id)
 	if err != nil {
-		return nil, err
+		t, _, err := m.stored(id)
+		return t, err
 	}
 	e.cancel()
 	return e.snapshot(), nil
@@ -165,7 +219,11 @@ func (m *Manager) Cancel(id string) (*v1.Task, error) {
 func (m *Manager) Watch(ctx context.Context, id string, send func(*v1.WatchTaskResponse) error) error {
 	e, err := m.entry(id)
 	if err != nil {
-		return err
+		t, logs, err := m.stored(id)
+		if err != nil {
+			return err
+		}
+		return send(&v1.WatchTaskResponse{Task: t, Logs: logs})
 	}
 	notify := make(chan struct{}, 1)
 	e.mu.Lock()
@@ -199,6 +257,20 @@ func (m *Manager) Watch(ctx context.Context, id string, send func(*v1.WatchTaskR
 	}
 }
 
+// Waits for every live task to end or ctx to expire
+func (m *Manager) Drain(ctx context.Context) {
+	m.mu.Lock()
+	entries := append([]*entry(nil), m.list...)
+	m.mu.Unlock()
+	for _, e := range entries {
+		select {
+		case <-e.done:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func (m *Manager) entry(id string) (*entry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -209,7 +281,7 @@ func (m *Manager) entry(id string) (*entry, error) {
 	return e, nil
 }
 
-// Drops the oldest finished tasks beyond history
+// Drops the oldest finished tasks beyond history, in memory and in the store
 func (m *Manager) prune() {
 	finished := 0
 	for _, e := range m.list {
@@ -225,6 +297,9 @@ func (m *Manager) prune() {
 			finished--
 			i--
 		}
+	}
+	if err := m.store.PruneTasks(context.Background(), historyMax); err != nil {
+		m.log.Warn("task history prune failed", "err", err)
 	}
 }
 
@@ -285,7 +360,7 @@ func (h *Handle) Message(message string) {
 	h.e.update(func(t *v1.Task) { t.Progress.Message = message }, false)
 }
 
-// Appends a log line and notifies watchers right away
+// Appends a log line, stores it, and notifies watchers right away
 func (h *Handle) Logf(format string, args ...any) {
 	line := fmt.Sprintf(format, args...)
 	h.e.mu.Lock()
@@ -295,8 +370,13 @@ func (h *Handle) Logf(format string, args ...any) {
 		h.e.logs = h.e.logs[drop:]
 		h.e.dropped += drop
 	}
+	position := h.e.dropped + len(h.e.logs) - 1
+	id := h.e.task.Id
 	h.e.broadcastLocked()
 	h.e.mu.Unlock()
+	if err := h.m.store.AppendTaskLog(context.Background(), id, position, line); err != nil {
+		h.m.log.Warn("task log write failed", "id", id, "err", err)
+	}
 }
 
 func terminal(s v1.TaskState) bool {

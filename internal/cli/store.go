@@ -31,7 +31,7 @@ func runPull(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 	if *detach {
-		if err := e.requireDaemon(cl); err != nil {
+		if err := e.requireDaemon(); err != nil {
 			return err
 		}
 	}

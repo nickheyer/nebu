@@ -30,7 +30,9 @@ func (e *env) print(msg proto.Message, render func(w io.Writer)) error {
 
 func table(w io.Writer, headers []string, rows [][]string) {
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, strings.Join(headers, "\t"))
+	if len(headers) > 0 {
+		fmt.Fprintln(tw, strings.Join(headers, "\t"))
+	}
 	for _, r := range rows {
 		fmt.Fprintln(tw, strings.Join(r, "\t"))
 	}

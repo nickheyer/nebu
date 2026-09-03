@@ -9,15 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/eval"
 	"github.com/nickheyer/nebu/pkg/host"
@@ -25,7 +24,6 @@ import (
 	"github.com/nickheyer/nebu/pkg/runtime"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/transfer"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -37,9 +35,9 @@ const (
 // Returned when an install id is not known
 var ErrUnknownInstall = errors.New("unknown install")
 
-// Persists installs and obtains new ones
+// Records installs in the store and obtains new ones
 type Manager struct {
-	Dir         string
+	DB          *db.DB
 	RuntimesDir string
 	Runtimes    *runtime.Registry
 	Host        *host.Prober
@@ -49,46 +47,22 @@ type Manager struct {
 }
 
 // Lists installs newest first, optionally for one runtime
-func (m *Manager) List(runtimeID string) ([]*v1.Install, error) {
-	entries, err := os.ReadDir(m.Dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var out []*v1.Install
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		in, err := m.read(filepath.Join(m.Dir, e.Name()))
-		if err != nil {
-			m.Log.Warn("skipping install record", "file", e.Name(), "err", err)
-			continue
-		}
-		if runtimeID == "" || in.GetRuntimeId() == runtimeID {
-			out = append(out, in)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].GetCreatedAt().AsTime().After(out[j].GetCreatedAt().AsTime())
-	})
-	return out, nil
+func (m *Manager) List(ctx context.Context, runtimeID string) ([]*v1.Install, error) {
+	return m.DB.ListInstalls(ctx, runtimeID)
 }
 
 // Returns one install by id
-func (m *Manager) Get(id string) (*v1.Install, error) {
-	in, err := m.read(m.path(id))
-	if errors.Is(err, os.ErrNotExist) {
+func (m *Manager) Get(ctx context.Context, id string) (*v1.Install, error) {
+	in, err := m.DB.GetInstall(ctx, id)
+	if db.IsNotFound(err) {
 		return nil, fmt.Errorf("%w %q", ErrUnknownInstall, id)
 	}
 	return in, err
 }
 
 // Returns the newest install of a runtime
-func (m *Manager) Default(runtimeID string) (*v1.Install, error) {
-	list, err := m.List(runtimeID)
+func (m *Manager) Default(ctx context.Context, runtimeID string) (*v1.Install, error) {
+	list, err := m.List(ctx, runtimeID)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +106,7 @@ func (m *Manager) Adopt(ctx context.Context, runtimeID, path string) (*v1.Instal
 		CreatedAt: timestamppb.Now(),
 	}
 	m.probe(ctx, rt, in)
-	return in, m.write(in)
+	return in, m.DB.PutInstall(ctx, in)
 }
 
 // Starts a task that downloads a release matching the host
@@ -145,7 +119,7 @@ func (m *Manager) InstallPrebuilt(ctx context.Context, runtimeID string) (*v1.Ta
 	if err != nil {
 		return nil, err
 	}
-	rule, err := m.selectRule(rt, profile)
+	rule, err := rt.Prebuilt(profile)
 	if err != nil {
 		return nil, err
 	}
@@ -153,24 +127,6 @@ func (m *Manager) InstallPrebuilt(ctx context.Context, runtimeID string) (*v1.Ta
 	return m.Tasks.Start(kindInstall, title, map[string]string{"runtime": runtimeID}, func(ctx context.Context, h *tasks.Handle) error {
 		return m.download(ctx, h, rt, rule)
 	}), nil
-}
-
-func (m *Manager) selectRule(rt *runtime.Runtime, profile *v1.HostProfile) (*v1.PrebuiltRule, error) {
-	env := host.Env(profile)
-	for _, rule := range rt.Manifest.GetAcquire().GetPrebuilt() {
-		e, err := eval.Compile(rule.GetWhen())
-		if err != nil {
-			return nil, err
-		}
-		ok, err := e.Bool(env)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			return rule, nil
-		}
-	}
-	return nil, fmt.Errorf("no prebuilt release of %s matches this host, adopt a binary instead", rt.Manifest.GetId())
 }
 
 type asset struct {
@@ -231,7 +187,7 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Run
 		CreatedAt: timestamppb.Now(),
 	}
 	m.probe(ctx, rt, in)
-	if err := m.write(in); err != nil {
+	if err := m.DB.PutInstall(ctx, in); err != nil {
 		return err
 	}
 	h.Logf("installed %s at %s", in.GetId(), binary)
@@ -283,12 +239,12 @@ func (m *Manager) resolveAsset(ctx context.Context, rule *v1.PrebuiltRule) (*ass
 }
 
 // Removes an install record and its downloaded directory
-func (m *Manager) Remove(id string) (*v1.Install, error) {
-	in, err := m.Get(id)
+func (m *Manager) Remove(ctx context.Context, id string) (*v1.Install, error) {
+	in, err := m.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Remove(m.path(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if _, err := m.DB.DeleteInstall(ctx, id); err != nil {
 		return nil, err
 	}
 	if in.GetKind() == v1.InstallKind_INSTALL_KIND_PREBUILT && strings.HasPrefix(in.GetDir(), m.RuntimesDir) {
@@ -302,26 +258,21 @@ func (m *Manager) Remove(id string) (*v1.Install, error) {
 // Runs the manifest probes and stores what they capture
 func (m *Manager) probe(ctx context.Context, rt *runtime.Runtime, in *v1.Install) {
 	in.Facts = map[string]string{}
-	for _, p := range rt.Manifest.GetProbes() {
-		re, err := regexp.Compile(p.GetMatch())
-		if err != nil {
-			m.Log.Warn("bad probe pattern", "runtime", rt.Manifest.GetId(), "key", p.GetKey(), "err", err)
-			continue
-		}
+	for _, p := range rt.Probes() {
 		timeout := probeTimeout
-		if p.GetTimeoutMs() > 0 {
-			timeout = time.Duration(p.GetTimeoutMs()) * time.Millisecond
+		if p.Spec.GetTimeoutMs() > 0 {
+			timeout = time.Duration(p.Spec.GetTimeoutMs()) * time.Millisecond
 		}
 		pctx, cancel := context.WithTimeout(ctx, timeout)
-		cmd := exec.CommandContext(pctx, in.GetPath(), p.GetArgs()...)
+		cmd := exec.CommandContext(pctx, in.GetPath(), p.Spec.GetArgs()...)
 		var out bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &out
 		cmd.Run()
 		cancel()
 		var values []string
-		for _, match := range re.FindAllStringSubmatch(out.String(), -1) {
+		for _, match := range p.Match.FindAllStringSubmatch(out.String(), -1) {
 			value := match[0]
-			for i, name := range re.SubexpNames() {
+			for i, name := range p.Match.SubexpNames() {
 				if name == "value" {
 					value = match[i]
 				}
@@ -329,43 +280,12 @@ func (m *Manager) probe(ctx context.Context, rt *runtime.Runtime, in *v1.Install
 			values = append(values, strings.TrimSpace(value))
 		}
 		if len(values) > 0 {
-			in.Facts[p.GetKey()] = strings.Join(values, ",")
+			in.Facts[p.Spec.GetKey()] = strings.Join(values, ",")
 		}
 	}
 	if in.Version == "" {
 		in.Version = in.Facts["version"]
 	}
-}
-
-func (m *Manager) path(id string) string {
-	return filepath.Join(m.Dir, id+".json")
-}
-
-func (m *Manager) read(path string) (*v1.Install, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	in := &v1.Install{}
-	if err := protojson.Unmarshal(data, in); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	return in, nil
-}
-
-func (m *Manager) write(in *v1.Install) error {
-	if err := os.MkdirAll(m.Dir, 0o755); err != nil {
-		return err
-	}
-	data, err := protojson.MarshalOptions{Multiline: true, Indent: "  "}.Marshal(in)
-	if err != nil {
-		return err
-	}
-	tmp := m.path(in.GetId()) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, m.path(in.GetId()))
 }
 
 func installID(runtimeID, path string) string {
@@ -393,5 +313,3 @@ func findBinary(dir, name string) (string, error) {
 	}
 	return found, nil
 }
-
-var _ = http.StatusOK

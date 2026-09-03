@@ -54,6 +54,7 @@ func commands() []command {
 		}},
 		{name: "run", summary: "start a stored model on a runtime", run: runRun},
 		{name: "ps", summary: "list running instances", run: runPs},
+		{name: "show", summary: "show instance info", run: runShow},
 		{name: "stop", summary: "stop an instance", run: runStop},
 		{name: "logs", summary: "show or follow instance output", run: runLogs},
 		{name: "version", summary: "print version", run: runVersion},

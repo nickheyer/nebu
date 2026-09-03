@@ -56,6 +56,8 @@ message Instance {
   repeated TriageHit triage = 18;
   repeated Measurement measurements = 19;
   string task_id = 20;
+  RunRequest request = 21;
+  bool desired_running = 22;
 }
 
 // Starts a stored model on a runtime

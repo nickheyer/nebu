@@ -17,11 +17,12 @@ type RenderInput struct {
 	Install   map[string]string
 }
 
-// Rendered command line and environment
+// Rendered command line, environment, and the param values that were emitted
 type Rendered struct {
 	Command string
 	Args    []string
 	Env     map[string]string
+	Params  map[string]string
 }
 
 func (in RenderInput) context() map[string]any {
@@ -42,7 +43,7 @@ func (rt *Runtime) Render(in RenderInput) (*Rendered, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := &Rendered{Command: command, Env: map[string]string{}}
+	out := &Rendered{Command: command, Env: map[string]string{}, Params: map[string]string{}}
 	for _, t := range rt.launchArgs {
 		arg, err := t.Render(ctx)
 		if err != nil {
@@ -69,6 +70,7 @@ func (rt *Runtime) Render(in RenderInput) (*Rendered, error) {
 		if !keep {
 			continue
 		}
+		out.Params[p.GetName()] = text
 		if p.GetEnv() != "" {
 			out.Env[p.GetEnv()] = text
 		}

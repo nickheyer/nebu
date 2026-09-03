@@ -6,15 +6,17 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Fails commands whose state lives only in a running daemon
-func (e *env) requireDaemon(cl *clients) error {
+func (e *env) requireDaemon() error {
 	if !e.remote {
 		return fmt.Errorf("this command needs a running daemon, start nebu serve or pass --addr")
 	}
@@ -144,7 +146,7 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := e.requireDaemon(cl); err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
 	sourceID, err := e.defaultSource(ctx, cl, *source)
@@ -188,6 +190,13 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	}
 	if _, err := e.watch(ctx, cl, resp.Msg.GetTask().GetId()); err != nil {
 		return err
+	}
+	final, err := cl.instances.GetInstance(ctx, connect.NewRequest(&v1.GetInstanceRequest{Id: in.GetId()}))
+	if err != nil {
+		return err
+	}
+	if final.Msg.GetInstance().GetState() != v1.InstanceState_INSTANCE_STATE_READY {
+		return fmt.Errorf("%s is %s: %s", in.GetName(), eval.EnumShort(final.Msg.GetInstance().GetState()), final.Msg.GetInstance().GetError())
 	}
 	fmt.Fprintf(e.out, "gateway %s/v1 model %s\n", e.gatewayBase(), in.GetName())
 	return nil
@@ -240,7 +249,7 @@ func runPs(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := e.requireDaemon(cl); err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
 	resp, err := cl.instances.ListInstances(ctx, connect.NewRequest(&v1.ListInstancesRequest{RunningOnly: !*all}))
@@ -262,7 +271,7 @@ func runPs(ctx context.Context, e *env, args []string) error {
 
 func measured(in *v1.Instance) string {
 	for _, m := range in.GetMeasurements() {
-		if m.GetKey() == "device.used" {
+		if m.GetKey() == estimate.DeviceUsedKey {
 			return estimate.Human(m.GetBytes())
 		}
 	}
@@ -285,7 +294,7 @@ func runStop(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := e.requireDaemon(cl); err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
 	resp, err := cl.instances.StopInstance(ctx, connect.NewRequest(&v1.StopInstanceRequest{Id: positional[0]}))
@@ -312,7 +321,7 @@ func runLogs(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := e.requireDaemon(cl); err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
 	stream, err := cl.instances.Logs(ctx, connect.NewRequest(&v1.LogsRequest{Id: positional[0], Follow: *follow, Tail: uint32(*tail)}))
@@ -326,4 +335,93 @@ func runLogs(ctx context.Context, e *env, args []string) error {
 		}
 	}
 	return stream.Err()
+}
+
+func runShow(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("show")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return fmt.Errorf("usage: nebu show <name|id>")
+	}
+	cl, err := e.clients()
+	if err != nil {
+		return err
+	}
+	if err := e.requireDaemon(); err != nil {
+		return err
+	}
+	resp, err := cl.instances.GetInstance(ctx, connect.NewRequest(&v1.GetInstanceRequest{Id: positional[0]}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) { renderInstance(w, resp.Msg.GetInstance()) })
+}
+
+func renderInstance(w io.Writer, in *v1.Instance) {
+	fmt.Fprintf(w, "%s %s %s\n", in.GetId(), in.GetName(), strings.ToUpper(eval.EnumShort(in.GetState())))
+	relaunch := "no"
+	if in.GetDesiredRunning() {
+		relaunch = "yes"
+	}
+	rows := [][]string{
+		{"model", in.GetSourceId() + "/" + in.GetRepo() + " " + in.GetGroup()},
+		{"runtime", in.GetRuntimeId() + " install " + in.GetInstallId()},
+		{"endpoint", in.GetEndpoint()},
+		{"pid", strconv.Itoa(int(in.GetPid()))},
+		{"device", measured(in)},
+		{"created", stamp(in.GetCreatedAt())},
+		{"ready", stamp(in.GetReadyAt())},
+		{"stopped", stamp(in.GetStoppedAt())},
+		{"relaunch on daemon start", relaunch},
+		{"task", in.GetTaskId()},
+	}
+	if in.GetError() != "" {
+		rows = append(rows, []string{"error", in.GetError()})
+	}
+	table(w, nil, rows)
+	if plan := in.GetPlan(); plan != nil {
+		section(w, "plan")
+		fmt.Fprintf(w, "%s device %s host %s cache %s %s %s\n", strings.ToUpper(eval.EnumShort(plan.GetVerdict())), poolUsage(plan, v1.PoolKind_POOL_KIND_DEVICE), poolUsage(plan, v1.PoolKind_POOL_KIND_HOST), estimate.Human(plan.GetCacheBytes()), placements(plan), plan.GetDetail())
+	}
+	section(w, "params")
+	keys := make([]string, 0, len(in.GetParams()))
+	for k := range in.GetParams() {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+	rows = nil
+	for _, k := range keys {
+		rows = append(rows, []string{k, in.GetParams()[k]})
+	}
+	table(w, nil, rows)
+	if len(in.GetMeasurements()) > 0 {
+		section(w, "measurements")
+		rows = nil
+		for _, m := range in.GetMeasurements() {
+			rows = append(rows, []string{m.GetKey(), estimate.Human(m.GetBytes()), m.GetLine()})
+		}
+		table(w, []string{"KEY", "BYTES", "LINE"}, rows)
+	}
+	if len(in.GetTriage()) > 0 {
+		section(w, "triage")
+		for _, hit := range in.GetTriage() {
+			fmt.Fprintf(w, "%s: %s\n  hint: %s\n", hit.GetId(), hit.GetSummary(), hit.GetHint())
+			if len(hit.GetFix()) > 0 {
+				fmt.Fprintf(w, "  try: --param %s\n", strings.ReplaceAll(compact(hit.GetFix()), " ", " --param "))
+			}
+			fmt.Fprintf(w, "  line: %s\n", hit.GetLine())
+		}
+	}
+	section(w, "command")
+	fmt.Fprintln(w, strings.Join(in.GetCommand(), " "))
+}
+
+func stamp(ts *timestamppb.Timestamp) string {
+	if ts == nil {
+		return "-"
+	}
+	return ts.AsTime().Local().Format(time.RFC3339)
 }

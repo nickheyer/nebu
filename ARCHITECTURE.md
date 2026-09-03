@@ -95,7 +95,7 @@ nebu/
 │   ├── runtime/                   manifest model, param schema, command rendering, installs
 │   ├── build/                     recipe engine, fetch, patch apply, hashed build cache
 │   │   └── sandbox/               build sandboxes, host toolchain or oci cli
-│   ├── launch/                    process launcher, output ring, health polling, pdeathsig
+│   ├── launch/                    process launcher, output files, adoption by pid, pdeathsig
 │   └── triage/                    log pattern matcher producing hints and fixes
 ├── spec/                          every runtime and model specific lives here, never in go
 │   ├── embed.go                   go:embed of the directories below
@@ -110,7 +110,7 @@ nebu/
 │   ├── inspect/                   resolve, describe, and plan a model before download
 │   ├── pull/                      fetch, verify, link, and manifest a weight group
 │   ├── installs/                  adopt or download runtime binaries, run probes
-│   ├── instances/                 plan, launch, supervise, and route running models
+│   ├── instances/                 plan, launch, supervise, persist, recover, and route
 │   ├── calibrate/                 learned overhead corrections per runtime and arch
 │   ├── doctor/                    probes, runtimes, installs, sources, and store as checks
 │   ├── db/                        pure go sqlite, sql migrations, no proto in schema
@@ -118,7 +118,7 @@ nebu/
 │   ├── rpc/
 │   │   ├── server.go              connect server, h2c, interceptors, auth
 │   │   └── services/              one file per proto service
-│   ├── tasks/                     task engine, progress fan-out, cancellation, log capture
+│   ├── tasks/                     task engine, progress fan-out, cancellation, stored history
 │   ├── slots/                     slot manager, reservations, swaps
 │   ├── gateway/                   openai-compatible reverse proxy routed by model name
 │   ├── monitor/                   watches monitored models for new revisions and quants
@@ -178,14 +178,28 @@ unchanged host is a cache hit.
    the planner runs against free memory, so a second model plans around the first.
 2. Solved params replace `auto`, the runtime package renders the command and environment
    from the manifest templates, and a free loopback port is picked.
-3. The process launcher starts it in its own process group tied to the daemon's lifetime,
-   captures output into a ring, and polls the manifest's health check until it answers.
+3. The process launcher starts it in its own process group with its output appended to a
+   file under the data dir, follows that file into a ring, and polls the manifest's health
+   check until it answers. On Linux the child also gets a parent-death signal.
 4. The gateway routes the public model name to the instance endpoint.
 5. Report rules parse the runtime's own allocation lines into measurements, and the device
    free-memory delta feeds the calibration table, which shifts the estimator's overhead
    term for that runtime and architecture on the next plan.
 6. On failure or unexpected exit, triage matches the output against the pattern catalog
-   and the hint travels back on the task and the instance record.
+   and the hint, with any suggested params, travels back on the task and the instance
+   record.
+7. Every state change writes the instance row, so `ps --all`, `show`, and `logs` answer for
+   instances that ended before the daemon last started.
+
+**Recovery** runs before the daemon listens. Tasks left unfinished are marked failed. For each
+instance row that was not terminal, the daemon checks whether its pid is alive with the
+recorded command line. A live runtime is adopted: its output file is followed from where it
+is, it is routed as soon as it answers health, it is supervised by pid, and a stop signals
+its group and escalates after the grace period. A dead one is marked stopped with the reason.
+Every record still wanted, meaning it was never stopped by request and is not already live,
+is relaunched from its original request one at a time, so each plans around the last. A stop
+by request clears that intent; a daemon shutdown does not, which is why models survive a
+reboot but not a `nebu stop`.
 
 **Installs** are adopted from a path or PATH, or downloaded through a prebuilt rule whose
 `when` expression selects the release for the probed host. Manifest probes run the binary
@@ -201,7 +215,7 @@ route flips when health passes. The public name never disappears.
 - Buf v2 with remote plugins, so no local protoc.
 - SvelteKit with adapter-static, Tailwind, bits-ui, embedded via `go:embed`.
 - Connect over h2c on one listener. The gateway shares that listener by default under `/v1/`
-  and can be split to its own address in config.
+  and moves to its own address when `gateway.listen` is set in config.
 - One file per service under `internal/rpc/services`.
 
 ## Deliberate departures
@@ -211,7 +225,10 @@ route flips when health passes. The public name never disappears.
   podman and nerdctl work unchanged.
 - No websocket hub. Live UI updates ride a Connect server stream, which works in browsers
   over HTTP/1.1 without a proxy.
-- No cgo SQLite driver. The modernc pure-Go port.
+- No cgo SQLite driver. The modernc pure-Go port. Installs, instances with their plans,
+  measurements, triage, and requests, calibrations, and task history are rows in
+  `<data_dir>/nebu.db`, created by the embedded migrations. Runtime output is the one thing
+  kept as files, one per instance, truncated past a size cap.
 - Spec files are YAML that unmarshal through protojson into the same messages the API uses.
   One schema, two transports.
 
@@ -255,8 +272,9 @@ when some spilled, and NO when the fixed need alone does not fit.
    Ships as a CLI with no daemon state beyond a cache. Done.
 2. `nebu pull`. Store and transfer with resume and verification. Done. Task history lives in
    the daemon, so `--detach` and `tasks` need `nebu serve` running.
-3. `nebu run`. Installs, the process launcher, gateway, triage, calibration. Done. Instances
-   live in the daemon, so `run`, `ps`, `stop`, and `logs` need `nebu serve`, which the CLI
-   finds on the configured listen address without flags.
+3. `nebu run`. Installs, the process launcher, gateway, triage, calibration, the SQL store,
+   recovery with adoption and relaunch. Done. Instances live in the daemon, so `run`, `ps`,
+   `show`, `stop`, and `logs` need `nebu serve`, which the CLI finds on the configured
+   listen address without flags.
 4. `nebu build`. Recipes and sandboxes.
 5. Slots, swaps, monitor, and the web UI on top of the same API.

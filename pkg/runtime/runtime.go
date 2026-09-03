@@ -20,7 +20,8 @@ import (
 // Value a solved param takes before planning
 const Auto = "auto"
 
-const defaultStopGrace = 15 * time.Second
+// Grace period before a stop escalates when the manifest sets none
+const DefaultStopGrace = 15 * time.Second
 
 var (
 	// Returned when a runtime id is not known
@@ -34,6 +35,17 @@ type constraint struct {
 	message string
 }
 
+type prebuiltRule struct {
+	spec *v1.PrebuiltRule
+	when *eval.Expr
+}
+
+// Manifest probe with its compiled pattern
+type Probe struct {
+	Spec  *v1.CommandProbe
+	Match *regexp.Regexp
+}
+
 // Compiled runtime manifest
 type Runtime struct {
 	Manifest      *v1.RuntimeManifest
@@ -44,6 +56,8 @@ type Runtime struct {
 	launchArgs    []*eval.Template
 	launchEnv     map[string]*eval.Template
 	report        []reportRule
+	prebuilt      []prebuiltRule
+	probes        []Probe
 }
 
 // Runtimes ordered by id
@@ -121,15 +135,53 @@ func compile(m *v1.RuntimeManifest) (*Runtime, error) {
 		}
 		rt.report = append(rt.report, reportRule{spec: r, re: re})
 	}
+	for _, p := range m.GetAcquire().GetPrebuilt() {
+		when, err := eval.Compile(p.GetWhen())
+		if err != nil {
+			return nil, fmt.Errorf("prebuilt rule %q: %w", p.GetAsset(), err)
+		}
+		if _, err := regexp.Compile(p.GetAsset()); err != nil {
+			return nil, fmt.Errorf("prebuilt rule %q: %w", p.GetAsset(), err)
+		}
+		rt.prebuilt = append(rt.prebuilt, prebuiltRule{spec: p, when: when})
+	}
+	for _, p := range m.GetProbes() {
+		if p.GetKey() == "" {
+			return nil, fmt.Errorf("probe without key")
+		}
+		re, err := regexp.Compile(p.GetMatch())
+		if err != nil {
+			return nil, fmt.Errorf("probe %s: %w", p.GetKey(), err)
+		}
+		rt.probes = append(rt.probes, Probe{Spec: p, Match: re})
+	}
 	return rt, nil
 }
+
+// Returns the first prebuilt rule whose condition holds on the host
+func (rt *Runtime) Prebuilt(profile *v1.HostProfile) (*v1.PrebuiltRule, error) {
+	env := host.Env(profile)
+	for _, r := range rt.prebuilt {
+		ok, err := r.when.Bool(env)
+		if err != nil {
+			return nil, fmt.Errorf("prebuilt rule %q: %w", r.spec.GetAsset(), err)
+		}
+		if ok {
+			return r.spec, nil
+		}
+	}
+	return nil, fmt.Errorf("no prebuilt release of %s matches this host, adopt a binary instead", rt.Manifest.GetId())
+}
+
+// Returns the manifest probes with compiled patterns
+func (rt *Runtime) Probes() []Probe { return rt.probes }
 
 // Returns the grace period before a stop escalates
 func (rt *Runtime) StopGrace() time.Duration {
 	if ms := rt.Manifest.GetLaunch().GetStopGraceMs(); ms > 0 {
 		return time.Duration(ms) * time.Millisecond
 	}
-	return defaultStopGrace
+	return DefaultStopGrace
 }
 
 // Lists runtimes by id

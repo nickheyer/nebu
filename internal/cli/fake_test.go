@@ -14,12 +14,18 @@ import (
 )
 
 const (
-	fakeEnv  = "NEBU_FAKE_RUNTIME"
-	fakeFail = "NEBU_FAKE_FAIL"
+	fakeEnv        = "NEBU_FAKE_RUNTIME"
+	fakeFail       = "NEBU_FAKE_FAIL"
+	fakeIgnoreTerm = "NEBU_FAKE_IGNORE_TERM"
+	serveEnv       = "NEBU_TEST_SERVE"
 )
 
-// Turns the test binary into a fake runtime when asked
+// Turns the test binary into a fake runtime or a real daemon when asked
 func TestMain(m *testing.M) {
+	if os.Getenv(serveEnv) == "1" {
+		os.Unsetenv(serveEnv)
+		os.Exit(Main(os.Args[1:], os.Stdout, os.Stderr))
+	}
 	if os.Getenv(fakeEnv) == "1" {
 		os.Exit(fakeRuntime(os.Args[1:]))
 	}
@@ -54,7 +60,12 @@ func fakeRuntime(args []string) int {
 		json.NewEncoder(w).Encode(map[string]any{"model": req["model"], "choices": []map[string]any{{"message": map[string]any{"content": "hello from fake"}}}})
 	})
 	srv := &http.Server{Addr: addr, Handler: mux}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	signals := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if os.Getenv(fakeIgnoreTerm) == "1" {
+		signal.Ignore(syscall.SIGTERM)
+		signals = signals[:1]
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), signals...)
 	defer stop()
 	go func() {
 		<-ctx.Done()
