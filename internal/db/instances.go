@@ -15,8 +15,8 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			return err
 		}
 		id := in.GetId()
-		if err := exec(`INSERT OR REPLACE INTO instances (id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, in.GetName(), in.GetSourceId(), in.GetRepo(), in.GetGroup(), in.GetRuntimeId(), in.GetInstallId(), in.GetEndpoint(), enumCol(in.GetState()), in.GetPid(), in.GetError(), in.GetTaskId(), boolCol(in.GetDesiredRunning()), stamp(in.GetCreatedAt().AsTime()), timeCol(in.GetReadyAt()), timeCol(in.GetStoppedAt())); err != nil {
+		if err := exec(`INSERT OR REPLACE INTO instances (id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, in.GetName(), in.GetSourceId(), in.GetRepo(), in.GetGroup(), in.GetRuntimeId(), in.GetInstallId(), in.GetEndpoint(), enumCol(in.GetState()), in.GetPid(), in.GetError(), in.GetTaskId(), boolCol(in.GetDesiredRunning()), stamp(in.GetCreatedAt().AsTime()), timeCol(in.GetReadyAt()), timeCol(in.GetStoppedAt()), in.GetSlotId()); err != nil {
 			return err
 		}
 		for _, table := range []string{"instance_params", "instance_command", "instance_requests", "instance_request_params", "instance_plans", "instance_plan_pools", "instance_plan_placements", "instance_plan_params", "instance_measurements", "instance_triage", "instance_triage_fixes"} {
@@ -33,8 +33,8 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			}
 		}
 		if req := in.GetRequest(); req != nil {
-			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName()); err != nil {
+			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId()); err != nil {
 				return err
 			}
 			if err := putMap(exec, `INSERT INTO instance_request_params (instance_id, name, value) VALUES (?, ?, ?)`, id, req.GetParams()); err != nil {
@@ -83,7 +83,7 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 
 // Lists every instance oldest first with all child rows
 func (d *DB) ListInstances(ctx context.Context) ([]*v1.Instance, error) {
-	rows, err := d.sql.QueryContext(ctx, `SELECT id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at FROM instances ORDER BY created_at, id`)
+	rows, err := d.sql.QueryContext(ctx, `SELECT id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id FROM instances ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (d *DB) ListInstances(ctx context.Context) ([]*v1.Instance, error) {
 		var state, created string
 		var ready, stopped sql.NullString
 		var desired int
-		if err := rows.Scan(&in.Id, &in.Name, &in.SourceId, &in.Repo, &in.Group, &in.RuntimeId, &in.InstallId, &in.Endpoint, &state, &in.Pid, &in.Error, &in.TaskId, &desired, &created, &ready, &stopped); err != nil {
+		if err := rows.Scan(&in.Id, &in.Name, &in.SourceId, &in.Repo, &in.Group, &in.RuntimeId, &in.InstallId, &in.Endpoint, &state, &in.Pid, &in.Error, &in.TaskId, &desired, &created, &ready, &stopped, &in.SlotId); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -127,7 +127,7 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 		return err
 	}
 	req := &v1.RunRequest{}
-	err = d.sql.QueryRowContext(ctx, `SELECT source_id, repo, weight_group, runtime_id, install_id, name FROM instance_requests WHERE instance_id = ?`, id).Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name)
+	err = d.sql.QueryRowContext(ctx, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id FROM instance_requests WHERE instance_id = ?`, id).Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId)
 	switch {
 	case err == sql.ErrNoRows:
 	case err != nil:

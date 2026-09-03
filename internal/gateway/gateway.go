@@ -3,7 +3,9 @@ package gateway
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -20,30 +22,38 @@ const (
 	healthPath  = "/health"
 	maxBody     = 64 << 20
 	modelHeader = "X-Nebu-Model"
+	retryAfter  = "2"
 )
-
-// Resolves public model names to instance endpoints
-type Router interface {
-	Route(name string) (string, bool)
-	Ready() []*v1.Instance
-}
 
 // Reverse proxy keyed by the model field of each request
 type Gateway struct {
-	router Router
-	log    *slog.Logger
+	table     *Table
+	keys      []string
+	listeners []*v1.Listener
+	log       *slog.Logger
 }
 
-// Builds the gateway
-func New(router Router, log *slog.Logger) *Gateway {
-	return &Gateway{router: router, log: log}
+// Builds the gateway, requiring a bearer key when keys exist
+func New(table *Table, keys []string, log *slog.Logger) *Gateway {
+	return &Gateway{table: table, keys: keys, log: log}
+}
+
+// Records the addresses the gateway answers on
+func (g *Gateway) SetListeners(listeners []*v1.Listener) { g.listeners = listeners }
+
+// Returns the route table
+func (g *Gateway) Table() *Table { return g.table }
+
+// Reports listeners, routes, and counters
+func (g *Gateway) Status() *v1.GatewayStatus {
+	return &v1.GatewayStatus{Listeners: g.listeners, Routes: g.table.List(), Auth: len(g.keys) > 0, Requests: g.table.Requests()}
 }
 
 // Registers gateway routes on a mux
 func (g *Gateway) Mount(mux *http.ServeMux) {
 	mux.HandleFunc(healthPath, g.health)
-	mux.HandleFunc(modelsPath, g.models)
-	mux.HandleFunc(prefix, g.proxy)
+	mux.HandleFunc(modelsPath, g.auth(g.models))
+	mux.HandleFunc(prefix, g.auth(g.proxy))
 }
 
 // Returns a handler serving only the gateway
@@ -53,18 +63,53 @@ func (g *Gateway) Handler() http.Handler {
 	return mux
 }
 
+// Rejects requests without a configured key when keys are set
+func (g *Gateway) auth(next http.HandlerFunc) http.HandlerFunc {
+	if len(g.keys) == 0 {
+		return next
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !g.authorized(r) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="nebu"`)
+			writeError(w, http.StatusUnauthorized, "missing or invalid api key", "authentication_error")
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (g *Gateway) authorized(r *http.Request) bool {
+	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
+	if token == "" {
+		token = r.Header.Get("X-Api-Key")
+	}
+	if token == "" {
+		return false
+	}
+	for _, k := range g.keys {
+		if subtle.ConstantTimeCompare([]byte(k), []byte(token)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *Gateway) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "models": len(g.router.Ready())})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "models": len(g.table.Ready())})
 }
 
 func (g *Gateway) models(w http.ResponseWriter, r *http.Request) {
 	data := []map[string]any{}
-	for _, in := range g.router.Ready() {
+	for _, rt := range g.table.List() {
+		if rt.GetState() == v1.RouteState_ROUTE_STATE_DRAINING {
+			continue
+		}
 		data = append(data, map[string]any{
-			"id":       in.GetName(),
+			"id":       rt.GetName(),
 			"object":   "model",
-			"created":  in.GetReadyAt().AsTime().Unix(),
+			"created":  rt.GetUpdatedAt().AsTime().Unix(),
 			"owned_by": "nebu",
+			"ready":    rt.GetState() == v1.RouteState_ROUTE_STATE_READY,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
@@ -77,16 +122,27 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := modelName(r, body)
-	endpoint, ok := g.router.Route(name)
-	if !ok {
-		if ready := g.router.Ready(); name == "" && len(ready) == 1 {
-			endpoint, ok = g.router.Route(ready[0].GetName())
+	endpoint, release, err := g.table.Acquire(name)
+	if errors.Is(err, ErrNoRoute) && name == "" {
+		if ready := g.table.Ready(); len(ready) == 1 {
+			name = ready[0].GetName()
+			endpoint, release, err = g.table.Acquire(name)
 		}
 	}
-	if !ok {
+	switch {
+	case errors.Is(err, ErrPending):
+		w.Header().Set("Retry-After", retryAfter)
+		writeError(w, http.StatusServiceUnavailable, "model "+name+" is starting, retry shortly", "model_starting")
+		return
+	case errors.Is(err, ErrDraining):
+		w.Header().Set("Retry-After", retryAfter)
+		writeError(w, http.StatusServiceUnavailable, "model "+name+" is being replaced, retry shortly", "model_swapping")
+		return
+	case err != nil:
 		writeError(w, http.StatusNotFound, "model "+name+" is not running, run it with nebu run", "model_not_found")
 		return
 	}
+	defer release()
 	target, err := url.Parse(endpoint)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error(), "server_error")
@@ -110,7 +166,7 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request) {
 	rp.ServeHTTP(w, r)
 }
 
-// Finds the requested model in the header, query, or JSON body
+// Finds the model in the header, query, or body
 func modelName(r *http.Request, body []byte) string {
 	if v := r.Header.Get(modelHeader); v != "" {
 		return v

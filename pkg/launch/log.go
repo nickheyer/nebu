@@ -34,7 +34,7 @@ func (l *Log) Write(line string) {
 	l.wakeLocked()
 }
 
-// Returns the last n retained lines, all when n is zero
+// Returns the last n retained lines, all when zero
 func (l *Log) Tail(n int) []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -62,7 +62,7 @@ func (l *Log) wakeLocked() {
 	}
 }
 
-// Sends the tail then new lines until the log closes or ctx ends
+// Sends the tail then new lines until close or ctx
 func (l *Log) Follow(ctx context.Context, tail int, send func([]string) error) error {
 	notify := make(chan struct{}, 1)
 	l.mu.Lock()

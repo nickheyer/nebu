@@ -20,7 +20,7 @@ func fixture(t *testing.T, parts ...string) string {
 	return abs
 }
 
-// Builds an offline environment with fixture probes and a local model
+// Builds an offline environment with fixture probes and a model
 func setup(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

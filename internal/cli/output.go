@@ -55,7 +55,7 @@ func compact(m map[string]string) string {
 	}
 	s := strings.Join(parts, " ")
 	if len(s) > factsWidth {
-		return s[:factsWidth-1] + "…"
+		return s[:factsWidth-1] + "..."
 	}
 	return s
 }

@@ -26,7 +26,7 @@ type Tensor struct {
 	Bytes uint64
 }
 
-// Writes a version 3 GGUF with the given metadata and tensors
+// Writes a version 3 GGUF with metadata and tensors
 func Write(w io.Writer, kv map[string]any, tensors []Tensor, alignment uint64) error {
 	var buf bytes.Buffer
 	buf.WriteString("GGUF")

@@ -12,7 +12,7 @@ const (
 	settleWait   = 500 * time.Millisecond
 )
 
-// Reports whether pid is alive and its command line ends with command
+// Reports whether pid lives with a matching command line
 func Running(pid int, command []string) bool {
 	if pid <= 0 || len(command) == 0 || !exists(pid) {
 		return false
@@ -27,7 +27,7 @@ func Running(pid int, command []string) bool {
 		if line != "" {
 			return strings.HasSuffix(line, want)
 		}
-		// Empty right after exec while argv is still being set up, or a zombie
+		// Empty right after exec, or a zombie
 		if time.Now().After(deadline) || !exists(pid) {
 			return false
 		}
@@ -35,7 +35,7 @@ func Running(pid int, command []string) bool {
 	}
 }
 
-// Stops a process group this daemon did not start, escalating after grace
+// Stops a foreign process group, escalating after grace
 func Terminate(pid int, grace time.Duration) bool {
 	if !exists(pid) {
 		return true

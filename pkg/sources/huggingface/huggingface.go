@@ -1,4 +1,4 @@
-// Package huggingface talks to the Hugging Face Hub API and compatible mirrors.
+// Package huggingface talks to the Hub API and compatible mirrors.
 package huggingface
 
 import (

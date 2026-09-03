@@ -1,4 +1,4 @@
-// Package transfer downloads blobs in resumable parallel chunks and verifies them.
+// Package transfer downloads blobs in resumable chunks and verifies them.
 package transfer
 
 import (
@@ -26,7 +26,7 @@ const (
 	maxBackoff  = 30 * time.Second
 )
 
-// Returned when the downloaded bytes do not match the expected digest
+// Returned when downloaded bytes do not match the digest
 var ErrDigestMismatch = errors.New("digest mismatch")
 
 // Reports byte deltas, negative when a chunk restarts
@@ -56,7 +56,7 @@ func New(workers int, chunk int64, retries int, bytesPerSecond uint64, log *slog
 	return f
 }
 
-// Fetches a blob into partial, resuming, then verifies and returns the hex digest
+// Fetches a blob with resume, verifies it, returns the digest
 func (f *Fetcher) Fetch(ctx context.Context, blob sources.Blob, partial, expected string, progress Progress) (string, error) {
 	if progress == nil {
 		progress = func(int64) {}

@@ -20,7 +20,7 @@ import (
 // Value a solved param takes before planning
 const Auto = "auto"
 
-// Grace period before a stop escalates when the manifest sets none
+// Grace before a stop escalates when the manifest sets none
 const DefaultStopGrace = 15 * time.Second
 
 var (
@@ -158,7 +158,7 @@ func compile(m *v1.RuntimeManifest) (*Runtime, error) {
 	return rt, nil
 }
 
-// Returns the first prebuilt rule whose condition holds on the host
+// Returns the first prebuilt rule that holds on the host
 func (rt *Runtime) Prebuilt(profile *v1.HostProfile) (*v1.PrebuiltRule, error) {
 	env := host.Env(profile)
 	for _, r := range rt.prebuilt {

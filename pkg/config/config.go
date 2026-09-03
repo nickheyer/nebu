@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/spec"
@@ -20,14 +22,21 @@ const (
 	EnvDataDir = "NEBU_DATA_DIR"
 	// Environment variable naming the listen address
 	EnvListen = "NEBU_LISTEN"
+	// Environment variable holding the API token
+	EnvToken = "NEBU_TOKEN"
 
-	defaultListen = "127.0.0.1:8484"
-	defaultSource = "huggingface"
-	minFreeBytes  = 50 << 30
-	workers       = 8
-	chunkBytes    = 32 << 20
-	retries       = 5
+	defaultListen   = "127.0.0.1:8484"
+	defaultSource   = "huggingface"
+	minFreeBytes    = 50 << 30
+	workers         = 8
+	chunkBytes      = 32 << 20
+	retries         = 5
+	drainTimeoutMs  = 30000
+	monitorInterval = 3600000
 )
+
+// Container CLIs tried in order when config names none
+var defaultCLIs = []string{"podman", "docker", "nerdctl"}
 
 // Search order when no path is given
 func candidates() []string {
@@ -81,6 +90,12 @@ func applyEnv(cfg *v1.Config) {
 	}
 	if v := os.Getenv(EnvListen); v != "" {
 		cfg.Listen = v
+	}
+	if v := os.Getenv(EnvToken); v != "" {
+		if cfg.Auth == nil {
+			cfg.Auth = &v1.Auth{}
+		}
+		cfg.Auth.Token = v
 	}
 }
 
@@ -137,8 +152,57 @@ func applyDefaults(cfg *v1.Config) error {
 	if cfg.Transfer.Retries == 0 {
 		cfg.Transfer.Retries = retries
 	}
+	if cfg.Gateway == nil {
+		cfg.Gateway = &v1.Gateway{}
+	}
+	if cfg.Gateway.DrainTimeoutMs == 0 {
+		cfg.Gateway.DrainTimeoutMs = drainTimeoutMs
+	}
+	if cfg.Auth == nil {
+		cfg.Auth = &v1.Auth{}
+	}
+	if cfg.Auth.Token == "" && cfg.Auth.TokenEnv != "" {
+		cfg.Auth.Token = os.Getenv(cfg.Auth.TokenEnv)
+	}
+	if cfg.Gateway.ApiKeyEnv != "" {
+		if v := os.Getenv(cfg.Gateway.ApiKeyEnv); v != "" {
+			cfg.Gateway.ApiKeys = append(cfg.Gateway.ApiKeys, splitKeys(v)...)
+		}
+	}
+	if cfg.Monitor == nil {
+		cfg.Monitor = &v1.Monitor{}
+	}
+	if cfg.Monitor.IntervalMs == 0 {
+		cfg.Monitor.IntervalMs = monitorInterval
+	}
+	if cfg.Builds == nil {
+		cfg.Builds = &v1.Builds{}
+	}
+	if cfg.Builds.Dir == "" {
+		cfg.Builds.Dir = filepath.Join(cfg.DataDir, "builds")
+	}
+	if len(cfg.Builds.Cli) == 0 {
+		cfg.Builds.Cli = append([]string(nil), defaultCLIs...)
+	}
+	if cfg.Builds.Jobs == 0 {
+		cfg.Builds.Jobs = uint32(runtime.NumCPU())
+	}
+	if cfg.Web == nil {
+		cfg.Web = &v1.Web{}
+	}
 	cfg.SpecDirs = append(cfg.SpecDirs, filepath.Join(cfg.DataDir, "spec"))
 	return nil
+}
+
+// Splits a comma or whitespace separated key list
+func splitKeys(s string) []string {
+	var out []string
+	for _, part := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' }) {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func dataHome() (string, error) {

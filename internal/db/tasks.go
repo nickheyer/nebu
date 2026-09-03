@@ -9,7 +9,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// Inserts or replaces a task and its labels, keeping its logs
+// Inserts or replaces a task and labels, keeping logs
 func (d *DB) PutTask(ctx context.Context, t *v1.Task) error {
 	return d.tx(ctx, func(tx *sql.Tx) error {
 		p := t.GetProgress()
@@ -55,7 +55,7 @@ func (d *DB) ListTasks(ctx context.Context, limit int) ([]*v1.Task, error) {
 	return d.tasks(ctx, ``, limit)
 }
 
-// Marks every task still pending or running as failed with reason
+// Marks every pending or running task failed with reason
 func (d *DB) FailUnfinishedTasks(ctx context.Context, reason string, finishedAt time.Time) (int64, error) {
 	res, err := d.sql.ExecContext(ctx, `UPDATE tasks SET state = ?, error = ?, finished_at = ? WHERE state IN (?, ?)`,
 		enumCol(v1.TaskState_TASK_STATE_FAILED), reason, stamp(finishedAt), enumCol(v1.TaskState_TASK_STATE_PENDING), enumCol(v1.TaskState_TASK_STATE_RUNNING))

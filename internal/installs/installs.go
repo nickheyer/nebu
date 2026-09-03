@@ -1,4 +1,4 @@
-// Package installs records usable copies of runtimes and obtains new ones.
+// Package installs records runtime copies and obtains new ones.
 package installs
 
 import (
@@ -14,11 +14,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/pkg/archive"
+	"github.com/nickheyer/nebu/pkg/build"
 	"github.com/nickheyer/nebu/pkg/eval"
+	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/runtime"
@@ -40,10 +44,25 @@ type Manager struct {
 	DB          *db.DB
 	RuntimesDir string
 	Runtimes    *runtime.Registry
+	Recipes     *build.Registry
+	Engine      *build.Engine
+	Defaults    *v1.Builds
 	Host        *host.Prober
 	Tasks       *tasks.Manager
 	Fetcher     *transfer.Fetcher
+	Events      *events.Bus
 	Log         *slog.Logger
+
+	buildMu  sync.Mutex
+	building map[string]*v1.Task
+}
+
+func (m *Manager) publishInstall(in *v1.Install, action v1.EventAction) {
+	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTALL, action, in.GetId(), &v1.Event_Install{Install: in})
+}
+
+func (m *Manager) publishBuild(b *v1.Build, action v1.EventAction) {
+	m.Events.Publish(v1.EventKind_EVENT_KIND_BUILD, action, b.GetId(), &v1.Event_Build{Build: b})
 }
 
 // Lists installs newest first, optionally for one runtime
@@ -106,7 +125,11 @@ func (m *Manager) Adopt(ctx context.Context, runtimeID, path string) (*v1.Instal
 		CreatedAt: timestamppb.Now(),
 	}
 	m.probe(ctx, rt, in)
-	return in, m.DB.PutInstall(ctx, in)
+	if err := m.DB.PutInstall(ctx, in); err != nil {
+		return nil, err
+	}
+	m.publishInstall(in, v1.EventAction_EVENT_ACTION_CREATED)
+	return in, nil
 }
 
 // Starts a task that downloads a release matching the host
@@ -147,18 +170,18 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Run
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	archive := filepath.Join(dir, a.name)
-	if info, err := os.Stat(archive); err != nil || info.Size() != a.size {
+	archivePath := filepath.Join(dir, a.name)
+	if info, err := os.Stat(archivePath); err != nil || info.Size() != a.size {
 		client, err := sources.NewClient(a.url, "")
 		if err != nil {
 			return err
 		}
 		h.Progress(0, uint64(a.size), "downloading "+a.name)
 		blob := sources.NewRangeBlob(client, a.url, a.size)
-		if _, err := m.Fetcher.Fetch(ctx, blob, archive+".partial", "", func(d int64) { h.Add(d) }); err != nil {
+		if _, err := m.Fetcher.Fetch(ctx, blob, archivePath+".partial", "", func(d int64) { h.Add(d) }); err != nil {
 			return err
 		}
-		if err := os.Rename(archive+".partial", archive); err != nil {
+		if err := os.Rename(archivePath+".partial", archivePath); err != nil {
 			return err
 		}
 	} else {
@@ -166,7 +189,7 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Run
 		h.Logf("archive already downloaded")
 	}
 	h.Message("extracting")
-	if err := extract(archive, dir); err != nil {
+	if err := archive.Extract(archivePath, dir); err != nil {
 		return err
 	}
 	binary, err := findBinary(dir, rule.GetBinary())
@@ -190,6 +213,7 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Run
 	if err := m.DB.PutInstall(ctx, in); err != nil {
 		return err
 	}
+	m.publishInstall(in, v1.EventAction_EVENT_ACTION_CREATED)
 	h.Logf("installed %s at %s", in.GetId(), binary)
 	return nil
 }
@@ -252,6 +276,16 @@ func (m *Manager) Remove(ctx context.Context, id string) (*v1.Install, error) {
 			return nil, err
 		}
 	}
+	if in.GetKind() == v1.InstallKind_INSTALL_KIND_BUILT && in.GetBuildId() != "" {
+		if b, err := m.DB.GetBuild(ctx, in.GetBuildId()); err == nil {
+			m.DB.DeleteBuild(ctx, b.GetId())
+			if b.GetDir() != "" && m.Engine != nil && strings.HasPrefix(b.GetDir(), m.Engine.Root) {
+				os.RemoveAll(b.GetDir())
+			}
+			m.publishBuild(b, v1.EventAction_EVENT_ACTION_DELETED)
+		}
+	}
+	m.publishInstall(in, v1.EventAction_EVENT_ACTION_DELETED)
 	return in, nil
 }
 

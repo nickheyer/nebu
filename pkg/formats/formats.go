@@ -31,7 +31,7 @@ type chunkReader struct {
 	pos   int
 }
 
-// Wraps a blob so header parsers issue few large range reads
+// Wraps a blob so header parsers issue few range reads
 func NewChunkReader(ra io.ReaderAt, size int64) io.Reader {
 	return &chunkReader{ra: ra, size: size, chunk: firstChunk}
 }
@@ -276,7 +276,7 @@ func Groups(m *v1.Model) []*Group {
 	return groups
 }
 
-// Finds one group by name, or the only group when name is empty
+// Finds one group by name, or the only one
 func FindGroup(groups []*Group, name string) (*Group, error) {
 	if name == "" {
 		if len(groups) == 1 {

@@ -110,6 +110,19 @@ message VerifyResponse {
   Task task = 1;
 }
 
+// Copies a stored model into a mirror layout
+message ExportRequest {
+  string source_id = 1;
+  string repo = 2;
+  string group = 3;
+  string dir = 4;
+}
+
+// Returns the export task
+message ExportResponse {
+  Task task = 1;
+}
+
 // Asks for store counters
 message GetStatusRequest {}
 
@@ -134,4 +147,6 @@ service StoreService {
   rpc Verify(VerifyRequest) returns (VerifyResponse);
   // Returns store counters
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  // Starts an export task
+  rpc Export(ExportRequest) returns (ExportResponse);
 }

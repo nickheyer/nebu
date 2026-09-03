@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Reads capacity of the filesystem holding a path, keyed by mount
+// Reads capacity of the filesystem holding a path by mount
 func stat(path string) (*v1.Storage, error) {
 	var fs unix.Statfs_t
 	if err := unix.Statfs(path, &fs); err != nil {

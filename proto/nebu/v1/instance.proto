@@ -16,6 +16,7 @@ enum InstanceState {
   INSTANCE_STATE_STOPPING = 3;
   INSTANCE_STATE_STOPPED = 4;
   INSTANCE_STATE_FAILED = 5;
+  INSTANCE_STATE_DRAINING = 6;
 }
 
 // One matched triage rule with its hint
@@ -58,6 +59,7 @@ message Instance {
   string task_id = 20;
   RunRequest request = 21;
   bool desired_running = 22;
+  string slot_id = 23;
 }
 
 // Starts a stored model on a runtime
@@ -69,6 +71,7 @@ message RunRequest {
   string install_id = 5;
   string name = 6;
   map<string, string> params = 7;
+  string slot_id = 8;
 }
 
 // Returns the instance and its startup task

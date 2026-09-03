@@ -39,6 +39,7 @@ func commands() []command {
 			{name: "status", summary: "show store counters", run: runStoreStatus},
 			{name: "gc", summary: "remove unreferenced blobs", run: runStoreGc},
 			{name: "verify", summary: "rehash stored blobs", run: runStoreVerify},
+			{name: "export", summary: "copy stored models into a mirror directory", run: runStoreExport},
 		}},
 		{name: "tasks", summary: "list, watch, and cancel tasks", run: runTasksList, sub: []command{
 			{name: "list", summary: "list tasks", run: runTasksList},
@@ -51,8 +52,39 @@ func commands() []command {
 			{name: "adopt", summary: "record a binary already on the host", run: runRuntimesAdopt},
 			{name: "install", summary: "download a prebuilt release for this host", run: runRuntimesInstall},
 			{name: "remove", summary: "remove an install", run: runRuntimesRemove},
+			{name: "recipes", summary: "list build recipes and what this host selects", run: runRuntimesRecipes},
+		}},
+		{name: "build", summary: "build a runtime from its recipe", run: runBuild},
+		{name: "builds", summary: "list, show, and remove builds", run: runBuildsList, sub: []command{
+			{name: "list", summary: "list builds", run: runBuildsList},
+			{name: "show", summary: "show one build", run: runBuildsShow},
+			{name: "remove", summary: "remove a build and its install", run: runBuildsRemove},
 		}},
 		{name: "run", summary: "start a stored model on a runtime", run: runRun},
+		{name: "swap", summary: "replace what a slot serves without dropping its name", run: runSwap},
+		{name: "slots", summary: "reservations of devices and memory", run: runSlotsList, sub: []command{
+			{name: "list", summary: "list slots", run: runSlotsList},
+			{name: "create", summary: "create a slot", run: runSlotsCreate},
+			{name: "show", summary: "show a slot and its occupant", run: runSlotsShow},
+			{name: "update", summary: "change slot settings", run: runSlotsUpdate},
+			{name: "evict", summary: "stop the occupant, keep the slot", run: runSlotsEvict},
+			{name: "remove", summary: "delete a slot", run: runSlotsRemove},
+		}},
+		{name: "routes", summary: "public names the gateway answers for", run: runRoutesList, sub: []command{
+			{name: "list", summary: "list routes", run: runRoutesList},
+			{name: "add", summary: "alias a name onto a running instance", run: runRoutesAdd},
+			{name: "remove", summary: "remove an alias", run: runRoutesRemove},
+		}},
+		{name: "gateway", summary: "gateway listeners, routes, and counters", run: runGateway},
+		{name: "monitor", summary: "watch sources for new revisions and quants", run: runMonitorList, sub: []command{
+			{name: "list", summary: "list watches", run: runMonitorList},
+			{name: "add", summary: "watch a repository", run: runMonitorAdd},
+			{name: "remove", summary: "stop watching", run: runMonitorRemove},
+			{name: "check", summary: "check now", run: runMonitorCheck},
+			{name: "findings", summary: "list findings", run: runMonitorFindings},
+			{name: "ack", summary: "acknowledge a finding", run: runMonitorAck},
+		}},
+		{name: "events", summary: "stream daemon events as JSON lines", run: runEvents},
 		{name: "ps", summary: "list running instances", run: runPs},
 		{name: "show", summary: "show instance info", run: runShow},
 		{name: "stop", summary: "stop an instance", run: runStop},
@@ -61,7 +93,7 @@ func commands() []command {
 	}
 }
 
-// Walks nested command tables and returns the command and its args
+// Walks nested command tables to the command and its args
 func resolve(cmds []command, args []string) (*command, []string) {
 	if len(args) == 0 {
 		return nil, args
@@ -91,7 +123,7 @@ type env struct {
 	closers []io.Closer
 }
 
-// Stops an in process daemon and its logger when one was started
+// Stops the in process daemon and logger when present
 func (e *env) close() {
 	if e.daemon != nil {
 		e.daemon.Close()

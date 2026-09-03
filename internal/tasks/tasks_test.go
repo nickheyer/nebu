@@ -24,12 +24,12 @@ func openStore(t *testing.T) *db.DB {
 }
 
 func manager(t *testing.T) *Manager {
-	return New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), openStore(t))
+	return New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), openStore(t), nil)
 }
 
 func TestHistorySurvivesManager(t *testing.T) {
 	store := openStore(t)
-	first := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), store)
+	first := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), store, nil)
 	done := first.Start("pull", "pull x", map[string]string{"repo": "x"}, func(ctx context.Context, h *Handle) error {
 		h.Logf("one")
 		h.Logf("two")
@@ -40,7 +40,7 @@ func TestHistorySurvivesManager(t *testing.T) {
 		return ctx.Err()
 	})
 	first.Watch(context.Background(), done.GetId(), func(*v1.WatchTaskResponse) error { return nil })
-	second := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), store)
+	second := New(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), store, nil)
 	task, logs, err := second.Get(done.GetId())
 	if err != nil || task.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED || len(logs) != 2 || logs[1] != "two" || task.GetLabels()["repo"] != "x" {
 		t.Fatalf("stored task %v %v %v", task, logs, err)

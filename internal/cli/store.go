@@ -150,7 +150,7 @@ func (e *env) defaultSource(ctx context.Context, cl *clients, id string) (string
 	return resp.Msg.GetSources()[0].GetId(), nil
 }
 
-// Resolves an empty group to the only stored group of a repo
+// Resolves an empty group to the only stored group
 func (e *env) onlyGroup(ctx context.Context, cl *clients, source, repo, group string) (string, error) {
 	if group != "" {
 		return group, nil

@@ -1,4 +1,4 @@
-// Package probes runs spec driven host probes and maps output onto profile entries.
+// Package probes runs spec driven host probes into profile entries.
 package probes
 
 import (
@@ -131,7 +131,7 @@ func Compile(spec *v1.ProbeSpec) (*Probe, error) {
 	return p, nil
 }
 
-// Runs exec and parse, never returning a Go error for host conditions
+// Runs exec and parse, never returning errors for host conditions
 func (p *Probe) Run(ctx context.Context) Result {
 	data, status, detail := p.execute(ctx)
 	if status != v1.ProbeStatus_PROBE_STATUS_OK {
@@ -418,7 +418,7 @@ func Key(s string) string {
 	return strings.Trim(keyClean.ReplaceAllString(strings.TrimSpace(s), "_"), "_")
 }
 
-// Parses a byte count with an optional inline or default unit
+// Parses a byte count with an inline or default unit
 func Bytes(s, unit string) (uint64, error) { return eval.Bytes(s, unit) }
 
 func optionalBytes(s, unit string) (uint64, error) {

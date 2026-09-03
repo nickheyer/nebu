@@ -13,7 +13,7 @@ import (
 
 const smoothing = 0.3
 
-// Corrections keyed by runtime and architecture, held in memory and written through to the store
+// Corrections by runtime and architecture, written through to the store
 type Table struct {
 	store   *db.DB
 	mu      sync.Mutex
@@ -48,7 +48,7 @@ func (t *Table) Delta(runtimeID, architecture string) float64 {
 	return 0
 }
 
-// Folds one measured versus planned device total into the table and stores it
+// Folds measured minus planned device bytes into the table
 func (t *Table) Record(ctx context.Context, runtimeID, architecture string, measured, planned uint64) error {
 	observed := float64(measured) - float64(planned)
 	t.mu.Lock()

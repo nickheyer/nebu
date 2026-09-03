@@ -30,6 +30,8 @@ probes:
 launch:
   command: '{{.install.path}}'
   args: ['--model', '{{index .artifacts "weights"}}', '--host', '{{.host}}', '--port', '{{.port}}']
+  env:
+    FAKE_VISIBLE_DEVICES: '{{range $i, $d := .devices}}{{if $i}},{{end}}{{index $d.facts "index"}}{{end}}'
   health:
     path: /health
     interval_ms: 50
@@ -41,6 +43,10 @@ params:
     type: PARAM_TYPE_INT
     default: '512'
     flag: --ctx-size
+  - name: alias
+    type: PARAM_TYPE_STRING
+    default: '{{.name}}'
+    flag: --alias
   - name: n_ubatch
     type: PARAM_TYPE_INT
     default: '64'
@@ -91,7 +97,7 @@ rules:
       n_ctx: '128'
 `
 
-// Starts an in process daemon and returns its address and a stop that waits for shutdown
+// Starts an in process daemon, returning its address and stop
 func startDaemon(t *testing.T, cfgPath, listen string) (string, func()) {
 	t.Helper()
 	cfg, err := config.Load(cfgPath)
@@ -123,7 +129,7 @@ func startDaemon(t *testing.T, cfgPath, listen string) (string, func()) {
 	return ln.Addr().String(), stop
 }
 
-// Starts the daemon as a separate process so it can be killed the way a crash would
+// Starts the daemon as a process so it can crash
 func spawnDaemon(t *testing.T, cfgPath string, extraEnv ...string) (string, *exec.Cmd) {
 	t.Helper()
 	listen := freeAddr(t)
@@ -174,7 +180,7 @@ func writeFakeSpecs(t *testing.T, cfg string) {
 	os.WriteFile(filepath.Join(root, "spec", "triage", "fake.yaml"), []byte(fakeTriageSpec), 0o644)
 }
 
-// Polls the instance list on addr until one line matches every want
+// Polls ps on addr until one line matches every want
 func waitPs(t *testing.T, cfg, addr string, all bool, wants ...string) string {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
@@ -340,7 +346,7 @@ func TestRunLifecycle(t *testing.T) {
 	}
 	t.Setenv(fakeFail, "")
 
-	// A model running at graceful shutdown comes back when the daemon starts again
+	// A model running at graceful shutdown comes back on restart
 	if out, errw, code = cli("run", "stories", "--source", "local", "--runtime", "fake", "--name", "stories"); code != 0 {
 		t.Fatalf("run again: %s %s", out, errw)
 	}
@@ -373,7 +379,7 @@ func TestRunLifecycle(t *testing.T) {
 	}
 	stopB()
 
-	// A daemon killed outright takes its runtime with it, and the next daemon relaunches
+	// A killed daemon takes its runtime, the next relaunches it
 	listenC, procC := spawnDaemon(t, cfg)
 	waitPs(t, cfg, listenC, false, "stories", "READY")
 	thirdPid, _ := pidOf(t, cfg, listenC, "stories")
@@ -392,7 +398,7 @@ func TestRunLifecycle(t *testing.T) {
 	}
 	stopD()
 
-	// A runtime that survives its daemon is adopted by the next one, not restarted
+	// A runtime outliving its daemon is adopted, not restarted
 	listenE, procE := spawnDaemon(t, cfg, fakeIgnoreTerm+"=1")
 	waitPs(t, cfg, listenE, false, "stories", "READY")
 	fifthPid, fifthID := pidOf(t, cfg, listenE, "stories")
@@ -413,7 +419,9 @@ func TestRunLifecycle(t *testing.T) {
 	}
 	resp, err = http.Post("http://"+addrF+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"stories"}`))
 	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("adopted model should be routed: %v", err)
+		body, _ := io.ReadAll(resp.Body)
+		routes, _, _ := run(t, cfg, "--addr", addrF, "routes")
+		t.Fatalf("adopted model should be routed: %v %d %s\n%s", err, resp.StatusCode, body, routes)
 	}
 	if out, _, code = run(t, cfg, "--addr", addrF, "logs", "stories"); code != 0 || !strings.Contains(out, "listening on") {
 		t.Fatalf("adopted output should be readable:\n%s", out)

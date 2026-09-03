@@ -12,8 +12,8 @@ import (
 // Inserts or replaces an install and its facts
 func (d *DB) PutInstall(ctx context.Context, in *v1.Install) error {
 	return d.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO installs (id, runtime_id, kind, path, dir, version, origin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			in.GetId(), in.GetRuntimeId(), enumCol(in.GetKind()), in.GetPath(), in.GetDir(), in.GetVersion(), in.GetOrigin(), stamp(in.GetCreatedAt().AsTime())); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO installs (id, runtime_id, kind, path, dir, version, origin, created_at, build_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			in.GetId(), in.GetRuntimeId(), enumCol(in.GetKind()), in.GetPath(), in.GetDir(), in.GetVersion(), in.GetOrigin(), stamp(in.GetCreatedAt().AsTime()), in.GetBuildId()); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM install_facts WHERE install_id = ?`, in.GetId()); err != nil {
@@ -57,7 +57,7 @@ func (d *DB) DeleteInstall(ctx context.Context, id string) (bool, error) {
 }
 
 func (d *DB) installs(ctx context.Context, where string, args ...any) ([]*v1.Install, error) {
-	rows, err := d.sql.QueryContext(ctx, `SELECT id, runtime_id, kind, path, dir, version, origin, created_at FROM installs `+where+` ORDER BY created_at DESC, id`, args...)
+	rows, err := d.sql.QueryContext(ctx, `SELECT id, runtime_id, kind, path, dir, version, origin, created_at, build_id FROM installs `+where+` ORDER BY created_at DESC, id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func (d *DB) installs(ctx context.Context, where string, args ...any) ([]*v1.Ins
 	for rows.Next() {
 		in := &v1.Install{}
 		var kind, created string
-		if err := rows.Scan(&in.Id, &in.RuntimeId, &kind, &in.Path, &in.Dir, &in.Version, &in.Origin, &created); err != nil {
+		if err := rows.Scan(&in.Id, &in.RuntimeId, &kind, &in.Path, &in.Dir, &in.Version, &in.Origin, &created, &in.BuildId); err != nil {
 			return nil, err
 		}
 		in.Kind = v1.InstallKind(enumVal(v1.InstallKind(0).Descriptor(), kind))

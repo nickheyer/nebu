@@ -77,6 +77,14 @@ func (s *StoreService) Verify(ctx context.Context, req *connect.Request[v1.Verif
 	return connect.NewResponse(&v1.VerifyResponse{Task: task}), nil
 }
 
+func (s *StoreService) Export(ctx context.Context, req *connect.Request[v1.ExportRequest]) (*connect.Response[v1.ExportResponse], error) {
+	task, err := s.puller.Export(ctx, req.Msg)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return connect.NewResponse(&v1.ExportResponse{Task: task}), nil
+}
+
 func (s *StoreService) GetStatus(ctx context.Context, req *connect.Request[v1.GetStatusRequest]) (*connect.Response[v1.GetStatusResponse], error) {
 	st, err := s.store.Status()
 	if err != nil {

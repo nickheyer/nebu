@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nebu/v1/runtime.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Whether a route can take requests
+enum RouteState {
+  ROUTE_STATE_UNSPECIFIED = 0;
+  ROUTE_STATE_PENDING = 1;
+  ROUTE_STATE_READY = 2;
+  ROUTE_STATE_DRAINING = 3;
+}
+
+// A public model name mapped to an instance
+message Route {
+  string name = 1;
+  string instance_id = 2;
+  string slot_id = 3;
+  string endpoint = 4;
+  ApiFlavor api = 5;
+  RouteState state = 6;
+  uint64 requests = 7;
+  uint32 in_flight = 8;
+  string model = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+// One address the gateway answers on
+message Listener {
+  string addr = 1;
+  bool shared = 2;
+}
+
+// Gateway wide view
+message GatewayStatus {
+  repeated Listener listeners = 1;
+  repeated Route routes = 2;
+  bool auth = 3;
+  uint64 requests = 4;
+}
+
+// Asks for the gateway view
+message GetGatewayStatusRequest {}
+
+// Returns the gateway view
+message GetGatewayStatusResponse {
+  GatewayStatus status = 1;
+}
+
+// Lists routes
+message ListRoutesRequest {}
+
+// Returns routes by name
+message ListRoutesResponse {
+  repeated Route routes = 1;
+}
+
+// Maps an extra public name onto a running instance
+message SetRouteRequest {
+  string name = 1;
+  string instance_id = 2;
+}
+
+// Returns the route
+message SetRouteResponse {
+  Route route = 1;
+}
+
+// Removes a route by name
+message DeleteRouteRequest {
+  string name = 1;
+}
+
+// Returns the removed route
+message DeleteRouteResponse {
+  Route route = 1;
+}
+
+// Routes and listeners of the OpenAI compatible gateway
+service GatewayService {
+  // Returns listeners, routes, and counters
+  rpc GetGatewayStatus(GetGatewayStatusRequest) returns (GetGatewayStatusResponse);
+  // Lists routes
+  rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse);
+  // Adds an alias route
+  rpc SetRoute(SetRouteRequest) returns (SetRouteResponse);
+  // Removes an alias route
+  rpc DeleteRoute(DeleteRouteRequest) returns (DeleteRouteResponse);
+}

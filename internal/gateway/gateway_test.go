@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -10,22 +11,18 @@ import (
 	"testing"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-type fakeRouter map[string]string
-
-func (f fakeRouter) Route(name string) (string, bool) {
-	ep, ok := f[name]
-	return ep, ok
-}
-
-func (f fakeRouter) Ready() []*v1.Instance {
-	var out []*v1.Instance
-	for name, ep := range f {
-		out = append(out, &v1.Instance{Name: name, Endpoint: ep, ReadyAt: timestamppb.Now()})
+func tableOf(t *testing.T, routes map[string]string) *Table {
+	t.Helper()
+	table, err := OpenTable(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return out
+	for name, ep := range routes {
+		table.Set(name, "inst-"+name, "", ep, "repo:"+name, v1.ApiFlavor_API_FLAVOR_OPENAI)
+	}
+	return table
 }
 
 func TestGateway(t *testing.T) {
@@ -35,7 +32,7 @@ func TestGateway(t *testing.T) {
 		w.Write([]byte(`{"path":"` + r.URL.Path + `","body":` + string(body) + `}`))
 	}))
 	defer upstream.Close()
-	g := New(fakeRouter{"m1": upstream.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	g := New(tableOf(t, map[string]string{"m1": upstream.URL}), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"m1","messages":[]}`))

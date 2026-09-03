@@ -22,6 +22,8 @@ type Catalog struct {
 	Archs    []*v1.ArchSpec
 	Runtimes []*v1.RuntimeManifest
 	Triage   []*v1.TriageSpec
+	Recipes  []*v1.Recipe
+	Patches  map[string][]byte
 }
 
 // Message with a stable id
@@ -32,7 +34,7 @@ type identified interface {
 
 // Loads layered spec filesystems, later layers override by id
 func Load(layers ...fs.FS) (*Catalog, error) {
-	c := &Catalog{}
+	c := &Catalog{Patches: map[string][]byte{}}
 	for _, fsys := range layers {
 		var err error
 		if c.Probes, err = loadDir(fsys, "probes", c.Probes, func() *v1.ProbeSpec { return &v1.ProbeSpec{} }); err != nil {
@@ -50,8 +52,36 @@ func Load(layers ...fs.FS) (*Catalog, error) {
 		if c.Triage, err = loadDir(fsys, "triage", c.Triage, func() *v1.TriageSpec { return &v1.TriageSpec{} }); err != nil {
 			return nil, err
 		}
+		if c.Recipes, err = loadDir(fsys, "recipes", c.Recipes, func() *v1.Recipe { return &v1.Recipe{} }); err != nil {
+			return nil, err
+		}
+		if err := loadFiles(fsys, "patches", c.Patches); err != nil {
+			return nil, err
+		}
 	}
 	return c, nil
+}
+
+// Reads every regular file in dir, later layers override
+func loadFiles(fsys fs.FS, dir string, files map[string][]byte) error {
+	entries, err := fs.ReadDir(fsys, dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		data, err := fs.ReadFile(fsys, path.Join(dir, e.Name()))
+		if err != nil {
+			return err
+		}
+		files[e.Name()] = data
+	}
+	return nil
 }
 
 // Returns directory layers that exist on disk

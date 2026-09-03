@@ -1,0 +1,40 @@
+# Slots and swaps
+
+A slot is a reservation of devices and a memory budget under one public name that never
+changes. Instances come and go inside it.
+
+```
+nebu slots create main --device GPU-1234 --memory 20GiB --runtime llamacpp
+nebu run org/model --group Q4_K_M --slot main
+nebu swap main org/other --group Q8_0
+```
+
+Planning inside a slot sees only the slot's device pools, capped at the budget, so a second
+slot on the same card plans around the first. The manifest's launch env can pin the process
+to the slot's devices through `.devices`. The slot's default runtime and params apply under
+whatever the run passes.
+
+The gateway route for a slot is its name. While the slot is empty or starting the route
+stays in place and answers `503` with `Retry-After`, never `404`, so a client that retries
+keeps working across a swap.
+
+## Swap
+
+`nebu swap` plans the new model with the old one still running.
+
+- When the plan fits, the new instance starts beside the old one. Once it is healthy the
+  route flips to it, the old instance drains, meaning it takes no new requests and waits
+  up to `gateway.drain_timeout_ms` for in flight ones, and then stops. Nothing is refused.
+- When it does not fit, or `--drain-first` is passed, the old instance drains and stops
+  first, the route goes pending, and the new instance starts. If the new one fails, the old
+  request is replayed so the slot serves what it served before and the error is kept on the
+  slot.
+
+`nebu slots evict` drains and stops the occupant and leaves the name pending. `nebu slots
+remove --force` stops the occupant and drops the name.
+
+## Restart
+
+Slots are rows in the store. On start the daemon adopts runtimes that survived, marks the
+rest, relaunches every instance that was never stopped by request, and each slot picks up
+the instance bound to it and routes it as soon as it answers health.

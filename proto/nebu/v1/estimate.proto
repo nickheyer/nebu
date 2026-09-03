@@ -64,6 +64,7 @@ message EstimateRequest {
   string group = 4;
   string runtime_id = 5;
   map<string, string> params = 6;
+  string slot_id = 7;
 }
 
 // Returns the plan and descriptor used
@@ -81,6 +82,7 @@ message InspectRequest {
   repeated string runtime_ids = 5;
   repeated uint32 contexts = 6;
   map<string, string> params = 7;
+  string slot_id = 8;
 }
 
 // One cell of the fit table

@@ -10,7 +10,7 @@ import (
 	"syscall"
 )
 
-// Puts the child in its own group and ties it to our lifetime
+// Puts the child in its own group tied to us
 func procAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGTERM}
 }

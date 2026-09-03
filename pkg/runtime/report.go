@@ -12,7 +12,7 @@ type reportRule struct {
 	re   *regexp.Regexp
 }
 
-// Sums allocations the runtime reported in its output, keyed by rule
+// Sums allocations the runtime reported, keyed by rule
 func (rt *Runtime) Measure(lines []string) []*v1.Measurement {
 	var out []*v1.Measurement
 	byKey := map[string]*v1.Measurement{}

@@ -115,7 +115,11 @@ func status(t *v1.Task, rate float64) string {
 	parts := []string{t.GetTitle(), strings.ToUpper(eval.EnumShort(t.GetState()))}
 	if p.GetTotal() > 0 {
 		pct := float64(p.GetDone()) * 100 / float64(p.GetTotal())
-		parts = append(parts, fmt.Sprintf("%s/%s %.0f%%", estimate.Human(p.GetDone()), estimate.Human(p.GetTotal()), pct))
+		if p.GetTotal() < 1000 {
+			parts = append(parts, fmt.Sprintf("%d/%d", p.GetDone(), p.GetTotal()))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s/%s %.0f%%", estimate.Human(p.GetDone()), estimate.Human(p.GetTotal()), pct))
+		}
 	}
 	if rate > 0 && !terminalState(t.GetState()) {
 		parts = append(parts, estimate.Human(uint64(rate))+"/s")
@@ -138,7 +142,7 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	return s[:n-1] + "..."
 }
 
 func isTerminal(w io.Writer) bool {

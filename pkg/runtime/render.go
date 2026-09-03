@@ -15,9 +15,10 @@ type RenderInput struct {
 	Host      string
 	Port      int
 	Install   map[string]string
+	Devices   []map[string]any
 }
 
-// Rendered command line, environment, and the param values that were emitted
+// Rendered command line, environment, and the emitted param values
 type Rendered struct {
 	Command string
 	Args    []string
@@ -33,6 +34,7 @@ func (in RenderInput) context() map[string]any {
 		"host":      in.Host,
 		"port":      in.Port,
 		"install":   in.Install,
+		"devices":   in.Devices,
 	}
 }
 
@@ -56,7 +58,10 @@ func (rt *Runtime) Render(in RenderInput) (*Rendered, error) {
 		if err != nil {
 			return nil, err
 		}
-		out.Env[k] = v
+		// Empty renders mean the variable does not apply
+		if v = strings.TrimSpace(v); v != "" {
+			out.Env[k] = v
+		}
 	}
 	for _, p := range rt.Manifest.GetParams() {
 		value, ok := in.Params[p.GetName()]
@@ -92,7 +97,7 @@ func (rt *Runtime) Render(in RenderInput) (*Rendered, error) {
 	return out, nil
 }
 
-// Formats a param value, rendering string templates, and says whether to emit it
+// Formats a param value and says whether to emit it
 func renderValue(value any, solved bool, ctx map[string]any) (string, bool, error) {
 	switch v := value.(type) {
 	case nil:

@@ -95,6 +95,14 @@ func (c *Client) Do(ctx context.Context, method, rawURL string, query url.Values
 	return nil, last
 }
 
+// Sends a prepared request once with the client's auth header
+func (c *Client) Send(req *http.Request) (*http.Response, error) {
+	if c.token != "" && req.Header.Get("Authorization") == "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	return c.http.Do(req)
+}
+
 // Fetches JSON into out and returns response headers
 func (c *Client) JSON(ctx context.Context, rawURL string, query url.Values, out any) (http.Header, error) {
 	resp, err := c.Do(ctx, http.MethodGet, rawURL, query, nil)
@@ -116,7 +124,7 @@ type RangeBlob struct {
 	mu     sync.Mutex
 }
 
-// Wraps a URL as a range readable blob of known size
+// Wraps a URL as a range readable blob
 func NewRangeBlob(c *Client, rawURL string, size int64) *RangeBlob {
 	return &RangeBlob{client: c, url: rawURL, size: size}
 }
@@ -145,7 +153,7 @@ func (b *RangeBlob) ReadAt(p []byte, off int64) (int, error) {
 		b.mu.Unlock()
 	}
 	body := io.Reader(resp.Body)
-	if resp.StatusCode == http.StatusOK {
+	if ignoredRange(resp) {
 		if _, err := io.CopyN(io.Discard, body, off); err != nil {
 			return 0, err
 		}
@@ -164,7 +172,7 @@ func (b *RangeBlob) ReadAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
-// Streams one range as a body, tolerating servers that ignore Range
+// Streams one range, tolerating servers that ignore Range
 func (b *RangeBlob) Range(ctx context.Context, off, length int64) (io.ReadCloser, error) {
 	if off >= b.size || length <= 0 {
 		return io.NopCloser(strings.NewReader("")), nil
@@ -184,13 +192,18 @@ func (b *RangeBlob) Range(ctx context.Context, off, length int64) (io.ReadCloser
 		b.mu.Unlock()
 	}
 	var body io.Reader = resp.Body
-	if resp.StatusCode == http.StatusOK {
+	if ignoredRange(resp) {
 		if _, err := io.CopyN(io.Discard, body, off); err != nil {
 			resp.Body.Close()
 			return nil, err
 		}
 	}
 	return &limitedBody{Reader: io.LimitReader(body, end-off+1), closer: resp.Body}, nil
+}
+
+// Reports a whole body response, some send 200 with Content-Range
+func ignoredRange(resp *http.Response) bool {
+	return resp.StatusCode == http.StatusOK && !strings.HasPrefix(resp.Header.Get("Content-Range"), "bytes ")
 }
 
 type limitedBody struct {

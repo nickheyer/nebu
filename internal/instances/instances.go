@@ -1,4 +1,4 @@
-// Package instances plans, launches, supervises, records, recovers, and routes running models.
+// Package instances runs, supervises, records, recovers, and routes models.
 package instances
 
 import (
@@ -20,11 +20,13 @@ import (
 
 	"github.com/nickheyer/nebu/internal/calibrate"
 	"github.com/nickheyer/nebu/internal/db"
+	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/eval"
+	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/host"
 	"github.com/nickheyer/nebu/pkg/launch"
@@ -52,6 +54,29 @@ var (
 	errStopped         = errors.New("stopped before ready")
 )
 
+// Narrows a run to a slot's devices, budget, and defaults
+type Reservation struct {
+	SlotID      string
+	Name        string
+	DeviceIDs   []string
+	MemoryBytes uint64
+	RuntimeID   string
+	Params      map[string]string
+	InstanceID  string
+}
+
+type swapKey struct{}
+
+// Marks a context as a swap, allowed beside an occupant
+func WithSwap(ctx context.Context) context.Context { return context.WithValue(ctx, swapKey{}, true) }
+
+func fromSwap(ctx context.Context) bool { v, _ := ctx.Value(swapKey{}).(bool); return v }
+
+// Resolves slot ids to reservations, implemented by the slot manager
+type Reserver interface {
+	Reservation(ctx context.Context, slotID string) (*Reservation, error)
+}
+
 // Owns every instance of this daemon
 type Manager struct {
 	DB          *db.DB
@@ -65,7 +90,13 @@ type Manager struct {
 	Host        *host.Prober
 	Triage      *triage.Matcher
 	Calibration *calibrate.Table
+	Routes      *gateway.Table
+	Events      *events.Bus
+	Reserver    Reserver
 	Log         *slog.Logger
+
+	// Called after every state change, outside the instance lock
+	OnChange func(*v1.Instance)
 
 	mu   sync.Mutex
 	list []*instance
@@ -96,17 +127,58 @@ func (in *instance) snapshot() *v1.Instance {
 	return proto.Clone(in.rec).(*v1.Instance)
 }
 
-// Applies fn, writes the record, and releases stop waiters once terminal
+// Applies fn, writes the record, releases waiters, and notifies
 func (in *instance) update(fn func(*v1.Instance)) {
 	in.mu.Lock()
-	defer in.mu.Unlock()
+	before := in.rec.GetState()
 	fn(in.rec)
 	if err := in.mgr.DB.PutInstance(context.Background(), in.rec); err != nil {
 		in.mgr.Log.Warn("instance record write failed", "id", in.rec.GetId(), "err", err)
 	}
-	if terminal(in.rec.GetState()) {
+	rec := proto.Clone(in.rec).(*v1.Instance)
+	in.mu.Unlock()
+	in.mgr.changed(rec, before)
+	// Stop waiters continue only after observers saw the exit
+	if terminal(rec.GetState()) {
 		in.exitOnce.Do(func() { close(in.exited) })
 	}
+}
+
+// Updates routes for a changed instance and tells listeners
+func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
+	if m.Routes != nil && rec.GetSlotId() == "" {
+		switch {
+		case rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY:
+			m.Routes.Set(rec.GetName(), rec.GetId(), "", rec.GetEndpoint(), modelOf(rec), m.api(rec))
+		case rec.GetState() == v1.InstanceState_INSTANCE_STATE_DRAINING && before != v1.InstanceState_INSTANCE_STATE_DRAINING:
+			m.Routes.Drain(rec.GetId())
+		case terminal(rec.GetState()) && !terminal(before):
+			m.Routes.RemoveInstance(rec.GetId())
+		}
+	} else if m.Routes != nil && terminal(rec.GetState()) && !terminal(before) {
+		m.Routes.RemoveInstance(rec.GetId())
+	}
+	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_UPDATED, rec.GetId(), &v1.Event_Instance{Instance: rec})
+	if m.OnChange != nil {
+		m.OnChange(rec)
+	}
+}
+
+// Returns the wire protocol of an instance's runtime
+func (m *Manager) api(rec *v1.Instance) v1.ApiFlavor {
+	rt, err := m.Runtimes.Get(rec.GetRuntimeId())
+	if err != nil {
+		return v1.ApiFlavor_API_FLAVOR_OPENAI
+	}
+	if api := rt.Manifest.GetLaunch().GetApi(); api != v1.ApiFlavor_API_FLAVOR_UNSPECIFIED {
+		return api
+	}
+	return v1.ApiFlavor_API_FLAVOR_OPENAI
+}
+
+// Formats the model an instance serves for routes
+func modelOf(rec *v1.Instance) string {
+	return rec.GetRepo() + ":" + rec.GetGroup()
 }
 
 func (in *instance) grace() time.Duration {
@@ -134,18 +206,92 @@ func (in *instance) attach(proc launch.Handle) {
 	in.mu.Unlock()
 }
 
-// Plans and launches a stored model, returning the record and its startup task
+// Everything resolved for a run before anything is launched
+type prepared struct {
+	req        *v1.RunRequest
+	stored     *v1.StoredModel
+	rt         *runtime.Runtime
+	install    *v1.Install
+	name       string
+	descriptor *v1.Descriptor
+	profile    *v1.HostProfile
+	planned    *v1.HostProfile
+	res        *Reservation
+	params     map[string]any
+	plan       *v1.MemoryPlan
+}
+
+// Plans a run without launching it
+func (m *Manager) Plan(ctx context.Context, req *v1.RunRequest) (*v1.MemoryPlan, error) {
+	p, err := m.prepare(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if p.plan == nil {
+		return &v1.MemoryPlan{Verdict: v1.FitVerdict_FIT_VERDICT_FITS, Detail: "runtime has no estimate policy"}, nil
+	}
+	return p.plan, nil
+}
+
+// Plans and launches a stored model, returning record and task
 func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v1.Task, error) {
-	stored, err := m.Store.ReadManifest(req.GetSourceId(), req.GetRepo(), req.GetGroup())
+	p, err := m.prepare(ctx, req)
 	if err != nil {
 		return nil, nil, err
+	}
+	if p.res != nil && p.res.InstanceID != "" && !fromSwap(ctx) {
+		if cur, err := m.Get(p.res.InstanceID); err == nil && !terminal(cur.GetState()) {
+			return nil, nil, fmt.Errorf("%w: slot %s serves %s, use nebu swap", runtime.ErrParam, p.res.Name, cur.GetName())
+		}
+	}
+	if p.plan != nil && p.plan.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO {
+		return nil, nil, fmt.Errorf("%w: %s does not fit, %s", runtime.ErrParam, p.name, p.plan.GetDetail())
+	}
+	return m.launch(ctx, p)
+}
+
+// Resolves model, runtime, install, reservation, and plan
+func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, error) {
+	req = proto.Clone(req).(*v1.RunRequest)
+	stored, err := m.Store.ReadManifest(req.GetSourceId(), req.GetRepo(), req.GetGroup())
+	if err != nil {
+		return nil, err
+	}
+	var res *Reservation
+	if req.GetSlotId() != "" {
+		if m.Reserver == nil {
+			return nil, fmt.Errorf("%w: slots are not available", runtime.ErrParam)
+		}
+		if res, err = m.Reserver.Reservation(ctx, req.GetSlotId()); err != nil {
+			return nil, err
+		}
+		req.SlotId = res.SlotID
+		if req.RuntimeId == "" {
+			req.RuntimeId = res.RuntimeID
+		}
+		if req.Name == "" {
+			req.Name = res.Name
+		}
+		merged := make(map[string]string, len(res.Params)+len(req.GetParams()))
+		for k, v := range res.Params {
+			merged[k] = v
+		}
+		for k, v := range req.GetParams() {
+			merged[k] = v
+		}
+		req.Params = merged
+	}
+	if req.GetRuntimeId() == "" {
+		if req.RuntimeId, err = m.defaultRuntime(ctx, stored.GetFormatId()); err != nil {
+			return nil, err
+		}
 	}
 	rt, err := m.Runtimes.Get(req.GetRuntimeId())
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if !rt.Accepts(stored.GetFormatId()) {
-		return nil, nil, fmt.Errorf("%w: runtime %s does not accept %s", runtime.ErrParam, rt.Manifest.GetId(), stored.GetFormatId())
+		return nil, fmt.Errorf("%w: runtime %s does not accept %s", runtime.ErrParam, rt.Manifest.GetId(), stored.GetFormatId())
 	}
 	var install *v1.Install
 	if req.GetInstallId() != "" {
@@ -154,49 +300,56 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 		install, err = m.Installs.Default(ctx, rt.Manifest.GetId())
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	name := req.GetName()
 	if name == "" {
 		name = path.Base(stored.GetRepo()) + ":" + stored.GetGroup()
 	}
-	if m.live(name) != nil {
-		return nil, nil, fmt.Errorf("%w: instance %q is already running", runtime.ErrParam, name)
+	if m.conflict(name, req.GetSlotId()) {
+		return nil, fmt.Errorf("%w: instance %q is already running", runtime.ErrParam, name)
 	}
 	descriptor, err := m.describe(ctx, stored)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	profile, err := m.Host.Profile(ctx, true)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
+	}
+	planProfile := profile
+	if res != nil {
+		planProfile = Constrain(profile, res.DeviceIDs, res.MemoryBytes)
 	}
 	params, err := rt.Params(req.GetParams())
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	var plan *v1.MemoryPlan
+	p := &prepared{req: req, stored: stored, rt: rt, install: install, name: name, descriptor: descriptor, profile: profile, planned: planProfile, res: res, params: params}
 	if rt.Policy != nil {
-		plan, err = rt.Policy.Plan(estimate.Input{
+		p.plan, err = rt.Policy.Plan(estimate.Input{
 			Descriptor:    descriptor,
 			Formulas:      m.Inspector.Builder.Formulas(descriptor.GetArchSpecId()),
-			Host:          profile,
+			Host:          planProfile,
 			Params:        params,
 			Free:          true,
 			OverheadDelta: m.Calibration.Delta(rt.Manifest.GetId(), descriptor.GetArchitecture()),
 		})
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		if plan.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO {
-			return nil, nil, fmt.Errorf("%w: %s does not fit, %s", runtime.ErrParam, name, plan.GetDetail())
-		}
-		for k, v := range plan.GetParams() {
+		for k, v := range p.plan.GetParams() {
 			if params[k] == runtime.Auto {
 				params[k] = v
 			}
 		}
 	}
+	return p, nil
+}
+
+// Renders and launches a prepared run
+func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Task, error) {
+	req, stored, rt, install, name, descriptor, profile, params, plan := p.req, p.stored, p.rt, p.install, p.name, p.descriptor, p.profile, p.params, p.plan
 	port, err := freePort()
 	if err != nil {
 		return nil, nil, err
@@ -208,6 +361,7 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 		Host:      bindHost,
 		Port:      port,
 		Install:   map[string]string{"path": install.GetPath(), "dir": install.GetDir(), "version": install.GetVersion()},
+		Devices:   deviceViews(p.planned, p.res),
 	})
 	if err != nil {
 		return nil, nil, err
@@ -228,15 +382,17 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 		Plan:           plan,
 		Request:        proto.Clone(req).(*v1.RunRequest),
 		DesiredRunning: true,
+		SlotId:         req.GetSlotId(),
 	}, rt)
 	m.mu.Lock()
-	if m.liveLocked(name) != nil {
+	if m.conflictLocked(name, req.GetSlotId()) {
 		m.mu.Unlock()
 		return nil, nil, fmt.Errorf("%w: instance %q is already running", runtime.ErrParam, name)
 	}
 	m.list = append(m.list, in)
 	m.pruneLocked()
 	m.mu.Unlock()
+	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_CREATED, in.rec.GetId(), &v1.Event_Instance{Instance: in.snapshot()})
 	task := m.Tasks.Start(kindRun, "run "+name, map[string]string{"instance": in.rec.GetId(), "name": name}, func(ctx context.Context, h *tasks.Handle) error {
 		return m.start(ctx, h, in, rendered, install, descriptor, profile)
 	})
@@ -292,7 +448,7 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 	return nil
 }
 
-// Polls health, and on failure records triage, stops the process, and returns the reason
+// Polls health, recording triage and stopping the process on failure
 func (m *Manager) waitReady(ctx context.Context, h *tasks.Handle, in *instance, proc launch.Handle) error {
 	health := in.rt.Manifest.GetLaunch().GetHealth()
 	url := in.snapshot().GetEndpoint() + health.GetPath()
@@ -317,7 +473,7 @@ func (m *Manager) waitReady(ctx context.Context, h *tasks.Handle, in *instance, 
 	return err
 }
 
-// Marks an instance ready unless a stop arrived meanwhile and reports measurements on the task
+// Marks an instance ready unless stopped and reports measurements
 func (m *Manager) ready(h *tasks.Handle, in *instance, measurements []*v1.Measurement) {
 	var rec *v1.Instance
 	in.update(func(r *v1.Instance) {
@@ -335,7 +491,7 @@ func (m *Manager) ready(h *tasks.Handle, in *instance, measurements []*v1.Measur
 	h.Logf("ready %s at %s", rec.GetName(), rec.GetEndpoint())
 }
 
-// Replaces measurements by key, keeping ones only the old set has
+// Replaces measurements by key, keeping ones only old has
 func mergeMeasurements(old, fresh []*v1.Measurement) []*v1.Measurement {
 	if len(fresh) == 0 {
 		return old
@@ -353,7 +509,7 @@ func mergeMeasurements(old, fresh []*v1.Measurement) []*v1.Measurement {
 	return out
 }
 
-// Marks an instance failed unless already terminal and returns its triage hits
+// Marks an instance failed unless terminal, returning triage hits
 func (m *Manager) fail(in *instance, err error) []*v1.TriageHit {
 	var hits []*v1.TriageHit
 	in.mu.Lock()
@@ -386,7 +542,7 @@ func (m *Manager) supervise(in *instance) {
 	state := in.rec.State
 	in.mu.Unlock()
 	switch state {
-	case v1.InstanceState_INSTANCE_STATE_STOPPING:
+	case v1.InstanceState_INSTANCE_STATE_STOPPING, v1.InstanceState_INSTANCE_STATE_DRAINING:
 		in.update(func(r *v1.Instance) {
 			r.State = v1.InstanceState_INSTANCE_STATE_STOPPED
 			r.StoppedAt = timestamppb.Now()
@@ -465,7 +621,72 @@ func (m *Manager) liveLocked(name string) *instance {
 	return nil
 }
 
-// Stops an instance by request, clearing its relaunch intent, and waits for exit
+// Reports a live instance with the name outside the slot
+func (m *Manager) conflict(name, slotID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.conflictLocked(name, slotID)
+}
+
+func (m *Manager) conflictLocked(name, slotID string) bool {
+	for _, in := range m.list {
+		rec := in.snapshot()
+		if rec.GetName() != name || terminal(rec.GetState()) {
+			continue
+		}
+		if slotID == "" || rec.GetSlotId() != slotID {
+			return true
+		}
+	}
+	return false
+}
+
+// Picks the first compatible runtime accepting a format
+func (m *Manager) defaultRuntime(ctx context.Context, formatID string) (string, error) {
+	profile, err := m.Host.Profile(ctx, false)
+	if err != nil {
+		return "", err
+	}
+	for _, rt := range m.Runtimes.List() {
+		if ok, _ := rt.Compatible(profile); ok && rt.Accepts(formatID) {
+			return rt.Manifest.GetId(), nil
+		}
+	}
+	return "", fmt.Errorf("%w: no compatible runtime accepts %s", runtime.ErrParam, formatID)
+}
+
+// Lists live instances bound to a slot, newest first
+func (m *Manager) InSlot(slotID string) []*v1.Instance {
+	var out []*v1.Instance
+	for _, rec := range m.List(true) {
+		if rec.GetSlotId() == slotID {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// Stops taking new requests and waits for in flight ones
+func (m *Manager) Drain(ctx context.Context, id string, limit time.Duration) (*v1.Instance, error) {
+	in, err := m.find(id)
+	if err != nil {
+		return nil, err
+	}
+	var draining bool
+	in.update(func(r *v1.Instance) {
+		if r.State == v1.InstanceState_INSTANCE_STATE_READY {
+			r.State = v1.InstanceState_INSTANCE_STATE_DRAINING
+			draining = true
+		}
+	})
+	if draining && m.Routes != nil {
+		m.Routes.Drain(in.rec.GetId())
+		m.Routes.WaitDrained(ctx, in.rec.GetId(), limit)
+	}
+	return in.snapshot(), nil
+}
+
+// Stops an instance by request, clearing relaunch intent
 func (m *Manager) Stop(ctx context.Context, id string) (*v1.Instance, error) {
 	in, err := m.find(id)
 	if err != nil {
@@ -519,7 +740,7 @@ func (m *Manager) Logs(ctx context.Context, id string, follow bool, tail int, se
 	return log.Follow(ctx, tail, send)
 }
 
-// Returns the live log or loads the output file a finished instance left behind
+// Returns the live log or loads the saved output file
 func (m *Manager) logOf(in *instance) *launch.Log {
 	in.mu.Lock()
 	log, proc := in.log, in.proc
@@ -551,7 +772,7 @@ func (m *Manager) logOf(in *instance) *launch.Log {
 // Returns the endpoint of a ready instance by name
 func (m *Manager) Route(name string) (string, bool) {
 	for _, rec := range m.Ready() {
-		if rec.GetName() == name {
+		if rec.GetName() == name || rec.GetId() == name {
 			return rec.GetEndpoint(), true
 		}
 	}
@@ -588,7 +809,7 @@ func (m *Manager) Close() {
 	wg.Wait()
 }
 
-// Loads the store, adopts runtimes still alive, marks the rest stopped, and relaunches wanted ones
+// Loads records, adopts live runtimes, marks the rest, relaunches wanted
 func (m *Manager) Recover(ctx context.Context) error {
 	loaded, err := m.load(ctx)
 	if err != nil {
@@ -642,7 +863,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 	return nil
 }
 
-// Takes over a runtime the previous daemon left running, routing it once it answers health
+// Adopts a runtime left running, routing it once healthy
 func (m *Manager) adopt(ctx context.Context, in *instance) {
 	rec := in.snapshot()
 	proc := launch.Adopt(int(rec.GetPid()), m.logPath(rec.GetId()))
@@ -674,7 +895,7 @@ func (m *Manager) adopt(ctx context.Context, in *instance) {
 	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })
 }
 
-// Relaunches one instance at a time so each plans around the last
+// Relaunches serially so each plans around the last
 func (m *Manager) relaunch(ctx context.Context, list []*instance) {
 	for _, old := range list {
 		if ctx.Err() != nil {
@@ -768,7 +989,7 @@ func (m *Manager) describe(ctx context.Context, stored *v1.StoredModel) (*v1.Des
 	return m.Inspector.Builder.Build(raw)
 }
 
-// Maps artifact roles onto the link paths a launch template can use
+// Maps artifact roles onto link paths for launch templates
 func artifacts(stored *v1.StoredModel) map[string]string {
 	out := map[string]string{"weights_dir": stored.GetPath()}
 	for _, sa := range stored.GetArtifacts() {
@@ -776,6 +997,58 @@ func artifacts(stored *v1.StoredModel) map[string]string {
 		if _, exists := out[key]; !exists {
 			out[key] = sa.GetPath()
 		}
+	}
+	return out
+}
+
+// Narrows a profile to devices and caps pools at budget
+func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64) *v1.HostProfile {
+	out := proto.Clone(p).(*v1.HostProfile)
+	if len(deviceIDs) == 0 && budget == 0 {
+		return out
+	}
+	allowed := map[string]bool{}
+	for _, id := range deviceIDs {
+		allowed[id] = true
+	}
+	var devices []*v1.Device
+	for _, d := range out.GetDevices() {
+		if len(allowed) == 0 || allowed[d.GetId()] || d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
+			devices = append(devices, d)
+		}
+	}
+	out.Devices = devices
+	var pools []*v1.MemoryPool
+	for _, pl := range out.GetPools() {
+		device := pl.GetKind() == v1.PoolKind_POOL_KIND_DEVICE || pl.GetKind() == v1.PoolKind_POOL_KIND_UNIFIED
+		if device && len(allowed) > 0 && !allowed[pl.GetDeviceId()] && !allowed[pl.GetId()] {
+			continue
+		}
+		if device && budget > 0 {
+			pl.TotalBytes = min(pl.GetTotalBytes(), budget)
+			pl.FreeBytes = min(pl.GetFreeBytes(), budget)
+		}
+		pools = append(pools, pl)
+	}
+	out.Pools = pools
+	return out
+}
+
+// Lists the devices a launch template may address
+func deviceViews(p *v1.HostProfile, res *Reservation) []map[string]any {
+	var out []map[string]any
+	for _, d := range p.GetDevices() {
+		if d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
+			continue
+		}
+		facts := make(map[string]any, len(d.GetFacts()))
+		for k, v := range d.GetFacts() {
+			facts[k] = v
+		}
+		out = append(out, map[string]any{"id": d.GetId(), "kind": eval.EnumShort(d.GetKind()), "vendor": d.GetVendor(), "name": d.GetName(), "facts": facts})
+	}
+	if res == nil || len(res.DeviceIDs) == 0 {
+		return nil
 	}
 	return out
 }

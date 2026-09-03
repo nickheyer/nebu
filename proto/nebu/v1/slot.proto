@@ -1,0 +1,140 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nebu/v1/instance.proto";
+import "nebu/v1/task.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Lifecycle of a slot
+enum SlotState {
+  SLOT_STATE_UNSPECIFIED = 0;
+  SLOT_STATE_EMPTY = 1;
+  SLOT_STATE_STARTING = 2;
+  SLOT_STATE_READY = 3;
+  SLOT_STATE_SWAPPING = 4;
+  SLOT_STATE_DRAINING = 5;
+  SLOT_STATE_FAILED = 6;
+}
+
+// A reservation of devices and memory budget with one public name
+message Slot {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  repeated string device_ids = 4;
+  uint64 memory_bytes = 5;
+  string runtime_id = 6;
+  map<string, string> params = 7;
+  string instance_id = 8;
+  SlotState state = 9;
+  string error = 10;
+  RunRequest request = 11;
+  string task_id = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+// Creates a slot
+message CreateSlotRequest {
+  string name = 1;
+  string description = 2;
+  repeated string device_ids = 3;
+  uint64 memory_bytes = 4;
+  string runtime_id = 5;
+  map<string, string> params = 6;
+}
+
+// Returns the new slot
+message CreateSlotResponse {
+  Slot slot = 1;
+}
+
+// Lists slots
+message ListSlotsRequest {}
+
+// Returns slots by name
+message ListSlotsResponse {
+  repeated Slot slots = 1;
+}
+
+// Fetches one slot by id or name
+message GetSlotRequest {
+  string id = 1;
+}
+
+// Returns one slot with its occupant
+message GetSlotResponse {
+  Slot slot = 1;
+  Instance instance = 2;
+}
+
+// Changes slot settings, applied on the next run
+message UpdateSlotRequest {
+  string id = 1;
+  string description = 2;
+  repeated string device_ids = 3;
+  uint64 memory_bytes = 4;
+  string runtime_id = 5;
+  map<string, string> params = 6;
+}
+
+// Returns the updated slot
+message UpdateSlotResponse {
+  Slot slot = 1;
+}
+
+// Deletes a slot, stopping its occupant when forced
+message DeleteSlotRequest {
+  string id = 1;
+  bool force = 2;
+}
+
+// Returns the deleted slot
+message DeleteSlotResponse {
+  Slot slot = 1;
+}
+
+// Replaces what a slot serves without dropping its public name
+message SwapRequest {
+  string slot_id = 1;
+  RunRequest run = 2;
+  bool drain_first = 3;
+}
+
+// Returns the slot, the incoming instance, and the swap task
+message SwapResponse {
+  Slot slot = 1;
+  Instance instance = 2;
+  Task task = 3;
+}
+
+// Stops the occupant of a slot, keeping the slot
+message EvictSlotRequest {
+  string id = 1;
+}
+
+// Returns the emptied slot
+message EvictSlotResponse {
+  Slot slot = 1;
+}
+
+// Slots and swaps
+service SlotService {
+  // Lists slots
+  rpc ListSlots(ListSlotsRequest) returns (ListSlotsResponse);
+  // Fetches one slot
+  rpc GetSlot(GetSlotRequest) returns (GetSlotResponse);
+  // Creates a slot
+  rpc CreateSlot(CreateSlotRequest) returns (CreateSlotResponse);
+  // Updates a slot
+  rpc UpdateSlot(UpdateSlotRequest) returns (UpdateSlotResponse);
+  // Deletes a slot
+  rpc DeleteSlot(DeleteSlotRequest) returns (DeleteSlotResponse);
+  // Swaps the model a slot serves
+  rpc Swap(SwapRequest) returns (SwapResponse);
+  // Stops the occupant of a slot
+  rpc EvictSlot(EvictSlotRequest) returns (EvictSlotResponse);
+}

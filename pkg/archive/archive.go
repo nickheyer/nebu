@@ -1,4 +1,5 @@
-package installs
+// Package archive extracts tar and zip archives safely.
+package archive
 
 import (
 	"archive/tar"
@@ -11,15 +12,44 @@ import (
 	"strings"
 )
 
-// Extracts a tar.gz or zip archive under dir, rejecting traversal
-func extract(archive, dir string) error {
+// Extracts a tar, tar.gz, or zip archive, rejecting traversal
+func Extract(archive, dir string) error {
 	switch {
 	case strings.HasSuffix(archive, ".tar.gz") || strings.HasSuffix(archive, ".tgz"):
-		return extractTar(archive, dir)
+		return extractTar(archive, dir, true)
+	case strings.HasSuffix(archive, ".tar"):
+		return extractTar(archive, dir, false)
 	case strings.HasSuffix(archive, ".zip"):
 		return extractZip(archive, dir)
 	}
+	return Sniff(archive, dir)
+}
+
+// Extracts by content when the name carries no usable extension
+func Sniff(archive, dir string) error {
+	f, err := os.Open(archive)
+	if err != nil {
+		return err
+	}
+	head := make([]byte, 4)
+	n, _ := io.ReadFull(f, head)
+	f.Close()
+	switch {
+	case n >= 2 && head[0] == 0x1f && head[1] == 0x8b:
+		return extractTar(archive, dir, true)
+	case n >= 4 && string(head) == "PK\x03\x04":
+		return extractZip(archive, dir)
+	}
 	return fmt.Errorf("unsupported archive %s", filepath.Base(archive))
+}
+
+// Returns the single top level directory, or dir itself
+func Root(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+		return dir
+	}
+	return filepath.Join(dir, entries[0].Name())
 }
 
 func target(dir, name string) (string, error) {
@@ -30,18 +60,22 @@ func target(dir, name string) (string, error) {
 	return clean, nil
 }
 
-func extractTar(archive, dir string) error {
+func extractTar(archive, dir string, gzipped bool) error {
 	f, err := os.Open(archive)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return err
+	var r io.Reader = f
+	if gzipped {
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return err
+		}
+		defer gz.Close()
+		r = gz
 	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
+	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {

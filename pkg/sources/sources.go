@@ -1,4 +1,4 @@
-// Package sources defines where models come from and how to read them.
+// Package sources defines where models come from.
 package sources
 
 import (
@@ -110,7 +110,7 @@ func Build(cfgs []*v1.Source, ctors Constructors) (*Registry, error) {
 	return r, nil
 }
 
-// Returns a source by id, or the first when id is empty
+// Returns a source by id, or the first when empty
 func (r *Registry) Get(id string) (Source, error) {
 	if id == "" {
 		if len(r.order) == 0 {

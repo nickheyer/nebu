@@ -432,5 +432,13 @@ FodyWeavers.xsd
 /build/
 /data/
 /pkg/proto/
+/web/nebu/node_modules/
+/web/nebu/.svelte-kit/
+/web/nebu/dist/*
+!/web/nebu/dist/.keep
+/web/nebu/src/lib/proto/
+/web/nebu/static/openapi.yaml
 *.db
+*.db-wal
+*.db-shm
 /nebu.yaml

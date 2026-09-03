@@ -133,6 +133,7 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	runtimeID := fs.String("runtime", "", "runtime id, the first that accepts the format when empty")
 	installID := fs.String("install", "", "install id, newest for the runtime when empty")
 	name := fs.String("name", "", "public model name for the gateway")
+	slot := fs.String("slot", "", "slot to run in, its name becomes the public name")
 	var params multi
 	fs.Var(&params, "param", "runtime param as name=value, repeatable")
 	positional, err := parse(fs, args)
@@ -157,11 +158,13 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	rtID, err := e.defaultRuntime(ctx, cl, sourceID, positional[0], groupName, *runtimeID)
-	if err != nil {
-		return err
+	rtID := *runtimeID
+	if *slot == "" {
+		if rtID, err = e.defaultRuntime(ctx, cl, sourceID, positional[0], groupName, *runtimeID); err != nil {
+			return err
+		}
 	}
-	req := &v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: rtID, InstallId: *installID, Name: *name, Params: map[string]string{}}
+	req := &v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: rtID, InstallId: *installID, Name: *name, Params: map[string]string{}, SlotId: *slot}
 	for _, p := range params {
 		k, v, ok := strings.Cut(p, "=")
 		if !ok {

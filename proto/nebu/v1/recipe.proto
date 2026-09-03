@@ -1,0 +1,193 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nebu/v1/task.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Where build steps run
+enum SandboxKind {
+  SANDBOX_KIND_UNSPECIFIED = 0;
+  SANDBOX_KIND_HOST = 1;
+  SANDBOX_KIND_OCI = 2;
+}
+
+// Lifecycle of a build
+enum BuildState {
+  BUILD_STATE_UNSPECIFIED = 0;
+  BUILD_STATE_RUNNING = 1;
+  BUILD_STATE_SUCCEEDED = 2;
+  BUILD_STATE_FAILED = 3;
+}
+
+// Where the source tree comes from, every field a template
+message RecipeSource {
+  string release = 1;
+  string ref = 2;
+  string archive = 3;
+  string repo = 4;
+  string subdir = 5;
+}
+
+// One unified diff applied to the tree
+message Patch {
+  string id = 1;
+  string when = 2;
+  string content = 3;
+  string file = 4;
+  string url = 5;
+  uint32 strip = 6;
+}
+
+// One command run inside the sandbox
+message BuildStep {
+  string name = 1;
+  repeated string command = 2;
+  string when = 3;
+  map<string, string> env = 4;
+  string dir = 5;
+}
+
+// Flags selected by host facts
+message BuildVariant {
+  string id = 1;
+  string description = 2;
+  string when = 3;
+  repeated string tools = 4;
+  map<string, string> vars = 5;
+  string image = 6;
+}
+
+// How steps are isolated from the host
+message Sandbox {
+  SandboxKind kind = 1;
+  string image = 2;
+  repeated string cli = 3;
+  repeated string args = 4;
+}
+
+// Data driven build definition
+message Recipe {
+  string id = 1;
+  string runtime_id = 2;
+  string description = 3;
+  RecipeSource source = 4;
+  repeated Patch patches = 5;
+  repeated BuildVariant variants = 6;
+  Sandbox sandbox = 7;
+  repeated BuildStep steps = 8;
+  repeated string outputs = 9;
+  string binary = 10;
+  repeated string facts = 11;
+  repeated string tools = 12;
+  uint32 timeout_ms = 13;
+  map<string, string> vars = 14;
+}
+
+// One build of a recipe on this host
+message Build {
+  string id = 1;
+  string recipe_id = 2;
+  string runtime_id = 3;
+  string variant = 4;
+  string ref = 5;
+  string commit = 6;
+  SandboxKind sandbox = 7;
+  string image = 8;
+  string dir = 9;
+  string binary = 10;
+  string install_id = 11;
+  string task_id = 12;
+  BuildState state = 13;
+  string error = 14;
+  map<string, string> vars = 15;
+  map<string, string> facts = 16;
+  repeated string patches = 17;
+  google.protobuf.Timestamp created_at = 18;
+  google.protobuf.Timestamp finished_at = 19;
+}
+
+// Recipe paired with what the host selects for it
+message RecipeStatus {
+  Recipe recipe = 1;
+  string variant = 2;
+  repeated string missing_tools = 3;
+  SandboxKind sandbox = 4;
+  string sandbox_cli = 5;
+  repeated string unmet = 6;
+  map<string, string> vars = 7;
+}
+
+// Lists recipes, optionally for one runtime
+message ListRecipesRequest {
+  string runtime_id = 1;
+}
+
+// Returns recipes with host selection
+message ListRecipesResponse {
+  repeated RecipeStatus recipes = 1;
+}
+
+// Builds a runtime from a recipe
+message BuildRequest {
+  string runtime_id = 1;
+  string recipe_id = 2;
+  string variant = 3;
+  map<string, string> vars = 4;
+  SandboxKind sandbox = 5;
+  string image = 6;
+  bool force = 7;
+  string ref = 8;
+}
+
+// Returns the build record and its task
+message BuildResponse {
+  Build build = 1;
+  Task task = 2;
+}
+
+// Lists builds, optionally for one runtime
+message ListBuildsRequest {
+  string runtime_id = 1;
+}
+
+// Returns builds newest first
+message ListBuildsResponse {
+  repeated Build builds = 1;
+}
+
+// Fetches one build
+message GetBuildRequest {
+  string id = 1;
+}
+
+// Returns one build
+message GetBuildResponse {
+  Build build = 1;
+}
+
+// Removes a build and its tree
+message RemoveBuildRequest {
+  string id = 1;
+}
+
+// Returns the removed build
+message RemoveBuildResponse {
+  Build build = 1;
+}
+
+// Recipes and builds
+service BuildService {
+  // Lists recipes with the variant the host selects
+  rpc ListRecipes(ListRecipesRequest) returns (ListRecipesResponse);
+  // Starts or reuses a build
+  rpc Build(BuildRequest) returns (BuildResponse);
+  // Lists builds
+  rpc ListBuilds(ListBuildsRequest) returns (ListBuildsResponse);
+  // Fetches one build
+  rpc GetBuild(GetBuildRequest) returns (GetBuildResponse);
+  // Removes a build
+  rpc RemoveBuild(RemoveBuildRequest) returns (RemoveBuildResponse);
+}

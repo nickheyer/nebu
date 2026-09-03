@@ -12,6 +12,8 @@ enum SourceKind {
   SOURCE_KIND_UNSPECIFIED = 0;
   SOURCE_KIND_HUGGINGFACE = 1;
   SOURCE_KIND_LOCAL = 2;
+  SOURCE_KIND_MODELSCOPE = 3;
+  SOURCE_KIND_MIRROR = 4;
 }
 
 // Configured place models come from

@@ -7,6 +7,7 @@ constraints:
     message: a probed GPU
 acquire:
   adopt: [vllm]
+  recipe_id: vllm
 probes:
   - key: version
     args: [--version]

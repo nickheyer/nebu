@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nebu/v1/gateway.proto";
+import "nebu/v1/host.proto";
+import "nebu/v1/instance.proto";
+import "nebu/v1/monitor.proto";
+import "nebu/v1/recipe.proto";
+import "nebu/v1/runtime.proto";
+import "nebu/v1/slot.proto";
+import "nebu/v1/store.proto";
+import "nebu/v1/task.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Which noun changed
+enum EventKind {
+  EVENT_KIND_UNSPECIFIED = 0;
+  EVENT_KIND_HOST = 1;
+  EVENT_KIND_TASK = 2;
+  EVENT_KIND_INSTANCE = 3;
+  EVENT_KIND_SLOT = 4;
+  EVENT_KIND_ROUTE = 5;
+  EVENT_KIND_INSTALL = 6;
+  EVENT_KIND_BUILD = 7;
+  EVENT_KIND_MODEL = 8;
+  EVENT_KIND_WATCH = 9;
+  EVENT_KIND_FINDING = 10;
+}
+
+// How it changed
+enum EventAction {
+  EVENT_ACTION_UNSPECIFIED = 0;
+  EVENT_ACTION_CREATED = 1;
+  EVENT_ACTION_UPDATED = 2;
+  EVENT_ACTION_DELETED = 3;
+}
+
+// One change with the record after it
+message Event {
+  uint64 seq = 1;
+  EventKind kind = 2;
+  EventAction action = 3;
+  string id = 4;
+  google.protobuf.Timestamp at = 5;
+  // The record after the change
+  oneof payload {
+    HostProfile host = 10;
+    Task task = 11;
+    Instance instance = 12;
+    Slot slot = 13;
+    Route route = 14;
+    Install install = 15;
+    Build build = 16;
+    StoredModel model = 17;
+    Watch watch = 18;
+    Finding finding = 19;
+  }
+}
+
+// Subscribes to changes, all kinds when empty
+message WatchEventsRequest {
+  repeated EventKind kinds = 1;
+  bool snapshot = 2;
+}
+
+// One event on the stream
+message WatchEventsResponse {
+  Event event = 1;
+}
+
+// Live updates feeding the UI
+service EventService {
+  // Streams events until the client goes away
+  rpc WatchEvents(WatchEventsRequest) returns (stream WatchEventsResponse);
+}

@@ -1,4 +1,4 @@
-// Package store keeps content addressed blobs, manifests, and a stable link tree.
+// Package store keeps blobs, manifests, and a stable link tree.
 package store
 
 import (
@@ -85,7 +85,7 @@ func (s *Store) Commit(partial, digest string) error {
 	return os.Rename(partial, dest)
 }
 
-// Adopts a local file by hard link, falling back to copy
+// Adopts a local file by hard link, else copy
 func (s *Store) Adopt(path, digest string) error {
 	if s.HasBlob(digest) {
 		return nil
@@ -246,7 +246,7 @@ func (s *Store) RemoveManifest(source, repo, group string) (*v1.StoredModel, err
 	return m, nil
 }
 
-// Creates a relative symlink to a blob and returns the link path
+// Creates a relative symlink to a blob, returning the path
 func (s *Store) Link(source, repo, group, rel, digest string) (string, error) {
 	dir, err := s.GroupDir(source, repo, group)
 	if err != nil {

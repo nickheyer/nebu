@@ -169,7 +169,7 @@ func partialKey(model *v1.Model, a *v1.Artifact) string {
 	return "pending-" + hex.EncodeToString(sum[:16])
 }
 
-// Starts a task that rehashes stored blobs and drops corrupt ones
+// Starts a task that rehashes blobs and drops corrupt ones
 func (p *Puller) Verify(ctx context.Context, req *v1.VerifyRequest) (*v1.Task, error) {
 	manifests, err := p.Store.ListManifests()
 	if err != nil {

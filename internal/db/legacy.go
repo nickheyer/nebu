@@ -14,7 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Moves records written as protojson files by earlier builds into the store, then removes them
+// Imports protojson records from earlier builds, then removes them
 func (d *DB) ImportLegacy(ctx context.Context, dataDir string, log *slog.Logger) error {
 	imported := 0
 	n, err := importDir(ctx, filepath.Join(dataDir, "installs"), func() *v1.Install { return &v1.Install{} }, func(in *v1.Install) error { return d.PutInstall(ctx, in) })

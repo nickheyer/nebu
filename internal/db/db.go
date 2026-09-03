@@ -1,4 +1,4 @@
-// Package db is the daemon's store: pure Go SQLite with SQL migrations.
+// Package db is the daemon's store, pure Go SQLite.
 package db
 
 import (
@@ -27,7 +27,7 @@ type DB struct {
 	sql *sql.DB
 }
 
-// Opens or creates the database at path and applies pending migrations
+// Opens or creates the database and applies pending migrations
 func Open(path string) (*DB, error) {
 	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
 	sqldb, err := sql.Open("sqlite", dsn)
@@ -46,7 +46,7 @@ func Open(path string) (*DB, error) {
 // Closes the database
 func (d *DB) Close() error { return d.sql.Close() }
 
-// Applies every embedded migration not yet recorded, each in its own transaction
+// Applies unrecorded migrations, each in its own transaction
 func (d *DB) migrate(ctx context.Context) error {
 	if _, err := d.sql.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)`); err != nil {
 		return err

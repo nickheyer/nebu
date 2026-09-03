@@ -25,6 +25,9 @@ const (
 	describeMax = 8
 )
 
+// Narrows a profile to a slot, set by the daemon
+type Constrainer func(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, error)
+
 // Orchestrates sources, readers, descriptors, and planning
 type Inspector struct {
 	Sources    *sources.Registry
@@ -35,7 +38,23 @@ type Inspector struct {
 	Host       *host.Prober
 	Cache      *cache.Store
 	Contexts   []uint32
+	Constrain  Constrainer
 	Log        *slog.Logger
+}
+
+// Returns the planning profile, narrowed to the named slot
+func (i *Inspector) profile(ctx context.Context, slotID string) (*v1.HostProfile, error) {
+	profile, err := i.Host.Profile(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	if slotID == "" {
+		return profile, nil
+	}
+	if i.Constrain == nil {
+		return nil, fmt.Errorf("slots are not available")
+	}
+	return i.Constrain(ctx, slotID, profile)
 }
 
 // Resolves and classifies a model, caching the listing briefly
@@ -63,7 +82,20 @@ func (i *Inspector) Resolve(ctx context.Context, sourceID, repo, revision string
 	return src, model, nil
 }
 
-// Reads raw header facts for a group, caching by content identity
+// Resolves a model again, ignoring the cached listing
+func (i *Inspector) ResolveFresh(ctx context.Context, sourceID, repo, revision string) (sources.Source, *v1.Model, error) {
+	src, err := i.Sources.Get(sourceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	key := strings.Join([]string{"resolve", src.Spec().GetId(), repo, revision}, "\x00")
+	if err := i.Cache.Delete(key); err != nil {
+		i.Log.Warn("cache delete failed", "err", err)
+	}
+	return i.Resolve(ctx, sourceID, repo, revision)
+}
+
+// Reads raw header facts, caching by content identity
 func (i *Inspector) Raw(ctx context.Context, src sources.Source, model *v1.Model, g *formats.Group) (*v1.RawModel, error) {
 	reader, ok := i.Readers[g.FormatID]
 	if !ok {
@@ -123,7 +155,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 	if err != nil {
 		return nil, err
 	}
-	profile, err := i.Host.Profile(ctx, false)
+	profile, err := i.profile(ctx, req.GetSlotId())
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +222,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	profile, err := i.Host.Profile(ctx, false)
+	profile, err := i.profile(ctx, req.GetSlotId())
 	if err != nil {
 		return nil, err
 	}

@@ -64,7 +64,7 @@ CREATE TABLE instance_command (
   PRIMARY KEY (instance_id, position)
 );
 
--- The run request as the caller made it, replayed on relaunch
+-- The caller's run request, replayed on relaunch
 CREATE TABLE instance_requests (
   instance_id TEXT PRIMARY KEY REFERENCES instances (id) ON DELETE CASCADE,
   source_id TEXT NOT NULL,

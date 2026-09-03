@@ -3,8 +3,11 @@ package rpc
 
 import (
 	"context"
+	"crypto/subtle"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -14,9 +17,12 @@ import (
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
+	"github.com/nickheyer/nebu/internal/monitor"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc/services"
+	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
 	"github.com/nickheyer/nebu/pkg/runtime"
@@ -38,13 +44,19 @@ type Deps struct {
 	Tasks     *tasks.Manager
 	Installs  *installs.Manager
 	Instances *instances.Manager
+	Slots     *slots.Manager
+	Monitor   *monitor.Manager
 	Gateway   *gateway.Gateway
+	Events    *events.Bus
+	Snapshot  services.Snapshotter
+	Web       http.Handler
+	Token     string
 	Log       *slog.Logger
 }
 
 // Builds the h2c handler serving every service
 func NewHandler(d Deps) http.Handler {
-	opts := connect.WithInterceptors(logging(d.Log))
+	opts := connect.WithInterceptors(logging(d.Log), &auth{token: d.Token})
 	mux := http.NewServeMux()
 	mux.Handle(nebuv1connect.NewHostServiceHandler(services.NewHostService(d.Host, d.Doctor), opts))
 	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector), opts))
@@ -53,6 +65,11 @@ func NewHandler(d Deps) http.Handler {
 	mux.Handle(nebuv1connect.NewEstimateServiceHandler(services.NewEstimateService(d.Inspector), opts))
 	mux.Handle(nebuv1connect.NewStoreServiceHandler(services.NewStoreService(d.Store, d.Puller), opts))
 	mux.Handle(nebuv1connect.NewTaskServiceHandler(services.NewTaskService(d.Tasks), opts))
+	mux.Handle(nebuv1connect.NewBuildServiceHandler(services.NewBuildService(d.Installs), opts))
+	mux.Handle(nebuv1connect.NewSlotServiceHandler(services.NewSlotService(d.Slots), opts))
+	mux.Handle(nebuv1connect.NewGatewayServiceHandler(services.NewGatewayService(d.Gateway, d.Instances), opts))
+	mux.Handle(nebuv1connect.NewMonitorServiceHandler(services.NewMonitorService(d.Monitor), opts))
+	mux.Handle(nebuv1connect.NewEventServiceHandler(services.NewEventService(d.Events, d.Snapshot), opts))
 	reflector := grpcreflect.NewStaticReflector(
 		nebuv1connect.HostServiceName,
 		nebuv1connect.SourceServiceName,
@@ -61,11 +78,19 @@ func NewHandler(d Deps) http.Handler {
 		nebuv1connect.StoreServiceName,
 		nebuv1connect.TaskServiceName,
 		nebuv1connect.InstanceServiceName,
+		nebuv1connect.BuildServiceName,
+		nebuv1connect.SlotServiceName,
+		nebuv1connect.GatewayServiceName,
+		nebuv1connect.MonitorServiceName,
+		nebuv1connect.EventServiceName,
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))
 	if d.Gateway != nil {
 		d.Gateway.Mount(mux)
+	}
+	if d.Web != nil {
+		mux.Handle("/", d.Web)
 	}
 	return h2c.NewHandler(mux, &http2.Server{})
 }
@@ -84,5 +109,42 @@ func logging(log *slog.Logger) connect.UnaryInterceptorFunc {
 			}
 			return resp, err
 		}
+	}
+}
+
+// Requires the configured bearer token on every call
+type auth struct {
+	token string
+}
+
+var errUnauthenticated = errors.New("missing or invalid token, set auth.token or NEBU_TOKEN")
+
+func (a *auth) ok(header http.Header) bool {
+	if a.token == "" {
+		return true
+	}
+	got := strings.TrimSpace(strings.TrimPrefix(header.Get("Authorization"), "Bearer"))
+	return subtle.ConstantTimeCompare([]byte(got), []byte(a.token)) == 1
+}
+
+func (a *auth) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		if !a.ok(req.Header()) {
+			return nil, connect.NewError(connect.CodeUnauthenticated, errUnauthenticated)
+		}
+		return next(ctx, req)
+	}
+}
+
+func (a *auth) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+	return next
+}
+
+func (a *auth) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
+		if !a.ok(conn.RequestHeader()) {
+			return connect.NewError(connect.CodeUnauthenticated, errUnauthenticated)
+		}
+		return next(ctx, conn)
 	}
 }

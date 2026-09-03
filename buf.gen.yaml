@@ -8,3 +8,12 @@ plugins:
     out: pkg/proto
     opt:
       - paths=source_relative
+  - remote: buf.build/bufbuild/es:v2.14.1
+    out: web/nebu/src/lib/proto
+    opt:
+      - target=ts
+  - remote: buf.build/community/sudorandom-connect-openapi
+    out: web/nebu/static
+    opt:
+      - format=yaml
+      - path=openapi.yaml

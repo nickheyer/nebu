@@ -1,0 +1,71 @@
+id: llamacpp
+runtime_id: llamacpp
+description: llama-server built from a release tag with the backend the host selects
+source:
+  release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
+  ref: latest
+  archive: https://github.com/ggml-org/llama.cpp/archive/refs/tags/{{.ref}}.tar.gz
+tools: [cmake]
+facts: [device.vendor, device.compute_capability, nvidia.driver_version]
+vars:
+  build_type: Release
+  extra: ''
+variants:
+  - id: cuda
+    description: CUDA kernels for the probed compute capabilities
+    when: any(devices, .vendor == "nvidia")
+    tools: [nvcc]
+    vars:
+      backend: -DGGML_CUDA=ON
+      archs: '-DCMAKE_CUDA_ARCHITECTURES={{$first := true}}{{range .devices}}{{if eq .vendor "nvidia"}}{{if not $first}};{{end}}{{$first = false}}{{replace "." "" (index .facts "compute_capability")}}{{end}}{{end}}'
+  - id: rocm
+    description: HIP kernels for AMD devices
+    when: any(devices, .vendor == "amd")
+    tools: [hipcc]
+    vars:
+      backend: -DGGML_HIP=ON
+      archs: ''
+  - id: vulkan
+    description: Vulkan shaders, works on any GPU with a Vulkan driver
+    when: any(devices, .kind == "gpu")
+    tools: [glslc]
+    vars:
+      backend: -DGGML_VULKAN=ON
+      archs: ''
+  - id: metal
+    description: Metal on Apple silicon
+    when: os == "darwin" && arch == "arm64"
+    vars:
+      backend: -DGGML_METAL=ON
+      archs: ''
+  - id: cpu
+    description: CPU only with native instruction selection
+    when: 'true'
+    vars:
+      backend: -DGGML_NATIVE=ON
+      archs: ''
+sandbox:
+  kind: SANDBOX_KIND_HOST
+  cli: [podman, docker, nerdctl]
+steps:
+  - name: configure
+    command:
+      - cmake
+      - -S
+      - .
+      - -B
+      - build
+      - '-DCMAKE_BUILD_TYPE={{.vars.build_type}}'
+      - '{{.vars.backend}}'
+      - '{{.vars.archs}}'
+      - -DBUILD_SHARED_LIBS=OFF
+      - -DLLAMA_CURL=OFF
+      - -DLLAMA_BUILD_TESTS=OFF
+      - -DLLAMA_BUILD_EXAMPLES=OFF
+      - -DLLAMA_BUILD_SERVER=ON
+      - '{{.vars.extra}}'
+  - name: compile
+    command: [cmake, --build, build, --config, '{{.vars.build_type}}', --target, llama-server, -j, '{{.jobs}}']
+outputs: [build/bin/llama-server]
+binary: llama-server
+timeout_ms: 10800000

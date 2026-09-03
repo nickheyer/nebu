@@ -131,7 +131,7 @@ func Number(v any) (float64, error) {
 	return 0, fmt.Errorf("%T is not a number", v)
 }
 
-// Parses a number, taking the max of a comma joined list
+// Parses a number, taking the max of a comma list
 func ParseNumber(s string) (float64, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -200,7 +200,7 @@ func versionParts(s string) []int {
 
 var numberPrefix = regexp.MustCompile(`^\s*([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\s*([A-Za-z]*)`)
 
-// Parses a byte count with an optional inline or default unit
+// Parses a byte count with an inline or default unit
 func Bytes(s, unit string) (uint64, error) {
 	m := numberPrefix.FindStringSubmatch(strings.ReplaceAll(s, ",", ""))
 	if m == nil {
@@ -242,9 +242,74 @@ type Template struct {
 	t   *template.Template
 }
 
+// Helpers every template can call
+var templateFuncs = template.FuncMap{
+	"join":       joinAny,
+	"split":      func(sep, s string) []string { return strings.Split(s, sep) },
+	"lower":      strings.ToLower,
+	"upper":      strings.ToUpper,
+	"trimSpace":  strings.TrimSpace,
+	"trimPrefix": func(prefix, s string) string { return strings.TrimPrefix(s, prefix) },
+	"trimSuffix": func(suffix, s string) string { return strings.TrimSuffix(s, suffix) },
+	"replace":    func(old, new, s string) string { return strings.ReplaceAll(s, old, new) },
+	"contains":   func(sub, s string) bool { return strings.Contains(s, sub) },
+	"hasPrefix":  func(prefix, s string) bool { return strings.HasPrefix(s, prefix) },
+	"hasSuffix":  func(suffix, s string) bool { return strings.HasSuffix(s, suffix) },
+	"default":    defaultValue,
+	"quote":      strconv.Quote,
+	"list":       func(args ...any) []any { return args },
+	"first":      firstOf,
+	"num":        func(v any) float64 { n, _ := Number(v); return n },
+}
+
+// Joins a slice of any scalar type with sep
+func joinAny(sep string, v any) string {
+	switch t := v.(type) {
+	case []string:
+		return strings.Join(t, sep)
+	case []any:
+		parts := make([]string, 0, len(t))
+		for _, item := range t {
+			parts = append(parts, fmt.Sprint(item))
+		}
+		return strings.Join(parts, sep)
+	case nil:
+		return ""
+	}
+	return fmt.Sprint(v)
+}
+
+// Returns def when v is nil or an empty string
+func defaultValue(def, v any) any {
+	switch t := v.(type) {
+	case nil:
+		return def
+	case string:
+		if t == "" {
+			return def
+		}
+	}
+	return v
+}
+
+// Returns the first element of a slice, nil when empty
+func firstOf(v any) any {
+	switch t := v.(type) {
+	case []string:
+		if len(t) > 0 {
+			return t[0]
+		}
+	case []any:
+		if len(t) > 0 {
+			return t[0]
+		}
+	}
+	return nil
+}
+
 // Compiles a template that errors on missing keys
 func CompileTemplate(src string) (*Template, error) {
-	t, err := template.New("").Option("missingkey=error").Parse(src)
+	t, err := template.New("").Funcs(templateFuncs).Option("missingkey=error").Parse(src)
 	if err != nil {
 		return nil, fmt.Errorf("compile template %q: %w", src, err)
 	}

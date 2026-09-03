@@ -1,4 +1,4 @@
-// Package launch starts runtime processes, follows their output, and finds them again.
+// Package launch starts runtime processes and finds them again.
 package launch
 
 import (
@@ -23,10 +23,10 @@ const (
 	tailChunk    = 64 << 10
 )
 
-// Bytes an output file may reach before it is truncated, kept small in tests
+// Output file size cap before truncation, small in tests
 var LogFileMax int64 = 64 << 20
 
-// Returned as the exit error of a process this daemon did not wait on
+// Exit error of a process this daemon never waited on
 var ErrUnknownExit = errors.New("exit status unknown")
 
 // What to start and where its output goes
@@ -38,7 +38,7 @@ type Spec struct {
 	LogPath string
 }
 
-// A runtime process, launched here or found alive after a restart
+// A runtime process, launched here or found after a restart
 type Handle interface {
 	Pid() int
 	Done() <-chan struct{}
@@ -69,7 +69,7 @@ type Process struct {
 	err    error
 }
 
-// Starts the process with its output appended to the log file, and follows that file
+// Starts the process writing the log file, then follows it
 func (l *ProcessLauncher) Launch(ctx context.Context, spec Spec) (Handle, error) {
 	if spec.LogPath == "" {
 		return nil, errors.New("launch: log path required")
@@ -108,7 +108,7 @@ func (l *ProcessLauncher) Launch(ctx context.Context, spec Spec) (Handle, error)
 // Returns the process id
 func (p *Process) Pid() int { return p.cmd.Process.Pid }
 
-// Closes when the process has exited and its output is fully read
+// Closes once the process exited and its output is read
 func (p *Process) Done() <-chan struct{} { return p.done }
 
 // Returns the exit error once Done is closed
@@ -124,7 +124,7 @@ func (p *Process) Err() error {
 // Returns captured output
 func (p *Process) Log() *Log { return p.log }
 
-// Reads everything the process has written so far into the log
+// Reads everything written so far into the log
 func (p *Process) Sync() { p.tail.drain() }
 
 // Terminates gracefully, then forcefully after grace
@@ -145,7 +145,7 @@ func (p *Process) Stop(grace time.Duration) error {
 	return nil
 }
 
-// A process found alive after a daemon restart, supervised by pid
+// A process found alive after a restart, supervised by pid
 type Adopted struct {
 	pid    int
 	log    *Log
@@ -155,7 +155,7 @@ type Adopted struct {
 	once   sync.Once
 }
 
-// Follows a live process this daemon did not start, reading the output file it still writes
+// Follows a live process this daemon did not start
 func Adopt(pid int, logPath string) Handle {
 	a := &Adopted{pid: pid, log: NewLog(logCapacity), exited: make(chan struct{}), done: make(chan struct{})}
 	go func() {
@@ -173,10 +173,10 @@ func Adopt(pid int, logPath string) Handle {
 // Returns the process id
 func (a *Adopted) Pid() int { return a.pid }
 
-// Closes when the process is gone and its output is fully read
+// Closes once the process is gone and output is read
 func (a *Adopted) Done() <-chan struct{} { return a.done }
 
-// Reports an unknown exit once Done is closed, since a non child cannot be waited on
+// Reports an unknown exit since non children cannot be waited
 func (a *Adopted) Err() error {
 	select {
 	case <-a.done:
@@ -189,10 +189,10 @@ func (a *Adopted) Err() error {
 // Returns captured output
 func (a *Adopted) Log() *Log { return a.log }
 
-// Reads everything the process has written so far into the log
+// Reads everything written so far into the log
 func (a *Adopted) Sync() { a.tail.drain() }
 
-// Signals the group, escalating after grace, then waits for the output to drain
+// Signals the group, escalates after grace, then drains output
 func (a *Adopted) Stop(grace time.Duration) error {
 	select {
 	case <-a.done:
@@ -255,7 +255,7 @@ func (t *tailer) drain() error {
 	}
 }
 
-// Keeps draining until the process is gone, truncating the file past the cap, then closes the log
+// Drains until the process is gone, truncating past the cap
 func (t *tailer) follow(exited <-chan struct{}, done chan struct{}) {
 	defer close(done)
 	defer t.log.Close()
@@ -284,7 +284,7 @@ func (t *tailer) follow(exited <-chan struct{}, done chan struct{}) {
 	}
 }
 
-// Truncates the file once it passes the cap, keeping the ring as the recent view
+// Truncates the file past the cap, the ring stays current
 func (t *tailer) rotate() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -296,7 +296,7 @@ func (t *tailer) rotate() {
 	}
 }
 
-// Returns the last lines of an output file, all retained when n is zero
+// Returns the last lines of a file, all when zero
 func ReadTail(path string, n int) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -336,7 +336,7 @@ func ReadTail(path string, n int) ([]string, error) {
 	return out, nil
 }
 
-// Polls a URL until it answers 200, the process exits, or the timeout passes
+// Polls a URL until 200, exit, or timeout
 func WaitHealthy(ctx context.Context, h Handle, url string, interval, timeout time.Duration) error {
 	if interval <= 0 {
 		interval = time.Second

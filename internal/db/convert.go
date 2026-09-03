@@ -31,10 +31,10 @@ func timeVal(s sql.NullString) *timestamppb.Timestamp {
 	return timestamppb.New(t)
 }
 
-// Stores an enum as its short lower case name, never its number
+// Stores an enum as its short lower case name
 func enumCol(e protoreflect.Enum) string { return eval.EnumShort(e) }
 
-// Reads a short enum name back into its number, zero when unknown
+// Reads a short enum name back, zero when unknown
 func enumVal(d protoreflect.EnumDescriptor, short string) protoreflect.EnumNumber {
 	prefix := screaming(string(d.Name())) + "_"
 	want := strings.ToUpper(short)
@@ -69,7 +69,7 @@ func boolCol(b bool) int {
 	return 0
 }
 
-// Writes map entries as rows with the given statement, in key order
+// Writes map entries as rows in key order
 func putMap(exec func(query string, args ...any) error, query, id string, m map[string]string) error {
 	keys := make([]string, 0, len(m))
 	for k := range m {

@@ -21,7 +21,7 @@ func signalGroup(pid int, sig syscall.Signal) {
 	}
 }
 
-// Process identity cannot be checked here, so stragglers are never claimed
+// Process identity cannot be checked, so stragglers are never claimed
 func exists(pid int) bool { return false }
 
 func cmdline(pid int) (string, error) { return "", errors.New("command line lookup unsupported") }

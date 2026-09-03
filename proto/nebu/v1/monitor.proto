@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nebu/v1/task.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// What a check found
+enum FindingKind {
+  FINDING_KIND_UNSPECIFIED = 0;
+  FINDING_KIND_NEW_REVISION = 1;
+  FINDING_KIND_NEW_GROUP = 2;
+  FINDING_KIND_REMOVED_GROUP = 3;
+}
+
+// A repository watched for new revisions and weight groups
+message Watch {
+  string id = 1;
+  string source_id = 2;
+  string repo = 3;
+  string revision = 4;
+  string group_match = 5;
+  bool auto_pull = 6;
+  string slot_id = 7;
+  string runtime_id = 8;
+  map<string, string> params = 9;
+  string last_commit = 10;
+  repeated string known_groups = 11;
+  google.protobuf.Timestamp checked_at = 12;
+  google.protobuf.Timestamp created_at = 13;
+  string error = 14;
+}
+
+// One change a check noticed
+message Finding {
+  string id = 1;
+  string watch_id = 2;
+  FindingKind kind = 3;
+  string repo = 4;
+  string commit = 5;
+  string group = 6;
+  string detail = 7;
+  string task_id = 8;
+  bool acknowledged = 9;
+  google.protobuf.Timestamp found_at = 10;
+}
+
+// Starts watching a repository
+message AddWatchRequest {
+  string source_id = 1;
+  string repo = 2;
+  string revision = 3;
+  string group_match = 4;
+  bool auto_pull = 5;
+  string slot_id = 6;
+  string runtime_id = 7;
+  map<string, string> params = 8;
+}
+
+// Returns the watch after its first check
+message AddWatchResponse {
+  Watch watch = 1;
+}
+
+// Lists watches
+message ListWatchesRequest {}
+
+// Returns watches
+message ListWatchesResponse {
+  repeated Watch watches = 1;
+}
+
+// Stops watching
+message RemoveWatchRequest {
+  string id = 1;
+}
+
+// Returns the removed watch
+message RemoveWatchResponse {
+  Watch watch = 1;
+}
+
+// Checks one watch or all of them now
+message CheckWatchesRequest {
+  string id = 1;
+}
+
+// Returns the check task
+message CheckWatchesResponse {
+  Task task = 1;
+}
+
+// Lists findings
+message ListFindingsRequest {
+  string watch_id = 1;
+  bool unacknowledged_only = 2;
+}
+
+// Returns findings newest first
+message ListFindingsResponse {
+  repeated Finding findings = 1;
+}
+
+// Marks a finding as seen
+message AckFindingRequest {
+  string id = 1;
+}
+
+// Returns the finding
+message AckFindingResponse {
+  Finding finding = 1;
+}
+
+// Watches sources for new revisions and quants
+service MonitorService {
+  // Adds a watch
+  rpc AddWatch(AddWatchRequest) returns (AddWatchResponse);
+  // Lists watches
+  rpc ListWatches(ListWatchesRequest) returns (ListWatchesResponse);
+  // Removes a watch
+  rpc RemoveWatch(RemoveWatchRequest) returns (RemoveWatchResponse);
+  // Runs checks now
+  rpc CheckWatches(CheckWatchesRequest) returns (CheckWatchesResponse);
+  // Lists findings
+  rpc ListFindings(ListFindingsRequest) returns (ListFindingsResponse);
+  // Acknowledges a finding
+  rpc AckFinding(AckFindingRequest) returns (AckFindingResponse);
+}
