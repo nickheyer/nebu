@@ -1,46 +1,83 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import { live, byCreated } from '$lib/state.svelte';
-  import { enumName, human, when } from '$lib/format';
-  import Badge from '$lib/components/Badge.svelte';
-  import TaskLog from '$lib/components/TaskLog.svelte';
+  import { replaceState } from '$app/navigation';
+  import { live, clock, taskActive } from '$lib/state.svelte';
+  import { ago, duration, newestFirst, when, pct, bytes } from '$lib/format';
   import { TaskState } from '$proto/task_pb';
+  import { ListChecks, Download, Hammer, ArrowLeftRight, Play, ShieldCheck, FolderOutput, Radar, Package } from '@lucide/svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import Empty from '$lib/components/ui/Empty.svelte';
+  import Tabs from '$lib/components/ui/Tabs.svelte';
+  import StateBadge from '$lib/components/ui/StateBadge.svelte';
+  import Progress from '$lib/components/ui/Progress.svelte';
+  import TaskDrawer from '$lib/components/TaskDrawer.svelte';
 
+  let view = $state('all');
   let selected = $state(page.url.searchParams.get('id') ?? '');
-  let activeOnly = $state(false);
-  const list = $derived([...live.tasks.values()].filter((t) => !activeOnly || t.state === TaskState.RUNNING || t.state === TaskState.PENDING).sort(byCreated));
+
+  $effect(() => {
+    const q = page.url.searchParams.get('id');
+    if (q) selected = q;
+  });
+  $effect(() => {
+    if (!selected && page.url.searchParams.has('id')) replaceState('/tasks', {});
+  });
+
+  const all = $derived([...live.tasks.values()].sort(newestFirst));
+  const active = $derived(all.filter(taskActive));
+  const failed = $derived(all.filter((t) => t.state === TaskState.FAILED));
+  const list = $derived(view === 'active' ? active : view === 'failed' ? failed : all);
+
+  const icons: Record<string, any> = { pull: Download, build: Hammer, swap: ArrowLeftRight, run: Play, verify: ShieldCheck, export: FolderOutput, check: Radar, install: Package };
 </script>
 
-<div class="space-y-4">
-  <div class="flex items-center gap-3">
-    <h1 class="h1">Tasks</h1>
-    <label class="ml-auto flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={activeOnly} /> active only</label>
-  </div>
-  <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
-    <div class="card overflow-auto">
-      <table class="table">
-        <thead><tr><th>title</th><th>kind</th><th>state</th><th>progress</th><th>created</th></tr></thead>
+<PageHeader title="Tasks" description="Every long running operation, with streamed progress and logs">
+  <Tabs bind:value={view} tabs={[{ id: 'all', label: 'All', count: all.length }, { id: 'active', label: 'Active', count: active.length }, { id: 'failed', label: 'Failed', count: failed.length || undefined }]} />
+</PageHeader>
+
+<Panel flush>
+  {#if list.length === 0}
+    <Empty icon={ListChecks} title={view === 'active' ? 'Nothing running' : view === 'failed' ? 'No failures' : 'No tasks yet'} description="Pulls, builds, runs, swaps, verifies, exports, and monitor checks all run as tasks. History survives daemon restarts." />
+  {:else}
+    <div class="overflow-x-auto">
+      <table class="tbl">
+        <thead><tr><th class="w-8"></th><th>task</th><th>state</th><th class="w-64">progress</th><th class="num">took</th><th class="num">started</th></tr></thead>
         <tbody>
           {#each list as t (t.id)}
-            <tr class="cursor-pointer hover:bg-zinc-800/60 {selected === t.id ? 'bg-zinc-800' : ''}" onclick={() => (selected = t.id)}>
-              <td>{t.title}</td>
-              <td>{t.kind}</td>
-              <td><Badge state={enumName(TaskState, t.state)} /></td>
-              <td class="muted text-xs">{t.progress?.total ? (t.progress.total < 1000n ? `${t.progress.done}/${t.progress.total}` : `${human(t.progress.done)} / ${human(t.progress.total)}`) : ''} {t.progress?.message ?? ''}</td>
-              <td class="muted">{when(t.createdAt)}</td>
+            {@const Icon = icons[t.kind] ?? ListChecks}
+            {@const running = taskActive(t)}
+            <tr class="row-link {selected === t.id ? 'row-active' : ''}" onclick={() => (selected = t.id)}>
+              <td class="text-fg-faint"><Icon size={15} /></td>
+              <td>
+                <div class="text-sm text-fg">{t.title}</div>
+                <div class="flex items-center gap-2 text-[11px] text-fg-faint">
+                  <span class="font-mono">{t.kind}</span>
+                  {#if t.error}<span class="max-w-md truncate text-bad" title={t.error}>{t.error}</span>{/if}
+                </div>
+              </td>
+              <td><StateBadge values={TaskState} value={t.state} size="xs" /></td>
+              <td>
+                {#if running || t.progress?.total}
+                  <Progress done={t.progress?.done} total={t.progress?.total} active={running} tone={t.state === TaskState.FAILED ? 'bad' : t.state === TaskState.SUCCEEDED ? 'ok' : 'accent'} />
+                  <div class="mt-1 truncate text-[11px] text-fg-muted tabular-nums">
+                    {#if t.progress?.total}
+                      {pct(t.progress.done, t.progress.total).toFixed(0)}%{#if t.progress.total >= 100000n}<span> · {bytes(t.progress.done)} of {bytes(t.progress.total)}</span>{/if}
+                    {/if}
+                    {#if t.progress?.message}<span> · {t.progress.message}</span>{/if}
+                  </div>
+                {:else}
+                  <span class="text-xs text-fg-faint">{t.progress?.message ?? ''}</span>
+                {/if}
+              </td>
+              <td class="num text-xs text-fg-muted">{t.startedAt ? duration(t.startedAt, t.finishedAt, clock.now) : '–'}</td>
+              <td class="num text-xs text-fg-muted" title={when(t.createdAt)}>{ago(t.createdAt, clock.now)}</td>
             </tr>
-          {:else}
-            <tr><td colspan="5" class="muted">no tasks</td></tr>
           {/each}
         </tbody>
       </table>
     </div>
-    <div class="card">
-      {#if selected}
-        {#key selected}<TaskLog id={selected} />{/key}
-      {:else}
-        <div class="muted">pick a task to follow its log</div>
-      {/if}
-    </div>
-  </div>
-</div>
+  {/if}
+</Panel>
+
+<TaskDrawer bind:id={selected} />

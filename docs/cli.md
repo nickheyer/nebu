@@ -57,7 +57,7 @@ nebu stop NAME|ID
 nebu slots list
 nebu slots create NAME [--device ID]... [--memory 8GiB] [--runtime R] [--param k=v] [--description D]
 nebu slots show NAME
-nebu slots update NAME [same flags as create]
+nebu slots update NAME [same flags as create, only the flags passed change]
 nebu slots evict NAME                stop the occupant, keep the slot and its name
 nebu slots remove NAME [--force]
 nebu swap SLOT org/repo [--group G] [--runtime R] [--install I] [--param k=v] [--drain-first]

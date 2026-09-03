@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"strconv"
@@ -127,7 +128,29 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := cl.slots.UpdateSlot(ctx, connect.NewRequest(&v1.UpdateSlotRequest{Id: current.Msg.GetSlot().GetId(), Description: *description, DeviceIds: devices, MemoryBytes: bytes, RuntimeId: *runtimeID, Params: paramMap}))
+	// The update replaces every field, so start from what the slot has and change only what was passed
+	cur := current.Msg.GetSlot()
+	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Description: cur.GetDescription(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams()}
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "device":
+			req.DeviceIds = nil
+			for _, d := range devices {
+				if d != "" {
+					req.DeviceIds = append(req.DeviceIds, d)
+				}
+			}
+		case "memory":
+			req.MemoryBytes = bytes
+		case "description":
+			req.Description = *description
+		case "runtime":
+			req.RuntimeId = *runtimeID
+		case "param":
+			req.Params = paramMap
+		}
+	})
+	resp, err := cl.slots.UpdateSlot(ctx, connect.NewRequest(req))
 	if err != nil {
 		return err
 	}

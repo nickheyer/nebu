@@ -163,8 +163,8 @@ func (m *Manager) Add(ctx context.Context, req *v1.AddWatchRequest) (*v1.Watch, 
 			return nil, fmt.Errorf("%w: %s is already watched as %s", ErrWatch, req.GetRepo(), w.GetId())
 		}
 	}
+	// No id until the baseline check passes, so a failed add leaves nothing behind
 	w := &v1.Watch{
-		Id:         newID(),
 		SourceId:   src.Spec().GetId(),
 		Repo:       req.GetRepo(),
 		Revision:   req.GetRevision(),
@@ -178,6 +178,7 @@ func (m *Manager) Add(ctx context.Context, req *v1.AddWatchRequest) (*v1.Watch, 
 	if _, err := m.check(ctx, nil, w); err != nil {
 		return nil, err
 	}
+	w.Id = newID()
 	m.save(w, v1.EventAction_EVENT_ACTION_CREATED)
 	return w, nil
 }
@@ -188,12 +189,17 @@ func (m *Manager) Remove(ctx context.Context, id string) (*v1.Watch, error) {
 	if err != nil {
 		return nil, err
 	}
+	findings, _ := m.Findings(ctx, w.GetId(), false)
 	if _, err := m.DB.DeleteWatch(ctx, w.GetId()); err != nil {
 		return nil, err
 	}
 	m.mu.Lock()
 	delete(m.watches, w.GetId())
 	m.mu.Unlock()
+	// The store cascades the findings, so the stream has to say so too
+	for _, f := range findings {
+		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_DELETED, f.GetId(), &v1.Event_Finding{Finding: f})
+	}
 	m.Events.Publish(v1.EventKind_EVENT_KIND_WATCH, v1.EventAction_EVENT_ACTION_DELETED, w.GetId(), &v1.Event_Watch{Watch: w})
 	return w, nil
 }

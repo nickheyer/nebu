@@ -147,15 +147,22 @@ func (m *Manager) Build(ctx context.Context, req *v1.BuildRequest) (*v1.Build, *
 	})
 	b.TaskId = task.GetId()
 	job = proto.Clone(b).(*v1.Build)
-	close(ready)
 	if m.building == nil {
 		m.building = map[string]*v1.Task{}
 	}
 	m.building[b.GetId()] = task
-	if err := m.DB.PutBuild(ctx, b); err != nil {
+	// The running row and its event land before the task can write a final state over them
+	err = m.DB.PutBuild(ctx, b)
+	if err != nil {
+		delete(m.building, b.GetId())
+		m.Tasks.Cancel(task.GetId())
+	} else {
+		m.publishBuild(b, v1.EventAction_EVENT_ACTION_CREATED)
+	}
+	close(ready)
+	if err != nil {
 		return nil, nil, err
 	}
-	m.publishBuild(b, v1.EventAction_EVENT_ACTION_CREATED)
 	return proto.Clone(b).(*v1.Build), task, nil
 }
 

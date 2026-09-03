@@ -16,6 +16,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/mirror"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/store"
+	"github.com/nickheyer/nebu/pkg/transfer"
 )
 
 const kindExport = "export"
@@ -84,7 +85,7 @@ func (p *Puller) export(ctx context.Context, h *tasks.Handle, models []*v1.Store
 				return fmt.Errorf("artifact %q escapes %s", a.GetPath(), repoDir)
 			}
 			h.Message("copying " + a.GetPath())
-			if err := placeFile(p.Store.BlobPath(sa.GetDigest()), dest, func(d int64) { h.Add(d) }, int64(a.GetSizeBytes())); err != nil {
+			if err := placeFile(p.Store.BlobPath(sa.GetDigest()), dest, func(d int64) { h.Add(d) }, int64(a.GetSizeBytes()), store.Hex(sa.GetDigest())); err != nil {
 				return fmt.Errorf("%s: %w", a.GetPath(), err)
 			}
 			index.Put(mirror.File{Path: a.GetPath(), Size: a.GetSizeBytes(), Sha256: store.Hex(sa.GetDigest())})
@@ -103,10 +104,16 @@ func (p *Puller) export(ctx context.Context, h *tasks.Handle, models []*v1.Store
 }
 
 // Hard links the blob into place, copying when linking fails
-func placeFile(src, dest string, progress func(int64), size int64) error {
+func placeFile(src, dest string, progress func(int64), size int64, hexDigest string) error {
 	if info, err := os.Stat(dest); err == nil && info.Size() == size {
-		progress(size)
-		return nil
+		// The same inode is the blob itself, anything else has to hash to it
+		if blob, err := os.Stat(src); err == nil && os.SameFile(info, blob) {
+			progress(size)
+			return nil
+		}
+		if got, err := transfer.HashFile(dest, progress); err == nil && got == hexDigest {
+			return nil
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err

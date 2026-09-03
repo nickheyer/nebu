@@ -1,103 +1,107 @@
 <script lang="ts">
-  import { api, message } from '$lib/api';
-  import { live, byCreated } from '$lib/state.svelte';
-  import { enumName, human, when } from '$lib/format';
-  import Badge from '$lib/components/Badge.svelte';
-  import InstanceLog from '$lib/components/InstanceLog.svelte';
+  import { page } from '$app/state';
+  import { replaceState } from '$app/navigation';
+  import { api } from '$lib/api';
+  import { live, clock, instanceLive, slotName } from '$lib/state.svelte';
+  import { launch } from '$lib/launch';
+  import { bytes, duration, newestFirst, when, ago } from '$lib/format';
+  import { fail, ok } from '$lib/toast.svelte';
+  import { confirm } from '$lib/confirm.svelte';
   import { InstanceState, type Instance } from '$proto/instance_pb';
+  import { PoolKind } from '$proto/host_pb';
+  import { Boxes, Square, RotateCcw, ScrollText } from '@lucide/svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import Empty from '$lib/components/ui/Empty.svelte';
+  import Tabs from '$lib/components/ui/Tabs.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import StateBadge from '$lib/components/ui/StateBadge.svelte';
+  import Menu from '$lib/components/ui/Menu.svelte';
+  import InstanceDrawer from '$lib/components/InstanceDrawer.svelte';
 
-  let all = $state(false);
-  let selected = $state('');
-  let error = $state('');
+  let view = $state('running');
+  let selected = $state(page.url.searchParams.get('id') ?? '');
 
-  const list = $derived([...live.instances.values()].filter((i) => all || (i.state !== InstanceState.STOPPED && i.state !== InstanceState.FAILED)).sort(byCreated));
-  const current = $derived(selected ? live.instances.get(selected) : undefined);
+  $effect(() => {
+    const q = page.url.searchParams.get('id');
+    if (q) selected = q;
+  });
+  $effect(() => {
+    if (!selected && page.url.searchParams.has('id')) replaceState('/instances', {});
+  });
 
-  function device(i: Instance): string {
-    const m = i.measurements.find((x) => x.key === 'device.used');
-    if (m) return human(m.bytes);
-    const planned = i.plan?.pools.filter((p) => p.kind === 1 || p.kind === 3).reduce((a, p) => a + p.usedBytes, 0n);
-    return planned ? '~' + human(planned) : '-';
+  const all = $derived([...live.instances.values()].sort(newestFirst));
+  const running = $derived(all.filter(instanceLive));
+  const failed = $derived(all.filter((i) => i.state === InstanceState.FAILED));
+  const list = $derived(view === 'running' ? running : view === 'failed' ? failed : all);
+
+  function memory(i: Instance): string {
+    const m = i.measurements.find((x) => x.key === 'device.used') ?? i.measurements.find((x) => x.key.endsWith('.used'));
+    if (m) return bytes(m.bytes);
+    const planned = i.plan?.pools.filter((p) => p.kind === PoolKind.DEVICE || p.kind === PoolKind.UNIFIED).reduce((a, p) => a + p.usedBytes, 0n) ?? 0n;
+    return planned ? '≈ ' + bytes(planned) : '–';
   }
 
-  async function stop(id: string) {
-    error = '';
+  async function stop(i: Instance) {
+    const yes = await confirm({ title: `Stop ${i.name}?`, message: 'The process gets its grace period, then is killed. It will not relaunch after a daemon restart.', action: 'Stop', tone: 'bad' });
+    if (!yes) return;
     try {
-      await api.instances.stopInstance({ id });
+      await api.instances.stopInstance({ id: i.id });
+      ok(`Stopping ${i.name}`);
     } catch (err) {
-      error = message(err);
+      fail(err, 'Stop failed');
     }
   }
 </script>
 
-<div class="space-y-4">
-  <div class="flex items-center gap-3">
-    <h1 class="h1">Instances</h1>
-    <label class="ml-auto flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={all} /> include stopped</label>
-  </div>
-  {#if error}<div class="text-sm text-red-300">{error}</div>{/if}
-  <div class="card overflow-auto">
-    <table class="table">
-      <thead><tr><th>name</th><th>state</th><th>model</th><th>runtime</th><th>pid</th><th>endpoint</th><th>device</th><th>slot</th><th>detail</th><th></th></tr></thead>
-      <tbody>
-        {#each list as i (i.id)}
-          <tr class="cursor-pointer hover:bg-zinc-800/60 {selected === i.id ? 'bg-zinc-800' : ''}" onclick={() => (selected = i.id)}>
-            <td>{i.name}</td>
-            <td><Badge state={enumName(InstanceState, i.state)} /></td>
-            <td class="mono">{i.repo}:{i.group}</td>
-            <td>{i.runtimeId}</td>
-            <td>{i.pid}</td>
-            <td class="mono">{i.endpoint}</td>
-            <td>{device(i)}</td>
-            <td class="mono">{i.slotId ? live.slots.get(i.slotId)?.name ?? i.slotId : ''}</td>
-            <td class="text-xs text-amber-300">{i.triage[0]?.summary ?? i.error}</td>
-            <td class="text-right">
-              {#if i.state !== InstanceState.STOPPED && i.state !== InstanceState.FAILED}
-                <button class="btn btn-danger" onclick={(e) => { e.stopPropagation(); stop(i.id); }}>stop</button>
-              {/if}
-            </td>
-          </tr>
-        {:else}
-          <tr><td colspan="10" class="muted">nothing here</td></tr>
-        {/each}
-      </tbody>
-    </table>
-  </div>
+<PageHeader title="Instances" description="Runtime processes serving stored models, live and past">
+  <Tabs bind:value={view} tabs={[{ id: 'running', label: 'Running', count: running.length }, { id: 'failed', label: 'Failed', count: failed.length || undefined }, { id: 'all', label: 'All', count: all.length }]} />
+</PageHeader>
 
-  {#if current}
-    <div class="card space-y-3">
-      <div class="flex flex-wrap items-center gap-2">
-        <h2 class="h2">{current.name}</h2>
-        <span class="muted mono text-xs">{current.id}</span>
-        <Badge state={enumName(InstanceState, current.state)} />
-        <span class="muted text-xs">created {when(current.createdAt)}, ready {when(current.readyAt)}, stopped {when(current.stoppedAt)}</span>
-      </div>
-      {#if current.plan}
-        <div class="text-sm">plan {enumName({ 0: 'UNSPECIFIED', 1: 'FITS', 2: 'PARTIAL', 3: 'NO' }, current.plan.verdict)}, weights {human(current.plan.weightsBytes)}, cache {human(current.plan.cacheBytes)}, overhead {human(current.plan.overheadBytes)} {current.plan.detail}</div>
-      {/if}
-      <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-        {#each Object.entries(current.params) as [k, v] (k)}<span><span class="muted">{k}=</span>{v}</span>{/each}
-      </div>
-      {#if current.measurements.length}
-        <table class="table">
-          <thead><tr><th>measurement</th><th>bytes</th><th>line</th></tr></thead>
-          <tbody>
-            {#each current.measurements as m (m.key)}
-              <tr><td>{m.key}</td><td>{human(m.bytes)}</td><td class="muted text-xs">{m.line}</td></tr>
-            {/each}
-          </tbody>
-        </table>
-      {/if}
-      {#each current.triage as hit (hit.id)}
-        <div class="rounded border border-amber-900 bg-amber-950/40 p-2 text-sm">
-          <div class="font-medium">{hit.summary}</div>
-          <div class="muted">{hit.hint}</div>
-          {#if Object.keys(hit.fix).length}<div class="text-xs">try {Object.entries(hit.fix).map(([k, v]) => `${k}=${v}`).join(' ')}</div>{/if}
-          <div class="mono muted mt-1">{hit.line}</div>
-        </div>
-      {/each}
-      <div class="mono muted text-xs">{current.command.join(' ')}</div>
-      <InstanceLog id={current.id} follow={current.state !== InstanceState.STOPPED && current.state !== InstanceState.FAILED} />
+<Panel flush>
+  {#if list.length === 0}
+    <Empty icon={Boxes} title={view === 'running' ? 'Nothing running' : view === 'failed' ? 'No failures' : 'No instances yet'} description={view === 'running' ? 'Run a stored model, or drop one on a slot.' : 'Instances stay listed after they stop so their plan, measurements, and log remain readable.'}>
+      {#if view === 'running'}<Button size="sm" variant="primary" href="/store">Open store</Button>{/if}
+    </Empty>
+  {:else}
+    <div class="overflow-x-auto">
+      <table class="tbl">
+        <thead>
+          <tr><th>name</th><th>state</th><th>model</th><th>runtime</th><th>endpoint</th><th class="num">device</th><th>slot</th><th class="num">{view === 'running' ? 'up' : 'when'}</th><th></th></tr>
+        </thead>
+        <tbody>
+          {#each list as i (i.id)}
+            {@const alive = instanceLive(i)}
+            <tr class="row-link {selected === i.id ? 'row-active' : ''}" onclick={() => (selected = i.id)}>
+              <td>
+                <div class="font-medium text-fg">{i.name}</div>
+                {#if i.triage[0]?.summary || (!alive && i.error)}
+                  <div class="max-w-xs truncate text-[11px] {i.state === InstanceState.FAILED ? 'text-bad' : 'text-fg-faint'}" title={i.triage[0]?.summary || i.error}>{i.triage[0]?.summary || i.error}</div>
+                {/if}
+              </td>
+              <td><StateBadge values={InstanceState} value={i.state} size="xs" /></td>
+              <td class="max-w-[14rem] truncate font-mono text-xs" title="{i.repo} {i.group}">{i.repo.split('/').pop()} <span class="text-fg-faint">· {i.group}</span></td>
+              <td class="text-xs">{i.runtimeId}</td>
+              <td class="font-mono text-xs text-fg-muted">{i.endpoint || '–'}</td>
+              <td class="num text-xs">{memory(i)}</td>
+              <td class="text-xs">{i.slotId ? slotName(i.slotId) : '–'}</td>
+              <td class="num text-xs text-fg-muted" title={when(i.createdAt)}>{alive && i.readyAt ? duration(i.readyAt, undefined, clock.now) : ago(i.stoppedAt ?? i.createdAt, clock.now)}</td>
+              <td class="text-right" onclick={(e) => e.stopPropagation()}>
+                <Menu
+                  items={[
+                    { label: 'Open log', icon: ScrollText, onSelect: () => (selected = i.id) },
+                    ...(alive
+                      ? [{ label: 'Stop', icon: Square, tone: 'bad' as const, onSelect: () => stop(i) }]
+                      : [{ label: 'Run again', icon: RotateCcw, disabled: !i.request, onSelect: () => i.request && launch({ ...i.request }) }])
+                  ]}
+                />
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
     </div>
   {/if}
-</div>
+</Panel>
+
+<InstanceDrawer bind:id={selected} />

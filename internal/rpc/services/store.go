@@ -5,6 +5,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/pull"
+	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
 	"github.com/nickheyer/nebu/pkg/store"
@@ -16,11 +17,12 @@ var _ nebuv1connect.StoreServiceHandler = (*StoreService)(nil)
 type StoreService struct {
 	store  *store.Store
 	puller *pull.Puller
+	events *events.Bus
 }
 
 // Builds the store service
-func NewStoreService(st *store.Store, p *pull.Puller) *StoreService {
-	return &StoreService{store: st, puller: p}
+func NewStoreService(st *store.Store, p *pull.Puller, bus *events.Bus) *StoreService {
+	return &StoreService{store: st, puller: p, events: bus}
 }
 
 func (s *StoreService) Pull(ctx context.Context, req *connect.Request[v1.PullRequest]) (*connect.Response[v1.PullResponse], error) {
@@ -52,6 +54,7 @@ func (s *StoreService) RemoveModel(ctx context.Context, req *connect.Request[v1.
 	if err != nil {
 		return nil, wrap(err)
 	}
+	s.events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_DELETED, store.Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()), &v1.Event_Model{Model: m})
 	resp := &v1.RemoveModelResponse{Model: m}
 	if req.Msg.GetGc() {
 		if resp.Gc, err = s.store.Gc(false); err != nil {

@@ -1,4 +1,4 @@
-import { createClient, type Interceptor } from '@connectrpc/connect';
+import { createClient, ConnectError, type Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
 import { BuildService } from '$proto/recipe_pb';
 import { EstimateService } from '$proto/estimate_pb';
@@ -62,6 +62,12 @@ export const api = {
 
 // Formats a Connect error for people
 export function message(err: unknown): string {
+  if (err instanceof ConnectError) return err.rawMessage || err.message;
   if (err instanceof Error) return err.message.replace(/^\[\w+\]\s*/, '');
   return String(err);
+}
+
+// Reports whether an error is the daemon refusing the token
+export function unauthenticated(err: unknown): boolean {
+  return err instanceof ConnectError && err.code === 16;
 }

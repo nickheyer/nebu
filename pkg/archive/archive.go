@@ -57,7 +57,48 @@ func target(dir, name string) (string, error) {
 	if rel, err := filepath.Rel(dir, clean); err != nil || strings.HasPrefix(rel, "..") {
 		return "", fmt.Errorf("archive entry %q escapes %s", name, dir)
 	}
+	if err := noSymlinkParents(dir, clean); err != nil {
+		return "", err
+	}
 	return clean, nil
+}
+
+// Refuses a path whose existing parents include a symlink, which an earlier entry could have planted
+func noSymlinkParents(dir, path string) error {
+	rel, err := filepath.Rel(dir, filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	cur := dir
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if part == "" || part == "." {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("archive entry %q sits under symlink %s", path, cur)
+		}
+	}
+	return nil
+}
+
+// Refuses link targets that resolve outside dir
+func checkLink(dir, path, linkname string) error {
+	if filepath.IsAbs(linkname) {
+		return fmt.Errorf("archive symlink %q points at an absolute path", linkname)
+	}
+	resolved := filepath.Join(filepath.Dir(path), filepath.FromSlash(linkname))
+	if rel, err := filepath.Rel(dir, resolved); err != nil || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("archive symlink %q escapes %s", linkname, dir)
+	}
+	return nil
 }
 
 func extractTar(archive, dir string, gzipped bool) error {
@@ -98,6 +139,9 @@ func extractTar(archive, dir string, gzipped bool) error {
 				return err
 			}
 		case tar.TypeSymlink:
+			if err := checkLink(dir, path, hdr.Linkname); err != nil {
+				return err
+			}
 			os.Remove(path)
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return err
@@ -142,6 +186,10 @@ func extractZip(archive, dir string) error {
 func writeFile(path string, r io.Reader, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
+	}
+	// Never write through a link left by an earlier entry
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		os.Remove(path)
 	}
 	if mode == 0 {
 		mode = 0o644

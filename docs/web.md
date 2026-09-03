@@ -12,16 +12,27 @@ snapshot and reconnects with backoff.
 
 Pages:
 
-- dashboard, devices with memory bars, slots as drop targets, running instances, tasks
-- catalog, search a source, inspect a repository, see the fit table, pull a group, watch it
-- store, stored models, run or swap through a dialog, drag a row onto a slot, gc, verify, export
-- runtimes, manifests with compatibility, adopt, install prebuilt, build with a recipe, installs, builds
-- slots, create, evict, delete, drop a model, follow the occupant's log
-- instances, list, stop, plan, measurements, triage, live log
-- tasks, list and follow any task
-- monitor, watches, findings, check now
-- host, profile and doctor
-- settings, api token, gateway listeners and routes, aliases
+- overview, device and host memory meters, slots as drop targets, running instances, activity,
+  unacknowledged findings, and a get started checklist until a model is serving
+- catalog, search a source or type `org/repo`, weight groups with pull progress, a fit matrix of
+  group by context length per runtime with the plan behind every cell, watch the repository
+- store, stored models with a slot rail to drop them on, run or swap through a dialog that can
+  check the memory plan first, export one or all as a mirror, verify, collect garbage, remove
+- runtimes, manifests with compatibility and unmet constraints, adopt, install prebuilt, build
+  with a recipe, installs, builds with their logs
+- slots, cards with state and route counters, a drawer with the occupant, reservation, last
+  request, live log, and history, create, edit, evict, delete, run or swap
+- instances, running, failed, or all, a drawer with overview, plan, live log, and triage hits
+  that can relaunch with the suggested fix
+- tasks, all, active, or failed with progress, a drawer following the log with cancel
+- monitor, watches with check now, findings with acknowledge, watch a repository
+- gateway, the endpoint with a copyable example, routes with state and counters, aliases
+- host, doctor, devices with facts, memory pools, storage, probes, host facts
+- settings, api token and connection
+
+Errors surface as toasts, destructive actions confirm first, and details open in a side drawer
+that deep links through `?id=` so a task or instance can be shared by URL. Dropping a stored
+model on an occupied slot swaps after confirming.
 
 When `auth.token` is set, enter it on the settings page. It is kept in the browser only.
 

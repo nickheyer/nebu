@@ -146,6 +146,10 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	}
 	base, cancel := context.WithCancel(context.Background())
 	bus := events.New()
+	// Every re-probe reaches the UI, so device meters follow launches and stops
+	prober.OnProbe = func(profile *v1.HostProfile) {
+		bus.Publish(v1.EventKind_EVENT_KIND_HOST, v1.EventAction_EVENT_ACTION_UPDATED, profile.GetHostname(), &v1.Event_Host{Host: profile})
+	}
 	d := &Daemon{
 		Config:   cfg,
 		DB:       store,
@@ -178,6 +182,7 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		Store:     blobStore,
 		Fetcher:   fetcher,
 		Tasks:     d.Tasks,
+		Events:    bus,
 		Log:       log,
 	}
 	d.Installs = &installs.Manager{
@@ -256,11 +261,6 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		return nil, err
 	}
 	d.Gateway = gateway.New(routes, cfg.GetGateway().GetApiKeys(), log)
-	// The gateway shares the API listener unless config says otherwise
-	var shared *gateway.Gateway
-	if cfg.GetGateway().GetListen() == "" {
-		shared = d.Gateway
-	}
 	var ui http.Handler
 	if !cfg.GetWeb().GetDisabled() {
 		ui = web.Handler()
@@ -279,12 +279,14 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		Instances: d.Instances,
 		Slots:     d.Slots,
 		Monitor:   d.Monitor,
-		Gateway:   shared,
-		Events:    bus,
-		Snapshot:  d.snapshot,
-		Web:       ui,
-		Token:     cfg.GetAuth().GetToken(),
-		Log:       log,
+		Gateway:   d.Gateway,
+		// The gateway shares the API listener unless config gives it one
+		GatewayShared: cfg.GetGateway().GetListen() == "",
+		Events:        bus,
+		Snapshot:      d.snapshot,
+		Web:           ui,
+		Token:         cfg.GetAuth().GetToken(),
+		Log:           log,
 	})
 	return d, nil
 }
@@ -437,11 +439,15 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 		return err
 	}
 	go d.Monitor.Run(ctx)
-	servers := []*http.Server{{Handler: d.handler, ReadHeaderTimeout: readHeaderTimeout}}
+	// Request contexts hang off this one so open streams end when serving stops
+	requests, endRequests := context.WithCancel(context.Background())
+	defer endRequests()
+	base := func(net.Listener) context.Context { return requests }
+	servers := []*http.Server{{Handler: d.handler, ReadHeaderTimeout: readHeaderTimeout, BaseContext: base}}
 	listeners := []net.Listener{ln}
 	d.Gateway.SetListeners([]*v1.Listener{{Addr: d.addr, Shared: true}})
 	if gatewayLn != nil {
-		servers = append(servers, &http.Server{Handler: d.Gateway.Handler(), ReadHeaderTimeout: readHeaderTimeout})
+		servers = append(servers, &http.Server{Handler: d.Gateway.Handler(), ReadHeaderTimeout: readHeaderTimeout, BaseContext: base})
 		listeners = append(listeners, gatewayLn)
 		d.Gateway.SetListeners([]*v1.Listener{{Addr: gatewayLn.Addr().String()}})
 		d.Log.Info("gateway listening", "addr", gatewayLn.Addr().String())
@@ -459,13 +465,15 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 			result = err
 		}
 	}
-	d.Close()
+	// Streams and in flight calls end first, then listeners close, then managers stop
+	endRequests()
 	stop, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	for _, srv := range servers {
-		if err := srv.Shutdown(stop); err != nil && result == nil {
+		if err := srv.Shutdown(stop); err != nil && !errors.Is(err, context.DeadlineExceeded) && result == nil {
 			result = err
 		}
 	}
+	d.Close()
 	return result
 }

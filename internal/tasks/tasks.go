@@ -333,9 +333,17 @@ func (e *entry) snapshot() *v1.Task {
 func (e *entry) update(fn func(*v1.Task), force bool) {
 	e.mu.Lock()
 	fn(e.task)
+	e.notifyLocked(force)
+	e.mu.Unlock()
+}
+
+// Broadcasts now, or once the interval since the last broadcast has passed
+func (e *entry) notifyLocked(force bool) {
 	if force || time.Since(e.last) >= notifyInterval {
 		e.broadcastLocked()
-	} else if e.timer == nil {
+		return
+	}
+	if e.timer == nil {
 		e.timer = time.AfterFunc(notifyInterval-time.Since(e.last), func() {
 			e.mu.Lock()
 			e.timer = nil
@@ -343,7 +351,6 @@ func (e *entry) update(fn func(*v1.Task), force bool) {
 			e.mu.Unlock()
 		})
 	}
-	e.mu.Unlock()
 }
 
 func (e *entry) broadcastLocked() {
@@ -395,7 +402,7 @@ func (h *Handle) Logf(format string, args ...any) {
 	}
 	position := h.e.dropped + len(h.e.logs) - 1
 	id := h.e.task.Id
-	h.e.broadcastLocked()
+	h.e.notifyLocked(false)
 	h.e.mu.Unlock()
 	if err := h.m.store.AppendTaskLog(context.Background(), id, position, line); err != nil {
 		h.m.log.Warn("task log write failed", "id", id, "err", err)

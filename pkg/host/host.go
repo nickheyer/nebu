@@ -19,11 +19,13 @@ import (
 
 // Runs probes and caches the resulting profile
 type Prober struct {
-	probes []*probes.Probe
-	paths  []string
-	ttl    time.Duration
-	mu     sync.Mutex
-	cached *v1.HostProfile
+	// Called with a copy after every fresh probe, outside the lock
+	OnProbe func(*v1.HostProfile)
+	probes  []*probes.Probe
+	paths   []string
+	ttl     time.Duration
+	mu      sync.Mutex
+	cached  *v1.HostProfile
 }
 
 // Compiles probe specs for this OS and remembers storage paths
@@ -45,16 +47,23 @@ func New(specs []*v1.ProbeSpec, paths []string, ttl time.Duration) (*Prober, err
 // Returns cached profile or probes again when stale or forced
 func (p *Prober) Profile(ctx context.Context, refresh bool) (*v1.HostProfile, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if !refresh && p.cached != nil && time.Since(p.cached.GetProbedAt().AsTime()) < p.ttl {
-		return proto.Clone(p.cached).(*v1.HostProfile), nil
+		out := proto.Clone(p.cached).(*v1.HostProfile)
+		p.mu.Unlock()
+		return out, nil
 	}
 	profile, err := p.probe(ctx)
 	if err != nil {
+		p.mu.Unlock()
 		return nil, err
 	}
 	p.cached = profile
-	return proto.Clone(profile).(*v1.HostProfile), nil
+	out := proto.Clone(profile).(*v1.HostProfile)
+	p.mu.Unlock()
+	if p.OnProbe != nil {
+		p.OnProbe(proto.Clone(profile).(*v1.HostProfile))
+	}
+	return out, nil
 }
 
 func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {

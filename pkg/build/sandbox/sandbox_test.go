@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -46,9 +47,16 @@ func TestOCIRunnerArgs(t *testing.T) {
 	if err := o.Run(context.Background(), Step{Name: "s", Command: []string{"make", "-j2"}, Env: map[string]string{"B": "2", "A": "1"}, Dir: "src"}, &out); err != nil {
 		t.Fatal(err)
 	}
+	// The container name is unique per run, so it is checked by shape and stripped
+	got := strings.TrimSpace(out.String())
+	name := regexp.MustCompile(` --name nebu-build-\d+-\d+`)
+	if !name.MatchString(got) {
+		t.Fatalf("args lack a container name: %q", got)
+	}
+	got = name.ReplaceAllString(got, "")
 	want := "run --rm -v " + root + ":" + Mount + " -w " + Mount + "/src -e A=1 -e B=2 --gpus all img:1 make -j2"
-	if strings.TrimSpace(out.String()) != want {
-		t.Fatalf("args\n got %q\nwant %q", strings.TrimSpace(out.String()), want)
+	if got != want {
+		t.Fatalf("args\n got %q\nwant %q", got, want)
 	}
 	noImage := NewOCI(root, fake, "", nil)
 	if err := noImage.Run(context.Background(), Step{Name: "s", Command: []string{"x"}}, &out); err == nil {

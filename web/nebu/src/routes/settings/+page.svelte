@@ -1,105 +1,81 @@
 <script lang="ts">
-  import { api, message, setToken, token, baseUrl } from '$lib/api';
+  import { api, baseUrl, setToken, token } from '$lib/api';
   import { connect, live } from '$lib/state.svelte';
-  import { enumName } from '$lib/format';
-  import Badge from '$lib/components/Badge.svelte';
-  import { RouteState } from '$proto/gateway_pb';
-  import { InstanceState } from '$proto/instance_pb';
-  import type { GatewayStatus } from '$proto/gateway_pb';
+  import { fail, ok } from '$lib/toast.svelte';
+  import { KeyRound, Save, Eye, EyeOff, Plug } from '@lucide/svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
+  import Button from '$lib/components/ui/Button.svelte';
+  import Panel from '$lib/components/ui/Panel.svelte';
+  import Field from '$lib/components/ui/Field.svelte';
+  import Kv from '$lib/components/ui/Kv.svelte';
+  import Badge from '$lib/components/ui/Badge.svelte';
 
   let value = $state(token());
-  let status = $state<GatewayStatus | null>(null);
-  let error = $state('');
-  let aliasName = $state('');
-  let aliasInstance = $state('');
-
-  const routes = $derived([...live.routes.values()].sort((a, b) => a.name.localeCompare(b.name)));
-  const ready = $derived([...live.instances.values()].filter((i) => i.state === InstanceState.READY));
-
-  async function refresh() {
-    try {
-      status = (await api.gateway.getGatewayStatus({})).status ?? null;
-    } catch (err) {
-      error = message(err);
-    }
-  }
-  $effect(() => {
-    refresh();
-  });
+  let show = $state(false);
+  let testing = $state(false);
 
   function save() {
     setToken(value.trim());
     connect();
-    refresh();
+    ok(value.trim() ? 'Token saved' : 'Token cleared', 'Reconnecting to the daemon');
   }
 
-  async function addAlias() {
-    error = '';
+  async function test() {
+    testing = true;
     try {
-      await api.gateway.setRoute({ name: aliasName, instanceId: aliasInstance });
-      aliasName = '';
+      const r = await api.host.getProfile({});
+      ok('Connected', `${r.profile?.hostname} answered`);
     } catch (err) {
-      error = message(err);
-    }
-  }
-
-  async function removeRoute(name: string) {
-    error = '';
-    try {
-      await api.gateway.deleteRoute({ name });
-    } catch (err) {
-      error = message(err);
+      fail(err, 'Connection failed');
+    } finally {
+      testing = false;
     }
   }
 </script>
 
-<div class="space-y-4">
-  <h1 class="h1">Settings</h1>
-  {#if error}<div class="text-sm text-red-300">{error}</div>{/if}
-  <div class="card space-y-2">
-    <h2 class="h2">API token</h2>
-    <p class="muted text-sm">Required when the daemon sets auth.token, stored only in this browser.</p>
-    <div class="flex gap-2">
-      <input class="input max-w-md" type="password" bind:value placeholder="token" />
-      <button class="btn btn-primary" onclick={save}>save</button>
-    </div>
-    <div class="muted text-xs">api {baseUrl}, stream {live.connected ? 'connected' : 'disconnected'} {live.error}</div>
-  </div>
+<PageHeader title="Settings" description="This browser's connection to the daemon. Everything else is configured on the daemon side." />
 
-  <div class="card space-y-2">
-    <h2 class="h2">Gateway</h2>
-    {#if status}
-      {#each status.listeners as l (l.addr)}
-        <div class="text-sm">OpenAI compatible endpoint at <span class="mono">http://{l.addr}/v1</span>{l.shared ? ', shared with the API listener' : ''}</div>
-      {/each}
-      <div class="muted text-sm">api keys {status.auth ? 'required' : 'not required'}, {status.requests.toString()} requests served</div>
-    {/if}
-    <table class="table">
-      <thead><tr><th>name</th><th>state</th><th>model</th><th>instance</th><th>slot</th><th>requests</th><th>in flight</th><th></th></tr></thead>
-      <tbody>
-        {#each routes as r (r.name)}
-          <tr>
-            <td class="mono">{r.name}</td>
-            <td><Badge state={enumName(RouteState, r.state)} /></td>
-            <td class="mono">{r.model}</td>
-            <td class="mono">{r.instanceId}</td>
-            <td>{r.slotId ? live.slots.get(r.slotId)?.name ?? r.slotId : ''}</td>
-            <td>{r.requests.toString()}</td>
-            <td>{r.inFlight}</td>
-            <td class="text-right">{#if !r.slotId}<button class="btn btn-danger" onclick={() => removeRoute(r.name)}>remove</button>{/if}</td>
-          </tr>
-        {:else}
-          <tr><td colspan="8" class="muted">no routes</td></tr>
-        {/each}
-      </tbody>
-    </table>
-    <div class="flex gap-2">
-      <input class="input max-w-xs" bind:value={aliasName} placeholder="alias name" />
-      <select class="input max-w-xs" bind:value={aliasInstance}>
-        <option value="">ready instance</option>
-        {#each ready as i (i.id)}<option value={i.id}>{i.name} ({i.repo}:{i.group})</option>{/each}
-      </select>
-      <button class="btn" onclick={addAlias} disabled={!aliasName || !aliasInstance}>add alias</button>
+<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+  <Panel title="API token" description="Required when the daemon sets auth.token. Kept in this browser only.">
+    <form
+      class="flex flex-col gap-3"
+      onsubmit={(e) => {
+        e.preventDefault();
+        save();
+      }}
+    >
+      <Field label="Bearer token" for="token">
+        <div class="relative">
+          <KeyRound size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-fg-faint" />
+          <input id="token" class="input pr-10 pl-9 font-mono" type={show ? 'text' : 'password'} bind:value autocomplete="off" placeholder="paste the daemon's auth.token" />
+          <button type="button" class="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-fg-faint hover:text-fg" onclick={() => (show = !show)} aria-label={show ? 'Hide token' : 'Show token'}>
+            {#if show}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+          </button>
+        </div>
+      </Field>
+      <div class="flex gap-2">
+        <Button type="submit" variant="primary" icon={Save}>Save and reconnect</Button>
+        <Button type="button" variant="outline" icon={Plug} loading={testing} onclick={test}>Test connection</Button>
+      </div>
+    </form>
+  </Panel>
+
+  <Panel title="Connection">
+    <div class="flex flex-col gap-3">
+      <div class="flex items-center gap-2">
+        <Badge tone={live.connected ? 'ok' : 'bad'} dot pulse={live.connected} label={live.connected ? 'live updates connected' : 'disconnected'} />
+        {#if live.needsToken}<Badge tone="warn" label="token required" />{/if}
+      </div>
+      <Kv
+        mono
+        items={[
+          ['api', baseUrl],
+          ['host', live.host?.hostname],
+          ['platform', live.host ? `${live.host.os}/${live.host.arch}` : undefined],
+          ['stream error', live.error || undefined]
+        ]}
+      />
+      <p class="text-xs leading-5 text-fg-faint">The page holds one server stream from the daemon and renders everything from it. When it drops, it reconnects with backoff and replays a snapshot.</p>
     </div>
-  </div>
+  </Panel>
 </div>

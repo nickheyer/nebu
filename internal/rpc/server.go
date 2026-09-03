@@ -47,11 +47,13 @@ type Deps struct {
 	Slots     *slots.Manager
 	Monitor   *monitor.Manager
 	Gateway   *gateway.Gateway
-	Events    *events.Bus
-	Snapshot  services.Snapshotter
-	Web       http.Handler
-	Token     string
-	Log       *slog.Logger
+	// Mounts the gateway under /v1/ on this handler when it has no listener of its own
+	GatewayShared bool
+	Events        *events.Bus
+	Snapshot      services.Snapshotter
+	Web           http.Handler
+	Token         string
+	Log           *slog.Logger
 }
 
 // Builds the h2c handler serving every service
@@ -63,7 +65,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host, d.Installs), opts))
 	mux.Handle(nebuv1connect.NewInstanceServiceHandler(services.NewInstanceService(d.Instances), opts))
 	mux.Handle(nebuv1connect.NewEstimateServiceHandler(services.NewEstimateService(d.Inspector), opts))
-	mux.Handle(nebuv1connect.NewStoreServiceHandler(services.NewStoreService(d.Store, d.Puller), opts))
+	mux.Handle(nebuv1connect.NewStoreServiceHandler(services.NewStoreService(d.Store, d.Puller, d.Events), opts))
 	mux.Handle(nebuv1connect.NewTaskServiceHandler(services.NewTaskService(d.Tasks), opts))
 	mux.Handle(nebuv1connect.NewBuildServiceHandler(services.NewBuildService(d.Installs), opts))
 	mux.Handle(nebuv1connect.NewSlotServiceHandler(services.NewSlotService(d.Slots), opts))
@@ -86,8 +88,13 @@ func NewHandler(d Deps) http.Handler {
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))
-	if d.Gateway != nil {
+	if d.Gateway != nil && d.GatewayShared {
 		d.Gateway.Mount(mux)
+	} else {
+		// Keeps OpenAI paths from falling through to the single page app
+		mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "the gateway listens on its own address, see nebu gateway", http.StatusNotFound)
+		})
 	}
 	if d.Web != nil {
 		mux.Handle("/", d.Web)
@@ -123,7 +130,12 @@ func (a *auth) ok(header http.Header) bool {
 	if a.token == "" {
 		return true
 	}
-	got := strings.TrimSpace(strings.TrimPrefix(header.Get("Authorization"), "Bearer"))
+	const scheme = "bearer "
+	h := header.Get("Authorization")
+	if len(h) < len(scheme) || !strings.EqualFold(h[:len(scheme)], scheme) {
+		return false
+	}
+	got := strings.TrimSpace(h[len(scheme):])
 	return subtle.ConstantTimeCompare([]byte(got), []byte(a.token)) == 1
 }
 

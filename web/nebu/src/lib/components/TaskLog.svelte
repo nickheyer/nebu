@@ -1,30 +1,55 @@
 <script lang="ts">
   import { api, message } from '$lib/api';
-  import { enumName, human } from '$lib/format';
+  import { live, clock, taskActive } from '$lib/state.svelte';
+  import { bytes, count, duration, pct } from '$lib/format';
   import { TaskState, type Task } from '$proto/task_pb';
-  import Badge from './Badge.svelte';
+  import { Ban } from '@lucide/svelte';
+  import StateBadge from './ui/StateBadge.svelte';
+  import Button from './ui/Button.svelte';
+  import Progress from './ui/Progress.svelte';
+  import LogView from './ui/LogView.svelte';
+  import { fail } from '$lib/toast.svelte';
 
-  let { id, onDone }: { id: string; onDone?: (t: Task) => void } = $props();
-  let task = $state<Task | null>(null);
+  let { id, height = 'h-80', onDone, compact = false }: { id: string; height?: string; onDone?: (t: Task) => void; compact?: boolean } = $props();
+
+  let streamed = $state<Task | null>(null);
   let lines = $state<string[]>([]);
   let error = $state('');
-  let box: HTMLDivElement | undefined = $state();
+  let cancelling = $state(false);
+
+  const task = $derived(live.tasks.get(id) ?? streamed);
+  const active = $derived(!!task && taskActive(task));
+  const progress = $derived.by(() => {
+    const p = task?.progress;
+    if (!p) return { known: false, text: '' };
+    if (!p.total) return { known: false, text: p.message };
+    const asBytes = p.total >= 100000n;
+    const text = asBytes ? `${bytes(p.done)} of ${bytes(p.total)}` : `${count(p.done)} of ${count(p.total)}`;
+    return { known: true, text: `${text} · ${pct(p.done, p.total).toFixed(0)}%${p.message ? ' · ' + p.message : ''}` };
+  });
 
   $effect(() => {
     const controller = new AbortController();
+    const current = id;
     lines = [];
-    task = null;
+    streamed = null;
     error = '';
     (async () => {
       try {
-        for await (const msg of api.tasks.watchTask({ id }, { signal: controller.signal })) {
-          if (msg.task) task = msg.task;
+        for await (const msg of api.tasks.watchTask({ id: current }, { signal: controller.signal })) {
+          if (msg.task) streamed = msg.task;
           if (msg.logs.length) {
-            lines = [...lines, ...msg.logs];
-            queueMicrotask(() => box?.scrollTo({ top: box.scrollHeight }));
+            lines.push(...msg.logs);
+            if (lines.length > 5000) lines.splice(0, lines.length - 5000);
           }
         }
-        if (task && onDone) onDone(task);
+        // A finished task answers from history, so read the stored log if the stream carried none
+        if (lines.length === 0 && !controller.signal.aborted) {
+          const stored = await api.tasks.getTask({ id: current }, { signal: controller.signal });
+          if (stored.task && !streamed) streamed = stored.task;
+          lines.push(...stored.logs);
+        }
+        if (streamed && onDone) onDone(streamed);
       } catch (err) {
         if (!controller.signal.aborted) error = message(err);
       }
@@ -32,40 +57,41 @@
     return () => controller.abort();
   });
 
-  function progress(t: Task): string {
-    const p = t.progress;
-    if (!p || !p.total) return p?.message ?? '';
-    const small = p.total < 1000n;
-    const pct = Number((p.done * 100n) / p.total);
-    return (small ? `${p.done}/${p.total}` : `${human(p.done)} / ${human(p.total)} ${pct}%`) + (p.message ? '  ' + p.message : '');
-  }
-
   async function cancel() {
+    cancelling = true;
     try {
       await api.tasks.cancelTask({ id });
     } catch (err) {
-      error = message(err);
+      fail(err, 'Cancel failed');
+    } finally {
+      cancelling = false;
     }
   }
 </script>
 
-<div class="space-y-2">
+<div class="flex flex-col gap-3">
   {#if task}
-    <div class="flex flex-wrap items-center gap-2 text-sm">
-      <Badge state={enumName(TaskState, task.state)} />
-      <span class="font-medium">{task.title}</span>
-      <span class="muted">{progress(task)}</span>
-      {#if task.state === TaskState.RUNNING || task.state === TaskState.PENDING}
-        <button class="btn ml-auto" onclick={cancel}>cancel</button>
-      {/if}
-    </div>
-    {#if task.progress?.total}
-      <div class="h-1.5 w-full overflow-hidden rounded bg-zinc-800">
-        <div class="h-full bg-emerald-600" style="width: {Number((task.progress.done * 100n) / task.progress.total)}%"></div>
+    {#if !compact}
+      <div class="flex flex-wrap items-center gap-2">
+        <StateBadge values={TaskState} value={task.state} />
+        <span class="font-medium text-fg">{task.title}</span>
+        <span class="rounded bg-raised px-1.5 py-0.5 font-mono text-[11px] text-fg-muted">{task.kind}</span>
+        <span class="text-xs text-fg-faint tabular-nums">{duration(task.startedAt ?? task.createdAt, task.finishedAt, clock.now)}</span>
+        {#if active}
+          <Button size="xs" variant="ghost" icon={Ban} class="ml-auto" loading={cancelling} onclick={cancel}>Cancel</Button>
+        {/if}
       </div>
     {/if}
-    {#if task.error}<div class="text-sm text-red-300">{task.error}</div>{/if}
+    {#if active || progress.known}
+      <div class="flex flex-col gap-1.5">
+        <Progress done={task.progress?.done} total={task.progress?.total} {active} tone={task.state === TaskState.FAILED ? 'bad' : task.state === TaskState.SUCCEEDED ? 'ok' : 'accent'} />
+        {#if progress.text}<div class="text-xs text-fg-muted tabular-nums">{progress.text}</div>{/if}
+      </div>
+    {/if}
+    {#if task.error}
+      <div class="rounded-md border border-bad/30 bg-bad/10 px-3 py-2 text-sm leading-6 text-bad">{task.error}</div>
+    {/if}
   {/if}
-  {#if error}<div class="text-sm text-red-300">{error}</div>{/if}
-  <div class="log" bind:this={box}>{lines.join('\n')}</div>
+  {#if error}<div class="text-sm text-bad">{error}</div>{/if}
+  <LogView {lines} {height} live={active} empty={active ? 'Waiting for output' : 'No output was recorded'} />
 </div>

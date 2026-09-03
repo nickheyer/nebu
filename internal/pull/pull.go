@@ -12,6 +12,7 @@ import (
 
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/formats"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/sources"
@@ -31,6 +32,7 @@ type Puller struct {
 	Store     *store.Store
 	Fetcher   *transfer.Fetcher
 	Tasks     *tasks.Manager
+	Events    *events.Bus
 	Log       *slog.Logger
 }
 
@@ -103,6 +105,7 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 	}
 	h.Progress(total, total, "done")
 	h.Logf("stored at %s", stored.Path)
+	p.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_CREATED, store.Key(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup()), &v1.Event_Model{Model: stored})
 	return nil
 }
 

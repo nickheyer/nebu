@@ -47,6 +47,35 @@ type Manager struct {
 
 	mu    sync.Mutex
 	slots map[string]*v1.Slot
+	// Slots a swap, evict, or delete is working on right now
+	busy map[string]bool
+}
+
+// Reserves a slot for one operation, refusing while another holds it or a swap runs
+func (m *Manager) claim(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.slots[id]
+	if !ok {
+		return fmt.Errorf("%w %q", ErrUnknownSlot, id)
+	}
+	if m.busy[id] {
+		return fmt.Errorf("%w: slot %s is busy", ErrSlot, s.GetName())
+	}
+	if s.GetState() == v1.SlotState_SLOT_STATE_SWAPPING {
+		return fmt.Errorf("%w: slot %s is already swapping", ErrSlot, s.GetName())
+	}
+	if m.busy == nil {
+		m.busy = map[string]bool{}
+	}
+	m.busy[id] = true
+	return nil
+}
+
+func (m *Manager) release(id string) {
+	m.mu.Lock()
+	delete(m.busy, id)
+	m.mu.Unlock()
 }
 
 // Loads every slot from the store
@@ -263,9 +292,10 @@ func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Slot, 
 	if err != nil {
 		return nil, err
 	}
-	if s.GetState() == v1.SlotState_SLOT_STATE_SWAPPING {
-		return nil, fmt.Errorf("%w: slot %s is swapping", ErrSlot, s.GetName())
+	if err := m.claim(s.GetId()); err != nil {
+		return nil, err
 	}
+	defer m.release(s.GetId())
 	if live := m.liveInstance(s); live != nil {
 		if !force {
 			return nil, fmt.Errorf("%w: slot %s serves %s, evict it or pass --force", ErrSlot, s.GetName(), live.GetName())
@@ -291,9 +321,10 @@ func (m *Manager) Evict(ctx context.Context, id string) (*v1.Slot, error) {
 	if err != nil {
 		return nil, err
 	}
-	if s.GetState() == v1.SlotState_SLOT_STATE_SWAPPING {
-		return nil, fmt.Errorf("%w: slot %s is swapping", ErrSlot, s.GetName())
+	if err := m.claim(s.GetId()); err != nil {
+		return nil, err
 	}
+	defer m.release(s.GetId())
 	for _, in := range m.Instances.InSlot(s.GetId()) {
 		if _, err := m.Instances.Drain(ctx, in.GetId(), m.DrainTimeout); err != nil {
 			return nil, err
@@ -321,9 +352,11 @@ func (m *Manager) Swap(ctx context.Context, req *v1.SwapRequest) (*v1.Slot, *v1.
 	if run.GetName() == "" {
 		run.Name = s.GetName()
 	}
-	if s.GetState() == v1.SlotState_SLOT_STATE_SWAPPING {
-		return nil, nil, nil, fmt.Errorf("%w: slot %s is already swapping", ErrSlot, s.GetName())
+	// The claim holds until the slot is either starting or marked swapping, so two swaps cannot interleave
+	if err := m.claim(s.GetId()); err != nil {
+		return nil, nil, nil, err
 	}
+	defer m.release(s.GetId())
 	old := m.liveInstance(s)
 	plan, err := m.Instances.Plan(ctx, run)
 	if err != nil {

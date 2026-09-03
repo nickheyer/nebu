@@ -24,6 +24,8 @@ const (
 	EnvListen = "NEBU_LISTEN"
 	// Environment variable holding the API token
 	EnvToken = "NEBU_TOKEN"
+	// Comma separated gateway keys read when gateway.api_key_env is unset
+	EnvAPIKeys = "NEBU_API_KEYS"
 
 	defaultListen   = "127.0.0.1:8484"
 	defaultSource   = "huggingface"
@@ -163,6 +165,9 @@ func applyDefaults(cfg *v1.Config) error {
 	}
 	if cfg.Auth.Token == "" && cfg.Auth.TokenEnv != "" {
 		cfg.Auth.Token = os.Getenv(cfg.Auth.TokenEnv)
+	}
+	if cfg.Gateway.ApiKeyEnv == "" {
+		cfg.Gateway.ApiKeyEnv = EnvAPIKeys
 	}
 	if cfg.Gateway.ApiKeyEnv != "" {
 		if v := os.Getenv(cfg.Gateway.ApiKeyEnv); v != "" {

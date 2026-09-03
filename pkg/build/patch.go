@@ -204,6 +204,20 @@ func applyFile(path string, fp filePatch) error {
 		}
 		return os.Remove(path)
 	}
+	if fp.isNew && err == nil {
+		var want []string
+		for _, h := range fp.hunks {
+			for _, l := range h.lines {
+				if l.kind != '-' {
+					want = append(want, l.text)
+				}
+			}
+		}
+		// Upstream merged the file, so there is nothing to add
+		if strings.Join(lines, "") == strings.Join(want, "") {
+			return nil
+		}
+	}
 	delta, drift := 0, 0
 	for i, h := range fp.hunks {
 		var oldLines, newLines []string

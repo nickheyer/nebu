@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/pkg/events"
@@ -41,6 +42,10 @@ func (s *EventService) WatchEvents(ctx context.Context, req *connect.Request[v1.
 		case ev := <-sub.Events():
 			if err := stream.Send(&v1.WatchEventsResponse{Event: ev}); err != nil {
 				return err
+			}
+			// A dropped event may have been a delete, so the client must resync from a snapshot
+			if sub.Dropped() > 0 {
+				return connect.NewError(connect.CodeResourceExhausted, errors.New("event stream fell behind, subscribe again with a snapshot"))
 			}
 		}
 	}

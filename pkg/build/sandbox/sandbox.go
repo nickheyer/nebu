@@ -10,12 +10,16 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 // Mount point of the build root inside a container
 const Mount = "/work"
+
+// How long a cancelled step may keep its output open before it is abandoned
+const waitDelay = 5 * time.Second
 
 // One command with its environment, Dir relative to the root
 type Step struct {
@@ -56,6 +60,8 @@ func (h *Host) Run(ctx context.Context, step Step, out io.Writer) error {
 	cmd.Dir = h.Path(step.Dir)
 	cmd.Env = append(os.Environ(), envList(step.Env)...)
 	cmd.Stdout, cmd.Stderr = out, out
+	// Build tools fork freely, so a cancel has to take the whole group
+	groupAttr(cmd)
 	return cmd.Run()
 }
 
@@ -92,7 +98,9 @@ func (o *OCI) Run(ctx context.Context, step Step, out io.Writer) error {
 	if o.image == "" {
 		return fmt.Errorf("step %s: no container image configured", step.Name)
 	}
-	args := []string{"run", "--rm", "-v", o.root + ":" + Mount, "-w", o.Path(step.Dir)}
+	// A name lets a cancel stop the container, not just the client
+	name := fmt.Sprintf("nebu-build-%d-%d", os.Getpid(), time.Now().UnixNano())
+	args := []string{"run", "--rm", "--name", name, "-v", o.root + ":" + Mount, "-w", o.Path(step.Dir)}
 	for _, kv := range envList(step.Env) {
 		args = append(args, "-e", kv)
 	}
@@ -101,6 +109,11 @@ func (o *OCI) Run(ctx context.Context, step Step, out io.Writer) error {
 	args = append(args, step.Command...)
 	cmd := exec.CommandContext(ctx, o.cli, args...)
 	cmd.Stdout, cmd.Stderr = out, out
+	cmd.Cancel = func() error {
+		exec.Command(o.cli, "kill", name).Run()
+		return cmd.Process.Kill()
+	}
+	cmd.WaitDelay = waitDelay
 	return cmd.Run()
 }
 

@@ -101,19 +101,25 @@ func (d *Doctor) Run(ctx context.Context) (*v1.DoctorReport, error) {
 			add(id, v1.CheckStatus_CHECK_STATUS_OK, fmt.Sprintf("%d installs, newest %s %s", len(list), list[0].GetVersion(), list[0].GetPath()), "")
 		}
 	}
-	if recipes, err := d.Installs.ListRecipes(ctx, ""); err == nil {
-		for _, rs := range recipes {
-			id := "recipe." + rs.GetRecipe().GetId()
-			if len(rs.GetUnmet()) > 0 {
-				add(id, v1.CheckStatus_CHECK_STATUS_WARN, fmt.Sprintf("variant %s, %s", rs.GetVariant(), strings.Join(rs.GetUnmet(), "; ")), "install the tools or build in a container with nebu build --sandbox oci --image IMAGE")
-				continue
-			}
-			detail := "variant " + rs.GetVariant() + " on the host"
-			if rs.GetSandbox() == v1.SandboxKind_SANDBOX_KIND_OCI {
-				detail = "variant " + rs.GetVariant() + " through " + rs.GetSandboxCli()
-			}
-			add(id, v1.CheckStatus_CHECK_STATUS_OK, detail, "")
+	recipes, err := d.Installs.ListRecipes(ctx, "")
+	if err != nil {
+		add("recipes", v1.CheckStatus_CHECK_STATUS_FAIL, err.Error(), "check the host profile and the spec directories")
+	}
+	for _, rs := range recipes {
+		id := "recipe." + rs.GetRecipe().GetId()
+		where := "variant " + rs.GetVariant()
+		if rs.GetVariant() == "" {
+			where = "no variant selected"
 		}
+		if len(rs.GetUnmet()) > 0 {
+			add(id, v1.CheckStatus_CHECK_STATUS_WARN, where+", "+strings.Join(rs.GetUnmet(), "; "), "install the tools or build in a container with nebu build --sandbox oci --image IMAGE")
+			continue
+		}
+		detail := where + " on the host"
+		if rs.GetSandbox() == v1.SandboxKind_SANDBOX_KIND_OCI {
+			detail = where + " through " + rs.GetSandboxCli()
+		}
+		add(id, v1.CheckStatus_CHECK_STATUS_OK, detail, "")
 	}
 	for _, cfg := range d.Sources.List() {
 		src, err := d.Sources.Get(cfg.GetId())

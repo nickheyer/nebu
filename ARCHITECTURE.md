@@ -139,7 +139,7 @@ nebu/
 |       +-- embed.go               go:embed of dist with a single page fallback
 |       +-- src/lib/proto/         generated connect-es client, never hand edited
 |       +-- src/lib/               api client, live state fed by events, shared components
-|       +-- src/routes/            dashboard, catalog, store, runtimes, slots, instances, tasks, monitor, host, settings
+|       +-- src/routes/            overview, catalog, store, runtimes, slots, instances, tasks, monitor, gateway, host, settings
 |       +-- static/                openapi output
 +-- test/
 |   +-- fixtures/

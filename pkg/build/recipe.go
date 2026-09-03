@@ -360,9 +360,12 @@ func (rc *Recipe) Select(profile *v1.HostProfile, opts Options) (*Selection, err
 	return sel, nil
 }
 
-// Renders recipe vars, variant vars, then overrides, against the ref
+// Renders recipe vars then variant vars against the ref, overrides seeded first so templates see them
 func (s *Selection) RenderVars() error {
 	s.Vars = map[string]string{}
+	for k, v := range s.overrides {
+		s.Vars[k] = v
+	}
 	if err := s.renderVars(s.Recipe.vars); err != nil {
 		return err
 	}
@@ -381,13 +384,10 @@ func (s *Selection) RenderVars() error {
 			s.Image = strings.TrimSpace(image)
 		}
 	}
-	for k, v := range s.overrides {
-		s.Vars[k] = v
-	}
 	return nil
 }
 
-// Renders vars in key order so later ones reference earlier
+// Renders vars in key order so later ones reference earlier, leaving overridden keys alone
 func (s *Selection) renderVars(ts map[string]*eval.Template) error {
 	keys := make([]string, 0, len(ts))
 	for k := range ts {
@@ -395,6 +395,9 @@ func (s *Selection) renderVars(ts map[string]*eval.Template) error {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
+		if _, ok := s.overrides[k]; ok {
+			continue
+		}
 		v, err := ts[k].Render(s.context())
 		if err != nil {
 			return fmt.Errorf("var %s: %w", k, err)
