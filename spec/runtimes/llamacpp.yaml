@@ -1,0 +1,107 @@
+id: llamacpp
+name: llama.cpp
+description: llama-server from ggml-org llama.cpp
+formats: [gguf]
+constraints:
+  - expr: len(devices) > 0
+    message: at least one probed device
+acquire:
+  adopt: [llama-server]
+launch:
+  command: '{{.install.path}}'
+  args: ['--model', '{{.artifacts.weights}}', '--host', '{{.host}}', '--port', '{{.port}}']
+  health:
+    path: /health
+    interval_ms: 1000
+    timeout_ms: 600000
+  api: API_FLAVOR_OPENAI
+params:
+  - name: n_ctx
+    type: PARAM_TYPE_INT
+    default: '8192'
+    flag: --ctx-size
+    description: Context length in tokens
+  - name: n_batch
+    type: PARAM_TYPE_INT
+    default: '2048'
+    flag: --batch-size
+    description: Logical batch size
+  - name: n_ubatch
+    type: PARAM_TYPE_INT
+    default: '512'
+    flag: --ubatch-size
+    description: Physical batch size
+  - name: n_gpu_layers
+    type: PARAM_TYPE_INT
+    default: auto
+    solved: true
+    flag: --n-gpu-layers
+    description: Layers placed on device, solved when auto
+  - name: n_cpu_moe
+    type: PARAM_TYPE_INT
+    default: auto
+    solved: true
+    flag: --n-cpu-moe
+    description: Layers whose experts stay in host memory, solved when auto
+  - name: cache_type_k
+    type: PARAM_TYPE_STRING
+    default: f16
+    choices: [f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0]
+    flag: --cache-type-k
+    description: Key cache element type
+  - name: cache_type_v
+    type: PARAM_TYPE_STRING
+    default: f16
+    choices: [f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0]
+    flag: --cache-type-v
+    description: Value cache element type
+  - name: flash_attn
+    type: PARAM_TYPE_STRING
+    default: auto
+    choices: [auto, 'on', 'off']
+    flag: --flash-attn
+    description: Flash attention mode
+  - name: n_parallel
+    type: PARAM_TYPE_INT
+    default: '1'
+    flag: --parallel
+    description: Concurrent sequences sharing the context
+  - name: threads
+    type: PARAM_TYPE_INT
+    default: '-1'
+    flag: --threads
+    description: CPU threads, negative for automatic
+estimate:
+  groups:
+    - kind: TENSOR_GROUP_KIND_EMBEDDING
+      pool: POOL_KIND_HOST
+    - kind: TENSOR_GROUP_KIND_LAYER
+      pool: POOL_KIND_DEVICE
+      param: n_gpu_layers
+      spill_priority: 10
+    - kind: TENSOR_GROUP_KIND_OUTPUT
+      pool: POOL_KIND_DEVICE
+      param: n_gpu_layers
+      spill_priority: 10
+    - kind: TENSOR_GROUP_KIND_EXPERTS
+      pool: POOL_KIND_DEVICE
+      param: n_cpu_moe
+      param_counts_host: true
+      spill_priority: 1
+      requires: TENSOR_GROUP_KIND_LAYER
+    - kind: TENSOR_GROUP_KIND_OTHER
+      pool: POOL_KIND_DEVICE
+  cache_bytes: n_ctx * cache_per_token * (cache_bytes[cache_type_k] + cache_bytes[cache_type_v]) / 2
+  overhead_bytes: 512 * MiB + n_ubatch * (n_embd + n_vocab) * 8
+  cache_element_bytes:
+    f32: 4
+    f16: 2
+    bf16: 2
+    q8_0: 1.0625
+    q5_1: 0.75
+    q5_0: 0.6875
+    q4_1: 0.625
+    q4_0: 0.5625
+  margin: 0.05
+  context_param: n_ctx
+triage: [llamacpp]

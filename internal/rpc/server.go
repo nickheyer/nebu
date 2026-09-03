@@ -1,0 +1,67 @@
+// Package rpc mounts Connect handlers on an HTTP handler.
+package rpc
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"connectrpc.com/connect"
+	"connectrpc.com/grpcreflect"
+	"github.com/nickheyer/nebu/internal/doctor"
+	"github.com/nickheyer/nebu/internal/inspect"
+	"github.com/nickheyer/nebu/internal/rpc/services"
+	"github.com/nickheyer/nebu/pkg/host"
+	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
+	"github.com/nickheyer/nebu/pkg/runtime"
+	"github.com/nickheyer/nebu/pkg/sources"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
+)
+
+// Everything the handlers need
+type Deps struct {
+	Host      *host.Prober
+	Doctor    *doctor.Doctor
+	Sources   *sources.Registry
+	Runtimes  *runtime.Registry
+	Inspector *inspect.Inspector
+	Log       *slog.Logger
+}
+
+// Builds the h2c handler serving every service
+func NewHandler(d Deps) http.Handler {
+	opts := connect.WithInterceptors(logging(d.Log))
+	mux := http.NewServeMux()
+	mux.Handle(nebuv1connect.NewHostServiceHandler(services.NewHostService(d.Host, d.Doctor), opts))
+	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector), opts))
+	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host), opts))
+	mux.Handle(nebuv1connect.NewEstimateServiceHandler(services.NewEstimateService(d.Inspector), opts))
+	reflector := grpcreflect.NewStaticReflector(
+		nebuv1connect.HostServiceName,
+		nebuv1connect.SourceServiceName,
+		nebuv1connect.RuntimeServiceName,
+		nebuv1connect.EstimateServiceName,
+	)
+	mux.Handle(grpcreflect.NewHandlerV1(reflector))
+	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))
+	return h2c.NewHandler(mux, &http2.Server{})
+}
+
+// Logs every call with duration and outcome
+func logging(log *slog.Logger) connect.UnaryInterceptorFunc {
+	return func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			start := time.Now()
+			resp, err := next(ctx, req)
+			attrs := []any{"procedure", req.Spec().Procedure, "ms", time.Since(start).Milliseconds()}
+			if err != nil {
+				log.Warn("rpc", append(attrs, "err", err)...)
+			} else {
+				log.Debug("rpc", attrs...)
+			}
+			return resp, err
+		}
+	}
+}

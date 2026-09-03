@@ -70,9 +70,11 @@ nebu/
 ├── pkg/
 │   ├── proto/nebu/v1/             generated go and connect-go, never hand edited
 │   ├── config/                    daemon config, paths and listeners only
-│   ├── logger/                    structured logging with rotation
+│   ├── logger/                    structured logging
+│   ├── eval/                      expression and template engines every spec file uses
+│   ├── cache/                     disk cache for listings and header reads
 │   ├── events/                    in-process bus behind the watch stream
-│   ├── spec/                      loads embedded spec files into proto messages, validates
+│   ├── spec/                      loads layered spec files into proto messages
 │   ├── host/                      host profile assembly and fact evaluation
 │   │   └── probes/                generic exec, csv, json, kv, sysfs readers driven by spec
 │   ├── sources/                   source interface, search, resolve, range reads
@@ -80,8 +82,9 @@ nebu/
 │   │   ├── modelscope/            modelscope api
 │   │   ├── mirror/                http and s3-style mirrors for air-gapped sites
 │   │   └── local/                 adopt files already on disk
-│   ├── formats/                   header readers into a common descriptor
-│   │   ├── gguf/                  header and tensor table, range-read capable
+│   ├── formats/                   classifier, groups, and header readers
+│   │   ├── gguf/                  header and tensor table from range reads
+│   │   │   └── gguftest/          writes small GGUF files for tests
 │   │   └── safetensors/           shard headers plus config.json
 │   ├── descriptor/                format-neutral descriptor, tensor groups, arch params
 │   ├── store/                     content-addressed blobs, manifests, stable link tree, gc
@@ -96,6 +99,7 @@ nebu/
 │   │   └── oci/                   container launcher via docker, podman, or nerdctl cli
 │   └── triage/                    log pattern matcher producing hints and fixes
 ├── spec/                          every runtime and model specific lives here, never in go
+│   ├── embed.go                   go:embed of the directories below
 │   ├── runtimes/                  one manifest per backend, llamacpp.yaml, vllm.yaml
 │   ├── formats/                   format descriptors, roles, file patterns
 │   ├── archs/                     architecture families, cache shapes, attention variants
@@ -104,6 +108,8 @@ nebu/
 │   └── triage/                    error patterns mapped to hints and actions
 ├── internal/
 │   ├── daemon/                    wiring of all managers, startup recovery, shutdown
+│   ├── inspect/                   resolve, describe, and plan a model before download
+│   ├── doctor/                    probes, runtimes, and sources as actionable checks
 │   ├── db/                        pure go sqlite, sql migrations, no proto in schema
 │   │   └── migrations/
 │   ├── rpc/
@@ -186,10 +192,44 @@ route flips when health passes. The public name never disappears.
 - Spec files are YAML that unmarshal through protojson into the same messages the API uses.
   One schema, two transports.
 
+## Spec file contract
+
+Every file under `spec/` is YAML that unmarshals through protojson into one message from
+`proto/nebu/v1`. Unknown fields fail the load. A site adds or overrides any spec by dropping
+a file with the same `id` into a directory listed in `spec_dirs`, which always includes
+`<data_dir>/spec`.
+
+- `probes/` is `ProbeSpec`. Go knows how to exec a command or read a file, parse CSV, JSON,
+  key-value blocks, or a regex, and render templates. Which tool, which fields, and which
+  facts come out is the spec.
+- `formats/` is `FormatSpec`. File rules claim paths and assign roles, group rules name the
+  loadable set, tensor rules classify tensor names into placement kinds, param rules map
+  metadata keys onto descriptor params with optional derive expressions.
+- `archs/` is `ArchSpec`. A regex over the architecture name and formulas such as
+  `cache_per_token` evaluated with the descriptor params in scope.
+- `runtimes/` is `RuntimeManifest`. Accepted formats, host constraints as expressions,
+  acquisition, launch templates, typed params with their flags, the estimate policy, and
+  report rules for calibration.
+
+Expressions use expr syntax with `KiB`, `MiB`, `GiB`, `vercmp()`, and `num()` in scope.
+Templates use Go text/template with `missingkey=error`, so optional fields go through
+`index`.
+
+## Planner
+
+The estimate policy is the only place a runtime's memory behaviour is described. Each
+tensor group kind maps to a pool and, when offloadable, to the param that counts it. The
+planner puts fixed kinds where the policy says, then searches offload counts in spill
+priority order, most protected kind outermost, taking layers from the end first. A kind
+that `requires` another can only sit on device where its parent does. Cache bytes follow
+the layer kind, overhead sits on device, and the solved counts come back as params ready
+to render as flags. The verdict is FITS when every offloadable item is on device, PARTIAL
+when some spilled, and NO when the fixed need alone does not fit.
+
 ## Milestones
 
 1. `nebu doctor` and `nebu inspect`. Host probes, sources, format readers, estimator.
-   Ships as a CLI with no daemon state beyond a cache.
+   Ships as a CLI with no daemon state beyond a cache. Done.
 2. `nebu pull`. Store and transfer with resume and verification.
 3. `nebu run`. Runtime manifests, the process launcher, gateway, triage, calibration.
 4. `nebu build`. Recipes and sandboxes.

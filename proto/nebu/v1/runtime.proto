@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "nebu/v1/model.proto";
+import "nebu/v1/host.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Value type of a runtime parameter
+enum ParamType {
+  PARAM_TYPE_UNSPECIFIED = 0;
+  PARAM_TYPE_STRING = 1;
+  PARAM_TYPE_INT = 2;
+  PARAM_TYPE_FLOAT = 3;
+  PARAM_TYPE_BOOL = 4;
+}
+
+// Wire protocol an instance speaks
+enum ApiFlavor {
+  API_FLAVOR_UNSPECIFIED = 0;
+  API_FLAVOR_OPENAI = 1;
+}
+
+// One tunable knob of a runtime
+message Param {
+  string name = 1;
+  ParamType type = 2;
+  string default = 3;
+  string description = 4;
+  repeated string choices = 5;
+  string flag = 6;
+  string env = 7;
+  bool solved = 8;
+}
+
+// Host requirement expressed over probed facts
+message Constraint {
+  string expr = 1;
+  string message = 2;
+}
+
+// Prebuilt release matched to host facts
+message PrebuiltRule {
+  string when = 1;
+  string url = 2;
+  string binary = 3;
+}
+
+// Ways to obtain an install
+message Acquire {
+  repeated string adopt = 1;
+  repeated PrebuiltRule prebuilt = 2;
+  string recipe_id = 3;
+}
+
+// Readiness probe of a running instance
+message HealthCheck {
+  string path = 1;
+  uint32 interval_ms = 2;
+  uint32 timeout_ms = 3;
+}
+
+// How to start and address an instance
+message Launch {
+  string command = 1;
+  repeated string args = 2;
+  map<string, string> env = 3;
+  HealthCheck health = 4;
+  ApiFlavor api = 5;
+}
+
+// Placement rule for one tensor group kind
+message GroupPolicy {
+  TensorGroupKind kind = 1;
+  PoolKind pool = 2;
+  string param = 3;
+  bool param_counts_host = 4;
+  uint32 spill_priority = 5;
+  TensorGroupKind requires = 6;
+}
+
+// Memory planning rules for a runtime
+message EstimatePolicy {
+  repeated GroupPolicy groups = 1;
+  string cache_bytes = 2;
+  string overhead_bytes = 3;
+  map<string, double> cache_element_bytes = 4;
+  double margin = 5;
+  string context_param = 6;
+}
+
+// Extracts a measured allocation from a log line
+message ReportRule {
+  string match = 1;
+  string key = 2;
+  string unit = 3;
+}
+
+// Data driven runtime definition
+message RuntimeManifest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  repeated string formats = 4;
+  repeated Constraint constraints = 5;
+  Acquire acquire = 6;
+  Launch launch = 7;
+  repeated Param params = 8;
+  EstimatePolicy estimate = 9;
+  repeated string triage = 10;
+  repeated ReportRule report = 11;
+}
+
+// Lists known runtimes
+message ListRuntimesRequest {}
+
+// Returns known runtimes with constraint results
+message ListRuntimesResponse {
+  repeated RuntimeStatus runtimes = 1;
+}
+
+// Runtime paired with host compatibility
+message RuntimeStatus {
+  RuntimeManifest manifest = 1;
+  bool compatible = 2;
+  repeated string unmet = 3;
+}
+
+// Fetches one runtime
+message GetRuntimeRequest {
+  string id = 1;
+}
+
+// Returns one runtime
+message GetRuntimeResponse {
+  RuntimeStatus runtime = 1;
+}
+
+// Runtime catalog
+service RuntimeService {
+  // Lists runtimes and host compatibility
+  rpc ListRuntimes(ListRuntimesRequest) returns (ListRuntimesResponse);
+  // Fetches one runtime by id
+  rpc GetRuntime(GetRuntimeRequest) returns (GetRuntimeResponse);
+}

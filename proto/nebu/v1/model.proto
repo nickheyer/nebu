@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Purpose of a file within a model
+enum ArtifactRole {
+  ARTIFACT_ROLE_UNSPECIFIED = 0;
+  ARTIFACT_ROLE_WEIGHTS = 1;
+  ARTIFACT_ROLE_PROJECTOR = 2;
+  ARTIFACT_ROLE_TOKENIZER = 3;
+  ARTIFACT_ROLE_CONFIG = 4;
+  ARTIFACT_ROLE_TEMPLATE = 5;
+  ARTIFACT_ROLE_OTHER = 6;
+}
+
+// Placement class of a tensor group
+enum TensorGroupKind {
+  TENSOR_GROUP_KIND_UNSPECIFIED = 0;
+  TENSOR_GROUP_KIND_EMBEDDING = 1;
+  TENSOR_GROUP_KIND_LAYER = 2;
+  TENSOR_GROUP_KIND_EXPERTS = 3;
+  TENSOR_GROUP_KIND_OUTPUT = 4;
+  TENSOR_GROUP_KIND_OTHER = 5;
+}
+
+// One file belonging to a model
+message Artifact {
+  string path = 1;
+  uint64 size_bytes = 2;
+  string sha256 = 3;
+  string format_id = 4;
+  ArtifactRole role = 5;
+  string group = 6;
+  uint32 shard_index = 7;
+  uint32 shard_count = 8;
+}
+
+// Repository at a revision with its artifacts
+message Model {
+  string source_id = 1;
+  string repo = 2;
+  string revision = 3;
+  string commit = 4;
+  repeated Artifact artifacts = 5;
+  google.protobuf.Timestamp resolved_at = 6;
+}
+
+// One tensor as read from a header
+message TensorInfo {
+  string name = 1;
+  string dtype = 2;
+  uint64 bytes = 3;
+  uint64 elements = 4;
+}
+
+// Header facts read from one weight group
+message RawModel {
+  string format_id = 1;
+  string group = 2;
+  map<string, string> metadata = 3;
+  repeated TensorInfo tensors = 4;
+}
+
+// Tensors summed by placement class and layer
+message TensorGroup {
+  string id = 1;
+  TensorGroupKind kind = 2;
+  int32 layer = 3;
+  uint64 bytes = 4;
+  uint64 elements = 5;
+}
+
+// Format neutral facts the planner consumes
+message Descriptor {
+  string format_id = 1;
+  string group = 2;
+  string architecture = 3;
+  string arch_spec_id = 4;
+  map<string, double> params = 5;
+  repeated TensorGroup groups = 6;
+  uint64 total_bytes = 7;
+  uint64 parameter_count = 8;
+  double bits_per_weight = 9;
+  map<string, string> metadata = 10;
+}
+
+// Claims files matching a path pattern
+message FileRule {
+  string match = 1;
+  ArtifactRole role = 2;
+}
+
+// Derives a group name from a path pattern
+message GroupRule {
+  string match = 1;
+  string value = 2;
+}
+
+// Classifies tensors by name pattern
+message TensorRule {
+  string match = 1;
+  TensorGroupKind kind = 2;
+}
+
+// Maps a descriptor param to candidate metadata keys
+message ParamRule {
+  string name = 1;
+  repeated string keys = 2;
+  string derive = 3;
+}
+
+// Data driven format definition
+message FormatSpec {
+  string id = 1;
+  string description = 2;
+  uint32 priority = 3;
+  repeated FileRule files = 4;
+  repeated GroupRule groups = 5;
+  string shards = 6;
+  repeated TensorRule tensors = 7;
+  repeated string architecture = 8;
+  repeated ParamRule params = 9;
+  repeated string metadata = 10;
+  repeated ArtifactRole requires = 11;
+  map<string, string> dtypes = 12;
+}
+
+// Data driven architecture family definition
+message ArchSpec {
+  string id = 1;
+  string description = 2;
+  string match = 3;
+  uint32 priority = 4;
+  map<string, string> formulas = 5;
+}

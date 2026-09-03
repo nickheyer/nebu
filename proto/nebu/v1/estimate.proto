@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "nebu/v1/host.proto";
+import "nebu/v1/model.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Whether a plan fits the primary pools
+enum FitVerdict {
+  FIT_VERDICT_UNSPECIFIED = 0;
+  FIT_VERDICT_FITS = 1;
+  FIT_VERDICT_PARTIAL = 2;
+  FIT_VERDICT_NO = 3;
+}
+
+// Bytes planned into one pool
+message PoolUsage {
+  string pool_id = 1;
+  PoolKind kind = 2;
+  uint64 used_bytes = 3;
+  uint64 capacity_bytes = 4;
+}
+
+// Bytes of one group kind planned into one pool
+message Placement {
+  TensorGroupKind kind = 1;
+  string pool_id = 2;
+  uint64 bytes = 3;
+  uint32 count = 4;
+}
+
+// Result of planning one model on one runtime
+message MemoryPlan {
+  FitVerdict verdict = 1;
+  repeated PoolUsage pools = 2;
+  repeated Placement placements = 3;
+  uint64 weights_bytes = 4;
+  uint64 cache_bytes = 5;
+  uint64 overhead_bytes = 6;
+  map<string, string> params = 7;
+  string detail = 8;
+}
+
+// Plans one weight group on one runtime
+message EstimateRequest {
+  string source_id = 1;
+  string repo = 2;
+  string revision = 3;
+  string group = 4;
+  string runtime_id = 5;
+  map<string, string> params = 6;
+}
+
+// Returns the plan and descriptor used
+message EstimateResponse {
+  MemoryPlan plan = 1;
+  Descriptor descriptor = 2;
+}
+
+// Builds a fit table for a model
+message InspectRequest {
+  string source_id = 1;
+  string repo = 2;
+  string revision = 3;
+  repeated string groups = 4;
+  repeated string runtime_ids = 5;
+  repeated uint32 contexts = 6;
+  map<string, string> params = 7;
+}
+
+// One cell of the fit table
+message FitRow {
+  string group = 1;
+  string runtime_id = 2;
+  uint32 context = 3;
+  MemoryPlan plan = 4;
+}
+
+// Model, descriptors, and fit table
+message InspectResponse {
+  Model model = 1;
+  repeated Descriptor descriptors = 2;
+  repeated FitRow rows = 3;
+  repeated string warnings = 4;
+}
+
+// Memory planning before download
+service EstimateService {
+  // Resolves, describes, and plans every group
+  rpc Inspect(InspectRequest) returns (InspectResponse);
+  // Plans one group on one runtime
+  rpc Estimate(EstimateRequest) returns (EstimateResponse);
+}

@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nebu/v1/model.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Kind of catalog a source talks to
+enum SourceKind {
+  SOURCE_KIND_UNSPECIFIED = 0;
+  SOURCE_KIND_HUGGINGFACE = 1;
+  SOURCE_KIND_LOCAL = 2;
+}
+
+// Configured place models come from
+message Source {
+  string id = 1;
+  SourceKind kind = 2;
+  string endpoint = 3;
+  string token_env = 4;
+  string path = 5;
+}
+
+// One catalog search result
+message SearchHit {
+  string source_id = 1;
+  string repo = 2;
+  string author = 3;
+  uint64 downloads = 4;
+  uint64 likes = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  repeated string tags = 7;
+}
+
+// Lists configured sources
+message ListSourcesRequest {}
+
+// Returns configured sources
+message ListSourcesResponse {
+  repeated Source sources = 1;
+}
+
+// Searches one source
+message SearchRequest {
+  string source_id = 1;
+  string query = 2;
+  repeated string tags = 3;
+  uint32 limit = 4;
+}
+
+// Returns search hits
+message SearchResponse {
+  repeated SearchHit hits = 1;
+}
+
+// Resolves a repo and revision to artifacts
+message ResolveRequest {
+  string source_id = 1;
+  string repo = 2;
+  string revision = 3;
+}
+
+// Returns the classified model
+message ResolveResponse {
+  Model model = 1;
+}
+
+// Catalog lookup across sources
+service SourceService {
+  // Lists configured sources
+  rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
+  // Searches a source catalog
+  rpc Search(SearchRequest) returns (SearchResponse);
+  // Resolves a repo to classified artifacts
+  rpc Resolve(ResolveRequest) returns (ResolveResponse);
+}

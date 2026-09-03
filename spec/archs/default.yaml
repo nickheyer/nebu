@@ -1,0 +1,6 @@
+id: default
+description: Standard attention with a full key and value cache per layer
+match: '.*'
+priority: 0
+formulas:
+  cache_per_token: n_layer * n_head_kv * (head_dim + head_dim_v)

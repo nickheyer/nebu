@@ -1,0 +1,66 @@
+id: vllm
+name: vLLM
+description: vllm serve over safetensors checkpoints
+formats: [safetensors]
+constraints:
+  - expr: any(devices, .kind == "gpu")
+    message: a probed GPU
+acquire:
+  adopt: [vllm]
+launch:
+  command: '{{.install.path}}'
+  args: ['serve', '{{.artifacts.weights_dir}}', '--host', '{{.host}}', '--port', '{{.port}}']
+  health:
+    path: /health
+    interval_ms: 2000
+    timeout_ms: 1800000
+  api: API_FLAVOR_OPENAI
+params:
+  - name: n_ctx
+    type: PARAM_TYPE_INT
+    default: '8192'
+    flag: --max-model-len
+    description: Maximum model length in tokens
+  - name: gpu_memory_utilization
+    type: PARAM_TYPE_FLOAT
+    default: '0.9'
+    flag: --gpu-memory-utilization
+    description: Fraction of device memory vLLM may claim
+  - name: kv_cache_dtype
+    type: PARAM_TYPE_STRING
+    default: auto
+    choices: [auto, fp8, fp8_e5m2, fp8_e4m3]
+    flag: --kv-cache-dtype
+    description: Cache element type
+  - name: max_num_seqs
+    type: PARAM_TYPE_INT
+    default: '256'
+    flag: --max-num-seqs
+    description: Maximum concurrent sequences
+  - name: tensor_parallel_size
+    type: PARAM_TYPE_INT
+    default: '1'
+    flag: --tensor-parallel-size
+    description: Devices to shard across
+estimate:
+  groups:
+    - kind: TENSOR_GROUP_KIND_EMBEDDING
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_LAYER
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_EXPERTS
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_OUTPUT
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_OTHER
+      pool: POOL_KIND_DEVICE
+  cache_bytes: n_ctx * cache_per_token * cache_bytes[kv_cache_dtype]
+  overhead_bytes: 2 * GiB
+  cache_element_bytes:
+    auto: 2
+    fp8: 1
+    fp8_e5m2: 1
+    fp8_e4m3: 1
+  margin: 0.1
+  context_param: n_ctx
+triage: [vllm]

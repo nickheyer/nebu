@@ -1,0 +1,201 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Classifies a probed compute device
+enum DeviceKind {
+  DEVICE_KIND_UNSPECIFIED = 0;
+  DEVICE_KIND_GPU = 1;
+  DEVICE_KIND_CPU = 2;
+  DEVICE_KIND_ACCELERATOR = 3;
+}
+
+// Classifies a memory pool by locality
+enum PoolKind {
+  POOL_KIND_UNSPECIFIED = 0;
+  POOL_KIND_DEVICE = 1;
+  POOL_KIND_HOST = 2;
+  POOL_KIND_UNIFIED = 3;
+}
+
+// Outcome of one probe run
+enum ProbeStatus {
+  PROBE_STATUS_UNSPECIFIED = 0;
+  PROBE_STATUS_OK = 1;
+  PROBE_STATUS_SKIPPED = 2;
+  PROBE_STATUS_FAILED = 3;
+}
+
+// Selects how probe output is parsed
+enum ParseKind {
+  PARSE_KIND_UNSPECIFIED = 0;
+  PARSE_KIND_CSV = 1;
+  PARSE_KIND_JSON = 2;
+  PARSE_KIND_KV = 3;
+  PARSE_KIND_REGEX = 4;
+}
+
+// Severity of one doctor check
+enum CheckStatus {
+  CHECK_STATUS_UNSPECIFIED = 0;
+  CHECK_STATUS_OK = 1;
+  CHECK_STATUS_WARN = 2;
+  CHECK_STATUS_FAIL = 3;
+}
+
+// Probed compute device with vendor facts
+message Device {
+  string id = 1;
+  DeviceKind kind = 2;
+  string vendor = 3;
+  string name = 4;
+  uint64 memory_total_bytes = 5;
+  uint64 memory_free_bytes = 6;
+  map<string, string> facts = 7;
+}
+
+// Memory pool a runtime can place bytes into
+message MemoryPool {
+  string id = 1;
+  PoolKind kind = 2;
+  string device_id = 3;
+  uint64 total_bytes = 4;
+  uint64 free_bytes = 5;
+}
+
+// Filesystem holding nebu data, one entry per mount
+message Storage {
+  string path = 1;
+  string filesystem = 2;
+  uint64 total_bytes = 3;
+  uint64 free_bytes = 4;
+  repeated string uses = 5;
+}
+
+// Result of one probe for doctor reporting
+message ProbeResult {
+  string probe_id = 1;
+  ProbeStatus status = 2;
+  string detail = 3;
+}
+
+// Everything nebu knows about the machine
+message HostProfile {
+  string hostname = 1;
+  string os = 2;
+  string arch = 3;
+  repeated Device devices = 4;
+  repeated MemoryPool pools = 5;
+  repeated Storage storage = 6;
+  map<string, string> facts = 7;
+  google.protobuf.Timestamp probed_at = 8;
+  repeated ProbeResult probes = 9;
+}
+
+// Command or file a probe reads
+message ProbeExec {
+  string command = 1;
+  repeated string args = 2;
+  string file = 3;
+  uint32 timeout_ms = 4;
+}
+
+// Turns probe output into rows of string fields
+message ProbeParse {
+  ParseKind kind = 1;
+  repeated string columns = 2;
+  string rows = 3;
+  string pattern = 4;
+  string block_separator = 5;
+}
+
+// Renders one device per parsed row
+message DeviceTemplate {
+  DeviceKind kind = 1;
+  string vendor = 2;
+  string id = 3;
+  string name = 4;
+  string memory_total = 5;
+  string memory_free = 6;
+  string unit = 7;
+  map<string, string> facts = 8;
+  string when = 9;
+}
+
+// Renders one memory pool per parsed row
+message PoolTemplate {
+  PoolKind kind = 1;
+  string id = 2;
+  string device_id = 3;
+  string total = 4;
+  string free = 5;
+  string unit = 6;
+  string when = 7;
+}
+
+// Renders one host fact from all rows
+message FactTemplate {
+  string key = 1;
+  string value = 2;
+}
+
+// Maps parsed rows onto profile entries
+message ProbeEmit {
+  DeviceTemplate device = 1;
+  PoolTemplate pool = 2;
+  repeated FactTemplate facts = 3;
+}
+
+// Data driven host probe definition
+message ProbeSpec {
+  string id = 1;
+  string description = 2;
+  repeated string os = 3;
+  ProbeExec exec = 4;
+  ProbeParse parse = 5;
+  ProbeEmit emit = 6;
+}
+
+// One doctor finding with a hint
+message DoctorCheck {
+  string id = 1;
+  CheckStatus status = 2;
+  string summary = 3;
+  string hint = 4;
+}
+
+// Full doctor output
+message DoctorReport {
+  HostProfile profile = 1;
+  repeated DoctorCheck checks = 2;
+}
+
+// Asks for the host profile
+message GetProfileRequest {
+  bool refresh = 1;
+}
+
+// Returns the host profile
+message GetProfileResponse {
+  HostProfile profile = 1;
+}
+
+// Asks for a doctor run
+message DoctorRequest {}
+
+// Returns doctor findings
+message DoctorResponse {
+  DoctorReport report = 1;
+}
+
+// Host probing and diagnostics
+service HostService {
+  // Returns cached or refreshed host profile
+  rpc GetProfile(GetProfileRequest) returns (GetProfileResponse);
+  // Runs every check and returns findings
+  rpc Doctor(DoctorRequest) returns (DoctorResponse);
+}

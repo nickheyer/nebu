@@ -427,3 +427,10 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Nebu
+/build/
+/data/
+/pkg/proto/
+*.db
+/nebu.yaml

@@ -1,0 +1,103 @@
+id: gguf
+description: GGML universal file format
+priority: 10
+files:
+  - match: '(?i)(^|/)mmproj[^/]*\.gguf$'
+    role: ARTIFACT_ROLE_PROJECTOR
+  - match: '(?i)\.gguf$'
+    role: ARTIFACT_ROLE_WEIGHTS
+groups:
+  - match: '(?i)(?:^|[-_./])(?P<quant>(?:UD-)?(?:I?Q\d(?:_[0-9A-Z]+)*|BF16|F16|F32|MXFP4|TQ\d_\d))(?:[-_./]|$)'
+    value: '${quant}'
+  - match: '^(?P<dir>.+)/[^/]+$'
+    value: '${dir}'
+  - match: '.*'
+    value: default
+shards: '-(?P<index>\d{5})-of-(?P<count>\d{5})\.gguf$'
+tensors:
+  - match: '^token_embd\.'
+    kind: TENSOR_GROUP_KIND_EMBEDDING
+  - match: '^blk\.(?P<layer>\d+)\..*_exps\.'
+    kind: TENSOR_GROUP_KIND_EXPERTS
+  - match: '^blk\.(?P<layer>\d+)\.'
+    kind: TENSOR_GROUP_KIND_LAYER
+  - match: '^output(_norm)?\.'
+    kind: TENSOR_GROUP_KIND_OUTPUT
+  - match: '.*'
+    kind: TENSOR_GROUP_KIND_OTHER
+architecture: [general.architecture]
+params:
+  - name: n_layer
+    keys: ['{arch}.block_count']
+    derive: layers_seen
+  - name: n_embd
+    keys: ['{arch}.embedding_length']
+  - name: n_head
+    keys: ['{arch}.attention.head_count']
+  - name: n_head_kv
+    keys: ['{arch}.attention.head_count_kv']
+    derive: n_head
+  - name: head_dim
+    keys: ['{arch}.attention.key_length']
+    derive: n_embd / n_head
+  - name: head_dim_v
+    keys: ['{arch}.attention.value_length']
+    derive: head_dim
+  - name: n_ctx_train
+    keys: ['{arch}.context_length']
+  - name: n_vocab
+    keys: ['{arch}.vocab_size', 'tokenizer.ggml.tokens.length']
+  - name: n_expert
+    keys: ['{arch}.expert_count']
+  - name: n_expert_used
+    keys: ['{arch}.expert_used_count']
+  - name: kv_lora_rank
+    keys: ['{arch}.attention.kv_lora_rank']
+  - name: rope_dim
+    keys: ['{arch}.rope.dimension_count']
+  - name: n_swa
+    keys: ['{arch}.attention.sliding_window']
+  - name: file_type
+    keys: ['general.file_type']
+metadata:
+  - general.name
+  - general.basename
+  - general.size_label
+  - general.file_type
+  - general.quantization_version
+  - general.finetune
+  - '{arch}.block_count'
+requires: []
+dtypes:
+  '0': F32
+  '1': F16
+  '2': Q4_0
+  '3': Q4_1
+  '6': Q5_0
+  '7': Q5_1
+  '8': Q8_0
+  '9': Q8_1
+  '10': Q2_K
+  '11': Q3_K
+  '12': Q4_K
+  '13': Q5_K
+  '14': Q6_K
+  '15': Q8_K
+  '16': IQ2_XXS
+  '17': IQ2_XS
+  '18': IQ3_XXS
+  '19': IQ1_S
+  '20': IQ4_NL
+  '21': IQ3_S
+  '22': IQ2_S
+  '23': IQ4_XS
+  '24': I8
+  '25': I16
+  '26': I32
+  '27': I64
+  '28': F64
+  '29': IQ1_M
+  '30': BF16
+  '34': TQ1_0
+  '35': TQ2_0
+  '39': MXFP4

@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "nebu/v1/source.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Logging settings
+message Logging {
+  string level = 1;
+  string format = 2;
+  string file = 3;
+}
+
+// Daemon and client configuration
+message Config {
+  string listen = 1;
+  string addr = 2;
+  string data_dir = 3;
+  string cache_dir = 4;
+  repeated string spec_dirs = 5;
+  repeated Source sources = 6;
+  Logging logging = 7;
+  repeated uint32 contexts = 8;
+  uint64 min_free_bytes = 9;
+}

@@ -1,0 +1,29 @@
+id: rocm-smi
+description: AMD GPUs through rocm-smi
+exec:
+  command: rocm-smi
+  args: [--showmeminfo, vram, --showproductname, --showuniqueid, --json]
+parse:
+  kind: PARSE_KIND_JSON
+emit:
+  device:
+    kind: DEVICE_KIND_GPU
+    vendor: amd
+    id: "{{.key}}"
+    name: "{{index . \"Card_Series\"}}"
+    memory_total: "{{index . \"VRAM_Total_Memory_B\"}}"
+    unit: B
+    when: key startsWith "card"
+    facts:
+      unique_id: "{{index . \"Unique_ID\"}}"
+      card_model: "{{index . \"Card_Model\"}}"
+  pool:
+    kind: POOL_KIND_DEVICE
+    id: "{{.key}}"
+    device_id: "{{.key}}"
+    total: "{{index . \"VRAM_Total_Memory_B\"}}"
+    unit: B
+    when: key startsWith "card"
+  facts:
+    - key: amd.count
+      value: "{{.count}}"

@@ -1,0 +1,18 @@
+id: meminfo
+description: Host memory from procfs
+os: [linux]
+exec:
+  file: /proc/meminfo
+parse:
+  kind: PARSE_KIND_KV
+emit:
+  pool:
+    kind: POOL_KIND_HOST
+    id: host
+    total: "{{.MemTotal}}"
+    free: "{{.MemAvailable}}"
+  facts:
+    - key: mem.total
+      value: "{{.first.MemTotal}}"
+    - key: mem.hugepages_total
+      value: "{{index .first \"HugePages_Total\"}}"
