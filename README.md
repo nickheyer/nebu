@@ -17,4 +17,4 @@ The end goal objectives are:
 
 4. Be a time save, not a time suck.
 
-> DISCLAIMER: I don't even know what language I'm going to use (not Python) at the time of writing this
+> DISCLAIMER: I don't even know what language I'm going to use at the time of writing this... not Python, probably not Go since ollama uses it and it seems like they regret it, I haven't written C++ since college, Rust seems like it would have the same hangups as go, I just don't know. 
