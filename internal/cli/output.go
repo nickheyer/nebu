@@ -22,7 +22,9 @@ func (e *env) print(msg proto.Message, render func(w io.Writer)) error {
 		_, err = fmt.Fprintln(e.out, string(data))
 		return err
 	}
-	render(e.out)
+	if render != nil {
+		render(e.out)
+	}
 	return nil
 }
 

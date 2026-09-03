@@ -164,6 +164,42 @@ func (b *RangeBlob) ReadAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
+// Streams one range as a body, tolerating servers that ignore Range
+func (b *RangeBlob) Range(ctx context.Context, off, length int64) (io.ReadCloser, error) {
+	if off >= b.size || length <= 0 {
+		return io.NopCloser(strings.NewReader("")), nil
+	}
+	end := min(off+length-1, b.size-1)
+	header := http.Header{"Range": {fmt.Sprintf("bytes=%d-%d", off, end)}}
+	b.mu.Lock()
+	rawURL := b.url
+	b.mu.Unlock()
+	resp, err := b.client.Do(ctx, http.MethodGet, rawURL, nil, header)
+	if err != nil {
+		return nil, err
+	}
+	if final := resp.Request.URL.String(); final != rawURL {
+		b.mu.Lock()
+		b.url = final
+		b.mu.Unlock()
+	}
+	var body io.Reader = resp.Body
+	if resp.StatusCode == http.StatusOK {
+		if _, err := io.CopyN(io.Discard, body, off); err != nil {
+			resp.Body.Close()
+			return nil, err
+		}
+	}
+	return &limitedBody{Reader: io.LimitReader(body, end-off+1), closer: resp.Body}, nil
+}
+
+type limitedBody struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (l *limitedBody) Close() error { return l.closer.Close() }
+
 // Returns blob size
 func (b *RangeBlob) Size() int64 { return b.size }
 

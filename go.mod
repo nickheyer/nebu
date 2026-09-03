@@ -16,4 +16,5 @@ require (
 require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 )

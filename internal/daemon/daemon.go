@@ -13,7 +13,9 @@ import (
 
 	"github.com/nickheyer/nebu/internal/doctor"
 	"github.com/nickheyer/nebu/internal/inspect"
+	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc"
+	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/cache"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/formats"
@@ -24,6 +26,8 @@ import (
 	"github.com/nickheyer/nebu/pkg/sources"
 	sourcesall "github.com/nickheyer/nebu/pkg/sources/all"
 	"github.com/nickheyer/nebu/pkg/spec"
+	"github.com/nickheyer/nebu/pkg/store"
+	"github.com/nickheyer/nebu/pkg/transfer"
 	specfs "github.com/nickheyer/nebu/spec"
 )
 
@@ -42,13 +46,17 @@ type Daemon struct {
 	Runtimes  *runtime.Registry
 	Inspector *inspect.Inspector
 	Doctor    *doctor.Doctor
+	Store     *store.Store
+	Tasks     *tasks.Manager
+	Puller    *pull.Puller
 	Log       *slog.Logger
 	handler   http.Handler
+	cancel    context.CancelFunc
 }
 
 // Builds every manager from config
 func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
-	for _, dir := range []string{cfg.GetDataDir(), cfg.GetCacheDir()} {
+	for _, dir := range []string{cfg.GetDataDir(), cfg.GetCacheDir(), cfg.GetStoreDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, err
 		}
@@ -58,7 +66,7 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
-	prober, err := host.New(catalog.Probes, []string{cfg.GetDataDir(), cfg.GetCacheDir()}, profileTTL)
+	prober, err := host.New(catalog.Probes, []string{cfg.GetStoreDir(), cfg.GetDataDir(), cfg.GetCacheDir()}, profileTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -82,17 +90,25 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := cache.Open(cfg.GetCacheDir())
+	cacheStore, err := cache.Open(cfg.GetCacheDir())
 	if err != nil {
 		return nil, err
 	}
+	blobStore, err := store.Open(cfg.GetStoreDir())
+	if err != nil {
+		return nil, err
+	}
+	base, cancel := context.WithCancel(context.Background())
 	d := &Daemon{
 		Config:   cfg,
 		Catalog:  catalog,
 		Host:     prober,
 		Sources:  srcs,
 		Runtimes: runtimes,
+		Store:    blobStore,
+		Tasks:    tasks.New(base, log),
 		Log:      log,
+		cancel:   cancel,
 	}
 	d.Inspector = &inspect.Inspector{
 		Sources:    srcs,
@@ -101,21 +117,35 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		Builder:    builder,
 		Runtimes:   runtimes,
 		Host:       prober,
-		Cache:      store,
+		Cache:      cacheStore,
 		Contexts:   cfg.GetContexts(),
 		Log:        log,
 	}
-	d.Doctor = &doctor.Doctor{Host: prober, Runtimes: runtimes, Sources: srcs, MinFree: cfg.GetMinFreeBytes()}
+	tr := cfg.GetTransfer()
+	d.Puller = &pull.Puller{
+		Inspector: d.Inspector,
+		Store:     blobStore,
+		Fetcher:   transfer.New(int(tr.GetWorkers()), int64(tr.GetChunkBytes()), int(tr.GetRetries()), tr.GetMaxBytesPerSecond(), log),
+		Tasks:     d.Tasks,
+		Log:       log,
+	}
+	d.Doctor = &doctor.Doctor{Host: prober, Runtimes: runtimes, Sources: srcs, Store: blobStore, MinFree: cfg.GetMinFreeBytes()}
 	d.handler = rpc.NewHandler(rpc.Deps{
 		Host:      prober,
 		Doctor:    d.Doctor,
 		Sources:   srcs,
 		Runtimes:  runtimes,
 		Inspector: d.Inspector,
+		Store:     blobStore,
+		Puller:    d.Puller,
+		Tasks:     d.Tasks,
 		Log:       log,
 	})
 	return d, nil
 }
+
+// Stops background tasks
+func (d *Daemon) Close() { d.cancel() }
 
 // Returns the API handler for in process or network use
 func (d *Daemon) Handler() http.Handler { return d.handler }
@@ -132,6 +162,7 @@ func (d *Daemon) Serve(ctx context.Context) error {
 	d.Log.Info("listening", "addr", ln.Addr().String())
 	select {
 	case <-ctx.Done():
+		d.cancel()
 		stop, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		return srv.Shutdown(stop)

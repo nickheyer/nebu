@@ -24,6 +24,9 @@ const (
 	defaultListen = "127.0.0.1:8484"
 	defaultSource = "huggingface"
 	minFreeBytes  = 50 << 30
+	workers       = 8
+	chunkBytes    = 32 << 20
+	retries       = 5
 )
 
 // Search order when no path is given
@@ -118,6 +121,21 @@ func applyDefaults(cfg *v1.Config) error {
 	}
 	if cfg.MinFreeBytes == 0 {
 		cfg.MinFreeBytes = minFreeBytes
+	}
+	if cfg.StoreDir == "" {
+		cfg.StoreDir = filepath.Join(cfg.DataDir, "store")
+	}
+	if cfg.Transfer == nil {
+		cfg.Transfer = &v1.Transfer{}
+	}
+	if cfg.Transfer.Workers == 0 {
+		cfg.Transfer.Workers = workers
+	}
+	if cfg.Transfer.ChunkBytes == 0 {
+		cfg.Transfer.ChunkBytes = chunkBytes
+	}
+	if cfg.Transfer.Retries == 0 {
+		cfg.Transfer.Retries = retries
 	}
 	cfg.SpecDirs = append(cfg.SpecDirs, filepath.Join(cfg.DataDir, "spec"))
 	return nil

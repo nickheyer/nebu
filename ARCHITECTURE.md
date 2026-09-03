@@ -56,10 +56,11 @@ nebu/
 ├── proto/
 │   └── nebu/
 │       └── v1/
+│           ├── config.proto       daemon and client configuration
 │           ├── host.proto         host profile, devices, memory pools, facts
 │           ├── source.proto       sources, search, resolve
 │           ├── model.proto        model, revision, artifact, format, role, descriptor
-│           ├── store.proto        blob store state, pulls, verification, gc
+│           ├── store.proto        stored models, pulls, verification, gc
 │           ├── runtime.proto      runtime manifest, install, params, constraints
 │           ├── recipe.proto       recipes, patch sets, build results
 │           ├── estimate.proto     memory plan requests and results
@@ -88,7 +89,7 @@ nebu/
 │   │   └── safetensors/           shard headers plus config.json
 │   ├── descriptor/                format-neutral descriptor, tensor groups, arch params
 │   ├── store/                     content-addressed blobs, manifests, stable link tree, gc
-│   ├── transfer/                  resumable parallel downloads, verification, throttling
+│   ├── transfer/                  resumable chunked downloads, verification, throttling
 │   ├── estimate/                  planner placing tensor groups and caches into memory pools
 │   ├── runtime/                   manifest model, param schema, command rendering, installs
 │   ├── build/                     recipe engine, fetch, patch apply, hashed build cache
@@ -109,13 +110,14 @@ nebu/
 ├── internal/
 │   ├── daemon/                    wiring of all managers, startup recovery, shutdown
 │   ├── inspect/                   resolve, describe, and plan a model before download
-│   ├── doctor/                    probes, runtimes, and sources as actionable checks
+│   ├── pull/                      fetch, verify, link, and manifest a weight group
+│   ├── doctor/                    probes, runtimes, sources, and store as checks
 │   ├── db/                        pure go sqlite, sql migrations, no proto in schema
 │   │   └── migrations/
 │   ├── rpc/
 │   │   ├── server.go              connect server, h2c, interceptors, auth
 │   │   └── services/              one file per proto service
-│   ├── tasks/                     task engine, durable jobs, cancellation, log capture
+│   ├── tasks/                     task engine, progress fan-out, cancellation, log capture
 │   ├── slots/                     slot manager, reservations, instance lifecycle, swaps
 │   ├── gateway/                   openai-compatible reverse proxy routed by model name
 │   ├── calibrate/                 records measured allocations to refine estimates
@@ -150,13 +152,25 @@ nebu/
 4. The result is a table of quant by runtime by context length, each marked fits, partial,
    or no, with the plan that produced it.
 
-**Install** has two halves that share the task engine.
+**Pull** runs as a task and is safe to interrupt at any point.
 
-- Model install pulls artifacts through transfer into the store, verifies against source
-  sha256, writes a manifest, and links a stable human path that never changes.
-- Runtime install adopts a binary you already have, downloads a prebuilt release, or runs a
-  recipe. A recipe is hashed with the resolved host facts, so an unchanged recipe on an
-  unchanged host is a cache hit.
+1. The inspector resolves and classifies the repo, and the caller names one weight group.
+2. Each artifact is fetched in parallel chunks into a partial file beside the blobs, with a
+   sidecar recording finished chunks. A second pull resumes from that sidecar.
+3. The whole file is hashed and compared with the sha256 the source reported, then renamed
+   into `blobs/sha256-<hex>`. Two quants that share bytes share one blob.
+4. A relative symlink is created under `models/<source>/<repo>/<group>/` so the path a
+   runtime is given never changes when blobs move.
+5. The manifest under `manifests/` records artifacts, digests, link paths, the descriptor,
+   and the commit. Local sources are hashed and hard linked instead of copied.
+
+Progress, rate, and log lines stream over a Connect server stream, which the CLI renders in
+place. `remove` drops the manifest and links, `store gc` drops blobs no manifest references,
+and `store verify` rehashes blobs and deletes corrupt ones so the next pull repairs them.
+
+**Runtime install** adopts a binary you already have, downloads a prebuilt release, or runs a
+recipe. A recipe is hashed with the resolved host facts, so an unchanged recipe on an
+unchanged host is a cache hit.
 
 **Run** is where the runtime becomes the ground truth.
 
@@ -230,7 +244,8 @@ when some spilled, and NO when the fixed need alone does not fit.
 
 1. `nebu doctor` and `nebu inspect`. Host probes, sources, format readers, estimator.
    Ships as a CLI with no daemon state beyond a cache. Done.
-2. `nebu pull`. Store and transfer with resume and verification.
+2. `nebu pull`. Store and transfer with resume and verification. Done. Task history lives in
+   the daemon, so `--detach` and `tasks` need `nebu serve` running.
 3. `nebu run`. Runtime manifests, the process launcher, gateway, triage, calibration.
 4. `nebu build`. Recipes and sandboxes.
 5. Slots, swaps, monitor, and the web UI on top of the same API.

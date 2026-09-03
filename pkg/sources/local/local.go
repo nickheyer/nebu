@@ -4,6 +4,7 @@ package local
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -105,6 +106,12 @@ type fileBlob struct {
 }
 
 func (f *fileBlob) Size() int64 { return f.size }
+
+func (f *fileBlob) Path() string { return f.Name() }
+
+func (f *fileBlob) Range(ctx context.Context, off, length int64) (io.ReadCloser, error) {
+	return io.NopCloser(io.NewSectionReader(f.File, off, length)), nil
+}
 
 func (s *source) Open(ctx context.Context, model *v1.Model, artifact *v1.Artifact) (sources.Blob, error) {
 	dir, err := s.dir(model.GetRepo())

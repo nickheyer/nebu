@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/sources"
@@ -281,7 +282,11 @@ func FindGroup(groups []*Group, name string) (*Group, error) {
 		if len(groups) == 1 {
 			return groups[0], nil
 		}
-		return nil, fmt.Errorf("%w: %d weight groups, name one", ErrUnknownGroup, len(groups))
+		names := make([]string, 0, len(groups))
+		for _, g := range groups {
+			names = append(names, g.Name)
+		}
+		return nil, fmt.Errorf("%w: choose one of %s", ErrUnknownGroup, strings.Join(names, ", "))
 	}
 	for _, g := range groups {
 		if g.Name == name {

@@ -20,6 +20,9 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 	if cfg.GetAddr() != "127.0.0.1:1" || cfg.GetListen() == "" || cfg.GetCacheDir() == "" || len(cfg.GetContexts()) == 0 || cfg.GetMinFreeBytes() == 0 {
 		t.Fatalf("cfg %+v", cfg)
 	}
+	if cfg.GetStoreDir() != filepath.Join(dir, "data", "store") || cfg.GetTransfer().GetWorkers() == 0 || cfg.GetTransfer().GetChunkBytes() == 0 {
+		t.Fatalf("store defaults %+v", cfg)
+	}
 	if len(cfg.GetSources()) != 1 || cfg.GetSources()[0].GetKind() != v1.SourceKind_SOURCE_KIND_LOCAL {
 		t.Fatalf("sources %v", cfg.GetSources())
 	}

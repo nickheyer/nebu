@@ -1,4 +1,4 @@
-.PHONY: gen proto-clean proto-lint build run test lint vet cgo-guard clean
+.PHONY: gen proto-clean proto-lint build run test lint vet cgo-guard clean dev
 
 BIN := build/nebu
 BUF ?= buf
@@ -17,6 +17,9 @@ proto-lint:
 # Builds static binary without cgo
 build: gen
 	go build -trimpath -o $(BIN) ./cmd/nebu
+
+dev: gen
+	go run ./cmd/nebu
 
 run: gen
 	go run ./cmd/nebu serve

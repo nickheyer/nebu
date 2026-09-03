@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Lifecycle of a long running task
+enum TaskState {
+  TASK_STATE_UNSPECIFIED = 0;
+  TASK_STATE_PENDING = 1;
+  TASK_STATE_RUNNING = 2;
+  TASK_STATE_SUCCEEDED = 3;
+  TASK_STATE_FAILED = 4;
+  TASK_STATE_CANCELED = 5;
+}
+
+// Progress counters of a task
+message TaskProgress {
+  uint64 done = 1;
+  uint64 total = 2;
+  string message = 3;
+}
+
+// One long running operation
+message Task {
+  string id = 1;
+  string kind = 2;
+  string title = 3;
+  TaskState state = 4;
+  TaskProgress progress = 5;
+  string error = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp started_at = 8;
+  google.protobuf.Timestamp finished_at = 9;
+  map<string, string> labels = 10;
+}
+
+
+// Lists tasks
+message ListTasksRequest {
+  bool active_only = 1;
+}
+
+// Returns tasks newest first
+message ListTasksResponse {
+  repeated Task tasks = 1;
+}
+
+// Fetches one task
+message GetTaskRequest {
+  string id = 1;
+}
+
+// Returns one task with its log tail
+message GetTaskResponse {
+  Task task = 1;
+  repeated string logs = 2;
+}
+
+// Streams one task until it ends
+message WatchTaskRequest {
+  string id = 1;
+}
+
+// Snapshot plus new log lines on a watch stream
+message WatchTaskResponse {
+  Task task = 1;
+  repeated string logs = 2;
+}
+
+// Cancels one task
+message CancelTaskRequest {
+  string id = 1;
+}
+
+// Returns the task after cancel
+message CancelTaskResponse {
+  Task task = 1;
+}
+
+// Long running operations
+service TaskService {
+  // Lists tasks
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+  // Fetches one task
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+  // Streams progress and logs until the task ends
+  rpc WatchTask(WatchTaskRequest) returns (stream WatchTaskResponse);
+  // Requests cancellation
+  rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
+}

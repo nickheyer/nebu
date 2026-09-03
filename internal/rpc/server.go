@@ -11,11 +11,14 @@ import (
 	"connectrpc.com/grpcreflect"
 	"github.com/nickheyer/nebu/internal/doctor"
 	"github.com/nickheyer/nebu/internal/inspect"
+	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc/services"
+	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/host"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
 	"github.com/nickheyer/nebu/pkg/runtime"
 	"github.com/nickheyer/nebu/pkg/sources"
+	"github.com/nickheyer/nebu/pkg/store"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -27,6 +30,9 @@ type Deps struct {
 	Sources   *sources.Registry
 	Runtimes  *runtime.Registry
 	Inspector *inspect.Inspector
+	Store     *store.Store
+	Puller    *pull.Puller
+	Tasks     *tasks.Manager
 	Log       *slog.Logger
 }
 
@@ -38,11 +44,15 @@ func NewHandler(d Deps) http.Handler {
 	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector), opts))
 	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host), opts))
 	mux.Handle(nebuv1connect.NewEstimateServiceHandler(services.NewEstimateService(d.Inspector), opts))
+	mux.Handle(nebuv1connect.NewStoreServiceHandler(services.NewStoreService(d.Store, d.Puller), opts))
+	mux.Handle(nebuv1connect.NewTaskServiceHandler(services.NewTaskService(d.Tasks), opts))
 	reflector := grpcreflect.NewStaticReflector(
 		nebuv1connect.HostServiceName,
 		nebuv1connect.SourceServiceName,
 		nebuv1connect.RuntimeServiceName,
 		nebuv1connect.EstimateServiceName,
+		nebuv1connect.StoreServiceName,
+		nebuv1connect.TaskServiceName,
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))

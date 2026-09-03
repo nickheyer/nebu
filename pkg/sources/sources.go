@@ -20,6 +20,24 @@ type Blob interface {
 	Size() int64
 }
 
+// Blob that can stream a byte range without buffering it
+type Ranger interface {
+	Range(ctx context.Context, off, length int64) (io.ReadCloser, error)
+}
+
+// Blob backed by a local file
+type Pather interface {
+	Path() string
+}
+
+// Streams a range, falling back to buffered reads
+func RangeOf(ctx context.Context, b Blob, off, length int64) (io.ReadCloser, error) {
+	if r, ok := b.(Ranger); ok {
+		return r.Range(ctx, off, length)
+	}
+	return io.NopCloser(io.NewSectionReader(b, off, length)), nil
+}
+
 // Catalog that can search, resolve, and open artifacts
 type Source interface {
 	Spec() *v1.Source

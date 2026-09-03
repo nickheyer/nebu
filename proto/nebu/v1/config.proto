@@ -13,6 +13,14 @@ message Logging {
   string file = 3;
 }
 
+// Download tuning
+message Transfer {
+  uint32 workers = 1;
+  uint64 chunk_bytes = 2;
+  uint32 retries = 3;
+  uint64 max_bytes_per_second = 4;
+}
+
 // Daemon and client configuration
 message Config {
   string listen = 1;
@@ -24,4 +32,6 @@ message Config {
   Logging logging = 7;
   repeated uint32 contexts = 8;
   uint64 min_free_bytes = 9;
+  string store_dir = 10;
+  Transfer transfer = 11;
 }

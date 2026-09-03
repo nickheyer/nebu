@@ -11,6 +11,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/runtime"
 	"github.com/nickheyer/nebu/pkg/sources"
+	"github.com/nickheyer/nebu/pkg/store"
 )
 
 // Runs every diagnostic
@@ -18,6 +19,7 @@ type Doctor struct {
 	Host     *host.Prober
 	Runtimes *runtime.Registry
 	Sources  *sources.Registry
+	Store    *store.Store
 	MinFree  uint64
 }
 
@@ -68,6 +70,16 @@ func (d *Doctor) Run(ctx context.Context) (*v1.DoctorReport, error) {
 			add("storage."+st.GetPath(), v1.CheckStatus_CHECK_STATUS_WARN, summary, fmt.Sprintf("below %s, models will not fit", estimate.Human(d.MinFree)))
 		} else {
 			add("storage."+st.GetPath(), v1.CheckStatus_CHECK_STATUS_OK, summary, "")
+		}
+	}
+	if st, err := d.Store.Status(); err != nil {
+		add("store", v1.CheckStatus_CHECK_STATUS_FAIL, err.Error(), "check permissions on the store directory")
+	} else {
+		summary := fmt.Sprintf("%d models, %d blobs, %s", st.GetModels(), st.GetBlobs(), estimate.Human(st.GetBlobBytes()))
+		if st.GetPartials() > 0 {
+			add("store", v1.CheckStatus_CHECK_STATUS_WARN, fmt.Sprintf("%s, %d partial downloads holding %s", summary, st.GetPartials(), estimate.Human(st.GetPartialBytes())), "pull again to resume or run nebu store gc --partials")
+		} else {
+			add("store", v1.CheckStatus_CHECK_STATUS_OK, summary, "")
 		}
 	}
 	for _, rt := range d.Runtimes.List() {

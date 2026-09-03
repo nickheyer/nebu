@@ -132,3 +132,75 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal("version")
 	}
 }
+
+func TestPullLifecycle(t *testing.T) {
+	cfg := setup(t)
+	out, errw, code := run(t, cfg, "pull", "stories", "--source", "local")
+	if code != 0 || !strings.Contains(out, "SUCCEEDED") || !strings.Contains(out, "stored at") {
+		t.Fatalf("pull: code=%d\n%s\n%s", code, out, errw)
+	}
+	out, _, code = run(t, cfg, "list")
+	if code != 0 || !strings.Contains(out, "stories") || !strings.Contains(out, "Q8_0") || !strings.Contains(out, "llama") {
+		t.Fatalf("list:\n%s", out)
+	}
+	out, _, code = run(t, cfg, "--json", "list")
+	if code != 0 {
+		t.Fatal("json list")
+	}
+	var listed struct {
+		Models []struct {
+			Path      string `json:"path"`
+			Artifacts []struct {
+				Path   string `json:"path"`
+				Digest string `json:"digest"`
+			} `json:"artifacts"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(out), &listed); err != nil || len(listed.Models) != 1 || len(listed.Models[0].Artifacts) != 1 {
+		t.Fatalf("json list: %v\n%s", err, out)
+	}
+	link := listed.Models[0].Artifacts[0].Path
+	if !strings.HasPrefix(listed.Models[0].Artifacts[0].Digest, "sha256:") {
+		t.Fatalf("digest %q", listed.Models[0].Artifacts[0].Digest)
+	}
+	if info, err := os.Stat(link); err != nil || info.Size() == 0 {
+		t.Fatalf("link %s should resolve to the blob: %v", link, err)
+	}
+	out, _, code = run(t, cfg, "pull", "stories", "--source", "local")
+	if code != 0 || !strings.Contains(out, "already stored") {
+		t.Fatalf("second pull should reuse the blob:\n%s", out)
+	}
+	out, _, code = run(t, cfg, "store")
+	if code != 0 || !strings.Contains(out, "MODELS") {
+		t.Fatalf("store status:\n%s", out)
+	}
+	out, _, code = run(t, cfg, "store", "verify")
+	if code != 0 || !strings.Contains(out, "SUCCEEDED") {
+		t.Fatalf("verify:\n%s", out)
+	}
+	out, _, code = run(t, cfg, "tasks")
+	if code != 0 || !strings.Contains(out, "STATE") {
+		t.Fatalf("tasks:\n%s", out)
+	}
+	if _, errw, code = run(t, cfg, "pull", "stories", "--source", "local", "--detach"); code == 0 || !strings.Contains(errw, "daemon") {
+		t.Fatalf("detach without a daemon should fail: %d %s", code, errw)
+	}
+	out, _, code = run(t, cfg, "store", "gc")
+	if code != 0 || !strings.Contains(out, "collected 0 files") {
+		t.Fatalf("gc before remove:\n%s", out)
+	}
+	out, _, code = run(t, cfg, "remove", "stories", "--source", "local", "--gc")
+	if code != 0 || !strings.Contains(out, "removed stories Q8_0") || !strings.Contains(out, "collected 1 blobs") {
+		t.Fatalf("remove:\n%s", out)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatal("link should be gone after remove")
+	}
+	out, _, code = run(t, cfg, "list")
+	if code != 0 || strings.Contains(out, "Q8_0") {
+		t.Fatalf("list after remove:\n%s", out)
+	}
+	if _, _, code = run(t, cfg, "remove", "stories", "--source", "local"); code == 0 {
+		t.Fatal("removing a missing model should fail")
+	}
+}
