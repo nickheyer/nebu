@@ -45,7 +45,17 @@ func commands() []command {
 			{name: "watch", summary: "follow one task", run: runTasksWatch},
 			{name: "cancel", summary: "cancel one task", run: runTasksCancel},
 		}},
-		{name: "runtimes", summary: "list runtimes and host compatibility", run: runRuntimes},
+		{name: "runtimes", summary: "runtimes and their installs", run: runRuntimes, sub: []command{
+			{name: "list", summary: "list runtimes and host compatibility", run: runRuntimes},
+			{name: "installs", summary: "list installs", run: runRuntimesInstalls},
+			{name: "adopt", summary: "record a binary already on the host", run: runRuntimesAdopt},
+			{name: "install", summary: "download a prebuilt release for this host", run: runRuntimesInstall},
+			{name: "remove", summary: "remove an install", run: runRuntimesRemove},
+		}},
+		{name: "run", summary: "start a stored model on a runtime", run: runRun},
+		{name: "ps", summary: "list running instances", run: runPs},
+		{name: "stop", summary: "stop an instance", run: runStop},
+		{name: "logs", summary: "show or follow instance output", run: runLogs},
 		{name: "version", summary: "print version", run: runVersion},
 	}
 }
@@ -74,6 +84,7 @@ type env struct {
 	out     io.Writer
 	errw    io.Writer
 	json    bool
+	remote  bool
 	cl      *clients
 	daemon  *daemon.Daemon
 	closers []io.Closer

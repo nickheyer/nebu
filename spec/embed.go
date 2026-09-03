@@ -6,7 +6,7 @@ import (
 	"io/fs"
 )
 
-//go:embed probes formats archs runtimes
+//go:embed probes formats archs runtimes triage
 var files embed.FS
 
 // Returns embedded spec filesystem

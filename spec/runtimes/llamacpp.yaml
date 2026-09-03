@@ -7,14 +7,47 @@ constraints:
     message: at least one probed device
 acquire:
   adopt: [llama-server]
+  prebuilt:
+    - when: os == "linux" && arch == "amd64" && any(devices, .vendor == "amd")
+      release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
+      asset: '^llama-b\d+-bin-ubuntu-rocm-[\d.]+-x64\.tar\.gz$'
+      binary: llama-server
+    - when: os == "linux" && arch == "amd64" && any(devices, .kind == "gpu")
+      release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
+      asset: '^llama-b\d+-bin-ubuntu-vulkan-x64\.tar\.gz$'
+      binary: llama-server
+    - when: os == "linux" && arch == "amd64"
+      release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
+      asset: '^llama-b\d+-bin-ubuntu-x64\.tar\.gz$'
+      binary: llama-server
+    - when: os == "linux" && arch == "arm64"
+      release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
+      asset: '^llama-b\d+-bin-ubuntu-arm64\.tar\.gz$'
+      binary: llama-server
+    - when: os == "darwin" && arch == "arm64"
+      release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
+      asset: '^llama-b\d+-bin-macos-arm64\.tar\.gz$'
+      binary: llama-server
+    - when: os == "darwin" && arch == "amd64"
+      release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
+      asset: '^llama-b\d+-bin-macos-x64\.tar\.gz$'
+      binary: llama-server
+probes:
+  - key: version
+    args: [--version]
+    match: 'version: (?P<value>\S+)'
+  - key: devices
+    args: [--list-devices]
+    match: '(?m)^\s+(?P<value>[A-Za-z_]+\d*): '
 launch:
   command: '{{.install.path}}'
-  args: ['--model', '{{.artifacts.weights}}', '--host', '{{.host}}', '--port', '{{.port}}']
+  args: ['--model', '{{index .artifacts "weights"}}', '--host', '{{.host}}', '--port', '{{.port}}']
   health:
     path: /health
     interval_ms: 1000
     timeout_ms: 600000
   api: API_FLAVOR_OPENAI
+  stop_grace_ms: 15000
 params:
   - name: n_ctx
     type: PARAM_TYPE_INT
@@ -71,6 +104,16 @@ params:
     default: '-1'
     flag: --threads
     description: CPU threads, negative for automatic
+  - name: mmproj
+    type: PARAM_TYPE_STRING
+    default: '{{index .artifacts "projector"}}'
+    flag: --mmproj
+    description: Multimodal projector, taken from the stored model when present
+  - name: alias
+    type: PARAM_TYPE_STRING
+    default: '{{.name}}'
+    flag: --alias
+    description: Model name reported in responses, the instance name by default
 estimate:
   groups:
     - kind: TENSOR_GROUP_KIND_EMBEDDING
@@ -105,3 +148,16 @@ estimate:
   margin: 0.05
   context_param: n_ctx
 triage: [llamacpp]
+report:
+  - key: device.weights
+    match: '(?:CUDA|ROCm|HIP|Vulkan|Metal|SYCL|OpenCL)\d* model buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
+  - key: host.weights
+    match: '(?:CPU|CPU_Mapped|CPU_REPACK|CUDA_Host)\w* model buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
+  - key: device.cache
+    match: '(?:CUDA|ROCm|HIP|Vulkan|Metal|SYCL|OpenCL)\d* KV buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
+  - key: host.cache
+    match: '(?:CPU|CUDA_Host)\w* KV buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
+  - key: device.compute
+    match: '(?:CUDA|ROCm|HIP|Vulkan|Metal|SYCL|OpenCL)\d* compute buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'
+  - key: host.compute
+    match: '(?:CPU|CUDA_Host)\w* compute buffer size\s*=\s*(?P<value>[\d.]+) (?P<unit>\w+)'

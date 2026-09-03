@@ -2,8 +2,10 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "google/protobuf/timestamp.proto";
 import "nebu/v1/model.proto";
 import "nebu/v1/host.proto";
+import "nebu/v1/task.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
 
@@ -20,6 +22,14 @@ enum ParamType {
 enum ApiFlavor {
   API_FLAVOR_UNSPECIFIED = 0;
   API_FLAVOR_OPENAI = 1;
+}
+
+// How an install was obtained
+enum InstallKind {
+  INSTALL_KIND_UNSPECIFIED = 0;
+  INSTALL_KIND_ADOPTED = 1;
+  INSTALL_KIND_PREBUILT = 2;
+  INSTALL_KIND_BUILT = 3;
 }
 
 // One tunable knob of a runtime
@@ -43,8 +53,30 @@ message Constraint {
 // Prebuilt release matched to host facts
 message PrebuiltRule {
   string when = 1;
-  string url = 2;
-  string binary = 3;
+  string release = 2;
+  string asset = 3;
+  string binary = 4;
+}
+
+// Runs the binary once and captures named groups as facts
+message CommandProbe {
+  string key = 1;
+  repeated string args = 2;
+  string match = 3;
+  uint32 timeout_ms = 4;
+}
+
+// A usable copy of a runtime
+message Install {
+  string id = 1;
+  string runtime_id = 2;
+  InstallKind kind = 3;
+  string path = 4;
+  string dir = 5;
+  string version = 6;
+  string origin = 7;
+  map<string, string> facts = 8;
+  google.protobuf.Timestamp created_at = 9;
 }
 
 // Ways to obtain an install
@@ -68,6 +100,23 @@ message Launch {
   map<string, string> env = 3;
   HealthCheck health = 4;
   ApiFlavor api = 5;
+  uint32 stop_grace_ms = 6;
+}
+
+// One log pattern with its hint
+message TriageRule {
+  string id = 1;
+  string match = 2;
+  string summary = 3;
+  string hint = 4;
+  map<string, string> fix = 5;
+}
+
+// Data driven set of failure patterns
+message TriageSpec {
+  string id = 1;
+  string description = 2;
+  repeated TriageRule rules = 3;
 }
 
 // Placement rule for one tensor group kind
@@ -110,6 +159,7 @@ message RuntimeManifest {
   EstimatePolicy estimate = 9;
   repeated string triage = 10;
   repeated ReportRule report = 11;
+  repeated CommandProbe probes = 12;
 }
 
 // Lists known runtimes
@@ -137,10 +187,59 @@ message GetRuntimeResponse {
   RuntimeStatus runtime = 1;
 }
 
-// Runtime catalog
+// Lists installs, optionally for one runtime
+message ListInstallsRequest {
+  string runtime_id = 1;
+}
+
+// Returns installs newest first
+message ListInstallsResponse {
+  repeated Install installs = 1;
+}
+
+// Adopts a binary already on the host
+message AdoptInstallRequest {
+  string runtime_id = 1;
+  string path = 2;
+}
+
+// Returns the adopted install
+message AdoptInstallResponse {
+  Install install = 1;
+}
+
+// Downloads a prebuilt release matched to the host
+message InstallPrebuiltRequest {
+  string runtime_id = 1;
+}
+
+// Returns the install task
+message InstallPrebuiltResponse {
+  Task task = 1;
+}
+
+// Removes an install record and its downloaded files
+message RemoveInstallRequest {
+  string id = 1;
+}
+
+// Returns the removed install
+message RemoveInstallResponse {
+  Install install = 1;
+}
+
+// Runtime catalog and installs
 service RuntimeService {
   // Lists runtimes and host compatibility
   rpc ListRuntimes(ListRuntimesRequest) returns (ListRuntimesResponse);
   // Fetches one runtime by id
   rpc GetRuntime(GetRuntimeRequest) returns (GetRuntimeResponse);
+  // Lists installs
+  rpc ListInstalls(ListInstallsRequest) returns (ListInstallsResponse);
+  // Adopts a binary on the host
+  rpc AdoptInstall(AdoptInstallRequest) returns (AdoptInstallResponse);
+  // Downloads a prebuilt release
+  rpc InstallPrebuilt(InstallPrebuiltRequest) returns (InstallPrebuiltResponse);
+  // Removes an install
+  rpc RemoveInstall(RemoveInstallRequest) returns (RemoveInstallResponse);
 }

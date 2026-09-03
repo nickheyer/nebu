@@ -4,10 +4,12 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/eval"
@@ -17,6 +19,8 @@ import (
 
 // Value a solved param takes before planning
 const Auto = "auto"
+
+const defaultStopGrace = 15 * time.Second
 
 var (
 	// Returned when a runtime id is not known
@@ -32,10 +36,14 @@ type constraint struct {
 
 // Compiled runtime manifest
 type Runtime struct {
-	Manifest    *v1.RuntimeManifest
-	Policy      *estimate.Policy
-	constraints []constraint
-	params      map[string]*v1.Param
+	Manifest      *v1.RuntimeManifest
+	Policy        *estimate.Policy
+	constraints   []constraint
+	params        map[string]*v1.Param
+	launchCommand *eval.Template
+	launchArgs    []*eval.Template
+	launchEnv     map[string]*eval.Template
+	report        []reportRule
 }
 
 // Runtimes ordered by id
@@ -87,7 +95,41 @@ func compile(m *v1.RuntimeManifest) (*Runtime, error) {
 		}
 		rt.Policy = policy
 	}
+	launch := m.GetLaunch()
+	command := launch.GetCommand()
+	if command == "" {
+		command = "{{.install.path}}"
+	}
+	var err error
+	if rt.launchCommand, err = eval.CompileTemplate(command); err != nil {
+		return nil, err
+	}
+	for _, a := range launch.GetArgs() {
+		t, err := eval.CompileTemplate(a)
+		if err != nil {
+			return nil, err
+		}
+		rt.launchArgs = append(rt.launchArgs, t)
+	}
+	if rt.launchEnv, err = eval.CompileTemplates(launch.GetEnv()); err != nil {
+		return nil, err
+	}
+	for _, r := range m.GetReport() {
+		re, err := regexp.Compile(r.GetMatch())
+		if err != nil {
+			return nil, fmt.Errorf("report rule %s: %w", r.GetKey(), err)
+		}
+		rt.report = append(rt.report, reportRule{spec: r, re: re})
+	}
 	return rt, nil
+}
+
+// Returns the grace period before a stop escalates
+func (rt *Runtime) StopGrace() time.Duration {
+	if ms := rt.Manifest.GetLaunch().GetStopGraceMs(); ms > 0 {
+		return time.Duration(ms) * time.Millisecond
+	}
+	return defaultStopGrace
 }
 
 // Lists runtimes by id

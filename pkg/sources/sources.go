@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
@@ -28,6 +29,33 @@ type Ranger interface {
 // Blob backed by a local file
 type Pather interface {
 	Path() string
+}
+
+type fileBlob struct {
+	*os.File
+	size int64
+}
+
+func (f *fileBlob) Size() int64 { return f.size }
+
+func (f *fileBlob) Path() string { return f.Name() }
+
+func (f *fileBlob) Range(ctx context.Context, off, length int64) (io.ReadCloser, error) {
+	return io.NopCloser(io.NewSectionReader(f.File, off, length)), nil
+}
+
+// Opens a local file as a blob
+func OpenFile(path string) (Blob, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return &fileBlob{File: f, size: info.Size()}, nil
 }
 
 // Streams a range, falling back to buffered reads

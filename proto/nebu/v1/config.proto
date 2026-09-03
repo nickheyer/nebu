@@ -21,6 +21,11 @@ message Transfer {
   uint64 max_bytes_per_second = 4;
 }
 
+// OpenAI compatible gateway settings
+message Gateway {
+  string listen = 1;
+}
+
 // Daemon and client configuration
 message Config {
   string listen = 1;
@@ -34,4 +39,5 @@ message Config {
   uint64 min_free_bytes = 9;
   string store_dir = 10;
   Transfer transfer = 11;
+  Gateway gateway = 12;
 }

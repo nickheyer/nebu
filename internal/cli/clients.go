@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/nickheyer/nebu/internal/daemon"
 	"github.com/nickheyer/nebu/pkg/logger"
@@ -20,16 +22,20 @@ func quiet(cfg *v1.Logging) *v1.Logging {
 	return out
 }
 
-const localBase = "http://nebu.local"
+const (
+	localBase   = "http://nebu.local"
+	dialTimeout = 300 * time.Millisecond
+)
 
 // Connect clients for every service
 type clients struct {
-	host     nebuv1connect.HostServiceClient
-	sources  nebuv1connect.SourceServiceClient
-	runtimes nebuv1connect.RuntimeServiceClient
-	estimate nebuv1connect.EstimateServiceClient
-	store    nebuv1connect.StoreServiceClient
-	tasks    nebuv1connect.TaskServiceClient
+	host      nebuv1connect.HostServiceClient
+	sources   nebuv1connect.SourceServiceClient
+	runtimes  nebuv1connect.RuntimeServiceClient
+	estimate  nebuv1connect.EstimateServiceClient
+	store     nebuv1connect.StoreServiceClient
+	tasks     nebuv1connect.TaskServiceClient
+	instances nebuv1connect.InstanceServiceClient
 }
 
 // Builds clients against the daemon or an in process handler
@@ -39,7 +45,13 @@ func (e *env) clients() (*clients, error) {
 	}
 	base := localBase
 	httpClient := &http.Client{}
-	if addr := e.cfg.GetAddr(); addr != "" {
+	addr := e.cfg.GetAddr()
+	if addr == "" && reachable(e.cfg.GetListen()) {
+		addr = e.cfg.GetListen()
+		e.log.Debug("using running daemon", "addr", addr)
+	}
+	if addr != "" {
+		e.remote = true
 		base = addr
 		if !strings.Contains(addr, "://") {
 			base = "http://" + addr
@@ -58,12 +70,26 @@ func (e *env) clients() (*clients, error) {
 		httpClient.Transport = handlerTransport{handler: d.Handler()}
 	}
 	e.cl = &clients{
-		host:     nebuv1connect.NewHostServiceClient(httpClient, base),
-		sources:  nebuv1connect.NewSourceServiceClient(httpClient, base),
-		runtimes: nebuv1connect.NewRuntimeServiceClient(httpClient, base),
-		estimate: nebuv1connect.NewEstimateServiceClient(httpClient, base),
-		store:    nebuv1connect.NewStoreServiceClient(httpClient, base),
-		tasks:    nebuv1connect.NewTaskServiceClient(httpClient, base),
+		host:      nebuv1connect.NewHostServiceClient(httpClient, base),
+		sources:   nebuv1connect.NewSourceServiceClient(httpClient, base),
+		runtimes:  nebuv1connect.NewRuntimeServiceClient(httpClient, base),
+		estimate:  nebuv1connect.NewEstimateServiceClient(httpClient, base),
+		store:     nebuv1connect.NewStoreServiceClient(httpClient, base),
+		tasks:     nebuv1connect.NewTaskServiceClient(httpClient, base),
+		instances: nebuv1connect.NewInstanceServiceClient(httpClient, base),
 	}
 	return e.cl, nil
+}
+
+// Reports whether something accepts connections at addr
+func reachable(addr string) bool {
+	if addr == "" {
+		return false
+	}
+	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }

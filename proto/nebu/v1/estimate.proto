@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "google/protobuf/timestamp.proto";
 import "nebu/v1/host.proto";
 import "nebu/v1/model.proto";
 
@@ -41,6 +42,18 @@ message MemoryPlan {
   uint64 overhead_bytes = 6;
   map<string, string> params = 7;
   string detail = 8;
+}
+
+// Learned correction for one runtime and architecture
+message Calibration {
+  double overhead_delta = 1;
+  uint32 samples = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+// Every learned correction keyed by runtime and architecture
+message CalibrationTable {
+  map<string, Calibration> entries = 1;
 }
 
 // Plans one weight group on one runtime

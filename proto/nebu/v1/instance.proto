@@ -1,0 +1,132 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nebu/v1/estimate.proto";
+import "nebu/v1/task.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Lifecycle of a running model
+enum InstanceState {
+  INSTANCE_STATE_UNSPECIFIED = 0;
+  INSTANCE_STATE_STARTING = 1;
+  INSTANCE_STATE_READY = 2;
+  INSTANCE_STATE_STOPPING = 3;
+  INSTANCE_STATE_STOPPED = 4;
+  INSTANCE_STATE_FAILED = 5;
+}
+
+// One matched triage rule with its hint
+message TriageHit {
+  string id = 1;
+  string summary = 2;
+  string hint = 3;
+  string line = 4;
+  map<string, string> fix = 5;
+}
+
+// One allocation reported by the runtime or measured on the host
+message Measurement {
+  string key = 1;
+  uint64 bytes = 2;
+  string line = 3;
+}
+
+// A runtime process serving one stored model
+message Instance {
+  string id = 1;
+  string name = 2;
+  string source_id = 3;
+  string repo = 4;
+  string group = 5;
+  string runtime_id = 6;
+  string install_id = 7;
+  map<string, string> params = 8;
+  repeated string command = 9;
+  string endpoint = 10;
+  InstanceState state = 11;
+  int32 pid = 12;
+  string error = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp ready_at = 15;
+  google.protobuf.Timestamp stopped_at = 16;
+  MemoryPlan plan = 17;
+  repeated TriageHit triage = 18;
+  repeated Measurement measurements = 19;
+  string task_id = 20;
+}
+
+// Starts a stored model on a runtime
+message RunRequest {
+  string source_id = 1;
+  string repo = 2;
+  string group = 3;
+  string runtime_id = 4;
+  string install_id = 5;
+  string name = 6;
+  map<string, string> params = 7;
+}
+
+// Returns the instance and its startup task
+message RunResponse {
+  Instance instance = 1;
+  Task task = 2;
+}
+
+// Lists instances
+message ListInstancesRequest {
+  bool running_only = 1;
+}
+
+// Returns instances newest first
+message ListInstancesResponse {
+  repeated Instance instances = 1;
+}
+
+// Fetches one instance by id or name
+message GetInstanceRequest {
+  string id = 1;
+}
+
+// Returns one instance
+message GetInstanceResponse {
+  Instance instance = 1;
+}
+
+// Stops one instance by id or name
+message StopInstanceRequest {
+  string id = 1;
+}
+
+// Returns the instance after stop
+message StopInstanceResponse {
+  Instance instance = 1;
+}
+
+// Streams runtime output
+message LogsRequest {
+  string id = 1;
+  bool follow = 2;
+  uint32 tail = 3;
+}
+
+// Batch of log lines
+message LogsResponse {
+  repeated string lines = 1;
+}
+
+// Running models
+service InstanceService {
+  // Plans, launches, and registers a model
+  rpc Run(RunRequest) returns (RunResponse);
+  // Lists instances
+  rpc ListInstances(ListInstancesRequest) returns (ListInstancesResponse);
+  // Fetches one instance
+  rpc GetInstance(GetInstanceRequest) returns (GetInstanceResponse);
+  // Stops one instance
+  rpc StopInstance(StopInstanceRequest) returns (StopInstanceResponse);
+  // Streams runtime output
+  rpc Logs(LogsRequest) returns (stream LogsResponse);
+}

@@ -1,0 +1,19 @@
+id: vllm
+description: Failure patterns of vllm serve
+rules:
+  - id: device-oom
+    match: '(?i)(torch\.OutOfMemoryError|CUDA out of memory|HIP out of memory)'
+    summary: device ran out of memory
+    hint: lower n_ctx or gpu_memory_utilization, or shard with tensor_parallel_size
+  - id: kv-cache-too-small
+    match: '(?i)(is larger than the maximum number of tokens that can be stored in KV cache|No available memory for the cache blocks)'
+    summary: the context does not fit in the cache budget
+    hint: lower n_ctx or raise gpu_memory_utilization
+  - id: unsupported-arch
+    match: '(?i)(Model architectures .* are not supported|has no attribute .*ForCausalLM)'
+    summary: this build does not support the model architecture
+    hint: upgrade the runtime
+  - id: port-in-use
+    match: '(?i)address already in use'
+    summary: the port is taken
+    hint: stop whatever holds the port or run the model again to get a fresh port

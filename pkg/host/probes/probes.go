@@ -418,43 +418,8 @@ func Key(s string) string {
 	return strings.Trim(keyClean.ReplaceAllString(strings.TrimSpace(s), "_"), "_")
 }
 
-var numberPrefix = regexp.MustCompile(`^\s*([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\s*([A-Za-z]*)`)
-
 // Parses a byte count with an optional inline or default unit
-func Bytes(s, unit string) (uint64, error) {
-	m := numberPrefix.FindStringSubmatch(s)
-	if m == nil {
-		return 0, fmt.Errorf("parse bytes %q", s)
-	}
-	f, err := strconv.ParseFloat(m[1], 64)
-	if err != nil {
-		return 0, err
-	}
-	if m[2] != "" {
-		unit = m[2]
-	}
-	mult, ok := unitMultiplier(unit)
-	if !ok {
-		return 0, fmt.Errorf("unknown unit %q", unit)
-	}
-	return uint64(f * mult), nil
-}
-
-func unitMultiplier(unit string) (float64, bool) {
-	switch strings.ToLower(strings.TrimSpace(unit)) {
-	case "", "b", "bytes":
-		return 1, true
-	case "k", "kb", "kib":
-		return 1 << 10, true
-	case "m", "mb", "mib":
-		return 1 << 20, true
-	case "g", "gb", "gib":
-		return 1 << 30, true
-	case "t", "tb", "tib":
-		return 1 << 40, true
-	}
-	return 0, false
-}
+func Bytes(s, unit string) (uint64, error) { return eval.Bytes(s, unit) }
 
 func optionalBytes(s, unit string) (uint64, error) {
 	if strings.TrimSpace(s) == "" {

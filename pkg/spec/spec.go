@@ -21,6 +21,7 @@ type Catalog struct {
 	Formats  []*v1.FormatSpec
 	Archs    []*v1.ArchSpec
 	Runtimes []*v1.RuntimeManifest
+	Triage   []*v1.TriageSpec
 }
 
 // Message with a stable id
@@ -44,6 +45,9 @@ func Load(layers ...fs.FS) (*Catalog, error) {
 			return nil, err
 		}
 		if c.Runtimes, err = loadDir(fsys, "runtimes", c.Runtimes, func() *v1.RuntimeManifest { return &v1.RuntimeManifest{} }); err != nil {
+			return nil, err
+		}
+		if c.Triage, err = loadDir(fsys, "triage", c.Triage, func() *v1.TriageSpec { return &v1.TriageSpec{} }); err != nil {
 			return nil, err
 		}
 	}

@@ -6,6 +6,8 @@ import (
 	"errors"
 
 	"connectrpc.com/connect"
+	"github.com/nickheyer/nebu/internal/installs"
+	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/runtime"
@@ -24,7 +26,8 @@ func wrap(err error) error {
 	case errors.Is(err, context.DeadlineExceeded):
 		return connect.NewError(connect.CodeDeadlineExceeded, err)
 	case errors.Is(err, sources.ErrUnknownSource), errors.Is(err, runtime.ErrUnknownRuntime), errors.Is(err, formats.ErrUnknownGroup),
-		errors.Is(err, tasks.ErrUnknownTask), errors.Is(err, store.ErrNotStored):
+		errors.Is(err, tasks.ErrUnknownTask), errors.Is(err, store.ErrNotStored),
+		errors.Is(err, installs.ErrUnknownInstall), errors.Is(err, instances.ErrUnknownInstance):
 		return connect.NewError(connect.CodeNotFound, err)
 	case errors.Is(err, runtime.ErrParam):
 		return connect.NewError(connect.CodeInvalidArgument, err)

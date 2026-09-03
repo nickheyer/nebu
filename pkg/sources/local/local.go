@@ -4,9 +4,7 @@ package local
 import (
 	"context"
 	"fmt"
-	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -100,32 +98,10 @@ func (s *source) Resolve(ctx context.Context, repo, rev string) (*v1.Model, erro
 	return model, nil
 }
 
-type fileBlob struct {
-	*os.File
-	size int64
-}
-
-func (f *fileBlob) Size() int64 { return f.size }
-
-func (f *fileBlob) Path() string { return f.Name() }
-
-func (f *fileBlob) Range(ctx context.Context, off, length int64) (io.ReadCloser, error) {
-	return io.NopCloser(io.NewSectionReader(f.File, off, length)), nil
-}
-
 func (s *source) Open(ctx context.Context, model *v1.Model, artifact *v1.Artifact) (sources.Blob, error) {
 	dir, err := s.dir(model.GetRepo())
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(filepath.Join(dir, filepath.FromSlash(artifact.GetPath())))
-	if err != nil {
-		return nil, err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, err
-	}
-	return &fileBlob{File: f, size: info.Size()}, nil
+	return sources.OpenFile(filepath.Join(dir, filepath.FromSlash(artifact.GetPath())))
 }

@@ -26,12 +26,14 @@ func runPull(ctx context.Context, e *env, args []string) error {
 		return fmt.Errorf("usage: nebu pull <repo>[@revision] [flags]")
 	}
 	repo, revision := splitRef(positional[0])
-	if *detach && e.cfg.GetAddr() == "" {
-		return fmt.Errorf("--detach needs a running daemon, pass --addr or set addr in config")
-	}
 	cl, err := e.clients()
 	if err != nil {
 		return err
+	}
+	if *detach {
+		if err := e.requireDaemon(cl); err != nil {
+			return err
+		}
 	}
 	resp, err := cl.store.Pull(ctx, connect.NewRequest(&v1.PullRequest{SourceId: *source, Repo: repo, Revision: revision, Group: *group}))
 	if err != nil {

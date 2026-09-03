@@ -21,10 +21,12 @@ type Policy struct {
 
 // Everything a plan needs
 type Input struct {
-	Descriptor *v1.Descriptor
-	Formulas   map[string]*eval.Expr
-	Host       *v1.HostProfile
-	Params     map[string]any
+	Descriptor    *v1.Descriptor
+	Formulas      map[string]*eval.Expr
+	Host          *v1.HostProfile
+	Params        map[string]any
+	Free          bool
+	OverheadDelta float64
 }
 
 // Compiles policy expressions
@@ -88,14 +90,17 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 	if err != nil {
 		return nil, err
 	}
+	if in.OverheadDelta != 0 {
+		overhead = uint64(max(float64(overhead)+in.OverheadDelta, 0))
+	}
 	primary, host := pools(in.Host)
 	margin := 1 - p.spec.GetMargin()
 	s := &solver{byKind: map[v1.TensorGroupKind]*bucket{}}
 	for _, pl := range primary {
-		s.devCap += uint64(float64(pl.GetTotalBytes()) * margin)
+		s.devCap += uint64(float64(capacity(pl, in.Free)) * margin)
 	}
 	for _, pl := range host {
-		s.hostCap += uint64(float64(pl.GetTotalBytes()) * margin)
+		s.hostCap += uint64(float64(capacity(pl, in.Free)) * margin)
 	}
 	s.fixedDev = overhead
 	layers := countKind(in.Descriptor, v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER)
@@ -163,7 +168,7 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 			}
 		}
 	}
-	s.fill(plan, primary, host, in.Descriptor, p.groups)
+	s.fill(plan, primary, host, in.Descriptor, p.groups, in.Free)
 	return plan, nil
 }
 
@@ -292,8 +297,8 @@ func (s *solver) fits() bool {
 	return s.hostCap == 0 || s.hostNeed() <= s.hostCap
 }
 
-func (s *solver) fill(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool, d *v1.Descriptor, policies map[v1.TensorGroupKind]*v1.GroupPolicy) {
-	plan.Pools = append(distribute(s.devNeed(), primary), distribute(s.hostNeed(), host)...)
+func (s *solver) fill(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool, d *v1.Descriptor, policies map[v1.TensorGroupKind]*v1.GroupPolicy, free bool) {
+	plan.Pools = append(distribute(s.devNeed(), primary, free), distribute(s.hostNeed(), host, free)...)
 	for _, b := range s.buckets {
 		solved := b.count
 		if b.policy.GetParamCountsHost() {
@@ -344,14 +349,18 @@ func (s *solver) fill(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool, d *v1
 	}
 }
 
-func distribute(need uint64, into []*v1.MemoryPool) []*v1.PoolUsage {
+func distribute(need uint64, into []*v1.MemoryPool, free bool) []*v1.PoolUsage {
 	var out []*v1.PoolUsage
 	remaining := need
-	total := sumTotal(into)
+	var total uint64
 	for _, pl := range into {
-		share := min(uint64(float64(need)*float64(pl.GetTotalBytes())/float64(total)), remaining)
+		total += capacity(pl, free)
+	}
+	total = max(total, 1)
+	for _, pl := range into {
+		share := min(uint64(float64(need)*float64(capacity(pl, free))/float64(total)), remaining)
 		remaining -= share
-		out = append(out, &v1.PoolUsage{PoolId: pl.GetId(), Kind: pl.GetKind(), UsedBytes: share, CapacityBytes: pl.GetTotalBytes()})
+		out = append(out, &v1.PoolUsage{PoolId: pl.GetId(), Kind: pl.GetKind(), UsedBytes: share, CapacityBytes: capacity(pl, free)})
 	}
 	if remaining > 0 && len(out) > 0 {
 		out[len(out)-1].UsedBytes += remaining
@@ -359,12 +368,23 @@ func distribute(need uint64, into []*v1.MemoryPool) []*v1.PoolUsage {
 	return out
 }
 
-func sumTotal(pools []*v1.MemoryPool) uint64 {
-	var t uint64
-	for _, pl := range pools {
-		t += pl.GetTotalBytes()
+// Uses free bytes when asked and known, else total
+func capacity(pl *v1.MemoryPool, free bool) uint64 {
+	if free && pl.GetFreeBytes() > 0 {
+		return pl.GetFreeBytes()
 	}
-	return max(t, 1)
+	return pl.GetTotalBytes()
+}
+
+// Sums bytes planned onto device class pools
+func PlannedDevice(plan *v1.MemoryPlan) uint64 {
+	var total uint64
+	for _, pu := range plan.GetPools() {
+		if pu.GetKind() == v1.PoolKind_POOL_KIND_DEVICE || pu.GetKind() == v1.PoolKind_POOL_KIND_UNIFIED {
+			total += pu.GetUsedBytes()
+		}
+	}
+	return total
 }
 
 func pools(h *v1.HostProfile) (primary, host []*v1.MemoryPool) {

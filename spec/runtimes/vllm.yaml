@@ -7,14 +7,19 @@ constraints:
     message: a probed GPU
 acquire:
   adopt: [vllm]
+probes:
+  - key: version
+    args: [--version]
+    match: '(?P<value>\d+\.\d+[\w.+-]*)'
 launch:
   command: '{{.install.path}}'
-  args: ['serve', '{{.artifacts.weights_dir}}', '--host', '{{.host}}', '--port', '{{.port}}']
+  args: ['serve', '{{index .artifacts "weights_dir"}}', '--host', '{{.host}}', '--port', '{{.port}}']
   health:
     path: /health
     interval_ms: 2000
     timeout_ms: 1800000
   api: API_FLAVOR_OPENAI
+  stop_grace_ms: 30000
 params:
   - name: n_ctx
     type: PARAM_TYPE_INT
@@ -42,6 +47,11 @@ params:
     default: '1'
     flag: --tensor-parallel-size
     description: Devices to shard across
+  - name: served_model_name
+    type: PARAM_TYPE_STRING
+    default: '{{.name}}'
+    flag: --served-model-name
+    description: Model name reported in responses, the instance name by default
 estimate:
   groups:
     - kind: TENSOR_GROUP_KIND_EMBEDDING
@@ -64,3 +74,7 @@ estimate:
   margin: 0.1
   context_param: n_ctx
 triage: [vllm]
+report:
+  - key: device.weights
+    match: 'Model loading took (?P<value>[\d.]+) (?P<unit>GiB|GB|MiB|MB)'
+

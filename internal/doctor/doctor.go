@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -20,6 +21,7 @@ type Doctor struct {
 	Runtimes *runtime.Registry
 	Sources  *sources.Registry
 	Store    *store.Store
+	Installs *installs.Manager
 	MinFree  uint64
 }
 
@@ -83,11 +85,20 @@ func (d *Doctor) Run(ctx context.Context) (*v1.DoctorReport, error) {
 		}
 	}
 	for _, rt := range d.Runtimes.List() {
+		id := "runtime." + rt.Manifest.GetId()
 		ok, unmet := rt.Compatible(profile)
-		if ok {
-			add("runtime."+rt.Manifest.GetId(), v1.CheckStatus_CHECK_STATUS_OK, "constraints satisfied", "")
-		} else {
-			add("runtime."+rt.Manifest.GetId(), v1.CheckStatus_CHECK_STATUS_WARN, "needs "+strings.Join(unmet, ", "), "")
+		if !ok {
+			add(id, v1.CheckStatus_CHECK_STATUS_WARN, "needs "+strings.Join(unmet, ", "), "")
+			continue
+		}
+		list, err := d.Installs.List(rt.Manifest.GetId())
+		switch {
+		case err != nil:
+			add(id, v1.CheckStatus_CHECK_STATUS_FAIL, err.Error(), "check permissions on the data directory")
+		case len(list) == 0:
+			add(id, v1.CheckStatus_CHECK_STATUS_WARN, "compatible, no install", fmt.Sprintf("nebu runtimes adopt %s or nebu runtimes install %s", rt.Manifest.GetId(), rt.Manifest.GetId()))
+		default:
+			add(id, v1.CheckStatus_CHECK_STATUS_OK, fmt.Sprintf("%d installs, newest %s %s", len(list), list[0].GetVersion(), list[0].GetPath()), "")
 		}
 	}
 	for _, cfg := range d.Sources.List() {

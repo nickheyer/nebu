@@ -18,8 +18,8 @@ once and never changes again.
 5. The runtime is the ground truth. Nebu asks it to list devices, dry-run a fit, or report what
    it allocated, and uses measured results to calibrate its own estimates.
 6. Formats are a property of the artifact. Runtimes declare which formats they accept.
-7. Launchers are plural. A bare process is the default. systemd units and OCI containers are
-   alternatives, not the design.
+7. Launchers are plural behind one interface. A bare process is the default and the only
+   one implemented so far. systemd units and OCI containers are alternatives, not the design.
 
 ## Nouns
 
@@ -61,7 +61,8 @@ nebu/
 │           ├── source.proto       sources, search, resolve
 │           ├── model.proto        model, revision, artifact, format, role, descriptor
 │           ├── store.proto        stored models, pulls, verification, gc
-│           ├── runtime.proto      runtime manifest, install, params, constraints
+│           ├── runtime.proto      runtime manifest, installs, params, triage, constraints
+│           ├── instance.proto     running models, run, stop, logs
 │           ├── recipe.proto       recipes, patch sets, build results
 │           ├── estimate.proto     memory plan requests and results
 │           ├── slot.proto         slots, instances, lifecycle, swap
@@ -94,10 +95,7 @@ nebu/
 │   ├── runtime/                   manifest model, param schema, command rendering, installs
 │   ├── build/                     recipe engine, fetch, patch apply, hashed build cache
 │   │   └── sandbox/               build sandboxes, host toolchain or oci cli
-│   ├── launch/                    launcher interface, supervision, health, pdeathsig
-│   │   ├── process/               bare process launcher, default
-│   │   ├── systemd/               transient unit launcher via systemd-run
-│   │   └── oci/                   container launcher via docker, podman, or nerdctl cli
+│   ├── launch/                    process launcher, output ring, health polling, pdeathsig
 │   └── triage/                    log pattern matcher producing hints and fixes
 ├── spec/                          every runtime and model specific lives here, never in go
 │   ├── embed.go                   go:embed of the directories below
@@ -106,21 +104,23 @@ nebu/
 │   ├── archs/                     architecture families, cache shapes, attention variants
 │   ├── recipes/                   build recipes as templates over host facts
 │   ├── probes/                    vendor tool invocations and output to fact mappings
-│   └── triage/                    error patterns mapped to hints and actions
+│   └── triage/                    failure patterns mapped to summaries and hints
 ├── internal/
 │   ├── daemon/                    wiring of all managers, startup recovery, shutdown
 │   ├── inspect/                   resolve, describe, and plan a model before download
 │   ├── pull/                      fetch, verify, link, and manifest a weight group
-│   ├── doctor/                    probes, runtimes, sources, and store as checks
+│   ├── installs/                  adopt or download runtime binaries, run probes
+│   ├── instances/                 plan, launch, supervise, and route running models
+│   ├── calibrate/                 learned overhead corrections per runtime and arch
+│   ├── doctor/                    probes, runtimes, installs, sources, and store as checks
 │   ├── db/                        pure go sqlite, sql migrations, no proto in schema
 │   │   └── migrations/
 │   ├── rpc/
 │   │   ├── server.go              connect server, h2c, interceptors, auth
 │   │   └── services/              one file per proto service
 │   ├── tasks/                     task engine, progress fan-out, cancellation, log capture
-│   ├── slots/                     slot manager, reservations, instance lifecycle, swaps
+│   ├── slots/                     slot manager, reservations, swaps
 │   ├── gateway/                   openai-compatible reverse proxy routed by model name
-│   ├── calibrate/                 records measured allocations to refine estimates
 │   ├── monitor/                   watches monitored models for new revisions and quants
 │   └── cli/                       client subcommands over connect, table and json output
 ├── web/
@@ -174,13 +174,22 @@ unchanged host is a cache hit.
 
 **Run** is where the runtime becomes the ground truth.
 
-1. The slot manager reserves devices and a budget.
-2. The runtime package renders a command and environment from the manifest and params.
-3. A launcher starts it, holds it under supervision, and polls the manifest's health check.
-4. The gateway adds a route for the model name.
-5. Calibrate parses the runtime's reported allocations into the estimator's correction table.
-6. On failure, triage matches the log against the pattern catalog and returns a hint and,
-   when safe, a retry with adjusted params.
+1. The stored manifest supplies the link paths and descriptor. The host is probed again and
+   the planner runs against free memory, so a second model plans around the first.
+2. Solved params replace `auto`, the runtime package renders the command and environment
+   from the manifest templates, and a free loopback port is picked.
+3. The process launcher starts it in its own process group tied to the daemon's lifetime,
+   captures output into a ring, and polls the manifest's health check until it answers.
+4. The gateway routes the public model name to the instance endpoint.
+5. Report rules parse the runtime's own allocation lines into measurements, and the device
+   free-memory delta feeds the calibration table, which shifts the estimator's overhead
+   term for that runtime and architecture on the next plan.
+6. On failure or unexpected exit, triage matches the output against the pattern catalog
+   and the hint travels back on the task and the instance record.
+
+**Installs** are adopted from a path or PATH, or downloaded through a prebuilt rule whose
+`when` expression selects the release for the probed host. Manifest probes run the binary
+once to capture its version and the devices it sees.
 
 **Swap** is run against an occupied slot. The old instance drains, the new one starts, and the
 route flips when health passes. The public name never disappears.
@@ -246,6 +255,8 @@ when some spilled, and NO when the fixed need alone does not fit.
    Ships as a CLI with no daemon state beyond a cache. Done.
 2. `nebu pull`. Store and transfer with resume and verification. Done. Task history lives in
    the daemon, so `--detach` and `tasks` need `nebu serve` running.
-3. `nebu run`. Runtime manifests, the process launcher, gateway, triage, calibration.
+3. `nebu run`. Installs, the process launcher, gateway, triage, calibration. Done. Instances
+   live in the daemon, so `run`, `ps`, `stop`, and `logs` need `nebu serve`, which the CLI
+   finds on the configured listen address without flags.
 4. `nebu build`. Recipes and sandboxes.
 5. Slots, swaps, monitor, and the web UI on top of the same API.

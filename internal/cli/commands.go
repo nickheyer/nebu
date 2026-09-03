@@ -24,7 +24,7 @@ func runServe(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	return d.Serve(ctx)
+	return d.ListenAndServe(ctx)
 }
 
 func runDoctor(ctx context.Context, e *env, args []string) error {
