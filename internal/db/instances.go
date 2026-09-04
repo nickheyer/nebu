@@ -33,8 +33,8 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			}
 		}
 		if req := in.GetRequest(); req != nil {
-			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id, profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId(), req.GetProfileId()); err != nil {
+			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id, profile_id, force) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId(), req.GetProfileId(), boolCol(req.GetForce())); err != nil {
 				return err
 			}
 			if err := putMap(exec, `INSERT INTO instance_request_params (instance_id, name, value) VALUES (?, ?, ?)`, id, req.GetParams()); err != nil {
@@ -42,8 +42,8 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			}
 		}
 		if plan := in.GetPlan(); plan != nil {
-			if err := exec(`INSERT INTO instance_plans (instance_id, verdict, weights_bytes, cache_bytes, overhead_bytes, detail) VALUES (?, ?, ?, ?, ?, ?)`,
-				id, enumCol(plan.GetVerdict()), int64(plan.GetWeightsBytes()), int64(plan.GetCacheBytes()), int64(plan.GetOverheadBytes()), plan.GetDetail()); err != nil {
+			if err := exec(`INSERT INTO instance_plans (instance_id, verdict, weights_bytes, cache_bytes, overhead_bytes, detail, overhead_delta) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				id, enumCol(plan.GetVerdict()), int64(plan.GetWeightsBytes()), int64(plan.GetCacheBytes()), int64(plan.GetOverheadBytes()), plan.GetDetail(), plan.GetOverheadDelta()); err != nil {
 				return err
 			}
 			for i, p := range plan.GetPools() {
@@ -127,12 +127,14 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 		return err
 	}
 	req := &v1.RunRequest{}
-	err = d.sql.QueryRowContext(ctx, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, profile_id FROM instance_requests WHERE instance_id = ?`, id).Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, &req.ProfileId)
+	var force int
+	err = d.sql.QueryRowContext(ctx, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, profile_id, force FROM instance_requests WHERE instance_id = ?`, id).Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, &req.ProfileId, &force)
 	switch {
 	case err == sql.ErrNoRows:
 	case err != nil:
 		return err
 	default:
+		req.Force = force != 0
 		if req.Params, err = d.stringMap(ctx, `SELECT name, value FROM instance_request_params WHERE instance_id = ? ORDER BY name`, id); err != nil {
 			return err
 		}
@@ -141,7 +143,7 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 	plan := &v1.MemoryPlan{}
 	var verdict string
 	var weights, cache, overhead int64
-	err = d.sql.QueryRowContext(ctx, `SELECT verdict, weights_bytes, cache_bytes, overhead_bytes, detail FROM instance_plans WHERE instance_id = ?`, id).Scan(&verdict, &weights, &cache, &overhead, &plan.Detail)
+	err = d.sql.QueryRowContext(ctx, `SELECT verdict, weights_bytes, cache_bytes, overhead_bytes, detail, overhead_delta FROM instance_plans WHERE instance_id = ?`, id).Scan(&verdict, &weights, &cache, &overhead, &plan.Detail, &plan.OverheadDelta)
 	switch {
 	case err == sql.ErrNoRows:
 	case err != nil:

@@ -24,19 +24,23 @@
   let runtimeId = $state('');
   let profileId = $state('');
   let values = $state<Record<string, string>>({});
+  let invalid = $state(0);
   let saving = $state(false);
 
   const groups = $derived<ProviderGroup[]>(groupByProvider(statuses));
   const slot = $derived(slotId ? live.slots.get(slotId) : undefined);
-  const effectiveRuntime = $derived(runtimeId || slot?.runtimeId || '');
+  // The swap runs on the named runtime, else the slot's, else the one a picked profile belongs to
+  const pickedRuntime = $derived(runtimeId || slot?.runtimeId || '');
+  const profileRuntime = $derived(live.profiles.get(profileId)?.runtimeId ?? '');
+  const effectiveRuntime = $derived(pickedRuntime || profileRuntime);
   const manifest = $derived(runtimes.find((r) => r.manifest?.id === effectiveRuntime)?.manifest);
-  const profiles = $derived(profilesOf(effectiveRuntime));
-  const defaultProfile = $derived(profiles.find((p) => p.default));
+  const profiles = $derived(profilesOf(pickedRuntime));
+  const defaultProfile = $derived(pickedRuntime ? profiles.find((p) => p.default) : undefined);
   const inherited = $derived({ ...profileParams(effectiveRuntime, profileId), ...(slot?.params ?? {}) });
 
+  // A profile belongs to one runtime, so it drops when the runtime moves away from it
   $effect(() => {
-    void effectiveRuntime;
-    profileId = '';
+    if (profileId && (!live.profiles.has(profileId) || profileRuntime !== effectiveRuntime)) profileId = '';
   });
 
   $effect(() => {
@@ -78,7 +82,7 @@
 <Dialog bind:open title="Want a model" description="A standing search across your sources, satisfied the moment a repository with a matching weight group turns up" size="lg">
   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
     <Field label="Search for" for="want-query" hint="Words the catalog search takes, the first hits are checked each time" class="sm:col-span-2">
-      <input id="want-query" class="input" bind:value={text} placeholder="Llama 4 Scout GGUF" autocomplete="off" spellcheck="false" />
+      <input id="want-query" class="input" bind:value={text} placeholder="model name, family, or format" autocomplete="off" spellcheck="false" />
     </Field>
     <Field label="Where" for="want-where">
       <select id="want-where" class="input" bind:value={where}>
@@ -94,11 +98,11 @@
     <Field label="Format" for="want-format" hint="Only weight groups of this format satisfy it">
       <select id="want-format" class="input" bind:value={formatId}>
         <option value="">Any format</option>
-        {#each [...live.formats.values()] as f (f.id)}<option value={f.id}>{f.id}</option>{/each}
+        {#each [...live.formats.values()] as f (f.id)}<option value={f.id}>{f.description || f.id}</option>{/each}
       </select>
     </Field>
     <Field label="Group match" for="want-match" hint="Regex over weight group names, any when empty" class="sm:col-span-2">
-      <input id="want-match" class="input font-mono" bind:value={match} placeholder="Q4_K_M|Q5" autocomplete="off" spellcheck="false" />
+      <input id="want-match" class="input font-mono" bind:value={match} placeholder="regex" autocomplete="off" spellcheck="false" />
     </Field>
 
     <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-line bg-sunken px-3 py-2.5 sm:col-span-2">
@@ -123,10 +127,10 @@
         {/each}
       </select>
     </Field>
-    <Field label="Profile for the swap" for="want-profile" class="sm:col-span-2">
+    <Field label="Profile for the swap" for="want-profile" class="sm:col-span-2" hint={slotId && !profiles.length ? `No profiles for ${pickedRuntime || 'any runtime'} yet` : slotId && !pickedRuntime ? 'A profile picks its runtime when the slot names none' : ''}>
       <select id="want-profile" class="input" bind:value={profileId} disabled={!slotId || !profiles.length}>
         <option value="">{defaultProfile ? `Runtime default · ${defaultProfile.name}` : 'Manifest defaults'}</option>
-        {#each profiles as p (p.id)}<option value={p.id}>{p.name}{p.description ? ` · ${p.description}` : ''}</option>{/each}
+        {#each profiles as p (p.id)}<option value={p.id}>{pickedRuntime ? '' : `${p.runtimeId} · `}{p.name}{p.description ? ` · ${p.description}` : ''}</option>{/each}
       </select>
     </Field>
     {#if slotId}
@@ -135,13 +139,13 @@
           <span class="text-xs font-medium text-fg-muted">Parameters for the swap</span>
           <span class="text-[11.5px] text-fg-faint">Empty fields inherit the profile, then the slot</span>
         </div>
-        <ParamForm params={manifest?.params ?? []} bind:values {inherited} idPrefix="want" />
+        <ParamForm params={manifest?.params ?? []} bind:values bind:invalid {inherited} idPrefix="want" />
       </div>
     {/if}
   </div>
 
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-    <Button variant="primary" loading={saving} onclick={submit} disabled={!text.trim()}>Want it</Button>
+    <Button variant="primary" loading={saving} onclick={submit} disabled={!text.trim() || invalid > 0}>Want it</Button>
   {/snippet}
 </Dialog>

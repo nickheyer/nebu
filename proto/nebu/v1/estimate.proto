@@ -42,6 +42,8 @@ message MemoryPlan {
   uint64 overhead_bytes = 6;
   map<string, string> params = 7;
   string detail = 8;
+  // The learned correction folded into overhead_bytes when the plan was made
+  double overhead_delta = 9;
 }
 
 // Learned correction for one runtime and architecture

@@ -58,6 +58,26 @@ params:
     keys: [config.num_moe_experts]
   - name: n_expert_used
     keys: [config.moe_router_topk]
+precisions:
+  - key: config.params_dtype
+    match: '^(?:torch\.)?(?P<name>bfloat16)$'
+    bits: 16
+    note: bfloat16, the training format on modern GPUs
+  - key: config.params_dtype
+    match: '^(?:torch\.)?(?P<name>float16)$'
+    bits: 16
+    note: float16, the training format on older GPUs
+  - key: config.params_dtype
+    match: '^(?:torch\.)?(?P<name>float32)$'
+    bits: 32
+  - key: config.bf16
+    match: '^(?i:true)$'
+    bits: 16
+    note: bfloat16, the training format on modern GPUs
+  - key: config.fp16
+    match: '^(?i:true)$'
+    bits: 16
+    note: float16, the training format on older GPUs
 metadata:
   - config.params_dtype
   - config.bf16

@@ -450,7 +450,7 @@ func (g *Git) Open(ctx context.Context, locator string, size int64) (Blob, error
 	if e.lfs {
 		return g.lfsBlob(repo, e), nil
 	}
-	return g.extract(ctx, repo, e)
+	return &gitBlob{g: g, repo: repo, e: e}, nil
 }
 
 // Reads one file whole, capped
@@ -469,6 +469,66 @@ func (g *Git) Read(ctx context.Context, locator string, max int64) ([]byte, erro
 }
 
 // Writes a plain blob out of the clone into scratch, fetching it first when the clone lacks it
+// A blob git holds, read out of the clone only when asked so a pull's schedule runs first
+type gitBlob struct {
+	g    *Git
+	repo string
+	e    *gitEntry
+	mu   sync.Mutex
+	file Blob
+}
+
+func (b *gitBlob) Size() int64 { return b.e.size }
+
+func (b *gitBlob) open(ctx context.Context) (Blob, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.file == nil {
+		f, err := b.g.extract(ctx, b.repo, b.e)
+		if err != nil {
+			return nil, err
+		}
+		b.file = f
+	}
+	return b.file, nil
+}
+
+func (b *gitBlob) ReadAt(p []byte, off int64) (int, error) {
+	f, err := b.open(context.Background())
+	if err != nil {
+		return 0, err
+	}
+	return f.ReadAt(p, off)
+}
+
+// Lands the file, its bytes reported once since git moves them whole
+func (b *gitBlob) Materialize(ctx context.Context, progress func(int64)) (string, error) {
+	f, err := b.open(ctx)
+	if err != nil {
+		return "", err
+	}
+	m, ok := f.(Materializer)
+	if !ok {
+		return "", fmt.Errorf("%T cannot land as a file", f)
+	}
+	path, err := m.Materialize(ctx, nil)
+	if err == nil && progress != nil {
+		progress(b.e.size)
+	}
+	return path, err
+}
+
+func (b *gitBlob) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.file != nil {
+		err := b.file.Close()
+		b.file = nil
+		return err
+	}
+	return nil
+}
+
 func (g *Git) extract(ctx context.Context, repo string, e *gitEntry) (Blob, error) {
 	dir := g.cloneDir(g.Remote(repo))
 	scratch := filepath.Join(g.dir, "blobs")

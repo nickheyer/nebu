@@ -1,4 +1,5 @@
-import { api } from './api';
+import { Code, ConnectError } from '@connectrpc/connect';
+import { api, message } from './api';
 import { live, instanceLive } from './state.svelte';
 import { confirm } from './confirm.svelte';
 import { fail, ok } from './toast.svelte';
@@ -49,12 +50,25 @@ export async function deleteSlot(slot: Slot): Promise<boolean> {
   });
   if (!yes) return false;
   try {
-    await api.slots.deleteSlot({ id: slot.id, force: true });
+    await api.slots.deleteSlot({ id: slot.id, force: occupied });
     ok(`Deleted ${slot.name}`);
     return true;
   } catch (err) {
-    fail(err, 'Delete failed');
-    return false;
+    if (!(err instanceof ConnectError && err.code === Code.FailedPrecondition)) {
+      fail(err, 'Delete failed');
+      return false;
+    }
+    // The daemon names the watches and wants that swap into the slot, dropping the swap is the person's call
+    const force = await confirm({ title: `Drop what swaps into ${slot.name}?`, message: `${message(err)}. They keep pulling but no longer swap anywhere.`, action: 'Drop and delete', tone: 'bad' });
+    if (!force) return false;
+    try {
+      await api.slots.deleteSlot({ id: slot.id, force: true });
+      ok(`Deleted ${slot.name}`, 'What swapped into it now only pulls');
+      return true;
+    } catch (again) {
+      fail(again, 'Delete failed');
+      return false;
+    }
   }
 }
 

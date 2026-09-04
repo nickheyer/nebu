@@ -7,8 +7,9 @@
 The UI uses the same Connect API as the CLI through the generated connect-es client under
 `web/nebu/src/lib/proto`. One server stream, `EventService.WatchEvents`, feeds every page:
 the daemon publishes a change to a task, instance, slot, route, install, build, stored
-model, watch, finding, source, or profile, and the page updates without polling. The stream starts with a
-snapshot and reconnects with backoff.
+model, the store's totals, watch, finding, want, source, or profile, and the page updates without
+polling. Route counters arrive at most once a second while requests flow. The stream starts with
+a snapshot and reconnects with backoff.
 
 Pages:
 
@@ -31,17 +32,22 @@ Pages:
   check the memory plan first, export one or all as a mirror, verify, collect garbage, remove.
   The run dialog is a typed form built from the runtime's manifest: every param with its type,
   choices, and description, a profile to start from, and empty fields that inherit the profile
-  and then the slot, so the form only carries what this run changes
+  and then the slot, so the form only carries what this run changes, and a run anyway switch for
+  a model the plan says does not fit. The store's totals and each model's last use follow the
+  stream
 - runtimes, manifests with compatibility and unmet constraints, adopt, install prebuilt, build
   with a recipe, profiles with add, edit, make default, and remove through the same typed form,
   installs, builds with their logs
-- slots, cards with state and route counters, a drawer with the occupant, reservation, last
-  request, live log, and history, create, edit, evict, delete, run or swap
+- slots, cards with state and route counters, a drawer with the occupant, reservation, the
+  limits its route enforces, last request, live log, history, and a chat on it while it serves,
+  create, edit, evict, delete, run or swap
 - instances, running, failed, or all, a drawer with overview, plan, live log, and triage hits
   that can relaunch with the suggested fix
 - tasks, all, active, or failed with progress, a drawer following the log with cancel
 - monitor, wanted models searched for across every source until one turns up, watches with
-  check now, findings with acknowledge, watch a repository, want a model
+  check now, findings with acknowledge, each naming the want or watch it belongs to and its
+  source, with the pull and the swap it set off, narrowed to one want or watch on request,
+  watch a repository, want a model
 - gateway, the endpoint with a copyable example, routes with state and counters, aliases
 - chat, a debug conversation with any ready route through the gateway itself, streamed, with a
   system prompt, temperature, a token cap, and tokens per second per answer, reachable from a

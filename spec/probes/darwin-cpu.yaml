@@ -9,7 +9,7 @@ parse:
 emit:
   device:
     kind: DEVICE_KIND_CPU
-    vendor: apple
+    vendor: '{{$b := lower .machdep_cpu_brand_string}}{{if hasPrefix "apple" $b}}apple{{else if contains "intel" $b}}intel{{else if contains "amd" $b}}amd{{else}}{{first (split " " $b)}}{{end}}'
     id: cpu-0
     name: "{{.machdep_cpu_brand_string}}"
     facts:

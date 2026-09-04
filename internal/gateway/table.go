@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"sort"
 	"sync"
@@ -17,7 +18,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const drainPoll = 50 * time.Millisecond
+const (
+	drainPoll = 50 * time.Millisecond
+	// How often at most a route's counters reach the stream while requests flow
+	counterFlush = time.Second
+)
 
 var (
 	// Returned when no route has the name
@@ -36,17 +41,24 @@ var (
 type Table struct {
 	store    *db.DB
 	events   *events.Bus
+	log      *slog.Logger
 	mu       sync.Mutex
 	routes   map[string]*v1.Route
 	inflight map[string]*atomic.Int32
 	limiters map[string]*rate.Limiter
 	defaults *v1.Policy
 	total    atomic.Uint64
+	// Routes whose counters moved since the stream last heard, flushed by one timer
+	dirty map[string]bool
+	flush *time.Timer
 }
 
 // Loads every route from the store
-func OpenTable(ctx context.Context, store *db.DB, bus *events.Bus) (*Table, error) {
-	t := &Table{store: store, events: bus, routes: map[string]*v1.Route{}, inflight: map[string]*atomic.Int32{}, limiters: map[string]*rate.Limiter{}}
+func OpenTable(ctx context.Context, store *db.DB, bus *events.Bus, log *slog.Logger) (*Table, error) {
+	if log == nil {
+		log = slog.Default()
+	}
+	t := &Table{store: store, events: bus, log: log, routes: map[string]*v1.Route{}, inflight: map[string]*atomic.Int32{}, limiters: map[string]*rate.Limiter{}, dirty: map[string]bool{}}
 	if store == nil {
 		return t, nil
 	}
@@ -72,11 +84,30 @@ func (t *Table) save(r *v1.Route, action v1.EventAction) {
 			err = t.store.PutRoute(context.Background(), r)
 		}
 		if err != nil {
-			t.events.Publish(v1.EventKind_EVENT_KIND_ROUTE, action, r.GetName(), &v1.Event_Route{Route: r})
-			return
+			t.log.Warn("route record write failed", "name", r.GetName(), "err", err)
 		}
 	}
-	t.events.Publish(v1.EventKind_EVENT_KIND_ROUTE, action, r.GetName(), &v1.Event_Route{Route: r})
+	t.events.Publish(v1.EventKind_EVENT_KIND_ROUTE, action, r.GetName(), r)
+}
+
+// Notes that a route's counters moved, the stream hearing about it once per flush
+func (t *Table) touchLocked(name string) {
+	t.dirty[name] = true
+	if t.flush == nil {
+		t.flush = time.AfterFunc(counterFlush, t.publishCounters)
+	}
+}
+
+func (t *Table) publishCounters() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for name := range t.dirty {
+		if r, ok := t.routes[name]; ok {
+			t.events.Publish(v1.EventKind_EVENT_KIND_ROUTE, v1.EventAction_EVENT_ACTION_UPDATED, name, t.snapshotLocked(r))
+		}
+	}
+	clear(t.dirty)
+	t.flush = nil
 }
 
 // Sets the policy routes without one of their own follow
@@ -114,8 +145,8 @@ func Effective(route, defaults *v1.Policy) *v1.Policy {
 	return out
 }
 
-// Points a name at a ready instance, the policy is the slot's, nil for none
-func (t *Table) Set(name, instanceID, slotID, endpoint, model string, api v1.ApiFlavor, policy *v1.Policy) *v1.Route {
+// Points a name at a ready instance answering to served, the policy is the slot's, nil for none
+func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, api v1.ApiFlavor, policy *v1.Policy) *v1.Route {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	r, ok := t.routes[name]
@@ -133,10 +164,10 @@ func (t *Table) Set(name, instanceID, slotID, endpoint, model string, api v1.Api
 		slotID = r.GetSlotId()
 	}
 	// Nothing to write when the route already says exactly this
-	if ok && r.GetInstanceId() == instanceID && r.GetEndpoint() == endpoint && r.GetModel() == model && r.GetApi() == api && r.GetSlotId() == slotID && r.GetState() == state && proto.Equal(r.GetPolicy(), policy) {
+	if ok && r.GetInstanceId() == instanceID && r.GetEndpoint() == endpoint && r.GetModel() == model && r.GetServed() == served && r.GetApi() == api && r.GetSlotId() == slotID && r.GetState() == state && proto.Equal(r.GetPolicy(), policy) {
 		return t.snapshotLocked(r)
 	}
-	r.InstanceId, r.Endpoint, r.Model, r.Api, r.SlotId, r.State = instanceID, endpoint, model, api, slotID, state
+	r.InstanceId, r.Endpoint, r.Model, r.Served, r.Api, r.SlotId, r.State = instanceID, endpoint, model, served, api, slotID, state
 	r.Policy = proto.Clone(policy).(*v1.Policy)
 	t.save(r, action)
 	return t.snapshotLocked(r)
@@ -252,37 +283,43 @@ func (t *Table) Ready() []*v1.Route {
 // Counts requests served through every route
 func (t *Table) Requests() uint64 { return t.total.Load() }
 
-// Claims a route for one request under its policy, returning endpoint, the flavor it speaks, the policy in force, and release
-func (t *Table) Acquire(name string) (string, v1.ApiFlavor, *v1.Policy, func(), error) {
+// Claims a route for one request under its policy, returning the route as it stands, the policy in force, and release
+func (t *Table) Acquire(name string) (*v1.Route, *v1.Policy, func(), error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	r, ok := t.routes[name]
 	if !ok {
-		return "", 0, nil, nil, ErrNoRoute
+		return nil, nil, nil, ErrNoRoute
 	}
 	switch r.GetState() {
 	case v1.RouteState_ROUTE_STATE_PENDING:
-		return "", 0, nil, nil, ErrPending
+		return nil, nil, nil, ErrPending
 	case v1.RouteState_ROUTE_STATE_DRAINING:
-		return "", 0, nil, nil, ErrDraining
+		return nil, nil, nil, ErrDraining
 	}
 	policy := Effective(r.GetPolicy(), t.defaults)
 	counter := t.counterLocked(r.GetInstanceId())
 	if cap := policy.GetMaxInFlight(); cap > 0 && counter.Load() >= int32(cap) {
-		return "", 0, nil, nil, ErrBusy
+		return nil, nil, nil, ErrBusy
 	}
 	if policy.GetRequestsPerSecond() > 0 && !t.limiterLocked(name, policy).Allow() {
-		return "", 0, nil, nil, ErrThrottled
+		return nil, nil, nil, ErrThrottled
 	}
 	counter.Add(1)
 	r.Requests++
 	t.total.Add(1)
-	release := func() { counter.Add(-1) }
-	api := r.GetApi()
-	if api == v1.ApiFlavor_API_FLAVOR_UNSPECIFIED {
-		api = v1.ApiFlavor_API_FLAVOR_OPENAI
+	t.touchLocked(name)
+	release := func() {
+		counter.Add(-1)
+		t.mu.Lock()
+		t.touchLocked(name)
+		t.mu.Unlock()
 	}
-	return r.GetEndpoint(), api, policy, release, nil
+	out := t.snapshotLocked(r)
+	if out.GetApi() == v1.ApiFlavor_API_FLAVOR_UNSPECIFIED {
+		out.Api = v1.ApiFlavor_API_FLAVOR_OPENAI
+	}
+	return out, policy, release, nil
 }
 
 // Returns the route's token bucket, retuned when its policy changed

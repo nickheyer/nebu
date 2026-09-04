@@ -55,20 +55,18 @@
   // One source answers for the provider's capabilities, the chosen one or the first that works
   const status = $derived(group?.sources.find((s) => s.source?.id === sourceId) ?? group?.sources.find((s) => !s.error) ?? group?.sources[0]);
   const caps = $derived(status?.capabilities);
+  // Every hit and the drawer carry their own source's capabilities, which the All tab merges across
+  const capsOf = (id: string) => statuses.find((s) => s.source?.id === id)?.capabilities ?? caps;
   const merged = $derived(all || (!!group && sourceId === '' && group.sources.length > 1));
   const labels = $derived(sourceLabels(all ? statuses : (group?.sources ?? [])));
   const name = $derived(all ? 'every source' : group ? (merged ? group.name : (labels.get(sourceId) ?? groupLabel(group))) : 'the source');
   const effectiveSort = $derived(sort || caps?.defaultSort || '');
   const sortLabel = $derived(caps?.sorts.find((s) => s.id === effectiveSort)?.label ?? effectiveSort);
   const reversible = $derived(sortReversible(caps, effectiveSort));
-  // Words for each direction that match what the sort orders by
-  const direction = $derived.by(() => {
-    if (effectiveSort === 'name') return { desc: 'Z to A', asc: 'A to Z' };
-    if (effectiveSort === 'updated' || effectiveSort === 'created') return { desc: 'Newest first', asc: 'Oldest first' };
-    return { desc: 'Highest first', asc: 'Lowest first' };
-  });
   const activeFilters = $derived(Object.entries(filters).filter(([, v]) => v));
-  const canSubmitRepo = $derived(looksLikeRepo(caps, query));
+  // The source whose repository form the typed text takes: the chosen one, else the first across every source
+  const repoSource = $derived(all ? statuses.find((s) => !s.error && looksLikeRepo(s.capabilities, query)) : looksLikeRepo(caps, query) ? status : undefined);
+  const canSubmitRepo = $derived(!!repoSource);
   // Sources of the provider that browse but cannot download without a token
   const tokenless = $derived((all ? statuses : merged ? (group?.sources ?? []) : status ? [status] : []).filter((s) => s.capabilities?.authRequired && !s.capabilities.tokenPresent));
   const browsing = $derived(!query.trim() && activeFilters.length === 0);
@@ -249,7 +247,7 @@
   function submit(e: Event) {
     e.preventDefault();
     if (debounce) clearTimeout(debounce);
-    if (canSubmitRepo && !hits.some((h) => h.repo === query.trim())) openRepo(openSourceId, query.trim(), '', null);
+    if (repoSource && !hits.some((h) => h.repo === query.trim())) openRepo(repoSource.source?.id || openSourceId, query.trim(), '', null);
     search();
   }
 
@@ -346,10 +344,10 @@
         <button
           type="button"
           class="inline-flex h-[2.125rem] items-center gap-1.5 rounded-md border border-line bg-raised px-2.5 text-xs text-fg-muted hover:text-fg"
-          title={ascending ? `${direction.asc}, click for ${direction.desc.toLowerCase()}` : `${direction.desc}, click for ${direction.asc.toLowerCase()}`}
+          title={ascending ? `${sortLabel} ascending, click to descend` : `${sortLabel} descending, click to ascend`}
           onclick={() => (ascending = !ascending)}
         >
-          {#if ascending}<ArrowUpNarrowWide size={14} /> {direction.asc}{:else}<ArrowDownWideNarrow size={14} /> {direction.desc}{/if}
+          {#if ascending}<ArrowUpNarrowWide size={14} /> Ascending{:else}<ArrowDownWideNarrow size={14} /> Descending{/if}
         </button>
       {/if}
     {/if}
@@ -385,7 +383,7 @@
     {:else if hits.length}
       <span>
         {#if total > 0n}{hits.length.toLocaleString()} of {Number(total).toLocaleString()}{:else}{hits.length.toLocaleString()}{/if}
-        {browsing ? 'models' : 'matches'} on {name}{#if sortLabel}, {sortLabel.toLowerCase()}{ascending && reversible ? `, ${direction.asc.toLowerCase()}` : ''}{/if}
+        {browsing ? 'models' : 'matches'} on {name}{#if sortLabel}, {sortLabel.toLowerCase()}{ascending && reversible ? ', ascending' : ''}{/if}
       </span>
     {/if}
   </div>
@@ -419,7 +417,7 @@
   {:else}
     <div class={view === 'grid' ? 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4' : 'flex flex-col gap-1.5'}>
       {#each hits as h (h.sourceId + '/' + h.repo)}
-        <HitCard hit={h} {caps} {runtimes} compact={view === 'list'} from={merged ? (labels.get(h.sourceId) ?? h.sourceId) : ''} selected={selected?.repo === h.repo && selected?.sourceId === h.sourceId && drawerOpen} onOpen={openHit} />
+        <HitCard hit={h} caps={capsOf(h.sourceId)} {runtimes} compact={view === 'list'} from={merged ? (labels.get(h.sourceId) ?? h.sourceId) : ''} selected={selected?.repo === h.repo && selected?.sourceId === h.sourceId && drawerOpen} onOpen={openHit} />
       {/each}
     </div>
     <div bind:this={sentinel} class="flex items-center justify-center py-6 text-xs text-fg-faint">
@@ -435,5 +433,5 @@
 {/if}
 
 {#if selected}
-  <ModelDrawer bind:open={drawerOpen} sourceId={selected.sourceId} sourceLabel={labels.get(selected.sourceId) ?? name} repo={selected.repo} revision={selected.revision} {caps} {runtimes} hit={selected.hit} bind:slotId onNavigate={(repo, rev) => { if (selected) selected = { ...selected, repo, revision: rev, hit: hits.find((h) => h.repo === repo) ?? null }; syncUrl(); }} />
+  <ModelDrawer bind:open={drawerOpen} sourceId={selected.sourceId} sourceLabel={labels.get(selected.sourceId) ?? name} repo={selected.repo} revision={selected.revision} caps={capsOf(selected.sourceId)} {runtimes} hit={selected.hit} bind:slotId onNavigate={(repo, rev) => { if (selected) selected = { ...selected, repo, revision: rev, hit: hits.find((h) => h.repo === repo) ?? null }; syncUrl(); }} />
 {/if}

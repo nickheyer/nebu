@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,7 +30,7 @@ const (
 )
 
 // Narrows a profile to a slot and returns the slot's default params, set by the daemon
-type Constrainer func(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, map[string]string, error)
+type Constrainer func(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, string, map[string]string, error)
 
 // Returns the profile a run of a runtime starts from, named by id or name or
 // the runtime's default, nil when it has none, set by the daemon
@@ -55,16 +56,16 @@ type Inspector struct {
 }
 
 // Returns the planning profile narrowed to the named slot, with the slot's default params
-func (i *Inspector) profile(ctx context.Context, slotID string) (*v1.HostProfile, map[string]string, error) {
+func (i *Inspector) profile(ctx context.Context, slotID string) (*v1.HostProfile, string, map[string]string, error) {
 	profile, err := i.Host.Profile(ctx, false)
 	if err != nil {
-		return nil, nil, err
+		return nil, "", nil, err
 	}
 	if slotID == "" {
-		return profile, nil, nil
+		return profile, "", nil, nil
 	}
 	if i.Constrain == nil {
-		return nil, nil, fmt.Errorf("slots are not available")
+		return nil, "", nil, fmt.Errorf("slots are not available")
 	}
 	return i.Constrain(ctx, slotID, profile)
 }
@@ -195,19 +196,22 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 	if err != nil {
 		return nil, err
 	}
-	profile, slotParams, err := i.profile(ctx, req.GetSlotId())
+	profile, slotRuntime, slotParams, err := i.profile(ctx, req.GetSlotId())
 	if err != nil {
 		return nil, err
 	}
 	groups := selectGroups(i.Classifier.Groups(model), req.GetGroups())
-	// A named profile plans its own runtime unless the request names runtimes itself
+	// A named profile plans its own runtime beside any the request names, else the slot's runtime, else every compatible one
 	ids := req.GetRuntimeIds()
 	named, err := i.Profile("", req.GetProfileId())
 	if err != nil {
 		return nil, err
 	}
-	if named != nil && len(ids) == 0 {
-		ids = []string{named.GetRuntimeId()}
+	if named != nil && !slices.Contains(ids, named.GetRuntimeId()) {
+		ids = append(ids, named.GetRuntimeId())
+	}
+	if len(ids) == 0 && slotRuntime != "" {
+		ids = []string{slotRuntime}
 	}
 	runtimes := i.selectRuntimes(ids, profile)
 	contexts := req.GetContexts()
@@ -288,8 +292,15 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
+	profile, slotRuntime, slotParams, err := i.profile(ctx, req.GetSlotId())
+	if err != nil {
+		return nil, err
+	}
+	// The slot's runtime, then a named profile's, pick the runtime when the request did not, as a run does
 	runtimeID := req.GetRuntimeId()
-	// A named profile picks its runtime when nothing else did, as a run does
+	if runtimeID == "" {
+		runtimeID = slotRuntime
+	}
 	if runtimeID == "" && req.GetProfileId() != "" {
 		named, err := i.Profile("", req.GetProfileId())
 		if err != nil {
@@ -298,10 +309,6 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 		runtimeID = named.GetRuntimeId()
 	}
 	rt, err := i.Runtimes.Get(runtimeID)
-	if err != nil {
-		return nil, err
-	}
-	profile, slotParams, err := i.profile(ctx, req.GetSlotId())
 	if err != nil {
 		return nil, err
 	}

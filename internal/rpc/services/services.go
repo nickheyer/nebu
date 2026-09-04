@@ -40,7 +40,7 @@ func wrap(err error) error {
 	case errors.Is(err, runtime.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, monitor.ErrWatch), errors.Is(err, sources.ErrSource),
 		errors.Is(err, profiles.ErrProfile):
 		return connect.NewError(connect.CodeInvalidArgument, err)
-	case errors.Is(err, profiles.ErrProfileInUse):
+	case errors.Is(err, profiles.ErrProfileInUse), errors.Is(err, sources.ErrSourceInUse), errors.Is(err, slots.ErrSlotInUse):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, transfer.ErrDigestMismatch):
 		return connect.NewError(connect.CodeDataLoss, err)

@@ -32,7 +32,7 @@ type Prober struct {
 func New(specs []*v1.ProbeSpec, paths []string, ttl time.Duration) (*Prober, error) {
 	p := &Prober{paths: paths, ttl: ttl}
 	for _, s := range specs {
-		if len(s.GetOs()) > 0 && !slices.Contains(s.GetOs(), runtime.GOOS) {
+		if len(s.GetOs()) > 0 && !slices.Contains(s.GetOs(), runtime.GOOS) || len(s.GetArch()) > 0 && !slices.Contains(s.GetArch(), runtime.GOARCH) {
 			continue
 		}
 		c, err := probes.Compile(s)

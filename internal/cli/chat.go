@@ -5,9 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -34,13 +37,13 @@ func runChat(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 	if len(positional) != 1 {
-		return fmt.Errorf("usage: nebu chat <model> [--system S] [--once TEXT] [--temperature F] [--max-tokens N]")
+		return fmt.Errorf("usage: nebu chat <model> [--system S] [--once TEXT] [--temperature F] [--max-tokens N] [--key K]")
+	}
+	if err := e.requireDaemon(); err != nil {
+		return err
 	}
 	cl, err := e.clients()
 	if err != nil {
-		return err
-	}
-	if err := e.requireDaemon(); err != nil {
 		return err
 	}
 	if err := e.routeReady(ctx, cl, positional[0]); err != nil {
@@ -50,7 +53,7 @@ func runChat(ctx context.Context, e *env, args []string) error {
 	if apiKey == "" && len(e.cfg.GetGateway().GetApiKeys()) > 0 {
 		apiKey = e.cfg.GetGateway().GetApiKeys()[0]
 	}
-	base := e.gatewayBase()
+	base := e.gatewayBase(ctx, cl)
 	session := &chatSession{
 		out: e.out, url: base + "/v1/chat/completions", model: positional[0], key: apiKey,
 		temperature: *temperature, maxTokens: *maxTokens, client: &http.Client{Transport: e.transport(base)},
@@ -61,16 +64,34 @@ func runChat(ctx context.Context, e *env, args []string) error {
 	if *once != "" {
 		return session.ask(ctx, *once)
 	}
-	fmt.Fprintf(e.errw, "chatting with %s through %s, /reset starts over, /system sets the prompt, ctrl-d ends\n", session.model, session.url)
+	fmt.Fprintf(e.errw, "chatting with %s through %s, /reset starts over, /system sets the prompt, ctrl-c stops an answer, ctrl-d ends\n", session.model, session.url)
 	sc := bufio.NewScanner(e.in)
 	sc.Buffer(make([]byte, 1<<20), 16<<20)
+	lines := make(chan string)
+	go func() {
+		defer close(lines)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+	}()
+	// An interrupt stops the answer in flight and ends the session when none is
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt)
+	defer signal.Stop(sigs)
 	for {
 		fmt.Fprint(e.errw, "> ")
-		if !sc.Scan() {
+		var line string
+		select {
+		case <-sigs:
 			fmt.Fprintln(e.errw)
-			return sc.Err()
+			return nil
+		case l, ok := <-lines:
+			if !ok {
+				fmt.Fprintln(e.errw)
+				return sc.Err()
+			}
+			line = strings.TrimSpace(l)
 		}
-		line := strings.TrimSpace(sc.Text())
 		switch {
 		case line == "":
 			continue
@@ -79,12 +100,24 @@ func runChat(ctx context.Context, e *env, args []string) error {
 			fmt.Fprintln(e.errw, "history cleared")
 			continue
 		case strings.HasPrefix(line, "/system "):
-			session.reset()
-			session.history = append(session.history, chatMessage{Role: "system", Content: strings.TrimSpace(strings.TrimPrefix(line, "/system "))})
-			fmt.Fprintln(e.errw, "system prompt set, history cleared")
+			session.setSystem(strings.TrimSpace(strings.TrimPrefix(line, "/system ")))
+			fmt.Fprintln(e.errw, "system prompt set")
 			continue
 		}
-		if err := session.ask(ctx, line); err != nil {
+		askCtx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			select {
+			case <-sigs:
+				cancel()
+				fmt.Fprintln(e.errw, "[stopped]")
+			case <-done:
+			}
+		}()
+		err := session.ask(askCtx, line)
+		close(done)
+		cancel()
+		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintln(e.errw, "error:", err)
 		}
 	}
@@ -136,6 +169,15 @@ func (s *chatSession) reset() {
 	s.history = kept
 }
 
+// Sets the system prompt ahead of the turns, keeping them
+func (s *chatSession) setSystem(text string) {
+	if len(s.history) > 0 && s.history[0].Role == "system" {
+		s.history[0].Content = text
+		return
+	}
+	s.history = append([]chatMessage{{Role: "system", Content: text}}, s.history...)
+}
+
 // Sends the history with one more user turn and streams the answer to out
 func (s *chatSession) ask(ctx context.Context, text string) error {
 	s.history = append(s.history, chatMessage{Role: "user", Content: text})
@@ -180,14 +222,17 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 	}
 	var answer strings.Builder
 	tokens := 0
+	var failed error
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64<<10), 16<<20)
-	for sc.Scan() {
+	for sc.Scan() && failed == nil {
 		line := sc.Text()
-		if !strings.HasPrefix(line, "data:") {
+		// A runtime that breaks off mid answer says so in an error field or an error line
+		field, payload, ok := strings.Cut(line, ":")
+		if !ok || field != "data" && field != "error" {
 			continue
 		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		payload = strings.TrimSpace(payload)
 		if payload == "[DONE]" {
 			continue
 		}
@@ -201,8 +246,18 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 			Usage *struct {
 				CompletionTokens int `json:"completion_tokens"`
 			} `json:"usage"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
 		}
 		if json.Unmarshal([]byte(payload), &chunk) != nil {
+			if field == "error" {
+				failed = errors.New(payload)
+			}
+			continue
+		}
+		if chunk.Error != nil {
+			failed = errors.New(chunk.Error.Message)
 			continue
 		}
 		for _, c := range chunk.Choices {
@@ -217,11 +272,20 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 			tokens = chunk.Usage.CompletionTokens
 		}
 	}
+	err = errors.Join(failed, sc.Err())
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
 	fmt.Fprintln(s.out)
 	elapsed := time.Since(started).Seconds()
-	if elapsed > 0 {
+	if elapsed > 0 && answer.Len() > 0 {
 		fmt.Fprintf(s.out, "[%d tokens in %.1fs, %.1f tok/s]\n", tokens, elapsed, float64(tokens)/elapsed)
 	}
-	s.history = append(s.history, chatMessage{Role: "assistant", Content: answer.String()})
-	return sc.Err()
+	// What arrived stays in the history, a turn with no answer is taken back
+	if answer.Len() > 0 {
+		s.history = append(s.history, chatMessage{Role: "assistant", Content: answer.String()})
+	} else {
+		s.history = s.history[:len(s.history)-1]
+	}
+	return err
 }

@@ -73,7 +73,7 @@ func runProfilesAdd(ctx context.Context, e *env, args []string) error {
 	description := fs.String("description", "", "what the profile is for")
 	def := fs.Bool("default", false, "apply to every run of the runtime that names no profile")
 	var params multi
-	fs.Var(&params, "param", "runtime param as name=value, repeatable, see nebu runtimes list")
+	fs.Var(&params, "param", "runtime param as name=value, repeatable, see nebu runtimes show")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -85,11 +85,11 @@ func runProfilesAdd(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	p := &v1.Profile{RuntimeId: positional[0], Name: positional[1], Description: *description, Params: paramMap, Default: *def}
@@ -120,11 +120,11 @@ func runProfilesUpdate(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	// The update replaces every field, so start from what the profile has and change only what was passed
@@ -169,11 +169,11 @@ func runProfilesRemove(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu profiles remove <id|name> [--runtime R] [--force]")
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	p, err := e.findProfile(ctx, cl, *runtimeID, positional[0])

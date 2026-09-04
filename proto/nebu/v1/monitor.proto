@@ -51,6 +51,8 @@ message Finding {
   // The want that found it, when no watch did
   string want_id = 11;
   string source_id = 12;
+  // The swap the pull led to, when a slot took it
+  string swap_task_id = 13;
 }
 
 // A standing search across sources, satisfied once a matching weight group turns up
@@ -76,6 +78,8 @@ message Want {
   google.protobuf.Timestamp checked_at = 17;
   google.protobuf.Timestamp created_at = 18;
   string error = 19;
+  // The swap the pull led to, when a slot took it
+  string swap_task_id = 20;
 }
 
 // Starts wanting a model

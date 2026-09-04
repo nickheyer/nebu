@@ -87,7 +87,7 @@
         </select>
       </Field>
       <Field label="Id" for="src-id" hint="Letters, digits, dots, dashes, or underscores. Pulled models are kept under it, so it cannot change later">
-        <input id="src-id" class="input font-mono" bind:value={id} placeholder="hf-mirror" aria-invalid={!!id && !idOk} />
+        <input id="src-id" class="input font-mono" bind:value={id} placeholder="letters, digits, dots, dashes" aria-invalid={!!id && !idOk} />
       </Field>
     {/if}
     <Field label="Name" for="src-name" hint="What the catalog calls it, the id when empty" class={editing ? 'sm:col-span-2' : ''}>
@@ -115,7 +115,7 @@
                 {#each f.choices as c (c)}<option value={c}>{c}</option>{/each}
               </select>
             {:else}
-              <input id="src-{f.name}" class="input {f.type === ConfigType.STRING ? '' : 'font-mono'}" type={inputType(f)} value={config[f.name] ?? ''} oninput={(e) => (config = { ...config, [f.name]: (e.currentTarget as HTMLInputElement).value })} placeholder={f.default || (f.type === ConfigType.PATH ? '/srv/models' : f.type === ConfigType.ENV ? 'MY_TOKEN' : '')} autocomplete="off" spellcheck="false" />
+              <input id="src-{f.name}" class="input {f.type === ConfigType.STRING ? '' : 'font-mono'}" type={inputType(f)} value={config[f.name] ?? ''} oninput={(e) => (config = { ...config, [f.name]: (e.currentTarget as HTMLInputElement).value })} placeholder={f.default || (f.type === ConfigType.PATH ? 'directory' : f.type === ConfigType.ENV ? 'VARIABLE_NAME' : f.type === ConfigType.URL ? 'https://host' : '')} autocomplete="off" spellcheck="false" />
             {/if}
           </Field>
         {/if}

@@ -57,7 +57,7 @@ once and never changes again.
 - **Watch**. A repository the monitor checks for new revisions and weight groups.
 - **Want**. A standing search the monitor runs until a matching weight group appears, then
   pulls and swaps it in as a watch would.
-- **Finding**. One change a check noticed, with the task it triggered.
+- **Finding**. One change a check noticed, with the pull it triggered and the swap that followed.
 - **Event**. One change to any of the above, streamed to the UI.
 
 ## Tree
@@ -118,7 +118,7 @@ nebu/
 |   +-- runtime/                   manifest model, param schema, command rendering
 |   +-- build/                     recipe engine, fetch, patch apply, hashed build cache
 |   |   +-- sandbox/               build runners, host toolchain or oci cli
-|   +-- proc/                      process trees started, found, and stopped the same way on every os
+|   +-- proc/                      process trees started, found, and stopped the same way on every os, a console and job of our own on windows
 |   +-- launch/                    process launcher, output files, adoption by pid
 |   +-- triage/                    log pattern matcher producing hints and fixes
 +-- spec/                          every runtime and model specific lives here, never in go
@@ -177,8 +177,9 @@ defaults their settings take, and implements the catalog API: search, resolve, r
 open. Providers are code. There are no source spec files, because a provider is a protocol and a
 protocol needs a program, not a table. The settings a provider accepts are the union of its
 transports' settings, the primary transport owning the bare names and every other one prefixing
-its own, and the provider publishes that list through its capabilities so the UI renders the form
-without knowing any provider by name.
+its own unless it stands in for the primary, as a mirror's directory does for its endpoint, and
+the provider publishes that list through its capabilities so the UI renders the form without
+knowing any provider by name.
 
 A **source** is an instance of a provider with its own settings, a map of names to values the
 provider validates on create and update: unknown names are refused, URLs need a scheme, variables
@@ -272,17 +273,23 @@ is fitted to what the card reported, and the two measured runs live under
 6. Report rules parse the runtime's own allocation lines into measurements, and the device
    free-memory delta feeds the calibration table, which shifts the estimator's overhead
    term for that runtime and architecture on the next plan.
-7. On failure or unexpected exit, triage matches the output against the pattern catalog
-   and the hint, with any suggested params, travels back on the task and the instance
-   record.
+7. On failure or unexpected exit, and on a prepare step that fails, triage matches the
+   output against the pattern catalog and the hint, with any suggested params, travels back
+   on the task and the instance record. The correction recorded for the calibration table is
+   measured against the plan without the correction it already carried, so it converges on
+   what the card reported rather than halfway there.
 8. Every state change writes the instance row, so `ps --all`, `show`, and `logs` answer for
    instances that ended before the daemon last started.
 
 **Recovery** runs before the daemon listens. Tasks left unfinished are marked failed. For each
 instance row that was not terminal, the daemon checks whether its pid is alive with the
-recorded command line. A live runtime is adopted: its output file is followed from where it
-is, it is routed as soon as it answers health, it is supervised by pid, and a stop signals
-its group and escalates after the grace period. A dead one is marked stopped with the reason.
+recorded command line. A live runtime still wanted is adopted: its output file is followed from
+where it is, it is routed as soon as it answers health, it is supervised by pid, and a stop
+signals its group and escalates after the grace period. One whose stop was in flight is
+finished instead. A runtime outlives the daemon only where nothing ties the two, on macOS and
+FreeBSD, or when it ignored the parent death signal, since Linux and Windows end the tree with
+the daemon, so there a crash means a relaunch rather than an adoption. A dead one is marked
+stopped with the reason.
 Every record still wanted, meaning it was never stopped by request and is not already live,
 is relaunched from its original request one at a time, so each plans around the last. A stop
 by request clears that intent; a daemon shutdown does not, which is why models survive a

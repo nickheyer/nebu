@@ -173,7 +173,7 @@ func TestWatchesAndFindings(t *testing.T) {
 	if len(unacked) != 1 || !proto.Equal(unacked[0], f) {
 		t.Fatalf("unacked %v", unacked)
 	}
-	if err := d.PruneFindings(ctx, 1); err != nil {
+	if _, err := d.PruneFindings(ctx, 1); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := d.GetFinding(ctx, "f2"); got == nil {

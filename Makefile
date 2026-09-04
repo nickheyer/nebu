@@ -94,8 +94,15 @@ migrate-hash:
 migrate-validate:
 	$(ATLAS_RUN) migrate validate --env local
 
+# Reads the daemon's database, mounted beside the tree since the container sees only what it is given
 migrate-status:
-	$(ATLAS_RUN) migrate status --env local --url "sqlite://$(DB_FILE)"
+	docker run --rm \
+		--volume "$(shell pwd):/workspace" \
+		--volume "$(dir $(abspath $(DB_FILE))):/db" \
+		--workdir /workspace \
+		--user "$(shell id -u):$(shell id -g)" \
+		--env HOME=/tmp \
+		$(ATLAS_IMAGE) migrate status --env local --url "sqlite:///db/$(notdir $(DB_FILE))"
 
 clean: proto-clean
 	rm -rf build $(WEB)/dist/* $(WEB)/.svelte-kit

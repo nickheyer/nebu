@@ -263,6 +263,12 @@ func (e *Engine) fetch(ctx context.Context, s *Selection, b *v1.Build, tctx map[
 		if err != nil {
 			return "", err
 		}
+		// Git moves the tree at its own pace, but not through a paused window
+		if e.Fetcher != nil {
+			if err := e.Fetcher.Hold(ctx); err != nil {
+				return "", err
+			}
+		}
 		return sources.Checkout(ctx, strings.TrimSpace(repo), b.GetRef(), dest, out)
 	}
 	return b.GetRef(), os.MkdirAll(dest, 0o755)

@@ -85,13 +85,38 @@ type Result struct {
 // One step of a streamed answer
 //
 // start carries the id and model, text a fragment, tool a call or a fragment
-// of one at Index, the first fragment naming it, and stop the reason and usage.
+// of one at Index, the first fragment naming it, stop the reason and usage,
+// and error the message of an answer that broke off.
 type Event struct {
 	Kind  string
 	Text  string
 	Tool  *ToolCall
 	Index int
 	Res   *Result
+}
+
+// Names an image's type from its bytes, the header's word when the bytes say nothing
+func mediaTypeOf(raw []byte, header string) string {
+	if mt := http.DetectContentType(raw); strings.HasPrefix(mt, "image/") {
+		return mt
+	}
+	if header != "" && strings.HasPrefix(header, "image/") {
+		return strings.TrimSpace(strings.Split(header, ";")[0])
+	}
+	return "image/png"
+}
+
+// Names a base64 image's type from its leading bytes
+func mediaTypeOfBase64(data string) string {
+	head := data
+	if len(head) > 1024 {
+		head = head[:1024]
+	}
+	raw, err := base64.StdEncoding.DecodeString(head[:len(head)-len(head)%4])
+	if err != nil {
+		return "image/png"
+	}
+	return mediaTypeOf(raw, "")
 }
 
 // Writes a streamed answer in one flavor
@@ -118,6 +143,8 @@ type Flavor interface {
 	ErrorMessage(body []byte) string
 	// Writes an error
 	Error(w http.ResponseWriter, status int, message, kind string)
+	// Whether images travel only as bytes, so a URL is fetched before rendering
+	InlineImages() bool
 }
 
 var flavors = map[v1.ApiFlavor]Flavor{

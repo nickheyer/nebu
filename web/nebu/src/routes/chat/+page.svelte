@@ -4,6 +4,7 @@
   import { api, baseUrl, gatewayKey, setGatewayKey } from '$lib/api';
   import { listenerUrl } from '$lib/gateway';
   import { live } from '$lib/state.svelte';
+  import { enumLabel } from '$lib/format';
   import { fail } from '$lib/toast.svelte';
   import { RouteState, type GatewayStatus } from '$proto/gateway_pb';
   import { MessageSquare, Send, Square, Trash2, KeyRound } from '@lucide/svelte';
@@ -13,11 +14,20 @@
   import Empty from '$lib/components/ui/Empty.svelte';
   import Markdown from '$lib/components/ui/Markdown.svelte';
 
+  // What one streamed line carries: a delta, the final usage, or the error that ended the answer
+  interface Chunk {
+    error?: { message?: string };
+    message?: string;
+    choices?: { delta?: { content?: string }; text?: string }[];
+    usage?: { completion_tokens?: number };
+  }
+
   interface Turn {
     role: 'user' | 'assistant';
     text: string;
     tokens?: number;
     seconds?: number;
+    error?: string;
   }
 
   let status = $state<GatewayStatus | null>(null);
@@ -33,16 +43,17 @@
   let controller: AbortController | null = null;
 
   const ready = $derived([...live.routes.values()].filter((r) => r.state === RouteState.READY).sort((a, b) => a.name.localeCompare(b.name)));
-  const chosen = $derived(ready.find((r) => r.name === model) ?? ready[0]);
-  // The select follows the route the chat really targets when the one asked for is not ready
+  // The route asked for stays chosen while it exists, even before it answers, else the first that does
+  const asked = $derived(model ? live.routes.get(model) : undefined);
+  const chosen = $derived(asked ?? ready[0]);
+  const chosenReady = $derived(chosen?.state === RouteState.READY);
   $effect(() => {
-    if (chosen && model !== chosen.name) model = chosen.name;
+    if (!asked && chosen && model !== chosen.name) model = chosen.name;
   });
   // The gateway on the API listener is same origin, one of its own is reached by address
-  const endpoint = $derived.by(() => {
-    const own = status?.listeners.find((l) => !l.shared);
-    return (own ? listenerUrl(own.addr, !!status?.tls) : baseUrl) + '/v1/chat/completions';
-  });
+  const own = $derived(status?.listeners.find((l) => !l.shared));
+  const gatewayBase = $derived(own ? listenerUrl(own.addr, !!status?.tls) : baseUrl);
+  const endpoint = $derived(gatewayBase + '/v1/chat/completions');
 
   onMount(async () => {
     model = page.url.searchParams.get('model') ?? '';
@@ -67,10 +78,34 @@
     turns = [];
   }
 
+  // The history the model sees: answered turns only, a failed or empty answer and its question left out
+  function history(): { role: string; content: string }[] {
+    const out: { role: string; content: string }[] = [];
+    const past = turns.slice(0, -1);
+    for (let i = 0; i < past.length; i++) {
+      const t = past[i];
+      if (t.role === 'user') {
+        const answer = past[i + 1];
+        if (answer?.role === 'assistant' && answer.text && !answer.error) out.push({ role: 'user', content: t.text }, { role: 'assistant', content: answer.text });
+        else if (i === past.length - 1) out.push({ role: 'user', content: t.text });
+      }
+    }
+    return out;
+  }
+
+  // Says what went wrong reaching the gateway, a blocked origin or an untrusted certificate being the usual causes
+  function explain(err: unknown): string {
+    const text = err instanceof Error ? err.message : String(err);
+    if (err instanceof TypeError && own) {
+      return `${text}. The browser could not reach ${gatewayBase}: open ${gatewayBase}/health once to accept its certificate, and make sure gateway.cors_origins includes ${window.location.origin} when it is set.`;
+    }
+    return text;
+  }
+
   // Sends the conversation and streams the answer into the last turn
   async function send() {
     const text = draft.trim();
-    if (!text || busy || !chosen) return;
+    if (!text || busy || !chosen || !chosenReady) return;
     draft = '';
     turns = [...turns, { role: 'user', text }, { role: 'assistant', text: '' }];
     busy = true;
@@ -79,7 +114,7 @@
     let tokens = 0;
     scroll();
     try {
-      const messages = [...(system.trim() ? [{ role: 'system', content: system.trim() }] : []), ...turns.slice(0, -1).map((t) => ({ role: t.role, content: t.text }))];
+      const messages = [...(system.trim() ? [{ role: 'system', content: system.trim() }] : []), ...history()];
       const body: Record<string, unknown> = { model: chosen.name, messages, stream: true, stream_options: { include_usage: true } };
       if (temperature.trim()) body.temperature = parseFloat(temperature);
       if (maxTokens.trim()) body.max_tokens = parseInt(maxTokens, 10);
@@ -106,26 +141,32 @@
         const lines = pending.split('\n');
         pending = lines.pop() ?? '';
         for (const line of lines) {
-          if (!line.startsWith('data:')) continue;
-          const data = line.slice(5).trim();
+          // A runtime that dies mid answer says so on an error field or an error line, never on a chunk
+          const field = line.startsWith('data:') ? 'data' : line.startsWith('error:') ? 'error' : '';
+          if (!field) continue;
+          const data = line.slice(field.length + 1).trim();
           if (data === '[DONE]') continue;
+          let chunk: Chunk;
           try {
-            const chunk = JSON.parse(data);
-            const delta = chunk.choices?.[0]?.delta?.content ?? chunk.choices?.[0]?.text ?? '';
-            if (delta) {
-              turns[turns.length - 1].text += delta;
-              tokens++;
-              scroll();
-            }
-            if (chunk.usage?.completion_tokens) tokens = chunk.usage.completion_tokens;
+            chunk = JSON.parse(data);
           } catch {
-            // a partial or foreign line
+            if (field === 'error') throw new Error(data);
+            continue;
           }
+          if (field === 'error' || chunk.error) throw new Error(chunk.error?.message ?? chunk.message ?? data);
+          const delta = chunk.choices?.[0]?.delta?.content ?? chunk.choices?.[0]?.text ?? '';
+          if (delta) {
+            turns[turns.length - 1].text += delta;
+            tokens++;
+            scroll();
+          }
+          if (chunk.usage?.completion_tokens) tokens = chunk.usage.completion_tokens;
         }
       }
     } catch (err) {
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
-        turns[turns.length - 1].text += `\n\n> ${err instanceof Error ? err.message : String(err)}`;
+        turns[turns.length - 1].error = explain(err);
+        fail(err, 'Chat failed');
       }
     } finally {
       const last = turns[turns.length - 1];
@@ -149,13 +190,14 @@
   {#if turns.length}<Button variant="outline" icon={Trash2} onclick={clear}>Clear</Button>{/if}
 </PageHeader>
 
-{#if ready.length === 0}
+{#if ready.length === 0 && !asked}
   <div class="panel"><Empty icon={MessageSquare} title="Nothing is serving" description="Run a stored model, or drop one on a slot, and it shows up here as soon as its route is ready." /></div>
 {:else}
   <div class="grid grid-cols-1 gap-4 lg:grid-cols-[18rem_1fr]">
     <aside class="panel flex flex-col gap-4 p-4">
       <Field label="Model" for="chat-model" hint="Routes that answer right now">
         <select id="chat-model" class="input font-mono" bind:value={model}>
+          {#if asked && !chosenReady}<option value={asked.name}>{asked.name} · {enumLabel(RouteState, asked.state)}</option>{/if}
           {#each ready as r (r.name)}<option value={r.name}>{r.name}</option>{/each}
         </select>
       </Field>
@@ -178,6 +220,9 @@
           </div>
         </Field>
       {/if}
+      {#if chosen && !chosenReady}
+        <p class="rounded-md border border-warn/30 bg-warn/8 px-2.5 py-1.5 text-xs text-warn">{chosen.name} is {enumLabel(RouteState, chosen.state)}. Send waits until it answers.</p>
+      {/if}
       <p class="text-[11px] leading-4 text-fg-faint">Sent to <span class="font-mono">{endpoint}</span> as <span class="font-mono">{chosen?.name}</span>{chosen?.model ? `, serving ${chosen.model}` : ''}.</p>
     </aside>
 
@@ -194,8 +239,11 @@
                   <span class="whitespace-pre-wrap">{t.text}</span>
                 {:else if t.text}
                   <Markdown markdown={t.text} />
-                {:else}
+                {:else if !t.error}
                   <span class="text-fg-faint">…</span>
+                {/if}
+                {#if t.error}
+                  <div class="text-sm text-bad {t.text ? 'mt-2 border-t border-bad/30 pt-2' : ''}">{t.error}</div>
                 {/if}
               </div>
               {#if t.role === 'assistant' && t.seconds !== undefined}
@@ -206,11 +254,11 @@
         </div>
       </div>
       <div class="flex items-end gap-2 border-t border-line p-3">
-        <textarea class="input min-h-10 flex-1 resize-none" rows="2" bind:value={draft} onkeydown={onKey} placeholder="Message, Enter to send, Shift+Enter for a new line" disabled={busy && false}></textarea>
+        <textarea class="input min-h-10 flex-1 resize-none" rows="2" bind:value={draft} onkeydown={onKey} placeholder="Message, Enter to send, Shift+Enter for a new line"></textarea>
         {#if busy}
           <Button variant="danger" icon={Square} onclick={stop}>Stop</Button>
         {:else}
-          <Button variant="primary" icon={Send} onclick={send} disabled={!draft.trim() || !chosen}>Send</Button>
+          <Button variant="primary" icon={Send} onclick={send} disabled={!draft.trim() || !chosenReady}>Send</Button>
         {/if}
       </div>
     </section>

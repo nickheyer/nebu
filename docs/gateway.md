@@ -27,9 +27,14 @@ speaks Anthropic or Ollama natively would be served the same way in the other di
 
 `/v1/messages/count_tokens` counts a prompt. An OpenAI runtime is asked through the
 `/tokenize` route llama.cpp, vLLM, and SGLang serve beside their chat endpoints, and an Anthropic
-runtime through its own count endpoint. When the runtime has neither, or refuses, the gateway
-answers an estimate: four bytes a token, a few per turn, and each image by its area, so a
-client budgeting context never gets an error for asking.
+runtime through its own count endpoint, never passed through. When the runtime has neither, or
+refuses, the gateway answers an estimate: four bytes a token, a few per turn, and each image by
+its area, so a client budgeting context never gets an error for asking. A stream that breaks
+off upstream ends with an error in the caller's shape, an `error` chunk, an `error` event, or an
+`error` line, rather than a clean end. An Ollama client's tool results are tied to the calls
+before them in order, since its format names no call ids, and its images are typed by their
+bytes. A runtime that takes images only as bytes, Ollama, is sent any image a client named by
+URL after the gateway fetches it.
 
 | status | meaning |
 | --- | --- |
@@ -44,21 +49,31 @@ client budgeting context never gets an error for asking.
 Routes come from three places. A plain `nebu run` registers its instance name when it is
 ready and drops it when the instance ends. A slot keeps its name for its whole life and
 points it at the current occupant. `nebu routes add NAME INSTANCE` adds an alias onto a
-running instance.
+running instance. A route remembers the name the runtime itself serves the model as, its
+instance name, and sends that upstream in place of the route name, so a slot, an alias, or a
+header routed request reaches a runtime that checks the `model` field, vLLM, SGLang, and NeMo
+do, while the answer carries the name the client asked for. A request whose route name is the
+served name passes through untouched.
 
 `nebu gateway` shows listeners, routes with request and in flight counts, the limits each
-enforces, and whether keys are required. Counters feed the swap logic: an instance is drained
-by waiting for its in flight count to reach zero.
+enforces, its own over the gateway's, and whether keys are required. Counters feed the swap
+logic: an instance is drained by waiting for its in flight count to reach zero, and they reach
+the event stream at most once a second while requests flow, so the web pages follow them.
 
 ## Browsers and TLS
 
 Every gateway path answers CORS preflights, allowing whatever headers the caller's SDK asks
 to send, so a page on another origin, a chat UI or a notebook, can call it with its key.
 `gateway.cors_origins` narrows which origins are allowed; empty allows any, which is safe
-because the key is still required. The listeners are plain
-HTTP unless `tls.cert_file` and `tls.key_file` are set, in which case the API, the web UI, and
-the gateway all speak TLS with HTTP/2. Listening beyond loopback without TLS, or without a
-token or keys, is logged as a warning at start. A reverse proxy in front of the loopback
+because the key is still required. When it is set and the gateway has a listener of its own,
+the web UI's origin must be among them for its chat page to reach the gateway, and a browser
+that has accepted a self signed certificate for the API must accept it for the gateway's
+address too, which opening its `/health` does. The listeners are plain HTTP unless
+`tls.cert_file` and `tls.key_file` are set, in which case the API, the web UI, and the gateway
+all speak TLS with HTTP/2. Listening beyond loopback without TLS, or without a token or keys,
+whether the gateway shares the API listener or has its own, is logged as a warning at start.
+With a gateway listener of its own, the API listener answers `/v1/`, `/api/`, and `/health`
+with a note saying where the gateway is rather than the web page. A reverse proxy in front of the loopback
 listener works as well; it only has to pass the `Authorization` header through and leave
 streamed responses unbuffered.
 

@@ -37,6 +37,8 @@ type Manager struct {
 
 	mu   sync.Mutex
 	rows []*v1.Source
+	// Names what starts from a source, watches and wants, dropping them when clear is set
+	Referrers func(id string, clear bool) []string
 }
 
 // Builds a manager with an empty registry, filled by Load; transports keep clones and scratch under cacheDir
@@ -69,7 +71,8 @@ func (m *Manager) Load(ctx context.Context, bootstrap []*v1.Source) error {
 		if have[strings.TrimSpace(cfg.GetId())] {
 			continue
 		}
-		row, err := m.prepare(cfg)
+		// The row is kept on its shape alone, a client that cannot be built stays listed as broken
+		row, err := m.prepare(cfg, false)
 		if err != nil {
 			return fmt.Errorf("config source %q: %w", cfg.GetId(), err)
 		}
@@ -140,7 +143,7 @@ func (m *Manager) indexLocked(id string) int {
 
 // Creates a source after checking that its provider accepts the settings
 func (m *Manager) Create(ctx context.Context, in *v1.Source) (*v1.Source, error) {
-	row, err := m.prepare(in)
+	row, err := m.prepare(in, true)
 	if err != nil {
 		return nil, err
 	}
@@ -190,8 +193,8 @@ func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error)
 	return clone(next), nil
 }
 
-// Removes a source; seeded defaults stay
-func (m *Manager) Delete(ctx context.Context, id string) (*v1.Source, error) {
+// Removes a source; seeded defaults stay, and one a watch or want names goes only when forced
+func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Source, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	i := m.indexLocked(id)
@@ -201,6 +204,13 @@ func (m *Manager) Delete(ctx context.Context, id string) (*v1.Source, error) {
 	row := m.rows[i]
 	if row.GetSeeded() {
 		return nil, fmt.Errorf("%w: %s is a seeded default and stays, change its settings instead", ErrSource, id)
+	}
+	if m.Referrers != nil {
+		if used := m.Referrers(id, false); len(used) > 0 && !force {
+			return nil, fmt.Errorf("%w: %s is named by %s, remove them or remove with force to drop the references", ErrSourceInUse, id, strings.Join(used, ", "))
+		} else if len(used) > 0 {
+			m.Referrers(id, true)
+		}
 	}
 	if _, err := m.Store.DeleteSource(ctx, id); err != nil {
 		return nil, err
@@ -215,12 +225,12 @@ func (m *Manager) Delete(ctx context.Context, id string) (*v1.Source, error) {
 
 func (m *Manager) publish(action v1.EventAction, s *v1.Source) {
 	if m.Events != nil {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_SOURCE, action, s.GetId(), &v1.Event_Source{Source: s})
+		m.Events.Publish(v1.EventKind_EVENT_KIND_SOURCE, action, s.GetId(), s)
 	}
 }
 
-// Turns a request into a row: a plain id, settings the provider accepts, fresh stamps
-func (m *Manager) prepare(in *v1.Source) (*v1.Source, error) {
+// Turns a request into a row: a plain id, settings the provider accepts, fresh stamps, the client built when asked
+func (m *Manager) prepare(in *v1.Source, build bool) (*v1.Source, error) {
 	id := strings.TrimSpace(in.GetId())
 	if !validID.MatchString(id) || strings.Contains(id, "..") {
 		return nil, fmt.Errorf("%w: id %q must be letters, digits, dots, dashes, or underscores", ErrSource, in.GetId())
@@ -232,7 +242,11 @@ func (m *Manager) prepare(in *v1.Source) (*v1.Source, error) {
 	row.Seeded = false
 	now := timestamppb.Now()
 	row.CreatedAt, row.UpdatedAt = now, now
-	if err := m.Registry.Check(row); err != nil {
+	check := m.Registry.Validate
+	if build {
+		check = m.Registry.Check
+	}
+	if err := check(row); err != nil {
 		return nil, err
 	}
 	return row, nil

@@ -6,6 +6,9 @@ import (
 	"syscall"
 )
 
+// Nothing to claim, a signal reaches any process we may signal
+func Init() {}
+
 func adopt(pid int) *Tree { return &Tree{pid: pid} }
 
 func interruptTree(t *Tree) { signalGroup(t.pid, syscall.SIGTERM) }

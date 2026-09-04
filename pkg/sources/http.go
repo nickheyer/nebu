@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -19,9 +20,11 @@ import (
 )
 
 const (
-	maxAttempts = 4
-	baseBackoff = 500 * time.Millisecond
-	userAgent   = "nebu (+https://github.com/nickheyer/nebu)"
+	maxAttempts   = 4
+	baseBackoff   = 500 * time.Millisecond
+	userAgent     = "nebu (+https://github.com/nickheyer/nebu)"
+	dialTimeout   = 30 * time.Second
+	headerTimeout = 2 * time.Minute
 )
 
 // HTTP transport for one host with auth and retry
@@ -47,7 +50,19 @@ func NewHTTP(endpoint, token string) (*HTTP, error) {
 	if base.Scheme == "" {
 		return nil, fmt.Errorf("endpoint %q needs a scheme", endpoint)
 	}
-	return &HTTP{http: &http.Client{Timeout: 5 * time.Minute}, base: base, token: token, scheme: "Bearer", header: http.Header{}}, nil
+	return &HTTP{http: &http.Client{Transport: newTransport()}, base: base, token: token, scheme: "Bearer", header: http.Header{}}, nil
+}
+
+// A transport that bounds the dial, the handshake, and the wait for headers, never the body
+//
+// A body is read under the transfer limits, which may hold it for as long as a
+// window says, so only the steps a stuck server could hang on carry a deadline.
+func newTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.DialContext = (&net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}).DialContext
+	t.TLSHandshakeTimeout = dialTimeout
+	t.ResponseHeaderTimeout = headerTimeout
+	return t
 }
 
 // Builds the transport, none when the source names no endpoint and the provider requires none

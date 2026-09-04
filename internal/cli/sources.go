@@ -147,11 +147,11 @@ func runSourcesAdd(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	src := &v1.Source{Id: positional[0], Kind: k, Name: *name, Config: cfg}
@@ -179,11 +179,11 @@ func runSourcesUpdate(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	current, err := e.findSource(ctx, cl, positional[0])
@@ -215,21 +215,22 @@ func runSourcesUpdate(ctx context.Context, e *env, args []string) error {
 
 func runSourcesRemove(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("sources remove")
+	force := fs.Bool("force", false, "remove the watches of the source and widen the wants narrowed to it first")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return fmt.Errorf("usage: nebu sources remove <id>")
+		return fmt.Errorf("usage: nebu sources remove <id> [--force]")
+	}
+	if err := e.requireDaemon(); err != nil {
+		return err
 	}
 	cl, err := e.clients()
 	if err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
-		return err
-	}
-	resp, err := cl.sources.DeleteSource(ctx, connect.NewRequest(&v1.DeleteSourceRequest{Id: positional[0]}))
+	resp, err := cl.sources.DeleteSource(ctx, connect.NewRequest(&v1.DeleteSourceRequest{Id: positional[0], Force: *force}))
 	if err != nil {
 		return err
 	}

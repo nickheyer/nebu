@@ -83,9 +83,11 @@ func (ollama) ParseRequest(path string, body []byte) (*Chat, error) {
 	images := func(data []string) []Part {
 		var out []Part
 		for _, d := range data {
-			part := Part{Type: "image", MediaType: "image/png", Data: d}
+			part := Part{Type: "image", Data: d}
 			if mt, raw, ok := dataURL(d); ok {
 				part.MediaType, part.Data = mt, raw
+			} else {
+				part.MediaType = mediaTypeOfBase64(d)
 			}
 			out = append(out, part)
 		}
@@ -110,14 +112,24 @@ func (ollama) ParseRequest(path string, body []byte) (*Chat, error) {
 	default:
 		return nil, bad("%s is not an endpoint the ollama flavor serves", path)
 	}
+	// Ollama names no call ids, so tool turns answer the last assistant's calls in order
+	var pending []string
 	for _, m := range req.Messages {
 		msg := Message{Role: m.Role}
 		if m.Content != "" {
 			msg.Parts = append(msg.Parts, Part{Type: "text", Text: m.Content})
 		}
 		msg.Parts = append(msg.Parts, images(m.Images)...)
+		if len(m.ToolCalls) > 0 {
+			pending = pending[:0]
+		}
 		for i, t := range m.ToolCalls {
-			msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: newID("call") + "-" + string(rune('a'+i)), Name: t.Function.Name, Args: string(t.Function.Arguments)})
+			id := newID("call") + "-" + string(rune('a'+i))
+			pending = append(pending, id)
+			msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: id, Name: t.Function.Name, Args: string(t.Function.Arguments)})
+		}
+		if m.Role == "tool" && len(pending) > 0 {
+			msg.ToolID, pending = pending[0], pending[1:]
 		}
 		c.Messages = append(c.Messages, msg)
 	}
@@ -374,11 +386,21 @@ func (s *olStream) Write(ev Event) error {
 			resp.Message = &olMessage{Role: "assistant"}
 		}
 		return s.line(resp)
+	case "error":
+		data, err := json.Marshal(map[string]any{"error": ev.Text, "model": s.model, "created_at": olNow(), "done": true})
+		if err != nil {
+			return err
+		}
+		_, err = s.w.Write(append(data, '\n'))
+		flush(s.w)
+		return err
 	}
 	return nil
 }
 
 func (s *olStream) Close() error { return nil }
+
+func (ollama) InlineImages() bool { return true }
 
 func (ollama) ErrorMessage(body []byte) string {
 	var e struct {

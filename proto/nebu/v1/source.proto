@@ -255,6 +255,8 @@ message UpdateSourceResponse {
 // Removes a source, refused for seeded defaults
 message DeleteSourceRequest {
   string id = 1;
+  // Removes the watches of the source and widens the wants narrowed to it first
+  bool force = 2;
 }
 
 // Returns the removed source

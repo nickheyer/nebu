@@ -356,7 +356,7 @@
 
 <Dialog bind:open={adoptOpen} title="Adopt a binary for {adoptRuntime}" description="Records a binary already on this host as an install and probes its version and devices">
   <Field label="Executable path" for="adopt-path" hint="Leave empty to search PATH for the names the manifest lists">
-    <input id="adopt-path" class="input font-mono" bind:value={adoptPath} placeholder="/usr/local/bin/llama-server" />
+    <input id="adopt-path" class="input font-mono" bind:value={adoptPath} placeholder={runtimes.find((r) => r.manifest?.id === adoptRuntime)?.manifest?.acquire?.adopt.join(', ') || 'path to the binary'} />
   </Field>
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (adoptOpen = false)}>Cancel</Button>

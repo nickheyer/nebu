@@ -96,10 +96,12 @@ func NewHandler(d Deps) http.Handler {
 	if d.Gateway != nil && d.GatewayShared {
 		d.Gateway.Mount(mux)
 	} else {
-		// Keeps OpenAI paths from falling through to the single page app
-		mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "the gateway listens on its own address, see nebu gateway", http.StatusNotFound)
-		})
+		// Keeps gateway paths from falling through to the single page app
+		for _, path := range []string{"/v1/", "/api/", "/health"} {
+			mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "the gateway listens on its own address, see nebu gateway", http.StatusNotFound)
+			})
+		}
 	}
 	if d.Web != nil {
 		mux.Handle("/", d.Web)

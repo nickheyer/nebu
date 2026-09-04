@@ -448,6 +448,47 @@ func placements(plan *v1.MemoryPlan) string {
 	return strings.Join(parts, " ")
 }
 
+// Prints one runtime with its params, what --param and profiles may name
+func runRuntimesShow(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("runtimes show")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return fmt.Errorf("usage: nebu runtimes show <runtime>")
+	}
+	cl, err := e.clients()
+	if err != nil {
+		return err
+	}
+	resp, err := cl.runtimes.ListRuntimes(ctx, connect.NewRequest(&v1.ListRuntimesRequest{}))
+	if err != nil {
+		return err
+	}
+	var rt *v1.RuntimeStatus
+	for _, r := range resp.Msg.GetRuntimes() {
+		if r.GetManifest().GetId() == positional[0] {
+			rt = r
+		}
+	}
+	if rt == nil {
+		return fmt.Errorf("unknown runtime %q", positional[0])
+	}
+	return e.print(rt, func(w io.Writer) {
+		m := rt.GetManifest()
+		for _, pair := range [][2]string{{"id", m.GetId()}, {"name", m.GetName()}, {"formats", strings.Join(m.GetFormats(), ", ")}, {"api", eval.EnumShort(m.GetLaunch().GetApi())}, {"compatible", strconv.FormatBool(rt.GetCompatible())}, {"unmet", strings.Join(rt.GetUnmet(), "; ")}} {
+			fmt.Fprintf(w, "%-11s %s\n", pair[0], pair[1])
+		}
+		section(w, "params")
+		var rows [][]string
+		for _, p := range m.GetParams() {
+			rows = append(rows, []string{p.GetName(), eval.EnumShort(p.GetType()), p.GetDefault(), strings.Join(p.GetChoices(), ","), p.GetDescription()})
+		}
+		table(w, []string{"NAME", "TYPE", "DEFAULT", "CHOICES", "DESCRIPTION"}, rows)
+	})
+}
+
 func runRuntimes(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("runtimes")
 	if _, err := parse(fs, args); err != nil {

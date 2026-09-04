@@ -47,9 +47,11 @@ DO NOT WRITE TESTS JUST TO WRITE TESTS, NO MATTER WHAT THE BELOW SAYS. YOU SHOUL
     dialogs share `ParamForm`, a typed form built from `manifest.params` with types, choices,
     descriptions, and inherited values as placeholders, and the runtimes page edits profiles
     through the same form. Manifests validate every profile write. `nebu inspect --profile` and `--slot`
-    plan the same way, the inspector applies the same calibration delta a run does, a watch or
-    want resolves its profile when added and keeps the id, and a profile anything names is
-    removed only with `--force`, which clears the references.
+    plan the same way, the slot's runtime standing in when the request names none, the inspector
+    applies the same calibration delta a run does, a watch or want resolves its profile when
+    added and keeps the id, a swap keeps the request as prepared so the slot holds the profile by
+    id, and a profile anything a restart would relaunch names is removed only with `--force`,
+    which clears the references. `nebu runtimes show` prints the params a profile may name.
 
 15. **Four runtimes.** Done. llama.cpp, vLLM, SGLang, and NeMo each ship as a manifest, a
     recipe, and triage rules under `spec/`, and no Go file names any of them. SGLang was the
@@ -78,7 +80,13 @@ DO NOT WRITE TESTS JUST TO WRITE TESTS, NO MATTER WHAT THE BELOW SAYS. YOU SHOUL
     rate or a pause, followed live by one retuned token bucket in `transfer.Schedule`. Eviction and gc
     wait for pulls in flight and drop only the evicted model's orphaned blobs, the model being
     pulled is spared, planning does not touch `used_at`, and recipe fetches and CLI or LFS
-    downloads follow the limits and paused windows too.
+    downloads follow the limits and paused windows too. Pulls in flight reserve their bytes
+    against the cap, a launch holds its model's key so an eviction waits and then spares it, a
+    pause that begins mid chunk closes the connection without spending a retry, the HTTP client
+    bounds only the steps a server can hang on, git clones and git served files wait for the
+    schedule, a Hugging Face source moves chunk by chunk under any limit rather than through its
+    CLI, the store announces its totals on the stream, and removal and verification take the
+    same locks a pull does.
 
 18. **Three flavors, TLS, and CORS.** Done. `ApiFlavor` names OpenAI, Anthropic, and Ollama,
     each one `Flavor` in `internal/gateway` that reads and writes requests, answers, streams, and
@@ -90,7 +98,12 @@ DO NOT WRITE TESTS JUST TO WRITE TESTS, NO MATTER WHAT THE BELOW SAYS. YOU SHOUL
     a token, or keys is warned about at start. The CLI dials https and trusts the configured
     certificate, preflights allow whatever headers the SDK asks, `/v1/models/NAME`, the Ollama
     heartbeat at `/`, `count_tokens` through the runtime's `/tokenize` or an estimate, and 413
-    on oversized bodies answer too, and a slot's limit edits reach its live route at once.
+    on oversized bodies answer too, and a slot's limit edits reach its live route at once. A route
+    carries the name the runtime serves, sent upstream in place of the route name so aliases and
+    slots reach vLLM and SGLang, a stream that breaks off ends with an error in the caller's
+    shape, Ollama tool results are tied to their calls and its images typed by their bytes, URL
+    images are fetched for it, counters reach the stream once a second, and the keys warning
+    covers a gateway sharing an exposed API listener.
 
 19. **Every operating system.** Done. `pkg/proc` is the one place processes are started, found,
     and stopped: a group with a parent-death signal on Linux, a group elsewhere on Unix, and on
@@ -99,7 +112,12 @@ DO NOT WRITE TESTS JUST TO WRITE TESTS, NO MATTER WHAT THE BELOW SAYS. YOU SHOUL
     and the build sandbox both use it. Windows storage reads the volume, and Windows and macOS
     hosts get memory and CPU probes, so planning has a host pool everywhere. The tree compiles for
     linux, windows, darwin, and freebsd. Windows and macOS probe GPUs of any vendor, macOS counts
-    reclaimable pages as free, and the prepare step runs under `pkg/proc` too.
+    reclaimable pages as free, and the prepare step runs under `pkg/proc` too. Apple silicon's
+    memory is one unified pool, probes select by `arch` beside `os`, AMD and Windows cards report
+    free bytes and an `index` fact every launch template pins by, the daemon on Windows claims a
+    console its children share and a job they inherit and breaks into a foreign console through a
+    copy of itself, darwin and FreeBSD read their mounts from statfs, the data dir is the
+    platform's own, and the stub for platforms that cannot exec is gone.
 
 ## NeMo
 
@@ -117,21 +135,25 @@ DO NOT WRITE TESTS JUST TO WRITE TESTS, NO MATTER WHAT THE BELOW SAYS. YOU SHOUL
     standing search kept as a row: query, provider or source, format, group regex, and the pull
     and swap settings a watch has; the monitor runs it on the interval, resolves the first hits,
     and the first matching weight group satisfies it with a `wanted_found` finding, a pull, and a
-    swap. Findings now name their source and belong to a watch or a want. Every finding reaches
-    the web UI as a toast wherever you are, desktop notifications are a settings toggle, and
-    `notify.webhooks` posts each finding and each failed instance as JSON. Findings list by
-    want id, a satisfied want looks again with `--rearm`, and the notifier exits with the daemon.
+    swap. Findings now name their source and belong to a watch or a want, and carry the swap
+    their pull set off. Every finding reaches the web UI as a toast wherever you are, desktop
+    notifications are a settings toggle, and `notify.webhooks` posts each finding and each
+    failed instance as JSON through a queue with retries. Findings list by want id, a satisfied
+    want looks again with `--rearm`, one check owns each watch and want it touches, a want's
+    format, runtime, and kind are checked when added, the fan out drops per provider sorts and
+    facets, a pruned finding leaves the stream, and the monitor and notifier live as long as the
+    daemon. Removing a slot or a source that watches and wants name is refused until forced.
 
 ## Interactive
 
-21. **Prompts.** Done. The web chat page and `nebu chat` both talk to a ready route through the
+22. **Prompts.** Done. The web chat page and `nebu chat` both talk to a ready route through the
     gateway itself, streaming, with a system prompt, temperature, and a token cap, showing tokens
     and tokens per second per answer. A running instance's drawer opens the chat on it. `nebu chat` checks the
     route is ready first, and a slot instance's drawer opens the chat on the slot name.
 
 ## DB
 
-22. **One migration, written by atlas.** Done. `internal/db/schema.sql` is the schema, `atlas.hcl`
+23. **One migration, written by atlas.** Done. `internal/db/schema.sql` is the schema, `atlas.hcl`
     points atlas at it, and `make migrate-reset` writes the single init migration and its
     `atlas.sum` from it, the rule until release, with `migrate-diff`, `migrate-hash`,
     `migrate-validate`, and `migrate-status` beside it through the same docker image discopanel
@@ -139,4 +161,7 @@ DO NOT WRITE TESTS JUST TO WRITE TESTS, NO MATTER WHAT THE BELOW SAYS. YOU SHOUL
     the directory against `atlas.sum` first, logs any drift between the live schema and
     `schema.sql`, and sets a database from the hand rolled runner aside as a dated copy instead of
     failing on it. A database whose revision the rewritten directory no longer holds is
-    diffed against `schema.sql`, brought to the head in place with its rows kept, and baselined. 
+    diffed against `schema.sql`, brought to the head in place with its rows kept, and baselined,
+    behind a dated copy of the file and as one transaction, drift naming the column or index.
+    The instance and slot requests keep `force`, plans keep the correction they carried, routes
+    keep the served name, findings and wants keep the swap they set off. 

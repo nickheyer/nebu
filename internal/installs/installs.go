@@ -58,11 +58,11 @@ type Manager struct {
 }
 
 func (m *Manager) publishInstall(in *v1.Install, action v1.EventAction) {
-	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTALL, action, in.GetId(), &v1.Event_Install{Install: in})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTALL, action, in.GetId(), in)
 }
 
 func (m *Manager) publishBuild(b *v1.Build, action v1.EventAction) {
-	m.Events.Publish(v1.EventKind_EVENT_KIND_BUILD, action, b.GetId(), &v1.Event_Build{Build: b})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_BUILD, action, b.GetId(), b)
 }
 
 // Lists installs newest first, optionally for one runtime

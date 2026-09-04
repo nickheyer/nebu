@@ -32,6 +32,8 @@ var (
 	ErrUnknownSlot = errors.New("unknown slot")
 	// Returned when a slot is busy or a request malformed
 	ErrSlot = errors.New("invalid slot request")
+	// Returned when a slot cannot go because a watch or want swaps into it
+	ErrSlotInUse = errors.New("slot in use")
 )
 
 // Owns every slot and drives swaps
@@ -49,6 +51,8 @@ type Manager struct {
 	slots map[string]*v1.Slot
 	// Slots a swap, evict, or delete is working on right now
 	busy map[string]bool
+	// Names what swaps into a slot, watches and wants, dropping the swap when clear is set
+	Referrers func(id string, clear bool) []string
 }
 
 // Reserves a slot for one operation, refusing while another holds it or a swap runs
@@ -186,7 +190,7 @@ func (m *Manager) update(id string, fn func(*v1.Slot)) *v1.Slot {
 	if err := m.DB.PutSlot(context.Background(), snapshot); err != nil {
 		m.Log.Warn("slot record write failed", "id", id, "err", err)
 	}
-	m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_UPDATED, id, &v1.Event_Slot{Slot: snapshot})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_UPDATED, id, snapshot)
 	return snapshot
 }
 
@@ -245,7 +249,7 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 	m.slots[s.GetId()] = s
 	m.mu.Unlock()
 	m.Routes.Pending(name, s.GetId(), "", s.GetPolicy())
-	m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_CREATED, s.GetId(), &v1.Event_Slot{Slot: s})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_CREATED, s.GetId(), s)
 	return proto.Clone(s).(*v1.Slot), nil
 }
 
@@ -332,6 +336,13 @@ func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Slot, 
 			return nil, err
 		}
 	}
+	if m.Referrers != nil {
+		if used := m.Referrers(s.GetId(), false); len(used) > 0 && !force {
+			return nil, fmt.Errorf("%w: slot %s is swapped into by %s, point them elsewhere or pass --force to drop the swap", ErrSlotInUse, s.GetName(), strings.Join(used, ", "))
+		} else if len(used) > 0 {
+			m.Referrers(s.GetId(), true)
+		}
+	}
 	if _, err := m.DB.DeleteSlot(ctx, s.GetId()); err != nil {
 		return nil, err
 	}
@@ -339,7 +350,7 @@ func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Slot, 
 	delete(m.slots, s.GetId())
 	m.mu.Unlock()
 	m.Routes.Delete(s.GetName())
-	m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_DELETED, s.GetId(), &v1.Event_Slot{Slot: s})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_DELETED, s.GetId(), s)
 	return s, nil
 }
 
@@ -396,8 +407,9 @@ func (m *Manager) Swap(ctx context.Context, req *v1.SwapRequest) (*v1.Slot, *v1.
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		// The instance holds the request as prepared, its profile by id and its runtime named
 		s = m.update(s.GetId(), func(sl *v1.Slot) {
-			sl.InstanceId, sl.State, sl.Error, sl.TaskId, sl.Request = in.GetId(), v1.SlotState_SLOT_STATE_STARTING, "", task.GetId(), run
+			sl.InstanceId, sl.State, sl.Error, sl.TaskId, sl.Request = in.GetId(), v1.SlotState_SLOT_STATE_STARTING, "", task.GetId(), in.GetRequest()
 		})
 		return s, in, task, nil
 	}
@@ -445,7 +457,7 @@ func (m *Manager) swapBlueGreen(ctx context.Context, h *tasks.Handle, s *v1.Slot
 		return err
 	}
 	h.Progress(1, 3, "switching route")
-	m.update(s.GetId(), func(sl *v1.Slot) { sl.InstanceId, sl.Request = fresh.GetId(), run })
+	m.update(s.GetId(), func(sl *v1.Slot) { sl.InstanceId, sl.Request = fresh.GetId(), fresh.GetRequest() })
 	m.route(m.mustFind(s.GetId()), fresh)
 	h.Logf("route %s now serves %s", s.GetName(), fresh.GetId())
 	h.Progress(2, 3, "draining "+old.GetId())
@@ -461,7 +473,7 @@ func (m *Manager) swapBlueGreen(ctx context.Context, h *tasks.Handle, s *v1.Slot
 // Drains the old, starts the new, rolls back on failure
 func (m *Manager) swapDrainFirst(ctx context.Context, h *tasks.Handle, s *v1.Slot, old *v1.Instance, run *v1.RunRequest) error {
 	h.Progress(0, 3, "draining "+old.GetId())
-	m.Routes.Pending(s.GetName(), s.GetId(), modelOf(run), s.GetPolicy())
+	m.Routes.Pending(s.GetName(), s.GetId(), modelOf(run), m.mustFind(s.GetId()).GetPolicy())
 	m.Instances.Drain(ctx, old.GetId(), m.DrainTimeout)
 	if _, err := m.Instances.Stop(ctx, old.GetId()); err != nil {
 		m.settle(s, nil, "", err)
@@ -485,7 +497,7 @@ func (m *Manager) swapDrainFirst(ctx context.Context, h *tasks.Handle, s *v1.Slo
 			return gerr
 		}
 		h.Progress(2, 3, "switching route")
-		m.update(s.GetId(), func(sl *v1.Slot) { sl.Request = run })
+		m.update(s.GetId(), func(sl *v1.Slot) { sl.Request = fresh.GetRequest() })
 		m.route(m.mustFind(s.GetId()), fresh)
 		m.update(s.GetId(), func(sl *v1.Slot) { sl.State, sl.Error = v1.SlotState_SLOT_STATE_READY, "" })
 		h.Progress(3, 3, "ready")
@@ -534,7 +546,7 @@ func (m *Manager) settle(s *v1.Slot, serving *v1.Instance, note string, err erro
 		sl.Error = strings.TrimSpace(note + " " + err.Error())
 	})
 	if serving == nil {
-		m.Routes.Pending(s.GetName(), s.GetId(), "", s.GetPolicy())
+		m.Routes.Pending(s.GetName(), s.GetId(), "", m.mustFind(s.GetId()).GetPolicy())
 	}
 }
 
@@ -545,7 +557,7 @@ func (m *Manager) mustFind(id string) *v1.Slot {
 
 // Points the slot name at an instance
 func (m *Manager) route(s *v1.Slot, in *v1.Instance) {
-	m.Routes.Set(s.GetName(), in.GetId(), s.GetId(), in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), m.api(in), s.GetPolicy())
+	m.Routes.Set(s.GetName(), in.GetId(), s.GetId(), in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), in.GetName(), m.api(in), s.GetPolicy())
 }
 
 func (m *Manager) api(in *v1.Instance) v1.ApiFlavor {

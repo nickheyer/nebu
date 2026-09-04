@@ -85,12 +85,16 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 		}
 	}
 	// The cap is kept by evicting what has sat unused longest before the bytes arrive, this model staying
-	evicted, err := p.Store.Evict(need, func(m *v1.StoredModel) bool {
+	evicted, release, err := p.Store.Evict(need, func(m *v1.StoredModel) bool {
 		return store.Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()) == key || (p.Keep != nil && p.Keep(m))
 	})
+	defer release()
 	for _, m := range evicted {
 		h.Logf("evicted %s %s, unused since %s", m.GetRepo(), m.GetGroup(), store.LastUse(m).Format(time.RFC3339))
-		p.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_DELETED, store.Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()), &v1.Event_Model{Model: m})
+		p.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_DELETED, store.Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()), m)
+	}
+	if len(evicted) > 0 {
+		p.AnnounceStore()
 	}
 	if err != nil {
 		return fmt.Errorf("evict: %w", err)
@@ -128,23 +132,30 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 	}
 	h.Progress(total, total, "done")
 	h.Logf("stored at %s", stored.Path)
-	p.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_CREATED, store.Key(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup()), &v1.Event_Model{Model: stored})
+	p.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_CREATED, store.Key(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup()), stored)
+	p.AnnounceStore()
 	return nil
+}
+
+// Tells the stream what the store holds now
+func (p *Puller) AnnounceStore() {
+	if st, err := p.Store.Status(); err == nil {
+		p.Events.Publish(v1.EventKind_EVENT_KIND_STORE, v1.EventAction_EVENT_ACTION_UPDATED, st.GetPath(), st)
+	}
 }
 
 // Ensures one artifact's blob exists and returns its digest
 func (p *Puller) fetch(ctx context.Context, h *tasks.Handle, src sources.Source, model *v1.Model, a *v1.Artifact) (string, error) {
 	size := int64(a.GetSizeBytes())
-	if a.GetSha256() != "" && p.Store.HasBlob(store.Digest(a.GetSha256())) {
-		h.Add(size)
-		h.Logf("%s already stored", a.GetPath())
-		return store.Digest(a.GetSha256()), nil
-	}
 	blob, err := src.Open(ctx, model, a)
 	if err != nil {
 		return "", err
 	}
 	defer blob.Close()
+	// A tool that moves whole files cannot follow a rate or a pause, so the ranged half serves under limits
+	if r, ok := blob.(sources.Ranged); ok && p.Fetcher.Schedule.Limits() {
+		blob = r.Ranged()
+	}
 	if whole, ok := blob.(sources.Materializer); ok {
 		// A blob already on disk names its file, anything else moves bytes and waits out a paused window
 		if _, onDisk := blob.(interface{ Name() string }); !onDisk {
@@ -191,6 +202,7 @@ func (p *Puller) fetch(ctx context.Context, h *tasks.Handle, src sources.Source,
 	defer unlock()
 	if a.GetSha256() != "" && p.Store.HasBlob(store.Digest(a.GetSha256())) {
 		h.Add(size)
+		h.Logf("%s already stored", a.GetPath())
 		return store.Digest(a.GetSha256()), nil
 	}
 	h.Message("downloading " + a.GetPath())
@@ -261,21 +273,28 @@ func (p *Puller) verify(ctx context.Context, h *tasks.Handle, models []*v1.Store
 				h.Add(int64(sa.GetArtifact().GetSizeBytes()))
 				continue
 			}
+			// A pull landing the same blob waits for the verdict rather than racing it
+			unlock := p.Store.Lock("blob:" + sa.GetDigest())
 			got, err := transfer.HashFile(p.Store.BlobPath(sa.GetDigest()), func(d int64) { h.Add(d) })
 			if err != nil {
+				unlock()
 				return err
 			}
 			if store.Digest(got) != sa.GetDigest() {
 				bad++
 				h.Logf("%s %s corrupt, removing blob %s", m.GetRepo(), sa.GetArtifact().GetPath(), sa.GetDigest())
 				if err := p.Store.RemoveBlob(sa.GetDigest()); err != nil {
+					unlock()
 					return err
 				}
+				p.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_UPDATED, store.Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()), m)
 			}
+			unlock()
 		}
 	}
 	h.Progress(total, total, "done")
 	if bad > 0 {
+		p.AnnounceStore()
 		return fmt.Errorf("%d artifacts failed verification, pull again to repair", bad)
 	}
 	return nil

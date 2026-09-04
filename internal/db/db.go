@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 	"time"
 
 	"ariga.io/atlas/sql/migrate"
@@ -32,7 +33,8 @@ var ErrNotFound = errors.New("not found")
 
 // Open store
 type DB struct {
-	sql *sql.DB
+	sql  *sql.DB
+	path string
 	// Where a database from before the atlas migrations was moved, empty when none was
 	SetAside string
 	// Ways the live schema differs from schema.sql, empty when none
@@ -53,7 +55,7 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 	sqldb.SetMaxOpenConns(1)
-	d := &DB{sql: sqldb, SetAside: aside}
+	d := &DB{sql: sqldb, path: path, SetAside: aside}
 	if err := d.migrate(context.Background()); err != nil {
 		sqldb.Close()
 		return nil, err
@@ -118,7 +120,7 @@ func (d *DB) migrate(ctx context.Context) error {
 		return err
 	}
 	revs := revisionStore{conn}
-	if d.Baselined, err = baseline(ctx, drv, dir, revs); err != nil {
+	if d.Baselined, err = baseline(ctx, drv, conn, d.path, dir, revs); err != nil {
 		return err
 	}
 	ex, err := migrate.NewExecutor(drv, dir, revs, migrate.WithOperatorVersion(operator))
@@ -140,7 +142,7 @@ func (d *DB) migrate(ctx context.Context) error {
 //
 // The init migration is rewritten until release, so a recorded version can vanish
 // from the directory, and atlas would replay CREATE TABLE onto a populated file.
-func baseline(ctx context.Context, drv migrate.Driver, dir migrate.Dir, store revisionStore) (string, error) {
+func baseline(ctx context.Context, drv migrate.Driver, conn *sql.Conn, path string, dir migrate.Dir, store revisionStore) (string, error) {
 	all, err := dir.Files()
 	if err != nil {
 		return "", err
@@ -185,7 +187,7 @@ func baseline(ctx context.Context, drv migrate.Driver, dir migrate.Dir, store re
 		return "", err
 	}
 	if len(changes) > 0 {
-		if err := drv.ApplyChanges(ctx, changes); err != nil {
+		if err := applyChanges(ctx, drv, conn, path, changes); err != nil {
 			return "", fmt.Errorf("baseline: %w", err)
 		}
 	}
@@ -204,6 +206,69 @@ func baseline(ctx context.Context, drv migrate.Driver, dir migrate.Dir, store re
 		return "", err
 	}
 	return fmt.Sprintf("%s, so the schema was brought to %s in place with %d changes", why, head.Version(), len(changes)), nil
+}
+
+// Runs a plan for the changes as one transaction, behind a dated copy of the file
+//
+// A table rebuilt in place is a create, copy, drop, and rename, so the file is
+// copied first and the statements commit together, the foreign key pragmas
+// atlas wraps them in staying outside where they take effect.
+func applyChanges(ctx context.Context, drv migrate.Driver, conn *sql.Conn, path string, changes []schema.Change) error {
+	plan, err := drv.PlanChanges(ctx, "baseline", changes)
+	if err != nil {
+		return err
+	}
+	if _, err := copyAside(ctx, conn, path, "pre-baseline"); err != nil {
+		return err
+	}
+	var before, body, after []string
+	for _, c := range plan.Changes {
+		switch {
+		case !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(c.Cmd)), "PRAGMA"):
+			body = append(body, c.Cmd)
+		case len(body) == 0:
+			before = append(before, c.Cmd)
+		default:
+			after = append(after, c.Cmd)
+		}
+	}
+	run := func(stmts []string) error {
+		for _, stmt := range stmts {
+			if _, err := conn.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("%s: %w", stmt, err)
+			}
+		}
+		return nil
+	}
+	if err := run(before); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
+		return err
+	}
+	if err := run(body); err != nil {
+		conn.ExecContext(ctx, "ROLLBACK")
+		run(after)
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return err
+	}
+	return run(after)
+}
+
+// Writes the database as it stands to a dated copy beside it, the log folded in first
+func copyAside(ctx context.Context, conn *sql.Conn, path, why string) (string, error) {
+	if path == "" || path == ":memory:" {
+		return "", nil
+	}
+	conn.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	aside := fmt.Sprintf("%s.%s.%s", path, why, time.Now().UTC().Format("20060102T150405"))
+	return aside, os.WriteFile(aside, data, 0o600)
 }
 
 // Copies the embedded migration files into an atlas memory dir
@@ -268,13 +333,39 @@ func describe(changes []schema.Change) []string {
 			out = append(out, "table "+c.T.Name+" unexpected")
 		case *schema.ModifyTable:
 			for _, sub := range c.Changes {
-				out = append(out, fmt.Sprintf("table %s %T", c.T.Name, sub))
+				out = append(out, "table "+c.T.Name+" "+describeChange(sub))
 			}
 		default:
 			out = append(out, fmt.Sprintf("%T", c))
 		}
 	}
 	return out
+}
+
+func describeChange(c schema.Change) string {
+	switch c := c.(type) {
+	case *schema.AddColumn:
+		return "column " + c.C.Name + " missing"
+	case *schema.DropColumn:
+		return "column " + c.C.Name + " unexpected"
+	case *schema.ModifyColumn:
+		return "column " + c.From.Name + " differs"
+	case *schema.AddIndex:
+		return "index " + c.I.Name + " missing"
+	case *schema.DropIndex:
+		return "index " + c.I.Name + " unexpected"
+	case *schema.ModifyIndex:
+		return "index " + c.From.Name + " differs"
+	case *schema.AddForeignKey:
+		return "foreign key " + c.F.Symbol + " missing"
+	case *schema.DropForeignKey:
+		return "foreign key " + c.F.Symbol + " unexpected"
+	case *schema.ModifyForeignKey:
+		return "foreign key " + c.From.Symbol + " differs"
+	case *schema.AddPrimaryKey, *schema.DropPrimaryKey, *schema.ModifyPrimaryKey:
+		return "primary key differs"
+	}
+	return fmt.Sprintf("%T", c)
 }
 
 // Returns the applied migration versions in order

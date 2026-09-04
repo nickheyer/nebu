@@ -292,6 +292,9 @@ func runTasksWatch(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu tasks watch <id>")
 	}
+	if err := e.requireDaemon(); err != nil {
+		return err
+	}
 	cl, err := e.clients()
 	if err != nil {
 		return err
@@ -315,6 +318,9 @@ func runTasksCancel(ctx context.Context, e *env, args []string) error {
 	}
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu tasks cancel <id>")
+	}
+	if err := e.requireDaemon(); err != nil {
+		return err
 	}
 	cl, err := e.clients()
 	if err != nil {

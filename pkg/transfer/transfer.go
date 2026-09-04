@@ -64,6 +64,10 @@ func (f *Fetcher) Hold(ctx context.Context) error { return f.wait(ctx, 0) }
 func (f *Fetcher) wait(ctx context.Context, n int) error {
 	for {
 		bps, pause := f.Schedule.At(time.Now())
+		if pause && n > 0 {
+			// Bytes are flowing on an open connection, which closes rather than idle through the pause
+			return errPaused
+		}
 		if pause {
 			select {
 			case <-ctx.Done():
@@ -250,6 +254,11 @@ func (f *Fetcher) retry(ctx context.Context, progress Progress, try func() (int6
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// A pause is not a failure, the chunk starts again once the window ends
+		if errors.Is(err, errPaused) {
+			attempt--
+			continue
+		}
 		last = err
 	}
 	return last
@@ -278,6 +287,9 @@ func (f *Fetcher) copyChunk(ctx context.Context, blob sources.Blob, file *os.Fil
 	reader := &meter{ctx: ctx, r: io.LimitReader(rc, length), fetcher: f, progress: progress}
 	return io.Copy(io.NewOffsetWriter(file, off), reader)
 }
+
+// Signals that a paused window began while bytes were flowing
+var errPaused = errors.New("transfer paused by a window")
 
 // Reports progress and applies the rate limit as bytes flow
 type meter struct {

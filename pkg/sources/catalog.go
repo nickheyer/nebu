@@ -21,6 +21,8 @@ type Catalog struct {
 	Name string
 	// What people call the seeded default when it is a particular site, Docker Hub for an OCI registry
 	Seed string
+	// Settings the seeded default starts with beyond the provider defaults, the site's own endpoints
+	SeedConfig map[string]string
 	// The site people browse, when it is not the primary endpoint
 	Web string
 	// Path of the browse page under the site, such as /models
@@ -82,6 +84,11 @@ type Reviser interface {
 // API that serves a description for a repository
 type Carder interface {
 	Card(ctx context.Context, c *Client, repo, revision string) (*v1.ModelCard, error)
+}
+
+// Implemented by an API that can list only when the source names a transport
+type Browser interface {
+	Browses(c *Client) bool
 }
 
 // API whose facets come from the catalog itself, read on demand and kept for a while

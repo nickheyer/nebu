@@ -46,7 +46,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/triage"
 	specfs "github.com/nickheyer/nebu/spec"
 	web "github.com/nickheyer/nebu/web/nebu"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/proto"
 )
 
 // What the daemon reports as its version, set by the CLI from build info
@@ -85,8 +85,11 @@ type Daemon struct {
 	handler   http.Handler
 	cancel    context.CancelFunc
 	closeOnce sync.Once
-	addr      string
-	secure    bool
+	// The monitor and notifier, waited for on close
+	background sync.WaitGroup
+	base       context.Context
+	addr       string
+	secure     bool
 }
 
 // Builds every manager from config
@@ -169,7 +172,7 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	base, cancel := context.WithCancel(context.Background())
 	// Every re-probe reaches the UI, so device meters follow launches and stops
 	prober.OnProbe = func(profile *v1.HostProfile) {
-		bus.Publish(v1.EventKind_EVENT_KIND_HOST, v1.EventAction_EVENT_ACTION_UPDATED, profile.GetHostname(), &v1.Event_Host{Host: profile})
+		bus.Publish(v1.EventKind_EVENT_KIND_HOST, v1.EventAction_EVENT_ACTION_UPDATED, profile.GetHostname(), profile)
 	}
 	d := &Daemon{
 		Config:   cfg,
@@ -184,6 +187,7 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		Tasks:    tasks.New(base, log, store, bus),
 		Log:      log,
 		cancel:   cancel,
+		base:     base,
 	}
 	d.Inspector = &inspect.Inspector{
 		Sources:    srcs,
@@ -243,7 +247,7 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	}
 	// Every plan, the fit table's and a run's, applies the same learned correction
 	d.Inspector.Delta = calibration.Delta
-	routes, err := gateway.OpenTable(context.Background(), store, bus)
+	routes, err := gateway.OpenTable(context.Background(), store, bus, log)
 	if err != nil {
 		store.Close()
 		return nil, err
@@ -290,12 +294,12 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		}
 		return false
 	}
-	d.Inspector.Constrain = func(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, map[string]string, error) {
+	d.Inspector.Constrain = func(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, string, map[string]string, error) {
 		res, err := d.Slots.Reservation(ctx, slotID)
 		if err != nil {
-			return nil, nil, err
+			return nil, "", nil, err
 		}
-		return instances.Constrain(profile, res.DeviceIDs, res.MemoryBytes), res.Params, nil
+		return instances.Constrain(profile, res.DeviceIDs, res.MemoryBytes), res.RuntimeID, res.Params, nil
 	}
 	d.Monitor = &monitor.Manager{
 		DB:        store,
@@ -319,6 +323,9 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		out = append(out, d.Slots.ProfileReferrers(refers, clear)...)
 		return append(out, d.Instances.ProfileReferrers(refers, clear)...)
 	}
+	// A slot or a source goes only when nothing swaps into it or watches through it, unless forced
+	d.Slots.Referrers = d.Monitor.SlotReferrers
+	srcMgr.Referrers = d.Monitor.SourceReferrers
 	d.Notifier = &notify.Notifier{Webhooks: cfg.GetNotify().GetWebhooks(), Events: bus, Log: log}
 	d.Gateway = gateway.New(routes, cfg.GetGateway().GetApiKeys(), cfg.GetGateway().GetCorsOrigins(), cfg.GetGateway().GetPolicy(), log)
 	d.Gateway.SetVersion(Version)
@@ -362,40 +369,10 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 	}
 	all := len(kinds) == 0
 	var out []*v1.Event
-	add := func(kind v1.EventKind, id string, payload any) {
-		if !all && !want[kind] {
-			return
+	add := func(kind v1.EventKind, id string, record proto.Message) {
+		if all || want[kind] {
+			out = append(out, events.Event(kind, v1.EventAction_EVENT_ACTION_CREATED, id, record))
 		}
-		ev := &v1.Event{Kind: kind, Action: v1.EventAction_EVENT_ACTION_CREATED, Id: id, At: timestamppb.Now()}
-		switch p := payload.(type) {
-		case *v1.HostProfile:
-			ev.Payload = &v1.Event_Host{Host: p}
-		case *v1.Task:
-			ev.Payload = &v1.Event_Task{Task: p}
-		case *v1.Instance:
-			ev.Payload = &v1.Event_Instance{Instance: p}
-		case *v1.Slot:
-			ev.Payload = &v1.Event_Slot{Slot: p}
-		case *v1.Route:
-			ev.Payload = &v1.Event_Route{Route: p}
-		case *v1.Install:
-			ev.Payload = &v1.Event_Install{Install: p}
-		case *v1.Build:
-			ev.Payload = &v1.Event_Build{Build: p}
-		case *v1.StoredModel:
-			ev.Payload = &v1.Event_Model{Model: p}
-		case *v1.Watch:
-			ev.Payload = &v1.Event_Watch{Watch: p}
-		case *v1.Finding:
-			ev.Payload = &v1.Event_Finding{Finding: p}
-		case *v1.Source:
-			ev.Payload = &v1.Event_Source{Source: p}
-		case *v1.Profile:
-			ev.Payload = &v1.Event_Profile{Profile: p}
-		case *v1.Want:
-			ev.Payload = &v1.Event_Want{Want: p}
-		}
-		out = append(out, ev)
 	}
 	if all || want[v1.EventKind_EVENT_KIND_HOST] {
 		if profile, err := d.Host.Profile(ctx, false); err == nil {
@@ -435,6 +412,9 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 			add(v1.EventKind_EVENT_KIND_MODEL, store.Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()), m)
 		}
 	}
+	if st, err := d.Store.Status(); err == nil {
+		add(v1.EventKind_EVENT_KIND_STORE, st.GetPath(), st)
+	}
 	for _, w := range d.Monitor.List() {
 		add(v1.EventKind_EVENT_KIND_WATCH, w.GetId(), w)
 	}
@@ -454,6 +434,7 @@ func (d *Daemon) Close() {
 	d.closeOnce.Do(func() {
 		d.Instances.Close()
 		d.cancel()
+		d.background.Wait()
 		drain, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		d.Tasks.Drain(drain)
@@ -528,7 +509,8 @@ func (d *Daemon) warnExposure(secure bool) {
 		if addr == d.Config.GetListen() && d.Config.GetAuth().GetToken() == "" {
 			d.Log.Warn("the api listens beyond loopback with no auth.token, anyone who can reach it controls this daemon", "addr", addr)
 		}
-		if addr == d.Config.GetGateway().GetListen() && len(d.Config.GetGateway().GetApiKeys()) == 0 {
+		shared := d.Config.GetGateway().GetListen() == "" && addr == d.Config.GetListen()
+		if (addr == d.Config.GetGateway().GetListen() || shared) && len(d.Config.GetGateway().GetApiKeys()) == 0 {
 			d.Log.Warn("the gateway listens beyond loopback with no gateway.api_keys", "addr", addr)
 		}
 	}
@@ -565,8 +547,14 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 		}
 		return err
 	}
-	go d.Monitor.Run(ctx)
-	go d.Notifier.Run(ctx)
+	// Both live as long as the daemon, not as long as one Serve call
+	for _, run := range []func(context.Context){d.Monitor.Run, d.Notifier.Run} {
+		d.background.Add(1)
+		go func() {
+			defer d.background.Done()
+			run(d.base)
+		}()
+	}
 	// Request contexts hang off this one so open streams end when serving stops
 	requests, endRequests := context.WithCancel(context.Background())
 	defer endRequests()

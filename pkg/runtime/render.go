@@ -44,14 +44,14 @@ func (in RenderInput) context() map[string]any {
 // Flattens a descriptor into the shape launch templates read
 //
 // Params and metadata are maps so a template can ask for a key that may be
-// absent through index and default. Always present, empty without a
-// descriptor, so templates never trip missingkey on it.
+// absent through index, a missing metadata key rendering empty and dropped.
+// Always present, empty without a descriptor, so templates never trip missingkey on it.
 func DescriptorView(d *v1.Descriptor) map[string]any {
 	params := make(map[string]any, len(d.GetParams()))
 	for k, v := range d.GetParams() {
 		params[k] = v
 	}
-	metadata := make(map[string]any, len(d.GetMetadata()))
+	metadata := make(map[string]string, len(d.GetMetadata()))
 	for k, v := range d.GetMetadata() {
 		metadata[k] = v
 	}

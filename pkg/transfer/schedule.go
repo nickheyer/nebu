@@ -12,7 +12,10 @@ import (
 // How often a paused download checks whether its window has passed
 const pausePoll = 15 * time.Second
 
-var dayNames = []string{"sun", "mon", "tue", "wed", "thu", "fri", "sat"}
+var (
+	dayNames = []string{"sun", "mon", "tue", "wed", "thu", "fri", "sat"}
+	dayFull  = []string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"}
+)
 
 type window struct {
 	days     [7]bool
@@ -45,6 +48,11 @@ func NewSchedule(base uint64, specs []*v1.TransferWindow) (*Schedule, error) {
 		s.windows = append(s.windows, w)
 	}
 	return s, nil
+}
+
+// Whether the schedule ever limits or holds anything
+func (s *Schedule) Limits() bool {
+	return s != nil && (s.base > 0 || len(s.windows) > 0)
 }
 
 // Returns the limit in force at t, and whether downloads are held
@@ -104,10 +112,11 @@ func parseDays(text string) ([7]bool, error) {
 	return out, nil
 }
 
+// Reads a day by its three letter name or its full name, nothing looser
 func dayIndex(name string) (int, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	for i, d := range dayNames {
-		if strings.HasPrefix(name, d) && name != "" {
+		if name == d || name == dayFull[i] {
 			return i, nil
 		}
 	}
@@ -125,7 +134,7 @@ func parseClock(text string, empty int) (int, error) {
 		return 0, fmt.Errorf("%q is not HH:MM", text)
 	}
 	min, err := strconv.Atoi(m)
-	if err != nil || min < 0 || min > 59 {
+	if err != nil || min < 0 || min > 59 || hour == 24 && min != 0 {
 		return 0, fmt.Errorf("%q is not HH:MM", text)
 	}
 	return hour*60 + min, nil

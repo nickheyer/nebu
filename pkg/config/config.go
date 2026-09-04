@@ -214,7 +214,20 @@ func splitKeys(s string) []string {
 	return out
 }
 
+// Where the platform keeps application data, XDG on unix
 func dataHome() (string, error) {
+	switch runtime.GOOS {
+	case "windows":
+		if v := os.Getenv("LOCALAPPDATA"); v != "" {
+			return v, nil
+		}
+	case "darwin":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, "Library", "Application Support"), nil
+	}
 	if v := os.Getenv("XDG_DATA_HOME"); v != "" {
 		return v, nil
 	}

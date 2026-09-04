@@ -43,9 +43,9 @@ func TestRenderAndMeasure(t *testing.T) {
 	pinned, err := rt.Render(RenderInput{
 		Name: "qwen", Params: params, Artifacts: map[string]string{"weights": "/store/m.gguf"}, Host: "127.0.0.1", Port: 1, Install: map[string]string{"path": "/opt/llama-server"},
 		Devices: []map[string]any{
-			{"id": "GPU-aaaa", "kind": "gpu", "vendor": "nvidia", "facts": map[string]any{"index": "1"}},
-			{"id": "GPU-bbbb", "kind": "gpu", "vendor": "nvidia", "facts": map[string]any{"index": "3"}},
-			{"id": "card2", "kind": "gpu", "vendor": "amd", "facts": map[string]any{}},
+			{"id": "GPU-aaaa", "kind": "gpu", "vendor": "nvidia", "facts": map[string]string{"index": "1"}},
+			{"id": "GPU-bbbb", "kind": "gpu", "vendor": "nvidia", "facts": map[string]string{"index": "3"}},
+			{"id": "card2", "kind": "gpu", "vendor": "amd", "facts": map[string]string{"index": "2"}},
 		},
 	})
 	if err != nil {

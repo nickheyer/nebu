@@ -20,7 +20,9 @@
   import SortTh from '$lib/components/ui/SortTh.svelte';
   import { TableSort } from '$lib/sort.svelte';
 
-  let status = $state<StoreStatus | null>(null);
+  let fetched = $state<StoreStatus | null>(null);
+  // The stream carries the totals after every change, the fetch only covers the wait for the first
+  const status = $derived(live.store ?? fetched);
   let filter = $state('');
   let exportOpen = $state(false);
   let exportTarget = $state<StoredModel | null>(null);
@@ -58,16 +60,12 @@
   );
   const total = $derived([...live.models.values()].reduce((a, m) => a + m.bytes, 0n));
 
-  async function refresh() {
-    try {
-      status = (await api.store.getStatus({})).status ?? null;
-    } catch (err) {
-      fail(err, 'Store status failed');
-    }
-  }
   $effect(() => {
-    void live.models.size;
-    refresh();
+    if (live.store) return;
+    api.store
+      .getStatus({})
+      .then((r) => (fetched = r.status ?? null))
+      .catch((err) => fail(err, 'Store status failed'));
   });
 
   async function remove(m: StoredModel) {
@@ -87,7 +85,6 @@
     try {
       const r = await api.store.gc({ partials: true });
       ok('Store collected', `${r.removed} files removed, ${bytes(r.freedBytes)} freed`);
-      refresh();
     } catch (err) {
       fail(err, 'Collect failed');
     } finally {

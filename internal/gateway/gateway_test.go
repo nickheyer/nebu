@@ -15,12 +15,12 @@ import (
 
 func tableOf(t *testing.T, routes map[string]string) *Table {
 	t.Helper()
-	table, err := OpenTable(context.Background(), nil, nil)
+	table, err := OpenTable(context.Background(), nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, ep := range routes {
-		table.Set(name, "inst-"+name, "", ep, "repo:"+name, v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
+		table.Set(name, "inst-"+name, "", ep, "repo:"+name, "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
 	}
 	return table
 }

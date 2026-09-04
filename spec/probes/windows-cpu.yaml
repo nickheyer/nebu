@@ -20,4 +20,4 @@ emit:
     - key: cpu.model
       value: "{{.first.Name}}"
     - key: cpu.threads
-      value: "{{.first.NumberOfLogicalProcessors}}"
+      value: "{{$n := 0.0}}{{range .rows}}{{$n = add $n .NumberOfLogicalProcessors}}{{end}}{{$n}}"

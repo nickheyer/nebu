@@ -53,8 +53,6 @@ CREATE TABLE `instances` (
 );
 -- Create index "instances_by_created" to table: "instances"
 CREATE INDEX `instances_by_created` ON `instances` (`created_at`);
--- Create index "instances_by_name" to table: "instances"
-CREATE INDEX `instances_by_name` ON `instances` (`name`);
 -- Create "instance_params" table
 CREATE TABLE `instance_params` (
   `instance_id` text NOT NULL,
@@ -82,6 +80,7 @@ CREATE TABLE `instance_requests` (
   `name` text NOT NULL,
   `slot_id` text NOT NULL DEFAULT '',
   `profile_id` text NOT NULL DEFAULT '',
+  `force` integer NOT NULL DEFAULT 0,
   PRIMARY KEY (`instance_id`),
   CONSTRAINT `0` FOREIGN KEY (`instance_id`) REFERENCES `instances` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE
 );
@@ -101,6 +100,7 @@ CREATE TABLE `instance_plans` (
   `cache_bytes` integer NOT NULL,
   `overhead_bytes` integer NOT NULL,
   `detail` text NOT NULL DEFAULT '',
+  `overhead_delta` real NOT NULL DEFAULT 0,
   PRIMARY KEY (`instance_id`),
   CONSTRAINT `0` FOREIGN KEY (`instance_id`) REFERENCES `instances` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE
 );
@@ -291,6 +291,7 @@ CREATE TABLE `slot_requests` (
   `install_id` text NOT NULL,
   `name` text NOT NULL,
   `profile_id` text NOT NULL DEFAULT '',
+  `force` integer NOT NULL DEFAULT 0,
   PRIMARY KEY (`slot_id`),
   CONSTRAINT `0` FOREIGN KEY (`slot_id`) REFERENCES `slots` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE
 );
@@ -313,6 +314,7 @@ CREATE TABLE `routes` (
   `model` text NOT NULL DEFAULT '',
   `requests` integer NOT NULL DEFAULT 0,
   `updated_at` text NOT NULL,
+  `served` text NOT NULL DEFAULT '',
   PRIMARY KEY (`name`)
 );
 -- Create "watches" table
@@ -370,6 +372,7 @@ CREATE TABLE `wants` (
   `checked_at` text NULL,
   `created_at` text NOT NULL,
   `error` text NOT NULL DEFAULT '',
+  `swap_task_id` text NOT NULL DEFAULT '',
   PRIMARY KEY (`id`)
 );
 -- Create "want_params" table
@@ -394,6 +397,7 @@ CREATE TABLE `findings` (
   `task_id` text NOT NULL DEFAULT '',
   `acknowledged` integer NOT NULL DEFAULT 0,
   `found_at` text NOT NULL,
+  `swap_task_id` text NOT NULL DEFAULT '',
   PRIMARY KEY (`id`)
 );
 -- Create index "findings_by_watch" to table: "findings"

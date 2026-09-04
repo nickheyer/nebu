@@ -7,7 +7,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// Inserts or replaces a profile with its params
+// Inserts or replaces a profile with its params, a default stepping the runtime's other profiles down in the same write
 func (d *DB) PutProfile(ctx context.Context, p *v1.Profile) error {
 	return d.tx(ctx, func(tx *sql.Tx) error {
 		exec := func(q string, args ...any) error {
@@ -15,6 +15,11 @@ func (d *DB) PutProfile(ctx context.Context, p *v1.Profile) error {
 			return err
 		}
 		id := p.GetId()
+		if p.GetDefault() {
+			if err := exec(`UPDATE profiles SET is_default = 0, updated_at = ? WHERE runtime_id = ? AND id != ? AND is_default = 1`, stamp(p.GetUpdatedAt().AsTime()), p.GetRuntimeId(), id); err != nil {
+				return err
+			}
+		}
 		if err := exec(`INSERT OR REPLACE INTO profiles (id, runtime_id, name, description, is_default, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			id, p.GetRuntimeId(), p.GetName(), p.GetDescription(), boolCol(p.GetDefault()), stamp(p.GetCreatedAt().AsTime()), stamp(p.GetUpdatedAt().AsTime())); err != nil {
 			return err

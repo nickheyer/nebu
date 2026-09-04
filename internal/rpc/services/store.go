@@ -50,11 +50,15 @@ func (s *StoreService) GetModel(ctx context.Context, req *connect.Request[v1.Get
 }
 
 func (s *StoreService) RemoveModel(ctx context.Context, req *connect.Request[v1.RemoveModelRequest]) (*connect.Response[v1.RemoveModelResponse], error) {
+	// A pull or a launch of the same group holds the key, so the removal waits its turn
+	unlock := s.store.Lock(store.Key(req.Msg.GetSourceId(), req.Msg.GetRepo(), req.Msg.GetGroup()))
 	m, err := s.store.RemoveManifest(req.Msg.GetSourceId(), req.Msg.GetRepo(), req.Msg.GetGroup())
+	unlock()
 	if err != nil {
 		return nil, wrap(err)
 	}
-	s.events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_DELETED, store.Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()), &v1.Event_Model{Model: m})
+	defer s.puller.AnnounceStore()
+	s.events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_DELETED, store.Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()), m)
 	resp := &v1.RemoveModelResponse{Model: m}
 	if req.Msg.GetGc() {
 		if resp.Gc, err = s.store.Gc(false); err != nil {
@@ -69,6 +73,7 @@ func (s *StoreService) Gc(ctx context.Context, req *connect.Request[v1.GcRequest
 	if err != nil {
 		return nil, wrap(err)
 	}
+	s.puller.AnnounceStore()
 	return connect.NewResponse(resp), nil
 }
 

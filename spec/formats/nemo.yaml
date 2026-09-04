@@ -50,10 +50,42 @@ params:
     keys: [num_moe_experts, config.num_moe_experts]
   - name: n_expert_used
     keys: [moe_router_topk, config.moe_router_topk]
+precisions:
+  - key: config.params_dtype
+    match: '^(?:torch\.)?(?P<name>bfloat16)$'
+    bits: 16
+    note: bfloat16, the training format on modern GPUs
+  - key: config.params_dtype
+    match: '^(?:torch\.)?(?P<name>float16)$'
+    bits: 16
+    note: float16, the training format on older GPUs
+  - key: config.params_dtype
+    match: '^(?:torch\.)?(?P<name>float32)$'
+    bits: 32
+  - key: config.bf16
+    match: '^(?i:true)$'
+    bits: 16
+    note: bfloat16, the training format on modern GPUs
+  - key: config.fp16
+    match: '^(?i:true)$'
+    bits: 16
+    note: float16, the training format on older GPUs
+  - key: precision
+    match: '^(?P<name>bf16)(?:-mixed|-true)?$'
+    bits: 16
+    note: bfloat16, the training format on modern GPUs
+  - key: precision
+    match: '^(?:fp)?(?P<name>16)(?:-mixed|-true)?$'
+    bits: 16
+    note: float16, the training format on older GPUs
+  - key: precision
+    match: '^(?:fp)?(?P<name>32)(?:-true)?$'
+    bits: 32
 metadata:
   - precision
   - config.params_dtype
   - config.bf16
+  - config.fp16
   - target
   - _target_
   - config._target_

@@ -12,9 +12,11 @@ emit:
     id: "{{.key}}"
     name: "{{index . \"Card_Series\"}}"
     memory_total: "{{index . \"VRAM_Total_Memory_B\"}}"
+    memory_free: "{{sub (index . \"VRAM_Total_Memory_B\") (index . \"VRAM_Total_Used_Memory_B\")}}"
     unit: B
     when: key startsWith "card"
     facts:
+      index: '{{trimPrefix "card" .key}}'
       unique_id: "{{index . \"Unique_ID\"}}"
       card_model: "{{index . \"Card_Model\"}}"
   pool:
@@ -22,6 +24,7 @@ emit:
     id: "{{.key}}"
     device_id: "{{.key}}"
     total: "{{index . \"VRAM_Total_Memory_B\"}}"
+    free: "{{sub (index . \"VRAM_Total_Memory_B\") (index . \"VRAM_Total_Used_Memory_B\")}}"
     unit: B
     when: key startsWith "card"
   facts:

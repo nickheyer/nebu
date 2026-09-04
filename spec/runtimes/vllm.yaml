@@ -18,7 +18,7 @@ launch:
   # A slot pins the process to its devices, an empty render is dropped so no slot means every device
   env:
     CUDA_VISIBLE_DEVICES: '{{$first := true}}{{range .devices}}{{if eq .vendor "nvidia"}}{{if not $first}},{{end}}{{$first = false}}{{.id}}{{end}}{{end}}'
-    ROCR_VISIBLE_DEVICES: '{{$first := true}}{{range .devices}}{{if eq .vendor "amd"}}{{if not $first}},{{end}}{{$first = false}}{{trimPrefix "card" .id}}{{end}}{{end}}'
+    ROCR_VISIBLE_DEVICES: '{{$first := true}}{{range .devices}}{{if eq .vendor "amd"}}{{if not $first}},{{end}}{{$first = false}}{{index .facts "index"}}{{end}}{{end}}'
   health:
     path: /health
     interval_ms: 2000

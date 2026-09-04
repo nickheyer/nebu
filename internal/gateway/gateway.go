@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -300,11 +301,11 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := modelName(r, body)
-	endpoint, api, policy, release, err := g.table.Acquire(name)
+	route, policy, release, err := g.table.Acquire(name)
 	if errors.Is(err, ErrNoRoute) && name == "" {
 		if ready := g.table.Ready(); len(ready) == 1 {
 			name = ready[0].GetName()
-			endpoint, api, policy, release, err = g.table.Acquire(name)
+			route, policy, release, err = g.table.Acquire(name)
 		}
 	}
 	switch {
@@ -329,15 +330,22 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	target, err := url.Parse(endpoint)
+	target, err := url.Parse(route.GetEndpoint())
 	if err != nil {
 		client.Error(w, http.StatusBadGateway, err.Error(), "server_error")
 		return
 	}
 	// A request in the runtime's own format passes through untouched, any other is translated both ways
-	if clientFlavor(r) != api {
-		g.translate(w, r, body, name, target, policy, client, flavorOf(api))
+	if clientFlavor(r) != route.GetApi() || r.URL.Path == anthropicCount {
+		g.translate(w, r, body, name, route.GetServed(), target, policy, client, flavorOf(route.GetApi()))
 		return
+	}
+	// The runtime answers to its own name, so a route named otherwise rewrites the model field
+	if served := route.GetServed(); served != "" && served != name {
+		if body, err = renameModel(body, served); err != nil {
+			client.Error(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+			return
+		}
 	}
 	// The whole exchange ends at the request timeout, so a hung runtime never holds a request in flight forever
 	ctx := r.Context()
@@ -394,15 +402,25 @@ func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []
 }
 
 // Serves a request written in one flavor from a runtime that speaks another
-func (g *Gateway) translate(w http.ResponseWriter, r *http.Request, body []byte, name string, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
+func (g *Gateway) translate(w http.ResponseWriter, r *http.Request, body []byte, name, served string, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
 	chat, err := client.ParseRequest(r.URL.Path, body)
 	if err != nil {
 		client.Error(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
+	// Upstream hears the runtime's own name, the client hears the one it asked for
+	if served != "" {
+		chat.Model = served
+	}
 	if chat.Kind == "count" {
 		g.count(w, r, chat, name, target, policy, client, upstream)
 		return
+	}
+	if upstream.InlineImages() {
+		if err := g.inlineImages(r.Context(), chat, policy); err != nil {
+			client.Error(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+			return
+		}
 	}
 	path, out, err := upstream.RenderRequest(chat)
 	if err != nil {
@@ -434,6 +452,7 @@ func (g *Gateway) translate(w http.ResponseWriter, r *http.Request, body []byte,
 		sw := client.Stream(w, chat)
 		if err := upstream.ParseStream(resp.Body, sw.Write); err != nil {
 			g.log.Warn("gateway stream", "model", name, "err", err)
+			sw.Write(Event{Kind: "error", Text: "upstream: " + err.Error()})
 		}
 		sw.Close()
 		return
@@ -448,9 +467,7 @@ func (g *Gateway) translate(w http.ResponseWriter, r *http.Request, body []byte,
 		client.Error(w, http.StatusBadGateway, "upstream answered in a shape the gateway could not read: "+err.Error(), "server_error")
 		return
 	}
-	if res.Model == "" {
-		res.Model = chat.Model
-	}
+	res.Model = name
 	answer, err := client.RenderResult(chat, res)
 	if err != nil {
 		client.Error(w, http.StatusInternalServerError, err.Error(), "server_error")
@@ -463,7 +480,7 @@ func (g *Gateway) translate(w http.ResponseWriter, r *http.Request, body []byte,
 
 // Answers a token count from the runtime's tokenizer when it has one, an estimate otherwise
 func (g *Gateway) count(w http.ResponseWriter, r *http.Request, chat *Chat, name string, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
-	res := &Result{Model: chat.Model}
+	res := &Result{Model: name}
 	n, err := g.countUpstream(r.Context(), chat, target, policy, upstream)
 	if err != nil {
 		g.log.Debug("gateway count estimated", "model", name, "err", err)
@@ -503,6 +520,54 @@ func (g *Gateway) countUpstream(ctx context.Context, chat *Chat, target *url.URL
 		return 0, err
 	}
 	return res.In, nil
+}
+
+// Fetches every image a message names by URL so a flavor that carries only bytes can send it
+func (g *Gateway) inlineImages(ctx context.Context, chat *Chat, policy *v1.Policy) error {
+	client := &http.Client{Transport: g.transport(policy.GetUpstreamTimeoutMs())}
+	for mi := range chat.Messages {
+		for pi, p := range chat.Messages[mi].Parts {
+			if p.Type != "image" || p.Data != "" || p.URL == "" {
+				continue
+			}
+			if mt, raw, ok := dataURL(p.URL); ok {
+				chat.Messages[mi].Parts[pi].MediaType, chat.Messages[mi].Parts[pi].Data = mt, raw
+				continue
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.URL, nil)
+			if err != nil {
+				return fmt.Errorf("image %s: %w", p.URL, err)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("image %s: %w", p.URL, err)
+			}
+			raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+			resp.Body.Close()
+			if err != nil {
+				return fmt.Errorf("image %s: %w", p.URL, err)
+			}
+			if resp.StatusCode >= http.StatusMultipleChoices {
+				return fmt.Errorf("image %s answered %d", p.URL, resp.StatusCode)
+			}
+			chat.Messages[mi].Parts[pi].Data = base64.StdEncoding.EncodeToString(raw)
+			chat.Messages[mi].Parts[pi].MediaType = mediaTypeOf(raw, resp.Header.Get("Content-Type"))
+		}
+	}
+	return nil
+}
+
+// Rewrites the model field of a JSON body, the rest kept as the client sent it
+func renameModel(body []byte, model string) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, fmt.Errorf("body is not a JSON object: %w", err)
+	}
+	if _, ok := fields["model"]; !ok {
+		return body, nil
+	}
+	fields["model"], _ = json.Marshal(model)
+	return json.Marshal(fields)
 }
 
 func isTimeout(err error) bool {

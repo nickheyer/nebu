@@ -16,10 +16,11 @@ emit:
     vendor: '{{lower (trimPrefix "sppci_vendor_" (index . "spdisplays_vendor"))}}'
     memory_total: '{{index . "spdisplays_vram"}}'
     facts:
+      index: "{{.index}}"
       cores: '{{index . "sppci_cores"}}'
       metal: '{{trimPrefix "spdisplays_" (index . "spdisplays_mtlgpufamilysupport")}}'
       bus: '{{trimPrefix "spdisplays_" (index . "sppci_bus")}}'
-  # Only a card with memory of its own is a pool, unified memory is the host pool
+  # Only a card with memory of its own is a pool, Apple silicon's unified memory is the darwin-unified pool
   pool:
     kind: POOL_KIND_DEVICE
     id: gpu-{{.index}}

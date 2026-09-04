@@ -1,4 +1,4 @@
-import { api } from './api';
+import { api, message } from './api';
 import { live, instanceLive, modelKey } from './state.svelte';
 import { fail, ok } from './toast.svelte';
 import type { StoredModel } from '$proto/store_pb';
@@ -13,6 +13,8 @@ export interface RunSpec {
   params?: Record<string, string>;
   slotId?: string;
   profileId?: string;
+  // Launches even when the plan says no, redoing any prepare step
+  force?: boolean;
 }
 
 // Reports whether a slot has something alive in it
@@ -22,8 +24,8 @@ export function slotOccupied(slotId: string | undefined): boolean {
   return !!s?.instanceId && instanceLive(live.instances.get(s.instanceId));
 }
 
-// Runs a model, swapping when its slot is occupied, and returns the task id
-export async function launch(spec: RunSpec, drainFirst = false): Promise<string | undefined> {
+// Runs a model, swapping when its slot is occupied, and returns the task id, telling the caller why it was refused
+export async function launch(spec: RunSpec, drainFirst = false, refused?: (text: string) => void): Promise<string | undefined> {
   const run = { ...spec, params: spec.params ?? {} };
   const swap = slotOccupied(spec.slotId);
   try {
@@ -34,6 +36,7 @@ export async function launch(spec: RunSpec, drainFirst = false): Promise<string 
     return id;
   } catch (err) {
     fail(err, swap ? 'Swap refused' : 'Run refused');
+    refused?.(message(err));
     return undefined;
   }
 }

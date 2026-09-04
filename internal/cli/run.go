@@ -18,7 +18,7 @@ import (
 
 // Fails commands whose state lives only in a running daemon
 func (e *env) requireDaemon() error {
-	if !e.remote {
+	if e.resolveAddr() == "" {
 		return fmt.Errorf("this command needs a running daemon, start nebu serve or pass --addr")
 	}
 	return nil
@@ -135,7 +135,7 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	installID := fs.String("install", "", "install id, newest for the runtime when empty")
 	name := fs.String("name", "", "public model name for the gateway")
 	slot := fs.String("slot", "", "slot to run in, its name becomes the public name")
-	force := fs.Bool("force", false, "launch even when the plan says the model does not fit")
+	force := fs.Bool("force", false, "launch even when the plan says the model does not fit, redoing any prepare step")
 	profile := fs.String("profile", "", "profile id or name to start params from, the runtime default when empty")
 	var params multi
 	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the profile and slot defaults")
@@ -150,11 +150,11 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	sourceID, err := e.defaultSource(ctx, cl, *source)
@@ -195,25 +195,34 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	if final.Msg.GetInstance().GetState() != v1.InstanceState_INSTANCE_STATE_READY {
 		return fmt.Errorf("%s is %s: %s", in.GetName(), eval.EnumShort(final.Msg.GetInstance().GetState()), final.Msg.GetInstance().GetError())
 	}
-	fmt.Fprintf(e.out, "gateway %s/v1 model %s\n", e.gatewayBase(), in.GetName())
+	fmt.Fprintf(e.out, "gateway %s/v1 model %s\n", e.gatewayBase(ctx, cl), in.GetName())
 	return nil
 }
 
-// Where this machine reaches the gateway, its own listener or the api's
-func (e *env) gatewayBase() string {
-	api := e.cfg.GetAddr()
+// Where this machine reaches the gateway, the daemon saying whether it has a listener of its own
+func (e *env) gatewayBase(ctx context.Context, cl *clients) string {
+	api := e.resolveAddr()
 	if api == "" {
 		api = dialable(e.cfg.GetListen(), "")
-	}
-	own := e.cfg.GetGateway().GetListen()
-	if own == "" {
-		return e.base(api)
 	}
 	host := ""
 	if u, err := url.Parse(e.base(api)); err == nil {
 		host = u.Hostname()
 	}
-	return e.base(dialable(own, host))
+	if resp, err := cl.gateway.GetGatewayStatus(ctx, connect.NewRequest(&v1.GetGatewayStatusRequest{})); err == nil {
+		st := resp.Msg.GetStatus()
+		for _, l := range st.GetListeners() {
+			if l.GetShared() {
+				continue
+			}
+			scheme := "http"
+			if st.GetTls() {
+				scheme = "https"
+			}
+			return scheme + "://" + dialable(l.GetAddr(), host)
+		}
+	}
+	return e.base(api)
 }
 
 func runPs(ctx context.Context, e *env, args []string) error {
@@ -222,11 +231,11 @@ func runPs(ctx context.Context, e *env, args []string) error {
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.instances.ListInstances(ctx, connect.NewRequest(&v1.ListInstancesRequest{RunningOnly: !*all}))
@@ -267,11 +276,11 @@ func runStop(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu stop <name|id>")
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.instances.StopInstance(ctx, connect.NewRequest(&v1.StopInstanceRequest{Id: positional[0]}))
@@ -294,11 +303,11 @@ func runLogs(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu logs <name|id> [--follow] [--tail N]")
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	stream, err := cl.instances.Logs(ctx, connect.NewRequest(&v1.LogsRequest{Id: positional[0], Follow: *follow, Tail: uint32(*tail)}))
@@ -323,11 +332,11 @@ func runShow(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu show <name|id>")
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.instances.GetInstance(ctx, connect.NewRequest(&v1.GetInstanceRequest{Id: positional[0]}))

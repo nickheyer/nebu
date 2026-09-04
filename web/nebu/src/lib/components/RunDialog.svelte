@@ -6,6 +6,7 @@
   import type { StoredModel } from '$proto/store_pb';
   import type { MemoryPlan } from '$proto/estimate_pb';
   import type { RuntimeStatus } from '$proto/runtime_pb';
+  import { FitVerdict } from '$proto/estimate_pb';
   import { Play, ArrowLeftRight, Gauge } from '@lucide/svelte';
   import Dialog from './ui/Dialog.svelte';
   import Field from './ui/Field.svelte';
@@ -23,7 +24,9 @@
   let slot = $state('');
   let profileId = $state('');
   let values = $state<Record<string, string>>({});
+  let invalid = $state(0);
   let drainFirst = $state(false);
+  let force = $state(false);
   let plan = $state<MemoryPlan | null>(null);
   let planError = $state('');
   let checking = $state(false);
@@ -42,6 +45,8 @@
   const defaultProfile = $derived(profiles.find((p) => p.default));
   // The layers under the form: the profile, then the slot's defaults
   const inherited = $derived({ ...profileParams(effectiveRuntime, profileId), ...(selectedSlot?.params ?? {}) });
+  // Only a plan that says no, or a daemon that refused for it, offers a forced launch
+  const refused = $derived(plan?.verdict === FitVerdict.NO || /does not fit/i.test(planError));
 
   $effect(() => {
     if (!open) return;
@@ -53,6 +58,7 @@
     profileId = '';
     values = {};
     drainFirst = false;
+    force = false;
     plan = null;
     planError = '';
     api.runtimes.listRuntimes({}).then((r) => (runtimes = r.runtimes)).catch(() => (runtimes = []));
@@ -85,7 +91,8 @@
       name: slot ? '' : name,
       params: values,
       slotId: slot,
-      profileId
+      profileId,
+      force
     };
   }
 
@@ -107,7 +114,7 @@
   async function submit() {
     if (!current) return;
     submitting = true;
-    const id = await launch(spec(), drainFirst);
+    const id = await launch(spec(), drainFirst, (text) => (planError = text));
     submitting = false;
     if (id !== undefined) open = false;
   }
@@ -189,7 +196,7 @@
           <span class="text-xs font-medium text-fg-muted">Parameters</span>
           <span class="text-[11.5px] text-fg-faint">Empty fields inherit the profile{selectedSlot ? ', then the slot' : ''}. Auto values are solved by the planner</span>
         </div>
-        <ParamForm params={manifest?.params ?? []} bind:values {inherited} idPrefix="run" />
+        <ParamForm params={manifest?.params ?? []} bind:values bind:invalid {inherited} idPrefix="run" />
       </div>
 
       {#if swap}
@@ -215,13 +222,22 @@
       {:else if planError}
         <div class="mt-2 text-sm text-bad">{planError}</div>
       {:else}
-        <p class="mt-2 text-xs text-fg-faint">Check before launching to see where weights and cache land. A run is refused when the plan says no.</p>
+        <p class="mt-2 text-xs text-fg-faint">Check before launching to see where weights and cache land. A run is refused when the plan says no, unless you run anyway below.</p>
+      {/if}
+      {#if refused || force}
+        <label class="mt-3 flex cursor-pointer items-start gap-3 rounded-lg border border-line bg-sunken px-3 py-2.5">
+          <input type="checkbox" class="mt-0.5 accent-accent" bind:checked={force} />
+          <span class="text-sm">
+            <span class="font-medium text-fg">Run anyway</span>
+            <span class="block text-xs leading-5 text-fg-muted">Launches even though the plan says it does not fit, and redoes any prepare step. The runtime may still refuse or spill to host memory.</span>
+          </span>
+        </label>
       {/if}
     </div>
   {/if}
 
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-    <Button variant="primary" icon={swap ? ArrowLeftRight : Play} loading={submitting} onclick={submit} disabled={!current || !effectiveRuntime}>{swap ? 'Swap' : 'Run'}</Button>
+    <Button variant="primary" icon={swap ? ArrowLeftRight : Play} loading={submitting} onclick={submit} disabled={!current || !effectiveRuntime || invalid > 0}>{swap ? 'Swap' : 'Run'}</Button>
   {/snippet}
 </Dialog>

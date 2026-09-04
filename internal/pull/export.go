@@ -57,6 +57,8 @@ func (p *Puller) Export(ctx context.Context, req *v1.ExportRequest) (*v1.Task, e
 }
 
 func (p *Puller) export(ctx context.Context, h *tasks.Handle, models []*v1.StoredModel, dir string) error {
+	// Nothing is collected or evicted while blobs are being copied out
+	defer p.Store.Hold()()
 	var total uint64
 	for _, m := range models {
 		total += m.GetBytes()

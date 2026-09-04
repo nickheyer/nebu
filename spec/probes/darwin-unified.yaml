@@ -1,7 +1,7 @@
-id: darwin-memory
-description: Host memory from sysctl on an Intel Mac, the pages macOS can hand out counted as free
+id: darwin-unified
+description: Unified memory from sysctl on Apple silicon, one pool the CPU and GPU share, reclaimable pages counted as free
 os: [darwin]
-arch: [amd64]
+arch: [arm64]
 exec:
   command: sysctl
   args: [hw.memsize, vm.page_free_count, vm.page_speculative_count, vm.page_purgeable_count, vm.page_pageable_external_count, vm.pagesize]
@@ -9,8 +9,8 @@ parse:
   kind: PARSE_KIND_KV
 emit:
   pool:
-    kind: POOL_KIND_HOST
-    id: host
+    kind: POOL_KIND_UNIFIED
+    id: unified
     total: "{{.hw_memsize}}"
     # Free pages sit near zero on macOS, speculative, purgeable, and file backed pages are reclaimable
     free: "{{mul (add (add .vm_page_free_count .vm_page_speculative_count) (add .vm_page_purgeable_count .vm_page_pageable_external_count)) .vm_pagesize}}"

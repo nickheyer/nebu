@@ -158,6 +158,8 @@ message ProbeSpec {
   ProbeExec exec = 4;
   ProbeParse parse = 5;
   ProbeEmit emit = 6;
+  // GOARCH names the probe runs on, every one when empty
+  repeated string arch = 7;
 }
 
 // One doctor finding with a hint

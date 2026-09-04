@@ -1,11 +1,13 @@
 <script lang="ts">
+  import { api } from '$lib/api';
   import { live, instanceLive, clock, taskFor } from '$lib/state.svelte';
   import { swapSlot, editSlot, evictSlot, deleteSlot } from '$lib/slotActions.svelte';
+  import { policyText } from '$lib/gateway';
   import { bytes, when, duration, enumLabel, count } from '$lib/format';
   import { SlotState } from '$proto/slot_pb';
   import { InstanceState } from '$proto/instance_pb';
-  import { RouteState } from '$proto/gateway_pb';
-  import { ArrowLeftRight, LogOut, Pencil, Trash2, ExternalLink } from '@lucide/svelte';
+  import { RouteState, type Policy } from '$proto/gateway_pb';
+  import { ArrowLeftRight, LogOut, Pencil, Trash2, ExternalLink, MessageSquare } from '@lucide/svelte';
   import Drawer from './ui/Drawer.svelte';
   import Tabs from './ui/Tabs.svelte';
   import Kv from './ui/Kv.svelte';
@@ -17,6 +19,7 @@
   let { id = $bindable(''), onInstance }: { id?: string; onInstance?: (instanceId: string) => void } = $props();
 
   let tab = $state('overview');
+  let defaults = $state<Policy | undefined>();
   const slot = $derived(id ? live.slots.get(id) : undefined);
   const instance = $derived(slot?.instanceId ? live.instances.get(slot.instanceId) : undefined);
   const alive = $derived(instanceLive(instance));
@@ -25,8 +28,11 @@
   const devices = $derived((slot?.deviceIds ?? []).map((d) => live.host?.devices.find((x) => x.id === d)?.name ?? d));
   const history = $derived([...live.instances.values()].filter((i) => i.slotId === id && i.id !== slot?.instanceId).sort((a, b) => Number((b.createdAt?.seconds ?? 0n) - (a.createdAt?.seconds ?? 0n))).slice(0, 8));
 
+  // The gateway default sits under every zero field of the slot's limits
   $effect(() => {
-    if (id) tab = 'overview';
+    if (!id) return;
+    tab = 'overview';
+    api.gateway.getGatewayStatus({}).then((r) => (defaults = r.status?.policy)).catch(() => (defaults = undefined));
   });
 </script>
 
@@ -93,6 +99,7 @@
                 ['budget', slot.memoryBytes ? bytes(slot.memoryBytes) : 'whole devices'],
                 ['runtime', slot.runtimeId || 'first compatible'],
                 ['public name', slot.name],
+                ['limits', policyText(slot.policy, defaults)],
                 ['created', when(slot.createdAt)],
                 ['updated', when(slot.updatedAt)]
               ]}
@@ -163,7 +170,10 @@
           if (await deleteSlot(slot)) id = '';
         }}>Delete</Button
       >
-      <Button variant="primary" size="sm" icon={ArrowLeftRight} class="ml-auto" onclick={() => swapSlot(slot)}>{alive ? 'Swap model' : 'Run a model'}</Button>
+      {#if route?.state === RouteState.READY}
+        <Button variant="outline" size="sm" icon={MessageSquare} class="ml-auto" href="/chat?model={encodeURIComponent(slot.name)}">Chat</Button>
+      {/if}
+      <Button variant="primary" size="sm" icon={ArrowLeftRight} class={route?.state === RouteState.READY ? '' : 'ml-auto'} onclick={() => swapSlot(slot)}>{alive ? 'Swap model' : 'Run a model'}</Button>
     {/if}
   {/snippet}
 </Drawer>

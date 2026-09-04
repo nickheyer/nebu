@@ -120,10 +120,24 @@ func (c *Client) CLI() *HFCLI { return transportOf[*HFCLI](c, TransportHFCLI) }
 
 // The API key from the environment variable the primary transport names, empty when none is set
 func (c *Client) Token() string {
-	if v := c.cfg["token_env"]; v != "" {
+	if v := c.cfg[c.tokenSetting()]; v != "" {
 		return os.Getenv(v)
 	}
 	return ""
+}
+
+// The setting naming the key's variable, the bare one or the first transport's own
+func (c *Client) tokenSetting() string {
+	first := ""
+	for _, f := range c.cat.Fields() {
+		if f.GetName() == "token_env" {
+			return f.GetName()
+		}
+		if first == "" && f.GetType() == v1.ConfigType_CONFIG_TYPE_ENV && strings.HasSuffix(f.GetName(), "token_env") {
+			first = f.GetName()
+		}
+	}
+	return first
 }
 
 // Reports whether a key is set
@@ -214,15 +228,20 @@ func (c *Client) Capabilities(ctx context.Context) *v1.SourceCapabilities {
 	}
 	_, revisions := c.cat.API.(Reviser)
 	_, card := c.cat.API.(Carder)
+	// A provider may need a transport this source did not name before it can list anything
+	lists := true
+	if b, ok := c.cat.API.(Browser); ok {
+		lists = b.Browses(c)
+	}
 	return &v1.SourceCapabilities{
-		Browse:        !c.cat.NoBrowse,
-		Search:        !c.cat.NoSearch,
+		Browse:        !c.cat.NoBrowse && lists,
+		Search:        !c.cat.NoSearch && lists,
 		Paginate:      true,
-		Card:          card,
+		Card:          card && lists,
 		Revisions:     revisions,
 		AuthRequired:  c.cat.AuthRequired,
 		TokenPresent:  c.HasToken(),
-		TokenEnv:      c.cfg["token_env"],
+		TokenEnv:      c.cfg[c.tokenSetting()],
 		Endpoint:      c.cfg["endpoint"],
 		Sorts:         c.sorts(),
 		DefaultSort:   c.cat.Sorts[0],

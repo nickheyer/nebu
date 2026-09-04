@@ -8,6 +8,7 @@ import (
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -32,12 +33,12 @@ type Subscription struct {
 func New() *Bus { return &Bus{subs: map[*Subscription]struct{}{}} }
 
 // Publishes one event with its record, nil bus safe
-func (b *Bus) Publish(kind v1.EventKind, action v1.EventAction, id string, payload any) *v1.Event {
+func (b *Bus) Publish(kind v1.EventKind, action v1.EventAction, id string, record proto.Message) *v1.Event {
 	if b == nil {
 		return nil
 	}
-	ev := &v1.Event{Seq: b.seq.Add(1), Kind: kind, Action: action, Id: id, At: timestamppb.Now()}
-	setPayload(ev, payload)
+	ev := Event(kind, action, id, record)
+	ev.Seq = b.seq.Add(1)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for s := range b.subs {
@@ -88,30 +89,20 @@ func (s *Subscription) Events() <-chan *v1.Event { return s.ch }
 // Counts events dropped for this subscriber
 func (s *Subscription) Dropped() uint64 { return s.dropped.Load() }
 
-// Copies the record into the event so mutation cannot leak
-func setPayload(ev *v1.Event, p any) {
-	switch t := p.(type) {
-	case *v1.Event_Host:
-		ev.Payload = &v1.Event_Host{Host: proto.Clone(t.Host).(*v1.HostProfile)}
-	case *v1.Event_Task:
-		ev.Payload = &v1.Event_Task{Task: proto.Clone(t.Task).(*v1.Task)}
-	case *v1.Event_Instance:
-		ev.Payload = &v1.Event_Instance{Instance: proto.Clone(t.Instance).(*v1.Instance)}
-	case *v1.Event_Slot:
-		ev.Payload = &v1.Event_Slot{Slot: proto.Clone(t.Slot).(*v1.Slot)}
-	case *v1.Event_Route:
-		ev.Payload = &v1.Event_Route{Route: proto.Clone(t.Route).(*v1.Route)}
-	case *v1.Event_Install:
-		ev.Payload = &v1.Event_Install{Install: proto.Clone(t.Install).(*v1.Install)}
-	case *v1.Event_Build:
-		ev.Payload = &v1.Event_Build{Build: proto.Clone(t.Build).(*v1.Build)}
-	case *v1.Event_Model:
-		ev.Payload = &v1.Event_Model{Model: proto.Clone(t.Model).(*v1.StoredModel)}
-	case *v1.Event_Watch:
-		ev.Payload = &v1.Event_Watch{Watch: proto.Clone(t.Watch).(*v1.Watch)}
-	case *v1.Event_Finding:
-		ev.Payload = &v1.Event_Finding{Finding: proto.Clone(t.Finding).(*v1.Finding)}
-	case *v1.Event_Source:
-		ev.Payload = &v1.Event_Source{Source: proto.Clone(t.Source).(*v1.Source)}
+// Builds an event around a copy of the record, in whichever payload slot holds its type
+func Event(kind v1.EventKind, action v1.EventAction, id string, record proto.Message) *v1.Event {
+	ev := &v1.Event{Kind: kind, Action: action, Id: id, At: timestamppb.Now()}
+	if record == nil || !record.ProtoReflect().IsValid() {
+		return ev
 	}
+	msg := ev.ProtoReflect()
+	slots := msg.Descriptor().Oneofs().ByName("payload").Fields()
+	name := record.ProtoReflect().Descriptor().FullName()
+	for i := 0; i < slots.Len(); i++ {
+		if fd := slots.Get(i); fd.Message() != nil && fd.Message().FullName() == name {
+			msg.Set(fd, protoreflect.ValueOfMessage(proto.Clone(record).ProtoReflect()))
+			break
+		}
+	}
+	return ev
 }

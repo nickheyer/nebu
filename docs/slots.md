@@ -40,7 +40,9 @@ keeps working across a swap.
   slot.
 
 `nebu slots evict` drains and stops the occupant and leaves the name pending. `nebu slots
-remove --force` stops the occupant and drops the name.
+remove` is refused while the slot serves or while a watch or want swaps into it; `--force`
+stops the occupant, drops those swaps, and removes the name. A plain `nebu run` cannot take a
+slot's name, and a failed swap leaves the pending route with the limits the slot has now.
 
 ## Restart
 

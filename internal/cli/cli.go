@@ -56,6 +56,7 @@ func commands() []command {
 		}},
 		{name: "runtimes", summary: "runtimes and their installs", run: runRuntimes, sub: []command{
 			{name: "list", summary: "list runtimes and host compatibility", run: runRuntimes},
+			{name: "show", summary: "show a runtime with every param it takes", run: runRuntimesShow},
 			{name: "installs", summary: "list installs", run: runRuntimesInstalls},
 			{name: "adopt", summary: "record a binary already on the host", run: runRuntimesAdopt},
 			{name: "install", summary: "download a prebuilt release for this host", run: runRuntimesInstall},
@@ -130,16 +131,19 @@ func resolve(cmds []command, args []string) (*command, []string) {
 
 // Shared state for one invocation
 type env struct {
-	cfg     *v1.Config
-	log     *slog.Logger
-	out     io.Writer
-	errw    io.Writer
-	in      io.Reader
-	json    bool
-	remote  bool
-	cl      *clients
-	daemon  *daemon.Daemon
-	closers []io.Closer
+	cfg    *v1.Config
+	log    *slog.Logger
+	out    io.Writer
+	errw   io.Writer
+	in     io.Reader
+	json   bool
+	remote bool
+	// The daemon address once looked for, empty when this process stands in
+	addr     string
+	resolved bool
+	cl       *clients
+	daemon   *daemon.Daemon
+	closers  []io.Closer
 }
 
 // Stops the in process daemon and logger when present

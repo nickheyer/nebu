@@ -37,8 +37,8 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 			return err
 		}
 		if req := s.GetRequest(); req != nil {
-			if err := exec(`INSERT INTO slot_requests (slot_id, source_id, repo, weight_group, runtime_id, install_id, name, profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetProfileId()); err != nil {
+			if err := exec(`INSERT INTO slot_requests (slot_id, source_id, repo, weight_group, runtime_id, install_id, name, profile_id, force) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetProfileId(), boolCol(req.GetForce())); err != nil {
 				return err
 			}
 			if err := putMap(exec, `INSERT INTO slot_request_params (slot_id, name, value) VALUES (?, ?, ?)`, id, req.GetParams()); err != nil {
@@ -88,12 +88,14 @@ func (d *DB) ListSlots(ctx context.Context) ([]*v1.Slot, error) {
 			return nil, err
 		}
 		req := &v1.RunRequest{SlotId: s.GetId()}
-		err = d.sql.QueryRowContext(ctx, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, profile_id FROM slot_requests WHERE slot_id = ?`, s.GetId()).Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.ProfileId)
+		var force int
+		err = d.sql.QueryRowContext(ctx, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, profile_id, force FROM slot_requests WHERE slot_id = ?`, s.GetId()).Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.ProfileId, &force)
 		switch {
 		case err == sql.ErrNoRows:
 		case err != nil:
 			return nil, err
 		default:
+			req.Force = force != 0
 			if req.Params, err = d.stringMap(ctx, `SELECT name, value FROM slot_request_params WHERE slot_id = ? ORDER BY name`, s.GetId()); err != nil {
 				return nil, err
 			}
@@ -115,14 +117,14 @@ func (d *DB) DeleteSlot(ctx context.Context, id string) (bool, error) {
 
 // Inserts or replaces a route
 func (d *DB) PutRoute(ctx context.Context, r *v1.Route) error {
-	_, err := d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO routes (name, instance_id, slot_id, endpoint, api, state, model, requests, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.GetName(), r.GetInstanceId(), r.GetSlotId(), r.GetEndpoint(), enumCol(r.GetApi()), enumCol(r.GetState()), r.GetModel(), int64(r.GetRequests()), stamp(r.GetUpdatedAt().AsTime()))
+	_, err := d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO routes (name, instance_id, slot_id, endpoint, api, state, model, requests, updated_at, served) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.GetName(), r.GetInstanceId(), r.GetSlotId(), r.GetEndpoint(), enumCol(r.GetApi()), enumCol(r.GetState()), r.GetModel(), int64(r.GetRequests()), stamp(r.GetUpdatedAt().AsTime()), r.GetServed())
 	return err
 }
 
 // Lists every route by name
 func (d *DB) ListRoutes(ctx context.Context) ([]*v1.Route, error) {
-	rows, err := d.sql.QueryContext(ctx, `SELECT name, instance_id, slot_id, endpoint, api, state, model, requests, updated_at FROM routes ORDER BY name`)
+	rows, err := d.sql.QueryContext(ctx, `SELECT name, instance_id, slot_id, endpoint, api, state, model, requests, updated_at, served FROM routes ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +134,7 @@ func (d *DB) ListRoutes(ctx context.Context) ([]*v1.Route, error) {
 		r := &v1.Route{}
 		var api, state, updated string
 		var requests int64
-		if err := rows.Scan(&r.Name, &r.InstanceId, &r.SlotId, &r.Endpoint, &api, &state, &r.Model, &requests, &updated); err != nil {
+		if err := rows.Scan(&r.Name, &r.InstanceId, &r.SlotId, &r.Endpoint, &api, &state, &r.Model, &requests, &updated, &r.Served); err != nil {
 			return nil, err
 		}
 		r.Api = v1.ApiFlavor(enumVal(v1.ApiFlavor(0).Descriptor(), api))
@@ -239,8 +241,8 @@ func (d *DB) PutWant(ctx context.Context, w *v1.Want) error {
 			return err
 		}
 		id := w.GetId()
-		if err := exec(`INSERT OR REPLACE INTO wants (id, query, kind, source_id, group_match, format_id, auto_pull, slot_id, runtime_id, profile_id, found_source_id, found_repo, found_group, task_id, satisfied, checked_at, created_at, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, w.GetQuery(), enumCol(w.GetKind()), w.GetSourceId(), w.GetGroupMatch(), w.GetFormatId(), boolCol(w.GetAutoPull()), w.GetSlotId(), w.GetRuntimeId(), w.GetProfileId(), w.GetFoundSourceId(), w.GetFoundRepo(), w.GetFoundGroup(), w.GetTaskId(), boolCol(w.GetSatisfied()), timeCol(w.GetCheckedAt()), stamp(w.GetCreatedAt().AsTime()), w.GetError()); err != nil {
+		if err := exec(`INSERT OR REPLACE INTO wants (id, query, kind, source_id, group_match, format_id, auto_pull, slot_id, runtime_id, profile_id, found_source_id, found_repo, found_group, task_id, satisfied, checked_at, created_at, error, swap_task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, w.GetQuery(), enumCol(w.GetKind()), w.GetSourceId(), w.GetGroupMatch(), w.GetFormatId(), boolCol(w.GetAutoPull()), w.GetSlotId(), w.GetRuntimeId(), w.GetProfileId(), w.GetFoundSourceId(), w.GetFoundRepo(), w.GetFoundGroup(), w.GetTaskId(), boolCol(w.GetSatisfied()), timeCol(w.GetCheckedAt()), stamp(w.GetCreatedAt().AsTime()), w.GetError(), w.GetSwapTaskId()); err != nil {
 			return err
 		}
 		if err := exec(`DELETE FROM want_params WHERE want_id = ?`, id); err != nil {
@@ -252,7 +254,7 @@ func (d *DB) PutWant(ctx context.Context, w *v1.Want) error {
 
 // Lists every want oldest first
 func (d *DB) ListWants(ctx context.Context) ([]*v1.Want, error) {
-	rows, err := d.sql.QueryContext(ctx, `SELECT id, query, kind, source_id, group_match, format_id, auto_pull, slot_id, runtime_id, profile_id, found_source_id, found_repo, found_group, task_id, satisfied, checked_at, created_at, error FROM wants ORDER BY created_at, id`)
+	rows, err := d.sql.QueryContext(ctx, `SELECT id, query, kind, source_id, group_match, format_id, auto_pull, slot_id, runtime_id, profile_id, found_source_id, found_repo, found_group, task_id, satisfied, checked_at, created_at, error, swap_task_id FROM wants ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +264,7 @@ func (d *DB) ListWants(ctx context.Context) ([]*v1.Want, error) {
 		var kind, created string
 		var auto, satisfied int
 		var checked sql.NullString
-		if err := rows.Scan(&w.Id, &w.Query, &kind, &w.SourceId, &w.GroupMatch, &w.FormatId, &auto, &w.SlotId, &w.RuntimeId, &w.ProfileId, &w.FoundSourceId, &w.FoundRepo, &w.FoundGroup, &w.TaskId, &satisfied, &checked, &created, &w.Error); err != nil {
+		if err := rows.Scan(&w.Id, &w.Query, &kind, &w.SourceId, &w.GroupMatch, &w.FormatId, &auto, &w.SlotId, &w.RuntimeId, &w.ProfileId, &w.FoundSourceId, &w.FoundRepo, &w.FoundGroup, &w.TaskId, &satisfied, &checked, &created, &w.Error, &w.SwapTaskId); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -300,8 +302,8 @@ func (d *DB) DeleteWant(ctx context.Context, id string) (bool, error) {
 
 // Inserts or replaces a finding
 func (d *DB) PutFinding(ctx context.Context, f *v1.Finding) error {
-	_, err := d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO findings (id, watch_id, want_id, source_id, kind, repo, commit_id, group_name, detail, task_id, acknowledged, found_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		f.GetId(), f.GetWatchId(), f.GetWantId(), f.GetSourceId(), enumCol(f.GetKind()), f.GetRepo(), f.GetCommit(), f.GetGroup(), f.GetDetail(), f.GetTaskId(), boolCol(f.GetAcknowledged()), stamp(f.GetFoundAt().AsTime()))
+	_, err := d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO findings (id, watch_id, want_id, source_id, kind, repo, commit_id, group_name, detail, task_id, acknowledged, found_at, swap_task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		f.GetId(), f.GetWatchId(), f.GetWantId(), f.GetSourceId(), enumCol(f.GetKind()), f.GetRepo(), f.GetCommit(), f.GetGroup(), f.GetDetail(), f.GetTaskId(), boolCol(f.GetAcknowledged()), stamp(f.GetFoundAt().AsTime()), f.GetSwapTaskId())
 	return err
 }
 
@@ -338,13 +340,22 @@ func (d *DB) ListFindings(ctx context.Context, watchID, wantID string, unackedOn
 }
 
 // Drops the oldest acknowledged findings beyond keep
-func (d *DB) PruneFindings(ctx context.Context, keep int) error {
-	_, err := d.sql.ExecContext(ctx, `DELETE FROM findings WHERE acknowledged = 1 AND id NOT IN (SELECT id FROM findings ORDER BY found_at DESC, id DESC LIMIT ?)`, keep)
-	return err
+// Drops acknowledged findings past the newest keep, returning what went so the stream can say
+func (d *DB) PruneFindings(ctx context.Context, keep int) ([]*v1.Finding, error) {
+	gone, err := d.findings(ctx, `WHERE acknowledged = 1 AND id NOT IN (SELECT id FROM findings ORDER BY found_at DESC, id DESC LIMIT ?)`, keep)
+	if err != nil || len(gone) == 0 {
+		return nil, err
+	}
+	for _, f := range gone {
+		if _, err := d.sql.ExecContext(ctx, `DELETE FROM findings WHERE id = ?`, f.GetId()); err != nil {
+			return nil, err
+		}
+	}
+	return gone, nil
 }
 
 func (d *DB) findings(ctx context.Context, where string, args ...any) ([]*v1.Finding, error) {
-	rows, err := d.sql.QueryContext(ctx, `SELECT id, watch_id, want_id, source_id, kind, repo, commit_id, group_name, detail, task_id, acknowledged, found_at FROM findings `+where+` ORDER BY found_at DESC, id DESC`, args...)
+	rows, err := d.sql.QueryContext(ctx, `SELECT id, watch_id, want_id, source_id, kind, repo, commit_id, group_name, detail, task_id, acknowledged, found_at, swap_task_id FROM findings `+where+` ORDER BY found_at DESC, id DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +365,7 @@ func (d *DB) findings(ctx context.Context, where string, args ...any) ([]*v1.Fin
 		f := &v1.Finding{}
 		var kind, found string
 		var acked int
-		if err := rows.Scan(&f.Id, &f.WatchId, &f.WantId, &f.SourceId, &kind, &f.Repo, &f.Commit, &f.Group, &f.Detail, &f.TaskId, &acked, &found); err != nil {
+		if err := rows.Scan(&f.Id, &f.WatchId, &f.WantId, &f.SourceId, &kind, &f.Repo, &f.Commit, &f.Group, &f.Detail, &f.TaskId, &acked, &found, &f.SwapTaskId); err != nil {
 			return nil, err
 		}
 		f.Kind = v1.FindingKind(enumVal(v1.FindingKind(0).Descriptor(), kind))

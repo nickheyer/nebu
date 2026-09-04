@@ -15,8 +15,8 @@ func TestPublishSubscribeFilter(t *testing.T) {
 	all := b.Subscribe(ctx, nil)
 	slots := b.Subscribe(ctx, []v1.EventKind{v1.EventKind_EVENT_KIND_SLOT})
 	slot := &v1.Slot{Id: "s1", Name: "main"}
-	ev := b.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_CREATED, "s1", &v1.Event_Slot{Slot: slot})
-	b.Publish(v1.EventKind_EVENT_KIND_TASK, v1.EventAction_EVENT_ACTION_UPDATED, "t1", &v1.Event_Task{Task: &v1.Task{Id: "t1"}})
+	ev := b.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_CREATED, "s1", slot)
+	b.Publish(v1.EventKind_EVENT_KIND_TASK, v1.EventAction_EVENT_ACTION_UPDATED, "t1", &v1.Task{Id: "t1"})
 	if ev.GetSeq() != 1 || ev.GetSlot().GetName() != "main" {
 		t.Fatalf("published event wrong: %v", ev)
 	}

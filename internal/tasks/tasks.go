@@ -103,7 +103,7 @@ func (m *Manager) Start(kind, title string, labels map[string]string, run func(c
 	m.prune()
 	m.mu.Unlock()
 	m.save(e)
-	m.events.Publish(v1.EventKind_EVENT_KIND_TASK, v1.EventAction_EVENT_ACTION_CREATED, e.task.Id, &v1.Event_Task{Task: e.snapshot()})
+	m.events.Publish(v1.EventKind_EVENT_KIND_TASK, v1.EventAction_EVENT_ACTION_CREATED, e.task.Id, e.snapshot())
 	h := &Handle{m: m, e: e}
 	go m.execute(ctx, e, h, run)
 	return e.snapshot()
@@ -367,7 +367,7 @@ func (e *entry) broadcastLocked() {
 		}
 	}
 	if e.m != nil && e.m.events != nil {
-		e.m.events.Publish(v1.EventKind_EVENT_KIND_TASK, v1.EventAction_EVENT_ACTION_UPDATED, e.task.Id, &v1.Event_Task{Task: e.task})
+		e.m.events.Publish(v1.EventKind_EVENT_KIND_TASK, v1.EventAction_EVENT_ACTION_UPDATED, e.task.Id, e.task)
 	}
 }
 

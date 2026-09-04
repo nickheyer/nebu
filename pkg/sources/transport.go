@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -168,6 +169,15 @@ func checkField(f *v1.ConfigField, value string) (string, error) {
 		if _, err := strconv.ParseInt(value, 10, 64); err != nil {
 			return "", fmt.Errorf("%s: %q is not a whole number", f.GetName(), value)
 		}
+	case v1.ConfigType_CONFIG_TYPE_PATH:
+		abs, err := filepath.Abs(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: %v", f.GetName(), err)
+		}
+		if info, err := os.Stat(abs); err != nil || !info.IsDir() {
+			return "", fmt.Errorf("%s: %q is not a directory", f.GetName(), value)
+		}
+		value = abs
 	}
 	return value, nil
 }

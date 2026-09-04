@@ -6,7 +6,7 @@
   import { confirm } from '$lib/confirm.svelte';
   import { FindingKind, type Watch, type Want } from '$proto/monitor_pb';
   import { SourceKind } from '$proto/source_pb';
-  import { Radar, Plus, RefreshCw, Trash2, Check, CheckCheck, Eye, ExternalLink, Sparkles } from '@lucide/svelte';
+  import { Radar, Plus, RefreshCw, Trash2, Check, CheckCheck, Eye, ExternalLink, Sparkles, ListFilter, X } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Panel from '$lib/components/ui/Panel.svelte';
@@ -22,19 +22,33 @@
   let wantOpen = $state(false);
   let view = $state('open');
   let checkingAll = $state(false);
+  // Narrows the findings to one watch or want, everything when empty
+  let only = $state<Watch | Want | null>(null);
 
   const watches = $derived([...live.watches.values()].sort((a, b) => a.repo.localeCompare(b.repo)));
   const wants = $derived([...live.wants.values()].sort((a, b) => Number(a.satisfied) - Number(b.satisfied) || a.query.localeCompare(b.query)));
-  const findings = $derived([...live.findings.values()].sort((a, b) => Number((b.foundAt?.seconds ?? 0n) - (a.foundAt?.seconds ?? 0n))));
+  const findings = $derived([...live.findings.values()].filter((f) => !only || ('query' in only ? f.wantId === only.id : f.watchId === only.id)).sort((a, b) => Number((b.foundAt?.seconds ?? 0n) - (a.foundAt?.seconds ?? 0n))));
   const open = $derived(findings.filter((f) => !f.acknowledged));
   const shown = $derived(view === 'open' ? open : findings);
 
   $effect(() => {
     // The snapshot only carries unacknowledged findings, so load the rest once
-    api.monitor.listFindings({}).then((r) => {
-      for (const f of r.findings) live.findings.set(f.id, f);
-    });
+    api.monitor
+      .listFindings({})
+      .then((r) => {
+        for (const f of r.findings) live.findings.set(f.id, f);
+      })
+      .catch((err) => fail(err, 'Could not list findings'));
   });
+
+  // A finding belongs to the want that searched or the watch that looked, and names where it came from
+  function ownerOf(f: { wantId: string; watchId: string }): string {
+    return f.wantId ? (live.wants.get(f.wantId)?.query ?? '') : (live.watches.get(f.watchId)?.repo ?? '');
+  }
+
+  function labelOf(w: Watch | Want): string {
+    return 'query' in w ? w.query : w.repo;
+  }
 
   async function check(w?: Watch | Want, rearm = false) {
     if (rearm && w && 'query' in w) {
@@ -137,7 +151,8 @@
                   {#if w.satisfied}
                     <a href="/catalog?source={w.foundSourceId}&repo={encodeURIComponent(w.foundRepo)}" class="font-mono text-fg hover:underline">{w.foundRepo}</a>
                     <span class="font-mono text-fg-muted">{w.foundGroup}</span>
-                    {#if w.taskId}<a href="/tasks?id={w.taskId}" class="ml-1 inline-flex items-center gap-1 text-[11px] text-accent hover:underline"><ExternalLink size={11} /> task</a>{/if}
+                    {#if w.taskId}<a href="/tasks?id={w.taskId}" class="ml-1 inline-flex items-center gap-1 text-[11px] text-accent hover:underline"><ExternalLink size={11} /> pull</a>{/if}
+                    {#if w.swapTaskId}<a href="/tasks?id={w.swapTaskId}" class="ml-1 inline-flex items-center gap-1 text-[11px] text-accent hover:underline"><ExternalLink size={11} /> swap</a>{/if}
                   {:else}
                     <span class="text-fg-faint">not yet</span>
                   {/if}
@@ -150,6 +165,7 @@
                   <Menu
                     items={[
                       w.satisfied ? { label: 'Look again', icon: RefreshCw, onSelect: () => check(w, true) } : { label: 'Look now', icon: RefreshCw, onSelect: () => check(w) },
+                      { label: 'Findings', icon: ListFilter, onSelect: () => (only = w) },
                       { label: '', separator: true },
                       { label: 'Stop wanting', icon: Trash2, tone: 'bad', onSelect: () => unwant(w) }
                     ]}
@@ -202,6 +218,7 @@
                   <Menu
                     items={[
                       { label: 'Check now', icon: RefreshCw, onSelect: () => check(w) },
+                      { label: 'Findings', icon: ListFilter, onSelect: () => (only = w) },
                       { label: 'Inspect in catalog', icon: ExternalLink, href: `/catalog?source=${w.sourceId}&repo=${encodeURIComponent(w.repo)}` },
                       { label: '', separator: true },
                       { label: 'Stop watching', icon: Trash2, tone: 'bad', onSelect: () => remove(w) }
@@ -216,8 +233,11 @@
     {/if}
   </Panel>
 
-  <Panel title="Findings" description="one row per change a check noticed" flush>
+  <Panel title="Findings" description={only ? `of ${labelOf(only)}` : 'one row per change a check noticed'} flush>
     {#snippet actions()}
+      {#if only}
+        <button type="button" class="inline-flex h-7 items-center gap-1 rounded-md border border-accent/25 bg-accent/12 px-2 text-xs text-accent hover:bg-accent/20" onclick={() => (only = null)}><ListFilter size={12} /> {labelOf(only)} <X size={12} /></button>
+      {/if}
       <Tabs size="sm" bind:value={view} tabs={[{ id: 'open', label: 'Open', count: open.length }, { id: 'all', label: 'All', count: findings.length }]} />
       {#if open.length}<Button size="sm" variant="ghost" icon={CheckCheck} onclick={ackAll}>Acknowledge all</Button>{/if}
     {/snippet}
@@ -237,7 +257,10 @@
               <div class="mt-0.5 text-xs text-fg-muted">{f.detail}</div>
               <div class="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-fg-faint">
                 <span title={when(f.foundAt)}>{ago(f.foundAt, clock.now)}</span>
-                {#if f.taskId}<a href="/tasks?id={f.taskId}" class="inline-flex items-center gap-1 text-accent hover:underline"><ExternalLink size={11} /> task</a>{/if}
+                {#if ownerOf(f)}<Badge size="xs" tone={f.wantId ? 'accent' : 'neutral'} label={ownerOf(f)} />{/if}
+                {#if f.sourceId}<span>from <span class="text-fg-muted">{live.sources.get(f.sourceId)?.name || f.sourceId}</span></span>{/if}
+                {#if f.taskId}<a href="/tasks?id={f.taskId}" class="inline-flex items-center gap-1 text-accent hover:underline"><ExternalLink size={11} /> pull</a>{/if}
+                {#if f.swapTaskId}<a href="/tasks?id={f.swapTaskId}" class="inline-flex items-center gap-1 text-accent hover:underline"><ExternalLink size={11} /> swap</a>{/if}
               </div>
             </div>
             {#if !f.acknowledged}

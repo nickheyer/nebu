@@ -101,19 +101,18 @@ func TestBuildKeepsOrderAndSeedsEveryCatalog(t *testing.T) {
 	for _, bad := range [][]*v1.Source{
 		{{Id: "a", Kind: v1.SourceKind_SOURCE_KIND_LOCAL, Config: map[string]string{"path": root}}, {Id: "a", Kind: v1.SourceKind_SOURCE_KIND_LOCAL, Config: map[string]string{"path": root}}},
 		{{Kind: v1.SourceKind_SOURCE_KIND_LOCAL, Config: map[string]string{"path": root}}},
-		{{Id: "u", Kind: v1.SourceKind_SOURCE_KIND_UNSPECIFIED}},
 	} {
 		if _, err := Build(bad); err == nil {
 			t.Fatalf("%v should fail", bad)
 		}
 	}
-	// A row whose client cannot be built stays listed and says why, with the fields to fix it
-	r, err = Build([]*v1.Source{{Id: "m", Kind: v1.SourceKind_SOURCE_KIND_MIRROR}, Seeds()[0]})
+	// A row whose client cannot be built, or whose kind is unknown, stays listed and says why, with the fields to fix it
+	r, err = Build([]*v1.Source{{Id: "m", Kind: v1.SourceKind_SOURCE_KIND_MIRROR}, {Id: "u", Kind: v1.SourceKind_SOURCE_KIND_UNSPECIFIED}, Seeds()[0]})
 	if err != nil {
 		t.Fatal(err)
 	}
 	st := r.Statuses(context.Background())
-	if len(st) != 2 || st[0].GetError() == "" || st[1].GetError() != "" || len(st[0].GetCapabilities().GetFields()) == 0 {
+	if len(st) != 3 || st[0].GetError() == "" || st[1].GetError() == "" || st[2].GetError() != "" || len(st[0].GetCapabilities().GetFields()) == 0 {
 		t.Fatalf("broken status %v", st)
 	}
 	if src, _ := r.Get("m"); src == nil {
@@ -270,13 +269,13 @@ func TestManagerSeedsBootstrapsAndEdits(t *testing.T) {
 		t.Fatalf("unknown update %v", err)
 	}
 
-	if _, err := m.Delete(ctx, "huggingface"); err == nil || !strings.Contains(err.Error(), "seeded") {
+	if _, err := m.Delete(ctx, "huggingface", false); err == nil || !strings.Contains(err.Error(), "seeded") {
 		t.Fatalf("seeded delete %v", err)
 	}
-	if _, err := m.Delete(ctx, "nope"); err == nil || !strings.Contains(err.Error(), ErrUnknownSource.Error()) {
+	if _, err := m.Delete(ctx, "nope", false); err == nil || !strings.Contains(err.Error(), ErrUnknownSource.Error()) {
 		t.Fatalf("unknown delete %v", err)
 	}
-	if gone, err := m.Delete(ctx, "hf-mirror"); err != nil || gone.GetId() != "hf-mirror" {
+	if gone, err := m.Delete(ctx, "hf-mirror", false); err != nil || gone.GetId() != "hf-mirror" {
 		t.Fatalf("delete %v %v", gone, err)
 	}
 	if _, err := m.Registry.Get("hf-mirror"); err == nil {

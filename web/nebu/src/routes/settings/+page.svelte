@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Code, ConnectError } from '@connectrpc/connect';
   import { api, baseUrl, setToken, token, message } from '$lib/api';
   import { connect, live, desktopNotify, setDesktopNotify } from '$lib/state.svelte';
   import { fail, ok } from '$lib/toast.svelte';
@@ -90,7 +91,19 @@
       await api.sources.deleteSource({ id: s.source?.id ?? '' });
       ok(`Removed ${label}`);
     } catch (err) {
-      fail(err, 'Remove failed');
+      if (!(err instanceof ConnectError && err.code === Code.FailedPrecondition)) {
+        fail(err, 'Remove failed');
+        return;
+      }
+      // The daemon names the watches and wants on the source, dropping them is the person's call
+      const force = await confirm({ title: `Drop what names ${label}?`, message: `${message(err)}. Its watches are removed and wants narrowed to it look everywhere instead.`, action: 'Remove and drop references', tone: 'bad' });
+      if (!force) return;
+      try {
+        await api.sources.deleteSource({ id: s.source?.id ?? '', force: true });
+        ok(`Removed ${label}`, 'Its watches went with it and its wants look everywhere');
+      } catch (again) {
+        fail(again, 'Remove failed');
+      }
     }
   }
 
@@ -223,7 +236,7 @@
   </div>
   <Panel title="Notifications" description="Findings always appear as toasts while a page is open, and on the monitor page until acknowledged">
     <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-line bg-sunken px-3 py-2.5">
-      <input type="checkbox" class="mt-0.5 accent-accent" checked={notify} onchange={(e) => toggleNotify((e.currentTarget as HTMLInputElement).checked)} />
+      <input type="checkbox" class="mt-0.5 accent-accent" checked={notify} onchange={async (e) => { const box = e.currentTarget as HTMLInputElement; await toggleNotify(box.checked); box.checked = notify; }} />
       <span class="text-sm">
         <span class="font-medium text-fg">Desktop notifications in this browser</span>
         <span class="block text-xs leading-5 text-fg-muted">A system notification for every new finding and every wanted model that turns up. Webhooks for other systems are set in the daemon config under notify.</span>

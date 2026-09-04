@@ -20,6 +20,7 @@
   let description = $state('');
   let isDefault = $state(false);
   let values = $state<Record<string, string>>({});
+  let invalid = $state(0);
   let saving = $state(false);
 
   const manifest = $derived(runtimes.find((r) => r.manifest?.id === rt)?.manifest);
@@ -27,7 +28,7 @@
 
   $effect(() => {
     if (!open) return;
-    rt = editing?.runtimeId ?? runtimeId ?? runtimes[0]?.manifest?.id ?? '';
+    rt = editing?.runtimeId || runtimeId || runtimes[0]?.manifest?.id || '';
     name = editing?.name ?? '';
     description = editing?.description ?? '';
     isDefault = editing?.default ?? false;
@@ -85,10 +86,10 @@
 
   <div class="mt-5 mb-2 text-[10.5px] font-semibold tracking-wider text-fg-faint uppercase">Parameters</div>
   <p class="mb-3 text-xs text-fg-muted">Empty fields inherit the manifest default. Slot defaults and a run's own params apply over the profile.</p>
-  <ParamForm params={manifest?.params ?? []} bind:values idPrefix="prof" />
+  <ParamForm params={manifest?.params ?? []} bind:values bind:invalid idPrefix="prof" />
 
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-    <Button variant="primary" loading={saving} onclick={submit} disabled={!rt || !name.trim() || nameTaken}>{editing ? 'Save' : 'Add profile'}</Button>
+    <Button variant="primary" loading={saving} onclick={submit} disabled={!rt || !name.trim() || nameTaken || invalid > 0}>{editing ? 'Save' : 'Add profile'}</Button>
   {/snippet}
 </Dialog>

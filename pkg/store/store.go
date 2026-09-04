@@ -41,6 +41,8 @@ type Store struct {
 	locks map[string]*sync.Mutex
 	// Held shared by pulls and alone by sweeps, whose blobs have no manifest yet
 	sweep sync.RWMutex
+	// Bytes pulls in flight will land, counted against the cap before they exist
+	reserved uint64
 	// Blob bytes the store keeps under by evicting, 0 for no cap
 	MaxBytes uint64
 }
@@ -242,58 +244,82 @@ func (s *Store) ListManifests() ([]*v1.StoredModel, error) {
 }
 
 // Marks a model used now, so eviction takes it last
-func (s *Store) Touch(source, repo, group string) error {
+func (s *Store) Touch(source, repo, group string) (*v1.StoredModel, error) {
 	m, err := s.ReadManifest(source, repo, group)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	m.UsedAt = timestamppb.Now()
-	return s.WriteManifest(m)
+	return m, s.WriteManifest(m)
 }
 
 // Removes least recently used models, keep says which stay, until need more bytes fit under the cap
 //
 // Returns what was removed. Nothing happens without a cap, and a pull larger than
 // the cap evicts everything it may and proceeds, the cap being a target, not a refusal.
-func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.StoredModel, error) {
+func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.StoredModel, func(), error) {
+	release := func() {}
 	if s.MaxBytes == 0 {
-		return nil, nil
+		return nil, release, nil
 	}
-	used, err := s.blobBytes()
-	if err != nil || used+need <= s.MaxBytes {
-		return nil, err
+	// The bytes are spoken for until the caller releases them, so two pulls cannot both fit the same room
+	s.mu.Lock()
+	s.reserved += need
+	s.mu.Unlock()
+	release = func() {
+		s.mu.Lock()
+		s.reserved -= min(need, s.reserved)
+		s.mu.Unlock()
+	}
+	used, err := s.committed()
+	if err != nil || used <= s.MaxBytes {
+		return nil, release, err
 	}
 	// Pulls in flight land first, then their bytes count too
 	s.sweep.Lock()
 	defer s.sweep.Unlock()
-	if used, err = s.blobBytes(); err != nil || used+need <= s.MaxBytes {
-		return nil, err
+	if used, err = s.committed(); err != nil || used <= s.MaxBytes {
+		return nil, release, err
 	}
 	manifests, err := s.ListManifests()
 	if err != nil {
-		return nil, err
+		return nil, release, err
 	}
 	// Idle longest first, a model never run counting from its pull
 	sort.SliceStable(manifests, func(i, j int) bool { return LastUse(manifests[i]).Before(LastUse(manifests[j])) })
 	var removed []*v1.StoredModel
 	for _, m := range manifests {
-		if used+need <= s.MaxBytes {
+		if used <= s.MaxBytes {
 			break
 		}
+		// A run about to start holds the key, so the check waits for it and then sees it running
+		unlock := s.Lock(Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()))
 		if keep != nil && keep(m) {
+			unlock()
 			continue
 		}
-		if _, err := s.RemoveManifest(m.GetSourceId(), m.GetRepo(), m.GetGroup()); err != nil {
-			return removed, err
+		_, err := s.RemoveManifest(m.GetSourceId(), m.GetRepo(), m.GetGroup())
+		unlock()
+		if err != nil {
+			return removed, release, err
 		}
 		removed = append(removed, m)
 		freed, err := s.dropOrphans(m)
 		if err != nil {
-			return removed, err
+			return removed, release, err
 		}
 		used -= min(freed, used)
 	}
-	return removed, nil
+	return removed, release, nil
+}
+
+// Blob bytes on disk plus what pulls in flight have reserved
+func (s *Store) committed() (uint64, error) {
+	used, err := s.blobBytes()
+	s.mu.Lock()
+	used += s.reserved
+	s.mu.Unlock()
+	return used, err
 }
 
 // When a model last started a run, or landed when it never ran
@@ -492,7 +518,7 @@ func (s *Store) Status() (*v1.StoreStatus, error) {
 			continue
 		}
 		switch {
-		case strings.HasSuffix(e.Name(), partialSuffix):
+		case strings.HasSuffix(e.Name(), partialSuffix), strings.HasSuffix(e.Name(), stateSuffix):
 			st.Partials++
 			st.PartialBytes += uint64(info.Size())
 		case strings.HasPrefix(e.Name(), blobPrefix):

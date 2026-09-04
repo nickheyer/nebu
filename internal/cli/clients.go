@@ -72,13 +72,7 @@ func (e *env) clients() (*clients, error) {
 	}
 	base := localBase
 	httpClient := &http.Client{}
-	addr := e.cfg.GetAddr()
-	if listen := dialable(e.cfg.GetListen(), ""); addr == "" && reachable(listen) {
-		addr = listen
-		e.log.Debug("using running daemon", "addr", addr)
-	}
-	if addr != "" {
-		e.remote = true
+	if addr := e.resolveAddr(); addr != "" {
 		base = e.base(addr)
 		httpClient.Transport = e.transport(base)
 	} else {
@@ -110,6 +104,21 @@ func (e *env) clients() (*clients, error) {
 		events:    nebuv1connect.NewEventServiceClient(httpClient, base),
 	}
 	return e.cl, nil
+}
+
+// The daemon address, configured or found listening, empty when this process would be the daemon
+func (e *env) resolveAddr() string {
+	if e.resolved {
+		return e.addr
+	}
+	e.resolved = true
+	addr := e.cfg.GetAddr()
+	if listen := dialable(e.cfg.GetListen(), ""); addr == "" && reachable(listen) {
+		addr = listen
+		e.log.Debug("using running daemon", "addr", addr)
+	}
+	e.addr, e.remote = addr, addr != ""
+	return addr
 }
 
 // Prefixes a bare address with the scheme the daemon serves

@@ -6,7 +6,7 @@ plan. Which tool, which flag, which fact, and which release is data.
 
 | directory | message | purpose |
 | --- | --- | --- |
-| `probes/` | `ProbeSpec` | vendor tools and files read into devices, pools, and facts |
+| `probes/` | `ProbeSpec` | vendor tools and files read into devices, pools, and facts, selected by `os` and `arch` |
 | `formats/` | `FormatSpec` | file roles, weight groups, tensor kinds, descriptor params |
 | `archs/` | `ArchSpec` | architecture families and their cache formulas, sliding window families included |
 | `runtimes/` | `RuntimeManifest` | how to acquire, launch, probe, estimate for, and triage a backend |
@@ -61,7 +61,8 @@ not by name, so the file name is free.
 Expressions use expr syntax with `KiB`, `MiB`, `GiB`, `TiB`, `vercmp()`, and `num()` in scope.
 Templates use Go text/template with `missingkey=error` plus `join`, `split`, `lower`, `upper`,
 `trimPrefix`, `trimSuffix`, `replace`, `contains`, `hasPrefix`, `hasSuffix`, `default`, `quote`,
-`list`, `first`, and `num`. Optional fields go through `index`.
+`list`, `first`, `num`, `add`, `sub`, and `mul`. Optional fields go through `index`, and a
+metadata key or device fact that is absent renders empty, so the argument carrying it is dropped.
 
 ## Launch templates
 
@@ -86,4 +87,7 @@ env:
   CUDA_VISIBLE_DEVICES: '{{range $i, $d := .devices}}{{if $i}},{{end}}{{index $d.facts "index"}}{{end}}'
 ```
 
-pins the process to the slot's devices and renders empty, and is dropped, otherwise.
+pins the process to the slot's devices and renders empty, and is dropped, otherwise. Every GPU
+probe emits an `index` fact, the number a vendor's visible devices variable counts by, so one
+template pins NVIDIA, AMD, and Vulkan devices alike, and every probe that can read it emits the
+memory free right now beside the total, so a second model plans around the first on any card.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -21,11 +22,11 @@ func runSlotsList(ctx context.Context, e *env, args []string) error {
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.slots.ListSlots(ctx, connect.NewRequest(&v1.ListSlotsRequest{}))
@@ -85,11 +86,11 @@ func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	if err := limits(); err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Description: *description, DeviceIds: devices, MemoryBytes: bytes, RuntimeId: *runtimeID, Params: paramMap, Policy: policy}))
@@ -126,11 +127,11 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	if err := limits(); err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	current, err := cl.slots.GetSlot(ctx, connect.NewRequest(&v1.GetSlotRequest{Id: positional[0]}))
@@ -268,11 +269,11 @@ func runSlotsShow(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu slots show <name|id>")
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.slots.GetSlot(ctx, connect.NewRequest(&v1.GetSlotRequest{Id: positional[0]}))
@@ -315,11 +316,11 @@ func runSlotsEvict(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu slots evict <name|id>")
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.slots.EvictSlot(ctx, connect.NewRequest(&v1.EvictSlotRequest{Id: positional[0]}))
@@ -339,11 +340,11 @@ func runSlotsRemove(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu slots remove <name|id> [--force]")
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.slots.DeleteSlot(ctx, connect.NewRequest(&v1.DeleteSlotRequest{Id: positional[0], Force: *force}))
@@ -360,6 +361,7 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	runtimeID := fs.String("runtime", "", "runtime id, the slot default or the first that accepts the format when empty")
 	installID := fs.String("install", "", "install id, newest for the runtime when empty")
 	drainFirst := fs.Bool("drain-first", false, "stop the old instance before starting the new one even when both fit")
+	force := fs.Bool("force", false, "launch even when the plan says the model does not fit, redoing any prepare step")
 	profile := fs.String("profile", "", "profile id or name to start params from, the runtime default when empty")
 	var params multi
 	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the profile and slot defaults")
@@ -374,11 +376,11 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	sourceID, err := e.defaultSource(ctx, cl, *source)
@@ -389,7 +391,7 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	run := &v1.RunRequest{SourceId: sourceID, Repo: positional[1], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Params: paramMap, ProfileId: *profile}
+	run := &v1.RunRequest{SourceId: sourceID, Repo: positional[1], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Params: paramMap, ProfileId: *profile, Force: *force}
 	resp, err := cl.slots.Swap(ctx, connect.NewRequest(&v1.SwapRequest{SlotId: positional[0], Run: run, DrainFirst: *drainFirst}))
 	if err != nil {
 		return err
@@ -416,7 +418,7 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	if s.GetState() != v1.SlotState_SLOT_STATE_READY {
 		return fmt.Errorf("slot %s is %s: %s", s.GetName(), eval.EnumShort(s.GetState()), s.GetError())
 	}
-	fmt.Fprintf(e.out, "gateway %s/v1 model %s serves %s\n", e.gatewayBase(), s.GetName(), modelText(s.GetRequest()))
+	fmt.Fprintf(e.out, "gateway %s/v1 model %s serves %s\n", e.gatewayBase(ctx, cl), s.GetName(), modelText(s.GetRequest()))
 	return nil
 }
 
@@ -425,24 +427,35 @@ func runRoutesList(ctx context.Context, e *env, args []string) error {
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.gateway.ListRoutes(ctx, connect.NewRequest(&v1.ListRoutesRequest{}))
 	if err != nil {
 		return err
 	}
-	return e.print(resp.Msg, func(w io.Writer) { routesTable(w, resp.Msg.GetRoutes()) })
+	defaults := e.gatewayDefaults(ctx, cl)
+	return e.print(resp.Msg, func(w io.Writer) { routesTable(w, resp.Msg.GetRoutes(), defaults) })
 }
 
-func routesTable(w io.Writer, list []*v1.Route) {
+// The limits routes inherit, none when the daemon cannot say
+func (e *env) gatewayDefaults(ctx context.Context, cl *clients) *v1.Policy {
+	resp, err := cl.gateway.GetGatewayStatus(ctx, connect.NewRequest(&v1.GetGatewayStatusRequest{}))
+	if err != nil {
+		return nil
+	}
+	return resp.Msg.GetStatus().GetPolicy()
+}
+
+// Prints routes with the limits each one enforces, its own over the gateway's
+func routesTable(w io.Writer, list []*v1.Route, defaults *v1.Policy) {
 	var rows [][]string
 	for _, r := range list {
-		rows = append(rows, []string{r.GetName(), strings.ToUpper(eval.EnumShort(r.GetState())), r.GetModel(), r.GetInstanceId(), r.GetSlotId(), r.GetEndpoint(), strconv.FormatUint(r.GetRequests(), 10), strconv.Itoa(int(r.GetInFlight())), policyText(r.GetPolicy())})
+		rows = append(rows, []string{r.GetName(), strings.ToUpper(eval.EnumShort(r.GetState())), r.GetModel(), r.GetInstanceId(), r.GetSlotId(), r.GetEndpoint(), strconv.FormatUint(r.GetRequests(), 10), strconv.Itoa(int(r.GetInFlight())), policyText(gateway.Effective(r.GetPolicy(), defaults))})
 	}
 	table(w, []string{"NAME", "STATE", "MODEL", "INSTANCE", "SLOT", "ENDPOINT", "REQUESTS", "IN FLIGHT", "LIMITS"}, rows)
 }
@@ -456,11 +469,11 @@ func runRoutesAdd(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 2 {
 		return fmt.Errorf("usage: nebu routes add <name> <instance>")
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	in, err := cl.instances.GetInstance(ctx, connect.NewRequest(&v1.GetInstanceRequest{Id: positional[1]}))
@@ -471,7 +484,7 @@ func runRoutesAdd(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	return e.print(resp.Msg, func(w io.Writer) { routesTable(w, []*v1.Route{resp.Msg.GetRoute()}) })
+	return e.print(resp.Msg, func(w io.Writer) { routesTable(w, []*v1.Route{resp.Msg.GetRoute()}, e.gatewayDefaults(ctx, cl)) })
 }
 
 func runRoutesRemove(ctx context.Context, e *env, args []string) error {
@@ -483,11 +496,11 @@ func runRoutesRemove(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu routes remove <name>")
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.gateway.DeleteRoute(ctx, connect.NewRequest(&v1.DeleteRouteRequest{Name: positional[0]}))
@@ -502,11 +515,11 @@ func runGateway(ctx context.Context, e *env, args []string) error {
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.gateway.GetGatewayStatus(ctx, connect.NewRequest(&v1.GetGatewayStatusRequest{}))
@@ -528,7 +541,7 @@ func runGateway(ctx context.Context, e *env, args []string) error {
 		}
 		fmt.Fprintf(w, "auth %t tls %t requests %d default limits %s\n", st.GetAuth(), st.GetTls(), st.GetRequests(), policyText(st.GetPolicy()))
 		section(w, "routes")
-		routesTable(w, st.GetRoutes())
+		routesTable(w, st.GetRoutes(), st.GetPolicy())
 	})
 }
 
@@ -537,11 +550,11 @@ func runMonitorList(ctx context.Context, e *env, args []string) error {
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.monitor.ListWatches(ctx, connect.NewRequest(&v1.ListWatchesRequest{}))
@@ -598,11 +611,11 @@ func runMonitorAdd(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.monitor.AddWatch(ctx, connect.NewRequest(&v1.AddWatchRequest{SourceId: *source, Repo: positional[0], Revision: *revision, GroupMatch: *match, AutoPull: *autoPull || *slot != "", SlotId: *slot, RuntimeId: *runtimeID, Params: paramMap, ProfileId: *profile}))
@@ -642,11 +655,11 @@ func runMonitorWants(ctx context.Context, e *env, args []string) error {
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.monitor.ListWants(ctx, connect.NewRequest(&v1.ListWantsRequest{}))
@@ -685,11 +698,11 @@ func runMonitorWant(ctx context.Context, e *env, args []string) error {
 			return err
 		}
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.monitor.AddWant(ctx, connect.NewRequest(req))
@@ -708,11 +721,11 @@ func runMonitorUnwant(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu monitor unwant <id>")
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.monitor.RemoveWant(ctx, connect.NewRequest(&v1.RemoveWantRequest{Id: positional[0]}))
@@ -731,11 +744,11 @@ func runMonitorRemove(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu monitor remove <id|repo>")
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.monitor.RemoveWatch(ctx, connect.NewRequest(&v1.RemoveWatchRequest{Id: positional[0]}))
@@ -758,11 +771,11 @@ func runMonitorCheck(ctx context.Context, e *env, args []string) error {
 	if len(positional) == 1 {
 		req.Id = positional[0]
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.monitor.CheckWatches(ctx, connect.NewRequest(req))
@@ -783,11 +796,11 @@ func runMonitorFindings(ctx context.Context, e *env, args []string) error {
 	if len(positional) == 1 {
 		req.WatchId = positional[0]
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.monitor.ListFindings(ctx, connect.NewRequest(req))
@@ -816,11 +829,11 @@ func runMonitorAck(ctx context.Context, e *env, args []string) error {
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu monitor ack <finding id>")
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	resp, err := cl.monitor.AckFinding(ctx, connect.NewRequest(&v1.AckFindingRequest{Id: positional[0]}))
@@ -846,11 +859,11 @@ func runEvents(ctx context.Context, e *env, args []string) error {
 		}
 		req.Kinds = append(req.Kinds, v1.EventKind(n))
 	}
-	cl, err := e.clients()
-	if err != nil {
+	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	if err := e.requireDaemon(); err != nil {
+	cl, err := e.clients()
+	if err != nil {
 		return err
 	}
 	stream, err := cl.events.WatchEvents(ctx, connect.NewRequest(req))

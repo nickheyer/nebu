@@ -9,7 +9,7 @@ import type { Route } from '$proto/gateway_pb';
 import type { Install, Profile } from '$proto/runtime_pb';
 import type { FormatSpec } from '$proto/model_pb';
 import type { Build } from '$proto/recipe_pb';
-import type { StoredModel } from '$proto/store_pb';
+import type { StoredModel, StoreStatus } from '$proto/store_pb';
 import { FindingKind, type Finding, type Watch, type Want } from '$proto/monitor_pb';
 import { toast } from './toast.svelte';
 import type { Source } from '$proto/source_pb';
@@ -22,6 +22,7 @@ export const live = $state({
   needsToken: false,
   error: '',
   host: null as HostProfile | null,
+  store: null as StoreStatus | null,
   tasks: new SvelteMap<string, Task>(),
   instances: new SvelteMap<string, Instance>(),
   slots: new SvelteMap<string, Slot>(),
@@ -116,6 +117,10 @@ export function apply(ev: Event) {
   const p = ev.payload;
   if (ev.kind === EventKind.HOST) {
     if (p.case === 'host') live.host = p.value;
+    return;
+  }
+  if (ev.kind === EventKind.STORE) {
+    if (p.case === 'store') live.store = p.value;
     return;
   }
   const map = maps[ev.kind];
@@ -228,9 +233,11 @@ export function unackedFindings(): Finding[] {
   return [...live.findings.values()].filter((f) => !f.acknowledged && f.kind !== FindingKind.UNSPECIFIED);
 }
 
-// Profiles of one runtime by name, the default one first
+// Profiles of one runtime, the default first, or every profile by runtime when none is named
 export function profilesOf(runtimeId: string): Profile[] {
-  return [...live.profiles.values()].filter((p) => p.runtimeId === runtimeId).sort((a, b) => Number(b.default) - Number(a.default) || a.name.localeCompare(b.name));
+  return [...live.profiles.values()]
+    .filter((p) => !runtimeId || p.runtimeId === runtimeId)
+    .sort((a, b) => a.runtimeId.localeCompare(b.runtimeId) || Number(b.default) - Number(a.default) || a.name.localeCompare(b.name));
 }
 
 // Params a run of a runtime starts from: the named profile, else the runtime default

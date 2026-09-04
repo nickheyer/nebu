@@ -6,11 +6,12 @@
   let {
     params = [],
     values = $bindable({}),
+    invalid = $bindable(0),
     inherited = {},
     idPrefix = 'param',
     disabled = false,
     class: cls = ''
-  }: { params?: Param[]; values?: Record<string, string>; inherited?: Record<string, string>; idPrefix?: string; disabled?: boolean; class?: string } = $props();
+  }: { params?: Param[]; values?: Record<string, string>; invalid?: number; inherited?: Record<string, string>; idPrefix?: string; disabled?: boolean; class?: string } = $props();
 
   let newName = $state('');
   let newValue = $state('');
@@ -47,6 +48,11 @@
     if (p.type === ParamType.BOOL) return /^(true|false)$/i.test(v);
     return true;
   }
+
+  // How many fields hold a value the runtime would refuse, so a dialog can hold its submit
+  $effect(() => {
+    invalid = params.filter((p) => !valid(p, values[p.name])).length;
+  });
 
   function add() {
     const name = newName.trim();
@@ -97,10 +103,10 @@
   {#if params.length === 0}
     <div class="flex items-end gap-1.5 sm:col-span-2">
       <Field label="Parameter" for="{idPrefix}-new-name" class="flex-1">
-        <input id="{idPrefix}-new-name" class="input font-mono" bind:value={newName} placeholder="n_ctx" {disabled} autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && add()} />
+        <input id="{idPrefix}-new-name" class="input font-mono" bind:value={newName} placeholder="name" {disabled} autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && add()} />
       </Field>
       <Field label="Value" for="{idPrefix}-new-value" class="flex-1">
-        <input id="{idPrefix}-new-value" class="input font-mono" bind:value={newValue} placeholder="8192" {disabled} autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && add()} />
+        <input id="{idPrefix}-new-value" class="input font-mono" bind:value={newValue} placeholder="value" {disabled} autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && add()} />
       </Field>
       <button type="button" class="input flex w-10 shrink-0 items-center justify-center text-fg-muted hover:text-fg" aria-label="Add parameter" disabled={disabled || !newName.trim()} onclick={add}><Plus size={14} /></button>
     </div>

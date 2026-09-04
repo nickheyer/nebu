@@ -19,10 +19,12 @@ var dockerhub = &Catalog{
 	Kind: v1.SourceKind_SOURCE_KIND_OCI,
 	Name: "OCI registry",
 	Seed: "Docker Hub",
+	// The hub API browses and searches, a registry with no hub resolves and pulls by name
 	Transports: []Use{
-		{Kind: TransportHTTP, Fields: map[string]string{"endpoint": "https://hub.docker.com"}},
+		{Kind: TransportHTTP, Fields: map[string]string{"endpoint": ""}},
 		{Kind: TransportDistribution, Name: "registry", Fields: map[string]string{"endpoint": "https://registry-1.docker.io", "token_env": "DOCKER_TOKEN"}},
 	},
+	SeedConfig:    map[string]string{"endpoint": "https://hub.docker.com"},
 	Description:   "Docker Hub, model artifacts under its ai/ namespace, or any registry speaking the OCI distribution API",
 	RepoExample:   "ai/gemma3:4b-q4_K_M",
 	RepoPattern:   `^[\w.-]+(/[\w.-]+)+(:[\w.-]+)?$`,
@@ -80,7 +82,13 @@ type dhItem struct {
 }
 
 // Searches the hub, scoped to the author or the namespace unless the query names one
+// Only a source naming a hub API lists, searches, or reads cards
+func (dockerhubAPI) Browses(c *Client) bool { return c.HTTP() != nil }
+
 func (dockerhubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
+	if c.HTTP() == nil {
+		return nil, fmt.Errorf("%w: %s names no hub endpoint to search", ErrUnsupported, c.ID())
+	}
 	order := "desc"
 	if sort.Ascending {
 		order = "asc"
@@ -330,8 +338,11 @@ func (dockerhubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v
 	return out, nil
 }
 
-// Fills sizes, dates, and digests from the hub, best effort
+// Fills sizes, dates, and digests from the hub, best effort, nothing without a hub
 func dhDecorate(ctx context.Context, c *Client, name string, byName map[string]*v1.Revision) {
+	if c.HTTP() == nil {
+		return
+	}
 	next := c.URL("v2", "repositories", name, "tags") + "?page_size=100"
 	for page := 0; next != "" && page < dhMaxPages; page++ {
 		var body struct {
@@ -403,6 +414,9 @@ func dhNumCompare(a, b string) int {
 }
 
 func (dockerhubAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v1.ModelCard, error) {
+	if c.HTTP() == nil {
+		return nil, fmt.Errorf("%w: %s names no hub endpoint to read cards from", ErrUnsupported, c.ID())
+	}
 	name, _ := dhSplit(repo, revision)
 	ns, short, _ := strings.Cut(name, "/")
 	page := c.Base() + "/r/" + name

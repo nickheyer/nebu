@@ -17,9 +17,12 @@ again, bypassing the listing cache, and records findings:
 
 With `--auto-pull`, groups matching `--match` are pulled when they appear, and groups that
 are already stored are pulled again when the revision changes. With `--slot`, the slot is
-swapped onto the freshest pull, preferring the group it already serves. The pull and swap
-tasks are attached to the findings, and everything is visible on the monitor page of the
-web UI, where findings stay until acknowledged.
+swapped onto the freshest pull, preferring the group it already serves. Each finding carries
+the pull it set off as its task and the swap that followed as its swap task, and everything is
+visible on the monitor page of the web UI, where findings stay until acknowledged. A slot or a
+runtime a watch names must exist when it is added. One check owns each watch and want it
+touches, so a scheduled check and a check by hand never pull and swap the same one twice, and
+a check of one that is being checked right now is refused.
 
 ## Wanted
 
@@ -43,12 +46,17 @@ and the catalog's All tab is the same search by hand.
 
 A `--profile` on a watch or a want is resolved when it is added, against `--runtime` or the
 slot's runtime, and kept by id, so an unknown or mismatched profile is refused at once and a
-renamed one still swaps. Removing a profile a watch or want names is refused until they are
-pointed elsewhere or the removal is forced, which clears the reference.
+renamed one still swaps. A want's `--format`, `--runtime`, and `--kind` are checked the same way
+when it is added. Removing a profile a watch or want names is refused until they are pointed
+elsewhere or the removal is forced, which clears the reference; removing a slot they swap into
+drops the swap when forced, and removing a source a watch checks through removes the watch and
+widens a want narrowed to it when forced.
 
 ## Notifications
 
 Every finding reaches the web UI as a toast on whatever page is open, and the settings page
 can turn on desktop notifications for this browser. `notify.webhooks` in config posts one JSON
 document, the event as the UI sees it, to each URL for every new finding and for every instance
-that fails, so a chat bot or an automation can pick it up.
+that fails, so a chat bot or an automation can pick it up. Posts queue behind a slow webhook
+rather than holding the daemon's event stream, a connection failure or a server error is tried
+again a few times with a growing pause, and anything the queue cannot hold is counted in the log.

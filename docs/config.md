@@ -7,7 +7,7 @@ then `/etc/nebu/config.yaml`. Unknown keys fail the load.
 ```yaml
 listen: 127.0.0.1:8484            # api, gateway, and web ui
 addr: ""                          # daemon address the cli dials, in process when empty
-data_dir: ~/.local/share/nebu     # db, runtime output, installs, builds
+data_dir: ~/.local/share/nebu     # db, runtime output, installs, builds, Library/Application Support on macOS, LOCALAPPDATA on Windows
 cache_dir: ~/.cache/nebu
 store_dir: <data_dir>/store       # blobs, manifests, links
 store:
@@ -66,7 +66,7 @@ tls:
 notify:
   webhooks: []                    # URLs posted one JSON event per new finding and failed instance
 monitor:
-  interval_ms: 3600000            # how often watches are checked
+  interval_ms: 3600000            # how often watches are checked and wants looked for
   disabled: false
 builds:
   sandbox: SANDBOX_KIND_HOST      # or SANDBOX_KIND_OCI
@@ -103,14 +103,17 @@ flight, whose blobs have no manifest yet, and eviction drops only the blobs of t
 removed that nothing else names. `nebu store status` and the store page show the cap beside
 what is on disk, and `nebu list` and the store page show when each model was last used.
 
-`transfer.windows` shape downloads by time of week. Each window names days, a local clock
-span, and either its own byte rate or `pause`, which holds every download until the window
-ends; outside every window `max_bytes_per_second` applies. A pull in flight follows the
-schedule as the clock moves, so a rate set for office hours eases at night without a restart.
-The limits cover every download nebu makes: pulls, prebuilt runtime archives, and the source
-archives and patches a recipe fetches. A paused window is waited out before a connection
-opens, so nothing idles on a server through the pause, and a file the Hugging Face CLI or git
-LFS moves whole waits for the window to end before it starts.
+`transfer.windows` shape downloads by time of week. Each window names days, by three letter or
+full name, a local clock span, and either its own byte rate or `pause`, which holds every
+download until the window ends; outside every window `max_bytes_per_second` applies. A pull in
+flight follows the schedule as the clock moves, so a rate set for office hours eases at night
+without a restart, and a chunk on the wire when a pause begins closes its connection and starts
+again when the window ends, without spending a retry. The limits cover every download nebu
+makes: pulls, prebuilt runtime archives, the source archives and patches a recipe fetches, git
+LFS objects, and the files a git host serves. A paused window is waited out before a connection
+opens, so nothing idles on a server through the pause, a recipe's git clone waits for it too
+though its rate is git's own, and under any limit at all a Hugging Face source moves files
+chunk by chunk over HTTP rather than through its CLI, which follows neither.
 
 When `auth.token` is set every API call, from the CLI or the web UI, must carry it as a
 bearer token. The CLI reads it from the same config or `NEBU_TOKEN`. The web UI asks for it
@@ -140,9 +143,15 @@ default source seeded under the provider's name: `huggingface`, `modelscope`, `o
 point it at a proxy or another token variable, but never removed. The `sources` list in config is a
 bootstrap: each entry creates a source with that id when none exists and is otherwise ignored, so
 once a source exists the daemon owns it. Config entries are created before the seeds, so an entry
-named after a provider defines that provider's source instead of the seeded one. Create, edit, and
-remove sources with `nebu sources add`, `update`, and `remove`, or on the settings page. `nebu
-sources` prints every source with what its provider can do and marks which are seeded.
+named after a provider defines that provider's source instead of the seeded one. An entry is
+checked for its shape alone, its kind and setting names and types, so one whose client cannot be
+built, a CLI not on the PATH say, is listed as broken with the reason rather than stopping the
+daemon. Create, edit, and remove sources with `nebu sources add`, `update`, and `remove`, or on the
+settings page. Removing a source a watch checks through, or a want is narrowed to, is refused
+until forced, which removes those watches and widens those wants to every source; what the source
+pulled stays in the store either way. `nebu sources` prints every source with what its provider
+can do and marks which are seeded. A change to one source rebuilds only that source's client, so
+the others keep their tokens and listing caches.
 
 A source's kind is fixed when it is created; to move to another provider, remove it and add a new
 source. Its settings are a map of names to values. Each provider declares the settings its sources
@@ -160,8 +169,13 @@ token variable, `distribution` for an OCI registry with a credential variable ho
 `file` for a directory, `git` for a partial clone whose LFS pointers resolve through the batch
 API, and `hfcli` for the Hugging Face CLI. A provider names the transports it uses; the primary
 one owns the bare setting names and every other one prefixes its settings with its name, so an OCI
-source has `endpoint` for the hub API and `registry_endpoint` for the registry. A URL setting needs
-a scheme, a variable setting is an environment variable name, and a path is a directory.
+source has `endpoint` for the hub API and `registry_endpoint` for the registry, unless it stands in
+for the primary the way a mirror's directory stands in for its endpoint, in which case it keeps
+bare names that do not collide. A URL setting needs a scheme, a variable setting is an environment
+variable name, and a path is a directory that exists, checked when the source is written and again
+whenever the daemon rebuilds its sources, so a directory that went away marks the source broken.
+The auth state a source reports comes from its bare `token_env`, or the first transport variable
+ending in `token_env` when the primary has none, so a registry credential counts.
 
 All of the seeded defaults list and search without a token. Civitai and Kaggle need one to
 download anything, the rest only for gated or private repositories. The first source is the one
@@ -175,7 +189,7 @@ What a source of each kind accepts, defaults in parentheses, required settings s
 | `SOURCE_KIND_HUGGINGFACE` | `endpoint` (`https://huggingface.co`), `token_env` (`HF_TOKEN`), `cli_command` (empty, `hf` or `huggingface-cli` moves whole files through the CLI) | `org/model` | branch or tag, `main` |
 | `SOURCE_KIND_MODELSCOPE` | `endpoint` (`https://www.modelscope.cn`), `token_env` (`MODELSCOPE_API_TOKEN`) | `org/model` | branch or tag, `master` |
 | `SOURCE_KIND_OLLAMA` | `endpoint` (`https://ollama.com`), `token_env` (`OLLAMA_API_KEY`), `registry_endpoint` (`https://registry.ollama.ai`) | `name[:tag]`, `latest` when absent | tag |
-| `SOURCE_KIND_OCI` | `endpoint` (`https://hub.docker.com`), `registry_endpoint` (`https://registry-1.docker.io`), `registry_token_env` (`DOCKER_TOKEN` as `user:token`) | `namespace/name[:tag]`, `ai/` when absent | tag |
+| `SOURCE_KIND_OCI` | `endpoint` (empty, the seeded Docker Hub sets `https://hub.docker.com`, a source with none resolves and pulls by name but lists nothing), `registry_endpoint` (`https://registry-1.docker.io`), `registry_token_env` (`DOCKER_TOKEN` as `user:token`) | `namespace/name[:tag]`, `ai/` when absent | tag |
 | `SOURCE_KIND_CIVITAI` | `endpoint` (`https://civitai.com`), `token_env` (`CIVITAI_API_TOKEN`) | model id, or `id/versionId`, or a model page URL | version id or name |
 | `SOURCE_KIND_KAGGLE` | `endpoint` (`https://www.kaggle.com`), `token_env` (`KAGGLE_KEY`), `username_env` (`KAGGLE_USERNAME`, basic auth) | `owner/model[/framework/instance]` | version number |
 | `SOURCE_KIND_NGC` | `endpoint` (`https://api.ngc.nvidia.com`), `token_env` (`NGC_API_KEY`, exchanged at `auth_endpoint`, guest when absent), `auth_endpoint` (`https://authn.nvidia.com`) | `org[/team]/name` | version |

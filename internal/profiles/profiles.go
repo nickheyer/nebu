@@ -158,22 +158,19 @@ func (m *Manager) check(p *v1.Profile) error {
 	return nil
 }
 
-// Writes a row, clearing the default flag on the runtime's other profiles when this one takes it
+// Writes a row, the store stepping the runtime's other default down in the same write, then follows it in memory
 func (m *Manager) saveLocked(ctx context.Context, p *v1.Profile, action v1.EventAction) error {
+	if err := m.DB.PutProfile(ctx, p); err != nil {
+		return err
+	}
 	if p.GetDefault() {
 		for _, other := range m.rows {
 			if other.GetId() != p.GetId() && other.GetRuntimeId() == p.GetRuntimeId() && other.GetDefault() {
 				other.Default = false
-				other.UpdatedAt = timestamppb.Now()
-				if err := m.DB.PutProfile(ctx, other); err != nil {
-					return err
-				}
+				other.UpdatedAt = p.GetUpdatedAt()
 				m.publish(v1.EventAction_EVENT_ACTION_UPDATED, other)
 			}
 		}
-	}
-	if err := m.DB.PutProfile(ctx, p); err != nil {
-		return err
 	}
 	m.rows[p.GetId()] = p
 	m.publish(action, p)
@@ -248,7 +245,7 @@ func (m *Manager) Delete(ctx context.Context, ref string, force bool) (*v1.Profi
 
 func (m *Manager) publish(action v1.EventAction, p *v1.Profile) {
 	if m.Events != nil {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_PROFILE, action, p.GetId(), &v1.Event_Profile{Profile: clone(p)})
+		m.Events.Publish(v1.EventKind_EVENT_KIND_PROFILE, action, p.GetId(), clone(p))
 	}
 }
 

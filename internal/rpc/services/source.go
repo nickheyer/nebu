@@ -62,7 +62,7 @@ func (s *SourceService) UpdateSource(ctx context.Context, req *connect.Request[v
 }
 
 func (s *SourceService) DeleteSource(ctx context.Context, req *connect.Request[v1.DeleteSourceRequest]) (*connect.Response[v1.DeleteSourceResponse], error) {
-	row, err := s.sources.Delete(ctx, req.Msg.GetId())
+	row, err := s.sources.Delete(ctx, req.Msg.GetId(), req.Msg.GetForce())
 	if err != nil {
 		return nil, wrap(err)
 	}

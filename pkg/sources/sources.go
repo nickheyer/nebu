@@ -26,6 +26,9 @@ import (
 // Returned when a source id is not configured
 var ErrUnknownSource = errors.New("unknown source")
 
+// Returned when a source cannot go because a watch or want names it
+var ErrSourceInUse = errors.New("source in use")
+
 // Returned when a source cannot do what was asked
 var ErrUnsupported = errors.New("not supported by this source")
 
@@ -97,6 +100,14 @@ type rangedWhole struct {
 	whole Blob
 }
 
+// Blob that also has a ranged form, what the transfer limits can follow
+type Ranged interface {
+	Ranged() Blob
+}
+
+// The ranged half, moved chunk by chunk under the limits instead of whole
+func (r *rangedWhole) Ranged() Blob { return r.Blob }
+
 func (r *rangedWhole) Materialize(ctx context.Context, progress func(int64)) (string, error) {
 	m, ok := r.whole.(Materializer)
 	if !ok {
@@ -166,6 +177,9 @@ func Build(cfgs []*v1.Source) (*Registry, error) {
 // from every call, so one bad row never hides the rest. The errors here are
 // structural: a missing id, a duplicate, or an unknown kind.
 func (r *Registry) Reload(cfgs []*v1.Source) error {
+	r.mu.RLock()
+	previous := r.byID
+	r.mu.RUnlock()
 	order := make([]Source, 0, len(cfgs))
 	byID := make(map[string]Source, len(cfgs))
 	for _, cfg := range cfgs {
@@ -175,12 +189,13 @@ func (r *Registry) Reload(cfgs []*v1.Source) error {
 		if _, dup := byID[cfg.GetId()]; dup {
 			return fmt.Errorf("%w: duplicate source id %q", ErrSource, cfg.GetId())
 		}
-		cat, ok := catalogs[cfg.GetKind()]
-		if !ok {
-			return fmt.Errorf("%w: source %s: unsupported kind %s", ErrSource, cfg.GetId(), cfg.GetKind())
-		}
 		var src Source
-		if c, err := newClient(cat, cfg, r.CacheDir); err != nil {
+		// A client whose row did not change keeps its caches and tokens, a broken one gets another try
+		if old, ok := previous[cfg.GetId()].(*Client); ok && proto.Equal(old.Spec(), cfg) {
+			src = old
+		} else if cat, ok := catalogs[cfg.GetKind()]; !ok {
+			src = &broken{spec: cfg, err: fmt.Errorf("source %s: unsupported kind %s", cfg.GetId(), cfg.GetKind())}
+		} else if c, err := newClient(cat, cfg, r.CacheDir); err != nil {
 			src = &broken{spec: cfg, err: fmt.Errorf("source %s: %w", cfg.GetId(), err)}
 		} else {
 			src = c
@@ -191,6 +206,18 @@ func (r *Registry) Reload(cfgs []*v1.Source) error {
 	r.mu.Lock()
 	r.order, r.byID = order, byID
 	r.mu.Unlock()
+	return nil
+}
+
+// Checks a spec's shape, its kind and settings, without reaching for anything
+func (r *Registry) Validate(spec *v1.Source) error {
+	cat, ok := catalogs[spec.GetKind()]
+	if !ok {
+		return fmt.Errorf("%w: unsupported kind %s", ErrSource, spec.GetKind())
+	}
+	if _, err := resolveConfig(cat.Fields(), spec.GetConfig()); err != nil {
+		return fmt.Errorf("%w: %v", ErrSource, err)
+	}
 	return nil
 }
 
@@ -214,7 +241,7 @@ func Seeds() []*v1.Source {
 		if cat.Configured {
 			continue
 		}
-		out = append(out, &v1.Source{Id: cat.ID, Kind: cat.Kind, Name: cat.seedName(), Seeded: true})
+		out = append(out, &v1.Source{Id: cat.ID, Kind: cat.Kind, Name: cat.seedName(), Seeded: true, Config: cat.SeedConfig})
 	}
 	return out
 }
@@ -361,6 +388,9 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 		if len(srcs) == 0 {
 			return nil, fmt.Errorf("%w: no sources", ErrUnknownSource)
 		}
+		// Sorts and facets belong to one provider, every source answers in its own order
+		req = proto.Clone(req).(*v1.SearchRequest)
+		req.Sort, req.Ascending, req.Filters = "", false, nil
 	}
 	cursors := map[string]string{}
 	if req.GetCursor() != "" {

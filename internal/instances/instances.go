@@ -153,7 +153,7 @@ func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
 	if m.Routes != nil && rec.GetSlotId() == "" {
 		switch {
 		case rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY:
-			m.Routes.Set(rec.GetName(), rec.GetId(), "", rec.GetEndpoint(), modelOf(rec), m.api(rec), nil)
+			m.Routes.Set(rec.GetName(), rec.GetId(), "", rec.GetEndpoint(), modelOf(rec), rec.GetName(), m.api(rec), nil)
 		case rec.GetState() == v1.InstanceState_INSTANCE_STATE_DRAINING && before != v1.InstanceState_INSTANCE_STATE_DRAINING:
 			m.Routes.Drain(rec.GetId())
 		case terminal(rec.GetState()) && !terminal(before):
@@ -162,7 +162,7 @@ func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
 	} else if m.Routes != nil && terminal(rec.GetState()) && !terminal(before) {
 		m.Routes.RemoveInstance(rec.GetId())
 	}
-	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_UPDATED, rec.GetId(), &v1.Event_Instance{Instance: rec})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_UPDATED, rec.GetId(), rec)
 	if m.OnChange != nil {
 		m.OnChange(rec)
 	}
@@ -204,7 +204,11 @@ func (in *instance) attach(proc launch.Handle) {
 }
 
 // Everything resolved for a run before anything is launched
-const defaultPrepareTimeout = time.Hour
+const (
+	defaultPrepareTimeout = time.Hour
+	// Lines the prepare step keeps in memory, the same ring the launcher keeps
+	logCapacity = 5000
+)
 
 type prepared struct {
 	req        *v1.RunRequest
@@ -312,6 +316,11 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if m.conflict(name, req.GetSlotId()) {
 		return nil, fmt.Errorf("%w: instance %q is already running", runtime.ErrParam, name)
 	}
+	if req.GetSlotId() == "" && m.Routes != nil {
+		if r, ok := m.Routes.Lookup(name); ok && r.GetSlotId() != "" {
+			return nil, fmt.Errorf("%w: %q is a slot, run with the slot or pick another name", runtime.ErrParam, name)
+		}
+	}
 	profile, err := m.Host.Profile(ctx, true)
 	if err != nil {
 		return nil, err
@@ -357,10 +366,16 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	if err != nil {
 		return nil, nil, err
 	}
-	// A model that just launched is the last the store evicts, a plan alone changes nothing
-	if err := m.Store.Touch(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup()); err != nil {
-		m.Log.Warn("store touch failed", "repo", stored.GetRepo(), "err", err)
+	// A model that just launched is the last the store evicts, a plan alone changes nothing,
+	// and its key stays held until the instance is listed so an eviction meanwhile waits and then spares it
+	key := store.Key(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
+	unlock := m.Store.Lock(key)
+	defer unlock()
+	touched, err := m.Store.Touch(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s %s is no longer stored, pull it again: %w", stored.GetRepo(), stored.GetGroup(), err)
 	}
+	m.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_UPDATED, key, touched)
 	artifacts := m.artifacts(stored, rt)
 	input := runtime.RenderInput{
 		Name:       name,
@@ -374,6 +389,9 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	}
 	var prep *runtime.Rendered
 	if rt.Prepares(stored.GetFormatId()) {
+		if artifacts["prepared_dir"] == "" {
+			return nil, nil, fmt.Errorf("%s needs a prepared tree for %s and the store has none", rt.Manifest.GetId(), stored.GetGroup())
+		}
 		if prep, err = rt.RenderPrepare(input); err != nil {
 			return nil, nil, err
 		}
@@ -414,12 +432,12 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	m.list = append(m.list, in)
 	m.pruneLocked()
 	m.mu.Unlock()
-	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_CREATED, in.rec.GetId(), &v1.Event_Instance{Instance: in.snapshot()})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_CREATED, in.rec.GetId(), in.snapshot())
 	prepDir := artifacts["prepared_dir"]
 	prepTimeout := time.Duration(rt.Manifest.GetLaunch().GetPrepare().GetTimeoutMs()) * time.Millisecond
 	task := m.Tasks.Start(kindRun, "run "+name, map[string]string{"instance": in.rec.GetId(), "name": name}, func(ctx context.Context, h *tasks.Handle) error {
 		if prep != nil {
-			if err := m.runPrepare(ctx, h, in, prep, install.GetDir(), prepDir, prepTimeout); err != nil {
+			if err := m.runPrepare(ctx, h, in, prep, install.GetDir(), prepDir, prepTimeout, req.GetForce()); err != nil {
 				return err
 			}
 		}
@@ -429,11 +447,17 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	return in.snapshot(), task, nil
 }
 
-func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance, prep *runtime.Rendered, dir, prepDir string, timeout time.Duration) error {
+func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance, prep *runtime.Rendered, dir, prepDir string, timeout time.Duration, force bool) error {
 	marker := filepath.Join(prepDir, ".prepared")
-	if _, err := os.Stat(marker); err == nil {
+	if _, err := os.Stat(marker); err == nil && !force {
 		h.Logf("prepared earlier at %s", prepDir)
 		return nil
+	}
+	if err := os.RemoveAll(prepDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(prepDir, 0o755); err != nil {
+		return err
 	}
 	if timeout <= 0 {
 		timeout = defaultPrepareTimeout
@@ -455,6 +479,11 @@ func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance,
 	defer logFile.Close()
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
+	// The output is the instance log until the runtime starts, so logs follow it and triage reads it
+	log := launch.NewLog(logCapacity)
+	in.mu.Lock()
+	in.log = log
+	in.mu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -463,6 +492,7 @@ func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance,
 		for scanner.Scan() {
 			line := scanner.Text()
 			fmt.Fprintln(logFile, line)
+			log.Write(line)
 			h.Logf("%s", line)
 		}
 	}()
@@ -470,18 +500,14 @@ func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance,
 	err = proc.Run(cmd)
 	pw.Close()
 	<-done
+	log.Close()
 	if err != nil {
 		os.RemoveAll(prepDir)
-		os.MkdirAll(prepDir, 0o755)
-		in.update(func(r *v1.Instance) {
-			if terminal(r.State) {
-				return
-			}
-			r.State = v1.InstanceState_INSTANCE_STATE_FAILED
-			r.Error = "prepare: " + err.Error()
-			r.StoppedAt = timestamppb.Now()
-		})
-		return fmt.Errorf("prepare: %w", err)
+		err = fmt.Errorf("prepare: %w", err)
+		for _, hit := range m.fail(in, err) {
+			h.Logf("triage %s: %s", hit.GetId(), hit.GetSummary())
+		}
+		return err
 	}
 	return os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
 }
@@ -523,8 +549,9 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 		used := deviceFree(before) - deviceFree(after)
 		if used > 0 {
 			measurements = append(measurements, &v1.Measurement{Key: estimate.DeviceUsedKey, Bytes: uint64(used)})
-			if rec.GetPlan() != nil {
-				if cerr := m.Calibration.Record(ctx, in.rt.Manifest.GetId(), d.GetArchitecture(), uint64(used), estimate.PlannedDevice(rec.GetPlan())); cerr != nil {
+			if plan := rec.GetPlan(); plan != nil {
+				base := max(float64(estimate.PlannedDevice(plan))-plan.GetOverheadDelta(), 0)
+				if cerr := m.Calibration.Record(ctx, in.rt.Manifest.GetId(), d.GetArchitecture(), uint64(used), uint64(base)); cerr != nil {
 					m.Log.Warn("calibration write failed", "err", cerr)
 				}
 			}
@@ -741,6 +768,11 @@ func (m *Manager) defaultRuntime(ctx context.Context, formatID string) (string, 
 	return "", fmt.Errorf("%w: no compatible runtime accepts %s", runtime.ErrParam, formatID)
 }
 
+// Whether a restart brings the record back, wanted and not failed on its own
+func relaunches(rec *v1.Instance) bool {
+	return rec.GetDesiredRunning() && rec.GetState() != v1.InstanceState_INSTANCE_STATE_FAILED
+}
+
 // Names the instances whose request starts from a profile, live ones and any a
 // restart would relaunch, dropping the reference when clear is set
 func (m *Manager) ProfileReferrers(refers func(ref, runtimeID string) bool, clear bool) []string {
@@ -751,7 +783,7 @@ func (m *Manager) ProfileReferrers(refers func(ref, runtimeID string) bool, clea
 	for _, in := range list {
 		rec := in.snapshot()
 		req := rec.GetRequest()
-		if terminal(rec.GetState()) && !rec.GetDesiredRunning() || !refers(req.GetProfileId(), req.GetRuntimeId()) {
+		if terminal(rec.GetState()) && !relaunches(rec) || !refers(req.GetProfileId(), req.GetRuntimeId()) {
 			continue
 		}
 		out = append(out, "instance "+rec.GetName())
@@ -933,11 +965,16 @@ func (m *Manager) Recover(ctx context.Context) error {
 		if !terminal(rec.GetState()) {
 			alive := proc.Running(int(rec.GetPid()), rec.GetCommand())
 			switch {
-			case alive && in.rt != nil:
+			case alive && in.rt != nil && rec.GetDesiredRunning():
 				m.adopt(ctx, in)
 				continue
-			case alive:
+			case alive && in.rt == nil:
 				m.Log.Warn("stopping instance whose runtime manifest is gone", "name", rec.GetName(), "runtime", rec.GetRuntimeId(), "pid", rec.GetPid())
+				fallthrough
+			case alive:
+				if in.rt != nil {
+					m.Log.Info("finishing the stop a previous daemon began", "name", rec.GetName(), "pid", rec.GetPid())
+				}
 				wg.Add(1)
 				go func(pid int, grace time.Duration) {
 					defer wg.Done()
@@ -950,7 +987,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 				r.StoppedAt = timestamppb.Now()
 			})
 		}
-		if rec.GetDesiredRunning() && rec.GetState() != v1.InstanceState_INSTANCE_STATE_FAILED {
+		if relaunches(rec) {
 			wanted[rec.GetName()] = in
 		}
 	}
@@ -1154,7 +1191,7 @@ func deviceViews(p *v1.HostProfile, res *Reservation) []map[string]any {
 		if d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
 			continue
 		}
-		facts := make(map[string]any, len(d.GetFacts()))
+		facts := make(map[string]string, len(d.GetFacts()))
 		for k, v := range d.GetFacts() {
 			facts[k] = v
 		}

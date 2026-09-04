@@ -32,6 +32,8 @@ enum EventKind {
   EVENT_KIND_SOURCE = 11;
   EVENT_KIND_PROFILE = 12;
   EVENT_KIND_WANT = 13;
+  // The store's totals, after anything lands, goes, or is collected
+  EVENT_KIND_STORE = 14;
 }
 
 // How it changed
@@ -64,6 +66,7 @@ message Event {
     Source source = 20;
     Profile profile = 21;
     Want want = 22;
+    StoreStatus store = 23;
   }
 }
 

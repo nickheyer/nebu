@@ -42,6 +42,8 @@ message Route {
   string model = 9;
   google.protobuf.Timestamp updated_at = 10;
   Policy policy = 11;
+  // The model name the runtime itself answers to, sent upstream in place of the route name
+  string served = 12;
 }
 
 // One address the gateway answers on

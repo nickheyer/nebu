@@ -52,7 +52,6 @@ CREATE TABLE instances (
   slot_id TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX instances_by_created ON instances (created_at);
-CREATE INDEX instances_by_name ON instances (name);
 
 CREATE TABLE instance_params (
   instance_id TEXT NOT NULL REFERENCES instances (id) ON DELETE CASCADE,
@@ -78,7 +77,8 @@ CREATE TABLE instance_requests (
   install_id TEXT NOT NULL,
   name TEXT NOT NULL,
   slot_id TEXT NOT NULL DEFAULT '',
-  profile_id TEXT NOT NULL DEFAULT ''
+  profile_id TEXT NOT NULL DEFAULT '',
+  force INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE instance_request_params (
@@ -94,7 +94,8 @@ CREATE TABLE instance_plans (
   weights_bytes INTEGER NOT NULL,
   cache_bytes INTEGER NOT NULL,
   overhead_bytes INTEGER NOT NULL,
-  detail TEXT NOT NULL DEFAULT ''
+  detail TEXT NOT NULL DEFAULT '',
+  overhead_delta REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE instance_plan_pools (
@@ -266,7 +267,8 @@ CREATE TABLE slot_requests (
   runtime_id TEXT NOT NULL,
   install_id TEXT NOT NULL,
   name TEXT NOT NULL,
-  profile_id TEXT NOT NULL DEFAULT ''
+  profile_id TEXT NOT NULL DEFAULT '',
+  force INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE slot_request_params (
@@ -286,7 +288,8 @@ CREATE TABLE routes (
   state TEXT NOT NULL,
   model TEXT NOT NULL DEFAULT '',
   requests INTEGER NOT NULL DEFAULT 0,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  served TEXT NOT NULL DEFAULT ''
 );
 
 -- Repositories watched for new revisions and weight groups
@@ -340,7 +343,8 @@ CREATE TABLE wants (
   satisfied INTEGER NOT NULL DEFAULT 0,
   checked_at TEXT,
   created_at TEXT NOT NULL,
-  error TEXT NOT NULL DEFAULT ''
+  error TEXT NOT NULL DEFAULT '',
+  swap_task_id TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE want_params (
@@ -363,7 +367,8 @@ CREATE TABLE findings (
   detail TEXT NOT NULL DEFAULT '',
   task_id TEXT NOT NULL DEFAULT '',
   acknowledged INTEGER NOT NULL DEFAULT 0,
-  found_at TEXT NOT NULL
+  found_at TEXT NOT NULL,
+  swap_task_id TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX findings_by_watch ON findings (watch_id, found_at);
 CREATE INDEX findings_by_want ON findings (want_id, found_at);

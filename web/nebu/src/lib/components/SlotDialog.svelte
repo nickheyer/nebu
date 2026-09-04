@@ -20,6 +20,7 @@
   let memory = $state('');
   let runtimeId = $state('');
   let values = $state<Record<string, string>>({});
+  let invalid = $state(0);
   let runtimes = $state<RuntimeStatus[]>([]);
   let maxInFlight = $state('');
   let rps = $state('');
@@ -68,7 +69,7 @@
       let out: Slot | undefined;
       if (slot) {
         out = (await api.slots.updateSlot({ id: slot.id, ...body })).slot;
-        ok(`Updated ${slot.name}`, 'Settings apply on the next run or swap');
+        ok(`Updated ${slot.name}`, 'Limits reach the route now, devices, budget, runtime, and params on the next run');
       } else {
         out = (await api.slots.createSlot({ name: name.trim(), ...body })).slot;
         ok(`Created ${name.trim()}`, 'Drag a stored model onto it to serve');
@@ -83,7 +84,7 @@
   }
 </script>
 
-<Dialog bind:open title={editing ? `Edit ${slot?.name}` : 'New slot'} description={editing ? 'Changes apply the next time something runs in the slot' : 'A slot reserves devices and memory under one public name that never goes away'} size="lg">
+<Dialog bind:open title={editing ? `Edit ${slot?.name}` : 'New slot'} description={editing ? 'Limits reach the route at once, the reservation applies the next time something runs in the slot' : 'A slot reserves devices and memory under one public name that never goes away'} size="lg">
   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
     <Field label="Name" for="slot-name" hint="Becomes the model name clients send to the gateway">
       <input id="slot-name" class="input font-mono" bind:value={name} placeholder="main" disabled={editing} aria-invalid={nameTaken} />
@@ -133,7 +134,7 @@
         <span class="text-xs font-medium text-fg-muted">Default parameters</span>
         <span class="text-[11.5px] text-fg-faint">{manifest ? "Over the runtime's default profile, under the run's own params" : 'Pick a runtime for a typed form, or name params directly'}</span>
       </div>
-      <ParamForm params={manifest?.params ?? []} bind:values inherited={profileParams(runtimeId)} idPrefix="slot" />
+      <ParamForm params={manifest?.params ?? []} bind:values bind:invalid inherited={profileParams(runtimeId)} idPrefix="slot" />
     </div>
 
     <div class="sm:col-span-2">
@@ -163,6 +164,6 @@
 
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-    <Button variant="primary" loading={saving} onclick={submit} disabled={!name.trim() || nameTaken || badBudget}>{editing ? 'Save' : 'Create slot'}</Button>
+    <Button variant="primary" loading={saving} onclick={submit} disabled={!name.trim() || nameTaken || badBudget || invalid > 0}>{editing ? 'Save' : 'Create slot'}</Button>
   {/snippet}
 </Dialog>

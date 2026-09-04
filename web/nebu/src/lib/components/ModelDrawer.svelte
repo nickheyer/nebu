@@ -282,7 +282,7 @@
               <table class="tbl">
                 <thead>
                   <tr>
-                    {@render th('Weights', 'The name of one set of weight files, what you pull and later run. For GGUF it is the quantization, such as Q4_K_M.')}
+                    {@render th('Weights', `The name of one set of weight files, what you pull and later run. ${formatBlurb(inspect.descriptors[0]?.formatId ?? '')}`)}
                     {@render th('Precision', 'How compactly each weight is stored. Fewer bits means smaller and faster to load but a little less accurate.')}
                     {@render th('Parameters', 'How big the model is, in weights. 8B is eight billion. Bigger usually answers better and needs more memory.', true)}
                     {@render th('Download', 'What you would download, which is also roughly the memory the weights take.', true)}

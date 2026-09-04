@@ -513,11 +513,15 @@ func (s *antStream) Write(ev Event) error {
 			return err
 		}
 		return writeSSE(s.w, "message_stop", map[string]any{"type": "message_stop"})
+	case "error":
+		return writeSSE(s.w, "error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": ev.Text}})
 	}
 	return nil
 }
 
 func (s *antStream) Close() error { return nil }
+
+func (anthropic) InlineImages() bool { return false }
 
 func (anthropic) ErrorMessage(body []byte) string {
 	var e struct {

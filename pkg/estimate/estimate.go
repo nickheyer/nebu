@@ -145,6 +145,7 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 		WeightsBytes:  weights,
 		CacheBytes:    cacheTotal,
 		OverheadBytes: overhead,
+		OverheadDelta: in.OverheadDelta,
 		Params:        stringParams(in.Params),
 	}
 	if len(primary) == 0 {

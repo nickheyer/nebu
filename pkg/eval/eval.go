@@ -262,6 +262,7 @@ var templateFuncs = template.FuncMap{
 	"num":        func(v any) float64 { n, _ := Number(v); return n },
 	"add":        func(a, b any) float64 { x, _ := Number(a); y, _ := Number(b); return x + y },
 	"mul":        func(a, b any) float64 { x, _ := Number(a); y, _ := Number(b); return x * y },
+	"sub":        func(a, b any) float64 { x, _ := Number(a); y, _ := Number(b); return x - y },
 }
 
 // Joins a slice of any scalar type with sep

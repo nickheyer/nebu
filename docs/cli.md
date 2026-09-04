@@ -1,11 +1,13 @@
 # Command line
 
 Every command talks to a daemon. `nebu serve` runs one. Commands that only need the
-host, sources, or the store start a daemon in process when none is listening on the
-configured address, so `inspect`, `pull`, `list`, and `build` work without `serve`. Commands
-whose state lives in the daemon, such as `run`, `ps`, `slots`, `monitor`, and `sources add`,
-need `serve` running and find it on the configured listen address without any flag. When
-`tls.cert_file` is set the CLI dials `https` and trusts that certificate as it is.
+host, sources, the store, installs, or builds start a daemon in process when none is listening
+on the configured address, so `inspect`, `pull`, `list`, `runtimes`, `build`, and `builds` work
+without `serve`. Commands whose state lives in the daemon, such as `run`, `ps`, `slots`,
+`routes`, `chat`, `monitor`, `events`, `tasks watch`, and `sources add`, need `serve` running,
+find it on the configured listen address without any flag, and refuse before building anything
+when nothing answers. When `tls.cert_file` is set the CLI dials `https` and trusts that
+certificate as it is.
 
 Global flags come before the command: `--config PATH`, `--addr HOST:PORT`, `--json`.
 
@@ -18,7 +20,7 @@ nebu sources                         configured sources with their sorts, facets
 nebu sources providers               providers with the settings their sources accept
 nebu sources add ID --kind K [--name N] [--set name=value]...
 nebu sources update ID [--name N] [--set name=value]... [--unset name]...
-nebu sources remove ID
+nebu sources remove ID [--force]     refused while a watch or want names the source, --force drops them
 nebu search [--source S | --kind K] [--sort ID] [--asc] [--filter facet=value]... [--tag T]... [--author A] [--limit N] [--cursor C] [words]
                                      every source at once with neither --source nor --kind
 nebu revisions REPO [--source S]     branches, tags, versions, or variants of a repository
@@ -66,6 +68,7 @@ nebu store export --dir DIR [repo] [--source S] [--group G]
 
 ```
 nebu runtimes list                   manifests and host compatibility
+nebu runtimes show RUNTIME           one manifest with every param, type, default, and choices
 nebu runtimes installs [runtime]
 nebu runtimes adopt RUNTIME [--path P]
 nebu runtimes install RUNTIME        download the prebuilt release the host rules select
@@ -75,13 +78,15 @@ nebu profiles [runtime]              named param sets per runtime, the default m
 nebu profiles add RUNTIME NAME [--description D] [--param k=v]... [--default]
 nebu profiles update ID|NAME [--runtime R] [--name N] [--description D] [--param k=v]... [--unset k]... [--default=BOOL]
 nebu profiles remove ID|NAME [--runtime R] [--force]
-nebu build RUNTIME [--recipe R] [--variant V] [--var k=v] [--sandbox host|oci] [--image I] [--ref REF] [--force] [--detach]
+nebu build [RUNTIME] [--recipe R] [--variant V] [--var k=v] [--sandbox host|oci] [--image I] [--ref REF] [--force] [--detach]
+                                     RUNTIME may be left out when --recipe names the recipe
 nebu builds list [runtime] | show ID | remove ID
+nebu version
 ```
 
 A profile is a named set of params for one runtime, kept as rows beside the seeded manifest.
-`nebu runtimes list` names the runtimes and the run dialog shows every param with its type,
-choices, and description. `profiles add` refuses a param the runtime does not declare or a value
+`nebu runtimes list` names the runtimes, `nebu runtimes show RUNTIME` prints every param with
+its type, default, choices, and description, and the run dialog shows the same. `profiles add` refuses a param the runtime does not declare or a value
 of the wrong type. One profile per runtime can be the default: every run, swap, and fit check of
 that runtime that names no profile starts from it. `profiles update` merges `--param` into what
 the profile has and `--unset` drops a param back to the manifest default. A name is unique within
@@ -93,7 +98,7 @@ refuses while a watch, want, slot request, or instance names the profile and lis
 ## Running models
 
 ```
-nebu run org/repo [--group G] [--runtime R] [--install I] [--name N] [--slot S] [--profile P] [--param k=v] [--force]
+nebu run org/repo [--group G] [--source S] [--runtime R] [--install I] [--name N] [--slot S] [--profile P] [--param k=v] [--force]
 nebu ps [--all]
 nebu show NAME|ID
 nebu logs NAME|ID [--follow] [--tail N]
@@ -102,7 +107,9 @@ nebu stop NAME|ID
 
 Params layer in a fixed order: the runtime's default profile, or the one `--profile` names by id
 or name, then the slot's default params, then `--param`. A profile picks its runtime when neither
-`--runtime` nor a slot does.
+`--runtime` nor a slot does. `--force` launches even when the plan says the model does not fit and
+redoes any prepare step the runtime has, and it is kept on the record so a relaunch after a
+restart and a rollback keep it. A name that is a slot's is refused for a plain run.
 
 ## Slots and swaps
 
@@ -112,25 +119,27 @@ nebu slots create NAME [--device ID]... [--memory 8GiB] [--runtime R] [--param k
 nebu slots show NAME
 nebu slots update NAME [same flags as create, only the flags passed change]
 nebu slots evict NAME                stop the occupant, keep the slot and its name
-nebu slots remove NAME [--force]
-nebu swap SLOT org/repo [--group G] [--runtime R] [--install I] [--profile P] [--param k=v] [--drain-first]
+nebu slots remove NAME [--force]     refused while it serves, or a watch or want swaps into it, --force stops and drops them
+nebu swap SLOT org/repo [--group G] [--source S] [--runtime R] [--install I] [--profile P] [--param k=v] [--drain-first] [--force]
 ```
 
 ## Gateway
 
 ```
-nebu gateway                         listeners, routes, counters
+nebu gateway                         listeners, routes, counters, and the limits each route enforces
 nebu routes list
 nebu routes add NAME INSTANCE        an alias onto a running instance
 nebu routes remove NAME
 nebu chat MODEL [--system S] [--once TEXT] [--temperature F] [--max-tokens N] [--key K]
 ```
 
-`chat` talks to a route through the gateway the way a client would, failing before the first
-turn when no route of that name is ready and naming the ones that are, then streaming the
-answer to stdout with a token count and rate after it. Without `--once` it reads turns from stdin and keeps
-the history, `/reset` clears it and `/system TEXT` sets the prompt. The first `gateway.api_keys`
-entry is sent unless `--key` says otherwise.
+`chat` talks to a route through the gateway the way a client would, at the address the daemon
+reports for it, failing before the first turn when no route of that name is ready and naming the
+ones that are, then streaming the answer to stdout with a token count and rate after it. Without
+`--once` it reads turns from stdin and keeps the history, `/reset` clears it, `/system TEXT` sets
+the prompt and keeps the turns, ctrl-c stops the answer in flight and keeps what arrived, and a
+runtime that breaks off mid answer is reported as an error. The first `gateway.api_keys` entry is
+sent unless `--key` says otherwise.
 
 ## Monitor
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -59,6 +60,8 @@ type Manager struct {
 	watches  map[string]*v1.Watch
 	wants    map[string]*v1.Want
 	checking bool
+	// Watches and wants a check holds right now, so two checks never pull and swap one twice
+	busy map[string]bool
 }
 
 // Loads every watch and want from the store
@@ -186,7 +189,7 @@ func (m *Manager) saveWant(w *v1.Want, action v1.EventAction) {
 	if err := m.DB.PutWant(context.Background(), w); err != nil {
 		m.Log.Warn("want record write failed", "id", w.GetId(), "err", err)
 	}
-	m.Events.Publish(v1.EventKind_EVENT_KIND_WANT, action, w.GetId(), &v1.Event_Want{Want: w})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_WANT, action, w.GetId(), w)
 }
 
 // Adds a want and looks for it once
@@ -203,11 +206,14 @@ func (m *Manager) AddWant(ctx context.Context, req *v1.AddWantRequest) (*v1.Want
 		if _, err := m.Inspector.Sources.Get(req.GetSourceId()); err != nil {
 			return nil, err
 		}
+	} else if req.GetKind() != v1.SourceKind_SOURCE_KIND_UNSPECIFIED && len(m.Inspector.Sources.OfKind(req.GetKind())) == 0 {
+		return nil, fmt.Errorf("%w: no source of kind %s", ErrWatch, req.GetKind())
 	}
-	if req.GetSlotId() != "" {
-		if _, _, err := m.Slots.Get(req.GetSlotId()); err != nil {
-			return nil, err
-		}
+	if req.GetFormatId() != "" && !m.knownFormat(req.GetFormatId()) {
+		return nil, fmt.Errorf("%w: unknown format %q", ErrWatch, req.GetFormatId())
+	}
+	if err := m.checkTarget(req.GetSlotId(), req.GetRuntimeId()); err != nil {
+		return nil, err
 	}
 	profileID, err := m.profileID(req.GetRuntimeId(), req.GetSlotId(), req.GetProfileId())
 	if err != nil {
@@ -233,6 +239,31 @@ func (m *Manager) AddWant(ctx context.Context, req *v1.AddWantRequest) (*v1.Want
 		m.Log.Warn("want check failed to start", "id", w.GetId(), "err", err)
 	}
 	return w, nil
+}
+
+// Whether a format id is one the classifier knows
+func (m *Manager) knownFormat(id string) bool {
+	for _, f := range m.Inspector.Classifier.Specs() {
+		if f.GetId() == id {
+			return true
+		}
+	}
+	return false
+}
+
+// Checks the slot and runtime a swap would use exist
+func (m *Manager) checkTarget(slotID, runtimeID string) error {
+	if slotID != "" {
+		if _, _, err := m.Slots.Get(slotID); err != nil {
+			return err
+		}
+	}
+	if runtimeID != "" {
+		if _, err := m.Inspector.Runtimes.Get(runtimeID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Resolves a profile named by id or name against the runtime a swap would use,
@@ -280,6 +311,58 @@ func (m *Manager) ProfileReferrers(refers func(ref, runtimeID string) bool, clea
 	return out
 }
 
+// Names the watches and wants that swap into a slot, dropping the swap when clear is set
+func (m *Manager) SlotReferrers(slotID string, clear bool) []string {
+	var out []string
+	for _, w := range m.List() {
+		if w.GetSlotId() != slotID {
+			continue
+		}
+		out = append(out, "watch "+w.GetRepo())
+		if clear {
+			w.SlotId = ""
+			m.save(w, v1.EventAction_EVENT_ACTION_UPDATED)
+		}
+	}
+	for _, w := range m.ListWants() {
+		if w.GetSlotId() != slotID {
+			continue
+		}
+		out = append(out, "want "+w.GetQuery())
+		if clear {
+			w.SlotId = ""
+			m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED)
+		}
+	}
+	return out
+}
+
+// Names the watches of a source and the wants narrowed to it, removing the
+// watches and widening the wants when clear is set
+func (m *Manager) SourceReferrers(sourceID string, clear bool) []string {
+	var out []string
+	for _, w := range m.List() {
+		if w.GetSourceId() != sourceID {
+			continue
+		}
+		out = append(out, "watch "+w.GetRepo())
+		if clear {
+			m.Remove(context.Background(), w.GetId())
+		}
+	}
+	for _, w := range m.ListWants() {
+		if w.GetSourceId() != sourceID {
+			continue
+		}
+		out = append(out, "want "+w.GetQuery())
+		if clear {
+			w.SourceId = ""
+			m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED)
+		}
+	}
+	return out
+}
+
 // Removes a want and its findings
 func (m *Manager) RemoveWant(ctx context.Context, id string) (*v1.Want, error) {
 	w, err := m.findWant(id)
@@ -294,9 +377,9 @@ func (m *Manager) RemoveWant(ctx context.Context, id string) (*v1.Want, error) {
 	delete(m.wants, w.GetId())
 	m.mu.Unlock()
 	for _, f := range findings {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_DELETED, f.GetId(), &v1.Event_Finding{Finding: f})
+		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_DELETED, f.GetId(), f)
 	}
-	m.Events.Publish(v1.EventKind_EVENT_KIND_WANT, v1.EventAction_EVENT_ACTION_DELETED, w.GetId(), &v1.Event_Want{Want: w})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_WANT, v1.EventAction_EVENT_ACTION_DELETED, w.GetId(), w)
 	return w, nil
 }
 
@@ -334,17 +417,21 @@ func (m *Manager) checkWant(ctx context.Context, logf func(string, ...any), w *v
 			if err := m.DB.PutFinding(ctx, f); err != nil {
 				m.Log.Warn("finding write failed", "err", err)
 			}
-			m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_CREATED, f.GetId(), &v1.Event_Finding{Finding: f})
+			m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_CREATED, f.GetId(), f)
 			logf("%s", f.GetDetail())
 			m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED)
 			if w.GetAutoPull() {
 				if task := m.pull(ctx, logf, f, hit.GetSourceId(), hit.GetRepo(), "", g.Name); task != "" {
 					w.TaskId = task
 					m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED)
-					m.swap(ctx, logf, w.GetSlotId(), &v1.RunRequest{SourceId: hit.GetSourceId(), Repo: hit.GetRepo(), Group: g.Name, RuntimeId: w.GetRuntimeId(), Params: w.GetParams(), SlotId: w.GetSlotId(), ProfileId: w.GetProfileId()})
+					if swap := m.swap(ctx, logf, w.GetSlotId(), &v1.RunRequest{SourceId: hit.GetSourceId(), Repo: hit.GetRepo(), Group: g.Name, RuntimeId: w.GetRuntimeId(), Params: w.GetParams(), SlotId: w.GetSlotId(), ProfileId: w.GetProfileId()}); swap != "" {
+						w.SwapTaskId = swap
+						m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED)
+						m.attachSwap(ctx, swap, f)
+					}
 				}
 			}
-			m.DB.PruneFindings(ctx, findingsMax)
+			m.prune(ctx)
 			return nil
 		}
 	}
@@ -363,7 +450,7 @@ func (m *Manager) pull(ctx context.Context, logf func(string, ...any), f *v1.Fin
 	}
 	f.TaskId = task.GetId()
 	m.DB.PutFinding(ctx, f)
-	m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_UPDATED, f.GetId(), &v1.Event_Finding{Finding: f})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_UPDATED, f.GetId(), f)
 	logf("pulling %s %s as task %s", repo, group, task.GetId())
 	final, err := m.Tasks.Wait(ctx, task.GetId())
 	if err != nil || final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
@@ -373,19 +460,42 @@ func (m *Manager) pull(ctx context.Context, logf func(string, ...any), f *v1.Fin
 	return task.GetId()
 }
 
-// Swaps a slot onto a run and waits, nothing without a slot
-func (m *Manager) swap(ctx context.Context, logf func(string, ...any), slotID string, run *v1.RunRequest) {
+// Swaps a slot onto a run and waits, returning the swap task id, nothing without a slot
+func (m *Manager) swap(ctx context.Context, logf func(string, ...any), slotID string, run *v1.RunRequest) string {
 	if slotID == "" {
-		return
+		return ""
 	}
 	_, _, task, err := m.Slots.Swap(ctx, &v1.SwapRequest{SlotId: slotID, Run: run})
 	if err != nil {
 		logf("swap into slot %s failed: %v", slotID, err)
-		return
+		return ""
 	}
 	logf("swapping slot %s to %s %s as task %s", slotID, run.GetRepo(), run.GetGroup(), task.GetId())
 	if final, err := m.Tasks.Wait(ctx, task.GetId()); err == nil && final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
 		logf("swap did not succeed: %s", final.GetError())
+	}
+	return task.GetId()
+}
+
+// Records the swap a pull led to on the findings that asked for it
+func (m *Manager) attachSwap(ctx context.Context, task string, findings ...*v1.Finding) {
+	for _, f := range findings {
+		f.SwapTaskId = task
+		if err := m.DB.PutFinding(ctx, f); err != nil {
+			m.Log.Warn("finding write failed", "err", err)
+		}
+		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_UPDATED, f.GetId(), f)
+	}
+}
+
+// Drops old acknowledged findings and tells the stream which
+func (m *Manager) prune(ctx context.Context) {
+	gone, err := m.DB.PruneFindings(ctx, findingsMax)
+	if err != nil {
+		m.Log.Warn("finding prune failed", "err", err)
+	}
+	for _, f := range gone {
+		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_DELETED, f.GetId(), f)
 	}
 }
 
@@ -399,7 +509,7 @@ func (m *Manager) save(w *v1.Watch, action v1.EventAction) {
 	if err := m.DB.PutWatch(context.Background(), w); err != nil {
 		m.Log.Warn("watch record write failed", "id", w.GetId(), "err", err)
 	}
-	m.Events.Publish(v1.EventKind_EVENT_KIND_WATCH, action, w.GetId(), &v1.Event_Watch{Watch: w})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_WATCH, action, w.GetId(), w)
 }
 
 // Adds a watch and records its baseline with one check
@@ -416,10 +526,8 @@ func (m *Manager) Add(ctx context.Context, req *v1.AddWatchRequest) (*v1.Watch, 
 	if err != nil {
 		return nil, err
 	}
-	if req.GetSlotId() != "" {
-		if _, _, err := m.Slots.Get(req.GetSlotId()); err != nil {
-			return nil, err
-		}
+	if err := m.checkTarget(req.GetSlotId(), req.GetRuntimeId()); err != nil {
+		return nil, err
 	}
 	for _, w := range m.List() {
 		if w.GetSourceId() == src.Spec().GetId() && w.GetRepo() == req.GetRepo() && w.GetRevision() == req.GetRevision() {
@@ -464,11 +572,11 @@ func (m *Manager) Remove(ctx context.Context, id string) (*v1.Watch, error) {
 	m.mu.Lock()
 	delete(m.watches, w.GetId())
 	m.mu.Unlock()
-	// The store cascades the findings, so the stream has to say so too
+	// The findings went with the watch, so the stream has to say so too
 	for _, f := range findings {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_DELETED, f.GetId(), &v1.Event_Finding{Finding: f})
+		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_DELETED, f.GetId(), f)
 	}
-	m.Events.Publish(v1.EventKind_EVENT_KIND_WATCH, v1.EventAction_EVENT_ACTION_DELETED, w.GetId(), &v1.Event_Watch{Watch: w})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_WATCH, v1.EventAction_EVENT_ACTION_DELETED, w.GetId(), w)
 	return w, nil
 }
 
@@ -503,16 +611,39 @@ func (m *Manager) Check(ctx context.Context, id string, rearm bool) (*v1.Task, e
 		m.mu.Unlock()
 		return nil, fmt.Errorf("%w: a check is already running", ErrWatch)
 	}
+	if id != "" && m.busy[id] {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: %s is being checked right now", ErrWatch, title)
+	}
+	// One check owns each id it touches, so a scheduled check never doubles a check by hand
+	if m.busy == nil {
+		m.busy = map[string]bool{}
+	}
+	watches = slices.DeleteFunc(watches, func(w *v1.Watch) bool { return m.busy[w.GetId()] })
+	wants = slices.DeleteFunc(wants, func(w *v1.Want) bool { return m.busy[w.GetId()] })
+	held := make([]string, 0, len(watches)+len(wants))
+	for _, w := range watches {
+		held = append(held, w.GetId())
+	}
+	for _, w := range wants {
+		held = append(held, w.GetId())
+	}
+	for _, h := range held {
+		m.busy[h] = true
+	}
 	m.checking = id == ""
 	m.mu.Unlock()
 	total := uint64(len(watches) + len(wants))
 	return m.Tasks.Start(kindCheck, title, map[string]string{"watch": id}, func(ctx context.Context, h *tasks.Handle) error {
 		defer func() {
-			if id == "" {
-				m.mu.Lock()
-				m.checking = false
-				m.mu.Unlock()
+			m.mu.Lock()
+			for _, h := range held {
+				delete(m.busy, h)
 			}
+			if id == "" {
+				m.checking = false
+			}
+			m.mu.Unlock()
 		}()
 		var failed []string
 		done := uint64(0)
@@ -595,7 +726,7 @@ func (m *Manager) check(ctx context.Context, h *tasks.Handle, w *v1.Watch) ([]*v
 		if err := m.DB.PutFinding(ctx, f); err != nil {
 			m.Log.Warn("finding write failed", "err", err)
 		}
-		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_CREATED, f.GetId(), &v1.Event_Finding{Finding: f})
+		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_CREATED, f.GetId(), f)
 		logf("%s: %s", w.GetRepo(), f.GetDetail())
 	}
 	if baseline {
@@ -606,7 +737,7 @@ func (m *Manager) check(ctx context.Context, h *tasks.Handle, w *v1.Watch) ([]*v
 	if w.GetAutoPull() && len(findings) > 0 {
 		m.act(ctx, logf, w, model, findings)
 	}
-	m.DB.PruneFindings(ctx, findingsMax)
+	m.prune(ctx)
 	return findings, nil
 }
 
@@ -646,9 +777,11 @@ func (m *Manager) act(ctx context.Context, logf func(string, ...any), w *v1.Watc
 		}
 	}
 	pulled := []string{}
+	var asked []*v1.Finding
 	for _, g := range targets {
 		if m.pull(ctx, logf, wanted[g], w.GetSourceId(), w.GetRepo(), w.GetRevision(), g) != "" {
 			pulled = append(pulled, g)
+			asked = append(asked, wanted[g])
 		}
 	}
 	if len(pulled) == 0 {
@@ -660,7 +793,9 @@ func (m *Manager) act(ctx context.Context, logf func(string, ...any), w *v1.Watc
 			group = g
 		}
 	}
-	m.swap(ctx, logf, w.GetSlotId(), &v1.RunRequest{SourceId: w.GetSourceId(), Repo: w.GetRepo(), Group: group, RuntimeId: w.GetRuntimeId(), Params: w.GetParams(), SlotId: w.GetSlotId(), ProfileId: w.GetProfileId()})
+	if swap := m.swap(ctx, logf, w.GetSlotId(), &v1.RunRequest{SourceId: w.GetSourceId(), Repo: w.GetRepo(), Group: group, RuntimeId: w.GetRuntimeId(), Params: w.GetParams(), SlotId: w.GetSlotId(), ProfileId: w.GetProfileId()}); swap != "" {
+		m.attachSwap(ctx, swap, asked...)
+	}
 }
 
 // Lists findings newest first, for one watch by id or repo, or one want by id, when named
@@ -671,6 +806,11 @@ func (m *Manager) Findings(ctx context.Context, watchID, wantID string, unackedO
 		} else if wt, werr := m.findWant(watchID); werr == nil {
 			watchID, wantID = "", wt.GetId()
 		} else {
+			return nil, err
+		}
+	}
+	if wantID != "" {
+		if _, err := m.findWant(wantID); err != nil {
 			return nil, err
 		}
 	}
@@ -690,7 +830,7 @@ func (m *Manager) Ack(ctx context.Context, id string) (*v1.Finding, error) {
 	if err := m.DB.PutFinding(ctx, f); err != nil {
 		return nil, err
 	}
-	m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_UPDATED, f.GetId(), &v1.Event_Finding{Finding: f})
+	m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_UPDATED, f.GetId(), f)
 	return f, nil
 }
 

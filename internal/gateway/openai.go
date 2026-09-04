@@ -444,9 +444,13 @@ func (s *oaiStream) Write(ev Event) error {
 		if err := s.chunk(&oaiMessage{}, "", &reason, &oaiUsage{PromptTokens: res.In, CompletionTokens: res.Out, TotalTokens: res.In + res.Out}); err != nil {
 			return err
 		}
+	case "error":
+		return writeSSE(s.w, "", map[string]any{"error": map[string]any{"message": ev.Text, "type": "upstream_error", "code": "upstream_error"}})
 	}
 	return nil
 }
+
+func (openai) InlineImages() bool { return false }
 
 func (s *oaiStream) Close() error {
 	_, err := io.WriteString(s.w, "data: [DONE]\n\n")

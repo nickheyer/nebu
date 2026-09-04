@@ -43,7 +43,7 @@ func TestConstrain(t *testing.T) {
 		t.Fatalf("budget only %v", budget.GetPools())
 	}
 	views := deviceViews(c, &Reservation{DeviceIDs: []string{"g1"}})
-	if len(views) != 1 || views[0]["id"] != "g1" || views[0]["facts"].(map[string]any)["index"] != "1" {
+	if len(views) != 1 || views[0]["id"] != "g1" || views[0]["facts"].(map[string]string)["index"] != "1" {
 		t.Fatalf("views %v", views)
 	}
 	if deviceViews(p, nil) != nil || deviceViews(p, &Reservation{}) != nil {

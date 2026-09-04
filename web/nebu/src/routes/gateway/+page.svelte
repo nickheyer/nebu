@@ -1,11 +1,11 @@
 <script lang="ts">
   import { api, baseUrl } from '$lib/api';
-  import { listenerUrl } from '$lib/gateway';
+  import { listenerUrl, policyText } from '$lib/gateway';
   import { live, slotName, clock } from '$lib/state.svelte';
   import { count, enumLabel, ago } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
-  import { RouteState, type GatewayStatus, type Policy } from '$proto/gateway_pb';
+  import { RouteState, type GatewayStatus } from '$proto/gateway_pb';
   import { InstanceState } from '$proto/instance_pb';
   import { Waypoints, Plus, Trash2, KeyRound, Link } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -35,21 +35,6 @@
   });
   const example = $derived(readyRoutes[0]?.name ?? routes[0]?.name ?? 'main');
 
-  // Each zero field of a route's policy inherits the gateway default
-  function policyText(p: Policy | undefined, d: Policy | undefined): string {
-    const pick = (a: number | undefined, b: number | undefined) => a || b || 0;
-    const parts: string[] = [];
-    const inFlight = pick(p?.maxInFlight, d?.maxInFlight);
-    const rps = pick(p?.requestsPerSecond, d?.requestsPerSecond);
-    const burst = pick(p?.burst, d?.burst);
-    const timeout = pick(p?.requestTimeoutMs, d?.requestTimeoutMs);
-    const upstream = pick(p?.upstreamTimeoutMs, d?.upstreamTimeoutMs);
-    if (inFlight) parts.push(`${inFlight} in flight`);
-    if (rps) parts.push(`${rps}/s${burst ? ` burst ${burst}` : ''}`);
-    if (timeout) parts.push(`${timeout / 1000}s total`);
-    if (upstream) parts.push(`${upstream / 1000}s first byte`);
-    return parts.length ? parts.join(', ') : 'none';
-  }
   const curl = $derived(
     `curl ${endpoints[0].url}/chat/completions \\\n  -H 'Content-Type: application/json' \\\n${status?.auth ? "  -H 'Authorization: Bearer $NEBU_API_KEY' \\\n" : ''}  -d '{"model":"${example}","messages":[{"role":"user","content":"hello"}]}'`
   );
@@ -61,8 +46,9 @@
       fail(err, 'Gateway status failed');
     }
   }
+  // Listeners, keys, and the default policy change with the daemon, counters and states ride the routes themselves
   $effect(() => {
-    void live.routes.size;
+    void [...live.routes.values()].map((r) => r.name + r.state).join();
     refresh();
   });
 
