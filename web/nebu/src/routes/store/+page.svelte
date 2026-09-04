@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '$lib/api';
-  import { live, clock, modelKey } from '$lib/state.svelte';
+  import { live, clock, modelKey, instanceLive } from '$lib/state.svelte';
   import { runModel } from '$lib/slotActions.svelte';
   import { dragModel } from '$lib/dnd.svelte';
   import { ago, bytes, count, params as fmtParams, when } from '$lib/format';
@@ -17,6 +17,8 @@
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import Field from '$lib/components/ui/Field.svelte';
   import SlotRail from '$lib/components/SlotRail.svelte';
+  import SortTh from '$lib/components/ui/SortTh.svelte';
+  import { TableSort } from '$lib/sort.svelte';
 
   let status = $state<StoreStatus | null>(null);
   let filter = $state('');
@@ -25,11 +27,30 @@
   let exportDir = $state('');
   let exporting = $state(false);
   let collecting = $state(false);
+  let sourceFilter = $state('');
+  const sort = new TableSort('pulled');
 
+  const sourceIds = $derived([...new Set([...live.models.values()].map((m) => m.sourceId))].sort());
   const models = $derived(
-    [...live.models.values()]
-      .filter((m) => !filter || `${m.repo} ${m.group} ${m.formatId} ${m.descriptor?.architecture ?? ''}`.toLowerCase().includes(filter.toLowerCase()))
-      .sort((a, b) => Number((b.pulledAt?.seconds ?? 0n) - (a.pulledAt?.seconds ?? 0n)))
+    sort.apply(
+      [...live.models.values()].filter((m) => (!sourceFilter || m.sourceId === sourceFilter) && (!filter || `${m.repo} ${m.group} ${m.formatId} ${m.descriptor?.architecture ?? ''}`.toLowerCase().includes(filter.toLowerCase()))),
+      (m, key) => {
+        switch (key) {
+          case 'model':
+            return `${m.repo} ${m.group}`;
+          case 'format':
+            return m.formatId;
+          case 'arch':
+            return m.descriptor?.architecture ?? '';
+          case 'params':
+            return m.descriptor?.parameterCount ?? 0n;
+          case 'size':
+            return m.bytes;
+          default:
+            return m.pulledAt?.seconds ?? 0n;
+        }
+      }
+    )
   );
   const total = $derived([...live.models.values()].reduce((a, m) => a + m.bytes, 0n));
 
@@ -120,6 +141,12 @@
 <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_17rem]">
   <Panel flush>
     {#snippet actions()}
+      {#if sourceIds.length > 1}
+        <select class="input h-8 w-auto py-0 pr-7 text-xs" bind:value={sourceFilter} aria-label="Source">
+          <option value="">All sources</option>
+          {#each sourceIds as id (id)}<option value={id}>{id}</option>{/each}
+        </select>
+      {/if}
       <div class="relative">
         <Search size={13} class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-faint" />
         <input class="input h-8 w-64 pl-8" placeholder="Filter by repo, group, format, arch" bind:value={filter} />
@@ -135,16 +162,25 @@
       <div class="overflow-x-auto">
         <table class="tbl">
           <thead>
-            <tr><th class="w-6"></th><th>model</th><th>format</th><th>arch</th><th class="num">params</th><th class="num">size</th><th>pulled</th><th></th></tr>
+            <tr>
+              <th class="w-6"></th>
+              <SortTh id="model" label="model" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
+              <SortTh id="format" label="format" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
+              <SortTh id="arch" label="arch" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
+              <SortTh id="params" label="params" num active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
+              <SortTh id="size" label="size" num active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
+              <SortTh id="pulled" label="pulled" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
+              <th></th>
+            </tr>
           </thead>
           <tbody>
             {#each models as m (modelKey(m))}
               {@const key = modelKey(m)}
-              {@const running = [...live.instances.values()].filter((i) => i.sourceId === m.sourceId && i.repo === m.repo && i.group === m.group && i.state !== 4 && i.state !== 5)}
+              {@const running = [...live.instances.values()].filter((i) => i.sourceId === m.sourceId && i.repo === m.repo && i.group === m.group && instanceLive(i))}
               <tr draggable="true" ondragstart={(e) => dragModel(e, key)} class="cursor-grab active:cursor-grabbing">
                 <td class="text-fg-faint"><GripVertical size={14} /></td>
                 <td>
-                  <div class="font-mono text-sm text-fg">{m.repo}</div>
+                  <div class="font-mono text-sm text-fg">{m.repo}{#if sourceIds.length > 1}<span class="ml-1.5 rounded bg-raised px-1 text-[10.5px] text-fg-faint">{m.sourceId}</span>{/if}</div>
                   <div class="flex items-center gap-2 font-mono text-xs text-fg-muted">
                     {m.group}
                     {#if running.length}<span class="rounded bg-ok/12 px-1.5 text-[10.5px] text-ok">serving as {running.map((i) => i.name).join(', ')}</span>{/if}

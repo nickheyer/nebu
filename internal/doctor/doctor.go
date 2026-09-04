@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/pkg/estimate"
@@ -121,13 +122,25 @@ func (d *Doctor) Run(ctx context.Context) (*v1.DoctorReport, error) {
 		}
 		add(id, v1.CheckStatus_CHECK_STATUS_OK, detail, "")
 	}
-	for _, cfg := range d.Sources.List() {
-		src, err := d.Sources.Get(cfg.GetId())
-		if err == nil {
-			_, err = src.Search(ctx, "", nil, 1)
-		}
-		if err != nil {
-			add("source."+cfg.GetId(), v1.CheckStatus_CHECK_STATUS_FAIL, err.Error(), "check network, endpoint, and token")
+	// takes as long as the slowest reporter
+	cfgs := d.Sources.List()
+	errs := make([]error, len(cfgs))
+	var wg sync.WaitGroup
+	for i, cfg := range cfgs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			src, err := d.Sources.Get(cfg.GetId())
+			if err == nil {
+				_, err = src.Search(ctx, &v1.SearchRequest{Limit: 1})
+			}
+			errs[i] = err
+		}()
+	}
+	wg.Wait()
+	for i, cfg := range cfgs {
+		if errs[i] != nil {
+			add("source."+cfg.GetId(), v1.CheckStatus_CHECK_STATUS_FAIL, errs[i].Error(), "check network, endpoint, and token")
 		} else {
 			add("source."+cfg.GetId(), v1.CheckStatus_CHECK_STATUS_OK, "reachable", "")
 		}

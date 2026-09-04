@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '$lib/api';
-  import { live, clock, taskFor } from '$lib/state.svelte';
+  import { live, clock, taskFor, instanceLive } from '$lib/state.svelte';
   import { ago, enumLabel, newestFirst, when } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
@@ -82,7 +82,7 @@
   }
 
   async function removeInstall(id: string, runtimeId: string) {
-    const used = [...live.instances.values()].some((i) => i.installId === id && i.state !== 4 && i.state !== 5);
+    const used = [...live.instances.values()].some((i) => i.installId === id && instanceLive(i));
     const yes = await confirm({ title: `Remove this ${runtimeId} install?`, message: used ? 'An instance is running from it. It keeps running but cannot be relaunched after a restart.' : 'Downloaded files are deleted. Adopted binaries are left where they are.', action: 'Remove', tone: 'bad' });
     if (!yes) return;
     try {

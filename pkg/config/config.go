@@ -28,7 +28,6 @@ const (
 	EnvAPIKeys = "NEBU_API_KEYS"
 
 	defaultListen   = "127.0.0.1:8484"
-	defaultSource   = "huggingface"
 	minFreeBytes    = 50 << 30
 	workers         = 8
 	chunkBytes      = 32 << 20
@@ -129,9 +128,6 @@ func applyDefaults(cfg *v1.Config) error {
 	}
 	if cfg.Logging.Format == "" {
 		cfg.Logging.Format = "text"
-	}
-	if len(cfg.Sources) == 0 {
-		cfg.Sources = []*v1.Source{{Id: defaultSource, Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE}}
 	}
 	if len(cfg.Contexts) == 0 {
 		cfg.Contexts = []uint32{8192, 32768, 131072}

@@ -4,6 +4,7 @@ package services
 import (
 	"context"
 	"errors"
+	"net/http"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/installs"
@@ -38,6 +39,14 @@ func wrap(err error) error {
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, transfer.ErrDigestMismatch):
 		return connect.NewError(connect.CodeDataLoss, err)
+	case errors.Is(err, sources.ErrUnsupported):
+		return connect.NewError(connect.CodeUnimplemented, err)
+	case sources.IsStatus(err, http.StatusNotFound):
+		return connect.NewError(connect.CodeNotFound, err)
+	case sources.IsStatus(err, http.StatusUnauthorized), sources.IsStatus(err, http.StatusForbidden):
+		return connect.NewError(connect.CodePermissionDenied, err)
+	case sources.IsStatus(err, http.StatusTooManyRequests):
+		return connect.NewError(connect.CodeResourceExhausted, err)
 	}
 	return connect.NewError(connect.CodeInternal, err)
 }

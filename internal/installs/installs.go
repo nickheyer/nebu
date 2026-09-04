@@ -172,7 +172,7 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Run
 	}
 	archivePath := filepath.Join(dir, a.name)
 	if info, err := os.Stat(archivePath); err != nil || info.Size() != a.size {
-		client, err := sources.NewClient(a.url, "")
+		client, err := sources.NewHTTP(a.url, "")
 		if err != nil {
 			return err
 		}
@@ -223,7 +223,7 @@ func (m *Manager) resolveAsset(ctx context.Context, rule *v1.PrebuiltRule) (*ass
 	if err != nil {
 		return nil, err
 	}
-	client, err := sources.NewClient(rule.GetRelease(), "")
+	client, err := sources.NewHTTP(rule.GetRelease(), "")
 	if err != nil {
 		return nil, err
 	}

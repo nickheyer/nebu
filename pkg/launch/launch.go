@@ -331,7 +331,7 @@ func ReadTail(path string, n int) ([]string, error) {
 	}
 	out := make([]string, len(lines))
 	for i, l := range lines {
-		out[i] = string(bytes.TrimRight(l, "\r"))
+		out[i] = Clean(string(bytes.TrimRight(l, "\r")))
 	}
 	return out, nil
 }

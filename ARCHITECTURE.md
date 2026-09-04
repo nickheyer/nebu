@@ -10,9 +10,11 @@ once and never changes again.
 1. Zero cgo. `CGO_ENABLED=0` is enforced in the Makefile and CI. Hardware is probed through
    vendor CLIs and sysfs, never through bound libraries.
 2. Proto is the API source of truth and nothing else. The database schema is SQL migrations.
-3. Nothing in Go knows a model name, a GPU name, a vendor name, or a CUDA arch. All of that is
-   data under `spec/`, validated against proto messages at test time. A grep of the Go tree for
-   any of those returns nothing.
+3. Go is generic. Nothing in Go knows a model name, a GPU name, a vendor name, or a CUDA arch;
+   that is data under `spec/`, decoded into proto messages and validated when it loads. Where a
+   third party wire format needs code, it lives in one localized module behind a shared interface
+   and nowhere else: a catalog adapter behind `sources.API`, a header reader behind
+   `formats.Reader`. Everything above the interface is written once for every implementation.
 4. The host is probed, never configured. Runtime constraints and build recipes are templates
    that the probed host profile fills in.
 5. The runtime is the ground truth. Nebu asks it to list devices, dry-run a fit, or report what
@@ -26,7 +28,13 @@ once and never changes again.
 ## Nouns
 
 - **Host**. Probed profile of the machine. Devices, memory pools, storage, facts.
-- **Source**. Where models come from. Hugging Face, ModelScope, a mirror, a local directory.
+- **Transport**. How bytes and listings move: HTTP, OCI distribution, filesystem, git with or
+  without LFS, the Hugging Face CLI. One Go type each behind one interface.
+- **Provider**. A hosted platform and the wire format it speaks: Hugging Face, Docker Hub,
+  GitHub, Ollama, ModelScope, Civitai, Kaggle, NGC, CSGHub, a host filesystem, a nebu mirror. One
+  Go module each, on one or more transports, implementing the catalog API.
+- **Source**. A configured instance of a provider. Rows in the database, seeded or bootstrapped
+  from config, created and edited in the UI. The only one of the three a user sees.
 - **Model**. A repository at a revision. Owns artifacts.
 - **Artifact**. A file or file set with a format and a role such as weights, projector,
   tokenizer, config, or draft.
@@ -87,11 +95,7 @@ nebu/
 |   +-- spec/                      loads layered spec files into proto messages
 |   +-- host/                      host profile assembly and fact evaluation
 |   |   +-- probes/                generic exec, csv, json, kv, sysfs readers driven by spec
-|   +-- sources/                   source interface, search, resolve, range reads
-|   |   +-- huggingface/           hub api, tree with sha256, download urls
-|   |   +-- modelscope/            modelscope api
-|   |   +-- mirror/                http, s3 style, and directory mirrors for air-gapped sites
-|   |   +-- local/                 adopt files already on disk
+|   +-- sources/                   providers behind one catalog api, transports behind one byte interface, sources as rows
 |   +-- mirror/                    index files an export writes and a mirror source reads
 |   +-- formats/                   classifier, groups, and header readers
 |   |   +-- gguf/                  header and tensor table from range reads
@@ -151,6 +155,28 @@ nebu/
 +-- scripts/                       release and ci helpers
 +-- .github/workflows/             ci with cgo guard, gen check, spec validation, tests
 ```
+
+## Sources
+
+A **transport** moves bytes and listings: HTTP, OCI distribution, filesystem, git with or without
+LFS, the Hugging Face CLI. Each is one Go type behind one interface. New transports are code.
+
+A **provider** is a hosted platform and the wire format it speaks: Hugging Face, Docker Hub,
+GitHub, Ollama, ModelScope, Civitai, Kaggle, NGC, CSGHub, a host filesystem, a nebu mirror. Each
+is one Go module that names the transports it uses and implements the catalog API: search,
+resolve, revisions, card, open. Providers are code. There are no source spec files, because a
+provider is a protocol and a protocol needs a program, not a table.
+
+A **source** is an instance of a provider with its own configuration, whatever that provider plus
+its transports need: endpoint, credential, namespace, path. Sources are rows in the database. The
+config file is an idempotent bootstrap: an entry creates the source when no source with that name
+exists and otherwise leaves it alone. The web UI creates, edits, and removes sources. Providers
+that work without configuration, such as Hugging Face, Docker Hub, and GitHub, get one seeded
+default source under the provider's name.
+
+Users see sources and never providers or transports. The catalog merges every source of a
+provider into one listing, shows which source a hit came from, and filters by source where the
+provider allows it.
 
 ## Flows
 
@@ -331,17 +357,19 @@ when some spilled, and NO when the fixed need alone does not fit.
 
 ## Milestones
 
-1. `nebu doctor` and `nebu inspect`. Host probes, sources, format readers, estimator.
-   Ships as a CLI with no daemon state beyond a cache. Done.
-2. `nebu pull`. Store and transfer with resume and verification. Done. Task history lives in
-   the daemon, so `--detach` and `tasks` need `nebu serve` running.
+1. `nebu doctor` and `nebu inspect`. Host probes, sources, format readers, estimator. Ships as a
+   CLI with no daemon state beyond a cache.
+2. `nebu pull`. Store and transfer with resume and verification. Task history lives in the
+   daemon, so `--detach` and `tasks` need `nebu serve` running.
 3. `nebu run`. Installs, the process launcher, gateway, triage, calibration, the SQL store,
-   recovery with adoption and relaunch. Done. Instances live in the daemon, so `run`, `ps`,
-   `show`, `stop`, and `logs` need `nebu serve`, which the CLI finds on the configured
-   listen address without flags.
-4. `nebu build`. Recipes over host facts, patch sets, host and OCI sandboxes, the hashed
-   build cache, and builds as rows next to installs. Done. Verified with a llama.cpp
-   release built from its tarball on the host.
-5. Slots, swaps, monitor, and the web UI on top of the same API. Done. Also the route
-   table, gateway keys and API token, the event stream, ModelScope and mirror sources,
-   store export, and the SvelteKit app embedded in the binary.
+   recovery with adoption and relaunch. Instances live in the daemon, so `run`, `ps`, `show`,
+   `stop`, and `logs` need `nebu serve`, which the CLI finds on the configured listen address.
+4. `nebu build`. Recipes over host facts, patch sets, host and OCI sandboxes, the hashed build
+   cache, builds as rows next to installs.
+5. Slots, swaps, monitor, the route table, gateway keys and API token, the event stream, store
+   export, the mirror source, and the SvelteKit app embedded in the binary.
+
+All five have code and an end to end suite that drives a fake runtime binary through pull, run,
+gateway, stop, restart, adoption, swap, rollback, monitor, export, build, auth, and the event
+stream. What has not been verified against a real catalog, a real GPU, or a second runtime, and
+what the end state described in the README still lacks, is tracked in `TODOS.md`.

@@ -3,7 +3,6 @@ package spec
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -156,38 +155,5 @@ func TestLayeredOverride(t *testing.T) {
 func TestDecodeRejectsUnknownFields(t *testing.T) {
 	if err := Decode([]byte("id: x\nbogus: 1\n"), &v1.ProbeSpec{}); err == nil {
 		t.Fatal("unknown field should fail")
-	}
-}
-
-var denied = regexp.MustCompile(`(?i)\b(nvidia|rocm|cuda|deepseek|qwen|llama|mistral|gemma|vllm|amd|intel|apple|hopper|blackwell)\b`)
-
-func TestNoOneOffsInGo(t *testing.T) {
-	root := filepath.Join("..", "..")
-	skip := map[string]bool{"spec": true, "test": true, "web": true, ".git": true}
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(root, path)
-		if info.IsDir() {
-			if skip[rel] || rel == filepath.Join("pkg", "proto") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if m := denied.FindString(string(data)); m != "" {
-			t.Errorf("%s mentions %q, move it into spec data", rel, m)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }

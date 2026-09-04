@@ -1,5 +1,6 @@
 <script lang="ts">
   import { DropdownMenu } from 'bits-ui';
+  import { goto } from '$app/navigation';
   import { Ellipsis } from '@lucide/svelte';
   import type { Component, Snippet } from 'svelte';
 
@@ -43,7 +44,7 @@
           <DropdownMenu.Item
             disabled={item.disabled}
             onSelect={() => {
-              if (item.href) location.assign(item.href);
+              if (item.href) goto(item.href);
               else item.onSelect?.();
             }}
             class="flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm outline-none select-none data-[disabled]:opacity-40 data-[highlighted]:bg-raised {item.tone === 'bad'

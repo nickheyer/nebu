@@ -37,7 +37,6 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/runtime"
 	"github.com/nickheyer/nebu/pkg/sources"
-	sourcesall "github.com/nickheyer/nebu/pkg/sources/all"
 	"github.com/nickheyer/nebu/pkg/spec"
 	"github.com/nickheyer/nebu/pkg/store"
 	"github.com/nickheyer/nebu/pkg/transfer"
@@ -97,7 +96,7 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
-	srcs, err := sources.Build(cfg.GetSources(), sourcesall.Constructors())
+	srcs, err := sources.Build(cfg.GetSources())
 	if err != nil {
 		return nil, err
 	}
@@ -270,6 +269,7 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		Host:      prober,
 		Doctor:    d.Doctor,
 		Sources:   srcs,
+		Formats:   classifier.Formats(),
 		Runtimes:  runtimes,
 		Inspector: d.Inspector,
 		Store:     blobStore,

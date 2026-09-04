@@ -147,7 +147,7 @@ func (e *env) defaultSource(ctx context.Context, cl *clients, id string) (string
 	if len(resp.Msg.GetSources()) == 0 {
 		return "", fmt.Errorf("no sources configured")
 	}
-	return resp.Msg.GetSources()[0].GetId(), nil
+	return resp.Msg.GetSources()[0].GetSource().GetId(), nil
 }
 
 // Resolves an empty group to the only stored group

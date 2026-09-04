@@ -47,10 +47,10 @@ export function pct(a: bigint | number | undefined, b: bigint | number | undefin
   return Math.max(0, Math.min(100, (x / y) * 100));
 }
 
-// Lower cases an enum value name with its prefix removed
+// Lower cases a generated enum name, NEW_REVISION becomes new revision
 export function enumLabel(values: Record<number, string>, v: number | undefined): string {
   const raw = values[v ?? 0] ?? 'UNSPECIFIED';
-  return raw.replace(/^[A-Z_]+?_(?=[A-Z]+$|[A-Z]+_)/, '').toLowerCase().replace(/_/g, ' ');
+  return raw.toLowerCase().replace(/_/g, ' ');
 }
 
 // Maps a state name onto a color tone

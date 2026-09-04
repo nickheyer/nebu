@@ -30,7 +30,7 @@
     api.sources
       .listSources({})
       .then((r) => {
-        sources = r.sources;
+        sources = r.sources.flatMap((s) => (s.source ? [s.source] : []));
         if (!source && sources.length) source = sources[0].id;
       })
       .catch(() => (sources = []));

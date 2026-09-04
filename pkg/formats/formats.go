@@ -173,6 +173,15 @@ func NewClassifier(specs []*v1.FormatSpec) (*Classifier, error) {
 // Returns a format spec by id
 func (c *Classifier) Spec(id string) *v1.FormatSpec { return c.byID[id] }
 
+// Lists format ids in priority order
+func (c *Classifier) Formats() []string {
+	out := make([]string, 0, len(c.formats))
+	for _, f := range c.formats {
+		out = append(out, f.spec.GetId())
+	}
+	return out
+}
+
 // Fills classification fields on every artifact in place
 func (c *Classifier) Classify(m *v1.Model) {
 	for _, a := range m.GetArtifacts() {

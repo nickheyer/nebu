@@ -17,13 +17,13 @@
     onOpenChange?: (open: boolean) => void;
     title: string;
     subtitle?: string;
-    width?: 'md' | 'lg' | 'xl';
+    width?: 'md' | 'lg' | 'xl' | '2xl';
     header?: Snippet;
     children: Snippet;
     footer?: Snippet;
   } = $props();
 
-  const widths = { md: 'max-w-xl', lg: 'max-w-2xl', xl: 'max-w-4xl' };
+  const widths = { md: 'max-w-xl', lg: 'max-w-2xl', xl: 'max-w-4xl', '2xl': 'max-w-6xl' };
 </script>
 
 <Dialog.Root bind:open {onOpenChange}>

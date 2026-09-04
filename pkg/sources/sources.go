@@ -1,4 +1,9 @@
 // Package sources defines where models come from.
+//
+// There is one client. Each catalog is a file that tells the client where the
+// catalog lives, what it accepts, and how its wire format maps onto the shared
+// model; the client does everything else. The source list is the set of those
+// files, plus the directories and mirrors config names.
 package sources
 
 import (
@@ -7,12 +12,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 // Returned when a source id is not configured
 var ErrUnknownSource = errors.New("unknown source")
+
+// Returned when a source cannot do what was asked
+var ErrUnsupported = errors.New("not supported by this source")
 
 // Random access handle on one artifact
 type Blob interface {
@@ -66,28 +75,34 @@ func RangeOf(ctx context.Context, b Blob, off, length int64) (io.ReadCloser, err
 	return io.NopCloser(io.NewSectionReader(b, off, length)), nil
 }
 
-// Catalog that can search, resolve, and open artifacts
+// Catalog that can browse, search, resolve, and open artifacts
+//
+// Every source, from the Hub to a directory on disk, answers the same
+// SearchRequest and describes what it accepts through Capabilities, so one
+// interface renders all of them. A source that keeps variants under one name,
+// such as an image tag or a version, returns a Model whose Repo names the
+// variant so stored groups never collide. Revisions and Card answer
+// ErrUnsupported on a source that has neither.
 type Source interface {
 	Spec() *v1.Source
-	Search(ctx context.Context, query string, tags []string, limit int) ([]*v1.SearchHit, error)
+	Capabilities(ctx context.Context) *v1.SourceCapabilities
+	Search(ctx context.Context, req *v1.SearchRequest) (*v1.SearchResponse, error)
 	Resolve(ctx context.Context, repo, revision string) (*v1.Model, error)
+	Revisions(ctx context.Context, repo string) ([]*v1.Revision, error)
+	Card(ctx context.Context, repo, revision string) (*v1.ModelCard, error)
 	Open(ctx context.Context, model *v1.Model, artifact *v1.Artifact) (Blob, error)
 }
 
-// Builds a source from its config
-type Constructor func(cfg *v1.Source) (Source, error)
-
-// Constructors keyed by source kind
-type Constructors map[v1.SourceKind]Constructor
-
-// Configured sources in config order
+// Every source: the directories and mirrors config names, then every implemented catalog
 type Registry struct {
 	order []Source
 	byID  map[string]Source
 }
 
-// Builds every configured source
-func Build(cfgs []*v1.Source, ctors Constructors) (*Registry, error) {
+// Builds every source. Config entries come first, in config order, so the
+// first is the one commands fall back to; they can only name the kinds that
+// need config. Every implemented catalog follows, in kind order.
+func Build(cfgs []*v1.Source) (*Registry, error) {
 	r := &Registry{byID: map[string]Source{}}
 	for _, cfg := range cfgs {
 		if cfg.GetId() == "" {
@@ -96,18 +111,38 @@ func Build(cfgs []*v1.Source, ctors Constructors) (*Registry, error) {
 		if _, dup := r.byID[cfg.GetId()]; dup {
 			return nil, fmt.Errorf("duplicate source id %q", cfg.GetId())
 		}
-		ctor, ok := ctors[cfg.GetKind()]
+		cat, ok := catalogs[cfg.GetKind()]
 		if !ok {
 			return nil, fmt.Errorf("source %s: unsupported kind %s", cfg.GetId(), cfg.GetKind())
 		}
-		src, err := ctor(cfg)
+		if !cat.Configured {
+			return nil, fmt.Errorf("source %s: %s is built in and takes no config", cfg.GetId(), cat.ID)
+		}
+		c, err := newClient(cat, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("source %s: %w", cfg.GetId(), err)
 		}
-		r.order = append(r.order, src)
-		r.byID[cfg.GetId()] = src
+		r.add(c)
+	}
+	for _, cat := range all() {
+		if cat.Configured {
+			continue
+		}
+		if _, taken := r.byID[cat.ID]; taken {
+			return nil, fmt.Errorf("source id %q belongs to a built in catalog", cat.ID)
+		}
+		c, err := newClient(cat, &v1.Source{Id: cat.ID, Kind: cat.Kind, Endpoint: cat.Endpoint})
+		if err != nil {
+			return nil, fmt.Errorf("source %s: %w", cat.ID, err)
+		}
+		r.add(c)
 	}
 	return r, nil
+}
+
+func (r *Registry) add(src Source) {
+	r.order = append(r.order, src)
+	r.byID[src.Spec().GetId()] = src
 }
 
 // Returns a source by id, or the first when empty
@@ -131,5 +166,20 @@ func (r *Registry) List() []*v1.Source {
 	for _, s := range r.order {
 		out = append(out, s.Spec())
 	}
+	return out
+}
+
+// Lists every source with what it can do
+func (r *Registry) Statuses(ctx context.Context) []*v1.SourceStatus {
+	out := make([]*v1.SourceStatus, len(r.order))
+	var wg sync.WaitGroup
+	for i, s := range r.order {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out[i] = &v1.SourceStatus{Source: s.Spec(), Capabilities: s.Capabilities(ctx)}
+		}()
+	}
+	wg.Wait()
 	return out
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/pkg/events"
+	"github.com/nickheyer/nebu/pkg/launch"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -173,6 +174,10 @@ func (m *Manager) stored(id string) (*v1.Task, []string, error) {
 	}
 	if err != nil {
 		return nil, nil, err
+	}
+	// Rows written before lines were cleaned still have to marshal
+	for i, l := range logs {
+		logs[i] = launch.Clean(l)
 	}
 	return t, logs, nil
 }
@@ -392,7 +397,7 @@ func (h *Handle) Message(message string) {
 
 // Appends a log line, stores it, and notifies watchers
 func (h *Handle) Logf(format string, args ...any) {
-	line := fmt.Sprintf(format, args...)
+	line := launch.Clean(fmt.Sprintf(format, args...))
 	h.e.mu.Lock()
 	h.e.logs = append(h.e.logs, line)
 	if len(h.e.logs) > logMax {

@@ -144,7 +144,7 @@
             <Badge size="xs" tone={kindTone[f.kind] ?? 'neutral'} label={enumLabel(FindingKind, f.kind)} class="mt-0.5 shrink-0" />
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-x-2 font-mono text-sm">
-                <a href="/catalog?repo={encodeURIComponent(f.repo)}" class="text-fg hover:underline">{f.repo}</a>
+                <a href="/catalog?source={live.watches.get(f.watchId)?.sourceId ?? ''}&repo={encodeURIComponent(f.repo)}" class="text-fg hover:underline">{f.repo}</a>
                 {#if f.group}<span class="text-fg-muted">{f.group}</span>{/if}
                 {#if f.commit}<span class="text-[11px] text-fg-faint">@ {f.commit.slice(0, 10)}</span>{/if}
               </div>

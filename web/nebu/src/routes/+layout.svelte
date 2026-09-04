@@ -5,13 +5,14 @@
   import { Tooltip } from 'bits-ui';
   import { connect, disconnect, live, unackedFindings, liveInstances } from '$lib/state.svelte';
   import { endDrag } from '$lib/dnd.svelte';
-  import { LayoutDashboard, Search, Database, LayoutGrid, Boxes, Waypoints, Wrench, ListChecks, Radar, Server, Settings, WifiOff, KeyRound } from '@lucide/svelte';
+  import { LayoutDashboard, Search, Database, LayoutGrid, Boxes, Waypoints, Wrench, ListChecks, Radar, Server, Settings, WifiOff, KeyRound, Menu as MenuIcon } from '@lucide/svelte';
   import Toaster from '$lib/components/ui/Toaster.svelte';
   import Confirmer from '$lib/components/ui/Confirmer.svelte';
   import ActivityMenu from '$lib/components/ActivityMenu.svelte';
   import SlotDialogs from '$lib/components/SlotDialogs.svelte';
 
   let { children } = $props();
+  let menuOpen = $state(false);
 
   const groups = $derived([
     { label: '', items: [{ href: '/', label: 'Overview', icon: LayoutDashboard }] },
@@ -60,8 +61,14 @@
 </script>
 
 <Tooltip.Provider delayDuration={250}>
-  <div class="flex h-full min-h-screen">
-    <nav class="sticky top-0 flex h-screen w-[232px] shrink-0 flex-col border-r border-line bg-surface/70">
+  <div class="flex min-h-screen">
+    {#if menuOpen}
+      <button class="fade fixed inset-0 z-30 bg-black/50 lg:hidden" aria-label="Close menu" onclick={() => (menuOpen = false)}></button>
+    {/if}
+    <nav
+      class="fixed inset-y-0 left-0 z-40 flex h-screen w-[232px] shrink-0 flex-col border-r border-line bg-surface transition-transform lg:sticky lg:top-0 lg:translate-x-0 lg:bg-surface/70 {menuOpen ? 'translate-x-0 shadow-pop' : '-translate-x-full'}"
+      aria-label="Main"
+    >
       <a href="/" class="flex h-14 items-center gap-2.5 border-b border-line px-4">
         <span class="flex h-7 w-7 items-center justify-center rounded-md bg-accent text-accent-fg">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18V6l16 12V6" /></svg>
@@ -80,6 +87,7 @@
               href={item.href}
               class="mb-0.5 flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm transition-colors {on ? 'bg-raised text-fg' : 'text-fg-muted hover:bg-raised/60 hover:text-fg'}"
               aria-current={on ? 'page' : undefined}
+              onclick={() => (menuOpen = false)}
             >
               <Icon size={15} class={on ? 'text-accent' : ''} />
               <span class="flex-1">{item.label}</span>
@@ -93,7 +101,7 @@
 
       <div class="border-t border-line px-2.5 py-2.5">
         <ActivityMenu />
-        <a href="/settings" class="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-fg-muted transition-colors hover:bg-raised hover:text-fg {active('/settings') ? 'bg-raised text-fg' : ''}">
+        <a href="/settings" class="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-fg-muted transition-colors hover:bg-raised hover:text-fg {active('/settings') ? 'bg-raised text-fg' : ''}" onclick={() => (menuOpen = false)}>
           <Settings size={15} />
           <span class="flex-1">Settings</span>
         </a>
@@ -105,6 +113,11 @@
     </nav>
 
     <div class="flex min-w-0 flex-1 flex-col">
+      <div class="flex h-12 items-center gap-3 border-b border-line bg-surface/70 px-4 lg:hidden">
+        <button class="rounded-md p-1.5 text-fg-muted hover:bg-raised hover:text-fg" aria-label="Open menu" onclick={() => (menuOpen = true)}><MenuIcon size={18} /></button>
+        <span class="text-sm font-semibold text-fg">nebu</span>
+        <span class="ml-auto relative inline-block h-1.5 w-1.5 rounded-full {live.connected ? 'bg-ok' : 'bg-bad'}"></span>
+      </div>
       {#if !live.connected && live.error}
         <div class="flex items-center gap-3 border-b px-6 py-2 text-sm {live.needsToken ? 'border-warn/30 bg-warn/10 text-warn' : 'border-bad/30 bg-bad/10 text-bad'}">
           {#if live.needsToken}
@@ -118,7 +131,7 @@
           {/if}
         </div>
       {/if}
-      <main class="mx-auto w-full max-w-[1480px] flex-1 px-8 py-7">
+      <main class="mx-auto w-full max-w-[1480px] flex-1 px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
         {@render children()}
       </main>
     </div>

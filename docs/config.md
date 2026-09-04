@@ -10,12 +10,13 @@ data_dir: ~/.local/share/nebu     # db, runtime output, installs, builds
 cache_dir: ~/.cache/nebu
 store_dir: <data_dir>/store       # blobs, manifests, links
 spec_dirs: [/etc/nebu/spec]       # extra spec layers, <data_dir>/spec is always last
-sources:
-  - id: huggingface
+sources:                          # bootstrap: each entry is created once, when no source has its name
+  - id: hf-mirror                  # a second Hugging Face source beside the seeded default
     kind: SOURCE_KIND_HUGGINGFACE
-    token_env: HF_TOKEN
-  - id: modelscope
-    kind: SOURCE_KIND_MODELSCOPE
+    endpoint: https://hf-mirror.com
+  - id: ghcr                       # a second registry beside the seeded dockerhub one
+    kind: SOURCE_KIND_OCI
+    endpoint: https://ghcr.io
   - id: mirror
     kind: SOURCE_KIND_MIRROR
     endpoint: https://mirror.example/models   # or path: /mnt/mirror
@@ -59,3 +60,50 @@ Environment overrides: `NEBU_ADDR`, `NEBU_DATA_DIR`, `NEBU_LISTEN`, `NEBU_TOKEN`
 When `auth.token` is set every API call, from the CLI or the web UI, must carry it as a
 bearer token. The CLI reads it from the same config or `NEBU_TOKEN`. The web UI asks for it
 on the settings page and keeps it in the browser.
+
+## Sources
+
+A source is a configured instance of a provider. Providers are built in: Hugging Face,
+ModelScope, Ollama, Docker Hub, Civitai, Kaggle, NGC, CSGHub, a host filesystem, a nebu mirror.
+Every provider answers the same catalog interface: browse or search with a sort and facets, page
+through results, resolve a repository at a revision to its files, list its revisions, read its
+card, and open files for ranged reads.
+
+Sources are rows in the daemon's database. Providers that work without configuration get one
+default source seeded under the provider's name: `huggingface`, `modelscope`, `ollama`,
+`civitai`, `dockerhub`, `kaggle`, `ngc`, `csghub`. The `sources` list in config is a bootstrap:
+each entry creates a source with that id when none exists and is otherwise ignored, so once a
+source exists the web UI owns it. Create, edit, and remove sources on the settings page.
+`nebu sources` prints every source with what its provider can do.
+
+All of the seeded defaults list and search without a token. Civitai and Kaggle need one to
+download anything, the rest only for gated or private repositories. The first source is the one
+commands fall back to when `--source` is not given: your first configured entry, or
+`huggingface` with no config.
+
+What a source of each kind needs:
+
+| kind | endpoint default | token env default | repo form | revision |
+| --- | --- | --- | --- | --- |
+| `SOURCE_KIND_HUGGINGFACE` | `https://huggingface.co` | `HF_TOKEN` | `org/model` | branch or tag, `main` |
+| `SOURCE_KIND_MODELSCOPE` | `https://www.modelscope.cn` | `MODELSCOPE_API_TOKEN` | `org/model` | branch or tag, `master` |
+| `SOURCE_KIND_OLLAMA` | `https://ollama.com`, blobs from `registry.ollama.ai` | `OLLAMA_API_KEY` | `name[:tag]`, `latest` when absent | tag |
+| `SOURCE_KIND_OCI` | `https://hub.docker.com`, blobs from `registry-1.docker.io` | `DOCKER_TOKEN` as `user:token` | `namespace/name[:tag]`, `ai/` when absent | tag |
+| `SOURCE_KIND_CIVITAI` | `https://civitai.com` | `CIVITAI_API_TOKEN` | model id, or `id/versionId`, or a model page URL | version id or name |
+| `SOURCE_KIND_KAGGLE` | `https://www.kaggle.com` | `KAGGLE_KEY`, basic auth with `KAGGLE_USERNAME` when set | `owner/model[/framework/instance]` | version number |
+| `SOURCE_KIND_NGC` | `https://api.ngc.nvidia.com` | `NGC_API_KEY`, exchanged at `authn.nvidia.com`, guest when absent | `org[/team]/name` | version |
+| `SOURCE_KIND_CSGHUB` | `https://hub.opencsg.com` | `OPENCSG_TOKEN` | `namespace/name` | branch, `main` |
+| `SOURCE_KIND_MIRROR` | `endpoint` or `path` required | `token_env` as configured | `org/model` | fixed by the export |
+| `SOURCE_KIND_LOCAL` | `path` required | none | directory under `path` | none |
+
+Sources that keep several variants under one name, such as an Ollama tag, a Docker tag, a Civitai
+version, or a Kaggle instance, resolve to a repository that names the variant, so `llama3.2` at tag
+`3b` is stored as `llama3.2:3b`. The catalog lists those variants under the repository and switches
+between them. Anything a catalog lets you narrow by, such as Civitai's adult content switch or
+Ollama's capability filter, is a facet the source declares and `nebu sources` lists; it is not
+config.
+
+Any hub that speaks the Hugging Face API, such as `hf-mirror.com` or an enterprise Hub, is a
+`SOURCE_KIND_HUGGINGFACE` source with its `endpoint` set. Any registry that speaks the OCI
+distribution API, including GHCR and a private registry, is a `SOURCE_KIND_OCI` source with its
+`endpoint` set. Any CSGHub install is a `SOURCE_KIND_CSGHUB` source with its `endpoint` set.

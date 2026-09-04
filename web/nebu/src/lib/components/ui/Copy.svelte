@@ -1,16 +1,14 @@
 <script lang="ts">
   import { Check, Copy } from '@lucide/svelte';
+  import { copyText } from '$lib/clipboard';
 
   let { text, label = 'Copy', size = 14 }: { text: string; label?: string; size?: number } = $props();
   let done = $state(false);
 
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
+    if (await copyText(text)) {
       done = true;
       setTimeout(() => (done = false), 1200);
-    } catch {
-      // clipboard needs a secure context, fall back to selecting nothing
     }
   }
 </script>

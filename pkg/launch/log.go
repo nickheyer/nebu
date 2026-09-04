@@ -21,8 +21,9 @@ func NewLog(capacity int) *Log {
 	return &Log{capacity: max(capacity, 1), subs: map[chan struct{}]struct{}{}}
 }
 
-// Appends one line and wakes followers
+// Appends one cleaned line and wakes followers
 func (l *Log) Write(line string) {
+	line = Clean(line)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.lines = append(l.lines, line)

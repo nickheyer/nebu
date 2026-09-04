@@ -13,10 +13,19 @@ Global flags come before the command: `--config PATH`, `--addr HOST:PORT`, `--js
 ```
 nebu doctor                          probe the host and check every dependency
 nebu host [--refresh]                the probed profile
-nebu sources                         configured sources
-nebu search [--source S] [--tag T] [--limit N] words
-nebu inspect org/repo[@rev] [--source S] [--runtime R] [--group G] [--ctx N] [--param k=v]
+nebu sources                         configured sources with their sorts, facets, and auth state
+nebu search [--source S] [--sort ID] [--asc] [--filter facet=value]... [--tag T]... [--author A] [--limit N] [--cursor C] [words]
+nebu revisions REPO [--source S]     branches, tags, versions, or variants of a repository
+nebu card REPO[@rev] [--source S]    the model card a source publishes
+nebu inspect REPO[@rev] [--source S] [--runtime R] [--group G] [--ctx N] [--param k=v]
 ```
+
+`search` without words browses the source in its default order. Sorts and facets differ per source
+and `nebu sources` lists them; a facet filter such as `--filter task=text-generation` or
+`--filter type=LORA,Checkpoint` narrows the listing, and `--cursor` continues from the value the
+previous page printed. Most catalogs only order descending, so `--asc` works with the sorts
+`nebu sources` marks with `±` and is refused for the rest. Repository forms differ per source too,
+see [config.md](config.md).
 
 ## Store
 

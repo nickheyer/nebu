@@ -13,6 +13,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/sources"
 )
 
 func runServe(ctx context.Context, e *env, args []string) error {
@@ -118,33 +119,95 @@ func runSources(ctx context.Context, e *env, args []string) error {
 	}
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
-		for _, s := range resp.Msg.GetSources() {
-			rows = append(rows, []string{s.GetId(), eval.EnumShort(s.GetKind()), s.GetEndpoint() + s.GetPath(), s.GetTokenEnv()})
+		for _, st := range resp.Msg.GetSources() {
+			s, c := st.GetSource(), st.GetCapabilities()
+			var can []string
+			for _, f := range []struct {
+				ok   bool
+				name string
+			}{{c.GetBrowse(), "browse"}, {c.GetSearch(), "search"}, {c.GetRevisions(), "revisions"}, {c.GetCard(), "card"}} {
+				if f.ok {
+					can = append(can, f.name)
+				}
+			}
+			auth := "-"
+			switch {
+			case c.GetTokenPresent():
+				auth = "token set"
+			case c.GetAuthRequired():
+				auth = "token needed"
+			}
+			if auth != "-" && c.GetTokenEnv() != "" {
+				auth += " (" + c.GetTokenEnv() + ")"
+			}
+			var facets []string
+			for _, f := range c.GetFacets() {
+				facets = append(facets, f.GetId())
+			}
+			where := s.GetEndpoint() + s.GetPath()
+			if where == "" {
+				where = c.GetWebUrl()
+			}
+			rows = append(rows, []string{s.GetId(), eval.EnumShort(s.GetKind()), where, auth, strings.Join(can, ","), strings.Join(sortIDs(c), ","), strings.Join(facets, ",")})
 		}
-		table(w, []string{"ID", "KIND", "LOCATION", "TOKEN ENV"}, rows)
+		table(w, []string{"ID", "KIND", "LOCATION", "AUTH", "CAN", "SORTS", "FACETS"}, rows)
 	})
+}
+
+// Sort ids with a ± on the ones --asc can flip
+func sortIDs(c *v1.SourceCapabilities) []string {
+	var out []string
+	for _, s := range c.GetSorts() {
+		id := s.GetId()
+		if s.GetReversible() {
+			id += "±"
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 func runSearch(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("search")
 	source := fs.String("source", "", "source id, first configured when empty")
-	limit := fs.Uint("limit", 20, "maximum hits")
-	var tags multi
+	limit := fs.Uint("limit", 20, "maximum hits per page")
+	sortBy := fs.String("sort", "", "sort id, see nebu sources for what each source accepts")
+	asc := fs.Bool("asc", false, "ascending instead of descending")
+	author := fs.String("author", "", "only repositories by this owner")
+	cursor := fs.String("cursor", "", "continue from the cursor a previous page printed")
+	var tags, filters multi
 	fs.Var(&tags, "tag", "tag filter, repeatable")
+	fs.Var(&filters, "filter", "facet filter as facet=value, repeatable")
 	query, err := parse(fs, args)
 	if err != nil {
 		return err
+	}
+	req := &v1.SearchRequest{
+		SourceId:  *source,
+		Query:     strings.Join(query, " "),
+		Tags:      tags,
+		Limit:     uint32(*limit),
+		Sort:      *sortBy,
+		Ascending: *asc,
+		Author:    *author,
+		Cursor:    *cursor,
+		Filters:   map[string]string{},
+	}
+	for _, f := range filters {
+		k, v, ok := strings.Cut(f, "=")
+		if !ok {
+			return fmt.Errorf("filter %q: expected facet=value", f)
+		}
+		if prev, dup := req.Filters[k]; dup {
+			v = prev + "," + v
+		}
+		req.Filters[k] = v
 	}
 	cl, err := e.clients()
 	if err != nil {
 		return err
 	}
-	resp, err := cl.sources.Search(ctx, connect.NewRequest(&v1.SearchRequest{
-		SourceId: *source,
-		Query:    strings.Join(query, " "),
-		Tags:     tags,
-		Limit:    uint32(*limit),
-	}))
+	resp, err := cl.sources.Search(ctx, connect.NewRequest(req))
 	if err != nil {
 		return err
 	}
@@ -155,9 +218,99 @@ func runSearch(ctx context.Context, e *env, args []string) error {
 			if h.GetUpdatedAt() != nil {
 				updated = h.GetUpdatedAt().AsTime().Format("2006-01-02")
 			}
-			rows = append(rows, []string{h.GetRepo(), strconv.FormatUint(h.GetDownloads(), 10), strconv.FormatUint(h.GetLikes(), 10), updated, strings.Join(firstN(h.GetTags(), 5), ",")})
+			size := "-"
+			if h.GetParameters() > 0 {
+				size = humanCount(h.GetParameters())
+			} else if h.GetSizeBytes() > 0 {
+				size = estimate.Human(h.GetSizeBytes())
+			}
+			rows = append(rows, []string{h.GetRepo(), h.GetTask(), size, strconv.FormatUint(h.GetDownloads(), 10), strconv.FormatUint(h.GetLikes(), 10), updated, strings.Join(h.GetFormats(), ",")})
 		}
-		table(w, []string{"REPO", "DOWNLOADS", "LIKES", "UPDATED", "TAGS"}, rows)
+		table(w, []string{"REPO", "TASK", "SIZE", "DOWNLOADS", "LIKES", "UPDATED", "FORMATS"}, rows)
+		var notes []string
+		if resp.Msg.GetTotal() > 0 {
+			notes = append(notes, fmt.Sprintf("%d matches", resp.Msg.GetTotal()))
+		}
+		if resp.Msg.GetNextCursor() != "" {
+			notes = append(notes, fmt.Sprintf("next page: --cursor %q", resp.Msg.GetNextCursor()))
+		}
+		if len(notes) > 0 {
+			fmt.Fprintln(w, "\n"+strings.Join(notes, ", "))
+		}
+	})
+}
+
+func runRevisions(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("revisions")
+	source := fs.String("source", "", "source id, first configured when empty")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return fmt.Errorf("usage: nebu revisions <repo> [--source S]")
+	}
+	cl, err := e.clients()
+	if err != nil {
+		return err
+	}
+	resp, err := cl.sources.ListRevisions(ctx, connect.NewRequest(&v1.ListRevisionsRequest{SourceId: *source, Repo: positional[0]}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		var rows [][]string
+		for _, r := range resp.Msg.GetRevisions() {
+			def := ""
+			if r.GetDefault() {
+				def = "*"
+			}
+			size := "-"
+			if r.GetSizeBytes() > 0 {
+				size = estimate.Human(r.GetSizeBytes())
+			}
+			updated := "-"
+			if r.GetUpdatedAt() != nil {
+				updated = r.GetUpdatedAt().AsTime().Format("2006-01-02")
+			}
+			rows = append(rows, []string{def, r.GetName(), r.GetRepo(), shortCommit(r.GetCommit()), size, updated, r.GetDetail()})
+		}
+		table(w, []string{"", "REVISION", "REPO", "COMMIT", "SIZE", "UPDATED", "DETAIL"}, rows)
+	})
+}
+
+func runCard(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("card")
+	source := fs.String("source", "", "source id, first configured when empty")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return fmt.Errorf("usage: nebu card <repo>[@revision] [--source S]")
+	}
+	repo, revision := splitRef(positional[0])
+	cl, err := e.clients()
+	if err != nil {
+		return err
+	}
+	resp, err := cl.sources.GetModelCard(ctx, connect.NewRequest(&v1.GetModelCardRequest{SourceId: *source, Repo: repo, Revision: revision}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		card := resp.Msg.GetCard()
+		switch {
+		case card.GetMarkdown() != "":
+			fmt.Fprintln(w, card.GetMarkdown())
+		case card.GetHtml() != "":
+			fmt.Fprintln(w, sources.StripTags(card.GetHtml()))
+		default:
+			fmt.Fprintln(w, "no card published")
+		}
+		if card.GetUrl() != "" {
+			fmt.Fprintln(w, "\n"+card.GetUrl())
+		}
 	})
 }
 

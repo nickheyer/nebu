@@ -16,5 +16,3 @@ The end goal objectives are:
 3. Provide quantifiable resource requirements of models (or quants of models) in real time, in direct comparison to host resources without all the elitist redditors going "oh you need at least 6 Nvidia H200's to even think about running this". This should be a natural intuitive side effect of #1 and #2 without needing to be some slop feature afterthought.
 
 4. Be a time save, not a time suck.
-
-> DISCLAIMER: I don't even know what language I'm going to use at the time of writing this... not Python, probably not Go since ollama uses it and it seems like they regret it, I haven't written C++ since college, Rust seems like it would have the same hangups as go, I just don't know. 

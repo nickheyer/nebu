@@ -14,6 +14,12 @@ enum SourceKind {
   SOURCE_KIND_LOCAL = 2;
   SOURCE_KIND_MODELSCOPE = 3;
   SOURCE_KIND_MIRROR = 4;
+  SOURCE_KIND_OLLAMA = 5;
+  SOURCE_KIND_CIVITAI = 6;
+  SOURCE_KIND_OCI = 7;
+  SOURCE_KIND_KAGGLE = 8;
+  SOURCE_KIND_NGC = 9;
+  SOURCE_KIND_CSGHUB = 10;
 }
 
 // Configured place models come from
@@ -23,6 +29,58 @@ message Source {
   string endpoint = 3;
   string token_env = 4;
   string path = 5;
+  // Kind specific settings such as namespace, username_env, or nsfw
+  map<string, string> options = 6;
+}
+
+// One way a source can order results
+message SortOption {
+  string id = 1;
+  string label = 2;
+  bool reversible = 3;
+}
+
+// One value a facet accepts
+message FacetValue {
+  string id = 1;
+  string label = 2;
+  string group = 3;
+}
+
+// One dimension results can be narrowed by
+message Facet {
+  string id = 1;
+  string label = 2;
+  repeated FacetValue values = 3;
+  bool multi = 4;
+  bool freeform = 5;
+}
+
+// What a source can do, so a client can render one interface for every catalog
+message SourceCapabilities {
+  bool browse = 1;
+  bool search = 2;
+  bool paginate = 3;
+  bool card = 4;
+  bool revisions = 5;
+  bool auth_required = 6;
+  bool token_present = 7;
+  repeated SortOption sorts = 8;
+  string default_sort = 9;
+  repeated Facet facets = 10;
+  string repo_example = 11;
+  string repo_pattern = 12;
+  string web_url = 13;
+  string description = 14;
+  string revision_label = 15;
+  string token_env = 16;
+}
+
+// A configured source with what it can do
+message SourceStatus {
+  Source source = 1;
+  SourceCapabilities capabilities = 2;
+  string error = 3;
 }
 
 // One catalog search result
@@ -34,27 +92,67 @@ message SearchHit {
   uint64 likes = 5;
   google.protobuf.Timestamp updated_at = 6;
   repeated string tags = 7;
+  string name = 8;
+  string description = 9;
+  string task = 10;
+  string library = 11;
+  string license = 12;
+  repeated string formats = 13;
+  uint64 parameters = 14;
+  uint64 size_bytes = 15;
+  bool gated = 16;
+  bool private = 17;
+  google.protobuf.Timestamp created_at = 18;
+  string url = 19;
+  map<string, string> extra = 20;
+}
+
+// One branch, tag, version, or variant of a repository
+message Revision {
+  string name = 1;
+  string commit = 2;
+  bool default = 3;
+  uint64 size_bytes = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string detail = 6;
+  // Set when the variant resolves as its own repository
+  string repo = 7;
+}
+
+// The description a source publishes for a repository
+message ModelCard {
+  string markdown = 1;
+  string html = 2;
+  string url = 3;
 }
 
 // Lists configured sources
 message ListSourcesRequest {}
 
-// Returns configured sources
+// Returns configured sources with their capabilities
 message ListSourcesResponse {
-  repeated Source sources = 1;
+  repeated SourceStatus sources = 1;
 }
 
-// Searches one source
+// Searches or browses one source
 message SearchRequest {
   string source_id = 1;
   string query = 2;
   repeated string tags = 3;
   uint32 limit = 4;
+  string sort = 5;
+  bool ascending = 6;
+  // Facet id to value, comma separated for multi valued facets
+  map<string, string> filters = 7;
+  string cursor = 8;
+  string author = 9;
 }
 
-// Returns search hits
+// Returns one page of hits
 message SearchResponse {
   repeated SearchHit hits = 1;
+  string next_cursor = 2;
+  uint64 total = 3;
 }
 
 // Resolves a repo and revision to artifacts
@@ -69,12 +167,39 @@ message ResolveResponse {
   Model model = 1;
 }
 
+// Lists revisions of a repository
+message ListRevisionsRequest {
+  string source_id = 1;
+  string repo = 2;
+}
+
+// Returns revisions, default first
+message ListRevisionsResponse {
+  repeated Revision revisions = 1;
+}
+
+// Fetches the description of a repository
+message GetModelCardRequest {
+  string source_id = 1;
+  string repo = 2;
+  string revision = 3;
+}
+
+// Returns the card
+message GetModelCardResponse {
+  ModelCard card = 1;
+}
+
 // Catalog lookup across sources
 service SourceService {
-  // Lists configured sources
+  // Lists configured sources with capabilities
   rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
-  // Searches a source catalog
+  // Searches or browses a source catalog
   rpc Search(SearchRequest) returns (SearchResponse);
   // Resolves a repo to classified artifacts
   rpc Resolve(ResolveRequest) returns (ResolveResponse);
+  // Lists revisions of a repository
+  rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse);
+  // Fetches the model card
+  rpc GetModelCard(GetModelCardRequest) returns (GetModelCardResponse);
 }

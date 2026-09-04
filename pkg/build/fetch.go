@@ -24,7 +24,7 @@ var commitLike = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 
 // Picks the newest tag from a GitHub style release feed
 func latestTag(ctx context.Context, feed string) (string, error) {
-	client, err := sources.NewClient(feed, "")
+	client, err := sources.NewHTTP(feed, "")
 	if err != nil {
 		return "", err
 	}
@@ -67,7 +67,7 @@ func download(ctx context.Context, rawURL, dest string, out io.Writer) error {
 		fmt.Fprintf(out, "using cached %s\n", filepath.Base(dest))
 		return nil
 	}
-	client, err := sources.NewClient(rawURL, "")
+	client, err := sources.NewHTTP(rawURL, "")
 	if err != nil {
 		return err
 	}
@@ -88,7 +88,7 @@ func download(ctx context.Context, rawURL, dest string, out io.Writer) error {
 	return last
 }
 
-func copyURL(ctx context.Context, client *sources.Client, rawURL, dest string) error {
+func copyURL(ctx context.Context, client *sources.HTTP, rawURL, dest string) error {
 	resp, err := client.Do(ctx, http.MethodGet, rawURL, nil, nil)
 	if err != nil {
 		return err

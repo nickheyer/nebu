@@ -25,6 +25,8 @@
     "@connectrpc/connect": "^2.1.2",
     "@connectrpc/connect-web": "^2.1.2",
     "@lucide/svelte": "^1.40.0",
-    "bits-ui": "^2.19.0"
+    "bits-ui": "^2.19.0",
+    "dompurify": "^3.4.14",
+    "marked": "^18.0.11"
   }
 }

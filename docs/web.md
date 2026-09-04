@@ -14,8 +14,16 @@ Pages:
 
 - overview, device and host memory meters, slots as drop targets, running instances, activity,
   unacknowledged findings, and a get started checklist until a model is serving
-- catalog, search a source or type `org/repo`, weight groups with pull progress, a fit matrix of
-  group by context length per runtime with the plan behind every cell, watch the repository
+- catalog, one interface over every configured source, each a tab across the top: browse without
+  a query in the source's default order, search, sort, flip the order where the source allows it,
+  and narrow by the facets the source declares such as task, library, license, type, or
+  capability, with cards or a list and endless paging. Every card says in words what it shows,
+  which runtime can serve the model, and whether a token is needed. Typing a repository name
+  inspects it directly. A model opens in a drawer that lists its weight groups as builds to choose
+  between, with the precision of each explained, the download size, whether it fits on this host,
+  and pull progress, then a fit matrix of group by context length per runtime with the plan behind
+  every cell, the model card, and its revisions, tags, versions, or variants to switch between,
+  plus watch and pull
 - store, stored models with a slot rail to drop them on, run or swap through a dialog that can
   check the memory plan first, export one or all as a mirror, verify, collect garbage, remove
 - runtimes, manifests with compatibility and unmet constraints, adopt, install prebuilt, build
@@ -30,7 +38,8 @@ Pages:
 - host, doctor, devices with facts, memory pools, storage, probes, host facts
 - settings, api token and connection
 
-Errors surface as toasts, destructive actions confirm first, and details open in a side drawer
+In the catalog, `/` focuses the search box and Enter on a repository name opens it without
+searching. Errors surface as toasts, destructive actions confirm first, and details open in a side drawer
 that deep links through `?id=` so a task or instance can be shared by URL. Dropping a stored
 model on an occupied slot swaps after confirming.
 

@@ -34,7 +34,8 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 	}
 	t.Setenv(EnvConfig, filepath.Join(dir, "also-missing.yaml"))
 	cfg, err = Load("")
-	if err != nil || len(cfg.GetSources()) != 1 || cfg.GetSources()[0].GetId() != defaultSource {
+	// Sources stay empty here, every implemented kind is built and config only overrides or adds
+	if err != nil || len(cfg.GetSources()) != 0 || cfg.GetListen() == "" {
 		t.Fatalf("defaults %+v %v", cfg, err)
 	}
 }

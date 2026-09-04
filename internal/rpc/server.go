@@ -34,9 +34,11 @@ import (
 
 // Everything the handlers need
 type Deps struct {
-	Host      *host.Prober
-	Doctor    *doctor.Doctor
-	Sources   *sources.Registry
+	Host    *host.Prober
+	Doctor  *doctor.Doctor
+	Sources *sources.Registry
+	// Format ids hits are tagged with when a catalog names them
+	Formats   []string
 	Runtimes  *runtime.Registry
 	Inspector *inspect.Inspector
 	Store     *store.Store
@@ -61,7 +63,7 @@ func NewHandler(d Deps) http.Handler {
 	opts := connect.WithInterceptors(logging(d.Log), &auth{token: d.Token})
 	mux := http.NewServeMux()
 	mux.Handle(nebuv1connect.NewHostServiceHandler(services.NewHostService(d.Host, d.Doctor), opts))
-	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector), opts))
+	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector, d.Formats), opts))
 	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host, d.Installs), opts))
 	mux.Handle(nebuv1connect.NewInstanceServiceHandler(services.NewInstanceService(d.Instances), opts))
 	mux.Handle(nebuv1connect.NewEstimateServiceHandler(services.NewEstimateService(d.Inspector), opts))
