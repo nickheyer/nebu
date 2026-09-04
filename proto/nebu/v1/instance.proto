@@ -72,6 +72,7 @@ message RunRequest {
   string name = 6;
   map<string, string> params = 7;
   string slot_id = 8;
+  bool force = 9;
 }
 
 // Returns the instance and its startup task

@@ -64,6 +64,16 @@ message CommandProbe {
   repeated string args = 2;
   string match = 3;
   uint32 timeout_ms = 4;
+  string command = 5;
+}
+
+// Turns a stored group of one of the formats into what the runtime loads, once per group, before its first launch
+message Prepare {
+  repeated string formats = 1;
+  string command = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  uint32 timeout_ms = 5;
 }
 
 // A usable copy of a runtime
@@ -102,6 +112,7 @@ message Launch {
   HealthCheck health = 4;
   ApiFlavor api = 5;
   uint32 stop_grace_ms = 6;
+  Prepare prepare = 7;
 }
 
 // One log pattern with its hint

@@ -3,6 +3,8 @@ package inspect
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/runtime"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -104,7 +107,7 @@ func (i *Inspector) Raw(ctx context.Context, src sources.Source, model *v1.Model
 	if missing := formats.Missing(i.Classifier.Spec(g.FormatID), g); len(missing) > 0 {
 		return nil, fmt.Errorf("group %s missing %v", g.Name, missing)
 	}
-	key := rawKey(model, g)
+	key := rawKey(model, g, i.Classifier.Spec(g.FormatID))
 	raw := &v1.RawModel{}
 	if data, ok := i.Cache.Get(key, 0); ok && proto.Unmarshal(data, raw) == nil {
 		raw.FormatId, raw.Group = g.FormatID, g.Name
@@ -159,7 +162,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 	if err != nil {
 		return nil, err
 	}
-	groups := selectGroups(formats.Groups(model), req.GetGroups())
+	groups := selectGroups(i.Classifier.Groups(model), req.GetGroups())
 	runtimes := i.selectRuntimes(req.GetRuntimeIds(), profile)
 	contexts := req.GetContexts()
 	if len(contexts) == 0 {
@@ -214,7 +217,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	g, err := formats.FindGroup(formats.Groups(model), req.GetGroup())
+	g, err := formats.FindGroup(i.Classifier.Groups(model), req.GetGroup())
 	if err != nil {
 		return nil, err
 	}
@@ -286,8 +289,9 @@ func withContext(params map[string]string, name string, n uint32) map[string]str
 	return out
 }
 
-func rawKey(model *v1.Model, g *formats.Group) string {
-	parts := []string{"raw", g.FormatID}
+func rawKey(model *v1.Model, g *formats.Group, spec *v1.FormatSpec) string {
+	sum := sha256.Sum256([]byte(prototext.Format(spec)))
+	parts := []string{"raw", g.FormatID, hex.EncodeToString(sum[:8])}
 	add := func(a *v1.Artifact) {
 		if a.GetSha256() != "" {
 			parts = append(parts, a.GetSha256())

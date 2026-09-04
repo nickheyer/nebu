@@ -70,9 +70,15 @@ var ErrUnknownGroup = errors.New("unknown weight group")
 type Opener func(ctx context.Context, a *v1.Artifact) (sources.Blob, error)
 
 // Loadable set of weights plus attached files
+//
+// Root is the directory prefix every path in the group shares and the store
+// strips when it lays the group out: the weights' directory, or the root the
+// format's root pattern captured for a group shaped as a tree. Empty for the
+// repository root.
 type Group struct {
 	FormatID string
 	Name     string
+	Root     string
 	Weights  []*v1.Artifact
 	Files    map[v1.ArtifactRole][]*v1.Artifact
 }
@@ -91,11 +97,14 @@ type Constructors map[string]Constructor
 // Readers keyed by format id
 type Readers map[string]Reader
 
-// Builds readers for every spec that has a constructor
+// Builds readers for every spec whose reader has a constructor
+//
+// A spec names its reader, so two formats can share one parser, and defaults
+// to its own id.
 func BuildReaders(specs []*v1.FormatSpec, ctors Constructors) (Readers, error) {
 	out := Readers{}
 	for _, s := range specs {
-		ctor, ok := ctors[s.GetId()]
+		ctor, ok := ctors[ReaderID(s)]
 		if !ok {
 			continue
 		}
@@ -106,6 +115,14 @@ func BuildReaders(specs []*v1.FormatSpec, ctors Constructors) (Readers, error) {
 		out[s.GetId()] = r
 	}
 	return out, nil
+}
+
+// Names the reader a format spec parses with
+func ReaderID(s *v1.FormatSpec) string {
+	if r := s.GetReader(); r != "" {
+		return r
+	}
+	return s.GetId()
 }
 
 type fileRule struct {
@@ -123,19 +140,31 @@ type compiledFormat struct {
 	files  []fileRule
 	groups []groupRule
 	shards *regexp.Regexp
+	root   *regexp.Regexp
 }
 
 // Assigns format, role, group, and shard to artifacts
 type Classifier struct {
-	formats []*compiledFormat
-	byID    map[string]*v1.FormatSpec
+	formats  []*compiledFormat
+	byID     map[string]*v1.FormatSpec
+	compiled map[string]*compiledFormat
 }
 
 // Compiles format specs ordered by priority then id
 func NewClassifier(specs []*v1.FormatSpec) (*Classifier, error) {
-	c := &Classifier{byID: map[string]*v1.FormatSpec{}}
+	c := &Classifier{byID: map[string]*v1.FormatSpec{}, compiled: map[string]*compiledFormat{}}
 	for _, s := range specs {
 		cf := &compiledFormat{spec: s}
+		if s.GetRoot() != "" {
+			re, err := regexp.Compile(s.GetRoot())
+			if err != nil {
+				return nil, fmt.Errorf("format %s root: %w", s.GetId(), err)
+			}
+			if re.SubexpIndex("root") < 0 {
+				return nil, fmt.Errorf("format %s root: pattern needs a root group", s.GetId())
+			}
+			cf.root = re
+		}
 		for _, f := range s.GetFiles() {
 			re, err := regexp.Compile(f.GetMatch())
 			if err != nil {
@@ -159,6 +188,7 @@ func NewClassifier(specs []*v1.FormatSpec) (*Classifier, error) {
 		}
 		c.formats = append(c.formats, cf)
 		c.byID[s.GetId()] = s
+		c.compiled[s.GetId()] = cf
 	}
 	sort.SliceStable(c.formats, func(i, j int) bool {
 		a, b := c.formats[i].spec, c.formats[j].spec
@@ -183,15 +213,45 @@ func (c *Classifier) Formats() []string {
 }
 
 // Fills classification fields on every artifact in place
+//
+// Formats claim files in priority order. A weight whose format requires files
+// the repository does not carry falls through to the next format that claims
+// it, so a lone safetensors checkpoint without a config is not left with a
+// format that cannot read it.
 func (c *Classifier) Classify(m *v1.Model) {
 	for _, a := range m.GetArtifacts() {
-		c.classify(a)
+		c.classify(a, nil)
+	}
+	excluded := map[*v1.Artifact]map[string]bool{}
+	for range c.formats {
+		demoted := false
+		for _, g := range c.Groups(m) {
+			if len(Missing(c.byID[g.FormatID], g)) == 0 {
+				continue
+			}
+			for _, a := range g.Weights {
+				ex := excluded[a]
+				if ex == nil {
+					ex = map[string]bool{}
+					excluded[a] = ex
+				}
+				ex[g.FormatID] = true
+				c.classify(a, ex)
+				demoted = true
+			}
+		}
+		if !demoted {
+			break
+		}
 	}
 }
 
-func (c *Classifier) classify(a *v1.Artifact) {
+func (c *Classifier) classify(a *v1.Artifact, exclude map[string]bool) {
 	a.FormatId, a.Role, a.Group, a.ShardIndex, a.ShardCount = "", v1.ArtifactRole_ARTIFACT_ROLE_OTHER, "", 0, 0
 	for _, f := range c.formats {
+		if exclude[f.spec.GetId()] {
+			continue
+		}
 		for _, rule := range f.files {
 			if !rule.re.MatchString(a.GetPath()) {
 				continue
@@ -241,8 +301,30 @@ func (f *compiledFormat) shard(p string) (uint32, uint32) {
 	return index, count
 }
 
+// Names the place a file attaches to: its directory, or the root its format's
+// root pattern captures for formats laid out as a tree
+func (c *Classifier) attachKey(a *v1.Artifact) string {
+	if root, ok := c.root(a); ok {
+		return "\x00" + root
+	}
+	return path.Dir(a.GetPath())
+}
+
+// Returns the tree root a path sits under when its format lays groups out as trees
+func (c *Classifier) root(a *v1.Artifact) (string, bool) {
+	if f := c.compiled[a.GetFormatId()]; f != nil && f.root != nil {
+		if m := f.root.FindStringSubmatchIndex(a.GetPath()); m != nil {
+			return strings.TrimSuffix(string(f.root.ExpandString(nil, "${root}", a.GetPath(), m)), "/"), true
+		}
+	}
+	return "", false
+}
+
 // Groups classified artifacts into loadable weight sets
-func Groups(m *v1.Model) []*Group {
+//
+// Files with a role other than weights attach to every group of their format
+// that shares their directory, or their root for tree shaped formats.
+func (c *Classifier) Groups(m *v1.Model) []*Group {
 	byKey := map[string]*Group{}
 	var order []string
 	for _, a := range m.GetArtifacts() {
@@ -268,12 +350,17 @@ func Groups(m *v1.Model) []*Group {
 			}
 			return g.Weights[i].GetPath() < g.Weights[j].GetPath()
 		})
-		dir := path.Dir(g.Weights[0].GetPath())
+		at := c.attachKey(g.Weights[0])
+		if root, ok := c.root(g.Weights[0]); ok {
+			g.Root = root
+		} else if dir := path.Dir(g.Weights[0].GetPath()); dir != "." {
+			g.Root = dir
+		}
 		for _, a := range m.GetArtifacts() {
 			if a.GetRole() == v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS || a.GetRole() == v1.ArtifactRole_ARTIFACT_ROLE_OTHER {
 				continue
 			}
-			if a.GetFormatId() == g.FormatID && path.Dir(a.GetPath()) == dir {
+			if a.GetFormatId() == g.FormatID && c.attachKey(a) == at {
 				g.Files[a.GetRole()] = append(g.Files[a.GetRole()], a)
 			}
 		}

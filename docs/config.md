@@ -96,6 +96,13 @@ What a source of each kind needs:
 | `SOURCE_KIND_MIRROR` | `endpoint` or `path` required | `token_env` as configured | `org/model` | fixed by the export |
 | `SOURCE_KIND_LOCAL` | `path` required | none | directory under `path` | none |
 
+What each catalog holds decides which runtime serves it. Hugging Face, ModelScope, CSGHub, Kaggle,
+and mirrors hold GGUF files and transformers checkpoints, served by llama.cpp and vLLM; Kaggle
+instances under other frameworks list but do not read. NGC holds NeMo 2 checkpoint directories and
+packed `.nemo` archives, served by NeMo, which converts an archive once before its first run,
+beside TAO, Riva, TensorRT, and MONAI assets that only browse. Civitai's image checkpoints browse
+only.
+
 Sources that keep several variants under one name, such as an Ollama tag, a Docker tag, a Civitai
 version, or a Kaggle instance, resolve to a repository that names the variant, so `llama3.2` at tag
 `3b` is stored as `llama3.2:3b`. The catalog lists those variants under the repository and switches

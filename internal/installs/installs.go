@@ -298,7 +298,12 @@ func (m *Manager) probe(ctx context.Context, rt *runtime.Runtime, in *v1.Install
 			timeout = time.Duration(p.Spec.GetTimeoutMs()) * time.Millisecond
 		}
 		pctx, cancel := context.WithTimeout(ctx, timeout)
-		cmd := exec.CommandContext(pctx, in.GetPath(), p.Spec.GetArgs()...)
+		command, err := rt.ProbeCommand(p, map[string]string{"path": in.GetPath(), "dir": in.GetDir(), "version": in.GetVersion()})
+		if err != nil {
+			cancel()
+			continue
+		}
+		cmd := exec.CommandContext(pctx, command, p.Spec.GetArgs()...)
 		var out bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &out
 		cmd.Run()

@@ -5,17 +5,19 @@ import (
 	"strings"
 
 	"github.com/nickheyer/nebu/pkg/eval"
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 // Everything a launch template can reference
 type RenderInput struct {
-	Name      string
-	Params    map[string]any
-	Artifacts map[string]string
-	Host      string
-	Port      int
-	Install   map[string]string
-	Devices   []map[string]any
+	Name       string
+	Params     map[string]any
+	Artifacts  map[string]string
+	Host       string
+	Port       int
+	Install    map[string]string
+	Devices    []map[string]any
+	Descriptor *v1.Descriptor
 }
 
 // Rendered command line, environment, and the emitted param values
@@ -28,13 +30,40 @@ type Rendered struct {
 
 func (in RenderInput) context() map[string]any {
 	return map[string]any{
-		"name":      in.Name,
-		"params":    in.Params,
-		"artifacts": in.Artifacts,
-		"host":      in.Host,
-		"port":      in.Port,
-		"install":   in.Install,
-		"devices":   in.Devices,
+		"name":       in.Name,
+		"params":     in.Params,
+		"artifacts":  in.Artifacts,
+		"host":       in.Host,
+		"port":       in.Port,
+		"install":    in.Install,
+		"devices":    in.Devices,
+		"descriptor": DescriptorView(in.Descriptor),
+	}
+}
+
+// Flattens a descriptor into the shape launch templates read
+//
+// Params and metadata are maps so a template can ask for a key that may be
+// absent through index and default. Always present, empty without a
+// descriptor, so templates never trip missingkey on it.
+func DescriptorView(d *v1.Descriptor) map[string]any {
+	params := make(map[string]any, len(d.GetParams()))
+	for k, v := range d.GetParams() {
+		params[k] = v
+	}
+	metadata := make(map[string]any, len(d.GetMetadata()))
+	for k, v := range d.GetMetadata() {
+		metadata[k] = v
+	}
+	return map[string]any{
+		"format_id":       d.GetFormatId(),
+		"group":           d.GetGroup(),
+		"architecture":    d.GetArchitecture(),
+		"arch_spec_id":    d.GetArchSpecId(),
+		"params":          params,
+		"metadata":        metadata,
+		"total_bytes":     float64(d.GetTotalBytes()),
+		"parameter_count": float64(d.GetParameterCount()),
 	}
 }
 
@@ -51,7 +80,10 @@ func (rt *Runtime) Render(in RenderInput) (*Rendered, error) {
 		if err != nil {
 			return nil, err
 		}
-		out.Args = append(out.Args, arg)
+		// An argument that renders empty does not apply, the same rule recipe steps follow
+		if arg = strings.TrimSpace(arg); arg != "" {
+			out.Args = append(out.Args, arg)
+		}
 	}
 	for k, t := range rt.launchEnv {
 		v, err := t.Render(ctx)
@@ -122,4 +154,48 @@ func renderValue(value any, solved bool, ctx map[string]any) (string, bool, erro
 		return fmt.Sprint(v), true, nil
 	}
 	return fmt.Sprint(value), true, nil
+}
+
+// Renders the prepare command a manifest declares for a stored group
+func (rt *Runtime) RenderPrepare(in RenderInput) (*Rendered, error) {
+	if rt.prepareCommand == nil {
+		return nil, nil
+	}
+	ctx := in.context()
+	command, err := rt.prepareCommand.Render(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := &Rendered{Command: strings.TrimSpace(command), Env: map[string]string{}, Params: map[string]string{}}
+	for _, t := range rt.prepareArgs {
+		arg, err := t.Render(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if arg = strings.TrimSpace(arg); arg != "" {
+			out.Args = append(out.Args, arg)
+		}
+	}
+	for k, t := range rt.prepareEnv {
+		v, err := t.Render(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if v = strings.TrimSpace(v); v != "" {
+			out.Env[k] = v
+		}
+	}
+	return out, nil
+}
+
+// Renders the command a probe runs, the install itself when the probe names none
+func (rt *Runtime) ProbeCommand(p Probe, install map[string]string) (string, error) {
+	if p.command == nil {
+		return install["path"], nil
+	}
+	out, err := p.command.Render(map[string]any{"install": install})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
 }

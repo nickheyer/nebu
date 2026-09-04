@@ -53,7 +53,7 @@ nebu builds list [runtime] | show ID | remove ID
 ## Running models
 
 ```
-nebu run org/repo [--group G] [--runtime R] [--install I] [--name N] [--slot S] [--param k=v]
+nebu run org/repo [--group G] [--runtime R] [--install I] [--name N] [--slot S] [--param k=v] [--force]
 nebu ps [--all]
 nebu show NAME|ID
 nebu logs NAME|ID [--follow] [--tail N]

@@ -101,6 +101,9 @@ nebu/
 |   |   +-- gguf/                  header and tensor table from range reads
 |   |   |   +-- gguftest/          writes small GGUF files for tests
 |   |   +-- safetensors/           shard headers plus config.json
+|   |   +-- pickle/                the pickle opcodes PyTorch checkpoints use, decoded without executing anything
+|   |   +-- torch/                 torch.save zips, tensor names and shapes from data.pkl alone
+|   |   +-- nemo/                  NeMo .nemo tars and NeMo 2 directories, config plus zarr or distributed checkpoint metadata
 |   +-- descriptor/                format-neutral descriptor, tensor groups, arch params
 |   +-- store/                     content-addressed blobs, manifests, stable link tree, gc
 |   +-- transfer/                  resumable chunked downloads, verification, throttling
@@ -113,8 +116,8 @@ nebu/
 |   +-- triage/                    log pattern matcher producing hints and fixes
 +-- spec/                          every runtime and model specific lives here, never in go
 |   +-- embed.go                   go:embed of the directories below
-|   +-- runtimes/                  one manifest per backend, llamacpp.yaml, vllm.yaml
-|   +-- formats/                   format descriptors, roles, file patterns
+|   +-- runtimes/                  one manifest per backend, llamacpp.yaml, vllm.yaml, nemo.yaml
+|   +-- formats/                   format descriptors, roles, file patterns, which reader parses them
 |   +-- archs/                     architecture families, cache shapes, attention variants
 |   +-- recipes/                   build recipes as templates over host facts
 |   +-- patches/                   unified diffs recipes reference by file
@@ -232,7 +235,8 @@ unchanged host is a cache hit.
 1. The stored manifest supplies the link paths and descriptor. The host is probed again and
    the planner runs against free memory, so a second model plans around the first.
 2. Solved params replace `auto`, the runtime package renders the command and environment
-   from the manifest templates, and a free loopback port is picked.
+   from the manifest templates, which also see the descriptor, and a free loopback port is
+   picked.
 3. The process launcher starts it in its own process group with its output appended to a
    file under the data dir, follows that file into a ring, and polls the manifest's health
    check until it answers. On Linux the child also gets a parent-death signal.
@@ -328,12 +332,15 @@ a file with the same `id` into a directory listed in `spec_dirs`, which always i
   facts come out is the spec.
 - `formats/` is `FormatSpec`. File rules claim paths and assign roles, group rules name the
   loadable set, tensor rules classify tensor names into placement kinds, param rules map
-  metadata keys onto descriptor params with optional derive expressions.
+  metadata keys onto descriptor params with optional derive expressions or sum the elements of
+  matching tensors. `reader` names the Go parser, so several formats can share one, and `root`
+  attaches files across a directory tree. A weight whose format requires files the repository
+  lacks falls through to the next format that claims it.
 - `archs/` is `ArchSpec`. A regex over the architecture name and formulas such as
   `cache_per_token` evaluated with the descriptor params in scope.
 - `runtimes/` is `RuntimeManifest`. Accepted formats, host constraints as expressions,
-  acquisition including the recipe id, launch templates, typed params with their flags, the
-  estimate policy, and report rules for calibration.
+  acquisition including the recipe id, launch templates with an optional prepare step, typed
+  params with their flags, the estimate policy, and report rules for calibration.
 - `recipes/` is `Recipe`. Source as release feed, ref, archive, or repo templates, patches
   with conditions, variants selected by host expressions with their tools and vars, the
   sandbox, steps as templated argv, outputs, and the binary.
@@ -342,7 +349,9 @@ a file with the same `id` into a directory listed in `spec_dirs`, which always i
 Expressions use expr syntax with `KiB`, `MiB`, `GiB`, `vercmp()`, and `num()` in scope.
 Templates use Go text/template with `missingkey=error`, so optional fields go through
 `index`, plus string helpers such as `join`, `replace`, `trimPrefix`, and `default`. Launch
-templates also see `.devices`, the slot's devices with their facts, empty without a slot.
+templates also see `.devices`, the slot's devices with their facts, empty without a slot, and
+`.descriptor`, the stored model's format, architecture, params, and metadata, so a manifest can
+pick a flag by what the checkpoint holds.
 
 ## Planner
 

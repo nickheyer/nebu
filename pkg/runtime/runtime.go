@@ -42,22 +42,26 @@ type prebuiltRule struct {
 
 // Manifest probe with its compiled pattern
 type Probe struct {
-	Spec  *v1.CommandProbe
-	Match *regexp.Regexp
+	Spec    *v1.CommandProbe
+	Match   *regexp.Regexp
+	command *eval.Template
 }
 
 // Compiled runtime manifest
 type Runtime struct {
-	Manifest      *v1.RuntimeManifest
-	Policy        *estimate.Policy
-	constraints   []constraint
-	params        map[string]*v1.Param
-	launchCommand *eval.Template
-	launchArgs    []*eval.Template
-	launchEnv     map[string]*eval.Template
-	report        []reportRule
-	prebuilt      []prebuiltRule
-	probes        []Probe
+	Manifest       *v1.RuntimeManifest
+	Policy         *estimate.Policy
+	constraints    []constraint
+	params         map[string]*v1.Param
+	launchCommand  *eval.Template
+	launchArgs     []*eval.Template
+	launchEnv      map[string]*eval.Template
+	report         []reportRule
+	prebuilt       []prebuiltRule
+	probes         []Probe
+	prepareCommand *eval.Template
+	prepareArgs    []*eval.Template
+	prepareEnv     map[string]*eval.Template
 }
 
 // Runtimes ordered by id
@@ -128,6 +132,24 @@ func compile(m *v1.RuntimeManifest) (*Runtime, error) {
 	if rt.launchEnv, err = eval.CompileTemplates(launch.GetEnv()); err != nil {
 		return nil, err
 	}
+	if prep := launch.GetPrepare(); prep != nil {
+		if prep.GetCommand() == "" || len(prep.GetFormats()) == 0 {
+			return nil, fmt.Errorf("prepare needs a command and at least one format")
+		}
+		if rt.prepareCommand, err = eval.CompileTemplate(prep.GetCommand()); err != nil {
+			return nil, err
+		}
+		for _, a := range prep.GetArgs() {
+			t, err := eval.CompileTemplate(a)
+			if err != nil {
+				return nil, err
+			}
+			rt.prepareArgs = append(rt.prepareArgs, t)
+		}
+		if rt.prepareEnv, err = eval.CompileTemplates(prep.GetEnv()); err != nil {
+			return nil, err
+		}
+	}
 	for _, r := range m.GetReport() {
 		re, err := regexp.Compile(r.GetMatch())
 		if err != nil {
@@ -153,7 +175,13 @@ func compile(m *v1.RuntimeManifest) (*Runtime, error) {
 		if err != nil {
 			return nil, fmt.Errorf("probe %s: %w", p.GetKey(), err)
 		}
-		rt.probes = append(rt.probes, Probe{Spec: p, Match: re})
+		probe := Probe{Spec: p, Match: re}
+		if p.GetCommand() != "" {
+			if probe.command, err = eval.CompileTemplate(p.GetCommand()); err != nil {
+				return nil, fmt.Errorf("probe %s: %w", p.GetKey(), err)
+			}
+		}
+		rt.probes = append(rt.probes, probe)
 	}
 	return rt, nil
 }
@@ -199,6 +227,11 @@ func (r *Registry) Get(id string) (*Runtime, error) {
 // Reports whether the runtime accepts a format
 func (rt *Runtime) Accepts(formatID string) bool {
 	return slices.Contains(rt.Manifest.GetFormats(), formatID)
+}
+
+// Reports whether the runtime prepares groups of a format before launching them
+func (rt *Runtime) Prepares(formatID string) bool {
+	return rt.prepareCommand != nil && slices.Contains(rt.Manifest.GetLaunch().GetPrepare().GetFormats(), formatID)
 }
 
 // Evaluates constraints against a host profile

@@ -110,12 +110,21 @@ Rules for whoever works this list:
     memory. The fit table shows both verdicts, labelled, and the inspector takes a
     flag for free versus total.
 
-13. **Two providers cannot feed a runtime, one sometimes.** Civitai checkpoints ship without a
-    config and NGC ships `.nemo`, so nothing classifies. Kaggle depends on the instance:
-    transformers instances carry a config plus safetensors and classify, the rest do not.
-    **Nick decides** whether nebu serves what Civitai and NGC hold. If not, mark those providers
-    browse only in their capabilities and say so in the UI. Do not add a diffusion or NeMo reader
-    unprompted.
+13. **Civitai browses, NGC serves.** Nick decided. The diffusion work that served Civitai's
+    checkpoints was removed; Civitai checkpoints classify as nothing and the catalog lists them
+    with no weight groups. NGC's NeMo 2 directories classify as `nemo2`, read from
+    `context/model.yaml` and the torch distributed `.metadata` pickle with Megatron's stacked
+    layers split per layer, and run on NeMo Export-Deploy's Ray Serve script through
+    `spec/runtimes/nemo.yaml` and a venv recipe. Packed `.nemo` archives classify as `nemo`,
+    read from the tar's config beside a pickle, zarr, or distributed checkpoint, and run on the
+    same runtime through its prepare step, which converts them once into the group's prepared
+    directory with NeMo's converter from the recipe's second environment. Generic pieces this
+    added: `FormatSpec.reader` and `root`, `ParamRule.tensor`, `Launch.prepare`,
+    `CommandProbe.command`, `RunRequest.force`, the store's prepared tree, `.descriptor` in
+    launch templates, launch args that render empty are dropped, the gateway follows same host
+    redirects, the raw header cache is keyed by the format spec, a re-pull prunes links it no
+    longer names, and a weight whose format requires files the repository lacks falls through to
+    the next format that claims it. Kaggle needed nothing. What is left is item 21.
 
 ## Runtimes and parameters
 
@@ -151,6 +160,14 @@ Rules for whoever works this list:
 19. **Windows is unsupported without saying so.** Adoption, process groups, and parent death
     signals are stubbed on non unix and the release script builds Linux and macOS only.
     **Nick decides:** state it in the README or build the stubs.
+
+## NeMo
+
+21. **NeMo has not run.** Its wheels need Python 3.12 and this host has 3.14 only, so the recipe
+    could not be built here; manifest, recipe, prepare step, triage, and estimate policy compile
+    and the fit table plans NGC checkpoints, nothing more. **Needs a host with Python 3.12 and an
+    NVIDIA GPU** to build the recipe, serve a NeMo 2 directory, convert a packed `.nemo`, and read
+    the logs. The converter accepts only the base models it lists, so `model_id` matters.
 
 ## Catalog and tests
 

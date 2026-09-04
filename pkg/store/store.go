@@ -25,6 +25,8 @@ const (
 	manifestExt   = ".json"
 	digestPrefix  = "sha256:"
 	blobPrefix    = "sha256-"
+	adaptersDir   = "adapters"
+	preparedDir   = "prepared"
 )
 
 // Returned when a model is not in the store
@@ -227,7 +229,7 @@ func (s *Store) ListManifests() ([]*v1.StoredModel, error) {
 	return out, nil
 }
 
-// Removes a manifest and its link directory
+// Removes a manifest, its link directory, its adapter link, and anything runtimes prepared from it
 func (s *Store) RemoveManifest(source, repo, group string) (*v1.StoredModel, error) {
 	m, err := s.ReadManifest(source, repo, group)
 	if err != nil {
@@ -241,9 +243,28 @@ func (s *Store) RemoveManifest(source, repo, group string) (*v1.StoredModel, err
 	if err := os.RemoveAll(dir); err != nil {
 		return nil, err
 	}
+	if prepared, err := safeJoin(source, repo, group); err == nil {
+		full := filepath.Join(s.root, preparedDir, prepared)
+		if err := os.RemoveAll(full); err != nil {
+			return nil, err
+		}
+		s.pruneEmpty(filepath.Dir(full), filepath.Join(s.root, preparedDir))
+	}
 	s.pruneEmpty(filepath.Dir(path), filepath.Join(s.root, manifestsDir))
 	s.pruneEmpty(filepath.Dir(dir), filepath.Join(s.root, modelsDir))
 	return m, nil
+}
+
+// Returns, creating it, the directory a runtime may write derived files for
+// a stored group into, such as a converted checkpoint, kept until the group
+// is removed
+func (s *Store) PreparedDir(source, repo, group, runtimeID string) (string, error) {
+	rel, err := safeJoin(source, repo, group, runtimeID)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(s.root, preparedDir, rel)
+	return dir, os.MkdirAll(dir, 0o755)
 }
 
 // Creates a relative symlink to a blob, returning the path
@@ -274,6 +295,24 @@ func (s *Store) Link(source, repo, group, rel, digest string) (string, error) {
 		return "", err
 	}
 	return link, nil
+}
+
+// Removes links under a stored group's directory that its manifest no longer names
+func (s *Store) PruneLinks(m *v1.StoredModel) error {
+	keep := map[string]bool{}
+	for _, sa := range m.GetArtifacts() {
+		keep[sa.GetPath()] = true
+	}
+	return filepath.WalkDir(m.GetPath(), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || keep[path] || d.Type()&fs.ModeSymlink == 0 {
+			return err
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		s.pruneEmpty(filepath.Dir(path), m.GetPath())
+		return nil
+	})
 }
 
 // Removes one link, ignoring absence

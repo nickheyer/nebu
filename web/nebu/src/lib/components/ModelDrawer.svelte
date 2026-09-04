@@ -333,7 +333,7 @@
                       </td>
                     </tr>
                   {:else}
-                    <tr><td colspan="6" class="text-sm text-fg-faint">No weights nebu can read. The files below are what {siteName} lists; a GGUF file or safetensors shards with a config.json would show up here.</td></tr>
+                    <tr><td colspan="6" class="text-sm text-fg-faint">No weights nebu can read. The files below are what {siteName} lists; a GGUF file, safetensors shards with a config.json, or a NeMo checkpoint would show up here.</td></tr>
                   {/each}
                 </tbody>
               </table>

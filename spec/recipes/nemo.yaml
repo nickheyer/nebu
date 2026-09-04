@@ -1,0 +1,47 @@
+id: nemo
+runtime_id: nemo
+description: NeMo Export-Deploy from PyPI in a virtual environment, with NeMo's checkpoint converter in a second one
+source:
+  release: https://api.github.com/repos/NVIDIA-NeMo/Export-Deploy/releases?per_page=5
+  ref: latest
+  archive: https://github.com/NVIDIA-NeMo/Export-Deploy/archive/refs/tags/{{.ref}}.tar.gz
+tools: [curl]
+facts: [device.vendor, device.compute_capability]
+vars:
+  version: ''
+  wheel: 'nemo-export-deploy=={{if .vars.version}}{{.vars.version}}{{else}}{{trimPrefix "v" .ref}}{{end}}'
+  converter: 2.5.3
+  converter_script: 'https://raw.githubusercontent.com/NVIDIA/NeMo/v{{.vars.converter}}/scripts/checkpoint_converters/convert_nemo1_to_nemo2.py'
+variants:
+  - id: py312
+    description: Python 3.12, the interpreter the Export-Deploy wheels are built for
+    when: 'true'
+    tools: [python3.12]
+    vars:
+      python: python3.12
+  - id: py3
+    description: The host's python3
+    when: 'true'
+    tools: [python3]
+    vars:
+      python: python3
+sandbox:
+  kind: SANDBOX_KIND_HOST
+  cli: [podman, docker, nerdctl]
+steps:
+  - name: venv
+    command: ['{{.vars.python}}', -m, venv, '{{.out}}/venv']
+  - name: pip
+    command: ['{{.out}}/venv/bin/python', -m, pip, install, --upgrade, pip]
+  - name: install
+    command: ['{{.out}}/venv/bin/python', -m, pip, install, '{{.vars.wheel}}']
+  - name: script
+    command: [cp, scripts/deploy/nlp/deploy_ray_inframework.py, '{{.out}}/deploy_ray_inframework.py']
+  - name: venv-convert
+    command: ['{{.vars.python}}', -m, venv, '{{.out}}/venv-convert']
+  - name: install-converter
+    command: ['{{.out}}/venv-convert/bin/python', -m, pip, install, 'nemo_toolkit[nlp]=={{.vars.converter}}']
+  - name: converter
+    command: [curl, -fsSL, '{{.vars.converter_script}}', -o, '{{.out}}/convert_nemo1_to_nemo2.py']
+binary: deploy_ray_inframework.py
+timeout_ms: 10800000

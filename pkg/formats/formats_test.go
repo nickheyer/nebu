@@ -64,7 +64,7 @@ func TestClassify(t *testing.T) {
 			t.Errorf("%s: got %s/%s/%q want %v", a.GetPath(), a.GetFormatId(), role, a.GetGroup(), w)
 		}
 	}
-	groups := Groups(m)
+	groups := c.Groups(m)
 	byName := map[string]*Group{}
 	for _, g := range groups {
 		byName[g.FormatID+":"+g.Name] = g

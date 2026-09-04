@@ -155,6 +155,7 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request) {
 			pr.Out.URL.RawPath = r.URL.RawPath
 			pr.Out.Host = target.Host
 		},
+		Transport:     &sameHostRedirects{next: http.DefaultTransport, body: body},
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			g.log.Warn("gateway upstream", "model", name, "err", err)
@@ -193,4 +194,36 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, message, kind string) {
 	writeJSON(w, status, map[string]any{"error": map[string]any{"message": message, "type": kind, "code": kind}})
+}
+
+// Follows redirects that stay on the upstream, so a backend that answers a
+// path with a redirect to its trailing slash twin, as FastAPI does, is served
+// instead of handing the client a Location on a loopback port
+type sameHostRedirects struct {
+	next http.RoundTripper
+	body []byte
+}
+
+const maxRedirects = 3
+
+func (t *sameHostRedirects) RoundTrip(req *http.Request) (*http.Response, error) {
+	for hop := 0; ; hop++ {
+		resp, err := t.next.RoundTrip(req)
+		if err != nil {
+			return nil, err
+		}
+		if hop >= maxRedirects || (resp.StatusCode != http.StatusTemporaryRedirect && resp.StatusCode != http.StatusPermanentRedirect && resp.StatusCode != http.StatusMovedPermanently && resp.StatusCode != http.StatusFound) {
+			return resp, nil
+		}
+		location, err := resp.Location()
+		if err != nil || location.Host != req.URL.Host {
+			return resp, nil
+		}
+		resp.Body.Close()
+		next := req.Clone(req.Context())
+		next.URL = location
+		next.Body = io.NopCloser(bytes.NewReader(t.body))
+		next.ContentLength = int64(len(t.body))
+		req = next
+	}
 }

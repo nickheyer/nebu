@@ -24,6 +24,7 @@ type paramRule struct {
 	name   string
 	keys   []string
 	derive *eval.Expr
+	tensor *regexp.Regexp
 }
 
 type compiledFormat struct {
@@ -65,6 +66,13 @@ func New(formats []*v1.FormatSpec, archs []*v1.ArchSpec) (*Builder, error) {
 					return nil, fmt.Errorf("format %s param %s: %w", f.GetId(), p.GetName(), err)
 				}
 				rule.derive = e
+			}
+			if p.GetTensor() != "" {
+				re, err := regexp.Compile(p.GetTensor())
+				if err != nil {
+					return nil, fmt.Errorf("format %s param %s tensor: %w", f.GetId(), p.GetName(), err)
+				}
+				rule.tensor = re
 			}
 			cf.params = append(cf.params, rule)
 		}
@@ -153,6 +161,18 @@ func (b *Builder) Build(raw *v1.RawModel) (*v1.Descriptor, error) {
 		g.Elements += t.GetElements()
 		d.TotalBytes += t.GetBytes()
 		d.ParameterCount += t.GetElements()
+	}
+	for _, rule := range f.params {
+		if rule.tensor == nil {
+			continue
+		}
+		var elements uint64
+		for _, t := range raw.GetTensors() {
+			if rule.tensor.MatchString(t.GetName()) {
+				elements += t.GetElements()
+			}
+		}
+		d.Params[rule.name] = float64(elements)
 	}
 	for _, g := range groups {
 		d.Groups = append(d.Groups, g)

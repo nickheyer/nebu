@@ -111,6 +111,8 @@ message ParamRule {
   string name = 1;
   repeated string keys = 2;
   string derive = 3;
+  // Sums the elements of tensors whose names match, for formats whose headers name no params
+  string tensor = 4;
 }
 
 // Data driven format definition
@@ -127,6 +129,8 @@ message FormatSpec {
   repeated string metadata = 10;
   repeated ArtifactRole requires = 11;
   map<string, string> dtypes = 12;
+  string reader = 13;
+  string root = 14;
 }
 
 // Data driven architecture family definition

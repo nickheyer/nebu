@@ -142,7 +142,9 @@ export function orderDescriptors(descriptors: Descriptor[], rows: FitRow[]): Des
 // What each weight format is, for people who have not met them
 export const formatBlurb: Record<string, string> = {
   gguf: 'GGUF packs the whole model into one file per precision, usually quantized to fit in less memory',
-  safetensors: 'Safetensors shards hold the original checkpoint next to its config, usually at full 16-bit precision'
+  safetensors: 'Safetensors shards hold the original checkpoint next to its config, usually at full 16-bit precision',
+  nemo: 'A NeMo checkpoint packed as one .nemo archive, the older NVIDIA layout',
+  nemo2: 'A NeMo 2 checkpoint directory, a model config beside a distributed checkpoint, the NVIDIA layout NeMo serves'
 };
 
 // Runtimes able to serve any of the formats, the ones this host can run first

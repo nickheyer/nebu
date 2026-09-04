@@ -164,21 +164,24 @@ func fetchGit(ctx context.Context, repo, ref, dest string, out io.Writer) (strin
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 		return cmd.Run()
 	}
+	clone := func(args ...string) error {
+		return run(append([]string{"clone"}, args...)...)
+	}
 	fmt.Fprintf(out, "cloning %s at %s\n", repo, ref)
 	switch {
 	case ref == "" || ref == Latest:
-		if err := run("clone", "--depth", "1", repo, dest); err != nil {
+		if err := clone("--depth", "1", repo, dest); err != nil {
 			return "", err
 		}
 	case commitLike.MatchString(ref):
-		if err := run("clone", repo, dest); err != nil {
+		if err := clone(repo, dest); err != nil {
 			return "", err
 		}
 		if err := run("-C", dest, "checkout", "--quiet", ref); err != nil {
 			return "", err
 		}
 	default:
-		if err := run("clone", "--depth", "1", "--branch", ref, repo, dest); err != nil {
+		if err := clone("--depth", "1", "--branch", ref, repo, dest); err != nil {
 			return "", err
 		}
 	}

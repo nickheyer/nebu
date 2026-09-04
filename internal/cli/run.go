@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -134,6 +135,7 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	installID := fs.String("install", "", "install id, newest for the runtime when empty")
 	name := fs.String("name", "", "public model name for the gateway")
 	slot := fs.String("slot", "", "slot to run in, its name becomes the public name")
+	force := fs.Bool("force", false, "launch even when the plan says the model does not fit")
 	var params multi
 	fs.Var(&params, "param", "runtime param as name=value, repeatable")
 	positional, err := parse(fs, args)
@@ -164,7 +166,7 @@ func runRun(ctx context.Context, e *env, args []string) error {
 			return err
 		}
 	}
-	req := &v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: rtID, InstallId: *installID, Name: *name, Params: map[string]string{}, SlotId: *slot}
+	req := &v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: rtID, InstallId: *installID, Name: *name, Params: map[string]string{}, SlotId: *slot, Force: *force}
 	for _, p := range params {
 		k, v, ok := strings.Cut(p, "=")
 		if !ok {
@@ -218,14 +220,14 @@ func (e *env) defaultRuntime(ctx context.Context, cl *clients, source, repo, gro
 	if err != nil {
 		return "", err
 	}
+	stored := model.Msg.GetModel()
 	for _, rt := range resp.Msg.GetRuntimes() {
-		for _, f := range rt.GetManifest().GetFormats() {
-			if f == model.Msg.GetModel().GetFormatId() && rt.GetCompatible() {
-				return rt.GetManifest().GetId(), nil
-			}
+		m := rt.GetManifest()
+		if rt.GetCompatible() && slices.Contains(m.GetFormats(), stored.GetFormatId()) {
+			return m.GetId(), nil
 		}
 	}
-	return "", fmt.Errorf("no compatible runtime accepts %s, pass --runtime", model.Msg.GetModel().GetFormatId())
+	return "", fmt.Errorf("no compatible runtime accepts %s, pass --runtime", stored.GetFormatId())
 }
 
 func (e *env) gatewayBase() string {

@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
-	"path"
 	"strings"
 
 	"github.com/nickheyer/nebu/internal/inspect"
@@ -42,7 +41,7 @@ func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error
 	if err != nil {
 		return nil, err
 	}
-	g, err := formats.FindGroup(formats.Groups(model), req.GetGroup())
+	g, err := formats.FindGroup(p.Inspector.Classifier.Groups(model), req.GetGroup())
 	if err != nil {
 		return nil, err
 	}
@@ -58,11 +57,7 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 	for _, role := range []v1.ArtifactRole{v1.ArtifactRole_ARTIFACT_ROLE_CONFIG, v1.ArtifactRole_ARTIFACT_ROLE_TOKENIZER, v1.ArtifactRole_ARTIFACT_ROLE_TEMPLATE, v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR} {
 		artifacts = append(artifacts, g.Files[role]...)
 	}
-	var total uint64
-	for _, a := range artifacts {
-		total += a.GetSizeBytes()
-	}
-	h.Progress(0, total, "resolving")
+	h.Progress(0, 0, "resolving")
 	unlock := p.Store.Lock(store.Key(model.GetSourceId(), model.GetRepo(), g.Name))
 	defer unlock()
 	stored := &v1.StoredModel{
@@ -78,7 +73,11 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 	} else {
 		stored.Descriptor_ = d
 	}
-	dir := path.Dir(g.Weights[0].GetPath())
+	var total uint64
+	for _, a := range artifacts {
+		total += a.GetSizeBytes()
+	}
+	h.Progress(0, total, "fetching")
 	for _, a := range artifacts {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -87,9 +86,10 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 		if err != nil {
 			return fmt.Errorf("%s: %w", a.GetPath(), err)
 		}
+		// The group's root comes off so a tree shaped checkpoint keeps its layout under the group dir
 		rel := a.GetPath()
-		if dir != "." {
-			rel = strings.TrimPrefix(rel, dir+"/")
+		if g.Root != "" {
+			rel = strings.TrimPrefix(rel, g.Root+"/")
 		}
 		link, err := p.Store.Link(model.GetSourceId(), model.GetRepo(), g.Name, rel, digest)
 		if err != nil {
@@ -101,6 +101,9 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 	stored.Path, _ = p.Store.GroupDir(model.GetSourceId(), model.GetRepo(), g.Name)
 	stored.PulledAt = timestamppb.Now()
 	if err := p.Store.WriteManifest(stored); err != nil {
+		return err
+	}
+	if err := p.Store.PruneLinks(stored); err != nil {
 		return err
 	}
 	h.Progress(total, total, "done")

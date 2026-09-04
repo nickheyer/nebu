@@ -20,7 +20,6 @@ import (
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/events"
-	"github.com/nickheyer/nebu/pkg/formats"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -267,7 +266,7 @@ func (m *Manager) check(ctx context.Context, h *tasks.Handle, w *v1.Watch) ([]*v
 		return nil, err
 	}
 	var groups []string
-	for _, g := range formats.Groups(model) {
+	for _, g := range m.Inspector.Classifier.Groups(model) {
 		groups = append(groups, g.Name)
 	}
 	sort.Strings(groups)

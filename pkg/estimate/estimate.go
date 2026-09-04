@@ -153,7 +153,13 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 	}
 	if !s.solve(0) {
 		plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
-		plan.Detail = fmt.Sprintf("fixed device need %s exceeds capacity %s", human(s.fixedDev), human(s.devCap))
+		least := s.fixedDev
+		for _, b := range s.buckets {
+			if b.fixed >= 0 {
+				least += b.prefix[b.fixed]
+			}
+		}
+		plan.Detail = fmt.Sprintf("device need %s exceeds capacity %s", human(least), human(s.devCap))
 		if s.hostCap > 0 && s.hostNeed() > s.hostCap {
 			plan.Detail = fmt.Sprintf("host need %s exceeds capacity %s", human(s.hostNeed()), human(s.hostCap))
 		}

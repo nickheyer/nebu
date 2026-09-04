@@ -2,15 +2,18 @@
 package instances
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -207,6 +210,8 @@ func (in *instance) attach(proc launch.Handle) {
 }
 
 // Everything resolved for a run before anything is launched
+const defaultPrepareTimeout = time.Hour
+
 type prepared struct {
 	req        *v1.RunRequest
 	stored     *v1.StoredModel
@@ -244,8 +249,8 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 			return nil, nil, fmt.Errorf("%w: slot %s serves %s, use nebu swap", runtime.ErrParam, p.res.Name, cur.GetName())
 		}
 	}
-	if p.plan != nil && p.plan.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO {
-		return nil, nil, fmt.Errorf("%w: %s does not fit, %s", runtime.ErrParam, p.name, p.plan.GetDetail())
+	if p.plan != nil && p.plan.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO && !p.req.GetForce() {
+		return nil, nil, fmt.Errorf("%w: %s does not fit, %s; pass force to run anyway", runtime.ErrParam, p.name, p.plan.GetDetail())
 	}
 	return m.launch(ctx, p)
 }
@@ -281,6 +286,10 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 		}
 		req.Params = merged
 	}
+	descriptor, err := m.describe(ctx, stored)
+	if err != nil {
+		return nil, err
+	}
 	if req.GetRuntimeId() == "" {
 		if req.RuntimeId, err = m.defaultRuntime(ctx, stored.GetFormatId()); err != nil {
 			return nil, err
@@ -308,10 +317,6 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	}
 	if m.conflict(name, req.GetSlotId()) {
 		return nil, fmt.Errorf("%w: instance %q is already running", runtime.ErrParam, name)
-	}
-	descriptor, err := m.describe(ctx, stored)
-	if err != nil {
-		return nil, err
 	}
 	profile, err := m.Host.Profile(ctx, true)
 	if err != nil {
@@ -354,15 +359,30 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	if err != nil {
 		return nil, nil, err
 	}
-	rendered, err := rt.Render(runtime.RenderInput{
-		Name:      name,
-		Params:    params,
-		Artifacts: artifacts(stored),
-		Host:      bindHost,
-		Port:      port,
-		Install:   map[string]string{"path": install.GetPath(), "dir": install.GetDir(), "version": install.GetVersion()},
-		Devices:   deviceViews(p.planned, p.res),
-	})
+	artifacts := m.artifacts(stored, rt)
+	input := runtime.RenderInput{
+		Name:       name,
+		Params:     params,
+		Artifacts:  artifacts,
+		Host:       bindHost,
+		Port:       port,
+		Install:    map[string]string{"path": install.GetPath(), "dir": install.GetDir(), "version": install.GetVersion()},
+		Devices:    deviceViews(p.planned, p.res),
+		Descriptor: descriptor,
+	}
+	var prep *runtime.Rendered
+	if rt.Prepares(stored.GetFormatId()) {
+		if prep, err = rt.RenderPrepare(input); err != nil {
+			return nil, nil, err
+		}
+		launchArtifacts := make(map[string]string, len(artifacts))
+		for k, v := range artifacts {
+			launchArtifacts[k] = v
+		}
+		launchArtifacts["weights_dir"] = artifacts["prepared_dir"]
+		input.Artifacts = launchArtifacts
+	}
+	rendered, err := rt.Render(input)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -393,11 +413,74 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	m.pruneLocked()
 	m.mu.Unlock()
 	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_CREATED, in.rec.GetId(), &v1.Event_Instance{Instance: in.snapshot()})
+	prepDir := artifacts["prepared_dir"]
+	prepTimeout := time.Duration(rt.Manifest.GetLaunch().GetPrepare().GetTimeoutMs()) * time.Millisecond
 	task := m.Tasks.Start(kindRun, "run "+name, map[string]string{"instance": in.rec.GetId(), "name": name}, func(ctx context.Context, h *tasks.Handle) error {
+		if prep != nil {
+			if err := m.runPrepare(ctx, h, in, prep, install.GetDir(), prepDir, prepTimeout); err != nil {
+				return err
+			}
+		}
 		return m.start(ctx, h, in, rendered, install, descriptor, profile)
 	})
 	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })
 	return in.snapshot(), task, nil
+}
+
+func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance, prep *runtime.Rendered, dir, prepDir string, timeout time.Duration) error {
+	marker := filepath.Join(prepDir, ".prepared")
+	if _, err := os.Stat(marker); err == nil {
+		h.Logf("prepared earlier at %s", prepDir)
+		return nil
+	}
+	if timeout <= 0 {
+		timeout = defaultPrepareTimeout
+	}
+	h.Progress(0, 0, "preparing")
+	h.Logf("prepare: %s %s", prep.Command, strings.Join(prep.Args, " "))
+	pctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(pctx, prep.Command, prep.Args...)
+	cmd.Dir = dir
+	cmd.Env = os.Environ()
+	for k, v := range prep.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	logFile, err := os.OpenFile(m.logPath(in.snapshot().GetId()), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	pr, pw := io.Pipe()
+	cmd.Stdout, cmd.Stderr = pw, pw
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scanner := bufio.NewScanner(pr)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			fmt.Fprintln(logFile, line)
+			h.Logf("%s", line)
+		}
+	}()
+	err = cmd.Run()
+	pw.Close()
+	<-done
+	if err != nil {
+		os.RemoveAll(prepDir)
+		os.MkdirAll(prepDir, 0o755)
+		in.update(func(r *v1.Instance) {
+			if terminal(r.State) {
+				return
+			}
+			r.State = v1.InstanceState_INSTANCE_STATE_FAILED
+			r.Error = "prepare: " + err.Error()
+			r.StoppedAt = timestamppb.Now()
+		})
+		return fmt.Errorf("prepare: %w", err)
+	}
+	return os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
 }
 
 func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rendered *runtime.Rendered, install *v1.Install, d *v1.Descriptor, before *v1.HostProfile) error {
@@ -989,13 +1072,19 @@ func (m *Manager) describe(ctx context.Context, stored *v1.StoredModel) (*v1.Des
 	return m.Inspector.Builder.Build(raw)
 }
 
-// Maps artifact roles onto link paths for launch templates
-func artifacts(stored *v1.StoredModel) map[string]string {
+func (m *Manager) artifacts(stored *v1.StoredModel, rt *runtime.Runtime) map[string]string {
 	out := map[string]string{"weights_dir": stored.GetPath()}
 	for _, sa := range stored.GetArtifacts() {
 		key := eval.EnumShort(sa.GetArtifact().GetRole())
 		if _, exists := out[key]; !exists {
 			out[key] = sa.GetPath()
+		}
+	}
+	if m.Store != nil {
+		if dir, err := m.Store.PreparedDir(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup(), rt.Manifest.GetId()); err == nil {
+			out["prepared_dir"] = dir
+		} else {
+			m.Log.Warn("prepared dir", "err", err)
 		}
 	}
 	return out
