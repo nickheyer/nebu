@@ -14,10 +14,9 @@ import (
 var kaggle = &Catalog{
 	ID:            "kaggle",
 	Kind:          v1.SourceKind_SOURCE_KIND_KAGGLE,
-	Endpoint:      "https://www.kaggle.com",
+	Name:          "Kaggle",
+	Transports:    []Use{{Kind: TransportHTTP, Fields: map[string]string{"endpoint": "https://www.kaggle.com", "token_env": "KAGGLE_KEY", "username_env": "KAGGLE_USERNAME"}}},
 	WebPath:       "/models",
-	TokenEnv:      "KAGGLE_KEY",
-	UsernameEnv:   "KAGGLE_USERNAME",
 	AuthRequired:  true,
 	Description:   "Kaggle Models, one instance per framework and variant",
 	RepoExample:   "owner/model/framework/instance",
@@ -25,6 +24,7 @@ var kaggle = &Catalog{
 	RevisionLabel: "variant",
 	Sorts:         []string{SortTrending, SortDownloads, SortLikes, SortUpdated, SortCreated, kgSortNotebooks},
 	Facets:        []*v1.Facet{Freeform(FacetAuthor, "Owner")},
+	HitFields:     []*v1.ConfigField{{Name: "frameworks", Label: "Frameworks", Description: "Frameworks the model is published for"}},
 	API:           kaggleAPI{},
 }
 
@@ -419,5 +419,5 @@ func (kaggleAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v
 }
 
 func (kaggleAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error) {
-	return c.Range(c.URL("api", "v1", "models", model.GetRepo(), model.GetRevision(), "download", artifact.GetPath()), artifact)
+	return c.Range(ctx, c.URL("api", "v1", "models", model.GetRepo(), model.GetRevision(), "download", artifact.GetPath()), artifact)
 }

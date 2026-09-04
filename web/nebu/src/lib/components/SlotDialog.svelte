@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from '$lib/api';
-  import { live } from '$lib/state.svelte';
-  import { bytes, parseBytes, parsePairs, pairsText } from '$lib/format';
+  import { live, profileParams } from '$lib/state.svelte';
+  import { bytes, parseBytes } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import type { Slot } from '$proto/slot_pb';
   import type { RuntimeStatus } from '$proto/runtime_pb';
@@ -10,6 +10,7 @@
   import Dialog from './ui/Dialog.svelte';
   import Field from './ui/Field.svelte';
   import Button from './ui/Button.svelte';
+  import ParamForm from './ParamForm.svelte';
 
   let { open = $bindable(false), slot = null, onDone }: { open?: boolean; slot?: Slot | null; onDone?: (s: Slot) => void } = $props();
 
@@ -18,15 +19,26 @@
   let devices = $state<string[]>([]);
   let memory = $state('');
   let runtimeId = $state('');
-  let paramsText = $state('');
+  let values = $state<Record<string, string>>({});
   let runtimes = $state<RuntimeStatus[]>([]);
+  let maxInFlight = $state('');
+  let rps = $state('');
+  let burst = $state('');
+  let timeout = $state('');
+  let upstream = $state('');
   let saving = $state(false);
+
+  // Seconds typed by people, milliseconds on the wire
+  const seconds = (ms: number | undefined) => (ms ? String(ms / 1000) : '');
+  const millis = (s: string) => Math.round((parseFloat(s) || 0) * 1000);
+  const whole = (s: string) => Math.max(0, Math.floor(parseFloat(s) || 0));
 
   const editing = $derived(!!slot);
   const gpus = $derived((live.host?.devices ?? []).filter((d) => d.kind !== DeviceKind.CPU));
   const budget = $derived(parseBytes(memory));
   const badBudget = $derived(memory.trim() !== '' && budget === 0n);
   const nameTaken = $derived(!editing && [...live.slots.values()].some((s) => s.name === name.trim()));
+  const manifest = $derived(runtimes.find((r) => r.manifest?.id === runtimeId)?.manifest);
 
   $effect(() => {
     if (!open) return;
@@ -35,7 +47,12 @@
     devices = [...(slot?.deviceIds ?? [])];
     memory = slot?.memoryBytes ? bytes(slot.memoryBytes, 0).replace(' ', '') : '';
     runtimeId = slot?.runtimeId ?? '';
-    paramsText = pairsText(slot?.params);
+    values = { ...(slot?.params ?? {}) };
+    maxInFlight = slot?.policy?.maxInFlight ? String(slot.policy.maxInFlight) : '';
+    rps = slot?.policy?.requestsPerSecond ? String(slot.policy.requestsPerSecond) : '';
+    burst = slot?.policy?.burst ? String(slot.policy.burst) : '';
+    timeout = seconds(slot?.policy?.requestTimeoutMs);
+    upstream = seconds(slot?.policy?.upstreamTimeoutMs);
     api.runtimes.listRuntimes({}).then((r) => (runtimes = r.runtimes)).catch(() => (runtimes = []));
   });
 
@@ -45,7 +62,8 @@
 
   async function submit() {
     saving = true;
-    const body = { description, deviceIds: devices, memoryBytes: budget, runtimeId, params: parsePairs(paramsText) };
+    const policy = { maxInFlight: whole(maxInFlight), requestsPerSecond: parseFloat(rps) || 0, burst: whole(burst), requestTimeoutMs: millis(timeout), upstreamTimeoutMs: millis(upstream) };
+    const body = { description, deviceIds: devices, memoryBytes: budget, runtimeId, params: values, policy };
     try {
       let out: Slot | undefined;
       if (slot) {
@@ -110,9 +128,37 @@
       </select>
     </Field>
 
-    <Field label="Default parameters" for="slot-params" hint="One name=value per line, merged under the run's own params" class="sm:col-span-2">
-      <textarea id="slot-params" class="input h-20" bind:value={paramsText} placeholder="n_ctx=16384"></textarea>
-    </Field>
+    <div class="sm:col-span-2">
+      <div class="mb-2 flex items-baseline gap-2">
+        <span class="text-xs font-medium text-fg-muted">Default parameters</span>
+        <span class="text-[11.5px] text-fg-faint">{manifest ? "Over the runtime's default profile, under the run's own params" : 'Pick a runtime for a typed form, or name params directly'}</span>
+      </div>
+      <ParamForm params={manifest?.params ?? []} bind:values inherited={profileParams(runtimeId)} idPrefix="slot" />
+    </div>
+
+    <div class="sm:col-span-2">
+      <div class="mb-2 flex items-baseline gap-2">
+        <span class="text-xs font-medium text-fg-muted">Request limits</span>
+        <span class="text-[11.5px] text-fg-faint">What the slot's route enforces at the gateway. Empty inherits the gateway default</span>
+      </div>
+      <div class="grid grid-cols-2 gap-4 sm:grid-cols-5">
+        <Field label="In flight" for="slot-inflight" hint="Requests at once">
+          <input id="slot-inflight" class="input font-mono" inputmode="numeric" bind:value={maxInFlight} placeholder="inherit" />
+        </Field>
+        <Field label="Per second" for="slot-rps" hint="Sustained rate">
+          <input id="slot-rps" class="input font-mono" inputmode="decimal" bind:value={rps} placeholder="inherit" />
+        </Field>
+        <Field label="Burst" for="slot-burst" hint="Absorbed at once">
+          <input id="slot-burst" class="input font-mono" inputmode="numeric" bind:value={burst} placeholder="rate" />
+        </Field>
+        <Field label="Timeout" for="slot-timeout" hint="Whole request, seconds">
+          <input id="slot-timeout" class="input font-mono" inputmode="decimal" bind:value={timeout} placeholder="inherit" />
+        </Field>
+        <Field label="First byte" for="slot-upstream" hint="Runtime must answer within, seconds">
+          <input id="slot-upstream" class="input font-mono" inputmode="decimal" bind:value={upstream} placeholder="inherit" />
+        </Field>
+      </div>
+    </div>
   </div>
 
   {#snippet footer()}

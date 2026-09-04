@@ -18,10 +18,12 @@ enum ParamType {
   PARAM_TYPE_BOOL = 4;
 }
 
-// Wire protocol an instance speaks
+// Wire protocol an instance speaks, and the ones the gateway answers in
 enum ApiFlavor {
   API_FLAVOR_UNSPECIFIED = 0;
   API_FLAVOR_OPENAI = 1;
+  API_FLAVOR_ANTHROPIC = 2;
+  API_FLAVOR_OLLAMA = 3;
 }
 
 // How an install was obtained
@@ -51,11 +53,16 @@ message Constraint {
 }
 
 // Prebuilt release matched to host facts
+//
+// releases names the repository at the source named by source, the github
+// default when empty. The newest release carrying an asset for every pattern
+// in assets is installed, all of them unpacked into one directory.
 message PrebuiltRule {
   string when = 1;
-  string release = 2;
-  string asset = 3;
+  string releases = 2;
+  repeated string assets = 3;
   string binary = 4;
+  string source = 5;
 }
 
 // Runs the binary once and captures named groups as facts
@@ -142,6 +149,10 @@ message GroupPolicy {
 }
 
 // Memory planning rules for a runtime
+//
+// devices_param names the param holding how many devices a run spans, so
+// device capacity is that many of the largest pools; empty means the
+// runtime spreads over every device it sees.
 message EstimatePolicy {
   repeated GroupPolicy groups = 1;
   string cache_bytes = 2;
@@ -149,6 +160,7 @@ message EstimatePolicy {
   map<string, double> cache_element_bytes = 4;
   double margin = 5;
   string context_param = 6;
+  string devices_param = 7;
 }
 
 // Extracts a measured allocation from a log line
@@ -172,6 +184,69 @@ message RuntimeManifest {
   repeated string triage = 10;
   repeated ReportRule report = 11;
   repeated CommandProbe probes = 12;
+}
+
+// A named set of param values for one runtime, user data beside the seeded manifest
+message Profile {
+  string id = 1;
+  string runtime_id = 2;
+  string name = 3;
+  string description = 4;
+  map<string, string> params = 5;
+  // Applies to every run of the runtime that names no profile
+  bool default = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// Lists profiles, optionally for one runtime
+message ListProfilesRequest {
+  string runtime_id = 1;
+}
+
+// Returns profiles by runtime then name
+message ListProfilesResponse {
+  repeated Profile profiles = 1;
+}
+
+// Creates a profile, its id is assigned
+message CreateProfileRequest {
+  Profile profile = 1;
+}
+
+// Returns the new profile
+message CreateProfileResponse {
+  Profile profile = 1;
+}
+
+// Replaces the name, description, params, and default flag of a profile
+message UpdateProfileRequest {
+  Profile profile = 1;
+}
+
+// Returns the updated profile
+message UpdateProfileResponse {
+  Profile profile = 1;
+}
+
+// Removes a profile, refused while a watch, want, slot, or instance starts from it unless forced
+message DeleteProfileRequest {
+  string id = 1;
+  // Clears every reference first, those fall back to the runtime's default profile
+  bool force = 2;
+}
+
+// Returns the removed profile
+message DeleteProfileResponse {
+  Profile profile = 1;
+}
+
+// Lists format specs
+message ListFormatsRequest {}
+
+// Returns format specs in priority order
+message ListFormatsResponse {
+  repeated FormatSpec formats = 1;
 }
 
 // Lists known runtimes
@@ -242,6 +317,8 @@ message RemoveInstallResponse {
 
 // Runtime catalog and installs
 service RuntimeService {
+  // Lists the formats runtimes accept, with their words
+  rpc ListFormats(ListFormatsRequest) returns (ListFormatsResponse);
   // Lists runtimes and host compatibility
   rpc ListRuntimes(ListRuntimesRequest) returns (ListRuntimesResponse);
   // Fetches one runtime by id
@@ -254,4 +331,12 @@ service RuntimeService {
   rpc InstallPrebuilt(InstallPrebuiltRequest) returns (InstallPrebuiltResponse);
   // Removes an install
   rpc RemoveInstall(RemoveInstallRequest) returns (RemoveInstallResponse);
+  // Lists param profiles
+  rpc ListProfiles(ListProfilesRequest) returns (ListProfilesResponse);
+  // Creates a param profile
+  rpc CreateProfile(CreateProfileRequest) returns (CreateProfileResponse);
+  // Replaces a param profile
+  rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse);
+  // Removes a param profile
+  rpc DeleteProfile(DeleteProfileRequest) returns (DeleteProfileResponse);
 }

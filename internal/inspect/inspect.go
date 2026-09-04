@@ -28,8 +28,15 @@ const (
 	describeMax = 8
 )
 
-// Narrows a profile to a slot, set by the daemon
-type Constrainer func(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, error)
+// Narrows a profile to a slot and returns the slot's default params, set by the daemon
+type Constrainer func(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, map[string]string, error)
+
+// Returns the profile a run of a runtime starts from, named by id or name or
+// the runtime's default, nil when it has none, set by the daemon
+type Profiler func(runtimeID, ref string) (*v1.Profile, error)
+
+// Returns the learned overhead correction for a runtime and architecture, set by the daemon
+type Calibrator func(runtimeID, architecture string) float64
 
 // Orchestrates sources, readers, descriptors, and planning
 type Inspector struct {
@@ -42,22 +49,45 @@ type Inspector struct {
 	Cache      *cache.Store
 	Contexts   []uint32
 	Constrain  Constrainer
+	Profiles   Profiler
+	Delta      Calibrator
 	Log        *slog.Logger
 }
 
-// Returns the planning profile, narrowed to the named slot
-func (i *Inspector) profile(ctx context.Context, slotID string) (*v1.HostProfile, error) {
+// Returns the planning profile narrowed to the named slot, with the slot's default params
+func (i *Inspector) profile(ctx context.Context, slotID string) (*v1.HostProfile, map[string]string, error) {
 	profile, err := i.Host.Profile(ctx, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if slotID == "" {
-		return profile, nil
+		return profile, nil, nil
 	}
 	if i.Constrain == nil {
-		return nil, fmt.Errorf("slots are not available")
+		return nil, nil, fmt.Errorf("slots are not available")
 	}
 	return i.Constrain(ctx, slotID, profile)
+}
+
+// Resolves the profile a run of a runtime starts from, nil when it has none
+func (i *Inspector) Profile(runtimeID, ref string) (*v1.Profile, error) {
+	if i.Profiles == nil {
+		if ref != "" {
+			return nil, fmt.Errorf("profiles are not available")
+		}
+		return nil, nil
+	}
+	return i.Profiles(runtimeID, ref)
+}
+
+// Layers a run's params the one way every plan does: the profile, then the
+// slot's defaults, then the request, returning the profile used
+func (i *Inspector) Layer(runtimeID, ref string, slot, params map[string]string) (*v1.Profile, map[string]string, error) {
+	p, err := i.Profile(runtimeID, ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	return p, runtime.Merge(p.GetParams(), slot, params), nil
 }
 
 // Resolves and classifies a model, caching the listing briefly
@@ -135,8 +165,9 @@ func (i *Inspector) Describe(ctx context.Context, src sources.Source, model *v1.
 	return i.Builder.Build(raw)
 }
 
-// Plans one descriptor on one runtime with overrides
-func (i *Inspector) Plan(rt *runtime.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string) (*v1.MemoryPlan, error) {
+// Plans one descriptor on one runtime with overrides, against the memory free
+// right now or all of it, with the same learned correction a run applies
+func (i *Inspector) Plan(rt *runtime.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool) (*v1.MemoryPlan, error) {
 	if rt.Policy == nil {
 		return nil, fmt.Errorf("runtime %s has no estimate policy", rt.Manifest.GetId())
 	}
@@ -144,11 +175,17 @@ func (i *Inspector) Plan(rt *runtime.Runtime, d *v1.Descriptor, profile *v1.Host
 	if err != nil {
 		return nil, err
 	}
+	var delta float64
+	if i.Delta != nil {
+		delta = i.Delta(rt.Manifest.GetId(), d.GetArchitecture())
+	}
 	return rt.Policy.Plan(estimate.Input{
-		Descriptor: d,
-		Formulas:   i.Builder.Formulas(d.GetArchSpecId()),
-		Host:       profile,
-		Params:     params,
+		Descriptor:    d,
+		Formulas:      i.Builder.Formulas(d.GetArchSpecId()),
+		Host:          profile,
+		Params:        params,
+		Free:          free,
+		OverheadDelta: delta,
 	})
 }
 
@@ -158,17 +195,40 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 	if err != nil {
 		return nil, err
 	}
-	profile, err := i.profile(ctx, req.GetSlotId())
+	profile, slotParams, err := i.profile(ctx, req.GetSlotId())
 	if err != nil {
 		return nil, err
 	}
 	groups := selectGroups(i.Classifier.Groups(model), req.GetGroups())
-	runtimes := i.selectRuntimes(req.GetRuntimeIds(), profile)
+	// A named profile plans its own runtime unless the request names runtimes itself
+	ids := req.GetRuntimeIds()
+	named, err := i.Profile("", req.GetProfileId())
+	if err != nil {
+		return nil, err
+	}
+	if named != nil && len(ids) == 0 {
+		ids = []string{named.GetRuntimeId()}
+	}
+	runtimes := i.selectRuntimes(ids, profile)
 	contexts := req.GetContexts()
 	if len(contexts) == 0 {
 		contexts = i.Contexts
 	}
 	resp := &v1.InspectResponse{Model: model}
+	// The named profile sits under its runtime's rows, every other runtime's default under the rest
+	layered := map[string]map[string]string{}
+	for _, rt := range runtimes {
+		ref := ""
+		if named != nil && named.GetRuntimeId() == rt.Manifest.GetId() {
+			ref = named.GetId()
+		}
+		_, params, err := i.Layer(rt.Manifest.GetId(), ref, slotParams, req.GetParams())
+		if err != nil {
+			resp.Warnings = append(resp.Warnings, fmt.Sprintf("%s: %v", rt.Manifest.GetId(), err))
+			continue
+		}
+		layered[rt.Manifest.GetId()] = params
+	}
 	descriptors := make([]*v1.Descriptor, len(groups))
 	warnings := make([]string, len(groups))
 	eg, gctx := errgroup.WithContext(ctx)
@@ -194,17 +254,24 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		}
 		resp.Descriptors = append(resp.Descriptors, d)
 		for _, rt := range runtimes {
-			if !rt.Accepts(d.GetFormatId()) || rt.Policy == nil {
+			params, ok := layered[rt.Manifest.GetId()]
+			if !ok || !rt.Accepts(d.GetFormatId()) || rt.Policy == nil {
 				continue
 			}
 			for _, n := range contexts {
-				overrides := withContext(req.GetParams(), rt.Policy.ContextParam(), n)
-				plan, err := i.Plan(rt, d, profile, overrides)
+				overrides := withContext(params, rt.Policy.ContextParam(), n)
+				plan, err := i.Plan(rt, d, profile, overrides, false)
 				if err != nil {
 					resp.Warnings = append(resp.Warnings, fmt.Sprintf("%s on %s: %v", d.GetGroup(), rt.Manifest.GetId(), err))
 					continue
 				}
-				resp.Rows = append(resp.Rows, &v1.FitRow{Group: d.GetGroup(), RuntimeId: rt.Manifest.GetId(), Context: n, Plan: plan})
+				// A run plans around what is loaded now, so the table says both
+				now, err := i.Plan(rt, d, profile, overrides, true)
+				if err != nil {
+					resp.Warnings = append(resp.Warnings, fmt.Sprintf("%s on %s: %v", d.GetGroup(), rt.Manifest.GetId(), err))
+					continue
+				}
+				resp.Rows = append(resp.Rows, &v1.FitRow{Group: d.GetGroup(), RuntimeId: rt.Manifest.GetId(), Context: n, Plan: plan, Free: now})
 			}
 		}
 	}
@@ -221,11 +288,24 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	rt, err := i.Runtimes.Get(req.GetRuntimeId())
+	runtimeID := req.GetRuntimeId()
+	// A named profile picks its runtime when nothing else did, as a run does
+	if runtimeID == "" && req.GetProfileId() != "" {
+		named, err := i.Profile("", req.GetProfileId())
+		if err != nil {
+			return nil, err
+		}
+		runtimeID = named.GetRuntimeId()
+	}
+	rt, err := i.Runtimes.Get(runtimeID)
 	if err != nil {
 		return nil, err
 	}
-	profile, err := i.profile(ctx, req.GetSlotId())
+	profile, slotParams, err := i.profile(ctx, req.GetSlotId())
+	if err != nil {
+		return nil, err
+	}
+	_, overrides, err := i.Layer(rt.Manifest.GetId(), req.GetProfileId(), slotParams, req.GetParams())
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +313,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	plan, err := i.Plan(rt, d, profile, req.GetParams())
+	plan, err := i.Plan(rt, d, profile, overrides, req.GetFree())
 	if err != nil {
 		return nil, err
 	}

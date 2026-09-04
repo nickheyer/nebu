@@ -144,7 +144,7 @@ func runSources(ctx context.Context, e *env, args []string) error {
 			for _, f := range c.GetFacets() {
 				facets = append(facets, f.GetId())
 			}
-			where := c.GetEndpoint() + s.GetPath()
+			where := c.GetEndpoint()
 			if where == "" {
 				where = c.GetWebUrl()
 			}
@@ -155,9 +155,9 @@ func runSources(ctx context.Context, e *env, args []string) error {
 			if st.GetError() != "" {
 				can = []string{"error: " + st.GetError()}
 			}
-			rows = append(rows, []string{s.GetId(), eval.EnumShort(s.GetKind()), origin, where, auth, strings.Join(can, ","), strings.Join(sortIDs(c), ","), strings.Join(facets, ",")})
+			rows = append(rows, []string{s.GetId(), s.GetName(), eval.EnumShort(s.GetKind()), origin, where, auth, strings.Join(can, ","), strings.Join(sortIDs(c), ","), strings.Join(facets, ",")})
 		}
-		table(w, []string{"ID", "KIND", "ORIGIN", "LOCATION", "AUTH", "CAN", "SORTS", "FACETS"}, rows)
+		table(w, []string{"ID", "NAME", "PROVIDER", "ORIGIN", "LOCATION", "AUTH", "CAN", "SORTS", "FACETS"}, rows)
 	})
 }
 
@@ -176,7 +176,8 @@ func sortIDs(c *v1.SourceCapabilities) []string {
 
 func runSearch(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("search")
-	source := fs.String("source", "", "source id, first configured when empty")
+	source := fs.String("source", "", "source id, every source when empty")
+	kind := fs.String("kind", "", "provider, every source of it merged, one of "+strings.Join(sourceKinds(), ", "))
 	limit := fs.Uint("limit", 20, "maximum hits per page")
 	sortBy := fs.String("sort", "", "sort id, see nebu sources for what each source accepts")
 	asc := fs.Bool("asc", false, "ascending instead of descending")
@@ -210,6 +211,11 @@ func runSearch(ctx context.Context, e *env, args []string) error {
 		}
 		req.Filters[k] = v
 	}
+	if *kind != "" {
+		if req.Kind, err = parseSourceKind(*kind); err != nil {
+			return err
+		}
+	}
 	cl, err := e.clients()
 	if err != nil {
 		return err
@@ -231,9 +237,12 @@ func runSearch(ctx context.Context, e *env, args []string) error {
 			} else if h.GetSizeBytes() > 0 {
 				size = estimate.Human(h.GetSizeBytes())
 			}
-			rows = append(rows, []string{h.GetRepo(), h.GetTask(), size, strconv.FormatUint(h.GetDownloads(), 10), strconv.FormatUint(h.GetLikes(), 10), updated, strings.Join(h.GetFormats(), ",")})
+			rows = append(rows, []string{h.GetSourceId(), h.GetRepo(), h.GetTask(), size, strconv.FormatUint(h.GetDownloads(), 10), strconv.FormatUint(h.GetLikes(), 10), updated, strings.Join(h.GetFormats(), ",")})
 		}
-		table(w, []string{"REPO", "TASK", "SIZE", "DOWNLOADS", "LIKES", "UPDATED", "FORMATS"}, rows)
+		table(w, []string{"SOURCE", "REPO", "TASK", "SIZE", "DOWNLOADS", "LIKES", "UPDATED", "FORMATS"}, rows)
+		for _, warn := range resp.Msg.GetWarnings() {
+			fmt.Fprintln(w, "warning:", warn)
+		}
 		var notes []string
 		if resp.Msg.GetTotal() > 0 {
 			notes = append(notes, fmt.Sprintf("%d matches", resp.Msg.GetTotal()))
@@ -324,11 +333,13 @@ func runCard(ctx context.Context, e *env, args []string) error {
 func runInspect(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("inspect")
 	source := fs.String("source", "", "source id, first configured when empty")
+	slot := fs.String("slot", "", "slot id or name to plan inside, its devices, budget, and defaults")
+	profile := fs.String("profile", "", "profile id or name to start params from, plans its runtime alone unless --runtime says otherwise")
 	var runtimes, groups, contexts, params multi
 	fs.Var(&runtimes, "runtime", "runtime id, repeatable")
 	fs.Var(&groups, "group", "weight group name, repeatable")
 	fs.Var(&contexts, "ctx", "context length, repeatable")
-	fs.Var(&params, "param", "runtime param as name=value, repeatable")
+	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the profile and slot defaults")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -337,7 +348,7 @@ func runInspect(ctx context.Context, e *env, args []string) error {
 		return fmt.Errorf("usage: nebu inspect <repo>[@revision] [flags]")
 	}
 	repo, revision := splitRef(positional[0])
-	req := &v1.InspectRequest{SourceId: *source, Repo: repo, Revision: revision, Groups: groups, RuntimeIds: runtimes, Params: map[string]string{}}
+	req := &v1.InspectRequest{SourceId: *source, Repo: repo, Revision: revision, Groups: groups, RuntimeIds: runtimes, Params: map[string]string{}, SlotId: *slot, ProfileId: *profile}
 	for _, c := range contexts {
 		n, err := strconv.ParseUint(c, 10, 32)
 		if err != nil {
@@ -383,12 +394,12 @@ func renderInspect(w io.Writer, resp *v1.InspectResponse) {
 		plan := r.GetPlan()
 		rows = append(rows, []string{
 			r.GetGroup(), r.GetRuntimeId(), strconv.FormatUint(uint64(r.GetContext()), 10),
-			strings.ToUpper(eval.EnumShort(plan.GetVerdict())),
+			strings.ToUpper(eval.EnumShort(plan.GetVerdict())), strings.ToUpper(eval.EnumShort(r.GetFree().GetVerdict())),
 			poolUsage(plan, v1.PoolKind_POOL_KIND_DEVICE), poolUsage(plan, v1.PoolKind_POOL_KIND_HOST),
 			estimate.Human(plan.GetCacheBytes()), placements(plan), plan.GetDetail(),
 		})
 	}
-	table(w, []string{"GROUP", "RUNTIME", "CTX", "VERDICT", "DEVICE", "HOST", "CACHE", "PLACEMENT", "DETAIL"}, rows)
+	table(w, []string{"GROUP", "RUNTIME", "CTX", "TOTAL", "FREE NOW", "DEVICE", "HOST", "CACHE", "PLACEMENT", "DETAIL"}, rows)
 	for _, warn := range resp.GetWarnings() {
 		fmt.Fprintln(w, "warning:", warn)
 	}
@@ -460,7 +471,8 @@ func runRuntimes(ctx context.Context, e *env, args []string) error {
 	})
 }
 
-func runVersion(ctx context.Context, e *env, args []string) error {
+// Reads the module version and commit out of the binary
+func buildVersion() string {
 	version, revision := "devel", ""
 	if bi, ok := debug.ReadBuildInfo(); ok {
 		if bi.Main.Version != "" && bi.Main.Version != "(devel)" {
@@ -472,7 +484,11 @@ func runVersion(ctx context.Context, e *env, args []string) error {
 			}
 		}
 	}
-	_, err := fmt.Fprintln(e.out, strings.TrimSpace("nebu "+version+" "+revision))
+	return strings.TrimSpace(version + " " + revision)
+}
+
+func runVersion(ctx context.Context, e *env, args []string) error {
+	_, err := fmt.Fprintln(e.out, "nebu "+buildVersion())
 	return err
 }
 

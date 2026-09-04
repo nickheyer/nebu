@@ -8,30 +8,64 @@ constraints:
 acquire:
   adopt: [llama-server]
   prebuilt:
+    # llama.cpp publishes no CUDA build for Linux, so an NVIDIA host takes Vulkan here and CUDA from the recipe
     - when: os == "linux" && arch == "amd64" && any(devices, .vendor == "amd")
-      release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
-      asset: '^llama-b\d+-bin-ubuntu-rocm-[\d.]+-x64\.tar\.gz$'
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-ubuntu-rocm-[\d.]+-x64\.tar\.gz$']
       binary: llama-server
     - when: os == "linux" && arch == "amd64" && any(devices, .kind == "gpu")
-      release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
-      asset: '^llama-b\d+-bin-ubuntu-vulkan-x64\.tar\.gz$'
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-ubuntu-vulkan-x64\.tar\.gz$']
       binary: llama-server
     - when: os == "linux" && arch == "amd64"
-      release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
-      asset: '^llama-b\d+-bin-ubuntu-x64\.tar\.gz$'
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-ubuntu-x64\.tar\.gz$']
+      binary: llama-server
+    - when: os == "linux" && arch == "arm64" && any(devices, .kind == "gpu")
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-ubuntu-vulkan-arm64\.tar\.gz$']
       binary: llama-server
     - when: os == "linux" && arch == "arm64"
-      release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
-      asset: '^llama-b\d+-bin-ubuntu-arm64\.tar\.gz$'
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-ubuntu-arm64\.tar\.gz$']
       binary: llama-server
     - when: os == "darwin" && arch == "arm64"
-      release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
-      asset: '^llama-b\d+-bin-macos-arm64\.tar\.gz$'
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-macos-arm64\.tar\.gz$']
       binary: llama-server
     - when: os == "darwin" && arch == "amd64"
-      release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
-      asset: '^llama-b\d+-bin-macos-x64\.tar\.gz$'
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-macos-x64\.tar\.gz$']
       binary: llama-server
+    # The CUDA build is the binary plus the cudart companion, CUDA 13 needs a 580 driver
+    - when: os == "windows" && arch == "amd64" && any(devices, .vendor == "nvidia") && vercmp(facts["nvidia.driver_version"] ?? "0", "580") >= 0
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-win-cuda-13\.[\d.]+-x64\.zip$', '^cudart-llama-bin-win-cuda-13\.[\d.]+-x64\.zip$']
+      binary: llama-server.exe
+    - when: os == "windows" && arch == "amd64" && any(devices, .vendor == "nvidia")
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-win-cuda-12\.[\d.]+-x64\.zip$', '^cudart-llama-bin-win-cuda-12\.[\d.]+-x64\.zip$']
+      binary: llama-server.exe
+    - when: os == "windows" && arch == "arm64" && any(devices, .vendor == "nvidia")
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-win-cuda-[\d.]+-arm64\.zip$', '^cudart-llama-bin-win-cuda-[\d.]+-arm64\.zip$']
+      binary: llama-server.exe
+    - when: os == "windows" && arch == "amd64" && any(devices, .vendor == "amd")
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-win-rocm-[\d.]+-x64\.zip$']
+      binary: llama-server.exe
+    - when: os == "windows" && arch == "amd64" && any(devices, .kind == "gpu")
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-win-vulkan-x64\.zip$']
+      binary: llama-server.exe
+    - when: os == "windows" && arch == "amd64"
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-win-cpu-x64\.zip$']
+      binary: llama-server.exe
+    - when: os == "windows" && arch == "arm64"
+      releases: ggml-org/llama.cpp
+      assets: ['^llama-b\d+-bin-win-cpu-arm64\.zip$']
+      binary: llama-server.exe
   recipe_id: llamacpp
 probes:
   - key: version
@@ -43,6 +77,11 @@ probes:
 launch:
   command: '{{.install.path}}'
   args: ['--model', '{{index .artifacts "weights"}}', '--host', '{{.host}}', '--port', '{{.port}}']
+  # A slot pins the process to its devices, an empty render is dropped so no slot means every device
+  env:
+    CUDA_VISIBLE_DEVICES: '{{$first := true}}{{range .devices}}{{if eq .vendor "nvidia"}}{{if not $first}},{{end}}{{$first = false}}{{.id}}{{end}}{{end}}'
+    ROCR_VISIBLE_DEVICES: '{{$first := true}}{{range .devices}}{{if eq .vendor "amd"}}{{if not $first}},{{end}}{{$first = false}}{{trimPrefix "card" .id}}{{end}}{{end}}'
+    GGML_VK_VISIBLE_DEVICES: '{{$first := true}}{{range .devices}}{{if eq .kind "gpu"}}{{$i := ""}}{{if eq .vendor "amd"}}{{$i = trimPrefix "card" .id}}{{else}}{{$i = default "" (index .facts "index")}}{{end}}{{if $i}}{{if not $first}},{{end}}{{$first = false}}{{$i}}{{end}}{{end}}{{end}}'
   health:
     path: /health
     interval_ms: 1000
@@ -141,7 +180,8 @@ estimate:
     - kind: TENSOR_GROUP_KIND_OTHER
       pool: POOL_KIND_DEVICE
   cache_bytes: n_ctx * cache_per_token * (cache_bytes[cache_type_k] + cache_bytes[cache_type_v]) / 2
-  overhead_bytes: 512 * MiB + n_ubatch * (n_embd + n_vocab) * 8
+  # The device context plus the compute buffer, fitted to measured CUDA runs with flash attention on
+  overhead_bytes: 384 * MiB + n_ctx * n_ubatch * 10 + n_ubatch * n_embd * 16
   cache_element_bytes:
     f32: 4
     f16: 2

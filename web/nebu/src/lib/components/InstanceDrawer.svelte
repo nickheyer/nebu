@@ -6,7 +6,7 @@
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { InstanceState } from '$proto/instance_pb';
-  import { Square, RotateCcw, Wrench, ExternalLink } from '@lucide/svelte';
+  import { Square, RotateCcw, Wrench, ExternalLink, MessageSquare } from '@lucide/svelte';
   import Drawer from './ui/Drawer.svelte';
   import Tabs from './ui/Tabs.svelte';
   import Kv from './ui/Kv.svelte';
@@ -186,6 +186,9 @@
       <span class="text-xs text-fg-faint">{enumLabel(InstanceState, instance.state)} · {instance.slotId ? `in slot ${slotName(instance.slotId)}` : 'standalone'}</span>
       <div class="ml-auto flex gap-2">
         {#if alive}
+          {#if instance.state === InstanceState.READY}
+            <Button variant="outline" icon={MessageSquare} href="/chat?model={encodeURIComponent(instance.slotId ? slotName(instance.slotId) : instance.name)}">Chat</Button>
+          {/if}
           <Button variant="danger" icon={Square} loading={stopping} onclick={stop}>Stop</Button>
         {:else if instance.request}
           <Button variant="primary" icon={RotateCcw} onclick={() => again()}>Run again</Button>

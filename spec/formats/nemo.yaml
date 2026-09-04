@@ -1,5 +1,6 @@
 id: nemo
 description: NeMo checkpoint packed as one .nemo tar, model_config.yaml beside a torch, zarr, or distributed checkpoint
+blurb: A NeMo checkpoint packed as one .nemo archive, the older NVIDIA layout
 priority: 6
 files:
   - match: '(?i)\.nemo$'

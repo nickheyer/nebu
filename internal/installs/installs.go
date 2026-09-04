@@ -21,7 +21,6 @@ import (
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/archive"
 	"github.com/nickheyer/nebu/pkg/build"
-	"github.com/nickheyer/nebu/pkg/eval"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -50,6 +49,7 @@ type Manager struct {
 	Host        *host.Prober
 	Tasks       *tasks.Manager
 	Fetcher     *transfer.Fetcher
+	Sources     *sources.Registry
 	Events      *events.Bus
 	Log         *slog.Logger
 
@@ -152,45 +152,62 @@ func (m *Manager) InstallPrebuilt(ctx context.Context, runtimeID string) (*v1.Ta
 	}), nil
 }
 
+// One release asset a rule matched, opened for download
 type asset struct {
-	tag  string
 	name string
-	url  string
 	size int64
+	blob sources.Blob
+}
+
+// Every asset of one release a rule needs
+type release struct {
+	tag    string
+	assets []asset
+}
+
+func (r *release) close() {
+	for _, a := range r.assets {
+		a.blob.Close()
+	}
 }
 
 func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Runtime, rule *v1.PrebuiltRule) error {
 	h.Progress(0, 0, "resolving release")
-	a, err := m.resolveAsset(ctx, rule)
+	rel, err := m.resolveAssets(ctx, rule)
 	if err != nil {
 		return err
 	}
-	h.Logf("release %s asset %s", a.tag, a.name)
-	dir := filepath.Join(m.RuntimesDir, rt.Manifest.GetId(), a.tag)
+	defer rel.close()
+	dir := filepath.Join(m.RuntimesDir, rt.Manifest.GetId(), rel.tag)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	archivePath := filepath.Join(dir, a.name)
-	if info, err := os.Stat(archivePath); err != nil || info.Size() != a.size {
-		client, err := sources.NewHTTP(a.url, "")
-		if err != nil {
-			return err
+	var total uint64
+	for _, a := range rel.assets {
+		total += uint64(a.size)
+		h.Logf("release %s asset %s", rel.tag, a.name)
+	}
+	h.Progress(0, total, "downloading")
+	for _, a := range rel.assets {
+		archivePath := filepath.Join(dir, a.name)
+		if info, err := os.Stat(archivePath); err == nil && info.Size() == a.size {
+			h.Add(a.size)
+			h.Logf("%s already downloaded", a.name)
+			continue
 		}
-		h.Progress(0, uint64(a.size), "downloading "+a.name)
-		blob := sources.NewRangeBlob(client, a.url, a.size)
-		if _, err := m.Fetcher.Fetch(ctx, blob, archivePath+".partial", "", func(d int64) { h.Add(d) }); err != nil {
+		h.Message("downloading " + a.name)
+		if _, err := m.Fetcher.Fetch(ctx, a.blob, archivePath+".partial", "", func(d int64) { h.Add(d) }); err != nil {
 			return err
 		}
 		if err := os.Rename(archivePath+".partial", archivePath); err != nil {
 			return err
 		}
-	} else {
-		h.Add(a.size)
-		h.Logf("archive already downloaded")
 	}
-	h.Message("extracting")
-	if err := archive.Extract(archivePath, dir); err != nil {
-		return err
+	for _, a := range rel.assets {
+		h.Message("extracting " + a.name)
+		if err := archive.Extract(filepath.Join(dir, a.name), dir); err != nil {
+			return err
+		}
 	}
 	binary, err := findBinary(dir, rule.GetBinary())
 	if err != nil {
@@ -205,8 +222,8 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Run
 		Kind:      v1.InstallKind_INSTALL_KIND_PREBUILT,
 		Path:      binary,
 		Dir:       dir,
-		Version:   a.tag,
-		Origin:    a.url,
+		Version:   rel.tag,
+		Origin:    rule.GetReleases() + "@" + rel.tag + "/" + rel.assets[0].name,
 		CreatedAt: timestamppb.Now(),
 	}
 	m.probe(ctx, rt, in)
@@ -218,48 +235,64 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Run
 	return nil
 }
 
-func (m *Manager) resolveAsset(ctx context.Context, rule *v1.PrebuiltRule) (*asset, error) {
-	re, err := regexp.Compile(rule.GetAsset())
+// Walks the releases of the rule's repository newest first and opens the assets of the first one carrying every pattern
+func (m *Manager) resolveAssets(ctx context.Context, rule *v1.PrebuiltRule) (*release, error) {
+	patterns := make([]*regexp.Regexp, 0, len(rule.GetAssets()))
+	for _, a := range rule.GetAssets() {
+		re, err := regexp.Compile(a)
+		if err != nil {
+			return nil, err
+		}
+		patterns = append(patterns, re)
+	}
+	if m.Sources == nil {
+		return nil, fmt.Errorf("no sources to read releases from")
+	}
+	sourceID := rule.GetSource()
+	if sourceID == "" {
+		sourceID = build.DefaultReleaseSource
+	}
+	src, err := m.Sources.Get(sourceID)
 	if err != nil {
 		return nil, err
 	}
-	client, err := sources.NewHTTP(rule.GetRelease(), "")
+	revisions, err := src.Revisions(ctx, rule.GetReleases())
 	if err != nil {
 		return nil, err
 	}
-	var root any
-	if _, err := client.JSON(ctx, rule.GetRelease(), nil, &root); err != nil {
-		return nil, err
-	}
-	releases, ok := root.([]any)
-	if !ok {
-		releases = []any{root}
-	}
-	for _, r := range releases {
-		rel, ok := r.(map[string]any)
-		if !ok {
+	for _, r := range revisions {
+		// A revision without bytes carries no assets, branches and tags never do
+		if r.GetSizeBytes() == 0 {
 			continue
 		}
-		tag, _ := rel["tag_name"].(string)
-		assets, _ := rel["assets"].([]any)
-		for _, item := range assets {
-			am, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			name, _ := am["name"].(string)
-			if !re.MatchString(name) {
-				continue
-			}
-			url, _ := am["browser_download_url"].(string)
-			size, _ := eval.Number(am["size"])
-			if tag == "" {
-				tag = strings.TrimSuffix(name, filepath.Ext(name))
-			}
-			return &asset{tag: tag, name: name, url: url, size: int64(size)}, nil
+		model, err := src.Resolve(ctx, rule.GetReleases(), r.GetName())
+		if err != nil {
+			return nil, err
 		}
+		var picked []*v1.Artifact
+		for _, re := range patterns {
+			for _, a := range model.GetArtifacts() {
+				if re.MatchString(a.GetPath()) {
+					picked = append(picked, a)
+					break
+				}
+			}
+		}
+		if len(picked) != len(patterns) {
+			continue
+		}
+		rel := &release{tag: r.GetName()}
+		for _, a := range picked {
+			blob, err := src.Open(ctx, model, a)
+			if err != nil {
+				rel.close()
+				return nil, err
+			}
+			rel.assets = append(rel.assets, asset{name: a.GetPath(), size: blob.Size(), blob: blob})
+		}
+		return rel, nil
 	}
-	return nil, fmt.Errorf("no asset matching %s in %s", rule.GetAsset(), rule.GetRelease())
+	return nil, fmt.Errorf("no release of %s at %s carries every asset of %s", rule.GetReleases(), sourceID, strings.Join(rule.GetAssets(), ", "))
 }
 
 // Removes an install record and its downloaded directory

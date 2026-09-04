@@ -23,12 +23,16 @@ enum BuildState {
 }
 
 // Where the source tree comes from, every field a template
+//
+// releases names a repository whose newest release resolves a latest ref, at
+// the source named by source, the github default when empty.
 message RecipeSource {
-  string release = 1;
+  string releases = 1;
   string ref = 2;
   string archive = 3;
   string repo = 4;
   string subdir = 5;
+  string source = 6;
 }
 
 // One unified diff applied to the tree

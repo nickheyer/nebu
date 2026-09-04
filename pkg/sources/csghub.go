@@ -15,16 +15,22 @@ import (
 var csghub = &Catalog{
 	ID:            "csghub",
 	Kind:          v1.SourceKind_SOURCE_KIND_CSGHUB,
-	Endpoint:      "https://hub.opencsg.com",
+	Name:          "CSGHub",
+	Seed:          "OpenCSG",
+	Transports:    []Use{httpUse("https://hub.opencsg.com", "OPENCSG_TOKEN")},
 	Web:           "https://opencsg.com",
 	WebPath:       "/models",
-	TokenEnv:      "OPENCSG_TOKEN",
-	Description:   "OpenCSG, the CSGHub community hub",
+	Description:   "OpenCSG, the CSGHub community hub, or any CSGHub install",
 	RepoExample:   "org/model",
 	RepoPattern:   `^[\w.-]+/[\w.-]+$`,
 	RevisionLabel: "revision",
 	Sorts:         []string{SortTrending, SortDownloads, SortLikes, SortUpdated},
-	API:           csghubAPI{},
+	Noise:         []string{".+:.+", "[a-z]{2,3}"},
+	HitFields: []*v1.ConfigField{
+		{Name: "architecture", Label: "Architecture", Description: "Model architecture"},
+		{Name: "base_model", Label: "Base model", Description: "Base model this was made from"},
+	},
+	API: csghubAPI{},
 }
 
 func init() { register(csghub) }
@@ -348,5 +354,5 @@ func (csghubAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact 
 	if revision == "" {
 		revision = csgRevision
 	}
-	return c.Range(c.URL("hf", model.GetRepo(), "resolve", revision, artifact.GetPath()), artifact)
+	return c.Range(ctx, c.URL("hf", model.GetRepo(), "resolve", revision, artifact.GetPath()), artifact)
 }

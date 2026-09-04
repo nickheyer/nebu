@@ -1,0 +1,38 @@
+id: windows-gpu
+description: GPUs of any vendor from the display adapter class, with their memory as the driver registered it
+os: [windows]
+exec:
+  command: powershell
+  args:
+    - -NoProfile
+    - -NonInteractive
+    - -Command
+    - >-
+      Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*' -ErrorAction SilentlyContinue
+      | Where-Object DriverDesc
+      | ForEach-Object { $m = $_.'HardwareInformation.qwMemorySize'; if ($m -is [array]) { $m = [BitConverter]::ToUInt64($m, 0) };
+      [pscustomobject]@{ Name = $_.DriverDesc; Vendor = $_.ProviderName; Device = $_.MatchingDeviceId; Driver = $_.DriverVersion; Memory = $m } }
+      | Format-List
+  timeout_ms: 20000
+parse:
+  kind: PARSE_KIND_KV
+emit:
+  # NVIDIA cards come from nvidia-smi, which also knows their free memory
+  device:
+    kind: DEVICE_KIND_GPU
+    id: gpu-{{.index}}
+    name: "{{.Name}}"
+    vendor: '{{$d := lower .Device}}{{if contains "ven_10de" $d}}nvidia{{else if contains "ven_1002" $d}}amd{{else if contains "ven_8086" $d}}intel{{else}}{{lower .Vendor}}{{end}}'
+    memory_total: "{{.Memory}}"
+    unit: B
+    when: not (lower(Device ?? "") contains "ven_10de")
+    facts:
+      driver_version: "{{.Driver}}"
+      pnp_id: "{{.Device}}"
+  pool:
+    kind: POOL_KIND_DEVICE
+    id: gpu-{{.index}}
+    device_id: gpu-{{.index}}
+    total: "{{.Memory}}"
+    unit: B
+    when: (Memory ?? "") != "" && not (lower(Device ?? "") contains "ven_10de")

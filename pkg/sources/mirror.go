@@ -3,14 +3,8 @@ package sources
 import (
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
-	"io/fs"
-	"net/http"
-	"net/url"
-	"os"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -21,8 +15,13 @@ import (
 
 // A store another nebu exported, read over HTTP, S3, or a directory; config names each one
 var mirror = &Catalog{
-	ID:            "mirror",
-	Kind:          v1.SourceKind_SOURCE_KIND_MIRROR,
+	ID:   "mirror",
+	Kind: v1.SourceKind_SOURCE_KIND_MIRROR,
+	Name: "Mirror",
+	Transports: []Use{
+		{Kind: TransportHTTP, Fields: map[string]string{"endpoint": "", "token_env": ""}},
+		{Kind: TransportFile, Fields: map[string]string{"path": ""}},
+	},
 	Configured:    true,
 	Description:   "A store another nebu exported, read over HTTP, S3, or a directory",
 	RepoExample:   "org/model",
@@ -42,21 +41,20 @@ const mirRevision = "mirror"
 // An exported store: index files where the export wrote them, else an object listing or a directory walk
 type mirrorAPI struct{}
 
-// Needs a directory or an endpoint from config
+// Needs a directory or an endpoint, the directory wins when both are set
 func (mirrorAPI) Check(c *Client) error {
-	if c.Spec().GetPath() == "" && c.Spec().GetEndpoint() == "" {
-		return fmt.Errorf("mirror source needs endpoint or path")
+	if c.File() == nil && c.HTTP() == nil {
+		return fmt.Errorf("a mirror needs endpoint or path")
 	}
-	_, err := mirDir(c)
-	return err
+	return nil
 }
 
-// The directory a mirror reads from, empty when it reads over HTTP
-func mirDir(c *Client) (string, error) {
-	if c.Spec().GetPath() == "" {
-		return "", nil
+// The transport a mirror reads through, the directory when it has one
+func mirTransport(c *Client) Transport {
+	if f := c.File(); f != nil {
+		return f
 	}
-	return filepath.Abs(c.Spec().GetPath())
+	return c.HTTP()
 }
 
 func (mirrorAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
@@ -110,12 +108,14 @@ func (mirrorAPI) Resolve(ctx context.Context, c *Client, repo, rev string) (*v1.
 		}
 		return model, nil
 	}
-	files, err := mirListObjects(ctx, c, repo)
+	files, err := mirTransport(c).List(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
 	for _, f := range files {
-		model.Artifacts = append(model.Artifacts, &v1.Artifact{Path: f.Path, SizeBytes: f.Size})
+		if path.Base(f.GetPath()) != index.IndexFile {
+			model.Artifacts = append(model.Artifacts, f)
+		}
 	}
 	if len(model.Artifacts) == 0 {
 		return nil, fmt.Errorf("%s: no index and no objects in the mirror", repo)
@@ -124,154 +124,48 @@ func (mirrorAPI) Resolve(ctx context.Context, c *Client, repo, rev string) (*v1.
 }
 
 func (mirrorAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error) {
-	rel := path.Join(model.GetRepo(), artifact.GetPath())
-	dir, err := mirDir(c)
-	if err != nil {
-		return nil, err
-	}
-	if dir != "" {
-		full := filepath.Join(dir, filepath.FromSlash(rel))
-		if r, err := filepath.Rel(dir, full); err != nil || strings.HasPrefix(r, "..") {
-			return nil, fmt.Errorf("%s escapes the mirror", rel)
-		}
-		return OpenFile(full)
-	}
-	return c.Range(c.URL(rel), artifact)
+	return mirTransport(c).Open(ctx, path.Join(model.GetRepo(), artifact.GetPath()), int64(artifact.GetSizeBytes()))
 }
 
 func mirReadJSON(ctx context.Context, c *Client, rel string, out any) error {
-	dir, err := mirDir(c)
+	data, err := mirTransport(c).Read(ctx, rel, cardMax)
 	if err != nil {
 		return err
 	}
-	if dir != "" {
-		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
-		if err != nil {
-			return err
-		}
-		return json.Unmarshal(data, out)
-	}
-	_, err = c.JSON(ctx, c.URL(rel), nil, out)
-	return err
-}
-
-// One object from an S3 style listing
-type mirObject struct {
-	Path string
-	Size uint64
-}
-
-type mirListResult struct {
-	XMLName               xml.Name `xml:"ListBucketResult"`
-	IsTruncated           bool     `xml:"IsTruncated"`
-	NextContinuationToken string   `xml:"NextContinuationToken"`
-	Contents              []struct {
-		Key  string `xml:"Key"`
-		Size uint64 `xml:"Size"`
-	} `xml:"Contents"`
-	CommonPrefixes []struct {
-		Prefix string `xml:"Prefix"`
-	} `xml:"CommonPrefixes"`
-}
-
-// Lists objects under a repo through ListObjectsV2, or a directory
-func mirListObjects(ctx context.Context, c *Client, repo string) ([]mirObject, error) {
-	dir, err := mirDir(c)
-	if err != nil {
-		return nil, err
-	}
-	if dir != "" {
-		var out []mirObject
-		root := filepath.Join(dir, filepath.FromSlash(repo))
-		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || d.Name() == index.IndexFile {
-				return err
-			}
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-			rel, _ := filepath.Rel(root, p)
-			out = append(out, mirObject{Path: filepath.ToSlash(rel), Size: uint64(info.Size())})
-			return nil
-		})
-		return out, err
-	}
-	var out []mirObject
-	token := ""
-	for {
-		q := url.Values{"list-type": {"2"}, "prefix": {repo + "/"}}
-		if token != "" {
-			q.Set("continuation-token", token)
-		}
-		var res mirListResult
-		if err := mirReadXML(ctx, c, q, &res); err != nil {
-			return nil, err
-		}
-		for _, o := range res.Contents {
-			rel := strings.TrimPrefix(o.Key, repo+"/")
-			if rel == "" || strings.HasSuffix(rel, "/") || path.Base(rel) == index.IndexFile {
-				continue
-			}
-			out = append(out, mirObject{Path: rel, Size: o.Size})
-		}
-		if !res.IsTruncated || res.NextContinuationToken == "" {
-			return out, nil
-		}
-		token = res.NextContinuationToken
-	}
+	return json.Unmarshal(data, out)
 }
 
 // Lists repositories as two level prefixes, or directories
 func mirListPrefixes(ctx context.Context, c *Client) ([]string, error) {
-	dir, err := mirDir(c)
-	if err != nil {
-		return nil, err
-	}
-	if dir != "" {
-		var out []string
-		owners, err := os.ReadDir(dir)
+	var out []string
+	if f := c.File(); f != nil {
+		owners, err := f.Dirs("")
 		if err != nil {
 			return nil, err
 		}
 		for _, o := range owners {
-			if !o.IsDir() {
-				continue
-			}
-			names, err := os.ReadDir(filepath.Join(dir, o.Name()))
+			names, err := f.Dirs(o)
 			if err != nil {
 				continue
 			}
 			for _, n := range names {
-				if n.IsDir() {
-					out = append(out, o.Name()+"/"+n.Name())
-				}
+				out = append(out, o+"/"+n)
 			}
 		}
 		return out, nil
 	}
-	var owners mirListResult
-	if err := mirReadXML(ctx, c, url.Values{"list-type": {"2"}, "delimiter": {"/"}}, &owners); err != nil {
+	owners, err := c.HTTP().Prefixes(ctx, "")
+	if err != nil {
 		return nil, err
 	}
-	var out []string
-	for _, o := range owners.CommonPrefixes {
-		var names mirListResult
-		if err := mirReadXML(ctx, c, url.Values{"list-type": {"2"}, "delimiter": {"/"}, "prefix": {o.Prefix}}, &names); err != nil {
+	for _, o := range owners {
+		names, err := c.HTTP().Prefixes(ctx, o)
+		if err != nil {
 			return nil, err
 		}
-		for _, n := range names.CommonPrefixes {
-			out = append(out, strings.TrimSuffix(n.Prefix, "/"))
+		for _, n := range names {
+			out = append(out, o+"/"+n)
 		}
 	}
 	return out, nil
-}
-
-func mirReadXML(ctx context.Context, c *Client, q url.Values, out any) error {
-	resp, err := c.Do(ctx, http.MethodGet, c.Base()+"/", q, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	return xml.NewDecoder(resp.Body).Decode(out)
 }

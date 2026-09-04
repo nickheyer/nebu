@@ -9,10 +9,19 @@ nebu run org/model --group Q4_K_M --slot main
 nebu swap main org/other --group Q8_0
 ```
 
-Planning inside a slot sees only the slot's device pools, capped at the budget, so a second
-slot on the same card plans around the first. The manifest's launch env can pin the process
-to the slot's devices through `.devices`. The slot's default runtime and params apply under
-whatever the run passes.
+Planning inside a slot sees only the slot's device pools, each capped at the budget, so a
+second slot on the same card plans around the first. The cap is per device rather than a total
+across the slot's devices: runtimes allocate on each card separately, so a per device cap is
+what the driver enforces, while a total could be met with one card overflowing. The manifest's launch env pins the process to
+the slot's devices through `.devices`: the shipped llama.cpp manifest sets
+`CUDA_VISIBLE_DEVICES` to the slot's NVIDIA device ids, `ROCR_VISIBLE_DEVICES` to its AMD card
+numbers, and `GGML_VK_VISIBLE_DEVICES` to their indices for the Vulkan build, and every one of
+them renders empty and is dropped without a slot. The slot's default runtime and params apply
+under whatever the run passes and over the runtime's profile, so a slot narrows a profile and a
+run narrows a slot. A slot also carries the request limits its route enforces at the gateway,
+in flight cap, rate and burst, request and upstream timeouts, each inheriting `gateway.policy`
+where it is zero, see [gateway.md](gateway.md). `nebu slots update` writes new limits to the
+route at once, no swap needed, while devices, budget, runtime, and params apply on the next run.
 
 The gateway route for a slot is its name. While the slot is empty or starting the route
 stays in place and answers `503` with `Retry-After`, never `404`, so a client that retries

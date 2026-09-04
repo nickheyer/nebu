@@ -15,19 +15,22 @@ import (
 
 // Docker Hub, model artifacts in its ai/ namespace
 var dockerhub = &Catalog{
-	ID:               "dockerhub",
-	Kind:             v1.SourceKind_SOURCE_KIND_OCI,
-	Endpoint:         "https://hub.docker.com",
-	Registry:         "https://registry-1.docker.io",
-	RegistryTokenEnv: "DOCKER_TOKEN",
-	Description:      "Docker Hub, model artifacts under its ai/ namespace",
-	RepoExample:      "ai/gemma3:4b-q4_K_M",
-	RepoPattern:      `^[\w.-]+(/[\w.-]+)+(:[\w.-]+)?$`,
-	RevisionLabel:    "tag",
-	Sorts:            []string{SortDownloads, SortUpdated},
-	Reversible:       []string{SortDownloads, SortUpdated},
-	Facets:           []*v1.Facet{Freeform(FacetAuthor, "Author")},
-	API:              dockerhubAPI{},
+	ID:   "dockerhub",
+	Kind: v1.SourceKind_SOURCE_KIND_OCI,
+	Name: "OCI registry",
+	Seed: "Docker Hub",
+	Transports: []Use{
+		{Kind: TransportHTTP, Fields: map[string]string{"endpoint": "https://hub.docker.com"}},
+		{Kind: TransportDistribution, Name: "registry", Fields: map[string]string{"endpoint": "https://registry-1.docker.io", "token_env": "DOCKER_TOKEN"}},
+	},
+	Description:   "Docker Hub, model artifacts under its ai/ namespace, or any registry speaking the OCI distribution API",
+	RepoExample:   "ai/gemma3:4b-q4_K_M",
+	RepoPattern:   `^[\w.-]+(/[\w.-]+)+(:[\w.-]+)?$`,
+	RevisionLabel: "tag",
+	Sorts:         []string{SortDownloads, SortUpdated},
+	Reversible:    []string{SortDownloads, SortUpdated},
+	Facets:        []*v1.Facet{Freeform(FacetAuthor, "Author")},
+	API:           dockerhubAPI{},
 }
 
 func init() { register(dockerhub) }

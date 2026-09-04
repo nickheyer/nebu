@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"slices"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -136,14 +136,19 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	name := fs.String("name", "", "public model name for the gateway")
 	slot := fs.String("slot", "", "slot to run in, its name becomes the public name")
 	force := fs.Bool("force", false, "launch even when the plan says the model does not fit")
+	profile := fs.String("profile", "", "profile id or name to start params from, the runtime default when empty")
 	var params multi
-	fs.Var(&params, "param", "runtime param as name=value, repeatable")
+	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the profile and slot defaults")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(positional) != 1 {
 		return fmt.Errorf("usage: nebu run <repo> [flags]")
+	}
+	paramMap, err := parseParams(params)
+	if err != nil {
+		return err
 	}
 	cl, err := e.clients()
 	if err != nil {
@@ -160,20 +165,7 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	rtID := *runtimeID
-	if *slot == "" {
-		if rtID, err = e.defaultRuntime(ctx, cl, sourceID, positional[0], groupName, *runtimeID); err != nil {
-			return err
-		}
-	}
-	req := &v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: rtID, InstallId: *installID, Name: *name, Params: map[string]string{}, SlotId: *slot, Force: *force}
-	for _, p := range params {
-		k, v, ok := strings.Cut(p, "=")
-		if !ok {
-			return fmt.Errorf("param %q: expected name=value", p)
-		}
-		req.Params[k] = v
-	}
+	req := &v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Name: *name, Params: paramMap, SlotId: *slot, Force: *force, ProfileId: *profile}
 	resp, err := cl.instances.Run(ctx, connect.NewRequest(req))
 	if err != nil {
 		return err
@@ -207,41 +199,21 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	return nil
 }
 
-// Picks the first compatible runtime that accepts the stored format
-func (e *env) defaultRuntime(ctx context.Context, cl *clients, source, repo, group, id string) (string, error) {
-	if id != "" {
-		return id, nil
-	}
-	model, err := cl.store.GetModel(ctx, connect.NewRequest(&v1.GetModelRequest{SourceId: source, Repo: repo, Group: group}))
-	if err != nil {
-		return "", err
-	}
-	resp, err := cl.runtimes.ListRuntimes(ctx, connect.NewRequest(&v1.ListRuntimesRequest{}))
-	if err != nil {
-		return "", err
-	}
-	stored := model.Msg.GetModel()
-	for _, rt := range resp.Msg.GetRuntimes() {
-		m := rt.GetManifest()
-		if rt.GetCompatible() && slices.Contains(m.GetFormats(), stored.GetFormatId()) {
-			return m.GetId(), nil
-		}
-	}
-	return "", fmt.Errorf("no compatible runtime accepts %s, pass --runtime", stored.GetFormatId())
-}
-
+// Where this machine reaches the gateway, its own listener or the api's
 func (e *env) gatewayBase() string {
-	if addr := e.cfg.GetGateway().GetListen(); addr != "" {
-		return "http://" + addr
+	api := e.cfg.GetAddr()
+	if api == "" {
+		api = dialable(e.cfg.GetListen(), "")
 	}
-	addr := e.cfg.GetAddr()
-	if addr == "" {
-		addr = e.cfg.GetListen()
+	own := e.cfg.GetGateway().GetListen()
+	if own == "" {
+		return e.base(api)
 	}
-	if strings.Contains(addr, "://") {
-		return addr
+	host := ""
+	if u, err := url.Parse(e.base(api)); err == nil {
+		host = u.Hostname()
 	}
-	return "http://" + addr
+	return e.base(dialable(own, host))
 }
 
 func runPs(ctx context.Context, e *env, args []string) error {
@@ -374,6 +346,7 @@ func renderInstance(w io.Writer, in *v1.Instance) {
 	rows := [][]string{
 		{"model", in.GetSourceId() + "/" + in.GetRepo() + " " + in.GetGroup()},
 		{"runtime", in.GetRuntimeId() + " install " + in.GetInstallId()},
+		{"profile", orDash(in.GetRequest().GetProfileId())},
 		{"endpoint", in.GetEndpoint()},
 		{"pid", strconv.Itoa(int(in.GetPid()))},
 		{"device", measured(in)},
@@ -422,6 +395,13 @@ func renderInstance(w io.Writer, in *v1.Instance) {
 	}
 	section(w, "command")
 	fmt.Fprintln(w, strings.Join(in.GetCommand(), " "))
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func stamp(ts *timestamppb.Timestamp) string {

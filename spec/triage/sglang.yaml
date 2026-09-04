@@ -1,0 +1,27 @@
+id: sglang
+description: Failure patterns of sglang.launch_server
+rules:
+  - id: device-oom
+    match: '(?i)(torch\.OutOfMemoryError|CUDA out of memory)'
+    summary: device ran out of memory
+    hint: lower n_ctx, chunked_prefill_size, or mem_fraction_static, or shard with tp_size
+  - id: pool-too-small
+    match: '(?i)(Not enough memory\. Please try to increase --mem-fraction-static|KV cache pool .* too small|not enough memory for the KV cache)'
+    summary: the cache pool cannot hold one full length request
+    hint: raise mem_fraction_static or lower n_ctx
+  - id: unsupported-arch
+    match: '(?i)(Unsupported architectures|is not supported by SGLang|does not support model)'
+    summary: this build does not support the model architecture
+    hint: upgrade the runtime
+  - id: kernel-mismatch
+    match: '(?i)(sgl_kernel|sgl-kernel).*(version|not found|ImportError|undefined symbol)'
+    summary: the kernel package does not match the runtime
+    hint: rebuild the sglang recipe so sglang and sgl-kernel come from one install
+  - id: missing-module
+    match: '(?i)(ModuleNotFoundError|No module named)'
+    summary: the install is missing a Python package
+    hint: rebuild the sglang recipe, the virtual environment is incomplete
+  - id: port-in-use
+    match: '(?i)address already in use'
+    summary: the port is taken
+    hint: stop whatever holds the port or run the model again to get a fresh port

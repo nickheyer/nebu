@@ -34,6 +34,8 @@ const (
 	retries         = 5
 	drainTimeoutMs  = 30000
 	monitorInterval = 3600000
+	// A runtime that has not started answering in this long is hung, not slow
+	upstreamTimeoutMs = 600000
 )
 
 // Container CLIs tried in order when config names none
@@ -155,6 +157,12 @@ func applyDefaults(cfg *v1.Config) error {
 	}
 	if cfg.Gateway.DrainTimeoutMs == 0 {
 		cfg.Gateway.DrainTimeoutMs = drainTimeoutMs
+	}
+	if cfg.Gateway.Policy == nil {
+		cfg.Gateway.Policy = &v1.Policy{}
+	}
+	if cfg.Gateway.Policy.UpstreamTimeoutMs == 0 {
+		cfg.Gateway.Policy.UpstreamTimeoutMs = upstreamTimeoutMs
 	}
 	if cfg.Auth == nil {
 		cfg.Auth = &v1.Auth{}

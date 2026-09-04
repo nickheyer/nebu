@@ -1,8 +1,8 @@
 <script lang="ts">
   import { api, message } from '$lib/api';
-  import { live, instanceLive, modelKey } from '$lib/state.svelte';
+  import { live, instanceLive, modelKey, profilesOf, profileParams } from '$lib/state.svelte';
   import { launch, slotOccupied } from '$lib/launch';
-  import { parsePairs, bytes, params as fmtParams } from '$lib/format';
+  import { bytes, params as fmtParams } from '$lib/format';
   import type { StoredModel } from '$proto/store_pb';
   import type { MemoryPlan } from '$proto/estimate_pb';
   import type { RuntimeStatus } from '$proto/runtime_pb';
@@ -11,6 +11,7 @@
   import Field from './ui/Field.svelte';
   import Button from './ui/Button.svelte';
   import PlanView from './PlanView.svelte';
+  import ParamForm from './ParamForm.svelte';
 
   let { open = $bindable(false), model = null, slotId = '' }: { open?: boolean; model?: StoredModel | null; slotId?: string } = $props();
 
@@ -20,7 +21,8 @@
   let installId = $state('');
   let name = $state('');
   let slot = $state('');
-  let paramsText = $state('');
+  let profileId = $state('');
+  let values = $state<Record<string, string>>({});
   let drainFirst = $state(false);
   let plan = $state<MemoryPlan | null>(null);
   let planError = $state('');
@@ -35,6 +37,11 @@
   const others = $derived(runtimes.filter((r) => !compatible.includes(r)));
   const effectiveRuntime = $derived(runtimeId || selectedSlot?.runtimeId || compatible[0]?.manifest?.id || '');
   const installs = $derived([...live.installs.values()].filter((i) => i.runtimeId === effectiveRuntime));
+  const manifest = $derived(runtimes.find((r) => r.manifest?.id === effectiveRuntime)?.manifest);
+  const profiles = $derived(profilesOf(effectiveRuntime));
+  const defaultProfile = $derived(profiles.find((p) => p.default));
+  // The layers under the form: the profile, then the slot's defaults
+  const inherited = $derived({ ...profileParams(effectiveRuntime, profileId), ...(selectedSlot?.params ?? {}) });
 
   $effect(() => {
     if (!open) return;
@@ -43,18 +50,26 @@
     runtimeId = '';
     installId = '';
     name = '';
-    paramsText = '';
+    profileId = '';
+    values = {};
     drainFirst = false;
     plan = null;
     planError = '';
     api.runtimes.listRuntimes({}).then((r) => (runtimes = r.runtimes)).catch(() => (runtimes = []));
   });
 
+  // A profile belongs to one runtime, so a runtime change drops it
+  $effect(() => {
+    void effectiveRuntime;
+    profileId = '';
+  });
+
   // A plan is for one set of inputs, so any change invalidates it
   $effect(() => {
     void runtimeId;
     void slot;
-    void paramsText;
+    void profileId;
+    void values;
     void pickedKey;
     plan = null;
     planError = '';
@@ -68,8 +83,9 @@
       runtimeId,
       installId,
       name: slot ? '' : name,
-      params: parsePairs(paramsText),
-      slotId: slot
+      params: values,
+      slotId: slot,
+      profileId
     };
   }
 
@@ -79,7 +95,7 @@
     planError = '';
     try {
       const s = spec();
-      const resp = await api.estimate.estimate({ sourceId: s.sourceId, repo: s.repo, group: s.group, runtimeId: effectiveRuntime, params: s.params, slotId: s.slotId });
+      const resp = await api.estimate.estimate({ sourceId: s.sourceId, repo: s.repo, group: s.group, runtimeId: effectiveRuntime, params: s.params, slotId: s.slotId, profileId: s.profileId, free: true });
       plan = resp.plan ?? null;
     } catch (err) {
       planError = message(err);
@@ -159,9 +175,22 @@
         </select>
       </Field>
 
-      <Field label="Parameters" for="run-params" hint="One name=value per line. Slot defaults apply first, and auto values are solved by the planner" class="sm:col-span-2">
-        <textarea id="run-params" class="input h-24" bind:value={paramsText} placeholder="n_ctx=8192&#10;n_gpu_layers=auto"></textarea>
+      <Field label="Profile" for="run-profile" hint={profiles.length ? 'Named params of the runtime the run starts from' : `No profiles for ${effectiveRuntime || 'this runtime'} yet, add one on the runtimes page`} class="sm:col-span-2">
+        <select id="run-profile" class="input" bind:value={profileId} disabled={!profiles.length}>
+          <option value="">{defaultProfile ? `Runtime default · ${defaultProfile.name}` : 'Manifest defaults'}</option>
+          {#each profiles as p (p.id)}
+            <option value={p.id}>{p.name}{p.description ? ` · ${p.description}` : ''}</option>
+          {/each}
+        </select>
       </Field>
+
+      <div class="sm:col-span-2">
+        <div class="mb-2 flex items-baseline gap-2">
+          <span class="text-xs font-medium text-fg-muted">Parameters</span>
+          <span class="text-[11.5px] text-fg-faint">Empty fields inherit the profile{selectedSlot ? ', then the slot' : ''}. Auto values are solved by the planner</span>
+        </div>
+        <ParamForm params={manifest?.params ?? []} bind:values {inherited} idPrefix="run" />
+      </div>
 
       {#if swap}
         <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-line bg-sunken px-3 py-2.5 sm:col-span-2">

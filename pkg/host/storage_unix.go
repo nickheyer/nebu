@@ -22,8 +22,8 @@ func stat(path string) (*v1.Storage, error) {
 	return &v1.Storage{
 		Path:       mount,
 		Filesystem: fstype,
-		TotalBytes: fs.Blocks * bsize,
-		FreeBytes:  fs.Bavail * bsize,
+		TotalBytes: uint64(fs.Blocks) * bsize,
+		FreeBytes:  uint64(fs.Bavail) * bsize,
 	}, nil
 }
 

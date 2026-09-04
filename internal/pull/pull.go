@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/tasks"
@@ -33,6 +34,8 @@ type Puller struct {
 	Tasks     *tasks.Manager
 	Events    *events.Bus
 	Log       *slog.Logger
+	// Says which stored models eviction leaves alone, set by the daemon
+	Keep func(*v1.StoredModel) bool
 }
 
 // Validates the request and starts a pull task
@@ -58,7 +61,8 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 		artifacts = append(artifacts, g.Files[role]...)
 	}
 	h.Progress(0, 0, "resolving")
-	unlock := p.Store.Lock(store.Key(model.GetSourceId(), model.GetRepo(), g.Name))
+	key := store.Key(model.GetSourceId(), model.GetRepo(), g.Name)
+	unlock := p.Store.Lock(key)
 	defer unlock()
 	stored := &v1.StoredModel{
 		SourceId: model.GetSourceId(),
@@ -73,10 +77,26 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 	} else {
 		stored.Descriptor_ = d
 	}
-	var total uint64
+	var total, need uint64
 	for _, a := range artifacts {
 		total += a.GetSizeBytes()
+		if a.GetSha256() == "" || !p.Store.HasBlob(store.Digest(a.GetSha256())) {
+			need += a.GetSizeBytes()
+		}
 	}
+	// The cap is kept by evicting what has sat unused longest before the bytes arrive, this model staying
+	evicted, err := p.Store.Evict(need, func(m *v1.StoredModel) bool {
+		return store.Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()) == key || (p.Keep != nil && p.Keep(m))
+	})
+	for _, m := range evicted {
+		h.Logf("evicted %s %s, unused since %s", m.GetRepo(), m.GetGroup(), store.LastUse(m).Format(time.RFC3339))
+		p.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_DELETED, store.Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()), &v1.Event_Model{Model: m})
+	}
+	if err != nil {
+		return fmt.Errorf("evict: %w", err)
+	}
+	// Sweeps wait until the manifest names every blob this pull lands
+	defer p.Store.Hold()()
 	h.Progress(0, total, "fetching")
 	for _, a := range artifacts {
 		if err := ctx.Err(); err != nil {
@@ -125,9 +145,28 @@ func (p *Puller) fetch(ctx context.Context, h *tasks.Handle, src sources.Source,
 		return "", err
 	}
 	defer blob.Close()
-	if local, ok := blob.(sources.Pather); ok {
+	if whole, ok := blob.(sources.Materializer); ok {
+		// A blob already on disk names its file, anything else moves bytes and waits out a paused window
+		if _, onDisk := blob.(interface{ Name() string }); !onDisk {
+			if err := p.Fetcher.Hold(ctx); err != nil {
+				return "", err
+			}
+		}
+		h.Message("fetching " + a.GetPath())
+		var moved int64
+		path, err := whole.Materialize(ctx, func(d int64) {
+			moved += d
+			h.Add(d)
+		})
+		if err != nil {
+			return "", err
+		}
 		h.Message("hashing " + a.GetPath())
-		hexDigest, err := transfer.HashFile(local.Path(), func(d int64) { h.Add(d) })
+		hexDigest, err := transfer.HashFile(path, func(d int64) {
+			if moved == 0 {
+				h.Add(d)
+			}
+		})
 		if err != nil {
 			return "", err
 		}
@@ -141,7 +180,7 @@ func (p *Puller) fetch(ctx context.Context, h *tasks.Handle, src sources.Source,
 			h.Logf("%s already stored", a.GetPath())
 			return digest, nil
 		}
-		if err := p.Store.Adopt(local.Path(), digest); err != nil {
+		if err := p.Store.Adopt(path, digest); err != nil {
 			return "", err
 		}
 		h.Logf("%s adopted as %s", a.GetPath(), digest)

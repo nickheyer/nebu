@@ -19,9 +19,9 @@ import (
 var civitai = &Catalog{
 	ID:            "civitai",
 	Kind:          v1.SourceKind_SOURCE_KIND_CIVITAI,
-	Endpoint:      "https://civitai.com",
+	Name:          "Civitai",
+	Transports:    []Use{httpUse("https://civitai.com", "CIVITAI_API_TOKEN")},
 	WebPath:       "/models",
-	TokenEnv:      "CIVITAI_API_TOKEN",
 	AuthRequired:  true,
 	Description:   "Civitai, checkpoints and adapters for image and video models",
 	RepoExample:   "4201",
@@ -30,7 +30,12 @@ var civitai = &Catalog{
 	Sorts:         []string{SortDownloads, SortLikes, SortTrending, SortCreated},
 	Reversible:    []string{SortCreated},
 	Facets:        civFacets(),
-	API:           civitaiAPI{},
+	HitFields: []*v1.ConfigField{
+		{Name: "nsfw", Label: "NSFW", Type: v1.ConfigType_CONFIG_TYPE_BOOL, Description: "Marked adult content by the source"},
+		{Name: "base_model", Label: "Base model", Description: "Base model this was made for"},
+		{Name: "version", Label: "Version", Description: "Latest version"},
+	},
+	API: civitaiAPI{},
 }
 
 func init() { register(civitai) }
@@ -440,7 +445,7 @@ func (civitaiAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact
 		if rawURL == "" {
 			rawURL = c.URL("api", "download", "models", strconv.FormatInt(v.ID, 10)) + "?fileId=" + strconv.FormatInt(f.ID, 10)
 		}
-		return c.Range(rawURL, artifact)
+		return c.Range(ctx, rawURL, artifact)
 	}
 	return nil, fmt.Errorf("%s: not in version %d", artifact.GetPath(), v.ID)
 }

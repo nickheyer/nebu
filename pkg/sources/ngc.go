@@ -20,12 +20,15 @@ import (
 
 // The NVIDIA NGC catalog
 var ngc = &Catalog{
-	ID:            "ngc",
-	Kind:          v1.SourceKind_SOURCE_KIND_NGC,
-	Endpoint:      "https://api.ngc.nvidia.com",
+	ID:   "ngc",
+	Kind: v1.SourceKind_SOURCE_KIND_NGC,
+	Name: "NVIDIA NGC",
+	Transports: []Use{
+		httpUse("https://api.ngc.nvidia.com", "NGC_API_KEY"),
+		{Kind: TransportHTTP, Name: "auth", Fields: map[string]string{"endpoint": "https://authn.nvidia.com"}},
+	},
 	Web:           "https://catalog.ngc.nvidia.com",
 	WebPath:       "/models",
-	TokenEnv:      "NGC_API_KEY",
 	Description:   "NVIDIA NGC catalog, checkpoints for NVIDIA's own frameworks",
 	RepoExample:   "org/team/model",
 	RepoPattern:   `^[\w.-]+(/[\w.-]+){1,2}$`,
@@ -36,7 +39,7 @@ var ngc = &Catalog{
 		Freeform(FacetFramework, "Framework"),
 		Freeform(FacetPublisher, "Publisher"),
 	},
-	API: &ngcAPI{auth: "https://authn.nvidia.com"},
+	API: ngcAPI{},
 }
 
 func init() { register(ngc) }
@@ -69,37 +72,37 @@ var ngcTagLabels = map[string]bool{"general": true, "framework": true, "precisio
 
 // The NGC API: a JSON query string search, versioned file lists, and an API key
 // exchanged at a token service for a short lived bearer, guest when that fails
-type ngcAPI struct {
-	// The token service, and the org the exchange is scoped to
-	auth string
-	org  string
+type ngcAPI struct{}
 
-	client *HTTP
-	mu     sync.Mutex
-	token  string
-	until  time.Time
+// Exchanges the API key at the token service, keeping the bearer for a while
+type ngcAuth struct {
+	auth  *HTTP
+	key   string
+	mu    sync.Mutex
+	token string
+	until time.Time
 }
 
-// Reaches the token service
-func (a *ngcAPI) Check(c *Client) error {
-	client, err := NewHTTP(a.auth, "")
-	if err != nil {
-		return err
+// Installs the exchange on the API transport, so every request carries the bearer and never the raw key
+func (ngcAPI) Check(c *Client) error {
+	auth, ok := c.Transport("auth").(*HTTP)
+	if !ok {
+		return fmt.Errorf("auth endpoint is required")
 	}
-	a.client = client
+	a := &ngcAuth{auth: auth, key: c.Token()}
+	c.HTTP().SetAuthorizer(a.headers)
 	return nil
 }
 
 // Returns the bearer header for catalog requests, none as a guest
-func (a *ngcAPI) Headers(ctx context.Context, c *Client) http.Header {
-	key := c.Token()
-	if key == "" || a.client == nil {
+func (a *ngcAuth) headers(ctx context.Context) http.Header {
+	if a.key == "" {
 		return nil
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if time.Now().After(a.until) {
-		a.token = a.exchange(ctx, key)
+		a.token = a.exchange(ctx)
 		a.until = time.Now().Add(ngcTokenTTL)
 		if a.token == "" {
 			a.until = time.Now().Add(ngcRetryAfter)
@@ -112,13 +115,10 @@ func (a *ngcAPI) Headers(ctx context.Context, c *Client) http.Header {
 }
 
 // Asks the auth service for a bearer, empty on any failure
-func (a *ngcAPI) exchange(ctx context.Context, key string) string {
+func (a *ngcAuth) exchange(ctx context.Context) string {
 	q := url.Values{"service": {"ngc"}}
-	if a.org != "" {
-		q.Set("scope", "group/ngc:"+a.org)
-	}
-	header := http.Header{"Authorization": {"ApiKey " + key}, "Accept": {"application/json"}}
-	resp, err := a.client.Do(ctx, http.MethodGet, a.client.URL("token"), q, header)
+	header := http.Header{"Authorization": {"ApiKey " + a.key}, "Accept": {"application/json"}}
+	resp, err := a.auth.Do(ctx, http.MethodGet, a.auth.URL("token"), q, header)
 	if err != nil {
 		return ""
 	}
@@ -155,7 +155,7 @@ type ngcResource struct {
 	} `json:"attributes"`
 }
 
-func (a *ngcAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
+func (ngcAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
 	key := ngcSortKeys[sort.ID]
 	query := strings.TrimSpace(req.GetQuery())
 	// Score means nothing without a query, popularity does
@@ -348,7 +348,7 @@ func ngcInfo(ctx context.Context, c *Client, org, team, name string) (*ngcModelI
 	return &body.Model, nil
 }
 
-func (a *ngcAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error) {
+func (ngcAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error) {
 	org, team, name, err := ngcSplit(repo)
 	if err != nil {
 		return nil, err
@@ -408,7 +408,7 @@ func ngcHexDigest(b64 string) string {
 	return hex.EncodeToString(raw)
 }
 
-func (a *ngcAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
+func (ngcAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
 	org, team, name, err := ngcSplit(repo)
 	if err != nil {
 		return nil, err
@@ -458,7 +458,7 @@ func (a *ngcAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.R
 	return out, nil
 }
 
-func (a *ngcAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v1.ModelCard, error) {
+func (ngcAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v1.ModelCard, error) {
 	org, team, name, err := ngcSplit(repo)
 	if err != nil {
 		return nil, err
@@ -478,7 +478,7 @@ func (a *ngcAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v
 	return card, nil
 }
 
-func (a *ngcAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error) {
+func (ngcAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error) {
 	org, team, name, err := ngcSplit(model.GetRepo())
 	if err != nil {
 		return nil, err
@@ -487,7 +487,7 @@ func (a *ngcAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact 
 		return nil, fmt.Errorf("%s: no version", model.GetRepo())
 	}
 	// The file URL answers with a redirect to a signed URL, ranges follow it
-	return c.Range(c.URL("v2", "models", org, team, name, "versions", model.GetRevision(), "files", artifact.GetPath()), artifact)
+	return c.Range(ctx, c.URL("v2", "models", org, team, name, "versions", model.GetRevision(), "files", artifact.GetPath()), artifact)
 }
 
 // Splits org/team/name or org/name

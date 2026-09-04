@@ -1,0 +1,31 @@
+id: darwin-gpu
+description: GPUs from the system profiler, Apple silicon sharing the host memory pool
+os: [darwin]
+exec:
+  command: system_profiler
+  args: [SPDisplaysDataType, -json]
+  timeout_ms: 20000
+parse:
+  kind: PARSE_KIND_JSON
+  rows: SPDisplaysDataType
+emit:
+  device:
+    kind: DEVICE_KIND_GPU
+    id: gpu-{{.index}}
+    name: "{{.name}}"
+    vendor: '{{lower (trimPrefix "sppci_vendor_" (index . "spdisplays_vendor"))}}'
+    memory_total: '{{index . "spdisplays_vram"}}'
+    facts:
+      cores: '{{index . "sppci_cores"}}'
+      metal: '{{trimPrefix "spdisplays_" (index . "spdisplays_mtlgpufamilysupport")}}'
+      bus: '{{trimPrefix "spdisplays_" (index . "sppci_bus")}}'
+  # Only a card with memory of its own is a pool, unified memory is the host pool
+  pool:
+    kind: POOL_KIND_DEVICE
+    id: gpu-{{.index}}
+    device_id: gpu-{{.index}}
+    total: '{{index . "spdisplays_vram"}}'
+    when: (spdisplays_vram ?? "") != ""
+  facts:
+    - key: gpu.count
+      value: "{{.count}}"

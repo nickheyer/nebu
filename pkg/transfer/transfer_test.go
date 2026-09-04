@@ -60,7 +60,7 @@ func fetcher(chunk int64) *Fetcher {
 
 func TestNewClampsAndLimits(t *testing.T) {
 	f := New(0, 1, 0, 1<<20, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if f.Workers != 1 || f.Chunk != 1<<16 || f.Retries != 1 || f.Limiter == nil {
+	if f.Workers != 1 || f.Chunk != 1<<16 || f.Retries != 1 || f.Schedule.base != 1<<20 {
 		t.Fatalf("defaults %+v", f)
 	}
 }

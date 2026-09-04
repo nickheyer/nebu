@@ -11,9 +11,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -37,6 +39,10 @@ type Store struct {
 	root  string
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// Held shared by pulls and alone by sweeps, whose blobs have no manifest yet
+	sweep sync.RWMutex
+	// Blob bytes the store keeps under by evicting, 0 for no cap
+	MaxBytes uint64
 }
 
 // Opens or creates a store
@@ -139,6 +145,12 @@ func (s *Store) Lock(key string) func() {
 	return m.Unlock
 }
 
+// Keeps sweeps out until a pull's manifest names its blobs, returns the release
+func (s *Store) Hold() func() {
+	s.sweep.RLock()
+	return s.sweep.RUnlock
+}
+
 // Stable key for a stored model
 func Key(source, repo, group string) string {
 	return strings.Join([]string{source, repo, group}, "/")
@@ -227,6 +239,110 @@ func (s *Store) ListManifests() ([]*v1.StoredModel, error) {
 		return Key(out[i].GetSourceId(), out[i].GetRepo(), out[i].GetGroup()) < Key(out[j].GetSourceId(), out[j].GetRepo(), out[j].GetGroup())
 	})
 	return out, nil
+}
+
+// Marks a model used now, so eviction takes it last
+func (s *Store) Touch(source, repo, group string) error {
+	m, err := s.ReadManifest(source, repo, group)
+	if err != nil {
+		return err
+	}
+	m.UsedAt = timestamppb.Now()
+	return s.WriteManifest(m)
+}
+
+// Removes least recently used models, keep says which stay, until need more bytes fit under the cap
+//
+// Returns what was removed. Nothing happens without a cap, and a pull larger than
+// the cap evicts everything it may and proceeds, the cap being a target, not a refusal.
+func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.StoredModel, error) {
+	if s.MaxBytes == 0 {
+		return nil, nil
+	}
+	used, err := s.blobBytes()
+	if err != nil || used+need <= s.MaxBytes {
+		return nil, err
+	}
+	// Pulls in flight land first, then their bytes count too
+	s.sweep.Lock()
+	defer s.sweep.Unlock()
+	if used, err = s.blobBytes(); err != nil || used+need <= s.MaxBytes {
+		return nil, err
+	}
+	manifests, err := s.ListManifests()
+	if err != nil {
+		return nil, err
+	}
+	// Idle longest first, a model never run counting from its pull
+	sort.SliceStable(manifests, func(i, j int) bool { return LastUse(manifests[i]).Before(LastUse(manifests[j])) })
+	var removed []*v1.StoredModel
+	for _, m := range manifests {
+		if used+need <= s.MaxBytes {
+			break
+		}
+		if keep != nil && keep(m) {
+			continue
+		}
+		if _, err := s.RemoveManifest(m.GetSourceId(), m.GetRepo(), m.GetGroup()); err != nil {
+			return removed, err
+		}
+		removed = append(removed, m)
+		freed, err := s.dropOrphans(m)
+		if err != nil {
+			return removed, err
+		}
+		used -= min(freed, used)
+	}
+	return removed, nil
+}
+
+// When a model last started a run, or landed when it never ran
+func LastUse(m *v1.StoredModel) time.Time {
+	if m.GetUsedAt() != nil {
+		return m.GetUsedAt().AsTime()
+	}
+	return m.GetPulledAt().AsTime()
+}
+
+// Removes the blobs of a removed model that no manifest still names, returning the bytes freed
+func (s *Store) dropOrphans(m *v1.StoredModel) (uint64, error) {
+	referenced, err := s.referenced()
+	if err != nil {
+		return 0, err
+	}
+	var freed uint64
+	for _, a := range m.GetArtifacts() {
+		path := s.BlobPath(a.GetDigest())
+		info, err := os.Stat(path)
+		if err != nil || referenced[filepath.Base(path)] {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return freed, err
+		}
+		freed += uint64(info.Size())
+	}
+	return freed, nil
+}
+
+// Names the blob files every manifest points at
+func (s *Store) referenced() (map[string]bool, error) {
+	manifests, err := s.ListManifests()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, m := range manifests {
+		for _, a := range m.GetArtifacts() {
+			out[filepath.Base(s.BlobPath(a.GetDigest()))] = true
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) blobBytes() (uint64, error) {
+	st, err := s.Status()
+	return st.GetBlobBytes(), err
 }
 
 // Removes a manifest, its link directory, its adapter link, and anything runtimes prepared from it
@@ -324,17 +440,13 @@ func (s *Store) Unlink(link string) error {
 	return err
 }
 
-// Removes blobs no manifest references
+// Removes blobs no manifest references, once pulls in flight have landed
 func (s *Store) Gc(partials bool) (*v1.GcResponse, error) {
-	manifests, err := s.ListManifests()
+	s.sweep.Lock()
+	defer s.sweep.Unlock()
+	referenced, err := s.referenced()
 	if err != nil {
 		return nil, err
-	}
-	referenced := map[string]bool{}
-	for _, m := range manifests {
-		for _, a := range m.GetArtifacts() {
-			referenced[filepath.Base(s.BlobPath(a.GetDigest()))] = true
-		}
 	}
 	entries, err := os.ReadDir(filepath.Join(s.root, blobsDir))
 	if err != nil {
@@ -369,7 +481,7 @@ func (s *Store) Status() (*v1.StoreStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	st := &v1.StoreStatus{Path: s.root, Models: uint64(len(manifests))}
+	st := &v1.StoreStatus{Path: s.root, Models: uint64(len(manifests)), MaxBytes: s.MaxBytes}
 	entries, err := os.ReadDir(filepath.Join(s.root, blobsDir))
 	if err != nil {
 		return nil, err

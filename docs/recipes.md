@@ -7,8 +7,9 @@
 id: llamacpp
 runtime_id: llamacpp
 source:
-  release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
-  ref: latest                                   # resolved to the newest tag in the feed
+  releases: ggml-org/llama.cpp                  # repository whose releases resolve latest
+  source: github                                # the source that lists them, github by default
+  ref: latest                                   # the newest release that is not a draft or prerelease
   archive: https://github.com/ggml-org/llama.cpp/archive/refs/tags/{{.ref}}.tar.gz
 tools: [cmake]                                  # must be on PATH for a host build
 facts: [device.vendor, device.compute_capability, nvidia.driver_version]
@@ -42,14 +43,19 @@ binary: llama-server
    `nebu runtimes recipes` and `nebu doctor`.
 2. `vars` render in key order against the host env, the variant, and the ref, so later vars
    can reference earlier ones. `--var k=v` overrides any of them.
-3. The ref resolves. `latest` reads the release feed and takes the newest tag that is not a
-   draft or prerelease.
+3. The ref resolves. `latest` asks the source named by `source`, the seeded `github` one by
+   default, for the revisions of `releases` and takes the newest release that is not a draft or
+   prerelease. A prebuilt rule in a runtime manifest names its repository the same way and takes
+   the newest release carrying an asset for every pattern in its `assets` list, all unpacked into
+   one directory, so a build that ships beside a runtime companion arrives whole and a release
+   missing one platform's build falls through to the one before it.
 4. Everything that decides the bytes produced is hashed: the recipe, variant, vars, ref,
    sandbox and image, the selected host facts, and the patch contents. The hash is the
    build id and its directory under `builds.dir`. A finished build with that id whose binary
    and install still exist is a cache hit and `nebu build` returns at once. `--force` rebuilds.
-5. The source is fetched, an archive through the download cache and unpacked, or a git
-   repository cloned at the ref. Recipes with no source get an empty tree.
+5. The source is fetched, an archive through the download cache under the `transfer` limits,
+   resumed and retried like a pull, then unpacked, or a git repository cloned at the ref.
+   Recipes with no source get an empty tree.
 6. Patches whose `when` holds apply in order with a pure Go unified diff applier. Content is
    inline, a file under `spec/patches/`, or a URL. A hunk already present is skipped.
 7. Steps run in the sandbox, each rendered with `.dir` (the tree), `.out` (the output

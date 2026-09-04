@@ -1,5 +1,6 @@
 id: nemo2
 description: NeMo 2 checkpoint directory, context/model.yaml beside a torch distributed checkpoint under weights/
+blurb: A NeMo 2 checkpoint directory, a model config beside a distributed checkpoint, the layout NeMo serves
 priority: 6
 reader: nemo
 root: '^(?P<root>(?:.*/)?)(?:weights|context)/'

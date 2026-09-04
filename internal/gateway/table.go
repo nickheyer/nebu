@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -24,21 +26,27 @@ var (
 	ErrPending = errors.New("route pending")
 	// Returned when the route is draining
 	ErrDraining = errors.New("route draining")
+	// Returned when the route has as many requests in flight as its policy allows
+	ErrBusy = errors.New("route busy")
+	// Returned when the route is over its request rate
+	ErrThrottled = errors.New("route throttled")
 )
 
-// Public names mapped to instances, persisted and counted
+// Public names mapped to instances, persisted, counted, and limited
 type Table struct {
 	store    *db.DB
 	events   *events.Bus
 	mu       sync.Mutex
 	routes   map[string]*v1.Route
 	inflight map[string]*atomic.Int32
+	limiters map[string]*rate.Limiter
+	defaults *v1.Policy
 	total    atomic.Uint64
 }
 
 // Loads every route from the store
 func OpenTable(ctx context.Context, store *db.DB, bus *events.Bus) (*Table, error) {
-	t := &Table{store: store, events: bus, routes: map[string]*v1.Route{}, inflight: map[string]*atomic.Int32{}}
+	t := &Table{store: store, events: bus, routes: map[string]*v1.Route{}, inflight: map[string]*atomic.Int32{}, limiters: map[string]*rate.Limiter{}}
 	if store == nil {
 		return t, nil
 	}
@@ -71,8 +79,43 @@ func (t *Table) save(r *v1.Route, action v1.EventAction) {
 	t.events.Publish(v1.EventKind_EVENT_KIND_ROUTE, action, r.GetName(), &v1.Event_Route{Route: r})
 }
 
-// Points a name at a ready instance
-func (t *Table) Set(name, instanceID, slotID, endpoint, model string, api v1.ApiFlavor) *v1.Route {
+// Sets the policy routes without one of their own follow
+func (t *Table) SetDefaults(p *v1.Policy) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.defaults = p
+}
+
+// Returns the policy routes without one of their own follow
+func (t *Table) Defaults() *v1.Policy {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return proto.Clone(t.defaults).(*v1.Policy)
+}
+
+// Resolves a route's policy over the defaults, each zero field inheriting
+func Effective(route, defaults *v1.Policy) *v1.Policy {
+	pick := func(a, b uint32) uint32 {
+		if a != 0 {
+			return a
+		}
+		return b
+	}
+	out := &v1.Policy{
+		MaxInFlight:       pick(route.GetMaxInFlight(), defaults.GetMaxInFlight()),
+		RequestsPerSecond: route.GetRequestsPerSecond(),
+		Burst:             pick(route.GetBurst(), defaults.GetBurst()),
+		RequestTimeoutMs:  pick(route.GetRequestTimeoutMs(), defaults.GetRequestTimeoutMs()),
+		UpstreamTimeoutMs: pick(route.GetUpstreamTimeoutMs(), defaults.GetUpstreamTimeoutMs()),
+	}
+	if out.RequestsPerSecond == 0 {
+		out.RequestsPerSecond = defaults.GetRequestsPerSecond()
+	}
+	return out
+}
+
+// Points a name at a ready instance, the policy is the slot's, nil for none
+func (t *Table) Set(name, instanceID, slotID, endpoint, model string, api v1.ApiFlavor, policy *v1.Policy) *v1.Route {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	r, ok := t.routes[name]
@@ -90,16 +133,17 @@ func (t *Table) Set(name, instanceID, slotID, endpoint, model string, api v1.Api
 		slotID = r.GetSlotId()
 	}
 	// Nothing to write when the route already says exactly this
-	if ok && r.GetInstanceId() == instanceID && r.GetEndpoint() == endpoint && r.GetModel() == model && r.GetApi() == api && r.GetSlotId() == slotID && r.GetState() == state {
+	if ok && r.GetInstanceId() == instanceID && r.GetEndpoint() == endpoint && r.GetModel() == model && r.GetApi() == api && r.GetSlotId() == slotID && r.GetState() == state && proto.Equal(r.GetPolicy(), policy) {
 		return t.snapshotLocked(r)
 	}
 	r.InstanceId, r.Endpoint, r.Model, r.Api, r.SlotId, r.State = instanceID, endpoint, model, api, slotID, state
+	r.Policy = proto.Clone(policy).(*v1.Policy)
 	t.save(r, action)
 	return t.snapshotLocked(r)
 }
 
 // Keeps a name alive with nothing behind it
-func (t *Table) Pending(name, slotID, model string) *v1.Route {
+func (t *Table) Pending(name, slotID, model string, policy *v1.Policy) *v1.Route {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	r, ok := t.routes[name]
@@ -110,6 +154,7 @@ func (t *Table) Pending(name, slotID, model string) *v1.Route {
 		action = v1.EventAction_EVENT_ACTION_CREATED
 	}
 	r.InstanceId, r.Endpoint, r.SlotId, r.State = "", "", slotID, v1.RouteState_ROUTE_STATE_PENDING
+	r.Policy = proto.Clone(policy).(*v1.Policy)
 	if model != "" {
 		r.Model = model
 	}
@@ -117,7 +162,7 @@ func (t *Table) Pending(name, slotID, model string) *v1.Route {
 	return t.snapshotLocked(r)
 }
 
-// Removes a name entirely
+// Removes a name entirely, and the instance's counter when no other name shares it
 func (t *Table) Delete(name string) (*v1.Route, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -126,6 +171,14 @@ func (t *Table) Delete(name string) (*v1.Route, bool) {
 		return nil, false
 	}
 	delete(t.routes, name)
+	delete(t.limiters, name)
+	shared := false
+	for _, other := range t.routes {
+		shared = shared || other.GetInstanceId() == r.GetInstanceId()
+	}
+	if !shared {
+		delete(t.inflight, r.GetInstanceId())
+	}
 	t.save(r, v1.EventAction_EVENT_ACTION_DELETED)
 	return t.snapshotLocked(r), true
 }
@@ -156,6 +209,7 @@ func (t *Table) RemoveInstance(instanceID string) {
 			continue
 		}
 		delete(t.routes, name)
+		delete(t.limiters, name)
 		t.save(r, v1.EventAction_EVENT_ACTION_DELETED)
 	}
 	delete(t.inflight, instanceID)
@@ -198,26 +252,60 @@ func (t *Table) Ready() []*v1.Route {
 // Counts requests served through every route
 func (t *Table) Requests() uint64 { return t.total.Load() }
 
-// Claims a route for one request, returning endpoint and release
-func (t *Table) Acquire(name string) (string, func(), error) {
+// Claims a route for one request under its policy, returning endpoint, the flavor it speaks, the policy in force, and release
+func (t *Table) Acquire(name string) (string, v1.ApiFlavor, *v1.Policy, func(), error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	r, ok := t.routes[name]
 	if !ok {
-		return "", nil, ErrNoRoute
+		return "", 0, nil, nil, ErrNoRoute
 	}
 	switch r.GetState() {
 	case v1.RouteState_ROUTE_STATE_PENDING:
-		return "", nil, ErrPending
+		return "", 0, nil, nil, ErrPending
 	case v1.RouteState_ROUTE_STATE_DRAINING:
-		return "", nil, ErrDraining
+		return "", 0, nil, nil, ErrDraining
 	}
+	policy := Effective(r.GetPolicy(), t.defaults)
 	counter := t.counterLocked(r.GetInstanceId())
+	if cap := policy.GetMaxInFlight(); cap > 0 && counter.Load() >= int32(cap) {
+		return "", 0, nil, nil, ErrBusy
+	}
+	if policy.GetRequestsPerSecond() > 0 && !t.limiterLocked(name, policy).Allow() {
+		return "", 0, nil, nil, ErrThrottled
+	}
 	counter.Add(1)
 	r.Requests++
 	t.total.Add(1)
 	release := func() { counter.Add(-1) }
-	return r.GetEndpoint(), release, nil
+	api := r.GetApi()
+	if api == v1.ApiFlavor_API_FLAVOR_UNSPECIFIED {
+		api = v1.ApiFlavor_API_FLAVOR_OPENAI
+	}
+	return r.GetEndpoint(), api, policy, release, nil
+}
+
+// Returns the route's token bucket, retuned when its policy changed
+func (t *Table) limiterLocked(name string, p *v1.Policy) *rate.Limiter {
+	burst := int(p.GetBurst())
+	if burst == 0 {
+		burst = int(math.Ceil(p.GetRequestsPerSecond()))
+	}
+	burst = max(burst, 1)
+	limit := rate.Limit(p.GetRequestsPerSecond())
+	l, ok := t.limiters[name]
+	if !ok {
+		l = rate.NewLimiter(limit, burst)
+		t.limiters[name] = l
+		return l
+	}
+	if l.Limit() != limit {
+		l.SetLimit(limit)
+	}
+	if l.Burst() != burst {
+		l.SetBurst(burst)
+	}
+	return l
 }
 
 func (t *Table) counterLocked(instanceID string) *atomic.Int32 {

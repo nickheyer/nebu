@@ -4,7 +4,7 @@
   import type { RuntimeStatus } from '$proto/runtime_pb';
   import { live, clock } from '$lib/state.svelte';
   import { ago, bytes, count, params as fmtParams } from '$lib/format';
-  import { displayTags, facetValueLabel, formatBlurb, hitSize, runtimesFor } from '$lib/catalog';
+  import { displayTags, facetValueLabel, formatBlurb, hitChips, hitSize, runtimesFor } from '$lib/catalog';
 
   let {
     hit,
@@ -12,13 +12,14 @@
     runtimes = [],
     selected = false,
     compact = false,
+    from = '',
     onOpen
-  }: { hit: SearchHit; caps?: SourceCapabilities; runtimes?: RuntimeStatus[]; selected?: boolean; compact?: boolean; onOpen: (hit: SearchHit) => void } = $props();
+  }: { hit: SearchHit; caps?: SourceCapabilities; runtimes?: RuntimeStatus[]; selected?: boolean; compact?: boolean; from?: string; onOpen: (hit: SearchHit) => void } = $props();
 
   const stored = $derived([...live.models.values()].some((m) => m.sourceId === hit.sourceId && m.repo === hit.repo));
   const size = $derived(hitSize(hit));
-  const sizes = $derived([...new Set((hit.extra['sizes'] ?? '').split(',').filter(Boolean))]);
-  const tags = $derived(displayTags(hit, compact ? 2 : 4));
+  const extras = $derived(hitChips(hit, caps));
+  const tags = $derived(displayTags(hit, caps, compact ? 2 : 4));
   const title = $derived(hit.name && hit.name !== hit.repo ? hit.name : hit.repo);
   const runners = $derived(runtimesFor(hit.formats, runtimes));
   const updated = $derived(hit.updatedAt ? ago(hit.updatedAt, clock.now) : '');
@@ -46,24 +47,19 @@
   {#if hit.private}
     <span class="inline-flex shrink-0 items-center gap-1 rounded-full border border-line bg-raised px-1.5 text-[10.5px] font-medium text-fg-muted" title="Private: only visible with a token that has access"><EyeOff size={10} /> private</span>
   {/if}
-  {#if hit.extra['nsfw']}
-    <span class="inline-flex shrink-0 items-center rounded-full border border-bad/25 bg-bad/10 px-1.5 text-[10.5px] font-medium text-bad" title="Marked adult content by the source">NSFW</span>
-  {/if}
 {/snippet}
 
 {#snippet chips()}
+  {#if from}{@render chip(from, 'info', 'The source this listing came from')}{/if}
   {#if hit.task}{@render chip(facetValueLabel(caps, 'task', hit.task), 'accent', 'What the model is for')}{/if}
   {#each runners as r (r.id)}
     <span class="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10.5px] font-medium {r.compatible ? 'border-info/30 bg-info/10 text-info' : 'border-line bg-sunken text-fg-faint'}" title={r.compatible ? `${r.name} can serve this format on this host` : `${r.name} serves this format but is not compatible with this host`}>
       <Cpu size={10} /> runs on {r.name}
     </span>
   {/each}
-  {#each hit.formats as f (f)}{@render chip(f, 'mono', formatBlurb[f] ?? `${f} weight files`)}{/each}
+  {#each hit.formats as f (f)}{@render chip(f, 'mono', formatBlurb(f))}{/each}
   {#if size.kind === 'params'}{@render chip(`${fmtParams(size.value)} params`, 'plain', `${fmtParams(size.value)} parameters. More parameters usually means smarter answers and more memory needed`)}{/if}
-  {#each sizes as s (s)}{@render chip(s, 'info', 'A size this model is published in, in parameters')}{/each}
-  {#if hit.extra['quant']}{@render chip(hit.extra['quant'], 'mono', 'Quantization, how compactly the weights are stored')}{/if}
-  {#if hit.extra['base_model']}{@render chip(hit.extra['base_model'], 'plain', 'Base model this was made for')}{/if}
-  {#if hit.extra['architecture'] && !compact}{@render chip(hit.extra['architecture'], 'faint', 'Model architecture')}{/if}
+  {#each extras as e (e.title + e.text)}{@render chip(e.text, 'plain', e.title)}{/each}
   {#each tags as t (t)}{@render chip(t, 'faint', 'Tag from the source')}{/each}
 {/snippet}
 

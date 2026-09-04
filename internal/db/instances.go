@@ -33,8 +33,8 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			}
 		}
 		if req := in.GetRequest(); req != nil {
-			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId()); err != nil {
+			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id, profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId(), req.GetProfileId()); err != nil {
 				return err
 			}
 			if err := putMap(exec, `INSERT INTO instance_request_params (instance_id, name, value) VALUES (?, ?, ?)`, id, req.GetParams()); err != nil {
@@ -127,7 +127,7 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 		return err
 	}
 	req := &v1.RunRequest{}
-	err = d.sql.QueryRowContext(ctx, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id FROM instance_requests WHERE instance_id = ?`, id).Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId)
+	err = d.sql.QueryRowContext(ctx, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, profile_id FROM instance_requests WHERE instance_id = ?`, id).Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, &req.ProfileId)
 	switch {
 	case err == sql.ErrNoRows:
 	case err != nil:

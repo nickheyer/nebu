@@ -113,7 +113,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 		if live != nil && live.GetState() == v1.InstanceState_INSTANCE_STATE_READY {
 			m.route(s, live)
 		} else {
-			m.Routes.Pending(s.GetName(), s.GetId(), modelOf(s.GetRequest()))
+			m.Routes.Pending(s.GetName(), s.GetId(), modelOf(s.GetRequest()), s.GetPolicy())
 		}
 	}
 	return nil
@@ -230,6 +230,7 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 		MemoryBytes: req.GetMemoryBytes(),
 		RuntimeId:   req.GetRuntimeId(),
 		Params:      req.GetParams(),
+		Policy:      req.GetPolicy(),
 		State:       v1.SlotState_SLOT_STATE_EMPTY,
 		CreatedAt:   timestamppb.Now(),
 		UpdatedAt:   timestamppb.Now(),
@@ -243,7 +244,7 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 	}
 	m.slots[s.GetId()] = s
 	m.mu.Unlock()
-	m.Routes.Pending(name, s.GetId(), "")
+	m.Routes.Pending(name, s.GetId(), "", s.GetPolicy())
 	m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_CREATED, s.GetId(), &v1.Event_Slot{Slot: s})
 	return proto.Clone(s).(*v1.Slot), nil
 }
@@ -268,7 +269,7 @@ func (m *Manager) checkDevices(ctx context.Context, ids []string) error {
 	return nil
 }
 
-// Changes settings that apply on the next run
+// Changes settings, the limits reaching the route at once and the rest applying on the next run
 func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Slot, error) {
 	s, err := m.find(req.GetId())
 	if err != nil {
@@ -277,13 +278,40 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 	if err := m.checkDevices(ctx, req.GetDeviceIds()); err != nil {
 		return nil, err
 	}
-	return m.update(s.GetId(), func(sl *v1.Slot) {
+	next := m.update(s.GetId(), func(sl *v1.Slot) {
 		sl.Description = req.GetDescription()
 		sl.DeviceIds = req.GetDeviceIds()
 		sl.MemoryBytes = req.GetMemoryBytes()
 		sl.RuntimeId = req.GetRuntimeId()
 		sl.Params = req.GetParams()
-	}), nil
+		sl.Policy = req.GetPolicy()
+	})
+	// A swap in flight writes the route itself when it settles
+	if next.GetState() != v1.SlotState_SLOT_STATE_SWAPPING {
+		if live := m.liveInstance(next); live != nil && live.GetState() == v1.InstanceState_INSTANCE_STATE_READY {
+			m.route(next, live)
+		} else if live == nil || live.GetState() == v1.InstanceState_INSTANCE_STATE_STARTING {
+			m.Routes.Pending(next.GetName(), next.GetId(), modelOf(next.GetRequest()), next.GetPolicy())
+		}
+	}
+	return next, nil
+}
+
+// Names the slots whose last request starts from a profile, the one a rollback
+// replays, dropping the reference when clear is set
+func (m *Manager) ProfileReferrers(refers func(ref, runtimeID string) bool, clear bool) []string {
+	var out []string
+	for _, s := range m.List() {
+		req := s.GetRequest()
+		if !refers(req.GetProfileId(), req.GetRuntimeId()) {
+			continue
+		}
+		out = append(out, "slot "+s.GetName())
+		if clear {
+			m.update(s.GetId(), func(sl *v1.Slot) { sl.Request.ProfileId = "" })
+		}
+	}
+	return out
 }
 
 // Deletes a slot, stopping its occupant when forced
@@ -433,7 +461,7 @@ func (m *Manager) swapBlueGreen(ctx context.Context, h *tasks.Handle, s *v1.Slot
 // Drains the old, starts the new, rolls back on failure
 func (m *Manager) swapDrainFirst(ctx context.Context, h *tasks.Handle, s *v1.Slot, old *v1.Instance, run *v1.RunRequest) error {
 	h.Progress(0, 3, "draining "+old.GetId())
-	m.Routes.Pending(s.GetName(), s.GetId(), modelOf(run))
+	m.Routes.Pending(s.GetName(), s.GetId(), modelOf(run), s.GetPolicy())
 	m.Instances.Drain(ctx, old.GetId(), m.DrainTimeout)
 	if _, err := m.Instances.Stop(ctx, old.GetId()); err != nil {
 		m.settle(s, nil, "", err)
@@ -506,7 +534,7 @@ func (m *Manager) settle(s *v1.Slot, serving *v1.Instance, note string, err erro
 		sl.Error = strings.TrimSpace(note + " " + err.Error())
 	})
 	if serving == nil {
-		m.Routes.Pending(s.GetName(), s.GetId(), "")
+		m.Routes.Pending(s.GetName(), s.GetId(), "", s.GetPolicy())
 	}
 }
 
@@ -517,16 +545,11 @@ func (m *Manager) mustFind(id string) *v1.Slot {
 
 // Points the slot name at an instance
 func (m *Manager) route(s *v1.Slot, in *v1.Instance) {
-	m.Routes.Set(s.GetName(), in.GetId(), s.GetId(), in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), m.api(in))
+	m.Routes.Set(s.GetName(), in.GetId(), s.GetId(), in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), m.api(in), s.GetPolicy())
 }
 
 func (m *Manager) api(in *v1.Instance) v1.ApiFlavor {
-	if m.Instances.Runtimes != nil {
-		if rt, err := m.Instances.Runtimes.Get(in.GetRuntimeId()); err == nil && rt.Manifest.GetLaunch().GetApi() != v1.ApiFlavor_API_FLAVOR_UNSPECIFIED {
-			return rt.Manifest.GetLaunch().GetApi()
-		}
-	}
-	return v1.ApiFlavor_API_FLAVOR_OPENAI
+	return m.Instances.Runtimes.API(in.GetRuntimeId())
 }
 
 // Tracks occupants started or lost outside a swap
@@ -576,7 +599,7 @@ func (m *Manager) OnInstance(rec *v1.Instance) {
 				sl.State, sl.Error = v1.SlotState_SLOT_STATE_EMPTY, ""
 			}
 		})
-		m.Routes.Pending(s.GetName(), s.GetId(), modelOf(s.GetRequest()))
+		m.Routes.Pending(s.GetName(), s.GetId(), modelOf(s.GetRequest()), s.GetPolicy())
 	}
 }
 

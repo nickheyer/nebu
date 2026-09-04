@@ -20,13 +20,15 @@ import (
 var modelscope = &Catalog{
 	ID:            "modelscope",
 	Kind:          v1.SourceKind_SOURCE_KIND_MODELSCOPE,
-	Endpoint:      "https://www.modelscope.cn",
-	TokenEnv:      "MODELSCOPE_API_TOKEN",
+	Name:          "ModelScope",
+	Transports:    []Use{httpUse("https://www.modelscope.cn", "MODELSCOPE_API_TOKEN")},
 	Description:   "ModelScope, the hub run by Alibaba",
 	RepoExample:   "org/model",
 	RepoPattern:   `^[\w.-]+/[\w.-]+$`,
 	RevisionLabel: "revision",
 	Sorts:         []string{SortRelevance, SortDownloads, SortLikes, SortUpdated},
+	Noise:         []string{".+:.+", "[a-z]{2,3}"},
+	HitFields:     []*v1.ConfigField{{Name: "architecture", Label: "Architecture", Description: "Model architecture"}},
 	API:           modelscopeAPI{},
 }
 
@@ -307,5 +309,5 @@ func (modelscopeAPI) Card(ctx context.Context, c *Client, repo, revision string)
 
 func (modelscopeAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error) {
 	q := url.Values{"Revision": {model.GetRevision()}, "FilePath": {artifact.GetPath()}}
-	return c.Range(c.URL("api", "v1", "models", model.GetRepo(), "repo")+"?"+q.Encode(), artifact)
+	return c.Range(ctx, c.URL("api", "v1", "models", model.GetRepo(), "repo")+"?"+q.Encode(), artifact)
 }

@@ -1,8 +1,16 @@
 package cli
 
 import (
+	"bytes"
+	"cmp"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -65,16 +73,14 @@ func (e *env) clients() (*clients, error) {
 	base := localBase
 	httpClient := &http.Client{}
 	addr := e.cfg.GetAddr()
-	if addr == "" && reachable(e.cfg.GetListen()) {
-		addr = e.cfg.GetListen()
+	if listen := dialable(e.cfg.GetListen(), ""); addr == "" && reachable(listen) {
+		addr = listen
 		e.log.Debug("using running daemon", "addr", addr)
 	}
 	if addr != "" {
 		e.remote = true
-		base = addr
-		if !strings.Contains(addr, "://") {
-			base = "http://" + addr
-		}
+		base = e.base(addr)
+		httpClient.Transport = e.transport(base)
 	} else {
 		log, closer, err := logger.New(quiet(e.cfg.GetLogging()))
 		if err != nil {
@@ -87,9 +93,6 @@ func (e *env) clients() (*clients, error) {
 		}
 		e.daemon = d
 		httpClient.Transport = handlerTransport{handler: d.Handler()}
-	}
-	if httpClient.Transport == nil {
-		httpClient.Transport = http.DefaultTransport
 	}
 	httpClient.Transport = authTransport{base: httpClient.Transport, token: e.cfg.GetAuth().GetToken()}
 	e.cl = &clients{
@@ -107,6 +110,87 @@ func (e *env) clients() (*clients, error) {
 		events:    nebuv1connect.NewEventServiceClient(httpClient, base),
 	}
 	return e.cl, nil
+}
+
+// Prefixes a bare address with the scheme the daemon serves
+func (e *env) base(addr string) string {
+	if strings.Contains(addr, "://") {
+		return addr
+	}
+	if e.cfg.GetTls().GetCertFile() != "" {
+		return "https://" + addr
+	}
+	return "http://" + addr
+}
+
+// Swaps an unspecified host for one this machine can dial
+func dialable(addr, host string) string {
+	h, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if ip := net.ParseIP(h); h != "" && (ip == nil || !ip.IsUnspecified()) {
+		return addr
+	}
+	if host == "" {
+		host = "localhost"
+	}
+	return net.JoinHostPort(host, port)
+}
+
+// The transport a daemon at base is dialed through, trusting its own certificate as is
+func (e *env) transport(base string) http.RoundTripper {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.ForceAttemptHTTP2 = true
+	own := e.ownCert()
+	// An address dialed by IP sends no server name, so the name checked is the one dialed
+	dialed := ""
+	if u, err := url.Parse(base); err == nil {
+		dialed = u.Hostname()
+	}
+	t.TLSClientConfig = &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true,
+		// The daemon's configured certificate needs no authority or name, anything else does
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return errors.New("tls: the server presented no certificate")
+			}
+			leaf := cs.PeerCertificates[0]
+			if own != nil && bytes.Equal(leaf.Raw, own.Raw) {
+				return nil
+			}
+			opts := x509.VerifyOptions{DNSName: cmp.Or(cs.ServerName, dialed), Intermediates: x509.NewCertPool()}
+			for _, c := range cs.PeerCertificates[1:] {
+				opts.Intermediates.AddCert(c)
+			}
+			_, err := leaf.Verify(opts)
+			return err
+		},
+	}
+	return t
+}
+
+// The certificate tls.cert_file holds, nil when unset or unreadable
+func (e *env) ownCert() *x509.Certificate {
+	file := e.cfg.GetTls().GetCertFile()
+	if file == "" {
+		return nil
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		e.log.Debug("tls.cert_file unreadable, verifying the daemon against system roots", "file", file, "err", err)
+		return nil
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil
+	}
+	return cert
 }
 
 // Reports whether something accepts connections at addr

@@ -9,7 +9,9 @@ once and never changes again.
 
 1. Zero cgo. `CGO_ENABLED=0` is enforced in the Makefile and CI. Hardware is probed through
    vendor CLIs and sysfs, never through bound libraries.
-2. Proto is the API source of truth and nothing else. The database schema is SQL migrations.
+2. Proto is the API source of truth and nothing else. The database schema is
+   `internal/db/schema.sql`, and atlas writes the migration directory from it, one init
+   migration until release, applied and recorded at startup with atlas's own revision table.
 3. Go is generic. Nothing in Go knows a model name, a GPU name, a vendor name, or a CUDA arch;
    that is data under `spec/`, decoded into proto messages and validated when it loads. Where a
    third party wire format needs code, it lives in one localized module behind a shared interface
@@ -41,6 +43,8 @@ once and never changes again.
 - **Descriptor**. Format-neutral facts read from artifact headers without downloading weights.
   Architecture parameters, tensor groups with sizes, cache shape inputs.
 - **Runtime**. A backend manifest. How to acquire it, launch it, probe it, estimate for it.
+- **Profile**. A named set of param values for one runtime. Rows in the database, one of them
+  the runtime's default, edited in the UI and never a spec file.
 - **Install**. A concrete usable copy of a runtime. Adopted, downloaded, or built.
 - **Recipe**. How to build an install. Base repo, ref, patches, flags, all templated.
 - **Estimate**. A memory plan for a model on a runtime with given params on this host.
@@ -51,6 +55,8 @@ once and never changes again.
 - **Build**. One run of a recipe on this host, keyed by the hash of everything that decides
   its bytes.
 - **Watch**. A repository the monitor checks for new revisions and weight groups.
+- **Want**. A standing search the monitor runs until a matching weight group appears, then
+  pulls and swaps it in as a watch would.
 - **Finding**. One change a check noticed, with the task it triggered.
 - **Event**. One change to any of the above, streamed to the UI.
 
@@ -112,14 +118,16 @@ nebu/
 |   +-- runtime/                   manifest model, param schema, command rendering
 |   +-- build/                     recipe engine, fetch, patch apply, hashed build cache
 |   |   +-- sandbox/               build runners, host toolchain or oci cli
-|   +-- launch/                    process launcher, output files, adoption by pid, pdeathsig
+|   +-- proc/                      process trees started, found, and stopped the same way on every os
+|   +-- launch/                    process launcher, output files, adoption by pid
 |   +-- triage/                    log pattern matcher producing hints and fixes
 +-- spec/                          every runtime and model specific lives here, never in go
 |   +-- embed.go                   go:embed of the directories below
-|   +-- runtimes/                  one manifest per backend, llamacpp.yaml, vllm.yaml, nemo.yaml
+|   +-- runtimes/                  one manifest per backend, llamacpp.yaml, vllm.yaml, sglang.yaml, nemo.yaml
 |   +-- formats/                   format descriptors, roles, file patterns, which reader parses them
 |   +-- archs/                     architecture families, cache shapes, attention variants
 |   +-- recipes/                   build recipes as templates over host facts
+|   +-- precisions/                words for a weight group by its bits per weight
 |   +-- patches/                   unified diffs recipes reference by file
 |   +-- probes/                    vendor tool invocations and output to fact mappings
 |   +-- triage/                    failure patterns mapped to summaries and hints
@@ -128,50 +136,53 @@ nebu/
 |   +-- inspect/                   resolve, describe, and plan a model before download
 |   +-- pull/                      fetch, verify, link, manifest, and export a weight group
 |   +-- installs/                  adopt, download, or build runtime binaries, run probes
+|   +-- profiles/                  named param sets per runtime as rows, one default each
 |   +-- instances/                 plan, launch, supervise, persist, recover, and route
 |   +-- calibrate/                 learned overhead corrections per runtime and arch
 |   +-- doctor/                    probes, runtimes, installs, recipes, sources, and store as checks
-|   +-- db/                        pure go sqlite, sql migrations, no proto in schema
-|   |   +-- migrations/
+|   +-- db/                        pure go sqlite, schema.sql is the truth, atlas migrations, no proto in schema
+|   |   +-- migrations/            one init migration and its atlas.sum until release
 |   +-- rpc/
 |   |   +-- server.go              connect server, h2c, interceptors, auth, web ui mount
 |   |   +-- services/              one file per proto service
 |   +-- tasks/                     task engine, progress fan-out, cancellation, stored history
 |   +-- slots/                     slot manager, reservations, swaps
-|   +-- gateway/                   openai-compatible reverse proxy and the route table
-|   +-- monitor/                   watches monitored models for new revisions and quants
+|   +-- gateway/                   openai, anthropic, and ollama flavors over one canonical chat, the route table, limits
+|   +-- monitor/                   watches monitored models for new revisions and quants, runs wants
+|   +-- notify/                    posts findings and failed instances to webhooks
 |   +-- cli/                       client subcommands over connect, table and json output
 +-- web/
 |   +-- nebu/                      sveltekit static app embedded into the binary
 |       +-- embed.go               go:embed of dist with a single page fallback
 |       +-- src/lib/proto/         generated connect-es client, never hand edited
 |       +-- src/lib/               api client, live state fed by events, shared components
-|       +-- src/routes/            overview, catalog, store, runtimes, slots, instances, tasks, monitor, gateway, host, settings
+|       +-- src/routes/            overview, catalog, store, runtimes, slots, instances, tasks, monitor, gateway, chat, host, settings
 |       +-- static/                openapi output
-+-- test/
-|   +-- fixtures/
-|       +-- gguf/                  real headers with tensor data truncated
-|       +-- safetensors/           shard headers and config.json samples
-|       +-- probes/                captured vendor tool outputs across vendors
-|       +-- logs/                  captured runtime logs for triage tests
 +-- docs/                          user docs
 +-- scripts/                       release and ci helpers
-+-- .github/workflows/             ci with cgo guard, gen check, spec validation, tests
++-- .github/workflows/             ci with gen check, lint (vet, cgo guard, embedded spec test, web check), tests, build
 ```
 
 ## Sources
 
-A **transport** moves bytes and listings: HTTP, OCI distribution, filesystem, git with or without
-LFS, the Hugging Face CLI. Each is one Go type behind one interface. New transports are code.
+A **transport** moves bytes and listings: HTTP, OCI distribution, filesystem, git with LFS, the
+Hugging Face CLI. Each is one Go type behind one interface with three methods, list, open, and
+read, over a locator in the transport's own terms. Each declares the settings it reads, an
+endpoint, a token variable, a directory, with a type. New transports are code.
 
-A **provider** is a hosted platform and the wire format it speaks: Hugging Face, Docker Hub,
-GitHub, Ollama, ModelScope, Civitai, Kaggle, NGC, CSGHub, a host filesystem, a nebu mirror. Each
-is one Go module that names the transports it uses and implements the catalog API: search,
-resolve, revisions, card, open. Providers are code. There are no source spec files, because a
-provider is a protocol and a protocol needs a program, not a table.
+A **provider** is a hosted platform and the wire format it speaks: Hugging Face, an OCI registry
+with Docker Hub seeded, GitHub, any git host, Ollama, ModelScope, Civitai, Kaggle, NGC, CSGHub, a
+host filesystem, a nebu mirror. Each is one Go module that names the transports it uses with the
+defaults their settings take, and implements the catalog API: search, resolve, revisions, card,
+open. Providers are code. There are no source spec files, because a provider is a protocol and a
+protocol needs a program, not a table. The settings a provider accepts are the union of its
+transports' settings, the primary transport owning the bare names and every other one prefixing
+its own, and the provider publishes that list through its capabilities so the UI renders the form
+without knowing any provider by name.
 
-A **source** is an instance of a provider with its own configuration, whatever that provider plus
-its transports need: endpoint, credential, namespace, path. Sources are rows in the database. The
+A **source** is an instance of a provider with its own settings, a map of names to values the
+provider validates on create and update: unknown names are refused, URLs need a scheme, variables
+are environment variable names, required ones must be set. Sources are rows in the database. The
 config file is an idempotent bootstrap: an entry creates the source when no source with that name
 exists and otherwise leaves it alone. The web UI creates, edits, and removes sources. Providers
 that work without configuration, such as Hugging Face, Docker Hub, and GitHub, get one seeded
@@ -182,8 +193,9 @@ update, and delete, so every consumer follows the change without a restart. A ro
 cannot be built stays listed with its error instead of failing the daemon.
 
 Users see sources and never providers or transports. The catalog merges every source of a
-provider into one listing, shows which source a hit came from, and filters by source where the
-provider allows it.
+provider into one listing, shows which source a hit came from, and narrows to one source on
+request. GitHub is also where runtimes come from: a recipe's latest ref and a prebuilt rule's
+asset resolve through the seeded `github` source's releases, so one release parser serves both.
 
 ## Flows
 
@@ -194,7 +206,8 @@ provider allows it.
 3. The estimator places tensor groups and caches into the host's memory pools once per
    runtime manifest and candidate param set.
 4. The result is a table of quant by runtime by context length, each marked fits, partial,
-   or no, with the plan that produced it.
+   or no, with the plan that produced it, once against the whole memory and once against what
+   is free right now, since a run plans against free memory.
 
 **Pull** runs as a task and is safe to interrupt at any point.
 
@@ -221,7 +234,7 @@ unchanged host is a cache hit.
 1. The host profile selects a variant, the first whose `when` holds and whose tools are on
    PATH, unless the request names one. Vars render in key order against the host env,
    the variant, and the ref, and request vars override them.
-2. The ref resolves. `latest` reads the release feed for the newest tag. The recipe, variant,
+2. The ref resolves. `latest` asks the github source for the newest release. The recipe, variant,
    vars, ref, sandbox, image, selected host facts, and patch contents are hashed into the
    build id. A finished build with that id whose binary and install still exist is returned
    at once unless the request forces a rebuild.
@@ -234,25 +247,35 @@ unchanged host is a cache hit.
 5. Outputs are copied out of the tree, the binary is checked, and the install is recorded
    with the manifest probes run against it. Builds, like installs, are rows in the store.
 
-**Run** is where the runtime becomes the ground truth.
+**Run** is where the runtime becomes the ground truth. The loop has been closed on an RTX
+3080 Ti: llama.cpp's own model and cache buffers match the plan to the byte, the overhead term
+is fitted to what the card reported, and the two measured runs live under
+`pkg/estimate/testdata/measured` as fixtures the planner is held to.
 
 1. The stored manifest supplies the link paths and descriptor. The host is probed again and
    the planner runs against free memory, so a second model plans around the first.
-2. Solved params replace `auto`, the runtime package renders the command and environment
+2. Params layer in one order everywhere a plan is made: the runtime's default profile or the
+   profile the request names, then the slot's defaults, then the request's own. The manifest
+   types every param and refuses unknown names or values of the wrong type, so the web form is
+   built from the manifest and profiles are validated when they are written.
+3. Solved params replace `auto`, the runtime package renders the command and environment
    from the manifest templates, which also see the descriptor, and a free loopback port is
    picked.
-3. The process launcher starts it in its own process group with its output appended to a
+4. The process launcher starts it in its own process group with its output appended to a
    file under the data dir, follows that file into a ring, and polls the manifest's health
-   check until it answers. On Linux the child also gets a parent-death signal.
-4. The route table maps the public model name to the instance endpoint and the gateway
+   check until it answers. The child is one tree on every OS through `pkg/proc`: a process
+   group with a parent-death signal on Linux, a process group elsewhere on Unix, and a job
+   object on Windows that ends with the daemon, so a runtime and whatever it spawned stop
+   together and a restart finds a survivor by pid and command line.
+5. The route table maps the public model name to the instance endpoint and the gateway
    proxies by that name. Routes are rows in the store.
-5. Report rules parse the runtime's own allocation lines into measurements, and the device
+6. Report rules parse the runtime's own allocation lines into measurements, and the device
    free-memory delta feeds the calibration table, which shifts the estimator's overhead
    term for that runtime and architecture on the next plan.
-6. On failure or unexpected exit, triage matches the output against the pattern catalog
+7. On failure or unexpected exit, triage matches the output against the pattern catalog
    and the hint, with any suggested params, travels back on the task and the instance
    record.
-7. Every state change writes the instance row, so `ps --all`, `show`, and `logs` answer for
+8. Every state change writes the instance row, so `ps --all`, `show`, and `logs` answer for
    instances that ended before the daemon last started.
 
 **Recovery** runs before the daemon listens. Tasks left unfinished are marked failed. For each
@@ -268,8 +291,9 @@ instance bound to them and route it as soon as it answers health, and route rows
 pending until an instance is adopted or relaunched.
 
 **Installs** are adopted from a path or PATH, or downloaded through a prebuilt rule whose
-`when` expression selects the release for the probed host. Manifest probes run the binary
-once to capture its version and the devices it sees.
+`when` expression selects the release for the probed host; every asset the rule lists is taken
+from one release and unpacked into one directory. Manifest probes run the binary once to
+capture its version and the devices it sees.
 
 **Slots** reserve devices and a memory budget under one public name. A run bound to a slot
 plans against the slot's device pools capped at the budget, inherits the slot's default
@@ -305,6 +329,11 @@ web UI holds one subscription and renders from it, so nothing polls.
 - One file per service under `internal/rpc/services`.
 - A bearer token on the API when `auth.token` is set, checked by one interceptor for unary
   and streaming calls. Gateway keys are separate under `gateway.api_keys`.
+- TLS with HTTP/2 on every listener when `tls.cert_file` and `tls.key_file` are set, and a
+  warning at start for a listener beyond loopback without TLS, a token, or keys.
+- Every gateway path answers CORS preflights, narrowed to `gateway.cors_origins` when set.
+- One `Policy` of in flight cap, rate, burst, request timeout, and upstream timeout on the
+  gateway, every slot inheriting the fields it leaves at zero.
 
 ## Deliberate departures
 
@@ -341,11 +370,14 @@ a file with the same `id` into a directory listed in `spec_dirs`, which always i
   attaches files across a directory tree. A weight whose format requires files the repository
   lacks falls through to the next format that claims it.
 - `archs/` is `ArchSpec`. A regex over the architecture name and formulas such as
-  `cache_per_token` evaluated with the descriptor params in scope.
+  `cache_per_token` evaluated with the descriptor params and the run params in scope. Formulas
+  may use one another in any order, so a sliding window family declares which layers keep the
+  window and folds `n_ctx` and `n_swa` into one per token figure.
 - `runtimes/` is `RuntimeManifest`. Accepted formats, host constraints as expressions,
   acquisition including the recipe id, launch templates with an optional prepare step, typed
   params with their flags, the estimate policy, and report rules for calibration.
-- `recipes/` is `Recipe`. Source as release feed, ref, archive, or repo templates, patches
+- `recipes/` is `Recipe`. Source as a releases repository at a source, ref, archive, or repo
+  templates, patches
   with conditions, variants selected by host expressions with their tools and vars, the
   sandbox, steps as templated argv, outputs, and the binary.
 - `patches/` holds unified diffs a recipe patch names through `file`.
@@ -360,9 +392,14 @@ pick a flag by what the checkpoint holds.
 ## Planner
 
 The estimate policy is the only place a runtime's memory behaviour is described. Each
-tensor group kind maps to a pool and, when offloadable, to the param that counts it. The
-planner puts fixed kinds where the policy says, then searches offload counts in spill
-priority order, most protected kind outermost, taking layers from the end first. A kind
+tensor group kind maps to a pool and, when offloadable, to the param that counts it. Device
+capacity is the sum of every device pool for a runtime that spreads layers across devices,
+or the largest pools up to the count a param names when the policy sets `devices_param`, so
+vLLM at tensor parallel one plans on one card. A slot's budget caps each of its device pools
+rather than their total, because runtimes allocate per device and a total could not say which
+card overflows. The planner puts fixed kinds where the policy says, then searches offload
+counts in spill priority order, most protected kind outermost, taking layers from the end
+first. A kind
 that `requires` another can only sit on device where its parent does. Cache bytes follow
 the layer kind, overhead sits on device, and the solved counts come back as params ready
 to render as flags. The verdict is FITS when every offloadable item is on device, PARTIAL

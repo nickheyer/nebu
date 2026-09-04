@@ -21,7 +21,7 @@ func TestEmbeddedSpecsCompile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Probes) == 0 || len(c.Formats) == 0 || len(c.Archs) == 0 || len(c.Runtimes) == 0 || len(c.Triage) == 0 || len(c.Recipes) == 0 {
+	if len(c.Probes) == 0 || len(c.Formats) == 0 || len(c.Archs) == 0 || len(c.Runtimes) == 0 || len(c.Triage) == 0 || len(c.Recipes) == 0 || len(c.Precisions) == 0 {
 		t.Fatalf("catalog incomplete: %+v", c)
 	}
 	for _, p := range c.Probes {
@@ -32,7 +32,7 @@ func TestEmbeddedSpecsCompile(t *testing.T) {
 	if _, err := formats.NewClassifier(c.Formats); err != nil {
 		t.Error(err)
 	}
-	if _, err := descriptor.New(c.Formats, c.Archs); err != nil {
+	if _, err := descriptor.New(c.Formats, c.Archs, c.Precisions); err != nil {
 		t.Error(err)
 	}
 	if _, err := runtime.New(c.Runtimes); err != nil {

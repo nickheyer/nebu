@@ -1,0 +1,22 @@
+id: darwin-cpu
+description: CPU model and counts from sysctl
+os: [darwin]
+exec:
+  command: sysctl
+  args: [machdep.cpu.brand_string, hw.physicalcpu, hw.logicalcpu]
+parse:
+  kind: PARSE_KIND_KV
+emit:
+  device:
+    kind: DEVICE_KIND_CPU
+    vendor: apple
+    id: cpu-0
+    name: "{{.machdep_cpu_brand_string}}"
+    facts:
+      cores: "{{.hw_physicalcpu}}"
+      siblings: "{{.hw_logicalcpu}}"
+  facts:
+    - key: cpu.model
+      value: "{{.first.machdep_cpu_brand_string}}"
+    - key: cpu.threads
+      value: "{{.first.hw_logicalcpu}}"

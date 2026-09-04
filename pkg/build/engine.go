@@ -14,6 +14,8 @@ import (
 	"github.com/nickheyer/nebu/pkg/build/sandbox"
 	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/sources"
+	"github.com/nickheyer/nebu/pkg/transfer"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -27,6 +29,10 @@ type Engine struct {
 	Root    string
 	Patches map[string][]byte
 	Jobs    int
+	// Where a latest ref reads releases from
+	Sources *sources.Registry
+	// Moves archives and patches under the transfer limits
+	Fetcher *transfer.Fetcher
 	Log     *slog.Logger
 }
 
@@ -49,12 +55,18 @@ func (s *Selection) Build() *v1.Build {
 func (e *Engine) Resolve(ctx context.Context, s *Selection, b *v1.Build) error {
 	rc := s.Recipe
 	tctx := s.context()
-	if rc.release != nil && (b.Ref == "" || b.Ref == Latest) {
-		feed, err := rc.release.Render(tctx)
+	if rc.releases != nil && (b.Ref == "" || b.Ref == Latest) {
+		repo, err := rc.releases.Render(tctx)
 		if err != nil {
 			return err
 		}
-		tag, err := latestTag(ctx, strings.TrimSpace(feed))
+		sourceID := DefaultReleaseSource
+		if rc.source != nil {
+			if sourceID, err = rc.source.Render(tctx); err != nil {
+				return err
+			}
+		}
+		tag, err := latestTag(ctx, e.Sources, strings.TrimSpace(sourceID), strings.TrimSpace(repo))
 		if err != nil {
 			return fmt.Errorf("resolve release: %w", err)
 		}
@@ -242,7 +254,7 @@ func (e *Engine) fetch(ctx context.Context, s *Selection, b *v1.Build, tctx map[
 				return "", err
 			}
 		}
-		if err := fetchArchive(ctx, strings.TrimSpace(rawURL), filepath.Join(e.Root, cacheDirName), dest, strings.TrimSpace(subdir), out); err != nil {
+		if err := e.fetchArchive(ctx, strings.TrimSpace(rawURL), dest, strings.TrimSpace(subdir), out); err != nil {
 			return "", err
 		}
 		return b.GetRef(), nil
@@ -251,7 +263,7 @@ func (e *Engine) fetch(ctx context.Context, s *Selection, b *v1.Build, tctx map[
 		if err != nil {
 			return "", err
 		}
-		return fetchGit(ctx, strings.TrimSpace(repo), b.GetRef(), dest, out)
+		return sources.Checkout(ctx, strings.TrimSpace(repo), b.GetRef(), dest, out)
 	}
 	return b.GetRef(), os.MkdirAll(dest, 0o755)
 }
@@ -274,7 +286,7 @@ func (e *Engine) patch(ctx context.Context, s *Selection, b *v1.Build, out io.Wr
 			data = e.Patches[p.spec.GetFile()]
 		default:
 			cached := filepath.Join(e.Root, cacheDirName, cacheName(p.spec.GetUrl()))
-			if err := download(ctx, p.spec.GetUrl(), cached, out); err != nil {
+			if err := e.download(ctx, p.spec.GetUrl(), cached, out); err != nil {
 				return fmt.Errorf("patch %s: %w", p.spec.GetId(), err)
 			}
 			var err error

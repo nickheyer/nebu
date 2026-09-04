@@ -17,54 +17,7 @@ Rules for whoever works this list:
 
 DO NOT WRITE TESTS JUST TO WRITE TESTS, NO MATTER WHAT THE BELOW SAYS. YOU SHOULD BE JUSTIFYING EVERY SINGLE LINE OF CODE AND ALWAYS BE LOOKING FOR EXISTING CODE THAT CAN BE CONSOLIDATED OR REMOVED ENTIRELY, REGARDLESS OF WHAT YOU ARE WORKING ON OR HOW LONG THAT CODE HAS BEEN THERE. ZERO EXCUSES. 
 
-## Configuration and sources
-
-5. **Provider config schemas.** Each provider declares the fields a source of it accepts, per
-   transport it uses: endpoint, credential, namespace, path, each with a type and whether it is
-   required. The declaration is a generic field list in `SourceCapabilities`; the values are a
-   `map<string,string>` on `Source` that the provider validates on create and update. That
-   replaces the `options` map nothing reads today. The UI renders the form from the declaration
-   and never knows a provider by name.
-
-6. **Transports behind one interface.** `HTTP`, `Distribution`, and the file blob in
-   `pkg/sources` are concrete types provider modules reach for directly. Define one transport
-   interface, put those three behind it, then add git with and without LFS and the Hugging Face
-   CLI. A provider names the transports it uses. Then add GitHub as a provider on git plus the
-   releases API, and route the two hand rolled GitHub release parsers through it: `latestTag` in
-   `pkg/build/fetch.go` and `resolveAsset` in `internal/installs/installs.go`.
-
-7. **Sources in the UI.** The settings page creates, edits, and deletes sources from the schema in
-   item 5. The catalog page merges every source of a provider into one listing, marks which
-   source each hit came from, and filters by source where the provider allows it. Depends on 4
-   and 5.
-
 ## Verify against the real world
-
-8. **No CUDA prebuilt rule for Linux.** `spec/runtimes/llamacpp.yaml` has ROCm, Vulkan, CPU,
-   arm64, and macOS rules; an NVIDIA Linux host matches the Vulkan rule. The CUDA build is two
-   archives, the binary and the cudart companion, and `PrebuiltRule` holds one asset pattern. Give
-   the rule a list of assets in the proto, then add the CUDA rule above the Vulkan one with a
-   vendor check in its `when`. Proto plus yaml, no vendor names in Go.
-
-9. **Slot device pinning is not wired.** The slots and spec docs describe pinning through launch
-   env templates; the shipped llama.cpp manifest has no `env` block. Add one, or render
-   llama-server's `--device` flag, which also covers Vulkan and ROCm. Either way it is a change to
-   the manifest yaml with zero Go. Until then a slot on a two GPU host confines the plan but not
-   the process.
-
-11. **The estimator has never been calibrated on hardware.** Close the calibration loop against a
-    real card and keep a fixture of plan versus measured `n_swa` is
-    extracted by both formats and used nowhere, so sliding window models overshoot; the fix is a
-    cache formula in `spec/archs/` that knows which layers use the window, no Go. Device pools are
-    summed into one capacity, which matches llama.cpp's layer split but is wrong for vLLM at
-    tensor parallel one; add a field to `EstimatePolicy` saying whether the runtime spans devices.
-    A slot budget caps each device pool today; Whether it should cap each pool or the total across
-    the slot's devices is whatever you can anecdotaly prove is the better option, or both if you
-    cant.
-
-12. **Catalog says fits, run says no.** Inspect plans against total memory, run plans against free
-    memory. The fit table shows both verdicts, labelled, and the inspector takes a
-    flag for free versus total.
 
 13. **Civitai browses, NGC serves.** Nick decided. The diffusion work that served Civitai's
     checkpoints was removed; Civitai checkpoints classify as nothing and the catalog lists them
@@ -84,38 +37,69 @@ DO NOT WRITE TESTS JUST TO WRITE TESTS, NO MATTER WHAT THE BELOW SAYS. YOU SHOUL
 
 ## Runtimes and parameters
 
-14. **Runtime knobs are per run only.** Params carry type, choices, and description in the
-    manifest; the run dialog is a free text box. Build a typed form from `manifest.params`. Add
-    per runtime default profiles as rows in the database, the same pattern as sources, not as
-    spec files: spec is seeded, profiles are user data. Let the UI edit them. README goal two
-    asked for configuring providers with all their knobs.
+14. **Runtime knobs are profiles now.** Done. A profile is a named param set for one runtime,
+    rows in the database like sources, never a spec file, one per runtime marked default. Params
+    layer in one order everywhere a plan is made, in `instances.prepare` and in the inspector's
+    estimate and fit table: the default or named profile, then the slot's defaults, then the
+    request's own. A named profile picks its runtime when nothing else does, and a watch names the
+    profile its swaps start from. `nebu profiles` lists, adds, updates, and removes them by id or
+    name, `--profile` rides on `run`, `swap`, and `monitor add`. The web run, slot, and watch
+    dialogs share `ParamForm`, a typed form built from `manifest.params` with types, choices,
+    descriptions, and inherited values as placeholders, and the runtimes page edits profiles
+    through the same form. Manifests validate every profile write. `nebu inspect --profile` and `--slot`
+    plan the same way, the inspector applies the same calibration delta a run does, a watch or
+    want resolves its profile when added and keeps the id, and a profile anything names is
+    removed only with `--force`, which clears the references.
 
-15. **Two runtimes.** which backend is next. Adding it is a manifest plus a
-    recipe plus triage rules, and it is the test that the manifest schema is not shaped around
-    llama.cpp.
+15. **Four runtimes.** Done. llama.cpp, vLLM, SGLang, and NeMo each ship as a manifest, a
+    recipe, and triage rules under `spec/`, and no Go file names any of them. SGLang was the
+    test: a Python module launched from its venv interpreter, `-m sglang.launch_server`, with a
+    probe that imports the package, and the schema needed nothing new. vLLM gained the slot device
+    pinning env the llama.cpp manifest already had. NeMo and SGLang still need a host with an
+    NVIDIA GPU to run, item 21.
 
-16. **Domain knowledge leaked into the web client.** `web/nebu/src/lib/catalog.ts` hard codes
-    quant name regexes, bit widths, K quant flavors, Hub housekeeping tags, per format blurbs, and
-    source display names. That belongs in data the daemon serves: the precision table and blurb on
-    `FormatSpec`, housekeeping tags and display name on the provider's `Catalog` struct exposed
-    through `SourceCapabilities`. The client keeps no tables.
+16. **The web client keeps no tables.** Done. `FormatSpec` carries `blurb` and `precisions`,
+    rules that read a group's width, label, and notes from its name or a metadata key, and the
+    new `spec/precisions/` table puts each bit width into words. The descriptor builder writes
+    the result as `Descriptor.precision`, so the fit table and the drawer show what the daemon
+    said. `RuntimeService.ListFormats` serves the format specs and the client reads them once per
+    connection. The Hub's housekeeping tags sit on its `Catalog` as `Noise` and reach the client
+    as `SourceCapabilities.hidden_tags`. Source and provider names were already daemon data.
 
 ## Gateway and operations
 
-17. **No limiters or policy.** The gateway counts requests but has no rate limit, concurrency cap,
-    per route timeout, or upstream timeout, so a hung runtime hangs the client and the drain
-    counter forever. The store has no size cap or eviction. Transfer has one global rate limit and
-    no schedule. Each is its own change; do not bundle them.
+17. **Limiters and policy.** Done as three changes. Gateway: `Policy` on `gateway.policy` and
+    on every slot, in flight cap, token bucket rate and burst, request timeout, and upstream
+    timeout, each zero field of a slot inheriting the gateway's, enforced in `Table.Acquire` and
+    the proxy, answering `429` and `504`, with the upstream timeout defaulting to ten minutes so a
+    hung runtime never holds a drain. Store: `store.max_bytes` with `Store.Evict`, which removes
+    the models unused longest before a pull, sparing what runs and what slots relaunch, and
+    `used_at` touched by every run. Transfer: `transfer.windows`, spans of the week with their own
+    rate or a pause, followed live by one retuned token bucket in `transfer.Schedule`. Eviction and gc
+    wait for pulls in flight and drop only the evicted model's orphaned blobs, the model being
+    pulled is spared, planning does not touch `used_at`, and recipe fetches and CLI or LFS
+    downloads follow the limits and paused windows too.
 
-18. **One API flavor, one transport.** `ApiFlavor` has one value. The listener is plain HTTP with
-    one shared bearer token and no warning about binding beyond loopback. A separate gateway
-    listener will hit CORS from the browser. Add TLS or document the reverse proxy, and add CORS
-    on the gateway listener. Anthropic AND Ollama compatible flavor is
-    in scope.
+18. **Three flavors, TLS, and CORS.** Done. `ApiFlavor` names OpenAI, Anthropic, and Ollama,
+    each one `Flavor` in `internal/gateway` that reads and writes requests, answers, streams, and
+    errors over one canonical chat, so the gateway serves any client format from any runtime
+    format and passes matching ones through untouched. Ollama's tags, ps, show, and version and
+    Anthropic's model list answer from the route table. Every gateway path answers CORS
+    preflights, narrowed by `gateway.cors_origins`. `tls.cert_file` and `tls.key_file` put the
+    API, web UI, and gateway behind TLS with HTTP/2, and a listener beyond loopback without TLS,
+    a token, or keys is warned about at start. The CLI dials https and trusts the configured
+    certificate, preflights allow whatever headers the SDK asks, `/v1/models/NAME`, the Ollama
+    heartbeat at `/`, `count_tokens` through the runtime's `/tokenize` or an estimate, and 413
+    on oversized bodies answer too, and a slot's limit edits reach its live route at once.
 
-19. **Windows is unsupported without saying so.** Adoption, process groups, and parent death
-    signals are stubbed on non unix, they should not be. nebu is built for every operating system.
-    end of story. 
+19. **Every operating system.** Done. `pkg/proc` is the one place processes are started, found,
+    and stopped: a group with a parent-death signal on Linux, a group elsewhere on Unix, and on
+    Windows a console process group inside a job object that dies with the daemon, killed as a
+    tree, found again by pid and command line, and interrupted with a console break. The launcher
+    and the build sandbox both use it. Windows storage reads the volume, and Windows and macOS
+    hosts get memory and CPU probes, so planning has a host pool everywhere. The tree compiles for
+    linux, windows, darwin, and freebsd. Windows and macOS probe GPUs of any vendor, macOS counts
+    reclaimable pages as free, and the prepare step runs under `pkg/proc` too.
 
 ## NeMo
 
@@ -127,13 +111,32 @@ DO NOT WRITE TESTS JUST TO WRITE TESTS, NO MATTER WHAT THE BELOW SAYS. YOU SHOUL
 
 ## Catalog and tests
 
-20. **One provider at a time.** After item 7 the catalog merges sources within a provider. This
-    item is search across providers, a wanted list, and notifications beyond the monitor page.
+20. **Every source at once, wanted models, and notifications.** Done. `Registry.Search` fans a
+    request with no source and no kind out to every source, the same code the provider merge
+    used, and the catalog has an All tab, `nebu search` doing the same by default. A `Want` is a
+    standing search kept as a row: query, provider or source, format, group regex, and the pull
+    and swap settings a watch has; the monitor runs it on the interval, resolves the first hits,
+    and the first matching weight group satisfies it with a `wanted_found` finding, a pull, and a
+    swap. Findings now name their source and belong to a watch or a want. Every finding reaches
+    the web UI as a toast wherever you are, desktop notifications are a settings toggle, and
+    `notify.webhooks` posts each finding and each failed instance as JSON. Findings list by
+    want id, a satisfied want looks again with `--rearm`, and the notifier exits with the daemon.
 
 ## Interactive
 
-21. **Prompts** Should easily be able to build a somewhat primitive way to prompt loaded models through a chat ui or other medium, in a "debug" session sort of way. From ui and cli if possible.
+21. **Prompts.** Done. The web chat page and `nebu chat` both talk to a ready route through the
+    gateway itself, streaming, with a system prompt, temperature, and a token cap, showing tokens
+    and tokens per second per answer. A running instance's drawer opens the chat on it. `nebu chat` checks the
+    route is ready first, and a slot instance's drawer opens the chat on the slot name.
 
 ## DB
 
-22. Flatten the migrations into 1, install atlas like ~/code/discopanel, do that and there should only ever be 1 migration until we release. 
+22. **One migration, written by atlas.** Done. `internal/db/schema.sql` is the schema, `atlas.hcl`
+    points atlas at it, and `make migrate-reset` writes the single init migration and its
+    `atlas.sum` from it, the rule until release, with `migrate-diff`, `migrate-hash`,
+    `migrate-validate`, and `migrate-status` beside it through the same docker image discopanel
+    uses. The daemon applies the embedded directory with atlas's executor and revision table, checks
+    the directory against `atlas.sum` first, logs any drift between the live schema and
+    `schema.sql`, and sets a database from the hand rolled runner aside as a dated copy instead of
+    failing on it. A database whose revision the rewritten directory no longer holds is
+    diffed against `schema.sql`, brought to the head in place with its rows kept, and baselined. 

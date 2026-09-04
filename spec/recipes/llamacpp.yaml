@@ -2,7 +2,7 @@ id: llamacpp
 runtime_id: llamacpp
 description: llama-server built from a release tag with the backend the host selects
 source:
-  release: https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=5
+  releases: ggml-org/llama.cpp
   ref: latest
   archive: https://github.com/ggml-org/llama.cpp/archive/refs/tags/{{.ref}}.tar.gz
 tools: [cmake]
@@ -25,18 +25,18 @@ variants:
     vars:
       backend: -DGGML_HIP=ON
       archs: ''
+  - id: metal
+    description: Metal on Apple silicon
+    when: os == "darwin" && arch == "arm64"
+    vars:
+      backend: -DGGML_METAL=ON
+      archs: ''
   - id: vulkan
     description: Vulkan shaders, works on any GPU with a Vulkan driver
     when: any(devices, .kind == "gpu")
     tools: [glslc]
     vars:
       backend: -DGGML_VULKAN=ON
-      archs: ''
-  - id: metal
-    description: Metal on Apple silicon
-    when: os == "darwin" && arch == "arm64"
-    vars:
-      backend: -DGGML_METAL=ON
       archs: ''
   - id: cpu
     description: CPU only with native instruction selection

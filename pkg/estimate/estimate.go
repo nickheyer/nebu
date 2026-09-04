@@ -94,6 +94,7 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 		overhead = uint64(max(float64(overhead)+in.OverheadDelta, 0))
 	}
 	primary, host := pools(in.Host)
+	primary = p.spanned(primary, in.Params)
 	margin := 1 - p.spec.GetMargin()
 	s := &solver{byKind: map[v1.TensorGroupKind]*bucket{}}
 	for _, pl := range primary {
@@ -178,6 +179,25 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 	return plan, nil
 }
 
+// Keeps the largest pools a run spans when the policy names a param counting them
+func (p *Policy) spanned(primary []*v1.MemoryPool, params map[string]any) []*v1.MemoryPool {
+	name := p.spec.GetDevicesParam()
+	if name == "" {
+		return primary
+	}
+	n, err := eval.Number(params[name])
+	if err != nil || n < 1 {
+		n = 1
+	}
+	if int(n) < len(primary) {
+		return primary[:int(n)]
+	}
+	return primary
+}
+
+// Builds the expression scope: descriptor params, run params, cache element
+// sizes, then the arch formulas, evaluated in passes so a formula can use
+// another whatever order the file lists them in
 func (p *Policy) env(in Input) (map[string]any, error) {
 	env := map[string]any{}
 	for k, v := range in.Descriptor.GetParams() {
@@ -191,17 +211,27 @@ func (p *Policy) env(in Input) (map[string]any, error) {
 		cache[k] = v
 	}
 	env["cache_bytes"] = cache
-	names := make([]string, 0, len(in.Formulas))
+	pending := make([]string, 0, len(in.Formulas))
 	for name := range in.Formulas {
-		names = append(names, name)
+		pending = append(pending, name)
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		v, err := in.Formulas[name].Float(env)
-		if err != nil {
-			return nil, fmt.Errorf("formula %s: %w", name, err)
+	sort.Strings(pending)
+	errs := map[string]error{}
+	for len(pending) > 0 {
+		var left []string
+		for _, name := range pending {
+			v, err := in.Formulas[name].Float(env)
+			if err != nil {
+				errs[name] = err
+				left = append(left, name)
+				continue
+			}
+			env[name] = v
 		}
-		env[name] = v
+		if len(left) == len(pending) {
+			return nil, fmt.Errorf("formula %s: %w", left[0], errs[left[0]])
+		}
+		pending = left
 	}
 	return env, nil
 }

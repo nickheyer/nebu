@@ -1,0 +1,83 @@
+id: sglang
+name: SGLang
+description: sglang.launch_server over safetensors checkpoints, a Python module run from its virtual environment
+formats: [safetensors]
+constraints:
+  - expr: any(devices, .vendor == "nvidia")
+    message: an NVIDIA GPU
+acquire:
+  recipe_id: sglang
+probes:
+  - key: version
+    args: [-c, 'import sglang; print(sglang.__version__)']
+    match: '(?P<value>\d+\.\d+[\w.+-]*)'
+    timeout_ms: 60000
+launch:
+  command: '{{.install.path}}'
+  args: ['-m', 'sglang.launch_server', '--model-path', '{{index .artifacts "weights_dir"}}', '--host', '{{.host}}', '--port', '{{.port}}']
+  # A slot pins the process to its devices, an empty render is dropped so no slot means every device
+  env:
+    CUDA_VISIBLE_DEVICES: '{{$first := true}}{{range .devices}}{{if eq .vendor "nvidia"}}{{if not $first}},{{end}}{{$first = false}}{{.id}}{{end}}{{end}}'
+  health:
+    path: /health
+    interval_ms: 2000
+    timeout_ms: 1800000
+  api: API_FLAVOR_OPENAI
+  stop_grace_ms: 30000
+params:
+  - name: n_ctx
+    type: PARAM_TYPE_INT
+    default: '8192'
+    flag: --context-length
+    description: Context length in tokens
+  - name: mem_fraction_static
+    type: PARAM_TYPE_FLOAT
+    default: '0.88'
+    flag: --mem-fraction-static
+    description: Fraction of device memory for weights and the cache pool
+  - name: kv_cache_dtype
+    type: PARAM_TYPE_STRING
+    default: auto
+    choices: [auto, fp8_e5m2, fp8_e4m3]
+    flag: --kv-cache-dtype
+    description: Cache element type
+  - name: tp_size
+    type: PARAM_TYPE_INT
+    default: '1'
+    flag: --tp-size
+    description: Devices to shard across
+  - name: chunked_prefill_size
+    type: PARAM_TYPE_INT
+    default: '8192'
+    flag: --chunked-prefill-size
+    description: Prompt tokens prefilled per step, smaller uses less memory
+  - name: served_model_name
+    type: PARAM_TYPE_STRING
+    default: '{{.name}}'
+    flag: --served-model-name
+    description: Model name reported in responses, the instance name by default
+estimate:
+  groups:
+    - kind: TENSOR_GROUP_KIND_EMBEDDING
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_LAYER
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_EXPERTS
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_OUTPUT
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_OTHER
+      pool: POOL_KIND_DEVICE
+  cache_bytes: n_ctx * cache_per_token * cache_bytes[kv_cache_dtype]
+  overhead_bytes: 2 * GiB
+  cache_element_bytes:
+    auto: 2
+    fp8_e5m2: 1
+    fp8_e4m3: 1
+  margin: 0.1
+  context_param: n_ctx
+  devices_param: tp_size
+triage: [sglang]
+report:
+  - key: device.weights
+    match: 'Load weight end\..*mem usage=(?P<value>[\d.]+) (?P<unit>GiB|GB)'

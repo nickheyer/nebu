@@ -20,19 +20,52 @@ enum SourceKind {
   SOURCE_KIND_KAGGLE = 8;
   SOURCE_KIND_NGC = 9;
   SOURCE_KIND_CSGHUB = 10;
+  SOURCE_KIND_GITHUB = 11;
+  SOURCE_KIND_GIT = 12;
+}
+
+// Value type of one source setting
+enum ConfigType {
+  CONFIG_TYPE_UNSPECIFIED = 0;
+  CONFIG_TYPE_STRING = 1;
+  CONFIG_TYPE_URL = 2;
+  CONFIG_TYPE_PATH = 3;
+  CONFIG_TYPE_ENV = 4;
+  CONFIG_TYPE_BOOL = 5;
+  CONFIG_TYPE_INT = 6;
+}
+
+// One setting a source of a provider accepts, declared by the transport that reads it
+message ConfigField {
+  string name = 1;
+  string label = 2;
+  ConfigType type = 3;
+  bool required = 4;
+  string default = 5;
+  string description = 6;
+  string transport = 7;
+  repeated string choices = 8;
+}
+
+// A provider sources are created from, with the settings its transports accept
+message Provider {
+  SourceKind kind = 1;
+  string name = 2;
+  string description = 3;
+  repeated ConfigField fields = 4;
+  repeated string transports = 5;
+  bool configured = 6;
 }
 
 // Configured place models come from
 message Source {
   string id = 1;
   SourceKind kind = 2;
-  string endpoint = 3;
-  string token_env = 4;
-  string path = 5;
-  map<string, string> options = 6;
-  bool seeded = 7;
-  google.protobuf.Timestamp created_at = 8;
-  google.protobuf.Timestamp updated_at = 9;
+  string name = 3;
+  map<string, string> config = 4;
+  bool seeded = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
 }
 
 // One way a source can order results
@@ -77,6 +110,13 @@ message SourceCapabilities {
   string revision_label = 15;
   string token_env = 16;
   string endpoint = 17;
+  string name = 18;
+  repeated ConfigField fields = 19;
+  repeated string transports = 20;
+  // Housekeeping tags the provider attaches that say nothing about a model, patterns matched whole
+  repeated string hidden_tags = 21;
+  // Extras worth a chip on a hit card in order, a bool showing its label, a comma list one chip each
+  repeated ConfigField hit_fields = 22;
 }
 
 // A configured source with what it can do
@@ -132,12 +172,20 @@ message ModelCard {
 // Lists configured sources
 message ListSourcesRequest {}
 
+// Lists providers sources can be created from
+message ListProvidersRequest {}
+
+// Returns every provider with the settings it accepts
+message ListProvidersResponse {
+  repeated Provider providers = 1;
+}
+
 // Returns configured sources with their capabilities
 message ListSourcesResponse {
   repeated SourceStatus sources = 1;
 }
 
-// Searches or browses one source
+// Searches or browses one source, every source of a provider, or every source at once
 message SearchRequest {
   string source_id = 1;
   string query = 2;
@@ -149,13 +197,16 @@ message SearchRequest {
   map<string, string> filters = 7;
   string cursor = 8;
   string author = 9;
+  // Searches every source of this provider when source_id is empty, every source when both are empty
+  SourceKind kind = 10;
 }
 
-// Returns one page of hits
+// Returns one page of hits, merged across sources when the request named none, with a warning for every source that did not answer
 message SearchResponse {
   repeated SearchHit hits = 1;
   string next_cursor = 2;
   uint64 total = 3;
+  repeated string warnings = 4;
 }
 
 // Resolves a repo and revision to artifacts
@@ -191,7 +242,7 @@ message CreateSourceResponse {
   SourceStatus source = 1;
 }
 
-// Replaces the settings of a source, its id and kind stay
+// Replaces the name and settings of a source, its id and kind stay
 message UpdateSourceRequest {
   Source source = 1;
 }
@@ -227,6 +278,8 @@ message GetModelCardResponse {
 service SourceService {
   // Lists configured sources with capabilities
   rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
+  // Lists providers with the settings their sources accept
+  rpc ListProviders(ListProvidersRequest) returns (ListProvidersResponse);
   // Searches or browses a source catalog
   rpc Search(SearchRequest) returns (SearchResponse);
   // Resolves a repo to classified artifacts

@@ -5,7 +5,7 @@
   import { Tooltip } from 'bits-ui';
   import { connect, disconnect, live, unackedFindings, liveInstances } from '$lib/state.svelte';
   import { endDrag } from '$lib/dnd.svelte';
-  import { LayoutDashboard, Search, Database, LayoutGrid, Boxes, Waypoints, Wrench, ListChecks, Radar, Server, Settings, WifiOff, KeyRound, Menu as MenuIcon } from '@lucide/svelte';
+  import { LayoutDashboard, Search, Database, LayoutGrid, Boxes, Waypoints, MessageSquare, Wrench, ListChecks, Radar, Server, Settings, WifiOff, KeyRound, Menu as MenuIcon } from '@lucide/svelte';
   import Toaster from '$lib/components/ui/Toaster.svelte';
   import Confirmer from '$lib/components/ui/Confirmer.svelte';
   import ActivityMenu from '$lib/components/ActivityMenu.svelte';
@@ -28,7 +28,8 @@
       items: [
         { href: '/slots', label: 'Slots', icon: LayoutGrid, count: live.slots.size || undefined },
         { href: '/instances', label: 'Instances', icon: Boxes, count: liveInstances().length || undefined },
-        { href: '/gateway', label: 'Gateway', icon: Waypoints }
+        { href: '/gateway', label: 'Gateway', icon: Waypoints },
+        { href: '/chat', label: 'Chat', icon: MessageSquare }
       ]
     },
     {

@@ -12,6 +12,7 @@ export interface RunSpec {
   name?: string;
   params?: Record<string, string>;
   slotId?: string;
+  profileId?: string;
 }
 
 // Reports whether a slot has something alive in it

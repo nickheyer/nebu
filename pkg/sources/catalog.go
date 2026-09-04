@@ -1,243 +1,177 @@
 package sources
 
 import (
+	"context"
+	"fmt"
 	"sort"
-	"strconv"
-	"strings"
-	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Sort ids every source maps onto its own ordering
-const (
-	SortRelevance = "relevance"
-	SortTrending  = "trending"
-	SortDownloads = "downloads"
-	SortLikes     = "likes"
-	SortUpdated   = "updated"
-	SortCreated   = "created"
-	SortName      = "name"
-	SortSize      = "size"
-)
+// What one provider tells the client: what it is called, which transports it
+// moves bytes through with what defaults, what it accepts, and through API
+// how its wire format maps onto the shared model. The client does everything
+// else, so a provider file holds nothing but these facts and that mapping.
+type Catalog struct {
+	// Source id the seeded default goes by, and the provider's own name
+	ID string
+	// Kind the proto knows it as
+	Kind v1.SourceKind
+	// What people call the provider
+	Name string
+	// What people call the seeded default when it is a particular site, Docker Hub for an OCI registry
+	Seed string
+	// The site people browse, when it is not the primary endpoint
+	Web string
+	// Path of the browse page under the site, such as /models
+	WebPath string
+	// Transports in order, the first is primary and owns the bare field names
+	Transports []Use
+	// Provider settings beyond what its transports read
+	Extra []*v1.ConfigField
+	// Set when downloads need a key
+	AuthRequired bool
+	// Set for providers that exist only through config, such as a directory or a mirror
+	Configured bool
+	// Set when the provider cannot list without a query, or cannot search at all
+	NoBrowse, NoSearch bool
+	// Housekeeping tags the provider attaches that say nothing about a model, patterns matched whole
+	Noise []string
+	// Extras of a hit worth a chip on its card, in order
+	HitFields []*v1.ConfigField
 
-// Facet ids shared across sources so a client can treat them alike
-const (
-	FacetTask       = "task"
-	FacetLibrary    = "library"
-	FacetLicense    = "license"
-	FacetFormat     = "format"
-	FacetType       = "type"
-	FacetPeriod     = "period"
-	FacetCapability = "capability"
-	FacetFramework  = "framework"
-	FacetBaseModel  = "base_model"
-	FacetPublisher  = "publisher"
-	FacetNSFW       = "nsfw"
-	FacetAuthor     = "author"
-	FacetTag        = "tag"
-)
+	Description   string
+	RepoExample   string
+	RepoPattern   string
+	RevisionLabel string
 
-var sortLabels = map[string]string{
-	SortRelevance: "Relevance",
-	SortTrending:  "Trending",
-	SortDownloads: "Most downloaded",
-	SortLikes:     "Most liked",
-	SortUpdated:   "Recently updated",
-	SortCreated:   "Newest",
-	SortName:      "Name",
-	SortSize:      "Size",
+	// Sort ids in display order, the first is the default
+	Sorts []string
+	// Sort ids the provider can flip, most only order descending
+	Reversible []string
+	// Facets fixed for the life of the provider, API.Facets adds live ones before them
+	Facets []*v1.Facet
+	// Page size when the request names none, and the largest the provider serves
+	DefaultLimit, MaxLimit int
+
+	API API
 }
 
-// Builds sort options with the shared labels
-func Sorts(ids ...string) []*v1.SortOption {
-	out := make([]*v1.SortOption, 0, len(ids))
-	for _, id := range ids {
-		label := sortLabels[id]
-		if label == "" {
-			label = Humanize(id)
+// How a provider's wire format maps onto the shared model
+//
+// Every method receives the client so it can reach the transports and the
+// shared helpers. Hits and models come back without a source id, the client
+// stamps it. The client has already checked the sort against the catalog.
+type API interface {
+	Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error)
+	Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error)
+	Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error)
+}
+
+// An ordering the client checked against the catalog's sorts
+type Sort struct {
+	ID        string
+	Ascending bool
+}
+
+// API that lists branches, tags, versions, or variants
+type Reviser interface {
+	Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error)
+}
+
+// API that serves a description for a repository
+type Carder interface {
+	Card(ctx context.Context, c *Client, repo, revision string) (*v1.ModelCard, error)
+}
+
+// API whose facets come from the catalog itself, read on demand and kept for a while
+type Faceter interface {
+	Facets(ctx context.Context, c *Client) ([]*v1.Facet, error)
+}
+
+// API that checks a built client, for settings that go together or auth it sets up itself
+type Checker interface {
+	Check(c *Client) error
+}
+
+var catalogs = map[v1.SourceKind]*Catalog{}
+
+// Adds a provider to the list, each file registers its own
+func register(cat *Catalog) {
+	if _, dup := catalogs[cat.Kind]; dup {
+		panic(fmt.Sprintf("catalog %s registered twice", cat.Kind))
+	}
+	if len(cat.Transports) == 0 || cat.Transports[0].Name != "" {
+		panic(fmt.Sprintf("catalog %s: the first transport is primary and has no name", cat.ID))
+	}
+	if len(cat.Sorts) == 0 {
+		panic(fmt.Sprintf("catalog %s: needs a sort, the first is the default", cat.ID))
+	}
+	seen := map[string]bool{}
+	for _, u := range cat.Transports {
+		if _, ok := transportConstructors[u.Kind]; !ok {
+			panic(fmt.Sprintf("catalog %s: unknown transport %q", cat.ID, u.Kind))
 		}
-		out = append(out, &v1.SortOption{Id: id, Label: label})
+		if seen[u.key()] {
+			panic(fmt.Sprintf("catalog %s: transport %s needs a distinct name", cat.ID, u.Kind))
+		}
+		seen[u.key()] = true
+	}
+	names := map[string]bool{}
+	for _, f := range cat.Fields() {
+		if names[f.GetName()] {
+			panic(fmt.Sprintf("catalog %s: setting %s declared twice", cat.ID, f.GetName()))
+		}
+		names[f.GetName()] = true
+	}
+	if cat.Name == "" {
+		cat.Name = cat.ID
+	}
+	catalogs[cat.Kind] = cat
+}
+
+// Every provider in kind order
+func all() []*Catalog {
+	out := make([]*Catalog, 0, len(catalogs))
+	for _, cat := range catalogs {
+		out = append(out, cat)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
+	return out
+}
+
+// The settings a source of this provider accepts, transports first in order, then the provider's own
+func (cat *Catalog) Fields() []*v1.ConfigField {
+	var out []*v1.ConfigField
+	for _, u := range cat.Transports {
+		out = append(out, u.fields()...)
+	}
+	return append(out, cat.Extra...)
+}
+
+// The keys of the transports in order
+func (cat *Catalog) transportNames() []string {
+	out := make([]string, 0, len(cat.Transports))
+	for _, u := range cat.Transports {
+		out = append(out, u.key())
 	}
 	return out
 }
 
-// Builds one facet value
-func Value(id, label string) *v1.FacetValue {
-	if label == "" {
-		label = Humanize(id)
+// What the seeded default is called
+func (cat *Catalog) seedName() string {
+	if cat.Seed != "" {
+		return cat.Seed
 	}
-	return &v1.FacetValue{Id: id, Label: label}
+	return cat.Name
 }
 
-// Builds one facet value inside a group
-func GroupedValue(id, label, group string) *v1.FacetValue {
-	v := Value(id, label)
-	v.Group = group
-	return v
+// Describes the provider for the API
+func (cat *Catalog) Provider() *v1.Provider {
+	return &v1.Provider{Kind: cat.Kind, Name: cat.Name, Description: cat.Description, Fields: cat.Fields(), Transports: cat.transportNames(), Configured: cat.Configured}
 }
 
-// Builds a facet with fixed values
-func NewFacet(id, label string, multi bool, values ...*v1.FacetValue) *v1.Facet {
-	return &v1.Facet{Id: id, Label: label, Values: values, Multi: multi}
-}
-
-// Builds a facet the person types a value into
-func Freeform(id, label string) *v1.Facet {
-	return &v1.Facet{Id: id, Label: label, Freeform: true}
-}
-
-// Turns an identifier like text-generation into Text generation
-func Humanize(id string) string {
-	s := strings.NewReplacer("-", " ", "_", " ").Replace(id)
-	if s == "" {
-		return s
-	}
-	return strings.ToUpper(s[:1]) + s[1:]
-}
-
-// Returns the values asked for one facet, split on commas
-func Filter(req *v1.SearchRequest, facet string) []string {
-	raw, ok := req.GetFilters()[facet]
-	if !ok {
-		return nil
-	}
-	var out []string
-	for _, part := range strings.Split(raw, ",") {
-		if p := strings.TrimSpace(part); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// Returns the first value asked for one facet
-func FilterOne(req *v1.SearchRequest, facet string) string {
-	if vs := Filter(req, facet); len(vs) > 0 {
-		return vs[0]
-	}
-	return ""
-}
-
-// Returns the author filter from either field
-func Author(req *v1.SearchRequest) string {
-	if a := strings.TrimSpace(req.GetAuthor()); a != "" {
-		return a
-	}
-	return FilterOne(req, FacetAuthor)
-}
-
-// Clamps the requested page size
-func Limit(req *v1.SearchRequest, def, max int) int {
-	n := int(req.GetLimit())
-	if n <= 0 {
-		return def
-	}
-	if n > max {
-		return max
-	}
-	return n
-}
-
-// Reads an offset cursor, zero when blank or malformed
-func Offset(cursor string) int {
-	n, err := strconv.Atoi(strings.TrimSpace(cursor))
-	if err != nil || n < 0 {
-		return 0
-	}
-	return n
-}
-
-// Slices an in memory result set by the request's offset cursor and a page size
-func Page(hits []*v1.SearchHit, req *v1.SearchRequest, limit int) *v1.SearchResponse {
-	start := Offset(req.GetCursor())
-	if start > len(hits) {
-		start = len(hits)
-	}
-	end := start + limit
-	if end > len(hits) {
-		end = len(hits)
-	}
-	resp := &v1.SearchResponse{Hits: hits[start:end], Total: uint64(len(hits))}
-	if end < len(hits) {
-		resp.NextCursor = strconv.Itoa(end)
-	}
-	return resp
-}
-
-// Reports whether every word of the query appears in the hit
-func Matches(hit *v1.SearchHit, query string) bool {
-	words := strings.Fields(strings.ToLower(query))
-	if len(words) == 0 {
-		return true
-	}
-	hay := strings.ToLower(strings.Join(append([]string{hit.GetRepo(), hit.GetName(), hit.GetAuthor(), hit.GetDescription(), hit.GetTask()}, hit.GetTags()...), "\n"))
-	for _, w := range words {
-		if !strings.Contains(hay, w) {
-			return false
-		}
-	}
-	return true
-}
-
-// Orders hits in place by a shared sort id, stable on the original order
-func SortHits(hits []*v1.SearchHit, id string, ascending bool) {
-	less := func(a, b *v1.SearchHit) bool {
-		switch id {
-		case SortDownloads:
-			return a.GetDownloads() > b.GetDownloads()
-		case SortLikes:
-			return a.GetLikes() > b.GetLikes()
-		case SortUpdated:
-			return stamp(a.GetUpdatedAt()).After(stamp(b.GetUpdatedAt()))
-		case SortCreated:
-			return stamp(a.GetCreatedAt()).After(stamp(b.GetCreatedAt()))
-		case SortSize:
-			return a.GetSizeBytes() > b.GetSizeBytes()
-		case SortName:
-			return strings.ToLower(a.GetRepo()) < strings.ToLower(b.GetRepo())
-		}
-		return false
-	}
-	if id == "" || id == SortRelevance {
-		return
-	}
-	sort.SliceStable(hits, func(i, j int) bool {
-		if ascending {
-			return less(hits[j], hits[i])
-		}
-		return less(hits[i], hits[j])
-	})
-}
-
-func stamp(ts interface{ AsTime() time.Time }) time.Time {
-	if ts == nil {
-		return time.Time{}
-	}
-	return ts.AsTime()
-}
-
-var stampLayouts = []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02 15:04:05.999999999", "2006-01-02"}
-
-// Parses the timestamps catalogs print, with or without a zone or fractional seconds, nil when blank or odd
-func Stamp(s string) *timestamppb.Timestamp {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	for _, layout := range stampLayouts {
-		if t, err := time.Parse(layout, s); err == nil && !t.IsZero() {
-			return timestamppb.New(t)
-		}
-	}
-	return nil
-}
-
-// Reports whether the repo names a variant by tag, splitting name:tag
-func SplitTag(repo, def string) (string, string) {
-	if i := strings.LastIndex(repo, ":"); i > 0 && !strings.Contains(repo[i+1:], "/") {
-		return repo[:i], repo[i+1:]
-	}
-	return repo, def
+// Builds a primary HTTP use with an endpoint and the token variable it reads, empty for none
+func httpUse(endpoint, tokenEnv string) Use {
+	return Use{Kind: TransportHTTP, Fields: map[string]string{"endpoint": endpoint, "token_env": tokenEnv}}
 }

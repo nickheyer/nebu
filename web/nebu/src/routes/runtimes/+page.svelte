@@ -1,13 +1,14 @@
 <script lang="ts">
-  import { api } from '$lib/api';
+  import { api, message } from '$lib/api';
+  import { Code, ConnectError } from '@connectrpc/connect';
   import { live, clock, taskFor, instanceLive } from '$lib/state.svelte';
-  import { ago, enumLabel, newestFirst, when } from '$lib/format';
+  import { ago, enumLabel, newestFirst, when, byName } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
-  import type { RuntimeStatus } from '$proto/runtime_pb';
+  import type { Profile, RuntimeStatus } from '$proto/runtime_pb';
   import { InstallKind } from '$proto/runtime_pb';
   import { BuildState, SandboxKind, type RecipeStatus } from '$proto/recipe_pb';
-  import { Wrench, Download, Hammer, FolderInput, Trash2, ScrollText, RefreshCw, CircleCheck, CircleAlert, Package } from '@lucide/svelte';
+  import { Wrench, Download, Hammer, FolderInput, Trash2, ScrollText, RefreshCw, CircleCheck, CircleAlert, Package, SlidersHorizontal, Plus, Pencil, Star, StarOff } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Panel from '$lib/components/ui/Panel.svelte';
@@ -19,6 +20,7 @@
   import Field from '$lib/components/ui/Field.svelte';
   import Skeleton from '$lib/components/ui/Skeleton.svelte';
   import BuildDialog from '$lib/components/BuildDialog.svelte';
+  import ProfileDialog from '$lib/components/ProfileDialog.svelte';
   import TaskDrawer from '$lib/components/TaskDrawer.svelte';
   import TaskChip from '$lib/components/TaskChip.svelte';
 
@@ -31,10 +33,14 @@
   let adopting = $state(false);
   let buildOpen = $state(false);
   let buildRecipe = $state<RecipeStatus | null>(null);
+  let profileOpen = $state(false);
+  let profileEditing = $state<Profile | null>(null);
+  let profileRuntime = $state('');
   let taskId = $state('');
 
   const installs = $derived([...live.installs.values()].sort(newestFirst));
   const builds = $derived([...live.builds.values()].sort(newestFirst));
+  const profiles = $derived([...live.profiles.values()].sort(byName((p) => `${p.runtimeId} ${p.default ? 0 : 1} ${p.name}`)));
 
   async function refresh() {
     try {
@@ -54,6 +60,53 @@
 
   function installsOf(id: string) {
     return installs.filter((i) => i.runtimeId === id);
+  }
+  function profilesOf(id: string) {
+    return profiles.filter((p) => p.runtimeId === id);
+  }
+
+  function newProfile(runtimeId = '') {
+    profileEditing = null;
+    profileRuntime = runtimeId;
+    profileOpen = true;
+  }
+
+  function editProfile(p: Profile) {
+    profileEditing = p;
+    profileRuntime = p.runtimeId;
+    profileOpen = true;
+  }
+
+  async function setDefault(p: Profile, on: boolean) {
+    try {
+      await api.runtimes.updateProfile({ profile: { ...p, default: on } });
+      ok(on ? `${p.name} is the ${p.runtimeId} default` : `${p.name} is no longer the default`, on ? 'Every run that names no profile starts from it' : 'Runs fall back to the manifest defaults');
+    } catch (err) {
+      fail(err, 'Update failed');
+    }
+  }
+
+  async function removeProfile(p: Profile) {
+    const yes = await confirm({ title: `Remove ${p.name}?`, message: p.default ? `Runs of ${p.runtimeId} that name no profile fall back to the manifest defaults.` : 'Nothing that names it is touched without asking you first.', action: 'Remove', tone: 'bad' });
+    if (!yes) return;
+    try {
+      await api.runtimes.deleteProfile({ id: p.id });
+      ok('Profile removed');
+    } catch (err) {
+      if (!(err instanceof ConnectError && err.code === Code.FailedPrecondition)) {
+        fail(err, 'Remove failed');
+        return;
+      }
+      // The daemon names what starts from the profile, clearing them is the person's call
+      const force = await confirm({ title: `Clear what names ${p.name}?`, message: `${message(err)}. Cleared ones start from the ${p.runtimeId} default profile instead.`, action: 'Clear and remove', tone: 'bad' });
+      if (!force) return;
+      try {
+        await api.runtimes.deleteProfile({ id: p.id, force: true });
+        ok('Profile removed', 'What named it now starts from the runtime default');
+      } catch (again) {
+        fail(again, 'Remove failed');
+      }
+    }
   }
   function recipesOf(id: string) {
     return recipes.filter((r) => r.recipe?.runtimeId === id);
@@ -137,7 +190,7 @@
           </div>
           <div class="flex flex-wrap gap-1.5">
             {#each rt.manifest?.formats ?? [] as f (f)}<span class="rounded border border-line bg-sunken px-1.5 py-0.5 font-mono text-[11px] text-fg-muted">{f}</span>{/each}
-            <span class="ml-auto text-xs text-fg-faint">{have.length} {have.length === 1 ? 'install' : 'installs'}</span>
+            <span class="ml-auto text-xs text-fg-faint">{have.length} {have.length === 1 ? 'install' : 'installs'} · {profilesOf(id).length} {profilesOf(id).length === 1 ? 'profile' : 'profiles'}</span>
           </div>
           {#if rt.unmet.length}
             <ul class="rounded-md border border-warn/30 bg-warn/8 px-3 py-2 text-xs leading-5 text-warn">
@@ -159,6 +212,7 @@
             {#if rt.manifest?.acquire?.prebuilt.length}
               <Button size="sm" icon={Download} onclick={() => prebuilt(id)}>Install prebuilt</Button>
             {/if}
+            <Button size="sm" icon={SlidersHorizontal} onclick={() => newProfile(id)}>New profile</Button>
             {#each recipesOf(id) as rs (rs.recipe?.id)}
               <Button
                 size="sm"
@@ -177,6 +231,55 @@
       {/each}
     {/if}
   </section>
+
+  <Panel title="Profiles" description="Named param sets per runtime, the default one applies to every run that names none" flush>
+    {#snippet actions()}
+      <Button size="sm" icon={Plus} onclick={() => newProfile()} disabled={!runtimes.length}>New profile</Button>
+    {/snippet}
+    {#if profiles.length === 0}
+      <Empty compact icon={SlidersHorizontal} title="No profiles yet" description="A profile fixes the knobs of a runtime once, so a run only says which model. Mark one as the default and every run of that runtime starts from it." />
+    {:else}
+      <div class="overflow-x-auto">
+        <table class="tbl">
+          <thead><tr><th>runtime</th><th>name</th><th>params</th><th>updated</th><th></th></tr></thead>
+          <tbody>
+            {#each profiles as p (p.id)}
+              {@const entries = Object.entries(p.params)}
+              <tr>
+                <td class="font-medium text-fg">{p.runtimeId}</td>
+                <td>
+                  <div class="flex items-center gap-2">
+                    <span class="font-mono text-xs text-fg">{p.name}</span>
+                    {#if p.default}<Badge tone="accent" size="xs" label="default" />{/if}
+                  </div>
+                  {#if p.description}<div class="text-[11px] text-fg-faint">{p.description}</div>{/if}
+                </td>
+                <td class="max-w-md">
+                  <div class="flex flex-wrap gap-1">
+                    {#each entries as [k, v] (k)}
+                      <span class="rounded bg-sunken px-1 font-mono text-[10.5px] text-fg-faint" title="{k}={v}"><span>{k}=</span><span class="text-fg-muted">{v.length > 24 ? v.slice(0, 24) + '…' : v}</span></span>
+                    {:else}
+                      <span class="text-[11px] text-fg-faint">manifest defaults</span>
+                    {/each}
+                  </div>
+                </td>
+                <td class="text-xs text-fg-muted" title={when(p.updatedAt)}>{ago(p.updatedAt, clock.now)}</td>
+                <td class="text-right">
+                  <Menu
+                    items={[
+                      { label: 'Edit', icon: Pencil, onSelect: () => editProfile(p) },
+                      p.default ? { label: 'Clear default', icon: StarOff, onSelect: () => setDefault(p, false) } : { label: 'Make default', icon: Star, onSelect: () => setDefault(p, true) },
+                      { label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeProfile(p) }
+                    ]}
+                  />
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </Panel>
 
   <Panel title="Installs" description="Usable copies of a runtime, newest first" flush>
     {#if installs.length === 0}
@@ -262,4 +365,5 @@
 </Dialog>
 
 <BuildDialog bind:open={buildOpen} recipe={buildRecipe} />
+<ProfileDialog bind:open={profileOpen} {runtimes} editing={profileEditing} runtimeId={profileRuntime} />
 <TaskDrawer bind:id={taskId} />

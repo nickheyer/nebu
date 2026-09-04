@@ -89,16 +89,25 @@
                       }}
                     >
                       <span class="font-semibold">{word(r.plan.verdict)}</span>
-                      {#if device(r.plan)}<span class="text-[10.5px] tabular-nums opacity-80">{device(r.plan)}</span>{/if}
+                      {#if r.free && r.free.verdict !== r.plan.verdict}
+                        <span class="text-[10px] leading-3 {verdictTone(r.free.verdict) === 'bad' ? 'text-bad' : verdictTone(r.free.verdict) === 'warn' ? 'text-warn' : ''}">now {word(r.free.verdict).toLowerCase()}</span>
+                      {:else if device(r.plan)}<span class="text-[10.5px] tabular-nums opacity-80">{device(r.plan)}</span>{/if}
                     </button>
                     {#snippet content()}
                       <div class="text-[11px] leading-5">
-                        <div class="mb-1 text-fg-muted">Memory this plan uses on each pool</div>
+                        <div class="mb-1 text-fg-muted">Against the whole device memory</div>
                         {#each r.plan?.pools ?? [] as p (p.poolId)}
                           <div><span class="font-mono text-fg-muted">{p.poolId}</span> {bytes(p.usedBytes)} of {bytes(p.capacityBytes)}</div>
                         {/each}
                         <div class="text-fg-muted">weights {bytes(r.plan?.weightsBytes)}, cache {bytes(r.plan?.cacheBytes)}, overhead {bytes(r.plan?.overheadBytes)}</div>
                         {#if r.plan?.detail}<div class="mt-1 text-fg-faint">{r.plan.detail}</div>{/if}
+                        {#if r.free}
+                          <div class="mt-2 mb-1 text-fg-muted">Against what is free right now: <span class="font-medium text-fg">{word(r.free.verdict)}</span></div>
+                          {#each r.free.pools as p (p.poolId)}
+                            <div><span class="font-mono text-fg-muted">{p.poolId}</span> {bytes(p.usedBytes)} of {bytes(p.capacityBytes)} free</div>
+                          {/each}
+                          {#if r.free.detail}<div class="mt-1 text-fg-faint">{r.free.detail}</div>{/if}
+                        {/if}
                       </div>
                     {/snippet}
                   </Tip>
@@ -125,5 +134,5 @@
     <div class="flex gap-1.5"><span class="mt-1 h-2 w-2 shrink-0 rounded-sm bg-warn"></span><span><span class="font-medium text-fg-muted">Partly.</span> Some layers spill into system RAM. It runs, but slower.</span></div>
     <div class="flex gap-1.5"><span class="mt-1 h-2 w-2 shrink-0 rounded-sm bg-bad"></span><span><span class="font-medium text-fg-muted">Too big.</span> Not enough memory even with spilling. Pick smaller weights or a shorter context.</span></div>
   </dl>
-  <p class="text-[11px] text-fg-faint">The number under each word is the device memory the plan uses.</p>
+  <p class="text-[11px] text-fg-faint">The big word is the verdict against the whole device memory, what a run gets once nothing else is loaded. The number under it is the device memory the plan uses. A run plans against what is free at that moment, so when that verdict differs the cell says so under the word.</p>
 </div>

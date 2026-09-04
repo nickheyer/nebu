@@ -11,7 +11,7 @@ import (
 func TestLoadDefaultsAndOverrides(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nebu.yaml")
-	os.WriteFile(path, []byte("data_dir: "+dir+"/data\nsources:\n  - id: local\n    kind: SOURCE_KIND_LOCAL\n    path: /models\n"), 0o644)
+	os.WriteFile(path, []byte("data_dir: "+dir+"/data\nsources:\n  - id: local\n    kind: SOURCE_KIND_LOCAL\n    config:\n      path: /models\n"), 0o644)
 	t.Setenv(EnvAddr, "127.0.0.1:1")
 	cfg, err := Load(path)
 	if err != nil {
@@ -23,7 +23,7 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 	if cfg.GetStoreDir() != filepath.Join(dir, "data", "store") || cfg.GetTransfer().GetWorkers() == 0 || cfg.GetTransfer().GetChunkBytes() == 0 {
 		t.Fatalf("store defaults %+v", cfg)
 	}
-	if len(cfg.GetSources()) != 1 || cfg.GetSources()[0].GetKind() != v1.SourceKind_SOURCE_KIND_LOCAL {
+	if len(cfg.GetSources()) != 1 || cfg.GetSources()[0].GetKind() != v1.SourceKind_SOURCE_KIND_LOCAL || cfg.GetSources()[0].GetConfig()["path"] != "/models" {
 		t.Fatalf("sources %v", cfg.GetSources())
 	}
 	if cfg.GetSpecDirs()[len(cfg.GetSpecDirs())-1] != filepath.Join(dir, "data", "spec") {

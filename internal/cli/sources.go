@@ -21,7 +21,7 @@ func parseSourceKind(s string) (v1.SourceKind, error) {
 	}
 	n, ok := v1.SourceKind_value[name]
 	if !ok || n == 0 {
-		return 0, fmt.Errorf("unknown source kind %q, one of %s", s, strings.Join(sourceKinds(), ", "))
+		return 0, fmt.Errorf("unknown provider %q, one of %s", s, strings.Join(sourceKinds(), ", "))
 	}
 	return v1.SourceKind(n), nil
 }
@@ -64,14 +64,24 @@ func sourceRow(w io.Writer, st *v1.SourceStatus) {
 	}
 	rows := [][]string{
 		{"id", s.GetId()},
-		{"kind", eval.EnumShort(s.GetKind())},
+		{"name", s.GetName()},
+		{"provider", c.GetName() + " (" + eval.EnumShort(s.GetKind()) + ")"},
 		{"origin", origin},
-		{"endpoint", c.GetEndpoint()},
-		{"path", s.GetPath()},
-		{"token env", c.GetTokenEnv()},
-		{"options", compact(s.GetOptions())},
+		{"transports", strings.Join(c.GetTransports(), ", ")},
 		{"created", stamp(s.GetCreatedAt())},
 		{"updated", stamp(s.GetUpdatedAt())},
+	}
+	for _, f := range c.GetFields() {
+		value, set := s.GetConfig()[f.GetName()]
+		if !set {
+			value = f.GetDefault()
+			if value == "" {
+				value = "-"
+			} else {
+				value += " (default)"
+			}
+		}
+		rows = append(rows, []string{f.GetName(), value})
 	}
 	if st.GetError() != "" {
 		rows = append(rows, []string{"error", st.GetError()})
@@ -79,26 +89,61 @@ func sourceRow(w io.Writer, st *v1.SourceStatus) {
 	table(w, nil, rows)
 }
 
+func runSourcesProviders(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("sources providers")
+	if _, err := parse(fs, args); err != nil {
+		return err
+	}
+	cl, err := e.clients()
+	if err != nil {
+		return err
+	}
+	resp, err := cl.sources.ListProviders(ctx, connect.NewRequest(&v1.ListProvidersRequest{}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		var rows [][]string
+		for _, p := range resp.Msg.GetProviders() {
+			var settings []string
+			for _, f := range p.GetFields() {
+				s := f.GetName()
+				if f.GetRequired() {
+					s += "*"
+				}
+				if f.GetDefault() != "" {
+					s += "=" + f.GetDefault()
+				}
+				settings = append(settings, s)
+			}
+			origin := "seeded"
+			if p.GetConfigured() {
+				origin = "config only"
+			}
+			rows = append(rows, []string{eval.EnumShort(p.GetKind()), p.GetName(), origin, strings.Join(p.GetTransports(), ","), strings.Join(settings, " ")})
+		}
+		table(w, []string{"KIND", "PROVIDER", "DEFAULT", "TRANSPORTS", "SETTINGS"}, rows)
+	})
+}
+
 func runSourcesAdd(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("sources add")
 	kind := fs.String("kind", "", "provider, one of "+strings.Join(sourceKinds(), ", "))
-	endpoint := fs.String("endpoint", "", "API host, the provider default when empty")
-	tokenEnv := fs.String("token-env", "", "environment variable holding the credential, the provider default when empty")
-	path := fs.String("path", "", "directory, for local and mirror sources")
-	var options multi
-	fs.Var(&options, "option", "provider specific setting as name=value, repeatable")
+	name := fs.String("name", "", "display name, the id when empty")
+	var settings multi
+	fs.Var(&settings, "set", "setting as name=value, repeatable, see nebu sources providers")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(positional) != 1 || *kind == "" {
-		return fmt.Errorf("usage: nebu sources add <id> --kind KIND [--endpoint URL] [--token-env VAR] [--path DIR] [--option k=v]")
+		return fmt.Errorf("usage: nebu sources add <id> --kind KIND [--name NAME] [--set name=value]...")
 	}
 	k, err := parseSourceKind(*kind)
 	if err != nil {
 		return err
 	}
-	opts, err := parseParams(options)
+	cfg, err := parseParams(settings)
 	if err != nil {
 		return err
 	}
@@ -109,7 +154,7 @@ func runSourcesAdd(ctx context.Context, e *env, args []string) error {
 	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	src := &v1.Source{Id: positional[0], Kind: k, Endpoint: *endpoint, TokenEnv: *tokenEnv, Path: *path, Options: opts}
+	src := &v1.Source{Id: positional[0], Kind: k, Name: *name, Config: cfg}
 	resp, err := cl.sources.CreateSource(ctx, connect.NewRequest(&v1.CreateSourceRequest{Source: src}))
 	if err != nil {
 		return err
@@ -119,19 +164,18 @@ func runSourcesAdd(ctx context.Context, e *env, args []string) error {
 
 func runSourcesUpdate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("sources update")
-	endpoint := fs.String("endpoint", "", "API host, the provider default when empty")
-	tokenEnv := fs.String("token-env", "", "environment variable holding the credential, the provider default when empty")
-	path := fs.String("path", "", "directory, for local and mirror sources")
-	var options multi
-	fs.Var(&options, "option", "provider specific setting as name=value, repeatable, replaces every option")
+	name := fs.String("name", "", "display name")
+	var settings, unset multi
+	fs.Var(&settings, "set", "setting as name=value, repeatable, merged into what the source has")
+	fs.Var(&unset, "unset", "setting to drop back to the provider default, repeatable")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return fmt.Errorf("usage: nebu sources update <id> [--endpoint URL] [--token-env VAR] [--path DIR] [--option k=v]")
+		return fmt.Errorf("usage: nebu sources update <id> [--name NAME] [--set name=value]... [--unset name]...")
 	}
-	opts, err := parseParams(options)
+	cfg, err := parseParams(settings)
 	if err != nil {
 		return err
 	}
@@ -148,18 +192,20 @@ func runSourcesUpdate(ctx context.Context, e *env, args []string) error {
 	}
 	// The update replaces every setting, so start from what the source has and change only what was passed
 	src := current.GetSource()
+	if src.Config == nil {
+		src.Config = map[string]string{}
+	}
 	fs.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "endpoint":
-			src.Endpoint = *endpoint
-		case "token-env":
-			src.TokenEnv = *tokenEnv
-		case "path":
-			src.Path = *path
-		case "option":
-			src.Options = opts
+		if f.Name == "name" {
+			src.Name = *name
 		}
 	})
+	for k, v := range cfg {
+		src.Config[k] = v
+	}
+	for _, k := range unset {
+		delete(src.Config, k)
+	}
 	resp, err := cl.sources.UpdateSource(ctx, connect.NewRequest(&v1.UpdateSourceRequest{Source: src}))
 	if err != nil {
 		return err

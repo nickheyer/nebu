@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 const (
@@ -21,13 +24,18 @@ const (
 	userAgent   = "nebu (+https://github.com/nickheyer/nebu)"
 )
 
-// HTTP client for one host with auth and retry
+// HTTP transport for one host with auth and retry
+//
+// Listing answers an S3 style ListObjectsV2 under a prefix, which is what
+// buckets and the mirrors exported into them speak. Opening serves range
+// reads on a URL.
 type HTTP struct {
-	http   *http.Client
-	base   *url.URL
-	token  string
-	scheme string
-	header http.Header
+	http       *http.Client
+	base       *url.URL
+	token      string
+	scheme     string
+	header     http.Header
+	authorizer func(ctx context.Context) http.Header
 }
 
 // Builds a client for a base endpoint sending token as a bearer
@@ -42,6 +50,21 @@ func NewHTTP(endpoint, token string) (*HTTP, error) {
 	return &HTTP{http: &http.Client{Timeout: 5 * time.Minute}, base: base, token: token, scheme: "Bearer", header: http.Header{}}, nil
 }
 
+// Builds the transport, none when the source names no endpoint and the provider requires none
+func newHTTPTransport(cfg map[string]string, _ transportEnv) (Transport, error) {
+	if cfg["endpoint"] == "" {
+		return nil, nil
+	}
+	h, err := NewHTTP(cfg["endpoint"], envValue(cfg, "token_env"))
+	if err != nil {
+		return nil, err
+	}
+	if user := envValue(cfg, "username_env"); user != "" && h.token != "" {
+		h.UseBasic(user)
+	}
+	return h, nil
+}
+
 // Sends the token as HTTP basic auth instead of a bearer
 func (c *HTTP) UseBasic(username string) {
 	c.scheme = "Basic"
@@ -53,6 +76,11 @@ func (c *HTTP) UseBasic(username string) {
 // Adds a header to every request
 func (c *HTTP) SetHeader(key, value string) {
 	c.header.Set(key, value)
+}
+
+// Replaces the token with headers computed per request, for keys that are exchanged first
+func (c *HTTP) SetAuthorizer(fn func(ctx context.Context) http.Header) {
+	c.authorizer = fn
 }
 
 // Returns the base endpoint without a trailing slash
@@ -70,6 +98,14 @@ func (c *HTTP) URL(segments ...string) string {
 	return c.base.String() + joinPath(segments...)
 }
 
+// Turns a locator into a URL, keeping one that is already absolute
+func (c *HTTP) Absolute(locator string) string {
+	if strings.Contains(locator, "://") {
+		return locator
+	}
+	return c.base.String() + "/" + strings.TrimLeft(locator, "/")
+}
+
 // Joins path segments into an escaped path with a leading slash, splitting segments that carry slashes
 func joinPath(segments ...string) string {
 	var parts []string
@@ -85,7 +121,16 @@ func joinPath(segments ...string) string {
 
 // Applies the configured authorization to a request when it has none
 func (c *HTTP) authorize(req *http.Request) {
-	if c.token == "" || req.Header.Get("Authorization") != "" {
+	if req.Header.Get("Authorization") != "" {
+		return
+	}
+	if c.authorizer != nil {
+		for k, vs := range c.authorizer(req.Context()) {
+			req.Header[k] = vs
+		}
+		return
+	}
+	if c.token == "" {
 		return
 	}
 	switch c.scheme {
@@ -217,16 +262,123 @@ func (c *HTTP) Text(ctx context.Context, rawURL string, query url.Values, max in
 
 // Fetches a text body with extra headers, capped
 func (c *HTTP) TextWith(ctx context.Context, rawURL string, query url.Values, header http.Header, max int64) (string, error) {
+	data, err := c.read(ctx, rawURL, query, header, max)
+	return string(data), err
+}
+
+func (c *HTTP) read(ctx context.Context, rawURL string, query url.Values, header http.Header, max int64) ([]byte, error) {
 	resp, err := c.Do(ctx, http.MethodGet, rawURL, query, header)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, max))
-	if err != nil {
-		return "", err
+	return readAllCapped(resp.Body, max)
+}
+
+// Reads a stream up to max bytes, everything when max is not positive
+func readAllCapped(r io.Reader, max int64) ([]byte, error) {
+	if max > 0 {
+		r = io.LimitReader(r, max)
 	}
-	return string(data), nil
+	return io.ReadAll(r)
+}
+
+// Reads a URL whole, capped
+func (c *HTTP) Read(ctx context.Context, locator string, max int64) ([]byte, error) {
+	return c.read(ctx, c.Absolute(locator), nil, nil, max)
+}
+
+// Opens a URL for range reads, asking the server for the size when the caller has none
+func (c *HTTP) Open(ctx context.Context, locator string, size int64) (Blob, error) {
+	rawURL := c.Absolute(locator)
+	if size <= 0 {
+		resp, err := c.Do(ctx, http.MethodHead, rawURL, nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		resp.Body.Close()
+		if size = resp.ContentLength; size <= 0 {
+			return nil, fmt.Errorf("%s: unknown size", rawURL)
+		}
+	}
+	return NewRangeBlob(c, rawURL, size), nil
+}
+
+type listResult struct {
+	XMLName               xml.Name `xml:"ListBucketResult"`
+	IsTruncated           bool     `xml:"IsTruncated"`
+	NextContinuationToken string   `xml:"NextContinuationToken"`
+	Contents              []struct {
+		Key  string `xml:"Key"`
+		Size uint64 `xml:"Size"`
+	} `xml:"Contents"`
+	CommonPrefixes []struct {
+		Prefix string `xml:"Prefix"`
+	} `xml:"CommonPrefixes"`
+}
+
+// Lists objects under a prefix through ListObjectsV2, paths relative to the prefix
+func (c *HTTP) List(ctx context.Context, locator string) ([]*v1.Artifact, error) {
+	prefix := strings.Trim(locator, "/")
+	if prefix != "" {
+		prefix += "/"
+	}
+	var out []*v1.Artifact
+	token := ""
+	for {
+		q := url.Values{"list-type": {"2"}}
+		if prefix != "" {
+			q.Set("prefix", prefix)
+		}
+		if token != "" {
+			q.Set("continuation-token", token)
+		}
+		var res listResult
+		if err := c.listPage(ctx, q, &res); err != nil {
+			return nil, err
+		}
+		for _, o := range res.Contents {
+			rel := strings.TrimPrefix(o.Key, prefix)
+			if rel == "" || strings.HasSuffix(rel, "/") {
+				continue
+			}
+			out = append(out, &v1.Artifact{Path: rel, SizeBytes: o.Size})
+		}
+		if !res.IsTruncated || res.NextContinuationToken == "" {
+			return out, nil
+		}
+		token = res.NextContinuationToken
+	}
+}
+
+// Lists the first level of prefixes under a prefix, the directories of a bucket
+func (c *HTTP) Prefixes(ctx context.Context, locator string) ([]string, error) {
+	prefix := strings.Trim(locator, "/")
+	if prefix != "" {
+		prefix += "/"
+	}
+	q := url.Values{"list-type": {"2"}, "delimiter": {"/"}}
+	if prefix != "" {
+		q.Set("prefix", prefix)
+	}
+	var res listResult
+	if err := c.listPage(ctx, q, &res); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, p := range res.CommonPrefixes {
+		out = append(out, strings.TrimSuffix(strings.TrimPrefix(p.Prefix, prefix), "/"))
+	}
+	return out, nil
+}
+
+func (c *HTTP) listPage(ctx context.Context, q url.Values, out *listResult) error {
+	resp, err := c.Do(ctx, http.MethodGet, c.Base()+"/", q, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return xml.NewDecoder(resp.Body).Decode(out)
 }
 
 var linkNext = regexp.MustCompile(`<([^>]+)>;\s*rel="next"`)
@@ -270,14 +422,17 @@ func IsStatus(err error, code int) bool {
 	return errors.As(err, &se) && se.Code == code
 }
 
+// Names a URL and headers to fetch a blob from, called before every range for links that expire
+type Resolver func(ctx context.Context) (string, http.Header, error)
+
 // Blob served through HTTP range requests
 type RangeBlob struct {
-	client  *HTTP
-	url     string
-	size    int64
-	header  http.Header
-	headers func(ctx context.Context) (http.Header, error)
-	mu      sync.Mutex
+	client   *HTTP
+	url      string
+	size     int64
+	header   http.Header
+	resolver Resolver
+	mu       sync.Mutex
 }
 
 // Wraps a URL as a range readable blob
@@ -293,25 +448,41 @@ func (b *RangeBlob) WithHeader(h http.Header) *RangeBlob {
 
 // Asks for fresh headers before every range request, for tokens that expire
 func (b *RangeBlob) WithHeaderFunc(fn func(ctx context.Context) (http.Header, error)) *RangeBlob {
-	b.headers = fn
+	b.resolver = func(ctx context.Context) (string, http.Header, error) {
+		h, err := fn(ctx)
+		return "", h, err
+	}
 	return b
 }
 
-func (b *RangeBlob) requestHeaders(ctx context.Context, rng string) (http.Header, error) {
+// Asks for the URL and headers before every range request, for links that expire
+func (b *RangeBlob) WithResolver(fn Resolver) *RangeBlob {
+	b.resolver = fn
+	return b
+}
+
+// Picks the URL and headers for one range request
+func (b *RangeBlob) prepare(ctx context.Context, rng string) (string, http.Header, error) {
 	h := http.Header{"Range": {rng}}
 	for k, vs := range b.header {
 		h[k] = vs
 	}
-	if b.headers != nil {
-		extra, err := b.headers(ctx)
+	b.mu.Lock()
+	rawURL := b.url
+	b.mu.Unlock()
+	if b.resolver != nil {
+		resolved, extra, err := b.resolver(ctx)
 		if err != nil {
-			return nil, err
+			return "", nil, err
+		}
+		if resolved != "" {
+			rawURL = resolved
 		}
 		for k, vs := range extra {
 			h[k] = vs
 		}
 	}
-	return h, nil
+	return rawURL, h, nil
 }
 
 // Reads one range, tolerating servers that ignore Range
@@ -323,10 +494,7 @@ func (b *RangeBlob) ReadAt(p []byte, off int64) (int, error) {
 	if end >= b.size {
 		end = b.size - 1
 	}
-	b.mu.Lock()
-	rawURL := b.url
-	b.mu.Unlock()
-	header, err := b.requestHeaders(context.Background(), fmt.Sprintf("bytes=%d-%d", off, end))
+	rawURL, header, err := b.prepare(context.Background(), fmt.Sprintf("bytes=%d-%d", off, end))
 	if err != nil {
 		return 0, err
 	}
@@ -362,10 +530,7 @@ func (b *RangeBlob) Range(ctx context.Context, off, length int64) (io.ReadCloser
 		return io.NopCloser(strings.NewReader("")), nil
 	}
 	end := min(off+length-1, b.size-1)
-	b.mu.Lock()
-	rawURL := b.url
-	b.mu.Unlock()
-	header, err := b.requestHeaders(ctx, fmt.Sprintf("bytes=%d-%d", off, end))
+	rawURL, header, err := b.prepare(ctx, fmt.Sprintf("bytes=%d-%d", off, end))
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +552,7 @@ func (b *RangeBlob) Range(ctx context.Context, off, length int64) (io.ReadCloser
 // Keeps a redirect target so later ranges skip the hop, unless it is signed and short lived
 func (b *RangeBlob) remember(resp *http.Response, rawURL string) {
 	final := resp.Request.URL.String()
-	if final == rawURL || signedURL(resp.Request.URL) {
+	if final == rawURL || signedURL(resp.Request.URL) || b.resolver != nil {
 		return
 	}
 	b.mu.Lock()

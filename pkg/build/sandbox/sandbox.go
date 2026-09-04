@@ -12,14 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nickheyer/nebu/pkg/proc"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 // Mount point of the build root inside a container
 const Mount = "/work"
-
-// How long a cancelled step may keep its output open before it is abandoned
-const waitDelay = 5 * time.Second
 
 // One command with its environment, Dir relative to the root
 type Step struct {
@@ -60,9 +58,8 @@ func (h *Host) Run(ctx context.Context, step Step, out io.Writer) error {
 	cmd.Dir = h.Path(step.Dir)
 	cmd.Env = append(os.Environ(), envList(step.Env)...)
 	cmd.Stdout, cmd.Stderr = out, out
-	// Build tools fork freely, so a cancel has to take the whole group
-	groupAttr(cmd)
-	return cmd.Run()
+	// Build tools fork freely, so a cancel has to take the whole tree
+	return proc.Run(cmd)
 }
 
 // Runs each step in a fresh container, root mounted
@@ -113,7 +110,7 @@ func (o *OCI) Run(ctx context.Context, step Step, out io.Writer) error {
 		exec.Command(o.cli, "kill", name).Run()
 		return cmd.Process.Kill()
 	}
-	cmd.WaitDelay = waitDelay
+	cmd.WaitDelay = proc.WaitDelay
 	return cmd.Run()
 }
 

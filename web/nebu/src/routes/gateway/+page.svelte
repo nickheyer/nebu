@@ -1,10 +1,11 @@
 <script lang="ts">
   import { api, baseUrl } from '$lib/api';
+  import { listenerUrl } from '$lib/gateway';
   import { live, slotName, clock } from '$lib/state.svelte';
   import { count, enumLabel, ago } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
-  import { RouteState, type GatewayStatus } from '$proto/gateway_pb';
+  import { RouteState, type GatewayStatus, type Policy } from '$proto/gateway_pb';
   import { InstanceState } from '$proto/instance_pb';
   import { Waypoints, Plus, Trash2, KeyRound, Link } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -30,9 +31,25 @@
   const endpoints = $derived.by(() => {
     const list = status?.listeners ?? [];
     if (list.length === 0) return [{ url: baseUrl + '/v1', shared: true, guess: true }];
-    return list.map((l) => ({ url: (l.shared ? baseUrl : 'http://' + l.addr) + '/v1', shared: l.shared, guess: false }));
+    return list.map((l) => ({ url: (l.shared ? baseUrl : listenerUrl(l.addr, !!status?.tls)) + '/v1', shared: l.shared, guess: false }));
   });
   const example = $derived(readyRoutes[0]?.name ?? routes[0]?.name ?? 'main');
+
+  // Each zero field of a route's policy inherits the gateway default
+  function policyText(p: Policy | undefined, d: Policy | undefined): string {
+    const pick = (a: number | undefined, b: number | undefined) => a || b || 0;
+    const parts: string[] = [];
+    const inFlight = pick(p?.maxInFlight, d?.maxInFlight);
+    const rps = pick(p?.requestsPerSecond, d?.requestsPerSecond);
+    const burst = pick(p?.burst, d?.burst);
+    const timeout = pick(p?.requestTimeoutMs, d?.requestTimeoutMs);
+    const upstream = pick(p?.upstreamTimeoutMs, d?.upstreamTimeoutMs);
+    if (inFlight) parts.push(`${inFlight} in flight`);
+    if (rps) parts.push(`${rps}/s${burst ? ` burst ${burst}` : ''}`);
+    if (timeout) parts.push(`${timeout / 1000}s total`);
+    if (upstream) parts.push(`${upstream / 1000}s first byte`);
+    return parts.length ? parts.join(', ') : 'none';
+  }
   const curl = $derived(
     `curl ${endpoints[0].url}/chat/completions \\\n  -H 'Content-Type: application/json' \\\n${status?.auth ? "  -H 'Authorization: Bearer $NEBU_API_KEY' \\\n" : ''}  -d '{"model":"${example}","messages":[{"role":"user","content":"hello"}]}'`
   );
@@ -74,7 +91,7 @@
   }
 </script>
 
-<PageHeader title="Gateway" description="The OpenAI compatible endpoint your router points at, and the names it answers to" />
+<PageHeader title="Gateway" description="One endpoint your router points at, answering in the OpenAI, Anthropic, and Ollama formats, and the names it answers to" />
 
 <div class="flex flex-col gap-6">
   <section class="grid grid-cols-1 gap-4 lg:grid-cols-5">
@@ -101,6 +118,7 @@
     <div class="grid grid-cols-2 gap-3 lg:col-span-2 lg:grid-cols-1">
       <div class="panel p-4"><Stat label="Requests served" value={count(status?.requests ?? 0n)} sub="since the daemon started" /></div>
       <div class="panel p-4"><Stat label="Routes ready" value="{readyRoutes.length} / {routes.length}" sub="{routes.filter((r) => r.slotId).length} owned by slots" /></div>
+      <div class="panel p-4"><Stat label="Default limits" value={policyText(undefined, status?.policy)} sub="set in gateway.policy, a slot can tighten its own route" /></div>
     </div>
   </section>
 
@@ -110,7 +128,7 @@
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
-          <thead><tr><th>name</th><th>state</th><th>model</th><th>instance</th><th>slot</th><th class="num">requests</th><th class="num">in flight</th><th>updated</th><th></th></tr></thead>
+          <thead><tr><th>name</th><th>state</th><th>model</th><th>instance</th><th>slot</th><th class="num">requests</th><th class="num">in flight</th><th>limits</th><th>updated</th><th></th></tr></thead>
           <tbody>
             {#each routes as r (r.name)}
               {@const inst = r.instanceId ? live.instances.get(r.instanceId) : undefined}
@@ -131,6 +149,7 @@
                 <td class="text-xs">{r.slotId ? slotName(r.slotId) : '–'}</td>
                 <td class="num text-xs">{count(r.requests)}</td>
                 <td class="num text-xs">{r.inFlight || '–'}</td>
+                <td class="text-xs text-fg-muted" title="What this route enforces, the gateway default where it inherits">{policyText(r.policy, status?.policy)}</td>
                 <td class="text-xs text-fg-muted">{ago(r.updatedAt, clock.now)}</td>
                 <td class="text-right">
                   {#if !r.slotId}

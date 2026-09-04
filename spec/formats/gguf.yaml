@@ -1,5 +1,6 @@
 id: gguf
 description: GGML universal file format
+blurb: GGUF packs the whole model into one file per precision, usually quantized to fit in less memory
 priority: 10
 files:
   - match: '(?i)(^|/)mmproj[^/]*\.gguf$'
@@ -57,6 +58,8 @@ params:
     keys: ['{arch}.rope.dimension_count']
   - name: n_swa
     keys: ['{arch}.attention.sliding_window']
+  - name: swa_pattern
+    keys: ['{arch}.attention.sliding_window_pattern']
   - name: file_type
     keys: ['general.file_type']
 metadata:
@@ -68,6 +71,47 @@ metadata:
   - general.finetune
   - '{arch}.block_count'
 requires: []
+# The quant token in the group name names the width, the flavour rules only add words
+precisions:
+  - key: group
+    match: '(?i)(?:^|[-_./])(?P<name>(?:UD-)?I?Q(?P<bits>\d)(?:_[0-9A-Z]+)*)(?:[-_./]|$)'
+  - key: group
+    match: '(?i)(?:^|[-_./])(?P<name>TQ(?P<bits>\d)_\d)(?:[-_./]|$)'
+  - key: group
+    match: '(?i)(?:^|[-_./])(?P<name>MXFP4)(?:[-_./]|$)'
+    bits: 4
+  - key: group
+    match: '(?i)(?:^|[-_./])(?P<name>F32)(?:[-_./]|$)'
+    bits: 32
+  - key: group
+    match: '(?i)(?:^|[-_./])(?P<name>BF16)(?:[-_./]|$)'
+    bits: 16
+    note: bfloat16, the training format on modern GPUs
+  - key: group
+    match: '(?i)(?:^|[-_./])(?P<name>F16)(?:[-_./]|$)'
+    bits: 16
+    note: float16, the training format on older GPUs
+  - key: group
+    match: '(?i)(?:^|[-_./])UD-'
+    note: Unsloth dynamic, key layers kept at higher precision
+  - key: group
+    match: '(?i)(?:^|[-_./])(?:UD-)?IQ\d'
+    note: importance-matrix quant, better quality than plain quants at the same bits
+  - key: group
+    match: '(?i)_K_XL(?:[-_./]|$)'
+    note: extra large K-quant, the most careful of its bit width
+  - key: group
+    match: '(?i)_K_L(?:[-_./]|$)'
+    note: large K-quant, more of the sensitive layers kept precise
+  - key: group
+    match: '(?i)_K_M(?:[-_./]|$)'
+    note: medium K-quant, the recommended balance
+  - key: group
+    match: '(?i)_K_S(?:[-_./]|$)'
+    note: small K-quant, a bit smaller and a bit rougher
+  - key: group
+    match: '(?i)(?:^|[-_./])Q\d_[01](?:[-_./]|$)'
+    note: older quant scheme, a K-quant at the same bits is usually better
 dtypes:
   '0': F32
   '1': F16

@@ -28,6 +28,8 @@ message StoredModel {
   uint64 bytes = 9;
   google.protobuf.Timestamp pulled_at = 10;
   string path = 11;
+  // Last time a run started from it, what eviction orders by
+  google.protobuf.Timestamp used_at = 12;
 }
 
 // Store wide counters
@@ -38,6 +40,8 @@ message StoreStatus {
   uint64 blob_bytes = 4;
   uint64 partials = 5;
   uint64 partial_bytes = 6;
+  // Blob bytes the store keeps under by evicting, 0 for no cap
+  uint64 max_bytes = 7;
 }
 
 // Pulls one weight group into the store

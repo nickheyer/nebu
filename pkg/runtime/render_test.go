@@ -37,6 +37,23 @@ func TestRenderAndMeasure(t *testing.T) {
 	if strings.Contains(args, "--n-cpu-moe") || strings.Contains(args, "--mmproj") {
 		t.Fatalf("unsolved and empty params must be omitted: %s", args)
 	}
+	if len(out.Env) != 0 {
+		t.Fatalf("without a slot no device variable applies: %v", out.Env)
+	}
+	pinned, err := rt.Render(RenderInput{
+		Name: "qwen", Params: params, Artifacts: map[string]string{"weights": "/store/m.gguf"}, Host: "127.0.0.1", Port: 1, Install: map[string]string{"path": "/opt/llama-server"},
+		Devices: []map[string]any{
+			{"id": "GPU-aaaa", "kind": "gpu", "vendor": "nvidia", "facts": map[string]any{"index": "1"}},
+			{"id": "GPU-bbbb", "kind": "gpu", "vendor": "nvidia", "facts": map[string]any{"index": "3"}},
+			{"id": "card2", "kind": "gpu", "vendor": "amd", "facts": map[string]any{}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned.Env["CUDA_VISIBLE_DEVICES"] != "GPU-aaaa,GPU-bbbb" || pinned.Env["ROCR_VISIBLE_DEVICES"] != "2" || pinned.Env["GGML_VK_VISIBLE_DEVICES"] != "1,3,2" {
+		t.Fatalf("slot devices should pin the process: %v", pinned.Env)
+	}
 	if out.Params["alias"] != "qwen" || out.Params["n_ctx"] != "4096" {
 		t.Fatalf("rendered params should carry final values: %v", out.Params)
 	}

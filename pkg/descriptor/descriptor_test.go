@@ -15,7 +15,7 @@ func builder(t *testing.T) *Builder {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := New(c.Formats, c.Archs)
+	b, err := New(c.Formats, c.Archs, c.Precisions)
 	if err != nil {
 		t.Fatal(err)
 	}

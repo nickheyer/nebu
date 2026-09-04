@@ -39,12 +39,12 @@ type Manager struct {
 	rows []*v1.Source
 }
 
-// Builds a manager with an empty registry, filled by Load
-func NewManager(store Store, bus *events.Bus, log *slog.Logger) *Manager {
+// Builds a manager with an empty registry, filled by Load; transports keep clones and scratch under cacheDir
+func NewManager(store Store, bus *events.Bus, log *slog.Logger, cacheDir string) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Manager{Store: store, Events: bus, Log: log, Registry: &Registry{byID: map[string]Source{}}}
+	return &Manager{Store: store, Events: bus, Log: log, Registry: &Registry{CacheDir: cacheDir, byID: map[string]Source{}}}
 }
 
 // Ids are path segments in the store, so they stay plain
@@ -69,7 +69,7 @@ func (m *Manager) Load(ctx context.Context, bootstrap []*v1.Source) error {
 		if have[strings.TrimSpace(cfg.GetId())] {
 			continue
 		}
-		row, err := prepare(cfg)
+		row, err := m.prepare(cfg)
 		if err != nil {
 			return fmt.Errorf("config source %q: %w", cfg.GetId(), err)
 		}
@@ -140,7 +140,7 @@ func (m *Manager) indexLocked(id string) int {
 
 // Creates a source after checking that its provider accepts the settings
 func (m *Manager) Create(ctx context.Context, in *v1.Source) (*v1.Source, error) {
-	row, err := prepare(in)
+	row, err := m.prepare(in)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ func (m *Manager) Create(ctx context.Context, in *v1.Source) (*v1.Source, error)
 	return clone(row), nil
 }
 
-// Replaces the settings of a source; its id, kind, and origin stay
+// Replaces the name and settings of a source; its id, kind, and origin stay
 func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -173,12 +173,10 @@ func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error)
 		return nil, fmt.Errorf("%w: the kind of %s is fixed, remove it and add a source of the new kind", ErrSource, row.GetId())
 	}
 	next := clone(row)
-	next.Endpoint = strings.TrimSpace(in.GetEndpoint())
-	next.TokenEnv = strings.TrimSpace(in.GetTokenEnv())
-	next.Path = strings.TrimSpace(in.GetPath())
-	next.Options = in.GetOptions()
+	next.Name = strings.TrimSpace(in.GetName())
+	next.Config = trimConfig(in.GetConfig())
 	next.UpdatedAt = timestamppb.Now()
-	if err := Check(next); err != nil {
+	if err := m.Registry.Check(next); err != nil {
 		return nil, err
 	}
 	if err := m.Store.PutSource(ctx, next); err != nil {
@@ -222,23 +220,33 @@ func (m *Manager) publish(action v1.EventAction, s *v1.Source) {
 }
 
 // Turns a request into a row: a plain id, settings the provider accepts, fresh stamps
-func prepare(in *v1.Source) (*v1.Source, error) {
+func (m *Manager) prepare(in *v1.Source) (*v1.Source, error) {
 	id := strings.TrimSpace(in.GetId())
 	if !validID.MatchString(id) || strings.Contains(id, "..") {
 		return nil, fmt.Errorf("%w: id %q must be letters, digits, dots, dashes, or underscores", ErrSource, in.GetId())
 	}
 	row := clone(in)
 	row.Id = id
-	row.Endpoint = strings.TrimSpace(in.GetEndpoint())
-	row.TokenEnv = strings.TrimSpace(in.GetTokenEnv())
-	row.Path = strings.TrimSpace(in.GetPath())
+	row.Name = strings.TrimSpace(in.GetName())
+	row.Config = trimConfig(in.GetConfig())
 	row.Seeded = false
 	now := timestamppb.Now()
 	row.CreatedAt, row.UpdatedAt = now, now
-	if err := Check(row); err != nil {
+	if err := m.Registry.Check(row); err != nil {
 		return nil, err
 	}
 	return row, nil
+}
+
+// Keeps the settings that carry a value, trimmed
+func trimConfig(in map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range in {
+		if k, v = strings.TrimSpace(k), strings.TrimSpace(v); k != "" && v != "" {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // Added sources first, oldest first, then seeded defaults in kind order

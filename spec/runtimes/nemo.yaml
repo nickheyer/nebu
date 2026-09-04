@@ -99,4 +99,5 @@ estimate:
   overhead_bytes: 3 * GiB
   margin: 0.1
   context_param: n_ctx
+  devices_param: num_gpus
 triage: [nemo]

@@ -74,6 +74,15 @@ message TensorGroup {
   uint64 elements = 5;
 }
 
+// How compactly a weight group stores each weight, in words
+message Precision {
+  uint32 bits = 1;
+  string label = 2;
+  string blurb = 3;
+  // Quality retained, 0 unknown through 5 full
+  uint32 level = 4;
+}
+
 // Format neutral facts the planner consumes
 message Descriptor {
   string format_id = 1;
@@ -86,6 +95,35 @@ message Descriptor {
   uint64 parameter_count = 8;
   double bits_per_weight = 9;
   map<string, string> metadata = 10;
+  Precision precision = 11;
+}
+
+// Reads a weight group's precision from its group name or a metadata key
+//
+// A bits capture or the bits field names the width, and the first matching
+// rule with a width claims it. A name capture labels it. Every matching rule
+// adds its note, expanded with the captures.
+message PrecisionRule {
+  // group, or a metadata key
+  string key = 1;
+  string match = 2;
+  uint32 bits = 3;
+  string note = 4;
+}
+
+// Words for one bit width and every width down to the next
+message PrecisionLevel {
+  uint32 bits = 1;
+  string label = 2;
+  string blurb = 3;
+  uint32 level = 4;
+}
+
+// Data driven precision words, widths in descending order
+message PrecisionSpec {
+  string id = 1;
+  string description = 2;
+  repeated PrecisionLevel levels = 3;
 }
 
 // Claims files matching a path pattern
@@ -131,6 +169,9 @@ message FormatSpec {
   map<string, string> dtypes = 12;
   string reader = 13;
   string root = 14;
+  // What the format is, for people who have not met it
+  string blurb = 15;
+  repeated PrecisionRule precisions = 16;
 }
 
 // Data driven architecture family definition

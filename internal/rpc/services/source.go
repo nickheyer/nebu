@@ -20,13 +20,21 @@ type SourceService struct {
 	formats   []string
 }
 
-// Builds the source service, formats are the ids hits get tagged with
-func NewSourceService(m *sources.Manager, insp *inspect.Inspector, formats []string) *SourceService {
-	return &SourceService{sources: m, inspector: insp, formats: formats}
+// Builds the source service, formats are what hits get tagged with, in priority order
+func NewSourceService(m *sources.Manager, insp *inspect.Inspector, formats []*v1.FormatSpec) *SourceService {
+	s := &SourceService{sources: m, inspector: insp}
+	for _, f := range formats {
+		s.formats = append(s.formats, f.GetId())
+	}
+	return s
 }
 
 func (s *SourceService) ListSources(ctx context.Context, req *connect.Request[v1.ListSourcesRequest]) (*connect.Response[v1.ListSourcesResponse], error) {
 	return connect.NewResponse(&v1.ListSourcesResponse{Sources: s.sources.Registry.Statuses(ctx)}), nil
+}
+
+func (s *SourceService) ListProviders(ctx context.Context, req *connect.Request[v1.ListProvidersRequest]) (*connect.Response[v1.ListProvidersResponse], error) {
+	return connect.NewResponse(&v1.ListProvidersResponse{Providers: sources.Providers()}), nil
 }
 
 func (s *SourceService) CreateSource(ctx context.Context, req *connect.Request[v1.CreateSourceRequest]) (*connect.Response[v1.CreateSourceResponse], error) {
@@ -61,19 +69,13 @@ func (s *SourceService) DeleteSource(ctx context.Context, req *connect.Request[v
 	return connect.NewResponse(&v1.DeleteSourceResponse{Source: row}), nil
 }
 
+// Searches one source, every source of a provider, or every source there is
 func (s *SourceService) Search(ctx context.Context, req *connect.Request[v1.SearchRequest]) (*connect.Response[v1.SearchResponse], error) {
-	src, err := s.sources.Registry.Get(req.Msg.GetSourceId())
-	if err != nil {
-		return nil, wrap(err)
-	}
-	resp, err := src.Search(ctx, req.Msg)
+	resp, err := s.sources.Registry.Search(ctx, req.Msg)
 	if err != nil {
 		return nil, wrap(err)
 	}
 	for _, h := range resp.GetHits() {
-		if h.SourceId == "" {
-			h.SourceId = src.Spec().GetId()
-		}
 		if len(h.Formats) == 0 {
 			h.Formats = s.formatsOf(h)
 		}

@@ -2,7 +2,7 @@ id: nemo
 runtime_id: nemo
 description: NeMo Export-Deploy from PyPI in a virtual environment, with NeMo's checkpoint converter in a second one
 source:
-  release: https://api.github.com/repos/NVIDIA-NeMo/Export-Deploy/releases?per_page=5
+  releases: NVIDIA-NeMo/Export-Deploy
   ref: latest
   archive: https://github.com/NVIDIA-NeMo/Export-Deploy/archive/refs/tags/{{.ref}}.tar.gz
 tools: [curl]

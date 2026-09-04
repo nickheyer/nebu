@@ -16,7 +16,7 @@ func TestMigrationsApplied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(versions) != 4 || versions[3] != 4 {
+	if len(versions) != 1 || versions[0] == "" {
 		t.Fatalf("versions %v", versions)
 	}
 }
@@ -109,8 +109,8 @@ func TestSlotsRoutesRoundTrip(t *testing.T) {
 func TestSourcesRoundTrip(t *testing.T) {
 	d, _ := open(t)
 	ctx := context.Background()
-	s := &v1.Source{Id: "hf-mirror", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Endpoint: "https://hf-mirror.com", TokenEnv: "HF_TOKEN", Path: "", Options: map[string]string{"namespace": "ai"}, Seeded: false, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0))}
-	seed := &v1.Source{Id: "huggingface", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Seeded: true, CreatedAt: timestamppb.New(time.Unix(3, 0)), UpdatedAt: timestamppb.New(time.Unix(3, 0))}
+	s := &v1.Source{Id: "hf-mirror", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Name: "Mirror", Config: map[string]string{"endpoint": "https://hf-mirror.com", "token_env": "HF_TOKEN"}, Seeded: false, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0))}
+	seed := &v1.Source{Id: "huggingface", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Name: "Hugging Face", Seeded: true, CreatedAt: timestamppb.New(time.Unix(3, 0)), UpdatedAt: timestamppb.New(time.Unix(3, 0))}
 	for _, in := range []*v1.Source{s, seed} {
 		if err := d.PutSource(ctx, in); err != nil {
 			t.Fatal(err)
@@ -123,14 +123,13 @@ func TestSourcesRoundTrip(t *testing.T) {
 	if !proto.Equal(list[0], s) || !proto.Equal(list[1], seed) {
 		t.Fatalf("source round trip\n got %v %v\nwant %v %v", list[0], list[1], s, seed)
 	}
-	s.Options = nil
-	s.TokenEnv = ""
+	s.Config = nil
 	if err := d.PutSource(ctx, s); err != nil {
 		t.Fatal(err)
 	}
 	list, _ = d.ListSources(ctx)
-	if len(list[0].GetOptions()) != 0 || list[0].GetTokenEnv() != "" {
-		t.Fatal("replace should drop the options")
+	if len(list[0].GetConfig()) != 0 {
+		t.Fatal("replace should drop the settings")
 	}
 	if ok, _ := d.DeleteSource(ctx, "hf-mirror"); !ok {
 		t.Fatal("delete source")
@@ -166,11 +165,11 @@ func TestWatchesAndFindings(t *testing.T) {
 	later := proto.Clone(f).(*v1.Finding)
 	later.Id, later.FoundAt, later.Acknowledged = "f2", timestamppb.New(time.Unix(12, 0)), true
 	d.PutFinding(ctx, later)
-	all, _ := d.ListFindings(ctx, "", false)
+	all, _ := d.ListFindings(ctx, "", "", false)
 	if len(all) != 2 || all[0].GetId() != "f2" {
 		t.Fatalf("findings newest first %v", all)
 	}
-	unacked, _ := d.ListFindings(ctx, "w1", true)
+	unacked, _ := d.ListFindings(ctx, "w1", "", true)
 	if len(unacked) != 1 || !proto.Equal(unacked[0], f) {
 		t.Fatalf("unacked %v", unacked)
 	}
@@ -183,7 +182,7 @@ func TestWatchesAndFindings(t *testing.T) {
 	if ok, _ := d.DeleteWatch(ctx, "w1"); !ok {
 		t.Fatal("delete watch")
 	}
-	if rest, _ := d.ListFindings(ctx, "", false); len(rest) != 0 {
+	if rest, _ := d.ListFindings(ctx, "", "", false); len(rest) != 0 {
 		t.Fatal("findings should cascade")
 	}
 	if _, err := d.GetFinding(ctx, "f1"); !IsNotFound(err) {

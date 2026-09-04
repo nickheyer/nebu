@@ -14,6 +14,25 @@ import { StoreService } from '$proto/store_pb';
 import { TaskService } from '$proto/task_pb';
 
 const tokenKey = 'nebu.token';
+const gatewayKeyKey = 'nebu.gateway_key';
+
+// Returns the gateway key the user saved in this browser, for the chat page
+export function gatewayKey(): string {
+  try {
+    return localStorage.getItem(gatewayKeyKey) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function setGatewayKey(value: string) {
+  try {
+    if (value) localStorage.setItem(gatewayKeyKey, value);
+    else localStorage.removeItem(gatewayKeyKey);
+  } catch {
+    // storage may be unavailable in private windows
+  }
+}
 
 // Returns the API token the user saved in this browser
 export function token(): string {

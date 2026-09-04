@@ -7,16 +7,20 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 const (
 	tokenGrace = 30 * time.Second
 	tokenTTL   = 5 * time.Minute
 	tagsPage   = "1000"
+	titleKey   = "org.opencontainers.image.title"
 )
 
 // Manifest media types a registry may answer with, preferred first
@@ -62,8 +66,10 @@ type bearer struct {
 	expires time.Time
 }
 
-// Reads an OCI distribution registry, where some catalogs ship models as layers,
+// OCI distribution transport, where some catalogs ship models as layers,
 // answering bearer challenges anonymously or with a credential
+//
+// A locator is repo:ref for a manifest and repo@digest for a blob.
 type Distribution struct {
 	http   *HTTP
 	creds  string
@@ -78,6 +84,13 @@ func NewDistribution(endpoint, creds string) (*Distribution, error) {
 		return nil, err
 	}
 	return &Distribution{http: h, creds: creds, tokens: map[string]bearer{}}, nil
+}
+
+func newDistributionTransport(cfg map[string]string, _ transportEnv) (Transport, error) {
+	if cfg["endpoint"] == "" {
+		return nil, nil
+	}
+	return NewDistribution(cfg["endpoint"], envValue(cfg, "token_env"))
 }
 
 // Returns the endpoint without a trailing slash
@@ -322,6 +335,67 @@ func (d *Distribution) Blob(repo, digest string, size int64) (Blob, error) {
 	return NewRangeBlob(d.http, d.http.URL("v2", repo, "blobs", digest), size).WithHeaderFunc(func(ctx context.Context) (http.Header, error) {
 		return d.PullHeaders(ctx, repo)
 	}), nil
+}
+
+// Splits a locator into its repo and the ref or digest after the last colon or at
+func splitLocator(locator string) (string, string) {
+	if i := strings.LastIndex(locator, "@"); i > 0 {
+		return locator[:i], locator[i+1:]
+	}
+	repo, ref := SplitTag(locator, "latest")
+	return repo, ref
+}
+
+// Lists the layers of a manifest as artifacts named by their title annotation or digest
+func (d *Distribution) List(ctx context.Context, locator string) ([]*v1.Artifact, error) {
+	repo, ref := splitLocator(locator)
+	m, err := d.Manifest(ctx, repo, ref)
+	if err != nil {
+		return nil, err
+	}
+	var out []*v1.Artifact
+	for _, l := range m.Layers {
+		if l.Size <= 0 {
+			continue
+		}
+		name := strings.TrimPrefix(path.Clean("/"+l.Annotations[titleKey]), "/")
+		if name == "" {
+			name = Hex(l.Digest) + ".bin"
+		}
+		out = append(out, &v1.Artifact{Path: name, SizeBytes: uint64(l.Size), Sha256: Hex(l.Digest)})
+	}
+	return out, nil
+}
+
+// Opens a blob by repo@digest
+func (d *Distribution) Open(ctx context.Context, locator string, size int64) (Blob, error) {
+	repo, digest := splitLocator(locator)
+	if !strings.Contains(digest, ":") {
+		digest = "sha256:" + digest
+	}
+	if size <= 0 {
+		resp, err := d.do(ctx, http.MethodHead, d.http.URL("v2", repo, "blobs", digest), nil)
+		if err != nil {
+			return nil, err
+		}
+		resp.Body.Close()
+		size = resp.ContentLength
+	}
+	return d.Blob(repo, digest, size)
+}
+
+// Reads a blob whole by repo@digest, capped
+func (d *Distribution) Read(ctx context.Context, locator string, max int64) ([]byte, error) {
+	repo, digest := splitLocator(locator)
+	if !strings.Contains(digest, ":") {
+		digest = "sha256:" + digest
+	}
+	resp, err := d.do(ctx, http.MethodGet, d.http.URL("v2", repo, "blobs", digest), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return readAllCapped(resp.Body, max)
 }
 
 // Strips the sha256: prefix from a digest, lower cased

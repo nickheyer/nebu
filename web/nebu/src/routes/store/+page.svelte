@@ -31,6 +31,8 @@
   const sort = new TableSort('pulled');
 
   const sourceIds = $derived([...new Set([...live.models.values()].map((m) => m.sourceId))].sort());
+  // Eviction takes the model used longest ago, a model never run counting from its pull
+  const usedAt = (m: StoredModel) => m.usedAt ?? m.pulledAt;
   const models = $derived(
     sort.apply(
       [...live.models.values()].filter((m) => (!sourceFilter || m.sourceId === sourceFilter) && (!filter || `${m.repo} ${m.group} ${m.formatId} ${m.descriptor?.architecture ?? ''}`.toLowerCase().includes(filter.toLowerCase()))),
@@ -46,6 +48,8 @@
             return m.descriptor?.parameterCount ?? 0n;
           case 'size':
             return m.bytes;
+          case 'used':
+            return usedAt(m)?.seconds ?? 0n;
           default:
             return m.pulledAt?.seconds ?? 0n;
         }
@@ -131,7 +135,7 @@
 
 <div class="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
   <div class="panel p-4"><Stat label="Models" value={count(live.models.size)} sub="weight groups pulled" /></div>
-  <div class="panel p-4"><Stat label="On disk" value={bytes(status?.blobBytes ?? total)} sub="{count(status?.blobs)} blobs" /></div>
+  <div class="panel p-4"><Stat label="On disk" value={bytes(status?.blobBytes ?? total)} sub={status?.maxBytes ? `${count(status?.blobs)} blobs, kept under ${bytes(status.maxBytes, 0)} by evicting what sat unused longest` : `${count(status?.blobs)} blobs, no cap set`} /></div>
   <div class="panel p-4"><Stat label="Referenced" value={bytes(total)} sub="sum of manifests" /></div>
   <div class="panel p-4">
     <Stat label="Partials" value={count(status?.partials ?? 0)} sub={status?.partials ? `${bytes(status.partialBytes)} resumable` : 'no interrupted pulls'} />
@@ -170,6 +174,7 @@
               <SortTh id="params" label="params" num active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
               <SortTh id="size" label="size" num active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
               <SortTh id="pulled" label="pulled" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
+              <SortTh id="used" label="used" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
               <th></th>
             </tr>
           </thead>
@@ -191,6 +196,7 @@
                 <td class="num text-xs">{fmtParams(m.descriptor?.parameterCount)}</td>
                 <td class="num text-xs">{bytes(m.bytes)}</td>
                 <td class="text-xs text-fg-muted" title={when(m.pulledAt)}>{ago(m.pulledAt, clock.now)}</td>
+                <td class="text-xs text-fg-muted" title={when(usedAt(m))}>{ago(usedAt(m), clock.now)}</td>
                 <td class="text-right whitespace-nowrap">
                   <span class="inline-flex items-center gap-1">
                     <Button size="xs" variant="primary" icon={Play} onclick={() => runModel(m)}>Run</Button>

@@ -3,8 +3,8 @@ name: vLLM
 description: vllm serve over safetensors checkpoints
 formats: [safetensors]
 constraints:
-  - expr: any(devices, .kind == "gpu")
-    message: a probed GPU
+  - expr: any(devices, .vendor == "nvidia" || .vendor == "amd")
+    message: an NVIDIA or AMD GPU
 acquire:
   adopt: [vllm]
   recipe_id: vllm
@@ -15,6 +15,10 @@ probes:
 launch:
   command: '{{.install.path}}'
   args: ['serve', '{{index .artifacts "weights_dir"}}', '--host', '{{.host}}', '--port', '{{.port}}']
+  # A slot pins the process to its devices, an empty render is dropped so no slot means every device
+  env:
+    CUDA_VISIBLE_DEVICES: '{{$first := true}}{{range .devices}}{{if eq .vendor "nvidia"}}{{if not $first}},{{end}}{{$first = false}}{{.id}}{{end}}{{end}}'
+    ROCR_VISIBLE_DEVICES: '{{$first := true}}{{range .devices}}{{if eq .vendor "amd"}}{{if not $first}},{{end}}{{$first = false}}{{trimPrefix "card" .id}}{{end}}{{end}}'
   health:
     path: /health
     interval_ms: 2000
@@ -74,6 +78,7 @@ estimate:
     fp8_e4m3: 1
   margin: 0.1
   context_param: n_ctx
+  devices_param: tensor_parallel_size
 triage: [vllm]
 report:
   - key: device.weights

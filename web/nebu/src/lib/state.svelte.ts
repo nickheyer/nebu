@@ -6,10 +6,13 @@ import { TaskState, type Task } from '$proto/task_pb';
 import { InstanceState, type Instance } from '$proto/instance_pb';
 import type { Slot } from '$proto/slot_pb';
 import type { Route } from '$proto/gateway_pb';
-import type { Install } from '$proto/runtime_pb';
+import type { Install, Profile } from '$proto/runtime_pb';
+import type { FormatSpec } from '$proto/model_pb';
 import type { Build } from '$proto/recipe_pb';
 import type { StoredModel } from '$proto/store_pb';
-import { FindingKind, type Finding, type Watch } from '$proto/monitor_pb';
+import { FindingKind, type Finding, type Watch, type Want } from '$proto/monitor_pb';
+import { toast } from './toast.svelte';
+import type { Source } from '$proto/source_pb';
 import { newestFirst } from './format';
 
 // Everything the UI shows, kept current by the event stream
@@ -27,7 +30,11 @@ export const live = $state({
   builds: new SvelteMap<string, Build>(),
   models: new SvelteMap<string, StoredModel>(),
   watches: new SvelteMap<string, Watch>(),
-  findings: new SvelteMap<string, Finding>()
+  findings: new SvelteMap<string, Finding>(),
+  sources: new SvelteMap<string, Source>(),
+  profiles: new SvelteMap<string, Profile>(),
+  formats: new SvelteMap<string, FormatSpec>(),
+  wants: new SvelteMap<string, Want>()
 });
 
 // A clock that ticks so relative times stay fresh
@@ -47,8 +54,47 @@ const maps: Maps = {
   [EventKind.BUILD]: live.builds,
   [EventKind.MODEL]: live.models,
   [EventKind.WATCH]: live.watches,
-  [EventKind.FINDING]: live.findings
+  [EventKind.FINDING]: live.findings,
+  [EventKind.SOURCE]: live.sources,
+  [EventKind.PROFILE]: live.profiles,
+  [EventKind.WANT]: live.wants
 };
+
+const notifyKey = 'nebu.notify';
+
+// Whether this browser raises desktop notifications for findings
+export function desktopNotify(): boolean {
+  try {
+    return localStorage.getItem(notifyKey) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export async function setDesktopNotify(on: boolean): Promise<boolean> {
+  if (on && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+    if ((await Notification.requestPermission()) !== 'granted') return false;
+  }
+  try {
+    localStorage.setItem(notifyKey, on ? '1' : '0');
+  } catch {
+    // storage may be unavailable
+  }
+  return on;
+}
+
+// Announces a finding that arrived live, in a toast and on the desktop when allowed
+function announce(f: Finding) {
+  const title = f.kind === FindingKind.WANTED_FOUND ? `Found ${f.repo}` : `${f.repo} changed`;
+  toast({ tone: f.kind === FindingKind.REMOVED_GROUP ? 'warn' : 'info', title, detail: f.detail, href: '/monitor', linkLabel: 'Monitor', sticky: true });
+  if (desktopNotify() && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    try {
+      new Notification(title, { body: f.detail, tag: f.id });
+    } catch {
+      // some browsers refuse notifications from a page without a service worker
+    }
+  }
+}
 
 // Keys seen during a snapshot so entries gone while disconnected can be pruned
 let snapshotSeen: Map<EventKind, Set<string>> | null = null;
@@ -79,6 +125,7 @@ export function apply(ev: Event) {
     return;
   }
   if (p.case && p.value) map.set(ev.id, p.value);
+  if (p.case === 'finding' && ev.action === EventAction.CREATED && ev.seq > 0n) announce(p.value);
   if (snapshotSeen && ev.seq === 0n) {
     let set = snapshotSeen.get(ev.kind);
     if (!set) snapshotSeen.set(ev.kind, (set = new Set()));
@@ -98,6 +145,10 @@ export function connect() {
     while (!signal.aborted) {
       snapshotSeen = new Map();
       try {
+        // Formats are spec data with no events, so each connection reads them once
+        const specs = await api.runtimes.listFormats({}, { signal });
+        live.formats.clear();
+        for (const f of specs.formats) live.formats.set(f.id, f);
         for await (const msg of api.events.watchEvents({ snapshot: true }, { signal })) {
           live.connected = true;
           live.needsToken = false;
@@ -175,4 +226,15 @@ export function modelKey(m: { sourceId: string; repo: string; group: string }): 
 
 export function unackedFindings(): Finding[] {
   return [...live.findings.values()].filter((f) => !f.acknowledged && f.kind !== FindingKind.UNSPECIFIED);
+}
+
+// Profiles of one runtime by name, the default one first
+export function profilesOf(runtimeId: string): Profile[] {
+  return [...live.profiles.values()].filter((p) => p.runtimeId === runtimeId).sort((a, b) => Number(b.default) - Number(a.default) || a.name.localeCompare(b.name));
+}
+
+// Params a run of a runtime starts from: the named profile, else the runtime default
+export function profileParams(runtimeId: string, profileId = ''): Record<string, string> {
+  const p = profileId ? live.profiles.get(profileId) : profilesOf(runtimeId).find((p) => p.default);
+  return p?.runtimeId === runtimeId ? { ...p.params } : {};
 }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"sync"
 	"time"
@@ -37,8 +38,12 @@ type Fetcher struct {
 	Workers int
 	Chunk   int64
 	Retries int
-	Limiter *rate.Limiter
-	Log     *slog.Logger
+	// Bytes per second by time of week, nil for no limit
+	Schedule *Schedule
+	Log      *slog.Logger
+
+	mu      sync.Mutex
+	limiter *rate.Limiter
 }
 
 type state struct {
@@ -47,13 +52,45 @@ type state struct {
 	Done  []bool `json:"done"`
 }
 
-// Builds a fetcher, deriving a limiter from bytes per second
+// Builds a fetcher limited to bytes per second at every hour, windows come through Schedule
 func New(workers int, chunk int64, retries int, bytesPerSecond uint64, log *slog.Logger) *Fetcher {
-	f := &Fetcher{Workers: max(workers, 1), Chunk: max(chunk, 1<<16), Retries: max(retries, 1), Log: log}
-	if bytesPerSecond > 0 {
-		f.Limiter = rate.NewLimiter(rate.Limit(bytesPerSecond), int(max(bytesPerSecond, 4<<20)))
+	return &Fetcher{Workers: max(workers, 1), Chunk: max(chunk, 1<<16), Retries: max(retries, 1), Schedule: &Schedule{base: bytesPerSecond}, Log: log}
+}
+
+// Waits out a paused window before a download the fetcher cannot meter starts
+func (f *Fetcher) Hold(ctx context.Context) error { return f.wait(ctx, 0) }
+
+// Holds a read of n bytes under the limit in force now, sleeping through a paused window
+func (f *Fetcher) wait(ctx context.Context, n int) error {
+	for {
+		bps, pause := f.Schedule.At(time.Now())
+		if pause {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(pausePoll):
+				continue
+			}
+		}
+		if bps == 0 || n == 0 {
+			return nil
+		}
+		return f.limiterFor(bps).WaitN(ctx, n)
 	}
-	return f
+}
+
+// Returns the one token bucket, retuned when the window changed the rate
+func (f *Fetcher) limiterFor(bps uint64) *rate.Limiter {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	burst := int(max(bps, 4<<20))
+	if f.limiter == nil {
+		f.limiter = rate.NewLimiter(rate.Limit(bps), burst)
+	} else if f.limiter.Limit() != rate.Limit(bps) {
+		f.limiter.SetLimit(rate.Limit(bps))
+		f.limiter.SetBurst(burst)
+	}
+	return f.limiter
 }
 
 // Fetches a blob with resume, verifies it, returns the digest
@@ -154,25 +191,62 @@ func saveState(partial string, st *state) error {
 	return os.Rename(tmp, partial+stateSuffix)
 }
 
-func (f *Fetcher) fetchChunk(ctx context.Context, blob sources.Blob, file *os.File, off, length int64, progress Progress) error {
+// Lands a URL in partial under the same limits as a blob and returns its digest
+//
+// A server that states the size and serves ranges gets resumable chunks, any
+// other is copied whole, from the start again on a failure.
+func (f *Fetcher) FetchURL(ctx context.Context, client *sources.HTTP, rawURL, partial string, progress Progress) (string, error) {
+	if resp, err := client.Do(ctx, http.MethodHead, rawURL, nil, nil); err == nil {
+		resp.Body.Close()
+		if resp.ContentLength > 0 && resp.Header.Get("Accept-Ranges") == "bytes" {
+			return f.Fetch(ctx, sources.NewRangeBlob(client, rawURL, resp.ContentLength), partial, "", progress)
+		}
+	}
+	if progress == nil {
+		progress = func(int64) {}
+	}
+	err := f.retry(ctx, progress, func() (int64, error) {
+		if err := f.wait(ctx, 0); err != nil {
+			return 0, err
+		}
+		resp, err := client.Do(ctx, http.MethodGet, rawURL, nil, nil)
+		if err != nil {
+			return 0, err
+		}
+		defer resp.Body.Close()
+		file, err := os.Create(partial)
+		if err != nil {
+			return 0, err
+		}
+		n, err := io.Copy(file, &meter{ctx: ctx, r: resp.Body, fetcher: f, progress: progress})
+		if cerr := file.Close(); err == nil {
+			err = cerr
+		}
+		return n, err
+	})
+	if err != nil {
+		return "", err
+	}
+	return HashFile(partial, nil)
+}
+
+// Runs try up to Retries times with backoff, taking back the progress a failed try reported
+func (f *Fetcher) retry(ctx context.Context, progress Progress, try func() (int64, error)) error {
 	var last error
-	for attempt := 0; attempt < f.Retries; attempt++ {
+	for attempt := 0; attempt < max(f.Retries, 1); attempt++ {
 		if attempt > 0 {
-			f.Log.Debug("retrying chunk", "offset", off, "attempt", attempt, "err", last)
+			f.Log.Debug("retrying", "attempt", attempt, "err", last)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(min(baseBackoff<<(attempt-1), maxBackoff)):
 			}
 		}
-		written, err := f.copyChunk(ctx, blob, file, off, length, progress)
-		if err == nil && written == length {
+		written, err := try()
+		if err == nil {
 			return nil
 		}
 		progress(-written)
-		if err == nil {
-			err = fmt.Errorf("short chunk at %d: %d of %d bytes", off, written, length)
-		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -181,13 +255,27 @@ func (f *Fetcher) fetchChunk(ctx context.Context, blob sources.Blob, file *os.Fi
 	return last
 }
 
+func (f *Fetcher) fetchChunk(ctx context.Context, blob sources.Blob, file *os.File, off, length int64, progress Progress) error {
+	return f.retry(ctx, progress, func() (int64, error) {
+		written, err := f.copyChunk(ctx, blob, file, off, length, progress)
+		if err == nil && written != length {
+			err = fmt.Errorf("short chunk at %d: %d of %d bytes", off, written, length)
+		}
+		return written, err
+	})
+}
+
 func (f *Fetcher) copyChunk(ctx context.Context, blob sources.Blob, file *os.File, off, length int64, progress Progress) (int64, error) {
+	// A paused window is waited out before the connection opens, not while it idles
+	if err := f.wait(ctx, 0); err != nil {
+		return 0, err
+	}
 	rc, err := sources.RangeOf(ctx, blob, off, length)
 	if err != nil {
 		return 0, err
 	}
 	defer rc.Close()
-	reader := &meter{ctx: ctx, r: io.LimitReader(rc, length), limiter: f.Limiter, progress: progress}
+	reader := &meter{ctx: ctx, r: io.LimitReader(rc, length), fetcher: f, progress: progress}
 	return io.Copy(io.NewOffsetWriter(file, off), reader)
 }
 
@@ -195,17 +283,15 @@ func (f *Fetcher) copyChunk(ctx context.Context, blob sources.Blob, file *os.Fil
 type meter struct {
 	ctx      context.Context
 	r        io.Reader
-	limiter  *rate.Limiter
+	fetcher  *Fetcher
 	progress Progress
 }
 
 func (m *meter) Read(p []byte) (int, error) {
 	n, err := m.r.Read(p)
 	if n > 0 {
-		if m.limiter != nil {
-			if lerr := m.limiter.WaitN(m.ctx, n); lerr != nil {
-				return n, lerr
-			}
+		if lerr := m.fetcher.wait(m.ctx, n); lerr != nil {
+			return n, lerr
 		}
 		m.progress(int64(n))
 	}

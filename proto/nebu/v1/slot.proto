@@ -3,6 +3,7 @@ syntax = "proto3";
 package nebu.v1;
 
 import "google/protobuf/timestamp.proto";
+import "nebu/v1/gateway.proto";
 import "nebu/v1/instance.proto";
 import "nebu/v1/task.proto";
 
@@ -35,6 +36,8 @@ message Slot {
   string task_id = 12;
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp updated_at = 14;
+  // Limits the slot's route enforces
+  Policy policy = 15;
 }
 
 // Creates a slot
@@ -45,6 +48,7 @@ message CreateSlotRequest {
   uint64 memory_bytes = 4;
   string runtime_id = 5;
   map<string, string> params = 6;
+  Policy policy = 7;
 }
 
 // Returns the new slot
@@ -79,6 +83,7 @@ message UpdateSlotRequest {
   uint64 memory_bytes = 4;
   string runtime_id = 5;
   map<string, string> params = 6;
+  Policy policy = 7;
 }
 
 // Returns the updated slot

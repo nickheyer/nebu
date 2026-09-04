@@ -1,0 +1,19 @@
+id: windows-memory
+description: Host memory from the operating system class
+os: [windows]
+exec:
+  command: powershell
+  args: [-NoProfile, -NonInteractive, -Command, 'Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory | Format-List']
+  timeout_ms: 20000
+parse:
+  kind: PARSE_KIND_KV
+emit:
+  pool:
+    kind: POOL_KIND_HOST
+    id: host
+    total: "{{.TotalVisibleMemorySize}}"
+    free: "{{.FreePhysicalMemory}}"
+    unit: kB
+  facts:
+    - key: mem.total
+      value: "{{.first.TotalVisibleMemorySize}} kB"

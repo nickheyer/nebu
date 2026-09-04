@@ -10,6 +10,7 @@ import (
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/monitor"
+	"github.com/nickheyer/nebu/internal/profiles"
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/build"
@@ -33,10 +34,14 @@ func wrap(err error) error {
 		errors.Is(err, tasks.ErrUnknownTask), errors.Is(err, store.ErrNotStored),
 		errors.Is(err, installs.ErrUnknownInstall), errors.Is(err, instances.ErrUnknownInstance),
 		errors.Is(err, installs.ErrUnknownBuild), errors.Is(err, build.ErrUnknownRecipe),
-		errors.Is(err, slots.ErrUnknownSlot), errors.Is(err, monitor.ErrUnknownWatch), errors.Is(err, monitor.ErrUnknownFinding):
+		errors.Is(err, slots.ErrUnknownSlot), errors.Is(err, monitor.ErrUnknownWatch), errors.Is(err, monitor.ErrUnknownWant), errors.Is(err, monitor.ErrUnknownFinding),
+		errors.Is(err, profiles.ErrUnknownProfile):
 		return connect.NewError(connect.CodeNotFound, err)
-	case errors.Is(err, runtime.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, monitor.ErrWatch), errors.Is(err, sources.ErrSource):
+	case errors.Is(err, runtime.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, monitor.ErrWatch), errors.Is(err, sources.ErrSource),
+		errors.Is(err, profiles.ErrProfile):
 		return connect.NewError(connect.CodeInvalidArgument, err)
+	case errors.Is(err, profiles.ErrProfileInUse):
+		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, transfer.ErrDigestMismatch):
 		return connect.NewError(connect.CodeDataLoss, err)
 	case errors.Is(err, sources.ErrUnsupported):

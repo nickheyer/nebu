@@ -1,14 +1,17 @@
 package estimate
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 
+	desc "github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/spec"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const (
@@ -143,7 +146,7 @@ func TestDensePartialAndFixed(t *testing.T) {
 	if plan.GetParams()["n_gpu_layers"] != "10" {
 		t.Fatalf("fixed override ignored %v", plan.GetParams())
 	}
-	in.Host = host(1*gib, 64*gib)
+	in.Host = host(256*mib, 64*gib)
 	in.Params = defaults(params, nil)
 	plan, err = p.Plan(in)
 	if err != nil {
@@ -208,5 +211,136 @@ func TestDeviceOnlyPolicy(t *testing.T) {
 func TestHuman(t *testing.T) {
 	if Human(1536*mib) != "1.5 GiB" || Human(10) != "10 B" {
 		t.Fatal(Human(1536*mib), Human(10))
+	}
+}
+
+// A run the daemon measured on real hardware: the descriptor it planned, the
+// params it launched with, and what the runtime and the device reported
+type measuredRun struct {
+	Runtime         string            `json:"runtime"`
+	Descriptor      json.RawMessage   `json:"descriptor"`
+	Params          map[string]string `json:"params"`
+	DeviceFreeBytes uint64            `json:"device_free_bytes"`
+	HostFreeBytes   uint64            `json:"host_free_bytes"`
+	Measured        map[string]uint64 `json:"measured"`
+}
+
+// Replans every measured run with the params it ran with and holds the plan to what the card reported
+func TestPlansMatchMeasuredRuns(t *testing.T) {
+	c, err := spec.Load(os.DirFS(filepath.Join("..", "..", "spec")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder, err := desc.New(c.Formats, c.Archs, c.Precisions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, _ := filepath.Glob(filepath.Join("testdata", "measured", "*.json"))
+	if len(files) == 0 {
+		t.Fatal("no measured runs")
+	}
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var run measuredRun
+		if err := json.Unmarshal(data, &run); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		d := &v1.Descriptor{}
+		if err := protojson.Unmarshal(run.Descriptor, d); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		p, params := policy(t, run.Runtime)
+		overrides := map[string]any{}
+		for k, v := range run.Params {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+				overrides[k] = n
+			} else {
+				overrides[k] = v
+			}
+		}
+		host := &v1.HostProfile{Pools: []*v1.MemoryPool{
+			{Id: "gpu", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: run.DeviceFreeBytes, FreeBytes: run.DeviceFreeBytes},
+			{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: run.HostFreeBytes, FreeBytes: run.HostFreeBytes},
+		}}
+		plan, err := p.Plan(Input{Descriptor: d, Formulas: builder.Formulas(d.GetArchSpecId()), Host: host, Params: defaults(params, overrides), Free: true})
+		if err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		within := func(name string, got, want uint64, low, high float64) {
+			ratio := float64(got) / float64(want)
+			if ratio < low || ratio > high {
+				t.Errorf("%s: %s planned %s, measured %s, ratio %.3f outside [%.2f, %.2f]", filepath.Base(file), name, human(got), human(want), ratio, low, high)
+			}
+		}
+		cache := run.Measured["device.cache"] + run.Measured["host.cache"]
+		within("cache", plan.GetCacheBytes(), cache, 0.99, 1.01)
+		weights := run.Measured["device.weights"] + run.Measured["host.weights"]
+		within("weights", plan.GetWeightsBytes(), weights, 0.99, 1.01)
+		// The device total may run a little over what the card reported, never under
+		within("device", PlannedDevice(plan), run.Measured[DeviceUsedKey], 1.0, 1.08)
+	}
+}
+
+func TestSlidingWindowAndSpannedDevices(t *testing.T) {
+	c, err := spec.Load(os.DirFS(filepath.Join("..", "..", "spec")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder, err := desc.New(c.Formats, c.Archs, c.Precisions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A Gemma 3 shaped model: 62 layers, a 1024 token window on five of every six
+	d := &v1.Descriptor{Architecture: "gemma3", Params: map[string]float64{"n_layer": 62, "n_head_kv": 16, "head_dim": 128, "head_dim_v": 128, "n_embd": 5376, "n_vocab": 262208, "n_swa": 1024}}
+	for _, a := range c.Archs {
+		if a.GetId() == "gemma3" {
+			d.ArchSpecId = a.GetId()
+		}
+	}
+	if d.ArchSpecId == "" {
+		t.Fatal("gemma3 arch spec missing")
+	}
+	for i := int32(0); i < 62; i++ {
+		d.Groups = append(d.Groups, &v1.TensorGroup{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, Layer: i, Bytes: 100 * mib})
+	}
+	p, params := policy(t, "llamacpp")
+	host := &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "g", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 80 * gib}, {Id: "h", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 80 * gib}}}
+	plan, err := p.Plan(Input{Descriptor: d, Formulas: builder.Formulas(d.GetArchSpecId()), Host: host, Params: defaults(params, map[string]any{"n_ctx": int64(32768)})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := uint64(32768) * 62 * 16 * 256 * 2
+	// Ten full layers hold 32k tokens, the other fifty-two hold the window plus a batch
+	want := uint64(32768)*10*16*256*2 + uint64(1024+512)*52*16*256*2
+	if plan.GetCacheBytes() != want || plan.GetCacheBytes() >= full/2 {
+		t.Fatalf("sliding window cache %s, want %s of a full %s", human(plan.GetCacheBytes()), human(want), human(full))
+	}
+	d.ArchSpecId, d.Architecture = "default", "llama"
+	plan, err = p.Plan(Input{Descriptor: d, Formulas: builder.Formulas("default"), Host: host, Params: defaults(params, map[string]any{"n_ctx": int64(32768)})})
+	if err != nil || plan.GetCacheBytes() != full {
+		t.Fatalf("a full cache arch ignores the window: %s %v", human(plan.GetCacheBytes()), err)
+	}
+
+	// vLLM at tensor parallel one sees one device, llama.cpp spreads over both
+	two := &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "a", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 8 * gib}, {Id: "b", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 8 * gib}, {Id: "h", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 64 * gib}}}
+	small := &v1.Descriptor{Architecture: "llama", ArchSpecId: "default", Params: map[string]float64{"n_layer": 4, "n_head_kv": 8, "head_dim": 128, "head_dim_v": 128, "n_embd": 4096, "n_vocab": 32000}}
+	for i := int32(0); i < 4; i++ {
+		small.Groups = append(small.Groups, &v1.TensorGroup{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, Layer: i, Bytes: 2 * gib})
+	}
+	vp, vparams := policy(t, "vllm")
+	one, err := vp.Plan(Input{Descriptor: small, Formulas: builder.Formulas("default"), Host: two, Params: defaults(vparams, map[string]any{"n_ctx": int64(1024)})})
+	if err != nil || one.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || len(one.GetPools()) != 2 {
+		t.Fatalf("tensor parallel one should plan on one device: %v %v", one, err)
+	}
+	both, err := vp.Plan(Input{Descriptor: small, Formulas: builder.Formulas("default"), Host: two, Params: defaults(vparams, map[string]any{"n_ctx": int64(1024), "tensor_parallel_size": int64(2)})})
+	if err != nil || both.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || len(both.GetPools()) != 3 {
+		t.Fatalf("tensor parallel two should span both: %v %v", both, err)
+	}
+	spread, err := p.Plan(Input{Descriptor: small, Formulas: builder.Formulas("default"), Host: two, Params: defaults(params, map[string]any{"n_ctx": int64(1024)})})
+	if err != nil || spread.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
+		t.Fatalf("llama.cpp spreads over every device: %v %v", spread, err)
 	}
 }

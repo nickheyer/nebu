@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nickheyer/nebu/pkg/proc"
 )
 
 func launcher() *ProcessLauncher {
@@ -136,23 +138,23 @@ func TestRunningAndTerminate(t *testing.T) {
 		t.Fatal(err)
 	}
 	pid := p.Pid()
-	if !Running(pid, append([]string{"sleep"}, spec.Args...)) {
+	if !proc.Running(pid, append([]string{"sleep"}, spec.Args...)) {
 		t.Fatal("live process with matching command should be running")
 	}
-	if Running(pid, []string{"sleep", "31"}) {
+	if proc.Running(pid, []string{"sleep", "31"}) {
 		t.Fatal("different command must not match")
 	}
-	if Running(pid, nil) {
+	if proc.Running(pid, nil) {
 		t.Fatal("empty command must not match")
 	}
-	if !Terminate(pid, 2*time.Second) {
+	if !proc.Terminate(pid, 2*time.Second) {
 		t.Fatal("terminate should report the process gone")
 	}
 	<-p.Done()
-	if Running(pid, []string{"sleep", "30"}) {
+	if proc.Running(pid, []string{"sleep", "30"}) {
 		t.Fatal("terminated process must not be running")
 	}
-	if !Terminate(pid, time.Second) {
+	if !proc.Terminate(pid, time.Second) {
 		t.Fatal("terminate on a gone pid is true")
 	}
 }
@@ -186,7 +188,7 @@ func TestAdoptIgnoringTerm(t *testing.T) {
 		t.Fatalf("adopted exit error %v", a.Err())
 	}
 	<-p.Done()
-	if Running(p.Pid(), []string{"sh"}) {
+	if proc.Running(p.Pid(), []string{"sh"}) {
 		t.Fatal("process should be gone")
 	}
 	if a.Stop(time.Second) != nil {

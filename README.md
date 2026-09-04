@@ -1,9 +1,19 @@
 # nebu
-Nebu is a model loading shim for inference services like llama.cpp, vllm, and others
+Nebu is a model loading shim for inference services like llama.cpp, vLLM, SGLang, and NeMo
 
 # Intro
 
-Nebu (named after Nebuchadnezzar, the matrix spaceship, not the babylonian guy) is yet another time-saving solution for a niche engineering problem - this time it's managing open source model weights and coordinating with backend inference platforms like `llama.cpp`. I say "like" but this is really my only target right now, though should be generic enough of an interface that we can jerry-rig anything, so if you only see llama cpp when this is public, you'll know I failed to keep things generic.
+Nebu (named after Nebuchadnezzar, the matrix spaceship, not the babylonian guy) is yet another time-saving solution for a niche engineering problem - this time it's managing open source model weights and coordinating with backend inference platforms like `llama.cpp`. "Like" is doing real work in that sentence: every runtime is a manifest, a recipe, and triage rules under `spec/`, no Go names one, and the same interface should jerry-rig anything.
+
+What ships today, each with its own page under `docs/`:
+
+- Four runtimes, llama.cpp, vLLM, SGLang, and NeMo, adopted, downloaded, or built from a recipe.
+- Sources on Hugging Face, GitHub, Ollama, ModelScope, Civitai, Kaggle, NGC, CSGHub, OCI registries, git, mirrors, and local directories, all merged in one catalog.
+- A gateway that speaks the OpenAI, Anthropic, and Ollama APIs from any runtime, with per route limits, CORS, and TLS.
+- Profiles, named param sets per runtime, layered under a slot's defaults and a request's own.
+- Watches and wants, so a new revision or a model that does not exist yet gets pulled and swapped in when it appears, with webhooks.
+- A chat page and `nebu chat` for prompting whatever is loaded through the gateway itself.
+- Linux, macOS, Windows, and FreeBSD hosts, processes owned and found again on every one.
 
 We are just doing what `ollama` already does, minus the weird commercial features, and with the added performance gained through better code, less bloat and coupling, and a generic patch system. Nebu will *not* be an inference provider, you still go through your router or direct api, we just facilitate the mundane devops of downloading models, moving them around the filesystem, stopping and starting the runetime(s), and if everything works out up to this point - installing/patching open source backend services to keep up with the new bleeding-edge ai standards and features that have to be rapidly adopted every week... 
 

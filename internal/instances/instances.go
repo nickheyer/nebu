@@ -33,6 +33,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/host"
 	"github.com/nickheyer/nebu/pkg/launch"
+	"github.com/nickheyer/nebu/pkg/proc"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/runtime"
 	"github.com/nickheyer/nebu/pkg/sources"
@@ -152,7 +153,7 @@ func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
 	if m.Routes != nil && rec.GetSlotId() == "" {
 		switch {
 		case rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY:
-			m.Routes.Set(rec.GetName(), rec.GetId(), "", rec.GetEndpoint(), modelOf(rec), m.api(rec))
+			m.Routes.Set(rec.GetName(), rec.GetId(), "", rec.GetEndpoint(), modelOf(rec), m.api(rec), nil)
 		case rec.GetState() == v1.InstanceState_INSTANCE_STATE_DRAINING && before != v1.InstanceState_INSTANCE_STATE_DRAINING:
 			m.Routes.Drain(rec.GetId())
 		case terminal(rec.GetState()) && !terminal(before):
@@ -169,14 +170,7 @@ func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
 
 // Returns the wire protocol of an instance's runtime
 func (m *Manager) api(rec *v1.Instance) v1.ApiFlavor {
-	rt, err := m.Runtimes.Get(rec.GetRuntimeId())
-	if err != nil {
-		return v1.ApiFlavor_API_FLAVOR_OPENAI
-	}
-	if api := rt.Manifest.GetLaunch().GetApi(); api != v1.ApiFlavor_API_FLAVOR_UNSPECIFIED {
-		return api
-	}
-	return v1.ApiFlavor_API_FLAVOR_OPENAI
+	return m.Runtimes.API(rec.GetRuntimeId())
 }
 
 // Formats the model an instance serves for routes
@@ -277,18 +271,18 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 		if req.Name == "" {
 			req.Name = res.Name
 		}
-		merged := make(map[string]string, len(res.Params)+len(req.GetParams()))
-		for k, v := range res.Params {
-			merged[k] = v
-		}
-		for k, v := range req.GetParams() {
-			merged[k] = v
-		}
-		req.Params = merged
 	}
 	descriptor, err := m.describe(ctx, stored)
 	if err != nil {
 		return nil, err
+	}
+	// A named profile picks its runtime when nothing else did
+	if req.GetRuntimeId() == "" && req.GetProfileId() != "" {
+		p, err := m.Inspector.Profile("", req.GetProfileId())
+		if err != nil {
+			return nil, err
+		}
+		req.RuntimeId = p.GetRuntimeId()
 	}
 	if req.GetRuntimeId() == "" {
 		if req.RuntimeId, err = m.defaultRuntime(ctx, stored.GetFormatId()); err != nil {
@@ -326,21 +320,25 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if res != nil {
 		planProfile = Constrain(profile, res.DeviceIDs, res.MemoryBytes)
 	}
-	params, err := rt.Params(req.GetParams())
+	var slotParams map[string]string
+	if res != nil {
+		slotParams = res.Params
+	}
+	// The one layering every plan uses, and a named profile is kept by id so a rename cannot strand it
+	used, layered, err := m.Inspector.Layer(rt.Manifest.GetId(), req.GetProfileId(), slotParams, req.GetParams())
+	if err != nil {
+		return nil, err
+	}
+	if req.GetProfileId() != "" {
+		req.ProfileId = used.GetId()
+	}
+	params, err := rt.Params(layered)
 	if err != nil {
 		return nil, err
 	}
 	p := &prepared{req: req, stored: stored, rt: rt, install: install, name: name, descriptor: descriptor, profile: profile, planned: planProfile, res: res, params: params}
 	if rt.Policy != nil {
-		p.plan, err = rt.Policy.Plan(estimate.Input{
-			Descriptor:    descriptor,
-			Formulas:      m.Inspector.Builder.Formulas(descriptor.GetArchSpecId()),
-			Host:          planProfile,
-			Params:        params,
-			Free:          true,
-			OverheadDelta: m.Calibration.Delta(rt.Manifest.GetId(), descriptor.GetArchitecture()),
-		})
-		if err != nil {
+		if p.plan, err = m.Inspector.Plan(rt, descriptor, planProfile, layered, true); err != nil {
 			return nil, err
 		}
 		for k, v := range p.plan.GetParams() {
@@ -358,6 +356,10 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	port, err := freePort()
 	if err != nil {
 		return nil, nil, err
+	}
+	// A model that just launched is the last the store evicts, a plan alone changes nothing
+	if err := m.Store.Touch(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup()); err != nil {
+		m.Log.Warn("store touch failed", "repo", stored.GetRepo(), "err", err)
 	}
 	artifacts := m.artifacts(stored, rt)
 	input := runtime.RenderInput{
@@ -464,7 +466,8 @@ func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance,
 			h.Logf("%s", line)
 		}
 	}()
-	err = cmd.Run()
+	// A converter forks workers, so a timeout or cancel takes the whole tree
+	err = proc.Run(cmd)
 	pw.Close()
 	<-done
 	if err != nil {
@@ -738,6 +741,27 @@ func (m *Manager) defaultRuntime(ctx context.Context, formatID string) (string, 
 	return "", fmt.Errorf("%w: no compatible runtime accepts %s", runtime.ErrParam, formatID)
 }
 
+// Names the instances whose request starts from a profile, live ones and any a
+// restart would relaunch, dropping the reference when clear is set
+func (m *Manager) ProfileReferrers(refers func(ref, runtimeID string) bool, clear bool) []string {
+	m.mu.Lock()
+	list := append([]*instance(nil), m.list...)
+	m.mu.Unlock()
+	var out []string
+	for _, in := range list {
+		rec := in.snapshot()
+		req := rec.GetRequest()
+		if terminal(rec.GetState()) && !rec.GetDesiredRunning() || !refers(req.GetProfileId(), req.GetRuntimeId()) {
+			continue
+		}
+		out = append(out, "instance "+rec.GetName())
+		if clear {
+			in.update(func(r *v1.Instance) { r.Request.ProfileId = "" })
+		}
+	}
+	return out
+}
+
 // Lists live instances bound to a slot, newest first
 func (m *Manager) InSlot(slotID string) []*v1.Instance {
 	var out []*v1.Instance
@@ -907,7 +931,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 	for _, in := range loaded {
 		rec := in.snapshot()
 		if !terminal(rec.GetState()) {
-			alive := launch.Running(int(rec.GetPid()), rec.GetCommand())
+			alive := proc.Running(int(rec.GetPid()), rec.GetCommand())
 			switch {
 			case alive && in.rt != nil:
 				m.adopt(ctx, in)
@@ -917,7 +941,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 				wg.Add(1)
 				go func(pid int, grace time.Duration) {
 					defer wg.Done()
-					launch.Terminate(pid, grace)
+					proc.Terminate(pid, grace)
 				}(int(rec.GetPid()), in.grace())
 			}
 			in.update(func(r *v1.Instance) {

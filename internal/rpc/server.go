@@ -18,12 +18,14 @@ import (
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/monitor"
+	"github.com/nickheyer/nebu/internal/profiles"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc/services"
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
 	"github.com/nickheyer/nebu/pkg/runtime"
 	"github.com/nickheyer/nebu/pkg/sources"
@@ -37,14 +39,15 @@ type Deps struct {
 	Host    *host.Prober
 	Doctor  *doctor.Doctor
 	Sources *sources.Manager
-	// Format ids hits are tagged with when a catalog names them
-	Formats   []string
+	// Formats in priority order, what hits are tagged with and what the UI puts into words
+	Formats   []*v1.FormatSpec
 	Runtimes  *runtime.Registry
 	Inspector *inspect.Inspector
 	Store     *store.Store
 	Puller    *pull.Puller
 	Tasks     *tasks.Manager
 	Installs  *installs.Manager
+	Profiles  *profiles.Manager
 	Instances *instances.Manager
 	Slots     *slots.Manager
 	Monitor   *monitor.Manager
@@ -64,7 +67,7 @@ func NewHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(nebuv1connect.NewHostServiceHandler(services.NewHostService(d.Host, d.Doctor), opts))
 	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector, d.Formats), opts))
-	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host, d.Installs), opts))
+	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Profiles, d.Formats), opts))
 	mux.Handle(nebuv1connect.NewInstanceServiceHandler(services.NewInstanceService(d.Instances), opts))
 	mux.Handle(nebuv1connect.NewEstimateServiceHandler(services.NewEstimateService(d.Inspector), opts))
 	mux.Handle(nebuv1connect.NewStoreServiceHandler(services.NewStoreService(d.Store, d.Puller, d.Events), opts))

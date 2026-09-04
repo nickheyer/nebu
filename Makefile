@@ -1,10 +1,20 @@
-.PHONY: gen proto-clean proto-lint web web-install web-check build build-cli run test lint vet cgo-guard spec-check clean dev release
+.PHONY: gen proto-clean proto-lint web web-install web-check build build-cli run test lint vet cgo-guard spec-check clean dev release migrate-diff migrate-reset migrate-hash migrate-validate migrate-status
 
 BIN := build/nebu
 BUF ?= buf
 NPM ?= npm
 WEB := web/nebu
 export CGO_ENABLED = 0
+
+# The schema in internal/db/schema.sql is the truth, atlas writes the migration from it
+ATLAS_IMAGE := arigaio/atlas:1.3.2-community
+ATLAS_RUN := docker run --rm \
+	--volume "$(shell pwd):/workspace" \
+	--workdir /workspace \
+	--user "$(shell id -u):$(shell id -g)" \
+	--env HOME=/tmp \
+	$(ATLAS_IMAGE)
+DB_FILE ?= $(HOME)/.local/share/nebu/nebu.db
 
 # Regenerates protobuf, connect, connect-es, and openapi outputs
 gen: proto-clean
@@ -59,13 +69,33 @@ vet: gen
 cgo-guard: gen
 	./scripts/cgo-guard.sh
 
+# Loads every embedded spec file the way the daemon does
 spec-check: gen
-	./scripts/validate-spec.sh
+	go test ./pkg/spec/ -run TestEmbeddedSpecsCompile -count=1
 
 lint: proto-lint vet cgo-guard spec-check web-check
 
 release: web
 	./scripts/release.sh
+
+# Writes a migration for whatever schema.sql changed
+migrate-diff:
+	@test -n "$(NAME)" || { echo "usage: make migrate-diff NAME=<name>"; exit 1; }
+	$(ATLAS_RUN) migrate diff $(NAME) --env local
+
+# Throws every migration away and writes schema.sql as the one init migration, the rule until release
+migrate-reset:
+	rm -f internal/db/migrations/*.sql internal/db/migrations/atlas.sum
+	$(ATLAS_RUN) migrate diff init --env local
+
+migrate-hash:
+	$(ATLAS_RUN) migrate hash --env local
+
+migrate-validate:
+	$(ATLAS_RUN) migrate validate --env local
+
+migrate-status:
+	$(ATLAS_RUN) migrate status --env local --url "sqlite://$(DB_FILE)"
 
 clean: proto-clean
 	rm -rf build $(WEB)/dist/* $(WEB)/.svelte-kit

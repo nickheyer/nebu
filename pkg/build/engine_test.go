@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,8 +16,38 @@ import (
 	"testing"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/spec"
+	"github.com/nickheyer/nebu/pkg/transfer"
 )
+
+// A registry whose github source reads releases from a fake API
+func githubRegistry(t *testing.T, base string) *sources.Registry {
+	t.Helper()
+	reg, err := sources.Build([]*v1.Source{{Id: "github", Kind: v1.SourceKind_SOURCE_KIND_GITHUB, Config: map[string]string{"endpoint": base}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
+// Serves the parts of the GitHub API a latest ref touches
+func githubHandler(releases []map[string]any) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/o/r":
+			w.Write([]byte(`{"default_branch":"main"}`))
+		case r.URL.Path == "/repos/o/r/releases":
+			json.NewEncoder(w).Encode(releases)
+		case strings.HasPrefix(r.URL.Path, "/repos/o/r/commits/"):
+			w.Write([]byte("c0ffee"))
+		case r.URL.Path == "/repos/o/r/branches" || r.URL.Path == "/repos/o/r/tags":
+			w.Write([]byte("[]"))
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
 
 func sourceTarball(t *testing.T, top string, files map[string]string) []byte {
 	t.Helper()
@@ -36,15 +67,18 @@ func server(t *testing.T) (*httptest.Server, *int) {
 	t.Helper()
 	downloads := 0
 	tarball := sourceTarball(t, "fake-2.1", map[string]string{"bin.in": "#!/bin/sh\necho $STAMP\n", "notes.txt": "hello\nworld\n"})
+	github := githubHandler([]map[string]any{
+		{"tag_name": "3.0-rc1", "prerelease": true},
+		{"tag_name": "2.1", "prerelease": false},
+	})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasPrefix(r.URL.Path, "/releases"):
-			json.NewEncoder(w).Encode([]map[string]any{
-				{"tag_name": "3.0-rc1", "prerelease": true},
-				{"tag_name": "2.1", "prerelease": false},
-			})
+		case strings.HasPrefix(r.URL.Path, "/repos/"):
+			github(w, r)
 		case r.URL.Path == "/fake-2.1.tar.gz":
-			downloads++
+			if r.Method == http.MethodGet {
+				downloads++
+			}
 			w.Write(tarball)
 		case r.URL.Path == "/extra.patch":
 			w.Write([]byte("--- a/notes.txt\n+++ b/notes.txt\n@@ -1,4 +1,5 @@\n hello\n patched\n from file\n+from url\n world\n"))
@@ -61,7 +95,7 @@ func engineRecipe(t *testing.T, base string) *Recipe {
 	y := `id: fake
 runtime_id: fake
 source:
-  release: ` + base + `/releases
+  releases: o/r
   archive: ` + base + `/fake-{{.ref}}.tar.gz
 tools: [sh]
 vars:
@@ -107,7 +141,7 @@ func TestEngineBuildsFromArchiveWithPatches(t *testing.T) {
 	srv, downloads := server(t)
 	rc := engineRecipe(t, srv.URL)
 	root := t.TempDir()
-	e := &Engine{Root: root, Patches: map[string][]byte{"more.patch": []byte("--- a/notes.txt\n+++ b/notes.txt\n@@ -1,3 +1,4 @@\n hello\n patched\n+from file\n world\n")}, Jobs: 3}
+	e := &Engine{Root: root, Patches: map[string][]byte{"more.patch": []byte("--- a/notes.txt\n+++ b/notes.txt\n@@ -1,3 +1,4 @@\n hello\n patched\n+from file\n world\n")}, Jobs: 3, Sources: githubRegistry(t, srv.URL), Fetcher: transfer.New(0, 0, 0, 0, slog.Default())}
 	sel, err := rc.Select(&v1.HostProfile{Os: "linux", Arch: "amd64", Facts: map[string]string{}}, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +210,7 @@ outputs: [bin]
 binary: bin
 `
 	rc := recipe(t, y)
-	e := &Engine{Root: t.TempDir()}
+	e := &Engine{Root: t.TempDir(), Fetcher: transfer.New(0, 0, 0, 0, slog.Default())}
 	sel, _ := rc.Select(&v1.HostProfile{Facts: map[string]string{}}, Options{})
 	b := sel.Build()
 	if err := e.Resolve(context.Background(), sel, b); err != nil {
@@ -262,19 +296,17 @@ func TestCacheNameAndLatestTag(t *testing.T) {
 	if !strings.HasSuffix(cacheName("https://x/y/z.tar.gz?x=1"), ".tar.gz") || !strings.HasSuffix(cacheName("https://x/p.patch"), ".patch") || strings.Contains(cacheName("https://x/plain"), ".") {
 		t.Fatal("cache names")
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/single" {
-			json.NewEncoder(w).Encode(map[string]any{"tag_name": "only"})
-			return
-		}
-		json.NewEncoder(w).Encode([]map[string]any{{"tag_name": "d", "draft": true}, {"tag_name": "p", "prerelease": true}})
-	}))
+	srv := httptest.NewServer(githubHandler([]map[string]any{{"tag_name": "d", "draft": true}, {"tag_name": "p", "prerelease": true}}))
 	defer srv.Close()
-	if tag, err := latestTag(context.Background(), srv.URL+"/single"); err != nil || tag != "only" {
-		t.Fatalf("single %q %v", tag, err)
-	}
-	if tag, err := latestTag(context.Background(), srv.URL+"/all-pre"); err != nil || tag != "d" {
+	reg := githubRegistry(t, srv.URL)
+	if tag, err := latestTag(context.Background(), reg, "github", "o/r"); err != nil || tag != "d" {
 		t.Fatalf("fallback %q %v", tag, err)
+	}
+	if _, err := latestTag(context.Background(), reg, "nope", "o/r"); err == nil {
+		t.Fatal("unknown source should fail")
+	}
+	if _, err := latestTag(context.Background(), nil, "github", "o/r"); err == nil {
+		t.Fatal("no registry should fail")
 	}
 	if _, err := spec.Load(); err != nil {
 		t.Fatal(err)

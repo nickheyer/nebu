@@ -7,6 +7,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/pkg/estimate"
@@ -45,9 +46,9 @@ func slotsTable(w io.Writer, list []*v1.Slot) {
 		if len(s.GetDeviceIds()) > 0 {
 			devices = strings.Join(s.GetDeviceIds(), ",")
 		}
-		rows = append(rows, []string{s.GetId(), s.GetName(), strings.ToUpper(eval.EnumShort(s.GetState())), modelText(s.GetRequest()), s.GetInstanceId(), devices, budget, s.GetError()})
+		rows = append(rows, []string{s.GetId(), s.GetName(), strings.ToUpper(eval.EnumShort(s.GetState())), modelText(s.GetRequest()), s.GetInstanceId(), devices, budget, policyText(s.GetPolicy()), s.GetError()})
 	}
-	table(w, []string{"ID", "NAME", "STATE", "MODEL", "INSTANCE", "DEVICES", "BUDGET", "ERROR"}, rows)
+	table(w, []string{"ID", "NAME", "STATE", "MODEL", "INSTANCE", "DEVICES", "BUDGET", "LIMITS", "ERROR"}, rows)
 }
 
 func modelText(req *v1.RunRequest) string {
@@ -65,12 +66,13 @@ func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	description := fs.String("description", "", "free text")
 	runtimeID := fs.String("runtime", "", "default runtime for models run in the slot")
 	fs.Var(&params, "param", "default runtime param as name=value, repeatable")
+	policy, limits := policyFlags(fs)
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return fmt.Errorf("usage: nebu slots create <name> [--device ID] [--memory 8GiB] [--runtime R] [--param k=v]")
+		return fmt.Errorf("usage: nebu slots create <name> [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D]")
 	}
 	bytes, err := parseMemory(*memory)
 	if err != nil {
@@ -80,6 +82,9 @@ func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := limits(); err != nil {
+		return err
+	}
 	cl, err := e.clients()
 	if err != nil {
 		return err
@@ -87,7 +92,7 @@ func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	resp, err := cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Description: *description, DeviceIds: devices, MemoryBytes: bytes, RuntimeId: *runtimeID, Params: paramMap}))
+	resp, err := cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Description: *description, DeviceIds: devices, MemoryBytes: bytes, RuntimeId: *runtimeID, Params: paramMap, Policy: policy}))
 	if err != nil {
 		return err
 	}
@@ -102,6 +107,7 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	description := fs.String("description", "", "free text")
 	runtimeID := fs.String("runtime", "", "default runtime for models run in the slot")
 	fs.Var(&params, "param", "default runtime param as name=value, repeatable")
+	policy, limits := policyFlags(fs)
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -117,6 +123,9 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := limits(); err != nil {
+		return err
+	}
 	cl, err := e.clients()
 	if err != nil {
 		return err
@@ -130,9 +139,22 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	}
 	// The update replaces every field, so start from what the slot has and change only what was passed
 	cur := current.Msg.GetSlot()
-	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Description: cur.GetDescription(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams()}
+	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Description: cur.GetDescription(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams(), Policy: cur.GetPolicy()}
+	if req.Policy == nil {
+		req.Policy = &v1.Policy{}
+	}
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
+		case "max-in-flight":
+			req.Policy.MaxInFlight = policy.MaxInFlight
+		case "rps":
+			req.Policy.RequestsPerSecond = policy.RequestsPerSecond
+		case "burst":
+			req.Policy.Burst = policy.Burst
+		case "timeout":
+			req.Policy.RequestTimeoutMs = policy.RequestTimeoutMs
+		case "upstream-timeout":
+			req.Policy.UpstreamTimeoutMs = policy.UpstreamTimeoutMs
 		case "device":
 			req.DeviceIds = nil
 			for _, d := range devices {
@@ -155,6 +177,63 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 	return e.print(resp.Msg, func(w io.Writer) { slotsTable(w, []*v1.Slot{resp.Msg.GetSlot()}) })
+}
+
+// Declares the route limit flags, the returned func fills the policy once parsed
+func policyFlags(fs *flag.FlagSet) (*v1.Policy, func() error) {
+	p := &v1.Policy{}
+	inFlight := fs.Uint("max-in-flight", 0, "requests in flight at once on the slot's route, 0 inherits the gateway default")
+	rps := fs.Float64("rps", 0, "sustained requests per second, 0 inherits")
+	burst := fs.Uint("burst", 0, "requests a quiet route absorbs at once, the rate rounded up when 0")
+	timeout := fs.String("timeout", "", "whole request timeout such as 60s or 5m, 0 inherits")
+	upstream := fs.String("upstream-timeout", "", "how long the runtime may take to start answering, such as 10m")
+	return p, func() error {
+		p.MaxInFlight, p.RequestsPerSecond, p.Burst = uint32(*inFlight), *rps, uint32(*burst)
+		var err error
+		if p.RequestTimeoutMs, err = parseMillis(*timeout); err != nil {
+			return fmt.Errorf("timeout: %w", err)
+		}
+		if p.UpstreamTimeoutMs, err = parseMillis(*upstream); err != nil {
+			return fmt.Errorf("upstream-timeout: %w", err)
+		}
+		return nil
+	}
+}
+
+func parseMillis(s string) (uint32, error) {
+	if strings.TrimSpace(s) == "" || s == "0" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, err
+	}
+	return uint32(d / time.Millisecond), nil
+}
+
+// Puts a policy into one line, dash when it inherits everything
+func policyText(p *v1.Policy) string {
+	var parts []string
+	if p.GetMaxInFlight() > 0 {
+		parts = append(parts, fmt.Sprintf("in-flight %d", p.GetMaxInFlight()))
+	}
+	if p.GetRequestsPerSecond() > 0 {
+		s := fmt.Sprintf("%g/s", p.GetRequestsPerSecond())
+		if p.GetBurst() > 0 {
+			s += fmt.Sprintf(" burst %d", p.GetBurst())
+		}
+		parts = append(parts, s)
+	}
+	if p.GetRequestTimeoutMs() > 0 {
+		parts = append(parts, "timeout "+(time.Duration(p.GetRequestTimeoutMs())*time.Millisecond).String())
+	}
+	if p.GetUpstreamTimeoutMs() > 0 {
+		parts = append(parts, "upstream "+(time.Duration(p.GetUpstreamTimeoutMs())*time.Millisecond).String())
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func parseMemory(s string) (uint64, error) {
@@ -209,6 +288,7 @@ func runSlotsShow(ctx context.Context, e *env, args []string) error {
 			{"budget", estimate.Human(s.GetMemoryBytes())},
 			{"runtime", s.GetRuntimeId()},
 			{"params", compact(s.GetParams())},
+			{"limits", policyText(s.GetPolicy())},
 			{"model", modelText(s.GetRequest())},
 			{"instance", s.GetInstanceId()},
 			{"task", s.GetTaskId()},
@@ -280,8 +360,9 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	runtimeID := fs.String("runtime", "", "runtime id, the slot default or the first that accepts the format when empty")
 	installID := fs.String("install", "", "install id, newest for the runtime when empty")
 	drainFirst := fs.Bool("drain-first", false, "stop the old instance before starting the new one even when both fit")
+	profile := fs.String("profile", "", "profile id or name to start params from, the runtime default when empty")
 	var params multi
-	fs.Var(&params, "param", "runtime param as name=value, repeatable")
+	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the profile and slot defaults")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -308,7 +389,7 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	run := &v1.RunRequest{SourceId: sourceID, Repo: positional[1], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Params: paramMap}
+	run := &v1.RunRequest{SourceId: sourceID, Repo: positional[1], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Params: paramMap, ProfileId: *profile}
 	resp, err := cl.slots.Swap(ctx, connect.NewRequest(&v1.SwapRequest{SlotId: positional[0], Run: run, DrainFirst: *drainFirst}))
 	if err != nil {
 		return err
@@ -361,9 +442,9 @@ func runRoutesList(ctx context.Context, e *env, args []string) error {
 func routesTable(w io.Writer, list []*v1.Route) {
 	var rows [][]string
 	for _, r := range list {
-		rows = append(rows, []string{r.GetName(), strings.ToUpper(eval.EnumShort(r.GetState())), r.GetModel(), r.GetInstanceId(), r.GetSlotId(), r.GetEndpoint(), strconv.FormatUint(r.GetRequests(), 10), strconv.Itoa(int(r.GetInFlight()))})
+		rows = append(rows, []string{r.GetName(), strings.ToUpper(eval.EnumShort(r.GetState())), r.GetModel(), r.GetInstanceId(), r.GetSlotId(), r.GetEndpoint(), strconv.FormatUint(r.GetRequests(), 10), strconv.Itoa(int(r.GetInFlight())), policyText(r.GetPolicy())})
 	}
-	table(w, []string{"NAME", "STATE", "MODEL", "INSTANCE", "SLOT", "ENDPOINT", "REQUESTS", "IN FLIGHT"}, rows)
+	table(w, []string{"NAME", "STATE", "MODEL", "INSTANCE", "SLOT", "ENDPOINT", "REQUESTS", "IN FLIGHT", "LIMITS"}, rows)
 }
 
 func runRoutesAdd(ctx context.Context, e *env, args []string) error {
@@ -439,9 +520,13 @@ func runGateway(ctx context.Context, e *env, args []string) error {
 			if l.GetShared() {
 				shared = " shared with the api"
 			}
-			fmt.Fprintf(w, "listening http://%s/v1%s\n", l.GetAddr(), shared)
+			scheme := "http"
+			if st.GetTls() {
+				scheme = "https"
+			}
+			fmt.Fprintf(w, "listening %s://%s/v1 and /api%s\n", scheme, l.GetAddr(), shared)
 		}
-		fmt.Fprintf(w, "auth %t requests %d\n", st.GetAuth(), st.GetRequests())
+		fmt.Fprintf(w, "auth %t tls %t requests %d default limits %s\n", st.GetAuth(), st.GetTls(), st.GetRequests(), policyText(st.GetPolicy()))
 		section(w, "routes")
 		routesTable(w, st.GetRoutes())
 	})
@@ -499,6 +584,7 @@ func runMonitorAdd(ctx context.Context, e *env, args []string) error {
 	autoPull := fs.Bool("auto-pull", false, "pull matching groups when they appear or change")
 	slot := fs.String("slot", "", "slot to swap onto the freshest pull, implies --auto-pull")
 	runtimeID := fs.String("runtime", "", "runtime used when swapping")
+	profile := fs.String("profile", "", "profile id or name the swap starts params from")
 	var params multi
 	fs.Var(&params, "param", "runtime param used when swapping, repeatable")
 	positional, err := parse(fs, args)
@@ -519,11 +605,121 @@ func runMonitorAdd(ctx context.Context, e *env, args []string) error {
 	if err := e.requireDaemon(); err != nil {
 		return err
 	}
-	resp, err := cl.monitor.AddWatch(ctx, connect.NewRequest(&v1.AddWatchRequest{SourceId: *source, Repo: positional[0], Revision: *revision, GroupMatch: *match, AutoPull: *autoPull || *slot != "", SlotId: *slot, RuntimeId: *runtimeID, Params: paramMap}))
+	resp, err := cl.monitor.AddWatch(ctx, connect.NewRequest(&v1.AddWatchRequest{SourceId: *source, Repo: positional[0], Revision: *revision, GroupMatch: *match, AutoPull: *autoPull || *slot != "", SlotId: *slot, RuntimeId: *runtimeID, Params: paramMap, ProfileId: *profile}))
 	if err != nil {
 		return err
 	}
 	return e.print(resp.Msg, func(w io.Writer) { watchesTable(w, []*v1.Watch{resp.Msg.GetWatch()}) })
+}
+
+func wantsTable(w io.Writer, list []*v1.Want) {
+	var rows [][]string
+	for _, wt := range list {
+		where := "every source"
+		if wt.GetSourceId() != "" {
+			where = wt.GetSourceId()
+		} else if wt.GetKind() != v1.SourceKind_SOURCE_KIND_UNSPECIFIED {
+			where = eval.EnumShort(wt.GetKind())
+		}
+		on := "record"
+		if wt.GetAutoPull() {
+			on = "pull"
+			if wt.GetSlotId() != "" {
+				on = "pull+swap " + wt.GetSlotId()
+			}
+		}
+		found := "-"
+		if wt.GetSatisfied() {
+			found = wt.GetFoundSourceId() + " " + wt.GetFoundRepo() + " " + wt.GetFoundGroup()
+		}
+		rows = append(rows, []string{wt.GetId(), wt.GetQuery(), where, wt.GetGroupMatch(), wt.GetFormatId(), on, found, stamp(wt.GetCheckedAt()), wt.GetError()})
+	}
+	table(w, []string{"ID", "QUERY", "WHERE", "MATCH", "FORMAT", "ON FOUND", "FOUND", "CHECKED", "ERROR"}, rows)
+}
+
+func runMonitorWants(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("monitor wants")
+	if _, err := parse(fs, args); err != nil {
+		return err
+	}
+	cl, err := e.clients()
+	if err != nil {
+		return err
+	}
+	if err := e.requireDaemon(); err != nil {
+		return err
+	}
+	resp, err := cl.monitor.ListWants(ctx, connect.NewRequest(&v1.ListWantsRequest{}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) { wantsTable(w, resp.Msg.GetWants()) })
+}
+
+func runMonitorWant(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("monitor want")
+	source := fs.String("source", "", "only this source, every source when empty")
+	kind := fs.String("kind", "", "only this provider, one of "+strings.Join(sourceKinds(), ", "))
+	match := fs.String("match", "", "regex over weight group names that satisfy the want")
+	format := fs.String("format", "", "format id a group must have, such as gguf")
+	autoPull := fs.Bool("auto-pull", false, "pull the group once found")
+	slot := fs.String("slot", "", "slot to swap onto the pull, implies --auto-pull")
+	runtimeID := fs.String("runtime", "", "runtime used when swapping")
+	profile := fs.String("profile", "", "profile id or name the swap starts params from")
+	var params multi
+	fs.Var(&params, "param", "runtime param used when swapping, repeatable")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) == 0 {
+		return fmt.Errorf("usage: nebu monitor want <query words> [flags]")
+	}
+	paramMap, err := parseParams(params)
+	if err != nil {
+		return err
+	}
+	req := &v1.AddWantRequest{Query: strings.Join(positional, " "), SourceId: *source, GroupMatch: *match, FormatId: *format, AutoPull: *autoPull, SlotId: *slot, RuntimeId: *runtimeID, Params: paramMap, ProfileId: *profile}
+	if *kind != "" {
+		if req.Kind, err = parseSourceKind(*kind); err != nil {
+			return err
+		}
+	}
+	cl, err := e.clients()
+	if err != nil {
+		return err
+	}
+	if err := e.requireDaemon(); err != nil {
+		return err
+	}
+	resp, err := cl.monitor.AddWant(ctx, connect.NewRequest(req))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) { wantsTable(w, []*v1.Want{resp.Msg.GetWant()}) })
+}
+
+func runMonitorUnwant(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("monitor unwant")
+	positional, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return fmt.Errorf("usage: nebu monitor unwant <id>")
+	}
+	cl, err := e.clients()
+	if err != nil {
+		return err
+	}
+	if err := e.requireDaemon(); err != nil {
+		return err
+	}
+	resp, err := cl.monitor.RemoveWant(ctx, connect.NewRequest(&v1.RemoveWantRequest{Id: positional[0]}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) { fmt.Fprintf(w, "no longer wanting %q\n", resp.Msg.GetWant().GetQuery()) })
 }
 
 func runMonitorRemove(ctx context.Context, e *env, args []string) error {
@@ -553,11 +749,12 @@ func runMonitorRemove(ctx context.Context, e *env, args []string) error {
 
 func runMonitorCheck(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("monitor check")
+	rearm := fs.Bool("rearm", false, "look again for a satisfied want, forgetting what it found")
 	positional, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
-	req := &v1.CheckWatchesRequest{}
+	req := &v1.CheckWatchesRequest{Rearm: *rearm}
 	if len(positional) == 1 {
 		req.Id = positional[0]
 	}

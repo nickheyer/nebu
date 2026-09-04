@@ -3,11 +3,12 @@
   import { page } from '$app/state';
   import { replaceState } from '$app/navigation';
   import { api, message } from '$lib/api';
+  import { live } from '$lib/state.svelte';
   import { fail } from '$lib/toast.svelte';
-  import { looksLikeRepo, pickSource, sortReversible, sourceName } from '$lib/catalog';
-  import type { SearchHit, SourceStatus } from '$proto/source_pb';
+  import { groupByProvider, groupLabel, kindParam, looksLikeRepo, parseKind, pickGroup, sortReversible, sourceLabels } from '$lib/catalog';
+  import { SourceKind, type SearchHit, type SourceStatus } from '$proto/source_pb';
   import type { RuntimeStatus } from '$proto/runtime_pb';
-  import { Search, Compass, LayoutGrid, List, ArrowDownWideNarrow, ArrowUpNarrowWide, Eye, KeyRound, X, RefreshCw, ExternalLink } from '@lucide/svelte';
+  import { Search, Compass, LayoutGrid, List, ArrowDownWideNarrow, ArrowUpNarrowWide, Eye, KeyRound, X, RefreshCw, ExternalLink, Settings } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
@@ -24,6 +25,7 @@
   let statuses = $state<SourceStatus[]>([]);
   let runtimes = $state<RuntimeStatus[]>([]);
   let sourcesError = $state('');
+  let kind = $state<SourceKind>(SourceKind.UNSPECIFIED);
   let sourceId = $state('');
   let query = $state('');
   let sort = $state('');
@@ -32,10 +34,11 @@
   let hits = $state<SearchHit[]>([]);
   let nextCursor = $state('');
   let total = $state(0n);
+  let warnings = $state<string[]>([]);
   let searching = $state(false);
   let loadingMore = $state(false);
   let searchError = $state('');
-  let selected = $state<{ repo: string; revision: string; hit: SearchHit | null } | null>(null);
+  let selected = $state<{ sourceId: string; repo: string; revision: string; hit: SearchHit | null } | null>(null);
   let drawerOpen = $state(false);
   let slotId = $state('');
   let view = $state<'grid' | 'list'>('grid');
@@ -45,10 +48,16 @@
   let generation = 0;
   let booted = false;
 
-  const status = $derived(pickSource(statuses, sourceId));
-  const source = $derived(status?.source);
+  const groups = $derived(groupByProvider(statuses));
+  // Every source at once, the tab before the providers
+  const all = $derived(kind === SourceKind.UNSPECIFIED && sourceId === '' && groups.length > 0);
+  const group = $derived(all ? undefined : pickGroup(groups, kind, sourceId));
+  // One source answers for the provider's capabilities, the chosen one or the first that works
+  const status = $derived(group?.sources.find((s) => s.source?.id === sourceId) ?? group?.sources.find((s) => !s.error) ?? group?.sources[0]);
   const caps = $derived(status?.capabilities);
-  const name = $derived(status ? sourceName(status) : 'the source');
+  const merged = $derived(all || (!!group && sourceId === '' && group.sources.length > 1));
+  const labels = $derived(sourceLabels(all ? statuses : (group?.sources ?? [])));
+  const name = $derived(all ? 'every source' : group ? (merged ? group.name : (labels.get(sourceId) ?? groupLabel(group))) : 'the source');
   const effectiveSort = $derived(sort || caps?.defaultSort || '');
   const sortLabel = $derived(caps?.sorts.find((s) => s.id === effectiveSort)?.label ?? effectiveSort);
   const reversible = $derived(sortReversible(caps, effectiveSort));
@@ -60,8 +69,11 @@
   });
   const activeFilters = $derived(Object.entries(filters).filter(([, v]) => v));
   const canSubmitRepo = $derived(looksLikeRepo(caps, query));
-  const needsToken = $derived(!!caps?.authRequired && !caps?.tokenPresent);
+  // Sources of the provider that browse but cannot download without a token
+  const tokenless = $derived((all ? statuses : merged ? (group?.sources ?? []) : status ? [status] : []).filter((s) => s.capabilities?.authRequired && !s.capabilities.tokenPresent));
   const browsing = $derived(!query.trim() && activeFilters.length === 0);
+  // The source a typed repository opens in: the chosen one, else the provider's first working source
+  const openSourceId = $derived(sourceId || status?.source?.id || statuses.find((s) => !s.error)?.source?.id || '');
 
   onMount(() => {
     try {
@@ -95,8 +107,11 @@
       return;
     }
     const p = page.url.searchParams;
-    const wanted = p.get('source') ?? '';
-    sourceId = pickSource(statuses, wanted)?.source?.id ?? '';
+    const wantedSource = p.get('source') ?? '';
+    const everything = p.get('provider') === 'all' && !wantedSource;
+    const g = everything ? undefined : pickGroup(groupByProvider(statuses), parseKind(p.get('provider') ?? ''), wantedSource);
+    kind = g?.kind ?? SourceKind.UNSPECIFIED;
+    sourceId = g?.sources.some((s) => s.source?.id === wantedSource) ? wantedSource : g && g.sources.length === 1 ? (g.sources[0].source?.id ?? '') : '';
     query = p.get('q') ?? '';
     sort = p.get('sort') ?? '';
     ascending = p.get('asc') === '1';
@@ -108,11 +123,22 @@
     booted = true;
     search();
     const repo = p.get('repo');
-    if (repo) openRepo(repo, p.get('rev') ?? '', null);
+    if (repo) openRepo(openSourceId, repo, p.get('rev') ?? '', null);
   }
 
-  // A source only accepts its own sorts and facets, so switching drops the rest
+  // Sources come and go on the settings page, the list follows without a reload
   $effect(() => {
+    void [...live.sources.keys()];
+    if (booted) api.sources.listSources({}).then((r) => (statuses = r.sources)).catch(() => {});
+  });
+
+  // A provider only accepts its own sorts and facets, so switching drops the rest, and searching everything carries none
+  $effect(() => {
+    if (all) {
+      if (sort) sort = '';
+      if (Object.keys(filters).length) filters = {};
+      return;
+    }
     if (!caps) return;
     if (sort && !caps.sorts.some((s) => s.id === sort)) sort = '';
     const keep: Record<string, string> = {};
@@ -127,6 +153,7 @@
 
   // Everything that changes the result set restarts the search from page one
   $effect(() => {
+    void kind;
     void sourceId;
     void effectiveSort;
     void ascending;
@@ -136,6 +163,8 @@
 
   function syncUrl() {
     const p = new URLSearchParams();
+    if (kind) p.set('provider', kindParam(kind));
+    else if (all) p.set('provider', 'all');
     if (sourceId) p.set('source', sourceId);
     if (query.trim()) p.set('q', query.trim());
     if (sort) p.set('sort', sort);
@@ -144,6 +173,7 @@
     if (selected && drawerOpen) {
       p.set('repo', selected.repo);
       if (selected.revision) p.set('rev', selected.revision);
+      if (selected.sourceId !== sourceId) p.set('source', selected.sourceId);
     }
     const qs = p.toString();
     const next = '/catalog' + (qs ? '?' + qs : '');
@@ -153,11 +183,11 @@
   function request(cursor = '') {
     const f: Record<string, string> = {};
     for (const [k, v] of activeFilters) f[k] = v;
-    return { sourceId, query: query.trim(), sort: effectiveSort, ascending: ascending && reversible, filters: f, limit: pageSize, cursor };
+    return { sourceId, kind: sourceId ? SourceKind.UNSPECIFIED : kind, query: query.trim(), sort: effectiveSort, ascending: ascending && reversible, filters: f, limit: pageSize, cursor };
   }
 
   async function search() {
-    if (!sourceId) return;
+    if (!group && !all) return;
     const gen = ++generation;
     searching = true;
     searchError = '';
@@ -168,11 +198,13 @@
       hits = r.hits;
       nextCursor = r.nextCursor;
       total = r.total;
+      warnings = r.warnings;
     } catch (err) {
       if (gen !== generation) return;
       hits = [];
       nextCursor = '';
       total = 0n;
+      warnings = [];
       searchError = message(err);
     } finally {
       if (gen === generation) searching = false;
@@ -186,10 +218,11 @@
     try {
       const r = await api.sources.search(request(nextCursor));
       if (gen !== generation) return;
-      const seen = new Set(hits.map((h) => h.repo));
-      hits = [...hits, ...r.hits.filter((h) => !seen.has(h.repo))];
+      const seen = new Set(hits.map((h) => h.sourceId + '/' + h.repo));
+      hits = [...hits, ...r.hits.filter((h) => !seen.has(h.sourceId + '/' + h.repo))];
       nextCursor = r.nextCursor;
       if (r.total) total = r.total;
+      warnings = [...new Set([...warnings, ...r.warnings])];
     } catch (err) {
       fail(err, 'Could not load more');
     } finally {
@@ -216,22 +249,23 @@
   function submit(e: Event) {
     e.preventDefault();
     if (debounce) clearTimeout(debounce);
-    if (canSubmitRepo && !hits.some((h) => h.repo === query.trim())) openRepo(query.trim(), '', null);
+    if (canSubmitRepo && !hits.some((h) => h.repo === query.trim())) openRepo(openSourceId, query.trim(), '', null);
     search();
   }
 
-  function pickSourceId(id: string) {
-    if (id === sourceId) return;
+  function pick(k: SourceKind, id: string) {
+    if (k === kind && id === sourceId) return;
+    kind = k;
     sourceId = id;
     input?.focus();
   }
 
   function openHit(h: SearchHit) {
-    openRepo(h.repo, '', h);
+    openRepo(h.sourceId || openSourceId, h.repo, '', h);
   }
 
-  function openRepo(repo: string, revision: string, hit: SearchHit | null) {
-    selected = { repo, revision, hit: hit ?? hits.find((h) => h.repo === repo) ?? null };
+  function openRepo(source: string, repo: string, revision: string, hit: SearchHit | null) {
+    selected = { sourceId: source, repo, revision, hit: hit ?? hits.find((h) => h.repo === repo && (h.sourceId || openSourceId) === source) ?? null };
     drawerOpen = true;
     syncUrl();
   }
@@ -264,6 +298,7 @@
     {#if caps?.webUrl}
       <a href={caps.webUrl} target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 hover:text-fg"><ExternalLink size={11} /> Open {name} in a new tab</a>
     {/if}
+    <a href="/settings" class="inline-flex items-center gap-1 hover:text-fg"><Settings size={11} /> Manage sources</a>
   {/snippet}
   <div role="group" aria-label="Layout" class="inline-flex rounded-md border border-line bg-sunken p-0.5">
     <button class="rounded p-1.5 {view === 'grid' ? 'bg-raised text-fg' : 'text-fg-faint hover:text-fg'}" title="Cards" onclick={() => setView('grid')}><LayoutGrid size={14} /></button>
@@ -281,7 +316,7 @@
   <div class="panel"><Skeleton rows={4} class="p-4" /></div>
 {:else}
   <div class="mb-3">
-    <SourceTabs {statuses} value={sourceId} onChange={pickSourceId} />
+    <SourceTabs {groups} {kind} {sourceId} onChange={pick} />
   </div>
 
   <form class="mb-3 flex flex-wrap items-center gap-2" onsubmit={submit}>
@@ -292,7 +327,7 @@
         class="input pr-28 pl-9"
         bind:value={query}
         oninput={onInput}
-        placeholder={caps?.search ? `Search ${name}, or paste ${caps?.repoExample || 'a repository name'} to open it` : `Type ${caps?.repoExample || 'a repository name'} to open it`}
+        placeholder={all ? 'Search every source at once' : caps?.search ? `Search ${name}, or paste ${caps?.repoExample || 'a repository name'} to open it` : `Type ${caps?.repoExample || 'a repository name'} to open it`}
         autocomplete="off"
         spellcheck="false"
       />
@@ -333,11 +368,15 @@
     </div>
   {/if}
 
-  {#if needsToken}
+  {#each tokenless as s (s.source?.id)}
     <div class="mb-4 flex items-center gap-2 rounded-lg border border-warn/30 bg-warn/8 px-3 py-2 text-xs text-warn">
       <KeyRound size={13} class="shrink-0" />
-      <span>{name} lets you browse freely but needs a token to download. Set <span class="font-mono">{caps?.tokenEnv || source?.tokenEnv || 'its token variable'}</span> in the daemon's environment and restart it.</span>
+      <span>{merged ? labels.get(s.source?.id ?? '') : name} lets you browse freely but needs a token to download. Set <span class="font-mono">{s.capabilities?.tokenEnv || 'its token variable'}</span> in the daemon's environment and restart it, or point the source at another variable in settings.</span>
     </div>
+  {/each}
+
+  {#if status?.error && !merged}
+    <div class="mb-4 rounded-lg border border-bad/30 bg-bad/8 px-3 py-2 text-xs text-bad">{status.error}. <a href="/settings" class="underline">Fix its settings</a>.</div>
   {/if}
 
   <div class="mb-2 flex items-center gap-3 text-xs text-fg-faint">
@@ -350,6 +389,10 @@
       </span>
     {/if}
   </div>
+
+  {#each warnings as w (w)}
+    <div class="mb-2 rounded-lg border border-warn/30 bg-warn/8 px-3 py-1.5 text-xs text-warn">{w}</div>
+  {/each}
 
   {#if searchError}
     <div class="panel">
@@ -375,8 +418,8 @@
     </div>
   {:else}
     <div class={view === 'grid' ? 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4' : 'flex flex-col gap-1.5'}>
-      {#each hits as h (h.repo)}
-        <HitCard hit={h} {caps} {runtimes} compact={view === 'list'} selected={selected?.repo === h.repo && drawerOpen} onOpen={openHit} />
+      {#each hits as h (h.sourceId + '/' + h.repo)}
+        <HitCard hit={h} {caps} {runtimes} compact={view === 'list'} from={merged ? (labels.get(h.sourceId) ?? h.sourceId) : ''} selected={selected?.repo === h.repo && selected?.sourceId === h.sourceId && drawerOpen} onOpen={openHit} />
       {/each}
     </div>
     <div bind:this={sentinel} class="flex items-center justify-center py-6 text-xs text-fg-faint">
@@ -392,5 +435,5 @@
 {/if}
 
 {#if selected}
-  <ModelDrawer bind:open={drawerOpen} {sourceId} sourceLabel={name} repo={selected.repo} revision={selected.revision} {caps} {runtimes} hit={selected.hit} bind:slotId onNavigate={(repo, rev) => { if (selected) selected = { ...selected, repo, revision: rev, hit: hits.find((h) => h.repo === repo) ?? null }; syncUrl(); }} />
+  <ModelDrawer bind:open={drawerOpen} sourceId={selected.sourceId} sourceLabel={labels.get(selected.sourceId) ?? name} repo={selected.repo} revision={selected.revision} {caps} {runtimes} hit={selected.hit} bind:slotId onNavigate={(repo, rev) => { if (selected) selected = { ...selected, repo, revision: rev, hit: hits.find((h) => h.repo === repo) ?? null }; syncUrl(); }} />
 {/if}

@@ -14,6 +14,9 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
+// Source id releases are read from when a recipe or rule names none
+const DefaultReleaseSource = "github"
+
 const (
 	// Ref value meaning the newest release in the feed
 	Latest = "latest"
@@ -58,7 +61,8 @@ type step struct {
 // Compiled recipe
 type Recipe struct {
 	Spec         *v1.Recipe
-	release      *eval.Template
+	releases     *eval.Template
+	source       *eval.Template
 	ref          *eval.Template
 	archive      *eval.Template
 	repo         *eval.Template
@@ -159,7 +163,10 @@ func compile(s *v1.Recipe) (*Recipe, error) {
 	rc := &Recipe{Spec: s}
 	var err error
 	src := s.GetSource()
-	if rc.release, err = optionalTemplate(src.GetRelease()); err != nil {
+	if rc.releases, err = optionalTemplate(src.GetReleases()); err != nil {
+		return nil, err
+	}
+	if rc.source, err = optionalTemplate(src.GetSource()); err != nil {
 		return nil, err
 	}
 	if rc.ref, err = optionalTemplate(src.GetRef()); err != nil {
@@ -307,7 +314,7 @@ func (rc *Recipe) Select(profile *v1.HostProfile, opts Options) (*Selection, err
 		}
 		sel.Ref = strings.TrimSpace(ref)
 	}
-	if sel.Ref == "" && rc.release != nil {
+	if sel.Ref == "" && rc.releases != nil {
 		sel.Ref = Latest
 	}
 	sel.overrides = opts.Vars

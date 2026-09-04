@@ -5,7 +5,7 @@
   import { runModel } from '$lib/slotActions.svelte';
   import { ago, bytes, count, params as fmtParams, when, enumLabel } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
-  import { facetValueLabel, fitSummary, formatBlurb, hitSize, orderDescriptors, precision, runtimesFor } from '$lib/catalog';
+  import { facetValueLabel, fitSummary, formatBlurb, formatNames, hitSize, orderDescriptors, precisionTone, runtimesFor } from '$lib/catalog';
   import { FitVerdict } from '$proto/estimate_pb';
   import type { SearchHit, SourceCapabilities, Revision, ModelCard } from '$proto/source_pb';
   import type { RuntimeStatus } from '$proto/runtime_pb';
@@ -60,6 +60,7 @@
   let cardError = $state('');
   let watchOpen = $state(false);
   let showFiles = $state(false);
+  let profileId = $state('');
   let generation = 0;
 
   const watched = $derived(!!curRepo && [...live.watches.values()].some((w) => w.sourceId === sourceId && w.repo === curRepo));
@@ -72,6 +73,8 @@
   const siteName = $derived(sourceLabel || caps?.description?.split(',')[0] || 'the source');
   const planRuntimes = $derived([...new Set((inspect?.rows ?? []).map((r) => r.runtimeId))]);
   const slotName = $derived(slotId ? (live.slots.get(slotId)?.name ?? 'the slot') : '');
+  const profiles = $derived([...live.profiles.values()].sort((a, b) => a.runtimeId.localeCompare(b.runtimeId) || Number(b.default) - Number(a.default) || a.name.localeCompare(b.name)));
+  const profileName = $derived(profileId ? (live.profiles.get(profileId)?.name ?? 'the profile') : '');
   const descriptorTitle = $derived(inspect && inspect.descriptors.length > 1 ? `${inspect.descriptors.length} versions of the weights` : 'The weights');
   const ordered = $derived(inspect ? orderDescriptors(inspect.descriptors, inspect.rows) : []);
   // The first row that fits is the largest that does, the usual thing to pull
@@ -101,11 +104,11 @@
     cardError = '';
     showFiles = false;
     inspecting = true;
-    plannedSlot = slotId;
+    planned = planKey();
     const target = { sourceId, repo: curRepo, revision: curRev };
     const jobs: Promise<void>[] = [
       api.estimate
-        .inspect({ ...target, slotId })
+        .inspect({ ...target, slotId, profileId })
         .then((r) => {
           if (gen === generation) inspect = r;
         })
@@ -141,20 +144,23 @@
     await Promise.all(jobs);
   }
 
-  // Re-plans when the slot changes, the listing is cached daemon side so it is cheap
-  let plannedSlot = '';
+  // Re-plans when the slot or profile changes, the listing is cached daemon side so it is cheap
+  let planned = '';
+  function planKey() {
+    return `${slotId}\0${profileId}`;
+  }
   $effect(() => {
-    const s = slotId;
+    const key = planKey();
     untrack(() => {
-      if (s === plannedSlot) return;
-      plannedSlot = s;
+      if (key === planned) return;
+      planned = key;
       if (open && inspect && !inspecting) refit();
     });
   });
   async function refit() {
     const gen = generation;
     try {
-      const r = await api.estimate.inspect({ sourceId, repo: curRepo, revision: curRev, slotId });
+      const r = await api.estimate.inspect({ sourceId, repo: curRepo, revision: curRev, slotId, profileId });
       if (gen === generation) inspect = r;
     } catch (err) {
       if (gen === generation) inspectError = message(err);
@@ -256,6 +262,12 @@
                 <option value="">Fit against the whole machine</option>
                 {#each [...live.slots.values()] as s (s.id)}<option value={s.id}>Fit inside {s.name}</option>{/each}
               </select>
+              {#if profiles.length}
+                <select class="input h-7 w-auto py-0 pr-7 text-xs" bind:value={profileId} aria-label="Plan from a profile" title="Start the plan from a named profile, which plans its own runtime, or from every runtime's default">
+                  <option value="">Default profiles</option>
+                  {#each profiles as p (p.id)}<option value={p.id}>{p.runtimeId} · {p.name}</option>{/each}
+                </select>
+              {/if}
             </div>
             <p class="mb-3 max-w-2xl text-xs leading-5 text-fg-muted">
               {#if inspect.descriptors.length > 1}
@@ -263,7 +275,7 @@
               {:else if inspect.descriptors.length === 1}
                 One set of weights. The fit column says whether it runs on this machine at the context lengths nebu plans for.
               {:else}
-                Nothing here looks like weights nebu can read. It understands GGUF files and safetensors shards next to a config.json.
+                Nothing here looks like weights nebu can read. It understands {formatNames()}.
               {/if}
             </p>
             <div class="overflow-x-auto rounded-lg border border-line">
@@ -274,7 +286,7 @@
                     {@render th('Precision', 'How compactly each weight is stored. Fewer bits means smaller and faster to load but a little less accurate.')}
                     {@render th('Parameters', 'How big the model is, in weights. 8B is eight billion. Bigger usually answers better and needs more memory.', true)}
                     {@render th('Download', 'What you would download, which is also roughly the memory the weights take.', true)}
-                    {@render th('Fit', 'Whether the weights plus room for the conversation fit in this machine\'s memory. The matrix below has the detail per context length.')}
+                    {@render th('Fit', 'Whether the weights plus room for the conversation fit in this machine\'s memory, and separately in what is free right now with everything already loaded. The matrix below has the detail per context length.')}
                     <th></th>
                   </tr>
                 </thead>
@@ -282,8 +294,10 @@
                   {#each ordered as d (d.group)}
                     {@const stored = storedModel(d.group)}
                     {@const task = pulling(d.group)}
-                    {@const p = precision(d)}
+                    {@const p = d.precision}
+                    {@const tone = precisionTone(p?.level ?? 0)}
                     {@const fit = fitSummary(inspect.rows, d.group)}
+                    {@const now = fitSummary(inspect.rows, d.group, true)}
                     {@const runners = runtimeNames(d.formatId)}
                     <tr>
                       <td>
@@ -292,7 +306,7 @@
                           {#if d.group === bestGroup && ordered.length > 1}<span class="rounded bg-accent/15 px-1.5 py-0.5 font-sans text-[10px] font-medium text-accent" title="The largest weights that fit this machine">largest that fits</span>{/if}
                         </div>
                         <div class="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-fg-faint">
-                          <span class="font-mono" title={formatBlurb[d.formatId] ?? d.formatId}>{d.formatId}</span>
+                          <span class="font-mono" title={formatBlurb(d.formatId)}>{d.formatId}</span>
                           {#if d.architecture}<span title="Architecture, the model family the runtime has to support">· {d.architecture}</span>{/if}
                         </div>
                       </td>
@@ -300,18 +314,19 @@
                         <div class="flex items-center gap-2">
                           <span class="flex items-center gap-0.5" title="Quality kept, out of five">
                             {#each [1, 2, 3, 4, 5] as i (i)}
-                              <span class="h-2 w-1.5 rounded-sm {i <= p.level ? (p.tone === 'ok' ? 'bg-ok' : p.tone === 'accent' ? 'bg-accent' : p.tone === 'warn' ? 'bg-warn' : p.tone === 'bad' ? 'bg-bad' : 'bg-fg-faint') : 'bg-line'}"></span>
+                              <span class="h-2 w-1.5 rounded-sm {i <= (p?.level ?? 0) ? (tone === 'ok' ? 'bg-ok' : tone === 'accent' ? 'bg-accent' : tone === 'warn' ? 'bg-warn' : tone === 'bad' ? 'bg-bad' : 'bg-fg-faint') : 'bg-line'}"></span>
                             {/each}
                           </span>
-                          <span class="text-xs text-fg">{p.label}</span>
+                          <span class="text-xs text-fg">{p?.label}</span>
                         </div>
-                        <div class="mt-0.5 text-[11px] leading-4 text-fg-faint">{p.blurb}</div>
+                        <div class="mt-0.5 text-[11px] leading-4 text-fg-faint">{p?.blurb}</div>
                       </td>
                       <td class="num text-xs">{fmtParams(d.parameterCount)}</td>
                       <td class="num text-xs whitespace-nowrap">{bytes(d.totalBytes, 1)}</td>
                       <td>
                         {#if fit}
                           <Badge tone={fit.tone} size="xs" dot label={fit.label} />
+                          {#if now && (now.verdict !== fit.verdict || now.context !== fit.context)}<div class="mt-0.5 text-[11px] {now.tone === 'bad' ? 'text-bad' : now.tone === 'warn' ? 'text-warn' : 'text-fg-faint'}" title="Against the memory free at this moment, with whatever is loaded now">{now.label}</div>{/if}
                           {#if planRuntimes.length > 1}<div class="mt-0.5 text-[11px] text-fg-faint">on {fit.runtime}</div>{/if}
                         {:else if runners}
                           <span class="text-xs text-fg-faint" title="No plan came back, see the warnings below">Not planned</span>
@@ -333,7 +348,7 @@
                       </td>
                     </tr>
                   {:else}
-                    <tr><td colspan="6" class="text-sm text-fg-faint">No weights nebu can read. The files below are what {siteName} lists; a GGUF file, safetensors shards with a config.json, or a NeMo checkpoint would show up here.</td></tr>
+                    <tr><td colspan="6" class="text-sm text-fg-faint">No weights nebu can read. The files below are what {siteName} lists. It reads {formatNames()}.</td></tr>
                   {/each}
                 </tbody>
               </table>
@@ -342,7 +357,7 @@
 
           {#if inspect.rows.length}
             <section>
-              <h3 class="mb-1 text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Fit by context length{slotName ? ` inside ${slotName}` : ''}</h3>
+              <h3 class="mb-1 text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Fit by context length{slotName ? ` inside ${slotName}` : ''}{profileName ? ` from ${profileName}` : ''}</h3>
               <p class="mb-3 max-w-2xl text-xs leading-5 text-fg-muted">
                 Context length is how much text the model holds at once, the prompt plus its reply, in tokens. Longer contexts need more memory for the model's working cache on top of the weights. Click a cell for the plan behind it.
               </p>

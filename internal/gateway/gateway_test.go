@@ -20,7 +20,7 @@ func tableOf(t *testing.T, routes map[string]string) *Table {
 		t.Fatal(err)
 	}
 	for name, ep := range routes {
-		table.Set(name, "inst-"+name, "", ep, "repo:"+name, v1.ApiFlavor_API_FLAVOR_OPENAI)
+		table.Set(name, "inst-"+name, "", ep, "repo:"+name, v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
 	}
 	return table
 }
@@ -32,7 +32,7 @@ func TestGateway(t *testing.T) {
 		w.Write([]byte(`{"path":"` + r.URL.Path + `","body":` + string(body) + `}`))
 	}))
 	defer upstream.Close()
-	g := New(tableOf(t, map[string]string{"m1": upstream.URL}), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	g := New(tableOf(t, map[string]string{"m1": upstream.URL}), nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"m1","messages":[]}`))

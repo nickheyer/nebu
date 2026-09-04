@@ -63,6 +63,9 @@ message Instance {
 }
 
 // Starts a stored model on a runtime
+//
+// Params apply over the profile named, or the runtime's default profile,
+// and over the slot's defaults.
 message RunRequest {
   string source_id = 1;
   string repo = 2;
@@ -73,6 +76,7 @@ message RunRequest {
   map<string, string> params = 7;
   string slot_id = 8;
   bool force = 9;
+  string profile_id = 10;
 }
 
 // Returns the instance and its startup task

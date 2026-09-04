@@ -44,12 +44,7 @@ func (s *GatewayService) SetRoute(ctx context.Context, req *connect.Request[v1.S
 	if r, ok := s.gateway.Table().Lookup(req.Msg.GetName()); ok && r.GetSlotId() != "" {
 		return nil, wrap(fmt.Errorf("%w: %s belongs to a slot", runtime.ErrParam, req.Msg.GetName()))
 	}
-	rt, err := s.instances.Runtimes.Get(in.GetRuntimeId())
-	api := v1.ApiFlavor_API_FLAVOR_OPENAI
-	if err == nil && rt.Manifest.GetLaunch().GetApi() != v1.ApiFlavor_API_FLAVOR_UNSPECIFIED {
-		api = rt.Manifest.GetLaunch().GetApi()
-	}
-	route := s.gateway.Table().Set(req.Msg.GetName(), in.GetId(), "", in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), api)
+	route := s.gateway.Table().Set(req.Msg.GetName(), in.GetId(), "", in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), s.instances.Runtimes.API(in.GetRuntimeId()), nil)
 	return connect.NewResponse(&v1.SetRouteResponse{Route: route}), nil
 }
 

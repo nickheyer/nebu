@@ -1,0 +1,9 @@
+id: gemma3
+description: Gemma 3, every sixth layer keeps the full cache, the rest a sliding window
+match: '(?i)^gemma3$'
+priority: 5
+formulas:
+  swa_pattern: 'swa_pattern ?? 6'
+  swa_layers: 'swa_pattern > 0 ? n_layer - floor(n_layer / swa_pattern) : n_layer'
+  swa_tokens: '(n_swa ?? 0) > 0 && (n_ctx ?? 0) > 0 ? min(n_ctx, n_swa + (n_ubatch ?? 0)) : (n_ctx ?? 1)'
+  cache_per_token: 'n_head_kv * (head_dim + head_dim_v) * ((n_layer - swa_layers) + swa_layers * swa_tokens / (n_ctx ?? 1))'

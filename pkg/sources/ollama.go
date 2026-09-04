@@ -18,12 +18,14 @@ import (
 
 // The Ollama library, browsed on the site and pulled from its registry
 var ollama = &Catalog{
-	ID:            "ollama",
-	Kind:          v1.SourceKind_SOURCE_KIND_OLLAMA,
-	Endpoint:      "https://ollama.com",
-	Registry:      "https://registry.ollama.ai",
+	ID:   "ollama",
+	Kind: v1.SourceKind_SOURCE_KIND_OLLAMA,
+	Name: "Ollama",
+	Transports: []Use{
+		httpUse("https://ollama.com", "OLLAMA_API_KEY"),
+		{Kind: TransportDistribution, Name: "registry", Fields: map[string]string{"endpoint": "https://registry.ollama.ai"}},
+	},
 	WebPath:       "/library",
-	TokenEnv:      "OLLAMA_API_KEY",
 	Description:   "Ollama library, pulled straight from its registry",
 	RepoExample:   "llama3.2:3b",
 	RepoPattern:   `^[\w.-]+(/[\w.-]+)?(:[\w.-]+)?$`,
@@ -33,6 +35,7 @@ var ollama = &Catalog{
 	Facets:        []*v1.Facet{olCapabilities()},
 	DefaultLimit:  30,
 	MaxLimit:      200,
+	HitFields:     []*v1.ConfigField{{Name: "sizes", Label: "Sizes", Description: "A size this model is published in, in parameters"}},
 	API:           ollamaAPI{},
 }
 

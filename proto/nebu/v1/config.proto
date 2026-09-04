@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "nebu/v1/gateway.proto";
 import "nebu/v1/recipe.proto";
 import "nebu/v1/source.proto";
 
@@ -14,12 +15,33 @@ message Logging {
   string file = 3;
 }
 
+// A span of the week with its own transfer limit
+message TransferWindow {
+  // Day names or ranges such as mon-fri or sat,sun, every day when empty
+  string days = 1;
+  // Local clock times as HH:MM, a from after to wraps past midnight
+  string from = 2;
+  string to = 3;
+  // Bytes per second inside the window, 0 for no limit
+  uint64 max_bytes_per_second = 4;
+  // Holds downloads inside the window
+  bool pause = 5;
+}
+
 // Download tuning
 message Transfer {
   uint32 workers = 1;
   uint64 chunk_bytes = 2;
   uint32 retries = 3;
   uint64 max_bytes_per_second = 4;
+  // Spans with their own limit, the first that holds wins, else max_bytes_per_second
+  repeated TransferWindow windows = 5;
+}
+
+// Store limits
+message Store {
+  // Blob bytes the store keeps under by evicting unused models before a pull, 0 for no cap
+  uint64 max_bytes = 1;
 }
 
 // OpenAI compatible gateway settings
@@ -28,6 +50,22 @@ message Gateway {
   repeated string api_keys = 2;
   string api_key_env = 3;
   uint32 drain_timeout_ms = 4;
+  // Limits every route enforces unless its slot says otherwise
+  Policy policy = 5;
+  // Origins browsers may call the gateway from, any when empty
+  repeated string cors_origins = 6;
+}
+
+// Where findings and failures are announced beyond the UI
+message Notify {
+  // URLs that receive one JSON document per finding and per failed instance
+  repeated string webhooks = 1;
+}
+
+// Certificate for the API and gateway listeners, plain HTTP when unset
+message Tls {
+  string cert_file = 1;
+  string key_file = 2;
 }
 
 // Bearer token required on the API listener when set
@@ -74,4 +112,7 @@ message Config {
   Monitor monitor = 14;
   Builds builds = 15;
   Web web = 16;
+  Store store = 17;
+  Tls tls = 18;
+  Notify notify = 19;
 }

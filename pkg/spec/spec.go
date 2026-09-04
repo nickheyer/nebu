@@ -17,13 +17,14 @@ import (
 
 // Every spec kind nebu ships or a site adds
 type Catalog struct {
-	Probes   []*v1.ProbeSpec
-	Formats  []*v1.FormatSpec
-	Archs    []*v1.ArchSpec
-	Runtimes []*v1.RuntimeManifest
-	Triage   []*v1.TriageSpec
-	Recipes  []*v1.Recipe
-	Patches  map[string][]byte
+	Probes     []*v1.ProbeSpec
+	Formats    []*v1.FormatSpec
+	Archs      []*v1.ArchSpec
+	Runtimes   []*v1.RuntimeManifest
+	Triage     []*v1.TriageSpec
+	Recipes    []*v1.Recipe
+	Precisions []*v1.PrecisionSpec
+	Patches    map[string][]byte
 }
 
 // Message with a stable id
@@ -53,6 +54,9 @@ func Load(layers ...fs.FS) (*Catalog, error) {
 			return nil, err
 		}
 		if c.Recipes, err = loadDir(fsys, "recipes", c.Recipes, func() *v1.Recipe { return &v1.Recipe{} }); err != nil {
+			return nil, err
+		}
+		if c.Precisions, err = loadDir(fsys, "precisions", c.Precisions, func() *v1.PrecisionSpec { return &v1.PrecisionSpec{} }); err != nil {
 			return nil, err
 		}
 		if err := loadFiles(fsys, "patches", c.Patches); err != nil {

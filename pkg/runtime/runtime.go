@@ -158,12 +158,18 @@ func compile(m *v1.RuntimeManifest) (*Runtime, error) {
 		rt.report = append(rt.report, reportRule{spec: r, re: re})
 	}
 	for _, p := range m.GetAcquire().GetPrebuilt() {
+		name := strings.Join(p.GetAssets(), ", ")
 		when, err := eval.Compile(p.GetWhen())
 		if err != nil {
-			return nil, fmt.Errorf("prebuilt rule %q: %w", p.GetAsset(), err)
+			return nil, fmt.Errorf("prebuilt rule %q: %w", name, err)
 		}
-		if _, err := regexp.Compile(p.GetAsset()); err != nil {
-			return nil, fmt.Errorf("prebuilt rule %q: %w", p.GetAsset(), err)
+		if len(p.GetAssets()) == 0 || p.GetReleases() == "" || p.GetBinary() == "" {
+			return nil, fmt.Errorf("prebuilt rule %q: needs releases, at least one asset, and a binary", name)
+		}
+		for _, a := range p.GetAssets() {
+			if _, err := regexp.Compile(a); err != nil {
+				return nil, fmt.Errorf("prebuilt rule %q: %w", name, err)
+			}
 		}
 		rt.prebuilt = append(rt.prebuilt, prebuiltRule{spec: p, when: when})
 	}
@@ -192,7 +198,7 @@ func (rt *Runtime) Prebuilt(profile *v1.HostProfile) (*v1.PrebuiltRule, error) {
 	for _, r := range rt.prebuilt {
 		ok, err := r.when.Bool(env)
 		if err != nil {
-			return nil, fmt.Errorf("prebuilt rule %q: %w", r.spec.GetAsset(), err)
+			return nil, fmt.Errorf("prebuilt rule %q: %w", strings.Join(r.spec.GetAssets(), ", "), err)
 		}
 		if ok {
 			return r.spec, nil
@@ -214,6 +220,16 @@ func (rt *Runtime) StopGrace() time.Duration {
 
 // Lists runtimes by id
 func (r *Registry) List() []*Runtime { return r.list }
+
+// Returns the wire format a runtime's server speaks, OpenAI when the manifest says nothing
+func (r *Registry) API(id string) v1.ApiFlavor {
+	if r != nil {
+		if rt, ok := r.byID[id]; ok && rt.Manifest.GetLaunch().GetApi() != v1.ApiFlavor_API_FLAVOR_UNSPECIFIED {
+			return rt.Manifest.GetLaunch().GetApi()
+		}
+	}
+	return v1.ApiFlavor_API_FLAVOR_OPENAI
+}
 
 // Returns one runtime by id
 func (r *Registry) Get(id string) (*Runtime, error) {
@@ -255,6 +271,17 @@ func (rt *Runtime) Compatible(profile *v1.HostProfile) (bool, []string) {
 func (rt *Runtime) Status(profile *v1.HostProfile) *v1.RuntimeStatus {
 	ok, unmet := rt.Compatible(profile)
 	return &v1.RuntimeStatus{Manifest: rt.Manifest, Compatible: ok, Unmet: unmet}
+}
+
+// Layers param maps, later ones over earlier ones, into a fresh map
+func Merge(layers ...map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, l := range layers {
+		for k, v := range l {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // Resolves typed params from defaults and overrides

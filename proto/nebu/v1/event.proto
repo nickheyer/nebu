@@ -30,6 +30,8 @@ enum EventKind {
   EVENT_KIND_WATCH = 9;
   EVENT_KIND_FINDING = 10;
   EVENT_KIND_SOURCE = 11;
+  EVENT_KIND_PROFILE = 12;
+  EVENT_KIND_WANT = 13;
 }
 
 // How it changed
@@ -60,6 +62,8 @@ message Event {
     Watch watch = 18;
     Finding finding = 19;
     Source source = 20;
+    Profile profile = 21;
+    Want want = 22;
   }
 }
 

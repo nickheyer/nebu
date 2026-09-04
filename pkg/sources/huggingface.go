@@ -15,16 +15,24 @@ import (
 
 // The Hugging Face Hub
 var huggingface = &Catalog{
-	ID:            "huggingface",
-	Kind:          v1.SourceKind_SOURCE_KIND_HUGGINGFACE,
-	Endpoint:      "https://huggingface.co",
-	TokenEnv:      "HF_TOKEN",
-	Description:   "Hugging Face Hub",
+	ID:   "huggingface",
+	Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE,
+	Name: "Hugging Face",
+	Transports: []Use{
+		httpUse("https://huggingface.co", "HF_TOKEN"),
+		{Kind: TransportHFCLI, Name: "cli", Fields: map[string]string{"command": ""}, Inherit: []string{"endpoint", "token_env"}},
+	},
+	Description:   "Hugging Face Hub, and any hub that speaks its API",
 	RepoExample:   "org/model",
 	RepoPattern:   `^[\w.-]+/[\w.-]+$`,
 	RevisionLabel: "revision",
 	Sorts:         []string{SortTrending, SortDownloads, SortLikes, SortUpdated, SortCreated},
-	API:           hubAPI{},
+	Noise:         []string{"endpoints_compatible", "eval-results", "autotrain_compatible", "text-generation-inference", "custom_code", "model-index", "has_space", "safetensors", "gguf", "pytorch", "transformers", ".+:.+", "[a-z]{2,3}"},
+	HitFields: []*v1.ConfigField{
+		{Name: "architecture", Label: "Architecture", Description: "Model architecture the GGUF header names"},
+		{Name: "context", Label: "Context", Description: "Context length in tokens the GGUF header declares"},
+	},
+	API: hubAPI{},
 }
 
 func init() { register(huggingface) }
@@ -290,6 +298,19 @@ func (hubAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v1.M
 	return c.CardText(ctx, c.URL(repo, "raw", revision, "README.md"), nil, c.Base()+"/"+repo)
 }
 
+// Opens a file for ranged reads over HTTP; with the CLI turned on, whole files land through it instead
 func (hubAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error) {
-	return c.Range(c.URL(model.GetRepo(), "resolve", model.GetRevision(), artifact.GetPath()), artifact)
+	b, err := c.Range(ctx, c.URL(model.GetRepo(), "resolve", model.GetRevision(), artifact.GetPath()), artifact)
+	if err != nil {
+		return nil, err
+	}
+	cli := c.CLI()
+	if cli == nil {
+		return b, nil
+	}
+	whole, err := cli.Open(ctx, model.GetRepo()+"@"+model.GetRevision()+"/"+artifact.GetPath(), int64(artifact.GetSizeBytes()))
+	if err != nil {
+		return nil, err
+	}
+	return &rangedWhole{Blob: b, whole: whole}, nil
 }

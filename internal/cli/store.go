@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func runPull(ctx context.Context, e *env, args []string) error {
@@ -87,15 +89,18 @@ func runList(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 	return e.print(resp.Msg, func(w io.Writer) {
+		stamp := func(ts *timestamppb.Timestamp) string {
+			if ts == nil {
+				return "-"
+			}
+			return ts.AsTime().Local().Format("2006-01-02 15:04")
+		}
 		var rows [][]string
 		for _, m := range resp.Msg.GetModels() {
-			pulled := "-"
-			if m.GetPulledAt() != nil {
-				pulled = m.GetPulledAt().AsTime().Local().Format("2006-01-02 15:04")
-			}
-			rows = append(rows, []string{m.GetSourceId(), m.GetRepo(), m.GetGroup(), m.GetFormatId(), m.GetDescriptor_().GetArchitecture(), estimate.Human(m.GetBytes()), pulled, m.GetPath()})
+			// Eviction takes the model used longest ago, a model never run counting from its pull
+			rows = append(rows, []string{m.GetSourceId(), m.GetRepo(), m.GetGroup(), m.GetFormatId(), m.GetDescriptor_().GetArchitecture(), estimate.Human(m.GetBytes()), stamp(m.GetPulledAt()), stamp(cmp.Or(m.GetUsedAt(), m.GetPulledAt())), m.GetPath()})
 		}
-		table(w, []string{"SOURCE", "REPO", "GROUP", "FORMAT", "ARCH", "SIZE", "PULLED", "PATH"}, rows)
+		table(w, []string{"SOURCE", "REPO", "GROUP", "FORMAT", "ARCH", "SIZE", "PULLED", "USED", "PATH"}, rows)
 	})
 }
 
@@ -189,8 +194,12 @@ func runStoreStatus(ctx context.Context, e *env, args []string) error {
 	}
 	st := resp.Msg.GetStatus()
 	return e.print(resp.Msg, func(w io.Writer) {
-		table(w, []string{"PATH", "MODELS", "BLOBS", "BLOB BYTES", "PARTIALS", "PARTIAL BYTES"}, [][]string{{
-			st.GetPath(), strconv.FormatUint(st.GetModels(), 10), strconv.FormatUint(st.GetBlobs(), 10), estimate.Human(st.GetBlobBytes()),
+		cap := "-"
+		if st.GetMaxBytes() > 0 {
+			cap = estimate.Human(st.GetMaxBytes())
+		}
+		table(w, []string{"PATH", "MODELS", "BLOBS", "BLOB BYTES", "CAP", "PARTIALS", "PARTIAL BYTES"}, [][]string{{
+			st.GetPath(), strconv.FormatUint(st.GetModels(), 10), strconv.FormatUint(st.GetBlobs(), 10), estimate.Human(st.GetBlobBytes()), cap,
 			strconv.FormatUint(st.GetPartials(), 10), estimate.Human(st.GetPartialBytes()),
 		}})
 	})

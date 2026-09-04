@@ -27,10 +27,16 @@ type paramRule struct {
 	tensor *regexp.Regexp
 }
 
+type precisionRule struct {
+	spec *v1.PrecisionRule
+	re   *regexp.Regexp
+}
+
 type compiledFormat struct {
-	spec    *v1.FormatSpec
-	tensors []tensorRule
-	params  []paramRule
+	spec       *v1.FormatSpec
+	tensors    []tensorRule
+	params     []paramRule
+	precisions []precisionRule
 }
 
 type compiledArch struct {
@@ -39,16 +45,21 @@ type compiledArch struct {
 	formulas map[string]*eval.Expr
 }
 
-// Builds descriptors from raw models using format and arch specs
+// Builds descriptors from raw models using format, arch, and precision specs
 type Builder struct {
 	formats map[string]*compiledFormat
 	archs   []*compiledArch
 	byID    map[string]*compiledArch
+	levels  []*v1.PrecisionLevel
 }
 
-// Compiles format and arch specs
-func New(formats []*v1.FormatSpec, archs []*v1.ArchSpec) (*Builder, error) {
+// Compiles format, arch, and precision specs
+func New(formats []*v1.FormatSpec, archs []*v1.ArchSpec, precisions []*v1.PrecisionSpec) (*Builder, error) {
 	b := &Builder{formats: map[string]*compiledFormat{}, byID: map[string]*compiledArch{}}
+	for _, p := range precisions {
+		b.levels = append(b.levels, p.GetLevels()...)
+	}
+	sort.SliceStable(b.levels, func(i, j int) bool { return b.levels[i].GetBits() > b.levels[j].GetBits() })
 	for _, f := range formats {
 		cf := &compiledFormat{spec: f}
 		for _, t := range f.GetTensors() {
@@ -57,6 +68,16 @@ func New(formats []*v1.FormatSpec, archs []*v1.ArchSpec) (*Builder, error) {
 				return nil, fmt.Errorf("format %s tensor rule: %w", f.GetId(), err)
 			}
 			cf.tensors = append(cf.tensors, tensorRule{re: re, kind: t.GetKind()})
+		}
+		for _, r := range f.GetPrecisions() {
+			re, err := regexp.Compile(r.GetMatch())
+			if err != nil {
+				return nil, fmt.Errorf("format %s precision rule: %w", f.GetId(), err)
+			}
+			if r.GetKey() == "" {
+				return nil, fmt.Errorf("format %s precision rule %q: key required", f.GetId(), r.GetMatch())
+			}
+			cf.precisions = append(cf.precisions, precisionRule{spec: r, re: re})
 		}
 		for _, p := range f.GetParams() {
 			rule := paramRule{name: p.GetName(), keys: p.GetKeys()}
@@ -221,7 +242,67 @@ func (b *Builder) Build(raw *v1.RawModel) (*v1.Descriptor, error) {
 			break
 		}
 	}
+	d.Precision = b.precision(f, raw, d)
 	return d, nil
+}
+
+// Puts a weight group's precision into words from the format's rules and the level table
+func (b *Builder) precision(f *compiledFormat, raw *v1.RawModel, d *v1.Descriptor) *v1.Precision {
+	var bits uint32
+	var name string
+	var notes []string
+	for _, rule := range f.precisions {
+		text := d.GetGroup()
+		if rule.spec.GetKey() != "group" {
+			text = raw.GetMetadata()[rule.spec.GetKey()]
+		}
+		m := rule.re.FindStringSubmatchIndex(text)
+		if m == nil {
+			continue
+		}
+		width := rule.spec.GetBits()
+		if i := rule.re.SubexpIndex("bits"); i >= 0 && m[2*i] >= 0 {
+			if n, err := strconv.ParseUint(text[m[2*i]:m[2*i+1]], 10, 32); err == nil {
+				width = uint32(n)
+			}
+		}
+		// The first rule carrying a width claims it, later widths are other readings of the same group
+		if width > 0 {
+			if bits > 0 {
+				continue
+			}
+			bits = width
+		}
+		if i := rule.re.SubexpIndex("name"); i >= 0 && m[2*i] >= 0 && name == "" {
+			name = text[m[2*i]:m[2*i+1]]
+		}
+		if rule.spec.GetNote() != "" {
+			notes = append(notes, string(rule.re.ExpandString(nil, rule.spec.GetNote(), text, m)))
+		}
+	}
+	if bits == 0 && d.GetBitsPerWeight() > 0 {
+		// Measured widths sit between the named ones, a rounded 16 and a floored 4.6 read right
+		if d.GetBitsPerWeight() >= 12 {
+			bits = uint32(math.Round(d.GetBitsPerWeight()))
+		} else {
+			bits = uint32(math.Floor(d.GetBitsPerWeight()))
+		}
+	}
+	out := &v1.Precision{Bits: bits}
+	for _, l := range b.levels {
+		if bits >= l.GetBits() {
+			out.Label, out.Blurb, out.Level = l.GetLabel(), l.GetBlurb(), l.GetLevel()
+			break
+		}
+	}
+	if name != "" && out.Level > 0 {
+		out.Label += " " + name
+	}
+	if len(notes) > 0 {
+		note := strings.Join(notes, ", ")
+		out.Blurb = strings.TrimSpace(out.Blurb + " " + strings.ToUpper(note[:1]) + note[1:] + ".")
+	}
+	return out
 }
 
 func (f *compiledFormat) classify(name string) (v1.TensorGroupKind, int32) {

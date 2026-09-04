@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -22,6 +23,8 @@ import (
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/monitor"
+	"github.com/nickheyer/nebu/internal/notify"
+	"github.com/nickheyer/nebu/internal/profiles"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc"
 	"github.com/nickheyer/nebu/internal/slots"
@@ -46,6 +49,9 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// What the daemon reports as its version, set by the CLI from build info
+var Version = "dev"
+
 const (
 	profileTTL        = 30 * time.Second
 	shutdownTimeout   = 10 * time.Second
@@ -68,9 +74,11 @@ type Daemon struct {
 	Tasks     *tasks.Manager
 	Puller    *pull.Puller
 	Installs  *installs.Manager
+	Profiles  *profiles.Manager
 	Instances *instances.Manager
 	Slots     *slots.Manager
 	Monitor   *monitor.Manager
+	Notifier  *notify.Notifier
 	Gateway   *gateway.Gateway
 	Routes    *gateway.Table
 	Log       *slog.Logger
@@ -78,6 +86,7 @@ type Daemon struct {
 	cancel    context.CancelFunc
 	closeOnce sync.Once
 	addr      string
+	secure    bool
 }
 
 // Builds every manager from config
@@ -104,7 +113,7 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
-	builder, err := descriptor.New(catalog.Formats, catalog.Archs)
+	builder, err := descriptor.New(catalog.Formats, catalog.Archs, catalog.Precisions)
 	if err != nil {
 		return nil, err
 	}
@@ -131,9 +140,19 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
+	blobStore.MaxBytes = cfg.GetStore().GetMaxBytes()
 	store, err := db.Open(filepath.Join(cfg.GetDataDir(), "nebu.db"))
 	if err != nil {
 		return nil, err
+	}
+	if store.SetAside != "" {
+		log.Warn("a database from before the atlas migrations was set aside and a fresh one started", "copy", store.SetAside)
+	}
+	if store.Baselined != "" {
+		log.Warn("database revisions no longer matched the migration directory", "baseline", store.Baselined)
+	}
+	for _, line := range store.Drift {
+		log.Warn("schema drift, the database and schema.sql disagree, run make migrate-reset", "change", line)
 	}
 	if err := store.ImportLegacy(context.Background(), cfg.GetDataDir(), log); err != nil {
 		store.Close()
@@ -141,7 +160,7 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	}
 	bus := events.New()
 	// Seeded defaults and config entries become rows here, the registry follows the rows from then on
-	srcMgr := sources.NewManager(store, bus, log)
+	srcMgr := sources.NewManager(store, bus, log, filepath.Join(cfg.GetCacheDir(), "sources"))
 	if err := srcMgr.Load(context.Background(), cfg.GetSources()); err != nil {
 		store.Close()
 		return nil, err
@@ -179,6 +198,10 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	}
 	tr := cfg.GetTransfer()
 	fetcher := transfer.New(int(tr.GetWorkers()), int64(tr.GetChunkBytes()), int(tr.GetRetries()), tr.GetMaxBytesPerSecond(), log)
+	if fetcher.Schedule, err = transfer.NewSchedule(tr.GetMaxBytesPerSecond(), tr.GetWindows()); err != nil {
+		store.Close()
+		return nil, fmt.Errorf("transfer windows: %w", err)
+	}
 	d.Puller = &pull.Puller{
 		Inspector: d.Inspector,
 		Store:     blobStore,
@@ -192,14 +215,22 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		RuntimesDir: filepath.Join(cfg.GetDataDir(), "runtimes"),
 		Runtimes:    runtimes,
 		Recipes:     recipes,
-		Engine:      &build.Engine{Root: cfg.GetBuilds().GetDir(), Patches: catalog.Patches, Jobs: int(cfg.GetBuilds().GetJobs()), Log: log},
+		Engine:      &build.Engine{Root: cfg.GetBuilds().GetDir(), Patches: catalog.Patches, Jobs: int(cfg.GetBuilds().GetJobs()), Sources: srcs, Fetcher: fetcher, Log: log},
 		Defaults:    cfg.GetBuilds(),
 		Host:        prober,
 		Tasks:       d.Tasks,
 		Fetcher:     fetcher,
+		Sources:     srcs,
 		Events:      bus,
 		Log:         log,
 	}
+	// Profiles are rows beside the seeded manifests, loaded once and followed through events
+	d.Profiles = &profiles.Manager{DB: store, Runtimes: runtimes, Events: bus, Log: log}
+	if err := d.Profiles.Load(context.Background()); err != nil {
+		store.Close()
+		return nil, err
+	}
+	d.Inspector.Profiles = d.Profiles.Resolve
 	matcher, err := triage.New(catalog.Triage)
 	if err != nil {
 		store.Close()
@@ -210,6 +241,8 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		store.Close()
 		return nil, err
 	}
+	// Every plan, the fit table's and a run's, applies the same learned correction
+	d.Inspector.Delta = calibration.Delta
 	routes, err := gateway.OpenTable(context.Background(), store, bus)
 	if err != nil {
 		store.Close()
@@ -240,12 +273,29 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	}
 	d.Instances.Reserver = d.Slots
 	d.Instances.OnChange = d.Slots.OnInstance
-	d.Inspector.Constrain = func(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, error) {
+	// Eviction spares what is running and what a slot would relaunch
+	d.Puller.Keep = func(m *v1.StoredModel) bool {
+		same := func(source, repo, group string) bool {
+			return source == m.GetSourceId() && repo == m.GetRepo() && group == m.GetGroup()
+		}
+		for _, in := range d.Instances.List(true) {
+			if same(in.GetSourceId(), in.GetRepo(), in.GetGroup()) {
+				return true
+			}
+		}
+		for _, s := range d.Slots.List() {
+			if r := s.GetRequest(); r != nil && same(r.GetSourceId(), r.GetRepo(), r.GetGroup()) {
+				return true
+			}
+		}
+		return false
+	}
+	d.Inspector.Constrain = func(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, map[string]string, error) {
 		res, err := d.Slots.Reservation(ctx, slotID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return instances.Constrain(profile, res.DeviceIDs, res.MemoryBytes), nil
+		return instances.Constrain(profile, res.DeviceIDs, res.MemoryBytes), res.Params, nil
 	}
 	d.Monitor = &monitor.Manager{
 		DB:        store,
@@ -262,7 +312,16 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		store.Close()
 		return nil, err
 	}
-	d.Gateway = gateway.New(routes, cfg.GetGateway().GetApiKeys(), log)
+	// A profile cannot go while a watch, want, slot, or instance starts from it, unless forced
+	d.Profiles.Referrers = func(p *v1.Profile, clear bool) []string {
+		refers := func(ref, runtimeID string) bool { return profiles.Refers(p, ref, runtimeID) }
+		out := d.Monitor.ProfileReferrers(refers, clear)
+		out = append(out, d.Slots.ProfileReferrers(refers, clear)...)
+		return append(out, d.Instances.ProfileReferrers(refers, clear)...)
+	}
+	d.Notifier = &notify.Notifier{Webhooks: cfg.GetNotify().GetWebhooks(), Events: bus, Log: log}
+	d.Gateway = gateway.New(routes, cfg.GetGateway().GetApiKeys(), cfg.GetGateway().GetCorsOrigins(), cfg.GetGateway().GetPolicy(), log)
+	d.Gateway.SetVersion(Version)
 	var ui http.Handler
 	if !cfg.GetWeb().GetDisabled() {
 		ui = web.Handler()
@@ -272,13 +331,14 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		Host:      prober,
 		Doctor:    d.Doctor,
 		Sources:   srcMgr,
-		Formats:   classifier.Formats(),
+		Formats:   classifier.Specs(),
 		Runtimes:  runtimes,
 		Inspector: d.Inspector,
 		Store:     blobStore,
 		Puller:    d.Puller,
 		Tasks:     d.Tasks,
 		Installs:  d.Installs,
+		Profiles:  d.Profiles,
 		Instances: d.Instances,
 		Slots:     d.Slots,
 		Monitor:   d.Monitor,
@@ -330,6 +390,10 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 			ev.Payload = &v1.Event_Finding{Finding: p}
 		case *v1.Source:
 			ev.Payload = &v1.Event_Source{Source: p}
+		case *v1.Profile:
+			ev.Payload = &v1.Event_Profile{Profile: p}
+		case *v1.Want:
+			ev.Payload = &v1.Event_Want{Want: p}
 		}
 		out = append(out, ev)
 	}
@@ -340,6 +404,9 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 	}
 	for _, s := range d.Sources.List() {
 		add(v1.EventKind_EVENT_KIND_SOURCE, s.GetId(), s)
+	}
+	for _, p := range d.Profiles.List("") {
+		add(v1.EventKind_EVENT_KIND_PROFILE, p.GetId(), p)
 	}
 	for _, t := range d.Tasks.List(false) {
 		add(v1.EventKind_EVENT_KIND_TASK, t.GetId(), t)
@@ -371,7 +438,10 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 	for _, w := range d.Monitor.List() {
 		add(v1.EventKind_EVENT_KIND_WATCH, w.GetId(), w)
 	}
-	if list, err := d.Monitor.Findings(ctx, "", true); err == nil {
+	for _, w := range d.Monitor.ListWants() {
+		add(v1.EventKind_EVENT_KIND_WANT, w.GetId(), w)
+	}
+	if list, err := d.Monitor.Findings(ctx, "", "", true); err == nil {
 		for _, f := range list {
 			add(v1.EventKind_EVENT_KIND_FINDING, f.GetId(), f)
 		}
@@ -399,20 +469,69 @@ func (d *Daemon) Addr() string { return d.addr }
 // Returns the API handler for in process or network use
 func (d *Daemon) Handler() http.Handler { return d.handler }
 
-// Listens on the configured addresses until ctx ends
+// Listens on the configured addresses until ctx ends, over TLS when a certificate is configured
 func (d *Daemon) ListenAndServe(ctx context.Context) error {
-	ln, err := net.Listen("tcp", d.Config.GetListen())
+	tlsConfig, err := d.tlsConfig()
+	if err != nil {
+		return err
+	}
+	listen := func(addr string) (net.Listener, error) {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil || tlsConfig == nil {
+			return ln, err
+		}
+		return tls.NewListener(ln, tlsConfig), nil
+	}
+	ln, err := listen(d.Config.GetListen())
 	if err != nil {
 		return err
 	}
 	var gatewayLn net.Listener
 	if addr := d.Config.GetGateway().GetListen(); addr != "" {
-		if gatewayLn, err = net.Listen("tcp", addr); err != nil {
+		if gatewayLn, err = listen(addr); err != nil {
 			ln.Close()
 			return err
 		}
 	}
+	d.secure = tlsConfig != nil
+	d.warnExposure(d.secure)
 	return d.Serve(ctx, ln, gatewayLn)
+}
+
+// Loads the configured certificate, nil for plain HTTP
+func (d *Daemon) tlsConfig() (*tls.Config, error) {
+	t := d.Config.GetTls()
+	if t.GetCertFile() == "" && t.GetKeyFile() == "" {
+		return nil, nil
+	}
+	cert, err := tls.LoadX509KeyPair(t.GetCertFile(), t.GetKeyFile())
+	if err != nil {
+		return nil, fmt.Errorf("tls: %w", err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2", "http/1.1"}, MinVersion: tls.VersionTLS12}, nil
+}
+
+// Says so when a listener reaches beyond this machine without TLS or a token
+func (d *Daemon) warnExposure(secure bool) {
+	for _, addr := range []string{d.Config.GetListen(), d.Config.GetGateway().GetListen()} {
+		host, _, err := net.SplitHostPort(addr)
+		if addr == "" || err != nil {
+			continue
+		}
+		ip := net.ParseIP(host)
+		if host == "localhost" || ip != nil && ip.IsLoopback() {
+			continue
+		}
+		if !secure {
+			d.Log.Warn("listening beyond loopback over plain http, set tls.cert_file and tls.key_file or front it with a reverse proxy", "addr", addr)
+		}
+		if addr == d.Config.GetListen() && d.Config.GetAuth().GetToken() == "" {
+			d.Log.Warn("the api listens beyond loopback with no auth.token, anyone who can reach it controls this daemon", "addr", addr)
+		}
+		if addr == d.Config.GetGateway().GetListen() && len(d.Config.GetGateway().GetApiKeys()) == 0 {
+			d.Log.Warn("the gateway listens beyond loopback with no gateway.api_keys", "addr", addr)
+		}
+	}
 }
 
 // Recovers state, then serves the API and gateway listeners
@@ -447,24 +566,25 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 		return err
 	}
 	go d.Monitor.Run(ctx)
+	go d.Notifier.Run(ctx)
 	// Request contexts hang off this one so open streams end when serving stops
 	requests, endRequests := context.WithCancel(context.Background())
 	defer endRequests()
 	base := func(net.Listener) context.Context { return requests }
 	servers := []*http.Server{{Handler: d.handler, ReadHeaderTimeout: readHeaderTimeout, BaseContext: base}}
 	listeners := []net.Listener{ln}
-	d.Gateway.SetListeners([]*v1.Listener{{Addr: d.addr, Shared: true}})
+	d.Gateway.SetListeners([]*v1.Listener{{Addr: d.addr, Shared: true}}, d.secure)
 	if gatewayLn != nil {
 		servers = append(servers, &http.Server{Handler: d.Gateway.Handler(), ReadHeaderTimeout: readHeaderTimeout, BaseContext: base})
 		listeners = append(listeners, gatewayLn)
-		d.Gateway.SetListeners([]*v1.Listener{{Addr: gatewayLn.Addr().String()}})
-		d.Log.Info("gateway listening", "addr", gatewayLn.Addr().String())
+		d.Gateway.SetListeners([]*v1.Listener{{Addr: gatewayLn.Addr().String()}}, d.secure)
+		d.Log.Info("gateway listening", "addr", gatewayLn.Addr().String(), "tls", d.secure)
 	}
 	errCh := make(chan error, len(servers))
 	for i, srv := range servers {
 		go func(srv *http.Server, ln net.Listener) { errCh <- srv.Serve(ln) }(srv, listeners[i])
 	}
-	d.Log.Info("listening", "addr", d.addr)
+	d.Log.Info("listening", "addr", d.addr, "tls", d.secure)
 	var result error
 	select {
 	case <-ctx.Done():

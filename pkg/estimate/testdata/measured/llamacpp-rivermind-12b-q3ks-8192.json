@@ -1,0 +1,347 @@
+{
+  "runtime": "llamacpp",
+  "note": "llama-server b10790 CUDA on an RTX 3080 Ti serving Rivermind 12B Q3_K_S, measured by the daemon on 2026-09-04",
+  "descriptor": {
+    "formatId": "gguf",
+    "group": "Q3_K_S",
+    "architecture": "llama",
+    "archSpecId": "default",
+    "params": {
+      "file_type": 11,
+      "head_dim": 128,
+      "head_dim_v": 128,
+      "n_ctx_train": 131072,
+      "n_embd": 5120,
+      "n_head": 32,
+      "n_head_kv": 8,
+      "n_layer": 40,
+      "n_vocab": 131072,
+      "rope_dim": 128
+    },
+    "groups": [
+      {
+        "id": "embedding",
+        "kind": "TENSOR_GROUP_KIND_EMBEDDING",
+        "layer": -1,
+        "bytes": "288358400",
+        "elements": "671088640"
+      },
+      {
+        "id": "layer.0",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.1",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 1,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.2",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 2,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.3",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 3,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.4",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 4,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.5",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 5,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.6",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 6,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.7",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 7,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.8",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 8,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.9",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 9,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.10",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 10,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.11",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 11,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.12",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 12,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.13",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 13,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.14",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 14,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.15",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 15,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.16",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 16,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.17",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 17,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.18",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 18,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.19",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 19,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.20",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 20,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.21",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 21,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.22",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 22,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.23",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 23,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.24",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 24,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.25",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 25,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.26",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 26,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.27",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 27,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.28",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 28,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.29",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 29,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.30",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 30,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.31",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 31,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.32",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 32,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.33",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 33,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.34",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 34,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.35",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 35,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.36",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 36,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.37",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 37,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.38",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 38,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "layer.39",
+        "kind": "TENSOR_GROUP_KIND_LAYER",
+        "layer": 39,
+        "bytes": "117186560",
+        "elements": "272640000"
+      },
+      {
+        "id": "output",
+        "kind": "TENSOR_GROUP_KIND_OUTPUT",
+        "layer": -1,
+        "bytes": "550522880",
+        "elements": "671093760"
+      }
+    ],
+    "totalBytes": "5526343680",
+    "parameterCount": "12247782400",
+    "bitsPerWeight": 3.6096942284017066,
+    "metadata": {
+      "general.basename": "Rivermind",
+      "general.file_type": "11",
+      "general.name": "Rivermind 12B v1",
+      "general.quantization_version": "2",
+      "general.size_label": "12B",
+      "llama.block_count": "40"
+    }
+  },
+  "params": {
+    "cache_type_k": "f16",
+    "cache_type_v": "f16",
+    "n_batch": "2048",
+    "n_ctx": "8192",
+    "n_gpu_layers": "41",
+    "n_ubatch": "512"
+  },
+  "device_free_bytes": 10805851621,
+  "host_free_bytes": 49543547418,
+  "measured": {
+    "device.weights": 5237983150,
+    "host.weights": 288358400,
+    "device.cache": 1342177280,
+    "device.compute": 125839605,
+    "host.compute": 29370613,
+    "device.used": 7026507776
+  },
+  "planned_device_bytes": 7674875904
+}

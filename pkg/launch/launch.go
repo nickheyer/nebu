@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/nickheyer/nebu/pkg/proc"
 )
 
 const (
@@ -61,6 +63,7 @@ type ProcessLauncher struct {
 // A process started by this daemon
 type Process struct {
 	cmd    *exec.Cmd
+	tree   *proc.Tree
 	log    *Log
 	tail   *tailer
 	exited chan struct{}
@@ -87,17 +90,20 @@ func (l *ProcessLauncher) Launch(ctx context.Context, spec Spec) (Handle, error)
 	for k, v := range spec.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	cmd.SysProcAttr = procAttr()
+	cmd.SysProcAttr = proc.Attr()
 	cmd.Stdout, cmd.Stderr = f, f
 	if err := cmd.Start(); err != nil {
 		f.Close()
 		return nil, err
 	}
 	f.Close()
-	p := &Process{cmd: cmd, log: NewLog(logCapacity), exited: make(chan struct{}), done: make(chan struct{})}
+	p := &Process{cmd: cmd, tree: proc.Adopt(cmd), log: NewLog(logCapacity), exited: make(chan struct{}), done: make(chan struct{})}
 	p.tail = newTailer(spec.LogPath, p.log)
 	go func() {
 		p.err = cmd.Wait()
+		// Whatever the runtime left behind goes with it
+		p.tree.Kill()
+		p.tree.Close()
 		close(p.exited)
 	}()
 	go p.tail.follow(p.exited, p.done)
@@ -134,13 +140,13 @@ func (p *Process) Stop(grace time.Duration) error {
 		return nil
 	default:
 	}
-	p.once.Do(func() { terminate(p.cmd) })
+	p.once.Do(func() { p.tree.Interrupt() })
 	select {
 	case <-p.done:
 		return nil
 	case <-time.After(grace):
 	}
-	kill(p.cmd)
+	p.tree.Kill()
 	<-p.done
 	return nil
 }
@@ -159,8 +165,8 @@ type Adopted struct {
 func Adopt(pid int, logPath string) Handle {
 	a := &Adopted{pid: pid, log: NewLog(logCapacity), exited: make(chan struct{}), done: make(chan struct{})}
 	go func() {
-		for exists(pid) {
-			time.Sleep(pollInterval)
+		for proc.Exists(pid) {
+			time.Sleep(proc.PollInterval)
 		}
 		close(a.exited)
 	}()
@@ -199,7 +205,7 @@ func (a *Adopted) Stop(grace time.Duration) error {
 		return nil
 	default:
 	}
-	a.once.Do(func() { Terminate(a.pid, grace) })
+	a.once.Do(func() { proc.Terminate(a.pid, grace) })
 	<-a.done
 	return nil
 }

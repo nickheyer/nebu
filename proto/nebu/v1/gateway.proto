@@ -15,6 +15,20 @@ enum RouteState {
   ROUTE_STATE_DRAINING = 3;
 }
 
+// Limits a route enforces on requests, zero inherits the gateway default
+message Policy {
+  // Requests in flight at once
+  uint32 max_in_flight = 1;
+  // Sustained requests per second
+  double requests_per_second = 2;
+  // Requests a quiet route absorbs at once, the rate rounded up when zero
+  uint32 burst = 3;
+  // The whole exchange, first byte in to last byte out
+  uint32 request_timeout_ms = 4;
+  // How long the runtime may take to start answering
+  uint32 upstream_timeout_ms = 5;
+}
+
 // A public model name mapped to an instance
 message Route {
   string name = 1;
@@ -27,6 +41,7 @@ message Route {
   uint32 in_flight = 8;
   string model = 9;
   google.protobuf.Timestamp updated_at = 10;
+  Policy policy = 11;
 }
 
 // One address the gateway answers on
@@ -41,6 +56,10 @@ message GatewayStatus {
   repeated Route routes = 2;
   bool auth = 3;
   uint64 requests = 4;
+  // What routes without a policy of their own enforce
+  Policy policy = 5;
+  // Whether the listeners speak TLS
+  bool tls = 6;
 }
 
 // Asks for the gateway view

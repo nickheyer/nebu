@@ -6,63 +6,41 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/nickheyer/nebu/pkg/archive"
 	"github.com/nickheyer/nebu/pkg/sources"
 )
 
-const downloadAttempts = 3
-
-var commitLike = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
-
-// Picks the newest tag from a GitHub style release feed
-func latestTag(ctx context.Context, feed string) (string, error) {
-	client, err := sources.NewHTTP(feed, "")
+// Picks the newest release of a repository at a source, the default revision it lists
+func latestTag(ctx context.Context, srcs *sources.Registry, sourceID, repo string) (string, error) {
+	if srcs == nil {
+		return "", fmt.Errorf("no sources to read releases from")
+	}
+	src, err := srcs.Get(sourceID)
 	if err != nil {
 		return "", err
 	}
-	var root any
-	if _, err := client.JSON(ctx, feed, nil, &root); err != nil {
+	revisions, err := src.Revisions(ctx, repo)
+	if err != nil {
 		return "", err
 	}
-	releases, ok := root.([]any)
-	if !ok {
-		releases = []any{root}
-	}
-	fallback := ""
-	for _, r := range releases {
-		rel, ok := r.(map[string]any)
-		if !ok {
-			continue
-		}
-		tag, _ := rel["tag_name"].(string)
-		if tag == "" {
-			continue
-		}
-		draft, _ := rel["draft"].(bool)
-		pre, _ := rel["prerelease"].(bool)
-		if !draft && !pre {
-			return tag, nil
-		}
-		if fallback == "" {
-			fallback = tag
+	for _, r := range revisions {
+		if r.GetDefault() {
+			return r.GetName(), nil
 		}
 	}
-	if fallback != "" {
-		return fallback, nil
+	if len(revisions) > 0 {
+		return revisions[0].GetName(), nil
 	}
-	return "", fmt.Errorf("no release with a tag in %s", feed)
+	return "", fmt.Errorf("no release with a tag in %s at %s", repo, src.Spec().GetId())
 }
 
-// Streams a URL into dest, reusing an existing complete file
-func download(ctx context.Context, rawURL, dest string, out io.Writer) error {
+// Lands a URL at dest through the transfer limits, resumed and retried, reusing a complete file
+func (e *Engine) download(ctx context.Context, rawURL, dest string, out io.Writer) error {
 	if info, err := os.Stat(dest); err == nil && info.Size() > 0 {
 		fmt.Fprintf(out, "using cached %s\n", filepath.Base(dest))
 		return nil
@@ -74,40 +52,10 @@ func download(ctx context.Context, rawURL, dest string, out io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
-	var last error
-	for attempt := 0; attempt < downloadAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		last = copyURL(ctx, client, rawURL, dest)
-		if last == nil {
-			return nil
-		}
-		fmt.Fprintf(out, "download failed: %v\n", last)
-	}
-	return last
-}
-
-func copyURL(ctx context.Context, client *sources.HTTP, rawURL, dest string) error {
-	resp, err := client.Do(ctx, http.MethodGet, rawURL, nil, nil)
-	if err != nil {
+	if _, err := e.Fetcher.FetchURL(ctx, client, rawURL, dest+".partial", nil); err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	tmp := dest + ".partial"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp, dest)
+	return os.Rename(dest+".partial", dest)
 }
 
 // Names a cache file for a URL, keeping the extension
@@ -125,10 +73,10 @@ func cacheName(rawURL string) string {
 }
 
 // Downloads and unpacks an archive so dest holds the tree
-func fetchArchive(ctx context.Context, rawURL, cacheDir, dest, subdir string, out io.Writer) error {
-	cached := filepath.Join(cacheDir, cacheName(rawURL))
+func (e *Engine) fetchArchive(ctx context.Context, rawURL, dest, subdir string, out io.Writer) error {
+	cached := filepath.Join(e.Root, cacheDirName, cacheName(rawURL))
 	fmt.Fprintf(out, "fetching %s\n", rawURL)
-	if err := download(ctx, rawURL, cached, out); err != nil {
+	if err := e.download(ctx, rawURL, cached, out); err != nil {
 		return err
 	}
 	tmp := dest + ".tmp"
@@ -153,42 +101,4 @@ func fetchArchive(ctx context.Context, rawURL, cacheDir, dest, subdir string, ou
 	}
 	os.RemoveAll(tmp)
 	return nil
-}
-
-// Clones a repository at ref into dest, returning the commit
-func fetchGit(ctx context.Context, repo, ref, dest string, out io.Writer) (string, error) {
-	os.RemoveAll(dest)
-	run := func(args ...string) error {
-		cmd := exec.CommandContext(ctx, "git", args...)
-		cmd.Stdout, cmd.Stderr = out, out
-		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-		return cmd.Run()
-	}
-	clone := func(args ...string) error {
-		return run(append([]string{"clone"}, args...)...)
-	}
-	fmt.Fprintf(out, "cloning %s at %s\n", repo, ref)
-	switch {
-	case ref == "" || ref == Latest:
-		if err := clone("--depth", "1", repo, dest); err != nil {
-			return "", err
-		}
-	case commitLike.MatchString(ref):
-		if err := clone(repo, dest); err != nil {
-			return "", err
-		}
-		if err := run("-C", dest, "checkout", "--quiet", ref); err != nil {
-			return "", err
-		}
-	default:
-		if err := clone("--depth", "1", "--branch", ref, repo, dest); err != nil {
-			return "", err
-		}
-	}
-	cmd := exec.CommandContext(ctx, "git", "-C", dest, "rev-parse", "HEAD")
-	data, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(data)), nil
 }

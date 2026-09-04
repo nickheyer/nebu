@@ -41,8 +41,28 @@ func (s *MonitorService) RemoveWatch(ctx context.Context, req *connect.Request[v
 	return connect.NewResponse(&v1.RemoveWatchResponse{Watch: w}), nil
 }
 
+func (s *MonitorService) AddWant(ctx context.Context, req *connect.Request[v1.AddWantRequest]) (*connect.Response[v1.AddWantResponse], error) {
+	w, err := s.monitor.AddWant(ctx, req.Msg)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return connect.NewResponse(&v1.AddWantResponse{Want: w}), nil
+}
+
+func (s *MonitorService) ListWants(ctx context.Context, req *connect.Request[v1.ListWantsRequest]) (*connect.Response[v1.ListWantsResponse], error) {
+	return connect.NewResponse(&v1.ListWantsResponse{Wants: s.monitor.ListWants()}), nil
+}
+
+func (s *MonitorService) RemoveWant(ctx context.Context, req *connect.Request[v1.RemoveWantRequest]) (*connect.Response[v1.RemoveWantResponse], error) {
+	w, err := s.monitor.RemoveWant(ctx, req.Msg.GetId())
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return connect.NewResponse(&v1.RemoveWantResponse{Want: w}), nil
+}
+
 func (s *MonitorService) CheckWatches(ctx context.Context, req *connect.Request[v1.CheckWatchesRequest]) (*connect.Response[v1.CheckWatchesResponse], error) {
-	task, err := s.monitor.Check(ctx, req.Msg.GetId())
+	task, err := s.monitor.Check(ctx, req.Msg.GetId(), req.Msg.GetRearm())
 	if err != nil {
 		return nil, wrap(err)
 	}
@@ -50,7 +70,7 @@ func (s *MonitorService) CheckWatches(ctx context.Context, req *connect.Request[
 }
 
 func (s *MonitorService) ListFindings(ctx context.Context, req *connect.Request[v1.ListFindingsRequest]) (*connect.Response[v1.ListFindingsResponse], error) {
-	list, err := s.monitor.Findings(ctx, req.Msg.GetWatchId(), req.Msg.GetUnacknowledgedOnly())
+	list, err := s.monitor.Findings(ctx, req.Msg.GetWatchId(), req.Msg.GetWantId(), req.Msg.GetUnacknowledgedOnly())
 	if err != nil {
 		return nil, wrap(err)
 	}

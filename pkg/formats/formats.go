@@ -203,11 +203,11 @@ func NewClassifier(specs []*v1.FormatSpec) (*Classifier, error) {
 // Returns a format spec by id
 func (c *Classifier) Spec(id string) *v1.FormatSpec { return c.byID[id] }
 
-// Lists format ids in priority order
-func (c *Classifier) Formats() []string {
-	out := make([]string, 0, len(c.formats))
+// Lists format specs in priority order
+func (c *Classifier) Specs() []*v1.FormatSpec {
+	out := make([]*v1.FormatSpec, 0, len(c.formats))
 	for _, f := range c.formats {
-		out = append(out, f.spec.GetId())
+		out = append(out, f.spec)
 	}
 	return out
 }

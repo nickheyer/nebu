@@ -1,0 +1,43 @@
+id: bits
+description: Words for a weight group by its bits per weight, the first width at or below wins
+levels:
+  - bits: 32
+    label: 32-bit float
+    blurb: The original weights at full size. Largest of all, nothing lost.
+    level: 5
+  - bits: 16
+    label: 16-bit
+    blurb: Full quality, the precision the model was trained at. Needs the most memory.
+    level: 5
+  - bits: 8
+    label: 8-bit
+    blurb: Near lossless. Half the size of 16-bit with quality most people cannot tell apart.
+    level: 4
+  - bits: 6
+    label: 6-bit
+    blurb: Very close to full quality at about a third of the 16-bit size.
+    level: 4
+  - bits: 5
+    label: 5-bit
+    blurb: Small quality loss, slightly smaller than 6-bit.
+    level: 3
+  - bits: 4
+    label: 4-bit
+    blurb: The usual choice. About a quarter of the 16-bit size with modest quality loss.
+    level: 3
+  - bits: 3
+    label: 3-bit
+    blurb: Noticeably lower quality. For when 4-bit does not fit.
+    level: 2
+  - bits: 2
+    label: 2-bit
+    blurb: Heavy quality loss. A last resort for tight memory.
+    level: 1
+  - bits: 1
+    label: 1-bit
+    blurb: Extreme compression. Expect degraded answers.
+    level: 1
+  - bits: 0
+    label: Unknown precision
+    blurb: The headers did not say how the weights are stored.
+    level: 0

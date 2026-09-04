@@ -1,5 +1,6 @@
 id: safetensors
 description: Safetensors shards with a transformers config
+blurb: Safetensors shards hold the original checkpoint next to its config, usually at full 16-bit precision
 priority: 5
 files:
   - match: '(?i)\.safetensors$'
@@ -60,7 +61,9 @@ params:
   - name: rope_dim
     keys: [qk_rope_head_dim]
   - name: n_swa
-    keys: [sliding_window]
+    keys: [sliding_window, text_config.sliding_window]
+  - name: swa_pattern
+    keys: [sliding_window_pattern, text_config.sliding_window_pattern]
 metadata:
   - torch_dtype
   - dtype
@@ -69,3 +72,32 @@ metadata:
   - quantization_config.bits
   - __metadata__.format
 requires: [ARTIFACT_ROLE_CONFIG]
+# A quantization config names the width and method, else the checkpoint dtype does
+precisions:
+  - key: quantization_config.bits
+    match: '^(?P<bits>\d+)$'
+  - key: quantization_config.quant_method
+    match: '^(?P<name>.+)$'
+    note: a calibrated quant that keeps quality close to the original at this bit width
+  - key: torch_dtype
+    match: '^(?P<name>bfloat16)$'
+    bits: 16
+    note: bfloat16, the training format on modern GPUs
+  - key: torch_dtype
+    match: '^(?P<name>float16)$'
+    bits: 16
+    note: float16, the training format on older GPUs
+  - key: torch_dtype
+    match: '^(?P<name>float32)$'
+    bits: 32
+  - key: dtype
+    match: '^(?P<name>bfloat16)$'
+    bits: 16
+    note: bfloat16, the training format on modern GPUs
+  - key: dtype
+    match: '^(?P<name>float16)$'
+    bits: 16
+    note: float16, the training format on older GPUs
+  - key: dtype
+    match: '^(?P<name>float32)$'
+    bits: 32
