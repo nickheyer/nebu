@@ -36,7 +36,7 @@ import (
 type Deps struct {
 	Host    *host.Prober
 	Doctor  *doctor.Doctor
-	Sources *sources.Registry
+	Sources *sources.Manager
 	// Format ids hits are tagged with when a catalog names them
 	Formats   []string
 	Runtimes  *runtime.Registry

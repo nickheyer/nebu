@@ -3,8 +3,8 @@
 Every command talks to a daemon. `nebu serve` runs one. Commands that only need the
 host, sources, or the store start a daemon in process when none is listening on the
 configured address, so `inspect`, `pull`, `list`, and `build` work without `serve`. Commands
-whose state lives in the daemon, such as `run`, `ps`, `slots`, and `monitor`, need `serve`
-running and find it on the configured listen address without any flag.
+whose state lives in the daemon, such as `run`, `ps`, `slots`, `monitor`, and `sources add`,
+need `serve` running and find it on the configured listen address without any flag.
 
 Global flags come before the command: `--config PATH`, `--addr HOST:PORT`, `--json`.
 
@@ -14,6 +14,9 @@ Global flags come before the command: `--config PATH`, `--addr HOST:PORT`, `--js
 nebu doctor                          probe the host and check every dependency
 nebu host [--refresh]                the probed profile
 nebu sources                         configured sources with their sorts, facets, and auth state
+nebu sources add ID --kind K [--endpoint URL] [--token-env VAR] [--path DIR] [--option k=v]...
+nebu sources update ID [--endpoint URL] [--token-env VAR] [--path DIR] [--option k=v]...
+nebu sources remove ID
 nebu search [--source S] [--sort ID] [--asc] [--filter facet=value]... [--tag T]... [--author A] [--limit N] [--cursor C] [words]
 nebu revisions REPO [--source S]     branches, tags, versions, or variants of a repository
 nebu card REPO[@rev] [--source S]    the model card a source publishes
@@ -26,6 +29,13 @@ and `nebu sources` lists them; a facet filter such as `--filter task=text-genera
 previous page printed. Most catalogs only order descending, so `--asc` works with the sorts
 `nebu sources` marks with `±` and is refused for the rest. Repository forms differ per source too,
 see [config.md](config.md).
+
+`sources add` names the provider with `--kind`: `huggingface`, `modelscope`, `ollama`, `civitai`,
+`oci`, `kaggle`, `ngc`, `csghub`, `local`, or `mirror`. An endpoint or token variable left out
+means the provider default; `local` needs `--path`, `mirror` needs `--path` or `--endpoint`.
+`sources update` changes only the flags passed and keeps the rest, except that `--option`
+replaces every option. Seeded defaults take `update` and refuse `remove`. The first source listed
+is the one `--source` falls back to: the oldest one you added, or `huggingface`.
 
 ## Store
 

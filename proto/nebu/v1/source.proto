@@ -29,8 +29,10 @@ message Source {
   string endpoint = 3;
   string token_env = 4;
   string path = 5;
-  // Kind specific settings such as namespace, username_env, or nsfw
   map<string, string> options = 6;
+  bool seeded = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
 }
 
 // One way a source can order results
@@ -74,6 +76,7 @@ message SourceCapabilities {
   string description = 14;
   string revision_label = 15;
   string token_env = 16;
+  string endpoint = 17;
 }
 
 // A configured source with what it can do
@@ -178,6 +181,36 @@ message ListRevisionsResponse {
   repeated Revision revisions = 1;
 }
 
+// Creates a source
+message CreateSourceRequest {
+  Source source = 1;
+}
+
+// Returns the new source with what it can do
+message CreateSourceResponse {
+  SourceStatus source = 1;
+}
+
+// Replaces the settings of a source, its id and kind stay
+message UpdateSourceRequest {
+  Source source = 1;
+}
+
+// Returns the updated source with what it can do
+message UpdateSourceResponse {
+  SourceStatus source = 1;
+}
+
+// Removes a source, refused for seeded defaults
+message DeleteSourceRequest {
+  string id = 1;
+}
+
+// Returns the removed source
+message DeleteSourceResponse {
+  Source source = 1;
+}
+
 // Fetches the description of a repository
 message GetModelCardRequest {
   string source_id = 1;
@@ -202,4 +235,10 @@ service SourceService {
   rpc ListRevisions(ListRevisionsRequest) returns (ListRevisionsResponse);
   // Fetches the model card
   rpc GetModelCard(GetModelCardRequest) returns (GetModelCardResponse);
+  // Creates a source
+  rpc CreateSource(CreateSourceRequest) returns (CreateSourceResponse);
+  // Replaces the settings of a source
+  rpc UpdateSource(UpdateSourceRequest) returns (UpdateSourceResponse);
+  // Removes a source
+  rpc DeleteSource(DeleteSourceRequest) returns (DeleteSourceResponse);
 }

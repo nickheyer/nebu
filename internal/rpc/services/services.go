@@ -35,7 +35,7 @@ func wrap(err error) error {
 		errors.Is(err, installs.ErrUnknownBuild), errors.Is(err, build.ErrUnknownRecipe),
 		errors.Is(err, slots.ErrUnknownSlot), errors.Is(err, monitor.ErrUnknownWatch), errors.Is(err, monitor.ErrUnknownFinding):
 		return connect.NewError(connect.CodeNotFound, err)
-	case errors.Is(err, runtime.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, monitor.ErrWatch):
+	case errors.Is(err, runtime.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, monitor.ErrWatch), errors.Is(err, sources.ErrSource):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, transfer.ErrDigestMismatch):
 		return connect.NewError(connect.CodeDataLoss, err)

@@ -144,13 +144,20 @@ func runSources(ctx context.Context, e *env, args []string) error {
 			for _, f := range c.GetFacets() {
 				facets = append(facets, f.GetId())
 			}
-			where := s.GetEndpoint() + s.GetPath()
+			where := c.GetEndpoint() + s.GetPath()
 			if where == "" {
 				where = c.GetWebUrl()
 			}
-			rows = append(rows, []string{s.GetId(), eval.EnumShort(s.GetKind()), where, auth, strings.Join(can, ","), strings.Join(sortIDs(c), ","), strings.Join(facets, ",")})
+			origin := "added"
+			if s.GetSeeded() {
+				origin = "seeded"
+			}
+			if st.GetError() != "" {
+				can = []string{"error: " + st.GetError()}
+			}
+			rows = append(rows, []string{s.GetId(), eval.EnumShort(s.GetKind()), origin, where, auth, strings.Join(can, ","), strings.Join(sortIDs(c), ","), strings.Join(facets, ",")})
 		}
-		table(w, []string{"ID", "KIND", "LOCATION", "AUTH", "CAN", "SORTS", "FACETS"}, rows)
+		table(w, []string{"ID", "KIND", "ORIGIN", "LOCATION", "AUTH", "CAN", "SORTS", "FACETS"}, rows)
 	})
 }
 

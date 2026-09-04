@@ -111,5 +111,7 @@ func setPayload(ev *v1.Event, p any) {
 		ev.Payload = &v1.Event_Watch{Watch: proto.Clone(t.Watch).(*v1.Watch)}
 	case *v1.Event_Finding:
 		ev.Payload = &v1.Event_Finding{Finding: proto.Clone(t.Finding).(*v1.Finding)}
+	case *v1.Event_Source:
+		ev.Payload = &v1.Event_Source{Source: proto.Clone(t.Source).(*v1.Source)}
 	}
 }

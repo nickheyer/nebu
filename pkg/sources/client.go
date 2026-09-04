@@ -330,6 +330,7 @@ func (c *Client) Capabilities(ctx context.Context) *v1.SourceCapabilities {
 		AuthRequired:  c.cat.AuthRequired,
 		TokenPresent:  c.token != "",
 		TokenEnv:      c.tokenEnv,
+		Endpoint:      c.Base(),
 		Sorts:         c.sorts(),
 		DefaultSort:   c.cat.Sorts[0],
 		Facets:        facets,

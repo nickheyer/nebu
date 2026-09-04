@@ -13,24 +13,56 @@ import (
 
 var _ nebuv1connect.SourceServiceHandler = (*SourceService)(nil)
 
-// Serves catalog lookups
+// Serves catalog lookups and the source rows behind them
 type SourceService struct {
-	sources   *sources.Registry
+	sources   *sources.Manager
 	inspector *inspect.Inspector
 	formats   []string
 }
 
 // Builds the source service, formats are the ids hits get tagged with
-func NewSourceService(reg *sources.Registry, insp *inspect.Inspector, formats []string) *SourceService {
-	return &SourceService{sources: reg, inspector: insp, formats: formats}
+func NewSourceService(m *sources.Manager, insp *inspect.Inspector, formats []string) *SourceService {
+	return &SourceService{sources: m, inspector: insp, formats: formats}
 }
 
 func (s *SourceService) ListSources(ctx context.Context, req *connect.Request[v1.ListSourcesRequest]) (*connect.Response[v1.ListSourcesResponse], error) {
-	return connect.NewResponse(&v1.ListSourcesResponse{Sources: s.sources.Statuses(ctx)}), nil
+	return connect.NewResponse(&v1.ListSourcesResponse{Sources: s.sources.Registry.Statuses(ctx)}), nil
+}
+
+func (s *SourceService) CreateSource(ctx context.Context, req *connect.Request[v1.CreateSourceRequest]) (*connect.Response[v1.CreateSourceResponse], error) {
+	row, err := s.sources.Create(ctx, req.Msg.GetSource())
+	if err != nil {
+		return nil, wrap(err)
+	}
+	st, err := s.sources.Registry.Status(ctx, row.GetId())
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return connect.NewResponse(&v1.CreateSourceResponse{Source: st}), nil
+}
+
+func (s *SourceService) UpdateSource(ctx context.Context, req *connect.Request[v1.UpdateSourceRequest]) (*connect.Response[v1.UpdateSourceResponse], error) {
+	row, err := s.sources.Update(ctx, req.Msg.GetSource())
+	if err != nil {
+		return nil, wrap(err)
+	}
+	st, err := s.sources.Registry.Status(ctx, row.GetId())
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return connect.NewResponse(&v1.UpdateSourceResponse{Source: st}), nil
+}
+
+func (s *SourceService) DeleteSource(ctx context.Context, req *connect.Request[v1.DeleteSourceRequest]) (*connect.Response[v1.DeleteSourceResponse], error) {
+	row, err := s.sources.Delete(ctx, req.Msg.GetId())
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return connect.NewResponse(&v1.DeleteSourceResponse{Source: row}), nil
 }
 
 func (s *SourceService) Search(ctx context.Context, req *connect.Request[v1.SearchRequest]) (*connect.Response[v1.SearchResponse], error) {
-	src, err := s.sources.Get(req.Msg.GetSourceId())
+	src, err := s.sources.Registry.Get(req.Msg.GetSourceId())
 	if err != nil {
 		return nil, wrap(err)
 	}
@@ -72,7 +104,7 @@ func (s *SourceService) Resolve(ctx context.Context, req *connect.Request[v1.Res
 }
 
 func (s *SourceService) ListRevisions(ctx context.Context, req *connect.Request[v1.ListRevisionsRequest]) (*connect.Response[v1.ListRevisionsResponse], error) {
-	src, err := s.sources.Get(req.Msg.GetSourceId())
+	src, err := s.sources.Registry.Get(req.Msg.GetSourceId())
 	if err != nil {
 		return nil, wrap(err)
 	}
@@ -84,7 +116,7 @@ func (s *SourceService) ListRevisions(ctx context.Context, req *connect.Request[
 }
 
 func (s *SourceService) GetModelCard(ctx context.Context, req *connect.Request[v1.GetModelCardRequest]) (*connect.Response[v1.GetModelCardResponse], error) {
-	src, err := s.sources.Get(req.Msg.GetSourceId())
+	src, err := s.sources.Registry.Get(req.Msg.GetSourceId())
 	if err != nil {
 		return nil, wrap(err)
 	}

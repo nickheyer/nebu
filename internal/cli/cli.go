@@ -29,7 +29,12 @@ func commands() []command {
 		{name: "serve", summary: "run the daemon", run: runServe},
 		{name: "doctor", summary: "probe the host and check every dependency", run: runDoctor},
 		{name: "host", summary: "show the probed host profile", run: runHost},
-		{name: "sources", summary: "list configured sources", run: runSources},
+		{name: "sources", summary: "configured sources", run: runSources, sub: []command{
+			{name: "list", summary: "list sources with their sorts, facets, and auth state", run: runSources},
+			{name: "add", summary: "add a source", run: runSourcesAdd},
+			{name: "update", summary: "change the settings of a source", run: runSourcesUpdate},
+			{name: "remove", summary: "remove a source", run: runSourcesRemove},
+		}},
 		{name: "search", summary: "search or browse a source catalog", run: runSearch},
 		{name: "revisions", summary: "list revisions, tags, or versions of a repository", run: runRevisions},
 		{name: "card", summary: "print the model card a source publishes", run: runCard},

@@ -175,7 +175,11 @@ its transports need: endpoint, credential, namespace, path. Sources are rows in 
 config file is an idempotent bootstrap: an entry creates the source when no source with that name
 exists and otherwise leaves it alone. The web UI creates, edits, and removes sources. Providers
 that work without configuration, such as Hugging Face, Docker Hub, and GitHub, get one seeded
-default source under the provider's name.
+default source under the provider's name. The manager in `pkg/sources` owns the rows behind a
+small store interface the database satisfies: on start it creates config entries and then seeded
+defaults whose names are absent, and it rebuilds the registry from the rows on every create,
+update, and delete, so every consumer follows the change without a restart. A row whose client
+cannot be built stays listed with its error instead of failing the daemon.
 
 Users see sources and never providers or transports. The catalog merges every source of a
 provider into one listing, shows which source a hit came from, and filters by source where the

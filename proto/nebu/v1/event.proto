@@ -10,6 +10,7 @@ import "nebu/v1/monitor.proto";
 import "nebu/v1/recipe.proto";
 import "nebu/v1/runtime.proto";
 import "nebu/v1/slot.proto";
+import "nebu/v1/source.proto";
 import "nebu/v1/store.proto";
 import "nebu/v1/task.proto";
 
@@ -28,6 +29,7 @@ enum EventKind {
   EVENT_KIND_MODEL = 8;
   EVENT_KIND_WATCH = 9;
   EVENT_KIND_FINDING = 10;
+  EVENT_KIND_SOURCE = 11;
 }
 
 // How it changed
@@ -57,6 +59,7 @@ message Event {
     StoredModel model = 17;
     Watch watch = 18;
     Finding finding = 19;
+    Source source = 20;
   }
 }
 

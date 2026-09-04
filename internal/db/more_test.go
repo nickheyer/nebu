@@ -16,7 +16,7 @@ func TestMigrationsApplied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(versions) != 3 || versions[2] != 3 {
+	if len(versions) != 4 || versions[3] != 4 {
 		t.Fatalf("versions %v", versions)
 	}
 }
@@ -103,6 +103,43 @@ func TestSlotsRoutesRoundTrip(t *testing.T) {
 	d.DeleteRoute(ctx, "main")
 	if routes, _ := d.ListRoutes(ctx); len(routes) != 0 {
 		t.Fatal("route delete")
+	}
+}
+
+func TestSourcesRoundTrip(t *testing.T) {
+	d, _ := open(t)
+	ctx := context.Background()
+	s := &v1.Source{Id: "hf-mirror", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Endpoint: "https://hf-mirror.com", TokenEnv: "HF_TOKEN", Path: "", Options: map[string]string{"namespace": "ai"}, Seeded: false, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0))}
+	seed := &v1.Source{Id: "huggingface", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Seeded: true, CreatedAt: timestamppb.New(time.Unix(3, 0)), UpdatedAt: timestamppb.New(time.Unix(3, 0))}
+	for _, in := range []*v1.Source{s, seed} {
+		if err := d.PutSource(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := d.ListSources(ctx)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list %v %v", list, err)
+	}
+	if !proto.Equal(list[0], s) || !proto.Equal(list[1], seed) {
+		t.Fatalf("source round trip\n got %v %v\nwant %v %v", list[0], list[1], s, seed)
+	}
+	s.Options = nil
+	s.TokenEnv = ""
+	if err := d.PutSource(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = d.ListSources(ctx)
+	if len(list[0].GetOptions()) != 0 || list[0].GetTokenEnv() != "" {
+		t.Fatal("replace should drop the options")
+	}
+	if ok, _ := d.DeleteSource(ctx, "hf-mirror"); !ok {
+		t.Fatal("delete source")
+	}
+	if ok, _ := d.DeleteSource(ctx, "hf-mirror"); ok {
+		t.Fatal("second delete should report absence")
+	}
+	if list, _ := d.ListSources(ctx); len(list) != 1 || list[0].GetId() != "huggingface" {
+		t.Fatalf("after delete %v", list)
 	}
 }
 

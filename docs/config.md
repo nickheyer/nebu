@@ -71,10 +71,21 @@ card, and open files for ranged reads.
 
 Sources are rows in the daemon's database. Providers that work without configuration get one
 default source seeded under the provider's name: `huggingface`, `modelscope`, `ollama`,
-`civitai`, `dockerhub`, `kaggle`, `ngc`, `csghub`. The `sources` list in config is a bootstrap:
-each entry creates a source with that id when none exists and is otherwise ignored, so once a
-source exists the web UI owns it. Create, edit, and remove sources on the settings page.
-`nebu sources` prints every source with what its provider can do.
+`civitai`, `dockerhub`, `kaggle`, `ngc`, `csghub`. A seeded default can be edited, to point it
+at a proxy or another token variable, but never removed. The `sources` list in config is a
+bootstrap: each entry creates a source with that id when none exists and is otherwise ignored, so
+once a source exists the daemon owns it. Config entries are created before the seeds, so an entry
+named after a provider defines that provider's source instead of the seeded one. Create, edit, and
+remove sources with `nebu sources add`, `update`, and `remove`, or on the settings page. `nebu
+sources` prints every source with what its provider can do and marks which are seeded.
+
+A source's kind is fixed when it is created; to move to another provider, remove it and add a new
+source. An empty `endpoint` or `token_env` means the provider default from the table below, which
+is what every seeded source starts with. Ids are plain names of letters, digits, dots, dashes, and
+underscores, because the store keeps what a source pulled under its id, and what a source pulled
+stays in the store after the source is removed. A source whose settings stop working, such as a
+directory that went away, stays listed with its error rather than keeping the daemon from
+starting.
 
 All of the seeded defaults list and search without a token. Civitai and Kaggle need one to
 download anything, the rest only for gated or private repositories. The first source is the one

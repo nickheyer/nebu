@@ -58,7 +58,7 @@ type Daemon struct {
 	DB        *db.DB
 	Catalog   *spec.Catalog
 	Host      *host.Prober
-	Sources   *sources.Registry
+	Sources   *sources.Manager
 	Runtimes  *runtime.Registry
 	Recipes   *build.Registry
 	Events    *events.Bus
@@ -93,10 +93,6 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		return nil, err
 	}
 	prober, err := host.New(catalog.Probes, []string{cfg.GetStoreDir(), cfg.GetDataDir(), cfg.GetCacheDir()}, profileTTL)
-	if err != nil {
-		return nil, err
-	}
-	srcs, err := sources.Build(cfg.GetSources())
 	if err != nil {
 		return nil, err
 	}
@@ -143,8 +139,15 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		store.Close()
 		return nil, err
 	}
-	base, cancel := context.WithCancel(context.Background())
 	bus := events.New()
+	// Seeded defaults and config entries become rows here, the registry follows the rows from then on
+	srcMgr := sources.NewManager(store, bus, log)
+	if err := srcMgr.Load(context.Background(), cfg.GetSources()); err != nil {
+		store.Close()
+		return nil, err
+	}
+	srcs := srcMgr.Registry
+	base, cancel := context.WithCancel(context.Background())
 	// Every re-probe reaches the UI, so device meters follow launches and stops
 	prober.OnProbe = func(profile *v1.HostProfile) {
 		bus.Publish(v1.EventKind_EVENT_KIND_HOST, v1.EventAction_EVENT_ACTION_UPDATED, profile.GetHostname(), &v1.Event_Host{Host: profile})
@@ -154,7 +157,7 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		DB:       store,
 		Catalog:  catalog,
 		Host:     prober,
-		Sources:  srcs,
+		Sources:  srcMgr,
 		Runtimes: runtimes,
 		Recipes:  recipes,
 		Events:   bus,
@@ -268,7 +271,7 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	d.handler = rpc.NewHandler(rpc.Deps{
 		Host:      prober,
 		Doctor:    d.Doctor,
-		Sources:   srcs,
+		Sources:   srcMgr,
 		Formats:   classifier.Formats(),
 		Runtimes:  runtimes,
 		Inspector: d.Inspector,
@@ -325,6 +328,8 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 			ev.Payload = &v1.Event_Watch{Watch: p}
 		case *v1.Finding:
 			ev.Payload = &v1.Event_Finding{Finding: p}
+		case *v1.Source:
+			ev.Payload = &v1.Event_Source{Source: p}
 		}
 		out = append(out, ev)
 	}
@@ -332,6 +337,9 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 		if profile, err := d.Host.Profile(ctx, false); err == nil {
 			add(v1.EventKind_EVENT_KIND_HOST, profile.GetHostname(), profile)
 		}
+	}
+	for _, s := range d.Sources.List() {
+		add(v1.EventKind_EVENT_KIND_SOURCE, s.GetId(), s)
 	}
 	for _, t := range d.Tasks.List(false) {
 		add(v1.EventKind_EVENT_KIND_TASK, t.GetId(), t)

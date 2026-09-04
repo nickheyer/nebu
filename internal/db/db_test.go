@@ -34,7 +34,7 @@ func TestMigrationsApplyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	versions, _ := d.Migrations(context.Background())
-	if len(versions) != 3 || versions[0] != 1 || versions[2] != 3 {
+	if len(versions) != 4 || versions[0] != 1 || versions[3] != 4 {
 		t.Fatalf("versions %v", versions)
 	}
 	d.Close()
@@ -43,7 +43,7 @@ func TestMigrationsApplyOnce(t *testing.T) {
 		t.Fatalf("reopen should not reapply: %v", err)
 	}
 	defer again.Close()
-	if versions, _ = again.Migrations(context.Background()); len(versions) != 3 {
+	if versions, _ = again.Migrations(context.Background()); len(versions) != 4 {
 		t.Fatalf("versions after reopen %v", versions)
 	}
 }

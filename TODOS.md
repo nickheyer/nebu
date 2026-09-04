@@ -5,56 +5,19 @@ and where to look.
 
 Rules for whoever works this list:
 
-- Nick decides. Where an item says **Nick decides**, do not pick an option; ask, then do what he
-  says. Everywhere else the item names one approach and that is the one to take.
-- A test whose server and client are both ours proves nothing. Fixtures are recorded from the real
-  service and checked in verbatim; end to end tests drive the real daemon. Never hand write a
-  response body.
-- Providers and transports are Go behind one interface each. Sources are rows. There are no source
-  spec files. See ARCHITECTURE.md, Sources.
-- Go stays generic. Anything that names a vendor, model family, runtime flag, or quant scheme goes
-  in `spec/` or in one localized provider module, never in shared code and never in the web client.
-- "Docs describe the target" means the documentation already states the contract and the code has
-  to be brought to it.
-- Terms: a **provider** is a platform module, a **source** is a configured instance of one, a
-  **transport** moves bytes. "Catalog" means the web page. `Catalog` in backticks means the Go
-  struct in `pkg/sources/client.go` that holds a provider's facts.
+- Do not move to next step until your current step is complete.
+- Do not introduce gaps, partial code, or placeholders.
+- Do not write non unit tests, and the unit tests you do write must be as minimal as possible and provide maximum coverage.
+- NEVER EVER EVER CREATE DEPENDENCIES OR COUPLING WHERE THERE DOESNT NEED TO BE.
+- ONE SIZE FITS ALL, MAKE IT WORK. 
+- Consolidate code. The less code needed for the same feature, user experience, and readability is always the better option.
+- Do NOT write any comments that occupy 2 or more consecutive lines, or are longer than 10-15 words, or contain em dashes/semicolons/non-ascii chars. 
 
-## Make the tree green
+> The most important rule of all that defies everything else on this page: Never opt for the easier implementation, always opt for the complete implementation with zero fail cases. It is never excusable to "fail loudly", you can never fail at all ever. Your implementation should be generic enough that it literally conforms to anything without writing a single coupling implementation or one off. One-offs are inexcusable. Anytime you have a question for "Nick", just ask yourself instead "What are the options available?" then choose the most difficult and complete option with no consideration for your own interests. If anything in the below todos is a lazy answer for a tough problem, you have full permission and are required to implement the tough solution for the tough problem instead, zero excuses. If you followed these instructions, there should be no more questions. 
 
-1. **Transfer tests do not compile.** `pkg/transfer/transfer_test.go` calls `sources.NewClient`,
-   which the sources refactor renamed to `sources.NewHTTP`, so `go test ./...`, `go vet ./...`,
-   and CI fail. The file stands up a fake range server and drives our fetcher against it, which is
-   the kind of test Nick rejected. Delete the file unless Nick says to keep it. If he keeps it,
-   the only change is the rename at lines 72, 97, and 128.
-
-2. **Done: docs and code disagreed on source names and endpoints.** Docker Hub registers as
-   `dockerhub`, the docs said `oci`. Ollama's API host is the website, the docs said the registry.
-   ARCHITECTURE.md drew deleted packages. Fixed in this pass. Nothing to do unless a provider moves
-   again.
-
-## Record reality first
-
-3. **Eight remote providers, zero recorded reality.** Probes, GGUF, safetensors, and triage test
-   against output captured from real tools under `test/fixtures`; the provider modules have
-   nothing. Before touching them for items 4 to 7, capture one real response for each provider's
-   search, resolve, revisions, card, and one ranged read, check them in verbatim under
-   `test/fixtures/sources/<provider>/`, and replay them. Add a smoke test gated by an environment
-   variable that hits the live endpoints. Civitai, Kaggle, and NGC captures need Nick's tokens.
-   The Ollama module scrapes HTML by Tailwind class names and will break silently, which is why
-   this comes before the refactor.
+DO NOT WRITE TESTS JUST TO WRITE TESTS, NO MATTER WHAT THE BELOW SAYS. YOU SHOULD BE JUSTIFYING EVERY SINGLE LINE OF CODE AND ALWAYS BE LOOKING FOR EXISTING CODE THAT CAN BE CONSOLIDATED OR REMOVED ENTIRELY, REGARDLESS OF WHAT YOU ARE WORKING ON OR HOW LONG THAT CODE HAS BEEN THERE. ZERO EXCUSES. 
 
 ## Configuration and sources
-
-4. **Sources become rows.** Add a `sources` table and migration, a source service with create,
-   update, and delete, and load the registry from the database, rebuilding it when a row changes.
-   Seeded defaults are rows too: on start, create one source per provider that runs unconfigured,
-   under the provider's name, when no row has that name. The config `sources` list is the same
-   operation from a file: create when the name is absent, otherwise ignore. Today `sources.Build`
-   rejects config for every built in kind, so no hub can take a token env or an endpoint such as
-   hf-mirror.com, GHCR, a self hosted CSGHub, or an NGC proxy; `newClient` already honors
-   `endpoint` and `token_env`, so the guard goes and the sources test asserting it goes with it.
-   The row's name is today's `id` field. Docs describe the target. Seeded defaults cant' be deleted.
 
 5. **Provider config schemas.** Each provider declares the fields a source of it accepts, per
    transport it uses: endpoint, credential, namespace, path, each with a type and whether it is
@@ -89,15 +52,8 @@ Rules for whoever works this list:
    the manifest yaml with zero Go. Until then a slot on a two GPU host confines the plan but not
    the process.
 
-10. **vLLM has never run.** Manifest, recipe, triage, and estimate policy exist; only llama.cpp
-    has been exercised. **Needs Nick's GPU host** to run it, measure, and fix the overhead term.
-    Adoption bug: after a daemon restart the recorded command line is compared to
-    `/proc/<pid>/cmdline`, and a venv shim rewrites argv, so a live vLLM would be marked dead and
-    relaunched beside itself. Fix by recording the process start time from `/proc/<pid>/stat` in
-    the instance row and matching pid plus start time. Do not match on the port.
-
 11. **The estimator has never been calibrated on hardware.** Close the calibration loop against a
-    real card and keep a fixture of plan versus measured; **needs Nick's GPU host**. `n_swa` is
+    real card and keep a fixture of plan versus measured `n_swa` is
     extracted by both formats and used nowhere, so sliding window models overshoot; the fix is a
     cache formula in `spec/archs/` that knows which layers use the window, no Go. Device pools are
     summed into one capacity, which matches llama.cpp's layer split but is wrong for vLLM at
@@ -134,7 +90,7 @@ Rules for whoever works this list:
     spec files: spec is seeded, profiles are user data. Let the UI edit them. README goal two
     asked for configuring providers with all their knobs.
 
-15. **Two runtimes.** **Nick decides** which backend is next. Adding it is a manifest plus a
+15. **Two runtimes.** which backend is next. Adding it is a manifest plus a
     recipe plus triage rules, and it is the test that the manifest schema is not shaped around
     llama.cpp.
 
@@ -154,12 +110,12 @@ Rules for whoever works this list:
 18. **One API flavor, one transport.** `ApiFlavor` has one value. The listener is plain HTTP with
     one shared bearer token and no warning about binding beyond loopback. A separate gateway
     listener will hit CORS from the browser. Add TLS or document the reverse proxy, and add CORS
-    on the gateway listener. **Nick decides** whether an Anthropic or Ollama compatible flavor is
+    on the gateway listener. Anthropic AND Ollama compatible flavor is
     in scope.
 
 19. **Windows is unsupported without saying so.** Adoption, process groups, and parent death
-    signals are stubbed on non unix and the release script builds Linux and macOS only.
-    **Nick decides:** state it in the README or build the stubs.
+    signals are stubbed on non unix, they should not be. nebu is built for every operating system.
+    end of story. 
 
 ## NeMo
 
@@ -173,3 +129,11 @@ Rules for whoever works this list:
 
 20. **One provider at a time.** After item 7 the catalog merges sources within a provider. This
     item is search across providers, a wanted list, and notifications beyond the monitor page.
+
+## Interactive
+
+21. **Prompts** Should easily be able to build a somewhat primitive way to prompt loaded models through a chat ui or other medium, in a "debug" session sort of way. From ui and cli if possible.
+
+## DB
+
+22. Flatten the migrations into 1, install atlas like ~/code/discopanel, do that and there should only ever be 1 migration until we release. 
