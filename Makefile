@@ -1,5 +1,6 @@
 .PHONY: gen proto-clean proto-lint web web-install web-check build build-cli run test lint vet cgo-guard spec-check clean dev release migrate-diff migrate-reset migrate-hash migrate-validate migrate-status
 
+HOME_DATA_DIR := ~/.local/nebu
 BIN := build/nebu
 BUF ?= buf
 NPM ?= npm
@@ -105,5 +106,5 @@ migrate-status:
 		$(ATLAS_IMAGE) migrate status --env local --url "sqlite:///db/$(notdir $(DB_FILE))"
 
 clean: proto-clean
-	rm -rf build $(WEB)/dist/* $(WEB)/.svelte-kit
+	rm -rf build $(WEB)/dist/* $(WEB)/.svelte-kit $(HOME_DATA_DIR)
 	touch $(WEB)/dist/.keep
