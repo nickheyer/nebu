@@ -18,7 +18,7 @@
     accent: 'bg-accent',
     neutral: 'bg-fg-faint'
   };
-  const heights = { sm: 'h-1', md: 'h-1.5', lg: 'h-2.5' };
+  const heights = { sm: 'h-1', md: 'h-1.5', lg: 'h-2' };
   const auto = $derived.by((): Tone => {
     if (tone) return tone;
     const p = pct(value, max);
@@ -29,5 +29,5 @@
 </script>
 
 <div class="flex w-full overflow-hidden rounded-full bg-line/70 {heights[height]} {cls}">
-  <div class="{fills[auto]} transition-[width] duration-500" style="width: {pct(value, max)}%"></div>
+  <div class="{fills[auto]} rounded-full transition-[width] duration-500" style="width: {pct(value, max)}%"></div>
 </div>

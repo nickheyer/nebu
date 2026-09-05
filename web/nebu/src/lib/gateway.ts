@@ -25,5 +25,5 @@ export function policyText(p: Policy | undefined, d: Policy | undefined): string
   if (rps) parts.push(`${rps}/s${burst ? ` burst ${burst}` : ''}`);
   if (timeout) parts.push(`${timeout / 1000}s total`);
   if (upstream) parts.push(`${upstream / 1000}s first byte`);
-  return parts.length ? parts.join(', ') : 'none';
+  return parts.length ? parts.join(' · ') : 'none';
 }

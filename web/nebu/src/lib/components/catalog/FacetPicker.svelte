@@ -49,16 +49,16 @@
 
 <Popover.Root bind:open>
   <Popover.Trigger
-    class="inline-flex h-8 max-w-[16rem] items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors {chosen.length
+    class="inline-flex h-9 max-w-[16rem] items-center gap-1.5 rounded-lg border px-3 text-sm transition-colors {chosen.length
       ? 'border-accent/40 bg-accent/10 text-fg'
       : 'border-line bg-raised text-fg-muted hover:border-line-strong hover:text-fg'} data-[state=open]:border-accent/60"
   >
     <span class="shrink-0 {chosen.length ? 'text-fg-muted' : ''}">{facet.label}</span>
     {#if summary}<span class="truncate font-medium">{summary}</span>{/if}
     {#if chosen.length}
-      <span role="button" tabindex="-1" class="ml-0.5 rounded p-0.5 text-fg-faint hover:bg-raised hover:text-fg" onclick={clear} onkeydown={(e) => e.key === 'Enter' && clear(e)} aria-label="Clear {facet.label}"><X size={11} /></span>
+      <span role="button" tabindex="-1" class="ml-0.5 rounded p-0.5 text-fg-faint hover:bg-raised hover:text-fg" onclick={clear} onkeydown={(e) => e.key === 'Enter' && clear(e)} aria-label="Clear {facet.label}"><X size={12} /></span>
     {:else}
-      <ChevronDown size={12} class="text-fg-faint" />
+      <ChevronDown size={13} class="text-fg-faint" />
     {/if}
   </Popover.Trigger>
   <Popover.Portal>
@@ -71,38 +71,38 @@
             applyDraft();
           }}
         >
-          <label class="text-xs font-medium text-fg-muted" for="facet-{facet.id}">{facet.label}</label>
-          <input id="facet-{facet.id}" class="input h-8" bind:value={draft} placeholder={facet.label} autocomplete="off" />
+          <label class="text-sm font-medium text-fg-muted" for="facet-{facet.id}">{facet.label}</label>
+          <input id="facet-{facet.id}" class="input" bind:value={draft} placeholder={facet.label} autocomplete="off" />
           <div class="flex justify-end gap-2">
-            {#if value}<button type="button" class="text-xs text-fg-faint hover:text-fg" onclick={() => clear()}>Clear</button>{/if}
-            <button type="submit" class="rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-accent-fg">Apply</button>
+            {#if value}<button type="button" class="text-sm text-fg-faint hover:text-fg" onclick={() => clear()}>Clear</button>{/if}
+            <button type="submit" class="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-accent-fg">Apply</button>
           </div>
         </form>
       {:else}
         {#if searchable}
           <div class="border-b border-line p-2">
             <div class="relative">
-              <Search size={12} class="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 text-fg-faint" />
-              <input class="input h-7 pl-7 text-xs" bind:value={filter} placeholder="Filter {facet.label.toLowerCase()}" autocomplete="off" />
+              <Search size={13} class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-faint" />
+              <input class="input h-8 pl-8" bind:value={filter} placeholder="Filter {facet.label.toLowerCase()}" autocomplete="off" />
             </div>
           </div>
         {/if}
-        <div class="max-h-72 overflow-y-auto p-1">
+        <div class="max-h-72 overflow-y-auto p-1.5">
           {#each groups as g (g.group)}
-            {#if g.group}<div class="px-2 pt-2 pb-1 text-[10.5px] font-semibold tracking-wider text-fg-faint uppercase">{g.group}</div>{/if}
+            {#if g.group}<div class="px-2 pt-2 pb-1 text-xs font-medium text-fg-faint">{g.group}</div>{/if}
             {#each g.values as v (v.id)}
               {@const on = chosen.includes(v.id)}
-              <button type="button" class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-raised {on ? 'text-fg' : 'text-fg-muted'}" onclick={() => toggle(v.id)}>
+              <button type="button" class="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-raised {on ? 'text-fg' : 'text-fg-muted'}" onclick={() => toggle(v.id)}>
                 <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded border {facet.multi ? '' : 'rounded-full'} {on ? 'border-accent bg-accent text-accent-fg' : 'border-line-strong'}">{#if on}<Check size={10} strokeWidth={3} />{/if}</span>
                 <span class="truncate">{v.label}</span>
               </button>
             {/each}
           {:else}
-            <div class="px-3 py-4 text-center text-xs text-fg-faint">None</div>
+            <div class="px-3 py-4 text-center text-sm text-fg-faint">None</div>
           {/each}
         </div>
         {#if chosen.length}
-          <div class="border-t border-line px-3 py-2 text-right"><button type="button" class="text-xs text-fg-faint hover:text-fg" onclick={() => clear()}>Clear</button></div>
+          <div class="border-t border-line px-3 py-2 text-right"><button type="button" class="text-sm text-fg-faint hover:text-fg" onclick={() => clear()}>Clear</button></div>
         {/if}
       {/if}
     </Popover.Content>

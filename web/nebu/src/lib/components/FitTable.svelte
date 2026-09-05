@@ -2,10 +2,11 @@
   import { bytes, ctx, deltaBytes, verdictTone, verdictWord } from '$lib/format';
   import { PoolKind } from '$proto/host_pb';
   import type { FitRow, MemoryPlan } from '$proto/estimate_pb';
-  import Tabs from './ui/Tabs.svelte';
+  import Segmented from './ui/Segmented.svelte';
   import Tip from './ui/Tip.svelte';
   import PlanView from './PlanView.svelte';
 
+  // Weight groups by context length, each cell a verdict with the plan behind it
   let { rows }: { rows: FitRow[] } = $props();
 
   const runtimes = $derived([...new Set(rows.map((r) => r.runtimeId))]);
@@ -36,39 +37,40 @@
 
 <div class="flex flex-col gap-3">
   {#if runtimes.length > 1}
-    <Tabs tabs={runtimes.map((r) => ({ id: r, label: r }))} bind:value={runtime} size="sm" />
+    <Segmented tabs={runtimes.map((r) => ({ id: r, label: r }))} bind:value={runtime} size="sm" />
   {/if}
   <div class="overflow-x-auto">
-    <table class="w-full border-separate border-spacing-1 text-xs">
+    <table class="w-full border-separate border-spacing-1 text-sm">
       <thead>
         <tr>
-          <th class="px-2 py-1 text-left text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Weights</th>
+          <th class="px-2 py-1 text-left text-xs font-medium text-fg-faint">Weights</th>
           {#each contexts as c (c)}
-            <th class="px-2 py-1 text-center text-[11px] font-semibold tracking-wider text-fg-faint uppercase" title="{c.toLocaleString()} tokens">{ctx(c)}</th>
+            <th class="px-2 py-1 text-center text-xs font-medium text-fg-faint" title="{c.toLocaleString()} tokens">{ctx(c)}</th>
           {/each}
         </tr>
       </thead>
       <tbody>
         {#each groups as g (g)}
           <tr>
-            <td class="px-2 py-1 font-mono whitespace-nowrap text-fg">{g}</td>
+            <td class="px-2 py-1 font-mono text-xs whitespace-nowrap text-fg">{g}</td>
             {#each contexts as c (c)}
               {@const r = cell(g, c)}
               <td class="p-0">
                 {#if r?.plan}
                   {@const t = verdictTone(r.plan.verdict)}
-                  <Tip>
+                  <Tip class="w-full">
                     <button
-                      class="flex h-10 w-full min-w-[4.5rem] flex-col items-center justify-center rounded-md border px-2 transition-colors {cellTone[t] ?? cellTone.neutral} {selected === r ? 'ring-2 ring-accent/60' : ''}"
+                      type="button"
+                      class="flex h-11 w-full min-w-[4.5rem] flex-col items-center justify-center rounded-lg border px-2 transition-colors {cellTone[t] ?? cellTone.neutral} {selected === r ? 'ring-2 ring-accent/60' : ''}"
                       onclick={() => (selected = selected === r ? null : r)}
                     >
-                      <span class="font-semibold">{verdictWord(r.plan.verdict)}</span>
+                      <span class="text-xs font-semibold">{verdictWord(r.plan.verdict)}</span>
                       {#if r.free && r.free.verdict !== r.plan.verdict}
-                        <span class="text-[10px] leading-3 {verdictTone(r.free.verdict) === 'bad' ? 'text-bad' : verdictTone(r.free.verdict) === 'warn' ? 'text-warn' : ''}">now {verdictWord(r.free.verdict).toLowerCase()}</span>
-                      {:else if device(r.plan)}<span class="text-[10.5px] tabular-nums opacity-80">{device(r.plan)}</span>{/if}
+                        <span class="text-xs leading-3 {verdictTone(r.free.verdict) === 'bad' ? 'text-bad' : verdictTone(r.free.verdict) === 'warn' ? 'text-warn' : ''}">now {verdictWord(r.free.verdict).toLowerCase()}</span>
+                      {:else if device(r.plan)}<span class="text-xs tabular-nums opacity-80">{device(r.plan)}</span>{/if}
                     </button>
                     {#snippet content()}
-                      <div class="text-[11px] leading-5">
+                      <div class="text-xs leading-5">
                         {#each r.plan?.pools ?? [] as p (p.poolId)}
                           <div><span class="font-mono text-fg-muted">{p.poolId}</span> {bytes(p.usedBytes)} of {bytes(p.capacityBytes)}</div>
                         {/each}
@@ -82,7 +84,7 @@
                     {/snippet}
                   </Tip>
                 {:else}
-                  <div class="flex h-10 w-full items-center justify-center rounded-md border border-line text-fg-faint">–</div>
+                  <div class="flex h-11 w-full items-center justify-center rounded-lg border border-line text-fg-faint">–</div>
                 {/if}
               </td>
             {/each}
@@ -92,14 +94,14 @@
     </table>
   </div>
   {#if selected?.plan}
-    <div class="rounded-lg border border-line bg-sunken p-3">
-      <div class="mb-2 text-xs text-fg-muted">
+    <div class="rounded-lg border border-line bg-sunken p-4">
+      <div class="mb-3 text-sm text-fg-muted">
         <span class="font-mono text-fg">{selected.group}</span> on {selected.runtimeId} at {ctx(selected.context)}
       </div>
       <PlanView plan={selected.plan} compact />
     </div>
   {/if}
-  <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-fg-faint">
+  <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-faint">
     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-ok"></span>Fits in device memory</span>
     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-warn"></span>Spills into host memory</span>
     <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-bad"></span>Does not fit</span>

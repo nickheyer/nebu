@@ -6,8 +6,8 @@
   import { SourceKind } from '$proto/source_pb';
   import FormDialog from './ui/FormDialog.svelte';
   import Field from './ui/Field.svelte';
-  import CheckCard from './ui/CheckCard.svelte';
-  import SwapTarget from './SwapTarget.svelte';
+  import Checkbox from './ui/Checkbox.svelte';
+  import RunTarget from './RunTarget.svelte';
 
   let { open = $bindable(false), query = '' }: { open?: boolean; query?: string } = $props();
 
@@ -54,22 +54,14 @@
   });
 </script>
 
-<FormDialog
-  bind:open
-  title="Want a model"
-  size="lg"
-  action="Want"
-  saving={form.saving}
-  disabled={!text.trim() || invalid > 0}
-  onsubmit={form.run}
->
+<FormDialog bind:open title="Want a model" description="A search run on every check until a weight group matches" size="lg" action="Want" saving={form.saving} disabled={!text.trim() || invalid > 0} onsubmit={form.run}>
   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-    <Field label="Search" for="want-query" class="sm:col-span-2">
+    <Field label="Query" for="want-query" class="sm:col-span-2">
       <input id="want-query" class="input" bind:value={text} placeholder="model name" autocomplete="off" spellcheck="false" />
     </Field>
     <Field label="Where" for="want-where">
       <select id="want-where" class="input" bind:value={where}>
-        <option value="">Every source</option>
+        <option value="">All sources</option>
         {#each groups as g (g.kind)}
           <option value="kind:{g.kind}">{g.name}{g.sources.length > 1 ? ` · all ${g.sources.length}` : ''}</option>
           {#if g.sources.length > 1}
@@ -80,14 +72,14 @@
     </Field>
     <Field label="Format" for="want-format">
       <select id="want-format" class="input" bind:value={formatId}>
-        <option value="">Any format</option>
+        <option value="">Any</option>
         {#each [...live.formats.values()] as f (f.id)}<option value={f.id}>{f.description || f.id}</option>{/each}
       </select>
     </Field>
-    <Field label="Group match" for="want-match" hint="Regex over weight group names" class="sm:col-span-2">
-      <input id="want-match" class="input font-mono" bind:value={match} placeholder="regex" autocomplete="off" spellcheck="false" />
+    <Field label="Group match" for="want-match" class="sm:col-span-2" hint="A pattern the weight group has to match">
+      <input id="want-match" class="input font-mono" bind:value={match} placeholder="Q4_K_M|Q5_K_M" autocomplete="off" spellcheck="false" />
     </Field>
-    <CheckCard bind:checked={autoPull} class="sm:col-span-2" title="Pull when found" />
-    <SwapTarget optional idPrefix="want" bind:slotId bind:runtimeId bind:profileId bind:values bind:invalid />
+    <Checkbox bind:checked={autoPull} class="sm:col-span-2" title="Pull when found" hint="The first match is pulled into the library" />
+    <RunTarget optional idPrefix="want" bind:slotId bind:runtimeId bind:profileId bind:values bind:invalid />
   </div>
 </FormDialog>

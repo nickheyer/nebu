@@ -3,19 +3,20 @@
   import type { Task } from '$proto/task_pb';
   import Spinner from './ui/Spinner.svelte';
 
+  // A running task inline: spinner, what it is, and its progress, linking to the task
   let { task, label }: { task: Task; label?: string } = $props();
   const p = $derived(task.progress);
   const known = $derived(!!p?.total);
 </script>
 
-<a href="/tasks?id={task.id}" class="group inline-flex max-w-full items-center gap-2 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-xs text-accent hover:bg-accent/15">
-  <Spinner size={12} />
+<a href="/tasks?id={task.id}" class="group inline-flex max-w-full items-center gap-2 text-sm text-accent hover:underline">
+  <Spinner size={13} />
   <span class="truncate">{label ?? task.title}</span>
   {#if known}
-    <span class="tabular-nums opacity-80">{pct(p!.done, p!.total).toFixed(0)}%</span>
-    <span class="h-1 w-16 overflow-hidden rounded-full bg-accent/20"><span class="block h-full bg-accent" style="width: {pct(p!.done, p!.total)}%"></span></span>
-    {#if p!.total >= 100000n}<span class="hidden tabular-nums opacity-70 group-hover:inline">{bytes(p!.done)}</span>{/if}
+    <span class="tabular-nums text-fg-muted">{pct(p!.done, p!.total).toFixed(0)}%</span>
+    <span class="h-1.5 w-20 overflow-hidden rounded-full bg-line"><span class="block h-full rounded-full bg-accent" style="width: {pct(p!.done, p!.total)}%"></span></span>
+    {#if p!.total >= 100000n}<span class="hidden tabular-nums text-fg-faint group-hover:inline">{bytes(p!.done)}</span>{/if}
   {:else if p?.message}
-    <span class="truncate opacity-80">{p.message}</span>
+    <span class="truncate text-fg-faint">{p.message}</span>
   {/if}
 </a>

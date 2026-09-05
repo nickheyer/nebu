@@ -2,7 +2,7 @@
   import { live, liveInstances, hostName, updateSettings } from '$lib/state.svelte';
   import { Check, X, ArrowRight } from '@lucide/svelte';
 
-  // Shows the state of this host until it serves something or is dismissed
+  // The three steps between a fresh host and a model answering, shown until they are done or dismissed
   let label = $state('');
   let editing = $state(false);
   let saving = $state(false);
@@ -14,9 +14,9 @@
   const shown = $derived(live.ready && !!live.settings && !live.settings.setupDismissed && !complete);
 
   const steps = $derived([
-    { title: 'Runtime', value: installs ? `${installs} installed` : 'none installed', done: installs > 0, href: '/runtimes', action: 'Runtimes' },
-    { title: 'Model', value: models ? `${models} stored` : 'none stored', done: models > 0, href: '/catalog', action: 'Catalog' },
-    { title: 'Serving', value: running ? `${running} running` : 'nothing running', done: running > 0, href: models ? '/store' : '/catalog', action: models ? 'Store' : 'Catalog' }
+    { title: 'Install a runtime', value: installs ? `${installs} installed` : 'None installed', done: installs > 0, href: '/runtimes', action: 'Runtimes' },
+    { title: 'Pull a model', value: models ? `${models} in the library` : 'None in the library', done: models > 0, href: '/catalog', action: 'Discover' },
+    { title: 'Run it in a slot', value: running ? `${running} running` : 'Nothing running', done: running > 0, href: models ? '/store' : '/catalog', action: models ? 'Library' : 'Discover' }
   ]);
 
   function edit() {
@@ -38,46 +38,41 @@
 </script>
 
 {#if shown}
-  <section class="relative overflow-hidden rounded-lg border border-line bg-surface" aria-label="Setup">
-    <div class="absolute inset-y-0 left-0 w-1 bg-accent"></div>
-    <div class="flex items-center gap-3 px-5 py-3">
-      <h2 class="text-sm font-semibold text-fg">Setup</h2>
-      <button class="ml-auto rounded-md p-1 text-fg-faint transition-colors hover:bg-raised hover:text-fg" aria-label="Dismiss" title="Dismiss" onclick={dismiss}><X size={15} /></button>
+  <section class="card p-5" aria-label="Setup">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <h2 class="text-base font-semibold text-fg">Set up {hostName() || 'this host'}</h2>
+      {#if editing}
+        <form
+          class="flex items-center gap-2"
+          onsubmit={(e) => {
+            e.preventDefault();
+            save();
+          }}
+        >
+          <!-- svelte-ignore a11y_autofocus -->
+          <input class="input h-8 w-56" bind:value={label} placeholder={live.host?.hostname} autofocus maxlength="64" aria-label="Host label" onkeydown={(e) => e.key === 'Escape' && (editing = false)} />
+          <button type="submit" class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-fg disabled:opacity-50" disabled={saving} aria-label="Save"><Check size={15} strokeWidth={3} /></button>
+        </form>
+      {:else}
+        <button type="button" class="text-sm text-accent hover:underline" onclick={edit}>Name this host</button>
+      {/if}
+      <button class="-mr-2 ml-auto rounded-lg p-1.5 text-fg-faint transition-colors hover:bg-raised hover:text-fg" aria-label="Dismiss setup" title="Dismiss" onclick={dismiss}><X size={16} /></button>
     </div>
-    <div class="grid grid-cols-1 divide-y divide-line border-t border-line sm:grid-cols-2 sm:divide-y-0 sm:divide-x xl:grid-cols-4">
-      <div class="flex min-h-[4.5rem] flex-col justify-center gap-1 px-5 py-3">
-        <div class="text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Name</div>
-        {#if editing}
-          <form
-            class="flex items-center gap-1.5"
-            onsubmit={(e) => {
-              e.preventDefault();
-              save();
-            }}
-          >
-            <!-- svelte-ignore a11y_autofocus -->
-            <input class="input h-7 flex-1 text-sm" bind:value={label} placeholder={live.host?.hostname} autofocus maxlength="64" onkeydown={(e) => e.key === 'Escape' && (editing = false)} />
-            <button type="submit" class="rounded-md bg-accent p-1 text-accent-fg disabled:opacity-50" disabled={saving} aria-label="Save"><Check size={14} strokeWidth={3} /></button>
-          </form>
-        {:else}
-          <button class="flex items-center gap-1.5 text-left text-sm text-fg hover:text-accent" onclick={edit}>
-            <span class="truncate">{hostName()}</span>
-            <span class="text-[11px] text-fg-faint">edit</span>
-          </button>
-        {/if}
-      </div>
-      {#each steps as s (s.title)}
-        <a href={s.href} class="group flex min-h-[4.5rem] items-center gap-3 px-5 py-3 transition-colors hover:bg-raised/50">
-          <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border {s.done ? 'border-ok bg-ok/15 text-ok' : 'border-line-strong text-fg-faint'}">
-            {#if s.done}<Check size={11} strokeWidth={3} />{/if}
-          </span>
-          <span class="min-w-0 flex-1">
-            <span class="block text-[11px] font-semibold tracking-wider text-fg-faint uppercase">{s.title}</span>
-            <span class="block truncate text-sm {s.done ? 'text-fg' : 'text-fg-muted'}">{s.value}</span>
-          </span>
-          <span class="inline-flex items-center gap-1 text-xs text-fg-faint transition-colors group-hover:text-accent">{s.action}<ArrowRight size={12} /></span>
-        </a>
+    <ol class="mt-4 grid gap-3 sm:grid-cols-3">
+      {#each steps as s, i (s.title)}
+        <li>
+          <a href={s.href} class="group flex h-full items-center gap-3 rounded-lg border border-line bg-bg/40 px-4 py-3 transition-colors hover:border-line-strong">
+            <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold {s.done ? 'border-ok bg-ok/15 text-ok' : 'border-line-strong text-fg-muted'}">
+              {#if s.done}<Check size={14} strokeWidth={3} />{:else}{i + 1}{/if}
+            </span>
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-sm font-medium {s.done ? 'text-fg-muted line-through' : 'text-fg'}">{s.title}</span>
+              <span class="block truncate text-xs text-fg-faint">{s.value}</span>
+            </span>
+            {#if !s.done}<span class="inline-flex items-center gap-1 text-xs text-fg-faint transition-colors group-hover:text-accent">{s.action}<ArrowRight size={12} /></span>{/if}
+          </a>
+        </li>
       {/each}
-    </div>
+    </ol>
   </section>
 {/if}

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Check, Copy } from '@lucide/svelte';
 
-  let { text, label = 'Copy', size = 14 }: { text: string; label?: string; size?: number } = $props();
+  let { text, label = 'Copy', size = 15, class: cls = '' }: { text: string; label?: string; size?: number; class?: string } = $props();
   let done = $state(false);
 
   // Copies through the clipboard API, or a hidden textarea outside a secure context
@@ -33,8 +33,11 @@
 
 <button
   type="button"
-  class="inline-flex shrink-0 items-center justify-center rounded p-1 text-fg-faint transition-colors hover:bg-raised hover:text-fg {done ? 'text-ok' : ''}"
-  onclick={copy}
+  class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-fg-faint transition-colors hover:bg-raised hover:text-fg {done ? 'text-ok' : ''} {cls}"
+  onclick={(e) => {
+    e.stopPropagation();
+    copy();
+  }}
   title={label}
   aria-label={label}
 >

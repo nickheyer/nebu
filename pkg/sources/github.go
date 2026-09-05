@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -48,9 +49,11 @@ const (
 	ghSortForks     = "forks"
 	ghFacetLanguage = "language"
 	ghPageSize      = 100
-	ghReleaseTTL    = 5 * time.Minute
-	ghShaMedia      = "application/vnd.github.sha"
-	ghRawMedia      = "application/vnd.github.raw+json"
+	// GitHub answers 422 past the first 1000 results of a list, so a listing stops there
+	ghMaxResults = 1000
+	ghReleaseTTL = 5 * time.Minute
+	ghShaMedia   = "application/vnd.github.sha"
+	ghRawMedia   = "application/vnd.github.raw+json"
 )
 
 type ghAsset struct {
@@ -77,10 +80,18 @@ type ghRef struct {
 	} `json:"commit"`
 }
 
-// Releases and the default branch of one repository
+// The default branch and releases of one repository
 type ghRepoState struct {
-	releases      []ghRelease
+	owner, name   string
 	defaultBranch string
+	// The newest page of releases, which holds the latest and the tags people usually name
+	releases []ghRelease
+	mu       sync.Mutex
+	// Releases asked for by tag beyond that page, nil for a tag that names no release
+	byTag map[string]*ghRelease
+	// The stable release beyond that page, once looked for
+	stable       *ghRelease
+	stableLooked bool
 }
 
 // The GitHub API for search, releases, refs, and cards, git for trees and blobs
@@ -175,7 +186,24 @@ func ghSplit(repo string) (string, string, error) {
 	return parts[0], strings.TrimSuffix(parts[1], ".git"), nil
 }
 
-// Reads the releases and default branch of a repo, kept a while per source
+// The first page of a repository list, sized to the API's largest page
+func ghListURL(c *Client, owner, name, kind string) string {
+	return c.URL("repos", owner, name, kind) + "?per_page=" + strconv.Itoa(ghPageSize)
+}
+
+// Reads a repository list from a page until the API's cap on results, seen counting what earlier pages held
+func ghList[T any](ctx context.Context, c *Client, next string, seen int, visit func([]T)) error {
+	if seen >= ghMaxResults {
+		return nil
+	}
+	return eachPageWhile(ctx, c, next, nil, func(page []T) bool {
+		visit(page)
+		seen += len(page)
+		return len(page) > 0 && seen < ghMaxResults
+	})
+}
+
+// Reads the default branch and the newest page of releases of a repo, kept a while per source
 func ghState(ctx context.Context, c *Client, repo string) (*ghRepoState, error) {
 	owner, name, err := ghSplit(repo)
 	if err != nil {
@@ -183,7 +211,7 @@ func ghState(ctx context.Context, c *Client, repo string) (*ghRepoState, error) 
 	}
 	memo := Cached(c, "github:"+owner+"/"+name, func() *Memo[*ghRepoState] { return &Memo[*ghRepoState]{TTL: ghReleaseTTL} })
 	return memo.Get(ctx, func(ctx context.Context) (*ghRepoState, error) {
-		st := &ghRepoState{}
+		st := &ghRepoState{owner: owner, name: name, byTag: map[string]*ghRelease{}}
 		var info struct {
 			DefaultBranch string `json:"default_branch"`
 		}
@@ -191,34 +219,73 @@ func ghState(ctx context.Context, c *Client, repo string) (*ghRepoState, error) 
 			return nil, err
 		}
 		st.defaultBranch = info.DefaultBranch
-		next := c.URL("repos", owner, name, "releases") + "?per_page=" + strconv.Itoa(ghPageSize)
-		if err := eachPage(ctx, c, next, nil, func(page []ghRelease) { st.releases = append(st.releases, page...) }); err != nil {
+		// One page is enough here: a repository that releases every commit has thousands, and the API refuses to page past the first 1000 anyway
+		if _, err := c.JSON(ctx, ghListURL(c, owner, name, "releases"), nil, &st.releases); err != nil {
 			return nil, err
 		}
 		return st, nil
 	})
 }
 
-// The newest release that is neither draft nor prerelease, else the newest of any kind
-func (st *ghRepoState) latest() *ghRelease {
+// The newest release that is neither draft nor prerelease, else the newest of any kind, nil when there are none
+func (st *ghRepoState) latest(ctx context.Context, c *Client) (*ghRelease, error) {
 	for i := range st.releases {
 		if r := &st.releases[i]; !r.Draft && !r.Prerelease {
-			return r
+			return r, nil
 		}
 	}
-	if len(st.releases) > 0 {
-		return &st.releases[0]
+	if len(st.releases) == 0 {
+		return nil, nil
 	}
-	return nil
+	if len(st.releases) < ghPageSize {
+		return &st.releases[0], nil
+	}
+	// A whole page without a stable release means it is older, and the API names it directly
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if !st.stableLooked {
+		var rel ghRelease
+		if _, err := c.JSON(ctx, c.URL("repos", st.owner, st.name, "releases", "latest"), nil, &rel); err != nil {
+			if !IsStatus(err, http.StatusNotFound) {
+				return nil, err
+			}
+		} else {
+			st.stable = &rel
+			st.byTag[rel.TagName] = &rel
+		}
+		st.stableLooked = true
+	}
+	if st.stable != nil {
+		return st.stable, nil
+	}
+	return &st.releases[0], nil
 }
 
-func (st *ghRepoState) release(tag string) *ghRelease {
+// The release a tag names: from the newest page, else asked for by tag and remembered, nil when the tag is no release
+func (st *ghRepoState) release(ctx context.Context, c *Client, tag string) (*ghRelease, error) {
+	if tag == "" {
+		return nil, nil
+	}
 	for i := range st.releases {
 		if st.releases[i].TagName == tag {
-			return &st.releases[i]
+			return &st.releases[i], nil
 		}
 	}
-	return nil
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if rel, ok := st.byTag[tag]; ok {
+		return rel, nil
+	}
+	var rel ghRelease
+	if _, err := c.JSON(ctx, c.URL("repos", st.owner, st.name, "releases", "tags", tag), nil, &rel); err != nil {
+		if !IsStatus(err, http.StatusNotFound) {
+			return nil, err
+		}
+		st.byTag[tag] = nil
+		return nil, nil
+	}
+	st.byTag[tag] = &rel
+	return &rel, nil
 }
 
 // Reads the commit a ref names
@@ -240,9 +307,15 @@ func (githubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) 
 	if err != nil {
 		return nil, err
 	}
-	rel := st.release(revision)
+	rel, err := st.release(ctx, c, revision)
+	if err != nil {
+		return nil, err
+	}
 	if revision == "" {
-		if rel = st.latest(); rel != nil {
+		if rel, err = st.latest(ctx, c); err != nil {
+			return nil, err
+		}
+		if rel != nil {
 			revision = rel.TagName
 		} else {
 			revision = st.defaultBranch
@@ -275,31 +348,42 @@ func (githubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.R
 	if err != nil {
 		return nil, err
 	}
-	latest := st.latest()
+	latest, err := st.latest(ctx, c)
+	if err != nil {
+		return nil, err
+	}
 	var out []*v1.Revision
 	seen := map[string]bool{}
-	for i := range st.releases {
-		r := &st.releases[i]
-		detail := "release"
-		switch {
-		case r.Draft:
-			detail = "draft"
-		case r.Prerelease:
-			detail = "prerelease"
+	releases := func(page []ghRelease) {
+		for i := range page {
+			r := &page[i]
+			detail := "release"
+			switch {
+			case r.Draft:
+				detail = "draft"
+			case r.Prerelease:
+				detail = "prerelease"
+			}
+			if r.Name != "" && r.Name != r.TagName {
+				detail += ", " + r.Name
+			}
+			rev := &v1.Revision{Name: r.TagName, Default: latest != nil && r.TagName == latest.TagName, Detail: detail, UpdatedAt: Stamp(r.PublishedAt)}
+			for _, as := range r.Assets {
+				rev.SizeBytes += uint64(as.Size)
+			}
+			out = append(out, rev)
+			seen[r.TagName] = true
 		}
-		if r.Name != "" && r.Name != r.TagName {
-			detail += ", " + r.Name
+	}
+	// The page the state holds first, the rest read from the second while a full page says there may be more
+	releases(st.releases)
+	if len(st.releases) == ghPageSize {
+		if err := ghList(ctx, c, ghListURL(c, owner, name, "releases")+"&page=2", len(st.releases), releases); err != nil {
+			return nil, err
 		}
-		rev := &v1.Revision{Name: r.TagName, Default: r == latest, Detail: detail, UpdatedAt: Stamp(r.PublishedAt)}
-		for _, as := range r.Assets {
-			rev.SizeBytes += uint64(as.Size)
-		}
-		out = append(out, rev)
-		seen[r.TagName] = true
 	}
 	for _, kind := range []string{"branches", "tags"} {
-		next := c.URL("repos", owner, name, kind) + "?per_page=" + strconv.Itoa(ghPageSize)
-		err := eachPage(ctx, c, next, nil, func(page []ghRef) {
+		err := ghList(ctx, c, ghListURL(c, owner, name, kind), 0, func(page []ghRef) {
 			for _, e := range page {
 				if seen[e.Name] {
 					continue
@@ -338,7 +422,11 @@ func (githubAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact 
 	if err != nil {
 		return nil, err
 	}
-	if rel := st.release(model.GetRevision()); rel != nil {
+	rel, err := st.release(ctx, c, model.GetRevision())
+	if err != nil {
+		return nil, err
+	}
+	if rel != nil {
 		for _, as := range rel.Assets {
 			if as.Name == artifact.GetPath() {
 				return c.HTTP().Open(ctx, as.URL, as.Size)

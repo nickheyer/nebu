@@ -8,11 +8,12 @@
   import { facetValueLabel, groupByProvider, groupLabel, hitSize, kindParam, locked, looksLikeRepo, parseKind, pickGroup, sortReversible, sourceLabels } from '$lib/catalog';
   import { ago, bytes, count, params as fmtParams } from '$lib/format';
   import { SourceKind, type SearchHit } from '$proto/source_pb';
-  import { Search, ArrowDown, ArrowUp, KeyRound, X, RefreshCw, Settings, Lock, EyeOff, Database, ChevronDown } from '@lucide/svelte';
+  import { Search, ArrowDown, ArrowUp, KeyRound, X, RefreshCw, Settings, Lock, EyeOff, Check, ChevronDown } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
   import Tip from '$lib/components/ui/Tip.svelte';
+  import ModelsNav from '$lib/components/ModelsNav.svelte';
   import SourceRail from '$lib/components/catalog/SourceRail.svelte';
   import FacetPicker from '$lib/components/catalog/FacetPicker.svelte';
   import ModelDrawer from '$lib/components/ModelDrawer.svelte';
@@ -53,7 +54,7 @@
   const capsOf = (id: string) => statuses.find((s) => s.source?.id === id)?.capabilities ?? caps;
   const merged = $derived(all || (!!group && sourceId === '' && group.sources.length > 1));
   const labels = $derived(sourceLabels(all ? statuses : (group?.sources ?? [])));
-  const name = $derived(all ? 'All sources' : group ? (merged ? group.name : (labels.get(sourceId) ?? groupLabel(group))) : 'Catalog');
+  const name = $derived(all ? 'all sources' : group ? (merged ? group.name : (labels.get(sourceId) ?? groupLabel(group))) : 'the catalog');
   const effectiveSort = $derived(sort || caps?.defaultSort || '');
   const reversible = $derived(sortReversible(caps, effectiveSort));
   const activeFilters = $derived(Object.entries(filters).filter(([, v]) => v));
@@ -71,7 +72,7 @@
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === '/' && !e.metaKey && !e.ctrlKey && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA' && document.activeElement?.tagName !== 'SELECT') {
+      if (e.key === '/' && !e.metaKey && !e.ctrlKey && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName ?? '')) {
         e.preventDefault();
         input?.focus();
       }
@@ -280,9 +281,9 @@
   {@const on = !!sortId && effectiveSort === sortId}
   <th class={num ? 'num' : ''} aria-sort={on ? (ascending ? 'ascending' : 'descending') : 'none'}>
     {#if sortId}
-      <button type="button" class="inline-flex items-center gap-1 rounded px-0.5 uppercase hover:text-fg {on ? 'text-fg' : ''}" onclick={() => orderBy(sortId)}>
+      <button type="button" class="inline-flex items-center gap-1 rounded hover:text-fg {on ? 'text-fg' : ''}" onclick={() => orderBy(sortId)}>
         {label}
-        {#if on}{#if ascending}<ArrowUp size={11} />{:else}<ArrowDown size={11} />{/if}{/if}
+        {#if on}{#if ascending}<ArrowUp size={12} />{:else}<ArrowDown size={12} />{/if}{/if}
       </button>
     {:else}
       {label}
@@ -293,7 +294,7 @@
 {#snippet skeletonRows(n: number)}
   {#each Array(n) as _, i (i)}
     <tr aria-busy="true">
-      <td><div class="skeleton h-3.5" style="width: {55 + ((i * 7) % 30)}%"></div><div class="skeleton mt-1.5 h-2.5" style="width: {30 + ((i * 11) % 25)}%"></div></td>
+      <td><div class="skeleton h-3.5" style="width: {55 + ((i * 7) % 30)}%"></div><div class="skeleton mt-2 h-2.5" style="width: {30 + ((i * 11) % 25)}%"></div></td>
       {#if merged}<td><div class="skeleton h-3 w-16"></div></td>{/if}
       <td><div class="skeleton h-3 w-20"></div></td>
       <td><div class="skeleton h-3 w-14"></div></td>
@@ -305,40 +306,43 @@
   {/each}
 {/snippet}
 
-<PageHeader title="Catalog">
-  <Button variant="ghost" size="sm" icon={Settings} href="/settings">Sources</Button>
+<PageHeader title="Models">
+  {#snippet meta()}
+    <ModelsNav />
+  {/snippet}
+  <Button variant="ghost" icon={Settings} href="/settings">Sources</Button>
 </PageHeader>
 
 {#if cached.error && statuses.length === 0}
-  <div class="panel">
+  <div class="card">
     <Empty title="Sources unavailable" description={cached.error}>
       <Button size="sm" icon={RefreshCw} onclick={() => refreshCached()}>Retry</Button>
     </Empty>
   </div>
 {:else if !cached.loaded}
   <div class="grid grid-cols-1 gap-6 lg:grid-cols-[13rem_minmax(0,1fr)]">
-    <div class="flex flex-col gap-2 pt-1">{#each [1, 2, 3, 4, 5] as i (i)}<div class="skeleton h-7" style="width: {60 + ((i * 13) % 35)}%"></div>{/each}</div>
-    <div class="rounded-lg border border-line"><table class="tbl"><tbody>{@render skeletonRows(8)}</tbody></table></div>
+    <div class="flex flex-col gap-2 pt-1">{#each [1, 2, 3, 4, 5] as i (i)}<div class="skeleton h-8" style="width: {60 + ((i * 13) % 35)}%"></div>{/each}</div>
+    <div class="card"><table class="tbl"><tbody>{@render skeletonRows(8)}</tbody></table></div>
   </div>
 {:else if statuses.length === 0}
-  <div class="panel">
-    <Empty title="No sources">
+  <div class="card">
+    <Empty title="No sources" description="Add one in settings to search it here.">
       <Button size="sm" icon={Settings} href="/settings">Settings</Button>
     </Empty>
   </div>
 {:else}
   <div class="grid grid-cols-1 gap-6 lg:grid-cols-[13rem_minmax(0,1fr)]">
-    <aside class="lg:sticky lg:top-6 lg:self-start">
+    <aside class="lg:sticky lg:top-8 lg:self-start">
       <SourceRail {groups} {kind} {sourceId} onChange={pick} />
     </aside>
 
     <div class="min-w-0">
-      <form class="mb-2 flex flex-wrap items-center gap-2" onsubmit={submit}>
+      <form class="flex flex-wrap items-center gap-2" onsubmit={submit}>
         <div class="relative min-w-64 flex-1">
-          <Search size={15} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-fg-faint" />
+          <Search size={16} class="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-fg-faint" />
           <input
             bind:this={input}
-            class="input pr-24 pl-9"
+            class="input h-10 pr-28 pl-10 text-base"
             bind:value={query}
             oninput={onInput}
             disabled={inputDead}
@@ -346,62 +350,66 @@
             autocomplete="off"
             spellcheck="false"
           />
-          <div class="pointer-events-none absolute top-1/2 right-2 flex -translate-y-1/2 items-center gap-1.5 text-[11px] text-fg-faint">
-            {#if canSubmitRepo}<span class="rounded bg-accent/15 px-1.5 py-0.5 text-accent">Enter opens</span>{:else if !query && !inputDead}<span class="kbd">/</span>{/if}
+          <div class="pointer-events-none absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-1.5 text-xs text-fg-faint">
+            {#if canSubmitRepo}<span class="rounded-md bg-accent/15 px-2 py-0.5 text-accent">Enter opens it</span>{:else if !query && !inputDead}<span class="kbd">/</span>{/if}
           </div>
         </div>
         {#if caps?.sorts.length && !all}
-          <select class="input w-40 shrink-0" bind:value={sort} aria-label="Sort">
+          <select class="input h-10 w-44 shrink-0" bind:value={sort} aria-label="Sort">
             {#each caps.sorts as s (s.id)}<option value={s.id === caps.defaultSort ? '' : s.id}>{s.label}</option>{/each}
           </select>
           {#if reversible}
             <Tip text={ascending ? 'Ascending' : 'Descending'}>
-              <Button type="button" variant="outline" icon={ascending ? ArrowUp : ArrowDown} onclick={() => (ascending = !ascending)} aria-label="Flip order" />
+              <Button type="button" size="lg" icon={ascending ? ArrowUp : ArrowDown} onclick={() => (ascending = !ascending)} aria-label="Flip order" />
             </Tip>
           {/if}
         {/if}
-        {#if caps?.facets.length && !all}
-          {#each caps.facets as f (f.id)}
-            <FacetPicker facet={f} value={filters[f.id] ?? ''} onChange={(v) => (filters = { ...filters, [f.id]: v })} />
-          {/each}
-        {/if}
-        {#if activeFilters.length || query || sort}
-          <Button type="button" variant="ghost" size="sm" icon={X} onclick={clearAll}>Clear</Button>
-        {/if}
       </form>
+      {#if (caps?.facets.length && !all) || activeFilters.length || query || sort}
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+          {#if caps?.facets.length && !all}
+            {#each caps.facets as f (f.id)}
+              <FacetPicker facet={f} value={filters[f.id] ?? ''} onChange={(v) => (filters = { ...filters, [f.id]: v })} />
+            {/each}
+          {/if}
+          {#if activeFilters.length || query || sort}
+            <Button type="button" variant="ghost" size="sm" icon={X} onclick={clearAll}>Clear</Button>
+          {/if}
+        </div>
+      {/if}
 
-      <div class="mb-2 flex min-h-5 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-faint">
+      <div class="mt-3 mb-2 flex min-h-5 flex-wrap items-center gap-x-4 gap-y-1 text-sm text-fg-faint">
         {#if !searching && hits.length}
           <span>{#if total > 0n}{hits.length.toLocaleString()} of {Number(total).toLocaleString()}{:else}{hits.length.toLocaleString()} shown{/if}</span>
         {/if}
         {#each tokenless as s (s.source?.id)}
-          <span class="inline-flex items-center gap-1 text-warn"><KeyRound size={12} />{merged ? labels.get(s.source?.id ?? '') : name} downloads need <span class="font-mono">{s.capabilities?.tokenEnv || 'a token'}</span></span>
+          <span class="inline-flex items-center gap-1.5 text-warn"><KeyRound size={13} />{merged ? labels.get(s.source?.id ?? '') : name} downloads need <span class="font-mono">{s.capabilities?.tokenEnv || 'a token'}</span></span>
         {/each}
         {#if status?.error && !merged}
           <span class="text-bad">{status.error}</span>
         {/if}
         {#if warnings.length}
           <button type="button" class="inline-flex items-center gap-1 text-warn hover:underline" onclick={() => (showWarnings = !showWarnings)}>
-            {warnings.length} {warnings.length === 1 ? 'source' : 'sources'} did not answer<ChevronDown size={12} class="transition-transform {showWarnings ? 'rotate-180' : ''}" />
+            {warnings.length} {warnings.length === 1 ? 'source' : 'sources'} did not answer<ChevronDown size={13} class="transition-transform {showWarnings ? 'rotate-180' : ''}" />
           </button>
         {/if}
       </div>
       {#if showWarnings && warnings.length}
-        <ul class="mb-2 rounded-md border border-warn/30 bg-warn/8 px-3 py-2 text-xs text-warn">
+        <ul class="note note-warn mb-3 list-disc pl-6">
           {#each warnings as w, i (i)}<li>{w}</li>{/each}
         </ul>
       {/if}
 
       {#if searchError}
-        <div class="rounded-lg border border-line">
+        <div class="card">
           <Empty compact title="{name} did not answer" description={searchError}>
             <Button size="sm" icon={RefreshCw} onclick={search}>Retry</Button>
           </Empty>
         </div>
       {:else if !searching && hits.length === 0}
-        <div class="rounded-lg border border-line">
+        <div class="card">
           {#if !caps?.browse && browsing && !all}
-            <Empty compact title="Type {caps?.repoExample || 'owner/name'} to open it" />
+            <Empty compact title="Type {caps?.repoExample || 'owner/name'} to open it" description="{name} does not list models, it opens the one you name." />
           {:else if !searchable}
             <Empty compact title="{name} does not search" />
           {:else}
@@ -411,12 +419,12 @@
           {/if}
         </div>
       {:else}
-        <div class="overflow-hidden rounded-lg border border-line">
+        <div class="card overflow-hidden">
           <table class="tbl table-fixed">
             <colgroup>
               <col />
               {#if merged}<col class="w-28" />{/if}
-              <col class="w-36" />
+              <col class="w-40" />
               <col class="w-28" />
               <col class="w-20" />
               <col class="w-24" />
@@ -445,21 +453,21 @@
                   {@const on = selected?.repo === h.repo && selected?.sourceId === h.sourceId && drawerOpen}
                   <tr class="row-link {on ? 'row-active' : ''}" onclick={() => openHit(h)}>
                     <td>
-                      <div class="flex items-center gap-1.5">
-                        <span class="truncate text-sm font-medium text-fg" title={h.repo}>{title}</span>
-                        {#if locked(h, hcaps)}<Tip text="Gated. Downloads need {hcaps?.tokenEnv || 'a token'}"><Lock size={12} class="shrink-0 text-warn" /></Tip>{:else if h.gated}<Tip text="Gated. The token on this source has access"><Lock size={12} class="shrink-0 text-fg-faint" /></Tip>{/if}
-                        {#if h.private}<Tip text="Private"><EyeOff size={12} class="shrink-0 text-fg-faint" /></Tip>{/if}
-                        {#if stored.has(h.sourceId + '/' + h.repo)}<Tip text="In the store"><Database size={12} class="shrink-0 text-ok" /></Tip>{/if}
+                      <div class="flex items-center gap-2">
+                        <span class="truncate font-medium text-fg" title={h.repo}>{title}</span>
+                        {#if locked(h, hcaps)}<Tip text="Gated. Downloads need {hcaps?.tokenEnv || 'a token'}"><Lock size={13} class="shrink-0 text-warn" /></Tip>{:else if h.gated}<Tip text="Gated. The token on this source has access"><Lock size={13} class="shrink-0 text-fg-faint" /></Tip>{/if}
+                        {#if h.private}<Tip text="Private"><EyeOff size={13} class="shrink-0 text-fg-faint" /></Tip>{/if}
+                        {#if stored.has(h.sourceId + '/' + h.repo)}<Tip text="In the library"><Check size={13} class="shrink-0 text-ok" /></Tip>{/if}
                       </div>
-                      <div class="truncate text-[11.5px] text-fg-faint">{h.author}{#if h.name && h.name !== h.repo}<span class="font-mono"> · {h.repo}</span>{/if}</div>
+                      <div class="truncate text-xs text-fg-faint">{h.author}{#if h.name && h.name !== h.repo}<span class="font-mono">{' · '}{h.repo}</span>{/if}</div>
                     </td>
-                    {#if merged}<td class="truncate text-xs text-fg-muted">{labels.get(h.sourceId) ?? h.sourceId}</td>{/if}
-                    <td class="truncate text-xs text-fg-muted">{h.task ? facetValueLabel(hcaps, 'task', h.task) : '–'}</td>
+                    {#if merged}<td class="truncate text-fg-muted">{labels.get(h.sourceId) ?? h.sourceId}</td>{/if}
+                    <td class="truncate text-fg-muted">{h.task ? facetValueLabel(hcaps, 'task', h.task) : '–'}</td>
                     <td class="truncate font-mono text-xs text-fg-muted">{h.formats.join(' ') || '–'}</td>
-                    <td class="num text-xs">{sizeOf(h)}</td>
-                    <td class="num text-xs text-fg-muted">{h.downloads > 0n ? count(h.downloads) : '–'}</td>
-                    <td class="num text-xs text-fg-muted">{h.likes > 0n ? count(h.likes) : '–'}</td>
-                    <td class="num text-xs text-fg-muted whitespace-nowrap">{h.updatedAt ? ago(h.updatedAt, clock.now) : '–'}</td>
+                    <td class="num">{sizeOf(h)}</td>
+                    <td class="num text-fg-muted">{h.downloads > 0n ? count(h.downloads) : '–'}</td>
+                    <td class="num text-fg-muted">{h.likes > 0n ? count(h.likes) : '–'}</td>
+                    <td class="num text-fg-muted whitespace-nowrap">{h.updatedAt ? ago(h.updatedAt, clock.now) : '–'}</td>
                   </tr>
                 {/each}
                 {#if loadingMore}

@@ -2,18 +2,19 @@
   import { live, cached, instanceLive, clock, taskFor } from '$lib/state.svelte';
   import { swapSlot, editSlot, evictSlot, deleteSlot } from '$lib/slotActions.svelte';
   import { policyText } from '$lib/gateway';
-  import { bytes, when, duration, enumLabel, count, newestFirst } from '$lib/format';
+  import { bytes, when, duration, count, newestFirst } from '$lib/format';
   import { SlotState } from '$proto/slot_pb';
   import { InstanceState } from '$proto/instance_pb';
   import { RouteState } from '$proto/gateway_pb';
-  import { ArrowLeftRight, LogOut, Pencil, Trash2, ExternalLink, MessageSquare } from '@lucide/svelte';
+  import { ArrowLeftRight, LogOut, Pencil, Trash2, ChevronRight, MessageSquare, Play } from '@lucide/svelte';
   import Drawer from './ui/Drawer.svelte';
-  import Tabs from './ui/Tabs.svelte';
+  import Segmented from './ui/Segmented.svelte';
   import Kv from './ui/Kv.svelte';
   import Button from './ui/Button.svelte';
-  import StateBadge from './ui/StateBadge.svelte';
+  import Pill from './ui/Pill.svelte';
+  import StatePill from './ui/StatePill.svelte';
   import Section from './ui/Section.svelte';
-  import ParamChips from './ui/ParamChips.svelte';
+  import ParamList from './ui/ParamList.svelte';
   import InstanceLog from './InstanceLog.svelte';
   import TaskChip from './TaskChip.svelte';
 
@@ -24,13 +25,14 @@
   const instance = $derived(slot?.instanceId ? live.instances.get(slot.instanceId) : undefined);
   const alive = $derived(instanceLive(instance));
   const route = $derived(slot ? live.routes.get(slot.name) : undefined);
+  const answering = $derived(route?.state === RouteState.READY);
   const swapTask = $derived(slot ? taskFor('swap', { slot: slot.id }) : undefined);
   const devices = $derived((slot?.deviceIds ?? []).map((d) => live.host?.devices.find((x) => x.id === d)?.name ?? d));
   const history = $derived(
     [...live.instances.values()]
       .filter((i) => i.slotId === id && i.id !== slot?.instanceId)
       .sort(newestFirst((i) => i.createdAt))
-      .slice(0, 8)
+      .slice(0, 12)
   );
 
   $effect(() => {
@@ -38,36 +40,31 @@
   });
 </script>
 
-<Drawer bind:id title={slot?.name ?? 'Slot'} subtitle={slot?.id}>
+<Drawer bind:id title={slot?.name ?? 'Slot'} subtitle={slot?.description || 'Slot'}>
   {#snippet header()}
     {#if slot}
       <div class="flex flex-wrap items-center gap-2">
-        <StateBadge values={SlotState} value={slot.state} />
-        {#if slot.description}<span class="text-xs text-fg-muted">{slot.description}</span>{/if}
-        {#if route}
-          <span class="text-xs tabular-nums {route.state === RouteState.READY ? 'text-ok' : 'text-fg-faint'}">{enumLabel(RouteState, route.state)} · {count(route.requests)} requests{route.inFlight ? ` · ${route.inFlight} in flight` : ''}</span>
-        {/if}
+        <StatePill values={SlotState} value={slot.state} />
+        {#if route}<Pill tone={answering ? 'ok' : 'neutral'} label="{count(route.requests)} requests{route.inFlight ? ` · ${route.inFlight} live` : ''}" />{/if}
       </div>
-      <div class="mt-3">
-        <Tabs size="sm" bind:value={tab} tabs={[{ id: 'overview', label: 'Overview' }, { id: 'log', label: 'Log' }, { id: 'history', label: 'History', count: history.length || undefined }]} />
-      </div>
+      <Segmented size="sm" class="mt-3" bind:value={tab} tabs={[{ id: 'overview', label: 'Overview' }, { id: 'log', label: 'Log' }, { id: 'history', label: 'History', count: history.length || undefined }]} />
     {/if}
   {/snippet}
 
   {#if slot}
-    <div class="px-5 py-4">
+    <div class="px-6 py-5">
       {#if tab === 'overview'}
-        <div class="flex flex-col gap-5">
-          {#if swapTask}<TaskChip task={swapTask} label="Swap in progress" />{/if}
+        <div class="flex flex-col gap-6">
+          {#if swapTask}<TaskChip task={swapTask} label="Swapping" />{/if}
           {#if slot.error && slot.state === SlotState.FAILED}
-            <div class="rounded-lg border border-bad/30 bg-bad/10 px-3 py-2 text-sm leading-6 text-bad">{slot.error}</div>
+            <div class="note note-bad">{slot.error}</div>
           {/if}
 
           <Section title="Serving">
             {#if instance}
-              <button class="flex w-full items-center gap-3 rounded-lg border border-line bg-sunken px-3 py-2.5 text-left transition-colors hover:border-line-strong" onclick={() => onInstance?.(instance.id)}>
+              <button type="button" class="flex w-full items-center gap-3 rounded-lg border border-line bg-sunken px-4 py-3 text-left transition-colors hover:border-line-strong" onclick={() => onInstance?.(instance.id)}>
                 <div class="min-w-0 flex-1">
-                  <div class="truncate font-mono text-sm text-fg">{instance.repo} <span class="text-fg-muted">· {instance.group}</span></div>
+                  <div class="truncate text-sm font-medium text-fg">{instance.repo} <span class="font-mono text-fg-muted">{instance.group}</span></div>
                   <div class="mt-0.5 flex flex-wrap gap-x-3 text-xs text-fg-faint">
                     <span>{instance.runtimeId}</span>
                     {#if instance.pid}<span>pid {instance.pid}</span>{/if}
@@ -75,11 +72,14 @@
                     {#if alive}<span>up {duration(instance.readyAt ?? instance.createdAt, undefined, clock.now)}</span>{/if}
                   </div>
                 </div>
-                <StateBadge values={InstanceState} value={instance.state} size="xs" />
-                <ExternalLink size={13} class="text-fg-faint" />
+                <StatePill values={InstanceState} value={instance.state} />
+                <ChevronRight size={16} class="text-fg-faint" />
               </button>
             {:else}
-              <div class="rounded-lg border border-dashed border-line px-3 py-4 text-center text-sm text-fg-faint">Empty. The gateway answers 503 for <span class="font-mono text-fg-muted">{slot.name}</span></div>
+              <div class="flex items-center gap-3 rounded-lg border border-dashed border-line px-4 py-3">
+                <span class="flex-1 text-sm text-fg-muted">Nothing running</span>
+                <Button size="sm" variant="primary" icon={Play} onclick={() => swapSlot(slot)}>Run a model</Button>
+              </div>
             {/if}
           </Section>
 
@@ -87,16 +87,15 @@
             <Kv
               columns={2}
               items={[
-                ['devices', devices.length ? devices.join(', ') : 'all'],
-                ['memory cap', slot.memoryBytes ? bytes(slot.memoryBytes) : 'none'],
+                ['devices', devices.length ? devices.join(', ') : 'any'],
+                ['memory cap', slot.memoryBytes ? bytes(slot.memoryBytes) : 'whole device'],
                 ['runtime', slot.runtimeId || 'first compatible'],
-                ['public name', slot.name],
                 ['limits', policyText(slot.policy, cached.gateway?.policy)],
                 ['created', when(slot.createdAt)],
                 ['updated', when(slot.updatedAt)]
               ]}
             />
-            {#if Object.keys(slot.params).length}<ParamChips params={slot.params} class="mt-3" />{/if}
+            {#if Object.keys(slot.params).length}<ParamList params={slot.params} class="mt-3" />{/if}
           </Section>
 
           {#if slot.request}
@@ -115,7 +114,7 @@
         </div>
       {:else if tab === 'log'}
         {#if instance}
-          {#key instance.id}<InstanceLog id={instance.id} follow={alive} height="h-[calc(100vh-16rem)]" />{/key}
+          {#key instance.id}<InstanceLog id={instance.id} follow={alive} height="h-[calc(100vh-17rem)]" />{/key}
         {:else}
           <p class="text-sm text-fg-faint">Nothing running</p>
         {/if}
@@ -123,20 +122,22 @@
         {#if history.length === 0}
           <p class="text-sm text-fg-faint">No history</p>
         {:else}
-          <table class="tbl">
-            <thead><tr><th>model</th><th>state</th><th>runtime</th><th>started</th><th>ended</th></tr></thead>
-            <tbody>
-              {#each history as i (i.id)}
-                <tr class="row-link" onclick={() => onInstance?.(i.id)}>
-                  <td class="font-mono text-xs">{i.repo} <span class="text-fg-muted">· {i.group}</span></td>
-                  <td><StateBadge values={InstanceState} value={i.state} size="xs" /></td>
-                  <td class="text-xs">{i.runtimeId}</td>
-                  <td class="text-xs text-fg-muted">{when(i.createdAt)}</td>
-                  <td class="text-xs text-fg-muted">{when(i.stoppedAt)}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+          <div class="overflow-x-auto rounded-lg border border-line">
+            <table class="tbl">
+              <thead><tr><th>Model</th><th>State</th><th>Runtime</th><th>Started</th><th>Ended</th></tr></thead>
+              <tbody>
+                {#each history as i (i.id)}
+                  <tr class="row-link" onclick={() => onInstance?.(i.id)}>
+                    <td class="font-mono text-xs">{i.repo} <span class="text-fg-muted">{i.group}</span></td>
+                    <td><StatePill values={InstanceState} value={i.state} /></td>
+                    <td class="text-fg-muted">{i.runtimeId}</td>
+                    <td class="text-fg-muted">{when(i.createdAt)}</td>
+                    <td class="text-fg-muted">{when(i.stoppedAt)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
         {/if}
       {/if}
     </div>
@@ -155,10 +156,10 @@
           if (await deleteSlot(slot)) id = '';
         }}>Delete</Button
       >
-      {#if route?.state === RouteState.READY}
-        <Button variant="outline" size="sm" icon={MessageSquare} class="ml-auto" href="/chat?model={encodeURIComponent(slot.name)}">Chat</Button>
-      {/if}
-      <Button variant="primary" size="sm" icon={ArrowLeftRight} class={route?.state === RouteState.READY ? '' : 'ml-auto'} onclick={() => swapSlot(slot)}>{alive ? 'Swap model' : 'Run a model'}</Button>
+      <span class="ml-auto flex items-center gap-2">
+        {#if answering}<Button size="sm" icon={MessageSquare} href="/chat?model={encodeURIComponent(slot.name)}">Chat</Button>{/if}
+        <Button variant="primary" size="sm" icon={alive ? ArrowLeftRight : Play} onclick={() => swapSlot(slot)}>{alive ? 'Swap model' : 'Run a model'}</Button>
+      </span>
     {/if}
   {/snippet}
 </Drawer>

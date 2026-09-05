@@ -4,7 +4,7 @@
   import { bytes, count, duration, pct } from '$lib/format';
   import { TaskState, type Task } from '$proto/task_pb';
   import { Ban } from '@lucide/svelte';
-  import StateBadge from './ui/StateBadge.svelte';
+  import StatePill from './ui/StatePill.svelte';
   import Button from './ui/Button.svelte';
   import Progress from './ui/Progress.svelte';
   import LogView from './ui/LogView.svelte';
@@ -68,27 +68,26 @@
   }
 </script>
 
-<div class="flex flex-col gap-3">
+<div class="flex flex-col gap-4">
   {#if task}
-    <div class="flex flex-wrap items-center gap-2">
-      <StateBadge values={TaskState} value={task.state} />
-      <span class="font-medium text-fg">{task.title}</span>
-      <span class="rounded bg-raised px-1.5 py-0.5 font-mono text-[11px] text-fg-muted">{task.kind}</span>
-      <span class="text-xs text-fg-faint tabular-nums">{duration(task.startedAt ?? task.createdAt, task.finishedAt, clock.now)}</span>
+    <div class="flex flex-wrap items-center gap-3">
+      <StatePill values={TaskState} value={task.state} />
+      <span class="font-mono text-xs text-fg-faint">{task.kind}</span>
+      <span class="text-sm tabular-nums text-fg-muted">{duration(task.startedAt ?? task.createdAt, task.finishedAt, clock.now)}</span>
       {#if active}
-        <Button size="xs" variant="ghost" icon={Ban} class="ml-auto" loading={cancelling} onclick={cancel}>Cancel</Button>
+        <Button size="sm" variant="ghost" icon={Ban} class="ml-auto" loading={cancelling} onclick={cancel}>Cancel</Button>
       {/if}
     </div>
     {#if active || progress.known}
       <div class="flex flex-col gap-1.5">
         <Progress done={task.progress?.done} total={task.progress?.total} {active} tone={task.state === TaskState.FAILED ? 'bad' : task.state === TaskState.SUCCEEDED ? 'ok' : 'accent'} />
-        {#if progress.text}<div class="text-xs text-fg-muted tabular-nums">{progress.text}</div>{/if}
+        {#if progress.text}<div class="text-sm tabular-nums text-fg-muted">{progress.text}</div>{/if}
       </div>
     {/if}
     {#if task.error}
-      <div class="rounded-md border border-bad/30 bg-bad/10 px-3 py-2 text-sm leading-6 text-bad">{task.error}</div>
+      <div class="note note-bad">{task.error}</div>
     {/if}
   {/if}
-  {#if error}<div class="text-sm text-bad">{error}</div>{/if}
-  <LogView {lines} {height} live={active} empty={active ? 'Waiting' : 'No output'} />
+  {#if error}<div class="note note-bad">{error}</div>{/if}
+  <LogView {lines} {height} live={active} empty={active ? 'Waiting for output' : 'No output'} />
 </div>

@@ -6,7 +6,7 @@
   import { SourceKind } from '$proto/source_pb';
   import FormDialog from './ui/FormDialog.svelte';
   import Field from './ui/Field.svelte';
-  import CheckCard from './ui/CheckCard.svelte';
+  import Checkbox from './ui/Checkbox.svelte';
 
   let { open = $bindable(false), providers = [], editing = null }: { open?: boolean; providers?: Provider[]; editing?: SourceStatus | null } = $props();
 
@@ -52,7 +52,7 @@
         return { title: `Updated ${source.name || source.id}` };
       }
       await api.sources.createSource({ source });
-      return { title: `Added ${source.name || source.id}` };
+      return { title: `Added ${source.name || source.id}`, link: { href: `/catalog?source=${source.id}`, label: 'Open it' } };
     },
     failTitle: () => (editing ? 'Update failed' : 'Add failed')
   });
@@ -60,37 +60,41 @@
 
 <FormDialog
   bind:open
-  title={editing ? `Edit ${editing.source?.name || editing.source?.id}` : 'Add a source'}
-  description={editing ? `${editing.capabilities?.name ?? ''} · ${editing.source?.id ?? ''}` : undefined}
+  title={editing ? `Edit ${editing.source?.name || editing.source?.id}` : 'New source'}
+  description={editing ? `${editing.capabilities?.name ?? ''} · ${editing.source?.id ?? ''}` : 'A place models come from'}
   size="lg"
-  action={editing ? 'Save' : 'Add source'}
+  action={editing ? 'Save' : 'Add'}
   saving={form.saving}
   disabled={(!editing && (!idOk || !provider)) || missing.length > 0}
-  note={missing.length ? `Needs ${missing.join(', ')}` : ''}
+  note={missing.length ? `Needs ${missing.join(' and ')}` : ''}
   onsubmit={form.run}
 >
   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
     {#if !editing}
       <Field label="Provider" for="src-kind" hint={provider?.description} class="sm:col-span-2">
-        <select id="src-kind" class="input" value={kind} onchange={(e) => pick(Number((e.currentTarget as HTMLSelectElement).value) as SourceKind)}>
-          {#each providers as p (p.kind)}<option value={p.kind}>{p.name}</option>{/each}
-        </select>
+        {#if providers.length <= 1}
+          <div id="src-kind" class="input-static">{provider?.name ?? '–'}</div>
+        {:else}
+          <select id="src-kind" class="input" value={kind} onchange={(e) => pick(Number((e.currentTarget as HTMLSelectElement).value) as SourceKind)}>
+            {#each providers as p (p.kind)}<option value={p.kind}>{p.name}</option>{/each}
+          </select>
+        {/if}
       </Field>
-      <Field label="Id" for="src-id" hint="Cannot change later">
-        <input id="src-id" class="input font-mono" bind:value={id} placeholder="my-source" aria-invalid={!!id && !idOk} />
+      <Field label="Id" for="src-id" info="Fixed once created" error={id && !idOk ? 'Letters, digits, dots, dashes, and underscores' : undefined}>
+        <input id="src-id" class="input font-mono" bind:value={id} placeholder="my-source" aria-invalid={!!id && !idOk} autocomplete="off" spellcheck="false" />
       </Field>
     {/if}
     <Field label="Name" for="src-name" class={editing ? 'sm:col-span-2' : ''}>
-      <input id="src-name" class="input" bind:value={name} placeholder={provider?.name} />
+      <input id="src-name" class="input" bind:value={name} placeholder={provider?.name} autocomplete="off" />
     </Field>
 
     {#each transports as t (t)}
       {#if transports.length > 1}
-        <div class="mt-1 text-[10.5px] font-semibold tracking-wider text-fg-faint uppercase sm:col-span-2">{humanize(t)}</div>
+        <div class="mt-2 text-sm font-semibold text-fg sm:col-span-2">{humanize(t)}</div>
       {/if}
       {#each fields.filter((f) => f.transport === t) as f (f.name)}
         {#if f.type === ConfigType.BOOL}
-          <CheckCard class="sm:col-span-2" checked={(config[f.name] ?? f.default) === 'true'} onchange={(on) => (config = { ...config, [f.name]: on ? 'true' : 'false' })} title={f.label} description={f.description} />
+          <Checkbox class="sm:col-span-2" checked={(config[f.name] ?? f.default) === 'true'} onchange={(on) => (config = { ...config, [f.name]: on ? 'true' : 'false' })} title={f.label} hint={f.description} />
         {:else}
           <Field label={f.label + (f.required ? ' *' : '')} for="src-{f.name}" hint={f.description}>
             {#if f.choices.length}
@@ -106,7 +110,7 @@
       {/each}
     {/each}
     {#if fields.length === 0 && provider}
-      <p class="text-sm text-fg-muted sm:col-span-2">Nothing to configure</p>
+      <p class="text-sm text-fg-faint sm:col-span-2">Nothing to configure</p>
     {/if}
   </div>
 </FormDialog>

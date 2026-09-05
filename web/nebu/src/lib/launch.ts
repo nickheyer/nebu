@@ -1,10 +1,8 @@
 import { api } from './api';
 import { live, instanceLive } from './state.svelte';
-import { confirm } from './confirm.svelte';
-import { droppedModel } from './dnd.svelte';
 import { fail, ok } from './toast.svelte';
 
-interface RunSpec {
+export interface RunSpec {
   sourceId: string;
   repo: string;
   group: string;
@@ -40,26 +38,4 @@ export async function launch(spec: RunSpec, drainFirst = false, refused?: (err: 
     refused?.(err);
     return undefined;
   }
-}
-
-// Runs the dropped model in a slot, asking first when that swaps out its occupant
-export async function dropModelOnSlot(ev: DragEvent, slotId: string) {
-  ev.preventDefault();
-  const key = droppedModel(ev);
-  const slot = live.slots.get(slotId);
-  if (!key || !slot) return;
-  const m = live.models.get(key);
-  if (!m) {
-    fail(new Error(key), 'Unknown model');
-    return;
-  }
-  if (slotOccupied(slotId)) {
-    const yes = await confirm({
-      title: `Swap ${slot.name}?`,
-      message: `${slot.request?.repo ?? 'The current model'} is replaced by ${m.repo} ${m.group}.`,
-      action: 'Swap'
-    });
-    if (!yes) return;
-  }
-  await launch({ sourceId: m.sourceId, repo: m.repo, group: m.group, slotId });
 }

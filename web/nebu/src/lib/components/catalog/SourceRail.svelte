@@ -4,7 +4,7 @@
   import { groupLabel, sourceLabels, type ProviderGroup } from '$lib/catalog';
   import Tip from '../ui/Tip.svelte';
 
-  // Every provider in a list that grows down, its sources under it when it has several
+  // Every provider in a list, its sources under it when it has several
   let {
     groups,
     kind,
@@ -27,13 +27,13 @@
   }
   function hint(g: ProviderGroup): string {
     if (broken(g)) return g.sources[0]?.error || 'Not working';
-    if (needsToken(g)) return `Token needed to download: ${g.sources[0]?.capabilities?.tokenEnv || 'unset'}`;
+    if (needsToken(g)) return `Downloads need ${g.sources[0]?.capabilities?.tokenEnv || 'a token'} set for the daemon`;
     if (!lists(g)) return 'Opens a typed repository only';
     return g.sources[0]?.capabilities?.description || g.name;
   }
 
-  const item = 'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors';
-  const on = 'bg-raised text-fg';
+  const item = 'flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left text-sm transition-colors';
+  const on = 'bg-raised font-medium text-fg';
   const off = 'text-fg-muted hover:bg-raised/60 hover:text-fg';
 </script>
 
@@ -41,15 +41,15 @@
   {#if groups.length > 1}
     {@const all = kind === SourceKind.UNSPECIFIED && sourceId === ''}
     <button type="button" class="{item} {all ? on : off}" aria-current={all ? 'true' : undefined} onclick={() => onChange(SourceKind.UNSPECIFIED, '')}>
-      <Globe size={14} class={all ? 'text-accent' : 'text-fg-faint'} />
+      <Globe size={15} class={all ? 'text-accent' : 'text-fg-faint'} />
       <span class="flex-1 truncate">All sources</span>
     </button>
-    <div class="my-1.5 h-px bg-line"></div>
+    <div class="my-2 h-px bg-line"></div>
   {/if}
   {#each ordered as g (g.kind)}
     {@const active = g.kind === kind}
     {@const several = g.sources.length > 1}
-    <Tip text={hint(g)}>
+    <Tip text={hint(g)} class="w-full">
       <button
         type="button"
         class="{item} {active && (!several || sourceId === '') ? on : off} {broken(g) ? 'opacity-60' : ''}"
@@ -58,20 +58,20 @@
       >
         <span class="flex-1 truncate">{groupLabel(g)}</span>
         {#if broken(g)}
-          <CircleAlert size={12} class="shrink-0 text-bad" />
+          <CircleAlert size={13} class="shrink-0 text-bad" />
         {:else if needsToken(g)}
-          <KeyRound size={12} class="shrink-0 text-warn" />
+          <KeyRound size={13} class="shrink-0 text-warn" />
         {/if}
-        {#if several}<ChevronDown size={12} class="shrink-0 text-fg-faint transition-transform {active ? 'rotate-180' : ''}" />{/if}
+        {#if several}<ChevronDown size={13} class="shrink-0 text-fg-faint transition-transform {active ? 'rotate-180' : ''}" />{/if}
       </button>
     </Tip>
     {#if active && several}
       <div class="mb-1 ml-3 flex flex-col gap-0.5 border-l border-line pl-2">
         {#each g.sources as s (s.source?.id)}
           {@const id = s.source?.id ?? ''}
-          <button type="button" class="{item} py-1 text-xs {sourceId === id ? on : off}" title={s.error || s.capabilities?.endpoint || ''} onclick={() => onChange(kind, id)}>
+          <button type="button" class="{item} h-7 text-xs {sourceId === id ? on : off}" title={s.error || s.capabilities?.endpoint || ''} onclick={() => onChange(kind, id)}>
             <span class="flex-1 truncate">{labels.get(id)}</span>
-            {#if s.error}<CircleAlert size={11} class="text-bad" />{:else if s.capabilities?.authRequired && !s.capabilities.tokenPresent}<KeyRound size={11} class="text-warn" />{/if}
+            {#if s.error}<CircleAlert size={12} class="text-bad" />{:else if s.capabilities?.authRequired && !s.capabilities.tokenPresent}<KeyRound size={12} class="text-warn" />{/if}
           </button>
         {/each}
       </div>

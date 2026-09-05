@@ -3,6 +3,7 @@
   import { Plus, X } from '@lucide/svelte';
   import Field from './ui/Field.svelte';
 
+  // Every parameter a runtime manifest declares as a field, an empty one inheriting what lies beneath
   let {
     params = [],
     values = $bindable({}),
@@ -64,7 +65,8 @@
   {#each params as p (p.name)}
     {@const v = values[p.name] ?? ''}
     {@const fid = `${idPrefix}-${p.name}`}
-    <Field label={p.name} for={fid} hint={p.description}>
+    {@const bad = !valid(p, v)}
+    <Field label={p.name} for={fid} hint={p.description} error={bad ? (numeric(p) ? (p.solved ? 'A number or auto' : 'A number') : 'true or false') : undefined}>
       {#if p.choices.length || p.type === ParamType.BOOL}
         <select id={fid} class="input font-mono" value={v} onchange={(e) => set(p.name, (e.currentTarget as HTMLSelectElement).value)}>
           <option value="">Inherit · {beneath(p)}</option>
@@ -78,21 +80,20 @@
           inputmode={p.type === ParamType.INT ? 'numeric' : p.type === ParamType.FLOAT ? 'decimal' : 'text'}
           value={v}
           placeholder={beneath(p)}
-          aria-invalid={!valid(p, v)}
+          aria-invalid={bad}
           autocomplete="off"
           spellcheck="false"
           oninput={(e) => set(p.name, (e.currentTarget as HTMLInputElement).value)}
         />
-        {#if !valid(p, v)}<span class="text-xs text-bad">{numeric(p) ? (p.solved ? 'A number or auto' : 'A number') : 'true or false'}</span>{/if}
       {/if}
     </Field>
   {/each}
 
   {#each extra as k (k)}
-    <Field label={k} for="{idPrefix}-{k}" hint={params.length ? 'Unknown to this runtime' : ''}>
+    <Field label={k} for="{idPrefix}-{k}" hint={params.length ? 'Not in this runtime’s manifest' : undefined}>
       <div class="flex gap-1.5">
         <input id="{idPrefix}-{k}" class="input font-mono" value={values[k]} autocomplete="off" spellcheck="false" oninput={(e) => (values = { ...values, [k]: (e.currentTarget as HTMLInputElement).value })} />
-        <button type="button" class="shrink-0 rounded-md px-2 text-fg-muted hover:bg-raised hover:text-fg" aria-label="Remove {k}" onclick={() => set(k, '')}><X size={14} /></button>
+        <button type="button" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-fg-muted hover:bg-raised hover:text-fg" aria-label="Remove {k}" onclick={() => set(k, '')}><X size={15} /></button>
       </div>
     </Field>
   {/each}
@@ -100,12 +101,12 @@
   {#if params.length === 0}
     <div class="flex items-end gap-1.5 sm:col-span-2">
       <Field label="Parameter" for="{idPrefix}-new-name" class="flex-1">
-        <input id="{idPrefix}-new-name" class="input font-mono" bind:value={newName} placeholder="name" autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && add()} />
+        <input id="{idPrefix}-new-name" class="input font-mono" bind:value={newName} placeholder="name" autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} />
       </Field>
       <Field label="Value" for="{idPrefix}-new-value" class="flex-1">
-        <input id="{idPrefix}-new-value" class="input font-mono" bind:value={newValue} placeholder="value" autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && add()} />
+        <input id="{idPrefix}-new-value" class="input font-mono" bind:value={newValue} placeholder="value" autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} />
       </Field>
-      <button type="button" class="input flex w-10 shrink-0 items-center justify-center text-fg-muted hover:text-fg" aria-label="Add parameter" disabled={!newName.trim()} onclick={add}><Plus size={14} /></button>
+      <button type="button" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-line bg-raised text-fg-muted hover:text-fg disabled:opacity-50" aria-label="Add parameter" disabled={!newName.trim()} onclick={add}><Plus size={15} /></button>
     </div>
   {/if}
 </div>

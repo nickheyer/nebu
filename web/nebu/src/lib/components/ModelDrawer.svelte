@@ -14,14 +14,15 @@
   import { ArtifactRole } from '$proto/model_pb';
   import { Download, Eye, Play, Check, ExternalLink, ArrowDownToLine, Heart, RefreshCw, ChevronDown, Lock } from '@lucide/svelte';
   import Drawer from './ui/Drawer.svelte';
-  import Tabs from './ui/Tabs.svelte';
+  import Segmented from './ui/Segmented.svelte';
   import Button from './ui/Button.svelte';
   import Skeleton from './ui/Skeleton.svelte';
   import Copy from './ui/Copy.svelte';
   import Empty from './ui/Empty.svelte';
   import Markdown from './ui/Markdown.svelte';
   import Tip from './ui/Tip.svelte';
-  import Info from './ui/Info.svelte';
+  import Pill from './ui/Pill.svelte';
+  import Section from './ui/Section.svelte';
   import FitTable from './FitTable.svelte';
   import TaskChip from './TaskChip.svelte';
   import WatchDialog from './WatchDialog.svelte';
@@ -217,14 +218,14 @@
 {#snippet filesTable(files: typeof otherFiles)}
   <div class="overflow-x-auto rounded-lg border border-line">
     <table class="tbl">
-      <thead><tr><th>path</th><th>role</th><th>format</th><th class="num">size</th></tr></thead>
+      <thead><tr><th>Path</th><th>Role</th><th>Format</th><th class="num">Size</th></tr></thead>
       <tbody>
         {#each files as a (a.path)}
           <tr>
             <td class="max-w-md truncate font-mono text-xs" title={a.path}>{a.path}</td>
-            <td class="text-xs text-fg-muted">{enumLabel(ArtifactRole, a.role)}</td>
-            <td class="text-xs text-fg-muted">{a.formatId || '–'}</td>
-            <td class="num text-xs">{bytes(a.sizeBytes)}</td>
+            <td class="text-fg-muted">{enumLabel(ArtifactRole, a.role)}</td>
+            <td class="text-fg-muted">{a.formatId || '–'}</td>
+            <td class="num">{bytes(a.sizeBytes)}</td>
           </tr>
         {/each}
       </tbody>
@@ -234,19 +235,19 @@
 
 <Drawer bind:open title={model?.repo || curRepo || 'Model'} subtitle={hit?.author ? `${hit.author}${hit.name && hit.name !== hit.repo ? ' · ' + hit.name : ''}` : siteName}>
   {#snippet header()}
-    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-fg-muted">
       {#if hit?.task}<span class="text-fg">{facetValueLabel(caps, 'task', hit.task)}</span>{/if}
-      {#if hit && hit.downloads > 0n}<span class="inline-flex items-center gap-1 tabular-nums"><ArrowDownToLine size={11} />{count(hit.downloads)}</span>{/if}
-      {#if hit && hit.likes > 0n}<span class="inline-flex items-center gap-1 tabular-nums"><Heart size={11} />{count(hit.likes)}</span>{/if}
+      {#if hit && hit.downloads > 0n}<span class="inline-flex items-center gap-1 tabular-nums"><ArrowDownToLine size={13} />{count(hit.downloads)}</span>{/if}
+      {#if hit && hit.likes > 0n}<span class="inline-flex items-center gap-1 tabular-nums"><Heart size={13} />{count(hit.likes)}</span>{/if}
       {#if size.kind === 'params'}<span>{fmtParams(size.value)} params</span>{:else if size.kind === 'bytes'}<span>{bytes(size.value, 1)}</span>{/if}
       {#if hit?.license}<span>{hit.license}</span>{/if}
       {#if hit?.updatedAt}<span>{ago(hit.updatedAt, clock.now)}</span>{/if}
-      {#if pageUrl}<a href={pageUrl} target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-accent hover:underline"><ExternalLink size={11} />{siteName}</a>{/if}
+      {#if pageUrl}<a href={pageUrl} target="_blank" rel="noopener noreferrer" class="link inline-flex items-center gap-1"><ExternalLink size={13} />{siteName}</a>{/if}
     </div>
     <div class="mt-3 flex flex-wrap items-center gap-2">
-      <Tabs size="sm" bind:value={tab} {tabs} />
+      <Segmented size="sm" bind:value={tab} {tabs} />
       {#if revisions.length > 1}
-        <select class="input ml-auto h-7 w-auto max-w-[14rem] py-0 pr-7 text-xs" value={currentRevision?.name ?? ''} onchange={(e) => { const r = revisions.find((x) => x.name === (e.currentTarget as HTMLSelectElement).value); if (r) pick(r); }} aria-label={revLabel}>
+        <select class="input ml-auto h-8 w-auto max-w-[14rem]" value={currentRevision?.name ?? ''} onchange={(e) => { const r = revisions.find((x) => x.name === (e.currentTarget as HTMLSelectElement).value); if (r) pick(r); }} aria-label={revLabel}>
           {#each revisions as r (r.repo || r.name)}
             <option value={r.name}>{r.name}{r.sizeBytes ? ` · ${bytes(r.sizeBytes, 1)}` : ''}</option>
           {/each}
@@ -255,7 +256,7 @@
     </div>
   {/snippet}
 
-  <div class="px-5 py-4">
+  <div class="px-6 py-5">
     {#if tab === 'weights'}
       {#if gated}
         <Empty icon={Lock} title="Gated" description="Accept the license on {siteName} and set {caps?.tokenEnv || 'a token'} for the daemon">
@@ -263,22 +264,8 @@
           <Button size="sm" variant="ghost" href="/settings">Sources</Button>
         </Empty>
       {:else if inspecting}
-        <div class="overflow-hidden rounded-lg border border-line">
-          <table class="tbl">
-            <thead><tr><th>Weights</th><th>Precision</th><th class="num">Params</th><th class="num">Size</th><th>Fit</th><th></th></tr></thead>
-            <tbody>
-              {#each [0, 1, 2, 3] as i (i)}
-                <tr aria-busy="true">
-                  <td><div class="skeleton h-3.5" style="width: {50 + i * 12}%"></div><div class="skeleton mt-1.5 h-2.5 w-1/3"></div></td>
-                  <td><div class="skeleton h-3 w-20"></div></td>
-                  <td class="num"><div class="skeleton ml-auto h-3 w-10"></div></td>
-                  <td class="num"><div class="skeleton ml-auto h-3 w-14"></div></td>
-                  <td><div class="skeleton h-3 w-24"></div></td>
-                  <td><div class="skeleton ml-auto h-6 w-14"></div></td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+        <div class="flex flex-col gap-3" aria-busy="true">
+          {#each [0, 1, 2] as i (i)}<div class="card h-[4.5rem]"></div>{/each}
         </div>
       {:else if inspectError}
         <Empty compact title="Could not read {curRepo}" description={inspectError}>
@@ -286,22 +273,22 @@
         </Empty>
       {:else if inspect && model}
         <div class="flex flex-col gap-6">
-          <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-faint">
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-fg-faint">
             <span>{revLabel} <span class="font-mono text-fg-muted">{model.revision || 'default'}</span></span>
             {#if model.commit}<span class="font-mono text-fg-muted" title={model.commit}>{model.commit.slice(0, 12)}</span>{/if}
             <span>{model.artifacts.length} files</span>
             <span>{when(model.resolvedAt)}</span>
-            <span class="ml-auto inline-flex items-center gap-1"><Copy text={model.repo} size={12} /></span>
+            <span class="ml-auto"><Copy text={model.repo} size={13} label="Copy repository" /></span>
           </div>
 
           {#if slots.length || profiles.length}
-            <div class="flex flex-wrap items-center gap-2 text-xs">
+            <div class="flex flex-wrap items-center gap-2 text-sm">
               {#if slots.length}
-                <span class="text-fg-faint">Plan for</span>
-                <Tabs size="sm" bind:value={slotId} tabs={[{ id: '', label: hostName() || 'this host' }, ...slots.map((s) => ({ id: s.id, label: s.name }))]} />
+                <span class="text-fg-muted">Plan for</span>
+                <Segmented size="sm" bind:value={slotId} tabs={[{ id: '', label: hostName() || 'this host' }, ...slots.map((s) => ({ id: s.id, label: s.name }))]} />
               {/if}
               {#if profiles.length}
-                <select class="input h-7 w-auto py-0 pr-7 text-xs {slots.length ? 'ml-auto' : ''}" bind:value={profileId} aria-label="Profile">
+                <select class="input h-8 w-auto {slots.length ? 'ml-auto' : ''}" bind:value={profileId} aria-label="Profile">
                   <option value="">Default profiles</option>
                   {#each profiles as p (p.id)}<option value={p.id}>{p.runtimeId} · {p.name}</option>{/each}
                 </select>
@@ -310,92 +297,81 @@
           {/if}
 
           {#if ordered.length}
-            <div class="overflow-x-auto rounded-lg border border-line">
-              <table class="tbl">
-                <thead>
-                  <tr>
-                    <th>Weights</th>
-                    <th><Tip text="Bits per weight. Fewer bits means smaller and less accurate"><span class="cursor-help uppercase">Precision</span></Tip></th>
-                    <th class="num">Params</th>
-                    <th class="num">Size</th>
-                    <th><Tip text="Whether weights and cache fit device memory at the longest context planned. Now is against what is free at this moment"><span class="cursor-help uppercase">Fit</span></Tip></th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each ordered as d (d.group)}
-                    {@const stored = storedModel(d.group)}
-                    {@const task = pulling(d.group)}
-                    {@const p = d.precision}
-                    {@const tone = precisionTone(p?.level ?? 0)}
-                    {@const fit = fitSummary(inspect.rows, d.group)}
-                    {@const now = fitSummary(inspect.rows, d.group, true)}
-                    {@const runners = runtimeNames(d.formatId)}
-                    {@const best = d.group === bestGroup && ordered.length > 1}
-                    <tr class={best ? 'bg-ok/5' : ''}>
-                      <td class="border-l-2 {best ? 'border-ok' : 'border-transparent'}">
-                        <div class="font-mono text-xs text-fg">{d.group}</div>
-                        <div class="mt-0.5 text-[11px] text-fg-faint"><span class="font-mono" title={formatBlurb(d.formatId)}>{d.formatId}</span>{#if d.architecture}<span> · {d.architecture}</span>{/if}</div>
-                      </td>
-                      <td>
-                        <Tip text={p?.blurb || 'Unknown'}>
-                          <span class="flex cursor-help items-center gap-2">
-                            <span class="flex items-center gap-0.5">
-                              {#each [1, 2, 3, 4, 5] as i (i)}
-                                <span class="h-2 w-1.5 rounded-sm {i <= (p?.level ?? 0) ? bars[tone] : 'bg-line'}"></span>
-                              {/each}
-                            </span>
-                            <span class="text-xs whitespace-nowrap text-fg">{p?.label}</span>
-                          </span>
-                        </Tip>
-                      </td>
-                      <td class="num text-xs">{fmtParams(d.parameterCount)}</td>
-                      <td class="num text-xs whitespace-nowrap">{bytes(d.totalBytes, 1)}</td>
-                      <td>
-                        {#if fit}
-                          <div class="text-xs whitespace-nowrap {fit.tone === 'ok' ? 'text-ok' : fit.tone === 'warn' ? 'text-warn' : 'text-bad'}">{fit.label}</div>
-                          {#if now && (now.verdict !== fit.verdict || now.context !== fit.context)}<div class="text-[11px] {now.tone === 'bad' ? 'text-bad' : now.tone === 'warn' ? 'text-warn' : 'text-fg-faint'}">now {now.label.toLowerCase()}</div>{/if}
-                          {#if planRuntimes.length > 1}<div class="text-[11px] text-fg-faint">{fit.runtime}</div>{/if}
-                        {:else if runners}
-                          <span class="text-xs text-fg-faint">Not planned</span>
-                        {:else}
-                          <span class="text-xs text-fg-faint">No runtime for {d.formatId}</span>
-                        {/if}
-                      </td>
-                      <td class="text-right whitespace-nowrap">
-                        {#if task}
-                          <TaskChip {task} label="Pulling" />
-                        {:else if stored}
-                          <Button size="xs" variant="primary" icon={Play} onclick={() => runModel(stored)}>Run</Button>
-                        {:else}
-                          <Button size="xs" variant="primary" icon={Download} onclick={() => pull(d.group)}>Pull</Button>
-                        {/if}
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
+            <div class="flex flex-col gap-2">
+              {#each ordered as d (d.group)}
+                {@const stored = storedModel(d.group)}
+                {@const task = pulling(d.group)}
+                {@const p = d.precision}
+                {@const tone = precisionTone(p?.level ?? 0)}
+                {@const fit = fitSummary(inspect.rows, d.group)}
+                {@const now = fitSummary(inspect.rows, d.group, true)}
+                {@const runners = runtimeNames(d.formatId)}
+                {@const best = d.group === bestGroup && ordered.length > 1}
+                <div class="rounded-lg border px-4 py-3 {best ? 'border-ok/40 bg-ok/5' : 'border-line'}">
+                  <div class="flex items-start gap-4">
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-2">
+                        <span class="truncate font-mono text-sm font-medium text-fg">{d.group}</span>
+                        {#if best}<Pill tone="ok" label="Best fit" />{/if}
+                      </div>
+                      <div class="mt-0.5 truncate text-xs text-fg-faint"><span title={formatBlurb(d.formatId)}>{d.formatId}</span>{#if d.architecture}<span>{' · '}{d.architecture}</span>{/if}</div>
+                    </div>
+                    <div class="shrink-0 text-right text-sm tabular-nums whitespace-nowrap">
+                      <span class="text-fg">{bytes(d.totalBytes, 1)}</span>
+                      <span class="block text-xs text-fg-faint">{fmtParams(d.parameterCount)} params</span>
+                    </div>
+                  </div>
+                  <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <Tip text={p?.blurb || 'Unknown precision'}>
+                      <span class="flex cursor-help items-center gap-2">
+                        <span class="flex items-center gap-0.5">
+                          {#each [1, 2, 3, 4, 5] as i (i)}
+                            <span class="h-2.5 w-1.5 rounded-sm {i <= (p?.level ?? 0) ? bars[tone] : 'bg-line'}"></span>
+                          {/each}
+                        </span>
+                        <span class="text-xs whitespace-nowrap text-fg-muted">{p?.label ?? '–'}</span>
+                      </span>
+                    </Tip>
+                    {#if fit}
+                      <span class="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <Pill tone={fit.tone} dot label={fit.label} />
+                        {#if now && (now.verdict !== fit.verdict || now.context !== fit.context)}<span class="text-xs {now.tone === 'bad' ? 'text-bad' : now.tone === 'warn' ? 'text-warn' : 'text-fg-faint'}">now {now.label.toLowerCase()}</span>{/if}
+                        {#if planRuntimes.length > 1}<span class="text-xs text-fg-faint">on {fit.runtime}</span>{/if}
+                      </span>
+                    {:else if runners}
+                      <span class="text-xs text-fg-faint">Not planned</span>
+                    {:else}
+                      <span class="text-xs text-fg-faint">No runtime serves {d.formatId}</span>
+                    {/if}
+                    <span class="ml-auto">
+                      {#if task}
+                        <TaskChip {task} label="Pulling" />
+                      {:else if stored}
+                        <Button size="sm" variant="primary" icon={Play} onclick={() => runModel(stored)}>Run</Button>
+                      {:else}
+                        <Button size="sm" variant="primary" icon={Download} onclick={() => pull(d.group)}>Pull</Button>
+                      {/if}
+                    </span>
+                  </div>
+                </div>
+              {/each}
             </div>
           {/if}
 
           {#if inspect.rows.length}
-            <section>
-              <div class="mb-2 flex items-center gap-2">
-                <h3 class="text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Fit by context</h3>
-                <Info text="Context is the prompt plus the reply in tokens. Longer context needs more cache memory. Click a cell for the plan" class="ml-auto" />
-              </div>
+            <Section title="Fit by context" description="Longer context needs more cache memory. Click a cell for the plan">
               <FitTable rows={inspect.rows} />
-            </section>
+            </Section>
           {/if}
 
           {#if inspect.warnings.length}
             <section>
-              <button class="flex items-center gap-1.5 text-[11px] font-semibold tracking-wider text-warn uppercase" onclick={() => (showWarnings = !showWarnings)}>
-                <ChevronDown size={12} class="transition-transform {showWarnings ? 'rotate-180' : ''}" />
+              <button type="button" class="flex items-center gap-1.5 text-sm font-medium text-warn" onclick={() => (showWarnings = !showWarnings)}>
+                <ChevronDown size={14} class="transition-transform {showWarnings ? 'rotate-180' : ''}" />
                 {inspect.warnings.length} {inspect.warnings.length === 1 ? 'warning' : 'warnings'}
               </button>
               {#if showWarnings}
-                <ul class="mt-2 rounded-lg border border-warn/30 bg-warn/8 px-3 py-2 text-xs leading-5 text-warn">
+                <ul class="note note-warn mt-2 list-disc pl-6">
                   {#each inspect.warnings as w, i (i)}<li>{w}</li>{/each}
                 </ul>
               {/if}
@@ -406,8 +382,8 @@
             {@render filesTable(model.artifacts)}
           {:else if otherFiles.length}
             <section>
-              <button class="flex items-center gap-1.5 text-[11px] font-semibold tracking-wider text-fg-faint uppercase hover:text-fg" onclick={() => (showFiles = !showFiles)}>
-                <ChevronDown size={12} class="transition-transform {showFiles ? 'rotate-180' : ''}" />
+              <button type="button" class="flex items-center gap-1.5 text-sm font-medium text-fg-muted hover:text-fg" onclick={() => (showFiles = !showFiles)}>
+                <ChevronDown size={14} class="transition-transform {showFiles ? 'rotate-180' : ''}" />
                 Other files ({otherFiles.length})
               </button>
               {#if showFiles}<div class="mt-2">{@render filesTable(otherFiles)}</div>{/if}
@@ -430,17 +406,17 @@
     {:else if tab === 'revisions'}
       <div class="overflow-x-auto rounded-lg border border-line">
         <table class="tbl">
-          <thead><tr><th>{revLabel}</th><th>detail</th><th class="num">size</th><th>updated</th><th>commit</th><th></th></tr></thead>
+          <thead><tr><th>{revLabel}</th><th>Detail</th><th class="num">Size</th><th>Updated</th><th>Commit</th><th></th></tr></thead>
           <tbody>
             {#each revisions as r (r.repo || r.name)}
               {@const current = r === currentRevision}
               <tr class={current ? 'row-active' : ''}>
-                <td class="font-mono text-xs text-fg">{r.name}{#if r.default}<span class="ml-1.5 text-[10.5px] text-fg-faint">default</span>{/if}</td>
-                <td class="max-w-xs truncate text-xs text-fg-muted" title={r.detail}>{r.detail || '–'}</td>
-                <td class="num text-xs">{r.sizeBytes ? bytes(r.sizeBytes) : '–'}</td>
-                <td class="text-xs text-fg-muted">{r.updatedAt ? ago(r.updatedAt, clock.now) : '–'}</td>
+                <td class="font-mono text-xs text-fg">{r.name}{#if r.default}<span class="ml-1.5 font-sans text-xs text-fg-faint">default</span>{/if}</td>
+                <td class="max-w-xs truncate text-fg-muted" title={r.detail}>{r.detail || '–'}</td>
+                <td class="num">{r.sizeBytes ? bytes(r.sizeBytes) : '–'}</td>
+                <td class="text-fg-muted">{r.updatedAt ? ago(r.updatedAt, clock.now) : '–'}</td>
                 <td class="font-mono text-xs text-fg-faint">{r.commit ? r.commit.slice(0, 12) : '–'}</td>
-                <td class="text-right">{#if current}<span class="text-[11px] text-accent">viewing</span>{:else}<Button size="xs" variant="ghost" onclick={() => pick(r)}>View</Button>{/if}</td>
+                <td class="actions">{#if current}<span class="text-xs text-accent">viewing</span>{:else}<Button size="sm" variant="ghost" onclick={() => pick(r)}>View</Button>{/if}</td>
               </tr>
             {/each}
           </tbody>
@@ -451,7 +427,7 @@
 
   {#snippet footer()}
     <div class="ml-auto flex gap-2">
-      <Button size="sm" variant={watched ? 'ghost' : 'outline'} icon={watched ? Check : Eye} disabled={watched || gated} onclick={() => (watchOpen = true)}>{watched ? 'Watching' : 'Watch'}</Button>
+      <Button size="sm" variant={watched ? 'ghost' : 'secondary'} icon={watched ? Check : Eye} disabled={watched || gated} onclick={() => (watchOpen = true)}>{watched ? 'Watching' : 'Watch for changes'}</Button>
     </div>
   {/snippet}
 </Drawer>

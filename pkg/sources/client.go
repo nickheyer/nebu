@@ -393,13 +393,23 @@ func (c *Client) nextLink(h http.Header) string { return c.HTTP().nextLink(h) }
 
 // Reads every page of a Link paged JSON list, handing each to visit
 func eachPage[T any](ctx context.Context, c *Client, next string, query url.Values, visit func([]T)) error {
+	return eachPageWhile(ctx, c, next, query, func(page []T) bool {
+		visit(page)
+		return true
+	})
+}
+
+// Reads pages of a Link paged JSON list until visit answers false or the pages run out
+func eachPageWhile[T any](ctx context.Context, c *Client, next string, query url.Values, visit func([]T) bool) error {
 	for next != "" {
 		var page []T
 		header, err := c.JSON(ctx, next, query, &page)
 		if err != nil {
 			return err
 		}
-		visit(page)
+		if !visit(page) {
+			return nil
+		}
 		next, query = c.nextLink(header), nil
 	}
 	return nil

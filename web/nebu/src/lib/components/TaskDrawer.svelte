@@ -10,29 +10,28 @@
   const related = $derived.by(() => {
     const l = task?.labels ?? {};
     const out: { label: string; href: string }[] = [];
-    if (l.instance) out.push({ label: 'instance', href: `/instances?id=${l.instance}` });
-    if (l.slot) out.push({ label: 'slot', href: `/slots?id=${l.slot}` });
-    if (l.build) out.push({ label: 'build', href: `/runtimes#builds` });
-    if (l.repo) out.push({ label: 'model', href: `/store` });
-    if (l.watch) out.push({ label: 'watch', href: `/monitor` });
+    if (l.instance) out.push({ label: 'instance', href: `/?instance=${l.instance}` });
+    if (l.slot) out.push({ label: 'slot', href: `/?slot=${l.slot}` });
+    if (l.build) out.push({ label: 'builds', href: `/runtimes#builds` });
+    if (l.repo) out.push({ label: 'library', href: `/store` });
+    if (l.watch) out.push({ label: 'monitor', href: `/monitor` });
     return out;
   });
 </script>
 
-<Drawer bind:id title={task?.title ?? 'Task'} subtitle={id}>
+<Drawer bind:id title={task?.title ?? 'Task'} subtitle={task ? `created ${when(task.createdAt)}` : id}>
   {#snippet header()}
-    {#if task}
-      <div class="flex flex-wrap items-center gap-3 text-xs text-fg-muted">
-        <span>created {when(task.createdAt)}</span>
+    {#if related.length}
+      <div class="flex flex-wrap items-center gap-3 text-sm">
         {#each related as r (r.href)}
-          <a href={r.href} class="inline-flex items-center gap-1 text-accent hover:underline" onclick={() => (id = '')}><ExternalLink size={11} /> {r.label}</a>
+          <a href={r.href} class="link inline-flex items-center gap-1" onclick={() => (id = '')}><ExternalLink size={13} /> {r.label}</a>
         {/each}
       </div>
     {/if}
   {/snippet}
-  <div class="px-5 py-4">
+  <div class="px-6 py-5">
     {#if id}
-      {#key id}<TaskLog {id} height="h-[calc(100vh-15rem)]" />{/key}
+      {#key id}<TaskLog {id} height="h-[calc(100vh-17rem)]" />{/key}
     {/if}
   </div>
 </Drawer>

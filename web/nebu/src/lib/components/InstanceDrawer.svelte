@@ -2,19 +2,19 @@
   import { api } from '$lib/api';
   import { live, clock, instanceLive, slotName } from '$lib/state.svelte';
   import { launch } from '$lib/launch';
-  import { bytes, when, duration, enumLabel } from '$lib/format';
+  import { bytes, when, duration } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { InstanceState } from '$proto/instance_pb';
   import { Square, RotateCcw, Wrench, ExternalLink, MessageSquare } from '@lucide/svelte';
   import Drawer from './ui/Drawer.svelte';
-  import Tabs from './ui/Tabs.svelte';
+  import Segmented from './ui/Segmented.svelte';
   import Kv from './ui/Kv.svelte';
   import Button from './ui/Button.svelte';
-  import StateBadge from './ui/StateBadge.svelte';
+  import StatePill from './ui/StatePill.svelte';
   import Copy from './ui/Copy.svelte';
   import Section from './ui/Section.svelte';
-  import ParamChips from './ui/ParamChips.svelte';
+  import ParamList from './ui/ParamList.svelte';
   import PlanView from './PlanView.svelte';
   import InstanceLog from './InstanceLog.svelte';
 
@@ -24,9 +24,10 @@
   let stopping = $state(false);
   const instance = $derived(id ? live.instances.get(id) : undefined);
   const alive = $derived(instanceLive(instance));
+  const routeName = $derived(instance ? (instance.slotId ? slotName(instance.slotId) : instance.name) : '');
 
   $effect(() => {
-    if (id) tab = 'overview';
+    if (id) tab = instance?.state === InstanceState.FAILED && instance.triage.length ? 'triage' : 'overview';
   });
 
   async function stop() {
@@ -52,36 +53,34 @@
   }
 </script>
 
-<Drawer bind:id title={instance?.name ?? 'Instance'} subtitle={instance?.id}>
+<Drawer bind:id title={instance?.name ?? 'Instance'} subtitle={instance ? `${instance.repo} · ${instance.group}` : ''}>
   {#snippet header()}
     {#if instance}
-      <div class="flex flex-wrap items-center gap-2">
-        <StateBadge values={InstanceState} value={instance.state} />
-        <span class="font-mono text-xs text-fg-muted">{instance.repo} · {instance.group}</span>
-        <span class="text-xs text-fg-faint">on {instance.runtimeId}</span>
-        {#if instance.slotId}<a href="/slots?id={instance.slotId}" class="text-xs text-accent hover:underline">slot {slotName(instance.slotId)}</a>{/if}
+      <div class="flex flex-wrap items-center gap-2 text-sm text-fg-muted">
+        <StatePill values={InstanceState} value={instance.state} />
+        <span>on {instance.runtimeId}</span>
+        {#if instance.slotId}<a href="/?slot={instance.slotId}" class="link">in slot {slotName(instance.slotId)}</a>{/if}
       </div>
-      <div class="mt-3">
-        <Tabs
-          size="sm"
-          bind:value={tab}
-          tabs={[
-            { id: 'overview', label: 'Overview' },
-            { id: 'plan', label: 'Plan' },
-            { id: 'log', label: 'Log' },
-            { id: 'triage', label: 'Triage', count: instance.triage.length || undefined }
-          ]}
-        />
-      </div>
+      <Segmented
+        size="sm"
+        class="mt-3"
+        bind:value={tab}
+        tabs={[
+          { id: 'overview', label: 'Overview' },
+          { id: 'plan', label: 'Plan' },
+          { id: 'log', label: 'Log' },
+          { id: 'triage', label: 'Triage', count: instance.triage.length || undefined }
+        ]}
+      />
     {/if}
   {/snippet}
 
   {#if instance}
-    <div class="px-5 py-4">
+    <div class="px-6 py-5">
       {#if tab === 'overview'}
-        <div class="flex flex-col gap-5">
+        <div class="flex flex-col gap-6">
           {#if instance.error}
-            <div class="rounded-lg border border-bad/30 bg-bad/10 px-3 py-2 text-sm leading-6 text-bad">{instance.error}</div>
+            <div class="note note-bad">{instance.error}</div>
           {/if}
           <Kv
             columns={2}
@@ -91,38 +90,39 @@
               ['install', instance.installId],
               ['runtime', instance.runtimeId],
               ['created', when(instance.createdAt)],
-              ['ready', instance.readyAt ? `${when(instance.readyAt)} · ${duration(instance.createdAt, instance.readyAt)} to start` : undefined],
+              ['ready', instance.readyAt ? `${when(instance.readyAt)} · ${duration(instance.createdAt, instance.readyAt)} startup` : undefined],
               ['stopped', when(instance.stoppedAt)],
               ['uptime', alive ? duration(instance.readyAt ?? instance.createdAt, undefined, clock.now) : undefined],
-              ['relaunch', instance.desiredRunning ? 'after restart' : 'no'],
-              ['task', instance.taskId]
+              ['relaunch', instance.desiredRunning ? 'after restart' : 'no']
             ]}
           />
           {#if instance.taskId}
-            <a href="/tasks?id={instance.taskId}" class="inline-flex items-center gap-1 text-xs text-accent hover:underline"><ExternalLink size={12} /> Launch task</a>
+            <a href="/tasks?id={instance.taskId}" class="link inline-flex items-center gap-1.5 text-sm"><ExternalLink size={14} /> Launch task</a>
           {/if}
 
           {#if Object.keys(instance.params).length}
-            <Section title="Parameters"><ParamChips params={instance.params} /></Section>
+            <Section title="Parameters"><ParamList params={instance.params} /></Section>
           {/if}
 
           {#if instance.measurements.length}
-            <Section title="Measured allocations">
-              <table class="tbl">
-                <thead><tr><th>key</th><th class="num">bytes</th><th>source line</th></tr></thead>
-                <tbody>
-                  {#each instance.measurements as m (m.key)}
-                    <tr><td class="font-mono text-xs">{m.key}</td><td class="num">{bytes(m.bytes)}</td><td class="max-w-xs truncate font-mono text-xs text-fg-faint" title={m.line}>{m.line}</td></tr>
-                  {/each}
-                </tbody>
-              </table>
+            <Section title="Measured" description="What the runtime reported about itself">
+              <div class="overflow-x-auto rounded-lg border border-line">
+                <table class="tbl">
+                  <thead><tr><th>Key</th><th class="num">Bytes</th><th>Line</th></tr></thead>
+                  <tbody>
+                    {#each instance.measurements as m (m.key)}
+                      <tr><td class="font-mono text-xs">{m.key}</td><td class="num">{bytes(m.bytes)}</td><td class="max-w-xs truncate font-mono text-xs text-fg-faint" title={m.line}>{m.line}</td></tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
             </Section>
           {/if}
 
           {#if instance.command.length}
             <Section title="Command">
-              {#snippet actions()}<Copy text={instance.command.join(' ')} size={12} />{/snippet}
-              <pre class="overflow-x-auto rounded-lg border border-line bg-sunken p-3 font-mono text-[11.5px] leading-5 whitespace-pre-wrap break-all text-fg-muted">{instance.command.join(' \\\n  ')}</pre>
+              {#snippet actions()}<Copy text={instance.command.join(' ')} size={14} />{/snippet}
+              <pre class="code whitespace-pre-wrap break-all">{instance.command.join(' \\\n  ')}</pre>
             </Section>
           {/if}
         </div>
@@ -133,23 +133,23 @@
           <p class="text-sm text-fg-faint">No plan recorded</p>
         {/if}
       {:else if tab === 'log'}
-        <InstanceLog id={instance.id} follow={alive} height="h-[calc(100vh-16rem)]" />
+        <InstanceLog id={instance.id} follow={alive} height="h-[calc(100vh-17rem)]" />
       {:else if tab === 'triage'}
         {#if instance.triage.length === 0}
-          <p class="text-sm text-fg-faint">Nothing matched</p>
+          <p class="text-sm text-fg-faint">Nothing in the log matched a known failure</p>
         {:else}
           <div class="flex flex-col gap-3">
             {#each instance.triage as hit (hit.id)}
-              <div class="rounded-lg border border-warn/30 bg-warn/8 p-3">
+              <div class="rounded-lg border border-warn/30 bg-warn/8 p-4">
                 <div class="text-sm font-medium text-fg">{hit.summary}</div>
                 {#if hit.hint}<p class="mt-1 text-sm leading-6 text-fg-muted">{hit.hint}</p>{/if}
-                {#if hit.line}<pre class="mt-2 overflow-x-auto rounded border border-line bg-sunken px-2 py-1 font-mono text-[11px] whitespace-pre-wrap text-fg-faint">{hit.line}</pre>{/if}
+                {#if hit.line}<pre class="code mt-3 whitespace-pre-wrap">{hit.line}</pre>{/if}
                 {#if Object.keys(hit.fix).length}
                   <div class="mt-3 flex flex-wrap items-center gap-2">
-                    <span class="text-xs text-fg-muted">suggested</span>
-                    <ParamChips params={hit.fix} />
+                    <span class="text-sm text-fg-muted">Suggested</span>
+                    <ParamList params={hit.fix} />
                     {#if instance.request && !alive}
-                      <Button size="xs" variant="primary" icon={Wrench} class="ml-auto" onclick={() => again(hit.fix)}>Run with fix</Button>
+                      <Button size="sm" variant="primary" icon={Wrench} class="ml-auto" onclick={() => again(hit.fix)}>Run with fix</Button>
                     {/if}
                   </div>
                 {/if}
@@ -163,15 +163,15 @@
 
   {#snippet footer()}
     {#if instance}
-      <span class="text-xs text-fg-faint">{enumLabel(InstanceState, instance.state)}{instance.slotId ? ` · slot ${slotName(instance.slotId)}` : ''}</span>
+      <span class="text-sm text-fg-faint">{instance.id.slice(0, 12)}</span>
       <div class="ml-auto flex gap-2">
         {#if alive}
           {#if instance.state === InstanceState.READY}
-            <Button variant="outline" icon={MessageSquare} href="/chat?model={encodeURIComponent(instance.slotId ? slotName(instance.slotId) : instance.name)}">Chat</Button>
+            <Button size="sm" icon={MessageSquare} href="/chat?model={encodeURIComponent(routeName)}">Chat</Button>
           {/if}
-          <Button variant="danger" icon={Square} loading={stopping} onclick={stop}>Stop</Button>
+          <Button size="sm" variant="danger" icon={Square} loading={stopping} onclick={stop}>Stop</Button>
         {:else if instance.request}
-          <Button variant="primary" icon={RotateCcw} onclick={() => again()}>Run again</Button>
+          <Button size="sm" variant="primary" icon={RotateCcw} onclick={() => again()}>Run again</Button>
         {/if}
       </div>
     {/if}

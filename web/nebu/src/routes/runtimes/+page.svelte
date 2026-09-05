@@ -5,20 +5,22 @@
   import { ago, enumLabel, newestFirst, when } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
-  import type { Profile } from '$proto/runtime_pb';
+  import { selectionParam } from '$lib/selection.svelte';
+  import type { Profile, RuntimeStatus } from '$proto/runtime_pb';
   import { InstallKind } from '$proto/runtime_pb';
   import { BuildState, SandboxKind, type RecipeStatus } from '$proto/recipe_pb';
-  import { Wrench, Download, Hammer, FolderInput, Trash2, ScrollText, RefreshCw, CircleCheck, CircleAlert, Package, SlidersHorizontal, Plus, Pencil, Star, StarOff } from '@lucide/svelte';
+  import { Download, Hammer, FolderInput, Trash2, ScrollText, RefreshCw, Plus, Pencil, Star, StarOff, Cpu, PanelRight } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
-  import Panel from '$lib/components/ui/Panel.svelte';
+  import Card from '$lib/components/ui/Card.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
-  import StateBadge from '$lib/components/ui/StateBadge.svelte';
+  import Pill from '$lib/components/ui/Pill.svelte';
+  import StatePill from '$lib/components/ui/StatePill.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import Field from '$lib/components/ui/Field.svelte';
-  import Skeleton from '$lib/components/ui/Skeleton.svelte';
-  import ParamChips from '$lib/components/ui/ParamChips.svelte';
+  import ParamList from '$lib/components/ui/ParamList.svelte';
+  import SkeletonRows from '$lib/components/ui/SkeletonRows.svelte';
   import BuildDialog from '$lib/components/BuildDialog.svelte';
   import ProfileDialog from '$lib/components/ProfileDialog.svelte';
   import RuntimeDrawer from '$lib/components/RuntimeDrawer.svelte';
@@ -36,8 +38,9 @@
   let profileEditing = $state<Profile | null>(null);
   let profileRuntime = $state('');
   let taskId = $state('');
-  let runtimeId = $state('');
+  const sel = selectionParam('/runtimes');
 
+  const loading = $derived(!live.ready && !live.error);
   const runtimes = $derived(cached.runtimes);
   const installs = $derived([...live.installs.values()].sort(newestFirst((i) => i.createdAt)));
   const builds = $derived([...live.builds.values()].sort(newestFirst((b) => b.createdAt)));
@@ -63,13 +66,27 @@
   function installsOf(id: string) {
     return installs.filter((i) => i.runtimeId === id);
   }
-
-  function newProfile(runtimeId = '') {
-    profileEditing = null;
-    profileRuntime = runtimeId;
-    profileOpen = true;
+  function recipesOf(id: string) {
+    return recipes.filter((r) => r.recipe?.runtimeId === id);
+  }
+  function adoptNames(rt: RuntimeStatus | undefined): string {
+    return rt?.manifest?.acquire?.adopt.join(' ') || 'binary';
   }
 
+  function openAdopt(id: string) {
+    adoptRuntime = id;
+    adoptPath = '';
+    adoptOpen = true;
+  }
+  function openBuild(rs: RecipeStatus) {
+    buildRecipe = rs;
+    buildOpen = true;
+  }
+  function newProfile(runtime = '') {
+    profileEditing = null;
+    profileRuntime = runtime;
+    profileOpen = true;
+  }
   function editProfile(p: Profile) {
     profileEditing = p;
     profileRuntime = p.runtimeId;
@@ -106,9 +123,6 @@
         fail(again, 'Remove failed');
       }
     }
-  }
-  function recipesOf(id: string) {
-    return recipes.filter((r) => r.recipe?.runtimeId === id);
   }
 
   async function adopt() {
@@ -157,107 +171,152 @@
   }
 </script>
 
-<PageHeader title="Runtimes">
-  <Button variant="outline" icon={RefreshCw} onclick={refresh}>Refresh</Button>
+{#snippet profileHead()}
+  <thead><tr><th>Runtime</th><th>Name</th><th>Parameters</th><th>Updated</th><th></th></tr></thead>
+{/snippet}
+
+{#snippet installHead()}
+  <thead><tr><th>Runtime</th><th>Kind</th><th>Version</th><th>Path</th><th>Facts</th><th>Added</th><th></th></tr></thead>
+{/snippet}
+
+{#snippet buildHead()}
+  <thead><tr><th>Runtime</th><th>Variant</th><th>Ref</th><th>State</th><th>Sandbox</th><th>Started</th><th></th></tr></thead>
+{/snippet}
+
+<PageHeader title="Runtimes" subtitle="Each needs an install before it can run anything: a prebuilt release, a build from its recipe, or a binary already on this host">
+  <Button icon={RefreshCw} onclick={refresh} aria-label="Reread manifests and recipes" title="Reread manifests and recipes" />
+  <Button icon={Plus} onclick={() => newProfile()} disabled={!runtimes.length}>New profile</Button>
 </PageHeader>
 
-<div class="flex flex-col gap-6">
-  <section class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+<div class="flex flex-col gap-8">
+  <section>
     {#if !cached.loaded}
-      {#each [1, 2] as i (i)}<div class="panel p-4"><Skeleton rows={4} /></div>{/each}
+      <div class="grid gap-4 md:grid-cols-2">
+        {#each [0, 1, 2, 3] as i (i)}<div class="card h-44" aria-busy="true"></div>{/each}
+      </div>
+    {:else if cached.error && runtimes.length === 0}
+      <div class="card">
+        <Empty title="Runtimes unavailable" description={cached.error}>
+          <Button size="sm" icon={RefreshCw} onclick={refresh}>Retry</Button>
+        </Empty>
+      </div>
+    {:else if runtimes.length === 0}
+      <div class="card"><Empty icon={Cpu} title="No runtime manifests" /></div>
     {:else}
-      {#each runtimes as rt (rt.manifest?.id)}
-        {@const id = rt.manifest?.id ?? ''}
-        {@const have = installsOf(id)}
-        {@const owned = profilesOf(id).length}
-        {@const installing = taskFor('install', { runtime: id })}
-        {@const building = taskFor('build', { runtime: id })}
-        <div class="panel flex flex-col gap-3 p-4">
-          <div class="flex items-start gap-3">
-            <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-line bg-raised text-fg-muted"><Wrench size={16} /></div>
-            <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-2">
-                <button class="text-sm font-semibold text-fg hover:underline" onclick={() => (runtimeId = id)}>{rt.manifest?.name}</button>
-                <span class="font-mono text-xs text-fg-faint">{id}</span>
-                <span class="inline-flex items-center gap-1.5 text-[11px] {rt.compatible ? 'text-ok' : 'text-warn'}"><span class="h-1.5 w-1.5 rounded-full bg-current"></span>{rt.compatible ? 'compatible' : 'incompatible'}</span>
-              </div>
-              <p class="mt-1 text-sm leading-5 text-fg-muted">{rt.manifest?.description}</p>
+      <div class="grid gap-4 md:grid-cols-2">
+        {#each runtimes as rt (rt.manifest?.id)}
+          {@const id = rt.manifest?.id ?? ''}
+          {@const have = installsOf(id)}
+          {@const newest = have[0]}
+          {@const owned = profilesOf(id).length}
+          {@const recipeList = recipesOf(id)}
+          {@const canPrebuilt = !!rt.manifest?.acquire?.prebuilt.length}
+          {@const task = taskFor('install', { runtime: id }) ?? taskFor('build', { runtime: id })}
+          <article class="card flex flex-col gap-4 p-5 transition-colors hover:border-line-strong {sel.id === id ? 'border-accent/50' : ''}">
+            <div class="flex items-start gap-3">
+              <button type="button" class="min-w-0 flex-1 text-left" onclick={() => (sel.id = id)}>
+                <div class="flex items-baseline gap-2">
+                  <span class="text-base font-semibold text-fg hover:text-accent">{rt.manifest?.name || id}</span>
+                  <span class="font-mono text-xs text-fg-faint">{id}</span>
+                </div>
+                {#if rt.manifest?.description}<div class="mt-0.5 line-clamp-2 text-sm text-fg-muted" title={rt.manifest.description}>{rt.manifest.description}</div>{/if}
+              </button>
+              {#if task}
+                <Pill tone="accent" dot pulse label={task.kind === 'build' ? 'Building' : 'Downloading'} />
+              {:else if have.length}
+                <Pill tone="ok" dot label="Installed" />
+              {:else if !rt.compatible}
+                <Pill tone="warn" dot label="Incompatible" />
+              {:else}
+                <Pill tone="neutral" label="Not installed" />
+              {/if}
             </div>
-          </div>
-          <div class="flex flex-wrap gap-1.5">
-            <span class="font-mono text-[11px] text-fg-faint">{(rt.manifest?.formats ?? []).join(' ')}</span>
-            <span class="ml-auto text-xs text-fg-faint">{have.length} {have.length === 1 ? 'install' : 'installs'} · {owned} {owned === 1 ? 'profile' : 'profiles'}</span>
-          </div>
-          {#if rt.unmet.length}
-            <ul class="rounded-md border border-warn/30 bg-warn/8 px-3 py-2 text-xs leading-5 text-warn">
-              {#each rt.unmet as u (u)}<li class="flex gap-2"><CircleAlert size={13} class="mt-1 shrink-0" />{u}</li>{/each}
-            </ul>
-          {/if}
-          {#if installing}<TaskChip task={installing} label="Downloading release" />{/if}
-          {#if building}<TaskChip task={building} label="Building" />{/if}
-          <div class="mt-auto flex flex-wrap gap-2 pt-1">
-            <Button
-              size="sm"
-              icon={FolderInput}
-              onclick={() => {
-                adoptRuntime = id;
-                adoptPath = '';
-                adoptOpen = true;
-              }}>Adopt</Button
-            >
-            {#if rt.manifest?.acquire?.prebuilt.length}
-              <Button size="sm" icon={Download} onclick={() => prebuilt(id)}>Install</Button>
-            {/if}
-            <Button size="sm" icon={SlidersHorizontal} onclick={() => newProfile(id)}>New profile</Button>
-            {#each recipesOf(id) as rs (rs.recipe?.id)}
-              <Button
-                size="sm"
-                icon={Hammer}
-                title={rs.unmet.join('; ')}
-                onclick={() => {
-                  buildRecipe = rs;
-                  buildOpen = true;
-                }}>Build{rs.variant ? ` · ${rs.variant}` : ''}</Button
-              >
-            {/each}
-          </div>
-        </div>
-      {:else}
-        <div class="panel lg:col-span-2"><Empty icon={Wrench} title="No runtime manifests" /></div>
-      {/each}
+
+            <div class="min-h-10 text-sm">
+              {#if task}
+                <TaskChip {task} />
+              {:else if have.length}
+                <div class="text-fg">{newest?.version || 'unknown version'} <span class="text-fg-muted">· {enumLabel(InstallKind, newest?.kind)}{have.length > 1 ? ` · ${have.length} installs` : ''}</span></div>
+                <div class="truncate font-mono text-xs text-fg-faint" title={newest?.path}>{newest?.path}</div>
+              {:else if !rt.compatible}
+                <ul class="list-disc pl-5 text-fg-muted">{#each rt.unmet as u (u)}<li>{u}</li>{/each}</ul>
+              {:else}
+                <div class="text-fg-muted">{canPrebuilt ? 'A prebuilt release is available for this host' : recipeList.length ? 'Built from source with a recipe' : `Adopt a ${adoptNames(rt)} binary already on this host`}</div>
+              {/if}
+            </div>
+
+            <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-faint">
+              <span class="font-mono">{(rt.manifest?.formats ?? []).join(' ')}</span>
+              {#if owned}<span>{owned} {owned === 1 ? 'profile' : 'profiles'}</span>{/if}
+            </div>
+
+            <div class="mt-auto flex items-center gap-2 border-t border-line pt-4">
+              {#if !have.length && !task}
+                {#if canPrebuilt}
+                  <Button size="sm" variant="primary" icon={Download} onclick={() => prebuilt(id)}>Install</Button>
+                {:else if recipeList.length}
+                  <Button size="sm" variant="primary" icon={Hammer} onclick={() => openBuild(recipeList[0])}>Build</Button>
+                {:else}
+                  <Button size="sm" variant="primary" icon={FolderInput} onclick={() => openAdopt(id)}>Adopt</Button>
+                {/if}
+              {:else}
+                <Button size="sm" icon={PanelRight} onclick={() => (sel.id = id)}>Details</Button>
+              {/if}
+              <span class="ml-auto">
+                <Menu
+                  size="sm"
+                  items={[
+                    { label: 'Adopt a binary', icon: FolderInput, detail: `${adoptNames(rt)} on this host`, onSelect: () => openAdopt(id) },
+                    ...(canPrebuilt ? [{ label: 'Install prebuilt', icon: Download, detail: 'download a release', onSelect: () => prebuilt(id) }] : []),
+                    ...recipeList.map((rs) => ({ label: `Build${rs.variant ? ` · ${rs.variant}` : ''}`, icon: Hammer, detail: 'from source with a recipe', onSelect: () => openBuild(rs) })),
+                    { label: '', separator: true },
+                    { label: 'New profile', icon: Plus, onSelect: () => newProfile(id) }
+                  ]}
+                />
+              </span>
+            </div>
+          </article>
+        {/each}
+      </div>
     {/if}
   </section>
 
-  <Panel title="Profiles" info="Named param sets per runtime. The default applies to every run that names none" flush>
-    {#snippet actions()}
-      <Button size="sm" icon={Plus} onclick={() => newProfile()} disabled={!runtimes.length}>New profile</Button>
-    {/snippet}
-    {#if profiles.length === 0}
-      <Empty compact icon={SlidersHorizontal} title="No profiles" />
+  <Card title="Profiles" description="Named parameter sets. The default applies to every run that names none" flush>
+    {#if loading}
+      <table class="tbl">
+        {@render profileHead()}
+        <tbody><SkeletonRows rows={2} cols={[{ w: 'w-20' }, { w: 'w-28', sub: true }, 'w-48', 'w-14', { w: 'w-6', num: true }]} /></tbody>
+      </table>
+    {:else if profiles.length === 0}
+      <Empty compact title="No profiles" description="Save a set of parameters once and pick it by name when running.">
+        <Button size="sm" icon={Plus} onclick={() => newProfile()} disabled={!runtimes.length}>New profile</Button>
+      </Empty>
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
-          <thead><tr><th>runtime</th><th>name</th><th>params</th><th>updated</th><th></th></tr></thead>
+          {@render profileHead()}
           <tbody>
             {#each profiles as p (p.id)}
               <tr>
-                <td class="font-medium text-fg">{p.runtimeId}</td>
+                <td class="text-fg-muted">{p.runtimeId}</td>
                 <td>
                   <div class="flex items-center gap-2">
-                    <span class="font-mono text-xs text-fg">{p.name}</span>
-                    {#if p.default}<span class="text-[11px] text-accent">default</span>{/if}
+                    <span class="font-mono text-sm text-fg">{p.name}</span>
+                    {#if p.default}<Pill tone="accent" label="default" />{/if}
                   </div>
-                  {#if p.description}<div class="text-[11px] text-fg-faint">{p.description}</div>{/if}
+                  {#if p.description}<div class="text-xs text-fg-faint">{p.description}</div>{/if}
                 </td>
                 <td class="max-w-md">
-                  {#if Object.keys(p.params).length}<ParamChips params={p.params} />{:else}<span class="text-[11px] text-fg-faint">defaults</span>{/if}
+                  {#if Object.keys(p.params).length}<ParamList params={p.params} />{:else}<span class="text-xs text-fg-faint">runtime defaults</span>{/if}
                 </td>
-                <td class="text-xs text-fg-muted" title={when(p.updatedAt)}>{ago(p.updatedAt, clock.now)}</td>
-                <td class="text-right">
+                <td class="text-fg-muted" title={when(p.updatedAt)}>{ago(p.updatedAt, clock.now)}</td>
+                <td class="actions">
                   <Menu
+                    size="sm"
                     items={[
                       { label: 'Edit', icon: Pencil, onSelect: () => editProfile(p) },
                       p.default ? { label: 'Clear default', icon: StarOff, onSelect: () => setDefault(p, false) } : { label: 'Make default', icon: Star, onSelect: () => setDefault(p, true) },
+                      { label: '', separator: true },
                       { label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeProfile(p) }
                     ]}
                   />
@@ -268,26 +327,31 @@
         </table>
       </div>
     {/if}
-  </Panel>
+  </Card>
 
-  <Panel title="Installs" flush>
-    {#if installs.length === 0}
-      <Empty compact icon={Package} title="No installs" />
+  <Card title="Installs" flush>
+    {#if loading}
+      <table class="tbl">
+        {@render installHead()}
+        <tbody><SkeletonRows rows={2} cols={[{ w: 'w-20' }, 'w-14', 'w-16', 'w-56', 'w-40', 'w-14', { w: 'w-6', num: true }]} /></tbody>
+      </table>
+    {:else if installs.length === 0}
+      <Empty compact title="No installs" />
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
-          <thead><tr><th>runtime</th><th>kind</th><th>version</th><th>path</th><th>facts</th><th>added</th><th></th></tr></thead>
+          {@render installHead()}
           <tbody>
             {#each installs as i (i.id)}
               <tr>
                 <td class="font-medium text-fg">{i.runtimeId}</td>
-                <td class="text-xs text-fg-muted">{enumLabel(InstallKind, i.kind)}</td>
+                <td class="text-fg-muted">{enumLabel(InstallKind, i.kind)}</td>
                 <td class="font-mono text-xs">{i.version || '–'}</td>
                 <td class="max-w-xs truncate font-mono text-xs text-fg-muted" title={i.path}>{i.path}</td>
-                <td class="max-w-sm"><ParamChips params={i.facts} max={4} /></td>
-                <td class="text-xs text-fg-muted" title={when(i.createdAt)}>{ago(i.createdAt, clock.now)}</td>
-                <td class="text-right">
-                  <Menu items={[{ label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeInstall(i.id, i.runtimeId) }]} />
+                <td class="max-w-sm"><ParamList params={i.facts} max={4} /></td>
+                <td class="text-fg-muted" title={when(i.createdAt)}>{ago(i.createdAt, clock.now)}</td>
+                <td class="actions">
+                  <Menu size="sm" items={[{ label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeInstall(i.id, i.runtimeId) }]} />
                 </td>
               </tr>
             {/each}
@@ -295,35 +359,40 @@
         </table>
       </div>
     {/if}
-  </Panel>
+  </Card>
 
-  <Panel title="Builds" flush>
+  <Card title="Builds" flush>
     <div id="builds"></div>
-    {#if builds.length === 0}
-      <Empty compact icon={Hammer} title="No builds" />
+    {#if loading}
+      <table class="tbl">
+        {@render buildHead()}
+        <tbody><SkeletonRows rows={2} cols={[{ w: 'w-20', sub: true }, 'w-16', 'w-24', 'w-16', 'w-20', 'w-14', { w: 'w-16', num: true }]} /></tbody>
+      </table>
+    {:else if builds.length === 0}
+      <Empty compact title="No builds" />
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
-          <thead><tr><th>runtime</th><th>variant</th><th>ref</th><th>state</th><th>sandbox</th><th>started</th><th></th></tr></thead>
+          {@render buildHead()}
           <tbody>
             {#each builds as b (b.id)}
               <tr>
                 <td>
                   <div class="font-medium text-fg">{b.runtimeId}</div>
-                  <div class="font-mono text-[11px] text-fg-faint">{b.recipeId} · {b.id.slice(0, 12)}</div>
+                  <div class="font-mono text-xs text-fg-faint">{b.recipeId} · {b.id.slice(0, 12)}</div>
                 </td>
-                <td class="text-xs">{b.variant}</td>
+                <td class="text-fg-muted">{b.variant}</td>
                 <td class="font-mono text-xs">{b.ref || '–'}{#if b.commit}<span class="text-fg-faint"> @ {b.commit.slice(0, 8)}</span>{/if}</td>
                 <td>
-                  <StateBadge values={BuildState} value={b.state} size="xs" />
-                  {#if b.error}<div class="mt-1 max-w-xs truncate text-[11px] text-bad" title={b.error}>{b.error}</div>{/if}
+                  <StatePill values={BuildState} value={b.state} />
+                  {#if b.error}<div class="mt-1 max-w-xs truncate text-xs text-bad" title={b.error}>{b.error}</div>{/if}
                 </td>
-                <td class="text-xs">{enumLabel(SandboxKind, b.sandbox)}{b.image ? ` · ${b.image}` : ''}</td>
-                <td class="text-xs text-fg-muted" title={when(b.createdAt)}>{ago(b.createdAt, clock.now)}</td>
-                <td class="text-right">
+                <td class="text-fg-muted">{enumLabel(SandboxKind, b.sandbox)}{b.image ? ` · ${b.image}` : ''}</td>
+                <td class="text-fg-muted" title={when(b.createdAt)}>{ago(b.createdAt, clock.now)}</td>
+                <td class="actions">
                   <span class="inline-flex items-center gap-1">
-                    {#if b.taskId}<Button size="xs" variant="ghost" icon={ScrollText} onclick={() => (taskId = b.taskId)}>Log</Button>{/if}
-                    <Menu items={[{ label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeBuild(b.id) }]} />
+                    {#if b.taskId}<Button size="sm" variant="ghost" icon={ScrollText} onclick={() => (taskId = b.taskId)}>Log</Button>{/if}
+                    <Menu size="sm" items={[{ label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeBuild(b.id) }]} />
                   </span>
                 </td>
               </tr>
@@ -332,20 +401,20 @@
         </table>
       </div>
     {/if}
-  </Panel>
+  </Card>
 </div>
 
-<Dialog bind:open={adoptOpen} title="Adopt a {adoptRuntime} binary">
-  <Field label="Path" for="adopt-path" hint="Empty searches PATH">
-    <input id="adopt-path" class="input font-mono" bind:value={adoptPath} placeholder={runtimes.find((r) => r.manifest?.id === adoptRuntime)?.manifest?.acquire?.adopt.join(', ') || 'path to the binary'} />
+<Dialog bind:open={adoptOpen} title="Adopt {adoptRuntime}" description="Use a binary already on this host">
+  <Field label="Path" for="adopt-path" hint="Empty finds the binary on the daemon's PATH">
+    <input id="adopt-path" class="input font-mono" bind:value={adoptPath} placeholder={adoptNames(runtimes.find((r) => r.manifest?.id === adoptRuntime))} autocomplete="off" spellcheck="false" />
   </Field>
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (adoptOpen = false)}>Cancel</Button>
-    <Button variant="primary" icon={CircleCheck} loading={adopting} onclick={adopt}>Adopt</Button>
+    <Button variant="primary" icon={FolderInput} loading={adopting} onclick={adopt}>Adopt</Button>
   {/snippet}
 </Dialog>
 
 <BuildDialog bind:open={buildOpen} recipe={buildRecipe} />
 <ProfileDialog bind:open={profileOpen} editing={profileEditing} runtimeId={profileRuntime} />
-<RuntimeDrawer bind:id={runtimeId} />
+<RuntimeDrawer bind:id={sel.id} />
 <TaskDrawer bind:id={taskId} />

@@ -33,9 +33,17 @@
 </script>
 
 <Dialog bind:open {title} {description} {size}>
-  {@render children()}
+  <form
+    onsubmit={(e) => {
+      e.preventDefault();
+      if (!disabled && !saving) onsubmit();
+    }}
+  >
+    {@render children()}
+    <button type="submit" class="hidden" aria-hidden="true" tabindex="-1"></button>
+  </form>
   {#snippet footer()}
-    {#if note}<span class="mr-auto text-xs text-warn">{note}</span>{/if}
+    {#if note}<span class="mr-auto text-sm text-warn">{note}</span>{/if}
     <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
     <Button variant="primary" {icon} loading={saving} {disabled} onclick={onsubmit}>{action}</Button>
   {/snippet}

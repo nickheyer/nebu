@@ -6,8 +6,8 @@
 </script>
 
 <th class={num ? 'num' : ''} aria-sort={on ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-  <button type="button" class="inline-flex items-center gap-1 rounded px-0.5 uppercase hover:text-fg {on ? 'text-fg' : ''}" onclick={() => onSort(id)}>
+  <button type="button" class="inline-flex items-center gap-1 rounded hover:text-fg {on ? 'text-fg' : ''}" onclick={() => onSort(id)}>
     {label}
-    {#if on}{#if dir === 'asc'}<ArrowUp size={11} />{:else}<ArrowDown size={11} />{/if}{/if}
+    {#if on}{#if dir === 'asc'}<ArrowUp size={12} />{:else}<ArrowDown size={12} />{/if}{/if}
   </button>
 </th>

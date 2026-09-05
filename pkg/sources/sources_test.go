@@ -2,12 +2,14 @@ package sources
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -465,5 +467,71 @@ func TestGitHubResolvesReleasesAndRefs(t *testing.T) {
 	}
 	if _, err := c.Search(context.Background(), &v1.SearchRequest{}); err != nil {
 		t.Fatalf("browse %v", err)
+	}
+}
+
+func TestGitHubStopsAtTheReleaseCap(t *testing.T) {
+	const pages = 12
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.RequestURI())
+		switch r.URL.Path {
+		case "/repos/o/r":
+			w.Write([]byte(`{"default_branch":"main"}`))
+		case "/repos/o/r/releases":
+			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+			if page == 0 {
+				page = 1
+			}
+			// The API refuses to page past its first thousand results
+			if page*ghPageSize > ghMaxResults {
+				http.Error(w, `{"message":"Only the first 1000 results are available."}`, http.StatusUnprocessableEntity)
+				return
+			}
+			w.Header().Set("Link", fmt.Sprintf(`<http://%s/repos/o/r/releases?per_page=%d&page=%d>; rel="next"`, r.Host, ghPageSize, page+1))
+			var items []string
+			for i := 0; i < ghPageSize; i++ {
+				n := (pages-page)*ghPageSize + ghPageSize - i
+				items = append(items, fmt.Sprintf(`{"tag_name":"b%d","prerelease":%v,"assets":[{"name":"bin-b%d.tar.gz","size":1,"browser_download_url":"http://%s/dl/b%d"}]}`, n, page == 1, n, r.Host, n))
+			}
+			w.Write([]byte("[" + strings.Join(items, ",") + "]"))
+		case "/repos/o/r/releases/latest":
+			w.Write([]byte(`{"tag_name":"b1100","assets":[{"name":"bin-b1100.tar.gz","size":1,"browser_download_url":"http://` + r.Host + `/dl/b1100"}]}`))
+		case "/repos/o/r/releases/tags/b7":
+			w.Write([]byte(`{"tag_name":"b7","assets":[{"name":"bin-b7.tar.gz","size":1,"browser_download_url":"http://` + r.Host + `/dl/b7"}]}`))
+		case "/repos/o/r/commits/b1100", "/repos/o/r/commits/b7":
+			w.Write([]byte("deadbeef"))
+		case "/repos/o/r/branches":
+			w.Write([]byte(`[{"name":"main","commit":{"sha":"cafe"}}]`))
+		case "/repos/o/r/tags":
+			w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	c := testClient(t, github, &v1.Source{Id: "gh", Config: map[string]string{"endpoint": srv.URL}})
+
+	// The newest page is all prereleases, so the stable release comes from the API's own answer
+	model, err := c.Resolve(context.Background(), "o/r", "")
+	if err != nil || model.GetRevision() != "b1100" || len(model.GetArtifacts()) != 1 {
+		t.Fatalf("latest %v %v", model, err)
+	}
+	// A tag far past the page still resolves to its assets rather than a tree
+	model, err = c.Resolve(context.Background(), "o/r", "b7")
+	if err != nil || len(model.GetArtifacts()) != 1 || model.GetArtifacts()[0].GetPath() != "bin-b7.tar.gz" {
+		t.Fatalf("old release %v %v", model, err)
+	}
+	revs, err := c.Revisions(context.Background(), "o/r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revs) != ghMaxResults+1 || !revs[0].GetDefault() || revs[0].GetName() != "b1100" {
+		t.Fatalf("revisions %d %v", len(revs), revs[0])
+	}
+	for _, h := range hits {
+		if strings.Contains(h, "page=11") {
+			t.Fatalf("read past the cap: %s", h)
+		}
 	}
 }

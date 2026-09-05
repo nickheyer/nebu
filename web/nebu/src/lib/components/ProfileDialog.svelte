@@ -5,7 +5,8 @@
   import type { Profile } from '$proto/runtime_pb';
   import FormDialog from './ui/FormDialog.svelte';
   import Field from './ui/Field.svelte';
-  import CheckCard from './ui/CheckCard.svelte';
+  import Checkbox from './ui/Checkbox.svelte';
+  import Section from './ui/Section.svelte';
   import ParamForm from './ParamForm.svelte';
 
   let { open = $bindable(false), editing = null, runtimeId = '' }: { open?: boolean; editing?: Profile | null; runtimeId?: string } = $props();
@@ -52,30 +53,34 @@
 <FormDialog
   bind:open
   title={editing ? `Edit ${editing.name}` : 'New profile'}
-  description={editing ? `${editing.runtimeId} · ${editing.id}` : undefined}
+  description={editing ? editing.runtimeId : 'A named set of parameters a run can start from'}
   size="lg"
-  action={editing ? 'Save' : 'Add profile'}
+  action={editing ? 'Save' : 'Add'}
   saving={form.saving}
   disabled={!rt || !name.trim() || nameTaken || invalid > 0}
   onsubmit={form.run}
 >
-  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-    <Field label="Runtime" for="prof-runtime">
-      <select id="prof-runtime" class="input" value={rt} disabled={!!editing} onchange={(e) => pick((e.currentTarget as HTMLSelectElement).value)}>
-        {#each cached.runtimes as r (r.manifest?.id)}<option value={r.manifest?.id}>{r.manifest?.name ?? r.manifest?.id}</option>{/each}
-      </select>
-    </Field>
-    <Field label="Name" for="prof-name">
-      <input id="prof-name" class="input font-mono" bind:value={name} placeholder="long-context" aria-invalid={nameTaken} autocomplete="off" spellcheck="false" />
-      {#if nameTaken}<span class="text-xs text-bad">Name taken</span>{/if}
-    </Field>
-    <Field label="Description" for="prof-desc" class="sm:col-span-2">
-      <input id="prof-desc" class="input" bind:value={description} placeholder="Optional" />
-    </Field>
-    <CheckCard bind:checked={isDefault} class="sm:col-span-2" title="Default for {rt || 'the runtime'}" description="Runs that name no profile start from it" />
+  <div class="flex flex-col gap-6">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <Field label="Runtime" for="prof-runtime">
+        {#if editing || cached.runtimes.length <= 1}
+          <div id="prof-runtime" class="input-static">{cached.runtimes.find((r) => r.manifest?.id === rt)?.manifest?.name ?? rt ?? '–'}</div>
+        {:else}
+          <select id="prof-runtime" class="input" value={rt} onchange={(e) => pick((e.currentTarget as HTMLSelectElement).value)}>
+            {#each cached.runtimes as r (r.manifest?.id)}<option value={r.manifest?.id}>{r.manifest?.name ?? r.manifest?.id}</option>{/each}
+          </select>
+        {/if}
+      </Field>
+      <Field label="Name" for="prof-name" error={nameTaken ? 'That name is taken' : undefined}>
+        <input id="prof-name" class="input font-mono" bind:value={name} placeholder="long-context" aria-invalid={nameTaken} autocomplete="off" spellcheck="false" />
+      </Field>
+      <Field label="Description" for="prof-desc" class="sm:col-span-2">
+        <input id="prof-desc" class="input" bind:value={description} placeholder="Optional" />
+      </Field>
+      <Checkbox bind:checked={isDefault} class="sm:col-span-2" title="Default for {rt || 'the runtime'}" hint="Applies to every run that names no profile" />
+    </div>
+    <Section title="Parameters" description="Empty fields keep the runtime default">
+      <ParamForm params={manifest?.params ?? []} bind:values bind:invalid idPrefix="prof" />
+    </Section>
   </div>
-
-  <div class="mt-5 mb-2 text-[10.5px] font-semibold tracking-wider text-fg-faint uppercase">Parameters</div>
-  <p class="mb-3 text-xs text-fg-muted">Empty inherits the manifest default</p>
-  <ParamForm params={manifest?.params ?? []} bind:values bind:invalid idPrefix="prof" />
 </FormDialog>
