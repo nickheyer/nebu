@@ -4,8 +4,6 @@ package instances
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -49,7 +47,6 @@ const (
 	bindHost     = "127.0.0.1"
 	closeTimeout = 30 * time.Second
 	probeTimeout = 2 * time.Second
-	restartNote  = "daemon restarted"
 )
 
 var (
@@ -76,9 +73,11 @@ func WithSwap(ctx context.Context) context.Context { return context.WithValue(ct
 
 func fromSwap(ctx context.Context) bool { v, _ := ctx.Value(swapKey{}).(bool); return v }
 
-// Resolves slot ids to reservations, implemented by the slot manager
-type Reserver interface {
+// What the slot manager answers for the instances bound to its slots
+type Slots interface {
 	Reservation(ctx context.Context, slotID string) (*Reservation, error)
+	// Called after every state change, outside the instance lock
+	OnInstance(*v1.Instance)
 }
 
 // Owns every instance of this daemon
@@ -96,11 +95,9 @@ type Manager struct {
 	Calibration *calibrate.Table
 	Routes      *gateway.Table
 	Events      *events.Bus
-	Reserver    Reserver
-	Log         *slog.Logger
-
-	// Called after every state change, outside the instance lock
-	OnChange func(*v1.Instance)
+	// Set by the daemon once slots exist, nil until then
+	Slots Slots
+	Log   *slog.Logger
 
 	mu   sync.Mutex
 	list []*instance
@@ -119,7 +116,7 @@ type instance struct {
 
 func (m *Manager) newInstance(rec *v1.Instance, rt *runtime.Runtime) *instance {
 	in := &instance{mgr: m, rec: rec, rt: rt, exited: make(chan struct{})}
-	if terminal(rec.GetState()) {
+	if Terminal(rec.GetState()) {
 		in.exitOnce.Do(func() { close(in.exited) })
 	}
 	return in
@@ -143,39 +140,28 @@ func (in *instance) update(fn func(*v1.Instance)) {
 	in.mu.Unlock()
 	in.mgr.changed(rec, before)
 	// Stop waiters continue only after observers saw the exit
-	if terminal(rec.GetState()) {
+	if Terminal(rec.GetState()) {
 		in.exitOnce.Do(func() { close(in.exited) })
 	}
 }
 
-// Updates routes for a changed instance and tells listeners
+// Updates routes for a changed instance and tells listeners, a slot routing its own instances
 func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
-	if m.Routes != nil && rec.GetSlotId() == "" {
-		switch {
-		case rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY:
-			m.Routes.Set(rec.GetName(), rec.GetId(), "", rec.GetEndpoint(), modelOf(rec), rec.GetName(), m.api(rec), nil)
-		case rec.GetState() == v1.InstanceState_INSTANCE_STATE_DRAINING && before != v1.InstanceState_INSTANCE_STATE_DRAINING:
-			m.Routes.Drain(rec.GetId())
-		case terminal(rec.GetState()) && !terminal(before):
-			m.Routes.RemoveInstance(rec.GetId())
-		}
-	} else if m.Routes != nil && terminal(rec.GetState()) && !terminal(before) {
+	slotted := rec.GetSlotId() != ""
+	switch {
+	case m.Routes == nil:
+	case Terminal(rec.GetState()) && !Terminal(before):
 		m.Routes.RemoveInstance(rec.GetId())
+	case slotted:
+	case rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY:
+		m.Routes.Serve(rec.GetName(), rec, m.Runtimes.API(rec.GetRuntimeId()), "", nil)
+	case rec.GetState() == v1.InstanceState_INSTANCE_STATE_DRAINING && before != v1.InstanceState_INSTANCE_STATE_DRAINING:
+		m.Routes.Drain(rec.GetId())
 	}
 	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_UPDATED, rec.GetId(), rec)
-	if m.OnChange != nil {
-		m.OnChange(rec)
+	if m.Slots != nil {
+		m.Slots.OnInstance(rec)
 	}
-}
-
-// Returns the wire protocol of an instance's runtime
-func (m *Manager) api(rec *v1.Instance) v1.ApiFlavor {
-	return m.Runtimes.API(rec.GetRuntimeId())
-}
-
-// Formats the model an instance serves for routes
-func modelOf(rec *v1.Instance) string {
-	return rec.GetRepo() + ":" + rec.GetGroup()
 }
 
 func (in *instance) grace() time.Duration {
@@ -203,13 +189,13 @@ func (in *instance) attach(proc launch.Handle) {
 	in.mu.Unlock()
 }
 
-// Everything resolved for a run before anything is launched
 const (
 	defaultPrepareTimeout = time.Hour
 	// Lines the prepare step keeps in memory, the same ring the launcher keeps
 	logCapacity = 5000
 )
 
+// Everything resolved for a run before anything is launched
 type prepared struct {
 	req        *v1.RunRequest
 	stored     *v1.StoredModel
@@ -243,7 +229,7 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 		return nil, nil, err
 	}
 	if p.res != nil && p.res.InstanceID != "" && !fromSwap(ctx) {
-		if cur, err := m.Get(p.res.InstanceID); err == nil && !terminal(cur.GetState()) {
+		if cur, err := m.Get(p.res.InstanceID); err == nil && !Terminal(cur.GetState()) {
 			return nil, nil, fmt.Errorf("%w: slot %s serves %s, use nebu swap", runtime.ErrParam, p.res.Name, cur.GetName())
 		}
 	}
@@ -262,10 +248,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	}
 	var res *Reservation
 	if req.GetSlotId() != "" {
-		if m.Reserver == nil {
-			return nil, fmt.Errorf("%w: slots are not available", runtime.ErrParam)
-		}
-		if res, err = m.Reserver.Reservation(ctx, req.GetSlotId()); err != nil {
+		if res, err = m.reservation(ctx, req.GetSlotId()); err != nil {
 			return nil, err
 		}
 		req.SlotId = res.SlotID
@@ -280,23 +263,28 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if err != nil {
 		return nil, err
 	}
-	// A named profile picks its runtime when nothing else did
+	profile, err := m.Host.Profile(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	// A named profile picks its runtime when nothing else did, else the first compatible one
 	if req.GetRuntimeId() == "" && req.GetProfileId() != "" {
-		p, err := m.Inspector.Profile("", req.GetProfileId())
+		p, err := m.Inspector.Profiles.Resolve("", req.GetProfileId())
 		if err != nil {
 			return nil, err
 		}
 		req.RuntimeId = p.GetRuntimeId()
 	}
+	var rt *runtime.Runtime
 	if req.GetRuntimeId() == "" {
-		if req.RuntimeId, err = m.defaultRuntime(ctx, stored.GetFormatId()); err != nil {
-			return nil, err
-		}
+		rt, err = m.Inspector.DefaultRuntime(profile, stored.GetFormatId())
+	} else {
+		rt, err = m.Runtimes.Get(req.GetRuntimeId())
 	}
-	rt, err := m.Runtimes.Get(req.GetRuntimeId())
 	if err != nil {
 		return nil, err
 	}
+	req.RuntimeId = rt.Manifest.GetId()
 	if !rt.Accepts(stored.GetFormatId()) {
 		return nil, fmt.Errorf("%w: runtime %s does not accept %s", runtime.ErrParam, rt.Manifest.GetId(), stored.GetFormatId())
 	}
@@ -320,10 +308,6 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 		if r, ok := m.Routes.Lookup(name); ok && r.GetSlotId() != "" {
 			return nil, fmt.Errorf("%w: %q is a slot, run with the slot or pick another name", runtime.ErrParam, name)
 		}
-	}
-	profile, err := m.Host.Profile(ctx, true)
-	if err != nil {
-		return nil, err
 	}
 	planProfile := profile
 	if res != nil {
@@ -407,7 +391,7 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 		return nil, nil, err
 	}
 	in := m.newInstance(&v1.Instance{
-		Id:             newID(),
+		Id:             db.NewID(),
 		Name:           name,
 		SourceId:       stored.GetSourceId(),
 		Repo:           stored.GetRepo(),
@@ -519,7 +503,7 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 	proc, err := m.Launcher.Launch(ctx, launch.Spec{Command: rendered.Command, Args: rendered.Args, Env: rendered.Env, Dir: install.GetDir(), LogPath: m.logPath(rec.GetId())})
 	if err != nil {
 		in.update(func(r *v1.Instance) {
-			if terminal(r.State) {
+			if Terminal(r.State) {
 				return
 			}
 			r.State = v1.InstanceState_INSTANCE_STATE_FAILED
@@ -635,7 +619,7 @@ func (m *Manager) fail(in *instance, err error) []*v1.TriageHit {
 		hits = m.Triage.Scan(in.rt.Manifest.GetTriage(), log.Tail(0))
 	}
 	in.update(func(r *v1.Instance) {
-		if terminal(r.State) || r.State == v1.InstanceState_INSTANCE_STATE_STOPPING {
+		if Terminal(r.State) || r.State == v1.InstanceState_INSTANCE_STATE_STOPPING {
 			hits = r.Triage
 			return
 		}
@@ -678,7 +662,7 @@ func (m *Manager) List(runningOnly bool) []*v1.Instance {
 	var out []*v1.Instance
 	for i := len(list) - 1; i >= 0; i-- {
 		rec := list[i].snapshot()
-		if runningOnly && terminal(rec.GetState()) {
+		if runningOnly && Terminal(rec.GetState()) {
 			continue
 		}
 		out = append(out, rec)
@@ -705,7 +689,7 @@ func (m *Manager) find(id string) (*instance, error) {
 		if rec.GetId() != id && rec.GetName() != id {
 			continue
 		}
-		if !terminal(rec.GetState()) {
+		if !Terminal(rec.GetState()) {
 			return in, nil
 		}
 		if match == nil {
@@ -727,7 +711,7 @@ func (m *Manager) live(name string) *instance {
 func (m *Manager) liveLocked(name string) *instance {
 	for _, in := range m.list {
 		rec := in.snapshot()
-		if rec.GetName() == name && !terminal(rec.GetState()) {
+		if rec.GetName() == name && !Terminal(rec.GetState()) {
 			return in
 		}
 	}
@@ -744,7 +728,7 @@ func (m *Manager) conflict(name, slotID string) bool {
 func (m *Manager) conflictLocked(name, slotID string) bool {
 	for _, in := range m.list {
 		rec := in.snapshot()
-		if rec.GetName() != name || terminal(rec.GetState()) {
+		if rec.GetName() != name || Terminal(rec.GetState()) {
 			continue
 		}
 		if slotID == "" || rec.GetSlotId() != slotID {
@@ -754,18 +738,21 @@ func (m *Manager) conflictLocked(name, slotID string) bool {
 	return false
 }
 
-// Picks the first compatible runtime accepting a format
-func (m *Manager) defaultRuntime(ctx context.Context, formatID string) (string, error) {
-	profile, err := m.Host.Profile(ctx, false)
+// The slot's reservation, refused before the daemon has slots
+func (m *Manager) reservation(ctx context.Context, slotID string) (*Reservation, error) {
+	if m.Slots == nil {
+		return nil, fmt.Errorf("%w: slots are not available", runtime.ErrParam)
+	}
+	return m.Slots.Reservation(ctx, slotID)
+}
+
+// Narrows a profile to a slot for planning, implementing the inspector's constrainer
+func (m *Manager) Constrain(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, string, map[string]string, error) {
+	res, err := m.reservation(ctx, slotID)
 	if err != nil {
-		return "", err
+		return nil, "", nil, err
 	}
-	for _, rt := range m.Runtimes.List() {
-		if ok, _ := rt.Compatible(profile); ok && rt.Accepts(formatID) {
-			return rt.Manifest.GetId(), nil
-		}
-	}
-	return "", fmt.Errorf("%w: no compatible runtime accepts %s", runtime.ErrParam, formatID)
+	return Constrain(profile, res.DeviceIDs, res.MemoryBytes), res.RuntimeID, res.Params, nil
 }
 
 // Whether a restart brings the record back, wanted and not failed on its own
@@ -783,7 +770,7 @@ func (m *Manager) ProfileReferrers(refers func(ref, runtimeID string) bool, clea
 	for _, in := range list {
 		rec := in.snapshot()
 		req := rec.GetRequest()
-		if terminal(rec.GetState()) && !relaunches(rec) || !refers(req.GetProfileId(), req.GetRuntimeId()) {
+		if Terminal(rec.GetState()) && !relaunches(rec) || !refers(req.GetProfileId(), req.GetRuntimeId()) {
 			continue
 		}
 		out = append(out, "instance "+rec.GetName())
@@ -840,7 +827,7 @@ func (m *Manager) stop(ctx context.Context, in *instance, byRequest bool) (*v1.I
 		if byRequest {
 			r.DesiredRunning = false
 		}
-		wasTerminal = terminal(r.State)
+		wasTerminal = Terminal(r.State)
 		if !wasTerminal {
 			r.State = v1.InstanceState_INSTANCE_STATE_STOPPING
 		}
@@ -908,27 +895,6 @@ func (m *Manager) logOf(in *instance) *launch.Log {
 	return in.log
 }
 
-// Returns the endpoint of a ready instance by name
-func (m *Manager) Route(name string) (string, bool) {
-	for _, rec := range m.Ready() {
-		if rec.GetName() == name || rec.GetId() == name {
-			return rec.GetEndpoint(), true
-		}
-	}
-	return "", false
-}
-
-// Lists instances that answer requests
-func (m *Manager) Ready() []*v1.Instance {
-	var out []*v1.Instance
-	for _, rec := range m.List(true) {
-		if rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY {
-			out = append(out, rec)
-		}
-	}
-	return out
-}
-
 // Stops every live instance for shutdown, keeping their relaunch intent
 func (m *Manager) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
@@ -962,7 +928,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 	wanted := map[string]*instance{}
 	for _, in := range loaded {
 		rec := in.snapshot()
-		if !terminal(rec.GetState()) {
+		if !Terminal(rec.GetState()) {
 			alive := proc.Running(int(rec.GetPid()), rec.GetCommand())
 			switch {
 			case alive && in.rt != nil && rec.GetDesiredRunning():
@@ -983,7 +949,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 			}
 			in.update(func(r *v1.Instance) {
 				r.State = v1.InstanceState_INSTANCE_STATE_STOPPED
-				r.Error = restartNote
+				r.Error = db.RestartNote
 				r.StoppedAt = timestamppb.Now()
 			})
 		}
@@ -1091,13 +1057,13 @@ func (m *Manager) logPath(id string) string { return filepath.Join(m.Dir, id+".l
 func (m *Manager) pruneLocked() {
 	finished := 0
 	for _, in := range m.list {
-		if terminal(in.snapshot().GetState()) {
+		if Terminal(in.snapshot().GetState()) {
 			finished++
 		}
 	}
 	for i := 0; i < len(m.list) && finished > historyMax; i++ {
 		in := m.list[i]
-		if terminal(in.snapshot().GetState()) {
+		if Terminal(in.snapshot().GetState()) {
 			m.list = append(m.list[:i], m.list[i+1:]...)
 			m.forget(in.rec.GetId())
 			finished--
@@ -1184,8 +1150,11 @@ func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64) *v1.HostPro
 	return out
 }
 
-// Lists the devices a launch template may address
+// Lists the devices a launch template may address, none without a slot pinning some
 func deviceViews(p *v1.HostProfile, res *Reservation) []map[string]any {
+	if res == nil || len(res.DeviceIDs) == 0 {
+		return nil
+	}
 	var out []map[string]any
 	for _, d := range p.GetDevices() {
 		if d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
@@ -1196,9 +1165,6 @@ func deviceViews(p *v1.HostProfile, res *Reservation) []map[string]any {
 			facts[k] = v
 		}
 		out = append(out, map[string]any{"id": d.GetId(), "kind": eval.EnumShort(d.GetKind()), "vendor": d.GetVendor(), "name": d.GetName(), "facts": facts})
-	}
-	if res == nil || len(res.DeviceIDs) == 0 {
-		return nil
 	}
 	return out
 }
@@ -1222,18 +1188,7 @@ func freePort() (int, error) {
 	return ln.Addr().(*net.TCPAddr).Port, nil
 }
 
-func terminal(s v1.InstanceState) bool {
-	switch s {
-	case v1.InstanceState_INSTANCE_STATE_STOPPED, v1.InstanceState_INSTANCE_STATE_FAILED:
-		return true
-	}
-	return false
-}
-
-func newID() string {
-	var b [6]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("%x", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b[:])
+// Reports whether an instance state is final
+func Terminal(s v1.InstanceState) bool {
+	return s == v1.InstanceState_INSTANCE_STATE_STOPPED || s == v1.InstanceState_INSTANCE_STATE_FAILED
 }

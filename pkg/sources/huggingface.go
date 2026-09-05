@@ -27,7 +27,15 @@ var huggingface = &Catalog{
 	RepoPattern:   `^[\w.-]+/[\w.-]+$`,
 	RevisionLabel: "revision",
 	Sorts:         []string{SortTrending, SortDownloads, SortLikes, SortUpdated, SortCreated},
-	Noise:         []string{"endpoints_compatible", "eval-results", "autotrain_compatible", "text-generation-inference", "custom_code", "model-index", "has_space", "safetensors", "gguf", "pytorch", "transformers", ".+:.+", "[a-z]{2,3}"},
+	// The API orders every one of these descending only
+	SortKeys: map[string]string{
+		SortTrending:  "trendingScore",
+		SortDownloads: "downloads",
+		SortLikes:     "likes",
+		SortUpdated:   "lastModified",
+		SortCreated:   "createdAt",
+	},
+	Noise: []string{"endpoints_compatible", "eval-results", "autotrain_compatible", "text-generation-inference", "custom_code", "model-index", "has_space", "safetensors", "gguf", "pytorch", "transformers", ".+:.+", "[a-z]{2,3}"},
 	HitFields: []*v1.ConfigField{
 		{Name: "architecture", Label: "Architecture", Description: "Model architecture the GGUF header names"},
 		{Name: "context", Label: "Context", Description: "Context length in tokens the GGUF header declares"},
@@ -39,18 +47,12 @@ func init() { register(huggingface) }
 
 const hubRevision = "main"
 
-// Hub sort keys by shared sort id, the API orders every one of them descending only
-var hubSortKeys = map[string]string{
-	SortTrending:  "trendingScore",
-	SortDownloads: "downloads",
-	SortLikes:     "likes",
-	SortUpdated:   "lastModified",
-	SortCreated:   "createdAt",
-}
-
 var hubExpand = []string{"pipeline_tag", "library_name", "gated", "private", "downloads", "likes", "lastModified", "createdAt", "tags", "safetensors", "gguf", "trendingScore"}
 
-// The Hub API: a model list paged by a Link cursor, a tree with LFS digests, refs, and raw files
+// Tag types the hub publishes, by the facet each fills
+var hubTaxonomy = []taxonomy{{"pipeline_tag", FacetTask, "Task"}, {"library", FacetLibrary, "Library"}, {"license", FacetLicense, "License"}}
+
+// The Hub API: a Link paged model list, a tree with LFS digests, and refs
 type hubAPI struct{}
 
 type hubTag struct {
@@ -61,21 +63,19 @@ type hubTag struct {
 
 // Reads the hub's own tag taxonomy so the facets never go stale
 func (hubAPI) Facets(ctx context.Context, c *Client) ([]*v1.Facet, error) {
-	var out []*v1.Facet
-	for _, t := range []struct{ kind, id, label string }{
-		{"pipeline_tag", FacetTask, "Task"},
-		{"library", FacetLibrary, "Library"},
-		{"license", FacetLicense, "License"},
-	} {
+	out, err := taxonomyFacets(ctx, hubTaxonomy, func(ctx context.Context, kind string) ([]*v1.FacetValue, error) {
 		var body map[string][]hubTag
-		if _, err := c.JSON(ctx, c.URL("api", "models-tags-by-type"), url.Values{"type": {t.kind}}, &body); err != nil {
+		if _, err := c.JSON(ctx, c.URL("api", "models-tags-by-type"), url.Values{"type": {kind}}, &body); err != nil {
 			return nil, err
 		}
-		facet := NewFacet(t.id, t.label, false)
-		for _, e := range body[t.kind] {
-			facet.Values = append(facet.Values, GroupedValue(strings.TrimPrefix(e.ID, t.kind+":"), e.Label, e.SubType))
+		var values []*v1.FacetValue
+		for _, e := range body[kind] {
+			values = append(values, GroupedValue(strings.TrimPrefix(e.ID, kind+":"), e.Label, e.SubType))
 		}
-		out = append(out, facet)
+		return values, nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return append(out, Freeform(FacetAuthor, "Author")), nil
 }
@@ -109,7 +109,7 @@ var hubCursor = regexp.MustCompile(`[?&]cursor=([^&>]+)`)
 func (hubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
 	q := url.Values{
 		"limit":     {strconv.Itoa(c.Limit(req))},
-		"sort":      {hubSortKeys[sort.ID]},
+		"sort":      {sort.Key},
 		"direction": {"-1"},
 	}
 	if query := strings.TrimSpace(req.GetQuery()); query != "" {
@@ -160,27 +160,15 @@ func (hubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 }
 
 func hubHit(c *Client, it hubItem) *v1.SearchHit {
-	author, name, _ := strings.Cut(it.ID, "/")
+	author, name := splitRepo(it.ID)
 	if it.Author != "" {
 		author = it.Author
 	}
-	if name == "" {
-		name = it.ID
-	}
-	hit := &v1.SearchHit{
-		Repo:      it.ID,
-		Name:      name,
-		Author:    author,
-		Downloads: it.Downloads,
-		Likes:     it.Likes,
-		Tags:      it.Tags,
-		Task:      it.PipelineTag,
-		Library:   it.LibraryName,
-		Private:   it.Private,
-		Gated:     hubGated(it.Gated),
-		Url:       c.Base() + "/" + it.ID,
-		Extra:     map[string]string{},
-	}
+	hit := newHit(it.ID, name, author)
+	hit.Downloads, hit.Likes, hit.Tags = it.Downloads, it.Likes, it.Tags
+	hit.Task, hit.Library = it.PipelineTag, it.LibraryName
+	hit.Private, hit.Gated = it.Private, hubGated(it.Gated)
+	hit.Url = hubPage(c, it.ID)
 	if !it.LastModified.IsZero() {
 		hit.UpdatedAt = timestamppb.New(it.LastModified)
 	}
@@ -213,6 +201,9 @@ func hubHit(c *Client, it hubItem) *v1.SearchHit {
 	return hit
 }
 
+// The model page on the hub
+func hubPage(c *Client, repo string) string { return c.Page(repo) }
+
 // The hub sends gated as false or as the mode, auto or manual
 func hubGated(raw json.RawMessage) bool {
 	s := strings.TrimSpace(string(raw))
@@ -240,14 +231,7 @@ func (hubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v
 		return nil, err
 	}
 	model := &v1.Model{Repo: repo, Revision: revision, Commit: info.Sha}
-	next := c.URL("api", "models", repo, "tree", revision)
-	query := url.Values{"recursive": {"true"}}
-	for next != "" {
-		var entries []hubTree
-		header, err := c.JSON(ctx, next, query, &entries)
-		if err != nil {
-			return nil, err
-		}
+	err := eachPage(ctx, c, c.URL("api", "models", repo, "tree", revision), url.Values{"recursive": {"true"}}, func(entries []hubTree) {
 		for _, e := range entries {
 			if e.Type != "file" {
 				continue
@@ -259,7 +243,9 @@ func (hubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v
 			}
 			model.Artifacts = append(model.Artifacts, a)
 		}
-		next, query = NextLink(header.Get("Link"), c.Base()), nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return model, nil
 }
@@ -279,14 +265,11 @@ func (hubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revi
 		return nil, err
 	}
 	var out []*v1.Revision
-	add := func(r hubRef, detail string) {
-		out = append(out, &v1.Revision{Name: r.Name, Commit: r.TargetCommit, Default: r.Name == hubRevision, Detail: detail})
-	}
 	for _, b := range body.Branches {
-		add(b, "branch")
+		out = append(out, refRevision(b.Name, b.TargetCommit, b.Name == hubRevision, false))
 	}
 	for _, t := range body.Tags {
-		add(t, "tag")
+		out = append(out, refRevision(t.Name, t.TargetCommit, t.Name == hubRevision, true))
 	}
 	return out, nil
 }
@@ -295,10 +278,10 @@ func (hubAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v1.M
 	if revision == "" {
 		revision = hubRevision
 	}
-	return c.CardText(ctx, c.URL(repo, "raw", revision, "README.md"), nil, c.Base()+"/"+repo)
+	return c.CardText(ctx, c.URL(repo, "raw", revision, "README.md"), nil, hubPage(c, repo))
 }
 
-// Opens a file for ranged reads over HTTP; with the CLI turned on, whole files land through it instead
+// Opens a file for ranged reads over HTTP, or whole through the CLI when on
 func (hubAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error) {
 	b, err := c.Range(ctx, c.URL(model.GetRepo(), "resolve", model.GetRevision(), artifact.GetPath()), artifact)
 	if err != nil {

@@ -224,11 +224,7 @@ func (anthropic) RenderRequest(c *Chat) (string, []byte, error) {
 		case "assistant":
 			blocks := antContent(m.Parts)
 			for _, t := range m.ToolCalls {
-				args := json.RawMessage(t.Args)
-				if !json.Valid(args) {
-					args = json.RawMessage("{}")
-				}
-				blocks = append(blocks, antBlock{Type: "tool_use", ID: t.ID, Name: t.Name, Input: args})
+				blocks = append(blocks, antBlock{Type: "tool_use", ID: t.ID, Name: t.Name, Input: jsonArgs(t.Args)})
 			}
 			if len(blocks) > 0 {
 				push("assistant", blocks)
@@ -317,20 +313,12 @@ func (anthropic) RenderResult(c *Chat, r *Result) ([]byte, error) {
 	if c.Kind == "count" {
 		return json.Marshal(map[string]any{"input_tokens": r.In})
 	}
-	id := r.ID
-	if id == "" {
-		id = newID("msg")
-	}
-	resp := antResponse{ID: id, Type: "message", Role: "assistant", Model: r.Model, Content: []antBlock{}, StopReason: ptr(antReason(r.Stop)), Usage: antUsage{InputTokens: r.In, OutputTokens: r.Out}}
+	resp := antResponse{ID: resultID(r, "msg"), Type: "message", Role: "assistant", Model: r.Model, Content: []antBlock{}, StopReason: ptr(antReason(r.Stop)), Usage: antUsage{InputTokens: r.In, OutputTokens: r.Out}}
 	if r.Text != "" || len(r.ToolCalls) == 0 {
 		resp.Content = append(resp.Content, antBlock{Type: "text", Text: r.Text})
 	}
 	for _, t := range r.ToolCalls {
-		args := json.RawMessage(t.Args)
-		if !json.Valid(args) {
-			args = json.RawMessage("{}")
-		}
-		resp.Content = append(resp.Content, antBlock{Type: "tool_use", ID: t.ID, Name: t.Name, Input: args})
+		resp.Content = append(resp.Content, antBlock{Type: "tool_use", ID: t.ID, Name: t.Name, Input: jsonArgs(t.Args)})
 	}
 	return json.Marshal(resp)
 }
@@ -412,7 +400,6 @@ type antStream struct {
 	kind  string
 	// Tool fragments by stream index map onto our own block indices
 	toolBlock map[int]int
-	toolIndex int
 	tools     toolGather
 	started   bool
 	in        int
@@ -478,19 +465,16 @@ func (s *antStream) Write(ev Event) error {
 			return err
 		}
 		s.tools.add(ev)
-		if _, open := s.toolBlock[ev.Index]; !open || s.kind != "tool_use" || s.toolBlock[ev.Index] != s.index {
-			if _, seen := s.toolBlock[ev.Index]; seen && s.toolBlock[ev.Index] == s.index {
-				// The block is ours already
-			} else {
-				id, name := ev.Tool.ID, ev.Tool.Name
-				if id == "" {
-					id = newID("toolu")
-				}
-				if err := s.openBlock(antBlock{Type: "tool_use", ID: id, Name: name, Input: json.RawMessage("{}")}); err != nil {
-					return err
-				}
-				s.toolBlock[ev.Index] = s.index
+		// A fragment opens a block unless the open block is already this call's
+		if block, seen := s.toolBlock[ev.Index]; !seen || block != s.index || s.kind != "tool_use" {
+			id := ev.Tool.ID
+			if id == "" {
+				id = newID("toolu")
 			}
+			if err := s.openBlock(antBlock{Type: "tool_use", ID: id, Name: ev.Tool.Name, Input: json.RawMessage("{}")}); err != nil {
+				return err
+			}
+			s.toolBlock[ev.Index] = s.index
 		}
 		if ev.Tool.Args == "" {
 			return nil
@@ -523,15 +507,7 @@ func (s *antStream) Close() error { return nil }
 
 func (anthropic) InlineImages() bool { return false }
 
-func (anthropic) ErrorMessage(body []byte) string {
-	var e struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	json.Unmarshal(body, &e)
-	return e.Error.Message
-}
+func (anthropic) ErrorMessage(body []byte) string { return errorField(body) }
 
 func (anthropic) Error(w http.ResponseWriter, status int, message, kind string) {
 	writeJSON(w, status, map[string]any{"type": "error", "error": map[string]any{"type": kind, "message": message}})

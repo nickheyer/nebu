@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/nickheyer/nebu/pkg/archive"
 )
 
 // Returned when a hunk matches neither old nor new text
@@ -176,7 +178,7 @@ func applyPatches(root string, patches []filePatch, strip int) ([]string, error)
 		}
 		rel := stripPath(name, strip)
 		target := filepath.Join(root, filepath.FromSlash(rel))
-		if r, err := filepath.Rel(root, target); err != nil || strings.HasPrefix(r, "..") {
+		if !archive.Within(root, target) {
 			return nil, fmt.Errorf("patch path %q escapes the tree", name)
 		}
 		if err := applyFile(target, fp); err != nil {

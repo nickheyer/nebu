@@ -450,7 +450,10 @@ func (g *Git) Open(ctx context.Context, locator string, size int64) (Blob, error
 	if e.lfs {
 		return g.lfsBlob(repo, e), nil
 	}
-	return &gitBlob{g: g, repo: repo, e: e}, nil
+	// Read out of the clone only when asked, so a pull's schedule runs first
+	return &lazyBlob{size: e.size, whole: true, land: func(ctx context.Context, _ func(int64)) (Blob, error) {
+		return g.extract(ctx, repo, e)
+	}}, nil
 }
 
 // Reads one file whole, capped
@@ -468,67 +471,7 @@ func (g *Git) Read(ctx context.Context, locator string, max int64) ([]byte, erro
 	return readAllCapped(rc, max)
 }
 
-// Writes a plain blob out of the clone into scratch, fetching it first when the clone lacks it
-// A blob git holds, read out of the clone only when asked so a pull's schedule runs first
-type gitBlob struct {
-	g    *Git
-	repo string
-	e    *gitEntry
-	mu   sync.Mutex
-	file Blob
-}
-
-func (b *gitBlob) Size() int64 { return b.e.size }
-
-func (b *gitBlob) open(ctx context.Context) (Blob, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.file == nil {
-		f, err := b.g.extract(ctx, b.repo, b.e)
-		if err != nil {
-			return nil, err
-		}
-		b.file = f
-	}
-	return b.file, nil
-}
-
-func (b *gitBlob) ReadAt(p []byte, off int64) (int, error) {
-	f, err := b.open(context.Background())
-	if err != nil {
-		return 0, err
-	}
-	return f.ReadAt(p, off)
-}
-
-// Lands the file, its bytes reported once since git moves them whole
-func (b *gitBlob) Materialize(ctx context.Context, progress func(int64)) (string, error) {
-	f, err := b.open(ctx)
-	if err != nil {
-		return "", err
-	}
-	m, ok := f.(Materializer)
-	if !ok {
-		return "", fmt.Errorf("%T cannot land as a file", f)
-	}
-	path, err := m.Materialize(ctx, nil)
-	if err == nil && progress != nil {
-		progress(b.e.size)
-	}
-	return path, err
-}
-
-func (b *gitBlob) Close() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.file != nil {
-		err := b.file.Close()
-		b.file = nil
-		return err
-	}
-	return nil
-}
-
+// Writes a plain blob out of the clone into scratch
 func (g *Git) extract(ctx context.Context, repo string, e *gitEntry) (Blob, error) {
 	dir := g.cloneDir(g.Remote(repo))
 	scratch := filepath.Join(g.dir, "blobs")
@@ -703,4 +646,92 @@ func Checkout(ctx context.Context, remote, ref, dest string, out io.Writer) (str
 		return "", err
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+// Any git host: trees from a partial clone, LFS weights through the batch API
+var gitrepo = &Catalog{
+	ID:            "git",
+	Kind:          v1.SourceKind_SOURCE_KIND_GIT,
+	Name:          "Git host",
+	Transports:    []Use{{Kind: TransportGit, Fields: map[string]string{"endpoint": "", "token_env": "", "username_env": ""}, Required: []string{"endpoint"}}},
+	Configured:    true,
+	NoBrowse:      true,
+	NoSearch:      true,
+	Description:   "Any git host such as GitLab, Gitea, or a forge of your own, repositories under one URL with LFS weights",
+	RepoExample:   "owner/repo",
+	RepoPattern:   `^[\w.-]+(/[\w.-]+)+$`,
+	RevisionLabel: "branch or tag",
+	Sorts:         []string{SortName},
+	API:           gitAPI{},
+}
+
+func init() { register(gitrepo) }
+
+// The git transport as a provider: no catalog to search, every repository opens by name
+type gitAPI struct{}
+
+// Nothing to list, a git host has no catalog
+func (gitAPI) Search(context.Context, *Client, *v1.SearchRequest, Sort) (*v1.SearchResponse, error) {
+	return &v1.SearchResponse{}, nil
+}
+
+func (gitAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error) {
+	commit, err := c.Git().Commit(ctx, repo, revision)
+	if err != nil {
+		return nil, err
+	}
+	if revision == "" {
+		refs, err := c.Git().Refs(ctx, repo)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range refs {
+			if r.Default {
+				revision = r.Name
+			}
+		}
+	}
+	artifacts, err := c.Git().List(ctx, repo+"@"+commit)
+	if err != nil {
+		return nil, err
+	}
+	return &v1.Model{Repo: repo, Revision: revision, Commit: commit, Artifacts: artifacts}, nil
+}
+
+func (gitAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
+	refs, err := c.Git().Refs(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*v1.Revision, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, refRevision(r.Name, r.Commit, r.Default, r.Tag))
+	}
+	return out, nil
+}
+
+func (gitAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v1.ModelCard, error) {
+	page := c.Git().Remote(repo)
+	commit, err := c.Git().Commit(ctx, repo, revision)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range []string{"README.md", "readme.md", "README"} {
+		data, err := c.Git().Read(ctx, repo+"@"+commit+"/"+name, cardMax)
+		if err == nil {
+			return &v1.ModelCard{Markdown: string(data), Url: page}, nil
+		}
+	}
+	return &v1.ModelCard{Url: page}, nil
+}
+
+func (gitAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error) {
+	ref := model.GetCommit()
+	if ref == "" {
+		ref = model.GetRevision()
+	}
+	if ref == "" {
+		return nil, fmt.Errorf("%s: no revision to open %s at", model.GetRepo(), artifact.GetPath())
+	}
+	return c.Git().Open(ctx, model.GetRepo()+"@"+ref+"/"+artifact.GetPath(), int64(artifact.GetSizeBytes()))
 }

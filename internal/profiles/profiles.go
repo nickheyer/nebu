@@ -3,8 +3,6 @@ package profiles
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -29,8 +27,10 @@ var (
 	ErrProfileInUse = errors.New("profile in use")
 )
 
-// Names what starts from a profile, clearing each reference when asked, set by the daemon
-type Referrer func(p *v1.Profile, clear bool) []string
+// Names what starts from a profile matching refers, clearing each reference when asked
+type Referrer interface {
+	ProfileReferrers(refers func(ref, runtimeID string) bool, clear bool) []string
+}
 
 // Reports whether a reference by id or name means this profile
 func Refers(p *v1.Profile, ref, runtimeID string) bool {
@@ -47,8 +47,8 @@ type Manager struct {
 	Runtimes *runtime.Registry
 	Events   *events.Bus
 	Log      *slog.Logger
-	// Nil means nothing outside this package can name a profile
-	Referrers Referrer
+	// Everything that can name a profile, asked before one is removed
+	Referrers []Referrer
 
 	mu   sync.Mutex
 	rows map[string]*v1.Profile
@@ -228,12 +228,11 @@ func (m *Manager) Delete(ctx context.Context, ref string, force bool) (*v1.Profi
 	if err != nil {
 		return nil, err
 	}
-	if m.Referrers != nil {
-		if used := m.Referrers(row, false); len(used) > 0 && !force {
-			return nil, fmt.Errorf("%w: %s is named by %s, point them elsewhere or remove with force to clear them", ErrProfileInUse, row.GetName(), strings.Join(used, ", "))
-		} else if len(used) > 0 {
-			m.Referrers(row, true)
-		}
+	refers := func(ref, runtimeID string) bool { return Refers(row, ref, runtimeID) }
+	if used := m.referrers(refers, false); len(used) > 0 && !force {
+		return nil, fmt.Errorf("%w: %s is named by %s, point them elsewhere or remove with force to clear them", ErrProfileInUse, row.GetName(), strings.Join(used, ", "))
+	} else if len(used) > 0 {
+		m.referrers(refers, true)
 	}
 	if _, err := m.DB.DeleteProfile(ctx, row.GetId()); err != nil {
 		return nil, err
@@ -243,10 +242,17 @@ func (m *Manager) Delete(ctx context.Context, ref string, force bool) (*v1.Profi
 	return clone(row), nil
 }
 
-func (m *Manager) publish(action v1.EventAction, p *v1.Profile) {
-	if m.Events != nil {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_PROFILE, action, p.GetId(), clone(p))
+// Asks every referrer, clearing the references when asked
+func (m *Manager) referrers(refers func(ref, runtimeID string) bool, clear bool) []string {
+	var out []string
+	for _, r := range m.Referrers {
+		out = append(out, r.ProfileReferrers(refers, clear)...)
 	}
+	return out
+}
+
+func (m *Manager) publish(action v1.EventAction, p *v1.Profile) {
+	m.Events.Publish(v1.EventKind_EVENT_KIND_PROFILE, action, p.GetId(), clone(p))
 }
 
 // Keeps the params that carry a value, trimmed
@@ -262,8 +268,4 @@ func trim(in map[string]string) map[string]string {
 
 func clone(p *v1.Profile) *v1.Profile { return proto.Clone(p).(*v1.Profile) }
 
-func newID(runtimeID string) string {
-	var b [4]byte
-	rand.Read(b[:])
-	return runtimeID + "-" + hex.EncodeToString(b[:])
-}
+func newID(runtimeID string) string { return runtimeID + "-" + db.NewID()[:8] }

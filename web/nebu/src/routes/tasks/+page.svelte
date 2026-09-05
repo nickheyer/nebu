@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { page } from '$app/state';
-  import { replaceState } from '$app/navigation';
   import { live, clock, taskActive } from '$lib/state.svelte';
+  import { selectionParam } from '$lib/selection.svelte';
   import { ago, duration, newestFirst, when, pct, bytes } from '$lib/format';
   import { TaskState } from '$proto/task_pb';
   import { ListChecks, Download, Hammer, ArrowLeftRight, Play, ShieldCheck, FolderOutput, Radar, Package } from '@lucide/svelte';
@@ -14,17 +13,9 @@
   import TaskDrawer from '$lib/components/TaskDrawer.svelte';
 
   let view = $state('all');
-  let selected = $state(page.url.searchParams.get('id') ?? '');
+  const sel = selectionParam('/tasks');
 
-  $effect(() => {
-    const q = page.url.searchParams.get('id');
-    if (q) selected = q;
-  });
-  $effect(() => {
-    if (!selected && page.url.searchParams.has('id')) replaceState('/tasks', {});
-  });
-
-  const all = $derived([...live.tasks.values()].sort(newestFirst));
+  const all = $derived([...live.tasks.values()].sort(newestFirst((t) => t.createdAt)));
   const active = $derived(all.filter(taskActive));
   const failed = $derived(all.filter((t) => t.state === TaskState.FAILED));
   const list = $derived(view === 'active' ? active : view === 'failed' ? failed : all);
@@ -47,7 +38,7 @@
           {#each list as t (t.id)}
             {@const Icon = icons[t.kind] ?? ListChecks}
             {@const running = taskActive(t)}
-            <tr class="row-link {selected === t.id ? 'row-active' : ''}" onclick={() => (selected = t.id)}>
+            <tr class="row-link {sel.id === t.id ? 'row-active' : ''}" onclick={() => (sel.id = t.id)}>
               <td class="text-fg-faint"><Icon size={15} /></td>
               <td>
                 <div class="text-sm text-fg">{t.title}</div>
@@ -80,4 +71,4 @@
   {/if}
 </Panel>
 
-<TaskDrawer bind:id={selected} />
+<TaskDrawer bind:id={sel.id} />

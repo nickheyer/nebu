@@ -5,35 +5,52 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func tarball(t *testing.T, name string, gz bool, entries map[string]string) string {
+func writeTar(t *testing.T, name string, gz bool, headers []*tar.Header, bodies map[string]string) string {
 	t.Helper()
 	var buf bytes.Buffer
-	var w interface {
-		Write([]byte) (int, error)
-	} = &buf
+	var w io.Writer = &buf
 	var gzw *gzip.Writer
 	if gz {
 		gzw = gzip.NewWriter(&buf)
 		w = gzw
 	}
-	tw := tar.NewWriter(w.(interface{ Write([]byte) (int, error) }))
-	for name, content := range entries {
-		tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(content)), Typeflag: tar.TypeReg})
-		tw.Write([]byte(content))
+	tw := tar.NewWriter(w)
+	for _, h := range headers {
+		body := bodies[h.Name]
+		h.Size = int64(len(body))
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	tw.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if gzw != nil {
 		gzw.Close()
 	}
 	path := filepath.Join(t.TempDir(), name)
 	os.WriteFile(path, buf.Bytes(), 0o644)
 	return path
+}
+
+// Tars regular files holding entries
+func tarball(t *testing.T, name string, gz bool, entries map[string]string) string {
+	t.Helper()
+	var headers []*tar.Header
+	for n := range entries {
+		headers = append(headers, &tar.Header{Name: n, Mode: 0o755, Typeflag: tar.TypeReg})
+	}
+	return writeTar(t, name, gz, headers, entries)
 }
 
 func zipfile(t *testing.T, name string, entries map[string]string) string {
@@ -90,5 +107,49 @@ func TestUnsupported(t *testing.T) {
 	os.WriteFile(path, []byte("not an archive at all"), 0o644)
 	if err := Extract(path, t.TempDir()); err == nil {
 		t.Fatal("garbage should fail")
+	}
+}
+
+// A symlink to a parent then a file under it must not write outside dir
+func TestExtractRefusesWriteThroughSymlink(t *testing.T) {
+	out := t.TempDir()
+	victim := filepath.Join(filepath.Dir(out), "victim")
+	os.Remove(victim)
+	archive := writeTar(t, "a.tar", false, []*tar.Header{
+		{Name: "lib", Typeflag: tar.TypeSymlink, Linkname: "..", Mode: 0o777},
+		{Name: "lib/victim", Typeflag: tar.TypeReg, Mode: 0o644},
+	}, map[string]string{"lib/victim": "owned"})
+	if err := Extract(archive, out); err == nil {
+		t.Fatal("expected an error for a file under an escaping symlink")
+	}
+	if _, err := os.Stat(victim); err == nil {
+		t.Fatal("file was written outside the extraction directory")
+	}
+}
+
+// A symlink whose target stays inside dir is fine
+func TestExtractKeepsInternalSymlink(t *testing.T) {
+	out := t.TempDir()
+	archive := writeTar(t, "a.tar", false, []*tar.Header{
+		{Name: "bin/real", Typeflag: tar.TypeReg, Mode: 0o755},
+		{Name: "bin/alias", Typeflag: tar.TypeSymlink, Linkname: "real", Mode: 0o777},
+	}, map[string]string{"bin/real": "#!/bin/sh\n"})
+	if err := Extract(archive, out); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(out, "bin", "alias"))
+	if err != nil || string(got) != "#!/bin/sh\n" {
+		t.Fatalf("alias unreadable: %v %q", err, got)
+	}
+}
+
+// An absolute or escaping link target is refused outright
+func TestExtractRefusesEscapingSymlink(t *testing.T) {
+	for _, target := range []string{"/etc/passwd", "../../outside"} {
+		out := t.TempDir()
+		archive := writeTar(t, "a.tar", false, []*tar.Header{{Name: "link", Typeflag: tar.TypeSymlink, Linkname: target, Mode: 0o777}}, nil)
+		if err := Extract(archive, out); err == nil {
+			t.Fatalf("expected an error for symlink to %s", target)
+		}
 	}
 }

@@ -25,7 +25,13 @@ var csghub = &Catalog{
 	RepoPattern:   `^[\w.-]+/[\w.-]+$`,
 	RevisionLabel: "revision",
 	Sorts:         []string{SortTrending, SortDownloads, SortLikes, SortUpdated},
-	Noise:         []string{".+:.+", "[a-z]{2,3}"},
+	SortKeys: map[string]string{
+		SortTrending:  "trending",
+		SortDownloads: "most_download",
+		SortLikes:     "most_favorite",
+		SortUpdated:   "recently_update",
+	},
+	Noise: []string{".+:.+", "[a-z]{2,3}"},
 	HitFields: []*v1.ConfigField{
 		{Name: "architecture", Label: "Architecture", Description: "Model architecture"},
 		{Name: "base_model", Label: "Base model", Description: "Base model this was made from"},
@@ -40,14 +46,6 @@ const (
 	csgMaxDepth = 8
 )
 
-// CSGHub sort keys by shared sort id
-var csgSortKeys = map[string]string{
-	SortTrending:  "trending",
-	SortDownloads: "most_download",
-	SortLikes:     "most_favorite",
-	SortUpdated:   "recently_update",
-}
-
 // Listing query parameters by facet id
 var csgFacetParams = map[string]string{
 	FacetTask:      "task_tag",
@@ -55,42 +53,47 @@ var csgFacetParams = map[string]string{
 	FacetLicense:   "license_tag",
 }
 
-// The CSGHub API: enveloped JSON, a paged model list, branches, a directory tree, and a Hub style download path
+// Tag categories the hub publishes, by the facet each fills
+var csgTaxonomy = []taxonomy{{"task", FacetTask, "Task"}, {"framework", FacetFramework, "Framework"}, {"license", FacetLicense, "License"}}
+
+// The CSGHub API: enveloped JSON, a paged list, branches, a tree, and Hub style downloads
 type csghubAPI struct{}
+
+// The hub wraps every answer in a data field
+type csgEnvelope[T any] struct {
+	Data T `json:"data"`
+}
+
+// Fetches one enveloped answer
+func csgData[T any](ctx context.Context, c *Client, rawURL string, q url.Values) (T, error) {
+	var body csgEnvelope[T]
+	_, err := c.JSON(ctx, rawURL, q, &body)
+	return body.Data, err
+}
 
 type csgTag struct {
 	Name     string `json:"name"`
-	Category string `json:"category"`
 	Group    string `json:"group"`
 	BuiltIn  bool   `json:"built_in"`
-	Scope    string `json:"scope"`
 	ShowName string `json:"show_name"`
 }
 
 // Reads the hub's own tag taxonomy, keeping the built in entries
 func (csghubAPI) Facets(ctx context.Context, c *Client) ([]*v1.Facet, error) {
-	var out []*v1.Facet
-	for _, t := range []struct{ category, id, label string }{
-		{"task", FacetTask, "Task"},
-		{"framework", FacetFramework, "Framework"},
-		{"license", FacetLicense, "License"},
-	} {
-		var body struct {
-			Data []csgTag `json:"data"`
-		}
-		if _, err := c.JSON(ctx, c.URL("api", "v1", "tags"), url.Values{"category": {t.category}, "scope": {"model"}}, &body); err != nil {
+	return taxonomyFacets(ctx, csgTaxonomy, func(ctx context.Context, category string) ([]*v1.FacetValue, error) {
+		tags, err := csgData[[]csgTag](ctx, c, c.URL("api", "v1", "tags"), url.Values{"category": {category}, "scope": {"model"}})
+		if err != nil {
 			return nil, err
 		}
-		facet := NewFacet(t.id, t.label, false)
-		for _, e := range body.Data {
+		var values []*v1.FacetValue
+		for _, e := range tags {
 			if !e.BuiltIn || e.Name == "" {
 				continue
 			}
-			facet.Values = append(facet.Values, GroupedValue(e.Name, e.ShowName, Humanize(e.Group)))
+			values = append(values, GroupedValue(e.Name, e.ShowName, Humanize(e.Group)))
 		}
-		out = append(out, facet)
-	}
-	return out, nil
+		return values, nil
+	})
 }
 
 type csgModel struct {
@@ -118,12 +121,8 @@ type csgModel struct {
 }
 
 func (csghubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
-	limit := c.Limit(req)
-	page := Offset(req.GetCursor())
-	if page < 1 {
-		page = 1
-	}
-	q := url.Values{"sort": {csgSortKeys[sort.ID]}, "per": {strconv.Itoa(limit)}, "page": {strconv.Itoa(page)}}
+	limit, page := c.Limit(req), c.page(req)
+	q := url.Values{"sort": {sort.Key}, "per": {strconv.Itoa(limit)}, "page": {strconv.Itoa(page)}}
 	if query := strings.TrimSpace(req.GetQuery()); query != "" {
 		q.Set("search", query)
 	}
@@ -145,9 +144,7 @@ func (csghubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, s
 			resp.Hits = append(resp.Hits, hit)
 		}
 	}
-	if uint64(page*limit) < body.Total && len(resp.Hits) > 0 {
-		resp.NextCursor = strconv.Itoa(page + 1)
-	}
+	c.nextPage(resp, page, limit, body.Total)
 	return resp, nil
 }
 
@@ -155,28 +152,17 @@ func csgHit(c *Client, m csgModel) *v1.SearchHit {
 	if m.Path == "" {
 		return nil
 	}
-	author, name, _ := strings.Cut(m.Path, "/")
-	if name == "" {
-		author, name = "", m.Path
-	}
+	author, name := splitRepo(m.Path)
 	if m.Name != "" {
 		name = m.Name
 	}
 	if m.Nickname != "" {
 		name = m.Nickname
 	}
-	hit := &v1.SearchHit{
-		Repo:        m.Path,
-		Name:        name,
-		Author:      author,
-		Description: Excerpt(StripTags(m.Description), 240),
-		License:     m.License,
-		Private:     m.Private,
-		Url:         c.Web() + "/models/" + m.Path,
-		CreatedAt:   Stamp(m.CreatedAt),
-		UpdatedAt:   Stamp(m.UpdatedAt),
-		Extra:       map[string]string{},
-	}
+	hit := newHit(m.Path, name, author)
+	hit.Description, hit.License, hit.Private = Summary(m.Description), m.License, m.Private
+	hit.Url = csgPage(c, m.Path)
+	hit.CreatedAt, hit.UpdatedAt = Stamp(m.CreatedAt), Stamp(m.UpdatedAt)
 	if m.Downloads > 0 {
 		hit.Downloads = uint64(m.Downloads)
 	}
@@ -214,6 +200,9 @@ func csgHit(c *Client, m csgModel) *v1.SearchHit {
 	return hit
 }
 
+// The model page on the site people browse
+func csgPage(c *Client, repo string) string { return c.Page("models", repo) }
+
 // The hub reports model_params in billions, a large value is already a count
 func csgParameters(v float64) uint64 {
 	if v < 1e6 {
@@ -223,9 +212,8 @@ func csgParameters(v float64) uint64 {
 }
 
 type csgBranch struct {
-	Name    string `json:"name"`
-	Message string `json:"message"`
-	Commit  struct {
+	Name   string `json:"name"`
+	Commit struct {
 		ID string `json:"id"`
 	} `json:"commit"`
 }
@@ -240,24 +228,16 @@ type csgTree struct {
 }
 
 func csgBranches(ctx context.Context, c *Client, repo string) ([]csgBranch, error) {
-	var body struct {
-		Data []csgBranch `json:"data"`
-	}
-	if _, err := c.JSON(ctx, c.URL("api", "v1", "models", repo, "branches"), nil, &body); err != nil {
-		return nil, err
-	}
-	return body.Data, nil
+	return csgData[[]csgBranch](ctx, c, c.URL("api", "v1", "models", repo, "branches"), nil)
 }
 
 // Reads the default branch from the repo detail, main when the hub does not say
 func csgDefaultBranch(ctx context.Context, c *Client, repo string) string {
-	var body struct {
-		Data csgModel `json:"data"`
-	}
-	if _, err := c.JSON(ctx, c.URL("api", "v1", "models", repo), nil, &body); err != nil || body.Data.DefaultBranch == "" {
+	m, err := csgData[csgModel](ctx, c, c.URL("api", "v1", "models", repo), nil)
+	if err != nil || m.DefaultBranch == "" {
 		return csgRevision
 	}
-	return body.Data.DefaultBranch
+	return m.DefaultBranch
 }
 
 func (csghubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error) {
@@ -275,45 +255,47 @@ func (csghubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) 
 			break
 		}
 	}
-	if err := csgWalk(ctx, c, repo, revision, "", 0, model); err != nil {
+	if err := csgWalk(ctx, c, repo, revision, model); err != nil {
 		return nil, err
 	}
 	return model, nil
 }
 
-// Lists one directory and descends into its subdirectories
-func csgWalk(ctx context.Context, c *Client, repo, revision, dir string, depth int, model *v1.Model) error {
-	q := url.Values{"ref": {revision}}
-	if dir != "" {
-		q.Set("path", dir)
-	}
-	var body struct {
-		Data []csgTree `json:"data"`
-	}
-	if _, err := c.JSON(ctx, c.URL("api", "v1", "models", repo, "tree"), q, &body); err != nil {
-		return err
-	}
-	for _, e := range body.Data {
-		path := e.Path
-		if path == "" {
-			path = strings.TrimPrefix(dir+"/"+e.Name, "/")
+// Lists the tree of a revision, descending into subdirectories to a fixed depth
+func csgWalk(ctx context.Context, c *Client, repo, revision string, model *v1.Model) error {
+	var walk func(dir string, depth int) error
+	walk = func(dir string, depth int) error {
+		q := url.Values{"ref": {revision}}
+		if dir != "" {
+			q.Set("path", dir)
 		}
-		switch e.Type {
-		case "file":
-			a := &v1.Artifact{Path: path, SizeBytes: e.Size}
-			if e.Lfs {
-				a.Sha256 = strings.ToLower(e.LfsSha256)
+		entries, err := csgData[[]csgTree](ctx, c, c.URL("api", "v1", "models", repo, "tree"), q)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			path := e.Path
+			if path == "" {
+				path = strings.TrimPrefix(dir+"/"+e.Name, "/")
 			}
-			model.Artifacts = append(model.Artifacts, a)
-		case "dir", "directory":
-			if depth < csgMaxDepth {
-				if err := csgWalk(ctx, c, repo, revision, path, depth+1, model); err != nil {
-					return err
+			switch e.Type {
+			case "file":
+				a := &v1.Artifact{Path: path, SizeBytes: e.Size}
+				if e.Lfs {
+					a.Sha256 = Hex(e.LfsSha256)
+				}
+				model.Artifacts = append(model.Artifacts, a)
+			case "dir", "directory":
+				if depth < csgMaxDepth {
+					if err := walk(path, depth+1); err != nil {
+						return err
+					}
 				}
 			}
 		}
+		return nil
 	}
-	return nil
+	return walk("", 0)
 }
 
 func (csghubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
@@ -324,7 +306,7 @@ func (csghubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.R
 	def := csgDefaultBranch(ctx, c, repo)
 	out := make([]*v1.Revision, 0, len(branches))
 	for _, b := range branches {
-		out = append(out, &v1.Revision{Name: b.Name, Commit: b.Commit.ID, Default: b.Name == def, Detail: "branch"})
+		out = append(out, refRevision(b.Name, b.Commit.ID, b.Name == def, false))
 	}
 	return out, nil
 }
@@ -334,14 +316,12 @@ func (csghubAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v
 	if revision != "" {
 		q = url.Values{"ref": {revision}}
 	}
-	card, err := c.CardText(ctx, c.URL("api", "v1", "models", repo, "raw", "README.md"), q, c.Web()+"/models/"+repo)
+	card, err := c.CardText(ctx, c.URL("api", "v1", "models", repo, "raw", "README.md"), q, csgPage(c, repo))
 	if err != nil || card.Markdown == "" {
 		return card, err
 	}
 	// The raw file arrives inside the hub's JSON envelope
-	var body struct {
-		Data string `json:"data"`
-	}
+	var body csgEnvelope[string]
 	if err := json.Unmarshal([]byte(card.Markdown), &body); err != nil {
 		return nil, fmt.Errorf("decode %s card: %w", repo, err)
 	}

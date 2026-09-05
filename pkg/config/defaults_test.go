@@ -33,7 +33,7 @@ func TestMilestoneDefaults(t *testing.T) {
 	if cfg.GetBuilds().GetSandbox() != v1.SandboxKind_SANDBOX_KIND_UNSPECIFIED || cfg.GetWeb() == nil {
 		t.Fatal("sandbox should stay unspecified, web should exist")
 	}
-	t.Setenv(EnvToken, "override")
+	t.Setenv(envToken, "override")
 	cfg, err = Load(path)
 	if err != nil {
 		t.Fatal(err)

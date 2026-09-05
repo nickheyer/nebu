@@ -70,6 +70,8 @@ type bucket struct {
 type solver struct {
 	buckets   []*bucket
 	byKind    map[v1.TensorGroupKind]*bucket
+	policies  map[v1.TensorGroupKind]*v1.GroupPolicy
+	free      bool
 	fixedDev  uint64
 	fixedHost uint64
 	devCap    uint64
@@ -96,7 +98,7 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 	primary, host := pools(in.Host)
 	primary = p.spanned(primary, in.Params)
 	margin := 1 - p.spec.GetMargin()
-	s := &solver{byKind: map[v1.TensorGroupKind]*bucket{}}
+	s := &solver{byKind: map[v1.TensorGroupKind]*bucket{}, policies: p.groups, free: in.Free}
 	for _, pl := range primary {
 		s.devCap += uint64(float64(capacity(pl, in.Free)) * margin)
 	}
@@ -161,9 +163,9 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 				least += b.prefix[b.fixed]
 			}
 		}
-		plan.Detail = fmt.Sprintf("device need %s exceeds capacity %s", human(least), human(s.devCap))
+		plan.Detail = fmt.Sprintf("device need %s exceeds capacity %s", Human(least), Human(s.devCap))
 		if s.hostCap > 0 && s.hostNeed() > s.hostCap {
-			plan.Detail = fmt.Sprintf("host need %s exceeds capacity %s", human(s.hostNeed()), human(s.hostCap))
+			plan.Detail = fmt.Sprintf("host need %s exceeds capacity %s", Human(s.hostNeed()), Human(s.hostCap))
 		}
 		for _, b := range s.buckets {
 			b.count = 0
@@ -176,7 +178,7 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 			}
 		}
 	}
-	s.fill(plan, primary, host, in.Descriptor, p.groups, in.Free)
+	s.fill(plan, primary, host, in.Descriptor)
 	return plan, nil
 }
 
@@ -334,8 +336,8 @@ func (s *solver) fits() bool {
 	return s.hostCap == 0 || s.hostNeed() <= s.hostCap
 }
 
-func (s *solver) fill(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool, d *v1.Descriptor, policies map[v1.TensorGroupKind]*v1.GroupPolicy, free bool) {
-	plan.Pools = append(distribute(s.devNeed(), primary, free), distribute(s.hostNeed(), host, free)...)
+func (s *solver) fill(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool, d *v1.Descriptor) {
+	plan.Pools = append(distribute(s.devNeed(), primary, s.free), distribute(s.hostNeed(), host, s.free)...)
 	for _, b := range s.buckets {
 		solved := b.count
 		if b.policy.GetParamCountsHost() {
@@ -361,7 +363,7 @@ func (s *solver) fill(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool, d *v1
 		pl.Count++
 	}
 	for _, g := range d.GetGroups() {
-		gp := policies[g.GetKind()]
+		gp := s.policies[g.GetKind()]
 		if gp == nil || gp.GetParam() == "" {
 			add(g.GetKind(), poolOf(gp), g.GetBytes())
 		}
@@ -475,7 +477,7 @@ func stringParams(params map[string]any) map[string]string {
 }
 
 // Formats bytes for humans
-func human(b uint64) string {
+func Human(b uint64) string {
 	const unit = 1024
 	if b < unit {
 		return fmt.Sprintf("%d B", b)
@@ -487,6 +489,3 @@ func human(b uint64) string {
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }
-
-// Formats bytes for humans
-func Human(b uint64) string { return human(b) }

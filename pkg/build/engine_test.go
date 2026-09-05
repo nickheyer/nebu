@@ -141,7 +141,7 @@ func TestEngineBuildsFromArchiveWithPatches(t *testing.T) {
 	srv, downloads := server(t)
 	rc := engineRecipe(t, srv.URL)
 	root := t.TempDir()
-	e := &Engine{Root: root, Patches: map[string][]byte{"more.patch": []byte("--- a/notes.txt\n+++ b/notes.txt\n@@ -1,3 +1,4 @@\n hello\n patched\n+from file\n world\n")}, Jobs: 3, Sources: githubRegistry(t, srv.URL), Fetcher: transfer.New(0, 0, 0, 0, slog.Default())}
+	e := &Engine{Root: root, Patches: map[string][]byte{"more.patch": []byte("--- a/notes.txt\n+++ b/notes.txt\n@@ -1,3 +1,4 @@\n hello\n patched\n+from file\n world\n")}, Jobs: 3, Sources: githubRegistry(t, srv.URL), Fetcher: transfer.New(0, 0, 0, slog.Default())}
 	sel, err := rc.Select(&v1.HostProfile{Os: "linux", Arch: "amd64", Facts: map[string]string{}}, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ outputs: [bin]
 binary: bin
 `
 	rc := recipe(t, y)
-	e := &Engine{Root: t.TempDir(), Fetcher: transfer.New(0, 0, 0, 0, slog.Default())}
+	e := &Engine{Root: t.TempDir(), Fetcher: transfer.New(0, 0, 0, slog.Default())}
 	sel, _ := rc.Select(&v1.HostProfile{Facts: map[string]string{}}, Options{})
 	b := sel.Build()
 	if err := e.Resolve(context.Background(), sel, b); err != nil {

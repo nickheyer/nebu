@@ -1,11 +1,12 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { api, baseUrl } from '$lib/api';
   import { listenerUrl, policyText } from '$lib/gateway';
-  import { live, slotName, clock } from '$lib/state.svelte';
-  import { count, enumLabel, ago } from '$lib/format';
+  import { live, cached, refreshCached, slotName, clock } from '$lib/state.svelte';
+  import { byName, count, enumLabel, ago } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
-  import { RouteState, type GatewayStatus } from '$proto/gateway_pb';
+  import { RouteState } from '$proto/gateway_pb';
   import { InstanceState } from '$proto/instance_pb';
   import { Waypoints, Plus, Trash2, KeyRound, Link } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -19,13 +20,13 @@
   import Field from '$lib/components/ui/Field.svelte';
   import InstanceDrawer from '$lib/components/InstanceDrawer.svelte';
 
-  let status = $state<GatewayStatus | null>(null);
   let aliasName = $state('');
   let aliasInstance = $state('');
   let adding = $state(false);
   let instanceId = $state('');
 
-  const routes = $derived([...live.routes.values()].sort((a, b) => a.name.localeCompare(b.name)));
+  const status = $derived(cached.gateway);
+  const routes = $derived([...live.routes.values()].sort(byName((r) => r.name)));
   const ready = $derived([...live.instances.values()].filter((i) => i.state === InstanceState.READY));
   const readyRoutes = $derived(routes.filter((r) => r.state === RouteState.READY));
   const endpoints = $derived.by(() => {
@@ -39,17 +40,9 @@
     `curl ${endpoints[0].url}/chat/completions \\\n  -H 'Content-Type: application/json' \\\n${status?.auth ? "  -H 'Authorization: Bearer $NEBU_API_KEY' \\\n" : ''}  -d '{"model":"${example}","messages":[{"role":"user","content":"hello"}]}'`
   );
 
-  async function refresh() {
-    try {
-      status = (await api.gateway.getGatewayStatus({})).status ?? null;
-    } catch (err) {
-      fail(err, 'Gateway status failed');
-    }
-  }
-  // Listeners, keys, and the default policy change with the daemon, counters and states ride the routes themselves
-  $effect(() => {
-    void [...live.routes.values()].map((r) => r.name + r.state).join();
-    refresh();
+  // The request total only moves with traffic, so each visit reads it fresh
+  onMount(() => {
+    void refreshCached();
   });
 
   async function addAlias() {
@@ -119,7 +112,10 @@
             {#each routes as r (r.name)}
               {@const inst = r.instanceId ? live.instances.get(r.instanceId) : undefined}
               <tr>
-                <td class="font-mono text-sm text-fg">{r.name}</td>
+                <td class="font-mono text-sm text-fg">
+                  {r.name}
+                  {#if r.served && r.served !== r.name}<div class="font-sans text-[11px] text-fg-faint" title="The model name sent upstream in place of the route name">answers as {r.served}</div>{/if}
+                </td>
                 <td><StateBadge values={RouteState} value={r.state} size="xs" /></td>
                 <td class="font-mono text-xs text-fg-muted">{r.model || '–'}</td>
                 <td class="text-xs">

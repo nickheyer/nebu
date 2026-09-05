@@ -37,7 +37,6 @@ type HTTP struct {
 	base       *url.URL
 	token      string
 	scheme     string
-	header     http.Header
 	authorizer func(ctx context.Context) http.Header
 }
 
@@ -50,7 +49,7 @@ func NewHTTP(endpoint, token string) (*HTTP, error) {
 	if base.Scheme == "" {
 		return nil, fmt.Errorf("endpoint %q needs a scheme", endpoint)
 	}
-	return &HTTP{http: &http.Client{Transport: newTransport()}, base: base, token: token, scheme: "Bearer", header: http.Header{}}, nil
+	return &HTTP{http: &http.Client{Transport: newTransport()}, base: base, token: token, scheme: "Bearer"}, nil
 }
 
 // A transport that bounds the dial, the handshake, and the wait for headers, never the body
@@ -88,11 +87,6 @@ func (c *HTTP) UseBasic(username string) {
 	}
 }
 
-// Adds a header to every request
-func (c *HTTP) SetHeader(key, value string) {
-	c.header.Set(key, value)
-}
-
 // Replaces the token with headers computed per request, for keys that are exchanged first
 func (c *HTTP) SetAuthorizer(fn func(ctx context.Context) http.Header) {
 	c.authorizer = fn
@@ -101,11 +95,6 @@ func (c *HTTP) SetAuthorizer(fn func(ctx context.Context) http.Header) {
 // Returns the base endpoint without a trailing slash
 func (c *HTTP) Base() string {
 	return c.base.String()
-}
-
-// Reports whether a token is configured
-func (c *HTTP) HasToken() bool {
-	return c.token != ""
 }
 
 // Joins escaped path segments onto the base URL
@@ -190,9 +179,6 @@ func (c *HTTP) DoBody(ctx context.Context, method, rawURL string, query url.Valu
 			return nil, err
 		}
 		req.Header.Set("User-Agent", userAgent)
-		for k, vs := range c.header {
-			req.Header[k] = vs
-		}
 		for k, vs := range header {
 			req.Header[k] = vs
 		}
@@ -313,7 +299,7 @@ func (c *HTTP) Open(ctx context.Context, locator string, size int64) (Blob, erro
 		}
 		resp.Body.Close()
 		if size = resp.ContentLength; size <= 0 {
-			return nil, fmt.Errorf("%s: unknown size", rawURL)
+			return nil, unknown(rawURL, "size")
 		}
 	}
 	return NewRangeBlob(c, rawURL, size), nil
@@ -414,6 +400,9 @@ func NextLink(link, base string) string {
 	return u.String()
 }
 
+// The rel next link of a page's Link header, relative ones under the base
+func (c *HTTP) nextLink(h http.Header) string { return NextLink(h.Get("Link"), c.Base()) }
+
 // HTTP error with the status and a body excerpt
 type StatusError struct {
 	Method string
@@ -445,7 +434,6 @@ type RangeBlob struct {
 	client   *HTTP
 	url      string
 	size     int64
-	header   http.Header
 	resolver Resolver
 	mu       sync.Mutex
 }
@@ -453,12 +441,6 @@ type RangeBlob struct {
 // Wraps a URL as a range readable blob
 func NewRangeBlob(c *HTTP, rawURL string, size int64) *RangeBlob {
 	return &RangeBlob{client: c, url: rawURL, size: size}
-}
-
-// Adds headers to every range request
-func (b *RangeBlob) WithHeader(h http.Header) *RangeBlob {
-	b.header = h
-	return b
 }
 
 // Asks for fresh headers before every range request, for tokens that expire
@@ -479,9 +461,6 @@ func (b *RangeBlob) WithResolver(fn Resolver) *RangeBlob {
 // Picks the URL and headers for one range request
 func (b *RangeBlob) prepare(ctx context.Context, rng string) (string, http.Header, error) {
 	h := http.Header{"Range": {rng}}
-	for k, vs := range b.header {
-		h[k] = vs
-	}
 	b.mu.Lock()
 	rawURL := b.url
 	b.mu.Unlock()

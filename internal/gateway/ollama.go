@@ -133,9 +133,7 @@ func (ollama) ParseRequest(path string, body []byte) (*Chat, error) {
 		}
 		c.Messages = append(c.Messages, msg)
 	}
-	for _, t := range req.Tools {
-		c.Tools = append(c.Tools, Tool{Name: t.Function.Name, Description: t.Function.Description, Schema: t.Function.Parameters})
-	}
+	c.Tools = toolsFromOAI(req.Tools)
 	return c, nil
 }
 
@@ -163,22 +161,10 @@ func (ollama) RenderRequest(c *Chat) (string, []byte, error) {
 				msg.Images = append(msg.Images, p.Data)
 			}
 		}
-		for _, t := range m.ToolCalls {
-			tc := olToolCall{}
-			tc.Function.Name = t.Name
-			tc.Function.Arguments = json.RawMessage(t.Args)
-			if !json.Valid(tc.Function.Arguments) {
-				tc.Function.Arguments = json.RawMessage("{}")
-			}
-			msg.ToolCalls = append(msg.ToolCalls, tc)
-		}
+		msg.ToolCalls = olToolCalls(m.ToolCalls)
 		req.Messages = append(req.Messages, msg)
 	}
-	for _, t := range c.Tools {
-		tool := oaiTool{Type: "function"}
-		tool.Function.Name, tool.Function.Description, tool.Function.Parameters = t.Name, t.Description, t.Schema
-		req.Tools = append(req.Tools, tool)
-	}
+	req.Tools = toolsToOAI(c.Tools)
 	data, err := json.Marshal(req)
 	return ollamaChat, data, err
 }
@@ -230,11 +216,7 @@ func olToolCalls(calls []ToolCall) []olToolCall {
 	var out []olToolCall
 	for _, t := range calls {
 		tc := olToolCall{}
-		tc.Function.Name = t.Name
-		tc.Function.Arguments = json.RawMessage(t.Args)
-		if !json.Valid(tc.Function.Arguments) {
-			tc.Function.Arguments = json.RawMessage("{}")
-		}
+		tc.Function.Name, tc.Function.Arguments = t.Name, jsonArgs(t.Args)
 		out = append(out, tc)
 	}
 	return out

@@ -34,7 +34,14 @@ var ngc = &Catalog{
 	RepoPattern:   `^[\w.-]+(/[\w.-]+){1,2}$`,
 	RevisionLabel: "version",
 	Sorts:         []string{SortDownloads, SortRelevance, SortUpdated, SortCreated, SortName},
-	Reversible:    []string{SortDownloads, SortRelevance, SortUpdated, SortCreated, SortName},
+	SortKeys: map[string]string{
+		SortRelevance: "score",
+		SortDownloads: "weightPopular",
+		SortUpdated:   "dateModified",
+		SortCreated:   "dateCreated",
+		SortName:      "name",
+	},
+	Reversible: []string{SortDownloads, SortRelevance, SortUpdated, SortCreated, SortName},
 	Facets: []*v1.Facet{
 		Freeform(FacetFramework, "Framework"),
 		Freeform(FacetPublisher, "Publisher"),
@@ -52,14 +59,8 @@ const (
 	ngcRetryAfter      = time.Minute
 )
 
-// Catalog order fields by shared sort id with their natural direction
-var ngcSortKeys = map[string]struct{ field, dir string }{
-	SortRelevance: {"score", "DESC"},
-	SortDownloads: {"weightPopular", "DESC"},
-	SortUpdated:   {"dateModified", "DESC"},
-	SortCreated:   {"dateCreated", "DESC"},
-	SortName:      {"name", "ASC"},
-}
+// Sorts whose natural order runs ascending, the rest run descending
+var ngcAscending = map[string]bool{SortName: true}
 
 // Search filter fields by shared facet id
 var ngcFilterFields = []struct{ facet, field string }{
@@ -70,8 +71,7 @@ var ngcFilterFields = []struct{ facet, field string }{
 // Label keys that describe a model
 var ngcTagLabels = map[string]bool{"general": true, "framework": true, "precision": true, "publisher": true, "builtBy": true}
 
-// The NGC API: a JSON query string search, versioned file lists, and an API key
-// exchanged at a token service for a short lived bearer, guest when that fails
+// The NGC API: query search, versioned file lists, an API key swapped for a bearer
 type ngcAPI struct{}
 
 // Exchanges the API key at the token service, keeping the bearer for a while
@@ -83,7 +83,7 @@ type ngcAuth struct {
 	until time.Time
 }
 
-// Installs the exchange on the API transport, so every request carries the bearer and never the raw key
+// Installs the exchange on the API transport, so requests carry the bearer, never the key
 func (ngcAPI) Check(c *Client) error {
 	auth, ok := c.Transport("auth").(*HTTP)
 	if !ok {
@@ -133,19 +133,18 @@ func (a *ngcAuth) exchange(ctx context.Context) string {
 }
 
 type ngcResource struct {
-	ResourceType  string  `json:"resourceType"`
-	ResourceID    string  `json:"resourceId"`
-	OrgName       string  `json:"orgName"`
-	TeamName      string  `json:"teamName"`
-	Name          string  `json:"name"`
-	DisplayName   string  `json:"displayName"`
-	Description   string  `json:"description"`
-	DateCreated   string  `json:"dateCreated"`
-	DateModified  string  `json:"dateModified"`
-	IsPublic      bool    `json:"isPublic"`
-	GuestAccess   bool    `json:"guestAccess"`
-	WeightPopular float64 `json:"weightPopular"`
-	Labels        []struct {
+	ResourceType string `json:"resourceType"`
+	ResourceID   string `json:"resourceId"`
+	OrgName      string `json:"orgName"`
+	TeamName     string `json:"teamName"`
+	Name         string `json:"name"`
+	DisplayName  string `json:"displayName"`
+	Description  string `json:"description"`
+	DateCreated  string `json:"dateCreated"`
+	DateModified string `json:"dateModified"`
+	IsPublic     bool   `json:"isPublic"`
+	GuestAccess  bool   `json:"guestAccess"`
+	Labels       []struct {
 		Key    string   `json:"key"`
 		Values []string `json:"values"`
 	} `json:"labels"`
@@ -156,15 +155,11 @@ type ngcResource struct {
 }
 
 func (ngcAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
-	key := ngcSortKeys[sort.ID]
 	query := strings.TrimSpace(req.GetQuery())
+	id := sort.ID
 	// Score means nothing without a query, popularity does
-	if sort.ID == SortRelevance && query == "" {
-		key = ngcSortKeys[SortDownloads]
-	}
-	dir := key.dir
-	if sort.Ascending {
-		dir = ngcFlip(dir)
+	if id == SortRelevance && query == "" {
+		id = SortDownloads
 	}
 	page := Offset(req.GetCursor())
 	type order struct {
@@ -181,7 +176,7 @@ func (ngcAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 		"query":    query,
 		"page":     page,
 		"pageSize": c.Limit(req),
-		"orderBy":  []order{{Field: key.field, Value: dir}},
+		"orderBy":  []order{{Field: c.cat.SortKeys[id], Value: direction(sort.Ascending != ngcAscending[id], "ASC", "DESC")}},
 		"filters":  filters,
 	})
 	if err != nil {
@@ -191,8 +186,7 @@ func (ngcAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 		ResultPageTotal int    `json:"resultPageTotal"`
 		ResultTotal     uint64 `json:"resultTotal"`
 		Results         []struct {
-			GroupValue string        `json:"groupValue"`
-			Resources  []ngcResource `json:"resources"`
+			Resources []ngcResource `json:"resources"`
 		} `json:"results"`
 	}
 	if _, err := c.JSON(ctx, c.URL("v2", "search", "catalog", "resources", ngcResourceModel), url.Values{"q": {string(data)}}, &body); err != nil {
@@ -235,13 +229,6 @@ func ngcNumberedOrg(resourceID string) bool {
 	return org != "" && strings.Trim(org, "0123456789") == ""
 }
 
-func ngcFlip(dir string) string {
-	if dir == "ASC" {
-		return "DESC"
-	}
-	return "ASC"
-}
-
 func ngcHit(c *Client, r ngcResource) *v1.SearchHit {
 	labels := map[string][]string{}
 	for _, l := range r.Labels {
@@ -259,18 +246,10 @@ func ngcHit(c *Client, r ngcResource) *v1.SearchHit {
 	if p := labels["publisher"]; len(p) > 0 && p[0] != "" {
 		author = p[0]
 	}
-	hit := &v1.SearchHit{
-		Repo:        r.ResourceID,
-		Name:        name,
-		Author:      author,
-		Description: Excerpt(StripTags(r.Description), 240),
-		Task:        attrs["application"],
-		Gated:       !r.GuestAccess,
-		Url:         ngcPageURL(c, r.OrgName, r.TeamName, r.Name),
-		CreatedAt:   Stamp(r.DateCreated),
-		UpdatedAt:   Stamp(r.DateModified),
-		Extra:       map[string]string{},
-	}
+	hit := newHit(r.ResourceID, name, author)
+	hit.Description, hit.Task, hit.Gated = Summary(r.Description), attrs["application"], !r.GuestAccess
+	hit.Url = ngcPageURL(c, r.OrgName, r.TeamName, r.Name)
+	hit.CreatedAt, hit.UpdatedAt = Stamp(r.DateCreated), Stamp(r.DateModified)
 	if strings.EqualFold(hit.Task, "other") {
 		hit.Task = ""
 	}
@@ -305,27 +284,13 @@ func ngcHit(c *Client, r ngcResource) *v1.SearchHit {
 }
 
 type ngcModelInfo struct {
-	Name                     string `json:"name"`
-	OrgName                  string `json:"orgName"`
-	TeamName                 string `json:"teamName"`
-	Description              string `json:"description"`
-	ShortDescription         string `json:"shortDescription"`
-	DisplayName              string `json:"displayName"`
-	LatestVersionIDStr       string `json:"latestVersionIdStr"`
-	LatestVersionSizeInBytes uint64 `json:"latestVersionSizeInBytes"`
-	ModelFormat              string `json:"modelFormat"`
-	Precision                string `json:"precision"`
-	Application              string `json:"application"`
-	Publisher                string `json:"publisher"`
-	CanGuestDownload         bool   `json:"canGuestDownload"`
+	Description        string `json:"description"`
+	ShortDescription   string `json:"shortDescription"`
+	LatestVersionIDStr string `json:"latestVersionIdStr"`
 }
 
 type ngcPagination struct {
-	Index        int             `json:"index"`
-	Size         int             `json:"size"`
-	TotalResults int             `json:"totalResults"`
-	TotalPages   int             `json:"totalPages"`
-	NextPage     json.RawMessage `json:"nextPage"`
+	NextPage json.RawMessage `json:"nextPage"`
 }
 
 // Reads the next page marker, which arrives as a string or a number
@@ -393,7 +358,7 @@ func (ngcAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v
 	return model, nil
 }
 
-// Turns the catalog's base64 digest into lower case hex, empty when it is not a sha256
+// Turns the catalog's base64 digest into lower case hex, empty unless it is a sha256
 func ngcHexDigest(b64 string) string {
 	b64 = strings.TrimSpace(b64)
 	raw, err := base64.StdEncoding.DecodeString(b64)
@@ -442,7 +407,7 @@ func (ngcAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revi
 				Default:   v.VersionID == info.LatestVersionIDStr,
 				SizeBytes: v.TotalSizeInBytes,
 				UpdatedAt: Stamp(v.CreatedDate),
-				Detail:    Excerpt(StripTags(v.Description), 240),
+				Detail:    Summary(v.Description),
 			})
 		}
 		next := body.PaginationInfo.next()
@@ -466,10 +431,7 @@ func (ngcAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v1.M
 	card := &v1.ModelCard{Url: ngcPageURL(c, org, team, name)}
 	info, err := ngcInfo(ctx, c, org, team, name)
 	if err != nil {
-		if IsStatus(err, 404) {
-			return card, nil
-		}
-		return nil, err
+		return cardOrEmpty(card.Url, err)
 	}
 	card.Markdown = info.Description
 	if card.Markdown == "" {
@@ -492,20 +454,14 @@ func (ngcAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1
 
 // Splits org/team/name or org/name
 func ngcSplit(repo string) (org, team, name string, err error) {
-	parts := strings.Split(strings.Trim(strings.TrimSpace(repo), "/"), "/")
-	bad := fmt.Errorf("repo %q: want org/name or org/team/name", repo)
-	for _, p := range parts {
-		if p == "" {
-			return "", "", "", bad
-		}
+	parts, err := segments("repo", repo, "org/name or org/team/name", 2, 3)
+	if err != nil {
+		return "", "", "", err
 	}
-	switch len(parts) {
-	case 2:
+	if len(parts) == 2 {
 		return parts[0], "", parts[1], nil
-	case 3:
-		return parts[0], parts[1], parts[2], nil
 	}
-	return "", "", "", bad
+	return parts[0], parts[1], parts[2], nil
 }
 
 // Joins the parts back into the repo nebu stores
@@ -518,9 +474,8 @@ func ngcJoin(org, team, name string) string {
 
 // Builds the human catalog page for a model
 func ngcPageURL(c *Client, org, team, name string) string {
-	u := c.Web() + "/orgs/" + url.PathEscape(org)
-	if team != "" {
-		u += "/teams/" + url.PathEscape(team)
+	if team == "" {
+		return c.Page("orgs", org, "models", name)
 	}
-	return u + "/models/" + url.PathEscape(name)
+	return c.Page("orgs", org, "teams", team, "models", name)
 }

@@ -40,16 +40,6 @@ func newHFCLITransport(cfg map[string]string, env transportEnv) (Transport, erro
 	return &HFCLI{command: cfg["command"], endpoint: cfg["endpoint"], token: envValue(cfg, "token_env"), dir: filepath.Join(env.cacheDir, TransportHFCLI)}, nil
 }
 
-// Splits repo@revision/path into its parts
-func splitRepoRef(locator string) (repo, ref, rest string) {
-	repo, tail, ok := strings.Cut(locator, "@")
-	if !ok {
-		return locator, "", ""
-	}
-	ref, rest, _ = strings.Cut(tail, "/")
-	return repo, ref, rest
-}
-
 // Cannot list, the Hub API does that
 func (h *HFCLI) List(context.Context, string) ([]*v1.Artifact, error) {
 	return nil, fmt.Errorf("listing through the CLI: %w", ErrUnsupported)
@@ -61,7 +51,13 @@ func (h *HFCLI) Open(ctx context.Context, locator string, size int64) (Blob, err
 	if repo == "" || rel == "" {
 		return nil, fmt.Errorf("locator %q: want repo@revision/path", locator)
 	}
-	return &cliBlob{cli: h, repo: repo, ref: ref, rel: rel, size: size}, nil
+	return &lazyBlob{size: size, land: func(ctx context.Context, progress func(int64)) (Blob, error) {
+		path, err := h.download(ctx, repo, ref, rel, progress)
+		if err != nil {
+			return nil, err
+		}
+		return openFile(path, true)
+	}}, nil
 }
 
 // Downloads a file and reads it whole, capped
@@ -71,7 +67,7 @@ func (h *HFCLI) Read(ctx context.Context, locator string, max int64) ([]byte, er
 		return nil, err
 	}
 	defer b.Close()
-	path, err := b.(*cliBlob).Materialize(ctx, nil)
+	path, err := b.(Materializer).Materialize(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -150,45 +146,4 @@ func (h *HFCLI) download(ctx context.Context, repo, ref, rel string, progress fu
 			report()
 		}
 	}
-}
-
-// A file the CLI downloads on demand, read in place afterwards
-type cliBlob struct {
-	cli  *HFCLI
-	repo string
-	ref  string
-	rel  string
-	size int64
-	file Blob
-}
-
-// Downloads the file once and returns where it landed
-func (b *cliBlob) Materialize(ctx context.Context, progress func(int64)) (string, error) {
-	if b.file == nil {
-		path, err := b.cli.download(ctx, b.repo, b.ref, b.rel, progress)
-		if err != nil {
-			return "", err
-		}
-		if b.file, err = openFile(path, true); err != nil {
-			return "", err
-		}
-		b.size = b.file.Size()
-	}
-	return b.file.(*fileBlob).Name(), nil
-}
-
-func (b *cliBlob) ReadAt(p []byte, off int64) (int, error) {
-	if _, err := b.Materialize(context.Background(), nil); err != nil {
-		return 0, err
-	}
-	return b.file.ReadAt(p, off)
-}
-
-func (b *cliBlob) Size() int64 { return b.size }
-
-func (b *cliBlob) Close() error {
-	if b.file != nil {
-		return b.file.Close()
-	}
-	return nil
 }

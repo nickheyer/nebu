@@ -31,9 +31,9 @@ var ollama = &Catalog{
 	RepoPattern:   `^[\w.-]+(/[\w.-]+)?(:[\w.-]+)?$`,
 	RevisionLabel: "tag",
 	Sorts:         []string{SortDownloads, SortCreated},
+	SortKeys:      map[string]string{SortDownloads: "popular", SortCreated: "newest"},
 	Reversible:    []string{SortDownloads, SortCreated},
 	Facets:        []*v1.Facet{olCapabilities()},
-	DefaultLimit:  30,
 	MaxLimit:      200,
 	HitFields:     []*v1.ConfigField{{Name: "sizes", Label: "Sizes", Description: "A size this model is published in, in parameters"}},
 	API:           ollamaAPI{},
@@ -43,17 +43,10 @@ func init() { register(ollama) }
 
 const (
 	olNamespace     = "library"
-	olTag           = "latest"
 	olPageMax       = 8 << 20
 	olUpdatedLayout = "Jan 2, 2006 3:04 PM UTC"
 	olLayerPrefix   = "application/vnd.ollama.image."
 )
-
-// Library sort values by shared sort id
-var olSortKeys = map[string]string{
-	SortDownloads: "popular",
-	SortCreated:   "newest",
-}
 
 // Categories the library's c parameter accepts
 func olCapabilities() *v1.Facet {
@@ -64,27 +57,12 @@ func olCapabilities() *v1.Facet {
 	return facet
 }
 
-// The Ollama library: a site scraped for listings, tags, and cards, and a distribution registry for manifests and layers
+// The Ollama library: a site scraped for listings, tags, cards, a registry for layers
 type ollamaAPI struct{}
 
 // Splits name[:tag] into the model name and its tag, an explicit revision wins
 func olSplit(repo, revision string) (string, string) {
-	name, tag := SplitTag(strings.TrimSpace(repo), "")
-	if r := strings.TrimSpace(revision); r != "" {
-		tag = r
-	}
-	if tag == "" {
-		tag = olTag
-	}
-	return name, tag
-}
-
-// Returns the registry repository, bare names live under the library namespace
-func olRepoPath(name string) string {
-	if strings.Contains(name, "/") {
-		return name
-	}
-	return olNamespace + "/" + name
+	return splitRef(repo, strings.TrimSpace(revision), latestTag)
 }
 
 // Returns the owner of a model, the library itself for bare names
@@ -107,7 +85,7 @@ var (
 )
 
 func (ollamaAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
-	q := url.Values{"sort": {olSortKeys[sort.ID]}}
+	q := url.Values{"sort": {sort.Key}}
 	query := strings.TrimSpace(req.GetQuery())
 	if query != "" {
 		q.Set("q", query)
@@ -145,15 +123,10 @@ func olHit(c *Client, block string) *v1.SearchHit {
 		return nil
 	}
 	name := m[1]
-	hit := &v1.SearchHit{
-		Repo:   name,
-		Name:   name,
-		Author: olAuthor(name),
-		Url:    c.URL(olRepoPath(name)),
-		Extra:  map[string]string{},
-	}
+	hit := newHit(name, name, olAuthor(name))
+	hit.Url = c.URL(namespaced(name, olNamespace))
 	if d := olDescRe.FindStringSubmatch(block); d != nil {
-		hit.Description = Excerpt(StripTags(d[1]), 240)
+		hit.Description = Summary(d[1])
 	}
 	for _, chip := range olChipRe.FindAllStringSubmatch(block, -1) {
 		if t := StripTags(chip[1]); t != "" {
@@ -207,12 +180,12 @@ var (
 
 func (ollamaAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
 	name, _ := olSplit(repo, "")
-	page, err := c.Text(ctx, c.URL(olRepoPath(name), "tags"), nil, olPageMax)
+	page, err := c.Text(ctx, c.URL(namespaced(name, olNamespace), "tags"), nil, olPageMax)
 	if err != nil {
 		return nil, err
 	}
 	// Every tag is on the page twice, once per layout, so rows merge by tag
-	prefix := olRepoPath(name) + ":"
+	prefix := namespaced(name, olNamespace) + ":"
 	locs := olTagLinkRe.FindAllStringSubmatchIndex(page, -1)
 	byTag := map[string]*v1.Revision{}
 	var out []*v1.Revision
@@ -228,7 +201,7 @@ func (ollamaAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.R
 		}
 		rev := byTag[tag]
 		if rev == nil {
-			rev = &v1.Revision{Name: tag, Repo: name + ":" + tag, Default: tag == olTag}
+			rev = &v1.Revision{Name: tag, Repo: name + ":" + tag, Default: tag == latestTag}
 			byTag[tag] = rev
 			out = append(out, rev)
 		}
@@ -268,7 +241,7 @@ func (ollamaAPI) Resolve(ctx context.Context, c *Client, repo, revision string) 
 	if name == "" {
 		return nil, fmt.Errorf("empty repo")
 	}
-	path := olRepoPath(name)
+	path := namespaced(name, olNamespace)
 	m, err := c.Distribution().Manifest(ctx, path, tag)
 	if err != nil {
 		return nil, err
@@ -286,10 +259,10 @@ func (ollamaAPI) Resolve(ctx context.Context, c *Client, repo, revision string) 
 		model.Commit = olDigestOf(m.Layers)
 	}
 	base := strings.ReplaceAll(name, "/", "-") + "-" + tag
-	names := olNamer{}
+	names := namer{}
 	for _, l := range m.Layers {
 		model.Artifacts = append(model.Artifacts, &v1.Artifact{
-			Path:      names.name(base, cfg.FileType, l.MediaType),
+			Path:      names.unique(olLayerName(base, cfg.FileType, l.MediaType)),
 			SizeBytes: uint64(l.Size),
 			Sha256:    Hex(l.Digest),
 		})
@@ -306,44 +279,34 @@ func olDigestOf(layers []Descriptor) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Counts file stems handed out so repeats get a numbered suffix
-type olNamer map[string]int
-
-// Names a layer by its kind, the weights carry the quant so the GGUF rules group them
-func (n olNamer) name(base, fileType, mediaType string) string {
+// Names a layer by its kind, weights carry the quant so GGUF rules group them
+func olLayerName(base, fileType, mediaType string) string {
 	kind := strings.TrimPrefix(mediaType, olLayerPrefix)
 	if i := strings.LastIndex(kind, "."); i >= 0 {
 		kind = kind[i+1:]
 	}
-	var stem, ext string
 	switch kind {
 	case "model":
-		stem, ext = base, ".gguf"
 		if fileType != "" {
-			stem += "-" + fileType
+			return base + "-" + fileType + ".gguf"
 		}
+		return base + ".gguf"
 	case "projector":
-		stem, ext = "mmproj-"+base, ".gguf"
+		return "mmproj-" + base + ".gguf"
 	case "template":
-		stem, ext = "template", ".txt"
+		return "template.txt"
 	case "params":
-		stem, ext = "params", ".json"
+		return "params.json"
 	case "system":
-		stem, ext = "system", ".txt"
+		return "system.txt"
 	case "license":
-		stem = "LICENSE"
+		return "LICENSE"
 	case "adapter":
-		stem, ext = "adapter", ".bin"
+		return "adapter.bin"
 	case "":
-		stem, ext = "layer", ".bin"
-	default:
-		stem, ext = kind, ".bin"
+		return "layer.bin"
 	}
-	n[stem]++
-	if count := n[stem]; count > 1 {
-		return fmt.Sprintf("%s-%d%s", stem, count, ext)
-	}
-	return stem + ext
+	return kind + ".bin"
 }
 
 var (
@@ -354,13 +317,10 @@ var (
 
 func (ollamaAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v1.ModelCard, error) {
 	name, _ := olSplit(repo, revision)
-	page := c.URL(olRepoPath(name))
+	page := c.URL(namespaced(name, olNamespace))
 	text, err := c.Text(ctx, page, nil, cardMax)
 	if err != nil {
-		if IsStatus(err, 404) {
-			return &v1.ModelCard{Url: page}, nil
-		}
-		return nil, err
+		return cardOrEmpty(page, err)
 	}
 	card := &v1.ModelCard{Url: page}
 	if m := olReadmeRe.FindStringSubmatch(text); m != nil {
@@ -392,11 +352,11 @@ func olDescription(page string) string {
 
 func (ollamaAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error) {
 	if artifact.GetSizeBytes() == 0 {
-		return nil, fmt.Errorf("%s: unknown size", artifact.GetPath())
+		return nil, unknown(artifact.GetPath(), "size")
 	}
 	if artifact.GetSha256() == "" {
-		return nil, fmt.Errorf("%s: unknown digest", artifact.GetPath())
+		return nil, unknown(artifact.GetPath(), "digest")
 	}
 	name, _ := olSplit(model.GetRepo(), model.GetRevision())
-	return c.Distribution().Blob(olRepoPath(name), "sha256:"+artifact.GetSha256(), int64(artifact.GetSizeBytes()))
+	return c.Distribution().Blob(namespaced(name, olNamespace), "sha256:"+artifact.GetSha256(), int64(artifact.GetSizeBytes()))
 }

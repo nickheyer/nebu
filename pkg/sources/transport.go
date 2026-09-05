@@ -103,7 +103,6 @@ var transportFields = map[string][]fieldDef{
 // What a transport is built from
 type transportEnv struct {
 	cacheDir string
-	use      string
 }
 
 // Builds a transport of one kind from the use's resolved settings by bare name

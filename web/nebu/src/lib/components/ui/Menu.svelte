@@ -2,7 +2,7 @@
   import { DropdownMenu } from 'bits-ui';
   import { goto } from '$app/navigation';
   import { Ellipsis } from '@lucide/svelte';
-  import type { Component, Snippet } from 'svelte';
+  import type { Component } from 'svelte';
 
   export interface MenuItem {
     label: string;
@@ -14,28 +14,19 @@
     separator?: boolean;
   }
 
-  let {
-    items,
-    trigger,
-    align = 'end',
-    label = 'Actions'
-  }: { items: MenuItem[]; trigger?: Snippet; align?: 'start' | 'end'; label?: string } = $props();
+  let { items }: { items: MenuItem[] } = $props();
 </script>
 
 <DropdownMenu.Root>
   <DropdownMenu.Trigger
     class="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-raised hover:text-fg data-[state=open]:bg-raised data-[state=open]:text-fg"
-    aria-label={label}
+    aria-label="Actions"
     onclick={(e: MouseEvent) => e.stopPropagation()}
   >
-    {#if trigger}{@render trigger()}{:else}<Ellipsis size={16} />{/if}
+    <Ellipsis size={16} />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
-    <DropdownMenu.Content
-      {align}
-      sideOffset={4}
-      class="enter-up z-[60] min-w-44 rounded-lg border border-line bg-overlay p-1 shadow-pop focus:outline-none"
-    >
+    <DropdownMenu.Content align="end" sideOffset={4} class="enter-up z-[60] min-w-44 rounded-lg border border-line bg-overlay p-1 shadow-pop focus:outline-none">
       {#each items as item, i (i)}
         {#if item.separator}
           <DropdownMenu.Separator class="my-1 h-px bg-line" />

@@ -40,6 +40,11 @@ type prebuiltRule struct {
 	when *eval.Expr
 }
 
+type reportRule struct {
+	spec *v1.ReportRule
+	re   *regexp.Regexp
+}
+
 // Manifest probe with its compiled pattern
 type Probe struct {
 	Spec    *v1.CommandProbe
@@ -346,4 +351,42 @@ func convert(p *v1.Param, raw string) (any, error) {
 		return b, nil
 	}
 	return raw, nil
+}
+
+// Sums allocations the runtime reported, keyed by rule
+func (rt *Runtime) Measure(lines []string) []*v1.Measurement {
+	var out []*v1.Measurement
+	byKey := map[string]*v1.Measurement{}
+	for _, r := range rt.report {
+		for _, line := range lines {
+			m := r.re.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			var value, unit string
+			for i, name := range r.re.SubexpNames() {
+				switch name {
+				case "value":
+					value = m[i]
+				case "unit":
+					unit = m[i]
+				}
+			}
+			if unit == "" {
+				unit = r.spec.GetUnit()
+			}
+			bytes, err := eval.Bytes(value, unit)
+			if err != nil {
+				continue
+			}
+			ms, ok := byKey[r.spec.GetKey()]
+			if !ok {
+				ms = &v1.Measurement{Key: r.spec.GetKey(), Line: line}
+				byKey[r.spec.GetKey()] = ms
+				out = append(out, ms)
+			}
+			ms.Bytes += bytes
+		}
+	}
+	return out
 }

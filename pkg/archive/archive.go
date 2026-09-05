@@ -22,11 +22,11 @@ func Extract(archive, dir string) error {
 	case strings.HasSuffix(archive, ".zip"):
 		return extractZip(archive, dir)
 	}
-	return Sniff(archive, dir)
+	return sniff(archive, dir)
 }
 
 // Extracts by content when the name carries no usable extension
-func Sniff(archive, dir string) error {
+func sniff(archive, dir string) error {
 	f, err := os.Open(archive)
 	if err != nil {
 		return err
@@ -52,9 +52,15 @@ func Root(dir string) string {
 	return filepath.Join(dir, entries[0].Name())
 }
 
+// Reports whether path stays under dir
+func Within(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && !strings.HasPrefix(rel, "..")
+}
+
 func target(dir, name string) (string, error) {
 	clean := filepath.Join(dir, filepath.FromSlash(name))
-	if rel, err := filepath.Rel(dir, clean); err != nil || strings.HasPrefix(rel, "..") {
+	if !Within(dir, clean) {
 		return "", fmt.Errorf("archive entry %q escapes %s", name, dir)
 	}
 	if err := noSymlinkParents(dir, clean); err != nil {
@@ -94,8 +100,7 @@ func checkLink(dir, path, linkname string) error {
 	if filepath.IsAbs(linkname) {
 		return fmt.Errorf("archive symlink %q points at an absolute path", linkname)
 	}
-	resolved := filepath.Join(filepath.Dir(path), filepath.FromSlash(linkname))
-	if rel, err := filepath.Rel(dir, resolved); err != nil || strings.HasPrefix(rel, "..") {
+	if !Within(dir, filepath.Join(filepath.Dir(path), filepath.FromSlash(linkname))) {
 		return fmt.Errorf("archive symlink %q escapes %s", linkname, dir)
 	}
 	return nil
@@ -135,7 +140,7 @@ func extractTar(archive, dir string, gzipped bool) error {
 				return err
 			}
 		case tar.TypeReg:
-			if err := writeFile(path, tr, os.FileMode(hdr.Mode)&0o777); err != nil {
+			if err := WriteFile(path, tr, os.FileMode(hdr.Mode)&0o777); err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
@@ -174,7 +179,7 @@ func extractZip(archive, dir string) error {
 		if err != nil {
 			return err
 		}
-		err = writeFile(path, rc, entry.Mode()&0o777)
+		err = WriteFile(path, rc, entry.Mode()&0o777)
 		rc.Close()
 		if err != nil {
 			return err
@@ -183,7 +188,8 @@ func extractZip(archive, dir string) error {
 	return nil
 }
 
-func writeFile(path string, r io.Reader, mode os.FileMode) error {
+// Writes r to path with mode, 0644 when unset, never through a symlink
+func WriteFile(path string, r io.Reader, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

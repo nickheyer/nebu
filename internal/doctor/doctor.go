@@ -122,7 +122,7 @@ func (d *Doctor) Run(ctx context.Context) (*v1.DoctorReport, error) {
 		}
 		add(id, v1.CheckStatus_CHECK_STATUS_OK, detail, "")
 	}
-	// takes as long as the slowest reporter
+	// Every source is asked at once, the report waiting for the slowest
 	cfgs := d.Sources.List()
 	errs := make([]error, len(cfgs))
 	var wg sync.WaitGroup

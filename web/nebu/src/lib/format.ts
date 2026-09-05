@@ -19,6 +19,11 @@ export function bytes(n: bigint | number | undefined | null, digits = 1): string
   return (i === 0 ? v.toFixed(0) : v.toFixed(digits)) + ' ' + units[i];
 }
 
+// Formats a byte delta with its sign, the way a learned correction reads
+export function deltaBytes(n: number): string {
+  return (n < 0 ? '-' : '+') + bytes(Math.abs(n));
+}
+
 // Formats a count with thousands separators, compact above a million
 export function count(n: bigint | number | undefined): string {
   if (n === undefined) return '–';
@@ -75,10 +80,6 @@ export function tone(state: string): Tone {
     case 'canceled':
     case 'no':
       return 'bad';
-    case 'empty':
-    case 'stopped':
-    case 'skipped':
-      return 'neutral';
     default:
       return 'neutral';
   }
@@ -97,6 +98,20 @@ export function verdictLabel(v: FitVerdict | undefined): string {
   }
 }
 
+// The short words a verdict is shown under, the legend beside them spelling them out
+export function verdictWord(v: FitVerdict | undefined): string {
+  switch (v) {
+    case FitVerdict.FITS:
+      return 'Fits';
+    case FitVerdict.PARTIAL:
+      return 'Partly';
+    case FitVerdict.NO:
+      return 'Too big';
+    default:
+      return 'Unknown';
+  }
+}
+
 export function verdictTone(v: FitVerdict | undefined): Tone {
   return tone(verdictLabel(v));
 }
@@ -105,12 +120,6 @@ export function verdictTone(v: FitVerdict | undefined): Tone {
 export function when(ts?: Timestamp): string {
   if (!ts) return '–';
   return timestampDate(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-}
-
-// Formats a timestamp as a clock time only
-export function clock(ts?: Timestamp): string {
-  if (!ts) return '–';
-  return timestampDate(ts).toLocaleTimeString(undefined, { timeStyle: 'medium' });
 }
 
 // Formats a timestamp relative to now, now is passed so callers can stay reactive
@@ -135,12 +144,6 @@ export function duration(from?: Timestamp, to?: Timestamp, now: number = Date.no
   if (m < 60) return `${m}m ${s}s`;
   const h = Math.floor(m / 60);
   return `${h}h ${m - h * 60}m`;
-}
-
-// Shortens an id for display
-export function shortId(id: string | undefined, n = 8): string {
-  if (!id) return '';
-  return id.length > n ? id.slice(0, n) : id;
 }
 
 // Splits name=value pairs typed one per line or comma separated
@@ -186,21 +189,14 @@ export function parseBytes(text: string): bigint {
   return BigInt(Math.round(parseFloat(m[1]) * unit));
 }
 
-// Splits org/name into its parts
-export function splitRepo(repo: string): { org: string; name: string } {
-  const i = repo.lastIndexOf('/');
-  if (i < 0) return { org: '', name: repo };
-  return { org: repo.slice(0, i), name: repo.slice(i + 1) };
-}
-
 // Sorts by a string key
 export function byName<T>(key: (t: T) => string) {
   return (a: T, b: T) => key(a).localeCompare(key(b));
 }
 
-// Sorts newest first by a timestamp field
-export function newestFirst<T extends { createdAt?: Timestamp }>(a: T, b: T): number {
-  return Number((b.createdAt?.seconds ?? 0n) - (a.createdAt?.seconds ?? 0n));
+// Sorts newest first by the timestamp a key picks
+export function newestFirst<T>(key: (t: T) => Timestamp | undefined) {
+  return (a: T, b: T) => Number((key(b)?.seconds ?? 0n) - (key(a)?.seconds ?? 0n));
 }
 
 // Formats a context length like 32k

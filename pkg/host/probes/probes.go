@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -99,7 +98,7 @@ func Compile(spec *v1.ProbeSpec) (*Probe, error) {
 		if err != nil {
 			return nil, fmt.Errorf("probe %s device facts: %w", spec.GetId(), err)
 		}
-		when, err := compileWhen(d.GetWhen())
+		when, err := eval.CompileOptional(d.GetWhen())
 		if err != nil {
 			return nil, fmt.Errorf("probe %s device: %w", spec.GetId(), err)
 		}
@@ -115,7 +114,7 @@ func Compile(spec *v1.ProbeSpec) (*Probe, error) {
 		if err != nil {
 			return nil, fmt.Errorf("probe %s pool: %w", spec.GetId(), err)
 		}
-		when, err := compileWhen(pl.GetWhen())
+		when, err := eval.CompileOptional(pl.GetWhen())
 		if err != nil {
 			return nil, fmt.Errorf("probe %s pool: %w", spec.GetId(), err)
 		}
@@ -148,9 +147,9 @@ func (p *Probe) Run(ctx context.Context) Result {
 func (p *Probe) Emit(rows []Row) (*Emitted, error) {
 	out := &Emitted{Facts: map[string]string{}}
 	for _, row := range rows {
-		env := rowEnv(row)
+		env := eval.Anys(row)
 		if p.device != nil {
-			ok, err := whenOK(p.device.when, env)
+			ok, err := p.device.when.Holds(env)
 			if err != nil {
 				return nil, err
 			}
@@ -163,7 +162,7 @@ func (p *Probe) Emit(rows []Row) (*Emitted, error) {
 			}
 		}
 		if p.pool != nil {
-			ok, err := whenOK(p.pool.when, env)
+			ok, err := p.pool.when.Holds(env)
 			if err != nil {
 				return nil, err
 			}
@@ -299,9 +298,9 @@ func parseCSV(data []byte, columns []string) ([]Row, error) {
 		row := Row{}
 		for j, col := range columns {
 			if j < len(rec) {
-				row[Key(col)] = strings.TrimSpace(rec[j])
+				row[key(col)] = strings.TrimSpace(rec[j])
 			} else {
-				row[Key(col)] = ""
+				row[key(col)] = ""
 			}
 		}
 		rows = append(rows, withIndex(row, len(rows)))
@@ -310,13 +309,10 @@ func parseCSV(data []byte, columns []string) ([]Row, error) {
 }
 
 func parseJSON(data []byte, path string) ([]Row, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var root any
-	if err := dec.Decode(&root); err != nil {
+	node, err := eval.DecodeJSON(data)
+	if err != nil {
 		return nil, err
 	}
-	node := root
 	for _, seg := range strings.Split(path, ".") {
 		if seg == "" {
 			continue
@@ -365,7 +361,7 @@ func parseKV(data []byte, sep string) []Row {
 		for _, line := range strings.Split(block, "\n") {
 			k, v, ok := splitKV(line)
 			if ok {
-				row[Key(k)] = v
+				row[key(k)] = v
 			}
 		}
 		if len(row) > 0 {
@@ -382,7 +378,7 @@ func parseRegex(data []byte, re *regexp.Regexp) []Row {
 		row := Row{}
 		for i, name := range names {
 			if name != "" && i < len(m) {
-				row[Key(name)] = strings.TrimSpace(m[i])
+				row[key(name)] = strings.TrimSpace(m[i])
 			}
 		}
 		rows = append(rows, withIndex(row, len(rows)))
@@ -400,7 +396,7 @@ func splitKV(line string) (string, string, bool) {
 }
 
 func flatten(prefix string, m map[string]any, into Row) Row {
-	eval.Flatten(prefix, m, into, Key)
+	eval.Flatten(prefix, m, into, key)
 	return into
 }
 
@@ -414,40 +410,15 @@ func withIndex(row Row, i int) Row {
 var keyClean = regexp.MustCompile(`[^A-Za-z0-9]+`)
 
 // Normalizes a field name to identifier characters
-func Key(s string) string {
+func key(s string) string {
 	return strings.Trim(keyClean.ReplaceAllString(strings.TrimSpace(s), "_"), "_")
 }
-
-// Parses a byte count with an inline or default unit
-func Bytes(s, unit string) (uint64, error) { return eval.Bytes(s, unit) }
 
 func optionalBytes(s, unit string) (uint64, error) {
 	if strings.TrimSpace(s) == "" {
 		return 0, nil
 	}
-	return Bytes(s, unit)
-}
-
-func compileWhen(src string) (*eval.Expr, error) {
-	if strings.TrimSpace(src) == "" {
-		return nil, nil
-	}
-	return eval.Compile(src)
-}
-
-func whenOK(e *eval.Expr, env map[string]any) (bool, error) {
-	if e == nil {
-		return true, nil
-	}
-	return e.Bool(env)
-}
-
-func rowEnv(row Row) map[string]any {
-	env := make(map[string]any, len(row))
-	for k, v := range row {
-		env[k] = v
-	}
-	return env
+	return eval.Bytes(s, unit)
 }
 
 func nonEmpty(m map[string]string) map[string]string {

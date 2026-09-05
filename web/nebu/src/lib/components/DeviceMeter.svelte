@@ -4,7 +4,7 @@
   import { Cpu, Microchip } from '@lucide/svelte';
   import Meter from './ui/Meter.svelte';
 
-  let { device, pool, compact = false }: { device: Device; pool?: MemoryPool; compact?: boolean } = $props();
+  let { device, pool }: { device: Device; pool?: MemoryPool } = $props();
 
   const total = $derived(pool?.totalBytes ?? device.memoryTotalBytes);
   const free = $derived(pool?.freeBytes ?? device.memoryFreeBytes);
@@ -31,12 +31,10 @@
   </div>
   {#if total > 0n}
     <Meter value={used} max={total} height="lg" />
-    {#if !compact}
-      <div class="flex items-center justify-between text-xs tabular-nums">
-        <span class="text-fg-muted">{bytes(used)} used</span>
-        <span class="text-fg-faint">{bytes(free)} free of {bytes(total)}</span>
-      </div>
-    {/if}
+    <div class="flex items-center justify-between text-xs tabular-nums">
+      <span class="text-fg-muted">{bytes(used)} used</span>
+      <span class="text-fg-faint">{bytes(free)} free of {bytes(total)}</span>
+    </div>
   {:else}
     <div class="text-xs text-fg-faint">No dedicated memory, plans place bytes in the host pool</div>
   {/if}

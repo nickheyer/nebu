@@ -35,13 +35,3 @@ export function fail(err: unknown, title = 'Something went wrong') {
 export function ok(title: string, detail?: string, link?: { href: string; label: string }) {
   toast({ tone: 'ok', title, detail, href: link?.href, linkLabel: link?.label });
 }
-
-// Runs an operation, toasting on failure, returning undefined then
-export async function attempt<T>(title: string, fn: () => Promise<T>): Promise<T | undefined> {
-  try {
-    return await fn();
-  } catch (err) {
-    fail(err, title);
-    return undefined;
-  }
-}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path"
 	"regexp"
 	"sort"
@@ -15,53 +16,6 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/sources"
 )
-
-const (
-	firstChunk = 1 << 20
-	maxChunk   = 32 << 20
-)
-
-// Reads a blob sequentially in chunks that double in size
-type chunkReader struct {
-	ra    io.ReaderAt
-	size  int64
-	off   int64
-	chunk int64
-	buf   []byte
-	pos   int
-}
-
-// Wraps a blob so header parsers issue few range reads
-func NewChunkReader(ra io.ReaderAt, size int64) io.Reader {
-	return &chunkReader{ra: ra, size: size, chunk: firstChunk}
-}
-
-func (c *chunkReader) Read(p []byte) (int, error) {
-	if c.pos >= len(c.buf) {
-		if c.off >= c.size {
-			return 0, io.EOF
-		}
-		n := min(c.chunk, c.size-c.off)
-		if int64(cap(c.buf)) < n {
-			c.buf = make([]byte, n)
-		}
-		c.buf = c.buf[:n]
-		read, err := c.ra.ReadAt(c.buf, c.off)
-		if err != nil && err != io.EOF {
-			return 0, err
-		}
-		if read == 0 {
-			return 0, io.EOF
-		}
-		c.buf = c.buf[:read]
-		c.off += int64(read)
-		c.pos = 0
-		c.chunk = min(c.chunk*2, maxChunk)
-	}
-	n := copy(p, c.buf[c.pos:])
-	c.pos += n
-	return n, nil
-}
 
 // Returned when a weight group cannot be found
 var ErrUnknownGroup = errors.New("unknown weight group")
@@ -97,6 +51,108 @@ type Constructors map[string]Constructor
 // Readers keyed by format id
 type Readers map[string]Reader
 
+// Reads a whole artifact, refusing one declared larger than limit
+func ReadAll(ctx context.Context, open Opener, a *v1.Artifact, limit int64) ([]byte, error) {
+	if a.GetSizeBytes() > uint64(limit) {
+		return nil, fmt.Errorf("%d bytes is too large to read whole", a.GetSizeBytes())
+	}
+	blob, err := open(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	defer blob.Close()
+	buf := make([]byte, blob.Size())
+	if _, err := blob.ReadAt(buf, 0); err != nil && err != io.EOF {
+		return nil, err
+	}
+	return buf, nil
+}
+
+// Reads each weight through parse, first metadata value winning across shards
+func EachWeight(ctx context.Context, open Opener, g *Group, parse func(ra io.ReaderAt, size int64) (map[string]string, []*v1.TensorInfo, error)) (*v1.RawModel, error) {
+	raw := &v1.RawModel{FormatId: g.FormatID, Group: g.Name, Metadata: map[string]string{}}
+	for _, a := range g.Weights {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		blob, err := open(ctx, a)
+		if err != nil {
+			return nil, err
+		}
+		metadata, tensors, err := parse(blob, blob.Size())
+		blob.Close()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", a.GetPath(), err)
+		}
+		for k, v := range metadata {
+			if _, exists := raw.Metadata[k]; !exists {
+				raw.Metadata[k] = v
+			}
+		}
+		raw.Tensors = append(raw.Tensors, tensors...)
+	}
+	return raw, nil
+}
+
+// Counts the elements a shape holds
+func Elements(shape []uint64) uint64 {
+	n := uint64(1)
+	for _, d := range shape {
+		n *= d
+	}
+	return n
+}
+
+// Describes a tensor from its shape and a dtype name Dtype knows
+func Tensor(name, dtype string, shape []uint64) *v1.TensorInfo {
+	label, width, _ := Dtype(dtype)
+	elements := Elements(shape)
+	return &v1.TensorInfo{Name: name, Dtype: label, Elements: elements, Bytes: uint64(math.Ceil(float64(elements) * width))}
+}
+
+// Maps a torch storage class, dtype, or numpy type string to label and width
+func Dtype(name string) (label string, width float64, ok bool) {
+	n := strings.ToLower(strings.TrimSpace(name))
+	n = strings.TrimPrefix(n, "torch.")
+	n = strings.TrimSuffix(n, "storage")
+	n = strings.TrimLeft(n, "<>|=")
+	switch n {
+	case "float", "float32", "f4":
+		return "F32", 4, true
+	case "half", "float16", "f2":
+		return "F16", 2, true
+	case "bfloat16", "bf16":
+		return "BF16", 2, true
+	case "double", "float64", "f8":
+		return "F64", 8, true
+	case "long", "int64", "i8":
+		return "I64", 8, true
+	case "int", "int32", "i4":
+		return "I32", 4, true
+	case "short", "int16", "i2":
+		return "I16", 2, true
+	case "char", "int8", "i1":
+		return "I8", 1, true
+	case "byte", "uint8", "u1":
+		return "U8", 1, true
+	case "bool", "b1":
+		return "BOOL", 1, true
+	case "float8_e4m3fn", "float8_e4m3fnuz":
+		return "F8_E4M3", 1, true
+	case "float8_e5m2", "float8_e5m2fnuz":
+		return "F8_E5M2", 1, true
+	case "complexfloat", "complex64", "c8":
+		return "C64", 8, true
+	case "complexdouble", "complex128", "c16":
+		return "C128", 16, true
+	case "quint8", "qint8":
+		return "Q8", 1, true
+	case "qint32":
+		return "Q32", 4, true
+	}
+	return "", 0, false
+}
+
 // Builds readers for every spec whose reader has a constructor
 //
 // A spec names its reader, so two formats can share one parser, and defaults
@@ -104,7 +160,7 @@ type Readers map[string]Reader
 func BuildReaders(specs []*v1.FormatSpec, ctors Constructors) (Readers, error) {
 	out := Readers{}
 	for _, s := range specs {
-		ctor, ok := ctors[ReaderID(s)]
+		ctor, ok := ctors[readerID(s)]
 		if !ok {
 			continue
 		}
@@ -118,7 +174,7 @@ func BuildReaders(specs []*v1.FormatSpec, ctors Constructors) (Readers, error) {
 }
 
 // Names the reader a format spec parses with
-func ReaderID(s *v1.FormatSpec) string {
+func readerID(s *v1.FormatSpec) string {
 	if r := s.GetReader(); r != "" {
 		return r
 	}

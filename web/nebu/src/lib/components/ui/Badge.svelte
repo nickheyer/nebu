@@ -1,5 +1,4 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte';
   import type { Tone } from '$lib/format';
 
   let {
@@ -7,10 +6,9 @@
     dot = false,
     pulse = false,
     size = 'sm',
-    children,
     label,
     class: cls = ''
-  }: { tone?: Tone; dot?: boolean; pulse?: boolean; size?: 'xs' | 'sm'; children?: Snippet; label?: string; class?: string } = $props();
+  }: { tone?: Tone; dot?: boolean; pulse?: boolean; size?: 'xs' | 'sm'; label?: string; class?: string } = $props();
 
   const tones: Record<Tone, string> = {
     ok: 'bg-ok/12 text-ok border-ok/25',
@@ -31,5 +29,4 @@
     <span class="relative inline-block h-1.5 w-1.5 rounded-full bg-current {pulse ? 'pulse' : ''}"></span>
   {/if}
   {#if label}{label}{/if}
-  {@render children?.()}
 </span>

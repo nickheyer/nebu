@@ -5,11 +5,10 @@ import type { FitRow } from '$proto/estimate_pb';
 import { FitVerdict } from '$proto/estimate_pb';
 import type { Descriptor } from '$proto/model_pb';
 import type { Tone } from './format';
-import { ctx } from './format';
-import { live } from './state.svelte';
+import { ctx, verdictWord } from './format';
 
 // What the daemon calls the provider behind a source
-export function providerName(s: SourceStatus | undefined): string {
+function providerName(s: SourceStatus | undefined): string {
   return s?.capabilities?.name || 'Source';
 }
 
@@ -112,11 +111,6 @@ export function looksLikeRepo(caps: SourceCapabilities | undefined, text: string
   }
 }
 
-// Picks the source with a given id, else the first
-export function pickSource(statuses: SourceStatus[], id: string): SourceStatus | undefined {
-  return statuses.find((s) => s.source?.id === id) ?? statuses[0];
-}
-
 // Picks the provider group of a kind, else the one holding the source, else the first
 export function pickGroup(groups: ProviderGroup[], kind: SourceKind, sourceId: string): ProviderGroup | undefined {
   return groups.find((g) => g.kind === kind) ?? groups.find((g) => g.sources.some((s) => s.source?.id === sourceId)) ?? groups[0];
@@ -177,18 +171,6 @@ export function orderDescriptors(descriptors: Descriptor[], rows: FitRow[]): Des
   return [...descriptors].sort((a, b) => rank(b) - rank(a) || Number(b.totalBytes - a.totalBytes));
 }
 
-// What a weight format is, in the words its spec carries
-export function formatBlurb(id: string): string {
-  const f = live.formats.get(id);
-  return f?.blurb || f?.description || `${id} weight files`;
-}
-
-// Every format the daemon reads, as one sentence fragment
-export function formatNames(): string {
-  const names = [...live.formats.values()].map((f) => f.description || f.id);
-  return names.length > 1 ? names.slice(0, -1).join(', ') + ', and ' + names[names.length - 1] : (names[0] ?? 'nothing yet');
-}
-
 // The tone of a precision level, 0 unknown through 5 full
 export function precisionTone(level: number): Tone {
   return (['neutral', 'bad', 'warn', 'accent', 'ok', 'ok'] as Tone[])[level] ?? 'neutral';
@@ -205,7 +187,7 @@ export function runtimesFor(formats: string[], runtimes: RuntimeStatus[]): { id:
 }
 
 // The one line answer to whether a weight group fits this host
-export interface FitSummary {
+interface FitSummary {
   verdict: FitVerdict;
   // The longest context that earns the verdict
   context: number;
@@ -214,8 +196,7 @@ export interface FitSummary {
   tone: Tone;
 }
 
-// Summarises the fit rows of one group, the best verdict at the longest context,
-// against the whole memory or against what is free right now
+// A group's best verdict at its longest context, against all memory or free memory
 export function fitSummary(rows: FitRow[], group: string, free = false): FitSummary | null {
   const rank = (v: FitVerdict) => (v === FitVerdict.FITS ? 2 : v === FitVerdict.PARTIAL ? 1 : 0);
   const planOf = (r: FitRow) => (free ? r.free : r.plan);
@@ -228,8 +209,10 @@ export function fitSummary(rows: FitRow[], group: string, free = false): FitSumm
   const plan = best ? planOf(best) : undefined;
   if (!best || !plan) return null;
   const v = plan.verdict;
+  const word = verdictWord(v);
   const now = free ? ' right now' : '';
-  if (v === FitVerdict.FITS) return { verdict: v, context: best.context, runtime: best.runtimeId, label: `Fits up to ${ctx(best.context)} context${now}`, tone: 'ok' };
-  if (v === FitVerdict.PARTIAL) return { verdict: v, context: best.context, runtime: best.runtimeId, label: `Partly${now}, spills into system RAM`, tone: 'warn' };
-  return { verdict: v, context: best.context, runtime: best.runtimeId, label: free ? 'Too big for what is free right now' : 'Too big for this host', tone: 'bad' };
+  const base = { verdict: v, context: best.context, runtime: best.runtimeId };
+  if (v === FitVerdict.FITS) return { ...base, label: `${word} up to ${ctx(best.context)} context${now}`, tone: 'ok' };
+  if (v === FitVerdict.PARTIAL) return { ...base, label: `${word}${now}, spills into system RAM`, tone: 'warn' };
+  return { ...base, label: `${word} for ${free ? 'what is free right now' : 'this host'}`, tone: 'bad' };
 }

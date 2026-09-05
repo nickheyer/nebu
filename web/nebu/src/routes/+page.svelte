@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { live, clock, activeTasks, liveInstances, unackedFindings, refreshHost, slotName } from '$lib/state.svelte';
-  import { swapSlot, editSlot, newSlot, deleteSlot } from '$lib/slotActions.svelte';
-  import { ago, bytes, enumLabel, duration, newestFirst, pct } from '$lib/format';
-  import { attempt } from '$lib/toast.svelte';
+  import { live, clock, activeTasks, liveInstances, unackedFindings, probeHost, slotName } from '$lib/state.svelte';
+  import { newSlot } from '$lib/slotActions.svelte';
+  import { ago, bytes, byName, enumLabel, duration, newestFirst, pct } from '$lib/format';
   import { DeviceKind, PoolKind } from '$proto/host_pb';
   import { InstanceState } from '$proto/instance_pb';
   import { FindingKind } from '$proto/monitor_pb';
@@ -29,10 +28,10 @@
 
   const devices = $derived((live.host?.devices ?? []).filter((d) => d.kind !== DeviceKind.CPU));
   const hostPool = $derived((live.host?.pools ?? []).find((p) => p.kind === PoolKind.HOST));
-  const slots = $derived([...live.slots.values()].sort((a, b) => a.name.localeCompare(b.name)));
+  const slots = $derived([...live.slots.values()].sort(byName((s) => s.name)));
   const running = $derived(liveInstances());
   const tasks = $derived(activeTasks());
-  const recent = $derived([...live.tasks.values()].sort(newestFirst).slice(0, 6));
+  const recent = $derived([...live.tasks.values()].sort(newestFirst((t) => t.createdAt)).slice(0, 6));
   const findings = $derived(unackedFindings().slice(0, 5));
 
   function poolOf(deviceId: string) {
@@ -41,7 +40,7 @@
 
   async function probe() {
     probing = true;
-    await attempt('Probe failed', () => refreshHost(true));
+    await probeHost();
     probing = false;
   }
 </script>
@@ -114,7 +113,7 @@
     {#if slots.length}
       <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {#each slots as s (s.id)}
-          <SlotCard slot={s} onOpen={(x) => (slotId = x.id)} onSwap={swapSlot} onEdit={editSlot} onDelete={deleteSlot} />
+          <SlotCard slot={s} onOpen={(x) => (slotId = x.id)} />
         {/each}
       </div>
     {:else}

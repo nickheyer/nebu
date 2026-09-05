@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nickheyer/nebu/pkg/archive"
 	"github.com/nickheyer/nebu/pkg/build/sandbox"
 	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -76,7 +77,7 @@ func (e *Engine) Resolve(ctx context.Context, s *Selection, b *v1.Build) error {
 		return fmt.Errorf("%w: recipe %s needs a ref for its archive", ErrSelection, rc.Spec.GetId())
 	}
 	s.Ref = b.Ref
-	if err := s.RenderVars(); err != nil {
+	if err := s.renderVars(); err != nil {
 		return err
 	}
 	b.Vars = s.Vars
@@ -85,12 +86,9 @@ func (e *Engine) Resolve(ctx context.Context, s *Selection, b *v1.Build) error {
 	}
 	b.Patches = nil
 	for _, p := range rc.patches {
-		ok := true
-		if p.when != nil {
-			var err error
-			if ok, err = p.when.Bool(s.env); err != nil {
-				return fmt.Errorf("patch %s: %w", p.spec.GetId(), err)
-			}
+		ok, err := p.when.Holds(s.env)
+		if err != nil {
+			return fmt.Errorf("patch %s: %w", p.spec.GetId(), err)
 		}
 		if ok {
 			b.Patches = append(b.Patches, p.spec.GetId())
@@ -390,18 +388,7 @@ func copyEntry(src, dst string) error {
 		return err
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	o, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(o, in); err != nil {
-		o.Close()
-		return err
-	}
-	return o.Close()
+	return archive.WriteFile(dst, in, info.Mode().Perm())
 }
 
 // Expression env for step conditions, host facts plus vars

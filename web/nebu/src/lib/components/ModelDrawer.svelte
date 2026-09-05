@@ -1,11 +1,11 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { api, message } from '$lib/api';
-  import { live, clock, taskFor, modelKey } from '$lib/state.svelte';
+  import { live, clock, taskFor, modelKey, profilesOf, formatBlurb, formatNames } from '$lib/state.svelte';
   import { runModel } from '$lib/slotActions.svelte';
   import { ago, bytes, count, params as fmtParams, when, enumLabel } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
-  import { facetValueLabel, fitSummary, formatBlurb, formatNames, hitSize, orderDescriptors, precisionTone, runtimesFor } from '$lib/catalog';
+  import { facetValueLabel, fitSummary, hitSize, orderDescriptors, precisionTone, runtimesFor } from '$lib/catalog';
   import { FitVerdict } from '$proto/estimate_pb';
   import type { SearchHit, SourceCapabilities, Revision, ModelCard } from '$proto/source_pb';
   import type { RuntimeStatus } from '$proto/runtime_pb';
@@ -21,6 +21,7 @@
   import Empty from './ui/Empty.svelte';
   import Markdown from './ui/Markdown.svelte';
   import Tip from './ui/Tip.svelte';
+  import Section from './ui/Section.svelte';
   import FitTable from './FitTable.svelte';
   import TaskChip from './TaskChip.svelte';
   import WatchDialog from './WatchDialog.svelte';
@@ -73,7 +74,7 @@
   const siteName = $derived(sourceLabel || caps?.description?.split(',')[0] || 'the source');
   const planRuntimes = $derived([...new Set((inspect?.rows ?? []).map((r) => r.runtimeId))]);
   const slotName = $derived(slotId ? (live.slots.get(slotId)?.name ?? 'the slot') : '');
-  const profiles = $derived([...live.profiles.values()].sort((a, b) => a.runtimeId.localeCompare(b.runtimeId) || Number(b.default) - Number(a.default) || a.name.localeCompare(b.name)));
+  const profiles = $derived(profilesOf(''));
   const profileName = $derived(profileId ? (live.profiles.get(profileId)?.name ?? 'the profile') : '');
   const descriptorTitle = $derived(inspect && inspect.descriptors.length > 1 ? `${inspect.descriptors.length} versions of the weights` : 'The weights');
   const ordered = $derived(inspect ? orderDescriptors(inspect.descriptors, inspect.rows) : []);
@@ -255,9 +256,8 @@
             <span class="ml-auto inline-flex items-center gap-1"><Copy text={model.repo} size={12} /> copy name</span>
           </div>
 
-          <section>
-            <div class="mb-1 flex flex-wrap items-center gap-3">
-              <h3 class="text-[11px] font-semibold tracking-wider text-fg-faint uppercase">{descriptorTitle}</h3>
+          <Section title={descriptorTitle}>
+            {#snippet actions()}
               <select class="input ml-auto h-7 w-auto py-0 pr-7 text-xs" bind:value={slotId} aria-label="Plan inside a slot" title="Check the fit against the whole machine or against one slot's share of it">
                 <option value="">Fit against the whole machine</option>
                 {#each [...live.slots.values()] as s (s.id)}<option value={s.id}>Fit inside {s.name}</option>{/each}
@@ -268,7 +268,7 @@
                   {#each profiles as p (p.id)}<option value={p.id}>{p.runtimeId} · {p.name}</option>{/each}
                 </select>
               {/if}
-            </div>
+            {/snippet}
             <p class="mb-3 max-w-2xl text-xs leading-5 text-fg-muted">
               {#if inspect.descriptors.length > 1}
                 The same model saved at different precisions. Fewer bits per weight means a smaller download and less memory at some cost in answer quality. The ones that fit come first, largest first, so the top row keeps the most quality this machine can hold.
@@ -353,16 +353,15 @@
                 </tbody>
               </table>
             </div>
-          </section>
+          </Section>
 
           {#if inspect.rows.length}
-            <section>
-              <h3 class="mb-1 text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Fit by context length{slotName ? ` inside ${slotName}` : ''}{profileName ? ` from ${profileName}` : ''}</h3>
+            <Section title="Fit by context length{slotName ? ` inside ${slotName}` : ''}{profileName ? ` from ${profileName}` : ''}">
               <p class="mb-3 max-w-2xl text-xs leading-5 text-fg-muted">
                 Context length is how much text the model holds at once, the prompt plus its reply, in tokens. Longer contexts need more memory for the model's working cache on top of the weights. Click a cell for the plan behind it.
               </p>
               <FitTable rows={inspect.rows} />
-            </section>
+            </Section>
           {/if}
 
           {#if inspect.warnings.length}

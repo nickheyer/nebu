@@ -62,12 +62,8 @@ const (
 type Daemon struct {
 	Config    *v1.Config
 	DB        *db.DB
-	Catalog   *spec.Catalog
 	Host      *host.Prober
 	Sources   *sources.Manager
-	Runtimes  *runtime.Registry
-	Recipes   *build.Registry
-	Events    *events.Bus
 	Inspector *inspect.Inspector
 	Doctor    *doctor.Doctor
 	Store     *store.Store
@@ -93,7 +89,7 @@ type Daemon struct {
 }
 
 // Builds every manager from config
-func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
+func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 	for _, dir := range []string{cfg.GetDataDir(), cfg.GetCacheDir(), cfg.GetStoreDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, err
@@ -135,6 +131,10 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 			}
 		}
 	}
+	matcher, err := triage.New(catalog.Triage)
+	if err != nil {
+		return nil, err
+	}
 	cacheStore, err := cache.Open(cfg.GetCacheDir())
 	if err != nil {
 		return nil, err
@@ -144,10 +144,21 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		return nil, err
 	}
 	blobStore.MaxBytes = cfg.GetStore().GetMaxBytes()
+	tr := cfg.GetTransfer()
+	fetcher := transfer.New(int(tr.GetWorkers()), int64(tr.GetChunkBytes()), int(tr.GetRetries()), log)
+	if fetcher.Schedule, err = transfer.NewSchedule(tr.GetMaxBytesPerSecond(), tr.GetWindows()); err != nil {
+		return nil, fmt.Errorf("transfer windows: %w", err)
+	}
 	store, err := db.Open(filepath.Join(cfg.GetDataDir(), "nebu.db"))
 	if err != nil {
 		return nil, err
 	}
+	// Every failure past this point closes the store on the way out
+	defer func() {
+		if err != nil {
+			store.Close()
+		}
+	}()
 	if store.SetAside != "" {
 		log.Warn("a database from before the atlas migrations was set aside and a fresh one started", "copy", store.SetAside)
 	}
@@ -157,15 +168,10 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	for _, line := range store.Drift {
 		log.Warn("schema drift, the database and schema.sql disagree, run make migrate-reset", "change", line)
 	}
-	if err := store.ImportLegacy(context.Background(), cfg.GetDataDir(), log); err != nil {
-		store.Close()
-		return nil, err
-	}
 	bus := events.New()
 	// Seeded defaults and config entries become rows here, the registry follows the rows from then on
 	srcMgr := sources.NewManager(store, bus, log, filepath.Join(cfg.GetCacheDir(), "sources"))
-	if err := srcMgr.Load(context.Background(), cfg.GetSources()); err != nil {
-		store.Close()
+	if err = srcMgr.Load(context.Background(), cfg.GetSources()); err != nil {
 		return nil, err
 	}
 	srcs := srcMgr.Registry
@@ -174,46 +180,41 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 	prober.OnProbe = func(profile *v1.HostProfile) {
 		bus.Publish(v1.EventKind_EVENT_KIND_HOST, v1.EventAction_EVENT_ACTION_UPDATED, profile.GetHostname(), profile)
 	}
-	d := &Daemon{
-		Config:   cfg,
-		DB:       store,
-		Catalog:  catalog,
-		Host:     prober,
-		Sources:  srcMgr,
-		Runtimes: runtimes,
-		Recipes:  recipes,
-		Events:   bus,
-		Store:    blobStore,
-		Tasks:    tasks.New(base, log, store, bus),
-		Log:      log,
-		cancel:   cancel,
-		base:     base,
+	d = &Daemon{
+		Config:  cfg,
+		DB:      store,
+		Host:    prober,
+		Sources: srcMgr,
+		Store:   blobStore,
+		Tasks:   tasks.New(base, log, store, bus),
+		Log:     log,
+		cancel:  cancel,
+		base:    base,
 	}
+	// Profiles are rows beside the seeded manifests, loaded once and followed through events
+	d.Profiles = &profiles.Manager{DB: store, Runtimes: runtimes, Events: bus, Log: log}
+	if err = d.Profiles.Load(context.Background()); err != nil {
+		return nil, err
+	}
+	calibration, err := calibrate.Open(context.Background(), store)
+	if err != nil {
+		return nil, err
+	}
+	// Every plan, the fit table's and a run's, applies the same learned correction
 	d.Inspector = &inspect.Inspector{
-		Sources:    srcs,
-		Classifier: classifier,
-		Readers:    readers,
-		Builder:    builder,
-		Runtimes:   runtimes,
-		Host:       prober,
-		Cache:      cacheStore,
-		Contexts:   cfg.GetContexts(),
-		Log:        log,
+		Sources:     srcs,
+		Classifier:  classifier,
+		Readers:     readers,
+		Builder:     builder,
+		Runtimes:    runtimes,
+		Host:        prober,
+		Cache:       cacheStore,
+		Profiles:    d.Profiles,
+		Calibration: calibration,
+		Contexts:    cfg.GetContexts(),
+		Log:         log,
 	}
-	tr := cfg.GetTransfer()
-	fetcher := transfer.New(int(tr.GetWorkers()), int64(tr.GetChunkBytes()), int(tr.GetRetries()), tr.GetMaxBytesPerSecond(), log)
-	if fetcher.Schedule, err = transfer.NewSchedule(tr.GetMaxBytesPerSecond(), tr.GetWindows()); err != nil {
-		store.Close()
-		return nil, fmt.Errorf("transfer windows: %w", err)
-	}
-	d.Puller = &pull.Puller{
-		Inspector: d.Inspector,
-		Store:     blobStore,
-		Fetcher:   fetcher,
-		Tasks:     d.Tasks,
-		Events:    bus,
-		Log:       log,
-	}
+	d.Puller = &pull.Puller{Inspector: d.Inspector, Store: blobStore, Fetcher: fetcher, Tasks: d.Tasks, Events: bus}
 	d.Installs = &installs.Manager{
 		DB:          store,
 		RuntimesDir: filepath.Join(cfg.GetDataDir(), "runtimes"),
@@ -228,32 +229,9 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		Events:      bus,
 		Log:         log,
 	}
-	// Profiles are rows beside the seeded manifests, loaded once and followed through events
-	d.Profiles = &profiles.Manager{DB: store, Runtimes: runtimes, Events: bus, Log: log}
-	if err := d.Profiles.Load(context.Background()); err != nil {
-		store.Close()
+	if d.Routes, err = gateway.OpenTable(context.Background(), store, bus, log); err != nil {
 		return nil, err
 	}
-	d.Inspector.Profiles = d.Profiles.Resolve
-	matcher, err := triage.New(catalog.Triage)
-	if err != nil {
-		store.Close()
-		return nil, err
-	}
-	calibration, err := calibrate.Open(context.Background(), store)
-	if err != nil {
-		store.Close()
-		return nil, err
-	}
-	// Every plan, the fit table's and a run's, applies the same learned correction
-	d.Inspector.Delta = calibration.Delta
-	routes, err := gateway.OpenTable(context.Background(), store, bus, log)
-	if err != nil {
-		store.Close()
-		return nil, err
-	}
-	d.Routes = routes
-	drain := time.Duration(cfg.GetGateway().GetDrainTimeoutMs()) * time.Millisecond
 	d.Instances = &instances.Manager{
 		DB:          store,
 		Dir:         filepath.Join(cfg.GetDataDir(), "instances"),
@@ -266,17 +244,17 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		Host:        prober,
 		Triage:      matcher,
 		Calibration: calibration,
-		Routes:      routes,
+		Routes:      d.Routes,
 		Events:      bus,
 		Log:         log,
 	}
-	d.Slots = &slots.Manager{DB: store, Instances: d.Instances, Routes: routes, Tasks: d.Tasks, Host: prober, Events: bus, DrainTimeout: drain, Log: log}
-	if err := d.Slots.Load(context.Background()); err != nil {
-		store.Close()
+	drain := time.Duration(cfg.GetGateway().GetDrainTimeoutMs()) * time.Millisecond
+	d.Slots = &slots.Manager{DB: store, Instances: d.Instances, Routes: d.Routes, Tasks: d.Tasks, Host: prober, Events: bus, DrainTimeout: drain, Log: log}
+	if err = d.Slots.Load(context.Background()); err != nil {
 		return nil, err
 	}
-	d.Instances.Reserver = d.Slots
-	d.Instances.OnChange = d.Slots.OnInstance
+	d.Instances.Slots = d.Slots
+	d.Inspector.Constrain = d.Instances
 	// Eviction spares what is running and what a slot would relaunch
 	d.Puller.Keep = func(m *v1.StoredModel) bool {
 		same := func(source, repo, group string) bool {
@@ -294,13 +272,6 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		}
 		return false
 	}
-	d.Inspector.Constrain = func(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, string, map[string]string, error) {
-		res, err := d.Slots.Reservation(ctx, slotID)
-		if err != nil {
-			return nil, "", nil, err
-		}
-		return instances.Constrain(profile, res.DeviceIDs, res.MemoryBytes), res.RuntimeID, res.Params, nil
-	}
 	d.Monitor = &monitor.Manager{
 		DB:        store,
 		Inspector: d.Inspector,
@@ -312,22 +283,15 @@ func New(cfg *v1.Config, log *slog.Logger) (*Daemon, error) {
 		Disabled:  cfg.GetMonitor().GetDisabled(),
 		Log:       log,
 	}
-	if err := d.Monitor.Load(context.Background()); err != nil {
-		store.Close()
+	if err = d.Monitor.Load(context.Background()); err != nil {
 		return nil, err
 	}
-	// A profile cannot go while a watch, want, slot, or instance starts from it, unless forced
-	d.Profiles.Referrers = func(p *v1.Profile, clear bool) []string {
-		refers := func(ref, runtimeID string) bool { return profiles.Refers(p, ref, runtimeID) }
-		out := d.Monitor.ProfileReferrers(refers, clear)
-		out = append(out, d.Slots.ProfileReferrers(refers, clear)...)
-		return append(out, d.Instances.ProfileReferrers(refers, clear)...)
-	}
-	// A slot or a source goes only when nothing swaps into it or watches through it, unless forced
+	// A profile, slot, or source goes only when nothing starts from it, unless forced
+	d.Profiles.Referrers = []profiles.Referrer{d.Monitor, d.Slots, d.Instances}
 	d.Slots.Referrers = d.Monitor.SlotReferrers
 	srcMgr.Referrers = d.Monitor.SourceReferrers
 	d.Notifier = &notify.Notifier{Webhooks: cfg.GetNotify().GetWebhooks(), Events: bus, Log: log}
-	d.Gateway = gateway.New(routes, cfg.GetGateway().GetApiKeys(), cfg.GetGateway().GetCorsOrigins(), cfg.GetGateway().GetPolicy(), log)
+	d.Gateway = gateway.New(d.Routes, cfg.GetGateway().GetApiKeys(), cfg.GetGateway().GetCorsOrigins(), cfg.GetGateway().GetPolicy(), log)
 	d.Gateway.SetVersion(Version)
 	var ui http.Handler
 	if !cfg.GetWeb().GetDisabled() {
@@ -444,9 +408,6 @@ func (d *Daemon) Close() {
 	})
 }
 
-// Returns the bound API address once serving
-func (d *Daemon) Addr() string { return d.addr }
-
 // Returns the API handler for in process or network use
 func (d *Daemon) Handler() http.Handler { return d.handler }
 
@@ -519,33 +480,14 @@ func (d *Daemon) warnExposure(secure bool) {
 // Recovers state, then serves the API and gateway listeners
 func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 	d.addr = ln.Addr().String()
-	if err := d.Tasks.Recover(ctx); err != nil {
-		ln.Close()
-		if gatewayLn != nil {
-			gatewayLn.Close()
+	for _, recover := range []func(context.Context) error{d.Tasks.Recover, d.Installs.RecoverBuilds, d.Instances.Recover, d.Slots.Recover} {
+		if err := recover(ctx); err != nil {
+			ln.Close()
+			if gatewayLn != nil {
+				gatewayLn.Close()
+			}
+			return err
 		}
-		return err
-	}
-	if err := d.Installs.RecoverBuilds(ctx); err != nil {
-		ln.Close()
-		if gatewayLn != nil {
-			gatewayLn.Close()
-		}
-		return err
-	}
-	if err := d.Instances.Recover(ctx); err != nil {
-		ln.Close()
-		if gatewayLn != nil {
-			gatewayLn.Close()
-		}
-		return err
-	}
-	if err := d.Slots.Recover(ctx); err != nil {
-		ln.Close()
-		if gatewayLn != nil {
-			gatewayLn.Close()
-		}
-		return err
 	}
 	// Both live as long as the daemon, not as long as one Serve call
 	for _, run := range []func(context.Context){d.Monitor.Run, d.Notifier.Run} {

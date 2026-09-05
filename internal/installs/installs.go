@@ -57,12 +57,31 @@ type Manager struct {
 	building map[string]*v1.Task
 }
 
-func (m *Manager) publishInstall(in *v1.Install, action v1.EventAction) {
-	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTALL, action, in.GetId(), in)
+// Writes an install row and tells the stream
+func (m *Manager) saveInstall(ctx context.Context, in *v1.Install) error {
+	if err := m.DB.PutInstall(ctx, in); err != nil {
+		return err
+	}
+	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTALL, v1.EventAction_EVENT_ACTION_CREATED, in.GetId(), in)
+	return nil
 }
 
-func (m *Manager) publishBuild(b *v1.Build, action v1.EventAction) {
+// Drops an install row and tells the stream
+func (m *Manager) dropInstall(ctx context.Context, in *v1.Install) error {
+	if _, err := m.DB.DeleteInstall(ctx, in.GetId()); err != nil {
+		return err
+	}
+	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTALL, v1.EventAction_EVENT_ACTION_DELETED, in.GetId(), in)
+	return nil
+}
+
+// Writes a build row and tells the stream
+func (m *Manager) saveBuild(ctx context.Context, b *v1.Build, action v1.EventAction) error {
+	if err := m.DB.PutBuild(ctx, b); err != nil {
+		return err
+	}
 	m.Events.Publish(v1.EventKind_EVENT_KIND_BUILD, action, b.GetId(), b)
+	return nil
 }
 
 // Lists installs newest first, optionally for one runtime
@@ -125,10 +144,9 @@ func (m *Manager) Adopt(ctx context.Context, runtimeID, path string) (*v1.Instal
 		CreatedAt: timestamppb.Now(),
 	}
 	m.probe(ctx, rt, in)
-	if err := m.DB.PutInstall(ctx, in); err != nil {
+	if err := m.saveInstall(ctx, in); err != nil {
 		return nil, err
 	}
-	m.publishInstall(in, v1.EventAction_EVENT_ACTION_CREATED)
 	return in, nil
 }
 
@@ -189,18 +207,13 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Run
 	}
 	h.Progress(0, total, "downloading")
 	for _, a := range rel.assets {
-		archivePath := filepath.Join(dir, a.name)
-		if info, err := os.Stat(archivePath); err == nil && info.Size() == a.size {
-			h.Add(a.size)
-			h.Logf("%s already downloaded", a.name)
-			continue
-		}
 		h.Message("downloading " + a.name)
-		if _, err := m.Fetcher.Fetch(ctx, a.blob, archivePath+".partial", "", func(d int64) { h.Add(d) }); err != nil {
+		reused, err := m.Fetcher.Land(ctx, a.blob, filepath.Join(dir, a.name), func(d int64) { h.Add(d) })
+		if err != nil {
 			return err
 		}
-		if err := os.Rename(archivePath+".partial", archivePath); err != nil {
-			return err
+		if reused {
+			h.Logf("%s already downloaded", a.name)
 		}
 	}
 	for _, a := range rel.assets {
@@ -227,10 +240,9 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Run
 		CreatedAt: timestamppb.Now(),
 	}
 	m.probe(ctx, rt, in)
-	if err := m.DB.PutInstall(ctx, in); err != nil {
+	if err := m.saveInstall(ctx, in); err != nil {
 		return err
 	}
-	m.publishInstall(in, v1.EventAction_EVENT_ACTION_CREATED)
 	h.Logf("installed %s at %s", in.GetId(), binary)
 	return nil
 }
@@ -301,7 +313,7 @@ func (m *Manager) Remove(ctx context.Context, id string) (*v1.Install, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := m.DB.DeleteInstall(ctx, id); err != nil {
+	if err := m.dropInstall(ctx, in); err != nil {
 		return nil, err
 	}
 	if in.GetKind() == v1.InstallKind_INSTALL_KIND_PREBUILT && strings.HasPrefix(in.GetDir(), m.RuntimesDir) {
@@ -311,14 +323,9 @@ func (m *Manager) Remove(ctx context.Context, id string) (*v1.Install, error) {
 	}
 	if in.GetKind() == v1.InstallKind_INSTALL_KIND_BUILT && in.GetBuildId() != "" {
 		if b, err := m.DB.GetBuild(ctx, in.GetBuildId()); err == nil {
-			m.DB.DeleteBuild(ctx, b.GetId())
-			if b.GetDir() != "" && m.Engine != nil && strings.HasPrefix(b.GetDir(), m.Engine.Root) {
-				os.RemoveAll(b.GetDir())
-			}
-			m.publishBuild(b, v1.EventAction_EVENT_ACTION_DELETED)
+			m.dropBuild(ctx, b)
 		}
 	}
-	m.publishInstall(in, v1.EventAction_EVENT_ACTION_DELETED)
 	return in, nil
 }
 

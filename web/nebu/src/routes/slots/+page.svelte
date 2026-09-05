@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { page } from '$app/state';
-  import { replaceState } from '$app/navigation';
   import { live, liveInstances } from '$lib/state.svelte';
-  import { swapSlot, editSlot, newSlot, deleteSlot } from '$lib/slotActions.svelte';
+  import { selectionParam } from '$lib/selection.svelte';
+  import { newSlot } from '$lib/slotActions.svelte';
+  import { byName } from '$lib/format';
   import { SlotState } from '$proto/slot_pb';
   import { Plus, LayoutGrid } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -12,18 +12,10 @@
   import SlotDrawer from '$lib/components/SlotDrawer.svelte';
   import InstanceDrawer from '$lib/components/InstanceDrawer.svelte';
 
-  let slotId = $state(page.url.searchParams.get('id') ?? '');
+  const sel = selectionParam('/slots');
   let instanceId = $state('');
 
-  $effect(() => {
-    const q = page.url.searchParams.get('id');
-    if (q) slotId = q;
-  });
-  $effect(() => {
-    if (!slotId && page.url.searchParams.has('id')) replaceState('/slots', {});
-  });
-
-  const slots = $derived([...live.slots.values()].sort((a, b) => a.name.localeCompare(b.name)));
+  const slots = $derived([...live.slots.values()].sort(byName((s) => s.name)));
   const serving = $derived(slots.filter((s) => s.state === SlotState.READY).length);
   const standalone = $derived(liveInstances().filter((i) => !i.slotId).length);
 </script>
@@ -50,11 +42,11 @@
 {:else}
   <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
     {#each slots as s (s.id)}
-      <SlotCard slot={s} onOpen={(x) => (slotId = x.id)} onSwap={swapSlot} onEdit={editSlot} onDelete={deleteSlot} />
+      <SlotCard slot={s} onOpen={(x) => (sel.id = x.id)} />
     {/each}
   </div>
   <p class="mt-4 text-xs text-fg-faint">Drag a model from the store onto a slot to serve it there. Dropping on an occupied slot swaps.</p>
 {/if}
 
-<SlotDrawer bind:id={slotId} onInstance={(i) => (instanceId = i)} />
+<SlotDrawer bind:id={sel.id} onInstance={(i) => (instanceId = i)} />
 <InstanceDrawer bind:id={instanceId} />

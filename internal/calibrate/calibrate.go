@@ -7,7 +7,6 @@ import (
 
 	"github.com/nickheyer/nebu/internal/db"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -38,8 +37,11 @@ func Key(runtimeID, architecture string) string {
 	return runtimeID + "|" + architecture
 }
 
-// Returns the learned overhead delta in bytes, zero when unknown
+// Returns the learned overhead delta in bytes, zero when unknown or without a table
 func (t *Table) Delta(runtimeID, architecture string) float64 {
+	if t == nil {
+		return 0
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if c, ok := t.entries[Key(runtimeID, architecture)]; ok {
@@ -67,15 +69,4 @@ func (t *Table) Record(ctx context.Context, runtimeID, architecture string, meas
 	c.Samples++
 	c.UpdatedAt = timestamppb.Now()
 	return t.store.PutCalibration(ctx, runtimeID, architecture, c)
-}
-
-// Returns a copy of every correction
-func (t *Table) Snapshot() *v1.CalibrationTable {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	out := &v1.CalibrationTable{Entries: map[string]*v1.Calibration{}}
-	for k, c := range t.entries {
-		out.Entries[k] = proto.Clone(c).(*v1.Calibration)
-	}
-	return out
 }

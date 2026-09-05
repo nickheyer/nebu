@@ -27,8 +27,6 @@ type Notifier struct {
 	Webhooks []string
 	Events   *events.Bus
 	Log      *slog.Logger
-	// Set to change the client, tests do
-	Client *http.Client
 }
 
 // Follows the bus until ctx ends, nothing to do without webhooks
@@ -42,10 +40,11 @@ func (n *Notifier) Run(ctx context.Context) {
 	sub := n.Events.Subscribe(ctx, []v1.EventKind{v1.EventKind_EVENT_KIND_FINDING, v1.EventKind_EVENT_KIND_INSTANCE})
 	queue := make(chan []byte, queueSize)
 	done := make(chan struct{})
+	client := &http.Client{Timeout: postTimeout}
 	go func() {
 		defer close(done)
 		for body := range queue {
-			n.post(ctx, body)
+			n.post(ctx, client, body)
 		}
 	}()
 	defer func() {
@@ -99,14 +98,10 @@ func (n *Notifier) matters(ev *v1.Event, seen map[string]v1.InstanceState) bool 
 }
 
 // Sends the document to every webhook, each tried again on a connection or server error
-func (n *Notifier) post(ctx context.Context, body []byte) {
-	client := n.Client
-	if client == nil {
-		client = &http.Client{Timeout: postTimeout}
-	}
+func (n *Notifier) post(ctx context.Context, client *http.Client, body []byte) {
 	for _, url := range n.Webhooks {
 		for attempt := 1; attempt <= attempts; attempt++ {
-			status, err := n.send(ctx, client, url, body)
+			status, err := send(ctx, client, url, body)
 			if err == nil && status < http.StatusInternalServerError {
 				if status >= http.StatusMultipleChoices {
 					n.Log.Warn("webhook refused the event", "url", url, "status", status)
@@ -126,7 +121,7 @@ func (n *Notifier) post(ctx context.Context, body []byte) {
 	}
 }
 
-func (n *Notifier) send(ctx context.Context, client *http.Client, url string, body []byte) (int, error) {
+func send(ctx context.Context, client *http.Client, url string, body []byte) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, err

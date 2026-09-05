@@ -27,7 +27,9 @@ var github = &Catalog{
 	RepoPattern:   `^[\w.-]+/[\w.-]+$`,
 	RevisionLabel: "release or ref",
 	Sorts:         []string{SortRelevance, SortLikes, SortUpdated, ghSortForks},
-	Reversible:    []string{SortLikes, SortUpdated, ghSortForks},
+	// Relevance has no key, it is the API's own order
+	SortKeys:   map[string]string{SortLikes: "stars", SortUpdated: "updated", ghSortForks: "forks"},
+	Reversible: []string{SortLikes, SortUpdated, ghSortForks},
 	Facets: []*v1.Facet{
 		Freeform(FacetAuthor, "Owner"),
 		Freeform(FacetTag, "Topic"),
@@ -51,13 +53,6 @@ const (
 	ghRawMedia      = "application/vnd.github.raw+json"
 )
 
-// Search sort keys by shared sort id, relevance is the API's own order
-var ghSortKeys = map[string]string{
-	SortLikes:   "stars",
-	SortUpdated: "updated",
-	ghSortForks: "forks",
-}
-
 type ghAsset struct {
 	Name   string `json:"name"`
 	Size   int64  `json:"size"`
@@ -72,6 +67,14 @@ type ghRelease struct {
 	Prerelease  bool      `json:"prerelease"`
 	PublishedAt string    `json:"published_at"`
 	Assets      []ghAsset `json:"assets"`
+}
+
+// One branch or tag as the API lists them
+type ghRef struct {
+	Name   string `json:"name"`
+	Commit struct {
+		Sha string `json:"sha"`
+	} `json:"commit"`
 }
 
 // Releases and the default branch of one repository
@@ -122,18 +125,11 @@ func (githubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, s
 	if len(terms) == 0 {
 		terms = append(terms, "stars:>0")
 	}
-	page := Offset(req.GetCursor())
-	if page < 1 {
-		page = 1
-	}
-	q := url.Values{"q": {strings.Join(terms, " ")}, "per_page": {strconv.Itoa(c.Limit(req))}, "page": {strconv.Itoa(page)}}
-	if key := ghSortKeys[sort.ID]; key != "" {
-		q.Set("sort", key)
-		order := "desc"
-		if sort.Ascending {
-			order = "asc"
-		}
-		q.Set("order", order)
+	limit, page := c.Limit(req), c.page(req)
+	q := url.Values{"q": {strings.Join(terms, " ")}, "per_page": {strconv.Itoa(limit)}, "page": {strconv.Itoa(page)}}
+	if sort.Key != "" {
+		q.Set("sort", sort.Key)
+		q.Set("order", direction(sort.Ascending, "asc", "desc"))
 	}
 	var body struct {
 		TotalCount uint64   `json:"total_count"`
@@ -146,26 +142,15 @@ func (githubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, s
 	for _, it := range body.Items {
 		resp.Hits = append(resp.Hits, ghHit(it))
 	}
-	if uint64(page*c.Limit(req)) < body.TotalCount && len(body.Items) > 0 {
-		resp.NextCursor = strconv.Itoa(page + 1)
-	}
+	c.nextPage(resp, page, limit, body.TotalCount)
 	return resp, nil
 }
 
 func ghHit(it ghItem) *v1.SearchHit {
-	hit := &v1.SearchHit{
-		Repo:        it.FullName,
-		Name:        it.Name,
-		Author:      it.Owner.Login,
-		Likes:       it.Stars,
-		Description: Excerpt(it.Description, 240),
-		Url:         it.HTMLURL,
-		Private:     it.Private,
-		Tags:        it.Topics,
-		UpdatedAt:   Stamp(it.PushedAt),
-		CreatedAt:   Stamp(it.CreatedAt),
-		Extra:       map[string]string{},
-	}
+	hit := newHit(it.FullName, it.Name, it.Owner.Login)
+	hit.Likes, hit.Description, hit.Url = it.Stars, Excerpt(it.Description, summaryLen), it.HTMLURL
+	hit.Private, hit.Tags = it.Private, it.Topics
+	hit.UpdatedAt, hit.CreatedAt = Stamp(it.PushedAt), Stamp(it.CreatedAt)
 	if it.License != nil && it.License.SPDX != "" && it.License.SPDX != "NOASSERTION" {
 		hit.License = it.License.SPDX
 	}
@@ -183,11 +168,11 @@ func ghHit(it ghItem) *v1.SearchHit {
 
 // Splits owner/name, refusing anything else
 func ghSplit(repo string) (string, string, error) {
-	owner, name, ok := strings.Cut(strings.Trim(strings.TrimSpace(repo), "/"), "/")
-	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
-		return "", "", fmt.Errorf("repo %q: want owner/name", repo)
+	parts, err := segments("repo", repo, "owner/name", 2)
+	if err != nil {
+		return "", "", err
 	}
-	return owner, strings.TrimSuffix(name, ".git"), nil
+	return parts[0], strings.TrimSuffix(parts[1], ".git"), nil
 }
 
 // Reads the releases and default branch of a repo, kept a while per source
@@ -207,20 +192,14 @@ func ghState(ctx context.Context, c *Client, repo string) (*ghRepoState, error) 
 		}
 		st.defaultBranch = info.DefaultBranch
 		next := c.URL("repos", owner, name, "releases") + "?per_page=" + strconv.Itoa(ghPageSize)
-		for next != "" {
-			var page []ghRelease
-			header, err := c.JSON(ctx, next, nil, &page)
-			if err != nil {
-				return nil, err
-			}
-			st.releases = append(st.releases, page...)
-			next = NextLink(header.Get("Link"), c.Base())
+		if err := eachPage(ctx, c, next, nil, func(page []ghRelease) { st.releases = append(st.releases, page...) }); err != nil {
+			return nil, err
 		}
 		return st, nil
 	})
 }
 
-// The newest release that is neither a draft nor a prerelease, else the newest of any kind
+// The newest release that is neither draft nor prerelease, else the newest of any kind
 func (st *ghRepoState) latest() *ghRelease {
 	for i := range st.releases {
 		if r := &st.releases[i]; !r.Draft && !r.Prerelease {
@@ -319,27 +298,18 @@ func (githubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.R
 		seen[r.TagName] = true
 	}
 	for _, kind := range []string{"branches", "tags"} {
-		detail := strings.TrimSuffix(strings.TrimSuffix(kind, "es"), "s")
 		next := c.URL("repos", owner, name, kind) + "?per_page=" + strconv.Itoa(ghPageSize)
-		for next != "" {
-			var page []struct {
-				Name   string `json:"name"`
-				Commit struct {
-					Sha string `json:"sha"`
-				} `json:"commit"`
-			}
-			header, err := c.JSON(ctx, next, nil, &page)
-			if err != nil {
-				return nil, err
-			}
+		err := eachPage(ctx, c, next, nil, func(page []ghRef) {
 			for _, e := range page {
 				if seen[e.Name] {
 					continue
 				}
 				seen[e.Name] = true
-				out = append(out, &v1.Revision{Name: e.Name, Commit: e.Commit.Sha, Detail: detail, Default: latest == nil && kind == "branches" && e.Name == st.defaultBranch})
+				out = append(out, refRevision(e.Name, e.Commit.Sha, latest == nil && kind == "branches" && e.Name == st.defaultBranch, kind == "tags"))
 			}
-			next = NextLink(header.Get("Link"), c.Base())
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
 	return out, nil
@@ -357,10 +327,7 @@ func (githubAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v
 	}
 	text, err := c.HTTP().TextWith(ctx, c.URL("repos", owner, name, "readme"), q, http.Header{"Accept": {ghRawMedia}}, cardMax)
 	if err != nil {
-		if IsStatus(err, http.StatusNotFound) {
-			return &v1.ModelCard{Url: page}, nil
-		}
-		return nil, err
+		return cardOrEmpty(page, err)
 	}
 	return &v1.ModelCard{Markdown: text, Url: page}, nil
 }

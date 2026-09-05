@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/tasks"
@@ -21,9 +20,8 @@ import (
 )
 
 const (
-	kindBuild   = "build"
-	buildLog    = "build.log"
-	restartNote = "daemon restarted"
+	kindBuild = "build"
+	buildLog  = "build.log"
 )
 
 // Returned when a build id is not known
@@ -152,12 +150,9 @@ func (m *Manager) Build(ctx context.Context, req *v1.BuildRequest) (*v1.Build, *
 	}
 	m.building[b.GetId()] = task
 	// The running row and its event land before the task can write a final state over them
-	err = m.DB.PutBuild(ctx, b)
-	if err != nil {
+	if err = m.saveBuild(ctx, b, v1.EventAction_EVENT_ACTION_CREATED); err != nil {
 		delete(m.building, b.GetId())
 		m.Tasks.Cancel(task.GetId())
-	} else {
-		m.publishBuild(b, v1.EventAction_EVENT_ACTION_CREATED)
 	}
 	close(ready)
 	if err != nil {
@@ -224,10 +219,9 @@ func (m *Manager) runBuild(ctx context.Context, h *tasks.Handle, sel *build.Sele
 	if b.GetCommit() != "" {
 		in.Facts["commit"] = b.GetCommit()
 	}
-	if err := m.DB.PutInstall(ctx, in); err != nil {
+	if err := m.saveInstall(ctx, in); err != nil {
 		return m.finishBuild(ctx, b, err)
 	}
-	m.publishInstall(in, v1.EventAction_EVENT_ACTION_CREATED)
 	b.InstallId = in.GetId()
 	h.Logf("installed %s at %s", in.GetId(), in.GetPath())
 	return m.finishBuild(ctx, b, nil)
@@ -241,10 +235,9 @@ func (m *Manager) finishBuild(ctx context.Context, b *v1.Build, err error) error
 	} else {
 		b.State = v1.BuildState_BUILD_STATE_SUCCEEDED
 	}
-	if perr := m.DB.PutBuild(context.Background(), b); perr != nil {
+	if perr := m.saveBuild(context.Background(), b, v1.EventAction_EVENT_ACTION_UPDATED); perr != nil {
 		m.Log.Warn("build record write failed", "id", b.GetId(), "err", perr)
 	}
-	m.publishBuild(b, v1.EventAction_EVENT_ACTION_UPDATED)
 	return err
 }
 
@@ -262,19 +255,6 @@ func (m *Manager) GetBuild(ctx context.Context, id string) (*v1.Build, error) {
 	return b, err
 }
 
-// Returns the transcript of a build
-func (m *Manager) BuildLog(ctx context.Context, id string) ([]string, error) {
-	b, err := m.GetBuild(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(filepath.Join(b.GetDir(), buildLog))
-	if err != nil {
-		return nil, err
-	}
-	return strings.Split(strings.TrimRight(string(data), "\n"), "\n"), nil
-}
-
 // Removes a build, its tree, and the install it produced
 func (m *Manager) RemoveBuild(ctx context.Context, id string) (*v1.Build, error) {
 	b, err := m.GetBuild(ctx, id)
@@ -289,27 +269,31 @@ func (m *Manager) RemoveBuild(ctx context.Context, id string) (*v1.Build, error)
 	}
 	if b.GetInstallId() != "" {
 		if in, err := m.DB.GetInstall(ctx, b.GetInstallId()); err == nil {
-			if _, err := m.DB.DeleteInstall(ctx, in.GetId()); err != nil {
+			if err := m.dropInstall(ctx, in); err != nil {
 				return nil, err
 			}
-			m.publishInstall(in, v1.EventAction_EVENT_ACTION_DELETED)
 		}
 	}
-	if _, err := m.DB.DeleteBuild(ctx, id); err != nil {
-		return nil, err
+	return b, m.dropBuild(ctx, b)
+}
+
+// Drops a build row with its tree and tells the stream
+func (m *Manager) dropBuild(ctx context.Context, b *v1.Build) error {
+	if _, err := m.DB.DeleteBuild(ctx, b.GetId()); err != nil {
+		return err
 	}
-	if b.GetDir() != "" && strings.HasPrefix(b.GetDir(), m.Engine.Root) {
+	if b.GetDir() != "" && m.Engine != nil && strings.HasPrefix(b.GetDir(), m.Engine.Root) {
 		if err := os.RemoveAll(b.GetDir()); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	m.publishBuild(b, v1.EventAction_EVENT_ACTION_DELETED)
-	return b, nil
+	m.Events.Publish(v1.EventKind_EVENT_KIND_BUILD, v1.EventAction_EVENT_ACTION_DELETED, b.GetId(), b)
+	return nil
 }
 
 // Marks builds a previous daemon left running as failed
 func (m *Manager) RecoverBuilds(ctx context.Context) error {
-	n, err := m.DB.FailUnfinishedBuilds(ctx, restartNote, time.Now())
+	n, err := m.DB.FailUnfinishedBuilds(ctx)
 	if err != nil {
 		return err
 	}
@@ -321,10 +305,9 @@ func (m *Manager) RecoverBuilds(ctx context.Context) error {
 
 // Splits a stream into lines for the task log
 type lineWriter struct {
-	mu   sync.Mutex
-	buf  bytes.Buffer
-	fn   func(string)
-	last time.Time
+	mu  sync.Mutex
+	buf bytes.Buffer
+	fn  func(string)
 }
 
 func (w *lineWriter) Write(p []byte) (int, error) {

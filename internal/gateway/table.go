@@ -173,6 +173,11 @@ func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, ap
 	return t.snapshotLocked(r)
 }
 
+// Points a name at a ready instance answering to its own name, the slot's policy when it has one
+func (t *Table) Serve(name string, in *v1.Instance, api v1.ApiFlavor, slotID string, policy *v1.Policy) *v1.Route {
+	return t.Set(name, in.GetId(), slotID, in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), in.GetName(), api, policy)
+}
+
 // Keeps a name alive with nothing behind it
 func (t *Table) Pending(name, slotID, model string, policy *v1.Policy) *v1.Route {
 	t.mu.Lock()

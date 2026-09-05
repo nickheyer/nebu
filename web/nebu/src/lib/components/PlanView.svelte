@@ -1,16 +1,17 @@
 <script lang="ts">
-  import { bytes, enumLabel, pct, verdictLabel, verdictTone } from '$lib/format';
+  import { bytes, deltaBytes, enumLabel, pct, verdictLabel, verdictTone } from '$lib/format';
   import { PoolKind } from '$proto/host_pb';
   import { TensorGroupKind } from '$proto/model_pb';
   import type { MemoryPlan } from '$proto/estimate_pb';
   import Badge from './ui/Badge.svelte';
   import Meter from './ui/Meter.svelte';
+  import ParamChips from './ui/ParamChips.svelte';
 
   let { plan, compact = false }: { plan: MemoryPlan; compact?: boolean } = $props();
 
   const kinds: Record<number, string> = { [PoolKind.DEVICE]: 'device', [PoolKind.HOST]: 'host', [PoolKind.UNIFIED]: 'unified' };
   // Template defaults render at launch, so only concrete values are worth showing
-  const solved = $derived(Object.entries(plan.params).filter(([, v]) => !v.includes('{{')));
+  const solved = $derived(Object.fromEntries(Object.entries(plan.params).filter(([, v]) => !v.includes('{{'))));
   const placementsByPool = $derived.by(() => {
     const out = new Map<string, { kind: string; bytes: bigint; count: number }[]>();
     for (const p of plan.placements) {
@@ -27,7 +28,10 @@
     <Badge tone={verdictTone(plan.verdict)} dot label={verdictLabel(plan.verdict)} />
     <span class="text-fg-muted">weights <span class="text-fg tabular-nums">{bytes(plan.weightsBytes)}</span></span>
     <span class="text-fg-muted">cache <span class="text-fg tabular-nums">{bytes(plan.cacheBytes)}</span></span>
-    <span class="text-fg-muted">overhead <span class="text-fg tabular-nums">{bytes(plan.overheadBytes)}</span></span>
+    <span class="text-fg-muted">
+      overhead <span class="text-fg tabular-nums">{bytes(plan.overheadBytes)}</span>
+      {#if plan.overheadDelta}<span class="text-xs text-fg-faint" title="Corrected by what earlier runs of this runtime measured">(learned {deltaBytes(plan.overheadDelta)})</span>{/if}
+    </span>
   </div>
   {#if plan.detail}<p class="text-sm leading-6 text-fg-muted">{plan.detail}</p>{/if}
   <div class="flex flex-col gap-3">
@@ -52,11 +56,7 @@
       </div>
     {/each}
   </div>
-  {#if !compact && solved.length}
-    <div class="flex flex-wrap gap-1.5">
-      {#each solved as [k, v] (k)}
-        <span class="rounded border border-line bg-sunken px-1.5 py-0.5 font-mono text-[11px]"><span class="text-fg-faint">{k}=</span><span class="text-fg">{v}</span></span>
-      {/each}
-    </div>
+  {#if !compact && Object.keys(solved).length}
+    <ParamChips params={solved} />
   {/if}
 </div>

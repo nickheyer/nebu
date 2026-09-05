@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/calibrate"
+	"github.com/nickheyer/nebu/internal/profiles"
 	"github.com/nickheyer/nebu/pkg/cache"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/estimate"
@@ -29,33 +31,29 @@ const (
 	describeMax = 8
 )
 
-// Narrows a profile to a slot and returns the slot's default params, set by the daemon
-type Constrainer func(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, string, map[string]string, error)
-
-// Returns the profile a run of a runtime starts from, named by id or name or
-// the runtime's default, nil when it has none, set by the daemon
-type Profiler func(runtimeID, ref string) (*v1.Profile, error)
-
-// Returns the learned overhead correction for a runtime and architecture, set by the daemon
-type Calibrator func(runtimeID, architecture string) float64
+// Narrows a plan to a slot, its devices, budget, runtime, and default params
+type Constrainer interface {
+	Constrain(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, string, map[string]string, error)
+}
 
 // Orchestrates sources, readers, descriptors, and planning
 type Inspector struct {
-	Sources    *sources.Registry
-	Classifier *formats.Classifier
-	Readers    formats.Readers
-	Builder    *descriptor.Builder
-	Runtimes   *runtime.Registry
-	Host       *host.Prober
-	Cache      *cache.Store
-	Contexts   []uint32
-	Constrain  Constrainer
-	Profiles   Profiler
-	Delta      Calibrator
-	Log        *slog.Logger
+	Sources     *sources.Registry
+	Classifier  *formats.Classifier
+	Readers     formats.Readers
+	Builder     *descriptor.Builder
+	Runtimes    *runtime.Registry
+	Host        *host.Prober
+	Cache       *cache.Store
+	Profiles    *profiles.Manager
+	Calibration *calibrate.Table
+	Contexts    []uint32
+	// Set by the daemon once slots exist, nil until then
+	Constrain Constrainer
+	Log       *slog.Logger
 }
 
-// Returns the planning profile narrowed to the named slot, with the slot's default params
+// Returns the planning profile narrowed to the named slot, with the slot's runtime and default params
 func (i *Inspector) profile(ctx context.Context, slotID string) (*v1.HostProfile, string, map[string]string, error) {
 	profile, err := i.Host.Profile(ctx, false)
 	if err != nil {
@@ -67,28 +65,27 @@ func (i *Inspector) profile(ctx context.Context, slotID string) (*v1.HostProfile
 	if i.Constrain == nil {
 		return nil, "", nil, fmt.Errorf("slots are not available")
 	}
-	return i.Constrain(ctx, slotID, profile)
-}
-
-// Resolves the profile a run of a runtime starts from, nil when it has none
-func (i *Inspector) Profile(runtimeID, ref string) (*v1.Profile, error) {
-	if i.Profiles == nil {
-		if ref != "" {
-			return nil, fmt.Errorf("profiles are not available")
-		}
-		return nil, nil
-	}
-	return i.Profiles(runtimeID, ref)
+	return i.Constrain.Constrain(ctx, slotID, profile)
 }
 
 // Layers a run's params the one way every plan does: the profile, then the
 // slot's defaults, then the request, returning the profile used
 func (i *Inspector) Layer(runtimeID, ref string, slot, params map[string]string) (*v1.Profile, map[string]string, error) {
-	p, err := i.Profile(runtimeID, ref)
+	p, err := i.Profiles.Resolve(runtimeID, ref)
 	if err != nil {
 		return nil, nil, err
 	}
 	return p, runtime.Merge(p.GetParams(), slot, params), nil
+}
+
+// Picks the first compatible runtime accepting a format
+func (i *Inspector) DefaultRuntime(profile *v1.HostProfile, formatID string) (*runtime.Runtime, error) {
+	for _, rt := range i.Runtimes.List() {
+		if ok, _ := rt.Compatible(profile); ok && rt.Accepts(formatID) {
+			return rt, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: no compatible runtime accepts %s", runtime.ErrParam, formatID)
 }
 
 // Resolves and classifies a model, caching the listing briefly
@@ -97,7 +94,7 @@ func (i *Inspector) Resolve(ctx context.Context, sourceID, repo, revision string
 	if err != nil {
 		return nil, nil, err
 	}
-	key := strings.Join([]string{"resolve", src.Spec().GetId(), repo, revision}, "\x00")
+	key := resolveKey(src, repo, revision)
 	model := &v1.Model{}
 	if data, ok := i.Cache.Get(key, resolveTTL); ok && proto.Unmarshal(data, model) == nil {
 		i.Classifier.Classify(model)
@@ -108,11 +105,7 @@ func (i *Inspector) Resolve(ctx context.Context, sourceID, repo, revision string
 		return nil, nil, err
 	}
 	i.Classifier.Classify(model)
-	if data, err := proto.Marshal(model); err == nil {
-		if err := i.Cache.Put(key, data); err != nil {
-			i.Log.Warn("cache write failed", "err", err)
-		}
-	}
+	i.remember(key, model)
 	return src, model, nil
 }
 
@@ -122,11 +115,25 @@ func (i *Inspector) ResolveFresh(ctx context.Context, sourceID, repo, revision s
 	if err != nil {
 		return nil, nil, err
 	}
-	key := strings.Join([]string{"resolve", src.Spec().GetId(), repo, revision}, "\x00")
-	if err := i.Cache.Delete(key); err != nil {
+	if err := i.Cache.Delete(resolveKey(src, repo, revision)); err != nil {
 		i.Log.Warn("cache delete failed", "err", err)
 	}
 	return i.Resolve(ctx, sourceID, repo, revision)
+}
+
+func resolveKey(src sources.Source, repo, revision string) string {
+	return strings.Join([]string{"resolve", src.Spec().GetId(), repo, revision}, "\x00")
+}
+
+// Caches a message under key, a failed write only logged
+func (i *Inspector) remember(key string, msg proto.Message) {
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return
+	}
+	if err := i.Cache.Put(key, data); err != nil {
+		i.Log.Warn("cache write failed", "err", err)
+	}
 }
 
 // Reads raw header facts, caching by content identity
@@ -149,11 +156,7 @@ func (i *Inspector) Raw(ctx context.Context, src sources.Source, model *v1.Model
 	if err != nil {
 		return nil, err
 	}
-	if data, err := proto.Marshal(raw); err == nil {
-		if err := i.Cache.Put(key, data); err != nil {
-			i.Log.Warn("cache write failed", "err", err)
-		}
-	}
+	i.remember(key, raw)
 	return raw, nil
 }
 
@@ -176,17 +179,13 @@ func (i *Inspector) Plan(rt *runtime.Runtime, d *v1.Descriptor, profile *v1.Host
 	if err != nil {
 		return nil, err
 	}
-	var delta float64
-	if i.Delta != nil {
-		delta = i.Delta(rt.Manifest.GetId(), d.GetArchitecture())
-	}
 	return rt.Policy.Plan(estimate.Input{
 		Descriptor:    d,
 		Formulas:      i.Builder.Formulas(d.GetArchSpecId()),
 		Host:          profile,
 		Params:        params,
 		Free:          free,
-		OverheadDelta: delta,
+		OverheadDelta: i.Calibration.Delta(rt.Manifest.GetId(), d.GetArchitecture()),
 	})
 }
 
@@ -203,7 +202,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 	groups := selectGroups(i.Classifier.Groups(model), req.GetGroups())
 	// A named profile plans its own runtime beside any the request names, else the slot's runtime, else every compatible one
 	ids := req.GetRuntimeIds()
-	named, err := i.Profile("", req.GetProfileId())
+	named, err := i.Profiles.Resolve("", req.GetProfileId())
 	if err != nil {
 		return nil, err
 	}
@@ -264,13 +263,12 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 			}
 			for _, n := range contexts {
 				overrides := withContext(params, rt.Policy.ContextParam(), n)
-				plan, err := i.Plan(rt, d, profile, overrides, false)
-				if err != nil {
-					resp.Warnings = append(resp.Warnings, fmt.Sprintf("%s on %s: %v", d.GetGroup(), rt.Manifest.GetId(), err))
-					continue
-				}
 				// A run plans around what is loaded now, so the table says both
-				now, err := i.Plan(rt, d, profile, overrides, true)
+				plan, err := i.Plan(rt, d, profile, overrides, false)
+				var now *v1.MemoryPlan
+				if err == nil {
+					now, err = i.Plan(rt, d, profile, overrides, true)
+				}
 				if err != nil {
 					resp.Warnings = append(resp.Warnings, fmt.Sprintf("%s on %s: %v", d.GetGroup(), rt.Manifest.GetId(), err))
 					continue
@@ -302,7 +300,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 		runtimeID = slotRuntime
 	}
 	if runtimeID == "" && req.GetProfileId() != "" {
-		named, err := i.Profile("", req.GetProfileId())
+		named, err := i.Profiles.Resolve("", req.GetProfileId())
 		if err != nil {
 			return nil, err
 		}
@@ -355,11 +353,8 @@ func selectGroups(groups []*formats.Group, names []string) []*formats.Group {
 	}
 	var out []*formats.Group
 	for _, g := range groups {
-		for _, n := range names {
-			if g.Name == n {
-				out = append(out, g)
-				break
-			}
+		if slices.Contains(names, g.Name) {
+			out = append(out, g)
 		}
 	}
 	return out

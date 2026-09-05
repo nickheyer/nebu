@@ -2,15 +2,11 @@ package db
 
 import (
 	"context"
-	"io"
-	"log/slog"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -33,8 +29,8 @@ func TestMigrationsApplyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	versions, _ := d.Migrations(context.Background())
-	if len(versions) != 1 || versions[0] == "" {
+	versions, _ := revisionStore{d.sql}.ReadRevisions(context.Background())
+	if len(versions) != 1 || versions[0].Version == "" {
 		t.Fatalf("versions %v", versions)
 	}
 	d.Close()
@@ -43,21 +39,21 @@ func TestMigrationsApplyOnce(t *testing.T) {
 		t.Fatalf("reopen should not reapply: %v", err)
 	}
 	defer again.Close()
-	if versions, _ = again.Migrations(context.Background()); len(versions) != 1 {
+	if versions, _ = (revisionStore{again.sql}).ReadRevisions(context.Background()); len(versions) != 1 {
 		t.Fatalf("versions after reopen %v", versions)
 	}
 }
 
 func TestEnums(t *testing.T) {
 	for _, s := range []v1.InstanceState{v1.InstanceState_INSTANCE_STATE_READY, v1.InstanceState_INSTANCE_STATE_FAILED} {
-		if got := v1.InstanceState(enumVal(v1.InstanceState(0).Descriptor(), enumCol(s))); got != s {
+		if got := enumOf[v1.InstanceState](enumCol(s)); got != s {
 			t.Fatalf("round trip %v gave %v", s, got)
 		}
 	}
-	if got := enumVal(v1.TensorGroupKind(0).Descriptor(), enumCol(v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER)); v1.TensorGroupKind(got) != v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER {
+	if got := enumOf[v1.TensorGroupKind](enumCol(v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER)); got != v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER {
 		t.Fatalf("multi word enum %v", got)
 	}
-	if enumVal(v1.InstanceState(0).Descriptor(), "bogus") != 0 {
+	if enumOf[v1.InstanceState]("bogus") != 0 {
 		t.Fatal("unknown should be zero")
 	}
 }
@@ -222,7 +218,7 @@ func TestTasks(t *testing.T) {
 	if len(list) != 3 || list[0].GetId() != "stuck" || list[1].GetId() != "t1" || list[2].GetId() != "olde" {
 		t.Fatalf("prune keeps running plus newest finished: %v", list)
 	}
-	n, err := d.FailUnfinishedTasks(ctx, "daemon restarted", time.Unix(30, 0))
+	n, err := d.FailUnfinishedTasks(ctx)
 	if err != nil || n != 1 {
 		t.Fatalf("fail unfinished %d %v", n, err)
 	}
@@ -232,38 +228,5 @@ func TestTasks(t *testing.T) {
 	}
 	if _, _, err := d.GetTask(ctx, "nope"); !IsNotFound(err) {
 		t.Fatal("missing task should be not found")
-	}
-}
-
-func TestImportLegacy(t *testing.T) {
-	d, dir := open(t)
-	ctx := context.Background()
-	write := func(rel string, msg proto.Message) {
-		data, _ := protojson.Marshal(msg)
-		os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755)
-		os.WriteFile(filepath.Join(dir, rel), data, 0o644)
-	}
-	write("installs/x.json", &v1.Install{Id: "x", RuntimeId: "rt", Kind: v1.InstallKind_INSTALL_KIND_PREBUILT, Path: "/p", Dir: "/d", CreatedAt: timestamppb.Now(), Facts: map[string]string{"a": "b"}})
-	write("instances/i1.json", sampleInstance())
-	write("calibration.json", &v1.CalibrationTable{Entries: map[string]*v1.Calibration{"rt|arch": {OverheadDelta: 1, Samples: 1, UpdatedAt: timestamppb.Now()}}})
-	if err := d.ImportLegacy(ctx, dir, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
-		t.Fatal(err)
-	}
-	if in, err := d.GetInstall(ctx, "x"); err != nil || in.GetFacts()["a"] != "b" {
-		t.Fatalf("install import %v %v", in, err)
-	}
-	if list, _ := d.ListInstances(ctx); len(list) != 1 || list[0].GetName() != "qwen" {
-		t.Fatalf("instance import %v", list)
-	}
-	if rows, _ := d.ListCalibrations(ctx); len(rows) != 1 || rows[0].Architecture != "arch" {
-		t.Fatalf("calibration import %v", rows)
-	}
-	for _, rel := range []string{"installs/x.json", "instances/i1.json", "calibration.json"} {
-		if _, err := os.Stat(filepath.Join(dir, rel)); err == nil {
-			t.Fatalf("%s should be removed after import", rel)
-		}
-	}
-	if err := d.ImportLegacy(ctx, dir, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
-		t.Fatalf("second import with nothing to do: %v", err)
 	}
 }

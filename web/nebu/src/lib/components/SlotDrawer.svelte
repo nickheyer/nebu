@@ -1,50 +1,44 @@
 <script lang="ts">
-  import { api } from '$lib/api';
-  import { live, instanceLive, clock, taskFor } from '$lib/state.svelte';
+  import { live, cached, instanceLive, clock, taskFor } from '$lib/state.svelte';
   import { swapSlot, editSlot, evictSlot, deleteSlot } from '$lib/slotActions.svelte';
   import { policyText } from '$lib/gateway';
-  import { bytes, when, duration, enumLabel, count } from '$lib/format';
+  import { bytes, when, duration, enumLabel, count, newestFirst } from '$lib/format';
   import { SlotState } from '$proto/slot_pb';
   import { InstanceState } from '$proto/instance_pb';
-  import { RouteState, type Policy } from '$proto/gateway_pb';
+  import { RouteState } from '$proto/gateway_pb';
   import { ArrowLeftRight, LogOut, Pencil, Trash2, ExternalLink, MessageSquare } from '@lucide/svelte';
   import Drawer from './ui/Drawer.svelte';
   import Tabs from './ui/Tabs.svelte';
   import Kv from './ui/Kv.svelte';
   import Button from './ui/Button.svelte';
   import StateBadge from './ui/StateBadge.svelte';
+  import Section from './ui/Section.svelte';
+  import ParamChips from './ui/ParamChips.svelte';
   import InstanceLog from './InstanceLog.svelte';
   import TaskChip from './TaskChip.svelte';
 
   let { id = $bindable(''), onInstance }: { id?: string; onInstance?: (instanceId: string) => void } = $props();
 
   let tab = $state('overview');
-  let defaults = $state<Policy | undefined>();
   const slot = $derived(id ? live.slots.get(id) : undefined);
   const instance = $derived(slot?.instanceId ? live.instances.get(slot.instanceId) : undefined);
   const alive = $derived(instanceLive(instance));
   const route = $derived(slot ? live.routes.get(slot.name) : undefined);
   const swapTask = $derived(slot ? taskFor('swap', { slot: slot.id }) : undefined);
   const devices = $derived((slot?.deviceIds ?? []).map((d) => live.host?.devices.find((x) => x.id === d)?.name ?? d));
-  const history = $derived([...live.instances.values()].filter((i) => i.slotId === id && i.id !== slot?.instanceId).sort((a, b) => Number((b.createdAt?.seconds ?? 0n) - (a.createdAt?.seconds ?? 0n))).slice(0, 8));
+  const history = $derived(
+    [...live.instances.values()]
+      .filter((i) => i.slotId === id && i.id !== slot?.instanceId)
+      .sort(newestFirst((i) => i.createdAt))
+      .slice(0, 8)
+  );
 
-  // The gateway default sits under every zero field of the slot's limits
   $effect(() => {
-    if (!id) return;
-    tab = 'overview';
-    api.gateway.getGatewayStatus({}).then((r) => (defaults = r.status?.policy)).catch(() => (defaults = undefined));
+    if (id) tab = 'overview';
   });
 </script>
 
-<Drawer
-  open={!!id}
-  onOpenChange={(v) => {
-    if (!v) id = '';
-  }}
-  title={slot?.name ?? 'Slot'}
-  subtitle={slot?.id}
-  width="lg"
->
+<Drawer bind:id title={slot?.name ?? 'Slot'} subtitle={slot?.id} width="lg">
   {#snippet header()}
     {#if slot}
       <div class="flex flex-wrap items-center gap-2">
@@ -69,8 +63,7 @@
             <div class="rounded-lg border border-bad/30 bg-bad/10 px-3 py-2 text-sm leading-6 text-bad">{slot.error}</div>
           {/if}
 
-          <section>
-            <h3 class="mb-2 text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Serving</h3>
+          <Section title="Serving">
             {#if instance}
               <button class="flex w-full items-center gap-3 rounded-lg border border-line bg-sunken px-3 py-2.5 text-left transition-colors hover:border-line-strong" onclick={() => onInstance?.(instance.id)}>
                 <div class="min-w-0 flex-1">
@@ -88,10 +81,9 @@
             {:else}
               <div class="rounded-lg border border-dashed border-line px-3 py-4 text-center text-sm text-fg-faint">Nothing is serving this slot. The gateway answers 503 with a retry hint for <span class="font-mono text-fg-muted">{slot.name}</span>.</div>
             {/if}
-          </section>
+          </Section>
 
-          <section>
-            <h3 class="mb-2 text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Reservation</h3>
+          <Section title="Reservation">
             <Kv
               columns={2}
               items={[
@@ -99,23 +91,16 @@
                 ['budget', slot.memoryBytes ? bytes(slot.memoryBytes) : 'whole devices'],
                 ['runtime', slot.runtimeId || 'first compatible'],
                 ['public name', slot.name],
-                ['limits', policyText(slot.policy, defaults)],
+                ['limits', policyText(slot.policy, cached.gateway?.policy)],
                 ['created', when(slot.createdAt)],
                 ['updated', when(slot.updatedAt)]
               ]}
             />
-            {#if Object.keys(slot.params).length}
-              <div class="mt-3 flex flex-wrap gap-1.5">
-                {#each Object.entries(slot.params) as [k, v] (k)}
-                  <span class="rounded border border-line bg-sunken px-1.5 py-0.5 font-mono text-[11px]"><span class="text-fg-faint">{k}=</span><span class="text-fg">{v}</span></span>
-                {/each}
-              </div>
-            {/if}
-          </section>
+            {#if Object.keys(slot.params).length}<ParamChips params={slot.params} class="mt-3" />{/if}
+          </Section>
 
           {#if slot.request}
-            <section>
-              <h3 class="mb-2 text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Last request</h3>
+            <Section title="Last request">
               <Kv
                 mono
                 items={[
@@ -125,7 +110,7 @@
                   ['params', Object.entries(slot.request.params).map(([k, v]) => `${k}=${v}`).join(' ')]
                 ]}
               />
-            </section>
+            </Section>
           {/if}
         </div>
       {:else if tab === 'log'}

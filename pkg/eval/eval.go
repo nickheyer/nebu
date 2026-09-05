@@ -14,7 +14,7 @@ import (
 )
 
 // Byte unit constants exposed to every expression
-var Constants = map[string]any{
+var constants = map[string]any{
 	"KiB": 1024.0,
 	"MiB": 1048576.0,
 	"GiB": 1073741824.0,
@@ -27,7 +27,7 @@ var functions = []expr.Option{
 		if len(args) != 2 {
 			return nil, fmt.Errorf("vercmp needs two arguments")
 		}
-		return CompareVersions(fmt.Sprint(args[0]), fmt.Sprint(args[1])), nil
+		return compareVersions(fmt.Sprint(args[0]), fmt.Sprint(args[1])), nil
 	}, new(func(string, string) int)),
 	expr.Function("num", func(args ...any) (any, error) {
 		if len(args) != 1 {
@@ -53,12 +53,20 @@ func Compile(src string) (*Expr, error) {
 	return &Expr{src: src, prog: prog}, nil
 }
 
+// Compiles an expression, nil when src is blank
+func CompileOptional(src string) (*Expr, error) {
+	if strings.TrimSpace(src) == "" {
+		return nil, nil
+	}
+	return Compile(src)
+}
+
 // Returns expression source
 func (e *Expr) Source() string { return e.src }
 
 // Evaluates against merged constants and env
-func (e *Expr) Eval(env map[string]any) (any, error) {
-	out, err := expr.Run(e.prog, Env(env))
+func (e *Expr) eval(env map[string]any) (any, error) {
+	out, err := expr.Run(e.prog, withConstants(env))
 	if err != nil {
 		return nil, fmt.Errorf("eval %q: %w", e.src, err)
 	}
@@ -67,7 +75,7 @@ func (e *Expr) Eval(env map[string]any) (any, error) {
 
 // Evaluates and coerces to float
 func (e *Expr) Float(env map[string]any) (float64, error) {
-	out, err := e.Eval(env)
+	out, err := e.eval(env)
 	if err != nil {
 		return 0, err
 	}
@@ -76,7 +84,7 @@ func (e *Expr) Float(env map[string]any) (float64, error) {
 
 // Evaluates and coerces to bool
 func (e *Expr) Bool(env map[string]any) (bool, error) {
-	out, err := e.Eval(env)
+	out, err := e.eval(env)
 	if err != nil {
 		return false, err
 	}
@@ -89,13 +97,30 @@ func (e *Expr) Bool(env map[string]any) (bool, error) {
 	return false, fmt.Errorf("eval %q: %v is not a bool", e.src, out)
 }
 
+// Evaluates to bool, holding by default when the expression is nil
+func (e *Expr) Holds(env map[string]any) (bool, error) {
+	if e == nil {
+		return true, nil
+	}
+	return e.Bool(env)
+}
+
 // Merges constants under the given env
-func Env(env map[string]any) map[string]any {
-	out := make(map[string]any, len(env)+len(Constants))
-	for k, v := range Constants {
+func withConstants(env map[string]any) map[string]any {
+	out := make(map[string]any, len(env)+len(constants))
+	for k, v := range constants {
 		out[k] = v
 	}
 	for k, v := range env {
+		out[k] = v
+	}
+	return out
+}
+
+// Widens a map's values to any, as expression and template scopes take
+func Anys[V any](m map[string]V) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
 		out[k] = v
 	}
 	return out
@@ -164,7 +189,7 @@ func ParseNumber(s string) (float64, error) {
 }
 
 // Compares dotted numeric versions, ignoring non numeric tails
-func CompareVersions(a, b string) int {
+func compareVersions(a, b string) int {
 	pa, pb := versionParts(a), versionParts(b)
 	for i := 0; i < len(pa) || i < len(pb); i++ {
 		var x, y int

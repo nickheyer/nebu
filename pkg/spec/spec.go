@@ -111,15 +111,6 @@ func Decode(data []byte, msg proto.Message) error {
 	return nil
 }
 
-// Encodes a proto message as YAML
-func Encode(msg proto.Message) ([]byte, error) {
-	js, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(msg)
-	if err != nil {
-		return nil, err
-	}
-	return yaml.JSONToYAML(js)
-}
-
 func loadDir[T identified](fsys fs.FS, dir string, into []T, newT func() T) ([]T, error) {
 	entries, err := fs.ReadDir(fsys, dir)
 	if errors.Is(err, fs.ErrNotExist) {

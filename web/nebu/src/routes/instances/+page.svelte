@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { page } from '$app/state';
-  import { replaceState } from '$app/navigation';
   import { api } from '$lib/api';
   import { live, clock, instanceLive, slotName } from '$lib/state.svelte';
+  import { selectionParam } from '$lib/selection.svelte';
   import { launch } from '$lib/launch';
   import { bytes, duration, newestFirst, when, ago } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
@@ -20,17 +19,9 @@
   import InstanceDrawer from '$lib/components/InstanceDrawer.svelte';
 
   let view = $state('running');
-  let selected = $state(page.url.searchParams.get('id') ?? '');
+  const sel = selectionParam('/instances');
 
-  $effect(() => {
-    const q = page.url.searchParams.get('id');
-    if (q) selected = q;
-  });
-  $effect(() => {
-    if (!selected && page.url.searchParams.has('id')) replaceState('/instances', {});
-  });
-
-  const all = $derived([...live.instances.values()].sort(newestFirst));
+  const all = $derived([...live.instances.values()].sort(newestFirst((i) => i.createdAt)));
   const running = $derived(all.filter(instanceLive));
   const failed = $derived(all.filter((i) => i.state === InstanceState.FAILED));
   const list = $derived(view === 'running' ? running : view === 'failed' ? failed : all);
@@ -72,7 +63,7 @@
         <tbody>
           {#each list as i (i.id)}
             {@const alive = instanceLive(i)}
-            <tr class="row-link {selected === i.id ? 'row-active' : ''}" onclick={() => (selected = i.id)}>
+            <tr class="row-link {sel.id === i.id ? 'row-active' : ''}" onclick={() => (sel.id = i.id)}>
               <td>
                 <div class="font-medium text-fg">{i.name}</div>
                 {#if i.triage[0]?.summary || (!alive && i.error)}
@@ -89,7 +80,7 @@
               <td class="text-right" onclick={(e) => e.stopPropagation()}>
                 <Menu
                   items={[
-                    { label: 'Open log', icon: ScrollText, onSelect: () => (selected = i.id) },
+                    { label: 'Open log', icon: ScrollText, onSelect: () => (sel.id = i.id) },
                     ...(alive
                       ? [{ label: 'Stop', icon: Square, tone: 'bad' as const, onSelect: () => stop(i) }]
                       : [{ label: 'Run again', icon: RotateCcw, disabled: !i.request, onSelect: () => i.request && launch({ ...i.request }) }])
@@ -104,4 +95,4 @@
   {/if}
 </Panel>
 
-<InstanceDrawer bind:id={selected} />
+<InstanceDrawer bind:id={sel.id} />

@@ -1,9 +1,10 @@
-import { api, message } from './api';
-import { live, instanceLive, modelKey } from './state.svelte';
+import { api } from './api';
+import { live, instanceLive } from './state.svelte';
+import { confirm } from './confirm.svelte';
+import { droppedModel } from './dnd.svelte';
 import { fail, ok } from './toast.svelte';
-import type { StoredModel } from '$proto/store_pb';
 
-export interface RunSpec {
+interface RunSpec {
   sourceId: string;
   repo: string;
   group: string;
@@ -24,8 +25,8 @@ export function slotOccupied(slotId: string | undefined): boolean {
   return !!s?.instanceId && instanceLive(live.instances.get(s.instanceId));
 }
 
-// Runs a model, swapping when its slot is occupied, and returns the task id, telling the caller why it was refused
-export async function launch(spec: RunSpec, drainFirst = false, refused?: (text: string) => void): Promise<string | undefined> {
+// Runs a model, swapping when its slot is occupied, and returns the task id
+export async function launch(spec: RunSpec, drainFirst = false, refused?: (err: unknown) => void): Promise<string | undefined> {
   const run = { ...spec, params: spec.params ?? {} };
   const swap = slotOccupied(spec.slotId);
   try {
@@ -36,23 +37,29 @@ export async function launch(spec: RunSpec, drainFirst = false, refused?: (text:
     return id;
   } catch (err) {
     fail(err, swap ? 'Swap refused' : 'Run refused');
-    refused?.(message(err));
+    refused?.(err);
     return undefined;
   }
 }
 
-// Runs a stored model by key into a slot
-export async function launchKey(key: string, slotId: string): Promise<string | undefined> {
+// Runs the dropped model in a slot, asking first when that swaps out its occupant
+export async function dropModelOnSlot(ev: DragEvent, slotId: string) {
+  ev.preventDefault();
+  const key = droppedModel(ev);
+  const slot = live.slots.get(slotId);
+  if (!key || !slot) return;
   const m = live.models.get(key);
   if (!m) {
     fail(new Error(key), 'Unknown model');
-    return undefined;
+    return;
   }
-  return launch({ sourceId: m.sourceId, repo: m.repo, group: m.group, slotId });
+  if (slotOccupied(slotId)) {
+    const yes = await confirm({
+      title: `Swap ${slot.name}?`,
+      message: `${slot.name} is serving ${slot.request?.repo ?? 'a model'}. It switches to ${m.repo} ${m.group} and the old instance drains and stops. The public name keeps answering throughout.`,
+      action: 'Swap'
+    });
+    if (!yes) return;
+  }
+  await launch({ sourceId: m.sourceId, repo: m.repo, group: m.group, slotId });
 }
-
-export function specOf(m: StoredModel, slotId = ''): RunSpec {
-  return { sourceId: m.sourceId, repo: m.repo, group: m.group, slotId };
-}
-
-export { modelKey };

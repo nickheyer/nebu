@@ -10,17 +10,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func TestMigrationsApplied(t *testing.T) {
-	d, _ := open(t)
-	versions, err := d.Migrations(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(versions) != 1 || versions[0] == "" {
-		t.Fatalf("versions %v", versions)
-	}
-}
-
 func TestBuildsRoundTrip(t *testing.T) {
 	d, _ := open(t)
 	ctx := context.Background()
@@ -45,12 +34,12 @@ func TestBuildsRoundTrip(t *testing.T) {
 	if list, _ := d.ListBuilds(ctx, "rt"); len(list) != 1 {
 		t.Fatal("filter by runtime")
 	}
-	n, err := d.FailUnfinishedBuilds(ctx, "restart", time.Unix(20, 0))
+	n, err := d.FailUnfinishedBuilds(ctx)
 	if err != nil || n != 2 {
 		t.Fatalf("fail unfinished %d %v", n, err)
 	}
 	got, _ = d.GetBuild(ctx, "b1")
-	if got.GetState() != v1.BuildState_BUILD_STATE_FAILED || got.GetError() != "restart" || got.GetFinishedAt() == nil {
+	if got.GetState() != v1.BuildState_BUILD_STATE_FAILED || got.GetError() != RestartNote || got.GetFinishedAt() == nil {
 		t.Fatalf("after fail %v", got)
 	}
 	if ok, _ := d.DeleteBuild(ctx, "b1"); !ok {

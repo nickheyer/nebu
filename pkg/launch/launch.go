@@ -133,20 +133,15 @@ func (p *Process) Log() *Log { return p.log }
 // Reads everything written so far into the log
 func (p *Process) Sync() { p.tail.drain() }
 
-// Terminates gracefully, then forcefully after grace
+// Terminates gracefully, then forcefully after grace, and waits for output
 func (p *Process) Stop(grace time.Duration) error {
 	select {
 	case <-p.done:
 		return nil
 	default:
 	}
-	p.once.Do(func() { p.tree.Interrupt() })
-	select {
-	case <-p.done:
-		return nil
-	case <-time.After(grace):
-	}
-	p.tree.Kill()
+	// Exit is watched through done, the process is never tied to a context
+	p.once.Do(func() { p.tree.Terminate(grace, p.done) })
 	<-p.done
 	return nil
 }
@@ -165,9 +160,7 @@ type Adopted struct {
 func Adopt(pid int, logPath string) Handle {
 	a := &Adopted{pid: pid, log: NewLog(logCapacity), exited: make(chan struct{}), done: make(chan struct{})}
 	go func() {
-		for proc.Exists(pid) {
-			time.Sleep(proc.PollInterval)
-		}
+		proc.WaitGone(pid, 0)
 		close(a.exited)
 	}()
 	a.tail = newTailer(logPath, a.log)

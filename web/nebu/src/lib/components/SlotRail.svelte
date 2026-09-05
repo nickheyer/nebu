@@ -1,29 +1,15 @@
 <script lang="ts">
-  import { live, instanceLive } from '$lib/state.svelte';
-  import { dnd, droppedModel, acceptsModel } from '$lib/dnd.svelte';
-  import { launchKey } from '$lib/launch';
-  import { confirm } from '$lib/confirm.svelte';
+  import { live } from '$lib/state.svelte';
+  import { dnd, acceptsModel } from '$lib/dnd.svelte';
+  import { dropModelOnSlot, slotOccupied } from '$lib/launch';
+  import { byName } from '$lib/format';
   import { SlotState } from '$proto/slot_pb';
   import { LayoutGrid, Plus } from '@lucide/svelte';
   import StateBadge from './ui/StateBadge.svelte';
   import Button from './ui/Button.svelte';
 
-  const slots = $derived([...live.slots.values()].sort((a, b) => a.name.localeCompare(b.name)));
+  const slots = $derived([...live.slots.values()].sort(byName((s) => s.name)));
   let over = $state('');
-
-  async function drop(ev: DragEvent, slotId: string) {
-    ev.preventDefault();
-    over = '';
-    const key = droppedModel(ev);
-    if (!key) return;
-    const s = live.slots.get(slotId);
-    const occupied = !!s?.instanceId && instanceLive(live.instances.get(s.instanceId));
-    if (occupied) {
-      const yes = await confirm({ title: `Swap ${s?.name}?`, message: 'The slot switches to the dropped model and the old instance drains and stops.', action: 'Swap' });
-      if (!yes) return;
-    }
-    await launchKey(key, slotId);
-  }
 </script>
 
 <aside class="panel sticky top-0 flex flex-col gap-2 p-3">
@@ -36,7 +22,7 @@
   {:else}
     <p class="px-1 text-xs leading-5 text-fg-faint">Drag a model onto a slot to serve it there.</p>
     {#each slots as s (s.id)}
-      {@const occupied = !!s.instanceId && instanceLive(live.instances.get(s.instanceId))}
+      {@const occupied = slotOccupied(s.id)}
       <div
         role="group"
         class="drop-target rounded-md border border-line bg-sunken px-3 py-2 transition-colors"
@@ -48,7 +34,10 @@
           over = s.id;
         }}
         ondragleave={() => (over = '')}
-        ondrop={(e) => drop(e, s.id)}
+        ondrop={(e) => {
+          over = '';
+          dropModelOnSlot(e, s.id);
+        }}
       >
         <div class="flex items-center justify-between gap-2">
           <a href="/slots?id={s.id}" class="truncate text-sm font-medium text-fg hover:underline">{s.name}</a>

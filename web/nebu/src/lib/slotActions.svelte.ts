@@ -1,6 +1,5 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import { api, message } from './api';
-import { live, instanceLive } from './state.svelte';
 import { confirm } from './confirm.svelte';
 import { fail, ok } from './toast.svelte';
 import type { Slot } from '$proto/slot_pb';
@@ -37,33 +36,31 @@ export function newSlot() {
   slotUi.editOpen = true;
 }
 
-// Deletes a slot after confirming, stopping its occupant
+// Deletes a slot after confirming, forcing past what the daemon names when asked
 export async function deleteSlot(slot: Slot): Promise<boolean> {
-  const occupied = !!slot.instanceId && instanceLive(live.instances.get(slot.instanceId));
-  const yes = await confirm({
-    title: `Delete ${slot.name}?`,
-    message: occupied
-      ? `The instance serving ${slot.request?.repo ?? 'it'} stops and the public name ${slot.name} stops answering.`
-      : `The public name ${slot.name} stops answering. Stored models are untouched.`,
-    action: 'Delete',
-    tone: 'bad'
-  });
+  const yes = await confirm({ title: `Delete ${slot.name}?`, message: `The public name ${slot.name} stops answering. Stored models are untouched.`, action: 'Delete', tone: 'bad' });
   if (!yes) return false;
   try {
-    await api.slots.deleteSlot({ id: slot.id, force: occupied });
+    await api.slots.deleteSlot({ id: slot.id, force: false });
     ok(`Deleted ${slot.name}`);
     return true;
   } catch (err) {
-    if (!(err instanceof ConnectError && err.code === Code.FailedPrecondition)) {
+    // Forcing past a live occupant or the swaps aimed at it is the person's call
+    const code = err instanceof ConnectError ? err.code : undefined;
+    const ask =
+      code === Code.InvalidArgument
+        ? { title: `Stop what ${slot.name} serves?`, message: `${message(err)}. The instance stops with the slot.`, action: 'Stop and delete' }
+        : code === Code.FailedPrecondition
+          ? { title: `Drop what swaps into ${slot.name}?`, message: `${message(err)}. They keep pulling but no longer swap anywhere.`, action: 'Drop and delete' }
+          : null;
+    if (!ask) {
       fail(err, 'Delete failed');
       return false;
     }
-    // The daemon names the watches and wants that swap into the slot, dropping the swap is the person's call
-    const force = await confirm({ title: `Drop what swaps into ${slot.name}?`, message: `${message(err)}. They keep pulling but no longer swap anywhere.`, action: 'Drop and delete', tone: 'bad' });
-    if (!force) return false;
+    if (!(await confirm({ ...ask, tone: 'bad' }))) return false;
     try {
       await api.slots.deleteSlot({ id: slot.id, force: true });
-      ok(`Deleted ${slot.name}`, 'What swapped into it now only pulls');
+      ok(`Deleted ${slot.name}`);
       return true;
     } catch (again) {
       fail(again, 'Delete failed');

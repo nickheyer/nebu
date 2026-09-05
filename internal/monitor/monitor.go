@@ -3,8 +3,6 @@ package monitor
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -64,6 +62,9 @@ type Manager struct {
 	busy map[string]bool
 }
 
+// A log line sink, a task's or nothing
+type logf func(format string, args ...any)
+
 // Loads every watch and want from the store
 func (m *Manager) Load(ctx context.Context) error {
 	list, err := m.DB.ListWatches(ctx)
@@ -109,21 +110,44 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
+// Clones rows oldest first, ids breaking ties
+func oldestFirst[T proto.Message](rows map[string]T, created func(T) *timestamppb.Timestamp, id func(T) string) []T {
+	out := make([]T, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, proto.Clone(r).(T))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := created(out[i]).AsTime(), created(out[j]).AsTime()
+		if a.Equal(b) {
+			return id(out[i]) < id(out[j])
+		}
+		return a.Before(b)
+	})
+	return out
+}
+
 // Lists watches oldest first
 func (m *Manager) List() []*v1.Watch {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]*v1.Watch, 0, len(m.watches))
-	for _, w := range m.watches {
-		out = append(out, proto.Clone(w).(*v1.Watch))
-	}
-	sort.Slice(out, func(i, j int) bool {
-		a, b := out[i].GetCreatedAt().AsTime(), out[j].GetCreatedAt().AsTime()
-		if a.Equal(b) {
-			return out[i].GetId() < out[j].GetId()
+	return oldestFirst(m.watches, (*v1.Watch).GetCreatedAt, (*v1.Watch).GetId)
+}
+
+// Lists wants oldest first
+func (m *Manager) ListWants() []*v1.Want {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return oldestFirst(m.wants, (*v1.Want).GetCreatedAt, (*v1.Want).GetId)
+}
+
+// Wants still looking
+func (m *Manager) openWants() []*v1.Want {
+	var out []*v1.Want
+	for _, w := range m.ListWants() {
+		if !w.GetSatisfied() {
+			out = append(out, w)
 		}
-		return a.Before(b)
-	})
+	}
 	return out
 }
 
@@ -141,35 +165,6 @@ func (m *Manager) find(id string) (*v1.Watch, error) {
 	return nil, fmt.Errorf("%w %q", ErrUnknownWatch, id)
 }
 
-// Lists wants oldest first
-func (m *Manager) ListWants() []*v1.Want {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]*v1.Want, 0, len(m.wants))
-	for _, w := range m.wants {
-		out = append(out, proto.Clone(w).(*v1.Want))
-	}
-	sort.Slice(out, func(i, j int) bool {
-		a, b := out[i].GetCreatedAt().AsTime(), out[j].GetCreatedAt().AsTime()
-		if a.Equal(b) {
-			return out[i].GetId() < out[j].GetId()
-		}
-		return a.Before(b)
-	})
-	return out
-}
-
-// Wants still looking
-func (m *Manager) openWants() []*v1.Want {
-	var out []*v1.Want
-	for _, w := range m.ListWants() {
-		if !w.GetSatisfied() {
-			out = append(out, w)
-		}
-	}
-	return out
-}
-
 func (m *Manager) findWant(id string) (*v1.Want, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -177,6 +172,19 @@ func (m *Manager) findWant(id string) (*v1.Want, error) {
 		return proto.Clone(w).(*v1.Want), nil
 	}
 	return nil, fmt.Errorf("%w %q", ErrUnknownWant, id)
+}
+
+func (m *Manager) save(w *v1.Watch, action v1.EventAction) {
+	m.mu.Lock()
+	if m.watches == nil {
+		m.watches = map[string]*v1.Watch{}
+	}
+	m.watches[w.GetId()] = proto.Clone(w).(*v1.Watch)
+	m.mu.Unlock()
+	if err := m.DB.PutWatch(context.Background(), w); err != nil {
+		m.Log.Warn("watch record write failed", "id", w.GetId(), "err", err)
+	}
+	m.Events.Publish(v1.EventKind_EVENT_KIND_WATCH, action, w.GetId(), w)
 }
 
 func (m *Manager) saveWant(w *v1.Want, action v1.EventAction) {
@@ -192,15 +200,57 @@ func (m *Manager) saveWant(w *v1.Want, action v1.EventAction) {
 	m.Events.Publish(v1.EventKind_EVENT_KIND_WANT, action, w.GetId(), w)
 }
 
+// Writes a finding and tells the stream
+func (m *Manager) saveFinding(ctx context.Context, f *v1.Finding, action v1.EventAction) {
+	if err := m.DB.PutFinding(ctx, f); err != nil {
+		m.Log.Warn("finding write failed", "err", err)
+	}
+	m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, action, f.GetId(), f)
+}
+
+// Tells the stream findings went with their watch or want
+func (m *Manager) dropFindings(findings []*v1.Finding) {
+	for _, f := range findings {
+		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_DELETED, f.GetId(), f)
+	}
+}
+
+// Checks what a watch or want would act on: its group regex, slot, runtime, and profile, the profile's id returned
+func (m *Manager) target(groupMatch, slotID, runtimeID, profileRef string) (string, error) {
+	if groupMatch != "" {
+		if _, err := regexp.Compile(groupMatch); err != nil {
+			return "", fmt.Errorf("%w: group match: %v", ErrWatch, err)
+		}
+	}
+	if slotID != "" {
+		s, _, err := m.Slots.Get(slotID)
+		if err != nil {
+			return "", err
+		}
+		if runtimeID == "" {
+			runtimeID = s.GetRuntimeId()
+		}
+	}
+	if runtimeID != "" {
+		if _, err := m.Inspector.Runtimes.Get(runtimeID); err != nil {
+			return "", err
+		}
+	}
+	if profileRef == "" {
+		return "", nil
+	}
+	// The slot's runtime stands in so the row keeps the id a rename cannot strand
+	p, err := m.Inspector.Profiles.Resolve(runtimeID, profileRef)
+	if err != nil {
+		return "", err
+	}
+	return p.GetId(), nil
+}
+
 // Adds a want and looks for it once
 func (m *Manager) AddWant(ctx context.Context, req *v1.AddWantRequest) (*v1.Want, error) {
 	if strings.TrimSpace(req.GetQuery()) == "" {
 		return nil, fmt.Errorf("%w: query required", ErrWatch)
-	}
-	if req.GetGroupMatch() != "" {
-		if _, err := regexp.Compile(req.GetGroupMatch()); err != nil {
-			return nil, fmt.Errorf("%w: group match: %v", ErrWatch, err)
-		}
 	}
 	if req.GetSourceId() != "" {
 		if _, err := m.Inspector.Sources.Get(req.GetSourceId()); err != nil {
@@ -209,18 +259,15 @@ func (m *Manager) AddWant(ctx context.Context, req *v1.AddWantRequest) (*v1.Want
 	} else if req.GetKind() != v1.SourceKind_SOURCE_KIND_UNSPECIFIED && len(m.Inspector.Sources.OfKind(req.GetKind())) == 0 {
 		return nil, fmt.Errorf("%w: no source of kind %s", ErrWatch, req.GetKind())
 	}
-	if req.GetFormatId() != "" && !m.knownFormat(req.GetFormatId()) {
+	if req.GetFormatId() != "" && m.Inspector.Classifier.Spec(req.GetFormatId()) == nil {
 		return nil, fmt.Errorf("%w: unknown format %q", ErrWatch, req.GetFormatId())
 	}
-	if err := m.checkTarget(req.GetSlotId(), req.GetRuntimeId()); err != nil {
-		return nil, err
-	}
-	profileID, err := m.profileID(req.GetRuntimeId(), req.GetSlotId(), req.GetProfileId())
+	profileID, err := m.target(req.GetGroupMatch(), req.GetSlotId(), req.GetRuntimeId(), req.GetProfileId())
 	if err != nil {
 		return nil, err
 	}
 	w := &v1.Want{
-		Id:         newID(),
+		Id:         db.NewID(),
 		Query:      strings.TrimSpace(req.GetQuery()),
 		Kind:       req.GetKind(),
 		SourceId:   req.GetSourceId(),
@@ -241,126 +288,58 @@ func (m *Manager) AddWant(ctx context.Context, req *v1.AddWantRequest) (*v1.Want
 	return w, nil
 }
 
-// Whether a format id is one the classifier knows
-func (m *Manager) knownFormat(id string) bool {
-	for _, f := range m.Inspector.Classifier.Specs() {
-		if f.GetId() == id {
-			return true
-		}
-	}
-	return false
-}
-
-// Checks the slot and runtime a swap would use exist
-func (m *Manager) checkTarget(slotID, runtimeID string) error {
-	if slotID != "" {
-		if _, _, err := m.Slots.Get(slotID); err != nil {
-			return err
-		}
-	}
-	if runtimeID != "" {
-		if _, err := m.Inspector.Runtimes.Get(runtimeID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Resolves a profile named by id or name against the runtime a swap would use,
-// the slot's when the request names none, so the row keeps the id
-func (m *Manager) profileID(runtimeID, slotID, ref string) (string, error) {
-	if ref == "" {
-		return "", nil
-	}
-	if runtimeID == "" && slotID != "" {
-		if s, _, err := m.Slots.Get(slotID); err == nil {
-			runtimeID = s.GetRuntimeId()
-		}
-	}
-	p, err := m.Inspector.Profile(runtimeID, ref)
-	if err != nil {
-		return "", err
-	}
-	return p.GetId(), nil
-}
-
-// Names the watches and wants whose swaps start from a profile, dropping the
-// reference when clear is set
-func (m *Manager) ProfileReferrers(refers func(ref, runtimeID string) bool, clear bool) []string {
+// Names the watches and wants pick selects, clearing each through fix when asked
+func (m *Manager) referrers(pickWatch func(*v1.Watch) bool, fixWatch func(*v1.Watch), pickWant func(*v1.Want) bool, fixWant func(*v1.Want), clear bool) []string {
 	var out []string
 	for _, w := range m.List() {
-		if !refers(w.GetProfileId(), w.GetRuntimeId()) {
+		if !pickWatch(w) {
 			continue
 		}
 		out = append(out, "watch "+w.GetRepo())
 		if clear {
-			w.ProfileId = ""
-			m.save(w, v1.EventAction_EVENT_ACTION_UPDATED)
+			fixWatch(w)
 		}
 	}
 	for _, w := range m.ListWants() {
-		if !refers(w.GetProfileId(), w.GetRuntimeId()) {
+		if !pickWant(w) {
 			continue
 		}
 		out = append(out, "want "+w.GetQuery())
 		if clear {
-			w.ProfileId = ""
-			m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED)
+			fixWant(w)
 		}
 	}
 	return out
+}
+
+// Names the watches and wants whose swaps start from a profile, dropping the reference when clear is set
+func (m *Manager) ProfileReferrers(refers func(ref, runtimeID string) bool, clear bool) []string {
+	return m.referrers(
+		func(w *v1.Watch) bool { return refers(w.GetProfileId(), w.GetRuntimeId()) },
+		func(w *v1.Watch) { w.ProfileId = ""; m.save(w, v1.EventAction_EVENT_ACTION_UPDATED) },
+		func(w *v1.Want) bool { return refers(w.GetProfileId(), w.GetRuntimeId()) },
+		func(w *v1.Want) { w.ProfileId = ""; m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED) },
+		clear)
 }
 
 // Names the watches and wants that swap into a slot, dropping the swap when clear is set
 func (m *Manager) SlotReferrers(slotID string, clear bool) []string {
-	var out []string
-	for _, w := range m.List() {
-		if w.GetSlotId() != slotID {
-			continue
-		}
-		out = append(out, "watch "+w.GetRepo())
-		if clear {
-			w.SlotId = ""
-			m.save(w, v1.EventAction_EVENT_ACTION_UPDATED)
-		}
-	}
-	for _, w := range m.ListWants() {
-		if w.GetSlotId() != slotID {
-			continue
-		}
-		out = append(out, "want "+w.GetQuery())
-		if clear {
-			w.SlotId = ""
-			m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED)
-		}
-	}
-	return out
+	return m.referrers(
+		func(w *v1.Watch) bool { return w.GetSlotId() == slotID },
+		func(w *v1.Watch) { w.SlotId = ""; m.save(w, v1.EventAction_EVENT_ACTION_UPDATED) },
+		func(w *v1.Want) bool { return w.GetSlotId() == slotID },
+		func(w *v1.Want) { w.SlotId = ""; m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED) },
+		clear)
 }
 
-// Names the watches of a source and the wants narrowed to it, removing the
-// watches and widening the wants when clear is set
+// Names the watches of a source and the wants narrowed to it, removing the watches and widening the wants when clear is set
 func (m *Manager) SourceReferrers(sourceID string, clear bool) []string {
-	var out []string
-	for _, w := range m.List() {
-		if w.GetSourceId() != sourceID {
-			continue
-		}
-		out = append(out, "watch "+w.GetRepo())
-		if clear {
-			m.Remove(context.Background(), w.GetId())
-		}
-	}
-	for _, w := range m.ListWants() {
-		if w.GetSourceId() != sourceID {
-			continue
-		}
-		out = append(out, "want "+w.GetQuery())
-		if clear {
-			w.SourceId = ""
-			m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED)
-		}
-	}
-	return out
+	return m.referrers(
+		func(w *v1.Watch) bool { return w.GetSourceId() == sourceID },
+		func(w *v1.Watch) { m.Remove(context.Background(), w.GetId()) },
+		func(w *v1.Want) bool { return w.GetSourceId() == sourceID },
+		func(w *v1.Want) { w.SourceId = ""; m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED) },
+		clear)
 }
 
 // Removes a want and its findings
@@ -376,15 +355,13 @@ func (m *Manager) RemoveWant(ctx context.Context, id string) (*v1.Want, error) {
 	m.mu.Lock()
 	delete(m.wants, w.GetId())
 	m.mu.Unlock()
-	for _, f := range findings {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_DELETED, f.GetId(), f)
-	}
+	m.dropFindings(findings)
 	m.Events.Publish(v1.EventKind_EVENT_KIND_WANT, v1.EventAction_EVENT_ACTION_DELETED, w.GetId(), w)
 	return w, nil
 }
 
 // Searches for a want and takes the first repository with a matching group
-func (m *Manager) checkWant(ctx context.Context, logf func(string, ...any), w *v1.Want) error {
+func (m *Manager) checkWant(ctx context.Context, log logf, w *v1.Want) error {
 	resp, err := m.Inspector.Sources.Search(ctx, &v1.SearchRequest{Query: w.GetQuery(), Kind: w.GetKind(), SourceId: w.GetSourceId(), Limit: wantHits})
 	w.CheckedAt = timestamppb.Now()
 	if err != nil {
@@ -397,37 +374,34 @@ func (m *Manager) checkWant(ctx context.Context, logf func(string, ...any), w *v
 		re, _ = regexp.Compile(w.GetGroupMatch())
 	}
 	for _, warn := range resp.GetWarnings() {
-		logf("%s: %s", w.GetQuery(), warn)
+		log("%s: %s", w.GetQuery(), warn)
 	}
-	for i, hit := range resp.GetHits() {
-		if i >= wantHits || ctx.Err() != nil {
+	for _, hit := range resp.GetHits() {
+		if ctx.Err() != nil {
 			break
 		}
 		_, model, err := m.Inspector.ResolveFresh(ctx, hit.GetSourceId(), hit.GetRepo(), "")
 		if err != nil {
-			logf("%s: %s did not resolve: %v", w.GetQuery(), hit.GetRepo(), err)
+			log("%s: %s did not resolve: %v", w.GetQuery(), hit.GetRepo(), err)
 			continue
 		}
 		for _, g := range m.Inspector.Classifier.Groups(model) {
 			if w.GetFormatId() != "" && g.FormatID != w.GetFormatId() || re != nil && !re.MatchString(g.Name) {
 				continue
 			}
-			f := &v1.Finding{Id: newID(), WantId: w.GetId(), SourceId: hit.GetSourceId(), Kind: v1.FindingKind_FINDING_KIND_WANTED_FOUND, Repo: hit.GetRepo(), Commit: model.GetCommit(), Group: g.Name, Detail: fmt.Sprintf("%s has %s %s, wanted as %q", hit.GetSourceId(), hit.GetRepo(), g.Name, w.GetQuery()), FoundAt: timestamppb.Now()}
+			f := &v1.Finding{Id: db.NewID(), WantId: w.GetId(), SourceId: hit.GetSourceId(), Kind: v1.FindingKind_FINDING_KIND_WANTED_FOUND, Repo: hit.GetRepo(), Commit: model.GetCommit(), Group: g.Name, Detail: fmt.Sprintf("%s has %s %s, wanted as %q", hit.GetSourceId(), hit.GetRepo(), g.Name, w.GetQuery()), FoundAt: timestamppb.Now()}
 			w.FoundSourceId, w.FoundRepo, w.FoundGroup, w.Satisfied, w.Error = hit.GetSourceId(), hit.GetRepo(), g.Name, true, ""
-			if err := m.DB.PutFinding(ctx, f); err != nil {
-				m.Log.Warn("finding write failed", "err", err)
-			}
-			m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_CREATED, f.GetId(), f)
-			logf("%s", f.GetDetail())
+			m.saveFinding(ctx, f, v1.EventAction_EVENT_ACTION_CREATED)
+			log("%s", f.GetDetail())
 			m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED)
 			if w.GetAutoPull() {
-				if task := m.pull(ctx, logf, f, hit.GetSourceId(), hit.GetRepo(), "", g.Name); task != "" {
+				if task := m.pull(ctx, log, f, hit.GetSourceId(), hit.GetRepo(), "", g.Name); task != "" {
 					w.TaskId = task
 					m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED)
-					if swap := m.swap(ctx, logf, w.GetSlotId(), &v1.RunRequest{SourceId: hit.GetSourceId(), Repo: hit.GetRepo(), Group: g.Name, RuntimeId: w.GetRuntimeId(), Params: w.GetParams(), SlotId: w.GetSlotId(), ProfileId: w.GetProfileId()}); swap != "" {
+					run := &v1.RunRequest{SourceId: hit.GetSourceId(), Repo: hit.GetRepo(), Group: g.Name, RuntimeId: w.GetRuntimeId(), Params: w.GetParams(), SlotId: w.GetSlotId(), ProfileId: w.GetProfileId()}
+					if swap := m.swap(ctx, log, w.GetSlotId(), run, f); swap != "" {
 						w.SwapTaskId = swap
 						m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED)
-						m.attachSwap(ctx, swap, f)
 					}
 				}
 			}
@@ -437,55 +411,46 @@ func (m *Manager) checkWant(ctx context.Context, logf func(string, ...any), w *v
 	}
 	w.Error = ""
 	m.saveWant(w, v1.EventAction_EVENT_ACTION_UPDATED)
-	logf("%s: nothing matching yet across %d hits", w.GetQuery(), len(resp.GetHits()))
+	log("%s: nothing matching yet across %d hits", w.GetQuery(), len(resp.GetHits()))
 	return nil
 }
 
 // Pulls one group for a finding and waits, returning the task id on success
-func (m *Manager) pull(ctx context.Context, logf func(string, ...any), f *v1.Finding, sourceID, repo, revision, group string) string {
+func (m *Manager) pull(ctx context.Context, log logf, f *v1.Finding, sourceID, repo, revision, group string) string {
 	task, err := m.Puller.Pull(ctx, &v1.PullRequest{SourceId: sourceID, Repo: repo, Revision: revision, Group: group})
 	if err != nil {
-		logf("pull %s %s failed to start: %v", repo, group, err)
+		log("pull %s %s failed to start: %v", repo, group, err)
 		return ""
 	}
 	f.TaskId = task.GetId()
-	m.DB.PutFinding(ctx, f)
-	m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_UPDATED, f.GetId(), f)
-	logf("pulling %s %s as task %s", repo, group, task.GetId())
-	final, err := m.Tasks.Wait(ctx, task.GetId())
-	if err != nil || final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
-		logf("pull %s %s did not succeed: %s", repo, group, final.GetError())
+	m.saveFinding(ctx, f, v1.EventAction_EVENT_ACTION_UPDATED)
+	log("pulling %s %s as task %s", repo, group, task.GetId())
+	if err := m.Tasks.WaitOK(ctx, task.GetId()); err != nil {
+		log("pull %s %s did not succeed: %v", repo, group, err)
 		return ""
 	}
 	return task.GetId()
 }
 
-// Swaps a slot onto a run and waits, returning the swap task id, nothing without a slot
-func (m *Manager) swap(ctx context.Context, logf func(string, ...any), slotID string, run *v1.RunRequest) string {
+// Swaps a slot onto a run and waits, recording the swap on the findings that asked for it, nothing without a slot
+func (m *Manager) swap(ctx context.Context, log logf, slotID string, run *v1.RunRequest, findings ...*v1.Finding) string {
 	if slotID == "" {
 		return ""
 	}
 	_, _, task, err := m.Slots.Swap(ctx, &v1.SwapRequest{SlotId: slotID, Run: run})
 	if err != nil {
-		logf("swap into slot %s failed: %v", slotID, err)
+		log("swap into slot %s failed: %v", slotID, err)
 		return ""
 	}
-	logf("swapping slot %s to %s %s as task %s", slotID, run.GetRepo(), run.GetGroup(), task.GetId())
-	if final, err := m.Tasks.Wait(ctx, task.GetId()); err == nil && final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
-		logf("swap did not succeed: %s", final.GetError())
+	log("swapping slot %s to %s %s as task %s", slotID, run.GetRepo(), run.GetGroup(), task.GetId())
+	for _, f := range findings {
+		f.SwapTaskId = task.GetId()
+		m.saveFinding(ctx, f, v1.EventAction_EVENT_ACTION_UPDATED)
+	}
+	if err := m.Tasks.WaitOK(ctx, task.GetId()); err != nil {
+		log("swap did not succeed: %v", err)
 	}
 	return task.GetId()
-}
-
-// Records the swap a pull led to on the findings that asked for it
-func (m *Manager) attachSwap(ctx context.Context, task string, findings ...*v1.Finding) {
-	for _, f := range findings {
-		f.SwapTaskId = task
-		if err := m.DB.PutFinding(ctx, f); err != nil {
-			m.Log.Warn("finding write failed", "err", err)
-		}
-		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_UPDATED, f.GetId(), f)
-	}
 }
 
 // Drops old acknowledged findings and tells the stream which
@@ -494,22 +459,7 @@ func (m *Manager) prune(ctx context.Context) {
 	if err != nil {
 		m.Log.Warn("finding prune failed", "err", err)
 	}
-	for _, f := range gone {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_DELETED, f.GetId(), f)
-	}
-}
-
-func (m *Manager) save(w *v1.Watch, action v1.EventAction) {
-	m.mu.Lock()
-	if m.watches == nil {
-		m.watches = map[string]*v1.Watch{}
-	}
-	m.watches[w.GetId()] = proto.Clone(w).(*v1.Watch)
-	m.mu.Unlock()
-	if err := m.DB.PutWatch(context.Background(), w); err != nil {
-		m.Log.Warn("watch record write failed", "id", w.GetId(), "err", err)
-	}
-	m.Events.Publish(v1.EventKind_EVENT_KIND_WATCH, action, w.GetId(), w)
+	m.dropFindings(gone)
 }
 
 // Adds a watch and records its baseline with one check
@@ -517,16 +467,8 @@ func (m *Manager) Add(ctx context.Context, req *v1.AddWatchRequest) (*v1.Watch, 
 	if strings.TrimSpace(req.GetRepo()) == "" {
 		return nil, fmt.Errorf("%w: repo required", ErrWatch)
 	}
-	if req.GetGroupMatch() != "" {
-		if _, err := regexp.Compile(req.GetGroupMatch()); err != nil {
-			return nil, fmt.Errorf("%w: group match: %v", ErrWatch, err)
-		}
-	}
 	src, err := m.Inspector.Sources.Get(req.GetSourceId())
 	if err != nil {
-		return nil, err
-	}
-	if err := m.checkTarget(req.GetSlotId(), req.GetRuntimeId()); err != nil {
 		return nil, err
 	}
 	for _, w := range m.List() {
@@ -534,7 +476,7 @@ func (m *Manager) Add(ctx context.Context, req *v1.AddWatchRequest) (*v1.Watch, 
 			return nil, fmt.Errorf("%w: %s is already watched as %s", ErrWatch, req.GetRepo(), w.GetId())
 		}
 	}
-	profileID, err := m.profileID(req.GetRuntimeId(), req.GetSlotId(), req.GetProfileId())
+	profileID, err := m.target(req.GetGroupMatch(), req.GetSlotId(), req.GetRuntimeId(), req.GetProfileId())
 	if err != nil {
 		return nil, err
 	}
@@ -551,10 +493,10 @@ func (m *Manager) Add(ctx context.Context, req *v1.AddWatchRequest) (*v1.Watch, 
 		ProfileId:  profileID,
 		CreatedAt:  timestamppb.Now(),
 	}
-	if _, err := m.check(ctx, nil, w); err != nil {
+	if err := m.check(ctx, nil, w); err != nil {
 		return nil, err
 	}
-	w.Id = newID()
+	w.Id = db.NewID()
 	m.save(w, v1.EventAction_EVENT_ACTION_CREATED)
 	return w, nil
 }
@@ -572,10 +514,7 @@ func (m *Manager) Remove(ctx context.Context, id string) (*v1.Watch, error) {
 	m.mu.Lock()
 	delete(m.watches, w.GetId())
 	m.mu.Unlock()
-	// The findings went with the watch, so the stream has to say so too
-	for _, f := range findings {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_DELETED, f.GetId(), f)
-	}
+	m.dropFindings(findings)
 	m.Events.Publish(v1.EventKind_EVENT_KIND_WATCH, v1.EventAction_EVENT_ACTION_DELETED, w.GetId(), w)
 	return w, nil
 }
@@ -649,7 +588,7 @@ func (m *Manager) Check(ctx context.Context, id string, rearm bool) (*v1.Task, e
 		done := uint64(0)
 		for _, w := range watches {
 			h.Progress(done, total, "checking "+w.GetRepo())
-			if _, err := m.check(ctx, h, w); err != nil {
+			if err := m.check(ctx, h.Logf, w); err != nil {
 				failed = append(failed, w.GetRepo()+": "+err.Error())
 			}
 			done++
@@ -670,11 +609,9 @@ func (m *Manager) Check(ctx context.Context, id string, rearm bool) (*v1.Task, e
 }
 
 // Resolves a watch, records changes, and runs automatic actions
-func (m *Manager) check(ctx context.Context, h *tasks.Handle, w *v1.Watch) ([]*v1.Finding, error) {
-	logf := func(format string, args ...any) {
-		if h != nil {
-			h.Logf(format, args...)
-		}
+func (m *Manager) check(ctx context.Context, log logf, w *v1.Watch) error {
+	if log == nil {
+		log = func(string, ...any) {}
 	}
 	_, model, err := m.Inspector.ResolveFresh(ctx, w.GetSourceId(), w.GetRepo(), w.GetRevision())
 	if err != nil {
@@ -683,7 +620,7 @@ func (m *Manager) check(ctx context.Context, h *tasks.Handle, w *v1.Watch) ([]*v
 		if w.GetId() != "" {
 			m.save(w, v1.EventAction_EVENT_ACTION_UPDATED)
 		}
-		return nil, err
+		return err
 	}
 	var groups []string
 	for _, g := range m.Inspector.Classifier.Groups(model) {
@@ -691,30 +628,22 @@ func (m *Manager) check(ctx context.Context, h *tasks.Handle, w *v1.Watch) ([]*v
 	}
 	sort.Strings(groups)
 	baseline := w.GetLastCommit() == "" && len(w.GetKnownGroups()) == 0
-	known := map[string]bool{}
-	for _, g := range w.GetKnownGroups() {
-		known[g] = true
-	}
-	current := map[string]bool{}
-	for _, g := range groups {
-		current[g] = true
-	}
 	var findings []*v1.Finding
-	newFinding := func(kind v1.FindingKind, group, detail string) *v1.Finding {
-		return &v1.Finding{Id: newID(), WatchId: w.GetId(), SourceId: w.GetSourceId(), Kind: kind, Repo: w.GetRepo(), Commit: model.GetCommit(), Group: group, Detail: detail, FoundAt: timestamppb.Now()}
+	newFinding := func(kind v1.FindingKind, group, detail string) {
+		findings = append(findings, &v1.Finding{Id: db.NewID(), WatchId: w.GetId(), SourceId: w.GetSourceId(), Kind: kind, Repo: w.GetRepo(), Commit: model.GetCommit(), Group: group, Detail: detail, FoundAt: timestamppb.Now()})
 	}
 	if !baseline {
 		if model.GetCommit() != "" && model.GetCommit() != w.GetLastCommit() {
-			findings = append(findings, newFinding(v1.FindingKind_FINDING_KIND_NEW_REVISION, "", fmt.Sprintf("commit %s replaced %s", short(model.GetCommit()), short(w.GetLastCommit()))))
+			newFinding(v1.FindingKind_FINDING_KIND_NEW_REVISION, "", fmt.Sprintf("commit %s replaced %s", short(model.GetCommit()), short(w.GetLastCommit())))
 		}
 		for _, g := range groups {
-			if !known[g] {
-				findings = append(findings, newFinding(v1.FindingKind_FINDING_KIND_NEW_GROUP, g, "new weight group "+g))
+			if !slices.Contains(w.GetKnownGroups(), g) {
+				newFinding(v1.FindingKind_FINDING_KIND_NEW_GROUP, g, "new weight group "+g)
 			}
 		}
 		for _, g := range w.GetKnownGroups() {
-			if !current[g] {
-				findings = append(findings, newFinding(v1.FindingKind_FINDING_KIND_REMOVED_GROUP, g, "weight group "+g+" is gone"))
+			if !slices.Contains(groups, g) {
+				newFinding(v1.FindingKind_FINDING_KIND_REMOVED_GROUP, g, "weight group "+g+" is gone")
 			}
 		}
 	}
@@ -723,26 +652,23 @@ func (m *Manager) check(ctx context.Context, h *tasks.Handle, w *v1.Watch) ([]*v
 		m.save(w, v1.EventAction_EVENT_ACTION_UPDATED)
 	}
 	for _, f := range findings {
-		if err := m.DB.PutFinding(ctx, f); err != nil {
-			m.Log.Warn("finding write failed", "err", err)
-		}
-		m.Events.Publish(v1.EventKind_EVENT_KIND_FINDING, v1.EventAction_EVENT_ACTION_CREATED, f.GetId(), f)
-		logf("%s: %s", w.GetRepo(), f.GetDetail())
+		m.saveFinding(ctx, f, v1.EventAction_EVENT_ACTION_CREATED)
+		log("%s: %s", w.GetRepo(), f.GetDetail())
 	}
 	if baseline {
-		logf("%s: baseline commit %s with %d groups", w.GetRepo(), short(model.GetCommit()), len(groups))
+		log("%s: baseline commit %s with %d groups", w.GetRepo(), short(model.GetCommit()), len(groups))
 	} else if len(findings) == 0 {
-		logf("%s: unchanged at %s", w.GetRepo(), short(model.GetCommit()))
+		log("%s: unchanged at %s", w.GetRepo(), short(model.GetCommit()))
 	}
 	if w.GetAutoPull() && len(findings) > 0 {
-		m.act(ctx, logf, w, model, findings)
+		m.act(ctx, log, w, findings)
 	}
 	m.prune(ctx)
-	return findings, nil
+	return nil
 }
 
 // Pulls groups the findings touch, then swaps the slot
-func (m *Manager) act(ctx context.Context, logf func(string, ...any), w *v1.Watch, model *v1.Model, findings []*v1.Finding) {
+func (m *Manager) act(ctx context.Context, log logf, w *v1.Watch, findings []*v1.Finding) {
 	var re *regexp.Regexp
 	if w.GetGroupMatch() != "" {
 		re, _ = regexp.Compile(w.GetGroupMatch())
@@ -779,7 +705,7 @@ func (m *Manager) act(ctx context.Context, logf func(string, ...any), w *v1.Watc
 	pulled := []string{}
 	var asked []*v1.Finding
 	for _, g := range targets {
-		if m.pull(ctx, logf, wanted[g], w.GetSourceId(), w.GetRepo(), w.GetRevision(), g) != "" {
+		if m.pull(ctx, log, wanted[g], w.GetSourceId(), w.GetRepo(), w.GetRevision(), g) != "" {
 			pulled = append(pulled, g)
 			asked = append(asked, wanted[g])
 		}
@@ -788,14 +714,10 @@ func (m *Manager) act(ctx context.Context, logf func(string, ...any), w *v1.Watc
 		return
 	}
 	group := pulled[0]
-	for _, g := range pulled {
-		if g == served {
-			group = g
-		}
+	if slices.Contains(pulled, served) {
+		group = served
 	}
-	if swap := m.swap(ctx, logf, w.GetSlotId(), &v1.RunRequest{SourceId: w.GetSourceId(), Repo: w.GetRepo(), Group: group, RuntimeId: w.GetRuntimeId(), Params: w.GetParams(), SlotId: w.GetSlotId(), ProfileId: w.GetProfileId()}); swap != "" {
-		m.attachSwap(ctx, swap, asked...)
-	}
+	m.swap(ctx, log, w.GetSlotId(), &v1.RunRequest{SourceId: w.GetSourceId(), Repo: w.GetRepo(), Group: group, RuntimeId: w.GetRuntimeId(), Params: w.GetParams(), SlotId: w.GetSlotId(), ProfileId: w.GetProfileId()}, asked...)
 }
 
 // Lists findings newest first, for one watch by id or repo, or one want by id, when named
@@ -842,12 +764,4 @@ func short(commit string) string {
 		return "none"
 	}
 	return commit
-}
-
-func newID() string {
-	var b [6]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return hex.EncodeToString([]byte(time.Now().String()))[:12]
-	}
-	return hex.EncodeToString(b[:])
 }

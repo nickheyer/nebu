@@ -45,13 +45,10 @@ type Descriptor struct {
 
 // An image or artifact manifest, or an index of them
 type Manifest struct {
-	SchemaVersion int               `json:"schemaVersion"`
-	MediaType     string            `json:"mediaType"`
-	ArtifactType  string            `json:"artifactType"`
-	Config        Descriptor        `json:"config"`
-	Layers        []Descriptor      `json:"layers"`
-	Manifests     []Descriptor      `json:"manifests"`
-	Annotations   map[string]string `json:"annotations"`
+	Config      Descriptor        `json:"config"`
+	Layers      []Descriptor      `json:"layers"`
+	Manifests   []Descriptor      `json:"manifests"`
+	Annotations map[string]string `json:"annotations"`
 	// Digest of the manifest itself, from the registry
 	Digest string `json:"-"`
 }
@@ -306,13 +303,12 @@ func (d *Distribution) Tags(ctx context.Context, repo string) ([]string, error) 
 		}
 		var body tagList
 		err = json.NewDecoder(resp.Body).Decode(&body)
-		link := resp.Header.Get("Link")
 		resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("tags %s: %w", repo, err)
 		}
 		out = append(out, body.Tags...)
-		next = NextLink(link, d.http.Base())
+		next = d.http.nextLink(resp.Header)
 	}
 	return out, nil
 }
@@ -330,19 +326,19 @@ func (d *Distribution) BlobJSON(ctx context.Context, repo, digest string, out an
 // Opens a layer as a range readable blob, refreshing the token as it expires
 func (d *Distribution) Blob(repo, digest string, size int64) (Blob, error) {
 	if size <= 0 {
-		return nil, fmt.Errorf("%s: unknown size", digest)
+		return nil, unknown(digest, "size")
 	}
 	return NewRangeBlob(d.http, d.http.URL("v2", repo, "blobs", digest), size).WithHeaderFunc(func(ctx context.Context) (http.Header, error) {
 		return d.PullHeaders(ctx, repo)
 	}), nil
 }
 
-// Splits a locator into its repo and the ref or digest after the last colon or at
+// Splits a locator into repo and the ref or digest after the last colon or at
 func splitLocator(locator string) (string, string) {
 	if i := strings.LastIndex(locator, "@"); i > 0 {
 		return locator[:i], locator[i+1:]
 	}
-	repo, ref := SplitTag(locator, "latest")
+	repo, ref := SplitTag(locator, latestTag)
 	return repo, ref
 }
 
@@ -396,9 +392,4 @@ func (d *Distribution) Read(ctx context.Context, locator string, max int64) ([]b
 	}
 	defer resp.Body.Close()
 	return readAllCapped(resp.Body, max)
-}
-
-// Strips the sha256: prefix from a digest, lower cased
-func Hex(digest string) string {
-	return strings.ToLower(strings.TrimPrefix(digest, "sha256:"))
 }

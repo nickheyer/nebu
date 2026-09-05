@@ -5,15 +5,15 @@ import type { HostProfile } from '$proto/host_pb';
 import { TaskState, type Task } from '$proto/task_pb';
 import { InstanceState, type Instance } from '$proto/instance_pb';
 import type { Slot } from '$proto/slot_pb';
-import type { Route } from '$proto/gateway_pb';
-import type { Install, Profile } from '$proto/runtime_pb';
+import type { GatewayStatus, Route } from '$proto/gateway_pb';
+import type { Install, Profile, RuntimeStatus } from '$proto/runtime_pb';
 import type { FormatSpec } from '$proto/model_pb';
 import type { Build } from '$proto/recipe_pb';
 import type { StoredModel, StoreStatus } from '$proto/store_pb';
 import { FindingKind, type Finding, type Watch, type Want } from '$proto/monitor_pb';
-import { toast } from './toast.svelte';
-import type { Source } from '$proto/source_pb';
-import { newestFirst } from './format';
+import { fail, toast } from './toast.svelte';
+import type { Source, SourceStatus } from '$proto/source_pb';
+import { byName, newestFirst } from './format';
 
 // Everything the UI shows, kept current by the event stream
 export const live = $state({
@@ -37,6 +37,34 @@ export const live = $state({
   formats: new SvelteMap<string, FormatSpec>(),
   wants: new SvelteMap<string, Want>()
 });
+
+// Lists without a map, reread per connection and after SOURCE or HOST events
+export const cached = $state({
+  loaded: false,
+  error: '',
+  runtimes: [] as RuntimeStatus[],
+  sources: [] as SourceStatus[],
+  gateway: null as GatewayStatus | null
+});
+
+// Reads the runtimes, source statuses, and gateway status, keeping what still answers when one fails
+export async function refreshCached() {
+  const [r, s, g] = await Promise.allSettled([api.runtimes.listRuntimes({}), api.sources.listSources({}), api.gateway.getGatewayStatus({})]);
+  if (r.status === 'fulfilled') cached.runtimes = r.value.runtimes;
+  if (s.status === 'fulfilled') cached.sources = s.value.sources;
+  if (g.status === 'fulfilled') cached.gateway = g.value.status ?? null;
+  const failed = [s, r, g].find((x): x is PromiseRejectedResult => x.status === 'rejected');
+  cached.error = failed ? message(failed.reason) : '';
+  cached.loaded = true;
+}
+
+let cacheTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Coalesces a burst of events into one refresh
+function invalidateCached() {
+  if (cacheTimer) clearTimeout(cacheTimer);
+  cacheTimer = setTimeout(refreshCached, 200);
+}
 
 // A clock that ticks so relative times stay fresh
 export const clock = $state({ now: Date.now() });
@@ -113,8 +141,9 @@ function settle() {
 }
 
 // Folds one event into the state
-export function apply(ev: Event) {
+function apply(ev: Event) {
   const p = ev.payload;
+  if (ev.seq > 0n && (ev.kind === EventKind.HOST || ev.kind === EventKind.SOURCE)) invalidateCached();
   if (ev.kind === EventKind.HOST) {
     if (p.case === 'host') live.host = p.value;
     return;
@@ -154,6 +183,7 @@ export function connect() {
         const specs = await api.runtimes.listFormats({}, { signal });
         live.formats.clear();
         for (const f of specs.formats) live.formats.set(f.id, f);
+        void refreshCached();
         for await (const msg of api.events.watchEvents({ snapshot: true }, { signal })) {
           live.connected = true;
           live.needsToken = false;
@@ -174,6 +204,8 @@ export function connect() {
         live.connected = false;
         live.needsToken = unauthenticated(err);
         live.error = message(err);
+        // Pages waiting on the cached lists get the same answer instead of a skeleton
+        if (!cached.loaded) Object.assign(cached, { loaded: true, error: live.error });
       }
       await new Promise((r) => setTimeout(r, backoff));
       backoff = Math.min(backoff * 2, 10000);
@@ -188,19 +220,25 @@ export function disconnect() {
   live.connected = false;
 }
 
-// Refreshes the host profile from the daemon
-export async function refreshHost(refresh = false) {
-  const resp = await api.host.getProfile({ refresh });
-  if (resp.profile) live.host = resp.profile;
+// Probes the host again, the HOST event carrying the new profile everywhere else
+export async function probeHost() {
+  try {
+    const resp = await api.host.getProfile({ refresh: true });
+    if (resp.profile) live.host = resp.profile;
+  } catch (err) {
+    fail(err, 'Probe failed');
+  }
 }
 
 export function taskActive(t: Task): boolean {
   return t.state === TaskState.PENDING || t.state === TaskState.RUNNING;
 }
 
+const byCreated = newestFirst<{ createdAt?: Task['createdAt'] }>((t) => t.createdAt);
+
 // Lists tasks still running, newest first
 export function activeTasks(): Task[] {
-  return [...live.tasks.values()].filter(taskActive).sort(newestFirst);
+  return [...live.tasks.values()].filter(taskActive).sort(byCreated);
 }
 
 // Finds the newest task of a kind whose labels include every given pair
@@ -208,7 +246,7 @@ export function taskFor(kind: string, labels: Record<string, string>, activeOnly
   const want = Object.entries(labels);
   return [...live.tasks.values()]
     .filter((t) => t.kind === kind && (!activeOnly || taskActive(t)) && want.every(([k, v]) => t.labels[k] === v))
-    .sort(newestFirst)[0];
+    .sort(byCreated)[0];
 }
 
 export function instanceLive(i: Instance | undefined): boolean {
@@ -217,7 +255,7 @@ export function instanceLive(i: Instance | undefined): boolean {
 
 // Instances that are alive, newest first
 export function liveInstances(): Instance[] {
-  return [...live.instances.values()].filter(instanceLive).sort(newestFirst);
+  return [...live.instances.values()].filter(instanceLive).sort(byCreated);
 }
 
 export function slotName(id: string | undefined): string {
@@ -237,11 +275,23 @@ export function unackedFindings(): Finding[] {
 export function profilesOf(runtimeId: string): Profile[] {
   return [...live.profiles.values()]
     .filter((p) => !runtimeId || p.runtimeId === runtimeId)
-    .sort((a, b) => a.runtimeId.localeCompare(b.runtimeId) || Number(b.default) - Number(a.default) || a.name.localeCompare(b.name));
+    .sort(byName((p) => `${p.runtimeId} ${p.default ? 0 : 1} ${p.name}`));
 }
 
 // Params a run of a runtime starts from: the named profile, else the runtime default
 export function profileParams(runtimeId: string, profileId = ''): Record<string, string> {
   const p = profileId ? live.profiles.get(profileId) : profilesOf(runtimeId).find((p) => p.default);
   return p?.runtimeId === runtimeId ? { ...p.params } : {};
+}
+
+// What a weight format is, in the words its spec carries
+export function formatBlurb(id: string): string {
+  const f = live.formats.get(id);
+  return f?.blurb || f?.description || `${id} weight files`;
+}
+
+// Every format the daemon reads, as one sentence fragment
+export function formatNames(): string {
+  const names = [...live.formats.values()].map((f) => f.description || f.id);
+  return names.length > 1 ? names.slice(0, -1).join(', ') + ', and ' + names[names.length - 1] : (names[0] ?? 'nothing yet');
 }

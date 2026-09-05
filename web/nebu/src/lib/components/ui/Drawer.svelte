@@ -5,7 +5,7 @@
 
   let {
     open = $bindable(false),
-    onOpenChange,
+    id = $bindable(''),
     title,
     subtitle,
     width = 'md',
@@ -14,7 +14,8 @@
     footer
   }: {
     open?: boolean;
-    onOpenChange?: (open: boolean) => void;
+    // Bound instead of open by drawers showing one record, empty when closed
+    id?: string;
     title: string;
     subtitle?: string;
     width?: 'md' | 'lg' | 'xl' | '2xl';
@@ -24,9 +25,15 @@
   } = $props();
 
   const widths = { md: 'max-w-xl', lg: 'max-w-2xl', xl: 'max-w-4xl', '2xl': 'max-w-6xl' };
+
+  function onOpenChange(v: boolean) {
+    if (v) return;
+    open = false;
+    id = '';
+  }
 </script>
 
-<Dialog.Root bind:open {onOpenChange}>
+<Dialog.Root open={open || !!id} {onOpenChange}>
   <Dialog.Portal>
     <Dialog.Overlay class="fade fixed inset-0 z-40 bg-black/50" />
     <Dialog.Content

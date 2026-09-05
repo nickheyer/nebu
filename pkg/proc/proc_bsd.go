@@ -15,7 +15,7 @@ func attr() *syscall.SysProcAttr {
 }
 
 // Returns the space joined command line of pid through ps
-func Cmdline(pid int) (string, error) {
+func cmdline(pid int) (string, error) {
 	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return "", err

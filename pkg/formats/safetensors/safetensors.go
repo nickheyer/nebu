@@ -2,7 +2,6 @@
 package safetensors
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -44,7 +43,11 @@ func (r *reader) Read(ctx context.Context, open formats.Opener, group *formats.G
 		}
 	}
 	for _, a := range group.Files[v1.ArtifactRole_ARTIFACT_ROLE_CONFIG] {
-		if err := r.readConfig(ctx, open, a, raw); err != nil {
+		data, err := formats.ReadAll(ctx, open, a, maxConfig)
+		if err == nil {
+			err = eval.FlattenJSON(data, "", raw.Metadata, nil)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("%s: %w", a.GetPath(), err)
 		}
 	}
@@ -87,39 +90,12 @@ func (r *reader) readShard(ctx context.Context, open formats.Opener, a *v1.Artif
 		if err := json.Unmarshal(msg, &th); err != nil {
 			return fmt.Errorf("tensor %s: %w", name, err)
 		}
-		elements := uint64(1)
-		for _, d := range th.Shape {
-			elements *= d
-		}
 		raw.Tensors = append(raw.Tensors, &v1.TensorInfo{
 			Name:     name,
 			Dtype:    th.Dtype,
 			Bytes:    th.DataOffsets[1] - th.DataOffsets[0],
-			Elements: elements,
+			Elements: formats.Elements(th.Shape),
 		})
 	}
-	return nil
-}
-
-func (r *reader) readConfig(ctx context.Context, open formats.Opener, a *v1.Artifact, raw *v1.RawModel) error {
-	if a.GetSizeBytes() > maxConfig {
-		return fmt.Errorf("config too large")
-	}
-	blob, err := open(ctx, a)
-	if err != nil {
-		return err
-	}
-	defer blob.Close()
-	buf := make([]byte, blob.Size())
-	if _, err := blob.ReadAt(buf, 0); err != nil && err != io.EOF {
-		return err
-	}
-	dec := json.NewDecoder(bytes.NewReader(buf))
-	dec.UseNumber()
-	var root any
-	if err := dec.Decode(&root); err != nil {
-		return err
-	}
-	eval.Flatten("", root, raw.Metadata, nil)
 	return nil
 }

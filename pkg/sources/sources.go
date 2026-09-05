@@ -26,6 +26,9 @@ import (
 // Returned when a source id is not configured
 var ErrUnknownSource = errors.New("unknown source")
 
+// The error for an id no source goes by
+func unknownSource(id string) error { return fmt.Errorf("%w %q", ErrUnknownSource, id) }
+
 // Returned when a source cannot go because a watch or want names it
 var ErrSourceInUse = errors.New("source in use")
 
@@ -40,11 +43,6 @@ type Blob interface {
 	io.ReaderAt
 	io.Closer
 	Size() int64
-}
-
-// Blob that can stream a byte range without buffering it
-type Ranger interface {
-	Range(ctx context.Context, off, length int64) (io.ReadCloser, error)
 }
 
 // Blob that lands as a whole file on this host, already there or moved by
@@ -127,10 +125,75 @@ func (r *rangedWhole) Close() error {
 
 // Streams a range, falling back to buffered reads
 func RangeOf(ctx context.Context, b Blob, off, length int64) (io.ReadCloser, error) {
-	if r, ok := b.(Ranger); ok {
+	if r, ok := b.(interface {
+		Range(ctx context.Context, off, length int64) (io.ReadCloser, error)
+	}); ok {
 		return r.Range(ctx, off, length)
 	}
 	return io.NopCloser(io.NewSectionReader(b, off, length)), nil
+}
+
+// A file a transport lands on first use, read in place afterwards
+type lazyBlob struct {
+	size int64
+	// Lands the file, reporting bytes as they move when the transport can
+	land func(ctx context.Context, progress func(int64)) (Blob, error)
+	// Set when land cannot report, so every Materialize reports the whole size
+	whole bool
+	mu    sync.Mutex
+	file  Blob
+}
+
+// Lands the file once and keeps it open, its real size replacing the caller's
+func (b *lazyBlob) open(ctx context.Context, progress func(int64)) (Blob, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.file == nil {
+		f, err := b.land(ctx, progress)
+		if err != nil {
+			return nil, err
+		}
+		b.file, b.size = f, f.Size()
+	}
+	return b.file, nil
+}
+
+func (b *lazyBlob) ReadAt(p []byte, off int64) (int, error) {
+	f, err := b.open(context.Background(), nil)
+	if err != nil {
+		return 0, err
+	}
+	return f.ReadAt(p, off)
+}
+
+func (b *lazyBlob) Size() int64 { return b.size }
+
+// Lands the file and returns where it is
+func (b *lazyBlob) Materialize(ctx context.Context, progress func(int64)) (string, error) {
+	f, err := b.open(ctx, progress)
+	if err != nil {
+		return "", err
+	}
+	m, ok := f.(Materializer)
+	if !ok {
+		return "", fmt.Errorf("%T cannot land as a file", f)
+	}
+	path, err := m.Materialize(ctx, nil)
+	if err == nil && b.whole && progress != nil {
+		progress(b.size)
+	}
+	return path, err
+}
+
+func (b *lazyBlob) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.file != nil {
+		err := b.file.Close()
+		b.file = nil
+		return err
+	}
+	return nil
 }
 
 // Catalog that can browse, search, resolve, and open artifacts
@@ -267,7 +330,7 @@ func (r *Registry) Get(id string) (Source, error) {
 	}
 	src, ok := r.byID[id]
 	if !ok {
-		return nil, fmt.Errorf("%w %q", ErrUnknownSource, id)
+		return nil, unknownSource(id)
 	}
 	return src, nil
 }

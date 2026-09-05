@@ -2,9 +2,9 @@
   import { ArrowDownToLine, Heart, Lock, EyeOff, Database, Cpu, HardDrive } from '@lucide/svelte';
   import type { SearchHit, SourceCapabilities } from '$proto/source_pb';
   import type { RuntimeStatus } from '$proto/runtime_pb';
-  import { live, clock } from '$lib/state.svelte';
+  import { live, clock, formatBlurb } from '$lib/state.svelte';
   import { ago, bytes, count, params as fmtParams } from '$lib/format';
-  import { displayTags, facetValueLabel, formatBlurb, hitChips, hitSize, runtimesFor } from '$lib/catalog';
+  import { displayTags, facetValueLabel, hitChips, hitSize, runtimesFor } from '$lib/catalog';
 
   let {
     hit,

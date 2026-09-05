@@ -31,6 +31,9 @@ const operator = "nebu"
 // Returned when a record is not in the store
 var ErrNotFound = errors.New("not found")
 
+// Reports whether err means a missing record
+func IsNotFound(err error) bool { return errors.Is(err, ErrNotFound) }
+
 // Open store
 type DB struct {
 	sql  *sql.DB
@@ -367,32 +370,3 @@ func describeChange(c schema.Change) string {
 	}
 	return fmt.Sprintf("%T", c)
 }
-
-// Returns the applied migration versions in order
-func (d *DB) Migrations(ctx context.Context) ([]string, error) {
-	revs, err := revisionStore{d.sql}.ReadRevisions(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, r := range revs {
-		if r.Applied == r.Total {
-			out = append(out, r.Version)
-		}
-	}
-	return out, nil
-}
-
-func (d *DB) tx(ctx context.Context, fn func(tx *sql.Tx) error) error {
-	tx, err := d.sql.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	if err := fn(tx); err != nil {
-		tx.Rollback()
-		return err
-	}
-	return tx.Commit()
-}
-
-func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }

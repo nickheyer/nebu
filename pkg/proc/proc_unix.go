@@ -18,10 +18,10 @@ func killTree(t *Tree) { signalGroup(t.pid, syscall.SIGKILL) }
 func closeTree(t *Tree) {}
 
 // Asks a foreign process group to stop
-func Interrupt(pid int) { signalGroup(pid, syscall.SIGTERM) }
+func interrupt(pid int) { signalGroup(pid, syscall.SIGTERM) }
 
 // Ends a foreign process group at once
-func Kill(pid int) { signalGroup(pid, syscall.SIGKILL) }
+func kill(pid int) { signalGroup(pid, syscall.SIGKILL) }
 
 // Signals the process group, falling back to the process alone
 func signalGroup(pid int, sig syscall.Signal) {

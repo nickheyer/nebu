@@ -457,15 +457,6 @@ func (s *Store) PruneLinks(m *v1.StoredModel) error {
 	})
 }
 
-// Removes one link, ignoring absence
-func (s *Store) Unlink(link string) error {
-	err := os.Remove(link)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
-}
-
 // Removes blobs no manifest references, once pulls in flight have landed
 func (s *Store) Gc(partials bool) (*v1.GcResponse, error) {
 	s.sweep.Lock()
@@ -538,7 +529,7 @@ func (s *Store) pruneEmpty(dir, stop string) {
 	}
 }
 
-// Joins path segments, rejecting traversal
+// Joins segments piecewise, rejecting .. anywhere, stricter than a Rel check for link paths
 func safeJoin(segments ...string) (string, error) {
 	var parts []string
 	for _, seg := range segments {

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { api } from '$lib/api';
+  import { createForm } from '$lib/form.svelte';
   import { parsePairs, pairsText } from '$lib/format';
-  import { fail, ok } from '$lib/toast.svelte';
   import { SandboxKind, type RecipeStatus } from '$proto/recipe_pb';
   import { Hammer } from '@lucide/svelte';
-  import Dialog from './ui/Dialog.svelte';
+  import FormDialog from './ui/FormDialog.svelte';
   import Field from './ui/Field.svelte';
-  import Button from './ui/Button.svelte';
+  import CheckCard from './ui/CheckCard.svelte';
 
   let { open = $bindable(false), recipe }: { open?: boolean; recipe: RecipeStatus | null } = $props();
 
@@ -16,24 +16,20 @@
   let ref = $state('');
   let varsText = $state('');
   let force = $state(false);
-  let starting = $state(false);
 
   const selected = $derived(recipe?.recipe?.variants.find((v) => v.id === variant));
 
-  $effect(() => {
-    if (!open || !recipe) return;
-    variant = recipe.variant || recipe.recipe?.variants[0]?.id || '';
-    sandbox = recipe.sandbox === SandboxKind.OCI ? 'oci' : 'host';
-    image = '';
-    ref = '';
-    varsText = '';
-    force = false;
-  });
-
-  async function submit() {
-    if (!recipe?.recipe) return;
-    starting = true;
-    try {
+  const form = createForm({
+    open: () => open,
+    close: () => (open = false),
+    reset() {
+      variant = recipe?.variant || recipe?.recipe?.variants[0]?.id || '';
+      sandbox = recipe?.sandbox === SandboxKind.OCI ? 'oci' : 'host';
+      image = ref = varsText = '';
+      force = false;
+    },
+    async submit() {
+      if (!recipe?.recipe) return;
       const r = await api.builds.build({
         recipeId: recipe.recipe.id,
         runtimeId: recipe.recipe.runtimeId,
@@ -44,18 +40,18 @@
         vars: parsePairs(varsText),
         force
       });
-      const cached = r.task?.labels['cached'] === 'true';
-      ok(cached ? 'Build already cached' : `Building ${recipe.recipe.runtimeId}`, cached ? 'An identical build exists, reusing it' : `${variant} variant`, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Follow the build' } : undefined);
-      open = false;
-    } catch (err) {
-      fail(err, 'Build refused');
-    } finally {
-      starting = false;
-    }
-  }
+      const hit = r.task?.labels['cached'] === 'true';
+      return {
+        title: hit ? 'Build already cached' : `Building ${recipe.recipe.runtimeId}`,
+        detail: hit ? 'An identical build exists, reusing it' : `${variant} variant`,
+        link: r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Follow the build' } : undefined
+      };
+    },
+    failTitle: 'Build refused'
+  });
 </script>
 
-<Dialog bind:open title="Build {recipe?.recipe?.runtimeId ?? ''}" description={recipe?.recipe?.description} size="lg">
+<FormDialog bind:open title="Build {recipe?.recipe?.runtimeId ?? ''}" description={recipe?.recipe?.description} size="lg" action="Start build" icon={Hammer} saving={form.saving} disabled={!variant} onsubmit={form.run}>
   {#if recipe?.recipe}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <Field label="Variant" for="b-variant" hint={selected?.description}>
@@ -79,13 +75,7 @@
       <Field label="Ref" for="b-ref" hint="Tag, branch, or commit. Empty follows the recipe, usually the latest release">
         <input id="b-ref" class="input font-mono" bind:value={ref} placeholder={recipe.recipe.source?.ref || 'latest'} />
       </Field>
-      <label class="flex cursor-pointer items-start gap-3 self-end rounded-lg border border-line bg-sunken px-3 py-2.5">
-        <input type="checkbox" class="mt-0.5 accent-accent" bind:checked={force} />
-        <span class="text-sm">
-          <span class="font-medium text-fg">Rebuild even when cached</span>
-          <span class="block text-xs leading-5 text-fg-muted">An unchanged recipe on an unchanged host is a cache hit</span>
-        </span>
-      </label>
+      <CheckCard bind:checked={force} class="self-end" title="Rebuild even when cached" description="An unchanged recipe on an unchanged host is a cache hit" />
       <Field label="Variables" for="b-vars" hint="One name=value per line, overriding recipe vars" class="sm:col-span-2">
         <textarea id="b-vars" class="input h-20" bind:value={varsText} placeholder={pairsText(recipe.vars).split('\n').slice(0, 2).join('\n') || 'build_type=Release'}></textarea>
       </Field>
@@ -108,9 +98,4 @@
       </details>
     {/if}
   {/if}
-
-  {#snippet footer()}
-    <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-    <Button variant="primary" icon={Hammer} loading={starting} onclick={submit} disabled={!variant}>Start build</Button>
-  {/snippet}
-</Dialog>
+</FormDialog>

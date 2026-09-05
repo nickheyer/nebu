@@ -8,15 +8,13 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 func TestHostRunner(t *testing.T) {
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, "src", "sub"), 0o755)
 	h := NewHost(root)
-	if h.Kind() != v1.SandboxKind_SANDBOX_KIND_HOST || h.Root() != root || h.Path("src/x") != filepath.Join(root, "src", "x") {
+	if h.Path("src/x") != filepath.Join(root, "src", "x") {
 		t.Fatal("host runner paths")
 	}
 	var out bytes.Buffer
@@ -40,7 +38,7 @@ func TestOCIRunnerArgs(t *testing.T) {
 	fake := filepath.Join(root, "fakecli")
 	os.WriteFile(fake, []byte("#!/bin/sh\necho \"$@\"\n"), 0o755)
 	o := NewOCI(root, fake, "img:1", []string{"--gpus", "all"})
-	if o.Kind() != v1.SandboxKind_SANDBOX_KIND_OCI || o.Path("src") != Mount+"/src" || o.Path("") != Mount || o.CLI() != fake || o.Image() != "img:1" {
+	if o.Path("src") != Mount+"/src" || o.Path("") != Mount {
 		t.Fatal("oci runner paths")
 	}
 	var out bytes.Buffer

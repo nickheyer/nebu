@@ -10,7 +10,7 @@
   import LogView from './ui/LogView.svelte';
   import { fail } from '$lib/toast.svelte';
 
-  let { id, height = 'h-80', onDone, compact = false }: { id: string; height?: string; onDone?: (t: Task) => void; compact?: boolean } = $props();
+  let { id, height = 'h-80' }: { id: string; height?: string } = $props();
 
   let streamed = $state<Task | null>(null);
   let lines = $state<string[]>([]);
@@ -49,7 +49,6 @@
           if (stored.task && !streamed) streamed = stored.task;
           lines.push(...stored.logs);
         }
-        if (streamed && onDone) onDone(streamed);
       } catch (err) {
         if (!controller.signal.aborted) error = message(err);
       }
@@ -71,17 +70,15 @@
 
 <div class="flex flex-col gap-3">
   {#if task}
-    {#if !compact}
-      <div class="flex flex-wrap items-center gap-2">
-        <StateBadge values={TaskState} value={task.state} />
-        <span class="font-medium text-fg">{task.title}</span>
-        <span class="rounded bg-raised px-1.5 py-0.5 font-mono text-[11px] text-fg-muted">{task.kind}</span>
-        <span class="text-xs text-fg-faint tabular-nums">{duration(task.startedAt ?? task.createdAt, task.finishedAt, clock.now)}</span>
-        {#if active}
-          <Button size="xs" variant="ghost" icon={Ban} class="ml-auto" loading={cancelling} onclick={cancel}>Cancel</Button>
-        {/if}
-      </div>
-    {/if}
+    <div class="flex flex-wrap items-center gap-2">
+      <StateBadge values={TaskState} value={task.state} />
+      <span class="font-medium text-fg">{task.title}</span>
+      <span class="rounded bg-raised px-1.5 py-0.5 font-mono text-[11px] text-fg-muted">{task.kind}</span>
+      <span class="text-xs text-fg-faint tabular-nums">{duration(task.startedAt ?? task.createdAt, task.finishedAt, clock.now)}</span>
+      {#if active}
+        <Button size="xs" variant="ghost" icon={Ban} class="ml-auto" loading={cancelling} onclick={cancel}>Cancel</Button>
+      {/if}
+    </div>
     {#if active || progress.known}
       <div class="flex flex-col gap-1.5">
         <Progress done={task.progress?.done} total={task.progress?.total} {active} tone={task.state === TaskState.FAILED ? 'bad' : task.state === TaskState.SUCCEEDED ? 'ok' : 'accent'} />

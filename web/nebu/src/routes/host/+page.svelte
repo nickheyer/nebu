@@ -1,8 +1,8 @@
 <script lang="ts">
   import { api } from '$lib/api';
-  import { live, clock, refreshHost } from '$lib/state.svelte';
+  import { live, clock, probeHost } from '$lib/state.svelte';
   import { ago, bytes, enumLabel, pct, when } from '$lib/format';
-  import { attempt, fail } from '$lib/toast.svelte';
+  import { fail } from '$lib/toast.svelte';
   import { CheckStatus, DeviceKind, PoolKind, ProbeStatus, type DoctorReport } from '$proto/host_pb';
   import { RefreshCw, Stethoscope, Server, CircleCheck, CircleAlert, CircleX, ChevronDown } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -46,7 +46,7 @@
   }
   async function probe() {
     probing = true;
-    await attempt('Probe failed', () => refreshHost(true));
+    await probeHost();
     probing = false;
   }
 

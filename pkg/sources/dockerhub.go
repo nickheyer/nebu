@@ -19,7 +19,7 @@ var dockerhub = &Catalog{
 	Kind: v1.SourceKind_SOURCE_KIND_OCI,
 	Name: "OCI registry",
 	Seed: "Docker Hub",
-	// The hub API browses and searches, a registry with no hub resolves and pulls by name
+	// The hub API browses and searches, a bare registry resolves and pulls by name
 	Transports: []Use{
 		{Kind: TransportHTTP, Fields: map[string]string{"endpoint": ""}},
 		{Kind: TransportDistribution, Name: "registry", Fields: map[string]string{"endpoint": "https://registry-1.docker.io", "token_env": "DOCKER_TOKEN"}},
@@ -30,6 +30,7 @@ var dockerhub = &Catalog{
 	RepoPattern:   `^[\w.-]+(/[\w.-]+)+(:[\w.-]+)?$`,
 	RevisionLabel: "tag",
 	Sorts:         []string{SortDownloads, SortUpdated},
+	SortKeys:      map[string]string{SortDownloads: "pull_count", SortUpdated: "updated_at"},
 	Reversible:    []string{SortDownloads, SortUpdated},
 	Facets:        []*v1.Facet{Freeform(FacetAuthor, "Author")},
 	API:           dockerhubAPI{},
@@ -39,17 +40,9 @@ func init() { register(dockerhub) }
 
 const (
 	dhNamespace   = "ai"
-	dhTag         = "latest"
 	dhMaxPages    = 10
 	dhFilepathKey = "org.cncf.model.filepath"
-	dhTitleKey    = "org.opencontainers.image.title"
 )
-
-// Hub sort keys by shared sort id
-var dhSortKeys = map[string]string{
-	SortDownloads: "pull_count",
-	SortUpdated:   "updated_at",
-}
 
 // Layer kinds by media type, used to name layers that carry no file path
 const (
@@ -61,7 +54,7 @@ const (
 	dhKindWeight
 )
 
-// Docker Hub: the hub API for search, tags, and cards beside a distribution registry for manifests and layers
+// Docker Hub: the hub API for search, tags, and cards, the registry for layers
 type dockerhubAPI struct{}
 
 type dhItem struct {
@@ -81,17 +74,13 @@ type dhItem struct {
 	MediaTypes       []string        `json:"media_types"`
 }
 
-// Searches the hub, scoped to the author or the namespace unless the query names one
 // Only a source naming a hub API lists, searches, or reads cards
 func (dockerhubAPI) Browses(c *Client) bool { return c.HTTP() != nil }
 
+// Searches the hub, scoped to the author or the namespace unless the query names one
 func (dockerhubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
 	if c.HTTP() == nil {
 		return nil, fmt.Errorf("%w: %s names no hub endpoint to search", ErrUnsupported, c.ID())
-	}
-	order := "desc"
-	if sort.Ascending {
-		order = "asc"
 	}
 	from := Offset(req.GetCursor())
 	query := strings.TrimSpace(req.GetQuery())
@@ -107,8 +96,8 @@ func (dockerhubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest
 		"type":  {"model"},
 		"size":  {strconv.Itoa(c.Limit(req))},
 		"from":  {strconv.Itoa(from)},
-		"sort":  {dhSortKeys[sort.ID]},
-		"order": {order},
+		"sort":  {sort.Key},
+		"order": {direction(sort.Ascending, "asc", "desc")},
 	}
 	var body struct {
 		Total   uint64   `json:"total"`
@@ -152,10 +141,7 @@ func dhHit(c *Client, it dhItem) *v1.SearchHit {
 	if repo == "" {
 		repo = it.Name
 	}
-	author, name, found := strings.Cut(repo, "/")
-	if !found {
-		author, name = "", repo
-	}
+	author, name := splitRepo(repo)
 	if it.Publisher.Name != "" {
 		author = it.Publisher.Name
 	}
@@ -165,8 +151,8 @@ func dhHit(c *Client, it dhItem) *v1.SearchHit {
 		Author:      author,
 		Downloads:   it.RawPullCount,
 		Likes:       it.StarCount,
-		Description: Excerpt(StripTags(it.ShortDescription), 240),
-		Url:         c.Base() + "/r/" + repo,
+		Description: Summary(it.ShortDescription),
+		Url:         dhPage(c, repo),
 		UpdatedAt:   Stamp(it.UpdatedAt),
 		CreatedAt:   Stamp(it.CreatedAt),
 	}
@@ -175,6 +161,9 @@ func dhHit(c *Client, it dhItem) *v1.SearchHit {
 	}
 	return hit
 }
+
+// The repository page on the hub
+func dhPage(c *Client, name string) string { return c.Page("r", name) }
 
 // Reads a JSON value that may be a string or a number as text
 func dhRawText(raw json.RawMessage) string {
@@ -185,19 +174,10 @@ func dhRawText(raw json.RawMessage) string {
 	return strings.TrimSpace(string(raw))
 }
 
-// Splits name:tag, an explicit revision wins and latest stands in when neither names a tag
+// Splits name:tag, an explicit revision wins, latest and the ai namespace fill in
 func dhSplit(repo, revision string) (string, string) {
-	name, tag := SplitTag(strings.TrimSpace(repo), "")
-	if revision != "" {
-		tag = revision
-	}
-	if tag == "" {
-		tag = dhTag
-	}
-	if !strings.Contains(name, "/") {
-		name = dhNamespace + "/" + name
-	}
-	return name, tag
+	name, tag := splitRef(repo, revision, latestTag)
+	return namespaced(name, dhNamespace), tag
 }
 
 func (dockerhubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error) {
@@ -213,7 +193,7 @@ func (dockerhubAPI) Resolve(ctx context.Context, c *Client, repo, revision strin
 func dhArtifacts(ctx context.Context, c *Client, name, tag string, m *Manifest) []*v1.Artifact {
 	stem := name[strings.LastIndex(name, "/")+1:] + "-" + tag
 	format, loaded := "", false
-	used := map[string]int{}
+	names := namer{}
 	var out []*v1.Artifact
 	for i, l := range m.Layers {
 		if l.Size <= 0 {
@@ -227,7 +207,7 @@ func dhArtifacts(ctx context.Context, c *Client, name, tag string, m *Manifest) 
 			}
 			p = dhGenerated(kind, stem, format, i+1)
 		}
-		a := &v1.Artifact{Path: dhUnique(used, p), SizeBytes: uint64(l.Size)}
+		a := &v1.Artifact{Path: names.unique(p), SizeBytes: uint64(l.Size)}
 		if strings.HasPrefix(strings.ToLower(l.Digest), "sha256:") {
 			a.Sha256 = Hex(l.Digest)
 		}
@@ -238,7 +218,7 @@ func dhArtifacts(ctx context.Context, c *Client, name, tag string, m *Manifest) 
 
 // Reads the file path a layer is annotated with, cleaned of leading slashes and dots
 func dhAnnotated(a map[string]string) string {
-	for _, key := range []string{dhFilepathKey, dhTitleKey} {
+	for _, key := range []string{dhFilepathKey, titleKey} {
 		if v := strings.TrimSpace(a[key]); v != "" {
 			if p := strings.TrimPrefix(path.Clean("/"+v), "/"); p != "" {
 				return p
@@ -266,7 +246,7 @@ func dhMediaKind(mediaType string) int {
 	return dhKindOther
 }
 
-// Names a layer from its kind, n is the layer's position for the ones nothing describes
+// Names a layer from its kind, n is its position when nothing describes it
 func dhGenerated(kind int, stem, format string, n int) string {
 	switch kind {
 	case dhKindGGUF:
@@ -283,16 +263,6 @@ func dhGenerated(kind int, stem, format string, n int) string {
 		}
 	}
 	return fmt.Sprintf("%s-%d.bin", stem, n)
-}
-
-// Keeps names distinct, a second gguf becomes stem-2.gguf
-func dhUnique(used map[string]int, p string) string {
-	used[p]++
-	if used[p] == 1 {
-		return p
-	}
-	ext := path.Ext(p)
-	return fmt.Sprintf("%s-%d%s", strings.TrimSuffix(p, ext), used[p], ext)
 }
 
 // Reads the weight format the config declares, empty when it cannot be read
@@ -322,15 +292,15 @@ func (dockerhubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v
 		return nil, err
 	}
 	sort.SliceStable(tags, func(i, j int) bool {
-		if tags[i] == dhTag || tags[j] == dhTag {
-			return tags[i] == dhTag && tags[j] != dhTag
+		if tags[i] == latestTag || tags[j] == latestTag {
+			return tags[i] == latestTag && tags[j] != latestTag
 		}
 		return dhNaturalLess(tags[i], tags[j])
 	})
 	out := make([]*v1.Revision, 0, len(tags))
 	byName := map[string]*v1.Revision{}
 	for _, t := range tags {
-		r := &v1.Revision{Name: t, Repo: name + ":" + t, Default: t == dhTag}
+		r := &v1.Revision{Name: t, Repo: name + ":" + t, Default: t == latestTag}
 		out = append(out, r)
 		byName[t] = r
 	}
@@ -419,16 +389,13 @@ func (dockerhubAPI) Card(ctx context.Context, c *Client, repo, revision string) 
 	}
 	name, _ := dhSplit(repo, revision)
 	ns, short, _ := strings.Cut(name, "/")
-	page := c.Base() + "/r/" + name
+	page := dhPage(c, name)
 	var body struct {
 		Description     string `json:"description"`
 		FullDescription string `json:"full_description"`
 	}
 	if _, err := c.JSON(ctx, c.URL("v2", "namespaces", ns, "repositories", short), nil, &body); err != nil {
-		if IsStatus(err, 404) {
-			return &v1.ModelCard{Url: page}, nil
-		}
-		return nil, err
+		return cardOrEmpty(page, err)
 	}
 	card := &v1.ModelCard{Url: page}
 	text := strings.TrimSpace(body.FullDescription)
@@ -445,7 +412,7 @@ func (dockerhubAPI) Card(ctx context.Context, c *Client, repo, revision string) 
 
 func (d dockerhubAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error) {
 	if artifact.GetSizeBytes() == 0 {
-		return nil, fmt.Errorf("%s: unknown size", artifact.GetPath())
+		return nil, unknown(artifact.GetPath(), "size")
 	}
 	name, _ := dhSplit(model.GetRepo(), model.GetRevision())
 	digest := artifact.GetSha256()
@@ -461,7 +428,7 @@ func (d dockerhubAPI) Open(ctx context.Context, c *Client, model *v1.Model, arti
 			}
 		}
 		if digest == "" {
-			return nil, fmt.Errorf("%s: unknown digest", artifact.GetPath())
+			return nil, unknown(artifact.GetPath(), "digest")
 		}
 	}
 	return c.Distribution().Blob(name, "sha256:"+digest, int64(artifact.GetSizeBytes()))

@@ -19,7 +19,7 @@
   });
 </script>
 
-<Drawer open={!!id} onOpenChange={(v: boolean) => { if (!v) id = ''; }} title={task?.title ?? 'Task'} subtitle={id} width="xl">
+<Drawer bind:id title={task?.title ?? 'Task'} subtitle={id} width="xl">
   {#snippet header()}
     {#if task}
       <div class="flex flex-wrap items-center gap-3 text-xs text-fg-muted">

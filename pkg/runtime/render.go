@@ -37,20 +37,13 @@ func (in RenderInput) context() map[string]any {
 		"port":       in.Port,
 		"install":    in.Install,
 		"devices":    in.Devices,
-		"descriptor": DescriptorView(in.Descriptor),
+		"descriptor": descriptorView(in.Descriptor),
 	}
 }
 
-// Flattens a descriptor into the shape launch templates read
-//
-// Params and metadata are maps so a template can ask for a key that may be
-// absent through index, a missing metadata key rendering empty and dropped.
-// Always present, empty without a descriptor, so templates never trip missingkey on it.
-func DescriptorView(d *v1.Descriptor) map[string]any {
-	params := make(map[string]any, len(d.GetParams()))
-	for k, v := range d.GetParams() {
-		params[k] = v
-	}
+// Flattens a descriptor into maps templates index, empty without a descriptor
+func descriptorView(d *v1.Descriptor) map[string]any {
+	params := eval.Anys(d.GetParams())
 	metadata := make(map[string]string, len(d.GetMetadata()))
 	for k, v := range d.GetMetadata() {
 		metadata[k] = v

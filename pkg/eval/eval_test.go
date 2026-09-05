@@ -2,6 +2,7 @@ package eval
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -19,8 +20,8 @@ func TestCompareVersions(t *testing.T) {
 		{"", "1", -1},
 	}
 	for _, c := range cases {
-		if got := CompareVersions(c.a, c.b); got != c.want {
-			t.Errorf("CompareVersions(%q,%q)=%d want %d", c.a, c.b, got, c.want)
+		if got := compareVersions(c.a, c.b); got != c.want {
+			t.Errorf("compareVersions(%q,%q)=%d want %d", c.a, c.b, got, c.want)
 		}
 	}
 }
@@ -86,7 +87,7 @@ func TestTemplate(t *testing.T) {
 
 func TestFlatten(t *testing.T) {
 	var root any
-	dec := json.NewDecoder(stringsReader(`{"a":{"b":1,"c":[1,2]},"d":[{"e":"x"}],"f":true,"g":null}`))
+	dec := json.NewDecoder(strings.NewReader(`{"a":{"b":1,"c":[1,2]},"d":[{"e":"x"}],"f":true,"g":null}`))
 	dec.UseNumber()
 	if err := dec.Decode(&root); err != nil {
 		t.Fatal(err)

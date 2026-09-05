@@ -105,10 +105,9 @@ nebu/
 |   +-- mirror/                    index files an export writes and a mirror source reads
 |   +-- formats/                   classifier, groups, and header readers
 |   |   +-- gguf/                  header and tensor table from range reads
-|   |   |   +-- gguftest/          writes small GGUF files for tests
 |   |   +-- safetensors/           shard headers plus config.json
 |   |   +-- pickle/                the pickle opcodes PyTorch checkpoints use, decoded without executing anything
-|   |   +-- torch/                 torch.save zips, tensor names and shapes from data.pkl alone
+|   |   +-- torch/                 torch.save zips read for nemo, tensor names and shapes from data.pkl alone
 |   |   +-- nemo/                  NeMo .nemo tars and NeMo 2 directories, config plus zarr or distributed checkpoint metadata
 |   +-- descriptor/                format-neutral descriptor, tensor groups, arch params
 |   +-- store/                     content-addressed blobs, manifests, stable link tree, gc
@@ -140,17 +139,17 @@ nebu/
 |   +-- instances/                 plan, launch, supervise, persist, recover, and route
 |   +-- calibrate/                 learned overhead corrections per runtime and arch
 |   +-- doctor/                    probes, runtimes, installs, recipes, sources, and store as checks
-|   +-- db/                        pure go sqlite, schema.sql is the truth, atlas migrations, no proto in schema
+|   +-- db/                        pure go sqlite, schema.sql is the truth, atlas migrations, one file per area over shared row helpers
 |   |   +-- migrations/            one init migration and its atlas.sum until release
 |   +-- rpc/
 |   |   +-- server.go              connect server, h2c, interceptors, auth, web ui mount
-|   |   +-- services/              one file per proto service
+|   |   +-- services/              the proto services grouped by area, every handler one call and one reply
 |   +-- tasks/                     task engine, progress fan-out, cancellation, stored history
 |   +-- slots/                     slot manager, reservations, swaps
 |   +-- gateway/                   openai, anthropic, and ollama flavors over one canonical chat, the route table, limits
 |   +-- monitor/                   watches monitored models for new revisions and quants, runs wants
 |   +-- notify/                    posts findings and failed instances to webhooks
-|   +-- cli/                       client subcommands over connect, table and json output
+|   +-- cli/                       client subcommands over connect by area, one parse and one print helper, table and json output
 +-- web/
 |   +-- nebu/                      sveltekit static app embedded into the binary
 |       +-- embed.go               go:embed of dist with a single page fallback
@@ -333,7 +332,8 @@ web UI holds one subscription and renders from it, so nothing polls.
 - Connect over h2c on one listener. The gateway shares that listener by default under `/v1/`
   and moves to its own address when `gateway.listen` is set in config. The web UI is served
   from the same listener at `/`.
-- One file per service under `internal/rpc/services`.
+- Services under `internal/rpc/services` are grouped by area, catalog, runtimes, and serving, every
+  handler one manager call answered through one reply helper that maps errors onto codes.
 - A bearer token on the API when `auth.token` is set, checked by one interceptor for unary
   and streaming calls. Gateway keys are separate under `gateway.api_keys`.
 - TLS with HTTP/2 on every listener when `tls.cert_file` and `tls.key_file` are set, and a

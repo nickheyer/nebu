@@ -10,12 +10,10 @@ import (
 )
 
 const (
-	killWait   = 5 * time.Second
-	settleWait = 500 * time.Millisecond
+	killWait     = 5 * time.Second
+	settleWait   = 500 * time.Millisecond
+	pollInterval = 100 * time.Millisecond
 )
-
-// How often a watched process is checked for exit
-const PollInterval = 100 * time.Millisecond
 
 // How long a cancelled command may keep its output open before it is abandoned
 const WaitDelay = 5 * time.Second
@@ -32,10 +30,8 @@ func Attr() *syscall.SysProcAttr { return attr() }
 // Takes charge of a started command's tree, call right after Start
 func Adopt(cmd *exec.Cmd) *Tree { return adopt(cmd.Process.Pid) }
 
-// Starts a command built with a context as a tree of its own, a cancel ending all of it
-//
-// Close the tree once the command has been waited for.
-func Start(cmd *exec.Cmd) (*Tree, error) {
+// Starts a context bound command as its own tree, closed once waited for
+func start(cmd *exec.Cmd) (*Tree, error) {
 	cmd.SysProcAttr = Attr()
 	var mu sync.Mutex
 	var tree *Tree
@@ -60,7 +56,7 @@ func Start(cmd *exec.Cmd) (*Tree, error) {
 
 // Runs a command built with a context to its end as a tree of its own
 func Run(cmd *exec.Cmd) error {
-	tree, err := Start(cmd)
+	tree, err := start(cmd)
 	if err != nil {
 		return err
 	}
@@ -80,6 +76,18 @@ func (t *Tree) Kill() { killTree(t) }
 // Releases what the OS handed out, once the root has exited
 func (t *Tree) Close() { closeTree(t) }
 
+// Interrupts the tree, then kills it once grace passes without done closing
+func (t *Tree) Terminate(grace time.Duration, done <-chan struct{}) {
+	t.Interrupt()
+	select {
+	case <-done:
+		return
+	case <-time.After(grace):
+	}
+	t.Kill()
+	<-done
+}
+
 // Reports whether pid lives with a matching command line
 //
 // Quotes are dropped from both sides, so a path the OS quoted still matches
@@ -91,7 +99,7 @@ func Running(pid int, command []string) bool {
 	want := strings.ReplaceAll(strings.Join(command, " "), `"`, "")
 	deadline := time.Now().Add(settleWait)
 	for {
-		line, err := Cmdline(pid)
+		line, err := cmdline(pid)
 		if err != nil {
 			return false
 		}
@@ -102,7 +110,7 @@ func Running(pid int, command []string) bool {
 		if time.Now().After(deadline) || !Exists(pid) {
 			return false
 		}
-		time.Sleep(PollInterval / 5)
+		time.Sleep(pollInterval / 5)
 	}
 }
 
@@ -111,21 +119,25 @@ func Terminate(pid int, grace time.Duration) bool {
 	if !Exists(pid) {
 		return true
 	}
-	Interrupt(pid)
-	if waitGone(pid, grace) {
+	interrupt(pid)
+	if WaitGone(pid, grace) {
 		return true
 	}
-	Kill(pid)
-	return waitGone(pid, killWait)
+	kill(pid)
+	return WaitGone(pid, killWait)
 }
 
-func waitGone(pid int, limit time.Duration) bool {
-	deadline := time.Now().Add(limit)
-	for time.Now().Before(deadline) {
-		if !Exists(pid) {
-			return true
-		}
-		time.Sleep(PollInterval)
+// Polls until pid is gone, giving up after limit when it is positive
+func WaitGone(pid int, limit time.Duration) bool {
+	var deadline time.Time
+	if limit > 0 {
+		deadline = time.Now().Add(limit)
 	}
-	return !Exists(pid)
+	for Exists(pid) {
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(pollInterval)
+	}
+	return true
 }

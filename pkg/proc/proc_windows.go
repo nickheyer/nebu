@@ -104,14 +104,14 @@ func adopt(pid int) *Tree {
 	return t
 }
 
-func interruptTree(t *Tree) { Interrupt(t.pid) }
+func interruptTree(t *Tree) { interrupt(t.pid) }
 
 func killTree(t *Tree) {
 	if t.job != 0 {
 		windows.TerminateJobObject(windows.Handle(t.job), 1)
 		return
 	}
-	Kill(t.pid)
+	kill(t.pid)
 }
 
 func closeTree(t *Tree) {
@@ -122,7 +122,7 @@ func closeTree(t *Tree) {
 }
 
 // Sends the group a break, what a console process treats as an interrupt
-func Interrupt(pid int) {
+func interrupt(pid int) {
 	if err := windows.GenerateConsoleCtrlEvent(windows.CTRL_BREAK_EVENT, uint32(pid)); err == nil {
 		return
 	}
@@ -138,7 +138,7 @@ func Interrupt(pid int) {
 }
 
 // Ends a foreign process with everything it spawned
-func Kill(pid int) {
+func kill(pid int) {
 	if err := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(pid)).Run(); err != nil {
 		if h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(pid)); err == nil {
 			windows.TerminateProcess(h, 1)
@@ -162,7 +162,7 @@ func Exists(pid int) bool {
 }
 
 // Returns the command line of pid as the system recorded it
-func Cmdline(pid int) (string, error) {
+func cmdline(pid int) (string, error) {
 	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", "(Get-CimInstance Win32_Process -Filter 'ProcessId="+strconv.Itoa(pid)+"').CommandLine").Output()
 	if err != nil {
 		return "", err

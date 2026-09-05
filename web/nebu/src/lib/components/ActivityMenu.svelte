@@ -1,10 +1,9 @@
 <script lang="ts">
   import { Popover } from 'bits-ui';
   import { activeTasks, live, clock } from '$lib/state.svelte';
-  import { pct, bytes, duration } from '$lib/format';
+  import { pct, bytes, duration, newestFirst } from '$lib/format';
   import { TaskState } from '$proto/task_pb';
   import { Activity, ChevronRight } from '@lucide/svelte';
-  import { newestFirst } from '$lib/format';
   import Spinner from './ui/Spinner.svelte';
   import Progress from './ui/Progress.svelte';
   import StateBadge from './ui/StateBadge.svelte';
@@ -13,7 +12,7 @@
   const recent = $derived(
     [...live.tasks.values()]
       .filter((t) => t.state !== TaskState.PENDING && t.state !== TaskState.RUNNING)
-      .sort(newestFirst)
+      .sort(newestFirst((t) => t.createdAt))
       .slice(0, 5)
   );
 </script>

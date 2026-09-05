@@ -1,13 +1,12 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { page } from '$app/state';
   import { replaceState } from '$app/navigation';
   import { api, message } from '$lib/api';
-  import { live } from '$lib/state.svelte';
+  import { cached, refreshCached } from '$lib/state.svelte';
   import { fail } from '$lib/toast.svelte';
   import { groupByProvider, groupLabel, kindParam, looksLikeRepo, parseKind, pickGroup, sortReversible, sourceLabels } from '$lib/catalog';
-  import { SourceKind, type SearchHit, type SourceStatus } from '$proto/source_pb';
-  import type { RuntimeStatus } from '$proto/runtime_pb';
+  import { SourceKind, type SearchHit } from '$proto/source_pb';
   import { Search, Compass, LayoutGrid, List, ArrowDownWideNarrow, ArrowUpNarrowWide, Eye, KeyRound, X, RefreshCw, ExternalLink, Settings } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -22,9 +21,6 @@
   const pageSize = 30;
   const viewKey = 'nebu.catalog.view';
 
-  let statuses = $state<SourceStatus[]>([]);
-  let runtimes = $state<RuntimeStatus[]>([]);
-  let sourcesError = $state('');
   let kind = $state<SourceKind>(SourceKind.UNSPECIFIED);
   let sourceId = $state('');
   let query = $state('');
@@ -48,6 +44,7 @@
   let generation = 0;
   let booted = false;
 
+  const statuses = $derived(cached.sources);
   const groups = $derived(groupByProvider(statuses));
   // Every source at once, the tab before the providers
   const all = $derived(kind === SourceKind.UNSPECIFIED && sourceId === '' && groups.length > 0);
@@ -70,6 +67,12 @@
   // Sources of the provider that browse but cannot download without a token
   const tokenless = $derived((all ? statuses : merged ? (group?.sources ?? []) : status ? [status] : []).filter((s) => s.capabilities?.authRequired && !s.capabilities.tokenPresent));
   const browsing = $derived(!query.trim() && activeFilters.length === 0);
+  // Listing needs a source that browses, matching one that searches, All merging whatever answers
+  const searchable = $derived(all || (browsing ? !!caps?.browse : !!caps?.search));
+  // Only a source that pages hands back a cursor, All when any of them does
+  const paginates = $derived(all ? statuses.some((s) => s.capabilities?.paginate) : !!caps?.paginate);
+  // With neither search nor a repository form the box has nothing to take
+  const inputDead = $derived(!all && !!caps && !caps.search && !caps.repoPattern);
   // The source a typed repository opens in: the chosen one, else the provider's first working source
   const openSourceId = $derived(sourceId || status?.source?.id || statuses.find((s) => !s.error)?.source?.id || '');
 
@@ -80,11 +83,6 @@
     } catch {
       // storage may be unavailable
     }
-    loadSources();
-    api.runtimes
-      .listRuntimes({})
-      .then((r) => (runtimes = r.runtimes))
-      .catch(() => (runtimes = []));
     const onKey = (e: KeyboardEvent) => {
       if (e.key === '/' && !e.metaKey && !e.ctrlKey && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA' && document.activeElement?.tagName !== 'SELECT') {
         e.preventDefault();
@@ -95,19 +93,17 @@
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  async function loadSources() {
-    try {
-      statuses = (await api.sources.listSources({})).sources;
-      sourcesError = '';
-    } catch (err) {
-      sourcesError = message(err);
-      fail(err, 'Could not list sources');
-      return;
-    }
+  // The URL picks the source, query, sort, and filters once the cached sources are in
+  $effect(() => {
+    if (!cached.loaded || booted || statuses.length === 0) return;
+    untrack(boot);
+  });
+
+  function boot() {
     const p = page.url.searchParams;
     const wantedSource = p.get('source') ?? '';
     const everything = p.get('provider') === 'all' && !wantedSource;
-    const g = everything ? undefined : pickGroup(groupByProvider(statuses), parseKind(p.get('provider') ?? ''), wantedSource);
+    const g = everything ? undefined : pickGroup(groups, parseKind(p.get('provider') ?? ''), wantedSource);
     kind = g?.kind ?? SourceKind.UNSPECIFIED;
     sourceId = g?.sources.some((s) => s.source?.id === wantedSource) ? wantedSource : g && g.sources.length === 1 ? (g.sources[0].source?.id ?? '') : '';
     query = p.get('q') ?? '';
@@ -123,12 +119,6 @@
     const repo = p.get('repo');
     if (repo) openRepo(openSourceId, repo, p.get('rev') ?? '', null);
   }
-
-  // Sources come and go on the settings page, the list follows without a reload
-  $effect(() => {
-    void [...live.sources.keys()];
-    if (booted) api.sources.listSources({}).then((r) => (statuses = r.sources)).catch(() => {});
-  });
 
   // A provider only accepts its own sorts and facets, so switching drops the rest, and searching everything carries none
   $effect(() => {
@@ -186,10 +176,11 @@
 
   async function search() {
     if (!group && !all) return;
+    syncUrl();
+    if (!searchable) return;
     const gen = ++generation;
     searching = true;
     searchError = '';
-    syncUrl();
     try {
       const r = await api.sources.search(request());
       if (gen !== generation) return;
@@ -304,14 +295,20 @@
   </div>
 </PageHeader>
 
-{#if sourcesError}
+{#if cached.error && statuses.length === 0}
   <div class="panel">
-    <Empty icon={Compass} title="Sources unavailable" description={sourcesError}>
-      <Button size="sm" icon={RefreshCw} onclick={loadSources}>Try again</Button>
+    <Empty icon={Compass} title="Sources unavailable" description={cached.error}>
+      <Button size="sm" icon={RefreshCw} onclick={() => refreshCached()}>Try again</Button>
     </Empty>
   </div>
-{:else if statuses.length === 0}
+{:else if !cached.loaded}
   <div class="panel"><Skeleton rows={4} class="p-4" /></div>
+{:else if statuses.length === 0}
+  <div class="panel">
+    <Empty icon={Compass} title="No sources" description="Add one in settings to browse a catalog.">
+      <Button size="sm" icon={Settings} href="/settings">Open settings</Button>
+    </Empty>
+  </div>
 {:else}
   <div class="mb-3">
     <SourceTabs {groups} {kind} {sourceId} onChange={pick} />
@@ -325,12 +322,13 @@
         class="input pr-28 pl-9"
         bind:value={query}
         oninput={onInput}
-        placeholder={all ? 'Search every source at once' : caps?.search ? `Search ${name}, or paste ${caps?.repoExample || 'a repository name'} to open it` : `Type ${caps?.repoExample || 'a repository name'} to open it`}
+        disabled={inputDead}
+        placeholder={all ? 'Search every source at once' : inputDead ? `${name} can neither search nor open a repository by name` : caps?.search ? `Search ${name}, or paste ${caps?.repoExample || 'a repository name'} to open it` : `Type ${caps?.repoExample || 'a repository name'} to open it`}
         autocomplete="off"
         spellcheck="false"
       />
       <div class="pointer-events-none absolute top-1/2 right-2 flex -translate-y-1/2 items-center gap-1.5 text-[11px] text-fg-faint">
-        {#if canSubmitRepo}<span class="pointer-events-auto rounded bg-accent/15 px-1.5 py-0.5 text-accent">Enter opens it</span>{:else if !query}<span class="kbd">/</span>{/if}
+        {#if canSubmitRepo}<span class="pointer-events-auto rounded bg-accent/15 px-1.5 py-0.5 text-accent">Enter opens it</span>{:else if !query && !inputDead}<span class="kbd">/</span>{/if}
       </div>
     </div>
     {#if caps?.sorts.length}
@@ -351,7 +349,7 @@
         </button>
       {/if}
     {/if}
-    <Button type="submit" variant="primary" loading={searching} icon={canSubmitRepo ? Eye : Search}>{canSubmitRepo ? 'Open' : 'Search'}</Button>
+    <Button type="submit" variant="primary" loading={searching} icon={canSubmitRepo ? Eye : Search} disabled={!canSubmitRepo && !searchable}>{canSubmitRepo ? 'Open' : 'Search'}</Button>
   </form>
 
   {#if caps?.facets.length}
@@ -404,6 +402,8 @@
         <Empty icon={Eye} title="Type a repository to open it" description="{name} cannot list what it holds. Enter {caps?.repoExample || 'a repository name'} above to read its files and see what fits." />
       {:else if browsing}
         <Empty icon={Compass} title="Nothing listed" description="{name} answered with an empty catalog." />
+      {:else if !searchable}
+        <Empty icon={Eye} title="{name} does not search" description="Type an exact {caps?.repoExample || 'repository name'} to open it directly." />
       {:else}
         <Empty icon={Compass} title="No matches" description="Try fewer words, drop a filter, or type an exact {caps?.repoExample || 'repository name'} to open it directly.">
           <Button size="sm" variant="ghost" onclick={clearAll}>Clear filters</Button>
@@ -417,14 +417,14 @@
   {:else}
     <div class={view === 'grid' ? 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4' : 'flex flex-col gap-1.5'}>
       {#each hits as h (h.sourceId + '/' + h.repo)}
-        <HitCard hit={h} caps={capsOf(h.sourceId)} {runtimes} compact={view === 'list'} from={merged ? (labels.get(h.sourceId) ?? h.sourceId) : ''} selected={selected?.repo === h.repo && selected?.sourceId === h.sourceId && drawerOpen} onOpen={openHit} />
+        <HitCard hit={h} caps={capsOf(h.sourceId)} runtimes={cached.runtimes} compact={view === 'list'} from={merged ? (labels.get(h.sourceId) ?? h.sourceId) : ''} selected={selected?.repo === h.repo && selected?.sourceId === h.sourceId && drawerOpen} onOpen={openHit} />
       {/each}
     </div>
-    <div bind:this={sentinel} class="flex items-center justify-center py-6 text-xs text-fg-faint">
+    <div class="flex items-center justify-center py-6 text-xs text-fg-faint">
       {#if loadingMore}
         <span class="inline-flex items-center gap-1.5"><Spinner size={12} /> Loading more…</span>
-      {:else if nextCursor}
-        <Button size="sm" variant="outline" onclick={more}>Load more</Button>
+      {:else if nextCursor && paginates}
+        <div bind:this={sentinel}><Button size="sm" variant="outline" onclick={more}>Load more</Button></div>
       {:else if hits.length >= pageSize}
         <span>That is everything {name} listed.</span>
       {/if}
@@ -433,5 +433,5 @@
 {/if}
 
 {#if selected}
-  <ModelDrawer bind:open={drawerOpen} sourceId={selected.sourceId} sourceLabel={labels.get(selected.sourceId) ?? name} repo={selected.repo} revision={selected.revision} caps={capsOf(selected.sourceId)} {runtimes} hit={selected.hit} bind:slotId onNavigate={(repo, rev) => { if (selected) selected = { ...selected, repo, revision: rev, hit: hits.find((h) => h.repo === repo) ?? null }; syncUrl(); }} />
+  <ModelDrawer bind:open={drawerOpen} sourceId={selected.sourceId} sourceLabel={labels.get(selected.sourceId) ?? name} repo={selected.repo} revision={selected.revision} caps={capsOf(selected.sourceId)} runtimes={cached.runtimes} hit={selected.hit} bind:slotId onNavigate={(repo, rev) => { if (selected) selected = { ...selected, repo, revision: rev, hit: hits.find((h) => h.repo === repo) ?? null }; syncUrl(); }} />
 {/if}

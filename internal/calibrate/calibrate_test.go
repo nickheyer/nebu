@@ -35,7 +35,8 @@ func TestRecordAndReload(t *testing.T) {
 		t.Fatalf("smoothed delta %v", d)
 	}
 	again, err := Open(ctx, store)
-	if err != nil || again.Delta("rt", "arch") != 140 || again.Snapshot().GetEntries()[Key("rt", "arch")].GetSamples() != 2 {
-		t.Fatalf("reload %v %v", again.Snapshot(), err)
+	rows, _ := store.ListCalibrations(ctx)
+	if err != nil || again.Delta("rt", "arch") != 140 || len(rows) != 1 || rows[0].Calibration.GetSamples() != 2 {
+		t.Fatalf("reload %v %v", rows, err)
 	}
 }

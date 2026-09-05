@@ -129,7 +129,7 @@ func (m *Manager) Get(id string) (*v1.Source, error) {
 	if i := m.indexLocked(id); i >= 0 {
 		return clone(m.rows[i]), nil
 	}
-	return nil, fmt.Errorf("%w %q", ErrUnknownSource, id)
+	return nil, unknownSource(id)
 }
 
 func (m *Manager) indexLocked(id string) int {
@@ -169,7 +169,7 @@ func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error)
 	defer m.mu.Unlock()
 	i := m.indexLocked(in.GetId())
 	if i < 0 {
-		return nil, fmt.Errorf("%w %q", ErrUnknownSource, in.GetId())
+		return nil, unknownSource(in.GetId())
 	}
 	row := m.rows[i]
 	if k := in.GetKind(); k != v1.SourceKind_SOURCE_KIND_UNSPECIFIED && k != row.GetKind() {
@@ -199,7 +199,7 @@ func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Source
 	defer m.mu.Unlock()
 	i := m.indexLocked(id)
 	if i < 0 {
-		return nil, fmt.Errorf("%w %q", ErrUnknownSource, id)
+		return nil, unknownSource(id)
 	}
 	row := m.rows[i]
 	if row.GetSeeded() {

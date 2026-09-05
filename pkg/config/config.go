@@ -15,17 +15,17 @@ import (
 
 const (
 	// Environment variable naming the config file
-	EnvConfig = "NEBU_CONFIG"
+	envConfig = "NEBU_CONFIG"
 	// Environment variable naming the daemon address
-	EnvAddr = "NEBU_ADDR"
+	envAddr = "NEBU_ADDR"
 	// Environment variable naming the data directory
-	EnvDataDir = "NEBU_DATA_DIR"
+	envDataDir = "NEBU_DATA_DIR"
 	// Environment variable naming the listen address
-	EnvListen = "NEBU_LISTEN"
+	envListen = "NEBU_LISTEN"
 	// Environment variable holding the API token
-	EnvToken = "NEBU_TOKEN"
+	envToken = "NEBU_TOKEN"
 	// Comma separated gateway keys read when gateway.api_key_env is unset
-	EnvAPIKeys = "NEBU_API_KEYS"
+	envAPIKeys = "NEBU_API_KEYS"
 
 	defaultListen   = "127.0.0.1:8484"
 	minFreeBytes    = 50 << 30
@@ -44,7 +44,7 @@ var defaultCLIs = []string{"podman", "docker", "nerdctl"}
 // Search order when no path is given
 func candidates() []string {
 	var out []string
-	if p := os.Getenv(EnvConfig); p != "" {
+	if p := os.Getenv(envConfig); p != "" {
 		out = append(out, p)
 	}
 	out = append(out, "nebu.yaml")
@@ -85,16 +85,16 @@ func Load(path string) (*v1.Config, error) {
 }
 
 func applyEnv(cfg *v1.Config) {
-	if v := os.Getenv(EnvAddr); v != "" {
+	if v := os.Getenv(envAddr); v != "" {
 		cfg.Addr = v
 	}
-	if v := os.Getenv(EnvDataDir); v != "" {
+	if v := os.Getenv(envDataDir); v != "" {
 		cfg.DataDir = v
 	}
-	if v := os.Getenv(EnvListen); v != "" {
+	if v := os.Getenv(envListen); v != "" {
 		cfg.Listen = v
 	}
-	if v := os.Getenv(EnvToken); v != "" {
+	if v := os.Getenv(envToken); v != "" {
 		if cfg.Auth == nil {
 			cfg.Auth = &v1.Auth{}
 		}
@@ -171,7 +171,7 @@ func applyDefaults(cfg *v1.Config) error {
 		cfg.Auth.Token = os.Getenv(cfg.Auth.TokenEnv)
 	}
 	if cfg.Gateway.ApiKeyEnv == "" {
-		cfg.Gateway.ApiKeyEnv = EnvAPIKeys
+		cfg.Gateway.ApiKeyEnv = envAPIKeys
 	}
 	if cfg.Gateway.ApiKeyEnv != "" {
 		if v := os.Getenv(cfg.Gateway.ApiKeyEnv); v != "" {

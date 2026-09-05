@@ -1,8 +1,6 @@
 package formats
 
 import (
-	"bytes"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -104,15 +102,4 @@ func roleName(r v1.ArtifactRole) string {
 		return "tokenizer"
 	}
 	return "other"
-}
-
-func TestChunkReader(t *testing.T) {
-	data := make([]byte, 3*firstChunk+123)
-	for i := range data {
-		data[i] = byte(i % 251)
-	}
-	got, err := io.ReadAll(NewChunkReader(bytes.NewReader(data), int64(len(data))))
-	if err != nil || !bytes.Equal(got, data) {
-		t.Fatalf("len=%d err=%v", len(got), err)
-	}
 }

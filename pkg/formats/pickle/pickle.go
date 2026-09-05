@@ -36,7 +36,6 @@ func (g Global) String() string { return g.Module + "." + g.Name }
 type Object struct {
 	Class Global
 	Args  []any
-	KW    map[string]any
 	State any
 }
 
@@ -46,10 +45,10 @@ type Persistent struct {
 }
 
 // Python tuple
-type Tuple []any
+type tuple []any
 
 // Python list, a pointer so appends after memoization are seen through references
-type List struct {
+type list struct {
 	Items []any
 }
 
@@ -108,26 +107,20 @@ func keyEqual(a, b any) bool {
 type mark struct{}
 
 // Decodes one pickle stream
-type Decoder struct {
+type decoder struct {
 	r     *bufio.Reader
 	stack []any
 	memo  map[int]any
-	// Reduce replaces the default object construction for a callable; return false to fall back
-	Reduce func(g Global, args []any) (any, bool)
-}
-
-// Wraps a reader
-func New(r io.Reader) *Decoder {
-	return &Decoder{r: bufio.NewReaderSize(r, 1<<16), memo: map[int]any{}}
 }
 
 // Decodes the first object in a stream
 func Decode(r io.Reader) (any, error) {
-	return New(r).Load()
+	d := &decoder{r: bufio.NewReaderSize(r, 1<<16), memo: map[int]any{}}
+	return d.load()
 }
 
 // Decodes the next object
-func (d *Decoder) Load() (any, error) {
+func (d *decoder) load() (any, error) {
 	for {
 		op, err := d.r.ReadByte()
 		if err != nil {
@@ -146,7 +139,7 @@ func (d *Decoder) Load() (any, error) {
 	}
 }
 
-func (d *Decoder) push(v any) error {
+func (d *decoder) push(v any) error {
 	if len(d.stack) >= maxStack {
 		return errors.New("pickle: stack too deep")
 	}
@@ -154,7 +147,7 @@ func (d *Decoder) push(v any) error {
 	return nil
 }
 
-func (d *Decoder) pop() (any, error) {
+func (d *decoder) pop() (any, error) {
 	if len(d.stack) == 0 {
 		return nil, errors.New("pickle: stack underflow")
 	}
@@ -163,7 +156,7 @@ func (d *Decoder) pop() (any, error) {
 	return v, nil
 }
 
-func (d *Decoder) top() (any, error) {
+func (d *decoder) top() (any, error) {
 	if len(d.stack) == 0 {
 		return nil, errors.New("pickle: stack underflow")
 	}
@@ -171,7 +164,7 @@ func (d *Decoder) top() (any, error) {
 }
 
 // Pops everything above the last mark
-func (d *Decoder) popMark() ([]any, error) {
+func (d *decoder) popMark() ([]any, error) {
 	for i := len(d.stack) - 1; i >= 0; i-- {
 		if _, ok := d.stack[i].(mark); ok {
 			items := append([]any(nil), d.stack[i+1:]...)
@@ -182,7 +175,7 @@ func (d *Decoder) popMark() ([]any, error) {
 	return nil, errors.New("pickle: no mark")
 }
 
-func (d *Decoder) memoize(key int, v any) error {
+func (d *decoder) memoize(key int, v any) error {
 	if len(d.memo) >= maxMemo {
 		return errors.New("pickle: memo too large")
 	}
@@ -190,7 +183,7 @@ func (d *Decoder) memoize(key int, v any) error {
 	return nil
 }
 
-func (d *Decoder) step(op byte) (bool, error) {
+func (d *decoder) step(op byte) (bool, error) {
 	switch op {
 	case '\x80': // PROTO
 		if _, err := d.r.ReadByte(); err != nil {
@@ -388,13 +381,13 @@ func (d *Decoder) step(op byte) (bool, error) {
 		}
 		return false, d.setItems(items)
 	case ']': // EMPTY_LIST
-		return false, d.push(&List{})
+		return false, d.push(&list{})
 	case 'l': // LIST
 		items, err := d.popMark()
 		if err != nil {
 			return false, err
 		}
-		return false, d.push(&List{Items: items})
+		return false, d.push(&list{Items: items})
 	case 'a': // APPEND
 		v, err := d.pop()
 		if err != nil {
@@ -408,23 +401,23 @@ func (d *Decoder) step(op byte) (bool, error) {
 		}
 		return false, d.appendItems(items)
 	case ')': // EMPTY_TUPLE
-		return false, d.push(Tuple{})
+		return false, d.push(tuple{})
 	case 't': // TUPLE
 		items, err := d.popMark()
 		if err != nil {
 			return false, err
 		}
-		return false, d.push(Tuple(items))
+		return false, d.push(tuple(items))
 	case '\x85', '\x86', '\x87': // TUPLE1..3
 		n := int(op - '\x84')
 		if len(d.stack) < n {
 			return false, errors.New("pickle: stack underflow")
 		}
-		items := Tuple(append([]any(nil), d.stack[len(d.stack)-n:]...))
+		items := tuple(append([]any(nil), d.stack[len(d.stack)-n:]...))
 		d.stack = d.stack[:len(d.stack)-n]
 		return false, d.push(items)
 	case '\x8f': // EMPTY_SET
-		return false, d.push(&List{})
+		return false, d.push(&list{})
 	case '\x90': // ADDITEMS
 		items, err := d.popMark()
 		if err != nil {
@@ -436,7 +429,7 @@ func (d *Decoder) step(op byte) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		return false, d.push(Tuple(items))
+		return false, d.push(tuple(items))
 	case 'c': // GLOBAL
 		module, err := d.line()
 		if err != nil {
@@ -471,7 +464,7 @@ func (d *Decoder) step(op byte) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		v, err := d.apply(fn, args, nil)
+		v, err := d.apply(fn, args)
 		if err != nil {
 			return false, err
 		}
@@ -485,14 +478,13 @@ func (d *Decoder) step(op byte) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		v, err := d.apply(cls, args, nil)
+		v, err := d.apply(cls, args)
 		if err != nil {
 			return false, err
 		}
 		return false, d.push(v)
 	case '\x92': // NEWOBJ_EX
-		kw, err := d.pop()
-		if err != nil {
+		if _, err := d.pop(); err != nil {
 			return false, err
 		}
 		args, err := d.pop()
@@ -503,7 +495,7 @@ func (d *Decoder) step(op byte) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		v, err := d.apply(cls, args, kw)
+		v, err := d.apply(cls, args)
 		if err != nil {
 			return false, err
 		}
@@ -607,8 +599,8 @@ func (d *Decoder) step(op byte) (bool, error) {
 	return false, nil
 }
 
-// Applies a callable, through the hook first, else by recording it
-func (d *Decoder) apply(fn, args, kw any) (any, error) {
+// Applies a callable, constructing builtins and recording everything else
+func (d *decoder) apply(fn, args any) (any, error) {
 	g, ok := fn.(Global)
 	if !ok {
 		if o, isObj := fn.(*Object); isObj {
@@ -619,9 +611,9 @@ func (d *Decoder) apply(fn, args, kw any) (any, error) {
 	}
 	var argv []any
 	switch a := args.(type) {
-	case Tuple:
+	case tuple:
 		argv = []any(a)
-	case *List:
+	case *list:
 		argv = a.Items
 	case nil:
 	default:
@@ -630,21 +622,7 @@ func (d *Decoder) apply(fn, args, kw any) (any, error) {
 	if v, ok := builtin(g, argv); ok {
 		return v, nil
 	}
-	if d.Reduce != nil {
-		if v, ok := d.Reduce(g, argv); ok {
-			return v, nil
-		}
-	}
-	obj := &Object{Class: g, Args: argv}
-	if kwd, ok := kw.(*Dict); ok && kwd != nil {
-		obj.KW = map[string]any{}
-		for _, p := range kwd.Pairs {
-			if k, ok := p.Key.(string); ok {
-				obj.KW[k] = p.Value
-			}
-		}
-	}
-	return obj, nil
+	return &Object{Class: g, Args: argv}, nil
 }
 
 // Constructs the few standard library callables whose value matters
@@ -655,30 +633,30 @@ func builtin(g Global, args []any) (any, bool) {
 	case "builtins.list", "builtins.set", "builtins.frozenset":
 		if len(args) == 1 {
 			switch a := args[0].(type) {
-			case Tuple:
-				return &List{Items: append([]any(nil), a...)}, true
-			case *List:
-				return &List{Items: append([]any(nil), a.Items...)}, true
+			case tuple:
+				return &list{Items: append([]any(nil), a...)}, true
+			case *list:
+				return &list{Items: append([]any(nil), a.Items...)}, true
 			}
 		}
-		return &List{}, true
+		return &list{}, true
 	case "builtins.tuple":
 		if len(args) == 1 {
-			if l, ok := args[0].(*List); ok {
-				return Tuple(append([]any(nil), l.Items...)), true
+			if l, ok := args[0].(*list); ok {
+				return tuple(append([]any(nil), l.Items...)), true
 			}
 		}
-		return Tuple{}, true
+		return tuple{}, true
 	case "torch.Size":
 		if len(args) == 1 {
 			switch a := args[0].(type) {
-			case Tuple:
+			case tuple:
 				return a, true
-			case *List:
-				return Tuple(append([]any(nil), a.Items...)), true
+			case *list:
+				return tuple(append([]any(nil), a.Items...)), true
 			}
 		}
-		return Tuple{}, true
+		return tuple{}, true
 	case "_codecs.encode":
 		if len(args) >= 1 {
 			if s, ok := args[0].(string); ok {
@@ -697,7 +675,7 @@ func builtin(g Global, args []any) (any, bool) {
 	return nil, false
 }
 
-func (d *Decoder) setItems(items []any) error {
+func (d *decoder) setItems(items []any) error {
 	top, err := d.top()
 	if err != nil {
 		return err
@@ -720,12 +698,12 @@ func (d *Decoder) setItems(items []any) error {
 	return nil
 }
 
-func (d *Decoder) appendItems(items []any) error {
+func (d *decoder) appendItems(items []any) error {
 	top, err := d.top()
 	if err != nil {
 		return err
 	}
-	l, ok := top.(*List)
+	l, ok := top.(*list)
 	if !ok {
 		return fmt.Errorf("pickle: APPEND on %T", top)
 	}
@@ -733,7 +711,7 @@ func (d *Decoder) appendItems(items []any) error {
 	return nil
 }
 
-func (d *Decoder) get(n int) error {
+func (d *decoder) get(n int) error {
 	v, ok := d.memo[n]
 	if !ok {
 		return fmt.Errorf("pickle: memo %d unset", n)
@@ -741,7 +719,7 @@ func (d *Decoder) get(n int) error {
 	return d.push(v)
 }
 
-func (d *Decoder) pushLong(n int) error {
+func (d *decoder) pushLong(n int) error {
 	buf, err := d.bytes(n)
 	if err != nil {
 		return err
@@ -775,7 +753,7 @@ func bigValue(v *big.Int) any {
 	return f
 }
 
-func (d *Decoder) line() (string, error) {
+func (d *decoder) line() (string, error) {
 	s, err := d.r.ReadString('\n')
 	if err != nil {
 		return "", err
@@ -783,7 +761,7 @@ func (d *Decoder) line() (string, error) {
 	return strings.TrimRight(s, "\r\n"), nil
 }
 
-func (d *Decoder) bytes(n int) ([]byte, error) {
+func (d *decoder) bytes(n int) ([]byte, error) {
 	if n < 0 || n > maxString {
 		return nil, fmt.Errorf("pickle: string of %d bytes", n)
 	}
@@ -794,7 +772,7 @@ func (d *Decoder) bytes(n int) ([]byte, error) {
 	return buf, nil
 }
 
-func (d *Decoder) u16() (uint16, error) {
+func (d *decoder) u16() (uint16, error) {
 	var buf [2]byte
 	if _, err := io.ReadFull(d.r, buf[:]); err != nil {
 		return 0, err
@@ -802,7 +780,7 @@ func (d *Decoder) u16() (uint16, error) {
 	return binary.LittleEndian.Uint16(buf[:]), nil
 }
 
-func (d *Decoder) u32() (uint32, error) {
+func (d *decoder) u32() (uint32, error) {
 	var buf [4]byte
 	if _, err := io.ReadFull(d.r, buf[:]); err != nil {
 		return 0, err
@@ -810,7 +788,7 @@ func (d *Decoder) u32() (uint32, error) {
 	return binary.LittleEndian.Uint32(buf[:]), nil
 }
 
-func (d *Decoder) u64() (uint64, error) {
+func (d *decoder) u64() (uint64, error) {
 	var buf [8]byte
 	if _, err := io.ReadFull(d.r, buf[:]); err != nil {
 		return 0, err
@@ -839,9 +817,9 @@ func Int(v any) (int64, bool) {
 // Returns the items of a tuple or list
 func Items(v any) ([]any, bool) {
 	switch t := v.(type) {
-	case Tuple:
+	case tuple:
 		return t, true
-	case *List:
+	case *list:
 		return t.Items, true
 	}
 	return nil, false

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { page } from '$app/state';
-  import { api, baseUrl, gatewayKey, setGatewayKey } from '$lib/api';
+  import { baseUrl, gatewayKey, setGatewayKey } from '$lib/api';
   import { listenerUrl } from '$lib/gateway';
-  import { live } from '$lib/state.svelte';
-  import { enumLabel } from '$lib/format';
+  import { live, cached } from '$lib/state.svelte';
+  import { byName, enumLabel } from '$lib/format';
   import { fail } from '$lib/toast.svelte';
-  import { RouteState, type GatewayStatus } from '$proto/gateway_pb';
+  import { RouteState } from '$proto/gateway_pb';
   import { MessageSquare, Send, Square, Trash2, KeyRound } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -30,7 +30,6 @@
     error?: string;
   }
 
-  let status = $state<GatewayStatus | null>(null);
   let model = $state('');
   let system = $state('');
   let temperature = $state('');
@@ -42,7 +41,8 @@
   let log: HTMLDivElement | undefined = $state();
   let controller: AbortController | null = null;
 
-  const ready = $derived([...live.routes.values()].filter((r) => r.state === RouteState.READY).sort((a, b) => a.name.localeCompare(b.name)));
+  const status = $derived(cached.gateway);
+  const ready = $derived([...live.routes.values()].filter((r) => r.state === RouteState.READY).sort(byName((r) => r.name)));
   // The route asked for stays chosen while it exists, even before it answers, else the first that does
   const asked = $derived(model ? live.routes.get(model) : undefined);
   const chosen = $derived(asked ?? ready[0]);
@@ -55,13 +55,8 @@
   const gatewayBase = $derived(own ? listenerUrl(own.addr, !!status?.tls) : baseUrl);
   const endpoint = $derived(gatewayBase + '/v1/chat/completions');
 
-  onMount(async () => {
+  onMount(() => {
     model = page.url.searchParams.get('model') ?? '';
-    try {
-      status = (await api.gateway.getGatewayStatus({})).status ?? null;
-    } catch (err) {
-      fail(err, 'Gateway status failed');
-    }
   });
 
   async function scroll() {
@@ -198,7 +193,7 @@
       <Field label="Model" for="chat-model" hint="Routes that answer right now">
         <select id="chat-model" class="input font-mono" bind:value={model}>
           {#if asked && !chosenReady}<option value={asked.name}>{asked.name} · {enumLabel(RouteState, asked.state)}</option>{/if}
-          {#each ready as r (r.name)}<option value={r.name}>{r.name}</option>{/each}
+          {#each ready as r (r.name)}<option value={r.name}>{r.name}{r.served && r.served !== r.name ? ` · answers as ${r.served}` : ''}</option>{/each}
         </select>
       </Field>
       <Field label="System prompt" for="chat-system">
@@ -223,7 +218,9 @@
       {#if chosen && !chosenReady}
         <p class="rounded-md border border-warn/30 bg-warn/8 px-2.5 py-1.5 text-xs text-warn">{chosen.name} is {enumLabel(RouteState, chosen.state)}. Send waits until it answers.</p>
       {/if}
-      <p class="text-[11px] leading-4 text-fg-faint">Sent to <span class="font-mono">{endpoint}</span> as <span class="font-mono">{chosen?.name}</span>{chosen?.model ? `, serving ${chosen.model}` : ''}.</p>
+      <p class="text-[11px] leading-4 text-fg-faint">
+        Sent to <span class="font-mono">{endpoint}</span> as <span class="font-mono">{chosen?.name}</span>{#if chosen?.served && chosen.served !== chosen.name}, which the runtime answers as <span class="font-mono">{chosen.served}</span>{/if}{chosen?.model ? `, serving ${chosen.model}` : ''}.
+      </p>
     </aside>
 
     <section class="panel flex min-h-[32rem] flex-col">

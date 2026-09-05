@@ -8,10 +8,8 @@
     values = $bindable({}),
     invalid = $bindable(0),
     inherited = {},
-    idPrefix = 'param',
-    disabled = false,
-    class: cls = ''
-  }: { params?: Param[]; values?: Record<string, string>; invalid?: number; inherited?: Record<string, string>; idPrefix?: string; disabled?: boolean; class?: string } = $props();
+    idPrefix = 'param'
+  }: { params?: Param[]; values?: Record<string, string>; invalid?: number; inherited?: Record<string, string>; idPrefix?: string } = $props();
 
   let newName = $state('');
   let newValue = $state('');
@@ -62,13 +60,13 @@
   }
 </script>
 
-<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 {cls}">
+<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
   {#each params as p (p.name)}
     {@const v = values[p.name] ?? ''}
     {@const fid = `${idPrefix}-${p.name}`}
     <Field label={p.name} for={fid} hint={p.description}>
       {#if p.choices.length || p.type === ParamType.BOOL}
-        <select id={fid} class="input font-mono" value={v} {disabled} onchange={(e) => set(p.name, (e.currentTarget as HTMLSelectElement).value)}>
+        <select id={fid} class="input font-mono" value={v} onchange={(e) => set(p.name, (e.currentTarget as HTMLSelectElement).value)}>
           <option value="">Inherit · {beneath(p)}</option>
           {#each p.choices.length ? p.choices : ['true', 'false'] as c (c)}<option value={c}>{c}</option>{/each}
         </select>
@@ -81,7 +79,6 @@
           value={v}
           placeholder={beneath(p)}
           aria-invalid={!valid(p, v)}
-          {disabled}
           autocomplete="off"
           spellcheck="false"
           oninput={(e) => set(p.name, (e.currentTarget as HTMLInputElement).value)}
@@ -94,8 +91,8 @@
   {#each extra as k (k)}
     <Field label={k} for="{idPrefix}-{k}" hint={params.length ? 'Not a param of this runtime, the run will refuse it' : ''}>
       <div class="flex gap-1.5">
-        <input id="{idPrefix}-{k}" class="input font-mono" value={values[k]} {disabled} autocomplete="off" spellcheck="false" oninput={(e) => (values = { ...values, [k]: (e.currentTarget as HTMLInputElement).value })} />
-        <button type="button" class="shrink-0 rounded-md px-2 text-fg-muted hover:bg-raised hover:text-fg" aria-label="Remove {k}" {disabled} onclick={() => set(k, '')}><X size={14} /></button>
+        <input id="{idPrefix}-{k}" class="input font-mono" value={values[k]} autocomplete="off" spellcheck="false" oninput={(e) => (values = { ...values, [k]: (e.currentTarget as HTMLInputElement).value })} />
+        <button type="button" class="shrink-0 rounded-md px-2 text-fg-muted hover:bg-raised hover:text-fg" aria-label="Remove {k}" onclick={() => set(k, '')}><X size={14} /></button>
       </div>
     </Field>
   {/each}
@@ -103,12 +100,12 @@
   {#if params.length === 0}
     <div class="flex items-end gap-1.5 sm:col-span-2">
       <Field label="Parameter" for="{idPrefix}-new-name" class="flex-1">
-        <input id="{idPrefix}-new-name" class="input font-mono" bind:value={newName} placeholder="name" {disabled} autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && add()} />
+        <input id="{idPrefix}-new-name" class="input font-mono" bind:value={newName} placeholder="name" autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && add()} />
       </Field>
       <Field label="Value" for="{idPrefix}-new-value" class="flex-1">
-        <input id="{idPrefix}-new-value" class="input font-mono" bind:value={newValue} placeholder="value" {disabled} autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && add()} />
+        <input id="{idPrefix}-new-value" class="input font-mono" bind:value={newValue} placeholder="value" autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && add()} />
       </Field>
-      <button type="button" class="input flex w-10 shrink-0 items-center justify-center text-fg-muted hover:text-fg" aria-label="Add parameter" disabled={disabled || !newName.trim()} onclick={add}><Plus size={14} /></button>
+      <button type="button" class="input flex w-10 shrink-0 items-center justify-center text-fg-muted hover:text-fg" aria-label="Add parameter" disabled={!newName.trim()} onclick={add}><Plus size={14} /></button>
     </div>
   {/if}
 </div>

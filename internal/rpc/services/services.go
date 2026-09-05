@@ -55,3 +55,11 @@ func wrap(err error) error {
 	}
 	return connect.NewError(connect.CodeInternal, err)
 }
+
+// Answers with the message, or the error mapped onto its code
+func reply[R any](msg *R, err error) (*connect.Response[R], error) {
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return connect.NewResponse(msg), nil
+}

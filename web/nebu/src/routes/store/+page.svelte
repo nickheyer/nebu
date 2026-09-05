@@ -6,7 +6,7 @@
   import { ago, bytes, count, params as fmtParams, when } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
-  import type { StoredModel, StoreStatus } from '$proto/store_pb';
+  import type { StoredModel } from '$proto/store_pb';
   import { Database, GripVertical, Play, FolderOutput, ShieldCheck, Trash2, Search, Recycle, HardDrive } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -20,9 +20,8 @@
   import SortTh from '$lib/components/ui/SortTh.svelte';
   import { TableSort } from '$lib/sort.svelte';
 
-  let fetched = $state<StoreStatus | null>(null);
-  // The stream carries the totals after every change, the fetch only covers the wait for the first
-  const status = $derived(live.store ?? fetched);
+  // The stream carries the totals in the snapshot and after every change
+  const status = $derived(live.store);
   let filter = $state('');
   let exportOpen = $state(false);
   let exportTarget = $state<StoredModel | null>(null);
@@ -59,14 +58,6 @@
     )
   );
   const total = $derived([...live.models.values()].reduce((a, m) => a + m.bytes, 0n));
-
-  $effect(() => {
-    if (live.store) return;
-    api.store
-      .getStatus({})
-      .then((r) => (fetched = r.status ?? null))
-      .catch((err) => fail(err, 'Store status failed'));
-  });
 
   async function remove(m: StoredModel) {
     const yes = await confirm({ title: `Remove ${m.repo}?`, message: `${m.group} is dropped from the store and blobs nothing else references are collected. Pulling again resumes from nothing.`, action: 'Remove', tone: 'bad' });

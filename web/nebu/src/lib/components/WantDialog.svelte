@@ -1,19 +1,16 @@
 <script lang="ts">
   import { api } from '$lib/api';
-  import { live, profilesOf, profileParams } from '$lib/state.svelte';
-  import { fail, ok } from '$lib/toast.svelte';
-  import { groupByProvider, type ProviderGroup } from '$lib/catalog';
-  import { SourceKind, type SourceStatus } from '$proto/source_pb';
-  import type { RuntimeStatus } from '$proto/runtime_pb';
-  import Dialog from './ui/Dialog.svelte';
+  import { live, cached } from '$lib/state.svelte';
+  import { createForm } from '$lib/form.svelte';
+  import { groupByProvider } from '$lib/catalog';
+  import { SourceKind } from '$proto/source_pb';
+  import FormDialog from './ui/FormDialog.svelte';
   import Field from './ui/Field.svelte';
-  import Button from './ui/Button.svelte';
-  import ParamForm from './ParamForm.svelte';
+  import CheckCard from './ui/CheckCard.svelte';
+  import SwapTarget from './SwapTarget.svelte';
 
   let { open = $bindable(false), query = '' }: { open?: boolean; query?: string } = $props();
 
-  let statuses = $state<SourceStatus[]>([]);
-  let runtimes = $state<RuntimeStatus[]>([]);
   let text = $state('');
   // Where to look: everything, one provider as kind:N, or one source as source:ID
   let where = $state('');
@@ -25,38 +22,20 @@
   let profileId = $state('');
   let values = $state<Record<string, string>>({});
   let invalid = $state(0);
-  let saving = $state(false);
 
-  const groups = $derived<ProviderGroup[]>(groupByProvider(statuses));
-  const slot = $derived(slotId ? live.slots.get(slotId) : undefined);
-  // The swap runs on the named runtime, else the slot's, else the one a picked profile belongs to
-  const pickedRuntime = $derived(runtimeId || slot?.runtimeId || '');
-  const profileRuntime = $derived(live.profiles.get(profileId)?.runtimeId ?? '');
-  const effectiveRuntime = $derived(pickedRuntime || profileRuntime);
-  const manifest = $derived(runtimes.find((r) => r.manifest?.id === effectiveRuntime)?.manifest);
-  const profiles = $derived(profilesOf(pickedRuntime));
-  const defaultProfile = $derived(pickedRuntime ? profiles.find((p) => p.default) : undefined);
-  const inherited = $derived({ ...profileParams(effectiveRuntime, profileId), ...(slot?.params ?? {}) });
+  const groups = $derived(groupByProvider(cached.sources));
 
-  // A profile belongs to one runtime, so it drops when the runtime moves away from it
-  $effect(() => {
-    if (profileId && (!live.profiles.has(profileId) || profileRuntime !== effectiveRuntime)) profileId = '';
-  });
-
-  $effect(() => {
-    if (!open) return;
-    text = query;
-    where = match = formatId = slotId = runtimeId = profileId = '';
-    values = {};
-    autoPull = false;
-    api.sources.listSources({}).then((r) => (statuses = r.sources)).catch(() => (statuses = []));
-    api.runtimes.listRuntimes({}).then((r) => (runtimes = r.runtimes)).catch(() => (runtimes = []));
-  });
-
-  async function submit() {
-    saving = true;
-    const [scope, id] = where.split(':');
-    try {
+  const form = createForm({
+    open: () => open,
+    close: () => (open = false),
+    reset() {
+      text = query;
+      where = match = formatId = slotId = runtimeId = profileId = '';
+      values = {};
+      autoPull = false;
+    },
+    async submit() {
+      const [scope, id] = where.split(':');
       await api.monitor.addWant({
         query: text.trim(),
         kind: scope === 'kind' ? (Number(id) as SourceKind) : SourceKind.UNSPECIFIED,
@@ -69,17 +48,22 @@
         params: values,
         profileId
       });
-      ok(`Wanting ${text.trim()}`, 'The first look is running now, then every monitor interval');
-      open = false;
-    } catch (err) {
-      fail(err, 'Want refused');
-    } finally {
-      saving = false;
-    }
-  }
+      return { title: `Wanting ${text.trim()}`, detail: 'The first look is running now, then every monitor interval' };
+    },
+    failTitle: 'Want refused'
+  });
 </script>
 
-<Dialog bind:open title="Want a model" description="A standing search across your sources, satisfied the moment a repository with a matching weight group turns up" size="lg">
+<FormDialog
+  bind:open
+  title="Want a model"
+  description="A standing search across your sources, satisfied the moment a repository with a matching weight group turns up"
+  size="lg"
+  action="Want it"
+  saving={form.saving}
+  disabled={!text.trim() || invalid > 0}
+  onsubmit={form.run}
+>
   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
     <Field label="Search for" for="want-query" hint="Words the catalog search takes, the first hits are checked each time" class="sm:col-span-2">
       <input id="want-query" class="input" bind:value={text} placeholder="model name, family, or format" autocomplete="off" spellcheck="false" />
@@ -104,48 +88,7 @@
     <Field label="Group match" for="want-match" hint="Regex over weight group names, any when empty" class="sm:col-span-2">
       <input id="want-match" class="input font-mono" bind:value={match} placeholder="regex" autocomplete="off" spellcheck="false" />
     </Field>
-
-    <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-line bg-sunken px-3 py-2.5 sm:col-span-2">
-      <input type="checkbox" class="mt-0.5 accent-accent" bind:checked={autoPull} />
-      <span class="text-sm">
-        <span class="font-medium text-fg">Pull when found</span>
-        <span class="block text-xs leading-5 text-fg-muted">The matching group is pulled into the store as soon as it turns up. Picking a slot below turns this on.</span>
-      </span>
-    </label>
-
-    <Field label="Swap into slot" for="want-slot" hint="The slot moves to the pull once it lands">
-      <select id="want-slot" class="input" bind:value={slotId}>
-        <option value="">No swap</option>
-        {#each [...live.slots.values()] as s (s.id)}<option value={s.id}>{s.name}</option>{/each}
-      </select>
-    </Field>
-    <Field label="Runtime for the swap" for="want-runtime">
-      <select id="want-runtime" class="input" bind:value={runtimeId} disabled={!slotId}>
-        <option value="">{slot?.runtimeId ? `Slot default · ${slot.runtimeId}` : 'First compatible runtime'}</option>
-        {#each runtimes as rt (rt.manifest?.id)}
-          <option value={rt.manifest?.id}>{rt.manifest?.name ?? rt.manifest?.id}{rt.compatible ? '' : ' · incompatible'}</option>
-        {/each}
-      </select>
-    </Field>
-    <Field label="Profile for the swap" for="want-profile" class="sm:col-span-2" hint={slotId && !profiles.length ? `No profiles for ${pickedRuntime || 'any runtime'} yet` : slotId && !pickedRuntime ? 'A profile picks its runtime when the slot names none' : ''}>
-      <select id="want-profile" class="input" bind:value={profileId} disabled={!slotId || !profiles.length}>
-        <option value="">{defaultProfile ? `Runtime default · ${defaultProfile.name}` : 'Manifest defaults'}</option>
-        {#each profiles as p (p.id)}<option value={p.id}>{pickedRuntime ? '' : `${p.runtimeId} · `}{p.name}{p.description ? ` · ${p.description}` : ''}</option>{/each}
-      </select>
-    </Field>
-    {#if slotId}
-      <div class="sm:col-span-2">
-        <div class="mb-2 flex items-baseline gap-2">
-          <span class="text-xs font-medium text-fg-muted">Parameters for the swap</span>
-          <span class="text-[11.5px] text-fg-faint">Empty fields inherit the profile, then the slot</span>
-        </div>
-        <ParamForm params={manifest?.params ?? []} bind:values bind:invalid {inherited} idPrefix="want" />
-      </div>
-    {/if}
+    <CheckCard bind:checked={autoPull} class="sm:col-span-2" title="Pull when found" description="The matching group is pulled into the store as soon as it turns up. Picking a slot below turns this on." />
+    <SwapTarget optional idPrefix="want" bind:slotId bind:runtimeId bind:profileId bind:values bind:invalid />
   </div>
-
-  {#snippet footer()}
-    <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-    <Button variant="primary" loading={saving} onclick={submit} disabled={!text.trim() || invalid > 0}>Want it</Button>
-  {/snippet}
-</Dialog>
+</FormDialog>

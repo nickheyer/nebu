@@ -23,7 +23,6 @@ type Bus struct {
 
 // One subscriber's queue
 type Subscription struct {
-	bus     *Bus
 	kinds   map[v1.EventKind]bool
 	ch      chan *v1.Event
 	dropped atomic.Uint64
@@ -62,9 +61,9 @@ func (b *Bus) Publish(kind v1.EventKind, action v1.EventAction, id string, recor
 	return ev
 }
 
-// Subscribes to kinds, all when empty, until ctx ends
+// Subscribes to kinds, all when empty, until ctx ends, a nil bus delivering nothing
 func (b *Bus) Subscribe(ctx context.Context, kinds []v1.EventKind) *Subscription {
-	s := &Subscription{bus: b, kinds: map[v1.EventKind]bool{}, ch: make(chan *v1.Event, subscriberBuffer)}
+	s := &Subscription{kinds: map[v1.EventKind]bool{}, ch: make(chan *v1.Event, subscriberBuffer)}
 	for _, k := range kinds {
 		s.kinds[k] = true
 	}

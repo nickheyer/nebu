@@ -100,10 +100,6 @@ func TestBuildCacheAndRemove(t *testing.T) {
 	if in.GetKind() != v1.InstallKind_INSTALL_KIND_BUILT || in.GetBuildId() != b.GetId() || in.GetFacts()["version"] != "4.5.6" || in.GetFacts()["variant"] != build.DefaultVariant {
 		t.Fatalf("install %v", in)
 	}
-	lines, err := m.BuildLog(ctx, b.GetId())
-	if err != nil || len(lines) == 0 {
-		t.Fatalf("build log %v %v", lines, err)
-	}
 	again, task2, err := m.Build(ctx, &v1.BuildRequest{RuntimeId: "fake", Vars: map[string]string{"greeting": "world"}})
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +173,7 @@ func TestRecoverBuilds(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := m.GetBuild(ctx, "stuck")
-	if b.GetState() != v1.BuildState_BUILD_STATE_FAILED || b.GetError() != restartNote {
+	if b.GetState() != v1.BuildState_BUILD_STATE_FAILED || b.GetError() != db.RestartNote {
 		t.Fatalf("recovered %v", b)
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -33,7 +32,6 @@ type Puller struct {
 	Fetcher   *transfer.Fetcher
 	Tasks     *tasks.Manager
 	Events    *events.Bus
-	Log       *slog.Logger
 	// Says which stored models eviction leaves alone, set by the daemon
 	Keep func(*v1.StoredModel) bool
 }
@@ -226,27 +224,39 @@ func partialKey(model *v1.Model, a *v1.Artifact) string {
 	return "pending-" + hex.EncodeToString(sum[:16])
 }
 
-// Starts a task that rehashes blobs and drops corrupt ones
-func (p *Puller) Verify(ctx context.Context, req *v1.VerifyRequest) (*v1.Task, error) {
+// The stored models a request names, every one when it names nothing
+func (p *Puller) selectManifests(sourceID, repo, group string) ([]*v1.StoredModel, error) {
 	manifests, err := p.Store.ListManifests()
 	if err != nil {
 		return nil, err
 	}
 	var selected []*v1.StoredModel
 	for _, m := range manifests {
-		if req.GetRepo() != "" && m.GetRepo() != req.GetRepo() {
-			continue
-		}
-		if req.GetSourceId() != "" && m.GetSourceId() != req.GetSourceId() {
-			continue
-		}
-		if req.GetGroup() != "" && m.GetGroup() != req.GetGroup() {
+		if sourceID != "" && m.GetSourceId() != sourceID || repo != "" && m.GetRepo() != repo || group != "" && m.GetGroup() != group {
 			continue
 		}
 		selected = append(selected, m)
 	}
-	if req.GetRepo() != "" && len(selected) == 0 {
-		return nil, fmt.Errorf("%w: %s", store.ErrNotStored, req.GetRepo())
+	if len(selected) == 0 && (sourceID != "" || repo != "" || group != "") {
+		return nil, fmt.Errorf("%w: nothing matches %s %s %s", store.ErrNotStored, sourceID, repo, group)
+	}
+	return selected, nil
+}
+
+// Bytes across the models, what a task over them counts up to
+func sizeOf(models []*v1.StoredModel) uint64 {
+	var total uint64
+	for _, m := range models {
+		total += m.GetBytes()
+	}
+	return total
+}
+
+// Starts a task that rehashes blobs and drops corrupt ones
+func (p *Puller) Verify(ctx context.Context, req *v1.VerifyRequest) (*v1.Task, error) {
+	selected, err := p.selectManifests(req.GetSourceId(), req.GetRepo(), req.GetGroup())
+	if err != nil {
+		return nil, err
 	}
 	title := fmt.Sprintf("verify %d models", len(selected))
 	return p.Tasks.Start(kindVerify, title, nil, func(ctx context.Context, h *tasks.Handle) error {
@@ -255,10 +265,7 @@ func (p *Puller) Verify(ctx context.Context, req *v1.VerifyRequest) (*v1.Task, e
 }
 
 func (p *Puller) verify(ctx context.Context, h *tasks.Handle, models []*v1.StoredModel) error {
-	var total uint64
-	for _, m := range models {
-		total += m.GetBytes()
-	}
+	total := sizeOf(models)
 	h.Progress(0, total, "hashing")
 	bad := 0
 	for _, m := range models {

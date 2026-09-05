@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -25,6 +26,27 @@ func snakeUpper(camel string) string {
 		b.WriteRune(r)
 	}
 	return strings.ToUpper(b.String())
+}
+
+// Decodes JSON with numbers kept as json.Number
+func DecodeJSON(data []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var root any
+	if err := dec.Decode(&root); err != nil {
+		return nil, err
+	}
+	return root, nil
+}
+
+// Decodes JSON and flattens it into dotted string keys
+func FlattenJSON(data []byte, prefix string, into map[string]string, norm func(string) string) error {
+	root, err := DecodeJSON(data)
+	if err != nil {
+		return err
+	}
+	Flatten(prefix, root, into, norm)
+	return nil
 }
 
 // Flattens decoded JSON into dotted string keys

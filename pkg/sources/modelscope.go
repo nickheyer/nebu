@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -27,9 +26,15 @@ var modelscope = &Catalog{
 	RepoPattern:   `^[\w.-]+/[\w.-]+$`,
 	RevisionLabel: "revision",
 	Sorts:         []string{SortRelevance, SortDownloads, SortLikes, SortUpdated},
-	Noise:         []string{".+:.+", "[a-z]{2,3}"},
-	HitFields:     []*v1.ConfigField{{Name: "architecture", Label: "Architecture", Description: "Model architecture"}},
-	API:           modelscopeAPI{},
+	SortKeys: map[string]string{
+		SortRelevance: "Default",
+		SortDownloads: "DownloadsCount",
+		SortLikes:     "StarsCount",
+		SortUpdated:   "GmtModified",
+	},
+	Noise:     []string{".+:.+", "[a-z]{2,3}"},
+	HitFields: []*v1.ConfigField{{Name: "architecture", Label: "Architecture", Description: "Model architecture"}},
+	API:       modelscopeAPI{},
 }
 
 func init() { register(modelscope) }
@@ -39,14 +44,6 @@ const (
 	msPublicVisible = 5
 )
 
-// ModelScope sort keys by shared sort id
-var msSortKeys = map[string]string{
-	SortRelevance: "Default",
-	SortDownloads: "DownloadsCount",
-	SortLikes:     "StarsCount",
-	SortUpdated:   "GmtModified",
-}
-
 // Criterion categories by facet id
 var msCriteria = map[string]string{
 	FacetTask:    "tasks",
@@ -55,8 +52,22 @@ var msCriteria = map[string]string{
 	FacetTag:     "tags",
 }
 
-// The ModelScope API: a PUT search with criteria, a recursive file list, revisions, and raw files
+// The ModelScope API: a PUT search with criteria, a recursive file list, revisions, raw files
 type modelscopeAPI struct{}
+
+// The status every ModelScope answer carries
+type msEnvelope struct {
+	Code    int    `json:"Code"`
+	Message string `json:"Message"`
+}
+
+// The error an answer reports under what, none when its code says it went through
+func (e msEnvelope) err(what string) error {
+	if e.Code != 0 && e.Code != 200 {
+		return fmt.Errorf("%s: %s", what, e.Message)
+	}
+	return nil
+}
 
 // Reads the task taxonomy the hub publishes
 func (modelscopeAPI) Facets(ctx context.Context, c *Client) ([]*v1.Facet, error) {
@@ -90,22 +101,17 @@ func (modelscopeAPI) Facets(ctx context.Context, c *Client) ([]*v1.Facet, error)
 }
 
 type msSearchBody struct {
+	msEnvelope
 	Data struct {
 		Model struct {
 			TotalCount uint64           `json:"TotalCount"`
 			Models     []map[string]any `json:"Models"`
 		} `json:"Model"`
 	} `json:"Data"`
-	Code    int    `json:"Code"`
-	Message string `json:"Message"`
 }
 
 func (modelscopeAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
-	limit := c.Limit(req)
-	page := Offset(req.GetCursor())
-	if page < 1 {
-		page = 1
-	}
+	limit, page := c.Limit(req), c.page(req)
 	var criterion []map[string]any
 	for facet, category := range msCriteria {
 		if values := Filter(req, facet); len(values) > 0 {
@@ -115,13 +121,13 @@ func (modelscopeAPI) Search(ctx context.Context, c *Client, req *v1.SearchReques
 	if len(req.GetTags()) > 0 {
 		criterion = append(criterion, map[string]any{"category": "tags", "predicate": "contains", "values": req.GetTags()})
 	}
-	body := map[string]any{"Name": strings.TrimSpace(req.GetQuery()), "PageNumber": page, "PageSize": limit, "SortBy": msSortKeys[sort.ID], "Criterion": criterion}
+	body := map[string]any{"Name": strings.TrimSpace(req.GetQuery()), "PageNumber": page, "PageSize": limit, "SortBy": sort.Key, "Criterion": criterion}
 	var root msSearchBody
 	if _, err := c.JSONBody(ctx, http.MethodPut, c.URL("api", "v1", "dolphin", "models"), nil, body, &root); err != nil {
 		return nil, err
 	}
-	if root.Code != 0 && root.Code != 200 {
-		return nil, fmt.Errorf("modelscope: %s", root.Message)
+	if err := root.err("modelscope"); err != nil {
+		return nil, err
 	}
 	resp := &v1.SearchResponse{Total: root.Data.Model.TotalCount}
 	for _, m := range root.Data.Model.Models {
@@ -129,9 +135,7 @@ func (modelscopeAPI) Search(ctx context.Context, c *Client, req *v1.SearchReques
 			resp.Hits = append(resp.Hits, hit)
 		}
 	}
-	if uint64(page*limit) < resp.Total && len(resp.Hits) > 0 {
-		resp.NextCursor = strconv.Itoa(page + 1)
-	}
+	c.nextPage(resp, page, limit, resp.Total)
 	return resp, nil
 }
 
@@ -141,7 +145,8 @@ func msHit(c *Client, m map[string]any) *v1.SearchHit {
 	if owner == "" || name == "" {
 		return nil
 	}
-	hit := &v1.SearchHit{Repo: owner + "/" + name, Name: name, Author: owner, Url: c.Base() + "/models/" + owner + "/" + name, Extra: map[string]string{}}
+	hit := newHit(owner+"/"+name, name, owner)
+	hit.Url = msPage(c, hit.Repo)
 	if n, err := eval.Number(m["Downloads"]); err == nil {
 		hit.Downloads = uint64(n)
 	}
@@ -158,7 +163,7 @@ func msHit(c *Client, m map[string]any) *v1.SearchHit {
 		hit.Private = true
 	}
 	if d, _ := m["Description"].(string); d != "" {
-		hit.Description = Excerpt(StripTags(d), 240)
+		hit.Description = Summary(d)
 	}
 	hit.License, _ = m["License"].(string)
 	hit.Tags = append(hit.Tags, msStrings(m["Tags"])...)
@@ -187,6 +192,9 @@ func msHit(c *Client, m map[string]any) *v1.SearchHit {
 	return hit
 }
 
+// The model page on the site
+func msPage(c *Client, repo string) string { return c.Page("models", repo) }
+
 func msStrings(v any) []string {
 	list, ok := v.([]any)
 	if !ok {
@@ -203,7 +211,6 @@ func msStrings(v any) []string {
 
 type msFile struct {
 	Path     string `json:"Path"`
-	Name     string `json:"Name"`
 	Size     uint64 `json:"Size"`
 	Sha256   string `json:"Sha256"`
 	Type     string `json:"Type"`
@@ -215,18 +222,17 @@ func (modelscopeAPI) Resolve(ctx context.Context, c *Client, repo, revision stri
 		revision = msRevision
 	}
 	var resp struct {
-		Code int `json:"Code"`
+		msEnvelope
 		Data struct {
 			Files []msFile `json:"Files"`
 		} `json:"Data"`
-		Message string `json:"Message"`
 	}
 	q := url.Values{"Revision": {revision}, "Recursive": {"true"}}
 	if _, err := c.JSON(ctx, c.URL("api", "v1", "models", repo, "repo", "files"), q, &resp); err != nil {
 		return nil, err
 	}
-	if resp.Code != 0 && resp.Code != 200 {
-		return nil, fmt.Errorf("%s: %s", repo, resp.Message)
+	if err := resp.err(repo); err != nil {
+		return nil, err
 	}
 	model := &v1.Model{Repo: repo, Revision: revision}
 	revisions := map[string]bool{}
@@ -235,7 +241,7 @@ func (modelscopeAPI) Resolve(ctx context.Context, c *Client, repo, revision stri
 		if f.Type != "blob" {
 			continue
 		}
-		model.Artifacts = append(model.Artifacts, &v1.Artifact{Path: f.Path, SizeBytes: f.Size, Sha256: strings.ToLower(f.Sha256)})
+		model.Artifacts = append(model.Artifacts, &v1.Artifact{Path: f.Path, SizeBytes: f.Size, Sha256: Hex(f.Sha256)})
 		revisions[f.Revision] = true
 		fmt.Fprintf(h, "%s\x00%s\x00", f.Path, f.Revision)
 	}
@@ -259,34 +265,33 @@ type msRef struct {
 
 func (modelscopeAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
 	var body struct {
-		Code int `json:"Code"`
+		msEnvelope
 		Data struct {
 			RevisionMap struct {
 				Branches []msRef `json:"Branches"`
 				Tags     []msRef `json:"Tags"`
 			} `json:"RevisionMap"`
 		} `json:"Data"`
-		Message string `json:"Message"`
 	}
 	if _, err := c.JSON(ctx, c.URL("api", "v1", "models", repo, "revisions"), nil, &body); err != nil {
 		return nil, err
 	}
-	if body.Code != 0 && body.Code != 200 {
-		return nil, fmt.Errorf("%s: %s", repo, body.Message)
+	if err := body.err(repo); err != nil {
+		return nil, err
 	}
 	var out []*v1.Revision
-	add := func(e msRef, detail string) {
-		r := &v1.Revision{Name: e.Revision, Default: e.Revision == msRevision, Detail: detail}
+	add := func(e msRef, tag bool) {
+		r := refRevision(e.Revision, "", e.Revision == msRevision, tag)
 		if e.CreatedAt > 0 {
 			r.UpdatedAt = timestamppb.New(time.Unix(e.CreatedAt, 0))
 		}
 		out = append(out, r)
 	}
 	for _, b := range body.Data.RevisionMap.Branches {
-		add(b, "branch")
+		add(b, false)
 	}
 	for _, t := range body.Data.RevisionMap.Tags {
-		add(t, "tag")
+		add(t, true)
 	}
 	return out, nil
 }
@@ -296,7 +301,7 @@ func (modelscopeAPI) Card(ctx context.Context, c *Client, repo, revision string)
 		revision = msRevision
 	}
 	q := url.Values{"Revision": {revision}, "FilePath": {"README.md"}}
-	card, err := c.CardText(ctx, c.URL("api", "v1", "models", repo, "repo"), q, c.Base()+"/models/"+repo)
+	card, err := c.CardText(ctx, c.URL("api", "v1", "models", repo, "repo"), q, msPage(c, repo))
 	if err != nil {
 		return nil, err
 	}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"net/url"
-	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,8 +27,15 @@ var civitai = &Catalog{
 	RepoPattern:   `^\d+(/\d+)?$`,
 	RevisionLabel: "version",
 	Sorts:         []string{SortDownloads, SortLikes, SortTrending, SortCreated},
-	Reversible:    []string{SortCreated},
-	Facets:        civFacets(),
+	// Recently Added is missing because the API accepts it only inside a collection
+	SortKeys: map[string]string{
+		SortDownloads: "Most Downloaded",
+		SortLikes:     "Most Liked",
+		SortTrending:  "Highest Rated",
+		SortCreated:   "Newest",
+	},
+	Reversible: []string{SortCreated},
+	Facets:     civFacets(),
 	HitFields: []*v1.ConfigField{
 		{Name: "nsfw", Label: "NSFW", Type: v1.ConfigType_CONFIG_TYPE_BOOL, Description: "Marked adult content by the source"},
 		{Name: "base_model", Label: "Base model", Description: "Base model this was made for"},
@@ -41,16 +47,6 @@ var civitai = &Catalog{
 func init() { register(civitai) }
 
 const civTrainingData = "Training Data"
-
-// Civitai sort names by shared sort id
-//
-// Recently Added is not here because the API only accepts it inside a collection.
-var civSortKeys = map[string]string{
-	SortDownloads: "Most Downloaded",
-	SortLikes:     "Most Liked",
-	SortTrending:  "Highest Rated",
-	SortCreated:   "Newest",
-}
 
 // Model types the API filters on
 var civModelTypes = []string{"Checkpoint", "TextualInversion", "Hypernetwork", "AestheticGradient", "LORA", "LoCon", "DoRA", "Controlnet", "Upscaler", "MotionModule", "VAE", "TextEncoder", "UNet", "CLIPVision", "Poses", "Wildcards", "Workflows", "ComfyWorkflows", "Detection", "VisionLanguage", "CLIP", "LLM", "Other"}
@@ -92,17 +88,12 @@ type civFile struct {
 	Hashes      map[string]string `json:"hashes"`
 	DownloadURL string            `json:"downloadUrl"`
 	Metadata    struct {
-		Format string `json:"format"`
-		Size   string `json:"size"`
-		FP     string `json:"fp"`
+		Size string `json:"size"`
+		FP   string `json:"fp"`
 	} `json:"metadata"`
 }
 
-// Names every file of a version, telling apart files published under one name
-//
-// A version often carries a pruned fp16 and a full fp32 build with the same
-// file name, so a colliding name gets its precision and size spliced in before
-// the extension, and the file id when even that ties.
+// Names a version's files, splicing precision, size, then the id into names that collide
 func civArtifactNames(files []civFile) map[int64]string {
 	counts := map[string]int{}
 	for _, f := range files {
@@ -124,21 +115,15 @@ func civArtifactNames(files []civFile) map[int64]string {
 					parts = append(parts, strings.ToLower(p))
 				}
 			}
-			if len(parts) == 0 || seen[civWithSuffix(f.Name, strings.Join(parts, "-"))] {
+			if len(parts) == 0 || seen[withSuffix(f.Name, "."+strings.Join(parts, "-"))] {
 				parts = append(parts, strconv.FormatInt(f.ID, 10))
 			}
-			name = civWithSuffix(f.Name, strings.Join(parts, "-"))
+			name = withSuffix(f.Name, "."+strings.Join(parts, "-"))
 		}
 		seen[name] = true
 		out[f.ID] = name
 	}
 	return out
-}
-
-// Inserts a suffix before the file extension
-func civWithSuffix(name, suffix string) string {
-	ext := path.Ext(name)
-	return strings.TrimSuffix(name, ext) + "." + suffix + ext
 }
 
 type civVersion struct {
@@ -167,7 +152,7 @@ type civModel struct {
 }
 
 func (civitaiAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
-	key := civSortKeys[sort.ID]
+	key := sort.Key
 	// Only the creation order can be flipped, the API has no direction switch
 	if sort.Ascending {
 		key = "Oldest"
@@ -240,18 +225,9 @@ func civFirstTag(req *v1.SearchRequest) string {
 
 func civHit(c *Client, it civModel) *v1.SearchHit {
 	id := strconv.FormatInt(it.ID, 10)
-	hit := &v1.SearchHit{
-		Repo:        id,
-		Name:        it.Name,
-		Author:      it.Creator.Username,
-		Downloads:   it.Stats.DownloadCount,
-		Likes:       it.Stats.ThumbsUpCount,
-		Tags:        it.Tags,
-		Task:        it.Type,
-		Description: Excerpt(StripTags(it.Description), 240),
-		Url:         civPageURL(c, id),
-		Extra:       map[string]string{},
-	}
+	hit := newHit(id, it.Name, it.Creator.Username)
+	hit.Downloads, hit.Likes, hit.Tags, hit.Task = it.Stats.DownloadCount, it.Stats.ThumbsUpCount, it.Tags, it.Type
+	hit.Description, hit.Url = Summary(it.Description), civPageURL(c, id)
 	if it.NSFW {
 		hit.Extra["nsfw"] = "true"
 	}
@@ -281,11 +257,10 @@ func civBytes(f civFile) uint64 {
 	return uint64(math.Round(f.SizeKB * 1024))
 }
 
-func civPageURL(c *Client, id string) string {
-	return c.Base() + "/models/" + id
-}
+// The model page on the site
+func civPageURL(c *Client, id string) string { return c.Page("models", id) }
 
-// Reads a model id and optional version id from a repo or a pasted page URL
+// Reads a model id and optional version id from a repo or a page URL
 func civParseRepo(repo string) (string, string, error) {
 	repo = strings.TrimSpace(repo)
 	if m := civRepoRe.FindStringSubmatch(repo); m != nil {
@@ -385,7 +360,7 @@ func (civitaiAPI) Resolve(ctx context.Context, c *Client, repo, revision string)
 		if f.Type == civTrainingData {
 			continue
 		}
-		model.Artifacts = append(model.Artifacts, &v1.Artifact{Path: names[f.ID], SizeBytes: civBytes(f), Sha256: strings.ToLower(f.Hashes["SHA256"])})
+		model.Artifacts = append(model.Artifacts, &v1.Artifact{Path: names[f.ID], SizeBytes: civBytes(f), Sha256: Hex(f.Hashes["SHA256"])})
 	}
 	return model, nil
 }

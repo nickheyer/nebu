@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from '$lib/api';
   import { live, clock, slotName, taskFor } from '$lib/state.svelte';
-  import { ago, enumLabel, when } from '$lib/format';
+  import { ago, byName, enumLabel, newestFirst, when } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { FindingKind, type Watch, type Want } from '$proto/monitor_pb';
@@ -25,9 +25,11 @@
   // Narrows the findings to one watch or want, everything when empty
   let only = $state<Watch | Want | null>(null);
 
-  const watches = $derived([...live.watches.values()].sort((a, b) => a.repo.localeCompare(b.repo)));
+  const watches = $derived([...live.watches.values()].sort(byName((w) => w.repo)));
   const wants = $derived([...live.wants.values()].sort((a, b) => Number(a.satisfied) - Number(b.satisfied) || a.query.localeCompare(b.query)));
-  const findings = $derived([...live.findings.values()].filter((f) => !only || ('query' in only ? f.wantId === only.id : f.watchId === only.id)).sort((a, b) => Number((b.foundAt?.seconds ?? 0n) - (a.foundAt?.seconds ?? 0n))));
+  const findings = $derived(
+    [...live.findings.values()].filter((f) => !only || ('query' in only ? f.wantId === only.id : f.watchId === only.id)).sort(newestFirst((f) => f.foundAt))
+  );
   const open = $derived(findings.filter((f) => !f.acknowledged));
   const shown = $derived(view === 'open' ? open : findings);
 
@@ -48,6 +50,11 @@
 
   function labelOf(w: Watch | Want): string {
     return 'query' in w ? w.query : w.repo;
+  }
+
+  // The profile a swap starts from, by name when the daemon still has it
+  function profileName(id: string): string {
+    return id ? (live.profiles.get(id)?.name ?? id) : 'runtime default';
   }
 
   async function check(w?: Watch | Want, rearm = false) {
@@ -112,6 +119,21 @@
   const kindTone: Record<number, 'ok' | 'info' | 'warn' | 'neutral' | 'accent'> = { [FindingKind.NEW_REVISION]: 'info', [FindingKind.NEW_GROUP]: 'ok', [FindingKind.REMOVED_GROUP]: 'warn', [FindingKind.WANTED_FOUND]: 'accent' };
 </script>
 
+{#snippet onSwap(w: Watch | Want)}
+  {#if w.autoPull && w.slotId}
+    <Badge size="xs" tone="accent" label="pull and swap" /> <span class="text-fg-muted">{slotName(w.slotId)}</span>
+  {:else if w.autoPull}
+    <Badge size="xs" tone="info" label="pull" />
+  {:else}
+    <span class="text-fg-faint">record only</span>
+  {/if}
+{/snippet}
+
+{#snippet swapTarget(w: Watch | Want)}
+  <td class="text-xs text-fg-muted">{w.slotId ? w.runtimeId || 'slot default' : '–'}</td>
+  <td class="text-xs text-fg-muted">{w.slotId ? profileName(w.profileId) : '–'}</td>
+{/snippet}
+
 <PageHeader title="Monitor" description="Watched repositories checked on an interval, and wanted models searched for until they turn up">
   <Button variant="outline" icon={RefreshCw} loading={checkingAll} disabled={!watches.length && !wants.length} onclick={() => check()}>Check all now</Button>
   <Button variant="outline" icon={Sparkles} onclick={() => (wantOpen = true)}>Want a model</Button>
@@ -127,7 +149,7 @@
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
-          <thead><tr><th>search</th><th>where</th><th>match</th><th>on found</th><th>found</th><th>last look</th><th></th></tr></thead>
+          <thead><tr><th>search</th><th>where</th><th>match</th><th>on found</th><th>runtime</th><th>profile</th><th>found</th><th>last look</th><th></th></tr></thead>
           <tbody>
             {#each wants as w (w.id)}
               {@const task = taskFor('check', { watch: w.id })}
@@ -138,15 +160,8 @@
                 </td>
                 <td class="text-xs">{whereOf(w)}</td>
                 <td class="font-mono text-xs text-fg-muted">{[w.formatId, w.groupMatch].filter(Boolean).join(' ') || 'any'}</td>
-                <td class="text-xs">
-                  {#if w.autoPull && w.slotId}
-                    <Badge size="xs" tone="accent" label="pull and swap" /> <span class="text-fg-muted">{slotName(w.slotId)}</span>
-                  {:else if w.autoPull}
-                    <Badge size="xs" tone="info" label="pull" />
-                  {:else}
-                    <span class="text-fg-faint">record only</span>
-                  {/if}
-                </td>
+                <td class="text-xs">{@render onSwap(w)}</td>
+                {@render swapTarget(w)}
                 <td class="text-xs">
                   {#if w.satisfied}
                     <a href="/catalog?source={w.foundSourceId}&repo={encodeURIComponent(w.foundRepo)}" class="font-mono text-fg hover:underline">{w.foundRepo}</a>
@@ -187,7 +202,7 @@
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
-          <thead><tr><th>repository</th><th>source</th><th>commit</th><th class="num">groups</th><th>match</th><th>on change</th><th>last check</th><th></th></tr></thead>
+          <thead><tr><th>repository</th><th>source</th><th>commit</th><th class="num">groups</th><th>match</th><th>on change</th><th>runtime</th><th>profile</th><th>last check</th><th></th></tr></thead>
           <tbody>
             {#each watches as w (w.id)}
               {@const task = taskFor('check', { watch: w.id })}
@@ -201,15 +216,8 @@
                 <td class="font-mono text-xs text-fg-muted">{w.lastCommit ? w.lastCommit.slice(0, 10) : '–'}</td>
                 <td class="num text-xs" title={w.knownGroups.join('\n')}>{w.knownGroups.length}</td>
                 <td class="font-mono text-xs text-fg-muted">{w.groupMatch || 'any'}</td>
-                <td class="text-xs">
-                  {#if w.autoPull && w.slotId}
-                    <Badge size="xs" tone="accent" label="pull and swap" /> <span class="text-fg-muted">{slotName(w.slotId)}</span>
-                  {:else if w.autoPull}
-                    <Badge size="xs" tone="info" label="pull" />
-                  {:else}
-                    <span class="text-fg-faint">record only</span>
-                  {/if}
-                </td>
+                <td class="text-xs">{@render onSwap(w)}</td>
+                {@render swapTarget(w)}
                 <td class="text-xs text-fg-muted" title={when(w.checkedAt)}>
                   {ago(w.checkedAt, clock.now)}
                   {#if w.error}<div class="max-w-xs truncate text-bad" title={w.error}>{w.error}</div>{/if}

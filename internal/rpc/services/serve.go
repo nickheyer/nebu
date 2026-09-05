@@ -1,0 +1,274 @@
+package services
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"connectrpc.com/connect"
+	"github.com/nickheyer/nebu/internal/gateway"
+	"github.com/nickheyer/nebu/internal/instances"
+	"github.com/nickheyer/nebu/internal/monitor"
+	"github.com/nickheyer/nebu/internal/slots"
+	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/pkg/events"
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
+	"github.com/nickheyer/nebu/pkg/runtime"
+)
+
+var (
+	_ nebuv1connect.InstanceServiceHandler = (*InstanceService)(nil)
+	_ nebuv1connect.SlotServiceHandler     = (*SlotService)(nil)
+	_ nebuv1connect.GatewayServiceHandler  = (*GatewayService)(nil)
+	_ nebuv1connect.MonitorServiceHandler  = (*MonitorService)(nil)
+	_ nebuv1connect.TaskServiceHandler     = (*TaskService)(nil)
+	_ nebuv1connect.EventServiceHandler    = (*EventService)(nil)
+)
+
+// Serves running models
+type InstanceService struct {
+	instances *instances.Manager
+}
+
+func NewInstanceService(m *instances.Manager) *InstanceService {
+	return &InstanceService{instances: m}
+}
+
+func (s *InstanceService) Run(ctx context.Context, req *connect.Request[v1.RunRequest]) (*connect.Response[v1.RunResponse], error) {
+	in, task, err := s.instances.Run(ctx, req.Msg)
+	return reply(&v1.RunResponse{Instance: in, Task: task}, err)
+}
+
+func (s *InstanceService) ListInstances(ctx context.Context, req *connect.Request[v1.ListInstancesRequest]) (*connect.Response[v1.ListInstancesResponse], error) {
+	return reply(&v1.ListInstancesResponse{Instances: s.instances.List(req.Msg.GetRunningOnly())}, nil)
+}
+
+func (s *InstanceService) GetInstance(ctx context.Context, req *connect.Request[v1.GetInstanceRequest]) (*connect.Response[v1.GetInstanceResponse], error) {
+	in, err := s.instances.Get(req.Msg.GetId())
+	return reply(&v1.GetInstanceResponse{Instance: in}, err)
+}
+
+func (s *InstanceService) StopInstance(ctx context.Context, req *connect.Request[v1.StopInstanceRequest]) (*connect.Response[v1.StopInstanceResponse], error) {
+	in, err := s.instances.Stop(ctx, req.Msg.GetId())
+	return reply(&v1.StopInstanceResponse{Instance: in}, err)
+}
+
+func (s *InstanceService) Logs(ctx context.Context, req *connect.Request[v1.LogsRequest], stream *connect.ServerStream[v1.LogsResponse]) error {
+	return wrap(s.instances.Logs(ctx, req.Msg.GetId(), req.Msg.GetFollow(), int(req.Msg.GetTail()), func(lines []string) error {
+		return stream.Send(&v1.LogsResponse{Lines: lines})
+	}))
+}
+
+// Serves slots and swaps
+type SlotService struct {
+	slots *slots.Manager
+}
+
+func NewSlotService(m *slots.Manager) *SlotService {
+	return &SlotService{slots: m}
+}
+
+func (s *SlotService) ListSlots(ctx context.Context, req *connect.Request[v1.ListSlotsRequest]) (*connect.Response[v1.ListSlotsResponse], error) {
+	return reply(&v1.ListSlotsResponse{Slots: s.slots.List()}, nil)
+}
+
+func (s *SlotService) GetSlot(ctx context.Context, req *connect.Request[v1.GetSlotRequest]) (*connect.Response[v1.GetSlotResponse], error) {
+	slot, in, err := s.slots.Get(req.Msg.GetId())
+	return reply(&v1.GetSlotResponse{Slot: slot, Instance: in}, err)
+}
+
+func (s *SlotService) CreateSlot(ctx context.Context, req *connect.Request[v1.CreateSlotRequest]) (*connect.Response[v1.CreateSlotResponse], error) {
+	slot, err := s.slots.Create(ctx, req.Msg)
+	return reply(&v1.CreateSlotResponse{Slot: slot}, err)
+}
+
+func (s *SlotService) UpdateSlot(ctx context.Context, req *connect.Request[v1.UpdateSlotRequest]) (*connect.Response[v1.UpdateSlotResponse], error) {
+	slot, err := s.slots.Update(ctx, req.Msg)
+	return reply(&v1.UpdateSlotResponse{Slot: slot}, err)
+}
+
+func (s *SlotService) DeleteSlot(ctx context.Context, req *connect.Request[v1.DeleteSlotRequest]) (*connect.Response[v1.DeleteSlotResponse], error) {
+	slot, err := s.slots.Delete(ctx, req.Msg.GetId(), req.Msg.GetForce())
+	return reply(&v1.DeleteSlotResponse{Slot: slot}, err)
+}
+
+func (s *SlotService) Swap(ctx context.Context, req *connect.Request[v1.SwapRequest]) (*connect.Response[v1.SwapResponse], error) {
+	slot, in, task, err := s.slots.Swap(ctx, req.Msg)
+	return reply(&v1.SwapResponse{Slot: slot, Instance: in, Task: task}, err)
+}
+
+func (s *SlotService) EvictSlot(ctx context.Context, req *connect.Request[v1.EvictSlotRequest]) (*connect.Response[v1.EvictSlotResponse], error) {
+	slot, err := s.slots.Evict(ctx, req.Msg.GetId())
+	return reply(&v1.EvictSlotResponse{Slot: slot}, err)
+}
+
+// Serves routes and gateway status
+type GatewayService struct {
+	gateway   *gateway.Gateway
+	instances *instances.Manager
+}
+
+func NewGatewayService(g *gateway.Gateway, m *instances.Manager) *GatewayService {
+	return &GatewayService{gateway: g, instances: m}
+}
+
+func (s *GatewayService) GetGatewayStatus(ctx context.Context, req *connect.Request[v1.GetGatewayStatusRequest]) (*connect.Response[v1.GetGatewayStatusResponse], error) {
+	return reply(&v1.GetGatewayStatusResponse{Status: s.gateway.Status()}, nil)
+}
+
+func (s *GatewayService) ListRoutes(ctx context.Context, req *connect.Request[v1.ListRoutesRequest]) (*connect.Response[v1.ListRoutesResponse], error) {
+	return reply(&v1.ListRoutesResponse{Routes: s.gateway.Table().List()}, nil)
+}
+
+// Aliases a name onto a ready instance, slot names being the slot's own
+func (s *GatewayService) SetRoute(ctx context.Context, req *connect.Request[v1.SetRouteRequest]) (*connect.Response[v1.SetRouteResponse], error) {
+	in, err := s.instances.Get(req.Msg.GetInstanceId())
+	if err != nil {
+		return nil, wrap(err)
+	}
+	if in.GetState() != v1.InstanceState_INSTANCE_STATE_READY {
+		return nil, wrap(fmt.Errorf("%w: instance %s is not ready", runtime.ErrParam, in.GetName()))
+	}
+	if err := s.slotless(req.Msg.GetName(), "belongs to a slot"); err != nil {
+		return nil, err
+	}
+	route := s.gateway.Table().Serve(req.Msg.GetName(), in, s.instances.Runtimes.API(in.GetRuntimeId()), "", nil)
+	return reply(&v1.SetRouteResponse{Route: route}, nil)
+}
+
+func (s *GatewayService) DeleteRoute(ctx context.Context, req *connect.Request[v1.DeleteRouteRequest]) (*connect.Response[v1.DeleteRouteResponse], error) {
+	if err := s.slotless(req.Msg.GetName(), "belongs to a slot, delete the slot instead"); err != nil {
+		return nil, err
+	}
+	route, ok := s.gateway.Table().Delete(req.Msg.GetName())
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no route %q", req.Msg.GetName()))
+	}
+	return reply(&v1.DeleteRouteResponse{Route: route}, nil)
+}
+
+// Refuses a route name a slot owns
+func (s *GatewayService) slotless(name, why string) error {
+	if r, ok := s.gateway.Table().Lookup(name); ok && r.GetSlotId() != "" {
+		return wrap(fmt.Errorf("%w: %s %s", runtime.ErrParam, name, why))
+	}
+	return nil
+}
+
+// Serves watches and findings
+type MonitorService struct {
+	monitor *monitor.Manager
+}
+
+func NewMonitorService(m *monitor.Manager) *MonitorService {
+	return &MonitorService{monitor: m}
+}
+
+func (s *MonitorService) AddWatch(ctx context.Context, req *connect.Request[v1.AddWatchRequest]) (*connect.Response[v1.AddWatchResponse], error) {
+	w, err := s.monitor.Add(ctx, req.Msg)
+	return reply(&v1.AddWatchResponse{Watch: w}, err)
+}
+
+func (s *MonitorService) ListWatches(ctx context.Context, req *connect.Request[v1.ListWatchesRequest]) (*connect.Response[v1.ListWatchesResponse], error) {
+	return reply(&v1.ListWatchesResponse{Watches: s.monitor.List()}, nil)
+}
+
+func (s *MonitorService) RemoveWatch(ctx context.Context, req *connect.Request[v1.RemoveWatchRequest]) (*connect.Response[v1.RemoveWatchResponse], error) {
+	w, err := s.monitor.Remove(ctx, req.Msg.GetId())
+	return reply(&v1.RemoveWatchResponse{Watch: w}, err)
+}
+
+func (s *MonitorService) AddWant(ctx context.Context, req *connect.Request[v1.AddWantRequest]) (*connect.Response[v1.AddWantResponse], error) {
+	w, err := s.monitor.AddWant(ctx, req.Msg)
+	return reply(&v1.AddWantResponse{Want: w}, err)
+}
+
+func (s *MonitorService) ListWants(ctx context.Context, req *connect.Request[v1.ListWantsRequest]) (*connect.Response[v1.ListWantsResponse], error) {
+	return reply(&v1.ListWantsResponse{Wants: s.monitor.ListWants()}, nil)
+}
+
+func (s *MonitorService) RemoveWant(ctx context.Context, req *connect.Request[v1.RemoveWantRequest]) (*connect.Response[v1.RemoveWantResponse], error) {
+	w, err := s.monitor.RemoveWant(ctx, req.Msg.GetId())
+	return reply(&v1.RemoveWantResponse{Want: w}, err)
+}
+
+func (s *MonitorService) CheckWatches(ctx context.Context, req *connect.Request[v1.CheckWatchesRequest]) (*connect.Response[v1.CheckWatchesResponse], error) {
+	task, err := s.monitor.Check(ctx, req.Msg.GetId(), req.Msg.GetRearm())
+	return reply(&v1.CheckWatchesResponse{Task: task}, err)
+}
+
+func (s *MonitorService) ListFindings(ctx context.Context, req *connect.Request[v1.ListFindingsRequest]) (*connect.Response[v1.ListFindingsResponse], error) {
+	list, err := s.monitor.Findings(ctx, req.Msg.GetWatchId(), req.Msg.GetWantId(), req.Msg.GetUnacknowledgedOnly())
+	return reply(&v1.ListFindingsResponse{Findings: list}, err)
+}
+
+func (s *MonitorService) AckFinding(ctx context.Context, req *connect.Request[v1.AckFindingRequest]) (*connect.Response[v1.AckFindingResponse], error) {
+	f, err := s.monitor.Ack(ctx, req.Msg.GetId())
+	return reply(&v1.AckFindingResponse{Finding: f}, err)
+}
+
+// Serves task listing and watching
+type TaskService struct {
+	tasks *tasks.Manager
+}
+
+func NewTaskService(m *tasks.Manager) *TaskService {
+	return &TaskService{tasks: m}
+}
+
+func (s *TaskService) ListTasks(ctx context.Context, req *connect.Request[v1.ListTasksRequest]) (*connect.Response[v1.ListTasksResponse], error) {
+	return reply(&v1.ListTasksResponse{Tasks: s.tasks.List(req.Msg.GetActiveOnly())}, nil)
+}
+
+func (s *TaskService) GetTask(ctx context.Context, req *connect.Request[v1.GetTaskRequest]) (*connect.Response[v1.GetTaskResponse], error) {
+	task, logs, err := s.tasks.Get(req.Msg.GetId())
+	return reply(&v1.GetTaskResponse{Task: task, Logs: logs}, err)
+}
+
+func (s *TaskService) WatchTask(ctx context.Context, req *connect.Request[v1.WatchTaskRequest], stream *connect.ServerStream[v1.WatchTaskResponse]) error {
+	return wrap(s.tasks.Watch(ctx, req.Msg.GetId(), stream.Send))
+}
+
+func (s *TaskService) CancelTask(ctx context.Context, req *connect.Request[v1.CancelTaskRequest]) (*connect.Response[v1.CancelTaskResponse], error) {
+	task, err := s.tasks.Cancel(req.Msg.GetId())
+	return reply(&v1.CancelTaskResponse{Task: task}, err)
+}
+
+// Produces the current state as events for a fresh subscriber
+type Snapshotter func(ctx context.Context, kinds []v1.EventKind) []*v1.Event
+
+// Streams live updates
+type EventService struct {
+	bus      *events.Bus
+	snapshot Snapshotter
+}
+
+func NewEventService(bus *events.Bus, snapshot Snapshotter) *EventService {
+	return &EventService{bus: bus, snapshot: snapshot}
+}
+
+func (s *EventService) WatchEvents(ctx context.Context, req *connect.Request[v1.WatchEventsRequest], stream *connect.ServerStream[v1.WatchEventsResponse]) error {
+	sub := s.bus.Subscribe(ctx, req.Msg.GetKinds())
+	if req.Msg.GetSnapshot() && s.snapshot != nil {
+		for _, ev := range s.snapshot(ctx, req.Msg.GetKinds()) {
+			if err := stream.Send(&v1.WatchEventsResponse{Event: ev}); err != nil {
+				return err
+			}
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case ev := <-sub.Events():
+			if err := stream.Send(&v1.WatchEventsResponse{Event: ev}); err != nil {
+				return err
+			}
+			// A dropped event may have been a delete, so the client must resync from a snapshot
+			if sub.Dropped() > 0 {
+				return connect.NewError(connect.CodeResourceExhausted, errors.New("event stream fell behind, subscribe again with a snapshot"))
+			}
+		}
+	}
+}

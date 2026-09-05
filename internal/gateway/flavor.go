@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -172,22 +171,68 @@ func flavorOf(api v1.ApiFlavor) Flavor {
 	return flavors[v1.ApiFlavor_API_FLAVOR_OPENAI]
 }
 
-var errBadRequest = errors.New("bad request")
-
 func bad(format string, args ...any) error {
-	return fmt.Errorf("%w: %s", errBadRequest, fmt.Sprintf(format, args...))
-}
-
-// Reads a number field that may be int or float
-func num(raw json.RawMessage) (float64, bool) {
-	var f float64
-	if len(raw) == 0 || json.Unmarshal(raw, &f) != nil {
-		return 0, false
-	}
-	return f, true
+	return fmt.Errorf("bad request: "+format, args...)
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// Tool arguments as a JSON object, an empty one when the text is not JSON
+func jsonArgs(s string) json.RawMessage {
+	if json.Valid([]byte(s)) && s != "" {
+		return json.RawMessage(s)
+	}
+	return json.RawMessage("{}")
+}
+
+// The message in an OpenAI or Anthropic shaped error body, empty when it has none
+func errorField(body []byte) string {
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	json.Unmarshal(body, &e)
+	return e.Error.Message
+}
+
+// The id a result carries, a fresh one under prefix when the runtime gave none
+func resultID(r *Result, prefix string) string {
+	if r.ID != "" {
+		return r.ID
+	}
+	return newID(prefix)
+}
+
+// Tools in the OpenAI shape, what Ollama borrows too
+func toolsFromOAI(tools []oaiTool) []Tool {
+	var out []Tool
+	for _, t := range tools {
+		out = append(out, Tool{Name: t.Function.Name, Description: t.Function.Description, Schema: t.Function.Parameters})
+	}
+	return out
+}
+
+func toolsToOAI(tools []Tool) []oaiTool {
+	var out []oaiTool
+	for _, t := range tools {
+		tool := oaiTool{Type: "function"}
+		tool.Function.Name, tool.Function.Description, tool.Function.Parameters = t.Name, t.Description, t.Schema
+		out = append(out, tool)
+	}
+	return out
+}
+
+// Calls in the OpenAI shape
+func oaiCalls(calls []ToolCall) []oaiToolCall {
+	var out []oaiToolCall
+	for _, t := range calls {
+		tc := oaiToolCall{ID: t.ID, Type: "function"}
+		tc.Function.Name, tc.Function.Arguments = t.Name, t.Args
+		out = append(out, tc)
+	}
+	return out
+}
 
 // Reads a string or a list of strings
 func strs(raw json.RawMessage) []string {

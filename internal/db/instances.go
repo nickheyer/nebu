@@ -9,20 +9,14 @@ import (
 
 // Inserts or replaces an instance with every child row
 func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
-	return d.tx(ctx, func(tx *sql.Tx) error {
-		exec := func(q string, args ...any) error {
-			_, err := tx.ExecContext(ctx, q, args...)
-			return err
-		}
+	return d.tx(ctx, func(exec execFn) error {
 		id := in.GetId()
 		if err := exec(`INSERT OR REPLACE INTO instances (id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, in.GetName(), in.GetSourceId(), in.GetRepo(), in.GetGroup(), in.GetRuntimeId(), in.GetInstallId(), in.GetEndpoint(), enumCol(in.GetState()), in.GetPid(), in.GetError(), in.GetTaskId(), boolCol(in.GetDesiredRunning()), stamp(in.GetCreatedAt().AsTime()), timeCol(in.GetReadyAt()), timeCol(in.GetStoppedAt()), in.GetSlotId()); err != nil {
 			return err
 		}
-		for _, table := range []string{"instance_params", "instance_command", "instance_requests", "instance_request_params", "instance_plans", "instance_plan_pools", "instance_plan_placements", "instance_plan_params", "instance_measurements", "instance_triage", "instance_triage_fixes"} {
-			if err := exec(`DELETE FROM `+table+` WHERE instance_id = ?`, id); err != nil {
-				return err
-			}
+		if err := clearChildren(exec, "instance_id", id, "instance_params", "instance_command", "instance_requests", "instance_request_params", "instance_plans", "instance_plan_pools", "instance_plan_placements", "instance_plan_params", "instance_measurements", "instance_triage", "instance_triage_fixes"); err != nil {
+			return err
 		}
 		if err := putMap(exec, `INSERT INTO instance_params (instance_id, name, value) VALUES (?, ?, ?)`, id, in.GetParams()); err != nil {
 			return err
@@ -83,32 +77,13 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 
 // Lists every instance oldest first with all child rows
 func (d *DB) ListInstances(ctx context.Context) ([]*v1.Instance, error) {
-	rows, err := d.sql.QueryContext(ctx, `SELECT id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id FROM instances ORDER BY created_at, id`)
+	out, err := list(ctx, d, `SELECT id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id FROM instances ORDER BY created_at, id`, func(rows *sql.Rows) (*v1.Instance, error) {
+		in := &v1.Instance{}
+		return in, rows.Scan(&in.Id, &in.Name, &in.SourceId, &in.Repo, &in.Group, &in.RuntimeId, &in.InstallId, &in.Endpoint, enumAt[v1.InstanceState]{&in.State}, &in.Pid, &in.Error, &in.TaskId, (*flag)(&in.DesiredRunning), at{&in.CreatedAt}, at{&in.ReadyAt}, at{&in.StoppedAt}, &in.SlotId)
+	})
 	if err != nil {
 		return nil, err
 	}
-	var out []*v1.Instance
-	for rows.Next() {
-		in := &v1.Instance{}
-		var state, created string
-		var ready, stopped sql.NullString
-		var desired int
-		if err := rows.Scan(&in.Id, &in.Name, &in.SourceId, &in.Repo, &in.Group, &in.RuntimeId, &in.InstallId, &in.Endpoint, &state, &in.Pid, &in.Error, &in.TaskId, &desired, &created, &ready, &stopped, &in.SlotId); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		in.State = v1.InstanceState(enumVal(v1.InstanceState(0).Descriptor(), state))
-		in.DesiredRunning = desired != 0
-		in.CreatedAt = timeVal(sql.NullString{String: created, Valid: true})
-		in.ReadyAt = timeVal(ready)
-		in.StoppedAt = timeVal(stopped)
-		out = append(out, in)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
 	for _, in := range out {
 		if err := d.fillInstance(ctx, in); err != nil {
 			return nil, err
@@ -126,56 +101,37 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 	if in.Command, err = d.strings(ctx, `SELECT arg FROM instance_command WHERE instance_id = ? ORDER BY position`, id); err != nil {
 		return err
 	}
-	req := &v1.RunRequest{}
-	var force int
-	err = d.sql.QueryRowContext(ctx, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, profile_id, force FROM instance_requests WHERE instance_id = ?`, id).Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, &req.ProfileId, &force)
-	switch {
-	case err == sql.ErrNoRows:
-	case err != nil:
+	requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, profile_id, force FROM instance_requests WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
+		req := &v1.RunRequest{}
+		return req, rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, &req.ProfileId, (*flag)(&req.Force))
+	}, id)
+	if err != nil {
 		return err
-	default:
-		req.Force = force != 0
-		if req.Params, err = d.stringMap(ctx, `SELECT name, value FROM instance_request_params WHERE instance_id = ? ORDER BY name`, id); err != nil {
+	}
+	if len(requests) > 0 {
+		in.Request = requests[0]
+		if in.Request.Params, err = d.stringMap(ctx, `SELECT name, value FROM instance_request_params WHERE instance_id = ? ORDER BY name`, id); err != nil {
 			return err
 		}
-		in.Request = req
 	}
-	plan := &v1.MemoryPlan{}
-	var verdict string
-	var weights, cache, overhead int64
-	err = d.sql.QueryRowContext(ctx, `SELECT verdict, weights_bytes, cache_bytes, overhead_bytes, detail, overhead_delta FROM instance_plans WHERE instance_id = ?`, id).Scan(&verdict, &weights, &cache, &overhead, &plan.Detail, &plan.OverheadDelta)
-	switch {
-	case err == sql.ErrNoRows:
-	case err != nil:
+	plans, err := list(ctx, d, `SELECT verdict, weights_bytes, cache_bytes, overhead_bytes, detail, overhead_delta FROM instance_plans WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.MemoryPlan, error) {
+		plan := &v1.MemoryPlan{}
+		return plan, rows.Scan(enumAt[v1.FitVerdict]{&plan.Verdict}, &plan.WeightsBytes, &plan.CacheBytes, &plan.OverheadBytes, &plan.Detail, &plan.OverheadDelta)
+	}, id)
+	if err != nil {
 		return err
-	default:
-		plan.Verdict = v1.FitVerdict(enumVal(v1.FitVerdict(0).Descriptor(), verdict))
-		plan.WeightsBytes, plan.CacheBytes, plan.OverheadBytes = uint64(weights), uint64(cache), uint64(overhead)
-		if err := d.each(ctx, `SELECT pool_id, kind, used_bytes, capacity_bytes FROM instance_plan_pools WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) error {
+	}
+	if len(plans) > 0 {
+		plan := plans[0]
+		if plan.Pools, err = list(ctx, d, `SELECT pool_id, kind, used_bytes, capacity_bytes FROM instance_plan_pools WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.PoolUsage, error) {
 			p := &v1.PoolUsage{}
-			var kind string
-			var used, capacity int64
-			if err := rows.Scan(&p.PoolId, &kind, &used, &capacity); err != nil {
-				return err
-			}
-			p.Kind = v1.PoolKind(enumVal(v1.PoolKind(0).Descriptor(), kind))
-			p.UsedBytes, p.CapacityBytes = uint64(used), uint64(capacity)
-			plan.Pools = append(plan.Pools, p)
-			return nil
+			return p, rows.Scan(&p.PoolId, enumAt[v1.PoolKind]{&p.Kind}, &p.UsedBytes, &p.CapacityBytes)
 		}, id); err != nil {
 			return err
 		}
-		if err := d.each(ctx, `SELECT kind, pool_id, bytes, count FROM instance_plan_placements WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) error {
+		if plan.Placements, err = list(ctx, d, `SELECT kind, pool_id, bytes, count FROM instance_plan_placements WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.Placement, error) {
 			p := &v1.Placement{}
-			var kind string
-			var bytes int64
-			if err := rows.Scan(&kind, &p.PoolId, &bytes, &p.Count); err != nil {
-				return err
-			}
-			p.Kind = v1.TensorGroupKind(enumVal(v1.TensorGroupKind(0).Descriptor(), kind))
-			p.Bytes = uint64(bytes)
-			plan.Placements = append(plan.Placements, p)
-			return nil
+			return p, rows.Scan(enumAt[v1.TensorGroupKind]{&p.Kind}, &p.PoolId, &p.Bytes, &p.Count)
 		}, id); err != nil {
 			return err
 		}
@@ -184,28 +140,19 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 		}
 		in.Plan = plan
 	}
-	if err := d.each(ctx, `SELECT key, bytes, line FROM instance_measurements WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) error {
+	if in.Measurements, err = list(ctx, d, `SELECT key, bytes, line FROM instance_measurements WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.Measurement, error) {
 		m := &v1.Measurement{}
-		var bytes int64
-		if err := rows.Scan(&m.Key, &bytes, &m.Line); err != nil {
-			return err
-		}
-		m.Bytes = uint64(bytes)
-		in.Measurements = append(in.Measurements, m)
-		return nil
+		return m, rows.Scan(&m.Key, &m.Bytes, &m.Line)
 	}, id); err != nil {
 		return err
 	}
 	var positions []int
-	if err := d.each(ctx, `SELECT position, rule_id, summary, hint, line FROM instance_triage WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) error {
+	if in.Triage, err = list(ctx, d, `SELECT position, rule_id, summary, hint, line FROM instance_triage WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.TriageHit, error) {
 		h := &v1.TriageHit{}
 		var pos int
-		if err := rows.Scan(&pos, &h.Id, &h.Summary, &h.Hint, &h.Line); err != nil {
-			return err
-		}
+		err := rows.Scan(&pos, &h.Id, &h.Summary, &h.Hint, &h.Line)
 		positions = append(positions, pos)
-		in.Triage = append(in.Triage, h)
-		return nil
+		return h, err
 	}, id); err != nil {
 		return err
 	}
@@ -223,33 +170,6 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 
 // Removes an instance and its child rows
 func (d *DB) DeleteInstance(ctx context.Context, id string) error {
-	_, err := d.sql.ExecContext(ctx, `DELETE FROM instances WHERE id = ?`, id)
+	_, err := d.del(ctx, "instances", "id", id)
 	return err
-}
-
-func (d *DB) strings(ctx context.Context, query string, args ...any) ([]string, error) {
-	var out []string
-	err := d.each(ctx, query, func(rows *sql.Rows) error {
-		var s string
-		if err := rows.Scan(&s); err != nil {
-			return err
-		}
-		out = append(out, s)
-		return nil
-	}, args...)
-	return out, err
-}
-
-func (d *DB) each(ctx context.Context, query string, fn func(*sql.Rows) error, args ...any) error {
-	rows, err := d.sql.QueryContext(ctx, query, args...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		if err := fn(rows); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
 }

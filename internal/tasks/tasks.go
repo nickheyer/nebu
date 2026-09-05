@@ -3,8 +3,6 @@ package tasks
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/nebu/internal/db"
+	"github.com/nickheyer/nebu/pkg/eval"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/launch"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -25,7 +24,6 @@ const (
 	historyMax     = 200
 	logMax         = 2000
 	notifyInterval = 100 * time.Millisecond
-	restartNote    = "daemon restarted"
 )
 
 // Returned when a task id is not known
@@ -69,7 +67,7 @@ func New(base context.Context, log *slog.Logger, store *db.DB, bus *events.Bus) 
 
 // Marks tasks a previous daemon left unfinished as failed
 func (m *Manager) Recover(ctx context.Context) error {
-	n, err := m.store.FailUnfinishedTasks(ctx, restartNote, time.Now())
+	n, err := m.store.FailUnfinishedTasks(ctx)
 	if err != nil {
 		return err
 	}
@@ -85,7 +83,7 @@ func (m *Manager) Start(kind, title string, labels map[string]string, run func(c
 	e := &entry{
 		m: m,
 		task: &v1.Task{
-			Id:        newID(),
+			Id:        db.NewID(),
 			Kind:      kind,
 			Title:     title,
 			State:     v1.TaskState_TASK_STATE_PENDING,
@@ -210,7 +208,7 @@ func (m *Manager) List(activeOnly bool) []*v1.Task {
 			out = append(out, t)
 		}
 	}
-	SortNewest(out)
+	sortNewest(out)
 	return out
 }
 
@@ -265,6 +263,18 @@ func (m *Manager) Watch(ctx context.Context, id string, send func(*v1.WatchTaskR
 		case <-e.done:
 		}
 	}
+}
+
+// Waits for a task and reports one that did not succeed as an error
+func (m *Manager) WaitOK(ctx context.Context, id string) error {
+	final, err := m.Wait(ctx, id)
+	if err != nil {
+		return err
+	}
+	if final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
+		return fmt.Errorf("%s: %s", eval.EnumShort(final.GetState()), final.GetError())
+	}
+	return nil
 }
 
 // Blocks until a task ends and returns its final snapshot
@@ -422,16 +432,8 @@ func terminal(s v1.TaskState) bool {
 	return false
 }
 
-func newID() string {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("%x", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b[:])
-}
-
 // Sorts tasks newest first by creation time
-func SortNewest(tasks []*v1.Task) {
+func sortNewest(tasks []*v1.Task) {
 	sort.SliceStable(tasks, func(i, j int) bool {
 		return tasks[i].GetCreatedAt().AsTime().After(tasks[j].GetCreatedAt().AsTime())
 	})

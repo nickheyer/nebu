@@ -13,6 +13,8 @@
   import Button from './ui/Button.svelte';
   import StateBadge from './ui/StateBadge.svelte';
   import Copy from './ui/Copy.svelte';
+  import Section from './ui/Section.svelte';
+  import ParamChips from './ui/ParamChips.svelte';
   import PlanView from './PlanView.svelte';
   import InstanceLog from './InstanceLog.svelte';
 
@@ -22,7 +24,6 @@
   let stopping = $state(false);
   const instance = $derived(id ? live.instances.get(id) : undefined);
   const alive = $derived(instanceLive(instance));
-  const open = $derived(!!id);
 
   $effect(() => {
     if (id) tab = 'overview';
@@ -51,15 +52,7 @@
   }
 </script>
 
-<Drawer
-  {open}
-  onOpenChange={(v) => {
-    if (!v) id = '';
-  }}
-  title={instance?.name ?? 'Instance'}
-  subtitle={instance?.id}
-  width="lg"
->
+<Drawer bind:id title={instance?.name ?? 'Instance'} subtitle={instance?.id} width="lg">
   {#snippet header()}
     {#if instance}
       <div class="flex flex-wrap items-center gap-2">
@@ -110,19 +103,11 @@
           {/if}
 
           {#if Object.keys(instance.params).length}
-            <section>
-              <h3 class="mb-2 text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Parameters</h3>
-              <div class="flex flex-wrap gap-1.5">
-                {#each Object.entries(instance.params) as [k, v] (k)}
-                  <span class="rounded border border-line bg-sunken px-1.5 py-0.5 font-mono text-[11px]"><span class="text-fg-faint">{k}=</span><span class="text-fg">{v}</span></span>
-                {/each}
-              </div>
-            </section>
+            <Section title="Parameters"><ParamChips params={instance.params} /></Section>
           {/if}
 
           {#if instance.measurements.length}
-            <section>
-              <h3 class="mb-2 text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Measured allocations</h3>
+            <Section title="Measured allocations">
               <table class="tbl">
                 <thead><tr><th>key</th><th class="num">bytes</th><th>source line</th></tr></thead>
                 <tbody>
@@ -131,17 +116,14 @@
                   {/each}
                 </tbody>
               </table>
-            </section>
+            </Section>
           {/if}
 
           {#if instance.command.length}
-            <section>
-              <div class="mb-2 flex items-center gap-2">
-                <h3 class="text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Command</h3>
-                <Copy text={instance.command.join(' ')} size={12} />
-              </div>
+            <Section title="Command">
+              {#snippet actions()}<Copy text={instance.command.join(' ')} size={12} />{/snippet}
               <pre class="overflow-x-auto rounded-lg border border-line bg-sunken p-3 font-mono text-[11.5px] leading-5 whitespace-pre-wrap break-all text-fg-muted">{instance.command.join(' \\\n  ')}</pre>
-            </section>
+            </Section>
           {/if}
         </div>
       {:else if tab === 'plan'}
@@ -165,9 +147,7 @@
                 {#if Object.keys(hit.fix).length}
                   <div class="mt-3 flex flex-wrap items-center gap-2">
                     <span class="text-xs text-fg-muted">suggested</span>
-                    {#each Object.entries(hit.fix) as [k, v] (k)}
-                      <span class="rounded border border-line bg-sunken px-1.5 py-0.5 font-mono text-[11px]"><span class="text-fg-faint">{k}=</span><span class="text-fg">{v}</span></span>
-                    {/each}
+                    <ParamChips params={hit.fix} />
                     {#if instance.request && !alive}
                       <Button size="xs" variant="primary" icon={Wrench} class="ml-auto" onclick={() => again(hit.fix)}>Run again with fix</Button>
                     {/if}

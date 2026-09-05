@@ -272,7 +272,7 @@ func TestPlansMatchMeasuredRuns(t *testing.T) {
 		within := func(name string, got, want uint64, low, high float64) {
 			ratio := float64(got) / float64(want)
 			if ratio < low || ratio > high {
-				t.Errorf("%s: %s planned %s, measured %s, ratio %.3f outside [%.2f, %.2f]", filepath.Base(file), name, human(got), human(want), ratio, low, high)
+				t.Errorf("%s: %s planned %s, measured %s, ratio %.3f outside [%.2f, %.2f]", filepath.Base(file), name, Human(got), Human(want), ratio, low, high)
 			}
 		}
 		cache := run.Measured["device.cache"] + run.Measured["host.cache"]
@@ -316,12 +316,12 @@ func TestSlidingWindowAndSpannedDevices(t *testing.T) {
 	// Ten full layers hold 32k tokens, the other fifty-two hold the window plus a batch
 	want := uint64(32768)*10*16*256*2 + uint64(1024+512)*52*16*256*2
 	if plan.GetCacheBytes() != want || plan.GetCacheBytes() >= full/2 {
-		t.Fatalf("sliding window cache %s, want %s of a full %s", human(plan.GetCacheBytes()), human(want), human(full))
+		t.Fatalf("sliding window cache %s, want %s of a full %s", Human(plan.GetCacheBytes()), Human(want), Human(full))
 	}
 	d.ArchSpecId, d.Architecture = "default", "llama"
 	plan, err = p.Plan(Input{Descriptor: d, Formulas: builder.Formulas("default"), Host: host, Params: defaults(params, map[string]any{"n_ctx": int64(32768)})})
 	if err != nil || plan.GetCacheBytes() != full {
-		t.Fatalf("a full cache arch ignores the window: %s %v", human(plan.GetCacheBytes()), err)
+		t.Fatalf("a full cache arch ignores the window: %s %v", Human(plan.GetCacheBytes()), err)
 	}
 
 	// vLLM at tensor parallel one sees one device, llama.cpp spreads over both

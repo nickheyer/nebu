@@ -32,34 +32,24 @@ func runChat(ctx context.Context, e *env, args []string) error {
 	temperature := fs.Float64("temperature", -1, "sampling temperature, the runtime default when unset")
 	maxTokens := fs.Int("max-tokens", 0, "answer length cap, the runtime default when 0")
 	key := fs.String("key", "", "gateway api key, the first configured when empty")
-	positional, err := parse(fs, args)
+	positional, err := e.parse(fs, args, 1, 1, "chat <model> [--system S] [--once TEXT] [--temperature F] [--max-tokens N] [--key K]")
 	if err != nil {
 		return err
 	}
-	if len(positional) != 1 {
-		return fmt.Errorf("usage: nebu chat <model> [--system S] [--once TEXT] [--temperature F] [--max-tokens N] [--key K]")
-	}
-	if err := e.requireDaemon(); err != nil {
-		return err
-	}
-	cl, err := e.clients()
-	if err != nil {
-		return err
-	}
-	if err := e.routeReady(ctx, cl, positional[0]); err != nil {
+	if err := e.routeReady(ctx, positional[0]); err != nil {
 		return err
 	}
 	apiKey := *key
 	if apiKey == "" && len(e.cfg.GetGateway().GetApiKeys()) > 0 {
 		apiKey = e.cfg.GetGateway().GetApiKeys()[0]
 	}
-	base := e.gatewayBase(ctx, cl)
+	base := e.gatewayBase(ctx)
 	session := &chatSession{
 		out: e.out, url: base + "/v1/chat/completions", model: positional[0], key: apiKey,
 		temperature: *temperature, maxTokens: *maxTokens, client: &http.Client{Transport: e.transport(base)},
 	}
 	if *system != "" {
-		session.history = append(session.history, chatMessage{Role: "system", Content: *system})
+		session.setSystem(*system)
 	}
 	if *once != "" {
 		return session.ask(ctx, *once)
@@ -124,8 +114,8 @@ func runChat(ctx context.Context, e *env, args []string) error {
 }
 
 // Fails before a session opens when the route is not there or not ready
-func (e *env) routeReady(ctx context.Context, cl *clients, name string) error {
-	resp, err := cl.gateway.ListRoutes(ctx, connect.NewRequest(&v1.ListRoutesRequest{}))
+func (e *env) routeReady(ctx context.Context, name string) error {
+	resp, err := e.cl.gateway.ListRoutes(ctx, connect.NewRequest(&v1.ListRoutesRequest{}))
 	if err != nil {
 		return err
 	}
@@ -160,13 +150,11 @@ type chatSession struct {
 
 // Drops every turn but the system prompt
 func (s *chatSession) reset() {
-	var kept []chatMessage
-	for _, m := range s.history {
-		if m.Role == "system" {
-			kept = append(kept, m)
-		}
+	if len(s.history) > 0 && s.history[0].Role == "system" {
+		s.history = s.history[:1]
+		return
 	}
-	s.history = kept
+	s.history = nil
 }
 
 // Sets the system prompt ahead of the turns, keeping them
@@ -210,13 +198,8 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		s.history = s.history[:len(s.history)-1]
-		var e struct {
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if json.Unmarshal(raw, &e) == nil && e.Error.Message != "" {
-			return fmt.Errorf("%d: %s", resp.StatusCode, e.Error.Message)
+		if msg := errorMessage(raw); msg != "" {
+			return fmt.Errorf("%d: %s", resp.StatusCode, msg)
 		}
 		return fmt.Errorf("%d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
@@ -226,9 +209,8 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64<<10), 16<<20)
 	for sc.Scan() && failed == nil {
-		line := sc.Text()
 		// A runtime that breaks off mid answer says so in an error field or an error line
-		field, payload, ok := strings.Cut(line, ":")
+		field, payload, ok := strings.Cut(sc.Text(), ":")
 		if !ok || field != "data" && field != "error" {
 			continue
 		}
@@ -246,9 +228,6 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 			Usage *struct {
 				CompletionTokens int `json:"completion_tokens"`
 			} `json:"usage"`
-			Error *struct {
-				Message string `json:"message"`
-			} `json:"error"`
 		}
 		if json.Unmarshal([]byte(payload), &chunk) != nil {
 			if field == "error" {
@@ -256,8 +235,8 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 			}
 			continue
 		}
-		if chunk.Error != nil {
-			failed = errors.New(chunk.Error.Message)
+		if msg := errorMessage([]byte(payload)); msg != "" {
+			failed = errors.New(msg)
 			continue
 		}
 		for _, c := range chunk.Choices {
@@ -288,4 +267,15 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 		s.history = s.history[:len(s.history)-1]
 	}
 	return err
+}
+
+// The message in an OpenAI shaped error body, empty when it has none
+func errorMessage(raw []byte) string {
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	json.Unmarshal(raw, &e)
+	return e.Error.Message
 }

@@ -3,6 +3,7 @@ package sources
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -23,9 +24,17 @@ var kaggle = &Catalog{
 	RepoPattern:   `^[\w.-]+/[\w.-]+(/[\w.-]+/[\w.-]+)?$`,
 	RevisionLabel: "variant",
 	Sorts:         []string{SortTrending, SortDownloads, SortLikes, SortUpdated, SortCreated, kgSortNotebooks},
-	Facets:        []*v1.Facet{Freeform(FacetAuthor, "Owner")},
-	HitFields:     []*v1.ConfigField{{Name: "frameworks", Label: "Frameworks", Description: "Frameworks the model is published for"}},
-	API:           kaggleAPI{},
+	SortKeys: map[string]string{
+		SortTrending:    "hotness",
+		SortDownloads:   "downloadCount",
+		SortLikes:       "voteCount",
+		SortUpdated:     "updateTime",
+		SortCreated:     "createTime",
+		kgSortNotebooks: "notebookCount",
+	},
+	Facets:    []*v1.Facet{Freeform(FacetAuthor, "Owner")},
+	HitFields: []*v1.ConfigField{{Name: "frameworks", Label: "Frameworks", Description: "Frameworks the model is published for"}},
+	API:       kaggleAPI{},
 }
 
 func init() { register(kaggle) }
@@ -35,23 +44,12 @@ const (
 	kgSortNotebooks = "notebooks"
 )
 
-// Kaggle sortBy values by sort id
-var kgSortKeys = map[string]string{
-	SortTrending:    "hotness",
-	SortDownloads:   "downloadCount",
-	SortLikes:       "voteCount",
-	SortUpdated:     "updateTime",
-	SortCreated:     "createTime",
-	kgSortNotebooks: "notebookCount",
-}
-
-// The Kaggle Models API: a token paged list, models with instances, versioned file lists, and signed downloads
+// The Kaggle Models API: a token paged list, instances, versioned file lists, signed downloads
 type kaggleAPI struct{}
 
 type kgInstance struct {
 	Slug          string `json:"slug"`
 	Framework     string `json:"framework"`
-	FineTunable   bool   `json:"fineTunable"`
 	Overview      string `json:"overview"`
 	Usage         string `json:"usage"`
 	VersionNumber int    `json:"versionNumber"`
@@ -77,7 +75,7 @@ type kgModel struct {
 
 func (kaggleAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
 	q := url.Values{
-		"sortBy":   {kgSortKeys[sort.ID]},
+		"sortBy":   {sort.Key},
 		"pageSize": {strconv.Itoa(c.Limit(req))},
 	}
 	if query := strings.TrimSpace(req.GetQuery()); query != "" {
@@ -110,7 +108,7 @@ func kgHit(c *Client, it kgModel) *v1.SearchHit {
 	if it.Ref == "" {
 		return nil
 	}
-	owner, name, _ := strings.Cut(it.Ref, "/")
+	owner, name := splitRepo(it.Ref)
 	if it.Slug != "" {
 		name = it.Slug
 	}
@@ -120,21 +118,13 @@ func kgHit(c *Client, it kgModel) *v1.SearchHit {
 	if it.Author != "" {
 		owner = it.Author
 	}
-	hit := &v1.SearchHit{
-		Repo:      it.Ref,
-		Name:      name,
-		Author:    owner,
-		Likes:     it.VoteCount,
-		Private:   it.IsPrivate,
-		Url:       kgPageURL(c, it),
-		UpdatedAt: Stamp(it.UpdateTime),
-		Extra:     map[string]string{},
-	}
+	hit := newHit(it.Ref, name, owner)
+	hit.Likes, hit.Private, hit.Url, hit.UpdatedAt = it.VoteCount, it.IsPrivate, kgPageURL(c, it), Stamp(it.UpdateTime)
 	summary := it.Subtitle
 	if summary == "" {
 		summary = kgFirstLine(it.Description)
 	}
-	hit.Description = Excerpt(StripTags(summary), 240)
+	hit.Description = Summary(summary)
 	for _, t := range it.Tags {
 		if t.Name != "" {
 			hit.Tags = append(hit.Tags, t.Name)
@@ -184,7 +174,7 @@ func kgPageURL(c *Client, it kgModel) string {
 	if it.URL != "" {
 		return it.URL
 	}
-	return c.Base() + "/models/" + it.Ref
+	return c.Page("models", it.Ref)
 }
 
 // Names one instance of a model, version 0 meaning latest
@@ -199,10 +189,6 @@ func (l kgLocator) repo() string { return l.modelRepo() + "/" + l.framework + "/
 
 func (l kgLocator) hasInstance() bool { return l.framework != "" && l.instance != "" }
 
-func kgSplit(s string) []string {
-	return strings.Split(strings.Trim(strings.TrimSpace(s), "/"), "/")
-}
-
 // Reads a version number, with or without the v prefix Commit uses
 func kgParseVersion(s string) (int, error) {
 	n, err := strconv.Atoi(strings.TrimPrefix(strings.TrimSpace(s), "v"))
@@ -215,44 +201,36 @@ func kgParseVersion(s string) (int, error) {
 // Reads owner/model with a framework/instance[/version] revision, or the variant repo with a version
 func kgParse(repo, revision string) (kgLocator, error) {
 	var l kgLocator
-	parts := kgSplit(repo)
-	switch len(parts) {
-	case 2:
-		l.owner, l.model = parts[0], parts[1]
-		if strings.TrimSpace(revision) == "" {
-			break
-		}
-		rp := kgSplit(revision)
-		if len(rp) != 2 && len(rp) != 3 {
-			return l, fmt.Errorf("revision %q: want framework/instance[/version]", revision)
-		}
-		l.framework, l.instance = rp[0], rp[1]
-		if len(rp) == 3 {
-			v, err := kgParseVersion(rp[2])
-			if err != nil {
-				return l, err
-			}
-			l.version = v
-		}
-	case 4:
-		l.owner, l.model, l.framework, l.instance = parts[0], parts[1], parts[2], parts[3]
-		if strings.TrimSpace(revision) != "" {
-			v, err := kgParseVersion(revision)
-			if err != nil {
-				return l, err
-			}
-			l.version = v
-		}
-	default:
-		return l, fmt.Errorf("repo %q: want owner/model or owner/model/framework/instance", repo)
+	parts, err := segments("repo", repo, "owner/model or owner/model/framework/instance", 2, 4)
+	if err != nil {
+		return l, err
 	}
-	for _, p := range parts {
-		if p == "" {
-			return l, fmt.Errorf("repo %q: empty segment", repo)
-		}
+	l.owner, l.model = parts[0], parts[1]
+	if len(parts) == 4 {
+		l.framework, l.instance = parts[2], parts[3]
 	}
-	if l.framework == "" && l.instance != "" || l.framework != "" && l.instance == "" {
-		return l, fmt.Errorf("revision %q: empty segment", revision)
+	if strings.TrimSpace(revision) == "" {
+		return l, nil
+	}
+	if len(parts) == 4 {
+		v, err := kgParseVersion(revision)
+		if err != nil {
+			return l, err
+		}
+		l.version = v
+		return l, nil
+	}
+	rp, err := segments("revision", revision, "framework/instance[/version]", 2, 3)
+	if err != nil {
+		return l, err
+	}
+	l.framework, l.instance = rp[0], rp[1]
+	if len(rp) == 3 {
+		v, err := kgParseVersion(rp[2])
+		if err != nil {
+			return l, err
+		}
+		l.version = v
 	}
 	return l, nil
 }
@@ -385,10 +363,7 @@ func (kaggleAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v
 	}
 	it, err := kgGetModel(ctx, c, l)
 	if err != nil {
-		if IsStatus(err, 404) {
-			return &v1.ModelCard{Url: kgPageURL(c, it)}, nil
-		}
-		return nil, err
+		return cardOrEmpty(kgPageURL(c, it), err)
 	}
 	card := &v1.ModelCard{Markdown: it.Description, Url: kgPageURL(c, it)}
 	if !l.hasInstance() {
@@ -396,7 +371,7 @@ func (kaggleAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v
 	}
 	in, err := kgGetInstance(ctx, c, l)
 	if err != nil {
-		if IsStatus(err, 404) {
+		if IsStatus(err, http.StatusNotFound) {
 			return card, nil
 		}
 		return nil, err

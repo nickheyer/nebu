@@ -3,8 +3,6 @@ package slots
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,10 +15,10 @@ import (
 	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/pkg/eval"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/runtime"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -46,13 +44,13 @@ type Manager struct {
 	Events       *events.Bus
 	DrainTimeout time.Duration
 	Log          *slog.Logger
+	// Names what swaps into a slot, watches and wants, dropping the swap when clear is set
+	Referrers func(id string, clear bool) []string
 
 	mu    sync.Mutex
 	slots map[string]*v1.Slot
 	// Slots a swap, evict, or delete is working on right now
 	busy map[string]bool
-	// Names what swaps into a slot, watches and wants, dropping the swap when clear is set
-	Referrers func(id string, clear bool) []string
 }
 
 // Reserves a slot for one operation, refusing while another holds it or a swap runs
@@ -101,7 +99,7 @@ func (m *Manager) Load(ctx context.Context) error {
 func (m *Manager) Recover(ctx context.Context) error {
 	for _, s := range m.List() {
 		live := m.liveInstance(s)
-		m.update(s.GetId(), func(sl *v1.Slot) {
+		s = m.update(s.GetId(), func(sl *v1.Slot) {
 			switch {
 			case live == nil:
 				sl.InstanceId = ""
@@ -117,7 +115,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 		if live != nil && live.GetState() == v1.InstanceState_INSTANCE_STATE_READY {
 			m.route(s, live)
 		} else {
-			m.Routes.Pending(s.GetName(), s.GetId(), modelOf(s.GetRequest()), s.GetPolicy())
+			m.pending(s, modelOf(s.GetRequest()))
 		}
 	}
 	return nil
@@ -175,6 +173,11 @@ func (m *Manager) find(id string) (*v1.Slot, error) {
 	return nil, fmt.Errorf("%w %q", ErrUnknownSlot, id)
 }
 
+func (m *Manager) mustFind(id string) *v1.Slot {
+	s, _ := m.find(id)
+	return s
+}
+
 // Applies fn under the lock, writes, and publishes the slot
 func (m *Manager) update(id string, fn func(*v1.Slot)) *v1.Slot {
 	m.mu.Lock()
@@ -194,7 +197,7 @@ func (m *Manager) update(id string, fn func(*v1.Slot)) *v1.Slot {
 	return snapshot
 }
 
-// Resolves a slot into planning constraints, implementing the instance reserver
+// Resolves a slot into planning constraints, implementing the instance manager's slots
 func (m *Manager) Reservation(ctx context.Context, id string) (*instances.Reservation, error) {
 	s, err := m.find(id)
 	if err != nil {
@@ -227,7 +230,7 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 		return nil, fmt.Errorf("%w: %q is already a route, pick another name", ErrSlot, name)
 	}
 	s := &v1.Slot{
-		Id:          newID(),
+		Id:          db.NewID(),
 		Name:        name,
 		Description: req.GetDescription(),
 		DeviceIds:   req.GetDeviceIds(),
@@ -248,7 +251,7 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 	}
 	m.slots[s.GetId()] = s
 	m.mu.Unlock()
-	m.Routes.Pending(name, s.GetId(), "", s.GetPolicy())
+	m.pending(s, "")
 	m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_CREATED, s.GetId(), s)
 	return proto.Clone(s).(*v1.Slot), nil
 }
@@ -295,7 +298,7 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 		if live := m.liveInstance(next); live != nil && live.GetState() == v1.InstanceState_INSTANCE_STATE_READY {
 			m.route(next, live)
 		} else if live == nil || live.GetState() == v1.InstanceState_INSTANCE_STATE_STARTING {
-			m.Routes.Pending(next.GetName(), next.GetId(), modelOf(next.GetRequest()), next.GetPolicy())
+			m.pending(next, modelOf(next.GetRequest()))
 		}
 	}
 	return next, nil
@@ -365,16 +368,22 @@ func (m *Manager) Evict(ctx context.Context, id string) (*v1.Slot, error) {
 	}
 	defer m.release(s.GetId())
 	for _, in := range m.Instances.InSlot(s.GetId()) {
-		if _, err := m.Instances.Drain(ctx, in.GetId(), m.DrainTimeout); err != nil {
-			return nil, err
-		}
-		if _, err := m.Instances.Stop(ctx, in.GetId()); err != nil {
+		if err := m.retire(ctx, in.GetId()); err != nil {
 			return nil, err
 		}
 	}
 	return m.update(s.GetId(), func(sl *v1.Slot) {
 		sl.InstanceId, sl.State, sl.Error = "", v1.SlotState_SLOT_STATE_EMPTY, ""
 	}), nil
+}
+
+// Drains an instance, then stops it
+func (m *Manager) retire(ctx context.Context, id string) error {
+	if _, err := m.Instances.Drain(ctx, id, m.DrainTimeout); err != nil {
+		return err
+	}
+	_, err := m.Instances.Stop(ctx, id)
+	return err
 }
 
 // Replaces what a slot serves, keeping its name answering throughout
@@ -420,7 +429,7 @@ func (m *Manager) Swap(ctx context.Context, req *v1.SwapRequest) (*v1.Slot, *v1.
 	}
 	title := fmt.Sprintf("swap %s to %s %s", s.GetName(), run.GetRepo(), run.GetGroup())
 	task := m.Tasks.Start(kindSwap, title, map[string]string{"slot": s.GetId(), "name": s.GetName()}, func(ctx context.Context, h *tasks.Handle) error {
-		h.Logf("swap mode %s, plan %s", mode, strings.ToLower(planVerdict(plan)))
+		h.Logf("swap mode %s, plan %s", mode, eval.EnumShort(plan.GetVerdict()))
 		if drainFirst {
 			return m.swapDrainFirst(ctx, h, s, old, run)
 		}
@@ -430,30 +439,31 @@ func (m *Manager) Swap(ctx context.Context, req *v1.SwapRequest) (*v1.Slot, *v1.
 	return m.mustFind(s.GetId()), old, task, nil
 }
 
-func planVerdict(plan *v1.MemoryPlan) string {
-	return strings.TrimPrefix(plan.GetVerdict().String(), "FIT_VERDICT_")
+// Starts a run for the slot and waits for it to be ready, the fresh record on success
+func (m *Manager) launch(ctx context.Context, h *tasks.Handle, run *v1.RunRequest, swap bool) (*v1.Instance, error) {
+	if swap {
+		ctx = instances.WithSwap(ctx)
+	}
+	in, task, err := m.Instances.Run(ctx, run)
+	if err != nil {
+		return nil, err
+	}
+	h.Logf("starting %s as instance %s", run.GetRepo(), in.GetId())
+	if err := m.Tasks.WaitOK(ctx, task.GetId()); err != nil {
+		return in, err
+	}
+	return m.Instances.Get(in.GetId())
 }
 
 // Starts the new instance beside the old, flips, then drains
 func (m *Manager) swapBlueGreen(ctx context.Context, h *tasks.Handle, s *v1.Slot, old *v1.Instance, run *v1.RunRequest) error {
 	h.Progress(0, 3, "starting "+run.GetRepo())
-	in, task, err := m.Instances.Run(instances.WithSwap(ctx), run)
+	fresh, err := m.launch(ctx, h, run, true)
 	if err != nil {
-		m.settle(s, old, "", err)
-		return err
-	}
-	h.Logf("starting %s as instance %s", run.GetRepo(), in.GetId())
-	final, err := m.Tasks.Wait(ctx, task.GetId())
-	if err == nil && final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
-		err = fmt.Errorf("%s: %s", strings.ToLower(strings.TrimPrefix(final.GetState().String(), "TASK_STATE_")), final.GetError())
-	}
-	if err != nil {
-		m.Instances.Stop(context.Background(), in.GetId())
+		if fresh != nil {
+			m.Instances.Stop(context.Background(), fresh.GetId())
+		}
 		m.settle(s, old, "", fmt.Errorf("new instance failed, %s still serving: %w", old.GetName(), err))
-		return err
-	}
-	fresh, err := m.Instances.Get(in.GetId())
-	if err != nil {
 		return err
 	}
 	h.Progress(1, 3, "switching route")
@@ -461,11 +471,8 @@ func (m *Manager) swapBlueGreen(ctx context.Context, h *tasks.Handle, s *v1.Slot
 	m.route(m.mustFind(s.GetId()), fresh)
 	h.Logf("route %s now serves %s", s.GetName(), fresh.GetId())
 	h.Progress(2, 3, "draining "+old.GetId())
-	m.Instances.Drain(ctx, old.GetId(), m.DrainTimeout)
-	m.Instances.Stop(ctx, old.GetId())
-	m.update(s.GetId(), func(sl *v1.Slot) {
-		sl.State, sl.Error = v1.SlotState_SLOT_STATE_READY, ""
-	})
+	m.retire(ctx, old.GetId())
+	m.update(s.GetId(), func(sl *v1.Slot) { sl.State, sl.Error = v1.SlotState_SLOT_STATE_READY, "" })
 	h.Progress(3, 3, "ready")
 	return nil
 }
@@ -473,29 +480,18 @@ func (m *Manager) swapBlueGreen(ctx context.Context, h *tasks.Handle, s *v1.Slot
 // Drains the old, starts the new, rolls back on failure
 func (m *Manager) swapDrainFirst(ctx context.Context, h *tasks.Handle, s *v1.Slot, old *v1.Instance, run *v1.RunRequest) error {
 	h.Progress(0, 3, "draining "+old.GetId())
-	m.Routes.Pending(s.GetName(), s.GetId(), modelOf(run), m.mustFind(s.GetId()).GetPolicy())
-	m.Instances.Drain(ctx, old.GetId(), m.DrainTimeout)
-	if _, err := m.Instances.Stop(ctx, old.GetId()); err != nil {
+	m.pending(m.mustFind(s.GetId()), modelOf(run))
+	if err := m.retire(ctx, old.GetId()); err != nil {
 		m.settle(s, nil, "", err)
 		return err
 	}
 	h.Logf("stopped %s", old.GetId())
 	h.Progress(1, 3, "starting "+run.GetRepo())
-	in, task, err := m.Instances.Run(ctx, run)
-	if err == nil {
-		h.Logf("starting %s as instance %s", run.GetRepo(), in.GetId())
-		m.update(s.GetId(), func(sl *v1.Slot) { sl.InstanceId = in.GetId() })
-		var final *v1.Task
-		final, err = m.Tasks.Wait(ctx, task.GetId())
-		if err == nil && final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
-			err = fmt.Errorf("%s: %s", strings.ToLower(strings.TrimPrefix(final.GetState().String(), "TASK_STATE_")), final.GetError())
-		}
+	fresh, err := m.launch(ctx, h, run, false)
+	if fresh != nil {
+		m.update(s.GetId(), func(sl *v1.Slot) { sl.InstanceId = fresh.GetId() })
 	}
 	if err == nil {
-		fresh, gerr := m.Instances.Get(in.GetId())
-		if gerr != nil {
-			return gerr
-		}
 		h.Progress(2, 3, "switching route")
 		m.update(s.GetId(), func(sl *v1.Slot) { sl.Request = fresh.GetRequest() })
 		m.route(m.mustFind(s.GetId()), fresh)
@@ -515,20 +511,14 @@ func (m *Manager) swapDrainFirst(ctx context.Context, h *tasks.Handle, s *v1.Slo
 	h.Progress(2, 3, "rolling back to "+previous.GetRepo())
 	previous = proto.Clone(previous).(*v1.RunRequest)
 	previous.SlotId = s.GetId()
-	back, btask, berr := m.Instances.Run(ctx, previous)
-	if berr == nil {
-		m.update(s.GetId(), func(sl *v1.Slot) { sl.InstanceId = back.GetId() })
-		var final *v1.Task
-		final, berr = m.Tasks.Wait(ctx, btask.GetId())
-		if berr == nil && final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
-			berr = errors.New(final.GetError())
-		}
+	restored, berr := m.launch(ctx, h, previous, false)
+	if restored != nil {
+		m.update(s.GetId(), func(sl *v1.Slot) { sl.InstanceId = restored.GetId() })
 	}
 	if berr != nil {
 		m.settle(s, nil, "", fmt.Errorf("%v, rollback failed too: %v", err, berr))
 		return err
 	}
-	restored, _ := m.Instances.Get(back.GetId())
 	m.route(m.mustFind(s.GetId()), restored)
 	m.settle(s, restored, "rolled back", err)
 	h.Logf("rolled back to %s", previous.GetRepo())
@@ -537,7 +527,7 @@ func (m *Manager) swapDrainFirst(ctx context.Context, h *tasks.Handle, s *v1.Slo
 
 // Settles the slot after a swap onto whichever instance survives
 func (m *Manager) settle(s *v1.Slot, serving *v1.Instance, note string, err error) {
-	m.update(s.GetId(), func(sl *v1.Slot) {
+	next := m.update(s.GetId(), func(sl *v1.Slot) {
 		if serving != nil {
 			sl.InstanceId, sl.State = serving.GetId(), v1.SlotState_SLOT_STATE_READY
 		} else {
@@ -546,25 +536,21 @@ func (m *Manager) settle(s *v1.Slot, serving *v1.Instance, note string, err erro
 		sl.Error = strings.TrimSpace(note + " " + err.Error())
 	})
 	if serving == nil {
-		m.Routes.Pending(s.GetName(), s.GetId(), "", m.mustFind(s.GetId()).GetPolicy())
+		m.pending(next, "")
 	}
-}
-
-func (m *Manager) mustFind(id string) *v1.Slot {
-	s, _ := m.find(id)
-	return s
 }
 
 // Points the slot name at an instance
 func (m *Manager) route(s *v1.Slot, in *v1.Instance) {
-	m.Routes.Set(s.GetName(), in.GetId(), s.GetId(), in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), in.GetName(), m.api(in), s.GetPolicy())
+	m.Routes.Serve(s.GetName(), in, m.Instances.Runtimes.API(in.GetRuntimeId()), s.GetId(), s.GetPolicy())
 }
 
-func (m *Manager) api(in *v1.Instance) v1.ApiFlavor {
-	return m.Instances.Runtimes.API(in.GetRuntimeId())
+// Keeps the slot name answering with nothing behind it
+func (m *Manager) pending(s *v1.Slot, model string) {
+	m.Routes.Pending(s.GetName(), s.GetId(), model, s.GetPolicy())
 }
 
-// Tracks occupants started or lost outside a swap
+// Tracks occupants started or lost outside a swap, implementing the instance manager's slots
 func (m *Manager) OnInstance(rec *v1.Instance) {
 	if rec.GetSlotId() == "" {
 		return
@@ -578,11 +564,11 @@ func (m *Manager) OnInstance(rec *v1.Instance) {
 	}
 	if rec.GetId() != s.GetInstanceId() {
 		if s.GetInstanceId() != "" {
-			if cur, err := m.Instances.Get(s.GetInstanceId()); err == nil && !terminal(cur.GetState()) {
+			if cur, err := m.Instances.Get(s.GetInstanceId()); err == nil && !instances.Terminal(cur.GetState()) {
 				return
 			}
 		}
-		if terminal(rec.GetState()) {
+		if instances.Terminal(rec.GetState()) {
 			return
 		}
 		m.update(s.GetId(), func(sl *v1.Slot) {
@@ -611,7 +597,7 @@ func (m *Manager) OnInstance(rec *v1.Instance) {
 				sl.State, sl.Error = v1.SlotState_SLOT_STATE_EMPTY, ""
 			}
 		})
-		m.Routes.Pending(s.GetName(), s.GetId(), modelOf(s.GetRequest()), s.GetPolicy())
+		m.pending(s, modelOf(s.GetRequest()))
 	}
 }
 
@@ -620,19 +606,4 @@ func modelOf(req *v1.RunRequest) string {
 		return ""
 	}
 	return req.GetRepo() + ":" + req.GetGroup()
-}
-
-func terminal(s v1.InstanceState) bool {
-	return s == v1.InstanceState_INSTANCE_STATE_STOPPED || s == v1.InstanceState_INSTANCE_STATE_FAILED
-}
-
-// Reports whether an error means the model does not fit
-func DoesNotFit(err error) bool { return errors.Is(err, runtime.ErrParam) }
-
-func newID() string {
-	var b [6]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return hex.EncodeToString([]byte(time.Now().String()))[:12]
-	}
-	return hex.EncodeToString(b[:])
 }

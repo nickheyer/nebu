@@ -30,25 +30,12 @@ func (p *Puller) Export(ctx context.Context, req *v1.ExportRequest) (*v1.Task, e
 	if err != nil {
 		return nil, err
 	}
-	manifests, err := p.Store.ListManifests()
+	selected, err := p.selectManifests(req.GetSourceId(), req.GetRepo(), req.GetGroup())
 	if err != nil {
 		return nil, err
 	}
-	var selected []*v1.StoredModel
-	for _, m := range manifests {
-		if req.GetSourceId() != "" && m.GetSourceId() != req.GetSourceId() {
-			continue
-		}
-		if req.GetRepo() != "" && m.GetRepo() != req.GetRepo() {
-			continue
-		}
-		if req.GetGroup() != "" && m.GetGroup() != req.GetGroup() {
-			continue
-		}
-		selected = append(selected, m)
-	}
 	if len(selected) == 0 {
-		return nil, fmt.Errorf("%w: nothing matches the export request", store.ErrNotStored)
+		return nil, fmt.Errorf("%w: nothing to export", store.ErrNotStored)
 	}
 	title := fmt.Sprintf("export %d models to %s", len(selected), dir)
 	return p.Tasks.Start(kindExport, title, map[string]string{"dir": dir}, func(ctx context.Context, h *tasks.Handle) error {
@@ -59,10 +46,7 @@ func (p *Puller) Export(ctx context.Context, req *v1.ExportRequest) (*v1.Task, e
 func (p *Puller) export(ctx context.Context, h *tasks.Handle, models []*v1.StoredModel, dir string) error {
 	// Nothing is collected or evicted while blobs are being copied out
 	defer p.Store.Hold()()
-	var total uint64
-	for _, m := range models {
-		total += m.GetBytes()
-	}
+	total := sizeOf(models)
 	h.Progress(0, total, "copying")
 	for _, m := range models {
 		repoDir := filepath.Join(dir, filepath.FromSlash(m.GetRepo()))

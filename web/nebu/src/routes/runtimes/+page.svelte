@@ -1,11 +1,11 @@
 <script lang="ts">
   import { api, message } from '$lib/api';
   import { Code, ConnectError } from '@connectrpc/connect';
-  import { live, clock, taskFor, instanceLive } from '$lib/state.svelte';
-  import { ago, enumLabel, newestFirst, when, byName } from '$lib/format';
+  import { live, cached, refreshCached, clock, taskFor, instanceLive, profilesOf } from '$lib/state.svelte';
+  import { ago, enumLabel, newestFirst, when } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
-  import type { Profile, RuntimeStatus } from '$proto/runtime_pb';
+  import type { Profile } from '$proto/runtime_pb';
   import { InstallKind } from '$proto/runtime_pb';
   import { BuildState, SandboxKind, type RecipeStatus } from '$proto/recipe_pb';
   import { Wrench, Download, Hammer, FolderInput, Trash2, ScrollText, RefreshCw, CircleCheck, CircleAlert, Package, SlidersHorizontal, Plus, Pencil, Star, StarOff } from '@lucide/svelte';
@@ -19,14 +19,14 @@
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import Field from '$lib/components/ui/Field.svelte';
   import Skeleton from '$lib/components/ui/Skeleton.svelte';
+  import ParamChips from '$lib/components/ui/ParamChips.svelte';
   import BuildDialog from '$lib/components/BuildDialog.svelte';
   import ProfileDialog from '$lib/components/ProfileDialog.svelte';
+  import RuntimeDrawer from '$lib/components/RuntimeDrawer.svelte';
   import TaskDrawer from '$lib/components/TaskDrawer.svelte';
   import TaskChip from '$lib/components/TaskChip.svelte';
 
-  let runtimes = $state<RuntimeStatus[]>([]);
   let recipes = $state<RecipeStatus[]>([]);
-  let loaded = $state(false);
   let adoptOpen = $state(false);
   let adoptRuntime = $state('');
   let adoptPath = $state('');
@@ -37,32 +37,32 @@
   let profileEditing = $state<Profile | null>(null);
   let profileRuntime = $state('');
   let taskId = $state('');
+  let runtimeId = $state('');
 
-  const installs = $derived([...live.installs.values()].sort(newestFirst));
-  const builds = $derived([...live.builds.values()].sort(newestFirst));
-  const profiles = $derived([...live.profiles.values()].sort(byName((p) => `${p.runtimeId} ${p.default ? 0 : 1} ${p.name}`)));
+  const runtimes = $derived(cached.runtimes);
+  const installs = $derived([...live.installs.values()].sort(newestFirst((i) => i.createdAt)));
+  const builds = $derived([...live.builds.values()].sort(newestFirst((b) => b.createdAt)));
+  const profiles = $derived(profilesOf(''));
 
-  async function refresh() {
+  // Recipes have no events, so a probe and the refresh button reread them
+  async function loadRecipes() {
     try {
-      const [r, c] = await Promise.all([api.runtimes.listRuntimes({}), api.builds.listRecipes({})]);
-      runtimes = r.runtimes;
-      recipes = c.recipes;
+      recipes = (await api.builds.listRecipes({})).recipes;
     } catch (err) {
-      fail(err, 'Could not list runtimes');
-    } finally {
-      loaded = true;
+      fail(err, 'Could not list recipes');
     }
   }
   $effect(() => {
     void live.host?.probedAt;
-    refresh();
+    loadRecipes();
   });
+  function refresh() {
+    void refreshCached();
+    loadRecipes();
+  }
 
   function installsOf(id: string) {
     return installs.filter((i) => i.runtimeId === id);
-  }
-  function profilesOf(id: string) {
-    return profiles.filter((p) => p.runtimeId === id);
   }
 
   function newProfile(runtimeId = '') {
@@ -164,12 +164,13 @@
 
 <div class="flex flex-col gap-6">
   <section class="grid grid-cols-1 gap-3 lg:grid-cols-2">
-    {#if !loaded}
+    {#if !cached.loaded}
       {#each [1, 2] as i (i)}<div class="panel p-4"><Skeleton rows={4} /></div>{/each}
     {:else}
       {#each runtimes as rt (rt.manifest?.id)}
         {@const id = rt.manifest?.id ?? ''}
         {@const have = installsOf(id)}
+        {@const owned = profilesOf(id).length}
         {@const installing = taskFor('install', { runtime: id })}
         {@const building = taskFor('build', { runtime: id })}
         <div class="panel flex flex-col gap-3 p-4">
@@ -177,7 +178,7 @@
             <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-line bg-raised text-fg-muted"><Wrench size={16} /></div>
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-2">
-                <span class="text-sm font-semibold text-fg">{rt.manifest?.name}</span>
+                <button class="text-sm font-semibold text-fg hover:underline" title="Manifest, params, installs, and profiles" onclick={() => (runtimeId = id)}>{rt.manifest?.name}</button>
                 <span class="font-mono text-xs text-fg-faint">{id}</span>
                 {#if rt.compatible}
                   <Badge tone="ok" size="xs" dot label="compatible" />
@@ -190,7 +191,7 @@
           </div>
           <div class="flex flex-wrap gap-1.5">
             {#each rt.manifest?.formats ?? [] as f (f)}<span class="rounded border border-line bg-sunken px-1.5 py-0.5 font-mono text-[11px] text-fg-muted">{f}</span>{/each}
-            <span class="ml-auto text-xs text-fg-faint">{have.length} {have.length === 1 ? 'install' : 'installs'} · {profilesOf(id).length} {profilesOf(id).length === 1 ? 'profile' : 'profiles'}</span>
+            <span class="ml-auto text-xs text-fg-faint">{have.length} {have.length === 1 ? 'install' : 'installs'} · {owned} {owned === 1 ? 'profile' : 'profiles'}</span>
           </div>
           {#if rt.unmet.length}
             <ul class="rounded-md border border-warn/30 bg-warn/8 px-3 py-2 text-xs leading-5 text-warn">
@@ -244,7 +245,6 @@
           <thead><tr><th>runtime</th><th>name</th><th>params</th><th>updated</th><th></th></tr></thead>
           <tbody>
             {#each profiles as p (p.id)}
-              {@const entries = Object.entries(p.params)}
               <tr>
                 <td class="font-medium text-fg">{p.runtimeId}</td>
                 <td>
@@ -255,13 +255,7 @@
                   {#if p.description}<div class="text-[11px] text-fg-faint">{p.description}</div>{/if}
                 </td>
                 <td class="max-w-md">
-                  <div class="flex flex-wrap gap-1">
-                    {#each entries as [k, v] (k)}
-                      <span class="rounded bg-sunken px-1 font-mono text-[10.5px] text-fg-faint" title="{k}={v}"><span>{k}=</span><span class="text-fg-muted">{v.length > 24 ? v.slice(0, 24) + '…' : v}</span></span>
-                    {:else}
-                      <span class="text-[11px] text-fg-faint">manifest defaults</span>
-                    {/each}
-                  </div>
+                  {#if Object.keys(p.params).length}<ParamChips params={p.params} />{:else}<span class="text-[11px] text-fg-faint">manifest defaults</span>{/if}
                 </td>
                 <td class="text-xs text-fg-muted" title={when(p.updatedAt)}>{ago(p.updatedAt, clock.now)}</td>
                 <td class="text-right">
@@ -290,20 +284,12 @@
           <thead><tr><th>runtime</th><th>kind</th><th>version</th><th>path</th><th>facts</th><th>added</th><th></th></tr></thead>
           <tbody>
             {#each installs as i (i.id)}
-              {@const facts = Object.entries(i.facts)}
               <tr>
                 <td class="font-medium text-fg">{i.runtimeId}</td>
                 <td><Badge size="xs" label={enumLabel(InstallKind, i.kind)} tone={i.kind === InstallKind.BUILT ? 'accent' : 'neutral'} /></td>
                 <td class="font-mono text-xs">{i.version || '–'}</td>
                 <td class="max-w-xs truncate font-mono text-xs text-fg-muted" title={i.path}>{i.path}</td>
-                <td class="max-w-sm">
-                  <div class="flex flex-wrap gap-1">
-                    {#each facts.slice(0, 4) as [k, v] (k)}
-                      <span class="rounded bg-sunken px-1 font-mono text-[10.5px] text-fg-faint" title="{k}={v}"><span>{k}=</span><span class="text-fg-muted">{v.length > 24 ? v.slice(0, 24) + '…' : v}</span></span>
-                    {/each}
-                    {#if facts.length > 4}<span class="text-[10.5px] text-fg-faint">+{facts.length - 4}</span>{/if}
-                  </div>
-                </td>
+                <td class="max-w-sm"><ParamChips params={i.facts} max={4} /></td>
                 <td class="text-xs text-fg-muted" title={when(i.createdAt)}>{ago(i.createdAt, clock.now)}</td>
                 <td class="text-right">
                   <Menu items={[{ label: 'Remove install', icon: Trash2, tone: 'bad', onSelect: () => removeInstall(i.id, i.runtimeId) }]} />
@@ -365,5 +351,6 @@
 </Dialog>
 
 <BuildDialog bind:open={buildOpen} recipe={buildRecipe} />
-<ProfileDialog bind:open={profileOpen} {runtimes} editing={profileEditing} runtimeId={profileRuntime} />
+<ProfileDialog bind:open={profileOpen} editing={profileEditing} runtimeId={profileRuntime} />
+<RuntimeDrawer bind:id={runtimeId} />
 <TaskDrawer bind:id={taskId} />

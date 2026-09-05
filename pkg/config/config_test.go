@@ -12,7 +12,7 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nebu.yaml")
 	os.WriteFile(path, []byte("data_dir: "+dir+"/data\nsources:\n  - id: local\n    kind: SOURCE_KIND_LOCAL\n    config:\n      path: /models\n"), 0o644)
-	t.Setenv(EnvAddr, "127.0.0.1:1")
+	t.Setenv(envAddr, "127.0.0.1:1")
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 	if _, err := Load(filepath.Join(dir, "missing.yaml")); err == nil {
 		t.Fatal("explicit missing file should fail")
 	}
-	t.Setenv(EnvConfig, filepath.Join(dir, "also-missing.yaml"))
+	t.Setenv(envConfig, filepath.Join(dir, "also-missing.yaml"))
 	cfg, err = Load("")
 	// Sources stay empty here, every implemented kind is built and config only overrides or adds
 	if err != nil || len(cfg.GetSources()) != 0 || cfg.GetListen() == "" {

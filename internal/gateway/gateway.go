@@ -363,14 +363,7 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request) {
 		},
 		Transport:     &sameHostRedirects{next: g.transport(policy.GetUpstreamTimeoutMs()), body: body},
 		FlushInterval: -1,
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			g.log.Warn("gateway upstream", "model", name, "err", err)
-			if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
-				client.Error(w, http.StatusGatewayTimeout, fmt.Sprintf("model %s did not answer within its timeout", name), "timeout_error")
-				return
-			}
-			client.Error(w, http.StatusBadGateway, "upstream error: "+err.Error(), "server_error")
-		},
+		ErrorHandler:  func(w http.ResponseWriter, _ *http.Request, err error) { g.upstreamError(w, client, name, err) },
 	}
 	r = r.WithContext(ctx)
 	r.Body = io.NopCloser(bytes.NewReader(body))
@@ -429,12 +422,7 @@ func (g *Gateway) translate(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	resp, cancel, err := g.send(r.Context(), target, path, out, chat.Stream, policy)
 	if err != nil {
-		g.log.Warn("gateway upstream", "model", name, "err", err)
-		if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
-			client.Error(w, http.StatusGatewayTimeout, fmt.Sprintf("model %s did not answer within its timeout", name), "timeout_error")
-			return
-		}
-		client.Error(w, http.StatusBadGateway, "upstream error: "+err.Error(), "server_error")
+		g.upstreamError(w, client, name, err)
 		return
 	}
 	defer cancel()
@@ -468,6 +456,11 @@ func (g *Gateway) translate(w http.ResponseWriter, r *http.Request, body []byte,
 		return
 	}
 	res.Model = name
+	g.answer(w, client, chat, res)
+}
+
+// Writes a finished answer in the client's flavor
+func (g *Gateway) answer(w http.ResponseWriter, client Flavor, chat *Chat, res *Result) {
 	answer, err := client.RenderResult(chat, res)
 	if err != nil {
 		client.Error(w, http.StatusInternalServerError, err.Error(), "server_error")
@@ -476,6 +469,16 @@ func (g *Gateway) translate(w http.ResponseWriter, r *http.Request, body []byte,
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(answer)
+}
+
+// Answers a failed exchange with the runtime, a timeout as 504 and anything else as 502
+func (g *Gateway) upstreamError(w http.ResponseWriter, client Flavor, name string, err error) {
+	g.log.Warn("gateway upstream", "model", name, "err", err)
+	if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
+		client.Error(w, http.StatusGatewayTimeout, fmt.Sprintf("model %s did not answer within its timeout", name), "timeout_error")
+		return
+	}
+	client.Error(w, http.StatusBadGateway, "upstream error: "+err.Error(), "server_error")
 }
 
 // Answers a token count from the runtime's tokenizer when it has one, an estimate otherwise
@@ -487,14 +490,7 @@ func (g *Gateway) count(w http.ResponseWriter, r *http.Request, chat *Chat, name
 		n = estimateTokens(chat)
 	}
 	res.In = n
-	answer, err := client.RenderResult(chat, res)
-	if err != nil {
-		client.Error(w, http.StatusInternalServerError, err.Error(), "server_error")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(answer)
+	g.answer(w, client, chat, res)
 }
 
 func (g *Gateway) countUpstream(ctx context.Context, chat *Chat, target *url.URL, policy *v1.Policy, upstream Flavor) (int, error) {

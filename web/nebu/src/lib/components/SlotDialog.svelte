@@ -1,18 +1,16 @@
 <script lang="ts">
   import { api } from '$lib/api';
-  import { live, profileParams } from '$lib/state.svelte';
+  import { live, cached, profileParams } from '$lib/state.svelte';
+  import { createForm } from '$lib/form.svelte';
   import { bytes, parseBytes } from '$lib/format';
-  import { fail, ok } from '$lib/toast.svelte';
   import type { Slot } from '$proto/slot_pb';
-  import type { RuntimeStatus } from '$proto/runtime_pb';
   import { DeviceKind } from '$proto/host_pb';
   import { Check } from '@lucide/svelte';
-  import Dialog from './ui/Dialog.svelte';
+  import FormDialog from './ui/FormDialog.svelte';
   import Field from './ui/Field.svelte';
-  import Button from './ui/Button.svelte';
   import ParamForm from './ParamForm.svelte';
 
-  let { open = $bindable(false), slot = null, onDone }: { open?: boolean; slot?: Slot | null; onDone?: (s: Slot) => void } = $props();
+  let { open = $bindable(false), slot = null }: { open?: boolean; slot?: Slot | null } = $props();
 
   let name = $state('');
   let description = $state('');
@@ -21,13 +19,11 @@
   let runtimeId = $state('');
   let values = $state<Record<string, string>>({});
   let invalid = $state(0);
-  let runtimes = $state<RuntimeStatus[]>([]);
   let maxInFlight = $state('');
   let rps = $state('');
   let burst = $state('');
   let timeout = $state('');
   let upstream = $state('');
-  let saving = $state(false);
 
   // Seconds typed by people, milliseconds on the wire
   const seconds = (ms: number | undefined) => (ms ? String(ms / 1000) : '');
@@ -39,52 +35,52 @@
   const budget = $derived(parseBytes(memory));
   const badBudget = $derived(memory.trim() !== '' && budget === 0n);
   const nameTaken = $derived(!editing && [...live.slots.values()].some((s) => s.name === name.trim()));
-  const manifest = $derived(runtimes.find((r) => r.manifest?.id === runtimeId)?.manifest);
-
-  $effect(() => {
-    if (!open) return;
-    name = slot?.name ?? '';
-    description = slot?.description ?? '';
-    devices = [...(slot?.deviceIds ?? [])];
-    memory = slot?.memoryBytes ? bytes(slot.memoryBytes, 0).replace(' ', '') : '';
-    runtimeId = slot?.runtimeId ?? '';
-    values = { ...(slot?.params ?? {}) };
-    maxInFlight = slot?.policy?.maxInFlight ? String(slot.policy.maxInFlight) : '';
-    rps = slot?.policy?.requestsPerSecond ? String(slot.policy.requestsPerSecond) : '';
-    burst = slot?.policy?.burst ? String(slot.policy.burst) : '';
-    timeout = seconds(slot?.policy?.requestTimeoutMs);
-    upstream = seconds(slot?.policy?.upstreamTimeoutMs);
-    api.runtimes.listRuntimes({}).then((r) => (runtimes = r.runtimes)).catch(() => (runtimes = []));
-  });
+  const manifest = $derived(cached.runtimes.find((r) => r.manifest?.id === runtimeId)?.manifest);
 
   function toggle(id: string) {
     devices = devices.includes(id) ? devices.filter((d) => d !== id) : [...devices, id];
   }
 
-  async function submit() {
-    saving = true;
-    const policy = { maxInFlight: whole(maxInFlight), requestsPerSecond: parseFloat(rps) || 0, burst: whole(burst), requestTimeoutMs: millis(timeout), upstreamTimeoutMs: millis(upstream) };
-    const body = { description, deviceIds: devices, memoryBytes: budget, runtimeId, params: values, policy };
-    try {
-      let out: Slot | undefined;
+  const form = createForm({
+    open: () => open,
+    close: () => (open = false),
+    reset() {
+      name = slot?.name ?? '';
+      description = slot?.description ?? '';
+      devices = [...(slot?.deviceIds ?? [])];
+      memory = slot?.memoryBytes ? bytes(slot.memoryBytes, 0).replace(' ', '') : '';
+      runtimeId = slot?.runtimeId ?? '';
+      values = { ...(slot?.params ?? {}) };
+      maxInFlight = slot?.policy?.maxInFlight ? String(slot.policy.maxInFlight) : '';
+      rps = slot?.policy?.requestsPerSecond ? String(slot.policy.requestsPerSecond) : '';
+      burst = slot?.policy?.burst ? String(slot.policy.burst) : '';
+      timeout = seconds(slot?.policy?.requestTimeoutMs);
+      upstream = seconds(slot?.policy?.upstreamTimeoutMs);
+    },
+    async submit() {
+      const policy = { maxInFlight: whole(maxInFlight), requestsPerSecond: parseFloat(rps) || 0, burst: whole(burst), requestTimeoutMs: millis(timeout), upstreamTimeoutMs: millis(upstream) };
+      const body = { description, deviceIds: devices, memoryBytes: budget, runtimeId, params: values, policy };
       if (slot) {
-        out = (await api.slots.updateSlot({ id: slot.id, ...body })).slot;
-        ok(`Updated ${slot.name}`, 'Limits reach the route now, devices, budget, runtime, and params on the next run');
-      } else {
-        out = (await api.slots.createSlot({ name: name.trim(), ...body })).slot;
-        ok(`Created ${name.trim()}`, 'Drag a stored model onto it to serve');
+        await api.slots.updateSlot({ id: slot.id, ...body });
+        return { title: `Updated ${slot.name}`, detail: 'Limits reach the route now, devices, budget, runtime, and params on the next run' };
       }
-      open = false;
-      if (out) onDone?.(out);
-    } catch (err) {
-      fail(err, slot ? 'Update failed' : 'Create failed');
-    } finally {
-      saving = false;
-    }
-  }
+      await api.slots.createSlot({ name: name.trim(), ...body });
+      return { title: `Created ${name.trim()}`, detail: 'Drag a stored model onto it to serve' };
+    },
+    failTitle: () => (slot ? 'Update failed' : 'Create failed')
+  });
 </script>
 
-<Dialog bind:open title={editing ? `Edit ${slot?.name}` : 'New slot'} description={editing ? 'Limits reach the route at once, the reservation applies the next time something runs in the slot' : 'A slot reserves devices and memory under one public name that never goes away'} size="lg">
+<FormDialog
+  bind:open
+  title={editing ? `Edit ${slot?.name}` : 'New slot'}
+  description={editing ? 'Limits reach the route at once, the reservation applies the next time something runs in the slot' : 'A slot reserves devices and memory under one public name that never goes away'}
+  size="lg"
+  action={editing ? 'Save' : 'Create slot'}
+  saving={form.saving}
+  disabled={!name.trim() || nameTaken || badBudget || invalid > 0}
+  onsubmit={form.run}
+>
   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
     <Field label="Name" for="slot-name" hint="Becomes the model name clients send to the gateway">
       <input id="slot-name" class="input font-mono" bind:value={name} placeholder="main" disabled={editing} aria-invalid={nameTaken} />
@@ -123,7 +119,7 @@
     <Field label="Default runtime" for="slot-runtime" hint="Used when a run does not name one">
       <select id="slot-runtime" class="input" bind:value={runtimeId}>
         <option value="">First compatible runtime</option>
-        {#each runtimes as rt (rt.manifest?.id)}
+        {#each cached.runtimes as rt (rt.manifest?.id)}
           <option value={rt.manifest?.id}>{rt.manifest?.name ?? rt.manifest?.id}{rt.compatible ? '' : ' · incompatible'}</option>
         {/each}
       </select>
@@ -161,9 +157,4 @@
       </div>
     </div>
   </div>
-
-  {#snippet footer()}
-    <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
-    <Button variant="primary" loading={saving} onclick={submit} disabled={!name.trim() || nameTaken || badBudget || invalid > 0}>{editing ? 'Save' : 'Create slot'}</Button>
-  {/snippet}
-</Dialog>
+</FormDialog>

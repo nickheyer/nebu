@@ -1,11 +1,9 @@
 <script lang="ts">
-  import { api } from '$lib/api';
-  import { live, instanceLive, taskFor } from '$lib/state.svelte';
-  import { dnd, droppedModel, acceptsModel } from '$lib/dnd.svelte';
-  import { launchKey } from '$lib/launch';
+  import { live, taskFor } from '$lib/state.svelte';
+  import { dnd, acceptsModel } from '$lib/dnd.svelte';
+  import { dropModelOnSlot, slotOccupied } from '$lib/launch';
+  import { swapSlot, editSlot, evictSlot, deleteSlot } from '$lib/slotActions.svelte';
   import { bytes, enumLabel, count } from '$lib/format';
-  import { fail } from '$lib/toast.svelte';
-  import { confirm } from '$lib/confirm.svelte';
   import { SlotState, type Slot } from '$proto/slot_pb';
   import { InstanceState } from '$proto/instance_pb';
   import { RouteState } from '$proto/gateway_pb';
@@ -14,54 +12,21 @@
   import Menu from './ui/Menu.svelte';
   import TaskChip from './TaskChip.svelte';
 
-  let {
-    slot,
-    onOpen,
-    onSwap,
-    onEdit,
-    onDelete
-  }: { slot: Slot; onOpen?: (slot: Slot) => void; onSwap?: (slot: Slot) => void; onEdit?: (slot: Slot) => void; onDelete?: (slot: Slot) => void } = $props();
+  let { slot, onOpen }: { slot: Slot; onOpen: (slot: Slot) => void } = $props();
 
   let over = $state(false);
   const instance = $derived(slot.instanceId ? live.instances.get(slot.instanceId) : undefined);
   const route = $derived(live.routes.get(slot.name));
-  const occupied = $derived(instanceLive(instance));
+  const occupied = $derived(slotOccupied(slot.id));
   const swapTask = $derived(taskFor('swap', { slot: slot.id }));
   const armed = $derived(!!dnd.model);
   const devices = $derived(slot.deviceIds.length ? slot.deviceIds.map((id) => live.host?.devices.find((d) => d.id === id)?.name ?? id) : []);
-
-  async function drop(ev: DragEvent) {
-    ev.preventDefault();
-    over = false;
-    const key = droppedModel(ev);
-    if (!key) return;
-    if (occupied) {
-      const m = live.models.get(key);
-      const yes = await confirm({
-        title: `Swap ${slot.name}?`,
-        message: `${slot.name} is serving ${slot.request?.repo ?? 'a model'}. It will switch to ${m?.repo ?? key} ${m?.group ?? ''} and the old instance will drain and stop. The public name keeps answering throughout.`,
-        action: 'Swap'
-      });
-      if (!yes) return;
-    }
-    await launchKey(key, slot.id);
-  }
-
-  async function evict() {
-    const yes = await confirm({ title: `Evict ${slot.name}?`, message: 'The instance stops. The slot and its public name stay, answering 503 until something serves it again.', action: 'Evict', tone: 'bad' });
-    if (!yes) return;
-    try {
-      await api.slots.evictSlot({ id: slot.id });
-    } catch (err) {
-      fail(err, 'Evict failed');
-    }
-  }
 </script>
 
 <div
   role="group"
   aria-label="slot {slot.name}"
-  class="drop-target panel group relative flex flex-col gap-3 p-4 {onOpen ? 'hover:border-line-strong' : ''}"
+  class="drop-target panel group relative flex flex-col gap-3 p-4 hover:border-line-strong"
   data-armed={armed}
   data-over={over}
   ondragover={(e) => {
@@ -70,30 +35,29 @@
     over = true;
   }}
   ondragleave={() => (over = false)}
-  ondrop={drop}
+  ondrop={(e) => {
+    over = false;
+    dropModelOnSlot(e, slot.id);
+  }}
 >
   <div class="flex items-start gap-2">
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-2">
-        {#if onOpen}
-          <button class="truncate text-left text-sm font-semibold text-fg before:absolute before:inset-0 before:rounded-xl focus-visible:outline-none focus-visible:before:ring-2 focus-visible:before:ring-accent/60" onclick={() => onOpen?.(slot)}>{slot.name}</button>
-        {:else}
-          <span class="truncate text-sm font-semibold text-fg">{slot.name}</span>
-        {/if}
+        <button class="truncate text-left text-sm font-semibold text-fg before:absolute before:inset-0 before:rounded-xl focus-visible:outline-none focus-visible:before:ring-2 focus-visible:before:ring-accent/60" onclick={() => onOpen(slot)}>{slot.name}</button>
         <StateBadge values={SlotState} value={slot.state} size="xs" />
       </div>
       {#if slot.description}<div class="mt-0.5 truncate text-xs text-fg-faint">{slot.description}</div>{/if}
     </div>
     <div class="relative z-10">
-    <Menu
-      items={[
-        { label: occupied ? 'Swap model' : 'Run a model', icon: ArrowLeftRight, onSelect: () => onSwap?.(slot) },
-        { label: 'Edit slot', icon: Pencil, onSelect: () => onEdit?.(slot) },
-        { label: 'Evict occupant', icon: LogOut, onSelect: evict, disabled: !occupied },
-        { label: '', separator: true },
-        { label: 'Delete slot', icon: Trash2, tone: 'bad', onSelect: () => onDelete?.(slot) }
-      ]}
-    />
+      <Menu
+        items={[
+          { label: occupied ? 'Swap model' : 'Run a model', icon: ArrowLeftRight, onSelect: () => swapSlot(slot) },
+          { label: 'Edit slot', icon: Pencil, onSelect: () => editSlot(slot) },
+          { label: 'Evict occupant', icon: LogOut, onSelect: () => evictSlot(slot), disabled: !occupied },
+          { label: '', separator: true },
+          { label: 'Delete slot', icon: Trash2, tone: 'bad', onSelect: () => deleteSlot(slot) }
+        ]}
+      />
     </div>
   </div>
 
@@ -110,7 +74,7 @@
       <div class="mt-1 flex items-center justify-between gap-2 pl-[21px] text-[11.5px]">
         <span class="truncate font-mono text-fg-muted">{slot.request.group}</span>
         {#if instance}
-          <span class="shrink-0 {instanceLive(instance) ? 'text-fg-muted' : 'text-fg-faint'}">
+          <span class="shrink-0 {occupied ? 'text-fg-muted' : 'text-fg-faint'}">
             {enumLabel(InstanceState, instance.state)}{instance.runtimeId ? ' · ' + instance.runtimeId : ''}
           </span>
         {/if}

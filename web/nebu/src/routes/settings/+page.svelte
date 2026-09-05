@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { Code, ConnectError } from '@connectrpc/connect';
   import { api, baseUrl, setToken, token, message } from '$lib/api';
-  import { connect, live, desktopNotify, setDesktopNotify } from '$lib/state.svelte';
+  import { connect, live, cached, desktopNotify, setDesktopNotify } from '$lib/state.svelte';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { sourceLabel } from '$lib/catalog';
@@ -16,24 +17,32 @@
   import Empty from '$lib/components/ui/Empty.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
   import Skeleton from '$lib/components/ui/Skeleton.svelte';
+  import CheckCard from '$lib/components/ui/CheckCard.svelte';
   import SourceDialog from '$lib/components/SourceDialog.svelte';
 
   let value = $state(token());
   let show = $state(false);
   let notify = $state(desktopNotify());
+  let testing = $state(false);
+  let providers = $state<Provider[]>([]);
+  let dialogOpen = $state(false);
+  let editing = $state<SourceStatus | null>(null);
+
+  const statuses = $derived(cached.sources);
+
+  // Providers are compiled in, so one read per visit is enough
+  onMount(() => {
+    api.sources
+      .listProviders({})
+      .then((p) => (providers = p.providers))
+      .catch((err) => fail(err, 'Could not list providers'));
+  });
 
   async function toggleNotify(on: boolean) {
     notify = await setDesktopNotify(on);
     if (on && !notify) fail(new Error('the browser refused notification permission'), 'Desktop notifications stay off');
     else ok(notify ? 'Desktop notifications on' : 'Desktop notifications off', notify ? 'New findings and wanted models reach you even on another tab' : undefined);
   }
-  let testing = $state(false);
-  let statuses = $state<SourceStatus[]>([]);
-  let providers = $state<Provider[]>([]);
-  let loaded = $state(false);
-  let sourcesError = $state('');
-  let dialogOpen = $state(false);
-  let editing = $state<SourceStatus | null>(null);
 
   function save() {
     setToken(value.trim());
@@ -52,26 +61,6 @@
       testing = false;
     }
   }
-
-  async function refresh() {
-    try {
-      const [s, p] = await Promise.all([api.sources.listSources({}), api.sources.listProviders({})]);
-      statuses = s.sources;
-      providers = p.providers;
-      sourcesError = '';
-    } catch (err) {
-      sourcesError = message(err);
-    } finally {
-      loaded = true;
-    }
-  }
-
-  // Every source event, from this page or elsewhere, refreshes the list with its capabilities
-  $effect(() => {
-    void [...live.sources.keys()];
-    void [...live.sources.values()].map((s) => s.updatedAt?.seconds);
-    refresh();
-  });
 
   function add() {
     editing = null;
@@ -133,10 +122,10 @@
     {#snippet actions()}
       <Button size="sm" variant="primary" icon={Plus} onclick={add} disabled={!providers.length}>Add source</Button>
     {/snippet}
-    {#if !loaded}
+    {#if !cached.loaded}
       <Skeleton rows={4} class="p-4" />
-    {:else if sourcesError}
-      <Empty compact icon={Compass} title="Sources unavailable" description={sourcesError} />
+    {:else if cached.error && statuses.length === 0}
+      <Empty compact icon={Compass} title="Sources unavailable" description={cached.error} />
     {:else if statuses.length === 0}
       <Empty compact icon={Compass} title="No sources" description="Add one to start browsing a catalog.">
         <Button size="sm" variant="primary" icon={Plus} onclick={add}>Add source</Button>
@@ -235,14 +224,8 @@
     </Panel>
   </div>
   <Panel title="Notifications" description="Findings always appear as toasts while a page is open, and on the monitor page until acknowledged">
-    <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-line bg-sunken px-3 py-2.5">
-      <input type="checkbox" class="mt-0.5 accent-accent" checked={notify} onchange={async (e) => { const box = e.currentTarget as HTMLInputElement; await toggleNotify(box.checked); box.checked = notify; }} />
-      <span class="text-sm">
-        <span class="font-medium text-fg">Desktop notifications in this browser</span>
-        <span class="block text-xs leading-5 text-fg-muted">A system notification for every new finding and every wanted model that turns up. Webhooks for other systems are set in the daemon config under notify.</span>
-      </span>
-    </label>
+    <CheckCard bind:checked={notify} onchange={toggleNotify} title="Desktop notifications in this browser" description="A system notification for every new finding and every wanted model that turns up. Webhooks for other systems are set in the daemon config under notify." />
   </Panel>
 </div>
 
-<SourceDialog bind:open={dialogOpen} {providers} {editing} onDone={refresh} />
+<SourceDialog bind:open={dialogOpen} {providers} {editing} />

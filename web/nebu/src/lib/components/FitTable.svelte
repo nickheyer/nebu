@@ -1,13 +1,12 @@
 <script lang="ts">
-  import { bytes, ctx, verdictTone } from '$lib/format';
+  import { bytes, ctx, deltaBytes, verdictTone, verdictWord } from '$lib/format';
   import { PoolKind } from '$proto/host_pb';
   import type { FitRow, MemoryPlan } from '$proto/estimate_pb';
-  import { FitVerdict } from '$proto/estimate_pb';
   import Tabs from './ui/Tabs.svelte';
   import Tip from './ui/Tip.svelte';
   import PlanView from './PlanView.svelte';
 
-  let { rows, onPick }: { rows: FitRow[]; onPick?: (row: FitRow) => void } = $props();
+  let { rows }: { rows: FitRow[] } = $props();
 
   const runtimes = $derived([...new Set(rows.map((r) => r.runtimeId))]);
   let runtime = $state('');
@@ -25,19 +24,6 @@
     let used = 0n;
     for (const p of plan.pools) if (p.kind === PoolKind.DEVICE || p.kind === PoolKind.UNIFIED) used += p.usedBytes;
     return used ? bytes(used, 0) : '';
-  }
-  // Short words for a cell, the legend below spells them out
-  function word(v: FitVerdict): string {
-    switch (v) {
-      case FitVerdict.FITS:
-        return 'Fits';
-      case FitVerdict.PARTIAL:
-        return 'Partly';
-      case FitVerdict.NO:
-        return 'Too big';
-      default:
-        return 'Unknown';
-    }
   }
   const cellTone: Record<string, string> = {
     ok: 'border-ok/30 bg-ok/10 text-ok hover:bg-ok/20',
@@ -83,14 +69,11 @@
                   <Tip>
                     <button
                       class="flex h-10 w-full min-w-[4.5rem] flex-col items-center justify-center rounded-md border px-2 transition-colors {cellTone[t] ?? cellTone.neutral} {selected === r ? 'ring-2 ring-accent/60' : ''}"
-                      onclick={() => {
-                        selected = selected === r ? null : r;
-                        onPick?.(r);
-                      }}
+                      onclick={() => (selected = selected === r ? null : r)}
                     >
-                      <span class="font-semibold">{word(r.plan.verdict)}</span>
+                      <span class="font-semibold">{verdictWord(r.plan.verdict)}</span>
                       {#if r.free && r.free.verdict !== r.plan.verdict}
-                        <span class="text-[10px] leading-3 {verdictTone(r.free.verdict) === 'bad' ? 'text-bad' : verdictTone(r.free.verdict) === 'warn' ? 'text-warn' : ''}">now {word(r.free.verdict).toLowerCase()}</span>
+                        <span class="text-[10px] leading-3 {verdictTone(r.free.verdict) === 'bad' ? 'text-bad' : verdictTone(r.free.verdict) === 'warn' ? 'text-warn' : ''}">now {verdictWord(r.free.verdict).toLowerCase()}</span>
                       {:else if device(r.plan)}<span class="text-[10.5px] tabular-nums opacity-80">{device(r.plan)}</span>{/if}
                     </button>
                     {#snippet content()}
@@ -99,10 +82,10 @@
                         {#each r.plan?.pools ?? [] as p (p.poolId)}
                           <div><span class="font-mono text-fg-muted">{p.poolId}</span> {bytes(p.usedBytes)} of {bytes(p.capacityBytes)}</div>
                         {/each}
-                        <div class="text-fg-muted">weights {bytes(r.plan?.weightsBytes)}, cache {bytes(r.plan?.cacheBytes)}, overhead {bytes(r.plan?.overheadBytes)}</div>
+                        <div class="text-fg-muted">weights {bytes(r.plan?.weightsBytes)}, cache {bytes(r.plan?.cacheBytes)}, overhead {bytes(r.plan?.overheadBytes)}{#if r.plan?.overheadDelta}<span> (learned {deltaBytes(r.plan.overheadDelta)})</span>{/if}</div>
                         {#if r.plan?.detail}<div class="mt-1 text-fg-faint">{r.plan.detail}</div>{/if}
                         {#if r.free}
-                          <div class="mt-2 mb-1 text-fg-muted">Against what is free right now: <span class="font-medium text-fg">{word(r.free.verdict)}</span></div>
+                          <div class="mt-2 mb-1 text-fg-muted">Against what is free right now: <span class="font-medium text-fg">{verdictWord(r.free.verdict)}</span></div>
                           {#each r.free.pools as p (p.poolId)}
                             <div><span class="font-mono text-fg-muted">{p.poolId}</span> {bytes(p.usedBytes)} of {bytes(p.capacityBytes)} free</div>
                           {/each}

@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"path"
 	"regexp"
 	"strconv"
@@ -79,25 +78,25 @@ func (r *reader) readDir(ctx context.Context, open formats.Opener, group *format
 		base := path.Base(a.GetPath())
 		switch {
 		case configNames[base]:
-			data, err := readAll(ctx, open, a)
-			if err != nil {
-				return nil, err
+			data, err := formats.ReadAll(ctx, open, a, maxSmall)
+			if err == nil {
+				err = flattenYAML(data, raw.Metadata)
 			}
-			if err := flattenYAML(data, raw.Metadata); err != nil {
+			if err != nil {
 				return nil, fmt.Errorf("%s: %w", a.GetPath(), err)
 			}
 		case base == "metadata.json":
-			data, err := readAll(ctx, open, a)
-			if err != nil {
-				return nil, err
+			data, err := formats.ReadAll(ctx, open, a, maxSmall)
+			if err == nil {
+				err = eval.FlattenJSON(data, "weights", raw.Metadata, nil)
 			}
-			if err := flattenJSON(data, "weights", raw.Metadata); err != nil {
+			if err != nil {
 				return nil, fmt.Errorf("%s: %w", a.GetPath(), err)
 			}
 		case base == metaFile:
-			data, err := readAll(ctx, open, a)
+			data, err := formats.ReadAll(ctx, open, a, maxSmall)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%s: %w", a.GetPath(), err)
 			}
 			ts, err := distTensors(data)
 			if err != nil {
@@ -157,7 +156,7 @@ func (r *reader) readTar(ctx context.Context, open formats.Opener, a *v1.Artifac
 			if err != nil {
 				return nil, err
 			}
-			if err := flattenJSON(data, "weights", raw.Metadata); err != nil {
+			if err := eval.FlattenJSON(data, "weights", raw.Metadata, nil); err != nil {
 				return nil, fmt.Errorf("%s: %w", name, err)
 			}
 		case base == "model_weights.ckpt":
@@ -199,7 +198,7 @@ func (r *reader) readTar(ctx context.Context, open formats.Opener, a *v1.Artifac
 			return nil, fmt.Errorf("%s: %w", ckpt.name, err)
 		}
 		for k, v := range ck.Metadata {
-			if _, exists := raw.Metadata[k]; !exists {
+			if _, exists := raw.Metadata["checkpoint."+k]; !exists {
 				raw.Metadata["checkpoint."+k] = v
 			}
 		}
@@ -277,15 +276,6 @@ func expandLayers(tensors []shaped, layers int) []*v1.TensorInfo {
 	return out
 }
 
-func newTensor(name, dtype string, shape []uint64) shaped {
-	elements := uint64(1)
-	for _, d := range shape {
-		elements *= d
-	}
-	label, width, _ := torch.Dtype(dtype)
-	return shaped{info: &v1.TensorInfo{Name: name, Dtype: label, Elements: elements, Bytes: uint64(math.Ceil(float64(elements) * width))}, shape: shape}
-}
-
 // Reads tensors out of a torch distributed checkpoint's .metadata pickle
 func distTensors(data []byte) ([]shaped, error) {
 	root, err := pickle.Decode(bytes.NewReader(data))
@@ -331,7 +321,7 @@ func distTensors(data []byte) ([]shaped, error) {
 			shape = append(shape, uint64(n))
 		}
 		props, _ := st.Get("properties")
-		out = append(out, newTensor(name, propertiesDtype(props), shape))
+		out = append(out, shaped{info: formats.Tensor(name, propertiesDtype(props), shape), shape: shape})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("metadata lists no tensors")
@@ -358,7 +348,7 @@ func propertiesDtype(v any) string {
 	for _, candidates := range [][]any{stateItems(obj.State), obj.Args} {
 		for _, c := range candidates {
 			if g, ok := c.(pickle.Global); ok {
-				if _, _, known := torch.Dtype(g.Name); known {
+				if _, _, known := formats.Dtype(g.Name); known {
 					return g.Name
 				}
 			}
@@ -396,7 +386,7 @@ func zarrTensor(file string, data []byte) (shaped, error) {
 		return shaped{}, err
 	}
 	name := path.Base(path.Dir(file))
-	return newTensor(name, arr.Dtype, arr.Shape), nil
+	return shaped{info: formats.Tensor(name, arr.Dtype, arr.Shape), shape: arr.Shape}, nil
 }
 
 func flattenYAML(data []byte, into map[string]string) error {
@@ -404,18 +394,7 @@ func flattenYAML(data []byte, into map[string]string) error {
 	if err != nil {
 		return err
 	}
-	return flattenJSON(js, "", into)
-}
-
-func flattenJSON(data []byte, prefix string, into map[string]string) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var root any
-	if err := dec.Decode(&root); err != nil {
-		return err
-	}
-	eval.Flatten(prefix, root, into, nil)
-	return nil
+	return eval.FlattenJSON(js, "", into, nil)
 }
 
 func firstOf(m map[string]string, keys ...string) string {
@@ -425,20 +404,4 @@ func firstOf(m map[string]string, keys ...string) string {
 		}
 	}
 	return ""
-}
-
-func readAll(ctx context.Context, open formats.Opener, a *v1.Artifact) ([]byte, error) {
-	if a.GetSizeBytes() > maxSmall {
-		return nil, fmt.Errorf("%s: %d bytes is too large to read whole", a.GetPath(), a.GetSizeBytes())
-	}
-	blob, err := open(ctx, a)
-	if err != nil {
-		return nil, err
-	}
-	defer blob.Close()
-	buf := make([]byte, blob.Size())
-	if _, err := blob.ReadAt(buf, 0); err != nil && err != io.EOF {
-		return nil, err
-	}
-	return buf, nil
 }

@@ -29,7 +29,7 @@ const (
 )
 
 // Container CLIs tried in order when config names none
-var DefaultCLIs = []string{"podman", "docker", "nerdctl"}
+var defaultCLIs = []string{"podman", "docker", "nerdctl"}
 
 var (
 	// Returned when a recipe id is not known
@@ -131,13 +131,6 @@ func optionalTemplate(src string) (*eval.Template, error) {
 	return eval.CompileTemplate(src)
 }
 
-func optionalExpr(src string) (*eval.Expr, error) {
-	if strings.TrimSpace(src) == "" {
-		return nil, nil
-	}
-	return eval.Compile(src)
-}
-
 func templateList(srcs []string) ([]*eval.Template, error) {
 	out := make([]*eval.Template, 0, len(srcs))
 	for _, s := range srcs {
@@ -188,7 +181,7 @@ func compile(s *v1.Recipe) (*Recipe, error) {
 		if p.GetContent() == "" && p.GetFile() == "" && p.GetUrl() == "" {
 			return nil, fmt.Errorf("patch %s: content, file, or url required", p.GetId())
 		}
-		when, err := optionalExpr(p.GetWhen())
+		when, err := eval.CompileOptional(p.GetWhen())
 		if err != nil {
 			return nil, fmt.Errorf("patch %s: %w", p.GetId(), err)
 		}
@@ -198,7 +191,7 @@ func compile(s *v1.Recipe) (*Recipe, error) {
 		if v.GetId() == "" {
 			return nil, fmt.Errorf("variant without id")
 		}
-		when, err := optionalExpr(v.GetWhen())
+		when, err := eval.CompileOptional(v.GetWhen())
 		if err != nil {
 			return nil, fmt.Errorf("variant %s: %w", v.GetId(), err)
 		}
@@ -220,7 +213,7 @@ func compile(s *v1.Recipe) (*Recipe, error) {
 		if len(st.GetCommand()) == 0 {
 			return nil, fmt.Errorf("%s: command required", name)
 		}
-		when, err := optionalExpr(st.GetWhen())
+		when, err := eval.CompileOptional(st.GetWhen())
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
@@ -318,7 +311,7 @@ func (rc *Recipe) Select(profile *v1.HostProfile, opts Options) (*Selection, err
 		sel.Ref = Latest
 	}
 	sel.overrides = opts.Vars
-	if err := sel.RenderVars(); err != nil {
+	if err := sel.renderVars(); err != nil {
 		return nil, err
 	}
 	var err error
@@ -340,7 +333,7 @@ func (rc *Recipe) Select(profile *v1.HostProfile, opts Options) (*Selection, err
 			clis = opts.Defaults.GetCli()
 		}
 		if len(clis) == 0 {
-			clis = DefaultCLIs
+			clis = defaultCLIs
 		}
 		cli, ok := sandbox.Detect(clis)
 		if !ok {
@@ -367,20 +360,20 @@ func (rc *Recipe) Select(profile *v1.HostProfile, opts Options) (*Selection, err
 	return sel, nil
 }
 
-// Renders recipe vars then variant vars against the ref, overrides seeded first so templates see them
-func (s *Selection) RenderVars() error {
+// Renders recipe vars then variant vars against the ref, overrides seeded first
+func (s *Selection) renderVars() error {
 	s.Vars = map[string]string{}
 	for k, v := range s.overrides {
 		s.Vars[k] = v
 	}
-	if err := s.renderVars(s.Recipe.vars); err != nil {
+	if err := s.renderVarMap(s.Recipe.vars); err != nil {
 		return err
 	}
 	for _, v := range s.Recipe.variants {
 		if v.spec.GetId() != s.Variant.GetId() {
 			continue
 		}
-		if err := s.renderVars(v.vars); err != nil {
+		if err := s.renderVarMap(v.vars); err != nil {
 			return fmt.Errorf("variant %s: %w", v.spec.GetId(), err)
 		}
 		if v.image != nil {
@@ -394,8 +387,8 @@ func (s *Selection) RenderVars() error {
 	return nil
 }
 
-// Renders vars in key order so later ones reference earlier, leaving overridden keys alone
-func (s *Selection) renderVars(ts map[string]*eval.Template) error {
+// Renders vars in key order so later ones reference earlier, skipping overrides
+func (s *Selection) renderVarMap(ts map[string]*eval.Template) error {
 	keys := make([]string, 0, len(ts))
 	for k := range ts {
 		keys = append(keys, k)
@@ -434,12 +427,9 @@ func (s *Selection) pickVariant(want string) error {
 	}
 	var first *v1.BuildVariant
 	for _, v := range rc.variants {
-		ok := true
-		if v.when != nil {
-			var err error
-			if ok, err = v.when.Bool(s.env); err != nil {
-				return fmt.Errorf("variant %s: %w", v.spec.GetId(), err)
-			}
+		ok, err := v.when.Holds(s.env)
+		if err != nil {
+			return fmt.Errorf("variant %s: %w", v.spec.GetId(), err)
 		}
 		if !ok {
 			continue

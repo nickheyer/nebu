@@ -139,9 +139,7 @@ func (openai) ParseRequest(path string, body []byte) (*Chat, error) {
 		}
 		c.Messages = append(c.Messages, msg)
 	}
-	for _, t := range req.Tools {
-		c.Tools = append(c.Tools, Tool{Name: t.Function.Name, Description: t.Function.Description, Schema: t.Function.Parameters})
-	}
+	c.Tools = toolsFromOAI(req.Tools)
 	if len(req.ToolChoice) > 0 {
 		var s string
 		if json.Unmarshal(req.ToolChoice, &s) == nil {
@@ -200,18 +198,10 @@ func (openai) RenderRequest(c *Chat) (string, []byte, error) {
 			}
 			msg.Content, _ = json.Marshal(parts)
 		}
-		for _, t := range m.ToolCalls {
-			tc := oaiToolCall{ID: t.ID, Type: "function"}
-			tc.Function.Name, tc.Function.Arguments = t.Name, t.Args
-			msg.ToolCalls = append(msg.ToolCalls, tc)
-		}
+		msg.ToolCalls = oaiCalls(m.ToolCalls)
 		req.Messages = append(req.Messages, msg)
 	}
-	for _, t := range c.Tools {
-		tool := oaiTool{Type: "function"}
-		tool.Function.Name, tool.Function.Description, tool.Function.Parameters = t.Name, t.Description, t.Schema
-		req.Tools = append(req.Tools, tool)
-	}
+	req.Tools = toolsToOAI(c.Tools)
 	switch c.ToolChoice {
 	case "":
 	case "auto", "none", "required":
@@ -298,24 +288,15 @@ func (openai) RenderResult(c *Chat, r *Result) ([]byte, error) {
 		}
 		return json.Marshal(map[string]any{"object": "list", "data": data, "model": r.Model, "usage": oaiUsage{PromptTokens: r.In, TotalTokens: r.In}})
 	}
-	id := r.ID
-	if id == "" {
-		id = newID("chatcmpl")
-	}
-	resp := oaiResponse{ID: id, Object: "chat.completion", Created: time.Now().Unix(), Model: r.Model, Usage: &oaiUsage{PromptTokens: r.In, CompletionTokens: r.Out, TotalTokens: r.In + r.Out}}
+	resp := oaiResponse{ID: resultID(r, "chatcmpl"), Object: "chat.completion", Created: time.Now().Unix(), Model: r.Model, Usage: &oaiUsage{PromptTokens: r.In, CompletionTokens: r.Out, TotalTokens: r.In + r.Out}}
 	reason := oaiReason(r.Stop)
 	if c.Kind == "generate" {
 		resp.Object = "text_completion"
 		resp.Choices = []oaiChoice{{Text: r.Text, FinishReason: &reason}}
 		return json.Marshal(resp)
 	}
-	msg := &oaiMessage{Role: "assistant"}
+	msg := &oaiMessage{Role: "assistant", ToolCalls: oaiCalls(r.ToolCalls)}
 	msg.Content, _ = json.Marshal(r.Text)
-	for _, t := range r.ToolCalls {
-		tc := oaiToolCall{ID: t.ID, Type: "function"}
-		tc.Function.Name, tc.Function.Arguments = t.Name, t.Args
-		msg.ToolCalls = append(msg.ToolCalls, tc)
-	}
 	resp.Choices = []oaiChoice{{Message: msg, FinishReason: &reason}}
 	return json.Marshal(resp)
 }
@@ -458,15 +439,7 @@ func (s *oaiStream) Close() error {
 	return err
 }
 
-func (openai) ErrorMessage(body []byte) string {
-	var e struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	json.Unmarshal(body, &e)
-	return e.Error.Message
-}
+func (openai) ErrorMessage(body []byte) string { return errorField(body) }
 
 func (openai) Error(w http.ResponseWriter, status int, message, kind string) {
 	writeJSON(w, status, map[string]any{"error": map[string]any{"message": message, "type": kind, "code": kind}})

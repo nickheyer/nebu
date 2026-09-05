@@ -11,7 +11,6 @@
     size = 'md',
     loading = false,
     icon,
-    iconRight,
     href,
     children,
     class: cls = '',
@@ -22,7 +21,6 @@
     size?: Size;
     loading?: boolean;
     icon?: Component<any>;
-    iconRight?: Component<any>;
     href?: string;
     children?: Snippet;
     class?: string;
@@ -55,10 +53,6 @@
     <Icon size={iconSize[size]} strokeWidth={2} />
   {/if}
   {@render children?.()}
-  {#if iconRight}
-    {@const Icon = iconRight}
-    <Icon size={iconSize[size]} strokeWidth={2} />
-  {/if}
 {/snippet}
 
 {#if href}

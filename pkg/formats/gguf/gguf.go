@@ -41,6 +41,54 @@ const (
 	typeFloat64
 )
 
+const (
+	firstChunk = 1 << 20
+	maxChunk   = 32 << 20
+)
+
+// Reads a blob sequentially in doubling chunks, counting bytes handed out
+type chunkReader struct {
+	ra    io.ReaderAt
+	size  int64
+	off   int64
+	chunk int64
+	buf   []byte
+	pos   int
+	n     int64
+}
+
+func newChunkReader(ra io.ReaderAt, size int64) *chunkReader {
+	return &chunkReader{ra: ra, size: size, chunk: firstChunk}
+}
+
+func (c *chunkReader) Read(p []byte) (int, error) {
+	if c.pos >= len(c.buf) {
+		if c.off >= c.size {
+			return 0, io.EOF
+		}
+		n := min(c.chunk, c.size-c.off)
+		if int64(cap(c.buf)) < n {
+			c.buf = make([]byte, n)
+		}
+		c.buf = c.buf[:n]
+		read, err := c.ra.ReadAt(c.buf, c.off)
+		if err != nil && err != io.EOF {
+			return 0, err
+		}
+		if read == 0 {
+			return 0, io.EOF
+		}
+		c.buf = c.buf[:read]
+		c.off += int64(read)
+		c.pos = 0
+		c.chunk = min(c.chunk*2, maxChunk)
+	}
+	n := copy(p, c.buf[c.pos:])
+	c.pos += n
+	c.n += int64(n)
+	return n, nil
+}
+
 type reader struct {
 	dtypes map[string]string
 }
@@ -51,33 +99,7 @@ func New(spec *v1.FormatSpec) (formats.Reader, error) {
 }
 
 func (r *reader) Read(ctx context.Context, open formats.Opener, group *formats.Group) (*v1.RawModel, error) {
-	raw := &v1.RawModel{FormatId: group.FormatID, Group: group.Name, Metadata: map[string]string{}}
-	for _, a := range group.Weights {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		blob, err := open(ctx, a)
-		if err != nil {
-			return nil, err
-		}
-		h, err := r.parse(blob, blob.Size())
-		blob.Close()
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", a.GetPath(), err)
-		}
-		for k, v := range h.metadata {
-			if _, exists := raw.Metadata[k]; !exists {
-				raw.Metadata[k] = v
-			}
-		}
-		raw.Tensors = append(raw.Tensors, h.tensors...)
-	}
-	return raw, nil
-}
-
-type header struct {
-	metadata map[string]string
-	tensors  []*v1.TensorInfo
+	return formats.EachWeight(ctx, open, group, r.parse)
 }
 
 type tensorEntry struct {
@@ -85,116 +107,104 @@ type tensorEntry struct {
 	offset uint64
 }
 
-type countingReader struct {
-	r io.Reader
-	n int64
-}
-
-func (c *countingReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	c.n += int64(n)
-	return n, err
-}
-
-func (r *reader) parse(ra io.ReaderAt, size int64) (*header, error) {
-	cr := &countingReader{r: formats.NewChunkReader(ra, size)}
+func (r *reader) parse(ra io.ReaderAt, size int64) (map[string]string, []*v1.TensorInfo, error) {
+	cr := newChunkReader(ra, size)
 	var m [4]byte
 	if _, err := io.ReadFull(cr, m[:]); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if string(m[:]) != magic {
-		return nil, fmt.Errorf("not a GGUF file")
+		return nil, nil, fmt.Errorf("not a GGUF file")
 	}
 	version, err := readU32(cr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if version < minVersion {
-		return nil, fmt.Errorf("unsupported GGUF version %d", version)
+		return nil, nil, fmt.Errorf("unsupported GGUF version %d", version)
 	}
 	nTensors, err := readU64(cr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	nKV, err := readU64(cr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if nTensors > maxCount || nKV > maxCount {
-		return nil, fmt.Errorf("implausible header counts")
+		return nil, nil, fmt.Errorf("implausible header counts")
 	}
-	h := &header{metadata: map[string]string{}}
+	metadata := map[string]string{}
 	for i := uint64(0); i < nKV; i++ {
 		key, err := readString(cr)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		typ, err := readU32(cr)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if err := readValue(cr, typ, key, h.metadata); err != nil {
-			return nil, fmt.Errorf("key %s: %w", key, err)
+		if err := readValue(cr, typ, key, metadata); err != nil {
+			return nil, nil, fmt.Errorf("key %s: %w", key, err)
 		}
 	}
 	entries := make([]tensorEntry, 0, nTensors)
 	for i := uint64(0); i < nTensors; i++ {
 		name, err := readString(cr)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		nDims, err := readU32(cr)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if nDims > 8 {
-			return nil, fmt.Errorf("tensor %s: %d dims", name, nDims)
+			return nil, nil, fmt.Errorf("tensor %s: %d dims", name, nDims)
 		}
-		elements := uint64(1)
-		for d := uint32(0); d < nDims; d++ {
-			dim, err := readU64(cr)
-			if err != nil {
-				return nil, err
+		shape := make([]uint64, nDims)
+		for d := range shape {
+			if shape[d], err = readU64(cr); err != nil {
+				return nil, nil, err
 			}
-			elements *= dim
 		}
 		typ, err := readU32(cr)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		offset, err := readU64(cr)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		entries = append(entries, tensorEntry{
-			info:   &v1.TensorInfo{Name: name, Dtype: r.dtype(typ), Elements: elements},
+			info:   &v1.TensorInfo{Name: name, Dtype: r.dtype(typ), Elements: formats.Elements(shape)},
 			offset: offset,
 		})
 	}
 	alignment := uint64(defaultAlignment)
-	if s, ok := h.metadata[alignmentKey]; ok {
+	if s, ok := metadata[alignmentKey]; ok {
 		if a, err := strconv.ParseUint(s, 10, 64); err == nil && a > 0 {
 			alignment = a
 		}
 	}
 	dataStart := (uint64(cr.n) + alignment - 1) / alignment * alignment
-	dataSize := uint64(size) - dataStart
 	if uint64(size) < dataStart {
-		return nil, fmt.Errorf("file smaller than header")
+		return nil, nil, fmt.Errorf("file smaller than header")
 	}
+	dataSize := uint64(size) - dataStart
 	sort.Slice(entries, func(i, j int) bool { return entries[i].offset < entries[j].offset })
+	tensors := make([]*v1.TensorInfo, 0, len(entries))
 	for i, e := range entries {
 		end := dataSize
 		if i+1 < len(entries) {
 			end = entries[i+1].offset
 		}
 		if end < e.offset {
-			return nil, fmt.Errorf("tensor %s: offset beyond data", e.info.Name)
+			return nil, nil, fmt.Errorf("tensor %s: offset beyond data", e.info.Name)
 		}
 		e.info.Bytes = end - e.offset
-		h.tensors = append(h.tensors, e.info)
+		tensors = append(tensors, e.info)
 	}
-	return h, nil
+	return metadata, tensors, nil
 }
 
 func (r *reader) dtype(typ uint32) string {

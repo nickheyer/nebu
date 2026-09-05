@@ -3,18 +3,27 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"slices"
+	"strings"
 	"syscall"
+	"text/tabwriter"
 
 	"github.com/nickheyer/nebu/internal/daemon"
 	"github.com/nickheyer/nebu/pkg/config"
 	"github.com/nickheyer/nebu/pkg/logger"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type command struct {
@@ -22,58 +31,60 @@ type command struct {
 	summary string
 	run     func(ctx context.Context, e *env, args []string) error
 	sub     []command
+	// Answers from a daemon built in process when none is listening
+	local bool
 }
 
 func commands() []command {
 	return []command{
-		{name: "serve", summary: "run the daemon", run: runServe},
-		{name: "doctor", summary: "probe the host and check every dependency", run: runDoctor},
-		{name: "host", summary: "show the probed host profile", run: runHost},
-		{name: "sources", summary: "configured sources", run: runSources, sub: []command{
-			{name: "list", summary: "list sources with their sorts, facets, and auth state", run: runSources},
-			{name: "providers", summary: "list providers with the settings their sources accept", run: runSourcesProviders},
+		{name: "serve", summary: "run the daemon", run: runServe, local: true},
+		{name: "doctor", summary: "probe the host and check every dependency", run: runDoctor, local: true},
+		{name: "host", summary: "show the probed host profile", run: runHost, local: true},
+		{name: "sources", summary: "configured sources", run: runSources, local: true, sub: []command{
+			{name: "list", summary: "list sources with their sorts, facets, and auth state", run: runSources, local: true},
+			{name: "providers", summary: "list providers with the settings their sources accept", run: runSourcesProviders, local: true},
 			{name: "add", summary: "add a source", run: runSourcesAdd},
 			{name: "update", summary: "change the settings of a source", run: runSourcesUpdate},
 			{name: "remove", summary: "remove a source", run: runSourcesRemove},
 		}},
-		{name: "search", summary: "search or browse a source catalog", run: runSearch},
-		{name: "revisions", summary: "list revisions, tags, or versions of a repository", run: runRevisions},
-		{name: "card", summary: "print the model card a source publishes", run: runCard},
-		{name: "inspect", summary: "estimate memory fit for every weight group of a model", run: runInspect},
-		{name: "pull", summary: "download a weight group into the store", run: runPull},
-		{name: "list", summary: "list stored models", run: runList},
-		{name: "remove", summary: "remove a stored model", run: runRemove},
-		{name: "store", summary: "store status, gc, and verify", run: runStoreStatus, sub: []command{
-			{name: "status", summary: "show store counters", run: runStoreStatus},
-			{name: "gc", summary: "remove unreferenced blobs", run: runStoreGc},
-			{name: "verify", summary: "rehash stored blobs", run: runStoreVerify},
-			{name: "export", summary: "copy stored models into a mirror directory", run: runStoreExport},
+		{name: "search", summary: "search or browse a source catalog", run: runSearch, local: true},
+		{name: "revisions", summary: "list revisions, tags, or versions of a repository", run: runRevisions, local: true},
+		{name: "card", summary: "print the model card a source publishes", run: runCard, local: true},
+		{name: "inspect", summary: "estimate memory fit for every weight group of a model", run: runInspect, local: true},
+		{name: "pull", summary: "download a weight group into the store", run: runPull, local: true},
+		{name: "list", summary: "list stored models", run: runList, local: true},
+		{name: "remove", summary: "remove a stored model", run: runRemove, local: true},
+		{name: "store", summary: "store status, gc, and verify", run: runStoreStatus, local: true, sub: []command{
+			{name: "status", summary: "show store counters", run: runStoreStatus, local: true},
+			{name: "gc", summary: "remove unreferenced blobs", run: runStoreGc, local: true},
+			{name: "verify", summary: "rehash stored blobs", run: runStoreVerify, local: true},
+			{name: "export", summary: "copy stored models into a mirror directory", run: runStoreExport, local: true},
 		}},
-		{name: "tasks", summary: "list, watch, and cancel tasks", run: runTasksList, sub: []command{
-			{name: "list", summary: "list tasks", run: runTasksList},
+		{name: "tasks", summary: "list, watch, and cancel tasks", run: runTasksList, local: true, sub: []command{
+			{name: "list", summary: "list tasks", run: runTasksList, local: true},
 			{name: "watch", summary: "follow one task", run: runTasksWatch},
 			{name: "cancel", summary: "cancel one task", run: runTasksCancel},
 		}},
-		{name: "runtimes", summary: "runtimes and their installs", run: runRuntimes, sub: []command{
-			{name: "list", summary: "list runtimes and host compatibility", run: runRuntimes},
-			{name: "show", summary: "show a runtime with every param it takes", run: runRuntimesShow},
-			{name: "installs", summary: "list installs", run: runRuntimesInstalls},
-			{name: "adopt", summary: "record a binary already on the host", run: runRuntimesAdopt},
-			{name: "install", summary: "download a prebuilt release for this host", run: runRuntimesInstall},
-			{name: "remove", summary: "remove an install", run: runRuntimesRemove},
-			{name: "recipes", summary: "list build recipes and what this host selects", run: runRuntimesRecipes},
+		{name: "runtimes", summary: "runtimes and their installs", run: runRuntimes, local: true, sub: []command{
+			{name: "list", summary: "list runtimes and host compatibility", run: runRuntimes, local: true},
+			{name: "show", summary: "show a runtime with every param it takes", run: runRuntimesShow, local: true},
+			{name: "installs", summary: "list installs", run: runRuntimesInstalls, local: true},
+			{name: "adopt", summary: "record a binary already on the host", run: runRuntimesAdopt, local: true},
+			{name: "install", summary: "download a prebuilt release for this host", run: runRuntimesInstall, local: true},
+			{name: "remove", summary: "remove an install", run: runRuntimesRemove, local: true},
+			{name: "recipes", summary: "list build recipes and what this host selects", run: runRuntimesRecipes, local: true},
 		}},
-		{name: "profiles", summary: "named param sets per runtime", run: runProfiles, sub: []command{
-			{name: "list", summary: "list profiles, for one runtime when named", run: runProfiles},
+		{name: "profiles", summary: "named param sets per runtime", run: runProfiles, local: true, sub: []command{
+			{name: "list", summary: "list profiles, for one runtime when named", run: runProfiles, local: true},
 			{name: "add", summary: "add a profile", run: runProfilesAdd},
 			{name: "update", summary: "change a profile", run: runProfilesUpdate},
 			{name: "remove", summary: "remove a profile", run: runProfilesRemove},
 		}},
-		{name: "build", summary: "build a runtime from its recipe", run: runBuild},
-		{name: "builds", summary: "list, show, and remove builds", run: runBuildsList, sub: []command{
-			{name: "list", summary: "list builds", run: runBuildsList},
-			{name: "show", summary: "show one build", run: runBuildsShow},
-			{name: "remove", summary: "remove a build and its install", run: runBuildsRemove},
+		{name: "build", summary: "build a runtime from its recipe", run: runBuild, local: true},
+		{name: "builds", summary: "list, show, and remove builds", run: runBuildsList, local: true, sub: []command{
+			{name: "list", summary: "list builds", run: runBuildsList, local: true},
+			{name: "show", summary: "show one build", run: runBuildsShow, local: true},
+			{name: "remove", summary: "remove a build and its install", run: runBuildsRemove, local: true},
 		}},
 		{name: "run", summary: "start a stored model on a runtime", run: runRun},
 		{name: "swap", summary: "replace what a slot serves without dropping its name", run: runSwap},
@@ -108,7 +119,7 @@ func commands() []command {
 		{name: "show", summary: "show instance info", run: runShow},
 		{name: "stop", summary: "stop an instance", run: runStop},
 		{name: "logs", summary: "show or follow instance output", run: runLogs},
-		{name: "version", summary: "print version", run: runVersion},
+		{name: "version", summary: "print version", run: runVersion, local: true},
 	}
 }
 
@@ -131,13 +142,13 @@ func resolve(cmds []command, args []string) (*command, []string) {
 
 // Shared state for one invocation
 type env struct {
-	cfg    *v1.Config
-	log    *slog.Logger
-	out    io.Writer
-	errw   io.Writer
-	in     io.Reader
-	json   bool
-	remote bool
+	cmd  *command
+	cfg  *v1.Config
+	log  *slog.Logger
+	out  io.Writer
+	errw io.Writer
+	in   io.Reader
+	json bool
 	// The daemon address once looked for, empty when this process stands in
 	addr     string
 	resolved bool
@@ -195,7 +206,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer closer.Close()
-	e := &env{cfg: cfg, log: log, out: stdout, errw: stderr, in: os.Stdin, json: *jsonOut}
+	e := &env{cmd: cmd, cfg: cfg, log: log, out: stdout, errw: stderr, in: os.Stdin, json: *jsonOut}
 	defer e.close()
 	if err := cmd.run(ctx, e, cmdArgs); err != nil {
 		fmt.Fprintln(stderr, "nebu:", err)
@@ -225,8 +236,29 @@ func (e *env) flags(name string) *flag.FlagSet {
 	return fs
 }
 
+// Parses flags anywhere among positionals, holds them to the usage line, and readies the clients
+//
+// A command that is not local needs a daemon listening, so that is checked before anything is dialed.
+// Max below zero takes any number of positionals.
+func (e *env) parse(fs *flag.FlagSet, args []string, min, max int, usage string) ([]string, error) {
+	positional, err := splitFlags(fs, args)
+	if err != nil {
+		return nil, err
+	}
+	if len(positional) < min || max >= 0 && len(positional) > max {
+		return nil, errors.New("usage: nebu " + usage)
+	}
+	if !e.cmd.local {
+		if err := e.requireDaemon(); err != nil {
+			return nil, err
+		}
+	}
+	e.cl, err = e.clients()
+	return positional, err
+}
+
 // Parses flags anywhere among positionals
-func parse(fs *flag.FlagSet, args []string) ([]string, error) {
+func splitFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 	var positional []string
 	for {
 		if err := fs.Parse(args); err != nil {
@@ -249,4 +281,170 @@ func (m *multi) String() string { return fmt.Sprint([]string(*m)) }
 func (m *multi) Set(v string) error {
 	*m = append(*m, v)
 	return nil
+}
+
+// Reads name=value pairs into a map
+func pairs(items []string, what string) (map[string]string, error) {
+	out := map[string]string{}
+	for _, item := range items {
+		k, v, ok := strings.Cut(item, "=")
+		if !ok {
+			return nil, fmt.Errorf("%s %q: expected name=value", what, item)
+		}
+		out[k] = v
+	}
+	return out, nil
+}
+
+// Splits repo@revision
+func splitRef(ref string) (string, string) {
+	if i := strings.LastIndex(ref, "@"); i > 0 {
+		return ref[:i], ref[i+1:]
+	}
+	return ref, ""
+}
+
+// Prints JSON when requested, else the table renderer
+func (e *env) print(msg proto.Message, render func(w io.Writer)) error {
+	if e.json {
+		data, err := protojson.MarshalOptions{Multiline: true, Indent: "  ", UseProtoNames: true}.Marshal(msg)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(e.out, string(data))
+		return err
+	}
+	if render != nil {
+		render(e.out)
+	}
+	return nil
+}
+
+// Prints the message unless an error came with it, what a call's last line does
+func (e *env) done(msg proto.Message, err error) error {
+	if err != nil {
+		return err
+	}
+	return e.print(msg, nil)
+}
+
+// Prints a line of text unless JSON was asked for
+func (e *env) text(format string, args ...any) {
+	if !e.json {
+		fmt.Fprintf(e.out, format, args...)
+	}
+}
+
+const factsWidth = 72
+
+func table(w io.Writer, headers []string, rows [][]string) {
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	if len(headers) > 0 {
+		fmt.Fprintln(tw, strings.Join(headers, "\t"))
+	}
+	for _, r := range rows {
+		fmt.Fprintln(tw, strings.Join(r, "\t"))
+	}
+	tw.Flush()
+}
+
+func section(w io.Writer, title string) {
+	fmt.Fprintf(w, "\n%s\n", strings.ToUpper(title))
+}
+
+// Rows of a map in key order
+func rowsOf(m map[string]string) [][]string {
+	var rows [][]string
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		rows = append(rows, []string{k, m[k]})
+	}
+	return rows
+}
+
+// One line of key=value pairs in key order, cut to the facts width
+func compact(m map[string]string) string {
+	var parts []string
+	for _, r := range rowsOf(m) {
+		parts = append(parts, r[0]+"="+r[1])
+	}
+	return truncate(strings.Join(parts, " "), factsWidth)
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "..."
+}
+
+// A timestamp in the layout, dash when unset
+func when(ts *timestamppb.Timestamp, layout string) string {
+	if ts == nil {
+		return "-"
+	}
+	return ts.AsTime().Local().Format(layout)
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+func shortCommit(c string) string {
+	if len(c) > 12 {
+		return c[:12]
+	}
+	return orDash(c)
+}
+
+func yes(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
+}
+
+func humanCount(n uint64) string {
+	switch {
+	case n >= 1e9:
+		return fmt.Sprintf("%.1fB", float64(n)/1e9)
+	case n >= 1e6:
+		return fmt.Sprintf("%.0fM", float64(n)/1e6)
+	}
+	return fmt.Sprint(n)
+}
+
+func runVersion(ctx context.Context, e *env, args []string) error {
+	_, err := fmt.Fprintln(e.out, "nebu "+buildVersion())
+	return err
+}
+
+// Runs the daemon in this process until interrupted
+func runServe(ctx context.Context, e *env, args []string) error {
+	if _, err := splitFlags(e.flags("serve"), args); err != nil {
+		return err
+	}
+	d, err := daemon.New(e.cfg, e.log)
+	if err != nil {
+		return err
+	}
+	return d.ListenAndServe(ctx)
+}
+
+// Reads the module version and commit out of the binary
+func buildVersion() string {
+	version, revision := "devel", ""
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+			version = bi.Main.Version
+		}
+		for _, s := range bi.Settings {
+			if s.Key == "vcs.revision" && len(s.Value) >= 7 {
+				revision = s.Value[:7]
+			}
+		}
+	}
+	return strings.TrimSpace(version + " " + revision)
 }

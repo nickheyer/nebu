@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -52,9 +53,26 @@ type state struct {
 	Done  []bool `json:"done"`
 }
 
-// Builds a fetcher limited to bytes per second at every hour, windows come through Schedule
-func New(workers int, chunk int64, retries int, bytesPerSecond uint64, log *slog.Logger) *Fetcher {
-	return &Fetcher{Workers: max(workers, 1), Chunk: max(chunk, 1<<16), Retries: max(retries, 1), Schedule: &Schedule{base: bytesPerSecond}, Log: log}
+// Builds a fetcher with no limits, Schedule setting the rate and windows
+func New(workers int, chunk int64, retries int, log *slog.Logger) *Fetcher {
+	return &Fetcher{Workers: max(workers, 1), Chunk: max(chunk, 1<<16), Retries: max(retries, 1), Log: log}
+}
+
+// Lands a blob at dest whole, resuming the partial beside it, reporting a file already there
+func (f *Fetcher) Land(ctx context.Context, blob sources.Blob, dest string, progress Progress) (bool, error) {
+	if info, err := os.Stat(dest); err == nil && info.Size() == blob.Size() {
+		if progress != nil {
+			progress(info.Size())
+		}
+		return true, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return false, err
+	}
+	if _, err := f.Fetch(ctx, blob, dest+".partial", "", progress); err != nil {
+		return false, err
+	}
+	return false, os.Rename(dest+".partial", dest)
 }
 
 // Waits out a paused window before a download the fetcher cannot meter starts

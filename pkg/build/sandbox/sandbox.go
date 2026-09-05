@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/nickheyer/nebu/pkg/proc"
-	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 // Mount point of the build root inside a container
@@ -29,8 +28,6 @@ type Step struct {
 
 // Runs steps somewhere
 type Runner interface {
-	Kind() v1.SandboxKind
-	Root() string
 	Path(rel string) string
 	Run(ctx context.Context, step Step, out io.Writer) error
 }
@@ -42,10 +39,6 @@ type Host struct {
 
 // Builds a host runner rooted at dir
 func NewHost(root string) *Host { return &Host{root: root} }
-
-func (h *Host) Kind() v1.SandboxKind { return v1.SandboxKind_SANDBOX_KIND_HOST }
-
-func (h *Host) Root() string { return h.root }
 
 // Returns the host path of a build relative path
 func (h *Host) Path(rel string) string { return filepath.Join(h.root, filepath.FromSlash(rel)) }
@@ -75,18 +68,8 @@ func NewOCI(root, cli, image string, args []string) *OCI {
 	return &OCI{root: root, cli: cli, image: image, args: args}
 }
 
-func (o *OCI) Kind() v1.SandboxKind { return v1.SandboxKind_SANDBOX_KIND_OCI }
-
-func (o *OCI) Root() string { return o.root }
-
 // Returns the container path of a build relative path
 func (o *OCI) Path(rel string) string { return strings.TrimRight(Mount+"/"+filepath.ToSlash(rel), "/") }
-
-// Returns the container CLI in use
-func (o *OCI) CLI() string { return o.cli }
-
-// Returns the image in use
-func (o *OCI) Image() string { return o.image }
 
 func (o *OCI) Run(ctx context.Context, step Step, out io.Writer) error {
 	if len(step.Command) == 0 {

@@ -65,7 +65,7 @@ func TestHistorySurvivesManager(t *testing.T) {
 		t.Fatal(err)
 	}
 	task, _, _ = second.Get(stuck.GetId())
-	if task.GetState() != v1.TaskState_TASK_STATE_FAILED || task.GetError() != restartNote {
+	if task.GetState() != v1.TaskState_TASK_STATE_FAILED || task.GetError() != db.RestartNote {
 		t.Fatalf("unfinished task should be failed on recover: %v", task)
 	}
 	if _, _, err := second.Get("nope"); !errors.Is(err, ErrUnknownTask) {
