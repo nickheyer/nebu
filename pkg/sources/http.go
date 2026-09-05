@@ -192,7 +192,8 @@ func (c *HTTP) DoBody(ctx context.Context, method, rawURL string, query url.Valu
 			continue
 		}
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-			last = fmt.Errorf("%s %s: %s", method, rawURL, resp.Status)
+			// Kept as a status error so a rate limit that outlasts the retries still reads as one
+			last = &StatusError{Method: method, URL: rawURL, Code: resp.StatusCode, Status: resp.Status, Header: resp.Header}
 			resp.Body.Close()
 			if !idempotent {
 				return nil, last

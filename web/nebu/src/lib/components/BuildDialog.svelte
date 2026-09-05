@@ -43,15 +43,15 @@
       const hit = r.task?.labels['cached'] === 'true';
       return {
         title: hit ? 'Build already cached' : `Building ${recipe.recipe.runtimeId}`,
-        detail: hit ? 'An identical build exists, reusing it' : `${variant} variant`,
-        link: r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Follow the build' } : undefined
+        detail: hit ? 'Reusing it' : variant,
+        link: r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined
       };
     },
     failTitle: 'Build refused'
   });
 </script>
 
-<FormDialog bind:open title="Build {recipe?.recipe?.runtimeId ?? ''}" description={recipe?.recipe?.description} size="lg" action="Start build" icon={Hammer} saving={form.saving} disabled={!variant} onsubmit={form.run}>
+<FormDialog bind:open title="Build {recipe?.recipe?.runtimeId ?? ''}" description={recipe?.recipe?.description} size="lg" action="Build" icon={Hammer} saving={form.saving} disabled={!variant} onsubmit={form.run}>
   {#if recipe?.recipe}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <Field label="Variant" for="b-variant" hint={selected?.description}>
@@ -61,22 +61,22 @@
           {/each}
         </select>
       </Field>
-      <Field label="Sandbox" for="b-sandbox" hint={sandbox === 'oci' ? (recipe.sandboxCli ? `Runs through ${recipe.sandboxCli}` : 'No container CLI was found on PATH') : 'Runs with the host toolchain'}>
+      <Field label="Sandbox" for="b-sandbox" hint={sandbox === 'oci' ? (recipe.sandboxCli ? `Through ${recipe.sandboxCli}` : 'No container CLI on PATH') : ''}>
         <select id="b-sandbox" class="input" bind:value={sandbox}>
           <option value="host">Host toolchain</option>
           <option value="oci">Container</option>
         </select>
       </Field>
       {#if sandbox === 'oci'}
-        <Field label="Image" for="b-image" hint="Overrides the recipe or variant image" class="sm:col-span-2">
+        <Field label="Image" for="b-image" class="sm:col-span-2">
           <input id="b-image" class="input font-mono" bind:value={image} placeholder={selected?.image || recipe.recipe.sandbox?.image || 'an image with the toolchain'} />
         </Field>
       {/if}
-      <Field label="Ref" for="b-ref" hint="Tag, branch, or commit. Empty follows the recipe, usually the latest release">
+      <Field label="Ref" for="b-ref" hint="Tag or commit. Empty follows the recipe">
         <input id="b-ref" class="input font-mono" bind:value={ref} placeholder={recipe.recipe.source?.ref || 'latest'} />
       </Field>
-      <CheckCard bind:checked={force} class="self-end" title="Rebuild even when cached" description="An unchanged recipe on an unchanged host is a cache hit" />
-      <Field label="Variables" for="b-vars" hint="One name=value per line, overriding recipe vars" class="sm:col-span-2">
+      <CheckCard bind:checked={force} class="self-end" title="Rebuild even when cached" />
+      <Field label="Variables" for="b-vars" hint="name=value per line" class="sm:col-span-2">
         <textarea id="b-vars" class="input h-20" bind:value={varsText} placeholder={pairsText(recipe.vars).split('\n').slice(0, 2).join('\n') || 'build_type=Release'}></textarea>
       </Field>
     </div>

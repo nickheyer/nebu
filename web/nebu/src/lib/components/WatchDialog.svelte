@@ -36,7 +36,7 @@
     },
     async submit() {
       await api.monitor.addWatch({ sourceId: source, repo: repoText.trim(), revision, groupMatch: match, autoPull: autoPull || !!slotId, slotId, runtimeId, params: values, profileId });
-      return { title: `Watching ${repoText.trim()}`, detail: 'The first check ran just now' };
+      return { title: `Watching ${repoText.trim()}` };
     },
     failTitle: 'Watch refused'
   });
@@ -45,7 +45,6 @@
 <FormDialog
   bind:open
   title="Watch a repository"
-  description="Checks on an interval and records a finding for a new commit or a weight group that appears or vanishes"
   action="Watch"
   saving={form.saving}
   disabled={!repoText.trim() || !source || invalid > 0}
@@ -60,13 +59,13 @@
     <Field label="Repository" for="w-repo">
       <input id="w-repo" class="input font-mono" bind:value={repoText} placeholder={repoExample} />
     </Field>
-    <Field label="Revision" for="w-rev" hint="Branch or tag, source default when empty">
+    <Field label="Revision" for="w-rev">
       <input id="w-rev" class="input font-mono" bind:value={revision} placeholder="main" />
     </Field>
     <Field label="Group match" for="w-match" hint="Regex over weight group names">
       <input id="w-match" class="input font-mono" bind:value={match} placeholder="regex" />
     </Field>
-    <CheckCard bind:checked={autoPull} class="sm:col-span-2" title="Pull automatically" description="Matching groups are pulled when they appear or change. Picking a slot below turns this on." />
+    <CheckCard bind:checked={autoPull} class="sm:col-span-2" title="Pull on change" />
     <SwapTarget optional idPrefix="w" bind:slotId bind:runtimeId bind:profileId bind:values bind:invalid />
   </div>
 </FormDialog>

@@ -1,6 +1,6 @@
 .PHONY: gen proto-clean proto-lint web web-install web-check build build-cli run test lint vet cgo-guard spec-check clean dev release migrate-diff migrate-reset migrate-hash migrate-validate migrate-status
 
-HOME_DATA_DIR := ~/.local/nebu
+HOME_DATA_DIR := "$(HOME)/.local/share/nebu"
 BIN := build/nebu
 BUF ?= buf
 NPM ?= npm
@@ -35,7 +35,7 @@ web: gen web-install
 	cd $(WEB) && $(NPM) run build
 	touch $(WEB)/dist/.keep
 
-dev: gen
+dev: clean web
 	@echo "Starting backend server with frontend dev server..."
 	@trap 'echo "Stopping all processes..."; kill $$(jobs -p) 2>/dev/null; wait; exit' INT TERM; \
 	cd $(WEB) && npm run dev & \

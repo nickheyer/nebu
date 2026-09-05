@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Host wide preferences, rows in the database, changed from the settings page or the CLI
+message Settings {
+  // What people call this host, its hostname when empty
+  string host_label = 1;
+  // The setup guide on the overview was dismissed
+  bool setup_dismissed = 2;
+}
+
+// Asks for the settings
+message GetSettingsRequest {}
+
+// Returns the settings
+message GetSettingsResponse {
+  Settings settings = 1;
+}
+
+// Replaces the settings
+message UpdateSettingsRequest {
+  Settings settings = 1;
+}
+
+// Returns the settings after the change
+message UpdateSettingsResponse {
+  Settings settings = 1;
+}
+
+// Host wide preferences
+service SettingsService {
+  // Returns the settings
+  rpc GetSettings(GetSettingsRequest) returns (GetSettingsResponse);
+  // Replaces the settings, every client following the change on the stream
+  rpc UpdateSettings(UpdateSettingsRequest) returns (UpdateSettingsResponse);
+}

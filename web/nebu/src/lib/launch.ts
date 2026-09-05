@@ -33,7 +33,7 @@ export async function launch(spec: RunSpec, drainFirst = false, refused?: (err: 
     const task = swap ? (await api.slots.swap({ slotId: spec.slotId!, run, drainFirst })).task : (await api.instances.run(run)).task;
     const id = task?.id ?? '';
     const target = spec.slotId ? `into ${live.slots.get(spec.slotId)?.name ?? 'slot'}` : '';
-    ok(swap ? `Swapping ${spec.repo} ${target}` : `Starting ${spec.repo} ${target}`, spec.group, id ? { href: `/tasks?id=${id}`, label: 'Follow the task' } : undefined);
+    ok(swap ? `Swapping ${spec.repo} ${target}` : `Starting ${spec.repo} ${target}`, spec.group, id ? { href: `/tasks?id=${id}`, label: 'Task' } : undefined);
     return id;
   } catch (err) {
     fail(err, swap ? 'Swap refused' : 'Run refused');
@@ -56,7 +56,7 @@ export async function dropModelOnSlot(ev: DragEvent, slotId: string) {
   if (slotOccupied(slotId)) {
     const yes = await confirm({
       title: `Swap ${slot.name}?`,
-      message: `${slot.name} is serving ${slot.request?.repo ?? 'a model'}. It switches to ${m.repo} ${m.group} and the old instance drains and stops. The public name keeps answering throughout.`,
+      message: `${slot.request?.repo ?? 'The current model'} is replaced by ${m.repo} ${m.group}.`,
       action: 'Swap'
     });
     if (!yes) return;

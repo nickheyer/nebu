@@ -443,3 +443,9 @@ CREATE TABLE `profile_params` (
   PRIMARY KEY (`profile_id`, `name`),
   CONSTRAINT `0` FOREIGN KEY (`profile_id`) REFERENCES `profiles` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE
 );
+-- Create "settings" table
+CREATE TABLE `settings` (
+  `key` text NULL,
+  `value` text NOT NULL,
+  PRIMARY KEY (`key`)
+);

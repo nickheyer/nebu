@@ -8,6 +8,7 @@ import { HostService } from '$proto/host_pb';
 import { InstanceService } from '$proto/instance_pb';
 import { MonitorService } from '$proto/monitor_pb';
 import { RuntimeService } from '$proto/runtime_pb';
+import { SettingsService } from '$proto/settings_pb';
 import { SlotService } from '$proto/slot_pb';
 import { SourceService } from '$proto/source_pb';
 import { StoreService } from '$proto/store_pb';
@@ -66,6 +67,7 @@ const transport = createConnectTransport({ baseUrl, interceptors: [auth] });
 // One client per service, sharing the transport
 export const api = {
   host: createClient(HostService, transport),
+  settings: createClient(SettingsService, transport),
   sources: createClient(SourceService, transport),
   runtimes: createClient(RuntimeService, transport),
   estimate: createClient(EstimateService, transport),

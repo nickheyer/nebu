@@ -72,7 +72,7 @@
           }}
         >
           <label class="text-xs font-medium text-fg-muted" for="facet-{facet.id}">{facet.label}</label>
-          <input id="facet-{facet.id}" class="input h-8" bind:value={draft} placeholder="Type and press Enter" autocomplete="off" />
+          <input id="facet-{facet.id}" class="input h-8" bind:value={draft} placeholder={facet.label} autocomplete="off" />
           <div class="flex justify-end gap-2">
             {#if value}<button type="button" class="text-xs text-fg-faint hover:text-fg" onclick={() => clear()}>Clear</button>{/if}
             <button type="submit" class="rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-accent-fg">Apply</button>
@@ -98,7 +98,7 @@
               </button>
             {/each}
           {:else}
-            <div class="px-3 py-4 text-center text-xs text-fg-faint">No matches</div>
+            <div class="px-3 py-4 text-center text-xs text-fg-faint">None</div>
           {/each}
         </div>
         {#if chosen.length}

@@ -17,7 +17,7 @@
       <Icon size={18} />
     </div>
   {/if}
-  <div class="text-sm font-medium text-fg">{title}</div>
-  {#if description}<p class="mt-1 max-w-sm text-sm leading-6 text-fg-muted">{description}</p>{/if}
+  <div class="max-w-md text-sm font-medium break-words text-fg">{title}</div>
+  {#if description}<p class="mt-1 max-w-md text-sm leading-6 break-words text-fg-muted">{description}</p>{/if}
   {#if children}<div class="mt-4 flex flex-wrap items-center justify-center gap-2">{@render children()}</div>{/if}
 </div>

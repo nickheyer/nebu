@@ -23,13 +23,13 @@
   const icons: Record<string, any> = { pull: Download, build: Hammer, swap: ArrowLeftRight, run: Play, verify: ShieldCheck, export: FolderOutput, check: Radar, install: Package };
 </script>
 
-<PageHeader title="Tasks" description="Every long running operation, with streamed progress and logs">
+<PageHeader title="Tasks">
   <Tabs bind:value={view} tabs={[{ id: 'all', label: 'All', count: all.length }, { id: 'active', label: 'Active', count: active.length }, { id: 'failed', label: 'Failed', count: failed.length || undefined }]} />
 </PageHeader>
 
 <Panel flush>
   {#if list.length === 0}
-    <Empty icon={ListChecks} title={view === 'active' ? 'Nothing running' : view === 'failed' ? 'No failures' : 'No tasks yet'} description="Pulls, builds, runs, swaps, verifies, exports, and monitor checks all run as tasks. History survives daemon restarts." />
+    <Empty icon={ListChecks} title={view === 'active' ? 'Nothing running' : view === 'failed' ? 'No failures' : 'No tasks'} />
   {:else}
     <div class="overflow-x-auto">
       <table class="tbl">

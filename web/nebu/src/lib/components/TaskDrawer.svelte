@@ -19,7 +19,7 @@
   });
 </script>
 
-<Drawer bind:id title={task?.title ?? 'Task'} subtitle={id} width="xl">
+<Drawer bind:id title={task?.title ?? 'Task'} subtitle={id}>
   {#snippet header()}
     {#if task}
       <div class="flex flex-wrap items-center gap-3 text-xs text-fg-muted">

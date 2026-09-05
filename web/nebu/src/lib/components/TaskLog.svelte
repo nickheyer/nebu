@@ -90,5 +90,5 @@
     {/if}
   {/if}
   {#if error}<div class="text-sm text-bad">{error}</div>{/if}
-  <LogView {lines} {height} live={active} empty={active ? 'Waiting for output' : 'No output was recorded'} />
+  <LogView {lines} {height} live={active} empty={active ? 'Waiting' : 'No output'} />
 </div>

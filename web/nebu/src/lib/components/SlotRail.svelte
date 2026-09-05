@@ -17,10 +17,10 @@
     <LayoutGrid size={12} /> Slots
   </div>
   {#if slots.length === 0}
-    <p class="px-1 text-xs leading-5 text-fg-faint">No slots yet. A slot keeps a public name serving a model on chosen devices.</p>
-    <Button size="sm" href="/slots" icon={Plus}>Create a slot</Button>
+    <p class="px-1 text-xs leading-5 text-fg-faint">No slots</p>
+    <Button size="sm" href="/slots" icon={Plus}>New slot</Button>
   {:else}
-    <p class="px-1 text-xs leading-5 text-fg-faint">Drag a model onto a slot to serve it there.</p>
+    <p class="px-1 text-xs leading-5 text-fg-faint">Drop a model on a slot to run it there</p>
     {#each slots as s (s.id)}
       {@const occupied = slotOccupied(s.id)}
       <div

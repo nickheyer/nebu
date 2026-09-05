@@ -58,37 +58,37 @@
   });
 </script>
 
-<Field label={optional ? 'Swap into slot' : 'Slot'} for="{idPrefix}-slot" hint={optional ? 'The slot moves to the pull once it lands' : slotOccupied(slotId) ? 'Occupied, so the run becomes a swap' : 'A slot pins devices, budget, and public name'}>
+<Field label={optional ? 'Swap into slot' : 'Slot'} for="{idPrefix}-slot" hint={slotOccupied(slotId) ? 'Occupied. The run becomes a swap' : ''}>
   <select id="{idPrefix}-slot" class="input" bind:value={slotId}>
-    <option value="">{optional ? 'No swap' : 'No slot, run on the whole host'}</option>
+    <option value="">{optional ? 'No swap' : 'None'}</option>
     {#each slots as s (s.id)}
       <option value={s.id}>{s.name}{slotOccupied(s.id) ? ` · serving ${s.request?.repo ?? ''}` : ' · empty'}</option>
     {/each}
   </select>
 </Field>
-<Field label={optional ? 'Runtime for the swap' : 'Runtime'} for="{idPrefix}-runtime" hint={off || compatible.length ? '' : formatId ? 'No compatible runtime accepts this format on this host' : 'No runtime is compatible with this host'}>
+<Field label="Runtime" for="{idPrefix}-runtime" hint={off || compatible.length ? '' : formatId ? 'No compatible runtime takes this format' : 'No compatible runtime'}>
   <select id="{idPrefix}-runtime" class="input" bind:value={runtimeId} disabled={off}>
-    <option value="">{slot?.runtimeId ? `Slot default · ${slot.runtimeId}` : formatId && compatible[0] ? `Auto · ${compatible[0].manifest?.id}` : 'First compatible runtime'}</option>
+    <option value="">{slot?.runtimeId ? `Slot default · ${slot.runtimeId}` : formatId && compatible[0] ? `Auto · ${compatible[0].manifest?.id}` : 'First compatible'}</option>
     {#each compatible as rt (rt.manifest?.id)}
       <option value={rt.manifest?.id}>{rt.manifest?.name ?? rt.manifest?.id}</option>
     {/each}
     {#each others as rt (rt.manifest?.id)}
-      <option value={rt.manifest?.id} disabled>{rt.manifest?.name ?? rt.manifest?.id} · {rt.compatible ? 'format not accepted' : 'incompatible host'}</option>
+      <option value={rt.manifest?.id} disabled>{rt.manifest?.name ?? rt.manifest?.id} · {rt.compatible ? 'wrong format' : 'incompatible'}</option>
     {/each}
   </select>
 </Field>
 {@render children?.()}
-<Field label={optional ? 'Profile for the swap' : 'Profile'} for="{idPrefix}-profile" class="sm:col-span-2" hint={off ? '' : !profiles.length ? `No profiles for ${pickedRuntime || 'any runtime'} yet, add one on the runtimes page` : pickedRuntime ? 'Named params of the runtime the run starts from' : 'A profile picks its runtime when nothing else names one'}>
+<Field label="Profile" for="{idPrefix}-profile" class="sm:col-span-2" hint={off || profiles.length ? '' : `No profiles for ${pickedRuntime || 'any runtime'}`}>
   <select id="{idPrefix}-profile" class="input" bind:value={profileId} disabled={off || !profiles.length}>
-    <option value="">{defaultProfile ? `Runtime default · ${defaultProfile.name}` : 'Manifest defaults'}</option>
+    <option value="">{defaultProfile ? `Default · ${defaultProfile.name}` : 'Defaults'}</option>
     {#each profiles as p (p.id)}<option value={p.id}>{pickedRuntime ? '' : `${p.runtimeId} · `}{p.name}{p.description ? ` · ${p.description}` : ''}</option>{/each}
   </select>
 </Field>
 {#if !off}
   <div class="sm:col-span-2">
     <div class="mb-2 flex items-baseline gap-2">
-      <span class="text-xs font-medium text-fg-muted">{optional ? 'Parameters for the swap' : 'Parameters'}</span>
-      <span class="text-[11.5px] text-fg-faint">Empty fields inherit the profile{slot ? ', then the slot' : ''}. Auto values are solved by the planner</span>
+      <span class="text-xs font-medium text-fg-muted">Parameters</span>
+      <span class="text-[11.5px] text-fg-faint">Empty inherits the profile{slot ? ' then the slot' : ''}</span>
     </div>
     <ParamForm params={manifest?.params ?? []} bind:values bind:invalid {inherited} {idPrefix} />
   </div>

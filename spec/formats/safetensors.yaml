@@ -57,9 +57,9 @@ params:
   - name: n_expert_used
     keys: [num_experts_per_tok, text_config.num_experts_per_tok]
   - name: kv_lora_rank
-    keys: [kv_lora_rank]
+    keys: [kv_lora_rank, text_config.kv_lora_rank]
   - name: rope_dim
-    keys: [qk_rope_head_dim]
+    keys: [qk_rope_head_dim, text_config.qk_rope_head_dim]
   - name: n_swa
     keys: [sliding_window, text_config.sliding_window]
   - name: swa_pattern

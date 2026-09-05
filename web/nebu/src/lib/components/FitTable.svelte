@@ -35,25 +35,16 @@
 </script>
 
 <div class="flex flex-col gap-3">
-  <div class="flex flex-wrap items-center gap-3 text-xs text-fg-muted">
-    {#if runtimes.length > 1}
-      <span>Planned for</span>
-      <Tabs tabs={runtimes.map((r) => ({ id: r, label: r }))} bind:value={runtime} size="sm" />
-    {:else if runtimes.length === 1}
-      <span>Planned for <span class="font-medium text-fg">{runtime}</span>, the runtime that serves these files</span>
-    {/if}
-  </div>
+  {#if runtimes.length > 1}
+    <Tabs tabs={runtimes.map((r) => ({ id: r, label: r }))} bind:value={runtime} size="sm" />
+  {/if}
   <div class="overflow-x-auto">
     <table class="w-full border-separate border-spacing-1 text-xs">
       <thead>
         <tr>
           <th class="px-2 py-1 text-left text-[11px] font-semibold tracking-wider text-fg-faint uppercase">Weights</th>
-          <th colspan={contexts.length} class="px-2 pb-0 text-left text-[10.5px] font-medium tracking-wide text-fg-faint normal-case">context length, in tokens →</th>
-        </tr>
-        <tr>
-          <th></th>
           {#each contexts as c (c)}
-            <th class="px-2 py-1 text-center text-[11px] font-semibold tracking-wider text-fg-faint uppercase" title="{c.toLocaleString()} tokens of prompt plus reply">{ctx(c)}</th>
+            <th class="px-2 py-1 text-center text-[11px] font-semibold tracking-wider text-fg-faint uppercase" title="{c.toLocaleString()} tokens">{ctx(c)}</th>
           {/each}
         </tr>
       </thead>
@@ -78,24 +69,20 @@
                     </button>
                     {#snippet content()}
                       <div class="text-[11px] leading-5">
-                        <div class="mb-1 text-fg-muted">Against the whole device memory</div>
                         {#each r.plan?.pools ?? [] as p (p.poolId)}
                           <div><span class="font-mono text-fg-muted">{p.poolId}</span> {bytes(p.usedBytes)} of {bytes(p.capacityBytes)}</div>
                         {/each}
-                        <div class="text-fg-muted">weights {bytes(r.plan?.weightsBytes)}, cache {bytes(r.plan?.cacheBytes)}, overhead {bytes(r.plan?.overheadBytes)}{#if r.plan?.overheadDelta}<span> (learned {deltaBytes(r.plan.overheadDelta)})</span>{/if}</div>
+                        <div class="text-fg-muted">weights {bytes(r.plan?.weightsBytes)} · cache {bytes(r.plan?.cacheBytes)} · overhead {bytes(r.plan?.overheadBytes)}{#if r.plan?.overheadDelta}<span> ({deltaBytes(r.plan.overheadDelta)} learned)</span>{/if}</div>
                         {#if r.plan?.detail}<div class="mt-1 text-fg-faint">{r.plan.detail}</div>{/if}
                         {#if r.free}
-                          <div class="mt-2 mb-1 text-fg-muted">Against what is free right now: <span class="font-medium text-fg">{verdictWord(r.free.verdict)}</span></div>
-                          {#each r.free.pools as p (p.poolId)}
-                            <div><span class="font-mono text-fg-muted">{p.poolId}</span> {bytes(p.usedBytes)} of {bytes(p.capacityBytes)} free</div>
-                          {/each}
-                          {#if r.free.detail}<div class="mt-1 text-fg-faint">{r.free.detail}</div>{/if}
+                          <div class="mt-2 text-fg-muted">Free right now: <span class="font-medium text-fg">{verdictWord(r.free.verdict)}</span></div>
+                          {#if r.free.detail}<div class="text-fg-faint">{r.free.detail}</div>{/if}
                         {/if}
                       </div>
                     {/snippet}
                   </Tip>
                 {:else}
-                  <div class="flex h-10 w-full items-center justify-center rounded-md border border-line text-fg-faint" title="Not planned at this context">–</div>
+                  <div class="flex h-10 w-full items-center justify-center rounded-md border border-line text-fg-faint">–</div>
                 {/if}
               </td>
             {/each}
@@ -107,15 +94,14 @@
   {#if selected?.plan}
     <div class="rounded-lg border border-line bg-sunken p-3">
       <div class="mb-2 text-xs text-fg-muted">
-        <span class="font-mono text-fg">{selected.group}</span> on {selected.runtimeId} at {ctx(selected.context)} context
+        <span class="font-mono text-fg">{selected.group}</span> on {selected.runtimeId} at {ctx(selected.context)}
       </div>
       <PlanView plan={selected.plan} compact />
     </div>
   {/if}
-  <dl class="grid gap-x-4 gap-y-1 text-[11px] leading-4 text-fg-faint sm:grid-cols-3">
-    <div class="flex gap-1.5"><span class="mt-1 h-2 w-2 shrink-0 rounded-sm bg-ok"></span><span><span class="font-medium text-fg-muted">Fits.</span> Weights and the working cache stay in device memory. Full speed.</span></div>
-    <div class="flex gap-1.5"><span class="mt-1 h-2 w-2 shrink-0 rounded-sm bg-warn"></span><span><span class="font-medium text-fg-muted">Partly.</span> Some layers spill into system RAM. It runs, but slower.</span></div>
-    <div class="flex gap-1.5"><span class="mt-1 h-2 w-2 shrink-0 rounded-sm bg-bad"></span><span><span class="font-medium text-fg-muted">Too big.</span> Not enough memory even with spilling. Pick smaller weights or a shorter context.</span></div>
-  </dl>
-  <p class="text-[11px] text-fg-faint">The big word is the verdict against the whole device memory, what a run gets once nothing else is loaded. The number under it is the device memory the plan uses. A run plans against what is free at that moment, so when that verdict differs the cell says so under the word.</p>
+  <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-fg-faint">
+    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-ok"></span>Fits in device memory</span>
+    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-warn"></span>Spills into host memory</span>
+    <span class="inline-flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm bg-bad"></span>Does not fit</span>
+  </div>
 </div>

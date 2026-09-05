@@ -8,7 +8,6 @@
     id = $bindable(''),
     title,
     subtitle,
-    width = 'md',
     header,
     children,
     footer
@@ -18,13 +17,62 @@
     id?: string;
     title: string;
     subtitle?: string;
-    width?: 'md' | 'lg' | 'xl' | '2xl';
     header?: Snippet;
     children: Snippet;
     footer?: Snippet;
   } = $props();
 
-  const widths = { md: 'max-w-xl', lg: 'max-w-2xl', xl: 'max-w-4xl', '2xl': 'max-w-6xl' };
+  // Every drawer opens at the same share of the window, kept per browser once dragged
+  const widthKey = 'nebu.drawer.width';
+  const defaultShare = 0.42;
+  const minWidth = 420;
+  const minRemaining = 200;
+
+  let share = $state(defaultShare);
+  let dragging = $state(false);
+
+  function readShare() {
+    try {
+      const v = parseFloat(localStorage.getItem(widthKey) ?? '');
+      if (v >= 0.2 && v <= 0.95) share = v;
+    } catch {
+      // storage may be unavailable
+    }
+  }
+  readShare();
+
+  function px(): number {
+    if (typeof window === 'undefined') return 0;
+    const w = window.innerWidth;
+    return Math.min(Math.max(w * share, minWidth), Math.max(w - minRemaining, minWidth));
+  }
+
+  function startDrag(e: PointerEvent) {
+    e.preventDefault();
+    dragging = true;
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => {
+      const w = window.innerWidth;
+      const next = Math.min(Math.max(w - ev.clientX, minWidth), w - minRemaining) / w;
+      share = next;
+    };
+    const stop = () => {
+      dragging = false;
+      target.releasePointerCapture(e.pointerId);
+      target.removeEventListener('pointermove', move);
+      target.removeEventListener('pointerup', stop);
+      target.removeEventListener('pointercancel', stop);
+      try {
+        localStorage.setItem(widthKey, share.toFixed(3));
+      } catch {
+        // storage may be unavailable
+      }
+    };
+    target.addEventListener('pointermove', move);
+    target.addEventListener('pointerup', stop);
+    target.addEventListener('pointercancel', stop);
+  }
 
   function onOpenChange(v: boolean) {
     if (v) return;
@@ -37,8 +85,18 @@
   <Dialog.Portal>
     <Dialog.Overlay class="fade fixed inset-0 z-40 bg-black/50" />
     <Dialog.Content
-      class="enter-right fixed inset-y-0 right-0 z-50 flex w-full {widths[width]} flex-col border-l border-line bg-surface shadow-pop focus:outline-none"
+      class="enter-right fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-line bg-surface shadow-pop focus:outline-none {dragging ? 'select-none' : ''}"
+      style="max-width: {px()}px"
     >
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize"
+        class="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize"
+        onpointerdown={startDrag}
+      >
+        <div class="mx-auto h-full w-px bg-transparent transition-colors group-hover:bg-accent/60 {dragging ? 'bg-accent' : ''}"></div>
+      </div>
       <header class="flex items-start gap-3 border-b border-line px-5 py-4">
         <div class="min-w-0 flex-1">
           <Dialog.Title class="truncate text-base font-semibold text-fg">{title}</Dialog.Title>

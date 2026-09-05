@@ -4,7 +4,6 @@
   import { ApiFlavor, InstallKind, ParamType } from '$proto/runtime_pb';
   import Drawer from './ui/Drawer.svelte';
   import Tabs from './ui/Tabs.svelte';
-  import Badge from './ui/Badge.svelte';
   import Kv from './ui/Kv.svelte';
   import Section from './ui/Section.svelte';
   import ParamChips from './ui/ParamChips.svelte';
@@ -22,13 +21,13 @@
   });
 </script>
 
-<Drawer bind:id title={manifest?.name || manifest?.id || 'Runtime'} subtitle={manifest?.id} width="lg">
+<Drawer bind:id title={manifest?.name || manifest?.id || 'Runtime'} subtitle={manifest?.id}>
   {#snippet header()}
     {#if status && manifest}
       <div class="flex flex-wrap items-center gap-2">
-        <Badge tone={status.compatible ? 'ok' : 'warn'} dot label={status.compatible ? 'compatible' : 'incompatible'} />
-        <span class="text-xs text-fg-muted">speaks {enumLabel(ApiFlavor, manifest.launch?.api)}</span>
-        {#each manifest.formats as f (f)}<Badge size="xs" label={f} />{/each}
+        <span class="inline-flex items-center gap-1.5 text-xs {status.compatible ? 'text-ok' : 'text-warn'}"><span class="h-1.5 w-1.5 rounded-full bg-current"></span>{status.compatible ? 'compatible' : 'incompatible'}</span>
+        <span class="text-xs text-fg-muted">{enumLabel(ApiFlavor, manifest.launch?.api)} API</span>
+        <span class="font-mono text-xs text-fg-faint">{manifest.formats.join(' ')}</span>
       </div>
       <div class="mt-3">
         <Tabs
@@ -75,14 +74,14 @@
         </div>
       {:else if tab === 'params'}
         {#if manifest.params.length === 0}
-          <p class="text-sm text-fg-faint">This runtime declares no params.</p>
+          <p class="text-sm text-fg-faint">No params</p>
         {:else}
           <table class="tbl">
             <thead><tr><th>name</th><th>type</th><th>default</th><th>choices</th><th>description</th></tr></thead>
             <tbody>
               {#each manifest.params as p (p.name)}
                 <tr>
-                  <td class="font-mono text-xs text-fg whitespace-nowrap">{p.name}{#if p.solved}<span class="ml-1.5 font-sans text-[10.5px] text-fg-faint" title="The planner solves it when set to auto">auto</span>{/if}</td>
+                  <td class="font-mono text-xs text-fg whitespace-nowrap">{p.name}{#if p.solved}<span class="ml-1.5 font-sans text-[10.5px] text-fg-faint" title="Solved by the planner when auto">auto</span>{/if}</td>
                   <td class="text-xs text-fg-muted">{enumLabel(ParamType, p.type)}</td>
                   <td class="font-mono text-xs text-fg-muted">{p.default || '–'}</td>
                   <td class="max-w-[12rem] truncate font-mono text-xs text-fg-muted" title={p.choices.join(', ')}>{p.choices.join(', ') || '–'}</td>
@@ -94,14 +93,14 @@
         {/if}
       {:else if tab === 'installs'}
         {#if installs.length === 0}
-          <p class="text-sm text-fg-faint">No install of this runtime yet. Adopt a binary, download a prebuilt release, or build one.</p>
+          <p class="text-sm text-fg-faint">No installs</p>
         {:else}
           <table class="tbl">
             <thead><tr><th>kind</th><th>version</th><th>path</th><th>facts</th><th>added</th></tr></thead>
             <tbody>
               {#each installs as i (i.id)}
                 <tr>
-                  <td><Badge size="xs" label={enumLabel(InstallKind, i.kind)} tone={i.kind === InstallKind.BUILT ? 'accent' : 'neutral'} /></td>
+                  <td class="text-xs text-fg-muted">{enumLabel(InstallKind, i.kind)}</td>
                   <td class="font-mono text-xs">{i.version || '–'}</td>
                   <td class="max-w-xs truncate font-mono text-xs text-fg-muted" title={i.path}>{i.path}</td>
                   <td class="max-w-sm"><ParamChips params={i.facts} max={4} /></td>
@@ -113,7 +112,7 @@
         {/if}
       {:else if tab === 'profiles'}
         {#if profiles.length === 0}
-          <p class="text-sm text-fg-faint">No profiles for this runtime. Runs start from the manifest defaults.</p>
+          <p class="text-sm text-fg-faint">No profiles</p>
         {:else}
           <table class="tbl">
             <thead><tr><th>name</th><th>params</th><th>updated</th></tr></thead>
@@ -123,12 +122,12 @@
                   <td>
                     <div class="flex items-center gap-2">
                       <span class="font-mono text-xs text-fg">{p.name}</span>
-                      {#if p.default}<Badge tone="accent" size="xs" label="default" />{/if}
+                      {#if p.default}<span class="text-[11px] text-accent">default</span>{/if}
                     </div>
                     {#if p.description}<div class="text-[11px] text-fg-faint">{p.description}</div>{/if}
                   </td>
                   <td class="max-w-md">
-                    {#if Object.keys(p.params).length}<ParamChips params={p.params} />{:else}<span class="text-[11px] text-fg-faint">manifest defaults</span>{/if}
+                    {#if Object.keys(p.params).length}<ParamChips params={p.params} />{:else}<span class="text-[11px] text-fg-faint">defaults</span>{/if}
                   </td>
                   <td class="text-xs text-fg-muted" title={when(p.updatedAt)}>{ago(p.updatedAt, clock.now)}</td>
                 </tr>

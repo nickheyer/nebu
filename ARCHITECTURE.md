@@ -30,6 +30,8 @@ once and never changes again.
 ## Nouns
 
 - **Host**. Probed profile of the machine. Devices, memory pools, storage, facts.
+- **Settings**. Host wide preferences as rows: the label people call the host by, whether the
+  setup guide was dismissed. Edited from the settings page or `nebu host --label`.
 - **Transport**. How bytes and listings move: HTTP, OCI distribution, filesystem, git with or
   without LFS, the Hugging Face CLI. One Go type each behind one interface.
 - **Provider**. A hosted platform and the wire format it speaks: Hugging Face, Docker Hub,
@@ -79,6 +81,7 @@ nebu/
 |       +-- v1/
 |           +-- config.proto       daemon and client configuration
 |           +-- host.proto         host profile, devices, memory pools, facts
+|           +-- settings.proto     host wide preferences
 |           +-- source.proto       sources, search, resolve
 |           +-- model.proto        model, revision, artifact, format, role, descriptor
 |           +-- store.proto        stored models, pulls, verification, gc, export
@@ -379,7 +382,9 @@ a file with the same `id` into a directory listed in `spec_dirs`, which always i
 - `archs/` is `ArchSpec`. A regex over the architecture name and formulas such as
   `cache_per_token` evaluated with the descriptor params and the run params in scope. Formulas
   may use one another in any order, so a sliding window family declares which layers keep the
-  window and folds `n_ctx` and `n_swa` into one per token figure.
+  window and folds `n_ctx` and `n_swa` into one per token figure. A family claims a checkpoint
+  only when its formulas evaluate over the params read from it, run params guarded with `??`, so
+  a checkpoint missing what the family needs falls to the next match rather than failing to plan.
 - `runtimes/` is `RuntimeManifest`. Accepted formats, host constraints as expressions,
   acquisition including the recipe id, launch templates with an optional prepare step, typed
   params with their flags, the estimate policy, and report rules for calibration.

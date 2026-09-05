@@ -409,3 +409,9 @@ CREATE TABLE profile_params (
   value TEXT NOT NULL,
   PRIMARY KEY (profile_id, name)
 );
+
+-- Host wide preferences, one row per field of the Settings message, the value as JSON
+CREATE TABLE settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);

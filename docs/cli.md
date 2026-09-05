@@ -15,7 +15,7 @@ Global flags come before the command: `--config PATH`, `--addr HOST:PORT`, `--js
 
 ```
 nebu doctor                          probe the host and check every dependency
-nebu host [--refresh]                the probed profile
+nebu host [--refresh] [--label NAME] the probed profile, the label naming this host everywhere
 nebu sources                         configured sources with their sorts, facets, and auth state
 nebu sources providers               providers with the settings their sources accept
 nebu sources add ID --kind K [--name N] [--set name=value]...

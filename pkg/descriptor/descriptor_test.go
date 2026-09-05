@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/spec"
 )
@@ -94,5 +95,38 @@ func TestArchMatchAndDerive(t *testing.T) {
 	}
 	if _, err := b.Build(&v1.RawModel{FormatId: "nope"}); err == nil {
 		t.Fatal("unknown format should fail")
+	}
+}
+
+func TestArchClaimsOnlyWhatItsFormulasCover(t *testing.T) {
+	b := builder(t)
+	raw := func(extra map[string]string) *v1.RawModel {
+		r := &v1.RawModel{FormatId: "safetensors", Group: "default", Metadata: map[string]string{
+			"model_type": "deepseek_v4", "num_hidden_layers": "4", "hidden_size": "1024", "num_attention_heads": "16", "num_key_value_heads": "1", "head_dim": "512", "qk_rope_head_dim": "64",
+		}, Tensors: []*v1.TensorInfo{{Name: "model.layers.0.attn.weight", Bytes: 8, Elements: 2}}}
+		for k, v := range extra {
+			r.Metadata[k] = v
+		}
+		return r
+	}
+	// No latent rank, so the MLA spec cannot plan it and the default family takes it
+	d, err := b.Build(raw(nil))
+	if err != nil || d.GetArchSpecId() != "default" {
+		t.Fatalf("without kv_lora_rank got %q %v", d.GetArchSpecId(), err)
+	}
+	env := map[string]any{}
+	for k, v := range d.GetParams() {
+		env[k] = v
+	}
+	if err := eval.Solve(b.Formulas(d.GetArchSpecId()), env); err != nil {
+		t.Fatalf("default formulas should solve: %v", err)
+	}
+	d, err = b.Build(raw(map[string]string{"kv_lora_rank": "512"}))
+	if err != nil || d.GetArchSpecId() != "mla" {
+		t.Fatalf("with kv_lora_rank got %q %v", d.GetArchSpecId(), err)
+	}
+	d, err = b.Build(raw(map[string]string{"text_config.kv_lora_rank": "512"}))
+	if err != nil || d.GetArchSpecId() != "mla" || d.GetParams()["kv_lora_rank"] != 512 {
+		t.Fatalf("nested kv_lora_rank got %q %v %v", d.GetArchSpecId(), d.GetParams(), err)
 	}
 }

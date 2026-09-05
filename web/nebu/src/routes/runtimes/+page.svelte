@@ -13,7 +13,6 @@
   import Button from '$lib/components/ui/Button.svelte';
   import Panel from '$lib/components/ui/Panel.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
-  import Badge from '$lib/components/ui/Badge.svelte';
   import StateBadge from '$lib/components/ui/StateBadge.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
   import Dialog from '$lib/components/ui/Dialog.svelte';
@@ -80,14 +79,14 @@
   async function setDefault(p: Profile, on: boolean) {
     try {
       await api.runtimes.updateProfile({ profile: { ...p, default: on } });
-      ok(on ? `${p.name} is the ${p.runtimeId} default` : `${p.name} is no longer the default`, on ? 'Every run that names no profile starts from it' : 'Runs fall back to the manifest defaults');
+      ok(on ? `${p.name} is the ${p.runtimeId} default` : `${p.name} is no longer the default`);
     } catch (err) {
       fail(err, 'Update failed');
     }
   }
 
   async function removeProfile(p: Profile) {
-    const yes = await confirm({ title: `Remove ${p.name}?`, message: p.default ? `Runs of ${p.runtimeId} that name no profile fall back to the manifest defaults.` : 'Nothing that names it is touched without asking you first.', action: 'Remove', tone: 'bad' });
+    const yes = await confirm({ title: `Remove ${p.name}?`, action: 'Remove', tone: 'bad' });
     if (!yes) return;
     try {
       await api.runtimes.deleteProfile({ id: p.id });
@@ -98,11 +97,11 @@
         return;
       }
       // The daemon names what starts from the profile, clearing them is the person's call
-      const force = await confirm({ title: `Clear what names ${p.name}?`, message: `${message(err)}. Cleared ones start from the ${p.runtimeId} default profile instead.`, action: 'Clear and remove', tone: 'bad' });
+      const force = await confirm({ title: `Remove ${p.name} and clear what names it?`, message: message(err), action: 'Remove all', tone: 'bad' });
       if (!force) return;
       try {
         await api.runtimes.deleteProfile({ id: p.id, force: true });
-        ok('Profile removed', 'What named it now starts from the runtime default');
+        ok('Profile removed');
       } catch (again) {
         fail(again, 'Remove failed');
       }
@@ -116,7 +115,7 @@
     adopting = true;
     try {
       const r = await api.runtimes.adoptInstall({ runtimeId: adoptRuntime, path: adoptPath.trim() });
-      ok(`Adopted ${adoptRuntime}`, r.install ? `${r.install.version || 'version unknown'} at ${r.install.path}` : undefined);
+      ok(`Adopted ${adoptRuntime}`, r.install ? `${r.install.version || 'unknown version'} at ${r.install.path}` : undefined);
       adoptOpen = false;
     } catch (err) {
       fail(err, 'Adopt failed');
@@ -128,7 +127,7 @@
   async function prebuilt(runtimeId: string) {
     try {
       const r = await api.runtimes.installPrebuilt({ runtimeId });
-      ok(`Downloading ${runtimeId}`, 'The release matching this host', r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Follow' } : undefined);
+      ok(`Downloading ${runtimeId}`, undefined, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
     } catch (err) {
       fail(err, 'Install refused');
     }
@@ -136,7 +135,7 @@
 
   async function removeInstall(id: string, runtimeId: string) {
     const used = [...live.instances.values()].some((i) => i.installId === id && instanceLive(i));
-    const yes = await confirm({ title: `Remove this ${runtimeId} install?`, message: used ? 'An instance is running from it. It keeps running but cannot be relaunched after a restart.' : 'Downloaded files are deleted. Adopted binaries are left where they are.', action: 'Remove', tone: 'bad' });
+    const yes = await confirm({ title: `Remove this ${runtimeId} install?`, message: used ? 'An instance runs from it. It keeps running but cannot relaunch.' : 'Downloaded files are deleted. Adopted binaries stay.', action: 'Remove', tone: 'bad' });
     if (!yes) return;
     try {
       await api.runtimes.removeInstall({ id });
@@ -147,7 +146,7 @@
   }
 
   async function removeBuild(id: string) {
-    const yes = await confirm({ title: 'Remove this build?', message: 'The build tree and the install it produced are deleted.', action: 'Remove', tone: 'bad' });
+    const yes = await confirm({ title: 'Remove this build?', message: 'The build tree and its install are deleted.', action: 'Remove', tone: 'bad' });
     if (!yes) return;
     try {
       await api.builds.removeBuild({ id });
@@ -158,7 +157,7 @@
   }
 </script>
 
-<PageHeader title="Runtimes" description="Backends this host can serve with, and the installs that make them usable">
+<PageHeader title="Runtimes">
   <Button variant="outline" icon={RefreshCw} onclick={refresh}>Refresh</Button>
 </PageHeader>
 
@@ -178,19 +177,15 @@
             <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-line bg-raised text-fg-muted"><Wrench size={16} /></div>
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-2">
-                <button class="text-sm font-semibold text-fg hover:underline" title="Manifest, params, installs, and profiles" onclick={() => (runtimeId = id)}>{rt.manifest?.name}</button>
+                <button class="text-sm font-semibold text-fg hover:underline" onclick={() => (runtimeId = id)}>{rt.manifest?.name}</button>
                 <span class="font-mono text-xs text-fg-faint">{id}</span>
-                {#if rt.compatible}
-                  <Badge tone="ok" size="xs" dot label="compatible" />
-                {:else}
-                  <Badge tone="warn" size="xs" dot label="incompatible" />
-                {/if}
+                <span class="inline-flex items-center gap-1.5 text-[11px] {rt.compatible ? 'text-ok' : 'text-warn'}"><span class="h-1.5 w-1.5 rounded-full bg-current"></span>{rt.compatible ? 'compatible' : 'incompatible'}</span>
               </div>
               <p class="mt-1 text-sm leading-5 text-fg-muted">{rt.manifest?.description}</p>
             </div>
           </div>
           <div class="flex flex-wrap gap-1.5">
-            {#each rt.manifest?.formats ?? [] as f (f)}<span class="rounded border border-line bg-sunken px-1.5 py-0.5 font-mono text-[11px] text-fg-muted">{f}</span>{/each}
+            <span class="font-mono text-[11px] text-fg-faint">{(rt.manifest?.formats ?? []).join(' ')}</span>
             <span class="ml-auto text-xs text-fg-faint">{have.length} {have.length === 1 ? 'install' : 'installs'} · {owned} {owned === 1 ? 'profile' : 'profiles'}</span>
           </div>
           {#if rt.unmet.length}
@@ -208,10 +203,10 @@
                 adoptRuntime = id;
                 adoptPath = '';
                 adoptOpen = true;
-              }}>Adopt binary</Button
+              }}>Adopt</Button
             >
             {#if rt.manifest?.acquire?.prebuilt.length}
-              <Button size="sm" icon={Download} onclick={() => prebuilt(id)}>Install prebuilt</Button>
+              <Button size="sm" icon={Download} onclick={() => prebuilt(id)}>Install</Button>
             {/if}
             <Button size="sm" icon={SlidersHorizontal} onclick={() => newProfile(id)}>New profile</Button>
             {#each recipesOf(id) as rs (rs.recipe?.id)}
@@ -228,17 +223,17 @@
           </div>
         </div>
       {:else}
-        <div class="panel lg:col-span-2"><Empty icon={Wrench} title="No runtime manifests" description="Drop a manifest under a spec directory to teach nebu a backend." /></div>
+        <div class="panel lg:col-span-2"><Empty icon={Wrench} title="No runtime manifests" /></div>
       {/each}
     {/if}
   </section>
 
-  <Panel title="Profiles" description="Named param sets per runtime, the default one applies to every run that names none" flush>
+  <Panel title="Profiles" info="Named param sets per runtime. The default applies to every run that names none" flush>
     {#snippet actions()}
       <Button size="sm" icon={Plus} onclick={() => newProfile()} disabled={!runtimes.length}>New profile</Button>
     {/snippet}
     {#if profiles.length === 0}
-      <Empty compact icon={SlidersHorizontal} title="No profiles yet" description="A profile fixes the knobs of a runtime once, so a run only says which model. Mark one as the default and every run of that runtime starts from it." />
+      <Empty compact icon={SlidersHorizontal} title="No profiles" />
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
@@ -250,12 +245,12 @@
                 <td>
                   <div class="flex items-center gap-2">
                     <span class="font-mono text-xs text-fg">{p.name}</span>
-                    {#if p.default}<Badge tone="accent" size="xs" label="default" />{/if}
+                    {#if p.default}<span class="text-[11px] text-accent">default</span>{/if}
                   </div>
                   {#if p.description}<div class="text-[11px] text-fg-faint">{p.description}</div>{/if}
                 </td>
                 <td class="max-w-md">
-                  {#if Object.keys(p.params).length}<ParamChips params={p.params} />{:else}<span class="text-[11px] text-fg-faint">manifest defaults</span>{/if}
+                  {#if Object.keys(p.params).length}<ParamChips params={p.params} />{:else}<span class="text-[11px] text-fg-faint">defaults</span>{/if}
                 </td>
                 <td class="text-xs text-fg-muted" title={when(p.updatedAt)}>{ago(p.updatedAt, clock.now)}</td>
                 <td class="text-right">
@@ -275,9 +270,9 @@
     {/if}
   </Panel>
 
-  <Panel title="Installs" description="Usable copies of a runtime, newest first" flush>
+  <Panel title="Installs" flush>
     {#if installs.length === 0}
-      <Empty compact icon={Package} title="No installs yet" description="Adopt a binary already on the host, download a prebuilt release, or build one from a recipe." />
+      <Empty compact icon={Package} title="No installs" />
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
@@ -286,13 +281,13 @@
             {#each installs as i (i.id)}
               <tr>
                 <td class="font-medium text-fg">{i.runtimeId}</td>
-                <td><Badge size="xs" label={enumLabel(InstallKind, i.kind)} tone={i.kind === InstallKind.BUILT ? 'accent' : 'neutral'} /></td>
+                <td class="text-xs text-fg-muted">{enumLabel(InstallKind, i.kind)}</td>
                 <td class="font-mono text-xs">{i.version || '–'}</td>
                 <td class="max-w-xs truncate font-mono text-xs text-fg-muted" title={i.path}>{i.path}</td>
                 <td class="max-w-sm"><ParamChips params={i.facts} max={4} /></td>
                 <td class="text-xs text-fg-muted" title={when(i.createdAt)}>{ago(i.createdAt, clock.now)}</td>
                 <td class="text-right">
-                  <Menu items={[{ label: 'Remove install', icon: Trash2, tone: 'bad', onSelect: () => removeInstall(i.id, i.runtimeId) }]} />
+                  <Menu items={[{ label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeInstall(i.id, i.runtimeId) }]} />
                 </td>
               </tr>
             {/each}
@@ -302,10 +297,10 @@
     {/if}
   </Panel>
 
-  <Panel title="Builds" description="Recipe runs on this host, keyed by the hash of everything that decides their bytes" flush>
+  <Panel title="Builds" flush>
     <div id="builds"></div>
     {#if builds.length === 0}
-      <Empty compact icon={Hammer} title="No builds yet" description="Building from a recipe produces an install of kind built. An unchanged recipe on an unchanged host is a cache hit." />
+      <Empty compact icon={Hammer} title="No builds" />
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
@@ -328,7 +323,7 @@
                 <td class="text-right">
                   <span class="inline-flex items-center gap-1">
                     {#if b.taskId}<Button size="xs" variant="ghost" icon={ScrollText} onclick={() => (taskId = b.taskId)}>Log</Button>{/if}
-                    <Menu items={[{ label: 'Remove build and install', icon: Trash2, tone: 'bad', onSelect: () => removeBuild(b.id) }]} />
+                    <Menu items={[{ label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeBuild(b.id) }]} />
                   </span>
                 </td>
               </tr>
@@ -340,8 +335,8 @@
   </Panel>
 </div>
 
-<Dialog bind:open={adoptOpen} title="Adopt a binary for {adoptRuntime}" description="Records a binary already on this host as an install and probes its version and devices">
-  <Field label="Executable path" for="adopt-path" hint="Leave empty to search PATH for the names the manifest lists">
+<Dialog bind:open={adoptOpen} title="Adopt a {adoptRuntime} binary">
+  <Field label="Path" for="adopt-path" hint="Empty searches PATH">
     <input id="adopt-path" class="input font-mono" bind:value={adoptPath} placeholder={runtimes.find((r) => r.manifest?.id === adoptRuntime)?.manifest?.acquire?.adopt.join(', ') || 'path to the binary'} />
   </Field>
   {#snippet footer()}

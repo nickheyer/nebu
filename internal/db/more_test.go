@@ -178,3 +178,26 @@ func TestWatchesAndFindings(t *testing.T) {
 		t.Fatal("finding gone")
 	}
 }
+
+func TestSettingsRoundTrip(t *testing.T) {
+	d, _ := open(t)
+	ctx := context.Background()
+	empty, err := d.GetSettings(ctx)
+	if err != nil || empty.GetHostLabel() != "" || empty.GetSetupDismissed() {
+		t.Fatalf("fresh settings %v %v", empty, err)
+	}
+	s := &v1.Settings{HostLabel: "lab box", SetupDismissed: true}
+	if err := d.PutSettings(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.GetSettings(ctx)
+	if err != nil || !proto.Equal(got, s) {
+		t.Fatalf("round trip %v %v", got, err)
+	}
+	if err := d.PutSettings(ctx, &v1.Settings{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = d.GetSettings(ctx); got.GetHostLabel() != "" || got.GetSetupDismissed() {
+		t.Fatalf("replace should clear %v", got)
+	}
+}

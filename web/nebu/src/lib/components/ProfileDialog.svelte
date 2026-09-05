@@ -40,10 +40,10 @@
       const profile = { id: editing?.id ?? '', runtimeId: rt, name: name.trim(), description: description.trim(), params: values, default: isDefault };
       if (editing) {
         await api.runtimes.updateProfile({ profile });
-        return { title: `Updated ${profile.name}`, detail: 'Applies to the next run that uses it' };
+        return { title: `Updated ${profile.name}` };
       }
       await api.runtimes.createProfile({ profile });
-      return { title: `Added ${profile.name}`, detail: isDefault ? `Every ${rt} run starts from it now` : 'Pick it in the run dialog or pass --profile' };
+      return { title: `Added ${profile.name}` };
     },
     failTitle: () => (editing ? 'Update failed' : 'Add failed')
   });
@@ -52,7 +52,7 @@
 <FormDialog
   bind:open
   title={editing ? `Edit ${editing.name}` : 'New profile'}
-  description={editing ? `${editing.runtimeId} · ${editing.id}` : 'A named set of params for one runtime, kept beside the seeded manifest'}
+  description={editing ? `${editing.runtimeId} · ${editing.id}` : undefined}
   size="lg"
   action={editing ? 'Save' : 'Add profile'}
   saving={form.saving}
@@ -60,22 +60,22 @@
   onsubmit={form.run}
 >
   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-    <Field label="Runtime" for="prof-runtime" hint={editing ? 'A profile stays with its runtime' : manifest?.description}>
+    <Field label="Runtime" for="prof-runtime">
       <select id="prof-runtime" class="input" value={rt} disabled={!!editing} onchange={(e) => pick((e.currentTarget as HTMLSelectElement).value)}>
         {#each cached.runtimes as r (r.manifest?.id)}<option value={r.manifest?.id}>{r.manifest?.name ?? r.manifest?.id}</option>{/each}
       </select>
     </Field>
-    <Field label="Name" for="prof-name" hint="Unique within the runtime, usable as --profile on the command line">
+    <Field label="Name" for="prof-name">
       <input id="prof-name" class="input font-mono" bind:value={name} placeholder="long-context" aria-invalid={nameTaken} autocomplete="off" spellcheck="false" />
-      {#if nameTaken}<span class="text-xs text-bad">{rt} already has a profile with this name</span>{/if}
+      {#if nameTaken}<span class="text-xs text-bad">Name taken</span>{/if}
     </Field>
     <Field label="Description" for="prof-desc" class="sm:col-span-2">
       <input id="prof-desc" class="input" bind:value={description} placeholder="Optional" />
     </Field>
-    <CheckCard bind:checked={isDefault} class="sm:col-span-2" title="Default for {rt || 'the runtime'}" description="Every run, swap, and fit check of the runtime that names no profile starts from these params. One profile per runtime holds this." />
+    <CheckCard bind:checked={isDefault} class="sm:col-span-2" title="Default for {rt || 'the runtime'}" description="Runs that name no profile start from it" />
   </div>
 
   <div class="mt-5 mb-2 text-[10.5px] font-semibold tracking-wider text-fg-faint uppercase">Parameters</div>
-  <p class="mb-3 text-xs text-fg-muted">Empty fields inherit the manifest default. Slot defaults and a run's own params apply over the profile.</p>
+  <p class="mb-3 text-xs text-fg-muted">Empty inherits the manifest default</p>
   <ParamForm params={manifest?.params ?? []} bind:values bind:invalid idPrefix="prof" />
 </FormDialog>

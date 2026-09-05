@@ -39,6 +39,7 @@ const (
 // Connect clients for every service
 type clients struct {
 	host      nebuv1connect.HostServiceClient
+	settings  nebuv1connect.SettingsServiceClient
 	sources   nebuv1connect.SourceServiceClient
 	runtimes  nebuv1connect.RuntimeServiceClient
 	estimate  nebuv1connect.EstimateServiceClient
@@ -150,6 +151,7 @@ func (e *env) clients() (*clients, error) {
 	httpClient.Transport = authTransport{base: httpClient.Transport, token: e.cfg.GetAuth().GetToken()}
 	e.cl = &clients{
 		host:      nebuv1connect.NewHostServiceClient(httpClient, base),
+		settings:  nebuv1connect.NewSettingsServiceClient(httpClient, base),
 		sources:   nebuv1connect.NewSourceServiceClient(httpClient, base),
 		runtimes:  nebuv1connect.NewRuntimeServiceClient(httpClient, base),
 		estimate:  nebuv1connect.NewEstimateServiceClient(httpClient, base),

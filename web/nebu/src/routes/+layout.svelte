@@ -3,9 +3,10 @@
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { Tooltip } from 'bits-ui';
-  import { connect, disconnect, live, unackedFindings, liveInstances } from '$lib/state.svelte';
+  import { connect, disconnect, live, unackedFindings, liveInstances, hostName } from '$lib/state.svelte';
   import { endDrag } from '$lib/dnd.svelte';
   import { LayoutDashboard, Search, Database, LayoutGrid, Boxes, Waypoints, MessageSquare, Wrench, ListChecks, Radar, Server, Settings, WifiOff, KeyRound, Menu as MenuIcon } from '@lucide/svelte';
+  import Logo from '$lib/components/Logo.svelte';
   import Toaster from '$lib/components/ui/Toaster.svelte';
   import Confirmer from '$lib/components/ui/Confirmer.svelte';
   import ActivityMenu from '$lib/components/ActivityMenu.svelte';
@@ -43,6 +44,9 @@
     }
   ]);
 
+  const name = $derived(hostName());
+  const labeled = $derived(!!live.settings?.hostLabel && live.settings.hostLabel !== live.host?.hostname);
+
   function active(href: string): boolean {
     const p = page.url.pathname;
     return href === '/' ? p === '/' : p === href || p.startsWith(href + '/');
@@ -61,6 +65,10 @@
   });
 </script>
 
+<svelte:head>
+  <title>{name ? `${name} · nebu` : 'nebu'}</title>
+</svelte:head>
+
 <Tooltip.Provider delayDuration={250}>
   <div class="flex min-h-screen">
     {#if menuOpen}
@@ -70,13 +78,16 @@
       class="fixed inset-y-0 left-0 z-40 flex h-screen w-[232px] shrink-0 flex-col border-r border-line bg-surface transition-transform lg:sticky lg:top-0 lg:translate-x-0 lg:bg-surface/70 {menuOpen ? 'translate-x-0 shadow-pop' : '-translate-x-full'}"
       aria-label="Main"
     >
-      <a href="/" class="flex h-14 items-center gap-2.5 border-b border-line px-4">
-        <span class="flex h-7 w-7 items-center justify-center rounded-md bg-accent text-accent-fg">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18V6l16 12V6" /></svg>
-        </span>
-        <span class="text-base font-semibold tracking-tight text-fg">nebu</span>
-        {#if live.host?.hostname}<span class="ml-auto truncate font-mono text-[11px] text-fg-faint" title={live.host.hostname}>{live.host.hostname}</span>{/if}
+      <a href="/" class="flex h-14 items-center gap-2.5 border-b border-line px-4 text-fg">
+        <Logo size={24} />
+        <span class="text-[17px] font-semibold tracking-tight">nebu</span>
       </a>
+      {#if name}
+        <div class="border-b border-line px-4 py-2.5">
+          <div class="truncate text-sm font-medium text-fg" title={name}>{name}</div>
+          {#if labeled}<div class="truncate font-mono text-[11px] text-fg-faint" title={live.host?.hostname}>{live.host?.hostname}</div>{/if}
+        </div>
+      {/if}
 
       <div class="flex-1 overflow-y-auto px-2.5 py-3">
         {#each groups as g (g.label)}
@@ -108,7 +119,7 @@
         </a>
         <div class="mt-1 flex items-center gap-2 px-2.5 py-1.5 text-[11.5px]" title={live.error}>
           <span class="relative inline-block h-1.5 w-1.5 rounded-full {live.connected ? 'bg-ok' : 'bg-bad'} {live.connected ? 'pulse' : ''}"></span>
-          <span class="text-fg-faint">{live.connected ? 'Live updates' : 'Reconnecting'}</span>
+          <span class="text-fg-faint">{live.connected ? 'Connected' : 'Reconnecting'}</span>
         </div>
       </div>
     </nav>
@@ -116,18 +127,19 @@
     <div class="flex min-w-0 flex-1 flex-col">
       <div class="flex h-12 items-center gap-3 border-b border-line bg-surface/70 px-4 lg:hidden">
         <button class="rounded-md p-1.5 text-fg-muted hover:bg-raised hover:text-fg" aria-label="Open menu" onclick={() => (menuOpen = true)}><MenuIcon size={18} /></button>
-        <span class="text-sm font-semibold text-fg">nebu</span>
+        <Logo size={20} class="text-fg" />
+        <span class="text-sm font-semibold text-fg">{name || 'nebu'}</span>
         <span class="ml-auto relative inline-block h-1.5 w-1.5 rounded-full {live.connected ? 'bg-ok' : 'bg-bad'}"></span>
       </div>
       {#if !live.connected && live.error}
         <div class="flex items-center gap-3 border-b px-6 py-2 text-sm {live.needsToken ? 'border-warn/30 bg-warn/10 text-warn' : 'border-bad/30 bg-bad/10 text-bad'}">
           {#if live.needsToken}
             <KeyRound size={15} />
-            <span>The daemon requires an API token.</span>
-            <a href="/settings" class="font-medium underline underline-offset-2">Enter it in settings</a>
+            <span>The daemon needs an API token.</span>
+            <a href="/settings" class="font-medium underline underline-offset-2">Settings</a>
           {:else}
             <WifiOff size={15} />
-            <span>Not connected to the daemon, retrying.</span>
+            <span>Daemon unreachable. Retrying.</span>
             <span class="truncate text-xs opacity-80">{live.error}</span>
           {/if}
         </div>

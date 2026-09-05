@@ -13,6 +13,7 @@ import type { StoredModel, StoreStatus } from '$proto/store_pb';
 import { FindingKind, type Finding, type Watch, type Want } from '$proto/monitor_pb';
 import { fail, toast } from './toast.svelte';
 import type { Source, SourceStatus } from '$proto/source_pb';
+import type { Settings } from '$proto/settings_pb';
 import { byName, newestFirst } from './format';
 
 // Everything the UI shows, kept current by the event stream
@@ -22,6 +23,7 @@ export const live = $state({
   needsToken: false,
   error: '',
   host: null as HostProfile | null,
+  settings: null as Settings | null,
   store: null as StoreStatus | null,
   tasks: new SvelteMap<string, Task>(),
   instances: new SvelteMap<string, Instance>(),
@@ -152,6 +154,10 @@ function apply(ev: Event) {
     if (p.case === 'store') live.store = p.value;
     return;
   }
+  if (ev.kind === EventKind.SETTINGS) {
+    if (p.case === 'settings') live.settings = p.value;
+    return;
+  }
   const map = maps[ev.kind];
   if (!map) return;
   if (ev.action === EventAction.DELETED) {
@@ -230,6 +236,23 @@ export async function probeHost() {
   }
 }
 
+// What this host is called: its label, else its hostname
+export function hostName(): string {
+  return live.settings?.hostLabel || live.host?.hostname || '';
+}
+
+// Writes settings, the stream carrying the change back to every page
+export async function updateSettings(patch: Partial<Settings>): Promise<boolean> {
+  try {
+    const r = await api.settings.updateSettings({ settings: { ...(live.settings ?? { hostLabel: '', setupDismissed: false }), ...patch } as Settings });
+    if (r.settings) live.settings = r.settings;
+    return true;
+  } catch (err) {
+    fail(err, 'Could not save');
+    return false;
+  }
+}
+
 export function taskActive(t: Task): boolean {
   return t.state === TaskState.PENDING || t.state === TaskState.RUNNING;
 }
@@ -288,10 +311,4 @@ export function profileParams(runtimeId: string, profileId = ''): Record<string,
 export function formatBlurb(id: string): string {
   const f = live.formats.get(id);
   return f?.blurb || f?.description || `${id} weight files`;
-}
-
-// Every format the daemon reads, as one sentence fragment
-export function formatNames(): string {
-  const names = [...live.formats.values()].map((f) => f.description || f.id);
-  return names.length > 1 ? names.slice(0, -1).join(', ') + ', and ' + names[names.length - 1] : (names[0] ?? 'nothing yet');
 }

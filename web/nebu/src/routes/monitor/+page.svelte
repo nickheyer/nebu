@@ -11,7 +11,6 @@
   import Button from '$lib/components/ui/Button.svelte';
   import Panel from '$lib/components/ui/Panel.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
-  import Badge from '$lib/components/ui/Badge.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
   import Tabs from '$lib/components/ui/Tabs.svelte';
   import WatchDialog from '$lib/components/WatchDialog.svelte';
@@ -59,14 +58,14 @@
 
   async function check(w?: Watch | Want, rearm = false) {
     if (rearm && w && 'query' in w) {
-      const yes = await confirm({ title: `Look again for ${w.query}?`, message: `What it found is forgotten and the next match is ${w.autoPull ? 'pulled and swapped' : 'recorded'} the same way.`, action: 'Look again' });
+      const yes = await confirm({ title: `Look again for ${w.query}?`, message: 'What it found is forgotten.', action: 'Look again' });
       if (!yes) return;
     }
     if (!w) checkingAll = true;
     try {
       const r = await api.monitor.checkWatches({ id: w?.id ?? '', rearm });
-      const what = w ? ('repo' in w ? `Checking ${w.repo}` : `Looking for ${w.query}`) : 'Checking every watch and want';
-      ok(what, undefined, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Follow' } : undefined);
+      const what = w ? ('repo' in w ? `Checking ${w.repo}` : `Looking for ${w.query}`) : 'Checking everything';
+      ok(what, undefined, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
     } catch (err) {
       fail(err, 'Check refused');
     } finally {
@@ -75,7 +74,7 @@
   }
 
   async function remove(w: Watch) {
-    const yes = await confirm({ title: `Stop watching ${w.repo}?`, message: 'Its findings are removed too. Pulled models stay in the store.', action: 'Remove', tone: 'bad' });
+    const yes = await confirm({ title: `Stop watching ${w.repo}?`, message: 'Its findings go too. Pulled models stay.', action: 'Stop', tone: 'bad' });
     if (!yes) return;
     try {
       await api.monitor.removeWatch({ id: w.id });
@@ -87,7 +86,7 @@
   }
 
   async function unwant(w: Want) {
-    const yes = await confirm({ title: `Stop wanting ${w.query}?`, message: 'Its findings are removed too. Anything pulled stays in the store.', action: 'Remove', tone: 'bad' });
+    const yes = await confirm({ title: `Stop wanting ${w.query}?`, message: 'Its findings go too. Pulled models stay.', action: 'Stop', tone: 'bad' });
     if (!yes) return;
     try {
       await api.monitor.removeWant({ id: w.id });
@@ -116,16 +115,16 @@
     for (const f of open) await ack(f.id);
   }
 
-  const kindTone: Record<number, 'ok' | 'info' | 'warn' | 'neutral' | 'accent'> = { [FindingKind.NEW_REVISION]: 'info', [FindingKind.NEW_GROUP]: 'ok', [FindingKind.REMOVED_GROUP]: 'warn', [FindingKind.WANTED_FOUND]: 'accent' };
+  const kindColor: Record<number, string> = { [FindingKind.NEW_REVISION]: 'text-info', [FindingKind.NEW_GROUP]: 'text-ok', [FindingKind.REMOVED_GROUP]: 'text-warn', [FindingKind.WANTED_FOUND]: 'text-accent' };
 </script>
 
 {#snippet onSwap(w: Watch | Want)}
   {#if w.autoPull && w.slotId}
-    <Badge size="xs" tone="accent" label="pull and swap" /> <span class="text-fg-muted">{slotName(w.slotId)}</span>
+    <span class="text-fg">pull and swap into <span class="font-mono">{slotName(w.slotId)}</span></span>
   {:else if w.autoPull}
-    <Badge size="xs" tone="info" label="pull" />
+    <span class="text-fg">pull</span>
   {:else}
-    <span class="text-fg-faint">record only</span>
+    <span class="text-fg-faint">record</span>
   {/if}
 {/snippet}
 
@@ -134,17 +133,17 @@
   <td class="text-xs text-fg-muted">{w.slotId ? profileName(w.profileId) : '–'}</td>
 {/snippet}
 
-<PageHeader title="Monitor" description="Watched repositories checked on an interval, and wanted models searched for until they turn up">
-  <Button variant="outline" icon={RefreshCw} loading={checkingAll} disabled={!watches.length && !wants.length} onclick={() => check()}>Check all now</Button>
-  <Button variant="outline" icon={Sparkles} onclick={() => (wantOpen = true)}>Want a model</Button>
-  <Button variant="primary" icon={Plus} onclick={() => (addOpen = true)}>Watch a repository</Button>
+<PageHeader title="Monitor">
+  <Button variant="outline" icon={RefreshCw} loading={checkingAll} disabled={!watches.length && !wants.length} onclick={() => check()}>Check now</Button>
+  <Button variant="outline" icon={Sparkles} onclick={() => (wantOpen = true)}>Want</Button>
+  <Button variant="primary" icon={Plus} onclick={() => (addOpen = true)}>Watch</Button>
 </PageHeader>
 
 <div class="flex flex-col gap-6">
-  <Panel title="Wanted" description="{wants.filter((w) => !w.satisfied).length} still looking" flush>
+  <Panel title="Wanted" description={wants.length ? `${wants.filter((w) => !w.satisfied).length} looking` : ''} info="A standing search across sources. The first matching weight group is pulled when it appears" flush>
     {#if wants.length === 0}
-      <Empty compact icon={Sparkles} title="Nothing wanted" description="Want a model that is not out yet, or not in a format you can run. Every source is searched each interval and the first matching weight group is pulled the moment it appears.">
-        <Button size="sm" variant="primary" icon={Sparkles} onclick={() => (wantOpen = true)}>Want a model</Button>
+      <Empty compact icon={Sparkles} title="Nothing wanted">
+        <Button size="sm" variant="primary" icon={Sparkles} onclick={() => (wantOpen = true)}>Want</Button>
       </Empty>
     {:else}
       <div class="overflow-x-auto">
@@ -169,7 +168,7 @@
                     {#if w.taskId}<a href="/tasks?id={w.taskId}" class="ml-1 inline-flex items-center gap-1 text-[11px] text-accent hover:underline"><ExternalLink size={11} /> pull</a>{/if}
                     {#if w.swapTaskId}<a href="/tasks?id={w.swapTaskId}" class="ml-1 inline-flex items-center gap-1 text-[11px] text-accent hover:underline"><ExternalLink size={11} /> swap</a>{/if}
                   {:else}
-                    <span class="text-fg-faint">not yet</span>
+                    <span class="text-fg-faint">–</span>
                   {/if}
                 </td>
                 <td class="text-xs text-fg-muted" title={when(w.checkedAt)}>
@@ -194,10 +193,10 @@
     {/if}
   </Panel>
 
-  <Panel title="Watches" description="{watches.length} watched" flush>
+  <Panel title="Watches" description={watches.length ? `${watches.length}` : ''} info="A repository checked on an interval for new commits and weight groups" flush>
     {#if watches.length === 0}
-      <Empty compact icon={Eye} title="Nothing watched" description="Watch a repository to be told about new commits and quants. Add auto pull and a slot to move to the freshest weights automatically.">
-        <Button size="sm" variant="primary" icon={Plus} onclick={() => (addOpen = true)}>Watch a repository</Button>
+      <Empty compact icon={Eye} title="Nothing watched">
+        <Button size="sm" variant="primary" icon={Plus} onclick={() => (addOpen = true)}>Watch</Button>
       </Empty>
     {:else}
       <div class="overflow-x-auto">
@@ -227,7 +226,7 @@
                     items={[
                       { label: 'Check now', icon: RefreshCw, onSelect: () => check(w) },
                       { label: 'Findings', icon: ListFilter, onSelect: () => (only = w) },
-                      { label: 'Inspect in catalog', icon: ExternalLink, href: `/catalog?source=${w.sourceId}&repo=${encodeURIComponent(w.repo)}` },
+                      { label: 'Open in catalog', icon: ExternalLink, href: `/catalog?source=${w.sourceId}&repo=${encodeURIComponent(w.repo)}` },
                       { label: '', separator: true },
                       { label: 'Stop watching', icon: Trash2, tone: 'bad', onSelect: () => remove(w) }
                     ]}
@@ -241,21 +240,21 @@
     {/if}
   </Panel>
 
-  <Panel title="Findings" description={only ? `of ${labelOf(only)}` : 'one row per change a check noticed'} flush>
+  <Panel title="Findings" description={only ? labelOf(only) : ''} flush>
     {#snippet actions()}
       {#if only}
         <button type="button" class="inline-flex h-7 items-center gap-1 rounded-md border border-accent/25 bg-accent/12 px-2 text-xs text-accent hover:bg-accent/20" onclick={() => (only = null)}><ListFilter size={12} /> {labelOf(only)} <X size={12} /></button>
       {/if}
       <Tabs size="sm" bind:value={view} tabs={[{ id: 'open', label: 'Open', count: open.length }, { id: 'all', label: 'All', count: findings.length }]} />
-      {#if open.length}<Button size="sm" variant="ghost" icon={CheckCheck} onclick={ackAll}>Acknowledge all</Button>{/if}
+      {#if open.length}<Button size="sm" variant="ghost" icon={CheckCheck} onclick={ackAll}>Ack all</Button>{/if}
     {/snippet}
     {#if shown.length === 0}
-      <Empty compact icon={Radar} title={view === 'open' ? 'Nothing new' : 'No findings'} description="A finding records a changed commit, or a weight group that appeared or vanished, with the task it triggered." />
+      <Empty compact icon={Radar} title={view === 'open' ? 'Nothing new' : 'No findings'} />
     {:else}
       <ul class="divide-y divide-line/60">
         {#each shown as f (f.id)}
           <li class="flex items-start gap-3 px-4 py-3 {f.acknowledged ? 'opacity-60' : ''}">
-            <Badge size="xs" tone={kindTone[f.kind] ?? 'neutral'} label={enumLabel(FindingKind, f.kind)} class="mt-0.5 shrink-0" />
+            <span class="mt-0.5 w-24 shrink-0 text-[11px] {kindColor[f.kind] ?? 'text-fg-faint'}">{enumLabel(FindingKind, f.kind)}</span>
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-x-2 font-mono text-sm">
                 <a href="/catalog?source={f.sourceId || live.watches.get(f.watchId)?.sourceId || ''}&repo={encodeURIComponent(f.repo)}" class="text-fg hover:underline">{f.repo}</a>
@@ -265,7 +264,7 @@
               <div class="mt-0.5 text-xs text-fg-muted">{f.detail}</div>
               <div class="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-fg-faint">
                 <span title={when(f.foundAt)}>{ago(f.foundAt, clock.now)}</span>
-                {#if ownerOf(f)}<Badge size="xs" tone={f.wantId ? 'accent' : 'neutral'} label={ownerOf(f)} />{/if}
+                {#if ownerOf(f)}<span class={f.wantId ? 'text-accent' : ''}>{f.wantId ? 'wanted' : 'watch'} {ownerOf(f)}</span>{/if}
                 {#if f.sourceId}<span>from <span class="text-fg-muted">{live.sources.get(f.sourceId)?.name || f.sourceId}</span></span>{/if}
                 {#if f.taskId}<a href="/tasks?id={f.taskId}" class="inline-flex items-center gap-1 text-accent hover:underline"><ExternalLink size={11} /> pull</a>{/if}
                 {#if f.swapTaskId}<a href="/tasks?id={f.swapTaskId}" class="inline-flex items-center gap-1 text-accent hover:underline"><ExternalLink size={11} /> swap</a>{/if}

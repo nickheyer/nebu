@@ -98,15 +98,15 @@ export function verdictLabel(v: FitVerdict | undefined): string {
   }
 }
 
-// The short words a verdict is shown under, the legend beside them spelling them out
+// The short word a verdict is shown under
 export function verdictWord(v: FitVerdict | undefined): string {
   switch (v) {
     case FitVerdict.FITS:
       return 'Fits';
     case FitVerdict.PARTIAL:
-      return 'Partly';
+      return 'Spills';
     case FitVerdict.NO:
-      return 'Too big';
+      return 'No fit';
     default:
       return 'Unknown';
   }

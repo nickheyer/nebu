@@ -62,10 +62,10 @@
       const body = { description, deviceIds: devices, memoryBytes: budget, runtimeId, params: values, policy };
       if (slot) {
         await api.slots.updateSlot({ id: slot.id, ...body });
-        return { title: `Updated ${slot.name}`, detail: 'Limits reach the route now, devices, budget, runtime, and params on the next run' };
+        return { title: `Updated ${slot.name}` };
       }
       await api.slots.createSlot({ name: name.trim(), ...body });
-      return { title: `Created ${name.trim()}`, detail: 'Drag a stored model onto it to serve' };
+      return { title: `Created ${name.trim()}` };
     },
     failTitle: () => (slot ? 'Update failed' : 'Create failed')
   });
@@ -74,7 +74,7 @@
 <FormDialog
   bind:open
   title={editing ? `Edit ${slot?.name}` : 'New slot'}
-  description={editing ? 'Limits reach the route at once, the reservation applies the next time something runs in the slot' : 'A slot reserves devices and memory under one public name that never goes away'}
+  description={editing ? 'Devices and memory apply on the next run' : undefined}
   size="lg"
   action={editing ? 'Save' : 'Create slot'}
   saving={form.saving}
@@ -82,15 +82,15 @@
   onsubmit={form.run}
 >
   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-    <Field label="Name" for="slot-name" hint="Becomes the model name clients send to the gateway">
+    <Field label="Name" for="slot-name" hint="The model name clients send to the gateway">
       <input id="slot-name" class="input font-mono" bind:value={name} placeholder="main" disabled={editing} aria-invalid={nameTaken} />
-      {#if nameTaken}<span class="text-xs text-bad">A slot with this name exists</span>{/if}
+      {#if nameTaken}<span class="text-xs text-bad">Name taken</span>{/if}
     </Field>
     <Field label="Description" for="slot-desc">
       <input id="slot-desc" class="input" bind:value={description} placeholder="Optional" />
     </Field>
 
-    <Field label="Devices" hint={devices.length ? '' : 'All devices when none are picked'} class="sm:col-span-2">
+    <Field label="Devices" hint={devices.length ? '' : 'All when none picked'} class="sm:col-span-2">
       <div class="flex flex-wrap gap-2">
         {#each gpus as d (d.id)}
           {@const on = devices.includes(d.id)}
@@ -107,18 +107,18 @@
             </span>
           </button>
         {:else}
-          <span class="text-sm text-fg-faint">No accelerators were probed. The slot will plan on host memory.</span>
+          <span class="text-sm text-fg-faint">No accelerators. Plans use host memory</span>
         {/each}
       </div>
     </Field>
 
-    <Field label="Memory budget" for="slot-memory" hint="Caps device memory the plan may use, for example 8GiB. Empty means the whole device">
+    <Field label="Memory cap" for="slot-memory" hint="Per device. Empty means the whole device">
       <input id="slot-memory" class="input font-mono" bind:value={memory} placeholder="8GiB" aria-invalid={badBudget} />
-      {#if badBudget}<span class="text-xs text-bad">Use a size like 8GiB or 512MiB</span>{/if}
+      {#if badBudget}<span class="text-xs text-bad">A size like 8GiB</span>{/if}
     </Field>
-    <Field label="Default runtime" for="slot-runtime" hint="Used when a run does not name one">
+    <Field label="Runtime" for="slot-runtime" hint="When a run names none">
       <select id="slot-runtime" class="input" bind:value={runtimeId}>
-        <option value="">First compatible runtime</option>
+        <option value="">First compatible</option>
         {#each cached.runtimes as rt (rt.manifest?.id)}
           <option value={rt.manifest?.id}>{rt.manifest?.name ?? rt.manifest?.id}{rt.compatible ? '' : ' · incompatible'}</option>
         {/each}
@@ -127,8 +127,8 @@
 
     <div class="sm:col-span-2">
       <div class="mb-2 flex items-baseline gap-2">
-        <span class="text-xs font-medium text-fg-muted">Default parameters</span>
-        <span class="text-[11.5px] text-fg-faint">{manifest ? "Over the runtime's default profile, under the run's own params" : 'Pick a runtime for a typed form, or name params directly'}</span>
+        <span class="text-xs font-medium text-fg-muted">Parameters</span>
+        <span class="text-[11.5px] text-fg-faint">{manifest ? 'Under the run params' : 'Pick a runtime for a typed form'}</span>
       </div>
       <ParamForm params={manifest?.params ?? []} bind:values bind:invalid inherited={profileParams(runtimeId)} idPrefix="slot" />
     </div>
@@ -136,22 +136,22 @@
     <div class="sm:col-span-2">
       <div class="mb-2 flex items-baseline gap-2">
         <span class="text-xs font-medium text-fg-muted">Request limits</span>
-        <span class="text-[11.5px] text-fg-faint">What the slot's route enforces at the gateway. Empty inherits the gateway default</span>
+        <span class="text-[11.5px] text-fg-faint">Empty inherits the gateway default</span>
       </div>
       <div class="grid grid-cols-2 gap-4 sm:grid-cols-5">
-        <Field label="In flight" for="slot-inflight" hint="Requests at once">
+        <Field label="In flight" for="slot-inflight">
           <input id="slot-inflight" class="input font-mono" inputmode="numeric" bind:value={maxInFlight} placeholder="inherit" />
         </Field>
-        <Field label="Per second" for="slot-rps" hint="Sustained rate">
+        <Field label="Per second" for="slot-rps">
           <input id="slot-rps" class="input font-mono" inputmode="decimal" bind:value={rps} placeholder="inherit" />
         </Field>
-        <Field label="Burst" for="slot-burst" hint="Absorbed at once">
+        <Field label="Burst" for="slot-burst">
           <input id="slot-burst" class="input font-mono" inputmode="numeric" bind:value={burst} placeholder="rate" />
         </Field>
-        <Field label="Timeout" for="slot-timeout" hint="Whole request, seconds">
+        <Field label="Timeout" for="slot-timeout" hint="seconds">
           <input id="slot-timeout" class="input font-mono" inputmode="decimal" bind:value={timeout} placeholder="inherit" />
         </Field>
-        <Field label="First byte" for="slot-upstream" hint="Runtime must answer within, seconds">
+        <Field label="First byte" for="slot-upstream" hint="seconds">
           <input id="slot-upstream" class="input font-mono" inputmode="decimal" bind:value={upstream} placeholder="inherit" />
         </Field>
       </div>

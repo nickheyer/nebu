@@ -455,6 +455,20 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 		req = proto.Clone(req).(*v1.SearchRequest)
 		req.Sort, req.Ascending, req.Filters = "", false, nil
 	}
+	// A source that cannot list, or cannot search when there is a query, has no page to give
+	able := srcs[:0:0]
+	for _, src := range srcs {
+		if answers(ctx, src, req) {
+			able = append(able, src)
+		}
+	}
+	if len(able) == 0 {
+		if strings.TrimSpace(req.GetQuery()) != "" {
+			return nil, fmt.Errorf("%w: no source here searches", ErrUnsupported)
+		}
+		return nil, fmt.Errorf("%w: no source here lists without a query", ErrUnsupported)
+	}
+	srcs = able
 	cursors := map[string]string{}
 	if req.GetCursor() != "" {
 		data, err := base64.RawURLEncoding.DecodeString(req.GetCursor())
@@ -532,6 +546,18 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 		out.NextCursor = base64.RawURLEncoding.EncodeToString(data)
 	}
 	return out, nil
+}
+
+// Reports whether a source can answer a request: built, and listing or searching as the request needs
+func answers(ctx context.Context, src Source, req *v1.SearchRequest) bool {
+	if _, broken := src.(*broken); broken {
+		return false
+	}
+	caps := src.Capabilities(ctx)
+	if strings.TrimSpace(req.GetQuery()) != "" {
+		return caps.GetSearch()
+	}
+	return caps.GetBrowse()
 }
 
 // Searches one source, stamping its id on every hit

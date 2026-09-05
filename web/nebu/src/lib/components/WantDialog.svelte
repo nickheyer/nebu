@@ -48,7 +48,7 @@
         params: values,
         profileId
       });
-      return { title: `Wanting ${text.trim()}`, detail: 'The first look is running now, then every monitor interval' };
+      return { title: `Wanting ${text.trim()}` };
     },
     failTitle: 'Want refused'
   });
@@ -57,16 +57,15 @@
 <FormDialog
   bind:open
   title="Want a model"
-  description="A standing search across your sources, satisfied the moment a repository with a matching weight group turns up"
   size="lg"
-  action="Want it"
+  action="Want"
   saving={form.saving}
   disabled={!text.trim() || invalid > 0}
   onsubmit={form.run}
 >
   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-    <Field label="Search for" for="want-query" hint="Words the catalog search takes, the first hits are checked each time" class="sm:col-span-2">
-      <input id="want-query" class="input" bind:value={text} placeholder="model name, family, or format" autocomplete="off" spellcheck="false" />
+    <Field label="Search" for="want-query" class="sm:col-span-2">
+      <input id="want-query" class="input" bind:value={text} placeholder="model name" autocomplete="off" spellcheck="false" />
     </Field>
     <Field label="Where" for="want-where">
       <select id="want-where" class="input" bind:value={where}>
@@ -79,16 +78,16 @@
         {/each}
       </select>
     </Field>
-    <Field label="Format" for="want-format" hint="Only weight groups of this format satisfy it">
+    <Field label="Format" for="want-format">
       <select id="want-format" class="input" bind:value={formatId}>
         <option value="">Any format</option>
         {#each [...live.formats.values()] as f (f.id)}<option value={f.id}>{f.description || f.id}</option>{/each}
       </select>
     </Field>
-    <Field label="Group match" for="want-match" hint="Regex over weight group names, any when empty" class="sm:col-span-2">
+    <Field label="Group match" for="want-match" hint="Regex over weight group names" class="sm:col-span-2">
       <input id="want-match" class="input font-mono" bind:value={match} placeholder="regex" autocomplete="off" spellcheck="false" />
     </Field>
-    <CheckCard bind:checked={autoPull} class="sm:col-span-2" title="Pull when found" description="The matching group is pulled into the store as soon as it turns up. Picking a slot below turns this on." />
+    <CheckCard bind:checked={autoPull} class="sm:col-span-2" title="Pull when found" />
     <SwapTarget optional idPrefix="want" bind:slotId bind:runtimeId bind:profileId bind:values bind:invalid />
   </div>
 </FormDialog>

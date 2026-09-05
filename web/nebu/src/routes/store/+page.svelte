@@ -60,12 +60,12 @@
   const total = $derived([...live.models.values()].reduce((a, m) => a + m.bytes, 0n));
 
   async function remove(m: StoredModel) {
-    const yes = await confirm({ title: `Remove ${m.repo}?`, message: `${m.group} is dropped from the store and blobs nothing else references are collected. Pulling again resumes from nothing.`, action: 'Remove', tone: 'bad' });
+    const yes = await confirm({ title: `Remove ${m.repo} ${m.group}?`, message: 'Blobs nothing else references are deleted.', action: 'Remove', tone: 'bad' });
     if (!yes) return;
     try {
       const r = await api.store.removeModel({ sourceId: m.sourceId, repo: m.repo, group: m.group, gc: true });
       live.models.delete(modelKey(m));
-      ok(`Removed ${m.repo}`, r.gc ? `${r.gc.removed} blobs collected, ${bytes(r.gc.freedBytes)} freed` : undefined);
+      ok(`Removed ${m.repo}`, r.gc ? `${bytes(r.gc.freedBytes)} freed` : undefined);
     } catch (err) {
       fail(err, 'Remove failed');
     }
@@ -75,7 +75,7 @@
     collecting = true;
     try {
       const r = await api.store.gc({ partials: true });
-      ok('Store collected', `${r.removed} files removed, ${bytes(r.freedBytes)} freed`);
+      ok('Collected', `${bytes(r.freedBytes)} freed`);
     } catch (err) {
       fail(err, 'Collect failed');
     } finally {
@@ -86,7 +86,7 @@
   async function verify(m?: StoredModel) {
     try {
       const r = await api.store.verify(m ? { sourceId: m.sourceId, repo: m.repo, group: m.group } : {});
-      ok(m ? `Verifying ${m.repo}` : 'Verifying every blob', 'Corrupt blobs are deleted so the next pull repairs them', r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Follow' } : undefined);
+      ok(m ? `Verifying ${m.repo}` : 'Verifying the store', undefined, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
     } catch (err) {
       fail(err, 'Verify refused');
     }
@@ -102,7 +102,7 @@
     try {
       const req = exportTarget ? { sourceId: exportTarget.sourceId, repo: exportTarget.repo, group: exportTarget.group, dir: exportDir } : { dir: exportDir };
       const r = await api.store.export(req);
-      ok(exportTarget ? `Exporting ${exportTarget.repo}` : 'Exporting the store', `to ${exportDir}`, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Follow' } : undefined);
+      ok(exportTarget ? `Exporting ${exportTarget.repo}` : 'Exporting the store', exportDir, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
       exportOpen = false;
     } catch (err) {
       fail(err, 'Export refused');
@@ -112,22 +112,20 @@
   }
 </script>
 
-<PageHeader title="Store" description="Pulled weight groups, content addressed and shared between quants">
+<PageHeader title="Store">
   {#snippet meta()}
     {#if status}<span class="font-mono">{status.path}</span>{/if}
   {/snippet}
-  <Button variant="outline" icon={ShieldCheck} onclick={() => verify()}>Verify all</Button>
-  <Button variant="outline" icon={Recycle} loading={collecting} onclick={gc}>Collect garbage</Button>
-  <Button variant="outline" icon={FolderOutput} onclick={() => openExport(null)} disabled={live.models.size === 0}>Export all</Button>
+  <Button variant="outline" icon={ShieldCheck} onclick={() => verify()}>Verify</Button>
+  <Button variant="outline" icon={Recycle} loading={collecting} onclick={gc}>Collect</Button>
+  <Button variant="outline" icon={FolderOutput} onclick={() => openExport(null)} disabled={live.models.size === 0}>Export</Button>
 </PageHeader>
 
-<div class="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
-  <div class="panel p-4"><Stat label="Models" value={count(live.models.size)} sub="weight groups pulled" /></div>
-  <div class="panel p-4"><Stat label="On disk" value={bytes(status?.blobBytes ?? total)} sub={status?.maxBytes ? `${count(status?.blobs)} blobs, kept under ${bytes(status.maxBytes, 0)} by evicting what sat unused longest` : `${count(status?.blobs)} blobs, no cap set`} /></div>
-  <div class="panel p-4"><Stat label="Referenced" value={bytes(total)} sub="sum of manifests" /></div>
-  <div class="panel p-4">
-    <Stat label="Partials" value={count(status?.partials ?? 0)} sub={status?.partials ? `${bytes(status.partialBytes)} resumable` : 'no interrupted pulls'} />
-  </div>
+<div class="mb-5 grid grid-cols-2 divide-x divide-line rounded-lg border border-line md:grid-cols-4">
+  <div class="px-4 py-3"><Stat label="Models" value={count(live.models.size)} /></div>
+  <div class="px-4 py-3"><Stat label="On disk" value={bytes(status?.blobBytes ?? total)} sub={status?.maxBytes ? `${count(status?.blobs)} blobs · cap ${bytes(status.maxBytes, 0)}` : `${count(status?.blobs)} blobs`} /></div>
+  <div class="px-4 py-3"><Stat label="Referenced" value={bytes(total)} /></div>
+  <div class="px-4 py-3"><Stat label="Partial pulls" value={count(status?.partials ?? 0)} sub={status?.partials ? bytes(status.partialBytes) : ''} /></div>
 </div>
 
 <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_17rem]">
@@ -141,15 +139,15 @@
       {/if}
       <div class="relative">
         <Search size={13} class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-faint" />
-        <input class="input h-8 w-64 pl-8" placeholder="Filter by repo, group, format, arch" bind:value={filter} />
+        <input class="input h-8 w-64 pl-8" placeholder="Filter" bind:value={filter} />
       </div>
     {/snippet}
     {#if live.models.size === 0}
-      <Empty icon={Database} title="Nothing stored yet" description="Pull a weight group from the catalog. Pulls resume if interrupted and two quants that share bytes share one blob.">
-        <Button size="sm" variant="primary" href="/catalog">Open catalog</Button>
+      <Empty icon={Database} title="Nothing stored">
+        <Button size="sm" variant="primary" href="/catalog">Catalog</Button>
       </Empty>
     {:else if models.length === 0}
-      <Empty compact title="No matches" description="Nothing stored matches that filter." />
+      <Empty compact title="No matches" />
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
@@ -176,7 +174,7 @@
                   <div class="font-mono text-sm text-fg">{m.repo}{#if sourceIds.length > 1}<span class="ml-1.5 rounded bg-raised px-1 text-[10.5px] text-fg-faint">{m.sourceId}</span>{/if}</div>
                   <div class="flex items-center gap-2 font-mono text-xs text-fg-muted">
                     {m.group}
-                    {#if running.length}<span class="rounded bg-ok/12 px-1.5 text-[10.5px] text-ok">serving as {running.map((i) => i.name).join(', ')}</span>{/if}
+                    {#if running.length}<span class="text-[11px] text-ok">serving as {running.map((i) => i.name).join(', ')}</span>{/if}
                   </div>
                 </td>
                 <td class="text-xs">{m.formatId}</td>
@@ -190,11 +188,11 @@
                     <Button size="xs" variant="primary" icon={Play} onclick={() => runModel(m)}>Run</Button>
                     <Menu
                       items={[
-                        { label: 'Run or swap into a slot', icon: Play, onSelect: () => runModel(m) },
-                        { label: 'Export as a mirror', icon: FolderOutput, onSelect: () => openExport(m) },
-                        { label: 'Verify blobs', icon: ShieldCheck, onSelect: () => verify(m) },
+                        { label: 'Run', icon: Play, onSelect: () => runModel(m) },
+                        { label: 'Export', icon: FolderOutput, onSelect: () => openExport(m) },
+                        { label: 'Verify', icon: ShieldCheck, onSelect: () => verify(m) },
                         { label: '', separator: true },
-                        { label: 'Remove from store', icon: Trash2, tone: 'bad', onSelect: () => remove(m), disabled: running.length > 0 }
+                        { label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => remove(m), disabled: running.length > 0 }
                       ]}
                     />
                   </span>
@@ -209,8 +207,8 @@
   <SlotRail />
 </div>
 
-<Dialog bind:open={exportOpen} title={exportTarget ? `Export ${exportTarget.repo}` : 'Export the store'} description="Writes a mirror layout with an index another nebu can pull from, for air-gapped sites">
-  <Field label="Directory on the daemon host" for="export-dir" hint="Files are hard linked when the directory shares a filesystem with the store, copied otherwise">
+<Dialog bind:open={exportOpen} title={exportTarget ? `Export ${exportTarget.repo}` : 'Export the store'} description="A mirror layout another nebu can pull from">
+  <Field label="Directory on the daemon host" for="export-dir">
     <input id="export-dir" class="input font-mono" bind:value={exportDir} placeholder="/mnt/mirror" />
   </Field>
   {#snippet footer()}

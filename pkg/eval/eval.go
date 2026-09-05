@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -103,6 +104,34 @@ func (e *Expr) Holds(env map[string]any) (bool, error) {
 		return true, nil
 	}
 	return e.Bool(env)
+}
+
+// Evaluates formulas into env in passes, so one may use another whatever
+// order they come in, naming the first that never resolves
+func Solve(formulas map[string]*Expr, env map[string]any) error {
+	pending := make([]string, 0, len(formulas))
+	for name := range formulas {
+		pending = append(pending, name)
+	}
+	sort.Strings(pending)
+	errs := map[string]error{}
+	for len(pending) > 0 {
+		var left []string
+		for _, name := range pending {
+			v, err := formulas[name].Float(env)
+			if err != nil {
+				errs[name] = err
+				left = append(left, name)
+				continue
+			}
+			env[name] = v
+		}
+		if len(left) == len(pending) {
+			return fmt.Errorf("formula %s: %w", left[0], errs[left[0]])
+		}
+		pending = left
+	}
+	return nil
 }
 
 // Merges constants under the given env

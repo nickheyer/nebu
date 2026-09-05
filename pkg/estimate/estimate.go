@@ -199,8 +199,7 @@ func (p *Policy) spanned(primary []*v1.MemoryPool, params map[string]any) []*v1.
 }
 
 // Builds the expression scope: descriptor params, run params, cache element
-// sizes, then the arch formulas, evaluated in passes so a formula can use
-// another whatever order the file lists them in
+// sizes, then the arch formulas solved over them
 func (p *Policy) env(in Input) (map[string]any, error) {
 	env := map[string]any{}
 	for k, v := range in.Descriptor.GetParams() {
@@ -214,27 +213,8 @@ func (p *Policy) env(in Input) (map[string]any, error) {
 		cache[k] = v
 	}
 	env["cache_bytes"] = cache
-	pending := make([]string, 0, len(in.Formulas))
-	for name := range in.Formulas {
-		pending = append(pending, name)
-	}
-	sort.Strings(pending)
-	errs := map[string]error{}
-	for len(pending) > 0 {
-		var left []string
-		for _, name := range pending {
-			v, err := in.Formulas[name].Float(env)
-			if err != nil {
-				errs[name] = err
-				left = append(left, name)
-				continue
-			}
-			env[name] = v
-		}
-		if len(left) == len(pending) {
-			return nil, fmt.Errorf("formula %s: %w", left[0], errs[left[0]])
-		}
-		pending = left
+	if err := eval.Solve(in.Formulas, env); err != nil {
+		return nil, err
 	}
 	return env, nil
 }

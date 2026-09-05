@@ -8,6 +8,7 @@ import (
 	"github.com/nickheyer/nebu/internal/doctor"
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/pull"
+	"github.com/nickheyer/nebu/internal/settings"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -18,6 +19,7 @@ import (
 
 var (
 	_ nebuv1connect.HostServiceHandler     = (*HostService)(nil)
+	_ nebuv1connect.SettingsServiceHandler = (*SettingsService)(nil)
 	_ nebuv1connect.SourceServiceHandler   = (*SourceService)(nil)
 	_ nebuv1connect.EstimateServiceHandler = (*EstimateService)(nil)
 	_ nebuv1connect.StoreServiceHandler    = (*StoreService)(nil)
@@ -41,6 +43,24 @@ func (s *HostService) GetProfile(ctx context.Context, req *connect.Request[v1.Ge
 func (s *HostService) Doctor(ctx context.Context, req *connect.Request[v1.DoctorRequest]) (*connect.Response[v1.DoctorResponse], error) {
 	report, err := s.doctor.Run(ctx)
 	return reply(&v1.DoctorResponse{Report: report}, err)
+}
+
+// Serves host wide preferences
+type SettingsService struct {
+	settings *settings.Manager
+}
+
+func NewSettingsService(m *settings.Manager) *SettingsService {
+	return &SettingsService{settings: m}
+}
+
+func (s *SettingsService) GetSettings(ctx context.Context, req *connect.Request[v1.GetSettingsRequest]) (*connect.Response[v1.GetSettingsResponse], error) {
+	return reply(&v1.GetSettingsResponse{Settings: s.settings.Get()}, nil)
+}
+
+func (s *SettingsService) UpdateSettings(ctx context.Context, req *connect.Request[v1.UpdateSettingsRequest]) (*connect.Response[v1.UpdateSettingsResponse], error) {
+	out, err := s.settings.Update(ctx, req.Msg.GetSettings())
+	return reply(&v1.UpdateSettingsResponse{Settings: out}, err)
 }
 
 // Serves catalog lookups and the source rows behind them

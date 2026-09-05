@@ -21,6 +21,7 @@ import (
 	"github.com/nickheyer/nebu/internal/profiles"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc/services"
+	"github.com/nickheyer/nebu/internal/settings"
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/events"
@@ -36,9 +37,10 @@ import (
 
 // Everything the handlers need
 type Deps struct {
-	Host    *host.Prober
-	Doctor  *doctor.Doctor
-	Sources *sources.Manager
+	Host     *host.Prober
+	Doctor   *doctor.Doctor
+	Settings *settings.Manager
+	Sources  *sources.Manager
 	// Formats in priority order, what hits are tagged with and what the UI puts into words
 	Formats   []*v1.FormatSpec
 	Runtimes  *runtime.Registry
@@ -66,6 +68,7 @@ func NewHandler(d Deps) http.Handler {
 	opts := connect.WithInterceptors(logging(d.Log), &auth{token: d.Token})
 	mux := http.NewServeMux()
 	mux.Handle(nebuv1connect.NewHostServiceHandler(services.NewHostService(d.Host, d.Doctor), opts))
+	mux.Handle(nebuv1connect.NewSettingsServiceHandler(services.NewSettingsService(d.Settings), opts))
 	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector, d.Formats), opts))
 	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Profiles, d.Formats), opts))
 	mux.Handle(nebuv1connect.NewInstanceServiceHandler(services.NewInstanceService(d.Instances), opts))
@@ -79,6 +82,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.Handle(nebuv1connect.NewEventServiceHandler(services.NewEventService(d.Events, d.Snapshot), opts))
 	reflector := grpcreflect.NewStaticReflector(
 		nebuv1connect.HostServiceName,
+		nebuv1connect.SettingsServiceName,
 		nebuv1connect.SourceServiceName,
 		nebuv1connect.RuntimeServiceName,
 		nebuv1connect.EstimateServiceName,

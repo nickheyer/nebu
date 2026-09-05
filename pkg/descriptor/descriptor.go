@@ -236,14 +236,30 @@ func (b *Builder) Build(raw *v1.RawModel) (*v1.Descriptor, error) {
 			d.Metadata[sub(key)] = v
 		}
 	}
-	for _, a := range b.archs {
-		if a.re.MatchString(d.Architecture) {
-			d.ArchSpecId = a.spec.GetId()
-			break
-		}
-	}
+	d.ArchSpecId = b.arch(d)
 	d.Precision = b.precision(f, raw, d)
 	return d, nil
+}
+
+// The first arch whose pattern matches and whose formulas evaluate over the
+// params read, so a family spec never claims a checkpoint missing what it
+// needs, the last match standing in when none evaluates
+func (b *Builder) arch(d *v1.Descriptor) string {
+	last := ""
+	for _, a := range b.archs {
+		if !a.re.MatchString(d.GetArchitecture()) {
+			continue
+		}
+		last = a.spec.GetId()
+		env := make(map[string]any, len(d.GetParams()))
+		for k, v := range d.GetParams() {
+			env[k] = v
+		}
+		if eval.Solve(a.formulas, env) == nil {
+			return a.spec.GetId()
+		}
+	}
+	return last
 }
 
 // Puts a weight group's precision into words from the format's rules and the level table

@@ -49,10 +49,10 @@
       const source = { id: id.trim(), kind, name: name.trim(), config: settings };
       if (editing) {
         await api.sources.updateSource({ source });
-        return { title: `Updated ${source.name || source.id}`, detail: 'Every page follows the change' };
+        return { title: `Updated ${source.name || source.id}` };
       }
       await api.sources.createSource({ source });
-      return { title: `Added ${source.name || source.id}`, detail: `${provider?.name ?? 'The provider'} is in the catalog now` };
+      return { title: `Added ${source.name || source.id}` };
     },
     failTitle: () => (editing ? 'Update failed' : 'Add failed')
   });
@@ -61,7 +61,7 @@
 <FormDialog
   bind:open
   title={editing ? `Edit ${editing.source?.name || editing.source?.id}` : 'Add a source'}
-  description={editing ? `${editing.capabilities?.name ?? ''} · ${editing.source?.id ?? ''}` : 'A source is one configured instance of a provider'}
+  description={editing ? `${editing.capabilities?.name ?? ''} · ${editing.source?.id ?? ''}` : undefined}
   size="lg"
   action={editing ? 'Save' : 'Add source'}
   saving={form.saving}
@@ -76,11 +76,11 @@
           {#each providers as p (p.kind)}<option value={p.kind}>{p.name}</option>{/each}
         </select>
       </Field>
-      <Field label="Id" for="src-id" hint="Letters, digits, dots, dashes, or underscores. Pulled models are kept under it, so it cannot change later">
-        <input id="src-id" class="input font-mono" bind:value={id} placeholder="letters, digits, dots, dashes" aria-invalid={!!id && !idOk} />
+      <Field label="Id" for="src-id" hint="Cannot change later">
+        <input id="src-id" class="input font-mono" bind:value={id} placeholder="my-source" aria-invalid={!!id && !idOk} />
       </Field>
     {/if}
-    <Field label="Name" for="src-name" hint="What the catalog calls it, the id when empty" class={editing ? 'sm:col-span-2' : ''}>
+    <Field label="Name" for="src-name" class={editing ? 'sm:col-span-2' : ''}>
       <input id="src-name" class="input" bind:value={name} placeholder={provider?.name} />
     </Field>
 
@@ -92,7 +92,7 @@
         {#if f.type === ConfigType.BOOL}
           <CheckCard class="sm:col-span-2" checked={(config[f.name] ?? f.default) === 'true'} onchange={(on) => (config = { ...config, [f.name]: on ? 'true' : 'false' })} title={f.label} description={f.description} />
         {:else}
-          <Field label={f.label + (f.required ? ' *' : '')} for="src-{f.name}" hint={f.description + (f.default ? `. Empty means ${f.default}` : '')}>
+          <Field label={f.label + (f.required ? ' *' : '')} for="src-{f.name}" hint={f.description}>
             {#if f.choices.length}
               <select id="src-{f.name}" class="input" value={config[f.name] ?? ''} onchange={(e) => (config = { ...config, [f.name]: (e.currentTarget as HTMLSelectElement).value })}>
                 <option value="">{f.default ? `Default · ${f.default}` : 'Not set'}</option>
@@ -106,7 +106,7 @@
       {/each}
     {/each}
     {#if fields.length === 0 && provider}
-      <p class="text-sm text-fg-muted sm:col-span-2">{provider.name} has nothing to configure.</p>
+      <p class="text-sm text-fg-muted sm:col-span-2">Nothing to configure</p>
     {/if}
   </div>
 </FormDialog>

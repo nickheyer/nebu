@@ -111,7 +111,7 @@
 <FormDialog
   bind:open
   title={swap ? 'Swap model' : 'Run model'}
-  description={current ? `${current.repo} · ${current.group}` : 'Pick a stored model'}
+  description={current ? `${current.repo} · ${current.group}` : undefined}
   size="lg"
   action={swap ? 'Swap' : 'Run'}
   icon={swap ? ArrowLeftRight : Play}
@@ -120,7 +120,7 @@
   onsubmit={form.run}
 >
   {#if !model}
-    <Field label="Stored model" for="run-model" class="mb-4" hint={stored.length ? '' : 'Nothing is stored yet, pull a model from the catalog first'}>
+    <Field label="Model" for="run-model" class="mb-4" hint={stored.length ? '' : 'Nothing stored'}>
       <select id="run-model" class="input font-mono" bind:value={pickedKey}>
         {#each stored as m (modelKey(m))}
           <option value={modelKey(m)}>{m.repo} · {m.group}</option>
@@ -141,17 +141,17 @@
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <SwapTarget bind:slotId={slot} bind:runtimeId bind:profileId bind:values bind:invalid bind:effectiveRuntime formatId={current.formatId} idPrefix="run">
         {#if !slot}
-          <Field label="Public name" for="run-name" hint="How the gateway addresses it, defaults to repo:group">
+          <Field label="Name" for="run-name" hint="The model name at the gateway">
             <input id="run-name" class="input font-mono" bind:value={name} placeholder="{current.repo.split('/').pop()}:{current.group}" />
           </Field>
         {:else}
-          <Field label="Public name" hint="Slots own their name">
+          <Field label="Name">
             <div class="input flex items-center font-mono text-fg-muted">{selectedSlot?.name}</div>
           </Field>
         {/if}
-        <Field label="Install" for="run-install" hint={installs.length || !effectiveRuntime ? '' : `No install for ${effectiveRuntime} yet, adopt or build one`}>
+        <Field label="Install" for="run-install" hint={installs.length || !effectiveRuntime ? '' : `No install of ${effectiveRuntime}`}>
           <select id="run-install" class="input" bind:value={installId}>
-            <option value="">Newest install</option>
+            <option value="">Newest</option>
             {#each installs as i (i.id)}
               <option value={i.id}>{i.version || i.id} · {i.path}</option>
             {/each}
@@ -159,26 +159,26 @@
         </Field>
       </SwapTarget>
       {#if swap}
-        <CheckCard bind:checked={drainFirst} class="sm:col-span-2" title="Drain first" description="Stop the current model before starting the new one. Otherwise the new one starts beside it and the name flips once it is healthy, when memory allows." />
+        <CheckCard bind:checked={drainFirst} class="sm:col-span-2" title="Stop the current model first" description="Otherwise the new one starts beside it when memory allows" />
       {/if}
     </div>
 
     <div class="mt-4 rounded-lg border border-line p-3">
       <div class="flex items-center gap-2">
         <Gauge size={14} class="text-fg-muted" />
-        <span class="text-sm font-medium text-fg">Memory plan</span>
-        <span class="text-xs text-fg-faint">against free memory{selectedSlot ? ` inside ${selectedSlot.name}` : ''}</span>
-        <Button size="sm" variant="outline" class="ml-auto" loading={checking} onclick={check} disabled={!effectiveRuntime}>Check fit</Button>
+        <span class="text-sm font-medium text-fg">Fit</span>
+        <span class="text-xs text-fg-faint">free memory{selectedSlot ? ` in ${selectedSlot.name}` : ''}</span>
+        <Button size="sm" variant="outline" class="ml-auto" loading={checking} onclick={check} disabled={!effectiveRuntime}>Check</Button>
       </div>
       {#if plan}
         <div class="mt-3"><PlanView {plan} /></div>
       {:else if planError}
         <div class="mt-2 text-sm text-bad">{planError}</div>
       {:else}
-        <p class="mt-2 text-xs text-fg-faint">Check before launching to see where weights and cache land. A run is refused when the plan says no, unless you run anyway below.</p>
+        <p class="mt-2 text-xs text-fg-faint">A run that does not fit is refused unless forced</p>
       {/if}
       {#if refused || force}
-        <CheckCard bind:checked={force} class="mt-3" title="Run anyway" description="Launches even though the plan says it does not fit, and redoes any prepare step. The runtime may still refuse or spill to host memory." />
+        <CheckCard bind:checked={force} class="mt-3" title="Run anyway" description="The runtime may still refuse or spill to host memory" />
       {/if}
     </div>
   {/if}

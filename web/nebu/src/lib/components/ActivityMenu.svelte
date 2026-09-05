@@ -35,7 +35,7 @@
     <Popover.Content side="right" align="end" sideOffset={12} class="enter-up z-[60] w-96 rounded-xl border border-line bg-overlay shadow-pop focus:outline-none">
       <div class="border-b border-line px-4 py-3">
         <div class="text-sm font-semibold text-fg">Activity</div>
-        <div class="text-xs text-fg-faint">{active.length ? `${active.length} running` : 'Nothing running'}</div>
+        <div class="text-xs text-fg-faint">{active.length ? `${active.length} running` : 'Idle'}</div>
       </div>
       <div class="max-h-[60vh] overflow-y-auto">
         {#each active as t (t.id)}

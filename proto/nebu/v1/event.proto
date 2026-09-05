@@ -9,6 +9,7 @@ import "nebu/v1/instance.proto";
 import "nebu/v1/monitor.proto";
 import "nebu/v1/recipe.proto";
 import "nebu/v1/runtime.proto";
+import "nebu/v1/settings.proto";
 import "nebu/v1/slot.proto";
 import "nebu/v1/source.proto";
 import "nebu/v1/store.proto";
@@ -34,6 +35,8 @@ enum EventKind {
   EVENT_KIND_WANT = 13;
   // The store's totals, after anything lands, goes, or is collected
   EVENT_KIND_STORE = 14;
+  // Host wide preferences, after a change
+  EVENT_KIND_SETTINGS = 15;
 }
 
 // How it changed
@@ -67,6 +70,7 @@ message Event {
     Profile profile = 21;
     Want want = 22;
     StoreStatus store = 23;
+    Settings settings = 24;
   }
 }
 

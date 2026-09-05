@@ -3,7 +3,7 @@
   import { api, baseUrl } from '$lib/api';
   import { listenerUrl, policyText } from '$lib/gateway';
   import { live, cached, refreshCached, slotName, clock } from '$lib/state.svelte';
-  import { byName, count, enumLabel, ago } from '$lib/format';
+  import { byName, count, ago } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { RouteState } from '$proto/gateway_pb';
@@ -14,7 +14,6 @@
   import Panel from '$lib/components/ui/Panel.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
   import StateBadge from '$lib/components/ui/StateBadge.svelte';
-  import Badge from '$lib/components/ui/Badge.svelte';
   import Copy from '$lib/components/ui/Copy.svelte';
   import Stat from '$lib/components/ui/Stat.svelte';
   import Field from '$lib/components/ui/Field.svelte';
@@ -59,7 +58,7 @@
   }
 
   async function remove(name: string) {
-    const yes = await confirm({ title: `Remove route ${name}?`, message: 'Clients using this name get 404. The instance keeps running under its own name.', action: 'Remove', tone: 'bad' });
+    const yes = await confirm({ title: `Remove route ${name}?`, message: 'Clients using this name get 404.', action: 'Remove', tone: 'bad' });
     if (!yes) return;
     try {
       await api.gateway.deleteRoute({ name });
@@ -70,7 +69,11 @@
   }
 </script>
 
-<PageHeader title="Gateway" description="One endpoint your router points at, answering in the OpenAI, Anthropic, and Ollama formats, and the names it answers to" />
+<PageHeader title="Gateway">
+  {#snippet meta()}
+    <span>OpenAI · Anthropic · Ollama APIs</span>
+  {/snippet}
+</PageHeader>
 
 <div class="flex flex-col gap-6">
   <section class="grid grid-cols-1 gap-4 lg:grid-cols-5">
@@ -80,13 +83,13 @@
           <div class="flex items-center gap-2 rounded-lg border border-line bg-sunken px-3 py-2">
             <Link size={14} class="shrink-0 text-fg-faint" />
             <span class="flex-1 truncate font-mono text-sm text-fg">{e.url}</span>
-            {#if e.shared}<Badge size="xs" label="shares the API listener" />{/if}
+            {#if e.shared}<span class="text-[11px] text-fg-faint">API listener</span>{/if}
             <Copy text={e.url} />
           </div>
         {/each}
         <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted">
-          <span class="inline-flex items-center gap-1"><KeyRound size={12} /> {status?.auth ? 'API keys required' : 'No API keys configured'}</span>
-          <span>models list at <span class="font-mono">{endpoints[0].url}/models</span></span>
+          <span class="inline-flex items-center gap-1"><KeyRound size={12} /> {status?.auth ? 'API keys required' : 'No API keys'}</span>
+          <span class="font-mono">{endpoints[0].url}/models</span>
         </div>
         <div class="relative">
           <pre class="overflow-x-auto rounded-lg border border-line bg-sunken p-3 pr-10 font-mono text-[11.5px] leading-5 text-fg-muted">{curl}</pre>
@@ -95,15 +98,15 @@
       </div>
     </Panel>
     <div class="grid grid-cols-2 gap-3 lg:col-span-2 lg:grid-cols-1">
-      <div class="panel p-4"><Stat label="Requests served" value={count(status?.requests ?? 0n)} sub="since the daemon started" /></div>
-      <div class="panel p-4"><Stat label="Routes ready" value="{readyRoutes.length} / {routes.length}" sub="{routes.filter((r) => r.slotId).length} owned by slots" /></div>
-      <div class="panel p-4"><Stat label="Default limits" value={policyText(undefined, status?.policy)} sub="set in gateway.policy, a slot can tighten its own route" /></div>
+      <div class="panel p-4"><Stat label="Requests" value={count(status?.requests ?? 0n)} sub="since start" /></div>
+      <div class="panel p-4"><Stat label="Routes ready" value="{readyRoutes.length} / {routes.length}" sub="{routes.filter((r) => r.slotId).length} from slots" /></div>
+      <div class="panel p-4"><Stat label="Default limits" value={policyText(undefined, status?.policy)} sub="gateway.policy" /></div>
     </div>
   </section>
 
-  <Panel title="Routes" description="public names mapped to instances" flush>
+  <Panel title="Routes" info="Every instance and slot answers under its name. An alias adds another" flush>
     {#if routes.length === 0}
-      <Empty compact icon={Waypoints} title="No routes" description="Every running instance and every slot gets a route by name. Add an alias to answer to another name too." />
+      <Empty compact icon={Waypoints} title="No routes" />
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
@@ -114,7 +117,7 @@
               <tr>
                 <td class="font-mono text-sm text-fg">
                   {r.name}
-                  {#if r.served && r.served !== r.name}<div class="font-sans text-[11px] text-fg-faint" title="The model name sent upstream in place of the route name">answers as {r.served}</div>{/if}
+                  {#if r.served && r.served !== r.name}<div class="font-sans text-[11px] text-fg-faint" title="Sent upstream in place of the route name">as {r.served}</div>{/if}
                 </td>
                 <td><StateBadge values={RouteState} value={r.state} size="xs" /></td>
                 <td class="font-mono text-xs text-fg-muted">{r.model || '–'}</td>
@@ -125,19 +128,19 @@
                   {:else if r.instanceId}
                     <span class="font-mono text-fg-faint">{r.instanceId.slice(0, 8)}</span>
                   {:else}
-                    <span class="text-fg-faint">{r.state === RouteState.PENDING ? 'waiting for an instance' : '–'}</span>
+                    <span class="text-fg-faint">{r.state === RouteState.PENDING ? 'waiting' : '–'}</span>
                   {/if}
                 </td>
                 <td class="text-xs">{r.slotId ? slotName(r.slotId) : '–'}</td>
                 <td class="num text-xs">{count(r.requests)}</td>
                 <td class="num text-xs">{r.inFlight || '–'}</td>
-                <td class="text-xs text-fg-muted" title="What this route enforces, the gateway default where it inherits">{policyText(r.policy, status?.policy)}</td>
+                <td class="text-xs text-fg-muted">{policyText(r.policy, status?.policy)}</td>
                 <td class="text-xs text-fg-muted">{ago(r.updatedAt, clock.now)}</td>
                 <td class="text-right">
                   {#if !r.slotId}
                     <Button size="xs" variant="ghost" icon={Trash2} class="text-bad hover:text-bad" onclick={() => remove(r.name)}>Remove</Button>
                   {:else}
-                    <span class="text-[11px] text-fg-faint">{enumLabel(RouteState, r.state) === 'pending' ? 'slot keeps it' : 'slot owned'}</span>
+                    <span class="text-[11px] text-fg-faint">slot</span>
                   {/if}
                 </td>
               </tr>
@@ -148,7 +151,7 @@
     {/if}
   </Panel>
 
-  <Panel title="Add an alias" description="Answer to another model name with an instance that is already ready">
+  <Panel title="Alias" info="Another model name for a ready instance">
     <form
       class="flex flex-wrap items-end gap-3"
       onsubmit={(e) => {
@@ -165,8 +168,8 @@
           {#each ready as i (i.id)}<option value={i.id}>{i.name} · {i.repo.split('/').pop()}:{i.group}</option>{/each}
         </select>
       </Field>
-      <Button type="submit" icon={Plus} loading={adding} disabled={!aliasName.trim() || !aliasInstance}>Add route</Button>
-      {#if ready.length === 0}<span class="pb-2 text-xs text-fg-faint">Nothing is ready to alias yet.</span>{/if}
+      <Button type="submit" icon={Plus} loading={adding} disabled={!aliasName.trim() || !aliasInstance}>Add</Button>
+      {#if ready.length === 0}<span class="pb-2 text-xs text-fg-faint">Nothing ready</span>{/if}
     </form>
   </Panel>
 </div>

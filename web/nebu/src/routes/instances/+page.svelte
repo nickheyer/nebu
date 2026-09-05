@@ -34,7 +34,7 @@
   }
 
   async function stop(i: Instance) {
-    const yes = await confirm({ title: `Stop ${i.name}?`, message: 'The process gets its grace period, then is killed. It will not relaunch after a daemon restart.', action: 'Stop', tone: 'bad' });
+    const yes = await confirm({ title: `Stop ${i.name}?`, message: 'It will not relaunch after a daemon restart.', action: 'Stop', tone: 'bad' });
     if (!yes) return;
     try {
       await api.instances.stopInstance({ id: i.id });
@@ -45,14 +45,14 @@
   }
 </script>
 
-<PageHeader title="Instances" description="Runtime processes serving stored models, live and past">
+<PageHeader title="Instances">
   <Tabs bind:value={view} tabs={[{ id: 'running', label: 'Running', count: running.length }, { id: 'failed', label: 'Failed', count: failed.length || undefined }, { id: 'all', label: 'All', count: all.length }]} />
 </PageHeader>
 
 <Panel flush>
   {#if list.length === 0}
-    <Empty icon={Boxes} title={view === 'running' ? 'Nothing running' : view === 'failed' ? 'No failures' : 'No instances yet'} description={view === 'running' ? 'Run a stored model, or drop one on a slot.' : 'Instances stay listed after they stop so their plan, measurements, and log remain readable.'}>
-      {#if view === 'running'}<Button size="sm" variant="primary" href="/store">Open store</Button>{/if}
+    <Empty icon={Boxes} title={view === 'running' ? 'Nothing running' : view === 'failed' ? 'No failures' : 'No instances'}>
+      {#if view === 'running' && live.models.size}<Button size="sm" variant="primary" href="/store">Store</Button>{/if}
     </Empty>
   {:else}
     <div class="overflow-x-auto">
@@ -80,7 +80,7 @@
               <td class="text-right" onclick={(e) => e.stopPropagation()}>
                 <Menu
                   items={[
-                    { label: 'Open log', icon: ScrollText, onSelect: () => (sel.id = i.id) },
+                    { label: 'Log', icon: ScrollText, onSelect: () => (sel.id = i.id) },
                     ...(alive
                       ? [{ label: 'Stop', icon: Square, tone: 'bad' as const, onSelect: () => stop(i) }]
                       : [{ label: 'Run again', icon: RotateCcw, disabled: !i.request, onSelect: () => i.request && launch({ ...i.request }) }])

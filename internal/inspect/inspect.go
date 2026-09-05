@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -218,6 +219,15 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		contexts = i.Contexts
 	}
 	resp := &v1.InspectResponse{Model: model}
+	// The same failure repeats per context, so every warning is kept once
+	seen := map[string]bool{}
+	warn := func(format string, args ...any) {
+		w := fmt.Sprintf(format, args...)
+		if !seen[w] {
+			seen[w] = true
+			resp.Warnings = append(resp.Warnings, w)
+		}
+	}
 	// The named profile sits under its runtime's rows, every other runtime's default under the rest
 	layered := map[string]map[string]string{}
 	for _, rt := range runtimes {
@@ -227,13 +237,14 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		}
 		_, params, err := i.Layer(rt.Manifest.GetId(), ref, slotParams, req.GetParams())
 		if err != nil {
-			resp.Warnings = append(resp.Warnings, fmt.Sprintf("%s: %v", rt.Manifest.GetId(), err))
+			warn("%s: %v", rt.Manifest.GetId(), err)
 			continue
 		}
 		layered[rt.Manifest.GetId()] = params
 	}
 	descriptors := make([]*v1.Descriptor, len(groups))
 	warnings := make([]string, len(groups))
+	failures := make([]error, len(groups))
 	eg, gctx := errgroup.WithContext(ctx)
 	eg.SetLimit(describeMax)
 	for idx, g := range groups {
@@ -241,6 +252,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 			d, err := i.Describe(gctx, src, model, g)
 			if err != nil {
 				warnings[idx] = fmt.Sprintf("%s: %v", g.Name, err)
+				failures[idx] = err
 				return nil
 			}
 			descriptors[idx] = d
@@ -250,9 +262,13 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 	if err := eg.Wait(); err != nil {
 		return nil, err
 	}
+	// A repository whose every weight file the source refuses is gated or private, not a warning
+	if denied := deniedAll(failures); denied != nil {
+		return nil, denied
+	}
 	for idx, d := range descriptors {
 		if d == nil {
-			resp.Warnings = append(resp.Warnings, warnings[idx])
+			warn("%s", warnings[idx])
 			continue
 		}
 		resp.Descriptors = append(resp.Descriptors, d)
@@ -270,7 +286,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 					now, err = i.Plan(rt, d, profile, overrides, true)
 				}
 				if err != nil {
-					resp.Warnings = append(resp.Warnings, fmt.Sprintf("%s on %s: %v", d.GetGroup(), rt.Manifest.GetId(), err))
+					warn("%s on %s: %v", d.GetGroup(), rt.Manifest.GetId(), err)
 					continue
 				}
 				resp.Rows = append(resp.Rows, &v1.FitRow{Group: d.GetGroup(), RuntimeId: rt.Manifest.GetId(), Context: n, Plan: plan, Free: now})
@@ -345,6 +361,20 @@ func (i *Inspector) selectRuntimes(ids []string, profile *v1.HostProfile) []*run
 		return i.Runtimes.List()
 	}
 	return compatible
+}
+
+// The first failure when there were some and each one was the source refusing access
+func deniedAll(failures []error) error {
+	var first error
+	for _, err := range failures {
+		if err == nil || !(sources.IsStatus(err, http.StatusUnauthorized) || sources.IsStatus(err, http.StatusForbidden)) {
+			return nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 func selectGroups(groups []*formats.Group, names []string) []*formats.Group {

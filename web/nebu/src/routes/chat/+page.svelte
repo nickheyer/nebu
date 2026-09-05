@@ -181,19 +181,19 @@
   }
 </script>
 
-<PageHeader title="Chat" description="Talk to a running model through the gateway, the same path your clients take">
+<PageHeader title="Chat">
   {#if turns.length}<Button variant="outline" icon={Trash2} onclick={clear}>Clear</Button>{/if}
 </PageHeader>
 
 {#if ready.length === 0 && !asked}
-  <div class="panel"><Empty icon={MessageSquare} title="Nothing is serving" description="Run a stored model, or drop one on a slot, and it shows up here as soon as its route is ready." /></div>
+  <div class="panel"><Empty icon={MessageSquare} title="Nothing serving" /></div>
 {:else}
   <div class="grid grid-cols-1 gap-4 lg:grid-cols-[18rem_1fr]">
     <aside class="panel flex flex-col gap-4 p-4">
-      <Field label="Model" for="chat-model" hint="Routes that answer right now">
+      <Field label="Model" for="chat-model">
         <select id="chat-model" class="input font-mono" bind:value={model}>
           {#if asked && !chosenReady}<option value={asked.name}>{asked.name} · {enumLabel(RouteState, asked.state)}</option>{/if}
-          {#each ready as r (r.name)}<option value={r.name}>{r.name}{r.served && r.served !== r.name ? ` · answers as ${r.served}` : ''}</option>{/each}
+          {#each ready as r (r.name)}<option value={r.name}>{r.name}{r.served && r.served !== r.name ? ` · ${r.served}` : ''}</option>{/each}
         </select>
       </Field>
       <Field label="System prompt" for="chat-system">
@@ -208,7 +208,7 @@
         </Field>
       </div>
       {#if status?.auth}
-        <Field label="Gateway key" for="chat-key" hint="gateway.api_keys is set, so the chat needs one. Kept in this browser only">
+        <Field label="Gateway key" for="chat-key" hint="Kept in this browser">
           <div class="relative">
             <KeyRound size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-fg-faint" />
             <input id="chat-key" class="input pl-9 font-mono" type="password" bind:value={key} onchange={() => setGatewayKey(key.trim())} autocomplete="off" />
@@ -216,17 +216,15 @@
         </Field>
       {/if}
       {#if chosen && !chosenReady}
-        <p class="rounded-md border border-warn/30 bg-warn/8 px-2.5 py-1.5 text-xs text-warn">{chosen.name} is {enumLabel(RouteState, chosen.state)}. Send waits until it answers.</p>
+        <p class="rounded-md border border-warn/30 bg-warn/8 px-2.5 py-1.5 text-xs text-warn">{chosen.name} is {enumLabel(RouteState, chosen.state)}</p>
       {/if}
-      <p class="text-[11px] leading-4 text-fg-faint">
-        Sent to <span class="font-mono">{endpoint}</span> as <span class="font-mono">{chosen?.name}</span>{#if chosen?.served && chosen.served !== chosen.name}, which the runtime answers as <span class="font-mono">{chosen.served}</span>{/if}{chosen?.model ? `, serving ${chosen.model}` : ''}.
-      </p>
+      <p class="truncate font-mono text-[11px] text-fg-faint" title={endpoint}>{endpoint}</p>
     </aside>
 
     <section class="panel flex min-h-[32rem] flex-col">
       <div bind:this={log} class="flex-1 overflow-y-auto p-4">
         {#if turns.length === 0}
-          <p class="text-sm text-fg-faint">Ask something. Answers stream in as the runtime produces them, and each one says how many tokens it took and how long.</p>
+          <p class="text-sm text-fg-faint">Send a message</p>
         {/if}
         <div class="flex flex-col gap-4">
           {#each turns as t, i (i)}
@@ -251,7 +249,7 @@
         </div>
       </div>
       <div class="flex items-end gap-2 border-t border-line p-3">
-        <textarea class="input min-h-10 flex-1 resize-none" rows="2" bind:value={draft} onkeydown={onKey} placeholder="Message, Enter to send, Shift+Enter for a new line"></textarea>
+        <textarea class="input min-h-10 flex-1 resize-none" rows="2" bind:value={draft} onkeydown={onKey} placeholder="Message"></textarea>
         {#if busy}
           <Button variant="danger" icon={Square} onclick={stop}>Stop</Button>
         {:else}

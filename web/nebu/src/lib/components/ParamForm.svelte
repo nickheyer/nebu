@@ -30,7 +30,7 @@
     const v = inherited[p.name];
     if (v !== undefined && v !== '') return v;
     if (p.default.includes('{{')) return 'set at launch';
-    return p.default || 'empty';
+    return p.default || 'unset';
   }
 
   function numeric(p: Param): boolean {
@@ -89,7 +89,7 @@
   {/each}
 
   {#each extra as k (k)}
-    <Field label={k} for="{idPrefix}-{k}" hint={params.length ? 'Not a param of this runtime, the run will refuse it' : ''}>
+    <Field label={k} for="{idPrefix}-{k}" hint={params.length ? 'Unknown to this runtime' : ''}>
       <div class="flex gap-1.5">
         <input id="{idPrefix}-{k}" class="input font-mono" value={values[k]} autocomplete="off" spellcheck="false" oninput={(e) => (values = { ...values, [k]: (e.currentTarget as HTMLInputElement).value })} />
         <button type="button" class="shrink-0 rounded-md px-2 text-fg-muted hover:bg-raised hover:text-fg" aria-label="Remove {k}" onclick={() => set(k, '')}><X size={14} /></button>

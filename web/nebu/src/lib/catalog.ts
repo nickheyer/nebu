@@ -1,5 +1,5 @@
 import type { Facet, SearchHit, SourceCapabilities, SourceStatus } from '$proto/source_pb';
-import { ConfigType, SourceKind } from '$proto/source_pb';
+import { SourceKind } from '$proto/source_pb';
 import type { RuntimeStatus } from '$proto/runtime_pb';
 import type { FitRow } from '$proto/estimate_pb';
 import { FitVerdict } from '$proto/estimate_pb';
@@ -128,40 +128,6 @@ export function hitSize(h: SearchHit): { kind: 'params' | 'bytes' | 'none'; valu
   return { kind: 'none', value: 0n };
 }
 
-const hiddenPatterns = new WeakMap<SourceCapabilities, RegExp[]>();
-
-// The source's housekeeping tag patterns, compiled once per capabilities object and matched whole
-function hiddenTags(caps: SourceCapabilities | undefined): RegExp[] {
-  if (!caps) return [];
-  let res = hiddenPatterns.get(caps);
-  if (!res) hiddenPatterns.set(caps, (res = caps.hiddenTags.map((p) => new RegExp(`^(?:${p})$`))));
-  return res;
-}
-
-// Tags worth showing on a card: what the card already says and the source's housekeeping hidden
-export function displayTags(h: SearchHit, caps: SourceCapabilities | undefined, max = 5): string[] {
-  const skip = new Set([h.task, h.library, h.license, ...h.formats].filter(Boolean));
-  const hidden = hiddenTags(caps);
-  const seen = new Set<string>();
-  return h.tags.filter((t) => !skip.has(t) && !hidden.some((re) => re.test(t)) && !seen.has(t) && seen.add(t)).slice(0, max);
-}
-
-// The chips a source declares for a hit: text, tooltip, a bool showing its label, a comma list one chip each
-export function hitChips(h: SearchHit, caps: SourceCapabilities | undefined): { text: string; title: string }[] {
-  const out: { text: string; title: string }[] = [];
-  for (const f of caps?.hitFields ?? []) {
-    const value = h.extra[f.name];
-    if (!value) continue;
-    const title = f.description || f.label;
-    if (f.type === ConfigType.BOOL) {
-      if (value === 'true') out.push({ text: f.label, title });
-      continue;
-    }
-    for (const part of new Set(value.split(',').map((p) => p.trim()).filter(Boolean))) out.push({ text: part, title });
-  }
-  return out;
-}
-
 // Orders weight groups for choosing: what fits first, then the largest, which keeps the most quality
 export function orderDescriptors(descriptors: Descriptor[], rows: FitRow[]): Descriptor[] {
   const rank = (d: Descriptor) => {
@@ -209,10 +175,13 @@ export function fitSummary(rows: FitRow[], group: string, free = false): FitSumm
   const plan = best ? planOf(best) : undefined;
   if (!best || !plan) return null;
   const v = plan.verdict;
-  const word = verdictWord(v);
-  const now = free ? ' right now' : '';
   const base = { verdict: v, context: best.context, runtime: best.runtimeId };
-  if (v === FitVerdict.FITS) return { ...base, label: `${word} up to ${ctx(best.context)} context${now}`, tone: 'ok' };
-  if (v === FitVerdict.PARTIAL) return { ...base, label: `${word}${now}, spills into system RAM`, tone: 'warn' };
-  return { ...base, label: `${word} for ${free ? 'what is free right now' : 'this host'}`, tone: 'bad' };
+  if (v === FitVerdict.FITS) return { ...base, label: `${verdictWord(v)} at ${ctx(best.context)}`, tone: 'ok' };
+  if (v === FitVerdict.PARTIAL) return { ...base, label: `${verdictWord(v)} at ${ctx(best.context)}`, tone: 'warn' };
+  return { ...base, label: verdictWord(v), tone: 'bad' };
+}
+
+// Whether a hit is gated on a source that holds no token, so opening it would only fail
+export function locked(h: SearchHit | null, caps: SourceCapabilities | undefined): boolean {
+  return !!h?.gated && !caps?.tokenPresent;
 }

@@ -46,8 +46,25 @@ func runDoctor(ctx context.Context, e *env, args []string) error {
 func runHost(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("host")
 	refresh := fs.Bool("refresh", false, "probe again instead of using the cached profile")
-	if _, err := e.parse(fs, args, 0, 0, "host [--refresh]"); err != nil {
+	label := fs.String("label", "", "what to call this host, the hostname when cleared with an empty value")
+	if _, err := e.parse(fs, args, 0, 0, "host [--refresh] [--label NAME]"); err != nil {
 		return err
+	}
+	// Naming the flag, even empty, sets the label, leaving it out only reads
+	labelSet := false
+	fs.Visit(func(f *flag.Flag) { labelSet = labelSet || f.Name == "label" })
+	current, err := e.cl.settings.GetSettings(ctx, connect.NewRequest(&v1.GetSettingsRequest{}))
+	if err != nil {
+		return err
+	}
+	settings := current.Msg.GetSettings()
+	if labelSet {
+		settings.HostLabel = *label
+		saved, err := e.cl.settings.UpdateSettings(ctx, connect.NewRequest(&v1.UpdateSettingsRequest{Settings: settings}))
+		if err != nil {
+			return err
+		}
+		settings = saved.Msg.GetSettings()
 	}
 	resp, err := e.cl.host.GetProfile(ctx, connect.NewRequest(&v1.GetProfileRequest{Refresh: *refresh}))
 	if err != nil {
@@ -55,7 +72,11 @@ func runHost(ctx context.Context, e *env, args []string) error {
 	}
 	p := resp.Msg.GetProfile()
 	return e.print(resp.Msg, func(w io.Writer) {
-		fmt.Fprintf(w, "%s %s/%s\n", p.GetHostname(), p.GetOs(), p.GetArch())
+		if l := settings.GetHostLabel(); l != "" {
+			fmt.Fprintf(w, "%s (%s) %s/%s\n", l, p.GetHostname(), p.GetOs(), p.GetArch())
+		} else {
+			fmt.Fprintf(w, "%s %s/%s\n", p.GetHostname(), p.GetOs(), p.GetArch())
+		}
 		section(w, "devices")
 		var rows [][]string
 		for _, d := range p.GetDevices() {

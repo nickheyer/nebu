@@ -31,7 +31,7 @@
 
   async function stop() {
     if (!instance) return;
-    const yes = await confirm({ title: `Stop ${instance.name}?`, message: 'The process gets its grace period, then is killed. It will not be relaunched after a daemon restart.', action: 'Stop', tone: 'bad' });
+    const yes = await confirm({ title: `Stop ${instance.name}?`, message: 'It will not relaunch after a daemon restart.', action: 'Stop', tone: 'bad' });
     if (!yes) return;
     stopping = true;
     try {
@@ -52,7 +52,7 @@
   }
 </script>
 
-<Drawer bind:id title={instance?.name ?? 'Instance'} subtitle={instance?.id} width="lg">
+<Drawer bind:id title={instance?.name ?? 'Instance'} subtitle={instance?.id}>
   {#snippet header()}
     {#if instance}
       <div class="flex flex-wrap items-center gap-2">
@@ -99,7 +99,7 @@
             ]}
           />
           {#if instance.taskId}
-            <a href="/tasks?id={instance.taskId}" class="inline-flex items-center gap-1 text-xs text-accent hover:underline"><ExternalLink size={12} /> Open the launch task</a>
+            <a href="/tasks?id={instance.taskId}" class="inline-flex items-center gap-1 text-xs text-accent hover:underline"><ExternalLink size={12} /> Launch task</a>
           {/if}
 
           {#if Object.keys(instance.params).length}
@@ -130,13 +130,13 @@
         {#if instance.plan}
           <PlanView plan={instance.plan} />
         {:else}
-          <p class="text-sm text-fg-faint">No memory plan was recorded for this instance.</p>
+          <p class="text-sm text-fg-faint">No plan recorded</p>
         {/if}
       {:else if tab === 'log'}
         <InstanceLog id={instance.id} follow={alive} height="h-[calc(100vh-16rem)]" />
       {:else if tab === 'triage'}
         {#if instance.triage.length === 0}
-          <p class="text-sm text-fg-faint">No failure patterns matched the output.</p>
+          <p class="text-sm text-fg-faint">Nothing matched</p>
         {:else}
           <div class="flex flex-col gap-3">
             {#each instance.triage as hit (hit.id)}
@@ -149,7 +149,7 @@
                     <span class="text-xs text-fg-muted">suggested</span>
                     <ParamChips params={hit.fix} />
                     {#if instance.request && !alive}
-                      <Button size="xs" variant="primary" icon={Wrench} class="ml-auto" onclick={() => again(hit.fix)}>Run again with fix</Button>
+                      <Button size="xs" variant="primary" icon={Wrench} class="ml-auto" onclick={() => again(hit.fix)}>Run with fix</Button>
                     {/if}
                   </div>
                 {/if}
@@ -163,7 +163,7 @@
 
   {#snippet footer()}
     {#if instance}
-      <span class="text-xs text-fg-faint">{enumLabel(InstanceState, instance.state)} · {instance.slotId ? `in slot ${slotName(instance.slotId)}` : 'standalone'}</span>
+      <span class="text-xs text-fg-faint">{enumLabel(InstanceState, instance.state)}{instance.slotId ? ` · slot ${slotName(instance.slotId)}` : ''}</span>
       <div class="ml-auto flex gap-2">
         {#if alive}
           {#if instance.state === InstanceState.READY}

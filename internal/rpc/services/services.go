@@ -11,6 +11,7 @@ import (
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/monitor"
 	"github.com/nickheyer/nebu/internal/profiles"
+	"github.com/nickheyer/nebu/internal/settings"
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/build"
@@ -38,7 +39,7 @@ func wrap(err error) error {
 		errors.Is(err, profiles.ErrUnknownProfile):
 		return connect.NewError(connect.CodeNotFound, err)
 	case errors.Is(err, runtime.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, monitor.ErrWatch), errors.Is(err, sources.ErrSource),
-		errors.Is(err, profiles.ErrProfile):
+		errors.Is(err, profiles.ErrProfile), errors.Is(err, settings.ErrSetting):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, profiles.ErrProfileInUse), errors.Is(err, sources.ErrSourceInUse), errors.Is(err, slots.ErrSlotInUse):
 		return connect.NewError(connect.CodeFailedPrecondition, err)

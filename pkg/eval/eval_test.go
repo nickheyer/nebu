@@ -110,3 +110,22 @@ func TestEnumShort(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestSolve(t *testing.T) {
+	compile := func(src string) *Expr {
+		e, err := Compile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	// b uses a and comes first alphabetically, so the second pass has to pick it up
+	env := map[string]any{"x": 2.0}
+	if err := Solve(map[string]*Expr{"b": compile("a * 3"), "a": compile("x + 1")}, env); err != nil || env["b"] != 9.0 {
+		t.Fatalf("solve %v %v", env, err)
+	}
+	err := Solve(map[string]*Expr{"c": compile("missing + 1")}, map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "formula c") {
+		t.Fatalf("unresolved formula should name itself, got %v", err)
+	}
+}

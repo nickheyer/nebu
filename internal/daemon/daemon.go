@@ -27,6 +27,7 @@ import (
 	"github.com/nickheyer/nebu/internal/profiles"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc"
+	"github.com/nickheyer/nebu/internal/settings"
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/build"
@@ -63,6 +64,7 @@ type Daemon struct {
 	Config    *v1.Config
 	DB        *db.DB
 	Host      *host.Prober
+	Settings  *settings.Manager
 	Sources   *sources.Manager
 	Inspector *inspect.Inspector
 	Doctor    *doctor.Doctor
@@ -191,7 +193,11 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 		cancel:  cancel,
 		base:    base,
 	}
-	// Profiles are rows beside the seeded manifests, loaded once and followed through events
+	// Settings and profiles are rows, loaded once and followed through events
+	d.Settings = &settings.Manager{DB: store, Events: bus}
+	if err = d.Settings.Load(context.Background()); err != nil {
+		return nil, err
+	}
 	d.Profiles = &profiles.Manager{DB: store, Runtimes: runtimes, Events: bus, Log: log}
 	if err = d.Profiles.Load(context.Background()); err != nil {
 		return nil, err
@@ -301,6 +307,7 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 	d.handler = rpc.NewHandler(rpc.Deps{
 		Host:      prober,
 		Doctor:    d.Doctor,
+		Settings:  d.Settings,
 		Sources:   srcMgr,
 		Formats:   classifier.Specs(),
 		Runtimes:  runtimes,
@@ -343,6 +350,7 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 			add(v1.EventKind_EVENT_KIND_HOST, profile.GetHostname(), profile)
 		}
 	}
+	add(v1.EventKind_EVENT_KIND_SETTINGS, settings.ID, d.Settings.Get())
 	for _, s := range d.Sources.List() {
 		add(v1.EventKind_EVENT_KIND_SOURCE, s.GetId(), s)
 	}

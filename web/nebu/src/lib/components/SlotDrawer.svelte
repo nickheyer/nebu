@@ -38,7 +38,7 @@
   });
 </script>
 
-<Drawer bind:id title={slot?.name ?? 'Slot'} subtitle={slot?.id} width="lg">
+<Drawer bind:id title={slot?.name ?? 'Slot'} subtitle={slot?.id}>
   {#snippet header()}
     {#if slot}
       <div class="flex flex-wrap items-center gap-2">
@@ -79,7 +79,7 @@
                 <ExternalLink size={13} class="text-fg-faint" />
               </button>
             {:else}
-              <div class="rounded-lg border border-dashed border-line px-3 py-4 text-center text-sm text-fg-faint">Nothing is serving this slot. The gateway answers 503 with a retry hint for <span class="font-mono text-fg-muted">{slot.name}</span>.</div>
+              <div class="rounded-lg border border-dashed border-line px-3 py-4 text-center text-sm text-fg-faint">Empty. The gateway answers 503 for <span class="font-mono text-fg-muted">{slot.name}</span></div>
             {/if}
           </Section>
 
@@ -87,8 +87,8 @@
             <Kv
               columns={2}
               items={[
-                ['devices', devices.length ? devices.join(', ') : 'all devices'],
-                ['budget', slot.memoryBytes ? bytes(slot.memoryBytes) : 'whole devices'],
+                ['devices', devices.length ? devices.join(', ') : 'all'],
+                ['memory cap', slot.memoryBytes ? bytes(slot.memoryBytes) : 'none'],
                 ['runtime', slot.runtimeId || 'first compatible'],
                 ['public name', slot.name],
                 ['limits', policyText(slot.policy, cached.gateway?.policy)],
@@ -117,11 +117,11 @@
         {#if instance}
           {#key instance.id}<InstanceLog id={instance.id} follow={alive} height="h-[calc(100vh-16rem)]" />{/key}
         {:else}
-          <p class="text-sm text-fg-faint">Nothing is running in this slot.</p>
+          <p class="text-sm text-fg-faint">Nothing running</p>
         {/if}
       {:else if tab === 'history'}
         {#if history.length === 0}
-          <p class="text-sm text-fg-faint">No earlier instances ran in this slot.</p>
+          <p class="text-sm text-fg-faint">No history</p>
         {:else}
           <table class="tbl">
             <thead><tr><th>model</th><th>state</th><th>runtime</th><th>started</th><th>ended</th></tr></thead>

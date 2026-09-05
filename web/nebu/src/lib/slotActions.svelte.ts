@@ -38,7 +38,7 @@ export function newSlot() {
 
 // Deletes a slot after confirming, forcing past what the daemon names when asked
 export async function deleteSlot(slot: Slot): Promise<boolean> {
-  const yes = await confirm({ title: `Delete ${slot.name}?`, message: `The public name ${slot.name} stops answering. Stored models are untouched.`, action: 'Delete', tone: 'bad' });
+  const yes = await confirm({ title: `Delete ${slot.name}?`, message: `The name ${slot.name} stops answering. Stored models stay.`, action: 'Delete', tone: 'bad' });
   if (!yes) return false;
   try {
     await api.slots.deleteSlot({ id: slot.id, force: false });
@@ -49,9 +49,9 @@ export async function deleteSlot(slot: Slot): Promise<boolean> {
     const code = err instanceof ConnectError ? err.code : undefined;
     const ask =
       code === Code.InvalidArgument
-        ? { title: `Stop what ${slot.name} serves?`, message: `${message(err)}. The instance stops with the slot.`, action: 'Stop and delete' }
+        ? { title: `Stop what ${slot.name} serves?`, message: message(err), action: 'Stop and delete' }
         : code === Code.FailedPrecondition
-          ? { title: `Drop what swaps into ${slot.name}?`, message: `${message(err)}. They keep pulling but no longer swap anywhere.`, action: 'Drop and delete' }
+          ? { title: `Delete ${slot.name} and what swaps into it?`, message: message(err), action: 'Delete all' }
           : null;
     if (!ask) {
       fail(err, 'Delete failed');
@@ -71,7 +71,7 @@ export async function deleteSlot(slot: Slot): Promise<boolean> {
 
 // Stops the occupant, keeping the slot
 export async function evictSlot(slot: Slot): Promise<boolean> {
-  const yes = await confirm({ title: `Evict ${slot.name}?`, message: 'The instance stops. The slot and its public name stay, answering 503 until something serves it again.', action: 'Evict', tone: 'bad' });
+  const yes = await confirm({ title: `Evict ${slot.name}?`, message: 'The instance stops. The slot stays.', action: 'Evict', tone: 'bad' });
   if (!yes) return false;
   try {
     await api.slots.evictSlot({ id: slot.id });
