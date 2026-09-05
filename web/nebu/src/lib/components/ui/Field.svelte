@@ -2,27 +2,24 @@
   import type { Snippet } from 'svelte';
   import Info from './Info.svelte';
 
-  // A labeled control. The info mark beside the label holds the one short explanation, the hint sits beneath
+  // A labeled control, the one explanation behind an info mark and any error beneath
   let {
     label,
-    hint,
     info,
     error,
     for: id,
     children,
+    trailing,
     class: cls = ''
-  }: { label: string; hint?: string; info?: string; error?: string; for?: string; children: Snippet; class?: string } = $props();
+  }: { label: string; info?: string; error?: string; for?: string; children: Snippet; trailing?: Snippet; class?: string } = $props();
 </script>
 
-<div class="flex flex-col gap-1.5 {cls}">
+<div class="flex min-w-0 flex-col gap-1.5 {cls}">
   <div class="flex h-5 items-center gap-1">
-    <label for={id} class="text-sm font-medium text-fg-muted">{label}</label>
+    <label for={id} class="caps text-fg-faint">{label}</label>
     {#if info}<Info text={info} />{/if}
+    {#if trailing}<span class="ml-auto">{@render trailing()}</span>{/if}
   </div>
   {@render children()}
-  {#if error}
-    <p class="text-xs text-bad">{error}</p>
-  {:else if hint}
-    <p class="text-xs leading-4 text-fg-faint">{hint}</p>
-  {/if}
+  {#if error}<p class="text-xs text-bad">{error}</p>{/if}
 </div>

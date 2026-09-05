@@ -19,12 +19,12 @@ export function bytes(n: bigint | number | undefined | null, digits = 1): string
   return (i === 0 ? v.toFixed(0) : v.toFixed(digits)) + ' ' + units[i];
 }
 
-// Formats a byte delta with its sign, the way a learned correction reads
+// Formats a byte delta with its sign
 export function deltaBytes(n: number): string {
   return (n < 0 ? '-' : '+') + bytes(Math.abs(n));
 }
 
-// Formats a count with thousands separators, compact above a million
+// Formats a count with separators, compact above ten thousand
 export function count(n: bigint | number | undefined): string {
   if (n === undefined) return '–';
   const v = Number(n);
@@ -52,10 +52,29 @@ export function pct(a: bigint | number | undefined, b: bigint | number | undefin
   return Math.max(0, Math.min(100, (x / y) * 100));
 }
 
+// A noun with its count, one model or three models
+export function plural(n: number | bigint, one: string, many = one + 's'): string {
+  const v = Number(n);
+  return `${v.toLocaleString()} ${v === 1 ? one : many}`;
+}
+
 // Lower cases a generated enum name, NEW_REVISION becomes new revision
 export function enumLabel(values: Record<number, string>, v: number | undefined): string {
   const raw = values[v ?? 0] ?? 'UNSPECIFIED';
   return raw.toLowerCase().replace(/_/g, ' ');
+}
+
+// The enum name with a capital, Ready or Not installed
+export function stateLabel(values: Record<number, string>, v: number | undefined): string {
+  const s = enumLabel(values, v);
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+const moving = new Set(['starting', 'running', 'pending', 'swapping', 'draining', 'stopping']);
+
+// Whether a state names something still in motion
+export function inMotion(values: Record<number, string>, v: number | undefined): boolean {
+  return moving.has(enumLabel(values, v));
 }
 
 // Maps a state name onto a color tone
@@ -74,6 +93,7 @@ export function tone(state: string): Tone {
     case 'stopping':
     case 'partial':
     case 'warn':
+    case 'skipped':
       return 'warn';
     case 'failed':
     case 'fail':
@@ -82,19 +102,6 @@ export function tone(state: string): Tone {
       return 'bad';
     default:
       return 'neutral';
-  }
-}
-
-export function verdictLabel(v: FitVerdict | undefined): string {
-  switch (v) {
-    case FitVerdict.FITS:
-      return 'fits';
-    case FitVerdict.PARTIAL:
-      return 'partial';
-    case FitVerdict.NO:
-      return 'no';
-    default:
-      return 'unknown';
   }
 }
 
@@ -113,7 +120,7 @@ export function verdictWord(v: FitVerdict | undefined): string {
 }
 
 export function verdictTone(v: FitVerdict | undefined): Tone {
-  return tone(verdictLabel(v));
+  return v === FitVerdict.FITS ? 'ok' : v === FitVerdict.PARTIAL ? 'warn' : v === FitVerdict.NO ? 'bad' : 'neutral';
 }
 
 // Formats a timestamp as local time
@@ -122,7 +129,7 @@ export function when(ts?: Timestamp): string {
   return timestampDate(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-// Formats a timestamp relative to now, now is passed so callers can stay reactive
+// Formats a timestamp relative to now, now passed so callers stay reactive
 export function ago(ts: Timestamp | undefined, now: number = Date.now()): string {
   if (!ts) return '–';
   const s = Math.max(0, (now - timestampDate(ts).getTime()) / 1000);
@@ -203,4 +210,16 @@ export function newestFirst<T>(key: (t: T) => Timestamp | undefined) {
 export function ctx(n: number): string {
   if (n >= 1024 && n % 1024 === 0) return n / 1024 + 'k';
   return n.toLocaleString();
+}
+
+// Keeps both ends of a long path or id, the middle folded
+export function middle(text: string, max = 40): string {
+  if (text.length <= max) return text;
+  const head = Math.ceil((max - 1) * 0.55);
+  return text.slice(0, head) + '…' + text.slice(text.length - (max - 1 - head));
+}
+
+// The last segment of a repository or path
+export function tail(text: string): string {
+  return text.split('/').filter(Boolean).pop() || text;
 }

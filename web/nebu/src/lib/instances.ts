@@ -9,8 +9,3 @@ export function instanceMemory(i: Instance): string {
   const planned = i.plan?.pools.filter((p) => p.kind === PoolKind.DEVICE || p.kind === PoolKind.UNIFIED).reduce((a, p) => a + p.usedBytes, 0n) ?? 0n;
   return planned ? '≈ ' + bytes(planned) : '';
 }
-
-// The last segment of a repository, the part people say
-export function shortRepo(repo: string): string {
-  return repo.split('/').pop() || repo;
-}

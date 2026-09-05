@@ -3,7 +3,7 @@
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { Tooltip } from 'bits-ui';
-  import { connect, disconnect, live, unackedFindings, activeTasks, hostName } from '$lib/state.svelte';
+  import { connect, disconnect, live, unackedFindings, activeTasks, hostName, hostLabeled } from '$lib/state.svelte';
   import { LayoutGrid, Boxes, MessageSquare, ListChecks, Radar, Cpu, Server, Settings, WifiOff, KeyRound, Menu as MenuIcon, X } from '@lucide/svelte';
   import Logo from '$lib/components/Logo.svelte';
   import Spinner from '$lib/components/ui/Spinner.svelte';
@@ -42,7 +42,6 @@
   ]);
 
   const name = $derived(hostName());
-  const labeled = $derived(!!live.settings?.hostLabel && live.settings.hostLabel !== live.host?.hostname);
 
   function active(item: { href: string; also?: string[] }): boolean {
     const p = page.url.pathname;
@@ -65,18 +64,19 @@
   {@const on = active(item)}
   <a
     href={item.href}
-    class="flex h-9 items-center gap-3 rounded-lg px-3 text-sm transition-colors {on ? 'bg-raised font-medium text-fg' : 'text-fg-muted hover:bg-raised/60 hover:text-fg'}"
+    class="relative flex h-8 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors {on ? 'bg-raised/70 font-medium text-fg' : 'text-fg-muted hover:bg-raised/50 hover:text-fg'}"
     aria-current={on ? 'page' : undefined}
     onclick={() => (menuOpen = false)}
   >
+    {#if on}<span class="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent"></span>{/if}
     {#if item.busy}
-      <Spinner size={16} class="text-accent" />
+      <Spinner size={15} class="text-accent" />
     {:else}
-      <Icon size={16} class={on ? 'text-accent' : 'text-fg-faint'} />
+      <Icon size={15} class={on ? 'text-accent' : 'text-fg-faint'} />
     {/if}
     <span class="flex-1">{item.label}</span>
     {#if item.count}
-      <span class="min-w-5 rounded-full px-1.5 text-center text-xs font-semibold tabular-nums {item.tone === 'accent' ? 'bg-accent/15 text-accent' : 'bg-raised text-fg-muted'}">{item.count}</span>
+      <span class="min-w-5 rounded-full px-1.5 text-center text-[11px] font-semibold tabular-nums {item.tone === 'accent' ? 'bg-accent/15 text-accent' : 'bg-raised text-fg-muted'}">{item.count}</span>
     {/if}
   </a>
 {/snippet}
@@ -87,28 +87,28 @@
       <button class="fade fixed inset-0 z-30 bg-black/50 lg:hidden" aria-label="Close menu" onclick={() => (menuOpen = false)}></button>
     {/if}
     <nav
-      class="fixed inset-y-0 left-0 z-40 flex h-screen w-60 shrink-0 flex-col border-r border-line bg-bg transition-transform lg:sticky lg:top-0 lg:translate-x-0 {menuOpen ? 'translate-x-0 shadow-pop' : '-translate-x-full'}"
+      class="fixed inset-y-0 left-0 z-40 flex h-screen w-56 shrink-0 flex-col border-r border-line bg-bg transition-transform lg:sticky lg:top-0 lg:translate-x-0 {menuOpen ? 'translate-x-0 shadow-pop' : '-translate-x-full'}"
       aria-label="Main"
     >
-      <div class="flex h-14 items-center gap-3 px-5">
-        <a href="/" class="flex items-center gap-2.5 text-fg">
-          <Logo size={24} />
-          <span class="text-lg font-semibold tracking-tight">nebu</span>
+      <div class="flex h-14 items-center gap-3 px-4">
+        <a href="/" class="flex items-center gap-2.5 text-fg" aria-label="nebu">
+          <Logo size={26} />
+          <span class="font-mono text-[13px] font-semibold tracking-[0.32em] text-fg">NEBU</span>
         </a>
-        <button class="ml-auto rounded-lg p-1.5 text-fg-faint hover:bg-raised hover:text-fg lg:hidden" aria-label="Close menu" onclick={() => (menuOpen = false)}><X size={16} /></button>
+        <button class="ml-auto rounded-md p-1.5 text-fg-faint hover:bg-raised hover:text-fg lg:hidden" aria-label="Close menu" onclick={() => (menuOpen = false)}><X size={15} /></button>
       </div>
 
-      <div class="mx-3 mb-2 rounded-lg border border-line bg-surface px-3 py-2.5">
-        <div class="flex items-center gap-2">
-          <span class="relative inline-block h-2 w-2 shrink-0 rounded-full {live.connected ? 'bg-ok' : 'bg-bad'} {live.connected ? 'pulse' : ''}"></span>
+      <a href="/host" class="mx-2 mb-3 flex flex-col rounded-md px-2.5 py-2 transition-colors hover:bg-raised/50">
+        <span class="flex items-center gap-2">
+          <span class="dot {live.connected ? 'text-ok pulse' : 'text-bad'}"></span>
           <span class="truncate text-sm font-medium text-fg" title={name}>{name || 'Connecting'}</span>
-        </div>
-        <div class="mt-0.5 truncate pl-4 text-xs text-fg-faint" title={live.host?.hostname}>
-          {#if !live.connected}Reconnecting{:else if labeled}{live.host?.hostname}{:else if live.host}{live.host.os}/{live.host.arch}{/if}
-        </div>
-      </div>
+        </span>
+        <span class="mt-0.5 truncate pl-3.5 text-xs text-fg-faint" title={live.host?.hostname}>
+          {#if !live.connected}reconnecting{:else if hostLabeled()}{live.host?.hostname}{:else if live.host}{live.host.os}/{live.host.arch}{/if}
+        </span>
+      </a>
 
-      <div class="flex-1 overflow-y-auto px-3 py-2">
+      <div class="flex-1 overflow-y-auto px-2">
         {#each groups as g, i (i)}
           <div class="flex flex-col gap-0.5 {i > 0 ? 'mt-4 border-t border-line pt-4' : ''}">
             {#each g as item (item.href)}{@render navItem(item)}{/each}
@@ -116,32 +116,32 @@
         {/each}
       </div>
 
-      <div class="border-t border-line px-3 py-3">
+      <div class="border-t border-line px-2 py-2">
         {@render navItem({ href: '/settings', label: 'Settings', icon: Settings })}
       </div>
     </nav>
 
     <div class="flex min-w-0 flex-1 flex-col">
       <div class="flex h-14 items-center gap-3 border-b border-line bg-bg px-4 lg:hidden">
-        <button class="rounded-lg p-1.5 text-fg-muted hover:bg-raised hover:text-fg" aria-label="Open menu" onclick={() => (menuOpen = true)}><MenuIcon size={18} /></button>
-        <Logo size={20} class="text-fg" />
+        <button class="rounded-md p-1.5 text-fg-muted hover:bg-raised hover:text-fg" aria-label="Open menu" onclick={() => (menuOpen = true)}><MenuIcon size={17} /></button>
+        <Logo size={22} class="text-fg" />
         <span class="text-sm font-semibold text-fg">{name || 'nebu'}</span>
-        <span class="relative ml-auto inline-block h-2 w-2 rounded-full {live.connected ? 'bg-ok' : 'bg-bad'}"></span>
+        <span class="dot ml-auto {live.connected ? 'text-ok' : 'text-bad'}"></span>
       </div>
       {#if !live.connected && live.error}
-        <div class="flex items-center gap-3 border-b px-8 py-2.5 text-sm {live.needsToken ? 'border-warn/30 bg-warn/10 text-warn' : 'border-bad/30 bg-bad/10 text-bad'}">
+        <div class="flex items-center gap-3 border-b px-8 py-2 text-sm {live.needsToken ? 'border-warn/25 bg-warn/8 text-warn' : 'border-bad/25 bg-bad/8 text-bad'}">
           {#if live.needsToken}
-            <KeyRound size={16} />
-            <span>The daemon needs an API token.</span>
-            <a href="/settings" class="font-medium underline underline-offset-2">Enter it in settings</a>
+            <KeyRound size={15} />
+            <span>The daemon wants an API token</span>
+            <a href="/settings" class="font-medium underline underline-offset-2">Settings</a>
           {:else}
-            <WifiOff size={16} />
-            <span>Daemon unreachable, retrying.</span>
+            <WifiOff size={15} />
+            <span>Daemon unreachable</span>
             <span class="truncate text-xs opacity-80">{live.error}</span>
           {/if}
         </div>
       {/if}
-      <main class="mx-auto w-full max-w-[1320px] flex-1 px-5 py-6 sm:px-8 sm:py-8">
+      <main class="mx-auto w-full max-w-[1200px] flex-1 px-5 py-6 sm:px-8 lg:px-10 lg:py-8">
         {@render children()}
       </main>
     </div>

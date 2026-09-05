@@ -5,6 +5,7 @@
   import type { Profile } from '$proto/runtime_pb';
   import FormDialog from './ui/FormDialog.svelte';
   import Field from './ui/Field.svelte';
+  import Select from './ui/Select.svelte';
   import Checkbox from './ui/Checkbox.svelte';
   import Section from './ui/Section.svelte';
   import ParamForm from './ParamForm.svelte';
@@ -22,10 +23,10 @@
   const nameTaken = $derived([...live.profiles.values()].some((p) => p.runtimeId === rt && p.id !== editing?.id && p.name.toLowerCase() === name.trim().toLowerCase()));
 
   // Params belong to a runtime, so switching runtimes starts them over
-  function pick(id: string) {
-    rt = id;
-    values = {};
-  }
+  $effect(() => {
+    void rt;
+    if (!editing) values = {};
+  });
 
   const form = createForm({
     open: () => open,
@@ -53,7 +54,7 @@
 <FormDialog
   bind:open
   title={editing ? `Edit ${editing.name}` : 'New profile'}
-  description={editing ? editing.runtimeId : 'A named set of parameters a run can start from'}
+  subtitle={editing ? editing.runtimeId : undefined}
   size="lg"
   action={editing ? 'Save' : 'Add'}
   saving={form.saving}
@@ -61,14 +62,12 @@
   onsubmit={form.run}
 >
   <div class="flex flex-col gap-6">
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <div class="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2">
       <Field label="Runtime" for="prof-runtime">
         {#if editing || cached.runtimes.length <= 1}
           <div id="prof-runtime" class="input-static">{cached.runtimes.find((r) => r.manifest?.id === rt)?.manifest?.name ?? rt ?? '–'}</div>
         {:else}
-          <select id="prof-runtime" class="input" value={rt} onchange={(e) => pick((e.currentTarget as HTMLSelectElement).value)}>
-            {#each cached.runtimes as r (r.manifest?.id)}<option value={r.manifest?.id}>{r.manifest?.name ?? r.manifest?.id}</option>{/each}
-          </select>
+          <Select id="prof-runtime" bind:value={rt} items={cached.runtimes.map((r) => ({ value: r.manifest?.id ?? '', label: r.manifest?.name ?? r.manifest?.id ?? '' }))} />
         {/if}
       </Field>
       <Field label="Name" for="prof-name" error={nameTaken ? 'That name is taken' : undefined}>
@@ -77,9 +76,9 @@
       <Field label="Description" for="prof-desc" class="sm:col-span-2">
         <input id="prof-desc" class="input" bind:value={description} placeholder="Optional" />
       </Field>
-      <Checkbox bind:checked={isDefault} class="sm:col-span-2" title="Default for {rt || 'the runtime'}" hint="Applies to every run that names no profile" />
+      <Checkbox bind:checked={isDefault} class="sm:col-span-2" label="Default for {rt || 'the runtime'}" info="Applies to every run that names no profile" />
     </div>
-    <Section title="Parameters" description="Empty fields keep the runtime default">
+    <Section title="Parameters" info="Empty fields keep the runtime default">
       <ParamForm params={manifest?.params ?? []} bind:values bind:invalid idPrefix="prof" />
     </Section>
   </div>

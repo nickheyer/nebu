@@ -1,25 +1,27 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { untrack } from 'svelte';
   import { page } from '$app/state';
   import { replaceState } from '$app/navigation';
   import { api } from '$lib/api';
-  import { live, cached, clock, modelKey, instanceLive } from '$lib/state.svelte';
+  import { live, cached, clock, modelKey, instanceLive, sourceName } from '$lib/state.svelte';
   import { runModel } from '$lib/slotActions.svelte';
   import { launch, slotOccupied } from '$lib/launch';
-  import { ago, byName, bytes, count, params as fmtParams, when } from '$lib/format';
+  import { ago, byName, bytes, count, params as fmtParams, plural, tail, when } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import type { StoredModel } from '$proto/store_pb';
-  import { Boxes, Play, FolderOutput, ShieldCheck, Trash2, Search, Recycle, HardDrive, ArrowLeftRight, Compass, SlidersHorizontal } from '@lucide/svelte';
+  import { Boxes, Play, FolderOutput, ShieldCheck, Trash2, Recycle, HardDrive, ArrowLeftRight, Compass, SlidersHorizontal } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
-  import Card from '$lib/components/ui/Card.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
   import Meter from '$lib/components/ui/Meter.svelte';
-  import Pill from '$lib/components/ui/Pill.svelte';
+  import State from '$lib/components/ui/State.svelte';
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import Field from '$lib/components/ui/Field.svelte';
+  import Select from '$lib/components/ui/Select.svelte';
+  import SearchInput from '$lib/components/ui/SearchInput.svelte';
+  import Section from '$lib/components/ui/Section.svelte';
   import SortTh from '$lib/components/ui/SortTh.svelte';
   import SkeletonRows from '$lib/components/ui/SkeletonRows.svelte';
   import ModelsNav from '$lib/components/ModelsNav.svelte';
@@ -33,12 +35,10 @@
   let exportTarget = $state<StoredModel | null>(null);
   let exportDir = $state('');
   let exporting = $state(false);
-  let collecting = $state(false);
   let sourceFilter = $state('');
   let selected = $state<StoredModel | null>(null);
   let drawerOpen = $state(false);
   let slotId = $state('');
-  let filterInput: HTMLInputElement | undefined = $state();
   const sort = new TableSort('pulled');
   const loading = $derived(!live.ready && !live.error);
 
@@ -82,16 +82,15 @@
     return [...(live.host?.storage ?? [])].filter((s) => p.startsWith(s.path)).sort((a, b) => b.path.length - a.path.length)[0];
   });
   const ceiling = $derived(status?.maxBytes || mount?.totalBytes || 0n);
-  const diskLine = $derived.by(() => {
+  const facts = $derived.by(() => {
     const parts: string[] = [];
     if (status?.maxBytes) parts.push(`${bytes(status.maxBytes, 0)} cap`);
     else if (mount) parts.push(`${bytes(mount.freeBytes)} free on ${mount.path}`);
-    if (shared) parts.push(`${bytes(shared)} shared between models`);
-    if (status?.partials) parts.push(`${count(status.partials)} partial ${Number(status.partials) === 1 ? 'pull' : 'pulls'} holding ${bytes(status.partialBytes)}`);
-    return parts.join(' · ');
+    if (shared) parts.push(`${bytes(shared)} shared`);
+    if (status?.partials) parts.push(`${plural(status.partials, 'partial pull')} holding ${bytes(status.partialBytes)}`);
+    return parts;
   });
 
-  const sourceName = (id: string) => live.sources.get(id)?.name || id;
   const capsOf = (id: string) => cached.sources.find((s) => s.source?.id === id)?.capabilities;
 
   function servingAs(m: StoredModel): string[] {
@@ -116,45 +115,31 @@
     if (!drawerOpen && !wanted && page.url.searchParams.has('model')) replaceState('/store', {});
   });
 
-  onMount(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === '/' && !e.metaKey && !e.ctrlKey && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName ?? '')) {
-        e.preventDefault();
-        filterInput?.focus();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
-
   async function remove(m: StoredModel) {
-    const yes = await confirm({ title: `Remove ${m.repo} ${m.group}?`, message: 'Blobs nothing else references are deleted.', action: 'Remove', tone: 'bad' });
+    const yes = await confirm({ title: `Remove ${tail(m.repo)} ${m.group}?`, message: 'Blobs nothing else references are deleted.', action: 'Remove', tone: 'bad' });
     if (!yes) return;
     try {
       const r = await api.store.removeModel({ sourceId: m.sourceId, repo: m.repo, group: m.group, gc: true });
       live.models.delete(modelKey(m));
-      ok(`Removed ${m.repo}`, r.gc ? `${bytes(r.gc.freedBytes)} freed` : undefined);
+      ok(`Removed ${tail(m.repo)}`, r.gc ? `${bytes(r.gc.freedBytes)} freed` : undefined);
     } catch (err) {
       fail(err, 'Remove failed');
     }
   }
 
   async function gc() {
-    collecting = true;
     try {
       const r = await api.store.gc({ partials: true });
       ok(`Freed ${bytes(r.freedBytes)}`);
     } catch (err) {
-      fail(err, 'GC failed');
-    } finally {
-      collecting = false;
+      fail(err, 'Collect failed');
     }
   }
 
   async function verify(m?: StoredModel) {
     try {
       const r = await api.store.verify(m ? { sourceId: m.sourceId, repo: m.repo, group: m.group } : {});
-      ok(m ? `Verifying ${m.repo}` : 'Verifying the library', undefined, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
+      ok(m ? `Verifying ${tail(m.repo)}` : 'Verifying the library', undefined, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
     } catch (err) {
       fail(err, 'Verify refused');
     }
@@ -170,7 +155,7 @@
     try {
       const req = exportTarget ? { sourceId: exportTarget.sourceId, repo: exportTarget.repo, group: exportTarget.group, dir: exportDir } : { dir: exportDir };
       const r = await api.store.export(req);
-      ok(exportTarget ? `Exporting ${exportTarget.repo}` : 'Exporting the library', exportDir, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
+      ok(exportTarget ? `Exporting ${tail(exportTarget.repo)}` : 'Exporting the library', exportDir, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
       exportOpen = false;
     } catch (err) {
       fail(err, 'Export refused');
@@ -182,8 +167,8 @@
   // Quick targets beside the run dialog: one click into any slot
   function runItems(m: StoredModel) {
     return [
-      ...slots.map((s) => ({ label: slotOccupied(s.id) ? `Swap into ${s.name}` : `Run in ${s.name}`, icon: slotOccupied(s.id) ? ArrowLeftRight : Play, detail: slotOccupied(s.id) ? `replaces ${s.request?.repo?.split('/').pop() ?? 'the current model'}` : 'empty', onSelect: () => launch({ sourceId: m.sourceId, repo: m.repo, group: m.group, slotId: s.id }) })),
-      { label: 'Run with options', icon: SlidersHorizontal, detail: 'runtime, profile, parameters, memory plan', onSelect: () => runModel(m) },
+      ...slots.map((s) => ({ label: slotOccupied(s.id) ? `Swap into ${s.name}` : `Run in ${s.name}`, icon: slotOccupied(s.id) ? ArrowLeftRight : Play, detail: slotOccupied(s.id) ? `replaces ${tail(s.request?.repo ?? '')}` : 'empty', onSelect: () => launch({ sourceId: m.sourceId, repo: m.repo, group: m.group, slotId: s.id }) })),
+      { label: 'Run with options', icon: SlidersHorizontal, onSelect: () => runModel(m) },
       { label: '', separator: true },
       { label: 'Export', icon: FolderOutput, onSelect: () => openExport(m) },
       { label: 'Verify', icon: ShieldCheck, onSelect: () => verify(m) },
@@ -208,49 +193,42 @@
 {/snippet}
 
 <PageHeader title="Models">
-  {#snippet meta()}
-    <ModelsNav />
-  {/snippet}
   <Menu
-    label="Library"
+    label="Maintain"
     icon={HardDrive}
     items={[
-      { label: 'Verify everything', icon: ShieldCheck, detail: 'rehash every blob, delete corrupt ones', onSelect: () => verify() },
-      { label: 'Collect garbage', icon: Recycle, detail: 'delete blobs and partial pulls nothing references', onSelect: gc },
+      { label: 'Verify everything', icon: ShieldCheck, detail: 'rehash every blob', onSelect: () => verify() },
+      { label: 'Collect garbage', icon: Recycle, detail: 'drop unreferenced blobs and partial pulls', onSelect: gc },
       { label: 'Export as a mirror', icon: FolderOutput, detail: 'a directory another nebu can pull from', onSelect: () => openExport(null), disabled: live.models.size === 0 }
     ]}
   />
-  <Button variant="primary" icon={Compass} href="/catalog">Discover models</Button>
+  {#snippet below()}
+    <ModelsNav />
+  {/snippet}
 </PageHeader>
 
-<div class="flex flex-col gap-5">
+<div class="flex flex-col gap-9">
   {#if status}
-    <div class="card flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:gap-6">
-      <div class="flex items-baseline gap-2">
+    <div class="flex flex-col gap-2">
+      <div class="flex flex-wrap items-baseline gap-x-4 gap-y-1">
         <span class="text-2xl font-semibold tabular-nums text-fg">{bytes(onDisk)}</span>
         <span class="text-sm text-fg-muted">on disk{ceiling ? ` of ${bytes(ceiling, 0)}` : ''}</span>
+        <span class="ml-auto text-sm tabular-nums text-fg-muted">{plural(live.models.size, 'model')} · {plural(status.blobs, 'blob')}</span>
       </div>
-      <div class="min-w-0 flex-1">
-        {#if ceiling}<Meter value={onDisk} max={ceiling} />{/if}
-        <div class="mt-1.5 truncate text-xs text-fg-faint" title={diskLine}>{diskLine || status.path}</div>
+      {#if ceiling}<Meter value={onDisk} max={ceiling} auto />{/if}
+      <div class="flex flex-wrap gap-x-4 text-xs text-fg-faint" title={status.path}>
+        {#each facts as f (f)}<span>{f}</span>{/each}
+        <span class="ml-auto truncate font-mono">{status.path}</span>
       </div>
-      <div class="text-sm text-fg-muted"><span class="tabular-nums text-fg">{count(live.models.size)}</span> {live.models.size === 1 ? 'model' : 'models'} · <span class="tabular-nums text-fg">{count(status.blobs)}</span> blobs</div>
     </div>
   {/if}
 
-  <Card flush>
+  <Section title="Library" count={live.models.size || undefined}>
     {#snippet actions()}
       {#if several}
-        <select class="input h-8 w-auto" bind:value={sourceFilter} aria-label="Source">
-          <option value="">All sources</option>
-          {#each sourceIds as id (id)}<option value={id}>{sourceName(id)}</option>{/each}
-        </select>
+        <Select size="sm" class="w-40" bind:value={sourceFilter} label="Source" items={[{ value: '', label: 'All sources' }, ...sourceIds.map((id) => ({ value: id, label: sourceName(id) }))]} />
       {/if}
-      <div class="relative">
-        <Search size={14} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-fg-faint" />
-        <input bind:this={filterInput} class="input h-8 w-64 pr-8 pl-9" placeholder="Filter the library" bind:value={filter} />
-        <span class="kbd pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 {filter ? 'hidden' : ''}">/</span>
-      </div>
+      <SearchInput class="w-64" bind:value={filter} placeholder="Filter" />
     {/snippet}
     {#if loading}
       <table class="tbl">
@@ -274,9 +252,9 @@
               {@const on = drawerOpen && selected && modelKey(selected) === key}
               <tr class="row-link {on ? 'row-active' : ''}" onclick={() => openModel(m)}>
                 <td>
-                  <div class="flex items-center gap-2">
-                    <span class="font-medium text-fg">{m.repo}</span>
-                    {#each serving as name (name)}<Pill tone="ok" dot label="serving as {name}" />{/each}
+                  <div class="flex items-center gap-3">
+                    <span class="text-fg">{m.repo}</span>
+                    {#each serving as name (name)}<State tone="ok" label="serving as {name}" />{/each}
                   </div>
                   <div class="font-mono text-xs text-fg-muted">{m.group}{#if m.descriptor?.architecture}<span class="font-sans">{' · '}{m.descriptor.architecture}</span>{/if}</div>
                 </td>
@@ -287,7 +265,7 @@
                 <td class="text-fg-muted" title={when(m.pulledAt)}>{ago(m.pulledAt, clock.now)}</td>
                 <td class="text-fg-muted" title={when(usedAt(m))}>{m.usedAt ? ago(m.usedAt, clock.now) : 'never'}</td>
                 <td class="actions" onclick={(e) => e.stopPropagation()}>
-                  <span class="inline-flex items-center gap-1.5">
+                  <span>
                     <Button size="sm" variant="primary" icon={Play} onclick={() => runModel(m)}>Run</Button>
                     <Menu size="sm" items={runItems(m)} />
                   </span>
@@ -298,11 +276,11 @@
         </table>
       </div>
     {/if}
-  </Card>
+  </Section>
 </div>
 
-<Dialog bind:open={exportOpen} title={exportTarget ? `Export ${exportTarget.repo}` : 'Export the library'} description="Writes a mirror another nebu can pull from">
-  <Field label="Directory" for="export-dir" hint="On the daemon's host">
+<Dialog bind:open={exportOpen} title={exportTarget ? `Export ${tail(exportTarget.repo)}` : 'Export the library'} subtitle={exportTarget ? exportTarget.repo : undefined}>
+  <Field label="Directory" for="export-dir" info="A path on the daemon's host. Another nebu can pull from it.">
     <input id="export-dir" class="input font-mono" bind:value={exportDir} placeholder="/mnt/mirror" autocomplete="off" spellcheck="false" />
   </Field>
   {#snippet footer()}

@@ -16,7 +16,7 @@ export interface RunSpec {
   force?: boolean;
 }
 
-// Reports whether a slot has something alive in it
+// Whether a slot has something alive in it
 export function slotOccupied(slotId: string | undefined): boolean {
   if (!slotId) return false;
   const s = live.slots.get(slotId);
@@ -30,8 +30,8 @@ export async function launch(spec: RunSpec, drainFirst = false, refused?: (err: 
   try {
     const task = swap ? (await api.slots.swap({ slotId: spec.slotId!, run, drainFirst })).task : (await api.instances.run(run)).task;
     const id = task?.id ?? '';
-    const target = spec.slotId ? `into ${live.slots.get(spec.slotId)?.name ?? 'slot'}` : '';
-    ok(swap ? `Swapping ${spec.repo} ${target}` : `Starting ${spec.repo} ${target}`, spec.group, id ? { href: `/tasks?id=${id}`, label: 'Task' } : undefined);
+    const target = spec.slotId ? ` into ${live.slots.get(spec.slotId)?.name ?? 'slot'}` : '';
+    ok(`${swap ? 'Swapping' : 'Starting'} ${spec.repo.split('/').pop()}${target}`, spec.group, id ? { href: `/tasks?id=${id}`, label: 'Task' } : undefined);
     return id;
   } catch (err) {
     fail(err, swap ? 'Swap refused' : 'Run refused');

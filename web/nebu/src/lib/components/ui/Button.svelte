@@ -3,7 +3,7 @@
   import type { HTMLButtonAttributes } from 'svelte/elements';
   import Spinner from './Spinner.svelte';
 
-  type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
+  type Variant = 'primary' | 'secondary' | 'subtle' | 'ghost' | 'danger';
   type Size = 'sm' | 'md' | 'lg';
 
   // A button without children is square and shows only its icon, so it needs an aria-label
@@ -29,16 +29,17 @@
 
   const variants: Record<Variant, string> = {
     primary: 'bg-accent text-accent-fg font-semibold hover:bg-accent-strong',
-    secondary: 'border border-line bg-raised text-fg hover:border-line-strong',
+    secondary: 'border border-line bg-raised/60 text-fg hover:border-line-strong hover:bg-raised',
+    subtle: 'bg-raised/50 text-fg hover:bg-raised',
     ghost: 'text-fg-muted hover:bg-raised hover:text-fg',
-    danger: 'border border-bad/30 bg-bad/10 text-bad hover:bg-bad/20'
+    danger: 'border border-bad/25 bg-bad/8 text-bad hover:bg-bad/15'
   };
-  const sizes: Record<Size, string> = { sm: 'h-8 gap-1.5 text-sm', md: 'h-9 gap-2 text-sm', lg: 'h-10 gap-2 text-sm' };
-  const pads: Record<Size, string> = { sm: 'px-2.5', md: 'px-3.5', lg: 'px-4' };
-  const squares: Record<Size, string> = { sm: 'w-8', md: 'w-9', lg: 'w-10' };
-  const iconSize: Record<Size, number> = { sm: 14, md: 16, lg: 16 };
+  const sizes: Record<Size, string> = { sm: 'h-7 gap-1.5 text-xs', md: 'h-8 gap-1.5 text-sm', lg: 'h-9 gap-2 text-sm' };
+  const pads: Record<Size, string> = { sm: 'px-2', md: 'px-3', lg: 'px-3.5' };
+  const squares: Record<Size, string> = { sm: 'w-7', md: 'w-8', lg: 'w-9' };
+  const iconSize: Record<Size, number> = { sm: 13, md: 14, lg: 15 };
   const classes = $derived(
-    `inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-lg font-medium transition-colors select-none disabled:opacity-50 ${variants[variant]} ${sizes[size]} ${children ? pads[size] : squares[size]} ${cls}`
+    `inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md font-medium transition-colors select-none disabled:opacity-45 disabled:hover:bg-inherit ${variants[variant]} ${sizes[size]} ${children ? pads[size] : squares[size]} ${cls}`
   );
 </script>
 

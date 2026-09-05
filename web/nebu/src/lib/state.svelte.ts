@@ -1,5 +1,6 @@
 import { SvelteMap } from 'svelte/reactivity';
 import { api, message, unauthenticated } from './api';
+import { readLocal, writeLocal } from './persist';
 import { EventAction, EventKind, type Event } from '$proto/event_pb';
 import type { HostProfile } from '$proto/host_pb';
 import { TaskState, type Task } from '$proto/task_pb';
@@ -49,7 +50,7 @@ export const cached = $state({
   gateway: null as GatewayStatus | null
 });
 
-// Reads the runtimes, source statuses, and gateway status, keeping what still answers when one fails
+// Reads runtimes, source statuses, and gateway status, keeping what still answers when one fails
 export async function refreshCached() {
   const [r, s, g] = await Promise.allSettled([api.runtimes.listRuntimes({}), api.sources.listSources({}), api.gateway.getGatewayStatus({})]);
   if (r.status === 'fulfilled') cached.runtimes = r.value.runtimes;
@@ -94,23 +95,13 @@ const maps: Maps = {
 const notifyKey = 'nebu.notify';
 
 // Whether this browser raises desktop notifications for findings
-export function desktopNotify(): boolean {
-  try {
-    return localStorage.getItem(notifyKey) === '1';
-  } catch {
-    return false;
-  }
-}
+export const desktopNotify = () => readLocal(notifyKey) === '1';
 
 export async function setDesktopNotify(on: boolean): Promise<boolean> {
   if (on && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
     if ((await Notification.requestPermission()) !== 'granted') return false;
   }
-  try {
-    localStorage.setItem(notifyKey, on ? '1' : '0');
-  } catch {
-    // storage may be unavailable
-  }
+  writeLocal(notifyKey, on ? '1' : '0');
   return on;
 }
 
@@ -122,7 +113,7 @@ function announce(f: Finding) {
     try {
       new Notification(title, { body: f.detail, tag: f.id });
     } catch {
-      // some browsers refuse notifications from a page without a service worker
+      // some browsers refuse notifications without a service worker
     }
   }
 }
@@ -185,7 +176,6 @@ export function connect() {
     while (!signal.aborted) {
       snapshotSeen = new Map();
       try {
-        // Formats are spec data with no events, so each connection reads them once
         const specs = await api.runtimes.listFormats({}, { signal });
         live.formats.clear();
         for (const f of specs.formats) live.formats.set(f.id, f);
@@ -210,7 +200,6 @@ export function connect() {
         live.connected = false;
         live.needsToken = unauthenticated(err);
         live.error = message(err);
-        // Pages waiting on the cached lists get the same answer instead of a skeleton
         if (!cached.loaded) Object.assign(cached, { loaded: true, error: live.error });
       }
       await new Promise((r) => setTimeout(r, backoff));
@@ -227,18 +216,25 @@ export function disconnect() {
 }
 
 // Probes the host again, the HOST event carrying the new profile everywhere else
-export async function probeHost() {
+export async function probeHost(): Promise<boolean> {
   try {
     const resp = await api.host.getProfile({ refresh: true });
     if (resp.profile) live.host = resp.profile;
+    return true;
   } catch (err) {
     fail(err, 'Probe failed');
+    return false;
   }
 }
 
 // What this host is called: its label, else its hostname
 export function hostName(): string {
   return live.settings?.hostLabel || live.host?.hostname || '';
+}
+
+// Whether the label differs from the hostname, so the hostname is worth showing beneath
+export function hostLabeled(): boolean {
+  return !!live.settings?.hostLabel && live.settings.hostLabel !== live.host?.hostname;
 }
 
 // Writes settings, the stream carrying the change back to every page
@@ -248,7 +244,7 @@ export async function updateSettings(patch: Partial<Settings>): Promise<boolean>
     if (r.settings) live.settings = r.settings;
     return true;
   } catch (err) {
-    fail(err, 'Could not save');
+    fail(err, 'Save failed');
     return false;
   }
 }
@@ -259,12 +255,12 @@ export function taskActive(t: Task): boolean {
 
 const byCreated = newestFirst<{ createdAt?: Task['createdAt'] }>((t) => t.createdAt);
 
-// Lists tasks still running, newest first
+// Tasks still running, newest first
 export function activeTasks(): Task[] {
   return [...live.tasks.values()].filter(taskActive).sort(byCreated);
 }
 
-// Finds the newest task of a kind whose labels include every given pair
+// The newest task of a kind whose labels include every given pair
 export function taskFor(kind: string, labels: Record<string, string>, activeOnly = true): Task | undefined {
   const want = Object.entries(labels);
   return [...live.tasks.values()]
@@ -286,6 +282,10 @@ export function slotName(id: string | undefined): string {
   return live.slots.get(id)?.name ?? id;
 }
 
+export function sourceName(id: string): string {
+  return live.sources.get(id)?.name || id;
+}
+
 export function modelKey(m: { sourceId: string; repo: string; group: string }): string {
   return `${m.sourceId}/${m.repo}/${m.group}`;
 }
@@ -301,14 +301,29 @@ export function profilesOf(runtimeId: string): Profile[] {
     .sort(byName((p) => `${p.runtimeId} ${p.default ? 0 : 1} ${p.name}`));
 }
 
+// The name a profile goes by, the id when it is gone
+export function profileName(id: string): string {
+  return id ? (live.profiles.get(id)?.name ?? id) : '';
+}
+
 // Params a run of a runtime starts from: the named profile, else the runtime default
 export function profileParams(runtimeId: string, profileId = ''): Record<string, string> {
   const p = profileId ? live.profiles.get(profileId) : profilesOf(runtimeId).find((p) => p.default);
   return p?.runtimeId === runtimeId ? { ...p.params } : {};
 }
 
+// The runtime a manifest id names, for its display name
+export function runtimeName(id: string): string {
+  return cached.runtimes.find((r) => r.manifest?.id === id)?.manifest?.name || id;
+}
+
 // What a weight format is, in the words its spec carries
 export function formatBlurb(id: string): string {
   const f = live.formats.get(id);
   return f?.blurb || f?.description || `${id} weight files`;
+}
+
+// The device a probed id names, for its display name
+export function deviceName(id: string): string {
+  return live.host?.devices.find((d) => d.id === id)?.name || id;
 }

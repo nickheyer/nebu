@@ -6,7 +6,7 @@
   let {
     open = $bindable(false),
     title,
-    description,
+    subtitle,
     size = 'md',
     action,
     icon,
@@ -18,21 +18,21 @@
   }: {
     open?: boolean;
     title: string;
-    description?: string;
+    subtitle?: string;
     size?: 'sm' | 'md' | 'lg' | 'xl';
     // The primary button's label
     action: string;
     icon?: Component<any>;
     saving?: boolean;
     disabled?: boolean;
-    // A warning shown beside the buttons, such as what is still missing
+    // A short warning beside the buttons, such as what is still missing
     note?: string;
     onsubmit: () => void;
     children: Snippet;
   } = $props();
 </script>
 
-<Dialog bind:open {title} {description} {size}>
+<Dialog bind:open {title} {subtitle} {size}>
   <form
     onsubmit={(e) => {
       e.preventDefault();

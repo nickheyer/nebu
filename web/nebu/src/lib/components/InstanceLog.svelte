@@ -26,5 +26,5 @@
   });
 </script>
 
-{#if error}<div class="mb-2 text-sm text-bad">{error}</div>{/if}
+{#if error}<div class="note note-bad mb-3">{error}</div>{/if}
 <LogView {lines} {height} live={follow} empty="No output yet" />

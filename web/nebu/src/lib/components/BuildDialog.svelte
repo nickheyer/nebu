@@ -3,15 +3,17 @@
   import { createForm } from '$lib/form.svelte';
   import { parsePairs, pairsText } from '$lib/format';
   import { SandboxKind, type RecipeStatus } from '$proto/recipe_pb';
-  import { Hammer, ChevronDown } from '@lucide/svelte';
+  import { Hammer } from '@lucide/svelte';
   import FormDialog from './ui/FormDialog.svelte';
   import Field from './ui/Field.svelte';
+  import Select from './ui/Select.svelte';
   import Checkbox from './ui/Checkbox.svelte';
+  import Disclosure from './ui/Disclosure.svelte';
 
   let { open = $bindable(false), recipe }: { open?: boolean; recipe: RecipeStatus | null } = $props();
 
   let variant = $state('');
-  let sandbox = $state<'host' | 'oci'>('host');
+  let sandbox = $state('host');
   let image = $state('');
   let ref = $state('');
   let varsText = $state('');
@@ -53,56 +55,50 @@
   });
 </script>
 
-<FormDialog bind:open title="Build {recipe?.recipe?.runtimeId ?? ''}" description={recipe?.recipe?.description} size="lg" action="Build" icon={Hammer} saving={form.saving} disabled={!variant} onsubmit={form.run}>
+<FormDialog bind:open title="Build {recipe?.recipe?.runtimeId ?? ''}" subtitle={recipe?.recipe?.description} size="lg" action="Build" icon={Hammer} saving={form.saving} disabled={!variant} onsubmit={form.run}>
   {#if recipe?.recipe}
-    <div class="flex flex-col gap-4">
+    <div class="flex flex-col gap-5">
       {#if recipe.missingTools.length || recipe.unmet.length}
         <ul class="note note-warn list-disc pl-6">
           {#if recipe.missingTools.length}<li>Missing tools: {recipe.missingTools.join(' ')}</li>{/if}
           {#each recipe.unmet as u (u)}<li>{u}</li>{/each}
         </ul>
       {/if}
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Variant" for="b-variant" hint={selected?.description}>
-          <select id="b-variant" class="input" bind:value={variant}>
-            {#each recipe.recipe.variants as v (v.id)}
-              <option value={v.id}>{v.id}{v.id === recipe.variant ? ' · fits this host' : ''}</option>
-            {/each}
-          </select>
+      <div class="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2">
+        <Field label="Variant" for="b-variant" info={selected?.description || undefined}>
+          <Select id="b-variant" bind:value={variant} items={recipe.recipe.variants.map((v) => ({ value: v.id, label: v.id, detail: v.id === recipe.variant ? 'fits this host' : undefined }))} />
         </Field>
         <Field label="Sandbox" for="b-sandbox">
-          <select id="b-sandbox" class="input" bind:value={sandbox}>
-            <option value="host">Host toolchain</option>
-            <option value="oci" disabled={!recipe.sandboxCli}>{recipe.sandboxCli ? `Container · ${recipe.sandboxCli}` : 'Container · no CLI on PATH'}</option>
-          </select>
+          <Select
+            id="b-sandbox"
+            bind:value={sandbox}
+            items={[
+              { value: 'host', label: 'Host toolchain' },
+              { value: 'oci', label: 'Container', detail: recipe.sandboxCli || 'no CLI on PATH', disabled: !recipe.sandboxCli }
+            ]}
+          />
         </Field>
         {#if sandbox === 'oci'}
           <Field label="Image" for="b-image" class="sm:col-span-2">
             <input id="b-image" class="input font-mono" bind:value={image} placeholder={selected?.image || recipe.recipe.sandbox?.image || 'image with the toolchain'} autocomplete="off" spellcheck="false" />
           </Field>
         {/if}
-        <Field label="Ref" for="b-ref" hint="A tag, branch, or commit">
+        <Field label="Ref" for="b-ref" info="A tag, branch, or commit">
           <input id="b-ref" class="input font-mono" bind:value={ref} placeholder={recipe.recipe.source?.ref || 'latest release'} autocomplete="off" spellcheck="false" />
         </Field>
-        <Checkbox bind:checked={force} class="self-end pb-2" title="Rebuild even if cached" />
-        <Field label="Variables" for="b-vars" class="sm:col-span-2" hint="One name=value per line">
+        <Checkbox bind:checked={force} class="self-end" label="Rebuild even if cached" />
+        <Field label="Variables" for="b-vars" class="sm:col-span-2" info="One name=value per line">
           <textarea id="b-vars" class="input h-20 font-mono text-xs" bind:value={varsText} placeholder={pairsText(recipe.vars).split('\n').slice(0, 2).join('\n') || 'name=value'}></textarea>
         </Field>
       </div>
       {#if recipe.recipe.steps.length}
-        <div class="rounded-lg border border-line">
-          <button type="button" class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-fg-muted hover:text-fg" aria-expanded={showSteps} onclick={() => (showSteps = !showSteps)}>
-            <ChevronDown size={14} class="transition-transform {showSteps ? 'rotate-180' : ''}" />
-            {recipe.recipe.steps.length} build steps
-          </button>
-          {#if showSteps}
-            <ol class="border-t border-line px-3 py-2 text-sm">
-              {#each recipe.recipe.steps as s, i (i)}
-                <li class="flex gap-3 py-1"><span class="w-5 tabular-nums text-fg-faint">{i + 1}</span><span class="text-fg">{s.name}</span><span class="ml-auto truncate font-mono text-xs text-fg-faint" title={s.command.join(' ')}>{s.command[0]}</span></li>
-              {/each}
-            </ol>
-          {/if}
-        </div>
+        <Disclosure label="Steps" summary={String(recipe.recipe.steps.length)} bind:open={showSteps}>
+          <ol class="text-sm">
+            {#each recipe.recipe.steps as s, i (i)}
+              <li class="flex gap-3 py-1"><span class="w-5 tabular-nums text-fg-faint">{i + 1}</span><span class="text-fg">{s.name}</span><span class="ml-auto truncate font-mono text-xs text-fg-faint" title={s.command.join(' ')}>{s.command[0]}</span></li>
+            {/each}
+          </ol>
+        </Disclosure>
       {/if}
     </div>
   {/if}

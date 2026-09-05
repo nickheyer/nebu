@@ -12,18 +12,25 @@ export function listenerUrl(addr: string, tls: boolean): string {
   return `${tls ? 'https' : 'http'}://${host}${port}`;
 }
 
-// Words for the limits a route enforces, each zero field of its policy inheriting the gateway default
-export function policyText(p: Policy | undefined, d: Policy | undefined): string {
-  const pick = (a: number | undefined, b: number | undefined) => a || b || 0;
-  const parts: string[] = [];
+const pick = (a: number | undefined, b: number | undefined) => a || b || 0;
+
+// The limits a route enforces as label and value pairs, each zero field inheriting the gateway default
+export function policyParts(p: Policy | undefined, d: Policy | undefined): [string, string][] {
+  const out: [string, string][] = [];
   const inFlight = pick(p?.maxInFlight, d?.maxInFlight);
   const rps = pick(p?.requestsPerSecond, d?.requestsPerSecond);
   const burst = pick(p?.burst, d?.burst);
   const timeout = pick(p?.requestTimeoutMs, d?.requestTimeoutMs);
   const upstream = pick(p?.upstreamTimeoutMs, d?.upstreamTimeoutMs);
-  if (inFlight) parts.push(`${inFlight} in flight`);
-  if (rps) parts.push(`${rps}/s${burst ? ` burst ${burst}` : ''}`);
-  if (timeout) parts.push(`${timeout / 1000}s total`);
-  if (upstream) parts.push(`${upstream / 1000}s first byte`);
+  if (inFlight) out.push(['in flight', String(inFlight)]);
+  if (rps) out.push(['per second', `${rps}${burst ? ` burst ${burst}` : ''}`]);
+  if (timeout) out.push(['timeout', `${timeout / 1000}s`]);
+  if (upstream) out.push(['first byte', `${upstream / 1000}s`]);
+  return out;
+}
+
+// The same limits in one line
+export function policyText(p: Policy | undefined, d: Policy | undefined): string {
+  const parts = policyParts(p, d).map(([k, v]) => (k === 'in flight' ? `${v} in flight` : k === 'per second' ? `${v}/s` : `${v} ${k}`));
   return parts.length ? parts.join(' · ') : 'none';
 }

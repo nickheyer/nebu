@@ -1,5 +1,6 @@
 <script lang="ts">
   import { bytes, ctx, deltaBytes, verdictTone, verdictWord } from '$lib/format';
+  import { runtimeName } from '$lib/state.svelte';
   import { PoolKind } from '$proto/host_pb';
   import type { FitRow, MemoryPlan } from '$proto/estimate_pb';
   import Segmented from './ui/Segmented.svelte';
@@ -27,25 +28,25 @@
     return used ? bytes(used, 0) : '';
   }
   const cellTone: Record<string, string> = {
-    ok: 'border-ok/30 bg-ok/10 text-ok hover:bg-ok/20',
-    warn: 'border-warn/30 bg-warn/10 text-warn hover:bg-warn/20',
-    bad: 'border-bad/25 bg-bad/8 text-bad/90 hover:bg-bad/15',
-    neutral: 'border-line bg-raised text-fg-faint'
+    ok: 'bg-ok/12 text-ok hover:bg-ok/20',
+    warn: 'bg-warn/12 text-warn hover:bg-warn/20',
+    bad: 'bg-bad/10 text-bad/90 hover:bg-bad/16',
+    neutral: 'bg-raised text-fg-faint'
   };
   let selected = $state<FitRow | null>(null);
 </script>
 
 <div class="flex flex-col gap-3">
   {#if runtimes.length > 1}
-    <Segmented tabs={runtimes.map((r) => ({ id: r, label: r }))} bind:value={runtime} size="sm" />
+    <Segmented tabs={runtimes.map((r) => ({ id: r, label: runtimeName(r) }))} bind:value={runtime} size="sm" />
   {/if}
   <div class="overflow-x-auto">
     <table class="w-full border-separate border-spacing-1 text-sm">
       <thead>
         <tr>
-          <th class="px-2 py-1 text-left text-xs font-medium text-fg-faint">Weights</th>
+          <th class="caps px-2 py-1 text-left text-fg-faint">Weights</th>
           {#each contexts as c (c)}
-            <th class="px-2 py-1 text-center text-xs font-medium text-fg-faint" title="{c.toLocaleString()} tokens">{ctx(c)}</th>
+            <th class="caps px-2 py-1 text-center text-fg-faint" title="{c.toLocaleString()} tokens">{ctx(c)}</th>
           {/each}
         </tr>
       </thead>
@@ -61,13 +62,13 @@
                   <Tip class="w-full">
                     <button
                       type="button"
-                      class="flex h-11 w-full min-w-[4.5rem] flex-col items-center justify-center rounded-lg border px-2 transition-colors {cellTone[t] ?? cellTone.neutral} {selected === r ? 'ring-2 ring-accent/60' : ''}"
+                      class="flex h-10 w-full min-w-[4.5rem] flex-col items-center justify-center rounded-md px-2 transition-colors {cellTone[t] ?? cellTone.neutral} {selected === r ? 'ring-2 ring-accent/60' : ''}"
                       onclick={() => (selected = selected === r ? null : r)}
                     >
                       <span class="text-xs font-semibold">{verdictWord(r.plan.verdict)}</span>
                       {#if r.free && r.free.verdict !== r.plan.verdict}
-                        <span class="text-xs leading-3 {verdictTone(r.free.verdict) === 'bad' ? 'text-bad' : verdictTone(r.free.verdict) === 'warn' ? 'text-warn' : ''}">now {verdictWord(r.free.verdict).toLowerCase()}</span>
-                      {:else if device(r.plan)}<span class="text-xs tabular-nums opacity-80">{device(r.plan)}</span>{/if}
+                        <span class="text-[11px] leading-3 opacity-80">now {verdictWord(r.free.verdict).toLowerCase()}</span>
+                      {:else if device(r.plan)}<span class="text-[11px] leading-3 tabular-nums opacity-80">{device(r.plan)}</span>{/if}
                     </button>
                     {#snippet content()}
                       <div class="text-xs leading-5">
@@ -77,14 +78,14 @@
                         <div class="text-fg-muted">weights {bytes(r.plan?.weightsBytes)} · cache {bytes(r.plan?.cacheBytes)} · overhead {bytes(r.plan?.overheadBytes)}{#if r.plan?.overheadDelta}<span> ({deltaBytes(r.plan.overheadDelta)} learned)</span>{/if}</div>
                         {#if r.plan?.detail}<div class="mt-1 text-fg-faint">{r.plan.detail}</div>{/if}
                         {#if r.free}
-                          <div class="mt-2 text-fg-muted">Free right now: <span class="font-medium text-fg">{verdictWord(r.free.verdict)}</span></div>
+                          <div class="mt-2 text-fg-muted">Free now: <span class="font-medium text-fg">{verdictWord(r.free.verdict)}</span></div>
                           {#if r.free.detail}<div class="text-fg-faint">{r.free.detail}</div>{/if}
                         {/if}
                       </div>
                     {/snippet}
                   </Tip>
                 {:else}
-                  <div class="flex h-11 w-full items-center justify-center rounded-lg border border-line text-fg-faint">–</div>
+                  <div class="flex h-10 w-full items-center justify-center rounded-md bg-raised/50 text-fg-faint">–</div>
                 {/if}
               </td>
             {/each}
@@ -94,9 +95,9 @@
     </table>
   </div>
   {#if selected?.plan}
-    <div class="rounded-lg border border-line bg-sunken p-4">
+    <div class="rounded-md border border-line bg-sunken/60 p-4">
       <div class="mb-3 text-sm text-fg-muted">
-        <span class="font-mono text-fg">{selected.group}</span> on {selected.runtimeId} at {ctx(selected.context)}
+        <span class="font-mono text-fg">{selected.group}</span> on {runtimeName(selected.runtimeId)} at {ctx(selected.context)}
       </div>
       <PlanView plan={selected.plan} compact />
     </div>

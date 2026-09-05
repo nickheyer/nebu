@@ -2,6 +2,8 @@
   import { ParamType, type Param } from '$proto/runtime_pb';
   import { Plus, X } from '@lucide/svelte';
   import Field from './ui/Field.svelte';
+  import Select from './ui/Select.svelte';
+  import IconButton from './ui/IconButton.svelte';
 
   // Every parameter a runtime manifest declares as a field, an empty one inheriting what lies beneath
   let {
@@ -61,17 +63,14 @@
   }
 </script>
 
-<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+<div class="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
   {#each params as p (p.name)}
     {@const v = values[p.name] ?? ''}
     {@const fid = `${idPrefix}-${p.name}`}
     {@const bad = !valid(p, v)}
-    <Field label={p.name} for={fid} hint={p.description} error={bad ? (numeric(p) ? (p.solved ? 'A number or auto' : 'A number') : 'true or false') : undefined}>
+    <Field label={p.name} for={fid} info={p.description || undefined} error={bad ? (numeric(p) ? (p.solved ? 'A number or auto' : 'A number') : 'true or false') : undefined}>
       {#if p.choices.length || p.type === ParamType.BOOL}
-        <select id={fid} class="input font-mono" value={v} onchange={(e) => set(p.name, (e.currentTarget as HTMLSelectElement).value)}>
-          <option value="">Inherit · {beneath(p)}</option>
-          {#each p.choices.length ? p.choices : ['true', 'false'] as c (c)}<option value={c}>{c}</option>{/each}
-        </select>
+        <Select id={fid} mono value={v} items={[{ value: '', label: 'Inherit', detail: beneath(p) }, ...(p.choices.length ? p.choices : ['true', 'false']).map((c) => ({ value: c, label: c }))]} />
       {:else}
         <input
           id={fid}
@@ -90,23 +89,23 @@
   {/each}
 
   {#each extra as k (k)}
-    <Field label={k} for="{idPrefix}-{k}" hint={params.length ? 'Not in this runtime’s manifest' : undefined}>
-      <div class="flex gap-1.5">
+    <Field label={k} for="{idPrefix}-{k}" info={params.length ? 'Not in the manifest' : undefined}>
+      <div class="flex gap-1">
         <input id="{idPrefix}-{k}" class="input font-mono" value={values[k]} autocomplete="off" spellcheck="false" oninput={(e) => (values = { ...values, [k]: (e.currentTarget as HTMLInputElement).value })} />
-        <button type="button" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-fg-muted hover:bg-raised hover:text-fg" aria-label="Remove {k}" onclick={() => set(k, '')}><X size={15} /></button>
+        <IconButton icon={X} label="Remove" onclick={() => set(k, '')} />
       </div>
     </Field>
   {/each}
 
   {#if params.length === 0}
-    <div class="flex items-end gap-1.5 sm:col-span-2">
+    <div class="flex items-end gap-1 sm:col-span-2">
       <Field label="Parameter" for="{idPrefix}-new-name" class="flex-1">
         <input id="{idPrefix}-new-name" class="input font-mono" bind:value={newName} placeholder="name" autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} />
       </Field>
       <Field label="Value" for="{idPrefix}-new-value" class="flex-1">
         <input id="{idPrefix}-new-value" class="input font-mono" bind:value={newValue} placeholder="value" autocomplete="off" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} />
       </Field>
-      <button type="button" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-line bg-raised text-fg-muted hover:text-fg disabled:opacity-50" aria-label="Add parameter" disabled={!newName.trim()} onclick={add}><Plus size={15} /></button>
+      <IconButton icon={Plus} label="Add" variant="secondary" disabled={!newName.trim()} onclick={add} />
     </div>
   {/if}
 </div>

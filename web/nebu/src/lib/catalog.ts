@@ -49,7 +49,7 @@ export function groupByProvider(statuses: SourceStatus[]): ProviderGroup[] {
   return out;
 }
 
-// A provider tab's label: the one source's own name, or the provider's when it has several
+// A provider's label: the one source's own name, or the provider's when it has several
 export function groupLabel(g: ProviderGroup): string {
   return g.sources.length === 1 ? sourceLabel(g.sources[0]) : g.name;
 }
@@ -65,7 +65,7 @@ export function parseKind(param: string): SourceKind {
   return typeof v === 'number' ? v : SourceKind.UNSPECIFIED;
 }
 
-// Finds the label a source gave a facet value, falling back to the id
+// The label a source gave a facet value, falling back to the id
 export function facetValueLabel(caps: SourceCapabilities | undefined, facetId: string, value: string): string {
   const f = caps?.facets.find((x) => x.id === facetId);
   return f?.values.find((v) => v.id === value)?.label ?? humanize(value);
@@ -100,7 +100,7 @@ export function groupValues(f: Facet): { group: string; values: Facet['values'] 
   return out;
 }
 
-// Reports whether typed text looks like a repository for this source
+// Whether typed text looks like a repository for this source
 export function looksLikeRepo(caps: SourceCapabilities | undefined, text: string): boolean {
   const t = text.trim();
   if (!t || !caps?.repoPattern) return false;
@@ -111,12 +111,12 @@ export function looksLikeRepo(caps: SourceCapabilities | undefined, text: string
   }
 }
 
-// Picks the provider group of a kind, else the one holding the source, else the first
+// The provider group of a kind, else the one holding the source, else the first
 export function pickGroup(groups: ProviderGroup[], kind: SourceKind, sourceId: string): ProviderGroup | undefined {
   return groups.find((g) => g.kind === kind) ?? groups.find((g) => g.sources.some((s) => s.source?.id === sourceId)) ?? groups[0];
 }
 
-// Reports whether the source can flip a sort, most catalogs only order descending
+// Whether the source can flip a sort, most catalogs only order descending
 export function sortReversible(caps: SourceCapabilities | undefined, sortId: string): boolean {
   return !!caps?.sorts.find((s) => s.id === sortId)?.reversible;
 }
@@ -126,6 +126,11 @@ export function hitSize(h: SearchHit): { kind: 'params' | 'bytes' | 'none'; valu
   if (h.parameters > 0n) return { kind: 'params', value: h.parameters };
   if (h.sizeBytes > 0n) return { kind: 'bytes', value: h.sizeBytes };
   return { kind: 'none', value: 0n };
+}
+
+// A key that tells two weight groups apart even when their names collide across formats
+export function descriptorKey(d: Descriptor): string {
+  return `${d.formatId}\0${d.group}`;
 }
 
 // Orders weight groups for choosing: what fits first, then the largest, which keeps the most quality
@@ -153,7 +158,7 @@ export function runtimesFor(formats: string[], runtimes: RuntimeStatus[]): { id:
 }
 
 // The one line answer to whether a weight group fits this host
-interface FitSummary {
+export interface FitSummary {
   verdict: FitVerdict;
   // The longest context that earns the verdict
   context: number;

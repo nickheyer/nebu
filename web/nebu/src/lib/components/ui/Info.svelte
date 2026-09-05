@@ -8,6 +8,6 @@
 
 <Tip {text}>
   <span class="inline-flex h-5 w-5 cursor-help items-center justify-center rounded-full text-fg-faint transition-colors hover:bg-raised hover:text-fg {cls}" aria-label={text}>
-    <Info size={14} />
+    <Info size={13} />
   </span>
 </Tip>

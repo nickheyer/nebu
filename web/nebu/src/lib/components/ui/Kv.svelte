@@ -1,12 +1,15 @@
 <script lang="ts">
+  // Labels and values, the labels faint, empty values shown as a dash
   let {
     items,
     mono = false,
-    columns = 1
-  }: { items: [string, string | number | undefined | null][]; mono?: boolean; columns?: 1 | 2 } = $props();
+    columns = 1,
+    class: cls = ''
+  }: { items: [string, string | number | undefined | null][]; mono?: boolean; columns?: 1 | 2 | 3; class?: string } = $props();
+  const grid = { 1: 'grid-cols-[auto_1fr]', 2: 'grid-cols-[auto_1fr] sm:grid-cols-[auto_1fr_auto_1fr]', 3: 'grid-cols-[auto_1fr] sm:grid-cols-[auto_1fr_auto_1fr] xl:grid-cols-[auto_1fr_auto_1fr_auto_1fr]' };
 </script>
 
-<dl class="grid gap-x-8 gap-y-2.5 text-sm {columns === 2 ? 'grid-cols-[auto_1fr] sm:grid-cols-[auto_1fr_auto_1fr]' : 'grid-cols-[auto_1fr]'}">
+<dl class="grid gap-x-6 gap-y-2 text-sm {grid[columns]} {cls}">
   {#each items as [k, v] (k)}
     <dt class="whitespace-nowrap text-fg-faint">{k}</dt>
     <dd class="min-w-0 truncate text-fg {mono ? 'mono' : ''}" title={String(v ?? '')}>{v === undefined || v === null || v === '' ? '–' : v}</dd>

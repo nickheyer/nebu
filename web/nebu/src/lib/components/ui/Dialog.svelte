@@ -6,14 +6,15 @@
   let {
     open = $bindable(false),
     title,
-    description,
+    subtitle,
     size = 'md',
     children,
     footer
   }: {
     open?: boolean;
     title: string;
-    description?: string;
+    // One line of context under the title, such as the model the dialog is about
+    subtitle?: string;
     size?: 'sm' | 'md' | 'lg' | 'xl';
     children: Snippet;
     footer?: Snippet;
@@ -30,18 +31,18 @@
     >
       <header class="flex items-start gap-3 px-6 pt-5 pb-4">
         <div class="min-w-0 flex-1">
-          <Dialog.Title class="text-lg font-semibold text-fg">{title}</Dialog.Title>
-          {#if description}<Dialog.Description class="mt-0.5 truncate text-sm text-fg-muted">{description}</Dialog.Description>{/if}
+          <Dialog.Title class="text-base font-semibold text-fg">{title}</Dialog.Title>
+          {#if subtitle}<Dialog.Description class="mt-0.5 truncate font-mono text-xs text-fg-muted">{subtitle}</Dialog.Description>{/if}
         </div>
-        <Dialog.Close class="-mt-1 -mr-2 rounded-lg p-1.5 text-fg-faint transition-colors hover:bg-raised hover:text-fg" aria-label="Close">
-          <X size={16} />
+        <Dialog.Close class="-mt-1 -mr-2 rounded-md p-1.5 text-fg-faint transition-colors hover:bg-raised hover:text-fg" aria-label="Close">
+          <X size={15} />
         </Dialog.Close>
       </header>
-      <div class="min-h-0 flex-1 overflow-y-auto px-6 pb-5">
+      <div class="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
         {@render children()}
       </div>
       {#if footer}
-        <footer class="flex items-center justify-end gap-2 border-t border-line bg-surface/60 px-6 py-3.5">
+        <footer class="flex items-center justify-end gap-2 border-t border-line bg-sunken/40 px-6 py-3">
           {@render footer()}
         </footer>
       {/if}

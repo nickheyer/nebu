@@ -3,12 +3,12 @@
   import { live, cached, profilesOf, profileParams } from '$lib/state.svelte';
   import { slotOccupied } from '$lib/launch';
   import { byName } from '$lib/format';
-  import { ChevronDown } from '@lucide/svelte';
   import Field from './ui/Field.svelte';
+  import Select from './ui/Select.svelte';
+  import Disclosure from './ui/Disclosure.svelte';
   import ParamForm from './ParamForm.svelte';
 
-  // Where and how a model runs: the slot, the runtime it resolves to, a profile, and the parameters over both.
-  // The slot is chosen here as a select unless the parent draws its own picker and binds slotId
+  // Where and how a model runs: the slot, the runtime it resolves to, a profile, and the parameters over both
   let {
     slotId = $bindable(''),
     runtimeId = $bindable(''),
@@ -71,44 +71,42 @@
 </script>
 
 {#if slotPicker && (slots.length || slotId)}
-  <Field label={optional ? 'Swap into slot' : 'Slot'} for="{idPrefix}-slot">
-    <select id="{idPrefix}-slot" class="input" bind:value={slotId}>
-      <option value="">{optional ? 'No swap, only pull' : 'None, run standalone'}</option>
-      {#each slots as s (s.id)}
-        <option value={s.id}>{s.name}{slotOccupied(s.id) ? ` · serving ${s.request?.repo ?? ''}` : ' · empty'}</option>
-      {/each}
-    </select>
+  <Field label={optional ? 'Swap into' : 'Slot'} for="{idPrefix}-slot">
+    <Select
+      id="{idPrefix}-slot"
+      bind:value={slotId}
+      items={[{ value: '', label: optional ? 'No swap' : 'Standalone' }, ...slots.map((s) => ({ value: s.id, label: s.name, detail: slotOccupied(s.id) ? (s.request?.repo ?? 'serving') : 'empty' }))]}
+    />
   </Field>
 {/if}
 <Field label="Runtime" for="{idPrefix}-runtime" error={!off && !compatible.length ? (formatId ? `No compatible runtime serves ${formatId}` : 'No compatible runtime') : undefined}>
-  <select id="{idPrefix}-runtime" class="input" bind:value={runtimeId} disabled={off}>
-    <option value="">{slot?.runtimeId ? `Slot default · ${slot.runtimeId}` : formatId && compatible[0] ? `Auto · ${compatible[0].manifest?.id}` : 'First compatible'}</option>
-    {#each compatible as rt (rt.manifest?.id)}
-      <option value={rt.manifest?.id}>{rt.manifest?.name ?? rt.manifest?.id}</option>
-    {/each}
-    {#each others as rt (rt.manifest?.id)}
-      <option value={rt.manifest?.id} disabled>{rt.manifest?.name ?? rt.manifest?.id} · {rt.compatible ? 'wrong format' : 'incompatible'}</option>
-    {/each}
-  </select>
+  <Select
+    id="{idPrefix}-runtime"
+    bind:value={runtimeId}
+    disabled={off}
+    items={[
+      { value: '', label: slot?.runtimeId ? 'Slot default' : 'Auto', detail: slot?.runtimeId || (formatId && compatible[0] ? compatible[0].manifest?.id : 'first compatible') },
+      ...compatible.map((rt) => ({ value: rt.manifest?.id ?? '', label: rt.manifest?.name ?? rt.manifest?.id ?? '' })),
+      ...others.map((rt) => ({ value: rt.manifest?.id ?? '', label: rt.manifest?.name ?? rt.manifest?.id ?? '', detail: rt.compatible ? 'wrong format' : 'incompatible', disabled: true }))
+    ]}
+  />
 </Field>
 {@render children?.()}
 <Field label="Profile" for="{idPrefix}-profile" info="A named set of parameters for the runtime">
-  <select id="{idPrefix}-profile" class="input" bind:value={profileId} disabled={off || !profiles.length}>
-    <option value="">{defaultProfile ? `Default · ${defaultProfile.name}` : profiles.length ? 'Runtime defaults' : 'None'}</option>
-    {#each profiles as p (p.id)}<option value={p.id}>{pickedRuntime ? '' : `${p.runtimeId} · `}{p.name}{p.description ? ` · ${p.description}` : ''}</option>{/each}
-  </select>
+  <Select
+    id="{idPrefix}-profile"
+    bind:value={profileId}
+    disabled={off || !profiles.length}
+    items={[
+      { value: '', label: defaultProfile ? 'Default' : profiles.length ? 'Runtime defaults' : 'None', detail: defaultProfile?.name },
+      ...profiles.map((p) => ({ value: p.id, label: p.name, detail: [pickedRuntime ? '' : p.runtimeId, p.description].filter(Boolean).join(' · ') || undefined }))
+    ]}
+  />
 </Field>
 {#if !off}
   <div class="sm:col-span-2">
-    <button type="button" class="flex w-full items-center gap-2 rounded-lg border border-line bg-bg/40 px-3 py-2 text-left text-sm text-fg hover:border-line-strong" aria-expanded={showParams} onclick={() => (showParams = !showParams)}>
-      <ChevronDown size={15} class="text-fg-faint transition-transform {showParams ? 'rotate-180' : ''}" />
-      <span class="font-medium">Parameters</span>
-      <span class="text-fg-faint">{set ? `${set} set` : 'inheriting the profile and slot'}</span>
-    </button>
-    {#if showParams}
-      <div class="mt-3">
-        <ParamForm params={manifest?.params ?? []} bind:values bind:invalid {inherited} {idPrefix} />
-      </div>
-    {/if}
+    <Disclosure label="Parameters" summary={set ? `${set} set` : 'inherited'} bind:open={showParams}>
+      <ParamForm params={manifest?.params ?? []} bind:values bind:invalid {inherited} {idPrefix} />
+    </Disclosure>
   </div>
 {/if}

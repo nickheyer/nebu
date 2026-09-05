@@ -10,28 +10,28 @@
   const related = $derived.by(() => {
     const l = task?.labels ?? {};
     const out: { label: string; href: string }[] = [];
-    if (l.instance) out.push({ label: 'instance', href: `/?instance=${l.instance}` });
-    if (l.slot) out.push({ label: 'slot', href: `/?slot=${l.slot}` });
-    if (l.build) out.push({ label: 'builds', href: `/runtimes#builds` });
-    if (l.repo) out.push({ label: 'library', href: `/store` });
-    if (l.watch) out.push({ label: 'monitor', href: `/monitor` });
+    if (l.instance) out.push({ label: 'Instance', href: `/?instance=${l.instance}` });
+    if (l.slot) out.push({ label: 'Slot', href: `/?slot=${l.slot}` });
+    if (l.build) out.push({ label: 'Builds', href: `/runtimes#builds` });
+    if (l.repo) out.push({ label: 'Library', href: `/store` });
+    if (l.watch) out.push({ label: 'Monitor', href: `/monitor` });
     return out;
   });
 </script>
 
-<Drawer bind:id title={task?.title ?? 'Task'} subtitle={task ? `created ${when(task.createdAt)}` : id}>
+<Drawer bind:id title={task?.title ?? 'Task'} subtitle={task ? when(task.createdAt) : id}>
   {#snippet header()}
     {#if related.length}
       <div class="flex flex-wrap items-center gap-3 text-sm">
         {#each related as r (r.href)}
-          <a href={r.href} class="link inline-flex items-center gap-1" onclick={() => (id = '')}><ExternalLink size={13} /> {r.label}</a>
+          <a href={r.href} class="link inline-flex items-center gap-1" onclick={() => (id = '')}><ExternalLink size={12} /> {r.label}</a>
         {/each}
       </div>
     {/if}
   {/snippet}
   <div class="px-6 py-5">
     {#if id}
-      {#key id}<TaskLog {id} height="h-[calc(100vh-17rem)]" />{/key}
+      {#key id}<TaskLog {id} height="h-[calc(100vh-16rem)]" />{/key}
     {/if}
   </div>
 </Drawer>

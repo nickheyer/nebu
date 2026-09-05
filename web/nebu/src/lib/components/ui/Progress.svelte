@@ -13,7 +13,7 @@
   const known = $derived(!!total && Number(total) > 0);
 </script>
 
-<div class="relative h-1.5 w-full overflow-hidden rounded-full bg-line/70 {cls}">
+<div class="relative h-1.5 w-full overflow-hidden rounded-full bg-line/80 {cls}">
   {#if known}
     <div class="h-full rounded-full {fills[tone]} transition-[width] duration-300" style="width: {pct(done, total)}%"></div>
   {:else if active}

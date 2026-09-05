@@ -1,20 +1,21 @@
 <script lang="ts">
   import { api } from '$lib/api';
-  import { live, cached, clock, slotName, taskFor } from '$lib/state.svelte';
+  import { live, cached, clock, slotName, taskFor, sourceName, profileName } from '$lib/state.svelte';
   import { groupByProvider } from '$lib/catalog';
-  import { ago, byName, enumLabel, newestFirst, when } from '$lib/format';
+  import { ago, byName, newestFirst, plural, when } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { FindingKind, type Watch, type Want } from '$proto/monitor_pb';
   import { SourceKind } from '$proto/source_pb';
   import type { Tone } from '$lib/format';
-  import { Plus, RefreshCw, Trash2, Check, CheckCheck, ExternalLink, ListFilter, X, Radar, Eye, Search } from '@lucide/svelte';
+  import { RefreshCw, Trash2, Check, CheckCheck, ExternalLink, ListFilter, X, Radar, Eye, Search } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
-  import Card from '$lib/components/ui/Card.svelte';
+  import IconButton from '$lib/components/ui/IconButton.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
-  import Pill from '$lib/components/ui/Pill.svelte';
+  import Section from '$lib/components/ui/Section.svelte';
+  import State from '$lib/components/ui/State.svelte';
   import Segmented from '$lib/components/ui/Segmented.svelte';
   import WatchDialog from '$lib/components/WatchDialog.svelte';
   import WantDialog from '$lib/components/WantDialog.svelte';
@@ -57,25 +58,15 @@
     return 'query' in w ? w.query : w.repo;
   }
 
-  function sourceName(id: string): string {
-    return live.sources.get(id)?.name || id;
-  }
-
-  // The profile a swap starts from, by name when the daemon still has it
-  function profileName(id: string): string {
-    return id ? (live.profiles.get(id)?.name ?? id) : 'default profile';
-  }
-
   async function check(w?: Watch | Want, rearm = false) {
     if (rearm && w && 'query' in w) {
-      const yes = await confirm({ title: `Look again for ${w.query}?`, message: 'What it found is forgotten and the search runs again.', action: 'Look again' });
+      const yes = await confirm({ title: `Look again for ${w.query}?`, message: 'What it found is forgotten.', action: 'Look again' });
       if (!yes) return;
     }
     if (!w) checkingAll = true;
     try {
       const r = await api.monitor.checkWatches({ id: w?.id ?? '', rearm });
-      const what = w ? `Checking ${labelOf(w)}` : 'Checking everything';
-      ok(what, undefined, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
+      ok(w ? `Checking ${labelOf(w)}` : 'Checking everything', undefined, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
     } catch (err) {
       fail(err, 'Check refused');
     } finally {
@@ -129,47 +120,48 @@
   }
 
   const kindTone: Record<number, Tone> = { [FindingKind.NEW_REVISION]: 'info', [FindingKind.NEW_GROUP]: 'ok', [FindingKind.REMOVED_GROUP]: 'warn', [FindingKind.WANTED_FOUND]: 'accent' };
+  const kindLabel: Record<number, string> = { [FindingKind.NEW_REVISION]: 'New revision', [FindingKind.NEW_GROUP]: 'New weights', [FindingKind.REMOVED_GROUP]: 'Removed weights', [FindingKind.WANTED_FOUND]: 'Found' };
 </script>
 
 {#snippet then(w: Watch | Want)}
   {#if w.autoPull && w.slotId}
-    <div class="text-fg">Pull, then swap into <span class="font-mono">{slotName(w.slotId)}</span></div>
-    <div class="text-xs text-fg-faint">{[w.runtimeId || 'slot runtime', profileName(w.profileId)].join(' · ')}</div>
+    <div class="text-fg">Pull and swap into <span class="font-mono">{slotName(w.slotId)}</span></div>
+    <div class="text-xs text-fg-faint">{[w.runtimeId || 'slot runtime', profileName(w.profileId) || 'default profile'].join(' · ')}</div>
   {:else if w.autoPull}
-    <span class="text-fg">Pull into the library</span>
+    <span class="text-fg">Pull</span>
   {:else}
-    <span class="text-fg-muted">Record a finding</span>
+    <span class="text-fg-muted">Record</span>
   {/if}
 {/snippet}
 
 {#snippet taskLinks(f: { taskId: string; swapTaskId: string })}
-  {#if f.taskId}<a href="/tasks?id={f.taskId}" class="link inline-flex items-center gap-1 text-xs"><ExternalLink size={12} />pull</a>{/if}
-  {#if f.swapTaskId}<a href="/tasks?id={f.swapTaskId}" class="link inline-flex items-center gap-1 text-xs"><ExternalLink size={12} />swap</a>{/if}
+  {#if f.taskId}<a href="/tasks?id={f.taskId}" class="link inline-flex items-center gap-1 text-xs"><ExternalLink size={11} />pull</a>{/if}
+  {#if f.swapTaskId}<a href="/tasks?id={f.swapTaskId}" class="link inline-flex items-center gap-1 text-xs"><ExternalLink size={11} />swap</a>{/if}
 {/snippet}
 
 {#snippet wantHead()}
-  <thead><tr><th>Query</th><th>Where</th><th>Match</th><th>On match</th><th>Found</th><th>Last check</th><th></th></tr></thead>
+  <thead><tr><th>Query</th><th>Where</th><th>Match</th><th>On match</th><th>Found</th><th>Checked</th><th></th></tr></thead>
 {/snippet}
 
 {#snippet watchHead()}
-  <thead><tr><th>Repository</th><th>Source</th><th>Commit</th><th class="num">Groups</th><th>Match</th><th>On change</th><th>Last check</th><th></th></tr></thead>
+  <thead><tr><th>Repository</th><th>Source</th><th>Commit</th><th class="num">Groups</th><th>Match</th><th>On change</th><th>Checked</th><th></th></tr></thead>
 {/snippet}
 
 {#snippet findingHead()}
   <thead><tr><th>Kind</th><th>Repository</th><th>Detail</th><th>From</th><th>Found</th><th></th></tr></thead>
 {/snippet}
 
-<PageHeader title="Monitor" subtitle="A want searches every source on each check until something matches. A watch checks one repository for new commits and weight groups.">
-  <Button icon={RefreshCw} loading={checkingAll} disabled={!watches.length && !wants.length} onclick={() => check()}>Check all now</Button>
+<PageHeader title="Monitor">
+  <Button icon={RefreshCw} loading={checkingAll} disabled={!watches.length && !wants.length} onclick={() => check()}>Check now</Button>
   <Button icon={Search} onclick={() => (wantOpen = true)}>Want a model</Button>
   <Button variant="primary" icon={Eye} onclick={() => (addOpen = true)}>Watch a repository</Button>
 </PageHeader>
 
-<div class="flex flex-col gap-6">
-  <Card title="Findings" description={only ? `from ${labelOf(only)}` : open.length ? `${open.length} new` : ''} flush>
+<div class="flex flex-col gap-9">
+  <Section title="Findings" count={open.length || undefined} meta={only ? `from ${labelOf(only)}` : ''}>
     {#snippet actions()}
-      {#if only}<Button size="sm" variant="ghost" icon={X} onclick={() => (only = null)}>Show all</Button>{/if}
-      <Segmented size="sm" bind:value={view} tabs={[{ id: 'open', label: 'New', count: open.length }, { id: 'all', label: 'All', count: findings.length }]} />
+      {#if only}<Button size="sm" variant="ghost" icon={X} onclick={() => (only = null)}>All</Button>{/if}
+      {#if findings.length}<Segmented size="sm" bind:value={view} tabs={[{ id: 'open', label: 'New', count: open.length }, { id: 'all', label: 'All', count: findings.length }]} />{/if}
       {#if open.length}<Button size="sm" variant="ghost" icon={CheckCheck} onclick={ackAll}>Acknowledge all</Button>{/if}
     {/snippet}
     {#if loading}
@@ -186,9 +178,9 @@
           <tbody>
             {#each shown as f (f.id)}
               <tr class={f.acknowledged ? 'opacity-60' : ''}>
-                <td><Pill tone={kindTone[f.kind] ?? 'neutral'} label={enumLabel(FindingKind, f.kind)} /></td>
+                <td><State tone={kindTone[f.kind] ?? 'neutral'} label={kindLabel[f.kind] ?? 'Finding'} /></td>
                 <td>
-                  <a href="/catalog?source={f.sourceId || live.watches.get(f.watchId)?.sourceId || ''}&repo={encodeURIComponent(f.repo)}" class="font-medium text-fg hover:text-accent">{f.repo}</a>
+                  <a href="/catalog?source={f.sourceId || live.watches.get(f.watchId)?.sourceId || ''}&repo={encodeURIComponent(f.repo)}" class="text-fg hover:text-accent">{f.repo}</a>
                   <div class="font-mono text-xs text-fg-faint">{[f.group, f.commit ? `@ ${f.commit.slice(0, 10)}` : ''].filter(Boolean).join(' ')}</div>
                 </td>
                 <td class="max-w-md truncate text-fg-muted" title={f.detail}>{f.detail}</td>
@@ -201,7 +193,7 @@
                   <div class="flex items-center gap-2">{@render taskLinks(f)}</div>
                 </td>
                 <td class="actions">
-                  {#if !f.acknowledged}<Button size="sm" variant="ghost" icon={Check} onclick={() => ack(f.id)}>Acknowledge</Button>{/if}
+                  <span>{#if !f.acknowledged}<IconButton size="sm" icon={Check} label="Acknowledge" onclick={() => ack(f.id)} />{/if}</span>
                 </td>
               </tr>
             {/each}
@@ -209,9 +201,9 @@
         </table>
       </div>
     {/if}
-  </Card>
+  </Section>
 
-  <Card title="Wanted" description={wants.length ? `${wants.filter((w) => !w.satisfied).length} still looking` : ''} flush>
+  <Section title="Wants" count={wants.length || undefined} meta={wants.length ? `${wants.filter((w) => !w.satisfied).length} looking` : ''} info="A search run on every check until a weight group matches">
     {#if loading}
       <table class="tbl">
         {@render wantHead()}
@@ -230,7 +222,7 @@
               {@const task = taskFor('check', { watch: w.id })}
               <tr class={w.satisfied ? 'opacity-70' : ''}>
                 <td>
-                  <span class="font-medium text-fg">{w.query}</span>
+                  <span class="text-fg">{w.query}</span>
                   {#if task}<div class="mt-1"><TaskChip {task} label="Checking" /></div>{/if}
                 </td>
                 <td class="text-fg-muted">{whereOf(w)}</td>
@@ -250,15 +242,17 @@
                   {#if w.error}<div class="max-w-xs truncate text-xs text-bad" title={w.error}>{w.error}</div>{/if}
                 </td>
                 <td class="actions">
-                  <Menu
-                    size="sm"
-                    items={[
-                      w.satisfied ? { label: 'Look again', icon: RefreshCw, onSelect: () => check(w, true) } : { label: 'Check now', icon: RefreshCw, onSelect: () => check(w) },
-                      { label: 'Its findings', icon: ListFilter, onSelect: () => (only = w) },
-                      { label: '', separator: true },
-                      { label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => unwant(w) }
-                    ]}
-                  />
+                  <span>
+                    <Menu
+                      size="sm"
+                      items={[
+                        w.satisfied ? { label: 'Look again', icon: RefreshCw, onSelect: () => check(w, true) } : { label: 'Check now', icon: RefreshCw, onSelect: () => check(w) },
+                        { label: 'Its findings', icon: ListFilter, onSelect: () => (only = w) },
+                        { label: '', separator: true },
+                        { label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => unwant(w) }
+                      ]}
+                    />
+                  </span>
                 </td>
               </tr>
             {/each}
@@ -266,16 +260,16 @@
         </table>
       </div>
     {/if}
-  </Card>
+  </Section>
 
-  <Card title="Watched" description={watches.length ? `${watches.length} ${watches.length === 1 ? 'repository' : 'repositories'}` : ''} flush>
+  <Section title="Watches" count={watches.length || undefined} info="One repository checked on an interval for new commits and weight groups">
     {#if loading}
       <table class="tbl">
         {@render watchHead()}
         <tbody><SkeletonRows rows={2} cols={[{ w: 'w-48' }, 'w-20', 'w-20', { w: 'w-6', num: true }, 'w-16', 'w-24', 'w-14', { w: 'w-6', num: true }]} /></tbody>
       </table>
     {:else if watches.length === 0}
-      <Empty compact title="Nothing watched" description="Watch a repository from its page in the catalog, or by name here.">
+      <Empty compact title="Nothing watched">
         <Button size="sm" icon={Eye} onclick={() => (addOpen = true)}>Watch a repository</Button>
       </Empty>
     {:else}
@@ -287,7 +281,7 @@
               {@const task = taskFor('check', { watch: w.id })}
               <tr>
                 <td>
-                  <a href="/catalog?source={w.sourceId}&repo={encodeURIComponent(w.repo)}" class="font-medium text-fg hover:text-accent">{w.repo}</a>
+                  <a href="/catalog?source={w.sourceId}&repo={encodeURIComponent(w.repo)}" class="text-fg hover:text-accent">{w.repo}</a>
                   {#if w.revision}<span class="font-mono text-xs text-fg-faint"> @{w.revision}</span>{/if}
                   {#if task}<div class="mt-1"><TaskChip {task} label="Checking" /></div>{/if}
                 </td>
@@ -301,16 +295,18 @@
                   {#if w.error}<div class="max-w-xs truncate text-xs text-bad" title={w.error}>{w.error}</div>{/if}
                 </td>
                 <td class="actions">
-                  <Menu
-                    size="sm"
-                    items={[
-                      { label: 'Check now', icon: RefreshCw, onSelect: () => check(w) },
-                      { label: 'Its findings', icon: ListFilter, onSelect: () => (only = w) },
-                      { label: 'Open in the catalog', icon: ExternalLink, href: `/catalog?source=${w.sourceId}&repo=${encodeURIComponent(w.repo)}` },
-                      { label: '', separator: true },
-                      { label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => remove(w) }
-                    ]}
-                  />
+                  <span>
+                    <Menu
+                      size="sm"
+                      items={[
+                        { label: 'Check now', icon: RefreshCw, onSelect: () => check(w) },
+                        { label: 'Its findings', icon: ListFilter, onSelect: () => (only = w) },
+                        { label: 'Open in the catalog', icon: ExternalLink, href: `/catalog?source=${w.sourceId}&repo=${encodeURIComponent(w.repo)}` },
+                        { label: '', separator: true },
+                        { label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => remove(w) }
+                      ]}
+                    />
+                  </span>
                 </td>
               </tr>
             {/each}
@@ -318,7 +314,7 @@
         </table>
       </div>
     {/if}
-  </Card>
+  </Section>
 </div>
 
 <WatchDialog bind:open={addOpen} />

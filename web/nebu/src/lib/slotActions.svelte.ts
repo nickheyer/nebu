@@ -1,5 +1,5 @@
-import { Code, ConnectError } from '@connectrpc/connect';
-import { api, message } from './api';
+import { Code } from '@connectrpc/connect';
+import { api, code, message } from './api';
 import { confirm } from './confirm.svelte';
 import { fail, ok } from './toast.svelte';
 import type { Slot } from '$proto/slot_pb';
@@ -21,7 +21,7 @@ export function runModel(model: StoredModel | null, slotId = '') {
   slotUi.runOpen = true;
 }
 
-// Opens the run dialog aimed at a slot, letting the person pick a model
+// Opens the run dialog aimed at a slot
 export function swapSlot(slot: Slot) {
   runModel(null, slot.id);
 }
@@ -38,19 +38,18 @@ export function newSlot() {
 
 // Deletes a slot after confirming, forcing past what the daemon names when asked
 export async function deleteSlot(slot: Slot): Promise<boolean> {
-  const yes = await confirm({ title: `Delete ${slot.name}?`, message: `The name ${slot.name} stops answering. Stored models stay.`, action: 'Delete', tone: 'bad' });
+  const yes = await confirm({ title: `Delete ${slot.name}?`, message: 'Clients using this name get 404. Stored models stay.', action: 'Delete', tone: 'bad' });
   if (!yes) return false;
   try {
     await api.slots.deleteSlot({ id: slot.id, force: false });
     ok(`Deleted ${slot.name}`);
     return true;
   } catch (err) {
-    // Forcing past a live occupant or the swaps aimed at it is the person's call
-    const code = err instanceof ConnectError ? err.code : undefined;
+    const c = code(err);
     const ask =
-      code === Code.InvalidArgument
-        ? { title: `Stop what ${slot.name} serves?`, message: message(err), action: 'Stop and delete' }
-        : code === Code.FailedPrecondition
+      c === Code.InvalidArgument
+        ? { title: `Stop ${slot.name} and delete it?`, message: message(err), action: 'Stop and delete' }
+        : c === Code.FailedPrecondition
           ? { title: `Delete ${slot.name} and what swaps into it?`, message: message(err), action: 'Delete all' }
           : null;
     if (!ask) {
@@ -71,7 +70,7 @@ export async function deleteSlot(slot: Slot): Promise<boolean> {
 
 // Stops the occupant, keeping the slot
 export async function evictSlot(slot: Slot): Promise<boolean> {
-  const yes = await confirm({ title: `Evict ${slot.name}?`, message: 'The instance stops. The slot stays.', action: 'Evict', tone: 'bad' });
+  const yes = await confirm({ title: `Evict ${slot.name}?`, message: 'The model stops. The slot stays.', action: 'Evict', tone: 'bad' });
   if (!yes) return false;
   try {
     await api.slots.evictSlot({ id: slot.id });
@@ -79,6 +78,20 @@ export async function evictSlot(slot: Slot): Promise<boolean> {
     return true;
   } catch (err) {
     fail(err, 'Evict failed');
+    return false;
+  }
+}
+
+// Stops an instance after confirming
+export async function stopInstance(id: string, name: string): Promise<boolean> {
+  const yes = await confirm({ title: `Stop ${name}?`, message: 'It stays stopped after a daemon restart.', action: 'Stop', tone: 'bad' });
+  if (!yes) return false;
+  try {
+    await api.instances.stopInstance({ id });
+    ok(`Stopping ${name}`);
+    return true;
+  } catch (err) {
+    fail(err, 'Stop failed');
     return false;
   }
 }

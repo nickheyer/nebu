@@ -1,4 +1,4 @@
-import { createClient, ConnectError, type Interceptor } from '@connectrpc/connect';
+import { createClient, ConnectError, Code, type Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
 import { BuildService } from '$proto/recipe_pb';
 import { EstimateService } from '$proto/estimate_pb';
@@ -13,46 +13,18 @@ import { SlotService } from '$proto/slot_pb';
 import { SourceService } from '$proto/source_pb';
 import { StoreService } from '$proto/store_pb';
 import { TaskService } from '$proto/task_pb';
+import { readLocal, writeLocal } from './persist';
 
 const tokenKey = 'nebu.token';
 const gatewayKeyKey = 'nebu.gateway_key';
 
-// Returns the gateway key the user saved in this browser, for the chat page
-export function gatewayKey(): string {
-  try {
-    return localStorage.getItem(gatewayKeyKey) ?? '';
-  } catch {
-    return '';
-  }
-}
+// The gateway key saved in this browser, for the chat page
+export const gatewayKey = () => readLocal(gatewayKeyKey);
+export const setGatewayKey = (value: string) => writeLocal(gatewayKeyKey, value);
 
-export function setGatewayKey(value: string) {
-  try {
-    if (value) localStorage.setItem(gatewayKeyKey, value);
-    else localStorage.removeItem(gatewayKeyKey);
-  } catch {
-    // storage may be unavailable in private windows
-  }
-}
-
-// Returns the API token the user saved in this browser
-export function token(): string {
-  try {
-    return localStorage.getItem(tokenKey) ?? '';
-  } catch {
-    return '';
-  }
-}
-
-// Saves the API token for later requests
-export function setToken(value: string) {
-  try {
-    if (value) localStorage.setItem(tokenKey, value);
-    else localStorage.removeItem(tokenKey);
-  } catch {
-    // storage may be unavailable in private windows
-  }
-}
+// The API token saved in this browser
+export const token = () => readLocal(tokenKey);
+export const setToken = (value: string) => writeLocal(tokenKey, value);
 
 const auth: Interceptor = (next) => async (req) => {
   const t = token();
@@ -81,14 +53,19 @@ export const api = {
   events: createClient(EventService, transport)
 };
 
-// Formats a Connect error for people
+// Formats an error for people
 export function message(err: unknown): string {
   if (err instanceof ConnectError) return err.rawMessage || err.message;
   if (err instanceof Error) return err.message.replace(/^\[\w+\]\s*/, '');
   return String(err);
 }
 
-// Reports whether an error is the daemon refusing the token
+// The Connect code of an error, unknown for anything else
+export function code(err: unknown): Code | undefined {
+  return err instanceof ConnectError ? err.code : undefined;
+}
+
+// Whether the daemon refused the token
 export function unauthenticated(err: unknown): boolean {
-  return err instanceof ConnectError && err.code === 16;
+  return code(err) === Code.Unauthenticated;
 }

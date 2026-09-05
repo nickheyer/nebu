@@ -17,7 +17,7 @@ export class TableSort {
     }
   }
 
-  // Sorts a copy by the value a column produces, numbers, bigints, strings, or dates
+  // Sorts a copy by the value a column produces
   apply<T>(rows: T[], value: (row: T, key: string) => string | number | bigint | undefined): T[] {
     const sign = this.dir === 'asc' ? 1 : -1;
     return [...rows].sort((a, b) => {

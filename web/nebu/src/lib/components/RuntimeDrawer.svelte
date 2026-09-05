@@ -1,11 +1,11 @@
 <script lang="ts">
   import { live, cached, clock, profilesOf } from '$lib/state.svelte';
-  import { ago, enumLabel, newestFirst, when } from '$lib/format';
+  import { ago, enumLabel, middle, newestFirst, when } from '$lib/format';
   import { ApiFlavor, InstallKind, ParamType } from '$proto/runtime_pb';
   import Drawer from './ui/Drawer.svelte';
-  import Segmented from './ui/Segmented.svelte';
+  import Tabs from './ui/Tabs.svelte';
   import Kv from './ui/Kv.svelte';
-  import Pill from './ui/Pill.svelte';
+  import State from './ui/State.svelte';
   import Section from './ui/Section.svelte';
   import ParamList from './ui/ParamList.svelte';
 
@@ -25,12 +25,12 @@
 <Drawer bind:id title={manifest?.name || manifest?.id || 'Runtime'} subtitle={manifest?.description || manifest?.id}>
   {#snippet header()}
     {#if status && manifest}
-      <div class="flex flex-wrap items-center gap-2 text-sm text-fg-muted">
-        <Pill tone={status.compatible ? 'ok' : 'warn'} dot label={status.compatible ? 'Compatible' : 'Incompatible'} />
+      <div class="flex flex-wrap items-center gap-3 text-sm text-fg-muted">
+        <State tone={status.compatible ? 'ok' : 'warn'} label={status.compatible ? 'Compatible' : 'Incompatible'} />
         <span>{enumLabel(ApiFlavor, manifest.launch?.api)} API</span>
         <span class="font-mono text-xs">{manifest.formats.join(' ')}</span>
       </div>
-      <Segmented
+      <Tabs
         size="sm"
         class="mt-3"
         bind:value={tab}
@@ -49,11 +49,9 @@
       {#if tab === 'overview'}
         <div class="flex flex-col gap-6">
           {#if status.unmet.length}
-            <Section title="What this host is missing">
-              <ul class="note note-warn list-disc pl-6">
-                {#each status.unmet as u (u)}<li>{u}</li>{/each}
-              </ul>
-            </Section>
+            <ul class="note note-warn list-disc pl-6">
+              {#each status.unmet as u (u)}<li>{u}</li>{/each}
+            </ul>
           {/if}
           <Section title="Manifest">
             <Kv
@@ -75,70 +73,61 @@
         {#if manifest.params.length === 0}
           <p class="text-sm text-fg-faint">No parameters</p>
         {:else}
-          <div class="overflow-x-auto rounded-lg border border-line">
-            <table class="tbl">
-              <thead><tr><th>Name</th><th>Type</th><th>Default</th><th>Choices</th><th>Description</th></tr></thead>
-              <tbody>
-                {#each manifest.params as p (p.name)}
-                  <tr>
-                    <td class="font-mono text-xs whitespace-nowrap text-fg">{p.name}{#if p.solved}<span class="ml-1.5 font-sans text-xs text-fg-faint" title="Solved by the planner when auto">auto</span>{/if}</td>
-                    <td class="text-fg-muted">{enumLabel(ParamType, p.type)}</td>
-                    <td class="font-mono text-xs text-fg-muted">{p.default || '–'}</td>
-                    <td class="max-w-[12rem] truncate font-mono text-xs text-fg-muted" title={p.choices.join(', ')}>{p.choices.join(', ') || '–'}</td>
-                    <td class="max-w-md text-xs leading-5 text-fg-muted">{p.description}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
+          <table class="tbl">
+            <thead><tr><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+            <tbody>
+              {#each manifest.params as p (p.name)}
+                <tr>
+                  <td class="font-mono text-xs whitespace-nowrap text-fg">{p.name}{#if p.solved}<span class="ml-1.5 font-sans text-xs text-fg-faint" title="Solved by the planner when auto">auto</span>{/if}</td>
+                  <td class="text-fg-muted">{enumLabel(ParamType, p.type)}</td>
+                  <td class="font-mono text-xs text-fg-muted">{p.default || '–'}{#if p.choices.length}<span class="block text-fg-faint" title={p.choices.join(', ')}>{p.choices.join(' ')}</span>{/if}</td>
+                  <td class="max-w-md text-xs leading-5 text-fg-muted">{p.description}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         {/if}
       {:else if tab === 'installs'}
         {#if installs.length === 0}
           <p class="text-sm text-fg-faint">Not installed</p>
         {:else}
-          <div class="overflow-x-auto rounded-lg border border-line">
-            <table class="tbl">
-              <thead><tr><th>Kind</th><th>Version</th><th>Path</th><th>Facts</th><th>Added</th></tr></thead>
-              <tbody>
-                {#each installs as i (i.id)}
-                  <tr>
-                    <td class="text-fg-muted">{enumLabel(InstallKind, i.kind)}</td>
-                    <td class="font-mono text-xs">{i.version || '–'}</td>
-                    <td class="max-w-xs truncate font-mono text-xs text-fg-muted" title={i.path}>{i.path}</td>
-                    <td class="max-w-sm"><ParamList params={i.facts} max={4} /></td>
-                    <td class="text-fg-muted" title={when(i.createdAt)}>{ago(i.createdAt, clock.now)}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
+          <table class="tbl">
+            <thead><tr><th>Kind</th><th>Version</th><th>Path</th><th>Facts</th><th>Added</th></tr></thead>
+            <tbody>
+              {#each installs as i (i.id)}
+                <tr>
+                  <td class="text-fg-muted">{enumLabel(InstallKind, i.kind)}</td>
+                  <td class="font-mono text-xs">{i.version || '–'}</td>
+                  <td class="font-mono text-xs text-fg-muted" title={i.path}>{middle(i.path, 36)}</td>
+                  <td class="max-w-sm"><ParamList params={i.facts} max={4} /></td>
+                  <td class="text-fg-muted" title={when(i.createdAt)}>{ago(i.createdAt, clock.now)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         {/if}
       {:else if tab === 'profiles'}
         {#if profiles.length === 0}
           <p class="text-sm text-fg-faint">No profiles</p>
         {:else}
-          <div class="overflow-x-auto rounded-lg border border-line">
-            <table class="tbl">
-              <thead><tr><th>Name</th><th>Parameters</th><th>Updated</th></tr></thead>
-              <tbody>
-                {#each profiles as p (p.id)}
-                  <tr>
-                    <td>
-                      <div class="flex items-center gap-2">
-                        <span class="font-mono text-xs text-fg">{p.name}</span>
-                        {#if p.default}<Pill tone="accent" label="default" />{/if}
-                      </div>
-                      {#if p.description}<div class="text-xs text-fg-faint">{p.description}</div>{/if}
-                    </td>
-                    <td class="max-w-md">
-                      {#if Object.keys(p.params).length}<ParamList params={p.params} />{:else}<span class="text-xs text-fg-faint">runtime defaults</span>{/if}
-                    </td>
-                    <td class="text-fg-muted" title={when(p.updatedAt)}>{ago(p.updatedAt, clock.now)}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
+          <table class="tbl">
+            <thead><tr><th>Name</th><th>Parameters</th><th>Updated</th></tr></thead>
+            <tbody>
+              {#each profiles as p (p.id)}
+                <tr>
+                  <td>
+                    <span class="font-mono text-xs text-fg">{p.name}</span>
+                    {#if p.default}<span class="ml-1.5 text-xs text-fg-faint">default</span>{/if}
+                    {#if p.description}<div class="text-xs text-fg-faint">{p.description}</div>{/if}
+                  </td>
+                  <td class="max-w-md">
+                    {#if Object.keys(p.params).length}<ParamList params={p.params} />{:else}<span class="text-xs text-fg-faint">runtime defaults</span>{/if}
+                  </td>
+                  <td class="text-fg-muted" title={when(p.updatedAt)}>{ago(p.updatedAt, clock.now)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         {/if}
       {/if}
     </div>

@@ -1,21 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Code, ConnectError } from '@connectrpc/connect';
-  import { api, baseUrl, setToken, token, message } from '$lib/api';
+  import { Code } from '@connectrpc/connect';
+  import { api, baseUrl, code, setToken, token, message } from '$lib/api';
   import { connect, live, cached, desktopNotify, setDesktopNotify, updateSettings } from '$lib/state.svelte';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { sourceLabel } from '$lib/catalog';
   import type { Provider, SourceStatus } from '$proto/source_pb';
-  import { KeyRound, Save, Eye, EyeOff, Plug, Plus, Pencil, Trash2, ExternalLink, Check, Circle, CircleAlert } from '@lucide/svelte';
+  import { KeyRound, Eye, EyeOff, Plug, Plus, Pencil, Trash2, ExternalLink, Check, Circle, CircleAlert } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
-  import Card from '$lib/components/ui/Card.svelte';
-  import Field from '$lib/components/ui/Field.svelte';
-  import Kv from '$lib/components/ui/Kv.svelte';
+  import IconButton from '$lib/components/ui/IconButton.svelte';
+  import Section from '$lib/components/ui/Section.svelte';
+  import Info from '$lib/components/ui/Info.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
-  import Pill from '$lib/components/ui/Pill.svelte';
+  import State from '$lib/components/ui/State.svelte';
   import Switch from '$lib/components/ui/Switch.svelte';
   import Tip from '$lib/components/ui/Tip.svelte';
   import SkeletonRows from '$lib/components/ui/SkeletonRows.svelte';
@@ -34,6 +34,7 @@
 
   const statuses = $derived(cached.sources);
   const labelDirty = $derived(label.trim() !== (live.settings?.hostLabel ?? ''));
+  const tokenDirty = $derived(value.trim() !== token());
 
   // The label field starts from the daemon's value once it arrives
   $effect(() => {
@@ -59,7 +60,6 @@
   async function toggleNotify(on: boolean) {
     notify = await setDesktopNotify(on);
     if (on && !notify) fail(new Error('the browser refused permission'), 'Notifications stay off');
-    else ok(notify ? 'Desktop notifications on' : 'Desktop notifications off');
   }
 
   function save() {
@@ -98,7 +98,7 @@
       await api.sources.deleteSource({ id: s.source?.id ?? '' });
       ok(`Removed ${name}`);
     } catch (err) {
-      if (!(err instanceof ConnectError && err.code === Code.FailedPrecondition)) {
+      if (code(err) !== Code.FailedPrecondition) {
         fail(err, 'Remove failed');
         return;
       }
@@ -129,68 +129,82 @@
   <thead><tr><th>Source</th><th>Provider</th><th>Settings</th><th>Token</th><th></th></tr></thead>
 {/snippet}
 
+{#snippet row(label: string, info: string | undefined, id: string | undefined, control: import('svelte').Snippet)}
+  <div class="grid grid-cols-1 items-start gap-x-8 gap-y-2 py-4 sm:grid-cols-[14rem_minmax(0,1fr)]">
+    <div class="flex h-8 items-center gap-1">
+      <label for={id} class="text-sm text-fg">{label}</label>
+      {#if info}<Info text={info} />{/if}
+    </div>
+    <div class="min-w-0">{@render control()}</div>
+  </div>
+{/snippet}
+
 <PageHeader title="Settings" />
 
-<div class="flex flex-col gap-6">
-  <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-    <Card title="This host" description="The label stands in for the hostname everywhere">
-      <form
-        class="flex flex-col gap-4"
-        onsubmit={(e) => {
-          e.preventDefault();
-          saveLabel();
-        }}
-      >
-        <Field label="Label" for="host-label">
+<div class="flex flex-col gap-9">
+  <Section title="Host">
+    <div class="divide-y divide-line/70 border-y border-line">
+      {#snippet labelControl()}
+        <form
+          class="flex max-w-lg items-center gap-2"
+          onsubmit={(e) => {
+            e.preventDefault();
+            saveLabel();
+          }}
+        >
           <input id="host-label" class="input" bind:value={label} placeholder={live.host?.hostname || 'hostname'} maxlength="64" autocomplete="off" />
-        </Field>
-        <Kv
-          mono
-          items={[
-            ['hostname', live.host?.hostname],
-            ['platform', live.host ? `${live.host.os}/${live.host.arch}` : undefined]
-          ]}
-        />
-        <div class="flex gap-2">
-          <Button type="submit" variant="primary" icon={Save} loading={labelSaving} disabled={!labelDirty}>Save</Button>
-        </div>
-      </form>
-    </Card>
+          <Button type="submit" variant="primary" loading={labelSaving} disabled={!labelDirty}>Save</Button>
+        </form>
+      {/snippet}
+      {@render row('Label', 'Stands in for the hostname everywhere', 'host-label', labelControl)}
+      {#snippet hostnameControl()}
+        <div class="flex h-8 items-center font-mono text-sm text-fg-muted">{live.host?.hostname ?? '–'}</div>
+      {/snippet}
+      {@render row('Hostname', undefined, undefined, hostnameControl)}
+      {#snippet platformControl()}
+        <div class="flex h-8 items-center font-mono text-sm text-fg-muted">{live.host ? `${live.host.os}/${live.host.arch}` : '–'}</div>
+      {/snippet}
+      {@render row('Platform', undefined, undefined, platformControl)}
+    </div>
+  </Section>
 
-    <Card title="Connection" description="The token is kept in this browser only">
-      <form
-        class="flex flex-col gap-4"
-        onsubmit={(e) => {
-          e.preventDefault();
-          save();
-        }}
-      >
-        <div class="flex flex-wrap items-center gap-2 text-sm">
-          <Pill tone={live.connected ? 'ok' : 'bad'} dot pulse={live.connected} label={live.connected ? 'Connected' : 'Disconnected'} />
+  <Section title="Connection">
+    <div class="divide-y divide-line/70 border-y border-line">
+      {#snippet daemonControl()}
+        <div class="flex h-8 flex-wrap items-center gap-3 text-sm">
+          <State tone={live.connected ? 'ok' : 'bad'} pulse={live.connected} label={live.connected ? 'Connected' : 'Disconnected'} />
           <span class="font-mono text-fg-muted">{baseUrl}</span>
           {#if live.needsToken}<span class="text-warn">token required</span>{/if}
           {#if live.error && !live.connected}<span class="truncate text-bad">{live.error}</span>{/if}
+          <Button size="sm" variant="ghost" icon={Plug} loading={testing} onclick={test}>Test</Button>
         </div>
-        <Field label="API token" for="token" hint="Set as auth.token in the daemon's config">
-          <div class="relative">
-            <KeyRound size={15} class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-fg-faint" />
-            <input id="token" class="input pr-10 pl-9 font-mono" type={show ? 'text' : 'password'} bind:value autocomplete="off" placeholder="auth.token" />
-            <button type="button" class="absolute top-1/2 right-2 -translate-y-1/2 rounded-md p-1 text-fg-faint hover:text-fg" onclick={() => (show = !show)} aria-label={show ? 'Hide token' : 'Show token'}>
-              {#if show}<EyeOff size={15} />{:else}<Eye size={15} />{/if}
+      {/snippet}
+      {@render row('Daemon', undefined, undefined, daemonControl)}
+      {#snippet tokenControl()}
+        <form
+          class="flex max-w-lg items-center gap-2"
+          onsubmit={(e) => {
+            e.preventDefault();
+            save();
+          }}
+        >
+          <div class="relative flex-1">
+            <KeyRound size={13} class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-faint" />
+            <input id="token" class="input pr-9 pl-8 font-mono" type={show ? 'text' : 'password'} bind:value autocomplete="off" placeholder="auth.token" />
+            <button type="button" class="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-sm p-1 text-fg-faint hover:text-fg" onclick={() => (show = !show)} aria-label={show ? 'Hide token' : 'Show token'}>
+              {#if show}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
             </button>
           </div>
-        </Field>
-        <div class="flex gap-2">
-          <Button type="submit" variant="primary" icon={Save}>Save</Button>
-          <Button type="button" icon={Plug} loading={testing} onclick={test}>Test</Button>
-        </div>
-      </form>
-    </Card>
-  </div>
+          <Button type="submit" variant="primary" disabled={!tokenDirty}>Save</Button>
+        </form>
+      {/snippet}
+      {@render row('API token', 'The daemon config sets auth.token. The browser keeps this copy.', 'token', tokenControl)}
+    </div>
+  </Section>
 
-  <Card title="Sources" flush>
+  <Section title="Sources" count={statuses.length || undefined}>
     {#snippet actions()}
-      <Button size="sm" variant="primary" icon={Plus} onclick={add} disabled={!providers.length}>Add source</Button>
+      <Button size="sm" icon={Plus} onclick={add} disabled={!providers.length}>Add source</Button>
     {/snippet}
     {#if !cached.loaded}
       <table class="tbl">
@@ -198,7 +212,7 @@
         <tbody><SkeletonRows rows={3} cols={[{ w: 'w-40', sub: true }, 'w-20', 'w-32', 'w-16', { w: 'w-6', num: true }]} /></tbody>
       </table>
     {:else if cached.error && statuses.length === 0}
-      <Empty compact title="Sources unavailable" description={cached.error} />
+      <Empty compact title={cached.error} />
     {:else if statuses.length === 0}
       <Empty compact title="No sources" />
     {:else}
@@ -211,8 +225,8 @@
               <tr>
                 <td>
                   <div class="flex items-center gap-2">
-                    <span class="font-medium text-fg">{sourceLabel(s)}</span>
-                    {#if s.source?.seeded}<Tip text="Created by the daemon. It can be edited but not removed"><Pill label="built in" /></Tip>{/if}
+                    <span class="text-fg">{sourceLabel(s)}</span>
+                    {#if s.source?.seeded}<Tip text="Seeded by the daemon. Editable but not removable."><span class="text-xs text-fg-faint">built in</span></Tip>{/if}
                   </div>
                   <div class="font-mono text-xs text-fg-faint">{s.source?.id}</div>
                   {#if s.error}<div class="mt-1 max-w-md text-xs text-bad" title={s.error}>{s.error}</div>{/if}
@@ -225,7 +239,7 @@
                   {#if summary(s)}
                     <div class="truncate font-mono text-xs text-fg-muted" title={summary(s)}>{summary(s)}</div>
                   {:else}
-                    <span class="text-fg-faint">defaults</span>
+                    <span class="text-xs text-fg-faint">defaults</span>
                   {/if}
                   {#if c?.endpoint || c?.webUrl}
                     <div class="mt-0.5 truncate text-xs text-fg-faint">{c.endpoint || c.webUrl}</div>
@@ -233,25 +247,27 @@
                 </td>
                 <td>
                   {#if !c?.tokenEnv}
-                    <span class="text-fg-faint">none</span>
+                    <span class="text-xs text-fg-faint">none</span>
                   {:else if c.tokenPresent}
-                    <Tip text="{c.tokenEnv} is set for the daemon"><span class="inline-flex items-center gap-1.5 text-ok"><Check size={14} /><span class="font-mono text-xs">{c.tokenEnv}</span></span></Tip>
+                    <Tip text="{c.tokenEnv} is set for the daemon"><span class="inline-flex items-center gap-1.5 text-ok"><Check size={13} /><span class="font-mono text-xs">{c.tokenEnv}</span></span></Tip>
                   {:else if c.authRequired}
-                    <Tip text="{c.tokenEnv} is not set. Downloads need it"><span class="inline-flex items-center gap-1.5 text-warn"><CircleAlert size={14} /><span class="font-mono text-xs">{c.tokenEnv}</span></span></Tip>
+                    <Tip text="{c.tokenEnv} is not set. Downloads need it."><span class="inline-flex items-center gap-1.5 text-warn"><CircleAlert size={13} /><span class="font-mono text-xs">{c.tokenEnv}</span></span></Tip>
                   {:else}
-                    <Tip text="{c.tokenEnv} is not set. Gated and private repositories need it"><span class="inline-flex items-center gap-1.5 text-fg-faint"><Circle size={14} /><span class="font-mono text-xs">{c.tokenEnv}</span></span></Tip>
+                    <Tip text="{c.tokenEnv} is not set. Gated and private repositories need it."><span class="inline-flex items-center gap-1.5 text-fg-faint"><Circle size={13} /><span class="font-mono text-xs">{c.tokenEnv}</span></span></Tip>
                   {/if}
                 </td>
                 <td class="actions">
-                  <Menu
-                    size="sm"
-                    items={[
-                      { label: 'Edit', icon: Pencil, onSelect: () => edit(s) },
-                      { label: 'Open in the catalog', icon: ExternalLink, href: `/catalog?source=${s.source?.id ?? ''}` },
-                      { label: '', separator: true },
-                      { label: 'Remove', icon: Trash2, tone: 'bad', disabled: !!s.source?.seeded, onSelect: () => remove(s) }
-                    ]}
-                  />
+                  <span>
+                    <IconButton size="sm" icon={Pencil} label="Edit" onclick={() => edit(s)} />
+                    <Menu
+                      size="sm"
+                      items={[
+                        { label: 'Open in the catalog', icon: ExternalLink, href: `/catalog?source=${s.source?.id ?? ''}` },
+                        { label: '', separator: true },
+                        { label: 'Remove', icon: Trash2, tone: 'bad', disabled: !!s.source?.seeded, onSelect: () => remove(s) }
+                      ]}
+                    />
+                  </span>
                 </td>
               </tr>
             {/each}
@@ -259,11 +275,16 @@
         </table>
       </div>
     {/if}
-  </Card>
+  </Section>
 
-  <Card title="Notifications">
-    <Switch bind:checked={notify} onchange={toggleNotify} title="Desktop notifications" hint="A notification from this browser whenever a watch or want turns something up" />
-  </Card>
+  <Section title="Notifications">
+    <div class="divide-y divide-line/70 border-y border-line">
+      {#snippet notifyControl()}
+        <div class="flex h-8 items-center"><Switch bind:checked={notify} onchange={toggleNotify} label="Desktop notifications" /></div>
+      {/snippet}
+      {@render row('Desktop notifications', 'From this browser whenever a watch or want turns something up', undefined, notifyControl)}
+    </div>
+  </Section>
 </div>
 
 <SourceDialog bind:open={dialogOpen} {providers} {editing} />

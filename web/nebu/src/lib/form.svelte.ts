@@ -9,13 +9,13 @@ export interface Done {
 }
 
 export interface FormSpec {
-  // Reads the dialog's open prop so every opening starts from the props
   open: () => boolean;
   close: () => void;
+  // Runs on every opening so the fields start from the props
   reset: () => void;
   // Sends the form, resolving to the success toast, or to nothing when it toasted itself
   submit: () => Promise<Done | void>;
-  // Title of the failure toast, left out when submit reports a refusal itself
+  // Title of the failure toast, left out when submit reports refusals itself
   failTitle?: string | (() => string);
 }
 

@@ -1,17 +1,15 @@
 <script lang="ts">
-  import { api } from '$lib/api';
   import { live, clock, instanceLive, slotName } from '$lib/state.svelte';
   import { launch } from '$lib/launch';
+  import { stopInstance } from '$lib/slotActions.svelte';
   import { bytes, when, duration } from '$lib/format';
-  import { fail, ok } from '$lib/toast.svelte';
-  import { confirm } from '$lib/confirm.svelte';
   import { InstanceState } from '$proto/instance_pb';
   import { Square, RotateCcw, Wrench, ExternalLink, MessageSquare } from '@lucide/svelte';
   import Drawer from './ui/Drawer.svelte';
-  import Segmented from './ui/Segmented.svelte';
+  import Tabs from './ui/Tabs.svelte';
   import Kv from './ui/Kv.svelte';
   import Button from './ui/Button.svelte';
-  import StatePill from './ui/StatePill.svelte';
+  import State from './ui/State.svelte';
   import Copy from './ui/Copy.svelte';
   import Section from './ui/Section.svelte';
   import ParamList from './ui/ParamList.svelte';
@@ -32,17 +30,9 @@
 
   async function stop() {
     if (!instance) return;
-    const yes = await confirm({ title: `Stop ${instance.name}?`, message: 'It will not relaunch after a daemon restart.', action: 'Stop', tone: 'bad' });
-    if (!yes) return;
     stopping = true;
-    try {
-      await api.instances.stopInstance({ id: instance.id });
-      ok(`Stopping ${instance.name}`);
-    } catch (err) {
-      fail(err, 'Stop failed');
-    } finally {
-      stopping = false;
-    }
+    await stopInstance(instance.id, instance.name);
+    stopping = false;
   }
 
   async function again(fix: Record<string, string> = {}) {
@@ -53,15 +43,15 @@
   }
 </script>
 
-<Drawer bind:id title={instance?.name ?? 'Instance'} subtitle={instance ? `${instance.repo} · ${instance.group}` : ''}>
+<Drawer bind:id mono title={instance?.name ?? 'Instance'} subtitle={instance ? `${instance.repo} · ${instance.group}` : ''}>
   {#snippet header()}
     {#if instance}
-      <div class="flex flex-wrap items-center gap-2 text-sm text-fg-muted">
-        <StatePill values={InstanceState} value={instance.state} />
-        <span>on {instance.runtimeId}</span>
-        {#if instance.slotId}<a href="/?slot={instance.slotId}" class="link">in slot {slotName(instance.slotId)}</a>{/if}
+      <div class="flex flex-wrap items-center gap-3 text-sm text-fg-muted">
+        <State values={InstanceState} value={instance.state} />
+        <span>{instance.runtimeId}</span>
+        {#if instance.slotId}<a href="/?slot={instance.slotId}" class="link">slot {slotName(instance.slotId)}</a>{/if}
       </div>
-      <Segmented
+      <Tabs
         size="sm"
         class="mt-3"
         bind:value={tab}
@@ -97,7 +87,7 @@
             ]}
           />
           {#if instance.taskId}
-            <a href="/tasks?id={instance.taskId}" class="link inline-flex items-center gap-1.5 text-sm"><ExternalLink size={14} /> Launch task</a>
+            <a href="/tasks?id={instance.taskId}" class="link inline-flex items-center gap-1.5 text-sm"><ExternalLink size={13} /> Launch task</a>
           {/if}
 
           {#if Object.keys(instance.params).length}
@@ -105,23 +95,21 @@
           {/if}
 
           {#if instance.measurements.length}
-            <Section title="Measured" description="What the runtime reported about itself">
-              <div class="overflow-x-auto rounded-lg border border-line">
-                <table class="tbl">
-                  <thead><tr><th>Key</th><th class="num">Bytes</th><th>Line</th></tr></thead>
-                  <tbody>
-                    {#each instance.measurements as m (m.key)}
-                      <tr><td class="font-mono text-xs">{m.key}</td><td class="num">{bytes(m.bytes)}</td><td class="max-w-xs truncate font-mono text-xs text-fg-faint" title={m.line}>{m.line}</td></tr>
-                    {/each}
-                  </tbody>
-                </table>
-              </div>
+            <Section title="Measured" info="What the runtime reported about its own memory">
+              <table class="tbl">
+                <thead><tr><th>Key</th><th class="num">Bytes</th><th>Line</th></tr></thead>
+                <tbody>
+                  {#each instance.measurements as m (m.key)}
+                    <tr><td class="font-mono text-xs">{m.key}</td><td class="num">{bytes(m.bytes)}</td><td class="max-w-xs truncate font-mono text-xs text-fg-faint" title={m.line}>{m.line}</td></tr>
+                  {/each}
+                </tbody>
+              </table>
             </Section>
           {/if}
 
           {#if instance.command.length}
             <Section title="Command">
-              {#snippet actions()}<Copy text={instance.command.join(' ')} size={14} />{/snippet}
+              {#snippet actions()}<Copy text={instance.command.join(' ')} size={13} />{/snippet}
               <pre class="code whitespace-pre-wrap break-all">{instance.command.join(' \\\n  ')}</pre>
             </Section>
           {/if}
@@ -140,13 +128,12 @@
         {:else}
           <div class="flex flex-col gap-3">
             {#each instance.triage as hit (hit.id)}
-              <div class="rounded-lg border border-warn/30 bg-warn/8 p-4">
+              <div class="rounded-md border border-warn/25 bg-warn/8 p-4">
                 <div class="text-sm font-medium text-fg">{hit.summary}</div>
                 {#if hit.hint}<p class="mt-1 text-sm leading-6 text-fg-muted">{hit.hint}</p>{/if}
                 {#if hit.line}<pre class="code mt-3 whitespace-pre-wrap">{hit.line}</pre>{/if}
                 {#if Object.keys(hit.fix).length}
-                  <div class="mt-3 flex flex-wrap items-center gap-2">
-                    <span class="text-sm text-fg-muted">Suggested</span>
+                  <div class="mt-3 flex flex-wrap items-center gap-3">
                     <ParamList params={hit.fix} />
                     {#if instance.request && !alive}
                       <Button size="sm" variant="primary" icon={Wrench} class="ml-auto" onclick={() => again(hit.fix)}>Run with fix</Button>
@@ -163,7 +150,7 @@
 
   {#snippet footer()}
     {#if instance}
-      <span class="text-sm text-fg-faint">{instance.id.slice(0, 12)}</span>
+      <span class="font-mono text-xs text-fg-faint">{instance.id.slice(0, 12)}</span>
       <div class="ml-auto flex gap-2">
         {#if alive}
           {#if instance.state === InstanceState.READY}

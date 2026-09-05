@@ -2,18 +2,20 @@
   import { api, baseUrl } from '$lib/api';
   import { listenerUrl, policyText } from '$lib/gateway';
   import { live, cached, refreshCached, slotName } from '$lib/state.svelte';
-  import { byName, count } from '$lib/format';
+  import { byName, count, tail } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { RouteState } from '$proto/gateway_pb';
   import { InstanceState } from '$proto/instance_pb';
-  import { Plus, Trash2, KeyRound, LockOpen } from '@lucide/svelte';
+  import { Plus, Trash2, KeyRound, LockOpen, ShieldCheck } from '@lucide/svelte';
   import Dialog from './ui/Dialog.svelte';
   import Button from './ui/Button.svelte';
+  import IconButton from './ui/IconButton.svelte';
   import Copy from './ui/Copy.svelte';
   import Segmented from './ui/Segmented.svelte';
   import Section from './ui/Section.svelte';
-  import StatePill from './ui/StatePill.svelte';
+  import Select from './ui/Select.svelte';
+  import State from './ui/State.svelte';
   import Empty from './ui/Empty.svelte';
 
   type Flavor = 'openai' | 'anthropic' | 'ollama';
@@ -77,79 +79,76 @@
   }
 </script>
 
-<Dialog bind:open title="Connect" description="OpenAI, Anthropic, and Ollama clients all work against this host" size="lg">
-  <div class="flex flex-col gap-6">
+<Dialog bind:open title="Connect" size="lg">
+  <div class="flex flex-col gap-7">
     <Section title="Endpoint">
-      <div class="overflow-hidden rounded-lg border border-line">
+      {#snippet actions()}
+        <span class="inline-flex items-center gap-1.5 text-xs text-fg-muted">
+          {#if auth}<KeyRound size={13} class="text-warn" /> API key{:else}<LockOpen size={13} /> No key{/if}
+        </span>
+        {#if status?.tls}<span class="inline-flex items-center gap-1.5 text-xs text-fg-muted"><ShieldCheck size={13} /> TLS</span>{/if}
+      {/snippet}
+      <div class="divide-y divide-line rounded-md border border-line">
         {#each origins as o (o.url)}
-          <div class="flex items-center gap-3 border-b border-line/60 px-3 py-2 last:border-b-0">
+          <div class="flex h-10 items-center gap-3 px-3">
             <span class="min-w-0 flex-1 truncate font-mono text-sm text-fg">{o.url}</span>
             {#if o.shared}<span class="text-xs text-fg-faint">API listener</span>{/if}
             <Copy text={o.url} />
           </div>
         {/each}
-        <div class="flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-line bg-sunken/60 px-3 py-2 text-sm text-fg-muted">
-          <span class="inline-flex items-center gap-1.5">
-            {#if auth}<KeyRound size={14} class="text-warn" /> Needs an API key{:else}<LockOpen size={14} /> No key needed{/if}
-          </span>
-          {#if status?.tls}<span>TLS</span>{/if}
-          <span>Limits {policyText(undefined, status?.policy)}</span>
-          <span class="ml-auto tabular-nums">{count(status?.requests ?? 0n)} requests since start</span>
-        </div>
+      </div>
+      <div class="flex flex-wrap gap-x-5 gap-y-1 text-xs text-fg-faint">
+        <span>limits {policyText(undefined, status?.policy)}</span>
+        <span class="tabular-nums">{count(status?.requests ?? 0n)} requests since start</span>
       </div>
     </Section>
 
-    <Section title="Example request">
+    <Section title="Request">
       {#snippet actions()}
         <Segmented size="sm" bind:value={flavor} tabs={[{ id: 'openai', label: 'OpenAI' }, { id: 'anthropic', label: 'Anthropic' }, { id: 'ollama', label: 'Ollama' }]} />
       {/snippet}
       <div class="relative">
         <pre class="code pr-12">{examples[flavor]}</pre>
-        <div class="absolute top-2 right-2"><Copy text={examples[flavor]} /></div>
+        <div class="absolute top-1.5 right-1.5"><Copy text={examples[flavor]} /></div>
       </div>
     </Section>
 
-    <Section title="Model names" description="What clients send as the model">
+    <Section title="Model names" count={routes.length} info="What clients send as the model">
       {#if routes.length === 0}
-        <div class="rounded-lg border border-line"><Empty compact title="Nothing answers yet" /></div>
+        <Empty compact title="Nothing answers yet" />
       {:else}
-        <div class="overflow-x-auto rounded-lg border border-line">
-          <table class="tbl">
-            <thead><tr><th>Name</th><th>State</th><th>Serves</th><th class="num">Requests</th><th>Limits</th><th></th></tr></thead>
-            <tbody>
-              {#each routes as r (r.name)}
-                {@const inst = r.instanceId ? live.instances.get(r.instanceId) : undefined}
-                <tr>
-                  <td class="font-mono text-fg">{r.name}</td>
-                  <td><StatePill values={RouteState} value={r.state} /></td>
-                  <td class="text-fg-muted">
-                    {#if r.slotId}slot {slotName(r.slotId)}{:else if inst}{inst.name}{:else if r.state === RouteState.PENDING}waiting{:else}–{/if}
-                    {#if r.model && r.model !== r.name}<span class="font-mono text-fg-faint">{' · '}{r.model}</span>{/if}
-                  </td>
-                  <td class="num">{count(r.requests)}{#if r.inFlight}<span class="text-fg-faint">{' · '}{r.inFlight} live</span>{/if}</td>
-                  <td class="text-fg-muted">{policyText(r.policy, status?.policy)}</td>
-                  <td class="actions">{#if !r.slotId}<Button size="sm" variant="ghost" icon={Trash2} aria-label="Remove {r.name}" onclick={() => remove(r.name)} />{/if}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+        <table class="tbl">
+          <thead><tr><th>Name</th><th>State</th><th>Serves</th><th class="num">Requests</th><th>Limits</th><th></th></tr></thead>
+          <tbody>
+            {#each routes as r (r.name)}
+              {@const inst = r.instanceId ? live.instances.get(r.instanceId) : undefined}
+              <tr>
+                <td class="font-mono text-xs text-fg">{r.name}</td>
+                <td><State values={RouteState} value={r.state} /></td>
+                <td class="text-fg-muted">
+                  {#if r.slotId}slot {slotName(r.slotId)}{:else if inst}{inst.name}{:else if r.state === RouteState.PENDING}waiting{:else}–{/if}
+                  {#if r.model && r.model !== r.name}<span class="font-mono text-xs text-fg-faint">{' · '}{r.model}</span>{/if}
+                </td>
+                <td class="num">{count(r.requests)}{#if r.inFlight}<span class="text-fg-faint">{' · '}{r.inFlight} live</span>{/if}</td>
+                <td class="text-xs text-fg-muted">{policyText(r.policy, status?.policy)}</td>
+                <td class="actions"><span>{#if !r.slotId}<IconButton size="sm" icon={Trash2} label="Remove" onclick={() => remove(r.name)} />{/if}</span></td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       {/if}
       {#if ready.length}
         <form
-          class="mt-3 flex flex-wrap items-center gap-2"
+          class="flex flex-wrap items-center gap-2"
           onsubmit={(e) => {
             e.preventDefault();
             if (aliasName.trim() && !nameTaken && aliasInstance) addAlias();
           }}
         >
-          <input class="input h-8 w-44 font-mono" bind:value={aliasName} placeholder="Another name" aria-label="Alias name" aria-invalid={nameTaken} autocomplete="off" spellcheck="false" />
+          <input class="input w-44 font-mono" bind:value={aliasName} placeholder="alias" aria-label="Alias" aria-invalid={nameTaken} autocomplete="off" spellcheck="false" />
           <span class="text-sm text-fg-faint">for</span>
-          <select class="input h-8 w-auto" bind:value={aliasInstance} aria-label="Instance">
-            <option value="">Pick an instance</option>
-            {#each ready as i (i.id)}<option value={i.id}>{i.name} · {i.repo.split('/').pop()}:{i.group}</option>{/each}
-          </select>
-          <Button type="submit" size="sm" icon={Plus} loading={adding} disabled={!aliasName.trim() || nameTaken || !aliasInstance}>Add alias</Button>
+          <Select class="w-64" bind:value={aliasInstance} label="Instance" placeholder="Instance" items={ready.map((i) => ({ value: i.id, label: i.name, detail: `${tail(i.repo)}:${i.group}` }))} />
+          <Button type="submit" size="md" icon={Plus} loading={adding} disabled={!aliasName.trim() || nameTaken || !aliasInstance}>Add</Button>
           {#if nameTaken}<span class="text-xs text-bad">That name is taken</span>{/if}
         </form>
       {/if}

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { api, message } from '$lib/api';
-  import { Code, ConnectError } from '@connectrpc/connect';
+  import { api, code, message } from '$lib/api';
+  import { Code } from '@connectrpc/connect';
   import { live, cached, refreshCached, clock, taskFor, instanceLive, profilesOf } from '$lib/state.svelte';
-  import { ago, enumLabel, newestFirst, when } from '$lib/format';
+  import { ago, enumLabel, middle, newestFirst, when } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { selectionParam } from '$lib/selection.svelte';
@@ -12,10 +12,10 @@
   import { Download, Hammer, FolderInput, Trash2, ScrollText, RefreshCw, Plus, Pencil, Star, StarOff, Cpu, PanelRight } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
-  import Card from '$lib/components/ui/Card.svelte';
+  import IconButton from '$lib/components/ui/IconButton.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
-  import Pill from '$lib/components/ui/Pill.svelte';
-  import StatePill from '$lib/components/ui/StatePill.svelte';
+  import Section from '$lib/components/ui/Section.svelte';
+  import State from '$lib/components/ui/State.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import Field from '$lib/components/ui/Field.svelte';
@@ -109,7 +109,7 @@
       await api.runtimes.deleteProfile({ id: p.id });
       ok('Profile removed');
     } catch (err) {
-      if (!(err instanceof ConnectError && err.code === Code.FailedPrecondition)) {
+      if (code(err) !== Code.FailedPrecondition) {
         fail(err, 'Remove failed');
         return;
       }
@@ -183,27 +183,24 @@
   <thead><tr><th>Runtime</th><th>Variant</th><th>Ref</th><th>State</th><th>Sandbox</th><th>Started</th><th></th></tr></thead>
 {/snippet}
 
-<PageHeader title="Runtimes" subtitle="Each needs an install before it can run anything: a prebuilt release, a build from its recipe, or a binary already on this host">
-  <Button icon={RefreshCw} onclick={refresh} aria-label="Reread manifests and recipes" title="Reread manifests and recipes" />
-  <Button icon={Plus} onclick={() => newProfile()} disabled={!runtimes.length}>New profile</Button>
+<PageHeader title="Runtimes">
+  <IconButton icon={RefreshCw} label="Reread manifests and recipes" variant="secondary" onclick={refresh} />
 </PageHeader>
 
-<div class="flex flex-col gap-8">
+<div class="flex flex-col gap-9">
   <section>
     {#if !cached.loaded}
-      <div class="grid gap-4 md:grid-cols-2">
-        {#each [0, 1, 2, 3] as i (i)}<div class="card h-44" aria-busy="true"></div>{/each}
+      <div class="flex flex-col gap-1.5" aria-busy="true">
+        {#each [0, 1, 2, 3] as i (i)}<div class="skeleton h-16"></div>{/each}
       </div>
     {:else if cached.error && runtimes.length === 0}
-      <div class="card">
-        <Empty title="Runtimes unavailable" description={cached.error}>
-          <Button size="sm" icon={RefreshCw} onclick={refresh}>Retry</Button>
-        </Empty>
-      </div>
+      <Empty title={cached.error}>
+        <Button size="sm" icon={RefreshCw} onclick={refresh}>Retry</Button>
+      </Empty>
     {:else if runtimes.length === 0}
-      <div class="card"><Empty icon={Cpu} title="No runtime manifests" /></div>
+      <Empty icon={Cpu} title="No runtime manifests" />
     {:else}
-      <div class="grid gap-4 md:grid-cols-2">
+      <div class="flex flex-col gap-1.5">
         {#each runtimes as rt (rt.manifest?.id)}
           {@const id = rt.manifest?.id ?? ''}
           {@const have = installsOf(id)}
@@ -212,68 +209,57 @@
           {@const recipeList = recipesOf(id)}
           {@const canPrebuilt = !!rt.manifest?.acquire?.prebuilt.length}
           {@const task = taskFor('install', { runtime: id }) ?? taskFor('build', { runtime: id })}
-          <article class="card flex flex-col gap-4 p-5 transition-colors hover:border-line-strong {sel.id === id ? 'border-accent/50' : ''}">
-            <div class="flex items-start gap-3">
-              <button type="button" class="min-w-0 flex-1 text-left" onclick={() => (sel.id = id)}>
-                <div class="flex items-baseline gap-2">
-                  <span class="text-base font-semibold text-fg hover:text-accent">{rt.manifest?.name || id}</span>
-                  <span class="font-mono text-xs text-fg-faint">{id}</span>
-                </div>
-                {#if rt.manifest?.description}<div class="mt-0.5 line-clamp-2 text-sm text-fg-muted" title={rt.manifest.description}>{rt.manifest.description}</div>{/if}
-              </button>
-              {#if task}
-                <Pill tone="accent" dot pulse label={task.kind === 'build' ? 'Building' : 'Downloading'} />
-              {:else if have.length}
-                <Pill tone="ok" dot label="Installed" />
-              {:else if !rt.compatible}
-                <Pill tone="warn" dot label="Incompatible" />
-              {:else}
-                <Pill tone="neutral" label="Not installed" />
-              {/if}
-            </div>
-
-            <div class="min-h-10 text-sm">
+          {@const rail = task ? 'bg-accent' : have.length ? 'bg-ok' : !rt.compatible ? 'bg-warn' : 'bg-line-strong'}
+          <article class="bay grid grid-cols-[minmax(8rem,12rem)_minmax(0,1fr)_auto] items-center gap-x-6 py-3 pr-2 pl-4 {sel.id === id ? 'ring-1 ring-accent/40' : ''}">
+            <span class="absolute inset-y-2.5 left-0 w-0.5 rounded-full {rail}"></span>
+            <button type="button" class="min-w-0 text-left" onclick={() => (sel.id = id)}>
+              <div class="truncate text-sm font-semibold text-fg">{rt.manifest?.name || id}</div>
+              <div class="mt-1">
+                {#if task}
+                  <State tone="accent" pulse label={task.kind === 'build' ? 'Building' : 'Downloading'} />
+                {:else if have.length}
+                  <State tone="ok" label="Installed" />
+                {:else if !rt.compatible}
+                  <State tone="warn" label="Incompatible" />
+                {:else}
+                  <State tone="neutral" label="Not installed" />
+                {/if}
+              </div>
+            </button>
+            <button type="button" class="min-w-0 text-left" onclick={() => (sel.id = id)}>
               {#if task}
                 <TaskChip {task} />
               {:else if have.length}
-                <div class="text-fg">{newest?.version || 'unknown version'} <span class="text-fg-muted">· {enumLabel(InstallKind, newest?.kind)}{have.length > 1 ? ` · ${have.length} installs` : ''}</span></div>
-                <div class="truncate font-mono text-xs text-fg-faint" title={newest?.path}>{newest?.path}</div>
+                <div class="truncate text-sm text-fg">{newest?.version || 'unknown version'} <span class="text-fg-muted">· {enumLabel(InstallKind, newest?.kind)}{have.length > 1 ? ` · ${have.length} installs` : ''}</span></div>
+                <div class="mt-1 truncate font-mono text-xs text-fg-faint" title={newest?.path}>{middle(newest?.path ?? '', 64)}</div>
               {:else if !rt.compatible}
-                <ul class="list-disc pl-5 text-fg-muted">{#each rt.unmet as u (u)}<li>{u}</li>{/each}</ul>
+                <div class="truncate text-sm text-fg-muted" title={rt.unmet.join('\n')}>{rt.unmet.join(' · ')}</div>
+                <div class="mt-1 truncate text-xs text-fg-faint" title={rt.manifest?.description}>{rt.manifest?.description}</div>
               {:else}
-                <div class="text-fg-muted">{canPrebuilt ? 'A prebuilt release is available for this host' : recipeList.length ? 'Built from source with a recipe' : `Adopt a ${adoptNames(rt)} binary already on this host`}</div>
+                <div class="truncate text-sm text-fg-muted" title={rt.manifest?.description}>{rt.manifest?.description}</div>
+                <div class="mt-1 truncate font-mono text-xs text-fg-faint">{(rt.manifest?.formats ?? []).join(' ')}{owned ? ` · ${owned} ${owned === 1 ? 'profile' : 'profiles'}` : ''}</div>
               {/if}
-            </div>
-
-            <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-faint">
-              <span class="font-mono">{(rt.manifest?.formats ?? []).join(' ')}</span>
-              {#if owned}<span>{owned} {owned === 1 ? 'profile' : 'profiles'}</span>{/if}
-            </div>
-
-            <div class="mt-auto flex items-center gap-2 border-t border-line pt-4">
+            </button>
+            <div class="flex items-center gap-1">
               {#if !have.length && !task}
-                {#if canPrebuilt}
-                  <Button size="sm" variant="primary" icon={Download} onclick={() => prebuilt(id)}>Install</Button>
-                {:else if recipeList.length}
-                  <Button size="sm" variant="primary" icon={Hammer} onclick={() => openBuild(recipeList[0])}>Build</Button>
-                {:else}
-                  <Button size="sm" variant="primary" icon={FolderInput} onclick={() => openAdopt(id)}>Adopt</Button>
-                {/if}
+                {#if canPrebuilt}<Button size="sm" variant="primary" icon={Download} onclick={() => prebuilt(id)}>Install</Button>{/if}
+                {#each recipeList as rs (rs.recipe?.id)}
+                  <Button size="sm" variant={canPrebuilt ? 'subtle' : 'primary'} icon={Hammer} onclick={() => openBuild(rs)}>Build{rs.variant ? ` · ${rs.variant}` : ''}</Button>
+                {/each}
+                <Button size="sm" variant={canPrebuilt || recipeList.length ? 'subtle' : 'primary'} icon={FolderInput} onclick={() => openAdopt(id)}>Adopt</Button>
               {:else}
-                <Button size="sm" icon={PanelRight} onclick={() => (sel.id = id)}>Details</Button>
+                <IconButton size="sm" icon={PanelRight} label="Details" onclick={() => (sel.id = id)} />
               {/if}
-              <span class="ml-auto">
-                <Menu
-                  size="sm"
-                  items={[
-                    { label: 'Adopt a binary', icon: FolderInput, detail: `${adoptNames(rt)} on this host`, onSelect: () => openAdopt(id) },
-                    ...(canPrebuilt ? [{ label: 'Install prebuilt', icon: Download, detail: 'download a release', onSelect: () => prebuilt(id) }] : []),
-                    ...recipeList.map((rs) => ({ label: `Build${rs.variant ? ` · ${rs.variant}` : ''}`, icon: Hammer, detail: 'from source with a recipe', onSelect: () => openBuild(rs) })),
-                    { label: '', separator: true },
-                    { label: 'New profile', icon: Plus, onSelect: () => newProfile(id) }
-                  ]}
-                />
-              </span>
+              <Menu
+                size="sm"
+                items={[
+                  { label: 'Adopt a binary', icon: FolderInput, detail: `${adoptNames(rt)} on this host`, onSelect: () => openAdopt(id) },
+                  ...(canPrebuilt ? [{ label: 'Install prebuilt', icon: Download, detail: 'download a release', onSelect: () => prebuilt(id) }] : []),
+                  ...recipeList.map((rs) => ({ label: `Build${rs.variant ? ` · ${rs.variant}` : ''}`, icon: Hammer, detail: 'from source', onSelect: () => openBuild(rs) })),
+                  { label: '', separator: true },
+                  { label: 'New profile', icon: Plus, onSelect: () => newProfile(id) }
+                ]}
+              />
             </div>
           </article>
         {/each}
@@ -281,16 +267,17 @@
     {/if}
   </section>
 
-  <Card title="Profiles" description="Named parameter sets. The default applies to every run that names none" flush>
+  <Section title="Profiles" count={profiles.length || undefined} info="Named parameter sets. The default applies to every run that names none.">
+    {#snippet actions()}
+      <Button size="sm" icon={Plus} onclick={() => newProfile()} disabled={!runtimes.length}>New profile</Button>
+    {/snippet}
     {#if loading}
       <table class="tbl">
         {@render profileHead()}
         <tbody><SkeletonRows rows={2} cols={[{ w: 'w-20' }, { w: 'w-28', sub: true }, 'w-48', 'w-14', { w: 'w-6', num: true }]} /></tbody>
       </table>
     {:else if profiles.length === 0}
-      <Empty compact title="No profiles" description="Save a set of parameters once and pick it by name when running.">
-        <Button size="sm" icon={Plus} onclick={() => newProfile()} disabled={!runtimes.length}>New profile</Button>
-      </Empty>
+      <Empty compact title="No profiles" />
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
@@ -300,10 +287,8 @@
               <tr>
                 <td class="text-fg-muted">{p.runtimeId}</td>
                 <td>
-                  <div class="flex items-center gap-2">
-                    <span class="font-mono text-sm text-fg">{p.name}</span>
-                    {#if p.default}<Pill tone="accent" label="default" />{/if}
-                  </div>
+                  <span class="font-mono text-sm text-fg">{p.name}</span>
+                  {#if p.default}<span class="ml-1.5 text-xs text-fg-faint">default</span>{/if}
                   {#if p.description}<div class="text-xs text-fg-faint">{p.description}</div>{/if}
                 </td>
                 <td class="max-w-md">
@@ -311,15 +296,17 @@
                 </td>
                 <td class="text-fg-muted" title={when(p.updatedAt)}>{ago(p.updatedAt, clock.now)}</td>
                 <td class="actions">
-                  <Menu
-                    size="sm"
-                    items={[
-                      { label: 'Edit', icon: Pencil, onSelect: () => editProfile(p) },
-                      p.default ? { label: 'Clear default', icon: StarOff, onSelect: () => setDefault(p, false) } : { label: 'Make default', icon: Star, onSelect: () => setDefault(p, true) },
-                      { label: '', separator: true },
-                      { label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeProfile(p) }
-                    ]}
-                  />
+                  <span>
+                    <IconButton size="sm" icon={Pencil} label="Edit" onclick={() => editProfile(p)} />
+                    <Menu
+                      size="sm"
+                      items={[
+                        p.default ? { label: 'Clear default', icon: StarOff, onSelect: () => setDefault(p, false) } : { label: 'Make default', icon: Star, onSelect: () => setDefault(p, true) },
+                        { label: '', separator: true },
+                        { label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeProfile(p) }
+                      ]}
+                    />
+                  </span>
                 </td>
               </tr>
             {/each}
@@ -327,9 +314,9 @@
         </table>
       </div>
     {/if}
-  </Card>
+  </Section>
 
-  <Card title="Installs" flush>
+  <Section title="Installs" count={installs.length || undefined}>
     {#if loading}
       <table class="tbl">
         {@render installHead()}
@@ -344,14 +331,14 @@
           <tbody>
             {#each installs as i (i.id)}
               <tr>
-                <td class="font-medium text-fg">{i.runtimeId}</td>
+                <td class="text-fg">{i.runtimeId}</td>
                 <td class="text-fg-muted">{enumLabel(InstallKind, i.kind)}</td>
                 <td class="font-mono text-xs">{i.version || '–'}</td>
-                <td class="max-w-xs truncate font-mono text-xs text-fg-muted" title={i.path}>{i.path}</td>
-                <td class="max-w-sm"><ParamList params={i.facts} max={4} /></td>
+                <td class="font-mono text-xs text-fg-muted" title={i.path}>{middle(i.path, 44)}</td>
+                <td class="max-w-sm"><ParamList params={i.facts} max={3} /></td>
                 <td class="text-fg-muted" title={when(i.createdAt)}>{ago(i.createdAt, clock.now)}</td>
                 <td class="actions">
-                  <Menu size="sm" items={[{ label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeInstall(i.id, i.runtimeId) }]} />
+                  <span><Menu size="sm" items={[{ label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeInstall(i.id, i.runtimeId) }]} /></span>
                 </td>
               </tr>
             {/each}
@@ -359,10 +346,9 @@
         </table>
       </div>
     {/if}
-  </Card>
+  </Section>
 
-  <Card title="Builds" flush>
-    <div id="builds"></div>
+  <Section title="Builds" count={builds.length || undefined} id="builds">
     {#if loading}
       <table class="tbl">
         {@render buildHead()}
@@ -378,20 +364,20 @@
             {#each builds as b (b.id)}
               <tr>
                 <td>
-                  <div class="font-medium text-fg">{b.runtimeId}</div>
+                  <div class="text-fg">{b.runtimeId}</div>
                   <div class="font-mono text-xs text-fg-faint">{b.recipeId} · {b.id.slice(0, 12)}</div>
                 </td>
                 <td class="text-fg-muted">{b.variant}</td>
                 <td class="font-mono text-xs">{b.ref || '–'}{#if b.commit}<span class="text-fg-faint"> @ {b.commit.slice(0, 8)}</span>{/if}</td>
                 <td>
-                  <StatePill values={BuildState} value={b.state} />
+                  <State values={BuildState} value={b.state} />
                   {#if b.error}<div class="mt-1 max-w-xs truncate text-xs text-bad" title={b.error}>{b.error}</div>{/if}
                 </td>
                 <td class="text-fg-muted">{enumLabel(SandboxKind, b.sandbox)}{b.image ? ` · ${b.image}` : ''}</td>
                 <td class="text-fg-muted" title={when(b.createdAt)}>{ago(b.createdAt, clock.now)}</td>
                 <td class="actions">
-                  <span class="inline-flex items-center gap-1">
-                    {#if b.taskId}<Button size="sm" variant="ghost" icon={ScrollText} onclick={() => (taskId = b.taskId)}>Log</Button>{/if}
+                  <span>
+                    {#if b.taskId}<IconButton size="sm" icon={ScrollText} label="Log" onclick={() => (taskId = b.taskId)} />{/if}
                     <Menu size="sm" items={[{ label: 'Remove', icon: Trash2, tone: 'bad', onSelect: () => removeBuild(b.id) }]} />
                   </span>
                 </td>
@@ -401,11 +387,11 @@
         </table>
       </div>
     {/if}
-  </Card>
+  </Section>
 </div>
 
-<Dialog bind:open={adoptOpen} title="Adopt {adoptRuntime}" description="Use a binary already on this host">
-  <Field label="Path" for="adopt-path" hint="Empty finds the binary on the daemon's PATH">
+<Dialog bind:open={adoptOpen} title="Adopt {adoptRuntime}" size="sm">
+  <Field label="Path" for="adopt-path" info="Empty finds the binary on the daemon's PATH">
     <input id="adopt-path" class="input font-mono" bind:value={adoptPath} placeholder={adoptNames(runtimes.find((r) => r.manifest?.id === adoptRuntime))} autocomplete="off" spellcheck="false" />
   </Field>
   {#snippet footer()}

@@ -2,6 +2,7 @@
   import { Dialog } from 'bits-ui';
   import { X } from '@lucide/svelte';
   import type { Snippet } from 'svelte';
+  import { readLocal, writeLocal } from '$lib/persist';
 
   // The side panel every page shares: one width, dragged wider, kept per browser
   let {
@@ -9,6 +10,7 @@
     id = $bindable(''),
     title,
     subtitle,
+    mono = false,
     header,
     children,
     footer
@@ -18,28 +20,21 @@
     id?: string;
     title: string;
     subtitle?: string;
+    mono?: boolean;
     header?: Snippet;
     children: Snippet;
     footer?: Snippet;
   } = $props();
 
   const widthKey = 'nebu.drawer.width';
-  const defaultShare = 0.44;
   const minWidth = 440;
   const minRemaining = 220;
 
-  let share = $state(defaultShare);
+  let share = $state(0.44);
   let dragging = $state(false);
 
-  function readShare() {
-    try {
-      const v = parseFloat(localStorage.getItem(widthKey) ?? '');
-      if (v >= 0.2 && v <= 0.95) share = v;
-    } catch {
-      // storage may be unavailable
-    }
-  }
-  readShare();
+  const saved = parseFloat(readLocal(widthKey));
+  if (saved >= 0.2 && saved <= 0.95) share = saved;
 
   function px(): number {
     if (typeof window === 'undefined') return 0;
@@ -62,11 +57,7 @@
       target.removeEventListener('pointermove', move);
       target.removeEventListener('pointerup', stop);
       target.removeEventListener('pointercancel', stop);
-      try {
-        localStorage.setItem(widthKey, share.toFixed(3));
-      } catch {
-        // storage may be unavailable
-      }
+      writeLocal(widthKey, share.toFixed(3));
     };
     target.addEventListener('pointermove', move);
     target.addEventListener('pointerup', stop);
@@ -84,27 +75,27 @@
   <Dialog.Portal>
     <Dialog.Overlay class="fade fixed inset-0 z-40 bg-black/50" />
     <Dialog.Content
-      class="enter-right fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-line bg-surface shadow-pop focus:outline-none {dragging ? 'select-none' : ''}"
+      class="enter-right fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-line bg-overlay shadow-pop focus:outline-none {dragging ? 'select-none' : ''}"
       style="max-width: {px()}px"
     >
       <div role="separator" aria-orientation="vertical" aria-label="Resize" class="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize" onpointerdown={startDrag}>
         <div class="mx-auto h-full w-px bg-transparent transition-colors group-hover:bg-accent/60 {dragging ? 'bg-accent' : ''}"></div>
       </div>
-      <header class="flex items-start gap-3 border-b border-line px-6 pt-5 pb-4">
+      <header class="flex items-start gap-3 px-6 pt-5 pb-0">
         <div class="min-w-0 flex-1">
-          <Dialog.Title class="truncate text-lg font-semibold text-fg">{title}</Dialog.Title>
+          <Dialog.Title class="truncate text-base font-semibold text-fg {mono ? 'font-mono' : ''}">{title}</Dialog.Title>
           {#if subtitle}<Dialog.Description class="mt-0.5 truncate text-sm text-fg-muted">{subtitle}</Dialog.Description>{/if}
           {#if header}<div class="mt-3">{@render header()}</div>{/if}
         </div>
-        <Dialog.Close class="-mt-1 -mr-2 rounded-lg p-1.5 text-fg-faint transition-colors hover:bg-raised hover:text-fg" aria-label="Close">
-          <X size={16} />
+        <Dialog.Close class="-mt-1 -mr-2 rounded-md p-1.5 text-fg-faint transition-colors hover:bg-raised hover:text-fg" aria-label="Close">
+          <X size={15} />
         </Dialog.Close>
       </header>
       <div class="min-h-0 flex-1 overflow-y-auto">
         {@render children()}
       </div>
       {#if footer}
-        <footer class="flex items-center gap-2 border-t border-line bg-bg/40 px-6 py-3.5">
+        <footer class="flex items-center gap-2 border-t border-line bg-sunken/40 px-6 py-3">
           {@render footer()}
         </footer>
       {/if}

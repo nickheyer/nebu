@@ -4,7 +4,7 @@
   import { bytes, count, duration, pct } from '$lib/format';
   import { TaskState, type Task } from '$proto/task_pb';
   import { Ban } from '@lucide/svelte';
-  import StatePill from './ui/StatePill.svelte';
+  import State from './ui/State.svelte';
   import Button from './ui/Button.svelte';
   import Progress from './ui/Progress.svelte';
   import LogView from './ui/LogView.svelte';
@@ -71,7 +71,7 @@
 <div class="flex flex-col gap-4">
   {#if task}
     <div class="flex flex-wrap items-center gap-3">
-      <StatePill values={TaskState} value={task.state} />
+      <State values={TaskState} value={task.state} />
       <span class="font-mono text-xs text-fg-faint">{task.kind}</span>
       <span class="text-sm tabular-nums text-fg-muted">{duration(task.startedAt ?? task.createdAt, task.finishedAt, clock.now)}</span>
       {#if active}
