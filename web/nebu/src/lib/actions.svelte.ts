@@ -2,6 +2,7 @@ import { Code } from '@connectrpc/connect';
 import { api, code, message } from './api';
 import { confirm } from './confirm.svelte';
 import { fail, ok } from './toast.svelte';
+import { startedTask, startedStop } from './state.svelte';
 import type { Slot } from '$proto/slot_pb';
 import type { StoredModel } from '$proto/store_pb';
 
@@ -67,7 +68,7 @@ export async function evictSlot(slot: Slot): Promise<boolean> {
 export async function relaunchSlot(slot: Slot): Promise<boolean> {
   try {
     const r = await api.slots.relaunchSlot({ id: slot.id });
-    ok(`Relaunching ${slot.name}`, slot.request?.repo, r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
+    startedTask(`Relaunching ${slot.name}`, `Relaunched ${slot.name}`, slot.request?.repo, r.task);
     return true;
   } catch (err) {
     fail(err, 'Relaunch refused');
@@ -81,7 +82,7 @@ export async function stopInstance(id: string, name: string): Promise<boolean> {
   if (!yes) return false;
   try {
     await api.instances.stopInstance({ id });
-    ok(`Stopping ${name}`);
+    startedStop(id, name);
     return true;
   } catch (err) {
     fail(err, 'Stop failed');

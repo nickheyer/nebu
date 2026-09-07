@@ -80,6 +80,9 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 		},
 		ProbedAt: timestamppb.Now(),
 	}
+	if home, err := os.UserHomeDir(); err == nil {
+		profile.Home = home
+	}
 	results := make([]probes.Result, len(p.probes))
 	var wg sync.WaitGroup
 	for i, pr := range p.probes {

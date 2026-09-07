@@ -4,7 +4,7 @@
   import { page } from '$app/state';
   import { tabState } from '$lib/tabs.svelte';
   import { api } from '$lib/api';
-  import { live, cached, clock, taskFor, instanceLive, installsOf } from '$lib/state.svelte';
+  import { live, cached, clock, taskFor, instanceLive, installsOf, startedTask } from '$lib/state.svelte';
   import { ago, enumLabel, newestFirst, when } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
@@ -20,7 +20,6 @@
   import Choices from '$lib/components/ui/Choices.svelte';
   import ParamList from '$lib/components/ui/ParamList.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
-  import Stat from '$lib/components/ui/Stat.svelte';
   import ConfigForm from '$lib/components/ConfigForm.svelte';
   import TaskChip from '$lib/components/TaskChip.svelte';
 
@@ -77,7 +76,7 @@
     installing = true;
     try {
       const r = await api.runtimes.install({ runtimeId: id, method, settings });
-      ok(`Installing ${manifest.name || id}`, howOf(option?.method).label, r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
+      startedTask(`Installing ${manifest.name || id}`, `Installed ${manifest.name || id}`, howOf(option?.method).label, r.task);
       tab.value = 'installs';
     } catch (err) {
       fail(err, 'Install refused');
@@ -130,7 +129,7 @@
       {#if task}
         <State tone="accent" pulse label={task.kind === 'build' ? 'Building' : 'Installing'} />
       {:else if installs.length}
-        <State tone="ok" label="Installed" />
+        <span title="Newest install added {when(installs[0].createdAt)}"><State tone="ok" label={installs[0].version ? `Installed ${installs[0].version}` : 'Installed'} /></span>
       {:else if !status.compatible}
         <State tone="warn" label="Not compatible" />
       {:else}
@@ -138,16 +137,13 @@
       {/if}
       <span>{manifest.description}</span>
     {/snippet}
-    {#if status.compatible && options.length && tab.value !== 'install'}
-      <Button variant={installs.length ? 'secondary' : 'primary'} icon={Download} onclick={() => (tab.value = 'install')}>Install</Button>
-    {/if}
     {#snippet below()}
       <Tabs tabs={tabs.map((t) => (t.id === 'installs' ? { ...t, count: installs.length || undefined } : t.id === 'builds' ? { ...t, count: builds.length || undefined } : t.id === 'params' ? { ...t, count: manifest.params.length || undefined } : t))} bind:value={tab.value} />
     {/snippet}
   </PageHeader>
 
   {#if tab.value === 'install'}
-    <div class="flex max-w-3xl flex-col gap-5">
+    <div class="mx-auto flex max-w-3xl flex-col gap-5">
       {#if task}
         <div class="card flex items-center gap-3 px-4 py-3">
           <TaskChip {task} />
@@ -227,7 +223,7 @@
               <span class="text-xs text-fg-faint">{enumLabel(InstallKind, i.kind)} · added {ago(i.createdAt, clock.now)}</span>
               <span class="ml-auto"><Button size="sm" variant="ghost" icon={Trash2} class="text-bad hover:text-bad" onclick={() => removeInstall(i.id)}>Remove</Button></span>
             </div>
-            <Kv class="mt-3" mono items={[['Path', i.path], ['Directory', i.dir], ['Origin', i.origin], ['Build', i.buildId || undefined]]} />
+            <Kv class="mt-3" mono omitEmpty items={[['Path', i.path], ['Directory', i.dir], ['Origin', i.origin], ['Build', i.buildId || undefined]]} />
             {#if Object.keys(i.facts).length}<div class="mt-3"><ParamList params={i.facts} /></div>{/if}
           </Card>
         {/each}
@@ -254,6 +250,7 @@
             <Kv
               class="mt-3"
               mono
+              omitEmpty
               columns={2}
               items={[
                 ['Recipe', b.recipeId],
@@ -323,12 +320,6 @@
           </ul>
         {:else}
           <p class="text-sm text-fg-faint">None.</p>
-        {/if}
-        {#if installs[0]}
-          <div class="mt-4 grid grid-cols-2 gap-4">
-            <Stat label="Newest install" value={installs[0].version || 'Unknown version'} sub={enumLabel(InstallKind, installs[0].kind)} />
-            <Stat label="Added" value={when(installs[0].createdAt)} />
-          </div>
         {/if}
       </Card>
     </div>

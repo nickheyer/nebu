@@ -185,6 +185,7 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 		OverheadDelta: in.OverheadDelta,
 		Params:        stringParams(in.Params),
 		Skipped:       skipped.list(),
+		AgainstFree:   in.Free,
 	}
 	if len(primary) > 0 && s.solve(0) {
 		plan.Verdict = v1.FitVerdict_FIT_VERDICT_FITS

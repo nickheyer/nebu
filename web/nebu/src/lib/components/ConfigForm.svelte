@@ -18,9 +18,8 @@
     values = next;
   }
 
-  // What the field shows while empty
+  // A hint of the shape a field takes, shown while empty and no default applies
   function hintFor(f: ConfigField): string {
-    if (f.default) return f.default;
     switch (f.type) {
       case ConfigType.PATH:
         return '/path/to/file';
@@ -50,9 +49,9 @@
         {#if f.choices.length}
           <Select id={fid} mono value={values[f.name] ?? ''} empty="Choose" onchange={(v) => set(f.name, v)} items={[...(f.default ? [{ value: '', label: `Default: ${f.default}` }] : []), ...f.choices.filter((c) => c !== f.default || !f.default).map((c) => ({ value: c, label: c }))]} />
         {:else if f.type === ConfigType.INT}
-          <NumberInput id={fid} integer empty={f.default} bind:value={() => values[f.name] ?? '', (v) => set(f.name, v)} />
+          <NumberInput id={fid} integer fallback={f.default} bind:value={() => values[f.name] ?? '', (v) => set(f.name, v)} />
         {:else}
-          <TextInput id={fid} mono={f.type !== ConfigType.STRING} type={f.type === ConfigType.URL ? 'url' : 'text'} empty={hintFor(f)} bind:value={() => values[f.name] ?? '', (v) => set(f.name, v)} />
+          <TextInput id={fid} mono={f.type !== ConfigType.STRING} type={f.type === ConfigType.URL ? 'url' : 'text'} fallback={f.default} empty={f.default ? '' : hintFor(f)} bind:value={() => values[f.name] ?? '', (v) => set(f.name, v)} />
         {/if}
       </Field>
     {/if}

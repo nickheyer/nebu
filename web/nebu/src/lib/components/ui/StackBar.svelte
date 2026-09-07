@@ -12,7 +12,7 @@
   import { bytes, pct } from '$lib/format';
 
   // Parts of one budget side by side, overflowing past the end in red when they do not fit
-  let { segments, max, legend = true, height = 'md', class: cls = '' }: { segments: Segment[]; max: bigint | number; legend?: boolean; height?: 'sm' | 'md' | 'lg'; class?: string } = $props();
+  let { segments, max, legend = true, height = 'md', capacity = '', class: cls = '' }: { segments: Segment[]; max: bigint | number; legend?: boolean; height?: 'sm' | 'md' | 'lg'; capacity?: string; class?: string } = $props();
 
   const fills: Record<Tone, string> = { ok: 'bg-ok', warn: 'bg-warn', bad: 'bg-bad', info: 'bg-info', accent: 'bg-accent', neutral: 'bg-fg-faint' };
   const heights = { sm: 'h-1', md: 'h-1.5', lg: 'h-2' };
@@ -41,7 +41,7 @@
           <span class="inline-flex items-center gap-1.5"><span class="inline-block h-1.5 w-1.5 rounded-full {fills[s.tone]}"></span>{s.label} <span class="text-fg">{bytes(s.value)}</span></span>
         {/if}
       {/each}
-      <span class="ml-auto {over ? 'text-bad' : 'text-fg-faint'}">{bytes(total)} of {bytes(max)}</span>
+      <span class="ml-auto {over ? 'text-bad' : 'text-fg-faint'}">{bytes(total)} of {bytes(max)}{capacity ? ` ${capacity}` : ''}</span>
     </div>
   {/if}
 </div>

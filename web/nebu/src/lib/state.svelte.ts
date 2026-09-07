@@ -5,19 +5,20 @@ import { PoolKind, type HostProfile, type Storage } from '$proto/host_pb';
 import { TaskState, type Task } from '$proto/task_pb';
 import { InstanceState, type Instance } from '$proto/instance_pb';
 import type { Slot } from '$proto/slot_pb';
-import type { GatewayStatus, Route, Trace } from '$proto/gateway_pb';
+import { TraceKind, type GatewayStatus, type Route, type Trace } from '$proto/gateway_pb';
 import type { Install, RuntimeStatus } from '$proto/runtime_pb';
 import type { FormatSpec } from '$proto/model_pb';
 import type { Build } from '$proto/recipe_pb';
 import type { StoredModel, StoreStatus } from '$proto/store_pb';
-import { fail, ok } from './toast.svelte';
+import { fail, started, settle as settleToast } from './toast.svelte';
 import type { Source, SourceStatus } from '$proto/source_pb';
 import type { Settings } from '$proto/settings_pb';
 import { newestFirst } from './format';
 import { weightsName } from './catalog';
 
-// Traces kept in the browser, the newest ones the gateway keeps
+// Traces kept in the browser, as many of each kind as the gateway keeps
 const traceLimit = 500;
+const countLimit = 50;
 
 // Everything the UI shows, kept current by the event stream
 export const live = $state({
@@ -102,17 +103,75 @@ function settle() {
   live.ready = true;
 }
 
-// Keeps one trace, dropping the oldest once the browser holds as many as the gateway does
+// How many traces of each kind the browser holds, so the cap costs nothing to check per event
+let answersHeld = 0;
+let countsHeld = 0;
+
+// Keeps one trace, dropping the oldest of its kind once the browser holds as many as the gateway does
 function keepTrace(t: Trace) {
+  const counting = t.kind === TraceKind.COUNT;
+  if (!live.traces.has(t.id)) {
+    if (counting) countsHeld++;
+    else answersHeld++;
+  }
   live.traces.set(t.id, t);
-  if (live.traces.size <= traceLimit) return;
-  const oldest = [...live.traces.values()].sort((a, b) => Number((a.startedAt?.seconds ?? 0n) - (b.startedAt?.seconds ?? 0n)));
-  for (const t of oldest.slice(0, live.traces.size - traceLimit)) live.traces.delete(t.id);
+  const limit = counting ? countLimit : traceLimit;
+  const held = counting ? countsHeld : answersHeld;
+  if (held <= limit) return;
+  const oldest = [...live.traces.values()].filter((x) => (x.kind === TraceKind.COUNT) === counting).sort((a, b) => Number((a.startedAt?.seconds ?? 0n) - (b.startedAt?.seconds ?? 0n)));
+  for (const x of oldest.slice(0, held - limit)) live.traces.delete(x.id);
+  if (counting) countsHeld = limit;
+  else answersHeld = limit;
+}
+
+// A toast for something this browser started, turned into its ending when the daemon reports one
+interface Started {
+  toast: number;
+  title: string;
+  done: string;
+  detail?: string;
+}
+const taskToasts = new Map<string, Started>();
+const stopToasts = new Map<string, Started>();
+
+// Toasts a task this browser started, with the title it gets once it has finished
+export function startedTask(title: string, done: string, detail: string | undefined, task: Task | undefined) {
+  const id = started(title, detail, task ? { href: `/tasks/${task.id}`, label: 'Open task' } : undefined);
+  if (!task) return;
+  taskToasts.set(task.id, { toast: id, title, done, detail });
+  settleTask(live.tasks.get(task.id) ?? task);
+}
+
+function settleTask(t: Task) {
+  const s = taskToasts.get(t.id);
+  if (!s || taskActive(t)) return;
+  taskToasts.delete(t.id);
+  const link = { href: `/tasks/${t.id}`, linkLabel: 'Open task' };
+  if (t.state === TaskState.SUCCEEDED) settleToast(s.toast, { tone: 'ok', title: s.done, detail: s.detail, ...link });
+  else if (t.state === TaskState.FAILED) settleToast(s.toast, { tone: 'bad', title: `${s.title} failed`, detail: t.error || s.detail, ...link });
+  else settleToast(s.toast, { tone: 'neutral', title: `${s.title} canceled`, detail: s.detail, ...link });
+}
+
+// Toasts an instance this browser asked to stop
+export function startedStop(id: string, name: string) {
+  stopToasts.set(id, { toast: started(`Stopping ${name}`), title: `Stopping ${name}`, done: `Stopped ${name}` });
+  const known = live.instances.get(id);
+  if (known) settleStop(known);
+}
+
+function settleStop(i: Instance) {
+  const s = stopToasts.get(i.id);
+  if (!s || instanceLive(i)) return;
+  stopToasts.delete(i.id);
+  if (i.state === InstanceState.FAILED) settleToast(s.toast, { tone: 'bad', title: `${s.title} failed`, detail: i.error || undefined });
+  else settleToast(s.toast, { tone: 'ok', title: s.done });
 }
 
 // Folds one event into the state
 function apply(ev: Event) {
   const p = ev.payload;
+  if (ev.kind === EventKind.TASK && p.case === 'task') settleTask(p.value);
+  if (ev.kind === EventKind.INSTANCE && p.case === 'instance') settleStop(p.value);
   // A new install changes which methods a runtime offers, so the runtime list is reread too
   if (ev.seq > 0n && (ev.kind === EventKind.HOST || ev.kind === EventKind.SOURCE || ev.kind === EventKind.INSTALL)) invalidateCached();
   if (ev.kind === EventKind.HOST) {
@@ -150,7 +209,8 @@ async function loadTraces(signal: AbortSignal) {
   try {
     const r = await api.gateway.listTraces({ limit: traceLimit }, { signal });
     live.traces.clear();
-    for (const t of r.traces) live.traces.set(t.id, t);
+    answersHeld = countsHeld = 0;
+    for (const t of r.traces) keepTrace(t);
   } catch (err) {
     if (!signal.aborted) live.error = message(err);
   }
@@ -212,12 +272,21 @@ export function disconnect() {
 export async function probeHost(): Promise<boolean> {
   try {
     const r = await api.host.doctor({});
-    ok('Probing host', undefined, r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
+    startedTask('Probing host', 'Probed host', undefined, r.task);
     return true;
   } catch (err) {
     fail(err, 'Probe failed');
     return false;
   }
+}
+
+// A path under the daemon's home directory shown from ~, any other as it is
+export function homePath(path: string): string {
+  const home = live.host?.home;
+  if (!home) return path;
+  if (path === home) return '~';
+  const root = home.endsWith('/') ? home : home + '/';
+  return path.startsWith(root) ? '~/' + path.slice(root.length) : path;
 }
 
 // What this host is called: its label, else its hostname
@@ -337,4 +406,9 @@ export function groupLabel(m: { sourceId: string; repo: string; group: string; f
 // Traces newest first, one route's when named
 export function tracesOf(route = ''): Trace[] {
   return [...live.traces.values()].filter((t) => !route || t.route === route).sort(newestFirst((t) => t.startedAt));
+}
+
+// Answers newest first, token counts left out, one route's when named
+export function answersOf(route = ''): Trace[] {
+  return tracesOf(route).filter((t) => t.kind !== TraceKind.COUNT);
 }

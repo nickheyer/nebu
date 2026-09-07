@@ -12,6 +12,7 @@ import (
 
 	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // A runtime that streams two words and a usage line in the OpenAI shape
@@ -133,12 +134,35 @@ func TestTraces(t *testing.T) {
 			t.Fatalf("events %v", seen)
 		}
 	}
+
+	// A token count is traced as one, in its own ring, and is not a request served
+	served := g.Status().GetRequests()
+	resp, err = http.Post(srv.URL+"/v1/messages/count_tokens", "application/json", strings.NewReader(`{"model":"m1","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	tr = waitTrace(t, g, resp.Header.Get(traceHeader))
+	if tr.GetKind() != v1.TraceKind_TRACE_KIND_COUNT || tr.GetStatus() != 200 || tr.GetPromptTokens() == 0 {
+		t.Fatalf("count trace %v", tr)
+	}
+	if g.Status().GetRequests() != served {
+		t.Fatal("a count was tallied as a request served")
+	}
+	if len(g.Traces().counts.items) != 1 || len(g.Traces().main.items) != 3 {
+		t.Fatalf("count ring %d main ring %d", len(g.Traces().counts.items), len(g.Traces().main.items))
+	}
+	if all = g.Traces().List("", 0); len(all) != 4 || all[0].GetKind() != v1.TraceKind_TRACE_KIND_COUNT {
+		t.Fatalf("merged list %v", all)
+	}
 }
 
 func TestRecorderRing(t *testing.T) {
-	r := NewRecorder(nil, 2)
-	for _, id := range []string{"a", "b", "c"} {
-		r.Start(&v1.Trace{Id: id, Route: "m"})
+	r := NewRecorder(nil, 2, 1)
+	at := func(sec int64) *timestamppb.Timestamp { return &timestamppb.Timestamp{Seconds: sec} }
+	for i, id := range []string{"a", "b", "c"} {
+		r.Start(&v1.Trace{Id: id, Route: "m", StartedAt: at(int64(i))})
 	}
 	if _, ok := r.Get("a"); ok {
 		t.Fatal("oldest should be dropped")
@@ -147,9 +171,30 @@ func TestRecorderRing(t *testing.T) {
 	if len(list) != 2 || list[0].GetId() != "c" || list[1].GetId() != "b" {
 		t.Fatalf("ring order %v", list)
 	}
-	r.Finish(&v1.Trace{Id: "b", Route: "m", Status: 200})
+	r.Finish(&v1.Trace{Id: "b", Route: "m", Status: 200, StartedAt: at(1)})
 	if got, _ := r.Get("b"); got.GetStatus() != 200 || got.GetFinishedAt() == nil {
 		t.Fatalf("finish %v", got)
+	}
+	// Token counts fill their own ring and never push an answer out
+	r.Start(&v1.Trace{Id: "n1", Route: "m", Kind: v1.TraceKind_TRACE_KIND_COUNT, StartedAt: at(3)})
+	r.Start(&v1.Trace{Id: "n2", Route: "m", Kind: v1.TraceKind_TRACE_KIND_COUNT, StartedAt: at(4)})
+	if _, ok := r.Get("n1"); ok {
+		t.Fatal("the count ring should hold one")
+	}
+	if _, ok := r.Get("b"); !ok {
+		t.Fatal("a count dropped an answer")
+	}
+	list = r.List("", 0)
+	if len(list) != 3 || list[0].GetId() != "n2" || list[1].GetId() != "c" || list[2].GetId() != "b" {
+		t.Fatalf("merged order %v", list)
+	}
+	if list = r.List("", 1); len(list) != 1 || list[0].GetId() != "n2" {
+		t.Fatalf("merged limit %v", list)
+	}
+	// A count that started before an answer lists after it
+	r.Start(&v1.Trace{Id: "n0", Route: "m", Kind: v1.TraceKind_TRACE_KIND_COUNT, StartedAt: at(0)})
+	if list = r.List("", 0); list[len(list)-1].GetId() != "n0" {
+		t.Fatalf("merge by start %v", list)
 	}
 }
 

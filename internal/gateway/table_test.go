@@ -32,10 +32,10 @@ func TestTableLifecycle(t *testing.T) {
 	if r.GetState() != v1.RouteState_ROUTE_STATE_PENDING || r.GetSlotId() != "s1" {
 		t.Fatalf("pending %v", r)
 	}
-	if _, _, _, err := table.Acquire("main"); !errors.Is(err, ErrPending) {
+	if _, _, _, err := table.Acquire("main", true); !errors.Is(err, ErrPending) {
 		t.Fatalf("pending acquire %v", err)
 	}
-	if _, _, _, err := table.Acquire("nope"); !errors.Is(err, ErrNoRoute) {
+	if _, _, _, err := table.Acquire("nope", true); !errors.Is(err, ErrNoRoute) {
 		t.Fatalf("missing acquire %v", err)
 	}
 	r = table.Set("main", "i1", "s1", "http://a", "repo:q4", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
@@ -43,7 +43,7 @@ func TestTableLifecycle(t *testing.T) {
 		t.Fatalf("ready %v", r)
 	}
 	table.Set("alias", "i1", "", "http://a", "repo:q4", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
-	route, _, release, err := table.Acquire("main")
+	route, _, release, err := table.Acquire("main", true)
 	if err != nil || route.GetEndpoint() != "http://a" {
 		t.Fatalf("acquire %v %v", route, err)
 	}
@@ -53,8 +53,19 @@ func TestTableLifecycle(t *testing.T) {
 	if got, _ := table.Lookup("main"); got.GetInFlight() != 1 || got.GetRequests() != 1 {
 		t.Fatalf("lookup counters %v", got)
 	}
+	// A token count holds a place in flight but is not a request served
+	if _, _, releaseCount, err := table.Acquire("main", false); err != nil {
+		t.Fatalf("count acquire %v", err)
+	} else if table.InFlight("i1") != 2 || table.Requests() != 1 {
+		t.Fatal("a count changed the served tally")
+	} else {
+		releaseCount()
+	}
+	if got, _ := table.Lookup("main"); got.GetInFlight() != 1 || got.GetRequests() != 1 {
+		t.Fatalf("counters after a count %v", got)
+	}
 	table.Drain("i1")
-	if _, _, _, err := table.Acquire("main"); !errors.Is(err, ErrDraining) {
+	if _, _, _, err := table.Acquire("main", true); !errors.Is(err, ErrDraining) {
 		t.Fatalf("draining acquire %v", err)
 	}
 	if table.WaitDrained(context.Background(), "i1", 30*time.Millisecond) {

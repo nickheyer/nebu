@@ -11,7 +11,7 @@
   <p class="text-sm text-fg-faint">{empty}</p>
 {:else}
   <div class="relative">
-    <pre class="code {height} overflow-auto whitespace-pre-wrap break-all pr-10">{shown}</pre>
+    <pre class="code {height} overflow-auto whitespace-pre-wrap wrap-anywhere pr-10">{shown}</pre>
     <div class="absolute top-1.5 right-1.5"><Copy text={shown} /></div>
   </div>
 {/if}

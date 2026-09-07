@@ -1,6 +1,6 @@
 <script lang="ts">
   import { clock } from '$lib/state.svelte';
-  import { ago, enumLabel, millisBetween, ms, rate, when } from '$lib/format';
+  import { ago, clockTime, enumLabel, millisBetween, ms, rate, when } from '$lib/format';
   import { TraceKind, type Trace } from '$proto/gateway_pb';
   import { ApiFlavor } from '$proto/runtime_pb';
   import Empty from './ui/Empty.svelte';
@@ -36,7 +36,7 @@
       <tbody>
         {#each traces as t (t.id)}
           <tr class="row-link {selected === t.id ? 'row-active' : ''}" onclick={() => onSelect?.(t)}>
-            <td class="whitespace-nowrap text-fg-muted" title={when(t.startedAt)}>{ago(t.startedAt, clock.now)}</td>
+            <td class="whitespace-nowrap font-mono text-xs tabular-nums text-fg-muted" title="{ago(t.startedAt, clock.now)} · {when(t.startedAt)}">{clockTime(t.startedAt, clock.now)}</td>
             {#if showRoute}<td class="max-w-[12rem] truncate font-mono text-xs text-fg">{t.route || '–'}</td>{/if}
             <td class="text-fg-muted">{enumLabel(TraceKind, t.kind)}</td>
             <td class="font-mono text-xs text-fg-muted">{format(t)}</td>

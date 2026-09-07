@@ -46,6 +46,8 @@ message MemoryPlan {
   double overhead_delta = 9;
   // Groups the runtime leaves on disk under these params, a draft head without speculative decoding
   repeated Placement skipped = 10;
+  // Whether pool capacities are the memory free when the plan was made rather than whole pools
+  bool against_free = 11;
 }
 
 // Learned correction for one runtime and architecture

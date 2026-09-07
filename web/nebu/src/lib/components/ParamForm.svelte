@@ -55,12 +55,13 @@
     if (v !== undefined && v !== '') return v;
     if (p.solved) return 'auto';
     if (p.default.includes('{{')) return 'set at launch';
-    return p.default || 'unset';
+    return p.default;
   }
   function beneathLabel(p: Param): string {
     const v = inherited[p.name];
     if (v !== undefined && v !== '') return `Slot default: ${v}`;
-    return `Default: ${beneath(p)}`;
+    const b = beneath(p);
+    return b ? `Default: ${b}` : 'Not set';
   }
 
   function numeric(p: Param): boolean {
@@ -107,9 +108,9 @@
     {:else if p.type === ParamType.BOOL}
       <Select id={fid} value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneathLabel(p) }, { value: 'true', label: 'On' }, { value: 'false', label: 'Off' }]} />
     {:else if numeric(p)}
-      <NumberInput id={fid} min={p.min || undefined} max={p.max || undefined} step={p.step || undefined} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
+      <NumberInput id={fid} min={p.min || undefined} max={p.max || undefined} step={p.step || undefined} unit={p.unit || undefined} integer={p.type === ParamType.INT} fallback={beneath(p)} empty={beneath(p) ? '' : 'not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
     {:else}
-      <TextInput id={fid} mono empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
+      <TextInput id={fid} mono fallback={beneath(p)} empty={beneath(p) ? '' : 'not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
     {/if}
   </Field>
 {/snippet}

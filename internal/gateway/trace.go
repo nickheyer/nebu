@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	// Traces the recorder keeps before the oldest is dropped
+	// Inference traces the recorder keeps before the oldest is dropped
 	traceRing = 500
+	// Token count traces the recorder keeps, in a ring of their own
+	countRing = 50
 	// Bytes of each body a trace keeps
 	traceBodyCap = 64 << 10
 	// The response header naming the trace of the request
@@ -26,21 +28,53 @@ const (
 //
 // A request's trace is written by the goroutine serving it and handed over
 // as a copy when it starts and when it ends, so readers never race a writer.
+// Token counts ring separately so they never evict answers.
 type Recorder struct {
 	events *events.Bus
-	size   int
 
-	mu   sync.Mutex
-	ring []*v1.Trace
-	byID map[string]*v1.Trace
+	mu     sync.Mutex
+	main   ring
+	counts ring
+	byID   map[string]*v1.Trace
 }
 
-// Builds a recorder that keeps size traces, the default when zero
-func NewRecorder(bus *events.Bus, size int) *Recorder {
+// Traces in the order they started, the oldest dropped past a size
+type ring struct {
+	size  int
+	items []*v1.Trace
+}
+
+// Appends a trace, returning the ids of those dropped to make room
+func (r *ring) add(t *v1.Trace) []string {
+	r.items = append(r.items, t)
+	var dropped []string
+	for len(r.items) > r.size {
+		dropped = append(dropped, r.items[0].GetId())
+		r.items[0] = nil
+		r.items = r.items[1:]
+	}
+	return dropped
+}
+
+// Swaps a newer copy in for the trace with its id
+func (r *ring) replace(t *v1.Trace) {
+	for i, old := range r.items {
+		if old.GetId() == t.GetId() {
+			r.items[i] = t
+			return
+		}
+	}
+}
+
+// Builds a recorder that keeps size inference traces and counts token counts, the defaults when zero
+func NewRecorder(bus *events.Bus, size, counts int) *Recorder {
 	if size <= 0 {
 		size = traceRing
 	}
-	return &Recorder{events: bus, size: size, byID: map[string]*v1.Trace{}}
+	if counts <= 0 {
+		counts = countRing
+	}
+	return &Recorder{events: bus, main: ring{size: size}, counts: ring{size: counts}, byID: map[string]*v1.Trace{}}
 }
 
 // Records a trace as it starts
@@ -56,36 +90,55 @@ func (r *Recorder) Finish(t *v1.Trace) {
 	r.put(t, v1.EventAction_EVENT_ACTION_UPDATED)
 }
 
+// The ring a trace belongs in, by its kind
+func (r *Recorder) ringOf(t *v1.Trace) *ring {
+	if t.GetKind() == v1.TraceKind_TRACE_KIND_COUNT {
+		return &r.counts
+	}
+	return &r.main
+}
+
 func (r *Recorder) put(t *v1.Trace, action v1.EventAction) {
 	snapshot := proto.Clone(t).(*v1.Trace)
 	r.mu.Lock()
+	rg := r.ringOf(snapshot)
 	if _, known := r.byID[snapshot.GetId()]; !known {
-		r.ring = append(r.ring, snapshot)
-		for len(r.ring) > r.size {
-			delete(r.byID, r.ring[0].GetId())
-			r.ring[0] = nil
-			r.ring = r.ring[1:]
+		for _, id := range rg.add(snapshot) {
+			delete(r.byID, id)
 		}
 	} else {
-		for i, old := range r.ring {
-			if old.GetId() == snapshot.GetId() {
-				r.ring[i] = snapshot
-				break
-			}
-		}
+		rg.replace(snapshot)
 	}
 	r.byID[snapshot.GetId()] = snapshot
 	r.mu.Unlock()
 	r.events.Publish(v1.EventKind_EVENT_KIND_TRACE, action, snapshot.GetId(), summary(snapshot))
 }
 
-// Lists traces newest first, one route's when named, at most limit when positive, bodies left out
+// Whether a started before b
+func startedBefore(a, b *v1.Trace) bool {
+	x, y := a.GetStartedAt(), b.GetStartedAt()
+	if x.GetSeconds() != y.GetSeconds() {
+		return x.GetSeconds() < y.GetSeconds()
+	}
+	return x.GetNanos() < y.GetNanos()
+}
+
+// Lists traces newest first across both rings, one route's when named, at most limit when positive, bodies left out
 func (r *Recorder) List(route string, limit int) []*v1.Trace {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out []*v1.Trace
-	for i := len(r.ring) - 1; i >= 0; i-- {
-		t := r.ring[i]
+	i, j := len(r.main.items)-1, len(r.counts.items)-1
+	for i >= 0 || j >= 0 {
+		var t *v1.Trace
+		// The newer head of the two rings goes next, the inference ring first on a tie
+		if j < 0 || (i >= 0 && !startedBefore(r.main.items[i], r.counts.items[j])) {
+			t = r.main.items[i]
+			i--
+		} else {
+			t = r.counts.items[j]
+			j--
+		}
 		if route != "" && t.GetRoute() != route {
 			continue
 		}

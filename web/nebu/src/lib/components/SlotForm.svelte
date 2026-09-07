@@ -95,7 +95,7 @@
         <TextInput id="slot-name" mono bind:value={name} empty="main" invalid={badName || nameTaken} />
       </Field>
       <Field label="Position" for="slot-position" description="Order in the list.">
-        <NumberInput id="slot-position" integer min={1} max={count + (creating ? 1 : 0)} bind:value={position} empty={creating ? String(count + 1) : ''} />
+        <NumberInput id="slot-position" integer min={1} max={count + (creating ? 1 : 0)} bind:value={position} fallback={creating ? String(count + 1) : ''} />
       </Field>
       <Field label="Description" for="slot-desc" class="sm:col-span-2">
         <TextInput id="slot-desc" bind:value={description} empty="What this slot is for" />
@@ -105,11 +105,11 @@
 
   <Card title="Reservation" meta={occupied ? 'Applies to the next run' : undefined}>
     <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
-      <Field label="Devices" for="slot-devices" class="sm:col-span-2" description="The model runs on these devices only.">
+      <Field label="Devices" for="slot-devices" class="sm:col-span-2" description="Where the model in this slot is placed.">
         <DevicePicker id="slot-devices" bind:value={devices} />
       </Field>
       <Field label="Memory cap" for="slot-memory" description="Per device. Plans stay under this instead of using the whole device." error={badBudget ? 'A number of GiB, such as 8' : undefined}>
-        <NumberInput id="slot-memory" min={0} step={0.5} unit="GiB" bind:value={memory} empty="whole device" invalid={badBudget} />
+        <NumberInput id="slot-memory" min={0} step={0.5} unit="GiB" bind:value={memory} fallback="whole device" invalid={badBudget} />
       </Field>
       <Field label="Runtime" for="slot-runtime" description="Used for every run in this slot unless a run picks another.">
         <Select id="slot-runtime" bind:value={runtimeId} items={[{ value: '', label: 'First compatible runtime' }, ...cached.runtimes.map((rt) => ({ value: rt.manifest?.id ?? '', label: rt.manifest?.name ?? rt.manifest?.id ?? '', detail: rt.compatible ? undefined : 'not compatible with this host', disabled: !rt.compatible }))]} />

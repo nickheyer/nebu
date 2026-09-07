@@ -146,6 +146,16 @@ export function when(ts?: Timestamp): string {
   return timestampDate(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+// Formats a timestamp as a clock time with seconds, the date in front when it is not today
+export function clockTime(ts: Timestamp | undefined, now: number = Date.now()): string {
+  if (!ts) return '–';
+  const d = timestampDate(ts);
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const today = new Date(now);
+  const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+  return sameDay ? time : `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${time}`;
+}
+
 // Formats a timestamp relative to now, now passed so callers stay reactive
 export function ago(ts: Timestamp | undefined, now: number = Date.now()): string {
   if (!ts) return '–';

@@ -128,7 +128,7 @@ func (m *Manager) Adopt(ctx context.Context, runtimeID, path string) (*v1.Instal
 		}
 		path = onPath(names)
 		if path == "" {
-			return nil, fmt.Errorf("%w: none of %v found on PATH, pass a path", runtime.ErrParam, names)
+			return nil, fmt.Errorf("%w: %s, pass a path", runtime.ErrParam, notOnPath(names))
 		}
 	}
 	abs, err := filepath.Abs(path)
@@ -152,6 +152,14 @@ func (m *Manager) Adopt(ctx context.Context, runtimeID, path string) (*v1.Instal
 		return nil, err
 	}
 	return in, nil
+}
+
+// Says that the binaries looked for were not on PATH, one by name and several as a list
+func notOnPath(names []string) string {
+	if len(names) == 1 {
+		return names[0] + " is not on PATH"
+	}
+	return "none of " + strings.Join(names, ", ") + " is on PATH"
 }
 
 // The first of names found on PATH, empty when none is
@@ -189,7 +197,7 @@ func (m *Manager) Options(ctx context.Context, rt *runtime.Runtime, profile *v1.
 			found := onPath(how.Adopt.GetNames())
 			opt.Fields = []*v1.ConfigField{{Name: fieldPath, Label: "Binary", Type: v1.ConfigType_CONFIG_TYPE_PATH, Required: found == "", Default: found, Description: "Path of " + strings.Join(how.Adopt.GetNames(), " or ")}}
 			if found == "" {
-				opt.Unmet = []string{"none of " + strings.Join(how.Adopt.GetNames(), ", ") + " on PATH"}
+				opt.Unmet = []string{notOnPath(how.Adopt.GetNames())}
 			}
 		case *v1.InstallMethod_Prebuilt:
 			// Only the builds published for this host are offered, the first of them by default
@@ -294,7 +302,7 @@ func (m *Manager) plan(ctx context.Context, rt *runtime.Runtime, profile *v1.Hos
 			p.path = onPath(how.Adopt.GetNames())
 		}
 		if p.path == "" {
-			return nil, fmt.Errorf("%w: none of %s on PATH, set path", runtime.ErrParam, strings.Join(how.Adopt.GetNames(), ", "))
+			return nil, fmt.Errorf("%w: %s, set path", runtime.ErrParam, notOnPath(how.Adopt.GetNames()))
 		}
 	case *v1.InstallMethod_Prebuilt:
 		if id := strings.TrimSpace(settings[fieldBuild]); id != "" {

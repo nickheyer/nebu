@@ -86,7 +86,7 @@
       <button class="fade fixed inset-0 z-30 bg-black/50 lg:hidden" aria-label="Close menu" onclick={() => (menuOpen = false)}></button>
     {/if}
     <nav
-      class="fixed inset-y-0 left-0 z-40 flex h-screen w-56 shrink-0 flex-col border-r border-line bg-bg transition-transform lg:sticky lg:top-0 lg:translate-x-0 {menuOpen ? 'translate-x-0 shadow-pop' : '-translate-x-full'}"
+      class="fixed inset-y-0 left-0 z-40 flex h-screen w-56 shrink-0 flex-col border-r border-line bg-bg transition-transform lg:translate-x-0 {menuOpen ? 'translate-x-0 shadow-pop' : '-translate-x-full'}"
       aria-label="Main"
     >
       <div class="flex h-14 items-center gap-3 px-4">
@@ -121,7 +121,7 @@
       </div>
     </nav>
 
-    <div class="flex min-w-0 flex-1 flex-col">
+    <div class="flex min-w-0 flex-1 flex-col overflow-x-clip lg:pl-56">
       <div class="flex h-14 items-center gap-3 border-b border-line bg-bg px-4 lg:hidden">
         <button class="rounded-md p-1.5 text-fg-muted hover:bg-raised hover:text-fg" aria-label="Open menu" onclick={() => (menuOpen = true)}><MenuIcon size={17} /></button>
         <Logo size={22} class="text-fg" />

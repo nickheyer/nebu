@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from '$app/state';
   import { tabState } from '$lib/tabs.svelte';
-  import { live, clock, instanceLive, slotName, groupLabel, runtimeName, tracesOf } from '$lib/state.svelte';
+  import { live, clock, instanceLive, slotName, groupLabel, runtimeName, answersOf } from '$lib/state.svelte';
   import { launch } from '$lib/launch';
   import { stopInstance } from '$lib/actions.svelte';
   import { bytes, when, duration, count, commandLines } from '$lib/format';
@@ -18,7 +18,7 @@
   import Empty from '$lib/components/ui/Empty.svelte';
   import Stat from '$lib/components/ui/Stat.svelte';
   import ParamList from '$lib/components/ui/ParamList.svelte';
-  import PlanView from '$lib/components/PlanView.svelte';
+  import PlanView, { solvedParams } from '$lib/components/PlanView.svelte';
   import InstanceLog from '$lib/components/InstanceLog.svelte';
   import TraceTable from '$lib/components/TraceTable.svelte';
   import TraceDetail from '$lib/components/TraceDetail.svelte';
@@ -38,7 +38,7 @@
   const routeName = $derived(instance ? (instance.slotId ? slotName(instance.slotId) : instance.name) : '');
   const route = $derived(routeName ? live.routes.get(routeName) : undefined);
   const install = $derived(instance?.installId ? live.installs.get(instance.installId) : undefined);
-  const traces = $derived(instance ? tracesOf().filter((t) => t.instanceId === instance.id) : []);
+  const traces = $derived(instance ? answersOf().filter((t) => t.instanceId === instance.id) : []);
   const tab = tabState(() => tabs.map((t) => t.id), () => 'overview');
   let selectedTrace = $state('');
   let stopping = $state(false);
@@ -141,18 +141,28 @@
       {#if instance.command.length}
         <Card title="Command">
           {#snippet actions()}<Copy text={instance.command.join(' ')} size={13} /> {/snippet}
-          <pre class="code whitespace-pre-wrap break-all">{commandLines(instance.command)}</pre>
+          <pre class="code whitespace-pre-wrap wrap-anywhere">{commandLines(instance.command)}</pre>
         </Card>
       {/if}
     </div>
   {:else if tab.value === 'plan'}
-    <Card>
-      {#if instance.plan}
-        <PlanView plan={instance.plan} />
-      {:else}
-        <p class="text-sm text-fg-faint">No plan was recorded for this instance.</p>
-      {/if}
-    </Card>
+    {#if instance.plan}
+      {@const solved = solvedParams(instance.plan)}
+      <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <Card title="Memory plan" meta={instance.plan.againstFree ? 'against memory free at launch' : 'against whole devices'}>
+          <PlanView plan={instance.plan} params={false} />
+        </Card>
+        <Card title="Parameters" meta="as the plan solved them">
+          {#if Object.keys(solved).length}
+            <ParamList params={solved} />
+          {:else}
+            <p class="text-sm text-fg-faint">The plan set no parameters.</p>
+          {/if}
+        </Card>
+      </div>
+    {:else}
+      <Card><p class="text-sm text-fg-faint">No plan was recorded for this instance.</p></Card>
+    {/if}
   {:else if tab.value === 'log'}
     <InstanceLog id={instance.id} follow={alive} height="h-[calc(100vh-18rem)]" />
   {:else if tab.value === 'requests'}

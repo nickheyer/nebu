@@ -1,6 +1,6 @@
 import { api } from './api';
-import { live, instanceLive } from './state.svelte';
-import { fail, ok } from './toast.svelte';
+import { live, instanceLive, startedTask } from './state.svelte';
+import { fail } from './toast.svelte';
 
 export interface RunSpec {
   sourceId: string;
@@ -30,7 +30,8 @@ export async function launch(spec: RunSpec, drainFirst = false, refused?: (err: 
     const task = swap ? (await api.slots.swap({ slotId: spec.slotId!, run, drainFirst })).task : (await api.instances.run(run)).task;
     const id = task?.id ?? '';
     const target = spec.slotId ? ` in ${live.slots.get(spec.slotId)?.name ?? 'slot'}` : '';
-    ok(`${swap ? 'Swapping' : 'Starting'} ${spec.repo.split('/').pop()}${target}`, spec.group, id ? { href: `/tasks/${id}`, label: 'Open task' } : undefined);
+    const what = `${spec.repo.split('/').pop()}${target}`;
+    startedTask(`${swap ? 'Swapping' : 'Starting'} ${what}`, `${swap ? 'Swapped' : 'Started'} ${what}`, spec.group, task);
     return id;
   } catch (err) {
     fail(err, swap ? 'Swap refused' : 'Run refused');

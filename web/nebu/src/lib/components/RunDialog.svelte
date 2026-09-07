@@ -161,16 +161,18 @@
           {#if current.descriptor?.bitsPerWeight}<span class="kv"><span>bits/weight</span><span>{current.descriptor.bitsPerWeight.toFixed(1)}</span></span>{/if}
         </div>
 
-        <Field label="Run in" for="run-target">
-          <Choices
-            label="Run in"
-            bind:value={slot}
-            items={[
-              { id: '', label: 'No slot', detail: 'runs under its own name' },
-              ...slots.map((s) => ({ id: s.id, label: `${s.position}. ${s.name}`, mono: true, detail: slotOccupied(s.id) ? `replaces ${tail(s.request?.repo ?? '')}` : 'empty', warn: slotOccupied(s.id) }))
-            ]}
-          />
-        </Field>
+        {#if slots.length}
+          <Field label="Run in" for="run-target">
+            <Choices
+              label="Run in"
+              bind:value={slot}
+              items={[
+                { id: '', label: 'No slot', detail: 'runs under its own name' },
+                ...slots.map((s) => ({ id: s.id, label: `${s.position}. ${s.name}`, mono: true, detail: slotOccupied(s.id) ? `replaces ${tail(s.request?.repo ?? '')}` : 'empty', warn: slotOccupied(s.id) }))
+              ]}
+            />
+          </Field>
+        {/if}
 
         <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
           <Field label="Runtime" for="run-runtime" error={!compatible.length ? `No compatible runtime serves ${formatId}` : undefined}>
@@ -189,7 +191,7 @@
           </Field>
           {#if !slot}
             <Field label="Model name" for="run-name" description="Clients send this as the model name." class="sm:col-span-2">
-              <TextInput id="run-name" mono bind:value={name} empty="{tail(current.repo)}:{current.group}" />
+              <TextInput id="run-name" mono bind:value={name} fallback="{tail(current.repo)}:{current.group}" />
             </Field>
           {/if}
         </div>
@@ -200,7 +202,7 @@
       {/if}
     </div>
 
-    <div class="flex flex-col gap-4">
+    <div class="flex flex-col gap-4 lg:sticky lg:top-0 lg:self-start">
       {#if current}
         <div class="card p-4">
           <div class="mb-3 flex items-center gap-2">

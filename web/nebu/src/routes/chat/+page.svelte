@@ -88,6 +88,8 @@
   // The name asked for stays chosen while it exists, else the first that answers
   const asked = $derived(model ? live.routes.get(model) : undefined);
   const chosen = $derived(asked ?? ready[0]);
+  // Primitives of the chosen route, so effects re-run only when these change and not on every counter tick
+  const chosenName = $derived(chosen?.name ?? '');
   const chosenReady = $derived(chosen?.state === RouteState.READY);
   $effect(() => {
     if (!asked && chosen && model !== chosen.name) model = chosen.name;
@@ -130,7 +132,7 @@
   const sessionKey = (name: string) => `nebu.chat.${name}`;
   let loaded = '';
   $effect(() => {
-    const name = chosen?.name ?? '';
+    const name = chosenName;
     untrack(() => {
       if (!name || name === loaded) return;
       loaded = name;
@@ -156,7 +158,7 @@
     model = page.url.searchParams.get('model') ?? '';
   });
   $effect(() => {
-    const name = chosen?.name;
+    const name = chosenName;
     if (!name || page.url.searchParams.get('model') === name) return;
     const url = new URL(page.url);
     url.searchParams.set('model', name);
@@ -308,12 +310,12 @@
     box.style.height = Math.min(box.scrollHeight, 200) + 'px';
   }
 
-  // The prompt's size as the gateway counts it, read once typing settles
+  // The prompt's size as the gateway counts it, read once typing settles; only primitives are read so a route's counter ticks do not recount
   $effect(() => {
     const text = draft;
     const sys = session.system;
     const turnsSnapshot = session.turns.length;
-    const name = chosen?.name;
+    const name = chosenName;
     const isReady = chosenReady;
     void turnsSnapshot;
     countController?.abort();
@@ -346,6 +348,14 @@
   });
 
   const stopWord = (s: string | undefined) => (s === 'end_turn' ? 'stop' : s === 'max_tokens' ? 'length' : s === 'tool_calls' || s === 'tool_use' ? 'tool' : s);
+  // Why an answer ended, said only when it is worth saying: a normal finish needs no note
+  function stopNote(s: string | undefined): string {
+    const w = stopWord(s);
+    if (!w || w === 'stop') return '';
+    if (w === 'length') return 'cut off at max tokens';
+    if (w === 'tool') return 'stopped to call a tool';
+    return `stopped: ${w}`;
+  }
 </script>
 
 <svelte:head><title>Chat · nebu</title></svelte:head>
@@ -360,14 +370,14 @@
   <div class="flex h-[calc(100vh-4.5rem)] min-h-[32rem] gap-4 lg:h-[calc(100vh-2.5rem)]">
     <section class="card flex min-w-0 flex-1 flex-col">
       <header class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-4 py-2.5">
-        <Select class="w-56" mono bind:value={model} label="Model" items={modelItems} />
+        <Select class="w-80 max-w-full" mono bind:value={model} label="Model" items={modelItems} />
         {#if chosen}
           <State values={RouteState} value={chosen.state} />
           {#if instance}
             <span class="hidden items-center gap-x-3 text-xs text-fg-muted md:flex">
               <span class="kv"><span>runtime</span><span>{runtimeName(instance.runtimeId)}{install?.version ? ` ${install.version}` : ''}</span></span>
               {#if instance.params.n_ctx}<span class="kv"><span>ctx</span><span>{instance.params.n_ctx}</span></span>{/if}
-              {#if slot}<a class="kv link" href="/slots/{slot.id}"><span>slot</span><span>{slot.name}</span></a>{:else}<a class="kv link" href="/instances/{instance.id}"><span>instance</span><span>{instance.name}</span></a>{/if}
+              {#if slot}<a class="kv link" href="/slots/{slot.id}"><span>slot</span><span>{slot.name}</span></a>{:else}<a class="link" href="/instances/{instance.id}">Open instance</a>{/if}
               {#if instanceLive(instance)}<span class="kv"><span>up</span><span>{duration(instance.readyAt ?? instance.createdAt, undefined, clock.now)}</span></span>{/if}
             </span>
           {/if}
@@ -427,7 +437,7 @@
                       {#if t.promptTokens || trace?.promptTokens}<span>{t.promptTokens || trace?.promptTokens} in</span>{/if}
                       {#if t.completionTokens || trace?.completionTokens}<span>{t.completionTokens || trace?.completionTokens} out</span>{/if}
                       <span>{rate(t.completionTokens || trace?.completionTokens, gen)}</span>
-                      {#if t.stop || trace?.stop}<span>stop: {stopWord(t.stop) || trace?.stop}</span>{/if}
+                      {#if stopNote(t.stop || trace?.stop)}<span class="text-warn">{stopNote(t.stop || trace?.stop)}</span>{/if}
                       {#if t.dialect}<span class="font-mono">{t.dialect}</span>{/if}
                       {#if trace && trace.firstTokenAt}<span title="As measured by the gateway">gateway {ms(millisBetween(trace.startedAt, trace.firstTokenAt))} · {ms(millisBetween(trace.startedAt, trace.finishedAt))}</span>{/if}
                       {#if t.trace}
@@ -482,10 +492,10 @@
                 <TextArea id="chat-system" bind:value={session.system} empty="Optional" />
               </Field>
               <div class="grid grid-cols-2 gap-3">
-                <Field label="Temperature" for="chat-temp"><NumberInput id="chat-temp" min={0} max={2} step={0.1} bind:value={session.temperature} empty="default" /></Field>
-                <Field label="Top P" for="chat-topp"><NumberInput id="chat-topp" min={0} max={1} step={0.05} bind:value={session.topP} empty="default" /></Field>
-                <Field label="Top K" for="chat-topk"><NumberInput id="chat-topk" integer min={0} bind:value={session.topK} empty="default" /></Field>
-                <Field label="Max tokens" for="chat-max"><NumberInput id="chat-max" integer min={1} step={64} bind:value={session.maxTokens} empty="default" /></Field>
+                <Field label="Temperature" for="chat-temp"><NumberInput id="chat-temp" min={0} max={2} step={0.1} bind:value={session.temperature} empty="runtime default" /></Field>
+                <Field label="Top P" for="chat-topp"><NumberInput id="chat-topp" min={0} max={1} step={0.05} bind:value={session.topP} empty="runtime default" /></Field>
+                <Field label="Top K" for="chat-topk"><NumberInput id="chat-topk" integer min={0} bind:value={session.topK} empty="runtime default" /></Field>
+                <Field label="Max tokens" for="chat-max"><NumberInput id="chat-max" integer min={1} step={64} bind:value={session.maxTokens} empty="runtime default" /></Field>
                 <Field label="Seed" for="chat-seed" description="Same seed, same sampling."><NumberInput id="chat-seed" integer min={0} bind:value={session.seed} empty="random" /></Field>
                 <Field label="Stop sequences" for="chat-stop" description="Comma separated."><TextInput id="chat-stop" mono bind:value={session.stop} empty="###, User:" /></Field>
               </div>

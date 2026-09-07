@@ -49,7 +49,7 @@
     />
     <Copy text={lines.join('\n')} label="Copy log" size={13} />
   </div>
-  <div bind:this={box} onscroll={onScroll} class="{height} overflow-auto p-3 font-mono text-xs leading-5 text-fg-muted {wrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}">
+  <div bind:this={box} onscroll={onScroll} class="{height} overflow-auto p-3 font-mono text-xs leading-5 text-fg-muted {wrap ? 'whitespace-pre-wrap wrap-anywhere' : 'whitespace-pre'}">
     {#if shown.length === 0}
       <span class="text-fg-faint">{empty}</span>
     {:else}

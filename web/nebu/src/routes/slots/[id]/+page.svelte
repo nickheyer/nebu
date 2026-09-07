@@ -2,7 +2,7 @@
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { tabState } from '$lib/tabs.svelte';
-  import { live, cached, clock, instanceLive, taskFor, deviceName, groupLabel, runtimeName, slotByRef, tracesOf } from '$lib/state.svelte';
+  import { live, cached, clock, instanceLive, taskFor, deviceName, groupLabel, runtimeName, slotByRef, answersOf } from '$lib/state.svelte';
   import { swapSlot, evictSlot, deleteSlot, relaunchSlot } from '$lib/actions.svelte';
   import { slotOccupied } from '$lib/launch';
   import { policyText } from '$lib/gateway';
@@ -54,7 +54,7 @@
       .sort(newestFirst((i) => i.createdAt))
       .slice(0, 30)
   );
-  const traces = $derived(slot ? tracesOf(slot.name) : []);
+  const traces = $derived(slot ? answersOf(slot.name) : []);
   let selectedTrace = $state('');
 
 </script>
@@ -202,7 +202,7 @@
       </div>
     {/if}
   {:else if tab.value === 'settings'}
-    <div class="max-w-3xl">
+    <div class="mx-auto max-w-3xl">
       {#key slot.id + slot.updatedAt?.seconds}
         <SlotForm {slot} cancelHref="/slots/{slot.id}" onSaved={() => (tab.value = 'overview')} />
       {/key}

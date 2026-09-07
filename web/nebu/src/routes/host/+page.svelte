@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { live, clock, probeHost, hostName, hostLabeled } from '$lib/state.svelte';
-  import { ago, bytes, pct, tail, storage } from '$lib/format';
+  import { live, clock, probeHost, hostName, hostLabeled, homePath } from '$lib/state.svelte';
+  import { ago, bytes, pct, storage } from '$lib/format';
   import { ProbeStatus } from '$proto/host_pb';
   import { RefreshCw, Server } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -61,7 +61,11 @@
               <td><Meter value={used} max={s.totalBytes} auto /><div class="mt-1 text-xs tabular-nums text-fg-faint">{pct(used, s.totalBytes).toFixed(0)}%</div></td>
               <td class="num">{storage(s.freeBytes)}</td>
               <td class="num text-fg-muted">{storage(s.totalBytes)}</td>
-              <td class="max-w-[16rem] truncate text-xs text-fg-muted" title={s.uses.join('\n')}>{s.uses.map(tail).join(' · ')}</td>
+              <td class="text-xs">
+                <div class="flex flex-col gap-0.5">
+                  {#each s.uses as u (u)}<span class="font-mono text-fg-muted" title={u}>{homePath(u)}</span>{/each}
+                </div>
+              </td>
             </tr>
           {:else}
             <tr><td colspan="6" class="text-fg-faint">No filesystems probed</td></tr>

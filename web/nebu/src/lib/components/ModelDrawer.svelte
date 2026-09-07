@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import { Code } from '@connectrpc/connect';
   import { api, code, message } from '$lib/api';
-  import { live, clock, taskFor, modelKey, hostName, runtimeName, instanceLive, installsOf, storeMount, poolName, orderedSlots } from '$lib/state.svelte';
+  import { live, clock, taskFor, modelKey, hostName, runtimeName, instanceLive, installsOf, storeMount, poolName, orderedSlots, startedTask } from '$lib/state.svelte';
   import { runModel } from '$lib/actions.svelte';
   import { ago, ratioBytes, ratioStorage, storage, count, params as fmtParams, enumLabel, byName, ctx as fmtCtx } from '$lib/format';
   import { readLocal, writeLocal } from '$lib/persist';
@@ -256,7 +256,7 @@
     if (!model) return;
     try {
       const r = await api.store.pull({ sourceId, repo: model.repo, revision: model.revision, group: d.group });
-      ok(`Downloading ${model.repo}`, names[d.group], r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
+      startedTask(`Downloading ${model.repo}`, `Downloaded ${model.repo}`, names[d.group], r.task);
     } catch (err) {
       fail(err, 'Download refused');
     }
@@ -274,7 +274,7 @@
   async function verify(m: StoredModel) {
     try {
       const r = await api.store.verify({ sourceId: m.sourceId, repo: m.repo, group: m.group });
-      ok(`Verifying ${weightsName(m.group, m.formatId)}`, undefined, r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
+      startedTask(`Verifying ${weightsName(m.group, m.formatId)}`, `Verified ${weightsName(m.group, m.formatId)}`, undefined, r.task);
     } catch (err) {
       fail(err, 'Verify refused');
     }
@@ -283,7 +283,7 @@
     exporting = m.group;
     try {
       const r = await api.store.export({ sourceId: m.sourceId, repo: m.repo, group: m.group, dir: exportDir.trim() });
-      ok(`Exporting ${weightsName(m.group, m.formatId)}`, exportDir.trim(), r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
+      startedTask(`Exporting ${weightsName(m.group, m.formatId)}`, `Exported ${weightsName(m.group, m.formatId)}`, exportDir.trim(), r.task);
     } catch (err) {
       fail(err, 'Export refused');
     } finally {

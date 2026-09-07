@@ -10,6 +10,6 @@
   {/snippet}
 </PageHeader>
 
-<div class="max-w-3xl">
+<div class="mx-auto max-w-3xl">
   <SlotForm cancelHref="/" onSaved={(s) => goto(`/slots/${s.id}`)} />
 </div>

@@ -3,7 +3,7 @@
   import { page } from '$app/state';
   import { replaceState } from '$app/navigation';
   import { api } from '$lib/api';
-  import { live, cached, clock, modelKey, instanceLive, sourceName, taskFor, storeMount, orderedSlots } from '$lib/state.svelte';
+  import { live, cached, clock, modelKey, instanceLive, sourceName, taskFor, storeMount, orderedSlots, startedTask } from '$lib/state.svelte';
   import { runModel } from '$lib/actions.svelte';
   import { launch, slotOccupied } from '$lib/launch';
   import { ago, byName, storage, params as fmtParams, plural, tail, when } from '$lib/format';
@@ -137,7 +137,7 @@
   async function verify(m?: StoredModel) {
     try {
       const r = await api.store.verify(m ? { sourceId: m.sourceId, repo: m.repo, group: m.group } : {});
-      ok(m ? `Verifying ${tail(m.repo)}` : 'Verifying every model', undefined, r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
+      startedTask(m ? `Verifying ${tail(m.repo)}` : 'Verifying every model', m ? `Verified ${tail(m.repo)}` : 'Verified every model', undefined, r.task);
     } catch (err) {
       fail(err, 'Verify refused');
     }
@@ -147,7 +147,7 @@
     exporting = true;
     try {
       const r = await api.store.export({ dir: exportDir.trim() });
-      ok('Exporting every model', exportDir.trim(), r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
+      startedTask('Exporting every model', 'Exported every model', exportDir.trim(), r.task);
       exportOpen = false;
     } catch (err) {
       fail(err, 'Export refused');

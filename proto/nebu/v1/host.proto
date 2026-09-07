@@ -87,6 +87,8 @@ message HostProfile {
   map<string, string> facts = 7;
   google.protobuf.Timestamp probed_at = 8;
   repeated ProbeResult probes = 9;
+  // The daemon's home directory
+  string home = 10;
 }
 
 // Command or file a probe reads

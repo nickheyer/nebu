@@ -1,6 +1,7 @@
 <script lang="ts">
   import { toasts, dismiss } from '$lib/toast.svelte';
   import { CircleCheck, CircleAlert, Info, TriangleAlert, X } from '@lucide/svelte';
+  import Spinner from './Spinner.svelte';
 
   const icons = { ok: CircleCheck, bad: CircleAlert, warn: TriangleAlert, info: Info, accent: Info, neutral: Info };
   const colors = { ok: 'text-ok', bad: 'text-bad', warn: 'text-warn', info: 'text-info', accent: 'text-accent', neutral: 'text-fg-muted' };
@@ -10,7 +11,7 @@
   {#each toasts as t (t.id)}
     {@const Icon = icons[t.tone]}
     <div class="enter-up pointer-events-auto flex items-start gap-3 rounded-lg border border-line bg-overlay px-3.5 py-3 shadow-pop">
-      <Icon size={16} class="mt-0.5 shrink-0 {colors[t.tone]}" />
+      {#if t.busy}<Spinner size={16} class="mt-0.5 shrink-0 {colors[t.tone]}" />{:else}<Icon size={16} class="mt-0.5 shrink-0 {colors[t.tone]}" />{/if}
       <div class="min-w-0 flex-1">
         <div class="text-sm font-medium text-fg">{t.title}</div>
         {#if t.detail}<div class="mt-0.5 text-sm leading-5 break-words text-fg-muted">{t.detail}</div>{/if}

@@ -1,8 +1,17 @@
+<script lang="ts" module>
+  import type { MemoryPlan } from '$proto/estimate_pb';
+
+  // The params a plan solved to concrete values; template defaults render at launch and are left out
+  export function solvedParams(plan: MemoryPlan): Record<string, string> {
+    return Object.fromEntries(Object.entries(plan.params).filter(([, v]) => !v.includes('{{')));
+  }
+</script>
+
 <script lang="ts">
   import { bytes, deltaBytes, enumLabel } from '$lib/format';
   import { PoolKind } from '$proto/host_pb';
   import { TensorGroupKind } from '$proto/model_pb';
-  import type { MemoryPlan, Placement } from '$proto/estimate_pb';
+  import type { Placement } from '$proto/estimate_pb';
   import { poolName } from '$lib/state.svelte';
   import StackBar from './ui/StackBar.svelte';
   import ParamList from './ui/ParamList.svelte';
@@ -13,8 +22,9 @@
 
   const kinds: Record<number, string> = { [PoolKind.DEVICE]: 'device', [PoolKind.HOST]: 'host', [PoolKind.UNIFIED]: 'unified' };
   const short: Record<number, string> = { [PoolKind.DEVICE]: 'GPU', [PoolKind.HOST]: 'RAM', [PoolKind.UNIFIED]: 'MEM' };
-  // Template defaults render at launch, so only concrete values are worth showing
-  const solved = $derived(Object.fromEntries(Object.entries(plan.params).filter(([, v]) => !v.includes('{{'))));
+  const solved = $derived(solvedParams(plan));
+  // A plan against free memory measures each pool by what was free, and its bars say so
+  const capacity = $derived(plan.againstFree ? 'free' : '');
   // Placements name the side they sit on, device or host, not the pool, and a unified pool listed twice
   // carries the device share first and the host share second
   const sides = $derived.by(() => {
@@ -41,7 +51,7 @@
     <span>weights <span class="text-fg-muted">{bytes(plan.weightsBytes)}</span></span>
     <span>cache <span class="text-fg-muted">{bytes(plan.cacheBytes)}</span></span>
     <span>overhead <span class="text-fg-muted">{bytes(plan.overheadBytes)}</span>{#if plan.overheadDelta}<span title="Correction learned from measured runs"> ({deltaBytes(plan.overheadDelta)} learned)</span>{/if}</span>
-    {#if onDisk > 0n}<span title="Weights not loaded with these parameters">on disk <span class="text-fg-muted">{bytes(onDisk)}</span></span>{/if}
+    {#if onDisk > 0n}<span title="Weights the runtime leaves on disk with these parameters">not loaded <span class="text-fg-muted">{bytes(onDisk)}</span></span>{/if}
   </div>
   {#each plan.pools as pool, i (pool.poolId + i)}
     {@const parts = placed(sides[i])}
@@ -54,6 +64,7 @@
           <div class="min-w-0 truncate text-xs text-fg" title={pool.poolId}>{poolName(pool.poolId)} <span class="text-fg-faint">{kinds[pool.kind] ?? ''}</span></div>
           <StackBar
             max={pool.capacityBytes}
+            {capacity}
             segments={weights
               ? [
                   { label: 'weights', value: weights, tone: over ? 'bad' : 'accent' },

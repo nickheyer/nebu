@@ -56,7 +56,7 @@ type Gateway struct {
 // Every request is traced and the newest traces reach the bus.
 func New(table *Table, keys, origins []string, policy *v1.Policy, bus *events.Bus, log *slog.Logger) *Gateway {
 	table.SetDefaults(policy)
-	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing), transports: map[uint32]*http.Transport{}}
+	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing, countRing), transports: map[uint32]*http.Transport{}}
 }
 
 // Returns the request recorder
@@ -345,12 +345,14 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		t.Status, t.ResponseBytes = uint32(w.status), w.bytes
 		g.traces.Finish(t)
 	}()
-	route, policy, release, err := g.table.Acquire(name)
+	// A token count is not a request served, so it leaves the route's tally alone
+	served := t.GetKind() != v1.TraceKind_TRACE_KIND_COUNT
+	route, policy, release, err := g.table.Acquire(name, served)
 	if errors.Is(err, ErrNoRoute) && name == "" {
 		if ready := g.table.Ready(); len(ready) == 1 {
 			name = ready[0].GetName()
 			t.Route = name
-			route, policy, release, err = g.table.Acquire(name)
+			route, policy, release, err = g.table.Acquire(name, served)
 		}
 	}
 	switch {

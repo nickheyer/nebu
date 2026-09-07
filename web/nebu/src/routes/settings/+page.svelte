@@ -75,7 +75,7 @@
             saveLabel();
           }}
         >
-          <TextInput id="host-label" class="flex-1" bind:value={label} empty={live.host?.hostname || 'hostname'} maxlength={64} />
+          <TextInput id="host-label" class="flex-1" bind:value={label} fallback={live.host?.hostname ?? ''} empty="hostname" maxlength={64} />
           <Button type="submit" variant="primary" loading={labelSaving} disabled={!labelDirty}>Save</Button>
         </form>
       {/snippet}

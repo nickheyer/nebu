@@ -317,8 +317,8 @@ func (t *Table) Ready() []*v1.Route {
 // Counts requests served through every route
 func (t *Table) Requests() uint64 { return t.total.Load() }
 
-// Claims a route for one request under its policy, returning the route as it stands, the policy in force, and release
-func (t *Table) Acquire(name string) (*v1.Route, *v1.Policy, func(), error) {
+// Claims a route for one request under its policy, returning the route as it stands, the policy in force, and release; only a served request, not a token count, is tallied
+func (t *Table) Acquire(name string, served bool) (*v1.Route, *v1.Policy, func(), error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	r, ok := t.routes[name]
@@ -340,8 +340,10 @@ func (t *Table) Acquire(name string) (*v1.Route, *v1.Policy, func(), error) {
 		return nil, nil, nil, ErrThrottled
 	}
 	counter.Add(1)
-	r.Requests++
-	t.total.Add(1)
+	if served {
+		r.Requests++
+		t.total.Add(1)
+	}
 	t.touchLocked(name)
 	release := func() {
 		counter.Add(-1)

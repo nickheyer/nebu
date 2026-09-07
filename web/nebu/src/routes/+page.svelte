@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { live, clock, liveInstances, instanceLive, slotName, groupLabel, orderedSlots, tracesOf, runtimeName } from '$lib/state.svelte';
+  import { live, clock, liveInstances, instanceLive, slotName, groupLabel, orderedSlots, answersOf, runtimeName } from '$lib/state.svelte';
   import { launch } from '$lib/launch';
   import { instanceMemory } from '$lib/instances';
   import { ago, newestFirst, tail, when } from '$lib/format';
   import { InstanceState } from '$proto/instance_pb';
   import { SlotState } from '$proto/slot_pb';
-  import { TraceKind } from '$proto/gateway_pb';
   import { Plus, RotateCcw, Compass, Cpu, ArrowRight } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
@@ -30,7 +29,7 @@
   const past = $derived([...live.instances.values()].filter((i) => !instanceLive(i)).sort(newestFirst((i) => i.createdAt)));
   const failed = $derived(past.filter((i) => i.state === InstanceState.FAILED));
   const history = $derived(historyView === 'failed' ? failed : past);
-  const recent = $derived(tracesOf().filter((t) => t.kind !== TraceKind.COUNT).slice(0, 8));
+  const recent = $derived(answersOf().slice(0, 8));
 </script>
 
 <PageHeader title="Serve">
