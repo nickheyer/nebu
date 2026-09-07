@@ -15,6 +15,7 @@ import (
 type Policy struct {
 	spec     *v1.EstimatePolicy
 	groups   map[v1.TensorGroupKind]*v1.GroupPolicy
+	when     map[v1.TensorGroupKind]*eval.Expr
 	cache    *eval.Expr
 	overhead *eval.Expr
 }
@@ -31,9 +32,16 @@ type Input struct {
 
 // Compiles policy expressions
 func NewPolicy(spec *v1.EstimatePolicy) (*Policy, error) {
-	p := &Policy{spec: spec, groups: map[v1.TensorGroupKind]*v1.GroupPolicy{}}
+	p := &Policy{spec: spec, groups: map[v1.TensorGroupKind]*v1.GroupPolicy{}, when: map[v1.TensorGroupKind]*eval.Expr{}}
 	for _, g := range spec.GetGroups() {
 		p.groups[g.GetKind()] = g
+		if g.GetWhen() != "" {
+			e, err := eval.Compile(g.GetWhen())
+			if err != nil {
+				return nil, fmt.Errorf("group %s when: %w", eval.EnumShort(g.GetKind()), err)
+			}
+			p.when[g.GetKind()] = e
+		}
 	}
 	var err error
 	if spec.GetCacheBytes() != "" {
@@ -52,11 +60,15 @@ func NewPolicy(spec *v1.EstimatePolicy) (*Policy, error) {
 // Returns the param name holding context length
 func (p *Policy) ContextParam() string { return p.spec.GetContextParam() }
 
+// One tensor group as the planner moves it: its weights, and the share of the cache that follows it
 type item struct {
-	kind  v1.TensorGroupKind
-	layer int32
-	bytes uint64
+	kind    v1.TensorGroupKind
+	layer   int32
+	weights uint64
+	cache   uint64
 }
+
+func (it item) bytes() uint64 { return it.weights + it.cache }
 
 type bucket struct {
 	policy *v1.GroupPolicy
@@ -68,10 +80,14 @@ type bucket struct {
 }
 
 type solver struct {
-	buckets   []*bucket
-	byKind    map[v1.TensorGroupKind]*bucket
-	policies  map[v1.TensorGroupKind]*v1.GroupPolicy
-	free      bool
+	buckets  []*bucket
+	byKind   map[v1.TensorGroupKind]*bucket
+	policies map[v1.TensorGroupKind]*v1.GroupPolicy
+	free     bool
+	overhead uint64
+	// Groups the policy pins to one side, never offloaded
+	pinned    []item
+	hosted    []item
 	fixedDev  uint64
 	fixedHost uint64
 	devCap    uint64
@@ -84,21 +100,25 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	cacheTotal, err := p.eval(p.cache, env)
+	cacheTotal, err := p.eval(p.cache, "cache_bytes", env)
 	if err != nil {
 		return nil, err
 	}
-	overhead, err := p.eval(p.overhead, env)
+	overhead, err := p.eval(p.overhead, "overhead_bytes", env)
 	if err != nil {
 		return nil, err
 	}
 	if in.OverheadDelta != 0 {
 		overhead = uint64(max(float64(overhead)+in.OverheadDelta, 0))
 	}
+	unloaded, err := p.unloaded(env)
+	if err != nil {
+		return nil, err
+	}
 	primary, host := pools(in.Host)
 	primary = p.spanned(primary, in.Params)
 	margin := 1 - p.spec.GetMargin()
-	s := &solver{byKind: map[v1.TensorGroupKind]*bucket{}, policies: p.groups, free: in.Free}
+	s := &solver{byKind: map[v1.TensorGroupKind]*bucket{}, policies: p.groups, free: in.Free, overhead: overhead}
 	for _, pl := range primary {
 		s.devCap += uint64(float64(capacity(pl, in.Free)) * margin)
 	}
@@ -106,25 +126,40 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 		s.hostCap += uint64(float64(capacity(pl, in.Free)) * margin)
 	}
 	s.fixedDev = overhead
-	layers := countKind(in.Descriptor, v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER)
+	layers := 0
+	for _, g := range in.Descriptor.GetGroups() {
+		if g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER && !unloaded[g.GetKind()] {
+			layers++
+		}
+	}
+	// The cache follows the layers it serves, or sits on device whole when nothing is layered
 	var cachePerLayer uint64
 	if layers > 0 {
 		cachePerLayer = cacheTotal / uint64(layers)
+	} else {
+		s.fixedDev += cacheTotal
 	}
 	byParam := map[string]*bucket{}
+	skipped := newPlacements()
 	var weights uint64
 	for _, g := range in.Descriptor.GetGroups() {
+		if unloaded[g.GetKind()] {
+			skipped.add(g.GetKind(), v1.PoolKind_POOL_KIND_UNSPECIFIED, g.GetBytes(), 1)
+			continue
+		}
 		weights += g.GetBytes()
-		bytes := g.GetBytes()
+		it := item{kind: g.GetKind(), layer: g.GetLayer(), weights: g.GetBytes()}
 		if g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER {
-			bytes += cachePerLayer
+			it.cache = cachePerLayer
 		}
 		gp := p.groups[g.GetKind()]
 		if gp == nil || gp.GetParam() == "" {
 			if poolOf(gp) == v1.PoolKind_POOL_KIND_HOST {
-				s.fixedHost += bytes
+				s.hosted = append(s.hosted, it)
+				s.fixedHost += it.bytes()
 			} else {
-				s.fixedDev += bytes
+				s.pinned = append(s.pinned, it)
+				s.fixedDev += it.bytes()
 			}
 			continue
 		}
@@ -135,7 +170,7 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 			s.buckets = append(s.buckets, b)
 		}
 		s.byKind[g.GetKind()] = b
-		b.items = append(b.items, item{kind: g.GetKind(), layer: g.GetLayer(), bytes: bytes})
+		b.items = append(b.items, it)
 	}
 	for _, b := range s.buckets {
 		b.prepare(in.Params)
@@ -149,36 +184,35 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 		OverheadBytes: overhead,
 		OverheadDelta: in.OverheadDelta,
 		Params:        stringParams(in.Params),
+		Skipped:       skipped.list(),
 	}
-	if len(primary) == 0 {
-		plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
-		plan.Detail = "no device memory pools probed"
-		return plan, nil
-	}
-	if !s.solve(0) {
-		plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
-		least := s.fixedDev
-		for _, b := range s.buckets {
-			if b.fixed >= 0 {
-				least += b.prefix[b.fixed]
-			}
-		}
-		plan.Detail = fmt.Sprintf("device need %s exceeds capacity %s", Human(least), Human(s.devCap))
-		if s.hostCap > 0 && s.hostNeed() > s.hostCap {
-			plan.Detail = fmt.Sprintf("host need %s exceeds capacity %s", Human(s.hostNeed()), Human(s.hostCap))
-		}
-		for _, b := range s.buckets {
-			b.count = 0
-		}
-	} else {
+	if len(primary) > 0 && s.solve(0) {
 		plan.Verdict = v1.FitVerdict_FIT_VERDICT_FITS
 		for _, b := range s.buckets {
 			if b.count < len(b.items) {
 				plan.Verdict = v1.FitVerdict_FIT_VERDICT_PARTIAL
 			}
 		}
+		s.fill(plan, primary, host)
+		return plan, nil
 	}
-	s.fill(plan, primary, host, in.Descriptor)
+	plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
+	// The least the solver could ask of each side, read before the layout below moves the counts
+	for _, b := range s.buckets {
+		b.count = max(b.fixed, 0)
+	}
+	least, most := s.devNeed(), s.hostNeed()
+	s.waterfall(plan, primary, host)
+	switch {
+	case len(primary) == 0:
+		plan.Detail = "no device memory pools probed"
+	case overflow(plan) > 0:
+		plan.Detail = fmt.Sprintf("needs %s, %s more than the %s of memory on this host", Human(need(plan)), Human(overflow(plan)), Human(held(plan)))
+	case s.hostCap > 0 && most > s.hostCap:
+		plan.Detail = fmt.Sprintf("host need %s exceeds capacity %s", Human(most), Human(s.hostCap))
+	default:
+		plan.Detail = fmt.Sprintf("device need %s exceeds capacity %s", Human(least), Human(s.devCap))
+	}
 	return plan, nil
 }
 
@@ -219,13 +253,13 @@ func (p *Policy) env(in Input) (map[string]any, error) {
 	return env, nil
 }
 
-func (p *Policy) eval(e *eval.Expr, env map[string]any) (uint64, error) {
+func (p *Policy) eval(e *eval.Expr, name string, env map[string]any) (uint64, error) {
 	if e == nil {
 		return 0, nil
 	}
 	v, err := e.Float(env)
 	if err != nil {
-		return 0, err
+		return 0, eval.Explain(e, name, env, err)
 	}
 	if math.IsNaN(v) || v < 0 {
 		return 0, fmt.Errorf("%s: invalid result %v", e.Source(), v)
@@ -233,11 +267,26 @@ func (p *Policy) eval(e *eval.Expr, env map[string]any) (uint64, error) {
 	return uint64(v), nil
 }
 
+// The kinds these params leave on disk: every group whose when clause does not hold
+func (p *Policy) unloaded(env map[string]any) (map[v1.TensorGroupKind]bool, error) {
+	out := map[v1.TensorGroupKind]bool{}
+	for kind, e := range p.when {
+		ok, err := e.Bool(env)
+		if err != nil {
+			return nil, eval.Explain(e, eval.EnumShort(kind)+" when", env, err)
+		}
+		if !ok {
+			out[kind] = true
+		}
+	}
+	return out, nil
+}
+
 func (b *bucket) prepare(params map[string]any) {
 	sort.SliceStable(b.items, func(i, j int) bool { return rank(b.items[i]) > rank(b.items[j]) })
 	b.prefix = make([]uint64, len(b.items)+1)
 	for i, it := range b.items {
-		b.prefix[i+1] = b.prefix[i] + it.bytes
+		b.prefix[i+1] = b.prefix[i] + it.bytes()
 		b.kinds[it.kind] = append(b.kinds[it.kind], i)
 	}
 	if v, ok := params[b.policy.GetParam()]; ok {
@@ -260,6 +309,14 @@ func (b *bucket) kindCount(kind v1.TensorGroupKind, n int) int {
 		}
 	}
 	return c
+}
+
+// The value the param reports for a count of items on device
+func (b *bucket) solved(count int) string {
+	if b.policy.GetParamCountsHost() {
+		count = len(b.items) - count
+	}
+	return strconv.Itoa(count)
 }
 
 func rank(it item) int64 {
@@ -316,37 +373,18 @@ func (s *solver) fits() bool {
 	return s.hostCap == 0 || s.hostNeed() <= s.hostCap
 }
 
-func (s *solver) fill(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool, d *v1.Descriptor) {
+// Writes a solved plan: each side's need spread over its pools by size, and every group on the side the solver put it
+func (s *solver) fill(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) {
 	plan.Pools = append(distribute(s.devNeed(), primary, s.free), distribute(s.hostNeed(), host, s.free)...)
 	for _, b := range s.buckets {
-		solved := b.count
-		if b.policy.GetParamCountsHost() {
-			solved = len(b.items) - b.count
-		}
-		plan.Params[b.policy.GetParam()] = strconv.Itoa(solved)
+		plan.Params[b.policy.GetParam()] = b.solved(b.count)
 	}
-	type key struct {
-		kind v1.TensorGroupKind
-		pool v1.PoolKind
+	agg := newPlacements()
+	for _, it := range s.pinned {
+		agg.add(it.kind, v1.PoolKind_POOL_KIND_DEVICE, it.weights, 1)
 	}
-	agg := map[key]*v1.Placement{}
-	var order []key
-	add := func(kind v1.TensorGroupKind, pool v1.PoolKind, bytes uint64) {
-		k := key{kind, pool}
-		pl, ok := agg[k]
-		if !ok {
-			pl = &v1.Placement{Kind: kind, PoolId: eval.EnumShort(pool)}
-			agg[k] = pl
-			order = append(order, k)
-		}
-		pl.Bytes += bytes
-		pl.Count++
-	}
-	for _, g := range d.GetGroups() {
-		gp := s.policies[g.GetKind()]
-		if gp == nil || gp.GetParam() == "" {
-			add(g.GetKind(), poolOf(gp), g.GetBytes())
-		}
+	for _, it := range s.hosted {
+		agg.add(it.kind, v1.PoolKind_POOL_KIND_HOST, it.weights, 1)
 	}
 	for _, b := range s.buckets {
 		for i, it := range b.items {
@@ -354,18 +392,149 @@ func (s *solver) fill(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool, d *v1
 			if i >= b.count {
 				pool = v1.PoolKind_POOL_KIND_HOST
 			}
-			add(it.kind, pool, it.bytes)
+			agg.add(it.kind, pool, it.weights, 1)
 		}
 	}
-	sort.SliceStable(order, func(i, j int) bool {
-		if order[i].kind != order[j].kind {
-			return order[i].kind < order[j].kind
+	plan.Placements = agg.list()
+}
+
+// One pool as the layout fills it
+type slot struct {
+	pool *v1.MemoryPool
+	side v1.PoolKind
+	cap  uint64
+	used uint64
+}
+
+// Lays a plan out the way the host would take it when no fit exists: device pools fill to the
+// brim in order, the rest flows on into host memory, and whatever no pool holds overflows past
+// the last pool's capacity, so the pools themselves say how far short the host falls. Groups
+// go in the order the solver protects them, overhead and pinned kinds first, then offloadable
+// kinds by spill priority, with kinds the policy keeps in host memory taking host pools alone.
+func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) {
+	var chain []*slot
+	seen := map[string]bool{}
+	for _, pl := range primary {
+		if !seen[pl.GetId()] {
+			seen[pl.GetId()] = true
+			chain = append(chain, &slot{pool: pl, side: v1.PoolKind_POOL_KIND_DEVICE, cap: capacity(pl, s.free)})
 		}
-		return order[i].pool < order[j].pool
+	}
+	hostStart := len(chain)
+	for _, pl := range host {
+		if !seen[pl.GetId()] {
+			seen[pl.GetId()] = true
+			chain = append(chain, &slot{pool: pl, side: v1.PoolKind_POOL_KIND_HOST, cap: capacity(pl, s.free)})
+		}
+	}
+	// A unified pool is both sides at once, so host kinds start where every kind does
+	if hostStart == len(chain) {
+		hostStart = 0
+	}
+	agg := newPlacements()
+	cur := 0
+	// Places one group from the cursor onward, saying which side its first byte landed on
+	place := func(it item, from int) v1.PoolKind {
+		if cur < from {
+			cur = from
+		}
+		remaining := it.bytes()
+		first := v1.PoolKind_POOL_KIND_UNSPECIFIED
+		count := uint32(1)
+		left := it.weights
+		// A group split across pools places its weights in the same shares, the last piece taking the rounding
+		record := func(side v1.PoolKind, taken uint64) {
+			if first == v1.PoolKind_POOL_KIND_UNSPECIFIED {
+				first = side
+			}
+			share := left
+			if taken < remaining {
+				share = it.weights * taken / it.bytes()
+			}
+			left -= share
+			if it.kind != v1.TensorGroupKind_TENSOR_GROUP_KIND_UNSPECIFIED {
+				agg.add(it.kind, side, share, count)
+			}
+			count = 0
+		}
+		for remaining > 0 && len(chain) > 0 {
+			if cur >= len(chain) {
+				last := chain[len(chain)-1]
+				last.used += remaining
+				record(last.side, remaining)
+				break
+			}
+			sl := chain[cur]
+			if sl.used >= sl.cap {
+				cur++
+				continue
+			}
+			take := min(sl.cap-sl.used, remaining)
+			sl.used += take
+			record(sl.side, take)
+			remaining -= take
+		}
+		return first
+	}
+	place(item{cache: s.overhead}, 0)
+	for _, it := range s.pinned {
+		place(it, 0)
+	}
+	for _, b := range s.buckets {
+		b.count = 0
+		for _, it := range b.items {
+			if place(it, 0) == v1.PoolKind_POOL_KIND_DEVICE {
+				b.count++
+			}
+		}
+		plan.Params[b.policy.GetParam()] = b.solved(b.count)
+	}
+	for _, it := range s.hosted {
+		place(it, hostStart)
+	}
+	for _, sl := range chain {
+		plan.Pools = append(plan.Pools, &v1.PoolUsage{PoolId: sl.pool.GetId(), Kind: sl.pool.GetKind(), UsedBytes: sl.used, CapacityBytes: sl.cap})
+	}
+	plan.Placements = agg.list()
+}
+
+// Placements summed by kind and side, in the order they were first seen then sorted
+type placements struct {
+	agg   map[[2]int32]*v1.Placement
+	order [][2]int32
+}
+
+func newPlacements() *placements {
+	return &placements{agg: map[[2]int32]*v1.Placement{}}
+}
+
+func (p *placements) add(kind v1.TensorGroupKind, pool v1.PoolKind, bytes uint64, count uint32) {
+	k := [2]int32{int32(kind), int32(pool)}
+	pl, ok := p.agg[k]
+	if !ok {
+		pl = &v1.Placement{Kind: kind}
+		if pool != v1.PoolKind_POOL_KIND_UNSPECIFIED {
+			pl.PoolId = eval.EnumShort(pool)
+		}
+		p.agg[k] = pl
+		p.order = append(p.order, k)
+	}
+	pl.Bytes += bytes
+	pl.Count += count
+}
+
+func (p *placements) list() []*v1.Placement {
+	sort.SliceStable(p.order, func(i, j int) bool {
+		if p.order[i][0] != p.order[j][0] {
+			return p.order[i][0] < p.order[j][0]
+		}
+		return p.order[i][1] < p.order[j][1]
 	})
-	for _, k := range order {
-		plan.Placements = append(plan.Placements, agg[k])
+	out := make([]*v1.Placement, 0, len(p.order))
+	for _, k := range p.order {
+		out = append(out, p.agg[k])
 	}
+	return out
 }
 
 func distribute(need uint64, into []*v1.MemoryPool, free bool) []*v1.PoolUsage {
@@ -409,6 +578,35 @@ func PlannedDevice(plan *v1.MemoryPlan) uint64 {
 	return total
 }
 
+// Sums bytes planned into every pool
+func need(plan *v1.MemoryPlan) uint64 {
+	var total uint64
+	for _, pu := range plan.GetPools() {
+		total += pu.GetUsedBytes()
+	}
+	return total
+}
+
+// Sums the capacity of every pool the plan touches
+func held(plan *v1.MemoryPlan) uint64 {
+	var total uint64
+	for _, pu := range plan.GetPools() {
+		total += pu.GetCapacityBytes()
+	}
+	return total
+}
+
+// Sums bytes planned past what their pools hold, the shortfall a host cannot make up
+func overflow(plan *v1.MemoryPlan) uint64 {
+	var total uint64
+	for _, pu := range plan.GetPools() {
+		if pu.GetUsedBytes() > pu.GetCapacityBytes() {
+			total += pu.GetUsedBytes() - pu.GetCapacityBytes()
+		}
+	}
+	return total
+}
+
 func pools(h *v1.HostProfile) (primary, host []*v1.MemoryPool) {
 	var unified []*v1.MemoryPool
 	for _, pl := range h.GetPools() {
@@ -436,16 +634,6 @@ func poolOf(gp *v1.GroupPolicy) v1.PoolKind {
 		return v1.PoolKind_POOL_KIND_DEVICE
 	}
 	return gp.GetPool()
-}
-
-func countKind(d *v1.Descriptor, kind v1.TensorGroupKind) int {
-	n := 0
-	for _, g := range d.GetGroups() {
-		if g.GetKind() == kind {
-			n++
-		}
-	}
-	return n
 }
 
 func stringParams(params map[string]any) map[string]string {

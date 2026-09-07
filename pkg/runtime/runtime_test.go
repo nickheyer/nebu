@@ -104,6 +104,15 @@ func TestShippedPrebuiltRulesPickByHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var release InstallMethod
+	for _, m := range rt.Installs() {
+		if m.Spec.GetPrebuilt() != nil {
+			release = m
+		}
+	}
+	if release.Spec == nil {
+		t.Fatal("llamacpp should offer a prebuilt release")
+	}
 	gpu := func(vendor string) *v1.Device {
 		return &v1.Device{Id: "g0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: vendor}
 	}
@@ -120,15 +129,40 @@ func TestShippedPrebuiltRulesPickByHost(t *testing.T) {
 		{&v1.HostProfile{Os: "windows", Arch: "amd64", Devices: []*v1.Device{gpu("intel")}}, "vulkan"},
 		{&v1.HostProfile{Os: "darwin", Arch: "arm64"}, "macos-arm64"},
 	} {
-		rule, err := rt.Prebuilt(tc.profile)
+		rule, err := release.HostRule(tc.profile)
 		if err != nil {
 			t.Fatalf("%s/%s: %v", tc.profile.GetOs(), tc.profile.GetArch(), err)
 		}
-		if !strings.Contains(rule.GetAssets()[0], tc.want) {
+		if rule == nil || !strings.Contains(rule.GetAssets()[0], tc.want) {
 			t.Fatalf("%s/%s %v: picked %v, want %s", tc.profile.GetOs(), tc.profile.GetArch(), tc.profile.GetDevices(), rule.GetAssets(), tc.want)
 		}
 		if len(rule.GetAssets()) > 1 && !strings.Contains(rule.GetAssets()[1], "cudart") {
 			t.Fatalf("cuda rule should carry the cudart companion: %v", rule.GetAssets())
 		}
+		if named, err := release.Rule(rule.GetId()); err != nil || named != rule {
+			t.Fatalf("rule by id %v %v", named, err)
+		}
+	}
+	if rule, _ := release.HostRule(&v1.HostProfile{Os: "plan9", Arch: "mips"}); rule != nil {
+		t.Fatalf("no rule should hold on plan9, got %v", rule)
+	}
+	if rules, _ := release.Rules(&v1.HostProfile{Os: "linux", Arch: "amd64", Devices: []*v1.Device{gpu("nvidia")}}); len(rules) != 2 || rules[0].GetId() != "linux-vulkan" || rules[1].GetId() != "linux-cpu" {
+		t.Fatalf("linux nvidia should be offered vulkan then cpu, got %v", rules)
+	}
+	if _, err := release.Rule("nope"); err == nil {
+		t.Fatal("unknown rule should fail")
+	}
+	if _, err := rt.Install("nope"); err == nil {
+		t.Fatal("unknown method should fail")
+	}
+	if _, err := New([]*v1.RuntimeManifest{{Id: "x", Acquire: &v1.Acquire{Methods: []*v1.InstallMethod{{Id: "a"}}}}}); err == nil {
+		t.Fatal("a method without a how should fail")
+	}
+	adopt := &v1.InstallMethod{Id: "a", How: &v1.InstallMethod_Adopt{Adopt: &v1.Adopt{Names: []string{"b"}}}}
+	if _, err := New([]*v1.RuntimeManifest{{Id: "x", Acquire: &v1.Acquire{Methods: []*v1.InstallMethod{adopt, adopt}}}}); err == nil {
+		t.Fatal("duplicate ids should fail")
+	}
+	if _, err := New([]*v1.RuntimeManifest{{Id: "x", Acquire: &v1.Acquire{Methods: []*v1.InstallMethod{{Id: "r", How: &v1.InstallMethod_Prebuilt{Prebuilt: &v1.Prebuilt{Releases: "o/r", Rules: []*v1.PrebuiltRule{{Id: "b", Assets: []string{"("}, Binary: "x"}}}}}}}}}); err == nil {
+		t.Fatal("a bad asset pattern should fail")
 	}
 }

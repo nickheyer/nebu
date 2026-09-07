@@ -55,10 +55,17 @@ func TestEmbeddedSpecsCompile(t *testing.T) {
 				t.Errorf("runtime %s references missing triage set %s", rt.GetId(), id)
 			}
 		}
-		if id := rt.GetAcquire().GetRecipeId(); id != "" {
-			if rc, err := recipes.Get(id); err != nil {
-				t.Errorf("runtime %s references missing recipe %s", rt.GetId(), id)
-			} else if rc.Spec.GetRuntimeId() != rt.GetId() {
+		for _, m := range rt.GetAcquire().GetMethods() {
+			id := m.GetRecipe().GetRecipeId()
+			if id == "" {
+				continue
+			}
+			rc, err := recipes.Get(id)
+			if err != nil {
+				t.Errorf("runtime %s method %s references missing recipe %s", rt.GetId(), m.GetId(), id)
+				continue
+			}
+			if rc.Spec.GetRuntimeId() != rt.GetId() {
 				t.Errorf("recipe %s builds %s, not %s", id, rc.Spec.GetRuntimeId(), rt.GetId())
 			}
 		}

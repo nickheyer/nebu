@@ -3,13 +3,13 @@
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { Tooltip } from 'bits-ui';
-  import { connect, disconnect, live, unackedFindings, activeTasks, hostName, hostLabeled } from '$lib/state.svelte';
-  import { LayoutGrid, Boxes, MessageSquare, ListChecks, Radar, Cpu, Server, Settings, WifiOff, KeyRound, Menu as MenuIcon, X } from '@lucide/svelte';
+  import { connect, disconnect, live, activeTasks, hostName, hostLabeled } from '$lib/state.svelte';
+  import { LayoutGrid, Boxes, MessageSquare, ListChecks, Cpu, Settings, WifiOff, KeyRound, Menu as MenuIcon, X } from '@lucide/svelte';
   import Logo from '$lib/components/Logo.svelte';
   import Spinner from '$lib/components/ui/Spinner.svelte';
   import Toaster from '$lib/components/ui/Toaster.svelte';
   import Confirmer from '$lib/components/ui/Confirmer.svelte';
-  import SlotDialogs from '$lib/components/SlotDialogs.svelte';
+  import RunDrawer from '$lib/components/RunDrawer.svelte';
 
   let { children } = $props();
   let menuOpen = $state(false);
@@ -22,7 +22,6 @@
     also?: string[];
     count?: number;
     busy?: boolean;
-    tone?: 'accent';
   }
 
   const groups = $derived<Item[][]>([
@@ -33,15 +32,12 @@
     ],
     [
       { href: '/tasks', label: 'Tasks', icon: ListChecks, count: activeTasks().length || undefined, busy: activeTasks().length > 0 },
-      { href: '/monitor', label: 'Monitor', icon: Radar, count: unackedFindings().length || undefined, tone: 'accent' }
-    ],
-    [
-      { href: '/runtimes', label: 'Runtimes', icon: Cpu },
-      { href: '/host', label: 'Host', icon: Server }
+      { href: '/runtimes', label: 'Runtimes', icon: Cpu }
     ]
   ]);
 
   const name = $derived(hostName());
+  const onHost = $derived(page.url.pathname === '/host');
 
   function active(item: { href: string; also?: string[] }): boolean {
     const p = page.url.pathname;
@@ -76,7 +72,7 @@
     {/if}
     <span class="flex-1">{item.label}</span>
     {#if item.count}
-      <span class="min-w-5 rounded-full px-1.5 text-center text-[11px] font-semibold tabular-nums {item.tone === 'accent' ? 'bg-accent/15 text-accent' : 'bg-raised text-fg-muted'}">{item.count}</span>
+      <span class="min-w-5 rounded-full bg-raised px-1.5 text-center text-[11px] font-semibold tabular-nums text-fg-muted">{item.count}</span>
     {/if}
   </a>
 {/snippet}
@@ -98,7 +94,8 @@
         <button class="ml-auto rounded-md p-1.5 text-fg-faint hover:bg-raised hover:text-fg lg:hidden" aria-label="Close menu" onclick={() => (menuOpen = false)}><X size={15} /></button>
       </div>
 
-      <a href="/host" class="mx-2 mb-3 flex flex-col rounded-md px-2.5 py-2 transition-colors hover:bg-raised/50">
+      <a href="/host" class="relative mx-2 mb-3 flex flex-col rounded-md px-2.5 py-2 transition-colors {onHost ? 'bg-raised/70' : 'hover:bg-raised/50'}" aria-current={onHost ? 'page' : undefined} onclick={() => (menuOpen = false)}>
+        {#if onHost}<span class="absolute inset-y-2 left-0 w-0.5 rounded-full bg-accent"></span>{/if}
         <span class="flex items-center gap-2">
           <span class="dot {live.connected ? 'text-ok pulse' : 'text-bad'}"></span>
           <span class="truncate text-sm font-medium text-fg" title={name}>{name || 'Connecting'}</span>
@@ -146,7 +143,7 @@
       </main>
     </div>
   </div>
-  <SlotDialogs />
+  <RunDrawer />
   <Confirmer />
   <Toaster />
 </Tooltip.Provider>

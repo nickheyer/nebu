@@ -128,6 +128,11 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 	return profile, nil
 }
 
+// Reads the filesystem holding a path, its mount and free bytes
+func Stat(path string) (*v1.Storage, error) {
+	return stat(path)
+}
+
 // Builds the expression environment for a profile
 func Env(p *v1.HostProfile) map[string]any {
 	devices := make([]any, 0, len(p.GetDevices()))

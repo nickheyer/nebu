@@ -131,54 +131,6 @@ func TestSourcesRoundTrip(t *testing.T) {
 	}
 }
 
-func TestWatchesAndFindings(t *testing.T) {
-	d, _ := open(t)
-	ctx := context.Background()
-	w := &v1.Watch{Id: "w1", SourceId: "hf", Repo: "org/name", Revision: "main", GroupMatch: "Q4", AutoPull: true, SlotId: "s1", RuntimeId: "rt", Params: map[string]string{"a": "b"}, LastCommit: "abc", KnownGroups: []string{"Q8", "Q4"}, CheckedAt: timestamppb.New(time.Unix(9, 0)), CreatedAt: timestamppb.New(time.Unix(8, 0)), Error: ""}
-	if err := d.PutWatch(ctx, w); err != nil {
-		t.Fatal(err)
-	}
-	list, _ := d.ListWatches(ctx)
-	if len(list) != 1 || !proto.Equal(list[0], w) {
-		t.Fatalf("watch round trip %v", list)
-	}
-	dup := proto.Clone(w).(*v1.Watch)
-	dup.Id = "w2"
-	if err := d.PutWatch(ctx, dup); err == nil {
-		t.Fatal("same repo and revision should violate the unique index")
-	}
-	f := &v1.Finding{Id: "f1", WatchId: "w1", Kind: v1.FindingKind_FINDING_KIND_NEW_GROUP, Repo: "org/name", Commit: "abc", Group: "Q5", Detail: "d", TaskId: "t", FoundAt: timestamppb.New(time.Unix(11, 0))}
-	if err := d.PutFinding(ctx, f); err != nil {
-		t.Fatal(err)
-	}
-	later := proto.Clone(f).(*v1.Finding)
-	later.Id, later.FoundAt, later.Acknowledged = "f2", timestamppb.New(time.Unix(12, 0)), true
-	d.PutFinding(ctx, later)
-	all, _ := d.ListFindings(ctx, "", "", false)
-	if len(all) != 2 || all[0].GetId() != "f2" {
-		t.Fatalf("findings newest first %v", all)
-	}
-	unacked, _ := d.ListFindings(ctx, "w1", "", true)
-	if len(unacked) != 1 || !proto.Equal(unacked[0], f) {
-		t.Fatalf("unacked %v", unacked)
-	}
-	if _, err := d.PruneFindings(ctx, 1); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := d.GetFinding(ctx, "f2"); got == nil {
-		t.Fatal("newest acknowledged finding kept within keep")
-	}
-	if ok, _ := d.DeleteWatch(ctx, "w1"); !ok {
-		t.Fatal("delete watch")
-	}
-	if rest, _ := d.ListFindings(ctx, "", "", false); len(rest) != 0 {
-		t.Fatal("findings should cascade")
-	}
-	if _, err := d.GetFinding(ctx, "f1"); !IsNotFound(err) {
-		t.Fatal("finding gone")
-	}
-}
-
 func TestSettingsRoundTrip(t *testing.T) {
 	d, _ := open(t)
 	ctx := context.Background()

@@ -1,13 +1,15 @@
-// Package doctor turns probes, runtimes, and sources into actionable checks.
+// Package doctor probes the host and checks every dependency as a task.
 package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 
 	"github.com/nickheyer/nebu/internal/installs"
+	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -16,34 +18,88 @@ import (
 	"github.com/nickheyer/nebu/pkg/store"
 )
 
-// Runs every diagnostic
+// The task kind a check runs under
+const Kind = "probe"
+
+// Severity of one check
+type status int
+
+const (
+	ok status = iota
+	warn
+	fail
+)
+
+func (s status) String() string {
+	switch s {
+	case warn:
+		return "warn"
+	case fail:
+		return "fail"
+	}
+	return "ok"
+}
+
+// Probes the host again and checks probes, devices, storage, the store, runtimes, recipes, and sources
 type Doctor struct {
 	Host     *host.Prober
 	Runtimes *runtime.Registry
 	Sources  *sources.Registry
 	Store    *store.Store
 	Installs *installs.Manager
+	Tasks    *tasks.Manager
 	MinFree  uint64
+
+	mu      sync.Mutex
+	running *v1.Task
 }
 
-// Produces a report from a fresh probe
-func (d *Doctor) Run(ctx context.Context) (*v1.DoctorReport, error) {
+// Starts the check as a task, one line per check in its log, failing when any check fails
+//
+// A check already running is returned instead of started twice.
+func (d *Doctor) Start(ctx context.Context) (*v1.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.running != nil {
+		if t, _, err := d.Tasks.Get(d.running.GetId()); err == nil && !terminal(t.GetState()) {
+			return t, nil
+		}
+	}
+	task := d.Tasks.Start(Kind, "Probe host", nil, d.run)
+	d.running = task
+	return task, nil
+}
+
+func terminal(s v1.TaskState) bool {
+	return s == v1.TaskState_TASK_STATE_SUCCEEDED || s == v1.TaskState_TASK_STATE_FAILED || s == v1.TaskState_TASK_STATE_CANCELED
+}
+
+// One check with its outcome and what to do about it
+type check struct {
+	id      string
+	status  status
+	summary string
+	hint    string
+}
+
+func (d *Doctor) run(ctx context.Context, h *tasks.Handle) error {
+	h.Progress(0, 0, "probing")
 	profile, err := d.Host.Profile(ctx, true)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	report := &v1.DoctorReport{Profile: profile}
-	add := func(id string, status v1.CheckStatus, summary, hint string) {
-		report.Checks = append(report.Checks, &v1.DoctorCheck{Id: id, Status: status, Summary: summary, Hint: hint})
+	var checks []check
+	add := func(id string, st status, summary, hint string) {
+		checks = append(checks, check{id: id, status: st, summary: summary, hint: hint})
 	}
 	for _, p := range profile.GetProbes() {
 		switch p.GetStatus() {
 		case v1.ProbeStatus_PROBE_STATUS_FAILED:
-			add("probe."+p.GetProbeId(), v1.CheckStatus_CHECK_STATUS_WARN, p.GetDetail(), "fix the tool or override the probe spec in a spec directory")
+			add("probe."+p.GetProbeId(), warn, p.GetDetail(), "fix the tool or override the probe spec in a spec directory")
 		case v1.ProbeStatus_PROBE_STATUS_SKIPPED:
-			add("probe."+p.GetProbeId(), v1.CheckStatus_CHECK_STATUS_OK, "skipped, "+p.GetDetail(), "")
+			add("probe."+p.GetProbeId(), ok, "skipped, "+p.GetDetail(), "")
 		default:
-			add("probe."+p.GetProbeId(), v1.CheckStatus_CHECK_STATUS_OK, p.GetDetail(), "")
+			add("probe."+p.GetProbeId(), ok, p.GetDetail(), "")
 		}
 	}
 	var gpus []string
@@ -53,58 +109,58 @@ func (d *Doctor) Run(ctx context.Context) (*v1.DoctorReport, error) {
 		}
 	}
 	if len(gpus) == 0 {
-		add("devices.gpu", v1.CheckStatus_CHECK_STATUS_WARN, "no GPU probed", "install the vendor management tool so a probe can see the device")
+		add("devices.gpu", warn, "no GPU probed", "install the vendor management tool so a probe can see the device")
 	} else {
-		add("devices.gpu", v1.CheckStatus_CHECK_STATUS_OK, strings.Join(gpus, ", "), "")
+		add("devices.gpu", ok, strings.Join(gpus, ", "), "")
 	}
 	hostPool := false
 	for _, pl := range profile.GetPools() {
 		if pl.GetKind() == v1.PoolKind_POOL_KIND_HOST || pl.GetKind() == v1.PoolKind_POOL_KIND_UNIFIED {
 			hostPool = true
-			add("pools."+pl.GetId(), v1.CheckStatus_CHECK_STATUS_OK, estimate.Human(pl.GetTotalBytes())+" total", "")
+			add("pools."+pl.GetId(), ok, estimate.Human(pl.GetTotalBytes())+" total", "")
 		}
 	}
 	if !hostPool {
-		add("pools.host", v1.CheckStatus_CHECK_STATUS_WARN, "no host memory pool probed", "host offload cannot be planned without a memory probe")
+		add("pools.host", warn, "no host memory pool probed", "host offload cannot be planned without a memory probe")
 	}
 	for _, st := range profile.GetStorage() {
 		summary := fmt.Sprintf("%s free of %s for %s", estimate.Human(st.GetFreeBytes()), estimate.Human(st.GetTotalBytes()), strings.Join(st.GetUses(), ", "))
 		if st.GetFreeBytes() < d.MinFree {
-			add("storage."+st.GetPath(), v1.CheckStatus_CHECK_STATUS_WARN, summary, fmt.Sprintf("below %s, models will not fit", estimate.Human(d.MinFree)))
+			add("storage."+st.GetPath(), warn, summary, fmt.Sprintf("below %s, models will not fit", estimate.Human(d.MinFree)))
 		} else {
-			add("storage."+st.GetPath(), v1.CheckStatus_CHECK_STATUS_OK, summary, "")
+			add("storage."+st.GetPath(), ok, summary, "")
 		}
 	}
 	if st, err := d.Store.Status(); err != nil {
-		add("store", v1.CheckStatus_CHECK_STATUS_FAIL, err.Error(), "check permissions on the store directory")
+		add("store", fail, err.Error(), "check permissions on the store directory")
 	} else {
 		summary := fmt.Sprintf("%d models, %d blobs, %s", st.GetModels(), st.GetBlobs(), estimate.Human(st.GetBlobBytes()))
 		if st.GetPartials() > 0 {
-			add("store", v1.CheckStatus_CHECK_STATUS_WARN, fmt.Sprintf("%s, %d partial downloads holding %s", summary, st.GetPartials(), estimate.Human(st.GetPartialBytes())), "pull again to resume or run nebu store gc --partials")
+			add("store", warn, fmt.Sprintf("%s, %d partial downloads holding %s", summary, st.GetPartials(), estimate.Human(st.GetPartialBytes())), "pull again to resume or run nebu store gc --partials")
 		} else {
-			add("store", v1.CheckStatus_CHECK_STATUS_OK, summary, "")
+			add("store", ok, summary, "")
 		}
 	}
 	for _, rt := range d.Runtimes.List() {
 		id := "runtime." + rt.Manifest.GetId()
-		ok, unmet := rt.Compatible(profile)
-		if !ok {
-			add(id, v1.CheckStatus_CHECK_STATUS_WARN, "needs "+strings.Join(unmet, ", "), "")
+		compatible, unmet := rt.Compatible(profile)
+		if !compatible {
+			add(id, warn, "needs "+strings.Join(unmet, ", "), "")
 			continue
 		}
 		list, err := d.Installs.List(ctx, rt.Manifest.GetId())
 		switch {
 		case err != nil:
-			add(id, v1.CheckStatus_CHECK_STATUS_FAIL, err.Error(), "check permissions on the data directory")
+			add(id, fail, err.Error(), "check permissions on the data directory")
 		case len(list) == 0:
-			add(id, v1.CheckStatus_CHECK_STATUS_WARN, "compatible, no install", fmt.Sprintf("nebu runtimes adopt %s or nebu runtimes install %s", rt.Manifest.GetId(), rt.Manifest.GetId()))
+			add(id, warn, "compatible, not installed", "nebu runtimes install "+rt.Manifest.GetId())
 		default:
-			add(id, v1.CheckStatus_CHECK_STATUS_OK, fmt.Sprintf("%d installs, newest %s %s", len(list), list[0].GetVersion(), list[0].GetPath()), "")
+			add(id, ok, fmt.Sprintf("%d installs, newest %s %s", len(list), list[0].GetVersion(), list[0].GetPath()), "")
 		}
 	}
 	recipes, err := d.Installs.ListRecipes(ctx, "")
 	if err != nil {
-		add("recipes", v1.CheckStatus_CHECK_STATUS_FAIL, err.Error(), "check the host profile and the spec directories")
+		add("recipes", fail, err.Error(), "check the host profile and the spec directories")
 	}
 	for _, rs := range recipes {
 		id := "recipe." + rs.GetRecipe().GetId()
@@ -113,16 +169,17 @@ func (d *Doctor) Run(ctx context.Context) (*v1.DoctorReport, error) {
 			where = "no variant selected"
 		}
 		if len(rs.GetUnmet()) > 0 {
-			add(id, v1.CheckStatus_CHECK_STATUS_WARN, where+", "+strings.Join(rs.GetUnmet(), "; "), "install the tools or build in a container with nebu build --sandbox oci --image IMAGE")
+			add(id, warn, where+", "+strings.Join(rs.GetUnmet(), "; "), "install the tools or build in a container with nebu build --sandbox oci --image IMAGE")
 			continue
 		}
 		detail := where + " on the host"
 		if rs.GetSandbox() == v1.SandboxKind_SANDBOX_KIND_OCI {
 			detail = where + " through " + rs.GetSandboxCli()
 		}
-		add(id, v1.CheckStatus_CHECK_STATUS_OK, detail, "")
+		add(id, ok, detail, "")
 	}
-	// Every source is asked at once, the report waiting for the slowest
+	h.Progress(0, 0, "asking every source")
+	// Every source is asked at once, the check waiting for the slowest
 	cfgs := d.Sources.List()
 	errs := make([]error, len(cfgs))
 	var wg sync.WaitGroup
@@ -140,10 +197,30 @@ func (d *Doctor) Run(ctx context.Context) (*v1.DoctorReport, error) {
 	wg.Wait()
 	for i, cfg := range cfgs {
 		if errs[i] != nil {
-			add("source."+cfg.GetId(), v1.CheckStatus_CHECK_STATUS_FAIL, errs[i].Error(), "check network, endpoint, and token")
+			add("source."+cfg.GetId(), fail, errs[i].Error(), "check network, endpoint, and token")
 		} else {
-			add("source."+cfg.GetId(), v1.CheckStatus_CHECK_STATUS_OK, "reachable", "")
+			add("source."+cfg.GetId(), ok, "reachable", "")
 		}
 	}
-	return report, nil
+	counts := map[status]int{}
+	for _, c := range checks {
+		counts[c.status]++
+		line := fmt.Sprintf("%-4s %s  %s", c.status, c.id, c.summary)
+		if c.hint != "" {
+			line += "  (" + c.hint + ")"
+		}
+		h.Logf("%s", line)
+	}
+	summary := fmt.Sprintf("%d ok", counts[ok])
+	if counts[warn] > 0 {
+		summary += fmt.Sprintf(", %d warnings", counts[warn])
+	}
+	if counts[fail] > 0 {
+		summary += fmt.Sprintf(", %d failed", counts[fail])
+	}
+	h.Progress(uint64(len(checks)), uint64(len(checks)), summary)
+	if counts[fail] > 0 {
+		return errors.New(summary)
+	}
+	return nil
 }

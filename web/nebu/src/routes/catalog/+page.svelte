@@ -5,10 +5,10 @@
   import { api, message } from '$lib/api';
   import { cached, refreshCached, live, clock } from '$lib/state.svelte';
   import { fail } from '$lib/toast.svelte';
-  import { facetValueLabel, groupByProvider, groupLabel, hitSize, kindParam, locked, looksLikeRepo, parseKind, pickGroup, sortReversible, sourceLabels } from '$lib/catalog';
-  import { ago, bytes, count, params as fmtParams } from '$lib/format';
-  import { SourceKind, type SearchHit } from '$proto/source_pb';
-  import { ArrowDown, ArrowUp, KeyRound, X, RefreshCw, Settings, Lock, EyeOff, Check, ChevronDown } from '@lucide/svelte';
+  import { facetValueLabel, groupByProvider, groupLabel, hitChips, hitSize, kindParam, locked, looksLikeRepo, parseKind, pickGroup, sortReversible, sourceLabels } from '$lib/catalog';
+  import { ago, storage, count, params as fmtParams } from '$lib/format';
+  import { SourceKind, type Provider, type SearchHit, type SourceStatus } from '$proto/source_pb';
+  import { ArrowDown, ArrowUp, KeyRound, X, RefreshCw, Plus, Lock, EyeOff, Check, ChevronDown } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import IconButton from '$lib/components/ui/IconButton.svelte';
@@ -20,6 +20,7 @@
   import SourceRail from '$lib/components/catalog/SourceRail.svelte';
   import FacetPicker from '$lib/components/catalog/FacetPicker.svelte';
   import ModelDrawer from '$lib/components/ModelDrawer.svelte';
+  import SourceDrawer from '$lib/components/SourceDrawer.svelte';
 
   const pageSize = 30;
 
@@ -45,6 +46,27 @@
   let debounce: ReturnType<typeof setTimeout> | null = null;
   let generation = 0;
   let booted = false;
+  // The URL this page last wrote, so one it did not write is read as a new request
+  let written = '';
+  // Sources are added and edited from the rail, the form the provider describes
+  let providers = $state<Provider[]>([]);
+  let sourceOpen = $state(false);
+  let editing = $state<SourceStatus | null>(null);
+
+  function editSource(s: SourceStatus) {
+    editing = s;
+    sourceOpen = true;
+  }
+  function addSource() {
+    editing = null;
+    sourceOpen = true;
+  }
+  $effect(() => {
+    api.sources
+      .listProviders({})
+      .then((p) => (providers = p.providers))
+      .catch((err) => fail(err, 'Could not list providers'));
+  });
 
   const statuses = $derived(cached.sources);
   const groups = $derived(groupByProvider(statuses));
@@ -80,6 +102,14 @@
     untrack(boot);
   });
 
+  // A link into the catalog, a model's namespace say, is read the same way
+  $effect(() => {
+    const here = page.url.pathname + page.url.search;
+    untrack(() => {
+      if (booted && here !== written) boot();
+    });
+  });
+
   function boot() {
     const p = page.url.searchParams;
     const wantedSource = p.get('source') ?? '';
@@ -97,6 +127,7 @@
     search();
     const repo = p.get('repo');
     if (repo) openRepo(openSourceId, repo, p.get('rev') ?? '', null);
+    else drawerOpen = false;
   }
 
   // A provider only accepts its own sorts and facets, so switching drops the rest
@@ -143,6 +174,7 @@
     }
     const qs = p.toString();
     const next = '/catalog' + (qs ? '?' + qs : '');
+    written = next;
     if (next !== page.url.pathname + page.url.search) replaceState(next, {});
   }
 
@@ -264,7 +296,7 @@
 
   function sizeOf(h: SearchHit): string {
     const s = hitSize(h);
-    return s.kind === 'params' ? fmtParams(s.value) : s.kind === 'bytes' ? bytes(s.value, 1) : '–';
+    return s.kind === 'params' ? fmtParams(s.value) : s.kind === 'bytes' ? storage(s.value, 1) : '–';
   }
 </script>
 
@@ -299,7 +331,6 @@
 {/snippet}
 
 <PageHeader title="Models">
-  <Button variant="ghost" icon={Settings} href="/settings">Sources</Button>
   {#snippet below()}
     <ModelsNav />
   {/snippet}
@@ -316,12 +347,12 @@
   </div>
 {:else if statuses.length === 0}
   <Empty title="No sources">
-    <Button size="sm" icon={Settings} href="/settings">Settings</Button>
+    <Button size="sm" icon={Plus} onclick={addSource} disabled={!providers.length}>Add source</Button>
   </Empty>
 {:else}
-  <div class="grid grid-cols-1 gap-8 lg:grid-cols-[12rem_minmax(0,1fr)]">
+  <div class="grid grid-cols-1 gap-8 lg:grid-cols-[13rem_minmax(0,1fr)]">
     <aside class="lg:sticky lg:top-8 lg:self-start">
-      <SourceRail {groups} {kind} {sourceId} onChange={pick} />
+      <SourceRail {groups} {kind} {sourceId} onChange={pick} onEdit={editSource} onAdd={addSource} />
     </aside>
 
     <div class="min-w-0">
@@ -427,6 +458,7 @@
               {#each hits as h (h.sourceId + '/' + h.repo)}
                 {@const hcaps = capsOf(h.sourceId)}
                 {@const title = h.name && h.name !== h.repo ? h.name : h.repo}
+                {@const chips = hitChips(h, hcaps)}
                 {@const on = selected?.repo === h.repo && selected?.sourceId === h.sourceId && drawerOpen}
                 <tr class="row-link {on ? 'row-active' : ''}" onclick={() => openHit(h)}>
                   <td>
@@ -437,6 +469,11 @@
                       {#if stored.has(h.sourceId + '/' + h.repo)}<Tip text="In the library"><Check size={12} class="shrink-0 text-ok" /></Tip>{/if}
                     </div>
                     <div class="truncate text-xs text-fg-faint">{h.author}{#if h.name && h.name !== h.repo}<span class="font-mono">{' · '}{h.repo}</span>{/if}</div>
+                    {#if chips.length}
+                      <div class="mt-1 flex flex-wrap gap-1">
+                        {#each chips as c (c)}<span class="rounded-sm bg-raised px-1.5 text-[11px] text-fg-muted">{c}</span>{/each}
+                      </div>
+                    {/if}
                   </td>
                   {#if merged}<td class="truncate text-fg-muted">{labels.get(h.sourceId) ?? h.sourceId}</td>{/if}
                   <td class="truncate text-fg-muted">{h.task ? facetValueLabel(hcaps, 'task', h.task) : '–'}</td>
@@ -463,6 +500,8 @@
   </div>
 {/if}
 
+<SourceDrawer bind:open={sourceOpen} {providers} {editing} />
+
 {#if selected}
   <ModelDrawer
     bind:open={drawerOpen}
@@ -471,7 +510,6 @@
     repo={selected.repo}
     revision={selected.revision}
     caps={capsOf(selected.sourceId)}
-    runtimes={cached.runtimes}
     hit={selected.hit}
     bind:slotId
     onNavigate={(repo, rev) => {

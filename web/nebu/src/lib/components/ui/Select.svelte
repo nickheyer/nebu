@@ -23,6 +23,7 @@
     disabled = false,
     size = 'md',
     label,
+    onchange,
     class: cls = ''
   }: {
     value?: string;
@@ -34,6 +35,8 @@
     size?: 'sm' | 'md';
     // Read by screen readers when no visible label points at the select
     label?: string;
+    // Called with the new value, for callers that do not bind
+    onchange?: (value: string) => void;
     class?: string;
   } = $props();
 
@@ -57,7 +60,14 @@
 </script>
 
 <div class="min-w-0 {cls || 'w-full'}">
-<Select.Root type="single" value={wrap(value)} onValueChange={(v) => (value = unwrap(v))} {disabled} items={items.map((i) => ({ value: wrap(i.value), label: i.label, disabled: i.disabled }))}>
+<Select.Root
+  type="single"
+  value={wrap(value)}
+  onValueChange={(v) => {
+    value = unwrap(v);
+    onchange?.(value);
+  }}
+  {disabled} items={items.map((i) => ({ value: wrap(i.value), label: i.label, disabled: i.disabled }))}>
   <Select.Trigger
     {id}
     aria-label={label}

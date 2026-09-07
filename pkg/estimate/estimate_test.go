@@ -2,9 +2,11 @@ package estimate
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	desc "github.com/nickheyer/nebu/pkg/descriptor"
@@ -342,5 +344,185 @@ func TestSlidingWindowAndSpannedDevices(t *testing.T) {
 	spread, err := p.Plan(Input{Descriptor: small, Formulas: builder.Formulas("default"), Host: two, Params: defaults(params, map[string]any{"n_ctx": int64(1024)})})
 	if err != nil || spread.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
 		t.Fatalf("llama.cpp spreads over every device: %v %v", spread, err)
+	}
+}
+
+// A header without the heads the cache formula needs fails by naming them, never with the evaluator's own words
+func TestPlanNamesMissingParams(t *testing.T) {
+	p, params := policy(t, "llamacpp")
+	d := descriptor(4, 100*mib, 0)
+	delete(d.Params, "n_head_kv")
+	_, err := p.Plan(Input{Descriptor: d, Formulas: formulas(t), Host: host(24*gib, 64*gib), Params: defaults(params, nil)})
+	var missing *eval.MissingError
+	if !errors.As(err, &missing) || strings.Join(missing.Names, ",") != "n_head_kv" || missing.Formula != "cache_per_token" {
+		t.Fatalf("want a missing n_head_kv, got %v", err)
+	}
+	delete(d.Params, "n_embd")
+	d.Params["n_head_kv"] = 8
+	_, err = p.Plan(Input{Descriptor: d, Formulas: formulas(t), Host: host(24*gib, 64*gib), Params: defaults(params, nil)})
+	if !errors.As(err, &missing) || strings.Join(missing.Names, ",") != "n_embd" || missing.Formula != "overhead_bytes" {
+		t.Fatalf("want a missing n_embd, got %v", err)
+	}
+}
+
+func usage(plan *v1.MemoryPlan, id string) *v1.PoolUsage {
+	for _, pu := range plan.GetPools() {
+		if pu.GetPoolId() == id {
+			return pu
+		}
+	}
+	return nil
+}
+
+// A model no fit holds is laid out the way the host would take it: the device fills to its
+// brim, the rest flows into host memory, and what nothing holds overflows past the last pool
+func TestNoFitFillsDeviceThenSpillsAndOverflows(t *testing.T) {
+	p, params := policy(t, "vllm")
+	// Twenty-eight 1 GiB layers plus cache and overhead, on a 12 GiB card with 16 GiB beside it
+	plan, err := p.Plan(Input{Descriptor: descriptor(28, gib, 0), Formulas: formulas(t), Host: host(12*gib, 16*gib), Params: defaults(params, nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO {
+		t.Fatalf("plan %+v", plan)
+	}
+	total := plan.GetWeightsBytes() + plan.GetCacheBytes() + plan.GetOverheadBytes()
+	gpu, ram := usage(plan, "gpu0"), usage(plan, "host")
+	if gpu == nil || ram == nil || gpu.GetUsedBytes() != 12*gib || gpu.GetCapacityBytes() != 12*gib {
+		t.Fatalf("device should fill to its capacity: %v", plan.GetPools())
+	}
+	if ram.GetUsedBytes() != total-12*gib || ram.GetUsedBytes() <= ram.GetCapacityBytes() {
+		t.Fatalf("host should take the rest and overflow: %v of %v", ram.GetUsedBytes(), total)
+	}
+	if PlannedDevice(plan) != 12*gib {
+		t.Fatalf("planned device %d", PlannedDevice(plan))
+	}
+	if !strings.Contains(plan.GetDetail(), "more than") {
+		t.Fatalf("detail %q", plan.GetDetail())
+	}
+	var device, hostSide uint32
+	var placed uint64
+	for _, pl := range plan.GetPlacements() {
+		placed += pl.GetBytes()
+		if pl.GetKind() != v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER {
+			continue
+		}
+		if pl.GetPoolId() == "device" {
+			device = pl.GetCount()
+		} else {
+			hostSide = pl.GetCount()
+		}
+	}
+	if device == 0 || hostSide == 0 || device+hostSide != 28 || placed != plan.GetWeightsBytes() {
+		t.Fatalf("layers should split across the sides, weights alone placed: %v", plan.GetPlacements())
+	}
+
+	// With host memory to spare the device still fills whole and the host takes the rest within its capacity
+	plan, err = p.Plan(Input{Descriptor: descriptor(28, gib, 0), Formulas: formulas(t), Host: host(12*gib, 64*gib), Params: defaults(params, nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gpu, ram = usage(plan, "gpu0"), usage(plan, "host")
+	if plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || gpu.GetUsedBytes() != 12*gib || ram.GetUsedBytes() != total-12*gib || ram.GetUsedBytes() > ram.GetCapacityBytes() {
+		t.Fatalf("plan %+v", plan)
+	}
+	if !strings.Contains(plan.GetDetail(), "device need") {
+		t.Fatalf("detail %q", plan.GetDetail())
+	}
+
+	// Two cards fill in turn before anything reaches the host, and the solved counts say what landed on device
+	lp, lparams := policy(t, "llamacpp")
+	two := &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "a", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 8 * gib}, {Id: "b", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 8 * gib}, {Id: "h", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 4 * gib}}}
+	plan, err = lp.Plan(Input{Descriptor: descriptor(28, gib, 0), Formulas: formulas(t), Host: two, Params: defaults(lparams, nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || usage(plan, "a").GetUsedBytes() != 8*gib || usage(plan, "b").GetUsedBytes() != 8*gib || usage(plan, "h").GetUsedBytes() <= 4*gib {
+		t.Fatalf("plan %+v", plan)
+	}
+	n, _ := strconv.Atoi(plan.GetParams()["n_gpu_layers"])
+	if n <= 0 || n >= 28 {
+		t.Fatalf("n_gpu_layers should say what landed on device, got %d", n)
+	}
+	// The embedding llama.cpp keeps in host memory lands there even when the device has room
+	plan, err = lp.Plan(Input{Descriptor: descriptor(4, 100*mib, 0), Formulas: formulas(t), Host: host(0, 64*gib), Params: defaults(lparams, nil)})
+	if err != nil || plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || usage(plan, "host").GetUsedBytes() == 0 {
+		t.Fatalf("no device: %+v %v", plan, err)
+	}
+}
+
+// A kind whose when clause does not hold stays on disk: out of the weights, out of every
+// pool, and listed as skipped, until the params turn it on
+func TestWhenClauseLeavesDraftHeadsOnDisk(t *testing.T) {
+	d := descriptor(4, 100*mib, 0)
+	for i := int32(0); i < 3; i++ {
+		d.Groups = append(d.Groups, &v1.TensorGroup{Id: "draft." + strconv.Itoa(int(i)), Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT, Layer: i, Bytes: gib})
+	}
+	d.Groups = append(d.Groups, &v1.TensorGroup{Id: "vision", Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_VISION, Layer: -1, Bytes: 500 * mib})
+	base := 4*100*mib + 600*mib + 500*mib
+	for _, id := range []string{"sglang", "vllm"} {
+		p, params := policy(t, id)
+		plan, err := p.Plan(Input{Descriptor: d, Formulas: formulas(t), Host: host(24*gib, 64*gib), Params: defaults(params, nil)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.GetWeightsBytes() != uint64(base) || len(plan.GetSkipped()) != 1 || plan.GetSkipped()[0].GetKind() != v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT || plan.GetSkipped()[0].GetBytes() != 3*gib || plan.GetSkipped()[0].GetCount() != 3 || plan.GetSkipped()[0].GetPoolId() != "" {
+			t.Fatalf("%s: drafts should stay on disk: weights %d skipped %v", id, plan.GetWeightsBytes(), plan.GetSkipped())
+		}
+		for _, pl := range plan.GetPlacements() {
+			if pl.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT {
+				t.Fatalf("%s: a skipped kind must not be placed: %v", id, plan.GetPlacements())
+			}
+		}
+		var vision bool
+		for _, pl := range plan.GetPlacements() {
+			vision = vision || (pl.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_VISION && pl.GetPoolId() == "device" && pl.GetBytes() == 500*mib)
+		}
+		if !vision {
+			t.Fatalf("%s: the vision tower loads on device: %v", id, plan.GetPlacements())
+		}
+		on := map[string]any{"speculative_algorithm": "NEXTN"}
+		if id == "vllm" {
+			on = map[string]any{"speculative_config": `{"method":"mtp","num_speculative_tokens":1}`}
+		}
+		plan, err = p.Plan(Input{Descriptor: d, Formulas: formulas(t), Host: host(24*gib, 64*gib), Params: defaults(params, on)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.GetWeightsBytes() != uint64(base)+3*gib || len(plan.GetSkipped()) != 0 {
+			t.Fatalf("%s: drafts should load once speculative decoding is on: weights %d skipped %v", id, plan.GetWeightsBytes(), plan.GetSkipped())
+		}
+		if PlannedDevice(plan) < uint64(base)+3*gib {
+			t.Fatalf("%s: drafts should sit on device: %d", id, PlannedDevice(plan))
+		}
+	}
+	// llama.cpp never drafts with them
+	p, params := policy(t, "llamacpp")
+	plan, err := p.Plan(Input{Descriptor: d, Formulas: formulas(t), Host: host(24*gib, 64*gib), Params: defaults(params, nil)})
+	if err != nil || plan.GetWeightsBytes() != uint64(base) || len(plan.GetSkipped()) != 1 {
+		t.Fatalf("llama.cpp: %+v %v", plan, err)
+	}
+}
+
+// Placements carry weights alone, so the pool's remainder reads as cache and overhead
+func TestPlacementsHoldWeightsAlone(t *testing.T) {
+	p, params := policy(t, "llamacpp")
+	plan, err := p.Plan(Input{Descriptor: descriptor(28, 100*mib, 0), Formulas: formulas(t), Host: host(12*gib, 64*gib), Params: defaults(params, nil)})
+	if err != nil || plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
+		t.Fatalf("plan %+v %v", plan, err)
+	}
+	var placed uint64
+	for _, pl := range plan.GetPlacements() {
+		placed += pl.GetBytes()
+	}
+	if placed != plan.GetWeightsBytes() {
+		t.Fatalf("placed %d weights %d", placed, plan.GetWeightsBytes())
+	}
+	var used uint64
+	for _, pu := range plan.GetPools() {
+		used += pu.GetUsedBytes()
+	}
+	if used != plan.GetWeightsBytes()+plan.GetCacheBytes()+plan.GetOverheadBytes() {
+		t.Fatalf("pools %d should hold weights, cache, and overhead", used)
 	}
 }

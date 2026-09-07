@@ -40,21 +40,32 @@ func TestResolveAsset(t *testing.T) {
 	}
 	m := &Manager{Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Sources: reg}
 	// The newest release lacks the asset, so the one before it is taken
-	rel, err := m.resolveAssets(context.Background(), &v1.PrebuiltRule{Releases: "o/r", Assets: []string{`^llama-b\d+-bin-ubuntu-x64\.tar\.gz$`}})
+	pre := &v1.Prebuilt{Releases: "o/r"}
+	rel, err := m.resolveAssets(context.Background(), pre, &v1.PrebuiltRule{Assets: []string{`^llama-b\d+-bin-ubuntu-x64\.tar\.gz$`}}, "")
 	if err != nil || rel.tag != "b1" || len(rel.assets) != 1 || rel.assets[0].name != "llama-b1-bin-ubuntu-x64.tar.gz" || rel.assets[0].size != 20 {
 		t.Fatalf("release %+v %v", rel, err)
 	}
 	rel.close()
 	// Every pattern must land in the same release, the newest has the binary but not its companion
-	rel, err = m.resolveAssets(context.Background(), &v1.PrebuiltRule{Releases: "o/r", Assets: []string{`^llama-b\d+-bin-win-cuda-12\.[\d.]+-x64\.zip$`, `^cudart-llama-bin-win-cuda-12\.[\d.]+-x64\.zip$`}})
+	cuda := &v1.PrebuiltRule{Assets: []string{`^llama-b\d+-bin-win-cuda-12\.[\d.]+-x64\.zip$`, `^cudart-llama-bin-win-cuda-12\.[\d.]+-x64\.zip$`}}
+	rel, err = m.resolveAssets(context.Background(), pre, cuda, "")
 	if err != nil || rel.tag != "b1" || len(rel.assets) != 2 || rel.assets[1].name != "cudart-llama-bin-win-cuda-12.4-x64.zip" || rel.assets[1].size != 40 {
 		t.Fatalf("two assets %+v %v", rel, err)
 	}
 	rel.close()
-	if _, err := m.resolveAssets(context.Background(), &v1.PrebuiltRule{Releases: "o/r", Assets: []string{"nope"}}); err == nil {
+	// A named release is taken as it is, and refused when it lacks the assets
+	rel, err = m.resolveAssets(context.Background(), pre, cuda, "b1")
+	if err != nil || rel.tag != "b1" || len(rel.assets) != 2 {
+		t.Fatalf("named release %+v %v", rel, err)
+	}
+	rel.close()
+	if _, err := m.resolveAssets(context.Background(), pre, cuda, "b2"); err == nil {
+		t.Fatal("a named release lacking the companion should fail")
+	}
+	if _, err := m.resolveAssets(context.Background(), pre, &v1.PrebuiltRule{Assets: []string{"nope"}}, ""); err == nil {
 		t.Fatal("no match should fail")
 	}
-	if _, err := m.resolveAssets(context.Background(), &v1.PrebuiltRule{Releases: "o/r", Assets: []string{"x"}, Source: "nope"}); err == nil {
+	if _, err := m.resolveAssets(context.Background(), &v1.Prebuilt{Releases: "o/r", Source: "nope"}, &v1.PrebuiltRule{Assets: []string{"x"}}, ""); err == nil {
 		t.Fatal("unknown source should fail")
 	}
 }

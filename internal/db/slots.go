@@ -29,8 +29,8 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 			return err
 		}
 		if req := s.GetRequest(); req != nil {
-			if err := exec(`INSERT INTO slot_requests (slot_id, source_id, repo, weight_group, runtime_id, install_id, name, profile_id, force) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetProfileId(), boolCol(req.GetForce())); err != nil {
+			if err := exec(`INSERT INTO slot_requests (slot_id, source_id, repo, weight_group, runtime_id, install_id, name, force) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), boolCol(req.GetForce())); err != nil {
 				return err
 			}
 			if err := putMap(exec, `INSERT INTO slot_request_params (slot_id, name, value) VALUES (?, ?, ?)`, id, req.GetParams()); err != nil {
@@ -63,9 +63,9 @@ func (d *DB) ListSlots(ctx context.Context) ([]*v1.Slot, error) {
 		if s.Params, err = d.stringMap(ctx, `SELECT name, value FROM slot_params WHERE slot_id = ? ORDER BY name`, s.GetId()); err != nil {
 			return nil, err
 		}
-		requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, profile_id, force FROM slot_requests WHERE slot_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
+		requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, force FROM slot_requests WHERE slot_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
 			req := &v1.RunRequest{SlotId: s.GetId()}
-			return req, rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.ProfileId, (*flag)(&req.Force))
+			return req, rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, (*flag)(&req.Force))
 		}, s.GetId())
 		if err != nil {
 			return nil, err

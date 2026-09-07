@@ -12,9 +12,8 @@
     const out: { label: string; href: string }[] = [];
     if (l.instance) out.push({ label: 'Instance', href: `/?instance=${l.instance}` });
     if (l.slot) out.push({ label: 'Slot', href: `/?slot=${l.slot}` });
-    if (l.build) out.push({ label: 'Builds', href: `/runtimes#builds` });
+    if (l.runtime) out.push({ label: 'Runtime', href: `/runtimes?id=${l.runtime}` });
     if (l.repo) out.push({ label: 'Library', href: `/store` });
-    if (l.watch) out.push({ label: 'Monitor', href: `/monitor` });
     return out;
   });
 </script>

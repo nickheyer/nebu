@@ -11,16 +11,17 @@
     title,
     subtitle,
     mono = false,
+    heading,
     header,
     children,
     footer
   }: {
     open?: boolean;
-    // Bound instead of open by panels showing one record, empty when closed
     id?: string;
     title: string;
     subtitle?: string;
     mono?: boolean;
+    heading?: Snippet;
     header?: Snippet;
     children: Snippet;
     footer?: Snippet;
@@ -83,7 +84,7 @@
       </div>
       <header class="flex items-start gap-3 px-6 pt-5 pb-0">
         <div class="min-w-0 flex-1">
-          <Dialog.Title class="truncate text-base font-semibold text-fg {mono ? 'font-mono' : ''}">{title}</Dialog.Title>
+          <Dialog.Title class="truncate text-base font-semibold text-fg {mono ? 'font-mono' : ''}">{#if heading}{@render heading()}{:else}{title}{/if}</Dialog.Title>
           {#if subtitle}<Dialog.Description class="mt-0.5 truncate text-sm text-fg-muted">{subtitle}</Dialog.Description>{/if}
           {#if header}<div class="mt-3">{@render header()}</div>{/if}
         </div>

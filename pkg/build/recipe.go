@@ -257,6 +257,22 @@ func (rc *Recipe) Timeout() time.Duration {
 	return DefaultTimeout
 }
 
+// Returns the variants whose conditions hold on the host, in recipe order
+func (rc *Recipe) Variants(profile *v1.HostProfile) ([]*v1.BuildVariant, error) {
+	env := host.Env(profile)
+	var out []*v1.BuildVariant
+	for _, v := range rc.variants {
+		ok, err := v.when.Holds(env)
+		if err != nil {
+			return nil, fmt.Errorf("variant %s: %w", v.spec.GetId(), err)
+		}
+		if ok {
+			out = append(out, v.spec)
+		}
+	}
+	return out, nil
+}
+
 // Caller choices and site defaults for one build
 type Options struct {
 	Variant  string

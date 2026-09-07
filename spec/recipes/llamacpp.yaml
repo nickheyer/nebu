@@ -1,6 +1,6 @@
 id: llamacpp
 runtime_id: llamacpp
-description: llama-server built from a release tag with the backend the host selects
+description: llama-server built from a release tag
 source:
   releases: ggml-org/llama.cpp
   ref: latest

@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Component } from 'svelte';
   import { bytes, pct, enumLabel } from '$lib/format';
-  import { DeviceKind, PoolKind, type HostProfile } from '$proto/host_pb';
+  import { DeviceKind, PoolKind, type HostProfile, type MemoryPool } from '$proto/host_pb';
   import { Cpu, MemoryStick, Microchip, ChevronRight } from '@lucide/svelte';
   import Meter from './ui/Meter.svelte';
   import Kv from './ui/Kv.svelte';
@@ -14,32 +14,55 @@
     mono: string;
     total: bigint;
     free: bigint;
+    // Others draw on the same pool, unified memory or a second socket
+    shared: boolean;
     facts: [string, string][];
   }
 
-  // One row per device, then host memory, a device row unfolding what the probes reported about it
+  // One row per device with the memory it draws on: a card's own pool, the system memory for a CPU, one unified pool for both on Apple silicon
   let { host }: { host: HostProfile } = $props();
 
-  const hostPool = $derived(host.pools.find((p) => p.kind === PoolKind.HOST));
-
-  function poolOf(deviceId: string) {
-    return host.pools.find((p) => p.deviceId === deviceId && p.kind !== PoolKind.HOST);
-  }
   const rows = $derived.by((): Row[] => {
+    const owned = new Map<string, MemoryPool>();
+    for (const p of host.pools) if (p.deviceId) owned.set(p.deviceId, p);
+    const loose = host.pools.filter((p) => !p.deviceId);
+    const system = loose.find((p) => p.kind === PoolKind.HOST);
+    const unified = loose.find((p) => p.kind === PoolKind.UNIFIED);
+    const users = new Map<string, number>();
+    const poolOf = (d: HostProfile['devices'][number]): MemoryPool | undefined => {
+      const own = owned.get(d.id);
+      if (own) return own;
+      if (d.kind === DeviceKind.CPU) return system ?? unified;
+      return unified;
+    };
+    for (const d of host.devices) {
+      const p = poolOf(d);
+      if (p) users.set(p.id, (users.get(p.id) ?? 0) + 1);
+    }
     const out: Row[] = host.devices.map((d) => {
-      const pool = poolOf(d.id);
+      const pool = poolOf(d);
+      const shared = !!pool && (users.get(pool.id) ?? 0) > 1;
+      const parts = [d.vendor, enumLabel(DeviceKind, d.kind)].filter(Boolean);
+      if (pool && !owned.has(d.id)) parts.push(pool.kind === PoolKind.UNIFIED ? 'unified memory' : 'system memory');
+      if (shared) parts.push('shared');
       return {
         id: d.id,
         icon: d.kind === DeviceKind.CPU ? Cpu : Microchip,
         name: d.name || d.id,
-        sub: `${d.vendor} ${enumLabel(DeviceKind, d.kind)}`.trim(),
+        sub: parts.join(' · '),
         mono: d.id,
         total: pool?.totalBytes ?? d.memoryTotalBytes,
         free: pool?.freeBytes ?? d.memoryFreeBytes,
+        shared,
         facts: Object.entries(d.facts).sort(([a], [b]) => a.localeCompare(b))
       };
     });
-    if (hostPool) out.push({ id: hostPool.id, icon: MemoryStick, name: 'Host memory', sub: 'system RAM', mono: '', total: hostPool.totalBytes, free: hostPool.freeBytes, facts: [] });
+    // Memory probed with no processor probed to hang it on still gets a row
+    for (const p of loose) {
+      if ((users.get(p.id) ?? 0) === 0) {
+        out.push({ id: p.id, icon: MemoryStick, name: p.kind === PoolKind.UNIFIED ? 'Unified memory' : 'System memory', sub: enumLabel(PoolKind, p.kind), mono: p.id, total: p.totalBytes, free: p.freeBytes, shared: false, facts: [] });
+      }
+    }
     return out;
   });
 </script>
@@ -61,7 +84,7 @@
         <span class="ml-3 inline-block w-9 text-right text-fg-muted">{pct(used, r.total).toFixed(0)}%</span>
       </div>
     {:else}
-      <div class="col-span-2 text-sm text-fg-faint">No dedicated memory</div>
+      <div class="col-span-2 text-sm text-fg-faint">No memory probed</div>
     {/if}
     <span class="flex w-4 justify-center text-fg-faint">{#if fold}<ChevronRight size={14} class="transition-transform group-open:rotate-90" />{/if}</span>
   </div>
@@ -80,6 +103,6 @@
       {@render row(r, false)}
     {/if}
   {:else}
-    <div class="px-2 py-6 text-center text-sm text-fg-faint">No devices</div>
+    <div class="px-2 py-6 text-center text-sm text-fg-faint">No devices probed</div>
   {/each}
 </div>

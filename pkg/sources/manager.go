@@ -37,8 +37,6 @@ type Manager struct {
 
 	mu   sync.Mutex
 	rows []*v1.Source
-	// Names what starts from a source, watches and wants, dropping them when clear is set
-	Referrers func(id string, clear bool) []string
 }
 
 // Builds a manager with an empty registry, filled by Load; transports keep clones and scratch under cacheDir
@@ -193,8 +191,8 @@ func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error)
 	return clone(next), nil
 }
 
-// Removes a source; seeded defaults stay, and one a watch or want names goes only when forced
-func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Source, error) {
+// Removes a source; seeded defaults stay
+func (m *Manager) Delete(ctx context.Context, id string) (*v1.Source, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	i := m.indexLocked(id)
@@ -204,13 +202,6 @@ func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Source
 	row := m.rows[i]
 	if row.GetSeeded() {
 		return nil, fmt.Errorf("%w: %s is a seeded default and stays, change its settings instead", ErrSource, id)
-	}
-	if m.Referrers != nil {
-		if used := m.Referrers(id, false); len(used) > 0 && !force {
-			return nil, fmt.Errorf("%w: %s is named by %s, remove them or remove with force to drop the references", ErrSourceInUse, id, strings.Join(used, ", "))
-		} else if len(used) > 0 {
-			m.Referrers(id, true)
-		}
 	}
 	if _, err := m.Store.DeleteSource(ctx, id); err != nil {
 		return nil, err

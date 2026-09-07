@@ -1,21 +1,20 @@
 import { SvelteMap } from 'svelte/reactivity';
 import { api, message, unauthenticated } from './api';
-import { readLocal, writeLocal } from './persist';
 import { EventAction, EventKind, type Event } from '$proto/event_pb';
-import type { HostProfile } from '$proto/host_pb';
+import { PoolKind, type HostProfile, type Storage } from '$proto/host_pb';
 import { TaskState, type Task } from '$proto/task_pb';
 import { InstanceState, type Instance } from '$proto/instance_pb';
 import type { Slot } from '$proto/slot_pb';
 import type { GatewayStatus, Route } from '$proto/gateway_pb';
-import type { Install, Profile, RuntimeStatus } from '$proto/runtime_pb';
+import type { Install, RuntimeStatus } from '$proto/runtime_pb';
 import type { FormatSpec } from '$proto/model_pb';
 import type { Build } from '$proto/recipe_pb';
 import type { StoredModel, StoreStatus } from '$proto/store_pb';
-import { FindingKind, type Finding, type Watch, type Want } from '$proto/monitor_pb';
-import { fail, toast } from './toast.svelte';
+import { fail, ok } from './toast.svelte';
 import type { Source, SourceStatus } from '$proto/source_pb';
 import type { Settings } from '$proto/settings_pb';
-import { byName, newestFirst } from './format';
+import { newestFirst } from './format';
+import { weightsName } from './catalog';
 
 // Everything the UI shows, kept current by the event stream
 export const live = $state({
@@ -33,15 +32,11 @@ export const live = $state({
   installs: new SvelteMap<string, Install>(),
   builds: new SvelteMap<string, Build>(),
   models: new SvelteMap<string, StoredModel>(),
-  watches: new SvelteMap<string, Watch>(),
-  findings: new SvelteMap<string, Finding>(),
   sources: new SvelteMap<string, Source>(),
-  profiles: new SvelteMap<string, Profile>(),
-  formats: new SvelteMap<string, FormatSpec>(),
-  wants: new SvelteMap<string, Want>()
+  formats: new SvelteMap<string, FormatSpec>()
 });
 
-// Lists without a map, reread per connection and after SOURCE or HOST events
+// Lists without a map, reread per connection and after SOURCE, HOST, and INSTALL events
 export const cached = $state({
   loaded: false,
   error: '',
@@ -85,38 +80,8 @@ const maps: Maps = {
   [EventKind.INSTALL]: live.installs,
   [EventKind.BUILD]: live.builds,
   [EventKind.MODEL]: live.models,
-  [EventKind.WATCH]: live.watches,
-  [EventKind.FINDING]: live.findings,
-  [EventKind.SOURCE]: live.sources,
-  [EventKind.PROFILE]: live.profiles,
-  [EventKind.WANT]: live.wants
+  [EventKind.SOURCE]: live.sources
 };
-
-const notifyKey = 'nebu.notify';
-
-// Whether this browser raises desktop notifications for findings
-export const desktopNotify = () => readLocal(notifyKey) === '1';
-
-export async function setDesktopNotify(on: boolean): Promise<boolean> {
-  if (on && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
-    if ((await Notification.requestPermission()) !== 'granted') return false;
-  }
-  writeLocal(notifyKey, on ? '1' : '0');
-  return on;
-}
-
-// Announces a finding that arrived live, in a toast and on the desktop when allowed
-function announce(f: Finding) {
-  const title = f.kind === FindingKind.WANTED_FOUND ? `Found ${f.repo}` : `${f.repo} changed`;
-  toast({ tone: f.kind === FindingKind.REMOVED_GROUP ? 'warn' : 'info', title, detail: f.detail, href: '/monitor', linkLabel: 'Monitor', sticky: true });
-  if (desktopNotify() && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-    try {
-      new Notification(title, { body: f.detail, tag: f.id });
-    } catch {
-      // some browsers refuse notifications without a service worker
-    }
-  }
-}
 
 // Keys seen during a snapshot so entries gone while disconnected can be pruned
 let snapshotSeen: Map<EventKind, Set<string>> | null = null;
@@ -136,7 +101,8 @@ function settle() {
 // Folds one event into the state
 function apply(ev: Event) {
   const p = ev.payload;
-  if (ev.seq > 0n && (ev.kind === EventKind.HOST || ev.kind === EventKind.SOURCE)) invalidateCached();
+  // A new install changes which methods a runtime offers, so the runtime list is reread too
+  if (ev.seq > 0n && (ev.kind === EventKind.HOST || ev.kind === EventKind.SOURCE || ev.kind === EventKind.INSTALL)) invalidateCached();
   if (ev.kind === EventKind.HOST) {
     if (p.case === 'host') live.host = p.value;
     return;
@@ -156,7 +122,6 @@ function apply(ev: Event) {
     return;
   }
   if (p.case && p.value) map.set(ev.id, p.value);
-  if (p.case === 'finding' && ev.action === EventAction.CREATED && ev.seq > 0n) announce(p.value);
   if (snapshotSeen && ev.seq === 0n) {
     let set = snapshotSeen.get(ev.kind);
     if (!set) snapshotSeen.set(ev.kind, (set = new Set()));
@@ -215,11 +180,11 @@ export function disconnect() {
   live.connected = false;
 }
 
-// Probes the host again, the HOST event carrying the new profile everywhere else
+// Probes the host again and checks every dependency, as a task whose log holds the checks
 export async function probeHost(): Promise<boolean> {
   try {
-    const resp = await api.host.getProfile({ refresh: true });
-    if (resp.profile) live.host = resp.profile;
+    const r = await api.host.doctor({});
+    ok('Probing host', undefined, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
     return true;
   } catch (err) {
     fail(err, 'Probe failed');
@@ -290,31 +255,14 @@ export function modelKey(m: { sourceId: string; repo: string; group: string }): 
   return `${m.sourceId}/${m.repo}/${m.group}`;
 }
 
-export function unackedFindings(): Finding[] {
-  return [...live.findings.values()].filter((f) => !f.acknowledged && f.kind !== FindingKind.UNSPECIFIED);
-}
-
-// Profiles of one runtime, the default first, or every profile by runtime when none is named
-export function profilesOf(runtimeId: string): Profile[] {
-  return [...live.profiles.values()]
-    .filter((p) => !runtimeId || p.runtimeId === runtimeId)
-    .sort(byName((p) => `${p.runtimeId} ${p.default ? 0 : 1} ${p.name}`));
-}
-
-// The name a profile goes by, the id when it is gone
-export function profileName(id: string): string {
-  return id ? (live.profiles.get(id)?.name ?? id) : '';
-}
-
-// Params a run of a runtime starts from: the named profile, else the runtime default
-export function profileParams(runtimeId: string, profileId = ''): Record<string, string> {
-  const p = profileId ? live.profiles.get(profileId) : profilesOf(runtimeId).find((p) => p.default);
-  return p?.runtimeId === runtimeId ? { ...p.params } : {};
-}
-
 // The runtime a manifest id names, for its display name
 export function runtimeName(id: string): string {
   return cached.runtimes.find((r) => r.manifest?.id === id)?.manifest?.name || id;
+}
+
+// The installs of one runtime, newest first
+export function installsOf(runtimeId: string): Install[] {
+  return [...live.installs.values()].filter((i) => i.runtimeId === runtimeId).sort(byCreated);
 }
 
 // What a weight format is, in the words its spec carries
@@ -326,4 +274,24 @@ export function formatBlurb(id: string): string {
 // The device a probed id names, for its display name
 export function deviceName(id: string): string {
   return live.host?.devices.find((d) => d.id === id)?.name || id;
+}
+
+// What a memory pool is called: its device, else the kind of memory it is
+export function poolName(id: string): string {
+  const pool = live.host?.pools.find((p) => p.id === id);
+  if (!pool) return id;
+  if (pool.kind === PoolKind.DEVICE) return deviceName(pool.deviceId);
+  return pool.kind === PoolKind.UNIFIED ? 'unified memory' : 'system memory';
+}
+
+// The filesystem the store sits on, the room a pull has
+export function storeMount(): Storage | undefined {
+  const p = live.store?.path ?? '';
+  if (!p) return undefined;
+  return [...(live.host?.storage ?? [])].filter((s) => p.startsWith(s.path)).sort((a, b) => b.path.length - a.path.length)[0];
+}
+
+// What a weight group is called where a record names only the group, its format read from the library
+export function groupLabel(m: { sourceId: string; repo: string; group: string; formatId?: string }): string {
+  return weightsName(m.group, m.formatId || live.models.get(modelKey(m))?.formatId);
 }

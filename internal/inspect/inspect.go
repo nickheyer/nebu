@@ -5,18 +5,20 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/calibrate"
-	"github.com/nickheyer/nebu/internal/profiles"
 	"github.com/nickheyer/nebu/pkg/cache"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/estimate"
+	"github.com/nickheyer/nebu/pkg/eval"
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -30,6 +32,9 @@ import (
 const (
 	resolveTTL  = 10 * time.Minute
 	describeMax = 8
+	// The header key saying what a file holds, and the one value that is weights to load
+	typeKey   = "general.type"
+	modelType = "model"
 )
 
 // Narrows a plan to a slot, its devices, budget, runtime, and default params
@@ -46,12 +51,52 @@ type Inspector struct {
 	Runtimes    *runtime.Registry
 	Host        *host.Prober
 	Cache       *cache.Store
-	Profiles    *profiles.Manager
 	Calibration *calibrate.Table
 	Contexts    []uint32
 	// Set by the daemon once slots exist, nil until then
 	Constrain Constrainer
+	// Reports whether a runtime has an install, set by the daemon, every runtime counted as installed when nil
+	Installed func(runtimeID string) bool
 	Log       *slog.Logger
+}
+
+func (i *Inspector) installed(rt *runtime.Runtime) bool {
+	return i.Installed == nil || i.Installed(rt.Manifest.GetId())
+}
+
+// The context lengths a group is planned at: the ones given, capped at the model's own and ending on it
+func planContexts(contexts []uint32, d *v1.Descriptor, named bool) []uint32 {
+	limit := d.GetParams()["n_ctx_train"]
+	if named || limit < 1 || limit > math.MaxUint32 {
+		return contexts
+	}
+	max := uint32(limit)
+	out := make([]uint32, 0, len(contexts)+1)
+	for _, n := range contexts {
+		if n < max {
+			out = append(out, n)
+		}
+	}
+	return append(out, max)
+}
+
+// Narrows runtimes to the ones accepting a format that have an install, every accepting one
+// when none is installed or the request named the runtimes itself
+func (i *Inspector) planners(runtimes []*runtime.Runtime, formatID string, named bool) []*runtime.Runtime {
+	var accepting, installed []*runtime.Runtime
+	for _, rt := range runtimes {
+		if !rt.Accepts(formatID) || rt.Policy == nil {
+			continue
+		}
+		accepting = append(accepting, rt)
+		if i.installed(rt) {
+			installed = append(installed, rt)
+		}
+	}
+	if named || len(installed) == 0 {
+		return accepting
+	}
+	return installed
 }
 
 // Returns the planning profile narrowed to the named slot, with the slot's runtime and default params
@@ -69,24 +114,24 @@ func (i *Inspector) profile(ctx context.Context, slotID string) (*v1.HostProfile
 	return i.Constrain.Constrain(ctx, slotID, profile)
 }
 
-// Layers a run's params the one way every plan does: the profile, then the
-// slot's defaults, then the request, returning the profile used
-func (i *Inspector) Layer(runtimeID, ref string, slot, params map[string]string) (*v1.Profile, map[string]string, error) {
-	p, err := i.Profiles.Resolve(runtimeID, ref)
-	if err != nil {
-		return nil, nil, err
-	}
-	return p, runtime.Merge(p.GetParams(), slot, params), nil
-}
-
-// Picks the first compatible runtime accepting a format
+// Picks the first compatible runtime accepting a format, an installed one before the rest
 func (i *Inspector) DefaultRuntime(profile *v1.HostProfile, formatID string) (*runtime.Runtime, error) {
+	var first *runtime.Runtime
 	for _, rt := range i.Runtimes.List() {
-		if ok, _ := rt.Compatible(profile); ok && rt.Accepts(formatID) {
+		if ok, _ := rt.Compatible(profile); !ok || !rt.Accepts(formatID) {
+			continue
+		}
+		if i.installed(rt) {
 			return rt, nil
 		}
+		if first == nil {
+			first = rt
+		}
 	}
-	return nil, fmt.Errorf("%w: no compatible runtime accepts %s", runtime.ErrParam, formatID)
+	if first == nil {
+		return nil, fmt.Errorf("%w: no compatible runtime accepts %s", runtime.ErrParam, formatID)
+	}
+	return first, nil
 }
 
 // Resolves and classifies a model, caching the listing briefly
@@ -108,18 +153,6 @@ func (i *Inspector) Resolve(ctx context.Context, sourceID, repo, revision string
 	i.Classifier.Classify(model)
 	i.remember(key, model)
 	return src, model, nil
-}
-
-// Resolves a model again, ignoring the cached listing
-func (i *Inspector) ResolveFresh(ctx context.Context, sourceID, repo, revision string) (sources.Source, *v1.Model, error) {
-	src, err := i.Sources.Get(sourceID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := i.Cache.Delete(resolveKey(src, repo, revision)); err != nil {
-		i.Log.Warn("cache delete failed", "err", err)
-	}
-	return i.Resolve(ctx, sourceID, repo, revision)
 }
 
 func resolveKey(src sources.Source, repo, revision string) string {
@@ -201,18 +234,12 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		return nil, err
 	}
 	groups := selectGroups(i.Classifier.Groups(model), req.GetGroups())
-	// A named profile plans its own runtime beside any the request names, else the slot's runtime, else every compatible one
+	// The runtimes the request names, else the slot's runtime, else every compatible one
 	ids := req.GetRuntimeIds()
-	named, err := i.Profiles.Resolve("", req.GetProfileId())
-	if err != nil {
-		return nil, err
-	}
-	if named != nil && !slices.Contains(ids, named.GetRuntimeId()) {
-		ids = append(ids, named.GetRuntimeId())
-	}
 	if len(ids) == 0 && slotRuntime != "" {
 		ids = []string{slotRuntime}
 	}
+	named := len(ids) > 0
 	runtimes := i.selectRuntimes(ids, profile)
 	contexts := req.GetContexts()
 	if len(contexts) == 0 {
@@ -228,20 +255,8 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 			resp.Warnings = append(resp.Warnings, w)
 		}
 	}
-	// The named profile sits under its runtime's rows, every other runtime's default under the rest
-	layered := map[string]map[string]string{}
-	for _, rt := range runtimes {
-		ref := ""
-		if named != nil && named.GetRuntimeId() == rt.Manifest.GetId() {
-			ref = named.GetId()
-		}
-		_, params, err := i.Layer(rt.Manifest.GetId(), ref, slotParams, req.GetParams())
-		if err != nil {
-			warn("%s: %v", rt.Manifest.GetId(), err)
-			continue
-		}
-		layered[rt.Manifest.GetId()] = params
-	}
+	// The slot's defaults sit under the request's params, the same layering a run uses
+	layered := runtime.Merge(slotParams, req.GetParams())
 	descriptors := make([]*v1.Descriptor, len(groups))
 	warnings := make([]string, len(groups))
 	failures := make([]error, len(groups))
@@ -251,7 +266,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		eg.Go(func() error {
 			d, err := i.Describe(gctx, src, model, g)
 			if err != nil {
-				warnings[idx] = fmt.Sprintf("%s: %v", g.Name, err)
+				warnings[idx] = fmt.Sprintf("%s: the header could not be read, %v", g.Name, err)
 				failures[idx] = err
 				return nil
 			}
@@ -271,14 +286,19 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 			warn("%s", warnings[idx])
 			continue
 		}
-		resp.Descriptors = append(resp.Descriptors, d)
-		for _, rt := range runtimes {
-			params, ok := layered[rt.Manifest.GetId()]
-			if !ok || !rt.Accepts(d.GetFormatId()) || rt.Policy == nil {
-				continue
+		// A header that says it holds something other than a model, an importance matrix or an adapter,
+		// is not weights whatever its name looks like, so its files go back to being ordinary files
+		if kind := d.GetMetadata()[typeKey]; kind != "" && kind != modelType {
+			for _, a := range groups[idx].Weights {
+				a.Role, a.Group = v1.ArtifactRole_ARTIFACT_ROLE_OTHER, ""
 			}
-			for _, n := range contexts {
-				overrides := withContext(params, rt.Policy.ContextParam(), n)
+			continue
+		}
+		resp.Descriptors = append(resp.Descriptors, d)
+		// What you have installed answers first, what you could install only when nothing installed serves the format
+		for _, rt := range i.planners(runtimes, d.GetFormatId(), named) {
+			for _, n := range planContexts(contexts, d, len(req.GetContexts()) > 0) {
+				overrides := withContext(layered, rt.Policy.ContextParam(), n)
 				// A run plans around what is loaded now, so the table says both
 				plan, err := i.Plan(rt, d, profile, overrides, false)
 				var now *v1.MemoryPlan
@@ -286,7 +306,8 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 					now, err = i.Plan(rt, d, profile, overrides, true)
 				}
 				if err != nil {
-					warn("%s on %s: %v", d.GetGroup(), rt.Manifest.GetId(), err)
+					warn("%s", planFailure(d, rt, err))
+					i.Log.Debug("plan failed", "group", d.GetGroup(), "runtime", rt.Manifest.GetId(), "err", err)
 					continue
 				}
 				resp.Rows = append(resp.Rows, &v1.FitRow{Group: d.GetGroup(), RuntimeId: rt.Manifest.GetId(), Context: n, Plan: plan, Free: now})
@@ -294,6 +315,15 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		}
 	}
 	return resp, nil
+}
+
+// Says why a group could not be planned in words a person can act on, the failure itself kept for the log
+func planFailure(d *v1.Descriptor, rt *runtime.Runtime, err error) string {
+	var missing *eval.MissingError
+	if errors.As(err, &missing) {
+		return fmt.Sprintf("%s: the header gives no %s, so memory on %s cannot be planned", d.GetGroup(), strings.Join(missing.Names, " or "), rt.Manifest.GetName())
+	}
+	return fmt.Sprintf("%s: memory on %s cannot be planned", d.GetGroup(), rt.Manifest.GetName())
 }
 
 // Plans one group on one runtime
@@ -310,26 +340,23 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	// The slot's runtime, then a named profile's, pick the runtime when the request did not, as a run does
+	// The slot's runtime picks the runtime when the request did not, as a run does
 	runtimeID := req.GetRuntimeId()
 	if runtimeID == "" {
 		runtimeID = slotRuntime
 	}
-	if runtimeID == "" && req.GetProfileId() != "" {
-		named, err := i.Profiles.Resolve("", req.GetProfileId())
+	if runtimeID == "" {
+		fallback, err := i.DefaultRuntime(profile, g.FormatID)
 		if err != nil {
 			return nil, err
 		}
-		runtimeID = named.GetRuntimeId()
+		runtimeID = fallback.Manifest.GetId()
 	}
 	rt, err := i.Runtimes.Get(runtimeID)
 	if err != nil {
 		return nil, err
 	}
-	_, overrides, err := i.Layer(rt.Manifest.GetId(), req.GetProfileId(), slotParams, req.GetParams())
-	if err != nil {
-		return nil, err
-	}
+	overrides := runtime.Merge(slotParams, req.GetParams())
 	d, err := i.Describe(ctx, src, model, g)
 	if err != nil {
 		return nil, err
@@ -416,6 +443,9 @@ func rawKey(model *v1.Model, g *formats.Group, spec *v1.FormatSpec) string {
 	}
 	for _, a := range g.Files[v1.ArtifactRole_ARTIFACT_ROLE_CONFIG] {
 		add(a)
+	}
+	if files := g.Files[v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR]; len(files) > 0 {
+		add(files[0])
 	}
 	return strings.Join(parts, "\x00")
 }

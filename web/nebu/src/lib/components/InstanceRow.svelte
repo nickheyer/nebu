@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { live, clock } from '$lib/state.svelte';
+  import { live, clock, groupLabel } from '$lib/state.svelte';
   import { instanceMemory } from '$lib/instances';
   import { stopInstance } from '$lib/slotActions.svelte';
   import { count, duration, enumLabel, tone } from '$lib/format';
@@ -41,7 +41,7 @@
   </button>
   <button type="button" class="min-w-0 text-left" onclick={() => onOpen(instance)}>
     <div class="truncate text-sm text-fg" title={instance.repo}>{instance.repo}</div>
-    <div class="mt-1 truncate text-xs text-fg-muted"><span class="font-mono">{instance.group}</span> · {instance.runtimeId}{install?.version ? ` ${install.version}` : ''}</div>
+    <div class="mt-1 truncate text-xs text-fg-muted"><span class="font-mono">{groupLabel(instance)}</span> · {instance.runtimeId}{install?.version ? ` ${install.version}` : ''}</div>
   </button>
   <div class="flex items-center gap-5">
     <dl class="hidden items-center gap-5 text-right lg:flex">

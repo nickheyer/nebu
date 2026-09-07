@@ -6,7 +6,11 @@ constraints:
   - expr: any(devices, .vendor == "nvidia")
     message: an NVIDIA GPU
 acquire:
-  recipe_id: sglang
+  methods:
+    - id: source
+      description: Installed from PyPI into a virtual environment
+      recipe:
+        recipe_id: sglang
 probes:
   - key: version
     args: [-c, 'import sglang; print(sglang.__version__)']
@@ -56,6 +60,32 @@ params:
     default: '{{.name}}'
     flag: --served-model-name
     description: Model name reported in responses, the instance name by default
+  # Speculative decoding, the prediction heads a checkpoint ships loading only once a method names them
+  - name: speculative_algorithm
+    type: PARAM_TYPE_STRING
+    default: ''
+    flag: --speculative-algorithm
+    description: Draft method, NEXTN for the prediction heads a checkpoint ships, EAGLE or EAGLE3 with a draft model; empty leaves them on disk
+  - name: speculative_draft_model_path
+    type: PARAM_TYPE_STRING
+    default: ''
+    flag: --speculative-draft-model-path
+    description: Draft model for EAGLE methods
+  - name: speculative_num_steps
+    type: PARAM_TYPE_STRING
+    default: ''
+    flag: --speculative-num-steps
+    description: Draft steps per verify, left to the runtime when empty
+  - name: speculative_eagle_topk
+    type: PARAM_TYPE_STRING
+    default: ''
+    flag: --speculative-eagle-topk
+    description: Branches kept per draft step, left to the runtime when empty
+  - name: speculative_num_draft_tokens
+    type: PARAM_TYPE_STRING
+    default: ''
+    flag: --speculative-num-draft-tokens
+    description: Draft tokens verified per step, left to the runtime when empty
 estimate:
   groups:
     - kind: TENSOR_GROUP_KIND_EMBEDDING
@@ -66,6 +96,13 @@ estimate:
       pool: POOL_KIND_DEVICE
     - kind: TENSOR_GROUP_KIND_OUTPUT
       pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_VISION
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_AUDIO
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_DRAFT
+      pool: POOL_KIND_DEVICE
+      when: (speculative_algorithm ?? "") != ""
     - kind: TENSOR_GROUP_KIND_OTHER
       pool: POOL_KIND_DEVICE
   cache_bytes: n_ctx * cache_per_token * cache_bytes[kv_cache_dtype]

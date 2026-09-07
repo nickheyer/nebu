@@ -11,7 +11,6 @@ export interface RunSpec {
   name?: string;
   params?: Record<string, string>;
   slotId?: string;
-  profileId?: string;
   // Launches even when the plan says no, redoing any prepare step
   force?: boolean;
 }

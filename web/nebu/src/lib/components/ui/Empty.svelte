@@ -10,6 +10,6 @@
     {@const Icon = icon}
     <Icon size={18} class="mb-3 text-fg-faint" />
   {/if}
-  <div class="text-sm text-fg-muted">{title}</div>
+  <div class="text-sm text-fg-muted [overflow-wrap:anywhere]">{title}</div>
   {#if children}<div class="mt-4 flex flex-wrap items-center justify-center gap-2">{@render children()}</div>{/if}
 </div>

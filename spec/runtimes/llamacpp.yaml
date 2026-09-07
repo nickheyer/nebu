@@ -6,67 +6,78 @@ constraints:
   - expr: len(devices) > 0
     message: at least one probed device
 acquire:
-  adopt: [llama-server]
-  prebuilt:
-    # llama.cpp publishes no CUDA build for Linux, so an NVIDIA host takes Vulkan here and CUDA from the recipe
-    - when: os == "linux" && arch == "amd64" && any(devices, .vendor == "amd")
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-ubuntu-rocm-[\d.]+-x64\.tar\.gz$']
-      binary: llama-server
-    - when: os == "linux" && arch == "amd64" && any(devices, .kind == "gpu")
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-ubuntu-vulkan-x64\.tar\.gz$']
-      binary: llama-server
-    - when: os == "linux" && arch == "amd64"
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-ubuntu-x64\.tar\.gz$']
-      binary: llama-server
-    - when: os == "linux" && arch == "arm64" && any(devices, .kind == "gpu")
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-ubuntu-vulkan-arm64\.tar\.gz$']
-      binary: llama-server
-    - when: os == "linux" && arch == "arm64"
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-ubuntu-arm64\.tar\.gz$']
-      binary: llama-server
-    - when: os == "darwin" && arch == "arm64"
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-macos-arm64\.tar\.gz$']
-      binary: llama-server
-    - when: os == "darwin" && arch == "amd64"
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-macos-x64\.tar\.gz$']
-      binary: llama-server
-    # The CUDA build is the binary plus the cudart companion, CUDA 13 needs a 580 driver
-    - when: os == "windows" && arch == "amd64" && any(devices, .vendor == "nvidia") && vercmp(facts["nvidia.driver_version"] ?? "0", "580") >= 0
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-win-cuda-13\.[\d.]+-x64\.zip$', '^cudart-llama-bin-win-cuda-13\.[\d.]+-x64\.zip$']
-      binary: llama-server.exe
-    - when: os == "windows" && arch == "amd64" && any(devices, .vendor == "nvidia")
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-win-cuda-12\.[\d.]+-x64\.zip$', '^cudart-llama-bin-win-cuda-12\.[\d.]+-x64\.zip$']
-      binary: llama-server.exe
-    - when: os == "windows" && arch == "arm64" && any(devices, .vendor == "nvidia")
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-win-cuda-[\d.]+-arm64\.zip$', '^cudart-llama-bin-win-cuda-[\d.]+-arm64\.zip$']
-      binary: llama-server.exe
-    - when: os == "windows" && arch == "amd64" && any(devices, .vendor == "amd")
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-win-rocm-[\d.]+-x64\.zip$']
-      binary: llama-server.exe
-    - when: os == "windows" && arch == "amd64" && any(devices, .kind == "gpu")
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-win-vulkan-x64\.zip$']
-      binary: llama-server.exe
-    - when: os == "windows" && arch == "amd64"
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-win-cpu-x64\.zip$']
-      binary: llama-server.exe
-    - when: os == "windows" && arch == "arm64"
-      releases: ggml-org/llama.cpp
-      assets: ['^llama-b\d+-bin-win-cpu-arm64\.zip$']
-      binary: llama-server.exe
-  recipe_id: llamacpp
+  methods:
+    - id: adopt
+      description: llama-server already on this host
+      adopt:
+        names: [llama-server]
+    - id: release
+      description: A prebuilt release from ggml-org, the build for this host chosen by default
+      prebuilt:
+        releases: ggml-org/llama.cpp
+        rules:
+          # llama.cpp publishes no CUDA build for Linux, so an NVIDIA host takes Vulkan here or builds from source
+          - id: linux-rocm
+            when: os == "linux" && arch == "amd64" && any(devices, .vendor == "amd")
+            assets: ['^llama-b\d+-bin-ubuntu-rocm-[\d.]+-x64\.tar\.gz$']
+            binary: llama-server
+          - id: linux-vulkan
+            when: os == "linux" && arch == "amd64" && any(devices, .kind == "gpu")
+            assets: ['^llama-b\d+-bin-ubuntu-vulkan-x64\.tar\.gz$']
+            binary: llama-server
+          - id: linux-cpu
+            when: os == "linux" && arch == "amd64"
+            assets: ['^llama-b\d+-bin-ubuntu-x64\.tar\.gz$']
+            binary: llama-server
+          - id: linux-arm64-vulkan
+            when: os == "linux" && arch == "arm64" && any(devices, .kind == "gpu")
+            assets: ['^llama-b\d+-bin-ubuntu-vulkan-arm64\.tar\.gz$']
+            binary: llama-server
+          - id: linux-arm64-cpu
+            when: os == "linux" && arch == "arm64"
+            assets: ['^llama-b\d+-bin-ubuntu-arm64\.tar\.gz$']
+            binary: llama-server
+          - id: macos-arm64
+            when: os == "darwin" && arch == "arm64"
+            assets: ['^llama-b\d+-bin-macos-arm64\.tar\.gz$']
+            binary: llama-server
+          - id: macos-x64
+            when: os == "darwin" && arch == "amd64"
+            assets: ['^llama-b\d+-bin-macos-x64\.tar\.gz$']
+            binary: llama-server
+          # The CUDA build is the binary plus the cudart companion, CUDA 13 needs a 580 driver
+          - id: windows-cuda13
+            when: os == "windows" && arch == "amd64" && any(devices, .vendor == "nvidia") && vercmp(facts["nvidia.driver_version"] ?? "0", "580") >= 0
+            assets: ['^llama-b\d+-bin-win-cuda-13\.[\d.]+-x64\.zip$', '^cudart-llama-bin-win-cuda-13\.[\d.]+-x64\.zip$']
+            binary: llama-server.exe
+          - id: windows-cuda12
+            when: os == "windows" && arch == "amd64" && any(devices, .vendor == "nvidia")
+            assets: ['^llama-b\d+-bin-win-cuda-12\.[\d.]+-x64\.zip$', '^cudart-llama-bin-win-cuda-12\.[\d.]+-x64\.zip$']
+            binary: llama-server.exe
+          - id: windows-arm64-cuda
+            when: os == "windows" && arch == "arm64" && any(devices, .vendor == "nvidia")
+            assets: ['^llama-b\d+-bin-win-cuda-[\d.]+-arm64\.zip$', '^cudart-llama-bin-win-cuda-[\d.]+-arm64\.zip$']
+            binary: llama-server.exe
+          - id: windows-rocm
+            when: os == "windows" && arch == "amd64" && any(devices, .vendor == "amd")
+            assets: ['^llama-b\d+-bin-win-rocm-[\d.]+-x64\.zip$']
+            binary: llama-server.exe
+          - id: windows-vulkan
+            when: os == "windows" && arch == "amd64" && any(devices, .kind == "gpu")
+            assets: ['^llama-b\d+-bin-win-vulkan-x64\.zip$']
+            binary: llama-server.exe
+          - id: windows-cpu
+            when: os == "windows" && arch == "amd64"
+            assets: ['^llama-b\d+-bin-win-cpu-x64\.zip$']
+            binary: llama-server.exe
+          - id: windows-arm64-cpu
+            when: os == "windows" && arch == "arm64"
+            assets: ['^llama-b\d+-bin-win-cpu-arm64\.zip$']
+            binary: llama-server.exe
+    - id: source
+      description: Built from source with the backend the host selects, CUDA on an NVIDIA host with nvcc
+      recipe:
+        recipe_id: llamacpp
 probes:
   - key: version
     args: [--version]
@@ -177,6 +188,15 @@ estimate:
       param_counts_host: true
       spill_priority: 1
       requires: TENSOR_GROUP_KIND_LAYER
+    # The projector loads whole on device beside the layers
+    - kind: TENSOR_GROUP_KIND_VISION
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_AUDIO
+      pool: POOL_KIND_DEVICE
+    # Prediction head tensors are skipped at load, no decoding path drafts with them
+    - kind: TENSOR_GROUP_KIND_DRAFT
+      pool: POOL_KIND_DEVICE
+      when: 'false'
     - kind: TENSOR_GROUP_KIND_OTHER
       pool: POOL_KIND_DEVICE
   cache_bytes: n_ctx * cache_per_token * (cache_bytes[cache_type_k] + cache_bytes[cache_type_v]) / 2

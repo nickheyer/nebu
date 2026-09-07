@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { live, taskFor, clock, deviceName } from '$lib/state.svelte';
+  import { live, taskFor, clock, deviceName, groupLabel } from '$lib/state.svelte';
   import { slotOccupied } from '$lib/launch';
   import { instanceMemory } from '$lib/instances';
-  import { swapSlot, editSlot, evictSlot, deleteSlot } from '$lib/slotActions.svelte';
+  import { swapSlot, evictSlot, deleteSlot } from '$lib/slotActions.svelte';
   import { bytes, count, duration, enumLabel, tone } from '$lib/format';
   import { SlotState, type Slot } from '$proto/slot_pb';
   import { RouteState } from '$proto/gateway_pb';
@@ -14,7 +14,7 @@
   import TaskChip from './TaskChip.svelte';
 
   // One slot as a bay: its name and state, what it serves, its numbers, and what to do next
-  let { slot, onOpen }: { slot: Slot; onOpen: (slot: Slot) => void } = $props();
+  let { slot, onOpen }: { slot: Slot; onOpen: (slot: Slot, tab?: string) => void } = $props();
 
   const instance = $derived(slot.instanceId ? live.instances.get(slot.instanceId) : undefined);
   const route = $derived(live.routes.get(slot.name));
@@ -42,7 +42,7 @@
     {#if slot.request?.repo}
       <div class="truncate text-sm text-fg" title={slot.request.repo}>{slot.request.repo}</div>
       <div class="mt-1 truncate text-xs text-fg-muted">
-        <span class="font-mono">{slot.request.group}</span>
+        <span class="font-mono">{groupLabel(slot.request)}</span>
         {#if instance?.runtimeId}<span>{' · '}{instance.runtimeId}{install?.version ? ` ${install.version}` : ''}</span>{/if}
       </div>
     {:else}
@@ -66,7 +66,7 @@
       {:else}
         <Button size="sm" variant="primary" icon={Play} onclick={() => swapSlot(slot)}>Run</Button>
       {/if}
-      <IconButton size="sm" icon={Pencil} label="Edit" onclick={() => editSlot(slot)} />
+      <IconButton size="sm" icon={Pencil} label="Settings" onclick={() => onOpen(slot, 'settings')} />
       <Menu
         size="sm"
         items={[

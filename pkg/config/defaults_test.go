@@ -24,8 +24,8 @@ func TestMilestoneDefaults(t *testing.T) {
 	if got := cfg.GetGateway().GetApiKeys(); len(got) != 3 || got[2] != "k3" {
 		t.Fatalf("keys %v", got)
 	}
-	if cfg.GetGateway().GetDrainTimeoutMs() != drainTimeoutMs || cfg.GetMonitor().GetIntervalMs() != monitorInterval {
-		t.Fatal("drain or monitor defaults missing")
+	if cfg.GetGateway().GetDrainTimeoutMs() != drainTimeoutMs {
+		t.Fatal("drain default missing")
 	}
 	if cfg.GetBuilds().GetDir() != filepath.Join(dir, "builds") || len(cfg.GetBuilds().GetCli()) != 3 || cfg.GetBuilds().GetJobs() == 0 {
 		t.Fatalf("build defaults %v", cfg.GetBuilds())

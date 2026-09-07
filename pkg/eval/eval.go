@@ -3,6 +3,7 @@ package eval
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -11,6 +12,8 @@ import (
 	"text/template"
 
 	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/ast"
+	"github.com/expr-lang/expr/parser"
 	"github.com/expr-lang/expr/vm"
 )
 
@@ -106,6 +109,74 @@ func (e *Expr) Holds(env map[string]any) (bool, error) {
 	return e.Bool(env)
 }
 
+// Says which variables a formula read that the scope did not hold, the one
+// failure that means the input lacks a fact rather than the spec being wrong
+type MissingError struct {
+	Formula string
+	Names   []string
+}
+
+func (e *MissingError) Error() string {
+	return fmt.Sprintf("formula %s needs %s", e.Formula, strings.Join(e.Names, ", "))
+}
+
+// Collects the identifiers an expression reads, leaving out the ones it calls
+// and the ones it guards with ??
+type identifiers struct {
+	read    map[string]bool
+	skipped map[string]bool
+}
+
+func (c *identifiers) Visit(node *ast.Node) {
+	switch n := (*node).(type) {
+	case *ast.IdentifierNode:
+		c.read[n.Value] = true
+	case *ast.CallNode:
+		if id, ok := n.Callee.(*ast.IdentifierNode); ok {
+			c.skipped[id.Value] = true
+		}
+	case *ast.BinaryNode:
+		if id, ok := n.Left.(*ast.IdentifierNode); ok && n.Operator == "??" {
+			c.skipped[id.Value] = true
+		}
+	}
+}
+
+// Names the variables the expression reads that env lacks or holds as nil,
+// sorted, none when the source does not parse
+func (e *Expr) Missing(env map[string]any) []string {
+	tree, err := parser.Parse(e.src)
+	if err != nil {
+		return nil
+	}
+	c := &identifiers{read: map[string]bool{}, skipped: map[string]bool{}}
+	ast.Walk(&tree.Node, c)
+	scope := withConstants(env)
+	var out []string
+	for name := range c.read {
+		if c.skipped[name] {
+			continue
+		}
+		if v, ok := scope[name]; !ok || v == nil {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Turns an evaluation failure into a MissingError naming what the scope
+// lacked, or hands the failure back when the scope held everything
+func Explain(e *Expr, name string, env map[string]any, err error) error {
+	if err == nil {
+		return nil
+	}
+	if names := e.Missing(env); len(names) > 0 {
+		return &MissingError{Formula: name, Names: names}
+	}
+	return err
+}
+
 // Evaluates formulas into env in passes, so one may use another whatever
 // order they come in, naming the first that never resolves
 func Solve(formulas map[string]*Expr, env map[string]any) error {
@@ -120,13 +191,17 @@ func Solve(formulas map[string]*Expr, env map[string]any) error {
 		for _, name := range pending {
 			v, err := formulas[name].Float(env)
 			if err != nil {
-				errs[name] = err
+				errs[name] = Explain(formulas[name], name, env, err)
 				left = append(left, name)
 				continue
 			}
 			env[name] = v
 		}
 		if len(left) == len(pending) {
+			var missing *MissingError
+			if errors.As(errs[left[0]], &missing) {
+				return missing
+			}
 			return fmt.Errorf("formula %s: %w", left[0], errs[left[0]])
 		}
 		pending = left

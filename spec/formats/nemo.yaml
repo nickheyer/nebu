@@ -11,6 +11,10 @@ groups:
   - match: '.*'
     value: default
 tensors:
+  - match: '(^|\.)(vision_model|vision_encoder|vision_projection)\.'
+    kind: TENSOR_GROUP_KIND_VISION
+  - match: '(^|\.)(audio_model|audio_encoder|speech_encoder)\.'
+    kind: TENSOR_GROUP_KIND_AUDIO
   - match: '(^|\.)(word_embeddings|position_embeddings)\.'
     kind: TENSOR_GROUP_KIND_EMBEDDING
   - match: '(^|\.)layers\.(?P<layer>\d+)\..*experts\.'

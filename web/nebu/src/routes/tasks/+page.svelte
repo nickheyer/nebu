@@ -5,7 +5,7 @@
   import { ago, duration, newestFirst, when, pct, bytes } from '$lib/format';
   import { fail } from '$lib/toast.svelte';
   import { TaskState, type Task } from '$proto/task_pb';
-  import { ListChecks, Download, Hammer, ArrowLeftRight, Play, ShieldCheck, FolderOutput, Radar, Package, Ban } from '@lucide/svelte';
+  import { ListChecks, Download, Hammer, ArrowLeftRight, Play, ShieldCheck, FolderOutput, Activity, Package, Ban } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
   import Tabs from '$lib/components/ui/Tabs.svelte';
@@ -24,7 +24,7 @@
   const failed = $derived(all.filter((t) => t.state === TaskState.FAILED));
   const list = $derived(view === 'active' ? active : view === 'failed' ? failed : all);
 
-  const icons: Record<string, any> = { pull: Download, build: Hammer, swap: ArrowLeftRight, run: Play, verify: ShieldCheck, export: FolderOutput, check: Radar, install: Package };
+  const icons: Record<string, any> = { pull: Download, build: Hammer, swap: ArrowLeftRight, run: Play, verify: ShieldCheck, export: FolderOutput, probe: Activity, install: Package };
 
   async function cancel(t: Task) {
     try {

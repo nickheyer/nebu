@@ -6,7 +6,6 @@ import "google/protobuf/timestamp.proto";
 import "nebu/v1/gateway.proto";
 import "nebu/v1/host.proto";
 import "nebu/v1/instance.proto";
-import "nebu/v1/monitor.proto";
 import "nebu/v1/recipe.proto";
 import "nebu/v1/runtime.proto";
 import "nebu/v1/settings.proto";
@@ -28,11 +27,7 @@ enum EventKind {
   EVENT_KIND_INSTALL = 6;
   EVENT_KIND_BUILD = 7;
   EVENT_KIND_MODEL = 8;
-  EVENT_KIND_WATCH = 9;
-  EVENT_KIND_FINDING = 10;
   EVENT_KIND_SOURCE = 11;
-  EVENT_KIND_PROFILE = 12;
-  EVENT_KIND_WANT = 13;
   // The store's totals, after anything lands, goes, or is collected
   EVENT_KIND_STORE = 14;
   // Host wide preferences, after a change
@@ -64,11 +59,7 @@ message Event {
     Install install = 15;
     Build build = 16;
     StoredModel model = 17;
-    Watch watch = 18;
-    Finding finding = 19;
     Source source = 20;
-    Profile profile = 21;
-    Want want = 22;
     StoreStatus store = 23;
     Settings settings = 24;
   }

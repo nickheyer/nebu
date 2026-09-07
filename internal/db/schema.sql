@@ -77,7 +77,6 @@ CREATE TABLE instance_requests (
   install_id TEXT NOT NULL,
   name TEXT NOT NULL,
   slot_id TEXT NOT NULL DEFAULT '',
-  profile_id TEXT NOT NULL DEFAULT '',
   force INTEGER NOT NULL DEFAULT 0
 );
 
@@ -267,7 +266,6 @@ CREATE TABLE slot_requests (
   runtime_id TEXT NOT NULL,
   install_id TEXT NOT NULL,
   name TEXT NOT NULL,
-  profile_id TEXT NOT NULL DEFAULT '',
   force INTEGER NOT NULL DEFAULT 0
 );
 
@@ -292,87 +290,6 @@ CREATE TABLE routes (
   served TEXT NOT NULL DEFAULT ''
 );
 
--- Repositories watched for new revisions and weight groups
-CREATE TABLE watches (
-  id TEXT PRIMARY KEY,
-  source_id TEXT NOT NULL,
-  repo TEXT NOT NULL,
-  revision TEXT NOT NULL DEFAULT '',
-  group_match TEXT NOT NULL DEFAULT '',
-  auto_pull INTEGER NOT NULL DEFAULT 0,
-  slot_id TEXT NOT NULL DEFAULT '',
-  runtime_id TEXT NOT NULL DEFAULT '',
-  last_commit TEXT NOT NULL DEFAULT '',
-  checked_at TEXT,
-  created_at TEXT NOT NULL,
-  error TEXT NOT NULL DEFAULT '',
-  profile_id TEXT NOT NULL DEFAULT ''
-);
-CREATE UNIQUE INDEX watches_by_repo ON watches (source_id, repo, revision);
-
-CREATE TABLE watch_params (
-  watch_id TEXT NOT NULL REFERENCES watches (id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  value TEXT NOT NULL,
-  PRIMARY KEY (watch_id, name)
-);
-
-CREATE TABLE watch_groups (
-  watch_id TEXT NOT NULL REFERENCES watches (id) ON DELETE CASCADE,
-  position INTEGER NOT NULL,
-  group_name TEXT NOT NULL,
-  PRIMARY KEY (watch_id, position)
-);
-
--- Standing searches, satisfied once a matching weight group turns up anywhere
-CREATE TABLE wants (
-  id TEXT PRIMARY KEY,
-  query TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT '',
-  source_id TEXT NOT NULL DEFAULT '',
-  group_match TEXT NOT NULL DEFAULT '',
-  format_id TEXT NOT NULL DEFAULT '',
-  auto_pull INTEGER NOT NULL DEFAULT 0,
-  slot_id TEXT NOT NULL DEFAULT '',
-  runtime_id TEXT NOT NULL DEFAULT '',
-  profile_id TEXT NOT NULL DEFAULT '',
-  found_source_id TEXT NOT NULL DEFAULT '',
-  found_repo TEXT NOT NULL DEFAULT '',
-  found_group TEXT NOT NULL DEFAULT '',
-  task_id TEXT NOT NULL DEFAULT '',
-  satisfied INTEGER NOT NULL DEFAULT 0,
-  checked_at TEXT,
-  created_at TEXT NOT NULL,
-  error TEXT NOT NULL DEFAULT '',
-  swap_task_id TEXT NOT NULL DEFAULT ''
-);
-
-CREATE TABLE want_params (
-  want_id TEXT NOT NULL REFERENCES wants (id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  value TEXT NOT NULL,
-  PRIMARY KEY (want_id, name)
-);
-
--- One change a check noticed, belonging to a watch or a want
-CREATE TABLE findings (
-  id TEXT PRIMARY KEY,
-  watch_id TEXT NOT NULL DEFAULT '',
-  want_id TEXT NOT NULL DEFAULT '',
-  source_id TEXT NOT NULL DEFAULT '',
-  kind TEXT NOT NULL,
-  repo TEXT NOT NULL,
-  commit_id TEXT NOT NULL DEFAULT '',
-  group_name TEXT NOT NULL DEFAULT '',
-  detail TEXT NOT NULL DEFAULT '',
-  task_id TEXT NOT NULL DEFAULT '',
-  acknowledged INTEGER NOT NULL DEFAULT 0,
-  found_at TEXT NOT NULL,
-  swap_task_id TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX findings_by_watch ON findings (watch_id, found_at);
-CREATE INDEX findings_by_want ON findings (want_id, found_at);
-
 -- Configured places models come from, one row per source, seeded defaults included
 CREATE TABLE sources (
   id TEXT PRIMARY KEY,
@@ -389,25 +306,6 @@ CREATE TABLE source_config (
   name TEXT NOT NULL,
   value TEXT NOT NULL,
   PRIMARY KEY (source_id, name)
-);
-
--- Named param sets per runtime, user data beside the seeded manifests
-CREATE TABLE profiles (
-  id TEXT PRIMARY KEY,
-  runtime_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  is_default INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE UNIQUE INDEX profiles_by_name ON profiles (runtime_id, name);
-
-CREATE TABLE profile_params (
-  profile_id TEXT NOT NULL REFERENCES profiles (id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  value TEXT NOT NULL,
-  PRIMARY KEY (profile_id, name)
 );
 
 -- Host wide preferences, one row per field of the Settings message, the value as JSON

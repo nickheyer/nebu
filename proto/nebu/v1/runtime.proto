@@ -3,8 +3,10 @@ syntax = "proto3";
 package nebu.v1;
 
 import "google/protobuf/timestamp.proto";
-import "nebu/v1/model.proto";
 import "nebu/v1/host.proto";
+import "nebu/v1/model.proto";
+import "nebu/v1/recipe.proto";
+import "nebu/v1/source.proto";
 import "nebu/v1/task.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
@@ -52,17 +54,55 @@ message Constraint {
   string message = 2;
 }
 
-// Prebuilt release matched to host facts
-//
-// releases names the repository at the source named by source, the github
-// default when empty. The newest release carrying an asset for every pattern
-// in assets is installed, all of them unpacked into one directory.
+// One published build of a release, the one for this host selected by when
 message PrebuiltRule {
-  string when = 1;
-  string releases = 2;
+  string id = 1;
+  string when = 2;
   repeated string assets = 3;
   string binary = 4;
-  string source = 5;
+}
+
+// Releases to download from, every asset of the chosen rule unpacked into one directory
+//
+// releases names the repository at the source named by source, the github
+// default when empty. The newest release carrying every asset of the rule is
+// taken unless a release is named.
+message Prebuilt {
+  string releases = 1;
+  string source = 2;
+  repeated PrebuiltRule rules = 3;
+}
+
+// Binaries already on the host, adopted from PATH or a path given
+message Adopt {
+  repeated string names = 1;
+}
+
+// A recipe to build, its variant, ref, sandbox, and vars chosen when installing
+message FromRecipe {
+  string recipe_id = 1;
+}
+
+// One way to obtain an install, offered when someone installs the runtime
+message InstallMethod {
+  string id = 1;
+  string description = 2;
+  // What the method does, exactly one set
+  oneof how {
+    Adopt adopt = 3;
+    Prebuilt prebuilt = 4;
+    FromRecipe recipe = 5;
+  }
+}
+
+// A method as this host sees it: the settings it takes, defaults picked for this host
+message InstallOption {
+  InstallMethod method = 1;
+  repeated ConfigField fields = 2;
+  // What keeps the default settings from running here, empty when nothing does
+  repeated string unmet = 3;
+  // The recipe with what the host selects, for a recipe method
+  RecipeStatus recipe = 4;
 }
 
 // Runs the binary once and captures named groups as facts
@@ -97,11 +137,9 @@ message Install {
   string build_id = 10;
 }
 
-// Ways to obtain an install
+// Ways to obtain an install, one chosen and configured when installing
 message Acquire {
-  repeated string adopt = 1;
-  repeated PrebuiltRule prebuilt = 2;
-  string recipe_id = 3;
+  repeated InstallMethod methods = 1;
 }
 
 // Readiness probe of a running instance
@@ -146,6 +184,9 @@ message GroupPolicy {
   bool param_counts_host = 4;
   uint32 spill_priority = 5;
   TensorGroupKind requires = 6;
+  // Expression over the run params and header facts; the kind stays on disk while it evaluates
+  // false, so a draft head counts only once a run drafts with it. Empty means always loaded.
+  string when = 7;
 }
 
 // Memory planning rules for a runtime
@@ -186,61 +227,6 @@ message RuntimeManifest {
   repeated CommandProbe probes = 12;
 }
 
-// A named set of param values for one runtime, user data beside the seeded manifest
-message Profile {
-  string id = 1;
-  string runtime_id = 2;
-  string name = 3;
-  string description = 4;
-  map<string, string> params = 5;
-  // Applies to every run of the runtime that names no profile
-  bool default = 6;
-  google.protobuf.Timestamp created_at = 7;
-  google.protobuf.Timestamp updated_at = 8;
-}
-
-// Lists profiles, optionally for one runtime
-message ListProfilesRequest {
-  string runtime_id = 1;
-}
-
-// Returns profiles by runtime then name
-message ListProfilesResponse {
-  repeated Profile profiles = 1;
-}
-
-// Creates a profile, its id is assigned
-message CreateProfileRequest {
-  Profile profile = 1;
-}
-
-// Returns the new profile
-message CreateProfileResponse {
-  Profile profile = 1;
-}
-
-// Replaces the name, description, params, and default flag of a profile
-message UpdateProfileRequest {
-  Profile profile = 1;
-}
-
-// Returns the updated profile
-message UpdateProfileResponse {
-  Profile profile = 1;
-}
-
-// Removes a profile, refused while a watch, want, slot, or instance starts from it unless forced
-message DeleteProfileRequest {
-  string id = 1;
-  // Clears every reference first, those fall back to the runtime's default profile
-  bool force = 2;
-}
-
-// Returns the removed profile
-message DeleteProfileResponse {
-  Profile profile = 1;
-}
-
 // Lists format specs
 message ListFormatsRequest {}
 
@@ -257,11 +243,12 @@ message ListRuntimesResponse {
   repeated RuntimeStatus runtimes = 1;
 }
 
-// Runtime paired with host compatibility
+// Runtime paired with host compatibility and how it installs here
 message RuntimeStatus {
   RuntimeManifest manifest = 1;
   bool compatible = 2;
   repeated string unmet = 3;
+  repeated InstallOption installs = 4;
 }
 
 // Fetches one runtime
@@ -295,13 +282,16 @@ message AdoptInstallResponse {
   Install install = 1;
 }
 
-// Downloads a prebuilt release matched to the host
-message InstallPrebuiltRequest {
+// Installs a runtime by one of its methods with the settings chosen for it
+message InstallRequest {
   string runtime_id = 1;
+  string method = 2;
+  // Values for the method's fields, a field left out taking its default
+  map<string, string> settings = 3;
 }
 
 // Returns the install task
-message InstallPrebuiltResponse {
+message InstallResponse {
   Task task = 1;
 }
 
@@ -327,16 +317,8 @@ service RuntimeService {
   rpc ListInstalls(ListInstallsRequest) returns (ListInstallsResponse);
   // Adopts a binary on the host
   rpc AdoptInstall(AdoptInstallRequest) returns (AdoptInstallResponse);
-  // Downloads a prebuilt release
-  rpc InstallPrebuilt(InstallPrebuiltRequest) returns (InstallPrebuiltResponse);
+  // Installs a runtime as a task by a method and its settings
+  rpc Install(InstallRequest) returns (InstallResponse);
   // Removes an install
   rpc RemoveInstall(RemoveInstallRequest) returns (RemoveInstallResponse);
-  // Lists param profiles
-  rpc ListProfiles(ListProfilesRequest) returns (ListProfilesResponse);
-  // Creates a param profile
-  rpc CreateProfile(CreateProfileRequest) returns (CreateProfileResponse);
-  // Replaces a param profile
-  rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse);
-  // Removes a param profile
-  rpc DeleteProfile(DeleteProfileRequest) returns (DeleteProfileResponse);
 }

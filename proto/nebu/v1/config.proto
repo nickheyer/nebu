@@ -56,9 +56,9 @@ message Gateway {
   repeated string cors_origins = 6;
 }
 
-// Where findings and failures are announced beyond the UI
+// Where failures are announced beyond the UI
 message Notify {
-  // URLs that receive one JSON document per finding and per failed instance
+  // URLs that receive one JSON document per failed instance
   repeated string webhooks = 1;
 }
 
@@ -72,12 +72,6 @@ message Tls {
 message Auth {
   string token = 1;
   string token_env = 2;
-}
-
-// Source monitor settings
-message Monitor {
-  uint32 interval_ms = 1;
-  bool disabled = 2;
 }
 
 // Build defaults
@@ -109,7 +103,6 @@ message Config {
   Transfer transfer = 11;
   Gateway gateway = 12;
   Auth auth = 13;
-  Monitor monitor = 14;
   Builds builds = 15;
   Web web = 16;
   Store store = 17;

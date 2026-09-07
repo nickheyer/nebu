@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,11 +33,19 @@ type precisionRule struct {
 	re   *regexp.Regexp
 }
 
+type packRule struct {
+	tensor *regexp.Regexp
+	key    string
+	value  *regexp.Regexp
+}
+
 type compiledFormat struct {
 	spec       *v1.FormatSpec
 	tensors    []tensorRule
 	params     []paramRule
 	precisions []precisionRule
+	packing    []packRule
+	draftFrom  *eval.Expr
 }
 
 type compiledArch struct {
@@ -78,6 +87,27 @@ func New(formats []*v1.FormatSpec, archs []*v1.ArchSpec, precisions []*v1.Precis
 				return nil, fmt.Errorf("format %s precision rule %q: key required", f.GetId(), r.GetMatch())
 			}
 			cf.precisions = append(cf.precisions, precisionRule{spec: r, re: re})
+		}
+		for _, r := range f.GetPacking() {
+			tensor, err := regexp.Compile(r.GetMatch())
+			if err != nil {
+				return nil, fmt.Errorf("format %s packing rule: %w", f.GetId(), err)
+			}
+			value, err := regexp.Compile(r.GetValue())
+			if err != nil {
+				return nil, fmt.Errorf("format %s packing rule %s: %w", f.GetId(), r.GetKey(), err)
+			}
+			if r.GetKey() == "" || value.SubexpIndex("bits") < 0 {
+				return nil, fmt.Errorf("format %s packing rule %q: key and a bits capture required", f.GetId(), r.GetMatch())
+			}
+			cf.packing = append(cf.packing, packRule{tensor: tensor, key: r.GetKey(), value: value})
+		}
+		if f.GetDraftFrom() != "" {
+			e, err := eval.Compile(f.GetDraftFrom())
+			if err != nil {
+				return nil, fmt.Errorf("format %s draft_from: %w", f.GetId(), err)
+			}
+			cf.draftFrom = e
 		}
 		for _, p := range f.GetParams() {
 			rule := paramRule{name: p.GetName(), keys: p.GetKeys()}
@@ -166,12 +196,20 @@ func (b *Builder) Build(raw *v1.RawModel) (*v1.Descriptor, error) {
 	}
 	groups := map[string]*v1.TensorGroup{}
 	maxLayer := int32(-1)
-	for _, t := range raw.GetTensors() {
+	elements := f.elements(raw)
+	draftFrom := f.draftStart(d.Params)
+	for idx, t := range raw.GetTensors() {
 		kind, layer := f.classify(t.GetName())
+		// A layer numbered past the main stack is a prediction head the header counts apart
+		if draftFrom >= 0 && layer >= draftFrom && (kind == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER || kind == v1.TensorGroupKind_TENSOR_GROUP_KIND_EXPERTS) {
+			kind = v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT
+		}
 		id := eval.EnumShort(kind)
 		if layer >= 0 {
 			id += "." + strconv.Itoa(int(layer))
-			maxLayer = max(maxLayer, layer)
+			if kind != v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT {
+				maxLayer = max(maxLayer, layer)
+			}
 		}
 		g, ok := groups[id]
 		if !ok {
@@ -179,21 +217,21 @@ func (b *Builder) Build(raw *v1.RawModel) (*v1.Descriptor, error) {
 			groups[id] = g
 		}
 		g.Bytes += t.GetBytes()
-		g.Elements += t.GetElements()
+		g.Elements += elements[idx]
 		d.TotalBytes += t.GetBytes()
-		d.ParameterCount += t.GetElements()
+		d.ParameterCount += elements[idx]
 	}
 	for _, rule := range f.params {
 		if rule.tensor == nil {
 			continue
 		}
-		var elements uint64
-		for _, t := range raw.GetTensors() {
+		var n uint64
+		for idx, t := range raw.GetTensors() {
 			if rule.tensor.MatchString(t.GetName()) {
-				elements += t.GetElements()
+				n += elements[idx]
 			}
 		}
-		d.Params[rule.name] = float64(elements)
+		d.Params[rule.name] = float64(n)
 	}
 	for _, g := range groups {
 		d.Groups = append(d.Groups, g)
@@ -262,12 +300,41 @@ func (b *Builder) arch(d *v1.Descriptor) string {
 	return last
 }
 
+// The weights each tensor holds, a packed tensor counting every weight its elements carry
+func (f *compiledFormat) elements(raw *v1.RawModel) []uint64 {
+	widths := make([]uint64, len(f.packing))
+	for i, rule := range f.packing {
+		m := rule.value.FindStringSubmatch(raw.GetMetadata()[rule.key])
+		if m == nil {
+			continue
+		}
+		widths[i], _ = strconv.ParseUint(m[rule.value.SubexpIndex("bits")], 10, 32)
+	}
+	out := make([]uint64, len(raw.GetTensors()))
+	for idx, t := range raw.GetTensors() {
+		n := t.GetElements()
+		for i, rule := range f.packing {
+			if widths[i] == 0 || n == 0 || !rule.tensor.MatchString(t.GetName()) {
+				continue
+			}
+			if stored := t.GetBytes() * 8 / n; stored > widths[i] {
+				n = n * stored / widths[i]
+			}
+		}
+		out[idx] = n
+	}
+	return out
+}
+
 // Puts a weight group's precision into words from the format's rules and the level table
 func (b *Builder) precision(f *compiledFormat, raw *v1.RawModel, d *v1.Descriptor) *v1.Precision {
 	var bits uint32
-	var name string
-	var notes []string
+	var labels, notes []string
+	matched := false
 	for _, rule := range f.precisions {
+		if rule.spec.GetFallback() && matched {
+			continue
+		}
 		text := d.GetGroup()
 		if rule.spec.GetKey() != "group" {
 			text = raw.GetMetadata()[rule.spec.GetKey()]
@@ -276,6 +343,7 @@ func (b *Builder) precision(f *compiledFormat, raw *v1.RawModel, d *v1.Descripto
 		if m == nil {
 			continue
 		}
+		matched = true
 		width := rule.spec.GetBits()
 		if i := rule.re.SubexpIndex("bits"); i >= 0 && m[2*i] >= 0 {
 			if n, err := strconv.ParseUint(text[m[2*i]:m[2*i+1]], 10, 32); err == nil {
@@ -289,8 +357,14 @@ func (b *Builder) precision(f *compiledFormat, raw *v1.RawModel, d *v1.Descripto
 			}
 			bits = width
 		}
-		if i := rule.re.SubexpIndex("name"); i >= 0 && m[2*i] >= 0 && name == "" {
-			name = text[m[2*i]:m[2*i+1]]
+		label := rule.spec.GetLabel()
+		if label != "" {
+			label = string(rule.re.ExpandString(nil, label, text, m))
+		} else if i := rule.re.SubexpIndex("name"); i >= 0 && m[2*i] >= 0 {
+			label = text[m[2*i]:m[2*i+1]]
+		}
+		if label != "" && !slices.Contains(labels, label) {
+			labels = append(labels, label)
 		}
 		if rule.spec.GetNote() != "" {
 			notes = append(notes, string(rule.re.ExpandString(nil, rule.spec.GetNote(), text, m)))
@@ -311,14 +385,31 @@ func (b *Builder) precision(f *compiledFormat, raw *v1.RawModel, d *v1.Descripto
 			break
 		}
 	}
-	if name != "" && out.Level > 0 {
-		out.Label += " " + name
+	if len(labels) > 0 && out.Level > 0 {
+		out.Label += " " + strings.Join(labels, ", ")
 	}
 	if len(notes) > 0 {
 		note := strings.Join(notes, ", ")
 		out.Blurb = strings.TrimSpace(out.Blurb + " " + strings.ToUpper(note[:1]) + note[1:] + ".")
 	}
 	return out
+}
+
+// The first layer index that is a draft layer under the format's rule, -1 when there is no
+// rule or the header lacks the facts it reads
+func (f *compiledFormat) draftStart(params map[string]float64) int32 {
+	if f.draftFrom == nil {
+		return -1
+	}
+	env := make(map[string]any, len(params))
+	for k, v := range params {
+		env[k] = v
+	}
+	v, err := f.draftFrom.Float(env)
+	if err != nil || math.IsNaN(v) || v < 0 || v > math.MaxInt32 {
+		return -1
+	}
+	return int32(v)
 }
 
 func (f *compiledFormat) classify(name string) (v1.TensorGroupKind, int32) {

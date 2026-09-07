@@ -1,8 +1,8 @@
 <script lang="ts">
-    import { afterNavigate, goto } from '$app/navigation';
+  import { afterNavigate, goto } from '$app/navigation';
 
-  // The gateway is shown from the serve page's connect dialog now
+  // The gateway is shown on the serve page now
   afterNavigate(() => {
-    goto('/?connect=1', { replaceState: true });
+    goto('/', { replaceState: true });
   });
 </script>

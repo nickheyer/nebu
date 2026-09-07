@@ -49,7 +49,6 @@ type clients struct {
 	builds    nebuv1connect.BuildServiceClient
 	slots     nebuv1connect.SlotServiceClient
 	gateway   nebuv1connect.GatewayServiceClient
-	monitor   nebuv1connect.MonitorServiceClient
 	events    nebuv1connect.EventServiceClient
 }
 
@@ -161,7 +160,6 @@ func (e *env) clients() (*clients, error) {
 		builds:    nebuv1connect.NewBuildServiceClient(httpClient, base),
 		slots:     nebuv1connect.NewSlotServiceClient(httpClient, base),
 		gateway:   nebuv1connect.NewGatewayServiceClient(httpClient, base),
-		monitor:   nebuv1connect.NewMonitorServiceClient(httpClient, base),
 		events:    nebuv1connect.NewEventServiceClient(httpClient, base),
 	}
 	return e.cl, nil
@@ -388,30 +386,6 @@ func (e *env) storedModel(ctx context.Context, source, repo, group string) (stri
 	}
 	groupName, err := e.onlyGroup(ctx, sourceID, repo, group)
 	return sourceID, groupName, err
-}
-
-// Finds one profile by id or name among the daemon's list
-func (e *env) findProfile(ctx context.Context, runtimeID, ref string) (*v1.Profile, error) {
-	resp, err := e.cl.runtimes.ListProfiles(ctx, connect.NewRequest(&v1.ListProfilesRequest{RuntimeId: runtimeID}))
-	if err != nil {
-		return nil, err
-	}
-	var found *v1.Profile
-	for _, p := range resp.Msg.GetProfiles() {
-		if p.GetId() == ref {
-			return p, nil
-		}
-		if strings.EqualFold(p.GetName(), ref) {
-			if found != nil {
-				return nil, fmt.Errorf("%q names a profile of both %s and %s, pass its id or --runtime", ref, found.GetRuntimeId(), p.GetRuntimeId())
-			}
-			found = p
-		}
-	}
-	if found == nil {
-		return nil, fmt.Errorf("unknown profile %q, see nebu profiles", ref)
-	}
-	return found, nil
 }
 
 // Follows a task to the end, progress and logs on a terminal, the final snapshot alone as JSON

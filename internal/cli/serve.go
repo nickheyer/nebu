@@ -26,9 +26,8 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	name := fs.String("name", "", "public model name for the gateway")
 	slot := fs.String("slot", "", "slot to run in, its name becomes the public name")
 	force := fs.Bool("force", false, "launch even when the plan says the model does not fit, redoing any prepare step")
-	profile := fs.String("profile", "", "profile id or name to start params from, the runtime default when empty")
 	var params multi
-	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the profile and slot defaults")
+	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the slot defaults")
 	positional, err := e.parse(fs, args, 1, 1, "run <repo> [flags]")
 	if err != nil {
 		return err
@@ -41,7 +40,7 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	req := &v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Name: *name, Params: paramMap, SlotId: *slot, Force: *force, ProfileId: *profile}
+	req := &v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Name: *name, Params: paramMap, SlotId: *slot, Force: *force}
 	resp, err := e.cl.instances.Run(ctx, connect.NewRequest(req))
 	if err != nil {
 		return err
@@ -151,7 +150,6 @@ func renderInstance(w io.Writer, in *v1.Instance) {
 	rows := [][]string{
 		{"model", in.GetSourceId() + "/" + in.GetRepo() + " " + in.GetGroup()},
 		{"runtime", in.GetRuntimeId() + " install " + in.GetInstallId()},
-		{"profile", orDash(in.GetRequest().GetProfileId())},
 		{"endpoint", in.GetEndpoint()},
 		{"pid", strconv.Itoa(int(in.GetPid()))},
 		{"device", measured(in)},
@@ -201,9 +199,8 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	installID := fs.String("install", "", "install id, newest for the runtime when empty")
 	drainFirst := fs.Bool("drain-first", false, "stop the old instance before starting the new one even when both fit")
 	force := fs.Bool("force", false, "launch even when the plan says the model does not fit, redoing any prepare step")
-	profile := fs.String("profile", "", "profile id or name to start params from, the runtime default when empty")
 	var params multi
-	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the profile and slot defaults")
+	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the slot defaults")
 	positional, err := e.parse(fs, args, 2, 2, "swap <slot> <repo> [flags]")
 	if err != nil {
 		return err
@@ -216,7 +213,7 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	run := &v1.RunRequest{SourceId: sourceID, Repo: positional[1], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Params: paramMap, ProfileId: *profile, Force: *force}
+	run := &v1.RunRequest{SourceId: sourceID, Repo: positional[1], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Params: paramMap, Force: *force}
 	resp, err := e.cl.slots.Swap(ctx, connect.NewRequest(&v1.SwapRequest{SlotId: positional[0], Run: run, DrainFirst: *drainFirst}))
 	if err != nil {
 		return err
@@ -485,7 +482,7 @@ func runSlotsEvict(ctx context.Context, e *env, args []string) error {
 
 func runSlotsRemove(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots remove")
-	force := fs.Bool("force", false, "stop the occupant and drop the watches and wants that swap into it first")
+	force := fs.Bool("force", false, "stop the occupant first")
 	positional, err := e.parse(fs, args, 1, 1, "slots remove <name|id> [--force]")
 	if err != nil {
 		return err

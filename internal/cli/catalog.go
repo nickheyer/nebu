@@ -24,23 +24,7 @@ func runDoctor(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	failed := 0
-	err = e.print(resp.Msg, func(w io.Writer) {
-		var rows [][]string
-		for _, c := range resp.Msg.GetReport().GetChecks() {
-			rows = append(rows, []string{loud(c.GetStatus()), c.GetId(), c.GetSummary(), c.GetHint()})
-		}
-		table(w, []string{"STATUS", "CHECK", "SUMMARY", "HINT"}, rows)
-	})
-	for _, c := range resp.Msg.GetReport().GetChecks() {
-		if c.GetStatus() == v1.CheckStatus_CHECK_STATUS_FAIL {
-			failed++
-		}
-	}
-	if err == nil && failed > 0 {
-		return fmt.Errorf("%d checks failed", failed)
-	}
-	return err
+	return e.done(e.follow(ctx, resp.Msg.GetTask().GetId()))
 }
 
 func runHost(ctx context.Context, e *env, args []string) error {
@@ -317,13 +301,11 @@ func runSourcesUpdate(ctx context.Context, e *env, args []string) error {
 }
 
 func runSourcesRemove(ctx context.Context, e *env, args []string) error {
-	fs := e.flags("sources remove")
-	force := fs.Bool("force", false, "remove the watches of the source and widen the wants narrowed to it first")
-	positional, err := e.parse(fs, args, 1, 1, "sources remove <id> [--force]")
+	positional, err := e.parse(e.flags("sources remove"), args, 1, 1, "sources remove <id>")
 	if err != nil {
 		return err
 	}
-	resp, err := e.cl.sources.DeleteSource(ctx, connect.NewRequest(&v1.DeleteSourceRequest{Id: positional[0], Force: *force}))
+	resp, err := e.cl.sources.DeleteSource(ctx, connect.NewRequest(&v1.DeleteSourceRequest{Id: positional[0]}))
 	if err != nil {
 		return err
 	}
@@ -453,12 +435,11 @@ func runInspect(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("inspect")
 	source := fs.String("source", "", "source id, first configured when empty")
 	slot := fs.String("slot", "", "slot id or name to plan inside, its devices, budget, and defaults")
-	profile := fs.String("profile", "", "profile id or name to start params from, plans its runtime alone unless --runtime says otherwise")
 	var runtimes, groups, contexts, params multi
 	fs.Var(&runtimes, "runtime", "runtime id, repeatable")
 	fs.Var(&groups, "group", "weight group name, repeatable")
 	fs.Var(&contexts, "ctx", "context length, repeatable")
-	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the profile and slot defaults")
+	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the slot defaults")
 	positional, err := e.parse(fs, args, 1, 1, "inspect <repo>[@revision] [flags]")
 	if err != nil {
 		return err
@@ -468,7 +449,7 @@ func runInspect(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	req := &v1.InspectRequest{SourceId: *source, Repo: repo, Revision: revision, Groups: groups, RuntimeIds: runtimes, Params: paramMap, SlotId: *slot, ProfileId: *profile}
+	req := &v1.InspectRequest{SourceId: *source, Repo: repo, Revision: revision, Groups: groups, RuntimeIds: runtimes, Params: paramMap, SlotId: *slot}
 	for _, c := range contexts {
 		n, err := strconv.ParseUint(c, 10, 32)
 		if err != nil {
@@ -549,6 +530,9 @@ func placements(plan *v1.MemoryPlan) string {
 			continue
 		}
 		parts = append(parts, fmt.Sprintf("%s %d/%d", eval.EnumShort(k), t.device, t.device+t.host))
+	}
+	for _, p := range plan.GetSkipped() {
+		parts = append(parts, eval.EnumShort(p.GetKind())+":disk")
 	}
 	return strings.Join(parts, " ")
 }

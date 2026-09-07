@@ -381,6 +381,9 @@ func (e *entry) broadcastLocked() {
 	}
 }
 
+// The task as it stands, for code that records which task did its work
+func (h *Handle) Task() *v1.Task { return h.e.snapshot() }
+
 // Sets done, total, and message at once
 func (h *Handle) Progress(done, total uint64, message string) {
 	h.done.Store(done)

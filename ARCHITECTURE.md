@@ -45,8 +45,8 @@ once and never changes again.
 - **Descriptor**. Format-neutral facts read from artifact headers without downloading weights.
   Architecture parameters, tensor groups with sizes, cache shape inputs.
 - **Runtime**. A backend manifest. How to acquire it, launch it, probe it, estimate for it.
-- **Profile**. A named set of param values for one runtime. Rows in the database, one of them
-  the runtime's default, edited in the UI and never a spec file.
+- **Install method**. One way a manifest says its runtime can be obtained: a binary on the host,
+  a published release, or a recipe. Offered as a list, one chosen and configured when installing.
 - **Install**. A concrete usable copy of a runtime. Adopted, downloaded, or built.
 - **Recipe**. How to build an install. Base repo, ref, patches, flags, all templated.
 - **Estimate**. A memory plan for a model on a runtime with given params on this host.
@@ -56,10 +56,6 @@ once and never changes again.
 - **Task**. Any long-running operation with streamed progress and logs.
 - **Build**. One run of a recipe on this host, keyed by the hash of everything that decides
   its bytes.
-- **Watch**. A repository the monitor checks for new revisions and weight groups.
-- **Want**. A standing search the monitor runs until a matching weight group appears, then
-  pulls and swaps it in as a watch would.
-- **Finding**. One change a check noticed, with the pull it triggered and the swap that followed.
 - **Event**. One change to any of the above, streamed to the UI.
 
 ## Tree
@@ -91,7 +87,6 @@ nebu/
 |           +-- estimate.proto     memory plan requests and results
 |           +-- slot.proto         slots, swaps, eviction
 |           +-- gateway.proto      routes, listeners, api flavors
-|           +-- monitor.proto      watches and findings
 |           +-- task.proto         durable jobs, progress and log streams
 |           +-- event.proto        watch stream feeding live ui updates
 +-- pkg/
@@ -137,11 +132,10 @@ nebu/
 |   +-- daemon/                    wiring of all managers, startup recovery, shutdown
 |   +-- inspect/                   resolve, describe, and plan a model before download
 |   +-- pull/                      fetch, verify, link, manifest, and export a weight group
-|   +-- installs/                  adopt, download, or build runtime binaries, run probes
-|   +-- profiles/                  named param sets per runtime as rows, one default each
+|   +-- installs/                  install methods as forms, adopt, download, or build runtime binaries, run probes
 |   +-- instances/                 plan, launch, supervise, persist, recover, and route
 |   +-- calibrate/                 learned overhead corrections per runtime and arch
-|   +-- doctor/                    probes, runtimes, installs, recipes, sources, and store as checks
+|   +-- doctor/                    probes, runtimes, installs, recipes, sources, and store checked as a task
 |   +-- db/                        pure go sqlite, schema.sql is the truth, atlas migrations, one file per area over shared row helpers
 |   |   +-- migrations/            one init migration and its atlas.sum until release
 |   +-- rpc/
@@ -150,15 +144,14 @@ nebu/
 |   +-- tasks/                     task engine, progress fan-out, cancellation, stored history
 |   +-- slots/                     slot manager, reservations, swaps
 |   +-- gateway/                   openai, anthropic, and ollama flavors over one canonical chat, the route table, limits
-|   +-- monitor/                   watches monitored models for new revisions and quants, runs wants
-|   +-- notify/                    posts findings and failed instances to webhooks
+|   +-- notify/                    posts failed instances to webhooks
 |   +-- cli/                       client subcommands over connect by area, one parse and one print helper, table and json output
 +-- web/
 |   +-- nebu/                      sveltekit static app embedded into the binary
 |       +-- embed.go               go:embed of dist with a single page fallback
 |       +-- src/lib/proto/         generated connect-es client, never hand edited
 |       +-- src/lib/               api client, live state fed by events, shared components
-|       +-- src/routes/            overview, catalog, store, runtimes, slots, instances, tasks, monitor, gateway, chat, host, settings
+|       +-- src/routes/            serve, catalog, store, runtimes, tasks, chat, host, settings
 |       +-- static/                openapi output
 +-- docs/                          user docs
 +-- scripts/                       release and ci helpers
@@ -207,7 +200,9 @@ asset resolve through the seeded `github` source's releases, so one release pars
 1. A source resolves a repo and revision to artifacts with sizes and sha256.
 2. A format reader range-reads only headers and emits a descriptor.
 3. The estimator places tensor groups and caches into the host's memory pools once per
-   runtime manifest and candidate param set.
+   runtime and candidate param set, the runtimes being the installed ones that accept the
+   group's format, or every compatible one when nothing installed does, at the configured
+   context lengths capped at the model's own.
 4. The result is a table of quant by runtime by context length, each marked fits, partial,
    or no, with the plan that produced it, once against the whole memory and once against what
    is free right now, since a run plans against free memory.
@@ -228,9 +223,12 @@ Progress, rate, and log lines stream over a Connect server stream, which the CLI
 place. `remove` drops the manifest and links, `store gc` drops blobs no manifest references,
 and `store verify` rehashes blobs and deletes corrupt ones so the next pull repairs them.
 
-**Runtime install** adopts a binary you already have, downloads a prebuilt release, or runs a
-recipe. A recipe is hashed with the resolved host facts, so an unchanged recipe on an
-unchanged host is a cache hit.
+**Runtime install** is one of the methods the manifest lists, chosen by the person installing:
+adopt a binary already on the host, download a published release, or run a recipe. The daemon
+describes each method's settings as fields with defaults for this host, the published build its
+rules select or the recipe variant the host selects, and the request carries the method and the
+settings, so the same form installs any runtime. A recipe is hashed with the resolved host
+facts, so an unchanged recipe on an unchanged host is a cache hit.
 
 **Build** runs as a task and produces an install of kind BUILT.
 
@@ -257,10 +255,9 @@ is fitted to what the card reported, and the two measured runs live under
 
 1. The stored manifest supplies the link paths and descriptor. The host is probed again and
    the planner runs against free memory, so a second model plans around the first.
-2. Params layer in one order everywhere a plan is made: the runtime's default profile or the
-   profile the request names, then the slot's defaults, then the request's own. The manifest
-   types every param and refuses unknown names or values of the wrong type, so the web form is
-   built from the manifest and profiles are validated when they are written.
+2. Params layer in one order everywhere a plan is made: the manifest defaults, then the slot's
+   defaults, then the request's own. The manifest types every param and refuses unknown names
+   or values of the wrong type, so the web form is built from the manifest.
 3. Solved params replace `auto`, the runtime package renders the command and environment
    from the manifest templates, which also see the descriptor, and a free loopback port is
    picked.
@@ -299,10 +296,10 @@ reboot but not a `nebu stop`. Builds left running are marked failed. Slots pick 
 instance bound to them and route it as soon as it answers health, and route rows come back
 pending until an instance is adopted or relaunched.
 
-**Installs** are adopted from a path or PATH, or downloaded through a prebuilt rule whose
-`when` expression selects the release for the probed host; every asset the rule lists is taken
-from one release and unpacked into one directory. Manifest probes run the binary once to
-capture its version and the devices it sees.
+**Installs** are adopted from a path or PATH, or downloaded through a prebuilt rule, the one
+whose `when` holds on the probed host by default; every asset the rule lists is taken from one
+release and unpacked into one directory. Manifest probes run the binary once to capture its
+version and the devices it sees.
 
 **Slots** reserve devices and a memory budget under one public name. A run bound to a slot
 plans against the slot's device pools capped at the budget, inherits the slot's default
@@ -317,10 +314,9 @@ finish, then stops. When it does not fit, or the caller asks, the old instance d
 stops first, the route goes pending, and the new instance starts, with the old request
 replayed as a rollback if the new one fails. The public name never disappears.
 
-**Monitor** checks watched repositories on an interval, bypassing the listing cache, and
-records a finding for a changed commit or a weight group that appeared or vanished. With
-auto pull, groups matching the watch's pattern are pulled, and with a slot the slot swaps
-onto the freshest pull. Findings stay until acknowledged.
+**Doctor** probes the host again and checks probes, devices, storage, the store, runtimes,
+recipes, and sources, as a task whose log holds one line per check and which fails when any
+check does. It runs once when the daemon starts and again from the host page or `nebu doctor`.
 
 **Events** are published by every manager on every change and fan out through an in-process
 bus to `EventService.WatchEvents`, a Connect server stream that starts with a snapshot. The
@@ -353,8 +349,8 @@ web UI holds one subscription and renders from it, so nothing polls.
 - No websocket hub. Live UI updates ride a Connect server stream, which works in browsers
   over HTTP/1.1 without a proxy.
 - No cgo SQLite driver. The modernc pure-Go port. Installs, builds, instances with their
-  plans, measurements, triage, and requests, slots, routes, watches, findings, calibrations,
-  and task history are rows in `<data_dir>/nebu.db`, created by the embedded migrations.
+  plans, measurements, triage, and requests, slots, routes, calibrations, and task history are
+  rows in `<data_dir>/nebu.db`, created by the embedded migrations.
   Runtime output and build transcripts are the things kept as files, truncated past a size
   cap for runtimes.
 - No `patch` binary and no git library. Recipe patches apply through a small unified diff
@@ -417,6 +413,26 @@ the layer kind, overhead sits on device, and the solved counts come back as para
 to render as flags. The verdict is FITS when every offloadable item is on device, PARTIAL
 when some spilled, and NO when the fixed need alone does not fit.
 
+A kind whose policy carries a `when` expression loads only while it holds over the run
+params and header facts, and otherwise stays on disk, listed under the plan's `skipped`
+rather than in any pool: the prediction heads a checkpoint ships count on SGLang and vLLM
+once a speculative method names them and never on llama.cpp. Placements carry weights alone,
+so a pool's remainder over its placements is the cache and overhead it holds.
+
+A plan with no fit is still laid out, the way the host would take it: device pools fill to
+their capacity in order, the rest flows on into host memory, and whatever no pool holds runs
+the last pool past its capacity. The pools then say the shortfall themselves, a 12 GiB card
+reading 12 of 12 and the 63 GiB beside it 63 plus what is left over, which is what the app
+draws, and the solved counts say what landed on device so a forced run starts from them.
+
+Tensor kinds are what the format specs classify: embedding, layer, experts, output, vision
+and audio encoders with their projectors, draft heads, and other. Encoder and draft rules
+sit ahead of the layer rules, since each numbers layers of its own, and a format's
+`draft_from` expression names the first layer index that is a draft head rather than a main
+layer, so a checkpoint that numbers its heads after the layers its config counts keeps
+them apart. The GGUF reader folds the projector a run loads beside the weights into the
+tensor table, so a vision tower counts wherever it lives.
+
 ## Milestones
 
 1. `nebu doctor` and `nebu inspect`. Host probes, sources, format readers, estimator. Ships as a
@@ -428,10 +444,9 @@ when some spilled, and NO when the fixed need alone does not fit.
    `stop`, and `logs` need `nebu serve`, which the CLI finds on the configured listen address.
 4. `nebu build`. Recipes over host facts, patch sets, host and OCI sandboxes, the hashed build
    cache, builds as rows next to installs.
-5. Slots, swaps, monitor, the route table, gateway keys and API token, the event stream, store
-   export, the mirror source, and the SvelteKit app embedded in the binary.
+5. Slots, swaps, the route table, gateway keys and API token, the event stream, store export,
+   the mirror source, and the SvelteKit app embedded in the binary.
 
 All five have code and an end to end suite that drives a fake runtime binary through pull, run,
-gateway, stop, restart, adoption, swap, rollback, monitor, export, build, auth, and the event
-stream. What has not been verified against a real catalog, a real GPU, or a second runtime, and
+gateway, stop, restart, adoption, swap, rollback, export, build, auth, and the event stream. What has not been verified against a real catalog, a real GPU, or a second runtime, and
 what the end state described in the README still lacks, is tracked in `TODOS.md`.

@@ -27,13 +27,12 @@ const (
 	// Comma separated gateway keys read when gateway.api_key_env is unset
 	envAPIKeys = "NEBU_API_KEYS"
 
-	defaultListen   = "127.0.0.1:8484"
-	minFreeBytes    = 50 << 30
-	workers         = 8
-	chunkBytes      = 32 << 20
-	retries         = 5
-	drainTimeoutMs  = 30000
-	monitorInterval = 3600000
+	defaultListen  = "127.0.0.1:8484"
+	minFreeBytes   = 50 << 30
+	workers        = 8
+	chunkBytes     = 32 << 20
+	retries        = 5
+	drainTimeoutMs = 30000
 	// A runtime that has not started answering in this long is hung, not slow
 	upstreamTimeoutMs = 600000
 )
@@ -177,12 +176,6 @@ func applyDefaults(cfg *v1.Config) error {
 		if v := os.Getenv(cfg.Gateway.ApiKeyEnv); v != "" {
 			cfg.Gateway.ApiKeys = append(cfg.Gateway.ApiKeys, splitKeys(v)...)
 		}
-	}
-	if cfg.Monitor == nil {
-		cfg.Monitor = &v1.Monitor{}
-	}
-	if cfg.Monitor.IntervalMs == 0 {
-		cfg.Monitor.IntervalMs = monitorInterval
 	}
 	if cfg.Builds == nil {
 		cfg.Builds = &v1.Builds{}

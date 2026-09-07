@@ -38,7 +38,7 @@ type command struct {
 func commands() []command {
 	return []command{
 		{name: "serve", summary: "run the daemon", run: runServe, local: true},
-		{name: "doctor", summary: "probe the host and check every dependency", run: runDoctor, local: true},
+		{name: "doctor", summary: "probe the host and check every dependency as a task", run: runDoctor, local: true},
 		{name: "host", summary: "show the probed host profile", run: runHost, local: true},
 		{name: "sources", summary: "configured sources", run: runSources, local: true, sub: []command{
 			{name: "list", summary: "list sources with their sorts, facets, and auth state", run: runSources, local: true},
@@ -70,15 +70,9 @@ func commands() []command {
 			{name: "show", summary: "show a runtime with every param it takes", run: runRuntimesShow, local: true},
 			{name: "installs", summary: "list installs", run: runRuntimesInstalls, local: true},
 			{name: "adopt", summary: "record a binary already on the host", run: runRuntimesAdopt, local: true},
-			{name: "install", summary: "download a prebuilt release for this host", run: runRuntimesInstall, local: true},
+			{name: "install", summary: "install a runtime by the method its manifest selects for this host", run: runRuntimesInstall, local: true},
 			{name: "remove", summary: "remove an install", run: runRuntimesRemove, local: true},
 			{name: "recipes", summary: "list build recipes and what this host selects", run: runRuntimesRecipes, local: true},
-		}},
-		{name: "profiles", summary: "named param sets per runtime", run: runProfiles, local: true, sub: []command{
-			{name: "list", summary: "list profiles, for one runtime when named", run: runProfiles, local: true},
-			{name: "add", summary: "add a profile", run: runProfilesAdd},
-			{name: "update", summary: "change a profile", run: runProfilesUpdate},
-			{name: "remove", summary: "remove a profile", run: runProfilesRemove},
 		}},
 		{name: "build", summary: "build a runtime from its recipe", run: runBuild, local: true},
 		{name: "builds", summary: "list, show, and remove builds", run: runBuildsList, local: true, sub: []command{
@@ -103,17 +97,6 @@ func commands() []command {
 		}},
 		{name: "gateway", summary: "gateway listeners, routes, and counters", run: runGateway},
 		{name: "chat", summary: "talk to a running model through the gateway", run: runChat},
-		{name: "monitor", summary: "watch sources for new revisions and quants", run: runMonitorList, sub: []command{
-			{name: "list", summary: "list watches", run: runMonitorList},
-			{name: "add", summary: "watch a repository", run: runMonitorAdd},
-			{name: "remove", summary: "stop watching", run: runMonitorRemove},
-			{name: "wants", summary: "list wanted models", run: runMonitorWants},
-			{name: "want", summary: "want a model, searched for until found", run: runMonitorWant},
-			{name: "unwant", summary: "stop wanting", run: runMonitorUnwant},
-			{name: "check", summary: "check now", run: runMonitorCheck},
-			{name: "findings", summary: "list findings", run: runMonitorFindings},
-			{name: "ack", summary: "acknowledge a finding", run: runMonitorAck},
-		}},
 		{name: "events", summary: "stream daemon events as JSON lines", run: runEvents},
 		{name: "ps", summary: "list running instances", run: runPs},
 		{name: "show", summary: "show instance info", run: runShow},

@@ -30,8 +30,6 @@ var (
 	ErrUnknownSlot = errors.New("unknown slot")
 	// Returned when a slot is busy or a request malformed
 	ErrSlot = errors.New("invalid slot request")
-	// Returned when a slot cannot go because a watch or want swaps into it
-	ErrSlotInUse = errors.New("slot in use")
 )
 
 // Owns every slot and drives swaps
@@ -44,8 +42,6 @@ type Manager struct {
 	Events       *events.Bus
 	DrainTimeout time.Duration
 	Log          *slog.Logger
-	// Names what swaps into a slot, watches and wants, dropping the swap when clear is set
-	Referrers func(id string, clear bool) []string
 
 	mu    sync.Mutex
 	slots map[string]*v1.Slot
@@ -304,23 +300,6 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 	return next, nil
 }
 
-// Names the slots whose last request starts from a profile, the one a rollback
-// replays, dropping the reference when clear is set
-func (m *Manager) ProfileReferrers(refers func(ref, runtimeID string) bool, clear bool) []string {
-	var out []string
-	for _, s := range m.List() {
-		req := s.GetRequest()
-		if !refers(req.GetProfileId(), req.GetRuntimeId()) {
-			continue
-		}
-		out = append(out, "slot "+s.GetName())
-		if clear {
-			m.update(s.GetId(), func(sl *v1.Slot) { sl.Request.ProfileId = "" })
-		}
-	}
-	return out
-}
-
 // Deletes a slot, stopping its occupant when forced
 func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Slot, error) {
 	s, err := m.find(id)
@@ -337,13 +316,6 @@ func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Slot, 
 		}
 		if _, err := m.Instances.Stop(ctx, live.GetId()); err != nil {
 			return nil, err
-		}
-	}
-	if m.Referrers != nil {
-		if used := m.Referrers(s.GetId(), false); len(used) > 0 && !force {
-			return nil, fmt.Errorf("%w: slot %s is swapped into by %s, point them elsewhere or pass --force to drop the swap", ErrSlotInUse, s.GetName(), strings.Join(used, ", "))
-		} else if len(used) > 0 {
-			m.Referrers(s.GetId(), true)
 		}
 	}
 	if _, err := m.DB.DeleteSlot(ctx, s.GetId()); err != nil {

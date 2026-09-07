@@ -3,6 +3,7 @@ syntax = "proto3";
 package nebu.v1;
 
 import "google/protobuf/timestamp.proto";
+import "nebu/v1/task.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
 
@@ -39,14 +40,6 @@ enum ParseKind {
   PARSE_KIND_REGEX = 4;
 }
 
-// Severity of one doctor check
-enum CheckStatus {
-  CHECK_STATUS_UNSPECIFIED = 0;
-  CHECK_STATUS_OK = 1;
-  CHECK_STATUS_WARN = 2;
-  CHECK_STATUS_FAIL = 3;
-}
-
 // Probed compute device with vendor facts
 message Device {
   string id = 1;
@@ -76,7 +69,7 @@ message Storage {
   repeated string uses = 5;
 }
 
-// Result of one probe for doctor reporting
+// Result of one probe
 message ProbeResult {
   string probe_id = 1;
   ProbeStatus status = 2;
@@ -162,20 +155,6 @@ message ProbeSpec {
   repeated string arch = 7;
 }
 
-// One doctor finding with a hint
-message DoctorCheck {
-  string id = 1;
-  CheckStatus status = 2;
-  string summary = 3;
-  string hint = 4;
-}
-
-// Full doctor output
-message DoctorReport {
-  HostProfile profile = 1;
-  repeated DoctorCheck checks = 2;
-}
-
 // Asks for the host profile
 message GetProfileRequest {
   bool refresh = 1;
@@ -186,18 +165,18 @@ message GetProfileResponse {
   HostProfile profile = 1;
 }
 
-// Asks for a doctor run
+// Asks for a fresh probe and a check of every dependency, run as a task
 message DoctorRequest {}
 
-// Returns doctor findings
+// Returns the check task, its log carrying one line per check
 message DoctorResponse {
-  DoctorReport report = 1;
+  Task task = 1;
 }
 
 // Host probing and diagnostics
 service HostService {
   // Returns cached or refreshed host profile
   rpc GetProfile(GetProfileRequest) returns (GetProfileResponse);
-  // Runs every check and returns findings
+  // Probes the host again and checks every dependency as a task
   rpc Doctor(DoctorRequest) returns (DoctorResponse);
 }

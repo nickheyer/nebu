@@ -23,7 +23,7 @@ const ID = "settings"
 
 const labelMax = 64
 
-// Owns the settings row, the same way profiles are owned: the rows are the
+// Owns the settings row, the same way sources are owned: the rows are the
 // truth and every change reaches the UI as an event
 type Manager struct {
 	DB     *db.DB

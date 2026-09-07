@@ -8,7 +8,6 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/internal/instances"
-	"github.com/nickheyer/nebu/internal/monitor"
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/events"
@@ -21,7 +20,6 @@ var (
 	_ nebuv1connect.InstanceServiceHandler = (*InstanceService)(nil)
 	_ nebuv1connect.SlotServiceHandler     = (*SlotService)(nil)
 	_ nebuv1connect.GatewayServiceHandler  = (*GatewayService)(nil)
-	_ nebuv1connect.MonitorServiceHandler  = (*MonitorService)(nil)
 	_ nebuv1connect.TaskServiceHandler     = (*TaskService)(nil)
 	_ nebuv1connect.EventServiceHandler    = (*EventService)(nil)
 )
@@ -154,58 +152,6 @@ func (s *GatewayService) slotless(name, why string) error {
 		return wrap(fmt.Errorf("%w: %s %s", runtime.ErrParam, name, why))
 	}
 	return nil
-}
-
-// Serves watches and findings
-type MonitorService struct {
-	monitor *monitor.Manager
-}
-
-func NewMonitorService(m *monitor.Manager) *MonitorService {
-	return &MonitorService{monitor: m}
-}
-
-func (s *MonitorService) AddWatch(ctx context.Context, req *connect.Request[v1.AddWatchRequest]) (*connect.Response[v1.AddWatchResponse], error) {
-	w, err := s.monitor.Add(ctx, req.Msg)
-	return reply(&v1.AddWatchResponse{Watch: w}, err)
-}
-
-func (s *MonitorService) ListWatches(ctx context.Context, req *connect.Request[v1.ListWatchesRequest]) (*connect.Response[v1.ListWatchesResponse], error) {
-	return reply(&v1.ListWatchesResponse{Watches: s.monitor.List()}, nil)
-}
-
-func (s *MonitorService) RemoveWatch(ctx context.Context, req *connect.Request[v1.RemoveWatchRequest]) (*connect.Response[v1.RemoveWatchResponse], error) {
-	w, err := s.monitor.Remove(ctx, req.Msg.GetId())
-	return reply(&v1.RemoveWatchResponse{Watch: w}, err)
-}
-
-func (s *MonitorService) AddWant(ctx context.Context, req *connect.Request[v1.AddWantRequest]) (*connect.Response[v1.AddWantResponse], error) {
-	w, err := s.monitor.AddWant(ctx, req.Msg)
-	return reply(&v1.AddWantResponse{Want: w}, err)
-}
-
-func (s *MonitorService) ListWants(ctx context.Context, req *connect.Request[v1.ListWantsRequest]) (*connect.Response[v1.ListWantsResponse], error) {
-	return reply(&v1.ListWantsResponse{Wants: s.monitor.ListWants()}, nil)
-}
-
-func (s *MonitorService) RemoveWant(ctx context.Context, req *connect.Request[v1.RemoveWantRequest]) (*connect.Response[v1.RemoveWantResponse], error) {
-	w, err := s.monitor.RemoveWant(ctx, req.Msg.GetId())
-	return reply(&v1.RemoveWantResponse{Want: w}, err)
-}
-
-func (s *MonitorService) CheckWatches(ctx context.Context, req *connect.Request[v1.CheckWatchesRequest]) (*connect.Response[v1.CheckWatchesResponse], error) {
-	task, err := s.monitor.Check(ctx, req.Msg.GetId(), req.Msg.GetRearm())
-	return reply(&v1.CheckWatchesResponse{Task: task}, err)
-}
-
-func (s *MonitorService) ListFindings(ctx context.Context, req *connect.Request[v1.ListFindingsRequest]) (*connect.Response[v1.ListFindingsResponse], error) {
-	list, err := s.monitor.Findings(ctx, req.Msg.GetWatchId(), req.Msg.GetWantId(), req.Msg.GetUnacknowledgedOnly())
-	return reply(&v1.ListFindingsResponse{Findings: list}, err)
-}
-
-func (s *MonitorService) AckFinding(ctx context.Context, req *connect.Request[v1.AckFindingRequest]) (*connect.Response[v1.AckFindingResponse], error) {
-	f, err := s.monitor.Ack(ctx, req.Msg.GetId())
-	return reply(&v1.AckFindingResponse{Finding: f}, err)
 }
 
 // Serves task listing and watching

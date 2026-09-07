@@ -27,8 +27,8 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			}
 		}
 		if req := in.GetRequest(); req != nil {
-			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id, profile_id, force) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId(), req.GetProfileId(), boolCol(req.GetForce())); err != nil {
+			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id, force) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId(), boolCol(req.GetForce())); err != nil {
 				return err
 			}
 			if err := putMap(exec, `INSERT INTO instance_request_params (instance_id, name, value) VALUES (?, ?, ?)`, id, req.GetParams()); err != nil {
@@ -46,7 +46,8 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 					return err
 				}
 			}
-			for i, p := range plan.GetPlacements() {
+			// A group left on disk is a placement with no pool
+			for i, p := range append(append([]*v1.Placement{}, plan.GetPlacements()...), plan.GetSkipped()...) {
 				if err := exec(`INSERT INTO instance_plan_placements (instance_id, position, kind, pool_id, bytes, count) VALUES (?, ?, ?, ?, ?, ?)`,
 					id, i, enumCol(p.GetKind()), p.GetPoolId(), int64(p.GetBytes()), p.GetCount()); err != nil {
 					return err
@@ -101,9 +102,9 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 	if in.Command, err = d.strings(ctx, `SELECT arg FROM instance_command WHERE instance_id = ? ORDER BY position`, id); err != nil {
 		return err
 	}
-	requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, profile_id, force FROM instance_requests WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
+	requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, force FROM instance_requests WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
 		req := &v1.RunRequest{}
-		return req, rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, &req.ProfileId, (*flag)(&req.Force))
+		return req, rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, (*flag)(&req.Force))
 	}, id)
 	if err != nil {
 		return err
@@ -129,11 +130,19 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 		}, id); err != nil {
 			return err
 		}
-		if plan.Placements, err = list(ctx, d, `SELECT kind, pool_id, bytes, count FROM instance_plan_placements WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.Placement, error) {
+		placed, err := list(ctx, d, `SELECT kind, pool_id, bytes, count FROM instance_plan_placements WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.Placement, error) {
 			p := &v1.Placement{}
 			return p, rows.Scan(enumAt[v1.TensorGroupKind]{&p.Kind}, &p.PoolId, &p.Bytes, &p.Count)
-		}, id); err != nil {
+		}, id)
+		if err != nil {
 			return err
+		}
+		for _, p := range placed {
+			if p.GetPoolId() == "" {
+				plan.Skipped = append(plan.Skipped, p)
+			} else {
+				plan.Placements = append(plan.Placements, p)
+			}
 		}
 		if plan.Params, err = d.stringMap(ctx, `SELECT name, value FROM instance_plan_params WHERE instance_id = ? ORDER BY name`, id); err != nil {
 			return err

@@ -267,14 +267,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if err != nil {
 		return nil, err
 	}
-	// A named profile picks its runtime when nothing else did, else the first compatible one
-	if req.GetRuntimeId() == "" && req.GetProfileId() != "" {
-		p, err := m.Inspector.Profiles.Resolve("", req.GetProfileId())
-		if err != nil {
-			return nil, err
-		}
-		req.RuntimeId = p.GetRuntimeId()
-	}
+	// The slot's runtime when it has one, else the first compatible one
 	var rt *runtime.Runtime
 	if req.GetRuntimeId() == "" {
 		rt, err = m.Inspector.DefaultRuntime(profile, stored.GetFormatId())
@@ -317,14 +310,8 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if res != nil {
 		slotParams = res.Params
 	}
-	// The one layering every plan uses, and a named profile is kept by id so a rename cannot strand it
-	used, layered, err := m.Inspector.Layer(rt.Manifest.GetId(), req.GetProfileId(), slotParams, req.GetParams())
-	if err != nil {
-		return nil, err
-	}
-	if req.GetProfileId() != "" {
-		req.ProfileId = used.GetId()
-	}
+	// The one layering every plan uses, the slot's defaults under the request's params
+	layered := runtime.Merge(slotParams, req.GetParams())
 	params, err := rt.Params(layered)
 	if err != nil {
 		return nil, err
@@ -758,27 +745,6 @@ func (m *Manager) Constrain(ctx context.Context, slotID string, profile *v1.Host
 // Whether a restart brings the record back, wanted and not failed on its own
 func relaunches(rec *v1.Instance) bool {
 	return rec.GetDesiredRunning() && rec.GetState() != v1.InstanceState_INSTANCE_STATE_FAILED
-}
-
-// Names the instances whose request starts from a profile, live ones and any a
-// restart would relaunch, dropping the reference when clear is set
-func (m *Manager) ProfileReferrers(refers func(ref, runtimeID string) bool, clear bool) []string {
-	m.mu.Lock()
-	list := append([]*instance(nil), m.list...)
-	m.mu.Unlock()
-	var out []string
-	for _, in := range list {
-		rec := in.snapshot()
-		req := rec.GetRequest()
-		if Terminal(rec.GetState()) && !relaunches(rec) || !refers(req.GetProfileId(), req.GetRuntimeId()) {
-			continue
-		}
-		out = append(out, "instance "+rec.GetName())
-		if clear {
-			in.update(func(r *v1.Instance) { r.Request.ProfileId = "" })
-		}
-	}
-	return out
 }
 
 // Lists live instances bound to a slot, newest first

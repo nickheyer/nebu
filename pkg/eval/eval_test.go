@@ -2,6 +2,7 @@ package eval
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -127,5 +128,30 @@ func TestSolve(t *testing.T) {
 	err := Solve(map[string]*Expr{"c": compile("missing + 1")}, map[string]any{})
 	if err == nil || !strings.Contains(err.Error(), "formula c") {
 		t.Fatalf("unresolved formula should name itself, got %v", err)
+	}
+}
+
+func TestMissingNamesWhatTheScopeLacks(t *testing.T) {
+	e, err := Compile("n_layer / (attn_interval ?? 1) * n_head_kv * (head_dim + head_dim_v) + KiB + vercmp(version, \"1\") + min(n_layer, 2)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]any{"n_layer": 2.0, "head_dim": 64.0, "head_dim_v": nil}
+	got := e.Missing(env)
+	want := []string{"head_dim_v", "n_head_kv", "version"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("missing %v want %v", got, want)
+	}
+	_, err = e.Float(env)
+	var missing *MissingError
+	if !errors.As(Explain(e, "cache_per_token", env, err), &missing) || missing.Formula != "cache_per_token" {
+		t.Fatalf("explain %v", err)
+	}
+	full := map[string]any{"n_layer": 2.0, "head_dim": 64.0, "head_dim_v": 64.0, "n_head_kv": 4.0, "version": "2"}
+	if len(e.Missing(full)) != 0 {
+		t.Fatalf("nothing should be missing: %v", e.Missing(full))
+	}
+	if err := Solve(map[string]*Expr{"cache_per_token": e}, map[string]any{"n_layer": 2.0}); !errors.As(err, &missing) {
+		t.Fatalf("solve should name the missing values: %v", err)
 	}
 }

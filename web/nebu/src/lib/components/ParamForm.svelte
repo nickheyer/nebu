@@ -50,7 +50,7 @@
     return true;
   }
 
-  // How many fields hold a value the runtime would refuse, so a dialog can hold its submit
+  // How many fields hold a value the runtime would refuse, so a form can hold its submit
   $effect(() => {
     invalid = params.filter((p) => !valid(p, values[p.name])).length;
   });
@@ -68,9 +68,9 @@
     {@const v = values[p.name] ?? ''}
     {@const fid = `${idPrefix}-${p.name}`}
     {@const bad = !valid(p, v)}
-    <Field label={p.name} for={fid} info={p.description || undefined} error={bad ? (numeric(p) ? (p.solved ? 'A number or auto' : 'A number') : 'true or false') : undefined}>
+    <Field label={p.name} for={fid} hint={p.description || undefined} error={bad ? (numeric(p) ? (p.solved ? 'A number or auto' : 'A number') : 'true or false') : undefined}>
       {#if p.choices.length || p.type === ParamType.BOOL}
-        <Select id={fid} mono value={v} items={[{ value: '', label: 'Inherit', detail: beneath(p) }, ...(p.choices.length ? p.choices : ['true', 'false']).map((c) => ({ value: c, label: c }))]} />
+        <Select id={fid} mono value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: 'Inherit', detail: beneath(p) }, ...(p.choices.length ? p.choices : ['true', 'false']).map((c) => ({ value: c, label: c }))]} />
       {:else}
         <input
           id={fid}
@@ -89,7 +89,7 @@
   {/each}
 
   {#each extra as k (k)}
-    <Field label={k} for="{idPrefix}-{k}" info={params.length ? 'Not in the manifest' : undefined}>
+    <Field label={k} for="{idPrefix}-{k}" hint={params.length ? 'Not in the manifest' : undefined}>
       <div class="flex gap-1">
         <input id="{idPrefix}-{k}" class="input font-mono" value={values[k]} autocomplete="off" spellcheck="false" oninput={(e) => (values = { ...values, [k]: (e.currentTarget as HTMLInputElement).value })} />
         <IconButton icon={X} label="Remove" onclick={() => set(k, '')} />

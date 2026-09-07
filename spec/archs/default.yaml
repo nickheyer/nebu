@@ -1,6 +1,6 @@
 id: default
-description: Standard attention with a full key and value cache per layer
+description: Standard attention with a full key and value cache per layer, on one layer in attn_interval for a hybrid model
 match: '.*'
 priority: 0
 formulas:
-  cache_per_token: n_layer * n_head_kv * (head_dim + head_dim_v)
+  cache_per_token: n_layer / (attn_interval ?? 1) * n_head_kv * (head_dim + head_dim_v)

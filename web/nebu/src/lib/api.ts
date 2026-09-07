@@ -6,7 +6,6 @@ import { EventService } from '$proto/event_pb';
 import { GatewayService } from '$proto/gateway_pb';
 import { HostService } from '$proto/host_pb';
 import { InstanceService } from '$proto/instance_pb';
-import { MonitorService } from '$proto/monitor_pb';
 import { RuntimeService } from '$proto/runtime_pb';
 import { SettingsService } from '$proto/settings_pb';
 import { SlotService } from '$proto/slot_pb';
@@ -49,7 +48,6 @@ export const api = {
   builds: createClient(BuildService, transport),
   slots: createClient(SlotService, transport),
   gateway: createClient(GatewayService, transport),
-  monitor: createClient(MonitorService, transport),
   events: createClient(EventService, transport)
 };
 

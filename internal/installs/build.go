@@ -67,8 +67,10 @@ func (m *Manager) recipe(req *v1.BuildRequest) (*build.Recipe, error) {
 	if err != nil {
 		return nil, err
 	}
-	if id := rt.Manifest.GetAcquire().GetRecipeId(); id != "" {
-		return m.Recipes.Get(id)
+	if ids := rt.RecipeIDs(); len(ids) == 1 {
+		return m.Recipes.Get(ids[0])
+	} else if len(ids) > 1 {
+		return nil, fmt.Errorf("%w: %s builds from recipes %s, pass one", build.ErrSelection, req.GetRuntimeId(), strings.Join(ids, ", "))
 	}
 	candidates := m.Recipes.ForRuntime(req.GetRuntimeId())
 	switch len(candidates) {
@@ -86,6 +88,61 @@ func (m *Manager) recipe(req *v1.BuildRequest) (*build.Recipe, error) {
 
 // Resolves a request to a build, reusing a finished one
 func (m *Manager) Build(ctx context.Context, req *v1.BuildRequest) (*v1.Build, *v1.Task, error) {
+	sel, b, err := m.resolveBuild(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	m.buildMu.Lock()
+	defer m.buildMu.Unlock()
+	if task, ok := m.building[b.GetId()]; ok {
+		existing, err := m.DB.GetBuild(ctx, b.GetId())
+		if err == nil {
+			return existing, task, nil
+		}
+	}
+	if !req.GetForce() {
+		if existing, install := m.cached(ctx, b.GetId()); existing != nil {
+			task := m.Tasks.Start(kindBuild, "build "+sel.Recipe.Spec.GetId()+" "+b.GetVariant(), map[string]string{"build": b.GetId(), "runtime": b.GetRuntimeId(), "cached": "true"}, func(ctx context.Context, h *tasks.Handle) error {
+				h.Logf("build %s already done, install %s at %s", existing.GetId(), install.GetId(), install.GetPath())
+				h.Progress(1, 1, "cached")
+				return nil
+			})
+			return existing, task, nil
+		}
+	}
+	b.State = v1.BuildState_BUILD_STATE_RUNNING
+	title := fmt.Sprintf("build %s %s %s", sel.Recipe.Spec.GetId(), b.GetVariant(), b.GetRef())
+	// The task works on its own copy once ids exist
+	var job *v1.Build
+	ready := make(chan struct{})
+	task := m.Tasks.Start(kindBuild, title, map[string]string{"build": b.GetId(), "runtime": b.GetRuntimeId(), "recipe": sel.Recipe.Spec.GetId()}, func(ctx context.Context, h *tasks.Handle) error {
+		<-ready
+		err := m.runBuild(ctx, h, sel, job)
+		m.buildMu.Lock()
+		delete(m.building, job.GetId())
+		m.buildMu.Unlock()
+		return err
+	})
+	b.TaskId = task.GetId()
+	job = proto.Clone(b).(*v1.Build)
+	if m.building == nil {
+		m.building = map[string]*v1.Task{}
+	}
+	m.building[b.GetId()] = task
+	// The running row and its event land before the task can write a final state over them
+	if err = m.saveBuild(ctx, b, v1.EventAction_EVENT_ACTION_CREATED); err != nil {
+		delete(m.building, b.GetId())
+		m.Tasks.Cancel(task.GetId())
+	}
+	close(ready)
+	if err != nil {
+		return nil, nil, err
+	}
+	return proto.Clone(b).(*v1.Build), task, nil
+}
+
+// Resolves a request to what the host selects and the build it hashes to
+func (m *Manager) resolveBuild(ctx context.Context, req *v1.BuildRequest) (*build.Selection, *v1.Build, error) {
 	rc, err := m.recipe(req)
 	if err != nil {
 		return nil, nil, err
@@ -112,53 +169,42 @@ func (m *Manager) Build(ctx context.Context, req *v1.BuildRequest) (*v1.Build, *
 	if err := m.Engine.Resolve(ctx, sel, b); err != nil {
 		return nil, nil, err
 	}
+	return sel, b, nil
+}
+
+// Runs a build inside the caller's task, a finished one reused, a running one waited for
+func (m *Manager) buildInline(ctx context.Context, h *tasks.Handle, req *v1.BuildRequest) error {
+	sel, b, err := m.resolveBuild(ctx, req)
+	if err != nil {
+		return err
+	}
 	m.buildMu.Lock()
-	defer m.buildMu.Unlock()
 	if task, ok := m.building[b.GetId()]; ok {
-		existing, err := m.DB.GetBuild(ctx, b.GetId())
-		if err == nil {
-			return existing, task, nil
-		}
+		m.buildMu.Unlock()
+		h.Logf("build %s is already running as task %s", b.GetId(), task.GetId())
+		return m.Tasks.WaitOK(ctx, task.GetId())
 	}
-	if !req.GetForce() {
-		if existing, install := m.cached(ctx, b.GetId()); existing != nil {
-			task := m.Tasks.Start(kindBuild, "build "+rc.Spec.GetId()+" "+b.GetVariant(), map[string]string{"build": b.GetId(), "runtime": b.GetRuntimeId(), "cached": "true"}, func(ctx context.Context, h *tasks.Handle) error {
-				h.Logf("build %s already done, install %s at %s", existing.GetId(), install.GetId(), install.GetPath())
-				h.Progress(1, 1, "cached")
-				return nil
-			})
-			return existing, task, nil
-		}
+	if existing, install := m.cached(ctx, b.GetId()); existing != nil {
+		m.buildMu.Unlock()
+		h.Logf("build %s already done, install %s at %s", existing.GetId(), install.GetId(), install.GetPath())
+		h.Progress(1, 1, "installed "+install.GetPath())
+		return nil
 	}
-	b.State = v1.BuildState_BUILD_STATE_RUNNING
-	title := fmt.Sprintf("build %s %s %s", rc.Spec.GetId(), b.GetVariant(), b.GetRef())
-	// The task works on its own copy once ids exist
-	var job *v1.Build
-	ready := make(chan struct{})
-	task := m.Tasks.Start(kindBuild, title, map[string]string{"build": b.GetId(), "runtime": b.GetRuntimeId(), "recipe": rc.Spec.GetId()}, func(ctx context.Context, h *tasks.Handle) error {
-		<-ready
-		err := m.runBuild(ctx, h, sel, job)
-		m.buildMu.Lock()
-		delete(m.building, job.GetId())
+	b.State, b.TaskId = v1.BuildState_BUILD_STATE_RUNNING, h.Task().GetId()
+	if err := m.saveBuild(ctx, b, v1.EventAction_EVENT_ACTION_CREATED); err != nil {
 		m.buildMu.Unlock()
 		return err
-	})
-	b.TaskId = task.GetId()
-	job = proto.Clone(b).(*v1.Build)
+	}
 	if m.building == nil {
 		m.building = map[string]*v1.Task{}
 	}
-	m.building[b.GetId()] = task
-	// The running row and its event land before the task can write a final state over them
-	if err = m.saveBuild(ctx, b, v1.EventAction_EVENT_ACTION_CREATED); err != nil {
-		delete(m.building, b.GetId())
-		m.Tasks.Cancel(task.GetId())
-	}
-	close(ready)
-	if err != nil {
-		return nil, nil, err
-	}
-	return proto.Clone(b).(*v1.Build), task, nil
+	m.building[b.GetId()] = h.Task()
+	m.buildMu.Unlock()
+	err = m.runBuild(ctx, h, sel, b)
+	m.buildMu.Lock()
+	delete(m.building, b.GetId())
+	m.buildMu.Unlock()
+	return err
 }
 
 // Returns a finished build and install when both still exist

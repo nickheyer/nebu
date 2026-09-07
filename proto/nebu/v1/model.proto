@@ -15,6 +15,12 @@ enum ArtifactRole {
   ARTIFACT_ROLE_CONFIG = 4;
   ARTIFACT_ROLE_TEMPLATE = 5;
   ARTIFACT_ROLE_OTHER = 6;
+  // A speculative decoding head such as an MTP draft, loaded beside the weights it drafts for
+  ARTIFACT_ROLE_DRAFT = 7;
+  // The shard index naming which file holds each tensor
+  ARTIFACT_ROLE_INDEX = 8;
+  // Model code a checkpoint ships for loaders that trust remote code
+  ARTIFACT_ROLE_CODE = 9;
 }
 
 // Placement class of a tensor group
@@ -25,6 +31,12 @@ enum TensorGroupKind {
   TENSOR_GROUP_KIND_EXPERTS = 3;
   TENSOR_GROUP_KIND_OUTPUT = 4;
   TENSOR_GROUP_KIND_OTHER = 5;
+  // A vision encoder and the projector feeding its features to the language model
+  TENSOR_GROUP_KIND_VISION = 6;
+  // An audio encoder and its projector
+  TENSOR_GROUP_KIND_AUDIO = 7;
+  // Speculative decoding layers such as multi token prediction heads, loaded only when a run drafts with them
+  TENSOR_GROUP_KIND_DRAFT = 8;
 }
 
 // One file belonging to a model
@@ -99,16 +111,26 @@ message Descriptor {
 }
 
 // Reads a weight group's precision from its group name or a metadata key
-//
-// A bits capture or the bits field names the width, and the first matching
-// rule with a width claims it. A name capture labels it. Every matching rule
-// adds its note, expanded with the captures.
 message PrecisionRule {
   // group, or a metadata key
   string key = 1;
   string match = 2;
+  // The width, unless a bits capture names it, the first matching width winning
   uint32 bits = 3;
+  // Added to the blurb, expanded with the captures
   string note = 4;
+  // Matches only while no rule before it has
+  bool fallback = 5;
+  // The label, expanded with the captures, the name capture when empty
+  string label = 6;
+}
+
+// Counts the weights a tensor packs into each stored element
+message PackRule {
+  string match = 1;
+  // The metadata key whose value the bits capture reads the packed width from
+  string key = 2;
+  string value = 3;
 }
 
 // Words for one bit width and every width down to the next
@@ -172,6 +194,11 @@ message FormatSpec {
   // What the format is, for people who have not met it
   string blurb = 15;
   repeated PrecisionRule precisions = 16;
+  repeated PackRule packing = 17;
+  // Expression over the params read from the header giving the first layer index that is a
+  // draft layer rather than a main one, so a checkpoint that numbers its prediction heads after
+  // the main layers keeps them apart; empty when layers are never drafts by index
+  string draft_from = 18;
 }
 
 // Data driven architecture family definition

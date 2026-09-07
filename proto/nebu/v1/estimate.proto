@@ -16,7 +16,7 @@ enum FitVerdict {
   FIT_VERDICT_NO = 3;
 }
 
-// Bytes planned into one pool
+// Bytes planned into one pool, past its capacity when the plan overflows the host and this is the last pool it spills into
 message PoolUsage {
   string pool_id = 1;
   PoolKind kind = 2;
@@ -24,7 +24,7 @@ message PoolUsage {
   uint64 capacity_bytes = 4;
 }
 
-// Bytes of one group kind planned into one pool
+// Bytes of one group kind planned onto one side, device or host, or left on disk when the pool is empty
 message Placement {
   TensorGroupKind kind = 1;
   string pool_id = 2;
@@ -44,6 +44,8 @@ message MemoryPlan {
   string detail = 8;
   // The learned correction folded into overhead_bytes when the plan was made
   double overhead_delta = 9;
+  // Groups the runtime leaves on disk under these params, a draft head without speculative decoding
+  repeated Placement skipped = 10;
 }
 
 // Learned correction for one runtime and architecture
@@ -60,8 +62,7 @@ message CalibrationTable {
 
 // Plans one weight group on one runtime, against memory free right now when free is set
 //
-// Params apply over the profile named, or the runtime's default profile,
-// and over the slot's defaults, the same layering a run uses.
+// Params apply over the slot's defaults, the same layering a run uses.
 message EstimateRequest {
   string source_id = 1;
   string repo = 2;
@@ -71,7 +72,6 @@ message EstimateRequest {
   map<string, string> params = 6;
   string slot_id = 7;
   bool free = 8;
-  string profile_id = 9;
 }
 
 // Returns the plan and descriptor used
@@ -82,8 +82,8 @@ message EstimateResponse {
 
 // Builds a fit table for a model
 //
-// A named profile plans its runtime alone unless runtime_ids says otherwise,
-// and every other runtime starts from its default profile.
+// Every compatible runtime is planned unless runtime_ids names some, the
+// slot's runtime alone when a slot is named and runtime_ids is empty.
 message InspectRequest {
   string source_id = 1;
   string repo = 2;
@@ -93,7 +93,6 @@ message InspectRequest {
   repeated uint32 contexts = 6;
   map<string, string> params = 7;
   string slot_id = 8;
-  string profile_id = 9;
 }
 
 // One cell of the fit table: the plan against the whole memory, and the one against what is free right now

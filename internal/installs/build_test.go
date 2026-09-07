@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,7 +40,7 @@ func buildManager(t *testing.T) *Manager {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	manifest := &v1.RuntimeManifest{Id: "fake", Acquire: &v1.Acquire{RecipeId: "fake"}, Probes: []*v1.CommandProbe{{Key: "version", Args: []string{"--version"}, Match: `fake version (?P<value>\S+)`}}}
+	manifest := &v1.RuntimeManifest{Id: "fake", Acquire: &v1.Acquire{Methods: []*v1.InstallMethod{{Id: "source", How: &v1.InstallMethod_Recipe{Recipe: &v1.FromRecipe{RecipeId: "fake"}}}}}, Probes: []*v1.CommandProbe{{Key: "version", Args: []string{"--version"}, Match: `fake version (?P<value>\S+)`}}}
 	runtimes, err := runtime.New([]*v1.RuntimeManifest{manifest})
 	if err != nil {
 		t.Fatal(err)
@@ -145,6 +146,56 @@ func TestBuildCacheAndRemove(t *testing.T) {
 	}
 	if _, _, err := m.Build(ctx, &v1.BuildRequest{RuntimeId: "fake", Variant: "nope"}); err == nil {
 		t.Fatal("unknown variant should fail")
+	}
+}
+
+func TestInstallByMethod(t *testing.T) {
+	m := buildManager(t)
+	ctx := context.Background()
+	rt, _ := m.Runtimes.Get("fake")
+	profile, _ := m.Host.Profile(ctx, false)
+	options, err := m.Options(ctx, rt, profile)
+	if err != nil || len(options) != 1 || options[0].GetMethod().GetId() != "source" || options[0].GetRecipe().GetVariant() != build.DefaultVariant {
+		t.Fatalf("options %v %v", options, err)
+	}
+	var names []string
+	for _, f := range options[0].GetFields() {
+		names = append(names, f.GetName())
+	}
+	if want := []string{"ref", "sandbox", "image", "force", "var.greeting"}; strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("fields %v", names)
+	}
+	if _, err := m.Install(ctx, "fake", "source", map[string]string{"nope": "1"}); err == nil {
+		t.Fatal("an unknown setting should be refused")
+	}
+	if _, err := m.Install(ctx, "fake", "source", map[string]string{"sandbox": "cloud"}); err == nil {
+		t.Fatal("an unknown sandbox should be refused")
+	}
+	if _, err := m.Install(ctx, "fake", "nope", nil); err == nil {
+		t.Fatal("unknown method should fail")
+	}
+	task, err := m.Install(ctx, "fake", "source", map[string]string{"var.greeting": "moon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.GetLabels()["method"] != "source" {
+		t.Fatalf("labels %v", task.GetLabels())
+	}
+	again, err := m.Install(ctx, "fake", "source", nil)
+	if err != nil || again.GetId() != task.GetId() {
+		t.Fatalf("a second install should return the running task: %v %v", again, err)
+	}
+	final, err := m.Tasks.Wait(ctx, task.GetId())
+	if err != nil || final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
+		t.Fatalf("install task %v %v", final, err)
+	}
+	list, _ := m.List(ctx, "fake")
+	if len(list) != 1 || list[0].GetKind() != v1.InstallKind_INSTALL_KIND_BUILT {
+		t.Fatalf("installs %v", list)
+	}
+	builds, _ := m.ListBuilds(ctx, "fake")
+	if len(builds) != 1 || builds[0].GetVars()["greeting"] != "moon" || builds[0].GetTaskId() != task.GetId() {
+		t.Fatalf("the install's build should carry its var and task: %v", builds)
 	}
 }
 

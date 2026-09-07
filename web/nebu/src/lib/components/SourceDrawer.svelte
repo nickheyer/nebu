@@ -2,14 +2,18 @@
   import { api } from '$lib/api';
   import { createForm } from '$lib/form.svelte';
   import { humanize } from '$lib/catalog';
-  import { ConfigType, type ConfigField, type Provider, type SourceStatus } from '$proto/source_pb';
-  import { SourceKind } from '$proto/source_pb';
-  import FormDialog from './ui/FormDialog.svelte';
+  import { confirm } from '$lib/confirm.svelte';
+  import { fail, ok } from '$lib/toast.svelte';
+  import { SourceKind, type ConfigField, type Provider, type SourceStatus } from '$proto/source_pb';
+  import { Trash2 } from '@lucide/svelte';
+  import Drawer from './ui/Drawer.svelte';
+  import Button from './ui/Button.svelte';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
-  import Checkbox from './ui/Checkbox.svelte';
   import Section from './ui/Section.svelte';
+  import ConfigForm from './ConfigForm.svelte';
 
+  // A source added or edited, its settings the form its provider declares
   let { open = $bindable(false), providers = [], editing = null }: { open?: boolean; providers?: Provider[]; editing?: SourceStatus | null } = $props();
 
   let kindText = $state('');
@@ -22,7 +26,7 @@
   // The provider declares the form, an existing source carrying it in its capabilities
   const fields = $derived<ConfigField[]>(editing ? (editing.capabilities?.fields ?? []) : (provider?.fields ?? []));
   const transports = $derived([...new Set(fields.map((f) => f.transport))]);
-  const missing = $derived(fields.filter((f) => f.required && !(config[f.name] ?? '').trim()).map((f) => f.label));
+  const missing = $derived(fields.filter((f) => f.required && !(config[f.name] ?? '').trim() && !f.default).map((f) => f.label || f.name));
   const idOk = $derived(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id) && !id.includes('..'));
 
   // Switching providers starts the settings over, they belong to the provider
@@ -33,12 +37,6 @@
 
   const acronyms = new Set(['http', 'cli', 'api', 'oci', 'ngc', 'ssh', 'lfs']);
   const transportName = (t: string) => (acronyms.has(t.toLowerCase()) ? t.toUpperCase() : humanize(t));
-
-  function inputType(f: ConfigField): string {
-    if (f.type === ConfigType.INT) return 'number';
-    if (f.type === ConfigType.URL) return 'url';
-    return 'text';
-  }
 
   const form = createForm({
     open: () => open,
@@ -58,34 +56,46 @@
         return { title: `Updated ${source.name || source.id}` };
       }
       await api.sources.createSource({ source });
-      return { title: `Added ${source.name || source.id}`, link: { href: `/catalog?source=${source.id}`, label: 'Open' } };
+      return { title: `Added ${source.name || source.id}` };
     },
     failTitle: () => (editing ? 'Update failed' : 'Add failed')
   });
+
+  const disabled = $derived((!editing && (!idOk || !provider)) || missing.length > 0);
+
+  async function remove() {
+    if (!editing?.source) return;
+    const label = editing.source.name || editing.source.id;
+    const yes = await confirm({ title: `Remove ${label}?`, message: 'Models it pulled stay in the library.', action: 'Remove', tone: 'bad' });
+    if (!yes) return;
+    try {
+      await api.sources.deleteSource({ id: editing.source.id });
+      ok(`Removed ${label}`);
+      open = false;
+    } catch (err) {
+      fail(err, 'Remove failed');
+    }
+  }
 </script>
 
-<FormDialog
-  bind:open
-  title={editing ? `Edit ${editing.source?.name || editing.source?.id}` : 'New source'}
-  subtitle={editing ? `${editing.capabilities?.name ?? ''} · ${editing.source?.id ?? ''}` : undefined}
-  size="lg"
-  action={editing ? 'Save' : 'Add'}
-  saving={form.saving}
-  disabled={(!editing && (!idOk || !provider)) || missing.length > 0}
-  note={missing.length ? `Needs ${missing.join(' and ')}` : ''}
-  onsubmit={form.run}
->
-  <div class="flex flex-col gap-6">
+<Drawer bind:open title={editing ? editing.source?.name || editing.source?.id || 'Source' : 'New source'} subtitle={editing ? `${editing.capabilities?.name ?? ''} · ${editing.source?.id ?? ''}` : 'A place models come from'}>
+  <form
+    class="flex flex-col gap-6 px-6 py-5"
+    onsubmit={(e) => {
+      e.preventDefault();
+      if (!disabled && !form.saving) form.run();
+    }}
+  >
     <div class="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2">
       {#if !editing}
-        <Field label="Provider" for="src-kind" info={provider?.description || undefined} class="sm:col-span-2">
+        <Field label="Provider" for="src-kind" hint={provider?.description || undefined} class="sm:col-span-2">
           {#if providers.length <= 1}
             <div id="src-kind" class="input-static">{provider?.name ?? '–'}</div>
           {:else}
             <Select id="src-kind" bind:value={kindText} items={providers.map((p) => ({ value: String(p.kind), label: p.name }))} />
           {/if}
         </Field>
-        <Field label="Id" for="src-id" info="Fixed once created" error={id && !idOk ? 'Letters, digits, dots, dashes, and underscores' : undefined}>
+        <Field label="Id" for="src-id" hint="Fixed once created" error={id && !idOk ? 'Letters, digits, dots, dashes, and underscores' : undefined}>
           <input id="src-id" class="input font-mono" bind:value={id} placeholder="my-source" aria-invalid={!!id && !idOk} autocomplete="off" spellcheck="false" />
         </Field>
       {/if}
@@ -96,25 +106,28 @@
 
     {#each transports as t (t)}
       <Section title={transports.length > 1 ? transportName(t) : 'Settings'}>
-        <div class="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2">
-          {#each fields.filter((f) => f.transport === t) as f (f.name)}
-            {#if f.type === ConfigType.BOOL}
-              <Checkbox class="sm:col-span-2" checked={(config[f.name] ?? f.default) === 'true'} onchange={(on) => (config = { ...config, [f.name]: on ? 'true' : 'false' })} label={f.label} info={f.description || undefined} />
-            {:else}
-              <Field label={f.label + (f.required ? ' *' : '')} for="src-{f.name}" info={f.description || undefined}>
-                {#if f.choices.length}
-                  <Select id="src-{f.name}" value={config[f.name] ?? ''} items={[{ value: '', label: f.default ? 'Default' : 'Not set', detail: f.default || undefined }, ...f.choices.map((c) => ({ value: c, label: c }))]} />
-                {:else}
-                  <input id="src-{f.name}" class="input {f.type === ConfigType.STRING ? '' : 'font-mono'}" type={inputType(f)} value={config[f.name] ?? ''} oninput={(e) => (config = { ...config, [f.name]: (e.currentTarget as HTMLInputElement).value })} placeholder={f.default || (f.type === ConfigType.PATH ? 'directory' : f.type === ConfigType.ENV ? 'VARIABLE_NAME' : f.type === ConfigType.URL ? 'https://host' : '')} autocomplete="off" spellcheck="false" />
-                {/if}
-              </Field>
-            {/if}
-          {/each}
-        </div>
+        <ConfigForm fields={fields.filter((f) => f.transport === t)} bind:values={config} idPrefix="src-{t}" />
       </Section>
     {/each}
     {#if fields.length === 0 && provider}
       <p class="text-sm text-fg-faint">Nothing to configure</p>
     {/if}
-  </div>
-</FormDialog>
+    {#if editing?.error}
+      <div class="note note-bad">{editing.error}</div>
+    {/if}
+    <button type="submit" class="hidden" aria-hidden="true" tabindex="-1"></button>
+  </form>
+
+  {#snippet footer()}
+    {#if editing && !editing.source?.seeded}
+      <Button variant="ghost" size="sm" icon={Trash2} class="text-bad hover:text-bad" onclick={remove}>Remove</Button>
+    {:else if editing?.source?.seeded}
+      <span class="text-xs text-fg-faint">Seeded by the daemon, editable but not removable</span>
+    {/if}
+    {#if missing.length}<span class="text-sm text-warn">Needs {missing.join(' and ')}</span>{/if}
+    <span class="ml-auto flex gap-2">
+      <Button variant="ghost" size="sm" onclick={() => (open = false)}>Cancel</Button>
+      <Button variant="primary" size="sm" loading={form.saving} {disabled} onclick={form.run}>{editing ? 'Save' : 'Add'}</Button>
+    </span>
+  {/snippet}
+</Drawer>

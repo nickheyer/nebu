@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { live, clock, instanceLive, slotName } from '$lib/state.svelte';
+  import { live, clock, instanceLive, slotName, groupLabel } from '$lib/state.svelte';
   import { launch } from '$lib/launch';
   import { stopInstance } from '$lib/slotActions.svelte';
   import { bytes, when, duration } from '$lib/format';
@@ -43,7 +43,7 @@
   }
 </script>
 
-<Drawer bind:id mono title={instance?.name ?? 'Instance'} subtitle={instance ? `${instance.repo} · ${instance.group}` : ''}>
+<Drawer bind:id mono title={instance?.name ?? 'Instance'} subtitle={instance ? `${instance.repo} · ${groupLabel(instance)}` : ''}>
   {#snippet header()}
     {#if instance}
       <div class="flex flex-wrap items-center gap-3 text-sm text-fg-muted">
@@ -95,7 +95,7 @@
           {/if}
 
           {#if instance.measurements.length}
-            <Section title="Measured" info="What the runtime reported about its own memory">
+            <Section title="Measured" meta="what the runtime reported">
               <table class="tbl">
                 <thead><tr><th>Key</th><th class="num">Bytes</th><th>Line</th></tr></thead>
                 <tbody>

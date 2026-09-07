@@ -1,22 +1,57 @@
 import type { Timestamp } from '@bufbuild/protobuf/wkt';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
-import { FitVerdict } from '$proto/estimate_pb';
 
 export type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'accent' | 'neutral';
 
-const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+const binary = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
+const decimal = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
 
-// Formats bytes for people
-export function bytes(n: bigint | number | undefined | null, digits = 1): string {
+function scaled(n: bigint | number | undefined | null, base: number, units: string[], digits: number): string {
   if (n === undefined || n === null) return '–';
   let v = typeof n === 'bigint' ? Number(n) : n;
   if (!v) return '0 B';
   let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
+  while (v >= base && i < units.length - 1) {
+    v /= base;
     i++;
   }
   return (i === 0 ? v.toFixed(0) : v.toFixed(digits)) + ' ' + units[i];
+}
+
+// Formats bytes of memory, the binary units memory is sold in
+export function bytes(n: bigint | number | undefined | null, digits = 1): string {
+  return scaled(n, 1024, binary, digits);
+}
+
+// Formats bytes on disk, the decimal units drives and downloads count in
+export function storage(n: bigint | number | undefined | null, digits = 1): string {
+  return scaled(n, 1000, decimal, digits);
+}
+
+// Formats a share of a budget in the budget's unit, 0.4 / 12 GiB, so the pair reads as one figure; past
+// the budget it reads as the budget plus the excess, 63+169 / 63 GiB, the way a pool fills and then overflows
+function ratio(a: bigint | number | undefined | null, b: bigint | number, base: number, units: string[]): string {
+  const x = Number(a ?? 0);
+  let y = Number(b);
+  let i = 0;
+  while (y >= base && i < units.length - 1) {
+    y /= base;
+    i++;
+  }
+  const part = x / base ** i;
+  const fmt = (v: number) => (v >= 10 || v === 0 ? v.toFixed(0) : v.toFixed(1));
+  const used = part > y && y > 0 ? `${y.toFixed(0)}+${fmt(part - y)}` : fmt(part);
+  return `${used} / ${y.toFixed(0)} ${units[i]}`;
+}
+
+// Memory used against memory held, in binary units
+export function ratioBytes(a: bigint | number | undefined | null, b: bigint | number): string {
+  return ratio(a, b, 1024, binary);
+}
+
+// Bytes to land against disk free, in the decimal units drives are sold in
+export function ratioStorage(a: bigint | number | undefined | null, b: bigint | number): string {
+  return ratio(a, b, 1000, decimal);
 }
 
 // Formats a byte delta with its sign
@@ -105,24 +140,6 @@ export function tone(state: string): Tone {
   }
 }
 
-// The short word a verdict is shown under
-export function verdictWord(v: FitVerdict | undefined): string {
-  switch (v) {
-    case FitVerdict.FITS:
-      return 'Fits';
-    case FitVerdict.PARTIAL:
-      return 'Spills';
-    case FitVerdict.NO:
-      return 'No fit';
-    default:
-      return 'Unknown';
-  }
-}
-
-export function verdictTone(v: FitVerdict | undefined): Tone {
-  return v === FitVerdict.FITS ? 'ok' : v === FitVerdict.PARTIAL ? 'warn' : v === FitVerdict.NO ? 'bad' : 'neutral';
-}
-
 // Formats a timestamp as local time
 export function when(ts?: Timestamp): string {
   if (!ts) return '–';
@@ -208,6 +225,7 @@ export function newestFirst<T>(key: (t: T) => Timestamp | undefined) {
 
 // Formats a context length like 32k
 export function ctx(n: number): string {
+  if (n >= 1048576 && n % 1048576 === 0) return n / 1048576 + 'M';
   if (n >= 1024 && n % 1024 === 0) return n / 1024 + 'k';
   return n.toLocaleString();
 }

@@ -29,9 +29,6 @@ var ErrUnknownSource = errors.New("unknown source")
 // The error for an id no source goes by
 func unknownSource(id string) error { return fmt.Errorf("%w %q", ErrUnknownSource, id) }
 
-// Returned when a source cannot go because a watch or want names it
-var ErrSourceInUse = errors.New("source in use")
-
 // Returned when a source cannot do what was asked
 var ErrUnsupported = errors.New("not supported by this source")
 

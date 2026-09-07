@@ -6,7 +6,11 @@ constraints:
   - expr: any(devices, .vendor == "nvidia")
     message: an NVIDIA GPU
 acquire:
-  recipe_id: nemo
+  methods:
+    - id: source
+      description: Export-Deploy from PyPI in a virtual environment, with the checkpoint converter in a second one
+      recipe:
+        recipe_id: nemo
 probes:
   - key: version
     command: '{{.install.dir}}/venv/bin/python'
@@ -92,6 +96,14 @@ estimate:
       pool: POOL_KIND_DEVICE
     - kind: TENSOR_GROUP_KIND_OUTPUT
       pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_VISION
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_AUDIO
+      pool: POOL_KIND_DEVICE
+    # In framework inference drafts with nothing, prediction heads stay on disk
+    - kind: TENSOR_GROUP_KIND_DRAFT
+      pool: POOL_KIND_DEVICE
+      when: 'false'
     - kind: TENSOR_GROUP_KIND_OTHER
       pool: POOL_KIND_DEVICE
   # In framework inference keeps a full length key and value cache per batched sequence

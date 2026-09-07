@@ -5,38 +5,26 @@ import { fail, ok } from './toast.svelte';
 import type { Slot } from '$proto/slot_pb';
 import type { StoredModel } from '$proto/store_pb';
 
-// Dialog state shared by every page that shows slots
-export const slotUi = $state({
-  runOpen: false,
-  runModel: null as StoredModel | null,
-  runSlotId: '',
-  editOpen: false,
-  editSlot: null as Slot | null
+// The run panel, shared by every page that can start a model
+export const runUi = $state({
+  open: false,
+  model: null as StoredModel | null,
+  slotId: ''
 });
 
-// Opens the run dialog for a model, into a slot when given
+// Opens the run panel for a model, aimed at a slot when given
 export function runModel(model: StoredModel | null, slotId = '') {
-  slotUi.runModel = model;
-  slotUi.runSlotId = slotId;
-  slotUi.runOpen = true;
+  runUi.model = model;
+  runUi.slotId = slotId;
+  runUi.open = true;
 }
 
-// Opens the run dialog aimed at a slot
+// Opens the run panel aimed at a slot
 export function swapSlot(slot: Slot) {
   runModel(null, slot.id);
 }
 
-export function editSlot(slot: Slot) {
-  slotUi.editSlot = slot;
-  slotUi.editOpen = true;
-}
-
-export function newSlot() {
-  slotUi.editSlot = null;
-  slotUi.editOpen = true;
-}
-
-// Deletes a slot after confirming, forcing past what the daemon names when asked
+// Deletes a slot after confirming, stopping its occupant when the daemon asks for that
 export async function deleteSlot(slot: Slot): Promise<boolean> {
   const yes = await confirm({ title: `Delete ${slot.name}?`, message: 'Clients using this name get 404. Stored models stay.', action: 'Delete', tone: 'bad' });
   if (!yes) return false;
@@ -45,18 +33,11 @@ export async function deleteSlot(slot: Slot): Promise<boolean> {
     ok(`Deleted ${slot.name}`);
     return true;
   } catch (err) {
-    const c = code(err);
-    const ask =
-      c === Code.InvalidArgument
-        ? { title: `Stop ${slot.name} and delete it?`, message: message(err), action: 'Stop and delete' }
-        : c === Code.FailedPrecondition
-          ? { title: `Delete ${slot.name} and what swaps into it?`, message: message(err), action: 'Delete all' }
-          : null;
-    if (!ask) {
+    if (code(err) !== Code.InvalidArgument) {
       fail(err, 'Delete failed');
       return false;
     }
-    if (!(await confirm({ ...ask, tone: 'bad' }))) return false;
+    if (!(await confirm({ title: `Stop ${slot.name} and delete it?`, message: message(err), action: 'Stop and delete', tone: 'bad' }))) return false;
     try {
       await api.slots.deleteSlot({ id: slot.id, force: true });
       ok(`Deleted ${slot.name}`);

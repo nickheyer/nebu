@@ -41,8 +41,8 @@ func (s *HostService) GetProfile(ctx context.Context, req *connect.Request[v1.Ge
 }
 
 func (s *HostService) Doctor(ctx context.Context, req *connect.Request[v1.DoctorRequest]) (*connect.Response[v1.DoctorResponse], error) {
-	report, err := s.doctor.Run(ctx)
-	return reply(&v1.DoctorResponse{Report: report}, err)
+	task, err := s.doctor.Start(ctx)
+	return reply(&v1.DoctorResponse{Task: task}, err)
 }
 
 // Serves host wide preferences
@@ -107,7 +107,7 @@ func (s *SourceService) UpdateSource(ctx context.Context, req *connect.Request[v
 }
 
 func (s *SourceService) DeleteSource(ctx context.Context, req *connect.Request[v1.DeleteSourceRequest]) (*connect.Response[v1.DeleteSourceResponse], error) {
-	row, err := s.sources.Delete(ctx, req.Msg.GetId(), req.Msg.GetForce())
+	row, err := s.sources.Delete(ctx, req.Msg.GetId())
 	return reply(&v1.DeleteSourceResponse{Source: row}, err)
 }
 

@@ -17,8 +17,6 @@ import (
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
-	"github.com/nickheyer/nebu/internal/monitor"
-	"github.com/nickheyer/nebu/internal/profiles"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc/services"
 	"github.com/nickheyer/nebu/internal/settings"
@@ -49,10 +47,8 @@ type Deps struct {
 	Puller    *pull.Puller
 	Tasks     *tasks.Manager
 	Installs  *installs.Manager
-	Profiles  *profiles.Manager
 	Instances *instances.Manager
 	Slots     *slots.Manager
-	Monitor   *monitor.Manager
 	Gateway   *gateway.Gateway
 	// Mounts the gateway under /v1/ on this handler when it has no listener of its own
 	GatewayShared bool
@@ -70,7 +66,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.Handle(nebuv1connect.NewHostServiceHandler(services.NewHostService(d.Host, d.Doctor), opts))
 	mux.Handle(nebuv1connect.NewSettingsServiceHandler(services.NewSettingsService(d.Settings), opts))
 	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector, d.Formats), opts))
-	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Profiles, d.Formats), opts))
+	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Formats), opts))
 	mux.Handle(nebuv1connect.NewInstanceServiceHandler(services.NewInstanceService(d.Instances), opts))
 	mux.Handle(nebuv1connect.NewEstimateServiceHandler(services.NewEstimateService(d.Inspector), opts))
 	mux.Handle(nebuv1connect.NewStoreServiceHandler(services.NewStoreService(d.Store, d.Puller, d.Events), opts))
@@ -78,7 +74,6 @@ func NewHandler(d Deps) http.Handler {
 	mux.Handle(nebuv1connect.NewBuildServiceHandler(services.NewBuildService(d.Installs), opts))
 	mux.Handle(nebuv1connect.NewSlotServiceHandler(services.NewSlotService(d.Slots), opts))
 	mux.Handle(nebuv1connect.NewGatewayServiceHandler(services.NewGatewayService(d.Gateway, d.Instances), opts))
-	mux.Handle(nebuv1connect.NewMonitorServiceHandler(services.NewMonitorService(d.Monitor), opts))
 	mux.Handle(nebuv1connect.NewEventServiceHandler(services.NewEventService(d.Events, d.Snapshot), opts))
 	reflector := grpcreflect.NewStaticReflector(
 		nebuv1connect.HostServiceName,
@@ -92,7 +87,6 @@ func NewHandler(d Deps) http.Handler {
 		nebuv1connect.BuildServiceName,
 		nebuv1connect.SlotServiceName,
 		nebuv1connect.GatewayServiceName,
-		nebuv1connect.MonitorServiceName,
 		nebuv1connect.EventServiceName,
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))

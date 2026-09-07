@@ -11,8 +11,10 @@ import (
 
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/formats"
+	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
@@ -34,6 +36,37 @@ type Puller struct {
 	Events    *events.Bus
 	// Says which stored models eviction leaves alone, set by the daemon
 	Keep func(*v1.StoredModel) bool
+	// Bytes the store's filesystem keeps free after a pull
+	MinFree uint64
+}
+
+// The files a pull lands, what they add up to, and what is not in the store yet
+func (p *Puller) plan(g *formats.Group) (artifacts []*v1.Artifact, total, need uint64) {
+	artifacts = append(artifacts, g.Weights...)
+	for _, role := range []v1.ArtifactRole{v1.ArtifactRole_ARTIFACT_ROLE_CONFIG, v1.ArtifactRole_ARTIFACT_ROLE_INDEX, v1.ArtifactRole_ARTIFACT_ROLE_TOKENIZER, v1.ArtifactRole_ARTIFACT_ROLE_TEMPLATE, v1.ArtifactRole_ARTIFACT_ROLE_CODE, v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR} {
+		artifacts = append(artifacts, g.Files[role]...)
+	}
+	for _, a := range artifacts {
+		total += a.GetSizeBytes()
+		if a.GetSha256() == "" || !p.Store.HasBlob(store.Digest(a.GetSha256())) {
+			need += a.GetSizeBytes()
+		}
+	}
+	return artifacts, total, need
+}
+
+// Refuses a pull the store's filesystem cannot hold, counting what a capped store may evict
+func (p *Puller) room(g *formats.Group) error {
+	_, _, need := p.plan(g)
+	st, err := host.Stat(p.Store.Root())
+	if err != nil {
+		return nil
+	}
+	free := st.GetFreeBytes() + p.Store.Evictable(need, p.Keep)
+	if need+p.MinFree <= free {
+		return nil
+	}
+	return fmt.Errorf("%w: needs %s, %s free on %s", store.ErrNoRoom, estimate.Human(need), estimate.Human(st.GetFreeBytes()), st.GetPath())
 }
 
 // Validates the request and starts a pull task
@@ -46,6 +79,9 @@ func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error
 	if err != nil {
 		return nil, err
 	}
+	if err := p.room(g); err != nil {
+		return nil, err
+	}
 	labels := map[string]string{"source": model.GetSourceId(), "repo": model.GetRepo(), "group": g.Name}
 	title := fmt.Sprintf("pull %s %s", model.GetRepo(), g.Name)
 	return p.Tasks.Start(kindPull, title, labels, func(ctx context.Context, h *tasks.Handle) error {
@@ -54,10 +90,7 @@ func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error
 }
 
 func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, model *v1.Model, g *formats.Group) error {
-	artifacts := append([]*v1.Artifact(nil), g.Weights...)
-	for _, role := range []v1.ArtifactRole{v1.ArtifactRole_ARTIFACT_ROLE_CONFIG, v1.ArtifactRole_ARTIFACT_ROLE_TOKENIZER, v1.ArtifactRole_ARTIFACT_ROLE_TEMPLATE, v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR} {
-		artifacts = append(artifacts, g.Files[role]...)
-	}
+	artifacts, total, need := p.plan(g)
 	h.Progress(0, 0, "resolving")
 	key := store.Key(model.GetSourceId(), model.GetRepo(), g.Name)
 	unlock := p.Store.Lock(key)
@@ -74,13 +107,6 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 		h.Logf("descriptor unavailable: %v", err)
 	} else {
 		stored.Descriptor_ = d
-	}
-	var total, need uint64
-	for _, a := range artifacts {
-		total += a.GetSizeBytes()
-		if a.GetSha256() == "" || !p.Store.HasBlob(store.Digest(a.GetSha256())) {
-			need += a.GetSizeBytes()
-		}
 	}
 	// The cap is kept by evicting what has sat unused longest before the bytes arrive, this model staying
 	evicted, release, err := p.Store.Evict(need, func(m *v1.StoredModel) bool {

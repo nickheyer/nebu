@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"strings"
@@ -31,7 +30,7 @@ func runRuntimes(ctx context.Context, e *env, args []string) error {
 	})
 }
 
-// Prints one runtime with its params, what --param and profiles may name
+// Prints one runtime with its install methods and every param --param may name
 func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 	positional, err := e.parse(e.flags("runtimes show"), args, 1, 1, "runtimes show <runtime>")
 	if err != nil {
@@ -45,6 +44,27 @@ func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 	return e.print(rt, func(w io.Writer) {
 		m := rt.GetManifest()
 		table(w, nil, [][]string{{"id", m.GetId()}, {"name", m.GetName()}, {"formats", strings.Join(m.GetFormats(), ", ")}, {"api", eval.EnumShort(m.GetLaunch().GetApi())}, {"compatible", yes(rt.GetCompatible())}, {"unmet", strings.Join(rt.GetUnmet(), "; ")}})
+		for _, opt := range rt.GetInstalls() {
+			im := opt.GetMethod()
+			section(w, "install "+im.GetId())
+			rows := [][]string{{"how", methodText(im)}}
+			if im.GetDescription() != "" {
+				rows = append(rows, []string{"about", im.GetDescription()})
+			}
+			if len(opt.GetUnmet()) > 0 {
+				rows = append(rows, []string{"unmet", strings.Join(opt.GetUnmet(), "; ")})
+			}
+			table(w, nil, rows)
+			rows = nil
+			for _, f := range opt.GetFields() {
+				name := f.GetName()
+				if f.GetRequired() {
+					name += "*"
+				}
+				rows = append(rows, []string{name, eval.EnumShort(f.GetType()), orDash(f.GetDefault()), strings.Join(f.GetChoices(), ","), f.GetDescription()})
+			}
+			table(w, []string{"SETTING", "TYPE", "DEFAULT", "CHOICES", "DESCRIPTION"}, rows)
+		}
 		section(w, "params")
 		var rows [][]string
 		for _, p := range m.GetParams() {
@@ -52,6 +72,19 @@ func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 		}
 		table(w, []string{"NAME", "TYPE", "DEFAULT", "CHOICES", "DESCRIPTION"}, rows)
 	})
+}
+
+// One line saying what an install method does
+func methodText(im *v1.InstallMethod) string {
+	switch how := im.GetHow().(type) {
+	case *v1.InstallMethod_Adopt:
+		return "adopt " + strings.Join(how.Adopt.GetNames(), " or ") + " from PATH"
+	case *v1.InstallMethod_Prebuilt:
+		return "download a release of " + how.Prebuilt.GetReleases()
+	case *v1.InstallMethod_Recipe:
+		return "build recipe " + how.Recipe.GetRecipeId()
+	}
+	return "-"
 }
 
 func runRuntimesInstalls(ctx context.Context, e *env, args []string) error {
@@ -93,11 +126,23 @@ func runRuntimesAdopt(ctx context.Context, e *env, args []string) error {
 }
 
 func runRuntimesInstall(ctx context.Context, e *env, args []string) error {
-	positional, err := e.parse(e.flags("runtimes install"), args, 1, 1, "runtimes install <runtime>")
+	fs := e.flags("runtimes install")
+	method := fs.String("method", "", "install method id, see nebu runtimes show")
+	var settings multi
+	fs.Var(&settings, "set", "method setting as name=value, repeatable, see nebu runtimes show")
+	usage := "runtimes install <runtime> --method ID [--set name=value]..."
+	positional, err := e.parse(fs, args, 1, 1, usage)
 	if err != nil {
 		return err
 	}
-	resp, err := e.cl.runtimes.InstallPrebuilt(ctx, connect.NewRequest(&v1.InstallPrebuiltRequest{RuntimeId: positional[0]}))
+	if *method == "" {
+		return fmt.Errorf("usage: nebu %s", usage)
+	}
+	values, err := pairs(settings, "setting")
+	if err != nil {
+		return err
+	}
+	resp, err := e.cl.runtimes.Install(ctx, connect.NewRequest(&v1.InstallRequest{RuntimeId: positional[0], Method: *method, Settings: values}))
 	if err != nil {
 		return err
 	}
@@ -140,121 +185,6 @@ func runRuntimesRecipes(ctx context.Context, e *env, args []string) error {
 			rows = append(rows, []string{r.GetId(), r.GetRuntimeId(), rs.GetVariant(), strings.Join(variants, ","), eval.EnumShort(rs.GetSandbox()), strings.Join(rs.GetUnmet(), "; "), r.GetDescription()})
 		}
 		table(w, []string{"ID", "RUNTIME", "SELECTED", "VARIANTS", "SANDBOX", "UNMET", "DESCRIPTION"}, rows)
-	})
-}
-
-func profilesTable(w io.Writer, list []*v1.Profile) {
-	var rows [][]string
-	for _, p := range list {
-		rows = append(rows, []string{p.GetId(), p.GetRuntimeId(), p.GetName(), yes(p.GetDefault()), compact(p.GetParams()), p.GetDescription()})
-	}
-	table(w, []string{"ID", "RUNTIME", "NAME", "DEFAULT", "PARAMS", "DESCRIPTION"}, rows)
-}
-
-func runProfiles(ctx context.Context, e *env, args []string) error {
-	positional, err := e.parse(e.flags("profiles"), args, 0, 1, "profiles [runtime]")
-	if err != nil {
-		return err
-	}
-	req := &v1.ListProfilesRequest{}
-	if len(positional) == 1 {
-		req.RuntimeId = positional[0]
-	}
-	resp, err := e.cl.runtimes.ListProfiles(ctx, connect.NewRequest(req))
-	if err != nil {
-		return err
-	}
-	return e.print(resp.Msg, func(w io.Writer) { profilesTable(w, resp.Msg.GetProfiles()) })
-}
-
-func runProfilesAdd(ctx context.Context, e *env, args []string) error {
-	fs := e.flags("profiles add")
-	description := fs.String("description", "", "what the profile is for")
-	def := fs.Bool("default", false, "apply to every run of the runtime that names no profile")
-	var params multi
-	fs.Var(&params, "param", "runtime param as name=value, repeatable, see nebu runtimes show")
-	positional, err := e.parse(fs, args, 2, 2, "profiles add <runtime> <name> [--description D] [--param k=v]... [--default]")
-	if err != nil {
-		return err
-	}
-	paramMap, err := pairs(params, "param")
-	if err != nil {
-		return err
-	}
-	p := &v1.Profile{RuntimeId: positional[0], Name: positional[1], Description: *description, Params: paramMap, Default: *def}
-	resp, err := e.cl.runtimes.CreateProfile(ctx, connect.NewRequest(&v1.CreateProfileRequest{Profile: p}))
-	if err != nil {
-		return err
-	}
-	return e.print(resp.Msg, func(w io.Writer) { profilesTable(w, []*v1.Profile{resp.Msg.GetProfile()}) })
-}
-
-func runProfilesUpdate(ctx context.Context, e *env, args []string) error {
-	fs := e.flags("profiles update")
-	runtimeID := fs.String("runtime", "", "runtime the name belongs to, when the name is used by several")
-	name := fs.String("name", "", "new name")
-	description := fs.String("description", "", "what the profile is for")
-	def := fs.Bool("default", false, "apply to every run of the runtime that names no profile, false to step down")
-	var params, unset multi
-	fs.Var(&params, "param", "param as name=value, repeatable, merged into what the profile has")
-	fs.Var(&unset, "unset", "param to drop back to the runtime default, repeatable")
-	positional, err := e.parse(fs, args, 1, 1, "profiles update <id|name> [--runtime R] [--name N] [--description D] [--param k=v]... [--unset k]... [--default=BOOL]")
-	if err != nil {
-		return err
-	}
-	paramMap, err := pairs(params, "param")
-	if err != nil {
-		return err
-	}
-	// The update replaces every field, so start from what the profile has and change only what was passed
-	p, err := e.findProfile(ctx, *runtimeID, positional[0])
-	if err != nil {
-		return err
-	}
-	if p.Params == nil {
-		p.Params = map[string]string{}
-	}
-	fs.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "name":
-			p.Name = *name
-		case "description":
-			p.Description = *description
-		case "default":
-			p.Default = *def
-		}
-	})
-	for k, v := range paramMap {
-		p.Params[k] = v
-	}
-	for _, k := range unset {
-		delete(p.Params, k)
-	}
-	resp, err := e.cl.runtimes.UpdateProfile(ctx, connect.NewRequest(&v1.UpdateProfileRequest{Profile: p}))
-	if err != nil {
-		return err
-	}
-	return e.print(resp.Msg, func(w io.Writer) { profilesTable(w, []*v1.Profile{resp.Msg.GetProfile()}) })
-}
-
-func runProfilesRemove(ctx context.Context, e *env, args []string) error {
-	fs := e.flags("profiles remove")
-	runtimeID := fs.String("runtime", "", "runtime the name belongs to, when the name is used by several")
-	force := fs.Bool("force", false, "clear the watches, wants, slots, and instances naming it first, they fall back to the runtime default")
-	positional, err := e.parse(fs, args, 1, 1, "profiles remove <id|name> [--runtime R] [--force]")
-	if err != nil {
-		return err
-	}
-	p, err := e.findProfile(ctx, *runtimeID, positional[0])
-	if err != nil {
-		return err
-	}
-	resp, err := e.cl.runtimes.DeleteProfile(ctx, connect.NewRequest(&v1.DeleteProfileRequest{Id: p.GetId(), Force: *force}))
-	if err != nil {
-		return err
-	}
-	return e.print(resp.Msg, func(w io.Writer) {
-		fmt.Fprintf(w, "removed %s %s\n", resp.Msg.GetProfile().GetRuntimeId(), resp.Msg.GetProfile().GetName())
 	})
 }
 

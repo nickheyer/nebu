@@ -22,9 +22,7 @@ import (
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
-	"github.com/nickheyer/nebu/internal/monitor"
 	"github.com/nickheyer/nebu/internal/notify"
-	"github.com/nickheyer/nebu/internal/profiles"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc"
 	"github.com/nickheyer/nebu/internal/settings"
@@ -72,10 +70,8 @@ type Daemon struct {
 	Tasks     *tasks.Manager
 	Puller    *pull.Puller
 	Installs  *installs.Manager
-	Profiles  *profiles.Manager
 	Instances *instances.Manager
 	Slots     *slots.Manager
-	Monitor   *monitor.Manager
 	Notifier  *notify.Notifier
 	Gateway   *gateway.Gateway
 	Routes    *gateway.Table
@@ -83,7 +79,7 @@ type Daemon struct {
 	handler   http.Handler
 	cancel    context.CancelFunc
 	closeOnce sync.Once
-	// The monitor and notifier, waited for on close
+	// The notifier, waited for on close
 	background sync.WaitGroup
 	base       context.Context
 	addr       string
@@ -127,7 +123,7 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 		return nil, err
 	}
 	for _, rt := range runtimes.List() {
-		if id := rt.Manifest.GetAcquire().GetRecipeId(); id != "" {
+		for _, id := range rt.RecipeIDs() {
 			if _, err := recipes.Get(id); err != nil {
 				return nil, fmt.Errorf("runtime %s: %w", rt.Manifest.GetId(), err)
 			}
@@ -193,13 +189,9 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 		cancel:  cancel,
 		base:    base,
 	}
-	// Settings and profiles are rows, loaded once and followed through events
+	// Settings are rows, loaded once and followed through events
 	d.Settings = &settings.Manager{DB: store, Events: bus}
 	if err = d.Settings.Load(context.Background()); err != nil {
-		return nil, err
-	}
-	d.Profiles = &profiles.Manager{DB: store, Runtimes: runtimes, Events: bus, Log: log}
-	if err = d.Profiles.Load(context.Background()); err != nil {
 		return nil, err
 	}
 	calibration, err := calibrate.Open(context.Background(), store)
@@ -215,12 +207,11 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 		Runtimes:    runtimes,
 		Host:        prober,
 		Cache:       cacheStore,
-		Profiles:    d.Profiles,
 		Calibration: calibration,
 		Contexts:    cfg.GetContexts(),
 		Log:         log,
 	}
-	d.Puller = &pull.Puller{Inspector: d.Inspector, Store: blobStore, Fetcher: fetcher, Tasks: d.Tasks, Events: bus}
+	d.Puller = &pull.Puller{Inspector: d.Inspector, Store: blobStore, Fetcher: fetcher, Tasks: d.Tasks, Events: bus, MinFree: cfg.GetMinFreeBytes()}
 	d.Installs = &installs.Manager{
 		DB:          store,
 		RuntimesDir: filepath.Join(cfg.GetDataDir(), "runtimes"),
@@ -234,6 +225,10 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 		Sources:     srcs,
 		Events:      bus,
 		Log:         log,
+	}
+	d.Inspector.Installed = func(runtimeID string) bool {
+		list, err := d.Installs.List(context.Background(), runtimeID)
+		return err == nil && len(list) > 0
 	}
 	if d.Routes, err = gateway.OpenTable(context.Background(), store, bus, log); err != nil {
 		return nil, err
@@ -278,24 +273,6 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 		}
 		return false
 	}
-	d.Monitor = &monitor.Manager{
-		DB:        store,
-		Inspector: d.Inspector,
-		Puller:    d.Puller,
-		Slots:     d.Slots,
-		Tasks:     d.Tasks,
-		Events:    bus,
-		Interval:  time.Duration(cfg.GetMonitor().GetIntervalMs()) * time.Millisecond,
-		Disabled:  cfg.GetMonitor().GetDisabled(),
-		Log:       log,
-	}
-	if err = d.Monitor.Load(context.Background()); err != nil {
-		return nil, err
-	}
-	// A profile, slot, or source goes only when nothing starts from it, unless forced
-	d.Profiles.Referrers = []profiles.Referrer{d.Monitor, d.Slots, d.Instances}
-	d.Slots.Referrers = d.Monitor.SlotReferrers
-	srcMgr.Referrers = d.Monitor.SourceReferrers
 	d.Notifier = &notify.Notifier{Webhooks: cfg.GetNotify().GetWebhooks(), Events: bus, Log: log}
 	d.Gateway = gateway.New(d.Routes, cfg.GetGateway().GetApiKeys(), cfg.GetGateway().GetCorsOrigins(), cfg.GetGateway().GetPolicy(), log)
 	d.Gateway.SetVersion(Version)
@@ -303,7 +280,7 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 	if !cfg.GetWeb().GetDisabled() {
 		ui = web.Handler()
 	}
-	d.Doctor = &doctor.Doctor{Host: prober, Runtimes: runtimes, Sources: srcs, Store: blobStore, Installs: d.Installs, MinFree: cfg.GetMinFreeBytes()}
+	d.Doctor = &doctor.Doctor{Host: prober, Runtimes: runtimes, Sources: srcs, Store: blobStore, Installs: d.Installs, Tasks: d.Tasks, MinFree: cfg.GetMinFreeBytes()}
 	d.handler = rpc.NewHandler(rpc.Deps{
 		Host:      prober,
 		Doctor:    d.Doctor,
@@ -316,10 +293,8 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 		Puller:    d.Puller,
 		Tasks:     d.Tasks,
 		Installs:  d.Installs,
-		Profiles:  d.Profiles,
 		Instances: d.Instances,
 		Slots:     d.Slots,
-		Monitor:   d.Monitor,
 		Gateway:   d.Gateway,
 		// The gateway shares the API listener unless config gives it one
 		GatewayShared: cfg.GetGateway().GetListen() == "",
@@ -354,9 +329,6 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 	for _, s := range d.Sources.List() {
 		add(v1.EventKind_EVENT_KIND_SOURCE, s.GetId(), s)
 	}
-	for _, p := range d.Profiles.List("") {
-		add(v1.EventKind_EVENT_KIND_PROFILE, p.GetId(), p)
-	}
 	for _, t := range d.Tasks.List(false) {
 		add(v1.EventKind_EVENT_KIND_TASK, t.GetId(), t)
 	}
@@ -386,17 +358,6 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 	}
 	if st, err := d.Store.Status(); err == nil {
 		add(v1.EventKind_EVENT_KIND_STORE, st.GetPath(), st)
-	}
-	for _, w := range d.Monitor.List() {
-		add(v1.EventKind_EVENT_KIND_WATCH, w.GetId(), w)
-	}
-	for _, w := range d.Monitor.ListWants() {
-		add(v1.EventKind_EVENT_KIND_WANT, w.GetId(), w)
-	}
-	if list, err := d.Monitor.Findings(ctx, "", "", true); err == nil {
-		for _, f := range list {
-			add(v1.EventKind_EVENT_KIND_FINDING, f.GetId(), f)
-		}
 	}
 	return out
 }
@@ -497,13 +458,15 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 			return err
 		}
 	}
-	// Both live as long as the daemon, not as long as one Serve call
-	for _, run := range []func(context.Context){d.Monitor.Run, d.Notifier.Run} {
-		d.background.Add(1)
-		go func() {
-			defer d.background.Done()
-			run(d.base)
-		}()
+	// The notifier lives as long as the daemon, not as long as one Serve call
+	d.background.Add(1)
+	go func() {
+		defer d.background.Done()
+		d.Notifier.Run(d.base)
+	}()
+	// A fresh daemon checks the host once so the tasks list says what needs attention
+	if _, err := d.Doctor.Start(ctx); err != nil {
+		d.Log.Warn("host check failed to start", "err", err)
 	}
 	// Request contexts hang off this one so open streams end when serving stops
 	requests, endRequests := context.WithCancel(context.Background())

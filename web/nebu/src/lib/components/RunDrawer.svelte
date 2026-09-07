@@ -2,14 +2,16 @@
   import { Code } from '@connectrpc/connect';
   import { api, code, message } from '$lib/api';
   import { live, modelKey } from '$lib/state.svelte';
+  import { runUi } from '$lib/slotActions.svelte';
   import { launch, slotOccupied } from '$lib/launch';
   import { createForm } from '$lib/form.svelte';
   import { byName, bytes, params as fmtParams, tail } from '$lib/format';
-  import type { StoredModel } from '$proto/store_pb';
+  import { weightsName } from '$lib/catalog';
   import type { MemoryPlan } from '$proto/estimate_pb';
   import { FitVerdict } from '$proto/estimate_pb';
   import { Play, ArrowLeftRight } from '@lucide/svelte';
-  import FormDialog from './ui/FormDialog.svelte';
+  import Drawer from './ui/Drawer.svelte';
+  import Button from './ui/Button.svelte';
   import Checkbox from './ui/Checkbox.svelte';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
@@ -21,14 +23,12 @@
   import PlanView from './PlanView.svelte';
   import RunTarget from './RunTarget.svelte';
 
-  let { open = $bindable(false), model = null, slotId = '' }: { open?: boolean; model?: StoredModel | null; slotId?: string } = $props();
-
+  // The one place a model is started or swapped in, opened from the library, a slot, or a model's panel
   let pickedKey = $state('');
   let runtimeId = $state('');
   let installId = $state('');
   let name = $state('');
   let slot = $state('');
-  let profileId = $state('');
   let values = $state<Record<string, string>>({});
   let invalid = $state(0);
   let effectiveRuntime = $state('');
@@ -40,6 +40,7 @@
   let checking = $state(false);
   let generation = 0;
 
+  const model = $derived(runUi.model);
   const stored = $derived([...live.models.values()].sort(byName((m) => m.repo + m.group)));
   const current = $derived(model ?? (pickedKey ? live.models.get(pickedKey) : undefined) ?? null);
   const slots = $derived([...live.slots.values()].sort(byName((s) => s.name)));
@@ -59,7 +60,6 @@
       name: slot ? '' : name,
       params: values,
       slotId: slot,
-      profileId,
       force
     };
   }
@@ -71,7 +71,7 @@
     checking = true;
     try {
       const s = spec();
-      const resp = await api.estimate.estimate({ sourceId: s.sourceId, repo: s.repo, group: s.group, runtimeId: effectiveRuntime, params: s.params, slotId: s.slotId, profileId: s.profileId, free: true });
+      const resp = await api.estimate.estimate({ sourceId: s.sourceId, repo: s.repo, group: s.group, runtimeId: effectiveRuntime, params: s.params, slotId: s.slotId, free: true });
       if (gen === generation) plan = resp.plan ?? null;
     } catch (err) {
       if (gen === generation) planError = message(err);
@@ -84,10 +84,9 @@
   $effect(() => {
     void runtimeId;
     void slot;
-    void profileId;
     void values;
     void pickedKey;
-    const ready = open && !!current && !!effectiveRuntime;
+    const ready = runUi.open && !!current && !!effectiveRuntime;
     generation++;
     plan = null;
     planError = '';
@@ -102,17 +101,17 @@
   });
 
   const form = createForm({
-    open: () => open,
-    close: () => (open = false),
+    open: () => runUi.open,
+    close: () => (runUi.open = false),
     reset() {
-      slot = slotId;
+      slot = runUi.slotId;
       pickedKey = model ? modelKey(model) : stored[0] ? modelKey(stored[0]) : '';
-      runtimeId = installId = name = profileId = '';
+      runtimeId = installId = name = '';
       values = {};
       swapMode = 'overlap';
       force = false;
     },
-    // The launch toasts its own refusal, the throw only keeps the dialog open
+    // The launch toasts its own refusal, the throw only keeps the panel open
     async submit() {
       const id = await launch(spec(), swapMode === 'drain', (err) => {
         refusal = err;
@@ -121,23 +120,21 @@
       if (id === undefined) throw refusal;
     }
   });
+
+  const disabled = $derived(!current || !effectiveRuntime || invalid > 0 || (refused && !force));
 </script>
 
-<FormDialog
-  bind:open
-  title={swap ? `Swap into ${selectedSlot?.name}` : 'Run a model'}
-  subtitle={current ? `${current.repo} · ${current.group}` : undefined}
-  size="lg"
-  action={swap ? 'Swap' : 'Run'}
-  icon={swap ? ArrowLeftRight : Play}
-  saving={form.saving}
-  disabled={!current || !effectiveRuntime || invalid > 0 || (refused && !force)}
-  onsubmit={form.run}
->
-  <div class="flex flex-col gap-6">
+<Drawer bind:open={runUi.open} title={swap ? `Swap into ${selectedSlot?.name}` : 'Run a model'} subtitle={current ? `${current.repo} · ${weightsName(current.group, current.formatId)}` : undefined}>
+  <form
+    class="flex flex-col gap-6 px-6 py-5"
+    onsubmit={(e) => {
+      e.preventDefault();
+      if (!disabled && !form.saving) form.run();
+    }}
+  >
     {#if !model}
       <Field label="Model" for="run-model">
-        <Select id="run-model" mono bind:value={pickedKey} disabled={!stored.length} placeholder="Nothing in the library" items={stored.map((m) => ({ value: modelKey(m), label: m.repo, detail: m.group }))} />
+        <Select id="run-model" mono bind:value={pickedKey} disabled={!stored.length} placeholder="Nothing in the library" items={stored.map((m) => ({ value: modelKey(m), label: m.repo, detail: weightsName(m.group, m.formatId) }))} />
       </Field>
     {/if}
 
@@ -162,12 +159,12 @@
       </Section>
 
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <RunTarget bind:slotId={slot} bind:runtimeId bind:profileId bind:values bind:invalid bind:effectiveRuntime formatId={current.formatId} slotPicker={false} idPrefix="run">
+        <RunTarget bind:slotId={slot} bind:runtimeId bind:values bind:invalid bind:effectiveRuntime formatId={current.formatId} slotPicker={false} idPrefix="run">
           <Field label="Install" for="run-install" error={effectiveRuntime && !installs.length ? `No install of ${effectiveRuntime}` : undefined}>
             <Select id="run-install" bind:value={installId} disabled={!installs.length} items={[{ value: '', label: installs.length ? 'Newest' : effectiveRuntime ? 'None' : '–' }, ...installs.map((i) => ({ value: i.id, label: i.version || i.id, detail: tail(i.path) }))]} />
           </Field>
           {#if !slot}
-            <Field label="Model name" for="run-name" info="What clients send as the model" class="sm:col-span-2">
+            <Field label="Model name" for="run-name" hint="What clients send as the model" class="sm:col-span-2">
               <input id="run-name" class="input font-mono" bind:value={name} placeholder="{tail(current.repo)}:{current.group}" autocomplete="off" spellcheck="false" />
             </Field>
           {/if}
@@ -175,8 +172,9 @@
       </div>
 
       {#if swap}
-        <Section title="Swap" info="Overlap starts the new model beside the old and needs room for both. Drain stops the old one first.">
+        <Section title="Swap">
           <Segmented bind:value={swapMode} tabs={[{ id: 'overlap', label: 'Overlap' }, { id: 'drain', label: 'Drain first' }]} />
+          <p class="text-xs text-fg-faint">{swapMode === 'overlap' ? 'The new model starts beside the old one, so both must fit' : 'The old model stops before the new one starts'}</p>
         </Section>
       {/if}
 
@@ -192,9 +190,15 @@
           <Skeleton rows={2} />
         {/if}
         {#if refused || force}
-          <Checkbox bind:checked={force} label="Run anyway" info="The plan says it will not fit. The runtime may still manage or fail." />
+          <Checkbox bind:checked={force} label="Run anyway" hint="The plan says it will not fit" />
         {/if}
       </Section>
     {/if}
-  </div>
-</FormDialog>
+    <button type="submit" class="hidden" aria-hidden="true" tabindex="-1"></button>
+  </form>
+
+  {#snippet footer()}
+    <Button variant="ghost" onclick={() => (runUi.open = false)}>Cancel</Button>
+    <span class="ml-auto"><Button variant="primary" icon={swap ? ArrowLeftRight : Play} loading={form.saving} {disabled} onclick={form.run}>{swap ? 'Swap' : 'Run'}</Button></span>
+  {/snippet}
+</Drawer>

@@ -6,8 +6,15 @@ constraints:
   - expr: any(devices, .vendor == "nvidia" || .vendor == "amd")
     message: an NVIDIA or AMD GPU
 acquire:
-  adopt: [vllm]
-  recipe_id: vllm
+  methods:
+    - id: adopt
+      description: vllm already on this host
+      adopt:
+        names: [vllm]
+    - id: source
+      description: Installed from PyPI into a virtual environment
+      recipe:
+        recipe_id: vllm
 probes:
   - key: version
     args: [--version]
@@ -57,6 +64,12 @@ params:
     default: '{{.name}}'
     flag: --served-model-name
     description: Model name reported in responses, the instance name by default
+  # Speculative decoding, the prediction heads a checkpoint ships loading only once a config names them
+  - name: speculative_config
+    type: PARAM_TYPE_STRING
+    default: ''
+    flag: --speculative-config
+    description: 'Speculative decoding as JSON, {"method":"mtp","num_speculative_tokens":1} for the prediction heads a checkpoint ships; empty leaves them on disk'
 estimate:
   groups:
     - kind: TENSOR_GROUP_KIND_EMBEDDING
@@ -67,6 +80,13 @@ estimate:
       pool: POOL_KIND_DEVICE
     - kind: TENSOR_GROUP_KIND_OUTPUT
       pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_VISION
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_AUDIO
+      pool: POOL_KIND_DEVICE
+    - kind: TENSOR_GROUP_KIND_DRAFT
+      pool: POOL_KIND_DEVICE
+      when: (speculative_config ?? "") != ""
     - kind: TENSOR_GROUP_KIND_OTHER
       pool: POOL_KIND_DEVICE
   cache_bytes: n_ctx * cache_per_token * cache_bytes[kv_cache_dtype]

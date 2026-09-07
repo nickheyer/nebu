@@ -221,7 +221,7 @@
             </Field>
           </div>
           {#if status?.auth}
-            <Field label="Gateway key" for="chat-key" info="Kept in this browser">
+            <Field label="Gateway key" for="chat-key" hint="Kept in this browser">
               <div class="relative">
                 <KeyRound size={13} class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-faint" />
                 <input id="chat-key" class="input pl-8 font-mono" type="password" bind:value={key} onchange={() => setGatewayKey(key.trim())} autocomplete="off" />

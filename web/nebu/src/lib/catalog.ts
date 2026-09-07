@@ -1,11 +1,9 @@
-import type { Facet, SearchHit, SourceCapabilities, SourceStatus } from '$proto/source_pb';
-import { SourceKind } from '$proto/source_pb';
-import type { RuntimeStatus } from '$proto/runtime_pb';
+import type { ConfigField, Facet, SearchHit, SourceCapabilities, SourceStatus } from '$proto/source_pb';
+import { ConfigType, SourceKind } from '$proto/source_pb';
 import type { FitRow } from '$proto/estimate_pb';
 import { FitVerdict } from '$proto/estimate_pb';
-import type { Descriptor } from '$proto/model_pb';
-import type { Tone } from './format';
-import { ctx, verdictWord } from './format';
+import type { Descriptor, Precision } from '$proto/model_pb';
+import { count, ctx } from './format';
 
 // What the daemon calls the provider behind a source
 function providerName(s: SourceStatus | undefined): string {
@@ -134,59 +132,57 @@ export function descriptorKey(d: Descriptor): string {
 }
 
 // Orders weight groups for choosing: what fits first, then the largest, which keeps the most quality
-export function orderDescriptors(descriptors: Descriptor[], rows: FitRow[]): Descriptor[] {
+//
+// Read at one context length when given, else at the best each group reaches.
+export function orderDescriptors(descriptors: Descriptor[], rows: FitRow[], context = 0): Descriptor[] {
+  const score = (v: FitVerdict | undefined) => (v === undefined ? -1 : v === FitVerdict.FITS ? 2 : v === FitVerdict.PARTIAL ? 1 : 0);
   const rank = (d: Descriptor) => {
-    const f = fitSummary(rows, d.group);
-    return f ? (f.verdict === FitVerdict.FITS ? 2 : f.verdict === FitVerdict.PARTIAL ? 1 : 0) : -1;
+    if (context) return score(rowAt(rows, d.group, context)?.plan?.verdict);
+    return Math.max(-1, ...rows.filter((r) => r.group === d.group && r.plan).map((r) => score(r.plan!.verdict)));
   };
   return [...descriptors].sort((a, b) => rank(b) - rank(a) || Number(b.totalBytes - a.totalBytes));
 }
 
-// The tone of a precision level, 0 unknown through 5 full
-export function precisionTone(level: number): Tone {
-  return (['neutral', 'bad', 'warn', 'accent', 'ok', 'ok'] as Tone[])[level] ?? 'neutral';
+// The row planning one group at one context length, on the one runtime the rows were filtered to
+export function rowAt(rows: FitRow[], group: string, context: number): FitRow | undefined {
+  return rows.find((r) => r.group === group && r.context === context);
 }
 
-// Runtimes able to serve any of the formats, the ones this host can run first
-export function runtimesFor(formats: string[], runtimes: RuntimeStatus[]): { id: string; name: string; compatible: boolean }[] {
-  const out: { id: string; name: string; compatible: boolean }[] = [];
-  for (const r of runtimes) {
-    const m = r.manifest;
-    if (m && m.formats.some((f) => formats.includes(f))) out.push({ id: m.id, name: m.name || m.id, compatible: r.compatible });
-  }
-  return out.sort((a, b) => Number(b.compatible) - Number(a.compatible));
+// The width alone, 8-bit out of 8-bit Q8_0, since the group name already says the rest
+export function precisionShort(p: Precision | undefined): string {
+  if (!p) return '';
+  return p.label.match(/^\d+-bit(?: float)?/)?.[0] ?? p.label;
 }
 
-// The one line answer to whether a weight group fits this host
-export interface FitSummary {
-  verdict: FitVerdict;
-  // The longest context that earns the verdict
-  context: number;
-  runtime: string;
-  label: string;
-  tone: Tone;
-}
-
-// A group's best verdict at its longest context, against all memory or free memory
-export function fitSummary(rows: FitRow[], group: string, free = false): FitSummary | null {
-  const rank = (v: FitVerdict) => (v === FitVerdict.FITS ? 2 : v === FitVerdict.PARTIAL ? 1 : 0);
-  const planOf = (r: FitRow) => (free ? r.free : r.plan);
-  let best: FitRow | null = null;
-  for (const r of rows) {
-    const p = planOf(r);
-    if (r.group !== group || !p) continue;
-    if (!best || rank(p.verdict) > rank(planOf(best)!.verdict) || (rank(p.verdict) === rank(planOf(best)!.verdict) && r.context > best.context)) best = r;
-  }
-  const plan = best ? planOf(best) : undefined;
-  if (!best || !plan) return null;
-  const v = plan.verdict;
-  const base = { verdict: v, context: best.context, runtime: best.runtimeId };
-  if (v === FitVerdict.FITS) return { ...base, label: `${verdictWord(v)} at ${ctx(best.context)}`, tone: 'ok' };
-  if (v === FitVerdict.PARTIAL) return { ...base, label: `${verdictWord(v)} at ${ctx(best.context)}`, tone: 'warn' };
-  return { ...base, label: verdictWord(v), tone: 'bad' };
+// What a weight group is called: its name, or its format when the spec gave it none worth reading
+export function weightsName(group: string, formatId = ''): string {
+  return group === 'default' ? formatId || 'weights' : group;
 }
 
 // Whether a hit is gated on a source that holds no token, so opening it would only fail
 export function locked(h: SearchHit | null, caps: SourceCapabilities | undefined): boolean {
   return !!h?.gated && !caps?.tokenPresent;
+}
+
+// The chips a hit carries beyond its columns, as the source declares them: a flag shows its label, a comma list one chip each
+export function hitChips(h: SearchHit, caps: SourceCapabilities | undefined): string[] {
+  const out: string[] = [];
+  for (const f of caps?.hitFields ?? []) {
+    const v = h.extra[f.name];
+    if (v === undefined || v === '') continue;
+    if (f.type === ConfigType.BOOL) {
+      if (v === 'true') out.push(f.label || f.name);
+      continue;
+    }
+    for (const part of splitValues(v)) out.push(chipText(f, part));
+  }
+  return out;
+}
+
+// A bare number needs its field to read, 262144 under context becoming 256k context
+function chipText(f: ConfigField, v: string): string {
+  if (!/^\d+$/.test(v)) return v;
+  const n = Number(v);
+  const word = (f.label || f.name).toLowerCase();
+  return f.name === 'context' ? `${ctx(n)} ${word}` : `${count(n)} ${word}`;
 }

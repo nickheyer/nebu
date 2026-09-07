@@ -32,7 +32,10 @@ const (
 )
 
 // Returned when a model is not in the store
-var ErrNotStored = errors.New("model not stored")
+var (
+	ErrNotStored = errors.New("model not stored")
+	ErrNoRoom    = errors.New("no room in the store")
+)
 
 // Store rooted at one directory
 type Store struct {
@@ -311,6 +314,28 @@ func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.Store
 		used -= min(freed, used)
 	}
 	return removed, release, nil
+}
+
+// Bytes a pull of need would free by eviction, what a capped store drops that keep does not hold
+func (s *Store) Evictable(need uint64, keep func(*v1.StoredModel) bool) uint64 {
+	if s.MaxBytes == 0 {
+		return 0
+	}
+	used, err := s.committed()
+	if err != nil || used+need <= s.MaxBytes {
+		return 0
+	}
+	manifests, err := s.ListManifests()
+	if err != nil {
+		return 0
+	}
+	var idle uint64
+	for _, m := range manifests {
+		if keep == nil || !keep(m) {
+			idle += m.GetBytes()
+		}
+	}
+	return min(idle, used+need-s.MaxBytes)
 }
 
 // Blob bytes on disk plus what pulls in flight have reserved

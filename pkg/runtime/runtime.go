@@ -35,14 +35,55 @@ type constraint struct {
 	message string
 }
 
+type reportRule struct {
+	spec *v1.ReportRule
+	re   *regexp.Regexp
+}
+
 type prebuiltRule struct {
 	spec *v1.PrebuiltRule
 	when *eval.Expr
 }
 
-type reportRule struct {
-	spec *v1.ReportRule
-	re   *regexp.Regexp
+// One way to obtain an install, its prebuilt rules compiled
+type InstallMethod struct {
+	Spec  *v1.InstallMethod
+	rules []prebuiltRule
+}
+
+// Returns one prebuilt rule by id
+func (m InstallMethod) Rule(id string) (*v1.PrebuiltRule, error) {
+	for _, r := range m.rules {
+		if r.spec.GetId() == id {
+			return r.spec, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: install method %s has no build %q", ErrParam, m.Spec.GetId(), id)
+}
+
+// Returns the prebuilt rules whose conditions hold on the host, in manifest order
+func (m InstallMethod) Rules(profile *v1.HostProfile) ([]*v1.PrebuiltRule, error) {
+	env := host.Env(profile)
+	var out []*v1.PrebuiltRule
+	for _, r := range m.rules {
+		ok, err := r.when.Holds(env)
+		if err != nil {
+			return nil, fmt.Errorf("install method %s build %s: %w", m.Spec.GetId(), r.spec.GetId(), err)
+		}
+		if ok {
+			out = append(out, r.spec)
+		}
+	}
+	return out, nil
+}
+
+// Returns the first prebuilt rule whose condition holds on the host, nil when none does
+func (m InstallMethod) HostRule(profile *v1.HostProfile) (*v1.PrebuiltRule, error) {
+	rules, err := m.Rules(profile)
+	if err != nil || len(rules) == 0 {
+		return nil, err
+	}
+	return rules[0], nil
 }
 
 // Manifest probe with its compiled pattern
@@ -62,7 +103,7 @@ type Runtime struct {
 	launchArgs     []*eval.Template
 	launchEnv      map[string]*eval.Template
 	report         []reportRule
-	prebuilt       []prebuiltRule
+	installs       []InstallMethod
 	probes         []Probe
 	prepareCommand *eval.Template
 	prepareArgs    []*eval.Template
@@ -162,21 +203,55 @@ func compile(m *v1.RuntimeManifest) (*Runtime, error) {
 		}
 		rt.report = append(rt.report, reportRule{spec: r, re: re})
 	}
-	for _, p := range m.GetAcquire().GetPrebuilt() {
-		name := strings.Join(p.GetAssets(), ", ")
-		when, err := eval.Compile(p.GetWhen())
-		if err != nil {
-			return nil, fmt.Errorf("prebuilt rule %q: %w", name, err)
+	seen := map[string]bool{}
+	for _, im := range m.GetAcquire().GetMethods() {
+		id := im.GetId()
+		if id == "" {
+			return nil, fmt.Errorf("install method without id")
 		}
-		if len(p.GetAssets()) == 0 || p.GetReleases() == "" || p.GetBinary() == "" {
-			return nil, fmt.Errorf("prebuilt rule %q: needs releases, at least one asset, and a binary", name)
+		if seen[id] {
+			return nil, fmt.Errorf("install method %s: duplicate id", id)
 		}
-		for _, a := range p.GetAssets() {
-			if _, err := regexp.Compile(a); err != nil {
-				return nil, fmt.Errorf("prebuilt rule %q: %w", name, err)
+		seen[id] = true
+		method := InstallMethod{Spec: im}
+		switch how := im.GetHow().(type) {
+		case *v1.InstallMethod_Adopt:
+			if len(how.Adopt.GetNames()) == 0 {
+				return nil, fmt.Errorf("install method %s: adopt needs at least one binary name", id)
 			}
+		case *v1.InstallMethod_Prebuilt:
+			p := how.Prebuilt
+			if p.GetReleases() == "" || len(p.GetRules()) == 0 {
+				return nil, fmt.Errorf("install method %s: prebuilt needs releases and at least one rule", id)
+			}
+			ids := map[string]bool{}
+			for _, r := range p.GetRules() {
+				if r.GetId() == "" || ids[r.GetId()] {
+					return nil, fmt.Errorf("install method %s: every rule needs its own id", id)
+				}
+				ids[r.GetId()] = true
+				if len(r.GetAssets()) == 0 || r.GetBinary() == "" {
+					return nil, fmt.Errorf("install method %s build %s: needs at least one asset and a binary", id, r.GetId())
+				}
+				for _, a := range r.GetAssets() {
+					if _, err := regexp.Compile(a); err != nil {
+						return nil, fmt.Errorf("install method %s build %s: %w", id, r.GetId(), err)
+					}
+				}
+				when, err := eval.CompileOptional(r.GetWhen())
+				if err != nil {
+					return nil, fmt.Errorf("install method %s build %s: %w", id, r.GetId(), err)
+				}
+				method.rules = append(method.rules, prebuiltRule{spec: r, when: when})
+			}
+		case *v1.InstallMethod_Recipe:
+			if how.Recipe.GetRecipeId() == "" {
+				return nil, fmt.Errorf("install method %s: recipe needs a recipe_id", id)
+			}
+		default:
+			return nil, fmt.Errorf("install method %s: one of adopt, prebuilt, or recipe required", id)
 		}
-		rt.prebuilt = append(rt.prebuilt, prebuiltRule{spec: p, when: when})
+		rt.installs = append(rt.installs, method)
 	}
 	for _, p := range m.GetProbes() {
 		if p.GetKey() == "" {
@@ -197,19 +272,28 @@ func compile(m *v1.RuntimeManifest) (*Runtime, error) {
 	return rt, nil
 }
 
-// Returns the first prebuilt rule that holds on the host
-func (rt *Runtime) Prebuilt(profile *v1.HostProfile) (*v1.PrebuiltRule, error) {
-	env := host.Env(profile)
-	for _, r := range rt.prebuilt {
-		ok, err := r.when.Bool(env)
-		if err != nil {
-			return nil, fmt.Errorf("prebuilt rule %q: %w", strings.Join(r.spec.GetAssets(), ", "), err)
-		}
-		if ok {
-			return r.spec, nil
+// Returns the install methods in manifest order
+func (rt *Runtime) Installs() []InstallMethod { return rt.installs }
+
+// Returns one install method by id
+func (rt *Runtime) Install(id string) (InstallMethod, error) {
+	for _, m := range rt.installs {
+		if m.Spec.GetId() == id {
+			return m, nil
 		}
 	}
-	return nil, fmt.Errorf("no prebuilt release of %s matches this host, adopt a binary instead", rt.Manifest.GetId())
+	return InstallMethod{}, fmt.Errorf("%w: %s has no install method %q", ErrParam, rt.Manifest.GetId(), id)
+}
+
+// The ids of the recipes the manifest builds from, in order, each once
+func (rt *Runtime) RecipeIDs() []string {
+	var out []string
+	for _, m := range rt.installs {
+		if id := m.Spec.GetRecipe().GetRecipeId(); id != "" && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // Returns the manifest probes with compiled patterns

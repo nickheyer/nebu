@@ -99,7 +99,25 @@ func New(spec *v1.FormatSpec) (formats.Reader, error) {
 }
 
 func (r *reader) Read(ctx context.Context, open formats.Opener, group *formats.Group) (*v1.RawModel, error) {
-	return formats.EachWeight(ctx, open, group, r.parse)
+	raw, err := formats.EachWeight(ctx, open, group, r.parse)
+	if err != nil {
+		return nil, err
+	}
+	// The projector a run loads beside the weights counts with them, the one a launch picks, its
+	// tensors joining the table while its header, which describes the encoder alone, stays out
+	if files := group.Files[v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR]; len(files) > 0 {
+		blob, err := open(ctx, files[0])
+		if err != nil {
+			return nil, err
+		}
+		_, tensors, err := r.parse(blob, blob.Size())
+		blob.Close()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", files[0].GetPath(), err)
+		}
+		raw.Tensors = append(raw.Tensors, tensors...)
+	}
+	return raw, nil
 }
 
 type tensorEntry struct {
@@ -187,6 +205,10 @@ func (r *reader) parse(ra io.ReaderAt, size int64) (map[string]string, []*v1.Ten
 		}
 	}
 	dataStart := (uint64(cr.n) + alignment - 1) / alignment * alignment
+	// A shard holding only metadata may end right after the header, before the padding a tensor would follow
+	if uint64(size) < dataStart && len(entries) == 0 {
+		dataStart = uint64(size)
+	}
 	if uint64(size) < dataStart {
 		return nil, nil, fmt.Errorf("file smaller than header")
 	}

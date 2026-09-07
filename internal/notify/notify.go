@@ -1,4 +1,4 @@
-// Package notify announces findings and failures beyond the UI.
+// Package notify announces failed instances beyond the UI.
 package notify
 
 import (
@@ -22,7 +22,7 @@ const (
 	retryBackoff = 2 * time.Second
 )
 
-// Posts one JSON document per event that matters to every webhook
+// Posts one JSON document per failed instance to every webhook
 type Notifier struct {
 	Webhooks []string
 	Events   *events.Bus
@@ -37,7 +37,7 @@ func (n *Notifier) Run(ctx context.Context) {
 	if len(n.Webhooks) == 0 {
 		return
 	}
-	sub := n.Events.Subscribe(ctx, []v1.EventKind{v1.EventKind_EVENT_KIND_FINDING, v1.EventKind_EVENT_KIND_INSTANCE})
+	sub := n.Events.Subscribe(ctx, []v1.EventKind{v1.EventKind_EVENT_KIND_INSTANCE})
 	queue := make(chan []byte, queueSize)
 	done := make(chan struct{})
 	client := &http.Client{Timeout: postTimeout}
@@ -64,7 +64,7 @@ func (n *Notifier) Run(ctx context.Context) {
 			n.Log.Warn("webhook events dropped behind a slow subscriber", "count", d-dropped)
 			dropped = d
 		}
-		if ev.GetSeq() == 0 || !n.matters(ev, seen) {
+		if ev.GetSeq() == 0 || !matters(ev, seen) {
 			continue
 		}
 		body, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(ev)
@@ -79,22 +79,20 @@ func (n *Notifier) Run(ctx context.Context) {
 	}
 }
 
-// Picks new findings and each instance's step into failed
-func (n *Notifier) matters(ev *v1.Event, seen map[string]v1.InstanceState) bool {
-	switch p := ev.GetPayload().(type) {
-	case *v1.Event_Finding:
-		return ev.GetAction() == v1.EventAction_EVENT_ACTION_CREATED
-	case *v1.Event_Instance:
-		id, state := p.Instance.GetId(), p.Instance.GetState()
-		if ev.GetAction() == v1.EventAction_EVENT_ACTION_DELETED {
-			delete(seen, id)
-			return false
-		}
-		failed := state == v1.InstanceState_INSTANCE_STATE_FAILED && seen[id] != state
-		seen[id] = state
-		return failed
+// Picks each instance's step into failed
+func matters(ev *v1.Event, seen map[string]v1.InstanceState) bool {
+	in := ev.GetInstance()
+	if in == nil {
+		return false
 	}
-	return false
+	id, state := in.GetId(), in.GetState()
+	if ev.GetAction() == v1.EventAction_EVENT_ACTION_DELETED {
+		delete(seen, id)
+		return false
+	}
+	failed := state == v1.InstanceState_INSTANCE_STATE_FAILED && seen[id] != state
+	seen[id] = state
+	return failed
 }
 
 // Sends the document to every webhook, each tried again on a connection or server error

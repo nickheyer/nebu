@@ -7,11 +7,9 @@ Nebu (named after Nebuchadnezzar, the matrix spaceship, not the babylonian guy) 
 
 What ships today, each with its own page under `docs/`:
 
-- Four runtimes, llama.cpp, vLLM, SGLang, and NeMo, adopted, downloaded, or built from a recipe.
+- Four runtimes, llama.cpp, vLLM, SGLang, and NeMo, each installed by a method its manifest lists, a binary on the host, a published release, or a build from a recipe, chosen and configured by you.
 - Sources on Hugging Face, GitHub, Ollama, ModelScope, Civitai, Kaggle, NGC, CSGHub, OCI registries, git, mirrors, and local directories, all merged in one catalog.
 - A gateway that speaks the OpenAI, Anthropic, and Ollama APIs from any runtime, with per route limits, CORS, and TLS.
-- Profiles, named param sets per runtime, layered under a slot's defaults and a request's own.
-- Watches and wants, so a new revision or a model that does not exist yet gets pulled and swapped in when it appears, with webhooks.
 - A chat page and `nebu chat` for prompting whatever is loaded through the gateway itself.
 - Linux, macOS, Windows, and FreeBSD hosts, processes owned and found again on every one.
 

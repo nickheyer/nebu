@@ -5,7 +5,6 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/installs"
-	"github.com/nickheyer/nebu/internal/profiles"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
@@ -17,18 +16,17 @@ var (
 	_ nebuv1connect.BuildServiceHandler   = (*BuildService)(nil)
 )
 
-// Serves the runtime catalog, the formats it accepts, installs, and param profiles
+// Serves the runtime catalog, the formats it accepts, and installs
 type RuntimeService struct {
 	runtimes *runtime.Registry
 	prober   *host.Prober
 	installs *installs.Manager
-	profiles *profiles.Manager
 	formats  []*v1.FormatSpec
 }
 
 // Builds the runtime service, formats in priority order
-func NewRuntimeService(reg *runtime.Registry, prober *host.Prober, inst *installs.Manager, prof *profiles.Manager, formats []*v1.FormatSpec) *RuntimeService {
-	return &RuntimeService{runtimes: reg, prober: prober, installs: inst, profiles: prof, formats: formats}
+func NewRuntimeService(reg *runtime.Registry, prober *host.Prober, inst *installs.Manager, formats []*v1.FormatSpec) *RuntimeService {
+	return &RuntimeService{runtimes: reg, prober: prober, installs: inst, formats: formats}
 }
 
 func (s *RuntimeService) ListFormats(ctx context.Context, req *connect.Request[v1.ListFormatsRequest]) (*connect.Response[v1.ListFormatsResponse], error) {
@@ -42,9 +40,24 @@ func (s *RuntimeService) ListRuntimes(ctx context.Context, req *connect.Request[
 	}
 	resp := &v1.ListRuntimesResponse{}
 	for _, rt := range s.runtimes.List() {
-		resp.Runtimes = append(resp.Runtimes, rt.Status(profile))
+		st, err := s.status(ctx, rt, profile)
+		if err != nil {
+			return nil, wrap(err)
+		}
+		resp.Runtimes = append(resp.Runtimes, st)
 	}
 	return reply(resp, nil)
+}
+
+// The runtime's status with its install methods as this host sees them
+func (s *RuntimeService) status(ctx context.Context, rt *runtime.Runtime, profile *v1.HostProfile) (*v1.RuntimeStatus, error) {
+	st := rt.Status(profile)
+	options, err := s.installs.Options(ctx, rt, profile)
+	if err != nil {
+		return nil, err
+	}
+	st.Installs = options
+	return st, nil
 }
 
 func (s *RuntimeService) GetRuntime(ctx context.Context, req *connect.Request[v1.GetRuntimeRequest]) (*connect.Response[v1.GetRuntimeResponse], error) {
@@ -56,7 +69,8 @@ func (s *RuntimeService) GetRuntime(ctx context.Context, req *connect.Request[v1
 	if err != nil {
 		return nil, wrap(err)
 	}
-	return reply(&v1.GetRuntimeResponse{Runtime: rt.Status(profile)}, nil)
+	st, err := s.status(ctx, rt, profile)
+	return reply(&v1.GetRuntimeResponse{Runtime: st}, err)
 }
 
 func (s *RuntimeService) ListInstalls(ctx context.Context, req *connect.Request[v1.ListInstallsRequest]) (*connect.Response[v1.ListInstallsResponse], error) {
@@ -69,33 +83,14 @@ func (s *RuntimeService) AdoptInstall(ctx context.Context, req *connect.Request[
 	return reply(&v1.AdoptInstallResponse{Install: in}, err)
 }
 
-func (s *RuntimeService) InstallPrebuilt(ctx context.Context, req *connect.Request[v1.InstallPrebuiltRequest]) (*connect.Response[v1.InstallPrebuiltResponse], error) {
-	task, err := s.installs.InstallPrebuilt(ctx, req.Msg.GetRuntimeId())
-	return reply(&v1.InstallPrebuiltResponse{Task: task}, err)
+func (s *RuntimeService) Install(ctx context.Context, req *connect.Request[v1.InstallRequest]) (*connect.Response[v1.InstallResponse], error) {
+	task, err := s.installs.Install(ctx, req.Msg.GetRuntimeId(), req.Msg.GetMethod(), req.Msg.GetSettings())
+	return reply(&v1.InstallResponse{Task: task}, err)
 }
 
 func (s *RuntimeService) RemoveInstall(ctx context.Context, req *connect.Request[v1.RemoveInstallRequest]) (*connect.Response[v1.RemoveInstallResponse], error) {
 	in, err := s.installs.Remove(ctx, req.Msg.GetId())
 	return reply(&v1.RemoveInstallResponse{Install: in}, err)
-}
-
-func (s *RuntimeService) ListProfiles(ctx context.Context, req *connect.Request[v1.ListProfilesRequest]) (*connect.Response[v1.ListProfilesResponse], error) {
-	return reply(&v1.ListProfilesResponse{Profiles: s.profiles.List(req.Msg.GetRuntimeId())}, nil)
-}
-
-func (s *RuntimeService) CreateProfile(ctx context.Context, req *connect.Request[v1.CreateProfileRequest]) (*connect.Response[v1.CreateProfileResponse], error) {
-	p, err := s.profiles.Create(ctx, req.Msg.GetProfile())
-	return reply(&v1.CreateProfileResponse{Profile: p}, err)
-}
-
-func (s *RuntimeService) UpdateProfile(ctx context.Context, req *connect.Request[v1.UpdateProfileRequest]) (*connect.Response[v1.UpdateProfileResponse], error) {
-	p, err := s.profiles.Update(ctx, req.Msg.GetProfile())
-	return reply(&v1.UpdateProfileResponse{Profile: p}, err)
-}
-
-func (s *RuntimeService) DeleteProfile(ctx context.Context, req *connect.Request[v1.DeleteProfileRequest]) (*connect.Response[v1.DeleteProfileResponse], error) {
-	p, err := s.profiles.Delete(ctx, req.Msg.GetId(), req.Msg.GetForce())
-	return reply(&v1.DeleteProfileResponse{Profile: p}, err)
 }
 
 // Serves recipes and builds

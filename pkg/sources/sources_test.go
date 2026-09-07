@@ -271,13 +271,13 @@ func TestManagerSeedsBootstrapsAndEdits(t *testing.T) {
 		t.Fatalf("unknown update %v", err)
 	}
 
-	if _, err := m.Delete(ctx, "huggingface", false); err == nil || !strings.Contains(err.Error(), "seeded") {
+	if _, err := m.Delete(ctx, "huggingface"); err == nil || !strings.Contains(err.Error(), "seeded") {
 		t.Fatalf("seeded delete %v", err)
 	}
-	if _, err := m.Delete(ctx, "nope", false); err == nil || !strings.Contains(err.Error(), ErrUnknownSource.Error()) {
+	if _, err := m.Delete(ctx, "nope"); err == nil || !strings.Contains(err.Error(), ErrUnknownSource.Error()) {
 		t.Fatalf("unknown delete %v", err)
 	}
-	if gone, err := m.Delete(ctx, "hf-mirror", false); err != nil || gone.GetId() != "hf-mirror" {
+	if gone, err := m.Delete(ctx, "hf-mirror"); err != nil || gone.GetId() != "hf-mirror" {
 		t.Fatalf("delete %v %v", gone, err)
 	}
 	if _, err := m.Registry.Get("hf-mirror"); err == nil {

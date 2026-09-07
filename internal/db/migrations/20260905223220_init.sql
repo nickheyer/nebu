@@ -79,7 +79,6 @@ CREATE TABLE `instance_requests` (
   `install_id` text NOT NULL,
   `name` text NOT NULL,
   `slot_id` text NOT NULL DEFAULT '',
-  `profile_id` text NOT NULL DEFAULT '',
   `force` integer NOT NULL DEFAULT 0,
   PRIMARY KEY (`instance_id`),
   CONSTRAINT `0` FOREIGN KEY (`instance_id`) REFERENCES `instances` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE
@@ -290,7 +289,6 @@ CREATE TABLE `slot_requests` (
   `runtime_id` text NOT NULL,
   `install_id` text NOT NULL,
   `name` text NOT NULL,
-  `profile_id` text NOT NULL DEFAULT '',
   `force` integer NOT NULL DEFAULT 0,
   PRIMARY KEY (`slot_id`),
   CONSTRAINT `0` FOREIGN KEY (`slot_id`) REFERENCES `slots` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE
@@ -317,93 +315,6 @@ CREATE TABLE `routes` (
   `served` text NOT NULL DEFAULT '',
   PRIMARY KEY (`name`)
 );
--- Create "watches" table
-CREATE TABLE `watches` (
-  `id` text NULL,
-  `source_id` text NOT NULL,
-  `repo` text NOT NULL,
-  `revision` text NOT NULL DEFAULT '',
-  `group_match` text NOT NULL DEFAULT '',
-  `auto_pull` integer NOT NULL DEFAULT 0,
-  `slot_id` text NOT NULL DEFAULT '',
-  `runtime_id` text NOT NULL DEFAULT '',
-  `last_commit` text NOT NULL DEFAULT '',
-  `checked_at` text NULL,
-  `created_at` text NOT NULL,
-  `error` text NOT NULL DEFAULT '',
-  `profile_id` text NOT NULL DEFAULT '',
-  PRIMARY KEY (`id`)
-);
--- Create index "watches_by_repo" to table: "watches"
-CREATE UNIQUE INDEX `watches_by_repo` ON `watches` (`source_id`, `repo`, `revision`);
--- Create "watch_params" table
-CREATE TABLE `watch_params` (
-  `watch_id` text NOT NULL,
-  `name` text NOT NULL,
-  `value` text NOT NULL,
-  PRIMARY KEY (`watch_id`, `name`),
-  CONSTRAINT `0` FOREIGN KEY (`watch_id`) REFERENCES `watches` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE
-);
--- Create "watch_groups" table
-CREATE TABLE `watch_groups` (
-  `watch_id` text NOT NULL,
-  `position` integer NOT NULL,
-  `group_name` text NOT NULL,
-  PRIMARY KEY (`watch_id`, `position`),
-  CONSTRAINT `0` FOREIGN KEY (`watch_id`) REFERENCES `watches` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE
-);
--- Create "wants" table
-CREATE TABLE `wants` (
-  `id` text NULL,
-  `query` text NOT NULL,
-  `kind` text NOT NULL DEFAULT '',
-  `source_id` text NOT NULL DEFAULT '',
-  `group_match` text NOT NULL DEFAULT '',
-  `format_id` text NOT NULL DEFAULT '',
-  `auto_pull` integer NOT NULL DEFAULT 0,
-  `slot_id` text NOT NULL DEFAULT '',
-  `runtime_id` text NOT NULL DEFAULT '',
-  `profile_id` text NOT NULL DEFAULT '',
-  `found_source_id` text NOT NULL DEFAULT '',
-  `found_repo` text NOT NULL DEFAULT '',
-  `found_group` text NOT NULL DEFAULT '',
-  `task_id` text NOT NULL DEFAULT '',
-  `satisfied` integer NOT NULL DEFAULT 0,
-  `checked_at` text NULL,
-  `created_at` text NOT NULL,
-  `error` text NOT NULL DEFAULT '',
-  `swap_task_id` text NOT NULL DEFAULT '',
-  PRIMARY KEY (`id`)
-);
--- Create "want_params" table
-CREATE TABLE `want_params` (
-  `want_id` text NOT NULL,
-  `name` text NOT NULL,
-  `value` text NOT NULL,
-  PRIMARY KEY (`want_id`, `name`),
-  CONSTRAINT `0` FOREIGN KEY (`want_id`) REFERENCES `wants` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE
-);
--- Create "findings" table
-CREATE TABLE `findings` (
-  `id` text NULL,
-  `watch_id` text NOT NULL DEFAULT '',
-  `want_id` text NOT NULL DEFAULT '',
-  `source_id` text NOT NULL DEFAULT '',
-  `kind` text NOT NULL,
-  `repo` text NOT NULL,
-  `commit_id` text NOT NULL DEFAULT '',
-  `group_name` text NOT NULL DEFAULT '',
-  `detail` text NOT NULL DEFAULT '',
-  `task_id` text NOT NULL DEFAULT '',
-  `acknowledged` integer NOT NULL DEFAULT 0,
-  `found_at` text NOT NULL,
-  `swap_task_id` text NOT NULL DEFAULT '',
-  PRIMARY KEY (`id`)
-);
--- Create index "findings_by_watch" to table: "findings"
-CREATE INDEX `findings_by_watch` ON `findings` (`watch_id`, `found_at`);
--- Create index "findings_by_want" to table: "findings"
-CREATE INDEX `findings_by_want` ON `findings` (`want_id`, `found_at`);
 -- Create "sources" table
 CREATE TABLE `sources` (
   `id` text NULL,
@@ -421,27 +332,6 @@ CREATE TABLE `source_config` (
   `value` text NOT NULL,
   PRIMARY KEY (`source_id`, `name`),
   CONSTRAINT `0` FOREIGN KEY (`source_id`) REFERENCES `sources` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE
-);
--- Create "profiles" table
-CREATE TABLE `profiles` (
-  `id` text NULL,
-  `runtime_id` text NOT NULL,
-  `name` text NOT NULL,
-  `description` text NOT NULL DEFAULT '',
-  `is_default` integer NOT NULL DEFAULT 0,
-  `created_at` text NOT NULL,
-  `updated_at` text NOT NULL,
-  PRIMARY KEY (`id`)
-);
--- Create index "profiles_by_name" to table: "profiles"
-CREATE UNIQUE INDEX `profiles_by_name` ON `profiles` (`runtime_id`, `name`);
--- Create "profile_params" table
-CREATE TABLE `profile_params` (
-  `profile_id` text NOT NULL,
-  `name` text NOT NULL,
-  `value` text NOT NULL,
-  PRIMARY KEY (`profile_id`, `name`),
-  CONSTRAINT `0` FOREIGN KEY (`profile_id`) REFERENCES `profiles` (`id`) ON UPDATE NO ACTION ON DELETE CASCADE
 );
 -- Create "settings" table
 CREATE TABLE `settings` (
