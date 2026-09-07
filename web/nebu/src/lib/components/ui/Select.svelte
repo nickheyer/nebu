@@ -17,7 +17,7 @@
   let {
     value = $bindable(''),
     items,
-    placeholder = 'Choose',
+    empty = 'Choose',
     id,
     mono = false,
     disabled = false,
@@ -28,7 +28,8 @@
   }: {
     value?: string;
     items: SelectItem[];
-    placeholder?: string;
+    // Shown while nothing is chosen
+    empty?: string;
     id?: string;
     mono?: boolean;
     disabled?: boolean;
@@ -74,7 +75,7 @@
     class="inline-flex w-full items-center gap-2 rounded-md border border-line bg-sunken px-2.5 text-left text-fg transition-colors hover:border-line-strong focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 data-[state=open]:border-accent {height}"
   >
     <span class="min-w-0 flex-1 truncate {mono ? 'font-mono' : ''} {current ? '' : 'text-fg-faint'}">
-      {current?.label ?? placeholder}{#if current?.detail}<span class="ml-1.5 text-fg-faint">{current.detail}</span>{/if}
+      {current?.label ?? empty}{#if current?.detail}<span class="ml-1.5 text-fg-faint">{current.detail}</span>{/if}
     </span>
     <ChevronDown size={14} class="shrink-0 text-fg-faint" />
   </Select.Trigger>

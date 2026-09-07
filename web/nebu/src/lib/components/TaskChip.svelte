@@ -9,7 +9,7 @@
   const known = $derived(!!p?.total);
 </script>
 
-<a href="/tasks?id={task.id}" class="group inline-flex max-w-full items-center gap-2 text-xs text-accent hover:underline">
+<a href="/tasks/{task.id}" class="group inline-flex max-w-full items-center gap-2 text-xs text-accent hover:underline">
   <Spinner size={12} />
   <span class="truncate">{label ?? task.title}</span>
   {#if known}

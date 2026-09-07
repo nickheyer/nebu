@@ -84,7 +84,7 @@
         <button type="button" class="rounded-sm px-1 font-mono transition-colors {last ? 'text-fg' : 'text-fg-muted hover:text-fg'}" onclick={() => (dir = crumbs.slice(0, i + 1).join('/'))}>{c}</button>
       {/each}
       <span class="ml-auto text-xs tabular-nums text-fg-faint">
-        {#if dir}{plural(rows.reduce((a, r) => a + r.count, 0), 'file')} · {storage(here)} here · {/if}{plural(files.length, 'file')} · {storage(total)}{#if inStore}<span> · {inStore} in the store</span>{/if}
+        {#if dir}{plural(rows.reduce((a, r) => a + r.count, 0), 'file')} · {storage(here)} here · {/if}{plural(files.length, 'file')} · {storage(total)}{#if inStore}<span> · {inStore} downloaded</span>{/if}
       </span>
     </div>
     <table class="tbl">
@@ -124,7 +124,7 @@
               </td>
               <td class="num">{storage(a.sizeBytes)}</td>
               <td class="w-8 text-right">
-                {#if stored.has(a.path)}<Tip text="In the store"><Check size={13} class="text-ok" /></Tip>{/if}
+                {#if stored.has(a.path)}<Tip text="Downloaded"><Check size={13} class="text-ok" /></Tip>{/if}
               </td>
             </tr>
           {/if}

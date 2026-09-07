@@ -29,8 +29,8 @@ export async function launch(spec: RunSpec, drainFirst = false, refused?: (err: 
   try {
     const task = swap ? (await api.slots.swap({ slotId: spec.slotId!, run, drainFirst })).task : (await api.instances.run(run)).task;
     const id = task?.id ?? '';
-    const target = spec.slotId ? ` into ${live.slots.get(spec.slotId)?.name ?? 'slot'}` : '';
-    ok(`${swap ? 'Swapping' : 'Starting'} ${spec.repo.split('/').pop()}${target}`, spec.group, id ? { href: `/tasks?id=${id}`, label: 'Task' } : undefined);
+    const target = spec.slotId ? ` in ${live.slots.get(spec.slotId)?.name ?? 'slot'}` : '';
+    ok(`${swap ? 'Swapping' : 'Starting'} ${spec.repo.split('/').pop()}${target}`, spec.group, id ? { href: `/tasks/${id}`, label: 'Open task' } : undefined);
     return id;
   } catch (err) {
     fail(err, swap ? 'Swap refused' : 'Run refused');

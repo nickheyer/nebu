@@ -37,6 +37,10 @@ enum InstallKind {
 }
 
 // One tunable knob of a runtime
+//
+// The form fields carry what a client needs to render a control without
+// knowing the runtime: a label, a unit, bounds and a step for numbers, the
+// section the param sits in, and whether it is folded away by default.
 message Param {
   string name = 1;
   ParamType type = 2;
@@ -46,6 +50,18 @@ message Param {
   string flag = 6;
   string env = 7;
   bool solved = 8;
+  // Shown in place of the name
+  string label = 9;
+  // Shown beside the control, such as tokens or threads
+  string unit = 10;
+  // Bounds and step for INT and FLOAT params, zero when unbounded
+  double min = 11;
+  double max = 12;
+  double step = 13;
+  // Section heading the param is listed under
+  string group = 14;
+  // Hidden until the form is expanded
+  bool advanced = 15;
 }
 
 // Host requirement expressed over probed facts

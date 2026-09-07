@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { live, clock, liveInstances, instanceLive, slotName, groupLabel } from '$lib/state.svelte';
-  import { selectionParam } from '$lib/selection.svelte';
+  import { live, clock, liveInstances, instanceLive, slotName, groupLabel, orderedSlots, tracesOf, runtimeName } from '$lib/state.svelte';
   import { launch } from '$lib/launch';
   import { instanceMemory } from '$lib/instances';
-  import { ago, byName, newestFirst, tail, when } from '$lib/format';
+  import { ago, newestFirst, tail, when } from '$lib/format';
   import { InstanceState } from '$proto/instance_pb';
-  import { SlotState, type Slot } from '$proto/slot_pb';
-  import { Plus, RotateCcw, Compass, Cpu } from '@lucide/svelte';
+  import { SlotState } from '$proto/slot_pb';
+  import { TraceKind } from '$proto/gateway_pb';
+  import { Plus, RotateCcw, Compass, Cpu, ArrowRight } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import IconButton from '$lib/components/ui/IconButton.svelte';
@@ -14,83 +14,70 @@
   import Section from '$lib/components/ui/Section.svelte';
   import Segmented from '$lib/components/ui/Segmented.svelte';
   import State from '$lib/components/ui/State.svelte';
-  import SlotRow from '$lib/components/SlotRow.svelte';
-  import InstanceRow from '$lib/components/InstanceRow.svelte';
-  import SlotDrawer from '$lib/components/SlotDrawer.svelte';
-  import InstanceDrawer from '$lib/components/InstanceDrawer.svelte';
+  import SlotCard from '$lib/components/SlotCard.svelte';
+  import InstanceCard from '$lib/components/InstanceCard.svelte';
   import Connect from '$lib/components/Connect.svelte';
   import Routes from '$lib/components/Routes.svelte';
-  import Guide from '$lib/components/Guide.svelte';
   import ActiveTasks from '$lib/components/ActiveTasks.svelte';
+  import TraceTable from '$lib/components/TraceTable.svelte';
 
-  const slotSel = selectionParam('/', 'slot');
-  const instSel = selectionParam('/', 'instance');
-  let slotTab = $state('overview');
   let historyView = $state('all');
 
   const loading = $derived(!live.ready && !live.error);
-  const slots = $derived([...live.slots.values()].sort(byName((s) => s.name)));
+  const slots = $derived(orderedSlots());
   const serving = $derived(slots.filter((s) => s.state === SlotState.READY).length);
   const standalone = $derived(liveInstances().filter((i) => !i.slotId));
   const past = $derived([...live.instances.values()].filter((i) => !instanceLive(i)).sort(newestFirst((i) => i.createdAt)));
   const failed = $derived(past.filter((i) => i.state === InstanceState.FAILED));
   const history = $derived(historyView === 'failed' ? failed : past);
-
-  function openSlot(s: Slot, tab = 'overview') {
-    instSel.id = '';
-    slotTab = tab;
-    slotSel.id = s.id;
-  }
-  function newSlot() {
-    instSel.id = '';
-    slotTab = 'settings';
-    slotSel.id = 'new';
-  }
-  function openInstance(id: string) {
-    slotSel.id = '';
-    instSel.id = id;
-  }
+  const recent = $derived(tracesOf().filter((t) => t.kind !== TraceKind.COUNT).slice(0, 8));
 </script>
 
-<PageHeader title="Serve" />
+<PageHeader title="Serve">
+  {#snippet meta()}
+    {#if slots.length}<span>{serving} of {slots.length} slots serving</span>{/if}
+  {/snippet}
+  <Button variant="primary" icon={Plus} href="/slots/new">New slot</Button>
+</PageHeader>
 
-<div class="flex flex-col gap-9">
-  <Guide />
+<div class="flex flex-col gap-8">
   <ActiveTasks />
 
-  <Section title="Slots" meta={slots.length ? `${serving} of ${slots.length} serving` : ''}>
-    {#snippet actions()}
-      <Button size="sm" icon={Plus} onclick={newSlot}>New slot</Button>
-    {/snippet}
-    {#if loading}
-      <div class="flex flex-col gap-1.5" aria-busy="true">
-        {#each [0, 1] as i (i)}<div class="skeleton h-16"></div>{/each}
-      </div>
-    {:else if slots.length === 0 && standalone.length === 0}
-      <Empty title={live.installs.size === 0 ? 'No runtime installed' : live.models.size === 0 ? 'Nothing in the library' : 'No slots'}>
-        {#if live.installs.size === 0}
-          <Button size="sm" variant="primary" icon={Cpu} href="/runtimes">Runtimes</Button>
-        {:else if live.models.size === 0}
-          <Button size="sm" variant="primary" icon={Compass} href="/catalog">Discover models</Button>
-        {:else}
-          <Button size="sm" variant="primary" icon={Plus} onclick={newSlot}>New slot</Button>
-        {/if}
-      </Empty>
-    {:else}
-      <div class="flex flex-col gap-1.5">
-        {#each slots as s (s.id)}
-          <SlotRow slot={s} onOpen={openSlot} />
-        {/each}
-        {#each standalone as i (i.id)}
-          <InstanceRow instance={i} onOpen={(x) => openInstance(x.id)} />
-        {/each}
-      </div>
-    {/if}
-  </Section>
+  {#if loading}
+    <div class="flex flex-col gap-2" aria-busy="true">
+      {#each [0, 1] as i (i)}<div class="skeleton h-16"></div>{/each}
+    </div>
+  {:else if slots.length === 0 && standalone.length === 0}
+    <Empty title={live.installs.size === 0 ? 'Install a runtime to start serving' : live.models.size === 0 ? 'Download a model to start serving' : 'No slots yet'}>
+      {#if live.installs.size === 0}
+        <Button variant="primary" icon={Cpu} href="/runtimes">Runtimes</Button>
+      {:else if live.models.size === 0}
+        <Button variant="primary" icon={Compass} href="/catalog">Browse catalog</Button>
+      {:else}
+        <Button variant="primary" icon={Plus} href="/slots/new">New slot</Button>
+      {/if}
+    </Empty>
+  {:else}
+    <div class="flex flex-col gap-2">
+      {#each slots as s (s.id)}
+        <SlotCard slot={s} />
+      {/each}
+      {#each standalone as i (i.id)}
+        <InstanceCard instance={i} />
+      {/each}
+    </div>
+  {/if}
 
   <Connect />
 
   <Routes />
+
+  <Section title="Recent requests">
+    {#snippet actions()}
+      <Button size="sm" variant="ghost" icon={ArrowRight} href="/requests">All requests</Button>
+    {/snippet}
+    <TraceTable traces={recent} compact onSelect={(t) => (window.location.href = `/requests?id=${t.id}`)} />
+  </Section>
 
   {#if past.length}
     <Section title="History" count={past.length}>
@@ -105,7 +92,7 @@
             <thead><tr><th>Instance</th><th>Model</th><th>State</th><th>Runtime</th><th class="num">Memory</th><th>Slot</th><th>Ended</th><th></th></tr></thead>
             <tbody>
               {#each history as i (i.id)}
-                <tr class="row-link {instSel.id === i.id ? 'row-active' : ''}" onclick={() => openInstance(i.id)}>
+                <tr class="row-link" onclick={() => (window.location.href = `/instances/${i.id}`)}>
                   <td class="font-mono text-xs text-fg">{i.name}</td>
                   <td>
                     <div class="truncate text-fg" title={i.repo}>{tail(i.repo)} <span class="font-mono text-xs text-fg-muted">{groupLabel(i)}</span></div>
@@ -114,7 +101,7 @@
                     {/if}
                   </td>
                   <td><State values={InstanceState} value={i.state} /></td>
-                  <td class="text-fg-muted">{i.runtimeId}</td>
+                  <td class="text-fg-muted">{runtimeName(i.runtimeId)}</td>
                   <td class="num text-fg-muted">{instanceMemory(i) || '–'}</td>
                   <td class="font-mono text-xs text-fg-muted">{i.slotId ? slotName(i.slotId) : '–'}</td>
                   <td class="text-fg-muted whitespace-nowrap" title={when(i.stoppedAt ?? i.createdAt)}>{ago(i.stoppedAt ?? i.createdAt, clock.now)}</td>
@@ -130,6 +117,3 @@
     </Section>
   {/if}
 </div>
-
-<SlotDrawer bind:id={slotSel.id} bind:tab={slotTab} onInstance={openInstance} />
-<InstanceDrawer bind:id={instSel.id} />

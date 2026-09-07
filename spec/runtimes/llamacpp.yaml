@@ -8,11 +8,11 @@ constraints:
 acquire:
   methods:
     - id: adopt
-      description: llama-server already on this host
+      description: Use a llama-server binary already on this host
       adopt:
         names: [llama-server]
     - id: release
-      description: A prebuilt release from ggml-org, the build for this host chosen by default
+      description: Download a release from ggml-org/llama.cpp
       prebuilt:
         releases: ggml-org/llama.cpp
         rules:
@@ -75,7 +75,7 @@ acquire:
             assets: ['^llama-b\d+-bin-win-cpu-arm64\.zip$']
             binary: llama-server.exe
     - id: source
-      description: Built from source with the backend the host selects, CUDA on an NVIDIA host with nvcc
+      description: Build from source for the devices on this host
       recipe:
         recipe_id: llamacpp
 probes:
@@ -101,75 +101,132 @@ launch:
   stop_grace_ms: 15000
 params:
   - name: n_ctx
+    label: Context length
     type: PARAM_TYPE_INT
     default: '8192'
+    unit: tokens
+    min: 256
+    step: 256
+    group: Context
     flag: --ctx-size
-    description: Context length in tokens
-  - name: n_batch
+    description: Tokens the model can hold in one conversation. Larger contexts need more cache memory.
+  - name: n_parallel
+    label: Parallel sequences
     type: PARAM_TYPE_INT
-    default: '2048'
-    flag: --batch-size
-    description: Logical batch size
-  - name: n_ubatch
-    type: PARAM_TYPE_INT
-    default: '512'
-    flag: --ubatch-size
-    description: Physical batch size
+    default: '1'
+    unit: sequences
+    min: 1
+    max: 256
+    step: 1
+    group: Context
+    flag: --parallel
+    description: Requests served at once. The context is split between them.
   - name: n_gpu_layers
+    label: GPU layers
     type: PARAM_TYPE_INT
     default: auto
     solved: true
+    unit: layers
+    min: 0
+    step: 1
+    group: Placement
     flag: --n-gpu-layers
-    description: Layers placed on device, solved when auto
+    description: Layers loaded onto the device. Auto takes the number from the memory plan.
   - name: n_cpu_moe
+    label: Expert layers on CPU
     type: PARAM_TYPE_INT
     default: auto
     solved: true
+    unit: layers
+    min: 0
+    step: 1
+    group: Placement
     flag: --n-cpu-moe
-    description: Layers whose experts stay in host memory, solved when auto
+    description: Layers whose expert weights stay in system memory. Auto takes the number from the memory plan.
+  - name: threads
+    label: CPU threads
+    type: PARAM_TYPE_INT
+    default: '-1'
+    unit: threads
+    min: -1
+    step: 1
+    group: Placement
+    advanced: true
+    flag: --threads
+    description: Threads for layers on the CPU. -1 picks a number from the core count.
   - name: cache_type_k
+    label: Key cache type
     type: PARAM_TYPE_STRING
     default: f16
     choices: [f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0]
+    group: Cache
     flag: --cache-type-k
-    description: Key cache element type
+    description: Element type of the key cache. Quantized types use less memory.
   - name: cache_type_v
+    label: Value cache type
     type: PARAM_TYPE_STRING
     default: f16
     choices: [f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0]
+    group: Cache
     flag: --cache-type-v
-    description: Value cache element type
+    description: Element type of the value cache. Quantized types need flash attention on.
   - name: flash_attn
+    label: Flash attention
     type: PARAM_TYPE_STRING
     default: auto
     choices: [auto, 'on', 'off']
+    group: Cache
     flag: --flash-attn
-    description: Flash attention mode
-  - name: n_parallel
+    description: Fused attention kernels. Auto turns it on where the device supports it.
+  - name: n_batch
+    label: Batch size
     type: PARAM_TYPE_INT
-    default: '1'
-    flag: --parallel
-    description: Concurrent sequences sharing the context
-  - name: threads
+    default: '2048'
+    unit: tokens
+    min: 32
+    step: 32
+    group: Batching
+    advanced: true
+    flag: --batch-size
+    description: Prompt tokens processed per step.
+  - name: n_ubatch
+    label: Micro-batch size
     type: PARAM_TYPE_INT
-    default: '-1'
-    flag: --threads
-    description: CPU threads, negative for automatic
-  - name: mmproj
-    type: PARAM_TYPE_STRING
-    default: '{{index .artifacts "projector"}}'
-    flag: --mmproj
-    description: Multimodal projector, taken from the stored model when present
+    default: '512'
+    unit: tokens
+    min: 32
+    step: 32
+    group: Batching
+    advanced: true
+    flag: --ubatch-size
+    description: Tokens per compute pass. Smaller values need less compute memory.
   - name: alias
+    label: Served name
     type: PARAM_TYPE_STRING
     default: '{{.name}}'
+    group: Identity
     flag: --alias
-    description: Model name reported in responses, the instance name by default
+    description: Model name the runtime reports. Defaults to the instance name.
+  - name: mmproj
+    label: Projector file
+    type: PARAM_TYPE_STRING
+    default: '{{index .artifacts "projector"}}'
+    group: Identity
+    advanced: true
+    flag: --mmproj
+    description: Multimodal projector to load. Defaults to the one stored with the model.
   - name: log_verbosity
+    label: Log level
     type: PARAM_TYPE_INT
     default: '4'
+    min: 0
+    max: 5
+    step: 1
+    group: Diagnostics
+    advanced: true
     flag: --log-verbosity
-    description: Log threshold, 4 prints the allocation lines the report rules read, 3 is the runtime default
+    description: 4 logs the memory allocation lines calibration reads. 3 is the runtime default.
+
 estimate:
   groups:
     - kind: TENSOR_GROUP_KIND_EMBEDDING

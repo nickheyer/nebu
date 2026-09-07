@@ -69,12 +69,19 @@
   --shadow-lift: 0 1px 0 0 oklch(0.2 0.01 250) inset;
 }
 
-/* Small caps labels above sections and table columns */
+/* Small caps labels above table columns and stat tiles */
 @utility caps {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+/* A raised panel with a border, the one container cards, forms, and panes share */
+@utility card {
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-line);
+  background: var(--color-surface);
 }
 
 @layer base {
@@ -131,17 +138,31 @@
   /* Text fields */
   .input {
     @apply h-8 w-full rounded-md border border-line bg-sunken px-2.5 text-sm text-fg placeholder:text-fg-faint;
+    @apply h-9 px-3;
     @apply transition-colors hover:border-line-strong focus:border-accent focus:outline-none;
     @apply disabled:cursor-not-allowed disabled:opacity-50;
   }
+  .input-sm {
+    @apply h-8 px-2.5;
+  }
   textarea.input {
-    @apply h-auto py-1.5 leading-6;
+    @apply h-auto py-2 leading-6;
   }
   .input[aria-invalid="true"] {
     @apply border-bad;
   }
   .input-static {
-    @apply flex h-8 w-full items-center rounded-md border border-line/60 bg-transparent px-2.5 text-sm text-fg-muted;
+    @apply flex h-9 w-full items-center rounded-md border border-line/60 bg-transparent px-3 text-sm text-fg-muted;
+  }
+  /* Number fields drop the spinner, the step buttons are drawn beside the unit */
+  input[type="number"].input {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+  input[type="number"].input::-webkit-outer-spin-button,
+  input[type="number"].input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
   }
 
   /* The one checkbox, a box that fills with the accent when on */
@@ -228,12 +249,35 @@
     @apply overflow-x-auto rounded-md border border-line bg-sunken p-3 font-mono text-xs leading-5 text-fg-muted;
   }
 
-  /* One raised row in a list of objects, such as a slot */
-  .bay {
-    @apply relative rounded-md bg-surface transition-colors;
+  /* A card that opens something when clicked */
+  .card-link {
+    @apply transition-colors;
   }
-  .bay:hover {
-    background: color-mix(in oklch, var(--color-raised) 55%, var(--color-surface));
+  .card-link:hover {
+    border-color: var(--color-line-strong);
+    background: color-mix(in oklch, var(--color-raised) 40%, var(--color-surface));
+  }
+
+  /* A row of stats, each a label over a number */
+  .stat {
+    @apply flex flex-col gap-0.5;
+  }
+  .stat dt {
+    @apply caps text-fg-faint;
+  }
+  .stat dd {
+    @apply text-sm tabular-nums text-fg;
+  }
+
+  /* A monospace value with a faint label before it */
+  .kv {
+    @apply inline-flex items-baseline gap-1.5 text-xs;
+  }
+  .kv > span:first-child {
+    @apply text-fg-faint;
+  }
+  .kv > span:last-child {
+    @apply font-mono text-fg-muted;
   }
 }
 

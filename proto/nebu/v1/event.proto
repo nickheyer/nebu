@@ -32,6 +32,8 @@ enum EventKind {
   EVENT_KIND_STORE = 14;
   // Host wide preferences, after a change
   EVENT_KIND_SETTINGS = 15;
+  // One request through the gateway, when it starts and when it ends, bodies left out
+  EVENT_KIND_TRACE = 16;
 }
 
 // How it changed
@@ -62,6 +64,7 @@ message Event {
     Source source = 20;
     StoreStatus store = 23;
     Settings settings = 24;
+    Trace trace = 25;
   }
 }
 

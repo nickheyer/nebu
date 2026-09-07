@@ -3,8 +3,8 @@
   import { page } from '$app/state';
   import { replaceState } from '$app/navigation';
   import { api } from '$lib/api';
-  import { live, cached, clock, modelKey, instanceLive, sourceName, taskFor, storeMount } from '$lib/state.svelte';
-  import { runModel } from '$lib/slotActions.svelte';
+  import { live, cached, clock, modelKey, instanceLive, sourceName, taskFor, storeMount, orderedSlots } from '$lib/state.svelte';
+  import { runModel } from '$lib/actions.svelte';
   import { launch, slotOccupied } from '$lib/launch';
   import { ago, byName, storage, params as fmtParams, plural, tail, when } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
@@ -24,6 +24,7 @@
   import SortTh from '$lib/components/ui/SortTh.svelte';
   import SkeletonRows from '$lib/components/ui/SkeletonRows.svelte';
   import TaskChip from '$lib/components/TaskChip.svelte';
+  import TextInput from '$lib/components/ui/TextInput.svelte';
   import ModelsNav from '$lib/components/ModelsNav.svelte';
   import ModelDrawer from '$lib/components/ModelDrawer.svelte';
   import { TableSort } from '$lib/sort.svelte';
@@ -43,7 +44,7 @@
 
   const sourceIds = $derived([...new Set([...live.models.values()].map((m) => m.sourceId))].sort());
   const several = $derived(sourceIds.length > 1);
-  const slots = $derived([...live.slots.values()].sort(byName((s) => s.name)));
+  const slots = $derived(orderedSlots());
   // Eviction takes the model used longest ago, a model never run counting from its pull
   const usedAt = (m: StoredModel) => m.usedAt ?? m.pulledAt;
   const models = $derived(
@@ -82,7 +83,7 @@
     if (status?.maxBytes) parts.push(`${storage(status.maxBytes, 0)} cap`);
     else if (mount) parts.push(`${storage(mount.freeBytes)} free on ${mount.path}`);
     if (shared) parts.push(`${storage(shared)} shared`);
-    if (status?.partials) parts.push(`${plural(status.partials, 'partial pull')} holding ${storage(status.partialBytes)}`);
+    if (status?.partials) parts.push(`${plural(status.partials, 'unfinished download')} using ${storage(status.partialBytes)}`);
     return parts;
   });
   // Store wide work under way, verifying or exporting everything
@@ -113,7 +114,7 @@
   });
 
   async function remove(m: StoredModel) {
-    const yes = await confirm({ title: `Remove ${tail(m.repo)} ${weightsName(m.group, m.formatId)}?`, message: 'Blobs nothing else references are deleted.', action: 'Remove', tone: 'bad' });
+    const yes = await confirm({ title: `Remove ${tail(m.repo)} ${weightsName(m.group, m.formatId)}?`, message: 'Files not shared with another variant are deleted from disk.', action: 'Remove', tone: 'bad' });
     if (!yes) return;
     try {
       const r = await api.store.removeModel({ sourceId: m.sourceId, repo: m.repo, group: m.group, gc: true });
@@ -127,7 +128,7 @@
   async function clean() {
     try {
       const r = await api.store.gc({ partials: true });
-      ok(`Freed ${storage(r.freedBytes)}`, r.removed ? plural(r.removed, 'file') + ' removed' : 'nothing to remove');
+      ok(`Freed ${storage(r.freedBytes)}`, r.removed ? plural(r.removed, 'file') + ' removed' : 'Nothing to remove');
     } catch (err) {
       fail(err, 'Clean failed');
     }
@@ -136,7 +137,7 @@
   async function verify(m?: StoredModel) {
     try {
       const r = await api.store.verify(m ? { sourceId: m.sourceId, repo: m.repo, group: m.group } : {});
-      ok(m ? `Verifying ${tail(m.repo)}` : 'Verifying the store', undefined, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
+      ok(m ? `Verifying ${tail(m.repo)}` : 'Verifying every model', undefined, r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
     } catch (err) {
       fail(err, 'Verify refused');
     }
@@ -146,7 +147,7 @@
     exporting = true;
     try {
       const r = await api.store.export({ dir: exportDir.trim() });
-      ok('Exporting the store', exportDir.trim(), r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
+      ok('Exporting every model', exportDir.trim(), r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
       exportOpen = false;
     } catch (err) {
       fail(err, 'Export refused');
@@ -158,8 +159,8 @@
   // Quick targets beside the run panel: one click into any slot
   function runItems(m: StoredModel) {
     return [
-      ...slots.map((s) => ({ label: slotOccupied(s.id) ? `Swap into ${s.name}` : `Run in ${s.name}`, icon: slotOccupied(s.id) ? ArrowLeftRight : Play, detail: slotOccupied(s.id) ? `replaces ${tail(s.request?.repo ?? '')}` : 'empty', onSelect: () => launch({ sourceId: m.sourceId, repo: m.repo, group: m.group, slotId: s.id }) })),
-      { label: 'Run with options', icon: SlidersHorizontal, onSelect: () => runModel(m) },
+      ...slots.map((s) => ({ label: slotOccupied(s.id) ? `Swap into ${s.position}. ${s.name}` : `Run in ${s.position}. ${s.name}`, icon: slotOccupied(s.id) ? ArrowLeftRight : Play, detail: slotOccupied(s.id) ? `replaces ${tail(s.request?.repo ?? '')}` : 'empty', onSelect: () => launch({ sourceId: m.sourceId, repo: m.repo, group: m.group, slotId: s.id }) })),
+      { label: 'Run with options…', icon: SlidersHorizontal, onSelect: () => runModel(m) },
       { label: '', separator: true },
       { label: 'Verify', icon: ShieldCheck, onSelect: () => verify(m) },
       { label: 'Remove', icon: Trash2, tone: 'bad' as const, onSelect: () => remove(m), disabled: servingAs(m).length > 0 }
@@ -189,7 +190,7 @@
 </PageHeader>
 
 <div class="flex flex-col gap-9">
-  <Section title="Store" meta={status?.path ?? ''}>
+  <Section title="Disk" meta={status?.path ?? ''}>
     {#snippet actions()}
       {#if storeTask}<TaskChip task={storeTask} />{/if}
       <Button size="sm" icon={ShieldCheck} disabled={!live.models.size || !!storeTask} onclick={() => verify()}>Verify</Button>
@@ -219,8 +220,8 @@
           if (exportDir.trim()) exportAll();
         }}
       >
-        <span class="text-sm text-fg-muted">Export every model as a mirror another nebu can pull from</span>
-        <input class="input min-w-64 flex-1 font-mono" bind:value={exportDir} placeholder="/mnt/mirror" aria-label="Export directory" autocomplete="off" spellcheck="false" />
+        <span class="text-sm text-fg-muted">Copy every model into a directory another nebu can use as a mirror source.</span>
+        <TextInput class="min-w-64 flex-1" mono bind:value={exportDir} empty="/path/to/mirror" aria-label="Export directory" />
         <Button type="submit" variant="primary" icon={FolderOutput} loading={exporting} disabled={!exportDir.trim()}>Export</Button>
         <Button variant="ghost" icon={X} aria-label="Cancel" onclick={() => (exportOpen = false)} />
       </form>
@@ -232,7 +233,7 @@
       {#if several}
         <Select size="sm" class="w-40" bind:value={sourceFilter} label="Source" items={[{ value: '', label: 'All sources' }, ...sourceIds.map((id) => ({ value: id, label: sourceName(id) }))]} />
       {/if}
-      <SearchInput class="w-64" bind:value={filter} placeholder="Filter" />
+      <SearchInput class="w-64" bind:value={filter} empty="Filter" />
     {/snippet}
     {#if loading}
       <table class="tbl">
@@ -240,11 +241,11 @@
         <tbody><SkeletonRows rows={3} cols={[{ w: 'w-56', sub: true }, 'w-12', { w: 'w-10', num: true }, { w: 'w-14', num: true }, 'w-14', 'w-14', { w: 'w-20', num: true }]} /></tbody>
       </table>
     {:else if live.models.size === 0}
-      <Empty icon={Boxes} title="Nothing in the library">
-        <Button variant="primary" icon={Compass} href="/catalog">Discover models</Button>
+      <Empty icon={Boxes} title="No models downloaded yet">
+        <Button variant="primary" icon={Compass} href="/catalog">Browse catalog</Button>
       </Empty>
     {:else if models.length === 0}
-      <Empty compact title="Nothing matches" />
+      <Empty compact title="No models match" />
     {:else}
       <div class="overflow-x-auto">
         <table class="tbl">
@@ -258,7 +259,7 @@
                 <td>
                   <div class="flex items-center gap-3">
                     <span class="text-fg">{m.repo}</span>
-                    {#each serving as name (name)}<State tone="ok" label="serving as {name}" />{/each}
+                    {#each serving as name (name)}<State tone="ok" label="Serving as {name}" />{/each}
                   </div>
                   <div class="font-mono text-xs text-fg-muted">{weightsName(m.group, m.formatId)}{#if m.descriptor?.architecture}<span class="font-sans">{' · '}{m.descriptor.architecture}</span>{/if}</div>
                 </td>

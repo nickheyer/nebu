@@ -241,3 +241,63 @@ export function middle(text: string, max = 40): string {
 export function tail(text: string): string {
   return text.split('/').filter(Boolean).pop() || text;
 }
+
+// Milliseconds between two timestamps, undefined when either is missing
+export function millisBetween(from?: Timestamp, to?: Timestamp): number | undefined {
+  if (!from || !to) return undefined;
+  return timestampDate(to).getTime() - timestampDate(from).getTime();
+}
+
+// Formats a span in milliseconds, seconds past one second
+export function ms(n: number | undefined): string {
+  if (n === undefined || n === null || Number.isNaN(n)) return '–';
+  if (n < 1000) return `${Math.round(n)} ms`;
+  if (n < 60000) return `${(n / 1000).toFixed(n < 10000 ? 2 : 1)} s`;
+  return `${Math.floor(n / 60000)}m ${Math.round((n % 60000) / 1000)}s`;
+}
+
+// Tokens per second from a count and a span in milliseconds, nothing for a span too short to mean anything
+export function rate(tokens: number | undefined, millis: number | undefined): string {
+  if (!tokens || !millis || millis < 50) return '–';
+  return `${(tokens / (millis / 1000)).toFixed(1)} tok/s`;
+}
+
+// Bytes as a whole number of GiB for a field, empty for zero
+export function gib(n: bigint | number | undefined): string {
+  if (!n) return '';
+  const v = Number(n) / 1024 ** 3;
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, '');
+}
+
+// A GiB figure typed in a field back to bytes, zero for blank or malformed
+export function fromGib(text: string): bigint {
+  const v = parseFloat(text);
+  if (!Number.isFinite(v) || v <= 0) return 0n;
+  return BigInt(Math.round(v * 1024 ** 3));
+}
+
+// Lays a command out one flag per line, a flag and its value together
+export function commandLines(argv: string[]): string {
+  if (argv.length === 0) return '';
+  const lines: string[] = [argv[0]];
+  for (let i = 1; i < argv.length; i++) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+    if (arg.startsWith('-') && next !== undefined && !/^-[A-Za-z]/.test(next)) {
+      lines.push(`${arg} ${next}`);
+      i++;
+    } else {
+      lines.push(arg);
+    }
+  }
+  return lines.join(' \\\n  ');
+}
+
+// Pretty prints JSON text, returning it untouched when it is not JSON
+export function prettyJson(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}

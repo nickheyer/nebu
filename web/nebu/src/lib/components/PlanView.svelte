@@ -40,8 +40,8 @@
   <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs tabular-nums text-fg-faint">
     <span>weights <span class="text-fg-muted">{bytes(plan.weightsBytes)}</span></span>
     <span>cache <span class="text-fg-muted">{bytes(plan.cacheBytes)}</span></span>
-    <span>overhead <span class="text-fg-muted">{bytes(plan.overheadBytes)}</span>{#if plan.overheadDelta}<span title="Learned from earlier runs of this runtime"> ({deltaBytes(plan.overheadDelta)} learned)</span>{/if}</span>
-    {#if onDisk > 0n}<span title="Weights the runtime leaves on disk under these params">on disk <span class="text-fg-muted">{bytes(onDisk)}</span></span>{/if}
+    <span>overhead <span class="text-fg-muted">{bytes(plan.overheadBytes)}</span>{#if plan.overheadDelta}<span title="Correction learned from measured runs"> ({deltaBytes(plan.overheadDelta)} learned)</span>{/if}</span>
+    {#if onDisk > 0n}<span title="Weights not loaded with these parameters">on disk <span class="text-fg-muted">{bytes(onDisk)}</span></span>{/if}
   </div>
   {#each plan.pools as pool, i (pool.poolId + i)}
     {@const parts = placed(sides[i])}
@@ -57,7 +57,7 @@
             segments={weights
               ? [
                   { label: 'weights', value: weights, tone: over ? 'bad' : 'accent' },
-                  { label: 'cache + overhead', value: rest, tone: over ? 'bad' : 'info' }
+                  { label: 'cache and overhead', value: rest, tone: over ? 'bad' : 'info' }
                 ]
               : [{ label: 'used', value: pool.usedBytes, tone: over ? 'bad' : 'accent' }]}
           />
@@ -79,7 +79,7 @@
       {#each plan.skipped as part (part.kind)}
         <span>{kindWord(part)} <span class="text-fg-muted">{bytes(part.bytes)}</span></span>
       {/each}
-      <span>not loaded under these params</span>
+      <span>not loaded with these parameters</span>
     </div>
   {/if}
   {#if params && !compact && Object.keys(solved).length}

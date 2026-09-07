@@ -227,6 +227,7 @@ CREATE TABLE build_patches (
 CREATE TABLE slots (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
+  position INTEGER NOT NULL DEFAULT 0,
   description TEXT NOT NULL DEFAULT '',
   runtime_id TEXT NOT NULL DEFAULT '',
   memory_bytes INTEGER NOT NULL DEFAULT 0,

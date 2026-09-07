@@ -87,7 +87,8 @@ func commands() []command {
 			{name: "create", summary: "create a slot", run: runSlotsCreate},
 			{name: "show", summary: "show a slot and its occupant", run: runSlotsShow},
 			{name: "update", summary: "change slot settings", run: runSlotsUpdate},
-			{name: "evict", summary: "stop the occupant, keep the slot", run: runSlotsEvict},
+			{name: "evict", summary: "stop the occupant and forget its model, keep the slot", run: runSlotsEvict},
+			{name: "relaunch", summary: "run the slot's model again after a failure", run: runSlotsRelaunch},
 			{name: "remove", summary: "delete a slot", run: runSlotsRemove},
 		}},
 		{name: "routes", summary: "public names the gateway answers for", run: runRoutesList, sub: []command{
@@ -95,7 +96,11 @@ func commands() []command {
 			{name: "add", summary: "alias a name onto a running instance", run: runRoutesAdd},
 			{name: "remove", summary: "remove an alias", run: runRoutesRemove},
 		}},
-		{name: "gateway", summary: "gateway listeners, routes, and counters", run: runGateway},
+		{name: "gateway", summary: "gateway listeners, routes, counters, and recent requests", run: runGateway, sub: []command{
+			{name: "status", summary: "show listeners, routes, and counters", run: runGateway},
+			{name: "traces", summary: "list recent requests through the gateway", run: runGatewayTraces},
+			{name: "trace", summary: "show one request with its bodies", run: runGatewayTrace},
+		}},
 		{name: "chat", summary: "talk to a running model through the gateway", run: runChat},
 		{name: "events", summary: "stream daemon events as JSON lines", run: runEvents},
 		{name: "ps", summary: "list running instances", run: runPs},

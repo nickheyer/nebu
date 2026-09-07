@@ -8,7 +8,7 @@ constraints:
 acquire:
   methods:
     - id: source
-      description: Installed from PyPI into a virtual environment
+      description: Install from PyPI into a virtual environment
       recipe:
         recipe_id: sglang
 probes:
@@ -30,62 +30,103 @@ launch:
   stop_grace_ms: 30000
 params:
   - name: n_ctx
+    label: Context length
     type: PARAM_TYPE_INT
     default: '8192'
+    unit: tokens
+    min: 256
+    step: 256
+    group: Context
     flag: --context-length
-    description: Context length in tokens
+    description: Tokens the model can hold in one conversation.
+  - name: chunked_prefill_size
+    label: Chunked prefill
+    type: PARAM_TYPE_INT
+    default: '8192'
+    unit: tokens
+    min: -1
+    step: 512
+    group: Context
+    advanced: true
+    flag: --chunked-prefill-size
+    description: Prompt tokens prefilled per step. Smaller values need less memory. -1 turns chunking off.
   - name: mem_fraction_static
+    label: Static memory fraction
     type: PARAM_TYPE_FLOAT
     default: '0.88'
+    min: 0.05
+    max: 1
+    step: 0.01
+    group: Memory
     flag: --mem-fraction-static
-    description: Fraction of device memory for weights and the cache pool
+    description: Share of each device reserved for weights and the cache pool.
   - name: kv_cache_dtype
+    label: KV cache type
     type: PARAM_TYPE_STRING
     default: auto
     choices: [auto, fp8_e5m2, fp8_e4m3]
+    group: Memory
     flag: --kv-cache-dtype
-    description: Cache element type
+    description: Element type of the cache. FP8 halves cache memory.
   - name: tp_size
+    label: Tensor parallel
     type: PARAM_TYPE_INT
     default: '1'
+    unit: devices
+    min: 1
+    step: 1
+    group: Parallelism
     flag: --tp-size
-    description: Devices to shard across
-  - name: chunked_prefill_size
-    type: PARAM_TYPE_INT
-    default: '8192'
-    flag: --chunked-prefill-size
-    description: Prompt tokens prefilled per step, smaller uses less memory
+    description: Devices each layer is sharded across.
   - name: served_model_name
+    label: Served name
     type: PARAM_TYPE_STRING
     default: '{{.name}}'
+    group: Identity
     flag: --served-model-name
-    description: Model name reported in responses, the instance name by default
-  # Speculative decoding, the prediction heads a checkpoint ships loading only once a method names them
+    description: Model name the runtime reports. Defaults to the instance name.
   - name: speculative_algorithm
+    label: Draft method
     type: PARAM_TYPE_STRING
     default: ''
+    choices: ['', NEXTN, EAGLE, EAGLE3]
+    group: Speculative decoding
+    advanced: true
     flag: --speculative-algorithm
-    description: Draft method, NEXTN for the prediction heads a checkpoint ships, EAGLE or EAGLE3 with a draft model; empty leaves them on disk
+    description: NEXTN uses the prediction heads shipped with the checkpoint. EAGLE methods need a draft model.
   - name: speculative_draft_model_path
+    label: Draft model
     type: PARAM_TYPE_STRING
     default: ''
+    group: Speculative decoding
+    advanced: true
     flag: --speculative-draft-model-path
-    description: Draft model for EAGLE methods
+    description: Path of the draft model for EAGLE methods.
   - name: speculative_num_steps
+    label: Draft steps
     type: PARAM_TYPE_STRING
     default: ''
+    group: Speculative decoding
+    advanced: true
     flag: --speculative-num-steps
-    description: Draft steps per verify, left to the runtime when empty
+    description: Draft steps per verify. Empty uses the runtime default.
   - name: speculative_eagle_topk
+    label: Draft branches
     type: PARAM_TYPE_STRING
     default: ''
+    group: Speculative decoding
+    advanced: true
     flag: --speculative-eagle-topk
-    description: Branches kept per draft step, left to the runtime when empty
+    description: Branches kept per draft step. Empty uses the runtime default.
   - name: speculative_num_draft_tokens
+    label: Draft tokens
     type: PARAM_TYPE_STRING
     default: ''
+    group: Speculative decoding
+    advanced: true
     flag: --speculative-num-draft-tokens
-    description: Draft tokens verified per step, left to the runtime when empty
+    description: Draft tokens verified per step. Empty uses the runtime default.
+
 estimate:
   groups:
     - kind: TENSOR_GROUP_KIND_EMBEDDING

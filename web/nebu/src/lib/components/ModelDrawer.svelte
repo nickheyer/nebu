@@ -2,8 +2,8 @@
   import { untrack } from 'svelte';
   import { Code } from '@connectrpc/connect';
   import { api, code, message } from '$lib/api';
-  import { live, clock, taskFor, modelKey, hostName, runtimeName, instanceLive, installsOf, storeMount, poolName } from '$lib/state.svelte';
-  import { runModel } from '$lib/slotActions.svelte';
+  import { live, clock, taskFor, modelKey, hostName, runtimeName, instanceLive, installsOf, storeMount, poolName, orderedSlots } from '$lib/state.svelte';
+  import { runModel } from '$lib/actions.svelte';
   import { ago, ratioBytes, ratioStorage, storage, count, params as fmtParams, enumLabel, byName, ctx as fmtCtx } from '$lib/format';
   import { readLocal, writeLocal } from '$lib/persist';
   import { fail, ok } from '$lib/toast.svelte';
@@ -32,6 +32,7 @@
   import PlanView from './PlanView.svelte';
   import ModelFiles from './ModelFiles.svelte';
   import TaskChip from './TaskChip.svelte';
+  import TextInput from './ui/TextInput.svelte';
 
   // One repository: whether its weights run on this host and fit on its disk, what is stored of it, its card, and its files
   let {
@@ -81,7 +82,7 @@
   const author = $derived(hit?.author || (curRepo.includes('/') ? curRepo.slice(0, curRepo.indexOf('/')) : ''));
   const rest = $derived(author && curRepo.startsWith(author + '/') ? curRepo.slice(author.length + 1) : curRepo);
   const authorHref = $derived(author && caps?.facets.some((f) => f.id === 'author') ? `/catalog?source=${encodeURIComponent(sourceId)}&f.author=${encodeURIComponent(author)}` : '');
-  const slots = $derived([...live.slots.values()].sort(byName((s) => s.name)));
+  const slots = $derived(orderedSlots());
   const installed = (id: string) => installsOf(id).length > 0;
   // The runtime the table is read on: the pick, else the first with an install, else the first planned
   let pickedRuntime = $state('');
@@ -115,7 +116,7 @@
   const storedPaths = $derived(new Set(storedGroups.flatMap((m) => m.artifacts.map((a) => a.artifact?.path ?? ''))));
   const tabs = $derived([
     { id: 'weights', label: 'Weights' },
-    ...(storedGroups.length ? [{ id: 'stored', label: 'Stored', count: storedGroups.length }] : []),
+    ...(storedGroups.length ? [{ id: 'stored', label: 'Downloaded', count: storedGroups.length }] : []),
     ...(caps?.card ? [{ id: 'card', label: 'Card' }] : []),
     { id: 'files', label: 'Files', count: model ? model.artifacts.length : undefined }
   ]);
@@ -255,9 +256,9 @@
     if (!model) return;
     try {
       const r = await api.store.pull({ sourceId, repo: model.repo, revision: model.revision, group: d.group });
-      ok(`Pulling ${model.repo}`, names[d.group], r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
+      ok(`Downloading ${model.repo}`, names[d.group], r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
     } catch (err) {
-      fail(err, 'Pull refused');
+      fail(err, 'Download refused');
     }
   }
   function storedModel(group: string) {
@@ -273,7 +274,7 @@
   async function verify(m: StoredModel) {
     try {
       const r = await api.store.verify({ sourceId: m.sourceId, repo: m.repo, group: m.group });
-      ok(`Verifying ${weightsName(m.group, m.formatId)}`, undefined, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
+      ok(`Verifying ${weightsName(m.group, m.formatId)}`, undefined, r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
     } catch (err) {
       fail(err, 'Verify refused');
     }
@@ -282,7 +283,7 @@
     exporting = m.group;
     try {
       const r = await api.store.export({ sourceId: m.sourceId, repo: m.repo, group: m.group, dir: exportDir.trim() });
-      ok(`Exporting ${weightsName(m.group, m.formatId)}`, exportDir.trim(), r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
+      ok(`Exporting ${weightsName(m.group, m.formatId)}`, exportDir.trim(), r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
     } catch (err) {
       fail(err, 'Export refused');
     } finally {
@@ -290,7 +291,7 @@
     }
   }
   async function remove(m: StoredModel) {
-    const yes = await confirm({ title: `Remove ${weightsName(m.group, m.formatId)}?`, message: 'Blobs nothing else references are deleted.', action: 'Remove', tone: 'bad' });
+    const yes = await confirm({ title: `Remove ${weightsName(m.group, m.formatId)}?`, message: 'Files not shared with another variant are deleted from disk.', action: 'Remove', tone: 'bad' });
     if (!yes) return;
     try {
       const r = await api.store.removeModel({ sourceId: m.sourceId, repo: m.repo, group: m.group, gc: true });
@@ -304,7 +305,7 @@
 
 <Drawer bind:open mono title={curRepo || 'Model'}>
   {#snippet heading()}
-    {#if author}{#if authorHref}<a href={authorHref} class="text-fg-muted transition-colors hover:text-fg" title="Every {author} model on {siteName}">{author}</a>{:else}<span class="text-fg-muted">{author}</span>{/if}<span class="text-fg-muted">/</span>{/if}{#if pageUrl}<a href={pageUrl} target="_blank" rel="noopener noreferrer" class="group transition-colors hover:text-accent">{rest}<span class="ml-2 font-sans text-xs font-normal text-fg-faint opacity-0 transition-opacity group-hover:opacity-100">view on {siteName}</span></a>{:else}{rest}{/if}
+    {#if author}{#if authorHref}<a href={authorHref} class="text-fg-muted transition-colors hover:text-fg" title="All models by {author} on {siteName}">{author}</a>{:else}<span class="text-fg-muted">{author}</span>{/if}<span class="text-fg-muted">/</span>{/if}{#if pageUrl}<a href={pageUrl} target="_blank" rel="noopener noreferrer" class="group transition-colors hover:text-accent">{rest}<span class="ml-2 font-sans text-xs font-normal text-fg-faint opacity-0 transition-opacity group-hover:opacity-100">open on {siteName}</span></a>{:else}{rest}{/if}
   {/snippet}
   {#snippet header()}
     <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-fg-muted">
@@ -346,8 +347,8 @@
     {#if shownTab === 'weights'}
       {#if gated}
         <Empty icon={Lock} title="Gated on {siteName}">
-          {#if pageUrl}<Button size="sm" href={pageUrl} icon={ExternalLink}>Accept the license</Button>{/if}
-          <span class="text-xs text-fg-faint">then set {caps?.tokenEnv || 'a token'} for the daemon</span>
+          {#if pageUrl}<Button size="sm" href={pageUrl} icon={ExternalLink}>Accept the license on {siteName}</Button>{/if}
+          <span class="text-xs text-fg-faint">Then set {caps?.tokenEnv || 'a token'} for the daemon.</span>
         </Empty>
       {:else if inspecting && !inspect}
         <table class="tbl" aria-busy="true">
@@ -362,11 +363,11 @@
         <div class="flex flex-col gap-6">
           {#if noRuntime}
             <div class="note note-warn flex flex-wrap items-center gap-3">
-              <span class="flex-1">No runtime installed for {formatIds.join(', ')}. Weights can be pulled, not run, until one is.</span>
-              <Button size="sm" href="/runtimes" icon={Download}>Install {runtimeName(runtime)}</Button>
+              <span class="flex-1">No installed runtime reads {formatIds.join(', ')}. You can download the weights now and run them once one is installed.</span>
+              <Button size="sm" href="/runtimes/{runtime}?tab=install" icon={Download}>Install {runtimeName(runtime)}</Button>
             </div>
           {:else if ordered.length && !planRuntimes.length}
-            <div class="note note-warn">No runtime serves {formatIds.join(', ')}.</div>
+            <div class="note note-warn">No runtime reads {formatIds.join(', ')}.</div>
           {/if}
           {#if ordered.length}
             {#if contexts.length > 1 || planRuntimes.length > 1 || slots.length}
@@ -375,7 +376,7 @@
                   <span class="inline-flex items-center gap-2">
                     <span>Context</span>
                     <Segmented size="sm" tabs={contexts.map((c) => ({ id: String(c), label: fmtCtx(c) }))} bind:value={() => String(context), (v) => pickContext(Number(v))} />
-                    {#if atLimit}<span>{fmtCtx(limit)} is the model's limit</span>{/if}
+                    {#if atLimit}<span>{fmtCtx(limit)} is the model's maximum</span>{/if}
                   </span>
                 {/if}
                 {#if planRuntimes.length > 1}
@@ -386,9 +387,9 @@
                 {/if}
                 {#if slots.length}
                   <span class="inline-flex items-center gap-2">
-                    <span>Slot</span>
-                    <Segmented size="sm" bind:value={slotId} tabs={[{ id: '', label: hostName() || 'host' }, ...slots.map((s) => ({ id: s.id, label: s.name }))]} />
-                    {#if inspecting}<span>planning</span>{/if}
+                    <span>Fit in</span>
+                    <Segmented size="sm" bind:value={slotId} tabs={[{ id: '', label: hostName() || 'Whole host' }, ...slots.map((s) => ({ id: s.id, label: s.name }))]} />
+                    {#if inspecting}<span>planning…</span>{/if}
                   </span>
                 {/if}
               </div>
@@ -414,7 +415,7 @@
                             <span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{precisionShort(p)}</span>
                           </Tip>
                         {/if}
-                        {#if best}<Tip text="The largest that fits in device memory"><Check size={13} class="text-ok" /></Tip>{/if}
+                        {#if best}<Tip text="Largest variant that fits in device memory"><Check size={13} class="text-ok" /></Tip>{/if}
                       </div>
                     </td>
                     <td class="w-full min-w-[10rem]">
@@ -446,11 +447,11 @@
                         onclick={(e) => e.stopPropagation()}
                       >
                         {#if task}
-                          <TaskChip {task} label="Pulling" />
+                          <TaskChip {task} label="Downloading" />
                         {:else if stored}
                           <Button size="sm" variant={best ? 'primary' : 'secondary'} icon={Play} onclick={() => runModel(stored)}>Run</Button>
                         {:else}
-                          <Button size="sm" variant={best ? 'primary' : 'ghost'} icon={Download} onclick={() => pull(d)}>Pull</Button>
+                          <Button size="sm" variant={best ? 'primary' : 'ghost'} icon={Download} onclick={() => pull(d)}>Download</Button>
                         {/if}
                       </span>
                     </td>
@@ -466,13 +467,13 @@
               </tbody>
             </table>
           {:else}
-            <Empty compact icon={Files} title="No weights {siteName} lists at this {revLabel}">
+            <Empty compact icon={Files} title="No weight files at this {revLabel}">
               <Button size="sm" onclick={() => (tab = 'files')}>Files</Button>
             </Empty>
           {/if}
 
           {#if inspect.warnings.length}
-            <Disclosure label="Warnings" summary={String(inspect.warnings.length)} tone="warn" bind:open={showWarnings}>
+            <Disclosure label="Warnings" summary={`${inspect.warnings.length}`} tone="warn" bind:open={showWarnings}>
               <ul class="list-disc pl-5 text-sm leading-6 text-fg-muted">
                 {#each inspect.warnings as w, i (i)}<li>{w}</li>{/each}
               </ul>
@@ -488,8 +489,8 @@
           <div class="flex flex-col gap-4 rounded-md border border-line p-4">
             <div class="flex flex-wrap items-center gap-3">
               <span class="font-mono text-sm text-fg">{weightsName(m.group, m.formatId)}</span>
-              <span class="text-xs text-fg-faint">{storage(m.bytes)} · pulled {ago(m.pulledAt, clock.now)}{m.usedAt ? ` · last run ${ago(m.usedAt, clock.now)}` : ''}</span>
-              {#each serving as name (name)}<State tone="ok" label="serving as {name}" />{/each}
+              <span class="text-xs text-fg-faint">{storage(m.bytes)} · downloaded {ago(m.pulledAt, clock.now)}{m.usedAt ? ` · last run ${ago(m.usedAt, clock.now)}` : ''}</span>
+              {#each serving as name (name)}<State tone="ok" label="Serving as {name}" />{/each}
               {#if task}<TaskChip {task} />{/if}
               <span class="ml-auto flex items-center gap-1">
                 <Button size="sm" variant="primary" icon={Play} onclick={() => runModel(m)}>Run</Button>
@@ -530,7 +531,7 @@
                 if (exportDir.trim()) exportModel(m);
               }}
             >
-              <input class="input flex-1 font-mono" bind:value={exportDir} placeholder="/mnt/mirror" aria-label="Export directory" autocomplete="off" spellcheck="false" />
+              <TextInput class="flex-1" mono bind:value={exportDir} empty="/path/to/mirror" aria-label="Export directory" />
               <Button type="submit" size="md" icon={FolderOutput} loading={exporting === m.group} disabled={!exportDir.trim()}>Export</Button>
             </form>
           </div>
@@ -539,8 +540,8 @@
     {:else if shownTab === 'files'}
       {#if gated}
         <Empty icon={Lock} title="Gated on {siteName}">
-          {#if pageUrl}<Button size="sm" href={pageUrl} icon={ExternalLink}>Accept the license</Button>{/if}
-          <span class="text-xs text-fg-faint">then set {caps?.tokenEnv || 'a token'} for the daemon</span>
+          {#if pageUrl}<Button size="sm" href={pageUrl} icon={ExternalLink}>Accept the license on {siteName}</Button>{/if}
+          <span class="text-xs text-fg-faint">Then set {caps?.tokenEnv || 'a token'} for the daemon.</span>
         </Empty>
       {:else if inspecting && !inspect}
         <table class="tbl" aria-busy="true">
@@ -562,7 +563,7 @@
       {:else if cardError}
         <Empty compact title={cardError} />
       {:else if card}
-        <Empty compact title="No card">
+        <Empty compact title="No model card">
           {#if card.url}<Button size="sm" href={card.url} icon={ExternalLink}>Open on {siteName}</Button>{/if}
         </Empty>
       {:else}

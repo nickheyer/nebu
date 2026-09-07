@@ -742,9 +742,9 @@ func (m *Manager) Constrain(ctx context.Context, slotID string, profile *v1.Host
 	return Constrain(profile, res.DeviceIDs, res.MemoryBytes), res.RuntimeID, res.Params, nil
 }
 
-// Whether a restart brings the record back, wanted and not failed on its own
+// Whether a restart brings the record back here: wanted, not failed on its own, and not a slot's, since a slot relaunches its own request
 func relaunches(rec *v1.Instance) bool {
-	return rec.GetDesiredRunning() && rec.GetState() != v1.InstanceState_INSTANCE_STATE_FAILED
+	return rec.GetDesiredRunning() && rec.GetState() != v1.InstanceState_INSTANCE_STATE_FAILED && rec.GetSlotId() == ""
 }
 
 // Lists live instances bound to a slot, newest first

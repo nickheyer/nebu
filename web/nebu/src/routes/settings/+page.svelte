@@ -7,6 +7,7 @@
   import Button from '$lib/components/ui/Button.svelte';
   import Section from '$lib/components/ui/Section.svelte';
   import State from '$lib/components/ui/State.svelte';
+  import TextInput from '$lib/components/ui/TextInput.svelte';
 
   let value = $state(token());
   let show = $state(false);
@@ -28,7 +29,7 @@
 
   async function saveLabel() {
     labelSaving = true;
-    if (await updateSettings({ hostLabel: label.trim() })) ok(label.trim() ? `This host is ${label.trim()}` : 'Label cleared');
+    if (await updateSettings({ hostLabel: label.trim() })) ok(label.trim() ? `Label set to ${label.trim()}` : 'Label cleared');
     labelSaving = false;
   }
 
@@ -74,11 +75,11 @@
             saveLabel();
           }}
         >
-          <input id="host-label" class="input" bind:value={label} placeholder={live.host?.hostname || 'hostname'} maxlength="64" autocomplete="off" />
+          <TextInput id="host-label" class="flex-1" bind:value={label} empty={live.host?.hostname || 'hostname'} maxlength={64} />
           <Button type="submit" variant="primary" loading={labelSaving} disabled={!labelDirty}>Save</Button>
         </form>
       {/snippet}
-      {@render row('Label', 'Shown in place of the hostname', 'host-label', labelControl)}
+      {@render row('Label', 'Shown instead of the hostname.', 'host-label', labelControl)}
       {#snippet hostnameControl()}
         <div class="flex h-8 items-center font-mono text-sm text-fg-muted">{live.host?.hostname ?? '–'}</div>
       {/snippet}
@@ -96,7 +97,7 @@
         <div class="flex h-8 flex-wrap items-center gap-3 text-sm">
           <State tone={live.connected ? 'ok' : 'bad'} pulse={live.connected} label={live.connected ? 'Connected' : 'Disconnected'} />
           <span class="font-mono text-fg-muted">{baseUrl}</span>
-          {#if live.needsToken}<span class="text-warn">token required</span>{/if}
+          {#if live.needsToken}<span class="text-warn">Token required</span>{/if}
           {#if live.error && !live.connected}<span class="truncate text-bad">{live.error}</span>{/if}
           <Button size="sm" variant="ghost" icon={Plug} loading={testing} onclick={test}>Test</Button>
         </div>
@@ -111,8 +112,9 @@
           }}
         >
           <div class="relative flex-1">
-            <KeyRound size={13} class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-faint" />
-            <input id="token" class="input pr-9 pl-8 font-mono" type={show ? 'text' : 'password'} bind:value autocomplete="off" placeholder="auth.token" />
+            <TextInput id="token" mono type={show ? 'text' : 'password'} bind:value empty="Token" inputClass="pr-9">
+              {#snippet leading()}<KeyRound size={13} />{/snippet}
+            </TextInput>
             <button type="button" class="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-sm p-1 text-fg-faint hover:text-fg" onclick={() => (show = !show)} aria-label={show ? 'Hide token' : 'Show token'}>
               {#if show}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
             </button>
@@ -120,7 +122,7 @@
           <Button type="submit" variant="primary" disabled={!tokenDirty}>Save</Button>
         </form>
       {/snippet}
-      {@render row('API token', 'The auth.token of the daemon config, kept in this browser', 'token', tokenControl)}
+      {@render row('API token', 'Stored in this browser. Must match auth.token in the daemon config.', 'token', tokenControl)}
     </div>
   </Section>
 </div>

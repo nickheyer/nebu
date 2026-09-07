@@ -60,7 +60,7 @@ func TestBuildsRoundTrip(t *testing.T) {
 func TestSlotsRoutesRoundTrip(t *testing.T) {
 	d, _ := open(t)
 	ctx := context.Background()
-	s := &v1.Slot{Id: "s1", Name: "main", Description: "d", DeviceIds: []string{"g1", "g0"}, MemoryBytes: 1 << 33, RuntimeId: "rt", Params: map[string]string{"n_ctx": "1"}, InstanceId: "i", State: v1.SlotState_SLOT_STATE_READY, Error: "", TaskId: "t", Request: &v1.RunRequest{SourceId: "src", Repo: "r", Group: "g", RuntimeId: "rt", Name: "main", SlotId: "s1", Params: map[string]string{"k": "v"}}, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0))}
+	s := &v1.Slot{Id: "s1", Name: "main", Position: 2, Description: "d", DeviceIds: []string{"g1", "g0"}, MemoryBytes: 1 << 33, RuntimeId: "rt", Params: map[string]string{"n_ctx": "1"}, InstanceId: "i", State: v1.SlotState_SLOT_STATE_READY, Error: "", TaskId: "t", Request: &v1.RunRequest{SourceId: "src", Repo: "r", Group: "g", RuntimeId: "rt", Name: "main", SlotId: "s1", Params: map[string]string{"k": "v"}}, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0))}
 	if err := d.PutSlot(ctx, s); err != nil {
 		t.Fatal(err)
 	}
@@ -135,10 +135,10 @@ func TestSettingsRoundTrip(t *testing.T) {
 	d, _ := open(t)
 	ctx := context.Background()
 	empty, err := d.GetSettings(ctx)
-	if err != nil || empty.GetHostLabel() != "" || empty.GetSetupDismissed() {
+	if err != nil || empty.GetHostLabel() != "" {
 		t.Fatalf("fresh settings %v %v", empty, err)
 	}
-	s := &v1.Settings{HostLabel: "lab box", SetupDismissed: true}
+	s := &v1.Settings{HostLabel: "lab box"}
 	if err := d.PutSettings(ctx, s); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if err := d.PutSettings(ctx, &v1.Settings{}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ = d.GetSettings(ctx); got.GetHostLabel() != "" || got.GetSetupDismissed() {
+	if got, _ = d.GetSettings(ctx); got.GetHostLabel() != "" {
 		t.Fatalf("replace should clear %v", got)
 	}
 }

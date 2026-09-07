@@ -33,6 +33,9 @@ var (
 )
 
 // Owns every slot and drives swaps
+//
+// A slot's request is what it is meant to serve. A run or swap sets it, an
+// evict or a stop clears it, a failure keeps it, and a restart relaunches it.
 type Manager struct {
 	DB           *db.DB
 	Instances    *instances.Manager
@@ -45,7 +48,7 @@ type Manager struct {
 
 	mu    sync.Mutex
 	slots map[string]*v1.Slot
-	// Slots a swap, evict, or delete is working on right now
+	// Slots a swap, evict, relaunch, or delete is working on right now
 	busy map[string]bool
 }
 
@@ -88,33 +91,74 @@ func (m *Manager) Load(ctx context.Context) error {
 		m.slots[s.GetId()] = s
 	}
 	m.mu.Unlock()
+	m.renumber()
 	return nil
 }
 
-// Reconciles slots with what survived a restart, keeping names routable
+// Reconciles slots with what survived a restart and relaunches the rest in position order
+//
+// A slot whose occupant is still alive keeps it. One with a request and
+// nothing alive comes back, unless it failed on its own before the restart,
+// in which case it stays failed for someone to relaunch by hand.
 func (m *Manager) Recover(ctx context.Context) error {
+	var relaunch []*v1.Slot
 	for _, s := range m.List() {
 		live := m.liveInstance(s)
-		s = m.update(s.GetId(), func(sl *v1.Slot) {
-			switch {
-			case live == nil:
-				sl.InstanceId = ""
-				if sl.State != v1.SlotState_SLOT_STATE_FAILED {
-					sl.State = v1.SlotState_SLOT_STATE_EMPTY
+		switch {
+		case live != nil:
+			s = m.update(s.GetId(), func(sl *v1.Slot) {
+				sl.InstanceId = live.GetId()
+				if live.GetState() == v1.InstanceState_INSTANCE_STATE_READY {
+					sl.State = v1.SlotState_SLOT_STATE_READY
+				} else {
+					sl.State = v1.SlotState_SLOT_STATE_STARTING
 				}
-			case live.GetState() == v1.InstanceState_INSTANCE_STATE_READY:
-				sl.InstanceId, sl.State = live.GetId(), v1.SlotState_SLOT_STATE_READY
-			default:
-				sl.InstanceId, sl.State = live.GetId(), v1.SlotState_SLOT_STATE_STARTING
+				if live.GetRequest() != nil {
+					sl.Request = live.GetRequest()
+				}
+			})
+			if live.GetState() == v1.InstanceState_INSTANCE_STATE_READY {
+				m.route(s, live)
+			} else {
+				m.pending(s, modelOf(s.GetRequest()))
 			}
-		})
-		if live != nil && live.GetState() == v1.InstanceState_INSTANCE_STATE_READY {
-			m.route(s, live)
-		} else {
+		case s.GetRequest() != nil && s.GetState() == v1.SlotState_SLOT_STATE_FAILED:
+			s = m.update(s.GetId(), func(sl *v1.Slot) { sl.InstanceId = "" })
 			m.pending(s, modelOf(s.GetRequest()))
+		case s.GetRequest() != nil && s.GetState() != v1.SlotState_SLOT_STATE_EMPTY:
+			s = m.update(s.GetId(), func(sl *v1.Slot) {
+				sl.InstanceId, sl.State, sl.Error = "", v1.SlotState_SLOT_STATE_STARTING, ""
+			})
+			m.pending(s, modelOf(s.GetRequest()))
+			relaunch = append(relaunch, s)
+		default:
+			// An empty slot serves nothing; a request left on one was written before evicting cleared it
+			s = m.update(s.GetId(), func(sl *v1.Slot) {
+				sl.InstanceId, sl.State, sl.Error, sl.TaskId, sl.Request = "", v1.SlotState_SLOT_STATE_EMPTY, "", "", nil
+			})
+			m.pending(s, "")
 		}
 	}
+	if len(relaunch) > 0 {
+		go m.relaunchAll(ctx, relaunch)
+	}
 	return nil
+}
+
+// Relaunches slots one at a time so each plans around the last
+func (m *Manager) relaunchAll(ctx context.Context, list []*v1.Slot) {
+	for _, s := range list {
+		if ctx.Err() != nil {
+			return
+		}
+		m.Log.Info("relaunching slot", "slot", s.GetName(), "model", modelOf(s.GetRequest()))
+		_, _, task, err := m.Relaunch(ctx, s.GetId())
+		if err != nil {
+			m.Log.Warn("slot relaunch failed", "slot", s.GetName(), "err", err)
+			continue
+		}
+		m.Tasks.Watch(ctx, task.GetId(), func(*v1.WatchTaskResponse) error { return nil })
+	}
 }
 
 func (m *Manager) liveInstance(s *v1.Slot) *v1.Instance {
@@ -130,16 +174,89 @@ func (m *Manager) liveInstance(s *v1.Slot) *v1.Instance {
 	return nil
 }
 
-// Lists slots by name
+// Lists slots by position
 func (m *Manager) List() []*v1.Slot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.listLocked()
+}
+
+func (m *Manager) listLocked() []*v1.Slot {
 	out := make([]*v1.Slot, 0, len(m.slots))
 	for _, s := range m.slots {
 		out = append(out, proto.Clone(s).(*v1.Slot))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].GetName() < out[j].GetName() })
+	sortSlots(out)
 	return out
+}
+
+func sortSlots(list []*v1.Slot) {
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].GetPosition() != list[j].GetPosition() {
+			return list[i].GetPosition() < list[j].GetPosition()
+		}
+		return list[i].GetName() < list[j].GetName()
+	})
+}
+
+// Gives the slots their places in this order, one through the count, returning copies of the ones that moved
+//
+// The lock is held by the caller.
+func (m *Manager) reorderLocked(ordered []*v1.Slot) []*v1.Slot {
+	var moved []*v1.Slot
+	for i, s := range ordered {
+		if want := uint32(i + 1); s.GetPosition() != want {
+			s.Position = want
+			s.UpdatedAt = timestamppb.Now()
+			moved = append(moved, proto.Clone(s).(*v1.Slot))
+		}
+	}
+	return moved
+}
+
+// Writes and publishes slots whose place changed
+func (m *Manager) persist(moved []*v1.Slot) {
+	for _, s := range moved {
+		if err := m.DB.PutSlot(context.Background(), s); err != nil {
+			m.Log.Warn("slot record write failed", "id", s.GetId(), "err", err)
+		}
+		m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_UPDATED, s.GetId(), s)
+	}
+}
+
+// Gives every slot its place in the list as it sorts today
+func (m *Manager) renumber() {
+	m.mu.Lock()
+	ordered := make([]*v1.Slot, 0, len(m.slots))
+	for _, s := range m.slots {
+		ordered = append(ordered, s)
+	}
+	sortSlots(ordered)
+	moved := m.reorderLocked(ordered)
+	m.mu.Unlock()
+	m.persist(moved)
+}
+
+// Moves one slot to a position, the others shifting to make room
+func (m *Manager) place(id string, position uint32) {
+	m.mu.Lock()
+	target, ok := m.slots[id]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	others := make([]*v1.Slot, 0, len(m.slots))
+	for _, s := range m.slots {
+		if s.GetId() != id {
+			others = append(others, s)
+		}
+	}
+	sortSlots(others)
+	at := min(max(int(position)-1, 0), len(others))
+	ordered := append(append(append([]*v1.Slot{}, others[:at]...), target), others[at:]...)
+	moved := m.reorderLocked(ordered)
+	m.mu.Unlock()
+	m.persist(moved)
 }
 
 // Returns one slot by id or name with its occupant
@@ -210,20 +327,31 @@ func (m *Manager) Reservation(ctx context.Context, id string) (*instances.Reserv
 	}, nil
 }
 
+// Checks a public name: not empty, not another slot's, not a route's
+func (m *Manager) checkName(name, self string) error {
+	if name == "" {
+		return fmt.Errorf("%w: name required", ErrSlot)
+	}
+	if strings.ContainsAny(name, " \t\n/") {
+		return fmt.Errorf("%w: a slot name has no spaces or slashes", ErrSlot)
+	}
+	if s, err := m.find(name); err == nil && s.GetId() != self {
+		return fmt.Errorf("%w: slot %q exists", ErrSlot, name)
+	}
+	if r, taken := m.Routes.Lookup(name); taken && r.GetSlotId() != self {
+		return fmt.Errorf("%w: %q is already a route, pick another name", ErrSlot, name)
+	}
+	return nil
+}
+
 // Creates a slot, checking that its devices exist
 func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Slot, error) {
 	name := strings.TrimSpace(req.GetName())
-	if name == "" {
-		return nil, fmt.Errorf("%w: name required", ErrSlot)
-	}
-	if _, err := m.find(name); err == nil {
-		return nil, fmt.Errorf("%w: slot %q exists", ErrSlot, name)
+	if err := m.checkName(name, ""); err != nil {
+		return nil, err
 	}
 	if err := m.checkDevices(ctx, req.GetDeviceIds()); err != nil {
 		return nil, err
-	}
-	if _, taken := m.Routes.Lookup(name); taken {
-		return nil, fmt.Errorf("%w: %q is already a route, pick another name", ErrSlot, name)
 	}
 	s := &v1.Slot{
 		Id:          db.NewID(),
@@ -238,18 +366,25 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 		CreatedAt:   timestamppb.Now(),
 		UpdatedAt:   timestamppb.Now(),
 	}
-	if err := m.DB.PutSlot(ctx, s); err != nil {
-		return nil, err
-	}
 	m.mu.Lock()
 	if m.slots == nil {
 		m.slots = map[string]*v1.Slot{}
 	}
+	s.Position = uint32(len(m.slots) + 1)
 	m.slots[s.GetId()] = s
 	m.mu.Unlock()
-	m.pending(s, "")
+	if err := m.DB.PutSlot(ctx, s); err != nil {
+		m.mu.Lock()
+		delete(m.slots, s.GetId())
+		m.mu.Unlock()
+		return nil, err
+	}
 	m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_CREATED, s.GetId(), s)
-	return proto.Clone(s).(*v1.Slot), nil
+	if req.GetPosition() > 0 {
+		m.place(s.GetId(), req.GetPosition())
+	}
+	m.pending(m.mustFind(s.GetId()), "")
+	return m.find(s.GetId())
 }
 
 func (m *Manager) checkDevices(ctx context.Context, ids []string) error {
@@ -272,7 +407,7 @@ func (m *Manager) checkDevices(ctx context.Context, ids []string) error {
 	return nil
 }
 
-// Changes settings, the limits reaching the route at once and the rest applying on the next run
+// Changes settings: the name and limits reach the route at once, the rest applies on the next run
 func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Slot, error) {
 	s, err := m.find(req.GetId())
 	if err != nil {
@@ -281,14 +416,37 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 	if err := m.checkDevices(ctx, req.GetDeviceIds()); err != nil {
 		return nil, err
 	}
+	name := strings.TrimSpace(req.GetName())
+	if name == "" {
+		name = s.GetName()
+	}
+	if name != s.GetName() {
+		if err := m.checkName(name, s.GetId()); err != nil {
+			return nil, err
+		}
+		if s.GetState() == v1.SlotState_SLOT_STATE_SWAPPING {
+			return nil, fmt.Errorf("%w: slot %s is swapping, rename it once that settles", ErrSlot, s.GetName())
+		}
+		if _, err := m.Routes.Rename(s.GetName(), name); err != nil && !errors.Is(err, gateway.ErrNoRoute) {
+			return nil, fmt.Errorf("%w: %v", ErrSlot, err)
+		}
+	}
 	next := m.update(s.GetId(), func(sl *v1.Slot) {
+		sl.Name = name
 		sl.Description = req.GetDescription()
 		sl.DeviceIds = req.GetDeviceIds()
 		sl.MemoryBytes = req.GetMemoryBytes()
 		sl.RuntimeId = req.GetRuntimeId()
 		sl.Params = req.GetParams()
 		sl.Policy = req.GetPolicy()
+		if sl.Request != nil {
+			sl.Request.Name = name
+		}
 	})
+	if req.GetPosition() > 0 && req.GetPosition() != next.GetPosition() {
+		m.place(next.GetId(), req.GetPosition())
+		next = m.mustFind(next.GetId())
+	}
 	// A swap in flight writes the route itself when it settles
 	if next.GetState() != v1.SlotState_SLOT_STATE_SWAPPING {
 		if live := m.liveInstance(next); live != nil && live.GetState() == v1.InstanceState_INSTANCE_STATE_READY {
@@ -326,10 +484,11 @@ func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Slot, 
 	m.mu.Unlock()
 	m.Routes.Delete(s.GetName())
 	m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_DELETED, s.GetId(), s)
+	m.renumber()
 	return s, nil
 }
 
-// Stops the occupant, keeping the slot and its name
+// Stops the occupant and forgets the request, keeping the slot and its name
 func (m *Manager) Evict(ctx context.Context, id string) (*v1.Slot, error) {
 	s, err := m.find(id)
 	if err != nil {
@@ -344,9 +503,43 @@ func (m *Manager) Evict(ctx context.Context, id string) (*v1.Slot, error) {
 			return nil, err
 		}
 	}
-	return m.update(s.GetId(), func(sl *v1.Slot) {
-		sl.InstanceId, sl.State, sl.Error = "", v1.SlotState_SLOT_STATE_EMPTY, ""
-	}), nil
+	next := m.update(s.GetId(), func(sl *v1.Slot) {
+		sl.InstanceId, sl.State, sl.Error, sl.TaskId, sl.Request = "", v1.SlotState_SLOT_STATE_EMPTY, "", "", nil
+	})
+	m.pending(next, "")
+	return next, nil
+}
+
+// Runs the slot's request again, after a failure or when nothing came back after a restart
+func (m *Manager) Relaunch(ctx context.Context, id string) (*v1.Slot, *v1.Instance, *v1.Task, error) {
+	s, err := m.find(id)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if s.GetRequest() == nil {
+		return nil, nil, nil, fmt.Errorf("%w: slot %s has nothing to relaunch, run a model in it", ErrSlot, s.GetName())
+	}
+	if err := m.claim(s.GetId()); err != nil {
+		return nil, nil, nil, err
+	}
+	defer m.release(s.GetId())
+	if live := m.liveInstance(s); live != nil {
+		return nil, nil, nil, fmt.Errorf("%w: slot %s serves %s, swap or evict instead", ErrSlot, s.GetName(), live.GetName())
+	}
+	run := proto.Clone(s.GetRequest()).(*v1.RunRequest)
+	run.SlotId, run.Name = s.GetId(), s.GetName()
+	in, task, err := m.Instances.Run(ctx, run)
+	if err != nil {
+		next := m.update(s.GetId(), func(sl *v1.Slot) {
+			sl.InstanceId, sl.State, sl.Error = "", v1.SlotState_SLOT_STATE_FAILED, err.Error()
+		})
+		m.pending(next, modelOf(next.GetRequest()))
+		return nil, nil, nil, err
+	}
+	next := m.update(s.GetId(), func(sl *v1.Slot) {
+		sl.InstanceId, sl.State, sl.Error, sl.TaskId, sl.Request = in.GetId(), v1.SlotState_SLOT_STATE_STARTING, "", task.GetId(), in.GetRequest()
+	})
+	return next, in, task, nil
 }
 
 // Drains an instance, then stops it
@@ -369,9 +562,7 @@ func (m *Manager) Swap(ctx context.Context, req *v1.SwapRequest) (*v1.Slot, *v1.
 		return nil, nil, nil, fmt.Errorf("%w: swap needs a model to run", ErrSlot)
 	}
 	run.SlotId = s.GetId()
-	if run.GetName() == "" {
-		run.Name = s.GetName()
-	}
+	run.Name = s.GetName()
 	// The claim holds until the slot is either starting or marked swapping, so two swaps cannot interleave
 	if err := m.claim(s.GetId()); err != nil {
 		return nil, nil, nil, err
@@ -388,7 +579,7 @@ func (m *Manager) Swap(ctx context.Context, req *v1.SwapRequest) (*v1.Slot, *v1.
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		// The instance holds the request as prepared, its profile by id and its runtime named
+		// The instance holds the request as prepared, its runtime named and its params layered
 		s = m.update(s.GetId(), func(sl *v1.Slot) {
 			sl.InstanceId, sl.State, sl.Error, sl.TaskId, sl.Request = in.GetId(), v1.SlotState_SLOT_STATE_STARTING, "", task.GetId(), in.GetRequest()
 		})
@@ -485,7 +676,7 @@ func (m *Manager) swapDrainFirst(ctx context.Context, h *tasks.Handle, s *v1.Slo
 	previous.SlotId = s.GetId()
 	restored, berr := m.launch(ctx, h, previous, false)
 	if restored != nil {
-		m.update(s.GetId(), func(sl *v1.Slot) { sl.InstanceId = restored.GetId() })
+		m.update(s.GetId(), func(sl *v1.Slot) { sl.InstanceId, sl.Request = restored.GetId(), restored.GetRequest() })
 	}
 	if berr != nil {
 		m.settle(s, nil, "", fmt.Errorf("%v, rollback failed too: %v", err, berr))
@@ -497,7 +688,7 @@ func (m *Manager) swapDrainFirst(ctx context.Context, h *tasks.Handle, s *v1.Slo
 	return err
 }
 
-// Settles the slot after a swap onto whichever instance survives
+// Settles the slot after a swap onto whichever instance survives, the request kept so a failed slot can be relaunched
 func (m *Manager) settle(s *v1.Slot, serving *v1.Instance, note string, err error) {
 	next := m.update(s.GetId(), func(sl *v1.Slot) {
 		if serving != nil {
@@ -508,7 +699,7 @@ func (m *Manager) settle(s *v1.Slot, serving *v1.Instance, note string, err erro
 		sl.Error = strings.TrimSpace(note + " " + err.Error())
 	})
 	if serving == nil {
-		m.pending(next, "")
+		m.pending(next, modelOf(next.GetRequest()))
 	}
 }
 
@@ -523,6 +714,10 @@ func (m *Manager) pending(s *v1.Slot, model string) {
 }
 
 // Tracks occupants started or lost outside a swap, implementing the instance manager's slots
+//
+// An occupant that stops on request empties the slot, one that fails leaves
+// the slot failed with the request kept, and one the daemon stopped on its
+// way down leaves the slot starting so a restart brings it back.
 func (m *Manager) OnInstance(rec *v1.Instance) {
 	if rec.GetSlotId() == "" {
 		return
@@ -559,17 +754,18 @@ func (m *Manager) OnInstance(rec *v1.Instance) {
 	case v1.InstanceState_INSTANCE_STATE_DRAINING:
 		m.update(s.GetId(), func(sl *v1.Slot) { sl.State = v1.SlotState_SLOT_STATE_DRAINING })
 	case v1.InstanceState_INSTANCE_STATE_STOPPED, v1.InstanceState_INSTANCE_STATE_FAILED:
-		m.update(s.GetId(), func(sl *v1.Slot) {
+		next := m.update(s.GetId(), func(sl *v1.Slot) {
 			sl.InstanceId = ""
-			if rec.GetState() == v1.InstanceState_INSTANCE_STATE_FAILED {
+			switch {
+			case rec.GetState() == v1.InstanceState_INSTANCE_STATE_FAILED:
 				sl.State, sl.Error = v1.SlotState_SLOT_STATE_FAILED, rec.GetError()
-			} else if rec.GetDesiredRunning() {
+			case rec.GetDesiredRunning():
 				sl.State = v1.SlotState_SLOT_STATE_STARTING
-			} else {
-				sl.State, sl.Error = v1.SlotState_SLOT_STATE_EMPTY, ""
+			default:
+				sl.State, sl.Error, sl.TaskId, sl.Request = v1.SlotState_SLOT_STATE_EMPTY, "", "", nil
 			}
 		})
-		m.pending(s, modelOf(s.GetRequest()))
+		m.pending(next, modelOf(next.GetRequest()))
 	}
 }
 

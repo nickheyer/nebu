@@ -274,7 +274,7 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 		return false
 	}
 	d.Notifier = &notify.Notifier{Webhooks: cfg.GetNotify().GetWebhooks(), Events: bus, Log: log}
-	d.Gateway = gateway.New(d.Routes, cfg.GetGateway().GetApiKeys(), cfg.GetGateway().GetCorsOrigins(), cfg.GetGateway().GetPolicy(), log)
+	d.Gateway = gateway.New(d.Routes, cfg.GetGateway().GetApiKeys(), cfg.GetGateway().GetCorsOrigins(), cfg.GetGateway().GetPolicy(), bus, log)
 	d.Gateway.SetVersion(Version)
 	var ui http.Handler
 	if !cfg.GetWeb().GetDisabled() {

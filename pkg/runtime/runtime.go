@@ -150,6 +150,9 @@ func compile(m *v1.RuntimeManifest) (*Runtime, error) {
 		if _, err := convert(p, p.GetDefault()); err != nil {
 			return nil, err
 		}
+		if err := checkForm(p); err != nil {
+			return nil, err
+		}
 		rt.params[p.GetName()] = p
 	}
 	if m.GetEstimate() != nil {
@@ -270,6 +273,28 @@ func compile(m *v1.RuntimeManifest) (*Runtime, error) {
 		rt.probes = append(rt.probes, probe)
 	}
 	return rt, nil
+}
+
+// Checks the form fields of a param: bounds only on numbers, in order, with a positive step
+func checkForm(p *v1.Param) error {
+	numeric := p.GetType() == v1.ParamType_PARAM_TYPE_INT || p.GetType() == v1.ParamType_PARAM_TYPE_FLOAT
+	if !numeric && (p.GetMin() != 0 || p.GetMax() != 0 || p.GetStep() != 0) {
+		return fmt.Errorf("param %s: min, max, and step apply to int and float params only", p.GetName())
+	}
+	if p.GetStep() < 0 {
+		return fmt.Errorf("param %s: step must be positive", p.GetName())
+	}
+	if p.GetMax() != 0 && p.GetMin() > p.GetMax() {
+		return fmt.Errorf("param %s: min %g is above max %g", p.GetName(), p.GetMin(), p.GetMax())
+	}
+	if p.GetType() == v1.ParamType_PARAM_TYPE_INT {
+		for _, v := range []float64{p.GetMin(), p.GetMax(), p.GetStep()} {
+			if v != float64(int64(v)) {
+				return fmt.Errorf("param %s: int bounds and step must be whole numbers", p.GetName())
+			}
+		}
+	}
+	return nil
 }
 
 // Returns the install methods in manifest order

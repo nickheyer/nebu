@@ -113,7 +113,7 @@ func TestGatewayAuthAndStates(t *testing.T) {
 	table.Set("ready", "i1", "", upstream.URL, "m", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
 	table.Set("draining", "i2", "", upstream.URL, "m", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
 	table.Drain("i2")
-	g := New(table, []string{"k1"}, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	g := New(table, []string{"k1"}, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	g.SetListeners([]*v1.Listener{{Addr: "127.0.0.1:1", Shared: true}}, false)
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()

@@ -50,9 +50,11 @@ once and never changes again.
 - **Install**. A concrete usable copy of a runtime. Adopted, downloaded, or built.
 - **Recipe**. How to build an install. Base repo, ref, patches, flags, all templated.
 - **Estimate**. A memory plan for a model on a runtime with given params on this host.
-- **Slot**. A reservation of devices and memory budget.
-- **Instance**. A running install serving a model in a slot.
+- **Slot**. A numbered reservation of devices and memory budget under one public name, and
+  the model it is meant to serve.
+- **Instance**. A running install serving a model, in a slot or under its own name.
 - **Route**. A public model name mapped to an instance in the gateway.
+- **Trace**. One request through the gateway: timing, tokens, and both bodies.
 - **Task**. Any long-running operation with streamed progress and logs.
 - **Build**. One run of a recipe on this host, keyed by the hash of everything that decides
   its bytes.
@@ -143,7 +145,7 @@ nebu/
 |   |   +-- services/              the proto services grouped by area, every handler one call and one reply
 |   +-- tasks/                     task engine, progress fan-out, cancellation, stored history
 |   +-- slots/                     slot manager, reservations, swaps
-|   +-- gateway/                   openai, anthropic, and ollama flavors over one canonical chat, the route table, limits
+|   +-- gateway/                   openai, anthropic, and ollama flavors over one canonical chat, the route table, limits, the trace ring
 |   +-- notify/                    posts failed instances to webhooks
 |   +-- cli/                       client subcommands over connect by area, one parse and one print helper, table and json output
 +-- web/
@@ -151,7 +153,7 @@ nebu/
 |       +-- embed.go               go:embed of dist with a single page fallback
 |       +-- src/lib/proto/         generated connect-es client, never hand edited
 |       +-- src/lib/               api client, live state fed by events, shared components
-|       +-- src/routes/            serve, catalog, store, runtimes, tasks, chat, host, settings
+|       +-- src/routes/            serve, slots, instances, store, catalog, runtimes, requests, tasks, chat, host, settings
 |       +-- static/                openapi output
 +-- docs/                          user docs
 +-- scripts/                       release and ci helpers
@@ -305,7 +307,16 @@ version and the devices it sees.
 plans against the slot's device pools capped at the budget, inherits the slot's default
 runtime and params, and can pin the process to the slot's devices through the launch env
 templates. The slot's name is a route that lives as long as the slot: while nothing serves
-it the gateway answers 503 with a retry hint rather than 404.
+it the gateway answers 503 with a retry hint rather than 404. Slots are numbered; the
+position orders the list and the relaunch after a restart, and a slot can be renamed, the
+route moving with it.
+
+A slot owns what it is meant to serve. Its request is set by a run or a swap, cleared by an
+evict or a stop, and kept when the occupant fails, so a failed slot can be relaunched from
+the page or `nebu slots relaunch`. After a daemon restart every slot with a request and
+no live occupant relaunches it in position order, one at a time; a slot that failed on
+its own before the restart stays failed with its error. Instances outside a slot relaunch
+themselves as before.
 
 **Swap** is run against an occupied slot. The new model is planned with the old one still
 running. When it fits, the new instance starts beside the old one, the route flips once
@@ -313,6 +324,17 @@ health passes, and the old instance drains, taking no new requests while in flig
 finish, then stops. When it does not fit, or the caller asks, the old instance drains and
 stops first, the route goes pending, and the new instance starts, with the old request
 replayed as a rollback if the new one fails. The public name never disappears.
+
+**Traces** are the gateway's record of every request it proxies: the public name, the
+client's wire format and the runtime's, whether it was translated, when the runtime's
+headers came, when the first token came, when it ended, the status, prompt and completion
+tokens, the stop reason, tool calls, and both bodies capped at 64 KiB. A passed through
+answer is read on its way past through the upstream flavor's own parser, so tokens and
+timing are the same whichever format the client spoke. The newest five hundred live in a
+ring in memory, each reaching the event stream without its bodies when it starts and when
+it ends, and the response carries the trace id in `X-Nebu-Trace`. `GatewayService.ListTraces`
+and `GetTrace` answer the requests page, the slot and instance pages, and the chat console,
+which correlates every answer with its trace.
 
 **Doctor** probes the host again and checks probes, devices, storage, the store, runtimes,
 recipes, and sources, as a task whose log holds one line per check and which fails when any
@@ -383,7 +405,10 @@ a file with the same `id` into a directory listed in `spec_dirs`, which always i
   a checkpoint missing what the family needs falls to the next match rather than failing to plan.
 - `runtimes/` is `RuntimeManifest`. Accepted formats, host constraints as expressions,
   acquisition including the recipe id, launch templates with an optional prepare step, typed
-  params with their flags, the estimate policy, and report rules for calibration.
+  params with their flags, the estimate policy, and report rules for calibration. Every param
+  carries what a form needs to render it without knowing the runtime: a label, a unit, bounds
+  and a step for numbers, choices for a fixed set, the group it sits under, and whether it is
+  advanced. The web UI renders every runtime's parameters from these fields alone.
 - `recipes/` is `Recipe`. Source as a releases repository at a source, ref, archive, or repo
   templates, patches
   with conditions, variants selected by host expressions with their tools and vars, the
@@ -446,7 +471,10 @@ tensor table, so a vision tower counts wherever it lives.
    cache, builds as rows next to installs.
 5. Slots, swaps, the route table, gateway keys and API token, the event stream, store export,
    the mirror source, and the SvelteKit app embedded in the binary.
+6. Request traces, the requests page, and the chat console as a debugging surface for a
+   running model: every answer with its timing, tokens, trace, and the runtime's log beside it.
 
-All five have code and an end to end suite that drives a fake runtime binary through pull, run,
-gateway, stop, restart, adoption, swap, rollback, export, build, auth, and the event stream. What has not been verified against a real catalog, a real GPU, or a second runtime, and
-what the end state described in the README still lacks, is tracked in `TODOS.md`.
+All six have code. The slot manager, the gateway, the trace ring, the route table, the store,
+and the database each have their own tests. Nothing here has been verified against a second
+real runtime beyond llama.cpp; the vLLM, SGLang, and NeMo manifests are held to the same
+generic code paths through their specs alone.

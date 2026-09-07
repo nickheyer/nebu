@@ -61,15 +61,47 @@ export function policyParts(p: Policy | undefined, d: Policy | undefined): [stri
   const burst = pick(p?.burst, d?.burst);
   const timeout = pick(p?.requestTimeoutMs, d?.requestTimeoutMs);
   const upstream = pick(p?.upstreamTimeoutMs, d?.upstreamTimeoutMs);
-  if (inFlight) out.push(['in flight', String(inFlight)]);
-  if (rps) out.push(['per second', `${rps}${burst ? ` burst ${burst}` : ''}`]);
-  if (timeout) out.push(['timeout', `${timeout / 1000}s`]);
-  if (upstream) out.push(['first byte', `${upstream / 1000}s`]);
+  if (inFlight) out.push(['In flight', String(inFlight)]);
+  if (rps) out.push(['Rate', `${rps}/s${burst ? `, burst ${burst}` : ''}`]);
+  if (timeout) out.push(['Timeout', `${timeout / 1000} s`]);
+  if (upstream) out.push(['First byte', `${upstream / 1000} s`]);
   return out;
 }
 
-// The same limits in one line
+// The same limits in one line, "No limits" when nothing applies
 export function policyText(p: Policy | undefined, d: Policy | undefined): string {
-  const parts = policyParts(p, d).map(([k, v]) => (k === 'in flight' ? `${v} in flight` : k === 'per second' ? `${v}/s` : `${v} ${k}`));
-  return parts.length ? parts.join(' · ') : 'none';
+  const parts = policyParts(p, d).map(([k, v]) => `${k.toLowerCase()} ${v}`);
+  return parts.length ? parts.join(' · ') : 'No limits';
+}
+
+// A policy as the form holds it, every field text, empty meaning inherit
+export interface PolicyFields {
+  maxInFlight: string;
+  rps: string;
+  burst: string;
+  timeout: string;
+  upstream: string;
+}
+
+export function policyFields(p: Policy | undefined): PolicyFields {
+  return {
+    maxInFlight: p?.maxInFlight ? String(p.maxInFlight) : '',
+    rps: p?.requestsPerSecond ? String(p.requestsPerSecond) : '',
+    burst: p?.burst ? String(p.burst) : '',
+    timeout: p?.requestTimeoutMs ? String(p.requestTimeoutMs / 1000) : '',
+    upstream: p?.upstreamTimeoutMs ? String(p.upstreamTimeoutMs / 1000) : ''
+  };
+}
+
+const whole = (s: string) => Math.max(0, Math.floor(parseFloat(s) || 0));
+const millis = (s: string) => Math.round((parseFloat(s) || 0) * 1000);
+
+// The form's fields as the policy the daemon takes
+export function policyFrom(f: PolicyFields): Policy {
+  return { maxInFlight: whole(f.maxInFlight), requestsPerSecond: parseFloat(f.rps) || 0, burst: whole(f.burst), requestTimeoutMs: millis(f.timeout), upstreamTimeoutMs: millis(f.upstream) } as Policy;
+}
+
+// How many limits a form sets
+export function policyCount(f: PolicyFields): number {
+  return [f.maxInFlight, f.rps, f.burst, f.timeout, f.upstream].filter((v) => v.trim()).length;
 }

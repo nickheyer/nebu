@@ -20,7 +20,7 @@
   import SourceRail from '$lib/components/catalog/SourceRail.svelte';
   import FacetPicker from '$lib/components/catalog/FacetPicker.svelte';
   import ModelDrawer from '$lib/components/ModelDrawer.svelte';
-  import SourceDrawer from '$lib/components/SourceDrawer.svelte';
+  import SourceDialog from '$lib/components/SourceDialog.svelte';
 
   const pageSize = 30;
 
@@ -346,7 +346,7 @@
     <table class="tbl"><tbody>{@render skeletonRows(8)}</tbody></table>
   </div>
 {:else if statuses.length === 0}
-  <Empty title="No sources">
+  <Empty title="No sources configured">
     <Button size="sm" icon={Plus} onclick={addSource} disabled={!providers.length}>Add source</Button>
   </Empty>
 {:else}
@@ -365,10 +365,10 @@
           oninput={onInput}
           onsubmit={submit}
           disabled={inputDead}
-          placeholder={inputDead ? `${name} opens nothing by name` : caps?.search || all ? `Search ${name}` : `Open ${caps?.repoExample || 'owner/name'}`}
+          empty={inputDead ? `${name} cannot be searched` : caps?.search || all ? `Search ${name}` : `Type a repository such as ${caps?.repoExample || 'owner/name'}`}
         >
           {#snippet trailing()}
-            {#if canSubmitRepo}<span class="rounded-sm bg-accent/15 px-1.5 text-[11px] text-accent">Enter opens it</span>{/if}
+            {#if canSubmitRepo}<span class="rounded-sm bg-accent/15 px-1.5 text-[11px] text-accent">Enter to open</span>{/if}
           {/snippet}
         </SearchInput>
         {#if sortItems.length && !all}
@@ -396,7 +396,7 @@
           <span class="tabular-nums">{#if total > 0n}{hits.length.toLocaleString()} of {Number(total).toLocaleString()}{:else}{hits.length.toLocaleString()}{/if}</span>
         {/if}
         {#each tokenless as s (s.source?.id)}
-          <span class="inline-flex items-center gap-1.5 text-warn"><KeyRound size={12} />{merged ? labels.get(s.source?.id ?? '') : name} downloads need <span class="font-mono">{s.capabilities?.tokenEnv || 'a token'}</span></span>
+          <span class="inline-flex items-center gap-1.5 text-warn"><KeyRound size={12} />Set <span class="font-mono">{s.capabilities?.tokenEnv || 'a token'}</span> to download from {merged ? labels.get(s.source?.id ?? '') : name}</span>
         {/each}
         {#if status?.error && !merged}
           <span class="text-bad">{status.error}</span>
@@ -419,9 +419,9 @@
         </Empty>
       {:else if !searching && hits.length === 0}
         {#if !caps?.browse && browsing && !all}
-          <Empty compact title="Type {caps?.repoExample || 'owner/name'} to open it" />
+          <Empty compact title="This source cannot be browsed. Type a repository name such as {caps?.repoExample || 'owner/name'}." />
         {:else if !searchable}
-          <Empty compact title="{name} does not search" />
+          <Empty compact title="{name} cannot be searched" />
         {:else}
           <Empty compact title="No results">
             {#if !browsing}<Button size="sm" variant="ghost" onclick={clearAll}>Clear</Button>{/if}
@@ -464,9 +464,9 @@
                   <td>
                     <div class="flex items-center gap-2">
                       <span class="truncate text-fg" title={h.repo}>{title}</span>
-                      {#if locked(h, hcaps)}<Tip text="Gated. Downloads need {hcaps?.tokenEnv || 'a token'}"><Lock size={12} class="shrink-0 text-warn" /></Tip>{:else if h.gated}<Tip text="Gated. The token on this source has access"><Lock size={12} class="shrink-0 text-fg-faint" /></Tip>{/if}
+                      {#if locked(h, hcaps)}<Tip text="Gated. Set {hcaps?.tokenEnv || 'a token'} to download."><Lock size={12} class="shrink-0 text-warn" /></Tip>{:else if h.gated}<Tip text="Gated. This source has a token."><Lock size={12} class="shrink-0 text-fg-faint" /></Tip>{/if}
                       {#if h.private}<Tip text="Private"><EyeOff size={12} class="shrink-0 text-fg-faint" /></Tip>{/if}
-                      {#if stored.has(h.sourceId + '/' + h.repo)}<Tip text="In the library"><Check size={12} class="shrink-0 text-ok" /></Tip>{/if}
+                      {#if stored.has(h.sourceId + '/' + h.repo)}<Tip text="Downloaded"><Check size={12} class="shrink-0 text-ok" /></Tip>{/if}
                     </div>
                     <div class="truncate text-xs text-fg-faint">{h.author}{#if h.name && h.name !== h.repo}<span class="font-mono">{' · '}{h.repo}</span>{/if}</div>
                     {#if chips.length}
@@ -500,7 +500,7 @@
   </div>
 {/if}
 
-<SourceDrawer bind:open={sourceOpen} {providers} {editing} />
+<SourceDialog bind:open={sourceOpen} {providers} {editing} />
 
 {#if selected}
   <ModelDrawer

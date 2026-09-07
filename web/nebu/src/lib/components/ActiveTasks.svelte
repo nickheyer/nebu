@@ -5,7 +5,7 @@
   import { fail } from '$lib/toast.svelte';
   import type { Task } from '$proto/task_pb';
   import { Ban } from '@lucide/svelte';
-  import Section from './ui/Section.svelte';
+  import Card from './ui/Card.svelte';
   import Progress from './ui/Progress.svelte';
   import Spinner from './ui/Spinner.svelte';
   import IconButton from './ui/IconButton.svelte';
@@ -23,12 +23,12 @@
 </script>
 
 {#if tasks.length}
-  <Section title="Activity" count={tasks.length}>
-    <ul class="divide-y divide-line/70 border-y border-line">
+  <Card title="Activity" meta={`${tasks.length} running`} padded={false}>
+    <ul class="divide-y divide-line/70 px-4">
       {#each tasks as t (t.id)}
-        <li class="flex items-center gap-4 px-1.5 py-2.5">
+        <li class="flex items-center gap-4 py-2.5">
           <Spinner size={14} class="shrink-0 text-accent" />
-          <a href="/tasks?id={t.id}" class="min-w-0 flex-1">
+          <a href="/tasks/{t.id}" class="min-w-0 flex-1">
             <div class="flex items-baseline gap-3">
               <span class="truncate text-sm text-fg hover:text-accent">{t.title}</span>
               <span class="ml-auto shrink-0 text-xs tabular-nums text-fg-faint">{duration(t.startedAt ?? t.createdAt, undefined, clock.now)}</span>
@@ -45,5 +45,5 @@
         </li>
       {/each}
     </ul>
-  </Section>
+  </Card>
 {/if}

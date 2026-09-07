@@ -2,7 +2,9 @@
   import { ConfigType, type ConfigField } from '$proto/source_pb';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
-  import Checkbox from './ui/Checkbox.svelte';
+  import Switch from './ui/Switch.svelte';
+  import NumberInput from './ui/NumberInput.svelte';
+  import TextInput from './ui/TextInput.svelte';
 
   // Fields the daemon describes, rendered the same way whatever they configure: a source, an install
   //
@@ -16,38 +18,41 @@
     values = next;
   }
 
-  function inputType(f: ConfigField): string {
-    if (f.type === ConfigType.INT) return 'number';
-    if (f.type === ConfigType.URL) return 'url';
-    return 'text';
-  }
-
-  function placeholder(f: ConfigField): string {
+  // What the field shows while empty
+  function hintFor(f: ConfigField): string {
     if (f.default) return f.default;
     switch (f.type) {
       case ConfigType.PATH:
-        return '/path';
+        return '/path/to/file';
       case ConfigType.ENV:
         return 'VARIABLE_NAME';
       case ConfigType.URL:
-        return 'https://host';
+        return 'https://example.com';
       default:
         return '';
     }
   }
 </script>
 
-<div class="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2 {cls}">
+<div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2 {cls}">
   {#each fields as f (f.name)}
     {@const fid = `${idPrefix}-${f.name}`}
     {#if f.type === ConfigType.BOOL}
-      <Checkbox class="sm:col-span-2" checked={(values[f.name] ?? f.default) === 'true'} onchange={(on) => set(f.name, on ? 'true' : 'false')} label={f.label || f.name} hint={f.description || undefined} />
+      <div class="flex items-start justify-between gap-4 rounded-md border border-line px-3 py-2.5 sm:col-span-2">
+        <div class="min-w-0">
+          <label for={fid} class="text-[13px] font-medium text-fg">{f.label || f.name}</label>
+          {#if f.description}<p class="text-xs leading-5 text-fg-muted">{f.description}</p>{/if}
+        </div>
+        <Switch checked={(values[f.name] ?? f.default) === 'true'} label={f.label || f.name} onchange={(on) => set(f.name, on ? 'true' : 'false')} />
+      </div>
     {:else}
-      <Field label={(f.label || f.name) + (f.required && !f.default ? ' *' : '')} for={fid} hint={f.description || undefined}>
+      <Field label={f.label || f.name} for={fid} required={f.required && !f.default} description={f.description || undefined}>
         {#if f.choices.length}
-          <Select id={fid} mono value={values[f.name] ?? ''} onchange={(v) => set(f.name, v)} items={[{ value: '', label: f.default ? 'Default' : 'Not set', detail: f.default || undefined }, ...f.choices.map((c) => ({ value: c, label: c }))]} />
+          <Select id={fid} mono value={values[f.name] ?? ''} empty="Choose" onchange={(v) => set(f.name, v)} items={[...(f.default ? [{ value: '', label: `Default: ${f.default}` }] : []), ...f.choices.filter((c) => c !== f.default || !f.default).map((c) => ({ value: c, label: c }))]} />
+        {:else if f.type === ConfigType.INT}
+          <NumberInput id={fid} integer empty={f.default} bind:value={() => values[f.name] ?? '', (v) => set(f.name, v)} />
         {:else}
-          <input id={fid} class="input {f.type === ConfigType.STRING ? '' : 'font-mono'}" type={inputType(f)} value={values[f.name] ?? ''} oninput={(e) => set(f.name, (e.currentTarget as HTMLInputElement).value)} placeholder={placeholder(f)} autocomplete="off" spellcheck="false" />
+          <TextInput id={fid} mono={f.type !== ConfigType.STRING} type={f.type === ConfigType.URL ? 'url' : 'text'} empty={hintFor(f)} bind:value={() => values[f.name] ?? '', (v) => set(f.name, v)} />
         {/if}
       </Field>
     {/if}

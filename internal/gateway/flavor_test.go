@@ -42,7 +42,7 @@ func openaiUpstream(t *testing.T) *httptest.Server {
 func TestTranslateFlavors(t *testing.T) {
 	upstream := openaiUpstream(t)
 	defer upstream.Close()
-	g := New(tableOf(t, map[string]string{"m1": upstream.URL}), nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	g := New(tableOf(t, map[string]string{"m1": upstream.URL}), nil, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
 

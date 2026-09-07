@@ -8,7 +8,7 @@ constraints:
 acquire:
   methods:
     - id: source
-      description: Export-Deploy from PyPI in a virtual environment, with the checkpoint converter in a second one
+      description: Install Export-Deploy and the checkpoint converter from PyPI into virtual environments
       recipe:
         recipe_id: nemo
 probes:
@@ -33,59 +33,100 @@ launch:
   stop_grace_ms: 60000
 params:
   - name: n_ctx
+    label: Context length
     type: PARAM_TYPE_INT
     default: '4096'
+    unit: tokens
+    min: 256
+    step: 256
+    group: Context
     flag: --inference_max_seq_length
-    description: Maximum sequence length in tokens
+    description: Tokens the model can hold in one sequence.
   - name: max_batch_size
+    label: Batch size
     type: PARAM_TYPE_INT
     default: '8'
+    unit: sequences
+    min: 1
+    step: 1
+    group: Context
     flag: --max_batch_size
-    description: Sequences batched together, each holding a full length cache
+    description: Sequences batched together. Each holds a full-length cache.
   - name: num_gpus
+    label: Devices
     type: PARAM_TYPE_INT
     default: '1'
+    unit: devices
+    min: 1
+    step: 1
+    group: Parallelism
     flag: --num_gpus
-    description: Devices the deployment claims
+    description: Devices the deployment claims.
   - name: tensor_model_parallel_size
+    label: Tensor parallel
     type: PARAM_TYPE_INT
     default: '1'
+    unit: devices
+    min: 1
+    step: 1
+    group: Parallelism
     flag: --tensor_model_parallel_size
-    description: Devices to shard each layer across
+    description: Devices each layer is sharded across.
   - name: pipeline_model_parallel_size
+    label: Pipeline parallel
     type: PARAM_TYPE_INT
     default: '1'
+    unit: devices
+    min: 1
+    step: 1
+    group: Parallelism
     flag: --pipeline_model_parallel_size
-    description: Devices to split the layer stack across
+    description: Devices the layer stack is split across.
+  - name: enable_cuda_graphs
+    label: CUDA graphs
+    type: PARAM_TYPE_BOOL
+    default: 'false'
+    group: Performance
+    flag: --enable_cuda_graphs
+    description: Capture CUDA graphs for faster decoding.
+  - name: enable_flash_decode
+    label: Flash decode
+    type: PARAM_TYPE_BOOL
+    default: 'false'
+    group: Performance
+    flag: --enable_flash_decode
+    description: Flash attention during decoding.
   - name: served_model_name
+    label: Served name
     type: PARAM_TYPE_STRING
     default: '{{.name}}'
+    group: Identity
     flag: --model_id
-    description: Model name reported in responses, the instance name by default
+    description: Model name the runtime reports. Defaults to the instance name.
   - name: model_id
+    label: Base model id
     type: PARAM_TYPE_STRING
     default: '{{index .descriptor.metadata "tokenizer.type"}}'
-    description: Hugging Face id of the base model the converter builds a packed .nemo as; the checkpoint's tokenizer id by default
-  - name: enable_cuda_graphs
-    type: PARAM_TYPE_BOOL
-    default: 'false'
-    flag: --enable_cuda_graphs
-    description: Capture CUDA graphs for faster decoding
-  - name: enable_flash_decode
-    type: PARAM_TYPE_BOOL
-    default: 'false'
-    flag: --enable_flash_decode
-    description: Flash attention during decoding
+    group: Conversion
+    advanced: true
+    description: Hugging Face id of the base model the converter builds a packed checkpoint as. Defaults to the checkpoint's tokenizer id.
   - name: legacy_ckpt
+    label: Legacy checkpoint
     type: PARAM_TYPE_BOOL
     default: 'false'
+    group: Conversion
+    advanced: true
     flag: --legacy_ckpt
-    description: Load a checkpoint written before Megatron Bridge
+    description: Load a checkpoint written before Megatron Bridge.
   - name: cuda_visible_devices
+    label: Visible devices
     type: PARAM_TYPE_STRING
     default: '{{range $i, $d := .devices}}{{if $i}},{{end}}{{index $d.facts "index"}}{{end}}'
+    group: Parallelism
+    advanced: true
     flag: --cuda_visible_devices
-    description: Devices a slot pins the deployment to, omitted without a slot
+    description: Device indexes the deployment is pinned to. Set from the slot's devices.
+
 estimate:
   groups:
     - kind: TENSOR_GROUP_KIND_EMBEDDING

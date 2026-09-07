@@ -6,12 +6,12 @@
   import { fail, ok } from '$lib/toast.svelte';
   import { SourceKind, type ConfigField, type Provider, type SourceStatus } from '$proto/source_pb';
   import { Trash2 } from '@lucide/svelte';
-  import Drawer from './ui/Drawer.svelte';
+  import Dialog from './ui/Dialog.svelte';
   import Button from './ui/Button.svelte';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
-  import Section from './ui/Section.svelte';
   import ConfigForm from './ConfigForm.svelte';
+  import TextInput from './ui/TextInput.svelte';
 
   // A source added or edited, its settings the form its provider declares
   let { open = $bindable(false), providers = [], editing = null }: { open?: boolean; providers?: Provider[]; editing?: SourceStatus | null } = $props();
@@ -29,7 +29,7 @@
   const missing = $derived(fields.filter((f) => f.required && !(config[f.name] ?? '').trim() && !f.default).map((f) => f.label || f.name));
   const idOk = $derived(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id) && !id.includes('..'));
 
-  // Switching providers starts the settings over, they belong to the provider
+  // Switching providers starts the settings over
   $effect(() => {
     void kindText;
     if (!editing) config = {};
@@ -53,12 +53,12 @@
       const source = { id: id.trim(), kind, name: name.trim(), config: settings };
       if (editing) {
         await api.sources.updateSource({ source });
-        return { title: `Updated ${source.name || source.id}` };
+        return { title: `Saved ${source.name || source.id}` };
       }
       await api.sources.createSource({ source });
       return { title: `Added ${source.name || source.id}` };
     },
-    failTitle: () => (editing ? 'Update failed' : 'Add failed')
+    failTitle: () => (editing ? 'Save failed' : 'Add failed')
   });
 
   const disabled = $derived((!editing && (!idOk || !provider)) || missing.length > 0);
@@ -66,7 +66,7 @@
   async function remove() {
     if (!editing?.source) return;
     const label = editing.source.name || editing.source.id;
-    const yes = await confirm({ title: `Remove ${label}?`, message: 'Models it pulled stay in the library.', action: 'Remove', tone: 'bad' });
+    const yes = await confirm({ title: `Remove ${label}?`, message: 'Models pulled from it stay in the library.', action: 'Remove', tone: 'bad' });
     if (!yes) return;
     try {
       await api.sources.deleteSource({ id: editing.source.id });
@@ -78,39 +78,40 @@
   }
 </script>
 
-<Drawer bind:open title={editing ? editing.source?.name || editing.source?.id || 'Source' : 'New source'} subtitle={editing ? `${editing.capabilities?.name ?? ''} · ${editing.source?.id ?? ''}` : 'A place models come from'}>
+<Dialog bind:open size="lg" title={editing ? editing.source?.name || editing.source?.id || 'Source' : 'Add source'} description={editing ? `${editing.capabilities?.name ?? ''} · ${editing.source?.id ?? ''}` : undefined}>
   <form
-    class="flex flex-col gap-6 px-6 py-5"
+    class="flex flex-col gap-6"
     onsubmit={(e) => {
       e.preventDefault();
       if (!disabled && !form.saving) form.run();
     }}
   >
-    <div class="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2">
+    <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
       {#if !editing}
-        <Field label="Provider" for="src-kind" hint={provider?.description || undefined} class="sm:col-span-2">
+        <Field label="Provider" for="src-kind" description={provider?.description || undefined} class="sm:col-span-2">
           {#if providers.length <= 1}
             <div id="src-kind" class="input-static">{provider?.name ?? '–'}</div>
           {:else}
             <Select id="src-kind" bind:value={kindText} items={providers.map((p) => ({ value: String(p.kind), label: p.name }))} />
           {/if}
         </Field>
-        <Field label="Id" for="src-id" hint="Fixed once created" error={id && !idOk ? 'Letters, digits, dots, dashes, and underscores' : undefined}>
-          <input id="src-id" class="input font-mono" bind:value={id} placeholder="my-source" aria-invalid={!!id && !idOk} autocomplete="off" spellcheck="false" />
+        <Field label="Id" for="src-id" required description="Cannot be changed later." error={id && !idOk ? 'Letters, digits, dots, dashes, and underscores' : undefined}>
+          <TextInput id="src-id" mono bind:value={id} empty="my-source" invalid={!!id && !idOk} />
         </Field>
       {/if}
       <Field label="Name" for="src-name" class={editing ? 'sm:col-span-2' : ''}>
-        <input id="src-name" class="input" bind:value={name} placeholder={provider?.name} autocomplete="off" />
+        <TextInput id="src-name" bind:value={name} empty={provider?.name ?? ''} />
       </Field>
     </div>
 
     {#each transports as t (t)}
-      <Section title={transports.length > 1 ? transportName(t) : 'Settings'}>
+      <div class="flex flex-col gap-3">
+        {#if transports.length > 1}<h3 class="caps text-fg-faint">{transportName(t)}</h3>{/if}
         <ConfigForm fields={fields.filter((f) => f.transport === t)} bind:values={config} idPrefix="src-{t}" />
-      </Section>
+      </div>
     {/each}
     {#if fields.length === 0 && provider}
-      <p class="text-sm text-fg-faint">Nothing to configure</p>
+      <p class="text-sm text-fg-faint">This provider has no settings.</p>
     {/if}
     {#if editing?.error}
       <div class="note note-bad">{editing.error}</div>
@@ -122,12 +123,12 @@
     {#if editing && !editing.source?.seeded}
       <Button variant="ghost" size="sm" icon={Trash2} class="text-bad hover:text-bad" onclick={remove}>Remove</Button>
     {:else if editing?.source?.seeded}
-      <span class="text-xs text-fg-faint">Seeded by the daemon, editable but not removable</span>
+      <span class="text-xs text-fg-faint">Built-in source. It can be edited but not removed.</span>
     {/if}
-    {#if missing.length}<span class="text-sm text-warn">Needs {missing.join(' and ')}</span>{/if}
+    {#if missing.length}<span class="text-sm text-warn">Required: {missing.join(', ')}</span>{/if}
     <span class="ml-auto flex gap-2">
-      <Button variant="ghost" size="sm" onclick={() => (open = false)}>Cancel</Button>
-      <Button variant="primary" size="sm" loading={form.saving} {disabled} onclick={form.run}>{editing ? 'Save' : 'Add'}</Button>
+      <Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
+      <Button variant="primary" loading={form.saving} {disabled} onclick={form.run}>{editing ? 'Save' : 'Add source'}</Button>
     </span>
   {/snippet}
-</Drawer>
+</Dialog>

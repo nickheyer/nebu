@@ -5,7 +5,7 @@ import { PoolKind, type HostProfile, type Storage } from '$proto/host_pb';
 import { TaskState, type Task } from '$proto/task_pb';
 import { InstanceState, type Instance } from '$proto/instance_pb';
 import type { Slot } from '$proto/slot_pb';
-import type { GatewayStatus, Route } from '$proto/gateway_pb';
+import type { GatewayStatus, Route, Trace } from '$proto/gateway_pb';
 import type { Install, RuntimeStatus } from '$proto/runtime_pb';
 import type { FormatSpec } from '$proto/model_pb';
 import type { Build } from '$proto/recipe_pb';
@@ -15,6 +15,9 @@ import type { Source, SourceStatus } from '$proto/source_pb';
 import type { Settings } from '$proto/settings_pb';
 import { newestFirst } from './format';
 import { weightsName } from './catalog';
+
+// Traces kept in the browser, the newest ones the gateway keeps
+const traceLimit = 500;
 
 // Everything the UI shows, kept current by the event stream
 export const live = $state({
@@ -33,7 +36,8 @@ export const live = $state({
   builds: new SvelteMap<string, Build>(),
   models: new SvelteMap<string, StoredModel>(),
   sources: new SvelteMap<string, Source>(),
-  formats: new SvelteMap<string, FormatSpec>()
+  formats: new SvelteMap<string, FormatSpec>(),
+  traces: new SvelteMap<string, Trace>()
 });
 
 // Lists without a map, reread per connection and after SOURCE, HOST, and INSTALL events
@@ -98,6 +102,14 @@ function settle() {
   live.ready = true;
 }
 
+// Keeps one trace, dropping the oldest once the browser holds as many as the gateway does
+function keepTrace(t: Trace) {
+  live.traces.set(t.id, t);
+  if (live.traces.size <= traceLimit) return;
+  const oldest = [...live.traces.values()].sort((a, b) => Number((a.startedAt?.seconds ?? 0n) - (b.startedAt?.seconds ?? 0n)));
+  for (const t of oldest.slice(0, live.traces.size - traceLimit)) live.traces.delete(t.id);
+}
+
 // Folds one event into the state
 function apply(ev: Event) {
   const p = ev.payload;
@@ -115,6 +127,10 @@ function apply(ev: Event) {
     if (p.case === 'settings') live.settings = p.value;
     return;
   }
+  if (ev.kind === EventKind.TRACE) {
+    if (p.case === 'trace') keepTrace(p.value);
+    return;
+  }
   const map = maps[ev.kind];
   if (!map) return;
   if (ev.action === EventAction.DELETED) {
@@ -126,6 +142,17 @@ function apply(ev: Event) {
     let set = snapshotSeen.get(ev.kind);
     if (!set) snapshotSeen.set(ev.kind, (set = new Set()));
     set.add(ev.id);
+  }
+}
+
+// Reads the traces the gateway kept, the stream carrying every one from here on
+async function loadTraces(signal: AbortSignal) {
+  try {
+    const r = await api.gateway.listTraces({ limit: traceLimit }, { signal });
+    live.traces.clear();
+    for (const t of r.traces) live.traces.set(t.id, t);
+  } catch (err) {
+    if (!signal.aborted) live.error = message(err);
   }
 }
 
@@ -145,6 +172,7 @@ export function connect() {
         live.formats.clear();
         for (const f of specs.formats) live.formats.set(f.id, f);
         void refreshCached();
+        void loadTraces(signal);
         for await (const msg of api.events.watchEvents({ snapshot: true }, { signal })) {
           live.connected = true;
           live.needsToken = false;
@@ -180,11 +208,11 @@ export function disconnect() {
   live.connected = false;
 }
 
-// Probes the host again and checks every dependency, as a task whose log holds the checks
+// Probes the host again and checks every dependency, as a task
 export async function probeHost(): Promise<boolean> {
   try {
     const r = await api.host.doctor({});
-    ok('Probing host', undefined, r.task ? { href: `/tasks?id=${r.task.id}`, label: 'Task' } : undefined);
+    ok('Probing host', undefined, r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
     return true;
   } catch (err) {
     fail(err, 'Probe failed');
@@ -197,7 +225,7 @@ export function hostName(): string {
   return live.settings?.hostLabel || live.host?.hostname || '';
 }
 
-// Whether the label differs from the hostname, so the hostname is worth showing beneath
+// Whether the label differs from the hostname
 export function hostLabeled(): boolean {
   return !!live.settings?.hostLabel && live.settings.hostLabel !== live.host?.hostname;
 }
@@ -205,7 +233,7 @@ export function hostLabeled(): boolean {
 // Writes settings, the stream carrying the change back to every page
 export async function updateSettings(patch: Partial<Settings>): Promise<boolean> {
   try {
-    const r = await api.settings.updateSettings({ settings: { ...(live.settings ?? { hostLabel: '', setupDismissed: false }), ...patch } as Settings });
+    const r = await api.settings.updateSettings({ settings: { ...(live.settings ?? { hostLabel: '' }), ...patch } as Settings });
     if (r.settings) live.settings = r.settings;
     return true;
   } catch (err) {
@@ -242,9 +270,19 @@ export function liveInstances(): Instance[] {
   return [...live.instances.values()].filter(instanceLive).sort(byCreated);
 }
 
+// Slots in their list order
+export function orderedSlots(): Slot[] {
+  return [...live.slots.values()].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+}
+
 export function slotName(id: string | undefined): string {
   if (!id) return '';
   return live.slots.get(id)?.name ?? id;
+}
+
+// Finds a slot by id or by name
+export function slotByRef(ref: string): Slot | undefined {
+  return live.slots.get(ref) ?? [...live.slots.values()].find((s) => s.name === ref);
 }
 
 export function sourceName(id: string): string {
@@ -281,7 +319,7 @@ export function poolName(id: string): string {
   const pool = live.host?.pools.find((p) => p.id === id);
   if (!pool) return id;
   if (pool.kind === PoolKind.DEVICE) return deviceName(pool.deviceId);
-  return pool.kind === PoolKind.UNIFIED ? 'unified memory' : 'system memory';
+  return pool.kind === PoolKind.UNIFIED ? 'Unified memory' : 'System memory';
 }
 
 // The filesystem the store sits on, the room a pull has
@@ -294,4 +332,9 @@ export function storeMount(): Storage | undefined {
 // What a weight group is called where a record names only the group, its format read from the library
 export function groupLabel(m: { sourceId: string; repo: string; group: string; formatId?: string }): string {
   return weightsName(m.group, m.formatId || live.models.get(modelKey(m))?.formatId);
+}
+
+// Traces newest first, one route's when named
+export function tracesOf(route = ''): Trace[] {
+  return [...live.traces.values()].filter((t) => !route || t.route === route).sort(newestFirst((t) => t.startedAt));
 }

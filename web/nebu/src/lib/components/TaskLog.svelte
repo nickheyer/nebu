@@ -89,5 +89,5 @@
     {/if}
   {/if}
   {#if error}<div class="note note-bad">{error}</div>{/if}
-  <LogView {lines} {height} live={active} empty={active ? 'Waiting for output' : 'No output'} />
+  <LogView {lines} {height} live={active} empty={active ? 'Waiting for output…' : 'No output'} />
 </div>

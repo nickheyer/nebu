@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"sort"
@@ -196,6 +197,34 @@ func (t *Table) Pending(name, slotID, model string, policy *v1.Policy) *v1.Route
 	}
 	t.save(r, action)
 	return t.snapshotLocked(r)
+}
+
+// Moves a route to a new name, refusing one already taken
+func (t *Table) Rename(from, to string) (*v1.Route, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if from == to {
+		if r, ok := t.routes[from]; ok {
+			return t.snapshotLocked(r), nil
+		}
+		return nil, ErrNoRoute
+	}
+	if _, taken := t.routes[to]; taken {
+		return nil, fmt.Errorf("%q is already a route", to)
+	}
+	r, ok := t.routes[from]
+	if !ok {
+		return nil, ErrNoRoute
+	}
+	delete(t.routes, from)
+	delete(t.limiters, from)
+	delete(t.dirty, from)
+	gone := proto.Clone(r).(*v1.Route)
+	t.save(gone, v1.EventAction_EVENT_ACTION_DELETED)
+	r.Name = to
+	t.routes[to] = r
+	t.save(r, v1.EventAction_EVENT_ACTION_CREATED)
+	return t.snapshotLocked(r), nil
 }
 
 // Removes a name entirely, and the instance's counter when no other name shares it

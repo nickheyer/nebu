@@ -18,7 +18,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/db"
+	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -42,16 +45,22 @@ type Gateway struct {
 	tls       bool
 	version   string
 	log       *slog.Logger
+	traces    *Recorder
 
 	mu         sync.Mutex
 	transports map[uint32]*http.Transport
 }
 
 // Builds the gateway, requiring a bearer key when keys exist, with the policy routes inherit and the origins browsers may call from
-func New(table *Table, keys, origins []string, policy *v1.Policy, log *slog.Logger) *Gateway {
+//
+// Every request is traced and the newest traces reach the bus.
+func New(table *Table, keys, origins []string, policy *v1.Policy, bus *events.Bus, log *slog.Logger) *Gateway {
 	table.SetDefaults(policy)
-	return &Gateway{table: table, keys: keys, origins: origins, log: log, transports: map[uint32]*http.Transport{}}
+	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing), transports: map[uint32]*http.Transport{}}
 }
+
+// Returns the request recorder
+func (g *Gateway) Traces() *Recorder { return g.traces }
 
 // Records what the gateway says it is, for clients that ask
 func (g *Gateway) SetVersion(v string) { g.version = v }
@@ -106,7 +115,7 @@ func (g *Gateway) cors(next http.HandlerFunc) http.HandlerFunc {
 			if asked := r.Header.Get("Access-Control-Request-Headers"); asked != "" {
 				w.Header().Set("Access-Control-Allow-Headers", asked)
 			}
-			w.Header().Set("Access-Control-Expose-Headers", "Retry-After")
+			w.Header().Set("Access-Control-Expose-Headers", "Retry-After, "+traceHeader)
 			w.Header().Set("Access-Control-Max-Age", "600")
 			w.Header().Add("Vary", "Origin")
 			w.Header().Add("Vary", "Access-Control-Request-Headers")
@@ -294,58 +303,112 @@ func (g *Gateway) about(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"version": g.version})
 }
 
-func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request) {
+// Starts the trace of one request: who asked, for what, in which format
+func (g *Gateway) trace(r *http.Request, name string, body []byte, api v1.ApiFlavor) *v1.Trace {
+	t := &v1.Trace{
+		Id:           db.NewID(),
+		Route:        name,
+		ClientApi:    api,
+		Path:         r.URL.Path,
+		Kind:         kindOf(api, r.URL.Path),
+		StartedAt:    timestamppb.Now(),
+		RequestBytes: uint64(len(body)),
+		Request:      capped(body),
+		Remote:       r.RemoteAddr,
+	}
+	if t.Kind != v1.TraceKind_TRACE_KIND_OTHER {
+		if chat, err := flavorOf(api).ParseRequest(r.URL.Path, body); err == nil {
+			t.Stream = chat.Stream
+		}
+	}
+	g.traces.Start(t)
+	return t
+}
+
+// Answers a refusal in the client's flavor and closes the trace with it
+func (g *Gateway) refuse(w *traceWriter, client Flavor, status int, message, kind string) {
+	w.t.Error = message
+	client.Error(w, status, message, kind)
+}
+
+func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	client := flavorOf(clientFlavor(r))
-	body, ok := readBody(w, r, client)
+	body, ok := readBody(rw, r, client)
 	if !ok {
 		return
 	}
 	name := modelName(r, body)
+	t := g.trace(r, name, body, clientFlavor(r))
+	rw.Header().Set(traceHeader, t.GetId())
+	w := &traceWriter{ResponseWriter: rw, t: t}
+	defer func() {
+		t.Status, t.ResponseBytes = uint32(w.status), w.bytes
+		g.traces.Finish(t)
+	}()
 	route, policy, release, err := g.table.Acquire(name)
 	if errors.Is(err, ErrNoRoute) && name == "" {
 		if ready := g.table.Ready(); len(ready) == 1 {
 			name = ready[0].GetName()
+			t.Route = name
 			route, policy, release, err = g.table.Acquire(name)
 		}
 	}
 	switch {
 	case errors.Is(err, ErrPending):
 		w.Header().Set("Retry-After", retryAfter)
-		client.Error(w, http.StatusServiceUnavailable, "model "+name+" is starting, retry shortly", "model_starting")
+		g.refuse(w, client, http.StatusServiceUnavailable, "model "+name+" is starting, retry shortly", "model_starting")
 		return
 	case errors.Is(err, ErrDraining):
 		w.Header().Set("Retry-After", retryAfter)
-		client.Error(w, http.StatusServiceUnavailable, "model "+name+" is being replaced, retry shortly", "model_swapping")
+		g.refuse(w, client, http.StatusServiceUnavailable, "model "+name+" is being replaced, retry shortly", "model_swapping")
 		return
 	case errors.Is(err, ErrBusy):
 		w.Header().Set("Retry-After", retryAfter)
-		client.Error(w, http.StatusTooManyRequests, "model "+name+" has every allowed request in flight, retry shortly", "rate_limit_error")
+		g.refuse(w, client, http.StatusTooManyRequests, "model "+name+" has every allowed request in flight, retry shortly", "rate_limit_error")
 		return
 	case errors.Is(err, ErrThrottled):
 		w.Header().Set("Retry-After", "1")
-		client.Error(w, http.StatusTooManyRequests, "model "+name+" is over its request rate, retry shortly", "rate_limit_error")
+		g.refuse(w, client, http.StatusTooManyRequests, "model "+name+" is over its request rate, retry shortly", "rate_limit_error")
 		return
 	case err != nil:
-		client.Error(w, http.StatusNotFound, "model "+name+" is not running, run it with nebu run", "model_not_found")
+		g.refuse(w, client, http.StatusNotFound, "model "+name+" is not running, run it with nebu run", "model_not_found")
 		return
 	}
 	defer release()
+	t.InstanceId, t.SlotId, t.UpstreamApi = route.GetInstanceId(), route.GetSlotId(), route.GetApi()
 	target, err := url.Parse(route.GetEndpoint())
 	if err != nil {
-		client.Error(w, http.StatusBadGateway, err.Error(), "server_error")
+		g.refuse(w, client, http.StatusBadGateway, err.Error(), "server_error")
 		return
 	}
 	// A request in the runtime's own format passes through untouched, any other is translated both ways
 	if clientFlavor(r) != route.GetApi() || r.URL.Path == anthropicCount {
+		t.Translated = true
 		g.translate(w, r, body, name, route.GetServed(), target, policy, client, flavorOf(route.GetApi()))
 		return
 	}
 	// The runtime answers to its own name, so a route named otherwise rewrites the model field
 	if served := route.GetServed(); served != "" && served != name {
 		if body, err = renameModel(body, served); err != nil {
-			client.Error(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+			g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
 			return
 		}
+	}
+	// The answer is read on its way past so the trace carries its tokens and text; a path the gateway
+	// does not know, or a body its flavor cannot read, keeps the head of the response instead
+	upstream := flavorOf(route.GetApi())
+	chat, perr := (*Chat)(nil), error(nil)
+	if t.Kind != v1.TraceKind_TRACE_KIND_OTHER {
+		chat, perr = upstream.ParseRequest(r.URL.Path, body)
+	}
+	if chat != nil && perr == nil {
+		reader := readPassthrough(t, upstream, chat)
+		w.tee = reader.pw
+		defer reader.close()
+	} else {
+		raw := &rawCapture{}
+		w.tee = raw
+		defer func() { t.Response = raw.buf.String() }()
 	}
 	// The whole exchange ends at the request timeout, so a hung runtime never holds a request in flight forever
 	ctx := r.Context()
@@ -363,7 +426,7 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request) {
 		},
 		Transport:     &sameHostRedirects{next: g.transport(policy.GetUpstreamTimeoutMs()), body: body},
 		FlushInterval: -1,
-		ErrorHandler:  func(w http.ResponseWriter, _ *http.Request, err error) { g.upstreamError(w, client, name, err) },
+		ErrorHandler:  func(w http.ResponseWriter, _ *http.Request, err error) { g.upstreamError(w, t, client, name, err) },
 	}
 	r = r.WithContext(ctx)
 	r.Body = io.NopCloser(bytes.NewReader(body))
@@ -395,10 +458,11 @@ func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []
 }
 
 // Serves a request written in one flavor from a runtime that speaks another
-func (g *Gateway) translate(w http.ResponseWriter, r *http.Request, body []byte, name, served string, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
+func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, served string, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
+	t := w.t
 	chat, err := client.ParseRequest(r.URL.Path, body)
 	if err != nil {
-		client.Error(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
 	// Upstream hears the runtime's own name, the client hears the one it asked for
@@ -411,33 +475,37 @@ func (g *Gateway) translate(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	if upstream.InlineImages() {
 		if err := g.inlineImages(r.Context(), chat, policy); err != nil {
-			client.Error(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+			g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
 			return
 		}
 	}
 	path, out, err := upstream.RenderRequest(chat)
 	if err != nil {
-		client.Error(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
+	t.UpstreamRequest = capped(out)
 	resp, cancel, err := g.send(r.Context(), target, path, out, chat.Stream, policy)
 	if err != nil {
-		g.upstreamError(w, client, name, err)
+		g.upstreamError(w, t, client, name, err)
 		return
 	}
 	defer cancel()
 	defer resp.Body.Close()
+	t.FirstByteAt = timestamppb.Now()
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 		message := upstream.ErrorMessage(raw)
 		if message == "" {
 			message = strings.TrimSpace(string(raw))
 		}
-		client.Error(w, resp.StatusCode, "upstream: "+message, "upstream_error")
+		g.refuse(w, client, resp.StatusCode, "upstream: "+message, "upstream_error")
 		return
 	}
+	sink := &traceSink{t: t}
+	defer sink.close()
 	if chat.Stream {
-		sw := client.Stream(w, chat)
+		sw := tracedStream{StreamWriter: client.Stream(w, chat), sink: sink}
 		if err := upstream.ParseStream(resp.Body, sw.Write); err != nil {
 			g.log.Warn("gateway stream", "model", name, "err", err)
 			sw.Write(Event{Kind: "error", Text: "upstream: " + err.Error()})
@@ -447,15 +515,17 @@ func (g *Gateway) translate(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
-		client.Error(w, http.StatusBadGateway, "upstream error: "+err.Error(), "server_error")
+		g.refuse(w, client, http.StatusBadGateway, "upstream error: "+err.Error(), "server_error")
 		return
 	}
 	res, err := upstream.ParseResult(chat, raw)
 	if err != nil {
-		client.Error(w, http.StatusBadGateway, "upstream answered in a shape the gateway could not read: "+err.Error(), "server_error")
+		g.refuse(w, client, http.StatusBadGateway, "upstream answered in a shape the gateway could not read: "+err.Error(), "server_error")
 		return
 	}
 	res.Model = name
+	sink.first()
+	sink.result(res)
 	g.answer(w, client, chat, res)
 }
 
@@ -472,17 +542,22 @@ func (g *Gateway) answer(w http.ResponseWriter, client Flavor, chat *Chat, res *
 }
 
 // Answers a failed exchange with the runtime, a timeout as 504 and anything else as 502
-func (g *Gateway) upstreamError(w http.ResponseWriter, client Flavor, name string, err error) {
+func (g *Gateway) upstreamError(w http.ResponseWriter, t *v1.Trace, client Flavor, name string, err error) {
 	g.log.Warn("gateway upstream", "model", name, "err", err)
+	message := "upstream error: " + err.Error()
+	status := http.StatusBadGateway
+	kind := "server_error"
 	if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
-		client.Error(w, http.StatusGatewayTimeout, fmt.Sprintf("model %s did not answer within its timeout", name), "timeout_error")
-		return
+		message, status, kind = fmt.Sprintf("model %s did not answer within its timeout", name), http.StatusGatewayTimeout, "timeout_error"
 	}
-	client.Error(w, http.StatusBadGateway, "upstream error: "+err.Error(), "server_error")
+	if t.Error == "" {
+		t.Error = message
+	}
+	client.Error(w, status, message, kind)
 }
 
 // Answers a token count from the runtime's tokenizer when it has one, an estimate otherwise
-func (g *Gateway) count(w http.ResponseWriter, r *http.Request, chat *Chat, name string, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
+func (g *Gateway) count(w *traceWriter, r *http.Request, chat *Chat, name string, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
 	res := &Result{Model: name}
 	n, err := g.countUpstream(r.Context(), chat, target, policy, upstream)
 	if err != nil {
@@ -490,6 +565,7 @@ func (g *Gateway) count(w http.ResponseWriter, r *http.Request, chat *Chat, name
 		n = estimateTokens(chat)
 	}
 	res.In = n
+	w.t.PromptTokens = uint32(n)
 	g.answer(w, client, chat, res)
 }
 

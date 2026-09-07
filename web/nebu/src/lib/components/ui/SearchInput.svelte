@@ -3,10 +3,10 @@
   import { Search, X } from '@lucide/svelte';
   import { slashFocus } from '$lib/keys';
 
-  // A search field with the slash shortcut and a clear button once it holds text
+  // A search field with the slash shortcut, a clear button once it holds text, and a hint while empty
   let {
     value = $bindable(''),
-    placeholder = 'Search',
+    empty = 'Search',
     size = 'md',
     disabled = false,
     oninput,
@@ -16,7 +16,7 @@
     class: cls = ''
   }: {
     value?: string;
-    placeholder?: string;
+    empty?: string;
     size?: 'md' | 'lg';
     disabled?: boolean;
     oninput?: () => void;
@@ -37,7 +37,6 @@
     use:slashFocus
     class="input {h} pr-16"
     bind:value
-    {placeholder}
     {disabled}
     autocomplete="off"
     spellcheck="false"
@@ -52,6 +51,9 @@
       }
     }}
   />
+  {#if empty && !value}
+    <span class="pointer-events-none absolute inset-y-0 {size === 'lg' ? 'left-9' : 'left-8'} flex items-center text-sm text-fg-faint" aria-hidden="true">{empty}</span>
+  {/if}
   <div class="absolute top-1/2 right-2 flex -translate-y-1/2 items-center gap-1">
     {#if trailing}{@render trailing()}{/if}
     {#if value}

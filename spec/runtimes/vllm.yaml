@@ -8,11 +8,11 @@ constraints:
 acquire:
   methods:
     - id: adopt
-      description: vllm already on this host
+      description: Use a vllm binary already on this host
       adopt:
         names: [vllm]
     - id: source
-      description: Installed from PyPI into a virtual environment
+      description: Install from PyPI into a virtual environment
       recipe:
         recipe_id: vllm
 probes:
@@ -34,42 +34,69 @@ launch:
   stop_grace_ms: 30000
 params:
   - name: n_ctx
+    label: Context length
     type: PARAM_TYPE_INT
     default: '8192'
+    unit: tokens
+    min: 256
+    step: 256
+    group: Context
     flag: --max-model-len
-    description: Maximum model length in tokens
+    description: Tokens the model can hold in one conversation.
+  - name: max_num_seqs
+    label: Max sequences
+    type: PARAM_TYPE_INT
+    default: '256'
+    unit: sequences
+    min: 1
+    step: 1
+    group: Context
+    flag: --max-num-seqs
+    description: Requests scheduled at once.
   - name: gpu_memory_utilization
+    label: GPU memory fraction
     type: PARAM_TYPE_FLOAT
     default: '0.9'
+    min: 0.05
+    max: 1
+    step: 0.01
+    group: Memory
     flag: --gpu-memory-utilization
-    description: Fraction of device memory vLLM may claim
+    description: Share of each device the runtime claims for weights and cache.
   - name: kv_cache_dtype
+    label: KV cache type
     type: PARAM_TYPE_STRING
     default: auto
     choices: [auto, fp8, fp8_e5m2, fp8_e4m3]
+    group: Memory
     flag: --kv-cache-dtype
-    description: Cache element type
-  - name: max_num_seqs
-    type: PARAM_TYPE_INT
-    default: '256'
-    flag: --max-num-seqs
-    description: Maximum concurrent sequences
+    description: Element type of the cache. FP8 halves cache memory.
   - name: tensor_parallel_size
+    label: Tensor parallel
     type: PARAM_TYPE_INT
     default: '1'
+    unit: devices
+    min: 1
+    step: 1
+    group: Parallelism
     flag: --tensor-parallel-size
-    description: Devices to shard across
+    description: Devices each layer is sharded across.
   - name: served_model_name
+    label: Served name
     type: PARAM_TYPE_STRING
     default: '{{.name}}'
+    group: Identity
     flag: --served-model-name
-    description: Model name reported in responses, the instance name by default
-  # Speculative decoding, the prediction heads a checkpoint ships loading only once a config names them
+    description: Model name the runtime reports. Defaults to the instance name.
   - name: speculative_config
+    label: Speculative config
     type: PARAM_TYPE_STRING
     default: ''
+    group: Speculative decoding
+    advanced: true
     flag: --speculative-config
-    description: 'Speculative decoding as JSON, {"method":"mtp","num_speculative_tokens":1} for the prediction heads a checkpoint ships; empty leaves them on disk'
+    description: 'JSON such as {"method":"mtp","num_speculative_tokens":1}. Empty leaves draft heads unloaded.'
+
 estimate:
   groups:
     - kind: TENSOR_GROUP_KIND_EMBEDDING

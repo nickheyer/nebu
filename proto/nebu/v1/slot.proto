@@ -21,6 +21,11 @@ enum SlotState {
 }
 
 // A reservation of devices and memory budget with one public name
+//
+// The request is what the slot is meant to serve. A run or swap sets it, an
+// evict clears it, and a failure keeps it so the slot can be relaunched. A
+// slot with no request is empty; one with a request comes back after a
+// daemon restart.
 message Slot {
   string id = 1;
   string name = 2;
@@ -38,6 +43,8 @@ message Slot {
   google.protobuf.Timestamp updated_at = 14;
   // Limits the slot's route enforces
   Policy policy = 15;
+  // Where the slot sits in the list, one based, the order slots relaunch in
+  uint32 position = 16;
 }
 
 // Creates a slot
@@ -49,6 +56,8 @@ message CreateSlotRequest {
   string runtime_id = 5;
   map<string, string> params = 6;
   Policy policy = 7;
+  // Position in the list, appended after the last slot when zero
+  uint32 position = 8;
 }
 
 // Returns the new slot
@@ -76,6 +85,9 @@ message GetSlotResponse {
 }
 
 // Changes slot settings, applied on the next run
+//
+// The name and limits reach the gateway at once. Devices, memory, the
+// runtime, and params apply to the next run or swap.
 message UpdateSlotRequest {
   string id = 1;
   string description = 2;
@@ -84,6 +96,10 @@ message UpdateSlotRequest {
   string runtime_id = 5;
   map<string, string> params = 6;
   Policy policy = 7;
+  // The public name, kept when empty
+  string name = 8;
+  // Position in the list, kept when zero
+  uint32 position = 9;
 }
 
 // Returns the updated slot
@@ -126,6 +142,18 @@ message EvictSlotResponse {
   Slot slot = 1;
 }
 
+// Runs the slot's request again, after a failure or when nothing came back after a restart
+message RelaunchSlotRequest {
+  string id = 1;
+}
+
+// Returns the slot, the new instance, and its startup task
+message RelaunchSlotResponse {
+  Slot slot = 1;
+  Instance instance = 2;
+  Task task = 3;
+}
+
 // Slots and swaps
 service SlotService {
   // Lists slots
@@ -142,4 +170,6 @@ service SlotService {
   rpc Swap(SwapRequest) returns (SwapResponse);
   // Stops the occupant of a slot
   rpc EvictSlot(EvictSlotRequest) returns (EvictSlotResponse);
+  // Runs the slot's request again
+  rpc RelaunchSlot(RelaunchSlotRequest) returns (RelaunchSlotResponse);
 }

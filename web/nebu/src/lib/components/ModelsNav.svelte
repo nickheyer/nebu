@@ -3,7 +3,7 @@
   import { live } from '$lib/state.svelte';
   import Tabs from './ui/Tabs.svelte';
 
-  // The two halves of the models page: what this host holds and what the sources offer
+  // The two halves of the models page: what is downloaded and what the sources offer
   const value = $derived(page.url.pathname.startsWith('/catalog') ? 'discover' : 'library');
 </script>
 
@@ -11,6 +11,6 @@
   {value}
   tabs={[
     { id: 'library', label: 'Library', href: '/store', count: live.models.size || undefined },
-    { id: 'discover', label: 'Discover', href: '/catalog' }
+    { id: 'discover', label: 'Catalog', href: '/catalog' }
   ]}
 />

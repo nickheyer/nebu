@@ -9,7 +9,7 @@
   import Segmented from './ui/Segmented.svelte';
   import Copy from './ui/Copy.svelte';
 
-  // How clients reach the gateway: every listener with the base URL of each wire format, and a first request
+  // How clients reach the gateway: each listener's base URL per wire format, and a first request
   let dialect = $state<string>('openai');
 
   const status = $derived(cached.gateway);
@@ -25,16 +25,16 @@
   const chosen = $derived(dialects.find((d) => d.id === dialect) ?? dialects[0]);
   const curl = $derived(chosen.curl(origins[0].url, example, auth));
 
-  // The request total only moves with traffic, so the section reads it once when shown
+  // The request total only moves with traffic, so the card reads it once when shown
   $effect(() => {
     void refreshCached();
   });
 </script>
 
-<Section title="Connect" meta={status ? `${count(status.requests)} requests since start` : ''}>
+<Section title="Endpoints" meta={status ? `${count(status.requests)} requests since start` : ''}>
   {#snippet actions()}
     <span class="inline-flex items-center gap-1.5 text-xs text-fg-muted">
-      {#if auth}<KeyRound size={13} class="text-warn" /> key required{:else}<LockOpen size={13} /> no key{/if}
+      {#if auth}<KeyRound size={13} class="text-warn" /> API key required{:else}<LockOpen size={13} /> No API key{/if}
     </span>
     {#if status?.tls}<span class="inline-flex items-center gap-1.5 text-xs text-fg-muted"><ShieldCheck size={13} /> TLS</span>{/if}
   {/snippet}
@@ -45,7 +45,7 @@
           <thead>
             <tr>
               <th>API</th>
-              <th>Base URL{#if origins.length > 1}<span class="ml-2 font-normal normal-case tracking-normal text-fg-faint">{o.shared ? 'api listener' : 'gateway listener'}</span>{/if}</th>
+              <th>Base URL{#if origins.length > 1}<span class="ml-2 font-normal normal-case tracking-normal text-fg-faint">{o.shared ? 'API listener' : 'gateway listener'}</span>{/if}</th>
               <th></th>
             </tr>
           </thead>
@@ -61,8 +61,8 @@
         </table>
       {/each}
       <div class="flex flex-wrap gap-x-5 gap-y-1 text-xs text-fg-faint">
-        <span>limits {policyText(undefined, status?.policy)}</span>
-        {#if auth}<span>key in <span class="font-mono">{chosen.header}</span></span>{/if}
+        <span class="kv"><span>default limits</span><span>{policyText(undefined, status?.policy)}</span></span>
+        {#if auth}<span class="kv"><span>key header</span><span>{chosen.header}</span></span>{/if}
       </div>
     </div>
     <div class="flex flex-col gap-3">

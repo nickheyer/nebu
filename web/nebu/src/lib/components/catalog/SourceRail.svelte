@@ -29,8 +29,8 @@
   }
   function hint(g: ProviderGroup): string {
     if (broken(g)) return g.sources[0]?.error || 'Not answering';
-    if (needsToken(g)) return `Downloads need ${g.sources[0]?.capabilities?.tokenEnv || 'a token'}`;
-    if (!lists(g)) return 'Opens a typed repository only';
+    if (needsToken(g)) return `Set ${g.sources[0]?.capabilities?.tokenEnv || 'a token'} to download`;
+    if (!lists(g)) return 'No browsing. Type a repository name to open it.';
     return g.sources[0]?.capabilities?.description || g.name;
   }
 

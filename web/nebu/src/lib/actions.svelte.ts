@@ -5,28 +5,28 @@ import { fail, ok } from './toast.svelte';
 import type { Slot } from '$proto/slot_pb';
 import type { StoredModel } from '$proto/store_pb';
 
-// The run panel, shared by every page that can start a model
+// The run dialog, shared by every page that can start a model
 export const runUi = $state({
   open: false,
   model: null as StoredModel | null,
   slotId: ''
 });
 
-// Opens the run panel for a model, aimed at a slot when given
+// Opens the run dialog for a model, aimed at a slot when given
 export function runModel(model: StoredModel | null, slotId = '') {
   runUi.model = model;
   runUi.slotId = slotId;
   runUi.open = true;
 }
 
-// Opens the run panel aimed at a slot
+// Opens the run dialog aimed at a slot
 export function swapSlot(slot: Slot) {
   runModel(null, slot.id);
 }
 
 // Deletes a slot after confirming, stopping its occupant when the daemon asks for that
 export async function deleteSlot(slot: Slot): Promise<boolean> {
-  const yes = await confirm({ title: `Delete ${slot.name}?`, message: 'Clients using this name get 404. Stored models stay.', action: 'Delete', tone: 'bad' });
+  const yes = await confirm({ title: `Delete slot ${slot.name}?`, message: `Requests for "${slot.name}" will get 404. Stored models are not affected.`, action: 'Delete', tone: 'bad' });
   if (!yes) return false;
   try {
     await api.slots.deleteSlot({ id: slot.id, force: false });
@@ -37,7 +37,7 @@ export async function deleteSlot(slot: Slot): Promise<boolean> {
       fail(err, 'Delete failed');
       return false;
     }
-    if (!(await confirm({ title: `Stop ${slot.name} and delete it?`, message: message(err), action: 'Stop and delete', tone: 'bad' }))) return false;
+    if (!(await confirm({ title: `Stop the model and delete ${slot.name}?`, message: message(err), action: 'Stop and delete', tone: 'bad' }))) return false;
     try {
       await api.slots.deleteSlot({ id: slot.id, force: true });
       ok(`Deleted ${slot.name}`);
@@ -49,9 +49,9 @@ export async function deleteSlot(slot: Slot): Promise<boolean> {
   }
 }
 
-// Stops the occupant, keeping the slot
+// Stops the occupant and clears the slot's model
 export async function evictSlot(slot: Slot): Promise<boolean> {
-  const yes = await confirm({ title: `Evict ${slot.name}?`, message: 'The model stops. The slot stays.', action: 'Evict', tone: 'bad' });
+  const yes = await confirm({ title: `Evict ${slot.name}?`, message: 'The model stops and the slot forgets it. The slot and its name stay.', action: 'Evict', tone: 'bad' });
   if (!yes) return false;
   try {
     await api.slots.evictSlot({ id: slot.id });
@@ -63,9 +63,21 @@ export async function evictSlot(slot: Slot): Promise<boolean> {
   }
 }
 
+// Runs the slot's model again
+export async function relaunchSlot(slot: Slot): Promise<boolean> {
+  try {
+    const r = await api.slots.relaunchSlot({ id: slot.id });
+    ok(`Relaunching ${slot.name}`, slot.request?.repo, r.task ? { href: `/tasks/${r.task.id}`, label: 'Open task' } : undefined);
+    return true;
+  } catch (err) {
+    fail(err, 'Relaunch refused');
+    return false;
+  }
+}
+
 // Stops an instance after confirming
 export async function stopInstance(id: string, name: string): Promise<boolean> {
-  const yes = await confirm({ title: `Stop ${name}?`, message: 'It stays stopped after a daemon restart.', action: 'Stop', tone: 'bad' });
+  const yes = await confirm({ title: `Stop ${name}?`, message: 'It will not come back after a daemon restart.', action: 'Stop', tone: 'bad' });
   if (!yes) return false;
   try {
     await api.instances.stopInstance({ id });

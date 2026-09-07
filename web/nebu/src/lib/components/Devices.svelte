@@ -84,7 +84,7 @@
         <span class="ml-3 inline-block w-9 text-right text-fg-muted">{pct(used, r.total).toFixed(0)}%</span>
       </div>
     {:else}
-      <div class="col-span-2 text-sm text-fg-faint">No memory probed</div>
+      <div class="col-span-2 text-sm text-fg-faint">Memory not probed</div>
     {/if}
     <span class="flex w-4 justify-center text-fg-faint">{#if fold}<ChevronRight size={14} class="transition-transform group-open:rotate-90" />{/if}</span>
   </div>

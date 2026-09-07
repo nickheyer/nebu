@@ -12,8 +12,8 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 	return d.tx(ctx, func(exec execFn) error {
 		id := s.GetId()
 		p := s.GetPolicy()
-		if err := exec(`INSERT OR REPLACE INTO slots (id, name, description, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, s.GetName(), s.GetDescription(), s.GetRuntimeId(), int64(s.GetMemoryBytes()), s.GetInstanceId(), enumCol(s.GetState()), s.GetError(), s.GetTaskId(), stamp(s.GetCreatedAt().AsTime()), stamp(s.GetUpdatedAt().AsTime()),
+		if err := exec(`INSERT OR REPLACE INTO slots (id, name, position, description, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, s.GetName(), s.GetPosition(), s.GetDescription(), s.GetRuntimeId(), int64(s.GetMemoryBytes()), s.GetInstanceId(), enumCol(s.GetState()), s.GetError(), s.GetTaskId(), stamp(s.GetCreatedAt().AsTime()), stamp(s.GetUpdatedAt().AsTime()),
 			p.GetMaxInFlight(), p.GetRequestsPerSecond(), p.GetBurst(), p.GetRequestTimeoutMs(), p.GetUpstreamTimeoutMs()); err != nil {
 			return err
 		}
@@ -41,12 +41,12 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 	})
 }
 
-// Lists every slot by name
+// Lists every slot by position, then name
 func (d *DB) ListSlots(ctx context.Context) ([]*v1.Slot, error) {
-	out, err := list(ctx, d, `SELECT id, name, description, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms FROM slots ORDER BY name`, func(rows *sql.Rows) (*v1.Slot, error) {
+	out, err := list(ctx, d, `SELECT id, name, position, description, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms FROM slots ORDER BY position, name`, func(rows *sql.Rows) (*v1.Slot, error) {
 		s := &v1.Slot{}
 		p := &v1.Policy{}
-		err := rows.Scan(&s.Id, &s.Name, &s.Description, &s.RuntimeId, &s.MemoryBytes, &s.InstanceId, enumAt[v1.SlotState]{&s.State}, &s.Error, &s.TaskId, at{&s.CreatedAt}, at{&s.UpdatedAt}, &p.MaxInFlight, &p.RequestsPerSecond, &p.Burst, &p.RequestTimeoutMs, &p.UpstreamTimeoutMs)
+		err := rows.Scan(&s.Id, &s.Name, &s.Position, &s.Description, &s.RuntimeId, &s.MemoryBytes, &s.InstanceId, enumAt[v1.SlotState]{&s.State}, &s.Error, &s.TaskId, at{&s.CreatedAt}, at{&s.UpdatedAt}, &p.MaxInFlight, &p.RequestsPerSecond, &p.Burst, &p.RequestTimeoutMs, &p.UpstreamTimeoutMs)
 		// A slot that inherits everything carries no policy, as it was written
 		if p.GetMaxInFlight()+p.GetBurst()+p.GetRequestTimeoutMs()+p.GetUpstreamTimeoutMs() > 0 || p.GetRequestsPerSecond() > 0 {
 			s.Policy = p

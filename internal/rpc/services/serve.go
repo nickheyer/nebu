@@ -101,6 +101,11 @@ func (s *SlotService) EvictSlot(ctx context.Context, req *connect.Request[v1.Evi
 	return reply(&v1.EvictSlotResponse{Slot: slot}, err)
 }
 
+func (s *SlotService) RelaunchSlot(ctx context.Context, req *connect.Request[v1.RelaunchSlotRequest]) (*connect.Response[v1.RelaunchSlotResponse], error) {
+	slot, in, task, err := s.slots.Relaunch(ctx, req.Msg.GetId())
+	return reply(&v1.RelaunchSlotResponse{Slot: slot, Instance: in, Task: task}, err)
+}
+
 // Serves routes and gateway status
 type GatewayService struct {
 	gateway   *gateway.Gateway
@@ -131,8 +136,20 @@ func (s *GatewayService) SetRoute(ctx context.Context, req *connect.Request[v1.S
 	if err := s.slotless(req.Msg.GetName(), "belongs to a slot"); err != nil {
 		return nil, err
 	}
-	route := s.gateway.Table().Serve(req.Msg.GetName(), in, s.instances.Runtimes.API(in.GetRuntimeId()), "", nil)
+	route := s.gateway.Table().Serve(req.Msg.GetName(), in, s.instances.Runtimes.API(in.GetRuntimeId()), "", req.Msg.GetPolicy())
 	return reply(&v1.SetRouteResponse{Route: route}, nil)
+}
+
+func (s *GatewayService) ListTraces(ctx context.Context, req *connect.Request[v1.ListTracesRequest]) (*connect.Response[v1.ListTracesResponse], error) {
+	return reply(&v1.ListTracesResponse{Traces: s.gateway.Traces().List(req.Msg.GetRoute(), int(req.Msg.GetLimit()))}, nil)
+}
+
+func (s *GatewayService) GetTrace(ctx context.Context, req *connect.Request[v1.GetTraceRequest]) (*connect.Response[v1.GetTraceResponse], error) {
+	t, ok := s.gateway.Traces().Get(req.Msg.GetId())
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no trace %q", req.Msg.GetId()))
+	}
+	return reply(&v1.GetTraceResponse{Trace: t}, nil)
 }
 
 func (s *GatewayService) DeleteRoute(ctx context.Context, req *connect.Request[v1.DeleteRouteRequest]) (*connect.Response[v1.DeleteRouteResponse], error) {

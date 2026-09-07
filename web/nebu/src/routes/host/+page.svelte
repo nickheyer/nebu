@@ -18,7 +18,7 @@
   const host = $derived(live.host);
   const loading = $derived(!live.ready && !live.error && !host);
 
-  // A probe reads the machine again and checks every dependency, the result a task in the sidebar
+  // Probes the machine again and checks every dependency, as a task
   async function probe() {
     probing = true;
     await probeHost();
@@ -34,14 +34,14 @@
       <span>probed {ago(host.probedAt, clock.now)}</span>
     {/if}
   {/snippet}
-  <IconButton icon={RefreshCw} label="Probe again" variant="secondary" loading={probing} onclick={probe} />
+  <Button icon={RefreshCw} loading={probing} onclick={probe}>Probe host</Button>
 </PageHeader>
 
 <div class="flex flex-col gap-9">
   {#if loading}
     <div class="skeleton h-40" aria-busy="true"></div>
   {:else if !host}
-    <Empty icon={Server} title="No profile yet">
+    <Empty icon={Server} title="The host has not been probed yet">
       <Button size="sm" variant="primary" icon={RefreshCw} loading={probing} onclick={probe}>Probe</Button>
     </Empty>
   {:else}
@@ -64,7 +64,7 @@
               <td class="max-w-[16rem] truncate text-xs text-fg-muted" title={s.uses.join('\n')}>{s.uses.map(tail).join(' · ')}</td>
             </tr>
           {:else}
-            <tr><td colspan="6" class="text-fg-faint">No storage probed</td></tr>
+            <tr><td colspan="6" class="text-fg-faint">No filesystems probed</td></tr>
           {/each}
         </tbody>
       </table>
@@ -82,7 +82,7 @@
                 <td class="max-w-md truncate text-fg-muted" title={p.detail}>{p.detail || '–'}</td>
               </tr>
             {:else}
-              <tr><td colspan="3" class="text-fg-faint">No probes</td></tr>
+              <tr><td colspan="3" class="text-fg-faint">No probes ran</td></tr>
             {/each}
           </tbody>
         </table>
@@ -92,7 +92,7 @@
         {#if Object.keys(host.facts).length}
           <Kv mono items={Object.entries(host.facts).sort(([a], [b]) => a.localeCompare(b))} />
         {:else}
-          <p class="text-sm text-fg-faint">None</p>
+          <p class="text-sm text-fg-faint">No facts probed.</p>
         {/if}
       </Section>
     </div>

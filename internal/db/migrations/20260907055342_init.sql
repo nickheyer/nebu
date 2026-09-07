@@ -246,6 +246,7 @@ CREATE TABLE `build_patches` (
 CREATE TABLE `slots` (
   `id` text NULL,
   `name` text NOT NULL,
+  `position` integer NOT NULL DEFAULT 0,
   `description` text NOT NULL DEFAULT '',
   `runtime_id` text NOT NULL DEFAULT '',
   `memory_bytes` integer NOT NULL DEFAULT 0,

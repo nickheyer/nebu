@@ -10,7 +10,7 @@ What ships today, each with its own page under `docs/`:
 - Four runtimes, llama.cpp, vLLM, SGLang, and NeMo, each installed by a method its manifest lists, a binary on the host, a published release, or a build from a recipe, chosen and configured by you.
 - Sources on Hugging Face, GitHub, Ollama, ModelScope, Civitai, Kaggle, NGC, CSGHub, OCI registries, git, mirrors, and local directories, all merged in one catalog.
 - A gateway that speaks the OpenAI, Anthropic, and Ollama APIs from any runtime, with per route limits, CORS, and TLS.
-- A chat page and `nebu chat` for prompting whatever is loaded through the gateway itself.
+- A chat console and `nebu chat` for prompting whatever is loaded through the gateway itself, every answer traced with its timing, token counts, and the exact bodies that crossed the gateway.
 - Linux, macOS, Windows, and FreeBSD hosts, processes owned and found again on every one.
 
 We are just doing what `ollama` already does, minus the weird commercial features, and with the added performance gained through better code, less bloat and coupling, and a generic patch system. Nebu will *not* be an inference provider, you still go through your router or direct api, we just facilitate the mundane devops of downloading models, moving them around the filesystem, stopping and starting the runetime(s), and if everything works out up to this point - installing/patching open source backend services to keep up with the new bleeding-edge ai standards and features that have to be rapidly adopted every week... 

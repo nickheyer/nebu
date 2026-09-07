@@ -15,6 +15,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func runRun(ctx context.Context, e *env, args []string) error {
@@ -272,14 +273,17 @@ func modelText(req *v1.RunRequest) string {
 func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 	req := &v1.UpdateSlotRequest{}
 	var devices, params multi
+	var position uint
 	fs.Var(&devices, "device", "device id from nebu host, repeatable, all devices when none")
 	memory := fs.String("memory", "", "device memory budget such as 8GiB, whole devices when empty")
 	fs.StringVar(&req.Description, "description", "", "free text")
 	fs.StringVar(&req.RuntimeId, "runtime", "", "default runtime for models run in the slot")
+	fs.UintVar(&position, "position", 0, "place in the slot list, one based, last when 0")
 	fs.Var(&params, "param", "default runtime param as name=value, repeatable")
 	policy, limits := policyFlags(fs)
 	req.Policy = policy
 	return req, func() error {
+		req.Position = uint32(position)
 		var err error
 		if req.MemoryBytes, err = parseMemory(*memory); err != nil {
 			return err
@@ -299,14 +303,14 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots create")
 	settings, read := slotFlags(fs)
-	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D]")
+	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--position N] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D]")
 	if err != nil {
 		return err
 	}
 	if err := read(); err != nil {
 		return err
 	}
-	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Description: settings.Description, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, RuntimeId: settings.RuntimeId, Params: settings.Params, Policy: settings.Policy}))
+	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Description: settings.Description, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, RuntimeId: settings.RuntimeId, Params: settings.Params, Policy: settings.Policy, Position: settings.Position}))
 	if err != nil {
 		return err
 	}
@@ -316,7 +320,8 @@ func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots update")
 	settings, read := slotFlags(fs)
-	positional, err := e.parse(fs, args, 1, 1, "slots update <name|id> [flags]")
+	rename := fs.String("name", "", "a new public name, the route following it")
+	positional, err := e.parse(fs, args, 1, 1, "slots update <name|id> [--name NEW] [--position N] [flags]")
 	if err != nil {
 		return err
 	}
@@ -355,6 +360,10 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 			req.RuntimeId = settings.RuntimeId
 		case "param":
 			req.Params = settings.Params
+		case "position":
+			req.Position = settings.Position
+		case "name":
+			req.Name = *rename
 		}
 	})
 	resp, err := e.cl.slots.UpdateSlot(ctx, connect.NewRequest(req))
@@ -480,6 +489,26 @@ func runSlotsEvict(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) { slotsTable(w, []*v1.Slot{resp.Msg.GetSlot()}) })
 }
 
+func runSlotsRelaunch(ctx context.Context, e *env, args []string) error {
+	positional, err := e.parse(e.flags("slots relaunch"), args, 1, 1, "slots relaunch <name|id>")
+	if err != nil {
+		return err
+	}
+	resp, err := e.cl.slots.RelaunchSlot(ctx, connect.NewRequest(&v1.RelaunchSlotRequest{Id: positional[0]}))
+	if err != nil {
+		return err
+	}
+	e.text("slot %s %s\n", resp.Msg.GetSlot().GetName(), eval.EnumShort(resp.Msg.GetSlot().GetState()))
+	if _, err := e.follow(ctx, resp.Msg.GetTask().GetId()); err != nil {
+		return err
+	}
+	final, err := e.cl.slots.GetSlot(ctx, connect.NewRequest(&v1.GetSlotRequest{Id: resp.Msg.GetSlot().GetId()}))
+	if err != nil {
+		return err
+	}
+	return e.print(final.Msg, func(w io.Writer) { slotsTable(w, []*v1.Slot{final.Msg.GetSlot()}) })
+}
+
 func runSlotsRemove(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots remove")
 	force := fs.Bool("force", false, "stop the occupant first")
@@ -516,15 +545,20 @@ func routesTable(w io.Writer, list []*v1.Route, defaults *v1.Policy) {
 }
 
 func runRoutesAdd(ctx context.Context, e *env, args []string) error {
-	positional, err := e.parse(e.flags("routes add"), args, 2, 2, "routes add <name> <instance>")
+	fs := e.flags("routes add")
+	policy, limits := policyFlags(fs)
+	positional, err := e.parse(fs, args, 2, 2, "routes add <name> <instance> [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D]")
 	if err != nil {
+		return err
+	}
+	if err := limits(); err != nil {
 		return err
 	}
 	in, err := e.cl.instances.GetInstance(ctx, connect.NewRequest(&v1.GetInstanceRequest{Id: positional[1]}))
 	if err != nil {
 		return err
 	}
-	resp, err := e.cl.gateway.SetRoute(ctx, connect.NewRequest(&v1.SetRouteRequest{Name: positional[0], InstanceId: in.Msg.GetInstance().GetId()}))
+	resp, err := e.cl.gateway.SetRoute(ctx, connect.NewRequest(&v1.SetRouteRequest{Name: positional[0], InstanceId: in.Msg.GetInstance().GetId(), Policy: policy}))
 	if err != nil {
 		return err
 	}
@@ -569,6 +603,92 @@ func runGateway(ctx context.Context, e *env, args []string) error {
 		fmt.Fprintf(w, "auth %t tls %t requests %d default limits %s\n", st.GetAuth(), st.GetTls(), st.GetRequests(), policyText(st.GetPolicy()))
 		section(w, "routes")
 		routesTable(w, st.GetRoutes(), st.GetPolicy())
+	})
+}
+
+func runGatewayTraces(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("gateway traces")
+	route := fs.String("route", "", "one public name, every route when empty")
+	limit := fs.Uint("limit", 50, "newest traces to show, 0 for everything kept")
+	if _, err := e.parse(fs, args, 0, 0, "gateway traces [--route NAME] [--limit N]"); err != nil {
+		return err
+	}
+	resp, err := e.cl.gateway.ListTraces(ctx, connect.NewRequest(&v1.ListTracesRequest{Route: *route, Limit: uint32(*limit)}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		var rows [][]string
+		for _, t := range resp.Msg.GetTraces() {
+			rows = append(rows, []string{t.GetId(), when(t.GetStartedAt(), time.RFC3339), t.GetRoute(), eval.EnumShort(t.GetKind()), traceFormat(t), strconv.Itoa(int(t.GetStatus())), traceMillis(t.GetStartedAt(), t.GetFirstTokenAt()), traceMillis(t.GetStartedAt(), t.GetFinishedAt()), strconv.Itoa(int(t.GetPromptTokens())), strconv.Itoa(int(t.GetCompletionTokens())), t.GetStop(), t.GetError()})
+		}
+		table(w, []string{"ID", "STARTED", "ROUTE", "KIND", "FORMAT", "STATUS", "FIRST TOKEN", "TOTAL", "IN", "OUT", "STOP", "ERROR"}, rows)
+	})
+}
+
+// The wire formats of a trace, one word when the runtime spoke the client's
+func traceFormat(t *v1.Trace) string {
+	client := eval.EnumShort(t.GetClientApi())
+	if !t.GetTranslated() {
+		return client
+	}
+	return client + ">" + eval.EnumShort(t.GetUpstreamApi())
+}
+
+// Milliseconds between two stamps, dash when either is missing
+func traceMillis(from, to *timestamppb.Timestamp) string {
+	if from == nil || to == nil {
+		return "-"
+	}
+	return strconv.FormatInt(to.AsTime().Sub(from.AsTime()).Milliseconds(), 10) + "ms"
+}
+
+func runGatewayTrace(ctx context.Context, e *env, args []string) error {
+	positional, err := e.parse(e.flags("gateway trace"), args, 1, 1, "gateway trace <id>")
+	if err != nil {
+		return err
+	}
+	resp, err := e.cl.gateway.GetTrace(ctx, connect.NewRequest(&v1.GetTraceRequest{Id: positional[0]}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		t := resp.Msg.GetTrace()
+		rows := [][]string{
+			{"id", t.GetId()},
+			{"route", t.GetRoute()},
+			{"instance", t.GetInstanceId()},
+			{"slot", t.GetSlotId()},
+			{"kind", eval.EnumShort(t.GetKind())},
+			{"format", traceFormat(t)},
+			{"path", t.GetPath()},
+			{"stream", yes(t.GetStream())},
+			{"remote", t.GetRemote()},
+			{"started", when(t.GetStartedAt(), time.RFC3339Nano)},
+			{"first byte", traceMillis(t.GetStartedAt(), t.GetFirstByteAt())},
+			{"first token", traceMillis(t.GetStartedAt(), t.GetFirstTokenAt())},
+			{"total", traceMillis(t.GetStartedAt(), t.GetFinishedAt())},
+			{"status", strconv.Itoa(int(t.GetStatus()))},
+			{"tokens", fmt.Sprintf("%d in, %d out", t.GetPromptTokens(), t.GetCompletionTokens())},
+			{"stop", t.GetStop()},
+			{"bytes", fmt.Sprintf("%d in, %d out", t.GetRequestBytes(), t.GetResponseBytes())},
+		}
+		if t.GetError() != "" {
+			rows = append(rows, []string{"error", t.GetError()})
+		}
+		table(w, nil, rows)
+		section(w, "request")
+		fmt.Fprintln(w, t.GetRequest())
+		if t.GetUpstreamRequest() != "" {
+			section(w, "upstream request")
+			fmt.Fprintln(w, t.GetUpstreamRequest())
+		}
+		for _, c := range t.GetToolCalls() {
+			section(w, "tool call "+c.GetName())
+			fmt.Fprintln(w, c.GetArguments())
+		}
+		section(w, "response")
+		fmt.Fprintln(w, t.GetResponse())
 	})
 }
 

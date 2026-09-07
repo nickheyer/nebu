@@ -84,6 +84,8 @@ message ListRoutesResponse {
 message SetRouteRequest {
   string name = 1;
   string instance_id = 2;
+  // Limits the alias enforces, the gateway defaults for every zero field
+  Policy policy = 3;
 }
 
 // Returns the route
@@ -101,6 +103,94 @@ message DeleteRouteResponse {
   Route route = 1;
 }
 
+// What a request asked the gateway for
+enum TraceKind {
+  TRACE_KIND_UNSPECIFIED = 0;
+  TRACE_KIND_CHAT = 1;
+  TRACE_KIND_GENERATE = 2;
+  TRACE_KIND_EMBED = 3;
+  TRACE_KIND_COUNT = 4;
+  // A path the gateway proxies without reading, such as a runtime's own endpoint
+  TRACE_KIND_OTHER = 5;
+}
+
+// One request through the gateway
+//
+// The gateway keeps the newest traces in memory, streams each one as an
+// event when it starts and when it ends, and answers its id in the
+// X-Nebu-Trace response header. Bodies are capped and left out of events;
+// GetTrace returns them.
+message Trace {
+  string id = 1;
+  // The public name the request named, empty when it named none
+  string route = 2;
+  string instance_id = 3;
+  string slot_id = 4;
+  // The wire format the client spoke and the one the runtime speaks
+  ApiFlavor client_api = 5;
+  ApiFlavor upstream_api = 6;
+  string path = 7;
+  TraceKind kind = 8;
+  bool stream = 9;
+  google.protobuf.Timestamp started_at = 10;
+  // The runtime's response headers arrived
+  google.protobuf.Timestamp first_byte_at = 11;
+  // The first text or tool call of the answer arrived
+  google.protobuf.Timestamp first_token_at = 12;
+  google.protobuf.Timestamp finished_at = 13;
+  // The HTTP status the client got
+  uint32 status = 14;
+  // Why the request failed, empty on success
+  string error = 15;
+  uint32 prompt_tokens = 16;
+  uint32 completion_tokens = 17;
+  // stop, length, tool, or filter
+  string stop = 18;
+  uint64 request_bytes = 19;
+  uint64 response_bytes = 20;
+  // The client's body as sent, capped
+  string request = 21;
+  // The body the gateway sent the runtime when it translated, capped, empty when passed through
+  string upstream_request = 22;
+  // The answer text, or the response body for a request the gateway did not read, capped
+  string response = 23;
+  // Whether the client and runtime formats differed
+  bool translated = 24;
+  // Where the request came from
+  string remote = 25;
+  // Tool calls the answer made, as the runtime named and argued them
+  repeated TraceToolCall tool_calls = 26;
+}
+
+// One tool call in a traced answer
+message TraceToolCall {
+  string id = 1;
+  string name = 2;
+  string arguments = 3;
+}
+
+// Lists traces newest first, one route's or every route's
+message ListTracesRequest {
+  string route = 1;
+  // At most this many, the whole ring when zero
+  uint32 limit = 2;
+}
+
+// Returns traces without bodies
+message ListTracesResponse {
+  repeated Trace traces = 1;
+}
+
+// Fetches one trace with its bodies
+message GetTraceRequest {
+  string id = 1;
+}
+
+// Returns one trace
+message GetTraceResponse {
+  Trace trace = 1;
+}
+
 // Routes and listeners of the OpenAI compatible gateway
 service GatewayService {
   // Returns listeners, routes, and counters
@@ -111,4 +201,8 @@ service GatewayService {
   rpc SetRoute(SetRouteRequest) returns (SetRouteResponse);
   // Removes an alias route
   rpc DeleteRoute(DeleteRouteRequest) returns (DeleteRouteResponse);
+  // Lists recent requests
+  rpc ListTraces(ListTracesRequest) returns (ListTracesResponse);
+  // Fetches one request with its bodies
+  rpc GetTrace(GetTraceRequest) returns (GetTraceResponse);
 }

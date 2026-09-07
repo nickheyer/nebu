@@ -8,8 +8,8 @@ option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
 message Settings {
   // What people call this host, its hostname when empty
   string host_label = 1;
-  // The setup guide on the overview was dismissed
-  bool setup_dismissed = 2;
+  reserved 2;
+  reserved "setup_dismissed";
 }
 
 // Asks for the settings
