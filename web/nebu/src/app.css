@@ -197,7 +197,7 @@
   .tbl td {
     @apply border-b border-line/70 px-3 py-2.5 align-middle;
   }
-  .tbl tbody tr:last-child td {
+  .tbl > tbody > tr:last-child > td {
     border-bottom: 0;
   }
   .tbl tbody tr.row-link {
@@ -215,6 +215,19 @@
   }
   .tbl td.actions > * {
     @apply inline-flex items-center justify-end gap-1;
+  }
+  /* A denser table for details nested under a row of another */
+  .tbl.dense th {
+    @apply h-7;
+  }
+  .tbl.dense td {
+    @apply py-1.5;
+  }
+  /* The footer a table sums up in, ruled off from the rows above it */
+  .tbl tfoot td {
+    @apply font-medium text-fg;
+    border-top: 1px solid var(--color-line-strong);
+    border-bottom: 0;
   }
 
   .link {

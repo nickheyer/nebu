@@ -202,10 +202,8 @@
       </div>
     {/if}
   {:else if tab.value === 'settings'}
-    <div class="mx-auto max-w-3xl">
-      {#key slot.id + slot.updatedAt?.seconds}
-        <SlotForm {slot} cancelHref="/slots/{slot.id}" onSaved={() => (tab.value = 'overview')} />
-      {/key}
-    </div>
+    {#key slot.id + slot.updatedAt?.seconds}
+      <SlotForm {slot} cancelHref="/slots/{slot.id}" onSaved={() => (tab.value = 'overview')} />
+    {/key}
   {/if}
 {/if}

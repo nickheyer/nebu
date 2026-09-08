@@ -57,7 +57,7 @@
     }
     return out;
   });
-  const height = $derived(size === 'sm' ? 'h-7 text-xs' : 'h-8 text-sm');
+  const height = $derived(size === 'sm' ? 'h-8 text-xs' : 'h-9 text-sm');
 </script>
 
 <div class="min-w-0 {cls || 'w-full'}">

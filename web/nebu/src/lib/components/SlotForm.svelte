@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '$lib/api';
-  import { live, cached, orderedSlots } from '$lib/state.svelte';
+  import { live, cached, orderedSlots, hostGpus } from '$lib/state.svelte';
   import { slotOccupied } from '$lib/launch';
   import { policyFields, policyFrom } from '$lib/gateway';
   import { gib, fromGib } from '$lib/format';
@@ -25,7 +25,8 @@
       name: slot?.name ?? '',
       description: slot?.description ?? '',
       position: slot?.position ? String(slot.position) : '',
-      devices: [...(slot?.deviceIds ?? [])],
+      // A slot pinned to no device is placed on every accelerator, so it starts with every one checked
+      devices: slot?.deviceIds.length ? [...slot.deviceIds] : null,
       memory: gib(slot?.memoryBytes),
       runtimeId: slot?.runtimeId ?? '',
       params: { ...(slot?.params ?? {}) } as Record<string, string>,
@@ -36,7 +37,7 @@
   let name = $state(start.name);
   let description = $state(start.description);
   let position = $state(start.position);
-  let devices = $state<string[]>(start.devices);
+  let devices = $state<string[] | null>(start.devices);
   let memory = $state(start.memory);
   let runtimeId = $state(start.runtimeId);
   let params = $state<Record<string, string>>(start.params);
@@ -45,6 +46,9 @@
   let saving = $state(false);
 
   const creating = $derived(!slot);
+  const gpuIds = $derived(hostGpus().map((d) => d.id));
+  const chosen = $derived(devices ?? gpuIds);
+  const noDevices = $derived(gpuIds.length > 0 && chosen.length === 0);
   const budget = $derived(fromGib(memory));
   const badBudget = $derived(memory.trim() !== '' && budget === 0n);
   const badName = $derived(/[\s/]/.test(name));
@@ -52,7 +56,7 @@
   const manifest = $derived(cached.runtimes.find((r) => r.manifest?.id === runtimeId)?.manifest);
   const occupied = $derived(!!slot && slotOccupied(slot.id));
   const count = $derived(orderedSlots().length);
-  const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && invalid === 0);
+  const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && !noDevices && invalid === 0);
   // Params set for one runtime mean nothing to another
   $effect(() => {
     if (runtimeId !== start.runtimeId) params = {};
@@ -60,7 +64,7 @@
 
   async function save() {
     saving = true;
-    const body = { description, deviceIds: devices, memoryBytes: budget, runtimeId, params, policy: policyFrom(policy), position: Math.max(0, parseInt(position, 10) || 0) };
+    const body = { description, deviceIds: chosen, memoryBytes: budget, runtimeId, params, policy: policyFrom(policy), position: Math.max(0, parseInt(position, 10) || 0) };
     try {
       if (slot) {
         const r = await api.slots.updateSlot({ id: slot.id, name: name.trim(), ...body });
@@ -95,7 +99,7 @@
         <TextInput id="slot-name" mono bind:value={name} empty="main" invalid={badName || nameTaken} />
       </Field>
       <Field label="Position" for="slot-position" description="Order in the list.">
-        <NumberInput id="slot-position" integer min={1} max={count + (creating ? 1 : 0)} bind:value={position} fallback={creating ? String(count + 1) : ''} />
+        <NumberInput id="slot-position" integer min={1} max={count + (creating ? 1 : 0)} bind:value={position} empty={creating ? String(count + 1) : ''} />
       </Field>
       <Field label="Description" for="slot-desc" class="sm:col-span-2">
         <TextInput id="slot-desc" bind:value={description} empty="What this slot is for" />
@@ -105,11 +109,11 @@
 
   <Card title="Reservation" meta={occupied ? 'Applies to the next run' : undefined}>
     <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
-      <Field label="Devices" for="slot-devices" class="sm:col-span-2" description="Where the model in this slot is placed.">
-        <DevicePicker id="slot-devices" bind:value={devices} />
+      <Field label="Devices" for="slot-devices" class="sm:col-span-2" description="Where the model in this slot is placed." error={noDevices ? 'Pick at least one device' : undefined}>
+        <DevicePicker id="slot-devices" bind:value={() => chosen, (v) => (devices = v)} />
       </Field>
       <Field label="Memory cap" for="slot-memory" description="Per device. Plans stay under this instead of using the whole device." error={badBudget ? 'A number of GiB, such as 8' : undefined}>
-        <NumberInput id="slot-memory" min={0} step={0.5} unit="GiB" bind:value={memory} fallback="whole device" invalid={badBudget} />
+        <NumberInput id="slot-memory" min={0} step={0.5} unit="GiB" bind:value={memory} empty="whole device" invalid={badBudget} />
       </Field>
       <Field label="Runtime" for="slot-runtime" description="Used for every run in this slot unless a run picks another.">
         <Select id="slot-runtime" bind:value={runtimeId} items={[{ value: '', label: 'First compatible runtime' }, ...cached.runtimes.map((rt) => ({ value: rt.manifest?.id ?? '', label: rt.manifest?.name ?? rt.manifest?.id ?? '', detail: rt.compatible ? undefined : 'not compatible with this host', disabled: !rt.compatible }))]} />

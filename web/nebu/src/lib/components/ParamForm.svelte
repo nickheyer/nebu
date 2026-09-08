@@ -6,18 +6,16 @@
   import NumberInput from './ui/NumberInput.svelte';
   import IconButton from './ui/IconButton.svelte';
   import TextInput from './ui/TextInput.svelte';
+  import TextArea from './ui/TextArea.svelte';
 
-  // Every parameter a runtime manifest declares, grouped the way the manifest groups them
-  //
-  // An empty field keeps what lies beneath: the slot's default, else the manifest default.
+  // Manifest groups stay in reading order. Empty fields inherit the slot or runtime default.
   let {
     params = [],
     values = $bindable({}),
     invalid = $bindable(0),
     inherited = {},
-    idPrefix = 'param',
-    columns = 2
-  }: { params?: Param[]; values?: Record<string, string>; invalid?: number; inherited?: Record<string, string>; idPrefix?: string; columns?: 1 | 2 } = $props();
+    idPrefix = 'param'
+  }: { params?: Param[]; values?: Record<string, string>; invalid?: number; inherited?: Record<string, string>; idPrefix?: string } = $props();
 
   let showAdvanced = $state(false);
   let newName = $state('');
@@ -34,6 +32,8 @@
     return out.sort((a, b) => Number(!!a.name) - Number(!!b.name));
   });
   const advancedCount = $derived(params.filter((p) => p.advanced).length);
+  const regularGroups = $derived(groups.map((g) => ({ ...g, params: g.params.filter((p) => !p.advanced) })).filter((g) => g.params.length));
+  const advancedGroups = $derived(groups.map((g) => ({ ...g, params: g.params.filter((p) => p.advanced) })).filter((g) => g.params.length));
   // Values the manifest does not name stay editable so nothing is lost when a manifest changes
   const known = $derived(new Set(params.map((p) => p.name)));
   const extra = $derived(Object.keys(values).filter((k) => !known.has(k)).sort());
@@ -101,54 +101,76 @@
   {@const v = values[p.name] ?? ''}
   {@const fid = `${idPrefix}-${p.name}`}
   {@const err = problem(p, v)}
-  <Field label={p.label || p.name} for={fid} description={p.description || undefined} error={err || undefined}>
-    {#snippet trailing()}<span class="font-mono text-[11px] text-fg-faint">{p.flag || p.env || p.name}</span>{/snippet}
-    {#if p.choices.length}
-      <Select id={fid} mono value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneathLabel(p) }, ...p.choices.filter((c) => c !== '' && c !== p.default).map((c) => ({ value: c, label: c }))]} />
-    {:else if p.type === ParamType.BOOL}
-      <Select id={fid} value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneathLabel(p) }, { value: 'true', label: 'On' }, { value: 'false', label: 'Off' }]} />
-    {:else if numeric(p)}
-      <NumberInput id={fid} min={p.min || undefined} max={p.max || undefined} step={p.step || undefined} unit={p.unit || undefined} integer={p.type === ParamType.INT} fallback={beneath(p)} empty={beneath(p) ? '' : 'not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
-    {:else}
-      <TextInput id={fid} mono fallback={beneath(p)} empty={beneath(p) ? '' : 'not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
-    {/if}
-  </Field>
+  {@const multiline = p.advanced && p.type === ParamType.STRING && !p.choices.length}
+  <div class="param-row" class:wide={multiline}>
+    <div class="min-w-0">
+      <label for={fid} class="text-[13px] font-medium text-fg" title={p.flag || p.env || p.name}>{p.label || p.name}</label>
+      {#if p.description}<p class="mt-1 text-xs leading-5 text-fg-muted wrap-anywhere">{p.description}</p>{/if}
+    </div>
+    <div class="min-w-0">
+      {#if p.choices.length}
+        <Select id={fid} mono value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneathLabel(p) }, ...p.choices.filter((c) => c !== '' && c !== p.default).map((c) => ({ value: c, label: c }))]} />
+      {:else if p.type === ParamType.BOOL}
+        <Select id={fid} value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneathLabel(p) }, { value: 'true', label: 'On' }, { value: 'false', label: 'Off' }]} />
+      {:else if numeric(p)}
+        <NumberInput id={fid} min={p.min || undefined} max={p.max || undefined} step={p.step || undefined} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={beneath(p) || 'not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
+      {:else if multiline}
+        <TextArea id={fid} mono rows={3} empty={beneath(p) || 'Not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
+      {:else}
+        <TextInput id={fid} mono empty={beneath(p) || 'Not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
+      {/if}
+      {#if err}<p class="mt-1.5 text-xs text-bad">{err}</p>{/if}
+    </div>
+  </div>
 {/snippet}
 
-<div class="flex flex-col gap-6">
-  {#each groups as g (g.name)}
-    {@const shown = g.params.filter((p) => !p.advanced || showAdvanced)}
-    {#if shown.length}
-      <div class="flex flex-col gap-3">
-        {#if g.name}<h3 class="caps text-fg-faint">{g.name}</h3>{/if}
-        <div class="grid grid-cols-1 gap-x-5 gap-y-4 {columns === 2 ? 'sm:grid-cols-2' : ''}">
-          {#each shown as p (p.name)}{@render control(p)}{/each}
+{#snippet groupList(list: { name: string; params: Param[] }[])}
+  <div class="flex flex-col gap-5">
+    {#each list as g (g.name)}
+      <fieldset class="min-w-0">
+        {#if g.name}<legend class="mb-1 w-full border-b border-line pb-2 text-xs font-medium text-fg-muted">{g.name}</legend>{/if}
+        <div class="divide-y divide-line/50">
+          {#each g.params as p (p.name)}{@render control(p)}{/each}
         </div>
-      </div>
-    {/if}
-  {/each}
+      </fieldset>
+    {/each}
+  </div>
+{/snippet}
+
+<div class="param-form flex flex-col gap-5">
+  {@render groupList(regularGroups)}
 
   {#if advancedCount}
-    <button type="button" class="inline-flex w-fit items-center gap-1.5 text-sm text-fg-muted transition-colors hover:text-fg" aria-expanded={showAdvanced} onclick={() => (showAdvanced = !showAdvanced)}>
-      <ChevronRight size={14} class="transition-transform {showAdvanced ? 'rotate-90' : ''}" />
-      {showAdvanced ? 'Hide' : 'Show'} {advancedCount} advanced
-    </button>
+    <div class="border-t border-line pt-3">
+      <button type="button" class="flex w-full items-center gap-2 rounded-md py-1 text-left text-sm text-fg-muted transition-colors hover:text-fg" aria-expanded={showAdvanced} aria-controls="{idPrefix}-advanced" onclick={() => (showAdvanced = !showAdvanced)}>
+        <ChevronRight size={14} class="shrink-0 transition-transform {showAdvanced ? 'rotate-90' : ''}" />
+        Advanced parameters
+        <span class="ml-auto text-xs tabular-nums text-fg-faint">{advancedCount}</span>
+      </button>
+      <div id="{idPrefix}-advanced" hidden={!showAdvanced}>
+        {#if showAdvanced}<div class="pt-4">{@render groupList(advancedGroups)}</div>{/if}
+      </div>
+    </div>
   {/if}
 
   {#if extra.length}
-    <div class="flex flex-col gap-3">
-      <h3 class="caps text-fg-faint">Not in the manifest</h3>
-      <div class="grid grid-cols-1 gap-x-5 gap-y-4 {columns === 2 ? 'sm:grid-cols-2' : ''}">
+    <fieldset class="min-w-0">
+      <legend class="w-full border-b border-line pb-2 text-xs font-medium text-fg-muted">Additional parameters</legend>
+      <div class="divide-y divide-line/50">
         {#each extra as k (k)}
-          <Field label={k} for="{idPrefix}-{k}" description="The manifest no longer names this parameter.">
-            <div class="flex gap-1">
-              <TextInput id="{idPrefix}-{k}" mono bind:value={() => values[k] ?? '', (next) => (values = { ...values, [k]: next })} />
-              <IconButton icon={X} label="Remove" onclick={() => set(k, '')} />
+          <div class="param-row">
+            <div class="min-w-0">
+              <label for="{idPrefix}-{k}" class="font-mono text-xs text-fg wrap-anywhere">{k}</label>
+              <p class="mt-1 text-xs leading-5 text-fg-muted">The manifest no longer names this parameter.</p>
             </div>
-          </Field>
+            <div class="flex min-w-0 items-center gap-1">
+              <TextInput id="{idPrefix}-{k}" class="flex-1" mono bind:value={() => values[k] ?? '', (next) => (values = { ...values, [k]: next })} />
+              <IconButton icon={X} label="Remove {k}" onclick={() => set(k, '')} />
+            </div>
+          </div>
         {/each}
       </div>
-    </div>
+    </fieldset>
   {/if}
 
   {#if params.length === 0}
@@ -163,3 +185,24 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .param-form {
+    container-type: inline-size;
+  }
+
+  .param-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+    padding-block: 0.875rem;
+  }
+
+  @container (min-width: 34rem) {
+    .param-row:not(.wide) {
+      grid-template-columns: minmax(0, 1fr) 16rem;
+      align-items: start;
+      column-gap: 2rem;
+    }
+  }
+</style>

@@ -16,15 +16,12 @@
   import StackBar from './ui/StackBar.svelte';
   import ParamList from './ui/ParamList.svelte';
 
-  // A memory plan in numbers: what weights, cache, and overhead add up to, how each pool fills, which tensor
-  // kinds landed on which side, what stays on disk, and the params a run renders as flags
-  let { plan, compact = false, bars = true, params = true }: { plan: MemoryPlan; compact?: boolean; bars?: boolean; params?: boolean } = $props();
+  // The estimate total and its breakdown, followed by one usage row for each memory pool.
+  let { plan, compact = false, params = true }: { plan: MemoryPlan; compact?: boolean; params?: boolean } = $props();
 
   const kinds: Record<number, string> = { [PoolKind.DEVICE]: 'device', [PoolKind.HOST]: 'host', [PoolKind.UNIFIED]: 'unified' };
-  const short: Record<number, string> = { [PoolKind.DEVICE]: 'GPU', [PoolKind.HOST]: 'RAM', [PoolKind.UNIFIED]: 'MEM' };
   const solved = $derived(solvedParams(plan));
-  // A plan against free memory measures each pool by what was free, and its bars say so
-  const capacity = $derived(plan.againstFree ? 'free' : '');
+  const total = $derived(plan.weightsBytes + plan.cacheBytes + plan.overheadBytes);
   // Placements name the side they sit on, device or host, not the pool, and a unified pool listed twice
   // carries the device share first and the host share second
   const sides = $derived.by(() => {
@@ -46,47 +43,44 @@
   }
 </script>
 
-<div class="flex flex-col gap-3">
-  <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs tabular-nums text-fg-faint">
-    <span>weights <span class="text-fg-muted">{bytes(plan.weightsBytes)}</span></span>
-    <span>cache <span class="text-fg-muted">{bytes(plan.cacheBytes)}</span></span>
-    <span>overhead <span class="text-fg-muted">{bytes(plan.overheadBytes)}</span>{#if plan.overheadDelta}<span title="Correction learned from measured runs"> ({deltaBytes(plan.overheadDelta)} learned)</span>{/if}</span>
-    {#if onDisk > 0n}<span title="Weights the runtime leaves on disk with these parameters">not loaded <span class="text-fg-muted">{bytes(onDisk)}</span></span>{/if}
+<div class="flex min-w-0 flex-col gap-4">
+  <div>
+    <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+      <span class="text-2xl font-semibold tracking-tight text-fg tabular-nums">{bytes(total)}</span>
+      <span class="text-xs text-fg-muted">estimated</span>
+    </div>
+    <dl class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums">
+      <div class="flex gap-1.5"><dt class="text-fg-muted">Weights</dt><dd>{bytes(plan.weightsBytes)}</dd></div>
+      <div class="flex gap-1.5"><dt class="text-fg-muted">Cache</dt><dd>{bytes(plan.cacheBytes)}</dd></div>
+      <div class="flex gap-1.5" title={plan.overheadDelta ? `${deltaBytes(plan.overheadDelta)} correction learned from measured runs` : undefined}><dt class="text-fg-muted">Overhead</dt><dd>{bytes(plan.overheadBytes)}</dd></div>
+      {#if onDisk > 0n}<div class="flex gap-1.5" title="Weights the runtime leaves on disk with these parameters"><dt class="text-fg-muted">Not loaded</dt><dd>{bytes(onDisk)}</dd></div>{/if}
+    </dl>
   </div>
-  {#each plan.pools as pool, i (pool.poolId + i)}
-    {@const parts = placed(sides[i])}
-    {@const weights = parts.reduce((a, p) => a + p.bytes, 0n)}
-    {@const rest = pool.usedBytes > weights ? pool.usedBytes - weights : 0n}
-    {@const over = pool.usedBytes > pool.capacityBytes}
-    {#if bars || (!compact && parts.length)}
-      <div class="flex flex-col gap-1.5">
-        {#if bars}
-          <div class="min-w-0 truncate text-xs text-fg" title={pool.poolId}>{poolName(pool.poolId)} <span class="text-fg-faint">{kinds[pool.kind] ?? ''}</span></div>
-          <StackBar
-            max={pool.capacityBytes}
-            {capacity}
-            segments={weights
-              ? [
-                  { label: 'weights', value: weights, tone: over ? 'bad' : 'accent' },
-                  { label: 'cache and overhead', value: rest, tone: over ? 'bad' : 'info' }
-                ]
-              : [{ label: 'used', value: pool.usedBytes, tone: over ? 'bad' : 'accent' }]}
-          />
+
+  <div class="flex flex-col gap-3 border-t border-line pt-3">
+    {#each plan.pools as pool, i (pool.poolId + i)}
+      {@const parts = placed(sides[i])}
+      {@const over = pool.usedBytes > pool.capacityBytes}
+      <div class="flex min-w-0 flex-col gap-2">
+        <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs">
+          <span class="min-w-0 text-fg wrap-anywhere" title={`${pool.poolId} · ${kinds[pool.kind] ?? ''}`}>{poolName(pool.poolId)}</span>
+          <span class="tabular-nums {over ? 'text-bad' : 'text-fg-muted'}"><span class={over ? 'text-bad' : 'text-fg'}>{bytes(pool.usedBytes)}</span> / {bytes(pool.capacityBytes)} {plan.againstFree ? 'free' : 'total'}</span>
+        </div>
+        {#if pool.usedBytes > 0n}
+          <StackBar max={pool.capacityBytes} legend={false} height="sm" segments={[{ label: 'Estimated usage', value: pool.usedBytes, tone: over ? 'bad' : 'accent' }]} />
         {/if}
         {#if !compact && parts.length}
           <div class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs tabular-nums text-fg-faint">
-            {#if !bars}<span class="w-7 shrink-0 text-fg-muted">{short[pool.kind] ?? 'pool'}</span>{/if}
             {#each parts as part (part.kind)}
               <span>{kindWord(part)} <span class="text-fg-muted">{bytes(part.bytes)}</span></span>
             {/each}
           </div>
         {/if}
       </div>
-    {/if}
-  {/each}
+    {/each}
+  </div>
   {#if !compact && plan.skipped.length}
     <div class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs tabular-nums text-fg-faint">
-      {#if !bars}<span class="w-7 shrink-0 text-fg-muted">Disk</span>{/if}
       {#each plan.skipped as part (part.kind)}
         <span>{kindWord(part)} <span class="text-fg-muted">{bytes(part.bytes)}</span></span>
       {/each}

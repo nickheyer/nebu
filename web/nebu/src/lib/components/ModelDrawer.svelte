@@ -29,7 +29,7 @@
   import State from './ui/State.svelte';
   import Disclosure from './ui/Disclosure.svelte';
   import StackBar from './ui/StackBar.svelte';
-  import PlanView from './PlanView.svelte';
+  import PlanTable from './PlanTable.svelte';
   import ModelFiles from './ModelFiles.svelte';
   import TaskChip from './TaskChip.svelte';
   import TextInput from './ui/TextInput.svelte';
@@ -459,7 +459,7 @@
                   {#if open && plan}
                     <tr>
                       <td colspan="3" class="bg-sunken/40 !px-4 !py-3">
-                        <PlanView {plan} bars={false} params={false} />
+                        <PlanTable {plan} />
                       </td>
                     </tr>
                   {/if}

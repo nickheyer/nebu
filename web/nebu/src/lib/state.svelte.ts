@@ -1,7 +1,7 @@
 import { SvelteMap } from 'svelte/reactivity';
 import { api, message, unauthenticated } from './api';
 import { EventAction, EventKind, type Event } from '$proto/event_pb';
-import { PoolKind, type HostProfile, type Storage } from '$proto/host_pb';
+import { DeviceKind, PoolKind, type Device, type HostProfile, type Storage } from '$proto/host_pb';
 import { TaskState, type Task } from '$proto/task_pb';
 import { InstanceState, type Instance } from '$proto/instance_pb';
 import type { Slot } from '$proto/slot_pb';
@@ -381,6 +381,11 @@ export function formatBlurb(id: string): string {
 // The device a probed id names, for its display name
 export function deviceName(id: string): string {
   return live.host?.devices.find((d) => d.id === id)?.name || id;
+}
+
+// The accelerators of this host, the devices a slot can be placed on
+export function hostGpus(): Device[] {
+  return (live.host?.devices ?? []).filter((d) => d.kind !== DeviceKind.CPU);
 }
 
 // What a memory pool is called: its device, else the kind of memory it is

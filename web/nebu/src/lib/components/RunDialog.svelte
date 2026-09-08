@@ -9,7 +9,7 @@
   import { weightsName } from '$lib/catalog';
   import type { MemoryPlan } from '$proto/estimate_pb';
   import { FitVerdict } from '$proto/estimate_pb';
-  import { Play, ArrowLeftRight } from '@lucide/svelte';
+  import { Play, ArrowLeftRight, ChevronRight } from '@lucide/svelte';
   import Dialog from './ui/Dialog.svelte';
   import Button from './ui/Button.svelte';
   import Checkbox from './ui/Checkbox.svelte';
@@ -19,7 +19,6 @@
   import Segmented from './ui/Segmented.svelte';
   import Spinner from './ui/Spinner.svelte';
   import Skeleton from './ui/Skeleton.svelte';
-  import Disclosure from './ui/Disclosure.svelte';
   import TextInput from './ui/TextInput.svelte';
   import PlanView from './PlanView.svelte';
   import ParamForm from './ParamForm.svelte';
@@ -34,7 +33,7 @@
   let invalid = $state(0);
   let swapMode = $state('overlap');
   let force = $state(false);
-  let showParams = $state(false);
+  let showParams = $state(true);
   let plan = $state<MemoryPlan | null>(null);
   let planError = $state('');
   let refusal = $state<unknown>(null);
@@ -122,7 +121,7 @@
       values = {};
       swapMode = 'overlap';
       force = false;
-      showParams = false;
+      showParams = true;
     },
     // The launch toasts its own refusal, the throw only keeps the dialog open
     async submit() {
@@ -137,30 +136,33 @@
   const disabled = $derived(!current || !effectiveRuntime || !installs.length || invalid > 0 || (refused && !force));
 </script>
 
-<Dialog bind:open={runUi.open} size="xl" title={swap ? `Swap into ${selectedSlot?.name}` : 'Run a model'} description={current ? `${current.repo} · ${weightsName(current.group, current.formatId)}` : undefined}>
+<Dialog bind:open={runUi.open} size="lg" title={swap ? `Swap into ${selectedSlot?.name}` : 'Run a model'} description={current ? `${current.repo} · ${weightsName(current.group, current.formatId)}` : undefined}>
   <form
-    class="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]"
+    class="run-form flex min-w-0 flex-col gap-6"
     onsubmit={(e) => {
       e.preventDefault();
       if (!disabled && !form.saving) form.run();
     }}
   >
-    <div class="flex flex-col gap-5">
-      {#if !model}
-        <Field label="Model" for="run-model">
-          <Select id="run-model" mono bind:value={pickedKey} disabled={!stored.length} empty="No models downloaded" items={stored.map((m) => ({ value: modelKey(m), label: m.repo, detail: weightsName(m.group, m.formatId) }))} />
-        </Field>
-      {/if}
+    {#if !model}
+      <Field label="Model" for="run-model">
+        <Select id="run-model" mono bind:value={pickedKey} disabled={!stored.length} empty="No models downloaded" items={stored.map((m) => ({ value: modelKey(m), label: m.repo, detail: weightsName(m.group, m.formatId) }))} />
+      </Field>
+    {/if}
 
-      {#if current}
-        <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted">
-          <span class="kv"><span>format</span><span>{current.formatId}</span></span>
-          {#if current.descriptor?.architecture}<span class="kv"><span>arch</span><span>{current.descriptor.architecture}</span></span>{/if}
-          <span class="kv"><span>params</span><span>{fmtParams(current.descriptor?.parameterCount)}</span></span>
-          <span class="kv"><span>size</span><span>{bytes(current.bytes)}</span></span>
-          {#if current.descriptor?.bitsPerWeight}<span class="kv"><span>bits/weight</span><span>{current.descriptor.bitsPerWeight.toFixed(1)}</span></span>{/if}
+    {#if current}
+      <section class="flex min-w-0 flex-col gap-4" aria-labelledby="run-setup-title">
+        <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <h2 id="run-setup-title" class="text-sm font-semibold text-fg">Run configuration</h2>
+          <details class="model-details text-xs text-fg-muted">
+            <summary class="cursor-pointer rounded-sm transition-colors hover:text-fg">{fmtParams(current.descriptor?.parameterCount)} parameters · {bytes(current.bytes)}</summary>
+            <dl class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+              <div class="flex gap-1.5"><dt>Format</dt><dd class="font-mono text-fg">{current.formatId}</dd></div>
+              {#if current.descriptor?.architecture}<div class="flex gap-1.5"><dt>Architecture</dt><dd class="font-mono text-fg wrap-anywhere">{current.descriptor.architecture}</dd></div>{/if}
+              {#if current.descriptor?.bitsPerWeight}<div class="flex gap-1.5"><dt>Bits/weight</dt><dd class="font-mono text-fg">{current.descriptor.bitsPerWeight.toFixed(1)}</dd></div>{/if}
+            </dl>
+          </details>
         </div>
-
         {#if slots.length}
           <Field label="Run in" for="run-target">
             <Choices
@@ -174,7 +176,7 @@
           </Field>
         {/if}
 
-        <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
+        <div class="setup-grid">
           <Field label="Runtime" for="run-runtime" error={!compatible.length ? `No compatible runtime serves ${formatId}` : undefined}>
             <Select
               id="run-runtime"
@@ -190,46 +192,67 @@
             <Select id="run-install" bind:value={installId} disabled={!installs.length} items={[{ value: '', label: installs.length ? `Newest: ${installs[0].version || installs[0].id}` : 'None' }, ...installs.map((i) => ({ value: i.id, label: i.version || i.id, detail: tail(i.path) }))]} />
           </Field>
           {#if !slot}
-            <Field label="Model name" for="run-name" description="Clients send this as the model name." class="sm:col-span-2">
-              <TextInput id="run-name" mono bind:value={name} fallback="{tail(current.repo)}:{current.group}" />
+            <Field label="Model name" for="run-name" class="col-span-full" description="Use this name in client requests.">
+              <TextInput id="run-name" mono bind:value={name} empty="{tail(current.repo)}:{current.group}" />
             </Field>
           {/if}
         </div>
+      </section>
 
-        <Disclosure label="Parameters" summary={setCount ? `${setCount} set` : selectedSlot && Object.keys(inherited).length ? 'slot defaults' : 'runtime defaults'} bind:open={showParams}>
-          <ParamForm params={manifest?.params ?? []} bind:values bind:invalid {inherited} idPrefix="run" />
-        </Disclosure>
-      {/if}
-    </div>
-
-    <div class="flex flex-col gap-4 lg:sticky lg:top-0 lg:self-start">
-      {#if current}
-        <div class="card p-4">
-          <div class="mb-3 flex items-center gap-2">
-            <h3 class="text-sm font-semibold text-fg">Memory</h3>
-            <span class="text-xs text-fg-faint">{selectedSlot ? `in ${selectedSlot.name}` : 'against free memory'}</span>
-            {#if checking}<Spinner size={13} class="ml-auto text-fg-faint" />{/if}
-          </div>
-          {#if plan}
-            <PlanView {plan} compact />
-          {:else if planError}
-            <div class="note note-bad">{planError}</div>
-          {:else if checking}
-            <Skeleton rows={3} />
-          {/if}
-          {#if refused || force}
-            <div class="mt-3"><Checkbox bind:checked={force} label="Run anyway" hint="Launch even though the plan says it will not fit." /></div>
-          {/if}
-        </div>
-        {#if swap}
-          <div class="card p-4">
-            <h3 class="mb-3 text-sm font-semibold text-fg">Swap</h3>
+      {#if swap}
+        <section class="border-t border-line pt-4" aria-labelledby="run-swap-title">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h2 id="run-swap-title" class="text-sm font-semibold text-fg">Swap behavior</h2>
             <Segmented bind:value={swapMode} tabs={[{ id: 'overlap', label: 'Side by side' }, { id: 'drain', label: 'Stop first' }]} />
-            <p class="mt-2 text-xs leading-5 text-fg-muted">{swapMode === 'overlap' ? 'The new model starts beside the old one, then the route flips. Both must fit.' : 'The old model drains and stops before the new one starts. Rolls back on failure.'}</p>
           </div>
-        {/if}
+          <p class="mt-2 text-xs leading-5 text-fg-muted">{swapMode === 'overlap' ? 'The new model starts beside the old one, then the route flips. Both must fit.' : 'The old model drains and stops before the new one starts. Rolls back on failure.'}</p>
+        </section>
       {/if}
-    </div>
+
+      <section class="rounded-lg border border-line bg-sunken/40 p-4" aria-labelledby="run-memory-title" aria-busy={checking}>
+        <div class="mb-3 flex flex-wrap items-center gap-2">
+          <h2 id="run-memory-title" class="text-sm font-semibold text-fg">Memory estimate</h2>
+          {#if selectedSlot}<span class="text-xs text-fg-muted">in {selectedSlot.name}</span>{/if}
+          <span class="ml-auto flex items-center gap-1.5 text-xs">
+            {#if checking}
+              <Spinner size={13} class="text-fg-muted" /><span class="text-fg-muted">Estimating…</span>
+            {:else if plan?.verdict === FitVerdict.FITS}
+              <span class="text-ok">Fits in memory</span>
+            {:else if plan?.verdict === FitVerdict.PARTIAL}
+              <span class="text-warn">Partial fit</span>
+            {:else if plan?.verdict === FitVerdict.NO}
+              <span class="text-bad">Exceeds available memory</span>
+            {/if}
+          </span>
+        </div>
+        {#if plan}
+          <PlanView {plan} compact />
+        {:else if checking}
+          <Skeleton rows={3} />
+        {:else if !planError}
+          <p class="text-xs leading-5 text-fg-muted">{effectiveRuntime ? 'No memory estimate is available.' : 'Choose a runtime to estimate memory.'}</p>
+        {/if}
+        {#if planError}<div class="note note-bad mt-3">{planError}</div>{/if}
+        {#if plan?.detail && plan.verdict !== FitVerdict.FITS}<p class="mt-3 text-xs leading-5 text-fg-muted">{plan.detail}</p>{/if}
+        {#if refused || force}
+          <div class="mt-4 border-t border-line pt-3"><Checkbox bind:checked={force} label="Run anyway" hint="Launch even though the plan says it will not fit." /></div>
+        {/if}
+      </section>
+
+      <section class="border-t border-line pt-4" aria-labelledby="run-params-title">
+        <h2 id="run-params-title">
+          <button type="button" class="flex w-full items-center gap-2 rounded-sm text-left text-sm text-fg" aria-expanded={showParams} aria-controls="run-parameters" onclick={() => (showParams = !showParams)}>
+            <ChevronRight size={14} class="shrink-0 text-fg-muted transition-transform {showParams ? 'rotate-90' : ''}" />
+            <span class="font-semibold">Parameters</span>
+            <span class="ml-auto text-xs font-normal text-fg-muted">{setCount ? `${setCount} overridden` : selectedSlot && Object.keys(inherited).length ? 'Slot defaults' : 'Runtime defaults'}</span>
+          </button>
+        </h2>
+        <div id="run-parameters" hidden={!showParams}>
+          <p class="mt-2 mb-4 text-xs leading-5 text-fg-muted">Empty fields use {selectedSlot && Object.keys(inherited).length ? 'the slot’s defaults, then runtime defaults' : 'runtime defaults'}.</p>
+          <ParamForm params={manifest?.params ?? []} bind:values bind:invalid {inherited} idPrefix="run" />
+        </div>
+      </section>
+    {/if}
     <button type="submit" class="hidden" aria-hidden="true" tabindex="-1"></button>
   </form>
 
@@ -238,3 +261,26 @@
     <span class="ml-auto"><Button variant="primary" icon={swap ? ArrowLeftRight : Play} loading={form.saving} {disabled} onclick={form.run}>{swap ? 'Swap' : 'Run'}</Button></span>
   {/snippet}
 </Dialog>
+
+<style>
+  .run-form {
+    container-type: inline-size;
+  }
+
+  .setup-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+  }
+
+  .model-details[open] {
+    flex-basis: 100%;
+  }
+
+  @container (min-width: 30rem) {
+    .setup-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: 1.25rem;
+    }
+  }
+</style>

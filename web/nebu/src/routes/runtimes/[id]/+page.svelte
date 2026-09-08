@@ -143,7 +143,7 @@
   </PageHeader>
 
   {#if tab.value === 'install'}
-    <div class="mx-auto flex max-w-3xl flex-col gap-5">
+    <div class="flex flex-col gap-5">
       {#if task}
         <div class="card flex items-center gap-3 px-4 py-3">
           <TaskChip {task} />
