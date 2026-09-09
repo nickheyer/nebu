@@ -31,15 +31,6 @@ enum ProbeStatus {
   PROBE_STATUS_FAILED = 3;
 }
 
-// Selects how probe output is parsed
-enum ParseKind {
-  PARSE_KIND_UNSPECIFIED = 0;
-  PARSE_KIND_CSV = 1;
-  PARSE_KIND_JSON = 2;
-  PARSE_KIND_KV = 3;
-  PARSE_KIND_REGEX = 4;
-}
-
 // Probed compute device with vendor facts
 message Device {
   string id = 1;
@@ -89,72 +80,6 @@ message HostProfile {
   repeated ProbeResult probes = 9;
   // The daemon's home directory
   string home = 10;
-}
-
-// Command or file a probe reads
-message ProbeExec {
-  string command = 1;
-  repeated string args = 2;
-  string file = 3;
-  uint32 timeout_ms = 4;
-}
-
-// Turns probe output into rows of string fields
-message ProbeParse {
-  ParseKind kind = 1;
-  repeated string columns = 2;
-  string rows = 3;
-  string pattern = 4;
-  string block_separator = 5;
-}
-
-// Renders one device per parsed row
-message DeviceTemplate {
-  DeviceKind kind = 1;
-  string vendor = 2;
-  string id = 3;
-  string name = 4;
-  string memory_total = 5;
-  string memory_free = 6;
-  string unit = 7;
-  map<string, string> facts = 8;
-  string when = 9;
-}
-
-// Renders one memory pool per parsed row
-message PoolTemplate {
-  PoolKind kind = 1;
-  string id = 2;
-  string device_id = 3;
-  string total = 4;
-  string free = 5;
-  string unit = 6;
-  string when = 7;
-}
-
-// Renders one host fact from all rows
-message FactTemplate {
-  string key = 1;
-  string value = 2;
-}
-
-// Maps parsed rows onto profile entries
-message ProbeEmit {
-  DeviceTemplate device = 1;
-  PoolTemplate pool = 2;
-  repeated FactTemplate facts = 3;
-}
-
-// Data driven host probe definition
-message ProbeSpec {
-  string id = 1;
-  string description = 2;
-  repeated string os = 3;
-  ProbeExec exec = 4;
-  ProbeParse parse = 5;
-  ProbeEmit emit = 6;
-  // GOARCH names the probe runs on, every one when empty
-  repeated string arch = 7;
 }
 
 // Asks for the host profile

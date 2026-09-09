@@ -13,9 +13,10 @@ import (
 
 	"github.com/nickheyer/nebu/pkg/archive"
 	"github.com/nickheyer/nebu/pkg/build/sandbox"
-	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/recipes"
 	"github.com/nickheyer/nebu/pkg/sources"
+	"github.com/nickheyer/nebu/pkg/text"
 	"github.com/nickheyer/nebu/pkg/transfer"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -27,9 +28,8 @@ type Progress func(done, total int, name string)
 
 // Runs builds under one root directory
 type Engine struct {
-	Root    string
-	Patches map[string][]byte
-	Jobs    int
+	Root string
+	Jobs int
 	// Where a latest ref reads releases from
 	Sources *sources.Registry
 	// Moves archives and patches under the transfer limits
@@ -40,9 +40,9 @@ type Engine struct {
 // Makes the record a build runs from, without the network
 func (s *Selection) Build() *v1.Build {
 	return &v1.Build{
-		RecipeId:  s.Recipe.Spec.GetId(),
-		RuntimeId: s.Recipe.Spec.GetRuntimeId(),
-		Variant:   s.Variant.GetId(),
+		RecipeId:  s.Recipe.ID(),
+		RuntimeId: s.Recipe.RuntimeID(),
+		Variant:   s.Variant.ID,
 		Ref:       s.Ref,
 		Sandbox:   s.Sandbox,
 		Image:     s.Image,
@@ -52,65 +52,49 @@ func (s *Selection) Build() *v1.Build {
 	}
 }
 
+// What the recipe's steps read for a build, with the sandbox paths a runner gives
+func (s *Selection) context(b *v1.Build, runner sandbox.Runner, jobs int) *recipes.Build {
+	out := &recipes.Build{Ref: b.GetRef(), Commit: b.GetCommit(), Variant: b.GetVariant(), Vars: b.GetVars(), Jobs: jobs, Host: s.profile}
+	if runner != nil {
+		out.Root, out.Src, out.Out = runner.Path(""), runner.Path(srcDir), runner.Path(outDir)
+	}
+	return out
+}
+
 // Resolves the ref, selects patches, and assigns id and directory
 func (e *Engine) Resolve(ctx context.Context, s *Selection, b *v1.Build) error {
 	rc := s.Recipe
-	tctx := s.context()
-	if rc.releases != nil && (b.Ref == "" || b.Ref == Latest) {
-		repo, err := rc.releases.Render(tctx)
-		if err != nil {
-			return err
-		}
-		sourceID := DefaultReleaseSource
-		if rc.source != nil {
-			if sourceID, err = rc.source.Render(tctx); err != nil {
-				return err
-			}
-		}
-		tag, err := latestTag(ctx, e.Sources, strings.TrimSpace(sourceID), strings.TrimSpace(repo))
+	src := rc.Source()
+	if src.Releases != "" && (b.Ref == "" || b.Ref == Latest) {
+		tag, err := latestTag(ctx, e.Sources, recipes.ReleaseSource, src.Releases)
 		if err != nil {
 			return fmt.Errorf("resolve release: %w", err)
 		}
 		b.Ref = tag
 	}
-	if rc.archive != nil && b.Ref == "" {
-		return fmt.Errorf("%w: recipe %s needs a ref for its archive", ErrSelection, rc.Spec.GetId())
+	if src.Archive != nil && b.Ref == "" {
+		return fmt.Errorf("%w: recipe %s needs a ref for its archive", ErrSelection, rc.ID())
 	}
 	s.Ref = b.Ref
-	if err := s.renderVars(); err != nil {
-		return err
-	}
 	b.Vars = s.Vars
 	if b.Image != "" || s.Sandbox != v1.SandboxKind_SANDBOX_KIND_OCI {
 		b.Image = s.Image
 	}
 	b.Patches = nil
-	for _, p := range rc.patches {
-		ok, err := p.when.Holds(s.env)
-		if err != nil {
-			return fmt.Errorf("patch %s: %w", p.spec.GetId(), err)
-		}
-		if ok {
-			b.Patches = append(b.Patches, p.spec.GetId())
-		}
-	}
 	contents := map[string][]byte{}
-	for _, p := range rc.patches {
-		switch {
-		case p.spec.GetContent() != "":
-			contents[p.spec.GetId()] = []byte(p.spec.GetContent())
-		case p.spec.GetFile() != "":
-			data, ok := e.Patches[p.spec.GetFile()]
-			if !ok {
-				return fmt.Errorf("patch %s: file %s not found in any spec directory", p.spec.GetId(), p.spec.GetFile())
-			}
-			contents[p.spec.GetId()] = data
-		default:
-			contents[p.spec.GetId()] = []byte(p.spec.GetUrl())
+	bctx := s.context(b, nil, 1)
+	for _, p := range rc.Patches() {
+		if p.Applies == nil || p.Applies(bctx) {
+			b.Patches = append(b.Patches, p.ID)
+		}
+		if len(p.Content) > 0 {
+			contents[p.ID] = p.Content
+		} else {
+			contents[p.ID] = []byte(p.URL)
 		}
 	}
-	b.Id = hashBuild(b, rc.Spec, contents)
-	b.Dir = filepath.Join(e.Root, rc.Spec.GetRuntimeId(), b.Id)
+	b.Id = hashBuild(rc, b, s.context(b, nil, 1), contents)
+	b.Dir = filepath.Join(e.Root, rc.RuntimeID(), b.Id)
 	return nil
 }
 
@@ -120,7 +104,7 @@ func (e *Engine) Run(ctx context.Context, s *Selection, b *v1.Build, out io.Writ
 	if progress == nil {
 		progress = func(int, int, string) {}
 	}
-	ctx, cancel := context.WithTimeout(ctx, rc.Timeout())
+	ctx, cancel := context.WithTimeout(ctx, Timeout(rc))
 	defer cancel()
 	if b.Dir == "" {
 		return fmt.Errorf("build has no directory, resolve it first")
@@ -131,7 +115,7 @@ func (e *Engine) Run(ctx context.Context, s *Selection, b *v1.Build, out io.Writ
 	if err := os.MkdirAll(filepath.Join(b.Dir, outDir), 0o755); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "build %s recipe %s variant %s ref %s sandbox %s\n", b.GetId(), rc.Spec.GetId(), b.GetVariant(), b.GetRef(), eval.EnumShort(b.GetSandbox()))
+	fmt.Fprintf(out, "build %s recipe %s variant %s ref %s sandbox %s\n", b.GetId(), rc.ID(), b.GetVariant(), b.GetRef(), text.Enum(b.GetSandbox()))
 	for _, kv := range sortedPairs(b.GetVars()) {
 		fmt.Fprintf(out, "var %s\n", kv)
 	}
@@ -143,67 +127,36 @@ func (e *Engine) Run(ctx context.Context, s *Selection, b *v1.Build, out io.Writ
 	if jobs <= 0 {
 		jobs = runtime.NumCPU()
 	}
-	tctx := s.context()
-	tctx["jobs"] = jobs
-	tctx["root"] = runner.Path("")
-	tctx["dir"] = runner.Path(srcDir)
-	tctx["out"] = runner.Path(outDir)
-	total := len(rc.steps) + 3
+	bctx := s.context(b, runner, jobs)
+	steps := rc.Steps(bctx)
+	total := len(steps) + 3
 	progress(0, total, "fetching source")
-	commit, err := e.fetch(ctx, s, b, tctx, out)
+	commit, err := e.fetch(ctx, s, b, out)
 	if err != nil {
 		return fmt.Errorf("fetch: %w", err)
 	}
 	b.Commit = commit
-	tctx["commit"] = commit
+	bctx.Commit = commit
 	progress(1, total, "applying patches")
 	if err := e.patch(ctx, s, b, out); err != nil {
 		return err
 	}
-	for i, st := range rc.steps {
-		name := st.spec.GetName()
+	for i, st := range rc.Steps(bctx) {
+		name := st.Name
 		if name == "" {
 			name = fmt.Sprintf("step %d", i+1)
 		}
-		if st.when != nil {
-			ok, err := st.when.Bool(stepEnv(s, tctx))
-			if err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-			if !ok {
-				fmt.Fprintf(out, "skip %s\n", name)
-				continue
-			}
+		if len(st.Command) == 0 {
+			return fmt.Errorf("%s: empty command", name)
 		}
 		progress(2+i, total, name)
-		command := make([]string, 0, len(st.command))
-		for _, t := range st.command {
-			arg, err := t.Render(tctx)
-			if err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-			// Empty renders come from unset vars and are dropped
-			if arg = strings.TrimSpace(arg); arg != "" {
-				command = append(command, arg)
-			}
-		}
-		env, err := eval.RenderTemplates(st.env, tctx)
-		if err != nil {
-			return fmt.Errorf("%s: %w", name, err)
-		}
 		dir := srcDir
-		if st.dir != nil {
-			rendered, err := st.dir.Render(tctx)
-			if err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-			if rendered = strings.TrimSpace(rendered); rendered != "" {
-				dir = filepath.Join(srcDir, rendered)
-			}
+		if st.Dir != "" {
+			dir = filepath.Join(srcDir, filepath.FromSlash(st.Dir))
 		}
-		fmt.Fprintf(out, "--- %s: %s\n", name, strings.Join(command, " "))
+		fmt.Fprintf(out, "--- %s: %s\n", name, strings.Join(st.Command, " "))
 		started := time.Now()
-		if err := runner.Run(ctx, sandbox.Step{Name: name, Command: command, Env: env, Dir: dir}, out); err != nil {
+		if err := runner.Run(ctx, sandbox.Step{Name: name, Command: st.Command, Env: st.Env, Dir: dir}, out); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -212,7 +165,7 @@ func (e *Engine) Run(ctx context.Context, s *Selection, b *v1.Build, out io.Writ
 		fmt.Fprintf(out, "--- %s done in %s\n", name, time.Since(started).Round(time.Second))
 	}
 	progress(total-1, total, "collecting outputs")
-	if err := e.collect(s, b, tctx, out); err != nil {
+	if err := e.collect(s, b, out); err != nil {
 		return err
 	}
 	progress(total, total, "done")
@@ -226,48 +179,26 @@ func (e *Engine) runner(s *Selection, b *v1.Build) (sandbox.Runner, error) {
 	if s.CLI == "" || b.GetImage() == "" {
 		return nil, fmt.Errorf("%w: container sandbox needs a cli and an image", ErrSelection)
 	}
-	args := make([]string, 0, len(s.Recipe.sandboxArgs))
-	for _, t := range s.Recipe.sandboxArgs {
-		a, err := t.Render(s.context())
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, a)
-	}
-	return sandbox.NewOCI(b.GetDir(), s.CLI, b.GetImage(), args), nil
+	return sandbox.NewOCI(b.GetDir(), s.CLI, b.GetImage(), s.Recipe.Sandbox().Args), nil
 }
 
-func (e *Engine) fetch(ctx context.Context, s *Selection, b *v1.Build, tctx map[string]any, out io.Writer) (string, error) {
-	rc := s.Recipe
+func (e *Engine) fetch(ctx context.Context, s *Selection, b *v1.Build, out io.Writer) (string, error) {
+	src := s.Recipe.Source()
 	dest := filepath.Join(b.GetDir(), srcDir)
 	switch {
-	case rc.archive != nil:
-		rawURL, err := rc.archive.Render(tctx)
-		if err != nil {
-			return "", err
-		}
-		subdir := ""
-		if rc.subdir != nil {
-			if subdir, err = rc.subdir.Render(tctx); err != nil {
-				return "", err
-			}
-		}
-		if err := e.fetchArchive(ctx, strings.TrimSpace(rawURL), dest, strings.TrimSpace(subdir), out); err != nil {
+	case src.Archive != nil:
+		if err := e.fetchArchive(ctx, src.Archive(b.GetRef()), dest, src.Subdir, out); err != nil {
 			return "", err
 		}
 		return b.GetRef(), nil
-	case rc.repo != nil:
-		repo, err := rc.repo.Render(tctx)
-		if err != nil {
-			return "", err
-		}
+	case src.Repo != "":
 		// Git moves the tree at its own pace, but not through a paused window
 		if e.Fetcher != nil {
 			if err := e.Fetcher.Hold(ctx); err != nil {
 				return "", err
 			}
 		}
-		return sources.Checkout(ctx, strings.TrimSpace(repo), b.GetRef(), dest, out)
+		return sources.Checkout(ctx, src.Repo, b.GetRef(), dest, out)
 	}
 	return b.GetRef(), os.MkdirAll(dest, 0o755)
 }
@@ -278,20 +209,15 @@ func (e *Engine) patch(ctx context.Context, s *Selection, b *v1.Build, out io.Wr
 	for _, id := range b.GetPatches() {
 		selected[id] = true
 	}
-	for _, p := range s.Recipe.patches {
-		if !selected[p.spec.GetId()] {
+	for _, p := range s.Recipe.Patches() {
+		if !selected[p.ID] {
 			continue
 		}
-		var data []byte
-		switch {
-		case p.spec.GetContent() != "":
-			data = []byte(p.spec.GetContent())
-		case p.spec.GetFile() != "":
-			data = e.Patches[p.spec.GetFile()]
-		default:
-			cached := filepath.Join(e.Root, cacheDirName, cacheName(p.spec.GetUrl()))
-			if err := e.download(ctx, p.spec.GetUrl(), cached, out); err != nil {
-				return fmt.Errorf("patch %s: %w", p.spec.GetId(), err)
+		data := p.Content
+		if len(data) == 0 {
+			cached := filepath.Join(e.Root, cacheDirName, cacheName(p.URL))
+			if err := e.download(ctx, p.URL, cached, out); err != nil {
+				return fmt.Errorf("patch %s: %w", p.ID, err)
 			}
 			var err error
 			if data, err = os.ReadFile(cached); err != nil {
@@ -300,30 +226,26 @@ func (e *Engine) patch(ctx context.Context, s *Selection, b *v1.Build, out io.Wr
 		}
 		parsed, err := parseUnified(data)
 		if err != nil {
-			return fmt.Errorf("patch %s: %w", p.spec.GetId(), err)
+			return fmt.Errorf("patch %s: %w", p.ID, err)
 		}
-		strip := int(p.spec.GetStrip())
-		if p.spec.GetStrip() == 0 {
+		strip := p.Strip
+		if strip == 0 {
 			strip = 1
 		}
 		touched, err := applyPatches(tree, parsed, strip)
 		if err != nil {
-			return fmt.Errorf("patch %s: %w", p.spec.GetId(), err)
+			return fmt.Errorf("patch %s: %w", p.ID, err)
 		}
-		fmt.Fprintf(out, "patch %s applied to %s\n", p.spec.GetId(), strings.Join(touched, ", "))
+		fmt.Fprintf(out, "patch %s applied to %s\n", p.ID, strings.Join(touched, ", "))
 	}
 	return nil
 }
 
 // Copies outputs into out and checks the binary is present
-func (e *Engine) collect(s *Selection, b *v1.Build, tctx map[string]any, out io.Writer) error {
+func (e *Engine) collect(s *Selection, b *v1.Build, out io.Writer) error {
 	tree := filepath.Join(b.GetDir(), srcDir)
 	dest := filepath.Join(b.GetDir(), outDir)
-	for _, t := range s.Recipe.outputs {
-		pattern, err := t.Render(tctx)
-		if err != nil {
-			return err
-		}
+	for _, pattern := range s.Recipe.Outputs() {
 		pattern = strings.TrimSpace(pattern)
 		matches, err := filepath.Glob(filepath.Join(tree, filepath.FromSlash(pattern)))
 		if err != nil {
@@ -338,11 +260,8 @@ func (e *Engine) collect(s *Selection, b *v1.Build, tctx map[string]any, out io.
 			}
 		}
 	}
-	binary, err := s.Recipe.binary.Render(tctx)
-	if err != nil {
-		return err
-	}
-	b.Binary = filepath.Join(dest, filepath.FromSlash(strings.TrimSpace(binary)))
+	binary := strings.TrimSpace(s.Recipe.Binary())
+	b.Binary = filepath.Join(dest, filepath.FromSlash(binary))
 	info, err := os.Stat(b.Binary)
 	if err != nil || info.IsDir() {
 		return fmt.Errorf("binary %s not produced", binary)
@@ -389,21 +308,4 @@ func copyEntry(src, dst string) error {
 	}
 	defer in.Close()
 	return archive.WriteFile(dst, in, info.Mode().Perm())
-}
-
-// Expression env for step conditions, host facts plus vars
-func stepEnv(s *Selection, tctx map[string]any) map[string]any {
-	env := make(map[string]any, len(s.env)+4)
-	for k, v := range s.env {
-		env[k] = v
-	}
-	vars := make(map[string]any, len(s.Vars))
-	for k, v := range s.Vars {
-		vars[k] = v
-	}
-	env["vars"] = vars
-	env["variant"] = s.Variant.GetId()
-	env["ref"] = s.Ref
-	env["sandbox"] = eval.EnumShort(s.Sandbox)
-	return env
 }

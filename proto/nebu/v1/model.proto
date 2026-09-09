@@ -102,7 +102,8 @@ message Descriptor {
   string format_id = 1;
   string group = 2;
   string architecture = 3;
-  string arch_spec_id = 4;
+  // The attention family the planner sizes the cache by
+  string family = 4;
   map<string, double> params = 5;
   repeated TensorGroup groups = 6;
   uint64 total_bytes = 7;
@@ -112,102 +113,10 @@ message Descriptor {
   Precision precision = 11;
 }
 
-// Reads a weight group's precision from its group name or a metadata key
-message PrecisionRule {
-  // group, or a metadata key
-  string key = 1;
-  string match = 2;
-  // The width, unless a bits capture names it, the first matching width winning
-  uint32 bits = 3;
-  // Added to the blurb, expanded with the captures
-  string note = 4;
-  // Matches only while no rule before it has
-  bool fallback = 5;
-  // The label, expanded with the captures, the name capture when empty
-  string label = 6;
-}
-
-// Counts the weights a tensor packs into each stored element
-message PackRule {
-  string match = 1;
-  // The metadata key whose value the bits capture reads the packed width from
-  string key = 2;
-  string value = 3;
-}
-
-// Words for one bit width and every width down to the next
-message PrecisionLevel {
-  uint32 bits = 1;
-  string label = 2;
-  string blurb = 3;
-  uint32 level = 4;
-}
-
-// Data driven precision words, widths in descending order
-message PrecisionSpec {
+// A weight format the daemon reads, in the words people meet it by
+message Format {
   string id = 1;
   string description = 2;
-  repeated PrecisionLevel levels = 3;
-}
-
-// Claims files matching a path pattern
-message FileRule {
-  string match = 1;
-  ArtifactRole role = 2;
-}
-
-// Derives a group name from a path pattern
-message GroupRule {
-  string match = 1;
-  string value = 2;
-}
-
-// Classifies tensors by name pattern
-message TensorRule {
-  string match = 1;
-  TensorGroupKind kind = 2;
-}
-
-// Maps a descriptor param to candidate metadata keys
-message ParamRule {
-  string name = 1;
-  repeated string keys = 2;
-  string derive = 3;
-  // Sums the elements of tensors whose names match, for formats whose headers name no params
-  string tensor = 4;
-}
-
-// Data driven format definition
-message FormatSpec {
-  string id = 1;
-  string description = 2;
-  uint32 priority = 3;
-  repeated FileRule files = 4;
-  repeated GroupRule groups = 5;
-  string shards = 6;
-  repeated TensorRule tensors = 7;
-  repeated string architecture = 8;
-  repeated ParamRule params = 9;
-  repeated string metadata = 10;
-  repeated ArtifactRole requires = 11;
-  map<string, string> dtypes = 12;
-  string reader = 13;
-  string root = 14;
   // What the format is, for people who have not met it
-  string blurb = 15;
-  repeated PrecisionRule precisions = 16;
-  repeated PackRule packing = 17;
-  // Expression over the params read from the header giving the first layer index that is a
-  // draft layer rather than a main one, so a checkpoint that numbers its prediction heads after
-  // the main layers keeps them apart; empty when layers are never drafts by index
-  string draft_from = 18;
-}
-
-// Data driven architecture family definition
-message ArchSpec {
-  string id = 1;
-  string description = 2;
-  string match = 3;
-  uint32 priority = 4;
-  map<string, string> formulas = 5;
+  string blurb = 3;
 }

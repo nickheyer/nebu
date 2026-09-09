@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/text"
 )
 
 func runRuntimes(ctx context.Context, e *env, args []string) error {
@@ -23,7 +23,7 @@ func runRuntimes(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, rt := range resp.Msg.GetRuntimes() {
-			m := rt.GetManifest()
+			m := rt.GetRuntime()
 			rows = append(rows, []string{m.GetId(), m.GetName(), strings.Join(m.GetFormats(), ","), yes(rt.GetCompatible()), strings.Join(rt.GetUnmet(), "; ")})
 		}
 		table(w, []string{"ID", "NAME", "FORMATS", "COMPATIBLE", "UNMET"}, rows)
@@ -42,8 +42,8 @@ func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 	}
 	rt := resp.Msg.GetRuntime()
 	return e.print(rt, func(w io.Writer) {
-		m := rt.GetManifest()
-		table(w, nil, [][]string{{"id", m.GetId()}, {"name", m.GetName()}, {"formats", strings.Join(m.GetFormats(), ", ")}, {"api", eval.EnumShort(m.GetLaunch().GetApi())}, {"compatible", yes(rt.GetCompatible())}, {"unmet", strings.Join(rt.GetUnmet(), "; ")}})
+		m := rt.GetRuntime()
+		table(w, nil, [][]string{{"id", m.GetId()}, {"name", m.GetName()}, {"formats", strings.Join(m.GetFormats(), ", ")}, {"api", text.Enum(m.GetApi())}, {"compatible", yes(rt.GetCompatible())}, {"unmet", strings.Join(rt.GetUnmet(), "; ")}})
 		for _, opt := range rt.GetInstalls() {
 			im := opt.GetMethod()
 			section(w, "install "+im.GetId())
@@ -61,14 +61,14 @@ func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 				if f.GetRequired() {
 					name += "*"
 				}
-				rows = append(rows, []string{name, eval.EnumShort(f.GetType()), orDash(f.GetDefault()), strings.Join(f.GetChoices(), ","), f.GetDescription()})
+				rows = append(rows, []string{name, text.Enum(f.GetType()), orDash(f.GetDefault()), strings.Join(f.GetChoices(), ","), f.GetDescription()})
 			}
 			table(w, []string{"SETTING", "TYPE", "DEFAULT", "CHOICES", "DESCRIPTION"}, rows)
 		}
 		section(w, "params")
 		var rows [][]string
 		for _, p := range m.GetParams() {
-			rows = append(rows, []string{p.GetName(), eval.EnumShort(p.GetType()), p.GetDefault(), strings.Join(p.GetChoices(), ","), p.GetDescription()})
+			rows = append(rows, []string{p.GetName(), text.Enum(p.GetType()), p.GetDefault(), strings.Join(p.GetChoices(), ","), p.GetDescription()})
 		}
 		table(w, []string{"NAME", "TYPE", "DEFAULT", "CHOICES", "DESCRIPTION"}, rows)
 	})
@@ -76,13 +76,13 @@ func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 
 // One line saying what an install method does
 func methodText(im *v1.InstallMethod) string {
-	switch how := im.GetHow().(type) {
-	case *v1.InstallMethod_Adopt:
-		return "adopt " + strings.Join(how.Adopt.GetNames(), " or ") + " from PATH"
-	case *v1.InstallMethod_Prebuilt:
-		return "download a release of " + how.Prebuilt.GetReleases()
-	case *v1.InstallMethod_Recipe:
-		return "build recipe " + how.Recipe.GetRecipeId()
+	switch im.GetKind() {
+	case v1.InstallKind_INSTALL_KIND_ADOPTED:
+		return "adopt " + strings.Join(im.GetBinaries(), " or ") + " from PATH"
+	case v1.InstallKind_INSTALL_KIND_PREBUILT:
+		return "download a release of " + im.GetReleases()
+	case v1.InstallKind_INSTALL_KIND_BUILT:
+		return "build recipe " + im.GetRecipeId()
 	}
 	return "-"
 }
@@ -106,7 +106,7 @@ func runRuntimesInstalls(ctx context.Context, e *env, args []string) error {
 func installsTable(w io.Writer, list []*v1.Install) {
 	var rows [][]string
 	for _, in := range list {
-		rows = append(rows, []string{in.GetId(), in.GetRuntimeId(), eval.EnumShort(in.GetKind()), in.GetVersion(), in.GetPath(), compact(in.GetFacts())})
+		rows = append(rows, []string{in.GetId(), in.GetRuntimeId(), text.Enum(in.GetKind()), in.GetVersion(), in.GetPath(), compact(in.GetFacts())})
 	}
 	table(w, []string{"ID", "RUNTIME", "KIND", "VERSION", "PATH", "FACTS"}, rows)
 }
@@ -182,7 +182,7 @@ func runRuntimesRecipes(ctx context.Context, e *env, args []string) error {
 			for _, v := range r.GetVariants() {
 				variants = append(variants, v.GetId())
 			}
-			rows = append(rows, []string{r.GetId(), r.GetRuntimeId(), rs.GetVariant(), strings.Join(variants, ","), eval.EnumShort(rs.GetSandbox()), strings.Join(rs.GetUnmet(), "; "), r.GetDescription()})
+			rows = append(rows, []string{r.GetId(), r.GetRuntimeId(), rs.GetVariant(), strings.Join(variants, ","), text.Enum(rs.GetSandbox()), strings.Join(rs.GetUnmet(), "; "), r.GetDescription()})
 		}
 		table(w, []string{"ID", "RUNTIME", "SELECTED", "VARIANTS", "SANDBOX", "UNMET", "DESCRIPTION"}, rows)
 	})
@@ -237,7 +237,7 @@ func runBuild(ctx context.Context, e *env, args []string) error {
 	if *detach {
 		return e.print(resp.Msg, func(w io.Writer) { fmt.Fprintf(w, "%s %s\n", b.GetId(), resp.Msg.GetTask().GetId()) })
 	}
-	e.text("build %s recipe %s variant %s ref %s sandbox %s\n", b.GetId(), b.GetRecipeId(), b.GetVariant(), b.GetRef(), eval.EnumShort(b.GetSandbox()))
+	e.text("build %s recipe %s variant %s ref %s sandbox %s\n", b.GetId(), b.GetRecipeId(), b.GetVariant(), b.GetRef(), text.Enum(b.GetSandbox()))
 	if _, err := e.follow(ctx, resp.Msg.GetTask().GetId()); err != nil {
 		return err
 	}
@@ -247,7 +247,7 @@ func runBuild(ctx context.Context, e *env, args []string) error {
 	}
 	fb := final.Msg.GetBuild()
 	if fb.GetState() != v1.BuildState_BUILD_STATE_SUCCEEDED {
-		return fmt.Errorf("build %s %s: %s", fb.GetId(), eval.EnumShort(fb.GetState()), fb.GetError())
+		return fmt.Errorf("build %s %s: %s", fb.GetId(), text.Enum(fb.GetState()), fb.GetError())
 	}
 	return e.print(final.Msg, func(w io.Writer) { fmt.Fprintf(w, "install %s at %s\n", fb.GetInstallId(), fb.GetBinary()) })
 }
@@ -268,7 +268,7 @@ func runBuildsList(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, b := range resp.Msg.GetBuilds() {
-			rows = append(rows, []string{b.GetId(), b.GetRuntimeId(), b.GetRecipeId(), b.GetVariant(), b.GetRef(), loud(b.GetState()), eval.EnumShort(b.GetSandbox()), b.GetInstallId(), b.GetError()})
+			rows = append(rows, []string{b.GetId(), b.GetRuntimeId(), b.GetRecipeId(), b.GetVariant(), b.GetRef(), loud(b.GetState()), text.Enum(b.GetSandbox()), b.GetInstallId(), b.GetError()})
 		}
 		table(w, []string{"ID", "RUNTIME", "RECIPE", "VARIANT", "REF", "STATE", "SANDBOX", "INSTALL", "ERROR"}, rows)
 	})
@@ -291,7 +291,7 @@ func runBuildsShow(ctx context.Context, e *env, args []string) error {
 			{"variant", b.GetVariant()},
 			{"ref", b.GetRef()},
 			{"commit", b.GetCommit()},
-			{"sandbox", eval.EnumShort(b.GetSandbox()) + " " + b.GetImage()},
+			{"sandbox", text.Enum(b.GetSandbox()) + " " + b.GetImage()},
 			{"dir", b.GetDir()},
 			{"binary", b.GetBinary()},
 			{"install", b.GetInstallId()},

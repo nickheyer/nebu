@@ -48,18 +48,17 @@ func header(tensors ...string) []byte {
 }
 
 func TestMetadataOnlyShardParses(t *testing.T) {
-	r := &reader{dtypes: map[string]string{"0": "F32"}}
 	only := header()
 	if len(only)%defaultAlignment == 0 {
 		only = append(only, 0)
 		binary.LittleEndian.PutUint64(only[8:], 0)
 	}
-	meta, tensors, err := r.parse(bytes.NewReader(only), int64(len(only)))
+	meta, tensors, err := parse(bytes.NewReader(only), int64(len(only)))
 	if err != nil || len(tensors) != 0 || meta["general.architecture"] != "llama" {
 		t.Fatalf("metadata only shard: tensors=%d meta=%v err=%v", len(tensors), meta, err)
 	}
 	// A shard that declares a tensor still has to reach the aligned data start
-	if _, _, err := r.parse(bytes.NewReader(header("blk.0.attn_q.weight")), int64(len(header("blk.0.attn_q.weight")))); err == nil {
+	if _, _, err := parse(bytes.NewReader(header("blk.0.attn_q.weight")), int64(len(header("blk.0.attn_q.weight")))); err == nil {
 		t.Fatal("a tensor without data should fail")
 	}
 	// With the data present the tensor spans to the end of the file
@@ -68,7 +67,7 @@ func TestMetadataOnlyShardParses(t *testing.T) {
 		full = append(full, 0)
 	}
 	full = append(full, make([]byte, 16)...)
-	_, tensors, err = r.parse(bytes.NewReader(full), int64(len(full)))
+	_, tensors, err = parse(bytes.NewReader(full), int64(len(full)))
 	if err != nil || len(tensors) != 1 || tensors[0].GetBytes() != 16 || tensors[0].GetDtype() != "F32" {
 		t.Fatalf("tensor shard: %v %v", tensors, err)
 	}
@@ -80,7 +79,6 @@ func (memBlob) Close() error { return nil }
 
 // The projector a run loads beside the weights joins the tensor table, its own header staying out
 func TestProjectorTensorsJoinTheWeights(t *testing.T) {
-	r := &reader{dtypes: map[string]string{"0": "F32"}}
 	file := func(names ...string) []byte {
 		b := header(names...)
 		for len(b)%defaultAlignment != 0 {
@@ -95,7 +93,7 @@ func TestProjectorTensorsJoinTheWeights(t *testing.T) {
 	g := &formats.Group{FormatID: "gguf", Name: "default", Weights: []*v1.Artifact{{Path: "model.gguf"}}, Files: map[v1.ArtifactRole][]*v1.Artifact{
 		v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR: {{Path: "mmproj-bf16.gguf"}, {Path: "mmproj.gguf"}},
 	}}
-	raw, err := r.Read(context.Background(), open, g)
+	raw, err := Format{}.Read(context.Background(), open, g)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -94,7 +94,6 @@ message Config {
   string addr = 2;
   string data_dir = 3;
   string cache_dir = 4;
-  repeated string spec_dirs = 5;
   repeated Source sources = 6;
   Logging logging = 7;
   repeated uint32 contexts = 8;

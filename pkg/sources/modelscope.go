@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/text"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -147,19 +147,19 @@ func msHit(c *Client, m map[string]any) *v1.SearchHit {
 	}
 	hit := newHit(owner+"/"+name, name, owner)
 	hit.Url = msPage(c, hit.Repo)
-	if n, err := eval.Number(m["Downloads"]); err == nil {
+	if n, err := text.Number(m["Downloads"]); err == nil {
 		hit.Downloads = uint64(n)
 	}
-	if n, err := eval.Number(m["Stars"]); err == nil {
+	if n, err := text.Number(m["Stars"]); err == nil {
 		hit.Likes = uint64(n)
 	}
-	if n, err := eval.Number(m["LastUpdatedTime"]); err == nil && n > 0 {
+	if n, err := text.Number(m["LastUpdatedTime"]); err == nil && n > 0 {
 		hit.UpdatedAt = timestamppb.New(time.Unix(int64(n), 0))
 	}
-	if n, err := eval.Number(m["CreatedTime"]); err == nil && n > 0 {
+	if n, err := text.Number(m["CreatedTime"]); err == nil && n > 0 {
 		hit.CreatedAt = timestamppb.New(time.Unix(int64(n), 0))
 	}
-	if n, err := eval.Number(m["Visibility"]); err == nil && n != 0 && n != msPublicVisible {
+	if n, err := text.Number(m["Visibility"]); err == nil && n != 0 && n != msPublicVisible {
 		hit.Private = true
 	}
 	if d, _ := m["Description"].(string); d != "" {
@@ -202,7 +202,7 @@ func msStrings(v any) []string {
 	}
 	var out []string
 	for _, item := range list {
-		if s := eval.Scalar(item); s != "" {
+		if s := text.Scalar(item); s != "" {
 			out = append(out, s)
 		}
 	}

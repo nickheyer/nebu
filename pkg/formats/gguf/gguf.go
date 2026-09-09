@@ -2,7 +2,6 @@
 package gguf
 
 import (
-	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -89,35 +88,12 @@ func (c *chunkReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-type reader struct {
-	dtypes map[string]string
-}
-
-// Builds a GGUF reader using dtype names from the spec
-func New(spec *v1.FormatSpec) (formats.Reader, error) {
-	return &reader{dtypes: spec.GetDtypes()}, nil
-}
-
-func (r *reader) Read(ctx context.Context, open formats.Opener, group *formats.Group) (*v1.RawModel, error) {
-	raw, err := formats.EachWeight(ctx, open, group, r.parse)
-	if err != nil {
-		return nil, err
-	}
-	// The projector a run loads beside the weights counts with them, the one a launch picks, its
-	// tensors joining the table while its header, which describes the encoder alone, stays out
-	if files := group.Files[v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR]; len(files) > 0 {
-		blob, err := open(ctx, files[0])
-		if err != nil {
-			return nil, err
-		}
-		_, tensors, err := r.parse(blob, blob.Size())
-		blob.Close()
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", files[0].GetPath(), err)
-		}
-		raw.Tensors = append(raw.Tensors, tensors...)
-	}
-	return raw, nil
+// GGML tensor types by number, the names quants go by
+var dtypes = map[uint32]string{
+	0: "F32", 1: "F16", 2: "Q4_0", 3: "Q4_1", 6: "Q5_0", 7: "Q5_1", 8: "Q8_0", 9: "Q8_1",
+	10: "Q2_K", 11: "Q3_K", 12: "Q4_K", 13: "Q5_K", 14: "Q6_K", 15: "Q8_K",
+	16: "IQ2_XXS", 17: "IQ2_XS", 18: "IQ3_XXS", 19: "IQ1_S", 20: "IQ4_NL", 21: "IQ3_S", 22: "IQ2_S", 23: "IQ4_XS",
+	24: "I8", 25: "I16", 26: "I32", 27: "I64", 28: "F64", 29: "IQ1_M", 30: "BF16", 34: "TQ1_0", 35: "TQ2_0", 39: "MXFP4",
 }
 
 type tensorEntry struct {
@@ -125,7 +101,7 @@ type tensorEntry struct {
 	offset uint64
 }
 
-func (r *reader) parse(ra io.ReaderAt, size int64) (map[string]string, []*v1.TensorInfo, error) {
+func parse(ra io.ReaderAt, size int64) (map[string]string, []*v1.TensorInfo, error) {
 	cr := newChunkReader(ra, size)
 	var m [4]byte
 	if _, err := io.ReadFull(cr, m[:]); err != nil {
@@ -194,7 +170,7 @@ func (r *reader) parse(ra io.ReaderAt, size int64) (map[string]string, []*v1.Ten
 			return nil, nil, err
 		}
 		entries = append(entries, tensorEntry{
-			info:   &v1.TensorInfo{Name: name, Dtype: r.dtype(typ), Elements: formats.Elements(shape)},
+			info:   &v1.TensorInfo{Name: name, Dtype: dtype(typ), Elements: formats.Elements(shape)},
 			offset: offset,
 		})
 	}
@@ -229,8 +205,8 @@ func (r *reader) parse(ra io.ReaderAt, size int64) (map[string]string, []*v1.Ten
 	return metadata, tensors, nil
 }
 
-func (r *reader) dtype(typ uint32) string {
-	if name, ok := r.dtypes[strconv.FormatUint(uint64(typ), 10)]; ok {
+func dtype(typ uint32) string {
+	if name, ok := dtypes[typ]; ok {
 		return name
 	}
 	return "type_" + strconv.FormatUint(uint64(typ), 10)

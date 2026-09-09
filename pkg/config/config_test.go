@@ -26,9 +26,6 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 	if len(cfg.GetSources()) != 1 || cfg.GetSources()[0].GetKind() != v1.SourceKind_SOURCE_KIND_LOCAL || cfg.GetSources()[0].GetConfig()["path"] != "/models" {
 		t.Fatalf("sources %v", cfg.GetSources())
 	}
-	if cfg.GetSpecDirs()[len(cfg.GetSpecDirs())-1] != filepath.Join(dir, "data", "spec") {
-		t.Fatalf("spec dirs %v", cfg.GetSpecDirs())
-	}
 	if _, err := Load(filepath.Join(dir, "missing.yaml")); err == nil {
 		t.Fatal("explicit missing file should fail")
 	}

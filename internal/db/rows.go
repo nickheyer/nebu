@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/nickheyer/nebu/pkg/eval"
+	"github.com/nickheyer/nebu/pkg/text"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -159,7 +159,7 @@ func (f *flag) Scan(v any) error {
 }
 
 // Stores an enum as its short lower case name
-func enumCol(e protoreflect.Enum) string { return eval.EnumShort(e) }
+func enumCol(e protoreflect.Enum) string { return text.Enum(e) }
 
 // Reads a short enum name back, zero when unknown
 func enumOf[E ~int32](short string) E {
@@ -176,7 +176,7 @@ func enumOf[E ~int32](short string) E {
 	return zero
 }
 
-// Converts CamelCase to SCREAMING_SNAKE the same way eval.EnumShort strips it
+// Converts CamelCase to SCREAMING_SNAKE the same way text.Enum strips it
 func screaming(s string) string {
 	var b strings.Builder
 	prev := rune(0)

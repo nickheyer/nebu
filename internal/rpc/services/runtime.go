@@ -5,10 +5,11 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/installs"
+	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
-	"github.com/nickheyer/nebu/pkg/runtime"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 )
 
 var (
@@ -18,19 +19,19 @@ var (
 
 // Serves the runtime catalog, the formats it accepts, and installs
 type RuntimeService struct {
-	runtimes *runtime.Registry
+	runtimes *runtimes.Registry
 	prober   *host.Prober
 	installs *installs.Manager
-	formats  []*v1.FormatSpec
+	formats  *formats.Registry
 }
 
 // Builds the runtime service, formats in priority order
-func NewRuntimeService(reg *runtime.Registry, prober *host.Prober, inst *installs.Manager, formats []*v1.FormatSpec) *RuntimeService {
-	return &RuntimeService{runtimes: reg, prober: prober, installs: inst, formats: formats}
+func NewRuntimeService(reg *runtimes.Registry, prober *host.Prober, inst *installs.Manager, fmts *formats.Registry) *RuntimeService {
+	return &RuntimeService{runtimes: reg, prober: prober, installs: inst, formats: fmts}
 }
 
 func (s *RuntimeService) ListFormats(ctx context.Context, req *connect.Request[v1.ListFormatsRequest]) (*connect.Response[v1.ListFormatsResponse], error) {
-	return reply(&v1.ListFormatsResponse{Formats: s.formats}, nil)
+	return reply(&v1.ListFormatsResponse{Formats: s.formats.Describe()}, nil)
 }
 
 func (s *RuntimeService) ListRuntimes(ctx context.Context, req *connect.Request[v1.ListRuntimesRequest]) (*connect.Response[v1.ListRuntimesResponse], error) {
@@ -50,8 +51,8 @@ func (s *RuntimeService) ListRuntimes(ctx context.Context, req *connect.Request[
 }
 
 // The runtime's status with its install methods as this host sees them
-func (s *RuntimeService) status(ctx context.Context, rt *runtime.Runtime, profile *v1.HostProfile) (*v1.RuntimeStatus, error) {
-	st := rt.Status(profile)
+func (s *RuntimeService) status(ctx context.Context, rt runtimes.Runtime, profile *v1.HostProfile) (*v1.RuntimeStatus, error) {
+	st := runtimes.Status(rt, profile)
 	options, err := s.installs.Options(ctx, rt, profile)
 	if err != nil {
 		return nil, err

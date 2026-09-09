@@ -10,8 +10,8 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/pkg/estimate"
-	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/text"
 )
 
 func runPull(ctx context.Context, e *env, args []string) error {
@@ -204,6 +204,6 @@ func runTasksCancel(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 	return e.print(resp.Msg, func(w io.Writer) {
-		fmt.Fprintf(w, "%s %s\n", resp.Msg.GetTask().GetId(), eval.EnumShort(resp.Msg.GetTask().GetState()))
+		fmt.Fprintf(w, "%s %s\n", resp.Msg.GetTask().GetId(), text.Enum(resp.Msg.GetTask().GetState()))
 	})
 }

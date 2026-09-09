@@ -3,7 +3,6 @@ syntax = "proto3";
 package nebu.v1;
 
 import "google/protobuf/timestamp.proto";
-import "nebu/v1/host.proto";
 import "nebu/v1/model.proto";
 import "nebu/v1/recipe.proto";
 import "nebu/v1/source.proto";
@@ -49,6 +48,7 @@ message Param {
   repeated string choices = 5;
   string flag = 6;
   string env = 7;
+  // The memory planner picks the value at launch while it is left at auto
   bool solved = 8;
   // Shown in place of the name
   string label = 9;
@@ -62,67 +62,20 @@ message Param {
   string group = 14;
   // Hidden until the form is expanded
   bool advanced = 15;
-  // Expression over the plan scope giving a solved param its value while it is auto, evaluated in manifest order
-  string auto = 16;
-  // Choices only offered while an expression holds
-  repeated ChoiceRule choice_rules = 17;
-  // Expression over the plan scope giving the upper bound of a numeric param, for a bound that depends on the model or host
-  string max_expr = 18;
-}
-
-// Choices of a param that only apply while an expression over the other params holds
-message ChoiceRule {
-  repeated string choices = 1;
-  string when = 2;
-  // Why the choices are ruled out while when does not hold
-  string message = 3;
-}
-
-// Host requirement expressed over probed facts
-message Constraint {
-  string expr = 1;
-  string message = 2;
-}
-
-// One published build of a release, the one for this host selected by when
-message PrebuiltRule {
-  string id = 1;
-  string when = 2;
-  repeated string assets = 3;
-  string binary = 4;
-}
-
-// Releases to download from, every asset of the chosen rule unpacked into one directory
-//
-// releases names the repository at the source named by source, the github
-// default when empty. The newest release carrying every asset of the rule is
-// taken unless a release is named.
-message Prebuilt {
-  string releases = 1;
-  string source = 2;
-  repeated PrebuiltRule rules = 3;
-}
-
-// Binaries already on the host, adopted from PATH or a path given
-message Adopt {
-  repeated string names = 1;
-}
-
-// A recipe to build, its variant, ref, sandbox, and vars chosen when installing
-message FromRecipe {
-  string recipe_id = 1;
 }
 
 // One way to obtain an install, offered when someone installs the runtime
 message InstallMethod {
   string id = 1;
   string description = 2;
-  // What the method does, exactly one set
-  oneof how {
-    Adopt adopt = 3;
-    Prebuilt prebuilt = 4;
-    FromRecipe recipe = 5;
-  }
+  // What the method does: adopt a binary on the host, download a published release, or build a recipe
+  InstallKind kind = 3;
+  // The binaries looked for on PATH, for an adopted install
+  repeated string binaries = 4;
+  // The repository releases come from, for a downloaded install
+  string releases = 5;
+  // The recipe built, for a built install
+  string recipe_id = 6;
 }
 
 // A method as this host sees it: the settings it takes, defaults picked for this host
@@ -133,24 +86,6 @@ message InstallOption {
   repeated string unmet = 3;
   // The recipe with what the host selects, for a recipe method
   RecipeStatus recipe = 4;
-}
-
-// Runs the binary once and captures named groups as facts
-message CommandProbe {
-  string key = 1;
-  repeated string args = 2;
-  string match = 3;
-  uint32 timeout_ms = 4;
-  string command = 5;
-}
-
-// Turns a stored group of one of the formats into what the runtime loads, once per group, before its first launch
-message Prepare {
-  repeated string formats = 1;
-  string command = 2;
-  repeated string args = 3;
-  map<string, string> env = 4;
-  uint32 timeout_ms = 5;
 }
 
 // A usable copy of a runtime
@@ -167,104 +102,25 @@ message Install {
   string build_id = 10;
 }
 
-// Ways to obtain an install, one chosen and configured when installing
-message Acquire {
-  repeated InstallMethod methods = 1;
-}
-
-// Readiness probe of a running instance
-message HealthCheck {
-  string path = 1;
-  uint32 interval_ms = 2;
-  uint32 timeout_ms = 3;
-}
-
-// How to start and address an instance
-message Launch {
-  string command = 1;
-  repeated string args = 2;
-  map<string, string> env = 3;
-  HealthCheck health = 4;
-  ApiFlavor api = 5;
-  uint32 stop_grace_ms = 6;
-  Prepare prepare = 7;
-}
-
-// One log pattern with its hint
-message TriageRule {
-  string id = 1;
-  string match = 2;
-  string summary = 3;
-  string hint = 4;
-  map<string, string> fix = 5;
-}
-
-// Data driven set of failure patterns
-message TriageSpec {
-  string id = 1;
-  string description = 2;
-  repeated TriageRule rules = 3;
-}
-
-// Placement rule for one tensor group kind
-message GroupPolicy {
-  TensorGroupKind kind = 1;
-  PoolKind pool = 2;
-  string param = 3;
-  bool param_counts_host = 4;
-  uint32 spill_priority = 5;
-  TensorGroupKind requires = 6;
-  // Expression over the run params and header facts; the kind stays on disk while it evaluates
-  // false, so a draft head counts only once a run drafts with it. Empty means always loaded.
-  string when = 7;
-}
-
-// Memory planning rules for a runtime
-//
-// devices_param names the param holding how many devices a run spans, so
-// device capacity is that many of the largest pools; empty means the
-// runtime spreads over every device it sees.
-message EstimatePolicy {
-  repeated GroupPolicy groups = 1;
-  string cache_bytes = 2;
-  string overhead_bytes = 3;
-  map<string, double> cache_element_bytes = 4;
-  double margin = 5;
-  string context_param = 6;
-  string devices_param = 7;
-  // Expression over the plan scope giving the most context the model was trained for, the ceiling an auto context solves under
-  string context_max = 8;
-}
-
-// Extracts a measured allocation from a log line
-message ReportRule {
-  string match = 1;
-  string key = 2;
-  string unit = 3;
-}
-
-// Data driven runtime definition
-message RuntimeManifest {
+// A runtime as the API describes it
+message Runtime {
   string id = 1;
   string name = 2;
   string description = 3;
   repeated string formats = 4;
-  repeated Constraint constraints = 5;
-  Acquire acquire = 6;
-  Launch launch = 7;
+  ApiFlavor api = 5;
+  // What the host must have, in words
+  repeated string requirements = 6;
+  repeated InstallMethod methods = 7;
   repeated Param params = 8;
-  EstimatePolicy estimate = 9;
-  repeated string triage = 10;
-  repeated ReportRule report = 11;
-  repeated CommandProbe probes = 12;
 }
 
-// Lists format specs
+// Lists formats
 message ListFormatsRequest {}
 
-// Returns format specs in priority order
+// Returns formats in priority order
 message ListFormatsResponse {
-  repeated FormatSpec formats = 1;
+  repeated Format formats = 1;
 }
 
 // Lists known runtimes
@@ -277,7 +133,7 @@ message ListRuntimesResponse {
 
 // Runtime paired with host compatibility and how it installs here
 message RuntimeStatus {
-  RuntimeManifest manifest = 1;
+  Runtime runtime = 1;
   bool compatible = 2;
   repeated string unmet = 3;
   repeated InstallOption installs = 4;

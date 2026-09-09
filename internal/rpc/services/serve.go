@@ -13,7 +13,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
-	"github.com/nickheyer/nebu/pkg/runtime"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 )
 
 var (
@@ -131,7 +131,7 @@ func (s *GatewayService) SetRoute(ctx context.Context, req *connect.Request[v1.S
 		return nil, wrap(err)
 	}
 	if in.GetState() != v1.InstanceState_INSTANCE_STATE_READY {
-		return nil, wrap(fmt.Errorf("%w: instance %s is not ready", runtime.ErrParam, in.GetName()))
+		return nil, wrap(fmt.Errorf("%w: instance %s is not ready", runtimes.ErrParam, in.GetName()))
 	}
 	if err := s.slotless(req.Msg.GetName(), "belongs to a slot"); err != nil {
 		return nil, err
@@ -166,7 +166,7 @@ func (s *GatewayService) DeleteRoute(ctx context.Context, req *connect.Request[v
 // Refuses a route name a slot owns
 func (s *GatewayService) slotless(name, why string) error {
 	if r, ok := s.gateway.Table().Lookup(name); ok && r.GetSlotId() != "" {
-		return wrap(fmt.Errorf("%w: %s %s", runtime.ErrParam, name, why))
+		return wrap(fmt.Errorf("%w: %s %s", runtimes.ErrParam, name, why))
 	}
 	return nil
 }

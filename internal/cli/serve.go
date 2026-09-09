@@ -12,8 +12,8 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/pkg/estimate"
-	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/text"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -59,7 +59,7 @@ func runRun(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 	if st := final.Msg.GetInstance(); st.GetState() != v1.InstanceState_INSTANCE_STATE_READY {
-		return fmt.Errorf("%s is %s: %s", in.GetName(), eval.EnumShort(st.GetState()), st.GetError())
+		return fmt.Errorf("%s is %s: %s", in.GetName(), text.Enum(st.GetState()), st.GetError())
 	}
 	return e.print(final.Msg, func(w io.Writer) { fmt.Fprintf(w, "gateway %s/v1 model %s\n", e.gatewayBase(ctx), in.GetName()) })
 }
@@ -109,7 +109,7 @@ func runStop(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 	return e.print(resp.Msg, func(w io.Writer) {
-		fmt.Fprintf(w, "%s %s\n", resp.Msg.GetInstance().GetName(), eval.EnumShort(resp.Msg.GetInstance().GetState()))
+		fmt.Fprintf(w, "%s %s\n", resp.Msg.GetInstance().GetName(), text.Enum(resp.Msg.GetInstance().GetState()))
 	})
 }
 
@@ -219,7 +219,7 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	e.text("slot %s %s\n", resp.Msg.GetSlot().GetName(), eval.EnumShort(resp.Msg.GetSlot().GetState()))
+	e.text("slot %s %s\n", resp.Msg.GetSlot().GetName(), text.Enum(resp.Msg.GetSlot().GetState()))
 	if _, err := e.follow(ctx, resp.Msg.GetTask().GetId()); err != nil {
 		return err
 	}
@@ -229,7 +229,7 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	}
 	s := final.Msg.GetSlot()
 	if s.GetState() != v1.SlotState_SLOT_STATE_READY {
-		return fmt.Errorf("slot %s is %s: %s", s.GetName(), eval.EnumShort(s.GetState()), s.GetError())
+		return fmt.Errorf("slot %s is %s: %s", s.GetName(), text.Enum(s.GetState()), s.GetError())
 	}
 	return e.print(final.Msg, func(w io.Writer) {
 		fmt.Fprintf(w, "gateway %s/v1 model %s serves %s\n", e.gatewayBase(ctx), s.GetName(), modelText(s.GetRequest()))
@@ -434,7 +434,7 @@ func parseMemory(s string) (uint64, error) {
 	if strings.TrimSpace(s) == "" {
 		return 0, nil
 	}
-	n, err := eval.Bytes(s, "")
+	n, err := text.Bytes(s, "")
 	if err != nil {
 		return 0, fmt.Errorf("memory %q: %w", s, err)
 	}
@@ -498,7 +498,7 @@ func runSlotsRelaunch(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	e.text("slot %s %s\n", resp.Msg.GetSlot().GetName(), eval.EnumShort(resp.Msg.GetSlot().GetState()))
+	e.text("slot %s %s\n", resp.Msg.GetSlot().GetName(), text.Enum(resp.Msg.GetSlot().GetState()))
 	if _, err := e.follow(ctx, resp.Msg.GetTask().GetId()); err != nil {
 		return err
 	}
@@ -620,7 +620,7 @@ func runGatewayTraces(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, t := range resp.Msg.GetTraces() {
-			rows = append(rows, []string{t.GetId(), when(t.GetStartedAt(), time.RFC3339), t.GetRoute(), eval.EnumShort(t.GetKind()), traceFormat(t), strconv.Itoa(int(t.GetStatus())), traceMillis(t.GetStartedAt(), t.GetFirstTokenAt()), traceMillis(t.GetStartedAt(), t.GetFinishedAt()), strconv.Itoa(int(t.GetPromptTokens())), strconv.Itoa(int(t.GetCompletionTokens())), t.GetStop(), t.GetError()})
+			rows = append(rows, []string{t.GetId(), when(t.GetStartedAt(), time.RFC3339), t.GetRoute(), text.Enum(t.GetKind()), traceFormat(t), strconv.Itoa(int(t.GetStatus())), traceMillis(t.GetStartedAt(), t.GetFirstTokenAt()), traceMillis(t.GetStartedAt(), t.GetFinishedAt()), strconv.Itoa(int(t.GetPromptTokens())), strconv.Itoa(int(t.GetCompletionTokens())), t.GetStop(), t.GetError()})
 		}
 		table(w, []string{"ID", "STARTED", "ROUTE", "KIND", "FORMAT", "STATUS", "FIRST TOKEN", "TOTAL", "IN", "OUT", "STOP", "ERROR"}, rows)
 	})
@@ -628,11 +628,11 @@ func runGatewayTraces(ctx context.Context, e *env, args []string) error {
 
 // The wire formats of a trace, one word when the runtime spoke the client's
 func traceFormat(t *v1.Trace) string {
-	client := eval.EnumShort(t.GetClientApi())
+	client := text.Enum(t.GetClientApi())
 	if !t.GetTranslated() {
 		return client
 	}
-	return client + ">" + eval.EnumShort(t.GetUpstreamApi())
+	return client + ">" + text.Enum(t.GetUpstreamApi())
 }
 
 // Milliseconds between two stamps, dash when either is missing
@@ -659,7 +659,7 @@ func runGatewayTrace(ctx context.Context, e *env, args []string) error {
 			{"route", t.GetRoute()},
 			{"instance", t.GetInstanceId()},
 			{"slot", t.GetSlotId()},
-			{"kind", eval.EnumShort(t.GetKind())},
+			{"kind", text.Enum(t.GetKind())},
 			{"format", traceFormat(t)},
 			{"path", t.GetPath()},
 			{"stream", yes(t.GetStream())},

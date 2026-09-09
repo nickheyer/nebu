@@ -7,11 +7,11 @@ import (
 	"math"
 	"sort"
 	"strconv"
-	"strings"
 
-	"github.com/nickheyer/nebu/pkg/eval"
-	"github.com/nickheyer/nebu/pkg/host"
+	"github.com/nickheyer/nebu/pkg/archs"
+	"github.com/nickheyer/nebu/pkg/formats"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/text"
 )
 
 // Value a solved param takes before planning
@@ -20,237 +20,196 @@ const Auto = "auto"
 // Returned when the params name a choice the runtime rules out under the other params
 var ErrRefused = errors.New("params refused")
 
-// A solved param with the expression that gives it its value
-type autoParam struct {
-	name string
-	expr *eval.Expr
+// Run params as a run resolved them, each an int64, float64, bool, string, or Auto
+type Params map[string]any
+
+// The whole number a param holds, zero while absent or auto
+func (p Params) Int(name string) int64 {
+	switch v := p[name].(type) {
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	}
+	return 0
 }
 
-// Choices of one param that only stand while an expression holds
-type choiceRule struct {
-	param   string
-	choices []string
-	when    *eval.Expr
-	message string
+// The number a param holds, zero while absent or auto
+func (p Params) Float(name string) float64 {
+	switch v := p[name].(type) {
+	case int64:
+		return float64(v)
+	case float64:
+		return v
+	}
+	return 0
 }
 
-// A numeric param with the bound the model or host gives it
-type boundParam struct {
-	spec *v1.Param
-	max  *eval.Expr
+// The text a param holds, empty while absent
+func (p Params) Str(name string) string {
+	if v, ok := p[name].(string); ok {
+		return v
+	}
+	return ""
 }
 
-// Compiled estimate policy of one runtime
+// The flag a param holds, false while absent
+func (p Params) Bool(name string) bool {
+	v, _ := p[name].(bool)
+	return v
+}
+
+// Whether a param waits for the planner to pick it
+func (p Params) IsAuto(name string) bool {
+	return p[name] == Auto
+}
+
+// A copy the caller may change
+func (p Params) Clone() Params {
+	out := make(Params, len(p)+1)
+	for k, v := range p {
+		out[k] = v
+	}
+	return out
+}
+
+// What a policy's rules read: the model, the host, and the run params with the autos solved so far
+type Scope struct {
+	Descriptor *v1.Descriptor
+	Model      formats.Params
+	Host       *v1.HostProfile
+	Params     Params
+	// Cache elements per token of context, from the model's attention family at this run's shape
+	CachePerToken float64
+}
+
+// Placement rule for one tensor group kind
+type GroupRule struct {
+	Kind v1.TensorGroupKind
+	Pool v1.PoolKind
+	// The run param counting how many of the kind sit on device, empty when the kind is pinned to its pool
+	Param string
+	// Whether the param counts the ones on the host instead
+	ParamCountsHost bool
+	// Higher spills to the host first when the device is short
+	SpillPriority uint32
+	// A kind that cannot outnumber another on device, experts following their layers
+	Requires v1.TensorGroupKind
+	// Whether the kind loads under these params, nil meaning always; a draft head loads only once a run drafts with it
+	Loaded func(s *Scope) bool
+}
+
+// Memory planning rules of one runtime
 type Policy struct {
-	spec     *v1.EstimatePolicy
-	groups   map[v1.TensorGroupKind]*v1.GroupPolicy
-	when     map[v1.TensorGroupKind]*eval.Expr
-	cache    *eval.Expr
-	overhead *eval.Expr
-	// Params solved by expression, in manifest order so one may read another
-	autos []autoParam
-	rules []choiceRule
-	// Every param whose bounds or choices the plan reports, in manifest order
-	stated []boundParam
-	// The context param and the ceiling an auto context solves under
-	context    *v1.Param
-	contextMax *eval.Expr
+	Groups []GroupRule
+	// Bytes of cache at this run's context, from the family's cost per token
+	CacheBytes func(s *Scope) uint64
+	// Bytes the runtime holds beside weights and cache
+	OverheadBytes func(s *Scope) uint64
+	// Share of every pool kept free
+	Margin float64
+	// The param holding context length, empty for a runtime whose context the planner never solves
+	ContextParam string
+	// The grid an auto context is solved on
+	ContextMin, ContextStep int64
+	// The most context the model was trained for, the ceiling an auto context solves under, zero for none
+	ContextMax func(s *Scope) int64
+	// The param counting the devices a run spans, so device capacity is that many of the largest pools; empty means every device
+	DevicesParam string
+	// The context and batch shape the family sizes the cache by
+	Shape func(p Params) archs.Run
+	// Gives every auto param but the context its value, in order, before the context is solved
+	Solve func(s *Scope)
+	// Every param's bounds and ruled out choices under the params, and why a run would be refused
+	States func(s *Scope) ([]*v1.ParamState, string)
 }
 
 // Everything a plan needs
 type Input struct {
 	Descriptor    *v1.Descriptor
-	Formulas      map[string]*eval.Expr
+	Family        archs.Arch
 	Host          *v1.HostProfile
-	Params        map[string]any
+	Params        Params
 	Free          bool
 	OverheadDelta float64
 	// Plans through a choice the rules refuse instead of failing, for an estimate that reports the refusal
 	SkipRules bool
 }
 
-// Compiles policy expressions, with the params the runtime takes for the ones the plan solves or bounds
-func NewPolicy(spec *v1.EstimatePolicy, params []*v1.Param) (*Policy, error) {
-	p := &Policy{spec: spec, groups: map[v1.TensorGroupKind]*v1.GroupPolicy{}, when: map[v1.TensorGroupKind]*eval.Expr{}}
-	for _, prm := range params {
-		if prm.GetAuto() != "" {
-			if !prm.GetSolved() {
-				return nil, fmt.Errorf("param %s: auto needs solved", prm.GetName())
-			}
-			e, err := eval.Compile(prm.GetAuto())
-			if err != nil {
-				return nil, fmt.Errorf("param %s auto: %w", prm.GetName(), err)
-			}
-			p.autos = append(p.autos, autoParam{name: prm.GetName(), expr: e})
-		}
-		for _, r := range prm.GetChoiceRules() {
-			if len(r.GetChoices()) == 0 || r.GetWhen() == "" || r.GetMessage() == "" {
-				return nil, fmt.Errorf("param %s: every choice rule needs choices, when, and message", prm.GetName())
-			}
-			for _, ch := range r.GetChoices() {
-				if !containsString(prm.GetChoices(), ch) {
-					return nil, fmt.Errorf("param %s: choice rule names %q, not one of its choices", prm.GetName(), ch)
-				}
-			}
-			e, err := eval.Compile(r.GetWhen())
-			if err != nil {
-				return nil, fmt.Errorf("param %s choice rule: %w", prm.GetName(), err)
-			}
-			p.rules = append(p.rules, choiceRule{param: prm.GetName(), choices: r.GetChoices(), when: e, message: r.GetMessage()})
-		}
-		var max *eval.Expr
-		if prm.GetMaxExpr() != "" {
-			numeric := prm.GetType() == v1.ParamType_PARAM_TYPE_INT || prm.GetType() == v1.ParamType_PARAM_TYPE_FLOAT
-			if !numeric {
-				return nil, fmt.Errorf("param %s: max_expr applies to int and float params only", prm.GetName())
-			}
-			var err error
-			if max, err = eval.Compile(prm.GetMaxExpr()); err != nil {
-				return nil, fmt.Errorf("param %s max_expr: %w", prm.GetName(), err)
-			}
-		}
-		if max != nil || len(prm.GetChoiceRules()) > 0 || prm.GetMin() != 0 || prm.GetMax() != 0 || prm.GetStep() != 0 {
-			p.stated = append(p.stated, boundParam{spec: prm, max: max})
-		}
-		if prm.GetName() == spec.GetContextParam() {
-			p.context = prm
-		}
-	}
-	if spec.GetContextMax() != "" {
-		e, err := eval.Compile(spec.GetContextMax())
-		if err != nil {
-			return nil, fmt.Errorf("context_max: %w", err)
-		}
-		p.contextMax = e
-	}
-	if spec.GetContextParam() != "" && p.context == nil {
-		return nil, fmt.Errorf("context_param %s is not a param", spec.GetContextParam())
-	}
-	for _, g := range spec.GetGroups() {
-		p.groups[g.GetKind()] = g
-		if g.GetWhen() != "" {
-			e, err := eval.Compile(g.GetWhen())
-			if err != nil {
-				return nil, fmt.Errorf("group %s when: %w", eval.EnumShort(g.GetKind()), err)
-			}
-			p.when[g.GetKind()] = e
-		}
-	}
-	var err error
-	if spec.GetCacheBytes() != "" {
-		if p.cache, err = eval.Compile(spec.GetCacheBytes()); err != nil {
-			return nil, err
-		}
-	}
-	if spec.GetOverheadBytes() != "" {
-		if p.overhead, err = eval.Compile(spec.GetOverheadBytes()); err != nil {
-			return nil, err
-		}
-	}
-	return p, nil
+// Says which facts the header lacked, the one failure that means the model rather than the policy is short
+type MissingError struct {
+	Names []string
 }
 
-// Returns the param name holding context length
-func (p *Policy) ContextParam() string { return p.spec.GetContextParam() }
-
-// One tensor group as the planner moves it: its weights, and the share of the cache that follows it
-type item struct {
-	kind    v1.TensorGroupKind
-	layer   int32
-	weights uint64
-	cache   uint64
+func (e *MissingError) Error() string {
+	return fmt.Sprintf("the header gives no %s", joinOr(e.Names))
 }
 
-func (it item) bytes() uint64 { return it.weights + it.cache }
-
-type bucket struct {
-	policy *v1.GroupPolicy
-	items  []item
-	prefix []uint64
-	kinds  map[v1.TensorGroupKind][]int
-	fixed  int
-	count  int
+func joinOr(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	}
+	out := ""
+	for i, n := range names {
+		switch {
+		case i == 0:
+			out = n
+		case i == len(names)-1:
+			out += " or " + n
+		default:
+			out += ", " + n
+		}
+	}
+	return out
 }
 
-type solver struct {
-	buckets  []*bucket
-	byKind   map[v1.TensorGroupKind]*bucket
-	policies map[v1.TensorGroupKind]*v1.GroupPolicy
-	free     bool
-	overhead uint64
-	// Groups the policy pins to one side, never offloaded
-	pinned    []item
-	hosted    []item
-	fixedDev  uint64
-	fixedHost uint64
-	devCap    uint64
-	hostCap   uint64
+func (p *Policy) scope(in Input, params Params) *Scope {
+	return &Scope{Descriptor: in.Descriptor, Model: formats.ParamsOf(in.Descriptor.GetParams()), Host: in.Host, Params: params}
 }
 
-// Plans the descriptor on the host, solving offload params, the params an expression
-// solves, and an auto context length, which takes the largest that still fits
+// Plans the descriptor on the host, solving offload params, the params the runtime solves, and an
+// auto context length, which takes the largest that still fits
 func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
-	env, err := p.env(in)
-	if err != nil {
-		return nil, err
+	s := p.scope(in, in.Params.Clone())
+	if p.Solve != nil {
+		p.Solve(s)
 	}
-	params := cloneParams(in.Params)
-	for _, a := range p.autos {
-		if params[a.name] != Auto {
-			continue
-		}
-		v, err := a.expr.Value(env)
-		if err != nil {
-			return nil, eval.Explain(a.expr, a.name, env, err)
-		}
-		params[a.name] = fmt.Sprint(v)
-		env[a.name] = params[a.name]
-	}
-	if !in.SkipRules {
-		if _, refusal, err := p.states(env, params, false); err != nil {
-			return nil, err
-		} else if refusal != "" {
+	if !in.SkipRules && p.States != nil {
+		if _, refusal := p.States(s); refusal != "" {
 			return nil, fmt.Errorf("%w: %s", ErrRefused, refusal)
 		}
 	}
-	if name := p.spec.GetContextParam(); name != "" && params[name] == Auto {
-		return p.solveContext(in, env, params)
+	if p.ContextParam != "" && s.Params.IsAuto(p.ContextParam) {
+		return p.solveContext(in, s)
 	}
-	return p.plan(in, env, params)
+	return p.plan(in, s)
 }
 
 // Picks the largest context on the param's grid, up to the model's own, that keeps the verdict the
 // smallest context earns: a model that fits whole stays whole, one that spills stays on the host
-func (p *Policy) solveContext(in Input, env map[string]any, params map[string]any) (*v1.MemoryPlan, error) {
-	name := p.spec.GetContextParam()
-	step := int64(p.context.GetStep())
+func (p *Policy) solveContext(in Input, s *Scope) (*v1.MemoryPlan, error) {
+	step := p.ContextStep
 	if step <= 0 {
 		step = 1
 	}
-	lo := int64(p.context.GetMin())
+	lo := p.ContextMin
 	if lo <= 0 {
 		lo = step
 	}
 	hi := lo
-	if p.contextMax != nil {
-		v, err := p.contextMax.Float(env)
-		if err != nil {
-			return nil, eval.Explain(p.contextMax, "context_max", env, err)
-		}
-		hi = int64(v)
-	}
-	if p.context.GetMax() > 0 && int64(p.context.GetMax()) < hi {
-		hi = int64(p.context.GetMax())
+	if p.ContextMax != nil {
+		hi = p.ContextMax(s)
 	}
 	if hi < lo {
 		hi = lo
 	}
 	at := func(n int64) (*v1.MemoryPlan, error) {
-		ps := cloneParams(params)
-		ps[name] = n
-		e := cloneParams(env)
-		e[name] = n
-		return p.plan(in, e, ps)
+		ps := s.Params.Clone()
+		ps[p.ContextParam] = n
+		return p.plan(in, &Scope{Descriptor: s.Descriptor, Model: s.Model, Host: s.Host, Params: ps})
 	}
 	best, err := at(lo)
 	if err != nil || best.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO {
@@ -281,116 +240,132 @@ func (p *Policy) solveContext(in Input, env map[string]any, params map[string]an
 }
 
 // Every param's bounds and ruled out choices under the params a plan solved, and why a run with them
-// would be refused, from the scope the plan read with the solved values in place
-func (p *Policy) States(in Input, plan *v1.MemoryPlan) ([]*v1.ParamState, string, error) {
-	env, err := p.env(in)
-	if err != nil {
-		return nil, "", err
+// would be refused, read with the solved values in place
+func (p *Policy) ParamStates(in Input, plan *v1.MemoryPlan) ([]*v1.ParamState, string) {
+	if p.States == nil {
+		return nil, ""
 	}
-	params := cloneParams(in.Params)
+	params := in.Params.Clone()
 	for k, v := range plan.GetParams() {
-		if n, err := strconv.ParseFloat(v, 64); err == nil {
-			params[k] = n
-		} else {
-			params[k] = v
-		}
-		env[k] = params[k]
+		params[k] = parsed(v)
 	}
-	return p.states(env, params, true)
+	return p.States(p.scope(in, params))
 }
 
-// The states of every param the policy speaks for; bounds are only read once every param is concrete,
-// since a bound may follow a param the plan has yet to solve
-func (p *Policy) states(env map[string]any, params map[string]any, bounds bool) ([]*v1.ParamState, string, error) {
-	var out []*v1.ParamState
-	var refusal string
-	for _, b := range p.stated {
-		st := &v1.ParamState{Name: b.spec.GetName(), Min: b.spec.GetMin(), Max: b.spec.GetMax(), Step: b.spec.GetStep()}
-		if b.max != nil && bounds {
-			v, err := b.max.Float(env)
-			if err != nil {
-				return nil, "", eval.Explain(b.max, b.spec.GetName()+" max", env, err)
-			}
-			if v > 0 {
-				st.Max = v
-			}
-		}
-		current := fmt.Sprint(params[b.spec.GetName()])
-		for _, r := range p.rules {
-			if r.param != b.spec.GetName() {
-				continue
-			}
-			ok, err := r.when.Bool(env)
-			if err != nil {
-				return nil, "", eval.Explain(r.when, b.spec.GetName()+" choice rule", env, err)
-			}
-			if ok {
-				continue
-			}
-			for _, ch := range r.choices {
-				st.Disabled = append(st.Disabled, &v1.DisabledChoice{Value: ch, Message: r.message})
-				if ch == current && refusal == "" {
-					refusal = fmt.Sprintf("%s %s: %s", label(b.spec), ch, r.message)
-				}
-			}
-		}
-		out = append(out, st)
+// A solved param value read back into the type it was planned as
+func parsed(v string) any {
+	switch v {
+	case Auto:
+		return Auto
+	case "true":
+		return true
+	case "false":
+		return false
 	}
-	return out, refusal, nil
+	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+		return n
+	}
+	if f, err := strconv.ParseFloat(v, 64); err == nil {
+		return f
+	}
+	return v
 }
 
-func label(p *v1.Param) string {
-	if p.GetLabel() != "" {
-		return strings.ToLower(p.GetLabel())
+// Sizes the cache the family keeps per token at this run's shape
+func (p *Policy) perToken(in Input, s *Scope) error {
+	if in.Family == nil {
+		return &MissingError{Names: []string{"an attention family"}}
 	}
-	return p.GetName()
+	var run archs.Run
+	if p.Shape != nil {
+		run = p.Shape(s.Params)
+	}
+	per, err := in.Family.CachePerToken(s.Model, run)
+	if err != nil {
+		var needs *archs.Needs
+		if errors.As(err, &needs) {
+			return &MissingError{Names: needs.Names}
+		}
+		return err
+	}
+	s.CachePerToken = per
+	return nil
 }
 
-func containsString(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
+// One tensor group as the planner moves it: its weights, and the share of the cache that follows it
+type item struct {
+	kind    v1.TensorGroupKind
+	layer   int32
+	weights uint64
+	cache   uint64
+}
+
+func (it item) bytes() uint64 { return it.weights + it.cache }
+
+type bucket struct {
+	rule   GroupRule
+	items  []item
+	prefix []uint64
+	kinds  map[v1.TensorGroupKind][]int
+	fixed  int
+	count  int
+}
+
+type solver struct {
+	buckets  []*bucket
+	byKind   map[v1.TensorGroupKind]*bucket
+	free     bool
+	overhead uint64
+	// Groups the policy pins to one side, never offloaded
+	pinned    []item
+	hosted    []item
+	fixedDev  uint64
+	fixedHost uint64
+	devCap    uint64
+	hostCap   uint64
+}
+
+func (p *Policy) rule(kind v1.TensorGroupKind) (GroupRule, bool) {
+	for _, g := range p.Groups {
+		if g.Kind == kind {
+			return g, true
 		}
 	}
-	return false
-}
-
-func cloneParams(m map[string]any) map[string]any {
-	out := make(map[string]any, len(m)+1)
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
+	return GroupRule{}, false
 }
 
 // Plans with every param concrete
-func (p *Policy) plan(in Input, env map[string]any, params map[string]any) (*v1.MemoryPlan, error) {
-	cacheTotal, err := p.eval(p.cache, "cache_bytes", env)
-	if err != nil {
+func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
+	if err := p.perToken(in, s); err != nil {
 		return nil, err
 	}
-	overhead, err := p.eval(p.overhead, "overhead_bytes", env)
-	if err != nil {
-		return nil, err
+	var cacheTotal, overhead uint64
+	if p.CacheBytes != nil {
+		cacheTotal = p.CacheBytes(s)
+	}
+	if p.OverheadBytes != nil {
+		overhead = p.OverheadBytes(s)
 	}
 	if in.OverheadDelta != 0 {
 		overhead = uint64(max(float64(overhead)+in.OverheadDelta, 0))
 	}
-	unloaded, err := p.unloaded(env)
-	if err != nil {
-		return nil, err
+	unloaded := map[v1.TensorGroupKind]bool{}
+	for _, g := range p.Groups {
+		if g.Loaded != nil && !g.Loaded(s) {
+			unloaded[g.Kind] = true
+		}
 	}
 	primary, host := pools(in.Host)
-	primary = p.spanned(primary, params)
-	margin := 1 - p.spec.GetMargin()
-	s := &solver{byKind: map[v1.TensorGroupKind]*bucket{}, policies: p.groups, free: in.Free, overhead: overhead}
+	primary = p.spanned(primary, s.Params)
+	margin := 1 - p.Margin
+	sv := &solver{byKind: map[v1.TensorGroupKind]*bucket{}, free: in.Free, overhead: overhead}
 	for _, pl := range primary {
-		s.devCap += uint64(float64(capacity(pl, in.Free)) * margin)
+		sv.devCap += uint64(float64(capacity(pl, in.Free)) * margin)
 	}
 	for _, pl := range host {
-		s.hostCap += uint64(float64(capacity(pl, in.Free)) * margin)
+		sv.hostCap += uint64(float64(capacity(pl, in.Free)) * margin)
 	}
-	s.fixedDev = overhead
+	sv.fixedDev = overhead
 	layers := 0
 	for _, g := range in.Descriptor.GetGroups() {
 		if g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER && !unloaded[g.GetKind()] {
@@ -402,7 +377,7 @@ func (p *Policy) plan(in Input, env map[string]any, params map[string]any) (*v1.
 	if layers > 0 {
 		cachePerLayer = cacheTotal / uint64(layers)
 	} else {
-		s.fixedDev += cacheTotal
+		sv.fixedDev += cacheTotal
 	}
 	byParam := map[string]*bucket{}
 	skipped := newPlacements()
@@ -417,79 +392,78 @@ func (p *Policy) plan(in Input, env map[string]any, params map[string]any) (*v1.
 		if g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER {
 			it.cache = cachePerLayer
 		}
-		gp := p.groups[g.GetKind()]
-		if gp == nil || gp.GetParam() == "" {
-			if poolOf(gp) == v1.PoolKind_POOL_KIND_HOST {
-				s.hosted = append(s.hosted, it)
-				s.fixedHost += it.bytes()
+		rule, known := p.rule(g.GetKind())
+		if !known || rule.Param == "" {
+			if known && rule.Pool == v1.PoolKind_POOL_KIND_HOST {
+				sv.hosted = append(sv.hosted, it)
+				sv.fixedHost += it.bytes()
 			} else {
-				s.pinned = append(s.pinned, it)
-				s.fixedDev += it.bytes()
+				sv.pinned = append(sv.pinned, it)
+				sv.fixedDev += it.bytes()
 			}
 			continue
 		}
-		b, ok := byParam[gp.GetParam()]
+		b, ok := byParam[rule.Param]
 		if !ok {
-			b = &bucket{policy: gp, kinds: map[v1.TensorGroupKind][]int{}, fixed: -1}
-			byParam[gp.GetParam()] = b
-			s.buckets = append(s.buckets, b)
+			b = &bucket{rule: rule, kinds: map[v1.TensorGroupKind][]int{}, fixed: -1}
+			byParam[rule.Param] = b
+			sv.buckets = append(sv.buckets, b)
 		}
-		s.byKind[g.GetKind()] = b
+		sv.byKind[g.GetKind()] = b
 		b.items = append(b.items, it)
 	}
-	for _, b := range s.buckets {
-		b.prepare(params)
+	for _, b := range sv.buckets {
+		b.prepare(s.Params)
 	}
-	sort.SliceStable(s.buckets, func(i, j int) bool {
-		return s.buckets[i].policy.GetSpillPriority() > s.buckets[j].policy.GetSpillPriority()
+	sort.SliceStable(sv.buckets, func(i, j int) bool {
+		return sv.buckets[i].rule.SpillPriority > sv.buckets[j].rule.SpillPriority
 	})
 	plan := &v1.MemoryPlan{
 		WeightsBytes:  weights,
 		CacheBytes:    cacheTotal,
 		OverheadBytes: overhead,
 		OverheadDelta: in.OverheadDelta,
-		Params:        stringParams(params),
+		Params:        stringParams(s.Params),
 		Skipped:       skipped.list(),
 		AgainstFree:   in.Free,
 	}
-	if len(primary) > 0 && s.solve(0) {
+	if len(primary) > 0 && sv.solve(0) {
 		plan.Verdict = v1.FitVerdict_FIT_VERDICT_FITS
-		for _, b := range s.buckets {
+		for _, b := range sv.buckets {
 			if b.count < len(b.items) {
 				plan.Verdict = v1.FitVerdict_FIT_VERDICT_PARTIAL
 			}
 		}
-		s.fill(plan, primary, host)
+		sv.fill(plan, primary, host)
 		return plan, nil
 	}
 	plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
 	// The least the solver could ask of each side, read before the layout below moves the counts
-	for _, b := range s.buckets {
+	for _, b := range sv.buckets {
 		b.count = max(b.fixed, 0)
 	}
-	least, most := s.devNeed(), s.hostNeed()
-	s.waterfall(plan, primary, host)
+	least, most := sv.devNeed(), sv.hostNeed()
+	sv.waterfall(plan, primary, host)
 	switch {
 	case len(primary) == 0:
 		plan.Detail = "no device memory pools probed"
 	case overflow(plan) > 0:
 		plan.Detail = fmt.Sprintf("needs %s, %s more than the %s of memory on this host", Human(need(plan)), Human(overflow(plan)), Human(held(plan)))
-	case s.hostCap > 0 && most > s.hostCap:
-		plan.Detail = fmt.Sprintf("host need %s exceeds capacity %s", Human(most), Human(s.hostCap))
+	case sv.hostCap > 0 && most > sv.hostCap:
+		plan.Detail = fmt.Sprintf("host need %s exceeds capacity %s", Human(most), Human(sv.hostCap))
 	default:
-		plan.Detail = fmt.Sprintf("device need %s exceeds capacity %s", Human(least), Human(s.devCap))
+		plan.Detail = fmt.Sprintf("device need %s exceeds capacity %s", Human(least), Human(sv.devCap))
 	}
 	return plan, nil
 }
 
 // Keeps the largest pools a run spans when the policy names a param counting them
-func (p *Policy) spanned(primary []*v1.MemoryPool, params map[string]any) []*v1.MemoryPool {
-	name := p.spec.GetDevicesParam()
-	if name == "" {
+func (p *Policy) spanned(primary []*v1.MemoryPool, params Params) []*v1.MemoryPool {
+	if p.DevicesParam == "" {
 		return primary
 	}
-	n, err := eval.Number(params[name])
-	if err != nil || n < 1 {
+	n := params.Int(p.DevicesParam)
+	if n < 1 {
 		n = 1
 	}
 	if int(n) < len(primary) {
@@ -498,68 +472,17 @@ func (p *Policy) spanned(primary []*v1.MemoryPool, params map[string]any) []*v1.
 	return primary
 }
 
-// Builds the expression scope: the host's facts and devices, descriptor params, the weights'
-// width, run params, cache element sizes, then the arch formulas solved over them
-func (p *Policy) env(in Input) (map[string]any, error) {
-	env := host.Env(in.Host)
-	for k, v := range in.Descriptor.GetParams() {
-		env[k] = v
-	}
-	env["bits_per_weight"] = in.Descriptor.GetBitsPerWeight()
-	for k, v := range in.Params {
-		env[k] = v
-	}
-	cache := map[string]any{}
-	for k, v := range p.spec.GetCacheElementBytes() {
-		cache[k] = v
-	}
-	env["cache_bytes"] = cache
-	if err := eval.Solve(in.Formulas, env); err != nil {
-		return nil, err
-	}
-	return env, nil
-}
-
-func (p *Policy) eval(e *eval.Expr, name string, env map[string]any) (uint64, error) {
-	if e == nil {
-		return 0, nil
-	}
-	v, err := e.Float(env)
-	if err != nil {
-		return 0, eval.Explain(e, name, env, err)
-	}
-	if math.IsNaN(v) || v < 0 {
-		return 0, fmt.Errorf("%s: invalid result %v", e.Source(), v)
-	}
-	return uint64(v), nil
-}
-
-// The kinds these params leave on disk: every group whose when clause does not hold
-func (p *Policy) unloaded(env map[string]any) (map[v1.TensorGroupKind]bool, error) {
-	out := map[v1.TensorGroupKind]bool{}
-	for kind, e := range p.when {
-		ok, err := e.Bool(env)
-		if err != nil {
-			return nil, eval.Explain(e, eval.EnumShort(kind)+" when", env, err)
-		}
-		if !ok {
-			out[kind] = true
-		}
-	}
-	return out, nil
-}
-
-func (b *bucket) prepare(params map[string]any) {
+func (b *bucket) prepare(params Params) {
 	sort.SliceStable(b.items, func(i, j int) bool { return rank(b.items[i]) > rank(b.items[j]) })
 	b.prefix = make([]uint64, len(b.items)+1)
 	for i, it := range b.items {
 		b.prefix[i+1] = b.prefix[i] + it.bytes()
 		b.kinds[it.kind] = append(b.kinds[it.kind], i)
 	}
-	if v, ok := params[b.policy.GetParam()]; ok {
-		if n, err := eval.Number(v); err == nil {
+	if v, ok := params[b.rule.Param]; ok && v != Auto {
+		if n, err := text.Number(v); err == nil {
 			count := int(n)
-			if b.policy.GetParamCountsHost() {
+			if b.rule.ParamCountsHost {
 				count = len(b.items) - count
 			}
 			b.fixed = min(max(count, 0), len(b.items))
@@ -580,7 +503,7 @@ func (b *bucket) kindCount(kind v1.TensorGroupKind, n int) int {
 
 // The value the param reports for a count of items on device
 func (b *bucket) solved(count int) string {
-	if b.policy.GetParamCountsHost() {
+	if b.rule.ParamCountsHost {
 		count = len(b.items) - count
 	}
 	return strconv.Itoa(count)
@@ -599,7 +522,7 @@ func (s *solver) solve(bi int) bool {
 	}
 	b := s.buckets[bi]
 	upper := len(b.items)
-	if req := b.policy.GetRequires(); req != v1.TensorGroupKind_TENSOR_GROUP_KIND_UNSPECIFIED {
+	if req := b.rule.Requires; req != v1.TensorGroupKind_TENSOR_GROUP_KIND_UNSPECIFIED {
 		if parent, ok := s.byKind[req]; ok && parent != b {
 			upper = min(upper, parent.kindCount(req, parent.count))
 		}
@@ -644,7 +567,7 @@ func (s *solver) fits() bool {
 func (s *solver) fill(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) {
 	plan.Pools = append(distribute(s.devNeed(), primary, s.free), distribute(s.hostNeed(), host, s.free)...)
 	for _, b := range s.buckets {
-		plan.Params[b.policy.GetParam()] = b.solved(b.count)
+		plan.Params[b.rule.Param] = b.solved(b.count)
 	}
 	agg := newPlacements()
 	for _, it := range s.pinned {
@@ -754,7 +677,7 @@ func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) 
 				b.count++
 			}
 		}
-		plan.Params[b.policy.GetParam()] = b.solved(b.count)
+		plan.Params[b.rule.Param] = b.solved(b.count)
 	}
 	for _, it := range s.hosted {
 		place(it, hostStart)
@@ -781,7 +704,7 @@ func (p *placements) add(kind v1.TensorGroupKind, pool v1.PoolKind, bytes uint64
 	if !ok {
 		pl = &v1.Placement{Kind: kind}
 		if pool != v1.PoolKind_POOL_KIND_UNSPECIFIED {
-			pl.PoolId = eval.EnumShort(pool)
+			pl.PoolId = text.Enum(pool)
 		}
 		p.agg[k] = pl
 		p.order = append(p.order, k)
@@ -896,14 +819,7 @@ func pools(h *v1.HostProfile) (primary, host []*v1.MemoryPool) {
 	return primary, host
 }
 
-func poolOf(gp *v1.GroupPolicy) v1.PoolKind {
-	if gp == nil || gp.GetPool() == v1.PoolKind_POOL_KIND_UNSPECIFIED {
-		return v1.PoolKind_POOL_KIND_DEVICE
-	}
-	return gp.GetPool()
-}
-
-func stringParams(params map[string]any) map[string]string {
+func stringParams(params Params) map[string]string {
 	out := make(map[string]string, len(params))
 	for k, v := range params {
 		out[k] = fmt.Sprint(v)

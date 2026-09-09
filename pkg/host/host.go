@@ -1,4 +1,4 @@
-// Package host assembles a probed profile of the machine.
+// Package host probes the machine into a profile of devices, memory pools, storage, and facts.
 package host
 
 import (
@@ -6,43 +6,57 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"slices"
 	"strconv"
 	"sync"
 	"time"
 
-	"github.com/nickheyer/nebu/pkg/eval"
-	"github.com/nickheyer/nebu/pkg/host/probes"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// One probe of the machine: a vendor tool or a system file read into devices, memory pools, and facts
+//
+// A probe never fails the profile. A tool that is not installed reports itself skipped, one that
+// errors reports itself failed, and the profile carries every outcome so the doctor can say what
+// the host is missing.
+type Probe interface {
+	ID() string
+	Description() string
+	// Whether the probe belongs on this operating system and architecture, GOOS and GOARCH names
+	Runs(os, arch string) bool
+	Run(ctx context.Context) Result
+}
+
+// What one probe found
+type Result struct {
+	Devices []*v1.Device
+	Pools   []*v1.MemoryPool
+	Facts   map[string]string
+	Status  v1.ProbeStatus
+	Detail  string
+}
+
 // Runs probes and caches the resulting profile
 type Prober struct {
 	// Called with a copy after every fresh probe, outside the lock
 	OnProbe func(*v1.HostProfile)
-	probes  []*probes.Probe
+	probes  []Probe
 	paths   []string
 	ttl     time.Duration
 	mu      sync.Mutex
 	cached  *v1.HostProfile
 }
 
-// Compiles probe specs for this OS and remembers storage paths
-func New(specs []*v1.ProbeSpec, paths []string, ttl time.Duration) (*Prober, error) {
+// Keeps the probes that run on this OS and architecture and remembers the storage paths to measure
+func New(probes []Probe, paths []string, ttl time.Duration) *Prober {
 	p := &Prober{paths: paths, ttl: ttl}
-	for _, s := range specs {
-		if len(s.GetOs()) > 0 && !slices.Contains(s.GetOs(), runtime.GOOS) || len(s.GetArch()) > 0 && !slices.Contains(s.GetArch(), runtime.GOARCH) {
-			continue
+	for _, pr := range probes {
+		if pr.Runs(runtime.GOOS, runtime.GOARCH) {
+			p.probes = append(p.probes, pr)
 		}
-		c, err := probes.Compile(s)
-		if err != nil {
-			return nil, err
-		}
-		p.probes = append(p.probes, c)
 	}
-	return p, nil
+	return p
 }
 
 // Returns cached profile or probes again when stale or forced
@@ -83,11 +97,11 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 	if home, err := os.UserHomeDir(); err == nil {
 		profile.Home = home
 	}
-	results := make([]probes.Result, len(p.probes))
+	results := make([]Result, len(p.probes))
 	var wg sync.WaitGroup
 	for i, pr := range p.probes {
 		wg.Add(1)
-		go func(i int, pr *probes.Probe) {
+		go func(i int, pr Probe) {
 			defer wg.Done()
 			results[i] = pr.Run(ctx)
 		}(i, pr)
@@ -95,21 +109,15 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 	wg.Wait()
 	for i, pr := range p.probes {
 		res := results[i]
-		pres := &v1.ProbeResult{ProbeId: pr.Spec.GetId(), Status: res.Status, Detail: res.Detail}
-		if res.Status == v1.ProbeStatus_PROBE_STATUS_OK {
-			em, err := pr.Emit(res.Rows)
-			if err != nil {
-				pres.Status = v1.ProbeStatus_PROBE_STATUS_FAILED
-				pres.Detail = err.Error()
-			} else {
-				profile.Devices = append(profile.Devices, em.Devices...)
-				profile.Pools = append(profile.Pools, em.Pools...)
-				for k, v := range em.Facts {
-					profile.Facts[k] = v
-				}
-			}
+		profile.Probes = append(profile.Probes, &v1.ProbeResult{ProbeId: pr.ID(), Status: res.Status, Detail: res.Detail})
+		if res.Status != v1.ProbeStatus_PROBE_STATUS_OK {
+			continue
 		}
-		profile.Probes = append(profile.Probes, pres)
+		profile.Devices = append(profile.Devices, res.Devices...)
+		profile.Pools = append(profile.Pools, res.Pools...)
+		for k, v := range res.Facts {
+			profile.Facts[k] = v
+		}
 	}
 	byMount := map[string]*v1.Storage{}
 	for _, path := range p.paths {
@@ -136,51 +144,35 @@ func Stat(path string) (*v1.Storage, error) {
 	return stat(path)
 }
 
-// Builds the expression environment for a profile
-func Env(p *v1.HostProfile) map[string]any {
-	devices := make([]any, 0, len(p.GetDevices()))
+// The devices of one vendor
+func Vendor(p *v1.HostProfile, vendor string) []*v1.Device {
+	var out []*v1.Device
 	for _, d := range p.GetDevices() {
-		devices = append(devices, map[string]any{
-			"id":                 d.GetId(),
-			"kind":               eval.EnumShort(d.GetKind()),
-			"vendor":             d.GetVendor(),
-			"name":               d.GetName(),
-			"memory_total_bytes": float64(d.GetMemoryTotalBytes()),
-			"memory_free_bytes":  float64(d.GetMemoryFreeBytes()),
-			"facts":              eval.Anys(d.GetFacts()),
-		})
-	}
-	pools := make([]any, 0, len(p.GetPools()))
-	for _, pl := range p.GetPools() {
-		pools = append(pools, map[string]any{
-			"id":          pl.GetId(),
-			"kind":        eval.EnumShort(pl.GetKind()),
-			"device_id":   pl.GetDeviceId(),
-			"total_bytes": float64(pl.GetTotalBytes()),
-			"free_bytes":  float64(pl.GetFreeBytes()),
-		})
-	}
-	storage := make([]any, 0, len(p.GetStorage()))
-	for _, s := range p.GetStorage() {
-		uses := make([]any, 0, len(s.GetUses()))
-		for _, u := range s.GetUses() {
-			uses = append(uses, u)
+		if d.GetVendor() == vendor {
+			out = append(out, d)
 		}
-		storage = append(storage, map[string]any{
-			"path":        s.GetPath(),
-			"filesystem":  s.GetFilesystem(),
-			"total_bytes": float64(s.GetTotalBytes()),
-			"free_bytes":  float64(s.GetFreeBytes()),
-			"uses":        uses,
-		})
 	}
-	return map[string]any{
-		"hostname": p.GetHostname(),
-		"os":       p.GetOs(),
-		"arch":     p.GetArch(),
-		"facts":    eval.Anys(p.GetFacts()),
-		"devices":  devices,
-		"pools":    pools,
-		"storage":  storage,
+	return out
+}
+
+// The devices of one kind
+func Kind(p *v1.HostProfile, kind v1.DeviceKind) []*v1.Device {
+	var out []*v1.Device
+	for _, d := range p.GetDevices() {
+		if d.GetKind() == kind {
+			out = append(out, d)
+		}
 	}
+	return out
+}
+
+// Whether any device is of the vendor
+func HasVendor(p *v1.HostProfile, vendor string) bool { return len(Vendor(p, vendor)) > 0 }
+
+// Whether any device is a GPU
+func HasGPU(p *v1.HostProfile) bool { return len(Kind(p, v1.DeviceKind_DEVICE_KIND_GPU)) > 0 }
+
+// Whether the profile is of the operating system and architecture, either empty meaning any
+func Is(p *v1.HostProfile, os, arch string) bool {
+	return (os == "" || p.GetOs() == os) && (arch == "" || p.GetArch() == arch)
 }

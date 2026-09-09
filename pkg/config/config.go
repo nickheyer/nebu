@@ -10,7 +10,8 @@ import (
 	"strings"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/spec"
+	"google.golang.org/protobuf/encoding/protojson"
+	"sigs.k8s.io/yaml"
 )
 
 const (
@@ -71,7 +72,7 @@ func Load(path string) (*v1.Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := spec.Decode(data, cfg); err != nil {
+		if err := Decode(data, cfg); err != nil {
 			return nil, fmt.Errorf("%s: %w", p, err)
 		}
 		break
@@ -81,6 +82,18 @@ func Load(path string) (*v1.Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// Decodes a YAML or JSON config file into the config message, refusing keys it does not know
+func Decode(data []byte, cfg *v1.Config) error {
+	js, err := yaml.YAMLToJSON(data)
+	if err != nil {
+		return fmt.Errorf("yaml: %w", err)
+	}
+	if err := protojson.Unmarshal(js, cfg); err != nil {
+		return fmt.Errorf("decode config: %w", err)
+	}
+	return nil
 }
 
 func applyEnv(cfg *v1.Config) {
@@ -192,7 +205,6 @@ func applyDefaults(cfg *v1.Config) error {
 	if cfg.Web == nil {
 		cfg.Web = &v1.Web{}
 	}
-	cfg.SpecDirs = append(cfg.SpecDirs, filepath.Join(cfg.DataDir, "spec"))
 	return nil
 }
 

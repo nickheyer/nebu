@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/nickheyer/nebu/internal/db"
-	"github.com/nickheyer/nebu/pkg/eval"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/launch"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/text"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -272,7 +272,7 @@ func (m *Manager) WaitOK(ctx context.Context, id string) error {
 		return err
 	}
 	if final.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
-		return fmt.Errorf("%s: %s", eval.EnumShort(final.GetState()), final.GetError())
+		return fmt.Errorf("%s: %s", text.Enum(final.GetState()), final.GetError())
 	}
 	return nil
 }

@@ -1,26 +1,26 @@
 package descriptor
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/nickheyer/nebu/pkg/eval"
+	"github.com/nickheyer/nebu/pkg/archs"
+	"github.com/nickheyer/nebu/pkg/formats"
+	"github.com/nickheyer/nebu/pkg/formats/all"
+	"github.com/nickheyer/nebu/pkg/precision"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/spec"
 )
 
 func builder(t *testing.T) *Builder {
 	t.Helper()
-	c, err := spec.Load(os.DirFS(filepath.Join("..", "..", "spec")))
+	fmts, err := all.Registry()
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := New(c.Formats, c.Archs, c.Precisions)
+	families, err := archs.New(archs.All())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return b
+	return &Builder{Formats: fmts, Archs: families, Scale: precision.Bits{}}
 }
 
 func moeRaw(arch string) *v1.RawModel {
@@ -50,6 +50,20 @@ func moeRaw(arch string) *v1.RawModel {
 	return raw
 }
 
+// The cache per token of a descriptor's family at no particular context
+func perToken(t *testing.T, b *Builder, d *v1.Descriptor) float64 {
+	t.Helper()
+	family := b.Family(d)
+	if family == nil {
+		t.Fatalf("no family for %q", d.GetFamily())
+	}
+	v, err := family.CachePerToken(formats.ParamsOf(d.GetParams()), archs.Run{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
 func TestBuild(t *testing.T) {
 	d, err := builder(t).Build(moeRaw("qwen3moe"))
 	if err != nil {
@@ -59,8 +73,8 @@ func TestBuild(t *testing.T) {
 	if d.GetArchitecture() != "qwen3moe" || p["n_layer"] != 2 || p["n_head_kv"] != 4 || p["head_dim"] != 64 || p["head_dim_v"] != 64 || p["n_vocab"] != 1000 || p["n_expert"] != 8 {
 		t.Fatalf("params %v", p)
 	}
-	if d.GetArchSpecId() != "default" || d.GetMetadata()["general.name"] != "Test Model" {
-		t.Fatalf("arch %q metadata %v", d.GetArchSpecId(), d.GetMetadata())
+	if d.GetFamily() != "default" || d.GetMetadata()["general.name"] != "Test Model" {
+		t.Fatalf("family %q metadata %v", d.GetFamily(), d.GetMetadata())
 	}
 	kinds := map[string]uint64{}
 	for _, g := range d.GetGroups() {
@@ -85,13 +99,11 @@ func TestArchMatchAndDerive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.GetArchSpecId() != "mla" || d.GetParams()["n_layer"] != 2 {
-		t.Fatalf("arch %q params %v", d.GetArchSpecId(), d.GetParams())
+	if d.GetFamily() != "mla" || d.GetParams()["n_layer"] != 2 {
+		t.Fatalf("family %q params %v", d.GetFamily(), d.GetParams())
 	}
-	f := b.Formulas("mla")
-	v, err := f["cache_per_token"].Float(map[string]any{"n_layer": 2.0, "kv_lora_rank": 512.0, "rope_dim": 64.0})
-	if err != nil || v != 1152 {
-		t.Fatalf("formula %v %v", v, err)
+	if v := perToken(t, b, d); v != 2*(512+64) {
+		t.Fatalf("mla cache per token %v", v)
 	}
 	if _, err := b.Build(&v1.RawModel{FormatId: "nope"}); err == nil {
 		t.Fatal("unknown format should fail")
@@ -109,25 +121,21 @@ func TestArchClaimsOnlyWhatItsFormulasCover(t *testing.T) {
 		}
 		return r
 	}
-	// No latent rank, so the MLA spec cannot plan it and the default family takes it
+	// No latent rank, so the MLA family cannot plan it and the default family takes it
 	d, err := b.Build(raw(nil))
-	if err != nil || d.GetArchSpecId() != "default" {
-		t.Fatalf("without kv_lora_rank got %q %v", d.GetArchSpecId(), err)
+	if err != nil || d.GetFamily() != "default" {
+		t.Fatalf("without kv_lora_rank got %q %v", d.GetFamily(), err)
 	}
-	env := map[string]any{}
-	for k, v := range d.GetParams() {
-		env[k] = v
-	}
-	if err := eval.Solve(b.Formulas(d.GetArchSpecId()), env); err != nil {
-		t.Fatalf("default formulas should solve: %v", err)
+	if v := perToken(t, b, d); v != 4*1*(512+512) {
+		t.Fatalf("default cache per token %v", v)
 	}
 	d, err = b.Build(raw(map[string]string{"kv_lora_rank": "512"}))
-	if err != nil || d.GetArchSpecId() != "mla" {
-		t.Fatalf("with kv_lora_rank got %q %v", d.GetArchSpecId(), err)
+	if err != nil || d.GetFamily() != "mla" {
+		t.Fatalf("with kv_lora_rank got %q %v", d.GetFamily(), err)
 	}
 	d, err = b.Build(raw(map[string]string{"text_config.kv_lora_rank": "512"}))
-	if err != nil || d.GetArchSpecId() != "mla" || d.GetParams()["kv_lora_rank"] != 512 {
-		t.Fatalf("nested kv_lora_rank got %q %v %v", d.GetArchSpecId(), d.GetParams(), err)
+	if err != nil || d.GetFamily() != "mla" || d.GetParams()["kv_lora_rank"] != 512 {
+		t.Fatalf("nested kv_lora_rank got %q %v %v", d.GetFamily(), d.GetParams(), err)
 	}
 }
 
@@ -206,19 +214,12 @@ func TestPerLayerEmbeddingAndHybridInterval(t *testing.T) {
 	if kinds["embedding"] != 6000 || kinds["output"] != 1110 || kinds["other"] != 5 {
 		t.Fatalf("per layer embedding and hyper connection output misplaced: %v", kinds)
 	}
-	if d.GetParams()["attn_interval"] != 4 || d.GetArchSpecId() != "default" {
-		t.Fatalf("params %v arch %q", d.GetParams(), d.GetArchSpecId())
-	}
-	env := map[string]any{}
-	for k, v := range d.GetParams() {
-		env[k] = v
-	}
-	if err := eval.Solve(b.Formulas("default"), env); err != nil {
-		t.Fatal(err)
+	if d.GetParams()["attn_interval"] != 4 || d.GetFamily() != "default" {
+		t.Fatalf("params %v family %q", d.GetParams(), d.GetFamily())
 	}
 	// Eight layers with a cache on one in four is two layers of cache: 2 * 4 heads * (64 + 64)
-	if env["cache_per_token"] != 1024.0 {
-		t.Fatalf("cache_per_token %v", env["cache_per_token"])
+	if v := perToken(t, b, d); v != 1024 {
+		t.Fatalf("cache_per_token %v", v)
 	}
 	// Without the interval every layer keeps a cache
 	delete(raw.Metadata, "qwen3next.full_attention_interval")
@@ -226,15 +227,8 @@ func TestPerLayerEmbeddingAndHybridInterval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env = map[string]any{}
-	for k, v := range d.GetParams() {
-		env[k] = v
-	}
-	if err := eval.Solve(b.Formulas("default"), env); err != nil {
-		t.Fatal(err)
-	}
-	if env["cache_per_token"] != 4096.0 {
-		t.Fatalf("cache_per_token %v", env["cache_per_token"])
+	if v := perToken(t, b, d); v != 4096 {
+		t.Fatalf("cache_per_token %v", v)
 	}
 }
 
@@ -369,5 +363,8 @@ func TestEncodersAndDraftHeads(t *testing.T) {
 		if _, ok := want[id]; !ok {
 			t.Errorf("gguf unexpected group %s", id)
 		}
+	}
+	if d.GetPrecision().GetBits() != 4 || d.GetPrecision().GetLabel() != "4-bit Q4_K_M" {
+		t.Fatalf("gguf precision %v", d.GetPrecision())
 	}
 }

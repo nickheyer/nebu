@@ -26,16 +26,16 @@ import (
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/estimate"
-	"github.com/nickheyer/nebu/pkg/eval"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/host"
 	"github.com/nickheyer/nebu/pkg/launch"
 	"github.com/nickheyer/nebu/pkg/proc"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/runtime"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
+	"github.com/nickheyer/nebu/pkg/text"
 	"github.com/nickheyer/nebu/pkg/triage"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -85,13 +85,12 @@ type Manager struct {
 	DB          *db.DB
 	Dir         string
 	Store       *store.Store
-	Runtimes    *runtime.Registry
+	Runtimes    *runtimes.Registry
 	Installs    *installs.Manager
 	Inspector   *inspect.Inspector
 	Launcher    launch.Launcher
 	Tasks       *tasks.Manager
 	Host        *host.Prober
-	Triage      *triage.Matcher
 	Calibration *calibrate.Table
 	Routes      *gateway.Table
 	Events      *events.Bus
@@ -107,14 +106,14 @@ type instance struct {
 	mgr      *Manager
 	mu       sync.Mutex
 	rec      *v1.Instance
-	rt       *runtime.Runtime
+	rt       runtimes.Runtime
 	proc     launch.Handle
 	log      *launch.Log
 	exited   chan struct{}
 	exitOnce sync.Once
 }
 
-func (m *Manager) newInstance(rec *v1.Instance, rt *runtime.Runtime) *instance {
+func (m *Manager) newInstance(rec *v1.Instance, rt runtimes.Runtime) *instance {
 	in := &instance{mgr: m, rec: rec, rt: rt, exited: make(chan struct{})}
 	if Terminal(rec.GetState()) {
 		in.exitOnce.Do(func() { close(in.exited) })
@@ -165,10 +164,10 @@ func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
 }
 
 func (in *instance) grace() time.Duration {
-	if in.rt != nil {
+	if in.rt != nil && in.rt.StopGrace() > 0 {
 		return in.rt.StopGrace()
 	}
-	return runtime.DefaultStopGrace
+	return runtimes.DefaultStopGrace
 }
 
 func (in *instance) stopRequested() bool {
@@ -199,14 +198,14 @@ const (
 type prepared struct {
 	req        *v1.RunRequest
 	stored     *v1.StoredModel
-	rt         *runtime.Runtime
+	rt         runtimes.Runtime
 	install    *v1.Install
 	name       string
 	descriptor *v1.Descriptor
 	profile    *v1.HostProfile
 	planned    *v1.HostProfile
 	res        *Reservation
-	params     map[string]any
+	params     estimate.Params
 	plan       *v1.MemoryPlan
 }
 
@@ -230,11 +229,11 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 	}
 	if p.res != nil && p.res.InstanceID != "" && !fromSwap(ctx) {
 		if cur, err := m.Get(p.res.InstanceID); err == nil && !Terminal(cur.GetState()) {
-			return nil, nil, fmt.Errorf("%w: slot %s serves %s, use nebu swap", runtime.ErrParam, p.res.Name, cur.GetName())
+			return nil, nil, fmt.Errorf("%w: slot %s serves %s, use nebu swap", runtimes.ErrParam, p.res.Name, cur.GetName())
 		}
 	}
 	if p.plan != nil && p.plan.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO && !p.req.GetForce() {
-		return nil, nil, fmt.Errorf("%w: %s does not fit, %s; pass force to run anyway", runtime.ErrParam, p.name, p.plan.GetDetail())
+		return nil, nil, fmt.Errorf("%w: %s does not fit, %s; pass force to run anyway", runtimes.ErrParam, p.name, p.plan.GetDetail())
 	}
 	return m.launch(ctx, p)
 }
@@ -268,7 +267,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 		return nil, err
 	}
 	// The slot's runtime when it has one, else the first compatible one
-	var rt *runtime.Runtime
+	var rt runtimes.Runtime
 	if req.GetRuntimeId() == "" {
 		rt, err = m.Inspector.DefaultRuntime(profile, stored.GetFormatId())
 	} else {
@@ -277,15 +276,15 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if err != nil {
 		return nil, err
 	}
-	req.RuntimeId = rt.Manifest.GetId()
-	if !rt.Accepts(stored.GetFormatId()) {
-		return nil, fmt.Errorf("%w: runtime %s does not accept %s", runtime.ErrParam, rt.Manifest.GetId(), stored.GetFormatId())
+	req.RuntimeId = rt.ID()
+	if !runtimes.Accepts(rt, stored.GetFormatId()) {
+		return nil, fmt.Errorf("%w: runtime %s does not accept %s", runtimes.ErrParam, rt.ID(), stored.GetFormatId())
 	}
 	var install *v1.Install
 	if req.GetInstallId() != "" {
 		install, err = m.Installs.Get(ctx, req.GetInstallId())
 	} else {
-		install, err = m.Installs.Default(ctx, rt.Manifest.GetId())
+		install, err = m.Installs.Default(ctx, rt.ID())
 	}
 	if err != nil {
 		return nil, err
@@ -295,11 +294,11 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 		name = path.Base(stored.GetRepo()) + ":" + stored.GetGroup()
 	}
 	if m.conflict(name, req.GetSlotId()) {
-		return nil, fmt.Errorf("%w: instance %q is already running", runtime.ErrParam, name)
+		return nil, fmt.Errorf("%w: instance %q is already running", runtimes.ErrParam, name)
 	}
 	if req.GetSlotId() == "" && m.Routes != nil {
 		if r, ok := m.Routes.Lookup(name); ok && r.GetSlotId() != "" {
-			return nil, fmt.Errorf("%w: %q is a slot, run with the slot or pick another name", runtime.ErrParam, name)
+			return nil, fmt.Errorf("%w: %q is a slot, run with the slot or pick another name", runtimes.ErrParam, name)
 		}
 	}
 	planProfile := profile
@@ -311,18 +310,18 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 		slotParams = res.Params
 	}
 	// The one layering every plan uses, the slot's defaults under the request's params
-	layered := runtime.Merge(slotParams, req.GetParams())
-	params, err := rt.Params(layered)
+	layered := runtimes.Merge(slotParams, req.GetParams())
+	params, err := runtimes.Resolve(rt, layered)
 	if err != nil {
 		return nil, err
 	}
 	p := &prepared{req: req, stored: stored, rt: rt, install: install, name: name, descriptor: descriptor, profile: profile, planned: planProfile, res: res, params: params}
-	if rt.Policy != nil {
+	if rt.Policy() != nil {
 		if p.plan, err = m.Inspector.Plan(rt, descriptor, planProfile, layered, true); err != nil {
 			return nil, err
 		}
 		for k, v := range p.plan.GetParams() {
-			if params[k] == runtime.Auto {
+			if params.IsAuto(k) {
 				params[k] = v
 			}
 		}
@@ -348,22 +347,22 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	}
 	m.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_UPDATED, key, touched)
 	artifacts := m.artifacts(stored, rt)
-	input := runtime.RenderInput{
+	input := runtimes.Launch{
 		Name:       name,
 		Params:     params,
 		Artifacts:  artifacts,
 		Host:       bindHost,
 		Port:       port,
-		Install:    map[string]string{"path": install.GetPath(), "dir": install.GetDir(), "version": install.GetVersion()},
-		Devices:    deviceViews(p.planned, p.res),
+		Install:    runtimes.Install{Path: install.GetPath(), Dir: install.GetDir(), Version: install.GetVersion()},
+		Devices:    slotDevices(p.planned, p.res),
 		Descriptor: descriptor,
 	}
-	var prep *runtime.Rendered
+	var prep *runtimes.Command
 	if rt.Prepares(stored.GetFormatId()) {
 		if artifacts["prepared_dir"] == "" {
-			return nil, nil, fmt.Errorf("%s needs a prepared tree for %s and the store has none", rt.Manifest.GetId(), stored.GetGroup())
+			return nil, nil, fmt.Errorf("%s needs a prepared tree for %s and the store has none", rt.ID(), stored.GetGroup())
 		}
-		if prep, err = rt.RenderPrepare(input); err != nil {
+		if prep, err = rt.Prepare(input); err != nil {
 			return nil, nil, err
 		}
 		launchArtifacts := make(map[string]string, len(artifacts))
@@ -373,7 +372,7 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 		launchArtifacts["weights_dir"] = artifacts["prepared_dir"]
 		input.Artifacts = launchArtifacts
 	}
-	rendered, err := rt.Render(input)
+	rendered, err := rt.Launch(input)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -383,7 +382,7 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 		SourceId:       stored.GetSourceId(),
 		Repo:           stored.GetRepo(),
 		Group:          stored.GetGroup(),
-		RuntimeId:      rt.Manifest.GetId(),
+		RuntimeId:      rt.ID(),
 		InstallId:      install.GetId(),
 		Params:         rendered.Params,
 		Command:        append([]string{rendered.Command}, rendered.Args...),
@@ -398,14 +397,14 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	m.mu.Lock()
 	if m.conflictLocked(name, req.GetSlotId()) {
 		m.mu.Unlock()
-		return nil, nil, fmt.Errorf("%w: instance %q is already running", runtime.ErrParam, name)
+		return nil, nil, fmt.Errorf("%w: instance %q is already running", runtimes.ErrParam, name)
 	}
 	m.list = append(m.list, in)
 	m.pruneLocked()
 	m.mu.Unlock()
 	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_CREATED, in.rec.GetId(), in.snapshot())
 	prepDir := artifacts["prepared_dir"]
-	prepTimeout := time.Duration(rt.Manifest.GetLaunch().GetPrepare().GetTimeoutMs()) * time.Millisecond
+	prepTimeout := rt.PrepareTimeout()
 	task := m.Tasks.Start(kindRun, "run "+name, map[string]string{"instance": in.rec.GetId(), "name": name}, func(ctx context.Context, h *tasks.Handle) error {
 		if prep != nil {
 			if err := m.runPrepare(ctx, h, in, prep, install.GetDir(), prepDir, prepTimeout, req.GetForce()); err != nil {
@@ -418,7 +417,7 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	return in.snapshot(), task, nil
 }
 
-func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance, prep *runtime.Rendered, dir, prepDir string, timeout time.Duration, force bool) error {
+func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance, prep *runtimes.Command, dir, prepDir string, timeout time.Duration, force bool) error {
 	marker := filepath.Join(prepDir, ".prepared")
 	if _, err := os.Stat(marker); err == nil && !force {
 		h.Logf("prepared earlier at %s", prepDir)
@@ -483,7 +482,7 @@ func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance,
 	return os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
 }
 
-func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rendered *runtime.Rendered, install *v1.Install, d *v1.Descriptor, before *v1.HostProfile) error {
+func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rendered *runtimes.Command, install *v1.Install, d *v1.Descriptor, before *v1.HostProfile) error {
 	rec := in.snapshot()
 	h.Logf("command: %s", strings.Join(rec.GetCommand(), " "))
 	h.Progress(0, 0, "launching")
@@ -522,7 +521,7 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 			measurements = append(measurements, &v1.Measurement{Key: estimate.DeviceUsedKey, Bytes: uint64(used)})
 			if plan := rec.GetPlan(); plan != nil {
 				base := max(float64(estimate.PlannedDevice(plan))-plan.GetOverheadDelta(), 0)
-				if cerr := m.Calibration.Record(ctx, in.rt.Manifest.GetId(), d.GetArchitecture(), uint64(used), uint64(base)); cerr != nil {
+				if cerr := m.Calibration.Record(ctx, in.rt.ID(), d.GetArchitecture(), uint64(used), uint64(base)); cerr != nil {
 					m.Log.Warn("calibration write failed", "err", cerr)
 				}
 			}
@@ -534,10 +533,10 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 
 // Polls health, recording triage and stopping the process on failure
 func (m *Manager) waitReady(ctx context.Context, h *tasks.Handle, in *instance, proc launch.Handle) error {
-	health := in.rt.Manifest.GetLaunch().GetHealth()
-	url := in.snapshot().GetEndpoint() + health.GetPath()
+	health := in.rt.Health()
+	url := in.snapshot().GetEndpoint() + health.Path
 	h.Message("waiting for " + url)
-	err := launch.WaitHealthy(ctx, proc, url, time.Duration(health.GetIntervalMs())*time.Millisecond, time.Duration(health.GetTimeoutMs())*time.Millisecond)
+	err := launch.WaitHealthy(ctx, proc, url, health.Interval, health.Timeout)
 	if err == nil {
 		return nil
 	}
@@ -603,7 +602,7 @@ func (m *Manager) fail(in *instance, err error) []*v1.TriageHit {
 		proc.Sync()
 	}
 	if log != nil && in.rt != nil {
-		hits = m.Triage.Scan(in.rt.Manifest.GetTriage(), log.Tail(0))
+		hits = triage.Scan(in.rt.Triage(), log.Tail(0))
 	}
 	in.update(func(r *v1.Instance) {
 		if Terminal(r.State) || r.State == v1.InstanceState_INSTANCE_STATE_STOPPING {
@@ -728,7 +727,7 @@ func (m *Manager) conflictLocked(name, slotID string) bool {
 // The slot's reservation, refused before the daemon has slots
 func (m *Manager) reservation(ctx context.Context, slotID string) (*Reservation, error) {
 	if m.Slots == nil {
-		return nil, fmt.Errorf("%w: slots are not available", runtime.ErrParam)
+		return nil, fmt.Errorf("%w: slots are not available", runtimes.ErrParam)
 	}
 	return m.Slots.Reservation(ctx, slotID)
 }
@@ -945,8 +944,7 @@ func (m *Manager) adopt(ctx context.Context, in *instance) {
 	proc := launch.Adopt(int(rec.GetPid()), m.logPath(rec.GetId()))
 	in.attach(proc)
 	go m.supervise(in)
-	health := in.rt.Manifest.GetLaunch().GetHealth()
-	url := rec.GetEndpoint() + health.GetPath()
+	url := rec.GetEndpoint() + in.rt.Health().Path
 	if rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY && launch.Healthy(&http.Client{Timeout: probeTimeout}, url) {
 		proc.Sync()
 		measurements := in.rt.Measure(proc.Log().Tail(0))
@@ -1043,9 +1041,9 @@ func (m *Manager) describe(ctx context.Context, stored *v1.StoredModel) (*v1.Des
 	if stored.GetDescriptor_() != nil {
 		return stored.GetDescriptor_(), nil
 	}
-	reader, ok := m.Inspector.Readers[stored.GetFormatId()]
-	if !ok {
-		return nil, fmt.Errorf("no reader for format %q", stored.GetFormatId())
+	f := m.Inspector.Formats.Get(stored.GetFormatId())
+	if f == nil {
+		return nil, fmt.Errorf("no format reads %q", stored.GetFormatId())
 	}
 	g := &formats.Group{FormatID: stored.GetFormatId(), Name: stored.GetGroup(), Files: map[v1.ArtifactRole][]*v1.Artifact{}}
 	for _, sa := range stored.GetArtifacts() {
@@ -1058,23 +1056,23 @@ func (m *Manager) describe(ctx context.Context, stored *v1.StoredModel) (*v1.Des
 		}
 	}
 	open := func(ctx context.Context, a *v1.Artifact) (sources.Blob, error) { return sources.OpenFile(a.GetPath()) }
-	raw, err := reader.Read(ctx, open, g)
+	raw, err := f.Read(ctx, open, g)
 	if err != nil {
 		return nil, err
 	}
 	return m.Inspector.Builder.Build(raw)
 }
 
-func (m *Manager) artifacts(stored *v1.StoredModel, rt *runtime.Runtime) map[string]string {
+func (m *Manager) artifacts(stored *v1.StoredModel, rt runtimes.Runtime) map[string]string {
 	out := map[string]string{"weights_dir": stored.GetPath()}
 	for _, sa := range stored.GetArtifacts() {
-		key := eval.EnumShort(sa.GetArtifact().GetRole())
+		key := text.Enum(sa.GetArtifact().GetRole())
 		if _, exists := out[key]; !exists {
 			out[key] = sa.GetPath()
 		}
 	}
 	if m.Store != nil {
-		if dir, err := m.Store.PreparedDir(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup(), rt.Manifest.GetId()); err == nil {
+		if dir, err := m.Store.PreparedDir(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup(), rt.ID()); err == nil {
 			out["prepared_dir"] = dir
 		} else {
 			m.Log.Warn("prepared dir", "err", err)
@@ -1116,21 +1114,16 @@ func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64) *v1.HostPro
 	return out
 }
 
-// Lists the devices a launch template may address, none without a slot pinning some
-func deviceViews(p *v1.HostProfile, res *Reservation) []map[string]any {
+// The devices a launch is pinned to, none without a slot pinning some
+func slotDevices(p *v1.HostProfile, res *Reservation) []*v1.Device {
 	if res == nil || len(res.DeviceIDs) == 0 {
 		return nil
 	}
-	var out []map[string]any
+	var out []*v1.Device
 	for _, d := range p.GetDevices() {
-		if d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
-			continue
+		if d.GetKind() != v1.DeviceKind_DEVICE_KIND_CPU {
+			out = append(out, d)
 		}
-		facts := make(map[string]string, len(d.GetFacts()))
-		for k, v := range d.GetFacts() {
-			facts[k] = v
-		}
-		out = append(out, map[string]any{"id": d.GetId(), "kind": eval.EnumShort(d.GetKind()), "vendor": d.GetVendor(), "name": d.GetName(), "facts": facts})
 	}
 	return out
 }

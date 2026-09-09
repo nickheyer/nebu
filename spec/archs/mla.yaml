@@ -1,6 +1,0 @@
-id: mla
-description: Multi head latent attention storing a compressed cache per layer
-match: '(?i)^deepseek'
-priority: 10
-formulas:
-  cache_per_token: n_layer * (kv_lora_rank + rope_dim)

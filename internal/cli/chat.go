@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/text"
 )
 
 type chatMessage struct {
@@ -125,7 +125,7 @@ func (e *env) routeReady(ctx context.Context, name string) error {
 			if r.GetState() == v1.RouteState_ROUTE_STATE_READY {
 				return nil
 			}
-			return fmt.Errorf("route %s is %s, wait for it or pick another", name, eval.EnumShort(r.GetState()))
+			return fmt.Errorf("route %s is %s, wait for it or pick another", name, text.Enum(r.GetState()))
 		}
 		if r.GetState() == v1.RouteState_ROUTE_STATE_READY {
 			names = append(names, r.GetName())

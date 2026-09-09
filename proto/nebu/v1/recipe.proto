@@ -22,72 +22,29 @@ enum BuildState {
   BUILD_STATE_FAILED = 3;
 }
 
-// Where the source tree comes from, every field a template
-//
-// releases names a repository whose newest release resolves a latest ref, at
-// the source named by source, the github default when empty.
-message RecipeSource {
-  string releases = 1;
-  string ref = 2;
-  string archive = 3;
-  string repo = 4;
-  string subdir = 5;
-  string source = 6;
-}
-
-// One unified diff applied to the tree
-message Patch {
-  string id = 1;
-  string when = 2;
-  string content = 3;
-  string file = 4;
-  string url = 5;
-  uint32 strip = 6;
-}
-
-// One command run inside the sandbox
-message BuildStep {
-  string name = 1;
-  repeated string command = 2;
-  string when = 3;
-  map<string, string> env = 4;
-  string dir = 5;
-}
-
-// Flags selected by host facts
-message BuildVariant {
+// One way a recipe builds, picked by what the host has
+message Variant {
   string id = 1;
   string description = 2;
-  string when = 3;
-  repeated string tools = 4;
-  map<string, string> vars = 5;
-  string image = 6;
+  // Tools the variant needs on the host beyond the recipe's own
+  repeated string tools = 3;
 }
 
-// How steps are isolated from the host
-message Sandbox {
-  SandboxKind kind = 1;
-  string image = 2;
-  repeated string cli = 3;
-  repeated string args = 4;
-}
-
-// Data driven build definition
+// A recipe as the API describes it
 message Recipe {
   string id = 1;
   string runtime_id = 2;
   string description = 3;
-  RecipeSource source = 4;
-  repeated Patch patches = 5;
-  repeated BuildVariant variants = 6;
-  Sandbox sandbox = 7;
-  repeated BuildStep steps = 8;
-  repeated string outputs = 9;
-  string binary = 10;
-  repeated string facts = 11;
-  repeated string tools = 12;
-  uint32 timeout_ms = 13;
-  map<string, string> vars = 14;
+  // Where the source comes from, in words
+  string source = 4;
+  repeated string tools = 5;
+  repeated Variant variants = 6;
+  SandboxKind sandbox = 7;
+  // Container CLIs tried in order for the oci sandbox
+  repeated string sandbox_clis = 8;
+  // Variables a build takes, with their defaults
+  map<string, string> vars = 9;
+  uint32 timeout_ms = 10;
 }
 
 // One build of a recipe on this host

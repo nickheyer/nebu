@@ -2,30 +2,70 @@ package triage
 
 import (
 	"testing"
-
-	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
+type fakeSet struct{ rules []Rule }
+
+func (fakeSet) ID() string          { return "x" }
+func (fakeSet) Description() string { return "fake" }
+func (s fakeSet) Rules() []Rule     { return s.rules }
+
 func TestScan(t *testing.T) {
-	m, err := New([]*v1.TriageSpec{{Id: "x", Rules: []*v1.TriageRule{
-		{Id: "arch", Match: `unknown model architecture: '(?P<arch>[^']+)'`, Summary: "no ${arch}", Hint: "build for ${arch}", Fix: map[string]string{"a": "b"}},
-		{Id: "oom", Match: `(?i)out of memory`, Summary: "oom", Hint: "lower ctx"},
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	set := fakeSet{rules: []Rule{
+		{ID: "arch", Summary: "no ${arch}", Hint: "build for ${arch}", Fix: map[string]string{"a": "b"}, Match: func(line string) (map[string]string, bool) {
+			arch, ok := quotedAfter(line, "unknown model architecture: '", "'")
+			if !ok {
+				return nil, false
+			}
+			return map[string]string{"arch": arch}, true
+		}},
+		{ID: "oom", Summary: "oom", Hint: "lower ctx", Match: anyOf("out of memory")},
+	}}
 	lines := []string{"loading", "unknown model architecture: 'qwen9'", "CUDA out of memory", "unknown model architecture: 'other'"}
-	hits := m.Scan([]string{"x", "missing"}, lines)
+	hits := Scan([]Set{set}, lines)
 	if len(hits) != 2 || hits[0].GetId() != "arch" || hits[0].GetSummary() != "no qwen9" || hits[0].GetHint() != "build for qwen9" || hits[0].GetFix()["a"] != "b" {
 		t.Fatalf("hits %v", hits)
 	}
 	if hits[1].GetId() != "oom" || hits[1].GetLine() != "CUDA out of memory" {
 		t.Fatalf("hits %v", hits)
 	}
-	if len(m.Scan([]string{"x"}, []string{"fine"})) != 0 {
+	if len(Scan([]Set{set}, []string{"fine"})) != 0 {
 		t.Fatal("no hits expected")
 	}
-	if _, err := New([]*v1.TriageSpec{{Id: "bad", Rules: []*v1.TriageRule{{Id: "r", Match: "("}}}}); err == nil {
-		t.Fatal("bad regex should fail")
+}
+
+// Every shipped set reads the lines its runtime prints
+func TestShippedRules(t *testing.T) {
+	cases := []struct {
+		set  Set
+		line string
+		id   string
+	}{
+		{LlamaCpp{}, "ggml_backend_cuda_buffer_type_alloc_buffer: allocating 5000.00 MiB on device 0: cudaMalloc failed: out of memory", "device-oom"},
+		{LlamaCpp{}, "llama_model_load: error loading model: unknown model architecture: 'qwen9'", "unknown-arch"},
+		{LlamaCpp{}, "V cache quantization requires flash_attn", "cache-quant-needs-flash"},
+		{LlamaCpp{}, `error while handling argument "--nope": unknown`, "bad-flag"},
+		{VLLM{}, "torch.OutOfMemoryError: CUDA out of memory", "device-oom"},
+		{VLLM{}, "ValueError: Model architectures ['FooForCausalLM'] are not supported for now", "unsupported-arch"},
+		{SGLang{}, "RuntimeError: Not enough memory. Please try to increase --mem-fraction-static", "pool-too-small"},
+		{SGLang{}, "ImportError: sgl_kernel undefined symbol", "kernel-mismatch"},
+		{NeMo{}, "RuntimeError: Missing key(s) in state_dict", "state-dict-mismatch"},
+		{NeMo{}, "ValueError: model_id foo not in MODEL_CONFIG_MAPPING", "convert-model-id"},
+	}
+	for _, c := range cases {
+		hits := Scan([]Set{c.set}, []string{c.line})
+		found := false
+		for _, h := range hits {
+			if h.GetId() == c.id {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: %q should hit %s, got %v", c.set.ID(), c.line, c.id, hits)
+		}
+	}
+	unknown := LlamaCpp{}.Rules()[1]
+	if names, ok := unknown.Match("unknown model architecture: 'x'"); !ok || names["arch"] != "x" {
+		t.Fatalf("arch capture %v %v", names, ok)
 	}
 }

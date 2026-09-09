@@ -18,14 +18,12 @@ import (
 	"github.com/nickheyer/nebu/pkg/cache"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/estimate"
-	"github.com/nickheyer/nebu/pkg/eval"
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/runtime"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"golang.org/x/sync/errgroup"
-	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -42,13 +40,12 @@ type Constrainer interface {
 	Constrain(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, string, map[string]string, error)
 }
 
-// Orchestrates sources, readers, descriptors, and planning
+// Orchestrates sources, formats, descriptors, and planning
 type Inspector struct {
 	Sources     *sources.Registry
-	Classifier  *formats.Classifier
-	Readers     formats.Readers
+	Formats     *formats.Registry
 	Builder     *descriptor.Builder
-	Runtimes    *runtime.Registry
+	Runtimes    *runtimes.Registry
 	Host        *host.Prober
 	Cache       *cache.Store
 	Calibration *calibrate.Table
@@ -60,13 +57,13 @@ type Inspector struct {
 	Log       *slog.Logger
 }
 
-func (i *Inspector) installed(rt *runtime.Runtime) bool {
-	return i.Installed == nil || i.Installed(rt.Manifest.GetId())
+func (i *Inspector) installed(rt runtimes.Runtime) bool {
+	return i.Installed == nil || i.Installed(rt.ID())
 }
 
 // The context lengths a group is planned at: the ones given, capped at the model's own and ending on it
 func planContexts(contexts []uint32, d *v1.Descriptor, named bool) []uint32 {
-	limit := d.GetParams()["n_ctx_train"]
+	limit := formats.ParamsOf(d.GetParams()).ContextTrain
 	if named || limit < 1 || limit > math.MaxUint32 {
 		return contexts
 	}
@@ -82,10 +79,10 @@ func planContexts(contexts []uint32, d *v1.Descriptor, named bool) []uint32 {
 
 // Narrows runtimes to the ones accepting a format that have an install, every accepting one
 // when none is installed or the request named the runtimes itself
-func (i *Inspector) planners(runtimes []*runtime.Runtime, formatID string, named bool) []*runtime.Runtime {
-	var accepting, installed []*runtime.Runtime
-	for _, rt := range runtimes {
-		if !rt.Accepts(formatID) || rt.Policy == nil {
+func (i *Inspector) planners(list []runtimes.Runtime, formatID string, named bool) []runtimes.Runtime {
+	var accepting, installed []runtimes.Runtime
+	for _, rt := range list {
+		if !runtimes.Accepts(rt, formatID) || rt.Policy() == nil {
 			continue
 		}
 		accepting = append(accepting, rt)
@@ -115,10 +112,10 @@ func (i *Inspector) profile(ctx context.Context, slotID string) (*v1.HostProfile
 }
 
 // Picks the first compatible runtime accepting a format, an installed one before the rest
-func (i *Inspector) DefaultRuntime(profile *v1.HostProfile, formatID string) (*runtime.Runtime, error) {
-	var first *runtime.Runtime
+func (i *Inspector) DefaultRuntime(profile *v1.HostProfile, formatID string) (runtimes.Runtime, error) {
+	var first runtimes.Runtime
 	for _, rt := range i.Runtimes.List() {
-		if ok, _ := rt.Compatible(profile); !ok || !rt.Accepts(formatID) {
+		if ok, _ := runtimes.Compatible(rt, profile); !ok || !runtimes.Accepts(rt, formatID) {
 			continue
 		}
 		if i.installed(rt) {
@@ -129,7 +126,7 @@ func (i *Inspector) DefaultRuntime(profile *v1.HostProfile, formatID string) (*r
 		}
 	}
 	if first == nil {
-		return nil, fmt.Errorf("%w: no compatible runtime accepts %s", runtime.ErrParam, formatID)
+		return nil, fmt.Errorf("%w: no compatible runtime accepts %s", runtimes.ErrParam, formatID)
 	}
 	return first, nil
 }
@@ -143,14 +140,14 @@ func (i *Inspector) Resolve(ctx context.Context, sourceID, repo, revision string
 	key := resolveKey(src, repo, revision)
 	model := &v1.Model{}
 	if data, ok := i.Cache.Get(key, resolveTTL); ok && proto.Unmarshal(data, model) == nil {
-		i.Classifier.Classify(model)
+		i.Formats.Classify(model)
 		return src, model, nil
 	}
 	model, err = src.Resolve(ctx, repo, revision)
 	if err != nil {
 		return nil, nil, err
 	}
-	i.Classifier.Classify(model)
+	i.Formats.Classify(model)
 	i.remember(key, model)
 	return src, model, nil
 }
@@ -172,21 +169,21 @@ func (i *Inspector) remember(key string, msg proto.Message) {
 
 // Reads raw header facts, caching by content identity
 func (i *Inspector) Raw(ctx context.Context, src sources.Source, model *v1.Model, g *formats.Group) (*v1.RawModel, error) {
-	reader, ok := i.Readers[g.FormatID]
-	if !ok {
-		return nil, fmt.Errorf("no reader for format %q", g.FormatID)
+	f := i.Formats.Get(g.FormatID)
+	if f == nil {
+		return nil, fmt.Errorf("no format reads %q", g.FormatID)
 	}
-	if missing := formats.Missing(i.Classifier.Spec(g.FormatID), g); len(missing) > 0 {
+	if missing := formats.Missing(f, g); len(missing) > 0 {
 		return nil, fmt.Errorf("group %s missing %v", g.Name, missing)
 	}
-	key := rawKey(model, g, i.Classifier.Spec(g.FormatID))
+	key := rawKey(model, g)
 	raw := &v1.RawModel{}
 	if data, ok := i.Cache.Get(key, 0); ok && proto.Unmarshal(data, raw) == nil {
 		raw.FormatId, raw.Group = g.FormatID, g.Name
 		return raw, nil
 	}
 	open := func(ctx context.Context, a *v1.Artifact) (sources.Blob, error) { return src.Open(ctx, model, a) }
-	raw, err := reader.Read(ctx, open, g)
+	raw, err := f.Read(ctx, open, g)
 	if err != nil {
 		return nil, err
 	}
@@ -203,31 +200,33 @@ func (i *Inspector) Describe(ctx context.Context, src sources.Source, model *v1.
 	return i.Builder.Build(raw)
 }
 
-// Everything a plan of one descriptor on one runtime reads
-func (i *Inspector) input(rt *runtime.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool) (estimate.Input, error) {
-	if rt.Policy == nil {
-		return estimate.Input{}, fmt.Errorf("runtime %s has no estimate policy", rt.Manifest.GetId())
+// Everything a plan of one descriptor on one runtime reads: the overrides typed, against the memory
+// free right now or all of it, with the same learned correction a run applies
+func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool) (estimate.Input, error) {
+	if rt.Policy() == nil {
+		return estimate.Input{}, fmt.Errorf("runtime %s has no estimate policy", rt.ID())
 	}
-	params, err := rt.Params(overrides)
+	params, err := runtimes.Resolve(rt, overrides)
 	if err != nil {
 		return estimate.Input{}, err
 	}
 	return estimate.Input{
 		Descriptor:    d,
-		Formulas:      i.Builder.Formulas(d.GetArchSpecId()),
+		Family:        i.Builder.Family(d),
 		Host:          profile,
 		Params:        params,
 		Free:          free,
-		OverheadDelta: i.Calibration.Delta(rt.Manifest.GetId(), d.GetArchitecture()),
+		OverheadDelta: i.Calibration.Delta(rt.ID(), d.GetArchitecture()),
 	}, nil
 }
 
-func (i *Inspector) Plan(rt *runtime.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool) (*v1.MemoryPlan, error) {
+// Plans one descriptor on one runtime with overrides, refusing params the runtime rules out
+func (i *Inspector) Plan(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool) (*v1.MemoryPlan, error) {
 	in, err := i.input(rt, d, profile, overrides, free)
 	if err != nil {
 		return nil, err
 	}
-	return rt.Policy.Plan(in)
+	return rt.Policy().Plan(in)
 }
 
 // Builds the full fit table for a model
@@ -240,14 +239,14 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 	if err != nil {
 		return nil, err
 	}
-	groups := selectGroups(i.Classifier.Groups(model), req.GetGroups())
+	groups := selectGroups(i.Formats.Groups(model), req.GetGroups())
 	// The runtimes the request names, else the slot's runtime, else every compatible one
 	ids := req.GetRuntimeIds()
 	if len(ids) == 0 && slotRuntime != "" {
 		ids = []string{slotRuntime}
 	}
 	named := len(ids) > 0
-	runtimes := i.selectRuntimes(ids, profile)
+	list := i.selectRuntimes(ids, profile)
 	contexts := req.GetContexts()
 	if len(contexts) == 0 {
 		contexts = i.Contexts
@@ -263,7 +262,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		}
 	}
 	// The slot's defaults sit under the request's params, the same layering a run uses
-	layered := runtime.Merge(slotParams, req.GetParams())
+	layered := runtimes.Merge(slotParams, req.GetParams())
 	descriptors := make([]*v1.Descriptor, len(groups))
 	warnings := make([]string, len(groups))
 	failures := make([]error, len(groups))
@@ -303,9 +302,9 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		}
 		resp.Descriptors = append(resp.Descriptors, d)
 		// What you have installed answers first, what you could install only when nothing installed serves the format
-		for _, rt := range i.planners(runtimes, d.GetFormatId(), named) {
+		for _, rt := range i.planners(list, d.GetFormatId(), named) {
 			for _, n := range planContexts(contexts, d, len(req.GetContexts()) > 0) {
-				overrides := withContext(layered, rt.Policy.ContextParam(), n)
+				overrides := withContext(layered, rt.Policy().ContextParam, n)
 				// A run plans around what is loaded now, so the table says both
 				plan, err := i.Plan(rt, d, profile, overrides, false)
 				var now *v1.MemoryPlan
@@ -314,10 +313,10 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 				}
 				if err != nil {
 					warn("%s", planFailure(d, rt, err))
-					i.Log.Debug("plan failed", "group", d.GetGroup(), "runtime", rt.Manifest.GetId(), "err", err)
+					i.Log.Debug("plan failed", "group", d.GetGroup(), "runtime", rt.ID(), "err", err)
 					continue
 				}
-				resp.Rows = append(resp.Rows, &v1.FitRow{Group: d.GetGroup(), RuntimeId: rt.Manifest.GetId(), Context: n, Plan: plan, Free: now})
+				resp.Rows = append(resp.Rows, &v1.FitRow{Group: d.GetGroup(), RuntimeId: rt.ID(), Context: n, Plan: plan, Free: now})
 			}
 		}
 	}
@@ -325,12 +324,12 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 }
 
 // Says why a group could not be planned in words a person can act on, the failure itself kept for the log
-func planFailure(d *v1.Descriptor, rt *runtime.Runtime, err error) string {
-	var missing *eval.MissingError
+func planFailure(d *v1.Descriptor, rt runtimes.Runtime, err error) string {
+	var missing *estimate.MissingError
 	if errors.As(err, &missing) {
-		return fmt.Sprintf("%s: the header gives no %s, so memory on %s cannot be planned", d.GetGroup(), strings.Join(missing.Names, " or "), rt.Manifest.GetName())
+		return fmt.Sprintf("%s: %v, so memory on %s cannot be planned", d.GetGroup(), missing, rt.Name())
 	}
-	return fmt.Sprintf("%s: memory on %s cannot be planned", d.GetGroup(), rt.Manifest.GetName())
+	return fmt.Sprintf("%s: memory on %s cannot be planned", d.GetGroup(), rt.Name())
 }
 
 // Plans one group on one runtime
@@ -339,7 +338,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	g, err := formats.FindGroup(i.Classifier.Groups(model), req.GetGroup())
+	g, err := formats.FindGroup(i.Formats.Groups(model), req.GetGroup())
 	if err != nil {
 		return nil, err
 	}
@@ -357,13 +356,13 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 		if err != nil {
 			return nil, err
 		}
-		runtimeID = fallback.Manifest.GetId()
+		runtimeID = fallback.ID()
 	}
 	rt, err := i.Runtimes.Get(runtimeID)
 	if err != nil {
 		return nil, err
 	}
-	overrides := runtime.Merge(slotParams, req.GetParams())
+	overrides := runtimes.Merge(slotParams, req.GetParams())
 	d, err := i.Describe(ctx, src, model, g)
 	if err != nil {
 		return nil, err
@@ -374,20 +373,17 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 		return nil, err
 	}
 	in.SkipRules = true
-	plan, err := rt.Policy.Plan(in)
+	plan, err := rt.Policy().Plan(in)
 	if err != nil {
 		return nil, err
 	}
-	states, refusal, err := rt.Policy.States(in, plan)
-	if err != nil {
-		return nil, err
-	}
+	states, refusal := rt.Policy().ParamStates(in, plan)
 	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Params: states, Refusal: refusal}, nil
 }
 
-func (i *Inspector) selectRuntimes(ids []string, profile *v1.HostProfile) []*runtime.Runtime {
+func (i *Inspector) selectRuntimes(ids []string, profile *v1.HostProfile) []runtimes.Runtime {
 	if len(ids) > 0 {
-		var out []*runtime.Runtime
+		var out []runtimes.Runtime
 		for _, id := range ids {
 			if rt, err := i.Runtimes.Get(id); err == nil {
 				out = append(out, rt)
@@ -395,9 +391,9 @@ func (i *Inspector) selectRuntimes(ids []string, profile *v1.HostProfile) []*run
 		}
 		return out
 	}
-	var compatible []*runtime.Runtime
+	var compatible []runtimes.Runtime
 	for _, rt := range i.Runtimes.List() {
-		if ok, _ := rt.Compatible(profile); ok {
+		if ok, _ := runtimes.Compatible(rt, profile); ok {
 			compatible = append(compatible, rt)
 		}
 	}
@@ -445,9 +441,10 @@ func withContext(params map[string]string, name string, n uint32) map[string]str
 	return out
 }
 
-func rawKey(model *v1.Model, g *formats.Group, spec *v1.FormatSpec) string {
-	sum := sha256.Sum256([]byte(prototext.Format(spec)))
-	parts := []string{"raw", g.FormatID, hex.EncodeToString(sum[:8])}
+// Keys the raw header cache by the content read: every weight's digest, the config files, and the
+// projector a run loads beside them; a source without digests keys by where the files sit
+func rawKey(model *v1.Model, g *formats.Group) string {
+	parts := []string{"raw", g.FormatID}
 	add := func(a *v1.Artifact) {
 		if a.GetSha256() != "" {
 			parts = append(parts, a.GetSha256())
@@ -464,5 +461,6 @@ func rawKey(model *v1.Model, g *formats.Group, spec *v1.FormatSpec) string {
 	if files := g.Files[v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR]; len(files) > 0 {
 		add(files[0])
 	}
-	return strings.Join(parts, "\x00")
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return "raw\x00" + g.FormatID + "\x00" + hex.EncodeToString(sum[:])
 }

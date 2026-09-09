@@ -1,4 +1,4 @@
-.PHONY: gen proto-clean proto-lint web web-install web-check build build-cli run test lint vet cgo-guard spec-check clean dev release migrate-diff migrate-reset migrate-hash migrate-validate migrate-status
+.PHONY: gen proto-clean proto-lint web web-install web-check build build-cli run test lint vet cgo-guard clean dev release migrate-diff migrate-reset migrate-hash migrate-validate migrate-status
 
 HOME_DATA_DIR := "$(HOME)/.local/share/nebu"
 BIN := build/nebu
@@ -70,11 +70,7 @@ vet: gen
 cgo-guard: gen
 	./scripts/cgo-guard.sh
 
-# Loads every embedded spec file the way the daemon does
-spec-check: gen
-	go test ./pkg/spec/ -run TestEmbeddedSpecsCompile -count=1
-
-lint: proto-lint vet cgo-guard spec-check web-check
+lint: proto-lint vet cgo-guard web-check
 
 release: web
 	./scripts/release.sh

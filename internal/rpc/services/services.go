@@ -14,7 +14,7 @@ import (
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/build"
 	"github.com/nickheyer/nebu/pkg/formats"
-	"github.com/nickheyer/nebu/pkg/runtime"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
 	"github.com/nickheyer/nebu/pkg/transfer"
@@ -29,13 +29,13 @@ func wrap(err error) error {
 		return connect.NewError(connect.CodeCanceled, err)
 	case errors.Is(err, context.DeadlineExceeded):
 		return connect.NewError(connect.CodeDeadlineExceeded, err)
-	case errors.Is(err, sources.ErrUnknownSource), errors.Is(err, runtime.ErrUnknownRuntime), errors.Is(err, formats.ErrUnknownGroup),
+	case errors.Is(err, sources.ErrUnknownSource), errors.Is(err, runtimes.ErrUnknownRuntime), errors.Is(err, formats.ErrUnknownGroup),
 		errors.Is(err, tasks.ErrUnknownTask), errors.Is(err, store.ErrNotStored),
 		errors.Is(err, installs.ErrUnknownInstall), errors.Is(err, instances.ErrUnknownInstance),
 		errors.Is(err, installs.ErrUnknownBuild), errors.Is(err, build.ErrUnknownRecipe),
 		errors.Is(err, slots.ErrUnknownSlot):
 		return connect.NewError(connect.CodeNotFound, err)
-	case errors.Is(err, runtime.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, sources.ErrSource),
+	case errors.Is(err, runtimes.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, sources.ErrSource),
 		errors.Is(err, settings.ErrSetting):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, transfer.ErrDigestMismatch):

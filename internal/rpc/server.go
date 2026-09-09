@@ -23,10 +23,10 @@ import (
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/events"
+	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/host"
-	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
-	"github.com/nickheyer/nebu/pkg/runtime"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
 	"golang.org/x/net/http2"
@@ -40,8 +40,8 @@ type Deps struct {
 	Settings *settings.Manager
 	Sources  *sources.Manager
 	// Formats in priority order, what hits are tagged with and what the UI puts into words
-	Formats   []*v1.FormatSpec
-	Runtimes  *runtime.Registry
+	Formats   *formats.Registry
+	Runtimes  *runtimes.Registry
 	Inspector *inspect.Inspector
 	Store     *store.Store
 	Puller    *pull.Puller

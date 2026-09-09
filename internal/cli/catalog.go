@@ -11,9 +11,9 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/pkg/estimate"
-	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/sources"
+	"github.com/nickheyer/nebu/pkg/text"
 )
 
 func runDoctor(ctx context.Context, e *env, args []string) error {
@@ -64,13 +64,13 @@ func runHost(ctx context.Context, e *env, args []string) error {
 		section(w, "devices")
 		var rows [][]string
 		for _, d := range p.GetDevices() {
-			rows = append(rows, []string{d.GetId(), eval.EnumShort(d.GetKind()), d.GetVendor(), d.GetName(), estimate.Human(d.GetMemoryTotalBytes()), compact(d.GetFacts())})
+			rows = append(rows, []string{d.GetId(), text.Enum(d.GetKind()), d.GetVendor(), d.GetName(), estimate.Human(d.GetMemoryTotalBytes()), compact(d.GetFacts())})
 		}
 		table(w, []string{"ID", "KIND", "VENDOR", "NAME", "MEMORY", "FACTS"}, rows)
 		section(w, "pools")
 		rows = nil
 		for _, pl := range p.GetPools() {
-			rows = append(rows, []string{pl.GetId(), eval.EnumShort(pl.GetKind()), pl.GetDeviceId(), estimate.Human(pl.GetTotalBytes()), estimate.Human(pl.GetFreeBytes())})
+			rows = append(rows, []string{pl.GetId(), text.Enum(pl.GetKind()), pl.GetDeviceId(), estimate.Human(pl.GetTotalBytes()), estimate.Human(pl.GetFreeBytes())})
 		}
 		table(w, []string{"ID", "KIND", "DEVICE", "TOTAL", "FREE"}, rows)
 		section(w, "storage")
@@ -82,7 +82,7 @@ func runHost(ctx context.Context, e *env, args []string) error {
 		section(w, "probes")
 		rows = nil
 		for _, pr := range p.GetProbes() {
-			rows = append(rows, []string{pr.GetProbeId(), eval.EnumShort(pr.GetStatus()), pr.GetDetail()})
+			rows = append(rows, []string{pr.GetProbeId(), text.Enum(pr.GetStatus()), pr.GetDetail()})
 		}
 		table(w, []string{"ID", "STATUS", "DETAIL"}, rows)
 	})
@@ -106,7 +106,7 @@ func sourceKinds() []string {
 	values := v1.SourceKind(0).Descriptor().Values()
 	out := make([]string, 0, values.Len())
 	for i := 1; i < values.Len(); i++ {
-		out = append(out, eval.EnumShort(v1.SourceKind(values.Get(i).Number())))
+		out = append(out, text.Enum(v1.SourceKind(values.Get(i).Number())))
 	}
 	return out
 }
@@ -157,7 +157,7 @@ func runSources(ctx context.Context, e *env, args []string) error {
 			if st.GetError() != "" {
 				can = []string{"error: " + st.GetError()}
 			}
-			rows = append(rows, []string{s.GetId(), s.GetName(), eval.EnumShort(s.GetKind()), origin(s.GetSeeded()), orDash(strings.TrimSpace(c.GetEndpoint() + c.GetWebUrl())), auth, strings.Join(can, ","), strings.Join(sorts, ","), strings.Join(facets, ",")})
+			rows = append(rows, []string{s.GetId(), s.GetName(), text.Enum(s.GetKind()), origin(s.GetSeeded()), orDash(strings.TrimSpace(c.GetEndpoint() + c.GetWebUrl())), auth, strings.Join(can, ","), strings.Join(sorts, ","), strings.Join(facets, ",")})
 		}
 		table(w, []string{"ID", "NAME", "PROVIDER", "ORIGIN", "LOCATION", "AUTH", "CAN", "SORTS", "FACETS"}, rows)
 	})
@@ -175,7 +175,7 @@ func sourceRow(w io.Writer, st *v1.SourceStatus) {
 	rows := [][]string{
 		{"id", s.GetId()},
 		{"name", s.GetName()},
-		{"provider", c.GetName() + " (" + eval.EnumShort(s.GetKind()) + ")"},
+		{"provider", c.GetName() + " (" + text.Enum(s.GetKind()) + ")"},
 		{"origin", origin(s.GetSeeded())},
 		{"transports", strings.Join(c.GetTransports(), ", ")},
 		{"created", when(s.GetCreatedAt(), time.RFC3339)},
@@ -223,7 +223,7 @@ func runSourcesProviders(ctx context.Context, e *env, args []string) error {
 			if p.GetConfigured() {
 				seeded = "config only"
 			}
-			rows = append(rows, []string{eval.EnumShort(p.GetKind()), p.GetName(), seeded, strings.Join(p.GetTransports(), ","), strings.Join(settings, " ")})
+			rows = append(rows, []string{text.Enum(p.GetKind()), p.GetName(), seeded, strings.Join(p.GetTransports(), ","), strings.Join(settings, " ")})
 		}
 		table(w, []string{"KIND", "PROVIDER", "DEFAULT", "TRANSPORTS", "SETTINGS"}, rows)
 	})
@@ -516,7 +516,7 @@ func placements(plan *v1.MemoryPlan) string {
 			counts[p.GetKind()] = t
 			order = append(order, p.GetKind())
 		}
-		if p.GetPoolId() == eval.EnumShort(v1.PoolKind_POOL_KIND_HOST) {
+		if p.GetPoolId() == text.Enum(v1.PoolKind_POOL_KIND_HOST) {
 			t.host += p.GetCount()
 		} else {
 			t.device += p.GetCount()
@@ -526,13 +526,13 @@ func placements(plan *v1.MemoryPlan) string {
 	for _, k := range order {
 		t := counts[k]
 		if t.device == 0 {
-			parts = append(parts, eval.EnumShort(k)+":host")
+			parts = append(parts, text.Enum(k)+":host")
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s %d/%d", eval.EnumShort(k), t.device, t.device+t.host))
+		parts = append(parts, fmt.Sprintf("%s %d/%d", text.Enum(k), t.device, t.device+t.host))
 	}
 	for _, p := range plan.GetSkipped() {
-		parts = append(parts, eval.EnumShort(p.GetKind())+":disk")
+		parts = append(parts, text.Enum(p.GetKind())+":disk")
 	}
 	return strings.Join(parts, " ")
 }

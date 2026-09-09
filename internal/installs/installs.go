@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,12 +23,13 @@ import (
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/archive"
 	"github.com/nickheyer/nebu/pkg/build"
-	"github.com/nickheyer/nebu/pkg/eval"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/runtime"
+	"github.com/nickheyer/nebu/pkg/recipes"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/sources"
+	"github.com/nickheyer/nebu/pkg/text"
 	"github.com/nickheyer/nebu/pkg/transfer"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -46,7 +46,7 @@ var ErrUnknownInstall = errors.New("unknown install")
 type Manager struct {
 	DB          *db.DB
 	RuntimesDir string
-	Runtimes    *runtime.Registry
+	Runtimes    *runtimes.Registry
 	Recipes     *build.Registry
 	Engine      *build.Engine
 	Defaults    *v1.Builds
@@ -115,6 +115,17 @@ func (m *Manager) Default(ctx context.Context, runtimeID string) (*v1.Install, e
 	return list[0], nil
 }
 
+// The binaries a runtime's adopt methods look for on PATH
+func adoptNames(rt runtimes.Runtime) []string {
+	var names []string
+	for _, m := range rt.Methods() {
+		if m.Kind == v1.InstallKind_INSTALL_KIND_ADOPTED {
+			names = append(names, m.Binaries...)
+		}
+	}
+	return names
+}
+
 // Records a binary already on the host
 func (m *Manager) Adopt(ctx context.Context, runtimeID, path string) (*v1.Install, error) {
 	rt, err := m.Runtimes.Get(runtimeID)
@@ -122,13 +133,10 @@ func (m *Manager) Adopt(ctx context.Context, runtimeID, path string) (*v1.Instal
 		return nil, err
 	}
 	if path == "" {
-		var names []string
-		for _, m := range rt.Installs() {
-			names = append(names, m.Spec.GetAdopt().GetNames()...)
-		}
+		names := adoptNames(rt)
 		path = onPath(names)
 		if path == "" {
-			return nil, fmt.Errorf("%w: %s, pass a path", runtime.ErrParam, notOnPath(names))
+			return nil, fmt.Errorf("%w: %s, pass a path", runtimes.ErrParam, notOnPath(names))
 		}
 	}
 	abs, err := filepath.Abs(path)
@@ -188,66 +196,60 @@ const (
 var sandboxNames = []string{"host", "oci"}
 
 // Describes every install method of a runtime as this host sees it, defaults picked here
-func (m *Manager) Options(ctx context.Context, rt *runtime.Runtime, profile *v1.HostProfile) ([]*v1.InstallOption, error) {
+func (m *Manager) Options(ctx context.Context, rt runtimes.Runtime, profile *v1.HostProfile) ([]*v1.InstallOption, error) {
 	var out []*v1.InstallOption
-	for _, im := range rt.Installs() {
-		opt := &v1.InstallOption{Method: im.Spec}
-		switch how := im.Spec.GetHow().(type) {
-		case *v1.InstallMethod_Adopt:
-			found := onPath(how.Adopt.GetNames())
-			opt.Fields = []*v1.ConfigField{{Name: fieldPath, Label: "Binary", Type: v1.ConfigType_CONFIG_TYPE_PATH, Required: found == "", Default: found, Description: "Path of " + strings.Join(how.Adopt.GetNames(), " or ")}}
+	for _, im := range rt.Methods() {
+		opt := &v1.InstallOption{Method: &v1.InstallMethod{Id: im.ID, Description: im.Description, Kind: im.Kind, Binaries: im.Binaries, Releases: im.Releases, RecipeId: im.RecipeID}}
+		switch im.Kind {
+		case v1.InstallKind_INSTALL_KIND_ADOPTED:
+			found := onPath(im.Binaries)
+			opt.Fields = []*v1.ConfigField{{Name: fieldPath, Label: "Binary", Type: v1.ConfigType_CONFIG_TYPE_PATH, Required: found == "", Default: found, Description: "Path of " + strings.Join(im.Binaries, " or ")}}
 			if found == "" {
-				opt.Unmet = []string{notOnPath(how.Adopt.GetNames())}
+				opt.Unmet = []string{notOnPath(im.Binaries)}
 			}
-		case *v1.InstallMethod_Prebuilt:
+		case v1.InstallKind_INSTALL_KIND_PREBUILT:
 			// Only the builds published for this host are offered, the first of them by default
-			rules, err := im.Rules(profile)
-			if err != nil {
-				return nil, err
-			}
 			var ids []string
-			for _, r := range rules {
-				ids = append(ids, r.GetId())
+			for _, r := range im.HostRules(profile) {
+				ids = append(ids, r.ID)
 			}
 			opt.Fields = []*v1.ConfigField{
 				{Name: fieldBuild, Label: "Build", Type: v1.ConfigType_CONFIG_TYPE_STRING, Required: true, Default: first(ids), Choices: ids, Description: "Which published build to download"},
-				{Name: fieldRelease, Label: "Release", Type: v1.ConfigType_CONFIG_TYPE_STRING, Description: "A release tag of " + how.Prebuilt.GetReleases() + ", the newest with the build when empty"},
+				{Name: fieldRelease, Label: "Release", Type: v1.ConfigType_CONFIG_TYPE_STRING, Description: "A release tag of " + im.Releases + ", the newest with the build when empty"},
 			}
-			if len(rules) == 0 {
-				opt.Unmet = []string{"no build of " + how.Prebuilt.GetReleases() + " is published for " + profile.GetOs() + "/" + profile.GetArch()}
+			if len(ids) == 0 {
+				opt.Unmet = []string{"no build of " + im.Releases + " is published for " + profile.GetOs() + "/" + profile.GetArch()}
 			}
-		case *v1.InstallMethod_Recipe:
-			rc, err := m.Recipes.Get(how.Recipe.GetRecipeId())
+		case v1.InstallKind_INSTALL_KIND_BUILT:
+			rc, err := m.Recipes.Get(im.RecipeID)
 			if err != nil {
 				return nil, err
 			}
-			sel, err := rc.Select(profile, build.Options{Defaults: m.Defaults})
+			sel, err := build.Select(rc, profile, build.Options{Defaults: m.Defaults})
 			if err != nil {
 				opt.Unmet = []string{err.Error()}
-				opt.Recipe = &v1.RecipeStatus{Recipe: rc.Spec, Unmet: opt.Unmet}
+				opt.Recipe = &v1.RecipeStatus{Recipe: build.Describe(rc), Unmet: opt.Unmet}
 				break
 			}
 			opt.Recipe = sel.Status()
 			opt.Unmet = sel.Unmet
 			// Only the variants this host can take are offered
-			applicable, err := rc.Variants(profile)
-			if err != nil {
-				return nil, err
-			}
 			var variants []string
-			for _, v := range applicable {
-				variants = append(variants, v.GetId())
+			for _, v := range build.Variants(rc, profile) {
+				variants = append(variants, v.ID)
 			}
 			opt.Fields = []*v1.ConfigField{
 				{Name: fieldRef, Label: "Ref", Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: sel.Ref, Description: "A tag, branch, or commit of the source"},
-				{Name: fieldSandbox, Label: "Sandbox", Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: eval.EnumShort(sel.Sandbox), Choices: sandboxNames, Description: "The host toolchain, or a container through " + firstOr(sel.CLI, "a container cli")},
+				{Name: fieldSandbox, Label: "Sandbox", Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: text.Enum(sel.Sandbox), Choices: sandboxNames, Description: "The host toolchain, or a container through " + firstOr(sel.CLI, "a container cli")},
 				{Name: fieldImage, Label: "Image", Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: sel.Image, Description: "Container image holding the toolchain, for the oci sandbox"},
 				{Name: fieldForce, Label: "Rebuild", Type: v1.ConfigType_CONFIG_TYPE_BOOL, Default: "false", Description: "Build again even when this exact build exists"},
 			}
 			if len(variants) > 0 {
-				opt.Fields = append([]*v1.ConfigField{{Name: fieldVariant, Label: "Variant", Type: v1.ConfigType_CONFIG_TYPE_STRING, Required: true, Default: sel.Variant.GetId(), Choices: variants, Description: "Which variant of the recipe to build"}}, opt.Fields...)
+				opt.Fields = append([]*v1.ConfigField{{Name: fieldVariant, Label: "Variant", Type: v1.ConfigType_CONFIG_TYPE_STRING, Required: true, Default: sel.Variant.ID, Choices: variants, Description: "Which variant of the recipe to build"}}, opt.Fields...)
 			}
-			for _, k := range slices.Sorted(maps.Keys(sel.Vars)) {
+			// The recipe's own variables are the ones people set; what the variant adds is not a setting
+			defaults := rc.Vars()
+			for _, k := range slices.Sorted(maps.Keys(defaults)) {
 				opt.Fields = append(opt.Fields, &v1.ConfigField{Name: varPrefix + k, Label: k, Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: sel.Vars[k], Description: "Recipe variable"})
 			}
 		}
@@ -272,16 +274,16 @@ func first(items []string) string {
 
 // What one install does once its settings are read
 type installPlan struct {
-	method  *v1.InstallMethod
+	method  runtimes.Method
 	path    string
-	rule    *v1.PrebuiltRule
+	rule    runtimes.PrebuiltRule
 	release string
 	build   *v1.BuildRequest
 }
 
 // Reads a method's settings into a plan, refusing names the method does not take
-func (m *Manager) plan(ctx context.Context, rt *runtime.Runtime, profile *v1.HostProfile, method string, settings map[string]string) (*installPlan, error) {
-	im, err := rt.Install(method)
+func (m *Manager) plan(ctx context.Context, rt runtimes.Runtime, profile *v1.HostProfile, method string, settings map[string]string) (*installPlan, error) {
+	im, err := runtimes.MethodOf(rt, method)
 	if err != nil {
 		return nil, err
 	}
@@ -291,32 +293,32 @@ func (m *Manager) plan(ctx context.Context, rt *runtime.Runtime, profile *v1.Hos
 	}
 	for k := range settings {
 		if !known[k] && !strings.HasPrefix(k, varPrefix) {
-			return nil, fmt.Errorf("%w: install method %s takes no setting %q", runtime.ErrParam, method, k)
+			return nil, fmt.Errorf("%w: install method %s takes no setting %q", runtimes.ErrParam, method, k)
 		}
 	}
-	p := &installPlan{method: im.Spec}
-	switch how := im.Spec.GetHow().(type) {
-	case *v1.InstallMethod_Adopt:
+	p := &installPlan{method: im}
+	switch im.Kind {
+	case v1.InstallKind_INSTALL_KIND_ADOPTED:
 		p.path = strings.TrimSpace(settings[fieldPath])
 		if p.path == "" {
-			p.path = onPath(how.Adopt.GetNames())
+			p.path = onPath(im.Binaries)
 		}
 		if p.path == "" {
-			return nil, fmt.Errorf("%w: %s, set path", runtime.ErrParam, notOnPath(how.Adopt.GetNames()))
+			return nil, fmt.Errorf("%w: %s, set path", runtimes.ErrParam, notOnPath(im.Binaries))
 		}
-	case *v1.InstallMethod_Prebuilt:
+	case v1.InstallKind_INSTALL_KIND_PREBUILT:
 		if id := strings.TrimSpace(settings[fieldBuild]); id != "" {
 			if p.rule, err = im.Rule(id); err != nil {
 				return nil, err
 			}
-		} else if p.rule, err = im.HostRule(profile); err != nil {
-			return nil, err
-		} else if p.rule == nil {
-			return nil, fmt.Errorf("%w: no build of %s is published for %s/%s, set build", runtime.ErrParam, how.Prebuilt.GetReleases(), profile.GetOs(), profile.GetArch())
+		} else if rules := im.HostRules(profile); len(rules) > 0 {
+			p.rule = rules[0]
+		} else {
+			return nil, fmt.Errorf("%w: no build of %s is published for %s/%s, set build", runtimes.ErrParam, im.Releases, profile.GetOs(), profile.GetArch())
 		}
 		p.release = strings.TrimSpace(settings[fieldRelease])
-	case *v1.InstallMethod_Recipe:
-		p.build = &v1.BuildRequest{RuntimeId: rt.Manifest.GetId(), RecipeId: how.Recipe.GetRecipeId(), Variant: settings[fieldVariant], Ref: settings[fieldRef], Image: settings[fieldImage], Vars: map[string]string{}}
+	case v1.InstallKind_INSTALL_KIND_BUILT:
+		p.build = &v1.BuildRequest{RuntimeId: rt.ID(), RecipeId: im.RecipeID, Variant: settings[fieldVariant], Ref: settings[fieldRef], Image: settings[fieldImage], Vars: map[string]string{}}
 		switch strings.ToLower(strings.TrimSpace(settings[fieldSandbox])) {
 		case "":
 		case "host":
@@ -324,11 +326,11 @@ func (m *Manager) plan(ctx context.Context, rt *runtime.Runtime, profile *v1.Hos
 		case "oci":
 			p.build.Sandbox = v1.SandboxKind_SANDBOX_KIND_OCI
 		default:
-			return nil, fmt.Errorf("%w: sandbox %q, one of %s", runtime.ErrParam, settings[fieldSandbox], strings.Join(sandboxNames, ", "))
+			return nil, fmt.Errorf("%w: sandbox %q, one of %s", runtimes.ErrParam, settings[fieldSandbox], strings.Join(sandboxNames, ", "))
 		}
 		if v := strings.TrimSpace(settings[fieldForce]); v != "" {
 			if p.build.Force, err = strconv.ParseBool(v); err != nil {
-				return nil, fmt.Errorf("%w: force: %v", runtime.ErrParam, err)
+				return nil, fmt.Errorf("%w: force: %v", runtimes.ErrParam, err)
 			}
 		}
 		for k, v := range settings {
@@ -356,8 +358,8 @@ func (m *Manager) Install(ctx context.Context, runtimeID, method string, setting
 	if err != nil {
 		return nil, err
 	}
-	if ok, unmet := rt.Compatible(profile); !ok {
-		return nil, fmt.Errorf("%w: %s needs %s", runtime.ErrParam, runtimeID, strings.Join(unmet, ", "))
+	if ok, unmet := runtimes.Compatible(rt, profile); !ok {
+		return nil, fmt.Errorf("%w: %s needs %s", runtimes.ErrParam, runtimeID, strings.Join(unmet, ", "))
 	}
 	p, err := m.plan(ctx, rt, profile, method, settings)
 	if err != nil {
@@ -370,7 +372,7 @@ func (m *Manager) Install(ctx context.Context, runtimeID, method string, setting
 			return t, nil
 		}
 	}
-	task := m.Tasks.Start(kindInstall, "install "+rt.Manifest.GetName(), map[string]string{"runtime": runtimeID, "method": method}, func(ctx context.Context, h *tasks.Handle) error {
+	task := m.Tasks.Start(kindInstall, "install "+rt.Name(), map[string]string{"runtime": runtimeID, "method": method}, func(ctx context.Context, h *tasks.Handle) error {
 		defer func() {
 			m.buildMu.Lock()
 			delete(m.installing, runtimeID)
@@ -390,25 +392,25 @@ func terminal(s v1.TaskState) bool {
 }
 
 // Carries out one install plan
-func (m *Manager) install(ctx context.Context, h *tasks.Handle, rt *runtime.Runtime, p *installPlan) error {
-	switch how := p.method.GetHow().(type) {
-	case *v1.InstallMethod_Adopt:
+func (m *Manager) install(ctx context.Context, h *tasks.Handle, rt runtimes.Runtime, p *installPlan) error {
+	switch p.method.Kind {
+	case v1.InstallKind_INSTALL_KIND_ADOPTED:
 		h.Logf("adopting %s", p.path)
-		in, err := m.Adopt(ctx, rt.Manifest.GetId(), p.path)
+		in, err := m.Adopt(ctx, rt.ID(), p.path)
 		if err != nil {
 			return err
 		}
 		h.Logf("adopted %s at %s", in.GetVersion(), in.GetPath())
 		h.Progress(1, 1, "adopted "+in.GetPath())
 		return nil
-	case *v1.InstallMethod_Prebuilt:
-		h.Logf("downloading build %s of %s", p.rule.GetId(), how.Prebuilt.GetReleases())
-		return m.download(ctx, h, rt, how.Prebuilt, p.rule, p.release)
-	case *v1.InstallMethod_Recipe:
-		h.Logf("building recipe %s", how.Recipe.GetRecipeId())
+	case v1.InstallKind_INSTALL_KIND_PREBUILT:
+		h.Logf("downloading build %s of %s", p.rule.ID, p.method.Releases)
+		return m.download(ctx, h, rt, p.method, p.rule, p.release)
+	case v1.InstallKind_INSTALL_KIND_BUILT:
+		h.Logf("building recipe %s", p.method.RecipeID)
 		return m.buildInline(ctx, h, p.build)
 	}
-	return fmt.Errorf("install method %s does nothing", p.method.GetId())
+	return fmt.Errorf("install method %s does nothing", p.method.ID)
 }
 
 // One release asset a rule matched, opened for download
@@ -430,14 +432,14 @@ func (r *release) close() {
 	}
 }
 
-func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Runtime, pre *v1.Prebuilt, rule *v1.PrebuiltRule, tag string) error {
+func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt runtimes.Runtime, method runtimes.Method, rule runtimes.PrebuiltRule, tag string) error {
 	h.Progress(0, 0, "resolving release")
-	rel, err := m.resolveAssets(ctx, pre, rule, tag)
+	rel, err := m.resolveAssets(ctx, method.Releases, rule, tag)
 	if err != nil {
 		return err
 	}
 	defer rel.close()
-	dir := filepath.Join(m.RuntimesDir, rt.Manifest.GetId(), rel.tag)
+	dir := filepath.Join(m.RuntimesDir, rt.ID(), rel.tag)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -463,7 +465,7 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Run
 			return err
 		}
 	}
-	binary, err := findBinary(dir, rule.GetBinary())
+	binary, err := findBinary(dir, rule.Binary)
 	if err != nil {
 		return err
 	}
@@ -471,13 +473,13 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Run
 		return err
 	}
 	in := &v1.Install{
-		Id:        installID(rt.Manifest.GetId(), binary),
-		RuntimeId: rt.Manifest.GetId(),
+		Id:        installID(rt.ID(), binary),
+		RuntimeId: rt.ID(),
 		Kind:      v1.InstallKind_INSTALL_KIND_PREBUILT,
 		Path:      binary,
 		Dir:       dir,
 		Version:   rel.tag,
-		Origin:    pre.GetReleases() + "@" + rel.tag + "/" + rel.assets[0].name,
+		Origin:    method.Releases + "@" + rel.tag + "/" + rel.assets[0].name,
 		CreatedAt: timestamppb.Now(),
 	}
 	m.probe(ctx, rt, in)
@@ -489,53 +491,45 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt *runtime.Run
 }
 
 // Opens the rule's assets from the release named, or from the newest release carrying every one of them
-func (m *Manager) resolveAssets(ctx context.Context, pre *v1.Prebuilt, rule *v1.PrebuiltRule, tag string) (*release, error) {
-	patterns := make([]*regexp.Regexp, 0, len(rule.GetAssets()))
-	for _, a := range rule.GetAssets() {
-		re, err := regexp.Compile(a)
-		if err != nil {
-			return nil, err
-		}
-		patterns = append(patterns, re)
-	}
+func (m *Manager) resolveAssets(ctx context.Context, releases string, rule runtimes.PrebuiltRule, tag string) (*release, error) {
 	if m.Sources == nil {
 		return nil, fmt.Errorf("no sources to read releases from")
 	}
-	sourceID := pre.GetSource()
-	if sourceID == "" {
-		sourceID = build.DefaultReleaseSource
-	}
-	src, err := m.Sources.Get(sourceID)
+	src, err := m.Sources.Get(recipes.ReleaseSource)
 	if err != nil {
 		return nil, err
 	}
 	var revisions []*v1.Revision
 	if tag != "" {
 		revisions = []*v1.Revision{{Name: tag, SizeBytes: 1}}
-	} else if revisions, err = src.Revisions(ctx, pre.GetReleases()); err != nil {
+	} else if revisions, err = src.Revisions(ctx, releases); err != nil {
 		return nil, err
+	}
+	var wanted []string
+	for _, a := range rule.Assets {
+		wanted = append(wanted, a.String())
 	}
 	for _, r := range revisions {
 		// A revision without bytes carries no assets, branches and tags never do
 		if r.GetSizeBytes() == 0 {
 			continue
 		}
-		model, err := src.Resolve(ctx, pre.GetReleases(), r.GetName())
+		model, err := src.Resolve(ctx, releases, r.GetName())
 		if err != nil {
 			return nil, err
 		}
 		var picked []*v1.Artifact
-		for _, re := range patterns {
+		for _, want := range rule.Assets {
 			for _, a := range model.GetArtifacts() {
-				if re.MatchString(a.GetPath()) {
+				if want.Matches(a.GetPath()) {
 					picked = append(picked, a)
 					break
 				}
 			}
 		}
-		if len(picked) != len(patterns) {
+		if len(picked) != len(rule.Assets) {
 			if tag != "" {
-				return nil, fmt.Errorf("release %s of %s lacks an asset for %s", tag, pre.GetReleases(), strings.Join(rule.GetAssets(), ", "))
+				return nil, fmt.Errorf("release %s of %s lacks an asset for %s", tag, releases, strings.Join(wanted, ", "))
 			}
 			continue
 		}
@@ -550,7 +544,7 @@ func (m *Manager) resolveAssets(ctx context.Context, pre *v1.Prebuilt, rule *v1.
 		}
 		return rel, nil
 	}
-	return nil, fmt.Errorf("no release of %s at %s carries every asset of %s", pre.GetReleases(), sourceID, strings.Join(rule.GetAssets(), ", "))
+	return nil, fmt.Errorf("no release of %s at %s carries every asset of %s", releases, recipes.ReleaseSource, strings.Join(wanted, ", "))
 }
 
 // Removes an install record and its downloaded directory
@@ -575,37 +569,27 @@ func (m *Manager) Remove(ctx context.Context, id string) (*v1.Install, error) {
 	return in, nil
 }
 
-// Runs the manifest probes and stores what they capture
-func (m *Manager) probe(ctx context.Context, rt *runtime.Runtime, in *v1.Install) {
+// Runs the runtime's probes against an install and stores what they read
+func (m *Manager) probe(ctx context.Context, rt runtimes.Runtime, in *v1.Install) {
 	in.Facts = map[string]string{}
+	view := runtimes.Install{Path: in.GetPath(), Dir: in.GetDir(), Version: in.GetVersion()}
 	for _, p := range rt.Probes() {
 		timeout := probeTimeout
-		if p.Spec.GetTimeoutMs() > 0 {
-			timeout = time.Duration(p.Spec.GetTimeoutMs()) * time.Millisecond
+		if p.Timeout > 0 {
+			timeout = p.Timeout
+		}
+		command := in.GetPath()
+		if p.Command != nil {
+			command = p.Command(view)
 		}
 		pctx, cancel := context.WithTimeout(ctx, timeout)
-		command, err := rt.ProbeCommand(p, map[string]string{"path": in.GetPath(), "dir": in.GetDir(), "version": in.GetVersion()})
-		if err != nil {
-			cancel()
-			continue
-		}
-		cmd := exec.CommandContext(pctx, command, p.Spec.GetArgs()...)
+		cmd := exec.CommandContext(pctx, command, p.Args...)
 		var out bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &out
 		cmd.Run()
 		cancel()
-		var values []string
-		for _, match := range p.Match.FindAllStringSubmatch(out.String(), -1) {
-			value := match[0]
-			for i, name := range p.Match.SubexpNames() {
-				if name == "value" {
-					value = match[i]
-				}
-			}
-			values = append(values, strings.TrimSpace(value))
-		}
-		if len(values) > 0 {
-			in.Facts[p.Spec.GetKey()] = strings.Join(values, ",")
+		if value, ok := p.Parse(out.String()); ok {
+			in.Facts[p.Key] = strings.TrimSpace(value)
 		}
 	}
 	if in.Version == "" {

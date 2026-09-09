@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -28,22 +27,22 @@ import (
 	"github.com/nickheyer/nebu/internal/settings"
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/pkg/archs"
 	"github.com/nickheyer/nebu/pkg/build"
 	"github.com/nickheyer/nebu/pkg/cache"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/events"
-	"github.com/nickheyer/nebu/pkg/formats"
 	formatsall "github.com/nickheyer/nebu/pkg/formats/all"
 	"github.com/nickheyer/nebu/pkg/host"
 	"github.com/nickheyer/nebu/pkg/launch"
+	"github.com/nickheyer/nebu/pkg/precision"
+	"github.com/nickheyer/nebu/pkg/probes"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/runtime"
+	"github.com/nickheyer/nebu/pkg/recipes"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/sources"
-	"github.com/nickheyer/nebu/pkg/spec"
 	"github.com/nickheyer/nebu/pkg/store"
 	"github.com/nickheyer/nebu/pkg/transfer"
-	"github.com/nickheyer/nebu/pkg/triage"
-	specfs "github.com/nickheyer/nebu/spec"
 	web "github.com/nickheyer/nebu/web/nebu"
 	"google.golang.org/protobuf/proto"
 )
@@ -93,45 +92,34 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 			return nil, err
 		}
 	}
-	layers := append([]fs.FS{specfs.FS()}, spec.Dirs(cfg.GetSpecDirs())...)
-	catalog, err := spec.Load(layers...)
+	prober := host.New(probes.All(), []string{cfg.GetStoreDir(), cfg.GetDataDir(), cfg.GetCacheDir()}, profileTTL)
+	fmts, err := formatsall.Registry()
 	if err != nil {
 		return nil, err
 	}
-	prober, err := host.New(catalog.Probes, []string{cfg.GetStoreDir(), cfg.GetDataDir(), cfg.GetCacheDir()}, profileTTL)
+	families, err := archs.New(archs.All())
 	if err != nil {
 		return nil, err
 	}
-	classifier, err := formats.NewClassifier(catalog.Formats)
+	builder := &descriptor.Builder{Formats: fmts, Archs: families, Scale: precision.Bits{}}
+	rts, err := runtimes.New(runtimes.All())
 	if err != nil {
 		return nil, err
 	}
-	readers, err := formats.BuildReaders(catalog.Formats, formatsall.Constructors())
+	recipeBook, err := build.New(recipes.All())
 	if err != nil {
 		return nil, err
 	}
-	builder, err := descriptor.New(catalog.Formats, catalog.Archs, catalog.Precisions)
-	if err != nil {
-		return nil, err
-	}
-	runtimes, err := runtime.New(catalog.Runtimes)
-	if err != nil {
-		return nil, err
-	}
-	recipes, err := build.New(catalog.Recipes)
-	if err != nil {
-		return nil, err
-	}
-	for _, rt := range runtimes.List() {
-		for _, id := range rt.RecipeIDs() {
-			if _, err := recipes.Get(id); err != nil {
-				return nil, fmt.Errorf("runtime %s: %w", rt.Manifest.GetId(), err)
+	for _, rt := range rts.List() {
+		for _, id := range runtimes.RecipeIDs(rt) {
+			rc, err := recipeBook.Get(id)
+			if err != nil {
+				return nil, fmt.Errorf("runtime %s: %w", rt.ID(), err)
+			}
+			if rc.RuntimeID() != rt.ID() {
+				return nil, fmt.Errorf("runtime %s: recipe %s builds %s", rt.ID(), id, rc.RuntimeID())
 			}
 		}
-	}
-	matcher, err := triage.New(catalog.Triage)
-	if err != nil {
-		return nil, err
 	}
 	cacheStore, err := cache.Open(cfg.GetCacheDir())
 	if err != nil {
@@ -201,10 +189,9 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 	// Every plan, the fit table's and a run's, applies the same learned correction
 	d.Inspector = &inspect.Inspector{
 		Sources:     srcs,
-		Classifier:  classifier,
-		Readers:     readers,
+		Formats:     fmts,
 		Builder:     builder,
-		Runtimes:    runtimes,
+		Runtimes:    rts,
 		Host:        prober,
 		Cache:       cacheStore,
 		Calibration: calibration,
@@ -215,9 +202,9 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 	d.Installs = &installs.Manager{
 		DB:          store,
 		RuntimesDir: filepath.Join(cfg.GetDataDir(), "runtimes"),
-		Runtimes:    runtimes,
-		Recipes:     recipes,
-		Engine:      &build.Engine{Root: cfg.GetBuilds().GetDir(), Patches: catalog.Patches, Jobs: int(cfg.GetBuilds().GetJobs()), Sources: srcs, Fetcher: fetcher, Log: log},
+		Runtimes:    rts,
+		Recipes:     recipeBook,
+		Engine:      &build.Engine{Root: cfg.GetBuilds().GetDir(), Jobs: int(cfg.GetBuilds().GetJobs()), Sources: srcs, Fetcher: fetcher, Log: log},
 		Defaults:    cfg.GetBuilds(),
 		Host:        prober,
 		Tasks:       d.Tasks,
@@ -237,13 +224,12 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 		DB:          store,
 		Dir:         filepath.Join(cfg.GetDataDir(), "instances"),
 		Store:       blobStore,
-		Runtimes:    runtimes,
+		Runtimes:    rts,
 		Installs:    d.Installs,
 		Inspector:   d.Inspector,
 		Launcher:    &launch.ProcessLauncher{Log: log},
 		Tasks:       d.Tasks,
 		Host:        prober,
-		Triage:      matcher,
 		Calibration: calibration,
 		Routes:      d.Routes,
 		Events:      bus,
@@ -280,14 +266,14 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 	if !cfg.GetWeb().GetDisabled() {
 		ui = web.Handler()
 	}
-	d.Doctor = &doctor.Doctor{Host: prober, Runtimes: runtimes, Sources: srcs, Store: blobStore, Installs: d.Installs, Tasks: d.Tasks, MinFree: cfg.GetMinFreeBytes()}
+	d.Doctor = &doctor.Doctor{Host: prober, Runtimes: rts, Sources: srcs, Store: blobStore, Installs: d.Installs, Tasks: d.Tasks, MinFree: cfg.GetMinFreeBytes()}
 	d.handler = rpc.NewHandler(rpc.Deps{
 		Host:      prober,
 		Doctor:    d.Doctor,
 		Settings:  d.Settings,
 		Sources:   srcMgr,
-		Formats:   classifier.Specs(),
-		Runtimes:  runtimes,
+		Formats:   fmts,
+		Runtimes:  rts,
 		Inspector: d.Inspector,
 		Store:     blobStore,
 		Puller:    d.Puller,

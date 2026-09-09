@@ -15,6 +15,8 @@ import (
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/build"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/recipes"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -35,12 +37,12 @@ func (m *Manager) ListRecipes(ctx context.Context, runtimeID string) ([]*v1.Reci
 	}
 	var out []*v1.RecipeStatus
 	for _, rc := range m.Recipes.List() {
-		if runtimeID != "" && rc.Spec.GetRuntimeId() != runtimeID {
+		if runtimeID != "" && rc.RuntimeID() != runtimeID {
 			continue
 		}
-		sel, err := rc.Select(profile, build.Options{Defaults: m.Defaults})
+		sel, err := build.Select(rc, profile, build.Options{Defaults: m.Defaults})
 		if err != nil {
-			out = append(out, &v1.RecipeStatus{Recipe: rc.Spec, Unmet: []string{err.Error()}})
+			out = append(out, &v1.RecipeStatus{Recipe: build.Describe(rc), Unmet: []string{err.Error()}})
 			continue
 		}
 		out = append(out, sel.Status())
@@ -49,14 +51,14 @@ func (m *Manager) ListRecipes(ctx context.Context, runtimeID string) ([]*v1.Reci
 }
 
 // Picks the named recipe, else the runtime manifest's recipe
-func (m *Manager) recipe(req *v1.BuildRequest) (*build.Recipe, error) {
+func (m *Manager) recipe(req *v1.BuildRequest) (recipes.Recipe, error) {
 	if req.GetRecipeId() != "" {
 		rc, err := m.Recipes.Get(req.GetRecipeId())
 		if err != nil {
 			return nil, err
 		}
-		if req.GetRuntimeId() != "" && rc.Spec.GetRuntimeId() != req.GetRuntimeId() {
-			return nil, fmt.Errorf("%w: recipe %s builds %s, not %s", build.ErrSelection, rc.Spec.GetId(), rc.Spec.GetRuntimeId(), req.GetRuntimeId())
+		if req.GetRuntimeId() != "" && rc.RuntimeID() != req.GetRuntimeId() {
+			return nil, fmt.Errorf("%w: recipe %s builds %s, not %s", build.ErrSelection, rc.ID(), rc.RuntimeID(), req.GetRuntimeId())
 		}
 		return rc, nil
 	}
@@ -67,7 +69,7 @@ func (m *Manager) recipe(req *v1.BuildRequest) (*build.Recipe, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ids := rt.RecipeIDs(); len(ids) == 1 {
+	if ids := runtimes.RecipeIDs(rt); len(ids) == 1 {
 		return m.Recipes.Get(ids[0])
 	} else if len(ids) > 1 {
 		return nil, fmt.Errorf("%w: %s builds from recipes %s, pass one", build.ErrSelection, req.GetRuntimeId(), strings.Join(ids, ", "))
@@ -81,7 +83,7 @@ func (m *Manager) recipe(req *v1.BuildRequest) (*build.Recipe, error) {
 	}
 	var ids []string
 	for _, c := range candidates {
-		ids = append(ids, c.Spec.GetId())
+		ids = append(ids, c.ID())
 	}
 	return nil, fmt.Errorf("%w: %s has recipes %s, pass one", build.ErrSelection, req.GetRuntimeId(), strings.Join(ids, ", "))
 }
@@ -102,7 +104,7 @@ func (m *Manager) Build(ctx context.Context, req *v1.BuildRequest) (*v1.Build, *
 	}
 	if !req.GetForce() {
 		if existing, install := m.cached(ctx, b.GetId()); existing != nil {
-			task := m.Tasks.Start(kindBuild, "build "+sel.Recipe.Spec.GetId()+" "+b.GetVariant(), map[string]string{"build": b.GetId(), "runtime": b.GetRuntimeId(), "cached": "true"}, func(ctx context.Context, h *tasks.Handle) error {
+			task := m.Tasks.Start(kindBuild, "build "+sel.Recipe.ID()+" "+b.GetVariant(), map[string]string{"build": b.GetId(), "runtime": b.GetRuntimeId(), "cached": "true"}, func(ctx context.Context, h *tasks.Handle) error {
 				h.Logf("build %s already done, install %s at %s", existing.GetId(), install.GetId(), install.GetPath())
 				h.Progress(1, 1, "cached")
 				return nil
@@ -111,11 +113,11 @@ func (m *Manager) Build(ctx context.Context, req *v1.BuildRequest) (*v1.Build, *
 		}
 	}
 	b.State = v1.BuildState_BUILD_STATE_RUNNING
-	title := fmt.Sprintf("build %s %s %s", sel.Recipe.Spec.GetId(), b.GetVariant(), b.GetRef())
+	title := fmt.Sprintf("build %s %s %s", sel.Recipe.ID(), b.GetVariant(), b.GetRef())
 	// The task works on its own copy once ids exist
 	var job *v1.Build
 	ready := make(chan struct{})
-	task := m.Tasks.Start(kindBuild, title, map[string]string{"build": b.GetId(), "runtime": b.GetRuntimeId(), "recipe": sel.Recipe.Spec.GetId()}, func(ctx context.Context, h *tasks.Handle) error {
+	task := m.Tasks.Start(kindBuild, title, map[string]string{"build": b.GetId(), "runtime": b.GetRuntimeId(), "recipe": sel.Recipe.ID()}, func(ctx context.Context, h *tasks.Handle) error {
 		<-ready
 		err := m.runBuild(ctx, h, sel, job)
 		m.buildMu.Lock()
@@ -151,7 +153,7 @@ func (m *Manager) resolveBuild(ctx context.Context, req *v1.BuildRequest) (*buil
 	if err != nil {
 		return nil, nil, err
 	}
-	sel, err := rc.Select(profile, build.Options{
+	sel, err := build.Select(rc, profile, build.Options{
 		Variant:  req.GetVariant(),
 		Vars:     req.GetVars(),
 		Sandbox:  req.GetSandbox(),

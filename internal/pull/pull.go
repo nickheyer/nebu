@@ -75,7 +75,7 @@ func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error
 	if err != nil {
 		return nil, err
 	}
-	g, err := formats.FindGroup(p.Inspector.Classifier.Groups(model), req.GetGroup())
+	g, err := formats.FindGroup(p.Inspector.Formats.Groups(model), req.GetGroup())
 	if err != nil {
 		return nil, err
 	}

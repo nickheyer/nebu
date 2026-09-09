@@ -42,11 +42,11 @@ func TestConstrain(t *testing.T) {
 	if budget.GetPools()[1].GetTotalBytes() != 30 || budget.GetPools()[1].GetFreeBytes() != 30 || budget.GetPools()[0].GetTotalBytes() != 100 {
 		t.Fatalf("budget only %v", budget.GetPools())
 	}
-	views := deviceViews(c, &Reservation{DeviceIDs: []string{"g1"}})
-	if len(views) != 1 || views[0]["id"] != "g1" || views[0]["facts"].(map[string]string)["index"] != "1" {
+	views := slotDevices(c, &Reservation{DeviceIDs: []string{"g1"}})
+	if len(views) != 1 || views[0].GetId() != "g1" || views[0].GetFacts()["index"] != "1" {
 		t.Fatalf("views %v", views)
 	}
-	if deviceViews(p, nil) != nil || deviceViews(p, &Reservation{}) != nil {
+	if slotDevices(p, nil) != nil || slotDevices(p, &Reservation{}) != nil {
 		t.Fatal("no slot devices means no views")
 	}
 }

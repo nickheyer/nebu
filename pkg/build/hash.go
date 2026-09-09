@@ -6,15 +6,16 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nickheyer/nebu/pkg/eval"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"google.golang.org/protobuf/proto"
+	"github.com/nickheyer/nebu/pkg/recipes"
+	"github.com/nickheyer/nebu/pkg/text"
 )
 
 const idLength = 16
 
-// Hashes everything that decides the bytes a build produces
-func hashBuild(b *v1.Build, spec *v1.Recipe, patches map[string][]byte) string {
+// Hashes everything that decides the bytes a build produces: the recipe's steps as this build would run
+// them, its outputs and binary, the variant, ref, sandbox, image, vars, facts, and patches
+func hashBuild(rc recipes.Recipe, b *v1.Build, bctx *recipes.Build, patches map[string][]byte) string {
 	h := sha256.New()
 	write := func(parts ...string) {
 		for _, p := range parts {
@@ -22,11 +23,16 @@ func hashBuild(b *v1.Build, spec *v1.Recipe, patches map[string][]byte) string {
 			h.Write([]byte{0})
 		}
 	}
-	opts := proto.MarshalOptions{Deterministic: true}
-	if data, err := opts.Marshal(spec); err == nil {
-		h.Write(data)
+	write("recipe", rc.ID(), rc.RuntimeID())
+	for _, st := range rc.Steps(bctx) {
+		write("step", st.Name, st.Dir)
+		write(st.Command...)
+		write(sortedPairs(st.Env)...)
 	}
-	write("variant", b.GetVariant(), "ref", b.GetRef(), "sandbox", eval.EnumShort(b.GetSandbox()), "image", b.GetImage())
+	write("outputs")
+	write(rc.Outputs()...)
+	write("binary", rc.Binary())
+	write("variant", b.GetVariant(), "ref", b.GetRef(), "sandbox", text.Enum(b.GetSandbox()), "image", b.GetImage())
 	write("vars")
 	write(sortedPairs(b.GetVars())...)
 	write("facts")

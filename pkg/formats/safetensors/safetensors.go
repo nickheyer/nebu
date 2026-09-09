@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/nickheyer/nebu/pkg/eval"
 	"github.com/nickheyer/nebu/pkg/formats"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/text"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -21,20 +21,13 @@ const (
 	shardReaders = 8
 )
 
-type reader struct{}
-
-// Builds a safetensors reader
-func New(spec *v1.FormatSpec) (formats.Reader, error) {
-	return &reader{}, nil
-}
-
 type tensorHeader struct {
 	Dtype       string    `json:"dtype"`
 	Shape       []uint64  `json:"shape"`
 	DataOffsets [2]uint64 `json:"data_offsets"`
 }
 
-func (r *reader) Read(ctx context.Context, open formats.Opener, group *formats.Group) (*v1.RawModel, error) {
+func (f Format) Read(ctx context.Context, open formats.Opener, group *formats.Group) (*v1.RawModel, error) {
 	raw := &v1.RawModel{FormatId: group.FormatID, Group: group.Name, Metadata: map[string]string{}}
 	// A checkpoint of many shards is read several at a time, the tensors kept in shard order
 	shards := make([]*v1.RawModel, len(group.Weights))
@@ -43,7 +36,7 @@ func (r *reader) Read(ctx context.Context, open formats.Opener, group *formats.G
 	for i, a := range group.Weights {
 		eg.Go(func() error {
 			part := &v1.RawModel{Metadata: map[string]string{}}
-			if err := r.readShard(gctx, open, a, part); err != nil {
+			if err := readShard(gctx, open, a, part); err != nil {
 				return fmt.Errorf("%s: %w", a.GetPath(), err)
 			}
 			shards[i] = part
@@ -62,7 +55,7 @@ func (r *reader) Read(ctx context.Context, open formats.Opener, group *formats.G
 	for _, a := range group.Files[v1.ArtifactRole_ARTIFACT_ROLE_CONFIG] {
 		data, err := formats.ReadAll(ctx, open, a, maxConfig)
 		if err == nil {
-			err = eval.FlattenJSON(data, "", raw.Metadata, nil)
+			err = text.FlattenJSON(data, "", raw.Metadata)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", a.GetPath(), err)
@@ -71,7 +64,7 @@ func (r *reader) Read(ctx context.Context, open formats.Opener, group *formats.G
 	return raw, nil
 }
 
-func (r *reader) readShard(ctx context.Context, open formats.Opener, a *v1.Artifact, raw *v1.RawModel) error {
+func readShard(ctx context.Context, open formats.Opener, a *v1.Artifact, raw *v1.RawModel) error {
 	blob, err := open(ctx, a)
 	if err != nil {
 		return err

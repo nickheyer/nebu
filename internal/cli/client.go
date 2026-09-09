@@ -21,10 +21,10 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/daemon"
 	"github.com/nickheyer/nebu/pkg/estimate"
-	"github.com/nickheyer/nebu/pkg/eval"
 	"github.com/nickheyer/nebu/pkg/logger"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
+	"github.com/nickheyer/nebu/pkg/text"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -522,4 +522,4 @@ func isTerminal(w io.Writer) bool {
 }
 
 // An enum's short name in capitals, how states read in tables
-func loud(e protoreflect.Enum) string { return strings.ToUpper(eval.EnumShort(e)) }
+func loud(e protoreflect.Enum) string { return strings.ToUpper(text.Enum(e)) }

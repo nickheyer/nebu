@@ -13,7 +13,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/runtime"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
 )
@@ -43,7 +43,7 @@ func (s status) String() string {
 // Probes the host again and checks probes, devices, storage, the store, runtimes, recipes, and sources
 type Doctor struct {
 	Host     *host.Prober
-	Runtimes *runtime.Registry
+	Runtimes *runtimes.Registry
 	Sources  *sources.Registry
 	Store    *store.Store
 	Installs *installs.Manager
@@ -95,7 +95,7 @@ func (d *Doctor) run(ctx context.Context, h *tasks.Handle) error {
 	for _, p := range profile.GetProbes() {
 		switch p.GetStatus() {
 		case v1.ProbeStatus_PROBE_STATUS_FAILED:
-			add("probe."+p.GetProbeId(), warn, p.GetDetail(), "fix the tool or override the probe spec in a spec directory")
+			add("probe."+p.GetProbeId(), warn, p.GetDetail(), "fix the tool the probe runs")
 		case v1.ProbeStatus_PROBE_STATUS_SKIPPED:
 			add("probe."+p.GetProbeId(), ok, "skipped, "+p.GetDetail(), "")
 		default:
@@ -142,25 +142,25 @@ func (d *Doctor) run(ctx context.Context, h *tasks.Handle) error {
 		}
 	}
 	for _, rt := range d.Runtimes.List() {
-		id := "runtime." + rt.Manifest.GetId()
-		compatible, unmet := rt.Compatible(profile)
+		id := "runtime." + rt.ID()
+		compatible, unmet := runtimes.Compatible(rt, profile)
 		if !compatible {
 			add(id, warn, "needs "+strings.Join(unmet, ", "), "")
 			continue
 		}
-		list, err := d.Installs.List(ctx, rt.Manifest.GetId())
+		list, err := d.Installs.List(ctx, rt.ID())
 		switch {
 		case err != nil:
 			add(id, fail, err.Error(), "check permissions on the data directory")
 		case len(list) == 0:
-			add(id, warn, "compatible, not installed", "nebu runtimes install "+rt.Manifest.GetId())
+			add(id, warn, "compatible, not installed", "nebu runtimes install "+rt.ID())
 		default:
 			add(id, ok, fmt.Sprintf("%d installs, newest %s %s", len(list), list[0].GetVersion(), list[0].GetPath()), "")
 		}
 	}
 	recipes, err := d.Installs.ListRecipes(ctx, "")
 	if err != nil {
-		add("recipes", fail, err.Error(), "check the host profile and the spec directories")
+		add("recipes", fail, err.Error(), "check the host profile")
 	}
 	for _, rs := range recipes {
 		id := "recipe." + rs.GetRecipe().GetId()

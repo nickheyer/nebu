@@ -10,6 +10,7 @@ import (
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/settings"
 	"github.com/nickheyer/nebu/pkg/events"
+	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
@@ -71,10 +72,10 @@ type SourceService struct {
 }
 
 // Builds the source service, formats are what hits get tagged with, in priority order
-func NewSourceService(m *sources.Manager, insp *inspect.Inspector, formats []*v1.FormatSpec) *SourceService {
+func NewSourceService(m *sources.Manager, insp *inspect.Inspector, fmts *formats.Registry) *SourceService {
 	s := &SourceService{sources: m, inspector: insp}
-	for _, f := range formats {
-		s.formats = append(s.formats, f.GetId())
+	for _, f := range fmts.List() {
+		s.formats = append(s.formats, f.ID())
 	}
 	return s
 }
@@ -125,7 +126,7 @@ func (s *SourceService) Search(ctx context.Context, req *connect.Request[v1.Sear
 	return connect.NewResponse(resp), nil
 }
 
-// Names the formats a hit advertises through its tags, using the loaded format specs
+// Names the formats a hit advertises through its tags
 func (s *SourceService) formatsOf(h *v1.SearchHit) []string {
 	var out []string
 	for _, id := range s.formats {

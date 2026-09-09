@@ -15,15 +15,14 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/nickheyer/nebu/pkg/eval"
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/formats/pickle"
 	"github.com/nickheyer/nebu/pkg/formats/torch"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/text"
 	"sigs.k8s.io/yaml"
 )
 
@@ -40,15 +39,8 @@ const (
 // Names the model config in either layout
 var configNames = map[string]bool{"model_config.yaml": true, "model.yaml": true}
 
-// Layer stacks Megatron stores as one tensor with the layer count first
-var stacked = regexp.MustCompile(`(^|\.)(decoder|encoder)\.layers\.([^0-9][^.]*)`)
-
+// Reads the headers of a packed or directory checkpoint, shared by both layouts
 type reader struct{}
-
-// Builds a NeMo reader
-func New(spec *v1.FormatSpec) (formats.Reader, error) {
-	return &reader{}, nil
-}
 
 // A tensor with the shape its header gave it, kept until layers are expanded
 type shaped struct {
@@ -88,7 +80,7 @@ func (r *reader) readDir(ctx context.Context, open formats.Opener, group *format
 		case base == "metadata.json":
 			data, err := formats.ReadAll(ctx, open, a, maxSmall)
 			if err == nil {
-				err = eval.FlattenJSON(data, "weights", raw.Metadata, nil)
+				err = text.FlattenJSON(data, "weights", raw.Metadata)
 			}
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", a.GetPath(), err)
@@ -156,7 +148,7 @@ func (r *reader) readTar(ctx context.Context, open formats.Opener, a *v1.Artifac
 			if err != nil {
 				return nil, err
 			}
-			if err := eval.FlattenJSON(data, "weights", raw.Metadata, nil); err != nil {
+			if err := text.FlattenJSON(data, "weights", raw.Metadata); err != nil {
 				return nil, fmt.Errorf("%s: %w", name, err)
 			}
 		case base == "model_weights.ckpt":
@@ -244,13 +236,14 @@ func archName(target string) string {
 // Splits tensors Megatron stacked across layers into one entry per layer
 //
 // Megatron core stores every layer's copy of a parameter as one tensor whose
-// first dimension counts layers, named without a layer index. Splitting them
-// gives the planner per layer groups and keeps totals exact.
+// first dimension counts layers, named decoder.layers.<parameter> without a
+// layer index. Splitting them gives the planner per layer groups and keeps
+// totals exact.
 func expandLayers(tensors []shaped, layers int) []*v1.TensorInfo {
 	out := make([]*v1.TensorInfo, 0, len(tensors))
 	for _, s := range tensors {
 		t := s.info
-		m := stacked.FindStringSubmatchIndex(t.GetName())
+		head, tail, ok := stackedName(t.GetName())
 		n := layers
 		if len(s.shape) > 0 {
 			if n == 0 || int(s.shape[0]) == n {
@@ -259,14 +252,13 @@ func expandLayers(tensors []shaped, layers int) []*v1.TensorInfo {
 				n = 0
 			}
 		}
-		if m == nil || n <= 0 || t.GetElements()%uint64(n) != 0 {
+		if !ok || n <= 0 || t.GetElements()%uint64(n) != 0 {
 			out = append(out, t)
 			continue
 		}
-		head, tail := t.GetName()[:m[6]], t.GetName()[m[6]:]
 		for i := 0; i < n; i++ {
 			out = append(out, &v1.TensorInfo{
-				Name:     head + strconv.Itoa(i) + "." + strings.TrimPrefix(tail, "."),
+				Name:     head + strconv.Itoa(i) + "." + tail,
 				Dtype:    t.GetDtype(),
 				Bytes:    t.GetBytes() / uint64(n),
 				Elements: t.GetElements() / uint64(n),
@@ -274,6 +266,22 @@ func expandLayers(tensors []shaped, layers int) []*v1.TensorInfo {
 		}
 	}
 	return out
+}
+
+// Splits a stacked layer tensor name at the layers segment: decoder.layers.mlp.weight becomes the
+// prefix decoder.layers. and the tail mlp.weight, false when a layer number already follows layers
+func stackedName(name string) (head, tail string, ok bool) {
+	seg := strings.Split(name, ".")
+	for i := 0; i+1 < len(seg); i++ {
+		if (seg[i] == "decoder" || seg[i] == "encoder") && seg[i+1] == "layers" && i+2 < len(seg) {
+			next := seg[i+2]
+			if next == "" || next[0] >= '0' && next[0] <= '9' {
+				return "", "", false
+			}
+			return strings.Join(seg[:i+2], ".") + ".", strings.Join(seg[i+2:], "."), true
+		}
+	}
+	return "", "", false
 }
 
 // Reads tensors out of a torch distributed checkpoint's .metadata pickle
@@ -394,7 +402,7 @@ func flattenYAML(data []byte, into map[string]string) error {
 	if err != nil {
 		return err
 	}
-	return eval.FlattenJSON(js, "", into, nil)
+	return text.FlattenJSON(js, "", into)
 }
 
 func firstOf(m map[string]string, keys ...string) string {
