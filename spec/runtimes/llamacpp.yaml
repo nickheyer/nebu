@@ -1,6 +1,6 @@
 id: llamacpp
 name: llama.cpp
-description: llama-server from ggml-org llama.cpp
+description: Serves GGUF models on CPU, CUDA, ROCm, Vulkan, and Metal
 formats: [gguf]
 constraints:
   - expr: len(devices) > 0
@@ -103,13 +103,15 @@ params:
   - name: n_ctx
     label: Context length
     type: PARAM_TYPE_INT
-    default: '8192'
+    default: auto
+    solved: true
     unit: tokens
     min: 256
     step: 256
+    max_expr: n_ctx_train
     group: Context
     flag: --ctx-size
-    description: Tokens the model can hold in one conversation. Larger contexts need more cache memory.
+    description: Tokens the model can hold in one conversation. Auto takes the largest that fits in memory, up to the length the model was trained for.
   - name: n_parallel
     label: Parallel sequences
     type: PARAM_TYPE_INT
@@ -129,6 +131,7 @@ params:
     unit: layers
     min: 0
     step: 1
+    max_expr: n_layer
     group: Placement
     flag: --n-gpu-layers
     description: Layers loaded onto the device. Auto takes the number from the memory plan.
@@ -140,6 +143,7 @@ params:
     unit: layers
     min: 0
     step: 1
+    max_expr: n_layer
     group: Placement
     flag: --n-cpu-moe
     description: Layers whose expert weights stay in system memory. Auto takes the number from the memory plan.
@@ -150,26 +154,37 @@ params:
     unit: threads
     min: -1
     step: 1
+    max_expr: num(facts["cpu.threads"] ?? 0)
     group: Placement
     advanced: true
     flag: --threads
     description: Threads for layers on the CPU. -1 picks a number from the core count.
+  # The cache follows the weights: quantized weights take an 8 bit cache, which loses nothing they kept,
+  # and full width weights keep a full width cache
   - name: cache_type_k
     label: Key cache type
     type: PARAM_TYPE_STRING
-    default: f16
+    default: auto
+    solved: true
+    auto: 'bits_per_weight > 8 ? "f16" : "q8_0"'
     choices: [f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0]
     group: Cache
     flag: --cache-type-k
-    description: Element type of the key cache. Quantized types use less memory.
+    description: Element type of the key cache. Auto takes q8_0 for quantized weights and f16 otherwise.
   - name: cache_type_v
     label: Value cache type
     type: PARAM_TYPE_STRING
-    default: f16
+    default: auto
+    solved: true
+    auto: 'flash_attn == "off" || bits_per_weight > 8 ? "f16" : "q8_0"'
     choices: [f32, f16, bf16, q8_0, q5_1, q5_0, q4_1, q4_0]
+    choice_rules:
+      - choices: [q8_0, q5_1, q5_0, q4_1, q4_0]
+        when: flash_attn != "off"
+        message: a quantized value cache needs flash attention on
     group: Cache
     flag: --cache-type-v
-    description: Element type of the value cache. Quantized types need flash attention on.
+    description: Element type of the value cache. Auto takes q8_0 for quantized weights with flash attention and f16 otherwise.
   - name: flash_attn
     label: Flash attention
     type: PARAM_TYPE_STRING
@@ -185,6 +200,7 @@ params:
     unit: tokens
     min: 32
     step: 32
+    max_expr: n_ctx
     group: Batching
     advanced: true
     flag: --batch-size
@@ -196,6 +212,7 @@ params:
     unit: tokens
     min: 32
     step: 32
+    max_expr: n_batch
     group: Batching
     advanced: true
     flag: --ubatch-size
@@ -270,6 +287,7 @@ estimate:
     q4_0: 0.5625
   margin: 0.05
   context_param: n_ctx
+  context_max: n_ctx_train
 triage: [llamacpp]
 report:
   - key: device.weights

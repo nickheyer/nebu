@@ -76,10 +76,28 @@ message EstimateRequest {
   bool free = 8;
 }
 
-// Returns the plan and descriptor used
+// A choice the current params rule out, and why
+message DisabledChoice {
+  string value = 1;
+  string message = 2;
+}
+
+// What the model, host, and current params make of one param: its bounds and the choices ruled out
+message ParamState {
+  string name = 1;
+  double min = 2;
+  double max = 3;
+  double step = 4;
+  repeated DisabledChoice disabled = 5;
+}
+
+// Returns the plan and descriptor used, with the state of every param under these inputs
 message EstimateResponse {
   MemoryPlan plan = 1;
   Descriptor descriptor = 2;
+  repeated ParamState params = 3;
+  // Why a run with these params would be refused, empty when it would not
+  string refusal = 4;
 }
 
 // Builds a fit table for a model

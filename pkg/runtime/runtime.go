@@ -18,7 +18,7 @@ import (
 )
 
 // Value a solved param takes before planning
-const Auto = "auto"
+const Auto = estimate.Auto
 
 // Grace before a stop escalates when the manifest sets none
 const DefaultStopGrace = 15 * time.Second
@@ -156,11 +156,17 @@ func compile(m *v1.RuntimeManifest) (*Runtime, error) {
 		rt.params[p.GetName()] = p
 	}
 	if m.GetEstimate() != nil {
-		policy, err := estimate.NewPolicy(m.GetEstimate())
+		policy, err := estimate.NewPolicy(m.GetEstimate(), m.GetParams())
 		if err != nil {
 			return nil, err
 		}
 		rt.Policy = policy
+	} else {
+		for _, p := range m.GetParams() {
+			if p.GetAuto() != "" || p.GetMaxExpr() != "" || len(p.GetChoiceRules()) > 0 {
+				return nil, fmt.Errorf("param %s: auto, max_expr, and choice_rules need an estimate policy to evaluate them", p.GetName())
+			}
+		}
 	}
 	launch := m.GetLaunch()
 	command := launch.GetCommand()

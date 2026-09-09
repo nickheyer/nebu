@@ -300,6 +300,78 @@ func (c *Classifier) Classify(m *v1.Model) {
 			break
 		}
 	}
+	c.disambiguate(m)
+}
+
+// Splits a group whose files are different models rather than shards of one: a repository that
+// publishes model-IQ4_XS, model-MTP-IQ4_XS, and model-LOW-MTP-IQ4_XS names every one by the quant
+// token, so each is named by what sets it apart from the others instead, IQ4_XS, MTP-IQ4_XS, and
+// LOW-MTP-IQ4_XS. Shards of one file share a stem and stay together.
+func (c *Classifier) disambiguate(m *v1.Model) {
+	type key struct{ format, group string }
+	byKey := map[key][]*v1.Artifact{}
+	var order []key
+	for _, a := range m.GetArtifacts() {
+		if a.GetRole() != v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS {
+			continue
+		}
+		k := key{a.GetFormatId(), a.GetGroup()}
+		if _, seen := byKey[k]; !seen {
+			order = append(order, k)
+		}
+		byKey[k] = append(byKey[k], a)
+	}
+	for _, k := range order {
+		f := c.compiled[k.format]
+		if f == nil {
+			continue
+		}
+		stems := map[string][]*v1.Artifact{}
+		var distinct []string
+		for _, a := range byKey[k] {
+			stem := f.stem(a.GetPath())
+			if _, seen := stems[stem]; !seen {
+				distinct = append(distinct, stem)
+			}
+			stems[stem] = append(stems[stem], a)
+		}
+		if len(distinct) < 2 {
+			continue
+		}
+		prefix := sharedPrefix(distinct)
+		for _, stem := range distinct {
+			for _, a := range stems[stem] {
+				a.Group = stem[len(prefix):]
+			}
+		}
+	}
+}
+
+// The path without its shard suffix, or without its extension when it is not a shard
+func (f *compiledFormat) stem(p string) string {
+	if f.shards != nil {
+		if loc := f.shards.FindStringIndex(p); loc != nil {
+			return p[:loc[0]]
+		}
+	}
+	return strings.TrimSuffix(p, path.Ext(p))
+}
+
+// The longest prefix every stem shares, cut back to a word boundary so a name never starts mid token
+func sharedPrefix(stems []string) string {
+	prefix := stems[0]
+	for _, s := range stems[1:] {
+		n := 0
+		for n < len(prefix) && n < len(s) && prefix[n] == s[n] {
+			n++
+		}
+		prefix = prefix[:n]
+	}
+	cut := strings.LastIndexAny(prefix, "-_./")
+	if cut < 0 {
+		return ""
+	}
+	return prefix[:cut+1]
 }
 
 func (c *Classifier) classify(a *v1.Artifact, exclude map[string]bool) {

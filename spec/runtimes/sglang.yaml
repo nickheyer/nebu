@@ -1,6 +1,6 @@
 id: sglang
 name: SGLang
-description: sglang.launch_server over safetensors checkpoints, a Python module run from its virtual environment
+description: Serves safetensors checkpoints with prefix caching on NVIDIA GPUs
 formats: [safetensors]
 constraints:
   - expr: any(devices, .vendor == "nvidia")

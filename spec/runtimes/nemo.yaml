@@ -1,6 +1,6 @@
 id: nemo
 name: NeMo
-description: NeMo Export-Deploy serving NeMo checkpoints in framework over Ray Serve with an OpenAI compatible API, converting packed archives first
+description: Serves NeMo checkpoints in framework on NVIDIA GPUs
 formats: [nemo2, nemo]
 constraints:
   - expr: any(devices, .vendor == "nvidia")

@@ -1,6 +1,6 @@
 id: vllm
 name: vLLM
-description: vllm serve over safetensors checkpoints
+description: Serves safetensors checkpoints at high throughput on NVIDIA and AMD GPUs
 formats: [safetensors]
 constraints:
   - expr: any(devices, .vendor == "nvidia" || .vendor == "amd")

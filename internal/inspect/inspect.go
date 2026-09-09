@@ -203,24 +203,31 @@ func (i *Inspector) Describe(ctx context.Context, src sources.Source, model *v1.
 	return i.Builder.Build(raw)
 }
 
-// Plans one descriptor on one runtime with overrides, against the memory free
-// right now or all of it, with the same learned correction a run applies
-func (i *Inspector) Plan(rt *runtime.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool) (*v1.MemoryPlan, error) {
+// Everything a plan of one descriptor on one runtime reads
+func (i *Inspector) input(rt *runtime.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool) (estimate.Input, error) {
 	if rt.Policy == nil {
-		return nil, fmt.Errorf("runtime %s has no estimate policy", rt.Manifest.GetId())
+		return estimate.Input{}, fmt.Errorf("runtime %s has no estimate policy", rt.Manifest.GetId())
 	}
 	params, err := rt.Params(overrides)
 	if err != nil {
-		return nil, err
+		return estimate.Input{}, err
 	}
-	return rt.Policy.Plan(estimate.Input{
+	return estimate.Input{
 		Descriptor:    d,
 		Formulas:      i.Builder.Formulas(d.GetArchSpecId()),
 		Host:          profile,
 		Params:        params,
 		Free:          free,
 		OverheadDelta: i.Calibration.Delta(rt.Manifest.GetId(), d.GetArchitecture()),
-	})
+	}, nil
+}
+
+func (i *Inspector) Plan(rt *runtime.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool) (*v1.MemoryPlan, error) {
+	in, err := i.input(rt, d, profile, overrides, free)
+	if err != nil {
+		return nil, err
+	}
+	return rt.Policy.Plan(in)
 }
 
 // Builds the full fit table for a model
@@ -361,11 +368,21 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	plan, err := i.Plan(rt, d, profile, overrides, req.GetFree())
+	// An estimate plans through params a run would refuse and says so, so a form can show what to change
+	in, err := i.input(rt, d, profile, overrides, req.GetFree())
 	if err != nil {
 		return nil, err
 	}
-	return &v1.EstimateResponse{Plan: plan, Descriptor_: d}, nil
+	in.SkipRules = true
+	plan, err := rt.Policy.Plan(in)
+	if err != nil {
+		return nil, err
+	}
+	states, refusal, err := rt.Policy.States(in, plan)
+	if err != nil {
+		return nil, err
+	}
+	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Params: states, Refusal: refusal}, nil
 }
 
 func (i *Inspector) selectRuntimes(ids []string, profile *v1.HostProfile) []*runtime.Runtime {

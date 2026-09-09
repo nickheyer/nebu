@@ -62,6 +62,20 @@ message Param {
   string group = 14;
   // Hidden until the form is expanded
   bool advanced = 15;
+  // Expression over the plan scope giving a solved param its value while it is auto, evaluated in manifest order
+  string auto = 16;
+  // Choices only offered while an expression holds
+  repeated ChoiceRule choice_rules = 17;
+  // Expression over the plan scope giving the upper bound of a numeric param, for a bound that depends on the model or host
+  string max_expr = 18;
+}
+
+// Choices of a param that only apply while an expression over the other params holds
+message ChoiceRule {
+  repeated string choices = 1;
+  string when = 2;
+  // Why the choices are ruled out while when does not hold
+  string message = 3;
 }
 
 // Host requirement expressed over probed facts
@@ -218,6 +232,8 @@ message EstimatePolicy {
   double margin = 5;
   string context_param = 6;
   string devices_param = 7;
+  // Expression over the plan scope giving the most context the model was trained for, the ceiling an auto context solves under
+  string context_max = 8;
 }
 
 // Extracts a measured allocation from a log line

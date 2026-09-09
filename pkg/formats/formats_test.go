@@ -40,6 +40,8 @@ func TestClassify(t *testing.T) {
 		"Q8_0/model-Q8_0-00001-of-00002.gguf", "Q8_0/model-Q8_0-00002-of-00002.gguf",
 		"MTP/mtp-model-Q8_0.gguf", "MTP/mtp-model-shared-Q4_K_M.gguf", "draft-model-Q4_K_M.gguf",
 		"Qwen3.8-27B-GSQ-RCO-IQ2_S.gguf", "Qwen3.8-27B-GSQ-RCO-IQ2_S-mtp.gguf", "imatrix-qwen3.8-27b.gguf", "Meta-Llama-3-8B.Q5_K_S.gguf",
+		"Qwen3.8-27B-NEO-CODER-MAX-IQ4_XS.gguf", "Qwen3.8-27B-NEO-CODER-MAX-LOW-MTP-IQ4_XS.gguf", "Qwen3.8-27B-NEO-CODER-MAX-MTP-IQ4_XS.gguf",
+		"Big-70B-Q6_K-00001-of-00002.gguf", "Big-70B-Q6_K-00002-of-00002.gguf", "Small-7B-Q6_K.gguf",
 		"model.safetensors.index.json", "generation_config.json", "preprocessor_config.json", "special_tokens_map.json", "merges.txt", "modeling_deepseek.py", "chat_template.jinja", ".gitattributes",
 	)
 	c.Classify(m)
@@ -63,14 +65,22 @@ func TestClassify(t *testing.T) {
 		"Qwen3.8-27B-GSQ-RCO-IQ2_S-mtp.gguf":      {"gguf", "weights", "IQ2_S-mtp"},
 		"imatrix-qwen3.8-27b.gguf":                {"gguf", "other", ""},
 		"Meta-Llama-3-8B.Q5_K_S.gguf":             {"gguf", "weights", "Q5_K_S"},
-		"model.safetensors.index.json":            {"safetensors", "index", ""},
-		"generation_config.json":                  {"safetensors", "config", ""},
-		"preprocessor_config.json":                {"safetensors", "config", ""},
-		"special_tokens_map.json":                 {"safetensors", "tokenizer", ""},
-		"merges.txt":                              {"safetensors", "tokenizer", ""},
-		"modeling_deepseek.py":                    {"safetensors", "code", ""},
-		"chat_template.jinja":                     {"safetensors", "template", ""},
-		".gitattributes":                          {"", "other", ""},
+		// Three models at one quant, told apart by the words before it
+		"Qwen3.8-27B-NEO-CODER-MAX-IQ4_XS.gguf":         {"gguf", "weights", "IQ4_XS"},
+		"Qwen3.8-27B-NEO-CODER-MAX-LOW-MTP-IQ4_XS.gguf": {"gguf", "weights", "LOW-MTP-IQ4_XS"},
+		"Qwen3.8-27B-NEO-CODER-MAX-MTP-IQ4_XS.gguf":     {"gguf", "weights", "MTP-IQ4_XS"},
+		// Shards stay one file while another model at the same quant is its own
+		"Big-70B-Q6_K-00001-of-00002.gguf": {"gguf", "weights", "Big-70B-Q6_K"},
+		"Big-70B-Q6_K-00002-of-00002.gguf": {"gguf", "weights", "Big-70B-Q6_K"},
+		"Small-7B-Q6_K.gguf":               {"gguf", "weights", "Small-7B-Q6_K"},
+		"model.safetensors.index.json":     {"safetensors", "index", ""},
+		"generation_config.json":           {"safetensors", "config", ""},
+		"preprocessor_config.json":         {"safetensors", "config", ""},
+		"special_tokens_map.json":          {"safetensors", "tokenizer", ""},
+		"merges.txt":                       {"safetensors", "tokenizer", ""},
+		"modeling_deepseek.py":             {"safetensors", "code", ""},
+		"chat_template.jinja":              {"safetensors", "template", ""},
+		".gitattributes":                   {"", "other", ""},
 	}
 	for _, a := range m.GetArtifacts() {
 		w, ok := want[a.GetPath()]
@@ -89,6 +99,14 @@ func TestClassify(t *testing.T) {
 	}
 	if g := byName["gguf:Q4_K_M"]; g == nil || len(g.Weights) != 2 || g.Weights[0].GetShardIndex() != 1 || g.Weights[1].GetShardCount() != 2 {
 		t.Fatalf("shard group %+v", g)
+	}
+	if g := byName["gguf:Big-70B-Q6_K"]; g == nil || len(g.Weights) != 2 || byName["gguf:Small-7B-Q6_K"] == nil || len(byName["gguf:Small-7B-Q6_K"].Weights) != 1 {
+		t.Fatalf("two models at one quant must not merge: %+v %+v", g, byName["gguf:Small-7B-Q6_K"])
+	}
+	for _, name := range []string{"IQ4_XS", "LOW-MTP-IQ4_XS", "MTP-IQ4_XS"} {
+		if g := byName["gguf:"+name]; g == nil || len(g.Weights) != 1 {
+			t.Fatalf("variant %s should be one file: %+v", name, g)
+		}
 	}
 	// A quant with a suffix is a second model, not a second file of the first
 	if g := byName["gguf:IQ2_S"]; g == nil || len(g.Weights) != 1 || byName["gguf:IQ2_S-mtp"] == nil || len(byName["gguf:IQ2_S-mtp"].Weights) != 1 {

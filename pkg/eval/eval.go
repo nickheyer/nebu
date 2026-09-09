@@ -77,6 +77,11 @@ func (e *Expr) eval(env map[string]any) (any, error) {
 	return out, nil
 }
 
+// Evaluates to whatever the expression yields
+func (e *Expr) Value(env map[string]any) (any, error) {
+	return e.eval(env)
+}
+
 // Evaluates and coerces to float
 func (e *Expr) Float(env map[string]any) (float64, error) {
 	out, err := e.eval(env)

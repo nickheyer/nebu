@@ -49,6 +49,8 @@ message Artifact {
   string group = 6;
   uint32 shard_index = 7;
   uint32 shard_count = 8;
+  // Where a browser can fetch the file from the source, empty when the source has no such address
+  string url = 9;
 }
 
 // Repository at a revision with its artifacts
