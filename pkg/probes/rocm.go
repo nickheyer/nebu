@@ -65,5 +65,5 @@ func (p rocmSMI) Run(ctx context.Context) host.Result {
 		})
 		pools = append(pools, &v1.MemoryPool{Id: key, Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: key, TotalBytes: total, FreeBytes: free})
 	}
-	return found(devices, pools, map[string]string{"amd.count": itoa(len(devices))}, rows(len(devices)))
+	return found(devices, pools, nil, rows(len(devices)))
 }

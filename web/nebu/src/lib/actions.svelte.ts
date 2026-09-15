@@ -10,13 +10,15 @@ import type { StoredModel } from '$proto/store_pb';
 export const runUi = $state({
   open: false,
   model: null as StoredModel | null,
-  slotId: ''
+  slotId: '',
+  runtimeId: ''
 });
 
-// Opens the run dialog for a model, aimed at a slot when given
-export function runModel(model: StoredModel | null, slotId = '') {
+// Opens the run dialog for a model, aimed at a slot when given, on a runtime when one is named
+export function runModel(model: StoredModel | null, slotId = '', runtimeId = '') {
   runUi.model = model;
   runUi.slotId = slotId;
+  runUi.runtimeId = runtimeId;
   runUi.open = true;
 }
 

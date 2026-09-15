@@ -29,8 +29,10 @@
       <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border {on ? 'border-accent' : 'border-line-strong'}">
         {#if on}<span class="h-2 w-2 rounded-full bg-accent"></span>{/if}
       </span>
-      <span class="min-w-0 flex-1 truncate text-sm {c.mono ? 'font-mono' : ''} {on ? 'text-fg' : 'text-fg-muted'}">{c.label}</span>
-      {#if c.detail}<span class="shrink-0 truncate text-xs {c.warn ? 'text-warn' : 'text-fg-faint'}">{c.detail}</span>{/if}
+      <span class="flex min-w-0 flex-1 flex-col">
+        <span class="truncate text-sm {c.mono ? 'font-mono' : ''} {on ? 'text-fg' : 'text-fg-muted'}">{c.label}</span>
+        {#if c.detail}<span class="truncate text-xs {c.warn ? 'text-warn' : 'text-fg-faint'}">{c.detail}</span>{/if}
+      </span>
     </button>
   {/each}
 </div>

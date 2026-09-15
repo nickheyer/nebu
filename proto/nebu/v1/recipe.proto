@@ -28,6 +28,21 @@ message Variant {
   string description = 2;
   // Tools the variant needs on the host beyond the recipe's own
   repeated string tools = 3;
+  // What the host must have for the variant, in words; empty when any host takes it
+  string requires = 4;
+  // What the variant sets on this host, empty when the host cannot take it
+  map<string, string> vars = 5;
+}
+
+// One variable a build takes, the kind people set
+message Var {
+  string name = 1;
+  string default = 2;
+  string description = 3;
+  // Values the variable takes, any when empty
+  repeated string choices = 4;
+  // The variable in words
+  string label = 5;
 }
 
 // A recipe as the API describes it
@@ -43,7 +58,7 @@ message Recipe {
   // Container CLIs tried in order for the oci sandbox
   repeated string sandbox_clis = 8;
   // Variables a build takes, with their defaults
-  map<string, string> vars = 9;
+  repeated Var vars = 9;
   uint32 timeout_ms = 10;
 }
 
@@ -79,6 +94,8 @@ message RecipeStatus {
   string sandbox_cli = 5;
   repeated string unmet = 6;
   map<string, string> vars = 7;
+  // Tools any variant needs that this host lacks
+  repeated string absent_tools = 8;
 }
 
 // Lists recipes, optionally for one runtime

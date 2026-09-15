@@ -86,7 +86,7 @@ type Daemon struct {
 }
 
 // Builds every manager from config
-func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
+func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err error) {
 	for _, dir := range []string{cfg.GetDataDir(), cfg.GetCacheDir(), cfg.GetStoreDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, err
@@ -288,6 +288,7 @@ func New(cfg *v1.Config, log *slog.Logger) (d *Daemon, err error) {
 		Snapshot:      d.snapshot,
 		Web:           ui,
 		Token:         cfg.GetAuth().GetToken(),
+		Recent:        recent,
 		Log:           log,
 	})
 	return d, nil

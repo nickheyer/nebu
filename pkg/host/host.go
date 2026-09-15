@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"strconv"
 	"sync"
 	"time"
 
@@ -88,9 +87,8 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 		Os:       runtime.GOOS,
 		Arch:     runtime.GOARCH,
 		Facts: map[string]string{
-			"os":        runtime.GOOS,
-			"arch":      runtime.GOARCH,
-			"cpu.count": strconv.Itoa(runtime.NumCPU()),
+			"os":   runtime.GOOS,
+			"arch": runtime.GOARCH,
 		},
 		ProbedAt: timestamppb.Now(),
 	}

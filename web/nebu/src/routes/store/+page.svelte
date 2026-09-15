@@ -16,7 +16,7 @@
   import Button from '$lib/components/ui/Button.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
   import Menu from '$lib/components/ui/Menu.svelte';
-  import Meter from '$lib/components/ui/Meter.svelte';
+  import SizeBar from '$lib/components/ui/SizeBar.svelte';
   import State from '$lib/components/ui/State.svelte';
   import Select from '$lib/components/ui/Select.svelte';
   import SearchInput from '$lib/components/ui/SearchInput.svelte';
@@ -75,14 +75,14 @@
   const referenced = $derived([...live.models.values()].reduce((a, m) => a + m.bytes, 0n));
   const onDisk = $derived(status?.blobBytes ?? referenced);
   const shared = $derived(referenced > onDisk ? referenced - onDisk : 0n);
-  // The filesystem the store sits on, so usage reads against a real ceiling when no cap is set
+  // The filesystem the store sits on: the bar is the whole disk, what everything else on it holds, then the store
   const mount = $derived(storeMount());
-  const ceiling = $derived(status?.maxBytes || mount?.totalBytes || 0n);
+  const diskUsed = $derived(mount ? (mount.totalBytes > mount.freeBytes ? mount.totalBytes - mount.freeBytes : 0n) : 0n);
+  const otherUse = $derived(diskUsed > onDisk ? diskUsed - onDisk : 0n);
   const facts = $derived.by(() => {
     const parts: string[] = [];
-    if (status?.maxBytes) parts.push(`${storage(status.maxBytes, 0)} cap`);
-    else if (mount) parts.push(`${storage(mount.freeBytes)} free on ${mount.path}`);
-    if (shared) parts.push(`${storage(shared)} shared`);
+    if (status?.maxBytes) parts.push(`${storage(status.maxBytes, 0)} cap on the store`);
+    if (shared) parts.push(`${storage(shared)} shared between variants`);
     if (status?.partials) parts.push(`${plural(status.partials, 'unfinished download')} using ${storage(status.partialBytes)}`);
     return parts;
   });
@@ -199,13 +199,13 @@
     {/snippet}
     {#if status}
       <div class="flex flex-col gap-2">
-        <div class="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-          <span class="text-2xl font-semibold tabular-nums text-fg">{storage(onDisk)}</span>
-          <span class="text-sm text-fg-muted">on disk{ceiling ? ` of ${storage(ceiling, 0)}` : ''}</span>
-          <span class="ml-auto text-sm tabular-nums text-fg-muted">{plural(live.models.size, 'model')} · {plural(status.blobs, 'blob')}</span>
-        </div>
-        {#if ceiling}<Meter value={onDisk} max={ceiling} auto />{/if}
+        {#if mount}
+          <SizeBar total={mount.totalBytes} units="decimal" figure="left" free="free" overlays={[{ start: 'left', items: [{ label: 'other', size: otherUse, tone: 'neutral' }, { label: 'models', size: onDisk, tone: 'accent' }] }]} />
+        {:else}
+          <span class="text-sm tabular-nums text-fg">{storage(onDisk)} in the store</span>
+        {/if}
         <div class="flex flex-wrap gap-x-4 text-xs text-fg-faint">
+          <span>{plural(live.models.size, 'model')} · {plural(status.blobs, 'blob')}</span>
           {#each facts as f (f)}<span>{f}</span>{/each}
         </div>
       </div>

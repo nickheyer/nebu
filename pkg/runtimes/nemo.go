@@ -33,14 +33,15 @@ func (NeMo) Unmet(h *v1.HostProfile) []string {
 
 func (NeMo) Methods() []Method {
 	return []Method{
-		{ID: "source", Description: "Install Export-Deploy and the checkpoint converter from PyPI into virtual environments", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "nemo"},
+		{ID: "source", Description: "Installs Export-Deploy and the checkpoint converter from PyPI into two virtual environments", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "nemo"},
 	}
 }
 
 func (NeMo) Params() []*v1.Param {
 	return []*v1.Param{
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: "Context", Flag: "--inference_max_seq_length",
-			Description: "Tokens the model can hold in one sequence. Auto takes the largest that fits in memory, up to the length the model was trained for."},
+			Rule:        contextRule,
+			Description: "Tokens the model can hold in one sequence."},
 		{Name: "max_batch_size", Label: "Batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "8", Unit: "sequences", Min: 1, Step: 1, Group: "Context", Flag: "--max_batch_size",
 			Description: "Sequences batched together. Each holds a full-length cache."},
 		{Name: "num_gpus", Label: "Devices", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--num_gpus",

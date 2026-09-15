@@ -2,7 +2,6 @@ package probes
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"time"
 
@@ -29,19 +28,14 @@ func (p windowsCPU) Run(ctx context.Context) host.Result {
 		return skipped("no processor listed")
 	}
 	var devices []*v1.Device
-	threads := 0
 	for i, kv := range blocks {
 		devices = append(devices, &v1.Device{
 			Id:     "cpu-" + itoa(i),
 			Kind:   v1.DeviceKind_DEVICE_KIND_CPU,
 			Vendor: strings.ToLower(kv["Manufacturer"]),
 			Name:   kv["Name"],
-			Facts:  map[string]string{"cores": kv["NumberOfCores"], "siblings": kv["NumberOfLogicalProcessors"]},
+			Facts:  map[string]string{"cores": kv["NumberOfCores"], "threads": kv["NumberOfLogicalProcessors"]},
 		})
-		if n, err := strconv.Atoi(kv["NumberOfLogicalProcessors"]); err == nil {
-			threads += n
-		}
 	}
-	facts := map[string]string{"cpu.model": blocks[0]["Name"], "cpu.threads": itoa(threads)}
-	return found(devices, nil, facts, rows(len(blocks)))
+	return found(devices, nil, nil, rows(len(blocks)))
 }

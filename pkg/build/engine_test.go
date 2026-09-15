@@ -12,12 +12,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/recipes"
 	"github.com/nickheyer/nebu/pkg/sources"
-	"github.com/nickheyer/nebu/pkg/spec"
 	"github.com/nickheyer/nebu/pkg/transfer"
 )
 
@@ -81,7 +82,7 @@ func server(t *testing.T) (*httptest.Server, *int) {
 			}
 			w.Write(tarball)
 		case r.URL.Path == "/extra.patch":
-			w.Write([]byte("--- a/notes.txt\n+++ b/notes.txt\n@@ -1,4 +1,5 @@\n hello\n patched\n from file\n+from url\n world\n"))
+			w.Write([]byte("--- a/notes.txt\n+++ b/notes.txt\n@@ -1,3 +1,4 @@\n hello\n patched\n+from url\n world\n"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -90,59 +91,46 @@ func server(t *testing.T) (*httptest.Server, *int) {
 	return srv, &downloads
 }
 
-func engineRecipe(t *testing.T, base string) *Recipe {
-	t.Helper()
-	y := `id: fake
-runtime_id: fake
-source:
-  releases: o/r
-  archive: ` + base + `/fake-{{.ref}}.tar.gz
-tools: [sh]
-vars:
-  stamp: 'v{{.ref}}-{{.variant}}'
-variants:
-  - id: cpu
-    when: 'true'
-patches:
-  - id: inline
-    content: |
-      --- a/notes.txt
-      +++ b/notes.txt
-      @@ -1,2 +1,3 @@
-       hello
-      +patched
-       world
-  - id: fromfile
-    file: more.patch
-  - id: fromurl
-    url: ` + base + `/extra.patch
-  - id: skipped
-    when: variant == "gpu"
-    content: "--- a/x\n+++ b/x\n@@ -0,0 +1 @@\n+never\n"
-steps:
-  - name: render
-    command: [sh, -c, 'sed "s/\$STAMP/$STAMP/" bin.in > bin && chmod +x bin']
-    env:
-      STAMP: '{{.vars.stamp}}'
-  - name: conditional
-    when: variant == "gpu"
-    command: ['false']
-  - name: dropempty
-    command: [sh, -c, 'test "$#" -eq 0', '{{index .vars "unset"}}']
-  - name: outfile
-    command: [sh, -c, 'cp notes.txt {{.out}}/copied.txt && echo commit={{.commit}} jobs={{.jobs}} root={{.root}} dir={{.dir}}']
-outputs: [bin, 'nothing*.opt']
-binary: bin
-`
-	return recipe(t, y)
+// A recipe whose steps read every build fact: the ref and variant stamp the binary, a step runs on
+// the gpu variant alone, an unset var drops out of a command, and the last step prints the paths
+func engineRecipe(base string) fakeRecipe {
+	return fakeRecipe{
+		id: "fake", runtimeID: "fake",
+		source: recipes.Source{Releases: "o/r", Archive: func(ref string) string { return base + "/fake-" + ref + ".tar.gz" }},
+		tools:  []string{"sh"},
+		vars:   []recipes.Var{{Name: "unset"}},
+		variants: []recipes.Variant{
+			{ID: "cpu", Applies: always},
+		},
+		patches: []recipes.Patch{
+			{ID: "inline", Content: []byte("--- a/notes.txt\n+++ b/notes.txt\n@@ -1,2 +1,3 @@\n hello\n+patched\n world\n")},
+			{ID: "fromurl", URL: base + "/extra.patch"},
+			{ID: "skipped", Applies: func(b *recipes.Build) bool { return b.Variant == "gpu" }, Content: []byte("--- a/x\n+++ b/x\n@@ -0,0 +1 @@\n+never\n")},
+		},
+		steps: func(b *recipes.Build) []recipes.Step {
+			steps := []recipes.Step{
+				{Name: "render", Command: []string{"sh", "-c", `sed "s/\$STAMP/$STAMP/" bin.in > bin && chmod +x bin`}, Env: map[string]string{"STAMP": "v" + b.Ref + "-" + b.Variant}},
+			}
+			if b.Variant == "gpu" {
+				steps = append(steps, recipes.Step{Name: "conditional", Command: []string{"false"}})
+			}
+			steps = append(steps,
+				recipes.Step{Name: "dropempty", Command: args("sh", "-c", `test "$#" -eq 0`, b.Vars["unset"])},
+				recipes.Step{Name: "outfile", Command: []string{"sh", "-c", "cp notes.txt " + b.Out + "/copied.txt && echo commit=" + b.Commit + " jobs=" + strconv.Itoa(b.Jobs) + " root=" + b.Root + " dir=" + b.Src}},
+			)
+			return steps
+		},
+		outputs: []string{"bin", "nothing*.opt"},
+		binary:  "bin",
+	}
 }
 
 func TestEngineBuildsFromArchiveWithPatches(t *testing.T) {
 	srv, downloads := server(t)
-	rc := engineRecipe(t, srv.URL)
+	rc := engineRecipe(srv.URL)
 	root := t.TempDir()
-	e := &Engine{Root: root, Patches: map[string][]byte{"more.patch": []byte("--- a/notes.txt\n+++ b/notes.txt\n@@ -1,3 +1,4 @@\n hello\n patched\n+from file\n world\n")}, Jobs: 3, Sources: githubRegistry(t, srv.URL), Fetcher: transfer.New(0, 0, 0, slog.Default())}
-	sel, err := rc.Select(&v1.HostProfile{Os: "linux", Arch: "amd64", Facts: map[string]string{}}, Options{})
+	e := &Engine{Root: root, Jobs: 3, Sources: githubRegistry(t, srv.URL), Fetcher: transfer.New(0, 0, 0, slog.Default())}
+	sel, err := Select(rc, &v1.HostProfile{Os: "linux", Arch: "amd64", Facts: map[string]string{}}, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +141,7 @@ func TestEngineBuildsFromArchiveWithPatches(t *testing.T) {
 	if err := e.Resolve(context.Background(), sel, b); err != nil {
 		t.Fatal(err)
 	}
-	if b.GetRef() != "2.1" || b.GetVars()["stamp"] != "v2.1-cpu" || len(b.GetPatches()) != 3 || b.GetId() == "" || b.GetDir() != filepath.Join(root, "fake", b.GetId()) {
+	if b.GetRef() != "2.1" || b.GetVars()["unset"] != "" || strings.Join(b.GetPatches(), ",") != "inline,fromurl" || b.GetId() == "" || b.GetDir() != filepath.Join(root, "fake", b.GetId()) {
 		t.Fatalf("resolved %v", b)
 	}
 	var out bytes.Buffer
@@ -170,17 +158,17 @@ func TestEngineBuildsFromArchiveWithPatches(t *testing.T) {
 		t.Fatalf("binary output %q", got)
 	}
 	notes, _ := os.ReadFile(filepath.Join(b.GetDir(), "out", "copied.txt"))
-	if string(notes) != "hello\npatched\nfrom file\nfrom url\nworld\n" {
+	if string(notes) != "hello\npatched\nfrom url\nworld\n" {
 		t.Fatalf("patches applied in order: %q", notes)
 	}
 	text := out.String()
-	for _, want := range []string{"skip conditional", "commit=2.1 jobs=3", "root=" + b.GetDir(), "dir=" + filepath.Join(b.GetDir(), "src"), "patch inline applied", "patch fromurl applied"} {
+	for _, want := range []string{"commit=2.1 jobs=3", "root=" + b.GetDir(), "dir=" + filepath.Join(b.GetDir(), "src"), "patch inline applied", "patch fromurl applied"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("transcript missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "patch skipped") {
-		t.Error("skipped patch should not apply")
+	if strings.Contains(text, "patch skipped") || strings.Contains(text, "conditional") {
+		t.Error("the gpu only patch and step must not run on the cpu variant")
 	}
 	if steps[len(steps)-1] != "done" || len(steps) < 5 {
 		t.Errorf("progress %v", steps)
@@ -198,20 +186,22 @@ func TestEngineBuildsFromArchiveWithPatches(t *testing.T) {
 
 func TestEngineFailsOnStepAndMissingOutput(t *testing.T) {
 	srv, _ := server(t)
-	y := `id: bad
-runtime_id: fake
-source:
-  ref: '2.1'
-  archive: ` + srv.URL + `/fake-{{.ref}}.tar.gz
-steps:
-  - name: boom
-    command: [sh, -c, 'echo failing >&2; exit 3']
-outputs: [bin]
-binary: bin
-`
-	rc := recipe(t, y)
+	rc := fakeRecipe{
+		id: "bad", runtimeID: "fake",
+		source: recipes.Source{Archive: func(ref string) string { return srv.URL + "/fake-" + ref + ".tar.gz" }},
+		steps: func(*recipes.Build) []recipes.Step {
+			return []recipes.Step{{Name: "boom", Command: []string{"sh", "-c", "echo failing >&2; exit 3"}}}
+		},
+		outputs: []string{"bin"},
+		binary:  "bin",
+	}
 	e := &Engine{Root: t.TempDir(), Fetcher: transfer.New(0, 0, 0, slog.Default())}
-	sel, _ := rc.Select(&v1.HostProfile{Facts: map[string]string{}}, Options{})
+	// An archive needs a ref, and takes the one given
+	sel, _ := Select(rc, &v1.HostProfile{Facts: map[string]string{}}, Options{})
+	if err := e.Resolve(context.Background(), sel, sel.Build()); err == nil {
+		t.Fatal("an archive without a ref should fail to resolve")
+	}
+	sel, _ = Select(rc, &v1.HostProfile{Facts: map[string]string{}}, Options{Ref: "2.1"})
 	b := sel.Build()
 	if err := e.Resolve(context.Background(), sel, b); err != nil {
 		t.Fatal(err)
@@ -221,40 +211,63 @@ binary: bin
 	if err == nil || !strings.Contains(err.Error(), "boom") || !strings.Contains(out.String(), "failing") {
 		t.Fatalf("step failure %v %s", err, out.String())
 	}
-	y2 := strings.Replace(y, "echo failing >&2; exit 3", "true", 1)
-	rc = recipe(t, strings.Replace(y2, "id: bad", "id: noout", 1))
-	sel, _ = rc.Select(&v1.HostProfile{Facts: map[string]string{}}, Options{})
+	rc.id = "noout"
+	rc.steps = func(*recipes.Build) []recipes.Step { return []recipes.Step{{Name: "ok", Command: []string{"true"}}} }
+	sel, _ = Select(rc, &v1.HostProfile{Facts: map[string]string{}}, Options{Ref: "2.1"})
 	b = sel.Build()
 	e.Resolve(context.Background(), sel, b)
 	if err := e.Run(context.Background(), sel, b, &out, nil); err == nil || !strings.Contains(err.Error(), "not produced") {
 		t.Fatalf("missing output should fail: %v", err)
 	}
+	rc.id = "empty"
+	rc.steps = func(*recipes.Build) []recipes.Step { return []recipes.Step{{Name: "empty"}} }
+	sel, _ = Select(rc, &v1.HostProfile{Facts: map[string]string{}}, Options{Ref: "2.1"})
+	b = sel.Build()
+	e.Resolve(context.Background(), sel, b)
+	if err := e.Run(context.Background(), sel, b, &out, nil); err == nil || !strings.Contains(err.Error(), "empty command") {
+		t.Fatalf("an empty command should fail: %v", err)
+	}
 }
 
-func TestEngineNoSourceAndPatchFileMissing(t *testing.T) {
-	rc := recipe(t, `id: nosrc
-runtime_id: fake
-steps:
-  - command: [sh, -c, 'mkdir -p {{.out}}/v && printf "#!/bin/sh\necho ok\n" > {{.out}}/v/tool && chmod +x {{.out}}/v/tool']
-binary: v/tool
-`)
-	e := &Engine{Root: t.TempDir()}
-	sel, _ := rc.Select(&v1.HostProfile{Facts: map[string]string{}}, Options{})
+func TestEngineNoSourceAndPatchURLMissing(t *testing.T) {
+	rc := fakeRecipe{
+		id: "nosrc", runtimeID: "fake",
+		steps: func(b *recipes.Build) []recipes.Step {
+			return []recipes.Step{{Command: []string{"sh", "-c", "mkdir -p " + b.Out + "/v && printf '#!/bin/sh\\necho ok\\n' > " + b.Out + "/v/tool && chmod +x " + b.Out + "/v/tool"}}}
+		},
+		binary: "v/tool",
+	}
+	e := &Engine{Root: t.TempDir(), Fetcher: transfer.New(0, 0, 0, slog.Default())}
+	sel, _ := Select(rc, &v1.HostProfile{Facts: map[string]string{}}, Options{})
 	b := sel.Build()
 	if err := e.Resolve(context.Background(), sel, b); err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
-	if err := e.Run(context.Background(), sel, b, &out, nil); err != nil {
-		t.Fatalf("%v\n%s", err, out.String())
+	if err := e.Run(context.Background(), sel, b, &bytes.Buffer{}, nil); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := os.Stat(b.GetBinary()); err != nil {
 		t.Fatal(err)
 	}
-	missing := recipe(t, "id: mp\nruntime_id: fake\npatches: [{id: p, file: nope.patch}]\nsteps: [{command: ['true']}]\nbinary: b\n")
-	sel, _ = missing.Select(&v1.HostProfile{Facts: map[string]string{}}, Options{})
-	if err := e.Resolve(context.Background(), sel, sel.Build()); err == nil || !strings.Contains(err.Error(), "nope.patch") {
-		t.Fatalf("missing patch file should fail at resolve: %v", err)
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	missing := fakeRecipe{
+		id: "mp", runtimeID: "fake",
+		patches: []recipes.Patch{{ID: "p", URL: srv.URL + "/nope.patch"}},
+		steps:   func(*recipes.Build) []recipes.Step { return []recipes.Step{{Command: []string{"true"}}} },
+		binary:  "b",
+	}
+	sel, _ = Select(missing, &v1.HostProfile{Facts: map[string]string{}}, Options{})
+	b = sel.Build()
+	if err := e.Resolve(context.Background(), sel, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Run(context.Background(), sel, b, &bytes.Buffer{}, nil); err == nil || !strings.Contains(err.Error(), "patch p") {
+		t.Fatalf("a patch that cannot be fetched should fail by name: %v", err)
+	}
+	// A build must be resolved before it runs
+	if err := e.Run(context.Background(), sel, sel.Build(), &bytes.Buffer{}, nil); err == nil {
+		t.Fatal("an unresolved build should fail")
 	}
 }
 
@@ -276,9 +289,17 @@ func TestEngineGitSource(t *testing.T) {
 	run("add", ".")
 	run("commit", "-q", "-m", "one")
 	run("tag", "v1")
-	rc := recipe(t, "id: g\nruntime_id: fake\nsource:\n  repo: "+repo+"\n  ref: v1\nsteps: [{command: [cp, tool.sh, tool]}]\noutputs: [tool]\nbinary: tool\n")
+	rc := fakeRecipe{
+		id: "g", runtimeID: "fake",
+		source: recipes.Source{Repo: repo},
+		steps: func(*recipes.Build) []recipes.Step {
+			return []recipes.Step{{Command: []string{"cp", "tool.sh", "tool"}}}
+		},
+		outputs: []string{"tool"},
+		binary:  "tool",
+	}
 	e := &Engine{Root: t.TempDir()}
-	sel, _ := rc.Select(&v1.HostProfile{Facts: map[string]string{}}, Options{})
+	sel, _ := Select(rc, &v1.HostProfile{Facts: map[string]string{}}, Options{Ref: "v1"})
 	b := sel.Build()
 	if err := e.Resolve(context.Background(), sel, b); err != nil {
 		t.Fatal(err)
@@ -307,8 +328,5 @@ func TestCacheNameAndLatestTag(t *testing.T) {
 	}
 	if _, err := latestTag(context.Background(), nil, "github", "o/r"); err == nil {
 		t.Fatal("no registry should fail")
-	}
-	if _, err := spec.Load(); err != nil {
-		t.Fatal(err)
 	}
 }

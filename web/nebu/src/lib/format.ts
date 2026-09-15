@@ -164,7 +164,13 @@ export function ago(ts: Timestamp | undefined, now: number = Date.now()): string
   if (s < 60) return Math.floor(s) + 's ago';
   if (s < 3600) return Math.floor(s / 60) + 'm ago';
   if (s < 86400) return Math.floor(s / 3600) + 'h ago';
-  return Math.floor(s / 86400) + 'd ago';
+  const days = Math.floor(s / 86400);
+  if (days <= 30) return days + 'd ago';
+  if (days < 365) {
+    const months = Math.floor(days / 30.44);
+    return months < 2 ? Math.floor(days / 7) + 'w ago' : months + 'mo ago';
+  }
+  return Math.floor(days / 365.25) + 'y ago';
 }
 
 // Formats the span between two timestamps, or since the first until now
@@ -310,4 +316,23 @@ export function prettyJson(text: string): string {
   } catch {
     return text;
   }
+}
+
+// A line of words with identifiers among them: the identifiers are set in mono and never break across lines
+export interface Segment {
+  text: string;
+  mono?: boolean;
+}
+
+export const words = (text: string): Segment => ({ text });
+export const ident = (text: string): Segment => ({ text, mono: true });
+
+// Identifiers as a list, commas between them
+export function idents(ids: string[]): Segment[] {
+  return ids.flatMap((id, i) => (i ? [words(', '), ident(id)] : [ident(id)]));
+}
+
+// A line as plain text
+export function lineText(segments: Segment[]): string {
+  return segments.map((s) => s.text).join('');
 }

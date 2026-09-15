@@ -475,13 +475,21 @@ func runInspect(ctx context.Context, e *env, args []string) error {
 		rows = nil
 		for _, r := range resp.Msg.GetRows() {
 			plan := r.GetPlan()
-			rows = append(rows, []string{r.GetGroup(), r.GetRuntimeId(), strconv.FormatUint(uint64(r.GetContext()), 10), loud(plan.GetVerdict()), loud(r.GetFree().GetVerdict()), poolUsage(plan, v1.PoolKind_POOL_KIND_DEVICE), poolUsage(plan, v1.PoolKind_POOL_KIND_HOST), estimate.Human(plan.GetCacheBytes()), placements(plan), plan.GetDetail()})
+			rows = append(rows, []string{r.GetGroup(), r.GetRuntimeId(), fitContext(r), loud(plan.GetVerdict()), loud(r.GetFree().GetVerdict()), poolUsage(plan, v1.PoolKind_POOL_KIND_DEVICE), poolUsage(plan, v1.PoolKind_POOL_KIND_HOST), estimate.Human(plan.GetCacheBytes()), placements(plan), plan.GetDetail()})
 		}
 		table(w, []string{"GROUP", "RUNTIME", "CTX", "TOTAL", "FREE NOW", "DEVICE", "HOST", "CACHE", "PLACEMENT", "DETAIL"}, rows)
 		for _, warn := range resp.Msg.GetWarnings() {
 			fmt.Fprintln(w, "warning:", warn)
 		}
 	})
+}
+
+// The context a fit row was planned at, the solved one saying so with the length it settled on
+func fitContext(r *v1.FitRow) string {
+	if r.GetContext() != 0 {
+		return strconv.FormatUint(uint64(r.GetContext()), 10)
+	}
+	return "auto " + r.GetPlan().GetParams()["n_ctx"]
 }
 
 func num(f float64) string {

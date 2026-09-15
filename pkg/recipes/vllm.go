@@ -16,8 +16,8 @@ func (VLLM) Description() string { return "vllm installed from PyPI into a virtu
 func (VLLM) Source() Source      { return Source{} }
 func (VLLM) Tools() []string     { return []string{"python3"} }
 func (VLLM) Facts() []string     { return []string{"device.vendor", "device.compute_capability"} }
-func (VLLM) Vars() map[string]string {
-	return map[string]string{"version": ""}
+func (VLLM) Vars() []Var {
+	return []Var{{Name: "version", Label: "Version", Description: "The vllm version on PyPI, the newest when empty"}}
 }
 
 func (VLLM) Variants() []Variant {
@@ -25,12 +25,14 @@ func (VLLM) Variants() []Variant {
 		{
 			ID:          "cuda",
 			Description: "The default wheel, built for CUDA",
+			Requires:    "an NVIDIA device",
 			Applies:     func(h *v1.HostProfile) bool { return host.HasVendor(h, "nvidia") },
 			Vars:        func(*v1.HostProfile) map[string]string { return nil },
 		},
 		{
 			ID:          "rocm",
 			Description: "ROCm wheels from the AMD index",
+			Requires:    "an AMD device",
 			Applies:     func(h *v1.HostProfile) bool { return host.HasVendor(h, "amd") },
 			Vars: func(*v1.HostProfile) map[string]string {
 				return map[string]string{"index": "--extra-index-url=https://download.pytorch.org/whl/rocm6.3"}

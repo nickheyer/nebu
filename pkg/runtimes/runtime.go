@@ -21,6 +21,9 @@ const Auto = estimate.Auto
 // Grace before a stop escalates when the runtime sets none
 const DefaultStopGrace = 15 * time.Second
 
+// What an auto context length resolves to, the same rule on every runtime the planner solves it for
+const contextRule = "the largest context that fits in memory, up to the length the model was trained for"
+
 var (
 	// Returned when a runtime id is not known
 	ErrUnknownRuntime = errors.New("unknown runtime")
@@ -166,6 +169,9 @@ func New(list []Runtime) (*Registry, error) {
 			if _, err := convert(p, p.GetDefault()); err != nil {
 				return nil, fmt.Errorf("runtime %s: %w", rt.ID(), err)
 			}
+			if err := checkRule(p); err != nil {
+				return nil, fmt.Errorf("runtime %s: %w", rt.ID(), err)
+			}
 			if err := checkForm(p); err != nil {
 				return nil, fmt.Errorf("runtime %s: %w", rt.ID(), err)
 			}
@@ -206,6 +212,49 @@ func New(list []Runtime) (*Registry, error) {
 	}
 	sort.Slice(r.list, func(i, j int) bool { return r.list[i].ID() < r.list[j].ID() })
 	return r, nil
+}
+
+// Checks that a solved param defaults to auto and says in words what auto resolves to, and that no other param claims a rule
+func checkRule(p *v1.Param) error {
+	if !p.GetSolved() {
+		if p.GetRule() != "" {
+			return fmt.Errorf("param %s: a rule belongs to a solved param", p.GetName())
+		}
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(p.GetDefault()), Auto) {
+		return fmt.Errorf("param %s: a solved param defaults to %s", p.GetName(), Auto)
+	}
+	if strings.TrimSpace(p.GetRule()) == "" {
+		return fmt.Errorf("param %s: a solved param needs a rule saying what auto resolves to", p.GetName())
+	}
+	return nil
+}
+
+// The logical processors of every CPU device, as the probes counted them
+func cpuThreads(h *v1.HostProfile) float64 {
+	var n float64
+	for _, d := range h.GetDevices() {
+		if d.GetKind() != v1.DeviceKind_DEVICE_KIND_CPU {
+			continue
+		}
+		if v, err := strconv.ParseFloat(d.GetFacts()["threads"], 64); err == nil {
+			n += v
+		}
+	}
+	return n
+}
+
+// The driver version the first device of a vendor reports, empty without one
+func driverVersion(h *v1.HostProfile, vendor string) string {
+	for _, d := range h.GetDevices() {
+		if d.GetVendor() == vendor {
+			if v := d.GetFacts()["driver_version"]; v != "" {
+				return v
+			}
+		}
+	}
+	return ""
 }
 
 // Checks the form fields of a param: bounds only on numbers, in order, with a positive step

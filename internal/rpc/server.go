@@ -25,6 +25,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/host"
+	"github.com/nickheyer/nebu/pkg/launch"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
 	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/sources"
@@ -56,14 +57,16 @@ type Deps struct {
 	Snapshot      services.Snapshotter
 	Web           http.Handler
 	Token         string
-	Log           *slog.Logger
+	// The daemon's own last log lines, streamed to the Host page
+	Recent *launch.Log
+	Log    *slog.Logger
 }
 
 // Builds the h2c handler serving every service
 func NewHandler(d Deps) http.Handler {
 	opts := connect.WithInterceptors(logging(d.Log), &auth{token: d.Token})
 	mux := http.NewServeMux()
-	mux.Handle(nebuv1connect.NewHostServiceHandler(services.NewHostService(d.Host, d.Doctor), opts))
+	mux.Handle(nebuv1connect.NewHostServiceHandler(services.NewHostService(d.Host, d.Doctor, d.Recent), opts))
 	mux.Handle(nebuv1connect.NewSettingsServiceHandler(services.NewSettingsService(d.Settings), opts))
 	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector, d.Formats), opts))
 	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Formats), opts))
@@ -91,6 +94,7 @@ func NewHandler(d Deps) http.Handler {
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))
+	mux.Handle(filesPath, &files{inspector: d.Inspector, auth: &auth{token: d.Token}, log: d.Log})
 	if d.Gateway != nil && d.GatewayShared {
 		d.Gateway.Mount(mux)
 	} else {

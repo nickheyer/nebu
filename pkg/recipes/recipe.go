@@ -27,11 +27,27 @@ type Source struct {
 func (s Source) String() string {
 	switch {
 	case s.Releases != "":
-		return "releases of " + s.Releases
+		return "github.com/" + s.Releases
 	case s.Repo != "":
 		return s.Repo
 	}
 	return "none"
+}
+
+// Whether a build fetches a source tree at all, so a ref means something
+func (s Source) Fetched() bool {
+	return s.Releases != "" || s.Repo != "" || s.Archive != nil
+}
+
+// One variable a build takes, the kind people set
+type Var struct {
+	Name string
+	// The variable in words
+	Label       string
+	Default     string
+	Description string
+	// Values the variable takes, any when empty
+	Choices []string
 }
 
 // One way a recipe builds, picked by what the host has
@@ -40,6 +56,8 @@ type Variant struct {
 	Description string
 	// Tools the variant needs on the host beyond the recipe's own
 	Tools []string
+	// What the host must have for the variant, in words; empty when any host takes it
+	Requires string
 	// Whether the host can take the variant
 	Applies func(h *v1.HostProfile) bool
 	// Variables the variant sets for this host
@@ -103,8 +121,8 @@ type Recipe interface {
 	Tools() []string
 	// Host and device facts folded into a build's identity, device.vendor and device.compute_capability say
 	Facts() []string
-	// Variables a build takes with their defaults, the ones people may set
-	Vars() map[string]string
+	// Variables a build takes with their defaults, the ones people may set, in the order they are shown
+	Vars() []Var
 	Variants() []Variant
 	Sandbox() Sandbox
 	// The steps a build runs in order, given what it resolved to
@@ -125,6 +143,11 @@ func All() []Recipe {
 // A variable's value, dropped from a command when empty so an unset flag never lands as ""
 func arg(vars map[string]string, name string) string {
 	return strings.TrimSpace(vars[name])
+}
+
+// A variable's value as the arguments it holds, split on whitespace, none when empty
+func args(vars map[string]string, name string) []string {
+	return strings.Fields(vars[name])
 }
 
 // A command with its empty arguments dropped

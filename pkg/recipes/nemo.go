@@ -19,8 +19,9 @@ func (NeMo) Description() string {
 func (NeMo) Source() Source {
 	return Source{
 		Releases: "NVIDIA-NeMo/Export-Deploy",
+		// GitHub serves a tag, a branch, or a commit alike at this path
 		Archive: func(ref string) string {
-			return "https://github.com/NVIDIA-NeMo/Export-Deploy/archive/refs/tags/" + ref + ".tar.gz"
+			return "https://github.com/NVIDIA-NeMo/Export-Deploy/archive/" + ref + ".tar.gz"
 		},
 	}
 }
@@ -28,9 +29,11 @@ func (NeMo) Source() Source {
 func (NeMo) Tools() []string { return []string{"curl"} }
 func (NeMo) Facts() []string { return []string{"device.vendor", "device.compute_capability"} }
 
-// version pins the Export-Deploy wheel, the release tag when empty; converter is the NeMo toolkit whose converter script is fetched
-func (NeMo) Vars() map[string]string {
-	return map[string]string{"version": "", "converter": "2.5.3"}
+func (NeMo) Vars() []Var {
+	return []Var{
+		{Name: "version", Label: "Version", Description: "The nemo-export-deploy version on PyPI, the release tag when empty"},
+		{Name: "converter", Label: "Converter version", Default: "2.5.3", Description: "The nemo_toolkit version whose checkpoint converter is installed"},
+	}
 }
 
 func (NeMo) Variants() []Variant {

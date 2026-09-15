@@ -190,7 +190,7 @@ func runRuntimesRecipes(ctx context.Context, e *env, args []string) error {
 
 func runBuild(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("build")
-	recipe := fs.String("recipe", "", "recipe id, the one the runtime manifest names when empty")
+	recipe := fs.String("recipe", "", "recipe id, the one the runtime builds from when empty")
 	variant := fs.String("variant", "", "variant id, selected from host facts when empty")
 	sandboxName := fs.String("sandbox", "", "host or oci, config default when empty")
 	image := fs.String("image", "", "container image for the oci sandbox")

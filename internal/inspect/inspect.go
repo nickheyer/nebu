@@ -303,7 +303,12 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		resp.Descriptors = append(resp.Descriptors, d)
 		// What you have installed answers first, what you could install only when nothing installed serves the format
 		for _, rt := range i.planners(list, d.GetFormatId(), named) {
-			for _, n := range planContexts(contexts, d, len(req.GetContexts()) > 0) {
+			// The row the planner solves itself comes first, the largest context that fits, then the grid
+			rows := []uint32{}
+			if rt.Policy().ContextParam != "" && len(req.GetContexts()) == 0 {
+				rows = append(rows, 0)
+			}
+			for _, n := range append(rows, planContexts(contexts, d, len(req.GetContexts()) > 0)...) {
 				overrides := withContext(layered, rt.Policy().ContextParam, n)
 				// A run plans around what is loaded now, so the table says both
 				plan, err := i.Plan(rt, d, profile, overrides, false)
@@ -430,12 +435,18 @@ func selectGroups(groups []*formats.Group, names []string) []*formats.Group {
 	return out
 }
 
+// The params with the context param set to a length, or back to auto for the row the planner solves
 func withContext(params map[string]string, name string, n uint32) map[string]string {
 	out := make(map[string]string, len(params)+1)
 	for k, v := range params {
 		out[k] = v
 	}
-	if name != "" {
+	if name == "" {
+		return out
+	}
+	if n == 0 {
+		out[name] = estimate.Auto
+	} else {
 		out[name] = fmt.Sprint(n)
 	}
 	return out

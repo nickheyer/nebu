@@ -39,10 +39,7 @@ var modelscope = &Catalog{
 
 func init() { register(modelscope) }
 
-const (
-	msRevision      = "master"
-	msPublicVisible = 5
-)
+const msPublicVisible = 5
 
 // Criterion categories by facet id
 var msCriteria = map[string]string{
@@ -217,9 +214,38 @@ type msFile struct {
 	Revision string `json:"Revision"`
 }
 
+// The revision the hub serves when none is named, as the repository detail reports it
+func msDefault(ctx context.Context, c *Client, repo string) (string, error) {
+	var resp struct {
+		msEnvelope
+		Data struct {
+			Revision string `json:"Revision"`
+		} `json:"Data"`
+	}
+	if _, err := c.JSON(ctx, c.URL("api", "v1", "models", repo), nil, &resp); err != nil {
+		return "", err
+	}
+	if err := resp.err(repo); err != nil {
+		return "", err
+	}
+	if resp.Data.Revision == "" {
+		return "", fmt.Errorf("%s: modelscope names no default revision", repo)
+	}
+	return resp.Data.Revision, nil
+}
+
+// Where a browser fetches one file of a repo at a revision
+func msFileURL(c *Client, repo, revision, path string) string {
+	q := url.Values{"Revision": {revision}, "FilePath": {path}}
+	return c.URL("api", "v1", "models", repo, "repo") + "?" + q.Encode()
+}
+
 func (modelscopeAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error) {
 	if revision == "" {
-		revision = msRevision
+		var err error
+		if revision, err = msDefault(ctx, c, repo); err != nil {
+			return nil, err
+		}
 	}
 	var resp struct {
 		msEnvelope
@@ -241,7 +267,7 @@ func (modelscopeAPI) Resolve(ctx context.Context, c *Client, repo, revision stri
 		if f.Type != "blob" {
 			continue
 		}
-		model.Artifacts = append(model.Artifacts, &v1.Artifact{Path: f.Path, SizeBytes: f.Size, Sha256: Hex(f.Sha256)})
+		model.Artifacts = append(model.Artifacts, &v1.Artifact{Path: f.Path, SizeBytes: f.Size, Sha256: Hex(f.Sha256), Url: msFileURL(c, repo, revision, f.Path)})
 		revisions[f.Revision] = true
 		fmt.Fprintf(h, "%s\x00%s\x00", f.Path, f.Revision)
 	}
@@ -279,9 +305,13 @@ func (modelscopeAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*
 	if err := body.err(repo); err != nil {
 		return nil, err
 	}
+	def, err := msDefault(ctx, c, repo)
+	if err != nil {
+		return nil, err
+	}
 	var out []*v1.Revision
 	add := func(e msRef, tag bool) {
-		r := refRevision(e.Revision, "", e.Revision == msRevision, tag)
+		r := refRevision(e.Revision, "", e.Revision == def, tag)
 		if e.CreatedAt > 0 {
 			r.UpdatedAt = timestamppb.New(time.Unix(e.CreatedAt, 0))
 		}
@@ -298,7 +328,10 @@ func (modelscopeAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*
 
 func (modelscopeAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v1.ModelCard, error) {
 	if revision == "" {
-		revision = msRevision
+		var err error
+		if revision, err = msDefault(ctx, c, repo); err != nil {
+			return nil, err
+		}
 	}
 	q := url.Values{"Revision": {revision}, "FilePath": {"README.md"}}
 	card, err := c.CardText(ctx, c.URL("api", "v1", "models", repo, "repo"), q, msPage(c, repo))
@@ -313,6 +346,5 @@ func (modelscopeAPI) Card(ctx context.Context, c *Client, repo, revision string)
 }
 
 func (modelscopeAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error) {
-	q := url.Values{"Revision": {model.GetRevision()}, "FilePath": {artifact.GetPath()}}
-	return c.Range(ctx, c.URL("api", "v1", "models", model.GetRepo(), "repo")+"?"+q.Encode(), artifact)
+	return c.Range(ctx, msFileURL(c, model.GetRepo(), model.GetRevision(), artifact.GetPath()), artifact)
 }

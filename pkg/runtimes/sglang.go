@@ -36,7 +36,7 @@ func (SGLang) Unmet(h *v1.HostProfile) []string {
 
 func (SGLang) Methods() []Method {
 	return []Method{
-		{ID: "source", Description: "Install from PyPI into a virtual environment", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "sglang"},
+		{ID: "source", Description: "Installs the sglang wheel from PyPI into its own virtual environment", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "sglang"},
 	}
 }
 
@@ -45,7 +45,8 @@ var sglangCacheBytes = map[string]float64{"auto": 2, "fp8_e5m2": 1, "fp8_e4m3": 
 func (SGLang) Params() []*v1.Param {
 	return []*v1.Param{
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: "Context", Flag: "--context-length",
-			Description: "Tokens the model can hold in one conversation. Auto takes the largest that fits in memory, up to the length the model was trained for."},
+			Rule:        contextRule,
+			Description: "Tokens the model can hold in one conversation."},
 		{Name: "chunked_prefill_size", Label: "Chunked prefill", Type: v1.ParamType_PARAM_TYPE_INT, Default: "8192", Unit: "tokens", Min: -1, Step: 512, Group: "Context", Advanced: true, Flag: "--chunked-prefill-size",
 			Description: "Prompt tokens prefilled per step. Smaller values need less memory. -1 turns chunking off."},
 		{Name: "mem_fraction_static", Label: "Static memory fraction", Type: v1.ParamType_PARAM_TYPE_FLOAT, Default: "0.88", Min: 0.05, Max: 1, Step: 0.01, Group: "Memory", Flag: "--mem-fraction-static",

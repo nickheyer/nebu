@@ -45,6 +45,12 @@ message ConfigField {
   string description = 6;
   string transport = 7;
   repeated string choices = 8;
+  // The choices in words, keyed by choice, for a value that is not its own word
+  map<string, string> choice_labels = 9;
+  // Why this host cannot take a choice, keyed by choice; a choice absent here is open
+  map<string, string> choice_unmet = 10;
+  // The shape a value takes, shown while the field is empty and no default applies
+  string placeholder = 11;
 }
 
 // A provider sources are created from, with the settings its transports accept
@@ -160,6 +166,9 @@ message Revision {
   string detail = 6;
   // Set when the variant resolves as its own repository
   string repo = 7;
+  // The parameter count and precision the source publishes for a variant, zero and empty when it names none
+  uint64 parameters = 8;
+  string precision = 9;
 }
 
 // The description a source publishes for a repository

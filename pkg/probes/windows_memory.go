@@ -37,5 +37,5 @@ func (p windowsMemory) Run(ctx context.Context) host.Result {
 		return failed(fmt.Errorf("FreePhysicalMemory: %w", err))
 	}
 	pool := &v1.MemoryPool{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: total, FreeBytes: free}
-	return found(nil, []*v1.MemoryPool{pool}, map[string]string{"mem.total": kv["TotalVisibleMemorySize"] + " kB"}, rows(1))
+	return found(nil, []*v1.MemoryPool{pool}, nil, rows(1))
 }

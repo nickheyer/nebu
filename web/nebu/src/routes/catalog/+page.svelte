@@ -21,6 +21,7 @@
   import FacetPicker from '$lib/components/catalog/FacetPicker.svelte';
   import ModelDrawer from '$lib/components/ModelDrawer.svelte';
   import SourceDialog from '$lib/components/SourceDialog.svelte';
+  import { TableSort } from '$lib/sort.svelte';
 
   const pageSize = 30;
 
@@ -92,9 +93,47 @@
   const inputDead = $derived(!all && !!caps && !caps.search && !caps.repoPattern);
   const openSourceId = $derived(sourceId || status?.source?.id || statuses.find((s) => !s.error)?.source?.id || '');
   const stored = $derived(new Set([...live.models.values()].map((m) => `${m.sourceId}/${m.repo}`)));
-  // Columns whose header can order the list, when the source has a sort of that id
+  // Columns whose header orders the list at the source, when it has a sort of that id; the rest order the page here
   const columnSort = (id: string) => (!all && caps?.sorts.some((s) => s.id === id) ? id : '');
   const sortItems = $derived((caps?.sorts ?? []).map((s) => ({ value: s.id === caps?.defaultSort ? '' : s.id, label: s.label })));
+  // The sort select is as wide as its longest label
+  const sortWidth = $derived(Math.max(10, ...sortItems.map((s) => s.label.length)) + 6);
+  const local = new TableSort('', 'desc');
+  const shown = $derived(
+    local.key
+      ? local.apply(hits, (h, key) => {
+          switch (key) {
+            case 'name':
+              return (h.name || h.repo).toLowerCase();
+            case 'source':
+              return labels.get(h.sourceId) ?? h.sourceId;
+            case 'task':
+              return h.task;
+            case 'format':
+              return h.formats.join(' ');
+            case 'size':
+              return hitSize(h).kind === 'sizes' ? hitSize(h).text : hitSize(h).value;
+            case 'downloads':
+              return h.downloads;
+            case 'likes':
+              return h.likes;
+            case 'updated':
+              return h.updatedAt?.seconds ?? 0n;
+          }
+          return undefined;
+        })
+      : hits
+  );
+  // A column the source cannot fill for any hit on the page is left out rather than shown as dashes
+  const has = $derived({
+    task: hits.some((h) => h.task),
+    format: hits.some((h) => h.formats.length),
+    size: hits.some((h) => hitSize(h).kind !== 'none'),
+    downloads: hits.some((h) => h.downloads > 0n),
+    likes: hits.some((h) => h.likes > 0n),
+    updated: hits.some((h) => h.updatedAt)
+  });
+  const columns = $derived(1 + (merged ? 1 : 0) + Object.values(has).filter(Boolean).length);
 
   // The URL picks the source, query, sort, and filters once the cached sources are in
   $effect(() => {
@@ -260,15 +299,21 @@
     input?.focus();
   }
 
-  // Clicking a column orders by it, the same column again flips it where the source allows
+  // Clicking a column orders by it at the source when it can, the same column again flipping it where the
+  // source allows; a column the source cannot order is ordered here, over the hits on the page
   function orderBy(id: string) {
-    if (!id) return;
-    if (effectiveSort === id) {
-      if (sortReversible(caps, id)) ascending = !ascending;
+    const server = columnSort(id);
+    if (server) {
+      local.key = '';
+      if (effectiveSort === server) {
+        if (sortReversible(caps, server)) ascending = !ascending;
+        return;
+      }
+      sort = server === caps?.defaultSort ? '' : server;
+      ascending = false;
       return;
     }
-    sort = id === caps?.defaultSort ? '' : id;
-    ascending = false;
+    local.toggle(id);
   }
 
   function openHit(h: SearchHit) {
@@ -296,22 +341,19 @@
 
   function sizeOf(h: SearchHit): string {
     const s = hitSize(h);
-    return s.kind === 'params' ? fmtParams(s.value) : s.kind === 'bytes' ? storage(s.value, 1) : '–';
+    return s.kind === 'params' ? fmtParams(s.value) : s.kind === 'bytes' ? storage(s.value, 1) : s.kind === 'sizes' ? s.text : '–';
   }
 </script>
 
-{#snippet th(label: string, id = '', num = false)}
+{#snippet th(label: string, id: string, num = false)}
   {@const sortId = columnSort(id)}
-  {@const on = !!sortId && effectiveSort === sortId}
-  <th class={num ? 'num' : ''} aria-sort={on ? (ascending ? 'ascending' : 'descending') : 'none'}>
-    {#if sortId}
-      <button type="button" class="caps inline-flex items-center gap-1 rounded-sm transition-colors hover:text-fg {on ? 'text-fg' : ''}" onclick={() => orderBy(sortId)}>
-        {label}
-        {#if on}{#if ascending}<ArrowUp size={11} />{:else}<ArrowDown size={11} />{/if}{/if}
-      </button>
-    {:else}
+  {@const on = sortId ? !local.key && effectiveSort === sortId : local.key === id}
+  {@const up = sortId ? ascending : local.dir === 'asc'}
+  <th class={num ? 'num' : ''} aria-sort={on ? (up ? 'ascending' : 'descending') : 'none'}>
+    <button type="button" class="caps inline-flex items-center gap-1 rounded-sm transition-colors hover:text-fg {on ? 'text-fg' : ''}" onclick={() => orderBy(id)}>
       {label}
-    {/if}
+      {#if on}{#if up}<ArrowUp size={11} />{:else}<ArrowDown size={11} />{/if}{/if}
+    </button>
   </th>
 {/snippet}
 
@@ -319,13 +361,9 @@
   {#each Array(n) as _, i (i)}
     <tr aria-busy="true">
       <td><div class="skeleton h-3" style="width: {55 + ((i * 7) % 30)}%"></div><div class="skeleton mt-2 h-2.5" style="width: {30 + ((i * 11) % 25)}%"></div></td>
-      {#if merged}<td><div class="skeleton h-3 w-16"></div></td>{/if}
-      <td><div class="skeleton h-3 w-20"></div></td>
-      <td><div class="skeleton h-3 w-14"></div></td>
-      <td class="num"><div class="skeleton ml-auto h-3 w-10"></div></td>
-      <td class="num"><div class="skeleton ml-auto h-3 w-12"></div></td>
-      <td class="num"><div class="skeleton ml-auto h-3 w-8"></div></td>
-      <td class="num"><div class="skeleton ml-auto h-3 w-12"></div></td>
+      {#each Array(Math.max(columns - 1, 3)) as _, c (c)}
+        <td><div class="skeleton h-3 w-14"></div></td>
+      {/each}
     </tr>
   {/each}
 {/snippet}
@@ -358,7 +396,7 @@
     <div class="min-w-0">
       <div class="flex flex-wrap items-center gap-2">
         <SearchInput
-          class="min-w-64 flex-1"
+          class="w-full max-w-lg"
           size="lg"
           bind:value={query}
           bind:element={input}
@@ -372,10 +410,13 @@
           {/snippet}
         </SearchInput>
         {#if sortItems.length && !all}
-          <Select class="w-40" bind:value={sort} label="Sort" items={sortItems} />
+          <div style="width: {sortWidth}ch"><Select class="w-full" bind:value={sort} label="Sort" items={sortItems} /></div>
           {#if reversible}
             <IconButton size="lg" variant="secondary" icon={ascending ? ArrowUp : ArrowDown} label={ascending ? 'Ascending' : 'Descending'} onclick={() => (ascending = !ascending)} />
           {/if}
+        {/if}
+        {#if !searching && hits.length}
+          <span class="ml-auto text-xs tabular-nums text-fg-faint">{#if total > 0n}{Number(total).toLocaleString()} results{:else}{hits.length.toLocaleString()} results{/if}</span>
         {/if}
       </div>
       {#if (caps?.facets.length && !all) || activeFilters.length || query || sort}
@@ -391,10 +432,7 @@
         </div>
       {/if}
 
-      <div class="mt-4 mb-1 flex min-h-5 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-faint">
-        {#if !searching && hits.length}
-          <span class="tabular-nums">{#if total > 0n}{hits.length.toLocaleString()} of {Number(total).toLocaleString()}{:else}{hits.length.toLocaleString()}{/if}</span>
-        {/if}
+      <div class="mt-3 mb-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-faint empty:hidden">
         {#each tokenless as s (s.source?.id)}
           <span class="inline-flex items-center gap-1.5 text-warn"><KeyRound size={12} />Set <span class="font-mono">{s.capabilities?.tokenEnv || 'a token'}</span> to download from {merged ? labels.get(s.source?.id ?? '') : name}</span>
         {/each}
@@ -432,30 +470,30 @@
           <colgroup>
             <col />
             {#if merged}<col class="w-28" />{/if}
-            <col class="w-44" />
-            <col class="w-28" />
-            <col class="w-20" />
-            <col class="w-24" />
-            <col class="w-20" />
-            <col class="w-24" />
+            {#if has.task}<col class="w-44" />{/if}
+            {#if has.format}<col class="w-28" />{/if}
+            {#if has.size}<col class="w-28" />{/if}
+            {#if has.downloads}<col class="w-24" />{/if}
+            {#if has.likes}<col class="w-20" />{/if}
+            {#if has.updated}<col class="w-24" />{/if}
           </colgroup>
           <thead>
             <tr>
               {@render th('Model', 'name')}
-              {#if merged}<th>Source</th>{/if}
-              <th>Task</th>
-              <th>Format</th>
-              {@render th('Size', '', true)}
-              {@render th('Downloads', 'downloads', true)}
-              {@render th('Likes', 'likes', true)}
-              {@render th('Updated', 'updated', true)}
+              {#if merged}{@render th('Source', 'source')}{/if}
+              {#if has.task}{@render th('Task', 'task')}{/if}
+              {#if has.format}{@render th('Format', 'format')}{/if}
+              {#if has.size}{@render th('Size', 'size', true)}{/if}
+              {#if has.downloads}{@render th('Downloads', 'downloads', true)}{/if}
+              {#if has.likes}{@render th('Likes', 'likes', true)}{/if}
+              {#if has.updated}{@render th('Updated', 'updated', true)}{/if}
             </tr>
           </thead>
           <tbody>
             {#if searching}
               {@render skeletonRows(10)}
             {:else}
-              {#each hits as h (h.sourceId + '/' + h.repo)}
+              {#each shown as h (h.sourceId + '/' + h.repo)}
                 {@const hcaps = capsOf(h.sourceId)}
                 {@const title = h.name && h.name !== h.repo ? h.name : h.repo}
                 {@const chips = hitChips(h, hcaps)}
@@ -476,12 +514,12 @@
                     {/if}
                   </td>
                   {#if merged}<td class="truncate text-fg-muted">{labels.get(h.sourceId) ?? h.sourceId}</td>{/if}
-                  <td class="truncate text-fg-muted">{h.task ? facetValueLabel(hcaps, 'task', h.task) : '–'}</td>
-                  <td class="truncate font-mono text-xs text-fg-muted">{h.formats.join(' ') || '–'}</td>
-                  <td class="num">{sizeOf(h)}</td>
-                  <td class="num text-fg-muted">{h.downloads > 0n ? count(h.downloads) : '–'}</td>
-                  <td class="num text-fg-muted">{h.likes > 0n ? count(h.likes) : '–'}</td>
-                  <td class="num text-fg-muted whitespace-nowrap">{h.updatedAt ? ago(h.updatedAt, clock.now) : '–'}</td>
+                  {#if has.task}<td class="truncate text-fg-muted">{h.task ? facetValueLabel(hcaps, 'task', h.task) : '–'}</td>{/if}
+                  {#if has.format}<td class="truncate font-mono text-xs text-fg-muted">{h.formats.join(' ') || '–'}</td>{/if}
+                  {#if has.size}<td class="num truncate whitespace-nowrap" title={sizeOf(h)}>{sizeOf(h)}</td>{/if}
+                  {#if has.downloads}<td class="num text-fg-muted">{h.downloads > 0n ? count(h.downloads) : '–'}</td>{/if}
+                  {#if has.likes}<td class="num text-fg-muted">{h.likes > 0n ? count(h.likes) : '–'}</td>{/if}
+                  {#if has.updated}<td class="num text-fg-muted whitespace-nowrap">{h.updatedAt ? ago(h.updatedAt, clock.now) : '–'}</td>{/if}
                 </tr>
               {/each}
               {#if loadingMore}

@@ -1,27 +1,32 @@
 <script lang="ts">
   import { ParamType, type Param } from '$proto/runtime_pb';
+  import type { ParamState } from '$proto/estimate_pb';
   import { ChevronRight, Plus, X } from '@lucide/svelte';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
   import NumberInput from './ui/NumberInput.svelte';
+  import RangeInput from './ui/RangeInput.svelte';
   import IconButton from './ui/IconButton.svelte';
   import TextInput from './ui/TextInput.svelte';
   import TextArea from './ui/TextArea.svelte';
 
-  // Manifest groups stay in reading order. Empty fields inherit the slot or runtime default.
+  // The runtime's groups stay in reading order. An empty field takes the slot's default, else the
+  // runtime's; a solved param left empty takes what its rule says at launch. The states a plan
+  // reports narrow a number's bounds to this model and host and grey out choices the other params rule out.
   let {
     params = [],
     values = $bindable({}),
     invalid = $bindable(0),
     inherited = {},
+    states = [],
     idPrefix = 'param'
-  }: { params?: Param[]; values?: Record<string, string>; invalid?: number; inherited?: Record<string, string>; idPrefix?: string } = $props();
+  }: { params?: Param[]; values?: Record<string, string>; invalid?: number; inherited?: Record<string, string>; states?: ParamState[]; idPrefix?: string } = $props();
 
   let showAdvanced = $state(false);
   let newName = $state('');
   let newValue = $state('');
 
-  // Groups in the order the manifest first names them, ungrouped params first
+  // Groups in the order the runtime first names them, ungrouped params first
   const groups = $derived.by(() => {
     const out: { name: string; params: Param[] }[] = [];
     for (const p of params) {
@@ -34,9 +39,10 @@
   const advancedCount = $derived(params.filter((p) => p.advanced).length);
   const regularGroups = $derived(groups.map((g) => ({ ...g, params: g.params.filter((p) => !p.advanced) })).filter((g) => g.params.length));
   const advancedGroups = $derived(groups.map((g) => ({ ...g, params: g.params.filter((p) => p.advanced) })).filter((g) => g.params.length));
-  // Values the manifest does not name stay editable so nothing is lost when a manifest changes
+  // Values the runtime does not name stay editable so nothing is lost when a runtime changes
   const known = $derived(new Set(params.map((p) => p.name)));
   const extra = $derived(Object.keys(values).filter((k) => !known.has(k)).sort());
+  const stateOf = $derived(new Map(states.map((s) => [s.name, s])));
   // An advanced param with a value is worth seeing
   $effect(() => {
     if (params.some((p) => p.advanced && values[p.name])) showAdvanced = true;
@@ -49,19 +55,27 @@
     values = next;
   }
 
-  // What applies when the field is left empty
+  // What applies when the field is left empty: the slot's value, the rule a solved param follows, or the runtime default
   function beneath(p: Param): string {
     const v = inherited[p.name];
     if (v !== undefined && v !== '') return v;
-    if (p.solved) return 'auto';
-    if (p.default.includes('{{')) return 'set at launch';
+    if (p.solved) return p.rule;
     return p.default;
   }
-  function beneathLabel(p: Param): string {
-    const v = inherited[p.name];
-    if (v !== undefined && v !== '') return `Slot default: ${v}`;
-    const b = beneath(p);
-    return b ? `Default: ${b}` : 'Not set';
+
+  // The bounds a number takes here: what the plan reports for this model and host, else the runtime's own
+  function bounds(p: Param): { min: number; max: number; step: number } {
+    const s = stateOf.get(p.name);
+    const min = s && (s.min !== 0 || s.max !== 0) ? s.min : p.min;
+    const max = s && s.max !== 0 ? s.max : p.max;
+    return { min, max, step: (s?.step || p.step) || 0 };
+  }
+  const ranged = (p: Param) => {
+    const b = bounds(p);
+    return numeric(p) && b.max !== 0 && b.max > b.min;
+  };
+  function disabledChoices(p: Param): Map<string, string> {
+    return new Map((stateOf.get(p.name)?.disabled ?? []).map((d) => [d.value, d.message]));
   }
 
   function numeric(p: Param): boolean {
@@ -71,15 +85,19 @@
   function problem(p: Param, v: string | undefined): string {
     if (!v) return '';
     if (p.solved && v.toLowerCase() === 'auto') return '';
-    if (p.choices.length) return p.choices.includes(v) ? '' : `One of ${p.choices.filter(Boolean).join(', ')}`;
+    if (p.choices.length) {
+      if (!p.choices.includes(v)) return `One of ${p.choices.filter(Boolean).join(', ')}`;
+      return disabledChoices(p).get(v) ?? '';
+    }
     if (p.type === ParamType.BOOL) return /^(true|false)$/i.test(v) ? '' : 'true or false';
     if (numeric(p)) {
       const ok = p.type === ParamType.INT ? /^-?\d+$/.test(v) : /^-?\d*\.?\d+([eE][-+]?\d+)?$/.test(v);
       if (!ok) return p.type === ParamType.INT ? 'A whole number' : 'A number';
       const n = parseFloat(v);
-      if (p.min !== 0 || p.max !== 0) {
-        if (n < p.min) return `At least ${p.min}`;
-        if (p.max !== 0 && n > p.max) return `At most ${p.max}`;
+      const b = bounds(p);
+      if (b.min !== 0 || b.max !== 0) {
+        if (n < b.min) return `At least ${b.min}`;
+        if (b.max !== 0 && n > b.max) return `At most ${b.max}`;
       }
     }
     return '';
@@ -102,6 +120,8 @@
   {@const fid = `${idPrefix}-${p.name}`}
   {@const err = problem(p, v)}
   {@const multiline = p.advanced && p.type === ParamType.STRING && !p.choices.length}
+  {@const b = bounds(p)}
+  {@const off = disabledChoices(p)}
   <div class="param-row" class:wide={multiline}>
     <div class="min-w-0">
       <label for={fid} class="text-[13px] font-medium text-fg" title={p.flag || p.env || p.name}>{p.label || p.name}</label>
@@ -109,17 +129,28 @@
     </div>
     <div class="min-w-0">
       {#if p.choices.length}
-        <Select id={fid} mono value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneathLabel(p) }, ...p.choices.filter((c) => c !== '' && c !== p.default).map((c) => ({ value: c, label: c }))]} />
+        <Select
+          id={fid}
+          mono
+          value={v}
+          onchange={(next) => set(p.name, next)}
+          items={[
+            { value: '', label: p.solved ? 'auto' : beneath(p) || 'not set', detail: p.solved && !inherited[p.name] ? p.rule : undefined },
+            ...p.choices.filter((c) => c !== '' && (p.solved || c !== p.default)).map((c) => ({ value: c, label: c, disabled: off.has(c), detail: off.get(c) }))
+          ]}
+        />
       {:else if p.type === ParamType.BOOL}
-        <Select id={fid} value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneathLabel(p) }, { value: 'true', label: 'On' }, { value: 'false', label: 'Off' }]} />
+        <Select id={fid} value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneath(p) === 'true' ? 'On' : beneath(p) === 'false' ? 'Off' : 'not set' }, { value: 'true', label: 'On' }, { value: 'false', label: 'Off' }]} />
+      {:else if ranged(p)}
+        <RangeInput id={fid} min={b.min} max={b.max} step={b.step || (p.type === ParamType.INT ? 1 : 0.01)} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={p.solved ? 'auto' : beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {:else if numeric(p)}
-        <NumberInput id={fid} min={p.min || undefined} max={p.max || undefined} step={p.step || undefined} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={beneath(p) || 'not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
+        <NumberInput id={fid} min={b.min || undefined} max={b.max || undefined} step={b.step || undefined} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={p.solved ? 'auto' : beneath(p) || 'not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {:else if multiline}
         <TextArea id={fid} mono rows={3} empty={beneath(p) || 'Not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {:else}
         <TextInput id={fid} mono empty={beneath(p) || 'Not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {/if}
-      {#if err}<p class="mt-1.5 text-xs text-bad">{err}</p>{/if}
+      {#if err}<p class="mt-1.5 text-xs text-bad">{err}</p>{:else if p.solved && !v}<p class="mt-1.5 text-xs text-fg-faint">{inherited[p.name] ? `${inherited[p.name]} from the slot` : p.rule}</p>{/if}
     </div>
   </div>
 {/snippet}
@@ -161,7 +192,7 @@
           <div class="param-row">
             <div class="min-w-0">
               <label for="{idPrefix}-{k}" class="font-mono text-xs text-fg wrap-anywhere">{k}</label>
-              <p class="mt-1 text-xs leading-5 text-fg-muted">The manifest no longer names this parameter.</p>
+              <p class="mt-1 text-xs leading-5 text-fg-muted">The runtime no longer names this parameter.</p>
             </div>
             <div class="flex min-w-0 items-center gap-1">
               <TextInput id="{idPrefix}-{k}" class="flex-1" mono bind:value={() => values[k] ?? '', (next) => (values = { ...values, [k]: next })} />
@@ -200,7 +231,7 @@
 
   @container (min-width: 34rem) {
     .param-row:not(.wide) {
-      grid-template-columns: minmax(0, 1fr) 16rem;
+      grid-template-columns: minmax(0, 1fr) 18rem;
       align-items: start;
       column-gap: 2rem;
     }

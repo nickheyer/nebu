@@ -1,56 +1,11 @@
 package build
 
 import (
-	"strings"
 	"testing"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/spec"
+	"github.com/nickheyer/nebu/pkg/recipes"
 )
-
-const testRecipe = `id: fake
-runtime_id: fake
-source:
-  ref: '1.0'
-  archive: http://example/fake-{{.ref}}.tar.gz
-tools: [sh]
-facts: [cpu.count, device.vendor, device.compute_capability]
-vars:
-  stamp: 'v{{.ref}}-{{.variant}}'
-  extra: ''
-variants:
-  - id: gpu
-    when: any(devices, .kind == "gpu")
-    tools: [definitely-missing-tool-xyz]
-    vars:
-      backend: gpu-{{.vars.stamp}}
-  - id: cpu
-    when: 'true'
-    vars:
-      backend: cpu
-steps:
-  - name: one
-    command: [sh, -c, 'true']
-outputs: [bin]
-binary: bin
-`
-
-func recipe(t *testing.T, yaml string) *Recipe {
-	t.Helper()
-	msg := &v1.Recipe{}
-	if err := spec.Decode([]byte(yaml), msg); err != nil {
-		t.Fatal(err)
-	}
-	reg, err := New([]*v1.Recipe{msg})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rc, err := reg.Get(msg.GetId())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return rc
-}
 
 func gpuProfile() *v1.HostProfile {
 	return &v1.HostProfile{
@@ -61,16 +16,16 @@ func gpuProfile() *v1.HostProfile {
 }
 
 func TestSelectSkipsVariantMissingTools(t *testing.T) {
-	rc := recipe(t, testRecipe)
-	sel, err := rc.Select(gpuProfile(), Options{})
+	rc := selectRecipe()
+	sel, err := Select(rc, gpuProfile(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sel.Variant.GetId() != "cpu" {
-		t.Fatalf("variant %s, gpu needs a missing tool", sel.Variant.GetId())
+	if sel.Variant.ID != "cpu" {
+		t.Fatalf("variant %s, gpu needs a missing tool", sel.Variant.ID)
 	}
-	if sel.Vars["stamp"] != "v1.0-cpu" || sel.Vars["backend"] != "cpu" {
-		t.Fatalf("vars %v", sel.Vars)
+	if sel.Vars["backend"] != "cpu" || sel.Vars["extra"] != "" || sel.Ref != Latest {
+		t.Fatalf("vars %v ref %q", sel.Vars, sel.Ref)
 	}
 	if sel.Facts["cpu.count"] != "8" || sel.Facts["device.vendor"] != "acme,acme" || sel.Facts["device.compute_capability"] != "7.5,8.6" {
 		t.Fatalf("facts %v", sel.Facts)
@@ -81,80 +36,99 @@ func TestSelectSkipsVariantMissingTools(t *testing.T) {
 }
 
 func TestSelectExplicitVariantReportsTools(t *testing.T) {
-	rc := recipe(t, testRecipe)
-	sel, err := rc.Select(gpuProfile(), Options{Variant: "gpu", Vars: map[string]string{"extra": "-DX=1"}})
+	rc := selectRecipe()
+	sel, err := Select(rc, gpuProfile(), Options{Variant: "gpu", Vars: map[string]string{"extra": "-DX=1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sel.Variant.GetId() != "gpu" || sel.Vars["backend"] != "gpu-v1.0-gpu" || sel.Vars["extra"] != "-DX=1" {
-		t.Fatalf("selection %s %v", sel.Variant.GetId(), sel.Vars)
+	if sel.Variant.ID != "gpu" || sel.Vars["backend"] != "gpu" || sel.Vars["extra"] != "-DX=1" {
+		t.Fatalf("selection %s %v", sel.Variant.ID, sel.Vars)
 	}
 	if sel.Err() == nil || len(sel.MissingTools) != 1 {
 		t.Fatalf("missing tool should be unmet: %v", sel.Unmet)
 	}
-	if _, err := rc.Select(gpuProfile(), Options{Variant: "nope"}); err == nil {
+	if _, err := Select(rc, gpuProfile(), Options{Variant: "nope"}); err == nil {
 		t.Fatal("unknown variant should fail")
 	}
 	st := sel.Status()
-	if st.GetVariant() != "gpu" || len(st.GetUnmet()) != 1 || st.GetSandbox() != v1.SandboxKind_SANDBOX_KIND_HOST {
+	if st.GetVariant() != "gpu" || len(st.GetUnmet()) != 1 || st.GetSandbox() != v1.SandboxKind_SANDBOX_KIND_HOST || st.GetRecipe().GetSource() != "github.com/o/r" {
 		t.Fatalf("status %v", st)
+	}
+	// A recipe without variants takes the default one and refuses any other name
+	plain := selectRecipe()
+	plain.variants = nil
+	if sel, err := Select(plain, gpuProfile(), Options{}); err != nil || sel.Variant.ID != DefaultVariant {
+		t.Fatalf("default variant %v %v", sel, err)
+	}
+	if _, err := Select(plain, gpuProfile(), Options{Variant: "gpu"}); err == nil {
+		t.Fatal("a recipe without variants should refuse a named one")
+	}
+	// A variant list none of which applies fails, naming the flag to pass
+	only := selectRecipe()
+	only.variants = only.variants[:1]
+	if _, err := Select(only, &v1.HostProfile{Facts: map[string]string{}}, Options{}); err == nil {
+		t.Fatal("no applicable variant should fail")
 	}
 }
 
 func TestSelectOCI(t *testing.T) {
-	rc := recipe(t, testRecipe)
-	sel, err := rc.Select(gpuProfile(), Options{Sandbox: v1.SandboxKind_SANDBOX_KIND_OCI, Image: "img:1", Defaults: &v1.Builds{Cli: []string{"sh"}}})
+	rc := selectRecipe()
+	sel, err := Select(rc, gpuProfile(), Options{Sandbox: v1.SandboxKind_SANDBOX_KIND_OCI, Image: "img:1", Defaults: &v1.Builds{Cli: []string{"sh"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sel.Variant.GetId() != "gpu" {
-		t.Fatalf("tools are not checked for containers, got %s", sel.Variant.GetId())
+	if sel.Variant.ID != "gpu" {
+		t.Fatalf("tools are not checked for containers, got %s", sel.Variant.ID)
 	}
 	if sel.CLI == "" || sel.Image != "img:1" || sel.Err() != nil {
 		t.Fatalf("oci selection cli=%q image=%q unmet=%v", sel.CLI, sel.Image, sel.Unmet)
 	}
-	sel, err = rc.Select(gpuProfile(), Options{Sandbox: v1.SandboxKind_SANDBOX_KIND_OCI, Defaults: &v1.Builds{Cli: []string{"no-such-cli-abc"}}})
+	sel, err = Select(rc, gpuProfile(), Options{Sandbox: v1.SandboxKind_SANDBOX_KIND_OCI, Defaults: &v1.Builds{Cli: []string{"no-such-cli-abc"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sel.Err() == nil || len(sel.Unmet) != 2 {
 		t.Fatalf("missing cli and image should both be unmet: %v", sel.Unmet)
 	}
+	// The variant's image and the recipe's default sandbox stand in when the request names none
+	rc.variants[0].Image = "variant:img"
+	rc.sandbox = recipes.Sandbox{Kind: v1.SandboxKind_SANDBOX_KIND_OCI, CLIs: []string{"sh"}}
+	sel, err = Select(rc, gpuProfile(), Options{})
+	if err != nil || sel.Sandbox != v1.SandboxKind_SANDBOX_KIND_OCI || sel.Image != "variant:img" || sel.CLI == "" {
+		t.Fatalf("recipe sandbox %v %v", sel, err)
+	}
 }
 
-func TestCompileErrors(t *testing.T) {
-	bad := []string{
-		"id: x\nruntime_id: r\nbinary: b\n",
-		"id: x\nruntime_id: r\nsteps: [{command: [a]}]\n",
-		"id: x\nbinary: b\nsteps: [{command: [a]}]\n",
-		"id: x\nruntime_id: r\nbinary: b\nsteps: [{command: ['{{.broken']}]\n",
-		"id: x\nruntime_id: r\nbinary: b\nsteps: [{command: [a]}]\nvariants: [{id: v, when: 'this is not ok('}]\n",
-		"id: x\nruntime_id: r\nbinary: b\nsteps: [{command: [a]}]\npatches: [{id: p}]\n",
+func TestRegistryRefusesBrokenRecipes(t *testing.T) {
+	good := selectRecipe()
+	bad := map[string]fakeRecipe{
+		"no id":                   {runtimeID: "r", binary: "b"},
+		"no runtime":              {id: "x", binary: "b"},
+		"no binary":               {id: "x", runtimeID: "r"},
+		"variant without applies": {id: "x", runtimeID: "r", binary: "b", variants: []recipes.Variant{{ID: "v"}}},
+		"variant without id":      {id: "x", runtimeID: "r", binary: "b", variants: []recipes.Variant{{Applies: always}}},
 	}
-	for _, y := range bad {
-		msg := &v1.Recipe{}
-		if err := spec.Decode([]byte(y), msg); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := New([]*v1.Recipe{msg}); err == nil {
-			t.Errorf("should fail: %s", strings.ReplaceAll(y, "\n", " "))
+	for name, rc := range bad {
+		if _, err := New([]recipes.Recipe{rc}); err == nil {
+			t.Errorf("%s should fail", name)
 		}
 	}
-	msg := &v1.Recipe{}
-	spec.Decode([]byte(testRecipe), msg)
-	if _, err := New([]*v1.Recipe{msg, msg}); err == nil {
+	if _, err := New([]recipes.Recipe{good, good}); err == nil {
 		t.Fatal("duplicate id should fail")
 	}
 }
 
 func TestHashChangesWithInputs(t *testing.T) {
-	rc := recipe(t, testRecipe)
+	rc := selectRecipe()
 	base := func() *v1.Build {
 		return &v1.Build{Variant: "cpu", Ref: "1.0", Sandbox: v1.SandboxKind_SANDBOX_KIND_HOST, Vars: map[string]string{"a": "1"}, Facts: map[string]string{"f": "x"}, Patches: []string{"p"}}
 	}
 	patches := map[string][]byte{"p": []byte("diff")}
-	id := hashBuild(base(), rc.Spec, patches)
-	if len(id) != idLength || id != hashBuild(base(), rc.Spec, patches) {
+	bctx := func(b *v1.Build) *recipes.Build {
+		return &recipes.Build{Ref: b.GetRef(), Variant: b.GetVariant(), Vars: b.GetVars()}
+	}
+	id := hashBuild(rc, base(), bctx(base()), patches)
+	if len(id) != idLength || id != hashBuild(rc, base(), bctx(base()), patches) {
 		t.Fatal("hash should be stable")
 	}
 	for name, mutate := range map[string]func(*v1.Build){
@@ -168,25 +142,55 @@ func TestHashChangesWithInputs(t *testing.T) {
 	} {
 		b := base()
 		mutate(b)
-		if hashBuild(b, rc.Spec, patches) == id {
+		if hashBuild(rc, b, bctx(b), patches) == id {
 			t.Errorf("%s change should change the hash", name)
 		}
 	}
-	if hashBuild(base(), rc.Spec, map[string][]byte{"p": []byte("other diff")}) == id {
+	if hashBuild(rc, base(), bctx(base()), map[string][]byte{"p": []byte("other diff")}) == id {
 		t.Error("patch content change should change the hash")
+	}
+	// The steps a build would run are part of its identity, so a recipe change rebuilds
+	other := rc
+	other.steps = func(b *recipes.Build) []recipes.Step {
+		return []recipes.Step{{Name: "two", Command: []string{"sh", "-c", "false"}}}
+	}
+	if hashBuild(other, base(), bctx(base()), patches) == id {
+		t.Error("step change should change the hash")
+	}
+	other = rc
+	other.binary = "elsewhere"
+	if hashBuild(other, base(), bctx(base()), patches) == id {
+		t.Error("binary change should change the hash")
 	}
 }
 
 func TestRegistryForRuntime(t *testing.T) {
-	rc := recipe(t, testRecipe)
-	reg, _ := New([]*v1.Recipe{rc.Spec})
+	rc := selectRecipe()
+	reg := registry(t, rc)
 	if len(reg.ForRuntime("fake")) != 1 || len(reg.ForRuntime("other")) != 0 || len(reg.List()) != 1 {
 		t.Fatal("registry lookups")
 	}
 	if _, err := reg.Get("missing"); err == nil {
 		t.Fatal("missing recipe")
 	}
-	if rc.Timeout() != DefaultTimeout {
+	if got, err := reg.Get("fake"); err != nil || got.ID() != "fake" {
+		t.Fatalf("get %v %v", got, err)
+	}
+	if Timeout(rc) != DefaultTimeout {
 		t.Fatal("default timeout")
+	}
+	rc.timeout = 1
+	if Timeout(rc) != 1 {
+		t.Fatal("recipe timeout")
+	}
+	d := Describe(rc, gpuProfile())
+	if d.GetId() != "fake" || d.GetRuntimeId() != "fake" || len(d.GetVariants()) != 2 || d.GetVariants()[0].GetTools()[0] != "definitely-missing-tool-xyz" || len(d.GetVars()) != 1 || d.GetVars()[0].GetName() != "extra" || d.GetTimeoutMs() != 0 {
+		t.Fatalf("describe %v", d)
+	}
+	if got := Variants(rc, gpuProfile()); len(got) != 2 {
+		t.Fatalf("both variants apply to a gpu host: %v", got)
+	}
+	if got := Variants(rc, &v1.HostProfile{}); len(got) != 1 || got[0].ID != "cpu" {
+		t.Fatalf("only cpu applies without devices: %v", got)
 	}
 }

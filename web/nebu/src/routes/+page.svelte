@@ -1,11 +1,14 @@
 <script lang="ts">
-  import { live, clock, liveInstances, instanceLive, slotName, groupLabel, orderedSlots, answersOf, runtimeName } from '$lib/state.svelte';
-  import { launch } from '$lib/launch';
+  import { goto } from '$app/navigation';
+  import { live, clock, liveInstances, instanceLive, slotName, groupLabel, orderedSlots, answersOf, runtimeName, taskFor } from '$lib/state.svelte';
+  import { launch, slotOccupied } from '$lib/launch';
   import { instanceMemory } from '$lib/instances';
-  import { ago, newestFirst, tail, when } from '$lib/format';
-  import { InstanceState } from '$proto/instance_pb';
-  import { SlotState } from '$proto/slot_pb';
-  import { Plus, RotateCcw, Compass, Cpu, ArrowRight } from '@lucide/svelte';
+  import { swapSlot, evictSlot, deleteSlot, relaunchSlot, stopInstance } from '$lib/actions.svelte';
+  import { ago, count, duration, newestFirst, tail, when } from '$lib/format';
+  import { InstanceState, type Instance } from '$proto/instance_pb';
+  import { SlotState, type Slot } from '$proto/slot_pb';
+  import { RouteState } from '$proto/gateway_pb';
+  import { Plus, RotateCcw, Compass, Cpu, ArrowRight, ArrowLeftRight, LogOut, MessageSquare, Play, Settings2, Square, Trash2 } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import IconButton from '$lib/components/ui/IconButton.svelte';
@@ -13,8 +16,8 @@
   import Section from '$lib/components/ui/Section.svelte';
   import Segmented from '$lib/components/ui/Segmented.svelte';
   import State from '$lib/components/ui/State.svelte';
-  import SlotCard from '$lib/components/SlotCard.svelte';
-  import InstanceCard from '$lib/components/InstanceCard.svelte';
+  import Menu from '$lib/components/ui/Menu.svelte';
+  import TaskChip from '$lib/components/TaskChip.svelte';
   import Connect from '$lib/components/Connect.svelte';
   import Routes from '$lib/components/Routes.svelte';
   import ActiveTasks from '$lib/components/ActiveTasks.svelte';
@@ -30,6 +33,15 @@
   const failed = $derived(past.filter((i) => i.state === InstanceState.FAILED));
   const history = $derived(historyView === 'failed' ? failed : past);
   const recent = $derived(answersOf().slice(0, 8));
+  // What the slots table says when it has nothing to list: the first thing missing on the way to serving
+  const firstStep = $derived(live.installs.size === 0 ? 'runtime' : live.models.size === 0 ? 'model' : 'slot');
+
+  function instanceOf(s: Slot): Instance | undefined {
+    return s.instanceId ? live.instances.get(s.instanceId) : undefined;
+  }
+  async function stop(i: Instance) {
+    await stopInstance(i.id, i.name);
+  }
 </script>
 
 <PageHeader title="Serve">
@@ -42,30 +54,102 @@
 <div class="flex flex-col gap-8">
   <ActiveTasks />
 
-  {#if loading}
-    <div class="flex flex-col gap-2" aria-busy="true">
-      {#each [0, 1] as i (i)}<div class="skeleton h-16"></div>{/each}
+  <Section title="Slots" count={slots.length || undefined}>
+    <div class="overflow-x-auto">
+      <table class="tbl">
+        <thead><tr><th class="w-8">#</th><th>Name</th><th>Model</th><th>Runtime</th><th>State</th><th class="num">Requests</th><th class="num">Memory</th><th></th></tr></thead>
+        <tbody>
+          {#if loading}
+            {#each [0, 1] as i (i)}
+              <tr aria-busy="true"><td colspan="8"><div class="skeleton h-4"></div></td></tr>
+            {/each}
+          {:else if slots.length === 0 && standalone.length === 0}
+            <tr>
+              <td colspan="8" class="!p-0">
+                <Empty compact class="border-0" title={firstStep === 'runtime' ? 'Install a runtime to start serving' : firstStep === 'model' ? 'Download a model to start serving' : 'No slots yet'}>
+                  {#if firstStep === 'runtime'}
+                    <Button size="sm" variant="primary" icon={Cpu} href="/runtimes">Runtimes</Button>
+                  {:else if firstStep === 'model'}
+                    <Button size="sm" variant="primary" icon={Compass} href="/catalog">Browse catalog</Button>
+                  {:else}
+                    <Button size="sm" variant="primary" icon={Plus} href="/slots/new">New slot</Button>
+                  {/if}
+                </Empty>
+              </td>
+            </tr>
+          {:else}
+            {#each slots as s (s.id)}
+              {@const instance = instanceOf(s)}
+              {@const route = live.routes.get(s.name)}
+              {@const occupied = slotOccupied(s.id)}
+              {@const answering = route?.state === RouteState.READY}
+              {@const swapTask = taskFor('swap', { slot: s.id })}
+              {@const failedSlot = s.state === SlotState.FAILED}
+              <tr class="row-link" onclick={() => goto(`/slots/${s.id}`)}>
+                <td class="font-mono text-xs text-fg-faint">{s.position}</td>
+                <td class="font-mono text-xs text-fg">{s.name}</td>
+                <td>
+                  {#if s.request?.repo}
+                    <div class="truncate text-fg" title={s.request.repo}>{tail(s.request.repo)} <span class="font-mono text-xs text-fg-muted">{groupLabel(s.request)}</span></div>
+                  {:else}
+                    <span class="text-fg-faint">Empty</span>
+                  {/if}
+                  {#if swapTask}<div class="mt-1"><TaskChip task={swapTask} label="Swapping" /></div>{/if}
+                  {#if failedSlot && s.error}<div class="max-w-md truncate text-xs text-bad" title={s.error}>{s.error}</div>{/if}
+                </td>
+                <td class="text-fg-muted">{instance ? runtimeName(instance.runtimeId) : s.runtimeId ? runtimeName(s.runtimeId) : '–'}</td>
+                <td>
+                  <State values={SlotState} value={s.state} />
+                  {#if occupied && instance}<span class="ml-2 text-xs tabular-nums text-fg-faint">{duration(instance.readyAt ?? instance.createdAt, undefined, clock.now)}</span>{/if}
+                </td>
+                <td class="num text-fg-muted">{occupied ? count(route?.requests ?? 0n) : '–'}{#if route?.inFlight}<span class="text-fg-faint"> · {route.inFlight} live</span>{/if}</td>
+                <td class="num text-fg-muted">{instance ? instanceMemory(instance) || '–' : '–'}</td>
+                <td class="actions" onclick={(e) => e.stopPropagation()}>
+                  <span>
+                    {#if answering}<IconButton size="sm" icon={MessageSquare} label="Chat" href="/chat?model={encodeURIComponent(s.name)}" />{/if}
+                    {#if failedSlot && s.request}
+                      <Button size="sm" variant="primary" icon={RotateCcw} onclick={() => relaunchSlot(s)}>Relaunch</Button>
+                    {:else if occupied}
+                      <Button size="sm" variant="subtle" icon={ArrowLeftRight} onclick={() => swapSlot(s)}>Swap</Button>
+                    {:else}
+                      <Button size="sm" variant="primary" icon={Play} onclick={() => swapSlot(s)}>Run</Button>
+                    {/if}
+                    <Menu
+                      size="sm"
+                      items={[
+                        { label: 'Settings', icon: Settings2, href: `/slots/${s.id}?tab=settings` },
+                        { label: 'Evict', icon: LogOut, onSelect: () => evictSlot(s), disabled: !occupied && !s.request, detail: 'Stop the model and forget it' },
+                        { label: '', separator: true },
+                        { label: 'Delete', icon: Trash2, tone: 'bad', onSelect: () => deleteSlot(s) }
+                      ]}
+                    />
+                  </span>
+                </td>
+              </tr>
+            {/each}
+            {#each standalone as i (i.id)}
+              {@const route = live.routes.get(i.name)}
+              <tr class="row-link" onclick={() => goto(`/instances/${i.id}`)}>
+                <td class="text-fg-faint">–</td>
+                <td class="font-mono text-xs text-fg">{i.name}</td>
+                <td><div class="truncate text-fg" title={i.repo}>{tail(i.repo)} <span class="font-mono text-xs text-fg-muted">{groupLabel(i)}</span></div></td>
+                <td class="text-fg-muted">{runtimeName(i.runtimeId)}</td>
+                <td><State values={InstanceState} value={i.state} /><span class="ml-2 text-xs tabular-nums text-fg-faint">{duration(i.readyAt ?? i.createdAt, undefined, clock.now)}</span></td>
+                <td class="num text-fg-muted">{count(route?.requests ?? 0n)}{#if route?.inFlight}<span class="text-fg-faint"> · {route.inFlight} live</span>{/if}</td>
+                <td class="num text-fg-muted">{instanceMemory(i) || '–'}</td>
+                <td class="actions" onclick={(e) => e.stopPropagation()}>
+                  <span>
+                    {#if route?.state === RouteState.READY}<IconButton size="sm" icon={MessageSquare} label="Chat" href="/chat?model={encodeURIComponent(i.name)}" />{/if}
+                    <IconButton size="sm" icon={Square} label="Stop" class="text-bad hover:text-bad" onclick={() => stop(i)} />
+                  </span>
+                </td>
+              </tr>
+            {/each}
+          {/if}
+        </tbody>
+      </table>
     </div>
-  {:else if slots.length === 0 && standalone.length === 0}
-    <Empty title={live.installs.size === 0 ? 'Install a runtime to start serving' : live.models.size === 0 ? 'Download a model to start serving' : 'No slots yet'}>
-      {#if live.installs.size === 0}
-        <Button variant="primary" icon={Cpu} href="/runtimes">Runtimes</Button>
-      {:else if live.models.size === 0}
-        <Button variant="primary" icon={Compass} href="/catalog">Browse catalog</Button>
-      {:else}
-        <Button variant="primary" icon={Plus} href="/slots/new">New slot</Button>
-      {/if}
-    </Empty>
-  {:else}
-    <div class="flex flex-col gap-2">
-      {#each slots as s (s.id)}
-        <SlotCard slot={s} />
-      {/each}
-      {#each standalone as i (i.id)}
-        <InstanceCard instance={i} />
-      {/each}
-    </div>
-  {/if}
+  </Section>
 
   <Connect />
 

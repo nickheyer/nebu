@@ -2,16 +2,31 @@
   import { ArtifactRole, type Artifact } from '$proto/model_pb';
   import { enumLabel, storage, plural } from '$lib/format';
   import { weightsName } from '$lib/catalog';
-  import { Folder, File, FileCode, FileText, Check, ChevronRight, CornerLeftUp } from '@lucide/svelte';
+  import { fileUrl } from '$lib/api';
+  import { copyText, downloadUrl } from '$lib/clipboard';
+  import { ok, fail } from '$lib/toast.svelte';
+  import { TableSort } from '$lib/sort.svelte';
+  import { Folder, File, FileCode, FileText, Check, ChevronRight, CornerLeftUp, Download, ExternalLink, Link } from '@lucide/svelte';
   import type { Component } from 'svelte';
   import Empty from './ui/Empty.svelte';
   import Tip from './ui/Tip.svelte';
+  import SortTh from './ui/SortTh.svelte';
+  import Menu from './ui/Menu.svelte';
 
   // Every file of a repository as the source lists it, walked a directory at a time, each saying what it is
-  // for and which weights it belongs to, with a mark on the ones already in the store
-  let { files, stored = new Set<string>() }: { files: Artifact[]; stored?: Set<string> } = $props();
+  // for and which weights it belongs to, with a mark on the ones already in the store; every column
+  // orders the listing, and each row carries what to do with the file
+  let {
+    files,
+    stored = new Set<string>(),
+    sourceId,
+    sourceName = 'the source',
+    repo,
+    revision = ''
+  }: { files: Artifact[]; stored?: Set<string>; sourceId: string; sourceName?: string; repo: string; revision?: string } = $props();
 
   let dir = $state('');
+  const sort = new TableSort('name', 'asc');
 
   interface Row {
     name: string;
@@ -22,7 +37,7 @@
     file?: Artifact;
   }
 
-  // What sits in the open directory: its folders first, then its files, both by name
+  // What sits in the open directory: folders and files ordered by the column chosen, folders first when ordered by name
   const rows = $derived.by(() => {
     const prefix = dir ? dir + '/' : '';
     const folders = new Map<string, Row>();
@@ -45,7 +60,19 @@
       f.count++;
       f.bytes += a.sizeBytes;
     }
-    return out.sort((a, b) => Number(b.folder) - Number(a.folder) || a.name.localeCompare(b.name));
+    const ordered = sort.apply(out, (r, key) => {
+      switch (key) {
+        case 'role':
+          return r.folder ? '' : enumLabel(ArtifactRole, r.file?.role);
+        case 'weights':
+          return r.file ? belongs(r.file) : '';
+        case 'size':
+          return r.bytes;
+        default:
+          return r.name.toLowerCase();
+      }
+    });
+    return sort.key === 'name' ? ordered.sort((a, b) => Number(b.folder) - Number(a.folder)) : ordered;
   });
   const total = $derived(files.reduce((a, f) => a + f.sizeBytes, 0n));
   const here = $derived(rows.reduce((a, r) => a + r.bytes, 0n));
@@ -66,6 +93,27 @@
   }
   function shard(a: Artifact): string {
     return a.shardCount > 1 ? `shard ${a.shardIndex} of ${a.shardCount}` : '';
+  }
+  async function copyPath(path: string) {
+    if (await copyText(path)) ok('Copied ' + path);
+    else fail('The clipboard refused', 'Copy failed');
+  }
+  function items(a: Artifact) {
+    const name = a.path.split('/').pop() ?? a.path;
+    const list: { label: string; icon: Component<any>; detail?: string; onSelect: () => void }[] = [
+      { label: 'Download file', icon: Download, detail: storage(a.sizeBytes), onSelect: () => downloadUrl(fileUrl(sourceId, repo, revision, a.path), name) },
+      { label: 'Copy path', icon: Link, onSelect: () => copyPath(a.path) }
+    ];
+    if (a.url) {
+      list.push({
+        label: `Open on ${sourceName}`,
+        icon: ExternalLink,
+        onSelect: () => {
+          window.open(a.url, '_blank', 'noopener');
+        }
+      });
+    }
+    return list;
   }
 </script>
 
@@ -88,11 +136,20 @@
       </span>
     </div>
     <table class="tbl">
-      <thead><tr><th>Name</th><th>Role</th><th>Weights</th><th class="num">Size</th><th></th></tr></thead>
+      <thead>
+        <tr>
+          <SortTh id="name" label="Name" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
+          <SortTh id="role" label="Role" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
+          <SortTh id="weights" label="Weights" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
+          <SortTh id="size" label="Size" num active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
+          <th class="w-8"></th>
+          <th class="w-8"></th>
+        </tr>
+      </thead>
       <tbody>
         {#if dir}
           <tr class="row-link" onclick={() => (dir = parent)}>
-            <td colspan="5">
+            <td colspan="6">
               <span class="inline-flex items-center gap-2 font-mono text-xs text-fg-muted"><CornerLeftUp size={13} class="text-fg-faint" />..</span>
             </td>
           </tr>
@@ -107,13 +164,14 @@
               <td></td>
               <td class="num text-fg-muted">{storage(r.bytes)}</td>
               <td></td>
+              <td></td>
             </tr>
           {:else if r.file}
             {@const a = r.file}
             {@const Icon = icons[a.role] ?? File}
             {@const variant = belongs(a)}
             {@const part = shard(a)}
-            <tr>
+            <tr class="group">
               <td class="w-full max-w-0" title={a.path}>
                 <div class="flex min-w-0 items-center gap-2 font-mono text-xs"><Icon size={13} class="shrink-0 text-fg-faint" /><span class="truncate text-fg">{r.name}</span></div>
               </td>
@@ -125,6 +183,9 @@
               <td class="num">{storage(a.sizeBytes)}</td>
               <td class="w-8 text-right">
                 {#if stored.has(a.path)}<Tip text="Downloaded"><Check size={13} class="text-ok" /></Tip>{/if}
+              </td>
+              <td class="w-8 !py-0 text-right">
+                <span class="inline-flex invisible group-hover:visible has-[[data-state=open]]:visible"><Menu size="sm" items={items(a)} /></span>
               </td>
             </tr>
           {/if}

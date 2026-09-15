@@ -13,25 +13,144 @@ import (
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/build"
+	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/runtime"
-	"github.com/nickheyer/nebu/pkg/spec"
+	"github.com/nickheyer/nebu/pkg/recipes"
+	"github.com/nickheyer/nebu/pkg/runtimes"
+	"github.com/nickheyer/nebu/pkg/triage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func timestampNow() *timestamppb.Timestamp { return timestamppb.Now() }
 
-const buildRecipe = `id: fake
-runtime_id: fake
-tools: [sh]
-vars:
-  greeting: hello
-steps:
-  - command: [sh, -c, 'printf "#!/bin/sh\necho fake version 4.5.6 {{.vars.greeting}}\n" > {{.out}}/fakebin && chmod +x {{.out}}/fakebin']
-binary: fakebin
-`
+// A runtime built from one recipe, whose binary prints its version and the greeting it was built with
+type fakeRuntime struct{}
+
+func (fakeRuntime) ID() string                                         { return "fake" }
+func (fakeRuntime) Name() string                                       { return "Fake" }
+func (fakeRuntime) Description() string                                { return "A runtime for tests" }
+func (fakeRuntime) Formats() []string                                  { return []string{"gguf"} }
+func (fakeRuntime) API() v1.ApiFlavor                                  { return v1.ApiFlavor_API_FLAVOR_OPENAI }
+func (fakeRuntime) Requirements() []string                             { return nil }
+func (fakeRuntime) Unmet(*v1.HostProfile) []string                     { return nil }
+func (fakeRuntime) Params() []*v1.Param                                { return nil }
+func (fakeRuntime) Prepares(string) bool                               { return false }
+func (fakeRuntime) Prepare(runtimes.Launch) (*runtimes.Command, error) { return nil, nil }
+func (fakeRuntime) PrepareTimeout() time.Duration                      { return 0 }
+func (fakeRuntime) Health() runtimes.Health                            { return runtimes.Health{Path: "/health"} }
+func (fakeRuntime) StopGrace() time.Duration                           { return time.Second }
+func (fakeRuntime) Policy() *estimate.Policy                           { return nil }
+func (fakeRuntime) Measure([]string) []*v1.Measurement                 { return nil }
+func (fakeRuntime) Triage() []triage.Set                               { return nil }
+
+func (fakeRuntime) Methods() []runtimes.Method {
+	return []runtimes.Method{{ID: "source", Description: "Build from source", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "fake"}}
+}
+
+func (fakeRuntime) Launch(in runtimes.Launch) (*runtimes.Command, error) {
+	return &runtimes.Command{Command: in.Install.Path}, nil
+}
+
+func (fakeRuntime) Probes() []runtimes.Probe {
+	return []runtimes.Probe{{Key: "version", Args: []string{"--version"}, Parse: func(out string) (string, bool) {
+		_, rest, ok := strings.Cut(out, "fake version ")
+		if !ok {
+			return "", false
+		}
+		if f := strings.Fields(rest); len(f) > 0 {
+			return f[0], true
+		}
+		return "", false
+	}}}
+}
+
+// A recipe with no source that writes a shell script as its binary
+type fakeRecipe struct{}
+
+func (fakeRecipe) ID() string             { return "fake" }
+func (fakeRecipe) RuntimeID() string      { return "fake" }
+func (fakeRecipe) Description() string    { return "Writes a script" }
+func (fakeRecipe) Source() recipes.Source { return recipes.Source{} }
+func (fakeRecipe) Tools() []string        { return []string{"sh"} }
+func (fakeRecipe) Facts() []string        { return nil }
+func (fakeRecipe) Vars() []recipes.Var {
+	return []recipes.Var{{Name: "greeting", Label: "Greeting", Default: "hello", Description: "The word the script prints"}}
+}
+func (fakeRecipe) Variants() []recipes.Variant { return nil }
+func (fakeRecipe) Sandbox() recipes.Sandbox {
+	return recipes.Sandbox{Kind: v1.SandboxKind_SANDBOX_KIND_HOST}
+}
+func (fakeRecipe) Outputs() []string        { return nil }
+func (fakeRecipe) Binary() string           { return "fakebin" }
+func (fakeRecipe) Timeout() time.Duration   { return time.Minute }
+func (fakeRecipe) Patches() []recipes.Patch { return nil }
+
+func (fakeRecipe) Steps(b *recipes.Build) []recipes.Step {
+	script := "#!/bin/sh\necho fake version 4.5.6 " + b.Vars["greeting"] + "\n"
+	return []recipes.Step{{Command: []string{"sh", "-c", "printf '%s' \"$1\" > " + b.Out + "/fakebin && chmod +x " + b.Out + "/fakebin", "sh", script}}}
+}
+
+// The fake recipe with a container CLI no host has, so the container sandbox is offered but unmet
+type cliLessRecipe struct{ fakeRecipe }
+
+func (cliLessRecipe) ID() string { return "clifree" }
+func (cliLessRecipe) Sandbox() recipes.Sandbox {
+	return recipes.Sandbox{Kind: v1.SandboxKind_SANDBOX_KIND_HOST, CLIs: []string{"definitely-missing-cli-xyz"}}
+}
+
+// The fake recipe fetched from the releases of a repository, so a ref means something
+type releasedRecipe struct{ fakeRecipe }
+
+func (releasedRecipe) ID() string { return "released" }
+func (releasedRecipe) Source() recipes.Source {
+	return recipes.Source{Releases: "o/r", Archive: func(ref string) string { return "https://example.com/" + ref + ".tar.gz" }}
+}
+
+func fieldNamed(fields []*v1.ConfigField, name string) *v1.ConfigField {
+	for _, f := range fields {
+		if f.GetName() == name {
+			return f
+		}
+	}
+	return nil
+}
+
+func TestBuildFieldsDescribeSandboxAndRef(t *testing.T) {
+	profile := &v1.HostProfile{Os: "linux", Arch: "amd64"}
+	defaults := &v1.Builds{}
+	sel, err := build.Select(cliLessRecipe{}, profile, build.Options{Defaults: defaults})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := buildFields(cliLessRecipe{}, sel, profile, defaults)
+	sandbox := fieldNamed(fields, "sandbox")
+	if sandbox.GetChoiceLabels()["oci"] != "Container" || sandbox.GetChoiceLabels()["host"] != "Host toolchain" {
+		t.Fatalf("sandbox choices need words: %v", sandbox.GetChoiceLabels())
+	}
+	if !strings.Contains(sandbox.GetChoiceUnmet()["oci"], "definitely-missing-cli-xyz") || sandbox.GetChoiceUnmet()["host"] != "" {
+		t.Fatalf("a container needs a cli the host lacks: %v", sandbox.GetChoiceUnmet())
+	}
+	if fieldNamed(fields, "ref") != nil {
+		t.Fatal("a recipe without a source takes no ref")
+	}
+	if image := fieldNamed(fields, "image"); image.GetPlaceholder() == "" || image.GetRequired() {
+		t.Fatalf("the image shows its shape and is required only under a container: %v", image)
+	}
+	if greeting := fieldNamed(fields, "var.greeting"); greeting.GetDefault() != "hello" || greeting.GetDescription() == "" {
+		t.Fatalf("recipe variables carry their default and description: %v", greeting)
+	}
+
+	sel, err = build.Select(releasedRecipe{}, profile, build.Options{Defaults: defaults})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := fieldNamed(buildFields(releasedRecipe{}, sel, profile, defaults), "ref")
+	if ref == nil || ref.GetDefault() != "" || ref.GetPlaceholder() != "newest release" || !strings.Contains(ref.GetDescription(), "github.com/o/r") {
+		t.Fatalf("a released source takes a ref, the newest release when empty: %v", ref)
+	}
+}
 
 func buildManager(t *testing.T) *Manager {
 	t.Helper()
@@ -40,20 +159,11 @@ func buildManager(t *testing.T) *Manager {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	manifest := &v1.RuntimeManifest{Id: "fake", Acquire: &v1.Acquire{Methods: []*v1.InstallMethod{{Id: "source", How: &v1.InstallMethod_Recipe{Recipe: &v1.FromRecipe{RecipeId: "fake"}}}}}, Probes: []*v1.CommandProbe{{Key: "version", Args: []string{"--version"}, Match: `fake version (?P<value>\S+)`}}}
-	runtimes, err := runtime.New([]*v1.RuntimeManifest{manifest})
+	rts, err := runtimes.New([]runtimes.Runtime{fakeRuntime{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rc := &v1.Recipe{}
-	if err := spec.Decode([]byte(buildRecipe), rc); err != nil {
-		t.Fatal(err)
-	}
-	recipes, err := build.New([]*v1.Recipe{rc})
-	if err != nil {
-		t.Fatal(err)
-	}
-	prober, err := host.New(nil, nil, time.Minute)
+	book, err := build.New([]recipes.Recipe{fakeRecipe{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,11 +171,11 @@ func buildManager(t *testing.T) *Manager {
 	root := t.TempDir()
 	return &Manager{
 		DB:       store,
-		Runtimes: runtimes,
-		Recipes:  recipes,
+		Runtimes: rts,
+		Recipes:  book,
 		Engine:   &build.Engine{Root: root, Log: log},
 		Defaults: &v1.Builds{},
-		Host:     prober,
+		Host:     host.New(nil, nil, time.Minute),
 		Tasks:    tasks.New(context.Background(), log, store, nil),
 		Events:   events.New(),
 		Log:      log,
@@ -162,7 +272,7 @@ func TestInstallByMethod(t *testing.T) {
 	for _, f := range options[0].GetFields() {
 		names = append(names, f.GetName())
 	}
-	if want := []string{"ref", "sandbox", "image", "force", "var.greeting"}; strings.Join(names, ",") != strings.Join(want, ",") {
+	if want := []string{"sandbox", "image", "force", "var.greeting"}; strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("fields %v", names)
 	}
 	if _, err := m.Install(ctx, "fake", "source", map[string]string{"nope": "1"}); err == nil {

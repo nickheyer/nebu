@@ -51,6 +51,15 @@ export const api = {
   events: createClient(EventService, transport)
 };
 
+// Where the daemon streams one file of a repository, the token in the link when the daemon needs one
+export function fileUrl(sourceId: string, repo: string, revision: string, path: string): string {
+  const p = new URLSearchParams({ source: sourceId, repo, path });
+  if (revision) p.set('revision', revision);
+  const t = token();
+  if (t) p.set('token', t);
+  return `${baseUrl}/files?${p.toString()}`;
+}
+
 // Formats an error for people
 export function message(err: unknown): string {
   if (err instanceof ConnectError) return err.rawMessage || err.message;

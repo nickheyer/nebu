@@ -12,6 +12,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/host"
+	"github.com/nickheyer/nebu/pkg/launch"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
 	"github.com/nickheyer/nebu/pkg/sources"
@@ -26,14 +27,15 @@ var (
 	_ nebuv1connect.StoreServiceHandler    = (*StoreService)(nil)
 )
 
-// Serves host profile and doctor
+// Serves host profile, doctor, and the daemon's own log
 type HostService struct {
 	prober *host.Prober
 	doctor *doctor.Doctor
+	recent *launch.Log
 }
 
-func NewHostService(prober *host.Prober, doc *doctor.Doctor) *HostService {
-	return &HostService{prober: prober, doctor: doc}
+func NewHostService(prober *host.Prober, doc *doctor.Doctor, recent *launch.Log) *HostService {
+	return &HostService{prober: prober, doctor: doc, recent: recent}
 }
 
 func (s *HostService) GetProfile(ctx context.Context, req *connect.Request[v1.GetProfileRequest]) (*connect.Response[v1.GetProfileResponse], error) {
@@ -44,6 +46,20 @@ func (s *HostService) GetProfile(ctx context.Context, req *connect.Request[v1.Ge
 func (s *HostService) Doctor(ctx context.Context, req *connect.Request[v1.DoctorRequest]) (*connect.Response[v1.DoctorResponse], error) {
 	task, err := s.doctor.Start(ctx)
 	return reply(&v1.DoctorResponse{Task: task}, err)
+}
+
+// Streams the daemon's own log: the last tail lines, then when following every line after until the
+// client goes
+func (s *HostService) Logs(ctx context.Context, req *connect.Request[v1.HostServiceLogsRequest], stream *connect.ServerStream[v1.HostServiceLogsResponse]) error {
+	send := func(lines []string) error { return stream.Send(&v1.HostServiceLogsResponse{Lines: lines}) }
+	if !req.Msg.GetFollow() {
+		lines := s.recent.Tail(int(req.Msg.GetTail()))
+		if len(lines) == 0 {
+			return nil
+		}
+		return wrap(send(lines))
+	}
+	return wrap(s.recent.Follow(ctx, int(req.Msg.GetTail()), send))
 }
 
 // Serves host wide preferences

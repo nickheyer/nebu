@@ -92,8 +92,8 @@ func (r *Registry) ForRuntime(runtimeID string) []recipes.Recipe {
 	return out
 }
 
-// A recipe as the API describes it
-func Describe(rc recipes.Recipe) *v1.Recipe {
+// A recipe as the API describes it to one host: its variables, and what each variant the host can take sets there
+func Describe(rc recipes.Recipe, profile *v1.HostProfile) *v1.Recipe {
 	out := &v1.Recipe{
 		Id:          rc.ID(),
 		RuntimeId:   rc.RuntimeID(),
@@ -102,11 +102,72 @@ func Describe(rc recipes.Recipe) *v1.Recipe {
 		Tools:       rc.Tools(),
 		Sandbox:     rc.Sandbox().Kind,
 		SandboxClis: rc.Sandbox().CLIs,
-		Vars:        rc.Vars(),
 		TimeoutMs:   uint32(Timeout(rc) / time.Millisecond),
 	}
+	for _, v := range rc.Vars() {
+		out.Vars = append(out.Vars, &v1.Var{Name: v.Name, Label: v.Label, Default: v.Default, Description: v.Description, Choices: v.Choices})
+	}
 	for _, v := range rc.Variants() {
-		out.Variants = append(out.Variants, &v1.Variant{Id: v.ID, Description: v.Description, Tools: v.Tools})
+		pv := &v1.Variant{Id: v.ID, Description: v.Description, Tools: v.Tools, Requires: v.Requires}
+		if v.Applies(profile) {
+			pv.Vars = variantVars(v, profile)
+		}
+		out.Variants = append(out.Variants, pv)
+	}
+	return out
+}
+
+// What a variant sets on a host, trimmed, the empty values left out
+func variantVars(v recipes.Variant, profile *v1.HostProfile) map[string]string {
+	if v.Vars == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for k, val := range v.Vars(profile) {
+		if val = strings.TrimSpace(val); val != "" {
+			out[k] = val
+		}
+	}
+	return out
+}
+
+// The image an oci sandbox runs for a variant: the variant's own, else the recipe's, else the configured default
+func Image(rc recipes.Recipe, v recipes.Variant, defaults *v1.Builds) string {
+	if v.Image != "" {
+		return v.Image
+	}
+	if img := rc.Sandbox().Image; img != "" {
+		return img
+	}
+	return defaults.GetImage()
+}
+
+// The container CLIs tried in order: the recipe's own, else the configured ones, else podman, docker, nerdctl
+func CLIs(rc recipes.Recipe, defaults *v1.Builds) []string {
+	if clis := rc.Sandbox().CLIs; len(clis) > 0 {
+		return clis
+	}
+	if clis := defaults.GetCli(); len(clis) > 0 {
+		return clis
+	}
+	return defaultCLIs
+}
+
+// Every tool the recipe or any of its variants needs, each once, in recipe order
+func allTools(rc recipes.Recipe) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(tools []string) {
+		for _, t := range tools {
+			if !seen[t] {
+				seen[t] = true
+				out = append(out, t)
+			}
+		}
+	}
+	add(rc.Tools())
+	for _, v := range rc.Variants() {
+		add(v.Tools)
 	}
 	return out
 }
@@ -142,18 +203,23 @@ type Options struct {
 
 // What the host selects for a recipe, ready to run
 type Selection struct {
-	Recipe       recipes.Recipe
-	Variant      recipes.Variant
-	Vars         map[string]string
-	Sandbox      v1.SandboxKind
-	CLI          string
-	Image        string
-	Ref          string
-	Facts        map[string]string
+	Recipe  recipes.Recipe
+	Variant recipes.Variant
+	Vars    map[string]string
+	Sandbox v1.SandboxKind
+	// The container CLIs tried, and the first of them on the host, empty when none is
+	CLIs  []string
+	CLI   string
+	Image string
+	Ref   string
+	Facts map[string]string
+	// Tools the chosen variant needs that the host lacks, under the host sandbox
 	MissingTools []string
-	Unmet        []string
-	profile      *v1.HostProfile
-	overrides    map[string]string
+	// Tools any variant needs that the host lacks
+	AbsentTools []string
+	Unmet       []string
+	profile     *v1.HostProfile
+	overrides   map[string]string
 }
 
 // Evaluates variants, sandbox, tools, vars, and facts against the host
@@ -177,29 +243,17 @@ func Select(rc recipes.Recipe, profile *v1.HostProfile, opts Options) (*Selectio
 		sel.Ref = Latest
 	}
 	sel.resolveVars()
+	sel.CLIs = CLIs(rc, opts.Defaults)
+	sel.CLI, _ = sandbox.Detect(sel.CLIs)
+	sel.AbsentTools = sandbox.MissingTools(allTools(rc))
 	if sel.Sandbox == v1.SandboxKind_SANDBOX_KIND_OCI {
-		sel.Image = sel.Variant.Image
-		if sel.Image == "" {
-			sel.Image = rc.Sandbox().Image
-		}
-		if sel.Image == "" {
-			sel.Image = opts.Defaults.GetImage()
-		}
+		sel.Image = Image(rc, sel.Variant, opts.Defaults)
 		if opts.Image != "" {
 			sel.Image = opts.Image
 		}
-		clis := rc.Sandbox().CLIs
-		if len(clis) == 0 {
-			clis = opts.Defaults.GetCli()
+		if sel.CLI == "" {
+			sel.Unmet = append(sel.Unmet, "no container cli among "+strings.Join(sel.CLIs, ", "))
 		}
-		if len(clis) == 0 {
-			clis = defaultCLIs
-		}
-		cli, ok := sandbox.Detect(clis)
-		if !ok {
-			sel.Unmet = append(sel.Unmet, "no container cli among "+strings.Join(clis, ", "))
-		}
-		sel.CLI = cli
 		if sel.Image == "" {
 			sel.Unmet = append(sel.Unmet, "no container image, pass --image or set builds.image")
 		}
@@ -222,8 +276,8 @@ func Select(rc recipes.Recipe, profile *v1.HostProfile, opts Options) (*Selectio
 // The recipe's defaults under the caller's overrides, then the variant's own values
 func (s *Selection) resolveVars() {
 	s.Vars = map[string]string{}
-	for k, v := range s.Recipe.Vars() {
-		s.Vars[k] = strings.TrimSpace(v)
+	for _, v := range s.Recipe.Vars() {
+		s.Vars[v.Name] = strings.TrimSpace(v.Default)
 	}
 	for k, v := range s.overrides {
 		s.Vars[k] = strings.TrimSpace(v)
@@ -278,9 +332,10 @@ func (s *Selection) pickVariant(want string) error {
 // Reports the selection for the API
 func (s *Selection) Status() *v1.RecipeStatus {
 	return &v1.RecipeStatus{
-		Recipe:       Describe(s.Recipe),
+		Recipe:       Describe(s.Recipe, s.profile),
 		Variant:      s.Variant.ID,
 		MissingTools: s.MissingTools,
+		AbsentTools:  s.AbsentTools,
 		Sandbox:      s.Sandbox,
 		SandboxCli:   s.CLI,
 		Unmet:        s.Unmet,

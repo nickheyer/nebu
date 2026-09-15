@@ -23,7 +23,7 @@ func (p darwinMemory) Run(ctx context.Context) host.Result {
 		return res
 	}
 	pool := &v1.MemoryPool{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: total, FreeBytes: free}
-	return found(nil, []*v1.MemoryPool{pool}, map[string]string{"mem.total": itoa(int(total))}, rows(1))
+	return found(nil, []*v1.MemoryPool{pool}, nil, rows(1))
 }
 
 // Reads memory size and the pages macOS can hand out: free pages sit near zero on macOS, so the

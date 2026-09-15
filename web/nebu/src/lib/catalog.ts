@@ -1,6 +1,6 @@
 import type { ConfigField, Facet, SearchHit, SourceCapabilities, SourceStatus } from '$proto/source_pb';
 import { ConfigType, SourceKind } from '$proto/source_pb';
-import type { FitRow } from '$proto/estimate_pb';
+import type { FitRow, MemoryPlan } from '$proto/estimate_pb';
 import { FitVerdict } from '$proto/estimate_pb';
 import type { Descriptor, Precision } from '$proto/model_pb';
 import { count, ctx } from './format';
@@ -119,11 +119,14 @@ export function sortReversible(caps: SourceCapabilities | undefined, sortId: str
   return !!caps?.sorts.find((s) => s.id === sortId)?.reversible;
 }
 
-// The most useful size to show for a hit
-export function hitSize(h: SearchHit): { kind: 'params' | 'bytes' | 'none'; value: bigint } {
-  if (h.parameters > 0n) return { kind: 'params', value: h.parameters };
-  if (h.sizeBytes > 0n) return { kind: 'bytes', value: h.sizeBytes };
-  return { kind: 'none', value: 0n };
+// The most useful size to show for a hit: a parameter count, a byte size, or the sizes a source lists
+// a model in, such as Ollama's 1b and 3b
+export function hitSize(h: SearchHit): { kind: 'params' | 'bytes' | 'sizes' | 'none'; value: bigint; text: string } {
+  if (h.parameters > 0n) return { kind: 'params', value: h.parameters, text: '' };
+  if (h.sizeBytes > 0n) return { kind: 'bytes', value: h.sizeBytes, text: '' };
+  const sizes = splitValues(h.extra['sizes']);
+  if (sizes.length) return { kind: 'sizes', value: 0n, text: sizes.length > 1 ? `${sizes[0]}–${sizes[sizes.length - 1]}` : sizes[0] };
+  return { kind: 'none', value: 0n, text: '' };
 }
 
 // A key that tells two weight groups apart even when their names collide across formats
@@ -131,21 +134,33 @@ export function descriptorKey(d: Descriptor): string {
   return `${d.formatId}\0${d.group}`;
 }
 
-// Orders weight groups for choosing: what fits first, then the largest, which keeps the most quality
-//
-// Read at one context length when given, else at the best each group reaches.
-export function orderDescriptors(descriptors: Descriptor[], rows: FitRow[], context = 0): Descriptor[] {
-  const score = (v: FitVerdict | undefined) => (v === undefined ? -1 : v === FitVerdict.FITS ? 2 : v === FitVerdict.PARTIAL ? 1 : 0);
-  const rank = (d: Descriptor) => {
-    if (context) return score(rowAt(rows, d.group, context)?.plan?.verdict);
-    return Math.max(-1, ...rows.filter((r) => r.group === d.group && r.plan).map((r) => score(r.plan!.verdict)));
-  };
-  return [...descriptors].sort((a, b) => rank(b) - rank(a) || Number(b.totalBytes - a.totalBytes));
+// Orders weight groups by bits per weight, the most precise first, then by size, so the list reads
+// down from full quality to the smallest quant with every variant of one width together
+export function orderDescriptors(descriptors: Descriptor[]): Descriptor[] {
+  return [...descriptors].sort((a, b) => b.bitsPerWeight - a.bitsPerWeight || Number(b.totalBytes - a.totalBytes) || a.group.localeCompare(b.group));
 }
 
-// The row planning one group at one context length, on the one runtime the rows were filtered to
+// The largest group among the rows that fits at a context, the one to pull when nothing else decides
+export function recommended(descriptors: Descriptor[], rows: FitRow[], context: number): string {
+  const fitting = descriptors.filter((d) => cellPlan(rowAt(rows, d.group, context))?.verdict === FitVerdict.FITS);
+  return fitting.sort((a, b) => Number(b.totalBytes - a.totalBytes))[0]?.group ?? '';
+}
+
+// The plan a row is read by: the one against memory free now, as a run plans, else the whole memory one
+export function cellPlan(row: FitRow | undefined): MemoryPlan | undefined {
+  return row?.free ?? row?.plan;
+}
+
+// The row planning one group at one context length, on the one runtime the rows were filtered to; a
+// context of zero is the row the planner solved itself
 export function rowAt(rows: FitRow[], group: string, context: number): FitRow | undefined {
   return rows.find((r) => r.group === group && r.context === context);
+}
+
+// The context a plan settled on, for the row the planner solved
+export function plannedContext(row: FitRow | undefined): number {
+  const n = Number(cellPlan(row)?.params['n_ctx'] ?? 0);
+  return Number.isFinite(n) ? n : 0;
 }
 
 // The width alone, 8-bit out of 8-bit Q8_0, since the group name already says the rest

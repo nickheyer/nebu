@@ -9,10 +9,13 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -125,6 +128,7 @@ func olHit(c *Client, block string) *v1.SearchHit {
 	name := m[1]
 	hit := newHit(name, name, olAuthor(name))
 	hit.Url = c.URL(namespaced(name, olNamespace))
+	hit.Formats = []string{"gguf"}
 	if d := olDescRe.FindStringSubmatch(block); d != nil {
 		hit.Description = Summary(d[1])
 	}
@@ -170,70 +174,154 @@ func olHasTags(hit *v1.SearchHit, want []string) bool {
 	return true
 }
 
-var (
-	olTagLinkRe = regexp.MustCompile(`<a[^>]*href="/([^"]+:[^"/]+)"`)
-	olSizeRe    = regexp.MustCompile(`>\s*(\d+(?:\.\d+)?\s?[KMGT]?B)\s*<`)
-	olContextRe = regexp.MustCompile(`>\s*(\d+(?:\.\d+)?[KM])\s*<`)
-	olInputRe   = regexp.MustCompile(`(?s)<div[^>]*col-span-2[^>]*>\s*(.*?)\s*</div>`)
-	olCommitRe  = regexp.MustCompile(`<span[^>]*font-mono[^>]*>\s*([0-9a-fA-F]{6,64})\s*</span>`)
+var olTagLinkRe = regexp.MustCompile(`<a[^>]*href="/([^"]+:[^"/]+)"`)
+
+const (
+	// Manifests and config blobs read at once when a model's tags are listed
+	olTagWorkers = 8
+	// How long a model's tag list is kept before the registry is asked again
+	olTagsTTL = 10 * time.Minute
 )
 
-func (ollamaAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
-	name, _ := olSplit(repo, "")
+// What the registry's config blob says about one tag: the weight format, the parameter count, and the quant
+type olConfig struct {
+	ModelFormat string `json:"model_format"`
+	ModelType   string `json:"model_type"`
+	FileType    string `json:"file_type"`
+}
+
+// The tag names of a model, from the library's tag page, the one listing the registry does not serve
+func olTagNames(ctx context.Context, c *Client, name string) ([]string, error) {
 	page, err := c.Text(ctx, c.URL(namespaced(name, olNamespace), "tags"), nil, olPageMax)
 	if err != nil {
 		return nil, err
 	}
-	// Every tag is on the page twice, once per layout, so rows merge by tag
+	// Every tag is on the page twice, once per layout, so names are kept once in the order first seen
 	prefix := namespaced(name, olNamespace) + ":"
-	locs := olTagLinkRe.FindAllStringSubmatchIndex(page, -1)
-	byTag := map[string]*v1.Revision{}
-	var out []*v1.Revision
-	for i, loc := range locs {
-		full := page[loc[2]:loc[3]]
-		if !strings.HasPrefix(full, prefix) {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range olTagLinkRe.FindAllStringSubmatch(page, -1) {
+		if !strings.HasPrefix(m[1], prefix) {
 			continue
 		}
-		tag := strings.TrimPrefix(full, prefix)
-		end := len(page)
-		if i+1 < len(locs) {
-			end = locs[i+1][0]
+		tag := strings.TrimPrefix(m[1], prefix)
+		if !seen[tag] {
+			seen[tag] = true
+			out = append(out, tag)
 		}
-		rev := byTag[tag]
-		if rev == nil {
-			rev = &v1.Revision{Name: tag, Repo: name + ":" + tag, Default: tag == latestTag}
-			byTag[tag] = rev
-			out = append(out, rev)
-		}
-		olFill(rev, page[loc[1]:end])
 	}
 	return out, nil
 }
 
-// Reads size, context, input, and commit from one tag row, keeping what is already known
-func olFill(rev *v1.Revision, chunk string) {
-	if rev.SizeBytes == 0 {
-		if m := olSizeRe.FindStringSubmatch(chunk); m != nil {
-			rev.SizeBytes = ParseSize(m[1])
-		}
+// Every tag of a model as its own variant, each read from the registry: the manifest for its size and
+// digest, the config blob for its parameter count and quant, nothing read from the tag's name
+func (ollamaAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
+	name, _ := olSplit(repo, "")
+	if name == "" {
+		return nil, fmt.Errorf("empty repo")
 	}
-	if rev.Commit == "" {
-		if m := olCommitRe.FindStringSubmatch(chunk); m != nil {
-			rev.Commit = strings.ToLower(m[1])
-		}
+	memo := Cached(c, "ollama-tags:"+name, func() *Memo[[]*v1.Revision] { return &Memo[[]*v1.Revision]{TTL: olTagsTTL} })
+	return memo.Get(ctx, func(ctx context.Context) ([]*v1.Revision, error) { return olTags(ctx, c, name) })
+}
+
+func olTags(ctx context.Context, c *Client, name string) ([]*v1.Revision, error) {
+	tags, err := olTagNames(ctx, c, name)
+	if err != nil {
+		return nil, err
 	}
-	if rev.Detail == "" {
-		var parts []string
-		if m := olContextRe.FindStringSubmatch(chunk); m != nil {
-			parts = append(parts, m[1]+" context")
-		}
-		if m := olInputRe.FindStringSubmatch(chunk); m != nil {
-			if in := StripTags(m[1]); in != "" {
-				parts = append(parts, in+" input")
+	path := namespaced(name, olNamespace)
+	out := make([]*v1.Revision, len(tags))
+	eg, gctx := errgroup.WithContext(ctx)
+	eg.SetLimit(olTagWorkers)
+	for i, tag := range tags {
+		eg.Go(func() error {
+			m, cfg, err := olManifest(gctx, c, path, tag)
+			if err != nil {
+				return fmt.Errorf("%s:%s: %w", name, tag, err)
 			}
-		}
-		rev.Detail = strings.Join(parts, ", ")
+			var size uint64
+			for _, l := range m.Layers {
+				size += uint64(l.Size)
+			}
+			out[i] = &v1.Revision{
+				Name:       tag,
+				Repo:       name + ":" + tag,
+				Commit:     olCommit(m),
+				Default:    tag == latestTag,
+				SizeBytes:  size,
+				Parameters: olParameters(cfg.ModelType),
+				Precision:  cfg.FileType,
+				Detail:     strings.TrimSpace(cfg.ModelType + " " + cfg.FileType),
+			}
+			return nil
+		})
 	}
+	if err := eg.Wait(); err != nil {
+		return nil, err
+	}
+	// Larger models after smaller ones, the smaller files of a size ahead of the larger
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.GetParameters() != b.GetParameters() {
+			return a.GetParameters() < b.GetParameters()
+		}
+		if a.GetSizeBytes() != b.GetSizeBytes() {
+			return a.GetSizeBytes() < b.GetSizeBytes()
+		}
+		return a.GetName() < b.GetName()
+	})
+	return out, nil
+}
+
+// One tag's manifest and the config blob it points at
+func olManifest(ctx context.Context, c *Client, path, tag string) (*Manifest, olConfig, error) {
+	m, err := c.Distribution().Manifest(ctx, path, tag)
+	if err != nil {
+		return nil, olConfig{}, err
+	}
+	var cfg olConfig
+	if m.Config.Digest != "" {
+		if err := c.Distribution().BlobJSON(ctx, path, m.Config.Digest, &cfg); err != nil {
+			return nil, olConfig{}, fmt.Errorf("config: %w", err)
+		}
+	}
+	return m, cfg, nil
+}
+
+// The manifest digest, or a hash of its layers when the registry sent none
+func olCommit(m *Manifest) string {
+	if m.Digest != "" {
+		return m.Digest
+	}
+	return olDigestOf(m.Layers)
+}
+
+// A parameter count as the config blob writes it, 3.2B, 70B, or 8x7B for a mixture, zero when it says none
+func olParameters(s string) uint64 {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	if s == "" {
+		return 0
+	}
+	mult := 1.0
+	switch s[len(s)-1] {
+	case 'B':
+		mult = 1e9
+	case 'M':
+		mult = 1e6
+	case 'K':
+		mult = 1e3
+	default:
+		return 0
+	}
+	product := 1.0
+	for _, part := range strings.Split(s[:len(s)-1], "X") {
+		f, err := strconv.ParseFloat(part, 64)
+		if err != nil || f <= 0 {
+			return 0
+		}
+		product *= f
+	}
+	return uint64(product*mult + 0.5)
 }
 
 func (ollamaAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error) {
@@ -242,22 +330,11 @@ func (ollamaAPI) Resolve(ctx context.Context, c *Client, repo, revision string) 
 		return nil, fmt.Errorf("empty repo")
 	}
 	path := namespaced(name, olNamespace)
-	m, err := c.Distribution().Manifest(ctx, path, tag)
+	m, cfg, err := olManifest(ctx, c, path, tag)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s:%s: %w", name, tag, err)
 	}
-	var cfg struct {
-		FileType string `json:"file_type"`
-	}
-	if m.Config.Digest != "" {
-		if err := c.Distribution().BlobJSON(ctx, path, m.Config.Digest, &cfg); err != nil {
-			return nil, fmt.Errorf("%s:%s config: %w", name, tag, err)
-		}
-	}
-	model := &v1.Model{Repo: name + ":" + tag, Revision: tag, Commit: m.Digest}
-	if model.Commit == "" {
-		model.Commit = olDigestOf(m.Layers)
-	}
+	model := &v1.Model{Repo: name + ":" + tag, Revision: tag, Commit: olCommit(m)}
 	base := strings.ReplaceAll(name, "/", "-") + "-" + tag
 	names := namer{}
 	for _, l := range m.Layers {

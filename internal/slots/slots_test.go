@@ -14,7 +14,7 @@ import (
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/runtime"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/store"
 )
 
@@ -36,7 +36,7 @@ func manager(t *testing.T) *Manager {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtimes, err := runtime.New(nil)
+	runtimes, err := runtimes.New(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,5 +22,5 @@ func (p darwinUnified) Run(ctx context.Context) host.Result {
 		return res
 	}
 	pool := &v1.MemoryPool{Id: "unified", Kind: v1.PoolKind_POOL_KIND_UNIFIED, TotalBytes: total, FreeBytes: free}
-	return found(nil, []*v1.MemoryPool{pool}, map[string]string{"mem.total": itoa(int(total))}, rows(1))
+	return found(nil, []*v1.MemoryPool{pool}, nil, rows(1))
 }

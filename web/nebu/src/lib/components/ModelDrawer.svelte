@@ -2,13 +2,13 @@
   import { untrack } from 'svelte';
   import { Code } from '@connectrpc/connect';
   import { api, code, message } from '$lib/api';
-  import { live, clock, taskFor, modelKey, hostName, runtimeName, instanceLive, installsOf, storeMount, poolName, orderedSlots, startedTask } from '$lib/state.svelte';
+  import { live, clock, taskFor, modelKey, hostName, runtimeName, instanceLive, installsOf, storeMount, poolName, orderedSlots, startedTask, instancesOnPool } from '$lib/state.svelte';
   import { runModel } from '$lib/actions.svelte';
   import { ago, ratioBytes, ratioStorage, storage, count, params as fmtParams, enumLabel, byName, ctx as fmtCtx } from '$lib/format';
   import { readLocal, writeLocal } from '$lib/persist';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
-  import { descriptorKey, facetValueLabel, hitChips, locked, orderDescriptors, precisionShort, rowAt, weightsName } from '$lib/catalog';
+  import { cellPlan, descriptorKey, facetValueLabel, hitChips, locked, orderDescriptors, plannedContext, precisionShort, recommended, rowAt, weightsName } from '$lib/catalog';
   import { FitVerdict, type InspectResponse, type MemoryPlan } from '$proto/estimate_pb';
   import { PoolKind } from '$proto/host_pb';
   import type { SearchHit, SourceCapabilities, Revision, ModelCard } from '$proto/source_pb';
@@ -28,7 +28,7 @@
   import Tip from './ui/Tip.svelte';
   import State from './ui/State.svelte';
   import Disclosure from './ui/Disclosure.svelte';
-  import StackBar from './ui/StackBar.svelte';
+  import SizeBar from './ui/SizeBar.svelte';
   import PlanTable from './PlanTable.svelte';
   import ModelFiles from './ModelFiles.svelte';
   import TaskChip from './TaskChip.svelte';
@@ -74,6 +74,8 @@
 
   const model = $derived(inspect?.model);
   const revLabel = $derived(caps?.revisionLabel || 'revision');
+  // A source that tags every variant of a model as its own repository lists them as a table, not a pick list
+  const variants = $derived(revisions.filter((r) => r.repo));
   const currentRevision = $derived(revisions.find((r) => (r.repo ? r.repo === (model?.repo ?? curRepo) : r.name === (model?.revision ?? curRev))) ?? revisions.find((r) => r.default));
   const revisionText = $derived(currentRevision?.name || model?.revision || curRev || 'default');
   const pageUrl = $derived(hit?.url || card?.url || '');
@@ -89,24 +91,23 @@
   const planRuntimes = $derived([...new Set((inspect?.rows ?? []).map((r) => r.runtimeId))]);
   const runtime = $derived(planRuntimes.includes(pickedRuntime) ? pickedRuntime : (planRuntimes.find(installed) ?? planRuntimes[0] ?? ''));
   const rows = $derived((inspect?.rows ?? []).filter((r) => r.runtimeId === runtime));
-  // The context length the table is read at: the last pick, kept per browser, else the shortest planned, which is the runtime default
+  // The context length the table is read at: the last pick, kept per browser, else the one the planner solves,
+  // the largest that fits, else the largest planned
   const ctxKey = 'nebu.drawer.context';
-  let pickedCtx = $state(Number(readLocal(ctxKey)) || 0);
+  let pickedCtx = $state(readLocal(ctxKey) === '' ? -1 : Number(readLocal(ctxKey)));
   const contexts = $derived([...new Set(rows.map((r) => r.context))].sort((a, b) => a - b));
-  const context = $derived(contexts.includes(pickedCtx) ? pickedCtx : (contexts[0] ?? 0));
+  const context = $derived(contexts.includes(pickedCtx) ? pickedCtx : contexts.includes(0) ? 0 : (contexts.at(-1) ?? 0));
   function pickContext(c: number) {
     pickedCtx = c;
     writeLocal(ctxKey, String(c));
   }
-  const ordered = $derived(inspect ? orderDescriptors(inspect.descriptors, rows, context) : []);
+  const ordered = $derived(inspect ? orderDescriptors(inspect.descriptors) : []);
   const names = $derived(Object.fromEntries((inspect?.descriptors ?? []).map((d) => [d.group, weightsName(d.group, d.formatId)])));
   const cells = $derived(new Map(ordered.map((d) => [d.group, rowAt(rows, d.group, context)])));
-  // The first row that fits is the largest that does, the usual thing to pull
-  const bestGroup = $derived(ordered.find((d) => cells.get(d.group)?.plan?.verdict === FitVerdict.FITS)?.group ?? '');
+  // The largest variant that fits right now, the usual thing to pull
+  const bestGroup = $derived(recommended(ordered, rows, context));
   // The source's count when it has one, else what the headers add up to
   const paramCount = $derived(hit && hit.parameters > 0n ? hit.parameters : ordered.reduce((a, d) => (d.parameterCount > a ? d.parameterCount : a), 0n));
-  const limit = $derived(Math.max(0, ...ordered.map((d) => d.params['n_ctx_train'] ?? 0)));
-  const atLimit = $derived(limit > 0 && contexts.at(-1) === limit);
   const mount = $derived(storeMount());
   // A gated repository on a source without a token cannot be read, and a refusal says the same
   const gated = $derived(locked(hit, caps) || denied);
@@ -125,17 +126,39 @@
   // Nothing installed serves these weights, so the table plans on what could be installed and says so once
   const noRuntime = $derived(planRuntimes.length > 0 && !planRuntimes.some(installed));
   const poolWord: Record<number, string> = { [PoolKind.DEVICE]: 'GPU', [PoolKind.HOST]: 'RAM', [PoolKind.UNIFIED]: 'MEM' };
-  // One bar per pool with what the plan put there, a unified pool listed twice carrying both of its shares; a
-  // plan nothing holds fills each pool in turn and runs the last one past its capacity, which the bar shows
-  function poolRows(plan: MemoryPlan): { id: string; kind: PoolKind; used: bigint; cap: bigint }[] {
-    const out: { id: string; kind: PoolKind; used: bigint; cap: bigint }[] = [];
+  // One bar per pool: the whole pool, what was in use when the host was read, and what this variant takes;
+  // a unified pool listed twice carries both of its shares as one
+  function poolRows(plan: MemoryPlan): { id: string; kind: PoolKind; used: bigint; cap: bigint; total: bigint; free: bigint }[] {
+    const out: { id: string; kind: PoolKind; used: bigint; cap: bigint; total: bigint; free: bigint }[] = [];
     for (const p of plan.pools) {
       const row = out.find((r) => r.id === p.poolId);
       if (row) row.used += p.usedBytes;
-      else out.push({ id: p.poolId, kind: p.kind, used: p.usedBytes, cap: p.capacityBytes });
+      else out.push({ id: p.poolId, kind: p.kind, used: p.usedBytes, cap: p.capacityBytes, total: p.totalBytes || p.capacityBytes, free: p.freeBytes });
     }
     return out;
   }
+  function poolOverlays(pool: { id: string; used: bigint; cap: bigint; total: bigint; free: bigint }, verdict: FitVerdict | undefined) {
+    const inUse = pool.total > pool.free ? pool.total - pool.free : 0n;
+    const ours = instancesOnPool(pool.id);
+    const others = inUse > ours ? inUse - ours : 0n;
+    const over = pool.used > pool.cap || verdict === FitVerdict.NO;
+    const items = [];
+    if (others > 0n) items.push({ size: others, tone: 'neutral' as const });
+    if (ours > 0n) items.push({ label: 'instances', size: ours, tone: 'info' as const });
+    items.push({ label: 'this', size: pool.used, tone: over ? ('bad' as const) : ('accent' as const) });
+    return [{ start: 'left' as const, items }];
+  }
+  // The variants a source tags by parameter count, each count its own group of rows, smallest first
+  const variantGroups = $derived.by(() => {
+    const out: { label: string; parameters: bigint; rows: Revision[] }[] = [];
+    for (const r of variants) {
+      const label = r.parameters > 0n ? fmtParams(r.parameters) : 'Other';
+      let g = out.find((x) => x.label === label);
+      if (!g) out.push((g = { label, parameters: r.parameters, rows: [] }));
+      g.rows.push(r);
+    }
+    return out.sort((a, b) => (a.parameters === b.parameters ? 0 : a.parameters === 0n ? 1 : b.parameters === 0n ? -1 : a.parameters < b.parameters ? -1 : 1));
+  });
   // The row opened to its plan
   let expanded = $state('');
 
@@ -315,7 +338,7 @@
       {#if paramCount > 0n}<span>{fmtParams(paramCount)} params</span>{:else if hit && hit.sizeBytes > 0n}<span>{storage(hit.sizeBytes, 1)}</span>{/if}
       {#if hit?.license}<span><span class="text-fg-faint">license</span> {hit.license}</span>{/if}
       {#if hit?.updatedAt}<span><span class="text-fg-faint">updated</span> {ago(hit.updatedAt, clock.now)}</span>{/if}
-      {#if revisions.length > 1}
+      {#if revisions.length > 1 && !variants.length}
         <span class="ml-auto inline-flex items-center gap-2 text-xs text-fg-faint">
           {revLabel}
           <Select
@@ -361,10 +384,32 @@
         </Empty>
       {:else if inspect && model}
         <div class="flex flex-col gap-6">
+          {#if variantGroups.length}
+            {@const dated = variants.some((r) => r.updatedAt)}
+            <table class="tbl">
+              <thead><tr><th>{revLabel}</th><th>Precision</th><th class="num">Size</th>{#if dated}<th>Updated</th>{/if}<th></th></tr></thead>
+              <tbody>
+                {#each variantGroups as g (g.label)}
+                  <tr><td colspan={dated ? 5 : 4} class="caps !pt-3 text-fg-faint">{g.label}</td></tr>
+                  {#each g.rows as r (r.name)}
+                    {@const on = r.repo === curRepo}
+                    {@const stored = live.models.get(modelKey({ sourceId, repo: r.repo, group: '' }))}
+                    <tr class="row-link {on ? 'row-active' : ''}" onclick={() => pick(r)}>
+                      <td class="font-mono text-xs text-fg">{r.name}{#if r.default}<span class="ml-2 text-fg-faint">default</span>{/if}</td>
+                      <td class="font-mono text-xs text-fg-muted">{r.precision || '–'}</td>
+                      <td class="num">{r.sizeBytes ? storage(r.sizeBytes, 1) : '–'}</td>
+                      {#if dated}<td class="text-fg-muted whitespace-nowrap">{r.updatedAt ? ago(r.updatedAt, clock.now) : '–'}</td>{/if}
+                      <td class="w-6 text-right">{#if on}<ChevronRight size={12} class="text-accent" />{:else if stored}<Tip text="Downloaded"><Check size={12} class="text-ok" /></Tip>{/if}</td>
+                    </tr>
+                  {/each}
+                {/each}
+              </tbody>
+            </table>
+          {/if}
           {#if noRuntime}
             <div class="note note-warn flex flex-wrap items-center gap-3">
               <span class="flex-1">No installed runtime reads {formatIds.join(', ')}. You can download the weights now and run them once one is installed.</span>
-              <Button size="sm" href="/runtimes/{runtime}?tab=install" icon={Download}>Install {runtimeName(runtime)}</Button>
+              <Button size="sm" href="/runtimes/{runtime}?tab=installs" icon={Download}>Install {runtimeName(runtime)}</Button>
             </div>
           {:else if ordered.length && !planRuntimes.length}
             <div class="note note-warn">No runtime reads {formatIds.join(', ')}.</div>
@@ -375,8 +420,7 @@
                 {#if contexts.length > 1}
                   <span class="inline-flex items-center gap-2">
                     <span>Context</span>
-                    <Segmented size="sm" tabs={contexts.map((c) => ({ id: String(c), label: fmtCtx(c) }))} bind:value={() => String(context), (v) => pickContext(Number(v))} />
-                    {#if atLimit}<span>{fmtCtx(limit)} is the model's maximum</span>{/if}
+                    <Segmented size="sm" tabs={contexts.map((c) => ({ id: String(c), label: c === 0 ? 'Largest that fits' : fmtCtx(c) }))} bind:value={() => String(context), (v) => pickContext(Number(v))} />
                   </span>
                 {/if}
                 {#if planRuntimes.length > 1}
@@ -401,7 +445,8 @@
                   {@const stored = storedModel(d.group)}
                   {@const task = pulling(d.group)}
                   {@const p = d.precision}
-                  {@const plan = cells.get(d.group)?.plan}
+                  {@const row = cells.get(d.group)}
+                  {@const plan = cellPlan(row)}
                   {@const best = d.group === bestGroup && ordered.length > 1}
                   {@const room = !mount || d.totalBytes <= mount.freeBytes}
                   {@const open = expanded === d.group}
@@ -415,7 +460,10 @@
                             <span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{precisionShort(p)}</span>
                           </Tip>
                         {/if}
-                        {#if best}<Tip text="Largest variant that fits in device memory"><Check size={13} class="text-ok" /></Tip>{/if}
+                        {#if context === 0 && plan}
+                          <Tip text="The largest context that fits, up to what the model was trained for"><span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{fmtCtx(plannedContext(row))} ctx</span></Tip>
+                        {/if}
+                        {#if best}<Tip text="Largest variant that fits in device memory right now"><Check size={13} class="text-ok" /></Tip>{/if}
                       </div>
                     </td>
                     <td class="w-full min-w-[10rem]">
@@ -425,7 +473,7 @@
                             {@const over = pool.used > pool.cap || plan.verdict === FitVerdict.NO}
                             <div class="flex items-center gap-2 text-[11px] tabular-nums text-fg-faint">
                               <span class="w-7 shrink-0" title={poolName(pool.id)}>{poolWord[pool.kind] ?? 'pool'}</span>
-                              <StackBar class="min-w-0 flex-1" legend={false} height="sm" max={pool.cap} segments={[{ label: 'used', value: pool.used, tone: over ? 'bad' : pool.kind === PoolKind.HOST ? 'info' : 'accent' }]} />
+                              <SizeBar class="min-w-0 flex-1" dense total={pool.total} overlays={poolOverlays(pool, plan.verdict)} />
                               <span class="w-[5.5rem] shrink-0 text-right whitespace-nowrap {over ? 'text-bad' : ''}">{ratioBytes(pool.used, pool.cap)}</span>
                             </div>
                           {/each}
@@ -433,7 +481,7 @@
                         <div class="flex items-center gap-2 text-[11px] tabular-nums text-fg-faint">
                           <span class="w-7 shrink-0">Disk</span>
                           {#if mount}
-                            <StackBar class="min-w-0 flex-1" legend={false} height="sm" max={mount.freeBytes} segments={[{ label: 'weights', value: d.totalBytes, tone: !room ? 'bad' : stored ? 'ok' : 'warn' }]} />
+                            <SizeBar class="min-w-0 flex-1" dense total={mount.totalBytes} units="decimal" overlays={[{ start: 'left', items: [{ size: mount.totalBytes - mount.freeBytes, tone: 'neutral' }, { label: 'weights', size: d.totalBytes, tone: !room ? 'bad' : stored ? 'ok' : 'warn' }] }]} />
                             <span class="w-[5.5rem] shrink-0 text-right whitespace-nowrap {room ? '' : 'text-bad'}">{ratioStorage(d.totalBytes, mount.freeBytes)}</span>
                           {:else}
                             <span class="flex-1 text-right">{storage(d.totalBytes, 1)}</span>
@@ -554,7 +602,7 @@
         </Empty>
       {:else if model}
         {#key curRepo + '\0' + curRev}
-          <ModelFiles files={model.artifacts} stored={storedPaths} />
+          <ModelFiles files={model.artifacts} stored={storedPaths} {sourceId} sourceName={siteName} repo={model.repo} revision={model.revision} />
         {/key}
       {/if}
     {:else if shownTab === 'card'}

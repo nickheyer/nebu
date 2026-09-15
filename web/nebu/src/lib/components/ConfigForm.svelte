@@ -8,8 +8,16 @@
 
   // Fields the daemon describes, rendered the same way whatever they configure: a source, an install
   //
-  // An empty value means the default. Only values that differ from the default are kept.
-  let { fields = [], values = $bindable({}), idPrefix = 'cfg', class: cls = '' }: { fields?: ConfigField[]; values?: Record<string, string>; idPrefix?: string; class?: string } = $props();
+  // An empty value means the default. Only values that differ from the default are kept. The form is
+  // valid once every required field holds a value of its own or a default; the grid takes as many
+  // columns as the fields fill.
+  let {
+    fields = [],
+    values = $bindable({}),
+    valid = $bindable(true),
+    idPrefix = 'cfg',
+    class: cls = ''
+  }: { fields?: ConfigField[]; values?: Record<string, string>; valid?: boolean; idPrefix?: string; class?: string } = $props();
 
   function set(name: string, v: string) {
     const next = { ...values };
@@ -31,13 +39,18 @@
         return '';
     }
   }
+
+  const missing = $derived(fields.filter((f) => f.required && !(values[f.name] ?? '').trim() && !f.default));
+  $effect(() => {
+    valid = missing.length === 0;
+  });
 </script>
 
-<div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2 {cls}">
+<div class="grid gap-x-5 gap-y-4 {cls}" style="grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr))">
   {#each fields as f (f.name)}
     {@const fid = `${idPrefix}-${f.name}`}
     {#if f.type === ConfigType.BOOL}
-      <div class="flex items-start justify-between gap-4 rounded-md border border-line px-3 py-2.5 sm:col-span-2">
+      <div class="flex items-start justify-between gap-4 rounded-md border border-line px-3 py-2.5">
         <div class="min-w-0">
           <label for={fid} class="text-[13px] font-medium text-fg">{f.label || f.name}</label>
           {#if f.description}<p class="text-xs leading-5 text-fg-muted">{f.description}</p>{/if}
@@ -45,9 +58,9 @@
         <Switch checked={(values[f.name] ?? f.default) === 'true'} label={f.label || f.name} onchange={(on) => set(f.name, on ? 'true' : 'false')} />
       </div>
     {:else}
-      <Field label={f.label || f.name} for={fid} required={f.required && !f.default} description={f.description || undefined}>
+      <Field label={f.label || f.name} for={fid} required={f.required && !f.default} description={f.description || undefined} error={missing.includes(f) && (values[f.name] ?? '') !== '' ? undefined : undefined}>
         {#if f.choices.length}
-          <Select id={fid} mono value={values[f.name] ?? ''} empty="Choose" onchange={(v) => set(f.name, v)} items={[...(f.default ? [{ value: '', label: `Default: ${f.default}` }] : []), ...f.choices.filter((c) => c !== f.default || !f.default).map((c) => ({ value: c, label: c }))]} />
+          <Select id={fid} mono value={values[f.name] ?? ''} empty="Choose" onchange={(v) => set(f.name, v)} items={[...(f.default ? [{ value: '', label: f.default }] : []), ...f.choices.filter((c) => c !== f.default || !f.default).map((c) => ({ value: c, label: c }))]} />
         {:else if f.type === ConfigType.INT}
           <NumberInput id={fid} integer empty={f.default} bind:value={() => values[f.name] ?? '', (v) => set(f.name, v)} />
         {:else}

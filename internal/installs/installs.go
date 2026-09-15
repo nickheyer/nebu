@@ -9,11 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -203,9 +201,9 @@ func (m *Manager) Options(ctx context.Context, rt runtimes.Runtime, profile *v1.
 		switch im.Kind {
 		case v1.InstallKind_INSTALL_KIND_ADOPTED:
 			found := onPath(im.Binaries)
-			opt.Fields = []*v1.ConfigField{{Name: fieldPath, Label: "Binary", Type: v1.ConfigType_CONFIG_TYPE_PATH, Required: found == "", Default: found, Description: "Path of " + strings.Join(im.Binaries, " or ")}}
+			opt.Fields = []*v1.ConfigField{{Name: fieldPath, Label: "Binary", Type: v1.ConfigType_CONFIG_TYPE_PATH, Required: found == "", Default: found, Placeholder: "/path/to/" + im.Binaries[0], Description: "Path of " + strings.Join(im.Binaries, " or ")}}
 			if found == "" {
-				opt.Unmet = []string{notOnPath(im.Binaries)}
+				opt.Unmet = []string{notOnPath(im.Binaries) + ", give its path"}
 			}
 		case v1.InstallKind_INSTALL_KIND_PREBUILT:
 			// Only the builds published for this host are offered, the first of them by default
@@ -215,7 +213,7 @@ func (m *Manager) Options(ctx context.Context, rt runtimes.Runtime, profile *v1.
 			}
 			opt.Fields = []*v1.ConfigField{
 				{Name: fieldBuild, Label: "Build", Type: v1.ConfigType_CONFIG_TYPE_STRING, Required: true, Default: first(ids), Choices: ids, Description: "Which published build to download"},
-				{Name: fieldRelease, Label: "Release", Type: v1.ConfigType_CONFIG_TYPE_STRING, Description: "A release tag of " + im.Releases + ", the newest with the build when empty"},
+				{Name: fieldRelease, Label: "Release", Type: v1.ConfigType_CONFIG_TYPE_STRING, Placeholder: "newest release", Description: "A release tag of " + im.Releases + ", the newest with the build when empty"},
 			}
 			if len(ids) == 0 {
 				opt.Unmet = []string{"no build of " + im.Releases + " is published for " + profile.GetOs() + "/" + profile.GetArch()}
@@ -228,34 +226,68 @@ func (m *Manager) Options(ctx context.Context, rt runtimes.Runtime, profile *v1.
 			sel, err := build.Select(rc, profile, build.Options{Defaults: m.Defaults})
 			if err != nil {
 				opt.Unmet = []string{err.Error()}
-				opt.Recipe = &v1.RecipeStatus{Recipe: build.Describe(rc), Unmet: opt.Unmet}
+				opt.Recipe = &v1.RecipeStatus{Recipe: build.Describe(rc, profile), Unmet: opt.Unmet}
 				break
 			}
 			opt.Recipe = sel.Status()
 			opt.Unmet = sel.Unmet
-			// Only the variants this host can take are offered
-			var variants []string
-			for _, v := range build.Variants(rc, profile) {
-				variants = append(variants, v.ID)
-			}
-			opt.Fields = []*v1.ConfigField{
-				{Name: fieldRef, Label: "Ref", Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: sel.Ref, Description: "A tag, branch, or commit of the source"},
-				{Name: fieldSandbox, Label: "Sandbox", Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: text.Enum(sel.Sandbox), Choices: sandboxNames, Description: "The host toolchain, or a container through " + firstOr(sel.CLI, "a container cli")},
-				{Name: fieldImage, Label: "Image", Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: sel.Image, Description: "Container image holding the toolchain, for the oci sandbox"},
-				{Name: fieldForce, Label: "Rebuild", Type: v1.ConfigType_CONFIG_TYPE_BOOL, Default: "false", Description: "Build again even when this exact build exists"},
-			}
-			if len(variants) > 0 {
-				opt.Fields = append([]*v1.ConfigField{{Name: fieldVariant, Label: "Variant", Type: v1.ConfigType_CONFIG_TYPE_STRING, Required: true, Default: sel.Variant.ID, Choices: variants, Description: "Which variant of the recipe to build"}}, opt.Fields...)
-			}
-			// The recipe's own variables are the ones people set; what the variant adds is not a setting
-			defaults := rc.Vars()
-			for _, k := range slices.Sorted(maps.Keys(defaults)) {
-				opt.Fields = append(opt.Fields, &v1.ConfigField{Name: varPrefix + k, Label: k, Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: sel.Vars[k], Description: "Recipe variable"})
-			}
+			opt.Fields = buildFields(rc, sel, profile, m.Defaults)
 		}
 		out = append(out, opt)
 	}
 	return out, nil
+}
+
+// The settings a build takes as this host sees them: the variant when the recipe has any, the ref when a
+// source tree is fetched, where the steps run and in what image, whether to build again, then the
+// recipe's own variables in the order it shows them
+func buildFields(rc recipes.Recipe, sel *build.Selection, profile *v1.HostProfile, defaults *v1.Builds) []*v1.ConfigField {
+	var fields []*v1.ConfigField
+	if variants := build.Variants(rc, profile); len(variants) > 0 {
+		var ids []string
+		for _, v := range variants {
+			ids = append(ids, v.ID)
+		}
+		fields = append(fields, &v1.ConfigField{Name: fieldVariant, Label: "Variant", Type: v1.ConfigType_CONFIG_TYPE_STRING, Required: true, Default: sel.Variant.ID, Choices: ids, Description: "The backend to build; the host default is the first variant this host can build"})
+	}
+	if src := rc.Source(); src.Fetched() {
+		fields = append(fields, refField(src))
+	}
+	sandbox := &v1.ConfigField{
+		Name: fieldSandbox, Label: "Sandbox", Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: text.Enum(sel.Sandbox), Choices: sandboxNames,
+		ChoiceLabels: map[string]string{"host": "Host toolchain", "oci": "Container"},
+		Description:  "Where the steps run: on this host with its toolchain, or in a container",
+	}
+	if sel.CLI != "" {
+		sandbox.Description += " run by " + filepath.Base(sel.CLI)
+	} else {
+		sandbox.ChoiceUnmet = map[string]string{"oci": "none of " + strings.Join(sel.CLIs, ", ") + " is on PATH"}
+	}
+	fields = append(fields,
+		sandbox,
+		&v1.ConfigField{Name: fieldImage, Label: "Container image", Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: build.Image(rc, sel.Variant, defaults), Placeholder: "registry/image:tag", Description: "The image whose toolchain the steps run in, for the container sandbox"},
+		&v1.ConfigField{Name: fieldForce, Label: "Rebuild", Type: v1.ConfigType_CONFIG_TYPE_BOOL, Default: "false", Description: "Build again even when this exact build exists"},
+	)
+	for _, v := range rc.Vars() {
+		fields = append(fields, &v1.ConfigField{Name: varPrefix + v.Name, Label: firstOr(v.Label, v.Name), Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: sel.Vars[v.Name], Choices: v.Choices, Description: v.Description})
+	}
+	return fields
+}
+
+// The ref of a fetched source: a tag, branch, or commit, the newest release when the source publishes releases
+func refField(src recipes.Source) *v1.ConfigField {
+	f := &v1.ConfigField{Name: fieldRef, Label: "Ref", Type: v1.ConfigType_CONFIG_TYPE_STRING}
+	switch {
+	case src.Releases != "":
+		f.Placeholder = "newest release"
+		f.Description = "A tag, branch, or commit of " + src.String() + ", the newest release when empty"
+	case src.Repo != "":
+		f.Description = "A tag, branch, or commit of " + src.Repo + ", the default branch when empty"
+	default:
+		f.Required = true
+		f.Description = "The ref whose archive holds the source"
+	}
+	return f
 }
 
 func firstOr(s, fallback string) string {

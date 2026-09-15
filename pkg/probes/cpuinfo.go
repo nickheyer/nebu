@@ -21,6 +21,11 @@ func (p cpuinfo) Run(context.Context) host.Result {
 	if !ok {
 		return res
 	}
+	return parseCPUInfo(data)
+}
+
+// One CPU device per procfs listing: the first logical processor names the package, the block count is its threads
+func parseCPUInfo(data []byte) host.Result {
 	blocks := kvBlocks(data)
 	if len(blocks) == 0 {
 		return skipped("/proc/cpuinfo lists no processors")
@@ -32,12 +37,7 @@ func (p cpuinfo) Run(context.Context) host.Result {
 		Kind:   v1.DeviceKind_DEVICE_KIND_CPU,
 		Vendor: first["vendor_id"],
 		Name:   first["model name"],
-		Facts:  map[string]string{"cores": first["cpu cores"], "siblings": first["siblings"], "flags": first["flags"]},
+		Facts:  map[string]string{"cores": first["cpu cores"], "siblings": first["siblings"], "threads": itoa(len(blocks)), "flags": first["flags"]},
 	}
-	facts := map[string]string{
-		"cpu.model":   first["model name"],
-		"cpu.flags":   first["flags"],
-		"cpu.threads": itoa(len(blocks)),
-	}
-	return found([]*v1.Device{device}, nil, facts, rows(len(blocks)))
+	return found([]*v1.Device{device}, nil, nil, rows(len(blocks)))
 }

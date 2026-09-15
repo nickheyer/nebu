@@ -62,6 +62,8 @@ message Param {
   string group = 14;
   // Hidden until the form is expanded
   bool advanced = 15;
+  // What auto resolves to, in words, for a solved param
+  string rule = 16;
 }
 
 // One way to obtain an install, offered when someone installs the runtime

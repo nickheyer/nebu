@@ -7,7 +7,7 @@ import { InstanceState, type Instance } from '$proto/instance_pb';
 import type { Slot } from '$proto/slot_pb';
 import { TraceKind, type GatewayStatus, type Route, type Trace } from '$proto/gateway_pb';
 import type { Install, RuntimeStatus } from '$proto/runtime_pb';
-import type { FormatSpec } from '$proto/model_pb';
+import type { Format } from '$proto/model_pb';
 import type { Build } from '$proto/recipe_pb';
 import type { StoredModel, StoreStatus } from '$proto/store_pb';
 import { fail, started, settle as settleToast } from './toast.svelte';
@@ -37,7 +37,7 @@ export const live = $state({
   builds: new SvelteMap<string, Build>(),
   models: new SvelteMap<string, StoredModel>(),
   sources: new SvelteMap<string, Source>(),
-  formats: new SvelteMap<string, FormatSpec>(),
+  formats: new SvelteMap<string, Format>(),
   traces: new SvelteMap<string, Trace>()
 });
 
@@ -362,9 +362,25 @@ export function modelKey(m: { sourceId: string; repo: string; group: string }): 
   return `${m.sourceId}/${m.repo}/${m.group}`;
 }
 
-// The runtime a manifest id names, for its display name
+// The runtime an id names, for its display name
 export function runtimeName(id: string): string {
-  return cached.runtimes.find((r) => r.manifest?.id === id)?.manifest?.name || id;
+  return cached.runtimes.find((r) => r.runtime?.id === id)?.runtime?.name || id;
+}
+
+// The runtime an id names, with how this host can install it
+export function runtimeStatus(id: string): RuntimeStatus | undefined {
+  return cached.runtimes.find((r) => r.runtime?.id === id);
+}
+
+// Bytes the live instances hold on one memory pool as their plans placed them, one instance left out
+// when asked, so a bar can show what nebu itself has already taken
+export function instancesOnPool(poolId: string, except = ''): bigint {
+  let total = 0n;
+  for (const i of live.instances.values()) {
+    if (i.id === except || !instanceLive(i)) continue;
+    for (const p of i.plan?.pools ?? []) if (p.poolId === poolId) total += p.usedBytes;
+  }
+  return total;
 }
 
 // The installs of one runtime, newest first
@@ -372,7 +388,7 @@ export function installsOf(runtimeId: string): Install[] {
   return [...live.installs.values()].filter((i) => i.runtimeId === runtimeId).sort(byCreated);
 }
 
-// What a weight format is, in the words its spec carries
+// What a weight format is, in the words the daemon carries for it
 export function formatBlurb(id: string): string {
   const f = live.formats.get(id);
   return f?.blurb || f?.description || `${id} weight files`;

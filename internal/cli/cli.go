@@ -19,6 +19,7 @@ import (
 
 	"github.com/nickheyer/nebu/internal/daemon"
 	"github.com/nickheyer/nebu/pkg/config"
+	"github.com/nickheyer/nebu/pkg/launch"
 	"github.com/nickheyer/nebu/pkg/logger"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -70,7 +71,7 @@ func commands() []command {
 			{name: "show", summary: "show a runtime with every param it takes", run: runRuntimesShow, local: true},
 			{name: "installs", summary: "list installs", run: runRuntimesInstalls, local: true},
 			{name: "adopt", summary: "record a binary already on the host", run: runRuntimesAdopt, local: true},
-			{name: "install", summary: "install a runtime by the method its manifest selects for this host", run: runRuntimesInstall, local: true},
+			{name: "install", summary: "install a runtime by one of its methods with the settings chosen for it", run: runRuntimesInstall, local: true},
 			{name: "remove", summary: "remove an install", run: runRuntimesRemove, local: true},
 			{name: "recipes", summary: "list build recipes and what this host selects", run: runRuntimesRecipes, local: true},
 		}},
@@ -130,13 +131,15 @@ func resolve(cmds []command, args []string) (*command, []string) {
 
 // Shared state for one invocation
 type env struct {
-	cmd  *command
-	cfg  *v1.Config
-	log  *slog.Logger
-	out  io.Writer
-	errw io.Writer
-	in   io.Reader
-	json bool
+	cmd *command
+	cfg *v1.Config
+	log *slog.Logger
+	// The last lines the logger wrote, for the daemon to stream to the Host page
+	recent *launch.Log
+	out    io.Writer
+	errw   io.Writer
+	in     io.Reader
+	json   bool
 	// The daemon address once looked for, empty when this process stands in
 	addr     string
 	resolved bool
@@ -188,13 +191,13 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	if *addr != "" {
 		cfg.Addr = *addr
 	}
-	log, closer, err := logger.New(cfg.GetLogging())
+	log, recent, closer, err := logger.New(cfg.GetLogging())
 	if err != nil {
 		fmt.Fprintln(stderr, "nebu:", err)
 		return 1
 	}
 	defer closer.Close()
-	e := &env{cmd: cmd, cfg: cfg, log: log, out: stdout, errw: stderr, in: os.Stdin, json: *jsonOut}
+	e := &env{cmd: cmd, cfg: cfg, log: log, recent: recent, out: stdout, errw: stderr, in: os.Stdin, json: *jsonOut}
 	defer e.close()
 	if err := cmd.run(ctx, e, cmdArgs); err != nil {
 		fmt.Fprintln(stderr, "nebu:", err)
@@ -414,7 +417,7 @@ func runServe(ctx context.Context, e *env, args []string) error {
 	if _, err := splitFlags(e.flags("serve"), args); err != nil {
 		return err
 	}
-	d, err := daemon.New(e.cfg, e.log)
+	d, err := daemon.New(e.cfg, e.log, e.recent)
 	if err != nil {
 		return err
 	}

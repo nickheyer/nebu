@@ -53,7 +53,7 @@
   const badBudget = $derived(memory.trim() !== '' && budget === 0n);
   const badName = $derived(/[\s/]/.test(name));
   const nameTaken = $derived(name.trim() !== slot?.name && [...live.slots.values()].some((s) => s.name === name.trim()));
-  const manifest = $derived(cached.runtimes.find((r) => r.manifest?.id === runtimeId)?.manifest);
+  const runtime = $derived(cached.runtimes.find((r) => r.runtime?.id === runtimeId)?.runtime);
   const occupied = $derived(!!slot && slotOccupied(slot.id));
   const count = $derived(orderedSlots().length);
   const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && !noDevices && invalid === 0);
@@ -116,20 +116,20 @@
         <NumberInput id="slot-memory" min={0} step={0.5} unit="GiB" bind:value={memory} empty="whole device" invalid={badBudget} />
       </Field>
       <Field label="Runtime" for="slot-runtime" description="Used for every run in this slot unless a run picks another.">
-        <Select id="slot-runtime" bind:value={runtimeId} items={[{ value: '', label: 'First compatible runtime' }, ...cached.runtimes.map((rt) => ({ value: rt.manifest?.id ?? '', label: rt.manifest?.name ?? rt.manifest?.id ?? '', detail: rt.compatible ? undefined : 'not compatible with this host', disabled: !rt.compatible }))]} />
+        <Select id="slot-runtime" bind:value={runtimeId} items={[{ value: '', label: 'First compatible runtime' }, ...cached.runtimes.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: rt.compatible ? undefined : 'not compatible with this host', disabled: !rt.compatible }))]} />
       </Field>
     </div>
   </Card>
 
-  <Card title="Default parameters" meta={manifest ? `${manifest.name} · a run can override any of them` : undefined}>
-    {#if manifest}
-      <ParamForm params={manifest.params} bind:values={params} bind:invalid idPrefix="slot" />
+  <Card title="Default parameters" meta={runtime ? `${runtime.name} · a run can override any of them` : undefined}>
+    {#if runtime}
+      <ParamForm params={runtime.params} bind:values={params} bind:invalid idPrefix="slot" />
     {:else}
       <p class="text-sm text-fg-faint">Pick a runtime to set default parameters.</p>
     {/if}
   </Card>
 
-  <Card title="Limits" meta="Empty fields use the gateway defaults">
+  <Card title="Limits">
     <PolicyForm bind:fields={policy} defaults={cached.gateway?.policy} idPrefix="slot" />
   </Card>
 

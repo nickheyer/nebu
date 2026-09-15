@@ -42,7 +42,7 @@ func (m *Manager) ListRecipes(ctx context.Context, runtimeID string) ([]*v1.Reci
 		}
 		sel, err := build.Select(rc, profile, build.Options{Defaults: m.Defaults})
 		if err != nil {
-			out = append(out, &v1.RecipeStatus{Recipe: build.Describe(rc), Unmet: []string{err.Error()}})
+			out = append(out, &v1.RecipeStatus{Recipe: build.Describe(rc, profile), Unmet: []string{err.Error()}})
 			continue
 		}
 		out = append(out, sel.Status())

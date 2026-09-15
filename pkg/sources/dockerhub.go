@@ -304,14 +304,17 @@ func (dockerhubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v
 		out = append(out, r)
 		byName[t] = r
 	}
-	dhDecorate(ctx, c, name, byName)
+	if err := dhDecorate(ctx, c, name, byName); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
-// Fills sizes, dates, and digests from the hub, best effort, nothing without a hub
-func dhDecorate(ctx context.Context, c *Client, name string, byName map[string]*v1.Revision) {
+// Fills sizes, dates, and digests from the hub's tag pages; a registry configured without a hub has
+// no such pages, so its tags carry what the registry alone says
+func dhDecorate(ctx context.Context, c *Client, name string, byName map[string]*v1.Revision) error {
 	if c.HTTP() == nil {
-		return
+		return nil
 	}
 	next := c.URL("v2", "repositories", name, "tags") + "?page_size=100"
 	for page := 0; next != "" && page < dhMaxPages; page++ {
@@ -325,7 +328,7 @@ func dhDecorate(ctx context.Context, c *Client, name string, byName map[string]*
 			} `json:"results"`
 		}
 		if _, err := c.JSON(ctx, next, nil, &body); err != nil {
-			return
+			return fmt.Errorf("%s tags: %w", name, err)
 		}
 		for _, t := range body.Results {
 			r, ok := byName[t.Name]
@@ -338,6 +341,7 @@ func dhDecorate(ctx context.Context, c *Client, name string, byName map[string]*
 		}
 		next = body.Next
 	}
+	return nil
 }
 
 // Orders tags so 7b comes before 12b, digit runs compare by value

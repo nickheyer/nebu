@@ -1,21 +1,21 @@
-package formats
+package formats_test
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/nickheyer/nebu/pkg/formats"
+	"github.com/nickheyer/nebu/pkg/formats/all"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/spec"
+	"github.com/nickheyer/nebu/pkg/text"
 )
 
-func loadFormats(t *testing.T) []*v1.FormatSpec {
+func registry(t *testing.T) *formats.Registry {
 	t.Helper()
-	c, err := spec.Load(os.DirFS(filepath.Join("..", "..", "spec")))
+	r, err := all.Registry()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return c.Formats
+	return r
 }
 
 func model(paths ...string) *v1.Model {
@@ -27,10 +27,7 @@ func model(paths ...string) *v1.Model {
 }
 
 func TestClassify(t *testing.T) {
-	c, err := NewClassifier(loadFormats(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := registry(t)
 	m := model(
 		"Qwen3-0.6B-Q2_K.gguf", "Qwen3-0.6B-Q2_K_L.gguf", "Qwen3-0.6B-UD-Q2_K_XL.gguf",
 		"Q4_K_M/model-Q4_K_M-00001-of-00002.gguf", "Q4_K_M/model-Q4_K_M-00002-of-00002.gguf",
@@ -87,17 +84,17 @@ func TestClassify(t *testing.T) {
 		if !ok {
 			continue
 		}
-		role := roleName(a.GetRole())
+		role := text.Enum(a.GetRole())
 		if a.GetFormatId() != w[0] || role != w[1] || a.GetGroup() != w[2] {
 			t.Errorf("%s: got %s/%s/%q want %v", a.GetPath(), a.GetFormatId(), role, a.GetGroup(), w)
 		}
 	}
 	groups := c.Groups(m)
-	byName := map[string]*Group{}
+	byName := map[string]*formats.Group{}
 	for _, g := range groups {
 		byName[g.FormatID+":"+g.Name] = g
 	}
-	if g := byName["gguf:Q4_K_M"]; g == nil || len(g.Weights) != 2 || g.Weights[0].GetShardIndex() != 1 || g.Weights[1].GetShardCount() != 2 {
+	if g := byName["gguf:Q4_K_M"]; g == nil || len(g.Weights) != 2 || g.Weights[0].GetShardIndex() != 1 || g.Weights[1].GetShardCount() != 2 || g.Root != "Q4_K_M" {
 		t.Fatalf("shard group %+v", g)
 	}
 	if g := byName["gguf:Big-70B-Q6_K"]; g == nil || len(g.Weights) != 2 || byName["gguf:Small-7B-Q6_K"] == nil || len(byName["gguf:Small-7B-Q6_K"].Weights) != 1 {
@@ -122,9 +119,6 @@ func TestClassify(t *testing.T) {
 	if g := byName["gguf:Q2_K"]; g == nil || len(g.Files[v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR]) != 1 || len(g.Files[v1.ArtifactRole_ARTIFACT_ROLE_DRAFT]) != 1 {
 		t.Fatalf("projector and root draft should attach to root gguf groups: %+v", g)
 	}
-	if g := byName["gguf:Q2_K"]; g == nil || len(g.Files[v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR]) != 1 {
-		t.Fatalf("projector should attach to root gguf groups: %+v", g)
-	}
 	if g := byName["gguf:Q4_K_M"]; len(g.Files[v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR]) != 0 {
 		t.Fatal("projector must not attach across directories")
 	}
@@ -138,32 +132,59 @@ func TestClassify(t *testing.T) {
 	if g := byName["safetensors:4bit"]; g == nil || g.Files[v1.ArtifactRole_ARTIFACT_ROLE_CONFIG][0].GetPath() != "4bit/config.json" {
 		t.Fatalf("subdir config attach %+v", g)
 	}
-	if _, err := FindGroup(groups, "nope"); err == nil {
+	if _, err := formats.FindGroup(groups, "nope"); err == nil {
 		t.Fatal("unknown group should fail")
 	}
-	if len(Missing(c.Spec("safetensors"), byName["safetensors:4bit"])) != 0 {
+	if _, err := formats.FindGroup(groups, ""); err == nil {
+		t.Fatal("no name among many groups should fail")
+	}
+	if g, err := formats.FindGroup(groups, "Q2_K"); err != nil || g.FormatID != "gguf" {
+		t.Fatalf("find by name %v %v", g, err)
+	}
+	if len(formats.Missing(c.Get("safetensors"), byName["safetensors:4bit"])) != 0 {
 		t.Fatal("4bit has config")
 	}
 }
 
-func roleName(r v1.ArtifactRole) string {
-	switch r {
-	case v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS:
-		return "weights"
-	case v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR:
-		return "projector"
-	case v1.ArtifactRole_ARTIFACT_ROLE_CONFIG:
-		return "config"
-	case v1.ArtifactRole_ARTIFACT_ROLE_TOKENIZER:
-		return "tokenizer"
-	case v1.ArtifactRole_ARTIFACT_ROLE_DRAFT:
-		return "draft"
-	case v1.ArtifactRole_ARTIFACT_ROLE_INDEX:
-		return "index"
-	case v1.ArtifactRole_ARTIFACT_ROLE_CODE:
-		return "code"
-	case v1.ArtifactRole_ARTIFACT_ROLE_TEMPLATE:
-		return "template"
+// A safetensors checkpoint without its config falls through to no format at all, so it never claims a
+// group whose headers cannot be read
+func TestClassifyDemotesUnreadableGroups(t *testing.T) {
+	c := registry(t)
+	m := model("lonely/model.safetensors", "README.md")
+	c.Classify(m)
+	if a := m.GetArtifacts()[0]; a.GetRole() != v1.ArtifactRole_ARTIFACT_ROLE_OTHER || a.GetFormatId() != "" {
+		t.Fatalf("a shard without a config should not be weights: %v", a)
 	}
-	return "other"
+	if len(c.Groups(m)) != 0 {
+		t.Fatal("no group should form without readable headers")
+	}
+}
+
+func TestStemAndShard(t *testing.T) {
+	for in, want := range map[string]string{
+		"a/model-00001-of-00003.gguf": "a/model",
+		"model-Q4_K_M.gguf":           "model-Q4_K_M",
+		"x-1-of-2.gguf":               "x-1-of-2",
+	} {
+		if got := formats.Stem(in); got != want {
+			t.Errorf("Stem(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if stem, i, n, ok := formats.Shard("model-00002-of-00005"); !ok || stem != "model" || i != 2 || n != 5 {
+		t.Fatalf("shard %q %d %d %v", stem, i, n, ok)
+	}
+}
+
+func TestDescribe(t *testing.T) {
+	c := registry(t)
+	list := c.Describe()
+	if len(list) != 4 || list[0].GetId() != "gguf" || list[0].GetBlurb() == "" {
+		t.Fatalf("formats in priority order with words: %v", list)
+	}
+	if c.Get("nope") != nil {
+		t.Fatal("unknown format should be nil")
+	}
+	if _, err := formats.New([]formats.Format{c.Get("gguf"), c.Get("gguf")}); err == nil {
+		t.Fatal("duplicate format should fail")
+	}
 }

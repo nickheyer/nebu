@@ -7,7 +7,8 @@
   import Tip from './ui/Tip.svelte';
 
   // A memory plan as a table: a column per side, device and host, a row per tensor kind with what it weighs on
-  // each side, cache and overhead under the weights, and a footer of every pool against its capacity
+  // each side, cache and overhead under the weights, and a footer of every pool against its capacity. A kind
+  // the runtime never loads keeps its row, its bytes in the total column with the reason on hover.
   let { plan }: { plan: MemoryPlan } = $props();
 
   const short: Record<number, string> = { [PoolKind.DEVICE]: 'GPU', [PoolKind.HOST]: 'RAM', [PoolKind.UNIFIED]: 'MEM' };
@@ -81,6 +82,7 @@
   });
   const onDisk = $derived(plan.skipped.reduce((a, p) => a + p.bytes, 0n));
   const need = $derived(plan.weightsBytes + plan.cacheBytes + plan.overheadBytes);
+  const skippedWords = $derived(plan.skipped.map((p) => `${enumLabel(TensorGroupKind, p.kind)} ×${p.count} ${bytes(p.bytes)}`).join(', '));
 </script>
 
 {#snippet amount(p: { bytes: bigint; count: number } | undefined)}
@@ -102,7 +104,6 @@
             {/if}
           </th>
         {/each}
-        {#if plan.skipped.length}<th class="num" title="Weights the runtime leaves on disk with these parameters">Not loaded</th>{/if}
         <th class="num">Total</th>
       </tr>
     </thead>
@@ -113,8 +114,15 @@
           {#each sides as side (side.id)}
             <td class="num">{@render amount(row.on[side.id])}</td>
           {/each}
-          {#if plan.skipped.length}<td class="num">{@render amount(row.disk)}</td>{/if}
-          <td class="num">{@render amount(row.disk ? undefined : { bytes: row.total, count: row.count })}</td>
+          <td class="num">
+            {#if row.disk}
+              <Tip text="Stays on disk. This runtime never loads {row.word} tensors with these parameters.">
+                <span class="text-fg-faint">{#if row.disk.count > 1}<span class="mr-1">×{row.disk.count}</span>{/if}{bytes(row.disk.bytes)} on disk</span>
+              </Tip>
+            {:else}
+              {@render amount({ bytes: row.total, count: row.count })}
+            {/if}
+          </td>
         </tr>
       {/each}
       <tr>
@@ -124,7 +132,6 @@
             {#if side.used > 0n}{bytes(side.rest)}{:else}<span class="text-fg-faint">–</span>{/if}
           </td>
         {/each}
-        {#if plan.skipped.length}<td class="!border-b-0" rowspan="2"></td>{/if}
         <td class="num">{bytes(plan.cacheBytes)}</td>
       </tr>
       <tr>
@@ -153,8 +160,13 @@
             {#if !side.pools.length}<span class="text-fg-faint">–</span>{/if}
           </td>
         {/each}
-        {#if plan.skipped.length}<td class="num">{bytes(onDisk)}</td>{/if}
-        <td class="num">{bytes(need)}</td>
+        <td class="num">
+          {#if onDisk > 0n}
+            <Tip text="Loaded into memory. Another {bytes(onDisk)} stays on disk: {skippedWords}.">{bytes(need)}</Tip>
+          {:else}
+            {bytes(need)}
+          {/if}
+        </td>
       </tr>
     </tfoot>
   </table>

@@ -5,7 +5,7 @@
     "formatId": "gguf",
     "group": "Q3_K_S",
     "architecture": "llama",
-    "archSpecId": "default",
+    "family": "default",
     "params": {
       "file_type": 11,
       "head_dim": 128,

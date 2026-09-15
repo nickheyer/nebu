@@ -47,16 +47,16 @@ func (LlamaCpp) Methods() []Method {
 	nvidia := func(h *v1.HostProfile) bool { return host.HasVendor(h, "nvidia") }
 	// The CUDA 13 build needs a 580 driver
 	nvidia580 := func(h *v1.HostProfile) bool {
-		return nvidia(h) && text.CompareVersions(h.GetFacts()["nvidia.driver_version"], "580") >= 0
+		return nvidia(h) && text.CompareVersions(driverVersion(h, "nvidia"), "580") >= 0
 	}
 	tar := func(contains string) Asset { return Asset{Prefix: "llama-b", Contains: contains, Suffix: ".tar.gz"} }
 	zip := func(contains, suffix string) Asset {
 		return Asset{Prefix: "llama-b", Contains: contains, Suffix: suffix}
 	}
 	return []Method{
-		{ID: "adopt", Description: "Use a llama-server binary already on this host", Kind: v1.InstallKind_INSTALL_KIND_ADOPTED, Binaries: []string{"llama-server"}},
+		{ID: "adopt", Description: "Records a llama-server already on this host; nothing is downloaded or built", Kind: v1.InstallKind_INSTALL_KIND_ADOPTED, Binaries: []string{"llama-server"}},
 		{
-			ID: "release", Description: "Download a release from ggml-org/llama.cpp", Kind: v1.InstallKind_INSTALL_KIND_PREBUILT, Releases: "ggml-org/llama.cpp",
+			ID: "release", Description: "A prebuilt llama-server from the GitHub releases of ggml-org/llama.cpp", Kind: v1.InstallKind_INSTALL_KIND_PREBUILT, Releases: "ggml-org/llama.cpp",
 			Rules: []PrebuiltRule{
 				{ID: "linux-rocm", Applies: linux("amd64", amd), Assets: []Asset{{Prefix: "llama-b", Contains: "-bin-ubuntu-rocm-", Suffix: "-x64.tar.gz"}}, Binary: "llama-server"},
 				{ID: "linux-vulkan", Applies: linux("amd64", host.HasGPU), Assets: []Asset{tar("-bin-ubuntu-vulkan-x64")}, Binary: "llama-server"},
@@ -74,7 +74,7 @@ func (LlamaCpp) Methods() []Method {
 				{ID: "windows-arm64-cpu", Applies: windows("arm64", nil), Assets: []Asset{zip("-bin-win-cpu-arm64", ".zip")}, Binary: "llama-server.exe"},
 			},
 		},
-		{ID: "source", Description: "Build from source for the devices on this host", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "llamacpp"},
+		{ID: "source", Description: "Compiles llama-server with the backend for the devices on this host", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "llamacpp"},
 	}
 }
 
@@ -89,19 +89,24 @@ var llamaQuantizedCache = []string{"q8_0", "q5_1", "q5_0", "q4_1", "q4_0"}
 func (LlamaCpp) Params() []*v1.Param {
 	return []*v1.Param{
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: "Context", Flag: "--ctx-size",
-			Description: "Tokens the model can hold in one conversation. Auto takes the largest that fits in memory, up to the length the model was trained for."},
+			Rule:        contextRule,
+			Description: "Tokens the model can hold in one conversation."},
 		{Name: "n_parallel", Label: "Parallel sequences", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "sequences", Min: 1, Max: 256, Step: 1, Group: "Context", Flag: "--parallel",
 			Description: "Requests served at once. The context is split between them."},
 		{Name: "n_gpu_layers", Label: "GPU layers", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "layers", Min: 0, Step: 1, Group: "Placement", Flag: "--n-gpu-layers",
-			Description: "Layers loaded onto the device. Auto takes the number from the memory plan."},
+			Rule:        "as many layers as fit on the device, the rest in system memory",
+			Description: "Layers loaded onto the device."},
 		{Name: "n_cpu_moe", Label: "Expert layers on CPU", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "layers", Min: 0, Step: 1, Group: "Placement", Flag: "--n-cpu-moe",
-			Description: "Layers whose expert weights stay in system memory. Auto takes the number from the memory plan."},
+			Rule:        "the expert layers the device cannot hold once the layers are placed",
+			Description: "Layers whose expert weights stay in system memory."},
 		{Name: "threads", Label: "CPU threads", Type: v1.ParamType_PARAM_TYPE_INT, Default: "-1", Unit: "threads", Min: -1, Step: 1, Group: "Placement", Advanced: true, Flag: "--threads",
 			Description: "Threads for layers on the CPU. -1 picks a number from the core count."},
 		{Name: "cache_type_k", Label: "Key cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: Auto, Solved: true, Choices: llamaCacheTypes, Group: "Cache", Flag: "--cache-type-k",
-			Description: "Element type of the key cache. Auto takes q8_0 for quantized weights and f16 otherwise."},
+			Rule:        "q8_0 for quantized weights, f16 for weights kept at 16 bits or more",
+			Description: "Element type of the key cache."},
 		{Name: "cache_type_v", Label: "Value cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: Auto, Solved: true, Choices: llamaCacheTypes, Group: "Cache", Flag: "--cache-type-v",
-			Description: "Element type of the value cache. Auto takes q8_0 for quantized weights with flash attention and f16 otherwise."},
+			Rule:        "q8_0 for quantized weights with flash attention on, f16 otherwise",
+			Description: "Element type of the value cache. Quantized types need flash attention on."},
 		{Name: "flash_attn", Label: "Flash attention", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "auto", Choices: []string{"auto", "on", "off"}, Group: "Cache", Flag: "--flash-attn",
 			Description: "Fused attention kernels. Auto turns it on where the device supports it."},
 		{Name: "n_batch", Label: "Batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "2048", Unit: "tokens", Min: 32, Step: 32, Group: "Batching", Advanced: true, Flag: "--batch-size",
@@ -257,7 +262,7 @@ func (LlamaCpp) Policy() *estimate.Policy {
 			}
 		},
 		States: func(s *estimate.Scope) ([]*v1.ParamState, string) {
-			threads, _ := strconv.ParseFloat(s.Host.GetFacts()["cpu.threads"], 64)
+			threads := cpuThreads(s.Host)
 			states := []*v1.ParamState{
 				bounds("n_ctx", 256, s.Model.ContextTrain, 256),
 				bounds("n_parallel", 1, 256, 1),

@@ -298,6 +298,14 @@ func cardOrEmpty(page string, err error) (*v1.ModelCard, error) {
 	return nil, err
 }
 
+// The first string when it is set, else the fallback
+func firstOr(s, fallback string) string {
+	if s != "" {
+		return s
+	}
+	return fallback
+}
+
 // Picks the word for a sort direction
 func direction(ascending bool, up, down string) string {
 	if ascending {

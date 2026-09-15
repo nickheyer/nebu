@@ -328,7 +328,7 @@ func (githubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) 
 	model := &v1.Model{Repo: owner + "/" + name, Revision: revision, Commit: commit}
 	if rel != nil {
 		for _, as := range rel.Assets {
-			model.Artifacts = append(model.Artifacts, &v1.Artifact{Path: as.Name, SizeBytes: uint64(as.Size), Sha256: Hex(as.Digest)})
+			model.Artifacts = append(model.Artifacts, &v1.Artifact{Path: as.Name, SizeBytes: uint64(as.Size), Sha256: Hex(as.Digest), Url: as.URL})
 		}
 		return model, nil
 	}

@@ -360,7 +360,7 @@ func (civitaiAPI) Resolve(ctx context.Context, c *Client, repo, revision string)
 		if f.Type == civTrainingData {
 			continue
 		}
-		model.Artifacts = append(model.Artifacts, &v1.Artifact{Path: names[f.ID], SizeBytes: civBytes(f), Sha256: Hex(f.Hashes["SHA256"])})
+		model.Artifacts = append(model.Artifacts, &v1.Artifact{Path: names[f.ID], SizeBytes: civBytes(f), Sha256: Hex(f.Hashes["SHA256"]), Url: civFileURL(c, v.ID, f)})
 	}
 	return model, nil
 }
@@ -406,6 +406,14 @@ func (civitaiAPI) Card(ctx context.Context, c *Client, repo, revision string) (*
 	return &v1.ModelCard{Html: m.Description, Url: civPageURL(c, id)}, nil
 }
 
+// Where a file of a version downloads from, the address the API names or the download endpoint by id
+func civFileURL(c *Client, versionID int64, f civFile) string {
+	if f.DownloadURL != "" {
+		return f.DownloadURL
+	}
+	return c.URL("api", "download", "models", strconv.FormatInt(versionID, 10)) + "?fileId=" + strconv.FormatInt(f.ID, 10)
+}
+
 func (civitaiAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error) {
 	_, v, err := civLookup(ctx, c, model.GetRepo(), model.GetRevision())
 	if err != nil {
@@ -416,10 +424,7 @@ func (civitaiAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact
 		if names[f.ID] != artifact.GetPath() {
 			continue
 		}
-		rawURL := f.DownloadURL
-		if rawURL == "" {
-			rawURL = c.URL("api", "download", "models", strconv.FormatInt(v.ID, 10)) + "?fileId=" + strconv.FormatInt(f.ID, 10)
-		}
+		rawURL := civFileURL(c, v.ID, f)
 		return c.Range(ctx, rawURL, artifact)
 	}
 	return nil, fmt.Errorf("%s: not in version %d", artifact.GetPath(), v.ID)

@@ -36,6 +36,10 @@ func All() []host.Probe {
 	}
 }
 
+// A probe's facts are what no device or pool carries; a device's own facts, its driver, its threads, its
+// compute capability, sit on the device, and memory totals sit on the pools, so the host facts never
+// repeat what the device list shows
+
 // Whether a probe written for some operating systems and architectures runs here, an empty list meaning any
 func on(oses, archs []string, os, arch string) bool {
 	return (len(oses) == 0 || slices.Contains(oses, os)) && (len(archs) == 0 || slices.Contains(archs, arch))

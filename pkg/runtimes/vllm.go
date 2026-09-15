@@ -35,8 +35,8 @@ func (VLLM) Unmet(h *v1.HostProfile) []string {
 
 func (VLLM) Methods() []Method {
 	return []Method{
-		{ID: "adopt", Description: "Use a vllm binary already on this host", Kind: v1.InstallKind_INSTALL_KIND_ADOPTED, Binaries: []string{"vllm"}},
-		{ID: "source", Description: "Install from PyPI into a virtual environment", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "vllm"},
+		{ID: "adopt", Description: "Records a vllm already on this host; nothing is downloaded or built", Kind: v1.InstallKind_INSTALL_KIND_ADOPTED, Binaries: []string{"vllm"}},
+		{ID: "source", Description: "Installs the vllm wheel from PyPI into its own virtual environment", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "vllm"},
 	}
 }
 
@@ -45,7 +45,8 @@ var vllmCacheBytes = map[string]float64{"auto": 2, "fp8": 1, "fp8_e5m2": 1, "fp8
 func (VLLM) Params() []*v1.Param {
 	return []*v1.Param{
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: "Context", Flag: "--max-model-len",
-			Description: "Tokens the model can hold in one conversation. Auto takes the largest that fits in memory, up to the length the model was trained for."},
+			Rule:        contextRule,
+			Description: "Tokens the model can hold in one conversation."},
 		{Name: "max_num_seqs", Label: "Max sequences", Type: v1.ParamType_PARAM_TYPE_INT, Default: "256", Unit: "sequences", Min: 1, Step: 1, Group: "Context", Flag: "--max-num-seqs",
 			Description: "Requests scheduled at once."},
 		{Name: "gpu_memory_utilization", Label: "GPU memory fraction", Type: v1.ParamType_PARAM_TYPE_FLOAT, Default: "0.9", Min: 0.05, Max: 1, Step: 0.01, Group: "Memory", Flag: "--gpu-memory-utilization",

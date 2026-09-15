@@ -66,5 +66,5 @@ func (p darwinGPU) Run(ctx context.Context) host.Result {
 			pools = append(pools, &v1.MemoryPool{Id: id, Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: id, TotalBytes: total})
 		}
 	}
-	return found(devices, pools, map[string]string{"gpu.count": itoa(len(devices))}, rows(len(devices)))
+	return found(devices, pools, nil, rows(len(devices)))
 }

@@ -22,6 +22,9 @@ message PoolUsage {
   PoolKind kind = 2;
   uint64 used_bytes = 3;
   uint64 capacity_bytes = 4;
+  // The whole pool, and what was free in it when the plan was made
+  uint64 total_bytes = 5;
+  uint64 free_bytes = 6;
 }
 
 // Bytes of one group kind planned onto one side, device or host, or left on disk when the pool is empty
@@ -48,6 +51,8 @@ message MemoryPlan {
   repeated Placement skipped = 10;
   // Whether pool capacities are the memory free when the plan was made rather than whole pools
   bool against_free = 11;
+  // When the host was read for this plan
+  google.protobuf.Timestamp planned_at = 12;
 }
 
 // Learned correction for one runtime and architecture
@@ -116,6 +121,9 @@ message InspectRequest {
 }
 
 // One cell of the fit table: the plan against the whole memory, and the one against what is free right now
+//
+// A context of zero is the row the planner solved itself, the largest context that fits, and the
+// plan's params carry the length it settled on.
 message FitRow {
   string group = 1;
   string runtime_id = 2;

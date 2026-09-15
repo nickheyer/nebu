@@ -4,7 +4,7 @@
   import { live, clock, instanceLive, slotName, groupLabel, runtimeName, answersOf } from '$lib/state.svelte';
   import { launch } from '$lib/launch';
   import { stopInstance } from '$lib/actions.svelte';
-  import { bytes, when, duration, count, commandLines } from '$lib/format';
+  import { bytes, when, duration, count, commandLines, tail } from '$lib/format';
   import { InstanceState } from '$proto/instance_pb';
   import { RouteState, type Trace } from '$proto/gateway_pb';
   import { Square, RotateCcw, Wrench, MessageSquare } from '@lucide/svelte';
@@ -18,14 +18,13 @@
   import Empty from '$lib/components/ui/Empty.svelte';
   import Stat from '$lib/components/ui/Stat.svelte';
   import ParamList from '$lib/components/ui/ParamList.svelte';
-  import PlanView, { solvedParams } from '$lib/components/PlanView.svelte';
+  import PlanView from '$lib/components/PlanView.svelte';
   import InstanceLog from '$lib/components/InstanceLog.svelte';
   import TraceTable from '$lib/components/TraceTable.svelte';
   import TraceDetail from '$lib/components/TraceDetail.svelte';
 
   const tabs = [
     { id: 'overview', label: 'Overview' },
-    { id: 'plan', label: 'Memory plan' },
     { id: 'log', label: 'Log' },
     { id: 'requests', label: 'Requests' },
     { id: 'triage', label: 'Triage' }
@@ -39,6 +38,9 @@
   const route = $derived(routeName ? live.routes.get(routeName) : undefined);
   const install = $derived(instance?.installId ? live.installs.get(instance.installId) : undefined);
   const traces = $derived(instance ? answersOf().filter((t) => t.instanceId === instance.id) : []);
+  // The model behind the name, said once, when the name does not already say it
+  const reference = $derived(instance ? `${instance.repo} ${groupLabel(instance)}` : '');
+  const named = $derived(!!instance && [instance.repo + ':' + instance.group, tail(instance.repo) + ':' + instance.group, reference].includes(instance.name));
   const tab = tabState(() => tabs.map((t) => t.id), () => 'overview');
   let selectedTrace = $state('');
   let stopping = $state(false);
@@ -77,7 +79,7 @@
   <PageHeader title={instance.name} mono back={instance.slotId ? { href: `/slots/${instance.slotId}`, label: `Slot ${slotName(instance.slotId)}` } : { href: '/', label: 'Serve' }}>
     {#snippet meta()}
       <State values={InstanceState} value={instance.state} />
-      <span>{instance.repo} <span class="font-mono text-xs">{groupLabel(instance)}</span></span>
+      {#if !named}<span>{instance.repo} <span class="font-mono text-xs">{groupLabel(instance)}</span></span>{/if}
     {/snippet}
     {#if alive}
       {#if route?.state === RouteState.READY}<Button icon={MessageSquare} href="/chat?model={encodeURIComponent(routeName)}">Chat</Button>{/if}
@@ -101,6 +103,11 @@
         <Stat label="Startup" value={instance.readyAt ? duration(instance.createdAt, instance.readyAt) : '–'} />
         <Stat label="Requests" value={count(route?.requests ?? 0n)} sub={route?.inFlight ? `${route.inFlight} in flight` : ''} />
       </div>
+      {#if instance.plan}
+        <Card title="Memory">
+          <PlanView plan={instance.plan} params={false} except={instance.id} />
+        </Card>
+      {/if}
       <div class="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <Card title="Details">
           <Kv
@@ -145,24 +152,6 @@
         </Card>
       {/if}
     </div>
-  {:else if tab.value === 'plan'}
-    {#if instance.plan}
-      {@const solved = solvedParams(instance.plan)}
-      <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <Card title="Memory plan" meta={instance.plan.againstFree ? 'against memory free at launch' : 'against whole devices'}>
-          <PlanView plan={instance.plan} params={false} />
-        </Card>
-        <Card title="Parameters" meta="as the plan solved them">
-          {#if Object.keys(solved).length}
-            <ParamList params={solved} />
-          {:else}
-            <p class="text-sm text-fg-faint">The plan set no parameters.</p>
-          {/if}
-        </Card>
-      </div>
-    {:else}
-      <Card><p class="text-sm text-fg-faint">No plan was recorded for this instance.</p></Card>
-    {/if}
   {:else if tab.value === 'log'}
     <InstanceLog id={instance.id} follow={alive} height="h-[calc(100vh-18rem)]" />
   {:else if tab.value === 'requests'}

@@ -43,12 +43,13 @@
 </script>
 
 <PageHeader title="Requests">
-  {#snippet meta()}
-    <span>Every request through the gateway, newest first. The gateway keeps the last 500.</span>
+  {#snippet below()}
+    <div class="flex flex-wrap items-center gap-2">
+      <Select class="w-48" bind:value={route} label="Model" items={[{ value: '', label: 'All models' }, ...routes.map((r) => ({ value: r, label: r }))]} mono />
+      <Select class="w-40" bind:value={kind} label="Kind" items={kinds} />
+      <Segmented bind:value={view} tabs={[{ id: 'all', label: 'All', count: all.length }, { id: 'live', label: 'In flight', count: inFlight || undefined }, { id: 'errors', label: 'Errors', count: errors || undefined }]} />
+    </div>
   {/snippet}
-  <Select class="w-48" bind:value={route} label="Model" items={[{ value: '', label: 'All models' }, ...routes.map((r) => ({ value: r, label: r }))]} mono />
-  <Select class="w-40" bind:value={kind} label="Kind" items={kinds} />
-  <Segmented bind:value={view} tabs={[{ id: 'all', label: 'All', count: all.length }, { id: 'live', label: 'In flight', count: inFlight || undefined }, { id: 'errors', label: 'Errors', count: errors || undefined }]} />
 </PageHeader>
 
 {#if live.traces.size === 0}

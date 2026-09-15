@@ -3,6 +3,7 @@ package sources
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -44,8 +45,6 @@ var huggingface = &Catalog{
 }
 
 func init() { register(huggingface) }
-
-const hubRevision = "main"
 
 var hubExpand = []string{"pipeline_tag", "library_name", "gated", "private", "downloads", "likes", "lastModified", "createdAt", "tags", "safetensors", "gguf", "trendingScore"}
 
@@ -220,23 +219,60 @@ type hubTree struct {
 	} `json:"lfs"`
 }
 
-func (hubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error) {
-	if revision == "" {
-		revision = hubRevision
-	}
+// The commit the hub serves for a repo at a revision, the hub's own default revision when none is named
+func hubSha(ctx context.Context, c *Client, repo, revision string) (string, error) {
 	var info struct {
 		Sha string `json:"sha"`
 	}
-	if _, err := c.JSON(ctx, c.URL("api", "models", repo, "revision", revision), nil, &info); err != nil {
+	segments := []string{"api", "models", repo}
+	if revision != "" {
+		segments = append(segments, "revision", revision)
+	}
+	if _, err := c.JSON(ctx, c.URL(segments...), nil, &info); err != nil {
+		return "", err
+	}
+	if info.Sha == "" {
+		return "", fmt.Errorf("%s: the hub names no commit at %s", repo, firstOr(revision, "its default revision"))
+	}
+	return info.Sha, nil
+}
+
+// The revision the hub serves when none is named, resolved from the hub itself: the branch its default
+// commit sits on, else that commit
+func hubDefault(ctx context.Context, c *Client, repo string) (revision, sha string, err error) {
+	if sha, err = hubSha(ctx, c, repo, ""); err != nil {
+		return "", "", err
+	}
+	refs, err := hubRefs(ctx, c, repo)
+	if err != nil {
+		return "", "", err
+	}
+	for _, b := range refs.Branches {
+		if b.TargetCommit == sha {
+			return b.Name, sha, nil
+		}
+	}
+	return sha, sha, nil
+}
+
+func (hubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error) {
+	var sha string
+	var err error
+	if revision == "" {
+		revision, sha, err = hubDefault(ctx, c, repo)
+	} else {
+		sha, err = hubSha(ctx, c, repo, revision)
+	}
+	if err != nil {
 		return nil, err
 	}
-	model := &v1.Model{Repo: repo, Revision: revision, Commit: info.Sha}
-	err := eachPage(ctx, c, c.URL("api", "models", repo, "tree", revision), url.Values{"recursive": {"true"}}, func(entries []hubTree) {
+	model := &v1.Model{Repo: repo, Revision: revision, Commit: sha}
+	err = eachPage(ctx, c, c.URL("api", "models", repo, "tree", revision), url.Values{"recursive": {"true"}}, func(entries []hubTree) {
 		for _, e := range entries {
 			if e.Type != "file" {
 				continue
 			}
-			a := &v1.Artifact{Path: e.Path, SizeBytes: e.Size}
+			a := &v1.Artifact{Path: e.Path, SizeBytes: e.Size, Url: c.URL(repo, "resolve", revision, e.Path)}
 			if e.Lfs != nil {
 				a.Sha256 = e.Lfs.Oid
 				a.SizeBytes = e.Lfs.Size
@@ -256,27 +292,46 @@ type hubRef struct {
 	TargetCommit string `json:"targetCommit"`
 }
 
-func (hubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
-	var body struct {
-		Branches []hubRef `json:"branches"`
-		Tags     []hubRef `json:"tags"`
-	}
+// The branches and tags of a repo as the hub lists them
+type hubRefList struct {
+	Branches []hubRef `json:"branches"`
+	Tags     []hubRef `json:"tags"`
+}
+
+func hubRefs(ctx context.Context, c *Client, repo string) (*hubRefList, error) {
+	var body hubRefList
 	if _, err := c.JSON(ctx, c.URL("api", "models", repo, "refs"), nil, &body); err != nil {
 		return nil, err
 	}
-	var out []*v1.Revision
-	for _, b := range body.Branches {
-		out = append(out, refRevision(b.Name, b.TargetCommit, b.Name == hubRevision, false))
+	return &body, nil
+}
+
+// Every branch and tag, the branch at the hub's default commit marked as the default
+func (hubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
+	sha, err := hubSha(ctx, c, repo, "")
+	if err != nil {
+		return nil, err
 	}
-	for _, t := range body.Tags {
-		out = append(out, refRevision(t.Name, t.TargetCommit, t.Name == hubRevision, true))
+	refs, err := hubRefs(ctx, c, repo)
+	if err != nil {
+		return nil, err
+	}
+	var out []*v1.Revision
+	for _, b := range refs.Branches {
+		out = append(out, refRevision(b.Name, b.TargetCommit, b.TargetCommit == sha, false))
+	}
+	for _, t := range refs.Tags {
+		out = append(out, refRevision(t.Name, t.TargetCommit, false, true))
 	}
 	return out, nil
 }
 
 func (hubAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v1.ModelCard, error) {
 	if revision == "" {
-		revision = hubRevision
+		var err error
+		if revision, _, err = hubDefault(ctx, c, repo); err != nil {
+			return nil, err
+		}
 	}
 	return c.CardText(ctx, c.URL(repo, "raw", revision, "README.md"), nil, hubPage(c, repo))
 }

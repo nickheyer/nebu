@@ -135,12 +135,12 @@ func (e *env) clients() (*clients, error) {
 		base = e.base(addr)
 		httpClient.Transport = e.transport(base)
 	} else {
-		log, closer, err := logger.New(quiet(e.cfg.GetLogging()))
+		log, recent, closer, err := logger.New(quiet(e.cfg.GetLogging()))
 		if err != nil {
 			return nil, err
 		}
 		e.closers = append(e.closers, closer)
-		d, err := daemon.New(e.cfg, log)
+		d, err := daemon.New(e.cfg, log, recent)
 		if err != nil {
 			return nil, err
 		}

@@ -280,7 +280,7 @@ func csgWalk(ctx context.Context, c *Client, repo, revision string, model *v1.Mo
 			}
 			switch e.Type {
 			case "file":
-				a := &v1.Artifact{Path: path, SizeBytes: e.Size}
+				a := &v1.Artifact{Path: path, SizeBytes: e.Size, Url: c.URL("hf", repo, "resolve", revision, path)}
 				if e.Lfs {
 					a.Sha256 = Hex(e.LfsSha256)
 				}

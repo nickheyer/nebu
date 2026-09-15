@@ -16,8 +16,8 @@ func (SGLang) Description() string { return "SGLang installed from PyPI into a v
 func (SGLang) Source() Source      { return Source{} }
 func (SGLang) Tools() []string     { return []string{"python3"} }
 func (SGLang) Facts() []string     { return []string{"device.vendor", "device.compute_capability"} }
-func (SGLang) Vars() map[string]string {
-	return map[string]string{"version": ""}
+func (SGLang) Vars() []Var {
+	return []Var{{Name: "version", Label: "Version", Description: "The sglang version on PyPI, the newest when empty"}}
 }
 
 func (SGLang) Variants() []Variant {
@@ -25,6 +25,7 @@ func (SGLang) Variants() []Variant {
 		{
 			ID:          "cuda",
 			Description: "The PyPI wheels, built for CUDA",
+			Requires:    "an NVIDIA device",
 			Applies:     func(h *v1.HostProfile) bool { return host.HasVendor(h, "nvidia") },
 			Vars:        func(*v1.HostProfile) map[string]string { return nil },
 		},

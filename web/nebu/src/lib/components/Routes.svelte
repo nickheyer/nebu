@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '$lib/api';
-  import { live, cached, slotName, groupLabel } from '$lib/state.svelte';
+  import { live, cached, slotName, groupLabel, instanceLive } from '$lib/state.svelte';
   import { policyText, policyFields, policyFrom } from '$lib/gateway';
   import { byName, count, tail } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
@@ -19,7 +19,7 @@
   import PolicyForm from './PolicyForm.svelte';
   import TextInput from './ui/TextInput.svelte';
 
-  // Every name the gateway answers to, what stands behind it, and a form for extra names
+  // Every name the gateway answers to, what stands behind it, and a form for extra names, shown once an instance exists to name
   let open = $state(false);
   let aliasName = $state('');
   let aliasInstance = $state('');
@@ -28,6 +28,7 @@
 
   const routes = $derived([...live.routes.values()].sort(byName((r) => r.name)));
   const ready = $derived([...live.instances.values()].filter((i) => i.state === InstanceState.READY));
+  const anyInstance = $derived([...live.instances.values()].some(instanceLive));
   const nameTaken = $derived(live.routes.has(aliasName.trim()));
   const badName = $derived(/[\s/]/.test(aliasName));
   const defaults = $derived(cached.gateway?.policy);
@@ -65,12 +66,13 @@
   }
 </script>
 
-<Section title="Model names" count={routes.length || undefined}>
+{#if anyInstance}
+<Section title="Aliases" count={routes.length || undefined}>
   {#snippet actions()}
     <Button size="sm" icon={Plus} disabled={!ready.length} onclick={openForm}>Add alias</Button>
   {/snippet}
   {#if routes.length === 0}
-    <Empty compact title="No model names yet. Run a model or create a slot." />
+    <Empty compact title="No aliases yet" />
   {:else}
     <div class="overflow-x-auto">
       <table class="tbl">
@@ -96,6 +98,7 @@
     </div>
   {/if}
 </Section>
+{/if}
 
 <Dialog bind:open title="Add alias" description="A second name that reaches a running model" size="lg">
   <form

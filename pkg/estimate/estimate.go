@@ -12,6 +12,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/formats"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/text"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Value a solved param takes before planning
@@ -426,6 +427,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		Params:        stringParams(s.Params),
 		Skipped:       skipped.list(),
 		AgainstFree:   in.Free,
+		PlannedAt:     plannedAt(in.Host),
 	}
 	if len(primary) > 0 && sv.solve(0) {
 		plan.Verdict = v1.FitVerdict_FIT_VERDICT_FITS
@@ -683,7 +685,7 @@ func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) 
 		place(it, hostStart)
 	}
 	for _, sl := range chain {
-		plan.Pools = append(plan.Pools, &v1.PoolUsage{PoolId: sl.pool.GetId(), Kind: sl.pool.GetKind(), UsedBytes: sl.used, CapacityBytes: sl.cap})
+		plan.Pools = append(plan.Pools, usage(sl.pool, sl.used, sl.cap))
 	}
 	plan.Placements = agg.list()
 }
@@ -738,12 +740,26 @@ func distribute(need uint64, into []*v1.MemoryPool, free bool) []*v1.PoolUsage {
 	for _, pl := range into {
 		share := min(uint64(float64(need)*float64(capacity(pl, free))/float64(total)), remaining)
 		remaining -= share
-		out = append(out, &v1.PoolUsage{PoolId: pl.GetId(), Kind: pl.GetKind(), UsedBytes: share, CapacityBytes: capacity(pl, free)})
+		out = append(out, usage(pl, share, capacity(pl, free)))
 	}
 	if remaining > 0 && len(out) > 0 {
 		out[len(out)-1].UsedBytes += remaining
 	}
 	return out
+}
+
+// One pool's share of a plan beside the whole pool and what was free in it, so a bar can draw
+// what others hold, what this plan takes, and what is left
+func usage(pl *v1.MemoryPool, used, cap uint64) *v1.PoolUsage {
+	return &v1.PoolUsage{PoolId: pl.GetId(), Kind: pl.GetKind(), UsedBytes: used, CapacityBytes: cap, TotalBytes: pl.GetTotalBytes(), FreeBytes: pl.GetFreeBytes()}
+}
+
+// When the host was read for a plan, now for a profile that carries no stamp
+func plannedAt(h *v1.HostProfile) *timestamppb.Timestamp {
+	if at := h.GetProbedAt(); at != nil {
+		return at
+	}
+	return timestamppb.Now()
 }
 
 // Uses free bytes when asked and known, else total
