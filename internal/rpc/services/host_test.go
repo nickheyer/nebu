@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -72,5 +74,42 @@ func TestLogsFollowsNewLines(t *testing.T) {
 	}
 	if connect.CodeOf(stream.Err()) != connect.CodeCanceled {
 		t.Fatal(stream.Err())
+	}
+}
+
+// A file lists the directory holding it: directories first, then files by name, binaries marked
+func TestListDirectoryListsAroundAFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "llama-server.exe"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := hostClient(t, launch.NewLog(1))
+	resp, err := client.ListDirectory(context.Background(), connect.NewRequest(&v1.ListDirectoryRequest{Path: filepath.Join(dir, "llama-server.exe")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Msg.GetPath() != dir || resp.Msg.GetParent() != filepath.Dir(dir) {
+		t.Fatalf("path %q parent %q", resp.Msg.GetPath(), resp.Msg.GetParent())
+	}
+	entries := resp.Msg.GetEntries()
+	if len(entries) != 3 || entries[0].GetName() != "sub" || entries[1].GetName() != "llama-server.exe" || entries[2].GetName() != "README" {
+		t.Fatalf("%v", entries)
+	}
+	if !entries[0].GetDir() || entries[0].GetExecutable() || entries[1].GetDir() || !entries[1].GetExecutable() || entries[2].GetExecutable() {
+		t.Fatalf("%v", entries)
+	}
+}
+
+// A path that is not there answers not found
+func TestListDirectoryMissingIsNotFound(t *testing.T) {
+	_, err := hostClient(t, launch.NewLog(1)).ListDirectory(context.Background(), connect.NewRequest(&v1.ListDirectoryRequest{Path: filepath.Join(t.TempDir(), "nope")}))
+	if connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("%v", err)
 	}
 }

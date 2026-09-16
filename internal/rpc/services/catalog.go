@@ -2,6 +2,10 @@ package services
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -60,6 +64,69 @@ func (s *HostService) Logs(ctx context.Context, req *connect.Request[v1.HostServ
 		return wrap(send(lines))
 	}
 	return wrap(s.recent.Follow(ctx, int(req.Msg.GetTail()), send))
+}
+
+// Lists a directory on the host so a client can pick a file: the daemon's home when none is named, the
+// directory holding a file when a file is named, directories first and then by name
+func (s *HostService) ListDirectory(ctx context.Context, req *connect.Request[v1.ListDirectoryRequest]) (*connect.Response[v1.ListDirectoryResponse], error) {
+	return reply(listDirectory(req.Msg.GetPath()))
+}
+
+func listDirectory(path string) (*v1.ListDirectoryResponse, error) {
+	if path == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			home = string(filepath.Separator)
+		}
+		path = home
+	}
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		path = filepath.Dir(path)
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	out := &v1.ListDirectoryResponse{Path: path}
+	if parent := filepath.Dir(path); parent != path {
+		out.Parent = parent
+	}
+	for _, e := range entries {
+		// Stat follows links, so a link to a directory or a binary reads as what it points at
+		info, err := os.Stat(filepath.Join(path, e.Name()))
+		if err != nil {
+			continue
+		}
+		out.Entries = append(out.Entries, &v1.DirEntry{Name: e.Name(), Dir: info.IsDir(), Executable: !info.IsDir() && executable(info, e.Name()), SizeBytes: uint64(info.Size())})
+	}
+	sort.SliceStable(out.Entries, func(i, j int) bool {
+		a, b := out.Entries[i], out.Entries[j]
+		if a.Dir != b.Dir {
+			return a.Dir
+		}
+		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+	})
+	return out, nil
+}
+
+// Windows runs files by extension, every other host by mode
+func executable(info os.FileInfo, name string) bool {
+	if runtime.GOOS == "windows" {
+		switch strings.ToLower(filepath.Ext(name)) {
+		case ".exe", ".bat", ".cmd", ".com":
+			return true
+		}
+		return false
+	}
+	return info.Mode()&0o111 != 0
 }
 
 // Serves host wide preferences

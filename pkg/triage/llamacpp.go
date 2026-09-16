@@ -54,6 +54,24 @@ func (LlamaCpp) Rules() []Rule {
 			Match:   anyOf("address already in use", "couldn't bind to server socket", "couldn’t bind to server socket"),
 		},
 		{
+			ID:      "gguf-hparams",
+			Summary: "this build cannot read the model's hyperparameters${detail}",
+			Hint:    "the file was converted for a different llama.cpp; Ollama's own engine reads GGUFs upstream llama.cpp rejects, so pull the model from a source that publishes upstream GGUFs, such as Hugging Face, or adopt the runtime the file was made for",
+			Match: func(line string) (map[string]string, bool) {
+				if !contains(line, "error loading model hyperparameters") {
+					return nil, false
+				}
+				names := map[string]string{"detail": ""}
+				key, hasKey := quotedAfter(line, "key ", " has wrong array length")
+				want, hasWant := quotedAfter(line, "expected ", ",")
+				got, hasGot := tailAfter(line, "got ")
+				if hasKey && hasWant && hasGot {
+					names["detail"] = ", " + key + " holds " + got + " values where it wants " + want
+				}
+				return names, true
+			},
+		},
+		{
 			ID:      "model-load",
 			Summary: "the model failed to load",
 			Hint:    "verify the store with nebu store verify, then check the lines above this one",

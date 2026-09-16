@@ -4,6 +4,7 @@ package services
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"net/http"
 
 	"connectrpc.com/connect"
@@ -38,6 +39,10 @@ func wrap(err error) error {
 	case errors.Is(err, runtimes.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, sources.ErrSource),
 		errors.Is(err, settings.ErrSetting):
 		return connect.NewError(connect.CodeInvalidArgument, err)
+	case errors.Is(err, fs.ErrNotExist):
+		return connect.NewError(connect.CodeNotFound, err)
+	case errors.Is(err, fs.ErrPermission):
+		return connect.NewError(connect.CodePermissionDenied, err)
 	case errors.Is(err, transfer.ErrDigestMismatch):
 		return connect.NewError(connect.CodeDataLoss, err)
 	case errors.Is(err, store.ErrNoRoom):

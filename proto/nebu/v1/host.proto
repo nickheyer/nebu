@@ -111,6 +111,28 @@ message HostServiceLogsResponse {
   repeated string lines = 1;
 }
 
+// One entry of a directory on the host
+message DirEntry {
+  string name = 1;
+  bool dir = 2;
+  // Whether the file can be run
+  bool executable = 3;
+  uint64 size_bytes = 4;
+}
+
+// Asks for the entries of a directory on the host, the daemon's home when empty; a file lists the directory holding it
+message ListDirectoryRequest {
+  string path = 1;
+}
+
+// Returns the directory as resolved, the directory above it, and its entries, directories first then by name
+message ListDirectoryResponse {
+  string path = 1;
+  // Empty at the root
+  string parent = 2;
+  repeated DirEntry entries = 3;
+}
+
 // Host probing and diagnostics
 service HostService {
   // Returns cached or refreshed host profile
@@ -119,4 +141,6 @@ service HostService {
   rpc Doctor(DoctorRequest) returns (DoctorResponse);
   // Streams the daemon's own log
   rpc Logs(HostServiceLogsRequest) returns (stream HostServiceLogsResponse);
+  // Lists a directory on the host, for picking a file
+  rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
 }

@@ -74,8 +74,6 @@
 
   const model = $derived(inspect?.model);
   const revLabel = $derived(caps?.revisionLabel || 'revision');
-  // A source that tags every variant of a model as its own repository lists them as a table, not a pick list
-  const variants = $derived(revisions.filter((r) => r.repo));
   const currentRevision = $derived(revisions.find((r) => (r.repo ? r.repo === (model?.repo ?? curRepo) : r.name === (model?.revision ?? curRev))) ?? revisions.find((r) => r.default));
   const revisionText = $derived(currentRevision?.name || model?.revision || curRev || 'default');
   const pageUrl = $derived(hit?.url || card?.url || '');
@@ -148,17 +146,15 @@
     items.push({ label: 'this', size: pool.used, tone: over ? ('bad' as const) : ('accent' as const) });
     return [{ start: 'left' as const, items }];
   }
-  // The variants a source tags by parameter count, each count its own group of rows, smallest first
-  const variantGroups = $derived.by(() => {
-    const out: { label: string; parameters: bigint; rows: Revision[] }[] = [];
-    for (const r of variants) {
-      const label = r.parameters > 0n ? fmtParams(r.parameters) : 'Other';
-      let g = out.find((x) => x.label === label);
-      if (!g) out.push((g = { label, parameters: r.parameters, rows: [] }));
-      g.rows.push(r);
-    }
-    return out.sort((a, b) => (a.parameters === b.parameters ? 0 : a.parameters === 0n ? 1 : b.parameters === 0n ? -1 : a.parameters < b.parameters ? -1 : 1));
-  });
+
+  // What a revision shows beside its name
+  function revisionDetail(r: Revision): string | undefined {
+    const parts = [r.sizeBytes ? storage(r.sizeBytes, 1) : '', r.updatedAt ? ago(r.updatedAt, clock.now) : '', r.default ? 'default' : '', r.repo && storedRepo(r.repo) ? 'downloaded' : ''];
+    return parts.filter(Boolean).join(' · ') || undefined;
+  }
+  function storedRepo(repo: string): boolean {
+    return [...live.models.values()].some((m) => m.sourceId === sourceId && m.repo === repo);
+  }
   // The row opened to its plan
   let expanded = $state('');
 
@@ -338,7 +334,7 @@
       {#if paramCount > 0n}<span>{fmtParams(paramCount)} params</span>{:else if hit && hit.sizeBytes > 0n}<span>{storage(hit.sizeBytes, 1)}</span>{/if}
       {#if hit?.license}<span><span class="text-fg-faint">license</span> {hit.license}</span>{/if}
       {#if hit?.updatedAt}<span><span class="text-fg-faint">updated</span> {ago(hit.updatedAt, clock.now)}</span>{/if}
-      {#if revisions.length > 1 && !variants.length}
+      {#if revisions.length > 1}
         <span class="ml-auto inline-flex items-center gap-2 text-xs text-fg-faint">
           {revLabel}
           <Select
@@ -351,7 +347,7 @@
               const r = revisions.find((x) => x.name === name);
               if (r) pick(r);
             }}
-            items={revisions.map((r) => ({ value: r.name, label: r.name, detail: [r.sizeBytes ? storage(r.sizeBytes, 1) : '', r.updatedAt ? ago(r.updatedAt, clock.now) : ''].filter(Boolean).join(' · ') || undefined }))}
+            items={revisions.map((r) => ({ value: r.name, label: r.name, detail: revisionDetail(r) }))}
           />
         </span>
       {:else if !gated}
@@ -384,28 +380,6 @@
         </Empty>
       {:else if inspect && model}
         <div class="flex flex-col gap-6">
-          {#if variantGroups.length}
-            {@const dated = variants.some((r) => r.updatedAt)}
-            <table class="tbl">
-              <thead><tr><th>{revLabel}</th><th>Precision</th><th class="num">Size</th>{#if dated}<th>Updated</th>{/if}<th></th></tr></thead>
-              <tbody>
-                {#each variantGroups as g (g.label)}
-                  <tr><td colspan={dated ? 5 : 4} class="caps !pt-3 text-fg-faint">{g.label}</td></tr>
-                  {#each g.rows as r (r.name)}
-                    {@const on = r.repo === curRepo}
-                    {@const stored = live.models.get(modelKey({ sourceId, repo: r.repo, group: '' }))}
-                    <tr class="row-link {on ? 'row-active' : ''}" onclick={() => pick(r)}>
-                      <td class="font-mono text-xs text-fg">{r.name}{#if r.default}<span class="ml-2 text-fg-faint">default</span>{/if}</td>
-                      <td class="font-mono text-xs text-fg-muted">{r.precision || '–'}</td>
-                      <td class="num">{r.sizeBytes ? storage(r.sizeBytes, 1) : '–'}</td>
-                      {#if dated}<td class="text-fg-muted whitespace-nowrap">{r.updatedAt ? ago(r.updatedAt, clock.now) : '–'}</td>{/if}
-                      <td class="w-6 text-right">{#if on}<ChevronRight size={12} class="text-accent" />{:else if stored}<Tip text="Downloaded"><Check size={12} class="text-ok" /></Tip>{/if}</td>
-                    </tr>
-                  {/each}
-                {/each}
-              </tbody>
-            </table>
-          {/if}
           {#if noRuntime}
             <div class="note note-warn flex flex-wrap items-center gap-3">
               <span class="flex-1">No installed runtime reads {formatIds.join(', ')}. You can download the weights now and run them once one is installed.</span>

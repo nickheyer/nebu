@@ -86,6 +86,15 @@ func allOf(phrases ...string) func(string) (map[string]string, bool) {
 // Whether a line holds a phrase exactly as written
 func contains(line, phrase string) bool { return strings.Contains(line, phrase) }
 
+// The text after the last occurrence of a phrase, trimmed, for a rule that reads a count the line ends with
+func tailAfter(line, phrase string) (string, bool) {
+	i := strings.LastIndex(line, phrase)
+	if i < 0 {
+		return "", false
+	}
+	return strings.TrimSpace(line[i+len(phrase):]), true
+}
+
 // The text between a phrase and the next closing quote, for a rule that names what the runtime rejected
 func quotedAfter(line, phrase, quote string) (string, bool) {
 	i := strings.Index(line, phrase)

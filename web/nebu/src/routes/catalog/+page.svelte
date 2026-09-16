@@ -194,7 +194,7 @@
     void effectiveSort;
     void ascending;
     void JSON.stringify(filters);
-    if (booted) search();
+    if (booted) untrack(search);
   });
 
   function syncUrl() {
@@ -238,7 +238,10 @@
       total = r.total;
       warnings = r.warnings;
       // A model opened by URL before the list arrived picks up its listing now
-      if (selected && !selected.hit) selected = { ...selected, hit: hits.find((h) => h.repo === selected!.repo && (h.sourceId || openSourceId) === selected!.sourceId) ?? null };
+      if (selected && !selected.hit) {
+        const listed = hits.find((h) => h.repo === selected!.repo && (h.sourceId || openSourceId) === selected!.sourceId);
+        if (listed) selected = { ...selected, hit: listed };
+      }
     } catch (err) {
       if (gen !== generation) return;
       hits = [];
@@ -326,8 +329,12 @@
     syncUrl();
   }
 
+  // Closing the drawer drops the model from the URL
   $effect(() => {
-    if (!drawerOpen && booted) syncUrl();
+    const open = drawerOpen;
+    untrack(() => {
+      if (!open && booted) syncUrl();
+    });
   });
 
   function clearAll() {

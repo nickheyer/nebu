@@ -201,7 +201,7 @@ func (m *Manager) Options(ctx context.Context, rt runtimes.Runtime, profile *v1.
 		switch im.Kind {
 		case v1.InstallKind_INSTALL_KIND_ADOPTED:
 			found := onPath(im.Binaries)
-			opt.Fields = []*v1.ConfigField{{Name: fieldPath, Label: "Binary", Type: v1.ConfigType_CONFIG_TYPE_PATH, Required: found == "", Default: found, Placeholder: "/path/to/" + im.Binaries[0], Description: "Path of " + strings.Join(im.Binaries, " or ")}}
+			opt.Fields = []*v1.ConfigField{{Name: fieldPath, Label: "Binary", Type: v1.ConfigType_CONFIG_TYPE_PATH, Required: found == "", Default: found, Description: "Path of " + strings.Join(im.Binaries, " or ")}}
 			if found == "" {
 				opt.Unmet = []string{notOnPath(im.Binaries) + ", give its path"}
 			}
@@ -213,7 +213,7 @@ func (m *Manager) Options(ctx context.Context, rt runtimes.Runtime, profile *v1.
 			}
 			opt.Fields = []*v1.ConfigField{
 				{Name: fieldBuild, Label: "Build", Type: v1.ConfigType_CONFIG_TYPE_STRING, Required: true, Default: first(ids), Choices: ids, Description: "Which published build to download"},
-				{Name: fieldRelease, Label: "Release", Type: v1.ConfigType_CONFIG_TYPE_STRING, Placeholder: "newest release", Description: "A release tag of " + im.Releases + ", the newest with the build when empty"},
+				{Name: fieldRelease, Label: "Release", Type: v1.ConfigType_CONFIG_TYPE_STRING, Placeholder: "Latest", Description: "A release tag of " + im.Releases + ", the newest with the build when empty"},
 			}
 			if len(ids) == 0 {
 				opt.Unmet = []string{"no build of " + im.Releases + " is published for " + profile.GetOs() + "/" + profile.GetArch()}
@@ -279,7 +279,7 @@ func refField(src recipes.Source) *v1.ConfigField {
 	f := &v1.ConfigField{Name: fieldRef, Label: "Ref", Type: v1.ConfigType_CONFIG_TYPE_STRING}
 	switch {
 	case src.Releases != "":
-		f.Placeholder = "newest release"
+		f.Placeholder = "Latest"
 		f.Description = "A tag, branch, or commit of " + src.String() + ", the newest release when empty"
 	case src.Repo != "":
 		f.Description = "A tag, branch, or commit of " + src.Repo + ", the default branch when empty"

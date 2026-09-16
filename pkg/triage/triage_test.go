@@ -45,6 +45,7 @@ func TestShippedRules(t *testing.T) {
 		{LlamaCpp{}, "llama_model_load: error loading model: unknown model architecture: 'qwen9'", "unknown-arch"},
 		{LlamaCpp{}, "V cache quantization requires flash_attn", "cache-quant-needs-flash"},
 		{LlamaCpp{}, `error while handling argument "--nope": unknown`, "bad-flag"},
+		{LlamaCpp{}, "llama_model_load: error loading model: error loading model hyperparameters: key qwen35.rope.dimension_sections has wrong array length; expected 4, got 3", "gguf-hparams"},
 		{VLLM{}, "torch.OutOfMemoryError: CUDA out of memory", "device-oom"},
 		{VLLM{}, "ValueError: Model architectures ['FooForCausalLM'] are not supported for now", "unsupported-arch"},
 		{SGLang{}, "RuntimeError: Not enough memory. Please try to increase --mem-fraction-static", "pool-too-small"},
@@ -67,5 +68,24 @@ func TestShippedRules(t *testing.T) {
 	unknown := LlamaCpp{}.Rules()[1]
 	if names, ok := unknown.Match("unknown model architecture: 'x'"); !ok || names["arch"] != "x" {
 		t.Fatalf("arch capture %v %v", names, ok)
+	}
+}
+
+// A GGUF this build rejects is named ahead of the catch-all, with the key and the counts it read
+func TestLlamaCppHparams(t *testing.T) {
+	lines := []string{
+		"llama_model_load: error loading model: error loading model hyperparameters: key qwen35.rope.dimension_sections has wrong array length; expected 4, got 3",
+		"llama_model_load_from_file_impl: failed to load model",
+	}
+	hits := Scan([]Set{LlamaCpp{}}, lines)
+	if len(hits) < 2 || hits[0].GetId() != "gguf-hparams" || hits[1].GetId() != "model-load" {
+		t.Fatalf("hits %v", hits)
+	}
+	if want := "this build cannot read the model's hyperparameters, qwen35.rope.dimension_sections holds 3 values where it wants 4"; hits[0].GetSummary() != want {
+		t.Fatalf("summary %q", hits[0].GetSummary())
+	}
+	plain := Scan([]Set{LlamaCpp{}}, []string{"llama_model_load: error loading model: error loading model hyperparameters: key foo has wrong type"})
+	if len(plain) == 0 || plain[0].GetId() != "gguf-hparams" || plain[0].GetSummary() != "this build cannot read the model's hyperparameters" {
+		t.Fatalf("plain hits %v", plain)
 	}
 }
