@@ -251,6 +251,13 @@ func (m *Manager) Watch(ctx context.Context, id string, send func(*v1.WatchTaskR
 		logs := append([]string(nil), e.logs[start:]...)
 		cursor = e.dropped + len(e.logs)
 		e.mu.Unlock()
+		if terminal(task.GetState()) {
+			select {
+			case <-e.done:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		if err := send(&v1.WatchTaskResponse{Task: task, Logs: logs}); err != nil {
 			return err
 		}
