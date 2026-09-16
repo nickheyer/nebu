@@ -6,7 +6,7 @@ Nebu is a model loading shim for inference services like llama.cpp, vLLM, SGLang
 Nebu (named after Nebuchadnezzar, the matrix spaceship, not the babylonian guy) is yet another time-saving solution for a niche engineering problem - this time it's managing open source model weights and coordinating with backend inference platforms like `llama.cpp`. 
 
 - Four runtimes: llama.cpp, vLLM, SGLang, and NeMo.
-- Four runtime installers: Adopt binary, Download binary, Build Binary
+- Three runtime installers: Adopt binary, Download binary, Build Binary
 - Model sources: Hugging Face, GitHub, Ollama, ModelScope, Civitai, Kaggle, NGC, CSGHub, OCI registries, git, mirrors, and local directories
 - API Dialects: OpenAI, Anthropic, and Ollama
 - Platforms: Linux, macOS, Windows, and FreeBSD
