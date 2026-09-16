@@ -40,12 +40,12 @@ jobs:
       - name: Require complete publication inputs
         env:
           GH_TOKEN: ${{ github.token }}
-          AUR_PRIVATE_KEY: ${{ secrets.AUR_PRIVATE_KEY }}
+          AUR_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          test -s LICENSE || { echo 'Add the project license before publishing.' >&2; exit 1; }
+          test -s LICENSE-MIT || { echo 'LICENSE-MIT is missing or empty.' >&2; exit 1; }
           if [[ "$RELEASE_TAG" != *-* ]]; then
-            test -n "$AUR_PRIVATE_KEY" || { echo 'Set AUR_PRIVATE_KEY for both nebu and nebu-bin.' >&2; exit 1; }
+            test -n "$AUR_PRIVATE_KEY" || { echo 'Set AUR_SSH_PRIVATE_KEY for both nebu and nebu-bin.' >&2; exit 1; }
             if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)" != false ]]; then
               echo 'AUR requires public release downloads.' >&2
               exit 1
@@ -97,7 +97,7 @@ jobs:
           args: release --clean --parallelism=2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          AUR_PRIVATE_KEY: ${{ secrets.AUR_PRIVATE_KEY }}
+          AUR_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
       - name: Keep generated AUR files and release metadata
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

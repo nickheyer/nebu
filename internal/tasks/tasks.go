@@ -103,8 +103,9 @@ func (m *Manager) Start(kind, title string, labels map[string]string, run func(c
 	m.save(e)
 	m.events.Publish(v1.EventKind_EVENT_KIND_TASK, v1.EventAction_EVENT_ACTION_CREATED, e.task.Id, e.snapshot())
 	h := &Handle{m: m, e: e}
+	initial := e.snapshot()
 	go m.execute(ctx, e, h, run)
-	return e.snapshot()
+	return initial
 }
 
 func (m *Manager) execute(ctx context.Context, e *entry, h *Handle, run func(context.Context, *Handle) error) {

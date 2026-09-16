@@ -46,6 +46,7 @@ jobs:
       - name: Check Go and TypeScript
         run: |
           make proto-lint vet cgo-guard test
+          npm ci --no-audit --no-fund --prefix web/nebu
           npm run check --prefix web/nebu
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:

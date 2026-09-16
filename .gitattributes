@@ -1,0 +1,2 @@
+internal/db/migrations/*.sql text eol=lf
+internal/db/migrations/atlas.sum text eol=lf

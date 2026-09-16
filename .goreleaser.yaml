@@ -57,6 +57,7 @@ release:
 aurs:
   - name: nebu-bin
     homepage: https://github.com/nickheyer/nebu
+    license: MIT
     description: Model storage, inference runtime management, and API gateway
     maintainers: [nickheyer]
     ids: [nebu]
@@ -94,6 +95,7 @@ aurs:
 aur_sources:
   - name: nebu
     homepage: https://github.com/nickheyer/nebu
+    license: MIT
     description: Model storage, inference runtime management, and API gateway
     maintainers: [nickheyer]
     git_url: ssh://aur@aur.archlinux.org/nebu.git
