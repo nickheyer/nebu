@@ -432,6 +432,7 @@ FodyWeavers.xsd
 # Nebu
 /build/
 /data/
+/dist/
 /pkg/proto/
 /web/nebu/node_modules/
 /web/nebu/.svelte-kit/

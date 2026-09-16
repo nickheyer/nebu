@@ -1,0 +1,45 @@
+name: nebu
+
+services:
+  nebu:
+    image: ghcr.io/nickheyer/nebu:${NEBU_IMAGE_TAG:-latest}
+    user: "${NEBU_UID:-10001}:${NEBU_GID:-10001}"
+    restart: unless-stopped
+    stop_grace_period: 60s
+    shm_size: "${NEBU_SHM_SIZE:-8gb}"
+    ports:
+      - "${NEBU_BIND_ADDRESS:-127.0.0.1}:${NEBU_PORT:-8484}:8484"
+    environment:
+      NEBU_DATA_DIR: "${NEBU_DATA_DIR:-/srv/nebu}"
+      HOME: "${NEBU_DATA_DIR:-/srv/nebu}"
+      NEBU_LISTEN: 0.0.0.0:8484
+      NEBU_TOKEN: "${NEBU_TOKEN:-}"
+      NEBU_API_KEYS: "${NEBU_API_KEYS:-}"
+      XDG_CACHE_HOME: "${NEBU_CACHE_DIR:-/srv/nebu-cache}"
+      HF_HOME: "${NEBU_CACHE_DIR:-/srv/nebu-cache}/huggingface"
+      TORCH_HOME: "${NEBU_CACHE_DIR:-/srv/nebu-cache}/torch"
+      PIP_CACHE_DIR: "${NEBU_CACHE_DIR:-/srv/nebu-cache}/pip"
+      HF_TOKEN: "${HF_TOKEN:-}"
+    volumes:
+      - type: bind
+        source: "${NEBU_DATA_DIR:-/srv/nebu}"
+        target: "${NEBU_DATA_DIR:-/srv/nebu}"
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${NEBU_CACHE_DIR:-/srv/nebu-cache}"
+        target: "${NEBU_CACHE_DIR:-/srv/nebu-cache}"
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./packaging/config.yaml
+        target: /etc/nebu/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${NEBU_MODELS_DIR:-./models}"
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false

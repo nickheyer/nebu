@@ -1,0 +1,10 @@
+services:
+  nebu:
+    group_add:
+      - "${NEBU_DOCKER_GID:?NEBU_DOCKER_GID required}"
+    volumes:
+      - type: bind
+        source: "${NEBU_DOCKER_SOCKET:-/var/run/docker.sock}"
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false

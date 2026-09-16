@@ -1,0 +1,165 @@
+version: 2
+project_name: nebu
+
+before:
+  hooks:
+    - make prepare
+
+builds:
+  - id: nebu
+    main: ./cmd/nebu
+    binary: nebu
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows, freebsd]
+    goarch: [amd64, arm64]
+    flags: [-trimpath, -mod=readonly]
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/nickheyer/nebu/internal/cli.releaseVersion={{ .Version }}
+        -X github.com/nickheyer/nebu/internal/cli.releaseCommit={{ .FullCommit }}
+    mod_timestamp: '{{ .CommitTimestamp }}'
+
+archives:
+  - id: nebu
+    ids: [nebu]
+    name_template: 'nebu_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE*
+      - compose*.yaml
+      - packaging/config.yaml
+      - packaging/nebu.service
+
+source:
+  enabled: true
+  name_template: 'nebu_{{ .Version }}_source'
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+
+release:
+  github:
+    owner: nickheyer
+    name: nebu
+  prerelease: auto
+  mode: keep-existing
+
+aurs:
+  - name: nebu-bin
+    homepage: https://github.com/nickheyer/nebu
+    description: Model storage, inference runtime management, and API gateway
+    maintainers: [nickheyer]
+    ids: [nebu]
+    git_url: ssh://aur@aur.archlinux.org/nebu-bin.git
+    private_key: '{{ .Env.AUR_PRIVATE_KEY }}'
+    skip_upload: auto
+    provides: [nebu]
+    conflicts: [nebu]
+    depends: [ca-certificates]
+    optdepends: &runtime_dependencies
+      - 'git: git model sources'
+      - 'cmake: building llama.cpp'
+      - 'gcc: compiling inference runtimes'
+      - 'python: Python inference runtimes'
+      - 'python-pip: installing Python inference runtimes'
+      - 'cuda: building CUDA inference runtimes'
+      - 'nvidia-utils: NVIDIA device probing'
+      - 'hip-runtime-amd: AMD inference runtimes'
+      - 'rocm-smi-lib: AMD device probing'
+      - 'docker: optional container build sandbox'
+    backup: [etc/nebu/config.yaml]
+    package: &package_files |
+      install -Dm755 nebu "${pkgdir}/usr/bin/nebu"
+      install -Dm644 packaging/config.yaml "${pkgdir}/etc/nebu/config.yaml"
+      install -Dm644 packaging/nebu.service "${pkgdir}/usr/lib/systemd/user/nebu.service"
+      install -Dm644 README.md "${pkgdir}/usr/share/doc/nebu/README.md"
+      for file in LICENSE*; do
+        [ -f "$file" ] || continue
+        install -Dm644 "$file" "${pkgdir}/usr/share/licenses/nebu/$file"
+      done
+    commit_author: &aur_author
+      name: nickheyer
+      email: nickheyer@users.noreply.github.com
+
+aur_sources:
+  - name: nebu
+    homepage: https://github.com/nickheyer/nebu
+    description: Model storage, inference runtime management, and API gateway
+    maintainers: [nickheyer]
+    git_url: ssh://aur@aur.archlinux.org/nebu.git
+    private_key: '{{ .Env.AUR_PRIVATE_KEY }}'
+    skip_upload: auto
+    arches: [x86_64, aarch64]
+    conflicts: [nebu-bin]
+    depends: [ca-certificates]
+    optdepends: *runtime_dependencies
+    makedepends: ['go>=1.27', 'nodejs>=22', npm, buf, make]
+    backup: [etc/nebu/config.yaml]
+    prepare: |
+      export GOTOOLCHAIN=local
+      go mod download
+      make gen
+      npm ci --no-audit --no-fund --prefix web/nebu
+    build: |
+      export CGO_ENABLED=0 GOTOOLCHAIN=local
+      npm run build --prefix web/nebu
+      go build -trimpath -mod=readonly -buildmode=pie \
+        -ldflags "-X github.com/nickheyer/nebu/internal/cli.releaseVersion=${pkgver}" \
+        -o nebu ./cmd/nebu
+    package: *package_files
+    commit_author: *aur_author
+
+dockers_v2:
+  - id: cpu
+    dockerfile: Dockerfile
+    ids: [nebu]
+    images: [ghcr.io/nickheyer/nebu]
+    tags:
+      - '{{ .Tag }}'
+      - '{{ if not .Prerelease }}latest{{ end }}'
+    platforms: [linux/amd64, linux/arm64]
+    flags: [--target=release]
+    extra_files: [packaging/config.yaml]
+    labels: &image_labels
+      org.opencontainers.image.title: nebu
+      org.opencontainers.image.description: Model storage, inference runtime management, and API gateway
+      org.opencontainers.image.source: https://github.com/nickheyer/nebu
+      org.opencontainers.image.version: '{{ .Version }}'
+      org.opencontainers.image.revision: '{{ .FullCommit }}'
+      org.opencontainers.image.created: '{{ .Date }}'
+  - id: cuda
+    dockerfile: Dockerfile
+    ids: [nebu]
+    images: [ghcr.io/nickheyer/nebu]
+    tags:
+      - '{{ .Tag }}-cuda'
+      - '{{ if not .Prerelease }}cuda{{ end }}'
+    platforms: [linux/amd64, linux/arm64]
+    flags: [--target=release]
+    build_args:
+      BASE_IMAGE: nvidia/cuda:12.9.1-devel-ubuntu24.04@sha256:020bc241a628776338f4d4053fed4c38f6f7f3d7eb5919fecb8de313bb8ba47c
+    extra_files: [packaging/config.yaml]
+    labels: *image_labels
+  - id: rocm
+    dockerfile: Dockerfile
+    ids: [nebu]
+    images: [ghcr.io/nickheyer/nebu]
+    tags:
+      - '{{ .Tag }}-rocm'
+      - '{{ if not .Prerelease }}rocm{{ end }}'
+    platforms: [linux/amd64]
+    flags: [--target=release]
+    build_args:
+      BASE_IMAGE: rocm/dev-ubuntu-24.04:6.4.3-complete@sha256:8dcd5c10e095ff8ef20c7eb0fcf8f5a4f0df905a67ee7aa1ea8cdeda91aa35ba
+    extra_files: [packaging/config.yaml]
+    labels: *image_labels

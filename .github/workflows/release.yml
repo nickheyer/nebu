@@ -1,0 +1,112 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (for example v1.0.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Resolve and validate the release tag
+        id: tag
+        env:
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$REQUESTED_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo 'Invalid release tag' >&2
+            exit 1
+          fi
+          echo "tag=$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+      - name: Require complete publication inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUR_PRIVATE_KEY: ${{ secrets.AUR_PRIVATE_KEY }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          test -s LICENSE || { echo 'Add the project license before publishing.' >&2; exit 1; }
+          if [[ "$RELEASE_TAG" != *-* ]]; then
+            test -n "$AUR_PRIVATE_KEY" || { echo 'Set AUR_PRIVATE_KEY for both nebu and nebu-bin.' >&2; exit 1; }
+            if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)" != false ]]; then
+              echo 'AUR requires public release downloads.' >&2
+              exit 1
+            fi
+          fi
+
+  checks:
+    needs: preflight
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.preflight.outputs.tag }}
+
+  publish:
+    needs: [preflight, checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1
+        with:
+          version: '1.73.0'
+          setup_only: true
+      - name: Make room for CUDA and ROCm image layers
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.1
+          args: release --clean --parallelism=2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUR_PRIVATE_KEY: ${{ secrets.AUR_PRIVATE_KEY }}
+      - name: Keep generated AUR files and release metadata
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-metadata
+          retention-days: 30
+          include-hidden-files: true
+          path: |
+            dist/artifacts.json
+            dist/metadata.json
+            dist/checksums.txt
+            dist/aur/**

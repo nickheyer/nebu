@@ -12,7 +12,7 @@ plugins:
     out: web/nebu/src/lib/proto
     opt:
       - target=ts
-  - remote: buf.build/community/sudorandom-connect-openapi
+  - remote: buf.build/community/sudorandom-connect-openapi:v0.27.2
     out: web/nebu/static
     opt:
       - format=yaml

@@ -1,23 +1,140 @@
 name: ci
+
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit or tag to validate
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: '0'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
-      - uses: bufbuild/buf-action@v1
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/nebu/package-lock.json
+      - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1
         with:
+          version: '1.73.0'
           setup_only: true
-      - run: ./scripts/check-gen.sh
-      - run: make lint
-      - run: make test
-      - run: make build
+      - name: Check protobuf generation
+        run: ./scripts/check-gen.sh
+      - name: Check Go and TypeScript
+        run: |
+          make proto-lint vet cgo-guard test
+          npm run check --prefix web/nebu
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.1
+          args: check
+      - name: Build every release target and both AUR recipes
+        run: goreleaser release --snapshot --clean --skip=publish,docker --parallelism=2
+        env:
+          AUR_PRIVATE_KEY: ''
+      - name: Validate Compose variants
+        env:
+          NEBU_VIDEO_GID: '44'
+          NEBU_RENDER_GID: '109'
+          NEBU_DOCKER_GID: '999'
+        run: |
+          docker compose -f compose.yaml config --quiet
+          docker compose -f compose.yaml -f compose.nvidia.yaml config --quiet
+          docker compose -f compose.yaml -f compose.rocm.yaml config --quiet
+          docker compose -f compose.yaml -f compose.oci.yaml config --quiet
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-snapshot
+          retention-days: 7
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+            dist/aur/**
+          include-hidden-files: true
+
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            binary: build/nebu
+          - os: macos-latest
+            binary: build/nebu
+          - os: windows-latest
+            binary: build/nebu.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1
+        with:
+          version: '1.73.0'
+          setup_only: true
+      - name: Generate build inputs
+        shell: bash
+        run: |
+          buf generate
+          npm ci --no-audit --no-fund --prefix web/nebu
+          npm run build --prefix web/nebu
+      - name: Build binary
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          BINARY: ${{ matrix.binary }}
+        run: go build -trimpath -mod=readonly -o "$BINARY" ./cmd/nebu
+      - name: Exercise the daemon and embedded UI
+        shell: bash
+        env:
+          BINARY: ${{ matrix.binary }}
+        run: python scripts/smoke.py "$BINARY"
+      - name: Test process and storage behavior with the race detector
+        if: runner.os != 'Windows'
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race ./...
+
+  container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+      - name: Build the source Dockerfile
+        run: docker buildx build --load --tag ghcr.io/nickheyer/nebu:smoke .
+      - name: Exercise Compose, persistence, and restart
+        run: ./scripts/smoke-container.sh smoke

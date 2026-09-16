@@ -1,9 +1,9 @@
-.PHONY: gen proto-clean proto-lint web web-install web-check build build-cli run test lint vet cgo-guard clean dev release migrate-diff migrate-reset migrate-hash migrate-validate migrate-status
+.PHONY: gen proto-clean proto-lint web web-install web-check prepare build build-cli run test lint vet cgo-guard clean dev release release-check migrate-diff migrate-reset migrate-hash migrate-validate migrate-status
 
-HOME_DATA_DIR := "$(HOME)/.local/share/nebu"
 BIN := build/nebu
 BUF ?= buf
 NPM ?= npm
+GORELEASER ?= goreleaser
 WEB := web/nebu
 export CGO_ENABLED = 0
 
@@ -28,7 +28,7 @@ proto-lint:
 	$(BUF) lint
 
 web-install:
-	cd $(WEB) && $(NPM) install --no-audit --no-fund
+	cd $(WEB) && $(NPM) ci --no-audit --no-fund
 
 # Builds the SvelteKit app into the embedded dist directory
 web: gen web-install
@@ -48,13 +48,14 @@ dev: clean web
 web-check: gen web-install
 	cd $(WEB) && $(NPM) run check
 
-# Builds the static binary with the web UI embedded
-build: web
-	go build -trimpath -o $(BIN) ./cmd/nebu
+prepare: web
 
-# Builds the binary without the web UI
+# Builds the static binary with the web UI embedded.
+build: web
+	go build -trimpath -mod=readonly -o $(BIN) ./cmd/nebu
+
 build-cli: gen
-	go build -trimpath -o $(BIN) ./cmd/nebu
+	go build -trimpath -mod=readonly -o $(BIN) ./cmd/nebu
 
 
 run: gen
@@ -72,8 +73,12 @@ cgo-guard: gen
 
 lint: proto-lint vet cgo-guard web-check
 
-release: web
-	./scripts/release.sh
+release-check:
+	$(GORELEASER) check
+
+# Local archives and AUR recipes; publishing is handled by the release workflow.
+release:
+	GORELEASER="$(GORELEASER)" ./scripts/release.sh
 
 # Writes a migration for whatever schema.sql changed
 migrate-diff:
@@ -101,6 +106,5 @@ migrate-status:
 		--env HOME=/tmp \
 		$(ATLAS_IMAGE) migrate status --env local --url "sqlite:///db/$(notdir $(DB_FILE))"
 
-clean: proto-clean
-	rm -rf build $(WEB)/dist/* $(WEB)/.svelte-kit $(HOME_DATA_DIR)
-	touch $(WEB)/dist/.keep
+clean:
+	rm -rf build dist $(WEB)/.svelte-kit

@@ -1,0 +1,12 @@
+services:
+  nebu:
+    image: ghcr.io/nickheyer/nebu:${NEBU_ROCM_IMAGE_TAG:-rocm}
+    platform: linux/amd64
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${NEBU_VIDEO_GID:?NEBU_VIDEO_GID required}"
+      - "${NEBU_RENDER_GID:?NEBU_RENDER_GID required}"
+    security_opt:
+      - seccomp=unconfined

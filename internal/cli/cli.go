@@ -424,7 +424,10 @@ func runServe(ctx context.Context, e *env, args []string) error {
 	return d.ListenAndServe(ctx)
 }
 
-// Reads the module version and commit out of the binary
+// Set by release builds.
+var releaseVersion, releaseCommit string
+
+// Reads the release version or the module version and commit out of the binary.
 func buildVersion() string {
 	version, revision := "devel", ""
 	if bi, ok := debug.ReadBuildInfo(); ok {
@@ -435,6 +438,15 @@ func buildVersion() string {
 			if s.Key == "vcs.revision" && len(s.Value) >= 7 {
 				revision = s.Value[:7]
 			}
+		}
+	}
+	if releaseVersion != "" {
+		version = releaseVersion
+	}
+	if releaseCommit != "" {
+		revision = releaseCommit
+		if len(revision) > 7 {
+			revision = revision[:7]
 		}
 	}
 	return strings.TrimSpace(version + " " + revision)

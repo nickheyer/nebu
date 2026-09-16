@@ -1,0 +1,9 @@
+listen: 127.0.0.1:8484
+
+# data_dir: /path/to/nebu
+# cache_dir: /path/to/cache/nebu
+# store_dir: /path/to/nebu/store
+
+logging:
+  level: info
+  format: text
