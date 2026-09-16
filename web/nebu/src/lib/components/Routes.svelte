@@ -113,7 +113,7 @@
         <TextInput id="alias-name" mono bind:value={aliasName} empty="gpt-4" invalid={nameTaken || badName} />
       </Field>
       <Field label="Instance" for="alias-instance" required>
-        <Select id="alias-instance" bind:value={aliasInstance} empty="Choose" items={ready.map((i) => ({ value: i.id, label: i.name, detail: `${tail(i.repo)} ${groupLabel(i)}` }))} />
+        <Select id="alias-instance" bind:value={aliasInstance} items={ready.map((i) => ({ value: i.id, label: i.name, detail: `${tail(i.repo)} ${groupLabel(i)}` }))} />
       </Field>
     </div>
     <div class="flex flex-col gap-3">

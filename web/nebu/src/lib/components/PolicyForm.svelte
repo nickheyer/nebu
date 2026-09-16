@@ -7,9 +7,10 @@
   // The limits a route enforces; an empty field inherits the gateway default, shown in the field as what applies
   let { fields = $bindable(), defaults, idPrefix = 'policy' }: { fields: PolicyFields; defaults: Policy | undefined; idPrefix?: string } = $props();
 
-  const none = 'unlimited';
+  // Zero is no limit, what applies while the gateway sets none
+  const none = '0';
   const seconds = (ms: number | undefined) => (ms ? String(ms / 1000) : none);
-  const burstDefault = $derived(defaults?.burst ? String(defaults.burst) : defaults?.requestsPerSecond ? String(Math.ceil(defaults.requestsPerSecond)) : '= rate');
+  const burstDefault = $derived(defaults?.burst ? String(defaults.burst) : defaults?.requestsPerSecond ? String(Math.ceil(defaults.requestsPerSecond)) : none);
 </script>
 
 <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">

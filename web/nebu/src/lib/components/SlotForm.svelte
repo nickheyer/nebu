@@ -50,6 +50,11 @@
   const chosen = $derived(devices ?? gpuIds);
   const noDevices = $derived(gpuIds.length > 0 && chosen.length === 0);
   const budget = $derived(fromGib(memory));
+  // The cap that applies while none is set: the whole of each chosen device, one figure when they share a size
+  const deviceGib = $derived.by(() => {
+    const totals = new Set(hostGpus().filter((d) => chosen.includes(d.id)).map((d) => d.memoryTotalBytes));
+    return totals.size === 1 ? gib([...totals][0]) : '';
+  });
   const badBudget = $derived(memory.trim() !== '' && budget === 0n);
   const badName = $derived(/[\s/]/.test(name));
   const nameTaken = $derived(name.trim() !== slot?.name && [...live.slots.values()].some((s) => s.name === name.trim()));
@@ -102,7 +107,7 @@
         <NumberInput id="slot-position" integer min={1} max={count + (creating ? 1 : 0)} bind:value={position} empty={creating ? String(count + 1) : ''} />
       </Field>
       <Field label="Description" for="slot-desc" class="sm:col-span-2">
-        <TextInput id="slot-desc" bind:value={description} empty="What this slot is for" />
+        <TextInput id="slot-desc" bind:value={description} />
       </Field>
     </div>
   </Card>
@@ -113,10 +118,10 @@
         <DevicePicker id="slot-devices" bind:value={() => chosen, (v) => (devices = v)} />
       </Field>
       <Field label="Memory cap" for="slot-memory" description="Per device. Plans stay under this instead of using the whole device." error={badBudget ? 'A number of GiB, such as 8' : undefined}>
-        <NumberInput id="slot-memory" min={0} step={0.5} unit="GiB" bind:value={memory} empty="whole device" invalid={badBudget} />
+        <NumberInput id="slot-memory" min={0} step={0.5} unit="GiB" bind:value={memory} empty={deviceGib} invalid={badBudget} />
       </Field>
-      <Field label="Runtime" for="slot-runtime" description="Used for every run in this slot unless a run picks another.">
-        <Select id="slot-runtime" bind:value={runtimeId} items={[{ value: '', label: 'First compatible runtime' }, ...cached.runtimes.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: rt.compatible ? undefined : 'not compatible with this host', disabled: !rt.compatible }))]} />
+      <Field label="Runtime" for="slot-runtime" description="Used for every run in this slot unless a run picks another. Empty takes the first runtime that reads the model.">
+        <Select id="slot-runtime" bind:value={runtimeId} items={[{ value: '', label: '–' }, ...cached.runtimes.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: rt.compatible ? undefined : 'not compatible with this host', disabled: !rt.compatible }))]} />
       </Field>
     </div>
   </Card>

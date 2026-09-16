@@ -470,24 +470,19 @@ func TestGitHubResolvesReleasesAndRefs(t *testing.T) {
 	}
 }
 
-func TestGitHubStopsAtTheReleaseCap(t *testing.T) {
+func TestGitHubListsOnePageOfEachKind(t *testing.T) {
 	const pages = 12
 	var hits []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits = append(hits, r.URL.RequestURI())
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page == 0 {
+			page = 1
+		}
 		switch r.URL.Path {
 		case "/repos/o/r":
 			w.Write([]byte(`{"default_branch":"main"}`))
 		case "/repos/o/r/releases":
-			page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-			if page == 0 {
-				page = 1
-			}
-			// The API refuses to page past its first thousand results
-			if page*ghPageSize > ghMaxResults {
-				http.Error(w, `{"message":"Only the first 1000 results are available."}`, http.StatusUnprocessableEntity)
-				return
-			}
 			w.Header().Set("Link", fmt.Sprintf(`<http://%s/repos/o/r/releases?per_page=%d&page=%d>; rel="next"`, r.Host, ghPageSize, page+1))
 			var items []string
 			for i := 0; i < ghPageSize; i++ {
@@ -501,10 +496,18 @@ func TestGitHubStopsAtTheReleaseCap(t *testing.T) {
 			w.Write([]byte(`{"tag_name":"b7","assets":[{"name":"bin-b7.tar.gz","size":1,"browser_download_url":"http://` + r.Host + `/dl/b7"}]}`))
 		case "/repos/o/r/commits/b1100", "/repos/o/r/commits/b7":
 			w.Write([]byte("deadbeef"))
+		case "/repos/o/r/commits/main":
+			w.Write([]byte("cafe"))
 		case "/repos/o/r/branches":
-			w.Write([]byte(`[{"name":"main","commit":{"sha":"cafe"}}]`))
+			// A full page of branches sorting before the default one, with more beyond
+			w.Header().Set("Link", fmt.Sprintf(`<http://%s/repos/o/r/branches?per_page=%d&page=%d>; rel="next"`, r.Host, ghPageSize, page+1))
+			var items []string
+			for i := 0; i < ghPageSize; i++ {
+				items = append(items, fmt.Sprintf(`{"name":"a%02d","commit":{"sha":"%02d"}}`, i, i))
+			}
+			w.Write([]byte("[" + strings.Join(items, ",") + "]"))
 		case "/repos/o/r/tags":
-			w.Write([]byte(`[]`))
+			w.Write([]byte(`[{"name":"b1200","commit":{"sha":"1200"}},{"name":"v0","commit":{"sha":"0"}}]`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -526,12 +529,34 @@ func TestGitHubStopsAtTheReleaseCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(revs) != ghMaxResults+1 || !revs[0].GetDefault() || revs[0].GetName() != "b1100" {
+	// The newest page of releases, the stable one, the default branch and the page of branches, and the tag that is no release
+	if len(revs) != 2*ghPageSize+3 || !revs[0].GetDefault() || revs[0].GetName() != "b1100" || revs[0].GetDetail() != "release" {
 		t.Fatalf("revisions %d %v", len(revs), revs[0])
 	}
+	branches := ghPageSize + 1
+	if b := revs[branches]; b.GetName() != "main" || b.GetCommit() != "cafe" || b.GetDetail() != "branch" || b.GetDefault() {
+		t.Fatalf("default branch %v", b)
+	}
+	if b := revs[branches+1]; b.GetName() != "a00" || b.GetDetail() != "branch" {
+		t.Fatalf("first listed branch %v", b)
+	}
+	if last := revs[len(revs)-1]; last.GetName() != "v0" || last.GetDetail() != "tag" {
+		t.Fatalf("tag %v", last)
+	}
+	listed := len(hits)
+	if _, err := c.Revisions(context.Background(), "o/r"); err != nil || len(hits) != listed {
+		t.Fatalf("listing again asked the API %v %v", hits[listed:], err)
+	}
+	counts := map[string]int{}
 	for _, h := range hits {
-		if strings.Contains(h, "page=11") {
-			t.Fatalf("read past the cap: %s", h)
+		if strings.Contains(h, "&page=") {
+			t.Fatalf("read a second page: %s", h)
+		}
+		counts[strings.SplitN(h, "?", 2)[0]]++
+	}
+	for _, path := range []string{"/repos/o/r/releases", "/repos/o/r/branches", "/repos/o/r/tags", "/repos/o/r/commits/main"} {
+		if counts[path] != 1 {
+			t.Fatalf("%s read %d times: %v", path, counts[path], hits)
 		}
 	}
 }

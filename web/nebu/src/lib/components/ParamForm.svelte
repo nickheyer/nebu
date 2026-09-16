@@ -135,20 +135,20 @@
           value={v}
           onchange={(next) => set(p.name, next)}
           items={[
-            { value: '', label: p.solved ? 'auto' : beneath(p) || 'not set', detail: p.solved && !inherited[p.name] ? p.rule : undefined },
+            { value: '', label: p.solved ? 'auto' : beneath(p) || '–', detail: p.solved && !inherited[p.name] ? p.rule : undefined },
             ...p.choices.filter((c) => c !== '' && (p.solved || c !== p.default)).map((c) => ({ value: c, label: c, disabled: off.has(c), detail: off.get(c) }))
           ]}
         />
       {:else if p.type === ParamType.BOOL}
-        <Select id={fid} value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneath(p) === 'true' ? 'On' : beneath(p) === 'false' ? 'Off' : 'not set' }, { value: 'true', label: 'On' }, { value: 'false', label: 'Off' }]} />
+        <Select id={fid} value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneath(p) === 'true' ? 'On' : beneath(p) === 'false' ? 'Off' : '–' }, { value: 'true', label: 'On' }, { value: 'false', label: 'Off' }]} />
       {:else if ranged(p)}
         <RangeInput id={fid} min={b.min} max={b.max} step={b.step || (p.type === ParamType.INT ? 1 : 0.01)} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={p.solved ? 'auto' : beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {:else if numeric(p)}
-        <NumberInput id={fid} min={b.min || undefined} max={b.max || undefined} step={b.step || undefined} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={p.solved ? 'auto' : beneath(p) || 'not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
+        <NumberInput id={fid} min={b.min || undefined} max={b.max || undefined} step={b.step || undefined} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={p.solved ? 'auto' : beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {:else if multiline}
-        <TextArea id={fid} mono rows={3} empty={beneath(p) || 'Not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
+        <TextArea id={fid} mono rows={3} empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {:else}
-        <TextInput id={fid} mono empty={beneath(p) || 'Not set'} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
+        <TextInput id={fid} mono empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {/if}
       {#if err}<p class="mt-1.5 text-xs text-bad">{err}</p>{:else if p.solved && !v}<p class="mt-1.5 text-xs text-fg-faint">{inherited[p.name] ? `${inherited[p.name]} from the slot` : p.rule}</p>{/if}
     </div>
@@ -207,10 +207,10 @@
   {#if params.length === 0}
     <div class="flex items-end gap-2">
       <Field label="Parameter" for="{idPrefix}-new-name" class="flex-1">
-        <TextInput id="{idPrefix}-new-name" mono bind:value={newName} empty="name" onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} />
+        <TextInput id="{idPrefix}-new-name" mono bind:value={newName} onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} />
       </Field>
       <Field label="Value" for="{idPrefix}-new-value" class="flex-1">
-        <TextInput id="{idPrefix}-new-value" mono bind:value={newValue} empty="value" onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} />
+        <TextInput id="{idPrefix}-new-value" mono bind:value={newValue} onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} />
       </Field>
       <IconButton icon={Plus} label="Add" variant="secondary" size="lg" disabled={!newName.trim()} onclick={add} />
     </div>

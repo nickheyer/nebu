@@ -233,7 +233,7 @@
       {#if several}
         <Select size="sm" class="w-40" bind:value={sourceFilter} label="Source" items={[{ value: '', label: 'All sources' }, ...sourceIds.map((id) => ({ value: id, label: sourceName(id) }))]} />
       {/if}
-      <SearchInput class="w-64" bind:value={filter} empty="Filter" />
+      <SearchInput class="w-64" bind:value={filter} />
     {/snippet}
     {#if loading}
       <table class="tbl">

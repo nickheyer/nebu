@@ -65,6 +65,7 @@
   let denied = $state(false);
   let inspecting = $state(false);
   let revisions = $state<Revision[]>([]);
+  let listingRevisions = $state(false);
   let card = $state<ModelCard | null>(null);
   let cardError = $state('');
   let showWarnings = $state(false);
@@ -75,7 +76,7 @@
   const model = $derived(inspect?.model);
   const revLabel = $derived(caps?.revisionLabel || 'revision');
   const currentRevision = $derived(revisions.find((r) => (r.repo ? r.repo === (model?.repo ?? curRepo) : r.name === (model?.revision ?? curRev))) ?? revisions.find((r) => r.default));
-  const revisionText = $derived(currentRevision?.name || model?.revision || curRev || 'default');
+  const revisionText = $derived(currentRevision?.name || model?.revision || curRev);
   const pageUrl = $derived(hit?.url || card?.url || '');
   const siteName = $derived(sourceLabel || caps?.name || 'the source');
   // The namespace ahead of the slash, a link back into the catalog where the source can filter by it
@@ -149,7 +150,7 @@
 
   // What a revision shows beside its name
   function revisionDetail(r: Revision): string | undefined {
-    const parts = [r.sizeBytes ? storage(r.sizeBytes, 1) : '', r.updatedAt ? ago(r.updatedAt, clock.now) : '', r.default ? 'default' : '', r.repo && storedRepo(r.repo) ? 'downloaded' : ''];
+    const parts = [r.sizeBytes ? storage(r.sizeBytes, 1) : '', r.updatedAt ? ago(r.updatedAt, clock.now) : '', r.repo && storedRepo(r.repo) ? 'downloaded' : ''];
     return parts.filter(Boolean).join(' · ') || undefined;
   }
   function storedRepo(repo: string): boolean {
@@ -181,6 +182,7 @@
     inspectError = '';
     denied = false;
     revisions = [];
+    listingRevisions = false;
     card = null;
     cardError = '';
     showWarnings = false;
@@ -206,6 +208,7 @@
           })
       );
       if (caps?.revisions) {
+        listingRevisions = true;
         jobs.push(
           api.sources
             .listRevisions({ sourceId, repo: curRepo })
@@ -213,6 +216,9 @@
               if (gen === generation) revisions = r.revisions;
             })
             .catch(() => {})
+            .finally(() => {
+              if (gen === generation) listingRevisions = false;
+            })
         );
       }
     }
@@ -334,24 +340,30 @@
       {#if paramCount > 0n}<span>{fmtParams(paramCount)} params</span>{:else if hit && hit.sizeBytes > 0n}<span>{storage(hit.sizeBytes, 1)}</span>{/if}
       {#if hit?.license}<span><span class="text-fg-faint">license</span> {hit.license}</span>{/if}
       {#if hit?.updatedAt}<span><span class="text-fg-faint">updated</span> {ago(hit.updatedAt, clock.now)}</span>{/if}
-      {#if revisions.length > 1}
+      {#if !gated}
         <span class="ml-auto inline-flex items-center gap-2 text-xs text-fg-faint">
           {revLabel}
-          <Select
-            size="sm"
-            mono
-            class="w-auto max-w-[14rem]"
-            label={revLabel}
-            value={currentRevision?.name ?? ''}
-            onchange={(name) => {
-              const r = revisions.find((x) => x.name === name);
-              if (r) pick(r);
-            }}
-            items={revisions.map((r) => ({ value: r.name, label: r.name, detail: revisionDetail(r) }))}
-          />
+          {#if listingRevisions}
+            <span class="skeleton h-8 w-36 rounded-md" aria-busy="true" aria-label="Listing {revLabel}s"></span>
+          {:else if revisions.length > 1}
+            <Select
+              size="sm"
+              mono
+              class="w-auto max-w-[14rem]"
+              label={revLabel}
+              value={currentRevision?.name ?? ''}
+              onchange={(name) => {
+                const r = revisions.find((x) => x.name === name);
+                if (r) pick(r);
+              }}
+              items={revisions.map((r) => ({ value: r.name, label: r.name, detail: revisionDetail(r) }))}
+            />
+          {:else if revisionText}
+            <span class="font-mono text-fg-muted">{revisionText}</span>{#if model?.commit}<span class="ml-2 font-mono" title={model.commit}>{model.commit.slice(0, 12)}</span>{/if}
+          {:else if inspecting}
+            <span class="skeleton h-3.5 w-16" aria-busy="true" aria-label="Reading the {revLabel}"></span>
+          {/if}
         </span>
-      {:else if !gated}
-        <span class="ml-auto text-xs text-fg-faint">{revLabel} <span class="font-mono text-fg-muted">{revisionText}</span>{#if model?.commit}<span class="ml-2 font-mono" title={model.commit}>{model.commit.slice(0, 12)}</span>{/if}</span>
       {/if}
     </div>
     {#if chips.length}
@@ -526,7 +538,7 @@
               items={[
                 ['path', m.path],
                 ['format', m.formatId],
-                ['revision', m.revision || 'default'],
+                ['revision', m.revision],
                 ['commit', m.commit ? m.commit.slice(0, 12) : undefined],
                 ['architecture', m.descriptor?.architecture],
                 ['params', m.descriptor?.parameterCount ? fmtParams(m.descriptor.parameterCount) : undefined],

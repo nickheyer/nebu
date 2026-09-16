@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,11 +50,9 @@ const (
 	ghSortForks     = "forks"
 	ghFacetLanguage = "language"
 	ghPageSize      = 100
-	// GitHub answers 422 past the first 1000 results of a list, so a listing stops there
-	ghMaxResults = 1000
-	ghReleaseTTL = 5 * time.Minute
-	ghShaMedia   = "application/vnd.github.sha"
-	ghRawMedia   = "application/vnd.github.raw+json"
+	ghReleaseTTL    = 5 * time.Minute
+	ghShaMedia      = "application/vnd.github.sha"
+	ghRawMedia      = "application/vnd.github.raw+json"
 )
 
 type ghAsset struct {
@@ -80,7 +79,8 @@ type ghRef struct {
 	} `json:"commit"`
 }
 
-// The default branch and releases of one repository
+// The default branch, releases, and refs of one repository, each list one API page so that an
+// unauthenticated caller's sixty requests an hour go a long way
 type ghRepoState struct {
 	owner, name   string
 	defaultBranch string
@@ -92,6 +92,8 @@ type ghRepoState struct {
 	// The stable release beyond that page, once looked for
 	stable       *ghRelease
 	stableLooked bool
+	// The first page of branches and of tags, once listed
+	pages map[string][]ghRef
 }
 
 // The GitHub API for search, releases, refs, and cards, git for trees and blobs
@@ -191,18 +193,6 @@ func ghListURL(c *Client, owner, name, kind string) string {
 	return c.URL("repos", owner, name, kind) + "?per_page=" + strconv.Itoa(ghPageSize)
 }
 
-// Reads a repository list from a page until the API's cap on results, seen counting what earlier pages held
-func ghList[T any](ctx context.Context, c *Client, next string, seen int, visit func([]T)) error {
-	if seen >= ghMaxResults {
-		return nil
-	}
-	return eachPageWhile(ctx, c, next, nil, func(page []T) bool {
-		visit(page)
-		seen += len(page)
-		return len(page) > 0 && seen < ghMaxResults
-	})
-}
-
 // Reads the default branch and the newest page of releases of a repo, kept a while per source
 func ghState(ctx context.Context, c *Client, repo string) (*ghRepoState, error) {
 	owner, name, err := ghSplit(repo)
@@ -211,7 +201,7 @@ func ghState(ctx context.Context, c *Client, repo string) (*ghRepoState, error) 
 	}
 	memo := Cached(c, "github:"+owner+"/"+name, func() *Memo[*ghRepoState] { return &Memo[*ghRepoState]{TTL: ghReleaseTTL} })
 	return memo.Get(ctx, func(ctx context.Context) (*ghRepoState, error) {
-		st := &ghRepoState{owner: owner, name: name, byTag: map[string]*ghRelease{}}
+		st := &ghRepoState{owner: owner, name: name, byTag: map[string]*ghRelease{}, pages: map[string][]ghRef{}}
 		var info struct {
 			DefaultBranch string `json:"default_branch"`
 		}
@@ -219,7 +209,7 @@ func ghState(ctx context.Context, c *Client, repo string) (*ghRepoState, error) 
 			return nil, err
 		}
 		st.defaultBranch = info.DefaultBranch
-		// One page is enough here: a repository that releases every commit has thousands, and the API refuses to page past the first 1000 anyway
+		// One page: a repository that releases every commit has thousands, and an older one resolves by its tag
 		if _, err := c.JSON(ctx, ghListURL(c, owner, name, "releases"), nil, &st.releases); err != nil {
 			return nil, err
 		}
@@ -288,6 +278,38 @@ func (st *ghRepoState) release(ctx context.Context, c *Client, tag string) (*ghR
 	return &rel, nil
 }
 
+// The first page of branches or tags, read once per state. Branches list alphabetically, so the
+// default branch leads them, fetched by name when a full page sorted it past the end
+func (st *ghRepoState) refs(ctx context.Context, c *Client, kind string) ([]ghRef, error) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if refs, ok := st.pages[kind]; ok {
+		return refs, nil
+	}
+	var refs []ghRef
+	if _, err := c.JSON(ctx, ghListURL(c, st.owner, st.name, kind), nil, &refs); err != nil {
+		return nil, err
+	}
+	if kind == "branches" {
+		i := slices.IndexFunc(refs, func(r ghRef) bool { return r.Name == st.defaultBranch })
+		switch {
+		case i > 0:
+			head := refs[i]
+			refs = append([]ghRef{head}, slices.Delete(refs, i, i+1)...)
+		case i < 0 && len(refs) == ghPageSize:
+			sha, err := ghCommit(ctx, c, st.owner, st.name, st.defaultBranch)
+			if err != nil {
+				return nil, err
+			}
+			head := ghRef{Name: st.defaultBranch}
+			head.Commit.Sha = sha
+			refs = append([]ghRef{head}, refs...)
+		}
+	}
+	st.pages[kind] = refs
+	return refs, nil
+}
+
 // Reads the commit a ref names
 func ghCommit(ctx context.Context, c *Client, owner, name, ref string) (string, error) {
 	sha, err := c.HTTP().TextWith(ctx, c.URL("repos", owner, name, "commits", ref), nil, http.Header{"Accept": {ghShaMedia}}, 128)
@@ -338,12 +360,9 @@ func (githubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) 
 	return model, nil
 }
 
-// Releases newest first, then branches and the tags without a release
+// The newest page of releases and the stable one when it lies past that page, then the branches
+// and the tags without a release
 func (githubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
-	owner, name, err := ghSplit(repo)
-	if err != nil {
-		return nil, err
-	}
 	st, err := ghState(ctx, c, repo)
 	if err != nil {
 		return nil, err
@@ -354,46 +373,41 @@ func (githubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.R
 	}
 	var out []*v1.Revision
 	seen := map[string]bool{}
-	releases := func(page []ghRelease) {
-		for i := range page {
-			r := &page[i]
-			detail := "release"
-			switch {
-			case r.Draft:
-				detail = "draft"
-			case r.Prerelease:
-				detail = "prerelease"
-			}
-			if r.Name != "" && r.Name != r.TagName {
-				detail += ", " + r.Name
-			}
-			rev := &v1.Revision{Name: r.TagName, Default: latest != nil && r.TagName == latest.TagName, Detail: detail, UpdatedAt: Stamp(r.PublishedAt)}
-			for _, as := range r.Assets {
-				rev.SizeBytes += uint64(as.Size)
-			}
-			out = append(out, rev)
-			seen[r.TagName] = true
+	release := func(r *ghRelease) {
+		detail := "release"
+		switch {
+		case r.Draft:
+			detail = "draft"
+		case r.Prerelease:
+			detail = "prerelease"
 		}
+		if r.Name != "" && r.Name != r.TagName {
+			detail += ", " + r.Name
+		}
+		rev := &v1.Revision{Name: r.TagName, Default: latest != nil && r.TagName == latest.TagName, Detail: detail, UpdatedAt: Stamp(r.PublishedAt)}
+		for _, as := range r.Assets {
+			rev.SizeBytes += uint64(as.Size)
+		}
+		out = append(out, rev)
+		seen[r.TagName] = true
 	}
-	// The page the state holds first, the rest read from the second while a full page says there may be more
-	releases(st.releases)
-	if len(st.releases) == ghPageSize {
-		if err := ghList(ctx, c, ghListURL(c, owner, name, "releases")+"&page=2", len(st.releases), releases); err != nil {
-			return nil, err
-		}
+	for i := range st.releases {
+		release(&st.releases[i])
+	}
+	if latest != nil && !seen[latest.TagName] {
+		release(latest)
 	}
 	for _, kind := range []string{"branches", "tags"} {
-		err := ghList(ctx, c, ghListURL(c, owner, name, kind), 0, func(page []ghRef) {
-			for _, e := range page {
-				if seen[e.Name] {
-					continue
-				}
-				seen[e.Name] = true
-				out = append(out, refRevision(e.Name, e.Commit.Sha, latest == nil && kind == "branches" && e.Name == st.defaultBranch, kind == "tags"))
-			}
-		})
+		refs, err := st.refs(ctx, c, kind)
 		if err != nil {
 			return nil, err
+		}
+		for _, e := range refs {
+			if seen[e.Name] {
+				continue
+			}
+			seen[e.Name] = true
+			out = append(out, refRevision(e.Name, e.Commit.Sha, latest == nil && kind == "branches" && e.Name == st.defaultBranch, kind == "tags"))
 		}
 	}
 	return out, nil

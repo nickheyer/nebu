@@ -32,7 +32,7 @@
   <div class="flex items-center gap-1 border-b border-line px-1.5 py-1">
     <div class="relative flex-1">
       <Search size={13} class="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 text-fg-faint" />
-      <input class="h-7 w-full rounded-md border border-transparent bg-transparent pl-7 text-sm text-fg placeholder:text-fg-faint focus:border-line focus:outline-none" placeholder="Filter" bind:value={filter} />
+      <input class="h-7 w-full rounded-md border border-transparent bg-transparent pl-7 text-sm text-fg placeholder:text-fg-faint focus:border-line focus:outline-none" aria-label="Filter" bind:value={filter} />
     </div>
     <span class="px-1 text-xs tabular-nums text-fg-faint">{shown.length}{filter ? ` / ${lines.length}` : ''}</span>
     {#if live}<span class="mx-1 inline-flex items-center gap-1.5 text-xs text-ok"><span class="dot pulse"></span>live</span>{/if}

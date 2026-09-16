@@ -51,6 +51,11 @@ message ConfigField {
   map<string, string> choice_unmet = 10;
   // The shape a value takes, shown while the field is empty and no default applies
   string placeholder = 11;
+  // The source and repository whose default revision applies while the field is empty: the newest
+  // release of a repository publishing releases, else its default branch. A client lists them and
+  // shows that revision in the empty field
+  string revision_source = 12;
+  string revision_repo = 13;
 }
 
 // A provider sources are created from, with the settings its transports accept

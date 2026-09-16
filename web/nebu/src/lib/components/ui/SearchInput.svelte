@@ -3,10 +3,10 @@
   import { Search, X } from '@lucide/svelte';
   import { slashFocus } from '$lib/keys';
 
-  // A search field with the slash shortcut, a clear button once it holds text, and a hint while empty
+  // A search field with the slash shortcut, a clear button once it holds text, and an example value while empty
   let {
     value = $bindable(''),
-    empty = 'Search',
+    empty = '',
     size = 'md',
     disabled = false,
     oninput,

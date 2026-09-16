@@ -213,7 +213,7 @@ func (m *Manager) Options(ctx context.Context, rt runtimes.Runtime, profile *v1.
 			}
 			opt.Fields = []*v1.ConfigField{
 				{Name: fieldBuild, Label: "Build", Type: v1.ConfigType_CONFIG_TYPE_STRING, Required: true, Default: first(ids), Choices: ids, Description: "Which published build to download"},
-				{Name: fieldRelease, Label: "Release", Type: v1.ConfigType_CONFIG_TYPE_STRING, Placeholder: "Latest", Description: "A release tag of " + im.Releases + ", the newest with the build when empty"},
+				{Name: fieldRelease, Label: "Release", Type: v1.ConfigType_CONFIG_TYPE_STRING, RevisionSource: recipes.ReleaseSource, RevisionRepo: im.Releases, Description: "A release tag of " + im.Releases + ", the newest with the build when empty"},
 			}
 			if len(ids) == 0 {
 				opt.Unmet = []string{"no build of " + im.Releases + " is published for " + profile.GetOs() + "/" + profile.GetArch()}
@@ -279,7 +279,7 @@ func refField(src recipes.Source) *v1.ConfigField {
 	f := &v1.ConfigField{Name: fieldRef, Label: "Ref", Type: v1.ConfigType_CONFIG_TYPE_STRING}
 	switch {
 	case src.Releases != "":
-		f.Placeholder = "Latest"
+		f.RevisionSource, f.RevisionRepo = recipes.ReleaseSource, src.Releases
 		f.Description = "A tag, branch, or commit of " + src.String() + ", the newest release when empty"
 	case src.Repo != "":
 		f.Description = "A tag, branch, or commit of " + src.Repo + ", the default branch when empty"

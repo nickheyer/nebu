@@ -75,7 +75,7 @@
             saveLabel();
           }}
         >
-          <TextInput id="host-label" class="flex-1" bind:value={label} empty={live.host?.hostname || 'hostname'} maxlength={64} />
+          <TextInput id="host-label" class="flex-1" bind:value={label} empty={live.host?.hostname ?? ''} maxlength={64} />
           <Button type="submit" variant="primary" loading={labelSaving} disabled={!labelDirty}>Save</Button>
         </form>
       {/snippet}
@@ -112,7 +112,7 @@
           }}
         >
           <div class="relative flex-1">
-            <TextInput id="token" mono type={show ? 'text' : 'password'} bind:value empty="Token" inputClass="pr-9">
+            <TextInput id="token" mono type={show ? 'text' : 'password'} bind:value inputClass="pr-9">
               {#snippet leading()}<KeyRound size={13} />{/snippet}
             </TextInput>
             <button type="button" class="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-sm p-1 text-fg-faint hover:text-fg" onclick={() => (show = !show)} aria-label={show ? 'Hide token' : 'Show token'}>

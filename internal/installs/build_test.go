@@ -147,8 +147,8 @@ func TestBuildFieldsDescribeSandboxAndRef(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := fieldNamed(buildFields(releasedRecipe{}, sel, profile, defaults), "ref")
-	if ref == nil || ref.GetDefault() != "" || ref.GetPlaceholder() != "Latest" || !strings.Contains(ref.GetDescription(), "github.com/o/r") {
-		t.Fatalf("a released source takes a ref, the newest release when empty: %v", ref)
+	if ref == nil || ref.GetDefault() != "" || ref.GetPlaceholder() != "" || ref.GetRevisionSource() != recipes.ReleaseSource || ref.GetRevisionRepo() != "o/r" || !strings.Contains(ref.GetDescription(), "github.com/o/r") {
+		t.Fatalf("a released source takes a ref, the newest release listed at the release source when empty: %v", ref)
 	}
 }
 

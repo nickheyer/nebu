@@ -410,7 +410,7 @@
           oninput={onInput}
           onsubmit={submit}
           disabled={inputDead}
-          empty={inputDead ? `${name} cannot be searched` : caps?.search || all ? `Search ${name}` : `Type a repository such as ${caps?.repoExample || 'owner/name'}`}
+          empty={inputDead || all || !caps || caps.search ? '' : caps.repoExample}
         >
           {#snippet trailing()}
             {#if canSubmitRepo}<span class="rounded-sm bg-accent/15 px-1.5 text-[11px] text-accent">Enter to open</span>{/if}
@@ -464,7 +464,7 @@
         </Empty>
       {:else if !searching && hits.length === 0}
         {#if !caps?.browse && browsing && !all}
-          <Empty compact title="This source cannot be browsed. Type a repository name such as {caps?.repoExample || 'owner/name'}." />
+          <Empty compact title={caps?.repoExample ? `This source cannot be browsed. Type a repository name such as ${caps.repoExample}.` : 'This source cannot be browsed. Type a repository name.'} />
         {:else if !searchable}
           <Empty compact title="{name} cannot be searched" />
         {:else}

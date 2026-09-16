@@ -159,8 +159,8 @@
     }}
   >
     {#if !model}
-      <Field label="Model" for="run-model">
-        <Select id="run-model" mono bind:value={pickedKey} disabled={!stored.length} empty="No models downloaded" items={stored.map((m) => ({ value: modelKey(m), label: m.repo, detail: weightsName(m.group, m.formatId) }))} />
+      <Field label="Model" for="run-model" error={stored.length ? undefined : 'No models downloaded'}>
+        <Select id="run-model" mono bind:value={pickedKey} disabled={!stored.length} items={stored.map((m) => ({ value: modelKey(m), label: m.repo, detail: weightsName(m.group, m.formatId) }))} />
       </Field>
     {/if}
 
@@ -196,14 +196,14 @@
               id="run-runtime"
               bind:value={runtimeId}
               items={[
-                { value: '', label: selectedSlot?.runtimeId ? runtimeName(selectedSlot.runtimeId) : (compatible[0]?.runtime?.name ?? 'none'), detail: selectedSlot?.runtimeId ? 'the slot’s runtime' : undefined },
+                { value: '', label: selectedSlot?.runtimeId ? runtimeName(selectedSlot.runtimeId) : (compatible[0]?.runtime?.name ?? '–'), detail: selectedSlot?.runtimeId ? 'the slot’s runtime' : undefined },
                 ...compatible.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '' })),
                 ...others.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: rt.compatible ? `does not read ${formatId}` : 'not compatible with this host', disabled: true }))
               ]}
             />
           </Field>
           <Field label="Install" for="run-install" error={effectiveRuntime && !installs.length ? `${effectiveRuntime} is not installed` : undefined}>
-            <Select id="run-install" bind:value={installId} disabled={!installs.length} items={[{ value: '', label: installs.length ? installs[0].version || installs[0].id : 'None', detail: installs.length ? 'newest' : undefined }, ...installs.map((i) => ({ value: i.id, label: i.version || i.id, detail: tail(i.path) }))]} />
+            <Select id="run-install" bind:value={installId} disabled={!installs.length} items={[{ value: '', label: installs.length ? installs[0].version || installs[0].id : '–', detail: installs.length ? 'newest' : undefined }, ...installs.map((i) => ({ value: i.id, label: i.version || i.id, detail: tail(i.path) }))]} />
           </Field>
           {#if !slot}
             <Field label="Model name" for="run-name" class="col-span-full">

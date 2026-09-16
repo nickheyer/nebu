@@ -489,14 +489,14 @@
                 <Switch bind:checked={session.stream} label="Stream" />
               </div>
               <Field label="System prompt" for="chat-system">
-                <TextArea id="chat-system" bind:value={session.system} empty="Optional" />
+                <TextArea id="chat-system" bind:value={session.system} />
               </Field>
               <div class="grid grid-cols-2 gap-3">
-                <Field label="Temperature" for="chat-temp"><NumberInput id="chat-temp" min={0} max={2} step={0.1} bind:value={session.temperature} empty="runtime default" /></Field>
-                <Field label="Top P" for="chat-topp"><NumberInput id="chat-topp" min={0} max={1} step={0.05} bind:value={session.topP} empty="runtime default" /></Field>
-                <Field label="Top K" for="chat-topk"><NumberInput id="chat-topk" integer min={0} bind:value={session.topK} empty="runtime default" /></Field>
-                <Field label="Max tokens" for="chat-max"><NumberInput id="chat-max" integer min={1} step={64} bind:value={session.maxTokens} empty="runtime default" /></Field>
-                <Field label="Seed" for="chat-seed" description="Same seed, same sampling."><NumberInput id="chat-seed" integer min={0} bind:value={session.seed} empty="random" /></Field>
+                <Field label="Temperature" for="chat-temp"><NumberInput id="chat-temp" min={0} max={2} step={0.1} bind:value={session.temperature} /></Field>
+                <Field label="Top P" for="chat-topp"><NumberInput id="chat-topp" min={0} max={1} step={0.05} bind:value={session.topP} /></Field>
+                <Field label="Top K" for="chat-topk"><NumberInput id="chat-topk" integer min={0} bind:value={session.topK} /></Field>
+                <Field label="Max tokens" for="chat-max"><NumberInput id="chat-max" integer min={1} step={64} bind:value={session.maxTokens} /></Field>
+                <Field label="Seed" for="chat-seed" description="Same seed, same sampling."><NumberInput id="chat-seed" integer min={0} bind:value={session.seed} /></Field>
                 <Field label="Stop sequences" for="chat-stop" description="Comma separated."><TextInput id="chat-stop" mono bind:value={session.stop} empty="###, User:" /></Field>
               </div>
               <Field label="Tools" for="chat-tools" description="A JSON array of tool definitions in the OpenAI shape. The gateway translates them for other formats." error={toolsProblem || undefined}>

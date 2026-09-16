@@ -28,6 +28,13 @@
   const transports = $derived([...new Set(fields.map((f) => f.transport))]);
   const missing = $derived(fields.filter((f) => f.required && !(config[f.name] ?? '').trim() && !f.default).map((f) => f.label || f.name));
   const idOk = $derived(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id) && !id.includes('..'));
+  // The id the provider's name makes, the shape an id takes
+  const idHint = $derived(
+    (provider?.name ?? '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+  );
 
   // Switching providers starts the settings over
   $effect(() => {
@@ -96,11 +103,11 @@
           {/if}
         </Field>
         <Field label="Id" for="src-id" required description="Cannot be changed later." error={id && !idOk ? 'Letters, digits, dots, dashes, and underscores' : undefined}>
-          <TextInput id="src-id" mono bind:value={id} empty="my-source" invalid={!!id && !idOk} />
+          <TextInput id="src-id" mono bind:value={id} empty={idHint} invalid={!!id && !idOk} />
         </Field>
       {/if}
       <Field label="Name" for="src-name" class={editing ? 'sm:col-span-2' : ''}>
-        <TextInput id="src-name" bind:value={name} empty={provider?.name ?? ''} />
+        <TextInput id="src-name" bind:value={name} empty={id} />
       </Field>
     </div>
 

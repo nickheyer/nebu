@@ -26,7 +26,7 @@
     values = next;
   }
 
-  // A hint of the shape a field takes, shown while empty and no default applies
+  // The shape a field's type takes, shown while empty and the daemon names neither a default nor a shape
   function hintFor(f: ConfigField): string {
     switch (f.type) {
       case ConfigType.PATH:
@@ -60,11 +60,11 @@
     {:else}
       <Field label={f.label || f.name} for={fid} required={f.required && !f.default} description={f.description || undefined} error={missing.includes(f) && (values[f.name] ?? '') !== '' ? undefined : undefined}>
         {#if f.choices.length}
-          <Select id={fid} mono value={values[f.name] ?? ''} empty="Choose" onchange={(v) => set(f.name, v)} items={[...(f.default ? [{ value: '', label: f.default }] : []), ...f.choices.filter((c) => c !== f.default || !f.default).map((c) => ({ value: c, label: c }))]} />
+          <Select id={fid} mono value={values[f.name] ?? ''} onchange={(v) => set(f.name, v)} items={[...(f.default ? [{ value: '', label: f.default }] : []), ...f.choices.filter((c) => c !== f.default || !f.default).map((c) => ({ value: c, label: c }))]} />
         {:else if f.type === ConfigType.INT}
-          <NumberInput id={fid} integer empty={f.default} bind:value={() => values[f.name] ?? '', (v) => set(f.name, v)} />
+          <NumberInput id={fid} integer empty={f.default || f.placeholder} bind:value={() => values[f.name] ?? '', (v) => set(f.name, v)} />
         {:else}
-          <TextInput id={fid} mono={f.type !== ConfigType.STRING} type={f.type === ConfigType.URL ? 'url' : 'text'} empty={f.default || hintFor(f)} bind:value={() => values[f.name] ?? '', (v) => set(f.name, v)} />
+          <TextInput id={fid} mono={f.type !== ConfigType.STRING} type={f.type === ConfigType.URL ? 'url' : 'text'} empty={f.default || f.placeholder || hintFor(f)} bind:value={() => values[f.name] ?? '', (v) => set(f.name, v)} />
         {/if}
       </Field>
     {/if}

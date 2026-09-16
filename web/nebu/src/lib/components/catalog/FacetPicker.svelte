@@ -72,7 +72,7 @@
           }}
         >
           <label class="caps text-fg-faint" for="facet-{facet.id}">{facet.label}</label>
-          <input id="facet-{facet.id}" class="input" bind:value={draft} placeholder={facet.label} autocomplete="off" />
+          <input id="facet-{facet.id}" class="input" bind:value={draft} autocomplete="off" />
           <div class="flex justify-end gap-2">
             {#if value}<button type="button" class="text-sm text-fg-faint hover:text-fg" onclick={() => clear()}>Clear</button>{/if}
             <button type="submit" class="rounded-md bg-accent px-3 py-1 text-sm font-semibold text-accent-fg">Apply</button>
@@ -83,7 +83,7 @@
           <div class="border-b border-line p-1.5">
             <div class="relative">
               <Search size={13} class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-faint" />
-              <input class="input h-7 pl-8" bind:value={filter} placeholder="Filter" autocomplete="off" />
+              <input class="input h-7 pl-8" bind:value={filter} aria-label="Filter" autocomplete="off" />
             </div>
           </div>
         {/if}
