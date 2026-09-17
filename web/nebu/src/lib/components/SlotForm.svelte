@@ -2,12 +2,15 @@
   import { api } from '$lib/api';
   import { live, cached, orderedSlots, hostGpus } from '$lib/state.svelte';
   import { slotOccupied } from '$lib/launch';
+  import { placements, placementId, placementOf } from '$lib/instances';
   import { policyFields, policyFrom, profileValue, profileFrom } from '$lib/gateway';
   import { gib, fromGib } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
+  import { PoolKind } from '$proto/host_pb';
   import type { Slot } from '$proto/slot_pb';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
+  import Segmented from './ui/Segmented.svelte';
   import NumberInput from './ui/NumberInput.svelte';
   import TextInput from './ui/TextInput.svelte';
   import Button from './ui/Button.svelte';
@@ -24,9 +27,9 @@
   function initial() {
     return {
       name: slot?.name ?? '',
-      description: slot?.description ?? '',
       position: slot?.position ? String(slot.position) : '',
-      // A slot pinned to no device is placed on every accelerator, so it starts with every one checked
+      placement: placementId(slot?.placement),
+      // A slot pinned to no device is placed on every GPU, so every one starts checked
       devices: slot?.deviceIds.length ? [...slot.deviceIds] : null,
       memory: gib(slot?.memoryBytes),
       runtimeId: slot?.runtimeId ?? '',
@@ -37,8 +40,8 @@
   }
   const start = initial();
   let name = $state(start.name);
-  let description = $state(start.description);
   let position = $state(start.position);
+  let placement = $state(start.placement);
   let devices = $state<string[] | null>(start.devices);
   let memory = $state(start.memory);
   let runtimeId = $state(start.runtimeId);
@@ -49,13 +52,25 @@
   let saving = $state(false);
 
   const creating = $derived(!slot);
-  const gpuIds = $derived(hostGpus().map((d) => d.id));
+  const gpus = $derived(hostGpus());
+  const gpuIds = $derived(gpus.map((d) => d.id));
+  const ram = $derived(live.host?.pools.find((p) => p.kind === PoolKind.HOST || p.kind === PoolKind.UNIFIED));
+  const hostOnly = $derived(placement === 'host');
+  // The GPU choices need a GPU; with none probed the model can only go in system memory
+  const placementTabs = $derived(placements.map((p) => ({ id: p.id, label: p.label, unmet: p.id !== 'host' && live.host && gpus.length === 0 ? 'No GPU probed on this host' : undefined })));
+  $effect(() => {
+    if (live.host && gpus.length === 0 && placement !== 'host') placement = 'host';
+  });
+  // GPUs are picked between only when there is more than one to pick from
+  const pickDevices = $derived(!hostOnly && gpus.length > 1);
   const chosen = $derived(devices ?? gpuIds);
-  const noDevices = $derived(gpuIds.length > 0 && chosen.length === 0);
+  // Every GPU checked means every GPU, including any probed later
+  const deviceIds = $derived(pickDevices && chosen.length < gpuIds.length ? chosen : []);
   const budget = $derived(fromGib(memory));
-  // The cap that applies while none is set: the whole of each chosen device, one figure when they share a size
-  const deviceGib = $derived.by(() => {
-    const totals = new Set(hostGpus().filter((d) => chosen.includes(d.id)).map((d) => d.memoryTotalBytes));
+  // What applies while no cap is set: the whole of system memory, or of each chosen GPU when they share a size
+  const poolGib = $derived.by(() => {
+    if (hostOnly) return gib(ram?.totalBytes);
+    const totals = new Set(gpus.filter((d) => chosen.includes(d.id)).map((d) => d.memoryTotalBytes));
     return totals.size === 1 ? gib([...totals][0]) : '';
   });
   const badBudget = $derived(memory.trim() !== '' && budget === 0n);
@@ -64,7 +79,7 @@
   const runtime = $derived(cached.runtimes.find((r) => r.runtime?.id === runtimeId)?.runtime);
   const occupied = $derived(!!slot && slotOccupied(slot.id));
   const count = $derived(orderedSlots().length);
-  const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && !noDevices && invalid === 0);
+  const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && invalid === 0);
   // Params set for one runtime mean nothing to another
   $effect(() => {
     if (runtimeId !== start.runtimeId) params = {};
@@ -72,7 +87,7 @@
 
   async function save() {
     saving = true;
-    const body = { description, deviceIds: chosen, memoryBytes: budget, runtimeId, params, policy: policyFrom(policy), profile: profileFrom(profile), position: Math.max(0, parseInt(position, 10) || 0) };
+    const body = { placement: placementOf(placement), deviceIds, memoryBytes: budget, runtimeId, params, policy: policyFrom(policy), profile: profileFrom(profile), position: Math.max(0, parseInt(position, 10) || 0) };
     try {
       if (slot) {
         const r = await api.slots.updateSlot({ id: slot.id, name: name.trim(), ...body });
@@ -101,39 +116,43 @@
     if (formOk && !saving) save();
   }}
 >
-  <Card title="Name">
+  <Card title="Slot">
     <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-[minmax(0,1fr)_8rem]">
-      <Field label="Name" for="slot-name" required description="Clients send this as the model name. Renaming moves the route." error={badName ? 'No spaces or slashes' : nameTaken ? 'Another slot has this name' : undefined}>
+      <Field label="Name" for="slot-name" required error={badName ? 'No spaces or slashes' : nameTaken ? 'Another slot has this name' : undefined}>
         <TextInput id="slot-name" mono bind:value={name} empty="main" invalid={badName || nameTaken} />
       </Field>
-      <Field label="Position" for="slot-position" description="Order in the list.">
+      <Field label="Position" for="slot-position">
         <NumberInput id="slot-position" integer min={1} max={count + (creating ? 1 : 0)} bind:value={position} empty={creating ? String(count + 1) : ''} />
       </Field>
-      <Field label="Description" for="slot-desc" class="sm:col-span-2">
-        <TextInput id="slot-desc" bind:value={description} />
-      </Field>
     </div>
   </Card>
 
-  <Card title="Reservation" meta={occupied ? 'Applies to the next run' : undefined}>
-    <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
-      <Field label="Devices" for="slot-devices" class="sm:col-span-2" description="Where the model in this slot is placed." error={noDevices ? 'Pick at least one device' : undefined}>
-        <DevicePicker id="slot-devices" bind:value={() => chosen, (v) => (devices = v)} />
+  <Card title="Memory" meta={occupied ? 'Applies to the next run' : undefined}>
+    <div class="flex flex-col gap-4">
+      <Field label="Placement" for="slot-placement">
+        <div id="slot-placement"><Segmented size="lg" bind:value={placement} tabs={placementTabs} /></div>
       </Field>
-      <Field label="Memory cap" for="slot-memory" description="Per device. Plans stay under this instead of using the whole device." error={badBudget ? 'A number of GiB, such as 8' : undefined}>
-        <NumberInput id="slot-memory" min={0} step={0.5} unit="GiB" bind:value={memory} empty={deviceGib} invalid={badBudget} />
-      </Field>
-      <Field label="Runtime" for="slot-runtime" description="Used for every run in this slot unless a run picks another. Empty takes the first runtime that reads the model.">
-        <Select id="slot-runtime" bind:value={runtimeId} items={[{ value: '', label: '–' }, ...cached.runtimes.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: rt.compatible ? undefined : 'not compatible with this host', disabled: !rt.compatible }))]} />
-      </Field>
+      {#if pickDevices}
+        <Field label="GPUs" for="slot-devices">
+          <DevicePicker id="slot-devices" bind:value={() => chosen, (v) => (devices = v)} />
+        </Field>
+      {/if}
+      <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
+        <Field label={hostOnly ? 'RAM cap' : 'Cap per GPU'} for="slot-memory" error={badBudget ? 'A number of GiB, such as 8' : undefined}>
+          <NumberInput id="slot-memory" min={0} step={0.5} unit="GiB" bind:value={memory} empty={poolGib} invalid={badBudget} />
+        </Field>
+        <Field label="Runtime" for="slot-runtime">
+          <Select id="slot-runtime" bind:value={runtimeId} items={[{ value: '', label: 'Any', detail: 'the first that reads the model' }, ...cached.runtimes.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: rt.compatible ? undefined : 'not compatible with this host', disabled: !rt.compatible }))]} />
+        </Field>
+      </div>
     </div>
   </Card>
 
-  <Card title="Default parameters" meta={runtime ? `${runtime.name} · a run can override any of them` : undefined}>
+  <Card title="Default parameters" meta={runtime?.name}>
     {#if runtime}
       <ParamForm params={runtime.params} bind:values={params} bind:invalid idPrefix="slot" />
     {:else}
-      <p class="text-sm text-fg-faint">Pick a runtime to set default parameters.</p>
+      <p class="text-sm text-fg-faint">Pick a runtime first</p>
     {/if}
   </Card>
 
@@ -141,7 +160,7 @@
     <PolicyForm bind:fields={policy} defaults={cached.gateway?.policy} idPrefix="slot" />
   </Card>
 
-  <Card title="Shaping" meta="how requests through the slot's name reach the runtime">
+  <Card title="Shaping">
     <ProfileForm bind:value={profile} idPrefix="slot" />
   </Card>
 

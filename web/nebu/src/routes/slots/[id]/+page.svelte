@@ -6,8 +6,10 @@
   import { swapSlot, evictSlot, deleteSlot, relaunchSlot } from '$lib/actions.svelte';
   import { slotOccupied } from '$lib/launch';
   import { policyText, profileText } from '$lib/gateway';
+  import { placementLabel } from '$lib/instances';
   import { bytes, when, duration, count, newestFirst, ago } from '$lib/format';
   import { SlotState } from '$proto/slot_pb';
+  import { Placement } from '$proto/estimate_pb';
   import { InstanceState } from '$proto/instance_pb';
   import { RouteState, type Trace } from '$proto/gateway_pb';
   import { ArrowLeftRight, LogOut, Trash2, MessageSquare, Play, RotateCcw } from '@lucide/svelte';
@@ -48,6 +50,15 @@
   const swapTask = $derived(slot ? taskFor('swap', { slot: slot.id }) : undefined);
   const install = $derived(instance?.installId ? live.installs.get(instance.installId) : undefined);
   const devices = $derived((slot?.deviceIds ?? []).map(deviceName));
+  // Where the slot keeps the model and how much of that memory it may take
+  const reservation = $derived.by((): [string, string][] => {
+    if (!slot) return [];
+    const host = slot.placement === Placement.HOST;
+    const out: [string, string][] = [['Placement', placementLabel(slot.placement)]];
+    if (!host) out.push(['GPUs', devices.length ? devices.join(', ') : 'Every GPU']);
+    out.push(['Memory cap', slot.memoryBytes ? `${bytes(slot.memoryBytes)} ${host ? 'of RAM' : 'per GPU'}` : 'None']);
+    return out;
+  });
   const history = $derived(
     [...live.instances.values()]
       .filter((i) => i.slotId === slot?.id && i.id !== slot?.instanceId)
@@ -71,7 +82,6 @@
     {#snippet meta()}
       <span class="font-mono text-fg-faint">#{slot.position}</span>
       <State values={SlotState} value={slot.state} />
-      {#if slot.description}<span>{slot.description}</span>{/if}
     {/snippet}
     {#if answering}<Button icon={MessageSquare} href="/chat?model={encodeURIComponent(slot.name)}">Chat</Button>{/if}
     {#if slot.state === SlotState.FAILED && slot.request}
@@ -149,9 +159,8 @@
         <Card title="Reservation">
           <Kv
             items={[
-              ['Devices', devices.length ? devices.join(', ') : 'Any'],
-              ['Memory cap', slot.memoryBytes ? `${bytes(slot.memoryBytes)} per device` : 'Whole device'],
-              ['Runtime', slot.runtimeId ? runtimeName(slot.runtimeId) : 'First compatible'],
+              ...reservation,
+              ['Runtime', slot.runtimeId ? runtimeName(slot.runtimeId) : 'Any'],
               ['Limits', policyText(slot.policy, cached.gateway?.policy)],
               ['Shaping', profileText(slot.profile, instance?.template)],
               ['Route', route ? `${route.state === RouteState.READY ? 'Ready' : route.state === RouteState.DRAINING ? 'Draining' : 'Waiting'} · ${count(route.requests)} requests` : '–'],

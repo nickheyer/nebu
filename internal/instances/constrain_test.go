@@ -23,7 +23,7 @@ func profile() *v1.HostProfile {
 
 func TestConstrain(t *testing.T) {
 	p := profile()
-	same := Constrain(p, nil, 0)
+	same := Constrain(p, nil, 0, v1.Placement_PLACEMENT_UNSPECIFIED)
 	if len(same.GetPools()) != 3 || len(same.GetDevices()) != 3 {
 		t.Fatal("no constraint keeps everything")
 	}
@@ -31,14 +31,14 @@ func TestConstrain(t *testing.T) {
 	if p.GetPools()[0].GetTotalBytes() != 100 {
 		t.Fatal("must clone")
 	}
-	c := Constrain(p, []string{"g1"}, 20)
+	c := Constrain(p, []string{"g1"}, 20, v1.Placement_PLACEMENT_UNSPECIFIED)
 	if len(c.GetPools()) != 2 || c.GetPools()[1].GetId() != "g1" || c.GetPools()[1].GetTotalBytes() != 20 || c.GetPools()[1].GetFreeBytes() != 10 {
 		t.Fatalf("pools %v", c.GetPools())
 	}
 	if len(c.GetDevices()) != 2 || c.GetDevices()[1].GetId() != "g1" {
 		t.Fatalf("devices %v", c.GetDevices())
 	}
-	budget := Constrain(p, nil, 30)
+	budget := Constrain(p, nil, 30, v1.Placement_PLACEMENT_UNSPECIFIED)
 	if budget.GetPools()[1].GetTotalBytes() != 30 || budget.GetPools()[1].GetFreeBytes() != 30 || budget.GetPools()[0].GetTotalBytes() != 100 {
 		t.Fatalf("budget only %v", budget.GetPools())
 	}

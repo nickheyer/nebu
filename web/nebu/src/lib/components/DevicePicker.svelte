@@ -2,7 +2,7 @@
   import { hostGpus } from '$lib/state.svelte';
   import { bytes } from '$lib/format';
 
-  // The accelerators a slot is placed on: every one checked, unchecked ones left out
+  // The accelerators a slot is placed on, every one checked to start; the last one checked stays checked
   let { value = $bindable([] as string[]), id = 'devices' }: { value?: string[]; id?: string } = $props();
 
   const gpus = $derived(hostGpus());
@@ -15,17 +15,14 @@
   }
 </script>
 
-{#if gpus.length === 0}
-  <div {id} class="rounded-md border border-line bg-sunken/40 px-3 py-3 text-sm text-fg-faint">No accelerators were probed on this host.</div>
-{:else}
-  <div {id} class="divide-y divide-line rounded-md border border-line bg-sunken/40">
-    {#each gpus as d (d.id)}
-      <label class="flex h-10 cursor-pointer items-center gap-3 px-3 text-sm">
-        <input type="checkbox" class="checkbox" checked={value.includes(d.id)} onchange={(e) => toggle(d.id, e.currentTarget.checked)} />
-        <span class="min-w-0 flex-1 truncate text-fg">{d.name || d.id}</span>
-        <span class="font-mono text-xs text-fg-faint">{d.id}</span>
-        <span class="w-16 text-right text-xs tabular-nums text-fg-muted">{bytes(d.memoryTotalBytes, 0)}</span>
-      </label>
-    {/each}
-  </div>
-{/if}
+<div {id} class="divide-y divide-line rounded-md border border-line bg-sunken/40">
+  {#each gpus as d (d.id)}
+    {@const on = value.includes(d.id)}
+    <label class="flex h-10 cursor-pointer items-center gap-3 px-3 text-sm">
+      <input type="checkbox" class="checkbox" checked={on} disabled={on && value.length === 1} onchange={(e) => toggle(d.id, e.currentTarget.checked)} />
+      <span class="min-w-0 flex-1 truncate text-fg">{d.name || d.id}</span>
+      <span class="font-mono text-xs text-fg-faint">{d.id}</span>
+      <span class="w-16 text-right text-xs tabular-nums text-fg-muted">{bytes(d.memoryTotalBytes, 0)}</span>
+    </label>
+  {/each}
+</div>

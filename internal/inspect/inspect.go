@@ -35,9 +35,17 @@ const (
 	modelType = "model"
 )
 
-// Narrows a plan to a slot, its devices, budget, runtime, and default params
+// What a slot narrows a plan to: the host as the slot sees it, the slot's runtime and default params, and where the model goes
+type Constraint struct {
+	Profile   *v1.HostProfile
+	RuntimeID string
+	Params    map[string]string
+	Placement v1.Placement
+}
+
+// Narrows a plan to a slot
 type Constrainer interface {
-	Constrain(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, string, map[string]string, error)
+	Constrain(ctx context.Context, slotID string, profile *v1.HostProfile) (*Constraint, error)
 }
 
 // Orchestrates sources, formats, descriptors, and planning
@@ -96,17 +104,17 @@ func (i *Inspector) planners(list []runtimes.Runtime, formatID string, named boo
 	return installed
 }
 
-// Returns the planning profile narrowed to the named slot, with the slot's runtime and default params
-func (i *Inspector) profile(ctx context.Context, slotID string) (*v1.HostProfile, string, map[string]string, error) {
+// Returns the host narrowed to the named slot with the slot's runtime, default params, and placement, the whole host with no slot
+func (i *Inspector) constraint(ctx context.Context, slotID string) (*Constraint, error) {
 	profile, err := i.Host.Profile(ctx, false)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, err
 	}
 	if slotID == "" {
-		return profile, "", nil, nil
+		return &Constraint{Profile: profile}, nil
 	}
 	if i.Constrain == nil {
-		return nil, "", nil, fmt.Errorf("slots are not available")
+		return nil, fmt.Errorf("slots are not available")
 	}
 	return i.Constrain.Constrain(ctx, slotID, profile)
 }
@@ -202,7 +210,7 @@ func (i *Inspector) Describe(ctx context.Context, src sources.Source, model *v1.
 
 // Everything a plan of one descriptor on one runtime reads: the overrides typed, against the memory
 // free right now or all of it, with the same learned correction a run applies
-func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool) (estimate.Input, error) {
+func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement) (estimate.Input, error) {
 	if rt.Policy() == nil {
 		return estimate.Input{}, fmt.Errorf("runtime %s has no estimate policy", rt.ID())
 	}
@@ -217,12 +225,13 @@ func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.Hos
 		Params:        params,
 		Free:          free,
 		OverheadDelta: i.Calibration.Delta(rt.ID(), d.GetArchitecture()),
+		Placement:     placement,
 	}, nil
 }
 
 // Plans one descriptor on one runtime with overrides, refusing params the runtime rules out
-func (i *Inspector) Plan(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool) (*v1.MemoryPlan, error) {
-	in, err := i.input(rt, d, profile, overrides, free)
+func (i *Inspector) Plan(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement) (*v1.MemoryPlan, error) {
+	in, err := i.input(rt, d, profile, overrides, free, placement)
 	if err != nil {
 		return nil, err
 	}
@@ -235,15 +244,16 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 	if err != nil {
 		return nil, err
 	}
-	profile, slotRuntime, slotParams, err := i.profile(ctx, req.GetSlotId())
+	c, err := i.constraint(ctx, req.GetSlotId())
 	if err != nil {
 		return nil, err
 	}
+	profile := c.Profile
 	groups := selectGroups(i.Formats.Groups(model), req.GetGroups())
 	// The runtimes the request names, else the slot's runtime, else every compatible one
 	ids := req.GetRuntimeIds()
-	if len(ids) == 0 && slotRuntime != "" {
-		ids = []string{slotRuntime}
+	if len(ids) == 0 && c.RuntimeID != "" {
+		ids = []string{c.RuntimeID}
 	}
 	named := len(ids) > 0
 	list := i.selectRuntimes(ids, profile)
@@ -262,7 +272,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		}
 	}
 	// The slot's defaults sit under the request's params, the same layering a run uses
-	layered := runtimes.Merge(slotParams, req.GetParams())
+	layered := runtimes.Merge(c.Params, req.GetParams())
 	descriptors := make([]*v1.Descriptor, len(groups))
 	warnings := make([]string, len(groups))
 	failures := make([]error, len(groups))
@@ -311,10 +321,10 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 			for _, n := range append(rows, planContexts(contexts, d, len(req.GetContexts()) > 0)...) {
 				overrides := withContext(layered, rt.Policy().ContextParam, n)
 				// A run plans around what is loaded now, so the table says both
-				plan, err := i.Plan(rt, d, profile, overrides, false)
+				plan, err := i.Plan(rt, d, profile, overrides, false, c.Placement)
 				var now *v1.MemoryPlan
 				if err == nil {
-					now, err = i.Plan(rt, d, profile, overrides, true)
+					now, err = i.Plan(rt, d, profile, overrides, true, c.Placement)
 				}
 				if err != nil {
 					warn("%s", planFailure(d, rt, err))
@@ -347,14 +357,15 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	profile, slotRuntime, slotParams, err := i.profile(ctx, req.GetSlotId())
+	c, err := i.constraint(ctx, req.GetSlotId())
 	if err != nil {
 		return nil, err
 	}
+	profile := c.Profile
 	// The slot's runtime picks the runtime when the request did not, as a run does
 	runtimeID := req.GetRuntimeId()
 	if runtimeID == "" {
-		runtimeID = slotRuntime
+		runtimeID = c.RuntimeID
 	}
 	if runtimeID == "" {
 		fallback, err := i.DefaultRuntime(profile, g.FormatID)
@@ -367,13 +378,13 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	overrides := runtimes.Merge(slotParams, req.GetParams())
+	overrides := runtimes.Merge(c.Params, req.GetParams())
 	d, err := i.Describe(ctx, src, model, g)
 	if err != nil {
 		return nil, err
 	}
 	// An estimate plans through params a run would refuse and says so, so a form can show what to change
-	in, err := i.input(rt, d, profile, overrides, req.GetFree())
+	in, err := i.input(rt, d, profile, overrides, req.GetFree(), c.Placement)
 	if err != nil {
 		return nil, err
 	}

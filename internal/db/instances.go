@@ -52,7 +52,7 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 				}
 			}
 			// A group left on disk is a placement with no pool
-			for i, p := range append(append([]*v1.Placement{}, plan.GetPlacements()...), plan.GetSkipped()...) {
+			for i, p := range append(append([]*v1.GroupPlacement{}, plan.GetPlacements()...), plan.GetSkipped()...) {
 				if err := exec(`INSERT INTO instance_plan_placements (instance_id, position, kind, pool_id, bytes, count) VALUES (?, ?, ?, ?, ?, ?)`,
 					id, i, enumCol(p.GetKind()), p.GetPoolId(), int64(p.GetBytes()), p.GetCount()); err != nil {
 					return err
@@ -135,8 +135,8 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 		}, id); err != nil {
 			return err
 		}
-		placed, err := list(ctx, d, `SELECT kind, pool_id, bytes, count FROM instance_plan_placements WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.Placement, error) {
-			p := &v1.Placement{}
+		placed, err := list(ctx, d, `SELECT kind, pool_id, bytes, count FROM instance_plan_placements WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.GroupPlacement, error) {
+			p := &v1.GroupPlacement{}
 			return p, rows.Scan(enumAt[v1.TensorGroupKind]{&p.Kind}, &p.PoolId, &p.Bytes, &p.Count)
 		}, id)
 		if err != nil {

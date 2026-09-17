@@ -134,8 +134,8 @@ func TestNames(t *testing.T) {
 	if _, err := m.Update(ctx, &v1.UpdateSlotRequest{Id: main.GetId(), Name: "other"}); err == nil {
 		t.Fatal("rename onto another slot should be refused")
 	}
-	renamed, err := m.Update(ctx, &v1.UpdateSlotRequest{Id: main.GetId(), Name: "primary", Description: "d"})
-	if err != nil || renamed.GetName() != "primary" || renamed.GetDescription() != "d" {
+	renamed, err := m.Update(ctx, &v1.UpdateSlotRequest{Id: main.GetId(), Name: "primary", Placement: v1.Placement_PLACEMENT_DEVICE})
+	if err != nil || renamed.GetName() != "primary" || renamed.GetPlacement() != v1.Placement_PLACEMENT_DEVICE {
 		t.Fatalf("rename %v %v", renamed, err)
 	}
 	if _, ok := m.Routes.Lookup("main"); ok {

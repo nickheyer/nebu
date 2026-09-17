@@ -258,9 +258,31 @@ func slotsTable(w io.Writer, list []*v1.Slot) {
 		if len(s.GetDeviceIds()) > 0 {
 			devices = strings.Join(s.GetDeviceIds(), ",")
 		}
-		rows = append(rows, []string{s.GetId(), s.GetName(), loud(s.GetState()), modelText(s.GetRequest()), s.GetInstanceId(), devices, budget, policyText(s.GetPolicy()), profileText(s.GetProfile()), s.GetError()})
+		rows = append(rows, []string{s.GetId(), s.GetName(), loud(s.GetState()), modelText(s.GetRequest()), s.GetInstanceId(), placementText(s.GetPlacement()), devices, budget, policyText(s.GetPolicy()), profileText(s.GetProfile()), s.GetError()})
 	}
-	table(w, []string{"ID", "NAME", "STATE", "MODEL", "INSTANCE", "DEVICES", "BUDGET", "LIMITS", "PROFILE", "ERROR"}, rows)
+	table(w, []string{"ID", "NAME", "STATE", "MODEL", "INSTANCE", "PLACEMENT", "DEVICES", "BUDGET", "LIMITS", "PROFILE", "ERROR"}, rows)
+}
+
+func parsePlacement(s string) (v1.Placement, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "auto":
+		return v1.Placement_PLACEMENT_UNSPECIFIED, nil
+	case "device", "gpu":
+		return v1.Placement_PLACEMENT_DEVICE, nil
+	case "host", "ram", "cpu":
+		return v1.Placement_PLACEMENT_HOST, nil
+	}
+	return v1.Placement_PLACEMENT_UNSPECIFIED, fmt.Errorf("placement %q: one of auto, device, host", s)
+}
+
+func placementText(p v1.Placement) string {
+	switch p {
+	case v1.Placement_PLACEMENT_DEVICE:
+		return "device"
+	case v1.Placement_PLACEMENT_HOST:
+		return "host"
+	}
+	return "auto"
 }
 
 func modelText(req *v1.RunRequest) string {
@@ -276,8 +298,8 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 	var devices, params multi
 	var position uint
 	fs.Var(&devices, "device", "device id from nebu host, repeatable, all devices when none")
-	memory := fs.String("memory", "", "device memory budget such as 8GiB, whole devices when empty")
-	fs.StringVar(&req.Description, "description", "", "free text")
+	memory := fs.String("memory", "", "the most memory a run takes per pool, such as 8GiB, whole pools when empty")
+	placement := fs.String("placement", "", "where the model goes: device, host, or auto for the device first with the rest on the host")
 	fs.StringVar(&req.RuntimeId, "runtime", "", "default runtime for models run in the slot")
 	fs.UintVar(&position, "position", 0, "place in the slot list, one based, last when 0")
 	fs.Var(&params, "param", "default runtime param as name=value, repeatable")
@@ -291,6 +313,9 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 		}
 		req.Position = uint32(position)
 		var err error
+		if req.Placement, err = parsePlacement(*placement); err != nil {
+			return err
+		}
 		if req.MemoryBytes, err = parseMemory(*memory); err != nil {
 			return err
 		}
@@ -309,14 +334,14 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots create")
 	settings, read := slotFlags(fs)
-	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--position N] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M]")
+	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M]")
 	if err != nil {
 		return err
 	}
 	if err := read(); err != nil {
 		return err
 	}
-	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Description: settings.Description, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, RuntimeId: settings.RuntimeId, Params: settings.Params, Policy: settings.Policy, Profile: settings.Profile, Position: settings.Position}))
+	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Placement: settings.Placement, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, RuntimeId: settings.RuntimeId, Params: settings.Params, Policy: settings.Policy, Profile: settings.Profile, Position: settings.Position}))
 	if err != nil {
 		return err
 	}
@@ -340,7 +365,7 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	}
 	// The update replaces every field, so start from what the slot has and change only what was passed
 	cur := current.Msg.GetSlot()
-	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Description: cur.GetDescription(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams(), Policy: cur.GetPolicy(), Profile: cur.GetProfile()}
+	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Placement: cur.GetPlacement(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams(), Policy: cur.GetPolicy(), Profile: cur.GetProfile()}
 	if req.Policy == nil {
 		req.Policy = &v1.Policy{}
 	}
@@ -362,8 +387,8 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 			req.DeviceIds = settings.DeviceIds
 		case "memory":
 			req.MemoryBytes = settings.MemoryBytes
-		case "description":
-			req.Description = settings.Description
+		case "placement":
+			req.Placement = settings.Placement
 		case "runtime":
 			req.RuntimeId = settings.RuntimeId
 		case "param":
@@ -508,7 +533,7 @@ func runSlotsShow(ctx context.Context, e *env, args []string) error {
 		s := resp.Msg.GetSlot()
 		fmt.Fprintf(w, "%s %s %s\n", s.GetId(), s.GetName(), loud(s.GetState()))
 		rows := [][]string{
-			{"description", s.GetDescription()},
+			{"placement", placementText(s.GetPlacement())},
 			{"devices", strings.Join(s.GetDeviceIds(), ", ")},
 			{"budget", estimate.Human(s.GetMemoryBytes())},
 			{"runtime", s.GetRuntimeId()},

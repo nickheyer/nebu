@@ -81,6 +81,41 @@
   let controller: AbortController | null = null;
   let countController: AbortController | null = null;
 
+  // The inspector's width, dragged at its left edge and kept per browser
+  const widthKey = 'nebu.chat.inspector';
+  const minWidth = 320;
+  let width = $state(384);
+  let dragging = $state(false);
+  const savedWidth = parseInt(readLocal(widthKey), 10);
+  if (savedWidth >= minWidth) width = clampWidth(savedWidth);
+
+  function clampWidth(w: number): number {
+    return Math.min(Math.max(w, minWidth), Math.max(window.innerWidth * 0.6, minWidth));
+  }
+
+  function startDrag(e: PointerEvent) {
+    e.preventDefault();
+    dragging = true;
+    const target = e.currentTarget as HTMLElement;
+    const startX = e.clientX;
+    const startWidth = width;
+    target.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => {
+      width = clampWidth(startWidth + (startX - ev.clientX));
+    };
+    const stop = () => {
+      dragging = false;
+      target.releasePointerCapture(e.pointerId);
+      target.removeEventListener('pointermove', move);
+      target.removeEventListener('pointerup', stop);
+      target.removeEventListener('pointercancel', stop);
+      writeLocal(widthKey, String(Math.round(width)));
+    };
+    target.addEventListener('pointermove', move);
+    target.addEventListener('pointerup', stop);
+    target.addEventListener('pointercancel', stop);
+  }
+
   const loading = $derived(!live.ready && !live.error);
   const status = $derived(cached.gateway);
   const routes = $derived([...live.routes.values()].sort(byName((r) => r.name)));
@@ -367,7 +402,7 @@
     {#if live.models.size}<Button variant="primary" href="/store">Library</Button>{:else}<Button variant="primary" href="/catalog">Browse catalog</Button>{/if}
   </Empty>
 {:else}
-  <div class="flex h-[calc(100vh-4.5rem)] min-h-[32rem] gap-4 lg:h-[calc(100vh-2.5rem)]">
+  <div class="flex h-[calc(100vh-4.5rem)] min-h-[32rem] gap-4 lg:h-[calc(100vh-2.5rem)] {dragging ? 'select-none' : ''}">
     <section class="card flex min-w-0 flex-1 flex-col">
       <header class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-4 py-2.5">
         <Select class="w-80 max-w-full" mono bind:value={model} label="Model" items={modelItems} />
@@ -399,7 +434,6 @@
             <div class="flex flex-col items-center justify-center gap-3 py-20 text-center">
               <Logo size={36} class="text-fg-faint" />
               <div class="font-mono text-sm text-fg-muted">{chosen?.name}</div>
-              <p class="max-w-sm text-xs leading-5 text-fg-faint">Every answer records its timing, token counts, and the exact request. Open the inspector to see them.</p>
             </div>
           {/if}
           {#each session.turns as t, i (i)}
@@ -469,41 +503,43 @@
           <div class="flex flex-wrap items-center gap-x-3 px-1 text-xs text-fg-faint">
             <span class="font-mono">{session.dialect}{session.stream ? ' · stream' : ''}</span>
             {#if promptTokens !== null}<span title="Counted by the gateway, through the runtime's tokenizer when it has one">{promptTokens} prompt tokens{instance?.params.n_ctx ? ` of ${instance.params.n_ctx}` : ''}</span>{:else if countError}<span class="text-warn" title={countError}>token count unavailable</span>{/if}
-            <span class="ml-auto">Enter sends, Shift+Enter for a new line</span>
           </div>
         </div>
       </div>
     </section>
 
     {#if inspector}
-      <aside class="card flex w-[24rem] shrink-0 flex-col">
+      <aside class="card relative flex shrink-0 flex-col" style="width: {width}px">
+        <div role="separator" aria-orientation="vertical" aria-label="Resize" class="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize" onpointerdown={startDrag}>
+          <div class="mx-auto h-full w-px bg-transparent transition-colors group-hover:bg-accent/60 {dragging ? 'bg-accent' : ''}"></div>
+        </div>
         <Tabs size="sm" bind:value={pane} tabs={inspectorTabs} class="px-3 pt-1" />
-        <div class="min-h-0 flex-1 overflow-y-auto p-4">
+        <div class="@container min-h-0 flex-1 overflow-y-auto p-4">
           {#if pane === 'settings'}
             <div class="flex flex-col gap-5">
-              <Field label="Wire format" description="The format the request is written in. The gateway translates to what the runtime speaks.">
+              <Field label="Wire format">
                 <Segmented bind:value={session.dialect} tabs={[{ id: 'openai', label: 'OpenAI' }, { id: 'anthropic', label: 'Anthropic' }, { id: 'ollama', label: 'Ollama' }]} />
               </Field>
               <div class="flex items-center justify-between gap-4 rounded-md border border-line px-3 py-2.5">
-                <div><div class="text-[13px] font-medium text-fg">Stream</div><div class="text-xs text-fg-muted">Tokens arrive as they are generated.</div></div>
+                <div class="text-[13px] font-medium text-fg">Stream</div>
                 <Switch bind:checked={session.stream} label="Stream" />
               </div>
               <Field label="System prompt" for="chat-system">
                 <TextArea id="chat-system" bind:value={session.system} />
               </Field>
-              <div class="grid grid-cols-2 gap-3">
+              <div class="grid grid-cols-2 gap-3 @lg:grid-cols-3">
                 <Field label="Temperature" for="chat-temp"><NumberInput id="chat-temp" min={0} max={2} step={0.1} bind:value={session.temperature} /></Field>
                 <Field label="Top P" for="chat-topp"><NumberInput id="chat-topp" min={0} max={1} step={0.05} bind:value={session.topP} /></Field>
                 <Field label="Top K" for="chat-topk"><NumberInput id="chat-topk" integer min={0} bind:value={session.topK} /></Field>
                 <Field label="Max tokens" for="chat-max"><NumberInput id="chat-max" integer min={1} step={64} bind:value={session.maxTokens} /></Field>
-                <Field label="Seed" for="chat-seed" description="Same seed, same sampling."><NumberInput id="chat-seed" integer min={0} bind:value={session.seed} /></Field>
-                <Field label="Stop sequences" for="chat-stop" description="Comma separated."><TextInput id="chat-stop" mono bind:value={session.stop} empty="###, User:" /></Field>
+                <Field label="Seed" for="chat-seed"><NumberInput id="chat-seed" integer min={0} bind:value={session.seed} /></Field>
+                <Field label="Stop sequences" for="chat-stop"><TextInput id="chat-stop" mono bind:value={session.stop} empty="###, User:" /></Field>
               </div>
-              <Field label="Tools" for="chat-tools" description="A JSON array of tool definitions in the OpenAI shape. The gateway translates them for other formats." error={toolsProblem || undefined}>
+              <Field label="Tools" for="chat-tools" error={toolsProblem || undefined}>
                 <TextArea id="chat-tools" mono height="h-36" bind:value={session.tools} empty={'[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}]'} invalid={!!toolsProblem} />
               </Field>
               {#if status?.auth}
-                <Field label="API key" for="chat-key" description="Stored in this browser.">
+                <Field label="API key" for="chat-key">
                   <TextInput id="chat-key" mono type="password" bind:value={key} onchange={() => setGatewayKey(key.trim())} />
                 </Field>
               {/if}
@@ -526,19 +562,19 @@
                 </div>
               </div>
             {:else}
-              <p class="text-sm text-fg-faint">The last request sent from this page appears here.</p>
+              <p class="text-sm text-fg-faint">No request sent yet</p>
             {/if}
           {:else if pane === 'trace'}
             {#if shownTrace}
               <TraceDetail id={shownTrace} />
             {:else}
-              <p class="text-sm text-fg-faint">Send a message. The gateway's record of it appears here: timing, tokens, and what the runtime received.</p>
+              <p class="text-sm text-fg-faint">No trace yet</p>
             {/if}
           {:else if pane === 'log'}
             {#if instance}
               {#key instance.id}<InstanceLog id={instance.id} follow={instanceLive(instance)} height="h-[calc(100vh-14rem)]" />{/key}
             {:else}
-              <p class="text-sm text-fg-faint">No instance behind this name yet.</p>
+              <p class="text-sm text-fg-faint">No instance yet</p>
             {/if}
           {/if}
         </div>

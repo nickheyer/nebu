@@ -8,7 +8,7 @@
   import Segmented from './ui/Segmented.svelte';
   import Copy from './ui/Copy.svelte';
 
-  // How clients reach the gateway: the base URL of the dialect picked, once, and a first request in it
+  // How clients reach the gateway in the dialect picked
   let dialect = $state<string>('openai');
 
   const status = $derived(cached.gateway);
@@ -38,14 +38,26 @@
     <div class="skeleton h-14" aria-busy="true"></div>
   {:else}
     <div class="flex flex-col gap-3">
-      <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <Segmented size="sm" bind:value={dialect} tabs={dialects.map((d) => ({ id: d.id, label: d.label }))} />
-        {#each origins as o (o.url)}
-          <span class="inline-flex items-center gap-1 font-mono text-sm text-fg">
-            {o.url}{chosen.base}<Copy text={o.url + chosen.base} label="Copy the {chosen.label} base URL" size={12} />
-            {#if origins.length > 1}<span class="ml-1 font-sans text-xs text-fg-faint">{o.shared ? 'API listener' : 'gateway listener'}</span>{/if}
-          </span>
-        {/each}
+      <Segmented size="sm" bind:value={dialect} tabs={dialects.map((d) => ({ id: d.id, label: d.label }))} />
+      <div class="overflow-x-auto">
+        <table class="tbl dense">
+          <tbody>
+            {#each origins as o (o.url)}
+              <tr>
+                <td class="whitespace-nowrap text-fg-muted">Base URL{#if origins.length > 1}<span class="ml-1 text-xs text-fg-faint">{o.shared ? 'API listener' : 'gateway listener'}</span>{/if}</td>
+                <td class="w-full font-mono text-xs text-fg">{o.url}{chosen.base}</td>
+                <td class="actions"><span><Copy text={o.url + chosen.base} label="Copy the base URL" size={12} /></span></td>
+              </tr>
+            {/each}
+            {#each chosen.endpoints as e (e.path)}
+              <tr>
+                <td class="font-mono text-xs text-fg-faint">{e.method}</td>
+                <td class="w-full font-mono text-xs text-fg-muted">{origin}{e.path}</td>
+                <td class="actions"><span><Copy text={origin + e.path} label="Copy {e.path}" size={12} /></span></td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       </div>
       <div class="relative">
         <pre class="code pr-12">{curl}</pre>

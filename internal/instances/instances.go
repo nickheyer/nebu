@@ -63,9 +63,17 @@ type Reservation struct {
 	Name        string
 	DeviceIDs   []string
 	MemoryBytes uint64
+	Placement   v1.Placement
 	RuntimeID   string
 	Params      map[string]string
 	InstanceID  string
+}
+
+func (r *Reservation) placement() v1.Placement {
+	if r == nil {
+		return v1.Placement_PLACEMENT_UNSPECIFIED
+	}
+	return r.Placement
 }
 
 type swapKey struct{}
@@ -305,7 +313,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	}
 	planProfile := profile
 	if res != nil {
-		planProfile = Constrain(profile, res.DeviceIDs, res.MemoryBytes)
+		planProfile = Constrain(profile, res.DeviceIDs, res.MemoryBytes, res.Placement)
 	}
 	var slotParams map[string]string
 	if res != nil {
@@ -319,7 +327,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	}
 	p := &prepared{req: req, stored: stored, rt: rt, install: install, name: name, descriptor: descriptor, profile: profile, planned: planProfile, res: res, params: params}
 	if rt.Policy() != nil {
-		if p.plan, err = m.Inspector.Plan(rt, descriptor, planProfile, layered, true); err != nil {
+		if p.plan, err = m.Inspector.Plan(rt, descriptor, planProfile, layered, true, res.placement()); err != nil {
 			return nil, err
 		}
 		for k, v := range p.plan.GetParams() {
@@ -357,6 +365,7 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 		Port:       port,
 		Install:    runtimes.Install{Path: install.GetPath(), Dir: install.GetDir(), Version: install.GetVersion()},
 		Devices:    slotDevices(p.planned, p.res),
+		Placement:  p.res.placement(),
 		Descriptor: descriptor,
 	}
 	var prep *runtimes.Command
@@ -753,12 +762,12 @@ func (m *Manager) reservation(ctx context.Context, slotID string) (*Reservation,
 }
 
 // Narrows a profile to a slot for planning, implementing the inspector's constrainer
-func (m *Manager) Constrain(ctx context.Context, slotID string, profile *v1.HostProfile) (*v1.HostProfile, string, map[string]string, error) {
+func (m *Manager) Constrain(ctx context.Context, slotID string, profile *v1.HostProfile) (*inspect.Constraint, error) {
 	res, err := m.reservation(ctx, slotID)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, err
 	}
-	return Constrain(profile, res.DeviceIDs, res.MemoryBytes), res.RuntimeID, res.Params, nil
+	return &inspect.Constraint{Profile: Constrain(profile, res.DeviceIDs, res.MemoryBytes, res.Placement), RuntimeID: res.RuntimeID, Params: res.Params, Placement: res.Placement}, nil
 }
 
 // Whether a restart brings the record back here: wanted, not failed on its own, and not a slot's, since a slot relaunches its own request
@@ -1108,12 +1117,13 @@ func (m *Manager) artifacts(stored *v1.StoredModel, rt runtimes.Runtime) map[str
 	return out
 }
 
-// Narrows a profile to devices and caps pools at budget
-func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64) *v1.HostProfile {
+// Narrows a profile to a slot: its devices alone, and the pools on the side the placement fills capped at the budget
+func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64, placement v1.Placement) *v1.HostProfile {
 	out := proto.Clone(p).(*v1.HostProfile)
 	if len(deviceIDs) == 0 && budget == 0 {
 		return out
 	}
+	hostOnly := placement == v1.Placement_PLACEMENT_HOST
 	allowed := map[string]bool{}
 	for _, id := range deviceIDs {
 		allowed[id] = true
@@ -1131,7 +1141,11 @@ func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64) *v1.HostPro
 		if device && len(allowed) > 0 && !allowed[pl.GetDeviceId()] && !allowed[pl.GetId()] {
 			continue
 		}
-		if device && budget > 0 {
+		capped := device
+		if hostOnly {
+			capped = pl.GetKind() == v1.PoolKind_POOL_KIND_HOST || pl.GetKind() == v1.PoolKind_POOL_KIND_UNIFIED
+		}
+		if capped && budget > 0 {
 			pl.TotalBytes = min(pl.GetTotalBytes(), budget)
 			pl.FreeBytes = min(pl.GetFreeBytes(), budget)
 		}

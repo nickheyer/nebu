@@ -46,7 +46,9 @@ type Launch struct {
 	Port      int
 	Install   Install
 	// The devices a slot pins the run to, none when the run sees every device
-	Devices    []*v1.Device
+	Devices []*v1.Device
+	// Where the slot keeps the model, the host alone meaning no device is touched
+	Placement  v1.Placement
 	Descriptor *v1.Descriptor
 }
 
@@ -535,6 +537,20 @@ func setEnv(env map[string]string, key, value string) {
 	if value != "" {
 		env[key] = value
 	}
+}
+
+// Hides every accelerator from a process that keeps the model in host memory
+func hideDevices(env map[string]string) {
+	env["CUDA_VISIBLE_DEVICES"] = ""
+	env["ROCR_VISIBLE_DEVICES"] = ""
+}
+
+// Refuses a launch in host memory for a runtime that runs in device memory alone
+func deviceBound(in Launch, name string) error {
+	if in.Placement == v1.Placement_PLACEMENT_HOST {
+		return fmt.Errorf("%w: %s runs in device memory only, but the slot keeps the model in host memory", ErrParam, name)
+	}
+	return nil
 }
 
 // A byte count a log line prints as a number and a unit after a phrase, 5123.45 MiB

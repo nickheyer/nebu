@@ -176,9 +176,10 @@ func TestDensePartialAndFixed(t *testing.T) {
 	if plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || plan.GetDetail() == "" {
 		t.Fatalf("plan %+v", plan)
 	}
+	// A host with no device memory holds the whole model in host memory
 	in.Host = host(0, 64*gib)
 	plan, err = p.Plan(in)
-	if err != nil || plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO {
+	if err != nil || plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || plan.GetParams()["n_gpu_layers"] != "0" || len(plan.GetPools()) != 1 || plan.GetPools()[0].GetKind() != v1.PoolKind_POOL_KIND_HOST {
 		t.Fatalf("no device pools: %+v %v", plan, err)
 	}
 }
@@ -541,9 +542,9 @@ func TestNoFitFillsDeviceThenSpillsAndOverflows(t *testing.T) {
 	if n <= 0 || n >= 28 {
 		t.Fatalf("n_gpu_layers should say what landed on device, got %d", n)
 	}
-	// The embedding llama.cpp keeps in host memory lands there even when the device has room
+	// A host with no device memory lands everything in host memory and fits there
 	plan, err = lp.Plan(input(descriptor(4, 100*mib, 0), host(0, 64*gib), defaults(lparams, nil)))
-	if err != nil || plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || usage(plan, "host").GetUsedBytes() == 0 {
+	if err != nil || plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || usage(plan, "host").GetUsedBytes() == 0 {
 		t.Fatalf("no device: %+v %v", plan, err)
 	}
 }

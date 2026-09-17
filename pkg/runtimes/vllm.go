@@ -63,6 +63,9 @@ func (VLLM) Params() []*v1.Param {
 }
 
 func (r VLLM) Launch(in Launch) (*Command, error) {
+	if err := deviceBound(in, r.Name()); err != nil {
+		return nil, err
+	}
 	dir := in.Artifacts["weights_dir"]
 	if dir == "" {
 		return nil, fmt.Errorf("%w: the stored group has no directory", ErrParam)

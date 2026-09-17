@@ -219,7 +219,6 @@
             <h2 id="run-swap-title" class="text-sm font-semibold text-fg">Swap behavior</h2>
             <Segmented bind:value={swapMode} tabs={[{ id: 'overlap', label: 'Side by side' }, { id: 'drain', label: 'Stop first' }]} />
           </div>
-          <p class="mt-2 text-xs leading-5 text-fg-muted">{swapMode === 'overlap' ? 'The new model starts beside the old one, then the route flips. Both must fit.' : 'The old model drains and stops before the new one starts. Rolls back on failure.'}</p>
         </section>
       {/if}
 
@@ -244,7 +243,7 @@
         {#if planRefusal}<div class="note note-warn mt-3">{planRefusal}</div>{/if}
         {#if plan?.detail && plan.verdict !== FitVerdict.FITS}<p class="mt-3 text-xs leading-5 text-fg-muted">{plan.detail}</p>{/if}
         {#if refused || force}
-          <div class="mt-4 border-t border-line pt-3"><Checkbox bind:checked={force} label="Run anyway" hint="Launch even though the plan says it will not fit." /></div>
+          <div class="mt-4 border-t border-line pt-3"><Checkbox bind:checked={force} label="Run anyway" /></div>
         {/if}
       </section>
 

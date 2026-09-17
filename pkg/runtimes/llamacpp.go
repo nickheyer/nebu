@@ -99,6 +99,8 @@ func (LlamaCpp) Params() []*v1.Param {
 		{Name: "n_cpu_moe", Label: "Expert layers on CPU", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "layers", Min: 0, Step: 1, Group: "Placement", Flag: "--n-cpu-moe",
 			Rule:        "the expert layers the device cannot hold once the layers are placed",
 			Description: "Layers whose expert weights stay in system memory."},
+		{Name: "device", Label: "Devices", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Placement", Advanced: true, Flag: "--device",
+			Description: "Devices to offload to as llama.cpp names them, CUDA0,CUDA1 say, or none for the CPU alone. Empty takes the slot's devices."},
 		{Name: "threads", Label: "CPU threads", Type: v1.ParamType_PARAM_TYPE_INT, Default: "-1", Unit: "threads", Min: -1, Step: 1, Group: "Placement", Advanced: true, Flag: "--threads",
 			Description: "Threads for layers on the CPU. -1 picks a number from the core count."},
 		{Name: "cache_type_k", Label: "Key cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: Auto, Solved: true, Choices: llamaCacheTypes, Group: "Cache", Flag: "--cache-type-k",
@@ -136,12 +138,26 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 			p["mmproj"] = proj
 		}
 	}
+	// A slot that keeps the model in host memory offloads to no device and hides every accelerator from the process
+	hostOnly := in.Placement == v1.Placement_PLACEMENT_HOST
+	if hostOnly {
+		switch p.Str("device") {
+		case "", "none":
+			p["device"] = "none"
+		default:
+			return nil, fmt.Errorf("%w: device %s names an accelerator, but the slot keeps the model in host memory", ErrParam, p.Str("device"))
+		}
+	}
 	args := []string{"--model", weights, "--host", in.Host, "--port", strconv.Itoa(in.Port)}
 	flags, env, emitted := Flags(r.Params(), p)
-	// A slot pins the process to its devices, no slot means every device
-	setEnv(env, "CUDA_VISIBLE_DEVICES", visible(in.Devices, "nvidia", false))
-	setEnv(env, "ROCR_VISIBLE_DEVICES", visible(in.Devices, "amd", true))
-	setEnv(env, "GGML_VK_VISIBLE_DEVICES", visible(in.Devices, "", true))
+	if hostOnly {
+		hideDevices(env)
+	} else {
+		// A slot pins the process to its devices, no slot means every device
+		setEnv(env, "CUDA_VISIBLE_DEVICES", visible(in.Devices, "nvidia", false))
+		setEnv(env, "ROCR_VISIBLE_DEVICES", visible(in.Devices, "amd", true))
+		setEnv(env, "GGML_VK_VISIBLE_DEVICES", visible(in.Devices, "", true))
+	}
 	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}, nil
 }
 

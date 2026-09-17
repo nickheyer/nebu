@@ -16,6 +16,16 @@ enum FitVerdict {
   FIT_VERDICT_NO = 3;
 }
 
+// Which memory a run's weights go into
+enum Placement {
+  // Device memory first, the rest in host memory
+  PLACEMENT_UNSPECIFIED = 0;
+  // Device memory only, a model that does not fit there is refused
+  PLACEMENT_DEVICE = 1;
+  // Host memory only, no device is touched
+  PLACEMENT_HOST = 2;
+}
+
 // Bytes planned into one pool, past its capacity when the plan overflows the host and this is the last pool it spills into
 message PoolUsage {
   string pool_id = 1;
@@ -28,7 +38,7 @@ message PoolUsage {
 }
 
 // Bytes of one group kind planned onto one side, device or host, or left on disk when the pool is empty
-message Placement {
+message GroupPlacement {
   TensorGroupKind kind = 1;
   string pool_id = 2;
   uint64 bytes = 3;
@@ -39,7 +49,7 @@ message Placement {
 message MemoryPlan {
   FitVerdict verdict = 1;
   repeated PoolUsage pools = 2;
-  repeated Placement placements = 3;
+  repeated GroupPlacement placements = 3;
   uint64 weights_bytes = 4;
   uint64 cache_bytes = 5;
   uint64 overhead_bytes = 6;
@@ -48,7 +58,7 @@ message MemoryPlan {
   // The learned correction folded into overhead_bytes when the plan was made
   double overhead_delta = 9;
   // Groups the runtime leaves on disk under these params, a draft head without speculative decoding
-  repeated Placement skipped = 10;
+  repeated GroupPlacement skipped = 10;
   // Whether pool capacities are the memory free when the plan was made rather than whole pools
   bool against_free = 11;
   // When the host was read for this plan

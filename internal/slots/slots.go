@@ -321,6 +321,7 @@ func (m *Manager) Reservation(ctx context.Context, id string) (*instances.Reserv
 		Name:        s.GetName(),
 		DeviceIDs:   s.GetDeviceIds(),
 		MemoryBytes: s.GetMemoryBytes(),
+		Placement:   s.GetPlacement(),
 		RuntimeID:   s.GetRuntimeId(),
 		Params:      s.GetParams(),
 		InstanceID:  s.GetInstanceId(),
@@ -344,20 +345,29 @@ func (m *Manager) checkName(name, self string) error {
 	return nil
 }
 
+// What to pin slots to
+func devicesFor(placement v1.Placement, ids []string) []string {
+	if placement == v1.Placement_PLACEMENT_HOST {
+		return nil
+	}
+	return ids
+}
+
 // Creates a slot, checking that its devices exist
 func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Slot, error) {
 	name := strings.TrimSpace(req.GetName())
 	if err := m.checkName(name, ""); err != nil {
 		return nil, err
 	}
-	if err := m.checkDevices(ctx, req.GetDeviceIds()); err != nil {
+	devices := devicesFor(req.GetPlacement(), req.GetDeviceIds())
+	if err := m.checkDevices(ctx, devices); err != nil {
 		return nil, err
 	}
 	s := &v1.Slot{
 		Id:          db.NewID(),
 		Name:        name,
-		Description: req.GetDescription(),
-		DeviceIds:   req.GetDeviceIds(),
+		Placement:   req.GetPlacement(),
+		DeviceIds:   devices,
 		MemoryBytes: req.GetMemoryBytes(),
 		RuntimeId:   req.GetRuntimeId(),
 		Params:      req.GetParams(),
@@ -414,7 +424,8 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 	if err != nil {
 		return nil, err
 	}
-	if err := m.checkDevices(ctx, req.GetDeviceIds()); err != nil {
+	devices := devicesFor(req.GetPlacement(), req.GetDeviceIds())
+	if err := m.checkDevices(ctx, devices); err != nil {
 		return nil, err
 	}
 	name := strings.TrimSpace(req.GetName())
@@ -434,8 +445,8 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 	}
 	next := m.update(s.GetId(), func(sl *v1.Slot) {
 		sl.Name = name
-		sl.Description = req.GetDescription()
-		sl.DeviceIds = req.GetDeviceIds()
+		sl.Placement = req.GetPlacement()
+		sl.DeviceIds = devices
 		sl.MemoryBytes = req.GetMemoryBytes()
 		sl.RuntimeId = req.GetRuntimeId()
 		sl.Params = req.GetParams()

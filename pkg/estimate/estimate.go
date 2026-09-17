@@ -135,6 +135,8 @@ type Input struct {
 	OverheadDelta float64
 	// Plans through a choice the rules refuse instead of failing, for an estimate that reports the refusal
 	SkipRules bool
+	// Where offloadable weights may go: the device first with the rest on the host, the device alone, or the host alone
+	Placement v1.Placement
 }
 
 // Says which facts the header lacked, the one failure that means the model rather than the policy is short
@@ -317,6 +319,8 @@ type solver struct {
 	byKind   map[v1.TensorGroupKind]*bucket
 	free     bool
 	overhead uint64
+	// Where offloadable groups may go: the device first, the device alone, or the host alone
+	placement v1.Placement
 	// Groups the policy pins to one side, never offloaded
 	pinned    []item
 	hosted    []item
@@ -324,6 +328,29 @@ type solver struct {
 	fixedHost uint64
 	devCap    uint64
 	hostCap   uint64
+}
+
+func (s *solver) hostOnly() bool   { return s.placement == v1.Placement_PLACEMENT_HOST }
+func (s *solver) deviceOnly() bool { return s.placement == v1.Placement_PLACEMENT_DEVICE }
+
+// Counts bytes that sit beside the weights, on the device unless the host holds everything
+func (s *solver) beside(n uint64) {
+	if s.hostOnly() {
+		s.fixedHost += n
+	} else {
+		s.fixedDev += n
+	}
+}
+
+// Keeps a group on the side its rule pins it to, the host when the host holds everything
+func (s *solver) pin(it item, toHost bool) {
+	if toHost || s.hostOnly() {
+		s.hosted = append(s.hosted, it)
+		s.fixedHost += it.bytes()
+		return
+	}
+	s.pinned = append(s.pinned, it)
+	s.fixedDev += it.bytes()
 }
 
 func (p *Policy) rule(kind v1.TensorGroupKind) (GroupRule, bool) {
@@ -358,27 +385,35 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	}
 	primary, host := pools(in.Host)
 	primary = p.spanned(primary, s.Params)
+	// A host with no device memory holds everything in host memory
+	placement := in.Placement
+	if placement == v1.Placement_PLACEMENT_UNSPECIFIED && len(primary) == 0 {
+		placement = v1.Placement_PLACEMENT_HOST
+	}
+	if placement == v1.Placement_PLACEMENT_HOST {
+		primary = nil
+	}
 	margin := 1 - p.Margin
-	sv := &solver{byKind: map[v1.TensorGroupKind]*bucket{}, free: in.Free, overhead: overhead}
+	sv := &solver{byKind: map[v1.TensorGroupKind]*bucket{}, free: in.Free, overhead: overhead, placement: placement}
 	for _, pl := range primary {
 		sv.devCap += uint64(float64(capacity(pl, in.Free)) * margin)
 	}
 	for _, pl := range host {
 		sv.hostCap += uint64(float64(capacity(pl, in.Free)) * margin)
 	}
-	sv.fixedDev = overhead
+	sv.beside(overhead)
 	layers := 0
 	for _, g := range in.Descriptor.GetGroups() {
 		if g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER && !unloaded[g.GetKind()] {
 			layers++
 		}
 	}
-	// The cache follows the layers it serves, or sits on device whole when nothing is layered
+	// The cache follows the layers it serves, or sits beside the weights whole when nothing is layered
 	var cachePerLayer uint64
 	if layers > 0 {
 		cachePerLayer = cacheTotal / uint64(layers)
 	} else {
-		sv.fixedDev += cacheTotal
+		sv.beside(cacheTotal)
 	}
 	byParam := map[string]*bucket{}
 	skipped := newPlacements()
@@ -395,13 +430,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		}
 		rule, known := p.rule(g.GetKind())
 		if !known || rule.Param == "" {
-			if known && rule.Pool == v1.PoolKind_POOL_KIND_HOST {
-				sv.hosted = append(sv.hosted, it)
-				sv.fixedHost += it.bytes()
-			} else {
-				sv.pinned = append(sv.pinned, it)
-				sv.fixedDev += it.bytes()
-			}
+			sv.pin(it, known && rule.Pool == v1.PoolKind_POOL_KIND_HOST)
 			continue
 		}
 		b, ok := byParam[rule.Param]
@@ -429,10 +458,26 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		AgainstFree:   in.Free,
 		PlannedAt:     plannedAt(in.Host),
 	}
-	if len(primary) > 0 && sv.solve(0) {
+	// A param that puts weights where the placement forbids them is laid out as typed and refused
+	if detail := sv.contradiction(); detail != "" {
+		plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
+		plan.Detail = detail
+		typed := plan.Params
+		plan.Params = stringParams(s.Params)
+		sv.waterfall(plan, primary, host)
+		plan.Params = typed
+		return plan, nil
+	}
+	if sv.hostOnly() && len(sv.buckets) == 0 {
+		plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
+		plan.Detail = "the runtime keeps the whole model in device memory and cannot run in host memory"
+		sv.waterfall(plan, primary, host)
+		return plan, nil
+	}
+	if (len(primary) > 0 || sv.hostOnly()) && sv.solve(0) {
 		plan.Verdict = v1.FitVerdict_FIT_VERDICT_FITS
 		for _, b := range sv.buckets {
-			if b.count < len(b.items) {
+			if !sv.hostOnly() && b.count < len(b.items) {
 				plan.Verdict = v1.FitVerdict_FIT_VERDICT_PARTIAL
 			}
 		}
@@ -442,13 +487,26 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
 	// The least the solver could ask of each side, read before the layout below moves the counts
 	for _, b := range sv.buckets {
-		b.count = max(b.fixed, 0)
+		switch {
+		case sv.hostOnly():
+			b.count = 0
+		case sv.deviceOnly():
+			b.count = len(b.items)
+		default:
+			b.count = max(b.fixed, 0)
+		}
 	}
 	least, most := sv.devNeed(), sv.hostNeed()
 	sv.waterfall(plan, primary, host)
 	switch {
+	case sv.hostOnly() && sv.hostCap == 0:
+		plan.Detail = "no host memory pools probed"
+	case sv.hostOnly():
+		plan.Detail = fmt.Sprintf("needs %s in host memory, %s more than the %s it holds", Human(most), Human(most-sv.hostCap), Human(sv.hostCap))
 	case len(primary) == 0:
 		plan.Detail = "no device memory pools probed"
+	case sv.deviceOnly() && least > sv.devCap:
+		plan.Detail = fmt.Sprintf("needs %s in device memory, %s more than the %s it holds", Human(least), Human(least-sv.devCap), Human(sv.devCap))
 	case overflow(plan) > 0:
 		plan.Detail = fmt.Sprintf("needs %s, %s more than the %s of memory on this host", Human(need(plan)), Human(overflow(plan)), Human(held(plan)))
 	case sv.hostCap > 0 && most > sv.hostCap:
@@ -457,6 +515,22 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		plan.Detail = fmt.Sprintf("device need %s exceeds capacity %s", Human(least), Human(sv.devCap))
 	}
 	return plan, nil
+}
+
+// Why a typed param fights the placement, empty when none does
+func (s *solver) contradiction() string {
+	for _, b := range s.buckets {
+		if b.fixed < 0 {
+			continue
+		}
+		switch {
+		case s.hostOnly() && b.fixed > 0:
+			return fmt.Sprintf("%s %s puts weights on the device, but the slot keeps the model in host memory", b.rule.Param, b.solved(b.fixed))
+		case s.deviceOnly() && b.fixed < len(b.items):
+			return fmt.Sprintf("%s %s leaves weights in host memory, but the slot keeps the model on the device", b.rule.Param, b.solved(b.fixed))
+		}
+	}
+	return ""
 }
 
 // Keeps the largest pools a run spans when the policy names a param counting them
@@ -518,6 +592,7 @@ func rank(it item) int64 {
 	return int64(it.layer)
 }
 
+// Tries every count of each bucket on the device, most first, within what the placement allows
 func (s *solver) solve(bi int) bool {
 	if bi == len(s.buckets) {
 		return s.fits()
@@ -530,6 +605,12 @@ func (s *solver) solve(bi int) bool {
 		}
 	}
 	lower := 0
+	switch {
+	case s.hostOnly():
+		upper = 0
+	case s.deviceOnly():
+		lower = upper
+	}
 	if b.fixed >= 0 {
 		upper, lower = min(b.fixed, upper), min(b.fixed, upper)
 	}
@@ -558,11 +639,15 @@ func (s *solver) hostNeed() uint64 {
 	return need
 }
 
+// Whether the counts fit their sides; a host with no host pool probed constrains nothing unless it holds everything
 func (s *solver) fits() bool {
 	if s.devNeed() > s.devCap {
 		return false
 	}
-	return s.hostCap == 0 || s.hostNeed() <= s.hostCap
+	if s.hostCap == 0 {
+		return !s.hostOnly()
+	}
+	return s.hostNeed() <= s.hostCap
 }
 
 // Writes a solved plan: each side's need spread over its pools by size, and every group on the side the solver put it
@@ -603,6 +688,8 @@ type slot struct {
 // the last pool's capacity, so the pools themselves say how far short the host falls. Groups
 // go in the order the solver protects them, overhead and pinned kinds first, then offloadable
 // kinds by spill priority, with kinds the policy keeps in host memory taking host pools alone.
+// A placement that keeps the model on the device overflows the last device pool instead of
+// flowing on, so the device pools say how far short the device falls.
 func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) {
 	var chain []*slot
 	seen := map[string]bool{}
@@ -623,10 +710,14 @@ func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) 
 	if hostStart == len(chain) {
 		hostStart = 0
 	}
+	spillEnd := len(chain)
+	if s.deviceOnly() && hostStart > 0 {
+		spillEnd = hostStart
+	}
 	agg := newPlacements()
 	cur := 0
-	// Places one group from the cursor onward, saying which side its first byte landed on
-	place := func(it item, from int) v1.PoolKind {
+	// Places one group from the cursor onward through the pools before end, saying which side its first byte landed on
+	place := func(it item, from, end int) v1.PoolKind {
 		if cur < from {
 			cur = from
 		}
@@ -649,9 +740,9 @@ func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) 
 			}
 			count = 0
 		}
-		for remaining > 0 && len(chain) > 0 {
-			if cur >= len(chain) {
-				last := chain[len(chain)-1]
+		for remaining > 0 && end > 0 {
+			if cur >= end {
+				last := chain[end-1]
 				last.used += remaining
 				record(last.side, remaining)
 				break
@@ -668,21 +759,21 @@ func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) 
 		}
 		return first
 	}
-	place(item{cache: s.overhead}, 0)
+	place(item{cache: s.overhead}, 0, spillEnd)
 	for _, it := range s.pinned {
-		place(it, 0)
+		place(it, 0, spillEnd)
 	}
 	for _, b := range s.buckets {
 		b.count = 0
 		for _, it := range b.items {
-			if place(it, 0) == v1.PoolKind_POOL_KIND_DEVICE {
+			if place(it, 0, spillEnd) == v1.PoolKind_POOL_KIND_DEVICE {
 				b.count++
 			}
 		}
 		plan.Params[b.rule.Param] = b.solved(b.count)
 	}
 	for _, it := range s.hosted {
-		place(it, hostStart)
+		place(it, hostStart, len(chain))
 	}
 	for _, sl := range chain {
 		plan.Pools = append(plan.Pools, usage(sl.pool, sl.used, sl.cap))
@@ -692,19 +783,19 @@ func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) 
 
 // Placements summed by kind and side, in the order they were first seen then sorted
 type placements struct {
-	agg   map[[2]int32]*v1.Placement
+	agg   map[[2]int32]*v1.GroupPlacement
 	order [][2]int32
 }
 
 func newPlacements() *placements {
-	return &placements{agg: map[[2]int32]*v1.Placement{}}
+	return &placements{agg: map[[2]int32]*v1.GroupPlacement{}}
 }
 
 func (p *placements) add(kind v1.TensorGroupKind, pool v1.PoolKind, bytes uint64, count uint32) {
 	k := [2]int32{int32(kind), int32(pool)}
 	pl, ok := p.agg[k]
 	if !ok {
-		pl = &v1.Placement{Kind: kind}
+		pl = &v1.GroupPlacement{Kind: kind}
 		if pool != v1.PoolKind_POOL_KIND_UNSPECIFIED {
 			pl.PoolId = text.Enum(pool)
 		}
@@ -715,14 +806,14 @@ func (p *placements) add(kind v1.TensorGroupKind, pool v1.PoolKind, bytes uint64
 	pl.Count += count
 }
 
-func (p *placements) list() []*v1.Placement {
+func (p *placements) list() []*v1.GroupPlacement {
 	sort.SliceStable(p.order, func(i, j int) bool {
 		if p.order[i][0] != p.order[j][0] {
 			return p.order[i][0] < p.order[j][0]
 		}
 		return p.order[i][1] < p.order[j][1]
 	})
-	out := make([]*v1.Placement, 0, len(p.order))
+	out := make([]*v1.GroupPlacement, 0, len(p.order))
 	for _, k := range p.order {
 		out = append(out, p.agg[k])
 	}

@@ -95,14 +95,14 @@
   >
     <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
       {#if !editing}
-        <Field label="Provider" for="src-kind" description={provider?.description || undefined} class="sm:col-span-2">
+        <Field label="Provider" for="src-kind" class="sm:col-span-2">
           {#if providers.length <= 1}
             <div id="src-kind" class="input-static">{provider?.name ?? '–'}</div>
           {:else}
             <Select id="src-kind" bind:value={kindText} items={providers.map((p) => ({ value: String(p.kind), label: p.name }))} />
           {/if}
         </Field>
-        <Field label="Id" for="src-id" required description="Cannot be changed later." error={id && !idOk ? 'Letters, digits, dots, dashes, and underscores' : undefined}>
+        <Field label="Id" for="src-id" required error={id && !idOk ? 'Letters, digits, dots, dashes, and underscores' : undefined}>
           <TextInput id="src-id" mono bind:value={id} empty={idHint} invalid={!!id && !idOk} />
         </Field>
       {/if}

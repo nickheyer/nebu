@@ -99,7 +99,7 @@ func sampleInstance() *v1.Instance {
 		Plan: &v1.MemoryPlan{
 			Verdict:      v1.FitVerdict_FIT_VERDICT_PARTIAL,
 			Pools:        []*v1.PoolUsage{{PoolId: "gpu0", Kind: v1.PoolKind_POOL_KIND_DEVICE, UsedBytes: 10, CapacityBytes: 20}, {PoolId: "ram", Kind: v1.PoolKind_POOL_KIND_HOST, UsedBytes: 1, CapacityBytes: 2}},
-			Placements:   []*v1.Placement{{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, PoolId: "gpu0", Bytes: 9, Count: 28}},
+			Placements:   []*v1.GroupPlacement{{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, PoolId: "gpu0", Bytes: 9, Count: 28}},
 			WeightsBytes: 9, CacheBytes: 1, OverheadBytes: 1, Params: map[string]string{"n_gpu_layers": "28"}, Detail: "ok",
 		},
 		Triage:         []*v1.TriageHit{{Id: "oom", Summary: "out of memory", Hint: "lower ctx", Line: "CUDA out of memory", Fix: map[string]string{"n_ctx": "1024"}}, {Id: "assert", Summary: "s", Hint: "h", Line: "l"}},

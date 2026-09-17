@@ -11,7 +11,7 @@
   import { ago, bytes, deltaBytes, enumLabel } from '$lib/format';
   import { PoolKind } from '$proto/host_pb';
   import { TensorGroupKind } from '$proto/model_pb';
-  import type { Placement } from '$proto/estimate_pb';
+  import type { GroupPlacement as Placement } from '$proto/estimate_pb';
   import { clock, instancesOnPool, poolName } from '$lib/state.svelte';
   import SizeBar from './ui/SizeBar.svelte';
   import ParamList from './ui/ParamList.svelte';

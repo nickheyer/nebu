@@ -3,6 +3,7 @@ syntax = "proto3";
 package nebu.v1;
 
 import "google/protobuf/timestamp.proto";
+import "nebu/v1/estimate.proto";
 import "nebu/v1/gateway.proto";
 import "nebu/v1/instance.proto";
 import "nebu/v1/task.proto";
@@ -47,6 +48,8 @@ message Slot {
   uint32 position = 16;
   // How requests through the slot's route are shaped
   Profile profile = 17;
+  // Which memory the model goes into
+  Placement placement = 18;
 }
 
 // Creates a slot
@@ -61,6 +64,7 @@ message CreateSlotRequest {
   // Position in the list, appended after the last slot when zero
   uint32 position = 8;
   Profile profile = 9;
+  Placement placement = 10;
 }
 
 // Returns the new slot
@@ -104,6 +108,7 @@ message UpdateSlotRequest {
   // Position in the list, kept when zero
   uint32 position = 9;
   Profile profile = 10;
+  Placement placement = 11;
 }
 
 // Returns the updated slot

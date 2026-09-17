@@ -2,7 +2,7 @@
   import { bytes, deltaBytes, enumLabel, plural, ratioBytes } from '$lib/format';
   import { PoolKind } from '$proto/host_pb';
   import { TensorGroupKind } from '$proto/model_pb';
-  import type { MemoryPlan, Placement } from '$proto/estimate_pb';
+  import type { MemoryPlan, GroupPlacement as Placement } from '$proto/estimate_pb';
   import { poolName } from '$lib/state.svelte';
   import Tip from './ui/Tip.svelte';
 

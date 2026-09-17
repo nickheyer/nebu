@@ -13,14 +13,16 @@ export function listenerUrl(addr: string, tls: boolean): string {
   return `${tls ? 'https' : 'http'}://${host}${port}`;
 }
 
-// The three wire formats the gateway answers in, each with the base URL clients configure
+// The three wire formats the gateway answers in: the base URL a client is configured with, and every path it answers on
 export interface Dialect {
   id: 'openai' | 'anthropic' | 'ollama';
   label: string;
-  // Appended to a listener's origin to make the base URL a client is given
+  // Appended to a listener's origin to make the base URL a client SDK takes
   base: string;
   // The header a key travels in
   header: string;
+  // Every path the gateway answers in the dialect, with its method
+  endpoints: { method: string; path: string }[];
   // A first request in the dialect
   curl: (origin: string, model: string, auth: boolean) => string;
 }
@@ -31,14 +33,25 @@ export const dialects: Dialect[] = [
     label: 'OpenAI',
     base: '/v1',
     header: 'Authorization: Bearer',
+    endpoints: [
+      { method: 'POST', path: '/v1/chat/completions' },
+      { method: 'POST', path: '/v1/completions' },
+      { method: 'POST', path: '/v1/embeddings' },
+      { method: 'GET', path: '/v1/models' }
+    ],
     curl: (origin, model, auth) =>
       `curl ${origin}/v1/chat/completions \\\n  -H 'Content-Type: application/json' \\\n${auth ? "  -H 'Authorization: Bearer $NEBU_API_KEY' \\\n" : ''}  -d '{"model":"${model}","messages":[{"role":"user","content":"hello"}]}'`
   },
   {
     id: 'anthropic',
     label: 'Anthropic',
-    base: '/v1',
+    base: '',
     header: 'x-api-key',
+    endpoints: [
+      { method: 'POST', path: '/v1/messages' },
+      { method: 'POST', path: '/v1/messages/count_tokens' },
+      { method: 'GET', path: '/v1/models' }
+    ],
     curl: (origin, model, auth) =>
       `curl ${origin}/v1/messages \\\n  -H 'Content-Type: application/json' \\\n  -H 'anthropic-version: 2023-06-01' \\\n${auth ? "  -H 'x-api-key: $NEBU_API_KEY' \\\n" : ''}  -d '{"model":"${model}","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'`
   },
@@ -47,6 +60,16 @@ export const dialects: Dialect[] = [
     label: 'Ollama',
     base: '',
     header: 'Authorization: Bearer',
+    endpoints: [
+      { method: 'POST', path: '/api/chat' },
+      { method: 'POST', path: '/api/generate' },
+      { method: 'POST', path: '/api/embed' },
+      { method: 'POST', path: '/api/embeddings' },
+      { method: 'GET', path: '/api/tags' },
+      { method: 'POST', path: '/api/show' },
+      { method: 'GET', path: '/api/ps' },
+      { method: 'GET', path: '/api/version' }
+    ],
     curl: (origin, model, auth) =>
       `curl ${origin}/api/chat \\\n  -H 'Content-Type: application/json' \\\n${auth ? "  -H 'Authorization: Bearer $NEBU_API_KEY' \\\n" : ''}  -d '{"model":"${model}","messages":[{"role":"user","content":"hello"}],"stream":false}'`
   }

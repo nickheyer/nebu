@@ -60,7 +60,7 @@ func TestBuildsRoundTrip(t *testing.T) {
 func TestSlotsRoutesRoundTrip(t *testing.T) {
 	d, _ := open(t)
 	ctx := context.Background()
-	s := &v1.Slot{Id: "s1", Name: "main", Position: 2, Description: "d", DeviceIds: []string{"g1", "g0"}, MemoryBytes: 1 << 33, RuntimeId: "rt", Params: map[string]string{"n_ctx": "1"}, InstanceId: "i", State: v1.SlotState_SLOT_STATE_READY, Error: "", TaskId: "t", Request: &v1.RunRequest{SourceId: "src", Repo: "r", Group: "g", RuntimeId: "rt", Name: "main", SlotId: "s1", Params: map[string]string{"k": "v"}}, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0)), Profile: &v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_USER}}
+	s := &v1.Slot{Id: "s1", Name: "main", Position: 2, Placement: v1.Placement_PLACEMENT_HOST, DeviceIds: []string{"g1", "g0"}, MemoryBytes: 1 << 33, RuntimeId: "rt", Params: map[string]string{"n_ctx": "1"}, InstanceId: "i", State: v1.SlotState_SLOT_STATE_READY, Error: "", TaskId: "t", Request: &v1.RunRequest{SourceId: "src", Repo: "r", Group: "g", RuntimeId: "rt", Name: "main", SlotId: "s1", Params: map[string]string{"k": "v"}}, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0)), Profile: &v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_USER}}
 	if err := d.PutSlot(ctx, s); err != nil {
 		t.Fatal(err)
 	}

@@ -239,6 +239,7 @@ CREATE TABLE slots (
   description TEXT NOT NULL DEFAULT '',
   runtime_id TEXT NOT NULL DEFAULT '',
   memory_bytes INTEGER NOT NULL DEFAULT 0,
+  placement TEXT NOT NULL DEFAULT '',
   instance_id TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL,
   error TEXT NOT NULL DEFAULT '',

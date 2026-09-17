@@ -10,9 +10,7 @@
   import TextInput from './ui/TextInput.svelte';
   import TextArea from './ui/TextArea.svelte';
 
-  // The runtime's groups stay in reading order. An empty field takes the slot's default, else the
-  // runtime's; a solved param left empty takes what its rule says at launch. The states a plan
-  // reports narrow a number's bounds to this model and host and grey out choices the other params rule out.
+  // runtimes groups in reading order
   let {
     params = [],
     values = $bindable({}),
@@ -150,7 +148,7 @@
       {:else}
         <TextInput id={fid} mono empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {/if}
-      {#if err}<p class="mt-1.5 text-xs text-bad">{err}</p>{:else if p.solved && !v}<p class="mt-1.5 text-xs text-fg-faint">{inherited[p.name] ? `${inherited[p.name]} from the slot` : p.rule}</p>{/if}
+      {#if err}<p class="mt-1.5 text-xs text-bad">{err}</p>{/if}
     </div>
   </div>
 {/snippet}
@@ -192,7 +190,6 @@
           <div class="param-row">
             <div class="min-w-0">
               <label for="{idPrefix}-{k}" class="font-mono text-xs text-fg wrap-anywhere">{k}</label>
-              <p class="mt-1 text-xs leading-5 text-fg-muted">The runtime no longer names this parameter.</p>
             </div>
             <div class="flex min-w-0 items-center gap-1">
               <TextInput id="{idPrefix}-{k}" class="flex-1" mono bind:value={() => values[k] ?? '', (next) => (values = { ...values, [k]: next })} />
