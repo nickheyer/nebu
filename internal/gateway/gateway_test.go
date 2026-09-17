@@ -20,7 +20,7 @@ func tableOf(t *testing.T, routes map[string]string) *Table {
 		t.Fatal(err)
 	}
 	for name, ep := range routes {
-		table.Set(name, "inst-"+name, "", ep, "repo:"+name, "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
+		table.Set(name, "inst-"+name, "", ep, "repo:"+name, "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, nil)
 	}
 	return table
 }

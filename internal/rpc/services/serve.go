@@ -136,7 +136,7 @@ func (s *GatewayService) SetRoute(ctx context.Context, req *connect.Request[v1.S
 	if err := s.slotless(req.Msg.GetName(), "belongs to a slot"); err != nil {
 		return nil, err
 	}
-	route := s.gateway.Table().Serve(req.Msg.GetName(), in, s.instances.Runtimes.API(in.GetRuntimeId()), "", req.Msg.GetPolicy())
+	route := s.gateway.Table().Serve(req.Msg.GetName(), in, s.instances.Runtimes.API(in.GetRuntimeId()), "", req.Msg.GetPolicy(), req.Msg.GetProfile())
 	return reply(&v1.SetRouteResponse{Route: route}, nil)
 }
 

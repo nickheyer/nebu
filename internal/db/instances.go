@@ -15,8 +15,13 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			id, in.GetName(), in.GetSourceId(), in.GetRepo(), in.GetGroup(), in.GetRuntimeId(), in.GetInstallId(), in.GetEndpoint(), enumCol(in.GetState()), in.GetPid(), in.GetError(), in.GetTaskId(), boolCol(in.GetDesiredRunning()), stamp(in.GetCreatedAt().AsTime()), timeCol(in.GetReadyAt()), timeCol(in.GetStoppedAt()), in.GetSlotId()); err != nil {
 			return err
 		}
-		if err := clearChildren(exec, "instance_id", id, "instance_params", "instance_command", "instance_requests", "instance_request_params", "instance_plans", "instance_plan_pools", "instance_plan_placements", "instance_plan_params", "instance_measurements", "instance_triage", "instance_triage_fixes"); err != nil {
+		if err := clearChildren(exec, "instance_id", id, "instance_params", "instance_command", "instance_requests", "instance_request_params", "instance_plans", "instance_plan_pools", "instance_plan_placements", "instance_plan_params", "instance_measurements", "instance_triage", "instance_triage_fixes", "instance_templates"); err != nil {
 			return err
+		}
+		if tp := in.GetTemplate(); tp != nil {
+			if err := exec(`INSERT INTO instance_templates (instance_id, late_system, refusal, error) VALUES (?, ?, ?, ?)`, id, boolCol(tp.GetLateSystem()), tp.GetRefusal(), tp.GetError()); err != nil {
+				return err
+			}
 		}
 		if err := putMap(exec, `INSERT INTO instance_params (instance_id, name, value) VALUES (?, ?, ?)`, id, in.GetParams()); err != nil {
 			return err
@@ -173,6 +178,16 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 		if len(fix) > 0 {
 			h.Fix = fix
 		}
+	}
+	templates, err := list(ctx, d, `SELECT late_system, refusal, error FROM instance_templates WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.TemplateProbe, error) {
+		tp := &v1.TemplateProbe{}
+		return tp, rows.Scan((*flag)(&tp.LateSystem), &tp.Refusal, &tp.Error)
+	}, id)
+	if err != nil {
+		return err
+	}
+	if len(templates) > 0 {
+		in.Template = templates[0]
 	}
 	return nil
 }

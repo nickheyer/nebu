@@ -45,7 +45,7 @@
   const generating = $derived(millisBetween(trace?.firstTokenAt, trace?.finishedAt));
   const tabs = $derived([
     { id: 'request', label: 'Request' },
-    ...(trace?.translated ? [{ id: 'upstream', label: 'Sent to runtime' }] : []),
+    ...(trace?.translated || full?.upstreamRequest ? [{ id: 'upstream', label: 'Sent to runtime' }] : []),
     { id: 'response', label: 'Response' },
     ...(trace?.toolCalls.length ? [{ id: 'tools', label: 'Tool calls', count: trace.toolCalls.length }] : [])
   ]);
@@ -88,7 +88,7 @@
       {:else if shownTab === 'request'}
         <Json text={full.request} empty="Empty body" />
       {:else if shownTab === 'upstream'}
-        <Json text={full.upstreamRequest} empty="Passed through unchanged" />
+        <Json text={full.upstreamRequest} empty="Passed through as sent" />
       {:else if shownTab === 'response'}
         {#if !finished}
           <p class="text-sm text-fg-faint">Still answering.</p>

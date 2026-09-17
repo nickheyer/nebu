@@ -47,6 +47,8 @@ const (
 	bindHost     = "127.0.0.1"
 	closeTimeout = 30 * time.Second
 	probeTimeout = 2 * time.Second
+	// How long the two chat requests that probe the chat template may take together
+	templateTimeout = 2 * time.Minute
 )
 
 var (
@@ -153,7 +155,7 @@ func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
 		m.Routes.RemoveInstance(rec.GetId())
 	case slotted:
 	case rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY:
-		m.Routes.Serve(rec.GetName(), rec, m.Runtimes.API(rec.GetRuntimeId()), "", nil)
+		m.Routes.Serve(rec.GetName(), rec, m.Runtimes.API(rec.GetRuntimeId()), "", nil, nil)
 	case rec.GetState() == v1.InstanceState_INSTANCE_STATE_DRAINING && before != v1.InstanceState_INSTANCE_STATE_DRAINING:
 		m.Routes.Drain(rec.GetId())
 	}
@@ -527,8 +529,25 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 			}
 		}
 	}
-	m.ready(h, in, measurements)
+	m.ready(h, in, measurements, m.probeTemplate(ctx, h.Logf, in))
 	return nil
+}
+
+// Learns what the runtime's chat template accepts and says what the gateway will do about it
+func (m *Manager) probeTemplate(ctx context.Context, logf func(string, ...any), in *instance) *v1.TemplateProbe {
+	rec := in.snapshot()
+	ctx, cancel := context.WithTimeout(ctx, templateTimeout)
+	defer cancel()
+	probe := gateway.ProbeTemplate(ctx, &http.Client{}, rec.GetEndpoint(), m.Runtimes.API(rec.GetRuntimeId()), rec.GetName())
+	switch {
+	case probe.GetError() != "":
+		logf("chat template probe: %s; the gateway sends system messages as they come", probe.GetError())
+	case probe.GetLateSystem():
+		logf("chat template renders a system message after the first")
+	default:
+		logf("chat template refuses a system message after the first: %s; the gateway folds them into the first unless a route says otherwise", probe.GetRefusal())
+	}
+	return probe
 }
 
 // Polls health, recording triage and stopping the process on failure
@@ -556,8 +575,8 @@ func (m *Manager) waitReady(ctx context.Context, h *tasks.Handle, in *instance, 
 	return err
 }
 
-// Marks an instance ready unless stopped and reports measurements
-func (m *Manager) ready(h *tasks.Handle, in *instance, measurements []*v1.Measurement) {
+// Marks an instance ready unless stopped and reports measurements and what its chat template accepted
+func (m *Manager) ready(h *tasks.Handle, in *instance, measurements []*v1.Measurement, probe *v1.TemplateProbe) {
 	var rec *v1.Instance
 	in.update(func(r *v1.Instance) {
 		if r.State == v1.InstanceState_INSTANCE_STATE_STARTING {
@@ -565,6 +584,7 @@ func (m *Manager) ready(h *tasks.Handle, in *instance, measurements []*v1.Measur
 			r.ReadyAt = timestamppb.Now()
 		}
 		r.Measurements = mergeMeasurements(r.Measurements, measurements)
+		r.Template = probe
 		rec = proto.Clone(r).(*v1.Instance)
 	})
 	for _, ms := range measurements {
@@ -950,6 +970,13 @@ func (m *Manager) adopt(ctx context.Context, in *instance) {
 		measurements := in.rt.Measure(proc.Log().Tail(0))
 		in.update(func(r *v1.Instance) { r.Measurements = mergeMeasurements(r.Measurements, measurements) })
 		m.Log.Info("adopted running instance", "name", rec.GetName(), "pid", rec.GetPid(), "endpoint", rec.GetEndpoint())
+		// A record from before the probe, or one whose probe failed, learns its template now, off the recovery path
+		if rec.GetTemplate() == nil || rec.GetTemplate().GetError() != "" {
+			go func() {
+				probe := m.probeTemplate(ctx, func(format string, args ...any) { m.Log.Info(fmt.Sprintf(format, args...), "name", rec.GetName()) }, in)
+				in.update(func(r *v1.Instance) { r.Template = probe })
+			}()
+		}
 		return
 	}
 	in.update(func(r *v1.Instance) {
@@ -963,7 +990,7 @@ func (m *Manager) adopt(ctx context.Context, in *instance) {
 			return err
 		}
 		proc.Sync()
-		m.ready(h, in, in.rt.Measure(proc.Log().Tail(0)))
+		m.ready(h, in, in.rt.Measure(proc.Log().Tail(0)), m.probeTemplate(ctx, h.Logf, in))
 		return nil
 	})
 	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })

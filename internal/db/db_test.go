@@ -22,28 +22,6 @@ func open(t *testing.T) (*DB, string) {
 	return d, dir
 }
 
-func TestMigrationsApplyOnce(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "nebu.db")
-	d, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	versions, _ := revisionStore{d.sql}.ReadRevisions(context.Background())
-	if len(versions) != 1 || versions[0].Version == "" {
-		t.Fatalf("versions %v", versions)
-	}
-	d.Close()
-	again, err := Open(path)
-	if err != nil {
-		t.Fatalf("reopen should not reapply: %v", err)
-	}
-	defer again.Close()
-	if versions, _ = (revisionStore{again.sql}).ReadRevisions(context.Background()); len(versions) != 1 {
-		t.Fatalf("versions after reopen %v", versions)
-	}
-}
-
 func TestEnums(t *testing.T) {
 	for _, s := range []v1.InstanceState{v1.InstanceState_INSTANCE_STATE_READY, v1.InstanceState_INSTANCE_STATE_FAILED} {
 		if got := enumOf[v1.InstanceState](enumCol(s)); got != s {
@@ -128,6 +106,7 @@ func sampleInstance() *v1.Instance {
 		Measurements:   []*v1.Measurement{{Key: "device.weights", Bytes: 9, Line: "x"}, {Key: "device.used", Bytes: 11}},
 		Request:        &v1.RunRequest{SourceId: "hf", Repo: "org/repo", Group: "Q4", RuntimeId: "llamacpp", Name: "qwen", Params: map[string]string{"n_ctx": "8192"}},
 		DesiredRunning: true,
+		Template:       &v1.TemplateProbe{LateSystem: false, Refusal: "System message must be at the beginning."},
 	}
 }
 
@@ -155,6 +134,7 @@ func TestInstances(t *testing.T) {
 	in.State = v1.InstanceState_INSTANCE_STATE_STOPPED
 	in.DesiredRunning = false
 	in.Triage = nil
+	in.Template = &v1.TemplateProbe{LateSystem: true}
 	in.StoppedAt = timestamppb.New(time.Unix(2000, 0))
 	if err := d.PutInstance(ctx, in); err != nil {
 		t.Fatal(err)

@@ -159,6 +159,7 @@ func renderInstance(w io.Writer, in *v1.Instance) {
 		{"stopped", when(in.GetStoppedAt(), time.RFC3339)},
 		{"relaunch on daemon start", yes(in.GetDesiredRunning())},
 		{"task", in.GetTaskId()},
+		{"chat template", templateText(in.GetTemplate())},
 	}
 	if in.GetError() != "" {
 		rows = append(rows, []string{"error", in.GetError()})
@@ -257,9 +258,9 @@ func slotsTable(w io.Writer, list []*v1.Slot) {
 		if len(s.GetDeviceIds()) > 0 {
 			devices = strings.Join(s.GetDeviceIds(), ",")
 		}
-		rows = append(rows, []string{s.GetId(), s.GetName(), loud(s.GetState()), modelText(s.GetRequest()), s.GetInstanceId(), devices, budget, policyText(s.GetPolicy()), s.GetError()})
+		rows = append(rows, []string{s.GetId(), s.GetName(), loud(s.GetState()), modelText(s.GetRequest()), s.GetInstanceId(), devices, budget, policyText(s.GetPolicy()), profileText(s.GetProfile()), s.GetError()})
 	}
-	table(w, []string{"ID", "NAME", "STATE", "MODEL", "INSTANCE", "DEVICES", "BUDGET", "LIMITS", "ERROR"}, rows)
+	table(w, []string{"ID", "NAME", "STATE", "MODEL", "INSTANCE", "DEVICES", "BUDGET", "LIMITS", "PROFILE", "ERROR"}, rows)
 }
 
 func modelText(req *v1.RunRequest) string {
@@ -282,7 +283,12 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 	fs.Var(&params, "param", "default runtime param as name=value, repeatable")
 	policy, limits := policyFlags(fs)
 	req.Policy = policy
+	profile, shaping := profileFlags(fs)
+	req.Profile = profile
 	return req, func() error {
+		if err := shaping(); err != nil {
+			return err
+		}
 		req.Position = uint32(position)
 		var err error
 		if req.MemoryBytes, err = parseMemory(*memory); err != nil {
@@ -303,14 +309,14 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots create")
 	settings, read := slotFlags(fs)
-	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--position N] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D]")
+	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--position N] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M]")
 	if err != nil {
 		return err
 	}
 	if err := read(); err != nil {
 		return err
 	}
-	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Description: settings.Description, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, RuntimeId: settings.RuntimeId, Params: settings.Params, Policy: settings.Policy, Position: settings.Position}))
+	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Description: settings.Description, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, RuntimeId: settings.RuntimeId, Params: settings.Params, Policy: settings.Policy, Profile: settings.Profile, Position: settings.Position}))
 	if err != nil {
 		return err
 	}
@@ -334,7 +340,7 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	}
 	// The update replaces every field, so start from what the slot has and change only what was passed
 	cur := current.Msg.GetSlot()
-	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Description: cur.GetDescription(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams(), Policy: cur.GetPolicy()}
+	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Description: cur.GetDescription(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams(), Policy: cur.GetPolicy(), Profile: cur.GetProfile()}
 	if req.Policy == nil {
 		req.Policy = &v1.Policy{}
 	}
@@ -350,6 +356,8 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 			req.Policy.RequestTimeoutMs = settings.Policy.RequestTimeoutMs
 		case "upstream-timeout":
 			req.Policy.UpstreamTimeoutMs = settings.Policy.UpstreamTimeoutMs
+		case "system-messages":
+			req.Profile = settings.Profile
 		case "device":
 			req.DeviceIds = settings.DeviceIds
 		case "memory":
@@ -392,6 +400,52 @@ func policyFlags(fs *flag.FlagSet) (*v1.Policy, func() error) {
 		}
 		return nil
 	}
+}
+
+// Declares the route shaping flags, the returned func fills the profile once parsed
+func profileFlags(fs *flag.FlagSet) (*v1.Profile, func() error) {
+	p := &v1.Profile{}
+	mode := fs.String("system-messages", "", "what a system message after the first becomes: keep, merge, user, or auto, which lets the instance's chat template probe decide")
+	return p, func() error {
+		var err error
+		p.SystemMessages, err = parseSystemMessages(*mode)
+		return err
+	}
+}
+
+func parseSystemMessages(s string) (v1.SystemMessages, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "auto":
+		return v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED, nil
+	case "keep":
+		return v1.SystemMessages_SYSTEM_MESSAGES_KEEP, nil
+	case "merge":
+		return v1.SystemMessages_SYSTEM_MESSAGES_MERGE, nil
+	case "user":
+		return v1.SystemMessages_SYSTEM_MESSAGES_USER, nil
+	}
+	return v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED, fmt.Errorf("system-messages: %q is not auto, keep, merge, or user", s)
+}
+
+// Puts a profile into one line, dash when it leaves everything to the instance
+func profileText(p *v1.Profile) string {
+	if p.GetSystemMessages() == v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
+		return "-"
+	}
+	return "system-messages " + text.Enum(p.GetSystemMessages())
+}
+
+// What an instance's chat template probe found, in one line
+func templateText(tp *v1.TemplateProbe) string {
+	switch {
+	case tp == nil:
+		return "not probed"
+	case tp.GetError() != "":
+		return "probe failed: " + tp.GetError()
+	case tp.GetLateSystem():
+		return "renders a system message after the first"
+	}
+	return "refuses a system message after the first: " + tp.GetRefusal()
 }
 
 func parseMillis(s string) (uint32, error) {
@@ -460,6 +514,7 @@ func runSlotsShow(ctx context.Context, e *env, args []string) error {
 			{"runtime", s.GetRuntimeId()},
 			{"params", compact(s.GetParams())},
 			{"limits", policyText(s.GetPolicy())},
+			{"profile", profileText(s.GetProfile())},
 			{"model", modelText(s.GetRequest())},
 			{"instance", s.GetInstanceId()},
 			{"task", s.GetTaskId()},
@@ -539,26 +594,30 @@ func runRoutesList(ctx context.Context, e *env, args []string) error {
 func routesTable(w io.Writer, list []*v1.Route, defaults *v1.Policy) {
 	var rows [][]string
 	for _, r := range list {
-		rows = append(rows, []string{r.GetName(), loud(r.GetState()), r.GetModel(), r.GetInstanceId(), r.GetSlotId(), r.GetEndpoint(), strconv.FormatUint(r.GetRequests(), 10), strconv.Itoa(int(r.GetInFlight())), policyText(gateway.Effective(r.GetPolicy(), defaults))})
+		rows = append(rows, []string{r.GetName(), loud(r.GetState()), r.GetModel(), r.GetInstanceId(), r.GetSlotId(), r.GetEndpoint(), strconv.FormatUint(r.GetRequests(), 10), strconv.Itoa(int(r.GetInFlight())), policyText(gateway.Effective(r.GetPolicy(), defaults)), profileText(r.GetProfile())})
 	}
-	table(w, []string{"NAME", "STATE", "MODEL", "INSTANCE", "SLOT", "ENDPOINT", "REQUESTS", "IN FLIGHT", "LIMITS"}, rows)
+	table(w, []string{"NAME", "STATE", "MODEL", "INSTANCE", "SLOT", "ENDPOINT", "REQUESTS", "IN FLIGHT", "LIMITS", "PROFILE"}, rows)
 }
 
 func runRoutesAdd(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("routes add")
 	policy, limits := policyFlags(fs)
-	positional, err := e.parse(fs, args, 2, 2, "routes add <name> <instance> [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D]")
+	profile, shaping := profileFlags(fs)
+	positional, err := e.parse(fs, args, 2, 2, "routes add <name> <instance> [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M]")
 	if err != nil {
 		return err
 	}
 	if err := limits(); err != nil {
 		return err
 	}
+	if err := shaping(); err != nil {
+		return err
+	}
 	in, err := e.cl.instances.GetInstance(ctx, connect.NewRequest(&v1.GetInstanceRequest{Id: positional[1]}))
 	if err != nil {
 		return err
 	}
-	resp, err := e.cl.gateway.SetRoute(ctx, connect.NewRequest(&v1.SetRouteRequest{Name: positional[0], InstanceId: in.Msg.GetInstance().GetId(), Policy: policy}))
+	resp, err := e.cl.gateway.SetRoute(ctx, connect.NewRequest(&v1.SetRouteRequest{Name: positional[0], InstanceId: in.Msg.GetInstance().GetId(), Policy: policy, Profile: profile}))
 	if err != nil {
 		return err
 	}

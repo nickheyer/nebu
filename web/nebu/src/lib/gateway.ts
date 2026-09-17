@@ -1,4 +1,5 @@
-import type { Policy } from '$proto/gateway_pb';
+import { SystemMessages, type Policy, type Profile } from '$proto/gateway_pb';
+import type { TemplateProbe } from '$proto/instance_pb';
 
 // Turns a listener address into a URL this browser can reach, an unspecified host meaning the one serving the page
 export function listenerUrl(addr: string, tls: boolean): string {
@@ -104,4 +105,42 @@ export function policyFrom(f: PolicyFields): Policy {
 // How many limits a form sets
 export function policyCount(f: PolicyFields): number {
   return [f.maxInFlight, f.rps, f.burst, f.timeout, f.upstream].filter((v) => v.trim()).length;
+}
+
+// The choices for a system message after the first, auto leaving it to the instance's chat template probe
+export const systemMessageItems: { value: string; label: string; detail: string }[] = [
+  { value: 'auto', label: 'Template decides', detail: 'Kept when the template renders them, merged when it refuses them' },
+  { value: 'keep', label: 'Keep', detail: 'Sent as they came' },
+  { value: 'merge', label: 'Merge', detail: 'Folded into the first system message' },
+  { value: 'user', label: 'User turns', detail: 'Sent as user messages where they stood' }
+];
+
+const modeOf: Record<string, SystemMessages> = { keep: SystemMessages.KEEP, merge: SystemMessages.MERGE, user: SystemMessages.USER };
+
+// The form's choice as the profile the daemon takes
+export function profileFrom(mode: string): Profile {
+  return { systemMessages: modeOf[mode] ?? SystemMessages.UNSPECIFIED } as Profile;
+}
+
+// A profile as the form holds it, auto when it leaves the choice to the instance
+export function profileValue(p: Profile | undefined): string {
+  return Object.entries(modeOf).find(([, m]) => m === p?.systemMessages)?.[0] ?? 'auto';
+}
+
+const modeLabel = (mode: string) => systemMessageItems.find((i) => i.value === mode)?.label.toLowerCase() ?? mode;
+
+// One line for a route's shaping, the instance's probe answering when the route leaves it to the template
+export function profileText(p: Profile | undefined, template?: TemplateProbe): string {
+  const mode = profileValue(p);
+  if (mode !== 'auto') return `System messages: ${modeLabel(mode)}`;
+  if (!template) return 'System messages: template decides';
+  if (template.error) return 'System messages: kept · probe failed';
+  return template.lateSystem ? 'System messages: kept · template renders them' : 'System messages: merged · template refuses them';
+}
+
+// What an instance's chat template probe found
+export function templateText(t: TemplateProbe | undefined): string {
+  if (!t) return 'Not probed';
+  if (t.error) return `Probe failed: ${t.error}`;
+  return t.lateSystem ? 'Renders a system message after the first' : `Refuses a system message after the first: ${t.refusal}`;
 }

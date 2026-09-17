@@ -12,9 +12,9 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 	return d.tx(ctx, func(exec execFn) error {
 		id := s.GetId()
 		p := s.GetPolicy()
-		if err := exec(`INSERT OR REPLACE INTO slots (id, name, position, description, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		if err := exec(`INSERT OR REPLACE INTO slots (id, name, position, description, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, system_messages) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, s.GetName(), s.GetPosition(), s.GetDescription(), s.GetRuntimeId(), int64(s.GetMemoryBytes()), s.GetInstanceId(), enumCol(s.GetState()), s.GetError(), s.GetTaskId(), stamp(s.GetCreatedAt().AsTime()), stamp(s.GetUpdatedAt().AsTime()),
-			p.GetMaxInFlight(), p.GetRequestsPerSecond(), p.GetBurst(), p.GetRequestTimeoutMs(), p.GetUpstreamTimeoutMs()); err != nil {
+			p.GetMaxInFlight(), p.GetRequestsPerSecond(), p.GetBurst(), p.GetRequestTimeoutMs(), p.GetUpstreamTimeoutMs(), profileCol(s.GetProfile())); err != nil {
 			return err
 		}
 		if err := clearChildren(exec, "slot_id", id, "slot_devices", "slot_params", "slot_requests", "slot_request_params"); err != nil {
@@ -43,14 +43,16 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 
 // Lists every slot by position, then name
 func (d *DB) ListSlots(ctx context.Context) ([]*v1.Slot, error) {
-	out, err := list(ctx, d, `SELECT id, name, position, description, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms FROM slots ORDER BY position, name`, func(rows *sql.Rows) (*v1.Slot, error) {
+	out, err := list(ctx, d, `SELECT id, name, position, description, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, system_messages FROM slots ORDER BY position, name`, func(rows *sql.Rows) (*v1.Slot, error) {
 		s := &v1.Slot{}
 		p := &v1.Policy{}
-		err := rows.Scan(&s.Id, &s.Name, &s.Position, &s.Description, &s.RuntimeId, &s.MemoryBytes, &s.InstanceId, enumAt[v1.SlotState]{&s.State}, &s.Error, &s.TaskId, at{&s.CreatedAt}, at{&s.UpdatedAt}, &p.MaxInFlight, &p.RequestsPerSecond, &p.Burst, &p.RequestTimeoutMs, &p.UpstreamTimeoutMs)
+		var profile profileAt
+		err := rows.Scan(&s.Id, &s.Name, &s.Position, &s.Description, &s.RuntimeId, &s.MemoryBytes, &s.InstanceId, enumAt[v1.SlotState]{&s.State}, &s.Error, &s.TaskId, at{&s.CreatedAt}, at{&s.UpdatedAt}, &p.MaxInFlight, &p.RequestsPerSecond, &p.Burst, &p.RequestTimeoutMs, &p.UpstreamTimeoutMs, &profile)
 		// A slot that inherits everything carries no policy, as it was written
 		if p.GetMaxInFlight()+p.GetBurst()+p.GetRequestTimeoutMs()+p.GetUpstreamTimeoutMs() > 0 || p.GetRequestsPerSecond() > 0 {
 			s.Policy = p
 		}
+		s.Profile = profile.p
 		return s, err
 	})
 	if err != nil {
@@ -87,17 +89,40 @@ func (d *DB) DeleteSlot(ctx context.Context, id string) (bool, error) {
 
 // Inserts or replaces a route
 func (d *DB) PutRoute(ctx context.Context, r *v1.Route) error {
-	_, err := d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO routes (name, instance_id, slot_id, endpoint, api, state, model, requests, updated_at, served) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.GetName(), r.GetInstanceId(), r.GetSlotId(), r.GetEndpoint(), enumCol(r.GetApi()), enumCol(r.GetState()), r.GetModel(), int64(r.GetRequests()), stamp(r.GetUpdatedAt().AsTime()), r.GetServed())
+	_, err := d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO routes (name, instance_id, slot_id, endpoint, api, state, model, requests, updated_at, served, system_messages) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.GetName(), r.GetInstanceId(), r.GetSlotId(), r.GetEndpoint(), enumCol(r.GetApi()), enumCol(r.GetState()), r.GetModel(), int64(r.GetRequests()), stamp(r.GetUpdatedAt().AsTime()), r.GetServed(), profileCol(r.GetProfile()))
 	return err
 }
 
 // Lists every route by name
 func (d *DB) ListRoutes(ctx context.Context) ([]*v1.Route, error) {
-	return list(ctx, d, `SELECT name, instance_id, slot_id, endpoint, api, state, model, requests, updated_at, served FROM routes ORDER BY name`, func(rows *sql.Rows) (*v1.Route, error) {
+	return list(ctx, d, `SELECT name, instance_id, slot_id, endpoint, api, state, model, requests, updated_at, served, system_messages FROM routes ORDER BY name`, func(rows *sql.Rows) (*v1.Route, error) {
 		r := &v1.Route{}
-		return r, rows.Scan(&r.Name, &r.InstanceId, &r.SlotId, &r.Endpoint, enumAt[v1.ApiFlavor]{&r.Api}, enumAt[v1.RouteState]{&r.State}, &r.Model, &r.Requests, at{&r.UpdatedAt}, &r.Served)
+		var profile profileAt
+		err := rows.Scan(&r.Name, &r.InstanceId, &r.SlotId, &r.Endpoint, enumAt[v1.ApiFlavor]{&r.Api}, enumAt[v1.RouteState]{&r.State}, &r.Model, &r.Requests, at{&r.UpdatedAt}, &r.Served, &profile)
+		r.Profile = profile.p
+		return r, err
 	})
+}
+
+// Stores a profile as its system message mode, empty when it leaves everything to the instance
+func profileCol(p *v1.Profile) string {
+	if p.GetSystemMessages() == v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
+		return ""
+	}
+	return enumCol(p.GetSystemMessages())
+}
+
+// Scans a system message mode into a profile, none when the column is empty, as it was written
+type profileAt struct{ p *v1.Profile }
+
+func (a *profileAt) Scan(v any) error {
+	a.p = nil
+	s, _ := v.(string)
+	if mode := enumOf[v1.SystemMessages](s); mode != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
+		a.p = &v1.Profile{SystemMessages: mode}
+	}
+	return nil
 }
 
 // Removes a route by name

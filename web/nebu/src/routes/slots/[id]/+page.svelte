@@ -5,7 +5,7 @@
   import { live, cached, clock, instanceLive, taskFor, deviceName, groupLabel, runtimeName, slotByRef, answersOf } from '$lib/state.svelte';
   import { swapSlot, evictSlot, deleteSlot, relaunchSlot } from '$lib/actions.svelte';
   import { slotOccupied } from '$lib/launch';
-  import { policyText } from '$lib/gateway';
+  import { policyText, profileText } from '$lib/gateway';
   import { bytes, when, duration, count, newestFirst, ago } from '$lib/format';
   import { SlotState } from '$proto/slot_pb';
   import { InstanceState } from '$proto/instance_pb';
@@ -153,6 +153,7 @@
               ['Memory cap', slot.memoryBytes ? `${bytes(slot.memoryBytes)} per device` : 'Whole device'],
               ['Runtime', slot.runtimeId ? runtimeName(slot.runtimeId) : 'First compatible'],
               ['Limits', policyText(slot.policy, cached.gateway?.policy)],
+              ['Shaping', profileText(slot.profile, instance?.template)],
               ['Route', route ? `${route.state === RouteState.READY ? 'Ready' : route.state === RouteState.DRAINING ? 'Draining' : 'Waiting'} · ${count(route.requests)} requests` : '–'],
               ['Created', when(slot.createdAt)],
               ['Updated', when(slot.updatedAt)]

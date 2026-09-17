@@ -60,7 +60,7 @@ func TestBuildsRoundTrip(t *testing.T) {
 func TestSlotsRoutesRoundTrip(t *testing.T) {
 	d, _ := open(t)
 	ctx := context.Background()
-	s := &v1.Slot{Id: "s1", Name: "main", Position: 2, Description: "d", DeviceIds: []string{"g1", "g0"}, MemoryBytes: 1 << 33, RuntimeId: "rt", Params: map[string]string{"n_ctx": "1"}, InstanceId: "i", State: v1.SlotState_SLOT_STATE_READY, Error: "", TaskId: "t", Request: &v1.RunRequest{SourceId: "src", Repo: "r", Group: "g", RuntimeId: "rt", Name: "main", SlotId: "s1", Params: map[string]string{"k": "v"}}, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0))}
+	s := &v1.Slot{Id: "s1", Name: "main", Position: 2, Description: "d", DeviceIds: []string{"g1", "g0"}, MemoryBytes: 1 << 33, RuntimeId: "rt", Params: map[string]string{"n_ctx": "1"}, InstanceId: "i", State: v1.SlotState_SLOT_STATE_READY, Error: "", TaskId: "t", Request: &v1.RunRequest{SourceId: "src", Repo: "r", Group: "g", RuntimeId: "rt", Name: "main", SlotId: "s1", Params: map[string]string{"k": "v"}}, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0)), Profile: &v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_USER}}
 	if err := d.PutSlot(ctx, s); err != nil {
 		t.Fatal(err)
 	}
@@ -81,13 +81,19 @@ func TestSlotsRoutesRoundTrip(t *testing.T) {
 	if ok, _ := d.DeleteSlot(ctx, "s1"); !ok {
 		t.Fatal("delete slot")
 	}
-	r := &v1.Route{Name: "main", InstanceId: "i", SlotId: "s1", Endpoint: "http://x", Api: v1.ApiFlavor_API_FLAVOR_OPENAI, State: v1.RouteState_ROUTE_STATE_READY, Model: "r:g", Requests: 7, UpdatedAt: timestamppb.New(time.Unix(3, 0))}
+	r := &v1.Route{Name: "main", InstanceId: "i", SlotId: "s1", Endpoint: "http://x", Api: v1.ApiFlavor_API_FLAVOR_OPENAI, State: v1.RouteState_ROUTE_STATE_READY, Model: "r:g", Requests: 7, UpdatedAt: timestamppb.New(time.Unix(3, 0)), Profile: &v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_MERGE}}
 	if err := d.PutRoute(ctx, r); err != nil {
 		t.Fatal(err)
 	}
 	routes, _ := d.ListRoutes(ctx)
 	if len(routes) != 1 || !proto.Equal(routes[0], r) {
 		t.Fatalf("route round trip %v", routes)
+	}
+	// A route that leaves shaping to the instance carries no profile, as it was written
+	r.Profile = nil
+	d.PutRoute(ctx, r)
+	if routes, _ = d.ListRoutes(ctx); routes[0].GetProfile() != nil {
+		t.Fatalf("empty profile should come back nil %v", routes[0])
 	}
 	d.DeleteRoute(ctx, "main")
 	if routes, _ := d.ListRoutes(ctx); len(routes) != 0 {

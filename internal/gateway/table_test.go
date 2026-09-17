@@ -28,7 +28,7 @@ func TestTableLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := table.Pending("main", "s1", "repo:q4", nil)
+	r := table.Pending("main", "s1", "repo:q4", nil, nil)
 	if r.GetState() != v1.RouteState_ROUTE_STATE_PENDING || r.GetSlotId() != "s1" {
 		t.Fatalf("pending %v", r)
 	}
@@ -38,11 +38,11 @@ func TestTableLifecycle(t *testing.T) {
 	if _, _, _, err := table.Acquire("nope", true); !errors.Is(err, ErrNoRoute) {
 		t.Fatalf("missing acquire %v", err)
 	}
-	r = table.Set("main", "i1", "s1", "http://a", "repo:q4", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
+	r = table.Set("main", "i1", "s1", "http://a", "repo:q4", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, nil)
 	if r.GetState() != v1.RouteState_ROUTE_STATE_READY || r.GetInstanceId() != "i1" {
 		t.Fatalf("ready %v", r)
 	}
-	table.Set("alias", "i1", "", "http://a", "repo:q4", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
+	table.Set("alias", "i1", "", "http://a", "repo:q4", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, nil)
 	route, _, release, err := table.Acquire("main", true)
 	if err != nil || route.GetEndpoint() != "http://a" {
 		t.Fatalf("acquire %v %v", route, err)
@@ -96,7 +96,7 @@ func TestTableLifecycle(t *testing.T) {
 	if len(reopened.List()) != 0 {
 		t.Fatal("deleted route should not persist")
 	}
-	table.Set("keep", "i2", "s2", "http://b", "m", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
+	table.Set("keep", "i2", "s2", "http://b", "m", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, nil)
 	reopened, _ = OpenTable(context.Background(), store, nil, nil)
 	kept, ok := reopened.Lookup("keep")
 	if !ok || kept.GetState() != v1.RouteState_ROUTE_STATE_PENDING || kept.GetInstanceId() != "" || kept.GetSlotId() != "s2" {
@@ -120,9 +120,9 @@ func TestGatewayAuthAndStates(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"ok":true}`)) }))
 	defer upstream.Close()
 	table, _ := OpenTable(context.Background(), nil, nil, nil)
-	table.Pending("starting", "s1", "m", nil)
-	table.Set("ready", "i1", "", upstream.URL, "m", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
-	table.Set("draining", "i2", "", upstream.URL, "m", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil)
+	table.Pending("starting", "s1", "m", nil, nil)
+	table.Set("ready", "i1", "", upstream.URL, "m", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, nil)
+	table.Set("draining", "i2", "", upstream.URL, "m", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, nil)
 	table.Drain("i2")
 	g := New(table, []string{"k1"}, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	g.SetListeners([]*v1.Listener{{Addr: "127.0.0.1:1", Shared: true}}, false)

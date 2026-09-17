@@ -362,6 +362,7 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 		RuntimeId:   req.GetRuntimeId(),
 		Params:      req.GetParams(),
 		Policy:      req.GetPolicy(),
+		Profile:     req.GetProfile(),
 		State:       v1.SlotState_SLOT_STATE_EMPTY,
 		CreatedAt:   timestamppb.Now(),
 		UpdatedAt:   timestamppb.Now(),
@@ -439,6 +440,7 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 		sl.RuntimeId = req.GetRuntimeId()
 		sl.Params = req.GetParams()
 		sl.Policy = req.GetPolicy()
+		sl.Profile = req.GetProfile()
 		if sl.Request != nil {
 			sl.Request.Name = name
 		}
@@ -705,12 +707,12 @@ func (m *Manager) settle(s *v1.Slot, serving *v1.Instance, note string, err erro
 
 // Points the slot name at an instance
 func (m *Manager) route(s *v1.Slot, in *v1.Instance) {
-	m.Routes.Serve(s.GetName(), in, m.Instances.Runtimes.API(in.GetRuntimeId()), s.GetId(), s.GetPolicy())
+	m.Routes.Serve(s.GetName(), in, m.Instances.Runtimes.API(in.GetRuntimeId()), s.GetId(), s.GetPolicy(), s.GetProfile())
 }
 
 // Keeps the slot name answering with nothing behind it
 func (m *Manager) pending(s *v1.Slot, model string) {
-	m.Routes.Pending(s.GetName(), s.GetId(), model, s.GetPolicy())
+	m.Routes.Pending(s.GetName(), s.GetId(), model, s.GetPolicy(), s.GetProfile())
 }
 
 // Tracks occupants started or lost outside a swap, implementing the instance manager's slots

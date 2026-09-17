@@ -45,6 +45,8 @@ message Slot {
   Policy policy = 15;
   // Where the slot sits in the list, one based, the order slots relaunch in
   uint32 position = 16;
+  // How requests through the slot's route are shaped
+  Profile profile = 17;
 }
 
 // Creates a slot
@@ -58,6 +60,7 @@ message CreateSlotRequest {
   Policy policy = 7;
   // Position in the list, appended after the last slot when zero
   uint32 position = 8;
+  Profile profile = 9;
 }
 
 // Returns the new slot
@@ -86,8 +89,8 @@ message GetSlotResponse {
 
 // Changes slot settings, applied on the next run
 //
-// The name and limits reach the gateway at once. Devices, memory, the
-// runtime, and params apply to the next run or swap.
+// The name, limits, and profile reach the gateway at once. Devices, memory,
+// the runtime, and params apply to the next run or swap.
 message UpdateSlotRequest {
   string id = 1;
   string description = 2;
@@ -100,6 +103,7 @@ message UpdateSlotRequest {
   string name = 8;
   // Position in the list, kept when zero
   uint32 position = 9;
+  Profile profile = 10;
 }
 
 // Returns the updated slot

@@ -29,6 +29,23 @@ message Policy {
   uint32 upstream_timeout_ms = 5;
 }
 
+// What the gateway does with a system message that is not the first message, which some chat templates refuse to render
+enum SystemMessages {
+  // The instance's template probe decides: keep when the template renders one, merge when it refuses one
+  SYSTEM_MESSAGES_UNSPECIFIED = 0;
+  // Sent as they came
+  SYSTEM_MESSAGES_KEEP = 1;
+  // Folded into the first system message, one made when the request has none
+  SYSTEM_MESSAGES_MERGE = 2;
+  // Sent as user turns where they stood
+  SYSTEM_MESSAGES_USER = 3;
+}
+
+// How a route shapes requests before the runtime sees them, each unset field taking the instance's own answer
+message Profile {
+  SystemMessages system_messages = 1;
+}
+
 // A public model name mapped to an instance
 message Route {
   string name = 1;
@@ -44,6 +61,8 @@ message Route {
   Policy policy = 11;
   // The model name the runtime itself answers to, sent upstream in place of the route name
   string served = 12;
+  // How requests through this name are shaped
+  Profile profile = 13;
 }
 
 // One address the gateway answers on
@@ -86,6 +105,8 @@ message SetRouteRequest {
   string instance_id = 2;
   // Limits the alias enforces, the gateway defaults for every zero field
   Policy policy = 3;
+  // How requests through the alias are shaped, the instance's own answer for every unset field
+  Profile profile = 4;
 }
 
 // Returns the route
@@ -150,7 +171,7 @@ message Trace {
   uint64 response_bytes = 20;
   // The client's body as sent, capped
   string request = 21;
-  // The body the gateway sent the runtime when it translated, capped, empty when passed through
+  // The body the gateway sent the runtime when it translated or shaped the request, capped, empty when passed through as sent
   string upstream_request = 22;
   // The answer text, or the response body for a request the gateway did not read, capped
   string response = 23;

@@ -2,7 +2,7 @@
   import { api } from '$lib/api';
   import { live, cached, orderedSlots, hostGpus } from '$lib/state.svelte';
   import { slotOccupied } from '$lib/launch';
-  import { policyFields, policyFrom } from '$lib/gateway';
+  import { policyFields, policyFrom, profileValue, profileFrom } from '$lib/gateway';
   import { gib, fromGib } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import type { Slot } from '$proto/slot_pb';
@@ -14,6 +14,7 @@
   import Card from './ui/Card.svelte';
   import ParamForm from './ParamForm.svelte';
   import PolicyForm from './PolicyForm.svelte';
+  import ProfileForm from './ProfileForm.svelte';
   import DevicePicker from './DevicePicker.svelte';
 
   // The settings of one slot, creating it when none is given
@@ -30,7 +31,8 @@
       memory: gib(slot?.memoryBytes),
       runtimeId: slot?.runtimeId ?? '',
       params: { ...(slot?.params ?? {}) } as Record<string, string>,
-      policy: policyFields(slot?.policy)
+      policy: policyFields(slot?.policy),
+      profile: profileValue(slot?.profile)
     };
   }
   const start = initial();
@@ -43,6 +45,7 @@
   let params = $state<Record<string, string>>(start.params);
   let invalid = $state(0);
   let policy = $state(start.policy);
+  let profile = $state(start.profile);
   let saving = $state(false);
 
   const creating = $derived(!slot);
@@ -69,7 +72,7 @@
 
   async function save() {
     saving = true;
-    const body = { description, deviceIds: chosen, memoryBytes: budget, runtimeId, params, policy: policyFrom(policy), position: Math.max(0, parseInt(position, 10) || 0) };
+    const body = { description, deviceIds: chosen, memoryBytes: budget, runtimeId, params, policy: policyFrom(policy), profile: profileFrom(profile), position: Math.max(0, parseInt(position, 10) || 0) };
     try {
       if (slot) {
         const r = await api.slots.updateSlot({ id: slot.id, name: name.trim(), ...body });
@@ -136,6 +139,10 @@
 
   <Card title="Limits">
     <PolicyForm bind:fields={policy} defaults={cached.gateway?.policy} idPrefix="slot" />
+  </Card>
+
+  <Card title="Shaping" meta="how requests through the slot's name reach the runtime">
+    <ProfileForm bind:value={profile} idPrefix="slot" />
   </Card>
 
   <div class="flex items-center justify-end gap-2">

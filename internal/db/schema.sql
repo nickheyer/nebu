@@ -143,6 +143,14 @@ CREATE TABLE instance_triage (
   PRIMARY KEY (instance_id, position)
 );
 
+-- What the runtime's chat template accepted, one row once the instance was probed
+CREATE TABLE instance_templates (
+  instance_id TEXT PRIMARY KEY REFERENCES instances (id) ON DELETE CASCADE,
+  late_system INTEGER NOT NULL DEFAULT 0,
+  refusal TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE instance_triage_fixes (
   instance_id TEXT NOT NULL REFERENCES instances (id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
@@ -241,7 +249,8 @@ CREATE TABLE slots (
   requests_per_second REAL NOT NULL DEFAULT 0,
   burst INTEGER NOT NULL DEFAULT 0,
   request_timeout_ms INTEGER NOT NULL DEFAULT 0,
-  upstream_timeout_ms INTEGER NOT NULL DEFAULT 0
+  upstream_timeout_ms INTEGER NOT NULL DEFAULT 0,
+  system_messages TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE slot_devices (
@@ -288,7 +297,8 @@ CREATE TABLE routes (
   model TEXT NOT NULL DEFAULT '',
   requests INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL,
-  served TEXT NOT NULL DEFAULT ''
+  served TEXT NOT NULL DEFAULT '',
+  system_messages TEXT NOT NULL DEFAULT ''
 );
 
 -- Configured places models come from, one row per source, seeded defaults included

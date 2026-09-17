@@ -383,10 +383,11 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		g.refuse(w, client, http.StatusBadGateway, err.Error(), "server_error")
 		return
 	}
-	// A request in the runtime's own format passes through untouched, any other is translated both ways
+	mode := g.table.SystemMode(route)
+	// A request in the runtime's own format passes through, any other is translated both ways
 	if clientFlavor(r) != route.GetApi() || r.URL.Path == anthropicCount {
 		t.Translated = true
-		g.translate(w, r, body, name, route.GetServed(), target, policy, client, flavorOf(route.GetApi()))
+		g.translate(w, r, body, name, route.GetServed(), mode, target, policy, client, flavorOf(route.GetApi()))
 		return
 	}
 	// The runtime answers to its own name, so a route named otherwise rewrites the model field
@@ -395,6 +396,18 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 			g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
 			return
 		}
+	}
+	// fold system messages and rewrite the messages of a JSON body
+	if bytes.HasPrefix(bytes.TrimSpace(body), []byte("{")) {
+		shaped, err := rewriteSystem(body, mode)
+		if err != nil {
+			g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
+			return
+		}
+		if !bytes.Equal(shaped, body) {
+			t.UpstreamRequest = capped(shaped)
+		}
+		body = shaped
 	}
 	// The answer is read on its way past so the trace carries its tokens and text; a path the gateway
 	// does not know, or a body its flavor cannot read, keeps the head of the response instead
@@ -460,7 +473,7 @@ func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []
 }
 
 // Serves a request written in one flavor from a runtime that speaks another
-func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, served string, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
+func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, served string, mode v1.SystemMessages, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
 	t := w.t
 	chat, err := client.ParseRequest(r.URL.Path, body)
 	if err != nil {
@@ -471,6 +484,7 @@ func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, 
 	if served != "" {
 		chat.Model = served
 	}
+	foldSystem(chat, mode)
 	if chat.Kind == "count" {
 		g.count(w, r, chat, name, target, policy, client, upstream)
 		return

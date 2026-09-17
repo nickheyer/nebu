@@ -48,7 +48,9 @@ type Table struct {
 	inflight map[string]*atomic.Int32
 	limiters map[string]*rate.Limiter
 	defaults *v1.Policy
-	total    atomic.Uint64
+	// What each instance's chat template accepted, for routes that leave system messages to the instance
+	templates map[string]*v1.TemplateProbe
+	total     atomic.Uint64
 	// Routes whose counters moved since the stream last heard, flushed by one timer
 	dirty map[string]bool
 	flush *time.Timer
@@ -59,7 +61,7 @@ func OpenTable(ctx context.Context, store *db.DB, bus *events.Bus, log *slog.Log
 	if log == nil {
 		log = slog.Default()
 	}
-	t := &Table{store: store, events: bus, log: log, routes: map[string]*v1.Route{}, inflight: map[string]*atomic.Int32{}, limiters: map[string]*rate.Limiter{}, dirty: map[string]bool{}}
+	t := &Table{store: store, events: bus, log: log, routes: map[string]*v1.Route{}, inflight: map[string]*atomic.Int32{}, limiters: map[string]*rate.Limiter{}, templates: map[string]*v1.TemplateProbe{}, dirty: map[string]bool{}}
 	if store == nil {
 		return t, nil
 	}
@@ -146,8 +148,8 @@ func Effective(route, defaults *v1.Policy) *v1.Policy {
 	return out
 }
 
-// Points a name at a ready instance answering to served, the policy is the slot's, nil for none
-func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, api v1.ApiFlavor, policy *v1.Policy) *v1.Route {
+// Points a name at a ready instance answering to served, the policy and profile the slot's, nil for none
+func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, api v1.ApiFlavor, policy *v1.Policy, profile *v1.Profile) *v1.Route {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	r, ok := t.routes[name]
@@ -165,22 +167,45 @@ func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, ap
 		slotID = r.GetSlotId()
 	}
 	// Nothing to write when the route already says exactly this
-	if ok && r.GetInstanceId() == instanceID && r.GetEndpoint() == endpoint && r.GetModel() == model && r.GetServed() == served && r.GetApi() == api && r.GetSlotId() == slotID && r.GetState() == state && proto.Equal(r.GetPolicy(), policy) {
+	if ok && r.GetInstanceId() == instanceID && r.GetEndpoint() == endpoint && r.GetModel() == model && r.GetServed() == served && r.GetApi() == api && r.GetSlotId() == slotID && r.GetState() == state && proto.Equal(r.GetPolicy(), policy) && proto.Equal(r.GetProfile(), profile) {
 		return t.snapshotLocked(r)
 	}
 	r.InstanceId, r.Endpoint, r.Model, r.Served, r.Api, r.SlotId, r.State = instanceID, endpoint, model, served, api, slotID, state
 	r.Policy = proto.Clone(policy).(*v1.Policy)
+	r.Profile = proto.Clone(profile).(*v1.Profile)
 	t.save(r, action)
 	return t.snapshotLocked(r)
 }
 
-// Points a name at a ready instance answering to its own name, the slot's policy when it has one
-func (t *Table) Serve(name string, in *v1.Instance, api v1.ApiFlavor, slotID string, policy *v1.Policy) *v1.Route {
-	return t.Set(name, in.GetId(), slotID, in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), in.GetName(), api, policy)
+// Points a name at a ready instance answering to its own name, the slot's policy and profile when it has them,
+// and remembers what the instance's chat template accepted
+func (t *Table) Serve(name string, in *v1.Instance, api v1.ApiFlavor, slotID string, policy *v1.Policy, profile *v1.Profile) *v1.Route {
+	t.mu.Lock()
+	if probe := in.GetTemplate(); probe != nil {
+		t.templates[in.GetId()] = proto.Clone(probe).(*v1.TemplateProbe)
+	} else {
+		delete(t.templates, in.GetId())
+	}
+	t.mu.Unlock()
+	return t.Set(name, in.GetId(), slotID, in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), in.GetName(), api, policy, profile)
+}
+
+// The way a route treats a system message after the first: what its profile says, else merge when the
+// instance's template refused one, else keep
+func (t *Table) SystemMode(r *v1.Route) v1.SystemMessages {
+	if mode := r.GetProfile().GetSystemMessages(); mode != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
+		return mode
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if probe, ok := t.templates[r.GetInstanceId()]; ok && probe.GetError() == "" && !probe.GetLateSystem() {
+		return v1.SystemMessages_SYSTEM_MESSAGES_MERGE
+	}
+	return v1.SystemMessages_SYSTEM_MESSAGES_KEEP
 }
 
 // Keeps a name alive with nothing behind it
-func (t *Table) Pending(name, slotID, model string, policy *v1.Policy) *v1.Route {
+func (t *Table) Pending(name, slotID, model string, policy *v1.Policy, profile *v1.Profile) *v1.Route {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	r, ok := t.routes[name]
@@ -192,6 +217,7 @@ func (t *Table) Pending(name, slotID, model string, policy *v1.Policy) *v1.Route
 	}
 	r.InstanceId, r.Endpoint, r.SlotId, r.State = "", "", slotID, v1.RouteState_ROUTE_STATE_PENDING
 	r.Policy = proto.Clone(policy).(*v1.Policy)
+	r.Profile = proto.Clone(profile).(*v1.Profile)
 	if model != "" {
 		r.Model = model
 	}
@@ -278,6 +304,7 @@ func (t *Table) RemoveInstance(instanceID string) {
 		t.save(r, v1.EventAction_EVENT_ACTION_DELETED)
 	}
 	delete(t.inflight, instanceID)
+	delete(t.templates, instanceID)
 }
 
 // Returns one route

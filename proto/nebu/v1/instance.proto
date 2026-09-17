@@ -35,6 +35,16 @@ message Measurement {
   string line = 3;
 }
 
+// What the runtime's chat template accepted when the instance came up, learned by rendering two short requests
+message TemplateProbe {
+  // Whether a system message after the first renders
+  bool late_system = 1;
+  // The runtime's own words when it refused one, empty when it rendered it
+  string refusal = 2;
+  // Why the probe could not tell, empty when it could
+  string error = 3;
+}
+
 // A runtime process serving one stored model
 message Instance {
   string id = 1;
@@ -60,6 +70,7 @@ message Instance {
   RunRequest request = 21;
   bool desired_running = 22;
   string slot_id = 23;
+  TemplateProbe template = 24;
 }
 
 // Starts a stored model on a runtime

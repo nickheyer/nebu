@@ -5,6 +5,7 @@
   import { launch } from '$lib/launch';
   import { stopInstance } from '$lib/actions.svelte';
   import { bytes, when, duration, count, commandLines, tail } from '$lib/format';
+  import { templateText } from '$lib/gateway';
   import { InstanceState } from '$proto/instance_pb';
   import { RouteState, type Trace } from '$proto/gateway_pb';
   import { Square, RotateCcw, Wrench, MessageSquare } from '@lucide/svelte';
@@ -116,6 +117,7 @@
               ['Source', instance.sourceId],
               ['Install', install ? `${install.version || install.id} · ${install.path}` : instance.installId],
               ['Slot', instance.slotId ? slotName(instance.slotId) : 'None'],
+              ['Chat template', templateText(instance.template)],
               ['Created', when(instance.createdAt)],
               ['Ready', when(instance.readyAt)],
               ['Stopped', when(instance.stoppedAt)],
