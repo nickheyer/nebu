@@ -24,9 +24,9 @@ func runRuntimes(ctx context.Context, e *env, args []string) error {
 		var rows [][]string
 		for _, rt := range resp.Msg.GetRuntimes() {
 			m := rt.GetRuntime()
-			rows = append(rows, []string{m.GetId(), m.GetName(), strings.Join(m.GetFormats(), ","), yes(rt.GetCompatible()), strings.Join(rt.GetUnmet(), "; ")})
+			rows = append(rows, []string{m.GetId(), m.GetName(), text.Enum(m.GetKind()), strings.Join(m.GetFormats(), ","), yes(rt.GetCompatible()), strings.Join(rt.GetUnmet(), "; ")})
 		}
-		table(w, []string{"ID", "NAME", "FORMATS", "COMPATIBLE", "UNMET"}, rows)
+		table(w, []string{"ID", "NAME", "SERVES", "FORMATS", "COMPATIBLE", "UNMET"}, rows)
 	})
 }
 
@@ -43,7 +43,7 @@ func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 	rt := resp.Msg.GetRuntime()
 	return e.print(rt, func(w io.Writer) {
 		m := rt.GetRuntime()
-		table(w, nil, [][]string{{"id", m.GetId()}, {"name", m.GetName()}, {"formats", strings.Join(m.GetFormats(), ", ")}, {"api", text.Enum(m.GetApi())}, {"compatible", yes(rt.GetCompatible())}, {"unmet", strings.Join(rt.GetUnmet(), "; ")}})
+		table(w, nil, [][]string{{"id", m.GetId()}, {"name", m.GetName()}, {"serves", text.Enum(m.GetKind()) + " models"}, {"formats", strings.Join(m.GetFormats(), ", ")}, {"api", text.Enum(m.GetApi())}, {"compatible", yes(rt.GetCompatible())}, {"unmet", strings.Join(rt.GetUnmet(), "; ")}})
 		for _, opt := range rt.GetInstalls() {
 			im := opt.GetMethod()
 			section(w, "install "+im.GetId())

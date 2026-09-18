@@ -21,8 +21,9 @@ func (SGLang) Name() string { return "SGLang" }
 func (SGLang) Description() string {
 	return "Serves safetensors checkpoints with prefix caching on NVIDIA GPUs"
 }
-func (SGLang) Formats() []string { return []string{"safetensors"} }
-func (SGLang) API() v1.ApiFlavor { return v1.ApiFlavor_API_FLAVOR_OPENAI }
+func (SGLang) Formats() []string  { return []string{"safetensors"} }
+func (SGLang) Kind() v1.ModelKind { return v1.ModelKind_MODEL_KIND_LANGUAGE }
+func (SGLang) API() v1.ApiFlavor  { return v1.ApiFlavor_API_FLAVOR_OPENAI }
 func (SGLang) Requirements() []string {
 	return []string{"an NVIDIA GPU"}
 }
@@ -45,28 +46,18 @@ var sglangCacheBytes = map[string]float64{"auto": 2, "fp8_e5m2": 1, "fp8_e4m3": 
 func (SGLang) Params() []*v1.Param {
 	return []*v1.Param{
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: "Context", Flag: "--context-length",
-			Rule:        contextRule,
-			Description: "Tokens the model can hold in one conversation."},
+			Rule: contextRule},
 		{Name: "chunked_prefill_size", Label: "Chunked prefill", Type: v1.ParamType_PARAM_TYPE_INT, Default: "8192", Unit: "tokens", Min: -1, Step: 512, Group: "Context", Advanced: true, Flag: "--chunked-prefill-size",
-			Description: "Prompt tokens prefilled per step. Smaller values need less memory. -1 turns chunking off."},
-		{Name: "mem_fraction_static", Label: "Static memory fraction", Type: v1.ParamType_PARAM_TYPE_FLOAT, Default: "0.88", Min: 0.05, Max: 1, Step: 0.01, Group: "Memory", Flag: "--mem-fraction-static",
-			Description: "Share of each device reserved for weights and the cache pool."},
-		{Name: "kv_cache_dtype", Label: "KV cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "auto", Choices: []string{"auto", "fp8_e5m2", "fp8_e4m3"}, Group: "Memory", Flag: "--kv-cache-dtype",
-			Description: "Element type of the cache. FP8 halves cache memory."},
-		{Name: "tp_size", Label: "Tensor parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--tp-size",
-			Description: "Devices each layer is sharded across."},
-		{Name: "served_model_name", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Flag: "--served-model-name",
-			Description: "Model name the runtime reports. Empty takes the instance name."},
-		{Name: "speculative_algorithm", Label: "Draft method", Type: v1.ParamType_PARAM_TYPE_STRING, Choices: []string{"", "NEXTN", "EAGLE", "EAGLE3"}, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-algorithm",
-			Description: "NEXTN uses the prediction heads shipped with the checkpoint. EAGLE methods need a draft model."},
-		{Name: "speculative_draft_model_path", Label: "Draft model", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-draft-model-path",
-			Description: "Path of the draft model for EAGLE methods."},
-		{Name: "speculative_num_steps", Label: "Draft steps", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-num-steps",
-			Description: "Draft steps per verify. Empty uses the runtime default."},
-		{Name: "speculative_eagle_topk", Label: "Draft branches", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-eagle-topk",
-			Description: "Branches kept per draft step. Empty uses the runtime default."},
-		{Name: "speculative_num_draft_tokens", Label: "Draft tokens", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-num-draft-tokens",
-			Description: "Draft tokens verified per step. Empty uses the runtime default."},
+			Description: "-1 off"},
+		{Name: "mem_fraction_static", Label: "Static memory fraction", Type: v1.ParamType_PARAM_TYPE_FLOAT, Default: "0.88", Min: 0.05, Max: 1, Step: 0.01, Group: "Memory", Flag: "--mem-fraction-static"},
+		{Name: "kv_cache_dtype", Label: "KV cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "auto", Choices: []string{"auto", "fp8_e5m2", "fp8_e4m3"}, Group: "Memory", Flag: "--kv-cache-dtype"},
+		{Name: "tp_size", Label: "Tensor parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--tp-size"},
+		{Name: "served_model_name", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Flag: "--served-model-name"},
+		{Name: "speculative_algorithm", Label: "Draft method", Type: v1.ParamType_PARAM_TYPE_STRING, Choices: []string{"", "NEXTN", "EAGLE", "EAGLE3"}, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-algorithm"},
+		{Name: "speculative_draft_model_path", Label: "Draft model", Type: v1.ParamType_PARAM_TYPE_PATH, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-draft-model-path", Picks: "checkpoint"},
+		{Name: "speculative_num_steps", Label: "Draft steps", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Step: 1, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-num-steps"},
+		{Name: "speculative_eagle_topk", Label: "Draft branches", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Step: 1, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-eagle-topk"},
+		{Name: "speculative_num_draft_tokens", Label: "Draft tokens", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Step: 1, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-num-draft-tokens"},
 	}
 }
 

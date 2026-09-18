@@ -137,7 +137,7 @@ type Recipe interface {
 
 // Every recipe nebu ships
 func All() []Recipe {
-	return []Recipe{LlamaCpp{}, VLLM{}, SGLang{}, NeMo{}}
+	return []Recipe{LlamaCpp{}, VLLM{}, SGLang{}, NeMo{}, SDCpp{}}
 }
 
 // A variable's value, dropped from a command when empty so an unset flag never lands as ""

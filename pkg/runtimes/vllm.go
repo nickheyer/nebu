@@ -20,8 +20,9 @@ func (VLLM) Name() string { return "vLLM" }
 func (VLLM) Description() string {
 	return "Serves safetensors checkpoints at high throughput on NVIDIA and AMD GPUs"
 }
-func (VLLM) Formats() []string { return []string{"safetensors"} }
-func (VLLM) API() v1.ApiFlavor { return v1.ApiFlavor_API_FLAVOR_OPENAI }
+func (VLLM) Formats() []string  { return []string{"safetensors"} }
+func (VLLM) Kind() v1.ModelKind { return v1.ModelKind_MODEL_KIND_LANGUAGE }
+func (VLLM) API() v1.ApiFlavor  { return v1.ApiFlavor_API_FLAVOR_OPENAI }
 func (VLLM) Requirements() []string {
 	return []string{"an NVIDIA or AMD GPU"}
 }
@@ -45,20 +46,14 @@ var vllmCacheBytes = map[string]float64{"auto": 2, "fp8": 1, "fp8_e5m2": 1, "fp8
 func (VLLM) Params() []*v1.Param {
 	return []*v1.Param{
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: "Context", Flag: "--max-model-len",
-			Rule:        contextRule,
-			Description: "Tokens the model can hold in one conversation."},
-		{Name: "max_num_seqs", Label: "Max sequences", Type: v1.ParamType_PARAM_TYPE_INT, Default: "256", Unit: "sequences", Min: 1, Step: 1, Group: "Context", Flag: "--max-num-seqs",
-			Description: "Requests scheduled at once."},
-		{Name: "gpu_memory_utilization", Label: "GPU memory fraction", Type: v1.ParamType_PARAM_TYPE_FLOAT, Default: "0.9", Min: 0.05, Max: 1, Step: 0.01, Group: "Memory", Flag: "--gpu-memory-utilization",
-			Description: "Share of each device the runtime claims for weights and cache."},
-		{Name: "kv_cache_dtype", Label: "KV cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "auto", Choices: []string{"auto", "fp8", "fp8_e5m2", "fp8_e4m3"}, Group: "Memory", Flag: "--kv-cache-dtype",
-			Description: "Element type of the cache. FP8 halves cache memory."},
-		{Name: "tensor_parallel_size", Label: "Tensor parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--tensor-parallel-size",
-			Description: "Devices each layer is sharded across."},
-		{Name: "served_model_name", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Flag: "--served-model-name",
-			Description: "Model name the runtime reports. Empty takes the instance name."},
+			Rule: contextRule},
+		{Name: "max_num_seqs", Label: "Max sequences", Type: v1.ParamType_PARAM_TYPE_INT, Default: "256", Unit: "sequences", Min: 1, Step: 1, Group: "Context", Flag: "--max-num-seqs"},
+		{Name: "gpu_memory_utilization", Label: "GPU memory fraction", Type: v1.ParamType_PARAM_TYPE_FLOAT, Default: "0.9", Min: 0.05, Max: 1, Step: 0.01, Group: "Memory", Flag: "--gpu-memory-utilization"},
+		{Name: "kv_cache_dtype", Label: "KV cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "auto", Choices: []string{"auto", "fp8", "fp8_e5m2", "fp8_e4m3"}, Group: "Memory", Flag: "--kv-cache-dtype"},
+		{Name: "tensor_parallel_size", Label: "Tensor parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--tensor-parallel-size"},
+		{Name: "served_model_name", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Flag: "--served-model-name"},
 		{Name: "speculative_config", Label: "Speculative config", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-config",
-			Description: `JSON such as {"method":"mtp","num_speculative_tokens":1}. Empty leaves draft heads unloaded.`},
+			Description: `{"method":"mtp","num_speculative_tokens":1}`},
 	}
 }
 

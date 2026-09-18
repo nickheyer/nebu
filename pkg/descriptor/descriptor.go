@@ -10,6 +10,7 @@ import (
 
 	"github.com/nickheyer/nebu/pkg/archs"
 	"github.com/nickheyer/nebu/pkg/formats"
+	"github.com/nickheyer/nebu/pkg/formats/diffusion"
 	"github.com/nickheyer/nebu/pkg/precision"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/text"
@@ -86,7 +87,39 @@ func (b *Builder) Build(raw *v1.RawModel) (*v1.Descriptor, error) {
 		d.Family = family.ID()
 	}
 	d.Precision = b.precision(f.Precision(raw, d.GetGroup()), d.GetBitsPerWeight())
+	d.Kind = kindOf(d)
+	if d.Kind == v1.ModelKind_MODEL_KIND_DIFFUSION {
+		d.Generates = diffusion.Generates(d.GetArchitecture())
+	}
 	return d, nil
+}
+
+// What a group is: a diffusion model when it holds a denoiser or its architecture names one, a
+// component when it is a part loaded beside a denoiser or its architecture names one, else a language model
+func kindOf(d *v1.Descriptor) v1.ModelKind {
+	var denoiser, part, language bool
+	for _, g := range d.GetGroups() {
+		switch g.GetKind() {
+		case v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION:
+			denoiser = true
+		case v1.TensorGroupKind_TENSOR_GROUP_KIND_VAE, v1.TensorGroupKind_TENSOR_GROUP_KIND_TEXT_ENCODER:
+			part = true
+		case v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, v1.TensorGroupKind_TENSOR_GROUP_KIND_EXPERTS:
+			language = true
+		}
+	}
+	switch {
+	case denoiser || diffusion.Denoiser(d.GetArchitecture()) && !language:
+		return v1.ModelKind_MODEL_KIND_DIFFUSION
+	case diffusion.Component(d.GetArchitecture()):
+		return v1.ModelKind_MODEL_KIND_COMPONENT
+	case d.GetFormatId() == "diffusion":
+		// A lone checkpoint that is no denoiser is a part, a LoRA, or a helper, never a language model
+		return v1.ModelKind_MODEL_KIND_COMPONENT
+	case part && !language:
+		return v1.ModelKind_MODEL_KIND_COMPONENT
+	}
+	return v1.ModelKind_MODEL_KIND_LANGUAGE
 }
 
 // Puts a weight group's precision into words from what its format read and the level table

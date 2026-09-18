@@ -50,6 +50,10 @@ type Launch struct {
 	// Where the slot keeps the model, the host alone meaning no device is touched
 	Placement  v1.Placement
 	Descriptor *v1.Descriptor
+	// The memory plan the params were solved by, nil for a runtime that plans nothing
+	Plan *v1.MemoryPlan
+	// Every other model in the store, for a runtime that loads parts stored beside its weights
+	Stored []*v1.StoredModel
 }
 
 // A command line ready to run, with the param values it carries
@@ -121,6 +125,8 @@ type Runtime interface {
 	Name() string
 	Description() string
 	Formats() []string
+	// The kind of model the runtime serves, a language model or a diffusion model
+	Kind() v1.ModelKind
 	API() v1.ApiFlavor
 	// What the host must have, in words
 	Requirements() []string
@@ -284,6 +290,59 @@ func checkForm(p *v1.Param) error {
 // Lists runtimes by id
 func (r *Registry) List() []Runtime { return r.list }
 
+// The bit a runtime takes in every runtimes bitmask, by its place in the id order, zero for a runtime not in the registry
+func (r *Registry) Bit(id string) uint32 {
+	for i, rt := range r.list {
+		if rt.ID() == id {
+			return 1 << uint(i)
+		}
+	}
+	return 0
+}
+
+// The runtimes a bitmask names, in id order
+func (r *Registry) Named(mask uint32) []Runtime {
+	var out []Runtime
+	for i, rt := range r.list {
+		if mask&(1<<uint(i)) != 0 {
+			out = append(out, rt)
+		}
+	}
+	return out
+}
+
+// The bitmask of every runtime that serves a format holding a kind of model, whatever the host; zero for a
+// kind no runtime serves, a component say
+func (r *Registry) Mask(formatID string, kind v1.ModelKind) uint32 {
+	var mask uint32
+	for i, rt := range r.list {
+		if Accepts(rt, formatID, kind) {
+			mask |= 1 << uint(i)
+		}
+	}
+	return mask
+}
+
+// The bitmask over several formats a model may be held in, the union of each format's own; a kind
+// nobody could tell, a catalog hit that says too little, is served nowhere until its headers are read
+func (r *Registry) MaskOf(formatIDs []string, kind v1.ModelKind) uint32 {
+	if kind == v1.ModelKind_MODEL_KIND_UNSPECIFIED {
+		return 0
+	}
+	var mask uint32
+	for _, id := range formatIDs {
+		mask |= r.Mask(id, kind)
+	}
+	return mask
+}
+
+// Builds status for API responses, the runtime's bit in every bitmask included
+func (r *Registry) Status(rt Runtime, profile *v1.HostProfile) *v1.RuntimeStatus {
+	st := Status(rt, profile)
+	st.Runtime.Bit = r.Bit(rt.ID())
+	return st
+}
+
 // Returns one runtime by id
 func (r *Registry) Get(id string) (Runtime, error) {
 	rt, ok := r.byID[id]
@@ -305,12 +364,19 @@ func (r *Registry) API(id string) v1.ApiFlavor {
 
 // Every runtime nebu ships
 func All() []Runtime {
-	return []Runtime{LlamaCpp{}, VLLM{}, SGLang{}, NeMo{}}
+	return []Runtime{LlamaCpp{}, VLLM{}, SGLang{}, NeMo{}, SDCpp{}}
 }
 
-// Whether the runtime accepts a format
-func Accepts(rt Runtime, formatID string) bool {
-	return slices.Contains(rt.Formats(), formatID)
+// Whether the runtime accepts a format holding a kind of model: a language runtime takes language
+// models alone, a diffusion runtime diffusion models alone, and no runtime serves a component
+func Accepts(rt Runtime, formatID string, kind v1.ModelKind) bool {
+	if !slices.Contains(rt.Formats(), formatID) {
+		return false
+	}
+	if kind == v1.ModelKind_MODEL_KIND_UNSPECIFIED {
+		kind = v1.ModelKind_MODEL_KIND_LANGUAGE
+	}
+	return kind == rt.Kind()
 }
 
 // Whether the host meets the runtime's requirements, and which it does not
@@ -368,6 +434,7 @@ func Describe(rt Runtime) *v1.Runtime {
 		Name:         rt.Name(),
 		Description:  rt.Description(),
 		Formats:      rt.Formats(),
+		Kind:         rt.Kind(),
 		Api:          rt.API(),
 		Requirements: rt.Requirements(),
 		Params:       rt.Params(),
@@ -427,7 +494,7 @@ func convert(p *v1.Param, raw string) (any, error) {
 	if p.GetSolved() && (raw == "" || strings.EqualFold(raw, Auto)) {
 		return Auto, nil
 	}
-	if len(p.GetChoices()) > 0 && !slices.Contains(p.GetChoices(), raw) {
+	if len(p.GetChoices()) > 0 && p.GetPicks() == "" && !slices.Contains(p.GetChoices(), raw) {
 		return nil, fmt.Errorf("param %s: %q not in %v", p.GetName(), raw, p.GetChoices())
 	}
 	switch p.GetType() {

@@ -80,6 +80,13 @@ func (localAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, so
 		if info, err := os.Stat(dir); err == nil {
 			hit.UpdatedAt = timestamppb.New(info.ModTime())
 		}
+		// The files say which formats the directory holds, a safetensors shard beside a config being a
+		// transformers checkpoint and one without a single file diffusion checkpoint
+		files, err := root.List(ctx, repo)
+		if err != nil {
+			return err
+		}
+		hit.Formats = locFormats(files)
 		hits = append(hits, hit)
 		return nil
 	}
@@ -106,6 +113,42 @@ func (localAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, so
 		}
 	}
 	return localPage(hits, req, sort, c.Limit(req)), nil
+}
+
+// The formats a directory's files are held in, by extension and by whether a config sits beside a safetensors shard
+func locFormats(files []*v1.Artifact) []string {
+	configs := map[string]bool{}
+	for _, f := range files {
+		if path.Base(f.GetPath()) == "config.json" {
+			configs[path.Dir(f.GetPath())] = true
+		}
+	}
+	var out []string
+	add := func(id string) {
+		for _, x := range out {
+			if x == id {
+				return
+			}
+		}
+		out = append(out, id)
+	}
+	for _, f := range files {
+		switch strings.ToLower(path.Ext(f.GetPath())) {
+		case ".gguf":
+			add("gguf")
+		case ".safetensors", ".sft":
+			if configs[path.Dir(f.GetPath())] {
+				add("safetensors")
+			} else {
+				add("diffusion")
+			}
+		case ".ckpt", ".pt", ".pth":
+			add("diffusion")
+		case ".nemo":
+			add("nemo")
+		}
+	}
+	return out
 }
 
 // Reports whether a directory directly holds at least one file

@@ -433,6 +433,9 @@ func (s *oaiStream) Write(ev Event) error {
 
 func (openai) InlineImages() bool { return false }
 
+// A tokenizer endpoint sees only the prompt text, so images are added to its count
+func (openai) CountsImages() bool { return false }
+
 func (s *oaiStream) Close() error {
 	_, err := io.WriteString(s.w, "data: [DONE]\n\n")
 	flush(s.w)

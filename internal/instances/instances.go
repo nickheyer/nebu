@@ -217,6 +217,8 @@ type prepared struct {
 	res        *Reservation
 	params     estimate.Params
 	plan       *v1.MemoryPlan
+	// Every other model in the store, the parts a run may load beside its weights
+	companions []*v1.StoredModel
 }
 
 // Plans a run without launching it
@@ -279,7 +281,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	// The slot's runtime when it has one, else the first compatible one
 	var rt runtimes.Runtime
 	if req.GetRuntimeId() == "" {
-		rt, err = m.Inspector.DefaultRuntime(profile, stored.GetFormatId())
+		rt, err = m.Inspector.DefaultRuntime(profile, stored.GetFormatId(), descriptor.GetKind())
 	} else {
 		rt, err = m.Runtimes.Get(req.GetRuntimeId())
 	}
@@ -287,8 +289,11 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 		return nil, err
 	}
 	req.RuntimeId = rt.ID()
-	if !runtimes.Accepts(rt, stored.GetFormatId()) {
-		return nil, fmt.Errorf("%w: runtime %s does not accept %s", runtimes.ErrParam, rt.ID(), stored.GetFormatId())
+	if !runtimes.Accepts(rt, stored.GetFormatId(), descriptor.GetKind()) {
+		if descriptor.GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT {
+			return nil, fmt.Errorf("%w: %s is a part loaded beside a diffusion model, not one served on its own", runtimes.ErrParam, stored.GetGroup())
+		}
+		return nil, fmt.Errorf("%w: runtime %s does not serve %s %s models", runtimes.ErrParam, rt.ID(), stored.GetFormatId(), strings.ToLower(strings.TrimPrefix(descriptor.GetKind().String(), "MODEL_KIND_")))
 	}
 	var install *v1.Install
 	if req.GetInstallId() != "" {
@@ -326,8 +331,13 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 		return nil, err
 	}
 	p := &prepared{req: req, stored: stored, rt: rt, install: install, name: name, descriptor: descriptor, profile: profile, planned: planProfile, res: res, params: params}
+	companions, err := m.Inspector.Companions(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
+	if err != nil {
+		return nil, err
+	}
+	p.companions = companions
 	if rt.Policy() != nil {
-		if p.plan, err = m.Inspector.Plan(rt, descriptor, planProfile, layered, true, res.placement()); err != nil {
+		if p.plan, err = m.Inspector.Plan(rt, descriptor, planProfile, layered, true, res.placement(), stored.GetRepo(), companions); err != nil {
 			return nil, err
 		}
 		for k, v := range p.plan.GetParams() {
@@ -367,6 +377,8 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 		Devices:    slotDevices(p.planned, p.res),
 		Placement:  p.res.placement(),
 		Descriptor: descriptor,
+		Plan:       plan,
+		Stored:     p.companions,
 	}
 	var prep *runtimes.Command
 	if rt.Prepares(stored.GetFormatId()) {
@@ -545,6 +557,11 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 // Learns what the runtime's chat template accepts and says what the gateway will do about it
 func (m *Manager) probeTemplate(ctx context.Context, logf func(string, ...any), in *instance) *v1.TemplateProbe {
 	rec := in.snapshot()
+	// A diffusion runtime has no chat template; what it generates is read instead and stamped on its routes
+	if m.Runtimes.API(rec.GetRuntimeId()) == v1.ApiFlavor_API_FLAVOR_SDCPP {
+		m.probeModes(ctx, logf, in)
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, templateTimeout)
 	defer cancel()
 	probe := gateway.ProbeTemplate(ctx, &http.Client{}, rec.GetEndpoint(), m.Runtimes.API(rec.GetRuntimeId()), rec.GetName())
@@ -557,6 +574,22 @@ func (m *Manager) probeTemplate(ctx context.Context, logf func(string, ...any), 
 		logf("chat template refuses a system message after the first: %s; the gateway folds them into the first unless a route says otherwise", probe.GetRefusal())
 	}
 	return probe
+}
+
+// Reads what a diffusion runtime generates from its capabilities endpoint, so the gateway can say which route makes images and which video
+func (m *Manager) probeModes(ctx context.Context, logf func(string, ...any), in *instance) {
+	rec := in.snapshot()
+	ctx, cancel := context.WithTimeout(ctx, templateTimeout)
+	defer cancel()
+	modes, err := gateway.Capabilities(ctx, &http.Client{}, rec.GetEndpoint())
+	if err != nil {
+		logf("capabilities probe: %s; the route says nothing about what it generates", err)
+		return
+	}
+	logf("generates %s", strings.Join(modes, ", "))
+	if m.Routes != nil {
+		m.Routes.SetModes(rec.GetId(), modes)
+	}
 }
 
 // Polls health, recording triage and stopping the process on failure
@@ -1072,11 +1105,54 @@ func (m *Manager) pruneLocked() {
 	}
 }
 
-// Returns the stored descriptor or rebuilds it from local files
+// Returns the stored descriptor, or rebuilds it from local files when there is none or it predates model kinds
 func (m *Manager) describe(ctx context.Context, stored *v1.StoredModel) (*v1.Descriptor, error) {
-	if stored.GetDescriptor_() != nil {
-		return stored.GetDescriptor_(), nil
+	if d := stored.GetDescriptor_(); d != nil && d.GetKind() != v1.ModelKind_MODEL_KIND_UNSPECIFIED {
+		return d, nil
 	}
+	return m.rebuild(ctx, stored)
+}
+
+// Rewrites the descriptor and runtime bitmask of every stored model whose manifest predates them, so the
+// library says what each is and which runtimes serve it; a model whose headers cannot be read keeps what it had
+func (m *Manager) RefreshDescriptors(ctx context.Context) {
+	list, err := m.Store.ListManifests()
+	if err != nil {
+		m.Log.Warn("refresh descriptors", "err", err)
+		return
+	}
+	for _, stored := range list {
+		if ctx.Err() != nil {
+			return
+		}
+		d := stored.GetDescriptor_()
+		if d != nil && d.GetKind() != v1.ModelKind_MODEL_KIND_UNSPECIFIED && stored.GetRuntimes() == m.Runtimes.Mask(stored.GetFormatId(), d.GetKind()) {
+			continue
+		}
+		if d == nil || d.GetKind() == v1.ModelKind_MODEL_KIND_UNSPECIFIED {
+			var err error
+			if d, err = m.rebuild(ctx, stored); err != nil {
+				m.Log.Warn("refresh descriptor", "repo", stored.GetRepo(), "group", stored.GetGroup(), "err", err)
+				continue
+			}
+		}
+		key := store.Key(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
+		unlock := m.Store.Lock(key)
+		stored.Descriptor_ = d
+		stored.Runtimes = m.Runtimes.Mask(stored.GetFormatId(), d.GetKind())
+		err = m.Store.WriteManifest(stored)
+		unlock()
+		if err != nil {
+			m.Log.Warn("refresh descriptor", "repo", stored.GetRepo(), "group", stored.GetGroup(), "err", err)
+			continue
+		}
+		m.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_UPDATED, key, stored)
+		m.Log.Info("descriptor refreshed", "repo", stored.GetRepo(), "group", stored.GetGroup(), "kind", strings.ToLower(strings.TrimPrefix(d.GetKind().String(), "MODEL_KIND_")), "architecture", d.GetArchitecture())
+	}
+}
+
+// Reads a stored model's headers off the disk and builds its descriptor
+func (m *Manager) rebuild(ctx context.Context, stored *v1.StoredModel) (*v1.Descriptor, error) {
 	f := m.Inspector.Formats.Get(stored.GetFormatId())
 	if f == nil {
 		return nil, fmt.Errorf("no format reads %q", stored.GetFormatId())

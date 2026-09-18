@@ -203,6 +203,10 @@ func kindOf(api v1.ApiFlavor, path string) v1.TraceKind {
 			return v1.TraceKind_TRACE_KIND_GENERATE
 		case openaiEmbeddings:
 			return v1.TraceKind_TRACE_KIND_EMBED
+		case imagesPath, editsPath:
+			return v1.TraceKind_TRACE_KIND_IMAGE
+		case videosPath:
+			return v1.TraceKind_TRACE_KIND_VIDEO
 		}
 	}
 	return v1.TraceKind_TRACE_KIND_OTHER
@@ -278,6 +282,8 @@ type traceWriter struct {
 	bytes  uint64
 	tee    io.Writer
 	wrote  bool
+	// Whether a job that outlives the request finishes the trace itself
+	detached bool
 }
 
 func (w *traceWriter) WriteHeader(status int) {

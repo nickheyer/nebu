@@ -106,6 +106,25 @@ message ParamState {
   repeated DisabledChoice disabled = 5;
 }
 
+// One place a missing part is published: a group to pull when the file is known, else a repository to pick a file from
+message PartSource {
+  string source_id = 1;
+  string repo = 2;
+  // The weight group the file forms in that repository, empty when the repository holds several to choose from
+  string group = 3;
+  // The file's path in the repository, empty when the repository holds several to choose from
+  string path = 4;
+}
+
+// A file the run needs beside its weights and the store does not hold
+message MissingPart {
+  // The param the file is named by
+  string param = 1;
+  // What the part is, in words
+  string label = 2;
+  repeated PartSource sources = 3;
+}
+
 // Returns the plan and descriptor used, with the state of every param under these inputs
 message EstimateResponse {
   MemoryPlan plan = 1;
@@ -113,6 +132,8 @@ message EstimateResponse {
   repeated ParamState params = 3;
   // Why a run with these params would be refused, empty when it would not
   string refusal = 4;
+  // The parts the run needs and the store does not hold, each with where to pull it from
+  repeated MissingPart missing = 5;
 }
 
 // Builds a fit table for a model

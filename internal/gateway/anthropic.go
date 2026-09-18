@@ -507,6 +507,9 @@ func (s *antStream) Close() error { return nil }
 
 func (anthropic) InlineImages() bool { return false }
 
+// The count endpoint sizes image blocks itself
+func (anthropic) CountsImages() bool { return true }
+
 func (anthropic) ErrorMessage(body []byte) string { return errorField(body) }
 
 func (anthropic) Error(w http.ResponseWriter, status int, message, kind string) {

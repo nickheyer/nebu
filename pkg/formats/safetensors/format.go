@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/nickheyer/nebu/pkg/formats"
+	"github.com/nickheyer/nebu/pkg/formats/diffusion"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -72,9 +73,10 @@ func hasPrefix(s string, prefixes []string) bool {
 	return false
 }
 
-// The architecture as the config names it, the class list first, then the model type, then the text model's
+// The architecture as the config names it, the class list first, then the model type, then the text model's,
+// then the class a diffusers component names itself by
 func (Format) Architecture(raw *v1.RawModel) string {
-	v := formats.First(raw.GetMetadata(), "architectures", "model_type", "text_config.model_type")
+	v := formats.First(raw.GetMetadata(), "architectures", "model_type", "text_config.model_type", "_class_name")
 	if i := strings.Index(v, ","); i >= 0 {
 		v = v[:i]
 	}
@@ -115,6 +117,10 @@ var (
 // Encoders and prediction heads come before the layer rules, since each numbers layers of its own; the
 // routed experts alone are experts, the shared expert every token uses stays with its layer
 func (Format) Tensor(name string) (v1.TensorGroupKind, int32) {
+	// A diffusers component keeps the names its pipeline knows, none of which a language model uses
+	if kind, ok := diffusion.Kind(name); ok && kind != v1.TensorGroupKind_TENSOR_GROUP_KIND_TEXT_ENCODER {
+		return kind, -1
+	}
 	seg := formats.Segments(name)
 	switch {
 	case formats.HasSegment(seg, "mtp", "nextn"):
@@ -235,10 +241,14 @@ func (Format) Precision(raw *v1.RawModel, _ string) formats.Words {
 
 func (Format) Metadata(raw *v1.RawModel) map[string]string {
 	out := map[string]string{}
-	for _, k := range []string{"torch_dtype", "dtype", "model_type", "quantization_config.quant_method", "quantization_config.bits", "__metadata__.format"} {
+	for _, k := range []string{"torch_dtype", "dtype", "model_type", "_class_name", "quantization_config.quant_method", "quantization_config.bits", "__metadata__.format"} {
 		if v, ok := raw.GetMetadata()[k]; ok {
 			out[k] = v
 		}
+	}
+	// A diffusers component keeps the names its pipeline knows, which say the family and the parts it bundles
+	for k, v := range diffusion.Metadata(raw) {
+		out[k] = v
 	}
 	return out
 }

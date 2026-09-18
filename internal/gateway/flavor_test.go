@@ -90,3 +90,27 @@ func TestTranslateFlavors(t *testing.T) {
 		t.Fatalf("tags %s", body)
 	}
 }
+
+// A 2x2 PNG, the smallest image the area rule sizes to one token
+const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAC0lEQVR4nGNgQAcAABIAAeRVjecAAAAASUVORK5CYII="
+
+func TestImageTokensAddedToTokenizerCount(t *testing.T) {
+	chat := &Chat{Messages: []Message{{Role: "user", Parts: []Part{{Type: "text", Text: "what is this"}, {Type: "image", MediaType: "image/png", Data: tinyPNG}, {Type: "image", MediaType: "image/png", Data: "not base64!"}}}}}
+	if got := imageTokensOf(chat); got != 1+imageTokensMax {
+		t.Fatalf("image tokens = %d, want %d", got, 1+imageTokensMax)
+	}
+	// A tokenizer that saw only the text gets the images added, a count endpoint that sized them does not
+	if got := withImageTokens(openai{}, chat, 10); got != 10+1+imageTokensMax {
+		t.Errorf("openai count = %d, want %d", got, 10+1+imageTokensMax)
+	}
+	if got := withImageTokens(ollama{}, chat, 10); got != 10+1+imageTokensMax {
+		t.Errorf("ollama count = %d, want %d", got, 10+1+imageTokensMax)
+	}
+	if got := withImageTokens(anthropic{}, chat, 10); got != 10 {
+		t.Errorf("anthropic count = %d, want 10", got)
+	}
+	// The estimate counts the same images beside the text
+	if got := estimateTokens(chat); got != (len(promptText(chat))+3)/4+3+1+imageTokensMax {
+		t.Errorf("estimate = %d", got)
+	}
+}

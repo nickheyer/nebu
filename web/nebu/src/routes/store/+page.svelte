@@ -10,6 +10,9 @@
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { weightsName } from '$lib/catalog';
+  import { isComponent, kindLabel } from '$lib/diffusion';
+  import { runtimesOf } from '$lib/runtimes';
+  import Chip from '$lib/components/ui/Chip.svelte';
   import type { StoredModel } from '$proto/store_pb';
   import { Boxes, Play, FolderOutput, ShieldCheck, Trash2, Recycle, ArrowLeftRight, Compass, SlidersHorizontal, X } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -58,6 +61,10 @@
             return m.sourceId;
           case 'format':
             return m.formatId;
+          case 'runs':
+            return runtimesOf(m.runtimes, cached.runtimes)
+              .map((r) => r.runtime?.id)
+              .join(',');
           case 'params':
             return m.descriptor?.parameterCount ?? 0n;
           case 'size':
@@ -156,8 +163,14 @@
     }
   }
 
-  // Quick targets beside the run panel: one click into any slot
+  // Quick targets beside the run panel: one click into any slot; a part loaded beside another model has no run at all
   function runItems(m: StoredModel) {
+    if (isComponent(m.descriptor)) {
+      return [
+        { label: 'Verify', icon: ShieldCheck, onSelect: () => verify(m) },
+        { label: 'Remove', icon: Trash2, tone: 'bad' as const, onSelect: () => remove(m), disabled: servingAs(m).length > 0 }
+      ];
+    }
     return [
       ...slots.map((s) => ({ label: slotOccupied(s.id) ? `Swap into ${s.position}. ${s.name}` : `Run in ${s.position}. ${s.name}`, icon: slotOccupied(s.id) ? ArrowLeftRight : Play, detail: slotOccupied(s.id) ? `replaces ${tail(s.request?.repo ?? '')}` : 'empty', onSelect: () => launch({ sourceId: m.sourceId, repo: m.repo, group: m.group, slotId: s.id }) })),
       { label: 'Run with options…', icon: SlidersHorizontal, onSelect: () => runModel(m) },
@@ -174,6 +187,7 @@
       <SortTh id="model" label="Model" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
       {#if several}<SortTh id="source" label="Source" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />{/if}
       <SortTh id="format" label="Format" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
+      <SortTh id="runs" label="Runs on" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
       <SortTh id="params" label="Params" num active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
       <SortTh id="size" label="Size" num active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
       <SortTh id="pulled" label="Pulled" active={sort.key} dir={sort.dir} onSort={(k) => sort.toggle(k)} />
@@ -261,17 +275,29 @@
                     <span class="text-fg">{m.repo}</span>
                     {#each serving as name (name)}<State tone="ok" label="Serving as {name}" />{/each}
                   </div>
-                  <div class="font-mono text-xs text-fg-muted">{weightsName(m.group, m.formatId)}{#if m.descriptor?.architecture}<span class="font-sans">{' · '}{m.descriptor.architecture}</span>{/if}</div>
+                  <div class="flex items-center gap-2 font-mono text-xs text-fg-muted">
+                    <span>{weightsName(m.group, m.formatId)}{#if m.descriptor?.architecture}<span class="font-sans">{' · '}{m.descriptor.architecture}</span>{/if}</span>
+                    {#if kindLabel(m.descriptor)}<Chip text={kindLabel(m.descriptor)} mono={false} title={isComponent(m.descriptor) ? 'A part loaded beside a diffusion model, not served on its own' : 'What this model generates'} />{/if}
+                  </div>
                 </td>
                 {#if several}<td class="text-fg-muted">{sourceName(m.sourceId)}</td>{/if}
                 <td class="text-fg-muted">{m.formatId}</td>
+                <td>
+                  <div class="flex flex-wrap gap-1">
+                    {#each runtimesOf(m.runtimes, cached.runtimes) as r (r.runtime?.id)}
+                      <Chip text={r.runtime?.name ?? r.runtime?.id ?? ''} mono={false} title={r.compatible ? `${r.runtime?.name} serves this model` : `${r.runtime?.name} serves this model, but is not compatible with this host`} class={r.compatible ? '' : 'opacity-50'} />
+                    {:else}
+                      <span class="text-xs text-fg-faint" title="No runtime serves this on its own">{isComponent(m.descriptor) ? 'part' : '–'}</span>
+                    {/each}
+                  </div>
+                </td>
                 <td class="num">{fmtParams(m.descriptor?.parameterCount)}</td>
                 <td class="num">{storage(m.bytes)}</td>
                 <td class="text-fg-muted" title={when(m.pulledAt)}>{ago(m.pulledAt, clock.now)}</td>
                 <td class="text-fg-muted" title={when(usedAt(m))}>{m.usedAt ? ago(m.usedAt, clock.now) : 'never'}</td>
                 <td class="actions" onclick={(e) => e.stopPropagation()}>
                   <span>
-                    <Button size="sm" variant="primary" icon={Play} onclick={() => runModel(m)}>Run</Button>
+                    {#if !isComponent(m.descriptor)}<Button size="sm" variant="primary" icon={Play} onclick={() => runModel(m)}>Run</Button>{/if}
                     <Menu size="sm" items={runItems(m)} />
                   </span>
                 </td>

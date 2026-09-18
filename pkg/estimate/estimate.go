@@ -82,6 +82,10 @@ type Scope struct {
 	Params     Params
 	// Cache elements per token of context, from the model's attention family at this run's shape
 	CachePerToken float64
+	// Every other model in the store, the parts a diffusion model may load beside itself
+	Companions []*v1.StoredModel
+	// The repository the model came from, so a policy prefers the parts stored from it
+	Repo string
 }
 
 // Placement rule for one tensor group kind
@@ -119,10 +123,26 @@ type Policy struct {
 	DevicesParam string
 	// The context and batch shape the family sizes the cache by
 	Shape func(p Params) archs.Run
-	// Gives every auto param but the context its value, in order, before the context is solved
+	// Gives every auto param but the context its value, in order, before the context is solved; a policy
+	// that loads files beside the weights swaps in a descriptor widened by the groups those files add
 	Solve func(s *Scope)
 	// Every param's bounds and ruled out choices under the params, and why a run would be refused
 	States func(s *Scope) ([]*v1.ParamState, string)
+	// The files a run needs beside its weights that nothing solved, each with where it is published, for a
+	// runtime that loads parts stored beside its weights; nil for one that loads nothing beside them
+	Missing func(s *Scope) []Missing
+}
+
+// One file a run needs and the store does not hold
+type Missing struct {
+	// The param the file is named by, and what it is in words
+	Param, Label string
+	Sources      []PartSource
+}
+
+// Where a part is published: a repository, and the file in it when one file is the part
+type PartSource struct {
+	Repo, Path string
 }
 
 // Everything a plan needs
@@ -137,6 +157,10 @@ type Input struct {
 	SkipRules bool
 	// Where offloadable weights may go: the device first with the rest on the host, the device alone, or the host alone
 	Placement v1.Placement
+	// Every other model in the store, for a policy that solves params to files among them
+	Companions []*v1.StoredModel
+	// The repository the model came from, so a policy prefers the parts stored from it
+	Repo string
 }
 
 // Says which facts the header lacked, the one failure that means the model rather than the policy is short
@@ -170,7 +194,7 @@ func joinOr(names []string) string {
 }
 
 func (p *Policy) scope(in Input, params Params) *Scope {
-	return &Scope{Descriptor: in.Descriptor, Model: formats.ParamsOf(in.Descriptor.GetParams()), Host: in.Host, Params: params}
+	return &Scope{Descriptor: in.Descriptor, Model: formats.ParamsOf(in.Descriptor.GetParams()), Host: in.Host, Params: params, Companions: in.Companions, Repo: in.Repo}
 }
 
 // Plans the descriptor on the host, solving offload params, the params the runtime solves, and an
@@ -212,7 +236,7 @@ func (p *Policy) solveContext(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	at := func(n int64) (*v1.MemoryPlan, error) {
 		ps := s.Params.Clone()
 		ps[p.ContextParam] = n
-		return p.plan(in, &Scope{Descriptor: s.Descriptor, Model: s.Model, Host: s.Host, Params: ps})
+		return p.plan(in, &Scope{Descriptor: s.Descriptor, Model: s.Model, Host: s.Host, Params: ps, Companions: s.Companions, Repo: s.Repo})
 	}
 	best, err := at(lo)
 	if err != nil || best.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO {
@@ -248,11 +272,24 @@ func (p *Policy) ParamStates(in Input, plan *v1.MemoryPlan) ([]*v1.ParamState, s
 	if p.States == nil {
 		return nil, ""
 	}
+	return p.States(p.solvedScope(in, plan))
+}
+
+// The parts a run needs beside its weights that the plan left unsolved, with where each is published
+func (p *Policy) MissingParts(in Input, plan *v1.MemoryPlan) []Missing {
+	if p.Missing == nil {
+		return nil
+	}
+	return p.Missing(p.solvedScope(in, plan))
+}
+
+// The scope with the plan's solved values in place
+func (p *Policy) solvedScope(in Input, plan *v1.MemoryPlan) *Scope {
 	params := in.Params.Clone()
 	for k, v := range plan.GetParams() {
 		params[k] = parsed(v)
 	}
-	return p.States(p.scope(in, params))
+	return p.scope(in, params)
 }
 
 // A solved param value read back into the type it was planned as
@@ -362,10 +399,12 @@ func (p *Policy) rule(kind v1.TensorGroupKind) (GroupRule, bool) {
 	return GroupRule{}, false
 }
 
-// Plans with every param concrete
+// Plans with every param concrete; a policy keeping no cache never sizes one per token
 func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
-	if err := p.perToken(in, s); err != nil {
-		return nil, err
+	if p.CacheBytes != nil {
+		if err := p.perToken(in, s); err != nil {
+			return nil, err
+		}
 	}
 	var cacheTotal, overhead uint64
 	if p.CacheBytes != nil {
@@ -403,7 +442,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	}
 	sv.beside(overhead)
 	layers := 0
-	for _, g := range in.Descriptor.GetGroups() {
+	for _, g := range s.Descriptor.GetGroups() {
 		if g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER && !unloaded[g.GetKind()] {
 			layers++
 		}
@@ -418,7 +457,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	byParam := map[string]*bucket{}
 	skipped := newPlacements()
 	var weights uint64
-	for _, g := range in.Descriptor.GetGroups() {
+	for _, g := range s.Descriptor.GetGroups() {
 		if unloaded[g.GetKind()] {
 			skipped.add(g.GetKind(), v1.PoolKind_POOL_KIND_UNSPECIFIED, g.GetBytes(), 1)
 			continue

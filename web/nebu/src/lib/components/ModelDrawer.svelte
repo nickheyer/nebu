@@ -4,6 +4,8 @@
   import { api, code, message } from '$lib/api';
   import { live, clock, taskFor, modelKey, hostName, runtimeName, instanceLive, installsOf, storeMount, poolName, orderedSlots, startedTask, instancesOnPool } from '$lib/state.svelte';
   import { runModel } from '$lib/actions.svelte';
+  import { isComponent, kindLabel, partWord } from '$lib/diffusion';
+  import { ModelKind } from '$proto/model_pb';
   import { ago, ratioBytes, ratioStorage, storage, count, params as fmtParams, enumLabel, byName, ctx as fmtCtx } from '$lib/format';
   import { readLocal, writeLocal } from '$lib/persist';
   import { fail, ok } from '$lib/toast.svelte';
@@ -124,6 +126,8 @@
   const formatIds = $derived([...new Set((inspect?.descriptors ?? []).map((d) => d.formatId))]);
   // Nothing installed serves these weights, so the table plans on what could be installed and says so once
   const noRuntime = $derived(planRuntimes.length > 0 && !planRuntimes.some(installed));
+  // Every variant is a part loaded beside a diffusion model, a VAE or a text encoder, which no runtime serves alone
+  const partsOnly = $derived(ordered.length > 0 && ordered.every((d) => d.kind === ModelKind.COMPONENT));
   const poolWord: Record<number, string> = { [PoolKind.DEVICE]: 'GPU', [PoolKind.HOST]: 'RAM', [PoolKind.UNIFIED]: 'MEM' };
   // One bar per pool: the whole pool, what was in use when the host was read, and what this variant takes;
   // a unified pool listed twice carries both of its shares as one
@@ -397,6 +401,8 @@
               <span class="flex-1">No installed runtime reads {formatIds.join(', ')}. You can download the weights now and run them once one is installed.</span>
               <Button size="sm" href="/runtimes/{runtime}?tab=installs" icon={Download}>Install {runtimeName(runtime)}</Button>
             </div>
+          {:else if partsOnly}
+            <div class="note note-info">These are parts loaded beside a diffusion model, {[...new Set(ordered.map((d) => partWord(d.architecture)))].join(', ')}. Download what a model needs and pick it in the model files when you run it.</div>
           {:else if ordered.length && !planRuntimes.length}
             <div class="note note-warn">No runtime reads {formatIds.join(', ')}.</div>
           {/if}
@@ -446,6 +452,11 @@
                             <span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{precisionShort(p)}</span>
                           </Tip>
                         {/if}
+                        {#if kindLabel(d)}
+                          <Tip text={isComponent(d) ? 'A part loaded beside a diffusion model, not served on its own' : 'What this model generates'}>
+                            <span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{kindLabel(d)}</span>
+                          </Tip>
+                        {/if}
                         {#if context === 0 && plan}
                           <Tip text="The largest context that fits, up to what the model was trained for"><span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{fmtCtx(plannedContext(row))} ctx</span></Tip>
                         {/if}
@@ -482,6 +493,8 @@
                       >
                         {#if task}
                           <TaskChip {task} label="Downloading" />
+                        {:else if stored && isComponent(d)}
+                          <span class="text-xs text-fg-faint">downloaded</span>
                         {:else if stored}
                           <Button size="sm" variant={best ? 'primary' : 'secondary'} icon={Play} onclick={() => runModel(stored)}>Run</Button>
                         {:else}
@@ -541,6 +554,7 @@
                 ['revision', m.revision],
                 ['commit', m.commit ? m.commit.slice(0, 12) : undefined],
                 ['architecture', m.descriptor?.architecture],
+                ['kind', kindLabel(m.descriptor) || undefined],
                 ['params', m.descriptor?.parameterCount ? fmtParams(m.descriptor.parameterCount) : undefined],
                 ['bits per weight', m.descriptor?.bitsPerWeight ? m.descriptor.bitsPerWeight.toFixed(2) : undefined]
               ]}

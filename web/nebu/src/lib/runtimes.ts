@@ -1,4 +1,5 @@
 import { InstallKind, ParamType, type Param, type RuntimeStatus } from '$proto/runtime_pb';
+import { ModelKind } from '$proto/model_pb';
 import { SandboxKind, type Build } from '$proto/recipe_pb';
 import type { Task } from '$proto/task_pb';
 import { newestFirst, type Tone } from './format';
@@ -117,3 +118,18 @@ export function defaultText(p: Param): string {
   return p.default;
 }
 
+
+// What a runtime serves, in words
+export function servesWord(kind: ModelKind): string {
+  return kind === ModelKind.DIFFUSION ? 'image and video models' : 'language models';
+}
+
+// The runtimes a bitmask names, in the daemon's order, each by the bit the daemon gave it
+export function runtimesOf(mask: number, runtimes: RuntimeStatus[]): RuntimeStatus[] {
+  return runtimes.filter((r) => r.runtime && r.runtime.bit !== 0 && (mask & r.runtime.bit) !== 0);
+}
+
+// Whether a bitmask names a runtime
+export function runsOn(mask: number, r: RuntimeStatus | undefined): boolean {
+  return !!r?.runtime && r.runtime.bit !== 0 && (mask & r.runtime.bit) !== 0;
+}

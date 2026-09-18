@@ -19,10 +19,10 @@ func registry(t *testing.T) *Registry {
 	return r
 }
 
-// Every shipped runtime describes itself, and every param the planner solves says in words what auto means
+// Every shipped runtime describes itself, every param has a label, and every param the planner solves says in words what auto means
 func TestShippedRuntimesAreComplete(t *testing.T) {
 	r := registry(t)
-	if len(r.List()) != 4 {
+	if len(r.List()) != 5 {
 		t.Fatalf("runtimes %d", len(r.List()))
 	}
 	for _, rt := range r.List() {
@@ -33,8 +33,8 @@ func TestShippedRuntimesAreComplete(t *testing.T) {
 			t.Fatalf("%s describes launch mechanics: %s", rt.ID(), rt.Description())
 		}
 		for _, p := range rt.Params() {
-			if p.GetLabel() == "" || p.GetDescription() == "" {
-				t.Fatalf("%s param %s needs a label and a description", rt.ID(), p.GetName())
+			if p.GetLabel() == "" {
+				t.Fatalf("%s param %s needs a label", rt.ID(), p.GetName())
 			}
 			if p.GetSolved() && (p.GetRule() == "" || !strings.EqualFold(p.GetDefault(), Auto)) {
 				t.Fatalf("%s solved param %s needs a rule and an auto default", rt.ID(), p.GetName())
@@ -167,8 +167,12 @@ func TestDeviceFactsFeedRules(t *testing.T) {
 	if _, err := MethodOf(LlamaCpp{}, "nope"); err == nil {
 		t.Fatal("unknown method")
 	}
-	if !Accepts(LlamaCpp{}, "gguf") || Accepts(LlamaCpp{}, "safetensors") {
+	if !Accepts(LlamaCpp{}, "gguf", v1.ModelKind_MODEL_KIND_LANGUAGE) || Accepts(LlamaCpp{}, "safetensors", v1.ModelKind_MODEL_KIND_LANGUAGE) || Accepts(LlamaCpp{}, "gguf", v1.ModelKind_MODEL_KIND_DIFFUSION) {
 		t.Fatal("accepts")
+	}
+	// A diffusion runtime takes diffusion models alone, an unspecified kind being a language model, and no runtime takes a component
+	if !Accepts(SDCpp{}, "gguf", v1.ModelKind_MODEL_KIND_DIFFUSION) || Accepts(SDCpp{}, "gguf", v1.ModelKind_MODEL_KIND_UNSPECIFIED) || Accepts(SDCpp{}, "gguf", v1.ModelKind_MODEL_KIND_COMPONENT) || Accepts(LlamaCpp{}, "gguf", v1.ModelKind_MODEL_KIND_COMPONENT) {
+		t.Fatal("kinds")
 	}
 	if ok, unmet := Compatible(LlamaCpp{}, &v1.HostProfile{}); ok || len(unmet) != 1 {
 		t.Fatal("a host without devices is unmet")

@@ -68,7 +68,7 @@ func NewHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(nebuv1connect.NewHostServiceHandler(services.NewHostService(d.Host, d.Doctor, d.Recent), opts))
 	mux.Handle(nebuv1connect.NewSettingsServiceHandler(services.NewSettingsService(d.Settings), opts))
-	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector, d.Formats), opts))
+	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector, d.Formats, d.Runtimes), opts))
 	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Formats), opts))
 	mux.Handle(nebuv1connect.NewInstanceServiceHandler(services.NewInstanceService(d.Instances), opts))
 	mux.Handle(nebuv1connect.NewEstimateServiceHandler(services.NewEstimateService(d.Inspector), opts))

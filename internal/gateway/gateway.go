@@ -49,6 +49,8 @@ type Gateway struct {
 
 	mu         sync.Mutex
 	transports map[uint32]*http.Transport
+	// Video generations in flight and finished, answered by id
+	videos *videoStore
 }
 
 // Builds the gateway, requiring a bearer key when keys exist, with the policy routes inherit and the origins browsers may call from
@@ -56,7 +58,7 @@ type Gateway struct {
 // Every request is traced and the newest traces reach the bus.
 func New(table *Table, keys, origins []string, policy *v1.Policy, bus *events.Bus, log *slog.Logger) *Gateway {
 	table.SetDefaults(policy)
-	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing, countRing), transports: map[uint32]*http.Transport{}}
+	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing, countRing), transports: map[uint32]*http.Transport{}, videos: newVideoStore()}
 }
 
 // Returns the request recorder
@@ -102,6 +104,7 @@ func (g *Gateway) Mount(mux *http.ServeMux) {
 	mux.HandleFunc(ollamaVersion, g.cors(g.about))
 	mux.HandleFunc(prefix, g.cors(g.auth(g.proxy)))
 	mux.HandleFunc(ollamaPrefix, g.cors(g.auth(g.proxy)))
+	mux.HandleFunc(sdcppPrefix, g.cors(g.auth(g.proxy)))
 }
 
 // Lets browsers on other origins call the gateway, answering preflights itself
@@ -221,12 +224,33 @@ func modelEntry(api v1.ApiFlavor, rt *v1.Route) map[string]any {
 		return map[string]any{"id": rt.GetName(), "type": "model", "display_name": rt.GetName(), "created_at": rt.GetUpdatedAt().AsTime().UTC().Format(time.RFC3339)}
 	}
 	return map[string]any{
-		"id":       rt.GetName(),
-		"object":   "model",
-		"created":  rt.GetUpdatedAt().AsTime().Unix(),
-		"owned_by": "nebu",
-		"ready":    rt.GetState() == v1.RouteState_ROUTE_STATE_READY,
+		"id":           rt.GetName(),
+		"object":       "model",
+		"created":      rt.GetUpdatedAt().AsTime().Unix(),
+		"owned_by":     "nebu",
+		"ready":        rt.GetState() == v1.RouteState_ROUTE_STATE_READY,
+		"capabilities": capabilitiesOf(rt),
 	}
+}
+
+// What a route answers to: chat and tools for a language model, images and videos as a diffusion runtime lists its modes
+func capabilitiesOf(rt *v1.Route) []string {
+	if rt.GetApi() != v1.ApiFlavor_API_FLAVOR_SDCPP {
+		return []string{"completion", "tools"}
+	}
+	var out []string
+	for _, mode := range rt.GetModes() {
+		switch mode {
+		case "img_gen":
+			out = append(out, "images")
+		case "vid_gen":
+			out = append(out, "videos")
+		}
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out
 }
 
 // Lists routes as models in the shape the caller's flavor expects
@@ -289,13 +313,12 @@ func (g *Gateway) show(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"modelfile":  "",
-		"parameters": "",
-		"template":   "",
-		"details":    map[string]any{"family": rt.GetModel(), "format": "", "parameter_size": "", "quantization_level": ""},
-		"model_info": map[string]any{"nebu.instance": rt.GetInstanceId(), "nebu.slot": rt.GetSlotId(), "nebu.model": rt.GetModel()},
-		// Every flavor crosses tool calls over, so every route takes tools
-		"capabilities": []string{"completion", "tools"},
+		"modelfile":    "",
+		"parameters":   "",
+		"template":     "",
+		"details":      map[string]any{"family": rt.GetModel(), "format": "", "parameter_size": "", "quantization_level": ""},
+		"model_info":   map[string]any{"nebu.instance": rt.GetInstanceId(), "nebu.slot": rt.GetSlotId(), "nebu.model": rt.GetModel()},
+		"capabilities": capabilitiesOf(rt),
 	})
 }
 
@@ -333,6 +356,11 @@ func (g *Gateway) refuse(w *traceWriter, client Flavor, status int, message, kin
 
 func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	client := flavorOf(clientFlavor(r))
+	// A video is asked after by its id, not by the model that made it
+	if strings.HasPrefix(r.URL.Path, videosPath) && r.Method != http.MethodPost {
+		g.video(rw, r, client)
+		return
+	}
 	body, ok := readBody(rw, r, client)
 	if !ok {
 		return
@@ -342,6 +370,9 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	rw.Header().Set(traceHeader, t.GetId())
 	w := &traceWriter{ResponseWriter: rw, t: t}
 	defer func() {
+		if w.detached {
+			return
+		}
 		t.Status, t.ResponseBytes = uint32(w.status), w.bytes
 		g.traces.Finish(t)
 	}()
@@ -376,8 +407,13 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		g.refuse(w, client, http.StatusNotFound, "model "+name+" is not running, run it with nebu run", "model_not_found")
 		return
 	}
-	defer release()
 	t.InstanceId, t.SlotId, t.UpstreamApi = route.GetInstanceId(), route.GetSlotId(), route.GetApi()
+	// An image or a video is made through the runtime's job API, the route held until the job ends
+	if t.GetKind() == v1.TraceKind_TRACE_KIND_IMAGE || t.GetKind() == v1.TraceKind_TRACE_KIND_VIDEO {
+		g.media(w, r, body, name, route, policy, release)
+		return
+	}
+	defer release()
 	target, err := url.Parse(route.GetEndpoint())
 	if err != nil {
 		g.refuse(w, client, http.StatusBadGateway, err.Error(), "server_error")
@@ -579,6 +615,8 @@ func (g *Gateway) count(w *traceWriter, r *http.Request, chat *Chat, name string
 	if err != nil {
 		g.log.Debug("gateway count estimated", "model", name, "err", err)
 		n = estimateTokens(chat)
+	} else {
+		n = withImageTokens(upstream, chat, n)
 	}
 	res.In = n
 	w.t.PromptTokens = uint32(n)
@@ -678,6 +716,10 @@ func modelName(r *http.Request, body []byte) string {
 		if json.Unmarshal(body, &probe) == nil {
 			return probe.Model
 		}
+	}
+	// An image edit arrives as a form, its model a field among the files
+	if form, err := parseForm(r, body); err == nil {
+		return form.value("model")
 	}
 	return ""
 }

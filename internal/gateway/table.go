@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -50,7 +51,9 @@ type Table struct {
 	defaults *v1.Policy
 	// What each instance's chat template accepted, for routes that leave system messages to the instance
 	templates map[string]*v1.TemplateProbe
-	total     atomic.Uint64
+	// What each instance generates as its capabilities endpoint lists them, img_gen and vid_gen, for diffusion runtimes
+	modes map[string][]string
+	total atomic.Uint64
 	// Routes whose counters moved since the stream last heard, flushed by one timer
 	dirty map[string]bool
 	flush *time.Timer
@@ -61,7 +64,7 @@ func OpenTable(ctx context.Context, store *db.DB, bus *events.Bus, log *slog.Log
 	if log == nil {
 		log = slog.Default()
 	}
-	t := &Table{store: store, events: bus, log: log, routes: map[string]*v1.Route{}, inflight: map[string]*atomic.Int32{}, limiters: map[string]*rate.Limiter{}, templates: map[string]*v1.TemplateProbe{}, dirty: map[string]bool{}}
+	t := &Table{store: store, events: bus, log: log, routes: map[string]*v1.Route{}, inflight: map[string]*atomic.Int32{}, limiters: map[string]*rate.Limiter{}, templates: map[string]*v1.TemplateProbe{}, modes: map[string][]string{}, dirty: map[string]bool{}}
 	if store == nil {
 		return t, nil
 	}
@@ -167,14 +170,28 @@ func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, ap
 		slotID = r.GetSlotId()
 	}
 	// Nothing to write when the route already says exactly this
-	if ok && r.GetInstanceId() == instanceID && r.GetEndpoint() == endpoint && r.GetModel() == model && r.GetServed() == served && r.GetApi() == api && r.GetSlotId() == slotID && r.GetState() == state && proto.Equal(r.GetPolicy(), policy) && proto.Equal(r.GetProfile(), profile) {
+	if ok && r.GetInstanceId() == instanceID && r.GetEndpoint() == endpoint && r.GetModel() == model && r.GetServed() == served && r.GetApi() == api && r.GetSlotId() == slotID && r.GetState() == state && proto.Equal(r.GetPolicy(), policy) && proto.Equal(r.GetProfile(), profile) && slices.Equal(r.GetModes(), t.modes[instanceID]) {
 		return t.snapshotLocked(r)
 	}
 	r.InstanceId, r.Endpoint, r.Model, r.Served, r.Api, r.SlotId, r.State = instanceID, endpoint, model, served, api, slotID, state
 	r.Policy = proto.Clone(policy).(*v1.Policy)
 	r.Profile = proto.Clone(profile).(*v1.Profile)
+	r.Modes = append([]string(nil), t.modes[instanceID]...)
 	t.save(r, action)
 	return t.snapshotLocked(r)
+}
+
+// Records what an instance generates, stamping every route pointed at it
+func (t *Table) SetModes(instanceID string, modes []string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.modes[instanceID] = append([]string(nil), modes...)
+	for _, r := range t.routes {
+		if r.GetInstanceId() == instanceID {
+			r.Modes = append([]string(nil), modes...)
+			t.save(r, v1.EventAction_EVENT_ACTION_UPDATED)
+		}
+	}
 }
 
 // Points a name at a ready instance answering to its own name, the slot's policy and profile when it has them,
@@ -295,7 +312,7 @@ func (t *Table) RemoveInstance(instanceID string) {
 			continue
 		}
 		if r.GetSlotId() != "" {
-			r.InstanceId, r.Endpoint, r.State = "", "", v1.RouteState_ROUTE_STATE_PENDING
+			r.InstanceId, r.Endpoint, r.State, r.Modes = "", "", v1.RouteState_ROUTE_STATE_PENDING, nil
 			t.save(r, v1.EventAction_EVENT_ACTION_UPDATED)
 			continue
 		}
@@ -305,6 +322,7 @@ func (t *Table) RemoveInstance(instanceID string) {
 	}
 	delete(t.inflight, instanceID)
 	delete(t.templates, instanceID)
+	delete(t.modes, instanceID)
 }
 
 // Returns one route

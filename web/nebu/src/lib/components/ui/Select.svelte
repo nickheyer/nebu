@@ -24,6 +24,7 @@
     size = 'md',
     label,
     onchange,
+    unset = false,
     class: cls = ''
   }: {
     value?: string;
@@ -36,6 +37,8 @@
     label?: string;
     // Called with the new value, for callers that do not bind
     onchange?: (value: string) => void;
+    // The empty value means nothing chosen, so its label reads as a placeholder
+    unset?: boolean;
     class?: string;
   } = $props();
 
@@ -72,7 +75,7 @@
     aria-label={label}
     class="inline-flex w-full items-center gap-2 rounded-md border border-line bg-sunken px-2.5 text-left text-fg transition-colors hover:border-line-strong focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 data-[state=open]:border-accent {height}"
   >
-    <span class="min-w-0 flex-1 truncate {mono ? 'font-mono' : ''} {current ? '' : 'text-fg-faint'}">
+    <span class="min-w-0 flex-1 truncate {mono ? 'font-mono' : ''} {current && !(unset && value === '') ? '' : 'text-fg-faint'}">
       {current?.label ?? ''}{#if current?.detail}<span class="ml-1.5 text-fg-faint">{current.detail}</span>{/if}
     </span>
     <ChevronDown size={14} class="shrink-0 text-fg-faint" />

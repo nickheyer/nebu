@@ -30,6 +30,8 @@ message StoredModel {
   string path = 11;
   // Last time a run started from it, what eviction orders by
   google.protobuf.Timestamp used_at = 12;
+  // The runtimes that serve this group, one bit per runtime as Runtime.bit numbers them, from its format and what its headers say it is
+  uint32 runtimes = 13;
 }
 
 // Store wide counters

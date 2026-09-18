@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -248,8 +250,23 @@ func civHit(c *Client, it civModel) *v1.SearchHit {
 		if f.Primary {
 			hit.SizeBytes += civBytes(f)
 		}
+		// Civitai publishes single file checkpoints, safetensors and pickles, and the odd GGUF
+		if format := civFormat(f.Name); format != "" && !slices.Contains(hit.Formats, format) {
+			hit.Formats = append(hit.Formats, format)
+		}
 	}
 	return hit
+}
+
+// The format a published file is held in by its extension, a checkpoint file being the single file diffusion format
+func civFormat(name string) string {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".gguf":
+		return "gguf"
+	case ".safetensors", ".sft", ".ckpt", ".pt", ".pth":
+		return "diffusion"
+	}
+	return ""
 }
 
 // Turns the API's fractional KB into exact bytes

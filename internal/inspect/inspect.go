@@ -53,6 +53,7 @@ type Inspector struct {
 	Sources     *sources.Registry
 	Formats     *formats.Registry
 	Builder     *descriptor.Builder
+	Stored      func() ([]*v1.StoredModel, error)
 	Runtimes    *runtimes.Registry
 	Host        *host.Prober
 	Cache       *cache.Store
@@ -87,10 +88,10 @@ func planContexts(contexts []uint32, d *v1.Descriptor, named bool) []uint32 {
 
 // Narrows runtimes to the ones accepting a format that have an install, every accepting one
 // when none is installed or the request named the runtimes itself
-func (i *Inspector) planners(list []runtimes.Runtime, formatID string, named bool) []runtimes.Runtime {
+func (i *Inspector) planners(list []runtimes.Runtime, formatID string, kind v1.ModelKind, named bool) []runtimes.Runtime {
 	var accepting, installed []runtimes.Runtime
 	for _, rt := range list {
-		if !runtimes.Accepts(rt, formatID) || rt.Policy() == nil {
+		if !runtimes.Accepts(rt, formatID, kind) || rt.Policy() == nil {
 			continue
 		}
 		accepting = append(accepting, rt)
@@ -119,11 +120,11 @@ func (i *Inspector) constraint(ctx context.Context, slotID string) (*Constraint,
 	return i.Constrain.Constrain(ctx, slotID, profile)
 }
 
-// Picks the first compatible runtime accepting a format, an installed one before the rest
-func (i *Inspector) DefaultRuntime(profile *v1.HostProfile, formatID string) (runtimes.Runtime, error) {
+// Picks the first compatible runtime accepting a format holding a kind of model, an installed one before the rest
+func (i *Inspector) DefaultRuntime(profile *v1.HostProfile, formatID string, kind v1.ModelKind) (runtimes.Runtime, error) {
 	var first runtimes.Runtime
 	for _, rt := range i.Runtimes.List() {
-		if ok, _ := runtimes.Compatible(rt, profile); !ok || !runtimes.Accepts(rt, formatID) {
+		if ok, _ := runtimes.Compatible(rt, profile); !ok || !runtimes.Accepts(rt, formatID, kind) {
 			continue
 		}
 		if i.installed(rt) {
@@ -134,9 +135,31 @@ func (i *Inspector) DefaultRuntime(profile *v1.HostProfile, formatID string) (ru
 		}
 	}
 	if first == nil {
+		if kind == v1.ModelKind_MODEL_KIND_COMPONENT {
+			return nil, fmt.Errorf("%w: a component is loaded beside a diffusion model, not served on its own", runtimes.ErrParam)
+		}
 		return nil, fmt.Errorf("%w: no compatible runtime accepts %s", runtimes.ErrParam, formatID)
 	}
 	return first, nil
+}
+
+// Every other model in the store, the parts a diffusion model may load beside itself wherever they were pulled from
+func (i *Inspector) Companions(sourceID, repo, group string) ([]*v1.StoredModel, error) {
+	if i.Stored == nil {
+		return nil, nil
+	}
+	list, err := i.Stored()
+	if err != nil {
+		return nil, err
+	}
+	var out []*v1.StoredModel
+	for _, m := range list {
+		if m.GetSourceId() == sourceID && m.GetRepo() == repo && m.GetGroup() == group {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }
 
 // Resolves and classifies a model, caching the listing briefly
@@ -210,7 +233,7 @@ func (i *Inspector) Describe(ctx context.Context, src sources.Source, model *v1.
 
 // Everything a plan of one descriptor on one runtime reads: the overrides typed, against the memory
 // free right now or all of it, with the same learned correction a run applies
-func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement) (estimate.Input, error) {
+func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, companions []*v1.StoredModel) (estimate.Input, error) {
 	if rt.Policy() == nil {
 		return estimate.Input{}, fmt.Errorf("runtime %s has no estimate policy", rt.ID())
 	}
@@ -226,12 +249,24 @@ func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.Hos
 		Free:          free,
 		OverheadDelta: i.Calibration.Delta(rt.ID(), d.GetArchitecture()),
 		Placement:     placement,
+		Companions:    companions,
+		Repo:          repo,
 	}, nil
 }
 
+// Plans the fit of one descriptor on one runtime through whatever params a run would refuse, for a table that is about memory alone
+func (i *Inspector) fit(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, companions []*v1.StoredModel) (*v1.MemoryPlan, error) {
+	in, err := i.input(rt, d, profile, overrides, free, placement, repo, companions)
+	if err != nil {
+		return nil, err
+	}
+	in.SkipRules = true
+	return rt.Policy().Plan(in)
+}
+
 // Plans one descriptor on one runtime with overrides, refusing params the runtime rules out
-func (i *Inspector) Plan(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement) (*v1.MemoryPlan, error) {
-	in, err := i.input(rt, d, profile, overrides, free, placement)
+func (i *Inspector) Plan(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, companions []*v1.StoredModel) (*v1.MemoryPlan, error) {
+	in, err := i.input(rt, d, profile, overrides, free, placement, repo, companions)
 	if err != nil {
 		return nil, err
 	}
@@ -262,6 +297,11 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		contexts = i.Contexts
 	}
 	resp := &v1.InspectResponse{Model: model}
+	// What the store holds, the parts a diffusion model's plan solves its file params to
+	companions, err := i.Companions(req.GetSourceId(), req.GetRepo(), "")
+	if err != nil {
+		return nil, err
+	}
 	// The same failure repeats per context, so every warning is kept once
 	seen := map[string]bool{}
 	warn := func(format string, args ...any) {
@@ -312,7 +352,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		}
 		resp.Descriptors = append(resp.Descriptors, d)
 		// What you have installed answers first, what you could install only when nothing installed serves the format
-		for _, rt := range i.planners(list, d.GetFormatId(), named) {
+		for _, rt := range i.planners(list, d.GetFormatId(), d.GetKind(), named) {
 			// The row the planner solves itself comes first, the largest context that fits, then the grid
 			rows := []uint32{}
 			if rt.Policy().ContextParam != "" && len(req.GetContexts()) == 0 {
@@ -321,10 +361,10 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 			for _, n := range append(rows, planContexts(contexts, d, len(req.GetContexts()) > 0)...) {
 				overrides := withContext(layered, rt.Policy().ContextParam, n)
 				// A run plans around what is loaded now, so the table says both
-				plan, err := i.Plan(rt, d, profile, overrides, false, c.Placement)
+				plan, err := i.fit(rt, d, profile, overrides, false, c.Placement, req.GetRepo(), companions)
 				var now *v1.MemoryPlan
 				if err == nil {
-					now, err = i.Plan(rt, d, profile, overrides, true, c.Placement)
+					now, err = i.fit(rt, d, profile, overrides, true, c.Placement, req.GetRepo(), companions)
 				}
 				if err != nil {
 					warn("%s", planFailure(d, rt, err))
@@ -367,8 +407,12 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if runtimeID == "" {
 		runtimeID = c.RuntimeID
 	}
+	d, err := i.Describe(ctx, src, model, g)
+	if err != nil {
+		return nil, err
+	}
 	if runtimeID == "" {
-		fallback, err := i.DefaultRuntime(profile, g.FormatID)
+		fallback, err := i.DefaultRuntime(profile, g.FormatID, d.GetKind())
 		if err != nil {
 			return nil, err
 		}
@@ -379,12 +423,12 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 		return nil, err
 	}
 	overrides := runtimes.Merge(c.Params, req.GetParams())
-	d, err := i.Describe(ctx, src, model, g)
+	companions, err := i.Companions(req.GetSourceId(), req.GetRepo(), req.GetGroup())
 	if err != nil {
 		return nil, err
 	}
 	// An estimate plans through params a run would refuse and says so, so a form can show what to change
-	in, err := i.input(rt, d, profile, overrides, req.GetFree(), c.Placement)
+	in, err := i.input(rt, d, profile, overrides, req.GetFree(), c.Placement, req.GetRepo(), companions)
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +438,38 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 		return nil, err
 	}
 	states, refusal := rt.Policy().ParamStates(in, plan)
-	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Params: states, Refusal: refusal}, nil
+	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Params: states, Refusal: refusal, Missing: i.missing(rt.Policy().MissingParts(in, plan))}, nil
+}
+
+// The parts a run needs and the store lacks, each place they are published named as a pull: the first
+// Hugging Face source configured, the repository, and the group the named file forms in it as the
+// formats classify it, so a client pulls it in one call; a repository without a named file is left for
+// the catalog to open, since it holds several files to choose from
+func (i *Inspector) missing(parts []estimate.Missing) []*v1.MissingPart {
+	var hub string
+	for _, spec := range i.Sources.List() {
+		if spec.GetKind() == v1.SourceKind_SOURCE_KIND_HUGGINGFACE {
+			hub = spec.GetId()
+			break
+		}
+	}
+	var out []*v1.MissingPart
+	for _, part := range parts {
+		mp := &v1.MissingPart{Param: part.Param, Label: part.Label}
+		for _, src := range part.Sources {
+			ps := &v1.PartSource{SourceId: hub, Repo: src.Repo, Path: src.Path}
+			if src.Path != "" {
+				m := &v1.Model{Artifacts: []*v1.Artifact{{Path: src.Path}}}
+				i.Formats.Classify(m)
+				if a := m.GetArtifacts()[0]; a.GetRole() == v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS {
+					ps.Group = a.GetGroup()
+				}
+			}
+			mp.Sources = append(mp.Sources, ps)
+		}
+		out = append(out, mp)
+	}
+	return out
 }
 
 func (i *Inspector) selectRuntimes(ids []string, profile *v1.HostProfile) []runtimes.Runtime {

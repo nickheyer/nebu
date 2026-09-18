@@ -15,7 +15,7 @@
       <tr>
         <th>Parameter</th>
         <th>Flag</th>
-        <th>Default</th>
+        <th>When unset</th>
         <th>Accepts</th>
       </tr>
     </thead>

@@ -69,7 +69,7 @@ aurs:
     depends: [ca-certificates]
     optdepends: &runtime_dependencies
       - 'git: git model sources'
-      - 'cmake: building llama.cpp'
+      - 'cmake: building llama.cpp and stable-diffusion.cpp'
       - 'gcc: compiling inference runtimes'
       - 'python: Python inference runtimes'
       - 'python-pip: installing Python inference runtimes'

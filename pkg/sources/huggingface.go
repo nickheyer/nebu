@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -135,6 +136,10 @@ func (hubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 	for _, t := range Filter(req, FacetTag) {
 		q.Add("filter", t)
 	}
+	// The hub tags every repository by the formats it holds, so a format narrows the page at the source
+	for _, tag := range hubFormatTags(Filter(req, FacetFormat)) {
+		q.Add("filter", tag)
+	}
 	for _, e := range hubExpand {
 		q.Add("expand[]", e)
 	}
@@ -156,6 +161,24 @@ func (hubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 		resp.Total = total
 	}
 	return resp, nil
+}
+
+// The hub's tags for the formats the daemon reads: a single file diffusion checkpoint is tagged safetensors like any other
+func hubFormatTags(formats []string) []string {
+	var out []string
+	for _, f := range formats {
+		tag := f
+		switch f {
+		case "diffusion":
+			tag = "safetensors"
+		case "nemo", "nemo2":
+			tag = "nemo"
+		}
+		if !slices.Contains(out, tag) {
+			out = append(out, tag)
+		}
+	}
+	return out
 }
 
 func hubHit(c *Client, it hubItem) *v1.SearchHit {

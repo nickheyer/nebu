@@ -10,7 +10,7 @@
     USE_PROFILES: { html: true }
   };
 
-  // Opens links in a new tab without leaking the opener
+  // Opens links in a new tab without leaking the opener, and makes media playable
   function harden(html: string): string {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     for (const a of doc.querySelectorAll('a[href]')) {
@@ -18,6 +18,12 @@
       a.setAttribute('rel', 'noopener noreferrer');
     }
     for (const img of doc.querySelectorAll('img')) img.setAttribute('loading', 'lazy');
+    // Media plays under its own controls, the file read only when played
+    for (const media of doc.querySelectorAll('video, audio')) {
+      media.setAttribute('controls', '');
+      media.setAttribute('preload', 'metadata');
+    }
+    for (const video of doc.querySelectorAll('video')) video.setAttribute('playsinline', '');
     return doc.body.innerHTML;
   }
 

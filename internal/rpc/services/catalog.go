@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -19,8 +20,10 @@ import (
 	"github.com/nickheyer/nebu/pkg/launch"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -151,20 +154,50 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, req *connect.Reque
 type SourceService struct {
 	sources   *sources.Manager
 	inspector *inspect.Inspector
-	formats   []string
+	formats   *formats.Registry
+	runtimes  *runtimes.Registry
 }
 
-// Builds the source service, formats are what hits get tagged with, in priority order
-func NewSourceService(m *sources.Manager, insp *inspect.Inspector, fmts *formats.Registry) *SourceService {
-	s := &SourceService{sources: m, inspector: insp}
-	for _, f := range fmts.List() {
-		s.formats = append(s.formats, f.ID())
+// Pages a filtered search reads on past an empty one before answering, so a narrow filter over a wide
+// catalog still answers with hits when the source holds any
+const filteredPages = 8
+
+// Builds the source service over the formats hits are tagged with and the runtimes they are matched against
+func NewSourceService(m *sources.Manager, insp *inspect.Inspector, fmts *formats.Registry, reg *runtimes.Registry) *SourceService {
+	return &SourceService{sources: m, inspector: insp, formats: fmts, runtimes: reg}
+}
+
+// The format ids in priority order
+func (s *SourceService) formatIDs() []string {
+	var out []string
+	for _, f := range s.formats.List() {
+		out = append(out, f.ID())
 	}
-	return s
+	return out
 }
 
+// The facets the daemon answers over every source: the runtime a model runs on and the format it is held in
+func (s *SourceService) sharedFacets() []*v1.Facet {
+	runtime := &v1.Facet{Id: sources.FacetRuntime, Label: "Runtime"}
+	for _, rt := range s.runtimes.List() {
+		runtime.Values = append(runtime.Values, &v1.FacetValue{Id: rt.ID(), Label: rt.Name()})
+	}
+	format := &v1.Facet{Id: sources.FacetFormat, Label: "Format", Multi: true}
+	for _, f := range s.formats.List() {
+		format.Values = append(format.Values, &v1.FacetValue{Id: f.ID(), Label: f.Description()})
+	}
+	return []*v1.Facet{runtime, format}
+}
+
+// Lists every source with the facets the daemon answers ahead of the provider's own
 func (s *SourceService) ListSources(ctx context.Context, req *connect.Request[v1.ListSourcesRequest]) (*connect.Response[v1.ListSourcesResponse], error) {
-	return reply(&v1.ListSourcesResponse{Sources: s.sources.Registry.Statuses(ctx)}, nil)
+	statuses := s.sources.Registry.Statuses(ctx)
+	for _, st := range statuses {
+		if st.GetCapabilities() != nil {
+			st.Capabilities.Facets = append(s.sharedFacets(), st.Capabilities.Facets...)
+		}
+	}
+	return reply(&v1.ListSourcesResponse{Sources: statuses}, nil)
 }
 
 func (s *SourceService) ListProviders(ctx context.Context, req *connect.Request[v1.ListProvidersRequest]) (*connect.Response[v1.ListProvidersResponse], error) {
@@ -196,31 +229,74 @@ func (s *SourceService) DeleteSource(ctx context.Context, req *connect.Request[v
 }
 
 // Searches one source, every source of a provider, or every source there is
+//
+// Every hit is stamped with what the catalog says it is, the formats it is held in, and the runtimes
+// that serve it. The runtime and format facets are answered here, over whatever the source could
+// narrow itself: a hit the filter rules out never reaches the page, and a page emptied by the filter
+// is read on past, the cursor carried, until one holds a hit or the source runs out.
 func (s *SourceService) Search(ctx context.Context, req *connect.Request[v1.SearchRequest]) (*connect.Response[v1.SearchResponse], error) {
-	resp, err := s.sources.Registry.Search(ctx, req.Msg)
-	if err != nil {
-		return nil, wrap(err)
+	in := proto.Clone(req.Msg).(*v1.SearchRequest)
+	var wantMask uint32
+	if id := strings.TrimSpace(in.GetFilters()[sources.FacetRuntime]); id != "" {
+		if _, err := s.runtimes.Get(id); err != nil {
+			return nil, wrap(err)
+		}
+		wantMask = s.runtimes.Bit(id)
 	}
-	for _, h := range resp.GetHits() {
-		if len(h.Formats) == 0 {
-			h.Formats = s.formatsOf(h)
+	wantFormats := sources.Filter(in, sources.FacetFormat)
+	for _, f := range wantFormats {
+		if s.formats.Get(f) == nil {
+			return nil, wrap(fmt.Errorf("%w: no format %q, one of %s", runtimes.ErrParam, f, strings.Join(s.formatIDs(), ", ")))
 		}
 	}
-	return connect.NewResponse(resp), nil
+	out := &v1.SearchResponse{}
+	dropped := false
+	for page := 0; page < filteredPages; page++ {
+		resp, err := s.sources.Registry.Search(ctx, in)
+		if err != nil {
+			return nil, wrap(err)
+		}
+		out.Warnings = append(out.Warnings, resp.GetWarnings()...)
+		out.NextCursor = resp.GetNextCursor()
+		if page == 0 {
+			out.Total = resp.GetTotal()
+		}
+		for _, h := range resp.GetHits() {
+			s.stamp(h)
+			if wantMask != 0 && h.GetRuntimes()&wantMask == 0 || len(wantFormats) > 0 && !holdsAny(h.GetFormats(), wantFormats) {
+				dropped = true
+				continue
+			}
+			out.Hits = append(out.Hits, h)
+		}
+		if len(out.Hits) > 0 || out.NextCursor == "" {
+			break
+		}
+		in.Cursor = out.NextCursor
+	}
+	// A count the source gave describes its own page, not what the filter kept of it
+	if dropped {
+		out.Total = 0
+	}
+	return connect.NewResponse(out), nil
 }
 
-// Names the formats a hit advertises through its tags
-func (s *SourceService) formatsOf(h *v1.SearchHit) []string {
-	var out []string
-	for _, id := range s.formats {
-		for _, t := range append([]string{h.GetLibrary()}, h.GetTags()...) {
-			if strings.EqualFold(t, id) {
-				out = append(out, id)
-				break
+// Stamps a hit with what it is, the formats it is held in, and the runtimes that serve it
+func (s *SourceService) stamp(h *v1.SearchHit) {
+	h.Kind = sources.Kind(h)
+	h.Formats = sources.Formats(h, s.formatIDs(), h.GetKind())
+	h.Runtimes = s.runtimes.MaskOf(h.GetFormats(), h.GetKind())
+}
+
+func holdsAny(have, want []string) bool {
+	for _, w := range want {
+		for _, h := range have {
+			if h == w {
+				return true
 			}
 		}
 	}
-	return out
+	return false
 }
 
 func (s *SourceService) Resolve(ctx context.Context, req *connect.Request[v1.ResolveRequest]) (*connect.Response[v1.ResolveResponse], error) {

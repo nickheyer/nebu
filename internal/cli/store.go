@@ -48,13 +48,17 @@ func runList(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
+	names, err := e.runtimeNames(ctx)
+	if err != nil {
+		return err
+	}
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, m := range resp.Msg.GetModels() {
 			// Eviction takes the model used longest ago, a model never run counting from its pull
-			rows = append(rows, []string{m.GetSourceId(), m.GetRepo(), m.GetGroup(), m.GetFormatId(), m.GetDescriptor_().GetArchitecture(), estimate.Human(m.GetBytes()), when(m.GetPulledAt(), time.DateTime), when(cmp.Or(m.GetUsedAt(), m.GetPulledAt()), time.DateTime), m.GetPath()})
+			rows = append(rows, []string{m.GetSourceId(), m.GetRepo(), m.GetGroup(), m.GetFormatId(), m.GetDescriptor_().GetArchitecture(), kindWord(m.GetDescriptor_().GetKind()), names.of(m.GetRuntimes()), estimate.Human(m.GetBytes()), when(m.GetPulledAt(), time.DateTime), when(cmp.Or(m.GetUsedAt(), m.GetPulledAt()), time.DateTime), m.GetPath()})
 		}
-		table(w, []string{"SOURCE", "REPO", "GROUP", "FORMAT", "ARCH", "SIZE", "PULLED", "USED", "PATH"}, rows)
+		table(w, []string{"SOURCE", "REPO", "GROUP", "FORMAT", "ARCH", "KIND", "RUNS ON", "SIZE", "PULLED", "USED", "PATH"}, rows)
 	})
 }
 

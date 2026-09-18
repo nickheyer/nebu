@@ -33,6 +33,7 @@ func (fakeRuntime) Name() string                                       { return 
 func (fakeRuntime) Description() string                                { return "A runtime for tests" }
 func (fakeRuntime) Formats() []string                                  { return []string{"gguf"} }
 func (fakeRuntime) API() v1.ApiFlavor                                  { return v1.ApiFlavor_API_FLAVOR_OPENAI }
+func (fakeRuntime) Kind() v1.ModelKind                                 { return v1.ModelKind_MODEL_KIND_LANGUAGE }
 func (fakeRuntime) Requirements() []string                             { return nil }
 func (fakeRuntime) Unmet(*v1.HostProfile) []string                     { return nil }
 func (fakeRuntime) Params() []*v1.Param                                { return nil }

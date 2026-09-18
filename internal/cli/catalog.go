@@ -321,9 +321,11 @@ func runSearch(ctx context.Context, e *env, args []string) error {
 	asc := fs.Bool("asc", false, "ascending instead of descending")
 	author := fs.String("author", "", "only repositories by this owner")
 	cursor := fs.String("cursor", "", "continue from the cursor a previous page printed")
-	var tags, filters multi
+	runtimeID := fs.String("runtime", "", "only models a runtime serves, by id, see nebu runtimes")
+	var tags, filters, formats multi
 	fs.Var(&tags, "tag", "tag filter, repeatable")
 	fs.Var(&filters, "filter", "facet filter as facet=value, repeatable")
+	fs.Var(&formats, "format", "only models held in a format, repeatable: gguf, safetensors, diffusion, nemo, or nemo2")
 	query, err := e.parse(fs, args, 0, -1, "search [query words] [flags]")
 	if err != nil {
 		return err
@@ -338,6 +340,16 @@ func runSearch(ctx context.Context, e *env, args []string) error {
 			v = prev + "," + v
 		}
 		req.Filters[k] = v
+	}
+	if *runtimeID != "" {
+		req.Filters[sources.FacetRuntime] = *runtimeID
+	}
+	if len(formats) > 0 {
+		req.Filters[sources.FacetFormat] = strings.Join(formats, ",")
+	}
+	names, err := e.runtimeNames(ctx)
+	if err != nil {
+		return err
 	}
 	if *kind != "" {
 		if req.Kind, err = parseSourceKind(*kind); err != nil {
@@ -357,9 +369,9 @@ func runSearch(ctx context.Context, e *env, args []string) error {
 			} else if h.GetSizeBytes() > 0 {
 				size = estimate.Human(h.GetSizeBytes())
 			}
-			rows = append(rows, []string{h.GetSourceId(), h.GetRepo(), h.GetTask(), size, strconv.FormatUint(h.GetDownloads(), 10), strconv.FormatUint(h.GetLikes(), 10), when(h.GetUpdatedAt(), time.DateOnly), strings.Join(h.GetFormats(), ",")})
+			rows = append(rows, []string{h.GetSourceId(), h.GetRepo(), h.GetTask(), kindWord(h.GetKind()), size, strconv.FormatUint(h.GetDownloads(), 10), strconv.FormatUint(h.GetLikes(), 10), when(h.GetUpdatedAt(), time.DateOnly), strings.Join(h.GetFormats(), ","), names.of(h.GetRuntimes())})
 		}
-		table(w, []string{"SOURCE", "REPO", "TASK", "SIZE", "DOWNLOADS", "LIKES", "UPDATED", "FORMATS"}, rows)
+		table(w, []string{"SOURCE", "REPO", "TASK", "KIND", "SIZE", "DOWNLOADS", "LIKES", "UPDATED", "FORMATS", "RUNS ON"}, rows)
 		for _, warn := range resp.Msg.GetWarnings() {
 			fmt.Fprintln(w, "warning:", warn)
 		}
@@ -374,6 +386,42 @@ func runSearch(ctx context.Context, e *env, args []string) error {
 			fmt.Fprintln(w, "\n"+strings.Join(notes, ", "))
 		}
 	})
+}
+
+// A model's kind in a word, blank when the catalog did not say
+func kindWord(k v1.ModelKind) string {
+	if k == v1.ModelKind_MODEL_KIND_UNSPECIFIED {
+		return "-"
+	}
+	return text.Enum(k)
+}
+
+// The runtimes by the bit each takes in a bitmask, read once from the daemon
+type runtimeNames map[uint32]string
+
+func (e *env) runtimeNames(ctx context.Context) (runtimeNames, error) {
+	resp, err := e.cl.runtimes.ListRuntimes(ctx, connect.NewRequest(&v1.ListRuntimesRequest{}))
+	if err != nil {
+		return nil, err
+	}
+	out := runtimeNames{}
+	for _, rt := range resp.Msg.GetRuntimes() {
+		out[rt.GetRuntime().GetBit()] = rt.GetRuntime().GetId()
+	}
+	return out, nil
+}
+
+// The runtimes a bitmask names, joined by commas, a dash for none
+func (n runtimeNames) of(mask uint32) string {
+	var out []string
+	for bit := uint32(1); bit != 0 && bit <= mask; bit <<= 1 {
+		if mask&bit != 0 {
+			if id, ok := n[bit]; ok {
+				out = append(out, id)
+			}
+		}
+	}
+	return orDash(strings.Join(out, ","))
 }
 
 func runRevisions(ctx context.Context, e *env, args []string) error {

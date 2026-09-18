@@ -148,7 +148,7 @@
     </div>
   </Card>
 
-  <Card title="Default parameters" meta={runtime?.name}>
+  <Card title="Parameters" meta={runtime?.name}>
     {#if runtime}
       <ParamForm params={runtime.params} bind:values={params} bind:invalid idPrefix="slot" />
     {:else}

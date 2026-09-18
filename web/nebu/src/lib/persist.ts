@@ -16,3 +16,17 @@ export function writeLocal(key: string, value: string) {
     // private windows and locked down browsers refuse storage
   }
 }
+
+// The stored keys under a prefix, none where storage is refused
+export function localKeys(prefix: string): string[] {
+  try {
+    const out: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(prefix)) out.push(k);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}

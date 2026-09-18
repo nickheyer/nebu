@@ -23,8 +23,9 @@
     icon,
     variant = 'secondary',
     size = 'md',
-    align = 'end'
-  }: { items: MenuItem[]; label?: string; icon?: Component<any>; variant?: 'primary' | 'secondary' | 'ghost'; size?: 'sm' | 'md'; align?: 'start' | 'end' } = $props();
+    align = 'end',
+    onOpenChange
+  }: { items: MenuItem[]; label?: string; icon?: Component<any>; variant?: 'primary' | 'secondary' | 'ghost'; size?: 'sm' | 'md'; align?: 'start' | 'end'; onOpenChange?: (open: boolean) => void } = $props();
 
   const variants = {
     primary: 'bg-accent text-accent-fg font-semibold hover:bg-accent-strong',
@@ -34,7 +35,7 @@
   const Icon = $derived(icon);
 </script>
 
-<DropdownMenu.Root>
+<DropdownMenu.Root {onOpenChange}>
   {#if label}
     <DropdownMenu.Trigger
       class="inline-flex shrink-0 items-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-colors select-none {variants[variant]} {size === 'sm' ? 'h-7 px-2 text-xs' : 'h-8 px-3 text-sm'} data-[state=open]:bg-raised"

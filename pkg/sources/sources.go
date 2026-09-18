@@ -448,9 +448,15 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 		if len(srcs) == 0 {
 			return nil, fmt.Errorf("%w: no sources", ErrUnknownSource)
 		}
-		// Sorts and facets belong to one provider, every source answers in its own order
+		// Facets belong to one provider, so across providers only the shared ones travel
 		req = proto.Clone(req).(*v1.SearchRequest)
-		req.Sort, req.Ascending, req.Filters = "", false, nil
+		filters := map[string]string{}
+		for k, v := range req.GetFilters() {
+			if Shared(k) {
+				filters[k] = v
+			}
+		}
+		req.Filters = filters
 	}
 	// A source that cannot list, or cannot search when there is a query, has no page to give
 	able := srcs[:0:0]
@@ -466,6 +472,14 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 		return nil, fmt.Errorf("%w: no source here lists without a query", ErrUnsupported)
 	}
 	srcs = able
+	// An order is one every source here offers, so the merged pages come back in it; none means each source's own
+	if req.GetSort() != "" {
+		for _, src := range srcs {
+			if !offersSort(src.Capabilities(ctx), req.GetSort(), req.GetAscending()) {
+				return nil, fmt.Errorf("%w: %s does not order by %s%s", ErrUnsupported, src.Spec().GetId(), req.GetSort(), direction(req.GetAscending(), " ascending", ""))
+			}
+		}
+	}
 	cursors := map[string]string{}
 	if req.GetCursor() != "" {
 		data, err := base64.RawURLEncoding.DecodeString(req.GetCursor())
@@ -535,6 +549,9 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 			break
 		}
 	}
+	// Every source's page came in the asked order, so the merged page is put in it too, a stable sort
+	// keeping each source's own order where the key ties; relevance and trending have no key to merge by
+	SortHits(out.Hits, req.GetSort(), req.GetAscending())
 	if len(next) > 0 {
 		data, err := json.Marshal(next)
 		if err != nil {
@@ -543,6 +560,16 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 		out.NextCursor = base64.RawURLEncoding.EncodeToString(data)
 	}
 	return out, nil
+}
+
+// Whether a source orders by a sort id, flipped when asked
+func offersSort(caps *v1.SourceCapabilities, id string, ascending bool) bool {
+	for _, s := range caps.GetSorts() {
+		if s.GetId() == id {
+			return !ascending || s.GetReversible()
+		}
+	}
+	return false
 }
 
 // Reports whether a source can answer a request: built, and listing or searching as the request needs

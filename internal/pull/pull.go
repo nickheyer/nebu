@@ -107,6 +107,7 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 		h.Logf("descriptor unavailable: %v", err)
 	} else {
 		stored.Descriptor_ = d
+		stored.Runtimes = p.Inspector.Runtimes.Mask(g.FormatID, d.GetKind())
 	}
 	// The cap is kept by evicting what has sat unused longest before the bytes arrive, this model staying
 	evicted, release, err := p.Store.Evict(need, func(m *v1.StoredModel) bool {

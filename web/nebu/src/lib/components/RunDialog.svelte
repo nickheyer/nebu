@@ -7,7 +7,9 @@
   import { createForm } from '$lib/form.svelte';
   import { byName, bytes, params as fmtParams, tail } from '$lib/format';
   import { weightsName } from '$lib/catalog';
-  import type { MemoryPlan, ParamState } from '$proto/estimate_pb';
+  import { isComponent, kindOf, partWord } from '$lib/diffusion';
+  import { runsOn, servesWord } from '$lib/runtimes';
+  import type { MemoryPlan, MissingPart, ParamState } from '$proto/estimate_pb';
   import { FitVerdict } from '$proto/estimate_pb';
   import { Play, ArrowLeftRight, ChevronRight } from '@lucide/svelte';
   import Dialog from './ui/Dialog.svelte';
@@ -36,6 +38,7 @@
   let showParams = $state(true);
   let plan = $state<MemoryPlan | null>(null);
   let states = $state<ParamState[]>([]);
+  let missing = $state<MissingPart[]>([]);
   let planRefusal = $state('');
   let planError = $state('');
   let refusal = $state<unknown>(null);
@@ -49,8 +52,13 @@
   const selectedSlot = $derived(slot ? live.slots.get(slot) : undefined);
   const swap = $derived(slotOccupied(slot));
   const formatId = $derived(current?.formatId ?? '');
-  const compatible = $derived(cached.runtimes.filter((r) => r.compatible && (!formatId || r.runtime?.formats.includes(formatId))));
+  const kind = $derived(kindOf(current?.descriptor));
+  const component = $derived(isComponent(current?.descriptor));
+  // The runtimes the daemon stamped on the stored model, narrowed to the ones this host can run
+  const compatible = $derived(cached.runtimes.filter((r) => r.compatible && !!current && runsOn(current.runtimes, r)));
   const others = $derived(cached.runtimes.filter((r) => !compatible.includes(r)));
+  // The files the plan picked from the store for the params left at auto
+  const solved = $derived(Object.fromEntries(Object.entries(plan?.params ?? {}).filter(([, v]) => v !== 'auto')));
   // The named runtime, else the slot's, else the first that serves the format
   const effectiveRuntime = $derived(runtimeId || selectedSlot?.runtimeId || compatible[0]?.runtime?.id || '');
   const runtime = $derived(cached.runtimes.find((r) => r.runtime?.id === effectiveRuntime)?.runtime);
@@ -85,6 +93,7 @@
       if (gen !== generation) return;
       plan = resp.plan ?? null;
       states = resp.params;
+      missing = resp.missing;
       planRefusal = resp.refusal;
     } catch (err) {
       if (gen === generation) planError = message(err);
@@ -101,10 +110,13 @@
     void slot;
     void values;
     void pickedKey;
+    // A part landing in the store solves a file param, so the plan is made again
+    void live.models.size;
     const ready = runUi.open && !!current && !!effectiveRuntime;
     generation++;
     plan = null;
     states = [];
+    missing = [];
     planRefusal = '';
     planError = '';
     refusal = null;
@@ -121,7 +133,7 @@
     };
   });
   $effect(() => {
-    if (setCount > 0) showParams = true;
+    if (setCount > 0 || missing.length > 0) showParams = true;
   });
 
   const form = createForm({
@@ -147,7 +159,7 @@
     }
   });
 
-  const disabled = $derived(!current || !effectiveRuntime || !installs.length || invalid > 0 || (refused && !force));
+  const disabled = $derived(!current || component || !effectiveRuntime || !installs.length || invalid > 0 || (refused && !force));
 </script>
 
 <Dialog bind:open={runUi.open} size="lg" title={swap ? `Swap into ${selectedSlot?.name}` : 'Run a model'} description={current ? `${current.repo} · ${weightsName(current.group, current.formatId)}` : undefined}>
@@ -183,27 +195,31 @@
               label="Run in"
               bind:value={slot}
               items={[
-                { id: '', label: 'No slot', detail: 'runs under its own name' },
-                ...slots.map((s) => ({ id: s.id, label: `${s.position}. ${s.name}`, mono: true, detail: slotOccupied(s.id) ? `replaces ${tail(s.request?.repo ?? '')}` : 'empty', warn: slotOccupied(s.id) }))
+                { id: '', label: 'No slot' },
+                ...slots.map((s) => ({ id: s.id, label: `${s.position}. ${s.name}`, mono: true, detail: slotOccupied(s.id) ? tail(s.request?.repo ?? '') : undefined, warn: slotOccupied(s.id) }))
               ]}
             />
           </Field>
         {/if}
 
+        {#if component}
+          <div class="note note-warn">A {partWord(current.descriptor?.architecture ?? '')} loads beside a diffusion model, not alone.</div>
+        {/if}
         <div class="setup-grid">
-          <Field label="Runtime" for="run-runtime" error={!compatible.length ? `No compatible runtime serves ${formatId}` : undefined}>
+          <Field label="Runtime" for="run-runtime" error={!compatible.length && !component ? `No runtime for ${formatId} ${kind === 2 ? 'diffusion' : 'language'} models` : undefined}>
             <Select
               id="run-runtime"
+              unset
               bind:value={runtimeId}
               items={[
-                { value: '', label: selectedSlot?.runtimeId ? runtimeName(selectedSlot.runtimeId) : (compatible[0]?.runtime?.name ?? '–'), detail: selectedSlot?.runtimeId ? 'the slot’s runtime' : undefined },
+                { value: '', label: selectedSlot?.runtimeId ? runtimeName(selectedSlot.runtimeId) : (compatible[0]?.runtime?.name ?? '–') },
                 ...compatible.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '' })),
-                ...others.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: rt.compatible ? `does not read ${formatId}` : 'not compatible with this host', disabled: true }))
+                ...others.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: !rt.compatible ? 'unsupported host' : rt.runtime?.kind !== kind ? servesWord(rt.runtime?.kind ?? 1) : `no ${formatId}`, disabled: true }))
               ]}
             />
           </Field>
-          <Field label="Install" for="run-install" error={effectiveRuntime && !installs.length ? `${effectiveRuntime} is not installed` : undefined}>
-            <Select id="run-install" bind:value={installId} disabled={!installs.length} items={[{ value: '', label: installs.length ? installs[0].version || installs[0].id : '–', detail: installs.length ? 'newest' : undefined }, ...installs.map((i) => ({ value: i.id, label: i.version || i.id, detail: tail(i.path) }))]} />
+          <Field label="Install" for="run-install" error={effectiveRuntime && !installs.length ? `${runtimeName(effectiveRuntime)} is not installed` : undefined}>
+            <Select id="run-install" unset bind:value={installId} disabled={!installs.length} items={[{ value: '', label: installs.length ? installs[0].version || installs[0].id : '–' }, ...installs.map((i) => ({ value: i.id, label: i.version || i.id }))]} />
           </Field>
           {#if !slot}
             <Field label="Model name" for="run-name" class="col-span-full">
@@ -222,41 +238,37 @@
         </section>
       {/if}
 
-      <section class="rounded-lg border border-line bg-sunken/40 p-4" aria-labelledby="run-memory-title" aria-busy={checking}>
-        <div class="mb-3 flex flex-wrap items-center gap-2">
-          <h2 id="run-memory-title" class="text-sm font-semibold text-fg">Memory estimate</h2>
-          {#if selectedSlot}<span class="text-xs text-fg-muted">in {selectedSlot.name}</span>{/if}
-          <span class="ml-auto flex items-center gap-1.5 text-xs">
-            {#if checking}
-              <Spinner size={13} class="text-fg-muted" /><span class="text-fg-muted">Estimating…</span>
-            {/if}
-          </span>
-        </div>
-        {#if plan}
-          <PlanView {plan} compact />
-        {:else if checking}
-          <Skeleton rows={3} />
-        {:else if !planError}
-          <p class="text-xs leading-5 text-fg-muted">{effectiveRuntime ? 'No memory estimate is available.' : 'Choose a runtime to estimate memory.'}</p>
-        {/if}
-        {#if planError}<div class="note note-bad mt-3">{planError}</div>{/if}
-        {#if planRefusal}<div class="note note-warn mt-3">{planRefusal}</div>{/if}
-        {#if plan?.detail && plan.verdict !== FitVerdict.FITS}<p class="mt-3 text-xs leading-5 text-fg-muted">{plan.detail}</p>{/if}
-        {#if refused || force}
-          <div class="mt-4 border-t border-line pt-3"><Checkbox bind:checked={force} label="Run anyway" /></div>
-        {/if}
-      </section>
+      {#if effectiveRuntime}
+        <section class="rounded-lg border border-line bg-sunken/40 p-4" aria-labelledby="run-memory-title" aria-busy={checking}>
+          <div class="mb-3 flex flex-wrap items-center gap-2">
+            <h2 id="run-memory-title" class="text-sm font-semibold text-fg">Memory</h2>
+            {#if selectedSlot}<span class="text-xs text-fg-muted">{selectedSlot.name}</span>{/if}
+            {#if checking}<Spinner size={13} class="ml-auto text-fg-muted" />{/if}
+          </div>
+          {#if plan}
+            <PlanView {plan} compact />
+          {:else if checking}
+            <Skeleton rows={3} />
+          {/if}
+          {#if planError}<div class="note note-bad mt-3">{planError}</div>{/if}
+          {#if planRefusal && !missing.length}<div class="note note-warn mt-3">{planRefusal}</div>{/if}
+          {#if plan?.detail && plan.verdict !== FitVerdict.FITS}<p class="mt-3 text-xs leading-5 text-fg-muted">{plan.detail}</p>{/if}
+          {#if refused || force}
+            <div class="mt-4 border-t border-line pt-3"><Checkbox bind:checked={force} label="Run anyway" /></div>
+          {/if}
+        </section>
+      {/if}
 
       <section class="border-t border-line pt-4" aria-labelledby="run-params-title">
         <h2 id="run-params-title">
           <button type="button" class="flex w-full items-center gap-2 rounded-sm text-left text-sm text-fg" aria-expanded={showParams} aria-controls="run-parameters" onclick={() => (showParams = !showParams)}>
             <ChevronRight size={14} class="shrink-0 text-fg-muted transition-transform {showParams ? 'rotate-90' : ''}" />
             <span class="font-semibold">Parameters</span>
-            {#if setCount}<span class="ml-auto text-xs font-normal text-fg-muted">{setCount} overridden</span>{/if}
+            {#if setCount}<span class="ml-auto text-xs font-normal text-fg-muted">{setCount} set</span>{/if}
           </button>
         </h2>
         <div id="run-parameters" class="mt-3" hidden={!showParams}>
-          <ParamForm params={runtime?.params ?? []} bind:values bind:invalid {inherited} {states} idPrefix="run" />
+          <ParamForm params={runtime?.params ?? []} bind:values bind:invalid {inherited} {states} {solved} {missing} idPrefix="run" />
         </div>
       </section>
     {/if}

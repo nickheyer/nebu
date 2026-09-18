@@ -384,6 +384,9 @@ func (s *olStream) Close() error { return nil }
 
 func (ollama) InlineImages() bool { return true }
 
+// There is no count endpoint, so a count is always estimated with its images
+func (ollama) CountsImages() bool { return false }
+
 func (ollama) ErrorMessage(body []byte) string {
 	var e struct {
 		Error string `json:"error"`

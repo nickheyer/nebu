@@ -19,6 +19,7 @@ func (NeMo) ID() string          { return "nemo" }
 func (NeMo) Name() string        { return "NeMo" }
 func (NeMo) Description() string { return "Serves NeMo checkpoints in framework on NVIDIA GPUs" }
 func (NeMo) Formats() []string   { return []string{"nemo2", "nemo"} }
+func (NeMo) Kind() v1.ModelKind  { return v1.ModelKind_MODEL_KIND_LANGUAGE }
 func (NeMo) API() v1.ApiFlavor   { return v1.ApiFlavor_API_FLAVOR_OPENAI }
 func (NeMo) Requirements() []string {
 	return []string{"an NVIDIA GPU"}
@@ -40,28 +41,18 @@ func (NeMo) Methods() []Method {
 func (NeMo) Params() []*v1.Param {
 	return []*v1.Param{
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: "Context", Flag: "--inference_max_seq_length",
-			Rule:        contextRule,
-			Description: "Tokens the model can hold in one sequence."},
-		{Name: "max_batch_size", Label: "Batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "8", Unit: "sequences", Min: 1, Step: 1, Group: "Context", Flag: "--max_batch_size",
-			Description: "Sequences batched together. Each holds a full-length cache."},
-		{Name: "num_gpus", Label: "Devices", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--num_gpus",
-			Description: "Devices the deployment claims."},
-		{Name: "tensor_model_parallel_size", Label: "Tensor parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--tensor_model_parallel_size",
-			Description: "Devices each layer is sharded across."},
-		{Name: "pipeline_model_parallel_size", Label: "Pipeline parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--pipeline_model_parallel_size",
-			Description: "Devices the layer stack is split across."},
-		{Name: "enable_cuda_graphs", Label: "CUDA graphs", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: "Performance", Flag: "--enable_cuda_graphs",
-			Description: "Capture CUDA graphs for faster decoding."},
-		{Name: "enable_flash_decode", Label: "Flash decode", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: "Performance", Flag: "--enable_flash_decode",
-			Description: "Flash attention during decoding."},
-		{Name: "served_model_name", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Flag: "--model_id",
-			Description: "Model name the runtime reports. Empty takes the instance name."},
+			Rule: contextRule},
+		{Name: "max_batch_size", Label: "Batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "8", Unit: "sequences", Min: 1, Step: 1, Group: "Context", Flag: "--max_batch_size"},
+		{Name: "num_gpus", Label: "Devices", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--num_gpus"},
+		{Name: "tensor_model_parallel_size", Label: "Tensor parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--tensor_model_parallel_size"},
+		{Name: "pipeline_model_parallel_size", Label: "Pipeline parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--pipeline_model_parallel_size"},
+		{Name: "enable_cuda_graphs", Label: "CUDA graphs", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: "Performance", Flag: "--enable_cuda_graphs"},
+		{Name: "enable_flash_decode", Label: "Flash decode", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: "Performance", Flag: "--enable_flash_decode"},
+		{Name: "served_model_name", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Flag: "--model_id"},
 		{Name: "model_id", Label: "Base model id", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Conversion", Advanced: true,
-			Description: "Hugging Face id of the base model the converter builds a packed checkpoint as. Empty takes the checkpoint's tokenizer id."},
-		{Name: "legacy_ckpt", Label: "Legacy checkpoint", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: "Conversion", Advanced: true, Flag: "--legacy_ckpt",
-			Description: "Load a checkpoint written before Megatron Bridge."},
-		{Name: "cuda_visible_devices", Label: "Visible devices", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Parallelism", Advanced: true, Flag: "--cuda_visible_devices",
-			Description: "Device indexes the deployment is pinned to. Empty takes the slot's devices."},
+			Description: "Hugging Face id"},
+		{Name: "legacy_ckpt", Label: "Legacy checkpoint", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: "Conversion", Advanced: true, Flag: "--legacy_ckpt"},
+		{Name: "cuda_visible_devices", Label: "Visible devices", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Parallelism", Advanced: true, Flag: "--cuda_visible_devices", Description: "0,1"},
 	}
 }
 

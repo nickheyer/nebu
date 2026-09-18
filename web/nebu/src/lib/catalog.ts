@@ -114,6 +114,11 @@ export function pickGroup(groups: ProviderGroup[], kind: SourceKind, sourceId: s
   return groups.find((g) => g.kind === kind) ?? groups.find((g) => g.sources.some((s) => s.source?.id === sourceId)) ?? groups[0];
 }
 
+// The facets the daemon answers over every source, the runtime a model runs on and the format it is held in
+export function sharedFacet(id: string): boolean {
+  return id === 'runtime' || id === 'format';
+}
+
 // Whether the source can flip a sort, most catalogs only order descending
 export function sortReversible(caps: SourceCapabilities | undefined, sortId: string): boolean {
   return !!caps?.sorts.find((s) => s.id === sortId)?.reversible;
@@ -180,16 +185,20 @@ export function locked(h: SearchHit | null, caps: SourceCapabilities | undefined
 }
 
 // The chips a hit carries beyond its columns, as the source declares them: a flag shows its label, a comma list one chip each
+// The chips a hit wears, each word once even when two fields carry it, a base model that is also a tag say
 export function hitChips(h: SearchHit, caps: SourceCapabilities | undefined): string[] {
   const out: string[] = [];
+  const add = (text: string) => {
+    if (text && !out.includes(text)) out.push(text);
+  };
   for (const f of caps?.hitFields ?? []) {
     const v = h.extra[f.name];
     if (v === undefined || v === '') continue;
     if (f.type === ConfigType.BOOL) {
-      if (v === 'true') out.push(f.label || f.name);
+      if (v === 'true') add(f.label || f.name);
       continue;
     }
-    for (const part of splitValues(v)) out.push(chipText(f, part));
+    for (const part of splitValues(v)) add(chipText(f, part));
   }
   return out;
 }

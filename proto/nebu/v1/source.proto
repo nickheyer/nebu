@@ -159,6 +159,10 @@ message SearchHit {
   google.protobuf.Timestamp created_at = 18;
   string url = 19;
   map<string, string> extra = 20;
+  // The runtimes that serve what the catalog says this is, one bit per runtime as Runtime.bit numbers them; zero when the catalog says too little to tell
+  uint32 runtimes = 21;
+  // What the catalog says the model is, a language model, a diffusion model, or a part of one; unspecified when it does not say
+  ModelKind kind = 22;
 }
 
 // One branch, tag, version, or variant of a repository

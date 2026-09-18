@@ -5,7 +5,10 @@
   import { api, message } from '$lib/api';
   import { cached, refreshCached, live, clock } from '$lib/state.svelte';
   import { fail } from '$lib/toast.svelte';
-  import { facetValueLabel, groupByProvider, groupLabel, hitChips, hitSize, kindParam, locked, looksLikeRepo, parseKind, pickGroup, sortReversible, sourceLabels } from '$lib/catalog';
+  import { facetValueLabel, groupByProvider, groupLabel, hitChips, hitSize, kindParam, locked, looksLikeRepo, parseKind, pickGroup, sharedFacet, sourceLabels } from '$lib/catalog';
+  import { hitKindLabel } from '$lib/diffusion';
+  import { runtimesOf } from '$lib/runtimes';
+  import Chip from '$lib/components/ui/Chip.svelte';
   import { ago, storage, count, params as fmtParams } from '$lib/format';
   import { SourceKind, type Provider, type SearchHit, type SourceStatus } from '$proto/source_pb';
   import { ArrowDown, ArrowUp, KeyRound, X, RefreshCw, Plus, Lock, EyeOff, Check, ChevronDown } from '@lucide/svelte';
@@ -21,7 +24,6 @@
   import FacetPicker from '$lib/components/catalog/FacetPicker.svelte';
   import ModelDrawer from '$lib/components/ModelDrawer.svelte';
   import SourceDialog from '$lib/components/SourceDialog.svelte';
-  import { TableSort } from '$lib/sort.svelte';
 
   const pageSize = 30;
 
@@ -81,8 +83,19 @@
   const merged = $derived(all || (!!group && sourceId === '' && group.sources.length > 1));
   const labels = $derived(sourceLabels(all ? statuses : (group?.sources ?? [])));
   const name = $derived(all ? 'all sources' : group ? (merged ? group.name : (labels.get(sourceId) ?? groupLabel(group))) : 'the catalog');
-  const effectiveSort = $derived(sort || caps?.defaultSort || '');
-  const reversible = $derived(sortReversible(caps, effectiveSort));
+  // The sources a search reaches: the one picked, the provider's, or every one that answers
+  const reached = $derived(all ? statuses.filter((s) => !s.error) : merged ? (group?.sources ?? []).filter((s) => !s.error) : status ? [status] : []);
+  // Across sources only an order every one of them offers can be asked for, so the merged pages come back in it
+  const sorts = $derived.by(() => {
+    if (!merged) return caps?.sorts ?? [];
+    const lists = reached.map((s) => s.capabilities?.sorts ?? []);
+    if (!lists.length) return [];
+    return lists[0].filter((s) => lists.every((l) => l.some((x) => x.id === s.id))).map((s) => ({ ...s, reversible: lists.every((l) => l.find((x) => x.id === s.id)?.reversible) }));
+  });
+  const effectiveSort = $derived(sort || (merged ? '' : (caps?.defaultSort ?? '')));
+  const reversible = $derived(!!sorts.find((s) => s.id === effectiveSort)?.reversible);
+  // The facets the daemon answers over every source, the same on each, so they show whichever sources are reached
+  const sharedFacets = $derived((statuses.find((s) => s.capabilities?.facets.length)?.capabilities?.facets ?? []).filter((f) => sharedFacet(f.id)));
   const activeFilters = $derived(Object.entries(filters).filter(([, v]) => v));
   const repoSource = $derived(all ? statuses.find((s) => !s.error && looksLikeRepo(s.capabilities, query)) : looksLikeRepo(caps, query) ? status : undefined);
   const canSubmitRepo = $derived(!!repoSource);
@@ -93,41 +106,16 @@
   const inputDead = $derived(!all && !!caps && !caps.search && !caps.repoPattern);
   const openSourceId = $derived(sourceId || status?.source?.id || statuses.find((s) => !s.error)?.source?.id || '');
   const stored = $derived(new Set([...live.models.values()].map((m) => `${m.sourceId}/${m.repo}`)));
-  // Columns whose header orders the list at the source, when it has a sort of that id; the rest order the page here
-  const columnSort = (id: string) => (!all && caps?.sorts.some((s) => s.id === id) ? id : '');
-  const sortItems = $derived((caps?.sorts ?? []).map((s) => ({ value: s.id === caps?.defaultSort ? '' : s.id, label: s.label })));
+  // A column orders the list at the source alone, when every source reached orders by it; the page is never reordered here
+  const columnSort = (id: string) => (sorts.some((s) => s.id === id) ? id : '');
+  const sortItems = $derived([...(merged ? [{ value: '', label: 'Each source’s own order' }] : []), ...sorts.map((s) => ({ value: !merged && s.id === caps?.defaultSort ? '' : s.id, label: s.label }))]);
   // The sort select is as wide as its longest label
   const sortWidth = $derived(Math.max(10, ...sortItems.map((s) => s.label.length)) + 6);
-  const local = new TableSort('', 'desc');
-  const shown = $derived(
-    local.key
-      ? local.apply(hits, (h, key) => {
-          switch (key) {
-            case 'name':
-              return (h.name || h.repo).toLowerCase();
-            case 'source':
-              return labels.get(h.sourceId) ?? h.sourceId;
-            case 'task':
-              return h.task;
-            case 'format':
-              return h.formats.join(' ');
-            case 'size':
-              return hitSize(h).kind === 'sizes' ? hitSize(h).text : hitSize(h).value;
-            case 'downloads':
-              return h.downloads;
-            case 'likes':
-              return h.likes;
-            case 'updated':
-              return h.updatedAt?.seconds ?? 0n;
-          }
-          return undefined;
-        })
-      : hits
-  );
   // A column the source cannot fill for any hit on the page is left out rather than shown as dashes
   const has = $derived({
     task: hits.some((h) => h.task),
     format: hits.some((h) => h.formats.length),
+    runs: hits.some((h) => h.runtimes !== 0 || h.kind !== 0),
     size: hits.some((h) => hitSize(h).kind !== 'none'),
     downloads: hits.some((h) => h.downloads > 0n),
     likes: hits.some((h) => h.likes > 0n),
@@ -169,17 +157,11 @@
     else drawerOpen = false;
   }
 
-  // A provider only accepts its own sorts and facets, so switching drops the rest
+  // A provider only accepts its own sorts and facets, so switching drops the rest; the shared facets stay everywhere
   $effect(() => {
-    if (all) {
-      if (sort) sort = '';
-      if (Object.keys(filters).length) filters = {};
-      return;
-    }
-    if (!caps) return;
-    if (sort && !caps.sorts.some((s) => s.id === sort)) sort = '';
+    if (sort && !sorts.some((s) => s.id === sort)) sort = '';
     const keep: Record<string, string> = {};
-    for (const [k, v] of Object.entries(filters)) if (caps.facets.some((f) => f.id === k)) keep[k] = v;
+    for (const [k, v] of Object.entries(filters)) if (sharedFacet(k) || (!all && caps?.facets.some((f) => f.id === k))) keep[k] = v;
     if (Object.keys(keep).length !== Object.keys(filters).length) filters = keep;
   });
 
@@ -302,21 +284,17 @@
     input?.focus();
   }
 
-  // Clicking a column orders by it at the source when it can, the same column again flipping it where the
-  // source allows; a column the source cannot order is ordered here, over the hits on the page
+  // Clicking a column orders by it at the source, the same column again flipping it where every source allows;
+  // a column no source orders by is a plain heading
   function orderBy(id: string) {
     const server = columnSort(id);
-    if (server) {
-      local.key = '';
-      if (effectiveSort === server) {
-        if (sortReversible(caps, server)) ascending = !ascending;
-        return;
-      }
-      sort = server === caps?.defaultSort ? '' : server;
-      ascending = false;
+    if (!server) return;
+    if (effectiveSort === server) {
+      if (reversible) ascending = !ascending;
       return;
     }
-    local.toggle(id);
+    sort = !merged && server === caps?.defaultSort ? '' : server;
+    ascending = false;
   }
 
   function openHit(h: SearchHit) {
@@ -354,13 +332,16 @@
 
 {#snippet th(label: string, id: string, num = false)}
   {@const sortId = columnSort(id)}
-  {@const on = sortId ? !local.key && effectiveSort === sortId : local.key === id}
-  {@const up = sortId ? ascending : local.dir === 'asc'}
-  <th class={num ? 'num' : ''} aria-sort={on ? (up ? 'ascending' : 'descending') : 'none'}>
-    <button type="button" class="caps inline-flex items-center gap-1 rounded-sm transition-colors hover:text-fg {on ? 'text-fg' : ''}" onclick={() => orderBy(id)}>
-      {label}
-      {#if on}{#if up}<ArrowUp size={11} />{:else}<ArrowDown size={11} />{/if}{/if}
-    </button>
+  {@const on = !!sortId && effectiveSort === sortId}
+  <th class={num ? 'num' : ''} aria-sort={on ? (ascending ? 'ascending' : 'descending') : 'none'}>
+    {#if sortId}
+      <button type="button" class="caps inline-flex items-center gap-1 rounded-sm transition-colors hover:text-fg {on ? 'text-fg' : ''}" title="Ordered by the source" onclick={() => orderBy(id)}>
+        {label}
+        {#if on}{#if ascending}<ArrowUp size={11} />{:else}<ArrowDown size={11} />{/if}{/if}
+      </button>
+    {:else}
+      <span class="caps">{label}</span>
+    {/if}
   </th>
 {/snippet}
 
@@ -416,7 +397,7 @@
             {#if canSubmitRepo}<span class="rounded-sm bg-accent/15 px-1.5 text-[11px] text-accent">Enter to open</span>{/if}
           {/snippet}
         </SearchInput>
-        {#if sortItems.length && !all}
+        {#if sorts.length}
           <div style="width: {sortWidth}ch"><Select class="w-full" bind:value={sort} label="Sort" items={sortItems} /></div>
           {#if reversible}
             <IconButton size="lg" variant="secondary" icon={ascending ? ArrowUp : ArrowDown} label={ascending ? 'Ascending' : 'Descending'} onclick={() => (ascending = !ascending)} />
@@ -426,10 +407,13 @@
           <span class="ml-auto text-xs tabular-nums text-fg-faint">{#if total > 0n}{Number(total).toLocaleString()} results{:else}{hits.length.toLocaleString()} results{/if}</span>
         {/if}
       </div>
-      {#if (caps?.facets.length && !all) || activeFilters.length || query || sort}
+      {#if sharedFacets.length || (caps?.facets.length && !all) || activeFilters.length || query || sort}
         <div class="mt-2 flex flex-wrap items-center gap-1.5">
+          {#each sharedFacets as f (f.id)}
+            <FacetPicker facet={f} value={filters[f.id] ?? ''} onChange={(v) => (filters = { ...filters, [f.id]: v })} />
+          {/each}
           {#if caps?.facets.length && !all}
-            {#each caps.facets as f (f.id)}
+            {#each caps.facets.filter((f) => !sharedFacet(f.id)) as f (f.id)}
               <FacetPicker facet={f} value={filters[f.id] ?? ''} onChange={(v) => (filters = { ...filters, [f.id]: v })} />
             {/each}
           {/if}
@@ -479,6 +463,7 @@
             {#if merged}<col class="w-28" />{/if}
             {#if has.task}<col class="w-44" />{/if}
             {#if has.format}<col class="w-28" />{/if}
+            {#if has.runs}<col class="w-44" />{/if}
             {#if has.size}<col class="w-28" />{/if}
             {#if has.downloads}<col class="w-24" />{/if}
             {#if has.likes}<col class="w-20" />{/if}
@@ -490,6 +475,7 @@
               {#if merged}{@render th('Source', 'source')}{/if}
               {#if has.task}{@render th('Task', 'task')}{/if}
               {#if has.format}{@render th('Format', 'format')}{/if}
+              {#if has.runs}{@render th('Runs on', 'runs')}{/if}
               {#if has.size}{@render th('Size', 'size', true)}{/if}
               {#if has.downloads}{@render th('Downloads', 'downloads', true)}{/if}
               {#if has.likes}{@render th('Likes', 'likes', true)}{/if}
@@ -500,7 +486,7 @@
             {#if searching}
               {@render skeletonRows(10)}
             {:else}
-              {#each shown as h (h.sourceId + '/' + h.repo)}
+              {#each hits as h (h.sourceId + '/' + h.repo)}
                 {@const hcaps = capsOf(h.sourceId)}
                 {@const title = h.name && h.name !== h.repo ? h.name : h.repo}
                 {@const chips = hitChips(h, hcaps)}
@@ -523,6 +509,17 @@
                   {#if merged}<td class="truncate text-fg-muted">{labels.get(h.sourceId) ?? h.sourceId}</td>{/if}
                   {#if has.task}<td class="truncate text-fg-muted">{h.task ? facetValueLabel(hcaps, 'task', h.task) : '–'}</td>{/if}
                   {#if has.format}<td class="truncate font-mono text-xs text-fg-muted">{h.formats.join(' ') || '–'}</td>{/if}
+                  {#if has.runs}
+                    <td>
+                      <div class="flex flex-wrap gap-1">
+                        {#each runtimesOf(h.runtimes, cached.runtimes) as r (r.runtime?.id)}
+                          <Chip text={r.runtime?.name ?? r.runtime?.id ?? ''} mono={false} title={r.compatible ? `${r.runtime?.name} serves what this is listed as` : `${r.runtime?.name} serves this, but is not compatible with this host`} class={r.compatible ? '' : 'opacity-50'} />
+                        {:else}
+                          <span class="text-xs text-fg-faint" title={hitKindLabel(h.kind) ? 'No runtime serves this on its own' : 'The source does not say what this is'}>{hitKindLabel(h.kind) || '–'}</span>
+                        {/each}
+                      </div>
+                    </td>
+                  {/if}
                   {#if has.size}<td class="num truncate whitespace-nowrap" title={sizeOf(h)}>{sizeOf(h)}</td>{/if}
                   {#if has.downloads}<td class="num text-fg-muted">{h.downloads > 0n ? count(h.downloads) : '–'}</td>{/if}
                   {#if has.likes}<td class="num text-fg-muted">{h.likes > 0n ? count(h.likes) : '–'}</td>{/if}

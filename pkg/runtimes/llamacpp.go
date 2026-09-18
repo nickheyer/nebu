@@ -22,8 +22,9 @@ func (LlamaCpp) Name() string { return "llama.cpp" }
 func (LlamaCpp) Description() string {
 	return "Serves GGUF models on CPU, CUDA, ROCm, Vulkan, and Metal"
 }
-func (LlamaCpp) Formats() []string { return []string{"gguf"} }
-func (LlamaCpp) API() v1.ApiFlavor { return v1.ApiFlavor_API_FLAVOR_OPENAI }
+func (LlamaCpp) Formats() []string  { return []string{"gguf"} }
+func (LlamaCpp) Kind() v1.ModelKind { return v1.ModelKind_MODEL_KIND_LANGUAGE }
+func (LlamaCpp) API() v1.ApiFlavor  { return v1.ApiFlavor_API_FLAVOR_OPENAI }
 func (LlamaCpp) Requirements() []string {
 	return []string{"at least one probed device"}
 }
@@ -89,38 +90,26 @@ var llamaQuantizedCache = []string{"q8_0", "q5_1", "q5_0", "q4_1", "q4_0"}
 func (LlamaCpp) Params() []*v1.Param {
 	return []*v1.Param{
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: "Context", Flag: "--ctx-size",
-			Rule:        contextRule,
-			Description: "Tokens the model can hold in one conversation."},
-		{Name: "n_parallel", Label: "Parallel sequences", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "sequences", Min: 1, Max: 256, Step: 1, Group: "Context", Flag: "--parallel",
-			Description: "Requests served at once. The context is split between them."},
+			Rule: contextRule},
+		{Name: "n_parallel", Label: "Parallel sequences", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "sequences", Min: 1, Max: 256, Step: 1, Group: "Context", Flag: "--parallel"},
 		{Name: "n_gpu_layers", Label: "GPU layers", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "layers", Min: 0, Step: 1, Group: "Placement", Flag: "--n-gpu-layers",
-			Rule:        "as many layers as fit on the device, the rest in system memory",
-			Description: "Layers loaded onto the device."},
+			Rule: "as many layers as fit on the device, the rest in system memory"},
 		{Name: "n_cpu_moe", Label: "Expert layers on CPU", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "layers", Min: 0, Step: 1, Group: "Placement", Flag: "--n-cpu-moe",
-			Rule:        "the expert layers the device cannot hold once the layers are placed",
-			Description: "Layers whose expert weights stay in system memory."},
+			Rule: "the expert layers the device cannot hold once the layers are placed"},
 		{Name: "device", Label: "Devices", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Placement", Advanced: true, Flag: "--device",
-			Description: "Devices to offload to as llama.cpp names them, CUDA0,CUDA1 say, or none for the CPU alone. Empty takes the slot's devices."},
+			Description: "CUDA0,CUDA1, or none"},
 		{Name: "threads", Label: "CPU threads", Type: v1.ParamType_PARAM_TYPE_INT, Default: "-1", Unit: "threads", Min: -1, Step: 1, Group: "Placement", Advanced: true, Flag: "--threads",
-			Description: "Threads for layers on the CPU. -1 picks a number from the core count."},
+			Description: "-1 for the core count"},
 		{Name: "cache_type_k", Label: "Key cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: Auto, Solved: true, Choices: llamaCacheTypes, Group: "Cache", Flag: "--cache-type-k",
-			Rule:        "q8_0 for quantized weights, f16 for weights kept at 16 bits or more",
-			Description: "Element type of the key cache."},
+			Rule: "q8_0 for quantized weights, f16 for weights kept at 16 bits or more"},
 		{Name: "cache_type_v", Label: "Value cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: Auto, Solved: true, Choices: llamaCacheTypes, Group: "Cache", Flag: "--cache-type-v",
-			Rule:        "q8_0 for quantized weights with flash attention on, f16 otherwise",
-			Description: "Element type of the value cache. Quantized types need flash attention on."},
-		{Name: "flash_attn", Label: "Flash attention", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "auto", Choices: []string{"auto", "on", "off"}, Group: "Cache", Flag: "--flash-attn",
-			Description: "Fused attention kernels. Auto turns it on where the device supports it."},
-		{Name: "n_batch", Label: "Batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "2048", Unit: "tokens", Min: 32, Step: 32, Group: "Batching", Advanced: true, Flag: "--batch-size",
-			Description: "Prompt tokens processed per step."},
-		{Name: "n_ubatch", Label: "Micro-batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "512", Unit: "tokens", Min: 32, Step: 32, Group: "Batching", Advanced: true, Flag: "--ubatch-size",
-			Description: "Tokens per compute pass. Smaller values need less compute memory."},
-		{Name: "alias", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Flag: "--alias",
-			Description: "Model name the runtime reports. Empty takes the instance name."},
-		{Name: "mmproj", Label: "Projector file", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Advanced: true, Flag: "--mmproj",
-			Description: "Multimodal projector to load. Empty takes the one stored with the model."},
-		{Name: "log_verbosity", Label: "Log level", Type: v1.ParamType_PARAM_TYPE_INT, Default: "4", Min: 0, Max: 5, Step: 1, Group: "Diagnostics", Advanced: true, Flag: "--log-verbosity",
-			Description: "4 logs the memory allocation lines calibration reads. 3 is the runtime default."},
+			Rule: "q8_0 for quantized weights with flash attention on, f16 otherwise"},
+		{Name: "flash_attn", Label: "Flash attention", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "auto", Choices: []string{"auto", "on", "off"}, Group: "Cache", Flag: "--flash-attn"},
+		{Name: "n_batch", Label: "Batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "2048", Unit: "tokens", Min: 32, Step: 32, Group: "Batching", Advanced: true, Flag: "--batch-size"},
+		{Name: "n_ubatch", Label: "Micro-batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "512", Unit: "tokens", Min: 32, Step: 32, Group: "Batching", Advanced: true, Flag: "--ubatch-size"},
+		{Name: "alias", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Flag: "--alias"},
+		{Name: "mmproj", Label: "Projector", Type: v1.ParamType_PARAM_TYPE_PATH, Group: "Identity", Advanced: true, Flag: "--mmproj", Picks: "projector"},
+		{Name: "log_verbosity", Label: "Log level", Type: v1.ParamType_PARAM_TYPE_INT, Default: "4", Min: 0, Max: 5, Step: 1, Group: "Diagnostics", Advanced: true, Flag: "--log-verbosity"},
 	}
 }
 

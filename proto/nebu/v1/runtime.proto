@@ -17,6 +17,7 @@ enum ParamType {
   PARAM_TYPE_INT = 2;
   PARAM_TYPE_FLOAT = 3;
   PARAM_TYPE_BOOL = 4;
+  PARAM_TYPE_PATH = 5;
 }
 
 // Wire protocol an instance speaks, and the ones the gateway answers in
@@ -25,6 +26,7 @@ enum ApiFlavor {
   API_FLAVOR_OPENAI = 1;
   API_FLAVOR_ANTHROPIC = 2;
   API_FLAVOR_OLLAMA = 3;
+  API_FLAVOR_SDCPP = 4;
 }
 
 // How an install was obtained
@@ -64,6 +66,8 @@ message Param {
   bool advanced = 15;
   // What auto resolves to, in words, for a solved param
   string rule = 16;
+  // What a param takes from the store: a component's architecture such as vae or t5, or model for any weights
+  string picks = 17;
 }
 
 // One way to obtain an install, offered when someone installs the runtime
@@ -115,6 +119,9 @@ message Runtime {
   repeated string requirements = 6;
   repeated InstallMethod methods = 7;
   repeated Param params = 8;
+  ModelKind kind = 9;
+  // The bit this runtime takes in every runtimes bitmask, on a catalog hit or a stored model
+  uint32 bit = 10;
 }
 
 // Lists formats

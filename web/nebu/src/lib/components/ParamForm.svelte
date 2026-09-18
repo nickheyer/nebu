@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ParamType, type Param } from '$proto/runtime_pb';
-  import type { ParamState } from '$proto/estimate_pb';
+  import type { MissingPart, ParamState } from '$proto/estimate_pb';
   import { ChevronRight, Plus, X } from '@lucide/svelte';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
@@ -9,16 +9,25 @@
   import IconButton from './ui/IconButton.svelte';
   import TextInput from './ui/TextInput.svelte';
   import TextArea from './ui/TextArea.svelte';
+  import StoreFileSelect from './StoreFileSelect.svelte';
+  import PartSources from './PartSources.svelte';
+  import { live } from '$lib/state.svelte';
+  import { picksModel } from '$lib/diffusion';
+  import { byName, tail } from '$lib/format';
 
-  // runtimes groups in reading order
+  // Every param of a runtime as a label and its control, in the runtime's groups; a control left empty
+  // reads what applies in its place, a path is picked from the store, and a part the store lacks
+  // lists where to download it
   let {
     params = [],
     values = $bindable({}),
     invalid = $bindable(0),
     inherited = {},
     states = [],
+    solved = {},
+    missing = [],
     idPrefix = 'param'
-  }: { params?: Param[]; values?: Record<string, string>; invalid?: number; inherited?: Record<string, string>; states?: ParamState[]; idPrefix?: string } = $props();
+  }: { params?: Param[]; values?: Record<string, string>; invalid?: number; inherited?: Record<string, string>; states?: ParamState[]; solved?: Record<string, string>; missing?: MissingPart[]; idPrefix?: string } = $props();
 
   let showAdvanced = $state(false);
   let newName = $state('');
@@ -41,9 +50,10 @@
   const known = $derived(new Set(params.map((p) => p.name)));
   const extra = $derived(Object.keys(values).filter((k) => !known.has(k)).sort());
   const stateOf = $derived(new Map(states.map((s) => [s.name, s])));
-  // An advanced param with a value is worth seeing
+  const missingOf = $derived(new Map(missing.map((m) => [m.param, m])));
+  // An advanced param with a value, or one the run cannot go without, is worth seeing
   $effect(() => {
-    if (params.some((p) => p.advanced && values[p.name])) showAdvanced = true;
+    if (params.some((p) => p.advanced && (values[p.name] || missingOf.has(p.name)))) showAdvanced = true;
   });
 
   function set(name: string, v: string) {
@@ -53,11 +63,26 @@
     values = next;
   }
 
-  // What applies when the field is left empty: the slot's value, the rule a solved param follows, or the runtime default
+  const isPath = (p: Param) => p.type === ParamType.PATH;
+
+  // The stored groups a choice param takes by name beside its own choices, the runtime linking each by its group
+  function storeChoices(p: Param): { value: string; label: string; detail: string }[] {
+    if (!p.choices.length || !p.picks) return [];
+    return [...live.models.values()]
+      .filter((m) => picksModel(m, p.picks))
+      .sort(byName((m) => m.group + m.repo))
+      .map((m) => ({ value: m.group, label: m.group, detail: tail(m.repo) }));
+  }
+
+  // What applies while the field is empty: the slot's value, what the plan solved the param to, else the runtime default
   function beneath(p: Param): string {
     const v = inherited[p.name];
-    if (v !== undefined && v !== '') return v;
-    if (p.solved) return p.rule;
+    if (v !== undefined && v !== '') return isPath(p) ? tail(v) : v;
+    if (p.solved) {
+      const s = solved[p.name];
+      if (s !== undefined && s !== '' && s.toLowerCase() !== 'auto') return isPath(p) ? tail(s) : s;
+      return 'auto';
+    }
     return p.default;
   }
 
@@ -84,7 +109,7 @@
     if (!v) return '';
     if (p.solved && v.toLowerCase() === 'auto') return '';
     if (p.choices.length) {
-      if (!p.choices.includes(v)) return `One of ${p.choices.filter(Boolean).join(', ')}`;
+      if (!p.choices.includes(v) && !storeChoices(p).some((c) => c.value === v)) return `One of ${p.choices.filter(Boolean).join(', ')}`;
       return disabledChoices(p).get(v) ?? '';
     }
     if (p.type === ParamType.BOOL) return /^(true|false)$/i.test(v) ? '' : 'true or false';
@@ -120,35 +145,37 @@
   {@const multiline = p.advanced && p.type === ParamType.STRING && !p.choices.length}
   {@const b = bounds(p)}
   {@const off = disabledChoices(p)}
+  {@const part = missingOf.get(p.name)}
   <div class="param-row" class:wide={multiline}>
     <div class="min-w-0">
       <label for={fid} class="text-[13px] font-medium text-fg" title={p.flag || p.env || p.name}>{p.label || p.name}</label>
-      {#if p.description}<p class="mt-1 text-xs leading-5 text-fg-muted wrap-anywhere">{p.description}</p>{/if}
+      {#if p.description}<p class="mt-0.5 font-mono text-xs text-fg-faint wrap-anywhere">{p.description}</p>{/if}
     </div>
     <div class="min-w-0">
       {#if p.choices.length}
         <Select
           id={fid}
           mono
+          unset
           value={v}
           onchange={(next) => set(p.name, next)}
-          items={[
-            { value: '', label: p.solved ? 'auto' : beneath(p) || '–', detail: p.solved && !inherited[p.name] ? p.rule : undefined },
-            ...p.choices.filter((c) => c !== '' && (p.solved || c !== p.default)).map((c) => ({ value: c, label: c, disabled: off.has(c), detail: off.get(c) }))
-          ]}
+          items={[{ value: '', label: beneath(p) || '–' }, ...p.choices.filter((c) => c !== '' && (p.solved || c !== p.default)).map((c) => ({ value: c, label: c, disabled: off.has(c), detail: off.get(c) })), ...storeChoices(p)]}
         />
       {:else if p.type === ParamType.BOOL}
-        <Select id={fid} value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneath(p) === 'true' ? 'On' : beneath(p) === 'false' ? 'Off' : '–' }, { value: 'true', label: 'On' }, { value: 'false', label: 'Off' }]} />
+        <Select id={fid} unset value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneath(p) === 'true' ? 'On' : beneath(p) === 'false' ? 'Off' : '–' }, { value: 'true', label: 'On' }, { value: 'false', label: 'Off' }]} />
       {:else if ranged(p)}
-        <RangeInput id={fid} min={b.min} max={b.max} step={b.step || (p.type === ParamType.INT ? 1 : 0.01)} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={p.solved ? 'auto' : beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
+        <RangeInput id={fid} min={b.min} max={b.max} step={b.step || (p.type === ParamType.INT ? 1 : 0.01)} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {:else if numeric(p)}
-        <NumberInput id={fid} min={b.min || undefined} max={b.max || undefined} step={b.step || undefined} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={p.solved ? 'auto' : beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
+        <NumberInput id={fid} min={b.min || undefined} max={b.max || undefined} step={b.step || undefined} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
+      {:else if isPath(p)}
+        <StoreFileSelect id={fid} picks={p.picks} empty={beneath(p)} bind:value={() => v, (next) => set(p.name, next)} />
       {:else if multiline}
         <TextArea id={fid} mono rows={3} empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {:else}
         <TextInput id={fid} mono empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {/if}
       {#if err}<p class="mt-1.5 text-xs text-bad">{err}</p>{/if}
+      {#if part && !v}<div class="mt-2"><PartSources {part} /></div>{/if}
     </div>
   </div>
 {/snippet}
@@ -173,7 +200,7 @@
     <div class="border-t border-line pt-3">
       <button type="button" class="flex w-full items-center gap-2 rounded-md py-1 text-left text-sm text-fg-muted transition-colors hover:text-fg" aria-expanded={showAdvanced} aria-controls="{idPrefix}-advanced" onclick={() => (showAdvanced = !showAdvanced)}>
         <ChevronRight size={14} class="shrink-0 transition-transform {showAdvanced ? 'rotate-90' : ''}" />
-        Advanced parameters
+        Advanced
         <span class="ml-auto text-xs tabular-nums text-fg-faint">{advancedCount}</span>
       </button>
       <div id="{idPrefix}-advanced" hidden={!showAdvanced}>
@@ -184,7 +211,7 @@
 
   {#if extra.length}
     <fieldset class="min-w-0">
-      <legend class="w-full border-b border-line pb-2 text-xs font-medium text-fg-muted">Additional parameters</legend>
+      <legend class="w-full border-b border-line pb-2 text-xs font-medium text-fg-muted">Other</legend>
       <div class="divide-y divide-line/50">
         {#each extra as k (k)}
           <div class="param-row">
@@ -222,14 +249,14 @@
   .param-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    gap: 0.75rem;
-    padding-block: 0.875rem;
+    gap: 0.5rem;
+    padding-block: 0.625rem;
   }
 
   @container (min-width: 34rem) {
     .param-row:not(.wide) {
       grid-template-columns: minmax(0, 1fr) 18rem;
-      align-items: start;
+      align-items: center;
       column-gap: 2rem;
     }
   }

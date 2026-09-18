@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nickheyer/nebu/pkg/formats"
+	"github.com/nickheyer/nebu/pkg/formats/diffusion"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -149,8 +150,16 @@ func (f Format) Read(ctx context.Context, open formats.Opener, group *formats.Gr
 	return raw, nil
 }
 
+// The architecture the header names; a diffusion checkpoint is named from its tensors, since a converter
+// writes whatever family it was told and stable-diffusion.cpp reads the tensors alone
 func (Format) Architecture(raw *v1.RawModel) string {
-	return formats.First(raw.GetMetadata(), "general.architecture")
+	if family := diffusion.Scan(raw.GetTensors(), raw.GetGroup()).Family; family != "" {
+		return family
+	}
+	if arch := formats.First(raw.GetMetadata(), "general.architecture"); arch != "" {
+		return arch
+	}
+	return diffusion.Architecture(raw)
 }
 
 func (Format) Params(raw *v1.RawModel) formats.Params {
@@ -194,6 +203,8 @@ func (Format) Tensor(name string) (v1.TensorGroupKind, int32) {
 		}
 	}
 	switch {
+	case strings.HasPrefix(name, "enc.blk.") || strings.HasPrefix(name, "enc.output_norm"):
+		return v1.TensorGroupKind_TENSOR_GROUP_KIND_TEXT_ENCODER, -1
 	case strings.HasPrefix(name, "a.") || strings.HasPrefix(name, "mm.a."):
 		return v1.TensorGroupKind_TENSOR_GROUP_KIND_AUDIO, -1
 	case strings.HasPrefix(name, "v.") || strings.HasPrefix(name, "mm.") || strings.HasPrefix(name, "resampler."):
@@ -202,6 +213,10 @@ func (Format) Tensor(name string) (v1.TensorGroupKind, int32) {
 		return v1.TensorGroupKind_TENSOR_GROUP_KIND_EMBEDDING, -1
 	case strings.HasPrefix(name, "output.") || strings.HasPrefix(name, "output_norm.") || strings.HasPrefix(name, "output_hc_"):
 		return v1.TensorGroupKind_TENSOR_GROUP_KIND_OUTPUT, -1
+	}
+	// A diffusion model converted to GGUF keeps the names of its checkpoint, and no language model GGUF shares them
+	if kind, ok := diffusion.Any(name); ok {
+		return kind, -1
 	}
 	return v1.TensorGroupKind_TENSOR_GROUP_KIND_OTHER, -1
 }
@@ -282,6 +297,10 @@ func (Format) Metadata(raw *v1.RawModel) map[string]string {
 		if v, ok := m[k]; ok {
 			out[k] = v
 		}
+	}
+	// A diffusion model converted to GGUF keeps its checkpoint's names, which say the family and the parts it bundles
+	for k, v := range diffusion.Metadata(raw) {
+		out[k] = v
 	}
 	return out
 }

@@ -170,7 +170,7 @@
           />
           {#if Object.keys(slot.params).length}
             <div class="mt-4">
-              <div class="caps mb-2 text-fg-faint">Default parameters</div>
+              <div class="caps mb-2 text-fg-faint">Parameters</div>
               <ParamList params={slot.params} />
             </div>
           {/if}

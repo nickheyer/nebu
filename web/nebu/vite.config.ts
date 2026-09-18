@@ -8,6 +8,7 @@ export default defineConfig({
     proxy: {
       '/nebu.v1.': { target: process.env.NEBU_ADDR ?? 'http://127.0.0.1:8484', changeOrigin: true },
       '/v1': { target: process.env.NEBU_ADDR ?? 'http://127.0.0.1:8484', changeOrigin: true },
+      '/sdcpp': { target: process.env.NEBU_ADDR ?? 'http://127.0.0.1:8484', changeOrigin: true },
       '/health': { target: process.env.NEBU_ADDR ?? 'http://127.0.0.1:8484', changeOrigin: true }
     }
   }

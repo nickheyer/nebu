@@ -8,8 +8,15 @@ export type Dialect = 'openai' | 'anthropic' | 'ollama';
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  // Images before the text, base64 bytes with their type
+  images?: ImagePart[];
   toolCalls?: ToolCall[];
   toolCallId?: string;
+}
+
+export interface ImagePart {
+  mediaType: string;
+  data: string;
 }
 
 export interface ToolCall {
@@ -42,9 +49,11 @@ export interface ChatRequest {
 
 // What arrives while an answer streams
 export interface ChatEvent {
-  kind: 'text' | 'tool' | 'usage' | 'stop' | 'error';
+  kind: 'text' | 'tool' | 'image' | 'usage' | 'stop' | 'error';
   text?: string;
   tool?: Partial<ToolCall> & { index: number };
+  // An image in the answer, a data URL or an address
+  image?: { url: string };
   promptTokens?: number;
   completionTokens?: number;
   stop?: string;
@@ -80,6 +89,11 @@ export function render(req: Omit<ChatRequest, 'signal' | 'base' | 'key'>): { pat
             for (const t of m.toolCalls) blocks.push({ type: 'tool_use', id: t.id, name: t.name, input: parseArgs(t.arguments) });
             return { role: 'assistant', content: blocks };
           }
+          if (m.images?.length) {
+            const blocks: unknown[] = m.images.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.mediaType, data: i.data } }));
+            if (m.content) blocks.push({ type: 'text', text: m.content });
+            return { role: m.role, content: blocks };
+          }
           return { role: m.role, content: m.content };
         }),
       stream: req.stream
@@ -92,7 +106,7 @@ export function render(req: Omit<ChatRequest, 'signal' | 'base' | 'key'>): { pat
     if (req.tools?.length) body.tools = req.tools.map((t) => anthropicTool(t));
     return { path: '/v1/messages', body, headers };
   }
-  const messages = [...(req.system ? [{ role: 'system', content: req.system }] : []), ...req.messages.map(openaiMessage)];
+  const messages = [...(req.system ? [{ role: 'system', content: req.system }] : []), ...req.messages.map(req.dialect === 'ollama' ? ollamaMessage : openaiMessage)];
   if (req.dialect === 'ollama') {
     const options: Record<string, unknown> = {};
     if (s.temperature !== undefined) options.temperature = s.temperature;
@@ -118,10 +132,33 @@ export function render(req: Omit<ChatRequest, 'signal' | 'base' | 'key'>): { pat
 }
 
 function openaiMessage(m: ChatMessage): Record<string, unknown> {
-  const out: Record<string, unknown> = { role: m.role, content: m.content };
+  // Images travel as parts before the text, a message without them as a plain string
+  const content = m.images?.length
+    ? [...m.images.map((i) => ({ type: 'image_url', image_url: { url: dataUrl(i) } })), ...(m.content ? [{ type: 'text', text: m.content }] : [])]
+    : m.content;
+  const out: Record<string, unknown> = { role: m.role, content };
   if (m.toolCalls?.length) out.tool_calls = m.toolCalls.map((t) => ({ id: t.id, type: 'function', function: { name: t.name, arguments: t.arguments } }));
   if (m.toolCallId) out.tool_call_id = m.toolCallId;
   return out;
+}
+
+// Ollama carries a message's images as bare base64 beside its text
+function ollamaMessage(m: ChatMessage): Record<string, unknown> {
+  const out = openaiMessage({ ...m, images: undefined });
+  if (m.images?.length) out.images = m.images.map((i) => i.data);
+  return out;
+}
+
+export function dataUrl(i: ImagePart): string {
+  return `data:${i.mediaType};base64,${i.data}`;
+}
+
+// The media type of bare base64 image bytes from their leading characters, png when they say nothing
+export function sniffBase64(data: string): string {
+  if (data.startsWith('/9j/')) return 'image/jpeg';
+  if (data.startsWith('R0lGOD')) return 'image/gif';
+  if (data.startsWith('UklGR')) return 'image/webp';
+  return 'image/png';
 }
 
 function anthropicTool(t: unknown): unknown {
@@ -227,10 +264,19 @@ function readOpenai(chunk: Record<string, unknown>, emit: (ev: ChatEvent) => voi
   const usage = chunk.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
   if (usage) emit({ kind: 'usage', promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens });
   type Call = { index?: number; id?: string; function?: { name?: string; arguments?: string } };
-  const choices = (chunk.choices as { delta?: { content?: string; tool_calls?: Call[] }; message?: { content?: string; tool_calls?: Call[] }; text?: string; finish_reason?: string }[]) ?? [];
+  type Content = string | { type: string; text?: string; image_url?: { url?: string } }[] | null;
+  const choices = (chunk.choices as { delta?: { content?: Content; tool_calls?: Call[] }; message?: { content?: Content; tool_calls?: Call[] }; text?: string; finish_reason?: string }[]) ?? [];
   for (const c of choices) {
-    const text = c.delta?.content ?? c.message?.content ?? c.text ?? '';
-    if (text) emit({ kind: 'text', text });
+    const content = c.delta?.content ?? c.message?.content ?? c.text ?? '';
+    // A string, or parts of text and images from a server that answers in parts
+    if (typeof content === 'string') {
+      if (content) emit({ kind: 'text', text: content });
+    } else if (Array.isArray(content)) {
+      for (const p of content) {
+        if (p.type === 'text' && p.text) emit({ kind: 'text', text: p.text });
+        else if (p.type === 'image_url' && p.image_url?.url) emit({ kind: 'image', image: { url: p.image_url.url } });
+      }
+    }
     const calls = c.delta?.tool_calls ?? c.message?.tool_calls ?? [];
     calls.forEach((t, i) => emit({ kind: 'tool', tool: { index: t.index ?? i, id: t.id, name: t.function?.name, arguments: t.function?.arguments } }));
     if (c.finish_reason) emit({ kind: 'stop', stop: c.finish_reason });
@@ -277,8 +323,9 @@ function readOllama(chunk: Record<string, unknown>, emit: (ev: ChatEvent) => voi
     emit({ kind: 'error', error: chunk.error });
     return;
   }
-  const msg = chunk.message as { content?: string; tool_calls?: { function: { name: string; arguments: unknown } }[] } | undefined;
+  const msg = chunk.message as { content?: string; images?: string[]; tool_calls?: { function: { name: string; arguments: unknown } }[] } | undefined;
   if (msg?.content) emit({ kind: 'text', text: msg.content });
+  for (const data of msg?.images ?? []) emit({ kind: 'image', image: { url: dataUrl({ mediaType: sniffBase64(data), data }) } });
   msg?.tool_calls?.forEach((t, i) => emit({ kind: 'tool', tool: { index: i, id: `call-${i}`, name: t.function.name, arguments: JSON.stringify(t.function.arguments ?? {}) } }));
   if (typeof chunk.response === 'string' && chunk.response) emit({ kind: 'text', text: chunk.response });
   if (chunk.done) {
@@ -295,10 +342,14 @@ function readWhole(dialect: Dialect, raw: string, emit: (ev: ChatEvent) => void)
     return;
   }
   if (dialect === 'anthropic') {
-    const blocks = (parsed.content as { type: string; text?: string; id?: string; name?: string; input?: unknown }[]) ?? [];
+    const blocks = (parsed.content as { type: string; text?: string; id?: string; name?: string; input?: unknown; source?: { type: string; media_type?: string; data?: string; url?: string } }[]) ?? [];
     blocks.forEach((b, i) => {
       if (b.type === 'text' && b.text) emit({ kind: 'text', text: b.text });
       if (b.type === 'tool_use') emit({ kind: 'tool', tool: { index: i, id: b.id, name: b.name, arguments: JSON.stringify(b.input ?? {}) } });
+      if (b.type === 'image' && b.source) {
+        const url = b.source.type === 'url' ? b.source.url : b.source.data ? dataUrl({ mediaType: b.source.media_type || sniffBase64(b.source.data), data: b.source.data }) : '';
+        if (url) emit({ kind: 'image', image: { url } });
+      }
     });
     const usage = parsed.usage as { input_tokens?: number; output_tokens?: number } | undefined;
     if (usage) emit({ kind: 'usage', promptTokens: usage.input_tokens, completionTokens: usage.output_tokens });

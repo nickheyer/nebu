@@ -170,7 +170,7 @@ func parse(ra io.ReaderAt, size int64) (map[string]string, []*v1.TensorInfo, err
 			return nil, nil, err
 		}
 		entries = append(entries, tensorEntry{
-			info:   &v1.TensorInfo{Name: name, Dtype: dtype(typ), Elements: formats.Elements(shape)},
+			info:   &v1.TensorInfo{Name: name, Dtype: dtype(typ), Elements: formats.Elements(shape), Shape: shape},
 			offset: offset,
 		})
 	}

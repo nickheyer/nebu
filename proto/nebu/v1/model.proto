@@ -37,6 +37,23 @@ enum TensorGroupKind {
   TENSOR_GROUP_KIND_AUDIO = 7;
   // Speculative decoding layers such as multi token prediction heads, loaded only when a run drafts with them
   TENSOR_GROUP_KIND_DRAFT = 8;
+  // The denoiser of a diffusion model, a UNet or a diffusion transformer
+  TENSOR_GROUP_KIND_DIFFUSION = 9;
+  // The autoencoder a diffusion model decodes latents through
+  TENSOR_GROUP_KIND_VAE = 10;
+  // A text encoder conditioning a diffusion model, CLIP, T5, or a language model used as one
+  TENSOR_GROUP_KIND_TEXT_ENCODER = 11;
+}
+
+// What a weight group is, which decides the runtimes that serve it
+enum ModelKind {
+  MODEL_KIND_UNSPECIFIED = 0;
+  // A language model served for chat, completion, or embeddings
+  MODEL_KIND_LANGUAGE = 1;
+  // A diffusion model that generates images or video
+  MODEL_KIND_DIFFUSION = 2;
+  // A part of a diffusion pipeline loaded beside a diffusion model, an autoencoder or a text encoder, not served alone
+  MODEL_KIND_COMPONENT = 3;
 }
 
 // One file belonging to a model
@@ -69,6 +86,8 @@ message TensorInfo {
   string dtype = 2;
   uint64 bytes = 3;
   uint64 elements = 4;
+  // The dimensions as the header lists them, outermost first, what tells one family's block from another's
+  repeated uint64 shape = 5;
 }
 
 // Header facts read from one weight group
@@ -111,6 +130,9 @@ message Descriptor {
   double bits_per_weight = 9;
   map<string, string> metadata = 10;
   Precision precision = 11;
+  ModelKind kind = 12;
+  // What a diffusion model makes, image or video, either or both; empty for anything else
+  repeated string generates = 13;
 }
 
 // A weight format the daemon reads, in the words people meet it by

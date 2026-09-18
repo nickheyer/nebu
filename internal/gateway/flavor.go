@@ -144,17 +144,22 @@ type Flavor interface {
 	Error(w http.ResponseWriter, status int, message, kind string)
 	// Whether images travel only as bytes, so a URL is fetched before rendering
 	InlineImages() bool
+	// Whether the flavor's token count endpoint counts images itself, so none are added to its answer
+	CountsImages() bool
 }
 
 var flavors = map[v1.ApiFlavor]Flavor{
 	v1.ApiFlavor_API_FLAVOR_OPENAI:    openai{},
 	v1.ApiFlavor_API_FLAVOR_ANTHROPIC: anthropic{},
 	v1.ApiFlavor_API_FLAVOR_OLLAMA:    ollama{},
+	v1.ApiFlavor_API_FLAVOR_SDCPP:     sdcpp{},
 }
 
 // Names the flavor a client request is written in, by its path and headers
 func clientFlavor(r *http.Request) v1.ApiFlavor {
 	switch {
+	case strings.HasPrefix(r.URL.Path, sdcppPrefix):
+		return v1.ApiFlavor_API_FLAVOR_SDCPP
 	case strings.HasPrefix(r.URL.Path, ollamaPrefix):
 		return v1.ApiFlavor_API_FLAVOR_OLLAMA
 	case strings.HasPrefix(r.URL.Path, anthropicMessages) || r.Header.Get("anthropic-version") != "":
@@ -287,8 +292,16 @@ const imageTokensMax = 1600
 // Approximates a prompt's tokens when no runtime counts them, four bytes a token, a few per turn, and each image by its area
 func estimateTokens(c *Chat) int {
 	n := (len(promptText(c)) + 3) / 4
-	for _, m := range c.Messages {
+	for range c.Messages {
 		n += 3
+	}
+	return n + imageTokensOf(c)
+}
+
+// Sums the tokens of every image in a chat, each by its area
+func imageTokensOf(c *Chat) int {
+	n := 0
+	for _, m := range c.Messages {
 		for _, p := range m.Parts {
 			if p.Type == "image" {
 				n += imageTokens(p)
@@ -296,6 +309,14 @@ func estimateTokens(c *Chat) int {
 		}
 	}
 	return n
+}
+
+// A runtime's count with the images added when its tokenizer saw only the text
+func withImageTokens(upstream Flavor, c *Chat, n int) int {
+	if upstream.CountsImages() {
+		return n
+	}
+	return n + imageTokensOf(c)
 }
 
 // Sizes an image the way Anthropic does, its area over 750, the cap when it cannot be decoded

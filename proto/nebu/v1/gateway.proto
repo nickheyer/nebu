@@ -63,6 +63,8 @@ message Route {
   string served = 12;
   // How requests through this name are shaped
   Profile profile = 13;
+  // What the runtime generates as its capabilities endpoint lists them, img_gen and vid_gen; empty for a language model
+  repeated string modes = 14;
 }
 
 // One address the gateway answers on
@@ -133,6 +135,8 @@ enum TraceKind {
   TRACE_KIND_COUNT = 4;
   // A path the gateway proxies without reading, such as a runtime's own endpoint
   TRACE_KIND_OTHER = 5;
+  TRACE_KIND_IMAGE = 6;
+  TRACE_KIND_VIDEO = 7;
 }
 
 // One request through the gateway

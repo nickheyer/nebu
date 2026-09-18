@@ -146,17 +146,29 @@ func TestClassify(t *testing.T) {
 	}
 }
 
-// A safetensors checkpoint without its config falls through to no format at all, so it never claims a
-// group whose headers cannot be read
+// A safetensors checkpoint without its config falls out of the safetensors format, whose headers need
+// the config, and lands in the diffusion format, which reads a lone file as a checkpoint of its own
 func TestClassifyDemotesUnreadableGroups(t *testing.T) {
 	c := registry(t)
-	m := model("lonely/model.safetensors", "README.md")
+	m := model("lonely/model.safetensors", "README.md", "split_files/vae/wan_2.1_vae.safetensors", "v1-5-pruned-emaonly.ckpt", "flux/ae.sft")
 	c.Classify(m)
-	if a := m.GetArtifacts()[0]; a.GetRole() != v1.ArtifactRole_ARTIFACT_ROLE_OTHER || a.GetFormatId() != "" {
-		t.Fatalf("a shard without a config should not be weights: %v", a)
+	want := map[string][2]string{
+		"lonely/model.safetensors":                {"diffusion", "model"},
+		"split_files/vae/wan_2.1_vae.safetensors": {"diffusion", "wan_2.1_vae"},
+		"v1-5-pruned-emaonly.ckpt":                {"diffusion", "v1-5-pruned-emaonly"},
+		"flux/ae.sft":                             {"diffusion", "ae"},
 	}
-	if len(c.Groups(m)) != 0 {
-		t.Fatal("no group should form without readable headers")
+	for _, a := range m.GetArtifacts() {
+		w, ok := want[a.GetPath()]
+		if !ok {
+			continue
+		}
+		if a.GetRole() != v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS || a.GetFormatId() != w[0] || a.GetGroup() != w[1] {
+			t.Fatalf("%s: got %s/%s/%q want %v", a.GetPath(), a.GetFormatId(), text.Enum(a.GetRole()), a.GetGroup(), w)
+		}
+	}
+	if groups := c.Groups(m); len(groups) != 4 {
+		t.Fatalf("every checkpoint file is a group of its own: %d", len(groups))
 	}
 }
 
@@ -178,7 +190,7 @@ func TestStemAndShard(t *testing.T) {
 func TestDescribe(t *testing.T) {
 	c := registry(t)
 	list := c.Describe()
-	if len(list) != 4 || list[0].GetId() != "gguf" || list[0].GetBlurb() == "" {
+	if len(list) != 5 || list[0].GetId() != "gguf" || list[4].GetId() != "diffusion" || list[0].GetBlurb() == "" {
 		t.Fatalf("formats in priority order with words: %v", list)
 	}
 	if c.Get("nope") != nil {

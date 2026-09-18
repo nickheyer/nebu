@@ -496,6 +496,20 @@
   max-width: 100%;
   border-radius: 0.375rem;
 }
+.prose-nebu video,
+.prose-nebu audio {
+  display: block;
+  max-width: 100%;
+  margin: 0 0 0.9em;
+}
+.prose-nebu video {
+  max-height: 32rem;
+  border-radius: 0.375rem;
+  background: var(--color-sunken);
+}
+.prose-nebu audio {
+  width: 100%;
+}
 .prose-nebu hr {
   border: 0;
   border-top: 1px solid var(--color-line);

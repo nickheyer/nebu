@@ -197,6 +197,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		Calibration: calibration,
 		Contexts:    cfg.GetContexts(),
 		Log:         log,
+		Stored:      blobStore.ListManifests,
 	}
 	d.Puller = &pull.Puller{Inspector: d.Inspector, Store: blobStore, Fetcher: fetcher, Tasks: d.Tasks, Events: bus, MinFree: cfg.GetMinFreeBytes()}
 	d.Installs = &installs.Manager{
@@ -450,6 +451,12 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 	go func() {
 		defer d.background.Done()
 		d.Notifier.Run(d.base)
+	}()
+	// Models pulled before descriptors said what kind they are get that read off their headers
+	d.background.Add(1)
+	go func() {
+		defer d.background.Done()
+		d.Instances.RefreshDescriptors(d.base)
 	}()
 	// A fresh daemon checks the host once so the tasks list says what needs attention
 	if _, err := d.Doctor.Start(ctx); err != nil {

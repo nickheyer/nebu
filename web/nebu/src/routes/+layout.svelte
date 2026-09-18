@@ -5,6 +5,7 @@
   import { Tooltip } from 'bits-ui';
   import { connect, disconnect, live, activeTasks, hostName, hostLabeled } from '$lib/state.svelte';
   import { LayoutGrid, Boxes, MessageSquare, ListChecks, Cpu, Settings, WifiOff, KeyRound, Menu as MenuIcon, X, Activity } from '@lucide/svelte';
+  import { sweepStale } from '$lib/images';
   import Logo from '$lib/components/Logo.svelte';
   import Spinner from '$lib/components/ui/Spinner.svelte';
   import Toaster from '$lib/components/ui/Toaster.svelte';
@@ -28,7 +29,7 @@
     [
       { href: '/', label: 'Serve', icon: LayoutGrid, also: ['/slots', '/instances'] },
       { href: '/store', label: 'Models', icon: Boxes, also: ['/catalog'] },
-      { href: '/chat', label: 'Chat', icon: MessageSquare }
+      { href: '/chat', label: 'Chat', icon: MessageSquare, also: ['/generate'] }
     ],
     [
       { href: '/requests', label: 'Requests', icon: Activity },
@@ -50,6 +51,8 @@
 
   onMount(() => {
     connect();
+    // Files a closed tab attached or a cleared conversation left go, once per load
+    sweepStale().catch(() => {});
     return () => disconnect();
   });
 </script>

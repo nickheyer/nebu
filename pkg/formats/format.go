@@ -437,7 +437,7 @@ func Elements(shape []uint64) uint64 {
 func Tensor(name, dtype string, shape []uint64) *v1.TensorInfo {
 	label, width, _ := Dtype(dtype)
 	elements := Elements(shape)
-	return &v1.TensorInfo{Name: name, Dtype: label, Elements: elements, Bytes: uint64(math.Ceil(float64(elements) * width))}
+	return &v1.TensorInfo{Name: name, Dtype: label, Elements: elements, Bytes: uint64(math.Ceil(float64(elements) * width)), Shape: shape}
 }
 
 // Maps a torch storage class, dtype, or numpy type string to label and width

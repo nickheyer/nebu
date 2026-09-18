@@ -52,7 +52,7 @@ func (s *RuntimeService) ListRuntimes(ctx context.Context, req *connect.Request[
 
 // The runtime's status with its install methods as this host sees them
 func (s *RuntimeService) status(ctx context.Context, rt runtimes.Runtime, profile *v1.HostProfile) (*v1.RuntimeStatus, error) {
-	st := runtimes.Status(rt, profile)
+	st := s.runtimes.Status(rt, profile)
 	options, err := s.installs.Options(ctx, rt, profile)
 	if err != nil {
 		return nil, err
