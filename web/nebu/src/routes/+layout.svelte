@@ -4,7 +4,7 @@
   import { page } from '$app/state';
   import { Tooltip } from 'bits-ui';
   import { connect, disconnect, live, activeTasks, hostName, hostLabeled } from '$lib/state.svelte';
-  import { LayoutGrid, Boxes, MessageSquare, ListChecks, Cpu, Settings, WifiOff, KeyRound, Menu as MenuIcon, X, Activity } from '@lucide/svelte';
+  import { LayoutGrid, Boxes, MessageSquare, ListChecks, Cpu, Settings, WifiOff, KeyRound, Menu as MenuIcon, X, Activity, Bot } from '@lucide/svelte';
   import { sweepStale } from '$lib/images';
   import Logo from '$lib/components/Logo.svelte';
   import Spinner from '$lib/components/ui/Spinner.svelte';
@@ -29,7 +29,8 @@
     [
       { href: '/', label: 'Serve', icon: LayoutGrid, also: ['/slots', '/instances'] },
       { href: '/store', label: 'Models', icon: Boxes, also: ['/catalog'] },
-      { href: '/chat', label: 'Chat', icon: MessageSquare, also: ['/generate'] }
+      { href: '/chat', label: 'Chat', icon: MessageSquare, also: ['/generate'] },
+      { href: '/bots', label: 'Bots', icon: Bot }
     ],
     [
       { href: '/requests', label: 'Requests', icon: Activity },

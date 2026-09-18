@@ -88,6 +88,12 @@ message Web {
   bool disabled = 1;
 }
 
+// Discord bot settings shared by every bot
+message Discord {
+  // The ffmpeg binary that samples frames from video attachments, found on PATH when empty
+  string ffmpeg = 1;
+}
+
 // Daemon and client configuration
 message Config {
   string listen = 1;
@@ -107,4 +113,5 @@ message Config {
   Store store = 17;
   Tls tls = 18;
   Notify notify = 19;
+  Discord discord = 20;
 }

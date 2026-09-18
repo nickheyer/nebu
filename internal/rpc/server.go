@@ -12,6 +12,7 @@ import (
 
 	"connectrpc.com/connect"
 	"connectrpc.com/grpcreflect"
+	"github.com/nickheyer/nebu/internal/bots"
 	"github.com/nickheyer/nebu/internal/doctor"
 	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/internal/inspect"
@@ -51,6 +52,7 @@ type Deps struct {
 	Instances *instances.Manager
 	Slots     *slots.Manager
 	Gateway   *gateway.Gateway
+	Bots      *bots.Manager
 	// Mounts the gateway under /v1/ on this handler when it has no listener of its own
 	GatewayShared bool
 	Events        *events.Bus
@@ -78,6 +80,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.Handle(nebuv1connect.NewSlotServiceHandler(services.NewSlotService(d.Slots), opts))
 	mux.Handle(nebuv1connect.NewGatewayServiceHandler(services.NewGatewayService(d.Gateway, d.Instances), opts))
 	mux.Handle(nebuv1connect.NewEventServiceHandler(services.NewEventService(d.Events, d.Snapshot), opts))
+	mux.Handle(nebuv1connect.NewBotServiceHandler(services.NewBotService(d.Bots), opts))
 	reflector := grpcreflect.NewStaticReflector(
 		nebuv1connect.HostServiceName,
 		nebuv1connect.SettingsServiceName,
@@ -91,6 +94,7 @@ func NewHandler(d Deps) http.Handler {
 		nebuv1connect.SlotServiceName,
 		nebuv1connect.GatewayServiceName,
 		nebuv1connect.EventServiceName,
+		nebuv1connect.BotServiceName,
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))

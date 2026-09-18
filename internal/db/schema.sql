@@ -325,3 +325,33 @@ CREATE TABLE settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Discord bots, their token and settings; the connection state lives in the daemon
+CREATE TABLE bots (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  token TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  spec TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- What a bot keeps per channel: the persona chosen there, where its memory starts, and the webhook it speaks through
+CREATE TABLE bot_channels (
+  bot_id TEXT NOT NULL REFERENCES bots (id) ON DELETE CASCADE,
+  channel_id TEXT NOT NULL,
+  persona_id TEXT NOT NULL DEFAULT '',
+  cutoff_message_id TEXT NOT NULL DEFAULT '',
+  webhook_id TEXT NOT NULL DEFAULT '',
+  webhook_token TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (bot_id, channel_id)
+);
+
+-- When each scheduled automation last ran, so intervals survive a restart
+CREATE TABLE bot_schedules (
+  bot_id TEXT NOT NULL REFERENCES bots (id) ON DELETE CASCADE,
+  automation_id TEXT NOT NULL,
+  last_run_at TEXT NOT NULL,
+  PRIMARY KEY (bot_id, automation_id)
+);

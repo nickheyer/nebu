@@ -3,6 +3,7 @@ syntax = "proto3";
 package nebu.v1;
 
 import "google/protobuf/timestamp.proto";
+import "nebu/v1/bot.proto";
 import "nebu/v1/gateway.proto";
 import "nebu/v1/host.proto";
 import "nebu/v1/instance.proto";
@@ -34,6 +35,10 @@ enum EventKind {
   EVENT_KIND_SETTINGS = 15;
   // One request through the gateway, when it starts and when it ends, bodies left out
   EVENT_KIND_TRACE = 16;
+  // A Discord bot, after its settings or connection change
+  EVENT_KIND_BOT = 17;
+  // One thing a Discord bot did or failed to do
+  EVENT_KIND_BOT_ACTIVITY = 18;
 }
 
 // How it changed
@@ -65,6 +70,8 @@ message Event {
     StoreStatus store = 23;
     Settings settings = 24;
     Trace trace = 25;
+    Bot bot = 26;
+    BotActivity bot_activity = 27;
   }
 }
 

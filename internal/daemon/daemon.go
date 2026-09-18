@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/bots"
 	"github.com/nickheyer/nebu/internal/calibrate"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/doctor"
@@ -74,6 +75,7 @@ type Daemon struct {
 	Notifier  *notify.Notifier
 	Gateway   *gateway.Gateway
 	Routes    *gateway.Table
+	Bots      *bots.Manager
 	Log       *slog.Logger
 	handler   http.Handler
 	cancel    context.CancelFunc
@@ -263,6 +265,11 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	d.Notifier = &notify.Notifier{Webhooks: cfg.GetNotify().GetWebhooks(), Events: bus, Log: log}
 	d.Gateway = gateway.New(d.Routes, cfg.GetGateway().GetApiKeys(), cfg.GetGateway().GetCorsOrigins(), cfg.GetGateway().GetPolicy(), bus, log)
 	d.Gateway.SetVersion(Version)
+	// Bots are rows too, each enabled one connected once the daemon serves
+	d.Bots = bots.New(base, store, d.Gateway, bus, log, cfg.GetDiscord().GetFfmpeg())
+	if err = d.Bots.Load(context.Background()); err != nil {
+		return nil, err
+	}
 	var ui http.Handler
 	if !cfg.GetWeb().GetDisabled() {
 		ui = web.Handler()
@@ -283,6 +290,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		Instances: d.Instances,
 		Slots:     d.Slots,
 		Gateway:   d.Gateway,
+		Bots:      d.Bots,
 		// The gateway shares the API listener unless config gives it one
 		GatewayShared: cfg.GetGateway().GetListen() == "",
 		Events:        bus,
@@ -329,6 +337,9 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 	for _, r := range d.Routes.List() {
 		add(v1.EventKind_EVENT_KIND_ROUTE, r.GetName(), r)
 	}
+	for _, b := range d.Bots.List() {
+		add(v1.EventKind_EVENT_KIND_BOT, b.GetId(), b)
+	}
 	if list, err := d.Installs.List(ctx, ""); err == nil {
 		for _, in := range list {
 			add(v1.EventKind_EVENT_KIND_INSTALL, in.GetId(), in)
@@ -353,6 +364,7 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 // Stops instances and background tasks, then closes the store
 func (d *Daemon) Close() {
 	d.closeOnce.Do(func() {
+		d.Bots.Close()
 		d.Instances.Close()
 		d.cancel()
 		d.background.Wait()
@@ -437,7 +449,7 @@ func (d *Daemon) warnExposure(secure bool) {
 // Recovers state, then serves the API and gateway listeners
 func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 	d.addr = ln.Addr().String()
-	for _, recover := range []func(context.Context) error{d.Tasks.Recover, d.Installs.RecoverBuilds, d.Instances.Recover, d.Slots.Recover} {
+	for _, recover := range []func(context.Context) error{d.Tasks.Recover, d.Installs.RecoverBuilds, d.Instances.Recover, d.Slots.Recover, d.Bots.Recover} {
 		if err := recover(ctx); err != nil {
 			ln.Close()
 			if gatewayLn != nil {

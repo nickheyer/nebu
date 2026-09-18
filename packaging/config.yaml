@@ -7,3 +7,7 @@ listen: 127.0.0.1:8484
 logging:
   level: info
   format: text
+
+# Discord bots keep their tokens as rows; this names only the ffmpeg that samples video attachments, found on PATH when unset
+# discord:
+#   ffmpeg: /usr/bin/ffmpeg

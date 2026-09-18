@@ -13,12 +13,15 @@ import type { StoredModel, StoreStatus } from '$proto/store_pb';
 import { fail, started, settle as settleToast } from './toast.svelte';
 import type { Source, SourceStatus } from '$proto/source_pb';
 import type { Settings } from '$proto/settings_pb';
+import type { Bot, BotActivity } from '$proto/bot_pb';
 import { newestFirst } from './format';
 import { weightsName } from './catalog';
 
 // Traces kept in the browser, as many of each kind as the gateway keeps
 const traceLimit = 500;
 const countLimit = 50;
+// Activity rows per bot.
+const activityLimit = 500;
 
 // Everything the UI shows, kept current by the event stream
 export const live = $state({
@@ -38,7 +41,10 @@ export const live = $state({
   models: new SvelteMap<string, StoredModel>(),
   sources: new SvelteMap<string, Source>(),
   formats: new SvelteMap<string, Format>(),
-  traces: new SvelteMap<string, Trace>()
+  traces: new SvelteMap<string, Trace>(),
+  bots: new SvelteMap<string, Bot>(),
+  // Oldest first, keyed by bot ID.
+  botActivity: new SvelteMap<string, BotActivity[]>()
 });
 
 // Lists without a map, reread per connection and after SOURCE, HOST, and INSTALL events
@@ -85,7 +91,8 @@ const maps: Maps = {
   [EventKind.INSTALL]: live.installs,
   [EventKind.BUILD]: live.builds,
   [EventKind.MODEL]: live.models,
-  [EventKind.SOURCE]: live.sources
+  [EventKind.SOURCE]: live.sources,
+  [EventKind.BOT]: live.bots
 };
 
 // Keys seen during a snapshot so entries gone while disconnected can be pruned
@@ -122,6 +129,20 @@ function keepTrace(t: Trace) {
   for (const x of oldest.slice(0, held - limit)) live.traces.delete(x.id);
   if (counting) countsHeld = limit;
   else answersHeld = limit;
+}
+
+function sameActivity(a: BotActivity, b: BotActivity): boolean {
+  return a.message === b.message && a.kind === b.kind && (a.at?.seconds ?? 0n) === (b.at?.seconds ?? 0n) && (a.at?.nanos ?? 0) === (b.at?.nanos ?? 0);
+}
+
+// Merge and deduplicate activity, retaining the newest rows per bot.
+export function keepActivity(rows: BotActivity[]) {
+  for (const row of rows) {
+    const held = live.botActivity.get(row.botId) ?? [];
+    if (held.some((x) => sameActivity(x, row))) continue;
+    const next = [...held, row].sort((a, b) => Number((a.at?.seconds ?? 0n) - (b.at?.seconds ?? 0n)) || (a.at?.nanos ?? 0) - (b.at?.nanos ?? 0));
+    live.botActivity.set(row.botId, next.length > activityLimit ? next.slice(next.length - activityLimit) : next);
+  }
 }
 
 // A toast for something this browser started, turned into its ending when the daemon reports one
@@ -188,6 +209,10 @@ function apply(ev: Event) {
   }
   if (ev.kind === EventKind.TRACE) {
     if (p.case === 'trace') keepTrace(p.value);
+    return;
+  }
+  if (ev.kind === EventKind.BOT_ACTIVITY) {
+    if (p.case === 'botActivity') keepActivity([p.value]);
     return;
   }
   const map = maps[ev.kind];
@@ -352,6 +377,16 @@ export function slotName(id: string | undefined): string {
 // Finds a slot by id or by name
 export function slotByRef(ref: string): Slot | undefined {
   return live.slots.get(ref) ?? [...live.slots.values()].find((s) => s.name === ref);
+}
+
+// Find a bot by ID or name.
+export function botByRef(ref: string): Bot | undefined {
+  return live.bots.get(ref) ?? [...live.bots.values()].find((b) => b.name === ref);
+}
+
+// Newest first.
+export function botActivityOf(id: string): BotActivity[] {
+  return [...(live.botActivity.get(id) ?? [])].reverse();
 }
 
 export function sourceName(id: string): string {

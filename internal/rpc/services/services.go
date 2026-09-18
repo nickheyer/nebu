@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"connectrpc.com/connect"
+	"github.com/nickheyer/nebu/internal/bots"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/settings"
@@ -34,10 +35,12 @@ func wrap(err error) error {
 		errors.Is(err, tasks.ErrUnknownTask), errors.Is(err, store.ErrNotStored),
 		errors.Is(err, installs.ErrUnknownInstall), errors.Is(err, instances.ErrUnknownInstance),
 		errors.Is(err, installs.ErrUnknownBuild), errors.Is(err, build.ErrUnknownRecipe),
-		errors.Is(err, slots.ErrUnknownSlot):
+		errors.Is(err, slots.ErrUnknownSlot), errors.Is(err, bots.ErrUnknownBot):
 		return connect.NewError(connect.CodeNotFound, err)
+	case errors.Is(err, bots.ErrNotRunning):
+		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, runtimes.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, sources.ErrSource),
-		errors.Is(err, settings.ErrSetting):
+		errors.Is(err, settings.ErrSetting), errors.Is(err, bots.ErrBot):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, fs.ErrNotExist):
 		return connect.NewError(connect.CodeNotFound, err)

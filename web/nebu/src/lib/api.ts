@@ -1,6 +1,7 @@
 import { createClient, ConnectError, Code, type Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
 import { BuildService } from '$proto/recipe_pb';
+import { BotService } from '$proto/bot_pb';
 import { EstimateService } from '$proto/estimate_pb';
 import { EventService } from '$proto/event_pb';
 import { GatewayService } from '$proto/gateway_pb';
@@ -48,7 +49,8 @@ export const api = {
   builds: createClient(BuildService, transport),
   slots: createClient(SlotService, transport),
   gateway: createClient(GatewayService, transport),
-  events: createClient(EventService, transport)
+  events: createClient(EventService, transport),
+  bots: createClient(BotService, transport)
 };
 
 // Where the daemon streams one file of a repository, the token in the link when the daemon needs one
