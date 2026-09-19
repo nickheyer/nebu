@@ -3,7 +3,6 @@
   import { X } from '@lucide/svelte';
   import type { Snippet } from 'svelte';
 
-  // A centered modal: a title bar, a scrolling body, and a footer of actions
   let {
     open = $bindable(false),
     title,

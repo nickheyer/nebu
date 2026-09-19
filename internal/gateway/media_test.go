@@ -17,13 +17,13 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// A fake sd-server: capabilities, the job API for images and video, and the native path passed through
+// Fake sd-server with capabilities, media jobs, and native API paths.
 type fakeSD struct {
 	mu       sync.Mutex
 	jobs     map[string]map[string]any
 	requests map[string]map[string]any
 	polls    map[string]int
-	// Polls a job stays queued then generating before it completes
+	// Poll counts for queued and generating states before completion.
 	slow      int
 	cancelled []string
 	modes     []string
@@ -135,7 +135,7 @@ func postJSON(t *testing.T, url, body string) (*http.Response, []byte) {
 	return resp, raw
 }
 
-// An image request in OpenAI's shape becomes a native job and answers with the images once the job ends
+// OpenAI image requests return images from completed native jobs.
 func TestImagesThroughJobs(t *testing.T) {
 	g, sd, srv := mediaGateway(t)
 	resp, raw := postJSON(t, srv.URL+imagesPath, `{"model":"sdxl","prompt":"a cat","n":2,"size":"1024x768","steps":8,"cfg_scale":4.5,"seed":7,"sampler":"euler","negative_prompt":"blurry","vae_tiling":true,"sd_cpp":{"cache_mode":"easycache"}}`)
@@ -170,7 +170,7 @@ func TestImagesThroughJobs(t *testing.T) {
 	if tiling := sent["vae_tiling_params"].(map[string]any); tiling["enabled"] != true {
 		t.Fatalf("tiling %v", tiling)
 	}
-	// The trace names the kind, the job it sent, and a summary rather than the bytes
+	// Traces contain request kind, job input, and a summary of the output.
 	traces := g.Traces().List("sdxl", 0)
 	if len(traces) != 1 || traces[0].GetKind() != v1.TraceKind_TRACE_KIND_IMAGE || traces[0].GetStop() != "stop" || traces[0].GetFirstTokenAt() == nil || traces[0].GetFinishedAt() == nil {
 		t.Fatalf("trace %v", traces)
@@ -179,7 +179,7 @@ func TestImagesThroughJobs(t *testing.T) {
 	if !strings.Contains(full.GetResponse(), `"images":2`) || strings.Contains(full.GetResponse(), "b64") || !strings.Contains(full.GetUpstreamRequest(), `"batch_count":2`) {
 		t.Fatalf("trace bodies %q %q", full.GetResponse(), full.GetUpstreamRequest())
 	}
-	// A refusal from the runtime, a failed job, and a bad request each answer in words
+	// Runtime, job, and validation failures return error messages.
 	resp, raw = postJSON(t, srv.URL+imagesPath, `{"model":"sdxl","prompt":"refuse me"}`)
 	if resp.StatusCode != 400 || !strings.Contains(string(raw), "loaded model does not support") {
 		t.Fatalf("refusal %d %s", resp.StatusCode, raw)
@@ -196,7 +196,7 @@ func TestImagesThroughJobs(t *testing.T) {
 	if resp.StatusCode != 400 || !strings.Contains(string(raw), "b64_json") {
 		t.Fatalf("url format %d %s", resp.StatusCode, raw)
 	}
-	// A language route makes no images, and a chat request to a diffusion route is told where to go
+	// Reject requests unsupported by the route's model kind.
 	resp, raw = postJSON(t, srv.URL+imagesPath, `{"model":"llm","prompt":"x"}`)
 	if resp.StatusCode != 400 || !strings.Contains(string(raw), "language model") {
 		t.Fatalf("language route %d %s", resp.StatusCode, raw)
@@ -205,14 +205,14 @@ func TestImagesThroughJobs(t *testing.T) {
 	if resp.StatusCode != 400 || !strings.Contains(string(raw), videosPath) {
 		t.Fatalf("chat on a diffusion route %d %s", resp.StatusCode, raw)
 	}
-	// A video request to a route that only makes images is refused, one to a route that makes both is not
+	// Video requests require video capability.
 	resp, raw = postJSON(t, srv.URL+videosPath, `{"model":"sdxl","prompt":"x"}`)
 	if resp.StatusCode != 400 || !strings.Contains(string(raw), "not video") {
 		t.Fatalf("no vid_gen %d %s", resp.StatusCode, raw)
 	}
 }
 
-// An edit arrives as OpenAI's multipart form, its files becoming the init and reference images
+// Multipart image edits map files to init and reference images.
 func TestImageEditsFromForm(t *testing.T) {
 	_, sd, srv := mediaGateway(t)
 	var buf bytes.Buffer
@@ -245,7 +245,7 @@ func TestImageEditsFromForm(t *testing.T) {
 	if refs, _ := sent["ref_images"].([]any); len(refs) != 1 || refs[0] != base64.StdEncoding.EncodeToString([]byte("second")) {
 		t.Fatalf("ref images %v", sent["ref_images"])
 	}
-	// The same edit as JSON, the image field holding a list
+	// JSON edits accept an image list.
 	resp2, raw2 := postJSON(t, srv.URL+editsPath, `{"model":"sdxl","prompt":"json edit","image":["aW1n","cmVm"],"mask":"bWFzaw=="}`)
 	if resp2.StatusCode != 200 {
 		t.Fatalf("json edit %d %s", resp2.StatusCode, raw2)
@@ -258,7 +258,7 @@ func TestImageEditsFromForm(t *testing.T) {
 	}
 }
 
-// A video is accepted at once, polled by id, and its file fetched once the job ends
+// Video requests return a job ID for polling and downloading.
 func TestVideosAreJobs(t *testing.T) {
 	g, sd, srv := mediaGateway(t)
 	resp, raw := postJSON(t, srv.URL+videosPath, `{"model":"wan","prompt":"a cat walking","size":"832x480","seconds":2,"fps":16,"steps":10,"high_noise":{"steps":8,"cfg_scale":3.5},"init_image":"data:image/png;base64,aW1n"}`)
@@ -283,7 +283,7 @@ func TestVideosAreJobs(t *testing.T) {
 	if sent["video_frames"] != 33.0 || sent["fps"] != 16.0 || sent["init_image"] != "data:image/png;base64,aW1n" || high["sample_steps"] != 8.0 || high["guidance"].(map[string]any)["txt_cfg"] != 3.5 {
 		t.Fatalf("video job %v", sent)
 	}
-	// The file is not there yet, then it is
+	// Files become available after job completion.
 	var content *http.Response
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -312,7 +312,7 @@ func TestVideosAreJobs(t *testing.T) {
 	if !strings.Contains(string(raw), vid.ID) || !strings.Contains(string(raw), `"object":"list"`) {
 		t.Fatalf("list %s", raw)
 	}
-	// The trace lived as long as the job did
+	// Trace duration matches job duration.
 	deadline = time.Now().Add(5 * time.Second)
 	for {
 		traces := g.Traces().List("wan", 0)
@@ -366,7 +366,7 @@ func TestVideosAreJobs(t *testing.T) {
 	}
 }
 
-// The native API passes through to a diffusion route, capabilities are read, and the model list says what each route does
+// Native media requests pass through. Model listings include route capabilities.
 func TestNativePassthroughAndCapabilities(t *testing.T) {
 	_, _, srv := mediaGateway(t)
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+sdcppCapabilities, nil)
@@ -401,7 +401,7 @@ func TestNativePassthroughAndCapabilities(t *testing.T) {
 	}
 }
 
-// Modes are kept per instance, stamped on every route pointed at it, and cleared when it goes
+// Capabilities are shared across an instance's routes and cleared on removal.
 func TestTableModes(t *testing.T) {
 	table := tableOf(t, nil)
 	table.SetModes("inst-1", []string{"img_gen"})

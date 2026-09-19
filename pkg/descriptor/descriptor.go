@@ -1,4 +1,4 @@
-// Package descriptor turns raw header facts into format neutral descriptors.
+// Package descriptor builds format neutral model descriptors from headers.
 package descriptor
 
 import (
@@ -16,20 +16,18 @@ import (
 	"github.com/nickheyer/nebu/pkg/text"
 )
 
-// Builds descriptors from raw models through the format that read them, the attention families,
-// and the words for precision
+// Builds descriptors using format readers, attention families, and precision tables.
 type Builder struct {
 	Formats *formats.Registry
 	Archs   *archs.Registry
 	Scale   precision.Scale
 }
 
-// The attention family a descriptor was sized by
+// Returns the attention family used to size the descriptor.
 func (b *Builder) Family(d *v1.Descriptor) archs.Arch {
 	return b.Archs.Get(d.GetFamily())
 }
 
-// Builds a descriptor from raw header facts
 func (b *Builder) Build(raw *v1.RawModel) (*v1.Descriptor, error) {
 	f := b.Formats.Get(raw.GetFormatId())
 	if f == nil {
@@ -47,7 +45,7 @@ func (b *Builder) Build(raw *v1.RawModel) (*v1.Descriptor, error) {
 	draftFrom := f.DraftFrom(params)
 	for _, t := range raw.GetTensors() {
 		kind, layer := f.Tensor(t.GetName())
-		// A layer numbered past the main stack is a prediction head the header counts apart
+		// Layers beyond the main stack are prediction heads.
 		if draftFrom >= 0 && layer >= draftFrom && (kind == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER || kind == v1.TensorGroupKind_TENSOR_GROUP_KIND_EXPERTS) {
 			kind = v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT
 		}
@@ -89,13 +87,13 @@ func (b *Builder) Build(raw *v1.RawModel) (*v1.Descriptor, error) {
 	d.Precision = b.precision(f.Precision(raw, d.GetGroup()), d.GetBitsPerWeight())
 	d.Kind = kindOf(d)
 	if d.Kind == v1.ModelKind_MODEL_KIND_DIFFUSION {
-		d.Generates = diffusion.Generates(d.GetArchitecture())
+		d.Generates = diffusion.Generates(diffusion.FamilyOf(d))
 	}
 	return d, nil
 }
 
-// What a group is: a diffusion model when it holds a denoiser or its architecture names one, a
-// component when it is a part loaded beside a denoiser or its architecture names one, else a language model
+// Classifies denoisers, standalone components, and language models. Language models used as text
+// encoders retain their language kind.
 func kindOf(d *v1.Descriptor) v1.ModelKind {
 	var denoiser, part, language bool
 	for _, g := range d.GetGroups() {
@@ -108,13 +106,16 @@ func kindOf(d *v1.Descriptor) v1.ModelKind {
 			language = true
 		}
 	}
+	profile := diffusion.ProfileOf(d)
 	switch {
-	case denoiser || diffusion.Denoiser(d.GetArchitecture()) && !language:
+	case denoiser || profile.Family != "" && !language:
 		return v1.ModelKind_MODEL_KIND_DIFFUSION
-	case diffusion.Component(d.GetArchitecture()):
+	case profile.Component != "" && profile.Component != "llm":
+		return v1.ModelKind_MODEL_KIND_COMPONENT
+	case diffusion.Component(d.GetArchitecture()) && diffusion.Canonical(d.GetArchitecture()) != "llm":
 		return v1.ModelKind_MODEL_KIND_COMPONENT
 	case d.GetFormatId() == "diffusion":
-		// A lone checkpoint that is no denoiser is a part, a LoRA, or a helper, never a language model
+		// Non-denoiser checkpoints in this format are components.
 		return v1.ModelKind_MODEL_KIND_COMPONENT
 	case part && !language:
 		return v1.ModelKind_MODEL_KIND_COMPONENT
@@ -122,11 +123,11 @@ func kindOf(d *v1.Descriptor) v1.ModelKind {
 	return v1.ModelKind_MODEL_KIND_LANGUAGE
 }
 
-// Puts a weight group's precision into words from what its format read and the level table
+// Resolves precision labels from format metadata and the level table.
 func (b *Builder) precision(w formats.Words, measured float64) *v1.Precision {
 	bits := w.Bits
 	if bits == 0 && measured > 0 {
-		// Measured widths sit between the named ones, a rounded 16 and a floored 4.6 read right
+		// Round widths above 8 bits and floor quantized widths such as 4.6.
 		if measured >= 12 {
 			bits = uint32(math.Round(measured))
 		} else {

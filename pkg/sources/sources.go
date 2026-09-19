@@ -1,11 +1,5 @@
-// Package sources defines where models come from.
-//
-// A transport moves bytes and listings, one Go type per protocol behind one
-// interface. A provider is a catalog: where it lives, which transports it
-// uses, what it accepts, and how its wire format maps onto the shared model.
-// A source is a row configuring one provider. The source list is a row per
-// source: a seeded default for every provider that runs unconfigured, plus
-// whatever config or the API added.
+// Package sources provides model catalogs and file transports. A source configures a provider and
+// its transports.
 package sources
 
 import (
@@ -42,8 +36,7 @@ type Blob interface {
 	Size() int64
 }
 
-// Blob that lands as a whole file on this host, already there or moved by
-// a transport that cannot serve ranges, reporting bytes as they move
+// Blob available as a complete local file, with transfer progress.
 type Materializer interface {
 	Materialize(ctx context.Context, progress func(delta int64)) (string, error)
 }
@@ -89,18 +82,18 @@ func openFile(path string, remove bool) (Blob, error) {
 	return &fileBlob{File: f, size: info.Size(), remove: remove}, nil
 }
 
-// A blob that serves ranges through one transport and lands whole through another
+// Blob with separate transports for range reads and complete downloads.
 type rangedWhole struct {
 	Blob
 	whole Blob
 }
 
-// Blob that also has a ranged form, what the transfer limits can follow
+// Blob supporting ranged transfers with rate limits.
 type Ranged interface {
 	Ranged() Blob
 }
 
-// The ranged half, moved chunk by chunk under the limits instead of whole
+// Range transport used for chunked, limited transfers.
 func (r *rangedWhole) Ranged() Blob { return r.Blob }
 
 func (r *rangedWhole) Materialize(ctx context.Context, progress func(int64)) (string, error) {
@@ -130,18 +123,18 @@ func RangeOf(ctx context.Context, b Blob, off, length int64) (io.ReadCloser, err
 	return io.NopCloser(io.NewSectionReader(b, off, length)), nil
 }
 
-// A file a transport lands on first use, read in place afterwards
+// File downloaded on first access and then read locally.
 type lazyBlob struct {
 	size int64
-	// Lands the file, reporting bytes as they move when the transport can
+	// Downloads the file and reports progress when supported.
 	land func(ctx context.Context, progress func(int64)) (Blob, error)
-	// Set when land cannot report, so every Materialize reports the whole size
+	// Reports full size on Materialize when incremental progress is unavailable.
 	whole bool
 	mu    sync.Mutex
 	file  Blob
 }
 
-// Lands the file once and keeps it open, its real size replacing the caller's
+// Downloads once and opens the file, using its actual size.
 func (b *lazyBlob) open(ctx context.Context, progress func(int64)) (Blob, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -165,7 +158,7 @@ func (b *lazyBlob) ReadAt(p []byte, off int64) (int, error) {
 
 func (b *lazyBlob) Size() int64 { return b.size }
 
-// Lands the file and returns where it is
+// Downloads the file and returns its path.
 func (b *lazyBlob) Materialize(ctx context.Context, progress func(int64)) (string, error) {
 	f, err := b.open(ctx, progress)
 	if err != nil {
@@ -193,14 +186,8 @@ func (b *lazyBlob) Close() error {
 	return nil
 }
 
-// Catalog that can browse, search, resolve, and open artifacts
-//
-// Every source, from the Hub to a directory on disk, answers the same
-// SearchRequest and describes what it accepts through Capabilities, so one
-// interface renders all of them. A source that keeps variants under one name,
-// such as an image tag or a version, returns a Model whose Repo names the
-// variant so stored groups never collide. Revisions and Card answer
-// ErrUnsupported on a source that has neither.
+// Model catalog with browsing, search, and artifact access. Repo includes variant identifiers to
+// avoid stored-group collisions. Unsupported revisions and cards return ErrUnsupported.
 type Source interface {
 	Spec() *v1.Source
 	Capabilities(ctx context.Context) *v1.SourceCapabilities
@@ -221,8 +208,7 @@ type Registry struct {
 	byID  map[string]Source
 }
 
-// Builds a registry over cfgs, in the given order, so the first is the one
-// commands fall back to
+// Builds a registry in fallback order.
 func Build(cfgs []*v1.Source) (*Registry, error) {
 	r := &Registry{byID: map[string]Source{}}
 	if err := r.Reload(cfgs); err != nil {
@@ -231,11 +217,8 @@ func Build(cfgs []*v1.Source) (*Registry, error) {
 	return r, nil
 }
 
-// Replaces every source with clients built from cfgs, in the given order
-//
-// A source whose client cannot be built stays listed and reports the reason
-// from every call, so one bad row never hides the rest. The errors here are
-// structural: a missing id, a duplicate, or an unknown kind.
+// Rebuilds clients in configuration order. Invalid IDs, duplicates, and unknown kinds fail. Client
+// initialization failures remain visible as broken sources.
 func (r *Registry) Reload(cfgs []*v1.Source) error {
 	r.mu.RLock()
 	previous := r.byID
@@ -250,7 +233,7 @@ func (r *Registry) Reload(cfgs []*v1.Source) error {
 			return fmt.Errorf("%w: duplicate source id %q", ErrSource, cfg.GetId())
 		}
 		var src Source
-		// A client whose row did not change keeps its caches and tokens, a broken one gets another try
+		// Reuse unchanged clients and retry broken ones.
 		if old, ok := previous[cfg.GetId()].(*Client); ok && proto.Equal(old.Spec(), cfg) {
 			src = old
 		} else if cat, ok := catalogs[cfg.GetKind()]; !ok {
@@ -269,7 +252,7 @@ func (r *Registry) Reload(cfgs []*v1.Source) error {
 	return nil
 }
 
-// Checks a spec's shape, its kind and settings, without reaching for anything
+// Validates the source definition without external access.
 func (r *Registry) Validate(spec *v1.Source) error {
 	cat, ok := catalogs[spec.GetKind()]
 	if !ok {
@@ -293,8 +276,7 @@ func (r *Registry) Check(spec *v1.Source) error {
 	return nil
 }
 
-// The default source of every provider that runs unconfigured, under the
-// provider's name, in kind order
+// Unconfigured provider defaults in kind order.
 func Seeds() []*v1.Source {
 	var out []*v1.Source
 	for _, cat := range all() {
@@ -306,7 +288,7 @@ func Seeds() []*v1.Source {
 	return out
 }
 
-// Every provider with the settings its sources accept, in kind order
+// Providers and accepted settings in kind order.
 func Providers() []*v1.Provider {
 	var out []*v1.Provider
 	for _, cat := range all() {
@@ -356,7 +338,7 @@ func (r *Registry) OfKind(kind v1.SourceKind) []Source {
 	return out
 }
 
-// Lists every source with what it can do, or why it cannot
+// Lists source capabilities and initialization errors.
 func (r *Registry) Statuses(ctx context.Context) []*v1.SourceStatus {
 	r.mu.RLock()
 	order := append([]Source{}, r.order...)
@@ -374,7 +356,7 @@ func (r *Registry) Statuses(ctx context.Context) []*v1.SourceStatus {
 	return out
 }
 
-// Describes one source with what it can do, or why it cannot
+// Returns source capabilities and initialization errors.
 func (r *Registry) Status(ctx context.Context, id string) (*v1.SourceStatus, error) {
 	src, err := r.Get(id)
 	if err != nil {
@@ -391,7 +373,7 @@ func status(ctx context.Context, s Source) *v1.SourceStatus {
 	return st
 }
 
-// A source whose client could not be built, listed so the failure is visible
+// Source with a retained initialization error.
 type broken struct {
 	spec *v1.Source
 	err  error
@@ -419,12 +401,8 @@ func (b *broken) Card(context.Context, string, string) (*v1.ModelCard, error) { 
 
 func (b *broken) Open(context.Context, *v1.Model, *v1.Artifact) (Blob, error) { return nil, b.err }
 
-// Searches one source, every source of a provider, or every source there is
-//
-// The cursor of a fanned out search is the set of per source cursors, so a
-// source that ran out drops from the next page and the rest continue where
-// they were. A source that fails leaves a warning rather than failing the page,
-// unless every one failed.
+// Searches selected sources with per-source cursors. Exhausted sources drop out. Partial failures
+// become warnings. The request fails only when all sources fail.
 func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.SearchResponse, error) {
 	if req.GetSourceId() != "" {
 		src, err := r.Get(req.GetSourceId())
@@ -448,7 +426,7 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 		if len(srcs) == 0 {
 			return nil, fmt.Errorf("%w: no sources", ErrUnknownSource)
 		}
-		// Facets belong to one provider, so across providers only the shared ones travel
+		// Only shared facets apply across providers.
 		req = proto.Clone(req).(*v1.SearchRequest)
 		filters := map[string]string{}
 		for k, v := range req.GetFilters() {
@@ -458,7 +436,7 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 		}
 		req.Filters = filters
 	}
-	// A source that cannot list, or cannot search when there is a query, has no page to give
+	// Skip sources without the required listing or search capability.
 	able := srcs[:0:0]
 	for _, src := range srcs {
 		if answers(ctx, src, req) {
@@ -472,7 +450,7 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 		return nil, fmt.Errorf("%w: no source here lists without a query", ErrUnsupported)
 	}
 	srcs = able
-	// An order is one every source here offers, so the merged pages come back in it; none means each source's own
+	// Use a shared sort when all sources support it, otherwise retain source order.
 	if req.GetSort() != "" {
 		for _, src := range srcs {
 			if !offersSort(src.Capabilities(ctx), req.GetSort(), req.GetAscending()) {
@@ -535,7 +513,7 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 		}
 	}
 	if len(failed) == len(pages) {
-		return nil, fmt.Errorf("%s", strings.Join(failed, "; "))
+		return nil, fmt.Errorf("%s", strings.Join(failed, ". "))
 	}
 	for i := 0; ; i++ {
 		added := false
@@ -549,8 +527,7 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 			break
 		}
 	}
-	// Every source's page came in the asked order, so the merged page is put in it too, a stable sort
-	// keeping each source's own order where the key ties; relevance and trending have no key to merge by
+	// Merge pages with a stable sort. Relevance and trending have no shared sort key.
 	SortHits(out.Hits, req.GetSort(), req.GetAscending())
 	if len(next) > 0 {
 		data, err := json.Marshal(next)
@@ -562,7 +539,7 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 	return out, nil
 }
 
-// Whether a source orders by a sort id, flipped when asked
+// Checks whether the source supports the requested sort direction.
 func offersSort(caps *v1.SourceCapabilities, id string, ascending bool) bool {
 	for _, s := range caps.GetSorts() {
 		if s.GetId() == id {
@@ -572,7 +549,7 @@ func offersSort(caps *v1.SourceCapabilities, id string, ascending bool) bool {
 	return false
 }
 
-// Reports whether a source can answer a request: built, and listing or searching as the request needs
+// Checks initialization and required listing or search support.
 func answers(ctx context.Context, src Source, req *v1.SearchRequest) bool {
 	if _, broken := src.(*broken); broken {
 		return false

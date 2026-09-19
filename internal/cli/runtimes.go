@@ -24,13 +24,13 @@ func runRuntimes(ctx context.Context, e *env, args []string) error {
 		var rows [][]string
 		for _, rt := range resp.Msg.GetRuntimes() {
 			m := rt.GetRuntime()
-			rows = append(rows, []string{m.GetId(), m.GetName(), text.Enum(m.GetKind()), strings.Join(m.GetFormats(), ","), yes(rt.GetCompatible()), strings.Join(rt.GetUnmet(), "; ")})
+			rows = append(rows, []string{m.GetId(), m.GetName(), text.Enum(m.GetKind()), strings.Join(m.GetFormats(), ","), yes(rt.GetCompatible()), strings.Join(rt.GetUnmet(), ", ")})
 		}
 		table(w, []string{"ID", "NAME", "SERVES", "FORMATS", "COMPATIBLE", "UNMET"}, rows)
 	})
 }
 
-// Prints one runtime with its install methods and every param --param may name
+// Prints runtime install methods and supported params.
 func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 	positional, err := e.parse(e.flags("runtimes show"), args, 1, 1, "runtimes show <runtime>")
 	if err != nil {
@@ -43,7 +43,7 @@ func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 	rt := resp.Msg.GetRuntime()
 	return e.print(rt, func(w io.Writer) {
 		m := rt.GetRuntime()
-		table(w, nil, [][]string{{"id", m.GetId()}, {"name", m.GetName()}, {"serves", text.Enum(m.GetKind()) + " models"}, {"formats", strings.Join(m.GetFormats(), ", ")}, {"api", text.Enum(m.GetApi())}, {"compatible", yes(rt.GetCompatible())}, {"unmet", strings.Join(rt.GetUnmet(), "; ")}})
+		table(w, nil, [][]string{{"id", m.GetId()}, {"name", m.GetName()}, {"serves", text.Enum(m.GetKind()) + " models"}, {"formats", strings.Join(m.GetFormats(), ", ")}, {"api", text.Enum(m.GetApi())}, {"compatible", yes(rt.GetCompatible())}, {"unmet", strings.Join(rt.GetUnmet(), ", ")}})
 		for _, opt := range rt.GetInstalls() {
 			im := opt.GetMethod()
 			section(w, "install "+im.GetId())
@@ -52,7 +52,7 @@ func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 				rows = append(rows, []string{"about", im.GetDescription()})
 			}
 			if len(opt.GetUnmet()) > 0 {
-				rows = append(rows, []string{"unmet", strings.Join(opt.GetUnmet(), "; ")})
+				rows = append(rows, []string{"unmet", strings.Join(opt.GetUnmet(), ", ")})
 			}
 			table(w, nil, rows)
 			rows = nil
@@ -74,7 +74,7 @@ func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 	})
 }
 
-// One line saying what an install method does
+// Summarizes an install method.
 func methodText(im *v1.InstallMethod) string {
 	switch im.GetKind() {
 	case v1.InstallKind_INSTALL_KIND_ADOPTED:
@@ -182,7 +182,7 @@ func runRuntimesRecipes(ctx context.Context, e *env, args []string) error {
 			for _, v := range r.GetVariants() {
 				variants = append(variants, v.GetId())
 			}
-			rows = append(rows, []string{r.GetId(), r.GetRuntimeId(), rs.GetVariant(), strings.Join(variants, ","), text.Enum(rs.GetSandbox()), strings.Join(rs.GetUnmet(), "; "), r.GetDescription()})
+			rows = append(rows, []string{r.GetId(), r.GetRuntimeId(), rs.GetVariant(), strings.Join(variants, ","), text.Enum(rs.GetSandbox()), strings.Join(rs.GetUnmet(), ", "), r.GetDescription()})
 		}
 		table(w, []string{"ID", "RUNTIME", "SELECTED", "VARIANTS", "SANDBOX", "UNMET", "DESCRIPTION"}, rows)
 	})

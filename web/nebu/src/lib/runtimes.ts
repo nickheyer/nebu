@@ -5,7 +5,6 @@ import type { Task } from '$proto/task_pb';
 import { newestFirst, type Tone } from './format';
 import { live, taskFor } from './state.svelte';
 
-// The verb an install method goes by, from what it does: adopt a binary, download a release, build a recipe
 export function methodVerb(kind: InstallKind): string {
   switch (kind) {
     case InstallKind.ADOPTED:
@@ -19,7 +18,6 @@ export function methodVerb(kind: InstallKind): string {
   }
 }
 
-// The verb while the method runs
 export function methodDoing(kind: InstallKind): string {
   switch (kind) {
     case InstallKind.ADOPTED:
@@ -33,7 +31,6 @@ export function methodDoing(kind: InstallKind): string {
   }
 }
 
-// How an install was obtained, in one word
 export function kindWord(kind: InstallKind): string {
   switch (kind) {
     case InstallKind.ADOPTED:
@@ -47,7 +44,6 @@ export function kindWord(kind: InstallKind): string {
   }
 }
 
-// Where build steps run, in a word
 export function sandboxWord(kind: SandboxKind): string {
   switch (kind) {
     case SandboxKind.HOST:
@@ -59,28 +55,25 @@ export function sandboxWord(kind: SandboxKind): string {
   }
 }
 
-// Whether this host can run a runtime, as one state: compatible, or what it needs
 export function fit(status: RuntimeStatus): { tone: Tone; label: string } {
   if (status.compatible) return { tone: 'ok', label: 'Compatible' };
   return { tone: 'bad', label: `Needs ${status.unmet.join(', ')}` };
 }
 
-// The newest install task of a runtime, whatever state it is in
+// Include completed install tasks.
 export function installTask(runtimeId: string): Task | undefined {
   return taskFor('install', { runtime: runtimeId }, false);
 }
 
-// What an install task is doing, by the verb of the method it runs
 export function taskDoing(status: RuntimeStatus | undefined, task: Task | undefined): string {
   return methodDoing(status?.installs.find((o) => o.method?.id === task?.labels.method)?.method?.kind ?? InstallKind.UNSPECIFIED);
 }
 
-// Builds of one runtime, newest first
 export function buildsOf(runtimeId: string): Build[] {
   return [...live.builds.values()].filter((b) => b.runtimeId === runtimeId).sort(newestFirst((b) => b.createdAt));
 }
 
-// Params by group in the order the runtime first names each group, ungrouped params first
+// Preserve runtime group order, with ungrouped params first.
 export function paramGroups(params: Param[]): { name: string; params: Param[] }[] {
   const out: { name: string; params: Param[] }[] = [];
   for (const p of params) {
@@ -91,7 +84,6 @@ export function paramGroups(params: Param[]): { name: string; params: Param[] }[
   return out.sort((a, b) => Number(!!a.name) - Number(!!b.name));
 }
 
-// What a param accepts, in words: its choices, its bounds with their unit and step, on or off, or text
 export function accepts(p: Param): string {
   if (p.choices.length) return p.choices.filter(Boolean).join(', ');
   switch (p.type) {
@@ -111,7 +103,6 @@ export function accepts(p: Param): string {
   }
 }
 
-// What a param takes when nothing is set: auto for a solved param, else its default, on or off for a switch
 export function defaultText(p: Param): string {
   if (p.solved) return 'auto';
   if (p.type === ParamType.BOOL) return p.default === 'true' ? 'on' : p.default === 'false' ? 'off' : p.default;
@@ -119,17 +110,15 @@ export function defaultText(p: Param): string {
 }
 
 
-// What a runtime serves, in words
 export function servesWord(kind: ModelKind): string {
   return kind === ModelKind.DIFFUSION ? 'image and video models' : 'language models';
 }
 
-// The runtimes a bitmask names, in the daemon's order, each by the bit the daemon gave it
+// Use the daemon's runtime bit assignments and order.
 export function runtimesOf(mask: number, runtimes: RuntimeStatus[]): RuntimeStatus[] {
   return runtimes.filter((r) => r.runtime && r.runtime.bit !== 0 && (mask & r.runtime.bit) !== 0);
 }
 
-// Whether a bitmask names a runtime
 export function runsOn(mask: number, r: RuntimeStatus | undefined): boolean {
   return !!r?.runtime && r.runtime.bit !== 0 && (mask & r.runtime.bit) !== 0;
 }

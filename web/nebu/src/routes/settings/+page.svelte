@@ -19,7 +19,6 @@
   const labelDirty = $derived(label.trim() !== (live.settings?.hostLabel ?? ''));
   const tokenDirty = $derived(value.trim() !== token());
 
-  // The label field starts from the daemon's value once it arrives
   $effect(() => {
     if (live.settings && !labelSeeded) {
       label = live.settings.hostLabel;

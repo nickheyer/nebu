@@ -6,6 +6,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/archs"
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/formats/all"
+	"github.com/nickheyer/nebu/pkg/formats/diffusion"
 	"github.com/nickheyer/nebu/pkg/precision"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
@@ -121,7 +122,7 @@ func TestArchClaimsOnlyWhatItsFormulasCover(t *testing.T) {
 		}
 		return r
 	}
-	// No latent rank, so the MLA family cannot plan it and the default family takes it
+	// Missing latent rank falls back from MLA to standard attention.
 	d, err := b.Build(raw(nil))
 	if err != nil || d.GetFamily() != "default" {
 		t.Fatalf("without kv_lora_rank got %q %v", d.GetFamily(), err)
@@ -164,7 +165,7 @@ func TestPackedExpertsAndQuantPrecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The fp4 experts hold two weights per byte, nothing else is packed
+	// FP4 experts pack two weights per byte.
 	if d.GetParameterCount() != 16+64+128+2+16 || d.GetTotalBytes() != 178 {
 		t.Fatalf("params %d bytes %d", d.GetParameterCount(), d.GetTotalBytes())
 	}
@@ -172,7 +173,7 @@ func TestPackedExpertsAndQuantPrecision(t *testing.T) {
 	if p.GetBits() != 6 || p.GetLabel() != "6-bit fp8, fp4 experts" || p.GetLevel() != 4 {
 		t.Fatalf("precision %v", p)
 	}
-	// The dtype is only the answer when no quantization config named one
+	// Use dtype when quantization config is absent.
 	raw := fp8Raw()
 	delete(raw.Metadata, "quantization_config.quant_method")
 	delete(raw.Metadata, "expert_dtype")
@@ -217,7 +218,7 @@ func TestPerLayerEmbeddingAndHybridInterval(t *testing.T) {
 	if d.GetParams()["attn_interval"] != 4 || d.GetFamily() != "default" {
 		t.Fatalf("params %v family %q", d.GetParams(), d.GetFamily())
 	}
-	// Eight layers with a cache on one in four is two layers of cache: 2 * 4 heads * (64 + 64)
+	// Two of eight layers keep cache: 2 * 4 heads * (64 + 64).
 	if v := perToken(t, b, d); v != 1024 {
 		t.Fatalf("cache_per_token %v", v)
 	}
@@ -232,9 +233,6 @@ func TestPerLayerEmbeddingAndHybridInterval(t *testing.T) {
 	}
 }
 
-// Encoders, projectors, and prediction heads each keep their own kind, whether the header names
-// them apart or numbers them past the layers its config counts, and the shared expert every token
-// uses stays with its layer rather than joining the routed experts a run can offload
 func TestEncodersAndDraftHeads(t *testing.T) {
 	b := builder(t)
 	raw := &v1.RawModel{FormatId: "safetensors", Group: "default", Metadata: map[string]string{
@@ -299,14 +297,14 @@ func TestEncodersAndDraftHeads(t *testing.T) {
 	if d.GetParams()["n_layer"] != 2 || d.GetParams()["n_layer_draft"] != 1 {
 		t.Fatalf("params %v", d.GetParams())
 	}
-	// Without a layer count in the config nothing says where the heads start, so a numbered layer stays a layer
+	// Without a configured layer count, numbered layers cannot be identified as heads.
 	delete(raw.Metadata, "num_hidden_layers")
 	d, err = b.Build(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.GetParams()["n_layer"] != 3 {
-		t.Fatalf("layers seen should count the numbered layers alone, got %v", d.GetParams()["n_layer"])
+		t.Fatalf("expected only numbered layers, got %v", d.GetParams()["n_layer"])
 	}
 	for _, g := range d.GetGroups() {
 		if g.GetId() == "draft.2" {
@@ -366,5 +364,42 @@ func TestEncodersAndDraftHeads(t *testing.T) {
 	}
 	if d.GetPrecision().GetBits() != 4 || d.GetPrecision().GetLabel() != "4-bit Q4_K_M" {
 		t.Fatalf("gguf precision %v", d.GetPrecision())
+	}
+}
+
+func TestKindFollowsTheTensors(t *testing.T) {
+	b := builder(t)
+	audio := &v1.RawModel{FormatId: "safetensors", Group: "audio_vae", Metadata: map[string]string{"_class_name": "AutoencoderKLMiniMaxH3Audio"}, Tensors: []*v1.TensorInfo{
+		{Name: "encoder.layers.0.conv.weight", Bytes: 8, Elements: 2, Shape: []uint64{2}},
+		{Name: "decoder.layers.0.conv.weight", Bytes: 8, Elements: 2, Shape: []uint64{2}},
+	}}
+	d, err := b.Build(audio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.GetKind() != v1.ModelKind_MODEL_KIND_COMPONENT || diffusion.PartOf(d) != "audio_vae" {
+		t.Fatalf("audio vae %v %s", d.GetKind(), diffusion.PartOf(d))
+	}
+	video := &v1.RawModel{FormatId: "safetensors", Group: "transformer", Metadata: map[string]string{"_class_name": "MiniMaxH3Transformer3DModel"}, Tensors: []*v1.TensorInfo{
+		{Name: "video_patch_proj.weight", Bytes: 8, Elements: 2, Shape: []uint64{2}},
+		{Name: "audio_patch_proj.weight", Bytes: 8, Elements: 2, Shape: []uint64{2}},
+		{Name: "blocks.0.attn.to_q.weight", Bytes: 8, Elements: 4, Shape: []uint64{2, 2}},
+	}}
+	if d, err = b.Build(video); err != nil {
+		t.Fatal(err)
+	}
+	if d.GetKind() != v1.ModelKind_MODEL_KIND_DIFFUSION || diffusion.FamilyOf(d) != "minimax_h3" || len(d.GetGenerates()) != 1 || d.GetGenerates()[0] != "video" {
+		t.Fatalf("minimax %v %s %v", d.GetKind(), diffusion.FamilyOf(d), d.GetGenerates())
+	}
+	// Text encoder placement preserves the language model kind.
+	llm := &v1.RawModel{FormatId: "safetensors", Group: "text_encoder", Metadata: map[string]string{"architectures": "Qwen3VLForConditionalGeneration", "num_hidden_layers": "1", "hidden_size": "8", "num_attention_heads": "1", "vocab_size": "10", "max_position_embeddings": "16"}, Tensors: []*v1.TensorInfo{
+		{Name: "model.embed_tokens.weight", Bytes: 160, Elements: 80, Shape: []uint64{10, 8}},
+		{Name: "model.layers.0.self_attn.q_proj.weight", Bytes: 128, Elements: 64, Shape: []uint64{8, 8}},
+	}}
+	if d, err = b.Build(llm); err != nil {
+		t.Fatal(err)
+	}
+	if d.GetKind() != v1.ModelKind_MODEL_KIND_LANGUAGE {
+		t.Fatalf("text encoder %v", d.GetKind())
 	}
 }

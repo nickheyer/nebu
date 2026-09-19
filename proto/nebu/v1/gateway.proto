@@ -15,33 +15,33 @@ enum RouteState {
   ROUTE_STATE_DRAINING = 3;
 }
 
-// Limits a route enforces on requests, zero inherits the gateway default
+// Route request limits. Zero inherits the gateway default.
 message Policy {
   // Requests in flight at once
   uint32 max_in_flight = 1;
   // Sustained requests per second
   double requests_per_second = 2;
-  // Requests a quiet route absorbs at once, the rate rounded up when zero
+  // Burst capacity. Zero uses the request rate rounded up.
   uint32 burst = 3;
   // The whole exchange, first byte in to last byte out
   uint32 request_timeout_ms = 4;
-  // How long the runtime may take to start answering
+  // Maximum wait for the runtime response.
   uint32 upstream_timeout_ms = 5;
 }
 
-// What the gateway does with a system message that is not the first message, which some chat templates refuse to render
+// Handling of system messages after the first message.
 enum SystemMessages {
-  // The instance's template probe decides: keep when the template renders one, merge when it refuses one
+  // Keep if the template probe accepts later system messages, otherwise merge.
   SYSTEM_MESSAGES_UNSPECIFIED = 0;
-  // Sent as they came
+  // Send unchanged.
   SYSTEM_MESSAGES_KEEP = 1;
-  // Folded into the first system message, one made when the request has none
+  // Merge into the first system message, creating it if absent.
   SYSTEM_MESSAGES_MERGE = 2;
-  // Sent as user turns where they stood
+  // Convert to user messages in place.
   SYSTEM_MESSAGES_USER = 3;
 }
 
-// How a route shapes requests before the runtime sees them, each unset field taking the instance's own answer
+// Request transformations. Unset fields use instance defaults.
 message Profile {
   SystemMessages system_messages = 1;
 }
@@ -59,15 +59,15 @@ message Route {
   string model = 9;
   google.protobuf.Timestamp updated_at = 10;
   Policy policy = 11;
-  // The model name the runtime itself answers to, sent upstream in place of the route name
+  // Upstream model name, replacing the public route name.
   string served = 12;
-  // How requests through this name are shaped
+  // Request transformations for this route.
   Profile profile = 13;
-  // What the runtime generates as its capabilities endpoint lists them, img_gen and vid_gen; empty for a language model
+  // Generation modes from the capabilities endpoint: img_gen and vid_gen. Empty for language models.
   repeated string modes = 14;
 }
 
-// One address the gateway answers on
+// Gateway listener address.
 message Listener {
   string addr = 1;
   bool shared = 2;
@@ -79,7 +79,7 @@ message GatewayStatus {
   repeated Route routes = 2;
   bool auth = 3;
   uint64 requests = 4;
-  // What routes without a policy of their own enforce
+  // Default route policy.
   Policy policy = 5;
   // Whether the listeners speak TLS
   bool tls = 6;
@@ -105,9 +105,9 @@ message ListRoutesResponse {
 message SetRouteRequest {
   string name = 1;
   string instance_id = 2;
-  // Limits the alias enforces, the gateway defaults for every zero field
+  // Alias limits. Zero fields inherit gateway defaults.
   Policy policy = 3;
-  // How requests through the alias are shaped, the instance's own answer for every unset field
+  // Alias request transformations. Unset fields use instance defaults.
   Profile profile = 4;
 }
 
@@ -126,44 +126,41 @@ message DeleteRouteResponse {
   Route route = 1;
 }
 
-// What a request asked the gateway for
+// Gateway operation.
 enum TraceKind {
   TRACE_KIND_UNSPECIFIED = 0;
   TRACE_KIND_CHAT = 1;
   TRACE_KIND_GENERATE = 2;
   TRACE_KIND_EMBED = 3;
   TRACE_KIND_COUNT = 4;
-  // A path the gateway proxies without reading, such as a runtime's own endpoint
+  // Endpoint proxied without parsing, such as a runtime-specific endpoint.
   TRACE_KIND_OTHER = 5;
   TRACE_KIND_IMAGE = 6;
   TRACE_KIND_VIDEO = 7;
 }
 
-// One request through the gateway
-//
-// The gateway keeps the newest traces in memory, streams each one as an
-// event when it starts and when it ends, and answers its id in the
-// X-Nebu-Trace response header. Bodies are capped and left out of events;
-// GetTrace returns them.
+// Gateway request trace.
+// Recent traces are kept in memory and streamed at request start and completion.
+// X-Nebu-Trace identifies the trace. Capped bodies are returned by GetTrace, not events.
 message Trace {
   string id = 1;
-  // The public name the request named, empty when it named none
+  // Requested public model name. Empty when omitted.
   string route = 2;
   string instance_id = 3;
   string slot_id = 4;
-  // The wire format the client spoke and the one the runtime speaks
+  // Client and runtime wire protocols.
   ApiFlavor client_api = 5;
   ApiFlavor upstream_api = 6;
   string path = 7;
   TraceKind kind = 8;
   bool stream = 9;
   google.protobuf.Timestamp started_at = 10;
-  // The runtime's response headers arrived
+  // Time runtime response headers arrived.
   google.protobuf.Timestamp first_byte_at = 11;
-  // The first text or tool call of the answer arrived
+  // Time the first response text or tool call arrived.
   google.protobuf.Timestamp first_token_at = 12;
   google.protobuf.Timestamp finished_at = 13;
-  // The HTTP status the client got
+  // Client response status.
   uint32 status = 14;
   // Why the request failed, empty on success
   string error = 15;
@@ -173,17 +170,17 @@ message Trace {
   string stop = 18;
   uint64 request_bytes = 19;
   uint64 response_bytes = 20;
-  // The client's body as sent, capped
+  // Original request body, capped.
   string request = 21;
-  // The body the gateway sent the runtime when it translated or shaped the request, capped, empty when passed through as sent
+  // Transformed upstream request body, capped. Empty when unchanged.
   string upstream_request = 22;
-  // The answer text, or the response body for a request the gateway did not read, capped
+  // Response text or unparsed response body, capped.
   string response = 23;
   // Whether the client and runtime formats differed
   bool translated = 24;
-  // Where the request came from
+  // Request origin.
   string remote = 25;
-  // Tool calls the answer made, as the runtime named and argued them
+  // Runtime tool calls with names and arguments.
   repeated TraceToolCall tool_calls = 26;
 }
 
@@ -197,7 +194,7 @@ message TraceToolCall {
 // Lists traces newest first, one route's or every route's
 message ListTracesRequest {
   string route = 1;
-  // At most this many, the whole ring when zero
+  // Maximum results. Zero returns the full buffer.
   uint32 limit = 2;
 }
 

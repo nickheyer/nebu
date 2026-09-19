@@ -1,5 +1,4 @@
-// Package text holds the small conversions the daemon shares: enum names for people, byte counts,
-// numbers in strings, dotted versions, and nested JSON flattened to dotted keys.
+// Package text provides enum labels, numeric and version parsing, and JSON flattening.
 package text
 
 import (

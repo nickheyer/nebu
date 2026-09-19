@@ -1,5 +1,4 @@
 <script lang="ts">
-  // The mark: an N held between two brackets, the diagonal in the accent
   let { size = 24, class: cls = '' }: { size?: number; class?: string } = $props();
 </script>
 

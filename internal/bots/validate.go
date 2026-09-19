@@ -29,7 +29,7 @@ const (
 	maxVideoFrames        = 32
 )
 
-// The roles slash commands come in, each with its default name
+// Slash command roles and default names.
 var commandRoles = []string{"ask", "imagine", "video", "persona", "models", "reset", "help"}
 
 var (
@@ -38,7 +38,7 @@ var (
 	sizePattern = regexp.MustCompile(`^(\d+)x(\d+)$`)
 )
 
-// Fills defaults, assigns ids, and refuses settings that cannot work, so a saved bot always runs as written
+// Applies defaults, assigns IDs, and validates bot settings.
 func normalize(botName string, s *v1.BotSpec) error {
 	bad := func(format string, args ...any) error {
 		return fmt.Errorf("%w: "+format, append([]any{ErrBot}, args...)...)
@@ -316,7 +316,7 @@ func checkAutomation(a *v1.Automation, e *v1.Engagement) error {
 		}
 	case v1.TriggerKind_TRIGGER_KIND_MEMBER_JOIN:
 		if !e.GetMemberEvents() {
-			return fmt.Errorf("a member join trigger needs member events on under engagement, and the Server Members intent in the developer portal")
+			return fmt.Errorf("member join triggers require engagement member events and the Server Members intent in the developer portal")
 		}
 	}
 	switch act.Kind {
@@ -357,7 +357,7 @@ func trimAll(in []string) []string {
 	return out
 }
 
-// Reads WIDTHxHEIGHT, both multiples of sixteen as the diffusion runtime wants them
+// Parses WIDTHxHEIGHT, requiring multiples of sixteen.
 func parseSize(s string) (int, int, error) {
 	m := sizePattern.FindStringSubmatch(strings.ToLower(strings.TrimSpace(s)))
 	if m == nil {

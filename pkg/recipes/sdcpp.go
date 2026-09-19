@@ -8,7 +8,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// sd-server compiled from the stable-diffusion.cpp source with the backend the host's devices take
+// Builds sd-server with the host backend.
 type SDCpp struct{}
 
 func (SDCpp) ID() string        { return "sdcpp" }
@@ -17,12 +17,11 @@ func (SDCpp) Description() string {
 	return "sd-server compiled from a tag, branch, or commit of stable-diffusion.cpp"
 }
 
-// The tree is cloned rather than fetched as an archive, since ggml and the image codecs come as submodules
+// Clone to include ggml and image codec submodules.
 func (SDCpp) Source() Source {
 	return Source{Releases: "leejet/stable-diffusion.cpp", Repo: "https://github.com/leejet/stable-diffusion.cpp"}
 }
 
-// git checks the tree and its submodules out, cmake configures and drives the build, cc and c++ compile it
 func (SDCpp) Tools() []string { return []string{"git", "cmake", "cc", "c++"} }
 func (SDCpp) Facts() []string {
 	return []string{"device.vendor", "device.compute_capability", "device.driver_version"}
@@ -30,7 +29,7 @@ func (SDCpp) Facts() []string {
 func (SDCpp) Vars() []Var {
 	return []Var{
 		{Name: "build_type", Label: "Build type", Default: "Release", Description: "The cmake build type", Choices: []string{"Release", "RelWithDebInfo", "Debug", "MinSizeRel"}},
-		{Name: "extra", Label: "Extra cmake flags", Description: "Further cmake flags for the configure step, separated by spaces, -DGGML_CUDA_F16=ON say"},
+		{Name: "extra", Label: "Extra cmake flags", Description: "Space-separated CMake flags, such as -DGGML_CUDA_F16=ON"},
 	}
 }
 
@@ -82,7 +81,7 @@ func (SDCpp) Sandbox() Sandbox {
 	return Sandbox{Kind: v1.SandboxKind_SANDBOX_KIND_HOST, CLIs: []string{"podman", "docker", "nerdctl"}}
 }
 
-// The submodules come first, then a static server without the bundled web page, which nebu's own console replaces
+// Fetch submodules and build a static server without the bundled web page.
 func (SDCpp) Steps(b *Build) []Step {
 	configure := command("cmake", "-S", ".", "-B", "build",
 		"-DCMAKE_BUILD_TYPE="+arg(b.Vars, "build_type"), arg(b.Vars, "backend"), arg(b.Vars, "archs"),

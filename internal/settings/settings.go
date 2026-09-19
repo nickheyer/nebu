@@ -1,4 +1,4 @@
-// Package settings keeps host wide preferences as rows.
+// Package settings stores host preferences.
 package settings
 
 import (
@@ -18,13 +18,12 @@ import (
 // Returned when a setting is malformed
 var ErrSetting = errors.New("invalid setting")
 
-// The event id every settings change travels under
+// Event ID for settings updates.
 const ID = "settings"
 
 const labelMax = 64
 
-// Owns the settings row, the same way sources are owned: the rows are the
-// truth and every change reaches the UI as an event
+// Stores settings and publishes changes to the UI.
 type Manager struct {
 	DB     *db.DB
 	Events *events.Bus
@@ -33,7 +32,7 @@ type Manager struct {
 	current *v1.Settings
 }
 
-// Reads the settings once, later reads answering from memory
+// Loads settings and serves later reads from memory.
 func (m *Manager) Load(ctx context.Context) error {
 	s, err := m.DB.GetSettings(ctx)
 	if err != nil {

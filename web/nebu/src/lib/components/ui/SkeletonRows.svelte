@@ -1,5 +1,4 @@
 <script lang="ts">
-  // Placeholder rows for a table whose data is on the way, one bar per column
   type Col = string | { w: string; num?: boolean; sub?: boolean };
   let { rows = 4, cols }: { rows?: number; cols: Col[] } = $props();
   const spec = $derived(cols.map((c) => (typeof c === 'string' ? { w: c, num: false, sub: false } : { num: false, sub: false, ...c })));

@@ -10,7 +10,6 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// A hub whose default branch is not main: the hub's own commit names it, nothing is assumed
 func TestHubResolvesTheDefaultRevisionFromTheHub(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -118,7 +117,6 @@ func TestModelScopeResolvesTheDefaultRevisionFromTheHub(t *testing.T) {
 	}
 }
 
-// Ollama's registry has no tag list, so names come from the library page and everything else from the registry
 func TestOllamaReadsEveryTagFromTheRegistry(t *testing.T) {
 	manifest := func(cfg, size string) string {
 		return `{"schemaVersion":2,"config":{"mediaType":"application/vnd.docker.container.image.v1+json","digest":"sha256:` + cfg + `","size":10},"layers":[{"mediaType":"application/vnd.ollama.image.model","digest":"sha256:aaaa","size":` + size + `},{"mediaType":"application/vnd.ollama.image.template","digest":"sha256:bbbb","size":10}]}`
@@ -192,7 +190,6 @@ func TestOllamaReadsEveryTagFromTheRegistry(t *testing.T) {
 	}
 }
 
-// Every catalog hit says its weights are GGUF, the format the registry stores
 func TestOllamaHitsNameTheirFormat(t *testing.T) {
 	c := testClient(t, ollama, &v1.Source{Id: "ol", Kind: v1.SourceKind_SOURCE_KIND_OLLAMA})
 	hit := olHit(c, `<li><a href="/library/llama3.2"><h2>llama3.2</h2></a><p class="max-w-lg">Meta</p><span class="bg-indigo-50">tools</span><span class="bg-[#ddf4ff]">1b</span><span class="bg-[#ddf4ff]">3b</span><span>82.7M</span><span>&nbsp;Pulls</span></li>`)

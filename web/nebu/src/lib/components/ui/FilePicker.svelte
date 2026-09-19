@@ -6,8 +6,6 @@
   import Button from './Button.svelte';
   import Spinner from './Spinner.svelte';
 
-  // A path on the host, typed or picked: Browse opens the host's directories in place, a directory
-  // descends, a runnable file is taken
   let { value = $bindable(''), id, empty = '', class: cls = '' }: { value?: string; id?: string; empty?: string; class?: string } = $props();
 
   let open = $state(false);
@@ -17,7 +15,6 @@
   let loading = $state(false);
   let error = $state('');
 
-  // The separator the host uses, read from the path it answers with
   const sep = $derived(path.includes('\\') && !path.includes('/') ? '\\' : '/');
   const crumbs = $derived.by(() => {
     const parts = path.split(sep).filter(Boolean);

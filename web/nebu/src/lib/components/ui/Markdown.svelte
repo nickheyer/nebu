@@ -10,7 +10,7 @@
     USE_PROFILES: { html: true }
   };
 
-  // Opens links in a new tab without leaking the opener, and makes media playable
+  // Prevent new tabs from accessing the opener.
   function harden(html: string): string {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     for (const a of doc.querySelectorAll('a[href]')) {
@@ -18,7 +18,6 @@
       a.setAttribute('rel', 'noopener noreferrer');
     }
     for (const img of doc.querySelectorAll('img')) img.setAttribute('loading', 'lazy');
-    // Media plays under its own controls, the file read only when played
     for (const media of doc.querySelectorAll('video, audio')) {
       media.setAttribute('controls', '');
       media.setAttribute('preload', 'metadata');
@@ -27,7 +26,7 @@
     return doc.body.innerHTML;
   }
 
-  // Renders markdown to sanitized HTML, a YAML front matter block dropped first
+  // Strip YAML front matter before rendering and sanitizing Markdown.
   function renderMarkdown(md: string): string {
     const body = md.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
     return harden(DOMPurify.sanitize(marked.parse(body, { async: false }) as string, allowed));
@@ -36,7 +35,6 @@
 
 <script lang="ts">
   let { markdown = '', html = '' }: { markdown?: string; html?: string } = $props();
-  // A source's own HTML, such as a description, is only sanitized
   const rendered = $derived(markdown ? renderMarkdown(markdown) : html ? harden(DOMPurify.sanitize(html, allowed)) : '');
 </script>
 

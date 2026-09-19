@@ -1,4 +1,3 @@
-// Column sort state a table shares with its headers
 export class TableSort {
   key = $state('');
   dir = $state<'asc' | 'desc'>('desc');
@@ -8,7 +7,7 @@ export class TableSort {
     this.dir = dir;
   }
 
-  // Clicking the active column flips it, another column starts descending
+  // New columns start descending. Repeated clicks reverse the order.
   toggle(key: string) {
     if (this.key === key) this.dir = this.dir === 'asc' ? 'desc' : 'asc';
     else {
@@ -17,7 +16,6 @@ export class TableSort {
     }
   }
 
-  // Sorts a copy by the value a column produces
   apply<T>(rows: T[], value: (row: T, key: string) => string | number | bigint | undefined): T[] {
     const sign = this.dir === 'asc' ? 1 : -1;
     return [...rows].sort((a, b) => {

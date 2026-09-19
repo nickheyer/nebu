@@ -110,7 +110,6 @@ func TestUnsupported(t *testing.T) {
 	}
 }
 
-// A symlink to a parent then a file under it must not write outside dir
 func TestExtractRefusesWriteThroughSymlink(t *testing.T) {
 	out := t.TempDir()
 	victim := filepath.Join(filepath.Dir(out), "victim")
@@ -127,7 +126,6 @@ func TestExtractRefusesWriteThroughSymlink(t *testing.T) {
 	}
 }
 
-// A symlink whose target stays inside dir is fine
 func TestExtractKeepsInternalSymlink(t *testing.T) {
 	out := t.TempDir()
 	archive := writeTar(t, "a.tar", false, []*tar.Header{
@@ -143,7 +141,6 @@ func TestExtractKeepsInternalSymlink(t *testing.T) {
 	}
 }
 
-// An absolute or escaping link target is refused outright
 func TestExtractRefusesEscapingSymlink(t *testing.T) {
 	for _, target := range []string{"/etc/passwd", "../../outside"} {
 		out := t.TempDir()

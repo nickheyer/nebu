@@ -37,7 +37,7 @@ type Engine struct {
 	Log     *slog.Logger
 }
 
-// Makes the record a build runs from, without the network
+// Creates a build record without network access.
 func (s *Selection) Build() *v1.Build {
 	return &v1.Build{
 		RecipeId:  s.Recipe.ID(),
@@ -52,7 +52,7 @@ func (s *Selection) Build() *v1.Build {
 	}
 }
 
-// What the recipe's steps read for a build, with the sandbox paths a runner gives
+// Resolved build inputs using sandbox paths.
 func (s *Selection) context(b *v1.Build, runner sandbox.Runner, jobs int) *recipes.Build {
 	out := &recipes.Build{Ref: b.GetRef(), Commit: b.GetCommit(), Variant: b.GetVariant(), Vars: b.GetVars(), Jobs: jobs, Host: s.profile}
 	if runner != nil {
@@ -192,7 +192,7 @@ func (e *Engine) fetch(ctx context.Context, s *Selection, b *v1.Build, out io.Wr
 		}
 		return b.GetRef(), nil
 	case src.Repo != "":
-		// Git moves the tree at its own pace, but not through a paused window
+		// Respect paused windows before starting git.
 		if e.Fetcher != nil {
 			if err := e.Fetcher.Hold(ctx); err != nil {
 				return "", err

@@ -32,7 +32,6 @@
   import ModelDrawer from '$lib/components/ModelDrawer.svelte';
   import { TableSort } from '$lib/sort.svelte';
 
-  // The stream carries the totals in the snapshot and after every change
   const status = $derived(live.store);
   let filter = $state('');
   let sourceFilter = $state('');
@@ -48,7 +47,7 @@
   const sourceIds = $derived([...new Set([...live.models.values()].map((m) => m.sourceId))].sort());
   const several = $derived(sourceIds.length > 1);
   const slots = $derived(orderedSlots());
-  // Eviction takes the model used longest ago, a model never run counting from its pull
+  // Evict by last run, falling back to download time.
   const usedAt = (m: StoredModel) => m.usedAt ?? m.pulledAt;
   const models = $derived(
     sort.apply(
@@ -78,11 +77,10 @@
     )
   );
 
-  // What the models add up to against what the blobs take: the difference is bytes two groups share
+  // The difference between model and blob totals is shared storage.
   const referenced = $derived([...live.models.values()].reduce((a, m) => a + m.bytes, 0n));
   const onDisk = $derived(status?.blobBytes ?? referenced);
   const shared = $derived(referenced > onDisk ? referenced - onDisk : 0n);
-  // The filesystem the store sits on: the bar is the whole disk, what everything else on it holds, then the store
   const mount = $derived(storeMount());
   const diskUsed = $derived(mount ? (mount.totalBytes > mount.freeBytes ? mount.totalBytes - mount.freeBytes : 0n) : 0n);
   const otherUse = $derived(diskUsed > onDisk ? diskUsed - onDisk : 0n);
@@ -93,7 +91,6 @@
     if (status?.partials) parts.push(`${plural(status.partials, 'unfinished download')} using ${storage(status.partialBytes)}`);
     return parts;
   });
-  // Store wide work under way, verifying or exporting everything
   const storeTask = $derived(taskFor('verify', { repo: '' }) ?? taskFor('export', { repo: '' }));
 
   const capsOf = (id: string) => cached.sources.find((s) => s.source?.id === id)?.capabilities;
@@ -108,7 +105,7 @@
     replaceState(`/store?model=${encodeURIComponent(modelKey(m))}`, {});
   }
 
-  // A model named in the URL opens once the snapshot has it, and closing the panel drops it from the URL
+  // Open the model from the URL after the snapshot loads.
   let wanted = page.url.searchParams.get('model') ?? '';
   $effect(() => {
     if (!wanted || !live.ready) return;
@@ -163,7 +160,6 @@
     }
   }
 
-  // Quick targets beside the run panel: one click into any slot; a part loaded beside another model has no run at all
   function runItems(m: StoredModel) {
     if (isComponent(m.descriptor)) {
       return [
@@ -234,7 +230,7 @@
           if (exportDir.trim()) exportAll();
         }}
       >
-        <span class="text-sm text-fg-muted">Copy every model into a directory another nebu can use as a mirror source.</span>
+        <span class="text-sm text-fg-muted">Export all models to a mirror directory.</span>
         <TextInput class="min-w-64 flex-1" mono bind:value={exportDir} empty="/path/to/mirror" aria-label="Export directory" />
         <Button type="submit" variant="primary" icon={FolderOutput} loading={exporting} disabled={!exportDir.trim()}>Export</Button>
         <Button variant="ghost" icon={X} aria-label="Cancel" onclick={() => (exportOpen = false)} />
@@ -277,7 +273,7 @@
                   </div>
                   <div class="flex items-center gap-2 font-mono text-xs text-fg-muted">
                     <span>{weightsName(m.group, m.formatId)}{#if m.descriptor?.architecture}<span class="font-sans">{' · '}{m.descriptor.architecture}</span>{/if}</span>
-                    {#if kindLabel(m.descriptor)}<Chip text={kindLabel(m.descriptor)} mono={false} title={isComponent(m.descriptor) ? 'A part loaded beside a diffusion model, not served on its own' : 'What this model generates'} />{/if}
+                    {#if kindLabel(m.descriptor)}<Chip text={kindLabel(m.descriptor)} mono={false} title={isComponent(m.descriptor) ? 'Requires a diffusion model' : 'Model output'} />{/if}
                   </div>
                 </td>
                 {#if several}<td class="text-fg-muted">{sourceName(m.sourceId)}</td>{/if}
@@ -287,7 +283,7 @@
                     {#each runtimesOf(m.runtimes, cached.runtimes) as r (r.runtime?.id)}
                       <Chip text={r.runtime?.name ?? r.runtime?.id ?? ''} mono={false} title={r.compatible ? `${r.runtime?.name} serves this model` : `${r.runtime?.name} serves this model, but is not compatible with this host`} class={r.compatible ? '' : 'opacity-50'} />
                     {:else}
-                      <span class="text-xs text-fg-faint" title="No runtime serves this on its own">{isComponent(m.descriptor) ? 'part' : '–'}</span>
+                      <span class="text-xs text-fg-faint" title="No compatible runtime">{isComponent(m.descriptor) ? 'part' : '–'}</span>
                     {/each}
                   </div>
                 </td>

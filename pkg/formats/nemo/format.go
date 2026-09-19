@@ -13,10 +13,10 @@ type Packed struct{}
 
 func (Packed) ID() string { return "nemo" }
 func (Packed) Description() string {
-	return "NeMo checkpoint packed as one .nemo tar, model_config.yaml beside a torch, zarr, or distributed checkpoint"
+	return "NeMo archive with model_config.yaml and torch, zarr, or distributed weights"
 }
 func (Packed) Blurb() string {
-	return "A NeMo checkpoint packed as one .nemo archive, the older NVIDIA layout"
+	return "NeMo checkpoint in a .nemo archive"
 }
 func (Packed) Priority() int               { return 6 }
 func (Packed) Requires() []v1.ArtifactRole { return nil }
@@ -66,9 +66,9 @@ func (Packed) Precision(raw *v1.RawModel, _ string) formats.Words {
 	base := strings.TrimSuffix(strings.TrimSuffix(p, "-mixed"), "-true")
 	switch base {
 	case "bf16":
-		return formats.Words{Bits: 16, Labels: []string{"bf16"}, Notes: []string{"bfloat16, the training format on modern GPUs"}}
+		return formats.Words{Bits: 16, Labels: []string{"bf16"}, Notes: []string{"16-bit bfloat16"}}
 	case "16", "fp16":
-		return formats.Words{Bits: 16, Labels: []string{"16"}, Notes: []string{"float16, the training format on older GPUs"}}
+		return formats.Words{Bits: 16, Labels: []string{"16"}, Notes: []string{"16-bit float16"}}
 	case "32", "fp32":
 		return formats.Words{Bits: 32, Labels: []string{"32"}}
 	}
@@ -87,14 +87,14 @@ func (Directory) Description() string {
 	return "NeMo 2 checkpoint directory, context/model.yaml beside a torch distributed checkpoint under weights/"
 }
 func (Directory) Blurb() string {
-	return "A NeMo 2 checkpoint directory, a model config beside a distributed checkpoint, the layout NeMo serves"
+	return "NeMo 2 model config and distributed weights"
 }
 func (Directory) Priority() int { return 6 }
 func (Directory) Requires() []v1.ArtifactRole {
 	return []v1.ArtifactRole{v1.ArtifactRole_ARTIFACT_ROLE_CONFIG}
 }
 
-// The tree is the directory holding weights/ and context/; every file of the checkpoint attaches to it
+// Groups all files under the directory containing weights/ and context/.
 func (Directory) Classify(p string) (formats.Claim, bool) {
 	root, sub, ok := treeOf(p)
 	if !ok {
@@ -177,17 +177,17 @@ func architecture(raw *v1.RawModel) string {
 func configPrecision(m map[string]string) (formats.Words, bool) {
 	switch strings.TrimPrefix(strings.TrimSpace(m["config.params_dtype"]), "torch.") {
 	case "bfloat16":
-		return formats.Words{Bits: 16, Labels: []string{"bfloat16"}, Notes: []string{"bfloat16, the training format on modern GPUs"}}, true
+		return formats.Words{Bits: 16, Labels: []string{"bfloat16"}, Notes: []string{"16-bit bfloat16"}}, true
 	case "float16":
-		return formats.Words{Bits: 16, Labels: []string{"float16"}, Notes: []string{"float16, the training format on older GPUs"}}, true
+		return formats.Words{Bits: 16, Labels: []string{"float16"}, Notes: []string{"16-bit float16"}}, true
 	case "float32":
 		return formats.Words{Bits: 32, Labels: []string{"float32"}}, true
 	}
 	if strings.EqualFold(strings.TrimSpace(m["config.bf16"]), "true") {
-		return formats.Words{Bits: 16, Notes: []string{"bfloat16, the training format on modern GPUs"}}, true
+		return formats.Words{Bits: 16, Notes: []string{"16-bit bfloat16"}}, true
 	}
 	if strings.EqualFold(strings.TrimSpace(m["config.fp16"]), "true") {
-		return formats.Words{Bits: 16, Notes: []string{"float16, the training format on older GPUs"}}, true
+		return formats.Words{Bits: 16, Notes: []string{"16-bit float16"}}, true
 	}
 	return formats.Words{}, false
 }

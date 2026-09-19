@@ -1,9 +1,9 @@
-// Package formats knows every weight file format: which files a repository's listing holds, how they
-// group into loadable sets, how their headers are read, and what those headers say.
+// Package formats groups model files, reads headers, and extracts model metadata.
 package formats
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,61 +23,70 @@ var ErrUnknownGroup = errors.New("unknown weight group")
 // Opens one artifact for random access
 type Opener func(ctx context.Context, a *v1.Artifact) (sources.Blob, error)
 
-// What a format makes of one file in a listing
+// Classification of a repository file.
 type Claim struct {
 	Role v1.ArtifactRole
-	// For weights, the loadable set the file belongs to
+	// Loadable weight group.
 	Group string
-	// For a file that is one shard of many, its place, one based
+	// Shard position, starting at one.
 	ShardIndex, ShardCount uint32
-	// Whether the format lays a group out as a tree, every file attaching to the tree's root rather than its own directory
+	// Whether files attach to a shared tree root instead of their directories.
 	Tree bool
-	// The tree root, the directory holding the group, empty for the repository root
+	// Group directory, empty for the repository root.
 	Root string
 }
 
-// How a weight group's precision reads from its headers or name
+// Precision labels and bit width.
 type Words struct {
 	Bits   uint32
 	Labels []string
 	Notes  []string
 }
 
-// One weight file format, from a repository listing to the facts the planner reads
+// A format that groups files by pipelines declared in model_index.json.
+type TreeFormat interface {
+	Format
+	// Classifies a path relative to the tree root.
+	ClassifyIn(t *v1.Tree, rel string) (Claim, bool)
+	// Splits independent denoisers into groups with their shared components.
+	Split(t *v1.Tree, g *Group) []*Group
+}
+
+// Maximum model_index.json size.
+const maxModelIndex = 1 << 20
+
+// A model format reader and classifier.
 type Format interface {
 	ID() string
 	Description() string
-	// What the format is, for people who have not met it
+	// Description of the format.
 	Blurb() string
-	// Formats claim files in priority order, highest first
+	// Formats claim files in descending priority order.
 	Priority() int
-	// Classifies one path, false when the format does not know the file
+	// Classifies a path relative to the tree root.
 	Classify(path string) (Claim, bool)
-	// Roles a group must carry files of for its headers to be readable
+	// Artifact roles required to read headers.
 	Requires() []v1.ArtifactRole
-	// Reads the headers of one group, weight bytes never fetched
+	// Reads headers without fetching weight data.
 	Read(ctx context.Context, open Opener, g *Group) (*v1.RawModel, error)
-	// The architecture the headers name
+	// Architecture from the headers.
 	Architecture(raw *v1.RawModel) string
-	// The architecture parameters the headers hold, zero for what they lack
+	// Architecture parameters, zero when absent.
 	Params(raw *v1.RawModel) Params
-	// The placement class of a tensor and its layer, -1 for a tensor of no layer
+	// Tensor placement and layer index, or -1 for tensors outside layers.
 	Tensor(name string) (v1.TensorGroupKind, int32)
-	// The first layer index that is a prediction head rather than a main layer, -1 when layers are never drafts by index
+	// First prediction head layer index, or -1 if not defined by index.
 	DraftFrom(p Params) int32
-	// The weights a tensor holds, more than its elements when several weights pack into each
+	// Weight count, accounting for packed elements.
 	Elements(t *v1.TensorInfo, raw *v1.RawModel) uint64
-	// The precision of a group as its name or headers put it
+	// Precision from the group name or headers.
 	Precision(raw *v1.RawModel, group string) Words
-	// The header keys worth keeping on the descriptor
+	// Metadata retained on the descriptor.
 	Metadata(raw *v1.RawModel) map[string]string
 }
 
-// Loadable set of weights plus attached files
-//
-// Root is the directory prefix every path in the group shares and the store strips when it lays
-// the group out: the weights' directory, or the root of a group shaped as a tree. Empty for the
-// repository root.
+// Loadable weights and associated files. Root is the shared path prefix removed when storing the
+// group. Empty means the repository root.
 type Group struct {
 	FormatID string
 	Name     string
@@ -129,14 +138,91 @@ func (r *Registry) Describe() []*v1.Format {
 	return out
 }
 
-// Fills classification fields on every artifact in place
-//
-// Formats claim files in priority order. A weight whose format requires files the repository
-// does not carry falls through to the next format that claims it, so a lone safetensors
-// checkpoint without a config is not left with a format that cannot read it.
+// Lay reads each model_index.json and records declared trees, deepest first. Unreadable or invalid
+// indexes fail the listing to avoid incomplete pulls.
+func (r *Registry) Lay(ctx context.Context, open Opener, m *v1.Model) error {
+	m.Trees = nil
+	for _, a := range m.GetArtifacts() {
+		dir, base := Split(a.GetPath())
+		if base != "model_index.json" {
+			continue
+		}
+		data, err := ReadAll(ctx, open, a, maxModelIndex)
+		if err != nil {
+			return fmt.Errorf("%s: %w", a.GetPath(), err)
+		}
+		t, err := ParseTree(dir, data)
+		if err != nil {
+			return fmt.Errorf("%s: %w", a.GetPath(), err)
+		}
+		m.Trees = append(m.Trees, t)
+	}
+	sort.SliceStable(m.Trees, func(i, j int) bool { return len(m.Trees[i].GetRoot()) > len(m.Trees[j].GetRoot()) })
+	return nil
+}
+
+// ParseTree reads the pipeline class and each component's library, class, and subfolder from
+// model_index.json.
+func ParseTree(root string, data []byte) (*v1.Tree, error) {
+	var index map[string]json.RawMessage
+	if err := json.Unmarshal(data, &index); err != nil {
+		return nil, err
+	}
+	t := &v1.Tree{Root: root, Parts: map[string]string{}, Classes: map[string]string{}}
+	if raw, ok := index["_class_name"]; ok {
+		json.Unmarshal(raw, &t.ClassName)
+	}
+	for key, raw := range index {
+		if strings.HasPrefix(key, "_") {
+			continue
+		}
+		var entry []json.RawMessage
+		if err := json.Unmarshal(raw, &entry); err != nil || len(entry) < 2 {
+			continue
+		}
+		var lib, class string
+		json.Unmarshal(entry[0], &lib)
+		json.Unmarshal(entry[1], &class)
+		if class == "" {
+			continue
+		}
+		sub := key
+		if len(entry) > 2 {
+			var opts struct {
+				Subfolder string `json:"subfolder"`
+			}
+			if json.Unmarshal(entry[2], &opts) == nil && opts.Subfolder != "" {
+				sub = strings.Trim(opts.Subfolder, "/")
+			}
+		}
+		t.Parts[key], t.Classes[key] = sub, class
+	}
+	return t, nil
+}
+
+// Returns the deepest tree containing the path, or nil.
+func TreeOf(m *v1.Model, p string) *v1.Tree {
+	for _, t := range m.GetTrees() {
+		if t.GetRoot() == "" || strings.HasPrefix(p, t.GetRoot()+"/") {
+			return t
+		}
+	}
+	return nil
+}
+
+// A path relative to a tree's root
+func within(t *v1.Tree, p string) string {
+	if t.GetRoot() == "" {
+		return p
+	}
+	return strings.TrimPrefix(p, t.GetRoot()+"/")
+}
+
+// Classifies artifacts in place. Declared pipelines take priority. Other formats must have their
+// required files present to claim weights.
 func (r *Registry) Classify(m *v1.Model) {
 	for _, a := range m.GetArtifacts() {
-		r.classify(a, nil)
+		r.classify(m, a, nil)
 	}
 	excluded := map[*v1.Artifact]map[string]bool{}
 	for range r.list {
@@ -152,7 +238,7 @@ func (r *Registry) Classify(m *v1.Model) {
 					excluded[a] = ex
 				}
 				ex[g.FormatID] = true
-				r.classify(a, ex)
+				r.classify(m, a, ex)
 				demoted = true
 			}
 		}
@@ -163,13 +249,13 @@ func (r *Registry) Classify(m *v1.Model) {
 	r.disambiguate(m)
 }
 
-func (r *Registry) classify(a *v1.Artifact, exclude map[string]bool) {
+func (r *Registry) classify(m *v1.Model, a *v1.Artifact, exclude map[string]bool) {
 	a.FormatId, a.Role, a.Group, a.ShardIndex, a.ShardCount = "", v1.ArtifactRole_ARTIFACT_ROLE_OTHER, "", 0, 0
 	for _, f := range r.list {
 		if exclude[f.ID()] {
 			continue
 		}
-		c, ok := f.Classify(a.GetPath())
+		c, ok := r.claim(m, f, a.GetPath())
 		if !ok {
 			continue
 		}
@@ -181,10 +267,25 @@ func (r *Registry) classify(a *v1.Artifact, exclude map[string]bool) {
 	}
 }
 
-// Splits a group whose files are different models rather than shards of one: a repository that
-// publishes model-IQ4_XS, model-MTP-IQ4_XS, and model-LOW-MTP-IQ4_XS names every one by the quant
-// token, so each is named by what sets it apart from the others instead, IQ4_XS, MTP-IQ4_XS, and
-// LOW-MTP-IQ4_XS. Shards of one file share a stem and stay together.
+// Classifies a path using its declared tree when available.
+func (r *Registry) claim(m *v1.Model, f Format, p string) (Claim, bool) {
+	tf, isTree := f.(TreeFormat)
+	t := TreeOf(m, p)
+	switch {
+	case isTree && t != nil:
+		c, ok := tf.ClassifyIn(t, within(t, p))
+		if ok {
+			c.Tree, c.Root = true, t.GetRoot()
+		}
+		return c, ok
+	case isTree:
+		return Claim{}, false
+	}
+	return f.Classify(p)
+}
+
+// Splits distinct models with the same quantization token by their unique name suffixes. Shards
+// with a shared stem remain together.
 func (r *Registry) disambiguate(m *v1.Model) {
 	type key struct{ format, group string }
 	byKey := map[key][]*v1.Artifact{}
@@ -200,6 +301,10 @@ func (r *Registry) disambiguate(m *v1.Model) {
 		byKey[k] = append(byKey[k], a)
 	}
 	for _, k := range order {
+		// Keep a declared pipeline's component models in one group.
+		if _, tree := r.byID[k.format].(TreeFormat); tree {
+			continue
+		}
 		stems := map[string][]*v1.Artifact{}
 		var distinct []string
 		for _, a := range byKey[k] {
@@ -221,7 +326,7 @@ func (r *Registry) disambiguate(m *v1.Model) {
 	}
 }
 
-// The path without its extension and, for one shard of many, without the shard suffix
+// Removes the extension and shard suffix.
 func Stem(p string) string {
 	base := strings.TrimSuffix(p, path.Ext(p))
 	if stem, _, _, ok := Shard(base); ok {
@@ -257,7 +362,7 @@ func digits(s string) bool {
 	return true
 }
 
-// The longest prefix every stem shares, cut back to a word boundary so a name never starts mid token
+// Returns the shared stem prefix, truncated to a word boundary.
 func sharedPrefix(stems []string) string {
 	prefix := stems[0]
 	for _, s := range stems[1:] {
@@ -274,31 +379,28 @@ func sharedPrefix(stems []string) string {
 	return prefix[:cut+1]
 }
 
-// Names the place a file attaches to: the root its format's tree layout gives it, else its directory
-func (r *Registry) attachKey(a *v1.Artifact) string {
-	if root, ok := r.root(a); ok {
+// Returns the tree root or file directory used for grouping.
+func (r *Registry) attachKey(m *v1.Model, a *v1.Artifact) string {
+	if root, ok := r.root(m, a); ok {
 		return "\x00" + root
 	}
 	return path.Dir(a.GetPath())
 }
 
-// Returns the tree root a path sits under when its format lays groups out as trees
-func (r *Registry) root(a *v1.Artifact) (string, bool) {
+// Returns the containing tree root for tree formats.
+func (r *Registry) root(m *v1.Model, a *v1.Artifact) (string, bool) {
 	f := r.byID[a.GetFormatId()]
 	if f == nil {
 		return "", false
 	}
-	c, ok := f.Classify(a.GetPath())
+	c, ok := r.claim(m, f, a.GetPath())
 	if !ok || !c.Tree {
 		return "", false
 	}
 	return strings.TrimSuffix(c.Root, "/"), true
 }
 
-// Groups classified artifacts into loadable weight sets
-//
-// Files with a role other than weights attach to every group of their format that shares their
-// directory, or their root for tree shaped formats.
+// Groups weights and attaches other artifacts with the same format and directory or tree root.
 func (r *Registry) Groups(m *v1.Model) []*Group {
 	byKey := map[string]*Group{}
 	var order []string
@@ -325,8 +427,8 @@ func (r *Registry) Groups(m *v1.Model) []*Group {
 			}
 			return g.Weights[i].GetPath() < g.Weights[j].GetPath()
 		})
-		at := r.attachKey(g.Weights[0])
-		if root, ok := r.root(g.Weights[0]); ok {
+		at := r.attachKey(m, g.Weights[0])
+		if root, ok := r.root(m, g.Weights[0]); ok {
 			g.Root = root
 		} else if dir := path.Dir(g.Weights[0].GetPath()); dir != "." {
 			g.Root = dir
@@ -335,12 +437,19 @@ func (r *Registry) Groups(m *v1.Model) []*Group {
 			if a.GetRole() == v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS || a.GetRole() == v1.ArtifactRole_ARTIFACT_ROLE_OTHER {
 				continue
 			}
-			if a.GetFormatId() == g.FormatID && r.attachKey(a) == at {
+			if a.GetFormatId() == g.FormatID && r.attachKey(m, a) == at {
 				g.Files[a.GetRole()] = append(g.Files[a.GetRole()], a)
 			}
 		}
 		for role := range g.Files {
 			sort.Slice(g.Files[role], func(i, j int) bool { return g.Files[role][i].GetPath() < g.Files[role][j].GetPath() })
+		}
+		// Each independent denoiser gets a group.
+		if tf, ok := r.byID[g.FormatID].(TreeFormat); ok {
+			if t := TreeOf(m, g.Weights[0].GetPath()); t != nil {
+				groups = append(groups, tf.Split(t, g)...)
+				continue
+			}
 		}
 		groups = append(groups, g)
 	}
@@ -398,7 +507,7 @@ func ReadAll(ctx context.Context, open Opener, a *v1.Artifact, limit int64) ([]b
 	return buf, nil
 }
 
-// Reads each weight through parse, first metadata value winning across shards
+// Parses weight headers, retaining the first metadata value across shards.
 func EachWeight(ctx context.Context, open Opener, g *Group, parse func(ra io.ReaderAt, size int64) (map[string]string, []*v1.TensorInfo, error)) (*v1.RawModel, error) {
 	raw := &v1.RawModel{FormatId: g.FormatID, Group: g.Name, Metadata: map[string]string{}}
 	for _, a := range g.Weights {
@@ -424,7 +533,6 @@ func EachWeight(ctx context.Context, open Opener, g *Group, parse func(ra io.Rea
 	return raw, nil
 }
 
-// Counts the elements a shape holds
 func Elements(shape []uint64) uint64 {
 	n := uint64(1)
 	for _, d := range shape {
@@ -483,7 +591,7 @@ func Dtype(name string) (label string, width float64, ok bool) {
 	return "", 0, false
 }
 
-// The first metadata value found under any of the keys, trimmed, empty when none is set
+// Returns the first nonempty trimmed metadata value.
 func First(m map[string]string, keys ...string) string {
 	for _, k := range keys {
 		if v := strings.TrimSpace(m[k]); v != "" {
@@ -493,7 +601,7 @@ func First(m map[string]string, keys ...string) string {
 	return ""
 }
 
-// The first metadata value under any of the keys that reads as a number, zero when none does
+// Returns the first numeric metadata value, or zero.
 func Num(m map[string]string, keys ...string) float64 {
 	for _, k := range keys {
 		v, ok := m[k]
@@ -503,7 +611,7 @@ func Num(m map[string]string, keys ...string) float64 {
 		if n, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
 			return n
 		}
-		// A list of numbers, such as a per layer sliding window pattern, reads as its largest
+		// Use the maximum for per-layer values such as sliding windows.
 		if strings.Contains(v, ",") {
 			best, any := 0.0, false
 			for _, part := range strings.Split(v, ",") {

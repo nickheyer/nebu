@@ -1,5 +1,4 @@
 <script lang="ts">
-  // A label over a value, for rows of figures
   let { label, value, sub, mono = false, tone = 'default' }: { label: string; value: string | number; sub?: string; mono?: boolean; tone?: 'default' | 'ok' | 'warn' | 'bad' | 'faint' } = $props();
   const colors = { default: 'text-fg', ok: 'text-ok', warn: 'text-warn', bad: 'text-bad', faint: 'text-fg-faint' };
 </script>

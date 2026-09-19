@@ -7,7 +7,7 @@ GORELEASER ?= goreleaser
 WEB := web/nebu
 export CGO_ENABLED = 0
 
-# The schema in internal/db/schema.sql is the truth, atlas writes the migration from it
+# Atlas generates migrations from internal/db/schema.sql.
 ATLAS_IMAGE := arigaio/atlas:1.3.2-community
 ATLAS_RUN := docker run --rm \
 	--volume "$(shell pwd):/workspace" \
@@ -17,7 +17,7 @@ ATLAS_RUN := docker run --rm \
 	$(ATLAS_IMAGE)
 DB_FILE ?= $(HOME)/.local/share/nebu/nebu.db
 
-# Regenerates protobuf, connect, connect-es, and openapi outputs
+# Generate protobuf, Connect, Connect-ES, and OpenAPI files.
 gen: proto-clean
 	$(BUF) generate
 
@@ -30,27 +30,27 @@ proto-lint:
 web-install:
 	cd $(WEB) && $(NPM) ci --no-audit --no-fund
 
-# Builds the SvelteKit app into the embedded dist directory
+# Build the UI into the embedded dist directory.
 web: gen web-install
 	cd $(WEB) && $(NPM) run build
 	touch $(WEB)/dist/.keep
 
 dev: clean web
-	@echo "Starting backend server with frontend dev server..."
-	@trap 'echo "Stopping all processes..."; kill $$(jobs -p) 2>/dev/null; wait; exit' INT TERM; \
+	@echo "Starting backend and frontend..."
+	@trap 'echo "Stopping processes..."; kill $$(jobs -p) 2>/dev/null; wait; exit' INT TERM; \
 	cd $(WEB) && npm run dev & \
 	FRONTEND_PID=$$!; \
 	go run cmd/nebu/main.go serve & \
 	BACKEND_PID=$$!; \
 	wait $$BACKEND_PID $$FRONTEND_PID
 
-# Type checks the SvelteKit app
+# Type check the UI.
 web-check: gen web-install
 	cd $(WEB) && $(NPM) run check
 
 prepare: web
 
-# Builds the static binary with the web UI embedded.
+# Build a static binary with the UI embedded.
 build: web
 	go build -trimpath -mod=readonly -o $(BIN) ./cmd/nebu
 
@@ -67,7 +67,7 @@ test: gen
 vet: gen
 	go vet ./...
 
-# Fails when any dependency needs cgo
+# Reject dependencies that need cgo.
 cgo-guard: gen
 	./scripts/cgo-guard.sh
 
@@ -76,16 +76,16 @@ lint: proto-lint vet cgo-guard web-check
 release-check:
 	$(GORELEASER) check
 
-# Local archives and AUR recipes; publishing is handled by the release workflow.
+# Build local archives and AUR recipes. The release workflow publishes them.
 release:
 	GORELEASER="$(GORELEASER)" ./scripts/release.sh
 
-# Writes a migration for whatever schema.sql changed
+# Generate a migration from schema.sql changes.
 migrate-diff:
 	@test -n "$(NAME)" || { echo "usage: make migrate-diff NAME=<name>"; exit 1; }
 	$(ATLAS_RUN) migrate diff $(NAME) --env local
 
-# Throws every migration away and writes schema.sql as the one init migration, the rule until release
+# Replace all migrations with one init migration until release.
 migrate-reset:
 	rm -f internal/db/migrations/*.sql internal/db/migrations/atlas.sum
 	$(ATLAS_RUN) migrate diff init --env local
@@ -96,7 +96,7 @@ migrate-hash:
 migrate-validate:
 	$(ATLAS_RUN) migrate validate --env local
 
-# Reads the daemon's database, mounted beside the tree since the container sees only what it is given
+# Mount the daemon's database to read migration status.
 migrate-status:
 	docker run --rm \
 		--volume "$(shell pwd):/workspace" \

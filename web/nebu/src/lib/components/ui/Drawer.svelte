@@ -4,7 +4,6 @@
   import type { Snippet } from 'svelte';
   import { readLocal, writeLocal } from '$lib/persist';
 
-  // The side panel every page shares: one width, dragged wider, kept per browser
   let {
     open = $bindable(false),
     id = $bindable(''),

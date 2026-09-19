@@ -47,7 +47,7 @@ const (
 	bindHost     = "127.0.0.1"
 	closeTimeout = 30 * time.Second
 	probeTimeout = 2 * time.Second
-	// How long the two chat requests that probe the chat template may take together
+	// Combined timeout for both chat template probes.
 	templateTimeout = 2 * time.Minute
 )
 
@@ -83,14 +83,14 @@ func WithSwap(ctx context.Context) context.Context { return context.WithValue(ct
 
 func fromSwap(ctx context.Context) bool { v, _ := ctx.Value(swapKey{}).(bool); return v }
 
-// What the slot manager answers for the instances bound to its slots
+// Slot manager interface for bound instances.
 type Slots interface {
 	Reservation(ctx context.Context, slotID string) (*Reservation, error)
 	// Called after every state change, outside the instance lock
 	OnInstance(*v1.Instance)
 }
 
-// Owns every instance of this daemon
+// Manages daemon instances.
 type Manager struct {
 	DB          *db.DB
 	Dir         string
@@ -137,7 +137,7 @@ func (in *instance) snapshot() *v1.Instance {
 	return proto.Clone(in.rec).(*v1.Instance)
 }
 
-// Applies fn, writes the record, releases waiters, and notifies
+// Applies and stores a state change, then wakes waiters and publishes it.
 func (in *instance) update(fn func(*v1.Instance)) {
 	in.mu.Lock()
 	before := in.rec.GetState()
@@ -148,13 +148,13 @@ func (in *instance) update(fn func(*v1.Instance)) {
 	rec := proto.Clone(in.rec).(*v1.Instance)
 	in.mu.Unlock()
 	in.mgr.changed(rec, before)
-	// Stop waiters continue only after observers saw the exit
+	// Publish exits before releasing stop waiters.
 	if Terminal(rec.GetState()) {
 		in.exitOnce.Do(func() { close(in.exited) })
 	}
 }
 
-// Updates routes for a changed instance and tells listeners, a slot routing its own instances
+// Publishes instance changes and updates routes. Slots manage their own routes.
 func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
 	slotted := rec.GetSlotId() != ""
 	switch {
@@ -200,11 +200,11 @@ func (in *instance) attach(proc launch.Handle) {
 
 const (
 	defaultPrepareTimeout = time.Hour
-	// Lines the prepare step keeps in memory, the same ring the launcher keeps
+	// Preparation log capacity, matching the launcher ring.
 	logCapacity = 5000
 )
 
-// Everything resolved for a run before anything is launched
+// Resolved launch inputs.
 type prepared struct {
 	req        *v1.RunRequest
 	stored     *v1.StoredModel
@@ -217,7 +217,7 @@ type prepared struct {
 	res        *Reservation
 	params     estimate.Params
 	plan       *v1.MemoryPlan
-	// Every other model in the store, the parts a run may load beside its weights
+	// Other stored models available as companion parts.
 	companions []*v1.StoredModel
 }
 
@@ -245,7 +245,7 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 		}
 	}
 	if p.plan != nil && p.plan.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO && !p.req.GetForce() {
-		return nil, nil, fmt.Errorf("%w: %s does not fit, %s; pass force to run anyway", runtimes.ErrParam, p.name, p.plan.GetDetail())
+		return nil, nil, fmt.Errorf("%w: %s does not fit, %s. Pass force to run anyway", runtimes.ErrParam, p.name, p.plan.GetDetail())
 	}
 	return m.launch(ctx, p)
 }
@@ -278,7 +278,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if err != nil {
 		return nil, err
 	}
-	// The slot's runtime when it has one, else the first compatible one
+	// Use the slot's runtime or the first compatible runtime.
 	var rt runtimes.Runtime
 	if req.GetRuntimeId() == "" {
 		rt, err = m.Inspector.DefaultRuntime(profile, stored.GetFormatId(), descriptor.GetKind())
@@ -324,7 +324,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if res != nil {
 		slotParams = res.Params
 	}
-	// The one layering every plan uses, the slot's defaults under the request's params
+	// Request params override slot defaults.
 	layered := runtimes.Merge(slotParams, req.GetParams())
 	params, err := runtimes.Resolve(rt, layered)
 	if err != nil {
@@ -356,8 +356,8 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	if err != nil {
 		return nil, nil, err
 	}
-	// A model that just launched is the last the store evicts, a plan alone changes nothing,
-	// and its key stays held until the instance is listed so an eviction meanwhile waits and then spares it
+	// Update last-used time only on launch. Hold the model lock until the instance
+	// is registered so eviction can see and protect it.
 	key := store.Key(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
 	unlock := m.Store.Lock(key)
 	defer unlock()
@@ -379,6 +379,7 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 		Descriptor: descriptor,
 		Plan:       plan,
 		Stored:     p.companions,
+		Model:      stored,
 	}
 	var prep *runtimes.Command
 	if rt.Prepares(stored.GetFormatId()) {
@@ -472,7 +473,7 @@ func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance,
 	defer logFile.Close()
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
-	// The output is the instance log until the runtime starts, so logs follow it and triage reads it
+	// Use preparation output as the instance log until the runtime starts.
 	log := launch.NewLog(logCapacity)
 	in.mu.Lock()
 	in.log = log
@@ -489,7 +490,7 @@ func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance,
 			h.Logf("%s", line)
 		}
 	}()
-	// A converter forks workers, so a timeout or cancel takes the whole tree
+	// Cancel the entire converter process tree, including workers.
 	err = proc.Run(cmd)
 	pw.Close()
 	<-done
@@ -554,10 +555,10 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 	return nil
 }
 
-// Learns what the runtime's chat template accepts and says what the gateway will do about it
+// Probes chat template support and logs gateway system message handling.
 func (m *Manager) probeTemplate(ctx context.Context, logf func(string, ...any), in *instance) *v1.TemplateProbe {
 	rec := in.snapshot()
-	// A diffusion runtime has no chat template; what it generates is read instead and stamped on its routes
+	// Probe diffusion capabilities and update its routes.
 	if m.Runtimes.API(rec.GetRuntimeId()) == v1.ApiFlavor_API_FLAVOR_SDCPP {
 		m.probeModes(ctx, logf, in)
 		return nil
@@ -567,23 +568,23 @@ func (m *Manager) probeTemplate(ctx context.Context, logf func(string, ...any), 
 	probe := gateway.ProbeTemplate(ctx, &http.Client{}, rec.GetEndpoint(), m.Runtimes.API(rec.GetRuntimeId()), rec.GetName())
 	switch {
 	case probe.GetError() != "":
-		logf("chat template probe: %s; the gateway sends system messages as they come", probe.GetError())
+		logf("chat template probe: %s. The gateway preserves system messages", probe.GetError())
 	case probe.GetLateSystem():
 		logf("chat template renders a system message after the first")
 	default:
-		logf("chat template refuses a system message after the first: %s; the gateway folds them into the first unless a route says otherwise", probe.GetRefusal())
+		logf("later system message rejected: %s. The gateway merges system messages unless the route overrides it", probe.GetRefusal())
 	}
 	return probe
 }
 
-// Reads what a diffusion runtime generates from its capabilities endpoint, so the gateway can say which route makes images and which video
+// Reads diffusion capabilities for gateway image and video routing.
 func (m *Manager) probeModes(ctx context.Context, logf func(string, ...any), in *instance) {
 	rec := in.snapshot()
 	ctx, cancel := context.WithTimeout(ctx, templateTimeout)
 	defer cancel()
 	modes, err := gateway.Capabilities(ctx, &http.Client{}, rec.GetEndpoint())
 	if err != nil {
-		logf("capabilities probe: %s; the route says nothing about what it generates", err)
+		logf("capabilities probe: %s. Route capabilities are unknown", err)
 		return
 	}
 	logf("generates %s", strings.Join(modes, ", "))
@@ -617,7 +618,7 @@ func (m *Manager) waitReady(ctx context.Context, h *tasks.Handle, in *instance, 
 	return err
 }
 
-// Marks an instance ready unless stopped and reports measurements and what its chat template accepted
+// Marks active instances ready and records measurements and template probe results.
 func (m *Manager) ready(h *tasks.Handle, in *instance, measurements []*v1.Measurement, probe *v1.TemplateProbe) {
 	var rec *v1.Instance
 	in.update(func(r *v1.Instance) {
@@ -636,7 +637,7 @@ func (m *Manager) ready(h *tasks.Handle, in *instance, measurements []*v1.Measur
 	h.Logf("ready %s at %s", rec.GetName(), rec.GetEndpoint())
 }
 
-// Replaces measurements by key, keeping ones only old has
+// Merges measurements by key, preserving old-only keys.
 func mergeMeasurements(old, fresh []*v1.Measurement) []*v1.Measurement {
 	if len(fresh) == 0 {
 		return old
@@ -786,7 +787,7 @@ func (m *Manager) conflictLocked(name, slotID string) bool {
 	return false
 }
 
-// The slot's reservation, refused before the daemon has slots
+// Returns the slot reservation or an error if slots are not initialized.
 func (m *Manager) reservation(ctx context.Context, slotID string) (*Reservation, error) {
 	if m.Slots == nil {
 		return nil, fmt.Errorf("%w: slots are not available", runtimes.ErrParam)
@@ -803,7 +804,7 @@ func (m *Manager) Constrain(ctx context.Context, slotID string, profile *v1.Host
 	return &inspect.Constraint{Profile: Constrain(profile, res.DeviceIDs, res.MemoryBytes, res.Placement), RuntimeID: res.RuntimeID, Params: res.Params, Placement: res.Placement}, nil
 }
 
-// Whether a restart brings the record back here: wanted, not failed on its own, and not a slot's, since a slot relaunches its own request
+// Relaunch wanted, nonfailed instances outside slots. Slots manage their own recovery.
 func relaunches(rec *v1.Instance) bool {
 	return rec.GetDesiredRunning() && rec.GetState() != v1.InstanceState_INSTANCE_STATE_FAILED && rec.GetSlotId() == ""
 }
@@ -941,7 +942,7 @@ func (m *Manager) Close() {
 	wg.Wait()
 }
 
-// Loads records, adopts live runtimes, marks the rest, relaunches wanted
+// Loads records, adopts live runtimes, marks exited ones, and relaunches wanted instances.
 func (m *Manager) Recover(ctx context.Context) error {
 	loaded, err := m.load(ctx)
 	if err != nil {
@@ -1012,7 +1013,7 @@ func (m *Manager) adopt(ctx context.Context, in *instance) {
 		measurements := in.rt.Measure(proc.Log().Tail(0))
 		in.update(func(r *v1.Instance) { r.Measurements = mergeMeasurements(r.Measurements, measurements) })
 		m.Log.Info("adopted running instance", "name", rec.GetName(), "pid", rec.GetPid(), "endpoint", rec.GetEndpoint())
-		// A record from before the probe, or one whose probe failed, learns its template now, off the recovery path
+		// Probe missing or failed template results asynchronously during recovery.
 		if rec.GetTemplate() == nil || rec.GetTemplate().GetError() != "" {
 			go func() {
 				probe := m.probeTemplate(ctx, func(format string, args ...any) { m.Log.Info(fmt.Sprintf(format, args...), "name", rec.GetName()) }, in)
@@ -1038,7 +1039,7 @@ func (m *Manager) adopt(ctx context.Context, in *instance) {
 	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })
 }
 
-// Relaunches serially so each plans around the last
+// Relaunches serially so each plan accounts for earlier launches.
 func (m *Manager) relaunch(ctx context.Context, list []*instance) {
 	for _, old := range list {
 		if ctx.Err() != nil {
@@ -1105,7 +1106,7 @@ func (m *Manager) pruneLocked() {
 	}
 }
 
-// Returns the stored descriptor, or rebuilds it from local files when there is none or it predates model kinds
+// Returns the stored descriptor, rebuilding missing or outdated descriptors from local files.
 func (m *Manager) describe(ctx context.Context, stored *v1.StoredModel) (*v1.Descriptor, error) {
 	if d := stored.GetDescriptor_(); d != nil && d.GetKind() != v1.ModelKind_MODEL_KIND_UNSPECIFIED {
 		return d, nil
@@ -1113,8 +1114,8 @@ func (m *Manager) describe(ctx context.Context, stored *v1.StoredModel) (*v1.Des
 	return m.rebuild(ctx, stored)
 }
 
-// Rewrites the descriptor and runtime bitmask of every stored model whose manifest predates them, so the
-// library says what each is and which runtimes serve it; a model whose headers cannot be read keeps what it had
+// Backfills descriptors and runtime masks in old manifests. Unreadable headers
+// leave the existing manifest unchanged.
 func (m *Manager) RefreshDescriptors(ctx context.Context) {
 	list, err := m.Store.ListManifests()
 	if err != nil {
@@ -1193,7 +1194,7 @@ func (m *Manager) artifacts(stored *v1.StoredModel, rt runtimes.Runtime) map[str
 	return out
 }
 
-// Narrows a profile to a slot: its devices alone, and the pools on the side the placement fills capped at the budget
+// Restricts the profile to slot devices and caps placement memory pools at its budget.
 func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64, placement v1.Placement) *v1.HostProfile {
 	out := proto.Clone(p).(*v1.HostProfile)
 	if len(deviceIDs) == 0 && budget == 0 {
@@ -1231,7 +1232,7 @@ func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64, placement v
 	return out
 }
 
-// The devices a launch is pinned to, none without a slot pinning some
+// Device pins from the slot, or none.
 func slotDevices(p *v1.HostProfile, res *Reservation) []*v1.Device {
 	if res == nil || len(res.DeviceIDs) == 0 {
 		return nil

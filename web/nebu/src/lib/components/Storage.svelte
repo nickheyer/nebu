@@ -4,8 +4,6 @@
   import { HardDrive } from '@lucide/svelte';
   import Meters, { type Meter } from './ui/Meters.svelte';
 
-  // One meter per filesystem nebu writes to, laid out like a device: the bar shows what the disk holds, the
-  // fold names its filesystem and the paths of nebu's on it
   let { host }: { host: HostProfile } = $props();
 
   const meters = $derived(

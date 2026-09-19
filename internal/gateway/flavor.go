@@ -18,7 +18,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// What a request asks for, the shape every flavor reads into and writes from
+// Shared request representation for protocol translation.
 type Chat struct {
 	// chat, generate for a bare prompt, embed, or count for a token count
 	Kind        string
@@ -37,16 +37,16 @@ type Chat struct {
 	Inputs []string
 }
 
-// One turn, the role being system, user, assistant, or tool
+// Chat turn with a system, user, assistant, or tool role.
 type Message struct {
 	Role      string
 	Parts     []Part
 	ToolCalls []ToolCall
-	// The call a tool turn answers
+	// Tool call ID for a result turn.
 	ToolID string
 }
 
-// Text or an image, base64 data with a media type or a URL
+// Text or image content. Images use base64 with a media type, or a URL.
 type Part struct {
 	Type      string
 	Text      string
@@ -55,7 +55,7 @@ type Part struct {
 	URL       string
 }
 
-// A tool the model called, arguments as the JSON object it produced
+// Tool call with JSON arguments.
 type ToolCall struct {
 	ID   string
 	Name string
@@ -69,7 +69,7 @@ type Tool struct {
 	Schema      json.RawMessage
 }
 
-// A finished answer, or the vectors of an embed request
+// Complete answer or embedding vectors.
 type Result struct {
 	ID        string
 	Model     string
@@ -81,11 +81,9 @@ type Result struct {
 	Vectors [][]float64
 }
 
-// One step of a streamed answer
-//
-// start carries the id and model, text a fragment, tool a call or a fragment
-// of one at Index, the first fragment naming it, stop the reason and usage,
-// and error the message of an answer that broke off.
+// Stream event. Start includes ID and model. Text carries a fragment. Tool
+// carries a call or indexed fragment, named in the first fragment. Stop includes
+// reason and usage. Error carries the failure message.
 type Event struct {
 	Kind  string
 	Text  string
@@ -94,7 +92,7 @@ type Event struct {
 	Res   *Result
 }
 
-// Names an image's type from its bytes, the header's word when the bytes say nothing
+// Detects image type from bytes, falling back to the declared type.
 func mediaTypeOf(raw []byte, header string) string {
 	if mt := http.DetectContentType(raw); strings.HasPrefix(mt, "image/") {
 		return mt
@@ -105,7 +103,7 @@ func mediaTypeOf(raw []byte, header string) string {
 	return "image/png"
 }
 
-// Names a base64 image's type from its leading bytes
+// Detects a base64 image's type from its leading bytes.
 func mediaTypeOfBase64(data string) string {
 	head := data
 	if len(head) > 1024 {
@@ -124,11 +122,11 @@ type StreamWriter interface {
 	Close() error
 }
 
-// One wire format, read from clients and written to runtimes and back
+// Client and runtime protocol adapter.
 type Flavor interface {
-	// Reads a request, the path naming the endpoint
+	// Parses a request for the endpoint path.
 	ParseRequest(path string, body []byte) (*Chat, error)
-	// Writes a request, returning the path it goes to
+	// Renders a request and returns its endpoint path.
 	RenderRequest(c *Chat) (string, []byte, error)
 	// Reads a finished answer
 	ParseResult(c *Chat, body []byte) (*Result, error)
@@ -138,13 +136,13 @@ type Flavor interface {
 	ParseStream(r io.Reader, emit func(Event) error) error
 	// Starts a streamed answer to the client
 	Stream(w http.ResponseWriter, c *Chat) StreamWriter
-	// Reads the message out of an error body, empty when it has none
+	// Extracts an error message, or returns empty.
 	ErrorMessage(body []byte) string
 	// Writes an error
 	Error(w http.ResponseWriter, status int, message, kind string)
-	// Whether images travel only as bytes, so a URL is fetched before rendering
+	// Whether image URLs must be fetched before rendering.
 	InlineImages() bool
-	// Whether the flavor's token count endpoint counts images itself, so none are added to its answer
+	// Whether token counts already include images.
 	CountsImages() bool
 }
 
@@ -155,7 +153,7 @@ var flavors = map[v1.ApiFlavor]Flavor{
 	v1.ApiFlavor_API_FLAVOR_SDCPP:     sdcpp{},
 }
 
-// Names the flavor a client request is written in, by its path and headers
+// Detects the client protocol from the request path and headers.
 func clientFlavor(r *http.Request) v1.ApiFlavor {
 	switch {
 	case strings.HasPrefix(r.URL.Path, sdcppPrefix):
@@ -168,7 +166,7 @@ func clientFlavor(r *http.Request) v1.ApiFlavor {
 	return v1.ApiFlavor_API_FLAVOR_OPENAI
 }
 
-// Returns the flavor an instance speaks, OpenAI when the manifest says nothing
+// Returns the instance protocol, defaulting to OpenAI.
 func flavorOf(api v1.ApiFlavor) Flavor {
 	if f, ok := flavors[api]; ok {
 		return f
@@ -182,7 +180,7 @@ func bad(format string, args ...any) error {
 
 func ptr[T any](v T) *T { return &v }
 
-// Tool arguments as a JSON object, an empty one when the text is not JSON
+// Parses tool arguments as JSON, returning an empty object on failure.
 func jsonArgs(s string) json.RawMessage {
 	if json.Valid([]byte(s)) && s != "" {
 		return json.RawMessage(s)
@@ -190,7 +188,7 @@ func jsonArgs(s string) json.RawMessage {
 	return json.RawMessage("{}")
 }
 
-// The message in an OpenAI or Anthropic shaped error body, empty when it has none
+// Extracts an OpenAI or Anthropic error message, or returns empty.
 func errorField(body []byte) string {
 	var e struct {
 		Error struct {
@@ -201,7 +199,7 @@ func errorField(body []byte) string {
 	return e.Error.Message
 }
 
-// The id a result carries, a fresh one under prefix when the runtime gave none
+// Returns the result ID, generating one with prefix if missing.
 func resultID(r *Result, prefix string) string {
 	if r.ID != "" {
 		return r.ID
@@ -209,7 +207,7 @@ func resultID(r *Result, prefix string) string {
 	return newID(prefix)
 }
 
-// Tools in the OpenAI shape, what Ollama borrows too
+// OpenAI tool definitions, also used by Ollama.
 func toolsFromOAI(tools []oaiTool) []Tool {
 	var out []Tool
 	for _, t := range tools {
@@ -268,7 +266,7 @@ func dataURL(u string) (string, string, bool) {
 	return strings.TrimSuffix(meta, ";base64"), data, true
 }
 
-// Flattens a chat into the text a runtime sees, a line per tool and turn, for counting
+// Flattens tools and turns into text for token counting.
 func promptText(c *Chat) string {
 	var b strings.Builder
 	for _, t := range c.Tools {
@@ -289,7 +287,7 @@ func promptText(c *Chat) string {
 
 const imageTokensMax = 1600
 
-// Approximates a prompt's tokens when no runtime counts them, four bytes a token, a few per turn, and each image by its area
+// Estimates tokens at four bytes each, plus turn overhead and image area.
 func estimateTokens(c *Chat) int {
 	n := (len(promptText(c)) + 3) / 4
 	for range c.Messages {
@@ -298,7 +296,7 @@ func estimateTokens(c *Chat) int {
 	return n + imageTokensOf(c)
 }
 
-// Sums the tokens of every image in a chat, each by its area
+// Estimates image tokens by area.
 func imageTokensOf(c *Chat) int {
 	n := 0
 	for _, m := range c.Messages {
@@ -311,7 +309,7 @@ func imageTokensOf(c *Chat) int {
 	return n
 }
 
-// A runtime's count with the images added when its tokenizer saw only the text
+// Adds image tokens when the runtime counted only text.
 func withImageTokens(upstream Flavor, c *Chat, n int) int {
 	if upstream.CountsImages() {
 		return n
@@ -319,7 +317,7 @@ func withImageTokens(upstream Flavor, c *Chat, n int) int {
 	return n + imageTokensOf(c)
 }
 
-// Sizes an image the way Anthropic does, its area over 750, the cap when it cannot be decoded
+// Estimates image tokens as area / 750, using the cap for undecodable images.
 func imageTokens(p Part) int {
 	raw, err := base64.StdEncoding.DecodeString(p.Data)
 	if err != nil {
@@ -449,7 +447,7 @@ func newID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
 
-// Fills the stop reason when nothing said, tool when calls were made
+// Defaults missing stop reasons, using tool when calls were made.
 func stopOf(reason string, calls int) string {
 	if reason == "" {
 		if calls > 0 {

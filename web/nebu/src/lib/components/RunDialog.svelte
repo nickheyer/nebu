@@ -1,17 +1,18 @@
 <script lang="ts">
   import { Code } from '@connectrpc/connect';
   import { api, code, message } from '$lib/api';
-  import { live, cached, modelKey, orderedSlots, runtimeName } from '$lib/state.svelte';
+  import { live, cached, modelKey, orderedSlots, runtimeName, startedTask, taskFor } from '$lib/state.svelte';
+  import { fail } from '$lib/toast.svelte';
   import { runUi } from '$lib/actions.svelte';
   import { launch, slotOccupied } from '$lib/launch';
   import { createForm } from '$lib/form.svelte';
-  import { byName, bytes, params as fmtParams, tail } from '$lib/format';
+  import { byName, bytes, params as fmtParams, storage, tail } from '$lib/format';
   import { weightsName } from '$lib/catalog';
   import { isComponent, kindOf, partWord } from '$lib/diffusion';
   import { runsOn, servesWord } from '$lib/runtimes';
-  import type { MemoryPlan, MissingPart, ParamState } from '$proto/estimate_pb';
+  import type { MemoryPlan, Part, ParamState } from '$proto/estimate_pb';
   import { FitVerdict } from '$proto/estimate_pb';
-  import { Play, ArrowLeftRight, ChevronRight } from '@lucide/svelte';
+  import { Play, ArrowLeftRight, ChevronRight, Download } from '@lucide/svelte';
   import Dialog from './ui/Dialog.svelte';
   import Button from './ui/Button.svelte';
   import Checkbox from './ui/Checkbox.svelte';
@@ -23,9 +24,9 @@
   import Skeleton from './ui/Skeleton.svelte';
   import TextInput from './ui/TextInput.svelte';
   import PlanView from './PlanView.svelte';
+  import PartsList from './PartsList.svelte';
   import ParamForm from './ParamForm.svelte';
 
-  // The one place a model is started or swapped in, opened from the library, a slot, or a model's panel
   let pickedKey = $state('');
   let runtimeId = $state('');
   let installId = $state('');
@@ -38,7 +39,7 @@
   let showParams = $state(true);
   let plan = $state<MemoryPlan | null>(null);
   let states = $state<ParamState[]>([]);
-  let missing = $state<MissingPart[]>([]);
+  let missing = $state<Part[]>([]);
   let planRefusal = $state('');
   let planError = $state('');
   let refusal = $state<unknown>(null);
@@ -54,18 +55,15 @@
   const formatId = $derived(current?.formatId ?? '');
   const kind = $derived(kindOf(current?.descriptor));
   const component = $derived(isComponent(current?.descriptor));
-  // The runtimes the daemon stamped on the stored model, narrowed to the ones this host can run
   const compatible = $derived(cached.runtimes.filter((r) => r.compatible && !!current && runsOn(current.runtimes, r)));
   const others = $derived(cached.runtimes.filter((r) => !compatible.includes(r)));
-  // The files the plan picked from the store for the params left at auto
   const solved = $derived(Object.fromEntries(Object.entries(plan?.params ?? {}).filter(([, v]) => v !== 'auto')));
-  // The named runtime, else the slot's, else the first that serves the format
+  // Prefer the requested runtime, then the slot's, then the first compatible runtime.
   const effectiveRuntime = $derived(runtimeId || selectedSlot?.runtimeId || compatible[0]?.runtime?.id || '');
   const runtime = $derived(cached.runtimes.find((r) => r.runtime?.id === effectiveRuntime)?.runtime);
   const inherited = $derived(selectedSlot?.params ?? {});
   const installs = $derived([...live.installs.values()].filter((i) => i.runtimeId === effectiveRuntime));
   const setCount = $derived(Object.keys(values).length);
-  // A plan saying no, or the daemon refusing for it, is what earns the forced launch
   const refused = $derived(plan?.verdict === FitVerdict.NO || !!planRefusal || (code(refusal) === Code.InvalidArgument && message(refusal).includes('pass force')));
 
   function spec() {
@@ -82,7 +80,7 @@
     };
   }
 
-  // Plans the fit against free memory, dropping an answer the inputs have moved past
+  // Discard plans computed for stale inputs.
   async function check() {
     if (!current) return;
     const gen = ++generation;
@@ -102,15 +100,14 @@
     }
   }
 
-  // The plan is for one set of inputs, so any change drops it and plans again once typing settles, and
-  // the host is read again every ten seconds while the dialog stays open so the bars follow what is running
+  // Debounce replanning after input changes. Refresh host memory every ten seconds.
   const replanEvery = 10_000;
   $effect(() => {
     void runtimeId;
     void slot;
     void values;
     void pickedKey;
-    // A part landing in the store solves a file param, so the plan is made again
+    // Newly stored parts can resolve automatic file parameters.
     void live.models.size;
     const ready = runUi.open && !!current && !!effectiveRuntime;
     generation++;
@@ -149,7 +146,7 @@
       force = false;
       showParams = true;
     },
-    // The launch toasts its own refusal, the throw only keeps the dialog open
+    // launch reports errors. Rethrow to keep the dialog open.
     async submit() {
       const id = await launch(spec(), swapMode === 'drain', (err) => {
         refusal = err;
@@ -160,6 +157,19 @@
   });
 
   const disabled = $derived(!current || component || !effectiveRuntime || !installs.length || invalid > 0 || (refused && !force));
+
+  const downloadable = $derived(missing.filter((p) => !p.error && !p.stored && !p.bundled));
+  const downloadBytes = $derived(downloadable.reduce((n, p) => n + p.sizeBytes, 0n));
+  const pulling = $derived(current ? taskFor('pull', { source: current.sourceId, repo: current.repo, group: current.group }) : undefined);
+  async function downloadParts() {
+    if (!current) return;
+    try {
+      const r = await api.store.pull({ sourceId: current.sourceId, repo: current.repo, revision: current.revision, group: current.group });
+      startedTask(`Downloading parts of ${tail(current.repo)}`, `Downloaded parts of ${tail(current.repo)}`, downloadable.map((p) => p.name).join(', '), r.task);
+    } catch (err) {
+      fail(err, 'Download refused');
+    }
+  }
 </script>
 
 <Dialog bind:open={runUi.open} size="lg" title={swap ? `Swap into ${selectedSlot?.name}` : 'Run a model'} description={current ? `${current.repo} · ${weightsName(current.group, current.formatId)}` : undefined}>
@@ -203,7 +213,7 @@
         {/if}
 
         {#if component}
-          <div class="note note-warn">A {partWord(current.descriptor?.architecture ?? '')} loads beside a diffusion model, not alone.</div>
+          <div class="note note-warn">This {partWord(current.descriptor)} requires a diffusion model.</div>
         {/if}
         <div class="setup-grid">
           <Field label="Runtime" for="run-runtime" error={!compatible.length && !component ? `No runtime for ${formatId} ${kind === 2 ? 'diffusion' : 'language'} models` : undefined}>
@@ -251,7 +261,23 @@
             <Skeleton rows={3} />
           {/if}
           {#if planError}<div class="note note-bad mt-3">{planError}</div>{/if}
-          {#if planRefusal && !missing.length}<div class="note note-warn mt-3">{planRefusal}</div>{/if}
+          {#if missing.length}
+            <div class="mt-3 flex flex-col gap-2 rounded-md border border-line bg-raised/30 p-3">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-sm font-medium text-fg">Missing parts</span>
+                <span class="ml-auto shrink-0">
+                  {#if pulling}
+                    <span class="text-xs text-fg-muted">Downloading…</span>
+                  {:else if downloadable.length}
+                    <Button size="sm" variant="primary" icon={Download} onclick={() => void downloadParts()}>Download {downloadable.length === 1 ? 'part' : `${downloadable.length} parts`}{downloadBytes > 0n ? ` · ${storage(downloadBytes)}` : ''}</Button>
+                  {/if}
+                </span>
+              </div>
+              <PartsList parts={missing} compact />
+            </div>
+          {:else if planRefusal}
+            <div class="note note-warn mt-3">{planRefusal}</div>
+          {/if}
           {#if plan?.detail && plan.verdict !== FitVerdict.FITS}<p class="mt-3 text-xs leading-5 text-fg-muted">{plan.detail}</p>{/if}
           {#if refused || force}
             <div class="mt-4 border-t border-line pt-3"><Checkbox bind:checked={force} label="Run anyway" /></div>

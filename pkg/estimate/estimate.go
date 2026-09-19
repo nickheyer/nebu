@@ -1,4 +1,4 @@
-// Package estimate plans model memory onto host pools.
+// Package estimate plans model memory across host and device pools.
 package estimate
 
 import (
@@ -15,16 +15,16 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Value a solved param takes before planning
+// Placeholder for parameters resolved by the planner.
 const Auto = "auto"
 
-// Returned when the params name a choice the runtime rules out under the other params
+// Invalid parameter combination.
 var ErrRefused = errors.New("params refused")
 
-// Run params as a run resolved them, each an int64, float64, bool, string, or Auto
+// Resolved parameters: int64, float64, bool, string, or Auto.
 type Params map[string]any
 
-// The whole number a param holds, zero while absent or auto
+// Integer value, zero if absent or auto.
 func (p Params) Int(name string) int64 {
 	switch v := p[name].(type) {
 	case int64:
@@ -35,7 +35,7 @@ func (p Params) Int(name string) int64 {
 	return 0
 }
 
-// The number a param holds, zero while absent or auto
+// Numeric value, zero if absent or auto.
 func (p Params) Float(name string) float64 {
 	switch v := p[name].(type) {
 	case int64:
@@ -46,7 +46,7 @@ func (p Params) Float(name string) float64 {
 	return 0
 }
 
-// The text a param holds, empty while absent
+// String value, empty if absent.
 func (p Params) Str(name string) string {
 	if v, ok := p[name].(string); ok {
 		return v
@@ -54,18 +54,17 @@ func (p Params) Str(name string) string {
 	return ""
 }
 
-// The flag a param holds, false while absent
+// Boolean value, false if absent.
 func (p Params) Bool(name string) bool {
 	v, _ := p[name].(bool)
 	return v
 }
 
-// Whether a param waits for the planner to pick it
+// Reports whether a parameter needs resolution.
 func (p Params) IsAuto(name string) bool {
 	return p[name] == Auto
 }
 
-// A copy the caller may change
 func (p Params) Clone() Params {
 	out := make(Params, len(p)+1)
 	for k, v := range p {
@@ -74,17 +73,17 @@ func (p Params) Clone() Params {
 	return out
 }
 
-// What a policy's rules read: the model, the host, and the run params with the autos solved so far
+// Inputs to policy rules, including parameters resolved so far.
 type Scope struct {
 	Descriptor *v1.Descriptor
 	Model      formats.Params
 	Host       *v1.HostProfile
 	Params     Params
-	// Cache elements per token of context, from the model's attention family at this run's shape
+	// Cache elements per context token for this run.
 	CachePerToken float64
-	// Every other model in the store, the parts a diffusion model may load beside itself
+	// Other stored models available as companions.
 	Companions []*v1.StoredModel
-	// The repository the model came from, so a policy prefers the parts stored from it
+	// Source repository, preferred when selecting companions.
 	Repo string
 }
 
@@ -92,60 +91,54 @@ type Scope struct {
 type GroupRule struct {
 	Kind v1.TensorGroupKind
 	Pool v1.PoolKind
-	// The run param counting how many of the kind sit on device, empty when the kind is pinned to its pool
+	// Parameter counting groups on device. Empty pins the kind to its pool.
 	Param string
-	// Whether the param counts the ones on the host instead
+	// Whether the parameter counts groups on host instead.
 	ParamCountsHost bool
-	// Higher spills to the host first when the device is short
+	// Higher values offload first.
 	SpillPriority uint32
-	// A kind that cannot outnumber another on device, experts following their layers
+	// Kind whose device count limits this kind, such as layers limiting experts.
 	Requires v1.TensorGroupKind
-	// Whether the kind loads under these params, nil meaning always; a draft head loads only once a run drafts with it
+	// Loading condition, nil for unconditional loading.
 	Loaded func(s *Scope) bool
 }
 
 // Memory planning rules of one runtime
 type Policy struct {
 	Groups []GroupRule
-	// Bytes of cache at this run's context, from the family's cost per token
+	// Cache bytes at the resolved context length.
 	CacheBytes func(s *Scope) uint64
-	// Bytes the runtime holds beside weights and cache
+	// Memory overhead excluding weights and cache.
 	OverheadBytes func(s *Scope) uint64
 	// Share of every pool kept free
 	Margin float64
-	// The param holding context length, empty for a runtime whose context the planner never solves
+	// Context length parameter, empty if not resolved by the planner.
 	ContextParam string
-	// The grid an auto context is solved on
+	// Allowed context increments.
 	ContextMin, ContextStep int64
-	// The most context the model was trained for, the ceiling an auto context solves under, zero for none
+	// Maximum trained context length, zero if unknown.
 	ContextMax func(s *Scope) int64
-	// The param counting the devices a run spans, so device capacity is that many of the largest pools; empty means every device
+	// Device count parameter. Limits capacity to the largest selected pools. Empty uses all devices.
 	DevicesParam string
-	// The context and batch shape the family sizes the cache by
+	// Context and batch dimensions for cache sizing.
 	Shape func(p Params) archs.Run
-	// Gives every auto param but the context its value, in order, before the context is solved; a policy
-	// that loads files beside the weights swaps in a descriptor widened by the groups those files add
+	// Resolves auto parameters before context sizing. May extend the descriptor with companion groups.
 	Solve func(s *Scope)
-	// Every param's bounds and ruled out choices under the params, and why a run would be refused
+	// Parameter bounds, excluded choices, and launch refusal under resolved values.
 	States func(s *Scope) ([]*v1.ParamState, string)
-	// The files a run needs beside its weights that nothing solved, each with where it is published, for a
-	// runtime that loads parts stored beside its weights; nil for one that loads nothing beside them
+	// Required companion slots left unresolved. Nil when the runtime has no companion files.
 	Missing func(s *Scope) []Missing
 }
 
-// One file a run needs and the store does not hold
+// Unfilled required companion slot.
 type Missing struct {
-	// The param the file is named by, and what it is in words
-	Param, Label string
-	Sources      []PartSource
+	// Runtime file parameter.
+	Param string
+	// Blueprint slot ID.
+	Slot string
 }
 
-// Where a part is published: a repository, and the file in it when one file is the part
-type PartSource struct {
-	Repo, Path string
-}
-
-// Everything a plan needs
+// Planning inputs.
 type Input struct {
 	Descriptor    *v1.Descriptor
 	Family        archs.Arch
@@ -153,17 +146,17 @@ type Input struct {
 	Params        Params
 	Free          bool
 	OverheadDelta float64
-	// Plans through a choice the rules refuse instead of failing, for an estimate that reports the refusal
+	// Returns an estimate with the refusal instead of failing immediately.
 	SkipRules bool
-	// Where offloadable weights may go: the device first with the rest on the host, the device alone, or the host alone
+	// Allowed memory placement: shared, device only, or host only.
 	Placement v1.Placement
-	// Every other model in the store, for a policy that solves params to files among them
+	// Other stored models available as companions.
 	Companions []*v1.StoredModel
-	// The repository the model came from, so a policy prefers the parts stored from it
+	// Source repository, preferred when selecting companions.
 	Repo string
 }
 
-// Says which facts the header lacked, the one failure that means the model rather than the policy is short
+// Reports header fields required for memory planning.
 type MissingError struct {
 	Names []string
 }
@@ -197,8 +190,7 @@ func (p *Policy) scope(in Input, params Params) *Scope {
 	return &Scope{Descriptor: in.Descriptor, Model: formats.ParamsOf(in.Descriptor.GetParams()), Host: in.Host, Params: params, Companions: in.Companions, Repo: in.Repo}
 }
 
-// Plans the descriptor on the host, solving offload params, the params the runtime solves, and an
-// auto context length, which takes the largest that still fits
+// Plans model placement and resolves auto parameters, using the largest context that fits.
 func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 	s := p.scope(in, in.Params.Clone())
 	if p.Solve != nil {
@@ -215,8 +207,8 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 	return p.plan(in, s)
 }
 
-// Picks the largest context on the param's grid, up to the model's own, that keeps the verdict the
-// smallest context earns: a model that fits whole stays whole, one that spills stays on the host
+// Finds the largest allowed context that preserves the minimum context's placement verdict, capped
+// at the trained length.
 func (p *Policy) solveContext(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	step := p.ContextStep
 	if step <= 0 {
@@ -257,7 +249,7 @@ func (p *Policy) solveContext(in Input, s *Scope) (*v1.MemoryPlan, error) {
 			r = mid - 1
 		}
 	}
-	// The ceiling itself when the grid stops short of it
+	// Also try the ceiling when it falls between increments.
 	if l == steps && lo+steps*step < hi {
 		if plan, err := at(hi); err == nil && plan.GetVerdict() <= target {
 			best = plan
@@ -266,8 +258,7 @@ func (p *Policy) solveContext(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	return best, nil
 }
 
-// Every param's bounds and ruled out choices under the params a plan solved, and why a run with them
-// would be refused, read with the solved values in place
+// Parameter bounds, excluded choices, and launch refusal under resolved values.
 func (p *Policy) ParamStates(in Input, plan *v1.MemoryPlan) ([]*v1.ParamState, string) {
 	if p.States == nil {
 		return nil, ""
@@ -275,7 +266,7 @@ func (p *Policy) ParamStates(in Input, plan *v1.MemoryPlan) ([]*v1.ParamState, s
 	return p.States(p.solvedScope(in, plan))
 }
 
-// The parts a run needs beside its weights that the plan left unsolved, with where each is published
+// Returns companion slots left unresolved by the plan.
 func (p *Policy) MissingParts(in Input, plan *v1.MemoryPlan) []Missing {
 	if p.Missing == nil {
 		return nil
@@ -283,7 +274,7 @@ func (p *Policy) MissingParts(in Input, plan *v1.MemoryPlan) []Missing {
 	return p.Missing(p.solvedScope(in, plan))
 }
 
-// The scope with the plan's solved values in place
+// Builds the scope with resolved parameter values.
 func (p *Policy) solvedScope(in Input, plan *v1.MemoryPlan) *Scope {
 	params := in.Params.Clone()
 	for k, v := range plan.GetParams() {
@@ -292,7 +283,7 @@ func (p *Policy) solvedScope(in Input, plan *v1.MemoryPlan) *Scope {
 	return p.scope(in, params)
 }
 
-// A solved param value read back into the type it was planned as
+// Converts a resolved value to its original parameter type.
 func parsed(v string) any {
 	switch v {
 	case Auto:
@@ -311,7 +302,7 @@ func parsed(v string) any {
 	return v
 }
 
-// Sizes the cache the family keeps per token at this run's shape
+// Calculates cache elements per token for the run shape.
 func (p *Policy) perToken(in Input, s *Scope) error {
 	if in.Family == nil {
 		return &MissingError{Names: []string{"an attention family"}}
@@ -332,7 +323,7 @@ func (p *Policy) perToken(in Input, s *Scope) error {
 	return nil
 }
 
-// One tensor group as the planner moves it: its weights, and the share of the cache that follows it
+// Tensor group weights and associated cache for placement.
 type item struct {
 	kind    v1.TensorGroupKind
 	layer   int32
@@ -356,9 +347,9 @@ type solver struct {
 	byKind   map[v1.TensorGroupKind]*bucket
 	free     bool
 	overhead uint64
-	// Where offloadable groups may go: the device first, the device alone, or the host alone
+	// Allowed memory placement: shared, device only, or host only.
 	placement v1.Placement
-	// Groups the policy pins to one side, never offloaded
+	// Groups pinned to host or device.
 	pinned    []item
 	hosted    []item
 	fixedDev  uint64
@@ -370,7 +361,7 @@ type solver struct {
 func (s *solver) hostOnly() bool   { return s.placement == v1.Placement_PLACEMENT_HOST }
 func (s *solver) deviceOnly() bool { return s.placement == v1.Placement_PLACEMENT_DEVICE }
 
-// Counts bytes that sit beside the weights, on the device unless the host holds everything
+// Places overhead on device unless the entire model uses host memory.
 func (s *solver) beside(n uint64) {
 	if s.hostOnly() {
 		s.fixedHost += n
@@ -379,7 +370,7 @@ func (s *solver) beside(n uint64) {
 	}
 }
 
-// Keeps a group on the side its rule pins it to, the host when the host holds everything
+// Applies pinned placement, overridden by host-only placement.
 func (s *solver) pin(it item, toHost bool) {
 	if toHost || s.hostOnly() {
 		s.hosted = append(s.hosted, it)
@@ -399,7 +390,7 @@ func (p *Policy) rule(kind v1.TensorGroupKind) (GroupRule, bool) {
 	return GroupRule{}, false
 }
 
-// Plans with every param concrete; a policy keeping no cache never sizes one per token
+// Plans resolved parameters. Skips cache sizing when the policy has no cache.
 func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	if p.CacheBytes != nil {
 		if err := p.perToken(in, s); err != nil {
@@ -447,7 +438,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 			layers++
 		}
 	}
-	// The cache follows the layers it serves, or sits beside the weights whole when nothing is layered
+	// Cache follows its layers, or the full weight group for unlayered models.
 	var cachePerLayer uint64
 	if layers > 0 {
 		cachePerLayer = cacheTotal / uint64(layers)
@@ -497,7 +488,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		AgainstFree:   in.Free,
 		PlannedAt:     plannedAt(in.Host),
 	}
-	// A param that puts weights where the placement forbids them is laid out as typed and refused
+	// Preserve invalid explicit placement in the estimate and report its refusal.
 	if detail := sv.contradiction(); detail != "" {
 		plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
 		plan.Detail = detail
@@ -524,7 +515,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		return plan, nil
 	}
 	plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
-	// The least the solver could ask of each side, read before the layout below moves the counts
+	// Record minimum memory requirements before changing group counts.
 	for _, b := range sv.buckets {
 		switch {
 		case sv.hostOnly():
@@ -556,7 +547,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	return plan, nil
 }
 
-// Why a typed param fights the placement, empty when none does
+// Reports explicit parameters that conflict with placement.
 func (s *solver) contradiction() string {
 	for _, b := range s.buckets {
 		if b.fixed < 0 {
@@ -572,7 +563,7 @@ func (s *solver) contradiction() string {
 	return ""
 }
 
-// Keeps the largest pools a run spans when the policy names a param counting them
+// Selects the largest pools allowed by the device count parameter.
 func (p *Policy) spanned(primary []*v1.MemoryPool, params Params) []*v1.MemoryPool {
 	if p.DevicesParam == "" {
 		return primary
@@ -616,7 +607,7 @@ func (b *bucket) kindCount(kind v1.TensorGroupKind, n int) int {
 	return c
 }
 
-// The value the param reports for a count of items on device
+// Converts the device group count to the parameter value.
 func (b *bucket) solved(count int) string {
 	if b.rule.ParamCountsHost {
 		count = len(b.items) - count
@@ -631,7 +622,7 @@ func rank(it item) int64 {
 	return int64(it.layer)
 }
 
-// Tries every count of each bucket on the device, most first, within what the placement allows
+// Searches allowed device counts, largest first.
 func (s *solver) solve(bi int) bool {
 	if bi == len(s.buckets) {
 		return s.fits()
@@ -678,7 +669,8 @@ func (s *solver) hostNeed() uint64 {
 	return need
 }
 
-// Whether the counts fit their sides; a host with no host pool probed constrains nothing unless it holds everything
+// Checks host and device capacity. Unknown host capacity is unconstrained unless all weights use
+// host memory.
 func (s *solver) fits() bool {
 	if s.devNeed() > s.devCap {
 		return false
@@ -689,7 +681,7 @@ func (s *solver) fits() bool {
 	return s.hostNeed() <= s.hostCap
 }
 
-// Writes a solved plan: each side's need spread over its pools by size, and every group on the side the solver put it
+// Builds the plan with groups assigned to pools in proportion to capacity.
 func (s *solver) fill(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) {
 	plan.Pools = append(distribute(s.devNeed(), primary, s.free), distribute(s.hostNeed(), host, s.free)...)
 	for _, b := range s.buckets {
@@ -722,13 +714,9 @@ type slot struct {
 	used uint64
 }
 
-// Lays a plan out the way the host would take it when no fit exists: device pools fill to the
-// brim in order, the rest flows on into host memory, and whatever no pool holds overflows past
-// the last pool's capacity, so the pools themselves say how far short the host falls. Groups
-// go in the order the solver protects them, overhead and pinned kinds first, then offloadable
-// kinds by spill priority, with kinds the policy keeps in host memory taking host pools alone.
-// A placement that keeps the model on the device overflows the last device pool instead of
-// flowing on, so the device pools say how far short the device falls.
+// Builds an overflow layout when no fit exists. Fills device pools before host pools, preserving
+// pinned kinds and spill priority. Excess bytes remain on the last allowed pool to report the
+// shortfall.
 func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) {
 	var chain []*slot
 	seen := map[string]bool{}
@@ -745,7 +733,7 @@ func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) 
 			chain = append(chain, &slot{pool: pl, side: v1.PoolKind_POOL_KIND_HOST, cap: capacity(pl, s.free)})
 		}
 	}
-	// A unified pool is both sides at once, so host kinds start where every kind does
+	// Unified memory shares the starting pool for host and device groups.
 	if hostStart == len(chain) {
 		hostStart = 0
 	}
@@ -755,7 +743,7 @@ func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) 
 	}
 	agg := newPlacements()
 	cur := 0
-	// Places one group from the cursor onward through the pools before end, saying which side its first byte landed on
+	// Places a group across pools from the cursor and returns its starting side.
 	place := func(it item, from, end int) v1.PoolKind {
 		if cur < from {
 			cur = from
@@ -764,7 +752,7 @@ func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) 
 		first := v1.PoolKind_POOL_KIND_UNSPECIFIED
 		count := uint32(1)
 		left := it.weights
-		// A group split across pools places its weights in the same shares, the last piece taking the rounding
+		// Split weights proportionally and assign rounding to the last piece.
 		record := func(side v1.PoolKind, taken uint64) {
 			if first == v1.PoolKind_POOL_KIND_UNSPECIFIED {
 				first = side
@@ -820,7 +808,7 @@ func (s *solver) waterfall(plan *v1.MemoryPlan, primary, host []*v1.MemoryPool) 
 	plan.Placements = agg.list()
 }
 
-// Placements summed by kind and side, in the order they were first seen then sorted
+// Sums placements by kind and side, then sorts them.
 type placements struct {
 	agg   map[[2]int32]*v1.GroupPlacement
 	order [][2]int32
@@ -878,13 +866,12 @@ func distribute(need uint64, into []*v1.MemoryPool, free bool) []*v1.PoolUsage {
 	return out
 }
 
-// One pool's share of a plan beside the whole pool and what was free in it, so a bar can draw
-// what others hold, what this plan takes, and what is left
+// Pool capacity, free memory, and planned usage for display.
 func usage(pl *v1.MemoryPool, used, cap uint64) *v1.PoolUsage {
 	return &v1.PoolUsage{PoolId: pl.GetId(), Kind: pl.GetKind(), UsedBytes: used, CapacityBytes: cap, TotalBytes: pl.GetTotalBytes(), FreeBytes: pl.GetFreeBytes()}
 }
 
-// When the host was read for a plan, now for a profile that carries no stamp
+// Profile timestamp, defaulting to now if absent.
 func plannedAt(h *v1.HostProfile) *timestamppb.Timestamp {
 	if at := h.GetProbedAt(); at != nil {
 		return at
@@ -932,7 +919,7 @@ func held(plan *v1.MemoryPlan) uint64 {
 	return total
 }
 
-// Sums bytes planned past what their pools hold, the shortfall a host cannot make up
+// Sums memory shortfalls across pools.
 func overflow(plan *v1.MemoryPlan) uint64 {
 	var total uint64
 	for _, pu := range plan.GetPools() {

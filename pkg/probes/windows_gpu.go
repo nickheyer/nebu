@@ -10,8 +10,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// GPUs of any vendor present right now, their memory as the driver registered it and what each adapter
-// has in use; NVIDIA cards are left to nvidia-smi, which also knows their free memory
+// Probes present GPUs and registered memory. NVIDIA memory is handled by nvidia-smi.
 type windowsGPU struct{}
 
 func (windowsGPU) ID() string { return "windows-gpu" }
@@ -22,8 +21,7 @@ func (windowsGPU) Runs(os, arch string) bool {
 	return on([]string{"windows"}, nil, os, arch)
 }
 
-// Lists every present display adapter with its registered memory and, when the performance counters
-// answer, the dedicated memory in use, matched to the adapter by LUID
+// Matches display adapters to dedicated memory counters by LUID.
 const windowsGPUScript = `$usage = @{};
 try { (Get-Counter '\GPU Adapter Memory(*)\Dedicated Usage' -ErrorAction Stop).CounterSamples | ForEach-Object {
 if ($_.InstanceName -match 'luid_0x([0-9a-fA-F]+)_0x([0-9a-fA-F]+)') {
@@ -83,7 +81,7 @@ func (p windowsGPU) Run(ctx context.Context) host.Result {
 	return found(devices, pools, nil, rows(len(devices)))
 }
 
-// The vendor a PnP instance id names by its PCI vendor code, else the driver's provider name
+// Resolves PCI vendor codes, falling back to the driver provider.
 func pciVendor(pnp, provider string) string {
 	switch {
 	case strings.Contains(pnp, "ven_10de"):

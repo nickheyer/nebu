@@ -13,7 +13,6 @@ interface Pending extends ConfirmRequest {
 
 export const pending = $state<{ current: Pending | null }>({ current: null });
 
-// Asks the person to confirm, resolving when they answer
 export function confirm(req: ConfirmRequest): Promise<boolean> {
   return new Promise((resolve) => {
     pending.current?.resolve(false);

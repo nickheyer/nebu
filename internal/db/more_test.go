@@ -89,7 +89,7 @@ func TestSlotsRoutesRoundTrip(t *testing.T) {
 	if len(routes) != 1 || !proto.Equal(routes[0], r) {
 		t.Fatalf("route round trip %v", routes)
 	}
-	// A route that leaves shaping to the instance carries no profile, as it was written
+	// Routes that inherit instance handling retain a nil profile.
 	r.Profile = nil
 	d.PutRoute(ctx, r)
 	if routes, _ = d.ListRoutes(ctx); routes[0].GetProfile() != nil {

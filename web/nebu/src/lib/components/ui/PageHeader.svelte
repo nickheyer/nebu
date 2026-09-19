@@ -2,7 +2,6 @@
   import type { Snippet } from 'svelte';
   import { ArrowLeft } from '@lucide/svelte';
 
-  // The top of every page: where it sits, what it is, the facts beside it, and the actions that belong to the whole page
   let { title, mono = false, back, meta, children, below }: { title: string; mono?: boolean; back?: { href: string; label: string }; meta?: Snippet; children?: Snippet; below?: Snippet } = $props();
 </script>
 

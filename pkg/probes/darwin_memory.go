@@ -26,8 +26,7 @@ func (p darwinMemory) Run(ctx context.Context) host.Result {
 	return found(nil, []*v1.MemoryPool{pool}, nil, rows(1))
 }
 
-// Reads memory size and the pages macOS can hand out: free pages sit near zero on macOS, so the
-// speculative, purgeable, and file backed pages count as free too, since they are reclaimable
+// Counts free and reclaimable speculative, purgeable, and file-backed pages as available memory.
 func darwinPages(ctx context.Context) (total, free uint64, res host.Result, ok bool) {
 	out, res, ok := command(ctx, 0, "sysctl", "hw.memsize", "vm.page_free_count", "vm.page_speculative_count", "vm.page_purgeable_count", "vm.page_pageable_external_count", "vm.pagesize")
 	if !ok {

@@ -1,5 +1,4 @@
 <script lang="ts">
-  // Labels and values, the labels faint, empty values shown as a dash or left out
   let {
     items,
     mono = false,

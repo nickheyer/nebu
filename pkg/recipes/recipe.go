@@ -1,4 +1,4 @@
-// Package recipes knows how every runtime is built from source, one file per recipe.
+// Package recipes defines runtime build recipes.
 package recipes
 
 import (
@@ -13,17 +13,17 @@ const ReleaseSource = "github"
 
 // Where a recipe's source tree comes from
 type Source struct {
-	// The repository whose newest release resolves a latest ref, at the github source
+	// GitHub repository used to resolve latest releases.
 	Releases string
-	// The archive holding a ref's tree, for a source fetched as a tarball
+	// Archive URL for a source ref.
 	Archive func(ref string) string
-	// A git repository cloned at the ref, for a source fetched with git
+	// Git repository cloned at the ref.
 	Repo string
 	// A directory inside the archive holding the tree
 	Subdir string
 }
 
-// Where the source comes from, in words
+// Source description.
 func (s Source) String() string {
 	switch {
 	case s.Releases != "":
@@ -34,35 +34,35 @@ func (s Source) String() string {
 	return "none"
 }
 
-// Whether a build fetches a source tree at all, so a ref means something
+// Reports whether the recipe fetches source code.
 func (s Source) Fetched() bool {
 	return s.Releases != "" || s.Repo != "" || s.Archive != nil
 }
 
-// One variable a build takes, the kind people set
+// User-configurable build variable.
 type Var struct {
 	Name string
-	// The variable in words
+	// Display label.
 	Label       string
 	Default     string
 	Description string
-	// Values the variable takes, any when empty
+	// Allowed values. Empty accepts any value.
 	Choices []string
 }
 
-// One way a recipe builds, picked by what the host has
+// Build variant selected for host capabilities.
 type Variant struct {
 	ID          string
 	Description string
 	// Tools the variant needs on the host beyond the recipe's own
 	Tools []string
-	// What the host must have for the variant, in words; empty when any host takes it
+	// Host requirements. Empty means unrestricted.
 	Requires string
-	// Whether the host can take the variant
+	// Checks host support.
 	Applies func(h *v1.HostProfile) bool
 	// Variables the variant sets for this host
 	Vars func(h *v1.HostProfile) map[string]string
-	// The container image the variant builds in, for the oci sandbox
+	// OCI build image.
 	Image string
 }
 
@@ -77,15 +77,15 @@ type Sandbox struct {
 	Args []string
 }
 
-// What one build resolved to, read by the steps
+// Resolved build inputs.
 type Build struct {
 	Ref     string
 	Commit  string
 	Variant string
 	Vars    map[string]string
-	// Paths as the sandbox sees them: the build root, the source tree, and where outputs go
+	// Sandbox paths for the build root, source, and outputs.
 	Root, Src, Out string
-	// Parallel jobs the host affords
+	// Available parallel jobs.
 	Jobs int
 	Host *v1.HostProfile
 }
@@ -95,14 +95,14 @@ type Step struct {
 	Name    string
 	Command []string
 	Env     map[string]string
-	// A directory under the source tree to run in, the tree itself when empty
+	// Working directory relative to source. Empty uses the source root.
 	Dir string
 }
 
 // One unified diff applied to the tree
 type Patch struct {
 	ID string
-	// Whether the patch applies to this build, nil meaning always
+	// Patch condition. Nil applies to all builds.
 	Applies func(b *Build) bool
 	// The diff itself, or where to fetch it
 	Content []byte
@@ -111,7 +111,7 @@ type Patch struct {
 	Strip int
 }
 
-// One recipe: everything a build of a runtime from source needs
+// Runtime build recipe.
 type Recipe interface {
 	ID() string
 	RuntimeID() string
@@ -119,17 +119,17 @@ type Recipe interface {
 	Source() Source
 	// Tools every variant needs on the host
 	Tools() []string
-	// Host and device facts folded into a build's identity, device.vendor and device.compute_capability say
+	// Host and device facts included in the build hash, such as device.vendor.
 	Facts() []string
-	// Variables a build takes with their defaults, the ones people may set, in the order they are shown
+	// Build variables and defaults in display order.
 	Vars() []Var
 	Variants() []Variant
 	Sandbox() Sandbox
-	// The steps a build runs in order, given what it resolved to
+	// Ordered build steps.
 	Steps(b *Build) []Step
 	// Paths under the source tree copied out after the steps, globs allowed
 	Outputs() []string
-	// The binary among the outputs an install points at, relative to the output directory
+	// Installed binary path relative to the output directory.
 	Binary() string
 	Timeout() time.Duration
 	Patches() []Patch
@@ -140,12 +140,12 @@ func All() []Recipe {
 	return []Recipe{LlamaCpp{}, VLLM{}, SGLang{}, NeMo{}, SDCpp{}}
 }
 
-// A variable's value, dropped from a command when empty so an unset flag never lands as ""
+// Expands a variable, omitting empty arguments.
 func arg(vars map[string]string, name string) string {
 	return strings.TrimSpace(vars[name])
 }
 
-// A variable's value as the arguments it holds, split on whitespace, none when empty
+// Expands a variable into whitespace-separated arguments.
 func args(vars map[string]string, name string) []string {
 	return strings.Fields(vars[name])
 }

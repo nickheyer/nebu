@@ -43,7 +43,7 @@
             if (lines.length > 5000) lines.splice(0, lines.length - 5000);
           }
         }
-        // A finished task answers from history, so read the stored log if the stream carried none
+        // Completed tasks may need their log loaded from history.
         if (lines.length === 0 && !controller.signal.aborted) {
           const stored = await api.tasks.getTask({ id: current }, { signal: controller.signal });
           if (stored.task && !streamed) streamed = stored.task;

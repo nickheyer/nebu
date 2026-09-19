@@ -1,5 +1,4 @@
 <script lang="ts">
-  // A small tag for an identifier such as a format, with what it is in the title
   let { text, title, mono = true, class: cls = '' }: { text: string; title?: string; mono?: boolean; class?: string } = $props();
 </script>
 

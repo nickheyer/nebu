@@ -1,5 +1,4 @@
 <script lang="ts">
-  // An on or off control that applies as soon as it is flipped
   let { checked = $bindable(false), label, onchange, disabled = false }: { checked?: boolean; label: string; onchange?: (checked: boolean) => void; disabled?: boolean } = $props();
 
   function flip() {

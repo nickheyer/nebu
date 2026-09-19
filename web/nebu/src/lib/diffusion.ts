@@ -2,7 +2,7 @@ import { ModelKind, type Descriptor } from '$proto/model_pb';
 import type { StoredModel } from '$proto/store_pb';
 import { ArtifactRole } from '$proto/model_pb';
 
-// The names a header, a diffusers config, or stable-diffusion.cpp gives a part or a family, folded to the ids the daemon uses
+// Normalize header, Diffusers, and stable-diffusion.cpp names to daemon IDs.
 const canonicalNames: Record<string, string> = {
   t5encoder: 't5', t5: 't5', umt5: 't5', byt5: 't5', t5encodermodel: 't5', umt5encodermodel: 't5', 'flan-t5': 't5',
   cliptextmodel: 'clip_l', clip_l: 'clip_l', 'clip-l': 'clip_l',
@@ -35,23 +35,27 @@ export function canonical(architecture: string): string {
   return canonicalNames[a] ?? a;
 }
 
-// The part a component is, in words
 const partWords: Record<string, string> = {
   vae: 'VAE', audio_vae: 'audio VAE', taesd: 'tiny autoencoder', t5: 'T5 text encoder', clip_l: 'CLIP-L text encoder', clip_g: 'CLIP-G text encoder', llm: 'language model text encoder', text_encoder: 'text encoder', clip_vision: 'CLIP vision encoder', audio_encoder: 'audio encoder', embeddings_connectors: 'embeddings connectors',
   lora: 'LoRA', controlnet: 'ControlNet', ip_adapter: 'IP-Adapter', photo_maker: 'PhotoMaker model', pulid: 'PuLID weights', motion_module: 'AnimateDiff motion module', embedding: 'textual inversion embedding', upscaler: 'upscaler', detector: 'ADetailer detector'
 };
 
-export function partWord(architecture: string): string {
-  return partWords[canonical(architecture)] ?? 'pipeline part';
+// Prefer tensor metadata over the configured architecture.
+export function partOf(d: Descriptor | undefined): string {
+  return d?.metadata['diffusion.component'] || canonical(d?.architecture ?? '');
 }
 
-// What a model is, in a word: what it generates for a diffusion model, its part for a component, nothing for a language model
+export function partWord(d: Descriptor | undefined): string {
+  return partWords[partOf(d)] ?? 'pipeline part';
+}
+
+// Label diffusion outputs and components. Leave language models unlabeled.
 export function kindLabel(d: Descriptor | undefined): string {
   switch (d?.kind) {
     case ModelKind.DIFFUSION:
       return d.generates.length ? d.generates.join(' + ') : 'diffusion';
     case ModelKind.COMPONENT:
-      return partWord(d.architecture);
+      return partWord(d);
   }
   return '';
 }
@@ -60,12 +64,11 @@ export function isComponent(d: Descriptor | undefined): boolean {
   return d?.kind === ModelKind.COMPONENT;
 }
 
-// The kind a runtime must serve for a model, a language model when the descriptor says nothing
+// Default to a language model when the descriptor has no kind.
 export function kindOf(d: Descriptor | undefined): ModelKind {
   return d?.kind || ModelKind.LANGUAGE;
 }
 
-// What the catalog says a hit is, in a word, blank when it did not say
 export function hitKindLabel(kind: ModelKind): string {
   switch (kind) {
     case ModelKind.DIFFUSION:
@@ -89,12 +92,12 @@ export function kindWord(kind: ModelKind): string {
   }
 }
 
-// The tokenizer.json a stored group carries, the file sd-server reads a tokenizer from
+// sd-server requires tokenizer.json.
 function tokenizerOf(m: StoredModel): string {
   return m.artifacts.find((a) => a.artifact?.role === ArtifactRole.TOKENIZER && a.artifact.path.endsWith('tokenizer.json'))?.path ?? '';
 }
 
-// The stored file a path param takes from a model: its weights, its projector, its tokenizer, the directory holding it, or the checkpoint directory
+// Resolve a path parameter to its stored file or directory.
 export function pickedPath(m: StoredModel, picks: string): string {
   if (picks === 'tokenizer') return tokenizerOf(m);
   if (picks === 'checkpoint') return m.path;
@@ -105,10 +108,9 @@ export function pickedPath(m: StoredModel, picks: string): string {
   return file;
 }
 
-// Whether a stored model is what a path param picks
 export function picksModel(m: StoredModel, picks: string): boolean {
   const d = m.descriptor;
-  const arch = canonical(d?.architecture ?? '');
+  const arch = partOf(d);
   switch (picks) {
     case '':
     case 'model':

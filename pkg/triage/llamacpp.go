@@ -35,7 +35,7 @@ func (LlamaCpp) Rules() []Rule {
 		{
 			ID:      "assert",
 			Summary: "runtime assertion failed",
-			Hint:    "keep the log line and check the runtime issue tracker, then try different params",
+			Hint:    "check the runtime issue tracker for this error",
 			Match: func(line string) (map[string]string, bool) {
 				return nil, contains(line, "GGML_ASSERT")
 			},
@@ -50,13 +50,13 @@ func (LlamaCpp) Rules() []Rule {
 		{
 			ID:      "port-in-use",
 			Summary: "the port is taken",
-			Hint:    "stop whatever holds the port or run the model again to get a fresh port",
+			Hint:    "free the port or rerun the model to use another port",
 			Match:   anyOf("address already in use", "couldn't bind to server socket", "couldn’t bind to server socket"),
 		},
 		{
 			ID:      "gguf-hparams",
 			Summary: "this build cannot read the model's hyperparameters${detail}",
-			Hint:    "the file was converted for a different llama.cpp; Ollama's own engine reads GGUFs upstream llama.cpp rejects, so pull the model from a source that publishes upstream GGUFs, such as Hugging Face, or adopt the runtime the file was made for",
+			Hint:    "this GGUF targets a different llama.cpp version. Use a compatible runtime or pull an upstream-compatible GGUF, for example from Hugging Face",
 			Match: func(line string) (map[string]string, bool) {
 				if !contains(line, "error loading model hyperparameters") {
 					return nil, false
@@ -74,13 +74,13 @@ func (LlamaCpp) Rules() []Rule {
 		{
 			ID:      "model-load",
 			Summary: "the model failed to load",
-			Hint:    "verify the store with nebu store verify, then check the lines above this one",
+			Hint:    "run nebu store verify and check the preceding log lines",
 			Match:   anyOf("error loading model", "failed to load model", "unable to load model"),
 		},
 		{
 			ID:      "bad-flag",
 			Summary: "this build rejected a flag nebu passed",
-			Hint:    "check the line for the flag, override that param with a value this build accepts, or adopt a newer runtime",
+			Hint:    "set the rejected parameter to a supported value or update the runtime",
 			Match: func(line string) (map[string]string, bool) {
 				if flag, ok := quotedAfter(line, `error while handling argument "`, `"`); ok {
 					return map[string]string{"flag": flag}, true

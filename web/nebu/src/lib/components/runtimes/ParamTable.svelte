@@ -2,8 +2,6 @@
   import { accepts, defaultText, paramGroups } from '$lib/runtimes';
   import type { Param } from '$proto/runtime_pb';
 
-  // Every knob of a runtime as a reference: what it is called, the flag it becomes, what it takes when
-  // left alone, and what it accepts, grouped as the runtime groups them
   let { params }: { params: Param[] } = $props();
 
   const groups = $derived(paramGroups(params));

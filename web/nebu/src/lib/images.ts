@@ -1,8 +1,4 @@
-// Images in a chat: their bytes kept in the browser's IndexedDB, their shape in the session
-//
-// A session lives in localStorage, which holds a few megabytes in all, so only an image's id and
-// shape are written there. The bytes go to IndexedDB under the id and are read back when a turn
-// is shown or sent.
+// Store image metadata in localStorage and bytes in IndexedDB to avoid the localStorage limit.
 
 import { localKeys, readLocal } from './persist';
 
@@ -15,23 +11,22 @@ export interface Attachment {
   name: string;
 }
 
-// The longest edge an image is sent at; vision encoders downscale or tile anything larger
+// Vision encoders downscale or tile images beyond this edge length.
 export const maxEdge = 1568;
-// A PNG above this is re-encoded as JPEG so one image never fills a request
+// Convert larger PNGs to JPEG to limit request size.
 const maxPngBytes = 4 << 20;
 const jpegQuality = 0.9;
 
 const dbName = 'nebu';
 const storeName = 'images';
-// The length of the time part of an id, base 36 milliseconds, enough until the year 5188
+// Base-36 timestamp width, valid through 5188.
 const idTimeLength = 9;
 
-// An id whose first part is the moment it was made; crypto.randomUUID needs a secure context
+// Prefix IDs with their creation time. Avoid crypto.randomUUID outside secure contexts.
 export function newId(): string {
   return Date.now().toString(36).padStart(idTimeLength, '0') + Math.random().toString(36).slice(2, 10);
 }
 
-// The moment an id was made
 function idTime(id: string): number {
   return parseInt(id.slice(0, idTimeLength), 36);
 }
@@ -89,14 +84,13 @@ export async function deleteImages(ids: string[]): Promise<void> {
   await Promise.all(ids.map((id) => settle(s.delete(id))));
 }
 
-// Removes stored images no session names, leaving recent ones another tab may still be attaching
+// Keep recent unreferenced images in case another tab is attaching them.
 export async function sweepImages(keep: Set<string>, before: number): Promise<void> {
   const s = await store('readwrite');
   const keys = (await settle(s.getAllKeys())) as string[];
   await Promise.all(keys.filter((k) => !keep.has(k) && idTime(k) < before).map((k) => settle(s.delete(k))));
 }
 
-// Decodes a file, scales it down to the edge limit, and settles on png or jpeg bytes every vision runtime reads
 export async function prepareImage(file: Blob, name: string): Promise<{ attachment: Attachment; blob: Blob }> {
   if (!file.type.startsWith('image/')) throw new Error(`${name} is ${file.type || 'of no image type'}`);
   const bitmap = await decode(file, name);
@@ -108,7 +102,7 @@ export async function prepareImage(file: Blob, name: string): Promise<{ attachme
     }
     const width = Math.max(1, Math.round(bitmap.width * scale));
     const height = Math.max(1, Math.round(bitmap.height * scale));
-    // A photo stays a jpeg; anything else keeps its alpha as a png until that is too big
+    // Preserve PNG transparency unless the encoded image exceeds the size limit.
     let blob = await draw(bitmap, width, height, file.type === 'image/jpeg' ? 'image/jpeg' : 'image/png');
     if (blob.type === 'image/png' && blob.size > maxPngBytes) blob = await draw(bitmap, width, height, 'image/jpeg');
     return { attachment: { id: newId(), mediaType: blob.type, width, height, bytes: blob.size, name }, blob };
@@ -117,14 +111,12 @@ export async function prepareImage(file: Blob, name: string): Promise<{ attachme
   }
 }
 
-// Keeps any file as it is, a video or an animation, with no shape to measure
 export async function storeBlob(blob: Blob, name: string): Promise<Attachment> {
   const attachment = { id: newId(), mediaType: blob.type, width: 0, height: 0, bytes: blob.size, name };
   await putImage(attachment.id, blob);
   return attachment;
 }
 
-// The ids every chat session and generation in this browser still shows, read from their stored records
 export function referencedIds(): Set<string> {
   const keep = new Set<string>();
   for (const k of localKeys('nebu.chat.')) {
@@ -135,24 +127,22 @@ export function referencedIds(): Set<string> {
         for (const m of t.media ?? []) if (m.id) keep.add(m.id);
       }
     } catch {
-      // a key under the prefix that is not a session
+      // Ignore unrelated keys sharing the prefix.
     }
   }
   try {
     const history = JSON.parse(readLocal('nebu.generate.history') || '[]') as { files?: { id: string }[]; inputs?: { id: string }[] }[];
     for (const g of history) for (const f of [...(g.files ?? []), ...(g.inputs ?? [])]) keep.add(f.id);
   } catch {
-    // no history yet
   }
   return keep;
 }
 
-// Drops stored files nothing shows any more, leaving those under a day old that another tab may still be attaching
+// Keep unreferenced files for one day in case another tab is attaching them.
 export function sweepStale(): Promise<void> {
   return sweepImages(referencedIds(), Date.now() - 24 * 60 * 60 * 1000);
 }
 
-// Keeps an image as it is, measured for its shape, the way an answer's image is stored
 export async function storeImage(blob: Blob, name: string): Promise<Attachment> {
   const bitmap = await decode(blob, name);
   const attachment = { id: newId(), mediaType: blob.type, width: bitmap.width, height: bitmap.height, bytes: blob.size, name };
@@ -169,7 +159,7 @@ async function decode(blob: Blob, name: string): Promise<ImageBitmap> {
   }
 }
 
-// Draws the bitmap at a size and encodes it, a jpeg over white since it has no alpha
+// Composite JPEGs on white because JPEG has no alpha channel.
 async function draw(bitmap: ImageBitmap, width: number, height: number, type: 'image/png' | 'image/jpeg'): Promise<Blob> {
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -186,7 +176,6 @@ async function draw(bitmap: ImageBitmap, width: number, height: number, type: 'i
   return blob;
 }
 
-// The base64 of a blob's bytes, as the wire formats carry an image
 export function toBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -199,7 +188,6 @@ export function toBase64(blob: Blob): Promise<string> {
   });
 }
 
-// The bytes of a data URL as a blob, an http URL fetched
 export async function fetchImage(url: string): Promise<Blob> {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`${resp.status} fetching the image`);

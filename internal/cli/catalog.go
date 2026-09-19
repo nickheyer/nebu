@@ -34,7 +34,7 @@ func runHost(ctx context.Context, e *env, args []string) error {
 	if _, err := e.parse(fs, args, 0, 0, "host [--refresh] [--label NAME]"); err != nil {
 		return err
 	}
-	// Naming the flag, even empty, sets the label, leaving it out only reads
+	// An explicit flag sets the label, including an empty value.
 	labelSet := false
 	fs.Visit(func(f *flag.Flag) { labelSet = labelSet || f.Name == "label" })
 	current, err := e.cl.settings.GetSettings(ctx, connect.NewRequest(&v1.GetSettingsRequest{}))
@@ -277,7 +277,7 @@ func runSourcesUpdate(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	// The update replaces every setting, so start from what the source has and change only what was passed
+	// Updates replace all settings. Merge flag changes into the current settings.
 	src := current.GetSource()
 	if src.Config == nil {
 		src.Config = map[string]string{}
@@ -388,7 +388,7 @@ func runSearch(ctx context.Context, e *env, args []string) error {
 	})
 }
 
-// A model's kind in a word, blank when the catalog did not say
+// Short model kind, or empty if unknown.
 func kindWord(k v1.ModelKind) string {
 	if k == v1.ModelKind_MODEL_KIND_UNSPECIFIED {
 		return "-"
@@ -396,7 +396,7 @@ func kindWord(k v1.ModelKind) string {
 	return text.Enum(k)
 }
 
-// The runtimes by the bit each takes in a bitmask, read once from the daemon
+// Runtime bitmask positions, cached from the daemon.
 type runtimeNames map[uint32]string
 
 func (e *env) runtimeNames(ctx context.Context) (runtimeNames, error) {
@@ -411,7 +411,7 @@ func (e *env) runtimeNames(ctx context.Context) (runtimeNames, error) {
 	return out, nil
 }
 
-// The runtimes a bitmask names, joined by commas, a dash for none
+// Comma-separated runtime names, or a dash for none.
 func (n runtimeNames) of(mask uint32) string {
 	var out []string
 	for bit := uint32(1); bit != 0 && bit <= mask; bit <<= 1 {
@@ -426,7 +426,7 @@ func (n runtimeNames) of(mask uint32) string {
 
 func runRevisions(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("revisions")
-	source := fs.String("source", "", "source id, first configured when empty")
+	source := fs.String("source", "", "source id (default: first configured)")
 	positional, err := e.parse(fs, args, 1, 1, "revisions <repo> [--source S]")
 	if err != nil {
 		return err
@@ -453,7 +453,7 @@ func runRevisions(ctx context.Context, e *env, args []string) error {
 
 func runCard(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("card")
-	source := fs.String("source", "", "source id, first configured when empty")
+	source := fs.String("source", "", "source id (default: first configured)")
 	positional, err := e.parse(fs, args, 1, 1, "card <repo>[@revision] [--source S]")
 	if err != nil {
 		return err
@@ -481,7 +481,7 @@ func runCard(ctx context.Context, e *env, args []string) error {
 
 func runInspect(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("inspect")
-	source := fs.String("source", "", "source id, first configured when empty")
+	source := fs.String("source", "", "source id (default: first configured)")
 	slot := fs.String("slot", "", "slot id or name to plan inside, its devices, budget, and defaults")
 	var runtimes, groups, contexts, params multi
 	fs.Var(&runtimes, "runtime", "runtime id, repeatable")
@@ -532,7 +532,7 @@ func runInspect(ctx context.Context, e *env, args []string) error {
 	})
 }
 
-// The context a fit row was planned at, the solved one saying so with the length it settled on
+// Formats context length, marking rows solved by the planner.
 func fitContext(r *v1.FitRow) string {
 	if r.GetContext() != 0 {
 		return strconv.FormatUint(uint64(r.GetContext()), 10)
@@ -593,7 +593,7 @@ func placements(plan *v1.MemoryPlan) string {
 	return strings.Join(parts, " ")
 }
 
-// One line summing up a plan
+// Summarizes a plan.
 func planLine(plan *v1.MemoryPlan) string {
 	return fmt.Sprintf("%s device %s host %s cache %s %s %s", loud(plan.GetVerdict()), poolUsage(plan, v1.PoolKind_POOL_KIND_DEVICE), poolUsage(plan, v1.PoolKind_POOL_KIND_HOST), estimate.Human(plan.GetCacheBytes()), placements(plan), plan.GetDetail())
 }

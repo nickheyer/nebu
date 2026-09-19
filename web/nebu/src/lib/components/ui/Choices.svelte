@@ -10,7 +10,6 @@
 </script>
 
 <script lang="ts">
-  // One of a few options as a list of rows, the chosen one marked
   let { items, value = $bindable(''), label, class: cls = '' }: { items: Choice[]; value?: string; label: string; class?: string } = $props();
 </script>
 

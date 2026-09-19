@@ -54,7 +54,6 @@
   const errorCount = $derived(activity.filter((a) => a.level === 'error').length);
   const section = $derived(formSections.find((s) => s === tab.value));
 
-  // Load history once per bot, then use the event stream.
   let backfilled = $state('');
   $effect(() => {
     if (tab.value !== 'activity' || !bot || backfilled === bot.id) return;

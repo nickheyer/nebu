@@ -30,7 +30,7 @@ const (
 	ggufString uint32 = 8
 )
 
-// A small llama shaped GGUF: two layers of a 64 wide model trained for 4096 tokens, with its data
+// Llama GGUF fixture: two layers, width 64, context length 4096, with tensor data.
 func ggufFixture() []byte {
 	var b bytes.Buffer
 	u32 := func(v uint32) { binary.Write(&b, binary.LittleEndian, v) }
@@ -94,7 +94,7 @@ func ggufFixture() []byte {
 	return b.Bytes()
 }
 
-// A probe that finds one card with room for the fixture many times over
+// Test probe with ample device memory.
 type cardProbe struct{}
 
 func (cardProbe) ID() string               { return "card" }
@@ -151,7 +151,7 @@ func inspector(t *testing.T) *Inspector {
 	}
 }
 
-// The fit table leads with the row the planner solved, its context the largest that fits, then the grid capped at the model's own
+// The fit table starts with the largest fitting context, then the capped context grid.
 func TestInspectLeadsWithTheSolvedContext(t *testing.T) {
 	i := inspector(t)
 	resp, err := i.Inspect(context.Background(), &v1.InspectRequest{SourceId: "disk", Repo: "org/model"})
@@ -184,7 +184,7 @@ func TestInspectLeadsWithTheSolvedContext(t *testing.T) {
 	if free := solved.GetFree().GetPools()[0]; free.GetCapacityBytes() != 20<<30 || !solved.GetFree().GetAgainstFree() {
 		t.Fatalf("the free plan is capped at what is free: %+v", free)
 	}
-	// Named contexts are planned as given, with no solved row
+	// Explicit contexts omit the automatically solved row.
 	resp, err = i.Inspect(context.Background(), &v1.InspectRequest{SourceId: "disk", Repo: "org/model", Contexts: []uint32{1024}})
 	if err != nil {
 		t.Fatal(err)

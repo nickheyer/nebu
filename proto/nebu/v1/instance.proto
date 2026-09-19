@@ -35,13 +35,13 @@ message Measurement {
   string line = 3;
 }
 
-// What the runtime's chat template accepted when the instance came up, learned by rendering two short requests
+// Chat template support probed with two requests at startup.
 message TemplateProbe {
-  // Whether a system message after the first renders
+  // Whether the template supports later system messages.
   bool late_system = 1;
-  // The runtime's own words when it refused one, empty when it rendered it
+  // Template refusal message. Empty when supported.
   string refusal = 2;
-  // Why the probe could not tell, empty when it could
+  // Probe error. Empty on success.
   string error = 3;
 }
 
@@ -73,9 +73,7 @@ message Instance {
   TemplateProbe template = 24;
 }
 
-// Starts a stored model on a runtime
-//
-// Params apply over the slot's defaults, which apply over the manifest defaults.
+// Start a stored model. Request parameters override slot defaults, which override manifest defaults.
 message RunRequest {
   string source_id = 1;
   string repo = 2;

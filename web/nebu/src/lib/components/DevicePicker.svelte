@@ -2,7 +2,7 @@
   import { hostGpus } from '$lib/state.svelte';
   import { bytes } from '$lib/format';
 
-  // The accelerators a slot is placed on, every one checked to start; the last one checked stays checked
+  // Keep at least one device selected.
   let { value = $bindable([] as string[]), id = 'devices' }: { value?: string[]; id?: string } = $props();
 
   const gpus = $derived(hostGpus());

@@ -53,7 +53,7 @@
 </PageHeader>
 
 {#if live.traces.size === 0}
-  <Empty icon={Activity} title="No requests have reached the gateway yet" />
+  <Empty icon={Activity} title="No requests yet" />
 {:else}
   <div class="grid grid-cols-1 gap-6 {selected ? 'xl:grid-cols-[minmax(0,1fr)_28rem]' : ''}">
     <TraceTable {traces} {selected} onSelect={select} compact={!!selected} />

@@ -1,6 +1,5 @@
-// Package diffusion reads the checkpoints diffusion models are published as: one safetensors or
-// torch file per model, with no config beside it, holding a denoiser with or without the
-// autoencoder and text encoders it samples with, or one of those parts on its own.
+// Package diffusion reads safetensors and torch checkpoints without configs, including denoisers
+// and standalone components.
 package diffusion
 
 import (
@@ -16,22 +15,21 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// Single file diffusion checkpoints, safetensors or torch, as image and video models are published
 type Format struct{}
 
 func (Format) ID() string          { return "diffusion" }
 func (Format) Description() string { return "Single file diffusion checkpoints" }
 func (Format) Blurb() string {
-	return "One safetensors or torch file holds a diffusion model, or one part of its pipeline such as a VAE or a text encoder, with no config beside it"
+	return "Safetensors or torch checkpoints without configs, including diffusion models, VAEs, and text encoders"
 }
 
-// Below the safetensors format, so a checkpoint with a transformers config keeps that format and one without falls here
+// Checkpoints with transformers configs use the higher priority safetensors format.
 func (Format) Priority() int               { return 4 }
 func (Format) Requires() []v1.ArtifactRole { return nil }
 
 var extensions = []string{".safetensors", ".sft", ".ckpt", ".pt", ".pth"}
 
-// Every checkpoint file is a group of its own named by its stem, shards of one file sharing the stem
+// Groups checkpoint files by stem, keeping shards together.
 func (Format) Classify(p string) (formats.Claim, bool) {
 	_, base := formats.Split(p)
 	lower := strings.ToLower(base)
@@ -62,7 +60,7 @@ func (Format) Read(ctx context.Context, open formats.Opener, g *formats.Group) (
 	})
 }
 
-// Whether the group's files are torch pickles rather than safetensors
+// Reports whether the weights use torch serialization.
 func isTorch(g *formats.Group) bool {
 	if len(g.Weights) == 0 {
 		return false
@@ -74,18 +72,15 @@ func isTorch(g *formats.Group) bool {
 	return false
 }
 
-// The profile of a checkpoint, read from the tensors the header listed
 func profile(raw *v1.RawModel) Profile {
 	return Scan(raw.GetTensors(), raw.GetGroup())
 }
 
-// The family of the denoiser, or the part a checkpoint without one is
 func (Format) Architecture(raw *v1.RawModel) string {
 	return Architecture(raw)
 }
 
-// Architecture names what a checkpoint holds from its tensors alone: the family of its denoiser, else
-// the part it is, else nothing; any format whose header names no architecture asks this
+// Architecture infers the denoiser family or component kind from tensors.
 func Architecture(raw *v1.RawModel) string {
 	p := profile(raw)
 	if p.Family != "" {
@@ -94,13 +89,16 @@ func Architecture(raw *v1.RawModel) string {
 	return p.Component
 }
 
-// The blocks and width of the denoiser, which size its activations
+// Returns denoiser dimensions or standalone encoder width and vocabulary.
 func (Format) Params(raw *v1.RawModel) formats.Params {
 	p := profile(raw)
+	if p.Family == "" {
+		return formats.Params{Embedding: p.Width, Vocab: p.Vocab}
+	}
 	return formats.Params{Layers: p.Blocks, Embedding: p.Embedding}
 }
 
-// A name the diffusion rules do not know is a helper tensor, never a layer of a language model
+// Unknown tensors use the helper group.
 func (Format) Tensor(name string) (v1.TensorGroupKind, int32) {
 	if kind, ok := Any(name); ok {
 		return kind, -1
@@ -111,7 +109,7 @@ func (Format) Tensor(name string) (v1.TensorGroupKind, int32) {
 func (Format) DraftFrom(formats.Params) int32                   { return -1 }
 func (Format) Elements(t *v1.TensorInfo, _ *v1.RawModel) uint64 { return t.GetElements() }
 
-// The precision the tensors are stored at, from the dtype most of the denoiser's bytes take, else the name
+// Infers precision from the predominant dtype, falling back to the group name.
 func (Format) Precision(raw *v1.RawModel, group string) formats.Words {
 	bytesBy := map[string]uint64{}
 	for _, t := range raw.GetTensors() {
@@ -126,13 +124,13 @@ func (Format) Precision(raw *v1.RawModel, group string) formats.Words {
 	var w formats.Words
 	switch top {
 	case "BF16":
-		w.Bits, w.Labels, w.Notes = 16, []string{"bfloat16"}, []string{"bfloat16, the training format on modern GPUs"}
+		w.Bits, w.Labels, w.Notes = 16, []string{"bfloat16"}, []string{"16-bit bfloat16"}
 	case "F16":
-		w.Bits, w.Labels, w.Notes = 16, []string{"float16"}, []string{"float16, the training format on older GPUs"}
+		w.Bits, w.Labels, w.Notes = 16, []string{"float16"}, []string{"16-bit float16"}
 	case "F32":
 		w.Bits, w.Labels = 32, []string{"float32"}
 	case "F8_E4M3", "F8_E5M2", "FLOAT8_E4M3FN", "FLOAT8_E5M2":
-		w.Bits, w.Labels, w.Notes = 8, []string{"float8"}, []string{"8-bit floating point, half the size of 16-bit with little lost"}
+		w.Bits, w.Labels, w.Notes = 8, []string{"float8"}, []string{"8-bit floating point"}
 	}
 	lower := strings.ToLower(group)
 	if w.Bits == 0 {
@@ -148,7 +146,7 @@ func (Format) Precision(raw *v1.RawModel, group string) formats.Words {
 	return w
 }
 
-// What the header said of itself, the family, and which parts the checkpoint bundles
+// Retains header metadata and inferred diffusion properties.
 func (Format) Metadata(raw *v1.RawModel) map[string]string {
 	out := map[string]string{}
 	for k, v := range raw.GetMetadata() {
@@ -162,7 +160,7 @@ func (Format) Metadata(raw *v1.RawModel) map[string]string {
 	return out
 }
 
-// The keys every descriptor of a diffusion checkpoint carries, whatever format holds it
+// Descriptor metadata keys.
 const (
 	KeyFamily      = "diffusion.family"
 	KeyVariant     = "diffusion.variant"
@@ -173,10 +171,15 @@ const (
 	KeyImageInput  = "diffusion.image_input"
 	KeyAudioInput  = "diffusion.audio_input"
 	KeyGenerates   = "diffusion.generates"
+	// Comma-separated bundled slot IDs.
+	KeySlots = "diffusion.slots"
+	// Standalone autoencoder latent channels and video flag.
+	KeyLatentChannels = "diffusion.latent_channels"
+	KeyVideoVAE       = "diffusion.video_vae"
 )
 
-// Metadata reads the family, its variant, the parts a checkpoint bundles, and what it makes, off the
-// tensors of any format, empty for a file that is no part of a diffusion pipeline
+// Metadata infers family, variant, bundled components, and outputs from tensors. Returns empty for
+// unrelated models.
 func Metadata(raw *v1.RawModel) map[string]string {
 	out := map[string]string{}
 	p := profile(raw)
@@ -195,6 +198,10 @@ func Metadata(raw *v1.RawModel) map[string]string {
 	if p.Component != "" {
 		out[KeyComponent] = p.Component
 	}
+	if p.LatentChannels > 0 {
+		out[KeyLatentChannels] = strconv.Itoa(int(p.LatentChannels))
+		out[KeyVideoVAE] = strconv.FormatBool(p.VideoVAE)
+	}
 	for kind, n := range p.Kinds {
 		if n > 0 {
 			out["diffusion.bytes."+strings.ToLower(strings.TrimPrefix(kind.String(), "TENSOR_GROUP_KIND_"))] = fmt.Sprint(n)
@@ -203,22 +210,49 @@ func Metadata(raw *v1.RawModel) map[string]string {
 	return out
 }
 
-// ProfileOf rebuilds the profile a descriptor's metadata recorded, so a runtime reads the parts a
-// stored model needs without the headers
+// FamilyOf returns the denoiser family, or empty if absent.
+func FamilyOf(d *v1.Descriptor) string { return ProfileOf(d).Family }
+
+// PartOf returns the component kind, falling back to the canonical architecture.
+func PartOf(d *v1.Descriptor) string {
+	if p := ProfileOf(d); p.Component != "" {
+		return p.Component
+	}
+	return Canonical(d.GetArchitecture())
+}
+
+// ProfileOf reconstructs a profile from stored descriptor metadata.
 func ProfileOf(d *v1.Descriptor) Profile {
 	m := d.GetMetadata()
-	p := Profile{Family: Canonical(m[KeyFamily]), Variant: m[KeyVariant], Component: m[KeyComponent]}
-	if p.Family == "" && Denoiser(d.GetArchitecture()) {
-		p.Family = Canonical(d.GetArchitecture())
-	}
-	if p.Component == "" && Component(d.GetArchitecture()) {
-		p.Component = Canonical(d.GetArchitecture())
+	p := Profile{Variant: m[KeyVariant]}
+	// Prefer the configured class over tensor inference.
+	switch arch := Canonical(d.GetArchitecture()); {
+	case Denoiser(arch):
+		p.Family = arch
+	case Component(arch):
+		p.Component = arch
+	default:
+		p.Family, p.Component = Canonical(m[KeyFamily]), m[KeyComponent]
 	}
 	p.VAE, _ = strconv.ParseBool(m[KeyVAE])
 	p.TextEncoder, _ = strconv.ParseBool(m[KeyTextEncoder])
 	p.ClipVision, _ = strconv.ParseBool(m[KeyClipVision])
 	p.ImageInput, _ = strconv.ParseBool(m[KeyImageInput])
 	p.AudioInput, _ = strconv.ParseBool(m[KeyAudioInput])
+	p.VideoVAE, _ = strconv.ParseBool(m[KeyVideoVAE])
+	for _, slot := range strings.Split(m[KeySlots], ",") {
+		if slot == "" {
+			continue
+		}
+		if p.Slots == nil {
+			p.Slots = map[string]bool{}
+		}
+		p.Slots[slot] = true
+	}
+	if n, err := strconv.ParseFloat(m[KeyLatentChannels], 64); err == nil {
+		p.LatentChannels = n
+	}
+	p.Width, p.Vocab = d.GetParams()["n_embd"], d.GetParams()["n_vocab"]
 	for _, g := range d.GetGroups() {
 		switch g.GetKind() {
 		case v1.TensorGroupKind_TENSOR_GROUP_KIND_VAE:

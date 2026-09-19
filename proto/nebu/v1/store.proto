@@ -8,14 +8,14 @@ import "nebu/v1/task.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
 
-// Artifact as stored, with its blob digest and link path
+// Stored artifact with blob digest and link path.
 message StoredArtifact {
   Artifact artifact = 1;
   string digest = 2;
   string path = 3;
 }
 
-// One pulled weight group and its attached files
+// Downloaded weight group and associated files.
 message StoredModel {
   string source_id = 1;
   string repo = 2;
@@ -28,9 +28,9 @@ message StoredModel {
   uint64 bytes = 9;
   google.protobuf.Timestamp pulled_at = 10;
   string path = 11;
-  // Last time a run started from it, what eviction orders by
+  // Last launch time, used for eviction order.
   google.protobuf.Timestamp used_at = 12;
-  // The runtimes that serve this group, one bit per runtime as Runtime.bit numbers them, from its format and what its headers say it is
+  // Compatible runtimes by Runtime.bit, based on the format and header metadata.
   uint32 runtimes = 13;
 }
 
@@ -42,16 +42,18 @@ message StoreStatus {
   uint64 blob_bytes = 4;
   uint64 partials = 5;
   uint64 partial_bytes = 6;
-  // Blob bytes the store keeps under by evicting, 0 for no cap
+  // Blob storage limit in bytes. Zero disables the limit.
   uint64 max_bytes = 7;
 }
 
-// Pulls one weight group into the store
+// Download a weight group and its blueprint dependencies.
 message PullRequest {
   string source_id = 1;
   string repo = 2;
   string revision = 3;
   string group = 4;
+  // Download only this group, excluding blueprint dependencies.
+  bool alone = 5;
 }
 
 // Returns the pull task

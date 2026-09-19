@@ -36,7 +36,7 @@ func (p meminfo) Run(context.Context) host.Result {
 		return failed(fmt.Errorf("MemAvailable: %w", err))
 	}
 	pool := &v1.MemoryPool{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: total, FreeBytes: free}
-	// The pool carries the totals; huge pages are the one fact the pool does not say
+	// Memory totals belong to the pool. Huge page counts remain host facts.
 	facts := map[string]string{}
 	if v, ok := kv["HugePages_Total"]; ok {
 		facts["mem.hugepages_total"] = v

@@ -33,7 +33,6 @@
   const failed = $derived(past.filter((i) => i.state === InstanceState.FAILED));
   const history = $derived(historyView === 'failed' ? failed : past);
   const recent = $derived(answersOf().slice(0, 8));
-  // What the slots table says when it has nothing to list: the first thing missing on the way to serving
   const firstStep = $derived(live.installs.size === 0 ? 'runtime' : live.models.size === 0 ? 'model' : 'slot');
 
   function instanceOf(s: Slot): Instance | undefined {

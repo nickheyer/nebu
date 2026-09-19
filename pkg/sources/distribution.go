@@ -63,10 +63,8 @@ type bearer struct {
 	expires time.Time
 }
 
-// OCI distribution transport, where some catalogs ship models as layers,
-// answering bearer challenges anonymously or with a credential
-//
-// A locator is repo:ref for a manifest and repo@digest for a blob.
+// OCI distribution transport with bearer authentication. Manifest locators use repo:ref, and blobs
+// use repo@digest.
 type Distribution struct {
 	http   *HTTP
 	creds  string
@@ -236,8 +234,8 @@ func (d *Distribution) PullHeaders(ctx context.Context, repo string) (http.Heade
 		h.Set("Authorization", "Bearer "+tok)
 		return h, nil
 	}
-	// A HEAD on the tags list is the cheapest way to learn the challenge, registries
-	// without that endpoint answer 404 and need no token at all
+	// Probe the tag endpoint for an authentication challenge. Registries returning 404 need no token
+	// here.
 	resp, err := d.do(ctx, http.MethodHead, d.http.URL("v2", repo, "tags", "list"), nil)
 	if err != nil {
 		var se *StatusError

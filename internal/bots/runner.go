@@ -21,21 +21,21 @@ import (
 )
 
 const (
-	// Discord allows one identify every five seconds per bucket, so shards open that far apart
+	// Discord requires five seconds between identifies per bucket.
 	identifyGap = 5 * time.Second
-	// How long a shard waits before opening again after a failure
+	// Shard reconnect delay.
 	reopenBackoff = 15 * time.Second
-	// A typing indicator lasts about ten seconds, so it is renewed a little sooner
+	// Renew typing indicators before their ten-second expiry.
 	typingRenew = 8 * time.Second
-	// How long a generation may take end to end before the bot gives up on it
+	// Generation timeout.
 	generationTimeout = 30 * time.Minute
-	// The name a persona webhook is created under
+	// Default persona webhook name.
 	webhookPrefix = "nebu "
-	// How often shard latencies and guild counts are read again
+	// Shard status polling interval.
 	statusRefresh = 30 * time.Second
 )
 
-// One connected bot: its shards, its personas' state per channel, and the work in flight
+// Connected bot state, shards, and active work.
 type runner struct {
 	m     *Manager
 	id    string
@@ -55,12 +55,12 @@ type runner struct {
 	shards []*shard
 	self   *discordgo.User
 	appID  string
-	// Whether commands were registered, done once by whichever shard is ready first
+	// Commands are registered once, by the first ready shard.
 	registered bool
 	channels   map[string]*channelState
 	// Last reply time per user, for the user cooldown
 	users map[string]time.Time
-	// Last run per automation id, and the minute a cron automation last fired
+	// Last run and last cron minute per automation ID.
 	lastRun   map[string]time.Time
 	lastCron  map[string]time.Time
 	sem       chan struct{}
@@ -77,11 +77,11 @@ type shard struct {
 	err       string
 }
 
-// What a runner keeps per channel
+// Per-channel runner state.
 type channelState struct {
 	row       db.BotChannel
 	lastReply time.Time
-	// A generation in flight for this channel, so a burst of messages gets one answer at a time
+	// Active generation. Each channel allows one reply at a time.
 	busy bool
 }
 
@@ -135,7 +135,7 @@ func newRunner(m *Manager, bot *v1.Bot, token string) *runner {
 	return r
 }
 
-// Opens every shard this host owns, then keeps them open until stopped
+// Connects this host's shards until stopped.
 func (r *runner) run() {
 	defer close(r.done)
 	rows, err := r.m.DB.ListBotChannels(r.ctx, r.id)
@@ -212,7 +212,7 @@ func (r *runner) run() {
 		sh.sess = sess
 		r.mu.Unlock()
 		if err := r.open(sh); err != nil {
-			// A refused token or intent stops the whole bot, anything else is tried again on a backoff
+			// Token and intent errors stop the bot. Retry other errors with backoff.
 			if strings.Contains(err.Error(), "discord refused") {
 				r.fail(err.Error())
 				r.closeAll()
@@ -237,7 +237,7 @@ func (r *runner) open(sh *shard) error {
 	return nil
 }
 
-// Opens a shard again until it connects or the bot stops
+// Retries shard connections until connected or stopped.
 func (r *runner) reopen(sh *shard) {
 	for {
 		select {
@@ -290,7 +290,7 @@ func (r *runner) connected() bool {
 	return false
 }
 
-// Any connected shard's session, for work that is not tied to an event
+// Returns a connected session for work outside an event handler.
 func (r *runner) anySession() (session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -326,7 +326,7 @@ func (r *runner) shardError(sh *shard, message string) {
 	r.refreshState()
 }
 
-// Works out the bot's state from its shards and publishes it with their status
+// Derives and publishes bot state from shard status.
 func (r *runner) refreshState() {
 	r.mu.Lock()
 	up, total := 0, len(r.shards)
@@ -389,7 +389,7 @@ func (r *runner) onReady(shardID int, ready *discordgo.Ready) {
 	if register {
 		go r.registerCommands(r.sessionOf(shardID))
 	}
-	// What Discord recommends is shown beside what the bot opened, so a bot outgrowing its shards says so
+	// Compare actual shard count with Discord's recommendation.
 	if sess := r.sessionOf(shardID); sess != nil && shardID == r.firstShard() {
 		go func() {
 			if gw, err := sess.GatewayBot(); err == nil {
@@ -409,7 +409,7 @@ func (r *runner) firstShard() int {
 	return r.shards[0].id
 }
 
-// Refreshes shard latencies and guild counts on a slow clock
+// Periodically refreshes shard latencies and guild counts.
 func (r *runner) heartbeat() {
 	for {
 		select {
@@ -468,7 +468,7 @@ func (r *runner) presence() {
 		}
 		wait := time.Duration(p.GetRotateSeconds()) * time.Second
 		if len(lines) <= 1 {
-			// One line or none is set once, then again on each reconnect
+			// Static activity is set once and restored on reconnect.
 			wait = time.Minute
 		}
 		select {
@@ -479,7 +479,7 @@ func (r *runner) presence() {
 	}
 }
 
-// Sets the activity line now, the way a presence automation asks
+// Updates activity for a presence automation.
 func (r *runner) setActivity(text string) error {
 	sess, err := r.anySession()
 	if err != nil {
@@ -506,14 +506,14 @@ func activityOf(kind, text string) *discordgo.Activity {
 	return a
 }
 
-// Keeps one line of activity
+// Records an activity entry.
 func (r *runner) activity(level, kind, message, guildID, channelID, persona, trace string) {
 	r.m.record(r, &v1.BotActivity{Level: level, Kind: kind, Message: message, GuildId: guildID, ChannelId: channelID, Persona: persona, Trace: trace})
 }
 
 func (r *runner) count(fn func(*v1.BotStatus)) { r.m.status(r, fn) }
 
-// The persona an id names, the first when the id is empty or unknown
+// Finds a persona by ID, defaulting to the first.
 func (r *runner) persona(id string) *v1.Persona {
 	if p, ok := r.personaBy[id]; ok && id != "" {
 		return p
@@ -521,7 +521,7 @@ func (r *runner) persona(id string) *v1.Persona {
 	return r.spec.GetPersonas()[0]
 }
 
-// The persona named by name, without case
+// Finds a persona by name, ignoring case.
 func (r *runner) personaNamed(name string) (*v1.Persona, bool) {
 	for _, p := range r.spec.GetPersonas() {
 		if strings.EqualFold(p.GetName(), strings.TrimSpace(name)) {
@@ -531,7 +531,7 @@ func (r *runner) personaNamed(name string) (*v1.Persona, bool) {
 	return nil, false
 }
 
-// The channel's state, made on first sight
+// Returns channel state, creating it if needed.
 func (r *runner) channel(channelID string) *channelState {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -599,7 +599,7 @@ func channelKind(t discordgo.ChannelType) string {
 	return ""
 }
 
-// Posts to a channel now, through a persona, as text or as a generation from the content
+// Posts persona text or generates a reply in the channel.
 func (r *runner) sendNow(ctx context.Context, req *v1.SendBotMessageRequest) (*v1.SendBotMessageResponse, error) {
 	sess, err := r.anySession()
 	if err != nil {
@@ -694,15 +694,15 @@ func (r *runner) sendNow(ctx context.Context, req *v1.SendBotMessageRequest) (*v
 	return out, nil
 }
 
-// Refuses a file Discord would refuse
+// Checks the Discord upload limit.
 func (r *runner) fits(f *file) error {
 	if limit := r.spec.GetMedia().GetMaxUploadBytes(); uint64(len(f.data)) > limit {
-		return fmt.Errorf("%s is %d bytes, over the %d byte upload limit; raise media.max_upload_bytes on a boosted server or ask for a shorter or smaller video", f.name, len(f.data), limit)
+		return fmt.Errorf("%s is %d bytes, exceeding the %d byte upload limit. Request a smaller video or raise media.max_upload_bytes if your server allows it", f.name, len(f.data), limit)
 	}
 	return nil
 }
 
-// Snowflake ids order by time, so the newer of two is the larger number
+// Snowflake IDs increase with time.
 func newer(a, b string) bool {
 	x, _ := strconv.ParseUint(a, 10, 64)
 	y, _ := strconv.ParseUint(b, 10, 64)

@@ -1,4 +1,3 @@
-// Copies text through the clipboard API, or a hidden textarea outside a secure context, saying whether it took
 export async function copyText(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard && window.isSecureContext) {
@@ -20,7 +19,6 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-// Starts a browser download of a URL the daemon answers with an attachment, the page staying where it is
 export function downloadUrl(url: string, name: string) {
   const a = document.createElement('a');
   a.href = url;

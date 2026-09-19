@@ -15,7 +15,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/sources"
 )
 
-// Picks the newest release of a repository at a source, the default revision it lists
+// Returns the source's default release revision.
 func latestTag(ctx context.Context, srcs *sources.Registry, sourceID, repo string) (string, error) {
 	if srcs == nil {
 		return "", fmt.Errorf("no sources to read releases from")
@@ -39,7 +39,7 @@ func latestTag(ctx context.Context, srcs *sources.Registry, sourceID, repo strin
 	return "", fmt.Errorf("no release with a tag in %s at %s", repo, src.Spec().GetId())
 }
 
-// Lands a URL at dest through the transfer limits, resumed and retried, reusing a complete file
+// Downloads with transfer limits, resume, and retries, reusing complete files.
 func (e *Engine) download(ctx context.Context, rawURL, dest string, out io.Writer) error {
 	if info, err := os.Stat(dest); err == nil && info.Size() > 0 {
 		fmt.Fprintf(out, "using cached %s\n", filepath.Base(dest))

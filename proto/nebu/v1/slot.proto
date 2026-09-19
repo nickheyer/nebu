@@ -21,12 +21,9 @@ enum SlotState {
   SLOT_STATE_FAILED = 6;
 }
 
-// A reservation of devices and memory budget with one public name
-//
-// The request is what the slot is meant to serve. A run or swap sets it, an
-// evict clears it, and a failure keeps it so the slot can be relaunched. A
-// slot with no request is empty; one with a request comes back after a
-// daemon restart.
+// Named device and memory reservation.
+// Run and swap set the request. Eviction clears it. Failures retain it for retry.
+// Slots with a request restart with the daemon.
 message Slot {
   string id = 1;
   string name = 2;
@@ -42,13 +39,13 @@ message Slot {
   string task_id = 12;
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp updated_at = 14;
-  // Limits the slot's route enforces
+  // Route limits.
   Policy policy = 15;
-  // Where the slot sits in the list, one based, the order slots relaunch in
+  // List and relaunch position, starting at one.
   uint32 position = 16;
-  // How requests through the slot's route are shaped
+  // Request transformations.
   Profile profile = 17;
-  // Which memory the model goes into
+  // Model memory placement.
   Placement placement = 18;
 }
 
@@ -61,7 +58,7 @@ message CreateSlotRequest {
   string runtime_id = 5;
   map<string, string> params = 6;
   Policy policy = 7;
-  // Position in the list, appended after the last slot when zero
+  // List position. Zero appends to the end.
   uint32 position = 8;
   Profile profile = 9;
   Placement placement = 10;
@@ -91,10 +88,9 @@ message GetSlotResponse {
   Instance instance = 2;
 }
 
-// Changes slot settings, applied on the next run
-//
-// The name, limits, and profile reach the gateway at once. Devices, memory,
-// the runtime, and params apply to the next run or swap.
+// Update slot settings.
+// Name, limits, and profile apply immediately. Devices, memory, runtime, and
+// parameters apply on the next run or swap.
 message UpdateSlotRequest {
   string id = 1;
   string description = 2;
@@ -103,9 +99,9 @@ message UpdateSlotRequest {
   string runtime_id = 5;
   map<string, string> params = 6;
   Policy policy = 7;
-  // The public name, kept when empty
+  // Public name. Empty keeps the current name.
   string name = 8;
-  // Position in the list, kept when zero
+  // List position. Zero keeps the current position.
   uint32 position = 9;
   Profile profile = 10;
   Placement placement = 11;
@@ -127,7 +123,7 @@ message DeleteSlotResponse {
   Slot slot = 1;
 }
 
-// Replaces what a slot serves without dropping its public name
+// Replace the model while keeping the slot's public name.
 message SwapRequest {
   string slot_id = 1;
   RunRequest run = 2;
@@ -151,7 +147,7 @@ message EvictSlotResponse {
   Slot slot = 1;
 }
 
-// Runs the slot's request again, after a failure or when nothing came back after a restart
+// Relaunch the slot's saved request.
 message RelaunchSlotRequest {
   string id = 1;
 }

@@ -21,7 +21,7 @@ import (
 //go:embed migrations/*.sql migrations/atlas.sum
 var migrationFiles embed.FS
 
-// The schema atlas wrote the migrations from, what the live database is held to
+// Target schema for Atlas migrations and drift checks.
 //
 //go:embed schema.sql
 var desiredSchema string
@@ -38,15 +38,15 @@ func IsNotFound(err error) bool { return errors.Is(err, ErrNotFound) }
 type DB struct {
 	sql  *sql.DB
 	path string
-	// Where a database from before the atlas migrations was moved, empty when none was
+	// Backup path for a pre-Atlas database, or empty.
 	SetAside string
-	// Ways the live schema differs from schema.sql, empty when none
+	// Differences between the live schema and schema.sql.
 	Drift []string
-	// How a database whose revisions the migration directory no longer holds was brought to its head, empty when it was not
+	// Recovery details for revisions missing from the migration directory, or empty.
 	Baselined string
 }
 
-// Opens or creates the database and brings it onto the embedded migration head
+// Opens the database and applies embedded migrations.
 func Open(path string) (*DB, error) {
 	aside, err := setAsideLegacy(path)
 	if err != nil {
@@ -69,10 +69,8 @@ func Open(path string) (*DB, error) {
 // Closes the database
 func (d *DB) Close() error { return d.sql.Close() }
 
-// Moves a database the hand rolled runner wrote out of the way, returning where it went
-//
-// Its migrations no longer exist, so it cannot be brought forward, and a
-// fresh database is what every nebu before release starts from.
+// Backs up databases from the old migration runner and returns the backup path.
+// Those migrations are unavailable, so startup creates a new database.
 func setAsideLegacy(path string) (string, error) {
 	if _, err := os.Stat(path); err != nil {
 		return "", nil
@@ -84,7 +82,7 @@ func setAsideLegacy(path string) (string, error) {
 	var legacy int
 	err = probe.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&legacy)
 	if err == nil && legacy > 0 {
-		// The write ahead log folds back into the file so the copy is whole
+		// Checkpoint the WAL before copying the database.
 		probe.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
 	}
 	probe.Close()
@@ -141,10 +139,9 @@ func (d *DB) migrate(ctx context.Context) error {
 	return nil
 }
 
-// Brings a database the directory's revisions no longer describe onto the head in place, rows kept
-//
-// The init migration is rewritten until release, so a recorded version can vanish
-// from the directory, and atlas would replay CREATE TABLE onto a populated file.
+// Reconciles databases whose recorded revisions are absent from the directory.
+// The init migration may change before release, so preserve existing rows
+// instead of replaying CREATE TABLE statements.
 func baseline(ctx context.Context, drv migrate.Driver, conn *sql.Conn, path string, dir migrate.Dir, store revisionStore) (string, error) {
 	all, err := dir.Files()
 	if err != nil {
@@ -211,11 +208,8 @@ func baseline(ctx context.Context, drv migrate.Driver, conn *sql.Conn, path stri
 	return fmt.Sprintf("%s, so the schema was brought to %s in place with %d changes", why, head.Version(), len(changes)), nil
 }
 
-// Runs a plan for the changes as one transaction, behind a dated copy of the file
-//
-// A table rebuilt in place is a create, copy, drop, and rename, so the file is
-// copied first and the statements commit together, the foreign key pragmas
-// atlas wraps them in staying outside where they take effect.
+// Backs up the database and applies schema changes in one transaction.
+// Keep Atlas foreign-key pragmas outside the transaction so they take effect.
 func applyChanges(ctx context.Context, drv migrate.Driver, conn *sql.Conn, path string, changes []schema.Change) error {
 	plan, err := drv.PlanChanges(ctx, "baseline", changes)
 	if err != nil {
@@ -260,7 +254,7 @@ func applyChanges(ctx context.Context, drv migrate.Driver, conn *sql.Conn, path 
 	return run(after)
 }
 
-// Writes the database as it stands to a dated copy beside it, the log folded in first
+// Checkpoints the WAL and creates a dated database backup.
 func copyAside(ctx context.Context, conn *sql.Conn, path, why string) (string, error) {
 	if path == "" || path == ":memory:" {
 		return "", nil
@@ -293,7 +287,7 @@ func migrationDir() (*migrate.MemDir, error) {
 	return dir, nil
 }
 
-// The changes that take the live schema to schema.sql, none when they agree
+// Schema changes needed to match schema.sql.
 func schemaChanges(ctx context.Context, live migrate.Driver) ([]schema.Change, error) {
 	stmts, err := migrate.NewLocalFile("schema.sql", []byte(desiredSchema)).Stmts()
 	if err != nil {
@@ -325,7 +319,7 @@ func schemaChanges(ctx context.Context, live migrate.Driver) ([]schema.Change, e
 	return live.RealmDiff(have, want)
 }
 
-// Puts schema changes into words, one line each
+// Formats one schema change per line.
 func describe(changes []schema.Change) []string {
 	var out []string
 	for _, c := range changes {

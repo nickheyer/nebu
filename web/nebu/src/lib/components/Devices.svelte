@@ -5,8 +5,6 @@
   import Meters, { type Meter } from './ui/Meters.svelte';
   import type { SizeItem } from './ui/SizeBar.svelte';
 
-  // One meter per device with the memory it draws on: a card's own pool, the system memory for a CPU, one
-  // unified pool for both on Apple silicon; the bar shows what nebu's instances hold apart from the rest
   let { host }: { host: HostProfile } = $props();
 
   function items(total: bigint, free: bigint, pool?: MemoryPool): SizeItem[] {
@@ -46,7 +44,7 @@
         facts: { id: d.id, vendor: d.vendor, ...d.facts }
       };
     });
-    // Memory probed with no processor probed to hang it on still gets a meter
+    // Show memory pools even when no matching processor was found.
     for (const p of loose) {
       if (!users.has(p.id)) {
         out.push({ id: p.id, icon: MemoryStick, name: p.kind === PoolKind.UNIFIED ? 'Unified memory' : 'System memory', total: p.totalBytes, items: items(p.totalBytes, p.freeBytes, p), facts: {} });

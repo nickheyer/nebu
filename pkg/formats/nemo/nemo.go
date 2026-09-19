@@ -1,11 +1,6 @@
-// Package nemo reads NVIDIA NeMo checkpoints, packed as .nemo tar files or laid out as directories.
-//
-// A NeMo 1 checkpoint is an uncompressed tar holding model_config.yaml beside
-// its weights, which are one torch.save pickle, a zarr tree, or a torch
-// distributed checkpoint. A NeMo 2 checkpoint is a directory with the model
-// config under context/ and a torch distributed checkpoint under weights/.
-// Both are read through ranged reads of headers and metadata; weight bytes
-// are never fetched.
+// Package nemo reads NeMo checkpoints without fetching weight data. NeMo 1 archives contain
+// model_config.yaml and torch, zarr, or distributed weights. NeMo 2 directories contain context/
+// configs and distributed weights under weights/.
 package nemo
 
 import (
@@ -233,12 +228,8 @@ func archName(target string) string {
 	return strings.ToLower(name)
 }
 
-// Splits tensors Megatron stacked across layers into one entry per layer
-//
-// Megatron core stores every layer's copy of a parameter as one tensor whose
-// first dimension counts layers, named decoder.layers.<parameter> without a
-// layer index. Splitting them gives the planner per layer groups and keeps
-// totals exact.
+// Splits Megatron tensors stacked on their first dimension into per-layer entries, preserving total
+// size.
 func expandLayers(tensors []shaped, layers int) []*v1.TensorInfo {
 	out := make([]*v1.TensorInfo, 0, len(tensors))
 	for _, s := range tensors {
@@ -268,8 +259,8 @@ func expandLayers(tensors []shaped, layers int) []*v1.TensorInfo {
 	return out
 }
 
-// Splits a stacked layer tensor name at the layers segment: decoder.layers.mlp.weight becomes the
-// prefix decoder.layers. and the tail mlp.weight, false when a layer number already follows layers
+// Splits decoder.layers.<parameter> into the layer prefix and parameter name. Rejects names with an
+// existing layer index.
 func stackedName(name string) (head, tail string, ok bool) {
 	seg := strings.Split(name, ".")
 	for i := 0; i+1 < len(seg); i++ {
@@ -337,10 +328,7 @@ func distTensors(data []byte) ([]shaped, error) {
 	return out, nil
 }
 
-// Reads the dtype out of a TensorProperties however it was pickled
-//
-// The dataclass arrives as a dict state, as a slot tuple state, or as
-// positional arguments, and the dtype is the one torch global among them.
+// Extracts the torch dtype from TensorProperties dict state, slot state, or constructor arguments.
 func propertiesDtype(v any) string {
 	obj, ok := v.(*pickle.Object)
 	if !ok {

@@ -32,12 +32,8 @@ var (
 	ownJob windows.Handle
 )
 
-// Claims a console the children share and a job they inherit, or answers a break request
-//
-// A break only reaches processes on the caller's console, so a daemon started
-// without one takes a hidden console before it launches anything. A process on
-// another console, one adopted from an earlier daemon, is reached by running this
-// binary again with breakEnv set, which attaches to that console and breaks there.
+// Creates a hidden console and inherited job for child processes. To interrupt adopted processes on
+// another console, starts a helper with breakEnv that attaches and sends the break.
 func Init() {
 	if pid, err := strconv.Atoi(os.Getenv(breakEnv)); err == nil {
 		procFreeConsole.Call()
@@ -83,7 +79,7 @@ func attr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP}
 }
 
-// Puts the process in a job object of its own, so its tree ends as one, nested in ours when we have one
+// Creates a job for the process tree, nested in the daemon job when available.
 func adopt(pid int) *Tree {
 	t := &Tree{pid: pid}
 	job := killOnCloseJob()

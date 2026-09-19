@@ -29,7 +29,7 @@ const (
 // Returned when a task id is not known
 var ErrUnknownTask = errors.New("unknown task")
 
-// Runs tasks, fans progress out, writes through to the store
+// Runs tasks, publishes progress, and stores history.
 type Manager struct {
 	base   context.Context
 	log    *slog.Logger
@@ -60,7 +60,7 @@ type Handle struct {
 	done atomic.Uint64
 }
 
-// Builds a manager whose tasks outlive requests and survive restarts
+// Creates a manager whose tasks outlive requests and whose history survives restarts.
 func New(base context.Context, log *slog.Logger, store *db.DB, bus *events.Bus) *Manager {
 	return &Manager{base: base, log: log, store: store, events: bus, byID: map[string]*entry{}}
 }
@@ -174,14 +174,14 @@ func (m *Manager) stored(id string) (*v1.Task, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	// Rows written before lines were cleaned still have to marshal
+	// Sanitize legacy log rows for serialization.
 	for i, l := range logs {
 		logs[i] = launch.Clean(l)
 	}
 	return t, logs, nil
 }
 
-// Lists tasks newest first, live from memory, history from store
+// Lists tasks newest first from memory and stored history.
 func (m *Manager) List(activeOnly bool) []*v1.Task {
 	m.mu.Lock()
 	entries := append([]*entry(nil), m.list...)
@@ -273,7 +273,7 @@ func (m *Manager) Watch(ctx context.Context, id string, send func(*v1.WatchTaskR
 	}
 }
 
-// Waits for a task and reports one that did not succeed as an error
+// Waits for completion and returns an error unless the task succeeded.
 func (m *Manager) WaitOK(ctx context.Context, id string) error {
 	final, err := m.Wait(ctx, id)
 	if err != nil {
@@ -324,7 +324,7 @@ func (m *Manager) entry(id string) (*entry, error) {
 	return e, nil
 }
 
-// Drops the oldest finished tasks beyond history everywhere
+// Trims completed tasks to the history limit in memory and storage.
 func (m *Manager) prune() {
 	finished := 0
 	for _, e := range m.list {
@@ -360,7 +360,7 @@ func (e *entry) update(fn func(*v1.Task), force bool) {
 	e.mu.Unlock()
 }
 
-// Broadcasts now, or once the interval since the last broadcast has passed
+// Broadcasts immediately or after the throttle interval.
 func (e *entry) notifyLocked(force bool) {
 	if force || time.Since(e.last) >= notifyInterval {
 		e.broadcastLocked()
@@ -389,7 +389,7 @@ func (e *entry) broadcastLocked() {
 	}
 }
 
-// The task as it stands, for code that records which task did its work
+// Current task snapshot.
 func (h *Handle) Task() *v1.Task { return h.e.snapshot() }
 
 // Sets done, total, and message at once

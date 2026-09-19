@@ -36,8 +36,8 @@ func (VLLM) Unmet(h *v1.HostProfile) []string {
 
 func (VLLM) Methods() []Method {
 	return []Method{
-		{ID: "adopt", Description: "Records a vllm already on this host; nothing is downloaded or built", Kind: v1.InstallKind_INSTALL_KIND_ADOPTED, Binaries: []string{"vllm"}},
-		{ID: "source", Description: "Installs the vllm wheel from PyPI into its own virtual environment", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "vllm"},
+		{ID: "adopt", Description: "Use an installed vllm", Kind: v1.InstallKind_INSTALL_KIND_ADOPTED, Binaries: []string{"vllm"}},
+		{ID: "source", Description: "Install vllm from PyPI in a virtual environment", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "vllm"},
 	}
 }
 

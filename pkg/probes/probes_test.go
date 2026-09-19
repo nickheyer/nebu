@@ -23,7 +23,6 @@ cpu cores	: 8
 flags		: fpu vme avx2
 `
 
-// The processor's model, flags, and thread count sit on the device and nowhere else
 func TestCPUInfoFactsLiveOnTheDevice(t *testing.T) {
 	res := parseCPUInfo([]byte(cpuinfoSample))
 	if res.Status != v1.ProbeStatus_PROBE_STATUS_OK || len(res.Devices) != 1 || len(res.Facts) != 0 {
@@ -41,7 +40,6 @@ func TestCPUInfoFactsLiveOnTheDevice(t *testing.T) {
 	}
 }
 
-// Every card is a device with its own pool, its driver a fact of the card, nothing repeated on the host
 func TestNvidiaSMIRowsBecomeDevicesAndPools(t *testing.T) {
 	out := "0, NVIDIA GeForce RTX 3080 Ti, GPU-aaaa, 12288, 1000, 11288, 8.6, 580.65.06, 00000000:01:00.0\n1, NVIDIA A100, GPU-bbbb, 40960, 0, 40960, 8.0, 580.65.06, 00000000:02:00.0\n"
 	res := parseNvidiaSMI([]byte(out))
@@ -85,7 +83,6 @@ func TestKVBlocksAndBytes(t *testing.T) {
 	}
 }
 
-// Every shipped probe belongs to some operating system and has an id
 func TestAllProbesAreNamed(t *testing.T) {
 	seen := map[string]bool{}
 	for _, p := range All() {

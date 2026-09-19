@@ -31,12 +31,11 @@ const (
 	maxBody     = 64 << 20
 	modelHeader = "X-Nebu-Model"
 	retryAfter  = "2"
-	// What the Ollama CLI expects from the root before it talks to a server
+	// Root response expected by the Ollama CLI.
 	heartbeat = "Ollama is running"
 )
 
-// Reverse proxy keyed by the model field of each request, answering in
-// the OpenAI, Anthropic, and Ollama wire formats whatever the runtime speaks
+// Routes requests by model and translates OpenAI, Anthropic, and Ollama protocols.
 type Gateway struct {
 	table     *Table
 	keys      []string
@@ -49,13 +48,12 @@ type Gateway struct {
 
 	mu         sync.Mutex
 	transports map[uint32]*http.Transport
-	// Video generations in flight and finished, answered by id
+	// Active and completed video jobs by ID.
 	videos *videoStore
 }
 
-// Builds the gateway, requiring a bearer key when keys exist, with the policy routes inherit and the origins browsers may call from
-//
-// Every request is traced and the newest traces reach the bus.
+// Creates a gateway with bearer keys, default route policy, and allowed origins.
+// Records requests and publishes recent traces.
 func New(table *Table, keys, origins []string, policy *v1.Policy, bus *events.Bus, log *slog.Logger) *Gateway {
 	table.SetDefaults(policy)
 	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing, countRing), transports: map[uint32]*http.Transport{}, videos: newVideoStore()}
@@ -64,10 +62,10 @@ func New(table *Table, keys, origins []string, policy *v1.Policy, bus *events.Bu
 // Returns the request recorder
 func (g *Gateway) Traces() *Recorder { return g.traces }
 
-// Records what the gateway says it is, for clients that ask
+// Sets gateway identity for clients.
 func (g *Gateway) SetVersion(v string) { g.version = v }
 
-// Returns a transport that gives the runtime this long to start answering, one per timeout
+// Caches transports by response header timeout.
 func (g *Gateway) transport(upstreamMs uint32) *http.Transport {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -80,7 +78,7 @@ func (g *Gateway) transport(upstreamMs uint32) *http.Transport {
 	return t
 }
 
-// Records the addresses the gateway answers on and whether they speak TLS
+// Records listener addresses and TLS status.
 func (g *Gateway) SetListeners(listeners []*v1.Listener, tls bool) {
 	g.listeners, g.tls = listeners, tls
 }
@@ -107,14 +105,14 @@ func (g *Gateway) Mount(mux *http.ServeMux) {
 	mux.HandleFunc(sdcppPrefix, g.cors(g.auth(g.proxy)))
 }
 
-// Lets browsers on other origins call the gateway, answering preflights itself
+// Handles CORS headers and preflight requests.
 func (g *Gateway) cors(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin != "" && g.originAllowed(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			// Whatever headers the client's SDK asks to send, the key is what guards the gateway
+			// Allow requested headers. Bearer keys enforce authentication.
 			if asked := r.Header.Get("Access-Control-Request-Headers"); asked != "" {
 				w.Header().Set("Access-Control-Allow-Headers", asked)
 			}
@@ -143,7 +141,7 @@ func (g *Gateway) originAllowed(origin string) bool {
 	return false
 }
 
-// Returns a handler serving only the gateway, its root answering the Ollama CLI's heartbeat
+// Returns the gateway handler with an Ollama heartbeat at root.
 func (g *Gateway) Handler() http.Handler {
 	mux := http.NewServeMux()
 	g.Mount(mux)
@@ -158,7 +156,7 @@ func (g *Gateway) Handler() http.Handler {
 	return mux
 }
 
-// Reads a body up to the cap, answering 413 in the caller's flavor past it and false
+// Reads a bounded body. Oversized requests receive 413 in the client's format.
 func readBody(w http.ResponseWriter, r *http.Request, client Flavor) ([]byte, bool) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 	if err != nil {
@@ -208,7 +206,7 @@ func (g *Gateway) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "models": len(g.table.Ready())})
 }
 
-// Describes one route as a model in the shape the flavor expects
+// Formats a route as a model for the client's protocol.
 func modelEntry(api v1.ApiFlavor, rt *v1.Route) map[string]any {
 	switch api {
 	case v1.ApiFlavor_API_FLAVOR_OLLAMA:
@@ -233,7 +231,7 @@ func modelEntry(api v1.ApiFlavor, rt *v1.Route) map[string]any {
 	}
 }
 
-// What a route answers to: chat and tools for a language model, images and videos as a diffusion runtime lists its modes
+// Reports chat, tool, image, and video capabilities for a route.
 func capabilitiesOf(rt *v1.Route) []string {
 	if rt.GetApi() != v1.ApiFlavor_API_FLAVOR_SDCPP {
 		return []string{"completion", "tools"}
@@ -253,7 +251,7 @@ func capabilitiesOf(rt *v1.Route) []string {
 	return out
 }
 
-// Lists routes as models in the shape the caller's flavor expects
+// Lists routes as models in the client's format.
 func (g *Gateway) models(w http.ResponseWriter, r *http.Request) {
 	api := clientFlavor(r)
 	var routes []*v1.Route
@@ -279,7 +277,7 @@ func (g *Gateway) models(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Answers one model by the name after /v1/models/ in the caller's flavor
+// Returns a model from /v1/models/ in the client's format.
 func (g *Gateway) model(w http.ResponseWriter, r *http.Request) {
 	api := clientFlavor(r)
 	name, _ := url.PathUnescape(strings.TrimPrefix(r.URL.Path, modelsPath+"/"))
@@ -291,7 +289,7 @@ func (g *Gateway) model(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, modelEntry(api, rt))
 }
 
-// Answers Ollama's show with what the route table knows
+// Builds Ollama's show response from route metadata.
 func (g *Gateway) show(w http.ResponseWriter, r *http.Request) {
 	client := flavors[v1.ApiFlavor_API_FLAVOR_OLLAMA]
 	body, ok := readBody(w, r, client)
@@ -326,7 +324,7 @@ func (g *Gateway) about(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"version": g.version})
 }
 
-// Starts the trace of one request: who asked, for what, in which format
+// Starts a request trace with caller, model, and protocol.
 func (g *Gateway) trace(r *http.Request, name string, body []byte, api v1.ApiFlavor) *v1.Trace {
 	t := &v1.Trace{
 		Id:           db.NewID(),
@@ -348,7 +346,7 @@ func (g *Gateway) trace(r *http.Request, name string, body []byte, api v1.ApiFla
 	return t
 }
 
-// Answers a refusal in the client's flavor and closes the trace with it
+// Returns an error in the client's format and closes the trace.
 func (g *Gateway) refuse(w *traceWriter, client Flavor, status int, message, kind string) {
 	w.t.Error = message
 	client.Error(w, status, message, kind)
@@ -356,7 +354,7 @@ func (g *Gateway) refuse(w *traceWriter, client Flavor, status int, message, kin
 
 func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	client := flavorOf(clientFlavor(r))
-	// A video is asked after by its id, not by the model that made it
+	// Video operations use the job ID.
 	if strings.HasPrefix(r.URL.Path, videosPath) && r.Method != http.MethodPost {
 		g.video(rw, r, client)
 		return
@@ -376,7 +374,7 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		t.Status, t.ResponseBytes = uint32(w.status), w.bytes
 		g.traces.Finish(t)
 	}()
-	// A token count is not a request served, so it leaves the route's tally alone
+	// Exclude token counts from served request counters.
 	served := t.GetKind() != v1.TraceKind_TRACE_KIND_COUNT
 	route, policy, release, err := g.table.Acquire(name, served)
 	if errors.Is(err, ErrNoRoute) && name == "" {
@@ -408,7 +406,7 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t.InstanceId, t.SlotId, t.UpstreamApi = route.GetInstanceId(), route.GetSlotId(), route.GetApi()
-	// An image or a video is made through the runtime's job API, the route held until the job ends
+	// Hold the route while the native media job runs.
 	if t.GetKind() == v1.TraceKind_TRACE_KIND_IMAGE || t.GetKind() == v1.TraceKind_TRACE_KIND_VIDEO {
 		g.media(w, r, body, name, route, policy, release)
 		return
@@ -420,20 +418,20 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mode := g.table.SystemMode(route)
-	// A request in the runtime's own format passes through, any other is translated both ways
+	// Translate when client and runtime protocols differ.
 	if clientFlavor(r) != route.GetApi() || r.URL.Path == anthropicCount {
 		t.Translated = true
 		g.translate(w, r, body, name, route.GetServed(), mode, target, policy, client, flavorOf(route.GetApi()))
 		return
 	}
-	// The runtime answers to its own name, so a route named otherwise rewrites the model field
+	// Replace the route alias with the runtime's model name.
 	if served := route.GetServed(); served != "" && served != name {
 		if body, err = renameModel(body, served); err != nil {
 			g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
 			return
 		}
 	}
-	// fold system messages and rewrite the messages of a JSON body
+	// Apply the route's system message policy.
 	if bytes.HasPrefix(bytes.TrimSpace(body), []byte("{")) {
 		shaped, err := rewriteSystem(body, mode)
 		if err != nil {
@@ -445,8 +443,8 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		}
 		body = shaped
 	}
-	// The answer is read on its way past so the trace carries its tokens and text; a path the gateway
-	// does not know, or a body its flavor cannot read, keeps the head of the response instead
+	// Parse tokens and text into the trace during proxying. Keep a response prefix
+	// for unsupported paths or unreadable bodies.
 	upstream := flavorOf(route.GetApi())
 	chat, perr := (*Chat)(nil), error(nil)
 	if t.Kind != v1.TraceKind_TRACE_KIND_OTHER {
@@ -461,7 +459,7 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		w.tee = raw
 		defer func() { t.Response = raw.buf.String() }()
 	}
-	// The whole exchange ends at the request timeout, so a hung runtime never holds a request in flight forever
+	// Apply the request timeout to the entire exchange.
 	ctx := r.Context()
 	if d := policy.GetRequestTimeoutMs(); d > 0 {
 		var cancel context.CancelFunc
@@ -485,7 +483,7 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	rp.ServeHTTP(w, r)
 }
 
-// Posts a rendered request to the runtime under the policy's timeouts
+// Sends a rendered request with policy timeouts.
 func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []byte, stream bool, policy *v1.Policy) (*http.Response, context.CancelFunc, error) {
 	cancel := context.CancelFunc(func() {})
 	if d := policy.GetRequestTimeoutMs(); d > 0 {
@@ -508,7 +506,7 @@ func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []
 	return resp, cancel, nil
 }
 
-// Serves a request written in one flavor from a runtime that speaks another
+// Translates requests and responses between protocols.
 func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, served string, mode v1.SystemMessages, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
 	t := w.t
 	chat, err := client.ParseRequest(r.URL.Path, body)
@@ -516,7 +514,7 @@ func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, 
 		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
-	// Upstream hears the runtime's own name, the client hears the one it asked for
+	// Use the runtime model name upstream and the requested alias in responses.
 	if served != "" {
 		chat.Model = served
 	}
@@ -581,7 +579,7 @@ func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, 
 	g.answer(w, client, chat, res)
 }
 
-// Writes a finished answer in the client's flavor
+// Writes a complete response in the client's format.
 func (g *Gateway) answer(w http.ResponseWriter, client Flavor, chat *Chat, res *Result) {
 	answer, err := client.RenderResult(chat, res)
 	if err != nil {
@@ -593,7 +591,7 @@ func (g *Gateway) answer(w http.ResponseWriter, client Flavor, chat *Chat, res *
 	w.Write(answer)
 }
 
-// Answers a failed exchange with the runtime, a timeout as 504 and anything else as 502
+// Maps runtime exchange timeouts to 504 and other failures to 502.
 func (g *Gateway) upstreamError(w http.ResponseWriter, t *v1.Trace, client Flavor, name string, err error) {
 	g.log.Warn("gateway upstream", "model", name, "err", err)
 	message := "upstream error: " + err.Error()
@@ -608,7 +606,7 @@ func (g *Gateway) upstreamError(w http.ResponseWriter, t *v1.Trace, client Flavo
 	client.Error(w, status, message, kind)
 }
 
-// Answers a token count from the runtime's tokenizer when it has one, an estimate otherwise
+// Uses the runtime tokenizer when available, otherwise estimates tokens.
 func (g *Gateway) count(w *traceWriter, r *http.Request, chat *Chat, name string, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
 	res := &Result{Model: name}
 	n, err := g.countUpstream(r.Context(), chat, target, policy, upstream)
@@ -648,7 +646,7 @@ func (g *Gateway) countUpstream(ctx context.Context, chat *Chat, target *url.URL
 	return res.In, nil
 }
 
-// Fetches every image a message names by URL so a flavor that carries only bytes can send it
+// Fetches image URLs for protocols that require image bytes.
 func (g *Gateway) inlineImages(ctx context.Context, chat *Chat, policy *v1.Policy) error {
 	client := &http.Client{Transport: g.transport(policy.GetUpstreamTimeoutMs())}
 	for mi := range chat.Messages {
@@ -683,7 +681,7 @@ func (g *Gateway) inlineImages(ctx context.Context, chat *Chat, policy *v1.Polic
 	return nil
 }
 
-// Rewrites the model field of a JSON body, the rest kept as the client sent it
+// Rewrites the JSON model field, preserving other fields.
 func renameModel(body []byte, model string) ([]byte, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
@@ -717,7 +715,7 @@ func modelName(r *http.Request, body []byte) string {
 			return probe.Model
 		}
 	}
-	// An image edit arrives as a form, its model a field among the files
+	// Image edits carry the model in a multipart field.
 	if form, err := parseForm(r, body); err == nil {
 		return form.value("model")
 	}
@@ -730,9 +728,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-// Follows redirects that stay on the upstream, so a backend that answers a
-// path with a redirect to its trailing slash twin, as FastAPI does, is served
-// instead of handing the client a Location on a loopback port
+// Follows same-upstream redirects, including trailing-slash redirects, to keep
+// backend loopback URLs out of client responses.
 type sameHostRedirects struct {
 	next http.RoundTripper
 	body []byte

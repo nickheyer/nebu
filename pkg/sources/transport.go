@@ -15,7 +15,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// Transport kinds, the names providers use them by and config fields are grouped under
+// Transport IDs used by providers and config fields.
 const (
 	TransportHTTP         = "http"
 	TransportDistribution = "distribution"
@@ -24,29 +24,20 @@ const (
 	TransportHFCLI        = "hfcli"
 )
 
-// Moves bytes and listings between a source and nebu, one Go type per protocol
-//
-// A locator names what to move in the transport's own terms: a URL or a path
-// under the endpoint for HTTP, repo:ref or repo@digest for a registry, a path
-// under the directory for a filesystem, repo@ref/path for git and the
-// Hugging Face CLI. Every transport opens and reads; one that cannot list
-// answers ErrUnsupported.
+// Transport for artifact listings and reads. Locators use protocol-specific forms: HTTP URLs,
+// registry repo:ref or repo@digest, filesystem paths, or repo@ref/path for git and hf. Unsupported
+// listing returns ErrUnsupported.
 type Transport interface {
-	// Lists what sits under a locator as artifacts with the sizes and digests the protocol carries
+	// Lists artifacts with available sizes and digests.
 	List(ctx context.Context, locator string) ([]*v1.Artifact, error)
-	// Opens one object for ranged reads, size is what the caller knows, zero when nothing
+	// Opens ranged reads. Size is zero if unknown.
 	Open(ctx context.Context, locator string, size int64) (Blob, error)
 	// Reads one small object whole, up to max bytes
 	Read(ctx context.Context, locator string, max int64) ([]byte, error)
 }
 
-// One transport a provider moves bytes through, with the settings it exposes
-//
-// Fields lists the transport's settings the provider offers with their
-// defaults; a setting left out is not offered. The primary use has no name
-// and owns the bare field names; every other use prefixes its fields with
-// its name, so a registry beside an API has registry_endpoint. Inherit names
-// primary settings the use reads as its own, so one setting turns it on.
+// Provider transport and exposed settings. Primary settings have bare names. Named transports
+// prefix fields, such as registry_endpoint. Inherit reuses selected primary settings.
 type Use struct {
 	Kind     string
 	Name     string
@@ -63,7 +54,7 @@ func (u Use) prefix() string {
 	return u.Name + "_"
 }
 
-// Key a use is looked up by, the kind for the primary one
+// Lookup key, using the kind for the primary transport.
 func (u Use) key() string {
 	if u.Name == "" {
 		return u.Kind
@@ -96,16 +87,16 @@ var transportFields = map[string][]fieldDef{
 		{"username_env", "Username variable", "Environment variable holding the user name sent with the token", v1.ConfigType_CONFIG_TYPE_ENV},
 	},
 	TransportHFCLI: {
-		{"command", "CLI command", "hf, huggingface-cli, or a path to one; downloads go over HTTP when empty", v1.ConfigType_CONFIG_TYPE_STRING},
+		{"command", "CLI command", "hf, huggingface-cli, or an executable path. Empty uses HTTP", v1.ConfigType_CONFIG_TYPE_STRING},
 	},
 }
 
-// What a transport is built from
+// Resolved transport configuration.
 type transportEnv struct {
 	cacheDir string
 }
 
-// Builds a transport of one kind from the use's resolved settings by bare name
+// Builds a transport from resolved settings.
 var transportConstructors = map[string]func(cfg map[string]string, env transportEnv) (Transport, error){
 	TransportHTTP:         newHTTPTransport,
 	TransportDistribution: newDistributionTransport,
@@ -181,8 +172,7 @@ func checkField(f *v1.ConfigField, value string) (string, error) {
 	return value, nil
 }
 
-// Overlays a source's settings on the provider's defaults, refusing unknown
-// names and values that do not fit their field
+// Applies source overrides to provider defaults and validates fields.
 func resolveConfig(fields []*v1.ConfigField, values map[string]string) (map[string]string, error) {
 	known := map[string]*v1.ConfigField{}
 	out := make(map[string]string, len(fields))
@@ -221,7 +211,7 @@ func fieldNames(fields []*v1.ConfigField) []string {
 	return out
 }
 
-// Reads the value of the environment variable a setting names, empty when it names none
+// Reads the configured environment variable, or returns empty.
 func envValue(cfg map[string]string, name string) string {
 	if v := cfg[name]; v != "" {
 		return os.Getenv(v)

@@ -53,7 +53,7 @@ func TestTableLifecycle(t *testing.T) {
 	if got, _ := table.Lookup("main"); got.GetInFlight() != 1 || got.GetRequests() != 1 {
 		t.Fatalf("lookup counters %v", got)
 	}
-	// A token count holds a place in flight but is not a request served
+	// Token counts occupy an in-flight slot without incrementing served requests.
 	if _, _, releaseCount, err := table.Acquire("main", false); err != nil {
 		t.Fatalf("count acquire %v", err)
 	} else if table.InFlight("i1") != 2 || table.Requests() != 1 {

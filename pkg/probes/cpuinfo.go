@@ -24,14 +24,14 @@ func (p cpuinfo) Run(context.Context) host.Result {
 	return parseCPUInfo(data)
 }
 
-// One CPU device per procfs listing: the first logical processor names the package, the block count is its threads
+// Uses the first processor's model and counts logical processor blocks as threads.
 func parseCPUInfo(data []byte) host.Result {
 	blocks := kvBlocks(data)
 	if len(blocks) == 0 {
 		return skipped("/proc/cpuinfo lists no processors")
 	}
 	first := blocks[0]
-	// The first logical processor stands for the package; every block of a package repeats its model
+	// Processor blocks repeat the package model.
 	device := &v1.Device{
 		Id:     "cpu-" + first["physical id"],
 		Kind:   v1.DeviceKind_DEVICE_KIND_CPU,

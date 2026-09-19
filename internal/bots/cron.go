@@ -7,14 +7,14 @@ import (
 	"time"
 )
 
-// A five field cron line: minute, hour, day of month, month, day of week, each a set of allowed values
+// Allowed values for cron's minute, hour, day, month, and weekday fields.
 type cronLine struct {
 	minute, hour, dom, month, dow [64]bool
-	// Whether the day fields were both given, in which case either matching is enough, as cron has it
+	// When both day fields are restricted, either may match.
 	domAny, dowAny bool
 }
 
-// Reads a cron line, taking *, lists, ranges, and steps in every field
+// Parses cron wildcards, lists, ranges, and steps.
 func parseCron(s string) (*cronLine, error) {
 	fields := strings.Fields(s)
 	if len(fields) != 5 {
@@ -51,7 +51,7 @@ func parseCron(s string) (*cronLine, error) {
 	return c, nil
 }
 
-// Fills the set from one field, reporting whether the field was a bare star
+// Parses field values and reports whether the field was a wildcard.
 func parseCronField(field string, min, max int, names map[string]int, set *[64]bool) (bool, error) {
 	star := false
 	for _, part := range strings.Split(field, ",") {
@@ -106,14 +106,14 @@ func cronValue(s string, names map[string]int) (int, error) {
 	return v, nil
 }
 
-// Whether the line names this minute
+// Reports whether the schedule matches this minute.
 func (c *cronLine) matches(t time.Time) bool {
 	if !c.minute[t.Minute()] || !c.hour[t.Hour()] || !c.month[int(t.Month())] {
 		return false
 	}
 	dom := c.dom[t.Day()]
 	dow := c.dow[int(t.Weekday())]
-	// With both day fields restricted either suffices, as cron has always had it
+	// Restricted day fields use OR semantics.
 	if !c.domAny && !c.dowAny {
 		return dom || dow
 	}

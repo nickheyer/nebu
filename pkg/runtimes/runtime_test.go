@@ -19,7 +19,6 @@ func registry(t *testing.T) *Registry {
 	return r
 }
 
-// Every shipped runtime describes itself, every param has a label, and every param the planner solves says in words what auto means
 func TestShippedRuntimesAreComplete(t *testing.T) {
 	r := registry(t)
 	if len(r.List()) != 5 {
@@ -53,7 +52,7 @@ func TestShippedRuntimesAreComplete(t *testing.T) {
 	}
 }
 
-// A runtime shaped by a test, so the registry's checks can be exercised
+// Configurable runtime for registry validation tests.
 type shaped struct {
 	LlamaCpp
 	id      string
@@ -133,7 +132,6 @@ func TestResolveAndFlags(t *testing.T) {
 	}
 }
 
-// The facts a rule reads come from the devices the probes found, never from a host fact repeating them
 func TestDeviceFactsFeedRules(t *testing.T) {
 	h := &v1.HostProfile{Os: "windows", Arch: "amd64", Devices: []*v1.Device{
 		{Id: "c0", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Facts: map[string]string{"threads": "16"}},
@@ -170,7 +168,7 @@ func TestDeviceFactsFeedRules(t *testing.T) {
 	if !Accepts(LlamaCpp{}, "gguf", v1.ModelKind_MODEL_KIND_LANGUAGE) || Accepts(LlamaCpp{}, "safetensors", v1.ModelKind_MODEL_KIND_LANGUAGE) || Accepts(LlamaCpp{}, "gguf", v1.ModelKind_MODEL_KIND_DIFFUSION) {
 		t.Fatal("accepts")
 	}
-	// A diffusion runtime takes diffusion models alone, an unspecified kind being a language model, and no runtime takes a component
+	// Match runtime model kinds, default unspecified to language, and reject components.
 	if !Accepts(SDCpp{}, "gguf", v1.ModelKind_MODEL_KIND_DIFFUSION) || Accepts(SDCpp{}, "gguf", v1.ModelKind_MODEL_KIND_UNSPECIFIED) || Accepts(SDCpp{}, "gguf", v1.ModelKind_MODEL_KIND_COMPONENT) || Accepts(LlamaCpp{}, "gguf", v1.ModelKind_MODEL_KIND_COMPONENT) {
 		t.Fatal("kinds")
 	}

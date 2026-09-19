@@ -20,7 +20,7 @@ enum ParamType {
   PARAM_TYPE_PATH = 5;
 }
 
-// Wire protocol an instance speaks, and the ones the gateway answers in
+// Instance and gateway wire protocols.
 enum ApiFlavor {
   API_FLAVOR_UNSPECIFIED = 0;
   API_FLAVOR_OPENAI = 1;
@@ -37,11 +37,7 @@ enum InstallKind {
   INSTALL_KIND_BUILT = 3;
 }
 
-// One tunable knob of a runtime
-//
-// The form fields carry what a client needs to render a control without
-// knowing the runtime: a label, a unit, bounds and a step for numbers, the
-// section the param sits in, and whether it is folded away by default.
+// Runtime parameter with metadata for rendering its form control.
 message Param {
   string name = 1;
   ParamType type = 2;
@@ -50,47 +46,47 @@ message Param {
   repeated string choices = 5;
   string flag = 6;
   string env = 7;
-  // The memory planner picks the value at launch while it is left at auto
+  // The planner chooses the value at launch when set to auto.
   bool solved = 8;
-  // Shown in place of the name
+  // Display label.
   string label = 9;
-  // Shown beside the control, such as tokens or threads
+  // Display unit, such as tokens or threads.
   string unit = 10;
   // Bounds and step for INT and FLOAT params, zero when unbounded
   double min = 11;
   double max = 12;
   double step = 13;
-  // Section heading the param is listed under
+  // Form section heading.
   string group = 14;
   // Hidden until the form is expanded
   bool advanced = 15;
-  // What auto resolves to, in words, for a solved param
+  // Description of the automatic value.
   string rule = 16;
-  // What a param takes from the store: a component's architecture such as vae or t5, or model for any weights
+  // Stored component architecture, such as vae or t5. Use model to accept any weights.
   string picks = 17;
 }
 
-// One way to obtain an install, offered when someone installs the runtime
+// Runtime installation method.
 message InstallMethod {
   string id = 1;
   string description = 2;
-  // What the method does: adopt a binary on the host, download a published release, or build a recipe
+  // Adopt a local binary, download a release, or build a recipe.
   InstallKind kind = 3;
-  // The binaries looked for on PATH, for an adopted install
+  // Binary names to search on PATH when adopting.
   repeated string binaries = 4;
-  // The repository releases come from, for a downloaded install
+  // Release repository for downloads.
   string releases = 5;
-  // The recipe built, for a built install
+  // Recipe for source builds.
   string recipe_id = 6;
 }
 
-// A method as this host sees it: the settings it takes, defaults picked for this host
+// Installation method with host-specific settings and defaults.
 message InstallOption {
   InstallMethod method = 1;
   repeated ConfigField fields = 2;
-  // What keeps the default settings from running here, empty when nothing does
+  // Reason the defaults cannot run on this host. Empty when supported.
   repeated string unmet = 3;
-  // The recipe with what the host selects, for a recipe method
+  // Recipe and selected variant for source builds.
   RecipeStatus recipe = 4;
 }
 
@@ -108,19 +104,19 @@ message Install {
   string build_id = 10;
 }
 
-// A runtime as the API describes it
+// Runtime definition.
 message Runtime {
   string id = 1;
   string name = 2;
   string description = 3;
   repeated string formats = 4;
   ApiFlavor api = 5;
-  // What the host must have, in words
+  // Host requirements.
   repeated string requirements = 6;
   repeated InstallMethod methods = 7;
   repeated Param params = 8;
   ModelKind kind = 9;
-  // The bit this runtime takes in every runtimes bitmask, on a catalog hit or a stored model
+  // Bit assigned to this runtime in catalog and stored-model runtime masks.
   uint32 bit = 10;
 }
 
@@ -140,7 +136,7 @@ message ListRuntimesResponse {
   repeated RuntimeStatus runtimes = 1;
 }
 
-// Runtime paired with host compatibility and how it installs here
+// Runtime compatibility and available installation methods.
 message RuntimeStatus {
   Runtime runtime = 1;
   bool compatible = 2;
@@ -179,11 +175,11 @@ message AdoptInstallResponse {
   Install install = 1;
 }
 
-// Installs a runtime by one of its methods with the settings chosen for it
+// Install a runtime using the selected method and settings.
 message InstallRequest {
   string runtime_id = 1;
   string method = 2;
-  // Values for the method's fields, a field left out taking its default
+  // Installation settings. Omitted fields use defaults.
   map<string, string> settings = 3;
 }
 
@@ -204,7 +200,7 @@ message RemoveInstallResponse {
 
 // Runtime catalog and installs
 service RuntimeService {
-  // Lists the formats runtimes accept, with their words
+  // List supported formats and their descriptions.
   rpc ListFormats(ListFormatsRequest) returns (ListFormatsResponse);
   // Lists runtimes and host compatibility
   rpc ListRuntimes(ListRuntimesRequest) returns (ListRuntimesResponse);
@@ -214,7 +210,7 @@ service RuntimeService {
   rpc ListInstalls(ListInstallsRequest) returns (ListInstallsResponse);
   // Adopts a binary on the host
   rpc AdoptInstall(AdoptInstallRequest) returns (AdoptInstallResponse);
-  // Installs a runtime as a task by a method and its settings
+  // Start an installation task with the selected method and settings.
   rpc Install(InstallRequest) returns (InstallResponse);
   // Removes an install
   rpc RemoveInstall(RemoveInstallRequest) returns (RemoveInstallResponse);

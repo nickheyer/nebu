@@ -20,16 +20,15 @@
   import ProfileForm from './ProfileForm.svelte';
   import DevicePicker from './DevicePicker.svelte';
 
-  // The settings of one slot, creating it when none is given
   let { slot, cancelHref = '/', onSaved }: { slot?: Slot; cancelHref?: string; onSaved: (slot: Slot) => void } = $props();
 
-  // The form starts from the slot as it stands; the page remounts the form when the slot changes
+  // The page remounts this form when the slot changes.
   function initial() {
     return {
       name: slot?.name ?? '',
       position: slot?.position ? String(slot.position) : '',
       placement: placementId(slot?.placement),
-      // A slot pinned to no device is placed on every GPU, so every one starts checked
+      // An empty device list selects all GPUs.
       devices: slot?.deviceIds.length ? [...slot.deviceIds] : null,
       memory: gib(slot?.memoryBytes),
       runtimeId: slot?.runtimeId ?? '',
@@ -56,18 +55,16 @@
   const gpuIds = $derived(gpus.map((d) => d.id));
   const ram = $derived(live.host?.pools.find((p) => p.kind === PoolKind.HOST || p.kind === PoolKind.UNIFIED));
   const hostOnly = $derived(placement === 'host');
-  // The GPU choices need a GPU; with none probed the model can only go in system memory
   const placementTabs = $derived(placements.map((p) => ({ id: p.id, label: p.label, unmet: p.id !== 'host' && live.host && gpus.length === 0 ? 'No GPU probed on this host' : undefined })));
   $effect(() => {
     if (live.host && gpus.length === 0 && placement !== 'host') placement = 'host';
   });
-  // GPUs are picked between only when there is more than one to pick from
   const pickDevices = $derived(!hostOnly && gpus.length > 1);
   const chosen = $derived(devices ?? gpuIds);
-  // Every GPU checked means every GPU, including any probed later
+  // Selecting all GPUs also includes GPUs discovered later.
   const deviceIds = $derived(pickDevices && chosen.length < gpuIds.length ? chosen : []);
   const budget = $derived(fromGib(memory));
-  // What applies while no cap is set: the whole of system memory, or of each chosen GPU when they share a size
+  // Default to full memory capacity. GPU capacities must match to show a default.
   const poolGib = $derived.by(() => {
     if (hostOnly) return gib(ram?.totalBytes);
     const totals = new Set(gpus.filter((d) => chosen.includes(d.id)).map((d) => d.memoryTotalBytes));
@@ -80,7 +77,7 @@
   const occupied = $derived(!!slot && slotOccupied(slot.id));
   const count = $derived(orderedSlots().length);
   const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && invalid === 0);
-  // Params set for one runtime mean nothing to another
+  // Clear parameters when the runtime changes.
   $effect(() => {
     if (runtimeId !== start.runtimeId) params = {};
   });

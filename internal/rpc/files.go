@@ -17,15 +17,12 @@ import (
 	"github.com/nickheyer/nebu/pkg/sources"
 )
 
-// Where a browser fetches one file of a repository through the daemon
+// Repository file download path.
 const filesPath = "/files"
 
-// Streams one file of a repository through the daemon, so a browser saves it with the daemon's own
-// tokens and through whichever transport the source uses
-//
-// The query names the source, the repo, its revision, and the path; the API token travels in the
-// Authorization header or, for a plain link, in the token query field. Ranges are honored so a
-// download can resume.
+// Streams repository files using the source's transport and credentials.
+// Query params select source, repository, revision, and path. Authentication uses
+// the Authorization header or token query param. Range requests support resuming.
 type files struct {
 	inspector *inspect.Inspector
 	auth      *auth
@@ -67,8 +64,7 @@ func (f *files) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("%s has no file %s at %s", repo, file, model.GetRevision()), http.StatusNotFound)
 		return
 	}
-	// The read outlives the handler's context only as far as the response does, so the source's
-	// own blob is closed when the response ends
+	// Close the source blob when the response ends.
 	blob, err := src.Open(r.Context(), model, artifact)
 	if err != nil {
 		f.fail(w, err)
@@ -83,7 +79,7 @@ func (f *files) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, name, time.Time{}, io.NewSectionReader(blob, 0, blob.Size()))
 }
 
-// Answers a resolve or open failure with the status the source's own answer carried, else as a bad gateway
+// Preserves source error status codes, defaulting to 502.
 func (f *files) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, context.Canceled):

@@ -1,31 +1,26 @@
 <script lang="ts" module>
   import type { Tone } from '$lib/format';
 
-  // One share of the total, drawn as a segment and named by its marker
   export interface SizeItem {
     label?: string;
     size: bigint | number;
     tone?: Tone;
   }
 
-  // A layer of segments laid from one edge of the bar, later layers drawn over earlier ones
+  // Later layers draw over earlier layers.
   export interface Overlay {
     start?: 'left' | 'right';
     items: SizeItem[];
-    // Whether this layer writes its markers under the bar
     markers?: boolean;
   }
 
-  // The units sizes read in: binary for memory, decimal for disks
+  // Binary units for memory, decimal for storage.
   export type Units = 'binary' | 'decimal';
 </script>
 
 <script lang="ts">
   import { bytes, ratioBytes, ratioStorage, storage } from '$lib/format';
 
-  // A bar of one total with layers of sizes over it. Under the bar a dot sits on each segment's far edge
-  // naming it, and a hollow dot on the far edge of the free space naming that; the used-of-total figure
-  // sits beside the bar; anything past the total is drawn red with how far it went over
   let {
     total,
     overlays,
@@ -38,9 +33,7 @@
     total: bigint | number;
     overlays: Overlay[];
     units?: Units;
-    // The side of the bar the figure of used against total sits on, or neither for a bare bar
     figure?: 'left' | 'right';
-    // The word the free space is marked with under the bar, or nothing to leave it unmarked
     free?: string;
     dense?: boolean;
     class?: string;
@@ -60,15 +53,12 @@
     text: string;
   }
 
-  // A dot under the bar with its text to one side of it
   interface Marker {
-    // Where the dot sits, as a share of the bar
     at: number;
     text: string;
     tone: Tone;
-    // A filled dot closes a segment, a hollow one closes the free space
+    // Filled markers show usage. Hollow markers show free space.
     hollow: boolean;
-    // The side of the dot the text would rather sit on, away from what the dot closes
     side: 'left' | 'right';
   }
 
@@ -77,13 +67,12 @@
   const extent = (o: Overlay) => o.items.reduce((a, i) => a + n(i.size), 0);
   const extents = $derived(overlays.map(extent));
   const used = $derived(Math.max(0, ...extents));
-  // The bar stretches to hold the longest layer, so an overflow stays in view beside the total
+  // Expand the scale to include overflow.
   const scale = $derived(Math.max(totalN, used, 1));
   const over = $derived(used - totalN);
   const pct = (v: number) => (v / scale) * 100;
 
-  // Segments of one layer from its edge, a segment crossing the total split so the excess reads as such,
-  // and a marker on the far edge of each named segment; an unnamed segment's size is the figure's to tell
+  // Split segments at capacity to mark overflow.
   function layer(o: Overlay, index: number): { segments: Segment[]; markers: Marker[] } {
     const segments: Segment[] = [];
     const markers: Marker[] = [];
@@ -109,8 +98,7 @@
   }
   const layers = $derived(overlays.map((o, i) => ({ overlay: o, ...layer(o, i) })));
 
-  // The free space lies between what the layers laid from the left reach and what those from the right
-  // reach, its marker on its right edge reading back into it
+  // Free space lies between the left and right layers.
   const reach = (start: 'left' | 'right') => Math.max(0, ...overlays.filter((o) => (o.start ?? 'left') === start).map(extent));
   const remaining = $derived(totalN - reach('left') - reach('right'));
   const markers = $derived.by((): Marker[] => {
@@ -119,10 +107,10 @@
     return out.sort((a, b) => a.at - b.at);
   });
 
-  // The row of markers is measured, and so is each marker, to lay the texts out without one on another
+  // Measure markers to avoid overlapping labels.
   let width = $state(0);
   let widths = $state<number[]>([]);
-  // The dot is 6px across and centred on its edge, so a marker's box starts or ends 3px past the edge
+  // Offset by 3px to center the 6px marker.
   const half = 3;
   const gap = 8;
   interface Spot {
@@ -130,7 +118,7 @@
     x1: number;
     side: 'left' | 'right';
   }
-  // The two boxes a marker can take, the side it would rather have first
+  // Try the preferred side first.
   function spots(m: Marker, w: number): [Spot, Spot] {
     const x = (m.at / 100) * width;
     const right: Spot = { x0: x - half, x1: x - half + w, side: 'right' };
@@ -139,9 +127,8 @@
   }
   const overlaps = (a: Spot, b: Spot) => a.x1 + gap > b.x0 && b.x1 + gap > a.x0;
   const clear = (s: Spot, taken: Spot[]) => s.x0 >= -half && s.x1 <= width + half && !taken.some((t) => overlaps(s, t));
-  // Each marker takes the side it would rather have unless that side runs into where the next marker
-  // would rather be, runs off the bar, or runs over a marker already placed; one with room on neither
-  // side stays hidden, its segment's title still carrying the text
+  // Try the opposite side if a label overlaps or exceeds the bar.
+  // Hide labels that fit on neither side, retaining the segment tooltip.
   const placed = $derived.by((): (Spot | undefined)[] => {
     const taken: Spot[] = [];
     return markers.map((m, i) => {
@@ -174,7 +161,7 @@
         <div class="absolute inset-y-0 w-px bg-fg" style="left: {pct(totalN)}%; z-index: {layers.length + 1}" title="{format(total)} total"></div>
       {/if}
     </div>
-    <!-- A bar keeps its row of markers with nothing to mark, so its box is the same height empty or filled -->
+    <!-- Reserve marker height even when the bar is empty. -->
     {#if !dense}
       <div class="relative h-4 w-full text-xs leading-4 tabular-nums" bind:clientWidth={width}>
         {#each markers as m, i (i)}

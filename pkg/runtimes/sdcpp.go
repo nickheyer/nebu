@@ -12,8 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nickheyer/nebu/pkg/blueprint"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/formats"
+	"github.com/nickheyer/nebu/pkg/formats/diffusers"
 	"github.com/nickheyer/nebu/pkg/formats/diffusion"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -22,11 +24,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// stable-diffusion.cpp's server, which samples image and video models on the CPU and on any GPU through CUDA, ROCm, Vulkan, or Metal
-//
-// A run names one denoiser, the stored group, and the parts its family loads beside it, each a file
-// param the planner solves to what the store holds, the way llama.cpp's projector rides with its
-// weights. Every flag sd-server takes is a param here, in the groups its own help lists them in.
+// SDCpp serves image and video models through stable-diffusion.cpp. The planner resolves component
+// files from the store.
 type SDCpp struct{}
 
 func (SDCpp) ID() string   { return "sdcpp" }
@@ -34,7 +33,7 @@ func (SDCpp) Name() string { return "stable-diffusion.cpp" }
 func (SDCpp) Description() string {
 	return "Generates images and video from diffusion checkpoints, safetensors or GGUF, on CPU, CUDA, ROCm, Vulkan, and Metal"
 }
-func (SDCpp) Formats() []string  { return []string{"gguf", "diffusion", "safetensors"} }
+func (SDCpp) Formats() []string  { return []string{"gguf", "diffusion", "safetensors", "diffusers"} }
 func (SDCpp) Kind() v1.ModelKind { return v1.ModelKind_MODEL_KIND_DIFFUSION }
 func (SDCpp) API() v1.ApiFlavor  { return v1.ApiFlavor_API_FLAVOR_SDCPP }
 func (SDCpp) Requirements() []string {
@@ -48,7 +47,7 @@ func (SDCpp) Unmet(h *v1.HostProfile) []string {
 	return nil
 }
 
-// stable-diffusion.cpp publishes no CUDA build for Linux, so an NVIDIA host takes Vulkan from the releases or builds from source
+// Linux CUDA requires a source build. Published Linux GPU builds use Vulkan or ROCm.
 func (SDCpp) Methods() []Method {
 	linux := func(more func(*v1.HostProfile) bool) func(*v1.HostProfile) bool {
 		return func(h *v1.HostProfile) bool { return host.Is(h, "linux", "amd64") && (more == nil || more(h)) }
@@ -60,9 +59,9 @@ func (SDCpp) Methods() []Method {
 	nvidia := func(h *v1.HostProfile) bool { return host.HasVendor(h, "nvidia") }
 	asset := func(contains, suffix string) Asset { return Asset{Prefix: "sd-", Contains: contains, Suffix: suffix} }
 	return []Method{
-		{ID: "adopt", Description: "Records an sd-server already on this host; nothing is downloaded or built", Kind: v1.InstallKind_INSTALL_KIND_ADOPTED, Binaries: []string{"sd-server"}},
+		{ID: "adopt", Description: "Use an installed sd-server", Kind: v1.InstallKind_INSTALL_KIND_ADOPTED, Binaries: []string{"sd-server"}},
 		{
-			ID: "release", Description: "A prebuilt sd-server from the GitHub releases of leejet/stable-diffusion.cpp", Kind: v1.InstallKind_INSTALL_KIND_PREBUILT, Releases: "leejet/stable-diffusion.cpp",
+			ID: "release", Description: "Download sd-server from GitHub releases", Kind: v1.InstallKind_INSTALL_KIND_PREBUILT, Releases: "leejet/stable-diffusion.cpp",
 			Rules: []PrebuiltRule{
 				{ID: "linux-rocm", Applies: linux(amd), Assets: []Asset{{Prefix: "sd-", Contains: "-x86_64-rocm-", Suffix: ".zip"}}, Binary: "sd-server"},
 				{ID: "linux-vulkan", Applies: linux(host.HasGPU), Assets: []Asset{asset("-bin-Linux-Ubuntu-", "-x86_64-vulkan.zip")}, Binary: "sd-server"},
@@ -74,70 +73,45 @@ func (SDCpp) Methods() []Method {
 				{ID: "windows-cpu", Applies: windows(nil), Assets: []Asset{asset("-bin-win-cpu-", "-x64.zip")}, Binary: "sd-server.exe"},
 			},
 		},
-		{ID: "source", Description: "Compiles sd-server with the backend for the devices on this host", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "sdcpp"},
+		{ID: "source", Description: "Build sd-server for this host", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "sdcpp"},
 	}
 }
 
-// The file params the planner solves to what the store holds, each by the part it picks and the words for it
-var sdParts = map[string]struct{ label, picks, flag string }{
-	"vae":                   {"a VAE", "vae", "--vae"},
-	"clip_l":                {"a CLIP-L text encoder", "clip_l", "--clip_l"},
-	"clip_g":                {"a CLIP-G text encoder", "clip_g", "--clip_g"},
-	"t5xxl":                 {"a T5 text encoder", "t5", "--t5xxl"},
-	"llm":                   {"a language model text encoder", "llm", "--llm"},
-	"llm_vision":            {"the language model's vision projector", "projector", "--llm_vision"},
-	"clip_vision":           {"a CLIP vision encoder", "clip_vision", "--clip_vision"},
-	"high_noise_model":      {"the high noise half of the denoiser", "diffusion", "--high-noise-diffusion-model"},
-	"uncond_model":          {"the unconditional denoiser", "diffusion", "--uncond-diffusion-model"},
-	"audio_encoder":         {"an audio encoder", "audio_encoder", "--audio-encoder"},
-	"audio_vae":             {"an audio VAE", "audio_vae", "--audio-vae"},
-	"embeddings_connectors": {"the embeddings connectors", "embeddings_connectors", "--embeddings-connectors"},
-	"tokenizer":             {"a tokenizer", "tokenizer", "--tokenizer"},
+// Maps component parameters to sd-server flags, store kinds, and blueprint slots.
+var sdParts = map[string]struct {
+	label, flag, picks string
+	slots              []string
+}{
+	"vae":                   {"a VAE", "--vae", "vae", []string{blueprint.SlotVAE}},
+	"clip_l":                {"a CLIP-L text encoder", "--clip_l", "clip_l", []string{blueprint.SlotTextEncoderClipL}},
+	"clip_g":                {"a CLIP-G text encoder", "--clip_g", "clip_g", []string{blueprint.SlotTextEncoderClipG}},
+	"t5xxl":                 {"a T5 text encoder", "--t5xxl", "t5", []string{blueprint.SlotTextEncoderT5, blueprint.SlotTextEncoderGlyph}},
+	"llm":                   {"a language model text encoder", "--llm", "llm", []string{blueprint.SlotTextEncoderLLM}},
+	"llm_vision":            {"the language model's vision projector", "--llm_vision", "projector", []string{blueprint.SlotTextEncoderVision}},
+	"clip_vision":           {"a CLIP vision encoder", "--clip_vision", "clip_vision", []string{blueprint.SlotImageClipVision}},
+	"high_noise_model":      {"the high noise half of the denoiser", "--high-noise-diffusion-model", "diffusion", []string{blueprint.SlotDenoiserHighNoise}},
+	"uncond_model":          {"the unconditional denoiser", "--uncond-diffusion-model", "diffusion", []string{blueprint.SlotDenoiserUncond}},
+	"audio_encoder":         {"an audio encoder", "--audio-encoder", "audio_encoder", []string{blueprint.SlotAudioEncoder}},
+	"audio_vae":             {"an audio VAE", "--audio-vae", "audio_vae", []string{blueprint.SlotVAEAudio}},
+	"embeddings_connectors": {"the embeddings connectors", "--embeddings-connectors", "embeddings_connectors", []string{blueprint.SlotConnector}},
+	"tokenizer":             {"a tokenizer", "--tokenizer", "tokenizer", []string{blueprint.SlotTokenizer}},
 }
 
-// The directory params that hold every adapter of a kind, solved to a directory of links to what the store holds of it
+// Returns the sd-server parameter for a slot, or empty if unsupported.
+func sdParam(slot string) string {
+	for name, part := range sdParts {
+		if slices.Contains(part.slots, slot) {
+			return name
+		}
+	}
+	return ""
+}
+
+// Adapter directories populated with links to stored models.
 var sdDirs = map[string]struct{ label, picks, flag, sub string }{
 	"lora_dir":      {"LoRAs", "lora", "--lora-model-dir", "loras"},
 	"embd_dir":      {"textual inversion embeddings", "embedding", "--embd-dir", "embeddings"},
 	"upscalers_dir": {"highres fix upscalers", "upscaler", "--hires-upscalers-dir", "upscalers"},
-}
-
-// Where the parts each family needs are published, as stable-diffusion.cpp's docs list them: the file in
-// a repository when one file is the part, the repository alone when it holds several to choose from,
-// a GGUF at every quantization say. The family's own entry comes first, then the one any family takes.
-var sdSources = map[string]map[string][]estimate.PartSource{
-	"vae": {
-		"flux": {{Repo: "black-forest-labs/FLUX.1-dev", Path: "ae.safetensors"}}, "chroma": {{Repo: "black-forest-labs/FLUX.1-dev", Path: "ae.safetensors"}}, "longcat": {{Repo: "black-forest-labs/FLUX.1-dev", Path: "ae.safetensors"}}, "boogu_image": {{Repo: "black-forest-labs/FLUX.1-dev", Path: "ae.safetensors"}},
-		"z_image": {{Repo: "black-forest-labs/FLUX.1-schnell", Path: "ae.safetensors"}}, "ovis_image": {{Repo: "black-forest-labs/FLUX.1-schnell", Path: "ae.safetensors"}},
-		"flux2": {{Repo: "black-forest-labs/FLUX.2-dev"}}, "flux2_klein": {{Repo: "black-forest-labs/FLUX.2-dev"}}, "lens": {{Repo: "black-forest-labs/FLUX.2-dev"}}, "ideogram4": {{Repo: "black-forest-labs/FLUX.2-dev"}}, "sefi_image": {{Repo: "black-forest-labs/FLUX.2-dev"}}, "ernie_image": {{Repo: "Comfy-Org/ERNIE-Image"}},
-		"wan":   {{Repo: "Comfy-Org/Wan_2.1_ComfyUI_repackaged", Path: "split_files/vae/wan_2.1_vae.safetensors"}, {Repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged", Path: "split_files/vae/wan2.2_vae.safetensors"}},
-		"krea2": {{Repo: "Comfy-Org/Wan_2.1_ComfyUI_repackaged", Path: "split_files/vae/wan_2.1_vae.safetensors"}}, "lingbot_video": {{Repo: "Comfy-Org/Wan_2.1_ComfyUI_repackaged", Path: "split_files/vae/wan_2.1_vae.safetensors"}},
-		"qwen_image": {{Repo: "Comfy-Org/Qwen-Image_ComfyUI", Path: "split_files/vae/qwen_image_vae.safetensors"}}, "anima": {{Repo: "Comfy-Org/Qwen-Image_ComfyUI", Path: "split_files/vae/qwen_image_vae.safetensors"}},
-		"hunyuan_video": {{Repo: "Comfy-Org/HunyuanVideo_1.5_repackaged"}}, "ltx2": {{Repo: "Lightricks/LTX-2.5", Path: "vae/ltx-2.5-video-vae-conv-bf16.safetensors"}}, "minimax_h3": {{Repo: "Comfy-Org/MiniMax-H3"}}, "mage_flow": {{Repo: "microsoft/Mage-Flow"}},
-		"sdxl": {{Repo: "madebyollin/sdxl-vae-fp16-fix"}}, "sd3": {{Repo: "stabilityai/stable-diffusion-3.5-large"}}, "pid": {{Repo: "nvidia/PiD"}}, "svd": {{Repo: "stabilityai/stable-video-diffusion-img2vid-xt"}},
-	},
-	"t5xxl": {
-		"wan":           {{Repo: "Comfy-Org/Wan_2.1_ComfyUI_repackaged", Path: "split_files/text_encoders/umt5_xxl_fp16.safetensors"}, {Repo: "city96/umt5-xxl-encoder-gguf"}},
-		"hunyuan_video": {{Repo: "Comfy-Org/HunyuanVideo_1.5_repackaged"}}, "minit2i": {{Repo: "google/flan-t5-large"}}, "sd3": {{Repo: "Comfy-Org/stable-diffusion-3.5-fp8", Path: "text_encoders/t5xxl_fp16.safetensors"}},
-		"": {{Repo: "comfyanonymous/flux_text_encoders", Path: "t5xxl_fp16.safetensors"}},
-	},
-	"clip_l": {"sd3": {{Repo: "Comfy-Org/stable-diffusion-3.5-fp8", Path: "text_encoders/clip_l.safetensors"}}, "": {{Repo: "comfyanonymous/flux_text_encoders", Path: "clip_l.safetensors"}}},
-	"clip_g": {"": {{Repo: "Comfy-Org/stable-diffusion-3.5-fp8", Path: "text_encoders/clip_g.safetensors"}}},
-	"llm": {
-		"qwen_image": {{Repo: "Comfy-Org/Qwen-Image_ComfyUI"}, {Repo: "mradermacher/Qwen2.5-VL-7B-Instruct-GGUF"}}, "longcat": {{Repo: "Comfy-Org/Qwen-Image_ComfyUI"}, {Repo: "mradermacher/Qwen2.5-VL-7B-Instruct-GGUF"}}, "hunyuan_video": {{Repo: "Comfy-Org/Qwen-Image_ComfyUI"}, {Repo: "mradermacher/Qwen2.5-VL-7B-Instruct-GGUF"}},
-		"flux2": {{Repo: "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF"}}, "flux2_klein": {{Repo: "Comfy-Org/flux2-klein-4B"}, {Repo: "unsloth/Qwen3-4B-GGUF"}}, "z_image": {{Repo: "Comfy-Org/z_image_turbo"}, {Repo: "unsloth/Qwen3-4B-Instruct-2507-GGUF"}},
-		"krea2": {{Repo: "Comfy-Org/Krea-2"}, {Repo: "Qwen/Qwen3-VL-4B-Instruct-GGUF"}}, "lingbot_video": {{Repo: "Comfy-Org/Krea-2"}, {Repo: "Qwen/Qwen3-VL-4B-Instruct-GGUF"}}, "mage_flow": {{Repo: "Comfy-Org/Krea-2"}, {Repo: "Qwen/Qwen3-VL-4B-Instruct-GGUF"}},
-		"boogu_image": {{Repo: "unsloth/Qwen3-VL-8B-Instruct-GGUF"}}, "ideogram4": {{Repo: "unsloth/Qwen3-VL-8B-Instruct-GGUF"}}, "ernie_image": {{Repo: "Comfy-Org/ERNIE-Image"}, {Repo: "unsloth/Ministral-3-3B-Instruct-2512-GGUF"}}, "anima": {{Repo: "circlestone-labs/Anima"}, {Repo: "mradermacher/Qwen3-0.6B-Base-GGUF"}},
-		"ltx2": {{Repo: "Lightricks/LTX-2.5", Path: "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"}, {Repo: "unsloth/gemma-3-12b-it-GGUF"}}, "minimax_h3": {{Repo: "Comfy-Org/MiniMax-H3"}, {Repo: "leejet/MiniMax-H3-GGUF"}}, "lens": {{Repo: "unsloth/gpt-oss-20b-GGUF"}}, "pid": {{Repo: "Comfy-Org/PixelDiT"}}, "ovis_image": {{Repo: "Comfy-Org/Ovis-Image"}}, "sefi_image": {{Repo: "SeFi-Image"}},
-	},
-	"clip_vision":           {"": {{Repo: "Comfy-Org/Wan_2.1_ComfyUI_repackaged", Path: "split_files/clip_vision/clip_vision_h.safetensors"}}},
-	"audio_encoder":         {"": {{Repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged", Path: "split_files/audio_encoders/wav2vec2_large_english_fp16.safetensors"}}},
-	"audio_vae":             {"ltx2": {{Repo: "Lightricks/LTX-2.5", Path: "vae/ltx-2.5-audio-vae-bf16.safetensors"}}, "minimax_h3": {{Repo: "Comfy-Org/MiniMax-H3"}}},
-	"embeddings_connectors": {"": {{Repo: "unsloth/LTX-2.3-GGUF"}}},
-	"uncond_model":          {"": {{Repo: "ideogram-ai/ideogram-4-fp8"}}},
-	"tokenizer":             {"lens": {{Repo: "openai/gpt-oss-20b", Path: "tokenizer.json"}}, "pid": {{Repo: "google/gemma-2-2b", Path: "tokenizer.json"}}},
-	"llm_vision":            {"": {{Repo: "unsloth/Qwen3-VL-8B-Instruct-GGUF"}, {Repo: "mradermacher/Qwen2.5-VL-7B-Instruct-GGUF"}}},
-	"high_noise_model":      {"": {{Repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"}}},
 }
 
 var (
@@ -174,12 +148,12 @@ func (SDCpp) Params() []*v1.Param {
 	solved := func(name, label string) *v1.Param {
 		part := sdParts[name]
 		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_PATH, Default: Auto, Solved: true, Group: groupFiles, Flag: part.flag, Picks: part.picks,
-			Rule: strings.TrimPrefix(strings.TrimPrefix(part.label, "a "), "an ") + " stored beside the model, from its repository first, then any repository"}
+			Rule: strings.TrimPrefix(strings.TrimPrefix(part.label, "a "), "an ") + " from the store, preferring the model repository, then blueprint sources, then matching names"}
 	}
 	dir := func(name, label string) *v1.Param {
 		d := sdDirs[name]
 		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_PATH, Default: Auto, Solved: true, Group: groupAdapters, Flag: d.flag, Picks: d.picks, Advanced: true,
-			Rule: "a directory of links to every " + strings.TrimSuffix(d.label, "s") + " in the store, so a request names any by its file name"}
+			Rule: "stored " + d.label + ", available to requests by file name"}
 	}
 	intParam := func(name, label, group, flag, def, unit, description string, min, max, step float64, advanced bool) *v1.Param {
 		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_INT, Default: def, Unit: unit, Min: min, Max: max, Step: step, Group: group, Flag: flag, Advanced: advanced, Description: description}
@@ -193,13 +167,13 @@ func (SDCpp) Params() []*v1.Param {
 	strParam := func(name, label, group, flag, def, description string, choices []string, advanced bool) *v1.Param {
 		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_STRING, Default: def, Choices: choices, Group: group, Flag: flag, Advanced: advanced, Description: description}
 	}
-	// A sampling setting the planner gives the family's own value while it is left at auto
+	// Sampling defaults resolved from the model family.
 	sampling := func(name, label, group, flag string, typ v1.ParamType, unit string, choices []string, min, max, step float64, rule string) *v1.Param {
 		return &v1.Param{Name: name, Label: label, Type: typ, Default: Auto, Solved: true, Unit: unit, Choices: choices, Min: min, Max: max, Step: step, Group: group, Flag: flag, Rule: rule}
 	}
 	pairs := "key=value, comma separated"
 	return []*v1.Param{
-		// Model files: the parts a family loads beside its denoiser, solved from the store
+		// Model files.
 		solved("vae", "VAE"),
 		solved("t5xxl", "T5 text encoder"),
 		solved("clip_l", "CLIP-L text encoder"),
@@ -214,7 +188,7 @@ func (SDCpp) Params() []*v1.Param {
 		solved("embeddings_connectors", "Embeddings connectors"),
 		solved("tokenizer", "Tokenizer"),
 
-		// Adapters and helpers: files a run may load beside the pipeline, and the directories requests name adapters under
+		// Adapters and helpers.
 		dir("lora_dir", "LoRA directory"),
 		dir("embd_dir", "Embeddings directory"),
 		dir("upscalers_dir", "Upscalers directory"),
@@ -226,9 +200,9 @@ func (SDCpp) Params() []*v1.Param {
 		pathParam("motion_module", "AnimateDiff motion module", groupAdapters, "--motion-module", "motion_module", true),
 		pathParam("upscale_model", "ESRGAN upscaler", groupAdapters, "--upscale-model", "upscaler", false),
 
-		// Placement: what the device holds and where the rest goes
+		// Memory placement.
 		{Name: "on_device", Label: "Parts on device", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "parts", Min: 0, Step: 1, Group: groupPlacement,
-			Rule: "every part of the pipeline that fits in device memory, the denoiser first, then the VAE, then the text encoders"},
+			Rule: "fit components on device in order: denoiser, VAE, text encoders"},
 		strParam("offload", "Offload to system memory", groupPlacement, "", "auto", "", []string{"auto", "on", "off"}, false),
 		strParam("backend", "Compute backend", groupPlacement, "--backend", "", "cpu, cuda0, or diffusion=cuda0,te=cpu", nil, true),
 		strParam("params_backend", "Weights backend", groupPlacement, "--params-backend", "", "disk, cpu, or diffusion=disk,te=cpu", nil, true),
@@ -242,7 +216,7 @@ func (SDCpp) Params() []*v1.Param {
 		boolParam("disable_prefetch", "Disable weight prefetch", groupPlacement, "--disable-prefetch", true),
 		boolParam("disable_segmented_compute", "Disable segmented compute", groupPlacement, "--disable-segmented-compute", true),
 
-		// Compute: how the parts are run
+		// Compute settings.
 		{Name: "diffusion_fa", Label: "Flash attention in the denoiser", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "true", Group: groupCompute, Flag: "--diffusion-fa"},
 		boolParam("fa", "Flash attention everywhere", groupCompute, "--fa", true),
 		strParam("weight_type", "Weight type", groupCompute, "--type", "", "", sdTypes, false),
@@ -256,21 +230,21 @@ func (SDCpp) Params() []*v1.Param {
 		strParam("rng", "Random number generator", groupCompute, "--rng", "cuda", "", sdRNG, true),
 		strParam("sampler_rng", "Sampler random number generator", groupCompute, "--sampler-rng", "", "", append([]string{""}, sdRNG...), true),
 		strParam("prediction", "Prediction type", groupCompute, "--prediction", "", "", sdPrediction, true),
-		floatParam("linear_scale", "Linear input scale", groupCompute, "--linear-scale", "0", "0 keeps the model's own", 0, 0, 0.05, true),
-		floatParam("attn_scale", "Attention K/V scale", groupCompute, "--attn-scale", "0", "0 keeps the model's own", 0, 0, 0.05, true),
+		floatParam("linear_scale", "Linear input scale", groupCompute, "--linear-scale", "0", "0 uses the model default", 0, 0, 0.05, true),
+		floatParam("attn_scale", "Attention K/V scale", groupCompute, "--attn-scale", "0", "0 uses the model default", 0, 0, 0.05, true),
 
-		// Generation: what a request takes when it names nothing
+		// Generation defaults.
 		intParam("width", "Width", groupDefaults, "--width", "1024", "px", "", 64, 4096, 16, false),
 		intParam("height", "Height", groupDefaults, "--height", "1024", "px", "", 64, 4096, 16, false),
 		sampling("steps", "Steps", groupDefaults, "--steps", v1.ParamType_PARAM_TYPE_INT, "steps", nil, 1, 150, 1,
-			"the step count the family samples well at, fewer for a distilled model such as a turbo, schnell, or lightning release"),
+			"family step count, reduced for distilled variants such as Turbo, schnell, and Lightning"),
 		sampling("sampling_method", "Sampler", groupDefaults, "--sampling-method", v1.ParamType_PARAM_TYPE_STRING, "", sdSamplers, 0, 0, 0,
-			"euler for a transformer family, lcm for PiD, euler_a for a UNet family, as stable-diffusion.cpp picks them"),
+			"euler for transformers, lcm for PiD, euler_a for UNets"),
 		sampling("scheduler", "Scheduler", groupDefaults, "--scheduler", v1.ParamType_PARAM_TYPE_STRING, "", sdSchedulers, 0, 0, 0,
-			"the schedule stable-diffusion.cpp picks for the family: flux, flux2, ltx2, logit_normal, lcm, or discrete"),
+			"family scheduler: flux, flux2, ltx2, logit_normal, lcm, or discrete"),
 		intParam("seed", "Seed", groupDefaults, "--seed", "-1", "", "-1 for random", -1, 0, 1, true),
 		intParam("batch_count", "Images per request", groupDefaults, "--batch-count", "1", "images", "", 1, 64, 1, true),
-		intParam("clip_skip", "CLIP skip", groupDefaults, "--clip-skip", "-1", "", "-1 for the family's own", -1, 12, 1, true),
+		intParam("clip_skip", "CLIP skip", groupDefaults, "--clip-skip", "-1", "", "-1 uses the family default", -1, 12, 1, true),
 		floatParam("strength", "Strength", groupDefaults, "--strength", "0.75", "", 0, 1, 0.05, true),
 		strParam("negative_prompt", "Negative prompt", groupDefaults, "--negative-prompt", "", "", nil, true),
 		strParam("sigmas", "Custom sigmas", groupDefaults, "--sigmas", "", "14.61,7.8,3.5,0.0", nil, true),
@@ -291,7 +265,7 @@ func (SDCpp) Params() []*v1.Param {
 
 		// Guidance
 		sampling("cfg_scale", "Guidance scale", groupGuidance, "--cfg-scale", v1.ParamType_PARAM_TYPE_FLOAT, "", nil, 0, 30, 0.5,
-			"the guidance the family is documented at, 1 for a distilled model that takes no negative prompt"),
+			"documented family guidance, or 1 for distilled models without negative prompts"),
 		floatParam("img_cfg_scale", "Image guidance scale", groupGuidance, "--img-cfg-scale", "0", "0 matches the guidance scale", 0, 30, 0.5, true),
 		sampling("guidance", "Distilled guidance", groupGuidance, "--guidance", v1.ParamType_PARAM_TYPE_FLOAT, "", nil, 0, 30, 0.5,
 			"4 for FLUX.2, 3.5 for every other family with a guidance embedding"),
@@ -299,9 +273,9 @@ func (SDCpp) Params() []*v1.Param {
 		strParam("skip_layers", "Skipped layers", groupGuidance, "--skip-layers", "", "7,8,9", nil, true),
 		floatParam("skip_layer_start", "Skip layer start", groupGuidance, "--skip-layer-start", "0.01", "", 0, 1, 0.01, true),
 		floatParam("skip_layer_end", "Skip layer end", groupGuidance, "--skip-layer-end", "0.2", "", 0, 1, 0.01, true),
-		floatParam("eta", "Eta", groupGuidance, "--eta", "0", "0 keeps the sampler's own", 0, 2, 0.05, true),
+		floatParam("eta", "Eta", groupGuidance, "--eta", "0", "0 uses the sampler default", 0, 2, 0.05, true),
 		sampling("flow_shift", "Flow shift", groupGuidance, "--flow-shift", v1.ParamType_PARAM_TYPE_FLOAT, "", nil, 0, 20, 0.05,
-			"the shift stable-diffusion.cpp gives the family, 5 for Wan, 1.15 for FLUX and Krea 2, 3 for Qwen Image, 0 for a family that samples without one"),
+			"family flow shift: 5 for Wan, 1.15 for FLUX and Krea 2, 3 for Qwen Image, otherwise 0"),
 
 		// Video
 		intParam("video_frames", "Video frames", groupVideo, "--video-frames", "1", "frames", "4n+1", 1, 401, 4, false),
@@ -319,7 +293,7 @@ func (SDCpp) Params() []*v1.Param {
 		strParam("high_noise_skip_layers", "High noise skipped layers", groupHighNoise, "--high-noise-skip-layers", "", "7,8,9", nil, true),
 		floatParam("high_noise_skip_layer_start", "High noise skip layer start", groupHighNoise, "--high-noise-skip-layer-start", "0.01", "", 0, 1, 0.01, true),
 		floatParam("high_noise_skip_layer_end", "High noise skip layer end", groupHighNoise, "--high-noise-skip-layer-end", "0.2", "", 0, 1, 0.01, true),
-		floatParam("high_noise_eta", "High noise eta", groupHighNoise, "--high-noise-eta", "0", "0 keeps the sampler's own", 0, 2, 0.05, true),
+		floatParam("high_noise_eta", "High noise eta", groupHighNoise, "--high-noise-eta", "0", "0 uses the sampler default", 0, 2, 0.05, true),
 
 		// VAE decoding
 		boolParam("vae_tiling", "VAE tiling", groupVAE, "--vae-tiling", false),
@@ -350,7 +324,7 @@ func (SDCpp) Params() []*v1.Param {
 		strParam("scm_mask", "SCM steps mask", groupCache, "--scm-mask", "", "1,1,0,1,0", nil, true),
 		strParam("scm_policy", "SCM policy", groupCache, "--scm-policy", "dynamic", "", []string{"dynamic", "static"}, true),
 
-		// ADetailer, a second pass over what a detector finds
+		// ADetailer second pass.
 		pathParam("ad_model", "ADetailer detector", groupDetailer, "--ad-model", "detector", true),
 		strParam("ad_prompt", "ADetailer prompt", groupDetailer, "--ad-prompt", "", "[PROMPT], [SEP], [SKIP]", nil, true),
 		strParam("ad_negative_prompt", "ADetailer negative prompt", groupDetailer, "--ad-negative-prompt", "", "", nil, true),
@@ -362,14 +336,13 @@ func (SDCpp) Params() []*v1.Param {
 	}
 }
 
-// A checkpoint that bundles its VAE or text encoders loads as a full model, a lone denoiser as a diffusion model
+// Bundled checkpoints use --model. Standalone denoisers use --diffusion-model.
 func bundled(d *v1.Descriptor) bool {
 	p := diffusion.ProfileOf(d)
 	return p.VAE || p.TextEncoder
 }
 
-// The parts of the pipeline the device may hold, the denoiser, the autoencoder, and the text encoders,
-// counted over the model's own groups and the parts solved beside it
+// Counts device-eligible pipeline components, including resolved companions.
 func sdPartCount(d *v1.Descriptor) int {
 	n := 0
 	for _, g := range d.GetGroups() {
@@ -386,25 +359,34 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 	if weights == "" {
 		return nil, fmt.Errorf("%w: the stored group has no weights file", ErrParam)
 	}
-	// A checkpoint in shards loads through its index, the way sd-server reads a safetensors index file
-	if _, _, count, ok := formats.Shard(strings.TrimSuffix(path.Base(weights), path.Ext(weights))); ok && count > 1 {
-		index := in.Artifacts[text.Enum(v1.ArtifactRole_ARTIFACT_ROLE_INDEX)]
-		if index == "" {
-			return nil, fmt.Errorf("%w: this group is split into %d shards and the store holds no index naming them; pull a single file checkpoint or a GGUF instead", ErrParam, count)
-		}
-		weights = index
-	}
 	if in.Descriptor.GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT {
 		return nil, fmt.Errorf("%w: %s is %s, a part loaded beside a diffusion model rather than one served on its own", ErrParam, in.Name, diffusion.Describe(in.Descriptor.GetArchitecture()))
 	}
 	p := in.Params.Clone()
 	args := []string{"--listen-ip", in.Host, "--listen-port", strconv.Itoa(in.Port)}
-	if bundled(in.Descriptor) {
-		args = append(args, "--model", weights)
+	if diffusers.Pipeline(in.Descriptor) {
+		// Resolve auto file parameters from declared pipeline subfolders.
+		denoiser, err := sdPipeline(in, p)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "--diffusion-model", denoiser)
 	} else {
-		args = append(args, "--diffusion-model", weights)
+		// Load sharded checkpoints through their index.
+		if _, _, count, ok := formats.Shard(strings.TrimSuffix(path.Base(weights), path.Ext(weights))); ok && count > 1 {
+			index := in.Artifacts[text.Enum(v1.ArtifactRole_ARTIFACT_ROLE_INDEX)]
+			if index == "" {
+				return nil, fmt.Errorf("%w: no index for this group's %d shards. Pull a single checkpoint file or GGUF", ErrParam, count)
+			}
+			weights = index
+		}
+		if bundled(in.Descriptor) {
+			args = append(args, "--model", weights)
+		} else {
+			args = append(args, "--diffusion-model", weights)
+		}
 	}
-	// The adapter directories are laid out under the group's prepared directory, one link per adapter the store holds
+	// Create adapter links under the prepared directory.
 	for name, d := range sdDirs {
 		if !p.IsAuto(name) {
 			continue
@@ -418,8 +400,7 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 	if msg := sdUpscalerProblem(p.Str("hires_upscaler"), in.Stored); msg != "" {
 		return nil, fmt.Errorf("%w: %s", ErrParam, msg)
 	}
-	// Offload follows the plan and the parts asked onto the device: every part on the device needs none, a
-	// part planned into host memory or left off the device by on_device needs it
+	// Enable offload when the plan or on_device leaves components in host memory.
 	offload := p.Str("offload") == "on"
 	if p.Str("offload") == "auto" {
 		offload = planOffloads(in.Plan) || (!p.IsAuto("on_device") && int(p.Int("on_device")) < sdPipelineParts(in.Plan, in.Descriptor))
@@ -451,9 +432,77 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}, nil
 }
 
-// Lays out a directory of links to every stored adapter of one kind, named by group so a request names
-// one by its file name the way sd-server scans a directory; the directory is remade on every launch
-// so it says what the store holds now, and stays empty when the store holds none
+// Resolves pipeline component paths and returns the denoiser path. Sharded components use index
+// files. Embedded vision towers load with their text encoder.
+func sdPipeline(in Launch, p estimate.Params) (string, error) {
+	if in.Model == nil {
+		return "", fmt.Errorf("%w: the run has no stored model to read the pipeline's files from", ErrParam)
+	}
+	d := in.Descriptor
+	fills := map[string]bool{}
+	for _, fill := range blueprint.Fills(diffusion.ProfileOf(d), d.GetGroup()) {
+		fills[fill.Slot] = true
+	}
+	file := func(slot, sub string) (string, error) {
+		weights, index, tokenizer := diffusers.Files(in.Model, sub)
+		switch {
+		case slot == blueprint.SlotTokenizer:
+			if tokenizer == "" {
+				return "", fmt.Errorf("%w: %s holds no tokenizer.json", ErrParam, sub)
+			}
+			return tokenizer, nil
+		case len(weights) == 0:
+			return "", fmt.Errorf("%w: %s holds no weights", ErrParam, sub)
+		case len(weights) > 1 && index == "":
+			return "", fmt.Errorf("%w: %s is split into %d shards and holds no index naming them", ErrParam, sub, len(weights))
+		case len(weights) > 1:
+			return index, nil
+		}
+		return weights[0], nil
+	}
+	declared := diffusers.Slots(d)
+	slots := make([]string, 0, len(declared))
+	for slot := range declared {
+		slots = append(slots, slot)
+	}
+	sort.Strings(slots)
+	var denoiser string
+	for _, slot := range slots {
+		sub := declared[slot]
+		switch slot {
+		case blueprint.SlotDenoiser:
+			var err error
+			if denoiser, err = file(slot, sub); err != nil {
+				return "", err
+			}
+			continue
+		case blueprint.SlotDenoiserHighNoise, blueprint.SlotDenoiserUncond:
+		case blueprint.SlotTextEncoderVision:
+			if sub == declared[blueprint.SlotTextEncoderLLM] {
+				continue
+			}
+		default:
+			if !fills[slot] {
+				continue
+			}
+		}
+		param := sdParam(slot)
+		if param == "" || !p.IsAuto(param) {
+			continue
+		}
+		path, err := file(slot, sub)
+		if err != nil {
+			return "", err
+		}
+		p[param] = path
+	}
+	if denoiser == "" {
+		return "", fmt.Errorf("%w: the pipeline declares no denoiser", ErrParam)
+	}
+	return denoiser, nil
+}
+
+// Rebuilds links to stored adapters, named for request lookup.
 func linkDir(prepared, sub string, stored []*v1.StoredModel, picks string) (string, error) {
 	if prepared == "" {
 		return "", fmt.Errorf("%w: the store gave no prepared directory to lay the %s links out in", ErrParam, sub)
@@ -466,23 +515,30 @@ func linkDir(prepared, sub string, stored []*v1.StoredModel, picks string) (stri
 		return "", err
 	}
 	for _, m := range stored {
-		if diffusion.Canonical(m.GetDescriptor_().GetArchitecture()) != picks || m.GetDescriptor_().GetKind() != v1.ModelKind_MODEL_KIND_COMPONENT {
+		if diffusion.PartOf(m.GetDescriptor_()) != picks || m.GetDescriptor_().GetKind() != v1.ModelKind_MODEL_KIND_COMPONENT {
 			continue
 		}
 		file := companionWeights(m)
 		if file == "" {
 			continue
 		}
-		name := m.GetGroup() + filepath.Ext(file)
-		if err := os.Symlink(file, filepath.Join(dir, name)); err != nil {
+		if err := os.Symlink(file, filepath.Join(dir, linkName(m)+filepath.Ext(file))); err != nil {
 			return "", err
 		}
 	}
 	return dir, nil
 }
 
-// The parts the pipeline loads, the denoiser, the autoencoder, and the text encoders: what the plan placed,
-// the solved parts included, else the descriptor's own groups
+// Uses the adapter group name, or the repository name for root-level default groups.
+func linkName(m *v1.StoredModel) string {
+	name := m.GetGroup()
+	if name == "default" || name == "" {
+		name = path.Base(m.GetRepo())
+	}
+	return strings.ReplaceAll(name, "/", "_")
+}
+
+// Returns pipeline components from the plan, falling back to descriptor groups.
 func sdPipelineParts(plan *v1.MemoryPlan, d *v1.Descriptor) int {
 	if plan == nil {
 		return sdPartCount(d)
@@ -497,7 +553,7 @@ func sdPipelineParts(plan *v1.MemoryPlan, d *v1.Descriptor) int {
 	return n
 }
 
-// Whether the plan put any part of the pipeline in host memory, which sd-server serves by offloading
+// Reports whether any pipeline component uses host memory.
 func planOffloads(plan *v1.MemoryPlan) bool {
 	host := text.Enum(v1.PoolKind_POOL_KIND_HOST)
 	for _, pl := range plan.GetPlacements() {
@@ -515,7 +571,7 @@ func (SDCpp) Prepares(string) bool             { return false }
 func (SDCpp) Prepare(Launch) (*Command, error) { return nil, nil }
 func (SDCpp) PrepareTimeout() time.Duration    { return 0 }
 
-// The server loads every part before it listens, so the capabilities endpoint answering means the model is ready
+// The capabilities endpoint responds after all components load.
 func (SDCpp) Health() Health {
 	return Health{Path: "/sdcpp/v1/capabilities", Interval: 2 * time.Second, Timeout: 30 * time.Minute}
 }
@@ -543,7 +599,7 @@ func (SDCpp) Probes() []Probe {
 		{Key: "devices", Args: []string{"--list-devices"}, Parse: func(out string) (string, bool) {
 			var names []string
 			for _, line := range strings.Split(out, "\n") {
-				// One device per line, its name before a tab and its description after
+				// Device name and description are separated by a tab.
 				name, _, ok := strings.Cut(line, "\t")
 				if ok && name != "" && !strings.ContainsAny(name, " :") {
 					names = append(names, name)
@@ -585,7 +641,7 @@ func (SDCpp) Measure(lines []string) []*v1.Measurement {
 	return m.list
 }
 
-// A byte count printed as a number and unit with no space between and a note in parentheses after, 1234.56 MB(VRAM) or 6702.86MB
+// Parses byte counts such as 1234.56 MB(VRAM) and 6702.86MB.
 func sdBytesAfter(line, phrase string) (uint64, bool) {
 	i := strings.Index(line, phrase)
 	if i < 0 {
@@ -611,7 +667,7 @@ func sdBytesAfter(line, phrase string) (uint64, bool) {
 	return uint64(n * mult), true
 }
 
-// The stored weights file of a companion, its first weights artifact
+// Returns the first stored weights path.
 func companionWeights(c *v1.StoredModel) string {
 	for _, sa := range c.GetArtifacts() {
 		if sa.GetArtifact().GetRole() == v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS {
@@ -621,7 +677,7 @@ func companionWeights(c *v1.StoredModel) string {
 	return ""
 }
 
-// A stored file of a companion by role, empty when it carries none
+// Returns the first stored path with the role, or empty.
 func companionFile(c *v1.StoredModel, role v1.ArtifactRole) string {
 	for _, sa := range c.GetArtifacts() {
 		if sa.GetArtifact().GetRole() == role {
@@ -631,7 +687,7 @@ func companionFile(c *v1.StoredModel, role v1.ArtifactRole) string {
 	return ""
 }
 
-// The tokenizer.json a stored group carries, the file sd-server reads a tokenizer from
+// Returns the stored tokenizer.json path.
 func companionTokenizer(c *v1.StoredModel) string {
 	for _, sa := range c.GetArtifacts() {
 		if sa.GetArtifact().GetRole() == v1.ArtifactRole_ARTIFACT_ROLE_TOKENIZER && path.Base(sa.GetArtifact().GetPath()) == "tokenizer.json" {
@@ -641,52 +697,28 @@ func companionTokenizer(c *v1.StoredModel) string {
 	return ""
 }
 
-// Whether a companion is the part a param names: a component of that architecture, any language model for the llm,
-// and for the high noise half a denoiser of the same family named like this one with high in place of low
-func companionFits(param, family, group string, c *v1.StoredModel) bool {
-	d := c.GetDescriptor_()
-	arch := diffusion.Canonical(d.GetArchitecture())
-	switch param {
-	case "llm":
-		return d.GetKind() == v1.ModelKind_MODEL_KIND_LANGUAGE || arch == "llm"
-	case "llm_vision":
-		return (d.GetKind() == v1.ModelKind_MODEL_KIND_LANGUAGE || arch == "llm") && companionFile(c, v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR) != ""
-	case "tokenizer":
-		return (d.GetKind() == v1.ModelKind_MODEL_KIND_LANGUAGE || arch == "llm") && companionTokenizer(c) != ""
-	case "high_noise_model":
-		if d.GetKind() != v1.ModelKind_MODEL_KIND_DIFFUSION || arch != family {
-			return false
-		}
-		return highOf(group) == strings.ToLower(c.GetGroup())
-	case "uncond_model":
-		return d.GetKind() == v1.ModelKind_MODEL_KIND_DIFFUSION && arch == family && strings.Contains(strings.ToLower(c.GetGroup()), "uncond") && !strings.Contains(strings.ToLower(group), "uncond")
+// Converts a stored model to a blueprint candidate.
+func candidate(c *v1.StoredModel) blueprint.Candidate {
+	out := blueprint.Candidate{Repo: c.GetRepo(), Group: c.GetGroup(), Roles: map[v1.ArtifactRole]bool{}, Descriptor: c.GetDescriptor_()}
+	for _, sa := range c.GetArtifacts() {
+		out.Paths = append(out.Paths, sa.GetArtifact().GetPath())
+		out.Roles[sa.GetArtifact().GetRole()] = true
 	}
-	return d.GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT && arch == sdParts[param].picks
+	return out
 }
 
-// The name of the high noise half beside a low noise half, empty for a name that is neither
-func highOf(group string) string {
-	lower := strings.ToLower(group)
-	for _, pair := range [][2]string{{"low_noise", "high_noise"}, {"lownoise", "highnoise"}, {"low-noise", "high-noise"}} {
-		if strings.Contains(lower, pair[0]) {
-			return strings.Replace(lower, pair[0], pair[1], 1)
-		}
-	}
-	return ""
-}
-
-// The file a param names in a companion: the projector for the vision tower, the tokenizer for the tokenizer, the weights for the rest
-func companionPath(param string, c *v1.StoredModel) string {
-	switch param {
-	case "llm_vision":
+// Selects projector, tokenizer.json, or weights according to the slot.
+func companionPath(slot string, c *v1.StoredModel) string {
+	switch slot {
+	case blueprint.SlotTextEncoderVision:
 		return companionFile(c, v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR)
-	case "tokenizer":
+	case blueprint.SlotTokenizer:
 		return companionTokenizer(c)
 	}
 	return companionWeights(c)
 }
 
-// The kind of tensor group a file param's part loads as, so the plan sizes it beside the model's own groups
+// Maps component parameters to memory planning kinds.
 var sdPartKinds = map[string]v1.TensorGroupKind{
 	"vae": v1.TensorGroupKind_TENSOR_GROUP_KIND_VAE, "audio_vae": v1.TensorGroupKind_TENSOR_GROUP_KIND_VAE,
 	"clip_l": v1.TensorGroupKind_TENSOR_GROUP_KIND_TEXT_ENCODER, "clip_g": v1.TensorGroupKind_TENSOR_GROUP_KIND_TEXT_ENCODER, "t5xxl": v1.TensorGroupKind_TENSOR_GROUP_KIND_TEXT_ENCODER, "llm": v1.TensorGroupKind_TENSOR_GROUP_KIND_TEXT_ENCODER, "embeddings_connectors": v1.TensorGroupKind_TENSOR_GROUP_KIND_TEXT_ENCODER,
@@ -695,9 +727,9 @@ var sdPartKinds = map[string]v1.TensorGroupKind{
 	"high_noise_model": v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION, "uncond_model": v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION,
 }
 
-// The bytes a companion's file takes: the artifact the param names, the whole group when its size is not listed
-func companionBytes(param string, c *v1.StoredModel) uint64 {
-	file := companionPath(param, c)
+// Returns artifact bytes, falling back to the group size.
+func companionBytes(slot string, c *v1.StoredModel) uint64 {
+	file := companionPath(slot, c)
 	for _, sa := range c.GetArtifacts() {
 		if sa.GetPath() == file && sa.GetArtifact().GetSizeBytes() > 0 {
 			return sa.GetArtifact().GetSizeBytes()
@@ -706,96 +738,104 @@ func companionBytes(param string, c *v1.StoredModel) uint64 {
 	return c.GetBytes()
 }
 
-// Solves the file params to what the store holds: for each part left at auto, the fitting companion from
-// the model's own repository first, then one whose name shares a word with the family, then any; the
-// vision projector and tokenizer follow the language model picked. Every part picked joins the scope's
-// descriptor as a group of its own, so the plan places and counts it beside the model's own groups.
+// Blueprint slot and its sd-server parameter, empty if unsupported.
+type sdSlot struct {
+	fill  blueprint.Fill
+	param string
+}
+
+// Returns required companion slots in blueprint order.
+func sdSlots(d *v1.Descriptor) []sdSlot {
+	var out []sdSlot
+	for _, fill := range blueprint.Needs(diffusion.ProfileOf(d), d.GetGroup()) {
+		out = append(out, sdSlot{fill: fill, param: sdParam(fill.Slot)})
+	}
+	return out
+}
+
+func sdTarget(s *estimate.Scope) blueprint.Target {
+	d := s.Descriptor
+	return blueprint.Target{Repo: s.Repo, Group: d.GetGroup(), Family: blueprint.Of(d), Bits: d.GetPrecision().GetBits()}
+}
+
+// Resolves auto components by blueprint rank, then precision distance. Reuses the selected language
+// model's vision tower when available and adds component sizes to the descriptor.
 func sdSolve(s *estimate.Scope) {
 	d := s.Descriptor
-	family := diffusion.Canonical(d.GetArchitecture())
-	group := strings.ToLower(d.GetGroup())
-	repo := s.Repo
-	rank := func(c *v1.StoredModel) int {
-		switch {
-		case repo != "" && c.GetRepo() == repo:
-			return 0
-		case strings.Contains(strings.ToLower(c.GetGroup()), family) || strings.Contains(strings.ToLower(c.GetRepo()), family):
-			return 1
+	target := sdTarget(s)
+	widened := proto.Clone(d).(*v1.Descriptor)
+	widen := func(param string, bytes uint64) {
+		if kind, ok := sdPartKinds[param]; ok {
+			widened.Groups = append(widened.Groups, &v1.TensorGroup{Id: param, Kind: kind, Layer: -1, Bytes: bytes})
+			widened.TotalBytes += bytes
 		}
-		return 2
 	}
-	pick := func(param string) *v1.StoredModel {
+	// Include explicit file sizes in the memory plan.
+	for param := range sdParts {
+		if s.Params.IsAuto(param) || s.Params.Str(param) == "" {
+			continue
+		}
+		if info, err := os.Stat(s.Params.Str(param)); err == nil && !info.IsDir() {
+			widen(param, uint64(info.Size()))
+		}
+	}
+	bits := d.GetPrecision().GetBits()
+	pick := func(fill blueprint.Fill) *v1.StoredModel {
 		var fits []*v1.StoredModel
 		for _, c := range s.Companions {
-			if companionFits(param, family, group, c) {
+			if blueprint.Fits(fill, target, candidate(c)) && companionPath(fill.Slot, c) != "" {
 				fits = append(fits, c)
 			}
 		}
 		if len(fits) == 0 {
 			return nil
 		}
-		sort.SliceStable(fits, func(i, j int) bool { return rank(fits[i]) < rank(fits[j]) })
+		sort.SliceStable(fits, func(i, j int) bool {
+			ri, rj := blueprint.Rank(fill, target, candidate(fits[i])), blueprint.Rank(fill, target, candidate(fits[j]))
+			if ri != rj {
+				return ri < rj
+			}
+			return bitsDistance(fits[i], bits) < bitsDistance(fits[j], bits)
+		})
 		return fits[0]
 	}
-	widened := proto.Clone(d).(*v1.Descriptor)
 	var llm *v1.StoredModel
-	for _, param := range sortedParts() {
-		if !s.Params.IsAuto(param) {
-			// A file named by hand is sized off the disk, so the plan counts it like a solved one
-			if kind, ok := sdPartKinds[param]; ok && s.Params.Str(param) != "" {
-				if info, err := os.Stat(s.Params.Str(param)); err == nil && !info.IsDir() {
-					widened.Groups = append(widened.Groups, &v1.TensorGroup{Id: param, Kind: kind, Layer: -1, Bytes: uint64(info.Size())})
-					widened.TotalBytes += uint64(info.Size())
-				}
-			}
+	for _, slot := range sdSlots(d) {
+		if slot.param == "" || !s.Params.IsAuto(slot.param) {
 			continue
 		}
 		var chosen *v1.StoredModel
-		switch param {
-		case "llm_vision", "tokenizer":
-			// The projector and tokenizer ride with the language model when it carries them
-			if llm != nil && companionFits(param, family, group, llm) {
-				chosen = llm
-			} else {
-				chosen = pick(param)
-			}
-		default:
-			chosen = pick(param)
+		if slot.fill.Slot == blueprint.SlotTextEncoderVision && llm != nil && blueprint.Fits(slot.fill, target, candidate(llm)) {
+			chosen = llm
+		} else {
+			chosen = pick(slot.fill)
 		}
 		if chosen == nil {
 			continue
 		}
-		if param == "llm" {
+		if slot.fill.Slot == blueprint.SlotTextEncoderLLM {
 			llm = chosen
 		}
-		file := companionPath(param, chosen)
-		if file == "" {
-			continue
-		}
-		s.Params[param] = file
-		if kind, ok := sdPartKinds[param]; ok {
-			widened.Groups = append(widened.Groups, &v1.TensorGroup{Id: param, Kind: kind, Layer: -1, Bytes: companionBytes(param, chosen)})
-			widened.TotalBytes += companionBytes(param, chosen)
-		}
+		s.Params[slot.param] = companionPath(slot.fill.Slot, chosen)
+		widen(slot.param, companionBytes(slot.fill.Slot, chosen))
 	}
 	s.Descriptor = widened
 	sdSampling(s)
 }
 
-// The file params in a fixed order, the language model before the parts that follow it
-func sortedParts() []string {
-	out := make([]string, 0, len(sdParts))
-	for name := range sdParts {
-		if name != "llm" && name != "llm_vision" && name != "tokenizer" {
-			out = append(out, name)
-		}
+// Absolute precision difference in bits.
+func bitsDistance(c *v1.StoredModel, bits uint32) int {
+	have := c.GetDescriptor_().GetPrecision().GetBits()
+	if bits == 0 || have == 0 {
+		return 0
 	}
-	sort.Strings(out)
-	return append([]string{"llm"}, append(out, "llm_vision", "tokenizer")...)
+	if have > bits {
+		return int(have - bits)
+	}
+	return int(bits - have)
 }
 
-// Why a run would be refused: a part the family needs left unset, or a component run on its own; the
-// refusal names the part and where its docs say it is published
+// Reports unsupported models or slots and missing required components.
 func sdRefusal(s *estimate.Scope) string {
 	d := s.Descriptor
 	if d.GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT {
@@ -804,70 +844,68 @@ func sdRefusal(s *estimate.Scope) string {
 	if msg := sdUpscalerProblem(s.Params.Str("hires_upscaler"), s.Companions); msg != "" {
 		return msg
 	}
-	profile := diffusion.ProfileOf(d)
-	var missing []string
-	for _, part := range sdMissing(s) {
-		var where []string
-		for _, src := range part.Sources {
-			if src.Path != "" {
-				where = append(where, src.Repo+" "+src.Path)
-			} else {
-				where = append(where, src.Repo)
-			}
+	family := blueprint.Of(d)
+	var missing, unsupported []string
+	for _, slot := range sdUnfilled(s) {
+		if slot.param == "" {
+			unsupported = append(unsupported, fmt.Sprintf("%s (%s)", slot.fill.Slot, slot.fill.Name))
+			continue
 		}
-		missing = append(missing, fmt.Sprintf("%s (%s, published at %s)", part.Param, part.Label, strings.Join(where, " or ")))
+		where := blueprint.Where(family, slot.fill)
+		missing = append(missing, fmt.Sprintf("%s (%s: %s, published at %s)", slot.param, slot.fill.Slot, slot.fill.Name, strings.Join(where, " or ")))
 	}
-	if len(missing) == 0 {
-		return ""
+	var out []string
+	if len(unsupported) > 0 {
+		out = append(out, fmt.Sprintf("stable-diffusion.cpp does not support %s required by %s", strings.Join(unsupported, ", "), family.Name))
 	}
-	return fmt.Sprintf("%s needs %s: pull it so it is found in the store, or pick the file in the model files params", profile.Family, strings.Join(missing, "; "))
+	if len(missing) > 0 {
+		out = append(out, fmt.Sprintf("%s needs %s. Pull the missing components or set their paths under Model files", family.Name, strings.Join(missing, ", ")))
+	}
+	return strings.Join(out, ". ")
 }
 
-// highres upscaler
+// Accepts built-in upscaler modes or stored upscalers.
 func sdUpscalerProblem(value string, stored []*v1.StoredModel) string {
 	if value == "" || slices.Contains(sdUpscalers, value) {
 		return ""
 	}
 	for _, m := range stored {
-		if m.GetGroup() == value && m.GetDescriptor_().GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT && diffusion.Canonical(m.GetDescriptor_().GetArchitecture()) == "upscaler" && companionWeights(m) != "" {
+		if m.GetGroup() == value && m.GetDescriptor_().GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT && diffusion.PartOf(m.GetDescriptor_()) == "upscaler" && companionWeights(m) != "" {
 			return ""
 		}
 	}
 	return fmt.Sprintf("hires_upscaler %q is not a latent mode, Lanczos, Nearest, or an upscaler in the store", value)
 }
 
-// The required parts a run needs that nothing solved, each with where its family's docs publish it
-func sdMissing(s *estimate.Scope) []estimate.Missing {
+// Returns unfilled required slots.
+func sdUnfilled(s *estimate.Scope) []sdSlot {
 	d := s.Descriptor
-	if d.GetKind() != v1.ModelKind_MODEL_KIND_DIFFUSION {
+	if d.GetKind() != v1.ModelKind_MODEL_KIND_DIFFUSION || blueprint.Of(d) == nil {
 		return nil
 	}
-	profile := diffusion.ProfileOf(d)
-	var out []estimate.Missing
-	for _, part := range diffusion.Needs(profile) {
-		if !part.Required || !(s.Params.IsAuto(part.Param) || s.Params.Str(part.Param) == "") {
+	var out []sdSlot
+	for _, slot := range sdSlots(d) {
+		if !slot.fill.Required {
 			continue
 		}
-		out = append(out, estimate.Missing{Param: part.Param, Label: sdParts[part.Param].label, Sources: sdSource(part.Param, profile.Family)})
-	}
-	return out
-}
-
-// Where a part is published for a family, as the runtime's docs list it: the family's own entries, then the ones any family takes
-func sdSource(param, family string) []estimate.PartSource {
-	by := sdSources[param]
-	out := append([]estimate.PartSource(nil), by[family]...)
-	if family != "" {
-		for _, src := range by[""] {
-			if !slices.Contains(out, src) {
-				out = append(out, src)
-			}
+		if slot.param != "" && !(s.Params.IsAuto(slot.param) || s.Params.Str(slot.param) == "") {
+			continue
 		}
+		out = append(out, slot)
 	}
 	return out
 }
 
-// Compute memory at the default size: the denoiser's activations over its latent tokens, then the VAE's decode, whichever peaks higher
+// Returns missing slots and their runtime parameters.
+func sdMissing(s *estimate.Scope) []estimate.Missing {
+	var out []estimate.Missing
+	for _, slot := range sdUnfilled(s) {
+		out = append(out, estimate.Missing{Param: slot.param, Slot: slot.fill.Slot})
+	}
+	return out
+}
+
+// Estimates peak activation memory across denoising and VAE decoding.
 func sdOverhead(s *estimate.Scope) uint64 {
 	width, height := float64(s.Params.Int("width")), float64(s.Params.Int("height"))
 	frames := math.Max(float64(s.Params.Int("video_frames")), 1)
@@ -892,7 +930,7 @@ func (SDCpp) Policy() *estimate.Policy {
 	device := v1.PoolKind_POOL_KIND_DEVICE
 	return &estimate.Policy{
 		Groups: []estimate.GroupRule{
-			// The pipeline's parts go on the device while they fit, the denoiser first, and the rest are offloaded
+			// Place components on device while they fit, starting with the denoiser.
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION, Pool: device, Param: "on_device", SpillPriority: 10},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_VAE, Pool: device, Param: "on_device", SpillPriority: 10},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_TEXT_ENCODER, Pool: device, Param: "on_device", SpillPriority: 10},

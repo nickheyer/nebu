@@ -18,11 +18,9 @@ import { readLocal, writeLocal } from './persist';
 const tokenKey = 'nebu.token';
 const gatewayKeyKey = 'nebu.gateway_key';
 
-// The gateway key saved in this browser, for the chat page
 export const gatewayKey = () => readLocal(gatewayKeyKey);
 export const setGatewayKey = (value: string) => writeLocal(gatewayKeyKey, value);
 
-// The API token saved in this browser
 export const token = () => readLocal(tokenKey);
 export const setToken = (value: string) => writeLocal(tokenKey, value);
 
@@ -36,7 +34,6 @@ export const baseUrl = typeof window === 'undefined' ? 'http://127.0.0.1:8484' :
 
 const transport = createConnectTransport({ baseUrl, interceptors: [auth] });
 
-// One client per service, sharing the transport
 export const api = {
   host: createClient(HostService, transport),
   settings: createClient(SettingsService, transport),
@@ -53,7 +50,7 @@ export const api = {
   bots: createClient(BotService, transport)
 };
 
-// Where the daemon streams one file of a repository, the token in the link when the daemon needs one
+// Include the API token in file URLs when authentication is required.
 export function fileUrl(sourceId: string, repo: string, revision: string, path: string): string {
   const p = new URLSearchParams({ source: sourceId, repo, path });
   if (revision) p.set('revision', revision);
@@ -62,19 +59,16 @@ export function fileUrl(sourceId: string, repo: string, revision: string, path: 
   return `${baseUrl}/files?${p.toString()}`;
 }
 
-// Formats an error for people
 export function message(err: unknown): string {
   if (err instanceof ConnectError) return err.rawMessage || err.message;
   if (err instanceof Error) return err.message.replace(/^\[\w+\]\s*/, '');
   return String(err);
 }
 
-// The Connect code of an error, unknown for anything else
 export function code(err: unknown): Code | undefined {
   return err instanceof ConnectError ? err.code : undefined;
 }
 
-// Whether the daemon refused the token
 export function unauthenticated(err: unknown): boolean {
   return code(err) === Code.Unauthenticated;
 }

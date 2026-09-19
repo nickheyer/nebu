@@ -1,6 +1,4 @@
 <script lang="ts">
-  // A number chosen on a slider between the bounds a runtime gives, the exact figure typed beside it;
-  // the empty text shows what applies while nothing is chosen
   let {
     value = $bindable(''),
     id,
@@ -17,7 +15,7 @@
 
   const decimals = $derived(Math.max(0, (String(step).split('.')[1] ?? '').length));
   const blank = $derived(value.trim() === '');
-  // The slider rests where the value or the empty text sits, at the floor when neither is a number
+  // Use the minimum when neither the value nor placeholder is numeric.
   const shown = $derived.by(() => {
     const v = parseFloat(blank ? empty : value);
     return Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : min;

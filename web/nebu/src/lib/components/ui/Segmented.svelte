@@ -3,7 +3,6 @@
     id: string;
     label: string;
     count?: number;
-    // Why this host cannot take the option, which disables it; empty when it can
     unmet?: string;
   }
 </script>
@@ -11,8 +10,6 @@
 <script lang="ts">
   import Tip from './Tip.svelte';
 
-  // A small toggle between a few options, the chosen one raised; lg stands as tall as a text field so
-  // the two line up in a form
   let { tabs, value = $bindable(''), size = 'md', class: cls = '' }: { tabs: Segment[]; value?: string; size?: 'sm' | 'md' | 'lg'; class?: string } = $props();
   const boxes: Record<string, string> = { sm: 'p-0.5', md: 'p-0.5', lg: 'p-[3px]' };
   const items: Record<string, string> = { sm: 'h-6 px-2 text-xs', md: 'h-7 px-2.5 text-sm', lg: 'h-7 px-3 text-sm' };

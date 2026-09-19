@@ -50,7 +50,7 @@ func (s *RuntimeService) ListRuntimes(ctx context.Context, req *connect.Request[
 	return reply(resp, nil)
 }
 
-// The runtime's status with its install methods as this host sees them
+// Runtime status and host-compatible install methods.
 func (s *RuntimeService) status(ctx context.Context, rt runtimes.Runtime, profile *v1.HostProfile) (*v1.RuntimeStatus, error) {
 	st := s.runtimes.Status(rt, profile)
 	options, err := s.installs.Options(ctx, rt, profile)

@@ -9,14 +9,13 @@
   import Json from './ui/Json.svelte';
   import Skeleton from './ui/Skeleton.svelte';
 
-  // One request in full: its timing, tokens, and the bodies that crossed the gateway
   let { id }: { id: string } = $props();
 
   let full = $state<Trace | null>(null);
   let error = $state('');
   let tab = $state('request');
 
-  // The stream carries the figures as they settle; the bodies are read when the trace opens and again once it ends
+  // Load bodies when the trace opens and when it completes. Metrics arrive on the stream.
   const summary = $derived(live.traces.get(id));
   const trace = $derived(full && full.id === id ? { ...summary, ...full, request: full.request, upstreamRequest: full.upstreamRequest, response: full.response } : summary);
   const finished = $derived(!!summary?.finishedAt);

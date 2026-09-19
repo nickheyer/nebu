@@ -1,4 +1,4 @@
-// Package probes holds every probe of the machine, one file per tool or system file read.
+// Package probes reads host information from system files and vendor tools.
 package probes
 
 import (
@@ -36,26 +36,25 @@ func All() []host.Probe {
 	}
 }
 
-// A probe's facts are what no device or pool carries; a device's own facts, its driver, its threads, its
-// compute capability, sit on the device, and memory totals sit on the pools, so the host facts never
-// repeat what the device list shows
+// Keep device details on devices and memory totals on pools. Host facts contain only remaining
+// properties.
 
-// Whether a probe written for some operating systems and architectures runs here, an empty list meaning any
+// Matches supported OS and architecture lists. Empty lists allow all values.
 func on(oses, archs []string, os, arch string) bool {
 	return (len(oses) == 0 || slices.Contains(oses, os)) && (len(archs) == 0 || slices.Contains(archs, arch))
 }
 
-// The tool was not on PATH or the file was not there, which is a fact about the host rather than a failure
+// Missing tools or files mark the probe skipped.
 func skipped(detail string) host.Result {
 	return host.Result{Status: v1.ProbeStatus_PROBE_STATUS_SKIPPED, Detail: detail}
 }
 
-// The tool ran or the file read, and what it said could not be used
+// Records a failed probe.
 func failed(err error) host.Result {
 	return host.Result{Status: v1.ProbeStatus_PROBE_STATUS_FAILED, Detail: err.Error()}
 }
 
-// A probe that read what it went for
+// Records a successful probe.
 func found(devices []*v1.Device, pools []*v1.MemoryPool, facts map[string]string, detail string) host.Result {
 	if facts == nil {
 		facts = map[string]string{}
@@ -96,9 +95,7 @@ func file(path string) ([]byte, host.Result, bool) {
 	return data, host.Result{}, true
 }
 
-// Splits key: value lines into blocks separated by blank lines, the way procfs and Format-List print
-//
-// Keys are trimmed and kept as written; a line without a separator is skipped.
+// Splits key-value blocks on blank lines. Trims keys and skips lines without separators.
 func kvBlocks(data []byte) []map[string]string {
 	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	var out []map[string]string

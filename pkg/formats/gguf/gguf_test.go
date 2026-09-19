@@ -23,7 +23,7 @@ func TestChunkReader(t *testing.T) {
 	}
 }
 
-// Writes a GGUF header with one string key and the tensors given, no padding and no data
+// Writes a GGUF header fixture without tensor data or padding.
 func header(tensors ...string) []byte {
 	var b bytes.Buffer
 	b.WriteString(magic)
@@ -77,7 +77,6 @@ type memBlob struct{ *bytes.Reader }
 
 func (memBlob) Close() error { return nil }
 
-// The projector a run loads beside the weights joins the tensor table, its own header staying out
 func TestProjectorTensorsJoinTheWeights(t *testing.T) {
 	file := func(names ...string) []byte {
 		b := header(names...)

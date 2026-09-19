@@ -92,7 +92,7 @@ func (p *Puller) export(ctx context.Context, h *tasks.Handle, models []*v1.Store
 // Hard links the blob into place, copying when linking fails
 func placeFile(src, dest string, progress func(int64), size int64, hexDigest string) error {
 	if info, err := os.Stat(dest); err == nil && info.Size() == size {
-		// The same inode is the blob itself, anything else has to hash to it
+		// Accept the same inode, otherwise compare digests.
 		if blob, err := os.Stat(src); err == nil && os.SameFile(info, blob) {
 			progress(size)
 			return nil
@@ -145,7 +145,7 @@ func placeFile(src, dest string, progress func(int64), size int64, hexDigest str
 	return os.Rename(tmp, dest)
 }
 
-// Lists every repo index under dir into the root index
+// Adds repository indexes under dir to the root index.
 func writeRootIndex(dir string) error {
 	var repos []mirror.RepoEntry
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {

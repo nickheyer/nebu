@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
-  // A bordered panel, with a title row when it has one
   let { title, meta, actions, children, padded = true, class: cls = '' }: { title?: string; meta?: string; actions?: Snippet; children: Snippet; padded?: boolean; class?: string } = $props();
 </script>
 

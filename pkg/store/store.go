@@ -42,11 +42,11 @@ type Store struct {
 	root  string
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
-	// Held shared by pulls and alone by sweeps, whose blobs have no manifest yet
+	// Pulls hold a shared lock until their manifests exist. Sweeps hold it exclusively.
 	sweep sync.RWMutex
-	// Bytes pulls in flight will land, counted against the cap before they exist
+	// Reserved bytes for active pulls, counted against the cap.
 	reserved uint64
-	// Blob bytes the store keeps under by evicting, 0 for no cap
+	// Blob capacity target, zero for unlimited.
 	MaxBytes uint64
 }
 
@@ -150,7 +150,7 @@ func (s *Store) Lock(key string) func() {
 	return m.Unlock
 }
 
-// Keeps sweeps out until a pull's manifest names its blobs, returns the release
+// Blocks sweeps until the pull writes its manifest. Returns the release function.
 func (s *Store) Hold() func() {
 	s.sweep.RLock()
 	return s.sweep.RUnlock
@@ -256,16 +256,14 @@ func (s *Store) Touch(source, repo, group string) (*v1.StoredModel, error) {
 	return m, s.WriteManifest(m)
 }
 
-// Removes least recently used models, keep says which stay, until need more bytes fit under the cap
-//
-// Returns what was removed. Nothing happens without a cap, and a pull larger than
-// the cap evicts everything it may and proceeds, the cap being a target, not a refusal.
+// Evicts unprotected models by least recent use and returns the removed entries. No cap disables
+// eviction. Oversized pulls may exceed the target after all eligible models are removed.
 func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.StoredModel, func(), error) {
 	release := func() {}
 	if s.MaxBytes == 0 {
 		return nil, release, nil
 	}
-	// The bytes are spoken for until the caller releases them, so two pulls cannot both fit the same room
+	// Reserve capacity so concurrent pulls cannot claim the same space.
 	s.mu.Lock()
 	s.reserved += need
 	s.mu.Unlock()
@@ -278,7 +276,7 @@ func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.Store
 	if err != nil || used <= s.MaxBytes {
 		return nil, release, err
 	}
-	// Pulls in flight land first, then their bytes count too
+	// Include reservations for active pulls.
 	s.sweep.Lock()
 	defer s.sweep.Unlock()
 	if used, err = s.committed(); err != nil || used <= s.MaxBytes {
@@ -288,14 +286,14 @@ func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.Store
 	if err != nil {
 		return nil, release, err
 	}
-	// Idle longest first, a model never run counting from its pull
+	// Evict least recently used models first, using pull time for unrun models.
 	sort.SliceStable(manifests, func(i, j int) bool { return LastUse(manifests[i]).Before(LastUse(manifests[j])) })
 	var removed []*v1.StoredModel
 	for _, m := range manifests {
 		if used <= s.MaxBytes {
 			break
 		}
-		// A run about to start holds the key, so the check waits for it and then sees it running
+		// Wait for starting runs before checking whether the model is protected.
 		unlock := s.Lock(Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()))
 		if keep != nil && keep(m) {
 			unlock()
@@ -316,7 +314,7 @@ func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.Store
 	return removed, release, nil
 }
 
-// Bytes a pull of need would free by eviction, what a capped store drops that keep does not hold
+// Estimates bytes freed by eviction for a pull of the requested size.
 func (s *Store) Evictable(need uint64, keep func(*v1.StoredModel) bool) uint64 {
 	if s.MaxBytes == 0 {
 		return 0
@@ -347,7 +345,7 @@ func (s *Store) committed() (uint64, error) {
 	return used, err
 }
 
-// When a model last started a run, or landed when it never ran
+// Last run time, falling back to pull time.
 func LastUse(m *v1.StoredModel) time.Time {
 	if m.GetUsedAt() != nil {
 		return m.GetUsedAt().AsTime()
@@ -422,9 +420,7 @@ func (s *Store) RemoveManifest(source, repo, group string) (*v1.StoredModel, err
 	return m, nil
 }
 
-// Returns, creating it, the directory a runtime may write derived files for
-// a stored group into, such as a converted checkpoint, kept until the group
-// is removed
+// Creates the runtime's derived-file directory, retained until the stored group is removed.
 func (s *Store) PreparedDir(source, repo, group, runtimeID string) (string, error) {
 	rel, err := safeJoin(source, repo, group, runtimeID)
 	if err != nil {

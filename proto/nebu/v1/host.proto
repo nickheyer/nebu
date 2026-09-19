@@ -42,7 +42,7 @@ message Device {
   map<string, string> facts = 7;
 }
 
-// Memory pool a runtime can place bytes into
+// Memory pool available to runtimes.
 message MemoryPool {
   string id = 1;
   PoolKind kind = 2;
@@ -67,7 +67,7 @@ message ProbeResult {
   string detail = 3;
 }
 
-// Everything nebu knows about the machine
+// Probed host profile.
 message HostProfile {
   string hostname = 1;
   string os = 2;
@@ -92,15 +92,15 @@ message GetProfileResponse {
   HostProfile profile = 1;
 }
 
-// Asks for a fresh probe and a check of every dependency, run as a task
+// Start a host probe and dependency check task.
 message DoctorRequest {}
 
-// Returns the check task, its log carrying one line per check
+// Check task with one log line per check.
 message DoctorResponse {
   Task task = 1;
 }
 
-// Asks for the daemon's own log, the last tail lines and then, when following, every line after
+// Read the last tail log lines and optionally follow new output.
 message HostServiceLogsRequest {
   bool follow = 1;
   uint32 tail = 2;
@@ -120,12 +120,12 @@ message DirEntry {
   uint64 size_bytes = 4;
 }
 
-// Asks for the entries of a directory on the host, the daemon's home when empty; a file lists the directory holding it
+// List a host directory. Empty uses the daemon's home. A file path lists its parent directory.
 message ListDirectoryRequest {
   string path = 1;
 }
 
-// Returns the directory as resolved, the directory above it, and its entries, directories first then by name
+// Resolved directory, parent path, and entries sorted by name with directories first.
 message ListDirectoryResponse {
   string path = 1;
   // Empty at the root
@@ -137,9 +137,9 @@ message ListDirectoryResponse {
 service HostService {
   // Returns cached or refreshed host profile
   rpc GetProfile(GetProfileRequest) returns (GetProfileResponse);
-  // Probes the host again and checks every dependency as a task
+  // Start a host probe and dependency check task.
   rpc Doctor(DoctorRequest) returns (DoctorResponse);
-  // Streams the daemon's own log
+  // Stream the daemon log.
   rpc Logs(HostServiceLogsRequest) returns (stream HostServiceLogsResponse);
   // Lists a directory on the host, for picking a file
   rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);

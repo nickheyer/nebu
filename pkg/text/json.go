@@ -29,8 +29,8 @@ func FlattenJSON(data []byte, prefix string, into map[string]string) error {
 	return nil
 }
 
-// Flattens decoded JSON into dotted string keys: objects nest by name, a list of scalars joins with commas
-// and records its length, a list of objects nests by index
+// Flattens JSON to dotted keys. Scalar lists become comma-separated values with a length. Object
+// lists use indexed keys.
 func Flatten(prefix string, v any, into map[string]string) {
 	switch t := v.(type) {
 	case map[string]any:

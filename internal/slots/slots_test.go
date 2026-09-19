@@ -184,7 +184,7 @@ func TestOccupantLifecycle(t *testing.T) {
 	if r, _ := m.Routes.Lookup("main"); r.GetState() != v1.RouteState_ROUTE_STATE_PENDING || r.GetModel() != "org/model:q4" {
 		t.Fatalf("failed route %v", r)
 	}
-	// A relaunch of a model the store no longer holds fails and says so
+	// Relaunch fails when the stored model is missing.
 	if _, _, _, err := m.Relaunch(ctx, s.GetId()); err == nil {
 		t.Fatal("relaunch without stored weights should fail")
 	}
@@ -204,7 +204,7 @@ func TestOccupantLifecycle(t *testing.T) {
 	if _, _, _, err := m.Relaunch(ctx, s.GetId()); err == nil || !strings.Contains(err.Error(), "nothing to relaunch") {
 		t.Fatalf("empty relaunch %v", err)
 	}
-	// A stop on request empties the slot, a stop the daemon made on its way down leaves it starting
+	// User stops empty the slot. Shutdown keeps it starting for recovery.
 	rec.State, rec.Error, rec.DesiredRunning = v1.InstanceState_INSTANCE_STATE_STARTING, "", true
 	m.OnInstance(rec)
 	rec.State, rec.DesiredRunning = v1.InstanceState_INSTANCE_STATE_STOPPED, false
@@ -227,7 +227,7 @@ func TestRecover(t *testing.T) {
 	wanted, _ := m.Create(ctx, &v1.CreateSlotRequest{Name: "wanted"})
 	broken, _ := m.Create(ctx, &v1.CreateSlotRequest{Name: "broken"})
 	idle, _ := m.Create(ctx, &v1.CreateSlotRequest{Name: "idle"})
-	// A slot written before evicting cleared the request: empty, yet still naming a model
+	// Legacy empty slot with a stale model request.
 	stale, _ := m.Create(ctx, &v1.CreateSlotRequest{Name: "stale"})
 	m.update(stale.GetId(), func(s *v1.Slot) { s.Request = request(stale.GetId()) })
 	m.update(wanted.GetId(), func(s *v1.Slot) {

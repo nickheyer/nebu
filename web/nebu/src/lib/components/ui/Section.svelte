@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
-  // A titled block of a page: the title, a count, a word of context, the actions, then the content
   let {
     title,
     count,

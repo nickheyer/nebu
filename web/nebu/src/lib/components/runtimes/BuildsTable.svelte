@@ -10,7 +10,6 @@
   import IconButton from '../ui/IconButton.svelte';
   import ArmedButton from '../ui/ArmedButton.svelte';
 
-  // Builds of one runtime that have not become an install: under way, failed, or left behind
   let { builds }: { builds: Build[] } = $props();
 
   let removing = $state('');

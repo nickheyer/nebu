@@ -16,15 +16,12 @@
   import DaemonLog from '$lib/components/DaemonLog.svelte';
 
   let probing = $state(false);
-  // A window wide enough for both shows the profile on the left and the daemon's log on the right; a
-  // narrower one shows one at a time under tabs
   const split = new MediaQuery('(min-width: 96rem)');
   let pane = $state('host');
 
   const host = $derived(live.host);
   const loading = $derived(!live.ready && !live.error && !host);
 
-  // Probes the machine again and checks every dependency, as a task
   async function probe() {
     probing = true;
     await probeHost();

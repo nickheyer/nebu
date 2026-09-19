@@ -13,20 +13,20 @@ enum BotState {
   BOT_STATE_STOPPED = 1;
   // Shards opening
   BOT_STATE_CONNECTING = 2;
-  // Every shard this host opens is connected
+  // All local shards are connected.
   BOT_STATE_READY = 3;
   // Some shards connected, others not
   BOT_STATE_DEGRADED = 4;
-  // Discord refused the token or the intents, or every shard is down
+  // Token or intents rejected, or all shards disconnected.
   BOT_STATE_FAILED = 5;
   // Shards closing
   BOT_STATE_STOPPING = 6;
 }
 
-// What starts an automation
+// Automation trigger.
 enum TriggerKind {
   TRIGGER_KIND_UNSPECIFIED = 0;
-  // A clock, cron or an interval
+  // Cron or interval schedule.
   TRIGGER_KIND_SCHEDULE = 1;
   // Any message the bot can see
   TRIGGER_KIND_MESSAGE = 2;
@@ -42,7 +42,7 @@ enum TriggerKind {
   TRIGGER_KIND_COMMAND = 7;
 }
 
-// What an automation does
+// Automation action.
 enum ActionKind {
   ACTION_KIND_UNSPECIFIED = 0;
   // Sends the rendered template to the persona's language model and posts the answer
@@ -59,19 +59,19 @@ enum ActionKind {
   ACTION_KIND_PRESENCE = 6;
 }
 
-// What the bot shows as its status and activity
+// Bot status and activity.
 message Presence {
   // online, idle, dnd, or invisible
   string status = 1;
   // playing, listening, watching, competing, or custom
   string activity_type = 2;
-  // Activity lines cycled in turn, one line kept when there is one
+  // Activity lines rotated in order.
   repeated string activities = 3;
-  // Seconds between lines, five minutes when zero
+  // Rotation interval in seconds. Zero defaults to five minutes.
   uint32 rotate_seconds = 4;
 }
 
-// How a persona samples its language model, each unset field left to the runtime
+// Language-model sampling settings. Unset fields use runtime defaults.
 message Sampling {
   optional double temperature = 1;
   optional double top_p = 2;
@@ -81,87 +81,87 @@ message Sampling {
   optional int64 seed = 6;
 }
 
-// The ways a persona behaves like a person typing rather than a service answering
+// Reply timing, formatting, and frequency settings.
 message Humanize {
   bool enabled = 1;
-  // Characters per second the persona types, the typing indicator shown for that long
+  // Simulated typing speed used to time the typing indicator.
   double chars_per_second = 2;
-  // A pause before typing starts, drawn between these
+  // Random delay before typing, bounded by these values.
   uint32 delay_min_ms = 3;
   uint32 delay_max_ms = 4;
-  // Typing never takes longer than this, whatever the answer's length
+  // Maximum typing delay.
   uint32 max_typing_ms = 5;
-  // Long answers go out as several messages, split at paragraphs and sentences, with a pause between
+  // Split long replies at paragraph and sentence boundaries, pausing between messages.
   bool split_messages = 6;
-  // Characters per message when splitting, Discord's own limit when zero
+  // Split length in characters. Zero uses the Discord message limit.
   uint32 max_chunk_chars = 7;
   // Lowercase the answer and drop its final period
   bool casual = 8;
   // Chance from 0 to 1 that a message gets an emoji reaction
   double reaction_chance = 9;
-  // Emojis to react with, one drawn at random
+  // Reaction emojis, selected at random.
   repeated string reactions = 10;
-  // Chance from 0 to 1 that a message not addressed to the persona gets an answer anyway
+  // Probability of an unprompted reply, from 0 to 1.
   double ambient_reply_chance = 11;
-  // Hours the persona is awake as HH:MM-HH:MM, always when empty
+  // Active hours as HH:MM-HH:MM. Empty means always active.
   string active_hours = 12;
-  // The IANA zone active hours are read in, the host's when empty
+  // IANA timezone for active hours. Empty uses the host timezone.
   string timezone = 13;
-  // Answer as a Discord reply to the message rather than a bare message; a webhook persona, which cannot reply, names the person instead
+  // Send a Discord reply. Webhook personas mention the author instead.
   bool quote_reply = 14;
-  // Chance from 0 to 1 that a message addressed to the persona is left unanswered
+  // Probability of ignoring an addressed message, from 0 to 1.
   double ignore_chance = 15;
 }
 
-// One voice the bot speaks with: a name, a face, a prompt, and the models behind it
+// Bot persona with identity, prompt, and models.
 message Persona {
   string id = 1;
   string name = 2;
   string avatar_url = 3;
-  // Speak through a channel webhook wearing the name and avatar, so several personas look like several people
+  // Use a channel webhook with the persona's name and avatar.
   bool webhook = 4;
   string system_prompt = 5;
-  // The gateway route for chat; with none named the one ready language model answers
+  // Chat route. Empty selects the sole ready language model.
   string model = 6;
-  // The gateway route for images; with none named the one ready image model answers
+  // Image route. Empty selects the sole ready image model.
   string image_model = 7;
-  // The gateway route for video; with none named the one ready video model answers
+  // Video route. Empty selects the sole ready video model.
   string video_model = 8;
   Sampling sampling = 9;
   Humanize humanize = 10;
-  // Words that call this persona in a channel, matched whole and without case
+  // Wake words, matched as whole words without case sensitivity.
   repeated string wake_words = 11;
-  // Channels this persona answers in by itself, every allowed channel when empty
+  // Channels for unprompted replies. Empty uses all allowed channels.
   repeated string channel_ids = 12;
-  // Whether images in messages reach the language model
+  // Pass message images to the language model.
   bool vision = 13;
   // Appended to every image prompt
   string image_style = 14;
-  // The negative prompt of every image and video
+  // Negative prompt for images and video.
   string negative_prompt = 15;
-  // Edit the message as the answer streams in rather than posting it whole
+  // Edit the message during generation.
   bool stream = 16;
 }
 
-// Where and when the bot speaks at all
+// Bot response rules.
 message Engagement {
   // Answer direct messages
   bool direct_messages = 1;
   // In guilds, answer only when mentioned, replied to, or called by a wake word
   bool require_mention = 2;
-  // Channels the bot answers in, every channel when empty
+  // Allowed channels. Empty allows all channels.
   repeated string channel_ids = 3;
-  // Channels the bot never answers in
+  // Blocked channels.
   repeated string denied_channel_ids = 4;
-  // Guilds the bot answers in, every guild when empty
+  // Allowed guilds. Empty allows all guilds.
   repeated string guild_ids = 5;
-  // People the bot answers, everyone when empty
+  // Allowed users. Empty allows all users.
   repeated string user_ids = 6;
-  // People the bot never answers
+  // Blocked users.
   repeated string denied_user_ids = 7;
-  // Answer other bots and webhooks, personas of this bot included
+  // Reply to bots and webhooks, including this bot's personas.
   bool answer_bots = 8;
-  // How many bot messages may follow one another before this bot stays quiet, three when zero
+  // Consecutive bot-message limit. Zero defaults to three.
   uint32 max_bot_chain = 9;
   // The character that starts a text command, such as !
   string prefix = 10;
@@ -169,40 +169,40 @@ message Engagement {
   uint32 cooldown_ms = 11;
   // Milliseconds between answers to one person
   uint32 user_cooldown_ms = 12;
-  // Generations in flight at once for this bot, four when zero
+  // Maximum concurrent generations. Zero defaults to four.
   uint32 max_concurrent = 13;
-  // Ask Discord for member events, which need the privileged members intent in the developer portal
+  // Subscribe to member events. Requires the privileged members intent.
   bool member_events = 14;
 }
 
 // Slash commands the bot registers
 message Commands {
   bool enabled = 1;
-  // Guilds to register in, at once; global when empty, which Discord rolls out within an hour
+  // Register immediately in these guilds. Empty registers globally, which can take an hour.
   repeated string guild_ids = 2;
   // Command names keyed by their role: ask, imagine, video, persona, models, reset, help
   map<string, string> names = 3;
-  // Roles left unregistered
+  // Command roles to skip.
   repeated string disabled = 4;
 }
 
-// How much of a channel a persona remembers
+// Channel history limits.
 message Memory {
-  // Messages read back from the channel before answering, twenty when zero
+  // History message count. Zero defaults to twenty.
   uint32 messages = 1;
-  // Messages older than this many minutes are left out, every message when zero
+  // Maximum history age in minutes. Zero disables the limit.
   uint32 window_minutes = 2;
-  // Whether other people's messages carry their display names
+  // Include author display names in history.
   bool include_names = 3;
-  // Characters of history at most, the oldest dropped past it, eight thousand when zero
+  // History character limit. Drop oldest messages first. Zero defaults to eight thousand.
   uint32 max_chars = 4;
 }
 
-// Images and video in and out
+// Image and video settings.
 message Media {
-  // Frames sampled from a video attachment for the language model, none when zero
+  // Video frames to sample for the language model. Zero disables sampling.
   uint32 video_frames = 1;
-  // Bytes a posted file may have, ten million when zero
+  // Upload limit in bytes. Zero defaults to ten million.
   uint64 max_upload_bytes = 2;
   // The default image size as WIDTHxHEIGHT
   string image_size = 3;
@@ -215,7 +215,7 @@ message Media {
   uint32 image_count = 8;
 }
 
-// What starts an automation
+// Automation trigger.
 message Trigger {
   TriggerKind kind = 1;
   // Five field cron for a schedule, minute hour day month weekday
@@ -228,7 +228,7 @@ message Trigger {
   string command = 5;
 }
 
-// What an automation does once triggered
+// Triggered automation action.
 message Action {
   ActionKind kind = 1;
   // A Go template over the trigger: .Content .Author .Channel .Guild .Now .Persona .Bot
@@ -236,32 +236,32 @@ message Action {
   string emoji = 3;
   // Post as a reply to the triggering message
   bool reply = 4;
-  // A route in place of the persona's
+  // Route override for the persona.
   string model = 5;
 }
 
-// A trigger, an action, and the persona that carries it out
+// Automation trigger, action, and persona.
 message Automation {
   string id = 1;
   string name = 2;
   bool enabled = 3;
   Trigger trigger = 4;
   Action action = 5;
-  // The persona that acts, the first when empty
+  // Persona ID. Empty selects the first persona.
   string persona_id = 6;
-  // Channels a schedule posts to, and channels a message trigger listens in; every allowed channel when empty
+  // Channels for scheduled posts or message triggers. Empty uses all allowed channels.
   repeated string channel_ids = 7;
   repeated string guild_ids = 8;
-  // Chance from 0 to 1 that a trigger fires, always when zero
+  // Trigger probability from 0 to 1. Zero means always.
   double chance = 9;
   uint32 cooldown_ms = 10;
 }
 
-// Everything configurable about a bot
+// Bot configuration.
 message BotSpec {
-  // Shards to open, Discord's recommendation when zero
+  // Shard count. Zero uses Discord's recommendation.
   uint32 shard_count = 1;
-  // The shards this host opens, every shard when empty, so one bot can spread over several hosts
+  // Shard IDs assigned to this host. Empty selects all shards.
   repeated uint32 shard_ids = 2;
   Presence presence = 3;
   // The first persona is the default
@@ -283,7 +283,7 @@ message ShardStatus {
   string error = 6;
 }
 
-// What a running bot knows about itself
+// Connected bot metadata.
 message BotStatus {
   string user_id = 1;
   string username = 2;
@@ -296,13 +296,13 @@ message BotStatus {
   uint64 images = 9;
   uint64 videos = 10;
   uint64 errors = 11;
-  // The link that adds the bot to a server
+  // Bot invite URL.
   string invite_url = 12;
   // Shards Discord recommends for this bot
   uint32 recommended_shards = 13;
 }
 
-// One Discord bot: a token, its shards, personas, and automations
+// Discord bot with connection state and configuration.
 message Bot {
   string id = 1;
   string name = 2;
@@ -314,11 +314,11 @@ message Bot {
   BotStatus status = 7;
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
-  // Whether a token is stored; the token itself never leaves the daemon
+  // Whether a token is stored. The token never leaves the daemon.
   bool token_set = 10;
 }
 
-// One thing a bot did or failed to do
+// Bot activity or failure.
 message BotActivity {
   string bot_id = 1;
   google.protobuf.Timestamp at = 2;
@@ -330,7 +330,7 @@ message BotActivity {
   string guild_id = 6;
   string channel_id = 7;
   string persona = 8;
-  // The gateway trace the generation left
+  // Generation trace ID.
   string trace = 9;
 }
 
@@ -381,12 +381,12 @@ message CreateBotResponse {
   Bot bot = 1;
 }
 
-// Replaces a bot's settings, a running bot restarted with them
+// Replace bot settings and restart it if running.
 message UpdateBotRequest {
   string id = 1;
-  // The name, kept when empty
+  // Name. Empty keeps the current name.
   string name = 2;
-  // A new token, the stored one kept when empty
+  // Token. Empty keeps the stored token.
   string token = 3;
   bool enabled = 4;
   BotSpec spec = 5;
@@ -427,10 +427,10 @@ message StopBotResponse {
   Bot bot = 1;
 }
 
-// Lists what a bot did lately, newest first
+// List recent activity, newest first.
 message ListBotActivityRequest {
   string bot_id = 1;
-  // At most this many, everything kept when zero
+  // Maximum results. Zero returns all retained activity.
   uint32 limit = 2;
 }
 
@@ -449,14 +449,14 @@ message ListBotGuildsResponse {
   repeated BotGuild guilds = 1;
 }
 
-// Asks Discord who a token belongs to before it is saved
+// Validate a token with Discord before saving.
 message ProbeBotTokenRequest {
   string token = 1;
-  // The saved token of this bot when the request carries none
+  // Use this bot's saved token when no token is supplied.
   string bot_id = 2;
 }
 
-// Returns what Discord said about the token
+// Token validation result from Discord.
 message ProbeBotTokenResponse {
   string user_id = 1;
   string username = 2;
@@ -466,15 +466,15 @@ message ProbeBotTokenResponse {
   string invite_url = 6;
 }
 
-// Makes a running bot post to a channel now, through one of its personas
+// Post to a channel using a running bot persona.
 message SendBotMessageRequest {
   string bot_id = 1;
   string channel_id = 2;
-  // The persona that speaks, the first when empty
+  // Persona ID. Empty selects the first persona.
   string persona_id = 3;
   // text, chat, image, or video
   ActionKind kind = 4;
-  // What to post, or the prompt to generate from
+  // Message text or generation prompt.
   string content = 5;
 }
 
@@ -500,7 +500,7 @@ service BotService {
   rpc StartBot(StartBotRequest) returns (StartBotResponse);
   // Disconnects a bot
   rpc StopBot(StopBotRequest) returns (StopBotResponse);
-  // Lists what a bot did lately
+  // List recent bot activity.
   rpc ListBotActivity(ListBotActivityRequest) returns (ListBotActivityResponse);
   // Lists the guilds and channels a running bot sees
   rpc ListBotGuilds(ListBotGuildsRequest) returns (ListBotGuildsResponse);

@@ -20,7 +20,7 @@ const (
 	ollamaVersion    = "/api/version"
 )
 
-// The Ollama wire format, newline delimited JSON when streaming
+// Ollama protocol, using newline-delimited JSON for streams.
 type ollama struct{}
 
 type olMessage struct {
@@ -112,7 +112,7 @@ func (ollama) ParseRequest(path string, body []byte) (*Chat, error) {
 	default:
 		return nil, bad("%s is not an endpoint the ollama flavor serves", path)
 	}
-	// Ollama names no call ids, so tool turns answer the last assistant's calls in order
+	// Ollama has no call IDs. Match tool results to preceding calls in order.
 	var pending []string
 	for _, m := range req.Messages {
 		msg := Message{Role: m.Role}
@@ -296,7 +296,7 @@ type olStream struct {
 	c     *Chat
 	model string
 	tools toolGather
-	// Tool fragments finish when the next event moves on, calls go out whole
+	// Emit complete tool calls when the stream moves to the next event.
 	open *int
 }
 
@@ -318,7 +318,7 @@ func (s *olStream) line(resp olResponse) error {
 	return nil
 }
 
-// Sends the tool call gathered so far when a fragment run ended
+// Emits the completed tool call.
 func (s *olStream) flushTool() error {
 	if s.open == nil {
 		return nil
@@ -384,7 +384,7 @@ func (s *olStream) Close() error { return nil }
 
 func (ollama) InlineImages() bool { return true }
 
-// There is no count endpoint, so a count is always estimated with its images
+// Ollama has no count endpoint. Estimate text and image tokens.
 func (ollama) CountsImages() bool { return false }
 
 func (ollama) ErrorMessage(body []byte) string {

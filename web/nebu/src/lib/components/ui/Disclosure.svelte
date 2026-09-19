@@ -2,7 +2,6 @@
   import type { Snippet } from 'svelte';
   import { ChevronRight } from '@lucide/svelte';
 
-  // A row that folds its content away, the summary saying what is inside while closed
   let {
     label,
     summary,

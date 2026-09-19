@@ -79,12 +79,11 @@ type ghRef struct {
 	} `json:"commit"`
 }
 
-// The default branch, releases, and refs of one repository, each list one API page so that an
-// unauthenticated caller's sixty requests an hour go a long way
+// Caches repository refs and one release page to limit API requests.
 type ghRepoState struct {
 	owner, name   string
 	defaultBranch string
-	// The newest page of releases, which holds the latest and the tags people usually name
+	// Lists recent releases, the latest stable release, branches, and tags without releases.
 	releases []ghRelease
 	mu       sync.Mutex
 	// Releases asked for by tag beyond that page, nil for a tag that names no release
@@ -92,7 +91,8 @@ type ghRepoState struct {
 	// The stable release beyond that page, once looked for
 	stable       *ghRelease
 	stableLooked bool
-	// The first page of branches and of tags, once listed
+	// Caches the first refs page. Fetches the default branch separately if it falls outside the
+	// alphabetical page.
 	pages map[string][]ghRef
 }
 
@@ -188,7 +188,8 @@ func ghSplit(repo string) (string, string, error) {
 	return parts[0], strings.TrimSuffix(parts[1], ".git"), nil
 }
 
-// The first page of a repository list, sized to the API's largest page
+// Caches the first refs page. Fetches the default branch separately if it falls outside the
+// alphabetical page.
 func ghListURL(c *Client, owner, name, kind string) string {
 	return c.URL("repos", owner, name, kind) + "?per_page=" + strconv.Itoa(ghPageSize)
 }
@@ -251,7 +252,7 @@ func (st *ghRepoState) latest(ctx context.Context, c *Client) (*ghRelease, error
 	return &st.releases[0], nil
 }
 
-// The release a tag names: from the newest page, else asked for by tag and remembered, nil when the tag is no release
+// Finds a cached release by tag, or fetches and caches it. Returns nil for non-release tags.
 func (st *ghRepoState) release(ctx context.Context, c *Client, tag string) (*ghRelease, error) {
 	if tag == "" {
 		return nil, nil
@@ -278,8 +279,8 @@ func (st *ghRepoState) release(ctx context.Context, c *Client, tag string) (*ghR
 	return &rel, nil
 }
 
-// The first page of branches or tags, read once per state. Branches list alphabetically, so the
-// default branch leads them, fetched by name when a full page sorted it past the end
+// Caches the first refs page. Fetches the default branch separately if it falls outside the
+// alphabetical page.
 func (st *ghRepoState) refs(ctx context.Context, c *Client, kind string) ([]ghRef, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -360,8 +361,7 @@ func (githubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) 
 	return model, nil
 }
 
-// The newest page of releases and the stable one when it lies past that page, then the branches
-// and the tags without a release
+// Lists recent releases, the latest stable release, branches, and tags without releases.
 func (githubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
 	st, err := ghState(ctx, c, repo)
 	if err != nil {

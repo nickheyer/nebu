@@ -1,5 +1,4 @@
 <script lang="ts">
-  // name=value pairs in mono, the names faint, folded past a limit
   let { params, max = Infinity, class: cls = '' }: { params: Record<string, string>; max?: number; class?: string } = $props();
   const entries = $derived(Object.entries(params));
 </script>

@@ -4,7 +4,6 @@
   import Button from './Button.svelte';
   import Tip from './Tip.svelte';
 
-  // A square button whose label lives in its tooltip
   let {
     icon,
     label,

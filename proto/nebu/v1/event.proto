@@ -17,7 +17,7 @@ import "nebu/v1/task.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
 
-// Which noun changed
+// Changed resource kind.
 enum EventKind {
   EVENT_KIND_UNSPECIFIED = 0;
   EVENT_KIND_HOST = 1;
@@ -29,15 +29,15 @@ enum EventKind {
   EVENT_KIND_BUILD = 7;
   EVENT_KIND_MODEL = 8;
   EVENT_KIND_SOURCE = 11;
-  // The store's totals, after anything lands, goes, or is collected
+  // Store totals after downloads, removals, or collection.
   EVENT_KIND_STORE = 14;
-  // Host wide preferences, after a change
+  // Updated host preferences.
   EVENT_KIND_SETTINGS = 15;
-  // One request through the gateway, when it starts and when it ends, bodies left out
+  // Gateway request start and completion, excluding bodies.
   EVENT_KIND_TRACE = 16;
   // A Discord bot, after its settings or connection change
   EVENT_KIND_BOT = 17;
-  // One thing a Discord bot did or failed to do
+  // Discord bot activity or failure.
   EVENT_KIND_BOT_ACTIVITY = 18;
 }
 
@@ -49,7 +49,7 @@ enum EventAction {
   EVENT_ACTION_DELETED = 3;
 }
 
-// One change with the record after it
+// Resource change with the updated record.
 message Event {
   uint64 seq = 1;
   EventKind kind = 2;
@@ -88,6 +88,6 @@ message WatchEventsResponse {
 
 // Live updates feeding the UI
 service EventService {
-  // Streams events until the client goes away
+  // Stream events until the client disconnects.
   rpc WatchEvents(WatchEventsRequest) returns (stream WatchEventsResponse);
 }

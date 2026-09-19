@@ -2,7 +2,6 @@ package diffusion
 
 import (
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/nickheyer/nebu/pkg/formats"
@@ -21,7 +20,7 @@ func shaped(name string, shape ...uint64) *v1.TensorInfo {
 	return &v1.TensorInfo{Name: name, Bytes: 2, Elements: formats.Elements(shape), Shape: shape}
 }
 
-// The tensors of names, those given a shape carrying it, each name once the way a header lists them
+// Creates unique tensor entries with optional shapes.
 func withShapes(names []string, shapes ...*v1.TensorInfo) []*v1.TensorInfo {
 	byName := map[string]*v1.TensorInfo{}
 	for _, s := range shapes {
@@ -53,7 +52,6 @@ func stack(prefix string, n int, suffix string) []string {
 	return out
 }
 
-// Every layout's names land in the part they load into
 func TestKind(t *testing.T) {
 	want := map[string]v1.TensorGroupKind{
 		"model.diffusion_model.input_blocks.0.0.weight":                             v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION,
@@ -86,7 +84,6 @@ func TestKind(t *testing.T) {
 	}
 }
 
-// Families are told apart the way stable-diffusion.cpp tells them, by signature tensors and shapes
 func TestScanFamilies(t *testing.T) {
 	sd1 := append(stack("model.diffusion_model.input_blocks", 12, "0.weight"), "model.diffusion_model.middle_block.1.weight", "model.diffusion_model.output_blocks.7.1.weight", "first_stage_model.decoder.conv_in.weight")
 	cases := []struct {
@@ -114,9 +111,11 @@ func TestScanFamilies(t *testing.T) {
 		{"wan2.2_ti2v_5B", append(tensors(append(stack("blocks", 30, "self_attn.q.weight"), "blocks.0.cross_attn.norm_k.weight")...), shaped("patch_embedding.weight", 3072, 48, 1, 2, 2)), "wan", "ti2v", false, false, true},
 		{"wan2.2_s2v_14B", tensors(append(stack("blocks", 40, "self_attn.q.weight"), "blocks.0.cross_attn.norm_k.weight", "audio_injector.injector.0.q.weight")...), "wan", "s2v", false, false, true},
 		{"qwen_image_bf16", tensors(append(stack("transformer_blocks", 60, "attn.to_q.weight"), "transformer_blocks.0.img_mod.1.weight", "img_in.weight")...), "qwen_image", "", false, false, true},
-		{"hunyuanvideo1.5_720p_t2v", tensors(append(stack("double_blocks", 20, "img_attn_qkv.weight"), "txt_in.individual_token_refiner.blocks.0.adaLN_modulation.1.weight")...), "hunyuan_video", "", false, false, true},
+		{"hunyuanvideo1.5_720p_t2v", withShapes(append(stack("double_blocks", 20, "img_attn_qkv.weight"), "txt_in.individual_token_refiner.blocks.0.adaLN_modulation.1.weight"), shaped("txt_in.input_embedder.weight", 3072, 3584)), "hunyuan_video_15", "", false, false, true},
+		{"hunyuan_video_t2v_720p_bf16", withShapes(append(stack("double_blocks", 20, "img_attn_qkv.weight"), "txt_in.individual_token_refiner.blocks.0.adaLN_modulation.1.weight"), shaped("txt_in.input_embedder.weight", 3072, 4096)), "hunyuan_video", "", false, false, true},
+		{"lumina_2_model_bf16", withShapes(append(stack("layers", 30, "attention.qkv.weight"), "cap_embedder.0.weight"), shaped("cap_embedder.0.weight", 2304)), "lumina2", "", false, false, false},
 		{"ltx-2.3-22b-dev", tensors(append(stack("transformer_blocks", 48, "attn1.to_q.weight"), "adaln_single.emb.timestep_embedder.linear_1.bias")...), "ltx2", "", false, false, true},
-		{"z_image_turbo", tensors(append(stack("layers", 30, "attention.qkv.weight"), "cap_embedder.0.weight")...), "z_image", "", false, false, false},
+		{"z_image_turbo", withShapes(append(stack("layers", 30, "attention.qkv.weight"), "cap_embedder.0.weight"), shaped("cap_embedder.0.weight", 2560)), "z_image", "", false, false, false},
 		{"minimax_h3_fl2va", tensors("video_patch_proj.weight", "audio_patch_proj.weight", "blocks.0.attn.to_q.weight"), "minimax_h3", "", false, false, true},
 		{"lingbot-video-dense-1.3b", tensors(append(stack("blocks", 30, "self_attn.q.weight"), "patch_embedder.weight")...), "lingbot_video", "", false, false, true},
 		{"ideogram4_fp8", tensors(append(stack("layers", 30, "attention.qkv.weight"), "embed_image_indicator.weight")...), "ideogram4", "", false, false, false},
@@ -130,7 +129,6 @@ func TestScanFamilies(t *testing.T) {
 	}
 }
 
-// A file without a denoiser is named as the part it is, the widths telling the two CLIPs apart
 func TestScanComponents(t *testing.T) {
 	cases := []struct {
 		group   string
@@ -148,6 +146,8 @@ func TestScanComponents(t *testing.T) {
 		{"clip_vision_h", tensors("vision_model.encoder.layers.0.self_attn.k_proj.weight", "visual_projection.weight"), "clip_vision"},
 		{"wav2vec2_large_english_fp16", tensors("feature_extractor.conv_layers.0.conv.weight", "encoder.layers.0.attention.k_proj.weight"), "audio_encoder"},
 		{"lightx2v_4steps_lora", tensors("diffusion_model.blocks.0.self_attn.q.lora_A.weight", "diffusion_model.blocks.0.self_attn.q.lora_B.weight"), "lora"},
+		{"adapter_model", tensors("blocks.0.attn.qkv_proj.lora_a", "blocks.0.attn.qkv_proj.lora_b", "token_refiner.blocks.0.mlp.fc1.lora_a"), "lora"},
+		{"kohya", tensors("lora_unet_double_blocks_0_img_attn_qkv.lora_down.weight", "lora_unet_double_blocks_0_img_attn_qkv.lora_up.weight"), "lora"},
 		{"control_v11p_sd15_canny", tensors("control_model.input_blocks.0.0.weight"), "controlnet"},
 		{"RealESRGAN_x4plus", tensors("conv_first.weight", "body.0.rdb1.conv1.weight"), "upscaler"},
 		{"ip-adapter_sd15", tensors("image_proj.proj.weight", "ip_adapter.1.to_k_ip.weight"), "ip_adapter"},
@@ -161,43 +161,58 @@ func TestScanComponents(t *testing.T) {
 	}
 }
 
-// What each family loads beside itself follows the runtime's docs, less what the checkpoint bundles
-func TestNeeds(t *testing.T) {
-	names := func(parts []Part) string {
-		var out []string
-		for _, p := range parts {
-			s := p.Param
-			if !p.Required {
-				s += "?"
-			}
-			out = append(out, s)
-		}
-		return strings.Join(out, ",")
-	}
-	if got := names(Needs(Profile{Family: "flux"})); got != "vae,clip_l,t5xxl" {
-		t.Fatalf("flux %s", got)
-	}
-	if got := names(Needs(Profile{Family: "wan", ImageInput: true})); got != "vae,t5xxl,high_noise_model?,clip_vision" {
-		t.Fatalf("wan i2v %s", got)
-	}
-	if got := names(Needs(Profile{Family: "wan", Variant: "s2v", ImageInput: true, AudioInput: true})); got != "vae,t5xxl,high_noise_model?,audio_encoder" {
-		t.Fatalf("wan s2v %s", got)
-	}
-	if got := names(Needs(Profile{Family: "sdxl", VAE: true, TextEncoder: true})); got != "" {
-		t.Fatalf("bundled sdxl %s", got)
-	}
-	if got := names(Needs(Profile{Family: "ltx2"})); got != "vae,llm,audio_vae?,embeddings_connectors?" {
-		t.Fatalf("ltx2 %s", got)
-	}
+func TestCanonical(t *testing.T) {
 	if got := Generates("wan"); len(got) != 2 {
 		t.Fatalf("wan makes images and video: %v", got)
 	}
-	if Canonical("hyvid") != "hunyuan_video" || Canonical("FluxTransformer2DModel") != "flux" || !Denoiser("sdxl") || !Component("T5EncoderModel") || Component("llama") {
+	if Canonical("hyvid") != "hunyuan_video" || Canonical("hunyuan_video_1.5") != "hunyuan_video_15" || Canonical("FluxTransformer2DModel") != "flux" || Canonical("HiDreamImageTransformer2DModel") != "hidream_i1" || Canonical("Lumina2Transformer2DModel") != "lumina2" || Canonical("LTXVideoTransformer3DModel") != "ltxv" {
 		t.Fatal("canonical names")
+	}
+	if !Denoiser("sdxl") || !Denoiser("cogvideox") || !Component("T5EncoderModel") || !Component("clip_h") || !Component("tokenizer") || Component("llama") {
+		t.Fatal("denoisers and components")
+	}
+	for _, f := range Families() {
+		if !Denoiser(f) {
+			t.Errorf("%s is listed but not a denoiser", f)
+		}
 	}
 }
 
-// The format claims every checkpoint extension, one group per file, and reads the family from the header it parses
+func TestScanShapes(t *testing.T) {
+	umt5 := Scan([]*v1.TensorInfo{shaped("shared.weight", 256384, 4096), shaped("encoder.block.0.layer.0.SelfAttention.q.weight", 4096, 4096)}, "umt5_xxl_fp16")
+	if umt5.Component != "t5" || umt5.Vocab != 256384 || umt5.Width != 4096 {
+		t.Fatalf("umt5 %+v", umt5)
+	}
+	t5 := Scan([]*v1.TensorInfo{shaped("shared.weight", 32128, 4096), shaped("encoder.block.0.layer.0.SelfAttention.q.weight", 4096, 4096)}, "t5xxl_fp16")
+	if t5.Component != "t5" || t5.Vocab != 32128 {
+		t.Fatalf("t5 %+v", t5)
+	}
+	clipH := Scan([]*v1.TensorInfo{shaped("text_model.embeddings.token_embedding.weight", 49408, 1024), shaped("text_model.encoder.layers.0.mlp.fc1.weight", 4096, 1024)}, "open_clip_vit_h")
+	if clipH.Component != "clip_h" || clipH.Width != 1024 {
+		t.Fatalf("clip-h %+v", clipH)
+	}
+	wan := Scan([]*v1.TensorInfo{shaped("encoder.conv1.weight", 96, 3, 3, 3, 3), shaped("decoder.conv1.weight", 384, 16, 3, 3, 3)}, "wan_2.1_vae")
+	if wan.Component != "vae" || wan.LatentChannels != 16 || !wan.VideoVAE {
+		t.Fatalf("wan vae %+v", wan)
+	}
+	ae := Scan([]*v1.TensorInfo{shaped("encoder.conv_in.weight", 128, 3, 3, 3), shaped("decoder.conv_in.weight", 512, 16, 3, 3), shaped("quant_conv.weight", 32, 32, 1, 1)}, "ae")
+	if ae.Component != "vae" || ae.LatentChannels != 16 || ae.VideoVAE {
+		t.Fatalf("flux ae %+v", ae)
+	}
+	var f Format
+	raw := &v1.RawModel{FormatId: "diffusion", Group: "wan_2.1_vae", Tensors: []*v1.TensorInfo{shaped("decoder.conv1.weight", 384, 16, 3, 3, 3)}}
+	m := f.Metadata(raw)
+	if m[KeyLatentChannels] != "16" || m[KeyVideoVAE] != "true" || m[KeyComponent] != "vae" {
+		t.Fatalf("vae metadata %v", m)
+	}
+	if p := ProfileOf(&v1.Descriptor{Architecture: "vae", Kind: v1.ModelKind_MODEL_KIND_COMPONENT, Metadata: m}); p.LatentChannels != 16 || !p.VideoVAE || p.Component != "vae" {
+		t.Fatalf("profile of vae %+v", p)
+	}
+	if p := f.Params(&v1.RawModel{Group: "umt5", Tensors: []*v1.TensorInfo{shaped("shared.weight", 256384, 4096)}}); p.Vocab != 256384 || p.Embedding != 4096 {
+		t.Fatalf("params of an encoder %+v", p)
+	}
+}
+
 func TestFormat(t *testing.T) {
 	var f Format
 	for _, p := range []string{"a.safetensors", "dir/b.sft", "c.ckpt", "d.pt", "e.pth"} {

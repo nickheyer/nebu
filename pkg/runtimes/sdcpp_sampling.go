@@ -11,10 +11,8 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// The sampling a family runs well at: the step count and guidance its docs and model cards state, and
-// the sampler, scheduler, and flow shift stable-diffusion.cpp picks for it when a request names none.
-// Passing every one at launch means the server reports exactly what a request gets, so a client can
-// show the figures rather than a word standing in for them.
+// Family sampling defaults from model documentation and stable-diffusion.cpp. Explicit launch
+// values let clients display the resolved settings.
 type sdSample struct {
 	Steps     int
 	Cfg       float64
@@ -22,16 +20,15 @@ type sdSample struct {
 	FlowShift float64
 	Sampler   string
 	Scheduler string
-	// The step count a distilled release of the family takes, at guidance 1
+	// Distilled step count at guidance 1.
 	Distilled int
 }
 
-// stable-diffusion.cpp's own figures for a family it has no better word on
+// Fallback stable-diffusion.cpp sampling defaults.
 var sdSampleFallback = sdSample{Steps: 20, Cfg: 7, Guidance: 3.5, Sampler: "euler", Scheduler: "discrete", Distilled: 4}
 
-// By family id as the diffusion profile names it. Steps and guidance follow the family's docs in
-// stable-diffusion.cpp and the model card; the sampler follows its default_sample_method, the scheduler
-// its default_scheduler, and the flow shift the value its denoiser setup gives the version.
+// Sampling defaults by canonical family ID. Steps and guidance follow model documentation. Other
+// values follow stable-diffusion.cpp defaults.
 var sdSamples = map[string]sdSample{
 	"sd1":             {Steps: 20, Cfg: 7, Guidance: 3.5, Sampler: "euler_a", Scheduler: "discrete", Distilled: 4},
 	"sd2":             {Steps: 20, Cfg: 7, Guidance: 3.5, Sampler: "euler_a", Scheduler: "discrete", Distilled: 4},
@@ -66,17 +63,15 @@ var sdSamples = map[string]sdSample{
 	"sensenova_u1":    {Steps: 50, Cfg: 4, Guidance: 3.5, FlowShift: 3, Sampler: "euler", Scheduler: "discrete", Distilled: 8},
 }
 
-// The words a distilled release carries in its name, each with the step count that word usually means; zero
-// leaves the count to the family
+// Distilled release markers and step counts. Zero uses the family default.
 var sdDistilledWords = map[string]int{
 	"turbo": 0, "schnell": 4, "lightning": 4, "hyper": 8, "lcm": 4, "dmd": 4, "distill": 0, "distilled": 0, "nitro": 4, "sdxs": 1,
 }
 
-// A step count written into a name, 4step, 8-steps, or 2_step
+// Matches step counts such as 4step, 8-steps, and 2_step.
 var sdStepWord = regexp.MustCompile(`(?i)(?:^|[^0-9])([0-9]{1,3})[-_ ]?steps?(?:$|[^a-z])`)
 
-// The words of a name, split on anything that is not a letter or a digit and where letters meet digits,
-// so flux2-klein-4B and FLUX.2-klein both read flux, 2, klein
+// Splits names into lowercase letter and digit tokens.
 func sdWords(name string) []string {
 	var out []string
 	digit := func(r rune) bool { return r >= '0' && r <= '9' }
@@ -95,7 +90,7 @@ func sdWords(name string) []string {
 	return out
 }
 
-// Whether a name says the model is distilled, and the step count the name gives when it gives one
+// Detects distilled variants and explicit step counts.
 func sdDistilled(name string) (bool, int) {
 	steps := 0
 	if m := sdStepWord.FindStringSubmatch(name); m != nil {
@@ -112,8 +107,7 @@ func sdDistilled(name string) (bool, int) {
 	return steps > 0, steps
 }
 
-// The family a model belongs to: what its tensors said, else what its name says, else what its header
-// claimed, since a converter writes whatever family it was told
+// Resolves the family from tensors, then the name, then the header architecture.
 func sdFamily(d *v1.Descriptor, repo string) string {
 	if f := diffusion.Canonical(d.GetMetadata()[diffusion.KeyFamily]); f != "" && diffusion.Denoiser(f) {
 		return f
@@ -124,8 +118,7 @@ func sdFamily(d *v1.Descriptor, repo string) string {
 	return diffusion.Canonical(d.GetArchitecture())
 }
 
-// The family a name spells out, the spelling of the most words winning so flux2 klein beats flux2 and
-// that beats flux; empty when the name spells none
+// Matches the most specific family name, or returns empty.
 func sdFamilyNamed(name string) string {
 	words := sdWords(name)
 	best, bestParts := "", 0
@@ -150,7 +143,7 @@ func sdFamilyNamed(name string) string {
 	return diffusion.Canonical(best)
 }
 
-// Gives every sampling param still at auto the family's figure, a distilled release running at guidance 1 for fewer steps
+// Resolves auto sampling settings. Distilled models use guidance 1 and fewer steps.
 func sdSampling(s *estimate.Scope) {
 	d := s.Descriptor
 	family := sdFamily(d, s.Repo)
@@ -165,7 +158,7 @@ func sdSampling(s *estimate.Scope) {
 		} else {
 			sample.Steps = sample.Distilled
 		}
-		// A FLUX release without the guidance embedding shifts by 1, the way schnell does
+		// FLUX without a guidance embedding uses shift 1, as in schnell.
 		if family == "flux" {
 			sample.FlowShift = 1
 		}

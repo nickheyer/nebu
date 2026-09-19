@@ -9,7 +9,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// How long a persona pauses before it starts typing
+// Delay before typing starts.
 func preDelay(h *v1.Humanize) time.Duration {
 	if !h.GetEnabled() || h.GetDelayMaxMs() == 0 {
 		return 0
@@ -22,7 +22,7 @@ func preDelay(h *v1.Humanize) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
-// How long a persona types one message, its length at the persona's speed with a little jitter, capped
+// Capped typing delay based on message length, speed, and jitter.
 func typingTime(h *v1.Humanize, text string) time.Duration {
 	if !h.GetEnabled() || h.GetCharsPerSecond() <= 0 {
 		return 0
@@ -36,7 +36,7 @@ func typingTime(h *v1.Humanize, text string) time.Duration {
 	return d
 }
 
-// Whether the persona is awake now, always without active hours
+// Checks active hours. No schedule means always active.
 func awake(h *v1.Humanize, now time.Time) bool {
 	if !h.GetEnabled() || h.GetActiveHours() == "" {
 		return true
@@ -77,7 +77,7 @@ func pick(list []string) string {
 	return list[rand.IntN(len(list))]
 }
 
-// Makes an answer read like a person typed it: lowercase outside code, no final period
+// Lowercases text outside code and removes the final period.
 func casual(text string) string {
 	if strings.Contains(text, "```") {
 		return text
@@ -90,7 +90,7 @@ func casual(text string) string {
 	return out
 }
 
-// One message per paragraph, a paragraph past the limit cut at sentences, the way a person sends a long thought
+// Splits paragraphs into messages, breaking long paragraphs at sentences.
 func split(text string, limit int) []string {
 	if limit <= 0 || limit > discordMessageMax {
 		limit = discordMessageMax
@@ -106,8 +106,8 @@ func split(text string, limit int) []string {
 	return out
 }
 
-// The messages an answer goes out as: paragraphs packed together up to the limit, a paragraph past it cut at
-// sentences, then at spaces, then wherever it must, and never inside a code fence
+// Packs paragraphs to the message limit, splitting at sentences or spaces when
+// possible. Keeps code fences intact.
 func chunk(text string, limit int) []string {
 	if limit <= 0 || limit > discordMessageMax {
 		limit = discordMessageMax
@@ -147,7 +147,7 @@ func chunk(text string, limit int) []string {
 	return out
 }
 
-// Paragraphs of a text, a fenced code block kept whole with its neighbors' blank lines inside it
+// Splits paragraphs while preserving fenced code blocks and their blank lines.
 func splitParagraphs(text string) []string {
 	var out []string
 	var cur strings.Builder
@@ -174,7 +174,7 @@ func splitParagraphs(text string) []string {
 	return out
 }
 
-// Cuts one paragraph at sentence ends, then at spaces, then wherever it must
+// Splits a paragraph at sentences, spaces, or the character limit.
 func splitLong(text string, limit int) []string {
 	var out []string
 	for len(text) > limit {
@@ -192,7 +192,7 @@ func splitLong(text string, limit int) []string {
 		}
 		if cut < 0 {
 			cut = limit
-			// Never split a multi byte character
+			// Keep UTF-8 characters intact.
 			for cut > 0 && !isRuneStart(text[cut]) {
 				cut--
 			}

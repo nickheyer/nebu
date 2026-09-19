@@ -22,7 +22,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// A Discord that records what the bot does and lets a test hand it events
+// Fake Discord session with recorded calls and injected events.
 type fakeSession struct {
 	mu        sync.Mutex
 	h         handlers
@@ -216,7 +216,7 @@ func (f *fakeSession) sentCount() int {
 	return len(f.sent)
 }
 
-// A runtime that answers chat the OpenAI way and images and video the stable-diffusion.cpp way
+// Fake runtime with OpenAI chat and stable-diffusion.cpp media APIs.
 type fakeUpstream struct {
 	mu       sync.Mutex
 	requests []map[string]any
@@ -354,7 +354,7 @@ func (f *fakeUpstream) lastJob() map[string]any {
 	return newest
 }
 
-// A manager over a temporary store and a gateway with one language model and one diffusion model
+// Test manager with a temporary store and language and diffusion routes.
 type harness struct {
 	m        *Manager
 	upstream *fakeUpstream
@@ -384,7 +384,7 @@ func newHarness(t *testing.T) *harness {
 	table.SetModes("inst-sd", []string{"img_gen", "vid_gen"})
 	table.Set("sd", "inst-sd", "", srv.URL, "repo:sd", "", v1.ApiFlavor_API_FLAVOR_SDCPP, nil, nil)
 	gw := gateway.New(table, nil, nil, nil, bus, log)
-	// Clocks tuned for a test's patience
+	// Shorten delays for tests.
 	scheduleTick, videoPoll, streamEdit = 200*time.Millisecond, 50*time.Millisecond, 10*time.Millisecond
 	h := &harness{upstream: up}
 	h.m = New(ctx, store, gw, bus, log, "")
@@ -452,7 +452,7 @@ func plain(id, content string) *discordgo.Message {
 	return &discordgo.Message{ID: id, ChannelID: "c1", GuildID: "g1", Content: content, Author: &discordgo.User{ID: "u1", Username: "nick"}, Timestamp: time.Now()}
 }
 
-// A spec with one persona on the language model, quick to answer
+// Single-persona spec with short reply delays.
 func quickSpec() *v1.BotSpec {
 	return &v1.BotSpec{
 		ShardCount: 1,

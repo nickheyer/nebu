@@ -12,17 +12,15 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// Between two system texts folded into one
+// Separator for merged system messages.
 const systemJoin = "\n\n"
 
-// How many bytes of a runtime's refusal the probe keeps
+// Maximum probe error body size.
 const refusalCap = 512
 
-// Shapes a chat the way a route asks before a flavor renders it
-//
-// A system message after the first is folded into the first, made when the
-// chat has none, or turned into a user turn where it stood. Keep leaves the
-// chat as it came.
+// Applies the route's system message policy before rendering. Merge combines
+// system messages at the start. User converts later ones to user turns. Keep
+// preserves the chat.
 func foldSystem(c *Chat, mode v1.SystemMessages) {
 	switch mode {
 	case v1.SystemMessages_SYSTEM_MESSAGES_MERGE:
@@ -54,8 +52,8 @@ func foldSystem(c *Chat, mode v1.SystemMessages) {
 	}
 }
 
-// Adds text to parts as one text part when every part is text, since a template may read only a string
-// or the first part, and as one more part otherwise
+// Combines text-only parts for templates that read only the first part.
+// Appends a separate text part when other content is present.
 func appendText(parts []Part, text string) []Part {
 	for _, p := range parts {
 		if p.Type != "text" {
@@ -68,11 +66,8 @@ func appendText(parts []Part, text string) []Part {
 	return []Part{{Type: "text", Text: text}}
 }
 
-// Shapes a body the gateway passes through, touching only the messages and only when the mode says to
-//
-// The body keeps every field the client set, which is why it is not read into a
-// chat and rendered again. The messages array is the OpenAI and Ollama shape, a
-// role and a content that is a string or a list of parts.
+// Applies system message policy directly to OpenAI or Ollama JSON messages.
+// Preserves all other client fields without a full parse-and-render cycle.
 func rewriteSystem(body []byte, mode v1.SystemMessages) ([]byte, error) {
 	if mode != v1.SystemMessages_SYSTEM_MESSAGES_MERGE && mode != v1.SystemMessages_SYSTEM_MESSAGES_USER {
 		return body, nil
@@ -134,7 +129,7 @@ func rewriteSystem(body []byte, mode v1.SystemMessages) ([]byte, error) {
 	return json.Marshal(fields)
 }
 
-// The text of a wire content, a string or the text parts of a list
+// Extracts text from a string or content part list.
 func contentText(raw json.RawMessage) string {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
@@ -154,7 +149,7 @@ func contentText(raw json.RawMessage) string {
 	return b.String()
 }
 
-// Adds text to a wire content the way appendText does to parts
+// Appends text to wire content using appendText semantics.
 func appendContent(raw json.RawMessage, text string) json.RawMessage {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
@@ -188,12 +183,9 @@ func appendContent(raw json.RawMessage, text string) json.RawMessage {
 	return out
 }
 
-// Learns whether a runtime's chat template renders a system message after the first
-//
-// Two one-token chats go to the runtime in its own flavor. The first has the
-// system message where every template takes it and must succeed, or the probe
-// cannot tell and says why. The second adds a system message after an
-// assistant turn; a refusal is the template's, in the runtime's own words.
+// Probes support for later system messages with two one-token requests.
+// The baseline starts with a system message. The second adds one after an
+// assistant turn. A baseline failure makes the probe inconclusive.
 func ProbeTemplate(ctx context.Context, client *http.Client, endpoint string, api v1.ApiFlavor, model string) *v1.TemplateProbe {
 	target, err := url.Parse(endpoint)
 	if err != nil {
@@ -224,7 +216,7 @@ func ProbeTemplate(ctx context.Context, client *http.Client, endpoint string, ap
 	return &v1.TemplateProbe{LateSystem: true}
 }
 
-// Sends one one-token chat and reads the status and, past success, the runtime's message
+// Sends a one-token chat and returns its status and any runtime error.
 func renderOnce(ctx context.Context, client *http.Client, target *url.URL, upstream Flavor, model string, messages []Message) (int, string, error) {
 	path, out, err := upstream.RenderRequest(&Chat{Kind: "chat", Model: model, MaxTokens: 1, Messages: messages})
 	if err != nil {

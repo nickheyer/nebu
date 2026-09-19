@@ -10,7 +10,6 @@
   import Spinner from './ui/Spinner.svelte';
   import IconButton from './ui/IconButton.svelte';
 
-  // What the daemon is busy with right now, each row leading to its log
   const tasks = $derived(activeTasks());
 
   async function cancel(t: Task) {

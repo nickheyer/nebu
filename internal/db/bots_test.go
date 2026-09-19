@@ -42,7 +42,7 @@ func TestBotsRoundTrip(t *testing.T) {
 	if !proto.Equal(rows[0].Bot, want) {
 		t.Fatalf("bot differs:\n%v\n%v", rows[0].Bot, want)
 	}
-	// A second write with the same name and another id is refused, names are unique
+	// Different bot IDs cannot share a name.
 	if err := d.PutBot(ctx, &v1.Bot{Id: "b2", Name: "nova", Spec: &v1.BotSpec{}, CreatedAt: timestamppb.Now(), UpdatedAt: timestamppb.Now()}, "x"); err == nil {
 		t.Fatal("duplicate name accepted")
 	}

@@ -9,7 +9,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// llama-server compiled from the llama.cpp source with the backend the host's devices take
+// Builds llama-server with the host backend.
 type LlamaCpp struct{}
 
 func (LlamaCpp) ID() string        { return "llamacpp" }
@@ -36,11 +36,11 @@ func (LlamaCpp) Facts() []string {
 func (LlamaCpp) Vars() []Var {
 	return []Var{
 		{Name: "build_type", Label: "Build type", Default: "Release", Description: "The cmake build type", Choices: []string{"Release", "RelWithDebInfo", "Debug", "MinSizeRel"}},
-		{Name: "extra", Label: "Extra cmake flags", Description: "Further cmake flags for the configure step, separated by spaces, -DGGML_CUDA_F16=ON say"},
+		{Name: "extra", Label: "Extra cmake flags", Description: "Space-separated CMake flags, such as -DGGML_CUDA_F16=ON"},
 	}
 }
 
-// The steps and outputs are POSIX, so the recipe builds on Linux and macOS; Windows takes the published builds
+// Builds on Linux and macOS. Windows uses published builds.
 func posix(h *v1.HostProfile) bool { return h.GetOs() != "windows" }
 
 func (LlamaCpp) Variants() []Variant {
@@ -87,7 +87,7 @@ func (LlamaCpp) Variants() []Variant {
 	}
 }
 
-// The compute capabilities of every NVIDIA device as CMake lists them, 8.6 becoming 86
+// Formats NVIDIA compute capabilities for CMake, such as 8.6 to 86.
 func cudaArchitectures(h *v1.HostProfile) string {
 	var out []string
 	for _, d := range host.Vendor(h, "nvidia") {

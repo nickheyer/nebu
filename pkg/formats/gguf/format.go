@@ -17,13 +17,13 @@ type Format struct{}
 func (Format) ID() string          { return "gguf" }
 func (Format) Description() string { return "GGML universal file format" }
 func (Format) Blurb() string {
-	return "GGUF packs the whole model into one file per precision, usually quantized to fit in less memory"
+	return "GGUF model weights and metadata, often quantized to reduce memory use"
 }
 func (Format) Priority() int               { return 10 }
 func (Format) Requires() []v1.ArtifactRole { return nil }
 
-// A projector file is the vision or audio encoder loaded beside the weights; a file named as an MTP
-// or draft head loads as a draft; an importance matrix is an input to quantization, not weights
+// Classifies projectors, MTP and draft heads, and importance matrices separately from model
+// weights.
 func (Format) Classify(p string) (formats.Claim, bool) {
 	_, base := formats.Split(p)
 	lower := strings.ToLower(base)
@@ -52,8 +52,8 @@ func headFile(lower string) bool {
 	return false
 }
 
-// The quant token names the group, with whatever follows it, so model-Q4_K_M and model-Q4_K_M-mtp
-// are two groups; a file without a quant token groups by its directory, and one at the root by default
+// Groups by the quantization token and its suffix. Files without one use their directory, or
+// default at the repository root.
 func groupName(p, stem string) string {
 	if q, ok := quantOf(stem); ok {
 		return q
@@ -85,10 +85,8 @@ func quantOf(stem string) (string, bool) {
 	return "", false
 }
 
-// The length of the quant token at the start of s, false when none starts there
-//
-// Tokens are Q or IQ and a digit with underscore parts after, TQ with a digit pair, or the
-// unquantized widths BF16, F16, F32, and MXFP4, all case insensitive.
+// Matches a quantization token prefix without case sensitivity: Q, IQ, TQ, BF16, F16, F32, or
+// MXFP4.
 func quantToken(s string) (int, bool) {
 	upper := strings.ToUpper(s)
 	for _, fixed := range []string{"BF16", "F16", "F32", "MXFP4"} {
@@ -133,8 +131,7 @@ func (f Format) Read(ctx context.Context, open formats.Opener, group *formats.Gr
 	if err != nil {
 		return nil, err
 	}
-	// The projector a run loads beside the weights counts with them, the one a launch picks, its
-	// tensors joining the table while its header, which describes the encoder alone, stays out
+	// Includes tensors from the selected projector, excluding its encoder-specific metadata.
 	if files := group.Files[v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR]; len(files) > 0 {
 		blob, err := open(ctx, files[0])
 		if err != nil {
@@ -150,8 +147,7 @@ func (f Format) Read(ctx context.Context, open formats.Opener, group *formats.Gr
 	return raw, nil
 }
 
-// The architecture the header names; a diffusion checkpoint is named from its tensors, since a converter
-// writes whatever family it was told and stable-diffusion.cpp reads the tensors alone
+// Infers diffusion architecture from tensors. Other models use the header architecture.
 func (Format) Architecture(raw *v1.RawModel) string {
 	if family := diffusion.Scan(raw.GetTensors(), raw.GetGroup()).Family; family != "" {
 		return family
@@ -186,8 +182,7 @@ func (Format) Params(raw *v1.RawModel) formats.Params {
 	}
 }
 
-// Tensors sit in numbered blocks, prediction heads under nextn, experts under _exps; the projector's
-// encoder and adapter tensors come from the mmproj file a run loads beside the weights
+// Classifies numbered blocks, nextn prediction heads, _exps experts, and projector tensors.
 func (Format) Tensor(name string) (v1.TensorGroupKind, int32) {
 	if rest, ok := strings.CutPrefix(name, "blk."); ok {
 		if n, tail, ok := strings.Cut(rest, "."); ok {
@@ -231,7 +226,8 @@ func (Format) DraftFrom(p formats.Params) int32 {
 
 func (Format) Elements(t *v1.TensorInfo, _ *v1.RawModel) uint64 { return t.GetElements() }
 
-// The quant token in the group name names the width, the flavour of the quant adds words
+// Groups by the quantization token and its suffix. Files without one use their directory, or
+// default at the repository root.
 func (Format) Precision(_ *v1.RawModel, group string) formats.Words {
 	var w formats.Words
 	q, ok := quantOf(group)

@@ -34,7 +34,7 @@ const (
 	chunkBytes     = 32 << 20
 	retries        = 5
 	drainTimeoutMs = 30000
-	// A runtime that has not started answering in this long is hung, not slow
+	// Runtime readiness timeout.
 	upstreamTimeoutMs = 600000
 )
 

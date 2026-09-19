@@ -178,7 +178,7 @@ func (f *botFlags) bind(fs *flag.FlagSet) {
 	fs.StringVar(&f.humanize, "humanize", "", "true or false, whether the default persona types and pauses like a person")
 }
 
-// Lays the flags over a spec, the file first when one is named
+// Loads the spec file, then applies flag overrides.
 func (f *botFlags) apply(fs *flag.FlagSet, spec *v1.BotSpec) (*v1.BotSpec, error) {
 	if f.spec != "" {
 		loaded, err := readSpec(f.spec)
@@ -243,7 +243,7 @@ func runBotsCreate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("bots create")
 	var f botFlags
 	f.bind(fs)
-	token := fs.String("token", "", "the bot token from the Discord developer portal, or the name of an environment variable holding it")
+	token := fs.String("token", "", "Discord bot token or environment variable name")
 	start := fs.Bool("start", false, "connect the bot as soon as it is created")
 	positional, err := e.parse(fs, args, 1, 1, "bots create <name> --token T [--start] [--spec FILE] [--model M] [--image-model M] [--video-model M] [--system TEXT] [--persona NAME] [--prefix !] [--require-mention B] [--dms B] [--humanize B]")
 	if err != nil {
@@ -263,7 +263,7 @@ func runBotsCreate(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) { botsTable(w, []*v1.Bot{resp.Msg.GetBot()}) })
 }
 
-// A token as given, or read from the environment variable it names
+// Returns a literal token or its named environment variable.
 func tokenValue(v string) string {
 	if env := os.Getenv(v); v != "" && env != "" && !strings.Contains(v, ".") {
 		return env

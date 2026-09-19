@@ -2,7 +2,6 @@
   import type { Component } from 'svelte';
   import type { SizeItem, Units } from './SizeBar.svelte';
 
-  // One meter: what it is, the shares of its total, and the facts folded under it
   export interface Meter {
     id: string;
     icon: Component<any>;
@@ -21,10 +20,6 @@
   import SizeBar from './SizeBar.svelte';
   import FactTable from './FactTable.svelte';
 
-  // A table of meters, a row each: the name, the bar at one reading width, then what the bar draws as
-  // figures in columns, used of total, free, and a column for each named share. The bar keeps its width
-  // however wide the window is, the table takes the rest the way every table does, and a row opens on
-  // the facts folded under it
   let { meters, name, bar, empty, unsized }: { meters: Meter[]; name: string; bar: string; empty: string; unsized: string } = $props();
 
   const open = new SvelteSet<string>();
@@ -34,7 +29,6 @@
   const format = (m: Meter) => (m.units === 'decimal' ? storage : bytes);
   const ratio = (m: Meter) => (m.units === 'decimal' ? ratioStorage : ratioBytes);
 
-  // The named shares across every meter, a column each in the order they first appear
   const shares = $derived([...new Set(meters.flatMap((m) => m.items.flatMap((i) => (i.label ? [i.label] : []))))]);
   const share = (m: Meter, label: string) => m.items.filter((i) => i.label === label).reduce((a, i) => a + n(i.size), 0);
   const tone = (label: string): Tone => meters.flatMap((m) => m.items).find((i) => i.label === label)?.tone ?? 'accent';

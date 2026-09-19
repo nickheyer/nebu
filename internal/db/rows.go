@@ -17,13 +17,13 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// What a record left unfinished by a previous daemon says when marked failed
+// Failure message for interrupted work after restart.
 const RestartNote = "daemon restarted"
 
 // Runs one statement
 type execFn func(query string, args ...any) error
 
-// Runs fn in one transaction, its statements through exec
+// Runs fn in a transaction using exec.
 func (d *DB) tx(ctx context.Context, fn func(exec execFn) error) error {
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
@@ -40,7 +40,7 @@ func (d *DB) tx(ctx context.Context, fn func(exec execFn) error) error {
 	return tx.Commit()
 }
 
-// Reads every row, scan filling one, the cursor closed before the caller queries again
+// Scans rows and closes the cursor before returning.
 func list[T any](ctx context.Context, d *DB, query string, scan func(*sql.Rows) (T, error), args ...any) ([]T, error) {
 	rows, err := d.sql.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -58,7 +58,7 @@ func list[T any](ctx context.Context, d *DB, query string, scan func(*sql.Rows) 
 	return out, rows.Err()
 }
 
-// The first item, ErrNotFound naming what was asked when there is none
+// Returns the first item or ErrNotFound.
 func one[T any](items []T, err error, what, id string) (T, error) {
 	var zero T
 	if err != nil {
@@ -70,7 +70,7 @@ func one[T any](items []T, err error, what, id string) (T, error) {
 	return items[0], nil
 }
 
-// Deletes rows whose column holds id, reporting whether any went
+// Deletes rows matching id and reports whether any were removed.
 func (d *DB) del(ctx context.Context, table, column, id string) (bool, error) {
 	res, err := d.sql.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+column+` = ?`, id)
 	if err != nil {
@@ -176,7 +176,7 @@ func enumOf[E ~int32](short string) E {
 	return zero
 }
 
-// Converts CamelCase to SCREAMING_SNAKE the same way text.Enum strips it
+// Converts CamelCase to SCREAMING_SNAKE for text.Enum compatibility.
 func screaming(s string) string {
 	var b strings.Builder
 	prev := rune(0)

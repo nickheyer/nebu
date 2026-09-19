@@ -13,7 +13,6 @@
   import ConfigForm from './ConfigForm.svelte';
   import TextInput from './ui/TextInput.svelte';
 
-  // A source added or edited, its settings the form its provider declares
   let { open = $bindable(false), providers = [], editing = null }: { open?: boolean; providers?: Provider[]; editing?: SourceStatus | null } = $props();
 
   let kindText = $state('');
@@ -23,12 +22,10 @@
 
   const kind = $derived(Number(kindText || SourceKind.UNSPECIFIED) as SourceKind);
   const provider = $derived(providers.find((p) => p.kind === kind));
-  // The provider declares the form, an existing source carrying it in its capabilities
   const fields = $derived<ConfigField[]>(editing ? (editing.capabilities?.fields ?? []) : (provider?.fields ?? []));
   const transports = $derived([...new Set(fields.map((f) => f.transport))]);
   const missing = $derived(fields.filter((f) => f.required && !(config[f.name] ?? '').trim() && !f.default).map((f) => f.label || f.name));
   const idOk = $derived(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id) && !id.includes('..'));
-  // The id the provider's name makes, the shape an id takes
   const idHint = $derived(
     (provider?.name ?? '')
       .toLowerCase()
@@ -36,7 +33,6 @@
       .replace(/^-+|-+$/g, '')
   );
 
-  // Switching providers starts the settings over
   $effect(() => {
     void kindText;
     if (!editing) config = {};

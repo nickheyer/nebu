@@ -35,7 +35,7 @@ enum ConfigType {
   CONFIG_TYPE_INT = 6;
 }
 
-// One setting a source of a provider accepts, declared by the transport that reads it
+// Source setting declared by its transport.
 message ConfigField {
   string name = 1;
   string label = 2;
@@ -45,20 +45,19 @@ message ConfigField {
   string description = 6;
   string transport = 7;
   repeated string choices = 8;
-  // The choices in words, keyed by choice, for a value that is not its own word
+  // Display labels keyed by choice value.
   map<string, string> choice_labels = 9;
-  // Why this host cannot take a choice, keyed by choice; a choice absent here is open
+  // Disabled choices and their reasons. Unlisted choices are allowed.
   map<string, string> choice_unmet = 10;
-  // The shape a value takes, shown while the field is empty and no default applies
+  // Placeholder shown when the field has no value or default.
   string placeholder = 11;
-  // The source and repository whose default revision applies while the field is empty: the newest
-  // release of a repository publishing releases, else its default branch. A client lists them and
-  // shows that revision in the empty field
+  // Source and repository for the default revision. Use the latest release when
+  // available, otherwise the default branch. Clients show it as the placeholder.
   string revision_source = 12;
   string revision_repo = 13;
 }
 
-// A provider sources are created from, with the settings its transports accept
+// Source provider and supported transport settings.
 message Provider {
   SourceKind kind = 1;
   string name = 2;
@@ -68,7 +67,7 @@ message Provider {
   bool configured = 6;
 }
 
-// Configured place models come from
+// Configured model source.
 message Source {
   string id = 1;
   SourceKind kind = 2;
@@ -93,7 +92,7 @@ message FacetValue {
   string group = 3;
 }
 
-// One dimension results can be narrowed by
+// Search filter.
 message Facet {
   string id = 1;
   string label = 2;
@@ -102,7 +101,7 @@ message Facet {
   bool freeform = 5;
 }
 
-// What a source can do, so a client can render one interface for every catalog
+// Source capabilities used to configure the catalog UI.
 message SourceCapabilities {
   bool browse = 1;
   bool search = 2;
@@ -124,13 +123,13 @@ message SourceCapabilities {
   string name = 18;
   repeated ConfigField fields = 19;
   repeated string transports = 20;
-  // Housekeeping tags the provider attaches that say nothing about a model, patterns matched whole
+  // Provider metadata tags to hide. Patterns match whole tags.
   repeated string hidden_tags = 21;
-  // Extras worth a chip on a hit card in order, a bool showing its label, a comma list one chip each
+  // Ordered search-result badges. Booleans show their label, comma lists show one badge per value.
   repeated ConfigField hit_fields = 22;
 }
 
-// A configured source with what it can do
+// Configured source and its capabilities.
 message SourceStatus {
   Source source = 1;
   SourceCapabilities capabilities = 2;
@@ -159,9 +158,9 @@ message SearchHit {
   google.protobuf.Timestamp created_at = 18;
   string url = 19;
   map<string, string> extra = 20;
-  // The runtimes that serve what the catalog says this is, one bit per runtime as Runtime.bit numbers them; zero when the catalog says too little to tell
+  // Compatible runtimes by Runtime.bit. Zero when catalog metadata is insufficient.
   uint32 runtimes = 21;
-  // What the catalog says the model is, a language model, a diffusion model, or a part of one; unspecified when it does not say
+  // Model kind from catalog metadata. Unspecified when unknown.
   ModelKind kind = 22;
 }
 
@@ -175,7 +174,7 @@ message Revision {
   string detail = 6;
   // Set when the variant resolves as its own repository
   string repo = 7;
-  // The parameter count and precision the source publishes for a variant, zero and empty when it names none
+  // Published parameter count and precision. Zero and empty when unavailable.
   uint64 parameters = 8;
   string precision = 9;
 }
@@ -203,7 +202,7 @@ message ListSourcesResponse {
   repeated SourceStatus sources = 1;
 }
 
-// Searches or browses one source, every source of a provider, or every source at once
+// Search one source, one provider, or all sources.
 message SearchRequest {
   string source_id = 1;
   string query = 2;
@@ -215,11 +214,11 @@ message SearchRequest {
   map<string, string> filters = 7;
   string cursor = 8;
   string author = 9;
-  // Searches every source of this provider when source_id is empty, every source when both are empty
+  // Search this provider when source_id is empty. Search all sources when both are empty.
   SourceKind kind = 10;
 }
 
-// Returns one page of hits, merged across sources when the request named none, with a warning for every source that did not answer
+// One results page, merged when searching multiple sources. Warnings identify sources that failed.
 message SearchResponse {
   repeated SearchHit hits = 1;
   string next_cursor = 2;
@@ -255,22 +254,22 @@ message CreateSourceRequest {
   Source source = 1;
 }
 
-// Returns the new source with what it can do
+// Return the new source and its capabilities.
 message CreateSourceResponse {
   SourceStatus source = 1;
 }
 
-// Replaces the name and settings of a source, its id and kind stay
+// Replace source name and settings. Keep its ID and kind.
 message UpdateSourceRequest {
   Source source = 1;
 }
 
-// Returns the updated source with what it can do
+// Return the updated source and its capabilities.
 message UpdateSourceResponse {
   SourceStatus source = 1;
 }
 
-// Removes a source, refused for seeded defaults
+// Remove a source. Seeded defaults cannot be removed.
 message DeleteSourceRequest {
   string id = 1;
 }

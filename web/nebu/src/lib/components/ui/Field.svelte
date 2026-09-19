@@ -1,8 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
-  // A labeled control: the label above, a faint line such as a flag name under it, whatever the field's own
-  // source says it does beneath that, and the error under the control
   let {
     label,
     description,

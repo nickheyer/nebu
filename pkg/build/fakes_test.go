@@ -7,7 +7,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/recipes"
 )
 
-// A recipe assembled field by field, so a test can shape one without a runtime behind it
+// Configurable test recipe.
 type fakeRecipe struct {
 	id, runtimeID string
 	source        recipes.Source
@@ -66,7 +66,7 @@ func args(parts ...string) []string {
 	return out
 }
 
-// The recipe the selection tests share: a release fed archive, a gpu variant needing a tool no host has, and a cpu fallback
+// Shared recipe with a release archive, unavailable GPU tool, and CPU fallback.
 func selectRecipe() fakeRecipe {
 	return fakeRecipe{
 		id: "fake", runtimeID: "fake",

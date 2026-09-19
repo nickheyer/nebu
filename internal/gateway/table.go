@@ -22,7 +22,7 @@ import (
 
 const (
 	drainPoll = 50 * time.Millisecond
-	// How often at most a route's counters reach the stream while requests flow
+	// Minimum interval between route counter updates.
 	counterFlush = time.Second
 )
 
@@ -39,7 +39,7 @@ var (
 	ErrThrottled = errors.New("route throttled")
 )
 
-// Public names mapped to instances, persisted, counted, and limited
+// Persistent route aliases, counters, and limits.
 type Table struct {
 	store    *db.DB
 	events   *events.Bus
@@ -49,12 +49,12 @@ type Table struct {
 	inflight map[string]*atomic.Int32
 	limiters map[string]*rate.Limiter
 	defaults *v1.Policy
-	// What each instance's chat template accepted, for routes that leave system messages to the instance
+	// Chat template probe results for automatic system message handling.
 	templates map[string]*v1.TemplateProbe
-	// What each instance generates as its capabilities endpoint lists them, img_gen and vid_gen, for diffusion runtimes
+	// Diffusion capabilities per instance: img_gen and vid_gen.
 	modes map[string][]string
 	total atomic.Uint64
-	// Routes whose counters moved since the stream last heard, flushed by one timer
+	// Routes with pending counter updates, flushed by a shared timer.
 	dirty map[string]bool
 	flush *time.Timer
 }
@@ -73,7 +73,7 @@ func OpenTable(ctx context.Context, store *db.DB, bus *events.Bus, log *slog.Log
 		return nil, err
 	}
 	for _, r := range rows {
-		// Nothing serves until an instance is adopted or relaunched
+		// Routes stay pending until an instance is adopted or relaunched.
 		r.InstanceId, r.Endpoint, r.State, r.InFlight = "", "", v1.RouteState_ROUTE_STATE_PENDING, 0
 		t.routes[r.GetName()] = r
 	}
@@ -96,7 +96,7 @@ func (t *Table) save(r *v1.Route, action v1.EventAction) {
 	t.events.Publish(v1.EventKind_EVENT_KIND_ROUTE, action, r.GetName(), r)
 }
 
-// Notes that a route's counters moved, the stream hearing about it once per flush
+// Queues a route counter update for the next flush.
 func (t *Table) touchLocked(name string) {
 	t.dirty[name] = true
 	if t.flush == nil {
@@ -116,21 +116,21 @@ func (t *Table) publishCounters() {
 	t.flush = nil
 }
 
-// Sets the policy routes without one of their own follow
+// Sets the default route policy.
 func (t *Table) SetDefaults(p *v1.Policy) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.defaults = p
 }
 
-// Returns the policy routes without one of their own follow
+// Returns the default route policy.
 func (t *Table) Defaults() *v1.Policy {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return proto.Clone(t.defaults).(*v1.Policy)
 }
 
-// Resolves a route's policy over the defaults, each zero field inheriting
+// Merges route policy with defaults. Zero fields inherit.
 func Effective(route, defaults *v1.Policy) *v1.Policy {
 	pick := func(a, b uint32) uint32 {
 		if a != 0 {
@@ -151,7 +151,7 @@ func Effective(route, defaults *v1.Policy) *v1.Policy {
 	return out
 }
 
-// Points a name at a ready instance answering to served, the policy and profile the slot's, nil for none
+// Maps a route to a ready instance and its served name, policy, and profile.
 func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, api v1.ApiFlavor, policy *v1.Policy, profile *v1.Profile) *v1.Route {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -169,7 +169,7 @@ func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, ap
 	if slotID == "" {
 		slotID = r.GetSlotId()
 	}
-	// Nothing to write when the route already says exactly this
+	// Skip unchanged routes.
 	if ok && r.GetInstanceId() == instanceID && r.GetEndpoint() == endpoint && r.GetModel() == model && r.GetServed() == served && r.GetApi() == api && r.GetSlotId() == slotID && r.GetState() == state && proto.Equal(r.GetPolicy(), policy) && proto.Equal(r.GetProfile(), profile) && slices.Equal(r.GetModes(), t.modes[instanceID]) {
 		return t.snapshotLocked(r)
 	}
@@ -181,7 +181,7 @@ func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, ap
 	return t.snapshotLocked(r)
 }
 
-// Records what an instance generates, stamping every route pointed at it
+// Updates capabilities on all routes for an instance.
 func (t *Table) SetModes(instanceID string, modes []string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -194,8 +194,7 @@ func (t *Table) SetModes(instanceID string, modes []string) {
 	}
 }
 
-// Points a name at a ready instance answering to its own name, the slot's policy and profile when it has them,
-// and remembers what the instance's chat template accepted
+// Maps a name to a ready instance, copying slot policy, profile, and template probe.
 func (t *Table) Serve(name string, in *v1.Instance, api v1.ApiFlavor, slotID string, policy *v1.Policy, profile *v1.Profile) *v1.Route {
 	t.mu.Lock()
 	if probe := in.GetTemplate(); probe != nil {
@@ -207,8 +206,8 @@ func (t *Table) Serve(name string, in *v1.Instance, api v1.ApiFlavor, slotID str
 	return t.Set(name, in.GetId(), slotID, in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), in.GetName(), api, policy, profile)
 }
 
-// The way a route treats a system message after the first: what its profile says, else merge when the
-// instance's template refused one, else keep
+// Uses the route's system message mode. Auto merges later system messages if
+// the template probe rejected them, otherwise keeps them.
 func (t *Table) SystemMode(r *v1.Route) v1.SystemMessages {
 	if mode := r.GetProfile().GetSystemMessages(); mode != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
 		return mode
@@ -221,7 +220,7 @@ func (t *Table) SystemMode(r *v1.Route) v1.SystemMessages {
 	return v1.SystemMessages_SYSTEM_MESSAGES_KEEP
 }
 
-// Keeps a name alive with nothing behind it
+// Keeps a route pending without an instance.
 func (t *Table) Pending(name, slotID, model string, policy *v1.Policy, profile *v1.Profile) *v1.Route {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -270,7 +269,7 @@ func (t *Table) Rename(from, to string) (*v1.Route, error) {
 	return t.snapshotLocked(r), nil
 }
 
-// Removes a name entirely, and the instance's counter when no other name shares it
+// Removes a route and its counter if no other route shares the instance.
 func (t *Table) Delete(name string) (*v1.Route, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -303,7 +302,7 @@ func (t *Table) Drain(instanceID string) {
 	}
 }
 
-// Detaches an instance, slot routes stay pending and others disappear
+// Detaches an instance. Slot routes stay pending, other routes are removed.
 func (t *Table) RemoveInstance(instanceID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -348,7 +347,7 @@ func (t *Table) List() []*v1.Route {
 	return out
 }
 
-// Lists routes that answer requests right now
+// Lists ready routes.
 func (t *Table) Ready() []*v1.Route {
 	var out []*v1.Route
 	for _, r := range t.List() {
@@ -362,7 +361,8 @@ func (t *Table) Ready() []*v1.Route {
 // Counts requests served through every route
 func (t *Table) Requests() uint64 { return t.total.Load() }
 
-// Claims a route for one request under its policy, returning the route as it stands, the policy in force, and release; only a served request, not a token count, is tallied
+// Claims a route under its effective policy and returns a release function.
+// Token counts are excluded from served request counters.
 func (t *Table) Acquire(name string, served bool) (*v1.Route, *v1.Policy, func(), error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -403,7 +403,7 @@ func (t *Table) Acquire(name string, served bool) (*v1.Route, *v1.Policy, func()
 	return out, policy, release, nil
 }
 
-// Returns the route's token bucket, retuned when its policy changed
+// Returns the route's token bucket, updating it after policy changes.
 func (t *Table) limiterLocked(name string, p *v1.Policy) *rate.Limiter {
 	burst := int(p.GetBurst())
 	if burst == 0 {

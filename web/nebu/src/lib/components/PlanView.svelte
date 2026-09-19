@@ -1,7 +1,6 @@
 <script lang="ts" module>
   import type { MemoryPlan } from '$proto/estimate_pb';
 
-  // The params a plan solved to concrete values
   export function solvedParams(plan: MemoryPlan): Record<string, string> {
     return Object.fromEntries(Object.entries(plan.params).filter(([, v]) => v !== 'auto'));
   }
@@ -16,8 +15,6 @@
   import SizeBar from './ui/SizeBar.svelte';
   import ParamList from './ui/ParamList.svelte';
 
-  // The estimate total and its breakdown, then every memory pool as a bar of its whole capacity: what
-  // other programs held when the host was read, what nebu's own instances hold, and what this plan takes
   let {
     plan,
     compact = false,
@@ -28,8 +25,7 @@
   const kinds: Record<number, string> = { [PoolKind.DEVICE]: 'device', [PoolKind.HOST]: 'host', [PoolKind.UNIFIED]: 'unified' };
   const solved = $derived(solvedParams(plan));
   const total = $derived(plan.weightsBytes + plan.cacheBytes + plan.overheadBytes);
-  // Placements name the side they sit on, device or host, not the pool, and a unified pool listed twice
-  // carries the device share first and the host share second
+  // A repeated unified pool lists device usage first, then host usage.
   const sides = $derived.by(() => {
     const out: string[] = [];
     const seen = new Set<string>();
@@ -47,7 +43,7 @@
     const word = enumLabel(TensorGroupKind, p.kind);
     return p.count > 1 ? `${word} ×${p.count}` : word;
   }
-  // The pool's whole size, and what was in use when the host was read split between nebu's own instances and everything else
+  // Separate nebu's allocations from other memory usage.
   function overlays(pool: MemoryPlan['pools'][number]) {
     const whole = pool.totalBytes || pool.capacityBytes;
     const inUse = whole > pool.freeBytes ? whole - pool.freeBytes : 0n;

@@ -1,7 +1,6 @@
 <script lang="ts">
   import { Minus, Plus } from '@lucide/svelte';
 
-  // A number field with a unit and step buttons; the empty text shows what applies while nothing is typed
   let {
     value = $bindable(''),
     id,
@@ -34,7 +33,7 @@
   const decimals = $derived(Math.max(0, (String(stepBy).split('.')[1] ?? '').length));
   const blank = $derived(value.trim() === '');
 
-  // Stepping starts from the typed number, else from the empty text when that is a number, else from the floor
+  // Start stepping from the value, then a numeric placeholder, then the minimum.
   function nudge(sign: number) {
     const base = parseFloat(blank ? empty : value);
     let next = (Number.isFinite(base) ? base : min ?? 0) + sign * stepBy;

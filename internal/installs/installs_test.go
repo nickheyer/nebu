@@ -41,20 +41,20 @@ func TestResolveAsset(t *testing.T) {
 	}
 	m := &Manager{Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Sources: reg}
 	ubuntu := runtimes.PrebuiltRule{ID: "linux", Assets: []runtimes.Asset{{Prefix: "llama-b", Contains: "-bin-ubuntu-x64", Suffix: ".tar.gz"}}, Binary: "llama-server"}
-	// The newest release lacks the asset, so the one before it is taken
+	// Use the previous release when the newest lacks the asset.
 	rel, err := m.resolveAssets(context.Background(), "o/r", ubuntu, "")
 	if err != nil || rel.tag != "b1" || len(rel.assets) != 1 || rel.assets[0].name != "llama-b1-bin-ubuntu-x64.tar.gz" || rel.assets[0].size != 20 {
 		t.Fatalf("release %+v %v", rel, err)
 	}
 	rel.close()
-	// Every asset must land in the same release, the newest has the binary but not its companion
+	// All assets must come from one release. The newest lacks the companion.
 	cuda := runtimes.PrebuiltRule{ID: "cuda", Assets: []runtimes.Asset{{Prefix: "llama-b", Contains: "-bin-win-cuda-12.", Suffix: "-x64.zip"}, {Prefix: "cudart-llama-bin-win-cuda-12.", Suffix: "-x64.zip"}}, Binary: "llama-server.exe"}
 	rel, err = m.resolveAssets(context.Background(), "o/r", cuda, "")
 	if err != nil || rel.tag != "b1" || len(rel.assets) != 2 || rel.assets[1].name != "cudart-llama-bin-win-cuda-12.4-x64.zip" || rel.assets[1].size != 40 {
 		t.Fatalf("two assets %+v %v", rel, err)
 	}
 	rel.close()
-	// A named release is taken as it is, and refused when it lacks the assets
+	// Explicit releases must contain every required asset.
 	rel, err = m.resolveAssets(context.Background(), "o/r", cuda, "b1")
 	if err != nil || rel.tag != "b1" || len(rel.assets) != 2 {
 		t.Fatalf("named release %+v %v", rel, err)

@@ -17,7 +17,7 @@ func (SGLang) Source() Source      { return Source{} }
 func (SGLang) Tools() []string     { return []string{"python3"} }
 func (SGLang) Facts() []string     { return []string{"device.vendor", "device.compute_capability"} }
 func (SGLang) Vars() []Var {
-	return []Var{{Name: "version", Label: "Version", Description: "The sglang version on PyPI, the newest when empty"}}
+	return []Var{{Name: "version", Label: "Version", Description: "PyPI version, latest when empty"}}
 }
 
 func (SGLang) Variants() []Variant {
@@ -31,7 +31,7 @@ func (SGLang) Variants() []Variant {
 		},
 		{
 			ID:          "cpu",
-			Description: "The same wheels over CPU torch, so the recipe builds anywhere; serving still needs the NVIDIA GPU the runtime asks for",
+			Description: "Install with CPU torch. Serving requires an NVIDIA GPU",
 			Applies:     func(*v1.HostProfile) bool { return true },
 			Vars: func(*v1.HostProfile) map[string]string {
 				return map[string]string{"index": "--extra-index-url=https://download.pytorch.org/whl/cpu"}

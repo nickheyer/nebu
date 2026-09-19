@@ -6,9 +6,6 @@
   import { poolName } from '$lib/state.svelte';
   import Tip from './ui/Tip.svelte';
 
-  // A memory plan as a table: a column per side, device and host, a row per tensor kind with what it weighs on
-  // each side, cache and overhead under the weights, and a footer of every pool against its capacity. A kind
-  // the runtime never loads keeps its row, its bytes in the total column with the reason on hover.
   let { plan }: { plan: MemoryPlan } = $props();
 
   const short: Record<number, string> = { [PoolKind.DEVICE]: 'GPU', [PoolKind.HOST]: 'RAM', [PoolKind.UNIFIED]: 'MEM' };
@@ -35,9 +32,8 @@
     count: number;
   }
 
-  // Placements name the side they sit on, device or host, so pools of one side share a column; a unified pool
-  // listed twice carries its device share first and its host share second, and each column says which. A side
-  // the plan placed weights on without a pool to hold them has no usage to show beyond those weights
+  // Group placements by device or host. Repeated unified pools list device usage first.
+  // Sides without pools can show weight usage only.
   const sides = $derived.by(() => {
     const out: Side[] = [];
     const seen = new Set<string>();
@@ -63,7 +59,6 @@
     return out;
   });
 
-  // One row per tensor kind, the loaded kinds in the planner's order and the kinds left on disk after them
   const rows = $derived.by(() => {
     const out: Row[] = [];
     const row = (kind: TensorGroupKind) => {
@@ -116,7 +111,7 @@
           {/each}
           <td class="num">
             {#if row.disk}
-              <Tip text="Stays on disk. This runtime never loads {row.word} tensors with these parameters.">
+              <Tip text="{row.word} tensors stay on disk with these parameters.">
                 <span class="text-fg-faint">{#if row.disk.count > 1}<span class="mr-1">×{row.disk.count}</span>{/if}{bytes(row.disk.bytes)} on disk</span>
               </Tip>
             {:else}

@@ -1,14 +1,11 @@
-// Sends one chat request through the gateway in a chosen wire format and streams the answer back
-//
-// Every format is spoken here so the console can exercise the gateway's
-// translation, not only the format the runtime speaks.
+// Support all gateway protocols so the console can exercise translation.
 
 export type Dialect = 'openai' | 'anthropic' | 'ollama';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
-  // Images before the text, base64 bytes with their type
+  // Base64 images precede the text.
   images?: ImagePart[];
   toolCalls?: ToolCall[];
   toolCallId?: string;
@@ -47,12 +44,10 @@ export interface ChatRequest {
   signal: AbortSignal;
 }
 
-// What arrives while an answer streams
 export interface ChatEvent {
   kind: 'text' | 'tool' | 'image' | 'usage' | 'stop' | 'error';
   text?: string;
   tool?: Partial<ToolCall> & { index: number };
-  // An image in the answer, a data URL or an address
   image?: { url: string };
   promptTokens?: number;
   completionTokens?: number;
@@ -61,16 +56,13 @@ export interface ChatEvent {
 }
 
 export interface Sent {
-  // The trace id the gateway answered with
   trace: string;
   status: number;
-  // The exact body sent
   body: string;
   path: string;
   headers: Record<string, string>;
 }
 
-// Builds the body and path for a dialect
 export function render(req: Omit<ChatRequest, 'signal' | 'base' | 'key'>): { path: string; body: Record<string, unknown>; headers: Record<string, string> } {
   const s = req.sampling;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -132,7 +124,7 @@ export function render(req: Omit<ChatRequest, 'signal' | 'base' | 'key'>): { pat
 }
 
 function openaiMessage(m: ChatMessage): Record<string, unknown> {
-  // Images travel as parts before the text, a message without them as a plain string
+  // Use a plain string for text-only messages.
   const content = m.images?.length
     ? [...m.images.map((i) => ({ type: 'image_url', image_url: { url: dataUrl(i) } })), ...(m.content ? [{ type: 'text', text: m.content }] : [])]
     : m.content;
@@ -142,7 +134,7 @@ function openaiMessage(m: ChatMessage): Record<string, unknown> {
   return out;
 }
 
-// Ollama carries a message's images as bare base64 beside its text
+// Ollama accepts bare base64 image data.
 function ollamaMessage(m: ChatMessage): Record<string, unknown> {
   const out = openaiMessage({ ...m, images: undefined });
   if (m.images?.length) out.images = m.images.map((i) => i.data);
@@ -153,7 +145,7 @@ export function dataUrl(i: ImagePart): string {
   return `data:${i.mediaType};base64,${i.data}`;
 }
 
-// The media type of bare base64 image bytes from their leading characters, png when they say nothing
+// Detect the image type from its base64 prefix, defaulting to PNG.
 export function sniffBase64(data: string): string {
   if (data.startsWith('/9j/')) return 'image/jpeg';
   if (data.startsWith('R0lGOD')) return 'image/gif';
@@ -175,7 +167,6 @@ function parseArgs(text: string): unknown {
   }
 }
 
-// Reads the message out of an error body in any of the three shapes
 export function errorMessage(raw: string): string {
   try {
     const parsed = JSON.parse(raw);
@@ -183,12 +174,10 @@ export function errorMessage(raw: string): string {
     if (parsed?.error?.message) return parsed.error.message;
     if (parsed?.message) return parsed.message;
   } catch {
-    // not json
   }
   return raw;
 }
 
-// Sends the request and calls emit per event until the answer ends
 export async function send(req: ChatRequest, emit: (ev: ChatEvent) => void, onSent?: (sent: Sent) => void): Promise<void> {
   const { path, body, headers } = render(req);
   if (req.key) {
@@ -268,7 +257,7 @@ function readOpenai(chunk: Record<string, unknown>, emit: (ev: ChatEvent) => voi
   const choices = (chunk.choices as { delta?: { content?: Content; tool_calls?: Call[] }; message?: { content?: Content; tool_calls?: Call[] }; text?: string; finish_reason?: string }[]) ?? [];
   for (const c of choices) {
     const content = c.delta?.content ?? c.message?.content ?? c.text ?? '';
-    // A string, or parts of text and images from a server that answers in parts
+    // Handle both plain text and multipart responses.
     if (typeof content === 'string') {
       if (content) emit({ kind: 'text', text: content });
     } else if (Array.isArray(content)) {
@@ -334,7 +323,6 @@ function readOllama(chunk: Record<string, unknown>, emit: (ev: ChatEvent) => voi
   }
 }
 
-// Reads a whole answer that did not stream
 function readWhole(dialect: Dialect, raw: string, emit: (ev: ChatEvent) => void) {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   if (dialect === 'ollama') {
@@ -359,7 +347,6 @@ function readWhole(dialect: Dialect, raw: string, emit: (ev: ChatEvent) => void)
   readOpenai(parsed, emit);
 }
 
-// Asks the gateway to count the prompt's tokens, through the runtime's tokenizer when it has one
 export async function countTokens(base: string, model: string, system: string, messages: ChatMessage[], key: string, signal: AbortSignal): Promise<number> {
   const { path, body, headers } = render({ dialect: 'anthropic', model, messages, system, sampling: {}, stream: false });
   delete body.max_tokens;

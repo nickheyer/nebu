@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ParamType, type Param } from '$proto/runtime_pb';
-  import type { MissingPart, ParamState } from '$proto/estimate_pb';
+  import type { Part, ParamState } from '$proto/estimate_pb';
   import { ChevronRight, Plus, X } from '@lucide/svelte';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
@@ -10,14 +10,11 @@
   import TextInput from './ui/TextInput.svelte';
   import TextArea from './ui/TextArea.svelte';
   import StoreFileSelect from './StoreFileSelect.svelte';
-  import PartSources from './PartSources.svelte';
+  import PartsList from './PartsList.svelte';
   import { live } from '$lib/state.svelte';
   import { picksModel } from '$lib/diffusion';
   import { byName, tail } from '$lib/format';
 
-  // Every param of a runtime as a label and its control, in the runtime's groups; a control left empty
-  // reads what applies in its place, a path is picked from the store, and a part the store lacks
-  // lists where to download it
   let {
     params = [],
     values = $bindable({}),
@@ -27,13 +24,13 @@
     solved = {},
     missing = [],
     idPrefix = 'param'
-  }: { params?: Param[]; values?: Record<string, string>; invalid?: number; inherited?: Record<string, string>; states?: ParamState[]; solved?: Record<string, string>; missing?: MissingPart[]; idPrefix?: string } = $props();
+  }: { params?: Param[]; values?: Record<string, string>; invalid?: number; inherited?: Record<string, string>; states?: ParamState[]; solved?: Record<string, string>; missing?: Part[]; idPrefix?: string } = $props();
 
   let showAdvanced = $state(false);
   let newName = $state('');
   let newValue = $state('');
 
-  // Groups in the order the runtime first names them, ungrouped params first
+  // Preserve runtime group order, with ungrouped params first.
   const groups = $derived.by(() => {
     const out: { name: string; params: Param[] }[] = [];
     for (const p of params) {
@@ -46,12 +43,12 @@
   const advancedCount = $derived(params.filter((p) => p.advanced).length);
   const regularGroups = $derived(groups.map((g) => ({ ...g, params: g.params.filter((p) => !p.advanced) })).filter((g) => g.params.length));
   const advancedGroups = $derived(groups.map((g) => ({ ...g, params: g.params.filter((p) => p.advanced) })).filter((g) => g.params.length));
-  // Values the runtime does not name stay editable so nothing is lost when a runtime changes
+  // Keep unknown parameters editable after runtime changes.
   const known = $derived(new Set(params.map((p) => p.name)));
   const extra = $derived(Object.keys(values).filter((k) => !known.has(k)).sort());
   const stateOf = $derived(new Map(states.map((s) => [s.name, s])));
   const missingOf = $derived(new Map(missing.map((m) => [m.param, m])));
-  // An advanced param with a value, or one the run cannot go without, is worth seeing
+  // Always show required and explicitly set parameters.
   $effect(() => {
     if (params.some((p) => p.advanced && (values[p.name] || missingOf.has(p.name)))) showAdvanced = true;
   });
@@ -65,7 +62,7 @@
 
   const isPath = (p: Param) => p.type === ParamType.PATH;
 
-  // The stored groups a choice param takes by name beside its own choices, the runtime linking each by its group
+  // Add compatible stored groups to the parameter's choices.
   function storeChoices(p: Param): { value: string; label: string; detail: string }[] {
     if (!p.choices.length || !p.picks) return [];
     return [...live.models.values()]
@@ -74,7 +71,7 @@
       .map((m) => ({ value: m.group, label: m.group, detail: tail(m.repo) }));
   }
 
-  // What applies while the field is empty: the slot's value, what the plan solved the param to, else the runtime default
+  // Default precedence: slot, plan, runtime.
   function beneath(p: Param): string {
     const v = inherited[p.name];
     if (v !== undefined && v !== '') return isPath(p) ? tail(v) : v;
@@ -86,7 +83,7 @@
     return p.default;
   }
 
-  // The bounds a number takes here: what the plan reports for this model and host, else the runtime's own
+  // Prefer planned bounds over runtime defaults.
   function bounds(p: Param): { min: number; max: number; step: number } {
     const s = stateOf.get(p.name);
     const min = s && (s.min !== 0 || s.max !== 0) ? s.min : p.min;
@@ -175,7 +172,7 @@
         <TextInput id={fid} mono empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {/if}
       {#if err}<p class="mt-1.5 text-xs text-bad">{err}</p>{/if}
-      {#if part && !v}<div class="mt-2"><PartSources {part} /></div>{/if}
+      {#if part && !v}<div class="mt-2"><PartsList parts={[part]} compact /></div>{/if}
     </div>
   </div>
 {/snippet}

@@ -11,13 +11,10 @@
   import Button from '../ui/Button.svelte';
   import SettingsFields from './SettingsFields.svelte';
 
-  // One install of a runtime by the method chosen and the settings it takes: an adopt records the binary
-  // at once, the other methods start a task the page follows
   let { status }: { status: RuntimeStatus } = $props();
 
   const runtime = $derived(status.runtime);
   const options = $derived(status.installs);
-  // The first method whose defaults run here, else the first
   let method = $state(untrack(() => (status.installs.find((o) => o.unmet.length === 0) ?? status.installs[0])?.method?.id ?? ''));
   let values = $state<Record<string, string>>({});
   let busy = $state(false);
@@ -27,12 +24,10 @@
   const kind = $derived(current?.method?.kind ?? InstallKind.UNSPECIFIED);
   const fields = $derived(current?.fields ?? []);
   const missing = $derived(fields.filter((f) => f.required && !f.default && !(values[f.name] ?? '').trim()));
-  // What keeps the method from running is said only when no field can put it right: there are no
-  // fields, or a required one has nothing to choose from and no path to pick
+  // Show the refusal only when the form has no field that can resolve it.
   const stuck = $derived(current?.unmet ?? []);
   const showStuck = $derived(stuck.length > 0 && (fields.length === 0 || fields.some((f) => f.required && !f.default && !f.choices.length && f.type !== ConfigType.PATH)));
 
-  // Switching methods starts the settings over, and any edit clears the last refusal
   $effect(() => {
     void method;
     untrack(() => (values = {}));

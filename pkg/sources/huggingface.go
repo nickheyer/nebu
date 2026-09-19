@@ -61,7 +61,7 @@ type hubTag struct {
 	SubType string `json:"subType"`
 }
 
-// Reads the hub's own tag taxonomy so the facets never go stale
+// Loads facets from the Hub tag taxonomy.
 func (hubAPI) Facets(ctx context.Context, c *Client) ([]*v1.Facet, error) {
 	out, err := taxonomyFacets(ctx, hubTaxonomy, func(ctx context.Context, kind string) ([]*v1.FacetValue, error) {
 		var body map[string][]hubTag
@@ -136,7 +136,7 @@ func (hubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 	for _, t := range Filter(req, FacetTag) {
 		q.Add("filter", t)
 	}
-	// The hub tags every repository by the formats it holds, so a format narrows the page at the source
+	// Apply format filters through repository tags.
 	for _, tag := range hubFormatTags(Filter(req, FacetFormat)) {
 		q.Add("filter", tag)
 	}
@@ -163,7 +163,7 @@ func (hubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 	return resp, nil
 }
 
-// The hub's tags for the formats the daemon reads: a single file diffusion checkpoint is tagged safetensors like any other
+// Maps format IDs to Hub tags. Standalone diffusion checkpoints use safetensors tags.
 func hubFormatTags(formats []string) []string {
 	var out []string
 	for _, f := range formats {
@@ -242,7 +242,7 @@ type hubTree struct {
 	} `json:"lfs"`
 }
 
-// The commit the hub serves for a repo at a revision, the hub's own default revision when none is named
+// Resolves the revision commit, using the Hub default when omitted.
 func hubSha(ctx context.Context, c *Client, repo, revision string) (string, error) {
 	var info struct {
 		Sha string `json:"sha"`
@@ -260,8 +260,7 @@ func hubSha(ctx context.Context, c *Client, repo, revision string) (string, erro
 	return info.Sha, nil
 }
 
-// The revision the hub serves when none is named, resolved from the hub itself: the branch its default
-// commit sits on, else that commit
+// Resolves the Hub default branch, falling back to its commit SHA.
 func hubDefault(ctx context.Context, c *Client, repo string) (revision, sha string, err error) {
 	if sha, err = hubSha(ctx, c, repo, ""); err != nil {
 		return "", "", err

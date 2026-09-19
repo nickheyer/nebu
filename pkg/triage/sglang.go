@@ -51,7 +51,7 @@ func (SGLang) Rules() []Rule {
 		{
 			ID:      "port-in-use",
 			Summary: "the port is taken",
-			Hint:    "stop whatever holds the port or run the model again to get a fresh port",
+			Hint:    "free the port or rerun the model to use another port",
 			Match:   anyOf("address already in use"),
 		},
 	}

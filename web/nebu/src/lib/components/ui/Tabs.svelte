@@ -3,13 +3,11 @@
     id: string;
     label: string;
     count?: number;
-    // A tab with a link navigates instead of setting the value
     href?: string;
   }
 
   import type { Snippet } from 'svelte';
 
-  // Underlined tabs, the active one carrying the accent, with room at the right end of the bar
   let { tabs, value = $bindable(''), size = 'md', end, class: cls = '' }: { tabs: Tab[]; value?: string; size?: 'sm' | 'md'; end?: Snippet; class?: string } = $props();
 
   const item = $derived(

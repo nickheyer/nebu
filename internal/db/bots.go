@@ -8,7 +8,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// A bot as stored, the token beside the record that never carries it
+// Stored bot with its token separate from the public record.
 type BotRow struct {
 	Bot   *v1.Bot
 	Token string
@@ -20,7 +20,7 @@ func (d *DB) PutBot(ctx context.Context, b *v1.Bot, token string) error {
 	if err != nil {
 		return err
 	}
-	// An upsert by id, so a second bot with a taken name is refused by the unique index rather than replacing the first
+	// Upsert by ID so duplicate names fail without replacing another bot.
 	_, err = d.sql.ExecContext(ctx, `INSERT INTO bots (id, name, token, enabled, spec, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET name = excluded.name, token = excluded.token, enabled = excluded.enabled, spec = excluded.spec, created_at = excluded.created_at, updated_at = excluded.updated_at`,
 		b.GetId(), b.GetName(), token, boolCol(b.GetEnabled()), string(spec), stamp(b.GetCreatedAt().AsTime()), stamp(b.GetUpdatedAt().AsTime()))
@@ -48,7 +48,7 @@ func (d *DB) DeleteBot(ctx context.Context, id string) (bool, error) {
 	return d.del(ctx, "bots", "id", id)
 }
 
-// What a bot keeps about one channel
+// Stored bot channel state.
 type BotChannel struct {
 	BotID        string
 	ChannelID    string
@@ -79,7 +79,7 @@ func (d *DB) PutBotSchedule(ctx context.Context, botID, automationID string, las
 	return err
 }
 
-// Reads when each of a bot's scheduled automations last ran, keyed by automation id
+// Returns last run times keyed by automation ID.
 func (d *DB) ListBotSchedules(ctx context.Context, botID string) (map[string]string, error) {
 	return d.stringMap(ctx, `SELECT automation_id, last_run_at FROM bot_schedules WHERE bot_id = ?`, botID)
 }

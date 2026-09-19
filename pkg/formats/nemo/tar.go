@@ -23,10 +23,7 @@ type entry struct {
 	dir    bool
 }
 
-// Walks tar headers through random access reads, skipping member bytes
-//
-// Headers cluster between large members, so each header read pulls a small
-// window and later headers inside it cost nothing.
+// Reads tar headers without member data, caching a small window to reduce repeated reads.
 type walker struct {
 	ra     io.ReaderAt
 	size   int64

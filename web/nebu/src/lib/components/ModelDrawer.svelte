@@ -11,7 +11,7 @@
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { cellPlan, descriptorKey, facetValueLabel, hitChips, locked, orderDescriptors, plannedContext, precisionShort, recommended, rowAt, weightsName } from '$lib/catalog';
-  import { FitVerdict, type InspectResponse, type MemoryPlan } from '$proto/estimate_pb';
+  import { FitVerdict, type InspectResponse, type MemoryPlan, type PartsResponse } from '$proto/estimate_pb';
   import { PoolKind } from '$proto/host_pb';
   import type { SearchHit, SourceCapabilities, Revision, ModelCard } from '$proto/source_pb';
   import type { StoredModel } from '$proto/store_pb';
@@ -32,11 +32,11 @@
   import Disclosure from './ui/Disclosure.svelte';
   import SizeBar from './ui/SizeBar.svelte';
   import PlanTable from './PlanTable.svelte';
+  import PartsList from './PartsList.svelte';
   import ModelFiles from './ModelFiles.svelte';
   import TaskChip from './TaskChip.svelte';
   import TextInput from './ui/TextInput.svelte';
 
-  // One repository: whether its weights run on this host and fit on its disk, what is stored of it, its card, and its files
   let {
     open = $bindable(false),
     sourceId,
@@ -81,19 +81,16 @@
   const revisionText = $derived(currentRevision?.name || model?.revision || curRev);
   const pageUrl = $derived(hit?.url || card?.url || '');
   const siteName = $derived(sourceLabel || caps?.name || 'the source');
-  // The namespace ahead of the slash, a link back into the catalog where the source can filter by it
   const author = $derived(hit?.author || (curRepo.includes('/') ? curRepo.slice(0, curRepo.indexOf('/')) : ''));
   const rest = $derived(author && curRepo.startsWith(author + '/') ? curRepo.slice(author.length + 1) : curRepo);
   const authorHref = $derived(author && caps?.facets.some((f) => f.id === 'author') ? `/catalog?source=${encodeURIComponent(sourceId)}&f.author=${encodeURIComponent(author)}` : '');
   const slots = $derived(orderedSlots());
   const installed = (id: string) => installsOf(id).length > 0;
-  // The runtime the table is read on: the pick, else the first with an install, else the first planned
   let pickedRuntime = $state('');
   const planRuntimes = $derived([...new Set((inspect?.rows ?? []).map((r) => r.runtimeId))]);
   const runtime = $derived(planRuntimes.includes(pickedRuntime) ? pickedRuntime : (planRuntimes.find(installed) ?? planRuntimes[0] ?? ''));
   const rows = $derived((inspect?.rows ?? []).filter((r) => r.runtimeId === runtime));
-  // The context length the table is read at: the last pick, kept per browser, else the one the planner solves,
-  // the largest that fits, else the largest planned
+  // Prefer the saved context, then the planner's choice, then the largest planned context.
   const ctxKey = 'nebu.drawer.context';
   let pickedCtx = $state(readLocal(ctxKey) === '' ? -1 : Number(readLocal(ctxKey)));
   const contexts = $derived([...new Set(rows.map((r) => r.context))].sort((a, b) => a - b));
@@ -105,16 +102,12 @@
   const ordered = $derived(inspect ? orderDescriptors(inspect.descriptors) : []);
   const names = $derived(Object.fromEntries((inspect?.descriptors ?? []).map((d) => [d.group, weightsName(d.group, d.formatId)])));
   const cells = $derived(new Map(ordered.map((d) => [d.group, rowAt(rows, d.group, context)])));
-  // The largest variant that fits right now, the usual thing to pull
   const bestGroup = $derived(recommended(ordered, rows, context));
-  // The source's count when it has one, else what the headers add up to
   const paramCount = $derived(hit && hit.parameters > 0n ? hit.parameters : ordered.reduce((a, d) => (d.parameterCount > a ? d.parameterCount : a), 0n));
   const mount = $derived(storeMount());
-  // A gated repository on a source without a token cannot be read, and a refusal says the same
   const gated = $derived(locked(hit, caps) || denied);
   const chips = $derived(hit ? hitChips(hit, caps) : []);
   const storedGroups = $derived([...live.models.values()].filter((m) => m.sourceId === sourceId && m.repo === curRepo).sort(byName((m) => m.group)));
-  // The paths of this repository already in the store, across every variant pulled
   const storedPaths = $derived(new Set(storedGroups.flatMap((m) => m.artifacts.map((a) => a.artifact?.path ?? ''))));
   const tabs = $derived([
     { id: 'weights', label: 'Weights' },
@@ -124,13 +117,11 @@
   ]);
   const shownTab = $derived(tabs.some((t) => t.id === tab) ? tab : 'weights');
   const formatIds = $derived([...new Set((inspect?.descriptors ?? []).map((d) => d.formatId))]);
-  // Nothing installed serves these weights, so the table plans on what could be installed and says so once
+  // Fall back to installable runtimes if none are installed.
   const noRuntime = $derived(planRuntimes.length > 0 && !planRuntimes.some(installed));
-  // Every variant is a part loaded beside a diffusion model, a VAE or a text encoder, which no runtime serves alone
   const partsOnly = $derived(ordered.length > 0 && ordered.every((d) => d.kind === ModelKind.COMPONENT));
   const poolWord: Record<number, string> = { [PoolKind.DEVICE]: 'GPU', [PoolKind.HOST]: 'RAM', [PoolKind.UNIFIED]: 'MEM' };
-  // One bar per pool: the whole pool, what was in use when the host was read, and what this variant takes;
-  // a unified pool listed twice carries both of its shares as one
+  // Combine device and host usage for unified pools.
   function poolRows(plan: MemoryPlan): { id: string; kind: PoolKind; used: bigint; cap: bigint; total: bigint; free: bigint }[] {
     const out: { id: string; kind: PoolKind; used: bigint; cap: bigint; total: bigint; free: bigint }[] = [];
     for (const p of plan.pools) {
@@ -152,7 +143,6 @@
     return [{ start: 'left' as const, items }];
   }
 
-  // What a revision shows beside its name
   function revisionDetail(r: Revision): string | undefined {
     const parts = [r.sizeBytes ? storage(r.sizeBytes, 1) : '', r.updatedAt ? ago(r.updatedAt, clock.now) : '', r.repo && storedRepo(r.repo) ? 'downloaded' : ''];
     return parts.filter(Boolean).join(' · ') || undefined;
@@ -160,10 +150,25 @@
   function storedRepo(repo: string): boolean {
     return [...live.models.values()].some((m) => m.sourceId === sourceId && m.repo === repo);
   }
-  // The row opened to its plan
+  // Load dependencies once per expanded group.
   let expanded = $state('');
+  let partsOf = $state<Record<string, PartsResponse | null>>({});
+  let partsError = $state<Record<string, string>>({});
+  async function loadParts(group: string) {
+    if (group in partsOf) return;
+    partsOf = { ...partsOf, [group]: null };
+    try {
+      const r = await api.estimate.parts({ sourceId, repo: curRepo, revision: curRev, group });
+      partsOf = { ...partsOf, [group]: r };
+    } catch (err) {
+      partsError = { ...partsError, [group]: message(err) };
+    }
+  }
+  function toggle(group: string) {
+    expanded = expanded === group ? '' : group;
+    if (expanded) void loadParts(expanded);
+  }
 
-  // A new target resets everything, the same target keeps what is loaded
   $effect(() => {
     const o = open;
     const r = repo;
@@ -177,7 +182,7 @@
     });
   });
 
-  // Another revision keeps the tab, another repository starts on the weights
+  // Keep the tab on revision changes. Reset it on repository changes.
   async function load(keepTab: boolean) {
     const gen = ++generation;
     if (!keepTab) tab = 'weights';
@@ -185,6 +190,8 @@
     inspect = null;
     inspectError = '';
     denied = false;
+    partsOf = {};
+    partsError = {};
     revisions = [];
     listingRevisions = false;
     card = null;
@@ -241,7 +248,7 @@
     await Promise.all(jobs);
   }
 
-  // Plans again when the slot changes, the listing and headers being cached daemon side
+  // Replan for the selected slot. The daemon caches listings and headers.
   let planned = '';
   $effect(() => {
     const key = slotId;
@@ -398,11 +405,12 @@
         <div class="flex flex-col gap-6">
           {#if noRuntime}
             <div class="note note-warn flex flex-wrap items-center gap-3">
-              <span class="flex-1">No installed runtime reads {formatIds.join(', ')}. You can download the weights now and run them once one is installed.</span>
+              <span class="flex-1">Install a runtime for {formatIds.join(', ')} to run these weights.</span>
               <Button size="sm" href="/runtimes/{runtime}?tab=installs" icon={Download}>Install {runtimeName(runtime)}</Button>
             </div>
           {:else if partsOnly}
-            <div class="note note-info">These are parts loaded beside a diffusion model, {[...new Set(ordered.map((d) => partWord(d.architecture)))].join(', ')}. Download what a model needs and pick it in the model files when you run it.</div>
+            {@const words = [...new Set(ordered.map((d) => partWord(d)))]}
+            <div class="note note-info">{words.length === 1 ? `This ${words[0]} requires a diffusion model.` : `These ${words.join(' and ')} files require a diffusion model.`} Download the model separately.</div>
           {:else if ordered.length && !planRuntimes.length}
             <div class="note note-warn">No runtime reads {formatIds.join(', ')}.</div>
           {/if}
@@ -442,7 +450,7 @@
                   {@const best = d.group === bestGroup && ordered.length > 1}
                   {@const room = !mount || d.totalBytes <= mount.freeBytes}
                   {@const open = expanded === d.group}
-                  <tr class="row-link {open ? 'row-active' : ''}" onclick={() => (expanded = open ? '' : d.group)}>
+                  <tr class="row-link {open ? 'row-active' : ''}" onclick={() => toggle(d.group)}>
                     <td class="whitespace-nowrap">
                       <div class="flex items-center gap-2">
                         <ChevronRight size={12} class="shrink-0 text-fg-faint transition-transform {open ? 'rotate-90' : ''}" />
@@ -453,12 +461,12 @@
                           </Tip>
                         {/if}
                         {#if kindLabel(d)}
-                          <Tip text={isComponent(d) ? 'A part loaded beside a diffusion model, not served on its own' : 'What this model generates'}>
+                          <Tip text={isComponent(d) ? 'Requires a diffusion model' : 'Model output'}>
                             <span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{kindLabel(d)}</span>
                           </Tip>
                         {/if}
                         {#if context === 0 && plan}
-                          <Tip text="The largest context that fits, up to what the model was trained for"><span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{fmtCtx(plannedContext(row))} ctx</span></Tip>
+                          <Tip text="Largest context that fits, capped at the trained context length"><span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{fmtCtx(plannedContext(row))} ctx</span></Tip>
                         {/if}
                         {#if best}<Tip text="Largest variant that fits in device memory right now"><Check size={13} class="text-ok" /></Tip>{/if}
                       </div>
@@ -498,15 +506,33 @@
                         {:else if stored}
                           <Button size="sm" variant={best ? 'primary' : 'secondary'} icon={Play} onclick={() => runModel(stored)}>Run</Button>
                         {:else}
-                          <Button size="sm" variant={best ? 'primary' : 'ghost'} icon={Download} onclick={() => pull(d)}>Download</Button>
+                          <Tip text="Download weights and required parts"><Button size="sm" variant={best ? 'primary' : 'ghost'} icon={Download} onclick={() => pull(d)}>Download</Button></Tip>
                         {/if}
                       </span>
                     </td>
                   </tr>
-                  {#if open && plan}
+                  {#if open}
+                    {@const parts = partsOf[d.group]}
                     <tr>
                       <td colspan="3" class="bg-sunken/40 !px-4 !py-3">
-                        <PlanTable {plan} />
+                        {#if plan}<PlanTable {plan} />{/if}
+                        <div class="mt-3 flex flex-col gap-1.5">
+                          {#if partsError[d.group]}
+                            <p class="text-xs text-bad">{partsError[d.group]}</p>
+                          {:else if parts === null || parts === undefined}
+                            <Skeleton rows={2} />
+                          {:else if !parts.family}
+                            <p class="text-xs text-fg-muted">{d.kind === ModelKind.COMPONENT ? `No dependencies. Download a diffusion model to use this component.` : 'No dependencies.'}</p>
+                          {:else if !parts.parts.length}
+                            <p class="text-xs text-fg-muted">{parts.familyName}: all required parts are included.</p>
+                          {:else}
+                            <div class="flex flex-wrap items-baseline gap-x-3 text-xs text-fg-muted">
+                              <span class="font-medium text-fg">{parts.familyName}</span>
+                              <span>{stored ? 'Parts' : 'Download includes'}{parts.pullBytes > 0n ? ` · ${storage(parts.pullBytes)} more to download` : ''}</span>
+                            </div>
+                            <PartsList parts={parts.parts} compact />
+                          {/if}
+                        </div>
                       </td>
                     </tr>
                   {/if}

@@ -32,10 +32,8 @@ var (
 	ErrSlot = errors.New("invalid slot request")
 )
 
-// Owns every slot and drives swaps
-//
-// A slot's request is what it is meant to serve. A run or swap sets it, an
-// evict or a stop clears it, a failure keeps it, and a restart relaunches it.
+// Manages slots and swaps. Run and swap set the saved request. Evict and stop
+// clear it. Failures retain it for relaunch after restart.
 type Manager struct {
 	DB           *db.DB
 	Instances    *instances.Manager
@@ -48,11 +46,11 @@ type Manager struct {
 
 	mu    sync.Mutex
 	slots map[string]*v1.Slot
-	// Slots a swap, evict, relaunch, or delete is working on right now
+	// Slots with active operations.
 	busy map[string]bool
 }
 
-// Reserves a slot for one operation, refusing while another holds it or a swap runs
+// Claims a slot unless another operation or swap holds it.
 func (m *Manager) claim(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -95,11 +93,8 @@ func (m *Manager) Load(ctx context.Context) error {
 	return nil
 }
 
-// Reconciles slots with what survived a restart and relaunches the rest in position order
-//
-// A slot whose occupant is still alive keeps it. One with a request and
-// nothing alive comes back, unless it failed on its own before the restart,
-// in which case it stays failed for someone to relaunch by hand.
+// Recovers live occupants and relaunches saved requests in position order.
+// Slots that failed before restart stay failed until manually relaunched.
 func (m *Manager) Recover(ctx context.Context) error {
 	var relaunch []*v1.Slot
 	for _, s := range m.List() {
@@ -132,7 +127,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 			m.pending(s, modelOf(s.GetRequest()))
 			relaunch = append(relaunch, s)
 		default:
-			// An empty slot serves nothing; a request left on one was written before evicting cleared it
+			// Clear stale requests from slots saved before eviction cleared them.
 			s = m.update(s.GetId(), func(sl *v1.Slot) {
 				sl.InstanceId, sl.State, sl.Error, sl.TaskId, sl.Request = "", v1.SlotState_SLOT_STATE_EMPTY, "", "", nil
 			})
@@ -145,7 +140,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 	return nil
 }
 
-// Relaunches slots one at a time so each plans around the last
+// Relaunches slots serially so each plan accounts for earlier launches.
 func (m *Manager) relaunchAll(ctx context.Context, list []*v1.Slot) {
 	for _, s := range list {
 		if ctx.Err() != nil {
@@ -199,9 +194,8 @@ func sortSlots(list []*v1.Slot) {
 	})
 }
 
-// Gives the slots their places in this order, one through the count, returning copies of the ones that moved
-//
-// The lock is held by the caller.
+// Assigns positions from 1 in list order and returns changed slots.
+// The caller must hold the lock.
 func (m *Manager) reorderLocked(ordered []*v1.Slot) []*v1.Slot {
 	var moved []*v1.Slot
 	for i, s := range ordered {
@@ -214,7 +208,7 @@ func (m *Manager) reorderLocked(ordered []*v1.Slot) []*v1.Slot {
 	return moved
 }
 
-// Writes and publishes slots whose place changed
+// Stores and publishes changed slot positions.
 func (m *Manager) persist(moved []*v1.Slot) {
 	for _, s := range moved {
 		if err := m.DB.PutSlot(context.Background(), s); err != nil {
@@ -224,7 +218,7 @@ func (m *Manager) persist(moved []*v1.Slot) {
 	}
 }
 
-// Gives every slot its place in the list as it sorts today
+// Renumbers slots in their current sort order.
 func (m *Manager) renumber() {
 	m.mu.Lock()
 	ordered := make([]*v1.Slot, 0, len(m.slots))
@@ -237,7 +231,7 @@ func (m *Manager) renumber() {
 	m.persist(moved)
 }
 
-// Moves one slot to a position, the others shifting to make room
+// Moves a slot and shifts neighboring positions.
 func (m *Manager) place(id string, position uint32) {
 	m.mu.Lock()
 	target, ok := m.slots[id]
@@ -328,7 +322,7 @@ func (m *Manager) Reservation(ctx context.Context, id string) (*instances.Reserv
 	}, nil
 }
 
-// Checks a public name: not empty, not another slot's, not a route's
+// Requires a nonempty name unused by other slots or routes.
 func (m *Manager) checkName(name, self string) error {
 	if name == "" {
 		return fmt.Errorf("%w: name required", ErrSlot)
@@ -345,7 +339,7 @@ func (m *Manager) checkName(name, self string) error {
 	return nil
 }
 
-// What to pin slots to
+// Slot device pins.
 func devicesFor(placement v1.Placement, ids []string) []string {
 	if placement == v1.Placement_PLACEMENT_HOST {
 		return nil
@@ -418,7 +412,7 @@ func (m *Manager) checkDevices(ctx context.Context, ids []string) error {
 	return nil
 }
 
-// Changes settings: the name and limits reach the route at once, the rest applies on the next run
+// Updates name and route limits immediately. Other settings apply on the next run.
 func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Slot, error) {
 	s, err := m.find(req.GetId())
 	if err != nil {
@@ -460,7 +454,7 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 		m.place(next.GetId(), req.GetPosition())
 		next = m.mustFind(next.GetId())
 	}
-	// A swap in flight writes the route itself when it settles
+	// Active swaps update the route when they finish.
 	if next.GetState() != v1.SlotState_SLOT_STATE_SWAPPING {
 		if live := m.liveInstance(next); live != nil && live.GetState() == v1.InstanceState_INSTANCE_STATE_READY {
 			m.route(next, live)
@@ -501,7 +495,7 @@ func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Slot, 
 	return s, nil
 }
 
-// Stops the occupant and forgets the request, keeping the slot and its name
+// Stops the occupant and clears the saved request.
 func (m *Manager) Evict(ctx context.Context, id string) (*v1.Slot, error) {
 	s, err := m.find(id)
 	if err != nil {
@@ -523,7 +517,7 @@ func (m *Manager) Evict(ctx context.Context, id string) (*v1.Slot, error) {
 	return next, nil
 }
 
-// Runs the slot's request again, after a failure or when nothing came back after a restart
+// Relaunches the slot's saved request.
 func (m *Manager) Relaunch(ctx context.Context, id string) (*v1.Slot, *v1.Instance, *v1.Task, error) {
 	s, err := m.find(id)
 	if err != nil {
@@ -564,7 +558,7 @@ func (m *Manager) retire(ctx context.Context, id string) error {
 	return err
 }
 
-// Replaces what a slot serves, keeping its name answering throughout
+// Swaps the slot's model while retaining its route name.
 func (m *Manager) Swap(ctx context.Context, req *v1.SwapRequest) (*v1.Slot, *v1.Instance, *v1.Task, error) {
 	s, err := m.find(req.GetSlotId())
 	if err != nil {
@@ -576,7 +570,7 @@ func (m *Manager) Swap(ctx context.Context, req *v1.SwapRequest) (*v1.Slot, *v1.
 	}
 	run.SlotId = s.GetId()
 	run.Name = s.GetName()
-	// The claim holds until the slot is either starting or marked swapping, so two swaps cannot interleave
+	// Hold the claim until starting or swapping to prevent concurrent swaps.
 	if err := m.claim(s.GetId()); err != nil {
 		return nil, nil, nil, err
 	}
@@ -592,7 +586,7 @@ func (m *Manager) Swap(ctx context.Context, req *v1.SwapRequest) (*v1.Slot, *v1.
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		// The instance holds the request as prepared, its runtime named and its params layered
+		// Save the prepared request with its runtime and merged params.
 		s = m.update(s.GetId(), func(sl *v1.Slot) {
 			sl.InstanceId, sl.State, sl.Error, sl.TaskId, sl.Request = in.GetId(), v1.SlotState_SLOT_STATE_STARTING, "", task.GetId(), in.GetRequest()
 		})
@@ -615,7 +609,7 @@ func (m *Manager) Swap(ctx context.Context, req *v1.SwapRequest) (*v1.Slot, *v1.
 	return m.mustFind(s.GetId()), old, task, nil
 }
 
-// Starts a run for the slot and waits for it to be ready, the fresh record on success
+// Launches the slot's model and returns the ready instance.
 func (m *Manager) launch(ctx context.Context, h *tasks.Handle, run *v1.RunRequest, swap bool) (*v1.Instance, error) {
 	if swap {
 		ctx = instances.WithSwap(ctx)
@@ -631,7 +625,7 @@ func (m *Manager) launch(ctx context.Context, h *tasks.Handle, run *v1.RunReques
 	return m.Instances.Get(in.GetId())
 }
 
-// Starts the new instance beside the old, flips, then drains
+// Starts the replacement, switches the route, then drains the old instance.
 func (m *Manager) swapBlueGreen(ctx context.Context, h *tasks.Handle, s *v1.Slot, old *v1.Instance, run *v1.RunRequest) error {
 	h.Progress(0, 3, "starting "+run.GetRepo())
 	fresh, err := m.launch(ctx, h, run, true)
@@ -653,7 +647,7 @@ func (m *Manager) swapBlueGreen(ctx context.Context, h *tasks.Handle, s *v1.Slot
 	return nil
 }
 
-// Drains the old, starts the new, rolls back on failure
+// Drains the old instance before launching, restoring it if launch fails.
 func (m *Manager) swapDrainFirst(ctx context.Context, h *tasks.Handle, s *v1.Slot, old *v1.Instance, run *v1.RunRequest) error {
 	h.Progress(0, 3, "draining "+old.GetId())
 	m.pending(m.mustFind(s.GetId()), modelOf(run))
@@ -701,7 +695,7 @@ func (m *Manager) swapDrainFirst(ctx context.Context, h *tasks.Handle, s *v1.Slo
 	return err
 }
 
-// Settles the slot after a swap onto whichever instance survives, the request kept so a failed slot can be relaunched
+// Updates the slot to the surviving instance and retains the request for relaunch.
 func (m *Manager) settle(s *v1.Slot, serving *v1.Instance, note string, err error) {
 	next := m.update(s.GetId(), func(sl *v1.Slot) {
 		if serving != nil {
@@ -721,16 +715,13 @@ func (m *Manager) route(s *v1.Slot, in *v1.Instance) {
 	m.Routes.Serve(s.GetName(), in, m.Instances.Runtimes.API(in.GetRuntimeId()), s.GetId(), s.GetPolicy(), s.GetProfile())
 }
 
-// Keeps the slot name answering with nothing behind it
+// Keeps the slot route pending without an instance.
 func (m *Manager) pending(s *v1.Slot, model string) {
 	m.Routes.Pending(s.GetName(), s.GetId(), model, s.GetPolicy(), s.GetProfile())
 }
 
-// Tracks occupants started or lost outside a swap, implementing the instance manager's slots
-//
-// An occupant that stops on request empties the slot, one that fails leaves
-// the slot failed with the request kept, and one the daemon stopped on its
-// way down leaves the slot starting so a restart brings it back.
+// Tracks occupants outside swaps. User stops empty the slot. Failures retain
+// the request in failed state. Shutdown leaves it starting for restart recovery.
 func (m *Manager) OnInstance(rec *v1.Instance) {
 	if rec.GetSlotId() == "" {
 		return

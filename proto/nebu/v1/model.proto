@@ -15,11 +15,11 @@ enum ArtifactRole {
   ARTIFACT_ROLE_CONFIG = 4;
   ARTIFACT_ROLE_TEMPLATE = 5;
   ARTIFACT_ROLE_OTHER = 6;
-  // A speculative decoding head such as an MTP draft, loaded beside the weights it drafts for
+  // Speculative decoding head, such as an MTP draft.
   ARTIFACT_ROLE_DRAFT = 7;
   // The shard index naming which file holds each tensor
   ARTIFACT_ROLE_INDEX = 8;
-  // Model code a checkpoint ships for loaders that trust remote code
+  // Checkpoint code for loaders that trust remote code.
   ARTIFACT_ROLE_CODE = 9;
 }
 
@@ -31,28 +31,28 @@ enum TensorGroupKind {
   TENSOR_GROUP_KIND_EXPERTS = 3;
   TENSOR_GROUP_KIND_OUTPUT = 4;
   TENSOR_GROUP_KIND_OTHER = 5;
-  // A vision encoder and the projector feeding its features to the language model
+  // Vision encoder and projector.
   TENSOR_GROUP_KIND_VISION = 6;
   // An audio encoder and its projector
   TENSOR_GROUP_KIND_AUDIO = 7;
-  // Speculative decoding layers such as multi token prediction heads, loaded only when a run drafts with them
+  // Speculative decoding layers, loaded only when drafting is enabled.
   TENSOR_GROUP_KIND_DRAFT = 8;
-  // The denoiser of a diffusion model, a UNet or a diffusion transformer
+  // Diffusion denoiser, either a UNet or diffusion transformer.
   TENSOR_GROUP_KIND_DIFFUSION = 9;
-  // The autoencoder a diffusion model decodes latents through
+  // Diffusion autoencoder for latent decoding.
   TENSOR_GROUP_KIND_VAE = 10;
-  // A text encoder conditioning a diffusion model, CLIP, T5, or a language model used as one
+  // Diffusion text encoder, such as CLIP, T5, or a language model.
   TENSOR_GROUP_KIND_TEXT_ENCODER = 11;
 }
 
-// What a weight group is, which decides the runtimes that serve it
+// Model kind used to select compatible runtimes.
 enum ModelKind {
   MODEL_KIND_UNSPECIFIED = 0;
   // A language model served for chat, completion, or embeddings
   MODEL_KIND_LANGUAGE = 1;
   // A diffusion model that generates images or video
   MODEL_KIND_DIFFUSION = 2;
-  // A part of a diffusion pipeline loaded beside a diffusion model, an autoencoder or a text encoder, not served alone
+  // Diffusion component, such as an autoencoder or text encoder. Requires a diffusion model.
   MODEL_KIND_COMPONENT = 3;
 }
 
@@ -66,8 +66,20 @@ message Artifact {
   string group = 6;
   uint32 shard_index = 7;
   uint32 shard_count = 8;
-  // Where a browser can fetch the file from the source, empty when the source has no such address
+  // Direct browser download URL. Empty when unavailable.
   string url = 9;
+}
+
+// Pipeline declared by model_index.json, including component subfolders and classes.
+message Tree {
+  // Directory containing model_index.json. Empty for the repository root.
+  string root = 1;
+  // The pipeline class, such as FluxPipeline
+  string class_name = 2;
+  // Subfolders keyed by pipeline component name, such as transformer, vae, or text_encoder.
+  map<string, string> parts = 3;
+  // Classes keyed by pipeline component name.
+  map<string, string> classes = 4;
 }
 
 // Repository at a revision with its artifacts
@@ -78,6 +90,8 @@ message Model {
   string commit = 4;
   repeated Artifact artifacts = 5;
   google.protobuf.Timestamp resolved_at = 6;
+  // Declared pipelines, deepest directory first.
+  repeated Tree trees = 7;
 }
 
 // One tensor as read from a header
@@ -86,7 +100,7 @@ message TensorInfo {
   string dtype = 2;
   uint64 bytes = 3;
   uint64 elements = 4;
-  // The dimensions as the header lists them, outermost first, what tells one family's block from another's
+  // Tensor dimensions from the header, outermost first.
   repeated uint64 shape = 5;
 }
 
@@ -107,7 +121,7 @@ message TensorGroup {
   uint64 elements = 5;
 }
 
-// How compactly a weight group stores each weight, in words
+// Weight precision and description.
 message Precision {
   uint32 bits = 1;
   string label = 2;
@@ -116,12 +130,12 @@ message Precision {
   uint32 level = 4;
 }
 
-// Format neutral facts the planner consumes
+// Format-independent model metadata for planning.
 message Descriptor {
   string format_id = 1;
   string group = 2;
   string architecture = 3;
-  // The attention family the planner sizes the cache by
+  // Attention architecture used to size the cache.
   string family = 4;
   map<string, double> params = 5;
   repeated TensorGroup groups = 6;
@@ -131,14 +145,14 @@ message Descriptor {
   map<string, string> metadata = 10;
   Precision precision = 11;
   ModelKind kind = 12;
-  // What a diffusion model makes, image or video, either or both; empty for anything else
+  // Diffusion outputs: image, video, or both. Empty for other model kinds.
   repeated string generates = 13;
 }
 
-// A weight format the daemon reads, in the words people meet it by
+// Supported weight format and display metadata.
 message Format {
   string id = 1;
   string description = 2;
-  // What the format is, for people who have not met it
+  // Format description.
   string blurb = 3;
 }

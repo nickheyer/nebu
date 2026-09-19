@@ -29,7 +29,7 @@ const (
 // Returned when a build id is not known
 var ErrUnknownBuild = errors.New("unknown build")
 
-// Lists recipes with what the host selects for each
+// Lists recipes with host selections.
 func (m *Manager) ListRecipes(ctx context.Context, runtimeID string) ([]*v1.RecipeStatus, error) {
 	profile, err := m.Host.Profile(ctx, false)
 	if err != nil {
@@ -50,7 +50,7 @@ func (m *Manager) ListRecipes(ctx context.Context, runtimeID string) ([]*v1.Reci
 	return out, nil
 }
 
-// Picks the named recipe, else the runtime manifest's recipe
+// Uses the requested recipe or the runtime manifest's default.
 func (m *Manager) recipe(req *v1.BuildRequest) (recipes.Recipe, error) {
 	if req.GetRecipeId() != "" {
 		rc, err := m.Recipes.Get(req.GetRecipeId())
@@ -114,7 +114,7 @@ func (m *Manager) Build(ctx context.Context, req *v1.BuildRequest) (*v1.Build, *
 	}
 	b.State = v1.BuildState_BUILD_STATE_RUNNING
 	title := fmt.Sprintf("build %s %s %s", sel.Recipe.ID(), b.GetVariant(), b.GetRef())
-	// The task works on its own copy once ids exist
+	// Give the task its own copy after assigning IDs.
 	var job *v1.Build
 	ready := make(chan struct{})
 	task := m.Tasks.Start(kindBuild, title, map[string]string{"build": b.GetId(), "runtime": b.GetRuntimeId(), "recipe": sel.Recipe.ID()}, func(ctx context.Context, h *tasks.Handle) error {
@@ -131,7 +131,7 @@ func (m *Manager) Build(ctx context.Context, req *v1.BuildRequest) (*v1.Build, *
 		m.building = map[string]*v1.Task{}
 	}
 	m.building[b.GetId()] = task
-	// The running row and its event land before the task can write a final state over them
+	// Store and publish the running state before the task can finish.
 	if err = m.saveBuild(ctx, b, v1.EventAction_EVENT_ACTION_CREATED); err != nil {
 		delete(m.building, b.GetId())
 		m.Tasks.Cancel(task.GetId())
@@ -143,7 +143,7 @@ func (m *Manager) Build(ctx context.Context, req *v1.BuildRequest) (*v1.Build, *
 	return proto.Clone(b).(*v1.Build), task, nil
 }
 
-// Resolves a request to what the host selects and the build it hashes to
+// Resolves host build settings and the build hash.
 func (m *Manager) resolveBuild(ctx context.Context, req *v1.BuildRequest) (*build.Selection, *v1.Build, error) {
 	rc, err := m.recipe(req)
 	if err != nil {
@@ -174,7 +174,7 @@ func (m *Manager) resolveBuild(ctx context.Context, req *v1.BuildRequest) (*buil
 	return sel, b, nil
 }
 
-// Runs a build inside the caller's task, a finished one reused, a running one waited for
+// Runs a build in the caller's task, reusing completed builds and waiting for active ones.
 func (m *Manager) buildInline(ctx context.Context, h *tasks.Handle, req *v1.BuildRequest) error {
 	sel, b, err := m.resolveBuild(ctx, req)
 	if err != nil {
@@ -325,7 +325,7 @@ func (m *Manager) RemoveBuild(ctx context.Context, id string) (*v1.Build, error)
 	return b, m.dropBuild(ctx, b)
 }
 
-// Drops a build row with its tree and tells the stream
+// Removes the build record and tree, then publishes the removal.
 func (m *Manager) dropBuild(ctx context.Context, b *v1.Build) error {
 	if _, err := m.DB.DeleteBuild(ctx, b.GetId()); err != nil {
 		return err

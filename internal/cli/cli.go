@@ -32,27 +32,28 @@ type command struct {
 	summary string
 	run     func(ctx context.Context, e *env, args []string) error
 	sub     []command
-	// Answers from a daemon built in process when none is listening
+	// Can use an in-process daemon when no daemon is listening.
 	local bool
 }
 
 func commands() []command {
 	return []command{
 		{name: "serve", summary: "run the daemon", run: runServe, local: true},
-		{name: "doctor", summary: "probe the host and check every dependency as a task", run: runDoctor, local: true},
+		{name: "doctor", summary: "check host dependencies", run: runDoctor, local: true},
 		{name: "host", summary: "show the probed host profile", run: runHost, local: true},
 		{name: "sources", summary: "configured sources", run: runSources, local: true, sub: []command{
 			{name: "list", summary: "list sources with their sorts, facets, and auth state", run: runSources, local: true},
-			{name: "providers", summary: "list providers with the settings their sources accept", run: runSourcesProviders, local: true},
+			{name: "providers", summary: "list providers and source settings", run: runSourcesProviders, local: true},
 			{name: "add", summary: "add a source", run: runSourcesAdd},
-			{name: "update", summary: "change the settings of a source", run: runSourcesUpdate},
+			{name: "update", summary: "change source settings", run: runSourcesUpdate},
 			{name: "remove", summary: "remove a source", run: runSourcesRemove},
 		}},
 		{name: "search", summary: "search or browse a source catalog", run: runSearch, local: true},
 		{name: "revisions", summary: "list revisions, tags, or versions of a repository", run: runRevisions, local: true},
-		{name: "card", summary: "print the model card a source publishes", run: runCard, local: true},
-		{name: "inspect", summary: "estimate memory fit for every weight group of a model", run: runInspect, local: true},
-		{name: "pull", summary: "download a weight group into the store", run: runPull, local: true},
+		{name: "card", summary: "print a model card", run: runCard, local: true},
+		{name: "inspect", summary: "estimate memory use for each weight group", run: runInspect, local: true},
+		{name: "pull", summary: "download a weight group and its blueprint parts", run: runPull, local: true},
+		{name: "parts", summary: "list a weight group's parts", run: runParts, local: true},
 		{name: "list", summary: "list stored models", run: runList, local: true},
 		{name: "remove", summary: "remove a stored model", run: runRemove, local: true},
 		{name: "store", summary: "store status, gc, and verify", run: runStoreStatus, local: true, sub: []command{
@@ -68,12 +69,12 @@ func commands() []command {
 		}},
 		{name: "runtimes", summary: "runtimes and their installs", run: runRuntimes, local: true, sub: []command{
 			{name: "list", summary: "list runtimes and host compatibility", run: runRuntimes, local: true},
-			{name: "show", summary: "show a runtime with every param it takes", run: runRuntimesShow, local: true},
+			{name: "show", summary: "show a runtime and its params", run: runRuntimesShow, local: true},
 			{name: "installs", summary: "list installs", run: runRuntimesInstalls, local: true},
 			{name: "adopt", summary: "record a binary already on the host", run: runRuntimesAdopt, local: true},
-			{name: "install", summary: "install a runtime by one of its methods with the settings chosen for it", run: runRuntimesInstall, local: true},
+			{name: "install", summary: "install a runtime", run: runRuntimesInstall, local: true},
 			{name: "remove", summary: "remove an install", run: runRuntimesRemove, local: true},
-			{name: "recipes", summary: "list build recipes and what this host selects", run: runRuntimesRecipes, local: true},
+			{name: "recipes", summary: "list build recipes and host defaults", run: runRuntimesRecipes, local: true},
 		}},
 		{name: "build", summary: "build a runtime from its recipe", run: runBuild, local: true},
 		{name: "builds", summary: "list, show, and remove builds", run: runBuildsList, local: true, sub: []command{
@@ -82,19 +83,19 @@ func commands() []command {
 			{name: "remove", summary: "remove a build and its install", run: runBuildsRemove, local: true},
 		}},
 		{name: "run", summary: "start a stored model on a runtime", run: runRun},
-		{name: "swap", summary: "replace what a slot serves without dropping its name", run: runSwap},
-		{name: "slots", summary: "reservations of devices and memory", run: runSlotsList, sub: []command{
+		{name: "swap", summary: "replace a slot's model", run: runSwap},
+		{name: "slots", summary: "device and memory reservations", run: runSlotsList, sub: []command{
 			{name: "list", summary: "list slots", run: runSlotsList},
 			{name: "create", summary: "create a slot", run: runSlotsCreate},
 			{name: "show", summary: "show a slot and its occupant", run: runSlotsShow},
 			{name: "update", summary: "change slot settings", run: runSlotsUpdate},
-			{name: "evict", summary: "stop the occupant and forget its model, keep the slot", run: runSlotsEvict},
+			{name: "evict", summary: "stop and clear a slot's model", run: runSlotsEvict},
 			{name: "relaunch", summary: "run the slot's model again after a failure", run: runSlotsRelaunch},
 			{name: "remove", summary: "delete a slot", run: runSlotsRemove},
 		}},
-		{name: "routes", summary: "public names the gateway answers for", run: runRoutesList, sub: []command{
+		{name: "routes", summary: "gateway model names", run: runRoutesList, sub: []command{
 			{name: "list", summary: "list routes", run: runRoutesList},
-			{name: "add", summary: "alias a name onto a running instance", run: runRoutesAdd},
+			{name: "add", summary: "add an alias for a running instance", run: runRoutesAdd},
 			{name: "remove", summary: "remove an alias", run: runRoutesRemove},
 		}},
 		{name: "gateway", summary: "gateway listeners, routes, counters, and recent requests", run: runGateway, sub: []command{
@@ -135,13 +136,13 @@ type env struct {
 	cmd *command
 	cfg *v1.Config
 	log *slog.Logger
-	// The last lines the logger wrote, for the daemon to stream to the Host page
+	// Recent log lines streamed to the Host page.
 	recent *launch.Log
 	out    io.Writer
 	errw   io.Writer
 	in     io.Reader
 	json   bool
-	// The daemon address once looked for, empty when this process stands in
+	// Resolved daemon address, or empty for an in-process daemon.
 	addr     string
 	resolved bool
 	cl       *clients
@@ -228,10 +229,8 @@ func (e *env) flags(name string) *flag.FlagSet {
 	return fs
 }
 
-// Parses flags anywhere among positionals, holds them to the usage line, and readies the clients
-//
-// A command that is not local needs a daemon listening, so that is checked before anything is dialed.
-// Max below zero takes any number of positionals.
+// Parses flags and positional args, validates usage, and creates clients.
+// Non-local commands require a running daemon. Negative max allows any arg count.
 func (e *env) parse(fs *flag.FlagSet, args []string, min, max int, usage string) ([]string, error) {
 	positional, err := splitFlags(fs, args)
 	if err != nil {
@@ -312,7 +311,7 @@ func (e *env) print(msg proto.Message, render func(w io.Writer)) error {
 	return nil
 }
 
-// Prints the message unless an error came with it, what a call's last line does
+// Prints a successful response or returns its error.
 func (e *env) done(msg proto.Message, err error) error {
 	if err != nil {
 		return err
@@ -353,7 +352,7 @@ func rowsOf(m map[string]string) [][]string {
 	return rows
 }
 
-// One line of key=value pairs in key order, cut to the facts width
+// Sorted key=value pairs, truncated to the facts column width.
 func compact(m map[string]string) string {
 	var parts []string
 	for _, r := range rowsOf(m) {
@@ -428,7 +427,7 @@ func runServe(ctx context.Context, e *env, args []string) error {
 // Set by release builds.
 var releaseVersion, releaseCommit string
 
-// Reads the release version or the module version and commit out of the binary.
+// Reads the release version or module version and commit from build info.
 func buildVersion() string {
 	version, revision := "devel", ""
 	if bi, ok := debug.ReadBuildInfo(); ok {

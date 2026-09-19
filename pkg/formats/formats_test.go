@@ -109,7 +109,7 @@ func TestClassify(t *testing.T) {
 	if g := byName["gguf:IQ2_S"]; g == nil || len(g.Weights) != 1 || byName["gguf:IQ2_S-mtp"] == nil || len(byName["gguf:IQ2_S-mtp"].Weights) != 1 {
 		t.Fatalf("suffixed quant should be its own group: %+v %+v", g, byName["gguf:IQ2_S-mtp"])
 	}
-	// The MTP heads carry the quant tokens of Q8_0 and Q4_K_M but load as drafts, so neither group grows a file
+	// MTP heads are drafts despite matching weight quantization tokens.
 	if g := byName["gguf:Q8_0"]; g == nil || len(g.Weights) != 2 {
 		t.Fatalf("draft heads must not join the group of their quant token: %+v", g)
 	}
@@ -125,7 +125,7 @@ func TestClassify(t *testing.T) {
 	if g := byName["safetensors:default"]; g == nil || len(g.Files[v1.ArtifactRole_ARTIFACT_ROLE_CONFIG]) != 3 || g.Files[v1.ArtifactRole_ARTIFACT_ROLE_CONFIG][0].GetPath() != "config.json" {
 		t.Fatalf("root config attach %+v", g)
 	}
-	// Every file a loader reads beside the weights attaches to the group, so a pull lands it
+	// Attach auxiliary files so pulls include them.
 	if g := byName["safetensors:default"]; len(g.Files[v1.ArtifactRole_ARTIFACT_ROLE_INDEX]) != 1 || len(g.Files[v1.ArtifactRole_ARTIFACT_ROLE_CODE]) != 1 || len(g.Files[v1.ArtifactRole_ARTIFACT_ROLE_TOKENIZER]) != 3 || len(g.Files[v1.ArtifactRole_ARTIFACT_ROLE_TEMPLATE]) != 1 {
 		t.Fatalf("index, code, tokenizer, and template attach: %+v", g.Files)
 	}
@@ -146,8 +146,6 @@ func TestClassify(t *testing.T) {
 	}
 }
 
-// A safetensors checkpoint without its config falls out of the safetensors format, whose headers need
-// the config, and lands in the diffusion format, which reads a lone file as a checkpoint of its own
 func TestClassifyDemotesUnreadableGroups(t *testing.T) {
 	c := registry(t)
 	m := model("lonely/model.safetensors", "README.md", "split_files/vae/wan_2.1_vae.safetensors", "v1-5-pruned-emaonly.ckpt", "flux/ae.sft")
@@ -190,7 +188,7 @@ func TestStemAndShard(t *testing.T) {
 func TestDescribe(t *testing.T) {
 	c := registry(t)
 	list := c.Describe()
-	if len(list) != 5 || list[0].GetId() != "gguf" || list[4].GetId() != "diffusion" || list[0].GetBlurb() == "" {
+	if len(list) != 7 || list[0].GetId() != "gguf" || list[1].GetId() != "diffusers" || list[4].GetId() != "peft" || list[5].GetId() != "safetensors" || list[6].GetId() != "diffusion" || list[0].GetBlurb() == "" {
 		t.Fatalf("formats in priority order with words: %v", list)
 	}
 	if c.Get("nope") != nil {

@@ -24,33 +24,33 @@ const (
 	maxLimit     = 100
 )
 
-// What a provider file holds: facts, transports, and the API mapping its wire format
+// Provider metadata, transports, and API mapping.
 type Catalog struct {
-	// Source id the seeded default goes by, and the provider's own name
+	// Provider ID and seeded source ID.
 	ID string
-	// Kind the proto knows it as
+	// Protobuf provider kind.
 	Kind v1.SourceKind
-	// What people call the provider
+	// Provider display name.
 	Name string
-	// What people call the seeded default when it is one site, Docker Hub for OCI
+	// Seeded source display name, such as Docker Hub for OCI.
 	Seed string
-	// Settings the seeded default starts with beyond the provider defaults, the site's own endpoints
+	// Seeded source overrides, including site endpoints.
 	SeedConfig map[string]string
-	// The site people browse, when it is not the primary endpoint
+	// Website URL when different from the primary endpoint.
 	Web string
 	// Path of the browse page under the site, such as /models
 	WebPath string
-	// Transports in order, the first is primary and owns the bare field names
+	// Transports in priority order. The first uses bare config field names.
 	Transports []Use
 	// Set when downloads need a key
 	AuthRequired bool
-	// Set for providers that exist only through config, such as a directory or a mirror
+	// Requires explicit configuration, as for directories and mirrors.
 	Configured bool
-	// Set when the provider cannot list without a query, or cannot search at all
+	// Listing and search capability restrictions.
 	NoBrowse, NoSearch bool
-	// Housekeeping tags the provider attaches that say nothing about a model, patterns matched whole
+	// Non-model tags to filter by whole-pattern match.
 	Noise []string
-	// Extras of a hit worth a chip on its card, in order
+	// Extra result fields shown as chips, in display order.
 	HitFields []*v1.ConfigField
 
 	Description   string
@@ -60,26 +60,26 @@ type Catalog struct {
 
 	// Sort ids in display order, the first is the default
 	Sorts []string
-	// The provider's own name for each sort id, what Sort.Key carries
+	// Provider sort keys.
 	SortKeys map[string]string
-	// Sort ids the provider can flip, most only order descending
+	// Sort IDs supporting ascending order.
 	Reversible []string
-	// Facets fixed for the life of the provider, API.Facets adds live ones before them
+	// Static facets, preceded by API-provided facets.
 	Facets []*v1.Facet
-	// Page size when the request names none, and the largest the provider serves
+	// Default and maximum page sizes.
 	DefaultLimit, MaxLimit int
 
 	API API
 }
 
-// How a provider's wire format maps onto the shared model, every method given the client
+// Maps provider responses to shared models.
 type API interface {
 	Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error)
 	Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error)
 	Open(ctx context.Context, c *Client, model *v1.Model, artifact *v1.Artifact) (Blob, error)
 }
 
-// An ordering the client checked against the catalog's sorts
+// Validated catalog sort.
 type Sort struct {
 	ID        string
 	Ascending bool
@@ -194,7 +194,7 @@ func httpUse(endpoint, tokenEnv string) Use {
 	return Use{Kind: TransportHTTP, Fields: map[string]string{"endpoint": endpoint, "token_env": tokenEnv}}
 }
 
-// The one implementation of Source: a provider's facts, its transports, and the shared behaviour
+// Source client combining provider metadata, transports, and shared behavior.
 type Client struct {
 	cat        *Catalog
 	spec       *v1.Source
@@ -204,7 +204,7 @@ type Client struct {
 	cache      sync.Map
 }
 
-// Keeps a value for the client's life, built on first use, never crossing sources
+// Initializes and caches a value for this client.
 func Cached[T any](c *Client, key string, build func() T) T {
 	if v, ok := c.cache.Load(key); ok {
 		return v.(T)
@@ -213,7 +213,7 @@ func Cached[T any](c *Client, key string, build func() T) T {
 	return v.(T)
 }
 
-// Builds a client for a provider from a source's settings over the provider's defaults
+// Builds a client with source overrides applied to provider defaults.
 func newClient(cat *Catalog, spec *v1.Source, cacheDir string) (*Client, error) {
 	cfg, err := resolveConfig(cat.Fields(), spec.GetConfig())
 	if err != nil {
@@ -290,7 +290,7 @@ func (c *Client) Token() string {
 	return ""
 }
 
-// The setting naming the key's variable, the bare one or the first transport's own
+// Returns the primary token variable setting, falling back to transport settings.
 func (c *Client) tokenSetting() string {
 	first := ""
 	for _, f := range c.cat.Fields() {
@@ -318,7 +318,7 @@ func (c *Client) Base() string {
 // Joins escaped path segments onto the API host
 func (c *Client) URL(segments ...string) string { return c.HTTP().URL(segments...) }
 
-// The site people browse
+// Website URL when different from the primary endpoint.
 func (c *Client) Web() string {
 	if c.cat.Web != "" {
 		return strings.TrimRight(c.cat.Web, "/")
@@ -329,7 +329,7 @@ func (c *Client) Web() string {
 // Joins escaped path segments onto the site
 func (c *Client) Page(segments ...string) string { return c.Web() + joinPath(segments...) }
 
-// The page the provider is browsed at, the directory for one on disk
+// Returns the browse page or local directory.
 func (c *Client) WebURL() string {
 	if web := c.Web(); web != "" {
 		return web + c.cat.WebPath
@@ -355,7 +355,7 @@ func (c *Client) Text(ctx context.Context, rawURL string, query url.Values, max 
 	return c.HTTP().Text(ctx, rawURL, query, max)
 }
 
-// Fetches a markdown card, an empty one with the page link when there is none
+// Fetches a model card, falling back to an empty card with the page link.
 func (c *Client) CardText(ctx context.Context, rawURL string, query url.Values, pageURL string) (*v1.ModelCard, error) {
 	text, err := c.Text(ctx, rawURL, query, cardMax)
 	if err != nil {
@@ -376,19 +376,19 @@ func (c *Client) Limit(req *v1.SearchRequest) int {
 	return Limit(req, def, max)
 }
 
-// The 1-based page a cursor names, the first when it names none
+// Decodes a page cursor, defaulting to page one.
 func (c *Client) page(req *v1.SearchRequest) int {
 	return max(Offset(req.GetCursor()), 1)
 }
 
-// Points the cursor at the next page when this one held hits and more remain
+// Sets the next-page cursor when more results remain.
 func (c *Client) nextPage(resp *v1.SearchResponse, page, limit int, total uint64) {
 	if uint64(page*limit) < total && len(resp.Hits) > 0 {
 		resp.NextCursor = strconv.Itoa(page + 1)
 	}
 }
 
-// The rel next link of a page's Link header, relative ones under the API host
+// Resolves the next Link header against the API host.
 func (c *Client) nextLink(h http.Header) string { return c.HTTP().nextLink(h) }
 
 // Reads every page of a Link paged JSON list, handing each to visit
@@ -399,7 +399,7 @@ func eachPage[T any](ctx context.Context, c *Client, next string, query url.Valu
 	})
 }
 
-// Reads pages of a Link paged JSON list until visit answers false or the pages run out
+// Visits Link-paginated JSON pages until exhausted or visit returns false.
 func eachPageWhile[T any](ctx context.Context, c *Client, next string, query url.Values, visit func([]T) bool) error {
 	for next != "" {
 		var page []T
@@ -428,7 +428,7 @@ func (c *Client) Capabilities(ctx context.Context) *v1.SourceCapabilities {
 	}
 	_, revisions := c.cat.API.(Reviser)
 	_, card := c.cat.API.(Carder)
-	// A provider may need a transport this source did not name before it lists
+	// Check required listing transports.
 	lists := true
 	if b, ok := c.cat.API.(Browser); ok {
 		lists = b.Browses(c)
@@ -468,7 +468,7 @@ func (c *Client) sorts() []*v1.SortOption {
 	return out
 }
 
-// Checks the requested order against the provider, the first sort standing in for none
+// Validates sorting, defaulting to the first supported sort.
 func (c *Client) sort(req *v1.SearchRequest) (Sort, error) {
 	id := req.GetSort()
 	if id == "" {

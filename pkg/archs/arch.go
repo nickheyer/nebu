@@ -1,4 +1,4 @@
-// Package archs knows every attention family: how much cache each token of context costs.
+// Package archs calculates cache requirements by attention family.
 package archs
 
 import (
@@ -10,7 +10,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/formats"
 )
 
-// The shape of one run that the cache size follows
+// Run dimensions used for cache sizing.
 type Run struct {
 	// Tokens of context the run holds, zero while unknown
 	Context float64
@@ -18,7 +18,7 @@ type Run struct {
 	UBatch float64
 }
 
-// One attention family, the way it keeps a cache per token
+// Attention family and cache formula.
 type Arch interface {
 	ID() string
 	Description() string
@@ -62,8 +62,8 @@ func (r *Registry) List() []Arch { return r.list }
 // Returns a family by id, nil when unknown
 func (r *Registry) Get(id string) Arch { return r.byID[id] }
 
-// The first family covering an architecture whose formula the params satisfy, so a family never claims
-// a checkpoint missing what it needs, the last match standing in when none is satisfied
+// Selects the first matching family with sufficient parameters, falling back to the last match if
+// none can be sized.
 func (r *Registry) Pick(architecture string, p formats.Params) Arch {
 	var last Arch
 	for _, a := range r.list {
@@ -107,9 +107,8 @@ func missing(pairs ...any) error {
 	return &Needs{Names: names}
 }
 
-// The cache of a model whose layers alternate between full attention and a sliding window: every
-// pattern-th layer keeps the whole context, the rest keep a window of tokens plus the batch being
-// prefilled. A pattern of zero means every layer slides.
+// Calculates cache for alternating attention. Every pattern-th layer uses full context. Other
+// layers use the window plus prefill batch. Zero means all layers use sliding windows.
 func slidingWindow(p formats.Params, run Run, pattern float64) (float64, error) {
 	if needs := missing(p.Layers, "n_layer", p.HeadsKV, "n_head_kv", p.HeadDim, "head_dim"); needs != nil {
 		return 0, needs

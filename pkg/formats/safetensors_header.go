@@ -20,8 +20,7 @@ type safetensorsTensor struct {
 	DataOffsets [2]uint64 `json:"data_offsets"`
 }
 
-// SafetensorsHeader reads the tensor table at the head of one safetensors file, the file's own
-// metadata keyed under __metadata__, the weight bytes never touched
+// SafetensorsHeader reads the tensor table and __metadata__ without fetching weight data.
 func SafetensorsHeader(ra io.ReaderAt, size int64) (map[string]string, []*v1.TensorInfo, error) {
 	var lenBuf [8]byte
 	if _, err := ra.ReadAt(lenBuf[:], 0); err != nil {

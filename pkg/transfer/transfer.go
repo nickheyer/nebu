@@ -58,7 +58,7 @@ func New(workers int, chunk int64, retries int, log *slog.Logger) *Fetcher {
 	return &Fetcher{Workers: max(workers, 1), Chunk: max(chunk, 1<<16), Retries: max(retries, 1), Log: log}
 }
 
-// Lands a blob at dest whole, resuming the partial beside it, reporting a file already there
+// Downloads to dest with resume and reports existing complete files.
 func (f *Fetcher) Land(ctx context.Context, blob sources.Blob, dest string, progress Progress) (bool, error) {
 	if info, err := os.Stat(dest); err == nil && info.Size() == blob.Size() {
 		if progress != nil {
@@ -75,15 +75,15 @@ func (f *Fetcher) Land(ctx context.Context, blob sources.Blob, dest string, prog
 	return false, os.Rename(dest+".partial", dest)
 }
 
-// Waits out a paused window before a download the fetcher cannot meter starts
+// Waits for an active transfer window before an unmetered download.
 func (f *Fetcher) Hold(ctx context.Context) error { return f.wait(ctx, 0) }
 
-// Holds a read of n bytes under the limit in force now, sleeping through a paused window
+// Rate-limits a read of n bytes and waits through paused windows.
 func (f *Fetcher) wait(ctx context.Context, n int) error {
 	for {
 		bps, pause := f.Schedule.At(time.Now())
 		if pause && n > 0 {
-			// Bytes are flowing on an open connection, which closes rather than idle through the pause
+			// Close active connections when a paused window begins.
 			return errPaused
 		}
 		if pause {
@@ -101,7 +101,7 @@ func (f *Fetcher) wait(ctx context.Context, n int) error {
 	}
 }
 
-// Returns the one token bucket, retuned when the window changed the rate
+// Returns the token bucket, updating its rate for the current window.
 func (f *Fetcher) limiterFor(bps uint64) *rate.Limiter {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -213,10 +213,8 @@ func saveState(partial string, st *state) error {
 	return os.Rename(tmp, partial+stateSuffix)
 }
 
-// Lands a URL in partial under the same limits as a blob and returns its digest
-//
-// A server that states the size and serves ranges gets resumable chunks, any
-// other is copied whole, from the start again on a failure.
+// Downloads a URL to partial with transfer limits and returns its digest. Known sizes with range
+// support use resumable chunks. Other downloads restart on failure.
 func (f *Fetcher) FetchURL(ctx context.Context, client *sources.HTTP, rawURL, partial string, progress Progress) (string, error) {
 	if resp, err := client.Do(ctx, http.MethodHead, rawURL, nil, nil); err == nil {
 		resp.Body.Close()
@@ -252,7 +250,7 @@ func (f *Fetcher) FetchURL(ctx context.Context, client *sources.HTTP, rawURL, pa
 	return HashFile(partial, nil)
 }
 
-// Runs try up to Retries times with backoff, taking back the progress a failed try reported
+// Retries with backoff and reverses failed progress increments.
 func (f *Fetcher) retry(ctx context.Context, progress Progress, try func() (int64, error)) error {
 	var last error
 	for attempt := 0; attempt < max(f.Retries, 1); attempt++ {
@@ -272,7 +270,7 @@ func (f *Fetcher) retry(ctx context.Context, progress Progress, try func() (int6
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// A pause is not a failure, the chunk starts again once the window ends
+		// Resume paused chunks after the window without counting a failure.
 		if errors.Is(err, errPaused) {
 			attempt--
 			continue
@@ -293,7 +291,7 @@ func (f *Fetcher) fetchChunk(ctx context.Context, blob sources.Blob, file *os.Fi
 }
 
 func (f *Fetcher) copyChunk(ctx context.Context, blob sources.Blob, file *os.File, off, length int64, progress Progress) (int64, error) {
-	// A paused window is waited out before the connection opens, not while it idles
+	// Wait through pauses before opening the connection.
 	if err := f.wait(ctx, 0); err != nil {
 		return 0, err
 	}

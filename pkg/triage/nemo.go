@@ -19,7 +19,7 @@ func (NeMo) Rules() []Rule {
 		{
 			ID:      "not-nemo2",
 			Summary: "the checkpoint is not a NeMo 2 directory",
-			Hint:    "in framework serving loads NeMo 2 checkpoints with context/ and weights/; a packed .nemo has to be converted first",
+			Hint:    "this serving mode requires NeMo 2 checkpoints with context/ and weights/. Convert packed .nemo files first",
 			Match: func(line string) (map[string]string, bool) {
 				if _, ok := anyOf("not a valid NeMo 2", "missing context director", "missing weights director")(line); ok {
 					return nil, true
@@ -54,7 +54,7 @@ func (NeMo) Rules() []Rule {
 		{
 			ID:      "convert-failed",
 			Summary: "converting the packed checkpoint failed",
-			Hint:    "read the converter output above; only the model families the converter lists can be converted",
+			Hint:    "check the converter output for supported model families",
 			Match: func(line string) (map[string]string, bool) {
 				if _, ok := anyOf("convert_nemo1_to_nemo2", "nemo-serve: converting")(line); !ok {
 					return nil, false
@@ -77,7 +77,7 @@ func (NeMo) Rules() []Rule {
 		{
 			ID:      "port-in-use",
 			Summary: "the port is taken",
-			Hint:    "stop whatever holds the port or run the model again to get a fresh port",
+			Hint:    "free the port or rerun the model to use another port",
 			Match:   anyOf("address already in use"),
 		},
 	}

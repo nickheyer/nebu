@@ -27,11 +27,7 @@ const (
 	headerTimeout = 2 * time.Minute
 )
 
-// HTTP transport for one host with auth and retry
-//
-// Listing answers an S3 style ListObjectsV2 under a prefix, which is what
-// buckets and the mirrors exported into them speak. Opening serves range
-// reads on a URL.
+// HTTP transport with authentication, retries, range reads, and S3 ListObjectsV2 listings.
 type HTTP struct {
 	http       *http.Client
 	base       *url.URL
@@ -52,10 +48,8 @@ func NewHTTP(endpoint, token string) (*HTTP, error) {
 	return &HTTP{http: &http.Client{Transport: newTransport()}, base: base, token: token, scheme: "Bearer"}, nil
 }
 
-// A transport that bounds the dial, the handshake, and the wait for headers, never the body
-//
-// A body is read under the transfer limits, which may hold it for as long as a
-// window says, so only the steps a stuck server could hang on carry a deadline.
+// Bounds connection, TLS handshake, and response header waits. Body reads have no deadline because
+// transfer schedules may pause them.
 func newTransport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.DialContext = (&net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}).DialContext

@@ -193,7 +193,7 @@ func (ngcAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 		return nil, err
 	}
 	resp := &v1.SearchResponse{Total: body.ResultTotal}
-	// Groups repeat resources, and the rest of the noise is test entries
+	// Skip duplicate groups and test entries.
 	seen := map[string]bool{}
 	for _, g := range body.Results {
 		for _, r := range g.Resources {
@@ -210,7 +210,7 @@ func (ngcAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 	return resp, nil
 }
 
-// A label value that says nothing
+// Placeholder label values.
 func ngcPlaceholder(v string) bool {
 	v = strings.TrimSpace(v)
 	if strings.HasPrefix(strings.ToUpper(v), "NSPECT-") {
@@ -253,7 +253,7 @@ func ngcHit(c *Client, r ngcResource) *v1.SearchHit {
 	if strings.EqualFold(hit.Task, "other") {
 		hit.Task = ""
 	}
-	// Labels repeat across keys, and a tag list must not
+	// Deduplicate tags across label keys.
 	seen := map[string]bool{}
 	for _, l := range r.Labels {
 		if !ngcTagLabels[l.Key] {
@@ -358,7 +358,7 @@ func (ngcAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v
 	return model, nil
 }
 
-// Turns the catalog's base64 digest into lower case hex, empty unless it is a sha256
+// Converts base64 SHA-256 digests to lowercase hex.
 func ngcHexDigest(b64 string) string {
 	b64 = strings.TrimSpace(b64)
 	raw, err := base64.StdEncoding.DecodeString(b64)

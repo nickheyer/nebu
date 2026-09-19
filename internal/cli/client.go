@@ -184,7 +184,7 @@ func (e *env) requireDaemon() error {
 	return nil
 }
 
-// The daemon address, configured or found listening, empty when this process would be the daemon
+// Returns the configured or discovered daemon address, or empty for local use.
 func (e *env) resolveAddr() string {
 	if e.resolved {
 		return e.addr
@@ -238,12 +238,12 @@ func reachable(addr string) bool {
 	return true
 }
 
-// The transport a daemon at base is dialed through, trusting its own certificate as is
+// Creates a transport that trusts the configured daemon certificate.
 func (e *env) transport(base string) http.RoundTripper {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.ForceAttemptHTTP2 = true
 	own := e.ownCert()
-	// An address dialed by IP sends no server name, so the name checked is the one dialed
+	// IP connections have no server name. Check the dialed address instead.
 	dialed := ""
 	if u, err := url.Parse(base); err == nil {
 		dialed = u.Hostname()
@@ -251,7 +251,7 @@ func (e *env) transport(base string) http.RoundTripper {
 	t.TLSClientConfig = &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: true,
-		// The daemon's configured certificate needs no authority or name, anything else does
+		// Trust the configured certificate directly. Validate other certificates normally.
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 {
 				return errors.New("tls: the server presented no certificate")
@@ -293,7 +293,7 @@ func (e *env) ownCert() *x509.Certificate {
 	return cert
 }
 
-// Where this machine reaches the gateway, the daemon saying whether it has a listener of its own
+// Returns the gateway's address, using its listener or the API listener.
 func (e *env) gatewayBase(ctx context.Context) string {
 	api := e.resolveAddr()
 	if api == "" {
@@ -318,7 +318,7 @@ func (e *env) gatewayBase(ctx context.Context) string {
 	return e.base(api)
 }
 
-// What the gateway reports, nil when the daemon cannot say
+// Returns gateway status, or nil if unavailable.
 func (e *env) gatewayStatus(ctx context.Context) *v1.GatewayStatus {
 	resp, err := e.cl.gateway.GetGatewayStatus(ctx, connect.NewRequest(&v1.GetGatewayStatusRequest{}))
 	if err != nil {
@@ -380,7 +380,7 @@ func (e *env) onlyGroup(ctx context.Context, source, repo, group string) (string
 	return "", fmt.Errorf("%s has groups %s, pass --group", repo, strings.Join(names, ", "))
 }
 
-// Resolves a repo and its group through the stored models, the request naming both
+// Resolves a stored repository and group.
 func (e *env) storedModel(ctx context.Context, source, repo, group string) (string, string, error) {
 	sourceID, err := e.defaultSource(ctx, source)
 	if err != nil {
@@ -390,7 +390,7 @@ func (e *env) storedModel(ctx context.Context, source, repo, group string) (stri
 	return sourceID, groupName, err
 }
 
-// Follows a task to the end, progress and logs on a terminal, the final snapshot alone as JSON
+// Follows task progress and logs. JSON output contains only the final snapshot.
 func (e *env) follow(ctx context.Context, id string) (*v1.Task, error) {
 	stream, err := e.cl.tasks.WatchTask(ctx, connect.NewRequest(&v1.WatchTaskRequest{Id: id}))
 	if err != nil {
@@ -523,5 +523,5 @@ func isTerminal(w io.Writer) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-// An enum's short name in capitals, how states read in tables
+// Uppercase enum name for tables.
 func loud(e protoreflect.Enum) string { return strings.ToUpper(text.Enum(e)) }

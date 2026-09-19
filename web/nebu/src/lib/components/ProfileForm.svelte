@@ -3,7 +3,6 @@
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
 
-  // How a route shapes requests before the runtime sees them; auto leaves each choice to the instance
   let { value = $bindable('auto'), idPrefix = 'profile' }: { value: string; idPrefix?: string } = $props();
 </script>
 

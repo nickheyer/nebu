@@ -15,7 +15,7 @@ type Format struct{}
 func (Format) ID() string          { return "safetensors" }
 func (Format) Description() string { return "Safetensors shards with a transformers config" }
 func (Format) Blurb() string {
-	return "Safetensors shards hold the original checkpoint next to its config, usually at full 16-bit precision"
+	return "Safetensors weights with a transformers config, usually at 16-bit precision"
 }
 func (Format) Priority() int { return 5 }
 func (Format) Requires() []v1.ArtifactRole {
@@ -73,8 +73,7 @@ func hasPrefix(s string, prefixes []string) bool {
 	return false
 }
 
-// The architecture as the config names it, the class list first, then the model type, then the text model's,
-// then the class a diffusers component names itself by
+// Uses the configured class, model type, text model, or diffusers component class, in that order.
 func (Format) Architecture(raw *v1.RawModel) string {
 	v := formats.First(raw.GetMetadata(), "architectures", "model_type", "text_config.model_type", "_class_name")
 	if i := strings.Index(v, ","); i >= 0 {
@@ -114,8 +113,8 @@ var (
 	normWords      = []string{"norm", "ln_f", "final_norm", "final_layernorm", "norm_f"}
 )
 
-// Encoders and prediction heads come before the layer rules, since each numbers layers of its own; the
-// routed experts alone are experts, the shared expert every token uses stays with its layer
+// Classify encoders and prediction heads before numbered layers. Shared experts remain with their
+// layer. Routed experts get a separate group.
 func (Format) Tensor(name string) (v1.TensorGroupKind, int32) {
 	// A diffusers component keeps the names its pipeline knows, none of which a language model uses
 	if kind, ok := diffusion.Kind(name); ok && kind != v1.TensorGroupKind_TENSOR_GROUP_KIND_TEXT_ENCODER {
@@ -167,8 +166,7 @@ func (Format) DraftFrom(p formats.Params) int32 {
 	return int32(p.Layers)
 }
 
-// Packed tensors hold several weights per stored element: expert tensors at the width the expert dtype
-// names, and quantized qweight and qzeros tensors at the width the quantization config names
+// Counts packed weights using expert dtype widths or quantization config for qweight and qzeros.
 func (Format) Elements(t *v1.TensorInfo, raw *v1.RawModel) uint64 {
 	n := t.GetElements()
 	if n == 0 {

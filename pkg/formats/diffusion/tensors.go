@@ -9,18 +9,13 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// Tensor names across the checkpoints stable-diffusion.cpp loads: the original layouts single files
-// and ComfyUI split files keep, and the diffusers layouts. Every name lands in the part of the
-// pipeline it belongs to, the denoiser, the autoencoder, or a text encoder, so a descriptor sizes
-// each part and a launch knows which parts a checkpoint bundles. The family of a denoiser is read
-// the way stable-diffusion.cpp reads it in ModelLoader::get_sd_version, the same signature tensors
-// and the same shapes, so nebu and the runtime agree on what a file is.
+// Tensor signatures for original, ComfyUI, and diffusers layouts. Family detection follows
+// stable-diffusion.cpp ModelLoader::get_sd_version.
 
-// The prefixes stable-diffusion.cpp gives a denoiser it loads, and the ones original checkpoints carry
+// Denoiser prefixes used by stable-diffusion.cpp and original checkpoints.
 var denoiserPrefixes = []string{"model.diffusion_model.uncond.", "model.diffusion_model.", "model.high_noise_diffusion_model.", "diffusion_model.", "unet.", "transformer."}
 
-// Names only a diffusion pipeline uses, safe to claim in any format: the denoiser, the autoencoder,
-// and the text encoders as single file checkpoints and ComfyUI split files name them
+// Tensor patterns specific to diffusion models.
 var (
 	strictDenoiser = []string{
 		"model.diffusion_model.", "model.high_noise_diffusion_model.", "diffusion_model.", "unet.",
@@ -45,9 +40,7 @@ var (
 	strictAudio       = []string{"wav2vec2.", "feature_extractor.", "feature_projection.", "masked_spec_embed", "encoder.pos_conv_embed."}
 )
 
-// Names a checkpoint without a config may hold that language models name their own tensors by too,
-// claimed only where no language model can be: the stacks of Wan, Lumina, and Cosmos, a T5 or a
-// language model standing alone as a text encoder, and an autoencoder's own encoder and decoder
+// Patterns shared with language models, used only for known diffusion checkpoints.
 var (
 	looseDenoiser = []string{
 		"blocks.", "head.", "out.", "net.", "layers.", "conv_in.", "conv_out.", "time_embedding.", "pos_embed", "norm_out.", "proj_out.", "proj_in.", "register_tokens", "modF.", "x_pad_token", "cap_pad_token", "caption_projection",
@@ -62,8 +55,7 @@ var (
 	looseAudio = []string{"encoder.layers."}
 )
 
-// Kind is the part of a diffusion pipeline a tensor loads into by a name only such a pipeline uses,
-// false for any other name; a format that also reads language models asks this before its own rules
+// Kind classifies tensor names specific to diffusion pipelines.
 func Kind(name string) (v1.TensorGroupKind, bool) {
 	switch {
 	case hasAny(name, strictTextEncoder):
@@ -80,8 +72,7 @@ func Kind(name string) (v1.TensorGroupKind, bool) {
 	return v1.TensorGroupKind_TENSOR_GROUP_KIND_UNSPECIFIED, false
 }
 
-// Any is Kind with the names a checkpoint without a config may hold as well, for a file that is
-// never a language model, a lone checkpoint or a GGUF that kept its checkpoint's names
+// Any also accepts names shared with language models. Use only for known diffusion checkpoints.
 func Any(name string) (v1.TensorGroupKind, bool) {
 	if kind, ok := Kind(name); ok {
 		return kind, true
@@ -108,29 +99,37 @@ func hasAny(name string, prefixes []string) bool {
 	return false
 }
 
-// What a checkpoint holds, read once from its tensor names and shapes
+// Checkpoint properties inferred from tensor names and shapes.
 type Profile struct {
-	// The family the denoiser belongs to, empty without a denoiser
+	// Denoiser family, empty if absent.
 	Family string
-	// The finer version stable-diffusion.cpp tells apart within the family, empty for the plain one
+	// Variant within the family, empty for the base variant.
 	Variant string
-	// The part a checkpoint without a denoiser is, empty when it has one
+	// Component kind for checkpoints without a denoiser.
 	Component string
-	// Whether the checkpoint bundles each part beside its denoiser
+	// Bundled components.
 	VAE, TextEncoder, ClipVision bool
-	// Whether the denoiser conditions on an image, so an image to video run needs an image encoder
+	// Bundled slot IDs, nil for standalone files.
+	Slots map[string]bool
+	// Whether the denoiser requires image conditioning.
 	ImageInput bool
-	// Whether the denoiser conditions on audio, so a run needs an audio encoder
+	// Whether the denoiser requires audio conditioning.
 	AudioInput bool
-	// Transformer blocks counted, and the width of a block's attention projection
+	// Transformer block count and attention projection width.
 	Blocks    float64
 	Embedding float64
-	// The tensors summed by the kind they load into
+	// Standalone encoder embedding width and vocabulary size.
+	Width float64
+	Vocab float64
+	// Standalone autoencoder latent channels and 3D convolution flag.
+	LatentChannels float64
+	VideoVAE       bool
+	// Tensor bytes by placement kind.
 	Kinds map[v1.TensorGroupKind]uint64
 }
 
-// The dimension stable-diffusion.cpp calls ne[i]: the innermost dimension is ne[0], and every
-// dimension past the fourth folds into ne[3], the way ggml holds a tensor of more than four
+// Returns ggml ne[i], counting from the innermost dimension. Dimensions beyond four are folded into
+// ne[3].
 func ne(t *v1.TensorInfo, i int) uint64 {
 	shape := t.GetShape()
 	n := len(shape)
@@ -153,7 +152,7 @@ func ne(t *v1.TensorInfo, i int) uint64 {
 	return out
 }
 
-// The name without the container a loader or a checkpoint put around the denoiser
+// Strips denoiser wrapper prefixes.
 func bare(name string) string {
 	for _, p := range denoiserPrefixes {
 		if strings.HasPrefix(name, p) {
@@ -163,10 +162,10 @@ func bare(name string) string {
 	return name
 }
 
-// Scan reads the profile of a checkpoint from its tensors, the group name lending the words its tensors cannot
+// Scan infers checkpoint properties from tensors and the group name.
 func Scan(tensors []*v1.TensorInfo, group string) Profile {
 	p := Profile{Kinds: map[v1.TensorGroupKind]uint64{}}
-	// A LoRA, a control net, or an adapter names the denoiser it patches, so it is told first from what it adds
+	// Detect adapters first because their tensor names include the target denoiser.
 	if helper := helperOf(tensors, strings.ToLower(group)); helper != "" {
 		p.Component = helper
 		for _, t := range tensors {
@@ -199,7 +198,7 @@ func Scan(tensors []*v1.TensorInfo, group string) Profile {
 				}
 			}
 		}
-		// The first block's query projection is square at the model width, a fused qkv three widths tall
+		// Query projections are square at model width. Fused QKV projections are three times taller.
 		if qElements == 0 {
 			switch {
 			case strings.HasSuffix(b, ".0.self_attn.q.weight"), strings.HasSuffix(b, ".0.attn.to_q.weight"), strings.HasSuffix(b, ".0.attn1.to_q.weight"), strings.HasSuffix(b, ".0.attention.to_q.weight"):
@@ -223,24 +222,68 @@ func Scan(tensors []*v1.TensorInfo, group string) Profile {
 			return p
 		}
 	}
-	p.Component = component(p.Kinds, names, tokenWidth(tensors), strings.ToLower(group))
+	p.Width, p.Vocab = encoderShape(tensors)
+	p.LatentChannels, p.VideoVAE = latentShape(tensors)
+	p.Component = component(p.Kinds, names, p.Width, strings.ToLower(group))
 	return p
 }
 
-// How many blocks a family stacks, from the stacks its denoiser counts in
+// Infers encoder width and vocabulary from token embeddings, or vision width from the class
+// embedding or projection.
+func encoderShape(tensors []*v1.TensorInfo) (width, vocab float64) {
+	for _, t := range tensors {
+		name := t.GetName()
+		switch {
+		case strings.HasSuffix(name, "token_embedding.weight"), strings.HasSuffix(name, "shared.weight"), strings.HasSuffix(name, "embed_tokens.weight"), strings.HasSuffix(name, "wte.weight"):
+			if len(t.GetShape()) == 2 {
+				return float64(ne(t, 0)), float64(ne(t, 1))
+			}
+		}
+	}
+	for _, t := range tensors {
+		name := t.GetName()
+		switch {
+		case strings.HasSuffix(name, "embeddings.class_embedding"):
+			return float64(ne(t, 0)), 0
+		case strings.HasSuffix(name, "visual_projection.weight"):
+			return float64(ne(t, 0)), 0
+		}
+	}
+	return 0, 0
+}
+
+// Standalone autoencoder latent channels and 3D convolution flag.
+func latentShape(tensors []*v1.TensorInfo) (channels float64, video bool) {
+	for _, t := range tensors {
+		name := t.GetName()
+		for _, suffix := range []string{"decoder.conv_in.weight", "decoder.conv1.weight", "decoder.conv_in.conv.weight", "decoder.conv_in.conv.conv.weight"} {
+			if !strings.HasSuffix(name, suffix) {
+				continue
+			}
+			shape := t.GetShape()
+			if len(shape) < 4 {
+				continue
+			}
+			return float64(shape[1]), len(shape) == 5
+		}
+	}
+	return 0, false
+}
+
+// Counts blocks in the family's denoiser stacks.
 func stackDepth(family string, maxIndex map[string]int) float64 {
 	switch family {
 	case "sd1", "sd2", "sdxl", "svd":
 		return float64(maxIndex["input_blocks"] + maxIndex["output_blocks"] + 1)
 	case "sd3":
 		return float64(maxIndex["joint_blocks"])
-	case "flux", "chroma", "chroma_radiance", "flux2", "flux2_klein", "hunyuan_video", "ovis_image", "longcat", "sefi_image":
+	case "flux", "chroma", "chroma_radiance", "flux2", "flux2_klein", "hunyuan_video", "hunyuan_video_15", "ovis_image", "longcat", "sefi_image":
 		return float64(maxIndex["double_blocks"] + maxIndex["single_blocks"] + maxIndex["transformer_blocks"] + maxIndex["single_transformer_blocks"])
 	case "hidream_o1":
 		return float64(maxIndex["double_stream_blocks"] + maxIndex["single_stream_blocks"])
 	case "boogu_image":
 		return float64(maxIndex["double_stream_layers"] + maxIndex["single_stream_layers"])
-	case "z_image", "ernie_image", "ideogram4", "minit2i", "pid":
+	case "z_image", "lumina2", "ernie_image", "ideogram4", "minit2i", "pid":
 		return float64(maxIndex["layers"])
 	}
 	best := 0
@@ -252,13 +295,13 @@ func stackDepth(family string, maxIndex map[string]int) float64 {
 	return float64(best)
 }
 
-// What the signature tensors said, gathered over every name the way stable-diffusion.cpp gathers them
+// Signature tensor flags used for family detection.
 type signals struct {
 	family, variant        string
 	imageInput, audioInput bool
 }
 
-// Reads the family off the signature tensors and shapes stable-diffusion.cpp reads them off, in the same order
+// Detects families using stable-diffusion.cpp's signature order.
 func detect(tensors []*v1.TensorInfo) signals {
 	has := func(sub string) bool {
 		for _, t := range tensors {
@@ -330,7 +373,11 @@ func detect(tensors []*v1.TensorInfo) signals {
 		}
 		return signals{family: "qwen_image", imageInput: true}
 	case has("txt_in.individual_token_refiner.blocks.0.adaLN_modulation.1.weight"):
-		return signals{family: "hunyuan_video", imageInput: true}
+		// HunyuanVideo uses 4096-wide LLaVA-llama-3 states. Version 1.5 uses 3584-wide Qwen2.5-VL states.
+		if dim(find("txt_in.input_embedder.weight"), 0) == 4096 {
+			return signals{family: "hunyuan_video", imageInput: true}
+		}
+		return signals{family: "hunyuan_video_15", imageInput: true}
 	case has("llm_adapter.blocks.0.cross_attn.q_proj.weight"):
 		return signals{family: "anima"}
 	case has("dual_time_embed.semantic_embedder.linear_1.weight"):
@@ -338,6 +385,10 @@ func detect(tensors []*v1.TensorInfo) signals {
 	case has("double_blocks.0.img_mlp.gate_proj.weight"):
 		return signals{family: "ovis_image"}
 	case has("cap_embedder.0.weight"):
+		// Lumina-Image 2.0 uses 2304-wide Gemma-2-2B captions. Z-Image uses 2560-wide Qwen3-4B captions.
+		if dim(find("cap_embedder.0.weight"), 0) == 2304 {
+			return signals{family: "lumina2"}
+		}
 		return signals{family: "z_image"}
 	case has("double_stream_layers.0.img_instruct_attn.processor.img_to_q.weight"):
 		return signals{family: "boogu_image", imageInput: true}
@@ -419,7 +470,7 @@ func detect(tensors []*v1.TensorInfo) signals {
 		}
 		return signals{family: "sd2"}
 	case isUnet:
-		// A UNet split from its text encoders: the width of its cross attention says which family trained it
+		// Cross-attention width identifies the family of a standalone UNet.
 		switch dim(find("input_blocks.1.1.transformer_blocks.0.attn2.to_k.weight", "down_blocks.0.attentions.0.transformer_blocks.0.attn2.to_k.weight"), 0) {
 		case 2048:
 			return signals{family: "sdxl"}
@@ -431,13 +482,12 @@ func detect(tensors []*v1.TensorInfo) signals {
 	return signals{}
 }
 
-// A file that patches or steers a denoiser rather than being one: a LoRA by its low rank pairs, a
-// control net by its own copy of the input blocks, an adapter by the projector it adds; empty for anything else
+// Detects LoRA pairs, ControlNet input blocks, and adapter projections.
 func helperOf(tensors []*v1.TensorInfo, group string) string {
 	for _, t := range tensors {
 		name := t.GetName()
 		switch {
-		case strings.Contains(name, ".lora_A."), strings.Contains(name, ".lora_B."), strings.Contains(name, ".lora_up."), strings.Contains(name, ".lora_down."), strings.HasPrefix(name, "lora_unet_"), strings.HasPrefix(name, "lora_te"), strings.HasPrefix(name, "lora_transformer_"), strings.Contains(name, ".hada_w1_"), strings.Contains(name, ".dora_scale"):
+		case loraSegment(name), strings.HasPrefix(name, "lora_unet_"), strings.HasPrefix(name, "lora_te"), strings.HasPrefix(name, "lora_transformer_"), strings.Contains(name, ".hada_w1_"), strings.Contains(name, ".dora_scale"):
 			return "lora"
 		case strings.HasPrefix(name, "control_model."), strings.HasPrefix(name, "controlnet_"), strings.HasPrefix(name, "controlnet."):
 			return "controlnet"
@@ -459,7 +509,23 @@ func helperOf(tensors []*v1.TensorInfo, group string) string {
 	return ""
 }
 
-// Whether every tensor is a bare vector rather than a module's weight, the way a textual inversion names clip_l and clip_g
+// LoRA tensor segment names used by PEFT, kohya, and diffusers.
+var loraSegments = []string{"lora_a", "lora_b", "lora_up", "lora_down"}
+
+// Matches LoRA tensor segments without case sensitivity.
+func loraSegment(name string) bool {
+	for _, seg := range strings.Split(name, ".") {
+		lower := strings.ToLower(seg)
+		for _, s := range loraSegments {
+			if lower == s {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Textual inversions contain bare vectors such as clip_l and clip_g.
 func flat(tensors []*v1.TensorInfo) bool {
 	for _, t := range tensors {
 		if strings.Contains(t.GetName(), ".") {
@@ -469,8 +535,8 @@ func flat(tensors []*v1.TensorInfo) bool {
 	return true
 }
 
-// The part a checkpoint without a denoiser is: an autoencoder, a text or image encoder, an upscaler, or a projector
-func component(kinds map[v1.TensorGroupKind]uint64, names map[string]bool, width uint64, group string) string {
+// Identifies standalone autoencoders, encoders, upscalers, and projectors.
+func component(kinds map[v1.TensorGroupKind]uint64, names map[string]bool, width float64, group string) string {
 	switch {
 	case named(names, "conv_first.", "upconv1.", "conv_body.", "body.", "model.0.", "model.1.sub."):
 		return "upscaler"
@@ -483,14 +549,20 @@ func component(kinds map[v1.TensorGroupKind]uint64, names map[string]bool, width
 		case named(names, "transformer.resblocks.", "clip_g."):
 			return "clip_g"
 		case named(names, "text_model.", "clip_l.", "cond_stage_model.", "conditioner.", "te."):
-			if width == 1280 || width == 0 && clipG(names) {
+			switch {
+			case width == 1280 || width == 0 && clipG(names):
 				return "clip_g"
+			case width == 1024:
+				return "clip_h"
 			}
 			return "clip_l"
 		}
 		return "text_encoder"
 	case kinds[v1.TensorGroupKind_TENSOR_GROUP_KIND_VISION] > 0:
 		return "clip_vision"
+	case kinds[v1.TensorGroupKind_TENSOR_GROUP_KIND_AUDIO] > 0 && named(names, "decoder."):
+		// An encoder with a decoder identifies an audio autoencoder.
+		return "audio_vae"
 	case kinds[v1.TensorGroupKind_TENSOR_GROUP_KIND_AUDIO] > 0:
 		return "audio_encoder"
 	case kinds[v1.TensorGroupKind_TENSOR_GROUP_KIND_VAE] > 0:
@@ -522,105 +594,16 @@ func named(names map[string]bool, prefixes ...string) bool {
 	return false
 }
 
-// CLIP-G keeps a projection and a 1280 wide embedding, CLIP-L neither; a name alone tells them apart when the shape is gone
+// CLIP-G has a projection and a 1280-wide embedding. Fall back to names when shapes are
+// unavailable.
 func clipG(names map[string]bool) bool {
 	return names["text_projection.weight"] || names["text_model.text_projection.weight"] || names["text_projection"]
 }
 
-// The width of a CLIP text encoder's token embedding, 768 for CLIP-L and 1280 for CLIP-G, zero without one
-func tokenWidth(tensors []*v1.TensorInfo) uint64 {
-	for _, t := range tensors {
-		if strings.HasSuffix(t.GetName(), "token_embedding.weight") {
-			return ne(t, 0)
-		}
-		if strings.HasSuffix(t.GetName(), "text_model.embeddings.position_embedding.weight") {
-			return ne(t, 0)
-		}
-	}
-	return 0
-}
+// Video families and their support for still images.
+var video = map[string]bool{"wan": true, "hunyuan_video": false, "hunyuan_video_15": false, "ltxv": false, "ltx2": false, "minimax_h3": false, "lingbot_video": false, "svd": false, "cogvideox": false, "mochi": false, "open_sora": false, "allegro": false, "step_video": false, "magi": false, "pyramid_flow": false, "easyanimate": false, "ovi": false, "cosmos": false}
 
-// One file a family loads beside its denoiser, by the run param naming it
-type Part struct {
-	// The param the file is named by, vae, t5xxl, clip_l, clip_g, llm, llm_vision, clip_vision, audio_encoder, audio_vae, high_noise_model, uncond_model, embeddings_connectors, tokenizer
-	Param string
-	// Whether a run cannot start without it
-	Required bool
-}
-
-// The parts each family loads beside a standalone denoiser, as stable-diffusion.cpp builds each family's
-// pipeline and its docs list the files: a checkpoint bundling a part drops the need for it
-var needs = map[string][]Part{
-	"sd1":             {{"vae", false}, {"clip_l", true}},
-	"sd2":             {{"vae", false}, {"clip_l", true}},
-	"sdxl":            {{"vae", false}, {"clip_l", true}, {"clip_g", true}},
-	"svd":             {{"vae", true}, {"clip_vision", true}},
-	"sd3":             {{"vae", true}, {"clip_l", true}, {"clip_g", true}, {"t5xxl", true}},
-	"flux":            {{"vae", true}, {"clip_l", true}, {"t5xxl", true}},
-	"chroma":          {{"vae", true}, {"t5xxl", true}},
-	"chroma_radiance": {{"t5xxl", true}},
-	"flux2":           {{"vae", true}, {"llm", true}},
-	"flux2_klein":     {{"vae", true}, {"llm", true}},
-	"sefi_image":      {{"vae", true}, {"llm", true}},
-	"lens":            {{"vae", true}, {"llm", true}, {"tokenizer", true}},
-	"ovis_image":      {{"vae", true}, {"llm", true}},
-	"wan":             {{"vae", true}, {"t5xxl", true}, {"high_noise_model", false}},
-	"lingbot_video":   {{"vae", true}, {"llm", true}},
-	"krea2":           {{"vae", true}, {"llm", true}},
-	"qwen_image":      {{"vae", true}, {"llm", true}, {"llm_vision", false}},
-	"longcat":         {{"vae", true}, {"llm", true}, {"llm_vision", false}},
-	"mage_flow":       {{"vae", true}, {"llm", true}, {"llm_vision", false}},
-	"boogu_image":     {{"vae", true}, {"llm", true}, {"llm_vision", false}},
-	"ernie_image":     {{"vae", true}, {"llm", true}},
-	"z_image":         {{"vae", true}, {"llm", true}},
-	"anima":           {{"vae", true}, {"llm", true}},
-	"hunyuan_video":   {{"vae", true}, {"llm", true}, {"t5xxl", true}},
-	"ltx2":            {{"vae", true}, {"llm", true}, {"audio_vae", false}, {"embeddings_connectors", false}},
-	"minimax_h3":      {{"vae", true}, {"llm", true}, {"audio_vae", false}, {"llm_vision", false}},
-	"hidream_o1":      {},
-	"minit2i":         {{"t5xxl", true}},
-	"pid":             {{"vae", true}, {"llm", true}, {"tokenizer", true}},
-	"ideogram4":       {{"vae", true}, {"llm", true}, {"uncond_model", true}},
-	"sensenova_u1":    {},
-}
-
-// Needs lists the parts a checkpoint loads beside itself: its family's parts less the ones it bundles,
-// plus what its inputs ask for, an image encoder for a Wan image to video model and an audio encoder
-// for a speech to video one
-func Needs(p Profile) []Part {
-	var out []Part
-	for _, part := range needs[Canonical(p.Family)] {
-		switch part.Param {
-		case "vae":
-			if p.VAE {
-				continue
-			}
-		case "clip_l", "clip_g", "t5xxl", "llm":
-			if p.TextEncoder {
-				continue
-			}
-		case "llm_vision":
-			if p.TextEncoder {
-				continue
-			}
-		}
-		out = append(out, part)
-	}
-	if Canonical(p.Family) == "wan" {
-		if p.ImageInput && p.Variant != "i2v" && p.Variant != "ti2v" && p.Variant != "s2v" && p.Variant != "vace" && !p.ClipVision {
-			out = append(out, Part{"clip_vision", true})
-		}
-		if p.AudioInput {
-			out = append(out, Part{"audio_encoder", true})
-		}
-	}
-	return out
-}
-
-// Families that make video, and whether each also makes a still image on its own
-var video = map[string]bool{"wan": true, "hunyuan_video": false, "ltx2": false, "minimax_h3": false, "lingbot_video": false, "svd": false}
-
-// Generates says what a family makes, image, video, or both, in the words the descriptor carries
+// Generates returns the family's output types: image, video, or both.
 func Generates(family string) []string {
 	if family == "" {
 		return nil
@@ -634,7 +617,7 @@ func Generates(family string) []string {
 	return []string{"image"}
 }
 
-// Modes says which of the server's generation modes a family answers, img_gen and vid_gen
+// Modes returns supported server modes: img_gen and vid_gen.
 func Modes(family string) []string {
 	var out []string
 	for _, g := range Generates(family) {
@@ -648,7 +631,7 @@ func Modes(family string) []string {
 	return out
 }
 
-// The names a GGUF header, a diffusers config, or stable-diffusion.cpp's own version list gives a family, folded to the ids the profile uses
+// Architecture aliases from GGUF, diffusers, and stable-diffusion.cpp.
 var canonical = map[string]string{
 	"sd1": "sd1", "sd1.5": "sd1", "sd15": "sd1", "sd1_inpaint": "sd1", "sd1_pix2pix": "sd1", "sd1_tiny_unet": "sd1", "sdxs_512_ds": "sd1", "unet2dconditionmodel": "sd1", "stable-diffusion": "sd1",
 	"sd2": "sd2", "sd2.1": "sd2", "sd2_inpaint": "sd2", "sd2_tiny_unet": "sd2", "sdxs_09": "sd2",
@@ -663,12 +646,39 @@ var canonical = map[string]string{
 	"wan": "wan", "wan2": "wan", "wan2.1": "wan", "wan2.2": "wan", "wan2_2_i2v": "wan", "wan2_2_ti2v": "wan", "wan2_2_s2v": "wan", "wantransformer3dmodel": "wan", "wanvacetransformer3dmodel": "wan", "vace": "wan",
 	"lingbot_video": "lingbot_video", "lingbot": "lingbot_video", "lingbot-video": "lingbot_video",
 	"qwen_image": "qwen_image", "qwenimage": "qwen_image", "qwen-image": "qwen_image", "qwen_image_layered": "qwen_image", "qwenimagetransformer2dmodel": "qwen_image", "qwen_image_edit": "qwen_image",
-	"hunyuan_video": "hunyuan_video", "hyvid": "hunyuan_video", "hunyuanvideo": "hunyuan_video", "hunyuanvideotransformer3dmodel": "hunyuan_video", "hunyuan_video_1.5": "hunyuan_video",
+	"hunyuan_video": "hunyuan_video", "hyvid": "hunyuan_video", "hunyuanvideo": "hunyuan_video", "hunyuanvideotransformer3dmodel": "hunyuan_video", "skyreels_v1": "hunyuan_video",
+	"hunyuan_video_15": "hunyuan_video_15", "hunyuan_video_1.5": "hunyuan_video_15", "hunyuanvideo1.5": "hunyuan_video_15", "hunyuanvideo-1.5": "hunyuan_video_15", "hunyuanvideo_1.5": "hunyuan_video_15", "hunyuanvideo15": "hunyuan_video_15", "hunyuanvideo15transformer3dmodel": "hunyuan_video_15",
 	"anima": "anima", "anima2": "anima",
-	"ltx2": "ltx2", "ltxav": "ltx2", "ltx-2": "ltx2", "ltx2.3": "ltx2", "ltx-2.3": "ltx2", "ltx2.5": "ltx2", "ltx-2.5": "ltx2", "ltxv": "ltx2", "ltx": "ltx2", "ltxvideotransformer3dmodel": "ltx2", "ltxav_transformer": "ltx2",
+	"ltx2": "ltx2", "ltxav": "ltx2", "ltx-2": "ltx2", "ltx2.3": "ltx2", "ltx-2.3": "ltx2", "ltx2.5": "ltx2", "ltx-2.5": "ltx2", "ltx": "ltx2", "ltxav_transformer": "ltx2",
+	"ltxv": "ltxv", "ltx-video": "ltxv", "ltx_video": "ltxv", "ltxvideo": "ltxv", "ltxvideotransformer3dmodel": "ltxv",
 	"minimax_h3": "minimax_h3", "minimax-h3": "minimax_h3", "minimaxh3": "minimax_h3",
-	"hidream_o1": "hidream_o1", "hidream-o1": "hidream_o1", "hidream": "hidream_o1", "hidreamimagetransformer2dmodel": "hidream_o1",
-	"z_image": "z_image", "zimage": "z_image", "z-image": "z_image", "lumina2": "z_image", "lumina": "z_image", "lumina2transformer2dmodel": "z_image",
+	"hidream_o1": "hidream_o1", "hidream-o1": "hidream_o1",
+	"hidream_i1": "hidream_i1", "hidream-i1": "hidream_i1", "hidream_e1": "hidream_i1", "hidream-e1": "hidream_i1", "hidream": "hidream_i1", "hidreamimagetransformer2dmodel": "hidream_i1",
+	"stablediffusion": "sd1", "stablediffusioninpaint": "sd1", "stablediffusion2": "sd2", "stablediffusionxl": "sdxl", "stablediffusionxlinpaint": "sdxl", "stablediffusion3": "sd3", "stablediffusion35": "sd3",
+	"hidreamimage": "hidream_i1", "kandinskyv22": "kandinsky22", "wanvideo": "wan", "ltxcondition": "ltxv",
+	"z_image": "z_image", "zimage": "z_image", "z-image": "z_image",
+	"lumina2": "lumina2", "lumina": "lumina2", "lumina-image-2.0": "lumina2", "lumina_image_2.0": "lumina2", "lumina-image-2": "lumina2", "lumina2transformer2dmodel": "lumina2",
+	"kolors": "kolors", "kwai-kolors": "kolors",
+	"sana": "sana", "sana1.5": "sana", "sana_1.5": "sana", "sanatransformer2dmodel": "sana",
+	"pixart": "pixart", "pixart-alpha": "pixart", "pixart_alpha": "pixart", "pixart-sigma": "pixart", "pixart_sigma": "pixart", "pixartalpha": "pixart", "pixartsigma": "pixart", "pixarttransformer2dmodel": "pixart",
+	"hunyuan_dit": "hunyuan_dit", "hunyuan-dit": "hunyuan_dit", "hunyuandit": "hunyuan_dit", "hunyuandit2dmodel": "hunyuan_dit",
+	"cogview4": "cogview4", "cogview3": "cogview4", "cogview": "cogview4", "cogview4transformer2dmodel": "cogview4", "cogview3plustransformer2dmodel": "cogview4",
+	"kandinsky22": "kandinsky22", "kandinsky-2-2": "kandinsky22", "kandinsky2.2": "kandinsky22", "kandinsky_2_2": "kandinsky22",
+	"kandinsky3": "kandinsky3", "kandinsky-3": "kandinsky3", "kandinsky_3": "kandinsky3", "kandinsky3unet": "kandinsky3",
+	"deepfloyd": "deepfloyd", "deepfloyd-if": "deepfloyd", "if-i": "deepfloyd", "if_i": "deepfloyd",
+	"stable_cascade": "stable_cascade", "stable-cascade": "stable_cascade", "stablecascade": "stable_cascade", "wurstchen": "stable_cascade", "würstchen": "stable_cascade", "stablecascadeunet": "stable_cascade",
+	"playground": "sdxl", "playground-v2.5": "sdxl", "playground_v2.5": "sdxl",
+	"cogvideox": "cogvideox", "cogvideo": "cogvideox", "cogvideox1.5": "cogvideox", "cogvideoxtransformer3dmodel": "cogvideox",
+	"mochi": "mochi", "mochi-1": "mochi", "mochi_1": "mochi", "mochitransformer3dmodel": "mochi",
+	"open_sora": "open_sora", "open-sora": "open_sora", "opensora": "open_sora",
+	"allegro": "allegro", "allegrotransformer3dmodel": "allegro",
+	"step_video": "step_video", "step-video": "step_video", "stepvideo": "step_video",
+	"magi": "magi", "magi-1": "magi", "magi_1": "magi",
+	"pyramid_flow": "pyramid_flow", "pyramid-flow": "pyramid_flow", "pyramidflow": "pyramid_flow",
+	"easyanimate": "easyanimate", "easyanimatetransformer3dmodel": "easyanimate",
+	"ovi":    "ovi",
+	"cosmos": "cosmos", "cosmos-predict": "cosmos", "cosmos_predict": "cosmos", "cosmostransformer3dmodel": "cosmos",
+	"skyreels_v2": "wan", "skyreels-v2": "wan", "skyreels_a2": "wan",
 	"boogu_image": "boogu_image", "boogu": "boogu_image", "boogu-image": "boogu_image",
 	"ovis_image": "ovis_image", "ovis": "ovis_image", "ovis-image": "ovis_image",
 	"ernie_image": "ernie_image", "ernie": "ernie_image", "ernie-image": "ernie_image",
@@ -692,29 +702,75 @@ var canonical = map[string]string{
 	"embeddings_connectors": "embeddings_connectors", "connectors": "embeddings_connectors",
 	"lora": "lora", "controlnet": "controlnet", "controlnetmodel": "controlnet", "ip_adapter": "ip_adapter", "ip-adapter": "ip_adapter", "photo_maker": "photo_maker", "photomaker": "photo_maker", "pulid": "pulid", "motion_module": "motion_module", "motionadapter": "motion_module", "embedding": "embedding", "textual_inversion": "embedding",
 	"upscaler": "upscaler", "esrgan": "upscaler", "realesrgan": "upscaler", "detector": "detector", "yolo": "detector",
-	"llm": "llm", "text_encoder": "text_encoder",
+	"clip_h": "clip_h", "clip-h": "clip_h",
+	"tokenizer": "tokenizer",
+	"llm":       "llm", "text_encoder": "text_encoder",
 }
 
-// Canonical folds the names a GGUF header, a diffusers config, or stable-diffusion.cpp gives a family or a part into the id the profile uses
+// Canonical resolves architecture aliases and recognized class names. Unknown names pass through
+// unchanged.
 func Canonical(architecture string) string {
 	a := strings.ToLower(strings.TrimSpace(architecture))
 	if c, ok := canonical[a]; ok {
 		return c
 	}
+	if c := classNamed(a); c != "" {
+		return c
+	}
 	return a
 }
 
-// Families stable-diffusion.cpp samples with, the ones a descriptor may name as a diffusion model
+// Class suffixes, longest first.
+var classSuffixes = []string{"modularpipeline", "pipeline", "transformer3dmodel", "transformer2dmodel", "unet3dconditionmodel", "unet2dconditionmodel", "ditmodel", "3dmodel", "2dmodel", "model"}
+
+// Infers a family or component kind from a class name, or returns empty.
+func classNamed(a string) string {
+	for _, suffix := range classSuffixes {
+		if stem, ok := strings.CutSuffix(a, suffix); ok && stem != "" {
+			if c, known := canonical[stem]; known {
+				return c
+			}
+		}
+	}
+	switch {
+	case strings.Contains(a, "autoencoder") || strings.Contains(a, "vae"):
+		switch {
+		case strings.Contains(a, "audio"):
+			return "audio_vae"
+		case strings.Contains(a, "tiny"):
+			return "taesd"
+		}
+		return "vae"
+	case strings.Contains(a, "textmodelwithprojection"):
+		return "clip_g"
+	case strings.Contains(a, "cliptextmodel"):
+		return "clip_l"
+	case strings.Contains(a, "t5") && strings.Contains(a, "encoder"):
+		return "t5"
+	case strings.Contains(a, "visionmodel") || strings.Contains(a, "siglip") || strings.Contains(a, "clipvision"):
+		return "clip_vision"
+	case strings.Contains(a, "wav2vec2") || strings.Contains(a, "hubert") || strings.Contains(a, "audioencoder"):
+		return "audio_encoder"
+	case strings.Contains(a, "forconditionalgeneration") || strings.Contains(a, "forcausallm") || strings.HasSuffix(a, "encoder"):
+		return "llm"
+	}
+	return ""
+}
+
+// Canonical denoiser family IDs.
 var denoisers = func() []string {
-	out := make([]string, 0, len(needs))
-	for f := range needs {
-		out = append(out, f)
+	out := []string{
+		"sd1", "sd2", "sdxl", "kolors", "sd3", "flux", "chroma", "chroma_radiance", "flux2", "flux2_klein", "hidream_i1", "hidream_o1",
+		"qwen_image", "z_image", "lumina2", "sana", "pixart", "hunyuan_dit", "cogview4", "kandinsky22", "kandinsky3", "deepfloyd", "stable_cascade",
+		"ovis_image", "longcat", "krea2", "ernie_image", "anima", "boogu_image", "mage_flow", "ideogram4", "sefi_image", "lens", "pid", "minit2i", "sensenova_u1",
+		"svd", "wan", "hunyuan_video", "hunyuan_video_15", "ltxv", "ltx2", "minimax_h3", "lingbot_video", "cogvideox", "mochi", "open_sora", "allegro",
+		"step_video", "magi", "pyramid_flow", "easyanimate", "ovi", "cosmos",
 	}
 	sort.Strings(out)
 	return out
 }()
 
-// Denoiser says whether an architecture, canonical or as a header names it, is a family stable-diffusion.cpp samples with
+// Denoiser reports whether an architecture resolves to a denoiser family.
 func Denoiser(architecture string) bool {
 	c := Canonical(architecture)
 	for _, f := range denoisers {
@@ -725,7 +781,7 @@ func Denoiser(architecture string) bool {
 	return false
 }
 
-// Families lists every family stable-diffusion.cpp samples with, by canonical id
+// Families returns supported denoiser family IDs.
 func Families() []string { return append([]string(nil), denoisers...) }
 
 // Sorted canonical names of denoiser families
@@ -740,7 +796,7 @@ func Spellings() []string {
 	return out
 }
 
-// The parts a run may name, each by the param naming it, and what a checkpoint of it is in words
+// Component descriptions by runtime parameter.
 var parts = map[string]string{
 	"vae":                   "a VAE",
 	"audio_vae":             "an audio VAE",
@@ -748,7 +804,9 @@ var parts = map[string]string{
 	"t5":                    "a T5 text encoder",
 	"clip_l":                "a CLIP-L text encoder",
 	"clip_g":                "a CLIP-G text encoder",
+	"clip_h":                "a CLIP-H text encoder",
 	"llm":                   "a language model text encoder",
+	"tokenizer":             "a tokenizer",
 	"text_encoder":          "a text encoder",
 	"clip_vision":           "a CLIP vision encoder",
 	"audio_encoder":         "an audio encoder",
@@ -764,13 +822,13 @@ var parts = map[string]string{
 	"detector":              "an ADetailer detector",
 }
 
-// Component says whether an architecture names a part loaded beside a denoiser rather than a model served on its own
+// Component reports whether an architecture is a standalone pipeline component.
 func Component(architecture string) bool {
 	_, ok := parts[Canonical(architecture)]
 	return ok
 }
 
-// Describe puts a part's architecture into words, a pipeline part when the name is not one the profile knows
+// Describe returns a component label, defaulting to pipeline part.
 func Describe(architecture string) string {
 	if w, ok := parts[Canonical(architecture)]; ok {
 		return w

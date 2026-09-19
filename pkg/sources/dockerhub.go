@@ -310,8 +310,7 @@ func (dockerhubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v
 	return out, nil
 }
 
-// Fills sizes, dates, and digests from the hub's tag pages; a registry configured without a hub has
-// no such pages, so its tags carry what the registry alone says
+// Adds tag sizes, dates, and digests from Docker Hub when a hub endpoint is configured.
 func dhDecorate(ctx context.Context, c *Client, name string, byName map[string]*v1.Revision) error {
 	if c.HTTP() == nil {
 		return nil

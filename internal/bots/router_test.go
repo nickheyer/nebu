@@ -26,7 +26,7 @@ func TestBotConnectsRegistersAndAnswersMentions(t *testing.T) {
 	if got.GetStatus().GetUsername() != "nebu-bot" || got.GetStatus().GetInviteUrl() == "" || len(got.GetStatus().GetShards()) != 1 || !got.GetStatus().GetShards()[0].GetConnected() {
 		t.Fatalf("status %v", got.GetStatus())
 	}
-	// A message that does not address the bot is left alone
+	// Ignore messages that do not address the bot.
 	s.h.message(0, plain("1", "just chatting"))
 	time.Sleep(150 * time.Millisecond)
 	if s.sentCount() != 0 {
@@ -88,7 +88,7 @@ func TestWakeWordsPickThePersonaAndWebhooksWearIt(t *testing.T) {
 	if err != nil || len(rows) != 1 || rows[0].WebhookID != "hook-c1" {
 		t.Fatalf("webhook not remembered: %v %v", rows, err)
 	}
-	// The persona's own webhook messages read back as its own turns, another persona's as other people
+	// Own webhook messages are assistant turns. Other personas are user turns.
 	s.history["c1"] = []*discordgo.Message{
 		{ID: "5", ChannelID: "c1", Content: "sam what do you think", Author: &discordgo.User{ID: "u1", Username: "nick"}, Timestamp: time.Now()},
 		{ID: "6", ChannelID: "c1", Content: "Hello from llm.", Author: &discordgo.User{ID: "hook-c1", Username: "Sam", Bot: true}, WebhookID: "hook-c1", Timestamp: time.Now()},
@@ -150,7 +150,7 @@ func TestHumanizedPersonaKeepsQuietOnFailure(t *testing.T) {
 	if s.sentCount() != 0 {
 		t.Fatalf("a humanized persona posted an error: %v", s.sent[0].msg.Content)
 	}
-	// A plain assistant says what went wrong
+	// Visible personas report errors.
 	spec = quickSpec()
 	if _, err := h.m.Update(context.Background(), &v1.UpdateBotRequest{Id: bot.GetId(), Enabled: true, Spec: spec}); err != nil {
 		t.Fatal(err)
@@ -241,7 +241,7 @@ func TestSlashCommandsAnswerWithFollowups(t *testing.T) {
 	if last := lastUserText(h.upstream.lastRequest()); last != "nick: what time is it" {
 		t.Fatalf("prompt %q", last)
 	}
-	// Choosing a persona for the channel sticks, and reset marks where memory starts
+	// Persona selection persists. Reset clears prior history.
 	choose := &discordgo.Interaction{Type: discordgo.InteractionApplicationCommand, ChannelID: "c1", GuildID: "g1", Member: &discordgo.Member{User: &discordgo.User{ID: "u1", Username: "nick"}},
 		Data: discordgo.ApplicationCommandInteractionData{Name: "persona", Options: []*discordgo.ApplicationCommandInteractionDataOption{{Name: "name", Type: discordgo.ApplicationCommandOptionString, Value: "sam"}}}}
 	s.h.interact(0, choose)
@@ -311,7 +311,7 @@ func TestAutomationsFireOnKeywordsAndSchedules(t *testing.T) {
 		defer s.mu.Unlock()
 		return len(s.reactions) == 1
 	})
-	// Schedules fire on the tick, faster here than in the daemon
+	// Use a shorter schedule interval in tests.
 	waitFor(t, "a tick", func() bool {
 		for _, m := range s.sentSnapshot() {
 			if m.Content == "tick in general" {

@@ -1,15 +1,11 @@
 <script lang="ts">
-  // Facts as keys and values, every value laid out in full and dotted keys indented under the prefix they
-  // share. In one column the keys run down the left of a table; in more, the facts run down each column in
-  // turn, as many columns as asked for and fit, and a long value takes a full-width row under the columns
   let { facts, mono = true, columns = 1, class: cls = '' }: { facts: Record<string, string> | [string, string][]; mono?: boolean; columns?: number; class?: string } = $props();
 
-  // A value past this many characters, or of several lines, is long
+  // Multiline values also count as long.
   const short = 24;
 
   interface Row {
     key: string;
-    // The key as shown: the last segment for a key under a shared prefix
     shown: string;
     depth: number;
     value: string;
@@ -19,7 +15,7 @@
   }
 
   const entries = $derived((Array.isArray(facts) ? facts : Object.entries(facts)).map(([k, v]) => [k, String(v ?? '')] as [string, string]).sort(([a], [b]) => a.localeCompare(b)));
-  // A prefix two or more keys share becomes a heading, its keys indented under it by their last segment
+  // Group keys with shared prefixes under a heading.
   const rows = $derived.by(() => {
     const prefixes = new Map<string, number>();
     for (const [k] of entries) {
@@ -37,11 +33,10 @@
     }
     return out;
   });
-  // The columns hold the short facts under their headings; a heading with only long facts under it is
-  // left out, as they show their whole key below
+  // Omit headings with only long values. Those values show their full keys below.
   const flowing = $derived(rows.filter((r, i) => !r.long && (!r.group || rows.slice(i + 1).some((n) => !n.long && n.key.startsWith(r.group + '.')))));
   const wide = $derived(rows.filter((r) => r.long).map((r) => ({ ...r, shown: r.key, depth: 0 })));
-  // The key column is as wide as the longest key, an indented key counted with its indent
+  // Include indentation when measuring key width.
   const keyWidth = $derived(Math.min(32, Math.max(4, ...[...flowing, ...wide].filter((r) => !r.group).map((r) => r.shown.length + r.depth * 2))));
 </script>
 

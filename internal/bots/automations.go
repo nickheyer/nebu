@@ -11,12 +11,12 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// How often schedules are checked, well inside a minute so no cron minute is missed
+// Schedule polling interval. Must be less than a minute.
 var scheduleTick = 20 * time.Second
 
-// What a template sees when an automation fires
+// Automation template data.
 type triggerData struct {
-	// The triggering message's text, or the member's name on a join, or the emoji on a reaction
+	// Message text, joining member name, or reaction emoji.
 	Content   string
 	Author    string
 	AuthorID  string
@@ -32,7 +32,7 @@ type triggerData struct {
 	Match []string
 }
 
-// Checks every scheduled automation on the tick and fires the ones that are due
+// Runs scheduled automations when due.
 func (r *runner) schedule() {
 	for {
 		select {
@@ -158,7 +158,7 @@ func (r *runner) messageAutomations(sess session, m *discordgo.Message, content 
 	}
 }
 
-// Fires the automations a new member triggers, posting in the automation's channels or the guild's system channel
+// Runs join automations in their configured channels or the guild's system channel.
 func (r *runner) onMemberAdd(shardID int, member *discordgo.Member) {
 	sess := r.sessionOf(shardID)
 	if sess == nil || member == nil || member.User == nil {
@@ -191,7 +191,7 @@ func (r *runner) onMemberAdd(shardID int, member *discordgo.Member) {
 	}
 }
 
-// Fires the automations a reaction triggers, on the message that got it
+// Runs reaction automations on the reacted message.
 func (r *runner) onReaction(shardID int, ev *discordgo.MessageReactionAdd) {
 	sess := r.sessionOf(shardID)
 	if sess == nil || ev == nil || ev.UserID == r.selfID() {
@@ -230,7 +230,7 @@ func (r *runner) automationApplies(a *automaton, guildID, channelID string) bool
 	return true
 }
 
-// What a message trigger's template sees
+// Template data for a message trigger.
 func (r *runner) dataOf(sess session, m *discordgo.Message, content string) triggerData {
 	data := triggerData{Content: content, ChannelID: m.ChannelID, GuildID: m.GuildID, Now: time.Now().Format(time.RFC1123), Bot: r.name}
 	if m.Author != nil {
@@ -259,7 +259,8 @@ func (a *automaton) render(data triggerData) (string, error) {
 	return strings.TrimSpace(b.String()), nil
 }
 
-// Carries out one automation's action, the chance and cooldown already rolled for schedules and rolled here for the rest
+// Runs an automation after checking chance and cooldown. Scheduled automations
+// have already passed those checks.
 func (r *runner) fire(sess session, a *automaton, p *v1.Persona, m *discordgo.Message, data triggerData) {
 	auto := a.a
 	if auto.GetTrigger().GetKind() != v1.TriggerKind_TRIGGER_KIND_SCHEDULE {

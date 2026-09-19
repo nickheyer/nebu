@@ -24,7 +24,7 @@ type window struct {
 	pause    bool
 }
 
-// Bytes per second by time of week, the first window that holds wins
+// Weekly rate schedule. The first matching window wins.
 type Schedule struct {
 	base    uint64
 	windows []window
@@ -112,7 +112,7 @@ func parseDays(text string) ([7]bool, error) {
 	return out, nil
 }
 
-// Reads a day by its three letter name or its full name, nothing looser
+// Accepts three-letter or full day names.
 func dayIndex(name string) (int, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	for i, d := range dayNames {

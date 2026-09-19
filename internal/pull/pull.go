@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,37 +28,55 @@ const (
 	kindVerify = "verify"
 )
 
-// Orchestrates resolve, fetch, link, and manifest writes
+// Resolves and downloads groups into the store.
 type Puller struct {
 	Inspector *inspect.Inspector
 	Store     *store.Store
 	Fetcher   *transfer.Fetcher
 	Tasks     *tasks.Manager
 	Events    *events.Bus
-	// Says which stored models eviction leaves alone, set by the daemon
+	// Models protected from eviction.
 	Keep func(*v1.StoredModel) bool
 	// Bytes the store's filesystem keeps free after a pull
 	MinFree uint64
 }
 
-// The files a pull lands, what they add up to, and what is not in the store yet
-func (p *Puller) plan(g *formats.Group) (artifacts []*v1.Artifact, total, need uint64) {
-	artifacts = append(artifacts, g.Weights...)
-	for _, role := range []v1.ArtifactRole{v1.ArtifactRole_ARTIFACT_ROLE_CONFIG, v1.ArtifactRole_ARTIFACT_ROLE_INDEX, v1.ArtifactRole_ARTIFACT_ROLE_TOKENIZER, v1.ArtifactRole_ARTIFACT_ROLE_TEMPLATE, v1.ArtifactRole_ARTIFACT_ROLE_CODE, v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR} {
-		artifacts = append(artifacts, g.Files[role]...)
-	}
-	for _, a := range artifacts {
-		total += a.GetSizeBytes()
-		if a.GetSha256() == "" || !p.Store.HasBlob(store.Digest(a.GetSha256())) {
-			need += a.GetSizeBytes()
-		}
-	}
-	return artifacts, total, need
+// One group to download and store.
+type landing struct {
+	src   sources.Source
+	model *v1.Model
+	g     *formats.Group
+	// Selected files. Nil selects the whole group.
+	files []*v1.Artifact
+	// Descriptor from headers, or nil if unreadable.
+	descriptor *v1.Descriptor
+	// Companion slot, or empty for the model itself.
+	slot string
 }
 
-// Refuses a pull the store's filesystem cannot hold, counting what a capped store may evict
-func (p *Puller) room(g *formats.Group) error {
-	_, _, need := p.plan(g)
+func (l *landing) artifacts() []*v1.Artifact {
+	if l.files != nil {
+		return l.files
+	}
+	return inspect.GroupArtifacts(l.g)
+}
+
+// Returns total bytes and bytes missing from the store.
+func (p *Puller) sizes(landings []*landing) (total, need uint64) {
+	for _, l := range landings {
+		for _, a := range l.artifacts() {
+			total += a.GetSizeBytes()
+			if a.GetSha256() == "" || !p.Store.HasBlob(store.Digest(a.GetSha256())) {
+				need += a.GetSizeBytes()
+			}
+		}
+	}
+	return total, need
+}
+
+// Checks disk space, including space recoverable through eviction.
+func (p *Puller) room(landings []*landing) error {
+	_, need := p.sizes(landings)
 	st, err := host.Stat(p.Store.Root())
 	if err != nil {
 		return nil
@@ -69,7 +88,9 @@ func (p *Puller) room(g *formats.Group) error {
 	return fmt.Errorf("%w: needs %s, %s free on %s", store.ErrNoRoom, estimate.Human(need), estimate.Human(st.GetFreeBytes()), st.GetPath())
 }
 
-// Validates the request and starts a pull task
+// Pull downloads a group and its missing blueprint parts. Unreadable headers or
+// unresolved required parts fail before the task starts. Alone skips those checks
+// and downloads only the requested group.
 func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error) {
 	src, model, err := p.Inspector.Resolve(ctx, req.GetSourceId(), req.GetRepo(), req.GetRevision())
 	if err != nil {
@@ -79,39 +100,67 @@ func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error
 	if err != nil {
 		return nil, err
 	}
-	if err := p.room(g); err != nil {
+	own := &landing{src: src, model: model, g: g}
+	landings := []*landing{own}
+	var unread error
+	var plan *inspect.Plan
+	if own.descriptor, err = p.Inspector.Describe(ctx, src, model, g); err != nil {
+		if !req.GetAlone() {
+			return nil, fmt.Errorf("%s %s: cannot plan parts without readable headers. Use --alone to download only this group: %w", model.GetRepo(), g.Name, err)
+		}
+		unread = err
+	} else if !req.GetAlone() {
+		if plan, err = p.Inspector.Parts(ctx, src, model, g, own.descriptor); err != nil {
+			return nil, err
+		}
+		if err := plan.Unfilled(); err != nil {
+			return nil, err
+		}
+		for _, pick := range plan.Pulls() {
+			landings = append(landings, &landing{src: pick.Source, model: pick.Model, g: pick.Group, files: pick.Files, descriptor: pick.Descriptor, slot: pick.Fill.Slot})
+		}
+	}
+	if err := p.room(landings); err != nil {
 		return nil, err
 	}
-	labels := map[string]string{"source": model.GetSourceId(), "repo": model.GetRepo(), "group": g.Name}
+	labels := map[string]string{"source": model.GetSourceId(), "repo": model.GetRepo(), "group": g.Name, "parts": strconv.Itoa(len(landings) - 1)}
 	title := fmt.Sprintf("pull %s %s", model.GetRepo(), g.Name)
+	if n := len(landings) - 1; n == 1 {
+		title += " and 1 part"
+	} else if n > 1 {
+		title += fmt.Sprintf(" and %d parts", n)
+	}
 	return p.Tasks.Start(kindPull, title, labels, func(ctx context.Context, h *tasks.Handle) error {
-		return p.run(ctx, h, src, model, g)
+		if unread != nil {
+			h.Logf("%s: unreadable header, downloading with --alone: %v", g.Name, unread)
+		}
+		if plan != nil {
+			for _, pick := range plan.Picks {
+				switch {
+				case pick.Stored != nil:
+					h.Logf("%s (%s): %s %s already stored", pick.Fill.Slot, pick.Fill.Name, pick.Stored.GetRepo(), pick.Stored.GetGroup())
+				case pick.Bundled:
+					h.Logf("%s (%s): bundled", pick.Fill.Slot, pick.Fill.Name)
+				case pick.Err != nil:
+					h.Logf("%s (%s, not required): %v", pick.Fill.Slot, pick.Fill.Name, pick.Err)
+				}
+			}
+		}
+		return p.run(ctx, h, landings)
 	}), nil
 }
 
-func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, model *v1.Model, g *formats.Group) error {
-	artifacts, total, need := p.plan(g)
+// Downloads the model and its parts with shared progress.
+func (p *Puller) run(ctx context.Context, h *tasks.Handle, landings []*landing) error {
+	total, need := p.sizes(landings)
 	h.Progress(0, 0, "resolving")
-	key := store.Key(model.GetSourceId(), model.GetRepo(), g.Name)
-	unlock := p.Store.Lock(key)
-	defer unlock()
-	stored := &v1.StoredModel{
-		SourceId: model.GetSourceId(),
-		Repo:     model.GetRepo(),
-		Revision: model.GetRevision(),
-		Commit:   model.GetCommit(),
-		Group:    g.Name,
-		FormatId: g.FormatID,
+	// Evict least recently used models, protecting groups in this pull.
+	keys := map[string]bool{}
+	for _, l := range landings {
+		keys[store.Key(l.model.GetSourceId(), l.model.GetRepo(), l.g.Name)] = true
 	}
-	if d, err := p.Inspector.Describe(ctx, src, model, g); err != nil {
-		h.Logf("descriptor unavailable: %v", err)
-	} else {
-		stored.Descriptor_ = d
-		stored.Runtimes = p.Inspector.Runtimes.Mask(g.FormatID, d.GetKind())
-	}
-	// The cap is kept by evicting what has sat unused longest before the bytes arrive, this model staying
 	evicted, release, err := p.Store.Evict(need, func(m *v1.StoredModel) bool {
-		return store.Key(m.GetSourceId(), m.GetRepo(), m.GetGroup()) == key || (p.Keep != nil && p.Keep(m))
+		return keys[store.Key(m.GetSourceId(), m.GetRepo(), m.GetGroup())] || (p.Keep != nil && p.Keep(m))
 	})
 	defer release()
 	for _, m := range evicted {
@@ -124,10 +173,59 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 	if err != nil {
 		return fmt.Errorf("evict: %w", err)
 	}
-	// Sweeps wait until the manifest names every blob this pull lands
+	// Block garbage collection until all manifests are written.
 	defer p.Store.Hold()()
 	h.Progress(0, total, "fetching")
-	for _, a := range artifacts {
+	for _, l := range landings {
+		if l.slot != "" {
+			h.Logf("%s: pulling %s %s", l.slot, l.model.GetRepo(), l.g.Name)
+		}
+		if err := p.land(ctx, h, l); err != nil {
+			if l.slot != "" {
+				return fmt.Errorf("%s from %s %s: %w", l.slot, l.model.GetRepo(), l.g.Name, err)
+			}
+			return err
+		}
+	}
+	h.Progress(total, total, "done")
+	return nil
+}
+
+// AnnounceStore publishes store counters.
+func (p *Puller) AnnounceStore() {
+	st, err := p.Store.Status()
+	if err != nil {
+		return
+	}
+	p.Events.Publish(v1.EventKind_EVENT_KIND_STORE, v1.EventAction_EVENT_ACTION_UPDATED, st.GetPath(), st)
+}
+
+// Downloads a group, links its files, and writes its manifest.
+func (p *Puller) land(ctx context.Context, h *tasks.Handle, l *landing) error {
+	src, model, g := l.src, l.model, l.g
+	key := store.Key(model.GetSourceId(), model.GetRepo(), g.Name)
+	unlock := p.Store.Lock(key)
+	defer unlock()
+	stored := &v1.StoredModel{
+		SourceId: model.GetSourceId(),
+		Repo:     model.GetRepo(),
+		Revision: model.GetRevision(),
+		Commit:   model.GetCommit(),
+		Group:    g.Name,
+		FormatId: g.FormatID,
+	}
+	if l.descriptor != nil {
+		stored.Descriptor_ = l.descriptor
+		stored.Runtimes = p.Inspector.Runtimes.Mask(g.FormatID, l.descriptor.GetKind())
+	} else if l.files == nil {
+		h.Logf("%s %s: descriptor unavailable", model.GetRepo(), g.Name)
+	}
+	// Store partial groups as components, such as a tokenizer.
+	if l.files != nil && l.slot != "" {
+		stored.Descriptor_ = &v1.Descriptor{FormatId: g.FormatID, Group: g.Name, Architecture: strings.TrimPrefix(l.slot, "text_encoder."), Kind: v1.ModelKind_MODEL_KIND_COMPONENT}
+		stored.Runtimes = 0
+	}
+	for _, a := range l.artifacts() {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -135,19 +233,23 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 		if err != nil {
 			return fmt.Errorf("%s: %w", a.GetPath(), err)
 		}
-		// The group's root comes off so a tree shaped checkpoint keeps its layout under the group dir
+		// Preserve paths relative to the group's root.
 		rel := a.GetPath()
 		if g.Root != "" {
 			rel = strings.TrimPrefix(rel, g.Root+"/")
 		}
-		link, err := p.Store.Link(model.GetSourceId(), model.GetRepo(), g.Name, rel, digest)
+		linked, err := p.Store.Link(model.GetSourceId(), model.GetRepo(), g.Name, rel, digest)
 		if err != nil {
 			return err
 		}
-		stored.Artifacts = append(stored.Artifacts, &v1.StoredArtifact{Artifact: a, Digest: digest, Path: link})
+		stored.Artifacts = append(stored.Artifacts, &v1.StoredArtifact{Artifact: a, Digest: digest, Path: linked})
 		stored.Bytes += a.GetSizeBytes()
 	}
-	stored.Path, _ = p.Store.GroupDir(model.GetSourceId(), model.GetRepo(), g.Name)
+	dir, err := p.Store.GroupDir(model.GetSourceId(), model.GetRepo(), g.Name)
+	if err != nil {
+		return err
+	}
+	stored.Path = dir
 	stored.PulledAt = timestamppb.Now()
 	if err := p.Store.WriteManifest(stored); err != nil {
 		return err
@@ -155,18 +257,9 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, src sources.Source, m
 	if err := p.Store.PruneLinks(stored); err != nil {
 		return err
 	}
-	h.Progress(total, total, "done")
-	h.Logf("stored at %s", stored.Path)
-	p.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_CREATED, store.Key(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup()), stored)
+	p.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_CREATED, key, stored)
 	p.AnnounceStore()
 	return nil
-}
-
-// Tells the stream what the store holds now
-func (p *Puller) AnnounceStore() {
-	if st, err := p.Store.Status(); err == nil {
-		p.Events.Publish(v1.EventKind_EVENT_KIND_STORE, v1.EventAction_EVENT_ACTION_UPDATED, st.GetPath(), st)
-	}
 }
 
 // Ensures one artifact's blob exists and returns its digest
@@ -177,12 +270,12 @@ func (p *Puller) fetch(ctx context.Context, h *tasks.Handle, src sources.Source,
 		return "", err
 	}
 	defer blob.Close()
-	// A tool that moves whole files cannot follow a rate or a pause, so the ranged half serves under limits
+	// Use ranged downloads when rate limits or pauses apply.
 	if r, ok := blob.(sources.Ranged); ok && p.Fetcher.Schedule.Limits() {
 		blob = r.Ranged()
 	}
 	if whole, ok := blob.(sources.Materializer); ok {
-		// A blob already on disk names its file, anything else moves bytes and waits out a paused window
+		// Reuse local blobs. Apply pause windows to downloads.
 		if _, onDisk := blob.(interface{ Name() string }); !onDisk {
 			if err := p.Fetcher.Hold(ctx); err != nil {
 				return "", err
@@ -251,7 +344,7 @@ func partialKey(model *v1.Model, a *v1.Artifact) string {
 	return "pending-" + hex.EncodeToString(sum[:16])
 }
 
-// The stored models a request names, every one when it names nothing
+// Returns requested stored models, or all models for an empty request.
 func (p *Puller) selectManifests(sourceID, repo, group string) ([]*v1.StoredModel, error) {
 	manifests, err := p.Store.ListManifests()
 	if err != nil {
@@ -270,7 +363,7 @@ func (p *Puller) selectManifests(sourceID, repo, group string) ([]*v1.StoredMode
 	return selected, nil
 }
 
-// Bytes across the models, what a task over them counts up to
+// Total bytes for task progress.
 func sizeOf(models []*v1.StoredModel) uint64 {
 	var total uint64
 	for _, m := range models {
@@ -307,7 +400,7 @@ func (p *Puller) verify(ctx context.Context, h *tasks.Handle, models []*v1.Store
 				h.Add(int64(sa.GetArtifact().GetSizeBytes()))
 				continue
 			}
-			// A pull landing the same blob waits for the verdict rather than racing it
+			// Block concurrent downloads while verifying this blob.
 			unlock := p.Store.Lock("blob:" + sa.GetDigest())
 			got, err := transfer.HashFile(p.Store.BlobPath(sa.GetDigest()), func(d int64) { h.Add(d) })
 			if err != nil {

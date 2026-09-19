@@ -11,13 +11,11 @@
   import Copy from '../ui/Copy.svelte';
   import ArmedButton from '../ui/ArmedButton.svelte';
 
-  // Every usable copy of one runtime, newest first, each row opening to everything recorded about it
   let { installs }: { installs: Install[] } = $props();
 
   let open = $state('');
   let removing = $state('');
 
-  // The names the instances running on an install serve as
   function serving(i: Install): string[] {
     return [...live.instances.values()].filter((x) => x.installId === i.id && instanceLive(x)).map((x) => (x.slotId ? (live.slots.get(x.slotId)?.name ?? x.name) : x.name));
   }
@@ -25,8 +23,7 @@
   const dirname = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/';
   const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-  // What the row does not show: the id, where it lives, where it came from, what its probes read, and
-  // the build that made it, each fact once and none that the row, the path, or the origin already states
+  // Omit details already shown in the row, path, or origin.
   function details(i: Install): [string, string][] {
     const b = i.buildId ? live.builds.get(i.buildId) : undefined;
     const said = new Set([i.version, b?.ref, b?.commit, ...i.origin.split(/\s+/), ...i.path.split(/[\\/]/)]);

@@ -13,11 +13,10 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// How many of its own lines the daemon keeps for the Host page
+// Host page log capacity.
 const recentLines = 5000
 
-// Builds a logger from config, writing to file when set, and the ring of the last lines it wrote, which
-// the daemon streams to the Host page
+// Builds a logger with optional file output and a ring buffer for the Host page.
 func New(cfg *v1.Logging) (*slog.Logger, *launch.Log, io.Closer, error) {
 	var w io.Writer = os.Stderr
 	var closer io.Closer = io.NopCloser(nil)
@@ -40,7 +39,7 @@ func New(cfg *v1.Logging) (*slog.Logger, *launch.Log, io.Closer, error) {
 	return slog.New(h), recent, closer, nil
 }
 
-// Feeds whole lines of handler output into the ring, holding a partial line until its end arrives
+// Buffers partial writes and adds complete lines to the ring.
 type lineWriter struct {
 	ring *launch.Log
 	mu   sync.Mutex

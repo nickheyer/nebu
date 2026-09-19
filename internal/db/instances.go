@@ -51,7 +51,7 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 					return err
 				}
 			}
-			// A group left on disk is a placement with no pool
+			// Disk-only placements have no memory pool.
 			for i, p := range append(append([]*v1.GroupPlacement{}, plan.GetPlacements()...), plan.GetSkipped()...) {
 				if err := exec(`INSERT INTO instance_plan_placements (instance_id, position, kind, pool_id, bytes, count) VALUES (?, ?, ?, ?, ?, ?)`,
 					id, i, enumCol(p.GetKind()), p.GetPoolId(), int64(p.GetBytes()), p.GetCount()); err != nil {

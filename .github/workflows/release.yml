@@ -23,7 +23,7 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - name: Resolve and validate the release tag
+      - name: Validate release tag
         id: tag
         env:
           REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
@@ -37,7 +37,7 @@ jobs:
         with:
           ref: ${{ steps.tag.outputs.tag }}
           fetch-depth: 0
-      - name: Require complete publication inputs
+      - name: Check release inputs
         env:
           GH_TOKEN: ${{ github.token }}
           AUR_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
@@ -80,7 +80,7 @@ jobs:
         with:
           version: '1.73.0'
           setup_only: true
-      - name: Make room for CUDA and ROCm image layers
+      - name: Free disk space for CUDA and ROCm images
         run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
@@ -98,7 +98,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AUR_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-      - name: Keep generated AUR files and release metadata
+      - name: Save AUR files and release metadata
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

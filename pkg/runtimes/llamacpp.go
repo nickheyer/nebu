@@ -14,7 +14,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/triage"
 )
 
-// llama.cpp's server, which runs GGUF models on the CPU and on any GPU through CUDA, ROCm, Vulkan, or Metal
+// LlamaCpp serves GGUF models on CPU and supported GPU backends.
 type LlamaCpp struct{}
 
 func (LlamaCpp) ID() string   { return "llamacpp" }
@@ -36,7 +36,7 @@ func (LlamaCpp) Unmet(h *v1.HostProfile) []string {
 	return nil
 }
 
-// llama.cpp publishes no CUDA build for Linux, so an NVIDIA host takes Vulkan from the releases or builds from source
+// Linux CUDA requires a source build. Published Linux GPU builds use Vulkan or ROCm.
 func (LlamaCpp) Methods() []Method {
 	linux := func(arch string, more func(*v1.HostProfile) bool) func(*v1.HostProfile) bool {
 		return func(h *v1.HostProfile) bool { return host.Is(h, "linux", arch) && (more == nil || more(h)) }
@@ -55,9 +55,9 @@ func (LlamaCpp) Methods() []Method {
 		return Asset{Prefix: "llama-b", Contains: contains, Suffix: suffix}
 	}
 	return []Method{
-		{ID: "adopt", Description: "Records a llama-server already on this host; nothing is downloaded or built", Kind: v1.InstallKind_INSTALL_KIND_ADOPTED, Binaries: []string{"llama-server"}},
+		{ID: "adopt", Description: "Use an installed llama-server", Kind: v1.InstallKind_INSTALL_KIND_ADOPTED, Binaries: []string{"llama-server"}},
 		{
-			ID: "release", Description: "A prebuilt llama-server from the GitHub releases of ggml-org/llama.cpp", Kind: v1.InstallKind_INSTALL_KIND_PREBUILT, Releases: "ggml-org/llama.cpp",
+			ID: "release", Description: "Download llama-server from GitHub releases", Kind: v1.InstallKind_INSTALL_KIND_PREBUILT, Releases: "ggml-org/llama.cpp",
 			Rules: []PrebuiltRule{
 				{ID: "linux-rocm", Applies: linux("amd64", amd), Assets: []Asset{{Prefix: "llama-b", Contains: "-bin-ubuntu-rocm-", Suffix: "-x64.tar.gz"}}, Binary: "llama-server"},
 				{ID: "linux-vulkan", Applies: linux("amd64", host.HasGPU), Assets: []Asset{tar("-bin-ubuntu-vulkan-x64")}, Binary: "llama-server"},
@@ -75,16 +75,16 @@ func (LlamaCpp) Methods() []Method {
 				{ID: "windows-arm64-cpu", Applies: windows("arm64", nil), Assets: []Asset{zip("-bin-win-cpu-arm64", ".zip")}, Binary: "llama-server.exe"},
 			},
 		},
-		{ID: "source", Description: "Compiles llama-server with the backend for the devices on this host", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "llamacpp"},
+		{ID: "source", Description: "Build llama-server for this host", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "llamacpp"},
 	}
 }
 
-// The element types the cache can be kept in, with the bytes each takes per element
+// Supported cache types and bytes per element.
 var llamaCacheTypes = []string{"f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0"}
 
 var llamaCacheBytes = map[string]float64{"f32": 4, "f16": 2, "bf16": 2, "q8_0": 1.0625, "q5_1": 0.75, "q5_0": 0.6875, "q4_1": 0.625, "q4_0": 0.5625}
 
-// The quantized types, which the value cache can only take with flash attention on
+// Quantized value caches require flash attention.
 var llamaQuantizedCache = []string{"q8_0", "q5_1", "q5_0", "q4_1", "q4_0"}
 
 func (LlamaCpp) Params() []*v1.Param {
@@ -93,9 +93,9 @@ func (LlamaCpp) Params() []*v1.Param {
 			Rule: contextRule},
 		{Name: "n_parallel", Label: "Parallel sequences", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "sequences", Min: 1, Max: 256, Step: 1, Group: "Context", Flag: "--parallel"},
 		{Name: "n_gpu_layers", Label: "GPU layers", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "layers", Min: 0, Step: 1, Group: "Placement", Flag: "--n-gpu-layers",
-			Rule: "as many layers as fit on the device, the rest in system memory"},
+			Rule: "fit layers on device and place the rest in system memory"},
 		{Name: "n_cpu_moe", Label: "Expert layers on CPU", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "layers", Min: 0, Step: 1, Group: "Placement", Flag: "--n-cpu-moe",
-			Rule: "the expert layers the device cannot hold once the layers are placed"},
+			Rule: "offload expert layers that exceed remaining device memory"},
 		{Name: "device", Label: "Devices", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Placement", Advanced: true, Flag: "--device",
 			Description: "CUDA0,CUDA1, or none"},
 		{Name: "threads", Label: "CPU threads", Type: v1.ParamType_PARAM_TYPE_INT, Default: "-1", Unit: "threads", Min: -1, Step: 1, Group: "Placement", Advanced: true, Flag: "--threads",
@@ -127,7 +127,7 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 			p["mmproj"] = proj
 		}
 	}
-	// A slot that keeps the model in host memory offloads to no device and hides every accelerator from the process
+	// Host placement disables GPU offload and hides accelerators.
 	hostOnly := in.Placement == v1.Placement_PLACEMENT_HOST
 	if hostOnly {
 		switch p.Str("device") {
@@ -142,7 +142,7 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 	if hostOnly {
 		hideDevices(env)
 	} else {
-		// A slot pins the process to its devices, no slot means every device
+		// Restrict devices only when a slot assigns them.
 		setEnv(env, "CUDA_VISIBLE_DEVICES", visible(in.Devices, "nvidia", false))
 		setEnv(env, "ROCR_VISIBLE_DEVICES", visible(in.Devices, "amd", true))
 		setEnv(env, "GGML_VK_VISIBLE_DEVICES", visible(in.Devices, "", true))
@@ -174,7 +174,7 @@ func (LlamaCpp) Probes() []Probe {
 		{Key: "devices", Args: []string{"--list-devices"}, Parse: func(out string) (string, bool) {
 			var names []string
 			for _, line := range strings.Split(out, "\n") {
-				// Each device is an indented line naming the backend device, CUDA0: NVIDIA ... (12345 MiB)
+				// Indented device lines start with a backend ID, such as CUDA0.
 				if !strings.HasPrefix(line, "  ") {
 					continue
 				}
@@ -188,8 +188,7 @@ func (LlamaCpp) Probes() []Probe {
 	}
 }
 
-// llama.cpp logs one line per backend buffer: the model, the KV cache, and the compute buffer, each sized
-// on a device backend such as CUDA0 or on the host, CPU or a pinned CUDA_Host buffer
+// Parses model, KV cache, and compute buffer allocations for device and host backends.
 func (LlamaCpp) Measure(lines []string) []*v1.Measurement {
 	var m measurements
 	for _, line := range lines {
@@ -217,8 +216,8 @@ func (LlamaCpp) Measure(lines []string) []*v1.Measurement {
 	return m.list
 }
 
-// The cache follows the weights: quantized weights take an 8 bit cache, which loses nothing they kept,
-// and full width weights keep a full width cache; the value cache only quantizes with flash attention on
+// Quantized weights default to an 8-bit cache. Other weights use f16. Quantized value caches
+// require flash attention.
 func llamaCacheType(s *estimate.Scope, value bool) string {
 	if s.Descriptor.GetBitsPerWeight() > 8 || (value && s.Params.Str("flash_attn") == "off") {
 		return "f16"
@@ -234,10 +233,10 @@ func (LlamaCpp) Policy() *estimate.Policy {
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, Pool: device, Param: "n_gpu_layers", SpillPriority: 10},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_OUTPUT, Pool: device, Param: "n_gpu_layers", SpillPriority: 10},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_EXPERTS, Pool: device, Param: "n_cpu_moe", ParamCountsHost: true, SpillPriority: 1, Requires: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER},
-			// The projector loads whole on device beside the layers
+			// Projectors load fully on device.
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_VISION, Pool: device},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_AUDIO, Pool: device},
-			// Prediction head tensors are skipped at load, no decoding path drafts with them
+			// Prediction heads are not loaded for this runtime.
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT, Pool: device, Loaded: func(*estimate.Scope) bool { return false }},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_OTHER, Pool: device},
 		},
@@ -245,7 +244,7 @@ func (LlamaCpp) Policy() *estimate.Policy {
 			k, v := llamaCacheBytes[s.Params.Str("cache_type_k")], llamaCacheBytes[s.Params.Str("cache_type_v")]
 			return uint64(float64(s.Params.Int("n_ctx")) * s.CachePerToken * (k + v) / 2)
 		},
-		// The device context plus the compute buffer, fitted to measured CUDA runs with flash attention on
+		// Device context and compute buffer estimate, fitted to CUDA runs with flash attention.
 		OverheadBytes: func(s *estimate.Scope) uint64 {
 			ctx, ubatch := float64(s.Params.Int("n_ctx")), float64(s.Params.Int("n_ubatch"))
 			return uint64(384*(1<<20) + ctx*ubatch*10 + ubatch*s.Model.Embedding*16)

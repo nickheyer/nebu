@@ -34,7 +34,6 @@ func TestScan(t *testing.T) {
 	}
 }
 
-// Every shipped set reads the lines its runtime prints
 func TestShippedRules(t *testing.T) {
 	cases := []struct {
 		set  Set
@@ -71,7 +70,6 @@ func TestShippedRules(t *testing.T) {
 	}
 }
 
-// A GGUF this build rejects is named ahead of the catch-all, with the key and the counts it read
 func TestLlamaCppHparams(t *testing.T) {
 	lines := []string{
 		"llama_model_load: error loading model: error loading model hyperparameters: key qwen35.rope.dimension_sections has wrong array length; expected 4, got 3",

@@ -16,28 +16,28 @@ enum FitVerdict {
   FIT_VERDICT_NO = 3;
 }
 
-// Which memory a run's weights go into
+// Weight placement.
 enum Placement {
   // Device memory first, the rest in host memory
   PLACEMENT_UNSPECIFIED = 0;
-  // Device memory only, a model that does not fit there is refused
+  // Require the model to fit in device memory.
   PLACEMENT_DEVICE = 1;
-  // Host memory only, no device is touched
+  // Use host memory only.
   PLACEMENT_HOST = 2;
 }
 
-// Bytes planned into one pool, past its capacity when the plan overflows the host and this is the last pool it spills into
+// Planned pool usage. The final spill pool may exceed capacity.
 message PoolUsage {
   string pool_id = 1;
   PoolKind kind = 2;
   uint64 used_bytes = 3;
   uint64 capacity_bytes = 4;
-  // The whole pool, and what was free in it when the plan was made
+  // Total and free pool memory at planning time.
   uint64 total_bytes = 5;
   uint64 free_bytes = 6;
 }
 
-// Bytes of one group kind planned onto one side, device or host, or left on disk when the pool is empty
+// Tensor-group bytes assigned to device or host memory. An empty pool means disk only.
 message GroupPlacement {
   TensorGroupKind kind = 1;
   string pool_id = 2;
@@ -55,13 +55,13 @@ message MemoryPlan {
   uint64 overhead_bytes = 6;
   map<string, string> params = 7;
   string detail = 8;
-  // The learned correction folded into overhead_bytes when the plan was made
+  // Learned correction included in overhead_bytes.
   double overhead_delta = 9;
-  // Groups the runtime leaves on disk under these params, a draft head without speculative decoding
+  // Unloaded groups, such as draft heads when speculative decoding is disabled.
   repeated GroupPlacement skipped = 10;
-  // Whether pool capacities are the memory free when the plan was made rather than whole pools
+  // Whether pool capacities use free memory instead of total memory.
   bool against_free = 11;
-  // When the host was read for this plan
+  // Host snapshot time used by this plan.
   google.protobuf.Timestamp planned_at = 12;
 }
 
@@ -72,14 +72,13 @@ message Calibration {
   google.protobuf.Timestamp updated_at = 3;
 }
 
-// Every learned correction keyed by runtime and architecture
+// Learned corrections keyed by runtime and architecture.
 message CalibrationTable {
   map<string, Calibration> entries = 1;
 }
 
-// Plans one weight group on one runtime, against memory free right now when free is set
-//
-// Params apply over the slot's defaults, the same layering a run uses.
+// Plan a weight group on a runtime. Use currently free memory when free is set.
+// Request parameters override slot defaults, as they do at launch.
 message EstimateRequest {
   string source_id = 1;
   string repo = 2;
@@ -91,13 +90,13 @@ message EstimateRequest {
   bool free = 8;
 }
 
-// A choice the current params rule out, and why
+// Disabled parameter choice and reason.
 message DisabledChoice {
   string value = 1;
   string message = 2;
 }
 
-// What the model, host, and current params make of one param: its bounds and the choices ruled out
+// Parameter bounds and disabled choices for the current model, host, and settings.
 message ParamState {
   string name = 1;
   double min = 2;
@@ -106,40 +105,67 @@ message ParamState {
   repeated DisabledChoice disabled = 5;
 }
 
-// One place a missing part is published: a group to pull when the file is known, else a repository to pick a file from
-message PartSource {
-  string source_id = 1;
-  string repo = 2;
-  // The weight group the file forms in that repository, empty when the repository holds several to choose from
-  string group = 3;
-  // The file's path in the repository, empty when the repository holds several to choose from
-  string path = 4;
-}
-
-// A file the run needs beside its weights and the store does not hold
-message MissingPart {
-  // The param the file is named by
-  string param = 1;
-  // What the part is, in words
+// Resolved blueprint dependency.
+// stored means available in the store, bundled means included in the model group, and error
+// explains resolution failures. Source fields identify the download location.
+// paths restrict the download to selected files within the group.
+message Part {
+  // Blueprint slot, such as text_encoder.t5.
+  string slot = 1;
+  // Slot display label.
   string label = 2;
-  repeated PartSource sources = 3;
+  // Component name from the blueprint, such as UMT5-XXL encoder.
+  string name = 3;
+  // Required to run the model.
+  bool required = 4;
+  // Runtime parameter for this file, when requested by a runtime.
+  string param = 5;
+  bool stored = 6;
+  bool bundled = 7;
+  string source_id = 8;
+  string repo = 9;
+  string revision = 10;
+  string group = 11;
+  repeated string paths = 12;
+  uint64 size_bytes = 13;
+  string error = 14;
+  // Pipeline subfolder for a bundled component.
+  string subfolder = 15;
 }
 
-// Returns the plan and descriptor used, with the state of every param under these inputs
+// Plan, descriptor, and parameter states for the requested inputs.
 message EstimateResponse {
   MemoryPlan plan = 1;
   Descriptor descriptor = 2;
   repeated ParamState params = 3;
-  // Why a run with these params would be refused, empty when it would not
+  // Launch refusal reason. Empty when allowed.
   string refusal = 4;
-  // The parts the run needs and the store does not hold, each with where to pull it from
-  repeated MissingPart missing = 5;
+  // Missing dependencies and their download locations.
+  repeated Part missing = 5;
 }
 
-// Builds a fit table for a model
-//
-// Every compatible runtime is planned unless runtime_ids names some, the
-// slot's runtime alone when a slot is named and runtime_ids is empty.
+// Resolve a weight group's dependencies.
+message PartsRequest {
+  string source_id = 1;
+  string repo = 2;
+  string revision = 3;
+  string group = 4;
+}
+
+// Weight group blueprint and resolved dependencies.
+message PartsResponse {
+  Descriptor descriptor = 1;
+  // Blueprint family ID and name. Empty when no blueprint applies.
+  string family = 2;
+  string family_name = 3;
+  repeated Part parts = 4;
+  // Additional bytes to download.
+  uint64 pull_bytes = 5;
+}
+
+// Build a model fit table.
+// Use runtime_ids when specified, otherwise the slot runtime if a slot is given,
+// otherwise all compatible runtimes.
 message InspectRequest {
   string source_id = 1;
   string repo = 2;
@@ -151,10 +177,9 @@ message InspectRequest {
   string slot_id = 8;
 }
 
-// One cell of the fit table: the plan against the whole memory, and the one against what is free right now
-//
-// A context of zero is the row the planner solved itself, the largest context that fits, and the
-// plan's params carry the length it settled on.
+// Plans for total and currently free memory.
+// Context zero selects the largest context that fits. The plan parameters
+// contain the selected context length.
 message FitRow {
   string group = 1;
   string runtime_id = 2;
@@ -177,4 +202,6 @@ service EstimateService {
   rpc Inspect(InspectRequest) returns (InspectResponse);
   // Plans one group on one runtime
   rpc Estimate(EstimateRequest) returns (EstimateResponse);
+  // Resolve the components needed by a weight group.
+  rpc Parts(PartsRequest) returns (PartsResponse);
 }

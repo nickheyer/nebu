@@ -12,7 +12,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/triage"
 )
 
-// NeMo Export-Deploy, serving NeMo checkpoints in framework over Ray Serve on NVIDIA GPUs, converting packed archives first
+// NeMo serves checkpoints through Export-Deploy and Ray Serve on NVIDIA GPUs.
 type NeMo struct{}
 
 func (NeMo) ID() string          { return "nemo" }
@@ -34,7 +34,7 @@ func (NeMo) Unmet(h *v1.HostProfile) []string {
 
 func (NeMo) Methods() []Method {
 	return []Method{
-		{ID: "source", Description: "Installs Export-Deploy and the checkpoint converter from PyPI into two virtual environments", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "nemo"},
+		{ID: "source", Description: "Install Export-Deploy and the checkpoint converter in separate virtual environments", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "nemo"},
 	}
 }
 
@@ -76,7 +76,7 @@ func (r NeMo) Launch(in Launch) (*Command, error) {
 	return &Command{Command: in.Install.Dir + "/venv/bin/python", Args: append(args, flags...), Env: env, Params: emitted}, nil
 }
 
-// A packed .nemo archive is converted to a NeMo 2 directory before its first launch
+// Convert packed .nemo archives to NeMo 2 before first launch.
 func (NeMo) Prepares(formatID string) bool { return formatID == "nemo" }
 
 func (NeMo) Prepare(in Launch) (*Command, error) {
@@ -116,7 +116,7 @@ func (NeMo) Probes() []Probe {
 	}}
 }
 
-// In framework serving reports no allocations nebu reads
+// This serving mode reports no supported memory measurements.
 func (NeMo) Measure([]string) []*v1.Measurement { return nil }
 
 func (NeMo) Policy() *estimate.Policy {
@@ -129,11 +129,11 @@ func (NeMo) Policy() *estimate.Policy {
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_OUTPUT, Pool: device},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_VISION, Pool: device},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_AUDIO, Pool: device},
-			// In framework inference drafts with nothing, prediction heads stay on disk
+			// This serving mode does not load prediction heads.
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT, Pool: device, Loaded: func(*estimate.Scope) bool { return false }},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_OTHER, Pool: device},
 		},
-		// In framework inference keeps a full length key and value cache per batched sequence
+		// Each batched sequence keeps a full-length KV cache.
 		CacheBytes: func(s *estimate.Scope) uint64 {
 			return uint64(float64(s.Params.Int("n_ctx")) * s.CachePerToken * 2 * float64(s.Params.Int("max_batch_size")))
 		},

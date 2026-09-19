@@ -13,7 +13,7 @@ import (
 
 const revisionTable = "atlas_schema_revisions"
 
-// Same columns as the atlas cli so its status reads ours
+// Match Atlas CLI columns so it can read migration status.
 const revisionTableDDL = `CREATE TABLE IF NOT EXISTS "atlas_schema_revisions" (
   "version" text NOT NULL,
   "description" text NOT NULL,
@@ -32,7 +32,7 @@ const revisionTableDDL = `CREATE TABLE IF NOT EXISTS "atlas_schema_revisions" (
 
 const revisionColumns = `"version", "description", "type", "applied", "total", "executed_at", "execution_time", "error", "error_stmt", "hash", "partial_hashes", "operator_version"`
 
-// Stores atlas revisions through whichever connection is migrating
+// Stores Atlas revisions using the active migration connection.
 type revisionStore struct {
 	conn schema.ExecQuerier
 }
@@ -103,7 +103,7 @@ func (r revisionStore) DeleteRevision(ctx context.Context, version string) error
 	return err
 }
 
-// Reads one revision row in revisionColumns order
+// Scans a revision row in revisionColumns order.
 func scanRevision(rows *sql.Rows) (*migrate.Revision, error) {
 	var (
 		rev           migrate.Revision

@@ -20,7 +20,6 @@
   import ProfileForm from './ProfileForm.svelte';
   import TextInput from './ui/TextInput.svelte';
 
-  // Every name the gateway answers to, what stands behind it, and a form for extra names, shown once an instance exists to name
   let open = $state(false);
   let aliasName = $state('');
   let aliasInstance = $state('');
@@ -104,7 +103,7 @@
 </Section>
 {/if}
 
-<Dialog bind:open title="Add alias" description="A second name that reaches a running model" size="lg">
+<Dialog bind:open title="Add alias" description="Another name for a running model" size="lg">
   <form
     class="flex flex-col gap-5"
     onsubmit={(e) => {

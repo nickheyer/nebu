@@ -78,7 +78,7 @@ type antResponse struct {
 	Usage        antUsage   `json:"usage"`
 }
 
-// Reads blocks, a bare string being one text block
+// Parses blocks, treating a bare string as one text block.
 func antBlocks(raw json.RawMessage) []antBlock {
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
@@ -115,7 +115,7 @@ func (anthropic) ParseRequest(path string, body []byte) (*Chat, error) {
 			case "tool_use":
 				msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: b.ID, Name: b.Name, Args: string(b.Input)})
 			case "tool_result":
-				// Each result is its own tool turn, the way every other flavor carries them
+				// Convert each result to a separate tool turn.
 				if len(msg.Parts) > 0 || len(msg.ToolCalls) > 0 {
 					c.Messages = append(c.Messages, msg)
 					msg = Message{Role: m.Role}
@@ -202,7 +202,7 @@ func (anthropic) RenderRequest(c *Chat) (string, []byte, error) {
 	if len(system) > 0 {
 		req.System, _ = json.Marshal(strings.Join(system, "\n\n"))
 	}
-	// Turns alternate, so neighbours with one role merge and tool results ride on a user turn
+	// Merge adjacent same-role turns and put tool results in user turns.
 	var last *antMessage
 	push := func(role string, blocks []antBlock) {
 		if last != nil && last.Role == role {
@@ -252,7 +252,7 @@ func (anthropic) RenderRequest(c *Chat) (string, []byte, error) {
 		req.ToolChoice = &antToolChoice{Type: "tool", Name: c.ToolChoice}
 	}
 	if c.Kind == "count" {
-		// The count endpoint takes the prompt alone and refuses sampling fields
+		// Exclude sampling fields from token count requests.
 		req.MaxTokens, req.Temperature, req.TopP, req.TopK, req.StopSequences, req.Stream = 0, nil, nil, nil, nil, false
 		data, err := json.Marshal(req)
 		return anthropicCount, data, err
@@ -395,10 +395,10 @@ type antStream struct {
 	w     http.ResponseWriter
 	id    string
 	model string
-	// The open content block, -1 for none, and its kind
+	// Open content block index and kind. -1 means none.
 	index int
 	kind  string
-	// Tool fragments by stream index map onto our own block indices
+	// Map stream tool indexes to output block indexes.
 	toolBlock map[int]int
 	tools     toolGather
 	started   bool
@@ -465,7 +465,7 @@ func (s *antStream) Write(ev Event) error {
 			return err
 		}
 		s.tools.add(ev)
-		// A fragment opens a block unless the open block is already this call's
+		// Open a block when the fragment belongs to a new call.
 		if block, seen := s.toolBlock[ev.Index]; !seen || block != s.index || s.kind != "tool_use" {
 			id := ev.Tool.ID
 			if id == "" {
@@ -492,7 +492,7 @@ func (s *antStream) Write(ev Event) error {
 			res = &Result{}
 		}
 		reason := antReason(stopOf(res.Stop, len(s.tools.order)))
-		// Input tokens ride on the final delta too, an OpenAI runtime only reports them at the end
+		// Include input tokens in the final delta because OpenAI reports them at the end.
 		if err := writeSSE(s.w, "message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": reason, "stop_sequence": nil}, "usage": map[string]any{"input_tokens": res.In, "output_tokens": res.Out}}); err != nil {
 			return err
 		}

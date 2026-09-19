@@ -12,11 +12,9 @@
     tone?: 'bad' | 'default';
     disabled?: boolean;
     separator?: boolean;
-    // A short line under the label
     detail?: string;
   }
 
-  // An ellipsis trigger by default, or a labeled button with a chevron when given a label
   let {
     items,
     label,

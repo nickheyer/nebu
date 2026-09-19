@@ -108,7 +108,7 @@ func TestBuildKeepsOrderAndSeedsEveryCatalog(t *testing.T) {
 			t.Fatalf("%v should fail", bad)
 		}
 	}
-	// A row whose client cannot be built, or whose kind is unknown, stays listed and says why, with the fields to fix it
+	// Broken sources remain visible with their error and editable settings.
 	r, err = Build([]*v1.Source{{Id: "m", Kind: v1.SourceKind_SOURCE_KIND_MIRROR}, {Id: "u", Kind: v1.SourceKind_SOURCE_KIND_UNSPECIFIED}, Seeds()[0]})
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +212,7 @@ func TestManagerSeedsBootstrapsAndEdits(t *testing.T) {
 	if first, _ := m.Registry.Get(""); first.Spec().GetId() != "disk" {
 		t.Fatal("first added source is the fallback")
 	}
-	// A second start changes nothing, and a changed config entry is ignored once its row exists
+	// Existing rows override later bootstrap config changes.
 	if err := m.Load(ctx, []*v1.Source{{Id: "disk", Kind: v1.SourceKind_SOURCE_KIND_LOCAL, Config: map[string]string{"path": t.TempDir()}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -515,7 +515,7 @@ func TestGitHubListsOnePageOfEachKind(t *testing.T) {
 	defer srv.Close()
 	c := testClient(t, github, &v1.Source{Id: "gh", Config: map[string]string{"endpoint": srv.URL}})
 
-	// The newest page is all prereleases, so the stable release comes from the API's own answer
+	// Expected requests: releases, stable release, default branch, branches, and a non-release tag.
 	model, err := c.Resolve(context.Background(), "o/r", "")
 	if err != nil || model.GetRevision() != "b1100" || len(model.GetArtifacts()) != 1 {
 		t.Fatalf("latest %v %v", model, err)
@@ -529,7 +529,7 @@ func TestGitHubListsOnePageOfEachKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The newest page of releases, the stable one, the default branch and the page of branches, and the tag that is no release
+	// Expected requests: releases, stable release, default branch, branches, and a non-release tag.
 	if len(revs) != 2*ghPageSize+3 || !revs[0].GetDefault() || revs[0].GetName() != "b1100" || revs[0].GetDetail() != "release" {
 		t.Fatalf("revisions %d %v", len(revs), revs[0])
 	}

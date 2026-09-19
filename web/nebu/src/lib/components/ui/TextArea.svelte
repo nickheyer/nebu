@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { HTMLTextareaAttributes } from 'svelte/elements';
 
-  // A multi line field that shows what applies while it is empty
   let {
     value = $bindable(''),
     empty = '',

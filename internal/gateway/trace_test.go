@@ -15,7 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// A runtime that streams two words and a usage line in the OpenAI shape
+// Fake OpenAI runtime streaming two words and usage.
 func streamingUpstream(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +63,7 @@ func TestTraces(t *testing.T) {
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
 
-	// A passed through stream is read on its way past
+	// Parse proxied streams for tracing.
 	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"m1","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +88,7 @@ func TestTraces(t *testing.T) {
 		t.Fatalf("stream bodies %v", tr)
 	}
 
-	// A translated request keeps both bodies and the answer
+	// Translated traces retain client, upstream, and response bodies.
 	resp, err = http.Post(srv.URL+"/v1/messages", "application/json", strings.NewReader(`{"model":"m1","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestTraces(t *testing.T) {
 		t.Fatalf("translated usage %v", tr)
 	}
 
-	// A refusal is traced with its status and reason
+	// Trace failures with their status and reason.
 	resp, _ = http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"nope","messages":[]}`))
 	io.ReadAll(resp.Body)
 	resp.Body.Close()
@@ -112,7 +112,7 @@ func TestTraces(t *testing.T) {
 		t.Fatalf("refusal trace %v", tr)
 	}
 
-	// Lists are newest first without bodies, one route's when asked
+	// Lists omit bodies, sort newest first, and support route filters.
 	all := g.Traces().List("", 0)
 	if len(all) != 3 || all[0].GetRoute() != "nope" || all[0].GetRequest() != "" {
 		t.Fatalf("list %v", all)
@@ -120,7 +120,7 @@ func TestTraces(t *testing.T) {
 	if only := g.Traces().List("m1", 1); len(only) != 1 || only[0].GetRoute() != "m1" {
 		t.Fatalf("route list %v", only)
 	}
-	// Every trace reached the stream twice, once starting and once done
+	// Publish each trace at start and completion.
 	seen := map[string]int{}
 	timeout := time.After(time.Second)
 	for len(seen) < 3 || seen[id] < 2 {
@@ -135,7 +135,7 @@ func TestTraces(t *testing.T) {
 		}
 	}
 
-	// A token count is traced as one, in its own ring, and is not a request served
+	// Token counts use a separate trace ring and no served request count.
 	served := g.Status().GetRequests()
 	resp, err = http.Post(srv.URL+"/v1/messages/count_tokens", "application/json", strings.NewReader(`{"model":"m1","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
@@ -175,7 +175,7 @@ func TestRecorderRing(t *testing.T) {
 	if got, _ := r.Get("b"); got.GetStatus() != 200 || got.GetFinishedAt() == nil {
 		t.Fatalf("finish %v", got)
 	}
-	// Token counts fill their own ring and never push an answer out
+	// Token count traces cannot evict inference traces.
 	r.Start(&v1.Trace{Id: "n1", Route: "m", Kind: v1.TraceKind_TRACE_KIND_COUNT, StartedAt: at(3)})
 	r.Start(&v1.Trace{Id: "n2", Route: "m", Kind: v1.TraceKind_TRACE_KIND_COUNT, StartedAt: at(4)})
 	if _, ok := r.Get("n1"); ok {
@@ -191,7 +191,7 @@ func TestRecorderRing(t *testing.T) {
 	if list = r.List("", 1); len(list) != 1 || list[0].GetId() != "n2" {
 		t.Fatalf("merged limit %v", list)
 	}
-	// A count that started before an answer lists after it
+	// List traces by start time across both rings.
 	r.Start(&v1.Trace{Id: "n0", Route: "m", Kind: v1.TraceKind_TRACE_KIND_COUNT, StartedAt: at(0)})
 	if list = r.List("", 0); list[len(list)-1].GetId() != "n0" {
 		t.Fatalf("merge by start %v", list)

@@ -10,7 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// What one shard asks of Discord, discordgo behind it and a fake in tests
+// Discord session interface, implemented by discordgo and test fakes.
 type session interface {
 	Open() error
 	Close() error
@@ -38,7 +38,7 @@ type session interface {
 	GatewayBot() (*discordgo.GatewayBotResponse, error)
 }
 
-// What a shard reports back to its runner
+// Shard events reported to the runner.
 type handlers struct {
 	ready      func(shard int, r *discordgo.Ready)
 	resumed    func(shard int)
@@ -129,7 +129,7 @@ func (d *dgSession) React(channelID, messageID, emoji string) error {
 	return d.s.MessageReactionAdd(channelID, messageID, emojiRef(emoji))
 }
 
-// Channels come from the shard's state when it holds them, Discord otherwise
+// Uses cached channel state, falling back to Discord.
 func (d *dgSession) Channel(channelID string) (*discordgo.Channel, error) {
 	if c, err := d.s.State.Channel(channelID); err == nil {
 		return c, nil
@@ -190,7 +190,7 @@ func (d *dgSession) OverwriteCommands(appID, guildID string, cmds []*discordgo.A
 
 func (d *dgSession) GatewayBot() (*discordgo.GatewayBotResponse, error) { return d.s.GatewayBot() }
 
-// Puts a gateway refusal into words: the close codes Discord uses for a bad token and for intents the portal has not granted
+// Explains Discord close codes for invalid tokens and missing intents.
 func describeGateway(err error) error {
 	if err == nil {
 		return nil
@@ -203,7 +203,7 @@ func describeGateway(err error) error {
 		case 4013:
 			return fmt.Errorf("discord refused the intents as invalid: %s", ce.Text)
 		case 4014:
-			return fmt.Errorf("discord refused a privileged intent; enable Message Content and, for member events, Server Members under Bot in the developer portal: %s", ce.Text)
+			return fmt.Errorf("discord intent denied. Enable Message Content and, for member events, Server Members in the developer portal: %s", ce.Text)
 		}
 	}
 	s := err.Error()
@@ -211,12 +211,12 @@ func describeGateway(err error) error {
 	case strings.Contains(s, "4004"):
 		return fmt.Errorf("discord refused the token: %w", err)
 	case strings.Contains(s, "4014"):
-		return fmt.Errorf("discord refused a privileged intent; enable Message Content and, for member events, Server Members under Bot in the developer portal: %w", err)
+		return fmt.Errorf("discord intent denied. Enable Message Content and, for member events, Server Members in the developer portal: %w", err)
 	}
 	return err
 }
 
-// The message Discord put in a REST error, the error's own text otherwise
+// Returns the Discord REST message or the original error text.
 func describeREST(err error) string {
 	var re *discordgo.RESTError
 	if errors.As(err, &re) && re.Message != nil && re.Message.Message != "" {
@@ -237,7 +237,7 @@ func unknownWebhook(err error) bool {
 	return errors.As(err, &re) && re.Message != nil && re.Message.Code == discordgo.ErrCodeUnknownWebhook
 }
 
-// The form a reaction endpoint takes: a unicode emoji as it is, a custom one as name:id
+// Formats reactions as Unicode or custom name:id.
 func emojiRef(emoji string) string {
 	e := strings.TrimSpace(emoji)
 	if strings.HasPrefix(e, "<") && strings.HasSuffix(e, ">") {
@@ -247,7 +247,7 @@ func emojiRef(emoji string) string {
 	return e
 }
 
-// The name a unicode or custom emoji goes by in a reaction event
+// Emoji name from a reaction event.
 func emojiName(e *discordgo.Emoji) string {
 	if e == nil {
 		return ""
@@ -258,7 +258,7 @@ func emojiName(e *discordgo.Emoji) string {
 	return e.Name
 }
 
-// Whether a reaction's emoji is the one a trigger names, by unicode, by name, or by name:id
+// Matches trigger emojis by Unicode, name, or name:id.
 func sameEmoji(want string, e *discordgo.Emoji) bool {
 	if e == nil {
 		return false

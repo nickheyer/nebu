@@ -16,13 +16,8 @@ import (
 
 const hfcliPoll = 500 * time.Millisecond
 
-// The Hugging Face CLI as a transport: whole files land in a scratch
-// directory through hf download, which uses Xet and parallel transfers the
-// Hub tunes for its own repositories
-//
-// A locator is repo@revision/path. The CLI cannot list or read ranges, so
-// listing answers ErrUnsupported and a blob opened through it materializes
-// on first use.
+// Hugging Face CLI transport using hf download into scratch storage. Locators use
+// repo@revision/path. Files download on first access. Listing and range reads are unsupported.
 type HFCLI struct {
 	command  string
 	endpoint string
@@ -45,7 +40,7 @@ func (h *HFCLI) List(context.Context, string) ([]*v1.Artifact, error) {
 	return nil, fmt.Errorf("listing through the CLI: %w", ErrUnsupported)
 }
 
-// Opens a file the CLI will download when the blob is materialized or read
+// Creates a blob downloaded on first read or materialization.
 func (h *HFCLI) Open(ctx context.Context, locator string, size int64) (Blob, error) {
 	repo, ref, rel := splitRepoRef(locator)
 	if repo == "" || rel == "" {
@@ -79,7 +74,7 @@ func (h *HFCLI) Read(ctx context.Context, locator string, max int64) ([]byte, er
 	return readAllCapped(f, max)
 }
 
-// Runs the download, reporting the growing file until the CLI returns
+// Reports file growth until the CLI download completes.
 func (h *HFCLI) download(ctx context.Context, repo, ref, rel string, progress func(int64)) (string, error) {
 	local := filepath.Join(h.dir, strings.ReplaceAll(repo, "/", "--"), ref)
 	if err := os.MkdirAll(local, 0o755); err != nil {

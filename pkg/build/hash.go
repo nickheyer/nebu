@@ -13,8 +13,8 @@ import (
 
 const idLength = 16
 
-// Hashes everything that decides the bytes a build produces: the recipe's steps as this build would run
-// them, its outputs and binary, the variant, ref, sandbox, image, vars, facts, and patches
+// Hashes resolved build inputs: steps, outputs, binary, variant, ref, sandbox, image, variables,
+// facts, and patches.
 func hashBuild(rc recipes.Recipe, b *v1.Build, bctx *recipes.Build, patches map[string][]byte) string {
 	h := sha256.New()
 	write := func(parts ...string) {

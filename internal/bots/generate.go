@@ -22,16 +22,16 @@ import (
 )
 
 const (
-	// Bytes of one attachment the bot will read
+	// Maximum attachment size to read.
 	attachmentMax = 25 << 20
-	// The header the gateway answers a trace id in
+	// Gateway trace ID header.
 	traceHeader = "X-Nebu-Trace"
 )
 
 var (
-	// How often a video is asked after
+	// Video polling interval.
 	videoPoll = 2 * time.Second
-	// How often a streamed answer is written back to Discord
+	// Interval between Discord message updates while streaming.
 	streamEdit = 1500 * time.Millisecond
 )
 
@@ -42,13 +42,13 @@ type file struct {
 	data []byte
 }
 
-// An answer from a language model, with the trace the gateway kept
+// Language model response and gateway trace.
 type answer struct {
 	text  string
 	trace string
 }
 
-// The route a persona uses for one kind of work: its own, or the one ready route of that kind
+// Uses the persona's route or the only ready route of the requested kind.
 func (r *runner) route(p *v1.Persona, kind string) (string, error) {
 	named := map[string]string{"chat": p.GetModel(), "image": p.GetImageModel(), "video": p.GetVideoModel()}[kind]
 	if named != "" {
@@ -75,11 +75,11 @@ func (r *runner) route(p *v1.Persona, kind string) (string, error) {
 	sort.Strings(fits)
 	switch len(fits) {
 	case 0:
-		return "", fmt.Errorf("no %s model is running; run one with nebu run or choose one for persona %s", kindWord(kind), p.GetName())
+		return "", fmt.Errorf("no %s model is running. Use nebu run or choose a model for persona %s", kindWord(kind), p.GetName())
 	case 1:
 		return fits[0], nil
 	}
-	return "", fmt.Errorf("%d %s models are running (%s); choose one for persona %s", len(fits), kindWord(kind), strings.Join(fits, ", "), p.GetName())
+	return "", fmt.Errorf("%d %s models are running (%s). Choose one for persona %s", len(fits), kindWord(kind), strings.Join(fits, ", "), p.GetName())
 }
 
 func kindWord(kind string) string {
@@ -98,7 +98,7 @@ func hasMode(rt *v1.Route, mode string) bool {
 	return false
 }
 
-// Sends a chat to the persona's language model through the gateway, calling onDelta with each fragment when streaming
+// Sends chat through the gateway and calls onDelta for streamed fragments.
 func (r *runner) chat(ctx context.Context, p *v1.Persona, model string, chat *gateway.Chat, onDelta func(string)) (*answer, error) {
 	chat.Kind, chat.Model, chat.Stream = "chat", model, onDelta != nil
 	s := p.GetSampling()
@@ -155,7 +155,7 @@ func (r *runner) chat(ctx context.Context, p *v1.Persona, model string, chat *ga
 	return out, failed
 }
 
-// Makes images on the persona's image model, each answered as a file
+// Generates images using the persona's model and returns files.
 func (r *runner) images(ctx context.Context, p *v1.Persona, model, prompt, initImage string, count int) ([]file, string, error) {
 	media := r.spec.GetMedia()
 	if style := strings.TrimSpace(p.GetImageStyle()); style != "" {
@@ -211,7 +211,7 @@ func (r *runner) images(ctx context.Context, p *v1.Persona, model, prompt, initI
 	return out, trace, nil
 }
 
-// Makes a video on the persona's video model, waiting for the job and answering the file
+// Generates a video and returns the completed file.
 func (r *runner) video(ctx context.Context, p *v1.Persona, model, prompt, initImage string, controlFrames []string) (*file, string, error) {
 	media := r.spec.GetMedia()
 	req := map[string]any{"model": model, "prompt": prompt}
@@ -320,7 +320,7 @@ func (r *runner) get(ctx context.Context, path string) (*http.Response, error) {
 	return r.client.Do(req)
 }
 
-// Forgets a finished or abandoned video on its own short clock
+// Deletes completed or abandoned videos with a separate timeout.
 func (r *runner) delete(videoID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -333,7 +333,7 @@ func (r *runner) delete(videoID string) {
 	}
 }
 
-// The message in a gateway refusal
+// Extracts the gateway error message.
 func gatewayError(flavor gateway.Flavor, resp *http.Response) error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	message := flavor.ErrorMessage(raw)
@@ -355,7 +355,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// Reads an attachment's bytes, refusing one past the cap
+// Reads an attachment within the size limit.
 func (r *runner) download(ctx context.Context, url string, size int) ([]byte, error) {
 	if size > attachmentMax {
 		return nil, fmt.Errorf("attachment is %d bytes, over the %d the bot reads", size, attachmentMax)
@@ -390,9 +390,8 @@ func isVideo(a *discordgo.MessageAttachment) bool {
 	return strings.HasPrefix(a.ContentType, "video/")
 }
 
-// The images of a message as parts for a language model, videos sampled into frames when the bot samples them
-//
-// A video the bot cannot sample is named in the text so the model knows something was there.
+// Converts attachments into chat parts and samples configured video frames.
+// Videos that cannot be sampled are described in text.
 func (r *runner) attachmentParts(ctx context.Context, m *discordgo.Message) ([]gateway.Part, []string, error) {
 	var parts []gateway.Part
 	var notes []string
@@ -429,7 +428,7 @@ func (r *runner) attachmentParts(ctx context.Context, m *discordgo.Message) ([]g
 	return parts, notes, nil
 }
 
-// Samples frames from a video with ffmpeg, evenly across its length, each answered as base64 PNG
+// Samples evenly spaced video frames with ffmpeg and returns base64 PNGs.
 func (r *runner) frames(ctx context.Context, data []byte, name string, want int) ([]string, error) {
 	binary := r.m.FFmpeg
 	if binary == "" {
@@ -437,7 +436,7 @@ func (r *runner) frames(ctx context.Context, data []byte, name string, want int)
 	}
 	path, err := exec.LookPath(binary)
 	if err != nil {
-		return nil, fmt.Errorf("sampling video needs ffmpeg, which was not found; install it or set discord.ffmpeg in the config")
+		return nil, fmt.Errorf("ffmpeg not found. Install it or set discord.ffmpeg to sample video")
 	}
 	dir, err := os.MkdirTemp("", "nebu-frames-")
 	if err != nil {
@@ -448,7 +447,7 @@ func (r *runner) frames(ctx context.Context, data []byte, name string, want int)
 	if err := os.WriteFile(in, data, 0o600); err != nil {
 		return nil, err
 	}
-	// One frame a second, scaled down, up to twice what is wanted so a short clip still yields enough and a long one is thinned below
+	// Sample at 1 fps, up to twice the requested count, then thin long clips.
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, "-hide_banner", "-loglevel", "error", "-i", in, "-vf", "fps=1,scale='min(768,iw)':-2", "-frames:v", fmt.Sprint(want*4), filepath.Join(dir, "frame-%04d.png"))
@@ -472,7 +471,7 @@ func (r *runner) frames(ctx context.Context, data []byte, name string, want int)
 	return out, nil
 }
 
-// Keeps want items spread evenly over the list, the whole list when it is short enough
+// Selects evenly spaced items, keeping all if the list is shorter than want.
 func thin(items []string, want int) []string {
 	if want <= 0 || len(items) <= want {
 		return items

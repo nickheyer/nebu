@@ -25,7 +25,7 @@ import (
 
 func timestampNow() *timestamppb.Timestamp { return timestamppb.Now() }
 
-// A runtime built from one recipe, whose binary prints its version and the greeting it was built with
+// Test recipe building a binary that prints its version and configured greeting.
 type fakeRuntime struct{}
 
 func (fakeRuntime) ID() string                                         { return "fake" }
@@ -67,7 +67,7 @@ func (fakeRuntime) Probes() []runtimes.Probe {
 	}}}
 }
 
-// A recipe with no source that writes a shell script as its binary
+// Source-free recipe that installs a shell script.
 type fakeRecipe struct{}
 
 func (fakeRecipe) ID() string             { return "fake" }
@@ -93,7 +93,7 @@ func (fakeRecipe) Steps(b *recipes.Build) []recipes.Step {
 	return []recipes.Step{{Command: []string{"sh", "-c", "printf '%s' \"$1\" > " + b.Out + "/fakebin && chmod +x " + b.Out + "/fakebin", "sh", script}}}
 }
 
-// The fake recipe with a container CLI no host has, so the container sandbox is offered but unmet
+// Test recipe using a nonexistent container CLI to report an unmet dependency.
 type cliLessRecipe struct{ fakeRecipe }
 
 func (cliLessRecipe) ID() string { return "clifree" }
@@ -101,7 +101,7 @@ func (cliLessRecipe) Sandbox() recipes.Sandbox {
 	return recipes.Sandbox{Kind: v1.SandboxKind_SANDBOX_KIND_HOST, CLIs: []string{"definitely-missing-cli-xyz"}}
 }
 
-// The fake recipe fetched from the releases of a repository, so a ref means something
+// Test recipe with repository releases for source ref selection.
 type releasedRecipe struct{ fakeRecipe }
 
 func (releasedRecipe) ID() string { return "released" }

@@ -9,7 +9,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// Reads the settings, every row one field, absent rows leaving the field at its zero
+// Reads one settings field per row. Missing rows keep zero values.
 func (d *DB) GetSettings(ctx context.Context) (*v1.Settings, error) {
 	fields := map[string]json.RawMessage{}
 	_, err := list(ctx, d, `SELECT key, value FROM settings`, func(rows *sql.Rows) (struct{}, error) {
@@ -29,7 +29,7 @@ func (d *DB) GetSettings(ctx context.Context) (*v1.Settings, error) {
 	return out, protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(data, out)
 }
 
-// Replaces the settings, one row per field of the message under its proto name
+// Replaces settings rows keyed by proto field name.
 func (d *DB) PutSettings(ctx context.Context, s *v1.Settings) error {
 	data, err := protojson.MarshalOptions{UseProtoNames: true, EmitDefaultValues: true}.Marshal(s)
 	if err != nil {

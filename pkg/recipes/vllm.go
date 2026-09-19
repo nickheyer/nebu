@@ -17,7 +17,7 @@ func (VLLM) Source() Source      { return Source{} }
 func (VLLM) Tools() []string     { return []string{"python3"} }
 func (VLLM) Facts() []string     { return []string{"device.vendor", "device.compute_capability"} }
 func (VLLM) Vars() []Var {
-	return []Var{{Name: "version", Label: "Version", Description: "The vllm version on PyPI, the newest when empty"}}
+	return []Var{{Name: "version", Label: "Version", Description: "PyPI version, latest when empty"}}
 }
 
 func (VLLM) Variants() []Variant {

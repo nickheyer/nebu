@@ -5,17 +5,15 @@ import { FitVerdict } from '$proto/estimate_pb';
 import type { Descriptor, Precision } from '$proto/model_pb';
 import { count, ctx } from './format';
 
-// What the daemon calls the provider behind a source
 function providerName(s: SourceStatus | undefined): string {
   return s?.capabilities?.name || 'Source';
 }
 
-// What a source is called, its id when it was never named
 export function sourceLabel(s: SourceStatus | undefined): string {
   return s?.source?.name || s?.source?.id || '';
 }
 
-// Names every source by id, adding the id where two share a name
+// Append source IDs to duplicate names.
 export function sourceLabels(statuses: SourceStatus[]): Map<string, string> {
   const counts = new Map<string, number>();
   for (const s of statuses) counts.set(sourceLabel(s), (counts.get(sourceLabel(s)) ?? 0) + 1);
@@ -28,14 +26,13 @@ export function sourceLabels(statuses: SourceStatus[]): Map<string, string> {
   return out;
 }
 
-// One provider with every source configured for it, in the daemon's order
 export interface ProviderGroup {
   kind: SourceKind;
   name: string;
   sources: SourceStatus[];
 }
 
-// Groups sources by provider, keeping the daemon's order of first appearance
+// Preserve provider order from the daemon.
 export function groupByProvider(statuses: SourceStatus[]): ProviderGroup[] {
   const out: ProviderGroup[] = [];
   for (const s of statuses) {
@@ -47,35 +44,31 @@ export function groupByProvider(statuses: SourceStatus[]): ProviderGroup[] {
   return out;
 }
 
-// A provider's label: the one source's own name, or the provider's when it has several
+// Use the source name for a single source, otherwise the provider name.
 export function groupLabel(g: ProviderGroup): string {
   return g.sources.length === 1 ? sourceLabel(g.sources[0]) : g.name;
 }
 
-// The short name a kind travels under in a URL, such as huggingface or oci
 export function kindParam(kind: SourceKind): string {
   return (SourceKind[kind] ?? '').toLowerCase();
 }
 
-// Reads a kind back from its short name, unspecified when unknown
 export function parseKind(param: string): SourceKind {
   const v = SourceKind[param.toUpperCase() as keyof typeof SourceKind];
   return typeof v === 'number' ? v : SourceKind.UNSPECIFIED;
 }
 
-// The label a source gave a facet value, falling back to the id
 export function facetValueLabel(caps: SourceCapabilities | undefined, facetId: string, value: string): string {
   const f = caps?.facets.find((x) => x.id === facetId);
   return f?.values.find((v) => v.id === value)?.label ?? humanize(value);
 }
 
-// Turns text-generation into Text generation
+// Turn text-generation into Text generation.
 export function humanize(id: string): string {
   const s = id.replace(/[-_]+/g, ' ').trim();
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
-// Splits a comma separated multi value
 export function splitValues(v: string | undefined): string[] {
   return (v ?? '')
     .split(',')
@@ -87,7 +80,7 @@ export function joinValues(vs: string[]): string {
   return vs.join(',');
 }
 
-// Groups facet values by their group label, preserving order
+// Preserve facet order within each group.
 export function groupValues(f: Facet): { group: string; values: Facet['values'] }[] {
   const out: { group: string; values: Facet['values'] }[] = [];
   for (const v of f.values) {
@@ -98,7 +91,6 @@ export function groupValues(f: Facet): { group: string; values: Facet['values'] 
   return out;
 }
 
-// Whether typed text looks like a repository for this source
 export function looksLikeRepo(caps: SourceCapabilities | undefined, text: string): boolean {
   const t = text.trim();
   if (!t || !caps?.repoPattern) return false;
@@ -109,23 +101,21 @@ export function looksLikeRepo(caps: SourceCapabilities | undefined, text: string
   }
 }
 
-// The provider group of a kind, else the one holding the source, else the first
+// Prefer the requested kind, then the source's provider, then the first provider.
 export function pickGroup(groups: ProviderGroup[], kind: SourceKind, sourceId: string): ProviderGroup | undefined {
   return groups.find((g) => g.kind === kind) ?? groups.find((g) => g.sources.some((s) => s.source?.id === sourceId)) ?? groups[0];
 }
 
-// The facets the daemon answers over every source, the runtime a model runs on and the format it is held in
 export function sharedFacet(id: string): boolean {
   return id === 'runtime' || id === 'format';
 }
 
-// Whether the source can flip a sort, most catalogs only order descending
+// Most catalogs support descending order only.
 export function sortReversible(caps: SourceCapabilities | undefined, sortId: string): boolean {
   return !!caps?.sorts.find((s) => s.id === sortId)?.reversible;
 }
 
-// The most useful size to show for a hit: a parameter count, a byte size, or the sizes a source lists
-// a model in, such as Ollama's 1b and 3b
+// Prefer parameter count, then byte size, then published size labels.
 export function hitSize(h: SearchHit): { kind: 'params' | 'bytes' | 'sizes' | 'none'; value: bigint; text: string } {
   if (h.parameters > 0n) return { kind: 'params', value: h.parameters, text: '' };
   if (h.sizeBytes > 0n) return { kind: 'bytes', value: h.sizeBytes, text: '' };
@@ -134,58 +124,52 @@ export function hitSize(h: SearchHit): { kind: 'params' | 'bytes' | 'sizes' | 'n
   return { kind: 'none', value: 0n, text: '' };
 }
 
-// A key that tells two weight groups apart even when their names collide across formats
+// Group names can repeat across formats.
 export function descriptorKey(d: Descriptor): string {
   return `${d.formatId}\0${d.group}`;
 }
 
-// Orders weight groups by bits per weight, the most precise first, then by size, so the list reads
-// down from full quality to the smallest quant with every variant of one width together
+// Sort by descending precision, then size.
 export function orderDescriptors(descriptors: Descriptor[]): Descriptor[] {
   return [...descriptors].sort((a, b) => b.bitsPerWeight - a.bitsPerWeight || Number(b.totalBytes - a.totalBytes) || a.group.localeCompare(b.group));
 }
 
-// The largest group among the rows that fits at a context, the one to pull when nothing else decides
+// Recommend the largest group that fits at this context length.
 export function recommended(descriptors: Descriptor[], rows: FitRow[], context: number): string {
   const fitting = descriptors.filter((d) => cellPlan(rowAt(rows, d.group, context))?.verdict === FitVerdict.FITS);
   return fitting.sort((a, b) => Number(b.totalBytes - a.totalBytes))[0]?.group ?? '';
 }
 
-// The plan a row is read by: the one against memory free now, as a run plans, else the whole memory one
+// Prefer the plan for free memory, matching launch behavior.
 export function cellPlan(row: FitRow | undefined): MemoryPlan | undefined {
   return row?.free ?? row?.plan;
 }
 
-// The row planning one group at one context length, on the one runtime the rows were filtered to; a
-// context of zero is the row the planner solved itself
+// Rows are already filtered by runtime. Context zero uses the planner's choice.
 export function rowAt(rows: FitRow[], group: string, context: number): FitRow | undefined {
   return rows.find((r) => r.group === group && r.context === context);
 }
 
-// The context a plan settled on, for the row the planner solved
 export function plannedContext(row: FitRow | undefined): number {
   const n = Number(cellPlan(row)?.params['n_ctx'] ?? 0);
   return Number.isFinite(n) ? n : 0;
 }
 
-// The width alone, 8-bit out of 8-bit Q8_0, since the group name already says the rest
+// Omit the quantization name already shown in the group label.
 export function precisionShort(p: Precision | undefined): string {
   if (!p) return '';
   return p.label.match(/^\d+-bit(?: float)?/)?.[0] ?? p.label;
 }
 
-// What a weight group is called: its name, or its format when the spec gave it none worth reading
 export function weightsName(group: string, formatId = ''): string {
   return group === 'default' ? formatId || 'weights' : group;
 }
 
-// Whether a hit is gated on a source that holds no token, so opening it would only fail
 export function locked(h: SearchHit | null, caps: SourceCapabilities | undefined): boolean {
   return !!h?.gated && !caps?.tokenPresent;
 }
 
-// The chips a hit carries beyond its columns, as the source declares them: a flag shows its label, a comma list one chip each
-// The chips a hit wears, each word once even when two fields carry it, a base model that is also a tag say
+// Deduplicate chip labels across fields. Split comma-separated values into chips.
 export function hitChips(h: SearchHit, caps: SourceCapabilities | undefined): string[] {
   const out: string[] = [];
   const add = (text: string) => {
@@ -203,7 +187,7 @@ export function hitChips(h: SearchHit, caps: SourceCapabilities | undefined): st
   return out;
 }
 
-// A bare number needs its field to read, 262144 under context becoming 256k context
+// Include the field name with numeric values, such as 256k context.
 function chipText(f: ConfigField, v: string): string {
   if (!/^\d+$/.test(v)) return v;
   const n = Number(v);

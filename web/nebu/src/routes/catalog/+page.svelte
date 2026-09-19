@@ -49,9 +49,8 @@
   let debounce: ReturnType<typeof setTimeout> | null = null;
   let generation = 0;
   let booted = false;
-  // The URL this page last wrote, so one it did not write is read as a new request
+  // Track URL writes to distinguish them from navigation.
   let written = '';
-  // Sources are added and edited from the rail, the form the provider describes
   let providers = $state<Provider[]>([]);
   let sourceOpen = $state(false);
   let editing = $state<SourceStatus | null>(null);
@@ -73,19 +72,16 @@
 
   const statuses = $derived(cached.sources);
   const groups = $derived(groupByProvider(statuses));
-  // Every source at once, the entry before the providers
   const all = $derived(kind === SourceKind.UNSPECIFIED && sourceId === '' && groups.length > 0);
   const group = $derived(all ? undefined : pickGroup(groups, kind, sourceId));
-  // One source answers for the provider's capabilities, the chosen one or the first that works
   const status = $derived(group?.sources.find((s) => s.source?.id === sourceId) ?? group?.sources.find((s) => !s.error) ?? group?.sources[0]);
   const caps = $derived(status?.capabilities);
   const capsOf = (id: string) => statuses.find((s) => s.source?.id === id)?.capabilities ?? caps;
   const merged = $derived(all || (!!group && sourceId === '' && group.sources.length > 1));
   const labels = $derived(sourceLabels(all ? statuses : (group?.sources ?? [])));
   const name = $derived(all ? 'all sources' : group ? (merged ? group.name : (labels.get(sourceId) ?? groupLabel(group))) : 'the catalog');
-  // The sources a search reaches: the one picked, the provider's, or every one that answers
   const reached = $derived(all ? statuses.filter((s) => !s.error) : merged ? (group?.sources ?? []).filter((s) => !s.error) : status ? [status] : []);
-  // Across sources only an order every one of them offers can be asked for, so the merged pages come back in it
+  // Offer sorts supported by all selected sources.
   const sorts = $derived.by(() => {
     if (!merged) return caps?.sorts ?? [];
     const lists = reached.map((s) => s.capabilities?.sorts ?? []);
@@ -94,7 +90,6 @@
   });
   const effectiveSort = $derived(sort || (merged ? '' : (caps?.defaultSort ?? '')));
   const reversible = $derived(!!sorts.find((s) => s.id === effectiveSort)?.reversible);
-  // The facets the daemon answers over every source, the same on each, so they show whichever sources are reached
   const sharedFacets = $derived((statuses.find((s) => s.capabilities?.facets.length)?.capabilities?.facets ?? []).filter((f) => sharedFacet(f.id)));
   const activeFilters = $derived(Object.entries(filters).filter(([, v]) => v));
   const repoSource = $derived(all ? statuses.find((s) => !s.error && looksLikeRepo(s.capabilities, query)) : looksLikeRepo(caps, query) ? status : undefined);
@@ -106,12 +101,11 @@
   const inputDead = $derived(!all && !!caps && !caps.search && !caps.repoPattern);
   const openSourceId = $derived(sourceId || status?.source?.id || statuses.find((s) => !s.error)?.source?.id || '');
   const stored = $derived(new Set([...live.models.values()].map((m) => `${m.sourceId}/${m.repo}`)));
-  // A column orders the list at the source alone, when every source reached orders by it; the page is never reordered here
+  // Sort at the source so pagination preserves order.
   const columnSort = (id: string) => (sorts.some((s) => s.id === id) ? id : '');
-  const sortItems = $derived([...(merged ? [{ value: '', label: 'Each source’s own order' }] : []), ...sorts.map((s) => ({ value: !merged && s.id === caps?.defaultSort ? '' : s.id, label: s.label }))]);
-  // The sort select is as wide as its longest label
+  const sortItems = $derived([...(merged ? [{ value: '', label: 'Source order' }] : []), ...sorts.map((s) => ({ value: !merged && s.id === caps?.defaultSort ? '' : s.id, label: s.label }))]);
   const sortWidth = $derived(Math.max(10, ...sortItems.map((s) => s.label.length)) + 6);
-  // A column the source cannot fill for any hit on the page is left out rather than shown as dashes
+  // Hide columns with no data.
   const has = $derived({
     task: hits.some((h) => h.task),
     format: hits.some((h) => h.formats.length),
@@ -123,13 +117,11 @@
   });
   const columns = $derived(1 + (merged ? 1 : 0) + Object.values(has).filter(Boolean).length);
 
-  // The URL picks the source, query, sort, and filters once the cached sources are in
   $effect(() => {
     if (!cached.loaded || booted || statuses.length === 0) return;
     untrack(boot);
   });
 
-  // A link into the catalog, a model's namespace say, is read the same way
   $effect(() => {
     const here = page.url.pathname + page.url.search;
     untrack(() => {
@@ -157,7 +149,7 @@
     else drawerOpen = false;
   }
 
-  // A provider only accepts its own sorts and facets, so switching drops the rest; the shared facets stay everywhere
+  // Keep shared filters when switching providers. Drop unsupported sorts and filters.
   $effect(() => {
     if (sort && !sorts.some((s) => s.id === sort)) sort = '';
     const keep: Record<string, string> = {};
@@ -169,7 +161,6 @@
     if (ascending && caps && !reversible) ascending = false;
   });
 
-  // Everything that changes the result set restarts the search from page one
   $effect(() => {
     void kind;
     void sourceId;
@@ -219,7 +210,7 @@
       nextCursor = r.nextCursor;
       total = r.total;
       warnings = r.warnings;
-      // A model opened by URL before the list arrived picks up its listing now
+      // Attach search metadata to models opened before the results arrived.
       if (selected && !selected.hit) {
         const listed = hits.find((h) => h.repo === selected!.repo && (h.sourceId || openSourceId) === selected!.sourceId);
         if (listed) selected = { ...selected, hit: listed };
@@ -255,7 +246,6 @@
     }
   }
 
-  // Loads the next page as the last row scrolls into view
   $effect(() => {
     const el = sentinel;
     if (!el) return;
@@ -284,8 +274,6 @@
     input?.focus();
   }
 
-  // Clicking a column orders by it at the source, the same column again flipping it where every source allows;
-  // a column no source orders by is a plain heading
   function orderBy(id: string) {
     const server = columnSort(id);
     if (!server) return;
@@ -307,7 +295,6 @@
     syncUrl();
   }
 
-  // Closing the drawer drops the model from the URL
   $effect(() => {
     const open = drawerOpen;
     untrack(() => {
@@ -515,7 +502,7 @@
                         {#each runtimesOf(h.runtimes, cached.runtimes) as r (r.runtime?.id)}
                           <Chip text={r.runtime?.name ?? r.runtime?.id ?? ''} mono={false} title={r.compatible ? `${r.runtime?.name} serves what this is listed as` : `${r.runtime?.name} serves this, but is not compatible with this host`} class={r.compatible ? '' : 'opacity-50'} />
                         {:else}
-                          <span class="text-xs text-fg-faint" title={hitKindLabel(h.kind) ? 'No runtime serves this on its own' : 'The source does not say what this is'}>{hitKindLabel(h.kind) || '–'}</span>
+                          <span class="text-xs text-fg-faint" title={hitKindLabel(h.kind) ? 'No compatible runtime' : 'Unknown model type'}>{hitKindLabel(h.kind) || '–'}</span>
                         {/each}
                       </div>
                     </td>

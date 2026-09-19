@@ -14,11 +14,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// One probe of the machine: a vendor tool or a system file read into devices, memory pools, and facts
-//
-// A probe never fails the profile. A tool that is not installed reports itself skipped, one that
-// errors reports itself failed, and the profile carries every outcome so the doctor can say what
-// the host is missing.
+// Probe of devices, memory pools, and host facts. Missing tools are skipped. Failed probes are
+// recorded without failing the profile.
 type Probe interface {
 	ID() string
 	Description() string

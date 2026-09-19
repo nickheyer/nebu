@@ -40,7 +40,7 @@ func (s status) String() string {
 	return "ok"
 }
 
-// Probes the host again and checks probes, devices, storage, the store, runtimes, recipes, and sources
+// Checks host probes, devices, storage, runtimes, recipes, and sources.
 type Doctor struct {
 	Host     *host.Prober
 	Runtimes *runtimes.Registry
@@ -54,9 +54,8 @@ type Doctor struct {
 	running *v1.Task
 }
 
-// Starts the check as a task, one line per check in its log, failing when any check fails
-//
-// A check already running is returned instead of started twice.
+// Starts a check task or returns the active one. Logs each result and fails
+// if any check fails.
 func (d *Doctor) Start(ctx context.Context) (*v1.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -74,7 +73,7 @@ func terminal(s v1.TaskState) bool {
 	return s == v1.TaskState_TASK_STATE_SUCCEEDED || s == v1.TaskState_TASK_STATE_FAILED || s == v1.TaskState_TASK_STATE_CANCELED
 }
 
-// One check with its outcome and what to do about it
+// Check result and suggested action.
 type check struct {
 	id      string
 	status  status
@@ -169,7 +168,7 @@ func (d *Doctor) run(ctx context.Context, h *tasks.Handle) error {
 			where = "no variant selected"
 		}
 		if len(rs.GetUnmet()) > 0 {
-			add(id, warn, where+", "+strings.Join(rs.GetUnmet(), "; "), "install the tools or build in a container with nebu build --sandbox oci --image IMAGE")
+			add(id, warn, where+", "+strings.Join(rs.GetUnmet(), ", "), "install the tools or build in a container with nebu build --sandbox oci --image IMAGE")
 			continue
 		}
 		detail := where + " on the host"
@@ -179,7 +178,7 @@ func (d *Doctor) run(ctx context.Context, h *tasks.Handle) error {
 		add(id, ok, detail, "")
 	}
 	h.Progress(0, 0, "asking every source")
-	// Every source is asked at once, the check waiting for the slowest
+	// Check sources concurrently.
 	cfgs := d.Sources.List()
 	errs := make([]error, len(cfgs))
 	var wg sync.WaitGroup

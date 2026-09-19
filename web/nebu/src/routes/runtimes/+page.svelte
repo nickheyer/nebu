@@ -11,7 +11,6 @@
   import SkeletonRows from '$lib/components/ui/SkeletonRows.svelte';
   import TaskChip from '$lib/components/TaskChip.svelte';
 
-  // Every runtime the daemon knows, whether this host can run it, and what is installed of it
   const runtimes = $derived(cached.runtimes);
   const loading = $derived(!cached.loaded);
 </script>
@@ -37,7 +36,7 @@
     <tbody><SkeletonRows rows={4} cols={['w-24', 'w-14', 'w-24', { w: 'w-16', num: true }]} /></tbody>
   </table>
 {:else if runtimes.length === 0}
-  <Empty icon={Cpu} title="The daemon knows no runtimes" />
+  <Empty icon={Cpu} title="No runtimes available" />
 {:else}
   <div class="overflow-x-auto">
     <table class="tbl">

@@ -3,8 +3,6 @@
   import Button from './Button.svelte';
   import IconButton from './IconButton.svelte';
 
-  // A destructive action that asks once, in place: the first click arms the button, which then says what it
-  // will do and fires on the second click; it disarms on its own after a moment, on Escape, or when focus leaves
   let {
     icon,
     label,

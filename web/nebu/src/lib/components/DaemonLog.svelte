@@ -2,7 +2,6 @@
   import { api, message } from '$lib/api';
   import LogView from './ui/LogView.svelte';
 
-  // The daemon's own log: the last lines it wrote, then every line it writes while the page is open
   let { height = 'h-96' }: { height?: string } = $props();
   let lines = $state<string[]>([]);
   let error = $state('');

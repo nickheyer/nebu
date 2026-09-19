@@ -3,7 +3,6 @@
   import type { Task } from '$proto/task_pb';
   import Spinner from './ui/Spinner.svelte';
 
-  // A running task inline: spinner, what it is, and its progress, linking to the task
   let { task, label }: { task: Task; label?: string } = $props();
   const p = $derived(task.progress);
   const known = $derived(!!p?.total);

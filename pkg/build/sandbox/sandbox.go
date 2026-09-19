@@ -26,7 +26,7 @@ type Step struct {
 	Dir     string
 }
 
-// Runs steps somewhere
+// Build step runner.
 type Runner interface {
 	Path(rel string) string
 	Run(ctx context.Context, step Step, out io.Writer) error
@@ -51,7 +51,7 @@ func (h *Host) Run(ctx context.Context, step Step, out io.Writer) error {
 	cmd.Dir = h.Path(step.Dir)
 	cmd.Env = append(os.Environ(), envList(step.Env)...)
 	cmd.Stdout, cmd.Stderr = out, out
-	// Build tools fork freely, so a cancel has to take the whole tree
+	// Cancel the full process tree.
 	return proc.Run(cmd)
 }
 
@@ -78,7 +78,7 @@ func (o *OCI) Run(ctx context.Context, step Step, out io.Writer) error {
 	if o.image == "" {
 		return fmt.Errorf("step %s: no container image configured", step.Name)
 	}
-	// A name lets a cancel stop the container, not just the client
+	// Use the container name to stop it when the CLI is cancelled.
 	name := fmt.Sprintf("nebu-build-%d-%d", os.Getpid(), time.Now().UnixNano())
 	args := []string{"run", "--rm", "--name", name, "-v", o.root + ":" + Mount, "-w", o.Path(step.Dir)}
 	for _, kv := range envList(step.Env) {

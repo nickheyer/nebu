@@ -22,42 +22,42 @@ enum BuildState {
   BUILD_STATE_FAILED = 3;
 }
 
-// One way a recipe builds, picked by what the host has
+// Build variant selected for the host.
 message Variant {
   string id = 1;
   string description = 2;
-  // Tools the variant needs on the host beyond the recipe's own
+  // Additional tools required by this variant.
   repeated string tools = 3;
-  // What the host must have for the variant, in words; empty when any host takes it
+  // Host requirements. Empty when unrestricted.
   string requires = 4;
-  // What the variant sets on this host, empty when the host cannot take it
+  // Variant settings for this host. Empty when unsupported.
   map<string, string> vars = 5;
 }
 
-// One variable a build takes, the kind people set
+// Configurable build variable.
 message Var {
   string name = 1;
   string default = 2;
   string description = 3;
-  // Values the variable takes, any when empty
+  // Allowed values. Empty when unrestricted.
   repeated string choices = 4;
-  // The variable in words
+  // Variable description.
   string label = 5;
 }
 
-// A recipe as the API describes it
+// Build recipe.
 message Recipe {
   string id = 1;
   string runtime_id = 2;
   string description = 3;
-  // Where the source comes from, in words
+  // Source description.
   string source = 4;
   repeated string tools = 5;
   repeated Variant variants = 6;
   SandboxKind sandbox = 7;
   // Container CLIs tried in order for the oci sandbox
   repeated string sandbox_clis = 8;
-  // Variables a build takes, with their defaults
+  // Build variables and defaults.
   repeated Var vars = 9;
   uint32 timeout_ms = 10;
 }
@@ -85,7 +85,7 @@ message Build {
   google.protobuf.Timestamp finished_at = 19;
 }
 
-// Recipe paired with what the host selects for it
+// Recipe with its selected host variant.
 message RecipeStatus {
   Recipe recipe = 1;
   string variant = 2;
@@ -94,7 +94,7 @@ message RecipeStatus {
   string sandbox_cli = 5;
   repeated string unmet = 6;
   map<string, string> vars = 7;
-  // Tools any variant needs that this host lacks
+  // Missing tools required by build variants.
   repeated string absent_tools = 8;
 }
 

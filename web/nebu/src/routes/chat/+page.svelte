@@ -38,7 +38,7 @@
   import TraceDetail from '$lib/components/TraceDetail.svelte';
   import MediaSettings, { type MediaForm } from '$lib/components/chat/MediaSettings.svelte';
 
-  // An image in an answer: stored under an id when it arrived as bytes, kept as an address otherwise
+  // Store inline image bytes by ID. Preserve remote image URLs.
   interface Media {
     key: string;
     id?: string;
@@ -46,19 +46,14 @@
     error?: string;
   }
 
-  // One turn of a conversation with everything measured about it
   interface Turn {
     role: 'user' | 'assistant';
     text: string;
-    // Images sent before the text of a question
     images?: Attachment[];
-    // Images in an answer
     media?: Media[];
     toolCalls?: ToolCall[];
     error?: string;
-    // The trace the gateway kept for the answer
     trace?: string;
-    // Measured in the browser
     startedAt?: number;
     firstTokenAt?: number;
     finishedAt?: number;
@@ -68,7 +63,6 @@
     dialect?: Dialect;
   }
 
-  // What is kept per language model in this browser
   interface Session {
     turns: Turn[];
     system: string;
@@ -85,7 +79,6 @@
 
   type Mode = 'image' | 'video';
 
-  // A message on its way out, its images still named by their attachments
   type Outgoing = ChatMessage & { attachments?: Attachment[] };
 
   const blank = (): Session => ({ turns: [], system: '', dialect: 'openai', stream: true, temperature: '', topP: '', topK: '', maxTokens: '', stop: '', seed: '', tools: '' });
@@ -107,29 +100,24 @@
   let controller: AbortController | null = null;
   let countController: AbortController | null = null;
 
-  // Images attached to the draft, those still being read, and files being dragged over the conversation
   let pending = $state<Attachment[]>([]);
   let attaching = $state(0);
   let dragDepth = $state(0);
   const dropping = $derived(dragDepth > 0);
   let picker: HTMLInputElement | undefined = $state();
-  // The image open at full size
   let lightbox = $state('');
   let lightboxAlt = $state('');
-  // An object URL per stored file on the page, the ids whose bytes are gone, and the base64 of each once read
   const urls = new SvelteMap<string, string>();
   const missing = new SvelteSet<string>();
   const encoded = new Map<string, string>();
   const loadingIds = new Set<string>();
 
-  // What an image or video model is asked for, its history, and what it offers
   let mode = $state<Mode>('image');
   let form = $state<MediaForm>(blankForm());
   let history = $state<Generation[]>([]);
   let caps = $state<Capabilities | null>(null);
   let capsError = $state('');
 
-  // The inspector's width, dragged at its left edge and kept per browser
   const widthKey = 'nebu.chat.inspector';
   const minWidth = 320;
   let width = $state(384);
@@ -168,13 +156,11 @@
   const status = $derived(cached.gateway);
   const routes = $derived([...live.routes.values()].sort(byName((r) => r.name)));
   const ready = $derived(routes.filter((r) => r.state === RouteState.READY));
-  // The name asked for stays chosen while it exists, else the first that answers
   const asked = $derived(model ? live.routes.get(model) : undefined);
   const chosen = $derived(asked ?? ready[0]);
-  // Primitives of the chosen route, so effects re-run only when these change and not on every counter tick
+  // Read primitive route fields so traffic counters do not retrigger effects.
   const chosenName = $derived(chosen?.name ?? '');
   const chosenReady = $derived(chosen?.state === RouteState.READY);
-  // Whether the chosen route makes images or video rather than text
   const media = $derived(chosen?.api === ApiFlavor.SDCPP);
   $effect(() => {
     if (!asked && chosen && model !== chosen.name) model = chosen.name;
@@ -183,7 +169,7 @@
   const slot = $derived(chosen?.slotId ? slotByRef(chosen.slotId) : undefined);
   const install = $derived(instance?.installId ? live.installs.get(instance.installId) : undefined);
   const stored = $derived(instance ? live.models.get(modelKey(instance)) : undefined);
-  // Whether the chosen language model takes images: a projector beside its weights or vision tensors in it; unknown while it is not in the store
+  // Vision requires a projector or vision tensors. Unknown for models absent from the store.
   const vision = $derived.by((): boolean | undefined => {
     if (media) return true;
     if (!stored) return undefined;
@@ -191,7 +177,7 @@
   });
   const blind = $derived(vision === false);
   const blindNote = $derived(`${chosenName} has no vision encoder, so it cannot take images`);
-  // The gateway on the API listener is same origin, one of its own is reached by address
+  // Shared listeners use the page origin. Dedicated listeners use their address.
   const own = $derived(status?.listeners.find((l) => !l.shared));
   const gatewayBase = $derived(own ? listenerUrl(own.addr, !!status?.tls) : baseUrl);
   const modelItems = $derived(routes.map((r) => ({ value: r.name, label: r.name, detail: r.state === RouteState.READY ? (r.api === ApiFlavor.SDCPP ? (r.modes.length ? r.modes.map((m) => (m === 'vid_gen' ? 'video' : 'image')).join(' · ') : 'image') : undefined) : enumLabel(RouteState, r.state) })));
@@ -213,7 +199,6 @@
     return { temperature: num(session.temperature), topP: num(session.topP), topK: int(session.topK), maxTokens: int(session.maxTokens), seed: int(session.seed), stop: stops.length ? stops : undefined };
   });
   const lastAnswer = $derived([...session.turns].reverse().find((t) => t.role === 'assistant'));
-  // The last body as the inspector shows it, image bytes shortened
   const shownBody = $derived(lastSent ? elide(lastSent.body) : '');
   const inspectorTabs = $derived([
     { id: 'settings', label: 'Settings' },
@@ -222,7 +207,6 @@
     { id: 'log', label: 'Log' }
   ]);
 
-  // What the media route makes, from its capabilities once read, its modes until then
   const modes = $derived(caps?.supported_modes ?? chosen?.modes ?? []);
   const canImage = $derived(modes.includes('img_gen'));
   const canVideo = $derived(modes.includes('vid_gen'));
@@ -234,11 +218,10 @@
     { id: 'image', label: 'Image', unmet: canImage ? '' : `${chosenName} makes no images` },
     { id: 'video', label: 'Video', unmet: canVideo ? '' : `${chosenName} makes no video` }
   ]);
-  // The generations of this model, oldest first so they read as a conversation, and the videos still running anywhere
+  // Show this model's history oldest first. Track running videos across models.
   const shown = $derived(history.filter((g) => g.model === chosenName).slice().reverse());
   const running = $derived(history.filter((g) => g.video && (g.video.status === 'queued' || g.video.status === 'in_progress')));
   const busyHere = $derived(busy || (media && running.some((g) => g.model === chosenName)));
-  // The start image and, for a video, its last frame, from the images attached to the draft
   const init = $derived(media ? (pending[0] ?? null) : null);
   const last = $derived(media && mode === 'video' ? (pending[1] ?? null) : null);
   const canSend = $derived.by(() => {
@@ -246,7 +229,6 @@
     if (media) return draft.trim().length > 0 && !busy && (mode === 'image' ? canImage : canVideo);
     return (draft.trim().length > 0 || pending.length > 0) && !busy;
   });
-  // What the media request applies, the form's figure or the running model's own, for the line under the composer
   const applied = $derived.by(() => {
     const d = caps?.defaults_by_mode?.[modeKey(mode)];
     const sp = d?.sample_params;
@@ -264,7 +246,7 @@
     return out.filter((s) => !s.startsWith('×') && !s.endsWith('×'));
   });
 
-  // Sessions live per model name in this browser, the language ones under one prefix and the media forms under another
+  // Use separate storage prefixes for chat sessions and media settings.
   const sessionPrefix = 'nebu.chat.';
   const sessionKey = (name: string) => sessionPrefix + name;
   const formKey = (name: string) => `nebu.generate.${name}`;
@@ -339,7 +321,6 @@
     replaceState(url, {});
   });
 
-  // A media route's capabilities, read once it answers, so every field shows what the running model applies
   $effect(() => {
     const name = chosenName;
     const isReady = chosenReady;
@@ -360,7 +341,7 @@
     return () => c.abort();
   });
 
-  // The running model's own size and frame shape for a form nothing has touched for this model
+  // Apply model defaults only while the form is untouched.
   function applyShape(got: Capabilities) {
     if (readLocal(formKey(chosenName))) return;
     const d = got.defaults_by_mode?.[modeKey(mode)];
@@ -371,7 +352,7 @@
     }
   }
 
-  // Keeps an object URL for every stored file on the page, each read from the store once
+  // Cache object URLs to avoid rereading stored files.
   $effect(() => {
     const ids = [...session.turns.flatMap((t) => [...(t.images ?? []).map((a) => a.id), ...(t.media ?? []).flatMap((m) => (m.id ? [m.id] : []))]), ...pending.map((a) => a.id), ...shown.flatMap((g) => g.files.map((f) => f.id))];
     for (const id of ids) {
@@ -399,7 +380,6 @@
     controller?.abort();
   }
 
-  // Drops files from the store and the page
   function forget(ids: string[]) {
     for (const id of ids) {
       const u = urls.get(id);
@@ -433,7 +413,7 @@
     session.turns = session.turns.filter((_, j) => j !== i);
   }
 
-  // The history the model sees: answered turns only, an unanswered question left out
+  // Exclude unanswered turns from history.
   function conversation(upTo = session.turns.length): Outgoing[] {
     const out: Outgoing[] = [];
     const past = session.turns.slice(0, upTo);
@@ -451,7 +431,6 @@
     return out;
   }
 
-  // The wire form of an attachment, its bytes read from the store and kept once read
   async function encode(a: Attachment): Promise<{ mediaType: string; data: string }> {
     let data = encoded.get(a.id);
     if (data === undefined) {
@@ -463,12 +442,10 @@
     return { mediaType: a.mediaType, data };
   }
 
-  // The messages with every image's bytes in place
   async function wire(msgs: Outgoing[]): Promise<ChatMessage[]> {
     return Promise.all(msgs.map(async ({ attachments, ...m }) => (attachments?.length ? { ...m, images: await Promise.all(attachments.map(encode)) } : m)));
   }
 
-  // Says what went wrong reaching the gateway, a blocked origin or an untrusted certificate being the usual causes
   function explain(err: unknown): string {
     const text = err instanceof Error ? err.message : String(err);
     if (err instanceof TypeError && own) {
@@ -477,7 +454,6 @@
     return text;
   }
 
-  // Stores an answer's image so the session names it by id rather than carrying its bytes
   function keep(turn: Turn, url: string) {
     const key = newId();
     turn.media = [...(turn.media ?? []), url.startsWith('data:') ? { key } : { key, url }];
@@ -494,7 +470,6 @@
       .catch((err) => set({ error: err instanceof Error ? err.message : String(err) }));
   }
 
-  // Sends the conversation up to the given user turn and streams the answer into the turn after it
   async function ask(userIndex: number) {
     if (busy || !chosen || !chosenReady) return;
     forget(imageIds(session.turns.slice(userIndex + 1)));
@@ -568,13 +543,12 @@
   const num = (s: string) => (s.trim() === '' ? undefined : parseFloat(s));
   const int = (s: string) => (s.trim() === '' ? undefined : parseInt(s, 10));
 
-  // The wire form of an image attached to a media request
   async function dataUrl(a: Attachment): Promise<string> {
     const { mediaType, data } = await encode(a);
     return `data:${mediaType};base64,${data}`;
   }
 
-  // The media request the form asks for, a random seed drawn here so every generation can be made again
+  // Choose the random seed here so the generation can be reproduced.
   async function mediaRequest(prompt: string, start: Attachment | null, end: Attachment | null): Promise<MediaRequest> {
     const seed = form.seed.trim() === '' ? Math.floor(Math.random() * 2147483647) : parseInt(form.seed, 10);
     const req: MediaRequest = {
@@ -631,7 +605,6 @@
     history = history.map((g) => (g.id === id ? { ...g, ...patch } : g));
   }
 
-  // Makes an image or a video from a prompt, the start images kept with the turn
   async function generate(prompt: string, start: Attachment | null, end: Attachment | null, kind: Mode = mode) {
     if (!chosen || !chosenReady) return;
     let req: MediaRequest;
@@ -686,7 +659,7 @@
     }
   }
 
-  // Videos still running are asked after until they end, their files kept once made
+  // Poll running videos and save completed files.
   $effect(() => {
     const ids = running.map((g) => g.id).join(',');
     if (!ids) return;
@@ -745,7 +718,6 @@
     history = history.filter((x) => x.id !== g.id);
   }
 
-  // Puts a generation's settings back in the form and its prompt in the composer
   function reuse(g: Generation) {
     const r = g.request;
     mode = g.kind;
@@ -794,7 +766,6 @@
     document.body.removeChild(a);
   }
 
-  // A generation's settings in a line: what the request named, else what the model applied
   function summary(g: Generation): string[] {
     const r = g.request;
     const out = [`${r.width}×${r.height}`];
@@ -827,7 +798,6 @@
     ask(session.turns.length - 1);
   }
 
-  // Asks again from the last question, dropping the last answer; a media route makes its last prompt again
   function regenerate() {
     if (media) {
       const g = shown[shown.length - 1];
@@ -849,14 +819,12 @@
     }
   }
 
-  // The box grows with the draft up to a few lines
   function grow() {
     if (!box) return;
     box.style.height = '';
     box.style.height = Math.min(box.scrollHeight, 200) + 'px';
   }
 
-  // How many images the draft takes: a language model any number, an image model one to start from, a video its last frame too
   const attachLimit = $derived(!media ? Infinity : mode === 'video' ? 2 : 1);
   const attachNote = $derived.by(() => {
     if (blind) return blindNote;
@@ -865,7 +833,6 @@
     return 'Attach an image to start from';
   });
 
-  // Reads each file into the draft, scaled to what an encoder takes; a media route keeps only as many as a request takes
   async function attach(files: File[]) {
     if (!files.length) return;
     if (blind) {
@@ -907,7 +874,6 @@
     el.value = '';
   }
 
-  // Files on the clipboard become attachments, text pastes as it always did
   function onPaste(e: ClipboardEvent) {
     const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
     if (!files.length) return;
@@ -915,7 +881,7 @@
     attach(files);
   }
 
-  // Files dragged over the conversation, the depth counted since entering a child leaves the parent
+  // Track drag depth because entering a child fires dragleave on its parent.
   function hasFiles(e: DragEvent): boolean {
     return !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
   }
@@ -946,7 +912,7 @@
     lightboxAlt = alt;
   }
 
-  // The prompt's size as the gateway counts it, read once typing settles; only primitives are read so a route's counter ticks do not recount
+  // Debounce token counts. Read primitive route fields to avoid recounting on traffic updates.
   $effect(() => {
     const text = draft;
     const sys = session.system;
@@ -989,7 +955,6 @@
   });
 
   const stopWord = (s: string | undefined) => (s === 'end_turn' ? 'stop' : s === 'max_tokens' ? 'length' : s === 'tool_calls' || s === 'tool_use' ? 'tool' : s);
-  // Why an answer ended, said only when it is worth saying: a normal finish needs no note
   function stopNote(s: string | undefined): string {
     const w = stopWord(s);
     if (!w || w === 'stop') return '';
@@ -998,7 +963,7 @@
     return `stopped: ${w}`;
   }
 
-  // The body with each image's bytes replaced by their size, so the pane stays readable
+  // Replace image bytes with their size in the inspector.
   function elide(body: string): string {
     return body.replace(/[A-Za-z0-9+/]{256,}={0,2}(?=")/g, (m) => `…${bytes((m.length * 3) / 4, 0)} of image data…`);
   }
@@ -1024,7 +989,7 @@
 {#if loading}
   <div class="h-[calc(100vh-6rem)]" aria-busy="true"></div>
 {:else if routes.length === 0}
-  <Empty icon={MessageSquare} title="Nothing is serving. Run a model to chat with it or make images and video with it.">
+  <Empty icon={MessageSquare} title="Run a model to chat or generate images and video.">
     {#if live.models.size}<Button variant="primary" href="/store">Library</Button>{:else}<Button variant="primary" href="/catalog">Browse catalog</Button>{/if}
   </Empty>
 {:else}
@@ -1062,10 +1027,10 @@
       </header>
 
       {#if chosen && !chosenReady}
-        <div class="note note-warn m-4 mb-0">{chosen.name} is {enumLabel(RouteState, chosen.state)}. Requests will wait until it answers.</div>
+        <div class="note note-warn m-4 mb-0">{chosen.name} is {enumLabel(RouteState, chosen.state)}. Requests will wait until it is ready.</div>
       {/if}
       {#if media && capsError}
-        <div class="note note-bad m-4 mb-0">Could not read what {chosenName} generates: {capsError}</div>
+        <div class="note note-bad m-4 mb-0">Could not load {chosenName} capabilities: {capsError}</div>
       {/if}
 
       <div bind:this={log} class="min-h-0 flex-1 overflow-y-auto px-4">
@@ -1176,7 +1141,7 @@
                     {#each t.media ?? [] as m, mi (m.key)}
                       {@const src = m.url ?? (m.id ? urls.get(m.id) : undefined)}
                       {#if m.error}
-                        <div class="note note-bad mt-2">Image {mi + 1} could not be kept: {m.error}</div>
+                        <div class="note note-bad mt-2">Could not save image {mi + 1}: {m.error}</div>
                       {:else if m.id && missing.has(m.id)}
                         <div class="mt-2 flex h-24 w-32 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-line text-xs text-fg-faint"><ImageOff size={16} />image missing</div>
                       {:else if src}

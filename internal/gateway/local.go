@@ -8,11 +8,11 @@ import (
 	"sync"
 )
 
-// Where in-process requests are addressed, a name the trace shows as the remote
+// In-process request address, recorded as the trace's remote address.
 const localBase = "http://nebu.gateway"
 
-// Returns a client that reaches the gateway in process, its requests traced under origin and carrying a
-// configured key when the gateway requires one, so a bot's generations are limited and recorded like any other
+// Returns an in-process gateway client with an origin label and configured key.
+// Requests use normal gateway limits and tracing.
 func (g *Gateway) Client(origin string) *http.Client {
 	key := ""
 	if len(g.keys) > 0 {
@@ -21,13 +21,13 @@ func (g *Gateway) Client(origin string) *http.Client {
 	return &http.Client{Transport: &localTransport{handler: g.Handler(), key: key, origin: origin}}
 }
 
-// The base URL requests through Client are written against
+// Base URL for in-process client requests.
 func (g *Gateway) LocalBase() string { return localBase }
 
-// Returns the flavor of one wire format, for callers that render and read requests themselves
+// Returns a protocol adapter for callers that render and parse requests.
 func FlavorFor(api v1.ApiFlavor) Flavor { return flavorOf(api) }
 
-// Serves requests through the handler over a pipe, so streamed answers arrive as they are written
+// Serves handler responses through a pipe for streaming.
 type localTransport struct {
 	handler http.Handler
 	key     string
@@ -65,7 +65,7 @@ func (t *localTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// Streams handler output into a pipe, the headers fixed at the first write
+// Streams handler output through a pipe, fixing headers on the first write.
 type pipeWriter struct {
 	header   http.Header
 	snapshot http.Header

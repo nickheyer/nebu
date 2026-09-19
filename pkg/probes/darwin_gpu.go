@@ -11,7 +11,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// GPUs from the system profiler; Apple silicon has no memory of its own, it draws on the unified pool
+// Probes GPUs through system_profiler. Apple silicon uses the unified memory pool.
 type darwinGPU struct{}
 
 func (darwinGPU) ID() string          { return "darwin-gpu" }
@@ -61,7 +61,7 @@ func (p darwinGPU) Run(ctx context.Context) host.Result {
 				"bus":   strings.TrimPrefix(d.Bus, "spdisplays_"),
 			},
 		})
-		// Only a card with memory of its own is a pool; Apple silicon shares the unified pool
+		// Create separate pools only for dedicated GPU memory.
 		if strings.TrimSpace(d.VRAM) != "" {
 			pools = append(pools, &v1.MemoryPool{Id: id, Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: id, TotalBytes: total})
 		}

@@ -13,11 +13,8 @@ var (
 	ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]`)
 )
 
-// Makes one line of process output safe to store and send
-//
-// Runtimes print progress with carriage returns, colour with escape codes, and
-// sometimes bytes that are not text at all. The API carries lines as proto
-// strings, which must be valid UTF-8, so every line passes through here once.
+// Strips terminal control sequences and invalid UTF-8 before storing process output in protobuf
+// strings.
 func Clean(line string) string {
 	if i := strings.LastIndexByte(line, '\r'); i >= 0 {
 		line = line[i+1:]

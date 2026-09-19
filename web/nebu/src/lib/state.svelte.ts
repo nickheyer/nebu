@@ -17,13 +17,12 @@ import type { Bot, BotActivity } from '$proto/bot_pb';
 import { newestFirst } from './format';
 import { weightsName } from './catalog';
 
-// Traces kept in the browser, as many of each kind as the gateway keeps
+// Match the gateway's per-kind trace limit.
 const traceLimit = 500;
 const countLimit = 50;
 // Activity rows per bot.
 const activityLimit = 500;
 
-// Everything the UI shows, kept current by the event stream
 export const live = $state({
   connected: false,
   ready: false,
@@ -47,7 +46,7 @@ export const live = $state({
   botActivity: new SvelteMap<string, BotActivity[]>()
 });
 
-// Lists without a map, reread per connection and after SOURCE, HOST, and INSTALL events
+// Refresh on connection and after SOURCE, HOST, and INSTALL events.
 export const cached = $state({
   loaded: false,
   error: '',
@@ -56,7 +55,7 @@ export const cached = $state({
   gateway: null as GatewayStatus | null
 });
 
-// Reads runtimes, source statuses, and gateway status, keeping what still answers when one fails
+// Retain successful responses if another service fails.
 export async function refreshCached() {
   const [r, s, g] = await Promise.allSettled([api.runtimes.listRuntimes({}), api.sources.listSources({}), api.gateway.getGatewayStatus({})]);
   if (r.status === 'fulfilled') cached.runtimes = r.value.runtimes;
@@ -69,13 +68,12 @@ export async function refreshCached() {
 
 let cacheTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Coalesces a burst of events into one refresh
+// Coalesce event bursts into one refresh.
 function invalidateCached() {
   if (cacheTimer) clearTimeout(cacheTimer);
   cacheTimer = setTimeout(refreshCached, 200);
 }
 
-// A clock that ticks so relative times stay fresh
 export const clock = $state({ now: Date.now() });
 if (typeof window !== 'undefined') setInterval(() => (clock.now = Date.now()), 5000);
 
@@ -95,7 +93,7 @@ const maps: Maps = {
   [EventKind.BOT]: live.bots
 };
 
-// Keys seen during a snapshot so entries gone while disconnected can be pruned
+// Track snapshot keys to remove stale entries after reconnecting.
 let snapshotSeen: Map<EventKind, Set<string>> | null = null;
 let settleTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -110,11 +108,11 @@ function settle() {
   live.ready = true;
 }
 
-// How many traces of each kind the browser holds, so the cap costs nothing to check per event
+// Track per-kind counts for constant-time capacity checks.
 let answersHeld = 0;
 let countsHeld = 0;
 
-// Keeps one trace, dropping the oldest of its kind once the browser holds as many as the gateway does
+// Drop the oldest trace of this kind at capacity.
 function keepTrace(t: Trace) {
   const counting = t.kind === TraceKind.COUNT;
   if (!live.traces.has(t.id)) {
@@ -145,7 +143,7 @@ export function keepActivity(rows: BotActivity[]) {
   }
 }
 
-// A toast for something this browser started, turned into its ending when the daemon reports one
+// Update task toasts when the daemon reports completion.
 interface Started {
   toast: number;
   title: string;
@@ -155,7 +153,6 @@ interface Started {
 const taskToasts = new Map<string, Started>();
 const stopToasts = new Map<string, Started>();
 
-// Toasts a task this browser started, with the title it gets once it has finished
 export function startedTask(title: string, done: string, detail: string | undefined, task: Task | undefined) {
   const id = started(title, detail, task ? { href: `/tasks/${task.id}`, label: 'Open task' } : undefined);
   if (!task) return;
@@ -173,7 +170,6 @@ function settleTask(t: Task) {
   else settleToast(s.toast, { tone: 'neutral', title: `${s.title} canceled`, detail: s.detail, ...link });
 }
 
-// Toasts an instance this browser asked to stop
 export function startedStop(id: string, name: string) {
   stopToasts.set(id, { toast: started(`Stopping ${name}`), title: `Stopping ${name}`, done: `Stopped ${name}` });
   const known = live.instances.get(id);
@@ -188,12 +184,11 @@ function settleStop(i: Instance) {
   else settleToast(s.toast, { tone: 'ok', title: s.done });
 }
 
-// Folds one event into the state
 function apply(ev: Event) {
   const p = ev.payload;
   if (ev.kind === EventKind.TASK && p.case === 'task') settleTask(p.value);
   if (ev.kind === EventKind.INSTANCE && p.case === 'instance') settleStop(p.value);
-  // A new install changes which methods a runtime offers, so the runtime list is reread too
+  // Installs can change the available runtime methods.
   if (ev.seq > 0n && (ev.kind === EventKind.HOST || ev.kind === EventKind.SOURCE || ev.kind === EventKind.INSTALL)) invalidateCached();
   if (ev.kind === EventKind.HOST) {
     if (p.case === 'host') live.host = p.value;
@@ -229,7 +224,6 @@ function apply(ev: Event) {
   }
 }
 
-// Reads the traces the gateway kept, the stream carrying every one from here on
 async function loadTraces(signal: AbortSignal) {
   try {
     const r = await api.gateway.listTraces({ limit: traceLimit }, { signal });
@@ -243,7 +237,7 @@ async function loadTraces(signal: AbortSignal) {
 
 let controller: AbortController | null = null;
 
-// Subscribes to the daemon, replaying the snapshot, reconnecting on loss
+// Replay the snapshot and reconnect if the stream closes.
 export function connect() {
   controller?.abort();
   controller = new AbortController();
@@ -286,14 +280,12 @@ export function connect() {
   })();
 }
 
-// Stops the subscription
 export function disconnect() {
   controller?.abort();
   controller = null;
   live.connected = false;
 }
 
-// Probes the host again and checks every dependency, as a task
 export async function probeHost(): Promise<boolean> {
   try {
     const r = await api.host.doctor({});
@@ -305,7 +297,7 @@ export async function probeHost(): Promise<boolean> {
   }
 }
 
-// A path under the daemon's home directory shown from ~, any other as it is
+// Abbreviate the daemon's home directory as ~.
 export function homePath(path: string): string {
   const home = live.host?.home;
   if (!home) return path;
@@ -314,17 +306,14 @@ export function homePath(path: string): string {
   return path.startsWith(root) ? '~/' + path.slice(root.length) : path;
 }
 
-// What this host is called: its label, else its hostname
 export function hostName(): string {
   return live.settings?.hostLabel || live.host?.hostname || '';
 }
 
-// Whether the label differs from the hostname
 export function hostLabeled(): boolean {
   return !!live.settings?.hostLabel && live.settings.hostLabel !== live.host?.hostname;
 }
 
-// Writes settings, the stream carrying the change back to every page
 export async function updateSettings(patch: Partial<Settings>): Promise<boolean> {
   try {
     const r = await api.settings.updateSettings({ settings: { ...(live.settings ?? { hostLabel: '' }), ...patch } as Settings });
@@ -342,12 +331,11 @@ export function taskActive(t: Task): boolean {
 
 const byCreated = newestFirst<{ createdAt?: Task['createdAt'] }>((t) => t.createdAt);
 
-// Tasks still running, newest first
 export function activeTasks(): Task[] {
   return [...live.tasks.values()].filter(taskActive).sort(byCreated);
 }
 
-// The newest task of a kind whose labels include every given pair
+// Return the newest task matching the kind and labels.
 export function taskFor(kind: string, labels: Record<string, string>, activeOnly = true): Task | undefined {
   const want = Object.entries(labels);
   return [...live.tasks.values()]
@@ -359,12 +347,10 @@ export function instanceLive(i: Instance | undefined): boolean {
   return !!i && i.state !== InstanceState.STOPPED && i.state !== InstanceState.FAILED;
 }
 
-// Instances that are alive, newest first
 export function liveInstances(): Instance[] {
   return [...live.instances.values()].filter(instanceLive).sort(byCreated);
 }
 
-// Slots in their list order
 export function orderedSlots(): Slot[] {
   return [...live.slots.values()].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
 }
@@ -374,17 +360,14 @@ export function slotName(id: string | undefined): string {
   return live.slots.get(id)?.name ?? id;
 }
 
-// Finds a slot by id or by name
 export function slotByRef(ref: string): Slot | undefined {
   return live.slots.get(ref) ?? [...live.slots.values()].find((s) => s.name === ref);
 }
 
-// Find a bot by ID or name.
 export function botByRef(ref: string): Bot | undefined {
   return live.bots.get(ref) ?? [...live.bots.values()].find((b) => b.name === ref);
 }
 
-// Newest first.
 export function botActivityOf(id: string): BotActivity[] {
   return [...(live.botActivity.get(id) ?? [])].reverse();
 }
@@ -397,18 +380,15 @@ export function modelKey(m: { sourceId: string; repo: string; group: string }): 
   return `${m.sourceId}/${m.repo}/${m.group}`;
 }
 
-// The runtime an id names, for its display name
 export function runtimeName(id: string): string {
   return cached.runtimes.find((r) => r.runtime?.id === id)?.runtime?.name || id;
 }
 
-// The runtime an id names, with how this host can install it
 export function runtimeStatus(id: string): RuntimeStatus | undefined {
   return cached.runtimes.find((r) => r.runtime?.id === id);
 }
 
-// Bytes the live instances hold on one memory pool as their plans placed them, one instance left out
-// when asked, so a bar can show what nebu itself has already taken
+// Sum planned memory for live instances, excluding the given instance.
 export function instancesOnPool(poolId: string, except = ''): bigint {
   let total = 0n;
   for (const i of live.instances.values()) {
@@ -418,28 +398,23 @@ export function instancesOnPool(poolId: string, except = ''): bigint {
   return total;
 }
 
-// The installs of one runtime, newest first
 export function installsOf(runtimeId: string): Install[] {
   return [...live.installs.values()].filter((i) => i.runtimeId === runtimeId).sort(byCreated);
 }
 
-// What a weight format is, in the words the daemon carries for it
 export function formatBlurb(id: string): string {
   const f = live.formats.get(id);
   return f?.blurb || f?.description || `${id} weight files`;
 }
 
-// The device a probed id names, for its display name
 export function deviceName(id: string): string {
   return live.host?.devices.find((d) => d.id === id)?.name || id;
 }
 
-// The accelerators of this host, the devices a slot can be placed on
 export function hostGpus(): Device[] {
   return (live.host?.devices ?? []).filter((d) => d.kind !== DeviceKind.CPU);
 }
 
-// What a memory pool is called: its device, else the kind of memory it is
 export function poolName(id: string): string {
   const pool = live.host?.pools.find((p) => p.id === id);
   if (!pool) return id;
@@ -447,24 +422,22 @@ export function poolName(id: string): string {
   return pool.kind === PoolKind.UNIFIED ? 'Unified memory' : 'System memory';
 }
 
-// The filesystem the store sits on, the room a pull has
 export function storeMount(): Storage | undefined {
   const p = live.store?.path ?? '';
   if (!p) return undefined;
   return [...(live.host?.storage ?? [])].filter((s) => p.startsWith(s.path)).sort((a, b) => b.path.length - a.path.length)[0];
 }
 
-// What a weight group is called where a record names only the group, its format read from the library
+// Look up the stored format when the record has only a group name.
 export function groupLabel(m: { sourceId: string; repo: string; group: string; formatId?: string }): string {
   return weightsName(m.group, m.formatId || live.models.get(modelKey(m))?.formatId);
 }
 
-// Traces newest first, one route's when named
 export function tracesOf(route = ''): Trace[] {
   return [...live.traces.values()].filter((t) => !route || t.route === route).sort(newestFirst((t) => t.startedAt));
 }
 
-// Answers newest first, token counts left out, one route's when named
+// Exclude token-count requests.
 export function answersOf(route = ''): Trace[] {
   return tracesOf(route).filter((t) => t.kind !== TraceKind.COUNT);
 }

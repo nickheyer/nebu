@@ -92,7 +92,7 @@ func (r *Registry) ForRuntime(runtimeID string) []recipes.Recipe {
 	return out
 }
 
-// A recipe as the API describes it to one host: its variables, and what each variant the host can take sets there
+// Build recipe and supported variants for the host.
 func Describe(rc recipes.Recipe, profile *v1.HostProfile) *v1.Recipe {
 	out := &v1.Recipe{
 		Id:          rc.ID(),
@@ -117,7 +117,7 @@ func Describe(rc recipes.Recipe, profile *v1.HostProfile) *v1.Recipe {
 	return out
 }
 
-// What a variant sets on a host, trimmed, the empty values left out
+// Returns trimmed, nonempty variant variables.
 func variantVars(v recipes.Variant, profile *v1.HostProfile) map[string]string {
 	if v.Vars == nil {
 		return nil
@@ -131,7 +131,7 @@ func variantVars(v recipes.Variant, profile *v1.HostProfile) map[string]string {
 	return out
 }
 
-// The image an oci sandbox runs for a variant: the variant's own, else the recipe's, else the configured default
+// Chooses the variant image, recipe image, or configured default, in that order.
 func Image(rc recipes.Recipe, v recipes.Variant, defaults *v1.Builds) string {
 	if v.Image != "" {
 		return v.Image
@@ -142,7 +142,7 @@ func Image(rc recipes.Recipe, v recipes.Variant, defaults *v1.Builds) string {
 	return defaults.GetImage()
 }
 
-// The container CLIs tried in order: the recipe's own, else the configured ones, else podman, docker, nerdctl
+// Chooses recipe CLIs, configured CLIs, or podman, docker, and nerdctl.
 func CLIs(rc recipes.Recipe, defaults *v1.Builds) []string {
 	if clis := rc.Sandbox().CLIs; len(clis) > 0 {
 		return clis
@@ -153,7 +153,7 @@ func CLIs(rc recipes.Recipe, defaults *v1.Builds) []string {
 	return defaultCLIs
 }
 
-// Every tool the recipe or any of its variants needs, each once, in recipe order
+// Unique required tools in recipe order.
 func allTools(rc recipes.Recipe) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -201,13 +201,13 @@ type Options struct {
 	Defaults *v1.Builds
 }
 
-// What the host selects for a recipe, ready to run
+// Resolved build selection.
 type Selection struct {
 	Recipe  recipes.Recipe
 	Variant recipes.Variant
 	Vars    map[string]string
 	Sandbox v1.SandboxKind
-	// The container CLIs tried, and the first of them on the host, empty when none is
+	// Chooses recipe CLIs, configured CLIs, or podman, docker, and nerdctl.
 	CLIs  []string
 	CLI   string
 	Image string
@@ -273,7 +273,7 @@ func Select(rc recipes.Recipe, profile *v1.HostProfile, opts Options) (*Selectio
 	return sel, nil
 }
 
-// The recipe's defaults under the caller's overrides, then the variant's own values
+// Combines recipe defaults, caller overrides, and variant values, in that order.
 func (s *Selection) resolveVars() {
 	s.Vars = map[string]string{}
 	for _, v := range s.Recipe.Vars() {
@@ -348,7 +348,7 @@ func (s *Selection) Err() error {
 	if len(s.Unmet) == 0 {
 		return nil
 	}
-	return fmt.Errorf("%w: %s", ErrSelection, strings.Join(s.Unmet, "; "))
+	return fmt.Errorf("%w: %s", ErrSelection, strings.Join(s.Unmet, ". "))
 }
 
 // Collects the host and device facts folded into the hash

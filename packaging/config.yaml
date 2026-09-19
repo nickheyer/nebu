@@ -8,6 +8,6 @@ logging:
   level: info
   format: text
 
-# Discord bots keep their tokens as rows; this names only the ffmpeg that samples video attachments, found on PATH when unset
+# ffmpeg samples video attachments. Defaults to ffmpeg on PATH.
 # discord:
 #   ffmpeg: /usr/bin/ffmpeg

@@ -39,13 +39,12 @@
   const route = $derived(routeName ? live.routes.get(routeName) : undefined);
   const install = $derived(instance?.installId ? live.installs.get(instance.installId) : undefined);
   const traces = $derived(instance ? answersOf().filter((t) => t.instanceId === instance.id) : []);
-  // The model behind the name, said once, when the name does not already say it
   const reference = $derived(instance ? `${instance.repo} ${groupLabel(instance)}` : '');
   const named = $derived(!!instance && [instance.repo + ':' + instance.group, tail(instance.repo) + ':' + instance.group, reference].includes(instance.name));
   const tab = tabState(() => tabs.map((t) => t.id), () => 'overview');
   let selectedTrace = $state('');
   let stopping = $state(false);
-  // A failed instance opens on its triage once, when no tab was asked for
+  // Default failed instances to triage unless the URL selects another tab.
   let shownTriage = false;
   $effect(() => {
     if (shownTriage || !instance || page.url.searchParams.get('tab')) return;

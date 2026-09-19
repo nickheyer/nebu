@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// An OpenAI runtime that streams a text fragment, a tool call, and usage
+// Fake OpenAI runtime streaming text, a tool call, and usage.
 func openaiUpstream(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +91,7 @@ func TestTranslateFlavors(t *testing.T) {
 	}
 }
 
-// A 2x2 PNG, the smallest image the area rule sizes to one token
+// A 2x2 PNG, estimated as one image token.
 const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAC0lEQVR4nGNgQAcAABIAAeRVjecAAAAASUVORK5CYII="
 
 func TestImageTokensAddedToTokenizerCount(t *testing.T) {
@@ -99,7 +99,7 @@ func TestImageTokensAddedToTokenizerCount(t *testing.T) {
 	if got := imageTokensOf(chat); got != 1+imageTokensMax {
 		t.Fatalf("image tokens = %d, want %d", got, 1+imageTokensMax)
 	}
-	// A tokenizer that saw only the text gets the images added, a count endpoint that sized them does not
+	// Add image tokens only to text-only tokenizer counts.
 	if got := withImageTokens(openai{}, chat, 10); got != 10+1+imageTokensMax {
 		t.Errorf("openai count = %d, want %d", got, 10+1+imageTokensMax)
 	}
@@ -109,7 +109,7 @@ func TestImageTokensAddedToTokenizerCount(t *testing.T) {
 	if got := withImageTokens(anthropic{}, chat, 10); got != 10 {
 		t.Errorf("anthropic count = %d, want 10", got)
 	}
-	// The estimate counts the same images beside the text
+	// Estimates include text and images.
 	if got := estimateTokens(chat); got != (len(promptText(chat))+3)/4+3+1+imageTokensMax {
 		t.Errorf("estimate = %d", got)
 	}

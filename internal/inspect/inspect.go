@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/nebu/internal/calibrate"
+	"github.com/nickheyer/nebu/pkg/blueprint"
 	"github.com/nickheyer/nebu/pkg/cache"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/estimate"
@@ -30,12 +31,12 @@ import (
 const (
 	resolveTTL  = 10 * time.Minute
 	describeMax = 8
-	// The header key saying what a file holds, and the one value that is weights to load
+	// Header key and value identifying model weights.
 	typeKey   = "general.type"
 	modelType = "model"
 )
 
-// What a slot narrows a plan to: the host as the slot sees it, the slot's runtime and default params, and where the model goes
+// Slot constraints: host resources, runtime, default params, and placement.
 type Constraint struct {
 	Profile   *v1.HostProfile
 	RuntimeID string
@@ -48,7 +49,7 @@ type Constrainer interface {
 	Constrain(ctx context.Context, slotID string, profile *v1.HostProfile) (*Constraint, error)
 }
 
-// Orchestrates sources, formats, descriptors, and planning
+// Resolves models and plans memory use.
 type Inspector struct {
 	Sources     *sources.Registry
 	Formats     *formats.Registry
@@ -61,7 +62,7 @@ type Inspector struct {
 	Contexts    []uint32
 	// Set by the daemon once slots exist, nil until then
 	Constrain Constrainer
-	// Reports whether a runtime has an install, set by the daemon, every runtime counted as installed when nil
+	// Reports installed runtimes. Nil treats all runtimes as installed.
 	Installed func(runtimeID string) bool
 	Log       *slog.Logger
 }
@@ -70,7 +71,7 @@ func (i *Inspector) installed(rt runtimes.Runtime) bool {
 	return i.Installed == nil || i.Installed(rt.ID())
 }
 
-// The context lengths a group is planned at: the ones given, capped at the model's own and ending on it
+// Requested context lengths capped at the model's limit, with that limit appended.
 func planContexts(contexts []uint32, d *v1.Descriptor, named bool) []uint32 {
 	limit := formats.ParamsOf(d.GetParams()).ContextTrain
 	if named || limit < 1 || limit > math.MaxUint32 {
@@ -86,8 +87,8 @@ func planContexts(contexts []uint32, d *v1.Descriptor, named bool) []uint32 {
 	return append(out, max)
 }
 
-// Narrows runtimes to the ones accepting a format that have an install, every accepting one
-// when none is installed or the request named the runtimes itself
+// Prefers installed runtimes that support the format. Explicit requests and
+// formats with no installed runtime include all compatible runtimes.
 func (i *Inspector) planners(list []runtimes.Runtime, formatID string, kind v1.ModelKind, named bool) []runtimes.Runtime {
 	var accepting, installed []runtimes.Runtime
 	for _, rt := range list {
@@ -105,7 +106,7 @@ func (i *Inspector) planners(list []runtimes.Runtime, formatID string, kind v1.M
 	return installed
 }
 
-// Returns the host narrowed to the named slot with the slot's runtime, default params, and placement, the whole host with no slot
+// Returns slot constraints, or the full host when no slot is specified.
 func (i *Inspector) constraint(ctx context.Context, slotID string) (*Constraint, error) {
 	profile, err := i.Host.Profile(ctx, false)
 	if err != nil {
@@ -120,7 +121,7 @@ func (i *Inspector) constraint(ctx context.Context, slotID string) (*Constraint,
 	return i.Constrain.Constrain(ctx, slotID, profile)
 }
 
-// Picks the first compatible runtime accepting a format holding a kind of model, an installed one before the rest
+// Selects a compatible runtime, preferring installed ones.
 func (i *Inspector) DefaultRuntime(profile *v1.HostProfile, formatID string, kind v1.ModelKind) (runtimes.Runtime, error) {
 	var first runtimes.Runtime
 	for _, rt := range i.Runtimes.List() {
@@ -143,7 +144,7 @@ func (i *Inspector) DefaultRuntime(profile *v1.HostProfile, formatID string, kin
 	return first, nil
 }
 
-// Every other model in the store, the parts a diffusion model may load beside itself wherever they were pulled from
+// Other stored models available as companion parts.
 func (i *Inspector) Companions(sourceID, repo, group string) ([]*v1.StoredModel, error) {
 	if i.Stored == nil {
 		return nil, nil
@@ -176,6 +177,11 @@ func (i *Inspector) Resolve(ctx context.Context, sourceID, repo, revision string
 	}
 	model, err = src.Resolve(ctx, repo, revision)
 	if err != nil {
+		return nil, nil, err
+	}
+	// Read pipeline declarations before classifying files into groups.
+	open := func(ctx context.Context, a *v1.Artifact) (sources.Blob, error) { return src.Open(ctx, model, a) }
+	if err := i.Formats.Lay(ctx, open, model); err != nil {
 		return nil, nil, err
 	}
 	i.Formats.Classify(model)
@@ -231,8 +237,7 @@ func (i *Inspector) Describe(ctx context.Context, src sources.Source, model *v1.
 	return i.Builder.Build(raw)
 }
 
-// Everything a plan of one descriptor on one runtime reads: the overrides typed, against the memory
-// free right now or all of it, with the same learned correction a run applies
+// Builds planning input from overrides, available or total memory, and calibration.
 func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, companions []*v1.StoredModel) (estimate.Input, error) {
 	if rt.Policy() == nil {
 		return estimate.Input{}, fmt.Errorf("runtime %s has no estimate policy", rt.ID())
@@ -254,7 +259,7 @@ func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.Hos
 	}, nil
 }
 
-// Plans the fit of one descriptor on one runtime through whatever params a run would refuse, for a table that is about memory alone
+// Estimates memory fit without rejecting unsupported runtime params.
 func (i *Inspector) fit(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, companions []*v1.StoredModel) (*v1.MemoryPlan, error) {
 	in, err := i.input(rt, d, profile, overrides, free, placement, repo, companions)
 	if err != nil {
@@ -264,7 +269,7 @@ func (i *Inspector) fit(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostP
 	return rt.Policy().Plan(in)
 }
 
-// Plans one descriptor on one runtime with overrides, refusing params the runtime rules out
+// Plans memory use and validates runtime params.
 func (i *Inspector) Plan(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, companions []*v1.StoredModel) (*v1.MemoryPlan, error) {
 	in, err := i.input(rt, d, profile, overrides, free, placement, repo, companions)
 	if err != nil {
@@ -285,7 +290,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 	}
 	profile := c.Profile
 	groups := selectGroups(i.Formats.Groups(model), req.GetGroups())
-	// The runtimes the request names, else the slot's runtime, else every compatible one
+	// Use requested runtimes, the slot's runtime, or all compatible runtimes.
 	ids := req.GetRuntimeIds()
 	if len(ids) == 0 && c.RuntimeID != "" {
 		ids = []string{c.RuntimeID}
@@ -297,12 +302,12 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 		contexts = i.Contexts
 	}
 	resp := &v1.InspectResponse{Model: model}
-	// What the store holds, the parts a diffusion model's plan solves its file params to
+	// Stored parts available for diffusion file params.
 	companions, err := i.Companions(req.GetSourceId(), req.GetRepo(), "")
 	if err != nil {
 		return nil, err
 	}
-	// The same failure repeats per context, so every warning is kept once
+	// Deduplicate warnings across contexts.
 	seen := map[string]bool{}
 	warn := func(format string, args ...any) {
 		w := fmt.Sprintf(format, args...)
@@ -311,7 +316,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 			resp.Warnings = append(resp.Warnings, w)
 		}
 	}
-	// The slot's defaults sit under the request's params, the same layering a run uses
+	// Request params override slot defaults.
 	layered := runtimes.Merge(c.Params, req.GetParams())
 	descriptors := make([]*v1.Descriptor, len(groups))
 	warnings := make([]string, len(groups))
@@ -333,7 +338,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 	if err := eg.Wait(); err != nil {
 		return nil, err
 	}
-	// A repository whose every weight file the source refuses is gated or private, not a warning
+	// If every weight file is inaccessible, return the access error.
 	if denied := deniedAll(failures); denied != nil {
 		return nil, denied
 	}
@@ -342,8 +347,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 			warn("%s", warnings[idx])
 			continue
 		}
-		// A header that says it holds something other than a model, an importance matrix or an adapter,
-		// is not weights whatever its name looks like, so its files go back to being ordinary files
+		// Headers identifying adapters or importance matrices override weight filenames.
 		if kind := d.GetMetadata()[typeKey]; kind != "" && kind != modelType {
 			for _, a := range groups[idx].Weights {
 				a.Role, a.Group = v1.ArtifactRole_ARTIFACT_ROLE_OTHER, ""
@@ -351,16 +355,16 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 			continue
 		}
 		resp.Descriptors = append(resp.Descriptors, d)
-		// What you have installed answers first, what you could install only when nothing installed serves the format
+		// Prefer installed runtimes that support the format.
 		for _, rt := range i.planners(list, d.GetFormatId(), d.GetKind(), named) {
-			// The row the planner solves itself comes first, the largest context that fits, then the grid
+			// Show the largest fitting context before the requested context grid.
 			rows := []uint32{}
 			if rt.Policy().ContextParam != "" && len(req.GetContexts()) == 0 {
 				rows = append(rows, 0)
 			}
 			for _, n := range append(rows, planContexts(contexts, d, len(req.GetContexts()) > 0)...) {
 				overrides := withContext(layered, rt.Policy().ContextParam, n)
-				// A run plans around what is loaded now, so the table says both
+				// Report fit against both available and total memory.
 				plan, err := i.fit(rt, d, profile, overrides, false, c.Placement, req.GetRepo(), companions)
 				var now *v1.MemoryPlan
 				if err == nil {
@@ -378,7 +382,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 	return resp, nil
 }
 
-// Says why a group could not be planned in words a person can act on, the failure itself kept for the log
+// Returns a planning error message and logs the underlying error.
 func planFailure(d *v1.Descriptor, rt runtimes.Runtime, err error) string {
 	var missing *estimate.MissingError
 	if errors.As(err, &missing) {
@@ -402,7 +406,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 		return nil, err
 	}
 	profile := c.Profile
-	// The slot's runtime picks the runtime when the request did not, as a run does
+	// Use the slot's runtime unless the request specifies one.
 	runtimeID := req.GetRuntimeId()
 	if runtimeID == "" {
 		runtimeID = c.RuntimeID
@@ -427,7 +431,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	// An estimate plans through params a run would refuse and says so, so a form can show what to change
+	// Return estimates with param errors for the form to display.
 	in, err := i.input(rt, d, profile, overrides, req.GetFree(), c.Placement, req.GetRepo(), companions)
 	if err != nil {
 		return nil, err
@@ -438,38 +442,39 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 		return nil, err
 	}
 	states, refusal := rt.Policy().ParamStates(in, plan)
-	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Params: states, Refusal: refusal, Missing: i.missing(rt.Policy().MissingParts(in, plan))}, nil
+	missing, err := i.missing(ctx, src, model, g, d, rt.Policy().MissingParts(in, plan))
+	if err != nil {
+		return nil, err
+	}
+	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Params: states, Refusal: refusal, Missing: missing}, nil
 }
 
-// The parts a run needs and the store lacks, each place they are published named as a pull: the first
-// Hugging Face source configured, the repository, and the group the named file forms in it as the
-// formats classify it, so a client pulls it in one call; a repository without a named file is left for
-// the catalog to open, since it holds several files to choose from
-func (i *Inspector) missing(parts []estimate.Missing) []*v1.MissingPart {
-	var hub string
-	for _, spec := range i.Sources.List() {
-		if spec.GetKind() == v1.SourceKind_SOURCE_KIND_HUGGINGFACE {
-			hub = spec.GetId()
-			break
-		}
+// Resolves missing slots and associates each part with its runtime param.
+func (i *Inspector) missing(ctx context.Context, src sources.Source, model *v1.Model, g *formats.Group, d *v1.Descriptor, parts []estimate.Missing) ([]*v1.Part, error) {
+	if len(parts) == 0 {
+		return nil, nil
 	}
-	var out []*v1.MissingPart
+	plan, err := i.Parts(ctx, src, model, g, d)
+	if err != nil {
+		return nil, err
+	}
+	var out []*v1.Part
 	for _, part := range parts {
-		mp := &v1.MissingPart{Param: part.Param, Label: part.Label}
-		for _, src := range part.Sources {
-			ps := &v1.PartSource{SourceId: hub, Repo: src.Repo, Path: src.Path}
-			if src.Path != "" {
-				m := &v1.Model{Artifacts: []*v1.Artifact{{Path: src.Path}}}
-				i.Formats.Classify(m)
-				if a := m.GetArtifacts()[0]; a.GetRole() == v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS {
-					ps.Group = a.GetGroup()
-				}
+		found := false
+		for _, pick := range plan.Picks {
+			if pick.Fill.Slot != part.Slot {
+				continue
 			}
-			mp.Sources = append(mp.Sources, ps)
+			p := pick.Proto()
+			p.Param = part.Param
+			out = append(out, p)
+			found = true
 		}
-		out = append(out, mp)
+		if !found {
+			out = append(out, &v1.Part{Slot: part.Slot, Label: blueprint.Label(part.Slot), Param: part.Param, Required: true, Error: "slot not defined for this model"})
+		}
 	}
-	return out
+	return out, nil
 }
 
 func (i *Inspector) selectRuntimes(ids []string, profile *v1.HostProfile) []runtimes.Runtime {
@@ -494,7 +499,7 @@ func (i *Inspector) selectRuntimes(ids []string, profile *v1.HostProfile) []runt
 	return compatible
 }
 
-// The first failure when there were some and each one was the source refusing access
+// Returns the first error if all failures denied access.
 func deniedAll(failures []error) error {
 	var first error
 	for _, err := range failures {
@@ -521,7 +526,7 @@ func selectGroups(groups []*formats.Group, names []string) []*formats.Group {
 	return out
 }
 
-// The params with the context param set to a length, or back to auto for the row the planner solves
+// Sets the context length, using auto when the planner should solve it.
 func withContext(params map[string]string, name string, n uint32) map[string]string {
 	out := make(map[string]string, len(params)+1)
 	for k, v := range params {
@@ -538,8 +543,8 @@ func withContext(params map[string]string, name string, n uint32) map[string]str
 	return out
 }
 
-// Keys the raw header cache by the content read: every weight's digest, the config files, and the
-// projector a run loads beside them; a source without digests keys by where the files sit
+// Keys cached headers by weight, config, and projector digests. Uses source paths
+// when digests are unavailable.
 func rawKey(model *v1.Model, g *formats.Group) string {
 	parts := []string{"raw", g.FormatID}
 	add := func(a *v1.Artifact) {

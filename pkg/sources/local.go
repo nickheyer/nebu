@@ -80,8 +80,7 @@ func (localAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, so
 		if info, err := os.Stat(dir); err == nil {
 			hit.UpdatedAt = timestamppb.New(info.ModTime())
 		}
-		// The files say which formats the directory holds, a safetensors shard beside a config being a
-		// transformers checkpoint and one without a single file diffusion checkpoint
+		// Distinguish transformers safetensors by their accompanying config.
 		files, err := root.List(ctx, repo)
 		if err != nil {
 			return err
@@ -95,7 +94,7 @@ func (localAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, so
 		return nil, err
 	}
 	for _, owner := range owners {
-		// A directory holding files is a repo, a directory of only directories is an owner
+		// Directories with files are repositories. Other directories are owners.
 		if locHoldsFiles(filepath.Join(root.Root(), owner)) {
 			if err := add(owner); err != nil {
 				return nil, err
@@ -115,7 +114,7 @@ func (localAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, so
 	return localPage(hits, req, sort, c.Limit(req)), nil
 }
 
-// The formats a directory's files are held in, by extension and by whether a config sits beside a safetensors shard
+// Infers formats from extensions and accompanying configs.
 func locFormats(files []*v1.Artifact) []string {
 	configs := map[string]bool{}
 	for _, f := range files {

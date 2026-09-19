@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* Inter for words and JetBrains Mono for data, the latin subsets shipped with the app */
+/* Bundled Latin font subsets. */
 @font-face {
   font-family: "Inter Variable";
   font-style: normal;
@@ -38,7 +38,7 @@
   --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* Ground, then surfaces that sit on it, darkest to lightest */
+  /* Surfaces, darkest to lightest. */
   --color-bg: oklch(0.135 0.007 250);
   --color-sunken: oklch(0.112 0.007 250);
   --color-surface: oklch(0.165 0.008 250);
@@ -77,7 +77,7 @@
   text-transform: uppercase;
 }
 
-/* A raised panel with a border, the one container cards, forms, and panes share */
+/* Shared panel styles. */
 @utility card {
   border-radius: 0.5rem;
   border: 1px solid var(--color-line);
@@ -153,7 +153,7 @@
   .input-static {
     @apply flex h-9 w-full items-center rounded-md border border-line/60 bg-transparent px-3 text-sm text-fg-muted;
   }
-  /* Number fields drop the spinner, the step buttons are drawn beside the unit */
+  /* Custom step buttons replace browser spinners. */
   input[type="number"].input {
     -moz-appearance: textfield;
     appearance: textfield;
@@ -164,7 +164,7 @@
     margin: 0;
   }
 
-  /* The one checkbox, a box that fills with the accent when on */
+  /* Checkbox */
   .checkbox {
     @apply h-4 w-4 shrink-0 cursor-pointer appearance-none rounded-sm border border-line-strong bg-sunken transition-colors checked:border-accent checked:bg-accent checked:bg-center checked:bg-no-repeat disabled:cursor-not-allowed disabled:opacity-50;
   }
@@ -172,7 +172,7 @@
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23102a2c' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-6'/%3E%3C/svg%3E");
   }
 
-  /* The one radio, a ring that holds an accent dot when on */
+  /* Radio */
   .radio {
     @apply h-4 w-4 shrink-0 cursor-pointer appearance-none rounded-full border border-line-strong bg-sunken transition-colors checked:border-accent disabled:cursor-not-allowed disabled:opacity-50;
   }
@@ -223,14 +223,14 @@
   .tbl td.actions > * {
     @apply inline-flex items-center justify-end gap-1;
   }
-  /* A denser table for details nested under a row of another */
+  /* Nested tables */
   .tbl.dense th {
     @apply h-7;
   }
   .tbl.dense td {
     @apply py-1.5;
   }
-  /* The footer a table sums up in, ruled off from the rows above it */
+  /* Table footer */
   .tbl tfoot td {
     @apply font-medium text-fg;
     border-top: 1px solid var(--color-line-strong);
@@ -245,12 +245,12 @@
     @apply inline-flex h-5 min-w-5 items-center justify-center rounded-sm border border-line-strong bg-raised px-1 font-mono text-[11px] text-fg-muted;
   }
 
-  /* A colored dot that says what state something is in */
+  /* Status dot */
   .dot {
     @apply relative inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-current;
   }
 
-  /* A short warning or error block */
+  /* Warnings and errors */
   .note {
     @apply rounded-md border px-3 py-2 text-sm leading-6;
   }
@@ -264,12 +264,12 @@
     @apply border-info/25 bg-info/8 text-info;
   }
 
-  /* A code block people copy from */
+  /* Code blocks */
   .code {
     @apply overflow-x-auto rounded-md border border-line bg-sunken p-3 font-mono text-xs leading-5 text-fg-muted;
   }
 
-  /* A card that opens something when clicked */
+  /* Clickable cards */
   .card-link {
     @apply transition-colors;
   }
@@ -278,7 +278,7 @@
     background: color-mix(in oklch, var(--color-raised) 40%, var(--color-surface));
   }
 
-  /* A row of stats, each a label over a number */
+  /* Stats */
   .stat {
     @apply flex flex-col gap-0.5;
   }
@@ -289,7 +289,7 @@
     @apply text-sm tabular-nums text-fg;
   }
 
-  /* A monospace value with a faint label before it */
+  /* Labeled values */
   .kv {
     @apply inline-flex items-baseline gap-1.5 text-xs;
   }
@@ -527,7 +527,7 @@
 }
 
 @layer components {
-  /* A slider whose track fills to the thumb, the fill share set by the control */
+  /* The control sets the slider fill percentage. */
   .range {
     appearance: none;
     height: 1.5rem;

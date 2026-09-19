@@ -9,10 +9,7 @@
   import FilePicker from '../ui/FilePicker.svelte';
   import Spinner from '../ui/Spinner.svelte';
 
-  // The settings a method takes, one under another: the default shows in the empty control and is sent as
-  // nothing, a choice the host cannot take is listed greyed with the reason, a path is typed or picked on
-  // the host, and a switch applies as it is flipped. A field that takes a revision of a repository shows the
-  // revision applying when empty once the source lists it. Only values that differ from the default are kept.
+  // Store only values that differ from defaults. Load revision defaults from the source.
   let { fields = [], values = $bindable({}), idPrefix = 'setting', class: cls = '' }: { fields?: ConfigField[]; values?: Record<string, string>; idPrefix?: string; class?: string } = $props();
 
   function set(name: string, v: string) {
@@ -22,7 +19,7 @@
     values = next;
   }
 
-  // The default revision of each repository a field names: absent until listed, then its name or the refusal
+  // Cache revision defaults and lookup errors per repository.
   const revKey = (f: ConfigField) => `${f.revisionSource}/${f.revisionRepo}`;
   const asked = new Set<string>();
   let revisions = $state<Record<string, { name: string; error: string }>>({});
@@ -49,7 +46,7 @@
   const label = (f: ConfigField) => f.label || f.name;
   const choiceLabel = (f: ConfigField, c: string) => f.choiceLabels[c] || c;
 
-  // The default first, chosen as nothing, then every other choice
+  // Put the default first and represent it with an empty value.
   function items(f: ConfigField) {
     const rest = f.choices.filter((c) => c !== f.default).map((c) => ({ value: c, label: choiceLabel(f, c), disabled: c in f.choiceUnmet, detail: f.choiceUnmet[c] }));
     return f.default ? [{ value: '', label: choiceLabel(f, f.default) }, ...rest] : rest;

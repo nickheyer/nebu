@@ -2,7 +2,6 @@
   import type { Snippet } from 'svelte';
   import type { HTMLInputAttributes } from 'svelte/elements';
 
-  // A text field; the empty text shows what applies while nothing is typed
   let {
     value = $bindable(''),
     empty = '',
@@ -19,7 +18,6 @@
     mono?: boolean;
     invalid?: boolean;
     size?: 'sm' | 'md';
-    // An icon drawn inside the field at its left edge
     leading?: Snippet;
     inputClass?: string;
     class?: string;

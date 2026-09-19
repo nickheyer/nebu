@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the installed binary's daemon, embedded UI, and authenticated API."""
+"""Test the daemon, embedded UI, and API authentication."""
 import argparse
 import json
 import os

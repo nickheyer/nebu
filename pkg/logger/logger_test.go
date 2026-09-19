@@ -10,7 +10,6 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// Every line the logger writes is kept in the ring behind it, the file still getting them all
 func TestNewKeepsRecentLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nebu.log")
 	log, recent, closer, err := New(&v1.Logging{File: path, Level: "debug"})
@@ -33,7 +32,6 @@ func TestNewKeepsRecentLines(t *testing.T) {
 	}
 }
 
-// A line under the configured level reaches neither the output nor the ring
 func TestNewKeepsOnlyEnabledLevels(t *testing.T) {
 	log, recent, closer, err := New(&v1.Logging{File: filepath.Join(t.TempDir(), "nebu.log"), Level: "warn"})
 	if err != nil {
@@ -47,7 +45,6 @@ func TestNewKeepsOnlyEnabledLevels(t *testing.T) {
 	}
 }
 
-// Output arriving in pieces still lands in the ring one whole line at a time
 func TestLineWriterSplitsOnNewlines(t *testing.T) {
 	ring := launch.NewLog(10)
 	w := &lineWriter{ring: ring}

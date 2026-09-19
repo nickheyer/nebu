@@ -88,10 +88,7 @@ func (t *Tree) Terminate(grace time.Duration, done <-chan struct{}) {
 	<-done
 }
 
-// Reports whether pid lives with a matching command line
-//
-// Quotes are dropped from both sides, so a path the OS quoted still matches
-// the argument list it was launched with.
+// Checks the PID and command line, ignoring quotes added by the OS.
 func Running(pid int, command []string) bool {
 	if pid <= 0 || len(command) == 0 || !Exists(pid) {
 		return false

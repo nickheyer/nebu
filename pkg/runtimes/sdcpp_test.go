@@ -46,18 +46,21 @@ func stored(repo, group, arch string, kind v1.ModelKind, paths ...string) *v1.St
 	return m
 }
 
-// A lone denoiser loads as a diffusion model with its parts named, a bundled checkpoint as the model itself
 func TestSDCppLaunch(t *testing.T) {
 	rt := SDCpp{}
 	prepared := t.TempDir()
 	lora := stored("Kijai/WanVideo_comfy", "lightx2v_4steps", "lora", v1.ModelKind_MODEL_KIND_COMPONENT, "loras/lightx2v_4steps.safetensors")
 	os.WriteFile(filepath.Join(prepared, "lora.safetensors"), nil, 0o644)
 	lora.Artifacts[0].Path = filepath.Join(prepared, "lora.safetensors")
+	// Root adapters use repository names because their group is default.
+	adapter := stored("TaoLiveAIGC/TaoMate-H3", "default", "lora", v1.ModelKind_MODEL_KIND_COMPONENT, "adapter_model.safetensors")
+	os.WriteFile(filepath.Join(prepared, "adapter.safetensors"), nil, 0o644)
+	adapter.Artifacts[0].Path = filepath.Join(prepared, "adapter.safetensors")
 	params, err := Resolve(rt, map[string]string{"vae": "/store/vae.safetensors", "t5xxl": "/store/umt5.gguf", "on_device": "3", "width": "832", "height": "480"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd, err := rt.Launch(Launch{Name: "wan", Params: params, Artifacts: map[string]string{"weights": "/store/wan.gguf", "prepared_dir": prepared}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/sd-server"}, Descriptor: sdDescriptor("wan", false, false), Devices: []*v1.Device{{Id: "GPU-1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Facts: map[string]string{"index": "0"}}}, Stored: []*v1.StoredModel{lora}})
+	cmd, err := rt.Launch(Launch{Name: "wan", Params: params, Artifacts: map[string]string{"weights": "/store/wan.gguf", "prepared_dir": prepared}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/sd-server"}, Descriptor: sdDescriptor("wan", false, false), Devices: []*v1.Device{{Id: "GPU-1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Facts: map[string]string{"index": "0"}}}, Stored: []*v1.StoredModel{lora, adapter}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,24 +73,27 @@ func TestSDCppLaunch(t *testing.T) {
 			t.Errorf("missing %s in %s", want, line)
 		}
 	}
-	// The LoRA directory links every stored LoRA by its group name
+	// Link stored LoRAs by group name.
 	if target, err := os.Readlink(filepath.Join(prepared, "loras", "lightx2v_4steps.safetensors")); err != nil || target != lora.Artifacts[0].Path {
 		t.Fatalf("lora link %q %v", target, err)
 	}
-	// Every part on the device needs no offload, and a part left auto emits no flag
+	if target, err := os.Readlink(filepath.Join(prepared, "loras", "TaoMate-H3.safetensors")); err != nil || target != adapter.Artifacts[0].Path {
+		t.Fatalf("adapter link %q %v", target, err)
+	}
+	// Full device placement disables offload. Unresolved file parameters emit no flag.
 	if strings.Contains(line, "--offload-to-cpu") || strings.Contains(line, "--clip_l") || strings.Contains(line, "--offload ") || cmd.Params["offload"] != "off" {
 		t.Fatalf("offload %s %v", line, cmd.Params)
 	}
 	if cmd.Env["CUDA_VISIBLE_DEVICES"] != "GPU-1" {
 		t.Fatalf("env %v", cmd.Env)
 	}
-	// Fewer parts on the device than the pipeline has turns offload on, as does asking for it
+	// Partial device placement or an explicit request enables offload.
 	params["on_device"] = "0"
 	cmd, err = rt.Launch(Launch{Name: "wan", Params: params, Artifacts: map[string]string{"weights": "/store/wan.gguf", "prepared_dir": prepared}, Install: Install{Path: "/bin/sd-server"}, Descriptor: sdDescriptor("wan", false, false)})
 	if err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--offload-to-cpu") || cmd.Params["offload"] != "on" {
 		t.Fatalf("offload from the plan %v %v", cmd, err)
 	}
-	// A checkpoint bundling its parts loads whole
+	// Bundled checkpoints use --model.
 	params, _ = Resolve(rt, nil)
 	cmd, err = rt.Launch(Launch{Name: "sdxl", Params: params, Artifacts: map[string]string{"weights": "/store/sd_xl_base_1.0.safetensors", "prepared_dir": prepared}, Install: Install{Path: "/bin/sd-server"}, Descriptor: sdDescriptor("sdxl", true, false), Placement: v1.Placement_PLACEMENT_HOST})
 	if err != nil {
@@ -97,7 +103,7 @@ func TestSDCppLaunch(t *testing.T) {
 	if !strings.Contains(line, "--model /store/sd_xl_base_1.0.safetensors") || strings.Contains(line, "--diffusion-model") || !strings.Contains(line, "--backend cpu") || cmd.Env["CUDA_VISIBLE_DEVICES"] != "" {
 		t.Fatalf("bundled launch %s %v", line, cmd.Env)
 	}
-	// Shards, components, a device backend in host memory, and a missing prepared directory are refused
+	// Reject unsupported layouts and placement.
 	if _, err := rt.Launch(Launch{Params: params, Artifacts: map[string]string{"weights": "/store/model-00001-of-00003.safetensors", "prepared_dir": prepared}, Descriptor: sdDescriptor("flux", false, false)}); err == nil {
 		t.Fatal("shards should be refused")
 	}
@@ -115,7 +121,62 @@ func TestSDCppLaunch(t *testing.T) {
 	}
 }
 
-// The parts a family needs are solved to what the store holds, the model's own repository first, and what is missing refuses the run
+func TestSDCppLaunchPipeline(t *testing.T) {
+	rt := SDCpp{}
+	prepared := t.TempDir()
+	d := &v1.Descriptor{FormatId: "diffusers", Group: "transformer", Architecture: "MiniMaxH3Transformer3DModel", Kind: v1.ModelKind_MODEL_KIND_DIFFUSION, Metadata: map[string]string{
+		diffusion.KeyFamily: "minimax_h3", diffusion.KeyVAE: "true", diffusion.KeyTextEncoder: "true", diffusion.KeySlots: "denoiser,text_encoder.llm,text_encoder.llm.vision,tokenizer,vae,vae.audio",
+		"pipeline.class": "MiniMaxH3ModularPipeline", "pipeline.transformer": "transformer", "pipeline.transformer.class": "MiniMaxH3Transformer3DModel",
+		"pipeline.vae": "vae", "pipeline.vae.class": "AutoencoderKLMiniMaxH3", "pipeline.audio_vae": "audio_vae", "pipeline.audio_vae.class": "AutoencoderKLMiniMaxH3Audio",
+		"pipeline.text_encoder": "text_encoder", "pipeline.text_encoder.class": "Qwen3VLForConditionalGeneration", "pipeline.text_encoder.vision": "true",
+		"pipeline.tokenizer": "tokenizer", "pipeline.tokenizer.class": "Qwen2TokenizerFast",
+	}}
+	d.Groups = append(d.Groups, &v1.TensorGroup{Id: "diffusion", Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION, Layer: -1, Bytes: 66 << 30})
+	file := func(p string, role v1.ArtifactRole) *v1.StoredArtifact {
+		return &v1.StoredArtifact{Artifact: &v1.Artifact{Path: p, Role: role}, Path: "/store/transformer/" + p}
+	}
+	model := &v1.StoredModel{Repo: "MiniMaxAI/MiniMax-H3", Group: "transformer", FormatId: "diffusers", Artifacts: []*v1.StoredArtifact{
+		file("model_index.json", v1.ArtifactRole_ARTIFACT_ROLE_CONFIG),
+		file("transformer/diffusion_pytorch_model-00001-of-00002.safetensors", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS),
+		file("transformer/diffusion_pytorch_model-00002-of-00002.safetensors", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS),
+		file("transformer/diffusion_pytorch_model.safetensors.index.json", v1.ArtifactRole_ARTIFACT_ROLE_INDEX),
+		file("vae/diffusion_pytorch_model.safetensors", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS),
+		file("audio_vae/diffusion_pytorch_model.safetensors", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS),
+		file("text_encoder/model-00001-of-00002.safetensors", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS),
+		file("text_encoder/model-00002-of-00002.safetensors", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS),
+		file("text_encoder/model.safetensors.index.json", v1.ArtifactRole_ARTIFACT_ROLE_INDEX),
+		file("tokenizer/tokenizer.json", v1.ArtifactRole_ARTIFACT_ROLE_TOKENIZER),
+	}}
+	params, err := Resolve(rt, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := rt.Launch(Launch{Name: "h3", Params: params, Artifacts: map[string]string{"weights": "/store/transformer/audio_vae/diffusion_pytorch_model.safetensors", "prepared_dir": prepared}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/sd-server"}, Descriptor: d, Model: model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.Join(cmd.Args, " ")
+	for _, want := range []string{"--diffusion-model /store/transformer/transformer/diffusion_pytorch_model.safetensors.index.json", "--vae /store/transformer/vae/diffusion_pytorch_model.safetensors", "--audio-vae /store/transformer/audio_vae/diffusion_pytorch_model.safetensors", "--llm /store/transformer/text_encoder/model.safetensors.index.json"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("missing %s in %s", want, line)
+		}
+	}
+	for _, unwanted := range []string{"--llm_vision", "--tokenizer", "--model "} {
+		if strings.Contains(line, unwanted) {
+			t.Errorf("unwanted %s in %s", unwanted, line)
+		}
+	}
+	params["vae"] = "/elsewhere/vae.safetensors"
+	cmd, err = rt.Launch(Launch{Name: "h3", Params: params, Artifacts: map[string]string{"weights": "/store/transformer/audio_vae/diffusion_pytorch_model.safetensors", "prepared_dir": prepared}, Install: Install{Path: "/bin/sd-server"}, Descriptor: d, Model: model})
+	if err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--vae /elsewhere/vae.safetensors") {
+		t.Fatalf("explicit file path changed: %v %v", cmd, err)
+	}
+	// Reject pipelines without stored files.
+	if _, err := rt.Launch(Launch{Name: "h3", Params: params, Artifacts: map[string]string{"weights": "/w", "prepared_dir": prepared}, Install: Install{Path: "/bin/sd-server"}, Descriptor: d}); err == nil {
+		t.Fatal("no stored model should be refused")
+	}
+}
+
 func TestSDCppPolicySolvesCompanions(t *testing.T) {
 	rt := SDCpp{}
 	params, _ := Resolve(rt, nil)
@@ -134,27 +195,40 @@ func TestSDCppPolicySolvesCompanions(t *testing.T) {
 		"t5xxl":            "/store/umt5-xxl-encoder-Q8_0.gguf",
 		"clip_vision":      "/store/clip_vision/clip_vision_h.safetensors",
 		"high_noise_model": "/store/diffusion_models/wan2.2_t2v_high_noise_14B_fp8.safetensors",
-		"llm":              "/store/Qwen2.5-VL-7B-Q8_0.gguf",
-		"llm_vision":       "/store/mmproj-Qwen2.5-VL-7B-F16.gguf",
 	}
 	for k, v := range want {
 		if s.Params.Str(k) != v {
 			t.Errorf("%s = %q, want %q", k, s.Params.Str(k), v)
 		}
 	}
-	if !s.Params.IsAuto("clip_l") || !s.Params.IsAuto("audio_encoder") || !s.Params.IsAuto("tokenizer") {
-		t.Fatal("parts nothing fits stay auto")
+	// Unlisted slots remain auto.
+	if !s.Params.IsAuto("clip_l") || !s.Params.IsAuto("audio_encoder") || !s.Params.IsAuto("tokenizer") || !s.Params.IsAuto("llm") || !s.Params.IsAuto("llm_vision") {
+		t.Fatal("parts the blueprint does not list stay auto")
 	}
 	if _, refusal := rt.Policy().States(s); refusal != "" {
 		t.Fatalf("wan with its parts should run: %s", refusal)
 	}
-	// Without the text encoder in the store the run is refused and says what to pull from where
+	// Select the required language encoder and its projector.
+	qwen := sdDescriptor("qwen_image", false, true)
+	qwen.Group = "qwen_image_fp8_e4m3fn"
+	qs := &estimate.Scope{Descriptor: qwen, Params: params.Clone(), Companions: companions, Repo: "Comfy-Org/Qwen-Image_ComfyUI"}
+	rt.Policy().Solve(qs)
+	if qs.Params.Str("llm") != "/store/Qwen2.5-VL-7B-Q8_0.gguf" || qs.Params.Str("llm_vision") != "/store/mmproj-Qwen2.5-VL-7B-F16.gguf" {
+		t.Fatalf("qwen image llm %q vision %q", qs.Params.Str("llm"), qs.Params.Str("llm_vision"))
+	}
+	if !qs.Params.IsAuto("vae") {
+		t.Fatal("wan's vae is not qwen image's")
+	}
+	// Missing encoders reject launch with source information.
 	bare := &estimate.Scope{Descriptor: sdDescriptor("wan", false, false), Params: params.Clone(), Companions: companions[:2], Repo: "Comfy-Org/Wan_2.2"}
 	rt.Policy().Solve(bare)
-	if _, refusal := rt.Policy().States(bare); !strings.Contains(refusal, "t5xxl") || !strings.Contains(refusal, "umt5_xxl") || strings.Contains(refusal, "vae (") {
+	if _, refusal := rt.Policy().States(bare); !strings.Contains(refusal, "t5xxl") || !strings.Contains(refusal, "UMT5-XXL") || !strings.Contains(refusal, "city96/umt5-xxl-encoder-gguf") || strings.Contains(refusal, "vae (") || strings.Contains(refusal, "high_noise_model") {
 		t.Fatalf("refusal %q", refusal)
 	}
-	// A checkpoint bundling its parts needs nothing, and a component is never run
+	if missing := sdMissing(bare); len(missing) != 1 || missing[0].Param != "t5xxl" || missing[0].Slot != "text_encoder.t5" {
+		t.Fatalf("missing %+v", missing)
+	}
+	// Bundled checkpoints need no companions. Standalone components cannot run.
 	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: sdDescriptor("sdxl", true, false), Params: params.Clone()}); refusal != "" {
 		t.Fatalf("sdxl bundles everything: %s", refusal)
 	}
@@ -165,7 +239,6 @@ func TestSDCppPolicySolvesCompanions(t *testing.T) {
 	}
 }
 
-// The highres upscaler is one of the fixed modes or an upscaler the store holds, refused otherwise at the estimate and at launch
 func TestSDCppHiresUpscaler(t *testing.T) {
 	rt := SDCpp{}
 	esrgan := stored("ai-forever/Real-ESRGAN", "RealESRGAN_x4plus", "upscaler", v1.ModelKind_MODEL_KIND_COMPONENT, "RealESRGAN_x4plus.pth")
@@ -196,7 +269,6 @@ func TestSDCppHiresUpscaler(t *testing.T) {
 	}
 }
 
-// The plan puts the denoiser on the device first and offloads the rest when the device is short
 func TestSDCppPlan(t *testing.T) {
 	rt := SDCpp{}
 	params, _ := Resolve(rt, nil)
@@ -209,7 +281,7 @@ func TestSDCppPlan(t *testing.T) {
 	if plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || plan.GetParams()["on_device"] != "3" || plan.GetOverheadBytes() == 0 || plan.GetCacheBytes() != 0 {
 		t.Fatalf("plan %+v", plan)
 	}
-	// A device holding the denoiser and the VAE but not the text encoder beside them keeps those two
+	// Keep the denoiser and VAE on device when the encoder does not fit.
 	d.Groups[2].Bytes = 4 << 30
 	small := &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "gpu0", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 20 << 30}, {Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 64 << 30}}}
 	plan, err = rt.Policy().Plan(estimate.Input{Descriptor: d, Host: small, Params: params})
@@ -217,7 +289,7 @@ func TestSDCppPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	if plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_PARTIAL || plan.GetParams()["on_device"] != "2" {
-		t.Fatalf("a short device keeps the denoiser and offloads the rest: %+v", plan)
+		t.Fatalf("expected denoiser on device and remaining components offloaded: %+v", plan)
 	}
 	// Compute memory follows the default size, larger sizes and no flash attention costing more
 	big := params.Clone()
@@ -232,7 +304,6 @@ func TestSDCppPlan(t *testing.T) {
 	}
 }
 
-// The log lines sd-server prints once loaded and after a run are read into measurements
 func TestSDCppMeasureAndProbes(t *testing.T) {
 	rt := SDCpp{}
 	m := rt.Measure([]string{
@@ -292,7 +363,6 @@ func TestSDCppMeasureAndProbes(t *testing.T) {
 	}
 }
 
-// Every runtime takes a bit, a bitmask names the runtimes that serve a format holding a kind, and nothing serves a component
 func TestRuntimeBits(t *testing.T) {
 	r := registry(t)
 	seen := map[uint32]bool{}

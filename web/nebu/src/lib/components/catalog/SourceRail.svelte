@@ -4,7 +4,6 @@
   import { groupLabel, sourceLabels, type ProviderGroup } from '$lib/catalog';
   import Tip from '../ui/Tip.svelte';
 
-  // Every provider in a list, its sources under it when it has several, each source edited from here and new ones added at the foot
   let {
     groups,
     kind,
@@ -15,7 +14,7 @@
   }: { groups: ProviderGroup[]; kind: SourceKind; sourceId: string; onChange: (kind: SourceKind, sourceId: string) => void; onEdit: (s: SourceStatus) => void; onAdd: () => void } = $props();
 
   const labels = $derived(sourceLabels(groups.flatMap((g) => g.sources)));
-  // Providers that can list come first, the ones that only open a typed name after
+  // List browsable providers first.
   const ordered = $derived([...groups].sort((a, b) => Number(lists(b)) - Number(lists(a))));
 
   function lists(g: ProviderGroup): boolean {

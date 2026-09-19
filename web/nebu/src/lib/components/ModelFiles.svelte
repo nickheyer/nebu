@@ -13,9 +13,6 @@
   import SortTh from './ui/SortTh.svelte';
   import Menu from './ui/Menu.svelte';
 
-  // Every file of a repository as the source lists it, walked a directory at a time, each saying what it is
-  // for and which weights it belongs to, with a mark on the ones already in the store; every column
-  // orders the listing, and each row carries what to do with the file
   let {
     files,
     stored = new Set<string>(),
@@ -37,7 +34,6 @@
     file?: Artifact;
   }
 
-  // What sits in the open directory: folders and files ordered by the column chosen, folders first when ordered by name
   const rows = $derived.by(() => {
     const prefix = dir ? dir + '/' : '';
     const folders = new Map<string, Row>();
@@ -87,7 +83,6 @@
     [ArtifactRole.TEMPLATE]: FileText,
     [ArtifactRole.INDEX]: FileText
   };
-  // Weights and their companions say which variant they belong to, other files stand alone
   function belongs(a: Artifact): string {
     return a.role === ArtifactRole.WEIGHTS || a.role === ArtifactRole.PROJECTOR || a.role === ArtifactRole.DRAFT ? weightsName(a.group, a.formatId) : '';
   }

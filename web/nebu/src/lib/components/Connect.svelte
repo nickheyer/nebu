@@ -8,11 +8,9 @@
   import Segmented from './ui/Segmented.svelte';
   import Copy from './ui/Copy.svelte';
 
-  // How clients reach the gateway in the dialect picked
   let dialect = $state<string>('openai');
 
   const status = $derived(cached.gateway);
-  // Every address the daemon answers on, as the daemon reports it, the shared one being the API listener itself
   const origins = $derived((status?.listeners ?? []).map((l) => ({ url: listenerUrl(l.addr, !!status?.tls), shared: l.shared })));
   const auth = $derived(!!status?.auth);
   const ready = $derived([...live.routes.values()].filter((r) => r.state === RouteState.READY).sort(byName((r) => r.name)));
@@ -21,7 +19,7 @@
   const origin = $derived(origins[0]?.url ?? '');
   const curl = $derived(origin ? chosen.curl(origin, example, auth) : '');
 
-  // The request total only moves with traffic, so the card reads it once when shown
+  // Capture the request total when the card opens.
   $effect(() => {
     void refreshCached();
   });

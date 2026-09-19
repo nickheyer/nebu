@@ -26,7 +26,7 @@ func (r *runner) selfID() string {
 	return r.self.ID
 }
 
-// Decides what one message gets: nothing, a reaction, an answer from a persona, a command, or an automation
+// Routes messages to reactions, persona replies, commands, or automations.
 func (r *runner) onMessage(shardID int, m *discordgo.Message) {
 	if m == nil || m.Author == nil || m.Author.ID == r.selfID() || r.selfID() == "" {
 		return
@@ -74,7 +74,7 @@ func (r *runner) onMessage(shardID int, m *discordgo.Message) {
 	go r.reply(sess, m, p, content)
 }
 
-// Whether the bot may answer in this guild, channel, and to this person
+// Checks guild, channel, and user permissions.
 func (r *runner) allowed(sess session, m *discordgo.Message) bool {
 	e := r.spec.GetEngagement()
 	if m.GuildID != "" && len(e.GetGuildIds()) > 0 && !contains(e.GetGuildIds(), m.GuildID) {
@@ -109,7 +109,7 @@ func (r *runner) allowed(sess session, m *discordgo.Message) bool {
 	return false
 }
 
-// The parent of a thread, empty for a channel that is not one
+// Returns the parent channel ID for a thread, or empty.
 func (r *runner) parentOf(sess session, channelID string) string {
 	c, err := sess.Channel(channelID)
 	if err != nil || !c.IsThread() {
@@ -127,7 +127,7 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// The content with mentions of the bot removed and others turned into names
+// Removes bot mentions and replaces other mentions with names.
 func (r *runner) clean(m *discordgo.Message) string {
 	self := r.selfID()
 	names := map[string]string{}
@@ -147,7 +147,7 @@ func (r *runner) clean(m *discordgo.Message) string {
 	return strings.TrimSpace(strings.Join(strings.Fields(out), " "))
 }
 
-// The persona a message goes to and whether it was addressed: a mention, a reply to the bot, a direct message, or a wake word
+// Selects a persona from mentions, replies, DMs, or wake words.
 func (r *runner) pick(m *discordgo.Message, content string) (*v1.Persona, bool) {
 	c := r.channel(m.ChannelID)
 	r.mu.Lock()
@@ -182,7 +182,7 @@ func (r *runner) pick(m *discordgo.Message, content string) (*v1.Persona, bool) 
 	return p, m.GuildID == ""
 }
 
-// Whether a word stands whole in the text
+// Matches whole words.
 func hasWord(text, word string) bool {
 	if word == "" {
 		return false
@@ -209,7 +209,7 @@ func isWordByte(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_' || b >= 0x80
 }
 
-// Whether a message came through one of this bot's persona webhooks
+// Reports whether a persona webhook sent the message.
 func (r *runner) ownWebhook(m *discordgo.Message) bool {
 	if m.WebhookID == "" {
 		return false
@@ -224,7 +224,7 @@ func (r *runner) ownWebhook(m *discordgo.Message) bool {
 	return false
 }
 
-// Whether the messages before this one are a run of bots as long as the bot tolerates
+// Checks the limit on consecutive bot messages.
 func (r *runner) chainTooLong(sess session, m *discordgo.Message) bool {
 	limit := int(r.spec.GetEngagement().GetMaxBotChain())
 	before, err := sess.Messages(m.ChannelID, limit-1, m.ID)
@@ -245,7 +245,7 @@ func (r *runner) chainTooLong(sess session, m *discordgo.Message) bool {
 	return false
 }
 
-// Whether the channel and the person are past their cooldowns
+// Checks channel and user cooldowns.
 func (r *runner) cooldownOK(m *discordgo.Message) bool {
 	e := r.spec.GetEngagement()
 	c := r.channel(m.ChannelID)
@@ -269,7 +269,7 @@ func (r *runner) markReplied(m *discordgo.Message) {
 	r.mu.Unlock()
 }
 
-// Takes the channel for one answer, false when one is already being made
+// Claims the channel for a reply, returning false if busy.
 func (r *runner) claim(channelID string) bool {
 	c := r.channel(channelID)
 	r.mu.Lock()
@@ -317,7 +317,7 @@ func (r *runner) wait(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// Answers a message as a persona, the way that persona is set to answer
+// Replies using the persona's settings.
 func (r *runner) reply(sess session, m *discordgo.Message, p *v1.Persona, content string) {
 	if !r.claim(m.ChannelID) {
 		return
@@ -392,7 +392,7 @@ func (r *runner) reply(sess session, m *discordgo.Message, p *v1.Persona, conten
 		chunks = chunk(text, discordMessageMax)
 	}
 	for i, piece := range chunks {
-		// Each message a person sends ends the casual way, not only the last
+		// Apply casual formatting to each chunk.
 		if h.GetEnabled() && h.GetCasual() {
 			piece = casual(piece)
 		}
@@ -417,7 +417,7 @@ func (r *runner) reply(sess session, m *discordgo.Message, p *v1.Persona, conten
 	r.activity("info", "reply", fmt.Sprintf("answered %s in %d messages", m.Author.DisplayName(), len(chunks)), m.GuildID, m.ChannelID, p.GetName(), ans.trace)
 }
 
-// Answers by posting once and editing as the text streams in, the rest posted after when it runs past one message
+// Streams a reply by editing one message, then posts any overflow.
 func (r *runner) streamed(ctx context.Context, sp *speaker, m *discordgo.Message, p *v1.Persona, model string, chat *gateway.Chat, ref *discordgo.MessageReference) {
 	var mu sync.Mutex
 	var buf strings.Builder
@@ -499,7 +499,7 @@ func (r *runner) streamed(ctx context.Context, sp *speaker, m *discordgo.Message
 	r.activity("info", "reply", fmt.Sprintf("answered %s, streamed", m.Author.DisplayName()), m.GuildID, m.ChannelID, p.GetName(), ans.trace)
 }
 
-// Records a failed answer; a persona that passes for a person keeps quiet, any other says what went wrong
+// Records reply failures. Humanized personas suppress error messages.
 func (r *runner) problem(sess session, m *discordgo.Message, p *v1.Persona, err error, trace string) {
 	r.count(func(s *v1.BotStatus) { s.Errors++ })
 	if p.GetHumanize().GetEnabled() {
@@ -510,7 +510,7 @@ func (r *runner) problem(sess session, m *discordgo.Message, p *v1.Persona, err 
 	sess.SendMessage(m.ChannelID, &discordgo.MessageSend{Content: "⚠️ " + err.Error(), Reference: &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID, GuildID: m.GuildID}, AllowedMentions: &discordgo.MessageAllowedMentions{}})
 }
 
-// Shapes an answer the persona's way: no echoed name prefix, casual when asked
+// Removes echoed names and applies optional casual formatting.
 func (r *runner) style(p *v1.Persona, text string) string {
 	text = strings.TrimSpace(text)
 	prefix := p.GetName() + ":"
@@ -523,14 +523,14 @@ func (r *runner) style(p *v1.Persona, text string) string {
 	return text
 }
 
-// One turn as the channel history gives it, before roles are merged
+// A history turn before adjacent roles are merged.
 type turn struct {
 	role  string
 	text  string
 	parts []gateway.Part
 }
 
-// Reads the channel back into a chat the persona answers: its prompt, the setting, the history, and the message
+// Builds chat input from the persona prompt, context, history, and message.
 func (r *runner) buildChat(ctx context.Context, sess session, p *v1.Persona, m *discordgo.Message, content string) (*gateway.Chat, error) {
 	mem := r.spec.GetMemory()
 	c := r.channel(m.ChannelID)
@@ -605,7 +605,7 @@ func (r *runner) buildChat(ctx context.Context, sess session, p *v1.Persona, m *
 	return chat, nil
 }
 
-// A chat of the prompt, the setting, and one message, for posts made by hand or on a schedule
+// Builds chat input for manual and scheduled posts.
 func (r *runner) freshChat(p *v1.Persona, sess session, channelID, content string) *gateway.Chat {
 	m := &discordgo.Message{ChannelID: channelID}
 	if c, err := sess.Channel(channelID); err == nil {
@@ -627,7 +627,7 @@ func attachmentWord(a *discordgo.MessageAttachment) string {
 	return "attachment"
 }
 
-// A message's text with its author's name in front, when names are kept
+// Prefixes the author's name when configured.
 func (r *runner) named(m *discordgo.Message, text string) string {
 	if !r.spec.GetMemory().GetIncludeNames() || m.Author == nil {
 		return text
@@ -645,7 +645,7 @@ func displayName(m *discordgo.Message) string {
 	return m.Author.DisplayName()
 }
 
-// Joins turns of one role that follow each other, since chat templates expect roles to alternate
+// Merges adjacent turns with the same role for alternating-role templates.
 func mergeTurns(turns []turn) []turn {
 	var out []turn
 	for _, t := range turns {
@@ -662,7 +662,7 @@ func mergeTurns(turns []turn) []turn {
 	return out
 }
 
-// Drops the oldest turns until the text fits, the last turn always kept
+// Trims oldest turns to the text limit, keeping the last turn.
 func trimTurns(turns []turn, maxChars int) []turn {
 	if maxChars <= 0 || len(turns) == 0 {
 		return turns
@@ -678,7 +678,7 @@ func trimTurns(turns []turn, maxChars int) []turn {
 	return turns
 }
 
-// The persona's prompt with where it is and when
+// Adds location and time to the persona prompt.
 func (r *runner) systemPrompt(sess session, p *v1.Persona, m *discordgo.Message) string {
 	var b bytes.Buffer
 	if prompt := strings.TrimSpace(p.GetSystemPrompt()); prompt != "" {
@@ -717,12 +717,12 @@ func (r *runner) systemPrompt(sess session, p *v1.Persona, m *discordgo.Message)
 	}
 	fmt.Fprintf(&b, "The time is %s. ", now.Format("Monday, January 2 2006, 15:04 MST"))
 	if r.spec.GetMemory().GetIncludeNames() {
-		b.WriteString("Messages from other people start with their name and a colon; never start your own message with a name, and answer as yourself.")
+		b.WriteString("Other people's messages start with their name and a colon. Reply as yourself without a name prefix.")
 	}
 	return strings.TrimSpace(b.String())
 }
 
-// Posts through the bot itself or through a channel webhook wearing the persona's name and face
+// Posts through the bot or the persona's webhook.
 type speaker struct {
 	r        *runner
 	sess     session
@@ -730,11 +730,11 @@ type speaker struct {
 	channel  string
 	threadID string
 	hook     *db.BotChannel
-	// Who a webhook persona names when asked to reply, since a webhook cannot quote
+	// Mention target for webhook replies, which cannot quote messages.
 	quoteAuthor string
 }
 
-// The way to speak in a channel as a persona, the webhook found or made when the persona uses one
+// Returns a channel sender, creating the persona webhook if needed.
 func (r *runner) speaker(sess session, p *v1.Persona, channelID string) (*speaker, error) {
 	sp := &speaker{r: r, sess: sess, p: p, channel: channelID}
 	if !p.GetWebhook() {
@@ -752,7 +752,7 @@ func (r *runner) speaker(sess session, p *v1.Persona, channelID string) (*speake
 	return sp, nil
 }
 
-// The bot's webhook on a channel, from the channel row, the channel's own list, or made new
+// Finds the bot's stored or existing channel webhook, or creates one.
 func (r *runner) webhook(sess session, channelID string) (*db.BotChannel, error) {
 	c := r.channel(channelID)
 	r.mu.Lock()
@@ -765,7 +765,7 @@ func (r *runner) webhook(sess session, channelID string) (*db.BotChannel, error)
 	hooks, err := sess.Webhooks(channelID)
 	if err != nil {
 		if missingPermission(err) {
-			return nil, fmt.Errorf("persona %s speaks through a webhook, which needs the Manage Webhooks permission in this channel", r.name)
+			return nil, fmt.Errorf("persona %s needs Manage Webhooks permission in this channel", r.name)
 		}
 		return nil, fmt.Errorf("webhooks could not be listed: %s", describeREST(err))
 	}
@@ -795,7 +795,7 @@ func (r *runner) webhook(sess session, channelID string) (*db.BotChannel, error)
 	return &row, nil
 }
 
-// Forgets a webhook Discord no longer knows
+// Clears a deleted webhook.
 func (r *runner) forgetWebhook(channelID string) {
 	c := r.channel(channelID)
 	r.mu.Lock()
@@ -812,14 +812,14 @@ func (sp *speaker) send(text string, files []file, ref *discordgo.MessageReferen
 	if sp.hook == nil {
 		return sp.sess.SendMessage(sp.channel, &discordgo.MessageSend{Content: text, Files: attached, Reference: ref, AllowedMentions: &discordgo.MessageAllowedMentions{Parse: []discordgo.AllowedMentionType{discordgo.AllowedMentionTypeUsers}}})
 	}
-	// A webhook cannot reply, so a quoted answer names the person instead
+	// Webhooks mention the recipient because they cannot quote replies.
 	if ref != nil && sp.quoteAuthor != "" {
 		text = "<@" + sp.quoteAuthor + "> " + text
 	}
 	params := &discordgo.WebhookParams{Content: text, Username: sp.p.GetName(), AvatarURL: sp.p.GetAvatarUrl(), Files: attached, AllowedMentions: &discordgo.MessageAllowedMentions{Parse: []discordgo.AllowedMentionType{discordgo.AllowedMentionTypeUsers}}}
 	msg, err := sp.sess.ExecuteWebhook(sp.hook.WebhookID, sp.hook.WebhookToken, sp.threadID, params)
 	if err != nil && unknownWebhook(err) {
-		// The webhook was deleted on Discord's side; make another and try once more
+		// Recreate the deleted webhook and retry once.
 		sp.r.forgetWebhook(sp.hook.ChannelID)
 		hook, again := sp.r.webhook(sp.sess, sp.hook.ChannelID)
 		if again != nil {
@@ -845,7 +845,7 @@ func (sp *speaker) edit(messageID, text string) error {
 	return err
 }
 
-// Posts a persona's text and files in a channel, the way sendNow and automations post
+// Posts persona text and files for manual posts and automations.
 func (r *runner) speak(sess session, p *v1.Persona, channelID, text string, files []file, ref *discordgo.MessageReference) (*discordgo.Message, error) {
 	sp, err := r.speaker(sess, p, channelID)
 	if err != nil {

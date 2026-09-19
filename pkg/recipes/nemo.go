@@ -31,8 +31,8 @@ func (NeMo) Facts() []string { return []string{"device.vendor", "device.compute_
 
 func (NeMo) Vars() []Var {
 	return []Var{
-		{Name: "version", Label: "Version", Description: "The nemo-export-deploy version on PyPI, the release tag when empty"},
-		{Name: "converter", Label: "Converter version", Default: "2.5.3", Description: "The nemo_toolkit version whose checkpoint converter is installed"},
+		{Name: "version", Label: "Version", Description: "PyPI version, release tag when empty"},
+		{Name: "converter", Label: "Converter version", Default: "2.5.3", Description: "nemo_toolkit converter version"},
 	}
 }
 
@@ -40,7 +40,7 @@ func (NeMo) Variants() []Variant {
 	return []Variant{
 		{
 			ID:          "py312",
-			Description: "Python 3.12, the interpreter the Export-Deploy wheels are built for",
+			Description: "Python 3.12 for Export-Deploy wheels",
 			Tools:       []string{"python3.12"},
 			Applies:     func(*v1.HostProfile) bool { return true },
 			Vars:        func(*v1.HostProfile) map[string]string { return map[string]string{"python": "python3.12"} },

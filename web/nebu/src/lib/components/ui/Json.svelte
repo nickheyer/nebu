@@ -2,7 +2,6 @@
   import { prettyJson } from '$lib/format';
   import Copy from './Copy.svelte';
 
-  // A body shown as formatted JSON when it is JSON, copyable
   let { text, height = 'max-h-96', empty = 'Empty' }: { text: string; height?: string; empty?: string } = $props();
   const shown = $derived(prettyJson(text));
 </script>

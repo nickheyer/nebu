@@ -48,7 +48,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// What the daemon reports as its version, set by the CLI from build info
+// Daemon version, supplied by CLI build info.
 var Version = "dev"
 
 const (
@@ -57,7 +57,7 @@ const (
 	readHeaderTimeout = 10 * time.Second
 )
 
-// Running set of managers behind one handler
+// Daemon managers and API handler.
 type Daemon struct {
 	Config    *v1.Config
 	DB        *db.DB
@@ -141,7 +141,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	if err != nil {
 		return nil, err
 	}
-	// Every failure past this point closes the store on the way out
+	// Close the store if initialization fails.
 	defer func() {
 		if err != nil {
 			store.Close()
@@ -157,14 +157,14 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		log.Warn("schema drift, the database and schema.sql disagree, run make migrate-reset", "change", line)
 	}
 	bus := events.New()
-	// Seeded defaults and config entries become rows here, the registry follows the rows from then on
+	// Seed source rows from defaults and config, then load the registry from storage.
 	srcMgr := sources.NewManager(store, bus, log, filepath.Join(cfg.GetCacheDir(), "sources"))
 	if err = srcMgr.Load(context.Background(), cfg.GetSources()); err != nil {
 		return nil, err
 	}
 	srcs := srcMgr.Registry
 	base, cancel := context.WithCancel(context.Background())
-	// Every re-probe reaches the UI, so device meters follow launches and stops
+	// Publish probe results to update UI device meters.
 	prober.OnProbe = func(profile *v1.HostProfile) {
 		bus.Publish(v1.EventKind_EVENT_KIND_HOST, v1.EventAction_EVENT_ACTION_UPDATED, profile.GetHostname(), profile)
 	}
@@ -179,7 +179,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		cancel:  cancel,
 		base:    base,
 	}
-	// Settings are rows, loaded once and followed through events
+	// Load settings and subscribe to updates.
 	d.Settings = &settings.Manager{DB: store, Events: bus}
 	if err = d.Settings.Load(context.Background()); err != nil {
 		return nil, err
@@ -188,7 +188,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	if err != nil {
 		return nil, err
 	}
-	// Every plan, the fit table's and a run's, applies the same learned correction
+	// Use the same calibration for estimates and launches.
 	d.Inspector = &inspect.Inspector{
 		Sources:     srcs,
 		Formats:     fmts,
@@ -245,7 +245,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	}
 	d.Instances.Slots = d.Slots
 	d.Inspector.Constrain = d.Instances
-	// Eviction spares what is running and what a slot would relaunch
+	// Protect running models and slot relaunch targets from eviction.
 	d.Puller.Keep = func(m *v1.StoredModel) bool {
 		same := func(source, repo, group string) bool {
 			return source == m.GetSourceId() && repo == m.GetRepo() && group == m.GetGroup()
@@ -265,7 +265,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	d.Notifier = &notify.Notifier{Webhooks: cfg.GetNotify().GetWebhooks(), Events: bus, Log: log}
 	d.Gateway = gateway.New(d.Routes, cfg.GetGateway().GetApiKeys(), cfg.GetGateway().GetCorsOrigins(), cfg.GetGateway().GetPolicy(), bus, log)
 	d.Gateway.SetVersion(Version)
-	// Bots are rows too, each enabled one connected once the daemon serves
+	// Load bots now and connect enabled bots when serving starts.
 	d.Bots = bots.New(base, store, d.Gateway, bus, log, cfg.GetDiscord().GetFfmpeg())
 	if err = d.Bots.Load(context.Background()); err != nil {
 		return nil, err
@@ -422,7 +422,7 @@ func (d *Daemon) tlsConfig() (*tls.Config, error) {
 	return &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2", "http/1.1"}, MinVersion: tls.VersionTLS12}, nil
 }
 
-// Says so when a listener reaches beyond this machine without TLS or a token
+// Warns about public listeners without TLS or authentication.
 func (d *Daemon) warnExposure(secure bool) {
 	for _, addr := range []string{d.Config.GetListen(), d.Config.GetGateway().GetListen()} {
 		host, _, err := net.SplitHostPort(addr)
@@ -434,10 +434,10 @@ func (d *Daemon) warnExposure(secure bool) {
 			continue
 		}
 		if !secure {
-			d.Log.Warn("listening beyond loopback over plain http, set tls.cert_file and tls.key_file or front it with a reverse proxy", "addr", addr)
+			d.Log.Warn("public HTTP listener. Configure tls.cert_file and tls.key_file or a reverse proxy", "addr", addr)
 		}
 		if addr == d.Config.GetListen() && d.Config.GetAuth().GetToken() == "" {
-			d.Log.Warn("the api listens beyond loopback with no auth.token, anyone who can reach it controls this daemon", "addr", addr)
+			d.Log.Warn("public API listener without auth.token. Anyone with network access can control the daemon", "addr", addr)
 		}
 		shared := d.Config.GetGateway().GetListen() == "" && addr == d.Config.GetListen()
 		if (addr == d.Config.GetGateway().GetListen() || shared) && len(d.Config.GetGateway().GetApiKeys()) == 0 {
@@ -458,23 +458,23 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 			return err
 		}
 	}
-	// The notifier lives as long as the daemon, not as long as one Serve call
+	// Keep the notifier active for the daemon's lifetime.
 	d.background.Add(1)
 	go func() {
 		defer d.background.Done()
 		d.Notifier.Run(d.base)
 	}()
-	// Models pulled before descriptors said what kind they are get that read off their headers
+	// Backfill model kinds for older stored descriptors.
 	d.background.Add(1)
 	go func() {
 		defer d.background.Done()
 		d.Instances.RefreshDescriptors(d.base)
 	}()
-	// A fresh daemon checks the host once so the tasks list says what needs attention
+	// Run a host check at startup.
 	if _, err := d.Doctor.Start(ctx); err != nil {
 		d.Log.Warn("host check failed to start", "err", err)
 	}
-	// Request contexts hang off this one so open streams end when serving stops
+	// Cancel request contexts when serving stops.
 	requests, endRequests := context.WithCancel(context.Background())
 	defer endRequests()
 	base := func(net.Listener) context.Context { return requests }
@@ -500,7 +500,7 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 			result = err
 		}
 	}
-	// Streams and in flight calls end first, then listeners close, then managers stop
+	// Stop requests and streams before listeners and managers.
 	endRequests()
 	stop, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()

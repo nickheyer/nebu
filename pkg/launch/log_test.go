@@ -28,7 +28,7 @@ func TestClean(t *testing.T) {
 			t.Errorf("Clean(%q) is not valid UTF-8", in)
 		}
 	}
-	// The whole point: a batch of cleaned lines marshals as a proto message
+	// Cleaned lines must marshal as protobuf strings.
 	l := NewLog(4)
 	l.Write("ok\xff")
 	l.Write("\x1b[1mbold")

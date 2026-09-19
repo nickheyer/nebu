@@ -13,7 +13,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/triage"
 )
 
-// SGLang, serving safetensors checkpoints with prefix caching on NVIDIA GPUs, run as a module of its virtual environment
+// SGLang serves safetensors models with prefix caching on NVIDIA GPUs.
 type SGLang struct{}
 
 func (SGLang) ID() string   { return "sglang" }
@@ -37,7 +37,7 @@ func (SGLang) Unmet(h *v1.HostProfile) []string {
 
 func (SGLang) Methods() []Method {
 	return []Method{
-		{ID: "source", Description: "Installs the sglang wheel from PyPI into its own virtual environment", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "sglang"},
+		{ID: "source", Description: "Install sglang from PyPI in a virtual environment", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "sglang"},
 	}
 }
 

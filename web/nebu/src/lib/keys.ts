@@ -1,4 +1,4 @@
-// A Svelte action that focuses its element when / is pressed outside any field
+// Focus on / unless the user is typing in another field.
 export function slashFocus(node: HTMLElement) {
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;

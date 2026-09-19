@@ -2,7 +2,6 @@
   export interface SelectItem {
     value: string;
     label: string;
-    // A short line beside the label, muted
     detail?: string;
     disabled?: boolean;
     group?: string;
@@ -13,8 +12,6 @@
   import { Select } from 'bits-ui';
   import { Check, ChevronDown } from '@lucide/svelte';
 
-  // One select for every choice, an empty value allowed as a real option; the trigger stays blank while
-  // nothing is chosen
   let {
     value = $bindable(''),
     items,
@@ -33,16 +30,14 @@
     mono?: boolean;
     disabled?: boolean;
     size?: 'sm' | 'md';
-    // Read by screen readers when no visible label points at the select
     label?: string;
-    // Called with the new value, for callers that do not bind
     onchange?: (value: string) => void;
-    // The empty value means nothing chosen, so its label reads as a placeholder
+    // Display the empty option as a placeholder.
     unset?: boolean;
     class?: string;
   } = $props();
 
-  // The library treats an empty value as nothing chosen, so empty travels under a sentinel
+  // Use a sentinel for empty values because the library reserves empty for no selection.
   const NONE = '__none__';
   const wrap = (v: string) => (v === '' ? NONE : v);
   const unwrap = (v: string) => (v === NONE ? '' : v);

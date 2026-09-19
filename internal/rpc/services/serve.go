@@ -124,7 +124,7 @@ func (s *GatewayService) ListRoutes(ctx context.Context, req *connect.Request[v1
 	return reply(&v1.ListRoutesResponse{Routes: s.gateway.Table().List()}, nil)
 }
 
-// Aliases a name onto a ready instance, slot names being the slot's own
+// Adds an alias for a ready instance, reserving slot names for slots.
 func (s *GatewayService) SetRoute(ctx context.Context, req *connect.Request[v1.SetRouteRequest]) (*connect.Response[v1.SetRouteResponse], error) {
 	in, err := s.instances.Get(req.Msg.GetInstanceId())
 	if err != nil {
@@ -163,7 +163,7 @@ func (s *GatewayService) DeleteRoute(ctx context.Context, req *connect.Request[v
 	return reply(&v1.DeleteRouteResponse{Route: route}, nil)
 }
 
-// Refuses a route name a slot owns
+// Rejects route names owned by slots.
 func (s *GatewayService) slotless(name, why string) error {
 	if r, ok := s.gateway.Table().Lookup(name); ok && r.GetSlotId() != "" {
 		return wrap(fmt.Errorf("%w: %s %s", runtimes.ErrParam, name, why))
@@ -228,7 +228,7 @@ func (s *EventService) WatchEvents(ctx context.Context, req *connect.Request[v1.
 			if err := stream.Send(&v1.WatchEventsResponse{Event: ev}); err != nil {
 				return err
 			}
-			// A dropped event may have been a delete, so the client must resync from a snapshot
+			// Dropped deletes require clients to reload a snapshot.
 			if sub.Dropped() > 0 {
 				return connect.NewError(connect.CodeResourceExhausted, errors.New("event stream fell behind, subscribe again with a snapshot"))
 			}

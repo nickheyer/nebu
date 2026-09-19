@@ -33,24 +33,24 @@ var (
 const (
 	// Activity lines kept per bot
 	activityMax = 500
-	// How often at most a bot's counters and latencies reach the stream
+	// Minimum interval between counter and latency updates.
 	statusFlush = time.Second
-	// The permissions the invite link asks for: view channels, send messages and in threads, embed links, attach files,
-	// read history, add reactions, use external emojis, and manage webhooks for personas
+	// Invite permissions: view channels, send messages and thread replies, embed links,
+	// attach files, read history, react, use external emojis, and manage persona webhooks.
 	invitePermissions = 1<<10 | 1<<11 | 1<<38 | 1<<14 | 1<<15 | 1<<16 | 1<<6 | 1<<18 | 1<<29
 )
 
-// Owns every bot: the rows are the truth, a runner stands behind each enabled one, and every change reaches the UI as an event
+// Manages stored bots, active runners, and UI events.
 type Manager struct {
 	DB      *db.DB
 	Gateway *gateway.Gateway
 	Events  *events.Bus
 	Log     *slog.Logger
-	// The ffmpeg binary that samples frames from video attachments, found on PATH when empty
+	// ffmpeg path for video sampling. Empty uses PATH.
 	FFmpeg string
-	// Opens a shard's session, discordgo unless a test says otherwise
+	// Session factory, replaced in tests.
 	dial dialer
-	// Asks Discord who a token belongs to, over REST unless a test says otherwise
+	// Token lookup, replaced in tests.
 	probe func(ctx context.Context, token string) (*v1.ProbeBotTokenResponse, error)
 
 	mu   sync.Mutex
@@ -61,11 +61,11 @@ type Manager struct {
 type entry struct {
 	bot   *v1.Bot
 	token string
-	// Why the stored settings no longer pass validation, empty when they do; such a bot is not connected until fixed
+	// Validation error for stored settings. Invalid bots stay disconnected.
 	invalid  string
 	run      *runner
 	activity []*v1.BotActivity
-	// A status publish waiting to go out, so counters do not flood the stream
+	// Pending status update for throttled publishing.
 	flush *time.Timer
 }
 
@@ -77,7 +77,7 @@ func New(base context.Context, store *db.DB, gw *gateway.Gateway, bus *events.Bu
 	return &Manager{DB: store, Gateway: gw, Events: bus, Log: log, FFmpeg: ffmpeg, dial: dialDiscord, probe: probeToken, bots: map[string]*entry{}, base: base}
 }
 
-// Reads every bot, none connected yet
+// Loads bots without connecting them.
 func (m *Manager) Load(ctx context.Context) error {
 	rows, err := m.DB.ListBots(ctx)
 	if err != nil {
@@ -89,7 +89,7 @@ func (m *Manager) Load(ctx context.Context) error {
 		e := &entry{bot: r.Bot, token: r.Token}
 		r.Bot.State = v1.BotState_BOT_STATE_STOPPED
 		r.Bot.Status = &v1.BotStatus{}
-		// Settings saved under an older rule that no longer pass are shown as a failure, never run half read
+		// Mark invalid stored settings as failed.
 		if err := normalize(r.Bot.GetName(), r.Bot.Spec); err != nil {
 			e.invalid = err.Error()
 			r.Bot.State, r.Bot.Error = v1.BotState_BOT_STATE_FAILED, "the stored settings no longer pass validation, save them again: "+err.Error()
@@ -220,7 +220,7 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateBotRequest) (*v1.Bot
 	return proto.Clone(bot).(*v1.Bot), nil
 }
 
-// Replaces a bot's settings, a running bot reconnecting with them
+// Updates settings and reconnects a running bot.
 func (m *Manager) Update(ctx context.Context, req *v1.UpdateBotRequest) (*v1.Bot, error) {
 	m.mu.Lock()
 	e, err := m.lookupLocked(req.GetId())
@@ -255,7 +255,7 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateBotRequest) (*v1.Bot
 		return nil, err
 	}
 	e.bot, e.token, e.invalid = next, token, ""
-	// A running bot takes the new settings by reconnecting; one turned off stops; one turned on starts
+	// Reconnect with new settings or start/stop when enabled changes.
 	old := e.run
 	e.run = nil
 	m.publishLocked(e, v1.EventAction_EVENT_ACTION_UPDATED)
@@ -354,7 +354,7 @@ func (m *Manager) Stop(ctx context.Context, ref string) (*v1.Bot, error) {
 	return proto.Clone(e.bot).(*v1.Bot), nil
 }
 
-// Lists what a bot did lately, newest first
+// Lists recent bot activity, newest first.
 func (m *Manager) Activity(ref string, limit int) ([]*v1.BotActivity, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -387,7 +387,7 @@ func (m *Manager) Send(ctx context.Context, req *v1.SendBotMessageRequest) (*v1.
 	return r.sendNow(ctx, req)
 }
 
-// Asks Discord who a token belongs to, a bot's stored token when the request names the bot instead
+// Looks up a token or a named bot's stored token with Discord.
 func (m *Manager) Probe(ctx context.Context, req *v1.ProbeBotTokenRequest) (*v1.ProbeBotTokenResponse, error) {
 	token := strings.TrimSpace(req.GetToken())
 	if token == "" && req.GetBotId() != "" {
@@ -428,7 +428,7 @@ func (m *Manager) startLocked(e *entry) {
 	go r.run()
 }
 
-// Records a state and publishes the bot, the error kept beside a failure
+// Stores and publishes bot state, including any error.
 func (m *Manager) setStateLocked(e *entry, state v1.BotState, errText string) {
 	e.bot.State, e.bot.Error = state, errText
 	m.publishLocked(e, v1.EventAction_EVENT_ACTION_UPDATED)
@@ -442,7 +442,7 @@ func (m *Manager) publishLocked(e *entry, action v1.EventAction) {
 	m.Events.Publish(v1.EventKind_EVENT_KIND_BOT, action, e.bot.GetId(), e.bot)
 }
 
-// Changes a bot's state from its runner, ignored once the runner was replaced
+// Applies state updates only from the bot's current runner.
 func (m *Manager) setState(r *runner, state v1.BotState, errText string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -453,7 +453,7 @@ func (m *Manager) setState(r *runner, state v1.BotState, errText string) {
 	m.setStateLocked(e, state, errText)
 }
 
-// Changes a bot's status from its runner, published once per flush interval
+// Applies runner status updates, throttled by the flush interval.
 func (m *Manager) status(r *runner, fn func(*v1.BotStatus)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -478,7 +478,7 @@ func (m *Manager) status(r *runner, fn func(*v1.BotStatus)) {
 	}
 }
 
-// Keeps one line of activity and streams it
+// Records and publishes an activity entry.
 func (m *Manager) record(r *runner, a *v1.BotActivity) {
 	a.BotId, a.At = r.id, timestamppb.Now()
 	m.mu.Lock()
@@ -505,7 +505,7 @@ func (m *Manager) record(r *runner, a *v1.BotActivity) {
 	m.Events.Publish(v1.EventKind_EVENT_KIND_BOT_ACTIVITY, v1.EventAction_EVENT_ACTION_CREATED, r.id, a)
 }
 
-// Asks Discord who a token belongs to and how many shards it recommends
+// Looks up the bot identity and recommended shard count.
 func probeToken(ctx context.Context, token string) (*v1.ProbeBotTokenResponse, error) {
 	s, err := discordgo.New("Bot " + token)
 	if err != nil {
@@ -540,7 +540,7 @@ func probeToken(ctx context.Context, token string) (*v1.ProbeBotTokenResponse, e
 	}, nil
 }
 
-// The link that adds a bot to a server with the permissions personas need
+// Bot invite URL with persona permissions.
 func inviteURL(appID string) string {
 	if appID == "" {
 		return ""

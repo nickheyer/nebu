@@ -50,7 +50,6 @@
   const swapTask = $derived(slot ? taskFor('swap', { slot: slot.id }) : undefined);
   const install = $derived(instance?.installId ? live.installs.get(instance.installId) : undefined);
   const devices = $derived((slot?.deviceIds ?? []).map(deviceName));
-  // Where the slot keeps the model and how much of that memory it may take
   const reservation = $derived.by((): [string, string][] => {
     if (!slot) return [];
     const host = slot.placement === Placement.HOST;

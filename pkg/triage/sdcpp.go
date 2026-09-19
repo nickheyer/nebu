@@ -18,19 +18,19 @@ func (SDCpp) Rules() []Rule {
 		{
 			ID:      "missing-part",
 			Summary: "a part of the pipeline was not given",
-			Hint:    "set the vae, text encoder, or encoder file the model loads beside itself in the model files params",
+			Hint:    "set the missing VAE or encoder path under Model files",
 			Match:   anyOf("no text encoder", "no vae", "vae is required", "text encoder is required", "missing text encoder", "missing vae", "clip_vision is required", "requires a clip vision", "t5xxl is required", "llm is required"),
 		},
 		{
 			ID:      "unknown-model",
 			Summary: "this build cannot tell what model the file holds",
-			Hint:    "the file may be a part rather than a checkpoint, or newer than this build; adopt or build a newer runtime, or check the file is a diffusion model",
+			Hint:    "check that the file is a diffusion model. If it requires newer support, update the runtime",
 			Match:   anyOf("unknown model", "unsupported model", "get sd version from file failed", "cannot identify updated diffusion model", "model type not supported", "unsupported sd version"),
 		},
 		{
 			ID:      "model-load",
 			Summary: "the model failed to load",
-			Hint:    "verify the store with nebu store verify, then check the lines above this one",
+			Hint:    "run nebu store verify and check the preceding log lines",
 			Match:   anyOf("new_sd_ctx_t failed", "load tensors from model loader failed", "init model loader from file failed", "failed to load model", "failed to load", "load weights from file failed"),
 		},
 		{
@@ -42,13 +42,13 @@ func (SDCpp) Rules() []Rule {
 		{
 			ID:      "bad-flag",
 			Summary: "this build rejected a flag nebu passed",
-			Hint:    "check the line for the flag, override that param with a value this build accepts, or adopt a newer runtime",
+			Hint:    "set the rejected parameter to a supported value or update the runtime",
 			Match:   anyOf("unknown argument", "invalid argument", "unrecognized argument", "error: unknown option", "requires an argument"),
 		},
 		{
 			ID:      "assert",
 			Summary: "runtime assertion failed",
-			Hint:    "keep the log line and check the runtime issue tracker, then try different params",
+			Hint:    "check the runtime issue tracker for this error",
 			Match: func(line string) (map[string]string, bool) {
 				return nil, contains(line, "GGML_ASSERT")
 			},

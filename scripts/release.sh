@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build release artifacts locally without publishing anything.
+# Build local release artifacts.
 set -eu
 cd "$(dirname "$0")/.."
 exec "${GORELEASER:-goreleaser}" release --snapshot --clean --skip=publish,docker "$@"

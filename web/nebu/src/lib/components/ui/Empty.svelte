@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { Component, Snippet } from 'svelte';
 
-  // Where a list would be when it has nothing: one line and at most one thing to do
   let { icon, title, children, compact = false, class: cls = '' }: { icon?: Component<any>; title: string; children?: Snippet; compact?: boolean; class?: string } = $props();
 </script>
 

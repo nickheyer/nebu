@@ -23,7 +23,7 @@ func hostClient(t *testing.T, recent *launch.Log) nebuv1connect.HostServiceClien
 	return nebuv1connect.NewHostServiceClient(srv.Client(), srv.URL)
 }
 
-// Without follow the stream carries the tail and ends
+// Without follow, return recent lines and close the stream.
 func TestLogsSendsTheTail(t *testing.T) {
 	recent := launch.NewLog(10)
 	for _, l := range []string{"one", "two", "three"} {
@@ -45,7 +45,7 @@ func TestLogsSendsTheTail(t *testing.T) {
 	}
 }
 
-// Following carries the tail, then each line written after it, until the client goes
+// Follow returns recent lines and streams new lines until disconnect.
 func TestLogsFollowsNewLines(t *testing.T) {
 	recent := launch.NewLog(10)
 	recent.Write("before")
@@ -77,7 +77,7 @@ func TestLogsFollowsNewLines(t *testing.T) {
 	}
 }
 
-// A file lists the directory holding it: directories first, then files by name, binaries marked
+// File paths list their parent directory with directories first and executables marked.
 func TestListDirectoryListsAroundAFile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
@@ -106,7 +106,7 @@ func TestListDirectoryListsAroundAFile(t *testing.T) {
 	}
 }
 
-// A path that is not there answers not found
+// Missing paths return not found.
 func TestListDirectoryMissingIsNotFound(t *testing.T) {
 	_, err := hostClient(t, launch.NewLog(1)).ListDirectory(context.Background(), connect.NewRequest(&v1.ListDirectoryRequest{Path: filepath.Join(t.TempDir(), "nope")}))
 	if connect.CodeOf(err) != connect.CodeNotFound {

@@ -19,7 +19,6 @@
     href: string;
     label: string;
     icon: typeof LayoutGrid;
-    // Other paths this item stands for
     also?: string[];
     count?: number;
     busy?: boolean;
@@ -41,7 +40,6 @@
 
   const name = $derived(hostName());
   const onHost = $derived(page.url.pathname === '/host');
-  // The chat console takes the whole viewport
   const wide = $derived(page.url.pathname === '/chat');
 
   function active(item: { href: string; also?: string[] }): boolean {
@@ -52,7 +50,7 @@
 
   onMount(() => {
     connect();
-    // Files a closed tab attached or a cleared conversation left go, once per load
+    // Remove unreferenced files once per page load.
     sweepStale().catch(() => {});
     return () => disconnect();
   });

@@ -196,7 +196,8 @@ func olTagNames(ctx context.Context, c *Client, name string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Every tag is on the page twice, once per layout, so names are kept once in the order first seen
+	// Reads each tag as a variant. Manifests provide size and digest. Configs provide parameter count
+	// and quantization.
 	prefix := namespaced(name, olNamespace) + ":"
 	seen := map[string]bool{}
 	var out []string
@@ -213,8 +214,8 @@ func olTagNames(ctx context.Context, c *Client, name string) ([]string, error) {
 	return out, nil
 }
 
-// Every tag of a model as its own variant, each read from the registry: the manifest for its size and
-// digest, the config blob for its parameter count and quant, nothing read from the tag's name
+// Reads each tag as a variant. Manifests provide size and digest. Configs provide parameter count
+// and quantization.
 func (ollamaAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {
 	name, _ := olSplit(repo, "")
 	if name == "" {

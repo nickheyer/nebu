@@ -55,8 +55,7 @@ func (s *HostService) Doctor(ctx context.Context, req *connect.Request[v1.Doctor
 	return reply(&v1.DoctorResponse{Task: task}, err)
 }
 
-// Streams the daemon's own log: the last tail lines, then when following every line after until the
-// client goes
+// Streams recent daemon logs and optionally follows new lines until disconnect.
 func (s *HostService) Logs(ctx context.Context, req *connect.Request[v1.HostServiceLogsRequest], stream *connect.ServerStream[v1.HostServiceLogsResponse]) error {
 	send := func(lines []string) error { return stream.Send(&v1.HostServiceLogsResponse{Lines: lines}) }
 	if !req.Msg.GetFollow() {
@@ -69,8 +68,8 @@ func (s *HostService) Logs(ctx context.Context, req *connect.Request[v1.HostServ
 	return wrap(s.recent.Follow(ctx, int(req.Msg.GetTail()), send))
 }
 
-// Lists a directory on the host so a client can pick a file: the daemon's home when none is named, the
-// directory holding a file when a file is named, directories first and then by name
+// Lists host files, sorting directories first and then by name. Defaults to
+// the daemon's home directory. File paths select their parent directory.
 func (s *HostService) ListDirectory(ctx context.Context, req *connect.Request[v1.ListDirectoryRequest]) (*connect.Response[v1.ListDirectoryResponse], error) {
 	return reply(listDirectory(req.Msg.GetPath()))
 }
@@ -103,7 +102,7 @@ func listDirectory(path string) (*v1.ListDirectoryResponse, error) {
 		out.Parent = parent
 	}
 	for _, e := range entries {
-		// Stat follows links, so a link to a directory or a binary reads as what it points at
+		// Follow symlinks when identifying directories and executables.
 		info, err := os.Stat(filepath.Join(path, e.Name()))
 		if err != nil {
 			continue
@@ -120,7 +119,7 @@ func listDirectory(path string) (*v1.ListDirectoryResponse, error) {
 	return out, nil
 }
 
-// Windows runs files by extension, every other host by mode
+// Detect executables by extension on Windows and file mode elsewhere.
 func executable(info os.FileInfo, name string) bool {
 	if runtime.GOOS == "windows" {
 		switch strings.ToLower(filepath.Ext(name)) {
@@ -132,7 +131,7 @@ func executable(info os.FileInfo, name string) bool {
 	return info.Mode()&0o111 != 0
 }
 
-// Serves host wide preferences
+// Serves host preferences.
 type SettingsService struct {
 	settings *settings.Manager
 }
@@ -150,7 +149,7 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, req *connect.Reque
 	return reply(&v1.UpdateSettingsResponse{Settings: out}, err)
 }
 
-// Serves catalog lookups and the source rows behind them
+// Serves catalog lookups and source settings.
 type SourceService struct {
 	sources   *sources.Manager
 	inspector *inspect.Inspector
@@ -158,11 +157,10 @@ type SourceService struct {
 	runtimes  *runtimes.Registry
 }
 
-// Pages a filtered search reads on past an empty one before answering, so a narrow filter over a wide
-// catalog still answers with hits when the source holds any
+// Maximum pages to search past when filters remove all hits.
 const filteredPages = 8
 
-// Builds the source service over the formats hits are tagged with and the runtimes they are matched against
+// Creates the source service with format and runtime registries.
 func NewSourceService(m *sources.Manager, insp *inspect.Inspector, fmts *formats.Registry, reg *runtimes.Registry) *SourceService {
 	return &SourceService{sources: m, inspector: insp, formats: fmts, runtimes: reg}
 }
@@ -176,7 +174,7 @@ func (s *SourceService) formatIDs() []string {
 	return out
 }
 
-// The facets the daemon answers over every source: the runtime a model runs on and the format it is held in
+// Shared runtime and format facets.
 func (s *SourceService) sharedFacets() []*v1.Facet {
 	runtime := &v1.Facet{Id: sources.FacetRuntime, Label: "Runtime"}
 	for _, rt := range s.runtimes.List() {
@@ -189,7 +187,7 @@ func (s *SourceService) sharedFacets() []*v1.Facet {
 	return []*v1.Facet{runtime, format}
 }
 
-// Lists every source with the facets the daemon answers ahead of the provider's own
+// Lists sources with shared facets before provider-specific facets.
 func (s *SourceService) ListSources(ctx context.Context, req *connect.Request[v1.ListSourcesRequest]) (*connect.Response[v1.ListSourcesResponse], error) {
 	statuses := s.sources.Registry.Statuses(ctx)
 	for _, st := range statuses {
@@ -204,7 +202,7 @@ func (s *SourceService) ListProviders(ctx context.Context, req *connect.Request[
 	return reply(&v1.ListProvidersResponse{Providers: sources.Providers()}, nil)
 }
 
-// Writes a source through write and answers with its status, the client rebuilt
+// Writes source settings, rebuilds the client, and returns status.
 func (s *SourceService) write(ctx context.Context, write func(context.Context, *v1.Source) (*v1.Source, error), in *v1.Source) (*v1.SourceStatus, error) {
 	row, err := write(ctx, in)
 	if err != nil {
@@ -228,12 +226,9 @@ func (s *SourceService) DeleteSource(ctx context.Context, req *connect.Request[v
 	return reply(&v1.DeleteSourceResponse{Source: row}, err)
 }
 
-// Searches one source, every source of a provider, or every source there is
-//
-// Every hit is stamped with what the catalog says it is, the formats it is held in, and the runtimes
-// that serve it. The runtime and format facets are answered here, over whatever the source could
-// narrow itself: a hit the filter rules out never reaches the page, and a page emptied by the filter
-// is read on past, the cursor carried, until one holds a hit or the source runs out.
+// Searches selected sources and labels hits with model kind, formats, and runtimes.
+// Applies runtime and format filters after provider filters. Continues past empty
+// filtered pages while preserving the cursor, within the page limit.
 func (s *SourceService) Search(ctx context.Context, req *connect.Request[v1.SearchRequest]) (*connect.Response[v1.SearchResponse], error) {
 	in := proto.Clone(req.Msg).(*v1.SearchRequest)
 	var wantMask uint32
@@ -274,14 +269,14 @@ func (s *SourceService) Search(ctx context.Context, req *connect.Request[v1.Sear
 		}
 		in.Cursor = out.NextCursor
 	}
-	// A count the source gave describes its own page, not what the filter kept of it
+	// Provider counts do not reflect local filtering.
 	if dropped {
 		out.Total = 0
 	}
 	return connect.NewResponse(out), nil
 }
 
-// Stamps a hit with what it is, the formats it is held in, and the runtimes that serve it
+// Labels a hit with model kind, formats, and compatible runtimes.
 func (s *SourceService) stamp(h *v1.SearchHit) {
 	h.Kind = sources.Kind(h)
 	h.Formats = sources.Formats(h, s.formatIDs(), h.GetKind())
@@ -339,6 +334,15 @@ func (s *EstimateService) Estimate(ctx context.Context, req *connect.Request[v1.
 	return reply(s.inspector.Estimate(ctx, req.Msg))
 }
 
+// Lists resolved blueprint parts for a group.
+func (s *EstimateService) Parts(ctx context.Context, req *connect.Request[v1.PartsRequest]) (*connect.Response[v1.PartsResponse], error) {
+	plan, err := s.inspector.PartsOf(ctx, req.Msg.GetSourceId(), req.Msg.GetRepo(), req.Msg.GetRevision(), req.Msg.GetGroup())
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return reply(plan.Proto(), nil)
+}
+
 // Serves the model store
 type StoreService struct {
 	store  *store.Store
@@ -366,7 +370,7 @@ func (s *StoreService) GetModel(ctx context.Context, req *connect.Request[v1.Get
 }
 
 func (s *StoreService) RemoveModel(ctx context.Context, req *connect.Request[v1.RemoveModelRequest]) (*connect.Response[v1.RemoveModelResponse], error) {
-	// A pull or a launch of the same group holds the key, so the removal waits its turn
+	// Wait for concurrent pulls or launches of this group.
 	unlock := s.store.Lock(store.Key(req.Msg.GetSourceId(), req.Msg.GetRepo(), req.Msg.GetGroup()))
 	m, err := s.store.RemoveManifest(req.Msg.GetSourceId(), req.Msg.GetRepo(), req.Msg.GetGroup())
 	unlock()

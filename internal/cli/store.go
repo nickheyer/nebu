@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -16,8 +17,9 @@ import (
 
 func runPull(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("pull")
-	source := fs.String("source", "", "source id, first configured when empty")
-	group := fs.String("group", "", "weight group, required when the repo has several")
+	source := fs.String("source", "", "source id (default: first configured)")
+	group := fs.String("group", "", "weight group (required if the repo has several)")
+	alone := fs.Bool("alone", false, "download only this group")
 	detach := fs.Bool("detach", false, "start the task and return its id")
 	positional, err := e.parse(fs, args, 1, 1, "pull <repo>[@revision] [flags]")
 	if err != nil {
@@ -29,7 +31,7 @@ func runPull(ctx context.Context, e *env, args []string) error {
 		}
 	}
 	repo, revision := splitRef(positional[0])
-	resp, err := e.cl.store.Pull(ctx, connect.NewRequest(&v1.PullRequest{SourceId: *source, Repo: repo, Revision: revision, Group: *group}))
+	resp, err := e.cl.store.Pull(ctx, connect.NewRequest(&v1.PullRequest{SourceId: *source, Repo: repo, Revision: revision, Group: *group, Alone: *alone}))
 	if err != nil {
 		return err
 	}
@@ -38,6 +40,69 @@ func runPull(ctx context.Context, e *env, args []string) error {
 		return e.print(task, func(w io.Writer) { fmt.Fprintln(w, task.GetId()) })
 	}
 	return e.done(e.follow(ctx, task.GetId()))
+}
+
+// Lists a group's parts and their sources.
+func runParts(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("parts")
+	source := fs.String("source", "", "source id (default: first configured)")
+	group := fs.String("group", "", "weight group (required if the repo has several)")
+	positional, err := e.parse(fs, args, 1, 1, "parts <repo>[@revision] [flags]")
+	if err != nil {
+		return err
+	}
+	repo, revision := splitRef(positional[0])
+	resp, err := e.cl.estimate.Parts(ctx, connect.NewRequest(&v1.PartsRequest{SourceId: *source, Repo: repo, Revision: revision, Group: *group}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		if resp.Msg.GetFamily() == "" {
+			if resp.Msg.GetDescriptor_().GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT {
+				fmt.Fprintln(w, "requires a separate diffusion model")
+				return
+			}
+			fmt.Fprintln(w, "component")
+			return
+		}
+		fmt.Fprintf(w, "%s (%s)\n", resp.Msg.GetFamilyName(), resp.Msg.GetFamily())
+		var rows [][]string
+		for _, part := range resp.Msg.GetParts() {
+			where, size := "", "-"
+			switch {
+			case part.GetError() != "":
+				where = "none: " + part.GetError()
+			case part.GetBundled():
+				where = "in the group"
+				if part.GetSubfolder() != "" {
+					where += " (" + part.GetSubfolder() + ")"
+					size = estimate.Human(part.GetSizeBytes())
+				}
+			default:
+				where = part.GetRepo() + " " + part.GetGroup()
+				if len(part.GetPaths()) > 0 {
+					where += " (" + strings.Join(part.GetPaths(), ", ") + ")"
+				}
+				size = estimate.Human(part.GetSizeBytes())
+			}
+			state := "pull"
+			switch {
+			case part.GetStored():
+				state = "stored"
+			case part.GetBundled():
+				state = "bundled"
+			case part.GetError() != "":
+				state = "missing"
+			}
+			required := "optional"
+			if part.GetRequired() {
+				required = "required"
+			}
+			rows = append(rows, []string{part.GetSlot(), part.GetName(), required, state, size, where})
+		}
+		table(w, []string{"SLOT", "PART", "NEEDED", "STATE", "SIZE", "FROM"}, rows)
+		fmt.Fprintf(w, "download size: %s\n", estimate.Human(resp.Msg.GetPullBytes()))
+	})
 }
 
 func runList(ctx context.Context, e *env, args []string) error {
@@ -55,7 +120,7 @@ func runList(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, m := range resp.Msg.GetModels() {
-			// Eviction takes the model used longest ago, a model never run counting from its pull
+			// Eviction uses last run time, or pull time for models never run.
 			rows = append(rows, []string{m.GetSourceId(), m.GetRepo(), m.GetGroup(), m.GetFormatId(), m.GetDescriptor_().GetArchitecture(), kindWord(m.GetDescriptor_().GetKind()), names.of(m.GetRuntimes()), estimate.Human(m.GetBytes()), when(m.GetPulledAt(), time.DateTime), when(cmp.Or(m.GetUsedAt(), m.GetPulledAt()), time.DateTime), m.GetPath()})
 		}
 		table(w, []string{"SOURCE", "REPO", "GROUP", "FORMAT", "ARCH", "KIND", "RUNS ON", "SIZE", "PULLED", "USED", "PATH"}, rows)
@@ -64,7 +129,7 @@ func runList(ctx context.Context, e *env, args []string) error {
 
 func runRemove(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("remove")
-	source := fs.String("source", "", "source id, first configured when empty")
+	source := fs.String("source", "", "source id (default: first configured)")
 	group := fs.String("group", "", "weight group")
 	gc := fs.Bool("gc", false, "collect unreferenced blobs afterwards")
 	positional, err := e.parse(fs, args, 1, 1, "remove <repo> --group <group> [flags]")

@@ -4,8 +4,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/formats"
 )
 
-// Standard attention with a full key and value cache per layer, on one layer in every
-// attention interval for a hybrid model whose other layers keep a fixed recurrent state
+// Full KV cache on each attention layer. Hybrid models use the configured attention interval.
 type Default struct{}
 
 func (Default) ID() string { return "default" }

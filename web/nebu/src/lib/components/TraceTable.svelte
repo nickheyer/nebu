@@ -5,7 +5,6 @@
   import { ApiFlavor } from '$proto/runtime_pb';
   import Empty from './ui/Empty.svelte';
 
-  // Requests through the gateway, one row each, the newest first
   let { traces, selected = '', onSelect, showRoute = true, compact = false }: { traces: Trace[]; selected?: string; onSelect?: (t: Trace) => void; showRoute?: boolean; compact?: boolean } = $props();
 
   const flavor = (f: ApiFlavor) => enumLabel(ApiFlavor, f).replace('unspecified', 'openai');

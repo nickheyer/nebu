@@ -3,7 +3,6 @@
   import { Search, X } from '@lucide/svelte';
   import { slashFocus } from '$lib/keys';
 
-  // A search field with the slash shortcut, a clear button once it holds text, and an example value while empty
   let {
     value = $bindable(''),
     empty = '',
@@ -21,7 +20,6 @@
     disabled?: boolean;
     oninput?: () => void;
     onsubmit?: () => void;
-    // Something drawn inside the field at its right edge, such as a hint
     trailing?: Snippet;
     element?: HTMLInputElement;
     class?: string;

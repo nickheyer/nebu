@@ -58,12 +58,8 @@ type gitEntry struct {
 	sha256  string
 }
 
-// Git transport: bare partial clones under the cache, trees listed without
-// fetching the blobs, LFS pointers resolved through the batch API, and plain
-// blobs extracted on demand
-//
-// A locator is repo@ref, or repo@ref/path for one file, where repo is a
-// path under the endpoint or a full URL. Refs come from ls-remote.
+// Git transport with cached partial clones, on-demand blobs, and LFS batch downloads. Locators use
+// repo@ref or repo@ref/path, where repo is an endpoint path or full URL.
 type Git struct {
 	endpoint string
 	username string
@@ -246,8 +242,7 @@ func (g *Git) ensure(ctx context.Context, repo, ref string) (string, error) {
 			return "", fmt.Errorf("%s: no branch or tag %q", repo, want)
 		}
 	}
-	// A ref marks a commit that arrived with its tree, checked without touching objects,
-	// because looking one up would fetch it lazily without its blobs
+	// Check fetched refs without inspecting objects, which could trigger an incomplete lazy fetch.
 	marker := "refs/nebu/fetched/" + commit
 	if _, err := g.git(ctx, dir, nil, "show-ref", "--verify", "--quiet", marker); err == nil {
 		return commit, nil
@@ -450,7 +445,7 @@ func (g *Git) Open(ctx context.Context, locator string, size int64) (Blob, error
 	if e.lfs {
 		return g.lfsBlob(repo, e), nil
 	}
-	// Read out of the clone only when asked, so a pull's schedule runs first
+	// Delay extraction until the transfer schedule permits it.
 	return &lazyBlob{size: e.size, whole: true, land: func(ctx context.Context, _ func(int64)) (Blob, error) {
 		return g.extract(ctx, repo, e)
 	}}, nil
@@ -525,7 +520,7 @@ type lfsBatch struct {
 	Message string `json:"message"`
 }
 
-// The batch endpoint of a repo's LFS server, an scp style remote reaching it over https as git-lfs does
+// Returns the LFS batch endpoint, translating scp remotes to HTTPS.
 func (g *Git) lfsURL(repo string) string {
 	remote := g.Remote(repo)
 	if _, rest, ok := strings.Cut(remote, "@"); ok && !strings.Contains(remote, "://") {
@@ -603,11 +598,8 @@ func mergeHeader(base, extra http.Header) http.Header {
 	return out
 }
 
-// Clones a repository at ref into dest with a working tree, returning the commit
-//
-// A build fetches this way; a latest or empty ref takes the default branch,
-// a commit hash checks out inside a full clone, anything else is a branch or
-// tag fetched shallow.
+// Clones ref into dest and returns the commit. Empty or latest selects the default branch. Commit
+// hashes use full clones, while branches and tags use shallow clones.
 func Checkout(ctx context.Context, remote, ref, dest string, out io.Writer) (string, error) {
 	if _, err := exec.LookPath("git"); err != nil {
 		return "", fmt.Errorf("git is not installed on this host")

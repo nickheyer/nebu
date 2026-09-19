@@ -113,7 +113,7 @@ func (m *Manager) Default(ctx context.Context, runtimeID string) (*v1.Install, e
 	return list[0], nil
 }
 
-// The binaries a runtime's adopt methods look for on PATH
+// Binary names used for PATH adoption.
 func adoptNames(rt runtimes.Runtime) []string {
 	var names []string
 	for _, m := range rt.Methods() {
@@ -160,7 +160,7 @@ func (m *Manager) Adopt(ctx context.Context, runtimeID, path string) (*v1.Instal
 	return in, nil
 }
 
-// Says that the binaries looked for were not on PATH, one by name and several as a list
+// Reports missing binaries by name.
 func notOnPath(names []string) string {
 	if len(names) == 1 {
 		return names[0] + " is not on PATH"
@@ -168,7 +168,7 @@ func notOnPath(names []string) string {
 	return "none of " + strings.Join(names, ", ") + " is on PATH"
 }
 
-// The first of names found on PATH, empty when none is
+// Returns the first binary found on PATH, or empty.
 func onPath(names []string) string {
 	for _, name := range names {
 		if found, err := exec.LookPath(name); err == nil {
@@ -178,7 +178,7 @@ func onPath(names []string) string {
 	return ""
 }
 
-// The settings every method reads by name
+// Install method setting names.
 const (
 	fieldPath    = "path"
 	fieldBuild   = "build"
@@ -193,7 +193,7 @@ const (
 
 var sandboxNames = []string{"host", "oci"}
 
-// Describes every install method of a runtime as this host sees it, defaults picked here
+// Describes install methods and host-specific defaults.
 func (m *Manager) Options(ctx context.Context, rt runtimes.Runtime, profile *v1.HostProfile) ([]*v1.InstallOption, error) {
 	var out []*v1.InstallOption
 	for _, im := range rt.Methods() {
@@ -206,13 +206,13 @@ func (m *Manager) Options(ctx context.Context, rt runtimes.Runtime, profile *v1.
 				opt.Unmet = []string{notOnPath(im.Binaries) + ", give its path"}
 			}
 		case v1.InstallKind_INSTALL_KIND_PREBUILT:
-			// Only the builds published for this host are offered, the first of them by default
+			// Offer compatible builds, defaulting to the first.
 			var ids []string
 			for _, r := range im.HostRules(profile) {
 				ids = append(ids, r.ID)
 			}
 			opt.Fields = []*v1.ConfigField{
-				{Name: fieldBuild, Label: "Build", Type: v1.ConfigType_CONFIG_TYPE_STRING, Required: true, Default: first(ids), Choices: ids, Description: "Which published build to download"},
+				{Name: fieldBuild, Label: "Build", Type: v1.ConfigType_CONFIG_TYPE_STRING, Required: true, Default: first(ids), Choices: ids, Description: "Published build to download"},
 				{Name: fieldRelease, Label: "Release", Type: v1.ConfigType_CONFIG_TYPE_STRING, RevisionSource: recipes.ReleaseSource, RevisionRepo: im.Releases, Description: "A release tag of " + im.Releases + ", the newest with the build when empty"},
 			}
 			if len(ids) == 0 {
@@ -238,9 +238,8 @@ func (m *Manager) Options(ctx context.Context, rt runtimes.Runtime, profile *v1.
 	return out, nil
 }
 
-// The settings a build takes as this host sees them: the variant when the recipe has any, the ref when a
-// source tree is fetched, where the steps run and in what image, whether to build again, then the
-// recipe's own variables in the order it shows them
+// Build settings for this host: variant, source ref, sandbox, image, rebuild flag,
+// and recipe variables in declaration order.
 func buildFields(rc recipes.Recipe, sel *build.Selection, profile *v1.HostProfile, defaults *v1.Builds) []*v1.ConfigField {
 	var fields []*v1.ConfigField
 	if variants := build.Variants(rc, profile); len(variants) > 0 {
@@ -248,7 +247,7 @@ func buildFields(rc recipes.Recipe, sel *build.Selection, profile *v1.HostProfil
 		for _, v := range variants {
 			ids = append(ids, v.ID)
 		}
-		fields = append(fields, &v1.ConfigField{Name: fieldVariant, Label: "Variant", Type: v1.ConfigType_CONFIG_TYPE_STRING, Required: true, Default: sel.Variant.ID, Choices: ids, Description: "The backend to build; the host default is the first variant this host can build"})
+		fields = append(fields, &v1.ConfigField{Name: fieldVariant, Label: "Variant", Type: v1.ConfigType_CONFIG_TYPE_STRING, Required: true, Default: sel.Variant.ID, Choices: ids, Description: "Backend to build (default: first compatible variant)"})
 	}
 	if src := rc.Source(); src.Fetched() {
 		fields = append(fields, refField(src))
@@ -265,7 +264,7 @@ func buildFields(rc recipes.Recipe, sel *build.Selection, profile *v1.HostProfil
 	}
 	fields = append(fields,
 		sandbox,
-		&v1.ConfigField{Name: fieldImage, Label: "Container image", Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: build.Image(rc, sel.Variant, defaults), Placeholder: "registry/image:tag", Description: "The image whose toolchain the steps run in, for the container sandbox"},
+		&v1.ConfigField{Name: fieldImage, Label: "Container image", Type: v1.ConfigType_CONFIG_TYPE_STRING, Default: build.Image(rc, sel.Variant, defaults), Placeholder: "registry/image:tag", Description: "Container image providing the build toolchain"},
 		&v1.ConfigField{Name: fieldForce, Label: "Rebuild", Type: v1.ConfigType_CONFIG_TYPE_BOOL, Default: "false", Description: "Build again even when this exact build exists"},
 	)
 	for _, v := range rc.Vars() {
@@ -274,7 +273,7 @@ func buildFields(rc recipes.Recipe, sel *build.Selection, profile *v1.HostProfil
 	return fields
 }
 
-// The ref of a fetched source: a tag, branch, or commit, the newest release when the source publishes releases
+// Source ref: tag, branch, or commit. Defaults to the newest available release.
 func refField(src recipes.Source) *v1.ConfigField {
 	f := &v1.ConfigField{Name: fieldRef, Label: "Ref", Type: v1.ConfigType_CONFIG_TYPE_STRING}
 	switch {
@@ -304,7 +303,7 @@ func first(items []string) string {
 	return items[0]
 }
 
-// What one install does once its settings are read
+// Resolved install plan.
 type installPlan struct {
 	method  runtimes.Method
 	path    string
@@ -313,7 +312,7 @@ type installPlan struct {
 	build   *v1.BuildRequest
 }
 
-// Reads a method's settings into a plan, refusing names the method does not take
+// Builds an install plan and rejects unknown settings.
 func (m *Manager) plan(ctx context.Context, rt runtimes.Runtime, profile *v1.HostProfile, method string, settings map[string]string) (*installPlan, error) {
 	im, err := runtimes.MethodOf(rt, method)
 	if err != nil {
@@ -370,7 +369,7 @@ func (m *Manager) plan(ctx context.Context, rt runtimes.Runtime, profile *v1.Hos
 				p.build.Vars[strings.TrimPrefix(k, varPrefix)] = v
 			}
 		}
-		// Bad settings are refused now, before anything runs
+		// Validate before starting work.
 		if _, _, err := m.resolveBuild(ctx, p.build); err != nil {
 			return nil, err
 		}
@@ -378,9 +377,8 @@ func (m *Manager) plan(ctx context.Context, rt runtimes.Runtime, profile *v1.Hos
 	return p, nil
 }
 
-// Installs a runtime as one task by the method and settings chosen
-//
-// A second install of a runtime whose install is under way returns that task.
+// Installs a runtime using the selected method and settings. Returns an existing
+// install task if one is already running for that runtime.
 func (m *Manager) Install(ctx context.Context, runtimeID, method string, settings map[string]string) (*v1.Task, error) {
 	rt, err := m.Runtimes.Get(runtimeID)
 	if err != nil {
@@ -445,14 +443,14 @@ func (m *Manager) install(ctx context.Context, h *tasks.Handle, rt runtimes.Runt
 	return fmt.Errorf("install method %s does nothing", p.method.ID)
 }
 
-// One release asset a rule matched, opened for download
+// Matched release asset opened for download.
 type asset struct {
 	name string
 	size int64
 	blob sources.Blob
 }
 
-// Every asset of one release a rule needs
+// Release assets required by a rule.
 type release struct {
 	tag    string
 	assets []asset
@@ -522,7 +520,7 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt runtimes.Run
 	return nil
 }
 
-// Opens the rule's assets from the release named, or from the newest release carrying every one of them
+// Opens assets from the requested release or the newest release containing all of them.
 func (m *Manager) resolveAssets(ctx context.Context, releases string, rule runtimes.PrebuiltRule, tag string) (*release, error) {
 	if m.Sources == nil {
 		return nil, fmt.Errorf("no sources to read releases from")
@@ -542,7 +540,7 @@ func (m *Manager) resolveAssets(ctx context.Context, releases string, rule runti
 		wanted = append(wanted, a.String())
 	}
 	for _, r := range revisions {
-		// A revision without bytes carries no assets, branches and tags never do
+		// Branches, tags, and revisions without downloadable bytes have no assets.
 		if r.GetSizeBytes() == 0 {
 			continue
 		}

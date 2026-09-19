@@ -2,7 +2,6 @@
   import { Dialog } from 'bits-ui';
   import { X } from '@lucide/svelte';
 
-  // An image shown at full size over the page, closed by a click anywhere or Escape
   let { src = $bindable(''), alt = '' }: { src?: string; alt?: string } = $props();
 </script>
 

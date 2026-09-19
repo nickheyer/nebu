@@ -2,11 +2,8 @@ package formats
 
 import "math"
 
-// The architecture parameters a header names, the ones every planner formula reads
-//
-// Zero means the header did not say. Derive fills what follows from what was read: heads without
-// a separate key value count share one, a head width follows from the embedding and head count,
-// and a layer count the header lacks is the number of layers seen among the tensors.
+// Architecture parameters from headers. Zero means unknown. Derive infers missing KV head count,
+// head width, and layer count when possible.
 type Params struct {
 	Layers            float64
 	Embedding         float64

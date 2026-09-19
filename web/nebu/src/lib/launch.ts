@@ -11,18 +11,17 @@ export interface RunSpec {
   name?: string;
   params?: Record<string, string>;
   slotId?: string;
-  // Launches even when the plan says no, redoing any prepare step
+  // Override the plan refusal and repeat preparation.
   force?: boolean;
 }
 
-// Whether a slot has something alive in it
 export function slotOccupied(slotId: string | undefined): boolean {
   if (!slotId) return false;
   const s = live.slots.get(slotId);
   return !!s?.instanceId && instanceLive(live.instances.get(s.instanceId));
 }
 
-// Runs a model, swapping when its slot is occupied, and returns the task id
+// Swap if the slot is occupied. Return the task ID.
 export async function launch(spec: RunSpec, drainFirst = false, refused?: (err: unknown) => void): Promise<string | undefined> {
   const run = { ...spec, params: spec.params ?? {} };
   const swap = slotOccupied(spec.slotId);

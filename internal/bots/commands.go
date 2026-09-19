@@ -12,7 +12,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// The slash commands a bot offers, under the names its settings give them
+// Slash commands with configured names.
 func (r *runner) commandDefinitions() []*discordgo.ApplicationCommand {
 	c := r.spec.GetCommands()
 	name := func(role string) string { return c.GetNames()[role] }
@@ -93,7 +93,7 @@ func (r *runner) registerCommands(sess session) {
 	}
 }
 
-// The role a command name plays
+// Resolves a command name to its role.
 func (r *runner) roleOf(name string) string {
 	for role, n := range r.spec.GetCommands().GetNames() {
 		if n == name {
@@ -103,7 +103,7 @@ func (r *runner) roleOf(name string) string {
 	return ""
 }
 
-// One invocation, from a slash command or a prefix command, answered the same way
+// A slash or prefix command invocation.
 type invocation struct {
 	sess      session
 	channelID string
@@ -208,7 +208,7 @@ func (r *runner) prefixCommand(sess session, m *discordgo.Message, rest string) 
 	word, args, _ := strings.Cut(rest, " ")
 	role := r.roleOf(strings.ToLower(word))
 	if role == "" || contains(r.spec.GetCommands().GetDisabled(), role) {
-		// Not one of the bot's own commands; a command automation may still take it
+		// Allow automations to handle unrecognized commands.
 		return
 	}
 	var attachment *discordgo.MessageAttachment
@@ -231,7 +231,7 @@ func (r *runner) command(in *invocation, role, prompt, personaID, personaName st
 	channelPersona := c.row.PersonaID
 	r.mu.Unlock()
 	p := r.persona(firstNonEmpty(personaID, channelPersona))
-	// A persona typed by name, as it is when there are too many for Discord to offer as choices
+	// Resolve typed persona names when Discord's choice limit is exceeded.
 	if _, known := r.personaBy[personaID]; personaID != "" && !known {
 		if named, ok := r.personaNamed(personaID); ok {
 			p = named
@@ -408,7 +408,7 @@ func (r *runner) command(in *invocation, role, prompt, personaID, personaName st
 			case isVideo(attachment):
 				want := int(r.spec.GetMedia().GetVideoFrames())
 				if want == 0 {
-					fail(fmt.Errorf("a video as input needs media.video_frames set, the frames sampled from it that guide the new one"), "")
+					fail(fmt.Errorf("video input requires media.video_frames to sample reference frames"), "")
 					return
 				}
 				frames, err = r.frames(ctx, data, attachment.Filename, want)
@@ -441,7 +441,7 @@ func (r *runner) command(in *invocation, role, prompt, personaID, personaName st
 	}
 }
 
-// The prompt with the caller's name in front, when names are kept
+// Prefixes the caller's name when configured.
 func (r *runner) namedText(u *discordgo.User, text string) string {
 	if !r.spec.GetMemory().GetIncludeNames() || u == nil {
 		return text
@@ -449,7 +449,7 @@ func (r *runner) namedText(u *discordgo.User, text string) string {
 	return u.DisplayName() + ": " + text
 }
 
-// The line a generation is posted under
+// Generation caption.
 func (r *runner) caption(who, prompt string) string {
 	if len(prompt) > 200 {
 		prompt = prompt[:200] + "…"

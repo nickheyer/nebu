@@ -91,8 +91,7 @@ func server(t *testing.T) (*httptest.Server, *int) {
 	return srv, &downloads
 }
 
-// A recipe whose steps read every build fact: the ref and variant stamp the binary, a step runs on
-// the gpu variant alone, an unset var drops out of a command, and the last step prints the paths
+// Test recipe covering refs, variants, optional variables, and sandbox paths.
 func engineRecipe(base string) fakeRecipe {
 	return fakeRecipe{
 		id: "fake", runtimeID: "fake",

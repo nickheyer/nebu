@@ -14,21 +14,19 @@ import (
 )
 
 const (
-	// Inference traces the recorder keeps before the oldest is dropped
+	// Maximum retained inference traces.
 	traceRing = 500
-	// Token count traces the recorder keeps, in a ring of their own
+	// Maximum retained token count traces, stored separately.
 	countRing = 50
-	// Bytes of each body a trace keeps
+	// Maximum retained bytes per trace body.
 	traceBodyCap = 64 << 10
-	// The response header naming the trace of the request
+	// Response header containing the trace ID.
 	traceHeader = "X-Nebu-Trace"
 )
 
-// Keeps the newest requests through the gateway and tells the stream about each one
-//
-// A request's trace is written by the goroutine serving it and handed over
-// as a copy when it starts and when it ends, so readers never race a writer.
-// Token counts ring separately so they never evict answers.
+// Records recent gateway requests and publishes trace events.
+// The serving goroutine owns each trace and publishes copies at start and finish.
+// Token counts use a separate ring so they cannot evict inference traces.
 type Recorder struct {
 	events *events.Bus
 
@@ -38,13 +36,13 @@ type Recorder struct {
 	byID   map[string]*v1.Trace
 }
 
-// Traces in the order they started, the oldest dropped past a size
+// Traces in start order, evicting the oldest at capacity.
 type ring struct {
 	size  int
 	items []*v1.Trace
 }
 
-// Appends a trace, returning the ids of those dropped to make room
+// Appends a trace and returns evicted IDs.
 func (r *ring) add(t *v1.Trace) []string {
 	r.items = append(r.items, t)
 	var dropped []string
@@ -56,7 +54,7 @@ func (r *ring) add(t *v1.Trace) []string {
 	return dropped
 }
 
-// Swaps a newer copy in for the trace with its id
+// Replaces a trace by ID.
 func (r *ring) replace(t *v1.Trace) {
 	for i, old := range r.items {
 		if old.GetId() == t.GetId() {
@@ -66,7 +64,7 @@ func (r *ring) replace(t *v1.Trace) {
 	}
 }
 
-// Builds a recorder that keeps size inference traces and counts token counts, the defaults when zero
+// Creates a recorder with separate inference and token count capacities. Zero uses defaults.
 func NewRecorder(bus *events.Bus, size, counts int) *Recorder {
 	if size <= 0 {
 		size = traceRing
@@ -90,7 +88,7 @@ func (r *Recorder) Finish(t *v1.Trace) {
 	r.put(t, v1.EventAction_EVENT_ACTION_UPDATED)
 }
 
-// The ring a trace belongs in, by its kind
+// Selects the trace ring by request kind.
 func (r *Recorder) ringOf(t *v1.Trace) *ring {
 	if t.GetKind() == v1.TraceKind_TRACE_KIND_COUNT {
 		return &r.counts
@@ -114,7 +112,6 @@ func (r *Recorder) put(t *v1.Trace, action v1.EventAction) {
 	r.events.Publish(v1.EventKind_EVENT_KIND_TRACE, action, snapshot.GetId(), summary(snapshot))
 }
 
-// Whether a started before b
 func startedBefore(a, b *v1.Trace) bool {
 	x, y := a.GetStartedAt(), b.GetStartedAt()
 	if x.GetSeconds() != y.GetSeconds() {
@@ -123,7 +120,7 @@ func startedBefore(a, b *v1.Trace) bool {
 	return x.GetNanos() < y.GetNanos()
 }
 
-// Lists traces newest first across both rings, one route's when named, at most limit when positive, bodies left out
+// Lists traces newest first without bodies. Optional route and limit narrow the results.
 func (r *Recorder) List(route string, limit int) []*v1.Trace {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -131,7 +128,7 @@ func (r *Recorder) List(route string, limit int) []*v1.Trace {
 	i, j := len(r.main.items)-1, len(r.counts.items)-1
 	for i >= 0 || j >= 0 {
 		var t *v1.Trace
-		// The newer head of the two rings goes next, the inference ring first on a tie
+		// Merge newest first, preferring inference traces on ties.
 		if j < 0 || (i >= 0 && !startedBefore(r.main.items[i], r.counts.items[j])) {
 			t = r.main.items[i]
 			i--
@@ -161,14 +158,14 @@ func (r *Recorder) Get(id string) (*v1.Trace, bool) {
 	return proto.Clone(t).(*v1.Trace), true
 }
 
-// A trace without its bodies, what lists and events carry
+// Copies trace metadata without bodies for lists and events.
 func summary(t *v1.Trace) *v1.Trace {
 	out := proto.Clone(t).(*v1.Trace)
 	out.Request, out.UpstreamRequest, out.Response = "", "", ""
 	return out
 }
 
-// Keeps the head of a body for a trace
+// Truncates a body for trace storage.
 func capped(b []byte) string {
 	if len(b) <= traceBodyCap {
 		return string(b)
@@ -176,7 +173,7 @@ func capped(b []byte) string {
 	return string(b[:traceBodyCap])
 }
 
-// The kind of request a path names in a flavor, other for anything the gateway proxies unread
+// Classifies request paths, using other for unparsed proxy requests.
 func kindOf(api v1.ApiFlavor, path string) v1.TraceKind {
 	switch api {
 	case v1.ApiFlavor_API_FLAVOR_ANTHROPIC:
@@ -212,7 +209,7 @@ func kindOf(api v1.ApiFlavor, path string) v1.TraceKind {
 	return v1.TraceKind_TRACE_KIND_OTHER
 }
 
-// Folds the answer's events into the trace: when the first token came, the text, the calls, and the usage
+// Records first token timing, response text, tool calls, and usage.
 type traceSink struct {
 	t    *v1.Trace
 	text strings.Builder
@@ -256,14 +253,14 @@ func (s *traceSink) result(res *Result) {
 	}
 }
 
-// What the trace keeps as the response
+// Response representation stored in the trace.
 func (s *traceSink) close() {
 	if s.text.Len() > 0 {
 		s.t.Response = capped([]byte(s.text.String()))
 	}
 }
 
-// A stream writer that feeds every event to the trace on its way to the client
+// Stream writer that records events before forwarding them.
 type tracedStream struct {
 	StreamWriter
 	sink *traceSink
@@ -274,7 +271,7 @@ func (s tracedStream) Write(ev Event) error {
 	return s.StreamWriter.Write(ev)
 }
 
-// A response writer that records status, first byte, and size, and copies the body to a reader
+// Records response status, first byte timing, and size while copying the body.
 type traceWriter struct {
 	http.ResponseWriter
 	t      *v1.Trace
@@ -282,7 +279,7 @@ type traceWriter struct {
 	bytes  uint64
 	tee    io.Writer
 	wrote  bool
-	// Whether a job that outlives the request finishes the trace itself
+	// Whether an asynchronous job closes the trace.
 	detached bool
 }
 
@@ -311,10 +308,8 @@ func (w *traceWriter) Flush() {
 	flush(w.ResponseWriter)
 }
 
-// Reads a passed through response the way the upstream flavor writes it, filling the trace
-//
-// The body is fed through a pipe as it is written to the client, so a
-// streamed answer is parsed as it flows and a whole one once it ends.
+// Parses proxied responses into traces through a pipe. Streams are parsed
+// as events arrive. Complete responses are parsed after the body ends.
 type passthroughReader struct {
 	pw   *io.PipeWriter
 	done chan struct{}
@@ -354,13 +349,13 @@ func readPassthrough(t *v1.Trace, upstream Flavor, c *Chat) *passthroughReader {
 	return p
 }
 
-// Ends the copy and waits for the parse
+// Closes the body copy and waits for parsing.
 func (p *passthroughReader) close() {
 	p.pw.Close()
 	<-p.done
 }
 
-// Keeps the head of a response the gateway does not read
+// Stores a prefix of unparsed responses.
 type rawCapture struct {
 	buf bytes.Buffer
 }

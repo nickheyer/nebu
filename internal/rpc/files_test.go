@@ -80,7 +80,7 @@ func TestFilesStreamsOneFileThroughTheDaemon(t *testing.T) {
 	}
 }
 
-// A daemon with a token serves a link only when the link carries it
+// Authenticated downloads require the token.
 func TestFilesRequireTheToken(t *testing.T) {
 	srv := fileServer(t, "secret")
 	get := func(url string, header string) int {

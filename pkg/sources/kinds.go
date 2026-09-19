@@ -6,15 +6,14 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// The facets the daemon answers over every source, whatever provider is behind it: the format a model
-// is held in, and the runtime it runs on. A provider narrows to them when its API can and the daemon
-// keeps only the hits that match, so a page never carries a model the filter rules out.
+// Shared format and runtime filters. Providers apply them when supported, and the daemon filters
+// remaining mismatches.
 const (
 	FacetFormat  = "format"
 	FacetRuntime = "runtime"
 )
 
-// The facets every source answers, kept when a search fans out across providers
+// Facets shared across providers.
 var SharedFacets = []string{FacetFormat, FacetRuntime}
 
 // Whether a facet is one of the shared ones
@@ -27,12 +26,12 @@ func Shared(facet string) bool {
 	return false
 }
 
-// Tasks a hub publishes under that mean a diffusion model, one that makes images or video
+// Tasks identifying image and video diffusion models.
 var diffusionTasks = map[string]bool{
 	"text-to-image": true, "image-to-image": true, "text-to-video": true, "image-to-video": true, "unconditional-image-generation": true, "image-to-3d": true, "text-to-3d": true, "video-to-video": true,
 }
 
-// Tasks that mean a language model, served for chat, completion, or embeddings
+// Tasks identifying language models for chat, completion, and embeddings.
 var languageTasks = map[string]bool{
 	"text-generation": true, "text2text-generation": true, "fill-mask": true, "feature-extraction": true, "sentence-similarity": true, "question-answering": true, "summarization": true, "translation": true,
 	"conversational": true, "image-text-to-text": true, "any-to-any": true, "visual-question-answering": true, "document-question-answering": true, "text-classification": true, "token-classification": true,
@@ -48,8 +47,8 @@ var civitaiKinds = map[string]v1.ModelKind{
 	"LLM": v1.ModelKind_MODEL_KIND_LANGUAGE, "VisionLanguage": v1.ModelKind_MODEL_KIND_LANGUAGE,
 }
 
-// Kind says what a catalog hit is from what its source published: the task it is listed under, the
-// library it was made with, and its tags; unspecified when the source says too little to tell
+// Kind infers model kind from catalog task, library, and tags. Insufficient metadata returns
+// unspecified.
 func Kind(h *v1.SearchHit) v1.ModelKind {
 	task := strings.ToLower(strings.TrimSpace(h.GetTask()))
 	if k, ok := civitaiKinds[strings.TrimSpace(h.GetTask())]; ok {
@@ -87,7 +86,7 @@ func Kind(h *v1.SearchHit) v1.ModelKind {
 			return v1.ModelKind_MODEL_KIND_DIFFUSION
 		}
 	}
-	// A GGUF with nothing else said is a language model, the format's overwhelming use, and Ollama publishes nothing else
+	// Default unclassified GGUF entries to language models, including Ollama entries.
 	for _, f := range h.GetFormats() {
 		if f == "gguf" {
 			return v1.ModelKind_MODEL_KIND_LANGUAGE
@@ -96,9 +95,8 @@ func Kind(h *v1.SearchHit) v1.ModelKind {
 	return v1.ModelKind_MODEL_KIND_UNSPECIFIED
 }
 
-// Formats names the formats a hit is held in from its tags and library, against the format ids the daemon
-// reads: a safetensors checkpoint of a diffusion model or one of its parts is the single file diffusion
-// format as well, since a hub tags a lone checkpoint and a diffusers tree alike
+// Formats infers format IDs from catalog tags and library. Diffusion safetensors also match the
+// standalone diffusion format.
 func Formats(h *v1.SearchHit, ids []string, kind v1.ModelKind) []string {
 	var out []string
 	seen := map[string]bool{}

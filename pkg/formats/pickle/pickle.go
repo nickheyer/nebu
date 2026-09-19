@@ -1,9 +1,5 @@
-// Package pickle decodes the subset of Python's pickle protocol that PyTorch checkpoints use.
-//
-// Nothing is executed. Callables named by GLOBAL are kept as values, and
-// applying one through REDUCE or NEWOBJ yields an Object recording the
-// callable and its arguments, which is enough to read tensor names, shapes,
-// and storage types out of a checkpoint without PyTorch.
+// Package pickle parses the pickle subset used by PyTorch checkpoints. It records callables and
+// arguments without executing them, allowing tensor metadata to be read without PyTorch.
 package pickle
 
 import (

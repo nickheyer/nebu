@@ -23,9 +23,8 @@
   const installs = $derived(installsOf(id));
   const task = $derived(installTask(id));
   const installing = $derived(!!task && taskActive(task));
-  // Builds that have not become an install: under way, failed, or left behind
   const builds = $derived(buildsOf(id).filter((b) => !b.installId || !live.installs.has(b.installId)));
-  // A failed build is told by its row, so the note is for failures no row records
+  // Only show errors without a corresponding build row.
   const failedInBuilds = $derived(!!task && builds.some((b) => b.taskId === task.id));
   const doing = $derived(taskDoing(status, task));
 </script>

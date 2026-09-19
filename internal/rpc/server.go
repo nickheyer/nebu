@@ -41,7 +41,7 @@ type Deps struct {
 	Doctor   *doctor.Doctor
 	Settings *settings.Manager
 	Sources  *sources.Manager
-	// Formats in priority order, what hits are tagged with and what the UI puts into words
+	// Formats in priority order for search labels and UI display.
 	Formats   *formats.Registry
 	Runtimes  *runtimes.Registry
 	Inspector *inspect.Inspector
@@ -53,13 +53,13 @@ type Deps struct {
 	Slots     *slots.Manager
 	Gateway   *gateway.Gateway
 	Bots      *bots.Manager
-	// Mounts the gateway under /v1/ on this handler when it has no listener of its own
+	// Mounts /v1/ when the gateway shares the API listener.
 	GatewayShared bool
 	Events        *events.Bus
 	Snapshot      services.Snapshotter
 	Web           http.Handler
 	Token         string
-	// The daemon's own last log lines, streamed to the Host page
+	// Recent daemon logs streamed to the Host page.
 	Recent *launch.Log
 	Log    *slog.Logger
 }
@@ -102,7 +102,7 @@ func NewHandler(d Deps) http.Handler {
 	if d.Gateway != nil && d.GatewayShared {
 		d.Gateway.Mount(mux)
 	} else {
-		// Keeps gateway paths from falling through to the single page app
+		// Prevent gateway paths from reaching the SPA fallback.
 		for _, path := range []string{"/v1/", "/api/", "/health"} {
 			mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "the gateway listens on its own address, see nebu gateway", http.StatusNotFound)

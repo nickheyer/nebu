@@ -38,7 +38,7 @@ func policy(t *testing.T, id string) (*estimate.Policy, estimate.Params) {
 	return nil, nil
 }
 
-// The runtime defaults with a fixed context and a full width cache, so cache bytes are exact, under the overrides given
+// Runtime defaults with fixed context and unquantized cache for exact byte counts.
 func defaults(params estimate.Params, overrides map[string]any) estimate.Params {
 	out := params.Clone()
 	if out.IsAuto("n_ctx") {
@@ -111,7 +111,7 @@ func TestDenseFits(t *testing.T) {
 	if hostUsed != 300*mib || dev < 28*100*mib {
 		t.Fatalf("pools dev=%d host=%d", dev, hostUsed)
 	}
-	// Every pool says how large it is and what was free, and the plan says when the host was read
+	// Plans retain pool capacity, free memory, and profile timestamp.
 	for _, pu := range plan.GetPools() {
 		if pu.GetTotalBytes() == 0 || pu.GetTotalBytes() != pu.GetCapacityBytes() {
 			t.Fatalf("pool totals %+v", pu)
@@ -122,7 +122,6 @@ func TestDenseFits(t *testing.T) {
 	}
 }
 
-// A plan against free memory caps every pool at what was free and still reports the whole pool
 func TestFreePlansCarryTheWholePool(t *testing.T) {
 	p, params := policy(t, "llamacpp")
 	h := host(12*gib, 64*gib)
@@ -230,7 +229,6 @@ func TestDeviceOnlyPolicy(t *testing.T) {
 	}
 }
 
-// An auto context takes the largest step of the grid that keeps the verdict of the smallest, capped by the trained length
 func TestAutoContextSolvesToTheLargestThatFits(t *testing.T) {
 	for _, id := range []string{"llamacpp", "vllm", "sglang", "nemo"} {
 		p, params := policy(t, id)
@@ -264,7 +262,6 @@ func TestAutoContextSolvesToTheLargestThatFits(t *testing.T) {
 	}
 }
 
-// The states report every param's bounds under the plan, and a value cache the runtime refuses without flash attention
 func TestParamStatesAndRefusal(t *testing.T) {
 	p, params := policy(t, "llamacpp")
 	d := descriptor(4, 100*mib, 0)
@@ -309,7 +306,7 @@ func TestParamStatesAndRefusal(t *testing.T) {
 			t.Fatalf("every quantized type is disabled without flash attention: %v", s)
 		}
 	}
-	// The cache types follow the weights: full width weights keep a full width cache, quantized weights an 8 bit one
+	// Quantized weights default to an 8-bit cache. Other weights use f16.
 	auto := params.Clone()
 	auto["n_ctx"] = int64(1024)
 	plan, err = p.Plan(input(d, host(24*gib, 64*gib), auto))
@@ -329,8 +326,7 @@ func TestHuman(t *testing.T) {
 	}
 }
 
-// A run the daemon measured on real hardware: the descriptor it planned, the
-// params it launched with, and what the runtime and the device reported
+// Measured run with descriptor, launch parameters, and runtime and device allocations.
 type measuredRun struct {
 	Runtime         string            `json:"runtime"`
 	Descriptor      json.RawMessage   `json:"descriptor"`
@@ -340,7 +336,6 @@ type measuredRun struct {
 	Measured        map[string]uint64 `json:"measured"`
 }
 
-// Replans every measured run with the params it ran with and holds the plan to what the card reported
 func TestPlansMatchMeasuredRuns(t *testing.T) {
 	families, err := archs.New(archs.All())
 	if err != nil {
@@ -441,7 +436,6 @@ func TestSlidingWindowAndSpannedDevices(t *testing.T) {
 	}
 }
 
-// A header without the heads the cache formula needs fails by naming them, never with the family's own words
 func TestPlanNamesMissingParams(t *testing.T) {
 	p, params := policy(t, "llamacpp")
 	d := descriptor(4, 100*mib, 0)
@@ -472,11 +466,9 @@ func usage(plan *v1.MemoryPlan, id string) *v1.PoolUsage {
 	return nil
 }
 
-// A model no fit holds is laid out the way the host would take it: the device fills to its
-// brim, the rest flows into host memory, and what nothing holds overflows past the last pool
 func TestNoFitFillsDeviceThenSpillsAndOverflows(t *testing.T) {
 	p, params := policy(t, "vllm")
-	// Twenty-eight 1 GiB layers plus cache and overhead, on a 12 GiB card with 16 GiB beside it
+	// 28 GiB of layers plus cache and overhead, on 12 GiB VRAM and 16 GiB RAM.
 	plan, err := p.Plan(input(descriptor(28, gib, 0), host(12*gib, 16*gib), defaults(params, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -515,7 +507,7 @@ func TestNoFitFillsDeviceThenSpillsAndOverflows(t *testing.T) {
 		t.Fatalf("layers should split across the sides, weights alone placed: %v", plan.GetPlacements())
 	}
 
-	// With host memory to spare the device still fills whole and the host takes the rest within its capacity
+	// Fill device memory first, then use available host capacity.
 	plan, err = p.Plan(input(descriptor(28, gib, 0), host(12*gib, 64*gib), defaults(params, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -528,7 +520,7 @@ func TestNoFitFillsDeviceThenSpillsAndOverflows(t *testing.T) {
 		t.Fatalf("detail %q", plan.GetDetail())
 	}
 
-	// Two cards fill in turn before anything reaches the host, and the solved counts say what landed on device
+	// Fill both devices before host memory and report device counts.
 	lp, lparams := policy(t, "llamacpp")
 	two := &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "a", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 8 * gib}, {Id: "b", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 8 * gib}, {Id: "h", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 4 * gib}}}
 	plan, err = lp.Plan(input(descriptor(28, gib, 0), two, defaults(lparams, nil)))
@@ -549,8 +541,6 @@ func TestNoFitFillsDeviceThenSpillsAndOverflows(t *testing.T) {
 	}
 }
 
-// A kind the policy loads only under some params stays on disk: out of the weights, out of every
-// pool, and listed as skipped, until the params turn it on
 func TestUnloadedKindsStayOnDisk(t *testing.T) {
 	d := descriptor(4, 100*mib, 0)
 	for i := int32(0); i < 3; i++ {
@@ -604,7 +594,6 @@ func TestUnloadedKindsStayOnDisk(t *testing.T) {
 	}
 }
 
-// Placements carry weights alone, so the pool's remainder reads as cache and overhead
 func TestPlacementsHoldWeightsAlone(t *testing.T) {
 	p, params := policy(t, "llamacpp")
 	plan, err := p.Plan(input(descriptor(28, 100*mib, 0), host(12*gib, 64*gib), defaults(params, nil)))
@@ -627,7 +616,6 @@ func TestPlacementsHoldWeightsAlone(t *testing.T) {
 	}
 }
 
-// Params read back the way a run resolves them
 func TestParamsAccessors(t *testing.T) {
 	p := estimate.Params{"i": int64(3), "f": 2.5, "s": "x", "b": true, "a": estimate.Auto}
 	if p.Int("i") != 3 || p.Int("f") != 2 || p.Float("i") != 3 || p.Float("f") != 2.5 || p.Str("s") != "x" || !p.Bool("b") || !p.IsAuto("a") || p.IsAuto("s") || p.Int("missing") != 0 {

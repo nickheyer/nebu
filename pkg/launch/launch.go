@@ -101,7 +101,7 @@ func (l *ProcessLauncher) Launch(ctx context.Context, spec Spec) (Handle, error)
 	p.tail = newTailer(spec.LogPath, p.log)
 	go func() {
 		p.err = cmd.Wait()
-		// Whatever the runtime left behind goes with it
+		// Clean up remaining child processes.
 		p.tree.Kill()
 		p.tree.Close()
 		close(p.exited)
@@ -140,7 +140,7 @@ func (p *Process) Stop(grace time.Duration) error {
 		return nil
 	default:
 	}
-	// Exit is watched through done, the process is never tied to a context
+	// Watch exit through done instead of binding the process to a context.
 	p.once.Do(func() { p.tree.Terminate(grace, p.done) })
 	<-p.done
 	return nil

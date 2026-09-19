@@ -12,11 +12,11 @@ const (
 	openaiChat        = "/v1/chat/completions"
 	openaiCompletions = "/v1/completions"
 	openaiEmbeddings  = "/v1/embeddings"
-	// The tokenizer llama.cpp, vLLM, and SGLang expose beside their OpenAI routes
+	// Tokenizer endpoint shared by llama.cpp, vLLM, and SGLang.
 	openaiTokenize = "/tokenize"
 )
 
-// The OpenAI wire format, what every shipped runtime speaks
+// OpenAI protocol adapter.
 type openai struct{}
 
 type oaiMessage struct {
@@ -159,7 +159,7 @@ func (openai) ParseRequest(path string, body []byte) (*Chat, error) {
 
 func (openai) RenderRequest(c *Chat) (string, []byte, error) {
 	if c.Kind == "count" {
-		// Both field names, one per server, each ignores the other's
+		// Send both server-specific field names. Servers ignore the other field.
 		text := promptText(c)
 		data, err := json.Marshal(map[string]any{"model": c.Model, "content": text, "prompt": text})
 		return openaiTokenize, data, err
@@ -239,7 +239,7 @@ func oaiReason(stop string) string {
 
 func (openai) ParseResult(c *Chat, body []byte) (*Result, error) {
 	if c.Kind == "count" {
-		// A count field, or the token list's length when the server gives only that
+		// Use the count field or token list length.
 		var count struct {
 			Count  int               `json:"count"`
 			Tokens []json.RawMessage `json:"tokens"`
@@ -433,7 +433,7 @@ func (s *oaiStream) Write(ev Event) error {
 
 func (openai) InlineImages() bool { return false }
 
-// A tokenizer endpoint sees only the prompt text, so images are added to its count
+// Add image tokens to the text-only tokenizer count.
 func (openai) CountsImages() bool { return false }
 
 func (s *oaiStream) Close() error {

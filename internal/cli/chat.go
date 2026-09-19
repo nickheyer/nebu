@@ -24,7 +24,7 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
-// Talks to a model through the gateway, one answer or a session over stdin
+// Sends a prompt or starts an interactive chat through the gateway.
 func runChat(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("chat")
 	system := fs.String("system", "", "system prompt")
@@ -54,7 +54,7 @@ func runChat(ctx context.Context, e *env, args []string) error {
 	if *once != "" {
 		return session.ask(ctx, *once)
 	}
-	fmt.Fprintf(e.errw, "chatting with %s through %s, /reset starts over, /system sets the prompt, ctrl-c stops an answer, ctrl-d ends\n", session.model, session.url)
+	fmt.Fprintf(e.errw, "chatting with %s through %s\n/reset: clear history, /system: set prompt, ctrl-c: stop answer, ctrl-d: exit\n", session.model, session.url)
 	sc := bufio.NewScanner(e.in)
 	sc.Buffer(make([]byte, 1<<20), 16<<20)
 	lines := make(chan string)
@@ -64,7 +64,7 @@ func runChat(ctx context.Context, e *env, args []string) error {
 			lines <- sc.Text()
 		}
 	}()
-	// An interrupt stops the answer in flight and ends the session when none is
+	// Interrupts cancel the current answer or exit an idle session.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt)
 	defer signal.Stop(sigs)
@@ -113,7 +113,7 @@ func runChat(ctx context.Context, e *env, args []string) error {
 	}
 }
 
-// Fails before a session opens when the route is not there or not ready
+// Requires a ready route before opening a session.
 func (e *env) routeReady(ctx context.Context, name string) error {
 	resp, err := e.cl.gateway.ListRoutes(ctx, connect.NewRequest(&v1.ListRoutesRequest{}))
 	if err != nil {
@@ -148,7 +148,7 @@ type chatSession struct {
 	history     []chatMessage
 }
 
-// Drops every turn but the system prompt
+// Clears chat history, keeping the system prompt.
 func (s *chatSession) reset() {
 	if len(s.history) > 0 && s.history[0].Role == "system" {
 		s.history = s.history[:1]
@@ -157,7 +157,7 @@ func (s *chatSession) reset() {
 	s.history = nil
 }
 
-// Sets the system prompt ahead of the turns, keeping them
+// Replaces the system prompt without clearing history.
 func (s *chatSession) setSystem(text string) {
 	if len(s.history) > 0 && s.history[0].Role == "system" {
 		s.history[0].Content = text
@@ -166,7 +166,7 @@ func (s *chatSession) setSystem(text string) {
 	s.history = append([]chatMessage{{Role: "system", Content: text}}, s.history...)
 }
 
-// Sends the history with one more user turn and streams the answer to out
+// Appends a user turn and streams the answer.
 func (s *chatSession) ask(ctx context.Context, text string) error {
 	s.history = append(s.history, chatMessage{Role: "user", Content: text})
 	body := map[string]any{"model": s.model, "messages": s.history, "stream": true, "stream_options": map[string]any{"include_usage": true}}
@@ -209,7 +209,7 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64<<10), 16<<20)
 	for sc.Scan() && failed == nil {
-		// A runtime that breaks off mid answer says so in an error field or an error line
+		// Check error fields and lines for interrupted answers.
 		field, payload, ok := strings.Cut(sc.Text(), ":")
 		if !ok || field != "data" && field != "error" {
 			continue
@@ -260,7 +260,7 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 	if elapsed > 0 && answer.Len() > 0 {
 		fmt.Fprintf(s.out, "[%d tokens in %.1fs, %.1f tok/s]\n", tokens, elapsed, float64(tokens)/elapsed)
 	}
-	// What arrived stays in the history, a turn with no answer is taken back
+	// Keep partial answers. Remove unanswered turns.
 	if answer.Len() > 0 {
 		s.history = append(s.history, chatMessage{Role: "assistant", Content: answer.String()})
 	} else {
@@ -269,7 +269,7 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 	return err
 }
 
-// The message in an OpenAI shaped error body, empty when it has none
+// Extracts an OpenAI error message, or returns empty.
 func errorMessage(raw []byte) string {
 	var e struct {
 		Error struct {

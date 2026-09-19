@@ -20,7 +20,7 @@ import (
 
 func runRun(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("run")
-	source := fs.String("source", "", "source id, first configured when empty")
+	source := fs.String("source", "", "source id (default: first configured)")
 	group := fs.String("group", "", "weight group, required when several are stored")
 	runtimeID := fs.String("runtime", "", "runtime id, the first that accepts the format when empty")
 	installID := fs.String("install", "", "install id, newest for the runtime when empty")
@@ -195,7 +195,7 @@ func renderInstance(w io.Writer, in *v1.Instance) {
 
 func runSwap(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("swap")
-	source := fs.String("source", "", "source id, first configured when empty")
+	source := fs.String("source", "", "source id (default: first configured)")
 	group := fs.String("group", "", "weight group, required when several are stored")
 	runtimeID := fs.String("runtime", "", "runtime id, the slot default or the first that accepts the format when empty")
 	installID := fs.String("install", "", "install id, newest for the runtime when empty")
@@ -292,14 +292,14 @@ func modelText(req *v1.RunRequest) string {
 	return req.GetRepo() + ":" + req.GetGroup()
 }
 
-// Declares the slot settings flags, the returned func reads them once parsed
+// Defines slot flags and returns a function to read parsed values.
 func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 	req := &v1.UpdateSlotRequest{}
 	var devices, params multi
 	var position uint
 	fs.Var(&devices, "device", "device id from nebu host, repeatable, all devices when none")
 	memory := fs.String("memory", "", "the most memory a run takes per pool, such as 8GiB, whole pools when empty")
-	placement := fs.String("placement", "", "where the model goes: device, host, or auto for the device first with the rest on the host")
+	placement := fs.String("placement", "", "placement: device, host, or auto (device first, then host)")
 	fs.StringVar(&req.RuntimeId, "runtime", "", "default runtime for models run in the slot")
 	fs.UintVar(&position, "position", 0, "place in the slot list, one based, last when 0")
 	fs.Var(&params, "param", "default runtime param as name=value, repeatable")
@@ -363,7 +363,7 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	// The update replaces every field, so start from what the slot has and change only what was passed
+	// Updates replace all fields. Merge flag changes into the current slot.
 	cur := current.Msg.GetSlot()
 	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Placement: cur.GetPlacement(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams(), Policy: cur.GetPolicy(), Profile: cur.GetProfile()}
 	if req.Policy == nil {
@@ -406,7 +406,7 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) { slotsTable(w, []*v1.Slot{resp.Msg.GetSlot()}) })
 }
 
-// Declares the route limit flags, the returned func fills the policy once parsed
+// Defines limit flags and returns a function to populate the policy.
 func policyFlags(fs *flag.FlagSet) (*v1.Policy, func() error) {
 	p := &v1.Policy{}
 	inFlight := fs.Uint("max-in-flight", 0, "requests in flight at once on the slot's route, 0 inherits the gateway default")
@@ -427,10 +427,10 @@ func policyFlags(fs *flag.FlagSet) (*v1.Policy, func() error) {
 	}
 }
 
-// Declares the route shaping flags, the returned func fills the profile once parsed
+// Defines profile flags and returns a function to populate the profile.
 func profileFlags(fs *flag.FlagSet) (*v1.Profile, func() error) {
 	p := &v1.Profile{}
-	mode := fs.String("system-messages", "", "what a system message after the first becomes: keep, merge, user, or auto, which lets the instance's chat template probe decide")
+	mode := fs.String("system-messages", "", "later system messages: keep, merge, user, or auto (use template probe)")
 	return p, func() error {
 		var err error
 		p.SystemMessages, err = parseSystemMessages(*mode)
@@ -452,7 +452,7 @@ func parseSystemMessages(s string) (v1.SystemMessages, error) {
 	return v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED, fmt.Errorf("system-messages: %q is not auto, keep, merge, or user", s)
 }
 
-// Puts a profile into one line, dash when it leaves everything to the instance
+// Summarizes a profile, or returns a dash when it inherits instance settings.
 func profileText(p *v1.Profile) string {
 	if p.GetSystemMessages() == v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
 		return "-"
@@ -460,7 +460,7 @@ func profileText(p *v1.Profile) string {
 	return "system-messages " + text.Enum(p.GetSystemMessages())
 }
 
-// What an instance's chat template probe found, in one line
+// Summarizes the chat template probe.
 func templateText(tp *v1.TemplateProbe) string {
 	switch {
 	case tp == nil:
@@ -484,7 +484,7 @@ func parseMillis(s string) (uint32, error) {
 	return uint32(d / time.Millisecond), nil
 }
 
-// Puts a policy into one line, dash when it inherits everything
+// Summarizes a policy, or returns a dash when all settings are inherited.
 func policyText(p *v1.Policy) string {
 	var parts []string
 	if p.GetMaxInFlight() > 0 {
@@ -615,7 +615,7 @@ func runRoutesList(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) { routesTable(w, resp.Msg.GetRoutes(), defaults) })
 }
 
-// Prints routes with the limits each one enforces, its own over the gateway's
+// Prints routes with their effective limits.
 func routesTable(w io.Writer, list []*v1.Route, defaults *v1.Policy) {
 	var rows [][]string
 	for _, r := range list {
@@ -710,7 +710,7 @@ func runGatewayTraces(ctx context.Context, e *env, args []string) error {
 	})
 }
 
-// The wire formats of a trace, one word when the runtime spoke the client's
+// Formats trace protocols, combining identical client and runtime protocols.
 func traceFormat(t *v1.Trace) string {
 	client := text.Enum(t.GetClientApi())
 	if !t.GetTranslated() {
@@ -719,7 +719,7 @@ func traceFormat(t *v1.Trace) string {
 	return client + ">" + text.Enum(t.GetUpstreamApi())
 }
 
-// Milliseconds between two stamps, dash when either is missing
+// Elapsed milliseconds, or a dash if either timestamp is missing.
 func traceMillis(from, to *timestamppb.Timestamp) string {
 	if from == nil || to == nil {
 		return "-"

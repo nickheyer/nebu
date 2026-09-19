@@ -1,7 +1,7 @@
 import { SystemMessages, type Policy, type Profile } from '$proto/gateway_pb';
 import type { TemplateProbe } from '$proto/instance_pb';
 
-// Turns a listener address into a URL this browser can reach, an unspecified host meaning the one serving the page
+// Use the page's hostname for wildcard listener addresses.
 export function listenerUrl(addr: string, tls: boolean): string {
   const i = addr.lastIndexOf(':');
   let host = i >= 0 ? addr.slice(0, i) : addr;
@@ -13,17 +13,13 @@ export function listenerUrl(addr: string, tls: boolean): string {
   return `${tls ? 'https' : 'http'}://${host}${port}`;
 }
 
-// The three wire formats the gateway answers in: the base URL a client is configured with, and every path it answers on
 export interface Dialect {
   id: 'openai' | 'anthropic' | 'ollama';
   label: string;
-  // Appended to a listener's origin to make the base URL a client SDK takes
+  // Append to the listener origin for the SDK base URL.
   base: string;
-  // The header a key travels in
   header: string;
-  // Every path the gateway answers in the dialect, with its method
   endpoints: { method: string; path: string }[];
-  // A first request in the dialect
   curl: (origin: string, model: string, auth: boolean) => string;
 }
 
@@ -77,7 +73,7 @@ export const dialects: Dialect[] = [
 
 const pick = (a: number | undefined, b: number | undefined) => a || b || 0;
 
-// The limits a route enforces as label and value pairs, each zero field inheriting the gateway default
+// Zero values inherit gateway defaults.
 export function policyParts(p: Policy | undefined, d: Policy | undefined): [string, string][] {
   const out: [string, string][] = [];
   const inFlight = pick(p?.maxInFlight, d?.maxInFlight);
@@ -92,13 +88,12 @@ export function policyParts(p: Policy | undefined, d: Policy | undefined): [stri
   return out;
 }
 
-// The same limits in one line, "No limits" when nothing applies
 export function policyText(p: Policy | undefined, d: Policy | undefined): string {
   const parts = policyParts(p, d).map(([k, v]) => `${k.toLowerCase()} ${v}`);
   return parts.length ? parts.join(' · ') : 'No limits';
 }
 
-// A policy as the form holds it, every field text, empty meaning inherit
+// Empty fields inherit gateway defaults.
 export interface PolicyFields {
   maxInFlight: string;
   rps: string;
@@ -120,50 +115,43 @@ export function policyFields(p: Policy | undefined): PolicyFields {
 const whole = (s: string) => Math.max(0, Math.floor(parseFloat(s) || 0));
 const millis = (s: string) => Math.round((parseFloat(s) || 0) * 1000);
 
-// The form's fields as the policy the daemon takes
 export function policyFrom(f: PolicyFields): Policy {
   return { maxInFlight: whole(f.maxInFlight), requestsPerSecond: parseFloat(f.rps) || 0, burst: whole(f.burst), requestTimeoutMs: millis(f.timeout), upstreamTimeoutMs: millis(f.upstream) } as Policy;
 }
 
-// How many limits a form sets
 export function policyCount(f: PolicyFields): number {
   return [f.maxInFlight, f.rps, f.burst, f.timeout, f.upstream].filter((v) => v.trim()).length;
 }
 
-// The choices for a system message after the first, auto leaving it to the instance's chat template probe
 export const systemMessageItems: { value: string; label: string; detail: string }[] = [
-  { value: 'auto', label: 'Template decides', detail: 'Kept when the template renders them, merged when it refuses them' },
-  { value: 'keep', label: 'Keep', detail: 'Sent as they came' },
-  { value: 'merge', label: 'Merge', detail: 'Folded into the first system message' },
-  { value: 'user', label: 'User turns', detail: 'Sent as user messages where they stood' }
+  { value: 'auto', label: 'Template decides', detail: 'Keep if supported by the template, otherwise merge' },
+  { value: 'keep', label: 'Keep', detail: 'Send unchanged' },
+  { value: 'merge', label: 'Merge', detail: 'Combine with the first system message' },
+  { value: 'user', label: 'User turns', detail: 'Convert to user messages in place' }
 ];
 
 const modeOf: Record<string, SystemMessages> = { keep: SystemMessages.KEEP, merge: SystemMessages.MERGE, user: SystemMessages.USER };
 
-// The form's choice as the profile the daemon takes
 export function profileFrom(mode: string): Profile {
   return { systemMessages: modeOf[mode] ?? SystemMessages.UNSPECIFIED } as Profile;
 }
 
-// A profile as the form holds it, auto when it leaves the choice to the instance
 export function profileValue(p: Profile | undefined): string {
   return Object.entries(modeOf).find(([, m]) => m === p?.systemMessages)?.[0] ?? 'auto';
 }
 
 const modeLabel = (mode: string) => systemMessageItems.find((i) => i.value === mode)?.label.toLowerCase() ?? mode;
 
-// One line for a route's shaping, the instance's probe answering when the route leaves it to the template
 export function profileText(p: Profile | undefined, template?: TemplateProbe): string {
   const mode = profileValue(p);
   if (mode !== 'auto') return `System messages: ${modeLabel(mode)}`;
   if (!template) return 'System messages: template decides';
   if (template.error) return 'System messages: kept · probe failed';
-  return template.lateSystem ? 'System messages: kept · template renders them' : 'System messages: merged · template refuses them';
+  return template.lateSystem ? 'System messages: kept · supported by template' : 'System messages: merged · unsupported by template';
 }
 
-// What an instance's chat template probe found
 export function templateText(t: TemplateProbe | undefined): string {
   if (!t) return 'Not probed';
   if (t.error) return `Probe failed: ${t.error}`;
-  return t.lateSystem ? 'Renders a system message after the first' : `Refuses a system message after the first: ${t.refusal}`;
+  return t.lateSystem ? 'Supports later system messages' : `Later system messages are unsupported: ${t.refusal}`;
 }

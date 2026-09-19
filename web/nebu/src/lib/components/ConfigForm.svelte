@@ -6,11 +6,7 @@
   import NumberInput from './ui/NumberInput.svelte';
   import TextInput from './ui/TextInput.svelte';
 
-  // Fields the daemon describes, rendered the same way whatever they configure: a source, an install
-  //
-  // An empty value means the default. Only values that differ from the default are kept. The form is
-  // valid once every required field holds a value of its own or a default; the grid takes as many
-  // columns as the fields fill.
+  // Empty fields use defaults. Store only overrides. Required fields need a value or default.
   let {
     fields = [],
     values = $bindable({}),
@@ -26,7 +22,7 @@
     values = next;
   }
 
-  // The shape a field's type takes, shown while empty and the daemon names neither a default nor a shape
+  // Fallback placeholder when the daemon provides neither a default nor a format.
   function hintFor(f: ConfigField): string {
     switch (f.type) {
       case ConfigType.PATH:

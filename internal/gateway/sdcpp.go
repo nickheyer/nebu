@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	// The native API of stable-diffusion.cpp's server, passed through for a client that speaks it
+	// Native stable-diffusion.cpp API paths, proxied unchanged.
 	sdcppPrefix       = "/sdcpp/"
 	sdcppCapabilities = "/sdcpp/v1/capabilities"
 	sdcppImageJob     = "/sdcpp/v1/img_gen"
@@ -18,10 +18,8 @@ const (
 	sdcppJobs         = "/sdcpp/v1/jobs/"
 )
 
-// stable-diffusion.cpp's server, which makes images and video and answers no chat, completion, or embedding request
-//
-// Such requests reach a diffusion route through the OpenAI paths, so translation refuses them in words
-// that name the endpoints the route does answer. The native paths pass through unread.
+// stable-diffusion.cpp protocol adapter. Rejects chat, completion, and embedding
+// requests with supported media endpoints. Native paths pass through unchanged.
 type sdcpp struct{}
 
 func notChat() error {
@@ -54,7 +52,7 @@ func (sdcpp) Error(w http.ResponseWriter, status int, message, kind string) {
 func (sdcpp) InlineImages() bool { return false }
 func (sdcpp) CountsImages() bool { return false }
 
-// Capabilities asks a running sd-server what it generates, img_gen and vid_gen, as its capabilities endpoint lists them
+// Capabilities reads img_gen and vid_gen support from sd-server.
 func Capabilities(ctx context.Context, client *http.Client, endpoint string) ([]string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(endpoint, "/")+sdcppCapabilities, nil)
 	if err != nil {

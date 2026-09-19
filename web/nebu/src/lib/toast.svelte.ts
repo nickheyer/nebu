@@ -9,7 +9,6 @@ export interface Toast {
   href?: string;
   linkLabel?: string;
   sticky?: boolean;
-  // Something is still happening, drawn with a spinner instead of a tone icon
   busy?: boolean;
 }
 
@@ -17,14 +16,12 @@ export const toasts = $state<Toast[]>([]);
 let next = 1;
 const timers = new Map<number, ReturnType<typeof setTimeout>>();
 
-// Dismisses a toast after a moment, longer for a failure
 function expire(id: number, tone: Tone) {
   const t = timers.get(id);
   if (t) clearTimeout(t);
   timers.set(id, setTimeout(() => dismiss(id), tone === 'bad' ? 9000 : 4500));
 }
 
-// Shows a toast, dismissed after a moment unless sticky
 export function toast(t: Omit<Toast, 'id'>): number {
   const id = next++;
   toasts.push({ id, ...t });
@@ -32,7 +29,7 @@ export function toast(t: Omit<Toast, 'id'>): number {
   return id;
 }
 
-// Turns a shown toast into its ending; one already gone is shown again as its ending
+// Update the toast on completion, or recreate it if dismissed.
 export function settle(id: number, t: Omit<Toast, 'id' | 'busy' | 'sticky'>) {
   const i = toasts.findIndex((x) => x.id === id);
   if (i < 0) {
@@ -51,7 +48,6 @@ export function dismiss(id: number) {
   if (i >= 0) toasts.splice(i, 1);
 }
 
-// Reports an error from an RPC or anything else
 export function fail(err: unknown, title = 'Something went wrong') {
   toast({ tone: 'bad', title, detail: message(err) });
 }
@@ -60,7 +56,6 @@ export function ok(title: string, detail?: string, link?: { href: string; label:
   toast({ tone: 'ok', title, detail, href: link?.href, linkLabel: link?.label });
 }
 
-// Reports that something has started and is still running
 export function started(title: string, detail?: string, link?: { href: string; label: string }): number {
   return toast({ tone: 'accent', busy: true, title, detail, href: link?.href, linkLabel: link?.label });
 }

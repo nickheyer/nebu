@@ -15,9 +15,9 @@ import (
 
 const (
 	postTimeout = 15 * time.Second
-	// Posts waiting for a slow webhook before the oldest is dropped
+	// Webhook queue capacity. Oldest posts are dropped when full.
 	queueSize = 1024
-	// Attempts per webhook, a failed connection or a server error tried again after a growing pause
+	// Maximum webhook attempts, with backoff for connection and server errors.
 	attempts     = 4
 	retryBackoff = 2 * time.Second
 )
@@ -29,10 +29,8 @@ type Notifier struct {
 	Log      *slog.Logger
 }
 
-// Follows the bus until ctx ends, nothing to do without webhooks
-//
-// Posting happens off the bus loop through a bounded queue, so a webhook that
-// stalls never costs the loop an event, and what the queue cannot hold is counted.
+// Subscribes to events until cancellation when webhooks are configured.
+// A bounded queue keeps slow webhooks off the event loop and counts dropped posts.
 func (n *Notifier) Run(ctx context.Context) {
 	if len(n.Webhooks) == 0 {
 		return
@@ -79,7 +77,7 @@ func (n *Notifier) Run(ctx context.Context) {
 	}
 }
 
-// Picks each instance's step into failed
+// Detects transitions to failed state.
 func matters(ev *v1.Event, seen map[string]v1.InstanceState) bool {
 	in := ev.GetInstance()
 	if in == nil {
@@ -95,7 +93,7 @@ func matters(ev *v1.Event, seen map[string]v1.InstanceState) bool {
 	return failed
 }
 
-// Sends the document to every webhook, each tried again on a connection or server error
+// Posts to each webhook, retrying connection and server errors.
 func (n *Notifier) post(ctx context.Context, client *http.Client, body []byte) {
 	for _, url := range n.Webhooks {
 		for attempt := 1; attempt <= attempts; attempt++ {

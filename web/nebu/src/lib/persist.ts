@@ -1,4 +1,4 @@
-// Browser storage that may be missing or refused, every read falling back to empty
+// Return an empty value if browser storage is unavailable.
 export function readLocal(key: string): string {
   try {
     return localStorage.getItem(key) ?? '';
@@ -7,17 +7,16 @@ export function readLocal(key: string): string {
   }
 }
 
-// Writes a value, an empty one removing the key
+// An empty value removes the key.
 export function writeLocal(key: string, value: string) {
   try {
     if (value) localStorage.setItem(key, value);
     else localStorage.removeItem(key);
   } catch {
-    // private windows and locked down browsers refuse storage
+    // Storage may be disabled by the browser.
   }
 }
 
-// The stored keys under a prefix, none where storage is refused
 export function localKeys(prefix: string): string[] {
   try {
     const out: string[] = [];

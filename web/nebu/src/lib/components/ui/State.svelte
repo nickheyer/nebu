@@ -1,7 +1,6 @@
 <script lang="ts">
   import { inMotion, stateLabel, tone as toneOf, type Tone } from '$lib/format';
 
-  // A colored dot and a word, the one way state is shown, from a generated enum or given outright
   let {
     values,
     value,

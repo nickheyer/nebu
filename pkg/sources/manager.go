@@ -22,13 +22,8 @@ type Store interface {
 	DeleteSource(ctx context.Context, id string) (bool, error)
 }
 
-// Owns the source rows and the registry built from them
-//
-// Seeded defaults and config entries become rows on Load, so from then on
-// the rows are the only truth and the registry is rebuilt from them on
-// every change. Rows that were added come first, oldest first, then the
-// seeded defaults in kind order, so the first source is the one commands
-// fall back to: your first added source, or huggingface with none.
+// Manages persisted sources and rebuilds the registry after changes. Added sources precede seeded
+// defaults, ordered by creation time and provider kind respectively.
 type Manager struct {
 	Store    Store
 	Events   *events.Bus
@@ -39,7 +34,7 @@ type Manager struct {
 	rows []*v1.Source
 }
 
-// Builds a manager with an empty registry, filled by Load; transports keep clones and scratch under cacheDir
+// Creates an empty manager. Transports cache clones and downloads under cacheDir.
 func NewManager(store Store, bus *events.Bus, log *slog.Logger, cacheDir string) *Manager {
 	if log == nil {
 		log = slog.Default()
@@ -47,15 +42,11 @@ func NewManager(store Store, bus *events.Bus, log *slog.Logger, cacheDir string)
 	return &Manager{Store: store, Events: bus, Log: log, Registry: &Registry{CacheDir: cacheDir, byID: map[string]Source{}}}
 }
 
-// Ids are path segments in the store, so they stay plain
+// IDs must be valid store path segments.
 var validID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
-// Loads the rows, creating each bootstrap entry and seeded default whose id
-// is absent, then builds the registry
-//
-// Bootstrap entries come first so a config file can define the source a
-// provider's name gets; a seeded default fills in only when nothing has that
-// name. An entry whose id exists is left alone, changed or not.
+// Loads persisted sources and inserts missing bootstrap entries, then seeded defaults. Existing IDs
+// are preserved. Builds the registry from the resulting rows.
 func (m *Manager) Load(ctx context.Context, bootstrap []*v1.Source) error {
 	rows, err := m.Store.ListSources(ctx)
 	if err != nil {
@@ -69,7 +60,7 @@ func (m *Manager) Load(ctx context.Context, bootstrap []*v1.Source) error {
 		if have[strings.TrimSpace(cfg.GetId())] {
 			continue
 		}
-		// The row is kept on its shape alone, a client that cannot be built stays listed as broken
+		// Retain valid source definitions even when client initialization fails.
 		row, err := m.prepare(cfg, false)
 		if err != nil {
 			return fmt.Errorf("config source %q: %w", cfg.GetId(), err)
@@ -161,7 +152,7 @@ func (m *Manager) Create(ctx context.Context, in *v1.Source) (*v1.Source, error)
 	return clone(row), nil
 }
 
-// Replaces the name and settings of a source; its id, kind, and origin stay
+// Updates source name and settings, preserving ID, kind, and origin.
 func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -191,7 +182,7 @@ func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error)
 	return clone(next), nil
 }
 
-// Removes a source; seeded defaults stay
+// Removes a source unless it is a seeded default.
 func (m *Manager) Delete(ctx context.Context, id string) (*v1.Source, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -220,7 +211,7 @@ func (m *Manager) publish(action v1.EventAction, s *v1.Source) {
 	}
 }
 
-// Turns a request into a row: a plain id, settings the provider accepts, fresh stamps, the client built when asked
+// Validates a new source and optionally builds its client.
 func (m *Manager) prepare(in *v1.Source, build bool) (*v1.Source, error) {
 	id := strings.TrimSpace(in.GetId())
 	if !validID.MatchString(id) || strings.Contains(id, "..") {
