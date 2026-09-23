@@ -1,5 +1,6 @@
 import { createClient, ConnectError, Code, type Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
+import { AuthService } from '$proto/auth_pb';
 import { BuildService } from '$proto/recipe_pb';
 import { BotService } from '$proto/bot_pb';
 import { EstimateService } from '$proto/estimate_pb';
@@ -47,7 +48,8 @@ export const api = {
   slots: createClient(SlotService, transport),
   gateway: createClient(GatewayService, transport),
   events: createClient(EventService, transport),
-  bots: createClient(BotService, transport)
+  bots: createClient(BotService, transport),
+  auth: createClient(AuthService, transport)
 };
 
 // Include the API token in file URLs when authentication is required.

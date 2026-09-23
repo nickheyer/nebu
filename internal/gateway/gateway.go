@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -35,10 +36,21 @@ const (
 	heartbeat = "Ollama is running"
 )
 
+// Answers whether requests need credentials at all and whether one request carries a valid one:
+// the daemon token, a user's API token, or a signed-in browser session
+type Credentials interface {
+	Enabled() bool
+	Authenticated(http.Header) bool
+}
+
+// Marks requests made in process, which pass without credentials
+type localKey struct{}
+
 // Routes requests by model and translates OpenAI, Anthropic, and Ollama protocols.
 type Gateway struct {
 	table     *Table
 	keys      []string
+	creds     Credentials
 	origins   []string
 	listeners []*v1.Listener
 	tls       bool
@@ -65,6 +77,14 @@ func (g *Gateway) Traces() *Recorder { return g.traces }
 // Sets gateway identity for clients.
 func (g *Gateway) SetVersion(v string) { g.version = v }
 
+// Requires credentials whenever they are enabled, and accepts them where a gateway key would do.
+func (g *Gateway) SetCredentials(c Credentials) { g.creds = c }
+
+// Whether requests must carry a gateway key or a daemon credential
+func (g *Gateway) required() bool {
+	return len(g.keys) > 0 || (g.creds != nil && g.creds.Enabled())
+}
+
 // Caches transports by response header timeout.
 func (g *Gateway) transport(upstreamMs uint32) *http.Transport {
 	g.mu.Lock()
@@ -88,7 +108,7 @@ func (g *Gateway) Table() *Table { return g.table }
 
 // Reports listeners, routes, and counters
 func (g *Gateway) Status() *v1.GatewayStatus {
-	return &v1.GatewayStatus{Listeners: g.listeners, Routes: g.table.List(), Auth: len(g.keys) > 0, Requests: g.table.Requests(), Policy: g.table.Defaults(), Tls: g.tls}
+	return &v1.GatewayStatus{Listeners: g.listeners, Routes: g.table.List(), Auth: g.required(), Requests: g.table.Requests(), Policy: g.table.Defaults(), Tls: g.tls}
 }
 
 // Registers gateway routes on a mux
@@ -111,7 +131,11 @@ func (g *Gateway) cors(next http.HandlerFunc) http.HandlerFunc {
 		origin := r.Header.Get("Origin")
 		if origin != "" && g.originAllowed(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			// Session cookies ride along only from the daemon's own host or a listed origin.
+			if g.credentialed(origin, r) {
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
 			// Allow requested headers. Bearer keys enforce authentication.
 			if asked := r.Header.Get("Access-Control-Request-Headers"); asked != "" {
 				w.Header().Set("Access-Control-Allow-Headers", asked)
@@ -127,6 +151,24 @@ func (g *Gateway) cors(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// Whether browsers at origin may send cookies: the request's own host on any port, or an origin listed by name
+func (g *Gateway) credentialed(origin string, r *http.Request) bool {
+	for _, o := range g.origins {
+		if o != "*" && strings.EqualFold(o, origin) {
+			return true
+		}
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.EqualFold(u.Hostname(), strings.Trim(host, "[]"))
 }
 
 func (g *Gateway) originAllowed(origin string) bool {
@@ -171,13 +213,10 @@ func readBody(w http.ResponseWriter, r *http.Request, client Flavor) ([]byte, bo
 	return body, true
 }
 
-// Rejects requests without a configured key when keys are set
+// Rejects requests without a gateway key or a daemon credential whenever either is configured
 func (g *Gateway) auth(next http.HandlerFunc) http.HandlerFunc {
-	if len(g.keys) == 0 {
-		return next
-	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !g.authorized(r) {
+		if g.required() && !g.authorized(r) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="nebu"`)
 			flavorOf(clientFlavor(r)).Error(w, http.StatusUnauthorized, "missing or invalid api key", "authentication_error")
 			return
@@ -186,20 +225,21 @@ func (g *Gateway) auth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// In-process callers pass. Others need a gateway key, or a credential the daemon accepts.
 func (g *Gateway) authorized(r *http.Request) bool {
+	if r.Context().Value(localKey{}) != nil {
+		return true
+	}
 	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
 	if token == "" {
 		token = r.Header.Get("X-Api-Key")
 	}
-	if token == "" {
-		return false
-	}
 	for _, k := range g.keys {
-		if subtle.ConstantTimeCompare([]byte(k), []byte(token)) == 1 {
+		if token != "" && subtle.ConstantTimeCompare([]byte(k), []byte(token)) == 1 {
 			return true
 		}
 	}
-	return false
+	return g.creds != nil && g.creds.Authenticated(r.Header)
 }
 
 func (g *Gateway) health(w http.ResponseWriter, r *http.Request) {

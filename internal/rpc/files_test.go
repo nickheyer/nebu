@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/pkg/cache"
 	"github.com/nickheyer/nebu/pkg/formats/all"
@@ -34,7 +35,7 @@ func fileServer(t *testing.T, token string) *httptest.Server {
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := &files{inspector: &inspect.Inspector{Sources: reg, Formats: fmts, Cache: store, Log: log}, auth: &auth{token: token}, log: log}
+	h := &files{inspector: &inspect.Inspector{Sources: reg, Formats: fmts, Cache: store, Log: log}, auth: auth.NewGuard(token, nil, nil), log: log}
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return srv

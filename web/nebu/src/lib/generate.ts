@@ -1,4 +1,5 @@
 import { errorMessage } from './chatClient';
+import { gatewayCredentials } from './auth.svelte';
 import { deleteImages, type Attachment } from './images';
 import { readLocal, writeLocal } from './persist';
 
@@ -147,7 +148,7 @@ async function refuse(resp: Response): Promise<never> {
 }
 
 export async function capabilities(base: string, model: string, key: string, signal: AbortSignal): Promise<Capabilities> {
-  const resp = await fetch(base + '/sdcpp/v1/capabilities', { headers: { ...headers(key, false), 'X-Nebu-Model': model }, signal });
+  const resp = await fetch(base + '/sdcpp/v1/capabilities', { headers: { ...headers(key, false), 'X-Nebu-Model': model }, signal, credentials: gatewayCredentials() });
   if (!resp.ok) await refuse(resp);
   return (await resp.json()) as Capabilities;
 }
@@ -155,7 +156,7 @@ export async function capabilities(base: string, model: string, key: string, sig
 export async function generateImages(base: string, req: MediaRequest, key: string, signal: AbortSignal, onSent?: (s: Sent) => void): Promise<{ images: string[]; format: string }> {
   const body = JSON.stringify(req);
   const h = headers(key);
-  const resp = await fetch(base + '/v1/images/generations', { method: 'POST', headers: h, body, signal });
+  const resp = await fetch(base + '/v1/images/generations', { method: 'POST', headers: h, body, signal, credentials: gatewayCredentials() });
   onSent?.({ path: '/v1/images/generations', headers: h, body, status: resp.status, trace: resp.headers.get('X-Nebu-Trace') ?? '' });
   if (!resp.ok) await refuse(resp);
   const parsed = (await resp.json()) as { output_format: string; data: { b64_json: string }[] };
@@ -165,26 +166,26 @@ export async function generateImages(base: string, req: MediaRequest, key: strin
 export async function createVideo(base: string, req: MediaRequest, key: string, signal: AbortSignal, onSent?: (s: Sent) => void): Promise<VideoObject> {
   const body = JSON.stringify(req);
   const h = headers(key);
-  const resp = await fetch(base + '/v1/videos', { method: 'POST', headers: h, body, signal });
+  const resp = await fetch(base + '/v1/videos', { method: 'POST', headers: h, body, signal, credentials: gatewayCredentials() });
   onSent?.({ path: '/v1/videos', headers: h, body, status: resp.status, trace: resp.headers.get('X-Nebu-Trace') ?? '' });
   if (!resp.ok) await refuse(resp);
   return (await resp.json()) as VideoObject;
 }
 
 export async function getVideo(base: string, id: string, key: string, signal?: AbortSignal): Promise<VideoObject> {
-  const resp = await fetch(`${base}/v1/videos/${id}`, { headers: headers(key, false), signal });
+  const resp = await fetch(`${base}/v1/videos/${id}`, { headers: headers(key, false), signal, credentials: gatewayCredentials() });
   if (!resp.ok) await refuse(resp);
   return (await resp.json()) as VideoObject;
 }
 
 export async function fetchVideo(base: string, id: string, key: string, signal?: AbortSignal): Promise<Blob> {
-  const resp = await fetch(`${base}/v1/videos/${id}/content`, { headers: headers(key, false), signal });
+  const resp = await fetch(`${base}/v1/videos/${id}/content`, { headers: headers(key, false), signal, credentials: gatewayCredentials() });
   if (!resp.ok) await refuse(resp);
   return resp.blob();
 }
 
 export async function deleteVideo(base: string, id: string, key: string): Promise<void> {
-  const resp = await fetch(`${base}/v1/videos/${id}`, { method: 'DELETE', headers: headers(key, false) });
+  const resp = await fetch(`${base}/v1/videos/${id}`, { method: 'DELETE', headers: headers(key, false), credentials: gatewayCredentials() });
   if (!resp.ok && resp.status !== 404) await refuse(resp);
 }
 

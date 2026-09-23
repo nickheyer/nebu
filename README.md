@@ -9,6 +9,8 @@ Nebu manages model weights and inference runtimes. Named after the Nebuchadnezza
 - APIs: OpenAI, Anthropic, Ollama
 - Discord: text, images, video, personas, automations, and sharding
 - Platforms: Linux, macOS, Windows, and FreeBSD
+- SSO/OIDC: Supports all OpenID Connect Providers. See `compose.yaml` or `packaging/config.yaml`
+- Local Auth: Enabled by default. The web UI signs in with an account, API and gateway clients send an API token made in Settings
 
 # Install
 

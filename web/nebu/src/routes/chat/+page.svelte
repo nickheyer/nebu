@@ -3,9 +3,10 @@
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { page } from '$app/state';
   import { replaceState } from '$app/navigation';
-  import { baseUrl, gatewayKey, setGatewayKey } from '$lib/api';
+  import { baseUrl, gatewayKey, setGatewayKey, token } from '$lib/api';
   import { listenerUrl } from '$lib/gateway';
   import { live, cached, slotByRef, instanceLive, runtimeName, modelKey, clock } from '$lib/state.svelte';
+  import { auth } from '$lib/auth.svelte';
   import { readLocal, writeLocal } from '$lib/persist';
   import { byName, bytes, enumLabel, ms, rate, duration, millisBetween } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
@@ -88,7 +89,8 @@
   let session = $state<Session>(blank());
   let draft = $state('');
   let busy = $state(false);
-  let key = $state(gatewayKey());
+  // The API token this browser sends to the daemon opens the gateway too
+  let key = $state(gatewayKey() || token());
   let inspector = $state(true);
   let pane = $state('settings');
   let shownTrace = $state('');
@@ -1252,7 +1254,7 @@
             {#if media}
               <div class="flex flex-col gap-5">
                 <MediaSettings bind:form {mode} {caps} hasInit={!!init} />
-                {#if status?.auth}
+                {#if status?.auth && !auth.user}
                   <Field label="API key" for="chat-key">
                     <TextInput id="chat-key" mono type="password" bind:value={key} onchange={() => setGatewayKey(key.trim())} />
                   </Field>
@@ -1282,7 +1284,7 @@
                 <Field label="Tools" for="chat-tools" error={toolsProblem || undefined}>
                   <TextArea id="chat-tools" mono height="h-36" bind:value={session.tools} empty={'[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}]'} invalid={!!toolsProblem} />
                 </Field>
-                {#if status?.auth}
+                {#if status?.auth && !auth.user}
                   <Field label="API key" for="chat-key">
                     <TextInput id="chat-key" mono type="password" bind:value={key} onchange={() => setGatewayKey(key.trim())} />
                   </Field>

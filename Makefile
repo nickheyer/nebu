@@ -15,7 +15,9 @@ ATLAS_RUN := docker run --rm \
 	--user "$(shell id -u):$(shell id -g)" \
 	--env HOME=/tmp \
 	$(ATLAS_IMAGE)
-DB_FILE ?= $(HOME)/.local/share/nebu/nebu.db
+
+LOCAL_NEBU := $(HOME)/.local/share/nebu
+DB_FILE ?= $(LOCAL_NEBU)/nebu.db
 
 # Generate protobuf, Connect, Connect-ES, and OpenAPI files.
 gen: proto-clean

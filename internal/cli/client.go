@@ -51,6 +51,7 @@ type clients struct {
 	gateway   nebuv1connect.GatewayServiceClient
 	events    nebuv1connect.EventServiceClient
 	bots      nebuv1connect.BotServiceClient
+	auth      nebuv1connect.AuthServiceClient
 }
 
 // Adds the bearer token to every request
@@ -163,6 +164,7 @@ func (e *env) clients() (*clients, error) {
 		gateway:   nebuv1connect.NewGatewayServiceClient(httpClient, base),
 		events:    nebuv1connect.NewEventServiceClient(httpClient, base),
 		bots:      nebuv1connect.NewBotServiceClient(httpClient, base),
+		auth:      nebuv1connect.NewAuthServiceClient(httpClient, base),
 	}
 	return e.cl, nil
 }

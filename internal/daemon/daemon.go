@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/bots"
 	"github.com/nickheyer/nebu/internal/calibrate"
 	"github.com/nickheyer/nebu/internal/db"
@@ -27,10 +28,12 @@ import (
 	"github.com/nickheyer/nebu/internal/rpc"
 	"github.com/nickheyer/nebu/internal/settings"
 	"github.com/nickheyer/nebu/internal/slots"
+	"github.com/nickheyer/nebu/internal/sso"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/archs"
 	"github.com/nickheyer/nebu/pkg/build"
 	"github.com/nickheyer/nebu/pkg/cache"
+	"github.com/nickheyer/nebu/pkg/config"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/events"
 	formatsall "github.com/nickheyer/nebu/pkg/formats/all"
@@ -55,6 +58,8 @@ const (
 	profileTTL        = 30 * time.Second
 	shutdownTimeout   = 10 * time.Second
 	readHeaderTimeout = 10 * time.Second
+	// Seals single sign-on cookies, kept in the data directory
+	sessionKeyFile = "session.key"
 )
 
 // Daemon managers and API handler.
@@ -76,6 +81,16 @@ type Daemon struct {
 	Gateway   *gateway.Gateway
 	Routes    *gateway.Table
 	Bots      *bots.Manager
+	// Browser sessions, nil when auth.disabled is set
+	Sessions *auth.Sessions
+	// Local accounts, nil when single sign-on replaces them or auth is off
+	Users *auth.Users
+	// API tokens users make, nil when auth is off
+	Tokens *auth.Tokens
+	// Checks every API and gateway request's credential
+	Guard *auth.Guard
+	// Single sign-on, nil when auth.oidc is unset
+	SSO       *sso.Service
 	Log       *slog.Logger
 	handler   http.Handler
 	cancel    context.CancelFunc
@@ -265,6 +280,10 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	d.Notifier = &notify.Notifier{Webhooks: cfg.GetNotify().GetWebhooks(), Events: bus, Log: log}
 	d.Gateway = gateway.New(d.Routes, cfg.GetGateway().GetApiKeys(), cfg.GetGateway().GetCorsOrigins(), cfg.GetGateway().GetPolicy(), bus, log)
 	d.Gateway.SetVersion(Version)
+	if err = d.openAuth(store); err != nil {
+		return nil, err
+	}
+	d.Gateway.SetCredentials(d.Guard)
 	// Load bots now and connect enabled bots when serving starts.
 	d.Bots = bots.New(base, store, d.Gateway, bus, log, cfg.GetDiscord().GetFfmpeg())
 	if err = d.Bots.Load(context.Background()); err != nil {
@@ -296,11 +315,61 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		Events:        bus,
 		Snapshot:      d.snapshot,
 		Web:           ui,
-		Token:         cfg.GetAuth().GetToken(),
+		Guard:         d.Guard,
+		Sessions:      d.Sessions,
+		Users:         d.Users,
+		Tokens:        d.Tokens,
+		SSO:           d.SSO,
 		Recent:        recent,
 		Log:           log,
 	})
 	return d, nil
+}
+
+// Sets up sessions, the daemon token, user API tokens, and accounts or single sign-on.
+// With auth.disabled the guard passes everything.
+func (d *Daemon) openAuth(store *db.DB) error {
+	cfg, a := d.Config, d.Config.GetAuth()
+	if a.GetDisabled() {
+		if a.GetToken() != "" || a.GetOidc().GetIssuer() != "" {
+			d.Log.Warn("auth.disabled is set, auth.token and auth.oidc are ignored")
+		}
+		d.Guard = auth.NewGuard("", nil, nil)
+		return nil
+	}
+	ttl, err := time.ParseDuration(a.GetSessionTtl())
+	if err != nil || ttl <= 0 {
+		return fmt.Errorf("auth.session_ttl %q must be a positive duration such as 24h", a.GetSessionTtl())
+	}
+	if d.Sessions, err = auth.OpenSessions(filepath.Join(cfg.GetDataDir(), sessionKeyFile), ttl); err != nil {
+		return err
+	}
+	if a.GetToken() == "" {
+		path := filepath.Join(cfg.GetDataDir(), config.TokenFile)
+		token, created, err := auth.LoadOrCreateToken(path)
+		if err != nil {
+			return err
+		}
+		cfg.Auth.Token = token
+		if created {
+			d.Log.Info("api token created for CLI and SDK clients", "file", path)
+		}
+	}
+	if oidc := a.GetOidc(); oidc.GetIssuer() != "" {
+		if d.SSO, err = sso.New(oidc, d.Sessions, d.Log); err != nil {
+			return err
+		}
+		d.Log.Info("single sign-on enabled", "issuer", oidc.GetIssuer(), "name", oidc.GetName())
+	} else {
+		d.Users = auth.NewUsers(store, d.Log)
+		if err := d.Users.Load(context.Background()); err != nil {
+			return err
+		}
+		d.Sessions.Validate(d.Users.Valid)
+	}
+	d.Tokens = auth.NewTokens(store, d.Log)
+	d.Guard = auth.NewGuard(a.GetToken(), d.Sessions, d.Tokens)
+	return nil
 }
 
 // Produces the current state of requested kinds as created events
@@ -436,12 +505,15 @@ func (d *Daemon) warnExposure(secure bool) {
 		if !secure {
 			d.Log.Warn("public HTTP listener. Configure tls.cert_file and tls.key_file or a reverse proxy", "addr", addr)
 		}
-		if addr == d.Config.GetListen() && d.Config.GetAuth().GetToken() == "" {
-			d.Log.Warn("public API listener without auth.token. Anyone with network access can control the daemon", "addr", addr)
+		if addr == d.Config.GetListen() && d.Sessions == nil {
+			d.Log.Warn("public API listener with auth.disabled. Anyone with network access can control the daemon", "addr", addr)
+		}
+		if addr == d.Config.GetListen() && d.Users != nil && d.Users.Count() == 0 {
+			d.Log.Warn("no account exists yet, the first visitor to the web UI creates it", "addr", addr)
 		}
 		shared := d.Config.GetGateway().GetListen() == "" && addr == d.Config.GetListen()
-		if (addr == d.Config.GetGateway().GetListen() || shared) && len(d.Config.GetGateway().GetApiKeys()) == 0 {
-			d.Log.Warn("the gateway listens beyond loopback with no gateway.api_keys", "addr", addr)
+		if (addr == d.Config.GetGateway().GetListen() || shared) && len(d.Config.GetGateway().GetApiKeys()) == 0 && d.Sessions == nil {
+			d.Log.Warn("the gateway listens beyond loopback with auth.disabled and no gateway.api_keys. Anyone with network access can run models", "addr", addr)
 		}
 	}
 }

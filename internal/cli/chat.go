@@ -31,7 +31,7 @@ func runChat(ctx context.Context, e *env, args []string) error {
 	once := fs.String("once", "", "send this one message and exit")
 	temperature := fs.Float64("temperature", -1, "sampling temperature, the runtime default when unset")
 	maxTokens := fs.Int("max-tokens", 0, "answer length cap, the runtime default when 0")
-	key := fs.String("key", "", "gateway api key, the first configured when empty")
+	key := fs.String("key", "", "gateway api key, the first configured or the daemon token when empty")
 	positional, err := e.parse(fs, args, 1, 1, "chat <model> [--system S] [--once TEXT] [--temperature F] [--max-tokens N] [--key K]")
 	if err != nil {
 		return err
@@ -42,6 +42,9 @@ func runChat(ctx context.Context, e *env, args []string) error {
 	apiKey := *key
 	if apiKey == "" && len(e.cfg.GetGateway().GetApiKeys()) > 0 {
 		apiKey = e.cfg.GetGateway().GetApiKeys()[0]
+	}
+	if apiKey == "" {
+		apiKey = e.cfg.GetAuth().GetToken()
 	}
 	base := e.gatewayBase(ctx)
 	session := &chatSession{

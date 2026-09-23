@@ -11,3 +11,16 @@ logging:
 # ffmpeg samples video attachments. Defaults to ffmpeg on PATH.
 # discord:
 #   ffmpeg: /usr/bin/ffmpeg
+# auth:
+#   disabled: false # if true, sso/accounts/token requirements all bypassed or disabled
+#   session_ttl: 24h
+#   token_env: NEBU_TOKEN
+#   oidc:
+#     issuer: https://accounts.google.com
+#     client_id: 1234.apps.googleusercontent.com
+#     client_secret_env: NEBU_OIDC_CLIENT_SECRET
+#     allowed_domains: [example.com]
+#     # allowed_emails: [ann@example.com]
+#     # allowed_groups: [nebu-admins]
+#     # public_url: https://nebu.example.com
+#   Register https://<nebu host>/auth/oidc/callback with the provider

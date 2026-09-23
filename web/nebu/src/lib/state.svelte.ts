@@ -16,6 +16,7 @@ import type { Settings } from '$proto/settings_pb';
 import type { Bot, BotActivity } from '$proto/bot_pb';
 import { newestFirst } from './format';
 import { weightsName } from './catalog';
+import { refreshAuth } from './auth.svelte';
 
 // Match the gateway's per-kind trace limit.
 const traceLimit = 500;
@@ -247,6 +248,7 @@ export function connect() {
     while (!signal.aborted) {
       snapshotSeen = new Map();
       try {
+        await refreshAuth();
         const specs = await api.runtimes.listFormats({}, { signal });
         live.formats.clear();
         for (const f of specs.formats) live.formats.set(f.id, f);

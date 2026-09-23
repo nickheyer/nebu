@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -27,6 +28,14 @@ const (
 	envToken = "NEBU_TOKEN"
 	// Comma separated gateway keys read when gateway.api_key_env is unset
 	envAPIKeys = "NEBU_API_KEYS"
+	// Single sign-on provider settings
+	envOIDCIssuer   = "NEBU_OIDC_ISSUER"
+	envOIDCClientID = "NEBU_OIDC_CLIENT_ID"
+	// Client secret read when auth.oidc.client_secret_env is unset
+	envOIDCSecret = "NEBU_OIDC_CLIENT_SECRET"
+
+	// API token the daemon generates in data_dir when auth.token is empty
+	TokenFile = "api.token"
 
 	defaultListen  = "127.0.0.1:8484"
 	minFreeBytes   = 50 << 30
@@ -36,7 +45,12 @@ const (
 	drainTimeoutMs = 30000
 	// Runtime readiness timeout.
 	upstreamTimeoutMs = 600000
+	sessionTTL        = "24h"
+	groupsClaim       = "groups"
 )
+
+// Scopes requested from the provider when auth.oidc.scopes is empty
+var defaultScopes = []string{"openid", "profile", "email"}
 
 // Container CLIs tried in order when config names none
 var defaultCLIs = []string{"podman", "docker", "nerdctl"}
@@ -112,6 +126,21 @@ func applyEnv(cfg *v1.Config) {
 		}
 		cfg.Auth.Token = v
 	}
+	issuer, clientID := os.Getenv(envOIDCIssuer), os.Getenv(envOIDCClientID)
+	if issuer != "" || clientID != "" {
+		if cfg.Auth == nil {
+			cfg.Auth = &v1.Auth{}
+		}
+		if cfg.Auth.Oidc == nil {
+			cfg.Auth.Oidc = &v1.Oidc{}
+		}
+		if issuer != "" {
+			cfg.Auth.Oidc.Issuer = issuer
+		}
+		if clientID != "" {
+			cfg.Auth.Oidc.ClientId = clientID
+		}
+	}
 }
 
 func applyDefaults(cfg *v1.Config) error {
@@ -182,6 +211,32 @@ func applyDefaults(cfg *v1.Config) error {
 	if cfg.Auth.Token == "" && cfg.Auth.TokenEnv != "" {
 		cfg.Auth.Token = os.Getenv(cfg.Auth.TokenEnv)
 	}
+	if cfg.Auth.SessionTtl == "" {
+		cfg.Auth.SessionTtl = sessionTTL
+	}
+	// The daemon writes the token it generated, so clients on the same host find it
+	if cfg.Auth.Token == "" && !cfg.Auth.Disabled {
+		if data, err := os.ReadFile(filepath.Join(cfg.DataDir, TokenFile)); err == nil {
+			cfg.Auth.Token = strings.TrimSpace(string(data))
+		}
+	}
+	if o := cfg.Auth.Oidc; o != nil && o.Issuer != "" {
+		if o.ClientSecretEnv == "" {
+			o.ClientSecretEnv = envOIDCSecret
+		}
+		if o.ClientSecret == "" {
+			o.ClientSecret = os.Getenv(o.ClientSecretEnv)
+		}
+		if len(o.Scopes) == 0 {
+			o.Scopes = append([]string(nil), defaultScopes...)
+		}
+		if o.GroupsClaim == "" {
+			o.GroupsClaim = groupsClaim
+		}
+		if o.Name == "" {
+			o.Name = issuerName(o.Issuer)
+		}
+	}
 	if cfg.Gateway.ApiKeyEnv == "" {
 		cfg.Gateway.ApiKeyEnv = envAPIKeys
 	}
@@ -206,6 +261,15 @@ func applyDefaults(cfg *v1.Config) error {
 		cfg.Web = &v1.Web{}
 	}
 	return nil
+}
+
+// The issuer's host, or the issuer itself when it is not a URL
+func issuerName(issuer string) string {
+	u, err := url.Parse(issuer)
+	if err != nil || u.Host == "" {
+		return issuer
+	}
+	return u.Hostname()
 }
 
 // Splits a comma or whitespace separated key list

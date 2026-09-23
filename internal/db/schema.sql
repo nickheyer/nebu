@@ -355,3 +355,29 @@ CREATE TABLE bot_schedules (
   last_run_at TEXT NOT NULL,
   PRIMARY KEY (bot_id, automation_id)
 );
+
+-- Local accounts for the web UI. Usernames are stored lowercase.
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX users_username ON users (username);
+
+-- API tokens users make in the web UI. The subject is the local account id or
+-- the single sign-on subject, and the secret is what clients send as a bearer token.
+CREATE TABLE api_tokens (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  email TEXT NOT NULL,
+  name TEXT NOT NULL,
+  secret TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE UNIQUE INDEX api_tokens_secret ON api_tokens (secret);
+CREATE INDEX api_tokens_owner ON api_tokens (provider, subject);

@@ -36,7 +36,7 @@ func TestLocalClientReachesTheGatewayInProcess(t *testing.T) {
 		t.Fatalf("trace %v", kept)
 	}
 	_ = seenAuth
-	// Network requests without a key fail. The local client supplies its key.
+	// Network requests without a key fail. The local client is trusted in process.
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
 	resp, _ = http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"m1","messages":[]}`))

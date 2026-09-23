@@ -1,4 +1,5 @@
 // Support all gateway protocols so the console can exercise translation.
+import { gatewayCredentials } from './auth.svelte';
 
 export type Dialect = 'openai' | 'anthropic' | 'ollama';
 
@@ -185,7 +186,7 @@ export async function send(req: ChatRequest, emit: (ev: ChatEvent) => void, onSe
     else headers.Authorization = 'Bearer ' + req.key;
   }
   const text = JSON.stringify(body);
-  const resp = await fetch(req.base + path, { method: 'POST', headers, body: text, signal: req.signal });
+  const resp = await fetch(req.base + path, { method: 'POST', headers, body: text, signal: req.signal, credentials: gatewayCredentials() });
   onSent?.({ trace: resp.headers.get('X-Nebu-Trace') ?? '', status: resp.status, body: text, path, headers });
   if (!resp.ok || !resp.body) {
     const raw = await resp.text();
@@ -352,7 +353,7 @@ export async function countTokens(base: string, model: string, system: string, m
   delete body.max_tokens;
   delete body.stream;
   if (key) headers['x-api-key'] = key;
-  const resp = await fetch(base + path.replace('/v1/messages', '/v1/messages/count_tokens'), { method: 'POST', headers, body: JSON.stringify(body), signal });
+  const resp = await fetch(base + path.replace('/v1/messages', '/v1/messages/count_tokens'), { method: 'POST', headers, body: JSON.stringify(body), signal, credentials: gatewayCredentials() });
   if (!resp.ok) throw new Error(`${resp.status}: ${errorMessage(await resp.text())}`);
   const parsed = (await resp.json()) as { input_tokens?: number };
   return parsed.input_tokens ?? 0;

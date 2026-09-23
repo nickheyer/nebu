@@ -15,6 +15,9 @@ services:
       NEBU_LISTEN: 0.0.0.0:8484
       NEBU_TOKEN: "${NEBU_TOKEN:-}"
       NEBU_API_KEYS: "${NEBU_API_KEYS:-}"
+      NEBU_OIDC_ISSUER: "${NEBU_OIDC_ISSUER:-}"
+      NEBU_OIDC_CLIENT_ID: "${NEBU_OIDC_CLIENT_ID:-}"
+      NEBU_OIDC_CLIENT_SECRET: "${NEBU_OIDC_CLIENT_SECRET:-}"
       XDG_CACHE_HOME: "${NEBU_CACHE_DIR:-/srv/nebu-cache}"
       HF_HOME: "${NEBU_CACHE_DIR:-/srv/nebu-cache}/huggingface"
       TORCH_HOME: "${NEBU_CACHE_DIR:-/srv/nebu-cache}/torch"

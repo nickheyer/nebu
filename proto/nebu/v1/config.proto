@@ -68,10 +68,45 @@ message Tls {
   string key_file = 2;
 }
 
-// Bearer token required on the API listener when set
+// Single sign-on through an OpenID Connect provider. Any provider with a
+// discovery document works: Google, Microsoft Entra ID, Okta, Auth0, Keycloak,
+// Authentik, Authelia, Zitadel, Kanidm, Pocket ID, Dex, GitLab, Cognito.
+message Oidc {
+  // Issuer URL. Discovery reads <issuer>/.well-known/openid-configuration.
+  string issuer = 1;
+  string client_id = 2;
+  string client_secret = 3;
+  // Environment variable holding the client secret, read when client_secret is empty.
+  // NEBU_OIDC_CLIENT_SECRET when empty.
+  string client_secret_env = 4;
+  // Scopes to request. openid, profile, and email when empty.
+  repeated string scopes = 5;
+  // Origin browsers reach the daemon at, such as https://nebu.example.com.
+  // Builds the callback URL. Each request's own scheme and host when empty.
+  string public_url = 6;
+  // Provider name shown on the sign-in button. The issuer host when empty.
+  string name = 7;
+  // Who may sign in. Everyone the provider signs in when all three are empty.
+  // An email or domain match admits the user, and allowed_groups must match as well when set.
+  repeated string allowed_emails = 8;
+  repeated string allowed_domains = 9;
+  repeated string allowed_groups = 10;
+  // Claim listing the user's groups, dotted for nested claims such as realm_access.roles. groups when empty.
+  string groups_claim = 11;
+}
+
+// API listener and web UI authentication. On by default: browsers sign in with a
+// local account, or through oidc when set, and API clients send the bearer token.
 message Auth {
+  // Bearer token for API clients. Generated into <data_dir>/api.token when empty.
   string token = 1;
   string token_env = 2;
+  // Single sign-on. Replaces local accounts when set.
+  Oidc oidc = 3;
+  // Turns authentication off: no accounts, no single sign-on, and no token check.
+  bool disabled = 4;
+  // Browser session lifetime such as 24h or 30m. 24h when empty.
+  string session_ttl = 5;
 }
 
 // Build defaults

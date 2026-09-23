@@ -1,0 +1,114 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// A local account that signs in to the web UI
+message User {
+  string id = 1;
+  string username = 2;
+  google.protobuf.Timestamp created_at = 3;
+  // Last password change
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+// Asks for every account
+message ListUsersRequest {}
+
+// Accounts by username
+message ListUsersResponse {
+  repeated User users = 1;
+}
+
+// Adds an account
+message CreateUserRequest {
+  string username = 1;
+  string password = 2;
+}
+
+// The new account
+message CreateUserResponse {
+  User user = 1;
+}
+
+// Removes an account and ends its sessions
+message DeleteUserRequest {
+  string username = 1;
+}
+
+// Confirms the removal
+message DeleteUserResponse {}
+
+// Changes an account's password and ends its sessions. Callers signed in with a
+// browser session give their own current password. The API token needs none.
+message SetPasswordRequest {
+  string username = 1;
+  string password = 2;
+  string current_password = 3;
+}
+
+// The account after the change
+message SetPasswordResponse {
+  User user = 1;
+}
+
+// An API token a signed-in user made. API and gateway clients send it as a
+// bearer token and act as that user.
+message ApiToken {
+  string id = 1;
+  // Label the owner gave it
+  string name = 2;
+  string secret = 3;
+  google.protobuf.Timestamp created_at = 4;
+  // Last request that sent it, unset until the first
+  google.protobuf.Timestamp last_used_at = 5;
+}
+
+// Asks for the caller's own tokens
+message ListTokensRequest {}
+
+// The caller's tokens, newest first
+message ListTokensResponse {
+  repeated ApiToken tokens = 1;
+}
+
+// Makes a token for the caller's own account
+message CreateTokenRequest {
+  string name = 1;
+}
+
+// The new token with its secret
+message CreateTokenResponse {
+  ApiToken token = 1;
+}
+
+// Revokes one of the caller's own tokens
+message DeleteTokenRequest {
+  string id = 1;
+}
+
+// Confirms the revocation
+message DeleteTokenResponse {}
+
+// Local accounts and API tokens. Account calls are unavailable when auth.oidc
+// is set or auth.disabled is true. Token calls need a signed-in account, local
+// or single sign-on, and are unavailable when auth.disabled is true.
+service AuthService {
+  // Lists accounts
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  // Adds an account
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  // Refuses the caller's own account and the last account
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+  // Changes a password and ends the account's sessions
+  rpc SetPassword(SetPasswordRequest) returns (SetPasswordResponse);
+  // Lists the caller's API tokens with their secrets
+  rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
+  // Makes an API token for the caller
+  rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
+  // Revokes one of the caller's API tokens
+  rpc DeleteToken(DeleteTokenRequest) returns (DeleteTokenResponse);
+}

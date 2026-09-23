@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/inspect"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/sources"
@@ -22,10 +23,10 @@ const filesPath = "/files"
 
 // Streams repository files using the source's transport and credentials.
 // Query params select source, repository, revision, and path. Authentication uses
-// the Authorization header or token query param. Range requests support resuming.
+// the Authorization header, the token query param, or the session cookie. Range requests support resuming.
 type files struct {
 	inspector *inspect.Inspector
-	auth      *auth
+	auth      *auth.Guard
 	log       *slog.Logger
 }
 
@@ -39,8 +40,8 @@ func (f *files) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if tok := q.Get("token"); tok != "" && header.Get("Authorization") == "" {
 		header.Set("Authorization", "Bearer "+tok)
 	}
-	if !f.auth.ok(header) {
-		http.Error(w, errUnauthenticated.Error(), http.StatusUnauthorized)
+	if !f.auth.Authenticated(header) {
+		http.Error(w, f.auth.Err().Error(), http.StatusUnauthorized)
 		return
 	}
 	source, repo, revision, file := q.Get("source"), q.Get("repo"), q.Get("revision"), q.Get("path")

@@ -105,6 +105,7 @@ func commands() []command {
 		}},
 		{name: "chat", summary: "talk to a running model through the gateway", run: runChat},
 		botCommands(),
+		userCommands(),
 		{name: "events", summary: "stream daemon events as JSON lines", run: runEvents},
 		{name: "ps", summary: "list running instances", run: runPs},
 		{name: "show", summary: "show instance info", run: runShow},

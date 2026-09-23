@@ -1,9 +1,11 @@
 <script lang="ts">
   import '../app.css';
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { Tooltip } from 'bits-ui';
   import { connect, disconnect, live, activeTasks, hostName, hostLabeled } from '$lib/state.svelte';
+  import { signInOffered } from '$lib/auth.svelte';
   import { LayoutGrid, Boxes, MessageSquare, ListChecks, Cpu, Settings, WifiOff, KeyRound, Menu as MenuIcon, X, Activity, Bot } from '@lucide/svelte';
   import { sweepStale } from '$lib/images';
   import Logo from '$lib/components/Logo.svelte';
@@ -41,6 +43,15 @@
   const name = $derived(hostName());
   const onHost = $derived(page.url.pathname === '/host');
   const wide = $derived(page.url.pathname === '/chat');
+  // The sign-in page stands alone, without the app chrome.
+  const bare = $derived(page.url.pathname === '/login');
+
+  // Send unauthenticated browsers to sign in when the daemon offers a way.
+  $effect(() => {
+    if (live.needsToken && signInOffered() && !bare) {
+      goto(`/login?next=${encodeURIComponent(page.url.pathname + page.url.search)}`, { replaceState: true });
+    }
+  });
 
   function active(item: { href: string; also?: string[] }): boolean {
     const p = page.url.pathname;
@@ -83,6 +94,10 @@
 {/snippet}
 
 <Tooltip.Provider delayDuration={250}>
+  {#if bare}
+    <main class="min-h-screen">{@render children()}</main>
+    <Toaster />
+  {:else}
   <div class="flex min-h-screen">
     {#if menuOpen}
       <button class="fade fixed inset-0 z-30 bg-black/50 lg:hidden" aria-label="Close menu" onclick={() => (menuOpen = false)}></button>
@@ -132,7 +147,11 @@
       </div>
       {#if !live.connected && live.error}
         <div class="flex items-center gap-3 border-b px-8 py-2 text-sm {live.needsToken ? 'border-warn/25 bg-warn/8 text-warn' : 'border-bad/25 bg-bad/8 text-bad'}">
-          {#if live.needsToken}
+          {#if live.needsToken && signInOffered()}
+            <KeyRound size={15} />
+            <span>Sign in required</span>
+            <a href="/login" class="font-medium underline underline-offset-2">Sign in</a>
+          {:else if live.needsToken}
             <KeyRound size={15} />
             <span>API token required</span>
             <a href="/settings" class="font-medium underline underline-offset-2">Set it in Settings</a>
@@ -151,4 +170,5 @@
   <RunDialog />
   <Confirmer />
   <Toaster />
+  {/if}
 </Tooltip.Provider>
