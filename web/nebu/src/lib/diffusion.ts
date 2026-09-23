@@ -1,6 +1,8 @@
 import { ModelKind, type Descriptor } from '$proto/model_pb';
 import type { StoredModel } from '$proto/store_pb';
+import type { Param } from '$proto/runtime_pb';
 import { ArtifactRole } from '$proto/model_pb';
+import { tail } from './format';
 
 // Normalize header, Diffusers, and stable-diffusion.cpp names to daemon IDs.
 const canonicalNames: Record<string, string> = {
@@ -92,26 +94,34 @@ export function kindWord(kind: ModelKind): string {
   }
 }
 
-// sd-server requires tokenizer.json.
-function tokenizerOf(m: StoredModel): string {
-  return m.artifacts.find((a) => a.artifact?.role === ArtifactRole.TOKENIZER && a.artifact.path.endsWith('tokenizer.json'))?.path ?? '';
+// The daemon resolves a store reference to the file the parameter loads from the group.
+const storeScheme = 'store://';
+
+export function storeRef(m: StoredModel): string {
+  return `${storeScheme}${m.sourceId}/${m.repo}#${m.group}`;
 }
 
-// Resolve a path parameter to its stored file or directory.
-export function pickedPath(m: StoredModel, picks: string): string {
-  if (picks === 'tokenizer') return tokenizerOf(m);
-  if (picks === 'checkpoint') return m.path;
-  const role = picks === 'projector' ? ArtifactRole.PROJECTOR : ArtifactRole.WEIGHTS;
-  const file = m.artifacts.find((a) => a.artifact?.role === role)?.path ?? '';
-  if (!file) return '';
-  if (picks === 'lora' || picks === 'embedding' || picks === 'upscaler') return file.slice(0, file.lastIndexOf('/'));
-  return file;
+export function isStoreRef(value: string): boolean {
+  return value.startsWith(storeScheme);
 }
 
-export function picksModel(m: StoredModel, picks: string): boolean {
+// Repository tail and group of a store reference, the path tail of anything else.
+export function pathLabel(value: string): string {
+  if (!isStoreRef(value)) return tail(value);
+  const [repoPath, group] = value.slice(storeScheme.length).split('#');
+  return `${tail(repoPath ?? '')} · ${group || 'weights'}`;
+}
+
+function hasTokenizer(m: StoredModel): boolean {
+  return m.artifacts.some((a) => a.artifact?.role === ArtifactRole.TOKENIZER && a.artifact.path.endsWith('tokenizer.json'));
+}
+
+// Whether a stored group can supply what a parameter takes. Pipelines supply the parts they
+// bundle in declared subfolders.
+export function picksModel(m: StoredModel, p: Param): boolean {
   const d = m.descriptor;
   const arch = partOf(d);
-  switch (picks) {
+  switch (p.picks) {
     case '':
     case 'model':
       return true;
@@ -120,12 +130,13 @@ export function picksModel(m: StoredModel, picks: string): boolean {
     case 'projector':
       return m.artifacts.some((a) => a.artifact?.role === ArtifactRole.PROJECTOR);
     case 'tokenizer':
-      return tokenizerOf(m) !== '';
+      return hasTokenizer(m);
     case 'checkpoint':
       return d?.kind === ModelKind.LANGUAGE && m.formatId === 'safetensors' && m.path !== '';
     case 'diffusion':
       return d?.kind === ModelKind.DIFFUSION;
-    default:
-      return d?.kind === ModelKind.COMPONENT && arch === picks;
   }
+  if (d?.kind === ModelKind.COMPONENT) return arch === p.picks;
+  const bundled = (d?.metadata['diffusion.slots'] ?? '').split(',');
+  return d?.kind === ModelKind.DIFFUSION && p.slots.some((s) => bundled.includes(s));
 }

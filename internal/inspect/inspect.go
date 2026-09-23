@@ -163,6 +163,23 @@ func (i *Inspector) Companions(sourceID, repo, group string) ([]*v1.StoredModel,
 	return out, nil
 }
 
+// Returns the stored model of a group, or nil when it is not in the store.
+func (i *Inspector) stored(sourceID, repo, group string) *v1.StoredModel {
+	if i.Stored == nil {
+		return nil
+	}
+	list, err := i.Stored()
+	if err != nil {
+		return nil
+	}
+	for _, m := range list {
+		if m.GetSourceId() == sourceID && m.GetRepo() == repo && m.GetGroup() == group {
+			return m
+		}
+	}
+	return nil
+}
+
 // Resolves and classifies a model, caching the listing briefly
 func (i *Inspector) Resolve(ctx context.Context, sourceID, repo, revision string) (sources.Source, *v1.Model, error) {
 	src, err := i.Sources.Get(sourceID)
@@ -237,10 +254,19 @@ func (i *Inspector) Describe(ctx context.Context, src sources.Source, model *v1.
 	return i.Builder.Build(raw)
 }
 
-// Builds planning input from overrides, available or total memory, and calibration.
-func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, companions []*v1.StoredModel) (estimate.Input, error) {
+// Builds planning input from overrides, available or total memory, and calibration. Path
+// parameters naming stored groups resolve to the files those groups hold.
+func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (estimate.Input, error) {
 	if rt.Policy() == nil {
 		return estimate.Input{}, fmt.Errorf("runtime %s has no estimate policy", rt.ID())
+	}
+	models := companions
+	if self != nil {
+		models = append(append([]*v1.StoredModel{}, companions...), self)
+	}
+	overrides, err := runtimes.ResolveStore(rt, overrides, models)
+	if err != nil {
+		return estimate.Input{}, err
 	}
 	params, err := runtimes.Resolve(rt, overrides)
 	if err != nil {
@@ -260,8 +286,8 @@ func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.Hos
 }
 
 // Estimates memory fit without rejecting unsupported runtime params.
-func (i *Inspector) fit(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, companions []*v1.StoredModel) (*v1.MemoryPlan, error) {
-	in, err := i.input(rt, d, profile, overrides, free, placement, repo, companions)
+func (i *Inspector) fit(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (*v1.MemoryPlan, error) {
+	in, err := i.input(rt, d, profile, overrides, free, placement, repo, self, companions)
 	if err != nil {
 		return nil, err
 	}
@@ -269,9 +295,10 @@ func (i *Inspector) fit(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostP
 	return rt.Policy().Plan(in)
 }
 
-// Plans memory use and validates runtime params.
-func (i *Inspector) Plan(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, companions []*v1.StoredModel) (*v1.MemoryPlan, error) {
-	in, err := i.input(rt, d, profile, overrides, free, placement, repo, companions)
+// Plans memory use and validates runtime params. The stored model itself, when there is one,
+// supplies parts its own parameters name.
+func (i *Inspector) Plan(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (*v1.MemoryPlan, error) {
+	in, err := i.input(rt, d, profile, overrides, free, placement, repo, self, companions)
 	if err != nil {
 		return nil, err
 	}
@@ -365,10 +392,11 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 			for _, n := range append(rows, planContexts(contexts, d, len(req.GetContexts()) > 0)...) {
 				overrides := withContext(layered, rt.Policy().ContextParam, n)
 				// Report fit against both available and total memory.
-				plan, err := i.fit(rt, d, profile, overrides, false, c.Placement, req.GetRepo(), companions)
+				self := i.stored(req.GetSourceId(), req.GetRepo(), d.GetGroup())
+				plan, err := i.fit(rt, d, profile, overrides, false, c.Placement, req.GetRepo(), self, companions)
 				var now *v1.MemoryPlan
 				if err == nil {
-					now, err = i.fit(rt, d, profile, overrides, true, c.Placement, req.GetRepo(), companions)
+					now, err = i.fit(rt, d, profile, overrides, true, c.Placement, req.GetRepo(), self, companions)
 				}
 				if err != nil {
 					warn("%s", planFailure(d, rt, err))
@@ -432,7 +460,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 		return nil, err
 	}
 	// Return estimates with param errors for the form to display.
-	in, err := i.input(rt, d, profile, overrides, req.GetFree(), c.Placement, req.GetRepo(), companions)
+	in, err := i.input(rt, d, profile, overrides, req.GetFree(), c.Placement, req.GetRepo(), i.stored(req.GetSourceId(), req.GetRepo(), req.GetGroup()), companions)
 	if err != nil {
 		return nil, err
 	}

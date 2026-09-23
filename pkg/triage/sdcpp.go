@@ -23,8 +23,8 @@ func (SDCpp) Rules() []Rule {
 		},
 		{
 			ID:      "unknown-model",
-			Summary: "this build cannot tell what model the file holds",
-			Hint:    "check that the file is a diffusion model. If it requires newer support, update the runtime",
+			Summary: "sd-server recognized none of the model's tensor names",
+			Hint:    "sd-server identifies a model by its tensor names, not its config. Pull the checkpoint in the layout stable-diffusion.cpp loads, published at the family's sources, or update the runtime when the family is newer than this build",
 			Match:   anyOf("unknown model", "unsupported model", "get sd version from file failed", "cannot identify updated diffusion model", "model type not supported", "unsupported sd version"),
 		},
 		{

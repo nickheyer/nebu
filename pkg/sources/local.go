@@ -85,8 +85,14 @@ func (localAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, so
 		if err != nil {
 			return err
 		}
-		hit.Formats = locFormats(files)
-		hits = append(hits, hit)
+		paths := make([]string, 0, len(files))
+		for _, f := range files {
+			paths = append(paths, f.GetPath())
+		}
+		hit.Formats = FormatsOf(paths)
+		if AdmitsFormats(req, hit.Formats) {
+			hits = append(hits, hit)
+		}
 		return nil
 	}
 	owners, err := root.Dirs("")
@@ -114,12 +120,12 @@ func (localAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, so
 	return localPage(hits, req, sort, c.Limit(req)), nil
 }
 
-// Infers formats from extensions and accompanying configs.
-func locFormats(files []*v1.Artifact) []string {
+// FormatsOf infers weight formats from file extensions and accompanying configs.
+func FormatsOf(paths []string) []string {
 	configs := map[string]bool{}
-	for _, f := range files {
-		if path.Base(f.GetPath()) == "config.json" {
-			configs[path.Dir(f.GetPath())] = true
+	for _, p := range paths {
+		if path.Base(p) == "config.json" {
+			configs[path.Dir(p)] = true
 		}
 	}
 	var out []string
@@ -131,12 +137,12 @@ func locFormats(files []*v1.Artifact) []string {
 		}
 		out = append(out, id)
 	}
-	for _, f := range files {
-		switch strings.ToLower(path.Ext(f.GetPath())) {
+	for _, p := range paths {
+		switch strings.ToLower(path.Ext(p)) {
 		case ".gguf":
 			add("gguf")
 		case ".safetensors", ".sft":
-			if configs[path.Dir(f.GetPath())] {
+			if configs[path.Dir(p)] {
 				add("safetensors")
 			} else {
 				add("diffusion")
@@ -208,8 +214,11 @@ func (mirrorAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, s
 	}
 	var hits []*v1.SearchHit
 	for _, r := range root.Repos {
+		if !AdmitsFormats(req, r.Formats) {
+			continue
+		}
 		author, name := splitRepo(r.Repo)
-		hit := &v1.SearchHit{Repo: r.Repo, Name: name, Author: author}
+		hit := &v1.SearchHit{Repo: r.Repo, Name: name, Author: author, Formats: r.Formats}
 		if !r.UpdatedAt.IsZero() {
 			hit.UpdatedAt = timestamppb.New(r.UpdatedAt)
 		}

@@ -1,4 +1,4 @@
-// Package diffusers reads pipelines declared in model_index.json.
+// Package diffusers reads pipelines declared in model_index.json or modular_model_index.json.
 package diffusers
 
 import (
@@ -7,6 +7,7 @@ import (
 	"io"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/nickheyer/nebu/pkg/blueprint"
@@ -24,7 +25,7 @@ type Format struct{}
 func (Format) ID() string          { return "diffusers" }
 func (Format) Description() string { return "Diffusers pipeline directory" }
 func (Format) Blurb() string {
-	return "A directory holding model_index.json, which names the subfolder of every part of the pipeline: the denoiser, the autoencoders, the text encoders, and their tokenizers"
+	return "A directory holding model_index.json or modular_model_index.json, which names the subfolder of every part of the pipeline: the denoiser, the autoencoders, the text encoders, their tokenizers, and the scheduler"
 }
 
 // Claim declared pipelines before safetensors groups their components separately.
@@ -37,11 +38,13 @@ func (Format) Requires() []v1.ArtifactRole {
 const (
 	KeyClass = "pipeline.class"
 	prefix   = "pipeline."
-	index    = "model_index.json"
 
 	readers   = 8
 	maxConfig = 16 << 20
 )
+
+// Component configs flattened under the component key.
+var configNames = []string{"config.json", "scheduler_config.json"}
 
 // Auxiliary files recognized by name.
 var (
@@ -68,11 +71,11 @@ func within(t *v1.Tree, p string) string {
 	return strings.TrimPrefix(p, t.GetRoot()+"/")
 }
 
-// Classifies weights and auxiliary files in declared component subfolders. model_index.json is the
-// pipeline config.
+// Classifies weights and auxiliary files in declared component subfolders. The pipeline index is
+// the pipeline config.
 func (Format) ClassifyIn(t *v1.Tree, rel string) (formats.Claim, bool) {
 	claim := formats.Claim{Group: Name(t)}
-	if rel == index {
+	if formats.PipelineIndex(rel) {
 		claim.Role = v1.ArtifactRole_ARTIFACT_ROLE_CONFIG
 		return claim, true
 	}
@@ -204,26 +207,34 @@ func Under(g *formats.Group, sub string) []*v1.Artifact {
 	return out
 }
 
+// Returns the group's pipeline index, preferring model_index.json.
+func indexOf(g *formats.Group) *v1.Artifact {
+	var best *v1.Artifact
+	for _, a := range g.Files[v1.ArtifactRole_ARTIFACT_ROLE_CONFIG] {
+		base := path.Base(a.GetPath())
+		if formats.PipelineIndex(base) && (best == nil || formats.PreferredPipelineIndex(base, path.Base(best.GetPath()))) {
+			best = a
+		}
+	}
+	return best
+}
+
 // Reads component configs and weight headers under component names. Excludes denoisers assigned to
-// other variants.
+// other variants and components whose files the tree does not hold, such as ones a modular
+// pipeline takes from another repository.
 func (Format) Read(ctx context.Context, open formats.Opener, g *formats.Group) (*v1.RawModel, error) {
 	raw := &v1.RawModel{FormatId: g.FormatID, Group: g.Name, Metadata: map[string]string{}}
-	var tree *v1.Tree
-	for _, a := range g.Files[v1.ArtifactRole_ARTIFACT_ROLE_CONFIG] {
-		if path.Base(a.GetPath()) != index {
-			continue
-		}
-		data, err := formats.ReadAll(ctx, open, a, maxConfig)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", a.GetPath(), err)
-		}
-		if tree, err = formats.ParseTree(g.Root, data); err != nil {
-			return nil, fmt.Errorf("%s: %w", a.GetPath(), err)
-		}
-		break
+	a := indexOf(g)
+	if a == nil {
+		return nil, fmt.Errorf("%s: the group carries no pipeline index", g.Name)
 	}
-	if tree == nil {
-		return nil, fmt.Errorf("%s: the group carries no %s", g.Name, index)
+	data, err := formats.ReadAll(ctx, open, a, maxConfig)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", a.GetPath(), err)
+	}
+	tree, err := formats.ParseTree(g.Root, data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", a.GetPath(), err)
 	}
 	held := map[string]bool{}
 	for _, a := range g.Weights {
@@ -231,14 +242,14 @@ func (Format) Read(ctx context.Context, open formats.Opener, g *formats.Group) (
 	}
 	raw.Metadata[KeyClass] = tree.GetClassName()
 	for key, sub := range tree.GetParts() {
-		if isPrimary(key, tree.GetClasses()[key]) && !held[key] {
+		if isPrimary(key, tree.GetClasses()[key]) && !held[key] || len(Under(g, sub)) == 0 {
 			continue
 		}
 		raw.Metadata[prefix+key] = sub
 		raw.Metadata[prefix+key+".class"] = tree.GetClasses()[key]
 	}
 	for _, a := range g.Files[v1.ArtifactRole_ARTIFACT_ROLE_CONFIG] {
-		if path.Base(a.GetPath()) != "config.json" {
+		if !oneOf(path.Base(a.GetPath()), configNames) {
 			continue
 		}
 		key := keyOfPath(tree.GetParts(), a.GetPath())
@@ -492,8 +503,10 @@ func (Format) Precision(raw *v1.RawModel, _ string) formats.Words {
 	return w
 }
 
-// Builds metadata from pipeline declarations. Infers the family from the denoiser class or tensors
-// and records bundled slots.
+// Builds metadata from pipeline declarations. Infers the family from the denoiser class, then its
+// tensors, and records whether the tensor names identify it, since stable-diffusion.cpp reads a
+// checkpoint by its names rather than its config. Records bundled slots and the scheduler's flow
+// shift.
 func (f Format) Metadata(raw *v1.RawModel) map[string]string {
 	m := raw.GetMetadata()
 	out := map[string]string{}
@@ -503,19 +516,25 @@ func (f Format) Metadata(raw *v1.RawModel) map[string]string {
 		}
 	}
 	family := diffusion.Canonical(f.Architecture(raw))
-	if !diffusion.Denoiser(family) {
+	if k := denoiserKey(m); k != "" {
 		var bare []*v1.TensorInfo
-		k := denoiserKey(m)
 		for _, t := range raw.GetTensors() {
 			if key, rest, ok := strings.Cut(t.GetName(), "/"); ok && key == k {
 				bare = append(bare, &v1.TensorInfo{Name: rest, Dtype: t.GetDtype(), Bytes: t.GetBytes(), Elements: t.GetElements(), Shape: t.GetShape()})
 			}
 		}
-		family = diffusion.Scan(bare, k).Family
+		scanned := diffusion.Scan(bare, k).Family
+		out[diffusion.KeyDetected] = strconv.FormatBool(scanned != "")
+		if !diffusion.Denoiser(family) {
+			family = scanned
+		}
 	}
 	if family != "" {
 		out[diffusion.KeyFamily] = family
 		out[diffusion.KeyGenerates] = strings.Join(diffusion.Generates(family), ",")
+	}
+	if shift, ok := flowShift(m); ok {
+		out[diffusion.KeyFlowShift] = shift
 	}
 	slots := slotsOf(m, family)
 	ids := make([]string, 0, len(slots))
@@ -532,6 +551,40 @@ func (f Format) Metadata(raw *v1.RawModel) map[string]string {
 	out[diffusion.KeyTextEncoder] = fmt.Sprint(anyText(slots))
 	out[diffusion.KeyClipVision] = has(blueprint.SlotImageClipVision)
 	return out
+}
+
+// Returns the fixed flow shift the pipeline's scheduler config declares. Schedulers that shift
+// dynamically by resolution declare none.
+func flowShift(m map[string]string) (string, bool) {
+	key := schedulerKey(m)
+	if key == "" || m[key+".use_dynamic_shifting"] == "true" {
+		return "", false
+	}
+	for _, name := range []string{"flow_shift", "shift"} {
+		if v, err := strconv.ParseFloat(m[key+"."+name], 64); err == nil && v > 0 {
+			return m[key+"."+name], true
+		}
+	}
+	return "", false
+}
+
+// Returns the component key of the scheduler, preferring one named scheduler.
+func schedulerKey(m map[string]string) string {
+	parts, classes := parts(m), classes(m)
+	if parts["scheduler"] != "" {
+		return "scheduler"
+	}
+	keys := make([]string, 0, len(parts))
+	for k := range parts {
+		if strings.Contains(strings.ToLower(classes[k]), "scheduler") {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
 }
 
 func anyText(slots map[string]string) bool {
@@ -611,6 +664,24 @@ func slotsOf(m map[string]string, family string) map[string]string {
 		}
 	}
 	return out
+}
+
+// SlotOfPath returns the slot of the declared subfolder holding a file, or empty. A language
+// model that also fills the vision slot reports the language slot.
+func SlotOfPath(d *v1.Descriptor, p string) string {
+	var found []string
+	for slot, sub := range Slots(d) {
+		if keyOfPath(map[string]string{sub: sub}, p) != "" {
+			found = append(found, slot)
+		}
+	}
+	sort.Strings(found)
+	for _, slot := range found {
+		if slot != blueprint.SlotTextEncoderVision || len(found) == 1 {
+			return slot
+		}
+	}
+	return ""
 }
 
 // Files returns a subfolder's weights in shard order, its shard index, and tokenizer.json.

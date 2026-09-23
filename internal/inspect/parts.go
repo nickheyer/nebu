@@ -183,7 +183,7 @@ func (i *Inspector) Parts(ctx context.Context, src sources.Source, model *v1.Mod
 		return nil, err
 	}
 	fills := blueprint.Needs(profile, g.Name)
-	// Declared pipelines map slots to subfolders in model_index.json.
+	// Declared pipelines map slots to subfolders in their pipeline index.
 	declared := diffusers.Slots(d)
 	if diffusers.Pipeline(d) {
 		fills = blueprint.Fills(profile, g.Name)

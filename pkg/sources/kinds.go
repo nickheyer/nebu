@@ -1,20 +1,64 @@
 package sources
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/text"
 )
 
-// Shared format and runtime filters. Providers apply them when supported, and the daemon filters
-// remaining mismatches.
+// Shared filters. The daemon turns a runtime into the formats and kind it serves, providers apply
+// formats and kinds through their own APIs where those offer a filter, and the daemon keeps only
+// the hits that match, fetching further pages until a page is full.
 const (
 	FacetFormat  = "format"
 	FacetRuntime = "runtime"
+	// Model kinds by name: language, diffusion, or component
+	FacetKind = "kind"
 )
 
 // Facets shared across providers.
-var SharedFacets = []string{FacetFormat, FacetRuntime}
+var SharedFacets = []string{FacetFormat, FacetRuntime, FacetKind}
+
+// KindName names a kind the way the kind facet spells it.
+func KindName(kind v1.ModelKind) string { return text.Enum(kind) }
+
+// Kinds returns the model kinds a request asks for, none when it names none.
+func Kinds(req *v1.SearchRequest) ([]v1.ModelKind, error) {
+	var out []v1.ModelKind
+	for _, name := range Filter(req, FacetKind) {
+		n, ok := v1.ModelKind_value["MODEL_KIND_"+strings.ToUpper(name)]
+		if !ok || n == 0 {
+			return nil, fmt.Errorf("%w: no model kind %q, one of language, diffusion, or component", ErrSource, name)
+		}
+		if !slices.Contains(out, v1.ModelKind(n)) {
+			out = append(out, v1.ModelKind(n))
+		}
+	}
+	return out, nil
+}
+
+// AdmitsKind reports whether the request asks for no kind or for this one.
+func AdmitsKind(req *v1.SearchRequest, kind v1.ModelKind) bool {
+	kinds, err := Kinds(req)
+	return err == nil && (len(kinds) == 0 || slices.Contains(kinds, kind))
+}
+
+// AdmitsFormats reports whether the request asks for no format or for one the model holds.
+func AdmitsFormats(req *v1.SearchRequest, have []string) bool {
+	want := Filter(req, FacetFormat)
+	if len(want) == 0 {
+		return true
+	}
+	for _, f := range have {
+		if slices.Contains(want, f) {
+			return true
+		}
+	}
+	return false
+}
 
 // Whether a facet is one of the shared ones
 func Shared(facet string) bool {

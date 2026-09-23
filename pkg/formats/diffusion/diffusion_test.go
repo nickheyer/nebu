@@ -241,3 +241,37 @@ func TestFormat(t *testing.T) {
 	}
 	var _ formats.Format = f
 }
+
+// Denoisers record whether their tensor names identify a family. Components and adapters carry no
+// denoiser to detect.
+func TestMetadataDetected(t *testing.T) {
+	raw := func(names ...string) *v1.RawModel { return &v1.RawModel{Group: "x", Tensors: tensors(names...)} }
+	if m := Metadata(raw("model.diffusion_model.video_patch_proj.weight", "model.diffusion_model.audio_patch_proj.weight")); m[KeyDetected] != "true" || m[KeyFamily] != "minimax_h3" {
+		t.Fatalf("original names %v", m)
+	}
+	if m := Metadata(raw("transformer_blocks.0.attn.to_q.weight", "proj_in.weight", "audio_proj_in.weight")); m[KeyDetected] != "false" || m[KeyFamily] != "" {
+		t.Fatalf("diffusers names %v", m)
+	}
+	for _, names := range [][]string{
+		{"decoder.conv_in.weight", "encoder.conv_in.weight"},
+		{"diffusion_model.blocks.0.attn.q.lora_down.weight", "diffusion_model.blocks.0.attn.q.lora_up.weight"},
+		{"model.layers.0.self_attn.q_proj.weight"},
+	} {
+		if m := Metadata(raw(names...)); m[KeyDetected] != "" {
+			t.Fatalf("%v: detected %q", names, m[KeyDetected])
+		}
+	}
+	d := &v1.Descriptor{Metadata: map[string]string{KeyDetected: "false", KeyFlowShift: "10.0"}}
+	if !Undetected(d) {
+		t.Fatal("undetected")
+	}
+	if shift, ok := FlowShift(d); !ok || shift != 10 {
+		t.Fatalf("flow shift %v %v", shift, ok)
+	}
+	if Undetected(&v1.Descriptor{}) {
+		t.Fatal("no record means nothing to refuse")
+	}
+	if _, ok := FlowShift(&v1.Descriptor{Metadata: map[string]string{KeyFlowShift: "0"}}); ok {
+		t.Fatal("zero is no shift")
+	}
+}

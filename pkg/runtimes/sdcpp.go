@@ -147,12 +147,12 @@ func (SDCpp) Params() []*v1.Param {
 	}
 	solved := func(name, label string) *v1.Param {
 		part := sdParts[name]
-		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_PATH, Default: Auto, Solved: true, Group: groupFiles, Flag: part.flag, Picks: part.picks,
+		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_PATH, Default: Auto, Solved: true, Group: groupFiles, Flag: part.flag, Picks: part.picks, Slots: part.slots,
 			Rule: strings.TrimPrefix(strings.TrimPrefix(part.label, "a "), "an ") + " from the store, preferring the model repository, then blueprint sources, then matching names"}
 	}
 	dir := func(name, label string) *v1.Param {
 		d := sdDirs[name]
-		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_PATH, Default: Auto, Solved: true, Group: groupAdapters, Flag: d.flag, Picks: d.picks, Advanced: true,
+		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_PATH, Default: Auto, Solved: true, Group: groupAdapters, Flag: d.flag, Picks: d.picks, Directory: true, Advanced: true,
 			Rule: "stored " + d.label + ", available to requests by file name"}
 	}
 	intParam := func(name, label, group, flag, def, unit, description string, min, max, step float64, advanced bool) *v1.Param {
@@ -275,7 +275,7 @@ func (SDCpp) Params() []*v1.Param {
 		floatParam("skip_layer_end", "Skip layer end", groupGuidance, "--skip-layer-end", "0.2", "", 0, 1, 0.01, true),
 		floatParam("eta", "Eta", groupGuidance, "--eta", "0", "0 uses the sampler default", 0, 2, 0.05, true),
 		sampling("flow_shift", "Flow shift", groupGuidance, "--flow-shift", v1.ParamType_PARAM_TYPE_FLOAT, "", nil, 0, 20, 0.05,
-			"family flow shift: 5 for Wan, 1.15 for FLUX and Krea 2, 3 for Qwen Image, otherwise 0"),
+			"the shift the pipeline's scheduler config declares, otherwise the family flow shift: 5 for Wan, 1.15 for FLUX and Krea 2, 3 for Qwen Image, 12 for MiniMax-H3, otherwise 0"),
 
 		// Video
 		intParam("video_frames", "Video frames", groupVideo, "--video-frames", "1", "frames", "4n+1", 1, 401, 4, false),
@@ -362,6 +362,9 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 	if in.Descriptor.GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT {
 		return nil, fmt.Errorf("%w: %s is %s, a part loaded beside a diffusion model rather than one served on its own", ErrParam, in.Name, diffusion.Describe(in.Descriptor.GetArchitecture()))
 	}
+	if msg := sdUndetected(in.Descriptor); msg != "" {
+		return nil, fmt.Errorf("%w: %s", ErrParam, msg)
+	}
 	p := in.Params.Clone()
 	args := []string{"--listen-ip", in.Host, "--listen-port", strconv.Itoa(in.Port)}
 	if diffusers.Pipeline(in.Descriptor) {
@@ -445,20 +448,17 @@ func sdPipeline(in Launch, p estimate.Params) (string, error) {
 	}
 	file := func(slot, sub string) (string, error) {
 		weights, index, tokenizer := diffusers.Files(in.Model, sub)
-		switch {
-		case slot == blueprint.SlotTokenizer:
+		if slot == blueprint.SlotTokenizer {
 			if tokenizer == "" {
 				return "", fmt.Errorf("%w: %s holds no tokenizer.json", ErrParam, sub)
 			}
 			return tokenizer, nil
-		case len(weights) == 0:
-			return "", fmt.Errorf("%w: %s holds no weights", ErrParam, sub)
-		case len(weights) > 1 && index == "":
-			return "", fmt.Errorf("%w: %s is split into %d shards and holds no index naming them", ErrParam, sub, len(weights))
-		case len(weights) > 1:
-			return index, nil
 		}
-		return weights[0], nil
+		loaded, err := loadable(sub, weights, index)
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", ErrParam, err)
+		}
+		return loaded, nil
 	}
 	declared := diffusers.Slots(d)
 	slots := make([]string, 0, len(declared))
@@ -518,15 +518,42 @@ func linkDir(prepared, sub string, stored []*v1.StoredModel, picks string) (stri
 		if diffusion.PartOf(m.GetDescriptor_()) != picks || m.GetDescriptor_().GetKind() != v1.ModelKind_MODEL_KIND_COMPONENT {
 			continue
 		}
-		file := companionWeights(m)
-		if file == "" {
+		if weights, _ := storedWeights(m); len(weights) == 0 {
 			continue
+		}
+		file, err := companionWeights(m)
+		if err != nil {
+			return "", fmt.Errorf("%w: cannot lay out %s: %v", ErrParam, sub, err)
 		}
 		if err := os.Symlink(file, filepath.Join(dir, linkName(m)+filepath.Ext(file))); err != nil {
 			return "", err
 		}
 	}
 	return dir, nil
+}
+
+// Returns the file sd-server loads for a group of weights: the single file, or the index naming
+// every shard.
+func loadable(what string, weights []string, index string) (string, error) {
+	switch len(weights) {
+	case 0:
+		return "", fmt.Errorf("%s holds no weights", what)
+	case 1:
+		return weights[0], nil
+	}
+	names := make([]string, len(weights))
+	for i, w := range weights {
+		names[i] = filepath.Base(w)
+	}
+	for _, name := range names {
+		if _, _, count, ok := formats.Shard(strings.TrimSuffix(name, filepath.Ext(name))); !ok || count < 2 {
+			return "", fmt.Errorf("%s holds %d weight files, %s. sd-server loads one file, so set its path under Model files", what, len(weights), strings.Join(names, ", "))
+		}
+	}
+	if index == "" {
+		return "", fmt.Errorf("%s is split into %d shards and holds no index naming them. Pull it again", what, len(weights))
+	}
+	return index, nil
 }
 
 // Uses the adapter group name, or the repository name for root-level default groups.
@@ -667,14 +694,24 @@ func sdBytesAfter(line, phrase string) (uint64, bool) {
 	return uint64(n * mult), true
 }
 
-// Returns the first stored weights path.
-func companionWeights(c *v1.StoredModel) string {
+// Returns a stored group's weight paths in shard order and its shard index.
+func storedWeights(c *v1.StoredModel) (weights []string, index string) {
 	for _, sa := range c.GetArtifacts() {
-		if sa.GetArtifact().GetRole() == v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS {
-			return sa.GetPath()
+		switch sa.GetArtifact().GetRole() {
+		case v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS:
+			weights = append(weights, sa.GetPath())
+		case v1.ArtifactRole_ARTIFACT_ROLE_INDEX:
+			index = sa.GetPath()
 		}
 	}
-	return ""
+	sort.Strings(weights)
+	return weights, index
+}
+
+// Returns the file sd-server loads for a stored group's weights.
+func companionWeights(c *v1.StoredModel) (string, error) {
+	weights, index := storedWeights(c)
+	return loadable(path.Join(c.GetRepo(), c.GetGroup()), weights, index)
 }
 
 // Returns the first stored path with the role, or empty.
@@ -707,13 +744,14 @@ func candidate(c *v1.StoredModel) blueprint.Candidate {
 	return out
 }
 
-// Selects projector, tokenizer.json, or weights according to the slot.
-func companionPath(slot string, c *v1.StoredModel) string {
+// Selects projector, tokenizer.json, or weights according to the slot. Empty means the stored
+// model has no file for the slot. An error means it has weights sd-server cannot load.
+func companionPath(slot string, c *v1.StoredModel) (string, error) {
 	switch slot {
 	case blueprint.SlotTextEncoderVision:
-		return companionFile(c, v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR)
+		return companionFile(c, v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR), nil
 	case blueprint.SlotTokenizer:
-		return companionTokenizer(c)
+		return companionTokenizer(c), nil
 	}
 	return companionWeights(c)
 }
@@ -727,13 +765,27 @@ var sdPartKinds = map[string]v1.TensorGroupKind{
 	"high_noise_model": v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION, "uncond_model": v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION,
 }
 
-// Returns artifact bytes, falling back to the group size.
+// Returns the bytes sd-server loads for the slot: the file's size, or every shard's when it loads
+// through an index, falling back to the group size.
 func companionBytes(slot string, c *v1.StoredModel) uint64 {
-	file := companionPath(slot, c)
+	file, err := companionPath(slot, c)
+	if err != nil || file == "" {
+		return c.GetBytes()
+	}
+	weights, index := storedWeights(c)
+	var total uint64
 	for _, sa := range c.GetArtifacts() {
-		if sa.GetPath() == file && sa.GetArtifact().GetSizeBytes() > 0 {
-			return sa.GetArtifact().GetSizeBytes()
+		switch {
+		case index != "" && file == index:
+			if slices.Contains(weights, sa.GetPath()) {
+				total += sa.GetArtifact().GetSizeBytes()
+			}
+		case sa.GetPath() == file:
+			total = sa.GetArtifact().GetSizeBytes()
 		}
+	}
+	if total > 0 {
+		return total
 	}
 	return c.GetBytes()
 }
@@ -780,25 +832,6 @@ func sdSolve(s *estimate.Scope) {
 		}
 	}
 	bits := d.GetPrecision().GetBits()
-	pick := func(fill blueprint.Fill) *v1.StoredModel {
-		var fits []*v1.StoredModel
-		for _, c := range s.Companions {
-			if blueprint.Fits(fill, target, candidate(c)) && companionPath(fill.Slot, c) != "" {
-				fits = append(fits, c)
-			}
-		}
-		if len(fits) == 0 {
-			return nil
-		}
-		sort.SliceStable(fits, func(i, j int) bool {
-			ri, rj := blueprint.Rank(fill, target, candidate(fits[i])), blueprint.Rank(fill, target, candidate(fits[j]))
-			if ri != rj {
-				return ri < rj
-			}
-			return bitsDistance(fits[i], bits) < bitsDistance(fits[j], bits)
-		})
-		return fits[0]
-	}
 	var llm *v1.StoredModel
 	for _, slot := range sdSlots(d) {
 		if slot.param == "" || !s.Params.IsAuto(slot.param) {
@@ -808,7 +841,7 @@ func sdSolve(s *estimate.Scope) {
 		if slot.fill.Slot == blueprint.SlotTextEncoderVision && llm != nil && blueprint.Fits(slot.fill, target, candidate(llm)) {
 			chosen = llm
 		} else {
-			chosen = pick(slot.fill)
+			chosen, _ = sdPick(slot.fill, target, bits, s.Companions)
 		}
 		if chosen == nil {
 			continue
@@ -816,11 +849,46 @@ func sdSolve(s *estimate.Scope) {
 		if slot.fill.Slot == blueprint.SlotTextEncoderLLM {
 			llm = chosen
 		}
-		s.Params[slot.param] = companionPath(slot.fill.Slot, chosen)
+		file, err := companionPath(slot.fill.Slot, chosen)
+		if err != nil || file == "" {
+			continue
+		}
+		s.Params[slot.param] = file
 		widen(slot.param, companionBytes(slot.fill.Slot, chosen))
 	}
 	s.Descriptor = widened
 	sdSampling(s)
+}
+
+// Selects the stored model filling a slot by blueprint rank, then precision distance. Also reports
+// stored models that fit the slot but hold no file sd-server loads.
+func sdPick(fill blueprint.Fill, target blueprint.Target, bits uint32, companions []*v1.StoredModel) (*v1.StoredModel, []string) {
+	var fits []*v1.StoredModel
+	var unloadable []string
+	for _, c := range companions {
+		if !blueprint.Fits(fill, target, candidate(c)) {
+			continue
+		}
+		file, err := companionPath(fill.Slot, c)
+		if err != nil {
+			unloadable = append(unloadable, err.Error())
+			continue
+		}
+		if file != "" {
+			fits = append(fits, c)
+		}
+	}
+	if len(fits) == 0 {
+		return nil, unloadable
+	}
+	sort.SliceStable(fits, func(i, j int) bool {
+		ri, rj := blueprint.Rank(fill, target, candidate(fits[i])), blueprint.Rank(fill, target, candidate(fits[j]))
+		if ri != rj {
+			return ri < rj
+		}
+		return bitsDistance(fits[i], bits) < bitsDistance(fits[j], bits)
+	})
+	return fits[0], unloadable
 }
 
 // Absolute precision difference in bits.
@@ -835,17 +903,35 @@ func bitsDistance(c *v1.StoredModel, bits uint32) int {
 	return int(bits - have)
 }
 
+// Refuses denoisers whose tensor names stable-diffusion.cpp does not identify, naming the layout it
+// loads. The runtime reads a checkpoint by its names, so a family known only from a config does not
+// load.
+func sdUndetected(d *v1.Descriptor) string {
+	if d.GetKind() != v1.ModelKind_MODEL_KIND_DIFFUSION || !diffusion.Undetected(d) {
+		return ""
+	}
+	f := blueprint.Of(d)
+	if f == nil {
+		return fmt.Sprintf("stable-diffusion.cpp identifies a model by its tensor names and recognizes none in %s", d.GetGroup())
+	}
+	return fmt.Sprintf("stable-diffusion.cpp identifies %s by its tensor names and recognizes none in %s, so it cannot load this checkpoint however its config describes it. Pull the checkpoint in the layout it loads, published at %s", f.Name, d.GetGroup(), strings.Join(blueprint.Published(f), " or "))
+}
+
 // Reports unsupported models or slots and missing required components.
 func sdRefusal(s *estimate.Scope) string {
 	d := s.Descriptor
 	if d.GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT {
 		return fmt.Sprintf("%s is %s, a part loaded beside a diffusion model rather than one served on its own", d.GetGroup(), diffusion.Describe(d.GetArchitecture()))
 	}
+	if msg := sdUndetected(d); msg != "" {
+		return msg
+	}
 	if msg := sdUpscalerProblem(s.Params.Str("hires_upscaler"), s.Companions); msg != "" {
 		return msg
 	}
 	family := blueprint.Of(d)
-	var missing, unsupported []string
+	target := sdTarget(s)
+	var missing, unsupported, unloadable []string
 	for _, slot := range sdUnfilled(s) {
 		if slot.param == "" {
 			unsupported = append(unsupported, fmt.Sprintf("%s (%s)", slot.fill.Slot, slot.fill.Name))
@@ -853,6 +939,8 @@ func sdRefusal(s *estimate.Scope) string {
 		}
 		where := blueprint.Where(family, slot.fill)
 		missing = append(missing, fmt.Sprintf("%s (%s: %s, published at %s)", slot.param, slot.fill.Slot, slot.fill.Name, strings.Join(where, " or ")))
+		_, problems := sdPick(slot.fill, target, d.GetPrecision().GetBits(), s.Companions)
+		unloadable = append(unloadable, problems...)
 	}
 	var out []string
 	if len(unsupported) > 0 {
@@ -860,6 +948,9 @@ func sdRefusal(s *estimate.Scope) string {
 	}
 	if len(missing) > 0 {
 		out = append(out, fmt.Sprintf("%s needs %s. Pull the missing components or set their paths under Model files", family.Name, strings.Join(missing, ", ")))
+	}
+	if len(unloadable) > 0 {
+		out = append(out, "The store holds parts sd-server cannot load: "+strings.Join(unloadable, "; "))
 	}
 	return strings.Join(out, ". ")
 }
@@ -870,8 +961,10 @@ func sdUpscalerProblem(value string, stored []*v1.StoredModel) string {
 		return ""
 	}
 	for _, m := range stored {
-		if m.GetGroup() == value && m.GetDescriptor_().GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT && diffusion.PartOf(m.GetDescriptor_()) == "upscaler" && companionWeights(m) != "" {
-			return ""
+		if m.GetGroup() == value && m.GetDescriptor_().GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT && diffusion.PartOf(m.GetDescriptor_()) == "upscaler" {
+			if _, err := companionWeights(m); err == nil {
+				return ""
+			}
 		}
 	}
 	return fmt.Sprintf("hires_upscaler %q is not a latent mode, Lanczos, Nearest, or an upscaler in the store", value)

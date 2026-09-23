@@ -2,16 +2,18 @@
   import { live } from '$lib/state.svelte';
   import { byName, tail } from '$lib/format';
   import { weightsName } from '$lib/catalog';
-  import { pickedPath, picksModel } from '$lib/diffusion';
+  import { pathLabel, picksModel, storeRef } from '$lib/diffusion';
+  import type { Param } from '$proto/runtime_pb';
   import Select from './ui/Select.svelte';
 
-  let { value = $bindable(''), id, picks = '', empty = '' }: { value?: string; id?: string; picks?: string; empty?: string } = $props();
+  let { value = $bindable(''), id, param, empty = '' }: { value?: string; id?: string; param: Param; empty?: string } = $props();
 
-  const fitting = $derived([...live.models.values()].filter((m) => picksModel(m, picks) && pickedPath(m, picks)).sort(byName((m) => m.repo + m.group)));
+  // The daemon resolves each reference to the file the parameter loads from the group.
+  const fitting = $derived([...live.models.values()].filter((m) => picksModel(m, param)).sort(byName((m) => m.repo + m.group)));
   const items = $derived.by(() => {
-    const out = [{ value: '', label: empty || '–' }, ...fitting.map((m) => ({ value: pickedPath(m, picks), label: `${tail(m.repo)} · ${weightsName(m.group, m.formatId)}` }))];
-    // Preserve selected paths that are no longer in the store.
-    if (value && !out.some((i) => i.value === value)) out.push({ value, label: tail(value) });
+    const out = [{ value: '', label: empty || '–' }, ...fitting.map((m) => ({ value: storeRef(m), label: `${tail(m.repo)} · ${weightsName(m.group, m.formatId)}` }))];
+    // Preserve values set by hand or naming groups no longer in the store.
+    if (value && !out.some((i) => i.value === value)) out.push({ value, label: pathLabel(value) });
     return out;
   });
 </script>

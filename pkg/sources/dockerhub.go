@@ -108,8 +108,12 @@ func (dockerhubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest
 	}
 	resp := &v1.SearchResponse{Total: body.Total}
 	for _, it := range body.Results {
-		if dhIsModel(it) {
-			resp.Hits = append(resp.Hits, dhHit(c, it))
+		if !dhIsModel(it) {
+			continue
+		}
+		hit := dhHit(c, it)
+		if AdmitsFormats(req, hit.GetFormats()) {
+			resp.Hits = append(resp.Hits, hit)
 		}
 	}
 	if next := from + len(body.Results); len(body.Results) > 0 && uint64(next) < body.Total {
@@ -158,6 +162,13 @@ func dhHit(c *Client, it dhItem) *v1.SearchHit {
 	}
 	if hit.Downloads == 0 {
 		hit.Downloads = ParseCount(strings.TrimSuffix(dhRawText(it.PullCount), "+"))
+	}
+	// The listing names layer media types, which say GGUF before the manifest is read.
+	for _, mt := range it.MediaTypes {
+		if dhMediaKind(mt) == dhKindGGUF {
+			hit.Formats = []string{"gguf"}
+			break
+		}
 	}
 	return hit
 }

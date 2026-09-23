@@ -208,6 +208,16 @@ type Registry struct {
 	byID  map[string]Source
 }
 
+// NewRegistry holds already built sources in the given order.
+func NewRegistry(srcs ...Source) *Registry {
+	r := &Registry{byID: map[string]Source{}}
+	for _, src := range srcs {
+		r.order = append(r.order, src)
+		r.byID[src.Spec().GetId()] = src
+	}
+	return r
+}
+
 // Builds a registry in fallback order.
 func Build(cfgs []*v1.Source) (*Registry, error) {
 	r := &Registry{byID: map[string]Source{}}

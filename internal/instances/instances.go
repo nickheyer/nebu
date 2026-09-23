@@ -324,20 +324,23 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if res != nil {
 		slotParams = res.Params
 	}
-	// Request params override slot defaults.
-	layered := runtimes.Merge(slotParams, req.GetParams())
+	companions, err := m.Inspector.Companions(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
+	if err != nil {
+		return nil, err
+	}
+	// Request params override slot defaults. Stored groups named by path params resolve to their files.
+	layered, err := runtimes.ResolveStore(rt, runtimes.Merge(slotParams, req.GetParams()), append(append([]*v1.StoredModel{}, companions...), stored))
+	if err != nil {
+		return nil, err
+	}
 	params, err := runtimes.Resolve(rt, layered)
 	if err != nil {
 		return nil, err
 	}
 	p := &prepared{req: req, stored: stored, rt: rt, install: install, name: name, descriptor: descriptor, profile: profile, planned: planProfile, res: res, params: params}
-	companions, err := m.Inspector.Companions(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
-	if err != nil {
-		return nil, err
-	}
 	p.companions = companions
 	if rt.Policy() != nil {
-		if p.plan, err = m.Inspector.Plan(rt, descriptor, planProfile, layered, true, res.placement(), stored.GetRepo(), companions); err != nil {
+		if p.plan, err = m.Inspector.Plan(rt, descriptor, planProfile, layered, true, res.placement(), stored.GetRepo(), stored, companions); err != nil {
 			return nil, err
 		}
 		for k, v := range p.plan.GetParams() {

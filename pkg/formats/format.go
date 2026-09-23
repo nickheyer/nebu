@@ -43,7 +43,7 @@ type Words struct {
 	Notes  []string
 }
 
-// A format that groups files by pipelines declared in model_index.json.
+// A format that groups files by pipelines declared in a pipeline index.
 type TreeFormat interface {
 	Format
 	// Classifies a path relative to the tree root.
@@ -52,8 +52,27 @@ type TreeFormat interface {
 	Split(t *v1.Tree, g *Group) []*Group
 }
 
-// Maximum model_index.json size.
+// Maximum pipeline index size.
 const maxModelIndex = 1 << 20
+
+// Pipeline index file names, in order of preference when a directory holds several. Diffusers
+// writes model_index.json for a pipeline and modular_model_index.json for a modular pipeline.
+var pipelineIndexes = []string{"model_index.json", "modular_model_index.json"}
+
+// PipelineIndex reports whether a file name is a pipeline index.
+func PipelineIndex(base string) bool { return pipelineIndexRank(base) >= 0 }
+
+// PreferredPipelineIndex reports whether a is a better pipeline index than b for the same directory.
+func PreferredPipelineIndex(a, b string) bool { return pipelineIndexRank(a) < pipelineIndexRank(b) }
+
+func pipelineIndexRank(base string) int {
+	for i, name := range pipelineIndexes {
+		if base == name {
+			return i
+		}
+	}
+	return -1
+}
 
 // A model format reader and classifier.
 type Format interface {
@@ -138,15 +157,27 @@ func (r *Registry) Describe() []*v1.Format {
 	return out
 }
 
-// Lay reads each model_index.json and records declared trees, deepest first. Unreadable or invalid
-// indexes fail the listing to avoid incomplete pulls.
+// Lay reads each pipeline index and records declared trees, deepest first. A directory holding
+// both index names uses model_index.json. Unreadable or invalid indexes fail the listing to avoid
+// incomplete pulls.
 func (r *Registry) Lay(ctx context.Context, open Opener, m *v1.Model) error {
 	m.Trees = nil
+	indexes := map[string]*v1.Artifact{}
+	var dirs []string
 	for _, a := range m.GetArtifacts() {
 		dir, base := Split(a.GetPath())
-		if base != "model_index.json" {
+		if !PipelineIndex(base) {
 			continue
 		}
+		if held, ok := indexes[dir]; !ok {
+			dirs = append(dirs, dir)
+			indexes[dir] = a
+		} else if _, heldBase := Split(held.GetPath()); PreferredPipelineIndex(base, heldBase) {
+			indexes[dir] = a
+		}
+	}
+	for _, dir := range dirs {
+		a := indexes[dir]
 		data, err := ReadAll(ctx, open, a, maxModelIndex)
 		if err != nil {
 			return fmt.Errorf("%s: %w", a.GetPath(), err)
@@ -161,8 +192,8 @@ func (r *Registry) Lay(ctx context.Context, open Opener, m *v1.Model) error {
 	return nil
 }
 
-// ParseTree reads the pipeline class and each component's library, class, and subfolder from
-// model_index.json.
+// ParseTree reads the pipeline class and each component's library, class, and subfolder from a
+// pipeline index. Modular pipelines name the subfolder in each component's options.
 func ParseTree(root string, data []byte) (*v1.Tree, error) {
 	var index map[string]json.RawMessage
 	if err := json.Unmarshal(data, &index); err != nil {

@@ -46,6 +46,8 @@ type RepoEntry struct {
 	Commit    string    `json:"commit,omitempty"`
 	Files     int       `json:"files"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Weight formats the files hold, so a mirror lists by format without reading every index.
+	Formats []string `json:"formats,omitempty"`
 }
 
 // Root index listing every repository

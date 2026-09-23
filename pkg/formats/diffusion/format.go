@@ -176,6 +176,11 @@ const (
 	// Standalone autoencoder latent channels and video flag.
 	KeyLatentChannels = "diffusion.latent_channels"
 	KeyVideoVAE       = "diffusion.video_vae"
+	// Whether the denoiser's tensor names identify its family. stable-diffusion.cpp reads a
+	// checkpoint by its tensor names, so a denoiser known only from its config does not load.
+	KeyDetected = "diffusion.detected"
+	// Flow shift the pipeline's scheduler config declares.
+	KeyFlowShift = "diffusion.flow_shift"
 )
 
 // Metadata infers family, variant, bundled components, and outputs from tensors. Returns empty for
@@ -183,6 +188,9 @@ const (
 func Metadata(raw *v1.RawModel) map[string]string {
 	out := map[string]string{}
 	p := profile(raw)
+	if p.Family != "" || p.Component == "" && denoiserNamed(raw.GetTensors()) {
+		out[KeyDetected] = strconv.FormatBool(p.Family != "")
+	}
 	if p.Family != "" {
 		out[KeyFamily] = p.Family
 		if p.Variant != "" {
@@ -210,8 +218,28 @@ func Metadata(raw *v1.RawModel) map[string]string {
 	return out
 }
 
+// Reports whether any tensor carries a name only denoisers use.
+func denoiserNamed(tensors []*v1.TensorInfo) bool {
+	for _, t := range tensors {
+		if kind, ok := Kind(t.GetName()); ok && kind == v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION {
+			return true
+		}
+	}
+	return false
+}
+
 // FamilyOf returns the denoiser family, or empty if absent.
 func FamilyOf(d *v1.Descriptor) string { return ProfileOf(d).Family }
+
+// Undetected reports whether the denoiser's tensor names identify no family, in which case
+// stable-diffusion.cpp cannot load it however its config describes it.
+func Undetected(d *v1.Descriptor) bool { return d.GetMetadata()[KeyDetected] == "false" }
+
+// FlowShift returns the flow shift the model's scheduler config declares, or false if none.
+func FlowShift(d *v1.Descriptor) (float64, bool) {
+	v, err := strconv.ParseFloat(d.GetMetadata()[KeyFlowShift], 64)
+	return v, err == nil && v > 0
+}
 
 // PartOf returns the component kind, falling back to the canonical architecture.
 func PartOf(d *v1.Descriptor) string {

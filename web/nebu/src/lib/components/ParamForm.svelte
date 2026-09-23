@@ -12,7 +12,7 @@
   import StoreFileSelect from './StoreFileSelect.svelte';
   import PartsList from './PartsList.svelte';
   import { live } from '$lib/state.svelte';
-  import { picksModel } from '$lib/diffusion';
+  import { pathLabel, picksModel } from '$lib/diffusion';
   import { byName, tail } from '$lib/format';
 
   let {
@@ -66,7 +66,7 @@
   function storeChoices(p: Param): { value: string; label: string; detail: string }[] {
     if (!p.choices.length || !p.picks) return [];
     return [...live.models.values()]
-      .filter((m) => picksModel(m, p.picks))
+      .filter((m) => picksModel(m, p))
       .sort(byName((m) => m.group + m.repo))
       .map((m) => ({ value: m.group, label: m.group, detail: tail(m.repo) }));
   }
@@ -74,10 +74,10 @@
   // Default precedence: slot, plan, runtime.
   function beneath(p: Param): string {
     const v = inherited[p.name];
-    if (v !== undefined && v !== '') return isPath(p) ? tail(v) : v;
+    if (v !== undefined && v !== '') return isPath(p) ? pathLabel(v) : v;
     if (p.solved) {
       const s = solved[p.name];
-      if (s !== undefined && s !== '' && s.toLowerCase() !== 'auto') return isPath(p) ? tail(s) : s;
+      if (s !== undefined && s !== '' && s.toLowerCase() !== 'auto') return isPath(p) ? pathLabel(s) : s;
       return 'auto';
     }
     return p.default;
@@ -165,7 +165,7 @@
       {:else if numeric(p)}
         <NumberInput id={fid} min={b.min || undefined} max={b.max || undefined} step={b.step || undefined} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {:else if isPath(p)}
-        <StoreFileSelect id={fid} picks={p.picks} empty={beneath(p)} bind:value={() => v, (next) => set(p.name, next)} />
+        <StoreFileSelect id={fid} param={p} empty={beneath(p)} bind:value={() => v, (next) => set(p.name, next)} />
       {:else if multiline}
         <TextArea id={fid} mono rows={3} empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {:else}

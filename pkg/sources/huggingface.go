@@ -2,6 +2,7 @@ package sources
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -106,7 +108,22 @@ type hubItem struct {
 
 var hubCursor = regexp.MustCompile(`[?&]cursor=([^&>]+)`)
 
+// Searches the hub. Several formats become one request per tag merged by the sort, since the
+// hub joins repeated tag filters with and.
 func (hubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
+	tags := hubFormatTags(Filter(req, FacetFormat))
+	if len(tags) > 1 {
+		return hubSearchAny(ctx, c, req, sort, tags)
+	}
+	tag := ""
+	if len(tags) == 1 {
+		tag = tags[0]
+	}
+	return hubSearch(ctx, c, req, sort, tag, strings.TrimSpace(req.GetCursor()))
+}
+
+// Fetches one page of the model list, filtered to one format tag when given.
+func hubSearch(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort, tag, cursor string) (*v1.SearchResponse, error) {
 	q := url.Values{
 		"limit":     {strconv.Itoa(c.Limit(req))},
 		"sort":      {sort.Key},
@@ -118,7 +135,7 @@ func (hubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 	if author := Author(req); author != "" {
 		q.Set("author", author)
 	}
-	if cursor := strings.TrimSpace(req.GetCursor()); cursor != "" {
+	if cursor != "" {
 		q.Set("cursor", cursor)
 	}
 	if task := FilterOne(req, FacetTask); task != "" {
@@ -136,8 +153,7 @@ func (hubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 	for _, t := range Filter(req, FacetTag) {
 		q.Add("filter", t)
 	}
-	// Apply format filters through repository tags.
-	for _, tag := range hubFormatTags(Filter(req, FacetFormat)) {
+	if tag != "" {
 		q.Add("filter", tag)
 	}
 	for _, e := range hubExpand {
@@ -161,6 +177,82 @@ func (hubAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort
 		resp.Total = total
 	}
 	return resp, nil
+}
+
+// Marks a cursor that pages several tag streams at once.
+const hubUnionCursor = "union:"
+
+// Fetches a page per format tag in parallel and merges them by the sort, dropping repositories
+// listed under several tags. The cursor carries every stream's position. The union's size is
+// unknown, so the total is left unset.
+func hubSearchAny(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort, tags []string) (*v1.SearchResponse, error) {
+	cursors := map[string]string{}
+	if cursor := strings.TrimSpace(req.GetCursor()); cursor != "" {
+		data, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(cursor, hubUnionCursor))
+		if !strings.HasPrefix(cursor, hubUnionCursor) || err != nil || json.Unmarshal(data, &cursors) != nil {
+			return nil, fmt.Errorf("%w: cursor %q is not one this search issued", ErrSource, cursor)
+		}
+	} else {
+		for _, tag := range tags {
+			cursors[tag] = ""
+		}
+	}
+	type page struct {
+		tag  string
+		resp *v1.SearchResponse
+		err  error
+	}
+	// Streams absent from the cursor are exhausted.
+	var pages []page
+	for _, tag := range tags {
+		if _, ok := cursors[tag]; ok {
+			pages = append(pages, page{tag: tag})
+		}
+	}
+	var wg sync.WaitGroup
+	for i := range pages {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			pages[i].resp, pages[i].err = hubSearch(ctx, c, req, sort, pages[i].tag, cursors[pages[i].tag])
+		}()
+	}
+	wg.Wait()
+	out := &v1.SearchResponse{}
+	next := map[string]string{}
+	seen := map[string]bool{}
+	for _, p := range pages {
+		if p.err != nil {
+			return nil, fmt.Errorf("%s: %w", p.tag, p.err)
+		}
+		if p.resp.GetNextCursor() != "" {
+			next[p.tag] = p.resp.GetNextCursor()
+		}
+	}
+	for i := 0; ; i++ {
+		added := false
+		for _, p := range pages {
+			if i < len(p.resp.GetHits()) {
+				added = true
+				if h := p.resp.GetHits()[i]; !seen[h.GetRepo()] {
+					seen[h.GetRepo()] = true
+					out.Hits = append(out.Hits, h)
+				}
+			}
+		}
+		if !added {
+			break
+		}
+	}
+	SortHits(out.Hits, sort.ID, sort.Ascending)
+	if len(next) > 0 {
+		data, err := json.Marshal(next)
+		if err != nil {
+			return nil, err
+		}
+		out.NextCursor = hubUnionCursor + base64.RawURLEncoding.EncodeToString(data)
+	}
+	return out, nil
 }
 
 // Maps format IDs to Hub tags. Standalone diffusion checkpoints use safetensors tags.

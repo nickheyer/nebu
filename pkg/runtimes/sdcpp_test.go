@@ -6,10 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nickheyer/nebu/pkg/blueprint"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/formats/diffusion"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 func sdDescriptor(family string, bundled bool, image bool) *v1.Descriptor {
@@ -390,5 +392,121 @@ func TestRuntimeBits(t *testing.T) {
 	}
 	if r.Bit("nope") != 0 {
 		t.Fatal("an unknown runtime has no bit")
+	}
+}
+
+// Sharded companions load through their index and count every shard's bytes. Shards without an
+// index cannot load, and the refusal says so instead of loading one shard.
+func TestSDCppShardedCompanions(t *testing.T) {
+	rt := SDCpp{}
+	params, _ := Resolve(rt, nil)
+	file := func(p string, role v1.ArtifactRole, size uint64) *v1.StoredArtifact {
+		return &v1.StoredArtifact{Artifact: &v1.Artifact{Path: p, Role: role, SizeBytes: size}, Path: "/store/" + p}
+	}
+	vae := &v1.StoredModel{SourceId: "hf", Repo: "Comfy-Org/Wan_2.2", Group: "wan_2.1_vae", Bytes: 3, Descriptor_: &v1.Descriptor{Architecture: "vae", Kind: v1.ModelKind_MODEL_KIND_COMPONENT}, Artifacts: []*v1.StoredArtifact{
+		file("vae/config.json", v1.ArtifactRole_ARTIFACT_ROLE_CONFIG, 1<<10),
+		file("vae/diffusion_pytorch_model-00002-of-00002.safetensors", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS, 1<<20),
+		file("vae/diffusion_pytorch_model-00001-of-00002.safetensors", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS, 3<<20),
+		file("vae/diffusion_pytorch_model.safetensors.index.json", v1.ArtifactRole_ARTIFACT_ROLE_INDEX, 1<<10),
+	}}
+	t5 := stored("city96/umt5-xxl-encoder-gguf", "umt5-xxl-encoder-Q8_0", "t5", v1.ModelKind_MODEL_KIND_COMPONENT, "umt5-xxl-encoder-Q8_0.gguf")
+	s := &estimate.Scope{Descriptor: sdDescriptor("wan", false, false), Params: params.Clone(), Companions: []*v1.StoredModel{vae, t5}, Repo: "Comfy-Org/Wan_2.2"}
+	rt.Policy().Solve(s)
+	if s.Params.Str("vae") != "/store/vae/diffusion_pytorch_model.safetensors.index.json" {
+		t.Fatalf("vae %q", s.Params.Str("vae"))
+	}
+	var planned uint64
+	for _, g := range s.Descriptor.GetGroups() {
+		if g.GetId() == "vae" {
+			planned = g.GetBytes()
+		}
+	}
+	if planned != 4<<20 {
+		t.Fatalf("the plan counts every shard, got %d", planned)
+	}
+	if _, refusal := rt.Policy().States(s); refusal != "" {
+		t.Fatalf("sharded parts with an index run: %s", refusal)
+	}
+	if p, err := companionWeights(vae); err != nil || p != "/store/vae/diffusion_pytorch_model.safetensors.index.json" {
+		t.Fatalf("weights %q %v", p, err)
+	}
+	// Without the index the shards cannot load.
+	bare := proto.Clone(vae).(*v1.StoredModel)
+	bare.Artifacts = bare.Artifacts[:3]
+	s = &estimate.Scope{Descriptor: sdDescriptor("wan", false, false), Params: params.Clone(), Companions: []*v1.StoredModel{bare, t5}, Repo: "Comfy-Org/Wan_2.2"}
+	rt.Policy().Solve(s)
+	if !s.Params.IsAuto("vae") {
+		t.Fatalf("no shard loads alone, got %q", s.Params.Str("vae"))
+	}
+	_, refusal := rt.Policy().States(s)
+	if !strings.Contains(refusal, "vae (") || !strings.Contains(refusal, "Comfy-Org/Wan_2.2/wan_2.1_vae is split into 2 shards and holds no index") {
+		t.Fatalf("refusal %q", refusal)
+	}
+	// Two whole files are two models, not shards.
+	pair := proto.Clone(vae).(*v1.StoredModel)
+	pair.Artifacts[1].Artifact.Path, pair.Artifacts[1].Path = "vae/wan_2.1_vae.safetensors", "/store/vae/wan_2.1_vae.safetensors"
+	pair.Artifacts[2].Artifact.Path, pair.Artifacts[2].Path = "vae/wan_2.1_vae.ckpt", "/store/vae/wan_2.1_vae.ckpt"
+	if _, err := companionWeights(pair); err == nil || !strings.Contains(err.Error(), "holds 2 weight files, wan_2.1_vae.ckpt, wan_2.1_vae.safetensors") {
+		t.Fatalf("pair %v", err)
+	}
+	if n := companionBytes(blueprint.SlotVAE, pair); n != pair.GetBytes() {
+		t.Fatalf("unloadable groups count their stored size, got %d", n)
+	}
+	// Sharded adapters cannot lay out as one link.
+	lora := &v1.StoredModel{Repo: "x/loras", Group: "split", Descriptor_: &v1.Descriptor{Architecture: "lora", Kind: v1.ModelKind_MODEL_KIND_COMPONENT}, Artifacts: []*v1.StoredArtifact{
+		file("split-00001-of-00002.safetensors", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS, 1),
+		file("split-00002-of-00002.safetensors", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS, 1),
+	}}
+	if _, err := linkDir(t.TempDir(), "loras", []*v1.StoredModel{lora}, "lora"); err == nil || !strings.Contains(err.Error(), "x/loras/split is split into 2 shards") {
+		t.Fatalf("link %v", err)
+	}
+}
+
+// A denoiser whose tensor names identify no family is refused before launch, naming where the
+// layout stable-diffusion.cpp loads is published.
+func TestSDCppUndetected(t *testing.T) {
+	rt := SDCpp{}
+	params, _ := Resolve(rt, nil)
+	d := sdDescriptor("minimax_h3", false, true)
+	d.Group = "transformer"
+	d.Metadata[diffusion.KeyDetected] = "false"
+	_, refusal := rt.Policy().States(&estimate.Scope{Descriptor: d, Params: params.Clone(), Repo: "FastVideo/FastVideo-FastH3-8-Step-V2"})
+	for _, want := range []string{"identifies MiniMax-H3 by its tensor names", "recognizes none in transformer", "Comfy-Org/MiniMax-H3 or leejet/MiniMax-H3-GGUF"} {
+		if !strings.Contains(refusal, want) {
+			t.Errorf("refusal %q lacks %q", refusal, want)
+		}
+	}
+	if _, err := rt.Launch(Launch{Name: "h3", Params: params, Artifacts: map[string]string{"weights": "/w.safetensors", "prepared_dir": t.TempDir()}, Install: Install{Path: "/bin/sd-server"}, Descriptor: d}); err == nil || !strings.Contains(err.Error(), "tensor names") {
+		t.Fatalf("launch %v", err)
+	}
+	d.Metadata[diffusion.KeyDetected] = "true"
+	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: d, Params: params.Clone()}); strings.Contains(refusal, "tensor names") {
+		t.Fatalf("identified names pass to the missing parts check: %q", refusal)
+	}
+	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: sdDescriptor("wan", false, false), Params: params.Clone()}); strings.Contains(refusal, "tensor names") {
+		t.Fatalf("no record refuses nothing: %q", refusal)
+	}
+}
+
+// The pipeline's scheduler config sets the flow shift over the family default.
+func TestSDCppFlowShift(t *testing.T) {
+	rt := SDCpp{}
+	params, _ := Resolve(rt, nil)
+	d := sdDescriptor("minimax_h3", false, true)
+	s := &estimate.Scope{Descriptor: d, Params: params.Clone(), Repo: "FastVideo/FastVideo-FastH3-8-Step-V2"}
+	rt.Policy().Solve(s)
+	if s.Params.Float("flow_shift") != 12 || s.Params.Int("steps") != 8 || s.Params.Float("cfg_scale") != 1 {
+		t.Fatalf("family defaults: shift %v steps %v cfg %v", s.Params.Float("flow_shift"), s.Params.Int("steps"), s.Params.Float("cfg_scale"))
+	}
+	d.Metadata[diffusion.KeyFlowShift] = "10.0"
+	s = &estimate.Scope{Descriptor: d, Params: params.Clone(), Repo: "FastVideo/FastVideo-FastH3-8-Step-V2"}
+	rt.Policy().Solve(s)
+	if s.Params.Float("flow_shift") != 10 {
+		t.Fatalf("scheduler shift %v", s.Params.Float("flow_shift"))
+	}
+	s.Params["flow_shift"] = 7.0
+	rt.Policy().Solve(s)
+	if s.Params.Float("flow_shift") != 7 {
+		t.Fatal("an explicit shift stays")
 	}
 }

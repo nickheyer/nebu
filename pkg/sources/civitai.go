@@ -176,7 +176,11 @@ func (civitaiAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, 
 	if period := FilterOne(req, FacetPeriod); period != "" {
 		q.Set("period", period)
 	}
-	for _, t := range Filter(req, FacetType) {
+	types, any := civTypesFor(req)
+	if !any {
+		return &v1.SearchResponse{}, nil
+	}
+	for _, t := range types {
 		q.Add("types", t)
 	}
 	for _, b := range Filter(req, FacetBaseModel) {
@@ -200,6 +204,25 @@ func (civitaiAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, 
 		resp.Hits = append(resp.Hits, civHit(c, it))
 	}
 	return resp, nil
+}
+
+// The model types a request admits: the type facet narrowed to the kinds asked for, every type
+// of those kinds when no type is named. Reports false when kinds and types share nothing, since
+// asking the API for no type lists every type.
+func civTypesFor(req *v1.SearchRequest) ([]string, bool) {
+	types := Filter(req, FacetType)
+	kinds, err := Kinds(req)
+	if err != nil || len(kinds) == 0 {
+		return types, true
+	}
+	var out []string
+	for _, t := range civModelTypes {
+		k, ok := civitaiKinds[t]
+		if ok && slices.Contains(kinds, k) && (len(types) == 0 || slices.Contains(types, t)) {
+			out = append(out, t)
+		}
+	}
+	return out, len(out) > 0
 }
 
 // Reads the nsfw switch from the request, hidden unless asked for
@@ -251,19 +274,25 @@ func civHit(c *Client, it civModel) *v1.SearchHit {
 			hit.SizeBytes += civBytes(f)
 		}
 		// Civitai publishes single file checkpoints, safetensors and pickles, and the odd GGUF
-		if format := civFormat(f.Name); format != "" && !slices.Contains(hit.Formats, format) {
+		if format := civFormat(f.Name, it.Type); format != "" && !slices.Contains(hit.Formats, format) {
 			hit.Formats = append(hit.Formats, format)
 		}
 	}
 	return hit
 }
 
-// The format a published file is held in by its extension, a checkpoint file being the single file diffusion format
-func civFormat(name string) string {
+// Names the format a file holds. Language models keep their safetensors as the transformers
+// layout, every other safetensors or pickle is a single file diffusion checkpoint.
+func civFormat(name, modelType string) string {
 	switch strings.ToLower(path.Ext(name)) {
 	case ".gguf":
 		return "gguf"
-	case ".safetensors", ".sft", ".ckpt", ".pt", ".pth":
+	case ".safetensors", ".sft":
+		if civitaiKinds[modelType] == v1.ModelKind_MODEL_KIND_LANGUAGE {
+			return "safetensors"
+		}
+		return "diffusion"
+	case ".ckpt", ".pt", ".pth":
 		return "diffusion"
 	}
 	return ""

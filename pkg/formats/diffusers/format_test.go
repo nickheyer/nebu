@@ -265,3 +265,145 @@ func TestWanPairSlots(t *testing.T) {
 		t.Fatalf("flux %v", s)
 	}
 }
+
+// Fixture in the layout FastVideo publishes: a modular pipeline index alone, sharded components,
+// a reference transformer another repository hosts, and diffusers tensor names.
+func modular(transformerNames ...string) (map[string][]byte, *v1.Model) {
+	if len(transformerNames) == 0 {
+		transformerNames = []string{"transformer_blocks.0.attn.to_q.weight", "proj_in.weight"}
+	}
+	first := map[string][]uint64{transformerNames[0]: {8, 8}}
+	second := map[string][]uint64{}
+	for _, n := range transformerNames[1:] {
+		second[n] = []uint64{8, 8}
+	}
+	files := map[string][]byte{
+		"modular_model_index.json": []byte(`{"_blocks_class_name":"MiniMaxH3Blocks","_class_name":"MiniMaxH3ModularPipeline","transformer":["diffusers","MiniMaxH3Transformer3DModel",{"pretrained_model_name_or_path":"FastVideo/FastVideo-FastH3-8-Step-V2","subfolder":"transformer"}],"transformer_ref":["diffusers","MiniMaxH3Transformer3DModel",{"pretrained_model_name_or_path":"MiniMaxAI/MiniMax-H3","subfolder":"transformer_ref"}],"vae":["diffusers","AutoencoderKLMiniMaxH3",{"subfolder":"vae"}],"audio_vae":["diffusers","AutoencoderKLMiniMaxH3Audio",{"subfolder":"audio_vae"}],"text_encoder":["transformers","Qwen3VLForConditionalGeneration",{"subfolder":"text_encoder"}],"tokenizer":["transformers","Qwen2TokenizerFast",{"subfolder":"tokenizer"}],"processor":["transformers","Qwen3VLProcessor",{"subfolder":"processor"}],"scheduler":["diffusers","MiniMaxH3Scheduler",{"subfolder":"scheduler"}],"audio_scheduler":["diffusers","MiniMaxH3Scheduler",{"subfolder":"audio_scheduler"}]}`),
+		"transformer/config.json":  []byte(`{"_class_name":"MiniMaxH3Transformer3DModel","hidden_size":5376,"num_layers":50}`),
+		"transformer/diffusion_pytorch_model-00001-of-00002.safetensors": safetensors(first, "BF16"),
+		"transformer/diffusion_pytorch_model-00002-of-00002.safetensors": safetensors(second, "BF16"),
+		"transformer/diffusion_pytorch_model.safetensors.index.json":     []byte(`{}`),
+		"vae/config.json": []byte(`{"_class_name":"AutoencoderKLMiniMaxH3","latent_channels":24}`),
+		"vae/diffusion_pytorch_model-00001-of-00002.safetensors": safetensors(map[string][]uint64{"decoder.conv_in.weight": {8, 24, 3, 3, 3}}, "F32"),
+		"vae/diffusion_pytorch_model-00002-of-00002.safetensors": safetensors(map[string][]uint64{"encoder.conv_in.weight": {8, 3, 3, 3, 3}}, "F32"),
+		"vae/diffusion_pytorch_model.safetensors.index.json":     []byte(`{}`),
+		"audio_vae/config.json":                                  []byte(`{"_class_name":"AutoencoderKLMiniMaxH3Audio"}`),
+		"audio_vae/diffusion_pytorch_model.safetensors":          safetensors(map[string][]uint64{"encoder.block.0.weight": {4, 4}, "decoder.block.0.weight": {4, 4}}, "F32"),
+		"text_encoder/config.json":                               []byte(`{"architectures":["Qwen3VLForConditionalGeneration"],"text_config":{"hidden_size":5120},"vision_config":{"depth":27}}`),
+		"text_encoder/model-00001-of-00002.safetensors":          safetensors(map[string][]uint64{"model.language_model.layers.0.self_attn.q_proj.weight": {8, 8}}, "BF16"),
+		"text_encoder/model-00002-of-00002.safetensors":          safetensors(map[string][]uint64{"model.visual.blocks.0.attn.qkv.weight": {8, 8}}, "BF16"),
+		"text_encoder/model.safetensors.index.json":              []byte(`{}`),
+		"tokenizer/tokenizer.json":                               []byte(`{}`),
+		"processor/tokenizer.json":                               []byte(`{}`),
+		"scheduler/scheduler_config.json":                        []byte(`{"_class_name":"MiniMaxH3Scheduler","_diffusers_version":"0.36.0.dev0","shift":10.0}`),
+		"audio_scheduler/scheduler_config.json":                  []byte(`{"_class_name":"MiniMaxH3Scheduler","shift":3.0}`),
+		"fastvideo_inference.json":                               []byte(`{"video_scheduler_shift":10.0}`),
+		"README.md":                                              []byte(`# hi`),
+	}
+	m := &v1.Model{Repo: "FastVideo/FastVideo-FastH3-8-Step-V2"}
+	for p, data := range files {
+		m.Artifacts = append(m.Artifacts, &v1.Artifact{Path: p, SizeBytes: uint64(len(data))})
+	}
+	return files, m
+}
+
+func TestModularPipeline(t *testing.T) {
+	files, m := modular()
+	r := registry(t)
+	if err := r.Lay(context.Background(), opener(files), m); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.GetTrees()) != 1 || m.GetTrees()[0].GetRoot() != "" || m.GetTrees()[0].GetClassName() != "MiniMaxH3ModularPipeline" {
+		t.Fatalf("trees %+v", m.GetTrees())
+	}
+	if p := m.GetTrees()[0].GetParts(); p["transformer"] != "transformer" || p["transformer_ref"] != "transformer_ref" || p["scheduler"] != "scheduler" {
+		t.Fatalf("parts %v", p)
+	}
+	r.Classify(m)
+	groups := r.Groups(m)
+	if len(groups) != 1 || groups[0].Name != "transformer" {
+		t.Fatalf("groups %+v", groups)
+	}
+	g := groups[0]
+	if len(g.Weights) != 7 || len(g.Files[v1.ArtifactRole_ARTIFACT_ROLE_INDEX]) != 3 {
+		t.Fatalf("%d weights, files %v", len(g.Weights), g.Files)
+	}
+	for _, a := range m.GetArtifacts() {
+		switch a.GetPath() {
+		case "README.md", "fastvideo_inference.json":
+			if a.GetFormatId() == "diffusers" {
+				t.Errorf("%s belongs to no pipeline", a.GetPath())
+			}
+		case "modular_model_index.json":
+			if a.GetFormatId() != "diffusers" || a.GetRole() != v1.ArtifactRole_ARTIFACT_ROLE_CONFIG {
+				t.Errorf("the modular index is the pipeline config, classified %q %v", a.GetFormatId(), a.GetRole())
+			}
+		default:
+			if a.GetFormatId() != "diffusers" {
+				t.Errorf("%s belongs to the pipeline, classified %q %v", a.GetPath(), a.GetFormatId(), a.GetRole())
+			}
+		}
+	}
+	var f Format
+	raw, err := f.Read(context.Background(), opener(files), g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw.GetMetadata()[prefix+"transformer_ref"]; ok {
+		t.Fatal("a transformer another repository hosts is not a part of this pipeline")
+	}
+	if raw.GetMetadata()[prefix+"scheduler"] != "scheduler" || raw.GetMetadata()["scheduler.shift"] != "10.0" || raw.GetMetadata()["audio_scheduler.shift"] != "3.0" {
+		t.Fatalf("scheduler config %v", raw.GetMetadata())
+	}
+	meta := f.Metadata(raw)
+	if meta[diffusion.KeyFamily] != "minimax_h3" || meta[diffusion.KeyDetected] != "false" || meta[diffusion.KeyFlowShift] != "10.0" {
+		t.Fatalf("diffusers names identify no family and the scheduler sets the shift: %v", meta)
+	}
+	d := &v1.Descriptor{Architecture: f.Architecture(raw), Metadata: meta}
+	if !diffusion.Undetected(d) {
+		t.Fatal("undetected")
+	}
+	if shift, ok := diffusion.FlowShift(d); !ok || shift != 10 {
+		t.Fatalf("flow shift %v %v", shift, ok)
+	}
+	slots := Slots(d)
+	if slots[blueprint.SlotDenoiser] != "transformer" || slots[blueprint.SlotVAE] != "vae" || slots[blueprint.SlotVAEAudio] != "audio_vae" || slots[blueprint.SlotTextEncoderLLM] != "text_encoder" || slots[blueprint.SlotTextEncoderVision] != "text_encoder" || slots[blueprint.SlotTokenizer] != "tokenizer" {
+		t.Fatalf("slots %v", slots)
+	}
+	// The original tensor names identify the family.
+	files, m = modular("video_patch_proj.weight", "audio_patch_proj.weight", "blocks.0.attn.qkv_proj.weight")
+	if err := r.Lay(context.Background(), opener(files), m); err != nil {
+		t.Fatal(err)
+	}
+	r.Classify(m)
+	raw, err = f.Read(context.Background(), opener(files), r.Groups(m)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta := f.Metadata(raw); meta[diffusion.KeyFamily] != "minimax_h3" || meta[diffusion.KeyDetected] != "true" {
+		t.Fatalf("original names: %v", meta)
+	}
+	// A scheduler that shifts by resolution declares no fixed shift.
+	files["scheduler/scheduler_config.json"] = []byte(`{"_class_name":"FlowMatchEulerDiscreteScheduler","shift":3.0,"use_dynamic_shifting":true,"base_shift":0.5,"max_shift":1.15}`)
+	raw, err = f.Read(context.Background(), opener(files), r.Groups(m)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.Metadata(raw)[diffusion.KeyFlowShift]; ok {
+		t.Fatal("dynamic shifting declares no flow shift")
+	}
+	// A directory holding both indexes is laid out from model_index.json.
+	files["model_index.json"] = []byte(`{"_class_name":"MiniMaxH3Pipeline","transformer":["diffusers","MiniMaxH3Transformer3DModel"],"vae":["diffusers","AutoencoderKLMiniMaxH3"]}`)
+	m.Artifacts = append(m.Artifacts, &v1.Artifact{Path: "model_index.json", SizeBytes: 10})
+	if err := r.Lay(context.Background(), opener(files), m); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.GetTrees()) != 1 || m.GetTrees()[0].GetClassName() != "MiniMaxH3Pipeline" {
+		t.Fatalf("trees %+v", m.GetTrees())
+	}
+	r.Classify(m)
+	raw, err = f.Read(context.Background(), opener(files), r.Groups(m)[0])
+	if err != nil || raw.GetMetadata()[KeyClass] != "MiniMaxH3Pipeline" {
+		t.Fatalf("read %v %v", raw.GetMetadata()[KeyClass], err)
+	}
+}

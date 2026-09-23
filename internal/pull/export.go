@@ -15,6 +15,7 @@ import (
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/mirror"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
 	"github.com/nickheyer/nebu/pkg/transfer"
 )
@@ -157,7 +158,11 @@ func writeRootIndex(dir string) error {
 			return err
 		}
 		rel, _ := filepath.Rel(dir, filepath.Dir(path))
-		repos = append(repos, mirror.RepoEntry{Repo: filepath.ToSlash(rel), Commit: index.Commit, Files: len(index.Files), UpdatedAt: index.UpdatedAt})
+		paths := make([]string, 0, len(index.Files))
+		for _, f := range index.Files {
+			paths = append(paths, f.Path)
+		}
+		repos = append(repos, mirror.RepoEntry{Repo: filepath.ToSlash(rel), Commit: index.Commit, Files: len(index.Files), UpdatedAt: index.UpdatedAt, Formats: sources.FormatsOf(paths)})
 		return nil
 	})
 	if err != nil {

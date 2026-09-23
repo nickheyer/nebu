@@ -64,6 +64,10 @@ message Param {
   string rule = 16;
   // Stored component architecture, such as vae or t5. Use model to accept any weights.
   string picks = 17;
+  // Blueprint slots the parameter fills, so a pipeline group bundling one of them supplies the part.
+  repeated string slots = 18;
+  // The parameter names a directory of stored parts rather than one file.
+  bool directory = 19;
 }
 
 // Runtime installation method.

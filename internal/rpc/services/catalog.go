@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
@@ -157,8 +158,8 @@ type SourceService struct {
 	runtimes  *runtimes.Registry
 }
 
-// Maximum pages to search past when filters remove all hits.
-const filteredPages = 8
+// Provider pages fetched for one page of results when providers cannot apply every filter.
+const searchRounds = 8
 
 // Creates the source service with format and runtime registries.
 func NewSourceService(m *sources.Manager, insp *inspect.Inspector, fmts *formats.Registry, reg *runtimes.Registry) *SourceService {
@@ -226,50 +227,130 @@ func (s *SourceService) DeleteSource(ctx context.Context, req *connect.Request[v
 	return reply(&v1.DeleteSourceResponse{Source: row}, err)
 }
 
-// Searches selected sources and labels hits with model kind, formats, and runtimes.
-// Applies runtime and format filters after provider filters. Continues past empty
-// filtered pages while preserving the cursor, within the page limit.
+// What a search asks for beyond what providers filter: the runtime's compatibility bit, the
+// formats, and the model kinds.
+type wanted struct {
+	mask    uint32
+	formats []string
+	kinds   []v1.ModelKind
+	// Set when the runtime serves none of the formats or kinds asked for.
+	nothing bool
+}
+
+// Reads the shared filters and turns a runtime into the formats and kind it serves, so providers
+// filter by those through their own APIs. The runtime facet itself stays with the daemon.
+func (s *SourceService) wanted(in *v1.SearchRequest) (wanted, error) {
+	var w wanted
+	w.formats = sources.Filter(in, sources.FacetFormat)
+	for _, f := range w.formats {
+		if s.formats.Get(f) == nil {
+			return w, fmt.Errorf("%w: no format %q, one of %s", runtimes.ErrParam, f, strings.Join(s.formatIDs(), ", "))
+		}
+	}
+	kinds, err := sources.Kinds(in)
+	if err != nil {
+		return w, err
+	}
+	w.kinds = kinds
+	id := strings.TrimSpace(in.GetFilters()[sources.FacetRuntime])
+	if id == "" {
+		return w, nil
+	}
+	rt, err := s.runtimes.Get(id)
+	if err != nil {
+		return w, err
+	}
+	w.mask = s.runtimes.Bit(id)
+	if len(w.formats) == 0 {
+		w.formats = rt.Formats()
+	} else {
+		w.formats = slices.DeleteFunc(slices.Clone(w.formats), func(f string) bool { return !slices.Contains(rt.Formats(), f) })
+	}
+	if len(w.kinds) > 0 && !slices.Contains(w.kinds, rt.Kind()) {
+		w.nothing = true
+	}
+	w.kinds = []v1.ModelKind{rt.Kind()}
+	if len(w.formats) == 0 {
+		w.nothing = true
+	}
+	delete(in.Filters, sources.FacetRuntime)
+	in.Filters[sources.FacetFormat] = strings.Join(w.formats, ",")
+	in.Filters[sources.FacetKind] = sources.KindName(rt.Kind())
+	return w, nil
+}
+
+// Reports whether a stamped hit is what the search asked for.
+func (w wanted) admits(h *v1.SearchHit) bool {
+	if w.mask != 0 && h.GetRuntimes()&w.mask == 0 {
+		return false
+	}
+	if len(w.formats) > 0 && !holdsAny(h.GetFormats(), w.formats) {
+		return false
+	}
+	if len(w.kinds) > 0 && !slices.Contains(w.kinds, h.GetKind()) {
+		return false
+	}
+	return true
+}
+
+// Searches selected sources and labels hits with model kind, formats, and runtimes. Providers
+// apply the format and kind filters their APIs offer. Hits they still list that miss the filters
+// are dropped, and further pages are fetched until the page holds the requested number of hits
+// or the sources run out.
 func (s *SourceService) Search(ctx context.Context, req *connect.Request[v1.SearchRequest]) (*connect.Response[v1.SearchResponse], error) {
 	in := proto.Clone(req.Msg).(*v1.SearchRequest)
-	var wantMask uint32
-	if id := strings.TrimSpace(in.GetFilters()[sources.FacetRuntime]); id != "" {
-		if _, err := s.runtimes.Get(id); err != nil {
-			return nil, wrap(err)
-		}
-		wantMask = s.runtimes.Bit(id)
+	if in.Filters == nil {
+		in.Filters = map[string]string{}
 	}
-	wantFormats := sources.Filter(in, sources.FacetFormat)
-	for _, f := range wantFormats {
-		if s.formats.Get(f) == nil {
-			return nil, wrap(fmt.Errorf("%w: no format %q, one of %s", runtimes.ErrParam, f, strings.Join(s.formatIDs(), ", ")))
-		}
+	w, err := s.wanted(in)
+	if err != nil {
+		return nil, wrap(err)
 	}
 	out := &v1.SearchResponse{}
+	if w.nothing {
+		return connect.NewResponse(out), nil
+	}
+	limit := int(in.GetLimit())
+	if limit <= 0 {
+		limit = sources.DefaultLimit
+	}
+	seen := map[string]bool{}
+	warned := map[string]bool{}
 	dropped := false
-	for page := 0; page < filteredPages; page++ {
+	for round := 0; round < searchRounds; round++ {
 		resp, err := s.sources.Registry.Search(ctx, in)
 		if err != nil {
 			return nil, wrap(err)
 		}
-		out.Warnings = append(out.Warnings, resp.GetWarnings()...)
-		out.NextCursor = resp.GetNextCursor()
-		if page == 0 {
+		for _, warning := range resp.GetWarnings() {
+			if !warned[warning] {
+				warned[warning] = true
+				out.Warnings = append(out.Warnings, warning)
+			}
+		}
+		if round == 0 {
 			out.Total = resp.GetTotal()
 		}
+		out.NextCursor = resp.GetNextCursor()
 		for _, h := range resp.GetHits() {
+			key := h.GetSourceId() + "/" + h.GetRepo()
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 			s.stamp(h)
-			if wantMask != 0 && h.GetRuntimes()&wantMask == 0 || len(wantFormats) > 0 && !holdsAny(h.GetFormats(), wantFormats) {
+			if !w.admits(h) {
 				dropped = true
 				continue
 			}
 			out.Hits = append(out.Hits, h)
 		}
-		if len(out.Hits) > 0 || out.NextCursor == "" {
+		if len(out.Hits) >= limit || out.NextCursor == "" {
 			break
 		}
 		in.Cursor = out.NextCursor
 	}
-	// Provider counts do not reflect local filtering.
+	// Provider counts include the hits dropped here.
 	if dropped {
 		out.Total = 0
 	}

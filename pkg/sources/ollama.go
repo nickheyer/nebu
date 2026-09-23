@@ -87,7 +87,12 @@ var (
 	olUpdatedRe  = regexp.MustCompile(`title="([^"]* UTC)"`)
 )
 
+// Searches the library. Every entry is a GGUF language model, so a request for another format or
+// kind has nothing to fetch.
 func (ollamaAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, sort Sort) (*v1.SearchResponse, error) {
+	if !AdmitsFormats(req, []string{"gguf"}) || !AdmitsKind(req, v1.ModelKind_MODEL_KIND_LANGUAGE) {
+		return &v1.SearchResponse{}, nil
+	}
 	q := url.Values{"sort": {sort.Key}}
 	query := strings.TrimSpace(req.GetQuery())
 	if query != "" {

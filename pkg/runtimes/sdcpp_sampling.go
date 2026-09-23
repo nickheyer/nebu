@@ -143,7 +143,8 @@ func sdFamilyNamed(name string) string {
 	return diffusion.Canonical(best)
 }
 
-// Resolves auto sampling settings. Distilled models use guidance 1 and fewer steps.
+// Resolves auto sampling settings. Distilled models use guidance 1 and fewer steps. A pipeline's
+// scheduler config sets the flow shift over the family default.
 func sdSampling(s *estimate.Scope) {
 	d := s.Descriptor
 	family := sdFamily(d, s.Repo)
@@ -173,7 +174,11 @@ func sdSampling(s *estimate.Scope) {
 		s.Params["guidance"] = sample.Guidance
 	}
 	if s.Params.IsAuto("flow_shift") {
-		s.Params["flow_shift"] = sample.FlowShift
+		if shift, ok := diffusion.FlowShift(d); ok {
+			s.Params["flow_shift"] = shift
+		} else {
+			s.Params["flow_shift"] = sample.FlowShift
+		}
 	}
 	if s.Params.IsAuto("sampling_method") {
 		s.Params["sampling_method"] = sample.Sampler

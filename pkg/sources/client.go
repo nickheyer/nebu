@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	facetTTL     = 6 * time.Hour
-	cardMax      = 2 << 20
-	defaultLimit = 30
+	facetTTL = 6 * time.Hour
+	cardMax  = 2 << 20
+	// DefaultLimit is the page size a request without one gets.
+	DefaultLimit = 30
 	maxLimit     = 100
 )
 
@@ -368,7 +369,7 @@ func (c *Client) CardText(ctx context.Context, rawURL string, query url.Values, 
 func (c *Client) Limit(req *v1.SearchRequest) int {
 	def, max := c.cat.DefaultLimit, c.cat.MaxLimit
 	if def <= 0 {
-		def = defaultLimit
+		def = DefaultLimit
 	}
 	if max <= 0 {
 		max = maxLimit
