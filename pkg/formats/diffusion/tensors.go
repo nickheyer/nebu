@@ -364,6 +364,8 @@ func detect(tensors []*v1.TensorInfo) signals {
 		return signals{family: "minit2i"}
 	case has("language_model.model.layers.0.self_attn.q_proj_mot_gen.weight"):
 		return signals{family: "sensenova_u1"}
+	case has("txt_in.text_norm.weight"):
+		return signals{family: "qwen_image21", imageInput: true}
 	case has("transformer_blocks.0.img_mod.1.weight"):
 		if dim(find("img_in.weight"), 0) == 128 {
 			return signals{family: "mage_flow", imageInput: true}
@@ -646,6 +648,7 @@ var canonical = map[string]string{
 	"wan": "wan", "wan2": "wan", "wan2.1": "wan", "wan2.2": "wan", "wan2_2_i2v": "wan", "wan2_2_ti2v": "wan", "wan2_2_s2v": "wan", "wantransformer3dmodel": "wan", "wanvacetransformer3dmodel": "wan", "vace": "wan",
 	"lingbot_video": "lingbot_video", "lingbot": "lingbot_video", "lingbot-video": "lingbot_video",
 	"qwen_image": "qwen_image", "qwenimage": "qwen_image", "qwen-image": "qwen_image", "qwen_image_layered": "qwen_image", "qwenimagetransformer2dmodel": "qwen_image", "qwen_image_edit": "qwen_image",
+	"qwen_image21": "qwen_image21", "qwen_image_21": "qwen_image21", "qwen_image_2.1": "qwen_image21", "qwen_image_2_1": "qwen_image21", "qwen-image-2.1": "qwen_image21", "qwen_image2.1": "qwen_image21", "qwenimage21": "qwen_image21", "qwenimage2.1": "qwen_image21", "qwenimage21transformer2dmodel": "qwen_image21",
 	"hunyuan_video": "hunyuan_video", "hyvid": "hunyuan_video", "hunyuanvideo": "hunyuan_video", "hunyuanvideotransformer3dmodel": "hunyuan_video", "skyreels_v1": "hunyuan_video",
 	"hunyuan_video_15": "hunyuan_video_15", "hunyuan_video_1.5": "hunyuan_video_15", "hunyuanvideo1.5": "hunyuan_video_15", "hunyuanvideo-1.5": "hunyuan_video_15", "hunyuanvideo_1.5": "hunyuan_video_15", "hunyuanvideo15": "hunyuan_video_15", "hunyuanvideo15transformer3dmodel": "hunyuan_video_15",
 	"anima": "anima", "anima2": "anima",
@@ -694,7 +697,7 @@ var canonical = map[string]string{
 	"t5encoder": "t5", "t5": "t5", "umt5": "t5", "t5encodermodel": "t5", "umt5encodermodel": "t5", "byt5": "t5", "flan-t5": "t5",
 	"cliptextmodel": "clip_l", "clip_l": "clip_l", "clip-l": "clip_l",
 	"cliptextmodelwithprojection": "clip_g", "clip_g": "clip_g", "clip-g": "clip_g",
-	"autoencoderkl": "vae", "autoencoderklwan": "vae", "autoencoderklqwenimage": "vae", "autoencoderklltxvideo": "vae", "autoencoderklhunyuanvideo": "vae", "autoencoderklcosmos": "vae", "autoencoderklflux2": "vae", "autoencoderklmagvit": "vae", "vae": "vae",
+	"autoencoderkl": "vae", "autoencoderklwan": "vae", "autoencoderklqwenimage": "vae", "autoencoderklqwenimage21": "vae", "autoencoderklltxvideo": "vae", "autoencoderklhunyuanvideo": "vae", "autoencoderklcosmos": "vae", "autoencoderklflux2": "vae", "autoencoderklmagvit": "vae", "vae": "vae",
 	"audio_vae": "audio_vae", "autoencoderklltxaudio": "audio_vae",
 	"autoencodertiny": "taesd", "taesd": "taesd", "taehv": "taesd", "tae": "taesd",
 	"clipvisionmodelwithprojection": "clip_vision", "clipvisionmodel": "clip_vision", "siglipvisionmodel": "clip_vision", "clip_vision": "clip_vision", "clip-vision": "clip_vision",
@@ -761,7 +764,7 @@ func classNamed(a string) string {
 var denoisers = func() []string {
 	out := []string{
 		"sd1", "sd2", "sdxl", "kolors", "sd3", "flux", "chroma", "chroma_radiance", "flux2", "flux2_klein", "hidream_i1", "hidream_o1",
-		"qwen_image", "z_image", "lumina2", "sana", "pixart", "hunyuan_dit", "cogview4", "kandinsky22", "kandinsky3", "deepfloyd", "stable_cascade",
+		"qwen_image", "qwen_image21", "z_image", "lumina2", "sana", "pixart", "hunyuan_dit", "cogview4", "kandinsky22", "kandinsky3", "deepfloyd", "stable_cascade",
 		"ovis_image", "longcat", "krea2", "ernie_image", "anima", "boogu_image", "mage_flow", "ideogram4", "sefi_image", "lens", "pid", "minit2i", "sensenova_u1",
 		"svd", "wan", "hunyuan_video", "hunyuan_video_15", "ltxv", "ltx2", "minimax_h3", "lingbot_video", "cogvideox", "mochi", "open_sora", "allegro",
 		"step_video", "magi", "pyramid_flow", "easyanimate", "ovi", "cosmos",

@@ -212,6 +212,28 @@ func TestFits(t *testing.T) {
 	if !Fits(llm, qTarget, noTower) || Fits(tower, qTarget, noTower) {
 		t.Fatal("encoder without a vision tower should match only the LLM slot")
 	}
+	// Qwen-Image 2.1 takes its own 64-channel VAE and Qwen3-VL-8B, and neither fits Qwen-Image.
+	qwen21 := diffusion.Profile{Family: "qwen_image21"}
+	vae21, q21Target := fillOf("qwen_image21", SlotVAE, qwen21, "Q8_0")
+	q21Target.Repo = "abenzerps/Qwen-Image-2.1-Uncensored-GGUF"
+	vae21File := component("abenzerps/Qwen-Image-2.1-Uncensored-GGUF", "qwen_image_2.1_vae_bf16", "vae", "vae/qwen_image_2.1_vae_bf16.safetensors")
+	vae21File.Descriptor.Metadata[diffusion.KeyLatentChannels], vae21File.Descriptor.Metadata[diffusion.KeyVideoVAE] = "64", "true"
+	vae1File := component("Comfy-Org/Qwen-Image_ComfyUI", "qwen_image_vae", "vae", "split_files/vae/qwen_image_vae.safetensors")
+	vae1File.Descriptor.Metadata[diffusion.KeyLatentChannels], vae1File.Descriptor.Metadata[diffusion.KeyVideoVAE] = "16", "true"
+	if !Fits(vae21, q21Target, vae21File) || Fits(vae21, q21Target, vae1File) {
+		t.Fatal("Qwen-Image 2.1 should accept its 64-channel VAE and reject the 16-channel Qwen-Image VAE")
+	}
+	vae1, _ := fillOf("qwen_image", SlotVAE, qwen, "qwen_image_fp8")
+	if Fits(vae1, qTarget, vae21File) {
+		t.Fatal("Qwen-Image must not take the 64-channel 2.1 VAE")
+	}
+	llm21, _ := fillOf("qwen_image21", SlotTextEncoderLLM, qwen21, "Q8_0")
+	qwen3VL := language("abenzerps/Qwen-Image-2.1-Uncensored-GGUF", "qwen3vl_8b_bf16", "qwen3vl", 8_800_000_000, "text_encoders/qwen3vl_8b_bf16.safetensors")
+	qwen3VL.Descriptor.Kind = v1.ModelKind_MODEL_KIND_COMPONENT
+	qwen3VL.Descriptor.Architecture = "llm"
+	if !Fits(llm21, q21Target, qwen3VL) || Fits(llm21, q21Target, qwenVL) {
+		t.Fatal("Qwen-Image 2.1 should take Qwen3-VL-8B and not Qwen2.5-VL-7B")
+	}
 	fluxLLM, f2Target := fillOf("flux2", SlotTextEncoderLLM, diffusion.Profile{Family: "flux2"}, "flux2-dev")
 	if !Fits(fluxLLM, f2Target, mistral) || Fits(fluxLLM, f2Target, qwenVL) {
 		t.Fatal("FLUX.2 should match Mistral Small by name")

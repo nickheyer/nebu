@@ -362,8 +362,10 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 	if in.Descriptor.GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT {
 		return nil, fmt.Errorf("%w: %s is %s, a part loaded beside a diffusion model rather than one served on its own", ErrParam, in.Name, diffusion.Describe(in.Descriptor.GetArchitecture()))
 	}
-	if msg := sdUndetected(in.Descriptor); msg != "" {
-		return nil, fmt.Errorf("%w: %s", ErrParam, msg)
+	if !in.Force {
+		if msg := sdUndetected(in.Descriptor); msg != "" {
+			return nil, fmt.Errorf("%w: %s", ErrParam, msg)
+		}
 	}
 	p := in.Params.Clone()
 	args := []string{"--listen-ip", in.Host, "--listen-port", strconv.Itoa(in.Port)}
@@ -903,18 +905,18 @@ func bitsDistance(c *v1.StoredModel, bits uint32) int {
 	return int(bits - have)
 }
 
-// Refuses denoisers whose tensor names stable-diffusion.cpp does not identify, naming the layout it
-// loads. The runtime reads a checkpoint by its names, so a family known only from a config does not
-// load.
+// Refuses denoisers whose tensor names match no family sd-server identifies. The runtime reads a
+// checkpoint by its names, so a family known only from a config does not load. Force skips the
+// refusal and leaves the judgment to sd-server, whose build may know families this list does not.
 func sdUndetected(d *v1.Descriptor) string {
 	if d.GetKind() != v1.ModelKind_MODEL_KIND_DIFFUSION || !diffusion.Undetected(d) {
 		return ""
 	}
 	f := blueprint.Of(d)
 	if f == nil {
-		return fmt.Sprintf("stable-diffusion.cpp identifies a model by its tensor names and recognizes none in %s", d.GetGroup())
+		return fmt.Sprintf("%s's tensor names match no denoiser family nebu knows. Pass force to let sd-server try it", d.GetGroup())
 	}
-	return fmt.Sprintf("stable-diffusion.cpp identifies %s by its tensor names and recognizes none in %s, so it cannot load this checkpoint however its config describes it. Pull the checkpoint in the layout it loads, published at %s", f.Name, d.GetGroup(), strings.Join(blueprint.Published(f), " or "))
+	return fmt.Sprintf("%s's tensor names are not the %s layout sd-server loads. Pull the checkpoint from %s, or pass force to let sd-server try it", d.GetGroup(), f.Name, strings.Join(blueprint.Published(f), " or "))
 }
 
 // Reports unsupported models or slots and missing required components.

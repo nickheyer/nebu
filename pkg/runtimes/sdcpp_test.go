@@ -241,6 +241,61 @@ func TestSDCppPolicySolvesCompanions(t *testing.T) {
 	}
 }
 
+// Force launches a denoiser whose tensor names nebu did not identify, leaving sd-server to judge it.
+func TestSDCppLaunchForce(t *testing.T) {
+	rt := SDCpp{}
+	prepared := t.TempDir()
+	params, err := Resolve(rt, map[string]string{"vae": "/store/qwen_image_2.1_vae_bf16.safetensors", "llm": "/store/qwen3vl_8b_bf16.safetensors"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &v1.Descriptor{FormatId: "gguf", Group: "Q8_0", Architecture: "qwen_image21_future", Kind: v1.ModelKind_MODEL_KIND_DIFFUSION, Metadata: map[string]string{diffusion.KeyDetected: "false"}, Params: map[string]float64{"n_embd": 4096}}
+	d.Groups = append(d.Groups, &v1.TensorGroup{Id: "diffusion", Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION, Layer: -1, Bytes: 7 << 30})
+	launch := Launch{Name: "q", Params: params, Artifacts: map[string]string{"weights": "/store/q8.gguf", "prepared_dir": prepared}, Install: Install{Path: "/bin/sd-server"}, Descriptor: d}
+	if _, err := rt.Launch(launch); err == nil || !strings.Contains(err.Error(), "Q8_0") || !strings.Contains(strings.ToLower(err.Error()), "pass force") {
+		t.Fatalf("an unidentified denoiser is refused until forced: %v", err)
+	}
+	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: d, Params: params.Clone()}); !strings.Contains(strings.ToLower(refusal), "pass force") {
+		t.Fatalf("the plan names force: %q", refusal)
+	}
+	launch.Force = true
+	cmd, err := rt.Launch(launch)
+	if err != nil {
+		t.Fatalf("force launches: %v", err)
+	}
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "--diffusion-model /store/q8.gguf") || !strings.Contains(joined, "--vae /store/qwen_image_2.1_vae_bf16.safetensors") || !strings.Contains(joined, "--llm /store/qwen3vl_8b_bf16.safetensors") {
+		t.Fatalf("forced args %q", joined)
+	}
+}
+
+// Qwen-Image 2.1 resolves its parts and sampling defaults.
+func TestSDCppQwenImage21(t *testing.T) {
+	rt := SDCpp{}
+	params, err := Resolve(rt, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := sdDescriptor("qwen_image21", false, true)
+	d.Group = "Q8_0"
+	d.Metadata[diffusion.KeyDetected] = "true"
+	vae := stored("abenzerps/Qwen-Image-2.1-Uncensored-GGUF", "qwen_image_2.1_vae_bf16", "vae", v1.ModelKind_MODEL_KIND_COMPONENT, "vae/qwen_image_2.1_vae_bf16.safetensors")
+	vae.Descriptor_.Metadata = map[string]string{diffusion.KeyLatentChannels: "64", diffusion.KeyVideoVAE: "true"}
+	llm := stored("abenzerps/Qwen-Image-2.1-Uncensored-GGUF", "qwen3vl_8b_bf16", "llm", v1.ModelKind_MODEL_KIND_COMPONENT, "text_encoders/qwen3vl_8b_bf16.safetensors")
+	llm.Descriptor_.ParameterCount = 8_800_000_000
+	s := &estimate.Scope{Descriptor: d, Params: params.Clone(), Companions: []*v1.StoredModel{vae, llm}, Repo: "abenzerps/Qwen-Image-2.1-Uncensored-GGUF"}
+	rt.Policy().Solve(s)
+	if s.Params.Str("vae") != "/store/vae/qwen_image_2.1_vae_bf16.safetensors" || s.Params.Str("llm") != "/store/text_encoders/qwen3vl_8b_bf16.safetensors" {
+		t.Fatalf("vae %q llm %q", s.Params.Str("vae"), s.Params.Str("llm"))
+	}
+	if _, refusal := rt.Policy().States(s); refusal != "" {
+		t.Fatalf("qwen image 2.1 with its parts should run: %s", refusal)
+	}
+	if s.Params.Int("steps") != 40 || s.Params.Str("scheduler") != "flux" || s.Params.Str("sampling_method") != "euler" {
+		t.Fatalf("defaults steps %d scheduler %q sampler %q", s.Params.Int("steps"), s.Params.Str("scheduler"), s.Params.Str("sampling_method"))
+	}
+}
+
 func TestSDCppHiresUpscaler(t *testing.T) {
 	rt := SDCpp{}
 	esrgan := stored("ai-forever/Real-ESRGAN", "RealESRGAN_x4plus", "upscaler", v1.ModelKind_MODEL_KIND_COMPONENT, "RealESRGAN_x4plus.pth")
@@ -471,7 +526,7 @@ func TestSDCppUndetected(t *testing.T) {
 	d.Group = "transformer"
 	d.Metadata[diffusion.KeyDetected] = "false"
 	_, refusal := rt.Policy().States(&estimate.Scope{Descriptor: d, Params: params.Clone(), Repo: "FastVideo/FastVideo-FastH3-8-Step-V2"})
-	for _, want := range []string{"identifies MiniMax-H3 by its tensor names", "recognizes none in transformer", "Comfy-Org/MiniMax-H3 or leejet/MiniMax-H3-GGUF"} {
+	for _, want := range []string{"transformer's tensor names are not the MiniMax-H3 layout", "Comfy-Org/MiniMax-H3 or leejet/MiniMax-H3-GGUF", "pass force"} {
 		if !strings.Contains(refusal, want) {
 			t.Errorf("refusal %q lacks %q", refusal, want)
 		}

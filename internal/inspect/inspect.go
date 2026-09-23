@@ -295,13 +295,13 @@ func (i *Inspector) fit(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostP
 	return rt.Policy().Plan(in)
 }
 
-// Plans memory use and validates runtime params. The stored model itself, when there is one,
-// supplies parts its own parameters name.
-func (i *Inspector) Plan(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (*v1.MemoryPlan, error) {
+// Plans memory use and validates runtime params
+func (i *Inspector) Plan(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel, force bool) (*v1.MemoryPlan, error) {
 	in, err := i.input(rt, d, profile, overrides, free, placement, repo, self, companions)
 	if err != nil {
 		return nil, err
 	}
+	in.SkipRules = force
 	return rt.Policy().Plan(in)
 }
 

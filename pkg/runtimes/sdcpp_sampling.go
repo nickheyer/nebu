@@ -43,6 +43,7 @@ var sdSamples = map[string]sdSample{
 	"wan":             {Steps: 20, Cfg: 6, Guidance: 3.5, FlowShift: 5, Sampler: "euler", Scheduler: "discrete", Distilled: 4},
 	"lingbot_video":   {Steps: 20, Cfg: 3, Guidance: 3.5, FlowShift: 3, Sampler: "euler", Scheduler: "discrete", Distilled: 4},
 	"qwen_image":      {Steps: 20, Cfg: 2.5, Guidance: 3.5, FlowShift: 3, Sampler: "euler", Scheduler: "discrete", Distilled: 8},
+	"qwen_image21":    {Steps: 40, Cfg: 6, Guidance: 3.5, FlowShift: 3, Sampler: "euler", Scheduler: "flux", Distilled: 8},
 	"hunyuan_video":   {Steps: 20, Cfg: 6, Guidance: 3.5, FlowShift: 7, Sampler: "euler", Scheduler: "discrete", Distilled: 4},
 	"anima":           {Steps: 20, Cfg: 6, Guidance: 3.5, FlowShift: 3, Sampler: "euler", Scheduler: "discrete", Distilled: 8},
 	"ltx2":            {Steps: 20, Cfg: 3, Guidance: 3.5, FlowShift: 2.37, Sampler: "euler", Scheduler: "ltx2", Distilled: 8},

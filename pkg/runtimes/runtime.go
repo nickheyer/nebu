@@ -56,6 +56,7 @@ type Launch struct {
 	Stored []*v1.StoredModel
 	// Stored model and its pipeline files.
 	Model *v1.StoredModel
+	Force bool
 }
 
 // Resolved command and parameters.

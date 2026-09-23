@@ -509,6 +509,16 @@ Text encoders embed the prompt. The denoiser converts noise to a latent using a 
 - Adapters: `lora` (Lightning, style, character), `controlnet` (InstantX union, DiffSynth), `ip_adapter`, EliGen entity control
 - Canonical: `Qwen/Qwen-Image`, `Qwen/Qwen-Image-Edit-2509`, `Comfy-Org/Qwen-Image_ComfyUI`, `lightx2v/Qwen-Image-Lightning`, `city96/Qwen-Image-gguf`
 
+### Qwen-Image 2.1
+
+- Output: images up to 2048px with rendered text, edits from reference images, RGBA output when the prompt asks for transparency
+- `denoiser`: 7B transformer, 32 blocks, 64 latent channels at 1x1 patch, identified by `txt_in.text_norm.weight`
+- `vae`: Qwen-Image 2.1 VAE, 64 channels, 3D convolutions with a singleton temporal kernel. The Qwen-Image and Wan 2.2 VAEs do not fit it
+- `text_encoder.llm`: Qwen3-VL-8B-Instruct
+- `text_encoder.llm.vision`: Qwen3-VL-8B vision tower for reference images. GGUF encoders require `mmproj`
+- Settings: `flux` scheduler with shift 3, 40 steps at guidance 6, dimensions divisible by 32
+- Canonical: `Qwen/Qwen-Image-2.1`, `Comfy-Org/Qwen-Image-2.1`, `leejet/Qwen-Image-2.1-GGUF`, `Qwen/Qwen3-VL-8B-Instruct-GGUF`
+
 ### Z-Image
 
 - Output: 1024px images, Turbo (8 steps), Base, Edit
@@ -705,6 +715,7 @@ Uses the text-to-image blueprint with an input image encoded as latent tokens, c
 | FLUX.1 Fill | FLUX.1 with 384 input channels | masked latent and mask | `clip_l`, `t5` |
 | FLUX.2 | FLUX.2 | up to 8 reference latents | Mistral Small 3.2 with vision |
 | Qwen-Image-Edit, 2509, 2511 | Qwen-Image | VAE latent plus Qwen2.5-VL vision tokens, several references | Qwen2.5-VL |
+| Qwen-Image 2.1 | Qwen-Image 2.1 | VAE latent plus Qwen3-VL vision tokens, several references | Qwen3-VL-8B |
 | HiDream-E1 | HiDream-I1 | reference latent tokens | four encoders of I1 |
 | OmniGen 1, 2 | a Phi-3 decoder (1), Qwen2.5-VL plus a diffusion head (2) | interleaved image and text tokens | bundled |
 | BAGEL | Qwen2.5 MoT with a SigLIP tower and a FLUX VAE | unified understanding and generation | bundled |

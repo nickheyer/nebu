@@ -64,7 +64,7 @@
   const inherited = $derived(selectedSlot?.params ?? {});
   const installs = $derived([...live.installs.values()].filter((i) => i.runtimeId === effectiveRuntime));
   const setCount = $derived(Object.keys(values).length);
-  const refused = $derived(plan?.verdict === FitVerdict.NO || !!planRefusal || (code(refusal) === Code.InvalidArgument && message(refusal).includes('pass force')));
+  const refused = $derived(plan?.verdict === FitVerdict.NO || !!planRefusal || (code(refusal) === Code.InvalidArgument && message(refusal).toLowerCase().includes('pass force')));
 
   function spec() {
     return {

@@ -28,6 +28,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/formats"
+	"github.com/nickheyer/nebu/pkg/formats/diffusion"
 	"github.com/nickheyer/nebu/pkg/host"
 	"github.com/nickheyer/nebu/pkg/launch"
 	"github.com/nickheyer/nebu/pkg/proc"
@@ -340,7 +341,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	p := &prepared{req: req, stored: stored, rt: rt, install: install, name: name, descriptor: descriptor, profile: profile, planned: planProfile, res: res, params: params}
 	p.companions = companions
 	if rt.Policy() != nil {
-		if p.plan, err = m.Inspector.Plan(rt, descriptor, planProfile, layered, true, res.placement(), stored.GetRepo(), stored, companions); err != nil {
+		if p.plan, err = m.Inspector.Plan(rt, descriptor, planProfile, layered, true, res.placement(), stored.GetRepo(), stored, companions, req.GetForce()); err != nil {
 			return nil, err
 		}
 		for k, v := range p.plan.GetParams() {
@@ -383,6 +384,7 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 		Plan:       plan,
 		Stored:     p.companions,
 		Model:      stored,
+		Force:      req.GetForce(),
 	}
 	var prep *runtimes.Command
 	if rt.Prepares(stored.GetFormatId()) {
@@ -1117,8 +1119,7 @@ func (m *Manager) describe(ctx context.Context, stored *v1.StoredModel) (*v1.Des
 	return m.rebuild(ctx, stored)
 }
 
-// Backfills descriptors and runtime masks in old manifests. Unreadable headers
-// leave the existing manifest unchanged.
+// Backfills descriptors and runtime masks in old manifest
 func (m *Manager) RefreshDescriptors(ctx context.Context) {
 	list, err := m.Store.ListManifests()
 	if err != nil {
@@ -1130,20 +1131,21 @@ func (m *Manager) RefreshDescriptors(ctx context.Context) {
 			return
 		}
 		d := stored.GetDescriptor_()
-		if d != nil && d.GetKind() != v1.ModelKind_MODEL_KIND_UNSPECIFIED && stored.GetRuntimes() == m.Runtimes.Mask(stored.GetFormatId(), d.GetKind()) {
-			continue
-		}
-		if d == nil || d.GetKind() == v1.ModelKind_MODEL_KIND_UNSPECIFIED {
+		if d == nil || d.GetKind() == v1.ModelKind_MODEL_KIND_UNSPECIFIED || diffusion.Undetected(d) {
 			var err error
 			if d, err = m.rebuild(ctx, stored); err != nil {
 				m.Log.Warn("refresh descriptor", "repo", stored.GetRepo(), "group", stored.GetGroup(), "err", err)
 				continue
 			}
 		}
+		mask := m.Runtimes.Mask(stored.GetFormatId(), d.GetKind())
+		if proto.Equal(d, stored.GetDescriptor_()) && stored.GetRuntimes() == mask {
+			continue
+		}
 		key := store.Key(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
 		unlock := m.Store.Lock(key)
 		stored.Descriptor_ = d
-		stored.Runtimes = m.Runtimes.Mask(stored.GetFormatId(), d.GetKind())
+		stored.Runtimes = mask
 		err = m.Store.WriteManifest(stored)
 		unlock()
 		if err != nil {

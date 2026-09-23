@@ -111,6 +111,7 @@ func TestScanFamilies(t *testing.T) {
 		{"wan2.2_ti2v_5B", append(tensors(append(stack("blocks", 30, "self_attn.q.weight"), "blocks.0.cross_attn.norm_k.weight")...), shaped("patch_embedding.weight", 3072, 48, 1, 2, 2)), "wan", "ti2v", false, false, true},
 		{"wan2.2_s2v_14B", tensors(append(stack("blocks", 40, "self_attn.q.weight"), "blocks.0.cross_attn.norm_k.weight", "audio_injector.injector.0.q.weight")...), "wan", "s2v", false, false, true},
 		{"qwen_image_bf16", tensors(append(stack("transformer_blocks", 60, "attn.to_q.weight"), "transformer_blocks.0.img_mod.1.weight", "img_in.weight")...), "qwen_image", "", false, false, true},
+		{"qwen-image-2.1-UC-Q8_0", tensors(append(stack("transformer_blocks", 32, "attn.to_q.weight"), "txt_in.text_norm.weight", "txt_in.in_layer.weight", "img_in.weight")...), "qwen_image21", "", false, false, true},
 		{"hunyuanvideo1.5_720p_t2v", withShapes(append(stack("double_blocks", 20, "img_attn_qkv.weight"), "txt_in.individual_token_refiner.blocks.0.adaLN_modulation.1.weight"), shaped("txt_in.input_embedder.weight", 3072, 3584)), "hunyuan_video_15", "", false, false, true},
 		{"hunyuan_video_t2v_720p_bf16", withShapes(append(stack("double_blocks", 20, "img_attn_qkv.weight"), "txt_in.individual_token_refiner.blocks.0.adaLN_modulation.1.weight"), shaped("txt_in.input_embedder.weight", 3072, 4096)), "hunyuan_video", "", false, false, true},
 		{"lumina_2_model_bf16", withShapes(append(stack("layers", 30, "attention.qkv.weight"), "cap_embedder.0.weight"), shaped("cap_embedder.0.weight", 2304)), "lumina2", "", false, false, false},
@@ -165,7 +166,7 @@ func TestCanonical(t *testing.T) {
 	if got := Generates("wan"); len(got) != 2 {
 		t.Fatalf("wan makes images and video: %v", got)
 	}
-	if Canonical("hyvid") != "hunyuan_video" || Canonical("hunyuan_video_1.5") != "hunyuan_video_15" || Canonical("FluxTransformer2DModel") != "flux" || Canonical("HiDreamImageTransformer2DModel") != "hidream_i1" || Canonical("Lumina2Transformer2DModel") != "lumina2" || Canonical("LTXVideoTransformer3DModel") != "ltxv" {
+	if Canonical("hyvid") != "hunyuan_video" || Canonical("hunyuan_video_1.5") != "hunyuan_video_15" || Canonical("FluxTransformer2DModel") != "flux" || Canonical("HiDreamImageTransformer2DModel") != "hidream_i1" || Canonical("Lumina2Transformer2DModel") != "lumina2" || Canonical("LTXVideoTransformer3DModel") != "ltxv" || Canonical("QwenImage21Transformer2DModel") != "qwen_image21" || Canonical("qwen_image_2.1") != "qwen_image21" || Canonical("AutoencoderKLQwenImage21") != "vae" {
 		t.Fatal("canonical names")
 	}
 	if !Denoiser("sdxl") || !Denoiser("cogvideox") || !Component("T5EncoderModel") || !Component("clip_h") || !Component("tokenizer") || Component("llama") {
