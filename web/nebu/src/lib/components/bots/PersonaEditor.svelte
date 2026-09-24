@@ -5,7 +5,7 @@
   import TextArea from '../ui/TextArea.svelte';
   import NumberInput from '../ui/NumberInput.svelte';
   import Disclosure from '../ui/Disclosure.svelte';
-  import SwitchRow from './SwitchRow.svelte';
+  import SwitchRow from '../ui/SwitchRow.svelte';
   import IdList from './IdList.svelte';
   import ModelSelect from './ModelSelect.svelte';
   import HumanizeForm from './HumanizeForm.svelte';
@@ -34,7 +34,7 @@
 <div class="flex flex-col gap-5">
   <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
     <Field label="Name" for="{idPrefix}-name" required error={badName ? 'Name required' : undefined}>
-      <TextInput id="{idPrefix}-name" bind:value={persona.name} empty="Ada" maxlength={80} invalid={badName} />
+      <TextInput id="{idPrefix}-name" bind:value={persona.name} empty="Ada" maxlength={80} />
     </Field>
     <Field label="Avatar URL" for="{idPrefix}-avatar" description="Used with webhooks.">
       <TextInput id="{idPrefix}-avatar" mono bind:value={persona.avatarUrl} empty="https://example.com/ada.png" />

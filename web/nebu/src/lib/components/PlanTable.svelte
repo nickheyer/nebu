@@ -84,7 +84,7 @@
   {#if p}{#if p.count > 1}<span class="mr-1 text-fg-faint">×{p.count}</span>{/if}{bytes(p.bytes)}{:else}<span class="text-fg-faint">–</span>{/if}
 {/snippet}
 
-<div class="contain-inline-size overflow-x-auto">
+<div class="tbl-wrap contain-inline-size">
   <table class="tbl dense text-xs">
     <thead>
       <tr>

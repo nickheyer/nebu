@@ -185,9 +185,20 @@
     font-size: 0.8125rem;
   }
 
-  /* Tables sit edge to edge under a section heading */
+  /* Tables bleed 0.75rem past their container so cell text lines up with the heading above and hovered rows have room. */
   .tbl {
-    @apply w-full border-collapse text-sm;
+    @apply border-collapse text-sm;
+    width: calc(100% + 1.5rem);
+    margin-inline: -0.75rem;
+  }
+  /* Scrolls wide tables. Carries the bleed so the table inside stays at full width. */
+  .tbl-wrap {
+    overflow-x: auto;
+    margin-inline: -0.75rem;
+  }
+  .tbl-wrap > .tbl {
+    width: 100%;
+    margin-inline: 0;
   }
   .tbl th {
     @apply caps h-9 border-b border-line px-3 text-left font-semibold text-fg-faint;
@@ -195,11 +206,11 @@
   }
   .tbl th:first-child,
   .tbl td:first-child {
-    @apply pl-1;
+    @apply pl-3;
   }
   .tbl th:last-child,
   .tbl td:last-child {
-    @apply pr-1;
+    @apply pr-3;
   }
   .tbl td {
     @apply border-b border-line/70 px-3 py-2.5 align-middle;

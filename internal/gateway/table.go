@@ -73,8 +73,10 @@ func OpenTable(ctx context.Context, store *db.DB, bus *events.Bus, log *slog.Log
 		return nil, err
 	}
 	for _, r := range rows {
-		// Routes stay pending until an instance is adopted or relaunched.
-		r.InstanceId, r.Endpoint, r.State, r.InFlight = "", "", v1.RouteState_ROUTE_STATE_PENDING, 0
+		if r.GetSlotId() != "" {
+			r.InstanceId = ""
+		}
+		r.Endpoint, r.State, r.InFlight = "", v1.RouteState_ROUTE_STATE_PENDING, 0
 		t.routes[r.GetName()] = r
 	}
 	return t, nil
@@ -178,7 +180,21 @@ func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, ap
 	r.Profile = proto.Clone(profile).(*v1.Profile)
 	r.Modes = append([]string(nil), t.modes[instanceID]...)
 	t.save(r, action)
+	if slotID == "" && state == v1.RouteState_ROUTE_STATE_READY {
+		t.readoptLocked(instanceID, endpoint, model, served, api)
+	}
 	return t.snapshotLocked(r)
+}
+
+func (t *Table) readoptLocked(instanceID, endpoint, model, served string, api v1.ApiFlavor) {
+	for _, r := range t.routes {
+		if r.GetSlotId() != "" || r.GetInstanceId() != instanceID || r.GetState() != v1.RouteState_ROUTE_STATE_PENDING {
+			continue
+		}
+		r.Endpoint, r.Model, r.Served, r.Api, r.State = endpoint, model, served, api, v1.RouteState_ROUTE_STATE_READY
+		r.Modes = append([]string(nil), t.modes[instanceID]...)
+		t.save(r, v1.EventAction_EVENT_ACTION_UPDATED)
+	}
 }
 
 // Updates capabilities on all routes for an instance.
@@ -273,12 +289,17 @@ func (t *Table) Rename(from, to string) (*v1.Route, error) {
 func (t *Table) Delete(name string) (*v1.Route, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.deleteLocked(name)
+}
+
+func (t *Table) deleteLocked(name string) (*v1.Route, bool) {
 	r, ok := t.routes[name]
 	if !ok {
 		return nil, false
 	}
 	delete(t.routes, name)
 	delete(t.limiters, name)
+	delete(t.dirty, name)
 	shared := false
 	for _, other := range t.routes {
 		shared = shared || other.GetInstanceId() == r.GetInstanceId()
@@ -288,6 +309,23 @@ func (t *Table) Delete(name string) (*v1.Route, bool) {
 	}
 	t.save(r, v1.EventAction_EVENT_ACTION_DELETED)
 	return t.snapshotLocked(r), true
+}
+
+// Removes every route keep rejects and returns them.
+func (t *Table) Prune(keep func(*v1.Route) bool) []*v1.Route {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var gone []*v1.Route
+	for name, r := range t.routes {
+		if keep(t.snapshotLocked(r)) {
+			continue
+		}
+		if removed, ok := t.deleteLocked(name); ok {
+			gone = append(gone, removed)
+		}
+	}
+	sort.Slice(gone, func(i, j int) bool { return gone[i].GetName() < gone[j].GetName() })
+	return gone
 }
 
 // Marks an instance's routes draining so new requests are refused

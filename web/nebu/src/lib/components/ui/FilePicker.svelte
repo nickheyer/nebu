@@ -56,7 +56,7 @@
 <div class="flex flex-col gap-2 {cls}">
   <div class="flex gap-2">
     <TextInput {id} mono class="flex-1" {empty} bind:value />
-    <Button type="button" size="lg" variant={open ? 'subtle' : 'secondary'} icon={FolderOpen} onclick={browse}>Browse</Button>
+    <Button type="button" variant={open ? 'subtle' : 'secondary'} icon={FolderOpen} onclick={browse}>Browse</Button>
   </div>
   {#if open}
     <div class="overflow-hidden rounded-md border border-line bg-sunken">

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/gateway"
@@ -110,10 +111,11 @@ func (s *SlotService) RelaunchSlot(ctx context.Context, req *connect.Request[v1.
 type GatewayService struct {
 	gateway   *gateway.Gateway
 	instances *instances.Manager
+	slots     *slots.Manager
 }
 
-func NewGatewayService(g *gateway.Gateway, m *instances.Manager) *GatewayService {
-	return &GatewayService{gateway: g, instances: m}
+func NewGatewayService(g *gateway.Gateway, m *instances.Manager, s *slots.Manager) *GatewayService {
+	return &GatewayService{gateway: g, instances: m, slots: s}
 }
 
 func (s *GatewayService) GetGatewayStatus(ctx context.Context, req *connect.Request[v1.GetGatewayStatusRequest]) (*connect.Response[v1.GetGatewayStatusResponse], error) {
@@ -124,19 +126,36 @@ func (s *GatewayService) ListRoutes(ctx context.Context, req *connect.Request[v1
 	return reply(&v1.ListRoutesResponse{Routes: s.gateway.Table().List()}, nil)
 }
 
-// Adds an alias for a ready instance, reserving slot names for slots.
+// Adds an alias. Slots, named directly or through the instance serving them,
+// keep the alias with their settings. Instances outside slots must be ready.
 func (s *GatewayService) SetRoute(ctx context.Context, req *connect.Request[v1.SetRouteRequest]) (*connect.Response[v1.SetRouteResponse], error) {
+	name := strings.TrimSpace(req.Msg.GetName())
+	alias := &v1.SlotAlias{Name: name, Policy: req.Msg.GetPolicy(), Profile: req.Msg.GetProfile()}
+	if req.Msg.GetSlotId() != "" {
+		_, route, err := s.slots.AddAlias(ctx, req.Msg.GetSlotId(), alias)
+		return reply(&v1.SetRouteResponse{Route: route}, err)
+	}
+	if req.Msg.GetInstanceId() == "" {
+		return nil, wrap(fmt.Errorf("%w: an alias needs a slot or an instance", runtimes.ErrParam))
+	}
 	in, err := s.instances.Get(req.Msg.GetInstanceId())
 	if err != nil {
 		return nil, wrap(err)
 	}
+	if in.GetSlotId() != "" {
+		_, route, err := s.slots.AddAlias(ctx, in.GetSlotId(), alias)
+		return reply(&v1.SetRouteResponse{Route: route}, err)
+	}
 	if in.GetState() != v1.InstanceState_INSTANCE_STATE_READY {
 		return nil, wrap(fmt.Errorf("%w: instance %s is not ready", runtimes.ErrParam, in.GetName()))
 	}
-	if err := s.slotless(req.Msg.GetName(), "belongs to a slot"); err != nil {
-		return nil, err
+	if name == "" || strings.ContainsAny(name, " \t\n/") {
+		return nil, wrap(fmt.Errorf("%w: an alias is a name without spaces or slashes", runtimes.ErrParam))
 	}
-	route := s.gateway.Table().Serve(req.Msg.GetName(), in, s.instances.Runtimes.API(in.GetRuntimeId()), "", req.Msg.GetPolicy(), req.Msg.GetProfile())
+	if r, ok := s.gateway.Table().Lookup(name); ok && r.GetSlotId() != "" {
+		return nil, wrap(fmt.Errorf("%w: %s belongs to a slot", runtimes.ErrParam, name))
+	}
+	route := s.gateway.Table().Serve(name, in, s.instances.Runtimes.API(in.GetRuntimeId()), "", req.Msg.GetPolicy(), req.Msg.GetProfile())
 	return reply(&v1.SetRouteResponse{Route: route}, nil)
 }
 
@@ -152,23 +171,18 @@ func (s *GatewayService) GetTrace(ctx context.Context, req *connect.Request[v1.G
 	return reply(&v1.GetTraceResponse{Trace: t}, nil)
 }
 
+// Removes an alias, from its slot when a slot owns it. A slot's own name is refused.
 func (s *GatewayService) DeleteRoute(ctx context.Context, req *connect.Request[v1.DeleteRouteRequest]) (*connect.Response[v1.DeleteRouteResponse], error) {
-	if err := s.slotless(req.Msg.GetName(), "belongs to a slot, delete the slot instead"); err != nil {
-		return nil, err
+	name := req.Msg.GetName()
+	if r, ok := s.gateway.Table().Lookup(name); ok && r.GetSlotId() != "" {
+		_, route, err := s.slots.RemoveAlias(ctx, r.GetSlotId(), name)
+		return reply(&v1.DeleteRouteResponse{Route: route}, err)
 	}
-	route, ok := s.gateway.Table().Delete(req.Msg.GetName())
+	route, ok := s.gateway.Table().Delete(name)
 	if !ok {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no route %q", req.Msg.GetName()))
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no route %q", name))
 	}
 	return reply(&v1.DeleteRouteResponse{Route: route}, nil)
-}
-
-// Rejects route names owned by slots.
-func (s *GatewayService) slotless(name, why string) error {
-	if r, ok := s.gateway.Table().Lookup(name); ok && r.GetSlotId() != "" {
-		return wrap(fmt.Errorf("%w: %s %s", runtimes.ErrParam, name, why))
-	}
-	return nil
 }
 
 // Serves task listing and watching

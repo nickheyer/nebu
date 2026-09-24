@@ -45,7 +45,7 @@
 
   <div class="flex flex-col gap-10">
     {#if installs.length}
-      <div class="overflow-x-auto"><InstallsTable {installs} /></div>
+      <div class="tbl-wrap"><InstallsTable {installs} /></div>
     {/if}
     {#if installing && task}
       <Card title={doing}>
@@ -63,7 +63,7 @@
     {/if}
     {#if builds.length}
       <Section title="Builds" count={builds.length}>
-        <div class="overflow-x-auto"><BuildsTable {builds} /></div>
+        <div class="tbl-wrap"><BuildsTable {builds} /></div>
       </Section>
     {/if}
     <Section title="Parameters" count={rt.params.length || undefined}>

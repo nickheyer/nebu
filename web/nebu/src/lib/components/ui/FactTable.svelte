@@ -74,7 +74,7 @@
           <tr><td colspan="2" class="caps !pt-3 text-fg-faint">{r.group}</td></tr>
         {:else}
           <tr>
-            <td class="w-px whitespace-nowrap align-top text-fg-muted {mono ? 'font-mono text-xs' : ''}" style="padding-left: {0.5 + r.depth * 1.25}rem" title={r.key}>{r.shown}</td>
+            <td class="w-px whitespace-nowrap align-top text-fg-muted {mono ? 'font-mono text-xs' : ''}" style="padding-left: {0.75 + r.depth * 1.25}rem" title={r.key}>{r.shown}</td>
             <td class="align-top {mono ? 'font-mono text-xs' : ''}">
               <span class="wrap-anywhere whitespace-pre-wrap {r.value === '' ? 'text-fg-faint' : 'text-fg'} {r.numeric ? 'tabular-nums' : ''}">{r.value === '' ? '–' : r.value}</span>
             </td>

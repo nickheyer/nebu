@@ -47,7 +47,7 @@ func ResolveStore(rt Runtime, overrides map[string]string, models []*v1.StoredMo
 	out := Merge(overrides)
 	for _, p := range rt.Params() {
 		v := strings.TrimSpace(out[p.GetName()])
-		if p.GetType() != v1.ParamType_PARAM_TYPE_PATH || v == "" || p.GetSolved() && strings.EqualFold(v, Auto) {
+		if p.GetType() != v1.ParamType_PARAM_TYPE_PATH || v == "" || strings.EqualFold(v, None) || p.GetSolved() && strings.EqualFold(v, Auto) {
 			continue
 		}
 		if strings.HasPrefix(v, StoreScheme) {

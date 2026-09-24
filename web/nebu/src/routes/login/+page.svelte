@@ -93,13 +93,13 @@
             <TextInput id="login-confirm" type="password" bind:value={confirm} autocomplete="new-password" required />
           </Field>
         {/if}
-        {#if error}<p class="text-sm text-bad" role="alert">{error}</p>{/if}
-        <Button type="submit" variant="primary" size="lg" icon={setupMode ? UserPlus : LogIn} loading={busy} class="w-full">{setupMode ? 'Create account' : 'Sign in'}</Button>
+        <p class="min-h-5 text-sm leading-5 text-bad" role="alert">{error}</p>
+        <Button type="submit" variant="primary" icon={setupMode ? UserPlus : LogIn} loading={busy} class="w-full">{setupMode ? 'Create account' : 'Sign in'}</Button>
       </form>
     {:else if auth.sso}
       <h1 class="text-lg font-semibold text-fg">Sign in</h1>
       <p class="mt-1 mb-6 text-sm text-fg-muted">This daemon signs browsers in through {auth.sso}.</p>
-      <Button variant="primary" size="lg" icon={LogIn} class="w-full" onclick={signInSso}>Sign in with {auth.sso}</Button>
+      <Button variant="primary" icon={LogIn} class="w-full" onclick={signInSso}>Sign in with {auth.sso}</Button>
     {/if}
     {#if !setupMode}
       <div class="mt-8 border-t border-line pt-5">
@@ -121,7 +121,7 @@
         {:else}
           <button type="button" class="text-sm text-fg-muted underline underline-offset-2 hover:text-fg" onclick={() => (useToken = true)}>Use an API token instead</button>
         {/if}
-        {#if live.needsToken && live.error && useToken}<p class="mt-2 text-sm text-warn">{live.error}</p>{/if}
+        {#if useToken}<p class="mt-2 min-h-5 text-sm leading-5 text-warn">{live.needsToken && live.error ? live.error : ''}</p>{/if}
       </div>
     {/if}
   </div>

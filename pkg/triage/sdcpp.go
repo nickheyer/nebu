@@ -1,5 +1,7 @@
 package triage
 
+import "strings"
+
 // The failures sd-server prints
 type SDCpp struct{}
 
@@ -28,6 +30,18 @@ func (SDCpp) Rules() []Rule {
 			Match:   anyOf("unknown model", "unsupported model", "get sd version from file failed", "cannot identify updated diffusion model", "model type not supported", "unsupported sd version"),
 		},
 		{
+			ID:      "tensor-missing",
+			Summary: "sd-server found no ${component} tensor named ${tensor} in the model files",
+			Hint:    "the ${component} file names its tensors in a layout this sd-server build does not map. Rebuild the sdcpp runtime to pick up nebu's layout patches, update it to a newer release, or pull the checkpoint in the layout published for stable-diffusion.cpp",
+			Match:   tensorLine("' not in model metadata"),
+		},
+		{
+			ID:      "tensor-shape",
+			Summary: "the ${component} tensor ${tensor} has a different shape than sd-server expects",
+			Hint:    "the ${component} file is a different variant than this model family loads. Pull the text encoder or VAE the family's sources publish for it",
+			Match:   tensorLine("' has wrong shape in model metadata"),
+		},
+		{
 			ID:      "model-load",
 			Summary: "the model failed to load",
 			Hint:    "run nebu store verify and check the preceding log lines",
@@ -53,5 +67,25 @@ func (SDCpp) Rules() []Rule {
 				return nil, contains(line, "GGML_ASSERT")
 			},
 		},
+	}
+}
+
+// Matches sd-server's metadata validation lines, which read
+// "<component> tensor '<name>' <problem>", and extracts both.
+func tensorLine(problem string) func(string) (map[string]string, bool) {
+	return func(line string) (map[string]string, bool) {
+		if !contains(line, problem) {
+			return nil, false
+		}
+		tensor, ok := quotedAfter(line, " tensor '", "'")
+		if !ok {
+			return nil, false
+		}
+		// The component follows the log prefix, "[ERROR  ] file.cpp:761  - ".
+		component := line[:strings.Index(line, " tensor '")]
+		if rest, ok := tailAfter(component, " - "); ok {
+			component = rest
+		}
+		return map[string]string{"component": strings.TrimSpace(component), "tensor": tensor}, true
 	}
 }

@@ -18,6 +18,9 @@ import (
 // Placeholder for parameters resolved by the planner.
 const Auto = estimate.Auto
 
+// Value of a path parameter the runtime would otherwise resolve, choosing no file at all.
+const None = "none"
+
 // Default shutdown grace period.
 const DefaultStopGrace = 15 * time.Second
 
@@ -494,6 +497,9 @@ func convert(p *v1.Param, raw string) (any, error) {
 	if p.GetSolved() && (raw == "" || strings.EqualFold(raw, Auto)) {
 		return Auto, nil
 	}
+	if p.GetType() == v1.ParamType_PARAM_TYPE_PATH && strings.EqualFold(raw, None) {
+		return None, nil
+	}
 	if len(p.GetChoices()) > 0 && p.GetPicks() == "" && !slices.Contains(p.GetChoices(), raw) {
 		return nil, fmt.Errorf("param %s: %q not in %v", p.GetName(), raw, p.GetChoices())
 	}
@@ -529,8 +535,8 @@ func convert(p *v1.Param, raw string) (any, error) {
 	return raw, nil
 }
 
-// Converts parameters to flags or environment variables. Skips empty strings and unresolved auto
-// values. True flags stand alone, and flags ending in = join their values.
+// Converts parameters to flags or environment variables. Skips empty strings, unresolved auto
+// values, and paths set to none. True flags stand alone, and flags ending in = join their values.
 func Flags(params []*v1.Param, values estimate.Params) (args []string, env map[string]string, emitted map[string]string) {
 	env = map[string]string{}
 	emitted = map[string]string{}
@@ -547,7 +553,7 @@ func Flags(params []*v1.Param, values estimate.Params) (args []string, env map[s
 			if p.GetSolved() && v == Auto {
 				continue
 			}
-			if v == "" {
+			if v == "" || p.GetType() == v1.ParamType_PARAM_TYPE_PATH && v == None {
 				continue
 			}
 			text = v

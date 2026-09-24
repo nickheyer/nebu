@@ -108,7 +108,8 @@ func (LlamaCpp) Params() []*v1.Param {
 		{Name: "n_batch", Label: "Batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "2048", Unit: "tokens", Min: 32, Step: 32, Group: "Batching", Advanced: true, Flag: "--batch-size"},
 		{Name: "n_ubatch", Label: "Micro-batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "512", Unit: "tokens", Min: 32, Step: 32, Group: "Batching", Advanced: true, Flag: "--ubatch-size"},
 		{Name: "alias", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Flag: "--alias"},
-		{Name: "mmproj", Label: "Projector", Type: v1.ParamType_PARAM_TYPE_PATH, Group: "Identity", Advanced: true, Flag: "--mmproj", Picks: "projector"},
+		{Name: "mmproj", Label: "Projector", Type: v1.ParamType_PARAM_TYPE_PATH, Default: Auto, Solved: true, Group: "Identity", Advanced: true, Flag: "--mmproj", Picks: "projector",
+			Rule: "the projector stored with the model, when it has one. Set none to serve text only"},
 		{Name: "log_verbosity", Label: "Log level", Type: v1.ParamType_PARAM_TYPE_INT, Default: "4", Min: 0, Max: 5, Step: 1, Group: "Diagnostics", Advanced: true, Flag: "--log-verbosity"},
 	}
 }
@@ -122,10 +123,8 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 	if p.Str("alias") == "" {
 		p["alias"] = in.Name
 	}
-	if p.Str("mmproj") == "" {
-		if proj := in.Artifacts["projector"]; proj != "" {
-			p["mmproj"] = proj
-		}
+	if p.IsAuto("mmproj") {
+		p["mmproj"] = in.Artifacts["projector"]
 	}
 	// Host placement disables GPU offload and hides accelerators.
 	hostOnly := in.Placement == v1.Placement_PLACEMENT_HOST

@@ -3,26 +3,30 @@
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { page } from '$app/state';
   import { replaceState } from '$app/navigation';
-  import { baseUrl, gatewayKey, setGatewayKey, token } from '$lib/api';
+  import { api, baseUrl, gatewayKey, setGatewayKey, token, message } from '$lib/api';
   import { listenerUrl } from '$lib/gateway';
   import { live, cached, slotByRef, instanceLive, runtimeName, modelKey, clock } from '$lib/state.svelte';
   import { auth } from '$lib/auth.svelte';
   import { readLocal, writeLocal } from '$lib/persist';
-  import { byName, bytes, enumLabel, ms, rate, duration, millisBetween } from '$lib/format';
+  import { byName, bytes, enumLabel, ms, rate, duration, millisBetween, ago } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
-  import { send, countTokens, type ChatMessage, type Dialect, type Sampling, type ToolCall, type Sent } from '$lib/chatClient';
+  import { confirm } from '$lib/confirm.svelte';
+  import { send, countTokens, type ChatMessage, type Sampling, type ToolCall, type Sent } from '$lib/chatClient';
+  import { blank, fresh, fileIds, fromConversation, toConversation, loadFile, uploadFile, deleteFiles, previewTitle, type Session, type Turn, type Media } from '$lib/chats';
   import { capabilities, createVideo, deleteVideo, fetchVideo, figure, generateImages, getVideo, lorasText, modeKey, namedChoice, parseLoras, readHistory, writeHistory, type Capabilities, type Generation, type MediaRequest } from '$lib/generate';
   import { prepareImage, storeImage, storeBlob, fetchImage, putImage, getImage, deleteImages, toBase64, newId, type Attachment } from '$lib/images';
   import { RouteState } from '$proto/gateway_pb';
   import { ApiFlavor } from '$proto/runtime_pb';
   import { ArtifactRole, TensorGroupKind } from '$proto/model_pb';
-  import { MessageSquare, Square, Trash2, ArrowUp, RotateCcw, PanelRightClose, PanelRightOpen, Wrench, X, FileJson, ImagePlus, ImageOff, Download, Film, Settings2 } from '@lucide/svelte';
+  import type { Conversation } from '$proto/chat_pb';
+  import { MessageSquare, MessageSquarePlus, Ghost, Square, Trash2, ArrowUp, RotateCcw, PanelRightClose, PanelRightOpen, Pencil, Check, Wrench, X, FileJson, ImagePlus, ImageOff, Download, Film, Settings2 } from '@lucide/svelte';
+  import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import IconButton from '$lib/components/ui/IconButton.svelte';
   import Field from '$lib/components/ui/Field.svelte';
   import Select from '$lib/components/ui/Select.svelte';
   import Segmented from '$lib/components/ui/Segmented.svelte';
-  import Switch from '$lib/components/ui/Switch.svelte';
+  import SwitchRow from '$lib/components/ui/SwitchRow.svelte';
   import NumberInput from '$lib/components/ui/NumberInput.svelte';
   import TextInput from '$lib/components/ui/TextInput.svelte';
   import TextArea from '$lib/components/ui/TextArea.svelte';
@@ -39,54 +43,29 @@
   import TraceDetail from '$lib/components/TraceDetail.svelte';
   import MediaSettings, { type MediaForm } from '$lib/components/chat/MediaSettings.svelte';
 
-  // Store inline image bytes by ID. Preserve remote image URLs.
-  interface Media {
-    key: string;
-    id?: string;
-    url?: string;
-    error?: string;
-  }
-
-  interface Turn {
-    role: 'user' | 'assistant';
-    text: string;
-    images?: Attachment[];
-    media?: Media[];
-    toolCalls?: ToolCall[];
-    error?: string;
-    trace?: string;
-    startedAt?: number;
-    firstTokenAt?: number;
-    finishedAt?: number;
-    promptTokens?: number;
-    completionTokens?: number;
-    stop?: string;
-    dialect?: Dialect;
-  }
-
-  interface Session {
-    turns: Turn[];
-    system: string;
-    dialect: Dialect;
-    stream: boolean;
-    temperature: string;
-    topP: string;
-    topK: string;
-    maxTokens: string;
-    stop: string;
-    seed: string;
-    tools: string;
-  }
-
   type Mode = 'image' | 'video';
 
   type Outgoing = ChatMessage & { attachments?: Attachment[] };
 
-  const blank = (): Session => ({ turns: [], system: '', dialect: 'openai', stream: true, temperature: '', topP: '', topK: '', maxTokens: '', stop: '', seed: '', tools: '' });
   const blankForm = (): MediaForm => ({ negative: '', width: '1024', height: '1024', steps: '', cfg: '', seed: '', sampler: '', scheduler: '', n: '', frames: '', fps: '', strength: '', guidance: '', flowShift: '', clipSkip: '', vaeTiling: false, temporalTiling: false, highSteps: '', highCfg: '', format: '', loras: '' });
 
   let model = $state('');
   let session = $state<Session>(blank());
+  // The conversation on screen. Its id is chosen here and saved with the daemon
+  // on the first answer unless ghost mode is on.
+  let convId = $state('');
+  let convTitle = $state('');
+  let saved = $state(false);
+  let saveError = $state('');
+  // What the daemon holds, to skip saving a conversation just opened or already saved.
+  let savedSnapshot = '';
+  let ghost = $state(false);
+  let chats = $state<Conversation[]>([]);
+  let chatsLoaded = $state(false);
+  let chatsError = $state('');
+  let opening = $state('');
+  let renaming = $state('');
+  let renameText = $state('');
   let draft = $state('');
   let busy = $state(false);
   // The API token this browser sends to the daemon opens the gateway too
@@ -203,6 +182,7 @@
   const lastAnswer = $derived([...session.turns].reverse().find((t) => t.role === 'assistant'));
   const shownBody = $derived(lastSent ? elide(lastSent.body) : '');
   const inspectorTabs = $derived([
+    { id: 'chats', label: 'Chats', count: chats.length || undefined },
     { id: 'settings', label: 'Settings' },
     { id: 'request', label: 'Request' },
     { id: 'trace', label: 'Trace' },
@@ -248,34 +228,21 @@
     return out.filter((s) => !s.startsWith('×') && !s.endsWith('×'));
   });
 
-  // Use separate storage prefixes for chat sessions and media settings.
-  const sessionPrefix = 'nebu.chat.';
-  const sessionKey = (name: string) => sessionPrefix + name;
+  // Media settings stay in this browser per model. Conversations live with the daemon.
   const formKey = (name: string) => `nebu.generate.${name}`;
-  let loaded = '';
   let loadedForm = '';
   $effect(() => {
     const name = chosenName;
     const isMedia = media;
     untrack(() => {
       if (!name) return;
-      if (!isMedia && name !== loaded) {
-        loaded = name;
-        try {
-          const raw = readLocal(sessionKey(name));
-          session = raw ? { ...blank(), ...(JSON.parse(raw) as Partial<Session>) } : blank();
-        } catch {
-          session = blank();
-        }
-        shownTrace = lastAnswer?.trace ?? '';
-      }
       if (isMedia && name !== loadedForm) {
         loadedForm = name;
         try {
           const raw = readLocal(formKey(name));
-          const saved = raw ? (JSON.parse(raw) as Partial<MediaForm> & { mode?: Mode }) : null;
-          form = { ...blankForm(), ...(saved ?? {}) };
-          if (saved?.mode) mode = saved.mode;
+          const stored = raw ? (JSON.parse(raw) as Partial<MediaForm> & { mode?: Mode }) : null;
+          form = { ...blankForm(), ...(stored ?? {}) };
+          if (stored?.mode) mode = stored.mode;
         } catch {
           form = blankForm();
         }
@@ -285,14 +252,178 @@
       }
     });
   });
+  // Save the conversation after each change once an answer is in. Streaming
+  // answers save when they finish. Ghost chats and media sessions never save.
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
+    const id = convId;
+    const isGhost = ghost;
+    const isBusy = busy;
+    const isMedia = media;
+    if (!id || isGhost || isBusy || isMedia) return;
     const snapshot = JSON.stringify(session);
-    const name = loaded;
-    if (!name) return;
+    void snapshot;
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => writeLocal(sessionKey(name), snapshot), 300);
+    saveTimer = setTimeout(() => untrack(() => save(id)), 500);
   });
+
+  async function save(id: string) {
+    if (id !== convId || ghost || busy) return;
+    if (session.turns.length === 0) {
+      if (saved) await discardSaved(id);
+      return;
+    }
+    const snapshot = JSON.stringify(session);
+    if (snapshot === savedSnapshot) return;
+    try {
+      const r = await api.chats.putConversation({ conversation: toConversation(id, convTitle, chosenName, session) });
+      if (!r.conversation) throw new Error('the daemon returned no conversation');
+      const c = r.conversation;
+      saveError = '';
+      if (id !== convId) return;
+      savedSnapshot = snapshot;
+      saved = true;
+      convTitle = c.title;
+      upsertChat({ ...c, turns: [], settings: undefined });
+    } catch (err) {
+      saveError = message(err);
+    }
+  }
+
+  function upsertChat(c: Conversation) {
+    chats = [c, ...chats.filter((x) => x.id !== c.id)];
+  }
+
+  // Removes a saved conversation the user emptied turn by turn.
+  async function discardSaved(id: string) {
+    try {
+      await api.chats.deleteConversation({ id });
+      chats = chats.filter((x) => x.id !== id);
+      if (id === convId) {
+        saved = false;
+        convTitle = '';
+      }
+    } catch (err) {
+      saveError = message(err);
+    }
+  }
+
+  async function refreshChats() {
+    try {
+      const r = await api.chats.listConversations({});
+      chats = r.conversations;
+      chatsError = '';
+    } catch (err) {
+      chatsError = message(err);
+    } finally {
+      chatsLoaded = true;
+    }
+  }
+
+  // A ghost chat with turns is lost when another chat takes its place.
+  async function leaveGhost(): Promise<boolean> {
+    if (!ghost || session.turns.length === 0) return true;
+    const yes = await confirm({ title: 'Discard this ghost chat?', message: 'It was never saved.', action: 'Discard', tone: 'bad' });
+    if (yes) forget(fileIds(session.turns));
+    return yes;
+  }
+
+  // Loads a saved conversation, leaving the current one as it was saved.
+  async function openChat(id: string) {
+    if (id === convId || busy) return;
+    if (!(await leaveGhost())) return;
+    opening = id;
+    try {
+      const r = await api.chats.getConversation({ id });
+      if (!r.conversation) throw new Error('the daemon returned no conversation');
+      const c = r.conversation;
+      stop();
+      session = fromConversation(c);
+      savedSnapshot = JSON.stringify(session);
+      convId = c.id;
+      convTitle = c.title;
+      saved = true;
+      saveError = '';
+      ghost = false;
+      pending = [];
+      lastSent = null;
+      shownTrace = lastAnswer?.trace ?? '';
+      if (c.model && live.routes.has(c.model)) model = c.model;
+      upsertChat({ ...c, turns: [], settings: undefined });
+      scroll();
+      box?.focus();
+    } catch (err) {
+      fail(err, 'Could not open the chat');
+    } finally {
+      opening = '';
+    }
+  }
+
+  // Starts an empty conversation with the same settings. The current one stays saved.
+  function newChat() {
+    stop();
+    session = fresh(session);
+    savedSnapshot = '';
+    convId = newId();
+    convTitle = '';
+    saved = false;
+    saveError = '';
+    lastSent = null;
+    shownTrace = '';
+    box?.focus();
+  }
+
+  async function startNew() {
+    if (await leaveGhost()) newChat();
+  }
+
+  // Ghost chats are never sent to the daemon. Turning ghost mode on or off
+  // starts a new chat, since a saved chat cannot be unsaved.
+  async function toggleGhost() {
+    if (!(await leaveGhost())) return;
+    ghost = !ghost;
+    newChat();
+    ok(ghost ? 'Ghost mode on' : 'Ghost mode off', ghost ? 'This chat is not saved and is gone when you leave' : 'Chats are saved to your account again');
+  }
+
+  async function deleteChat(c: Conversation) {
+    const yes = await confirm({ title: `Delete "${c.title}"?`, message: 'The conversation and its images are removed from your account.', action: 'Delete', tone: 'bad' });
+    if (!yes) return;
+    try {
+      await api.chats.deleteConversation({ id: c.id });
+      chats = chats.filter((x) => x.id !== c.id);
+      if (c.id === convId) {
+        forget(fileIds(session.turns));
+        saved = false;
+        newChat();
+      }
+      ok(`Deleted ${c.title}`);
+    } catch (err) {
+      fail(err, 'Delete failed');
+    }
+  }
+
+  function startRename(c: Conversation) {
+    renaming = c.id;
+    renameText = c.title;
+  }
+
+  async function finishRename() {
+    const id = renaming;
+    const title = renameText.trim();
+    renaming = '';
+    if (!id || !title) return;
+    try {
+      const r = await api.chats.renameConversation({ id, title });
+      if (r.conversation) {
+        chats = chats.map((x) => (x.id === id ? { ...x, title: r.conversation!.title, updatedAt: r.conversation!.updatedAt } : x));
+        if (id === convId) convTitle = r.conversation.title;
+      }
+    } catch (err) {
+      fail(err, 'Rename failed');
+    }
+  }
+
   let saveFormTimer: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
     const snapshot = JSON.stringify({ ...form, mode });
@@ -311,16 +442,30 @@
     model = page.url.searchParams.get('model') ?? '';
     history = readHistory();
     historyLoaded = true;
+    const wanted = page.url.searchParams.get('chat');
+    if (wanted) openChat(wanted);
+    else convId = newId();
+    refreshChats();
   });
   onDestroy(() => {
     for (const u of urls.values()) URL.revokeObjectURL(u);
   });
+  // Keep the model and the saved chat in the address for reloads and links.
   $effect(() => {
     const name = chosenName;
-    if (!name || page.url.searchParams.get('model') === name) return;
+    const id = saved ? convId : '';
     const url = new URL(page.url);
-    url.searchParams.set('model', name);
-    replaceState(url, {});
+    let changed = false;
+    if (name && url.searchParams.get('model') !== name) {
+      url.searchParams.set('model', name);
+      changed = true;
+    }
+    if ((url.searchParams.get('chat') ?? '') !== id) {
+      if (id) url.searchParams.set('chat', id);
+      else url.searchParams.delete('chat');
+      changed = true;
+    }
+    if (changed) replaceState(url, {});
   });
 
   $effect(() => {
@@ -354,13 +499,15 @@
     }
   }
 
-  // Cache object URLs to avoid rereading stored files.
+  // Cache object URLs to avoid rereading stored files. Chat images come from
+  // this browser's cache, then from the daemon. Generated media is browser only.
   $effect(() => {
-    const ids = [...session.turns.flatMap((t) => [...(t.images ?? []).map((a) => a.id), ...(t.media ?? []).flatMap((m) => (m.id ? [m.id] : []))]), ...pending.map((a) => a.id), ...shown.flatMap((g) => g.files.map((f) => f.id))];
-    for (const id of ids) {
+    const chatIds = [...fileIds(session.turns), ...pending.map((a) => a.id)];
+    const mediaIds = shown.flatMap((g) => g.files.map((f) => f.id));
+    for (const id of [...chatIds, ...mediaIds]) {
       if (urls.has(id) || missing.has(id) || loadingIds.has(id)) continue;
       loadingIds.add(id);
-      getImage(id)
+      (mediaIds.includes(id) ? getImage(id) : loadFile(id))
         .then((blob) => {
           if (blob) urls.set(id, URL.createObjectURL(blob));
           else missing.add(id);
@@ -393,25 +540,39 @@
     deleteImages(ids).catch((err) => fail(err, 'Could not delete a file'));
   }
 
-  function imageIds(turns: Turn[]): string[] {
-    return turns.flatMap((t) => [...(t.images ?? []).map((a) => a.id), ...(t.media ?? []).flatMap((m) => (m.id ? [m.id] : []))]);
+  // Removes images from this browser and, for saved chats, from the daemon.
+  function drop(ids: string[]) {
+    forget(ids);
+    if (!ghost && ids.length) deleteFiles(ids).catch((err) => fail(err, 'Could not remove an image from your account'));
   }
 
-  function clear() {
-    stop();
+  async function clear() {
     if (media) {
+      stop();
       for (const g of shown) remove(g);
-    } else {
-      forget(imageIds(session.turns));
-      session.turns = [];
+      lastSent = null;
+      shownTrace = '';
+      box?.focus();
+      return;
     }
-    lastSent = null;
-    shownTrace = '';
-    box?.focus();
+    if (saved) {
+      const yes = await confirm({ title: `Delete "${convTitle || previewTitle(session.turns)}"?`, message: 'The conversation and its images are removed from your account.', action: 'Delete', tone: 'bad' });
+      if (!yes) return;
+      try {
+        await api.chats.deleteConversation({ id: convId });
+        chats = chats.filter((x) => x.id !== convId);
+      } catch (err) {
+        fail(err, 'Delete failed');
+        return;
+      }
+    }
+    forget(fileIds(session.turns));
+    saved = false;
+    newChat();
   }
 
   function removeTurn(i: number) {
-    forget(imageIds([session.turns[i]]));
+    drop(fileIds([session.turns[i]]));
     session.turns = session.turns.filter((_, j) => j !== i);
   }
 
@@ -436,8 +597,8 @@
   async function encode(a: Attachment): Promise<{ mediaType: string; data: string }> {
     let data = encoded.get(a.id);
     if (data === undefined) {
-      const blob = await getImage(a.id);
-      if (!blob) throw new Error(`${a.name} is no longer stored in this browser. Remove the turn it is in to continue.`);
+      const blob = await loadFile(a.id);
+      if (!blob) throw new Error(`${a.name} could not be loaded. Remove the turn it is in to continue.`);
       data = await toBase64(blob);
       encoded.set(a.id, data);
     }
@@ -463,8 +624,13 @@
     const set = (patch: Partial<Media>) => {
       turn.media = (turn.media ?? []).map((m) => (m.key === key ? { ...m, ...patch } : m));
     };
+    const isGhost = ghost;
     fetchImage(url)
-      .then((blob) => storeImage(blob, 'Image from ' + chosenName))
+      .then(async (blob) => {
+        const a = await storeImage(blob, 'Image from ' + chosenName);
+        if (!isGhost) await uploadFile(a, blob);
+        return a;
+      })
       .then((a) => {
         urls.set(a.id, url);
         set({ id: a.id });
@@ -474,7 +640,7 @@
 
   async function ask(userIndex: number) {
     if (busy || !chosen || !chosenReady) return;
-    forget(imageIds(session.turns.slice(userIndex + 1)));
+    drop(fileIds(session.turns.slice(userIndex + 1)));
     session.turns = [...session.turns.slice(0, userIndex + 1), { role: 'assistant', text: '', dialect: session.dialect, startedAt: Date.now() }];
     const turn = session.turns[session.turns.length - 1];
     busy = true;
@@ -797,6 +963,16 @@
       return;
     }
     session.turns = [...session.turns, { role: 'user', text, images: images.length ? images : undefined }];
+    if (!ghost) {
+      for (const a of images) {
+        getImage(a.id)
+          .then((blob) => {
+            if (!blob) throw new Error(`${a.name} is not in this browser any more`);
+            return uploadFile(a, blob);
+          })
+          .catch((err) => fail(err, `Could not save ${a.name} with the chat`));
+      }
+    }
     ask(session.turns.length - 1);
   }
 
@@ -972,13 +1148,14 @@
 
   const emptyTurns = $derived(media ? shown.length === 0 : session.turns.length === 0);
   const hasTurns = $derived(!emptyTurns);
+  const heading = $derived(ghost ? 'Ghost chat' : convTitle || (session.turns.length ? previewTitle(session.turns) : 'New chat'));
 </script>
 
 <svelte:head><title>Chat · nebu</title></svelte:head>
 
 {#snippet thumb(a: Attachment, size: string)}
   {#if missing.has(a.id)}
-    <div class="flex {size} flex-col items-center justify-center gap-1 rounded-md border border-dashed border-line text-xs text-fg-faint" title="{a.name} is no longer stored in this browser"><ImageOff size={16} />image missing</div>
+    <div class="flex {size} flex-col items-center justify-center gap-1 rounded-md border border-dashed border-line text-xs text-fg-faint" title="{a.name} could not be loaded"><ImageOff size={16} />image missing</div>
   {:else if urls.has(a.id)}
     <button type="button" class="block overflow-hidden rounded-md border border-line" onclick={() => show(urls.get(a.id), a.name)} aria-label="Open {a.name}">
       <img src={urls.get(a.id)} alt={a.name} width={a.width} height={a.height} class="block h-auto max-h-64 w-auto max-w-full object-contain" />
@@ -988,14 +1165,33 @@
   {/if}
 {/snippet}
 
+{#if loading || routes.length === 0}
+  <PageHeader title="Chat" />
+{:else}
+  <PageHeader title="Chat">
+    {#snippet meta()}
+      {#if ghost}
+        <span class="inline-flex items-center gap-1.5 rounded-full border border-line bg-raised/60 px-2 py-0.5 text-xs text-fg" title="This chat is not saved and is gone when you leave the page"><Ghost size={12} class="text-accent" />Ghost mode</span>
+      {:else if saveError}
+        <span class="text-warn" title={saveError}>Not saved: {saveError}</span>
+      {:else}
+        <span class="max-w-md truncate" title={heading}>{heading}</span>
+        {#if saved}<span class="text-fg-faint">saved</span>{/if}
+      {/if}
+    {/snippet}
+    <IconButton size="sm" icon={Ghost} variant={ghost ? 'primary' : 'secondary'} aria-pressed={ghost} label={ghost ? 'Ghost mode is on. Turn it off to start a chat that is saved.' : 'Ghost mode: start a chat that is never saved'} onclick={toggleGhost} />
+    <Button size="sm" variant="primary" icon={MessageSquarePlus} onclick={startNew} disabled={busy}>New chat</Button>
+  </PageHeader>
+{/if}
+
 {#if loading}
-  <div class="h-[calc(100vh-6rem)]" aria-busy="true"></div>
+  <div class="h-[calc(100vh-8rem)]" aria-busy="true"></div>
 {:else if routes.length === 0}
   <Empty icon={MessageSquare} title="Run a model to chat or generate images and video.">
     {#if live.models.size}<Button variant="primary" href="/store">Library</Button>{:else}<Button variant="primary" href="/catalog">Browse catalog</Button>{/if}
   </Empty>
 {:else}
-  <div class="flex h-[calc(100vh-4.5rem)] min-h-[32rem] gap-4 lg:h-[calc(100vh-2.5rem)] {dragging ? 'select-none' : ''}">
+  <div class="flex h-[calc(100vh-8rem)] min-h-[32rem] gap-4 lg:h-[calc(100vh-6rem)] {dragging ? 'select-none' : ''}">
     <section class="card relative flex min-w-0 flex-1 flex-col" aria-label="Conversation" ondragenter={onDragEnter} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop}>
       {#if dropping}
         <div class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed bg-bg/80 {blind ? 'border-warn' : 'border-accent'}">
@@ -1005,11 +1201,11 @@
         </div>
       {/if}
       <header class="flex items-center gap-3 border-b border-line px-4 py-2.5">
-        <Select class="w-80 max-w-[40%] shrink-0" mono bind:value={model} label="Model" items={modelItems} />
+        <Select size="sm" class="w-80 max-w-[40%] shrink-0" mono bind:value={model} label="Model" items={modelItems} />
         {#if chosen}
           <State values={RouteState} value={chosen.state} class="shrink-0" />
           {#if media && canImage && canVideo}
-            <Segmented size="sm" bind:value={mode} tabs={modeItems} class="shrink-0" />
+            <Segmented bind:value={mode} tabs={modeItems} class="shrink-0" />
           {/if}
           {#if instance}
             <span class="hidden min-w-0 flex-1 items-center gap-x-3 overflow-hidden text-xs whitespace-nowrap text-fg-muted md:flex">
@@ -1022,9 +1218,9 @@
           {/if}
         {/if}
         <span class="ml-auto flex shrink-0 items-center gap-1">
-          <IconButton icon={RotateCcw} label={media ? 'Make the last prompt again' : 'Regenerate the last answer'} onclick={regenerate} disabled={busy || !hasTurns} />
-          <IconButton icon={Trash2} label="Clear the conversation" onclick={clear} disabled={!hasTurns} />
-          <IconButton icon={inspector ? PanelRightClose : PanelRightOpen} label={inspector ? 'Hide the side panel' : 'Show the side panel'} onclick={() => (inspector = !inspector)} />
+          <IconButton size="sm" icon={RotateCcw} label={media ? 'Make the last prompt again' : 'Regenerate the last answer'} onclick={regenerate} disabled={busy || !hasTurns} />
+          <IconButton size="sm" icon={Trash2} label={media ? 'Clear the generations shown' : saved ? 'Delete this chat' : 'Discard this chat'} onclick={clear} disabled={!hasTurns || busy} />
+          <IconButton size="sm" icon={inspector ? PanelRightClose : PanelRightOpen} label={inspector ? 'Hide the side panel' : 'Show the side panel'} onclick={() => (inspector = !inspector)} />
         </span>
       </header>
 
@@ -1041,6 +1237,9 @@
             <div class="flex flex-col items-center justify-center gap-3 py-20 text-center">
               <Logo size={36} class="text-fg-faint" />
               <div class="font-mono text-sm text-fg-muted">{chosen?.name}</div>
+              {#if ghost && !media}
+                <div class="inline-flex items-center gap-1.5 text-xs text-fg-faint"><Ghost size={12} />This chat is not saved</div>
+              {/if}
               {#if media}
                 <div class="text-xs text-fg-faint">{canVideo && canImage ? 'Describe an image or a video to make. Paste or drop an image to start from one.' : canVideo ? 'Describe a video to make. Paste or drop an image to start from it.' : 'Describe an image to make. Paste or drop an image to start from it.'}</div>
               {:else if vision}
@@ -1249,8 +1448,39 @@
           <div class="mx-auto h-full w-px bg-transparent transition-colors group-hover:bg-accent/60 {dragging ? 'bg-accent' : ''}"></div>
         </div>
         <Tabs size="sm" bind:value={pane} tabs={inspectorTabs} class="px-3 pt-1" />
-        <div class="@container min-h-0 flex-1 overflow-y-auto p-4">
-          {#if pane === 'settings'}
+        <div class="@container min-h-0 flex-1 overflow-y-auto {pane === 'chats' ? 'p-2' : 'p-4'}">
+          {#if pane === 'chats'}
+            {#if !chatsLoaded}
+              <div class="skeleton m-2 h-24" aria-busy="true"></div>
+            {:else if chatsError}
+              <div class="note note-bad m-2 text-xs">{chatsError}</div>
+            {:else if chats.length === 0}
+              <p class="px-2 py-8 text-center text-sm text-fg-faint">Your chats are listed here once a model answers.</p>
+            {:else}
+              <div class="flex flex-col gap-0.5">
+                {#each chats as c (c.id)}
+                  {@const on = c.id === convId && !ghost}
+                  <div class="group relative rounded-md {on ? 'bg-raised/70' : 'hover:bg-raised/40'}">
+                    {#if renaming === c.id}
+                      <div class="flex items-center gap-1 p-1.5">
+                        <TextInput size="sm" class="flex-1" bind:value={renameText} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); finishRename(); } else if (e.key === 'Escape') renaming = ''; }} onblur={finishRename} autofocus />
+                        <IconButton size="xs" icon={Check} label="Save the name" onclick={finishRename} />
+                      </div>
+                    {:else}
+                      <button type="button" class="block w-full px-2.5 py-2 text-left" onclick={() => openChat(c.id)} disabled={opening === c.id} aria-current={on ? 'true' : undefined}>
+                        <div class="truncate pr-14 text-sm {on ? 'text-fg' : 'text-fg-muted group-hover:text-fg'}">{c.title || 'Untitled'}</div>
+                        <div class="mt-0.5 flex items-center gap-1.5 truncate text-[11px] text-fg-faint"><span class="truncate font-mono">{c.model}</span><span>·</span><span class="shrink-0">{ago(c.updatedAt, clock.now)}</span>{#if opening === c.id}<Spinner size={10} class="ml-auto shrink-0" />{/if}</div>
+                      </button>
+                      <span class="absolute top-1.5 right-1.5 flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                        <IconButton size="xs" icon={Pencil} label="Rename" onclick={() => startRename(c)} />
+                        <IconButton size="xs" icon={Trash2} label="Delete" onclick={() => deleteChat(c)} />
+                      </span>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          {:else if pane === 'settings'}
             {#if media}
               <div class="flex flex-col gap-5">
                 <MediaSettings bind:form {mode} {caps} hasInit={!!init} />
@@ -1266,10 +1496,7 @@
                 <Field label="Wire format">
                   <Segmented bind:value={session.dialect} tabs={[{ id: 'openai', label: 'OpenAI' }, { id: 'anthropic', label: 'Anthropic' }, { id: 'ollama', label: 'Ollama' }]} />
                 </Field>
-                <div class="flex items-center justify-between gap-4 rounded-md border border-line px-3 py-2.5">
-                  <div class="text-[13px] font-medium text-fg">Stream</div>
-                  <Switch bind:checked={session.stream} label="Stream" />
-                </div>
+                <SwitchRow bind:checked={session.stream} label="Stream" />
                 <Field label="System prompt" for="chat-system">
                   <TextArea id="chat-system" bind:value={session.system} />
                 </Field>

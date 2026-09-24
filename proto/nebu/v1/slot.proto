@@ -21,6 +21,13 @@ enum SlotState {
   SLOT_STATE_FAILED = 6;
 }
 
+// Another public name a slot answers to
+message SlotAlias {
+  string name = 1;
+  Policy policy = 2;
+  Profile profile = 3;
+}
+
 // Named device and memory reservation.
 // Run and swap set the request. Eviction clears it. Failures retain it for retry.
 // Slots with a request restart with the daemon.
@@ -47,6 +54,8 @@ message Slot {
   Profile profile = 17;
   // Model memory placement.
   Placement placement = 18;
+  // Extra public names, each a route serving the slot's model.
+  repeated SlotAlias aliases = 19;
 }
 
 // Creates a slot
@@ -62,6 +71,8 @@ message CreateSlotRequest {
   uint32 position = 8;
   Profile profile = 9;
   Placement placement = 10;
+  // Extra public names for the slot.
+  repeated SlotAlias aliases = 11;
 }
 
 // Returns the new slot
@@ -88,9 +99,7 @@ message GetSlotResponse {
   Instance instance = 2;
 }
 
-// Update slot settings.
-// Name, limits, and profile apply immediately. Devices, memory, runtime, and
-// parameters apply on the next run or swap.
+// Update slot settings
 message UpdateSlotRequest {
   string id = 1;
   string description = 2;
@@ -105,6 +114,8 @@ message UpdateSlotRequest {
   uint32 position = 9;
   Profile profile = 10;
   Placement placement = 11;
+  // Extra public names, replacing the current list. Names dropped stop answering.
+  repeated SlotAlias aliases = 12;
 }
 
 // Returns the updated slot

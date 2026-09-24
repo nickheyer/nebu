@@ -3,7 +3,7 @@
   import Field from '../ui/Field.svelte';
   import NumberInput from '../ui/NumberInput.svelte';
   import TextInput from '../ui/TextInput.svelte';
-  import SwitchRow from './SwitchRow.svelte';
+  import SwitchRow from '../ui/SwitchRow.svelte';
   import IdList from './IdList.svelte';
 
   let { fields = $bindable(), idPrefix }: { fields: HumanizeFields; idPrefix: string } = $props();

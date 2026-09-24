@@ -36,13 +36,13 @@
     <div class="skeleton h-14" aria-busy="true"></div>
   {:else}
     <div class="flex flex-col gap-3">
-      <Segmented size="sm" bind:value={dialect} tabs={dialects.map((d) => ({ id: d.id, label: d.label }))} />
-      <div class="overflow-x-auto">
+      <Segmented bind:value={dialect} tabs={dialects.map((d) => ({ id: d.id, label: d.label }))} />
+      <div class="tbl-wrap">
         <table class="tbl dense">
           <tbody>
             {#each origins as o (o.url)}
               <tr>
-                <td class="whitespace-nowrap text-fg-muted">Base URL{#if origins.length > 1}<span class="ml-1 text-xs text-fg-faint">{o.shared ? 'API listener' : 'gateway listener'}</span>{/if}</td>
+                <td class="font-mono text-xs whitespace-nowrap text-fg-faint">Base URL{#if origins.length > 1}<span class="ml-1 font-sans text-fg-faint">{o.shared ? 'API listener' : 'gateway listener'}</span>{/if}</td>
                 <td class="w-full font-mono text-xs text-fg">{o.url}{chosen.base}</td>
                 <td class="actions"><span><Copy text={o.url + chosen.base} label="Copy the base URL" size={12} /></span></td>
               </tr>

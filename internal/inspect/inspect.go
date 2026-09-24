@@ -29,11 +29,11 @@ import (
 )
 
 const (
-	resolveTTL  = 10 * time.Minute
-	describeMax = 8
-	// Header key and value identifying model weights.
-	typeKey   = "general.type"
-	modelType = "model"
+	resolveTTL      = 10 * time.Minute
+	describeMax     = 8
+	describeTimeout = 30 * time.Second
+	typeKey         = "general.type"
+	modelType       = "model"
 )
 
 // Slot constraints: host resources, runtime, default params, and placement.
@@ -343,6 +343,9 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 			resp.Warnings = append(resp.Warnings, w)
 		}
 	}
+	for _, w := range model.GetWarnings() {
+		warn("%s", w)
+	}
 	// Request params override slot defaults.
 	layered := runtimes.Merge(c.Params, req.GetParams())
 	descriptors := make([]*v1.Descriptor, len(groups))
@@ -352,9 +355,15 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 	eg.SetLimit(describeMax)
 	for idx, g := range groups {
 		eg.Go(func() error {
-			d, err := i.Describe(gctx, src, model, g)
+			dctx, cancel := context.WithTimeout(gctx, describeTimeout)
+			defer cancel()
+			d, err := i.Describe(dctx, src, model, g)
 			if err != nil {
-				warnings[idx] = fmt.Sprintf("%s: the header could not be read, %v", g.Name, err)
+				if errors.Is(err, context.DeadlineExceeded) && gctx.Err() == nil {
+					warnings[idx] = fmt.Sprintf("%s: the headers took longer than %s to read", g.Name, describeTimeout)
+				} else {
+					warnings[idx] = fmt.Sprintf("%s: the header could not be read, %v", g.Name, err)
+				}
 				failures[idx] = err
 				return nil
 			}

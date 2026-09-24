@@ -132,7 +132,7 @@
           {/if}
           {#if instance.measurements.length}
             <Card title="Measured" meta="what the runtime reported" padded={false}>
-              <div class="px-3">
+              <div class="px-4">
                 <table class="tbl">
                   <thead><tr><th>Key</th><th class="num">Bytes</th><th>Line</th></tr></thead>
                   <tbody>

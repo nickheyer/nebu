@@ -336,6 +336,23 @@ func SplitTag(repo, def string) (string, string) {
 	return repo, def
 }
 
+// Reports whether the caller named a tag, after the colon in repo or as a revision
+func tagNamed(repo, revision string) bool {
+	_, tag := SplitTag(strings.TrimSpace(repo), "")
+	return tag != "" || strings.TrimSpace(revision) != ""
+}
+
+// The tag a bare name stands for: latest when the registry publishes it, else the first tag listed
+func defaultTag(tags []string) string {
+	if slices.Contains(tags, latestTag) {
+		return latestTag
+	}
+	if len(tags) > 0 {
+		return tags[0]
+	}
+	return ""
+}
+
 // Splits name:tag, an explicit revision winning and def standing in for none
 func splitRef(repo, revision, def string) (name, tag string) {
 	name, tag = SplitTag(strings.TrimSpace(repo), "")

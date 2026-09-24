@@ -43,16 +43,6 @@
 </script>
 
 <div class="flex flex-col gap-2 {cls}">
-  {#if items.length}
-    <div class="flex flex-wrap gap-1.5">
-      {#each items as item, i (item)}
-        <span class="inline-flex h-6 max-w-full items-center gap-1 rounded-sm border border-line bg-raised/40 pr-1 pl-2 text-xs text-fg {mono ? 'font-mono' : ''}">
-          <span class="truncate">{item}</span>
-          <button type="button" class="shrink-0 rounded-sm p-0.5 text-fg-faint transition-colors hover:text-fg" aria-label="Remove {item}" onclick={() => remove(i)}><X size={11} /></button>
-        </span>
-      {/each}
-    </div>
-  {/if}
   <div class="flex items-center gap-2">
     <TextInput
       {id}
@@ -72,4 +62,14 @@
     <Button type="button" icon={Plus} aria-label="Add" onclick={add} disabled={!draft.trim()} />
     {#if children}{@render children()}{/if}
   </div>
+  {#if items.length}
+    <div class="flex flex-wrap gap-1.5">
+      {#each items as item, i (item)}
+        <span class="inline-flex h-6 max-w-full items-center gap-1 rounded-sm border border-line bg-raised/40 pr-1 pl-2 text-xs text-fg {mono ? 'font-mono' : ''}">
+          <span class="truncate">{item}</span>
+          <button type="button" class="shrink-0 rounded-sm p-0.5 text-fg-faint transition-colors hover:text-fg" aria-label="Remove {item}" onclick={() => remove(i)}><X size={11} /></button>
+        </span>
+      {/each}
+    </div>
+  {/if}
 </div>

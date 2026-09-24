@@ -180,7 +180,7 @@
                 {#if stored.has(a.path)}<Tip text="Downloaded"><Check size={13} class="text-ok" /></Tip>{/if}
               </td>
               <td class="w-8 !py-0 text-right">
-                <span class="inline-flex invisible group-hover:visible has-[[data-state=open]]:visible"><Menu size="sm" items={items(a)} /></span>
+                <span class="inline-flex invisible group-hover:visible has-[[data-state=open]]:visible"><Menu size="xs" items={items(a)} /></span>
               </td>
             </tr>
           {/if}

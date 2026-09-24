@@ -144,9 +144,13 @@
   {@const off = disabledChoices(p)}
   {@const part = missingOf.get(p.name)}
   <div class="param-row" class:wide={multiline}>
-    <div class="min-w-0">
-      <label for={fid} class="text-[13px] font-medium text-fg" title={p.flag || p.env || p.name}>{p.label || p.name}</label>
-      {#if p.description}<p class="mt-0.5 font-mono text-xs text-fg-faint wrap-anywhere">{p.description}</p>{/if}
+    <div class="flex min-h-9 min-w-0 flex-col justify-center">
+      <label for={fid} class="text-[13px] leading-5 font-medium text-fg" title={p.flag || p.env || p.name}>{p.label || p.name}</label>
+      {#if err}
+        <p class="text-xs leading-4 text-bad" role="alert">{err}</p>
+      {:else if p.description}
+        <p class="font-mono text-xs leading-4 text-fg-faint wrap-anywhere">{p.description}</p>
+      {/if}
     </div>
     <div class="min-w-0">
       {#if p.choices.length}
@@ -171,7 +175,6 @@
       {:else}
         <TextInput id={fid} mono empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {/if}
-      {#if err}<p class="mt-1.5 text-xs text-bad">{err}</p>{/if}
       {#if part && !v}<div class="mt-2"><PartsList parts={[part]} compact /></div>{/if}
     </div>
   </div>
@@ -233,7 +236,7 @@
       <Field label="Value" for="{idPrefix}-new-value" class="flex-1">
         <TextInput id="{idPrefix}-new-value" mono bind:value={newValue} onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} />
       </Field>
-      <IconButton icon={Plus} label="Add" variant="secondary" size="lg" disabled={!newName.trim()} onclick={add} />
+      <IconButton icon={Plus} label="Add" variant="secondary" disabled={!newName.trim()} onclick={add} />
     </div>
   {/if}
 </div>
@@ -250,9 +253,9 @@
     padding-block: 0.625rem;
   }
 
-  @container (min-width: 34rem) {
+  @container (min-width: 40rem) {
     .param-row:not(.wide) {
-      grid-template-columns: minmax(0, 1fr) 18rem;
+      grid-template-columns: minmax(0, 1fr) 22rem;
       align-items: center;
       column-gap: 2rem;
     }

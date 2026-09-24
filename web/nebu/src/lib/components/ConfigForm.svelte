@@ -2,7 +2,7 @@
   import { ConfigType, type ConfigField } from '$proto/source_pb';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
-  import Switch from './ui/Switch.svelte';
+  import SwitchRow from './ui/SwitchRow.svelte';
   import NumberInput from './ui/NumberInput.svelte';
   import TextInput from './ui/TextInput.svelte';
 
@@ -46,13 +46,7 @@
   {#each fields as f (f.name)}
     {@const fid = `${idPrefix}-${f.name}`}
     {#if f.type === ConfigType.BOOL}
-      <div class="flex items-start justify-between gap-4 rounded-md border border-line px-3 py-2.5">
-        <div class="min-w-0">
-          <label for={fid} class="text-[13px] font-medium text-fg">{f.label || f.name}</label>
-          {#if f.description}<p class="text-xs leading-5 text-fg-muted">{f.description}</p>{/if}
-        </div>
-        <Switch checked={(values[f.name] ?? f.default) === 'true'} label={f.label || f.name} onchange={(on) => set(f.name, on ? 'true' : 'false')} />
-      </div>
+      <SwitchRow checked={(values[f.name] ?? f.default) === 'true'} label={f.label || f.name} description={f.description || undefined} onchange={(on) => set(f.name, on ? 'true' : 'false')} />
     {:else}
       <Field label={f.label || f.name} for={fid} required={f.required && !f.default} description={f.description || undefined} error={missing.includes(f) && (values[f.name] ?? '') !== '' ? undefined : undefined}>
         {#if f.choices.length}

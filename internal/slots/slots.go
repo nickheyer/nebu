@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -134,6 +135,14 @@ func (m *Manager) Recover(ctx context.Context) error {
 			m.pending(s, "")
 		}
 	}
+	// Drop routes of slots that no longer exist and names slots no longer have.
+	m.Routes.Prune(func(r *v1.Route) bool {
+		if r.GetSlotId() == "" {
+			return true
+		}
+		s, err := m.find(r.GetSlotId())
+		return err == nil && slices.Contains(names(s), r.GetName())
+	})
 	if len(relaunch) > 0 {
 		go m.relaunchAll(ctx, relaunch)
 	}
@@ -333,10 +342,82 @@ func (m *Manager) checkName(name, self string) error {
 	if s, err := m.find(name); err == nil && s.GetId() != self {
 		return fmt.Errorf("%w: slot %q exists", ErrSlot, name)
 	}
-	if r, taken := m.Routes.Lookup(name); taken && r.GetSlotId() != self {
+	if owner := m.aliasOwner(name); owner != nil && owner.GetId() != self {
+		return fmt.Errorf("%w: %q is an alias of slot %s", ErrSlot, name, owner.GetName())
+	}
+	if r, taken := m.Routes.Lookup(name); taken && (self == "" || r.GetSlotId() != self) {
 		return fmt.Errorf("%w: %q is already a route, pick another name", ErrSlot, name)
 	}
 	return nil
+}
+
+// The slot with the name among its aliases, nil when none has it
+func (m *Manager) aliasOwner(name string) *v1.Slot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.slots {
+		for _, a := range s.GetAliases() {
+			if a.GetName() == name {
+				return proto.Clone(s).(*v1.Slot)
+			}
+		}
+	}
+	return nil
+}
+
+// Trims and checks a slot's alias list against its own name
+func (m *Manager) checkAliases(list []*v1.SlotAlias, self, primary string) ([]*v1.SlotAlias, error) {
+	out := make([]*v1.SlotAlias, 0, len(list))
+	seen := map[string]bool{}
+	for _, a := range list {
+		name := strings.TrimSpace(a.GetName())
+		if name == primary {
+			return nil, fmt.Errorf("%w: alias %q is the slot's own name", ErrSlot, name)
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("%w: alias %q is listed twice", ErrSlot, name)
+		}
+		if err := m.checkName(name, self); err != nil {
+			return nil, err
+		}
+		seen[name] = true
+		clean := &v1.SlotAlias{Name: name}
+		if p := a.GetPolicy(); p.GetMaxInFlight()+p.GetBurst()+p.GetRequestTimeoutMs()+p.GetUpstreamTimeoutMs() > 0 || p.GetRequestsPerSecond() > 0 {
+			clean.Policy = proto.Clone(p).(*v1.Policy)
+		}
+		if a.GetProfile().GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
+			clean.Profile = proto.Clone(a.GetProfile()).(*v1.Profile)
+		}
+		out = append(out, clean)
+	}
+	return out, nil
+}
+
+// Every public name of the slot: its own, then its aliases in order
+func names(s *v1.Slot) []string {
+	out := []string{s.GetName()}
+	for _, a := range s.GetAliases() {
+		out = append(out, a.GetName())
+	}
+	return out
+}
+
+// Limits and shaping for one of the slot's names. Alias fields override the slot's.
+func settingsFor(s *v1.Slot, name string) (*v1.Policy, *v1.Profile) {
+	for _, a := range s.GetAliases() {
+		if a.GetName() != name {
+			continue
+		}
+		policy, profile := s.GetPolicy(), s.GetProfile()
+		if a.GetPolicy() != nil {
+			policy = gateway.Effective(a.GetPolicy(), s.GetPolicy())
+		}
+		if a.GetProfile().GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
+			profile = a.GetProfile()
+		}
+		return policy, profile
+	}
+	return s.GetPolicy(), s.GetProfile()
 }
 
 // Slot device pins.
@@ -353,6 +434,10 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 	if err := m.checkName(name, ""); err != nil {
 		return nil, err
 	}
+	aliases, err := m.checkAliases(req.GetAliases(), "", name)
+	if err != nil {
+		return nil, err
+	}
 	devices := devicesFor(req.GetPlacement(), req.GetDeviceIds())
 	if err := m.checkDevices(ctx, devices); err != nil {
 		return nil, err
@@ -360,6 +445,7 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 	s := &v1.Slot{
 		Id:          db.NewID(),
 		Name:        name,
+		Aliases:     aliases,
 		Placement:   req.GetPlacement(),
 		DeviceIds:   devices,
 		MemoryBytes: req.GetMemoryBytes(),
@@ -412,7 +498,7 @@ func (m *Manager) checkDevices(ctx context.Context, ids []string) error {
 	return nil
 }
 
-// Updates name and route limits immediately. Other settings apply on the next run.
+// Updates name, aliases, and route limits immediately. Other settings apply on the next run.
 func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Slot, error) {
 	s, err := m.find(req.GetId())
 	if err != nil {
@@ -426,6 +512,10 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 	if name == "" {
 		name = s.GetName()
 	}
+	aliases, err := m.checkAliases(req.GetAliases(), s.GetId(), name)
+	if err != nil {
+		return nil, err
+	}
 	if name != s.GetName() {
 		if err := m.checkName(name, s.GetId()); err != nil {
 			return nil, err
@@ -433,12 +523,18 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 		if s.GetState() == v1.SlotState_SLOT_STATE_SWAPPING {
 			return nil, fmt.Errorf("%w: slot %s is swapping, rename it once that settles", ErrSlot, s.GetName())
 		}
+	}
+	// Names dropped from the alias list stop answering before the rename, so a
+	// slot can take over one of its own former aliases as its name.
+	m.dropNames(s, append([]string{s.GetName()}, aliasNames(aliases)...))
+	if name != s.GetName() {
 		if _, err := m.Routes.Rename(s.GetName(), name); err != nil && !errors.Is(err, gateway.ErrNoRoute) {
 			return nil, fmt.Errorf("%w: %v", ErrSlot, err)
 		}
 	}
 	next := m.update(s.GetId(), func(sl *v1.Slot) {
 		sl.Name = name
+		sl.Aliases = aliases
 		sl.Placement = req.GetPlacement()
 		sl.DeviceIds = devices
 		sl.MemoryBytes = req.GetMemoryBytes()
@@ -454,15 +550,92 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 		m.place(next.GetId(), req.GetPosition())
 		next = m.mustFind(next.GetId())
 	}
-	// Active swaps update the route when they finish.
-	if next.GetState() != v1.SlotState_SLOT_STATE_SWAPPING {
-		if live := m.liveInstance(next); live != nil && live.GetState() == v1.InstanceState_INSTANCE_STATE_READY {
-			m.route(next, live)
-		} else if live == nil || live.GetState() == v1.InstanceState_INSTANCE_STATE_STARTING {
-			m.pending(next, modelOf(next.GetRequest()))
+	m.apply(next)
+	return next, nil
+}
+
+func aliasNames(list []*v1.SlotAlias) []string {
+	out := make([]string, 0, len(list))
+	for _, a := range list {
+		out = append(out, a.GetName())
+	}
+	return out
+}
+
+// Removes the slot's routes except the kept names.
+func (m *Manager) dropNames(s *v1.Slot, keep []string) []*v1.Route {
+	return m.Routes.Prune(func(r *v1.Route) bool {
+		return r.GetSlotId() != s.GetId() || slices.Contains(keep, r.GetName())
+	})
+}
+
+// Points every name of the slot at its occupant
+func (m *Manager) apply(s *v1.Slot) {
+	live := m.liveInstance(s)
+	switch {
+	case s.GetState() == v1.SlotState_SLOT_STATE_SWAPPING, live != nil && live.GetState() == v1.InstanceState_INSTANCE_STATE_DRAINING:
+		for _, name := range names(s) {
+			if _, ok := m.Routes.Lookup(name); !ok {
+				m.pendingName(s, name, modelOf(s.GetRequest()))
+			}
+		}
+	case live != nil && live.GetState() == v1.InstanceState_INSTANCE_STATE_READY:
+		m.route(s, live)
+	default:
+		m.pending(s, modelOf(s.GetRequest()))
+	}
+}
+
+// Adds an alias to a slot, or updates its limits and shaping, and returns the alias route.
+func (m *Manager) AddAlias(ctx context.Context, id string, alias *v1.SlotAlias) (*v1.Slot, *v1.Route, error) {
+	s, err := m.find(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	checked, err := m.checkAliases([]*v1.SlotAlias{alias}, s.GetId(), s.GetName())
+	if err != nil {
+		return nil, nil, err
+	}
+	clean := checked[0]
+	next := m.update(s.GetId(), func(sl *v1.Slot) {
+		for i, a := range sl.Aliases {
+			if a.GetName() == clean.GetName() {
+				sl.Aliases[i] = clean
+				return
+			}
+		}
+		sl.Aliases = append(sl.Aliases, clean)
+	})
+	m.apply(next)
+	r, ok := m.Routes.Lookup(clean.GetName())
+	if !ok {
+		return nil, nil, fmt.Errorf("%w: alias %q was saved but has no route", ErrSlot, clean.GetName())
+	}
+	return next, r, nil
+}
+
+// Removes an alias from its slot and returns the route it answered as.
+func (m *Manager) RemoveAlias(ctx context.Context, id, name string) (*v1.Slot, *v1.Route, error) {
+	s, err := m.find(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if name == s.GetName() {
+		return nil, nil, fmt.Errorf("%w: %q is the name of slot %s, delete the slot instead", ErrSlot, name, s.GetName())
+	}
+	if !slices.Contains(aliasNames(s.GetAliases()), name) {
+		return nil, nil, fmt.Errorf("%w: slot %s has no alias %q", ErrSlot, s.GetName(), name)
+	}
+	next := m.update(s.GetId(), func(sl *v1.Slot) {
+		sl.Aliases = slices.DeleteFunc(sl.Aliases, func(a *v1.SlotAlias) bool { return a.GetName() == name })
+	})
+	gone := m.dropNames(next, names(next))
+	for _, r := range gone {
+		if r.GetName() == name {
+			return next, r, nil
 		}
 	}
-	return next, nil
+	return next, &v1.Route{Name: name, SlotId: next.GetId()}, nil
 }
 
 // Deletes a slot, stopping its occupant when forced
@@ -489,7 +662,7 @@ func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Slot, 
 	m.mu.Lock()
 	delete(m.slots, s.GetId())
 	m.mu.Unlock()
-	m.Routes.Delete(s.GetName())
+	m.dropNames(s, nil)
 	m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_DELETED, s.GetId(), s)
 	m.renumber()
 	return s, nil
@@ -710,14 +883,25 @@ func (m *Manager) settle(s *v1.Slot, serving *v1.Instance, note string, err erro
 	}
 }
 
-// Points the slot name at an instance
+// Points the slot's name and aliases at an instance
 func (m *Manager) route(s *v1.Slot, in *v1.Instance) {
-	m.Routes.Serve(s.GetName(), in, m.Instances.Runtimes.API(in.GetRuntimeId()), s.GetId(), s.GetPolicy(), s.GetProfile())
+	api := m.Instances.Runtimes.API(in.GetRuntimeId())
+	for _, name := range names(s) {
+		policy, profile := settingsFor(s, name)
+		m.Routes.Serve(name, in, api, s.GetId(), policy, profile)
+	}
 }
 
-// Keeps the slot route pending without an instance.
+// Keeps the slot's name and aliases pending without an instance.
 func (m *Manager) pending(s *v1.Slot, model string) {
-	m.Routes.Pending(s.GetName(), s.GetId(), model, s.GetPolicy(), s.GetProfile())
+	for _, name := range names(s) {
+		m.pendingName(s, name, model)
+	}
+}
+
+func (m *Manager) pendingName(s *v1.Slot, name, model string) {
+	policy, profile := settingsFor(s, name)
+	m.Routes.Pending(name, s.GetId(), model, policy, profile)
 }
 
 // Tracks occupants outside swaps. User stops empty the slot. Failures retain

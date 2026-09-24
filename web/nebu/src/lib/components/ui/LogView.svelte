@@ -36,9 +36,9 @@
     </div>
     <span class="px-1 text-xs tabular-nums text-fg-faint">{shown.length}{filter ? ` / ${lines.length}` : ''}</span>
     {#if live}<span class="mx-1 inline-flex items-center gap-1.5 text-xs text-ok"><span class="dot pulse"></span>live</span>{/if}
-    <IconButton size="sm" icon={TextWrap} label="Wrap lines" class={wrap ? 'bg-raised text-fg' : ''} onclick={() => (wrap = !wrap)} />
+    <IconButton size="xs" icon={TextWrap} label="Wrap lines" class={wrap ? 'bg-raised text-fg' : ''} onclick={() => (wrap = !wrap)} />
     <IconButton
-      size="sm"
+      size="xs"
       icon={ArrowDownToLine}
       label="Follow output"
       class={follow ? 'bg-raised text-fg' : ''}

@@ -95,7 +95,7 @@ func commands() []command {
 		}},
 		{name: "routes", summary: "gateway model names", run: runRoutesList, sub: []command{
 			{name: "list", summary: "list routes", run: runRoutesList},
-			{name: "add", summary: "add an alias for a running instance", run: runRoutesAdd},
+			{name: "add", summary: "add an alias for a slot or a running instance", run: runRoutesAdd},
 			{name: "remove", summary: "remove an alias", run: runRoutesRemove},
 		}},
 		{name: "gateway", summary: "gateway listeners, routes, counters, and recent requests", run: runGateway, sub: []command{

@@ -21,7 +21,6 @@
   import Choices from './ui/Choices.svelte';
   import Segmented from './ui/Segmented.svelte';
   import Spinner from './ui/Spinner.svelte';
-  import Skeleton from './ui/Skeleton.svelte';
   import TextInput from './ui/TextInput.svelte';
   import PlanView from './PlanView.svelte';
   import PartsList from './PartsList.svelte';
@@ -102,19 +101,23 @@
 
   // Debounce replanning after input changes. Refresh host memory every ten seconds.
   const replanEvery = 10_000;
+  let planFor = '';
   $effect(() => {
-    void runtimeId;
     void slot;
     void values;
-    void pickedKey;
     // Newly stored parts can resolve automatic file parameters.
     void live.models.size;
+    const key = `${pickedKey}\0${effectiveRuntime}`;
     const ready = runUi.open && !!current && !!effectiveRuntime;
     generation++;
-    plan = null;
-    states = [];
-    missing = [];
-    planRefusal = '';
+    // The last plan stays up while inputs change. Another model or runtime starts blank.
+    if (key !== planFor || !ready) {
+      planFor = key;
+      plan = null;
+      states = [];
+      missing = [];
+      planRefusal = '';
+    }
     planError = '';
     refusal = null;
     if (!ready) {
@@ -258,7 +261,13 @@
           {#if plan}
             <PlanView {plan} compact />
           {:else if checking}
-            <Skeleton rows={3} />
+            <div class="flex flex-col gap-4" aria-busy="true">
+              <div class="flex flex-col gap-2"><div class="skeleton h-7 w-24"></div><div class="skeleton h-3 w-72 max-w-full"></div></div>
+              <div class="flex flex-col gap-4 border-t border-line pt-3">
+                <div class="flex flex-col gap-1.5"><div class="skeleton h-3 w-40"></div><div class="skeleton h-4 w-full"></div><div class="h-4"></div></div>
+                <div class="flex flex-col gap-1.5"><div class="skeleton h-3 w-32"></div><div class="skeleton h-4 w-full"></div><div class="h-4"></div></div>
+              </div>
+            </div>
           {/if}
           {#if planError}<div class="note note-bad mt-3">{planError}</div>{/if}
           {#if missing.length}

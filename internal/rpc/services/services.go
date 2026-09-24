@@ -10,6 +10,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/bots"
+	"github.com/nickheyer/nebu/internal/chats"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/settings"
@@ -36,12 +37,13 @@ func wrap(err error) error {
 		errors.Is(err, tasks.ErrUnknownTask), errors.Is(err, store.ErrNotStored),
 		errors.Is(err, installs.ErrUnknownInstall), errors.Is(err, instances.ErrUnknownInstance),
 		errors.Is(err, installs.ErrUnknownBuild), errors.Is(err, build.ErrUnknownRecipe),
-		errors.Is(err, slots.ErrUnknownSlot), errors.Is(err, bots.ErrUnknownBot), errors.Is(err, auth.ErrUnknownUser), errors.Is(err, auth.ErrUnknownToken):
+		errors.Is(err, slots.ErrUnknownSlot), errors.Is(err, bots.ErrUnknownBot), errors.Is(err, auth.ErrUnknownUser), errors.Is(err, auth.ErrUnknownToken),
+		errors.Is(err, chats.ErrUnknownConversation):
 		return connect.NewError(connect.CodeNotFound, err)
 	case errors.Is(err, bots.ErrNotRunning), errors.Is(err, auth.ErrLastUser):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, runtimes.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, sources.ErrSource),
-		errors.Is(err, settings.ErrSetting), errors.Is(err, bots.ErrBot), errors.Is(err, auth.ErrUser), errors.Is(err, auth.ErrToken):
+		errors.Is(err, settings.ErrSetting), errors.Is(err, bots.ErrBot), errors.Is(err, auth.ErrUser), errors.Is(err, auth.ErrToken), errors.Is(err, chats.ErrChat):
 		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, auth.ErrCredentials):
 		return connect.NewError(connect.CodePermissionDenied, err)

@@ -159,6 +159,7 @@
           <Kv
             items={[
               ...reservation,
+              ['Aliases', slot.aliases.length ? slot.aliases.map((a) => a.name).join(', ') : 'None'],
               ['Runtime', slot.runtimeId ? runtimeName(slot.runtimeId) : 'Any'],
               ['Limits', policyText(slot.policy, cached.gateway?.policy)],
               ['Shaping', profileText(slot.profile, instance?.template)],
@@ -193,7 +194,7 @@
     {#if history.length === 0}
       <Empty compact title="No earlier instances in this slot" />
     {:else}
-      <div class="overflow-x-auto">
+      <div class="tbl-wrap">
           <table class="tbl">
             <thead><tr><th>Model</th><th>State</th><th>Runtime</th><th>Started</th><th>Ended</th></tr></thead>
             <tbody>

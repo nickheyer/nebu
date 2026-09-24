@@ -34,8 +34,10 @@ const (
 	videosPath = "/v1/videos"
 
 	// Job polling interval and completed video retention time.
-	jobPoll   = 500 * time.Millisecond
-	videoKeep = 24 * time.Hour
+	jobPoll = 500 * time.Millisecond
+	// How long a cancelled job may keep running before the gateway reports it as stuck
+	cancelWait = 2 * time.Minute
+	videoKeep  = 24 * time.Hour
 	// Maximum retained videos. Evicts the oldest completed videos.
 	videoLimit = 32
 )
@@ -539,8 +541,7 @@ func (g *Gateway) await(ctx context.Context, target *url.URL, id string, policy 
 		status, raw, err := g.native(ctx, http.MethodGet, target, sdcppJobs+id, nil, policy)
 		if err != nil {
 			if ctx.Err() != nil {
-				g.cancelJob(target, id, policy)
-				return nil, ctx.Err()
+				return nil, g.abandon(ctx, target, id, policy)
 			}
 			return nil, err
 		}
@@ -565,19 +566,90 @@ func (g *Gateway) await(ctx context.Context, target *url.URL, id string, policy 
 		}
 		select {
 		case <-ctx.Done():
-			g.cancelJob(target, id, policy)
-			return nil, ctx.Err()
+			return nil, g.abandon(ctx, target, id, policy)
 		case <-time.After(jobPoll):
 		}
 	}
 }
 
-// Cancels the job with a separate timeout after the caller's context ends.
-func (g *Gateway) cancelJob(target *url.URL, id string, policy *v1.Policy) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// The caller's context ended before the job did. Keeps the runtime's answer to the cancel
+// that followed, since the job keeps running when the runtime refuses it.
+type abandoned struct {
+	cause error
+	stop  error
+}
+
+func (e *abandoned) Error() string {
+	why := "the request was cancelled before the job finished"
+	if errors.Is(e.cause, context.DeadlineExceeded) {
+		why = "the job ran past the route's request timeout"
+	}
+	if e.stop != nil {
+		return why + ", and the runtime kept generating: " + e.stop.Error()
+	}
+	return why
+}
+
+func (e *abandoned) Unwrap() error { return e.cause }
+
+// Cancels the job after the caller's context ends and reports whether the runtime stopped it.
+func (g *Gateway) abandon(ctx context.Context, target *url.URL, id string, policy *v1.Policy) error {
+	left := &abandoned{cause: ctx.Err(), stop: g.cancelJob(target, id, policy)}
+	if left.stop != nil {
+		g.log.Warn("gateway cancel job", "job", id, "err", left.stop)
+	}
+	return left
+}
+
+// Cancels the job with a separate timeout and waits until the runtime reports it ended.
+// Returns why it could not when the runtime refuses the cancel or the job keeps running.
+func (g *Gateway) cancelJob(target *url.URL, id string, policy *v1.Policy) error {
+	ctx, cancel := context.WithTimeout(context.Background(), cancelWait)
 	defer cancel()
-	if _, _, err := g.native(ctx, http.MethodPost, target, sdcppJobs+id+"/cancel", nil, policy); err != nil {
-		g.log.Debug("gateway cancel job", "job", id, "err", err)
+	status, raw, err := g.native(ctx, http.MethodPost, target, sdcppJobs+id+"/cancel", nil, policy)
+	if err != nil {
+		return fmt.Errorf("cancelling job %s: %w", id, err)
+	}
+	switch status {
+	case http.StatusOK, http.StatusAccepted:
+	case http.StatusNotFound, http.StatusGone:
+		// The runtime already dropped the job, so nothing runs for it.
+		return nil
+	default:
+		message := sdcpp{}.ErrorMessage(raw)
+		if message == "" {
+			message = strings.TrimSpace(string(raw))
+		}
+		return fmt.Errorf("the runtime refused to cancel job %s (%d): %s", id, status, message)
+	}
+	last := "generating"
+	for {
+		status, raw, err := g.native(ctx, http.MethodGet, target, sdcppJobs+id, nil, policy)
+		if ctx.Err() != nil {
+			return fmt.Errorf("job %s was still %s %s after the runtime accepted the cancel", id, last, cancelWait)
+		}
+		if err != nil {
+			return fmt.Errorf("job %s after cancel: %w", id, err)
+		}
+		if status == http.StatusNotFound || status == http.StatusGone {
+			return nil
+		}
+		if status != http.StatusOK {
+			return fmt.Errorf("job %s answered %d after cancel: %s", id, status, strings.TrimSpace(string(raw)))
+		}
+		var job sdJob
+		if err := json.Unmarshal(raw, &job); err != nil {
+			return fmt.Errorf("job %s after cancel: %w", id, err)
+		}
+		if job.done() {
+			return nil
+		}
+		last = job.Status
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("job %s was still %s %s after the runtime accepted the cancel", id, last, cancelWait)
+		case <-time.After(jobPoll):
+		}
 	}
 }
 
@@ -638,9 +710,12 @@ func (g *Gateway) image(w *traceWriter, r *http.Request, req *mediaRequest, name
 	t.FirstByteAt = timestamppb.Now()
 	done, err := g.await(ctx, target, accepted.ID, policy, func() { t.FirstTokenAt = timestamppb.Now() })
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			t.Stop, t.Error = "cancelled", "client went away"
-			return
+		if left, ok := errors.AsType[*abandoned](err); ok {
+			t.Error = left.Error()
+			if errors.Is(err, context.Canceled) {
+				t.Stop = "cancelled"
+				return
+			}
 		}
 		g.mediaError(w, client, t, name, err)
 		return
@@ -900,10 +975,9 @@ func (g *Gateway) followVideo(ctx context.Context, cancel context.CancelFunc, re
 	if err != nil {
 		v.status = "failed"
 		message := err.Error()
-		if errors.Is(err, context.DeadlineExceeded) {
-			message = "the job ran past the route's request timeout"
-		} else if errors.Is(err, context.Canceled) {
-			message = "the job was cancelled"
+		var left *abandoned
+		if errors.As(err, &left) {
+			message = left.Error()
 		}
 		v.failure = &struct{ code, message string }{"upstream_error", message}
 		t.Error, t.Stop, t.Status = message, "failed", http.StatusBadGateway

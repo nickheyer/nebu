@@ -234,7 +234,7 @@
           {#if !status?.shards.length}
             <div class="p-4"><Empty compact title={running ? 'No shards reported' : 'Start the bot to view shards'} /></div>
           {:else}
-            <div class="overflow-x-auto">
+            <div class="tbl-wrap mx-0 px-1">
               <table class="tbl dense">
                 <thead><tr><th>Shard</th><th>State</th><th class="num">Guilds</th><th class="num">Latency</th><th>Connected</th><th>Error</th></tr></thead>
                 <tbody>
@@ -339,7 +339,7 @@
       {#if shownActivity.length === 0}
         <Empty icon={BotIcon} title={activityView === 'errors' ? 'No errors' : 'No activity'} />
       {:else}
-        <div class="overflow-x-auto">
+        <div class="tbl-wrap">
           <table class="tbl dense">
             <thead><tr><th>When</th><th>Level</th><th>Kind</th><th>Persona</th><th>Channel</th><th>Message</th><th></th></tr></thead>
             <tbody>

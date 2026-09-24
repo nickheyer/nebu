@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"path"
 	"sort"
@@ -194,6 +195,17 @@ func dhSplit(repo, revision string) (string, string) {
 func (dockerhubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error) {
 	name, tag := dhSplit(repo, revision)
 	m, err := c.Distribution().Manifest(ctx, name, tag)
+	// A bare name whose repository publishes no latest tag resolves to the first tag it lists
+	if err != nil && !tagNamed(repo, revision) && IsStatus(err, http.StatusNotFound) {
+		tags, terr := c.Distribution().Tags(ctx, name)
+		if terr != nil {
+			return nil, err
+		}
+		if def := defaultTag(dhSortTags(tags)); def != "" && def != tag {
+			tag = def
+			m, err = c.Distribution().Manifest(ctx, name, tag)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -302,16 +314,12 @@ func (dockerhubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v
 	if err != nil {
 		return nil, err
 	}
-	sort.SliceStable(tags, func(i, j int) bool {
-		if tags[i] == latestTag || tags[j] == latestTag {
-			return tags[i] == latestTag && tags[j] != latestTag
-		}
-		return dhNaturalLess(tags[i], tags[j])
-	})
+	dhSortTags(tags)
+	def := defaultTag(tags)
 	out := make([]*v1.Revision, 0, len(tags))
 	byName := map[string]*v1.Revision{}
 	for _, t := range tags {
-		r := &v1.Revision{Name: t, Repo: name + ":" + t, Default: t == latestTag}
+		r := &v1.Revision{Name: t, Repo: name + ":" + t, Default: t == def}
 		out = append(out, r)
 		byName[t] = r
 	}
@@ -319,6 +327,17 @@ func (dockerhubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v
 		return nil, err
 	}
 	return out, nil
+}
+
+// Orders tags latest first, then naturally, and returns the same slice
+func dhSortTags(tags []string) []string {
+	sort.SliceStable(tags, func(i, j int) bool {
+		if tags[i] == latestTag || tags[j] == latestTag {
+			return tags[i] == latestTag && tags[j] != latestTag
+		}
+		return dhNaturalLess(tags[i], tags[j])
+	})
+	return tags
 }
 
 // Adds tag sizes, dates, and digests from Docker Hub when a hub endpoint is configured.

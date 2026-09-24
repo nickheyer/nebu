@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Component } from 'svelte';
   import type { HTMLButtonAttributes } from 'svelte/elements';
-  import Button from './Button.svelte';
+  import Button, { type ButtonSize, type ButtonVariant } from './Button.svelte';
   import Tip from './Tip.svelte';
 
   let {
@@ -16,8 +16,8 @@
   }: {
     icon: Component<any>;
     label: string;
-    size?: 'sm' | 'md' | 'lg';
-    variant?: 'primary' | 'secondary' | 'subtle' | 'ghost' | 'danger';
+    size?: ButtonSize;
+    variant?: ButtonVariant;
     loading?: boolean;
     href?: string;
     class?: string;

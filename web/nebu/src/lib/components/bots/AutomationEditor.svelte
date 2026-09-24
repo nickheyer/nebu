@@ -6,7 +6,7 @@
   import TextArea from '../ui/TextArea.svelte';
   import NumberInput from '../ui/NumberInput.svelte';
   import Select from '../ui/Select.svelte';
-  import SwitchRow from './SwitchRow.svelte';
+  import SwitchRow from '../ui/SwitchRow.svelte';
   import IdList from './IdList.svelte';
   import ModelSelect from './ModelSelect.svelte';
   import ChannelPicker from './ChannelPicker.svelte';
@@ -56,15 +56,15 @@
         </Field>
       {:else if trigger === TriggerKind.KEYWORD}
         <Field label="Pattern" for="{idPrefix}-pattern" description="Regex, ignoring case. {'{{index .Match 1}}'} is the first capture group." required>
-          <TextInput id="{idPrefix}-pattern" mono bind:value={automation.pattern} empty="\bgood (morning|night)\b" invalid={automation.pattern.trim() === ''} />
+          <TextInput id="{idPrefix}-pattern" mono bind:value={automation.pattern} empty="\bgood (morning|night)\b" />
         </Field>
       {:else if trigger === TriggerKind.REACTION}
         <Field label="Reaction emoji" for="{idPrefix}-pattern" required>
-          <TextInput id="{idPrefix}-pattern" bind:value={automation.pattern} empty="👀" invalid={automation.pattern.trim() === ''} />
+          <TextInput id="{idPrefix}-pattern" bind:value={automation.pattern} empty="👀" />
         </Field>
       {:else if trigger === TriggerKind.COMMAND}
         <Field label="Command" for="{idPrefix}-command" description="Without the command prefix." required>
-          <TextInput id="{idPrefix}-command" mono bind:value={automation.command} empty="roll" invalid={automation.command.trim() === ''} />
+          <TextInput id="{idPrefix}-command" mono bind:value={automation.command} empty="roll" />
         </Field>
       {:else if trigger === TriggerKind.MEMBER_JOIN}
         <div class="text-xs leading-5 text-fg-muted sm:pt-6">Enable Member events and Discord's Server Members intent.</div>
@@ -98,7 +98,7 @@
       </Field>
       {#if action === ActionKind.REACT}
         <Field label="Emoji" for="{idPrefix}-emoji" description="Added to the triggering message." required>
-          <TextInput id="{idPrefix}-emoji" bind:value={automation.emoji} empty="🎉" invalid={automation.emoji.trim() === ''} />
+          <TextInput id="{idPrefix}-emoji" bind:value={automation.emoji} empty="🎉" />
         </Field>
       {:else if modelKind}
         <Field label="Model" for="{idPrefix}-model" description="Overrides the persona's model.">
@@ -108,7 +108,7 @@
     </div>
     {#if templated}
       <Field label={action === ActionKind.TEXT ? 'Message template' : action === ActionKind.PRESENCE ? 'Activity template' : 'Prompt template'} for="{idPrefix}-template" required>
-        <TextArea id="{idPrefix}-template" mono bind:value={automation.template} empty={'Hello {{.Channel}}'} invalid={automation.template.trim() === ''} />
+        <TextArea id="{idPrefix}-template" mono bind:value={automation.template} empty={'Hello {{.Channel}}'} />
         {#snippet sub()}
           <span class="text-xs text-fg-faint">Fields: {#each templateFields as f, i (f)}{#if i}{' '}{/if}<code class="font-mono text-fg-muted">{f}</code>{/each}</span>
         {/snippet}

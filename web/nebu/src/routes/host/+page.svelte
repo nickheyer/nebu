@@ -53,7 +53,7 @@
 
 <div class={split.current ? 'grid grid-cols-2 gap-8' : ''}>
   {#if split.current || pane === 'host'}
-    <div class="flex min-w-0 flex-col gap-9">
+    <div class="flex min-w-0 flex-col gap-10">
       {#if loading}
         <div class="skeleton h-40" aria-busy="true"></div>
       {:else if !host}

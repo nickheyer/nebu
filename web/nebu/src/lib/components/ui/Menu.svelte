@@ -23,33 +23,37 @@
     size = 'md',
     align = 'end',
     onOpenChange
-  }: { items: MenuItem[]; label?: string; icon?: Component<any>; variant?: 'primary' | 'secondary' | 'ghost'; size?: 'sm' | 'md'; align?: 'start' | 'end'; onOpenChange?: (open: boolean) => void } = $props();
+  }: { items: MenuItem[]; label?: string; icon?: Component<any>; variant?: 'primary' | 'secondary' | 'ghost'; size?: 'xs' | 'sm' | 'md'; align?: 'start' | 'end'; onOpenChange?: (open: boolean) => void } = $props();
 
   const variants = {
     primary: 'bg-accent text-accent-fg font-semibold hover:bg-accent-strong',
     secondary: 'border border-line bg-raised/60 text-fg hover:border-line-strong hover:bg-raised',
     ghost: 'text-fg-muted hover:bg-raised hover:text-fg'
   };
+  // Match Button heights: xs 28px, sm 32px, md 36px.
+  const labeled: Record<string, string> = { xs: 'h-7 px-2 text-xs', sm: 'h-8 px-2.5 text-[13px]', md: 'h-9 px-3.5 text-sm' };
+  const square: Record<string, string> = { xs: 'h-7 w-7', sm: 'h-8 w-8', md: 'h-9 w-9' };
+  const iconSize: Record<string, number> = { xs: 12, sm: 13, md: 14 };
   const Icon = $derived(icon);
 </script>
 
 <DropdownMenu.Root {onOpenChange}>
   {#if label}
     <DropdownMenu.Trigger
-      class="inline-flex shrink-0 items-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-colors select-none {variants[variant]} {size === 'sm' ? 'h-7 px-2 text-xs' : 'h-8 px-3 text-sm'} data-[state=open]:bg-raised"
+      class="inline-flex shrink-0 items-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-colors select-none {variants[variant]} {labeled[size]} data-[state=open]:bg-raised"
       onclick={(e: MouseEvent) => e.stopPropagation()}
     >
-      {#if Icon}<Icon size={size === 'sm' ? 13 : 14} />{/if}
+      {#if Icon}<Icon size={iconSize[size]} />{/if}
       {label}
       <ChevronDown size={13} class="opacity-70" />
     </DropdownMenu.Trigger>
   {:else}
     <DropdownMenu.Trigger
-      class="inline-flex shrink-0 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-raised hover:text-fg data-[state=open]:bg-raised data-[state=open]:text-fg {size === 'sm' ? 'h-7 w-7' : 'h-8 w-8'}"
+      class="inline-flex shrink-0 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-raised hover:text-fg data-[state=open]:bg-raised data-[state=open]:text-fg {square[size]}"
       aria-label="More"
       onclick={(e: MouseEvent) => e.stopPropagation()}
     >
-      <Ellipsis size={15} />
+      <Ellipsis size={iconSize[size] + 1} />
     </DropdownMenu.Trigger>
   {/if}
   <DropdownMenu.Portal>

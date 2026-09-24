@@ -108,7 +108,6 @@
   // Hide columns with no data.
   const has = $derived({
     task: hits.some((h) => h.task),
-    format: hits.some((h) => h.formats.length),
     runs: hits.some((h) => h.runtimes !== 0 || h.kind !== 0),
     size: hits.some((h) => hitSize(h).kind !== 'none'),
     downloads: hits.some((h) => h.downloads > 0n),
@@ -317,10 +316,10 @@
   }
 </script>
 
-{#snippet th(label: string, id: string, num = false)}
+{#snippet th(label: string, id: string, num = false, cls = '')}
   {@const sortId = columnSort(id)}
   {@const on = !!sortId && effectiveSort === sortId}
-  <th class={num ? 'num' : ''} aria-sort={on ? (ascending ? 'ascending' : 'descending') : 'none'}>
+  <th class="{num ? 'num' : ''} {cls}" aria-sort={on ? (ascending ? 'ascending' : 'descending') : 'none'}>
     {#if sortId}
       <button type="button" class="caps inline-flex items-center gap-1 rounded-sm transition-colors hover:text-fg {on ? 'text-fg' : ''}" title="Ordered by the source" onclick={() => orderBy(id)}>
         {label}
@@ -387,15 +386,14 @@
         {#if sorts.length}
           <div style="width: {sortWidth}ch"><Select class="w-full" bind:value={sort} label="Sort" items={sortItems} /></div>
           {#if reversible}
-            <IconButton size="lg" variant="secondary" icon={ascending ? ArrowUp : ArrowDown} label={ascending ? 'Ascending' : 'Descending'} onclick={() => (ascending = !ascending)} />
+            <IconButton variant="secondary" icon={ascending ? ArrowUp : ArrowDown} label={ascending ? 'Ascending' : 'Descending'} onclick={() => (ascending = !ascending)} />
           {/if}
         {/if}
-        {#if !searching && hits.length}
+        {#if hits.length}
           <span class="ml-auto text-xs tabular-nums text-fg-faint">{#if total > 0n}{Number(total).toLocaleString()} results{:else}{hits.length.toLocaleString()} results{/if}</span>
         {/if}
       </div>
-      {#if sharedFacets.length || (caps?.facets.length && !all) || activeFilters.length || query || sort}
-        <div class="mt-2 flex flex-wrap items-center gap-1.5">
+      <div class="mt-2 flex min-h-7 flex-wrap items-center gap-1.5">
           {#each sharedFacets as f (f.id)}
             <FacetPicker facet={f} value={filters[f.id] ?? ''} onChange={(v) => (filters = { ...filters, [f.id]: v })} />
           {/each}
@@ -407,8 +405,7 @@
           {#if activeFilters.length || query || sort}
             <Button type="button" variant="ghost" size="sm" icon={X} onclick={clearAll}>Clear</Button>
           {/if}
-        </div>
-      {/if}
+      </div>
 
       <div class="mt-3 mb-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-faint empty:hidden">
         {#each tokenless as s (s.source?.id)}
@@ -444,81 +441,72 @@
           </Empty>
         {/if}
       {:else}
-        <table class="tbl table-fixed">
-          <colgroup>
-            <col />
-            {#if merged}<col class="w-28" />{/if}
-            {#if has.task}<col class="w-44" />{/if}
-            {#if has.format}<col class="w-28" />{/if}
-            {#if has.runs}<col class="w-44" />{/if}
-            {#if has.size}<col class="w-28" />{/if}
-            {#if has.downloads}<col class="w-24" />{/if}
-            {#if has.likes}<col class="w-20" />{/if}
-            {#if has.updated}<col class="w-24" />{/if}
-          </colgroup>
-          <thead>
-            <tr>
-              {@render th('Model', 'name')}
-              {#if merged}{@render th('Source', 'source')}{/if}
-              {#if has.task}{@render th('Task', 'task')}{/if}
-              {#if has.format}{@render th('Format', 'format')}{/if}
-              {#if has.runs}{@render th('Runs on', 'runs')}{/if}
-              {#if has.size}{@render th('Size', 'size', true)}{/if}
-              {#if has.downloads}{@render th('Downloads', 'downloads', true)}{/if}
-              {#if has.likes}{@render th('Likes', 'likes', true)}{/if}
-              {#if has.updated}{@render th('Updated', 'updated', true)}{/if}
-            </tr>
-          </thead>
-          <tbody>
-            {#if searching}
-              {@render skeletonRows(10)}
-            {:else}
-              {#each hits as h (h.sourceId + '/' + h.repo)}
-                {@const hcaps = capsOf(h.sourceId)}
-                {@const title = h.name && h.name !== h.repo ? h.name : h.repo}
-                {@const chips = hitChips(h, hcaps)}
-                {@const on = selected?.repo === h.repo && selected?.sourceId === h.sourceId && drawerOpen}
-                <tr class="row-link {on ? 'row-active' : ''}" onclick={() => openHit(h)}>
-                  <td>
-                    <div class="flex items-center gap-2">
-                      <span class="truncate text-fg" title={h.repo}>{title}</span>
-                      {#if locked(h, hcaps)}<Tip text="Gated. Set {hcaps?.tokenEnv || 'a token'} to download."><Lock size={12} class="shrink-0 text-warn" /></Tip>{:else if h.gated}<Tip text="Gated. This source has a token."><Lock size={12} class="shrink-0 text-fg-faint" /></Tip>{/if}
-                      {#if h.private}<Tip text="Private"><EyeOff size={12} class="shrink-0 text-fg-faint" /></Tip>{/if}
-                      {#if stored.has(h.sourceId + '/' + h.repo)}<Tip text="Downloaded"><Check size={12} class="shrink-0 text-ok" /></Tip>{/if}
-                    </div>
-                    <div class="truncate text-xs text-fg-faint">{h.author}{#if h.name && h.name !== h.repo}<span class="font-mono">{' · '}{h.repo}</span>{/if}</div>
-                    {#if chips.length}
-                      <div class="mt-1 flex flex-wrap gap-1">
-                        {#each chips as c (c)}<span class="rounded-sm bg-raised px-1.5 text-[11px] text-fg-muted">{c}</span>{/each}
+        <!-- The model column takes the remaining width. Lower value columns appear as the table widens. -->
+        <div class="tbl-wrap @container">
+          <table class="tbl">
+            <thead>
+              <tr>
+                {@render th('Model', 'name', false, 'w-full')}
+                {#if merged}{@render th('Source', 'source')}{/if}
+                {#if has.task}{@render th('Task', 'task', false, 'hidden @4xl:table-cell')}{/if}
+                {#if has.runs}{@render th('Runs on', 'runs')}{/if}
+                {#if has.size}{@render th('Size', 'size', true)}{/if}
+                {#if has.downloads}{@render th('Downloads', 'downloads', true)}{/if}
+                {#if has.likes}{@render th('Likes', 'likes', true, 'hidden @6xl:table-cell')}{/if}
+                {#if has.updated}{@render th('Updated', 'updated', true, 'hidden @5xl:table-cell')}{/if}
+              </tr>
+            </thead>
+            <tbody class="transition-opacity {searching ? 'opacity-60' : ''}" aria-busy={searching}>
+              {#if searching && hits.length === 0}
+                {@render skeletonRows(10)}
+              {:else}
+                {#each hits as h (h.sourceId + '/' + h.repo)}
+                  {@const hcaps = capsOf(h.sourceId)}
+                  {@const title = h.name && h.name !== h.repo ? h.name : h.repo}
+                  {@const chips = hitChips(h, hcaps)}
+                  {@const on = selected?.repo === h.repo && selected?.sourceId === h.sourceId && drawerOpen}
+                  <tr class="row-link {on ? 'row-active' : ''}" onclick={() => openHit(h)}>
+                    <td class="w-full max-w-0">
+                      <div class="flex items-center gap-2">
+                        <span class="truncate text-fg" title={h.repo}>{title}</span>
+                        {#if locked(h, hcaps)}<Tip text="Gated. Set {hcaps?.tokenEnv || 'a token'} to download."><Lock size={12} class="shrink-0 text-warn" /></Tip>{:else if h.gated}<Tip text="Gated. This source has a token."><Lock size={12} class="shrink-0 text-fg-faint" /></Tip>{/if}
+                        {#if h.private}<Tip text="Private"><EyeOff size={12} class="shrink-0 text-fg-faint" /></Tip>{/if}
+                        {#if stored.has(h.sourceId + '/' + h.repo)}<Tip text="Downloaded"><Check size={12} class="shrink-0 text-ok" /></Tip>{/if}
                       </div>
-                    {/if}
-                  </td>
-                  {#if merged}<td class="truncate text-fg-muted">{labels.get(h.sourceId) ?? h.sourceId}</td>{/if}
-                  {#if has.task}<td class="truncate text-fg-muted">{h.task ? facetValueLabel(hcaps, 'task', h.task) : '–'}</td>{/if}
-                  {#if has.format}<td class="truncate font-mono text-xs text-fg-muted">{h.formats.join(' ') || '–'}</td>{/if}
-                  {#if has.runs}
-                    <td>
-                      <div class="flex flex-wrap gap-1">
-                        {#each runtimesOf(h.runtimes, cached.runtimes) as r (r.runtime?.id)}
-                          <Chip text={r.runtime?.name ?? r.runtime?.id ?? ''} mono={false} title={r.compatible ? `${r.runtime?.name} serves what this is listed as` : `${r.runtime?.name} serves this, but is not compatible with this host`} class={r.compatible ? '' : 'opacity-50'} />
-                        {:else}
-                          <span class="text-xs text-fg-faint" title={hitKindLabel(h.kind) ? 'No compatible runtime' : 'Unknown model type'}>{hitKindLabel(h.kind) || '–'}</span>
-                        {/each}
-                      </div>
+                      <div class="truncate text-xs text-fg-faint">{h.author}{#if h.name && h.name !== h.repo}<span class="font-mono">{' · '}{h.repo}</span>{/if}</div>
+                      {#if h.formats.length || chips.length}
+                        <div class="mt-1 flex flex-wrap gap-1">
+                          {#each h.formats as f (f)}<span class="rounded-sm bg-raised px-1.5 font-mono text-[11px] text-fg-muted">{f}</span>{/each}
+                          {#each chips as c (c)}<span class="rounded-sm bg-raised px-1.5 text-[11px] text-fg-muted">{c}</span>{/each}
+                        </div>
+                      {/if}
                     </td>
-                  {/if}
-                  {#if has.size}<td class="num truncate whitespace-nowrap" title={sizeOf(h)}>{sizeOf(h)}</td>{/if}
-                  {#if has.downloads}<td class="num text-fg-muted">{h.downloads > 0n ? count(h.downloads) : '–'}</td>{/if}
-                  {#if has.likes}<td class="num text-fg-muted">{h.likes > 0n ? count(h.likes) : '–'}</td>{/if}
-                  {#if has.updated}<td class="num text-fg-muted whitespace-nowrap">{h.updatedAt ? ago(h.updatedAt, clock.now) : '–'}</td>{/if}
-                </tr>
-              {/each}
-              {#if loadingMore}
-                {@render skeletonRows(4)}
+                    {#if merged}<td class="whitespace-nowrap text-fg-muted">{labels.get(h.sourceId) ?? h.sourceId}</td>{/if}
+                    {#if has.task}<td class="hidden whitespace-nowrap text-fg-muted @4xl:table-cell"><span class="block max-w-44 truncate">{h.task ? facetValueLabel(hcaps, 'task', h.task) : '–'}</span></td>{/if}
+                    {#if has.runs}
+                      <td class="whitespace-nowrap">
+                        <div class="flex gap-1">
+                          {#each runtimesOf(h.runtimes, cached.runtimes) as r (r.runtime?.id)}
+                            <Chip text={r.runtime?.name ?? r.runtime?.id ?? ''} mono={false} title={r.compatible ? `${r.runtime?.name} serves what this is listed as` : `${r.runtime?.name} serves this, but is not compatible with this host`} class={r.compatible ? '' : 'opacity-50'} />
+                          {:else}
+                            <span class="text-xs text-fg-faint" title={hitKindLabel(h.kind) ? 'No compatible runtime' : 'Unknown model type'}>{hitKindLabel(h.kind) || '–'}</span>
+                          {/each}
+                        </div>
+                      </td>
+                    {/if}
+                    {#if has.size}<td class="num" title={sizeOf(h)}>{sizeOf(h)}</td>{/if}
+                    {#if has.downloads}<td class="num text-fg-muted">{h.downloads > 0n ? count(h.downloads) : '–'}</td>{/if}
+                    {#if has.likes}<td class="num hidden text-fg-muted @6xl:table-cell">{h.likes > 0n ? count(h.likes) : '–'}</td>{/if}
+                    {#if has.updated}<td class="num hidden text-fg-muted @5xl:table-cell">{h.updatedAt ? ago(h.updatedAt, clock.now) : '–'}</td>{/if}
+                  </tr>
+                {/each}
+                {#if loadingMore}
+                  {@render skeletonRows(4)}
+                {/if}
               {/if}
-            {/if}
-          </tbody>
-        </table>
+            </tbody>
+          </table>
+        </div>
         {#if !searching && nextCursor && paginates}
           <div bind:this={sentinel} class="flex justify-center py-4">
             <Button size="sm" variant="ghost" loading={loadingMore} onclick={more}>More</Button>

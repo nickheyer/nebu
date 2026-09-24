@@ -199,7 +199,7 @@
   {/snippet}
 </PageHeader>
 
-<div class="flex flex-col gap-9">
+<div class="flex flex-col gap-10">
   <Section title="Disk" meta={status?.path ?? ''}>
     {#snippet actions()}
       {#if storeTask}<TaskChip task={storeTask} />{/if}
@@ -257,7 +257,7 @@
     {:else if models.length === 0}
       <Empty compact title="No models match" />
     {:else}
-      <div class="overflow-x-auto">
+      <div class="tbl-wrap">
         <table class="tbl">
           {@render head()}
           <tbody>
@@ -293,8 +293,8 @@
                 <td class="text-fg-muted" title={when(usedAt(m))}>{m.usedAt ? ago(m.usedAt, clock.now) : 'never'}</td>
                 <td class="actions" onclick={(e) => e.stopPropagation()}>
                   <span>
-                    {#if !isComponent(m.descriptor)}<Button size="sm" variant="primary" icon={Play} onclick={() => runModel(m)}>Run</Button>{/if}
-                    <Menu size="sm" items={runItems(m)} />
+                    {#if !isComponent(m.descriptor)}<Button size="xs" variant="primary" icon={Play} onclick={() => runModel(m)}>Run</Button>{/if}
+                    <Menu size="xs" items={runItems(m)} />
                   </span>
                 </td>
               </tr>

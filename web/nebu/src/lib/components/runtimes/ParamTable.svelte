@@ -7,7 +7,7 @@
   const groups = $derived(paramGroups(params));
 </script>
 
-<div class="overflow-x-auto">
+<div class="tbl-wrap">
   <table class="tbl">
     <thead>
       <tr>

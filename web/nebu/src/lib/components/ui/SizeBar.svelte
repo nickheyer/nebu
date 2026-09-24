@@ -145,7 +145,7 @@
 </script>
 
 {#snippet fig()}
-  <span class="flex w-28 shrink-0 items-center tabular-nums text-fg {dense ? 'h-2.5 text-[11px]' : 'h-4 text-xs'} {figure === 'left' ? 'justify-end' : 'justify-start'}" title="{format(used)} of {format(total)}">{ratio(used, total)}</span>
+  <span class="flex w-28 shrink-0 items-center tabular-nums text-fg {dense ? 'h-2.5 text-[11px]' : 'h-4 text-xs'} justify-start" title="{format(used)} of {format(total)}">{ratio(used, total)}</span>
 {/snippet}
 
 <div class="flex min-w-0 items-start gap-3 {cls}">

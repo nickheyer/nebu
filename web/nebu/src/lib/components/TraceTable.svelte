@@ -16,7 +16,7 @@
 {#if traces.length === 0}
   <Empty compact title="No requests yet" />
 {:else}
-  <div class="overflow-x-auto">
+  <div class="tbl-wrap">
     <table class="tbl">
       <thead>
         <tr>

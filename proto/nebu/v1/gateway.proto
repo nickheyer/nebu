@@ -101,14 +101,17 @@ message ListRoutesResponse {
   repeated Route routes = 1;
 }
 
-// Maps an extra public name onto a running instance
+// Maps an extra public name onto a slot or a running instance
 message SetRouteRequest {
   string name = 1;
+  // A ready instance. Its slot takes the alias when it serves one.
   string instance_id = 2;
-  // Alias limits. Zero fields inherit gateway defaults.
+  // Alias limits. Zero fields inherit the slots, then gateway defaults.
   Policy policy = 3;
-  // Alias request transformations. Unset fields use instance defaults.
+  // Alias request transformations. Unset fields use the slots, then instance defaults.
   Profile profile = 4;
+  // A slot by id or name, taking the alias even before a model runs in it.
+  string slot_id = 5;
 }
 
 // Returns the route
@@ -116,7 +119,7 @@ message SetRouteResponse {
   Route route = 1;
 }
 
-// Removes a route by name
+// Removes an alias by name. Slot names are removed with their slot.
 message DeleteRouteRequest {
   string name = 1;
 }
@@ -219,9 +222,9 @@ service GatewayService {
   rpc GetGatewayStatus(GetGatewayStatusRequest) returns (GetGatewayStatusResponse);
   // Lists routes
   rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse);
-  // Adds an alias route
+  // Adds an alias for a slot or a running instance
   rpc SetRoute(SetRouteRequest) returns (SetRouteResponse);
-  // Removes an alias route
+  // Removes an alias, from its slot when it has one
   rpc DeleteRoute(DeleteRouteRequest) returns (DeleteRouteResponse);
   // Lists recent requests
   rpc ListTraces(ListTracesRequest) returns (ListTracesResponse);

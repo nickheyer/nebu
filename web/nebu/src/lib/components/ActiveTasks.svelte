@@ -40,7 +40,7 @@
               {#if t.progress?.message}<span>{t.progress?.total ? ' · ' : ''}{t.progress.message}</span>{/if}
             </div>
           </a>
-          <IconButton size="sm" icon={Ban} label="Cancel" onclick={() => cancel(t)} />
+          <IconButton size="xs" icon={Ban} label="Cancel" onclick={() => cancel(t)} />
         </li>
       {/each}
     </ul>

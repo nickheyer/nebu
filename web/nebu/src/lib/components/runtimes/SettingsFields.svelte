@@ -3,7 +3,7 @@
   import { ConfigType, type ConfigField } from '$proto/source_pb';
   import Field from '../ui/Field.svelte';
   import Select from '../ui/Select.svelte';
-  import Switch from '../ui/Switch.svelte';
+  import SwitchRow from '../ui/SwitchRow.svelte';
   import NumberInput from '../ui/NumberInput.svelte';
   import TextInput from '../ui/TextInput.svelte';
   import FilePicker from '../ui/FilePicker.svelte';
@@ -57,10 +57,7 @@
   {#each fields as f (f.name)}
     {@const id = `${idPrefix}-${f.name}`}
     {#if f.type === ConfigType.BOOL}
-      <div class="flex min-h-9 items-center justify-between gap-4">
-        <span class="text-[13px] font-medium text-fg">{label(f)}</span>
-        <Switch checked={(values[f.name] ?? f.default) === 'true'} label={label(f)} onchange={(on) => set(f.name, String(on) === f.default ? '' : String(on))} />
-      </div>
+      <SwitchRow checked={(values[f.name] ?? f.default) === 'true'} label={label(f)} description={f.description || undefined} onchange={(on) => set(f.name, String(on) === f.default ? '' : String(on))} />
     {:else}
       <Field label={label(f)} for={id} required={f.required && !f.default} error={revision(f)?.error || undefined}>
         {#if f.choices.length}

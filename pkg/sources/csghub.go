@@ -3,12 +3,18 @@ package sources
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"golang.org/x/sync/errgroup"
 )
 
 // OpenCSG, the public CSGHub
@@ -44,6 +50,12 @@ func init() { register(csghub) }
 const (
 	csgRevision = "main"
 	csgMaxDepth = 8
+	// Directories listed for one model, how many at once, how long one listing may take, and how
+	// long the walk keeps starting new ones
+	csgMaxDirs     = 128
+	csgWalkWorkers = 8
+	csgDirTimeout  = 10 * time.Second
+	csgWalkBudget  = 25 * time.Second
 )
 
 // Listing query parameters by facet id
@@ -261,41 +273,95 @@ func (csghubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) 
 	return model, nil
 }
 
-// Lists the tree of a revision, descending into subdirectories to a fixed depth
+// Lists the tree of a revision breadth first, a level of directories at a time, within a depth, a
+// count of directories, and a time budget. Directories the hub cannot list and any beyond those
+// limits are reported on the model.
 func csgWalk(ctx context.Context, c *Client, repo, revision string, model *v1.Model) error {
-	var walk func(dir string, depth int) error
-	walk = func(dir string, depth int) error {
-		q := url.Values{"ref": {revision}}
-		if dir != "" {
-			q.Set("path", dir)
+	type dir struct {
+		path  string
+		depth int
+	}
+	var mu sync.Mutex
+	listed, pastCap, pastDepth, pastTime := 0, 0, 0, 0
+	deadline := time.Now().Add(csgWalkBudget)
+	level := []dir{{"", 0}}
+	for len(level) > 0 {
+		if time.Now().After(deadline) {
+			pastTime += len(level)
+			break
 		}
-		entries, err := csgData[[]csgTree](ctx, c, c.URL("api", "v1", "models", repo, "tree"), q)
-		if err != nil {
-			return err
-		}
-		for _, e := range entries {
-			path := e.Path
-			if path == "" {
-				path = strings.TrimPrefix(dir+"/"+e.Name, "/")
+		sort.Slice(level, func(i, j int) bool { return level[i].path < level[j].path })
+		var next []dir
+		eg, gctx := errgroup.WithContext(ctx)
+		eg.SetLimit(csgWalkWorkers)
+		for _, d := range level {
+			if listed >= csgMaxDirs {
+				pastCap++
+				continue
 			}
-			switch e.Type {
-			case "file":
-				a := &v1.Artifact{Path: path, SizeBytes: e.Size, Url: c.URL("hf", repo, "resolve", revision, path)}
-				if e.Lfs {
-					a.Sha256 = Hex(e.LfsSha256)
+			listed++
+			eg.Go(func() error {
+				q := url.Values{"ref": {revision}}
+				if d.path != "" {
+					q.Set("path", d.path)
 				}
-				model.Artifacts = append(model.Artifacts, a)
-			case "dir", "directory":
-				if depth < csgMaxDepth {
-					if err := walk(path, depth+1); err != nil {
+				dctx, cancel := context.WithTimeout(gctx, csgDirTimeout)
+				defer cancel()
+				entries, err := csgData[[]csgTree](dctx, c, c.URL("api", "v1", "models", repo, "tree"), q)
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil {
+					// The hub's git backend answers with a server error, or hangs, for directories it cannot open
+					var se *StatusError
+					switch {
+					case errors.As(err, &se) && se.Code >= http.StatusInternalServerError:
+						model.Warnings = append(model.Warnings, fmt.Sprintf("%s: not listed, the hub answered %s", d.path, se.Status))
+					case errors.Is(err, context.DeadlineExceeded) && gctx.Err() == nil:
+						model.Warnings = append(model.Warnings, fmt.Sprintf("%s: not listed, the hub took longer than %s", d.path, csgDirTimeout))
+					default:
 						return err
 					}
+					return nil
 				}
-			}
+				for _, e := range entries {
+					path := e.Path
+					if path == "" {
+						path = strings.TrimPrefix(d.path+"/"+e.Name, "/")
+					}
+					switch e.Type {
+					case "file":
+						a := &v1.Artifact{Path: path, SizeBytes: e.Size, Url: c.URL("hf", repo, "resolve", revision, path)}
+						if e.Lfs {
+							a.Sha256 = Hex(e.LfsSha256)
+						}
+						model.Artifacts = append(model.Artifacts, a)
+					case "dir", "directory":
+						if d.depth+1 > csgMaxDepth {
+							pastDepth++
+							continue
+						}
+						next = append(next, dir{path, d.depth + 1})
+					}
+				}
+				return nil
+			})
 		}
-		return nil
+		if err := eg.Wait(); err != nil {
+			return err
+		}
+		level = next
 	}
-	return walk("", 0)
+	sort.Slice(model.Artifacts, func(i, j int) bool { return model.Artifacts[i].Path < model.Artifacts[j].Path })
+	if pastDepth > 0 {
+		model.Warnings = append(model.Warnings, fmt.Sprintf("%d directories deeper than %d levels not listed", pastDepth, csgMaxDepth))
+	}
+	if pastCap > 0 {
+		model.Warnings = append(model.Warnings, fmt.Sprintf("%d directories not listed, %d is the most read for one model", pastCap, csgMaxDirs))
+	}
+	if pastTime > 0 {
+		model.Warnings = append(model.Warnings, fmt.Sprintf("%d directories not listed, the listing stopped after %s", pastTime, csgWalkBudget))
+	}
+	return nil
 }
 
 func (csghubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revision, error) {

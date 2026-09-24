@@ -268,6 +268,21 @@ CREATE TABLE slot_params (
   PRIMARY KEY (slot_id, name)
 );
 
+-- Extra public names a slot answers to, in list order, each with limits and shaping that override the slot's when set
+CREATE TABLE slot_aliases (
+  slot_id TEXT NOT NULL REFERENCES slots (id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  max_in_flight INTEGER NOT NULL DEFAULT 0,
+  requests_per_second REAL NOT NULL DEFAULT 0,
+  burst INTEGER NOT NULL DEFAULT 0,
+  request_timeout_ms INTEGER NOT NULL DEFAULT 0,
+  upstream_timeout_ms INTEGER NOT NULL DEFAULT 0,
+  system_messages TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (slot_id, position)
+);
+CREATE UNIQUE INDEX slot_aliases_name ON slot_aliases (name);
+
 -- The last run request, replayed on rollback and relaunch
 CREATE TABLE slot_requests (
   slot_id TEXT PRIMARY KEY REFERENCES slots (id) ON DELETE CASCADE,
@@ -381,3 +396,32 @@ CREATE TABLE api_tokens (
 );
 CREATE UNIQUE INDEX api_tokens_secret ON api_tokens (secret);
 CREATE INDEX api_tokens_owner ON api_tokens (provider, subject);
+
+-- Saved web chat conversations, owned by the account that made them. The turns
+-- and settings are one JSON document, the columns what lists show.
+CREATE TABLE conversations (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  turn_count INTEGER NOT NULL DEFAULT 0,
+  body TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX conversations_owner ON conversations (provider, subject, updated_at);
+
+-- Images attached to or answered in saved conversations, bytes included, owned like the conversations
+CREATE TABLE chat_files (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  width INTEGER NOT NULL DEFAULT 0,
+  height INTEGER NOT NULL DEFAULT 0,
+  data BLOB NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX chat_files_owner ON chat_files (provider, subject);

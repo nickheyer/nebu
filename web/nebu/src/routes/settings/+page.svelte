@@ -201,9 +201,9 @@
 
 {#snippet row(label: string, hint: string | undefined, id: string | undefined, control: import('svelte').Snippet)}
   <div class="grid grid-cols-1 items-start gap-x-8 gap-y-2 py-4 sm:grid-cols-[14rem_minmax(0,1fr)]">
-    <div class="flex flex-col justify-center">
-      <label for={id} class="flex h-8 items-center text-sm text-fg">{label}</label>
-      {#if hint}<span class="-mt-1 text-xs text-fg-faint">{hint}</span>{/if}
+    <div class="flex flex-col">
+      <label for={id} class="flex h-9 items-center text-sm text-fg">{label}</label>
+      {#if hint}<span class="-mt-1.5 text-xs leading-5 text-fg-muted">{hint}</span>{/if}
     </div>
     <div class="min-w-0">{@render control()}</div>
   </div>
@@ -211,7 +211,7 @@
 
 <PageHeader title="Settings" />
 
-<div class="flex flex-col gap-9">
+<div class="flex flex-col gap-10">
   <Section title="Host">
     <div class="divide-y divide-line/70 border-y border-line">
       {#snippet labelControl()}
@@ -228,11 +228,11 @@
       {/snippet}
       {@render row('Label', 'Shown instead of the hostname.', 'host-label', labelControl)}
       {#snippet hostnameControl()}
-        <div class="flex h-8 items-center font-mono text-sm text-fg-muted">{live.host?.hostname ?? '–'}</div>
+        <div class="flex h-9 items-center font-mono text-sm text-fg-muted">{live.host?.hostname ?? '–'}</div>
       {/snippet}
       {@render row('Hostname', undefined, undefined, hostnameControl)}
       {#snippet platformControl()}
-        <div class="flex h-8 items-center font-mono text-sm text-fg-muted">{live.host ? `${live.host.os}/${live.host.arch}` : '–'}</div>
+        <div class="flex h-9 items-center font-mono text-sm text-fg-muted">{live.host ? `${live.host.os}/${live.host.arch}` : '–'}</div>
       {/snippet}
       {@render row('Platform', undefined, undefined, platformControl)}
     </div>
@@ -242,7 +242,7 @@
     <Section title="Account">
       <div class="divide-y divide-line/70 border-y border-line">
         {#snippet accountControl()}
-          <div class="flex min-h-8 flex-wrap items-center gap-3 text-sm">
+          <div class="flex min-h-9 flex-wrap items-center gap-3 text-sm">
             {#if me}
               <State tone="ok" label={me.name} />
               <span class="text-xs text-fg-faint">Session ends {new Date(me.expires).toLocaleString()}</span>
@@ -281,7 +281,7 @@
         {#if !usersLoaded}
           <div class="skeleton h-10" aria-busy="true"></div>
         {:else}
-          <div class="overflow-x-auto">
+          <div class="tbl-wrap">
             <table class="tbl dense">
               <thead><tr><th>Username</th><th>Created</th><th>Password changed</th><th></th></tr></thead>
               <tbody>
@@ -290,7 +290,7 @@
                     <td class="font-mono text-xs text-fg">{u.username}{#if me && u.username === me.name}<span class="ml-2 text-fg-faint">you</span>{/if}</td>
                     <td class="whitespace-nowrap text-xs text-fg-muted">{when(u.createdAt)}</td>
                     <td class="whitespace-nowrap text-xs text-fg-muted">{when(u.updatedAt)}</td>
-                    <td class="actions"><span><IconButton icon={Trash2} label="Remove {u.username}" size="sm" disabled={(me && u.username === me.name) || users.length === 1} onclick={() => removeUser(u)} /></span></td>
+                    <td class="actions"><span><IconButton icon={Trash2} label="Remove {u.username}" size="xs" disabled={(me && u.username === me.name) || users.length === 1} onclick={() => removeUser(u)} /></span></td>
                   </tr>
                 {/each}
               </tbody>
@@ -321,7 +321,7 @@
         {#if !tokensLoaded}
           <div class="skeleton h-10" aria-busy="true"></div>
         {:else if tokens.length}
-          <div class="overflow-x-auto">
+          <div class="tbl-wrap">
             <table class="tbl dense">
               <thead><tr><th>Name</th><th>Token</th><th>Created</th><th>Last used</th><th></th></tr></thead>
               <tbody>
@@ -339,7 +339,7 @@
                     </td>
                     <td class="whitespace-nowrap text-xs text-fg-muted">{when(t.createdAt)}</td>
                     <td class="whitespace-nowrap text-xs text-fg-muted">{t.lastUsedAt ? when(t.lastUsedAt) : 'Never'}</td>
-                    <td class="actions"><span><IconButton icon={Trash2} label="Revoke {t.name}" size="sm" onclick={() => revokeToken(t)} /></span></td>
+                    <td class="actions"><span><IconButton icon={Trash2} label="Revoke {t.name}" size="xs" onclick={() => revokeToken(t)} /></span></td>
                   </tr>
                 {/each}
               </tbody>
@@ -363,7 +363,7 @@
   <Section title="Connection">
     <div class="divide-y divide-line/70 border-y border-line">
       {#snippet daemonControl()}
-        <div class="flex h-8 flex-wrap items-center gap-3 text-sm">
+        <div class="flex min-h-9 flex-wrap items-center gap-3 text-sm">
           <State tone={live.connected ? 'ok' : 'bad'} pulse={live.connected} label={live.connected ? 'Connected' : 'Disconnected'} />
           <span class="font-mono text-fg-muted">{baseUrl}</span>
           {#if live.needsToken}<span class="text-warn">{signInOffered() ? 'Sign in required' : 'Token required'}</span>{/if}
@@ -374,7 +374,7 @@
       {@render row('Daemon', undefined, undefined, daemonControl)}
       {#if auth.sso}
         {#snippet ssoControl()}
-          <div class="flex min-h-8 flex-wrap items-center gap-3 text-sm">
+          <div class="flex min-h-9 flex-wrap items-center gap-3 text-sm">
             {#if auth.user?.provider === 'oidc'}
               <State tone="ok" label={auth.user.name || auth.user.email || auth.user.subject} />
               {#if auth.user.email && auth.user.email !== auth.user.name}<span class="font-mono text-fg-muted">{auth.user.email}</span>{/if}

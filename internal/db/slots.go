@@ -17,11 +17,18 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 			p.GetMaxInFlight(), p.GetRequestsPerSecond(), p.GetBurst(), p.GetRequestTimeoutMs(), p.GetUpstreamTimeoutMs(), profileCol(s.GetProfile())); err != nil {
 			return err
 		}
-		if err := clearChildren(exec, "slot_id", id, "slot_devices", "slot_params", "slot_requests", "slot_request_params"); err != nil {
+		if err := clearChildren(exec, "slot_id", id, "slot_devices", "slot_aliases", "slot_params", "slot_requests", "slot_request_params"); err != nil {
 			return err
 		}
 		for i, dev := range s.GetDeviceIds() {
 			if err := exec(`INSERT INTO slot_devices (slot_id, position, device_id) VALUES (?, ?, ?)`, id, i, dev); err != nil {
+				return err
+			}
+		}
+		for i, a := range s.GetAliases() {
+			ap := a.GetPolicy()
+			if err := exec(`INSERT INTO slot_aliases (slot_id, position, name, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, system_messages) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, i, a.GetName(), ap.GetMaxInFlight(), ap.GetRequestsPerSecond(), ap.GetBurst(), ap.GetRequestTimeoutMs(), ap.GetUpstreamTimeoutMs(), profileCol(a.GetProfile())); err != nil {
 				return err
 			}
 		}
@@ -62,6 +69,9 @@ func (d *DB) ListSlots(ctx context.Context) ([]*v1.Slot, error) {
 		if s.DeviceIds, err = d.strings(ctx, `SELECT device_id FROM slot_devices WHERE slot_id = ? ORDER BY position`, s.GetId()); err != nil {
 			return nil, err
 		}
+		if s.Aliases, err = list(ctx, d, `SELECT name, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, system_messages FROM slot_aliases WHERE slot_id = ? ORDER BY position`, scanAlias, s.GetId()); err != nil {
+			return nil, err
+		}
 		if s.Params, err = d.stringMap(ctx, `SELECT name, value FROM slot_params WHERE slot_id = ? ORDER BY name`, s.GetId()); err != nil {
 			return nil, err
 		}
@@ -80,6 +90,21 @@ func (d *DB) ListSlots(ctx context.Context) ([]*v1.Slot, error) {
 		}
 	}
 	return out, nil
+}
+
+// Scans an alias with its limits, no policy when every field inherits, as it was written
+func scanAlias(rows *sql.Rows) (*v1.SlotAlias, error) {
+	a := &v1.SlotAlias{}
+	p := &v1.Policy{}
+	var profile profileAt
+	if err := rows.Scan(&a.Name, &p.MaxInFlight, &p.RequestsPerSecond, &p.Burst, &p.RequestTimeoutMs, &p.UpstreamTimeoutMs, &profile); err != nil {
+		return nil, err
+	}
+	if p.GetMaxInFlight()+p.GetBurst()+p.GetRequestTimeoutMs()+p.GetUpstreamTimeoutMs() > 0 || p.GetRequestsPerSecond() > 0 {
+		a.Policy = p
+	}
+	a.Profile = profile.p
+	return a, nil
 }
 
 // Removes a slot with its child rows, reporting existence

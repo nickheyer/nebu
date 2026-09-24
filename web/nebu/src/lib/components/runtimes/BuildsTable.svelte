@@ -55,7 +55,7 @@
         <td class="whitespace-nowrap text-fg-muted" title={when(b.createdAt)}>{ago(b.createdAt, clock.now)}</td>
         <td class="actions">
           <span>
-            {#if b.taskId}<IconButton size="sm" icon={ScrollText} label="Open task" href="/tasks/{b.taskId}" />{/if}
+            {#if b.taskId}<IconButton size="xs" icon={ScrollText} label="Open task" href="/tasks/{b.taskId}" />{/if}
             {#if !running}<ArmedButton compact icon={Trash2} label="Remove" armed="Remove build" loading={removing === b.id} onconfirm={() => remove(b)} />{/if}
           </span>
         </td>

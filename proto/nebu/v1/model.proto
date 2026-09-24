@@ -92,6 +92,8 @@ message Model {
   google.protobuf.Timestamp resolved_at = 6;
   // Declared pipelines, deepest directory first.
   repeated Tree trees = 7;
+  // Directories the source could not list, one line each.
+  repeated string warnings = 8;
 }
 
 // One tensor as read from a header

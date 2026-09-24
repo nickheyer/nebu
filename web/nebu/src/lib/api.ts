@@ -3,6 +3,7 @@ import { createConnectTransport } from '@connectrpc/connect-web';
 import { AuthService } from '$proto/auth_pb';
 import { BuildService } from '$proto/recipe_pb';
 import { BotService } from '$proto/bot_pb';
+import { ChatService } from '$proto/chat_pb';
 import { EstimateService } from '$proto/estimate_pb';
 import { EventService } from '$proto/event_pb';
 import { GatewayService } from '$proto/gateway_pb';
@@ -49,7 +50,8 @@ export const api = {
   gateway: createClient(GatewayService, transport),
   events: createClient(EventService, transport),
   bots: createClient(BotService, transport),
-  auth: createClient(AuthService, transport)
+  auth: createClient(AuthService, transport),
+  chats: createClient(ChatService, transport)
 };
 
 // Include the API token in file URLs when authentication is required.

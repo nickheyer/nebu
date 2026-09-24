@@ -11,8 +11,8 @@
   import Tip from './Tip.svelte';
 
   let { tabs, value = $bindable(''), size = 'md', class: cls = '' }: { tabs: Segment[]; value?: string; size?: 'sm' | 'md' | 'lg'; class?: string } = $props();
-  const boxes: Record<string, string> = { sm: 'p-0.5', md: 'p-0.5', lg: 'p-[3px]' };
-  const items: Record<string, string> = { sm: 'h-6 px-2 text-xs', md: 'h-7 px-2.5 text-sm', lg: 'h-7 px-3 text-sm' };
+  // Outer heights match Button: sm 28px, md 32px, lg 36px (2px padding and a 1px border around each item).
+  const items: Record<string, string> = { sm: 'h-[22px] px-2 text-xs', md: 'h-[26px] px-2.5 text-[13px]', lg: 'h-[30px] px-3 text-sm' };
   const item = $derived(`inline-flex items-center gap-1.5 rounded-[5px] font-medium whitespace-nowrap transition-colors ${items[size]}`);
 </script>
 
@@ -21,7 +21,7 @@
   {#if t.count !== undefined}<span class="text-xs tabular-nums {on ? 'text-fg-muted' : 'text-fg-faint'}">{t.count}</span>{/if}
 {/snippet}
 
-<div role="radiogroup" class="inline-flex items-center gap-0.5 rounded-md border border-line bg-sunken {boxes[size]} {cls}">
+<div role="radiogroup" class="inline-flex w-fit shrink-0 items-center gap-0.5 rounded-md border border-line bg-sunken p-0.5 {cls}">
   {#each tabs as t (t.id)}
     {@const on = value === t.id}
     {#if t.unmet}

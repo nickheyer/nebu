@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"html"
+	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
@@ -236,6 +237,7 @@ func olTags(ctx context.Context, c *Client, name string) ([]*v1.Revision, error)
 		return nil, err
 	}
 	path := namespaced(name, olNamespace)
+	def := defaultTag(tags)
 	out := make([]*v1.Revision, len(tags))
 	eg, gctx := errgroup.WithContext(ctx)
 	eg.SetLimit(olTagWorkers)
@@ -253,7 +255,7 @@ func olTags(ctx context.Context, c *Client, name string) ([]*v1.Revision, error)
 				Name:       tag,
 				Repo:       name + ":" + tag,
 				Commit:     olCommit(m),
-				Default:    tag == latestTag,
+				Default:    tag == def,
 				SizeBytes:  size,
 				Parameters: olParameters(cfg.ModelType),
 				Precision:  cfg.FileType,
@@ -337,6 +339,17 @@ func (ollamaAPI) Resolve(ctx context.Context, c *Client, repo, revision string) 
 	}
 	path := namespaced(name, olNamespace)
 	m, cfg, err := olManifest(ctx, c, path, tag)
+	// A bare name whose library entry publishes no latest tag resolves to the first tag it lists
+	if err != nil && !tagNamed(repo, revision) && IsStatus(err, http.StatusNotFound) {
+		tags, terr := olTagNames(ctx, c, name)
+		if terr != nil {
+			return nil, fmt.Errorf("%s:%s: %w", name, tag, err)
+		}
+		if def := defaultTag(tags); def != "" && def != tag {
+			tag = def
+			m, cfg, err = olManifest(ctx, c, path, tag)
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s:%s: %w", name, tag, err)
 	}

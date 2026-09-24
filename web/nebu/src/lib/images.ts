@@ -1,6 +1,6 @@
 // Store image metadata in localStorage and bytes in IndexedDB to avoid the localStorage limit.
 
-import { localKeys, readLocal } from './persist';
+import { readLocal } from './persist';
 
 export interface Attachment {
   id: string;
@@ -117,19 +117,10 @@ export async function storeBlob(blob: Blob, name: string): Promise<Attachment> {
   return attachment;
 }
 
+// Files the generation history refers to. Chat images are kept by the daemon
+// and cached here, so a swept copy is fetched again when shown.
 export function referencedIds(): Set<string> {
   const keep = new Set<string>();
-  for (const k of localKeys('nebu.chat.')) {
-    try {
-      const s = JSON.parse(readLocal(k)) as { turns?: { images?: { id: string }[]; media?: { id?: string }[] }[] } | null;
-      for (const t of s?.turns ?? []) {
-        for (const a of t.images ?? []) keep.add(a.id);
-        for (const m of t.media ?? []) if (m.id) keep.add(m.id);
-      }
-    } catch {
-      // Ignore unrelated keys sharing the prefix.
-    }
-  }
   try {
     const history = JSON.parse(readLocal('nebu.generate.history') || '[]') as { files?: { id: string }[]; inputs?: { id: string }[] }[];
     for (const g of history) for (const f of [...(g.files ?? []), ...(g.inputs ?? [])]) keep.add(f.id);

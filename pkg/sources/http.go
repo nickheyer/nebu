@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,8 +21,10 @@ import (
 )
 
 const (
-	maxAttempts   = 4
-	baseBackoff   = 500 * time.Millisecond
+	maxAttempts = 4
+	baseBackoff = 500 * time.Millisecond
+	// The longest a Retry-After header stretches one wait between attempts
+	maxRetryAfter = 15 * time.Second
 	userAgent     = "nebu (+https://github.com/nickheyer/nebu)"
 	dialTimeout   = 30 * time.Second
 	headerTimeout = 2 * time.Minute
@@ -158,10 +161,14 @@ func (c *HTTP) DoBody(ctx context.Context, method, rawURL string, query url.Valu
 	var last error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
+			delay := baseBackoff << (attempt - 1)
+			if wait := retryAfter(last); wait > delay {
+				delay = min(wait, maxRetryAfter)
+			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(baseBackoff << (attempt - 1)):
+			case <-time.After(delay):
 			}
 		}
 		var reader io.Reader
@@ -202,6 +209,25 @@ func (c *HTTP) DoBody(ctx context.Context, method, rawURL string, query url.Valu
 		return resp, nil
 	}
 	return nil, last
+}
+
+// The wait a rate limited or unavailable answer asked for in Retry-After, zero when it named none
+func retryAfter(err error) time.Duration {
+	var se *StatusError
+	if !errors.As(err, &se) || se.Header == nil {
+		return 0
+	}
+	v := strings.TrimSpace(se.Header.Get("Retry-After"))
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		return time.Duration(secs) * time.Second
+	}
+	if at, err := http.ParseTime(v); err == nil {
+		return time.Until(at)
+	}
+	return 0
 }
 
 // Sends a prepared request once with the client's auth header

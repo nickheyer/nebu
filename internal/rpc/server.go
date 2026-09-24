@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/grpcreflect"
 	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/bots"
+	"github.com/nickheyer/nebu/internal/chats"
 	"github.com/nickheyer/nebu/internal/doctor"
 	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/internal/inspect"
@@ -52,6 +53,8 @@ type Deps struct {
 	Slots     *slots.Manager
 	Gateway   *gateway.Gateway
 	Bots      *bots.Manager
+	// Saved web chat conversations, one store per account
+	Chats *chats.Manager
 	// Mounts /v1/ when the gateway shares the API listener.
 	GatewayShared bool
 	Events        *events.Bus
@@ -86,10 +89,11 @@ func NewHandler(d Deps) http.Handler {
 	mux.Handle(nebuv1connect.NewTaskServiceHandler(services.NewTaskService(d.Tasks), opts))
 	mux.Handle(nebuv1connect.NewBuildServiceHandler(services.NewBuildService(d.Installs), opts))
 	mux.Handle(nebuv1connect.NewSlotServiceHandler(services.NewSlotService(d.Slots), opts))
-	mux.Handle(nebuv1connect.NewGatewayServiceHandler(services.NewGatewayService(d.Gateway, d.Instances), opts))
+	mux.Handle(nebuv1connect.NewGatewayServiceHandler(services.NewGatewayService(d.Gateway, d.Instances, d.Slots), opts))
 	mux.Handle(nebuv1connect.NewEventServiceHandler(services.NewEventService(d.Events, d.Snapshot), opts))
 	mux.Handle(nebuv1connect.NewBotServiceHandler(services.NewBotService(d.Bots), opts))
 	mux.Handle(nebuv1connect.NewAuthServiceHandler(services.NewAuthService(d.Users, d.Tokens, d.Guard), opts))
+	mux.Handle(nebuv1connect.NewChatServiceHandler(services.NewChatService(d.Chats, d.Guard), opts))
 	reflector := grpcreflect.NewStaticReflector(
 		nebuv1connect.HostServiceName,
 		nebuv1connect.SettingsServiceName,
@@ -105,6 +109,7 @@ func NewHandler(d Deps) http.Handler {
 		nebuv1connect.EventServiceName,
 		nebuv1connect.BotServiceName,
 		nebuv1connect.AuthServiceName,
+		nebuv1connect.ChatServiceName,
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))

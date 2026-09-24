@@ -23,7 +23,7 @@
   import Empty from '../ui/Empty.svelte';
   import Kv from '../ui/Kv.svelte';
   import Copy from '../ui/Copy.svelte';
-  import SwitchRow from './SwitchRow.svelte';
+  import SwitchRow from '../ui/SwitchRow.svelte';
   import IdList from './IdList.svelte';
   import PersonaEditor from './PersonaEditor.svelte';
   import AutomationEditor from './AutomationEditor.svelte';
@@ -160,7 +160,7 @@
       <div class="flex flex-col gap-4">
         <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
           <Field label="Name" for="bot-name" required error={nameTaken ? 'Another bot has this name' : undefined}>
-            <TextInput id="bot-name" bind:value={name} empty="ada" invalid={badName || nameTaken} />
+            <TextInput id="bot-name" bind:value={name} empty="ada" invalid={nameTaken} />
           </Field>
           <Field label="Token" for="bot-token" required={creating} description={bot?.tokenSet ? 'Stored on the daemon.' : 'Discord Developer Portal > Bot > Token.'}>
             <div class="flex items-center gap-2">
@@ -235,7 +235,7 @@
           <SwitchRow bind:checked={fields.engagement.answerBots} label="Reply to bots" description="Includes webhooks and this bot's personas." />
           <SwitchRow bind:checked={fields.engagement.memberEvents} label="Member events" description="Requires Server Members intent in the Discord Developer Portal." />
         </div>
-        <div class="grid grid-cols-2 gap-x-5 gap-y-4 lg:grid-cols-5">
+        <div class="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-3 xl:grid-cols-5">
           <Field label="Command prefix" for="engagement-prefix">
             <TextInput id="engagement-prefix" mono bind:value={fields.engagement.prefix} empty="!" maxlength={8} />
           </Field>
@@ -288,7 +288,7 @@
               {#if pickerBot}<ChannelPicker botId={pickerBot} guilds onPick={(ids) => (fields.commands.guildIds = addIds(fields.commands.guildIds, ids))} />{/if}
             </IdList>
           </Field>
-          <div class="overflow-x-auto">
+          <div class="tbl-wrap">
             <table class="tbl dense">
               <thead><tr><th>Command</th><th>Name</th><th>Register</th></tr></thead>
               <tbody>

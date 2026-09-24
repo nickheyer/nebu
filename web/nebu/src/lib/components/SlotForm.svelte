@@ -19,6 +19,7 @@
   import PolicyForm from './PolicyForm.svelte';
   import ProfileForm from './ProfileForm.svelte';
   import DevicePicker from './DevicePicker.svelte';
+  import IdList from './bots/IdList.svelte';
 
   let { slot, cancelHref = '/', onSaved }: { slot?: Slot; cancelHref?: string; onSaved: (slot: Slot) => void } = $props();
 
@@ -26,6 +27,7 @@
   function initial() {
     return {
       name: slot?.name ?? '',
+      aliases: (slot?.aliases ?? []).map((a) => a.name),
       position: slot?.position ? String(slot.position) : '',
       placement: placementId(slot?.placement),
       // An empty device list selects all GPUs.
@@ -39,6 +41,7 @@
   }
   const start = initial();
   let name = $state(start.name);
+  let aliases = $state<string[]>(start.aliases);
   let position = $state(start.position);
   let placement = $state(start.placement);
   let devices = $state<string[] | null>(start.devices);
@@ -73,10 +76,23 @@
   const badBudget = $derived(memory.trim() !== '' && budget === 0n);
   const badName = $derived(/[\s/]/.test(name));
   const nameTaken = $derived(name.trim() !== slot?.name && [...live.slots.values()].some((s) => s.name === name.trim()));
+  // Aliases keep the limits and shaping they were given in the Serve page's alias dialog.
+  const aliasProblem = $derived.by(() => {
+    for (const a of aliases) {
+      if (/[\s/]/.test(a)) return `${a} has a space or slash`;
+      if (a === name.trim()) return `${a} is the slot's own name`;
+      const other = [...live.slots.values()].find((s) => s.id !== slot?.id && (s.name === a || s.aliases.some((x) => x.name === a)));
+      if (other) return `${a} belongs to slot ${other.name}`;
+      const route = live.routes.get(a);
+      if (route && route.slotId !== (slot?.id ?? '')) return `${a} is already a route`;
+    }
+    return '';
+  });
+  const aliasList = $derived(aliases.map((n) => slot?.aliases.find((a) => a.name === n) ?? { name: n }));
   const runtime = $derived(cached.runtimes.find((r) => r.runtime?.id === runtimeId)?.runtime);
   const occupied = $derived(!!slot && slotOccupied(slot.id));
   const count = $derived(orderedSlots().length);
-  const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && invalid === 0);
+  const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && !aliasProblem && invalid === 0);
   // Clear parameters when the runtime changes.
   $effect(() => {
     if (runtimeId !== start.runtimeId) params = {};
@@ -84,7 +100,7 @@
 
   async function save() {
     saving = true;
-    const body = { placement: placementOf(placement), deviceIds, memoryBytes: budget, runtimeId, params, policy: policyFrom(policy), profile: profileFrom(profile), position: Math.max(0, parseInt(position, 10) || 0) };
+    const body = { placement: placementOf(placement), deviceIds, memoryBytes: budget, runtimeId, params, policy: policyFrom(policy), profile: profileFrom(profile), position: Math.max(0, parseInt(position, 10) || 0), aliases: aliasList };
     try {
       if (slot) {
         const r = await api.slots.updateSlot({ id: slot.id, name: name.trim(), ...body });
@@ -120,6 +136,11 @@
       </Field>
       <Field label="Position" for="slot-position">
         <NumberInput id="slot-position" integer min={1} max={count + (creating ? 1 : 0)} bind:value={position} empty={creating ? String(count + 1) : ''} />
+      </Field>
+    </div>
+    <div class="mt-4">
+      <Field label="Aliases" for="slot-aliases" description="Other model names clients can send. They follow the slot's model through swaps and restarts." error={aliasProblem || undefined}>
+        <IdList id="slot-aliases" bind:items={aliases} empty="gpt-4" />
       </Field>
     </div>
   </Card>

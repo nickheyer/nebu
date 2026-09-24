@@ -182,20 +182,21 @@
     });
   });
 
-  // Keep the tab on revision changes. Reset it on repository changes.
   async function load(keepTab: boolean) {
     const gen = ++generation;
-    if (!keepTab) tab = 'weights';
+    if (!keepTab) {
+      tab = 'weights';
+      inspect = null;
+      revisions = [];
+      listingRevisions = false;
+      card = null;
+      cardError = '';
+    }
     if (gated && caps?.card) tab = 'card';
-    inspect = null;
     inspectError = '';
     denied = false;
     partsOf = {};
     partsError = {};
-    revisions = [];
-    listingRevisions = false;
-    card = null;
-    cardError = '';
     showWarnings = false;
     planned = slotId;
     const target = { sourceId, repo: curRepo, revision: curRev };
@@ -218,7 +219,7 @@
             if (gen === generation) inspecting = false;
           })
       );
-      if (caps?.revisions) {
+      if (caps?.revisions && !keepTab) {
         listingRevisions = true;
         jobs.push(
           api.sources
@@ -402,7 +403,7 @@
           <Button size="sm" icon={RefreshCw} onclick={() => load(true)}>Retry</Button>
         </Empty>
       {:else if inspect && model}
-        <div class="flex flex-col gap-6">
+        <div class="flex flex-col gap-6 transition-opacity {inspecting ? 'opacity-60' : ''}" aria-busy={inspecting}>
           {#if noRuntime}
             <div class="note note-warn flex flex-wrap items-center gap-3">
               <span class="flex-1">Install a runtime for {formatIds.join(', ')} to run these weights.</span>
@@ -433,7 +434,7 @@
                   <span class="inline-flex items-center gap-2">
                     <span>Fit in</span>
                     <Segmented size="sm" bind:value={slotId} tabs={[{ id: '', label: hostName() || 'Whole host' }, ...slots.map((s) => ({ id: s.id, label: s.name }))]} />
-                    {#if inspecting}<span>planning…</span>{/if}
+                    <span class="w-16">{#if inspecting}planning…{/if}</span>
                   </span>
                 {/if}
               </div>
@@ -451,24 +452,32 @@
                   {@const room = !mount || d.totalBytes <= mount.freeBytes}
                   {@const open = expanded === d.group}
                   <tr class="row-link {open ? 'row-active' : ''}" onclick={() => toggle(d.group)}>
-                    <td class="whitespace-nowrap">
-                      <div class="flex items-center gap-2">
-                        <ChevronRight size={12} class="shrink-0 text-fg-faint transition-transform {open ? 'rotate-90' : ''}" />
-                        <span class="font-mono text-sm text-fg">{names[d.group]}</span>
-                        {#if p}
-                          <Tip text={p.blurb || 'Unknown precision'}>
-                            <span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{precisionShort(p)}</span>
-                          </Tip>
-                        {/if}
-                        {#if kindLabel(d)}
-                          <Tip text={isComponent(d) ? 'Requires a diffusion model' : 'Model output'}>
-                            <span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{kindLabel(d)}</span>
-                          </Tip>
-                        {/if}
-                        {#if context === 0 && plan}
-                          <Tip text="Largest context that fits, capped at the trained context length"><span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{fmtCtx(plannedContext(row))} ctx</span></Tip>
-                        {/if}
-                        {#if best}<Tip text="Largest variant that fits in device memory right now"><Check size={13} class="text-ok" /></Tip>{/if}
+                    <td class="w-56 max-w-56">
+                      <div class="flex items-start gap-2">
+                        <ChevronRight size={12} class="mt-1 shrink-0 text-fg-faint transition-transform {open ? 'rotate-90' : ''}" />
+                        <div class="flex min-w-0 flex-col gap-1">
+                          <div class="flex min-w-0 items-center gap-1.5">
+                            <span class="truncate font-mono text-sm text-fg" title={names[d.group]}>{names[d.group]}</span>
+                            {#if best}<Tip text="Largest variant that fits in device memory right now"><Check size={13} class="shrink-0 text-ok" /></Tip>{/if}
+                          </div>
+                          {#if p || kindLabel(d) || (context === 0 && plan)}
+                            <div class="flex flex-wrap items-center gap-1">
+                              {#if p}
+                                <Tip text={p.blurb || 'Unknown precision'}>
+                                  <span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{precisionShort(p)}</span>
+                                </Tip>
+                              {/if}
+                              {#if kindLabel(d)}
+                                <Tip text={isComponent(d) ? 'Requires a diffusion model' : 'Model output'}>
+                                  <span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{kindLabel(d)}</span>
+                                </Tip>
+                              {/if}
+                              {#if context === 0 && plan}
+                                <Tip text="Largest context that fits, capped at the trained context length"><span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{fmtCtx(plannedContext(row))} ctx</span></Tip>
+                              {/if}
+                            </div>
+                          {/if}
+                        </div>
                       </div>
                     </td>
                     <td class="w-full min-w-[10rem]">
@@ -504,9 +513,9 @@
                         {:else if stored && isComponent(d)}
                           <span class="text-xs text-fg-faint">downloaded</span>
                         {:else if stored}
-                          <Button size="sm" variant={best ? 'primary' : 'secondary'} icon={Play} onclick={() => runModel(stored)}>Run</Button>
+                          <Button size="xs" variant={best ? 'primary' : 'secondary'} icon={Play} onclick={() => runModel(stored)}>Run</Button>
                         {:else}
-                          <Tip text="Download weights and required parts"><Button size="sm" variant={best ? 'primary' : 'ghost'} icon={Download} onclick={() => pull(d)}>Download</Button></Tip>
+                          <Tip text="Download weights and required parts"><Button size="xs" variant={best ? 'primary' : 'ghost'} icon={Download} onclick={() => pull(d)}>Download</Button></Tip>
                         {/if}
                       </span>
                     </td>

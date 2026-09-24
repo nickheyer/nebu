@@ -50,11 +50,11 @@
   <Button variant="primary" icon={Plus} href="/slots/new">New slot</Button>
 </PageHeader>
 
-<div class="flex flex-col gap-8">
+<div class="flex flex-col gap-10">
   <ActiveTasks />
 
   <Section title="Slots" count={slots.length || undefined}>
-    <div class="overflow-x-auto">
+    <div class="tbl-wrap">
       <table class="tbl">
         <thead><tr><th class="w-8">#</th><th>Name</th><th>Model</th><th>Runtime</th><th>State</th><th class="num">Requests</th><th class="num">Memory</th><th></th></tr></thead>
         <tbody>
@@ -86,7 +86,10 @@
               {@const failedSlot = s.state === SlotState.FAILED}
               <tr class="row-link" onclick={() => goto(`/slots/${s.id}`)}>
                 <td class="font-mono text-xs text-fg-faint">{s.position}</td>
-                <td class="font-mono text-xs text-fg">{s.name}</td>
+                <td class="font-mono text-xs text-fg">
+                  {s.name}
+                  {#if s.aliases.length}<div class="text-fg-faint" title="Aliases">{s.aliases.map((a) => a.name).join(', ')}</div>{/if}
+                </td>
                 <td>
                   {#if s.request?.repo}
                     <div class="truncate text-fg" title={s.request.repo}>{tail(s.request.repo)} <span class="font-mono text-xs text-fg-muted">{groupLabel(s.request)}</span></div>
@@ -105,16 +108,16 @@
                 <td class="num text-fg-muted">{instance ? instanceMemory(instance) || '–' : '–'}</td>
                 <td class="actions" onclick={(e) => e.stopPropagation()}>
                   <span>
-                    {#if answering}<IconButton size="sm" icon={MessageSquare} label="Chat" href="/chat?model={encodeURIComponent(s.name)}" />{/if}
+                    {#if answering}<IconButton size="xs" icon={MessageSquare} label="Chat" href="/chat?model={encodeURIComponent(s.name)}" />{/if}
                     {#if failedSlot && s.request}
-                      <Button size="sm" variant="primary" icon={RotateCcw} onclick={() => relaunchSlot(s)}>Relaunch</Button>
+                      <Button size="xs" variant="primary" icon={RotateCcw} onclick={() => relaunchSlot(s)}>Relaunch</Button>
                     {:else if occupied}
-                      <Button size="sm" variant="subtle" icon={ArrowLeftRight} onclick={() => swapSlot(s)}>Swap</Button>
+                      <Button size="xs" variant="subtle" icon={ArrowLeftRight} onclick={() => swapSlot(s)}>Swap</Button>
                     {:else}
-                      <Button size="sm" variant="primary" icon={Play} onclick={() => swapSlot(s)}>Run</Button>
+                      <Button size="xs" variant="primary" icon={Play} onclick={() => swapSlot(s)}>Run</Button>
                     {/if}
                     <Menu
-                      size="sm"
+                      size="xs"
                       items={[
                         { label: 'Settings', icon: Settings2, href: `/slots/${s.id}?tab=settings` },
                         { label: 'Evict', icon: LogOut, onSelect: () => evictSlot(s), disabled: !occupied && !s.request, detail: 'Stop the model and forget it' },
@@ -138,8 +141,8 @@
                 <td class="num text-fg-muted">{instanceMemory(i) || '–'}</td>
                 <td class="actions" onclick={(e) => e.stopPropagation()}>
                   <span>
-                    {#if route?.state === RouteState.READY}<IconButton size="sm" icon={MessageSquare} label="Chat" href="/chat?model={encodeURIComponent(i.name)}" />{/if}
-                    <IconButton size="sm" icon={Square} label="Stop" class="text-bad hover:text-bad" onclick={() => stop(i)} />
+                    {#if route?.state === RouteState.READY}<IconButton size="xs" icon={MessageSquare} label="Chat" href="/chat?model={encodeURIComponent(i.name)}" />{/if}
+                    <IconButton size="xs" icon={Square} label="Stop" class="text-bad hover:text-bad" onclick={() => stop(i)} />
                   </span>
                 </td>
               </tr>
@@ -164,12 +167,12 @@
   {#if past.length}
     <Section title="History" count={past.length}>
       {#snippet actions()}
-        <Segmented size="sm" bind:value={historyView} tabs={[{ id: 'all', label: 'All' }, { id: 'failed', label: 'Failed', count: failed.length || undefined }]} />
+        <Segmented bind:value={historyView} tabs={[{ id: 'all', label: 'All' }, { id: 'failed', label: 'Failed', count: failed.length || undefined }]} />
       {/snippet}
       {#if history.length === 0}
         <Empty compact title="No failures" />
       {:else}
-        <div class="overflow-x-auto">
+        <div class="tbl-wrap">
           <table class="tbl">
             <thead><tr><th>Instance</th><th>Model</th><th>State</th><th>Runtime</th><th class="num">Memory</th><th>Slot</th><th>Ended</th><th></th></tr></thead>
             <tbody>
@@ -188,7 +191,7 @@
                   <td class="font-mono text-xs text-fg-muted">{i.slotId ? slotName(i.slotId) : '–'}</td>
                   <td class="text-fg-muted whitespace-nowrap" title={when(i.stoppedAt ?? i.createdAt)}>{ago(i.stoppedAt ?? i.createdAt, clock.now)}</td>
                   <td class="actions" onclick={(e) => e.stopPropagation()}>
-                    <span>{#if i.request}<IconButton size="sm" icon={RotateCcw} label="Run again" onclick={() => launch({ ...i.request! })} />{/if}</span>
+                    <span>{#if i.request}<IconButton size="xs" icon={RotateCcw} label="Run again" onclick={() => launch({ ...i.request! })} />{/if}</span>
                   </td>
                 </tr>
               {/each}

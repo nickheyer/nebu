@@ -42,7 +42,7 @@
   {/snippet}
 </PageHeader>
 
-<div class="overflow-x-auto">
+<div class="tbl-wrap">
     {#if loading}
       <table class="tbl">
         {@render head()}
@@ -79,7 +79,7 @@
               <td class="num text-fg-muted">{t.startedAt ? duration(t.startedAt, t.finishedAt, clock.now) : '–'}</td>
               <td class="num text-fg-muted" title={when(t.createdAt)}>{ago(t.createdAt, clock.now)}</td>
               <td class="actions" onclick={(e) => e.stopPropagation()}>
-                <span>{#if running}<IconButton size="sm" icon={Ban} label="Cancel" onclick={() => cancel(t)} />{/if}</span>
+                <span>{#if running}<IconButton size="xs" icon={Ban} label="Cancel" onclick={() => cancel(t)} />{/if}</span>
               </td>
             </tr>
           {/each}

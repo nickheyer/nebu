@@ -7,13 +7,13 @@
     icon,
     label,
     armed: armedLabel,
-    size = 'sm',
+    size = 'xs',
     compact = false,
     loading = false,
     disabled = false,
     onconfirm,
     class: cls = ''
-  }: { icon?: Component<any>; label: string; armed: string; size?: 'sm' | 'md'; compact?: boolean; loading?: boolean; disabled?: boolean; onconfirm: () => void; class?: string } = $props();
+  }: { icon?: Component<any>; label: string; armed: string; size?: 'xs' | 'sm' | 'md'; compact?: boolean; loading?: boolean; disabled?: boolean; onconfirm: () => void; class?: string } = $props();
 
   let armed = $state(false);
   let timer: ReturnType<typeof setTimeout> | undefined;

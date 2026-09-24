@@ -33,7 +33,7 @@
   const share = (m: Meter, label: string) => m.items.filter((i) => i.label === label).reduce((a, i) => a + n(i.size), 0);
   const tone = (label: string): Tone => meters.flatMap((m) => m.items).find((i) => i.label === label)?.tone ?? 'accent';
   const dots: Record<Tone, string> = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad', info: 'text-info', accent: 'text-accent', neutral: 'text-fg-faint' };
-  const columns = $derived(5 + shares.length);
+  const columns = $derived(4 + shares.length);
 
   function toggle(id: string) {
     if (open.has(id)) open.delete(id);
@@ -41,16 +41,15 @@
   }
 </script>
 
-<div class="@container overflow-x-auto">
+<div class="tbl-wrap @container">
   <table class="tbl table-fixed">
     <thead>
       <tr>
-        <th class="w-40 @3xl:w-64 @4xl:w-80">{name}</th>
-        <th class="w-32 @3xl:w-48 @5xl:w-72">{bar}</th>
-        <th class="num w-28 @5xl:w-36">Used</th>
-        <th class="num w-24 @5xl:w-32">Free</th>
-        {#each shares as s (s)}<th class="num w-24 @5xl:w-32">{s}</th>{/each}
-        <th></th>
+        <th class="w-56 @3xl:w-72 @5xl:w-96">{name}</th>
+        <th>{bar}</th>
+        <th class="num w-28">Used</th>
+        <th class="num w-24">Free</th>
+        {#each shares as s (s)}<th class="num w-28">{s}</th>{/each}
       </tr>
     </thead>
     <tbody>
@@ -84,7 +83,6 @@
               {#if v > 0}<span class="inline-flex items-center gap-1.5"><span class="dot {dots[tone(s)]}"></span>{format(m)(v)}</span>{:else}<span class="text-fg-faint">–</span>{/if}
             </td>
           {/each}
-          <td></td>
         </tr>
         {#if opened}
           <tr>

@@ -38,7 +38,7 @@
 {:else if runtimes.length === 0}
   <Empty icon={Cpu} title="No runtimes available" />
 {:else}
-  <div class="overflow-x-auto">
+  <div class="tbl-wrap">
     <table class="tbl">
       {@render head()}
       <tbody>
@@ -73,7 +73,7 @@
               <td class="actions" onclick={(e) => e.stopPropagation()}>
                 <span>
                   {#if s.compatible && installs.length === 0 && !installing}
-                    <Button size="sm" icon={Download} href="/runtimes/{rt.id}">Install</Button>
+                    <Button size="xs" icon={Download} href="/runtimes/{rt.id}">Install</Button>
                   {/if}
                 </span>
               </td>

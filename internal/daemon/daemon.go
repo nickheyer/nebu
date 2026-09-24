@@ -17,6 +17,7 @@ import (
 	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/bots"
 	"github.com/nickheyer/nebu/internal/calibrate"
+	"github.com/nickheyer/nebu/internal/chats"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/doctor"
 	"github.com/nickheyer/nebu/internal/gateway"
@@ -81,6 +82,8 @@ type Daemon struct {
 	Gateway   *gateway.Gateway
 	Routes    *gateway.Table
 	Bots      *bots.Manager
+	// Saved web chat conversations
+	Chats *chats.Manager
 	// Browser sessions, nil when auth.disabled is set
 	Sessions *auth.Sessions
 	// Local accounts, nil when single sign-on replaces them or auth is off
@@ -289,6 +292,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	if err = d.Bots.Load(context.Background()); err != nil {
 		return nil, err
 	}
+	d.Chats = &chats.Manager{DB: store, Log: log}
 	var ui http.Handler
 	if !cfg.GetWeb().GetDisabled() {
 		ui = web.Handler()
@@ -310,6 +314,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		Slots:     d.Slots,
 		Gateway:   d.Gateway,
 		Bots:      d.Bots,
+		Chats:     d.Chats,
 		// The gateway shares the API listener unless config gives it one
 		GatewayShared: cfg.GetGateway().GetListen() == "",
 		Events:        bus,
@@ -529,6 +534,16 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 			}
 			return err
 		}
+	}
+	// Aliases of instances outside slots outlive a restart
+	for _, r := range d.Routes.Prune(func(r *v1.Route) bool {
+		if r.GetSlotId() != "" {
+			return true
+		}
+		in, err := d.Instances.Get(r.GetInstanceId())
+		return err == nil && !instances.Terminal(in.GetState())
+	}) {
+		d.Log.Info("dropped route of an instance that did not survive the restart", "route", r.GetName(), "instance", r.GetInstanceId())
 	}
 	// Keep the notifier active for the daemon's lifetime.
 	d.background.Add(1)

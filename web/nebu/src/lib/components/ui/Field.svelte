@@ -14,11 +14,11 @@
 </script>
 
 <div class="flex min-w-0 flex-col gap-1.5 {cls}">
-  <div class="flex min-w-0 flex-col">
-    <label for={id} class="text-[13px] font-medium text-fg">{label}{#if required}<span class="ml-0.5 text-bad" aria-hidden="true">*</span>{/if}</label>
-    {#if sub}<span class="min-w-0 truncate">{@render sub()}</span>{/if}
-    {#if description}<p class="text-xs leading-5 text-fg-muted">{description}</p>{/if}
+  <div class="flex min-w-0 items-baseline justify-between gap-3">
+    <label for={id} class="shrink-0 text-[13px] leading-5 font-medium text-fg">{label}{#if required}<span class="ml-0.5 text-bad" aria-hidden="true">*</span>{/if}</label>
+    {#if error}<span class="min-w-0 truncate text-xs leading-5 text-bad" role="alert" title={error}>{error}</span>{/if}
   </div>
   {@render children()}
-  {#if error}<p class="text-xs text-bad">{error}</p>{/if}
+  {#if description}<p class="text-xs leading-5 text-fg-muted">{description}</p>{/if}
+  {#if sub}<div class="min-w-0 truncate text-xs leading-5 text-fg-faint">{@render sub()}</div>{/if}
 </div>

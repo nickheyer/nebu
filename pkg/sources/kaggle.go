@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
@@ -235,21 +236,30 @@ func kgParse(repo, revision string) (kgLocator, error) {
 	return l, nil
 }
 
+// How long a model or instance answer is kept, so the calls one page makes share it
+const kgDetailTTL = 10 * time.Minute
+
 // Fetches a model with its instances
 func kgGetModel(ctx context.Context, c *Client, l kgLocator) (kgModel, error) {
-	var it kgModel
-	_, err := c.JSON(ctx, c.URL("api", "v1", "models", l.modelRepo(), "get"), nil, &it)
-	if it.Ref == "" {
-		it.Ref = l.modelRepo()
-	}
-	return it, err
+	memo := Cached(c, "kaggle-model:"+l.modelRepo(), func() *Memo[kgModel] { return &Memo[kgModel]{TTL: kgDetailTTL} })
+	return memo.Get(ctx, func(ctx context.Context) (kgModel, error) {
+		var it kgModel
+		_, err := c.JSON(ctx, c.URL("api", "v1", "models", l.modelRepo(), "get"), nil, &it)
+		if it.Ref == "" {
+			it.Ref = l.modelRepo()
+		}
+		return it, err
+	})
 }
 
 // Fetches one instance with its latest version number
 func kgGetInstance(ctx context.Context, c *Client, l kgLocator) (kgInstance, error) {
-	var in kgInstance
-	_, err := c.JSON(ctx, c.URL("api", "v1", "models", l.repo(), "get"), nil, &in)
-	return in, err
+	memo := Cached(c, "kaggle-instance:"+l.repo(), func() *Memo[kgInstance] { return &Memo[kgInstance]{TTL: kgDetailTTL} })
+	return memo.Get(ctx, func(ctx context.Context) (kgInstance, error) {
+		var in kgInstance
+		_, err := c.JSON(ctx, c.URL("api", "v1", "models", l.repo(), "get"), nil, &in)
+		return in, err
+	})
 }
 
 // Fills in the first instance and the latest version when the locator leaves them open

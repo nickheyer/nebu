@@ -3,13 +3,13 @@
   import { figure, modeKey, namedChoice, type Capabilities } from '$lib/generate';
   import Field from '$lib/components/ui/Field.svelte';
   import Select from '$lib/components/ui/Select.svelte';
-  import Switch from '$lib/components/ui/Switch.svelte';
   import NumberInput from '$lib/components/ui/NumberInput.svelte';
   import RangeInput from '$lib/components/ui/RangeInput.svelte';
   import TextInput from '$lib/components/ui/TextInput.svelte';
   import TextArea from '$lib/components/ui/TextArea.svelte';
   import IconButton from '$lib/components/ui/IconButton.svelte';
   import Disclosure from '$lib/components/ui/Disclosure.svelte';
+  import SwitchRow from '$lib/components/ui/SwitchRow.svelte';
 
   // Empty fields use model defaults and are omitted from the request.
   export interface MediaForm {
@@ -142,15 +142,9 @@
       <Field label="LoRAs" for="gen-loras" description={loraNames.length ? `Available: ${loraNames.join(', ')}. Use name:weight or high:name:weight for the high noise stage.` : "Use name:weight from the runtime's LoRA directory. Prefix with high: for the high noise stage."}>
         <TextInput id="gen-loras" mono bind:value={form.loras} empty={loraNames.length ? `${loraNames[0]}:0.8` : 'name:0.8, high:other:1'} />
       </Field>
-      <div class="flex items-center justify-between gap-4 rounded-md border border-line px-3 py-2.5">
-        <div class="text-[13px] font-medium text-fg">VAE tiling</div>
-        <Switch bind:checked={form.vaeTiling} label="VAE tiling" />
-      </div>
+      <SwitchRow bind:checked={form.vaeTiling} label="VAE tiling" />
       {#if mode === 'video'}
-        <div class="flex items-center justify-between gap-4 rounded-md border border-line px-3 py-2.5">
-          <div class="text-[13px] font-medium text-fg">Temporal tiling</div>
-          <Switch bind:checked={form.temporalTiling} label="Temporal tiling" />
-        </div>
+        <SwitchRow bind:checked={form.temporalTiling} label="Temporal tiling" />
       {/if}
     </div>
   </Disclosure>

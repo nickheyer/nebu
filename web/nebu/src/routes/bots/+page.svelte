@@ -81,7 +81,7 @@
     </div>
   </Empty>
 {:else}
-  <div class="overflow-x-auto">
+  <div class="tbl-wrap">
     <table class="tbl">
       {@render head()}
       <tbody>

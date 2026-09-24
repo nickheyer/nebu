@@ -340,12 +340,18 @@ func civDigits(s string) bool {
 	return true
 }
 
+// How long a model's detail is kept, so the calls one page makes share it
+const civDetailTTL = 10 * time.Minute
+
 func civGet(ctx context.Context, c *Client, id string) (*civModel, error) {
-	var m civModel
-	if _, err := c.JSON(ctx, c.URL("api", "v1", "models", id), nil, &m); err != nil {
-		return nil, err
-	}
-	return &m, nil
+	memo := Cached(c, "civitai-model:"+id, func() *Memo[*civModel] { return &Memo[*civModel]{TTL: civDetailTTL} })
+	return memo.Get(ctx, func(ctx context.Context) (*civModel, error) {
+		var m civModel
+		if _, err := c.JSON(ctx, c.URL("api", "v1", "models", id), nil, &m); err != nil {
+			return nil, err
+		}
+		return &m, nil
+	})
 }
 
 // Picks a version by id, then by name, else the first
