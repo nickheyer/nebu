@@ -270,17 +270,28 @@ func dataURL(u string) (string, string, bool) {
 func promptText(c *Chat) string {
 	var b strings.Builder
 	for _, t := range c.Tools {
-		b.WriteString(t.Name + " " + t.Description + " " + string(t.Schema) + "\n")
+		b.WriteString(t.Name)
+		b.WriteString(" ")
+		b.WriteString(t.Description)
+		b.WriteString(" ")
+		b.WriteString(string(t.Schema))
+		b.WriteString("\n")
 	}
 	for _, m := range c.Messages {
-		b.WriteString(m.Role + ": " + textOf(m.Parts))
+		b.WriteString(m.Role)
+		b.WriteString(": ")
+		b.WriteString(textOf(m.Parts))
 		for _, t := range m.ToolCalls {
-			b.WriteString(" " + t.Name + " " + t.Args)
+			b.WriteString(" ")
+			b.WriteString(t.Name)
+			b.WriteString(" ")
+			b.WriteString(t.Args)
 		}
 		b.WriteString("\n")
 	}
 	for _, in := range c.Inputs {
-		b.WriteString(in + "\n")
+		b.WriteString(in)
+		b.WriteString("\n")
 	}
 	return b.String()
 }
