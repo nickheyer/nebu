@@ -3,9 +3,12 @@ package gateway
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"time"
+
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 const (
@@ -20,14 +23,32 @@ const (
 	ollamaVersion    = "/api/version"
 )
 
-// Ollama protocol, using newline-delimited JSON for streams.
+// Ollama protocol
 type ollama struct{}
 
 type olMessage struct {
-	Role      string       `json:"role"`
-	Content   string       `json:"content"`
-	Images    []string     `json:"images,omitempty"`
-	ToolCalls []olToolCall `json:"tool_calls,omitempty"`
+	Role      string                     `json:"role"`
+	Content   string                     `json:"content"`
+	Thinking  string                     `json:"thinking,omitempty"`
+	Images    []string                   `json:"images,omitempty"`
+	ToolCalls []olToolCall               `json:"tool_calls,omitempty"`
+	Extra     map[string]json.RawMessage `json:"-"`
+}
+
+func (m *olMessage) UnmarshalJSON(data []byte) error {
+	type plain olMessage
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*m = olMessage(p)
+	m.Extra = extraFields(data, plain{})
+	return nil
+}
+
+func (m olMessage) MarshalJSON() ([]byte, error) {
+	type plain olMessage
+	return withExtra(plain(m), m.Extra)
 }
 
 type olToolCall struct {
@@ -46,28 +67,63 @@ type olOptions struct {
 }
 
 type olRequest struct {
-	Model    string          `json:"model"`
-	Messages []olMessage     `json:"messages,omitempty"`
-	Prompt   string          `json:"prompt,omitempty"`
-	System   string          `json:"system,omitempty"`
-	Images   []string        `json:"images,omitempty"`
-	Input    json.RawMessage `json:"input,omitempty"`
-	Stream   *bool           `json:"stream,omitempty"`
-	Options  *olOptions      `json:"options,omitempty"`
-	Tools    []oaiTool       `json:"tools,omitempty"`
+	Model    string                     `json:"model"`
+	Messages []olMessage                `json:"messages,omitempty"`
+	Prompt   string                     `json:"prompt,omitempty"`
+	System   string                     `json:"system,omitempty"`
+	Images   []string                   `json:"images,omitempty"`
+	Input    json.RawMessage            `json:"input,omitempty"`
+	Stream   *bool                      `json:"stream,omitempty"`
+	Options  *olOptions                 `json:"options,omitempty"`
+	Tools    []oaiTool                  `json:"tools,omitempty"`
+	Extra    map[string]json.RawMessage `json:"-"`
+}
+
+func (r *olRequest) UnmarshalJSON(data []byte) error {
+	type plain olRequest
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*r = olRequest(p)
+	r.Extra = extraFields(data, plain{})
+	return nil
+}
+
+func (r olRequest) MarshalJSON() ([]byte, error) {
+	type plain olRequest
+	return withExtra(plain(r), r.Extra)
 }
 
 type olResponse struct {
-	Model           string      `json:"model"`
-	CreatedAt       string      `json:"created_at"`
-	Message         *olMessage  `json:"message,omitempty"`
-	Response        *string     `json:"response,omitempty"`
-	Done            bool        `json:"done"`
-	DoneReason      string      `json:"done_reason,omitempty"`
-	PromptEvalCount int         `json:"prompt_eval_count,omitempty"`
-	EvalCount       int         `json:"eval_count,omitempty"`
-	Embeddings      [][]float64 `json:"embeddings,omitempty"`
-	Embedding       []float64   `json:"embedding,omitempty"`
+	Model           string                     `json:"model"`
+	CreatedAt       string                     `json:"created_at"`
+	Message         *olMessage                 `json:"message,omitempty"`
+	Response        *string                    `json:"response,omitempty"`
+	Done            bool                       `json:"done"`
+	DoneReason      string                     `json:"done_reason,omitempty"`
+	PromptEvalCount int                        `json:"prompt_eval_count,omitempty"`
+	EvalCount       int                        `json:"eval_count,omitempty"`
+	Embeddings      [][]float64                `json:"embeddings,omitempty"`
+	Embedding       []float64                  `json:"embedding,omitempty"`
+	Error           string                     `json:"error,omitempty"`
+	Extra           map[string]json.RawMessage `json:"-"`
+}
+
+func (r *olResponse) UnmarshalJSON(data []byte) error {
+	type plain olResponse
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*r = olResponse(p)
+	r.Extra = extraFields(data, plain{})
+	return nil
+}
+
+func (r olResponse) MarshalJSON() ([]byte, error) {
+	type plain olResponse
+	return withExtra(plain(r), r.Extra)
 }
 
 func (ollama) ParseRequest(path string, body []byte) (*Chat, error) {
@@ -76,7 +132,7 @@ func (ollama) ParseRequest(path string, body []byte) (*Chat, error) {
 		return nil, bad("%v", err)
 	}
 	// Ollama streams unless told not to
-	c := &Chat{Kind: "chat", Model: req.Model, Stream: req.Stream == nil || *req.Stream}
+	c := &Chat{Kind: "chat", Format: v1.ApiFlavor_API_FLAVOR_OLLAMA, Model: req.Model, Stream: req.Stream == nil || *req.Stream, Extra: req.Extra}
 	if o := req.Options; o != nil {
 		c.Temperature, c.TopP, c.TopK, c.MaxTokens, c.Stop = o.Temperature, o.TopP, o.TopK, o.NumPredict, strs(o.Stop)
 	}
@@ -115,7 +171,13 @@ func (ollama) ParseRequest(path string, body []byte) (*Chat, error) {
 	// Ollama has no call IDs. Match tool results to preceding calls in order.
 	var pending []string
 	for _, m := range req.Messages {
-		msg := Message{Role: m.Role}
+		msg := Message{Role: m.Role, Extra: m.Extra}
+		if m.Thinking != "" {
+			if m.Role != "assistant" {
+				return nil, bad("thinking belongs in assistant turns, not %s turns", m.Role)
+			}
+			msg.Parts = append(msg.Parts, Part{Type: "thinking", Text: m.Thinking})
+		}
 		if m.Content != "" {
 			msg.Parts = append(msg.Parts, Part{Type: "text", Text: m.Content})
 		}
@@ -141,7 +203,8 @@ func (ollama) RenderRequest(c *Chat) (string, []byte, error) {
 	if c.Kind == "count" {
 		return "", nil, bad("the ollama flavor has no token count endpoint")
 	}
-	req := olRequest{Model: c.Model, Stream: ptr(c.Stream)}
+	// Ollama skips fields it does not know, so every field the gateway does not map goes through.
+	req := olRequest{Model: c.Model, Stream: ptr(c.Stream), Extra: c.Extra}
 	if c.Temperature != nil || c.TopP != nil || c.TopK != nil || c.MaxTokens > 0 || len(c.Stop) > 0 {
 		req.Options = &olOptions{Temperature: c.Temperature, TopP: c.TopP, TopK: c.TopK, NumPredict: c.MaxTokens}
 		if len(c.Stop) > 0 {
@@ -155,16 +218,27 @@ func (ollama) RenderRequest(c *Chat) (string, []byte, error) {
 		return ollamaEmbed, data, err
 	}
 	for _, m := range c.Messages {
-		msg := olMessage{Role: m.Role, Content: textOf(m.Parts)}
+		msg := olMessage{Role: m.Role, Content: textOf(m.Parts), Extra: m.Extra}
+		if m.Role == "assistant" {
+			msg.Thinking = thinkingOf(m.Parts)
+		}
 		for _, p := range m.Parts {
 			if p.Type == "image" && p.Data != "" {
 				msg.Images = append(msg.Images, p.Data)
 			}
 		}
-		msg.ToolCalls = olToolCalls(m.ToolCalls)
+		calls, broken := olToolCalls(m.ToolCalls)
+		if broken != "" {
+			return "", nil, bad("tool call %s has arguments that are not a JSON object", broken)
+		}
+		msg.ToolCalls = calls
 		req.Messages = append(req.Messages, msg)
 	}
-	req.Tools = toolsToOAI(c.Tools)
+	tools, err := toolsToOAI(c.Tools)
+	if err != nil {
+		return "", nil, err
+	}
+	req.Tools = tools
 	data, err := json.Marshal(req)
 	return ollamaChat, data, err
 }
@@ -196,7 +270,10 @@ func (ollama) ParseResult(c *Chat, body []byte) (*Result, error) {
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, err
 	}
-	r := &Result{Model: resp.Model, In: resp.PromptEvalCount, Out: resp.EvalCount, Vectors: resp.Embeddings, Stop: olStop(resp.DoneReason)}
+	if resp.Error != "" {
+		return nil, &upstreamRefusal{status: http.StatusBadGateway, message: resp.Error}
+	}
+	r := &Result{Model: resp.Model, In: resp.PromptEvalCount, Out: resp.EvalCount, Vectors: resp.Embeddings, Stop: olStop(resp.DoneReason), Extra: resp.Extra}
 	if len(resp.Embedding) > 0 {
 		r.Vectors = [][]float64{resp.Embedding}
 	}
@@ -212,29 +289,38 @@ func (ollama) ParseResult(c *Chat, body []byte) (*Result, error) {
 
 func olNow() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
-func olToolCalls(calls []ToolCall) []olToolCall {
+// Renders calls, or names the first whose arguments are not a JSON object.
+func olToolCalls(calls []ToolCall) ([]olToolCall, string) {
 	var out []olToolCall
 	for _, t := range calls {
+		args, ok := jsonArgs(t.Args)
+		if !ok {
+			return nil, t.Name
+		}
 		tc := olToolCall{}
-		tc.Function.Name, tc.Function.Arguments = t.Name, jsonArgs(t.Args)
+		tc.Function.Name, tc.Function.Arguments = t.Name, args
 		out = append(out, tc)
 	}
-	return out
+	return out, ""
 }
 
 func (ollama) RenderResult(c *Chat, r *Result) ([]byte, error) {
 	if c.Kind == "embed" {
-		resp := olResponse{Model: r.Model, Embeddings: r.Vectors, PromptEvalCount: r.In}
+		resp := olResponse{Model: r.Model, Embeddings: r.Vectors, PromptEvalCount: r.In, Extra: r.Extra}
 		if len(r.Vectors) > 0 {
 			resp.Embedding = r.Vectors[0]
 		}
 		return json.Marshal(resp)
 	}
-	resp := olResponse{Model: r.Model, CreatedAt: olNow(), Done: true, DoneReason: olReason(r.Stop), PromptEvalCount: r.In, EvalCount: r.Out}
+	resp := olResponse{Model: r.Model, CreatedAt: olNow(), Done: true, DoneReason: olReason(r.Stop), PromptEvalCount: r.In, EvalCount: r.Out, Extra: r.Extra}
 	if c.Kind == "generate" {
 		resp.Response = ptr(r.Text)
 	} else {
-		resp.Message = &olMessage{Role: "assistant", Content: r.Text, ToolCalls: olToolCalls(r.ToolCalls)}
+		calls, broken := olToolCalls(r.ToolCalls)
+		if broken != "" {
+			return nil, &toolArgsError{name: broken}
+		}
+		resp.Message = &olMessage{Role: "assistant", Content: r.Text, ToolCalls: calls}
 	}
 	return json.Marshal(resp)
 }
@@ -254,6 +340,10 @@ func (ollama) ParseStream(rd io.Reader, emit func(Event) error) error {
 		if err := json.Unmarshal(line, &chunk); err != nil {
 			return err
 		}
+		if chunk.Error != "" {
+			return errors.New(chunk.Error)
+		}
+		final.Extra = mergeExtra(final.Extra, chunk.Extra)
 		if !started {
 			started = true
 			final.Model = chunk.Model
@@ -324,19 +414,17 @@ func (s *olStream) flushTool() error {
 		return nil
 	}
 	call := *s.tools.calls[*s.open]
-	if call.Args == "" {
-		call.Args = "{}"
-	}
 	s.open = nil
-	return s.line(olResponse{Message: &olMessage{Role: "assistant", ToolCalls: olToolCalls([]ToolCall{call})}})
+	calls, broken := olToolCalls([]ToolCall{call})
+	if broken != "" {
+		return &toolArgsError{name: broken}
+	}
+	return s.line(olResponse{Message: &olMessage{Role: "assistant", ToolCalls: calls}})
 }
 
 func (s *olStream) Write(ev Event) error {
 	switch ev.Kind {
 	case "start":
-		if ev.Res != nil && ev.Res.Model != "" {
-			s.model = ev.Res.Model
-		}
 	case "text":
 		if err := s.flushTool(); err != nil {
 			return err
@@ -361,7 +449,7 @@ func (s *olStream) Write(ev Event) error {
 		if res == nil {
 			res = &Result{}
 		}
-		resp := olResponse{Done: true, DoneReason: olReason(res.Stop), PromptEvalCount: res.In, EvalCount: res.Out}
+		resp := olResponse{Done: true, DoneReason: olReason(res.Stop), PromptEvalCount: res.In, EvalCount: res.Out, Extra: res.Extra}
 		if s.c.Kind == "generate" {
 			resp.Response = ptr("")
 		} else {

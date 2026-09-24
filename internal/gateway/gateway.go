@@ -523,8 +523,9 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	rp.ServeHTTP(w, r)
 }
 
-// Sends a rendered request with policy timeouts.
-func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []byte, stream bool, policy *v1.Policy) (*http.Response, context.CancelFunc, error) {
+// Sends a rendered request with policy timeouts. The client's capability and
+// session headers go with it.
+func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []byte, stream bool, policy *v1.Policy, from http.Header) (*http.Response, context.CancelFunc, error) {
 	cancel := context.CancelFunc(func() {})
 	if d := policy.GetRequestTimeoutMs(); d > 0 {
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(d)*time.Millisecond)
@@ -534,6 +535,7 @@ func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []
 		cancel()
 		return nil, nil, err
 	}
+	forwardHeaders(req.Header, from)
 	req.Header.Set("Content-Type", "application/json")
 	if stream {
 		req.Header.Set("Accept", "text/event-stream, application/x-ndjson, application/json")
@@ -544,6 +546,25 @@ func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []
 		return nil, nil, err
 	}
 	return resp, cancel, nil
+}
+
+// Copies the headers a client uses to announce capabilities and identify its
+// session, as they are. The credential headers stay with the gateway.
+func forwardHeaders(to, from http.Header) {
+	for name, values := range from {
+		if strings.HasPrefix(name, "Anthropic-") || strings.HasPrefix(name, "X-Claude-Code-") {
+			to[name] = append([]string(nil), values...)
+		}
+	}
+}
+
+// Copies the headers a client reads for retries and usage limits
+func relayHeaders(to, from http.Header) {
+	for name, values := range from {
+		if strings.HasPrefix(name, "Anthropic-") || name == "Retry-After" || name == "X-Should-Retry" {
+			to[name] = append([]string(nil), values...)
+		}
+	}
 }
 
 // Translates requests and responses between protocols.
@@ -575,7 +596,9 @@ func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, 
 		return
 	}
 	t.UpstreamRequest = capped(out)
-	resp, cancel, err := g.send(r.Context(), target, path, out, chat.Stream, policy)
+
+	chat.Model = name
+	resp, cancel, err := g.send(r.Context(), target, path, out, chat.Stream, policy, r.Header)
 	if err != nil {
 		g.upstreamError(w, t, client, name, err)
 		return
@@ -583,13 +606,16 @@ func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, 
 	defer cancel()
 	defer resp.Body.Close()
 	t.FirstByteAt = timestamppb.Now()
+	relayHeaders(w.Header(), resp.Header)
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 		message := upstream.ErrorMessage(raw)
 		if message == "" {
 			message = strings.TrimSpace(string(raw))
 		}
-		g.refuse(w, client, resp.StatusCode, "upstream: "+message, "upstream_error")
+		// The runtime's own words reach the client, which matches on them to recover.
+		t.Error = "upstream: " + message
+		client.Error(w, resp.StatusCode, message, errorKind(resp.StatusCode, raw))
 		return
 	}
 	sink := &traceSink{t: t}
@@ -597,8 +623,20 @@ func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, 
 	if chat.Stream {
 		sw := tracedStream{StreamWriter: client.Stream(w, chat), sink: sink}
 		if err := upstream.ParseStream(resp.Body, sw.Write); err != nil {
-			g.log.Warn("gateway stream", "model", name, "err", err)
-			sw.Write(Event{Kind: "error", Text: "upstream: " + err.Error()})
+			switch {
+			case r.Context().Err() != nil:
+				// The client hung up. There is no one left to tell.
+				t.Stop, t.Error = "cancelled", "client went away"
+				g.log.Info("gateway stream", "model", name, "err", t.Error)
+			case errors.Is(err, context.DeadlineExceeded):
+				message := fmt.Sprintf("model %s did not answer within its timeout", name)
+				g.log.Warn("gateway stream", "model", name, "err", message)
+				sw.Write(Event{Kind: "error", Text: message})
+			default:
+				g.log.Warn("gateway stream", "model", name, "err", err)
+				t.Error = "upstream: " + err.Error()
+				sw.Write(Event{Kind: "error", Text: err.Error()})
+			}
 		}
 		sw.Close()
 		return
@@ -610,6 +648,11 @@ func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, 
 	}
 	res, err := upstream.ParseResult(chat, raw)
 	if err != nil {
+		if refusal, ok := errors.AsType[*upstreamRefusal](err); ok {
+			t.Error = "upstream: " + refusal.message
+			client.Error(w, refusal.status, refusal.message, errorKind(refusal.status, raw))
+			return
+		}
 		g.refuse(w, client, http.StatusBadGateway, "upstream answered in a shape the gateway could not read: "+err.Error(), "server_error")
 		return
 	}
@@ -619,11 +662,16 @@ func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, 
 	g.answer(w, client, chat, res)
 }
 
-// Writes a complete response in the client's format.
-func (g *Gateway) answer(w http.ResponseWriter, client Flavor, chat *Chat, res *Result) {
+// Writes a complete response in the client's format
+func (g *Gateway) answer(w *traceWriter, client Flavor, chat *Chat, res *Result) {
 	answer, err := client.RenderResult(chat, res)
 	if err != nil {
-		client.Error(w, http.StatusInternalServerError, err.Error(), "server_error")
+		var args *toolArgsError
+		if errors.As(err, &args) {
+			g.refuse(w, client, http.StatusBadGateway, "upstream: "+err.Error(), "upstream_error")
+			return
+		}
+		g.refuse(w, client, http.StatusInternalServerError, err.Error(), "server_error")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -649,7 +697,7 @@ func (g *Gateway) upstreamError(w http.ResponseWriter, t *v1.Trace, client Flavo
 // Uses the runtime tokenizer when available, otherwise estimates tokens.
 func (g *Gateway) count(w *traceWriter, r *http.Request, chat *Chat, name string, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
 	res := &Result{Model: name}
-	n, err := g.countUpstream(r.Context(), chat, target, policy, upstream)
+	n, err := g.countUpstream(r.Context(), chat, target, policy, upstream, r.Header)
 	if err != nil {
 		g.log.Debug("gateway count estimated", "model", name, "err", err)
 		n = estimateTokens(chat)
@@ -661,12 +709,12 @@ func (g *Gateway) count(w *traceWriter, r *http.Request, chat *Chat, name string
 	g.answer(w, client, chat, res)
 }
 
-func (g *Gateway) countUpstream(ctx context.Context, chat *Chat, target *url.URL, policy *v1.Policy, upstream Flavor) (int, error) {
+func (g *Gateway) countUpstream(ctx context.Context, chat *Chat, target *url.URL, policy *v1.Policy, upstream Flavor, from http.Header) (int, error) {
 	path, out, err := upstream.RenderRequest(chat)
 	if err != nil {
 		return 0, err
 	}
-	resp, cancel, err := g.send(ctx, target, path, out, false, policy)
+	resp, cancel, err := g.send(ctx, target, path, out, false, policy, from)
 	if err != nil {
 		return 0, err
 	}

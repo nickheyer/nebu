@@ -52,11 +52,10 @@ func foldSystem(c *Chat, mode v1.SystemMessages) {
 	}
 }
 
-// Combines text-only parts for templates that read only the first part.
-// Appends a separate text part when other content is present.
+// Combines plain text parts for templates
 func appendText(parts []Part, text string) []Part {
 	for _, p := range parts {
-		if p.Type != "text" {
+		if p.Type != "text" || len(p.Extra) > 0 {
 			return append(parts, Part{Type: "text", Text: systemJoin + text})
 		}
 	}

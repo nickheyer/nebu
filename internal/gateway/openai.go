@@ -2,10 +2,13 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 const (
@@ -16,7 +19,7 @@ const (
 	openaiTokenize = "/tokenize"
 )
 
-// OpenAI protocol adapter.
+// OpenAI protocol adapter
 type openai struct{}
 
 type oaiMessage struct {
@@ -25,6 +28,25 @@ type oaiMessage struct {
 	Name       string          `json:"name,omitempty"`
 	ToolCalls  []oaiToolCall   `json:"tool_calls,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
+	// Reasoning in assistant turns, as llama.cpp and vLLM name it.
+	ReasoningContent string                     `json:"reasoning_content,omitempty"`
+	Extra            map[string]json.RawMessage `json:"-"`
+}
+
+func (m *oaiMessage) UnmarshalJSON(data []byte) error {
+	type plain oaiMessage
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*m = oaiMessage(p)
+	m.Extra = extraFields(data, plain{})
+	return nil
+}
+
+func (m oaiMessage) MarshalJSON() ([]byte, error) {
+	type plain oaiMessage
+	return withExtra(plain(m), m.Extra)
 }
 
 type oaiToolCall struct {
@@ -35,6 +57,39 @@ type oaiToolCall struct {
 		Name      string `json:"name,omitempty"`
 		Arguments string `json:"arguments,omitempty"`
 	} `json:"function"`
+}
+
+// A content part: text or an image URL
+type oaiPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL string `json:"url"`
+	} `json:"image_url,omitempty"`
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+func (p *oaiPart) UnmarshalJSON(data []byte) error {
+	type plain oaiPart
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*p = oaiPart(v)
+	p.Extra = extraFields(data, plain{})
+	return nil
+}
+
+// Writes the field its type calls for, so a text part always carries text.
+func (p oaiPart) MarshalJSON() ([]byte, error) {
+	fields := map[string]any{"type": p.Type}
+	switch p.Type {
+	case "text":
+		fields["text"] = p.Text
+	case "image_url":
+		fields["image_url"] = p.ImageURL
+	}
+	return withExtra(fields, p.Extra)
 }
 
 type oaiRequest struct {
@@ -51,17 +106,71 @@ type oaiRequest struct {
 	StreamOptions       *struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options,omitempty"`
-	Tools      []oaiTool       `json:"tools,omitempty"`
-	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
+	Tools      []oaiTool                  `json:"tools,omitempty"`
+	ToolChoice json.RawMessage            `json:"tool_choice,omitempty"`
+	Extra      map[string]json.RawMessage `json:"-"`
+}
+
+func (r *oaiRequest) UnmarshalJSON(data []byte) error {
+	type plain oaiRequest
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*r = oaiRequest(p)
+	r.Extra = extraFields(data, plain{})
+	return nil
+}
+
+func (r oaiRequest) MarshalJSON() ([]byte, error) {
+	type plain oaiRequest
+	return withExtra(plain(r), r.Extra)
+}
+
+type oaiFunction struct {
+	Name        string                     `json:"name"`
+	Description string                     `json:"description,omitempty"`
+	Parameters  json.RawMessage            `json:"parameters,omitempty"`
+	Strict      *bool                      `json:"strict,omitempty"`
+	Extra       map[string]json.RawMessage `json:"-"`
+}
+
+func (f *oaiFunction) UnmarshalJSON(data []byte) error {
+	type plain oaiFunction
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*f = oaiFunction(p)
+	f.Extra = extraFields(data, plain{})
+	return nil
+}
+
+func (f oaiFunction) MarshalJSON() ([]byte, error) {
+	type plain oaiFunction
+	return withExtra(plain(f), f.Extra)
 }
 
 type oaiTool struct {
-	Type     string `json:"type"`
-	Function struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description,omitempty"`
-		Parameters  json.RawMessage `json:"parameters,omitempty"`
-	} `json:"function"`
+	Type     string                     `json:"type"`
+	Function oaiFunction                `json:"function"`
+	Extra    map[string]json.RawMessage `json:"-"`
+}
+
+func (t *oaiTool) UnmarshalJSON(data []byte) error {
+	type plain oaiTool
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*t = oaiTool(p)
+	t.Extra = extraFields(data, plain{})
+	return nil
+}
+
+func (t oaiTool) MarshalJSON() ([]byte, error) {
+	type plain oaiTool
+	return withExtra(plain(t), t.Extra)
 }
 
 type oaiUsage struct {
@@ -88,6 +197,23 @@ type oaiResponse struct {
 	Data    []struct {
 		Embedding []float64 `json:"embedding"`
 	} `json:"data,omitempty"`
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+func (r *oaiResponse) UnmarshalJSON(data []byte) error {
+	type plain oaiResponse
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*r = oaiResponse(p)
+	r.Extra = extraFields(data, plain{})
+	return nil
+}
+
+func (r oaiResponse) MarshalJSON() ([]byte, error) {
+	type plain oaiResponse
+	return withExtra(plain(r), r.Extra)
 }
 
 func (openai) ParseRequest(path string, body []byte) (*Chat, error) {
@@ -95,7 +221,7 @@ func (openai) ParseRequest(path string, body []byte) (*Chat, error) {
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, bad("%v", err)
 	}
-	c := &Chat{Kind: "chat", Model: req.Model, MaxTokens: max(req.MaxTokens, req.MaxCompletionTokens), Temperature: req.Temperature, TopP: req.TopP, Stop: strs(req.Stop), Stream: req.Stream}
+	c := &Chat{Kind: "chat", Format: v1.ApiFlavor_API_FLAVOR_OPENAI, Model: req.Model, MaxTokens: max(req.MaxTokens, req.MaxCompletionTokens), Temperature: req.Temperature, TopP: req.TopP, Stop: strs(req.Stop), Stream: req.Stream, Extra: req.Extra}
 	switch path {
 	case openaiEmbeddings:
 		c.Kind, c.Inputs = "embed", strs(req.Input)
@@ -106,34 +232,18 @@ func (openai) ParseRequest(path string, body []byte) (*Chat, error) {
 		return c, nil
 	}
 	for _, m := range req.Messages {
-		msg := Message{Role: m.Role, ToolID: m.ToolCallID}
-		var text string
-		if json.Unmarshal(m.Content, &text) == nil {
-			if text != "" {
-				msg.Parts = []Part{{Type: "text", Text: text}}
+		msg := Message{Role: m.Role, ToolID: m.ToolCallID, Extra: m.Extra}
+		if m.ReasoningContent != "" {
+			if m.Role != "assistant" {
+				return nil, bad("reasoning_content belongs in assistant turns, not %s turns", m.Role)
 			}
-		} else {
-			var parts []struct {
-				Type     string `json:"type"`
-				Text     string `json:"text"`
-				ImageURL struct {
-					URL string `json:"url"`
-				} `json:"image_url"`
-			}
-			json.Unmarshal(m.Content, &parts)
-			for _, p := range parts {
-				switch p.Type {
-				case "text":
-					msg.Parts = append(msg.Parts, Part{Type: "text", Text: p.Text})
-				case "image_url":
-					part := Part{Type: "image", URL: p.ImageURL.URL}
-					if mt, data, ok := dataURL(p.ImageURL.URL); ok {
-						part.MediaType, part.Data, part.URL = mt, data, ""
-					}
-					msg.Parts = append(msg.Parts, part)
-				}
-			}
+			msg.Parts = append(msg.Parts, Part{Type: "thinking", Text: m.ReasoningContent})
 		}
+		parts, err := oaiParts(m.Content)
+		if err != nil {
+			return nil, err
+		}
+		msg.Parts = append(msg.Parts, parts...)
 		for _, t := range m.ToolCalls {
 			msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: t.ID, Name: t.Function.Name, Args: t.Function.Arguments})
 		}
@@ -157,6 +267,102 @@ func (openai) ParseRequest(path string, body []byte) (*Chat, error) {
 	return c, nil
 }
 
+// Reads message content as a string or a list of text and image parts. Any
+// other part type is refused by name.
+func oaiParts(raw json.RawMessage) ([]Part, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		if text == "" {
+			return nil, nil
+		}
+		return []Part{{Type: "text", Text: text}}, nil
+	}
+	var list []oaiPart
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, bad("message content must be a string or a list of parts")
+	}
+	var out []Part
+	for _, p := range list {
+		switch p.Type {
+		case "text":
+			out = append(out, Part{Type: "text", Text: p.Text, Extra: p.Extra})
+		case "image_url":
+			part := Part{Type: "image", Extra: p.Extra}
+			if p.ImageURL != nil {
+				part.URL = p.ImageURL.URL
+			}
+			if mt, data, ok := dataURL(part.URL); ok {
+				part.MediaType, part.Data, part.URL = mt, data, ""
+			}
+			out = append(out, part)
+		default:
+			return nil, bad("%s parts are not content the gateway can pass to a model", p.Type)
+		}
+	}
+	return out, nil
+}
+
+// Renders text and image parts: a bare string for one plain text part, otherwise a part list.
+func oaiContent(parts []Part) json.RawMessage {
+	var list []oaiPart
+	for _, p := range parts {
+		switch p.Type {
+		case "text":
+			list = append(list, oaiPart{Type: "text", Text: p.Text, Extra: p.Extra})
+		case "image":
+			url := p.URL
+			if url == "" {
+				url = "data:" + p.MediaType + ";base64," + p.Data
+			}
+			list = append(list, oaiPart{Type: "image_url", ImageURL: &struct {
+				URL string `json:"url"`
+			}{url}, Extra: p.Extra})
+		}
+	}
+	if len(list) == 0 {
+		return json.RawMessage(`""`)
+	}
+	if len(list) == 1 && list[0].Type == "text" && len(list[0].Extra) == 0 {
+		out, _ := json.Marshal(list[0].Text)
+		return out
+	}
+	out, _ := json.Marshal(list)
+	return out
+}
+
+// Reads an error a runtime put in a 200 body or a stream chunk: an error object
+// with a message, a bare error string, or vLLM's object of type error.
+func oaiFailure(data []byte) string {
+	var body struct {
+		Error   json.RawMessage `json:"error"`
+		Object  string          `json:"object"`
+		Message string          `json:"message"`
+	}
+	if json.Unmarshal(data, &body) != nil {
+		return ""
+	}
+	if len(body.Error) > 0 && string(body.Error) != "null" {
+		var text string
+		if json.Unmarshal(body.Error, &text) == nil && text != "" {
+			return text
+		}
+		if message := errorField(data); message != "" {
+			return message
+		}
+		return strings.TrimSpace(string(body.Error))
+	}
+	if body.Object == "error" {
+		if body.Message != "" {
+			return body.Message
+		}
+		return strings.TrimSpace(string(data))
+	}
+	return ""
+}
+
 func (openai) RenderRequest(c *Chat) (string, []byte, error) {
 	if c.Kind == "count" {
 		// Send both server-specific field names. Servers ignore the other field.
@@ -164,7 +370,8 @@ func (openai) RenderRequest(c *Chat) (string, []byte, error) {
 		data, err := json.Marshal(map[string]any{"model": c.Model, "content": text, "prompt": text})
 		return openaiTokenize, data, err
 	}
-	req := oaiRequest{Model: c.Model, MaxTokens: c.MaxTokens, Temperature: c.Temperature, TopP: c.TopP, Stream: c.Stream}
+	// OpenAI-format runtimes skip fields they dont know
+	req := oaiRequest{Model: c.Model, MaxTokens: c.MaxTokens, Temperature: c.Temperature, TopP: c.TopP, Stream: c.Stream, Extra: c.Extra}
 	if len(c.Stop) > 0 {
 		req.Stop, _ = json.Marshal(c.Stop)
 	}
@@ -179,29 +386,36 @@ func (openai) RenderRequest(c *Chat) (string, []byte, error) {
 			IncludeUsage bool `json:"include_usage"`
 		}{true}
 	}
-	for _, m := range c.Messages {
-		msg := oaiMessage{Role: m.Role, ToolCallID: m.ToolID}
-		if m.Role == "tool" || len(m.Parts) == 1 && m.Parts[0].Type == "text" || len(m.Parts) == 0 {
+	// Tool turns carry text only. Their images follow the run of tool turns as a user turn.
+	var held []Part
+	for i, m := range c.Messages {
+		msg := oaiMessage{Role: m.Role, ToolCallID: m.ToolID, Extra: m.Extra}
+		if m.Role == "tool" {
 			msg.Content, _ = json.Marshal(textOf(m.Parts))
-		} else {
-			var parts []map[string]any
+			req.Messages = append(req.Messages, msg)
 			for _, p := range m.Parts {
 				if p.Type == "image" {
-					url := p.URL
-					if url == "" {
-						url = "data:" + p.MediaType + ";base64," + p.Data
-					}
-					parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}})
-				} else {
-					parts = append(parts, map[string]any{"type": "text", "text": p.Text})
+					held = append(held, p)
 				}
 			}
-			msg.Content, _ = json.Marshal(parts)
+			if len(held) > 0 && (i+1 == len(c.Messages) || c.Messages[i+1].Role != "tool") {
+				req.Messages = append(req.Messages, oaiMessage{Role: "user", Content: oaiContent(held)})
+				held = nil
+			}
+			continue
+		}
+		msg.Content = oaiContent(m.Parts)
+		if m.Role == "assistant" {
+			msg.ReasoningContent = thinkingOf(m.Parts)
 		}
 		msg.ToolCalls = oaiCalls(m.ToolCalls)
 		req.Messages = append(req.Messages, msg)
 	}
-	req.Tools = toolsToOAI(c.Tools)
+	tools, err := toolsToOAI(c.Tools)
+	if err != nil {
+		return "", nil, err
+	}
+	req.Tools = tools
 	switch c.ToolChoice {
 	case "":
 	case "auto", "none", "required":
@@ -252,11 +466,14 @@ func (openai) ParseResult(c *Chat, body []byte) (*Result, error) {
 		}
 		return &Result{Model: c.Model, In: max(count.Count, len(count.Tokens))}, nil
 	}
+	if message := oaiFailure(body); message != "" {
+		return nil, &upstreamRefusal{status: http.StatusBadGateway, message: message}
+	}
 	var resp oaiResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, err
 	}
-	r := &Result{ID: resp.ID, Model: resp.Model}
+	r := &Result{ID: resp.ID, Model: resp.Model, Extra: resp.Extra}
 	if resp.Usage != nil {
 		r.In, r.Out = resp.Usage.PromptTokens, resp.Usage.CompletionTokens
 	}
@@ -286,9 +503,9 @@ func (openai) RenderResult(c *Chat, r *Result) ([]byte, error) {
 		for i, v := range r.Vectors {
 			data = append(data, map[string]any{"object": "embedding", "index": i, "embedding": v})
 		}
-		return json.Marshal(map[string]any{"object": "list", "data": data, "model": r.Model, "usage": oaiUsage{PromptTokens: r.In, TotalTokens: r.In}})
+		return withExtra(map[string]any{"object": "list", "data": data, "model": r.Model, "usage": oaiUsage{PromptTokens: r.In, TotalTokens: r.In}}, r.Extra)
 	}
-	resp := oaiResponse{ID: resultID(r, "chatcmpl"), Object: "chat.completion", Created: time.Now().Unix(), Model: r.Model, Usage: &oaiUsage{PromptTokens: r.In, CompletionTokens: r.Out, TotalTokens: r.In + r.Out}}
+	resp := oaiResponse{ID: resultID(r, "chatcmpl"), Object: "chat.completion", Created: time.Now().Unix(), Model: r.Model, Usage: &oaiUsage{PromptTokens: r.In, CompletionTokens: r.Out, TotalTokens: r.In + r.Out}, Extra: r.Extra}
 	reason := oaiReason(r.Stop)
 	if c.Kind == "generate" {
 		resp.Object = "text_completion"
@@ -309,10 +526,14 @@ func (openai) ParseStream(rd io.Reader, emit func(Event) error) error {
 		if string(data) == "[DONE]" {
 			return nil
 		}
+		if message := oaiFailure(data); message != "" {
+			return errors.New(message)
+		}
 		var chunk oaiResponse
 		if err := json.Unmarshal(data, &chunk); err != nil {
 			return err
 		}
+		final.Extra = mergeExtra(final.Extra, chunk.Extra)
 		if !started {
 			started = true
 			final.ID, final.Model = chunk.ID, chunk.Model
@@ -363,7 +584,7 @@ func (openai) ParseStream(rd io.Reader, emit func(Event) error) error {
 }
 
 type oaiStream struct {
-	w        http.ResponseWriter
+	live     *liveWriter
 	c        *Chat
 	id       string
 	model    string
@@ -372,13 +593,14 @@ type oaiStream struct {
 	sentRole bool
 }
 
+// Opens the stream. Comment lines keep it alive while the model works.
 func (openai) Stream(w http.ResponseWriter, c *Chat) StreamWriter {
 	streamHeaders(w, "text/event-stream")
-	return &oaiStream{w: w, c: c, id: newID("chatcmpl"), model: c.Model, created: time.Now().Unix()}
+	return &oaiStream{live: newLiveWriter(w, pingComment), c: c, id: newID("chatcmpl"), model: c.Model, created: time.Now().Unix()}
 }
 
-func (s *oaiStream) chunk(delta *oaiMessage, text string, finish *string, usage *oaiUsage) error {
-	resp := oaiResponse{ID: s.id, Object: "chat.completion.chunk", Created: s.created, Model: s.model, Usage: usage}
+func (s *oaiStream) chunk(delta *oaiMessage, text string, finish *string, usage *oaiUsage, extra map[string]json.RawMessage) error {
+	resp := oaiResponse{ID: s.id, Object: "chat.completion.chunk", Created: s.created, Model: s.model, Usage: usage, Extra: extra}
 	if s.c.Kind == "generate" {
 		resp.Object = "text_completion"
 		resp.Choices = []oaiChoice{{Text: text, FinishReason: finish}}
@@ -391,15 +613,12 @@ func (s *oaiStream) chunk(delta *oaiMessage, text string, finish *string, usage 
 		}
 		resp.Choices = []oaiChoice{{Delta: delta, FinishReason: finish}}
 	}
-	return writeSSE(s.w, "", resp)
+	return s.live.sse("", resp)
 }
 
 func (s *oaiStream) Write(ev Event) error {
 	switch ev.Kind {
 	case "start":
-		if ev.Res != nil && ev.Res.Model != "" {
-			s.model = ev.Res.Model
-		}
 		if ev.Res != nil && ev.Res.ID != "" {
 			s.id = ev.Res.ID
 		}
@@ -407,7 +626,7 @@ func (s *oaiStream) Write(ev Event) error {
 	case "text":
 		delta := &oaiMessage{}
 		delta.Content, _ = json.Marshal(ev.Text)
-		return s.chunk(delta, ev.Text, nil, nil)
+		return s.chunk(delta, ev.Text, nil, nil, nil)
 	case "tool":
 		s.tools.add(ev)
 		tc := oaiToolCall{Index: ptr(ev.Index), ID: ev.Tool.ID, Type: "function"}
@@ -415,18 +634,19 @@ func (s *oaiStream) Write(ev Event) error {
 		if tc.ID == "" && tc.Function.Name == "" {
 			tc.Type = ""
 		}
-		return s.chunk(&oaiMessage{ToolCalls: []oaiToolCall{tc}}, "", nil, nil)
+		return s.chunk(&oaiMessage{ToolCalls: []oaiToolCall{tc}}, "", nil, nil, nil)
 	case "stop":
 		res := ev.Res
 		if res == nil {
 			res = &Result{}
 		}
 		reason := oaiReason(stopOf(res.Stop, len(s.tools.order)))
-		if err := s.chunk(&oaiMessage{}, "", &reason, &oaiUsage{PromptTokens: res.In, CompletionTokens: res.Out, TotalTokens: res.In + res.Out}); err != nil {
+		// The closing chunk carries every top-level key the runtime added.
+		if err := s.chunk(&oaiMessage{}, "", &reason, &oaiUsage{PromptTokens: res.In, CompletionTokens: res.Out, TotalTokens: res.In + res.Out}, res.Extra); err != nil {
 			return err
 		}
 	case "error":
-		return writeSSE(s.w, "", map[string]any{"error": map[string]any{"message": ev.Text, "type": "upstream_error", "code": "upstream_error"}})
+		return s.live.sse("", map[string]any{"error": map[string]any{"message": ev.Text, "type": "upstream_error", "code": "upstream_error"}})
 	}
 	return nil
 }
@@ -437,8 +657,12 @@ func (openai) InlineImages() bool { return false }
 func (openai) CountsImages() bool { return false }
 
 func (s *oaiStream) Close() error {
-	_, err := io.WriteString(s.w, "data: [DONE]\n\n")
-	flush(s.w)
+	err := s.live.write(func(w http.ResponseWriter) error {
+		_, err := io.WriteString(w, "data: [DONE]\n\n")
+		flush(w)
+		return err
+	})
+	s.live.close()
 	return err
 }
 

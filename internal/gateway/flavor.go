@@ -12,16 +12,23 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// Shared request representation for protocol translation.
+// Shared request representation for protocol translation. Every shape here
+// carries Extra: the fields of the wire object the adapter has no mapping for.
+// They travel as they are, so a capability the gateway does not know still
+// reaches the runtime, and a key the runtime adds still reaches the client.
 type Chat struct {
 	// chat, generate for a bare prompt, embed, or count for a token count
-	Kind        string
+	Kind string
+	// The client's protocol
+	Format      v1.ApiFlavor
 	Model       string
 	Messages    []Message
 	MaxTokens   int
@@ -35,6 +42,7 @@ type Chat struct {
 	ToolChoice string
 	// Texts to embed when Kind is embed
 	Inputs []string
+	Extra  map[string]json.RawMessage
 }
 
 // Chat turn with a system, user, assistant, or tool role.
@@ -44,15 +52,18 @@ type Message struct {
 	ToolCalls []ToolCall
 	// Tool call ID for a result turn.
 	ToolID string
+	Extra  map[string]json.RawMessage
 }
 
-// Text or image content. Images use base64 with a media type, or a URL.
+// Text, image, or thinking content. Images use base64 with a media type, or a
+// URL. Thinking carries the model's reasoning in Text and its signature in Data.
 type Part struct {
 	Type      string
 	Text      string
 	MediaType string
 	Data      string
 	URL       string
+	Extra     map[string]json.RawMessage
 }
 
 // Tool call with JSON arguments.
@@ -62,11 +73,15 @@ type ToolCall struct {
 	Args string
 }
 
-// A tool the client offers
+// A tool the client offers. Type is empty or custom for a tool defined by its
+// schema. Any other type names a tool the API itself provides.
 type Tool struct {
+	Type        string
 	Name        string
 	Description string
 	Schema      json.RawMessage
+	Strict      *bool
+	Extra       map[string]json.RawMessage
 }
 
 // Complete answer or embedding vectors.
@@ -79,6 +94,7 @@ type Result struct {
 	Stop    string
 	In, Out int
 	Vectors [][]float64
+	Extra   map[string]json.RawMessage
 }
 
 // Stream event. Start includes ID and model. Text carries a fragment. Tool
@@ -180,12 +196,38 @@ func bad(format string, args ...any) error {
 
 func ptr[T any](v T) *T { return &v }
 
-// Parses tool arguments as JSON, returning an empty object on failure.
-func jsonArgs(s string) json.RawMessage {
-	if json.Valid([]byte(s)) && s != "" {
-		return json.RawMessage(s)
+// Reads tool arguments as a JSON object. Empty or null arguments mean none.
+func jsonArgs(s string) (json.RawMessage, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "null" {
+		return json.RawMessage("{}"), true
 	}
-	return json.RawMessage("{}")
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(s), &fields) != nil {
+		return nil, false
+	}
+	return json.RawMessage(s), true
+}
+
+// A model answered a tool call with arguments that are not a JSON object
+type toolArgsError struct{ name string }
+
+func (e *toolArgsError) Error() string {
+	return "model answered tool call " + e.name + " with arguments that are not a JSON object"
+}
+
+// Joins the thinking parts of a message
+func thinkingOf(parts []Part) string {
+	var b strings.Builder
+	for _, p := range parts {
+		if p.Type == "thinking" {
+			if b.Len() > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString(p.Text)
+		}
+	}
+	return b.String()
 }
 
 // Extracts an OpenAI or Anthropic error message, or returns empty.
@@ -207,23 +249,114 @@ func resultID(r *Result, prefix string) string {
 	return newID(prefix)
 }
 
+// Fields of a JSON object that a wire struct has no tag for
+func extraFields(raw []byte, known any) map[string]json.RawMessage {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return nil
+	}
+	t := reflect.TypeOf(known)
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name == "" {
+			name = t.Field(i).Name
+		}
+		delete(fields, name)
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	return fields
+}
+
+// Marshals v and adds the extra fields v does not set itself
+func withExtra(v any, extra map[string]json.RawMessage) ([]byte, error) {
+	data, err := json.Marshal(v)
+	if err != nil || len(extra) == 0 {
+		return data, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	for k, raw := range extra {
+		if _, taken := fields[k]; !taken {
+			fields[k] = raw
+		}
+	}
+	return json.Marshal(fields)
+}
+
+// Adds from's fields to into, later values winning
+func mergeExtra(into, from map[string]json.RawMessage) map[string]json.RawMessage {
+	if len(from) == 0 {
+		return into
+	}
+	if into == nil {
+		into = map[string]json.RawMessage{}
+	}
+	for k, v := range from {
+		into[k] = v
+	}
+	return into
+}
+
+// The error type a runtime named in its body, or one that fits the status
+func errorKind(status int, body []byte) string {
+	var e struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &e) == nil && e.Error.Type != "" {
+		return e.Error.Type
+	}
+	switch status {
+	case http.StatusBadRequest:
+		return "invalid_request_error"
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	case http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case 529:
+		return "overloaded_error"
+	}
+	return "api_error"
+}
+
 // OpenAI tool definitions, also used by Ollama.
 func toolsFromOAI(tools []oaiTool) []Tool {
 	var out []Tool
 	for _, t := range tools {
-		out = append(out, Tool{Name: t.Function.Name, Description: t.Function.Description, Schema: t.Function.Parameters})
+		tool := Tool{Name: t.Function.Name, Description: t.Function.Description, Schema: t.Function.Parameters, Strict: t.Function.Strict, Extra: mergeExtra(t.Extra, t.Function.Extra)}
+		if t.Type != "function" {
+			tool.Type = t.Type
+		}
+		out = append(out, tool)
 	}
 	return out
 }
 
-func toolsToOAI(tools []Tool) []oaiTool {
+// Renders tools in the OpenAI shape, which has room only for tools defined by
+// schema. The refusal names the type the way the Claude API does, which is
+// the wording Claude Code recognizes and recovers from.
+func toolsToOAI(tools []Tool) ([]oaiTool, error) {
 	var out []oaiTool
 	for _, t := range tools {
-		tool := oaiTool{Type: "function"}
-		tool.Function.Name, tool.Function.Description, tool.Function.Parameters = t.Name, t.Description, t.Schema
+		if t.Type != "" && t.Type != "custom" {
+			return nil, bad("Input tag '%s' found using 'type' does not match any of the expected tags: 'custom'", t.Type)
+		}
+		tool := oaiTool{Type: "function", Extra: t.Extra}
+		tool.Function = oaiFunction{Name: t.Name, Description: t.Description, Parameters: t.Schema, Strict: t.Strict}
 		out = append(out, tool)
 	}
-	return out
+	return out, nil
 }
 
 // Calls in the OpenAI shape
@@ -417,6 +550,79 @@ func streamHeaders(w http.ResponseWriter, contentType string) {
 	flush(w)
 }
 
+// Silence on a stream before a keepalive is written
+const keepaliveEvery = 15 * time.Second
+
+// Serializes writes to a streaming response and writes a keepalive whenever
+// the stream has been silent for keepaliveEvery, so clients and proxies with
+// idle watchdogs hold the connection while the model is still working.
+type liveWriter struct {
+	w    http.ResponseWriter
+	ping func(http.ResponseWriter) error
+	mu   sync.Mutex
+	last time.Time
+	err  error
+	stop chan struct{}
+	done chan struct{}
+	once sync.Once
+}
+
+func newLiveWriter(w http.ResponseWriter, ping func(http.ResponseWriter) error) *liveWriter {
+	l := &liveWriter{w: w, ping: ping, last: time.Now(), stop: make(chan struct{}), done: make(chan struct{})}
+	go l.run()
+	return l
+}
+
+func (l *liveWriter) run() {
+	defer close(l.done)
+	ticker := time.NewTicker(keepaliveEvery / 3)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-l.stop:
+			return
+		case now := <-ticker.C:
+			l.mu.Lock()
+			if l.err == nil && now.Sub(l.last) >= keepaliveEvery {
+				l.err = l.ping(l.w)
+				l.last = now
+			}
+			l.mu.Unlock()
+		}
+	}
+}
+
+// Writes under the lock. Once a write fails, every later write fails the same way.
+func (l *liveWriter) write(fn func(http.ResponseWriter) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.err != nil {
+		return l.err
+	}
+	l.err = fn(l.w)
+	l.last = time.Now()
+	return l.err
+}
+
+func (l *liveWriter) sse(event string, v any) error {
+	return l.write(func(w http.ResponseWriter) error { return writeSSE(w, event, v) })
+}
+
+// Stops keepalives and waits for one in progress to finish
+func (l *liveWriter) close() {
+	l.once.Do(func() { close(l.stop) })
+	<-l.done
+}
+
+// An SSE comment line, which every SSE client skips
+func pingComment(w http.ResponseWriter) error {
+	if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
+		return err
+	}
+	flush(w)
+	return nil
+}
+
 // Gathers streamed tool fragments into whole calls, in index order
 type toolGather struct {
 	calls map[int]*ToolCall
@@ -458,12 +664,13 @@ func newID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
 
-// Defaults missing stop reasons, using tool when calls were made.
+// Defaults missing stop reasons. A turn that made tool calls stopped for them,
+// unless it was cut short by length or a filter.
 func stopOf(reason string, calls int) string {
+	if calls > 0 && (reason == "" || reason == "stop") {
+		return "tool"
+	}
 	if reason == "" {
-		if calls > 0 {
-			return "tool"
-		}
 		return "stop"
 	}
 	return reason
