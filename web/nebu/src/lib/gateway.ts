@@ -18,9 +18,12 @@ export interface Dialect {
   label: string;
   // Append to the listener origin for the SDK base URL.
   base: string;
+  // Header carrying the API key, with its scheme when one applies
   header: string;
+  scheme?: string;
   endpoints: { method: string; path: string }[];
-  curl: (origin: string, model: string, auth: boolean) => string;
+  // Chat request shown as the curl example
+  chat: { path: string; headers?: string[]; body: (model: string) => object };
 }
 
 export const dialects: Dialect[] = [
@@ -28,15 +31,15 @@ export const dialects: Dialect[] = [
     id: 'openai',
     label: 'OpenAI',
     base: '/v1',
-    header: 'Authorization: Bearer',
+    header: 'Authorization',
+    scheme: 'Bearer',
     endpoints: [
       { method: 'POST', path: '/v1/chat/completions' },
       { method: 'POST', path: '/v1/completions' },
       { method: 'POST', path: '/v1/embeddings' },
       { method: 'GET', path: '/v1/models' }
     ],
-    curl: (origin, model, auth) =>
-      `curl ${origin}/v1/chat/completions \\\n  -H 'Content-Type: application/json' \\\n${auth ? "  -H 'Authorization: Bearer $NEBU_API_KEY' \\\n" : ''}  -d '{"model":"${model}","messages":[{"role":"user","content":"hello"}]}'`
+    chat: { path: '/v1/chat/completions', body: (model) => ({ model, messages: [{ role: 'user', content: 'hello' }] }) }
   },
   {
     id: 'anthropic',
@@ -48,14 +51,14 @@ export const dialects: Dialect[] = [
       { method: 'POST', path: '/v1/messages/count_tokens' },
       { method: 'GET', path: '/v1/models' }
     ],
-    curl: (origin, model, auth) =>
-      `curl ${origin}/v1/messages \\\n  -H 'Content-Type: application/json' \\\n  -H 'anthropic-version: 2023-06-01' \\\n${auth ? "  -H 'x-api-key: $NEBU_API_KEY' \\\n" : ''}  -d '{"model":"${model}","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'`
+    chat: { path: '/v1/messages', headers: ['anthropic-version: 2023-06-01'], body: (model) => ({ model, max_tokens: 256, messages: [{ role: 'user', content: 'hello' }] }) }
   },
   {
     id: 'ollama',
     label: 'Ollama',
     base: '',
-    header: 'Authorization: Bearer',
+    header: 'Authorization',
+    scheme: 'Bearer',
     endpoints: [
       { method: 'POST', path: '/api/chat' },
       { method: 'POST', path: '/api/generate' },
@@ -66,10 +69,18 @@ export const dialects: Dialect[] = [
       { method: 'GET', path: '/api/ps' },
       { method: 'GET', path: '/api/version' }
     ],
-    curl: (origin, model, auth) =>
-      `curl ${origin}/api/chat \\\n  -H 'Content-Type: application/json' \\\n${auth ? "  -H 'Authorization: Bearer $NEBU_API_KEY' \\\n" : ''}  -d '{"model":"${model}","messages":[{"role":"user","content":"hello"}],"stream":false}'`
+    chat: { path: '/api/chat', body: (model) => ({ model, messages: [{ role: 'user', content: 'hello' }], stream: false }) }
   }
 ];
+
+export const keyHeader = (d: Dialect) => (d.scheme ? `${d.header}: ${d.scheme}` : d.header);
+
+// Double quotes so the shell expands the key variable
+export function curl(d: Dialect, origin: string, model: string, auth: boolean): string {
+  const key = `${d.header}: ${d.scheme ? `${d.scheme} ` : ''}$API_KEY`;
+  const headers = ['Content-Type: application/json', ...(d.chat.headers ?? []), ...(auth ? [key] : [])];
+  return [`curl ${origin}${d.chat.path}`, ...headers.map((h) => `-H "${h}"`), `-d '${JSON.stringify(d.chat.body(model))}'`].join(' \\\n  ');
+}
 
 const pick = (a: number | undefined, b: number | undefined) => a || b || 0;
 

@@ -44,7 +44,7 @@ func runChat(ctx context.Context, e *env, args []string) error {
 		apiKey = e.cfg.GetGateway().GetApiKeys()[0]
 	}
 	if apiKey == "" {
-		apiKey = e.cfg.GetAuth().GetToken()
+		apiKey = e.token()
 	}
 	base := e.gatewayBase(ctx)
 	session := &chatSession{

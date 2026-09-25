@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -151,6 +152,18 @@ type env struct {
 	cl       *clients
 	daemon   *daemon.Daemon
 	closers  []io.Closer
+}
+
+// The configured token, else the one the daemon on this host wrote
+func (e *env) token() string {
+	if t := e.cfg.GetAuth().GetToken(); t != "" || e.cfg.GetAuth().GetDisabled() {
+		return t
+	}
+	data, err := os.ReadFile(filepath.Join(e.cfg.GetDataDir(), config.TokenFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // Stops the in process daemon and logger when present

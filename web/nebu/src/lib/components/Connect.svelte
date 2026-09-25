@@ -1,6 +1,6 @@
 <script lang="ts">
   import { live, cached, refreshCached } from '$lib/state.svelte';
-  import { dialects, listenerUrl } from '$lib/gateway';
+  import { curl, dialects, keyHeader, listenerUrl } from '$lib/gateway';
   import { byName, count } from '$lib/format';
   import { RouteState } from '$proto/gateway_pb';
   import { KeyRound, LockOpen, ShieldCheck } from '@lucide/svelte';
@@ -17,7 +17,7 @@
   const example = $derived(ready[0]?.name ?? [...live.routes.values()].sort(byName((r) => r.name))[0]?.name ?? 'main');
   const chosen = $derived(dialects.find((d) => d.id === dialect) ?? dialects[0]);
   const origin = $derived(origins[0]?.url ?? '');
-  const curl = $derived(origin ? chosen.curl(origin, example, auth) : '');
+  const snippet = $derived(origin ? curl(chosen, origin, example, auth) : '');
 
   // Capture the request total when the card opens.
   $effect(() => {
@@ -28,7 +28,7 @@
 <Section title="Endpoints" meta={status ? `${count(status.requests)} requests since start` : ''}>
   {#snippet actions()}
     <span class="inline-flex items-center gap-1.5 text-xs text-fg-muted">
-      {#if auth}<KeyRound size={13} class="text-warn" /> API key in <span class="font-mono">{chosen.header}</span>{:else}<LockOpen size={13} /> No API key{/if}
+      {#if auth}<KeyRound size={13} class="text-warn" /> API key in <span class="font-mono">{keyHeader(chosen)}</span>{:else}<LockOpen size={13} /> No API key{/if}
     </span>
     {#if status?.tls}<span class="inline-flex items-center gap-1.5 text-xs text-fg-muted"><ShieldCheck size={13} /> TLS</span>{/if}
   {/snippet}
@@ -58,8 +58,8 @@
         </table>
       </div>
       <div class="relative">
-        <pre class="code pr-12">{curl}</pre>
-        <div class="absolute top-1.5 right-1.5"><Copy text={curl} /></div>
+        <pre class="code pr-12">{snippet}</pre>
+        <div class="absolute top-1.5 right-1.5"><Copy text={snippet} /></div>
       </div>
     </div>
   {/if}

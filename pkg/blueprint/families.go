@@ -233,10 +233,10 @@ var families = []Family{
 		Canonical: []string{"nvidia/Cosmos-Predict2-2B-Video2World", "nvidia/Cosmos-Transfer1-7B"}},
 	{ID: Language, Name: "Language model", Pipeline: "language", Makes: "text, vectors, scores, transcripts, or actions from weights served by a language runtime",
 		Fills: []Fill{
-			{Kind: "weights", Name: "weights", Slot: SlotWeights, Required: true},
-			{Kind: "config", Name: "architecture config", Slot: SlotConfig, Required: true},
-			{Kind: "tokenizer", Name: "tokenizer and chat template", Slot: SlotTokenizer},
-			{Kind: "projector", Name: "vision or audio projector", Slot: SlotProjector},
+			req(SlotWeights, Part{Kind: "weights", Name: "weights"}),
+			req(SlotConfig, Part{Kind: "config", Name: "architecture config"}),
+			opt(SlotTokenizer, Part{Kind: "tokenizer", Name: "tokenizer and chat template"}),
+			opt(SlotProjector, Part{Kind: "projector", Name: "vision or audio projector"}),
 		}},
 }
 

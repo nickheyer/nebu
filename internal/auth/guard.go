@@ -34,7 +34,7 @@ func NewGuard(token string, sessions *Sessions, tokens *Tokens) *Guard {
 	case sessions != nil:
 		g.err = errors.New("sign in, or send an API token from Settings or the daemon's api.token as a bearer token")
 	case token != "":
-		g.err = errors.New("missing or invalid token, set auth.token or NEBU_TOKEN")
+		g.err = errors.New("missing or invalid token, set auth.token or NEBU_AUTH_TOKEN")
 	default:
 		g.err = errors.New("missing credentials")
 	}

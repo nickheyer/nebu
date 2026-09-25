@@ -150,7 +150,7 @@ func (e *env) clients() (*clients, error) {
 		e.daemon = d
 		httpClient.Transport = handlerTransport{handler: d.Handler()}
 	}
-	httpClient.Transport = authTransport{base: httpClient.Transport, token: e.cfg.GetAuth().GetToken()}
+	httpClient.Transport = authTransport{base: httpClient.Transport, token: e.token()}
 	e.cl = &clients{
 		host:      nebuv1connect.NewHostServiceClient(httpClient, base),
 		settings:  nebuv1connect.NewSettingsServiceClient(httpClient, base),

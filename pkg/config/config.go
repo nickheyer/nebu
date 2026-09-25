@@ -2,326 +2,146 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
-	"strconv"
 	"strings"
 
+	"github.com/go-viper/mapstructure/v2"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"google.golang.org/protobuf/encoding/protojson"
-	"sigs.k8s.io/yaml"
+	"github.com/spf13/viper"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-const (
-	// Environment variable naming the config file
-	envConfig = "NEBU_CONFIG"
-	// Environment variable naming the daemon address
-	envAddr = "NEBU_ADDR"
-	// Environment variable naming the data directory
-	envDataDir = "NEBU_DATA_DIR"
-	// Environment variable naming the listen address
-	envListen = "NEBU_LISTEN"
-	// Environment variable holding the API token
-	envToken = "NEBU_TOKEN"
-	// Comma separated gateway keys read when gateway.api_key_env is unset
-	envAPIKeys = "NEBU_API_KEYS"
-	// Single sign-on provider settings
-	envOIDCIssuer   = "NEBU_OIDC_ISSUER"
-	envOIDCClientID = "NEBU_OIDC_CLIENT_ID"
-	// Client secret read when auth.oidc.client_secret_env is unset
-	envOIDCSecret = "NEBU_OIDC_CLIENT_SECRET"
+// API token the daemon generates in data_dir when auth.token is empty
+const TokenFile = "api.token"
 
-	// API token the daemon generates in data_dir when auth.token is empty
-	TokenFile = "api.token"
-
-	defaultListen  = "127.0.0.1:8484"
-	minFreeBytes   = 50 << 30
-	workers        = 8
-	chunkBytes     = 32 << 20
-	retries        = 5
-	drainTimeoutMs = 30000
-	// Runtime readiness timeout.
-	upstreamTimeoutMs = 600000
-	sessionTTL        = "24h"
-	groupsClaim       = "groups"
-	// Seats other seats connect to sit behind a guard listener unless config says direct
-	meshExposure = "guard"
-)
-
-// Scopes requested from the provider when auth.oidc.scopes is empty
-var defaultScopes = []string{"openid", "profile", "email"}
-
-// Container CLIs tried in order when config names none
-var defaultCLIs = []string{"podman", "docker", "nerdctl"}
-
-// Search order when no path is given
-func candidates() []string {
-	var out []string
-	if p := os.Getenv(envConfig); p != "" {
-		out = append(out, p)
-	}
-	out = append(out, "nebu.yaml")
-	if dir, err := os.UserConfigDir(); err == nil {
-		out = append(out, filepath.Join(dir, "nebu", "config.yaml"))
-	}
-	return append(out, "/etc/nebu/config.yaml")
-}
-
-// Loads config from path or the first candidate found
+// Loads the file at path, or the first config.yaml on the search path
 func Load(path string) (*v1.Config, error) {
-	cfg := &v1.Config{}
-	paths := candidates()
-	if path != "" {
-		paths = []string{path}
+	dataDir, err := dataHome()
+	if err != nil {
+		return nil, err
 	}
-	for _, p := range paths {
-		data, err := os.ReadFile(p)
-		if errors.Is(err, os.ErrNotExist) {
-			if path != "" {
-				return nil, err
-			}
-			continue
-		}
-		if err != nil {
+	cacheDir, _ := os.UserCacheDir()
+
+	v := viper.New()
+	v.SetConfigName("config")
+	v.AddConfigPath("/etc/nebu")
+	v.AddConfigPath("$HOME/.config/nebu")
+	v.AddConfigPath(".")
+	if path != "" {
+		v.SetConfigFile(path)
+	}
+
+	v.SetEnvPrefix("nebu")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
+
+	v.SetDefault("listen", "127.0.0.1:8484")
+	v.SetDefault("addr", "")
+	v.SetDefault("data_dir", filepath.Join(dataDir, "nebu"))
+	v.SetDefault("cache_dir", filepath.Join(cacheDir, "nebu"))
+	v.SetDefault("sources", []any{})
+	v.SetDefault("logging.level", "info")
+	v.SetDefault("logging.format", "text")
+	v.SetDefault("logging.file", "")
+	v.SetDefault("contexts", []uint32{8192, 32768, 131072})
+	v.SetDefault("min_free_bytes", uint64(50<<30))
+	v.SetDefault("transfer.workers", 8)
+	v.SetDefault("transfer.chunk_bytes", 32<<20)
+	v.SetDefault("transfer.retries", 5)
+	v.SetDefault("transfer.max_bytes_per_second", 0)
+	v.SetDefault("transfer.windows", []any{})
+	v.SetDefault("gateway.listen", "")
+	v.SetDefault("gateway.api_keys", []string{})
+	v.SetDefault("gateway.drain_timeout_ms", 30000)
+	v.SetDefault("gateway.policy.max_in_flight", 0)
+	v.SetDefault("gateway.policy.requests_per_second", 0.0)
+	v.SetDefault("gateway.policy.burst", 0)
+	v.SetDefault("gateway.policy.request_timeout_ms", 0)
+	v.SetDefault("gateway.policy.upstream_timeout_ms", 600000)
+	v.SetDefault("gateway.cors_origins", []string{})
+	v.SetDefault("auth.token", "")
+	v.SetDefault("auth.oidc.issuer", "")
+	v.SetDefault("auth.oidc.client_id", "")
+	v.SetDefault("auth.oidc.client_secret", "")
+	v.SetDefault("auth.oidc.scopes", []string{"openid", "profile", "email"})
+	v.SetDefault("auth.oidc.public_url", "")
+	v.SetDefault("auth.oidc.allowed_emails", []string{})
+	v.SetDefault("auth.oidc.allowed_domains", []string{})
+	v.SetDefault("auth.oidc.allowed_groups", []string{})
+	v.SetDefault("auth.oidc.groups_claim", "groups")
+	v.SetDefault("auth.disabled", false)
+	v.SetDefault("auth.session_ttl", "24h")
+	v.SetDefault("builds.sandbox", "unspecified")
+	v.SetDefault("builds.image", "")
+	v.SetDefault("builds.cli", []string{"podman", "docker", "nerdctl"})
+	v.SetDefault("builds.jobs", runtime.NumCPU())
+	v.SetDefault("web.disabled", false)
+	v.SetDefault("store.max_bytes", 0)
+	v.SetDefault("tls.cert_file", "")
+	v.SetDefault("tls.key_file", "")
+	v.SetDefault("notify.webhooks", []string{})
+	v.SetDefault("discord.ffmpeg", "")
+	v.SetDefault("mesh.listen", "")
+	v.SetDefault("mesh.advertise", "")
+	v.SetDefault("mesh.announce", true)
+	v.SetDefault("mesh.exposure", "guard")
+
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
 			return nil, err
 		}
-		if err := Decode(data, cfg); err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
-		}
-		break
 	}
-	applyEnv(cfg)
-	if err := applyDefaults(cfg); err != nil {
-		return nil, err
+
+	// Derived from keys the file or environment may have set
+	dataDir = v.GetString("data_dir")
+	v.SetDefault("store_dir", filepath.Join(dataDir, "store"))
+	v.SetDefault("builds.dir", filepath.Join(dataDir, "builds"))
+	v.SetDefault("auth.oidc.name", issuerHost(v.GetString("auth.oidc.issuer")))
+
+	cfg := &v1.Config{}
+	hooks := viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(mapstructure.StringToSliceHookFunc(","), enumHook))
+	if err := v.UnmarshalExact(cfg, hooks, jsonTags); err != nil {
+		return nil, fmt.Errorf("%s: %w", cmp.Or(v.ConfigFileUsed(), "config"), err)
 	}
 	return cfg, nil
 }
 
-// Decodes a YAML or JSON config file into the config message, refusing keys it does not know
-func Decode(data []byte, cfg *v1.Config) error {
-	js, err := yaml.YAMLToJSON(data)
-	if err != nil {
-		return fmt.Errorf("yaml: %w", err)
+// Generated messages carry the proto field names in json tags
+func jsonTags(c *mapstructure.DecoderConfig) { c.TagName = "json" }
+
+// Decodes enum values written by name, with or without the type prefix
+func enumHook(from, to reflect.Type, data any) (any, error) {
+	if from.Kind() != reflect.String || to.Kind() != reflect.Int32 {
+		return data, nil
 	}
-	if err := protojson.Unmarshal(js, cfg); err != nil {
-		return fmt.Errorf("decode config: %w", err)
+	enum, ok := reflect.Zero(to).Interface().(protoreflect.Enum)
+	if !ok {
+		return data, nil
 	}
-	return nil
+	name, values := data.(string), enum.Descriptor().Values()
+	for i := 0; i < values.Len(); i++ {
+		value := values.Get(i)
+		if full := string(value.Name()); strings.EqualFold(full, name) || strings.HasSuffix(full, "_"+strings.ToUpper(name)) {
+			return reflect.ValueOf(value.Number()).Convert(to).Interface(), nil
+		}
+	}
+	return nil, fmt.Errorf("%q is not a %s", name, enum.Descriptor().Name())
 }
 
-func applyEnv(cfg *v1.Config) {
-	if v := os.Getenv(envAddr); v != "" {
-		cfg.Addr = v
+// The issuer host, or the issuer itself when it is not a URL
+func issuerHost(issuer string) string {
+	if u, err := url.Parse(issuer); err == nil && u.Host != "" {
+		return u.Hostname()
 	}
-	if v := os.Getenv(envDataDir); v != "" {
-		cfg.DataDir = v
-	}
-	if v := os.Getenv(envListen); v != "" {
-		cfg.Listen = v
-	}
-	if v := os.Getenv(envToken); v != "" {
-		if cfg.Auth == nil {
-			cfg.Auth = &v1.Auth{}
-		}
-		cfg.Auth.Token = v
-	}
-	issuer, clientID := os.Getenv(envOIDCIssuer), os.Getenv(envOIDCClientID)
-	if issuer != "" || clientID != "" {
-		if cfg.Auth == nil {
-			cfg.Auth = &v1.Auth{}
-		}
-		if cfg.Auth.Oidc == nil {
-			cfg.Auth.Oidc = &v1.Oidc{}
-		}
-		if issuer != "" {
-			cfg.Auth.Oidc.Issuer = issuer
-		}
-		if clientID != "" {
-			cfg.Auth.Oidc.ClientId = clientID
-		}
-	}
-}
-
-func applyDefaults(cfg *v1.Config) error {
-	if cfg.Listen == "" {
-		cfg.Listen = defaultListen
-	}
-	if cfg.DataDir == "" {
-		base, err := dataHome()
-		if err != nil {
-			return err
-		}
-		cfg.DataDir = filepath.Join(base, "nebu")
-	}
-	if cfg.CacheDir == "" {
-		base, err := os.UserCacheDir()
-		if err != nil {
-			base = filepath.Join(cfg.DataDir, "cache")
-		} else {
-			base = filepath.Join(base, "nebu")
-		}
-		cfg.CacheDir = base
-	}
-	if cfg.Logging == nil {
-		cfg.Logging = &v1.Logging{}
-	}
-	if cfg.Logging.Level == "" {
-		cfg.Logging.Level = "info"
-	}
-	if cfg.Logging.Format == "" {
-		cfg.Logging.Format = "text"
-	}
-	if len(cfg.Contexts) == 0 {
-		cfg.Contexts = []uint32{8192, 32768, 131072}
-	}
-	if cfg.MinFreeBytes == 0 {
-		cfg.MinFreeBytes = minFreeBytes
-	}
-	if cfg.StoreDir == "" {
-		cfg.StoreDir = filepath.Join(cfg.DataDir, "store")
-	}
-	if cfg.Transfer == nil {
-		cfg.Transfer = &v1.Transfer{}
-	}
-	if cfg.Transfer.Workers == 0 {
-		cfg.Transfer.Workers = workers
-	}
-	if cfg.Transfer.ChunkBytes == 0 {
-		cfg.Transfer.ChunkBytes = chunkBytes
-	}
-	if cfg.Transfer.Retries == 0 {
-		cfg.Transfer.Retries = retries
-	}
-	if cfg.Gateway == nil {
-		cfg.Gateway = &v1.Gateway{}
-	}
-	if cfg.Gateway.DrainTimeoutMs == 0 {
-		cfg.Gateway.DrainTimeoutMs = drainTimeoutMs
-	}
-	if cfg.Gateway.Policy == nil {
-		cfg.Gateway.Policy = &v1.Policy{}
-	}
-	if cfg.Gateway.Policy.UpstreamTimeoutMs == 0 {
-		cfg.Gateway.Policy.UpstreamTimeoutMs = upstreamTimeoutMs
-	}
-	if cfg.Auth == nil {
-		cfg.Auth = &v1.Auth{}
-	}
-	if cfg.Auth.Token == "" && cfg.Auth.TokenEnv != "" {
-		cfg.Auth.Token = os.Getenv(cfg.Auth.TokenEnv)
-	}
-	if cfg.Auth.SessionTtl == "" {
-		cfg.Auth.SessionTtl = sessionTTL
-	}
-	// The daemon writes the token it generated, so clients on the same host find it
-	if cfg.Auth.Token == "" && !cfg.Auth.Disabled {
-		if data, err := os.ReadFile(filepath.Join(cfg.DataDir, TokenFile)); err == nil {
-			cfg.Auth.Token = strings.TrimSpace(string(data))
-		}
-	}
-	if o := cfg.Auth.Oidc; o != nil && o.Issuer != "" {
-		if o.ClientSecretEnv == "" {
-			o.ClientSecretEnv = envOIDCSecret
-		}
-		if o.ClientSecret == "" {
-			o.ClientSecret = os.Getenv(o.ClientSecretEnv)
-		}
-		if len(o.Scopes) == 0 {
-			o.Scopes = append([]string(nil), defaultScopes...)
-		}
-		if o.GroupsClaim == "" {
-			o.GroupsClaim = groupsClaim
-		}
-		if o.Name == "" {
-			o.Name = issuerName(o.Issuer)
-		}
-	}
-	if cfg.Gateway.ApiKeyEnv == "" {
-		cfg.Gateway.ApiKeyEnv = envAPIKeys
-	}
-	if cfg.Gateway.ApiKeyEnv != "" {
-		if v := os.Getenv(cfg.Gateway.ApiKeyEnv); v != "" {
-			cfg.Gateway.ApiKeys = append(cfg.Gateway.ApiKeys, splitKeys(v)...)
-		}
-	}
-	if cfg.Builds == nil {
-		cfg.Builds = &v1.Builds{}
-	}
-	if cfg.Builds.Dir == "" {
-		cfg.Builds.Dir = filepath.Join(cfg.DataDir, "builds")
-	}
-	if len(cfg.Builds.Cli) == 0 {
-		cfg.Builds.Cli = append([]string(nil), defaultCLIs...)
-	}
-	if cfg.Builds.Jobs == 0 {
-		cfg.Builds.Jobs = uint32(runtime.NumCPU())
-	}
-	if cfg.Web == nil {
-		cfg.Web = &v1.Web{}
-	}
-	if cfg.Mesh == nil {
-		cfg.Mesh = &v1.MeshConfig{}
-	}
-	if cfg.Mesh.Exposure == "" {
-		cfg.Mesh.Exposure = meshExposure
-	}
-	return checkMesh(cfg.Mesh)
-}
-
-// Refuses mesh settings that name nothing the daemon can act on
-func checkMesh(m *v1.MeshConfig) error {
-	switch strings.ToLower(m.GetExposure()) {
-	case "guard", "direct":
-		m.Exposure = strings.ToLower(m.GetExposure())
-	default:
-		return fmt.Errorf("mesh.exposure %q: guard or direct", m.GetExposure())
-	}
-	if l := strings.TrimSpace(m.GetListen()); l != "" {
-		if _, _, err := net.SplitHostPort(l); err != nil {
-			return fmt.Errorf("mesh.listen %q: host:port, such as 0.0.0.0:8485", m.GetListen())
-		}
-		m.Listen = l
-	}
-	if a := strings.TrimSpace(m.GetAdvertise()); a != "" {
-		host := a
-		if h, port, err := net.SplitHostPort(a); err == nil {
-			if _, err := strconv.ParseUint(port, 10, 16); err != nil {
-				return fmt.Errorf("mesh.advertise %q: a host, or host:port, on the link to the other members", m.GetAdvertise())
-			}
-			host = h
-		}
-		host = strings.Trim(host, "[]")
-		if host == "" || strings.ContainsAny(host, " /") || strings.Contains(host, ":") && net.ParseIP(host) == nil {
-			return fmt.Errorf("mesh.advertise %q: a host, or host:port, on the link to the other members", m.GetAdvertise())
-		}
-		m.Advertise = a
-	}
-	return nil
-}
-
-// The issuer's host, or the issuer itself when it is not a URL
-func issuerName(issuer string) string {
-	u, err := url.Parse(issuer)
-	if err != nil || u.Host == "" {
-		return issuer
-	}
-	return u.Hostname()
-}
-
-// Splits a comma or whitespace separated key list
-func splitKeys(s string) []string {
-	var out []string
-	for _, part := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' }) {
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
+	return issuer
 }
 
 // Where the platform keeps application data, XDG on unix

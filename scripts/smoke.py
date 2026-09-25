@@ -61,7 +61,7 @@ def main():
         config = root / "config.json"
         config.write_text(json.dumps({"data_dir": str(root / "data"), "cache_dir": str(root / "cache")}))
         env = dict(os.environ, NEBU_DATA_DIR=str(root / "data"), NEBU_LISTEN=f"127.0.0.1:{port}",
-                   NEBU_TOKEN="nebu-smoke-token", NEBU_API_KEYS="nebu-smoke-key", NEBU_ADDR="")
+                   NEBU_AUTH_TOKEN="nebu-smoke-token", NEBU_GATEWAY_API_KEYS="nebu-smoke-key", NEBU_ADDR="")
         version = subprocess.check_output([binary, "-config", str(config), "version"], env=env, text=True)
         assert version.startswith("nebu "), version
         with (root / "daemon.log").open("w+") as log:
