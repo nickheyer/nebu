@@ -5,12 +5,9 @@ modules:
 lint:
   use:
     - STANDARD
-    - COMMENTS
   except:
     - FIELD_NOT_REQUIRED
     - PACKAGE_NO_IMPORT_CYCLE
-    - COMMENT_FIELD
-    - COMMENT_ENUM_VALUE
 breaking:
   use:
     - FILE

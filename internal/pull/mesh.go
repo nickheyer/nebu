@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/tasks"
@@ -503,13 +504,13 @@ func (p *Puller) landBlob(ctx context.Context, h *tasks.Handle, l *meshLanding, 
 		}
 		head.Body.Close()
 		h.Message("fetching " + a.GetPath() + " from " + from.Name)
-		var added int64
+		var added atomic.Int64
 		hexDigest, err := p.Fetcher.Fetch(mctx, sources.NewRangeBlob(client, url, size), partial, store.Hex(digest), func(d int64) {
-			added += d
+			added.Add(d)
 			h.Add(d)
 		})
 		if err != nil {
-			h.Add(-added)
+			h.Add(-added.Load())
 			if ctx.Err() != nil {
 				unlock()
 				return ctx.Err()
