@@ -608,7 +608,7 @@ func (SDCpp) StopGrace() time.Duration { return 20 * time.Second }
 func (SDCpp) Triage() []triage.Set     { return []triage.Set{triage.SDCpp{}} }
 
 func (SDCpp) Probes() []Probe {
-	return []Probe{
+	return append([]Probe{
 		{Key: "version", Args: []string{"--version"}, Parse: func(out string) (string, bool) {
 			// stable-diffusion.cpp version unknown, commit cc515a0
 			line := strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
@@ -636,7 +636,7 @@ func (SDCpp) Probes() []Probe {
 			}
 			return strings.Join(names, ","), len(names) > 0
 		}},
-	}
+	}, sdShapeProbes()...)
 }
 
 // sd-server logs the weights once loaded, split between device and host memory, and one compute buffer per part on the device it ran on:
@@ -667,7 +667,7 @@ func (SDCpp) Measure(lines []string) []*v1.Measurement {
 			m.add(side+".compute", n, line)
 		}
 	}
-	return m.list
+	return append(m.list, transportMeasurement(lines)...)
 }
 
 // Parses byte counts such as 1234.56 MB(VRAM) and 6702.86MB.
@@ -1000,7 +1000,8 @@ func sdMissing(s *estimate.Scope) []estimate.Missing {
 	return out
 }
 
-// Estimates peak activation memory across denoising and VAE decoding.
+// Estimates peak activation memory across denoising and VAE decoding, each counted when the
+// descriptor holds the part that runs it, both when it lists no parts
 func sdOverhead(s *estimate.Scope) uint64 {
 	width, height := float64(s.Params.Int("width")), float64(s.Params.Int("height"))
 	frames := math.Max(float64(s.Params.Int("video_frames")), 1)
@@ -1018,7 +1019,25 @@ func sdOverhead(s *estimate.Scope) uint64 {
 	if s.Params.Bool("vae_tiling") {
 		decode = 512 * 512 * frames * 1024
 	}
+	if parts := sdPartCount(s.Descriptor); parts > 0 {
+		if !sdHolds(s.Descriptor, v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION) {
+			activations = 0
+		}
+		if !sdHolds(s.Descriptor, v1.TensorGroupKind_TENSOR_GROUP_KIND_VAE) {
+			decode = 0
+		}
+	}
 	return uint64(384*(1<<20) + math.Max(activations, decode))
+}
+
+// Whether the descriptor holds a part of a kind
+func sdHolds(d *v1.Descriptor, kind v1.TensorGroupKind) bool {
+	for _, g := range d.GetGroups() {
+		if g.GetKind() == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func (SDCpp) Policy() *estimate.Policy {

@@ -4,10 +4,12 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -47,6 +49,8 @@ const (
 	upstreamTimeoutMs = 600000
 	sessionTTL        = "24h"
 	groupsClaim       = "groups"
+	// Seats other seats connect to sit behind a guard listener unless config says direct
+	meshExposure = "guard"
 )
 
 // Scopes requested from the provider when auth.oidc.scopes is empty
@@ -259,6 +263,43 @@ func applyDefaults(cfg *v1.Config) error {
 	}
 	if cfg.Web == nil {
 		cfg.Web = &v1.Web{}
+	}
+	if cfg.Mesh == nil {
+		cfg.Mesh = &v1.MeshConfig{}
+	}
+	if cfg.Mesh.Exposure == "" {
+		cfg.Mesh.Exposure = meshExposure
+	}
+	return checkMesh(cfg.Mesh)
+}
+
+// Refuses mesh settings that name nothing the daemon can act on
+func checkMesh(m *v1.MeshConfig) error {
+	switch strings.ToLower(m.GetExposure()) {
+	case "guard", "direct":
+		m.Exposure = strings.ToLower(m.GetExposure())
+	default:
+		return fmt.Errorf("mesh.exposure %q: guard or direct", m.GetExposure())
+	}
+	if l := strings.TrimSpace(m.GetListen()); l != "" {
+		if _, _, err := net.SplitHostPort(l); err != nil {
+			return fmt.Errorf("mesh.listen %q: host:port, such as 0.0.0.0:8485", m.GetListen())
+		}
+		m.Listen = l
+	}
+	if a := strings.TrimSpace(m.GetAdvertise()); a != "" {
+		host := a
+		if h, port, err := net.SplitHostPort(a); err == nil {
+			if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+				return fmt.Errorf("mesh.advertise %q: a host, or host:port, on the link to the other members", m.GetAdvertise())
+			}
+			host = h
+		}
+		host = strings.Trim(host, "[]")
+		if host == "" || strings.ContainsAny(host, " /") || strings.Contains(host, ":") && net.ParseIP(host) == nil {
+			return fmt.Errorf("mesh.advertise %q: a host, or host:port, on the link to the other members", m.GetAdvertise())
+		}
+		m.Advertise = a
 	}
 	return nil
 }

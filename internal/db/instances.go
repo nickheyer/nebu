@@ -3,16 +3,60 @@ package db
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"google.golang.org/protobuf/encoding/protojson"
 )
+
+// Stores a seat block as JSON, empty for a solo instance
+func seatCol(s *v1.SeatSpec) (string, error) {
+	if s == nil {
+		return "", nil
+	}
+	raw, err := protojson.Marshal(s)
+	return string(raw), err
+}
+
+// Scans a seat block back, nil when the column is empty
+type seatAt struct{ s *v1.SeatSpec }
+
+func (a *seatAt) Scan(v any) error {
+	a.s = nil
+	raw, _ := v.(string)
+	if raw == "" {
+		return nil
+	}
+	s := &v1.SeatSpec{}
+	if err := protojson.Unmarshal([]byte(raw), s); err != nil {
+		return err
+	}
+	a.s = s
+	return nil
+}
+
+// Scans a comma separated node id list
+type spanAt struct{ ids []string }
+
+func (a *spanAt) Scan(v any) error {
+	a.ids = nil
+	raw, _ := v.(string)
+	if raw != "" {
+		a.ids = strings.Split(raw, ",")
+	}
+	return nil
+}
 
 // Inserts or replaces an instance with every child row
 func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 	return d.tx(ctx, func(exec execFn) error {
 		id := in.GetId()
-		if err := exec(`INSERT OR REPLACE INTO instances (id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, in.GetName(), in.GetSourceId(), in.GetRepo(), in.GetGroup(), in.GetRuntimeId(), in.GetInstallId(), in.GetEndpoint(), enumCol(in.GetState()), in.GetPid(), in.GetError(), in.GetTaskId(), boolCol(in.GetDesiredRunning()), stamp(in.GetCreatedAt().AsTime()), timeCol(in.GetReadyAt()), timeCol(in.GetStoppedAt()), in.GetSlotId()); err != nil {
+		seat, err := seatCol(in.GetSeat())
+		if err != nil {
+			return err
+		}
+		if err := exec(`INSERT OR REPLACE INTO instances (id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id, seat, transport) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, in.GetName(), in.GetSourceId(), in.GetRepo(), in.GetGroup(), in.GetRuntimeId(), in.GetInstallId(), in.GetEndpoint(), enumCol(in.GetState()), in.GetPid(), in.GetError(), in.GetTaskId(), boolCol(in.GetDesiredRunning()), stamp(in.GetCreatedAt().AsTime()), timeCol(in.GetReadyAt()), timeCol(in.GetStoppedAt()), in.GetSlotId(), seat, in.GetTransport()); err != nil {
 			return err
 		}
 		if err := clearChildren(exec, "instance_id", id, "instance_params", "instance_command", "instance_requests", "instance_request_params", "instance_plans", "instance_plan_pools", "instance_plan_placements", "instance_plan_params", "instance_measurements", "instance_triage", "instance_triage_fixes", "instance_templates"); err != nil {
@@ -32,8 +76,12 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			}
 		}
 		if req := in.GetRequest(); req != nil {
-			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id, force) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId(), boolCol(req.GetForce())); err != nil {
+			reqSeat, err := seatCol(req.GetSeat())
+			if err != nil {
+				return err
+			}
+			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id, force, span, shape, seat, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId(), boolCol(req.GetForce()), strings.Join(req.GetSpan(), ","), enumCol(req.GetShape()), reqSeat, enumCol(req.GetProfile())); err != nil {
 				return err
 			}
 			if err := putMap(exec, `INSERT INTO instance_request_params (instance_id, name, value) VALUES (?, ?, ?)`, id, req.GetParams()); err != nil {
@@ -83,9 +131,12 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 
 // Lists every instance oldest first with all child rows
 func (d *DB) ListInstances(ctx context.Context) ([]*v1.Instance, error) {
-	out, err := list(ctx, d, `SELECT id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id FROM instances ORDER BY created_at, id`, func(rows *sql.Rows) (*v1.Instance, error) {
+	out, err := list(ctx, d, `SELECT id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id, seat, transport FROM instances ORDER BY created_at, id`, func(rows *sql.Rows) (*v1.Instance, error) {
 		in := &v1.Instance{}
-		return in, rows.Scan(&in.Id, &in.Name, &in.SourceId, &in.Repo, &in.Group, &in.RuntimeId, &in.InstallId, &in.Endpoint, enumAt[v1.InstanceState]{&in.State}, &in.Pid, &in.Error, &in.TaskId, (*flag)(&in.DesiredRunning), at{&in.CreatedAt}, at{&in.ReadyAt}, at{&in.StoppedAt}, &in.SlotId)
+		var seat seatAt
+		err := rows.Scan(&in.Id, &in.Name, &in.SourceId, &in.Repo, &in.Group, &in.RuntimeId, &in.InstallId, &in.Endpoint, enumAt[v1.InstanceState]{&in.State}, &in.Pid, &in.Error, &in.TaskId, (*flag)(&in.DesiredRunning), at{&in.CreatedAt}, at{&in.ReadyAt}, at{&in.StoppedAt}, &in.SlotId, &seat, &in.Transport)
+		in.Seat = seat.s
+		return in, err
 	})
 	if err != nil {
 		return nil, err
@@ -107,9 +158,13 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 	if in.Command, err = d.strings(ctx, `SELECT arg FROM instance_command WHERE instance_id = ? ORDER BY position`, id); err != nil {
 		return err
 	}
-	requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, force FROM instance_requests WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
+	requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, force, span, shape, seat, profile FROM instance_requests WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
 		req := &v1.RunRequest{}
-		return req, rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, (*flag)(&req.Force))
+		var span spanAt
+		var seat seatAt
+		err := rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, (*flag)(&req.Force), &span, enumAt[v1.Shape]{&req.Shape}, &seat, enumAt[v1.PlanProfile]{&req.Profile})
+		req.Span, req.Seat = span.ids, seat.s
+		return req, err
 	}, id)
 	if err != nil {
 		return err

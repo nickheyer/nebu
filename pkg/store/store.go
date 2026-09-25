@@ -48,6 +48,11 @@ type Store struct {
 	reserved uint64
 	// Blob capacity target, zero for unlimited.
 	MaxBytes uint64
+	// Where formation stages keep the tensors their heads stream to them, one directory per
+	// formation. They count toward the limit and are collected with the blobs.
+	CacheDir string
+	// Whether a formation's tensor cache is still wanted, nil keeps every one
+	KeepCache func(formationID string) bool
 }
 
 // Opens or creates a store
@@ -286,6 +291,12 @@ func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.Store
 	if err != nil {
 		return nil, release, err
 	}
+	// Caches of formations that ended go before any model.
+	freed, err := s.collectCaches()
+	if err != nil {
+		return nil, release, err
+	}
+	used -= min(freed, used)
 	// Evict least recently used models first, using pull time for unrun models.
 	sort.SliceStable(manifests, func(i, j int) bool { return LastUse(manifests[i]).Before(LastUse(manifests[j])) })
 	var removed []*v1.StoredModel
@@ -314,18 +325,22 @@ func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.Store
 	return removed, release, nil
 }
 
-// Estimates bytes freed by eviction for a pull of the requested size.
-func (s *Store) Evictable(need uint64, keep func(*v1.StoredModel) bool) uint64 {
+// Bytes eviction would free for a pull of the requested size: the models not kept and the tensor
+// caches of formations that ended, up to what the pull needs under the cap
+func (s *Store) Evictable(need uint64, keep func(*v1.StoredModel) bool) (uint64, error) {
 	if s.MaxBytes == 0 {
-		return 0
+		return 0, nil
 	}
 	used, err := s.committed()
-	if err != nil || used+need <= s.MaxBytes {
-		return 0
+	if err != nil {
+		return 0, err
+	}
+	if used+need <= s.MaxBytes {
+		return 0, nil
 	}
 	manifests, err := s.ListManifests()
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	var idle uint64
 	for _, m := range manifests {
@@ -333,16 +348,35 @@ func (s *Store) Evictable(need uint64, keep func(*v1.StoredModel) bool) uint64 {
 			idle += m.GetBytes()
 		}
 	}
-	return min(idle, used+need-s.MaxBytes)
+	caches, err := s.tensorCaches()
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range caches {
+		if !s.keepCache(c.formationID) {
+			idle += c.bytes
+		}
+	}
+	return min(idle, used+need-s.MaxBytes), nil
 }
 
-// Blob bytes on disk plus what pulls in flight have reserved
+// Blob bytes on disk, the tensor caches stages keep, plus what pulls in flight have reserved
 func (s *Store) committed() (uint64, error) {
 	used, err := s.blobBytes()
+	if err != nil {
+		return 0, err
+	}
+	caches, err := s.tensorCaches()
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range caches {
+		used += c.bytes
+	}
 	s.mu.Lock()
 	used += s.reserved
 	s.mu.Unlock()
-	return used, err
+	return used, nil
 }
 
 // Last run time, falling back to pull time.
@@ -501,8 +535,11 @@ func (s *Store) Gc(partials bool) (*v1.GcResponse, error) {
 			continue
 		}
 		info, err := e.Info()
-		if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		if err := os.Remove(filepath.Join(s.root, blobsDir, name)); err != nil {
 			return nil, err
@@ -510,7 +547,93 @@ func (s *Store) Gc(partials bool) (*v1.GcResponse, error) {
 		resp.Removed++
 		resp.FreedBytes += uint64(info.Size())
 	}
+	freed, err := s.collectCaches()
+	if err != nil {
+		return nil, err
+	}
+	if freed > 0 {
+		resp.Removed++
+		resp.FreedBytes += freed
+	}
 	return resp, nil
+}
+
+// One formation's tensor cache on disk
+type tensorCache struct {
+	formationID string
+	path        string
+	bytes       uint64
+}
+
+// The tensor caches stages keep, with their sizes. A file gone between the listing and its stat
+// holds no bytes; any other failure to read a cache is the caller's to report.
+func (s *Store) tensorCaches() ([]tensorCache, error) {
+	if s.CacheDir == "" {
+		return nil, nil
+	}
+	entries, err := os.ReadDir(s.CacheDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []tensorCache
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		c := tensorCache{formationID: e.Name(), path: filepath.Join(s.CacheDir, e.Name())}
+		err := filepath.WalkDir(c.path, func(_ string, d fs.DirEntry, err error) error {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			info, err := d.Info()
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			c.bytes += uint64(info.Size())
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("tensor cache %s: %w", c.formationID, err)
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// Whether a formation's tensor cache is still wanted
+func (s *Store) keepCache(formationID string) bool {
+	return s.KeepCache != nil && s.KeepCache(formationID)
+}
+
+// Removes the tensor caches of formations no longer wanted and returns the bytes freed
+func (s *Store) collectCaches() (uint64, error) {
+	caches, err := s.tensorCaches()
+	if err != nil {
+		return 0, err
+	}
+	var freed uint64
+	for _, c := range caches {
+		if s.keepCache(c.formationID) {
+			continue
+		}
+		if err := os.RemoveAll(c.path); err != nil {
+			return freed, err
+		}
+		freed += c.bytes
+	}
+	return freed, nil
 }
 
 // Counts models, blobs, and partials
@@ -526,8 +649,11 @@ func (s *Store) Status() (*v1.StoreStatus, error) {
 	}
 	for _, e := range entries {
 		info, err := e.Info()
-		if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
+		}
+		if err != nil {
+			return nil, err
 		}
 		switch {
 		case strings.HasSuffix(e.Name(), partialSuffix), strings.HasSuffix(e.Name(), stateSuffix):
@@ -537,6 +663,14 @@ func (s *Store) Status() (*v1.StoreStatus, error) {
 			st.Blobs++
 			st.BlobBytes += uint64(info.Size())
 		}
+	}
+	caches, err := s.tensorCaches()
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range caches {
+		st.Caches++
+		st.CacheBytes += c.bytes
 	}
 	return st, nil
 }

@@ -52,6 +52,7 @@ type clients struct {
 	events    nebuv1connect.EventServiceClient
 	bots      nebuv1connect.BotServiceClient
 	auth      nebuv1connect.AuthServiceClient
+	mesh      nebuv1connect.MeshServiceClient
 }
 
 // Adds the bearer token to every request
@@ -165,6 +166,7 @@ func (e *env) clients() (*clients, error) {
 		events:    nebuv1connect.NewEventServiceClient(httpClient, base),
 		bots:      nebuv1connect.NewBotServiceClient(httpClient, base),
 		auth:      nebuv1connect.NewAuthServiceClient(httpClient, base),
+		mesh:      nebuv1connect.NewMeshServiceClient(httpClient, base),
 	}
 	return e.cl, nil
 }
@@ -380,6 +382,37 @@ func (e *env) onlyGroup(ctx context.Context, source, repo, group string) (string
 		return names[0], nil
 	}
 	return "", fmt.Errorf("%s has groups %s, pass --group", repo, strings.Join(names, ", "))
+}
+
+// Resolves a repository and group stored on any member of the mesh, this node included
+func (e *env) meshModel(ctx context.Context, source, repo, group string) (string, string, error) {
+	if sourceID, groupName, err := e.storedModel(ctx, source, repo, group); err == nil {
+		return sourceID, groupName, nil
+	}
+	resp, err := e.cl.mesh.ListNodes(ctx, connect.NewRequest(&v1.ListNodesRequest{}))
+	if err != nil {
+		return "", "", err
+	}
+	groups := map[string]string{}
+	var names []string
+	for _, n := range resp.Msg.GetNodes() {
+		for _, s := range n.GetStored() {
+			if s.GetRepo() != repo || source != "" && s.GetSourceId() != source || group != "" && s.GetGroup() != group {
+				continue
+			}
+			if _, ok := groups[s.GetGroup()]; !ok {
+				groups[s.GetGroup()] = s.GetSourceId()
+				names = append(names, s.GetGroup())
+			}
+		}
+	}
+	switch len(names) {
+	case 0:
+		return "", "", fmt.Errorf("%s is stored on no member of the mesh, pull it first", repo)
+	case 1:
+		return groups[names[0]], names[0], nil
+	}
+	return "", "", fmt.Errorf("%s has groups %s on the mesh, pass --group", repo, strings.Join(names, ", "))
 }
 
 // Resolves a stored repository and group.

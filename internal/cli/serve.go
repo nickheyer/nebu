@@ -27,6 +27,9 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	name := fs.String("name", "", "public model name for the gateway")
 	slot := fs.String("slot", "", "slot to run in, its name becomes the public name")
 	force := fs.Bool("force", false, "launch even when the plan says the model does not fit, redoing any prepare step")
+	span := fs.String("span", "", "mesh nodes the run may use, comma separated, which makes it a formation")
+	shape := fs.String("shape", "", "formation shape: auto, chain, lockstep, relay, replicas, draft, or stages")
+	profile := fs.String("profile", "", "what the planner weighs: chat, agent, batch, or auto")
 	var params multi
 	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the slot defaults")
 	positional, err := e.parse(fs, args, 1, 1, "run <repo> [flags]")
@@ -36,6 +39,21 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	paramMap, err := pairs(params, "param")
 	if err != nil {
 		return err
+	}
+	shapeValue, err := parseShape(*shape)
+	if err != nil {
+		return err
+	}
+	profileValue, err := parseProfile(*profile)
+	if err != nil {
+		return err
+	}
+	if *span != "" || *shape != "" || *profile != "" {
+		sourceID, groupName, err := e.meshModel(ctx, *source, positional[0], *group)
+		if err != nil {
+			return err
+		}
+		return e.runFormation(ctx, &v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Name: *name, Params: paramMap, SlotId: *slot, Force: *force, Span: parseSpan(*span), Shape: shapeValue, Profile: profileValue})
 	}
 	sourceID, groupName, err := e.storedModel(ctx, *source, positional[0], *group)
 	if err != nil {
@@ -309,7 +327,7 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 	req := &v1.UpdateSlotRequest{}
 	var devices, params, aliases multi
 	var position uint
-	fs.Var(&devices, "device", "device id from nebu host, repeatable, all devices when none")
+	fs.Var(&devices, "device", "device id from nebu host, or node/device for one on another member, repeatable, all devices here when none")
 	fs.Var(&aliases, "alias", "extra names for a slot")
 	memory := fs.String("memory", "", "the most memory a run takes per pool, such as 8GiB, whole pools when empty")
 	placement := fs.String("placement", "", "placement: device, host, or auto (device first, then host)")
@@ -797,6 +815,24 @@ func runGatewayTrace(ctx context.Context, e *env, args []string) error {
 			{"tokens", fmt.Sprintf("%d in, %d out", t.GetPromptTokens(), t.GetCompletionTokens())},
 			{"stop", t.GetStop()},
 			{"bytes", fmt.Sprintf("%d in, %d out", t.GetRequestBytes(), t.GetResponseBytes())},
+		}
+		if t.GetNodeId() != "" {
+			rows = append(rows, []string{"node", t.GetNodeId()})
+		}
+		if t.GetForwarded() {
+			rows = append(rows, []string{"forwarded", yes(true)})
+		}
+		if t.GetConductorTrace() != "" {
+			rows = append(rows, []string{"conductor trace", t.GetConductorTrace()})
+		}
+		if t.GetRelay() != "" {
+			rows = append(rows, []string{"relay", t.GetRelay()})
+		}
+		if len(t.GetSeats()) > 0 {
+			rows = append(rows, []string{"seats", strings.Join(t.GetSeats(), ", ")})
+		}
+		if t.GetDraftOffered() > 0 {
+			rows = append(rows, []string{"draft", fmt.Sprintf("%d of %d accepted", t.GetDraftAccepted(), t.GetDraftOffered())})
 		}
 		if t.GetError() != "" {
 			rows = append(rows, []string{"error", t.GetError()})

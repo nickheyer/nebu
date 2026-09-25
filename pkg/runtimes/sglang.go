@@ -89,10 +89,20 @@ func (SGLang) StopGrace() time.Duration { return 30 * time.Second }
 func (SGLang) Triage() []triage.Set     { return []triage.Set{triage.SGLang{}} }
 
 func (SGLang) Probes() []Probe {
-	return []Probe{{Key: "version", Args: []string{"-c", "import sglang; print(sglang.__version__)"}, Timeout: time.Minute, Parse: versionField}}
+	help := []string{"-m", "sglang.launch_server", "--help"}
+	nnodes := flagProbe(factNNodes, help, "--nnodes")
+	nnodes.Timeout = time.Minute
+	disaggregation := flagProbe(factDisaggregation, help, "--disaggregation-mode")
+	disaggregation.Timeout = time.Minute
+	nixl := sglangNIXLProbe()
+	return []Probe{
+		{Key: "version", Args: []string{"-c", "import sglang; print(sglang.__version__)"}, Timeout: time.Minute, Parse: versionField},
+		nnodes, disaggregation, nixl,
+	}
 }
 
-// SGLang logs the weights it loaded, Load weight end. ... mem usage=12.34 GiB
+// SGLang logs the weights it loaded, Load weight end. ... mem usage=12.34 GiB, and NCCL names the
+// net its ranks took, NET/IB or NET/Socket, which is a measurement too
 func (SGLang) Measure(lines []string) []*v1.Measurement {
 	var m measurements
 	for _, line := range lines {
@@ -103,12 +113,15 @@ func (SGLang) Measure(lines []string) []*v1.Measurement {
 			m.add("device.weights", n, line)
 		}
 	}
-	return m.list
+	return append(m.list, transportMeasurement(lines)...)
 }
 
 func (SGLang) Policy() *estimate.Policy {
 	device := v1.PoolKind_POOL_KIND_DEVICE
 	return &estimate.Policy{
+		// Ranks pass half precision activations in a ring and pipeline prompt chunks, two in flight
+		// with dynamic chunking, and the NIXL backend streams the cache as layers finish.
+		Shapes: &estimate.ShapeFacts{Ring: true, ActivationBytes: 2, ChunksInFlight: 2, RelayOverlap: true, RelayRDMA: true, ReductionsPerLayer: 2, ChainAggregate: true, ChainSpeculative: false, Handoff: estimate.HandoffSGLangBootstrap},
 		Groups: []estimate.GroupRule{
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_EMBEDDING, Pool: device},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, Pool: device},

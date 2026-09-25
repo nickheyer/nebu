@@ -9,6 +9,7 @@ import { EventService } from '$proto/event_pb';
 import { GatewayService } from '$proto/gateway_pb';
 import { HostService } from '$proto/host_pb';
 import { InstanceService } from '$proto/instance_pb';
+import { MeshService } from '$proto/mesh_pb';
 import { RuntimeService } from '$proto/runtime_pb';
 import { SettingsService } from '$proto/settings_pb';
 import { SlotService } from '$proto/slot_pb';
@@ -51,7 +52,8 @@ export const api = {
   events: createClient(EventService, transport),
   bots: createClient(BotService, transport),
   auth: createClient(AuthService, transport),
-  chats: createClient(ChatService, transport)
+  chats: createClient(ChatService, transport),
+  mesh: createClient(MeshService, transport)
 };
 
 // Include the API token in file URLs when authentication is required.

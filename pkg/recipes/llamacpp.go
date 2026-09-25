@@ -105,15 +105,16 @@ func (LlamaCpp) Sandbox() Sandbox {
 func (LlamaCpp) Steps(b *Build) []Step {
 	configure := command("cmake", "-S", ".", "-B", "build",
 		"-DCMAKE_BUILD_TYPE="+arg(b.Vars, "build_type"), arg(b.Vars, "backend"), arg(b.Vars, "archs"),
-		"-DBUILD_SHARED_LIBS=OFF", "-DLLAMA_CURL=OFF", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_BUILD_SERVER=ON")
+		"-DBUILD_SHARED_LIBS=OFF", "-DLLAMA_CURL=OFF", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_BUILD_SERVER=ON", "-DLLAMA_BUILD_TOOLS=ON", "-DGGML_RPC=ON")
 	configure = append(configure, args(b.Vars, "extra")...)
 	return []Step{
 		{Name: "configure", Command: configure},
-		{Name: "compile", Command: command("cmake", "--build", "build", "--config", arg(b.Vars, "build_type"), "--target", "llama-server", "-j", strconv.Itoa(b.Jobs))},
+		{Name: "compile", Command: command("cmake", "--build", "build", "--config", arg(b.Vars, "build_type"), "--target", "llama-server", "--target", "rpc-server", "-j", strconv.Itoa(b.Jobs))},
 	}
 }
 
-func (LlamaCpp) Outputs() []string      { return []string{"build/bin/llama-server"} }
+// The server and the rpc server that lets it head a chain or draft formation
+func (LlamaCpp) Outputs() []string      { return []string{"build/bin/llama-server", "build/bin/rpc-server"} }
 func (LlamaCpp) Binary() string         { return "llama-server" }
 func (LlamaCpp) Timeout() time.Duration { return 3 * time.Hour }
 func (LlamaCpp) Patches() []Patch       { return nil }

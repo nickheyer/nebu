@@ -20,10 +20,12 @@ import (
 	"github.com/nickheyer/nebu/internal/chats"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/doctor"
+	"github.com/nickheyer/nebu/internal/formations"
 	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
+	"github.com/nickheyer/nebu/internal/mesh"
 	"github.com/nickheyer/nebu/internal/notify"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc"
@@ -40,6 +42,7 @@ import (
 	formatsall "github.com/nickheyer/nebu/pkg/formats/all"
 	"github.com/nickheyer/nebu/pkg/host"
 	"github.com/nickheyer/nebu/pkg/launch"
+	"github.com/nickheyer/nebu/pkg/perf"
 	"github.com/nickheyer/nebu/pkg/precision"
 	"github.com/nickheyer/nebu/pkg/probes"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -93,11 +96,16 @@ type Daemon struct {
 	// Checks every API and gateway request's credential
 	Guard *auth.Guard
 	// Single sign-on, nil when auth.oidc is unset
-	SSO       *sso.Service
-	Log       *slog.Logger
-	handler   http.Handler
-	cancel    context.CancelFunc
-	closeOnce sync.Once
+	SSO *sso.Service
+	// The mesh this node belongs to, the conductor of formations, and the numbers they learn
+	Mesh       *mesh.Manager
+	Formations *formations.Manager
+	Perf       *perf.Table
+	Log        *slog.Logger
+	tls        *tls.Config
+	handler    http.Handler
+	cancel     context.CancelFunc
+	closeOnce  sync.Once
 	// The notifier, waited for on close
 	background sync.WaitGroup
 	base       context.Context
@@ -197,6 +205,9 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		cancel:  cancel,
 		base:    base,
 	}
+	if d.tls, err = d.tlsConfig(); err != nil {
+		return nil, err
+	}
 	// Load settings and subscribe to updates.
 	d.Settings = &settings.Manager{DB: store, Events: bus}
 	if err = d.Settings.Load(context.Background()); err != nil {
@@ -241,6 +252,8 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	if d.Routes, err = gateway.OpenTable(context.Background(), store, bus, log); err != nil {
 		return nil, err
 	}
+	d.Routes.SetHandoffs(handoffOf(rts))
+	d.Routes.Follow(base)
 	d.Instances = &instances.Manager{
 		DB:          store,
 		Dir:         filepath.Join(cfg.GetDataDir(), "instances"),
@@ -287,6 +300,9 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		return nil, err
 	}
 	d.Gateway.SetCredentials(d.Guard)
+	if err = d.openMesh(context.Background(), store, prober, rts, blobStore, calibration, bus, log); err != nil {
+		return nil, err
+	}
 	// Load bots now and connect enabled bots when serving starts.
 	d.Bots = bots.New(base, store, d.Gateway, bus, log, cfg.GetDiscord().GetFfmpeg())
 	if err = d.Bots.Load(context.Background()); err != nil {
@@ -298,7 +314,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		ui = web.Handler()
 	}
 	d.Doctor = &doctor.Doctor{Host: prober, Runtimes: rts, Sources: srcs, Store: blobStore, Installs: d.Installs, Tasks: d.Tasks, MinFree: cfg.GetMinFreeBytes()}
-	d.handler = rpc.NewHandler(rpc.Deps{
+	deps := rpc.Deps{
 		Host:      prober,
 		Doctor:    d.Doctor,
 		Settings:  d.Settings,
@@ -327,8 +343,89 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		SSO:           d.SSO,
 		Recent:        recent,
 		Log:           log,
-	})
+		Mesh:          d.Mesh,
+		Formations:    d.Formations,
+		Perf:          d.Perf,
+		CacheDir:      d.Formations.CacheDir,
+	}
+	d.handler = rpc.NewHandler(deps)
+	// Node traffic gets the same services with the gateway mounted, whatever the gateway listens on.
+	meshDeps := deps
+	meshDeps.GatewayShared, meshDeps.Web = true, nil
+	d.Mesh.Handler = rpc.NewHandler(meshDeps)
 	return d, nil
+}
+
+// Opens the mesh identity, the conductor, and the learned tables, wiring them to the puller and gateway
+func (d *Daemon) openMesh(ctx context.Context, store *db.DB, prober *host.Prober, rts *runtimes.Registry, blobStore *store.Store, calibration *calibrate.Table, bus *events.Bus, log *slog.Logger) error {
+	table, err := perf.Open(ctx, store)
+	if err != nil {
+		return err
+	}
+	d.Perf = table
+	d.Mesh = &mesh.Manager{
+		DB:        store,
+		Config:    d.Config.GetMesh(),
+		Host:      prober,
+		Installs:  d.Installs,
+		Runtimes:  rts,
+		Store:     blobStore,
+		Perf:      table,
+		Routes:    d.Routes,
+		Settings:  d.Settings,
+		Events:    bus,
+		Guard:     d.Guard,
+		Log:       log,
+		Version:   Version,
+		APIListen: d.Config.GetListen(),
+		APITLS:    d.tls,
+	}
+	if err := d.Mesh.Open(ctx); err != nil {
+		return err
+	}
+	d.Formations = &formations.Manager{
+		DB:           store,
+		Mesh:         d.Mesh,
+		Instances:    d.Instances,
+		Routes:       d.Routes,
+		Tasks:        d.Tasks,
+		Inspector:    d.Inspector,
+		Runtimes:     rts,
+		Installs:     d.Installs,
+		Store:        blobStore,
+		Puller:       d.Puller,
+		Perf:         table,
+		Calibration:  calibration,
+		Events:       bus,
+		Log:          log,
+		CacheDir:     filepath.Join(d.Config.GetCacheDir(), "rpc"),
+		SlotView:     d.Slots,
+		Traces:       d.Gateway.Traces(),
+		Gateway:      d.Gateway,
+		DrainTimeout: time.Duration(d.Config.GetGateway().GetDrainTimeoutMs()) * time.Millisecond,
+	}
+	if err := d.Formations.Open(ctx); err != nil {
+		return err
+	}
+	d.Mesh.Formations = d.Formations
+	d.Slots.Formations = d.Formations
+	d.Instances.Formations = d.Formations
+	blobStore.CacheDir, blobStore.KeepCache = d.Formations.CacheDir, d.Formations.Live
+	d.Puller.Mesh = mesh.Source{Mesh: d.Mesh}
+	d.Gateway.SetPeers(d.Formations)
+	keep := d.Puller.Keep
+	d.Puller.Keep = func(m *v1.StoredModel) bool {
+		if keep(m) {
+			return true
+		}
+		for _, f := range d.Formations.List(true) {
+			if f.GetSourceId() == m.GetSourceId() && f.GetRepo() == m.GetRepo() && f.GetGroup() == m.GetGroup() {
+				return true
+			}
+		}
+		return false
+	}
+	return nil
 }
 
 // Sets up sessions, the daemon token, user API tokens, and accounts or single sign-on.
@@ -411,6 +508,15 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 	for _, r := range d.Routes.List() {
 		add(v1.EventKind_EVENT_KIND_ROUTE, r.GetName(), r)
 	}
+	if d.Mesh.Joined() {
+		for _, n := range d.Mesh.Nodes() {
+			add(v1.EventKind_EVENT_KIND_NODE, n.GetId(), n)
+		}
+	}
+	add(v1.EventKind_EVENT_KIND_MESH, "mesh", d.Mesh.Status())
+	for _, f := range d.Formations.List(false) {
+		add(v1.EventKind_EVENT_KIND_FORMATION, f.GetId(), f)
+	}
 	for _, b := range d.Bots.List() {
 		add(v1.EventKind_EVENT_KIND_BOT, b.GetId(), b)
 	}
@@ -439,7 +545,9 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 func (d *Daemon) Close() {
 	d.closeOnce.Do(func() {
 		d.Bots.Close()
+		d.Formations.Close()
 		d.Instances.Close()
+		d.Mesh.Close()
 		d.cancel()
 		d.background.Wait()
 		drain, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -456,10 +564,7 @@ func (d *Daemon) Handler() http.Handler { return d.handler }
 
 // Listens on the configured addresses until ctx ends, over TLS when a certificate is configured
 func (d *Daemon) ListenAndServe(ctx context.Context) error {
-	tlsConfig, err := d.tlsConfig()
-	if err != nil {
-		return err
-	}
+	tlsConfig := d.tls
 	listen := func(addr string) (net.Listener, error) {
 		ln, err := net.Listen("tcp", addr)
 		if err != nil || tlsConfig == nil {
@@ -526,7 +631,7 @@ func (d *Daemon) warnExposure(secure bool) {
 // Recovers state, then serves the API and gateway listeners
 func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 	d.addr = ln.Addr().String()
-	for _, recover := range []func(context.Context) error{d.Tasks.Recover, d.Installs.RecoverBuilds, d.Instances.Recover, d.Slots.Recover, d.Bots.Recover} {
+	for _, recover := range []func(context.Context) error{d.Tasks.Recover, d.Installs.RecoverBuilds, d.Instances.Recover, d.Slots.Recover, d.Formations.Recover, d.Bots.Recover} {
 		if err := recover(ctx); err != nil {
 			ln.Close()
 			if gatewayLn != nil {
@@ -535,9 +640,9 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 			return err
 		}
 	}
-	// Aliases of instances outside slots outlive a restart
+	// Aliases of instances outside slots outlive a restart, and formation routes follow their records
 	for _, r := range d.Routes.Prune(func(r *v1.Route) bool {
-		if r.GetSlotId() != "" {
+		if r.GetSlotId() != "" || r.GetFormationId() != "" {
 			return true
 		}
 		in, err := d.Instances.Get(r.GetInstanceId())
@@ -561,6 +666,15 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 	if _, err := d.Doctor.Start(ctx); err != nil {
 		d.Log.Warn("host check failed to start", "err", err)
 	}
+	// Join the mesh's loops and watch formations for the daemon's lifetime.
+	if err := d.Mesh.Start(d.base); err != nil {
+		ln.Close()
+		if gatewayLn != nil {
+			gatewayLn.Close()
+		}
+		return err
+	}
+	d.Formations.Start()
 	// Cancel request contexts when serving stops.
 	requests, endRequests := context.WithCancel(context.Background())
 	defer endRequests()
@@ -598,4 +712,18 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 	}
 	d.Close()
 	return result
+}
+
+// Names each runtime's relay handoff from its shape facts, for the gateway's relay routes
+func handoffOf(reg *runtimes.Registry) func(runtimeID string) string {
+	return func(runtimeID string) string {
+		rt, err := reg.Get(runtimeID)
+		if err != nil {
+			return ""
+		}
+		if p := rt.Policy(); p != nil && p.Shapes != nil {
+			return p.Shapes.Handoff
+		}
+		return ""
+	}
 }

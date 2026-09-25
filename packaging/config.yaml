@@ -8,6 +8,14 @@ logging:
   level: info
   format: text
 
+# Mesh: nodes on one network pooling their devices. Everything about membership runs from the
+# Mesh page; these settings only shape how this node is reached.
+# mesh:
+#   listen: 0.0.0.0:8485   # node traffic listener, bound when the API listener stays on loopback
+#   advertise: 10.0.0.5    # the address other members reach this node at, on the fastest link
+#   announce: true         # multicast beacons, so nodes and meshes on the network find each other
+#   exposure: guard        # guard: seats other seats connect to sit behind a forwarder; direct: on the mesh address
+
 # ffmpeg samples video attachments. Defaults to ffmpeg on PATH.
 # discord:
 #   ffmpeg: /usr/bin/ffmpeg

@@ -129,6 +129,18 @@ message Discord {
   string ffmpeg = 1;
 }
 
+// Mesh membership settings
+message MeshConfig {
+  // Address node traffic listens on, a second listener when the API listener stays on loopback
+  string listen = 1;
+  // The address this node tells other members, on the fastest link to them
+  string advertise = 2;
+  // Whether to send and hear multicast beacons. On when unset.
+  optional bool announce = 3;
+  // guard, a forwarder in front of seats other seats connect to, or direct, the seat on the mesh address itself
+  string exposure = 4;
+}
+
 // Daemon and client configuration
 message Config {
   string listen = 1;
@@ -149,4 +161,5 @@ message Config {
   Tls tls = 18;
   Notify notify = 19;
   Discord discord = 20;
+  MeshConfig mesh = 21;
 }

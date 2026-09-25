@@ -28,23 +28,27 @@ func timestampNow() *timestamppb.Timestamp { return timestamppb.Now() }
 // Test recipe building a binary that prints its version and configured greeting.
 type fakeRuntime struct{}
 
-func (fakeRuntime) ID() string                                         { return "fake" }
-func (fakeRuntime) Name() string                                       { return "Fake" }
-func (fakeRuntime) Description() string                                { return "A runtime for tests" }
-func (fakeRuntime) Formats() []string                                  { return []string{"gguf"} }
-func (fakeRuntime) API() v1.ApiFlavor                                  { return v1.ApiFlavor_API_FLAVOR_OPENAI }
-func (fakeRuntime) Kind() v1.ModelKind                                 { return v1.ModelKind_MODEL_KIND_LANGUAGE }
-func (fakeRuntime) Requirements() []string                             { return nil }
-func (fakeRuntime) Unmet(*v1.HostProfile) []string                     { return nil }
-func (fakeRuntime) Params() []*v1.Param                                { return nil }
-func (fakeRuntime) Prepares(string) bool                               { return false }
-func (fakeRuntime) Prepare(runtimes.Launch) (*runtimes.Command, error) { return nil, nil }
-func (fakeRuntime) PrepareTimeout() time.Duration                      { return 0 }
-func (fakeRuntime) Health() runtimes.Health                            { return runtimes.Health{Path: "/health"} }
-func (fakeRuntime) StopGrace() time.Duration                           { return time.Second }
-func (fakeRuntime) Policy() *estimate.Policy                           { return nil }
-func (fakeRuntime) Measure([]string) []*v1.Measurement                 { return nil }
-func (fakeRuntime) Triage() []triage.Set                               { return nil }
+func (fakeRuntime) ID() string                                            { return "fake" }
+func (fakeRuntime) Name() string                                          { return "Fake" }
+func (fakeRuntime) Description() string                                   { return "A runtime for tests" }
+func (fakeRuntime) Formats() []string                                     { return []string{"gguf"} }
+func (fakeRuntime) API() v1.ApiFlavor                                     { return v1.ApiFlavor_API_FLAVOR_OPENAI }
+func (fakeRuntime) Kind() v1.ModelKind                                    { return v1.ModelKind_MODEL_KIND_LANGUAGE }
+func (fakeRuntime) Requirements() []string                                { return nil }
+func (fakeRuntime) Unmet(*v1.HostProfile) []string                        { return nil }
+func (fakeRuntime) Params() []*v1.Param                                   { return nil }
+func (fakeRuntime) Prepares(string) bool                                  { return false }
+func (fakeRuntime) Prepare(runtimes.Launch) (*runtimes.Command, error)    { return nil, nil }
+func (fakeRuntime) PrepareTimeout() time.Duration                         { return 0 }
+func (fakeRuntime) Health() runtimes.Health                               { return runtimes.Health{Path: "/health"} }
+func (fakeRuntime) StopGrace() time.Duration                              { return time.Second }
+func (fakeRuntime) Policy() *estimate.Policy                              { return nil }
+func (fakeRuntime) Measure([]string) []*v1.Measurement                    { return nil }
+func (fakeRuntime) Triage() []triage.Set                                  { return nil }
+func (fakeRuntime) Shapes(*v1.Install) []v1.Shape                         { return []v1.Shape{v1.Shape_SHAPE_SOLO} }
+func (fakeRuntime) Roles(v1.Shape) []runtimes.Role                        { return nil }
+func (fakeRuntime) LaunchSeat(runtimes.Launch) (*runtimes.Command, error) { return nil, nil }
+func (fakeRuntime) Transport([]string) string                             { return "" }
 
 func (fakeRuntime) Methods() []runtimes.Method {
 	return []runtimes.Method{{ID: "source", Description: "Build from source", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "fake"}}

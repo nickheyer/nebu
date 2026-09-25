@@ -2,12 +2,15 @@
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { tabState } from '$lib/tabs.svelte';
-  import { live, cached, clock, instanceLive, taskFor, deviceName, groupLabel, runtimeName, slotByRef, answersOf } from '$lib/state.svelte';
+  import { live, cached, clock, instanceLive, taskFor, deviceName, groupLabel, runtimeName, slotByRef, answersOf, formationLive, nodeName } from '$lib/state.svelte';
+  import { shapeLabel, seatLabel } from '$lib/mesh';
+  import { FormationState } from '$proto/mesh_pb';
+  import FormationLog from '$lib/components/FormationLog.svelte';
   import { swapSlot, evictSlot, deleteSlot, relaunchSlot } from '$lib/actions.svelte';
   import { slotOccupied } from '$lib/launch';
   import { policyText, profileText } from '$lib/gateway';
   import { placementLabel } from '$lib/instances';
-  import { bytes, when, duration, count, newestFirst, ago } from '$lib/format';
+  import { bytes, when, duration, count, newestFirst, ago, plural } from '$lib/format';
   import { SlotState } from '$proto/slot_pb';
   import { Placement } from '$proto/estimate_pb';
   import { InstanceState } from '$proto/instance_pb';
@@ -43,7 +46,8 @@
   const tab = tabState(() => tabs.map((t) => t.id), () => 'overview');
   const loading = $derived(!live.ready && !live.error);
   const instance = $derived(slot?.instanceId ? live.instances.get(slot.instanceId) : undefined);
-  const alive = $derived(instanceLive(instance));
+  const formation = $derived(slot?.formationId ? live.formations.get(slot.formationId) : undefined);
+  const alive = $derived(instanceLive(instance) || formationLive(formation));
   const occupied = $derived(!!slot && slotOccupied(slot.id));
   const route = $derived(slot ? live.routes.get(slot.name) : undefined);
   const answering = $derived(route?.state === RouteState.READY);
@@ -143,6 +147,37 @@
                 </div>
               {/if}
             </div>
+          {:else if formation}
+            <div class="flex flex-col gap-4">
+              <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+                <a class="link text-sm" href="/formations/{formation.id}">{formation.repo}</a>
+                <span class="font-mono text-xs text-fg-muted">{formation.group}</span>
+                <State values={FormationState} value={formation.state} />
+              </div>
+              <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <Stat label="Distribution" value={shapeLabel(formation.shape)} sub={plural(new Set(formation.seats.map((s) => s.nodeId)).size, 'node')} />
+                <Stat label="Runtime" value={runtimeName(formation.runtimeId)} />
+                <Stat label="Uptime" value={alive && formation.readyAt ? duration(formation.readyAt, undefined, clock.now) : '–'} />
+                <Stat label="Requests" value={count(route?.requests ?? 0n)} sub={route?.inFlight ? `${route.inFlight} in flight` : ''} />
+              </div>
+              <div class="tbl-wrap contain-inline-size">
+                <table class="tbl dense">
+                  <thead><tr><th>Worker</th><th>Node</th><th>State</th></tr></thead>
+                  <tbody>
+                    {#each formation.seats as s (s.nodeId + s.role + s.rank)}
+                      <tr>
+                        <td class="text-fg">{seatLabel(s.role, s.rank)}</td>
+                        <td class="text-fg-muted">{s.nodeName || nodeName(s.nodeId)}</td>
+                        <td><State values={InstanceState} value={s.state} /></td>
+                      </tr>
+                    {:else}
+                      <tr><td colspan="3" class="text-fg-faint">No workers have started</td></tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+              <a class="link self-start text-sm" href="/formations/{formation.id}">Formation details</a>
+            </div>
           {:else if slot.request}
             <div class="flex flex-col gap-3">
               <div class="text-sm text-fg">{slot.request.repo} <span class="font-mono text-xs text-fg-muted">{groupLabel(slot.request)}</span></div>
@@ -187,6 +222,8 @@
   {:else if tab.value === 'log'}
     {#if instance}
       {#key instance.id}<InstanceLog id={instance.id} follow={alive} height="h-[calc(100vh-18rem)]" />{/key}
+    {:else if formation}
+      {#key formation.id}<FormationLog id={formation.id} follow={alive} height="h-[calc(100vh-18rem)]" />{/key}
     {:else}
       <Empty compact title="Nothing is running in this slot" />
     {/if}

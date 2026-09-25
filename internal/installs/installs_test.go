@@ -7,8 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/runtimes"
@@ -72,5 +75,62 @@ func TestResolveAsset(t *testing.T) {
 	}
 	if _, err := (&Manager{}).resolveAssets(context.Background(), "o/r", cuda, ""); err == nil {
 		t.Fatal("no registry should fail")
+	}
+}
+
+// A runtime whose only probe names files, so the probe runner runs no process
+type fileProbed struct {
+	runtimes.LlamaCpp
+	files func(in runtimes.Install) []string
+}
+
+func (f fileProbed) Probes() []runtimes.Probe {
+	return []runtimes.Probe{{Key: "rpc", Files: f.files}}
+}
+
+// A file probe records the first candidate present, beside the binary or in the install's bin
+// directory, and records nothing when none is
+func TestProbeFiles(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "build", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	server := filepath.Join(bin, "llama-server")
+	if err := os.WriteFile(server, []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	beside := fileProbed{files: func(in runtimes.Install) []string {
+		return []string{filepath.Join(filepath.Dir(in.Path), "ggml-rpc-server"), filepath.Join(filepath.Dir(in.Path), "rpc-server")}
+	}}
+	in := &v1.Install{Path: server, Dir: dir}
+	start := time.Now()
+	m.probe(context.Background(), beside, in)
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("a file probe ran the binary")
+	}
+	if in.Facts["rpc"] != "" {
+		t.Fatalf("no rpc server present, got %q", in.Facts["rpc"])
+	}
+	rpc := filepath.Join(bin, "rpc-server")
+	os.WriteFile(rpc, []byte("#!/bin/sh\n"), 0o755)
+	m.probe(context.Background(), beside, in)
+	if in.Facts["rpc"] != rpc {
+		t.Fatalf("rpc server beside the binary: %q", in.Facts["rpc"])
+	}
+	// A candidate named for another directory is found under the install's bin directory by name.
+	elsewhere := fileProbed{files: func(runtimes.Install) []string { return []string{"/nowhere/rpc-server"} }}
+	in = &v1.Install{Path: filepath.Join(dir, "llama-server"), Dir: dir}
+	m.probe(context.Background(), elsewhere, in)
+	if in.Facts["rpc"] != rpc {
+		t.Fatalf("rpc server in the install's bin directory: %q", in.Facts["rpc"])
+	}
+	os.Mkdir(filepath.Join(dir, "ggml-rpc-server"), 0o755)
+	dirs := fileProbed{files: func(runtimes.Install) []string { return []string{filepath.Join(dir, "ggml-rpc-server")} }}
+	in = &v1.Install{Path: filepath.Join(dir, "llama-server"), Dir: dir}
+	m.probe(context.Background(), dirs, in)
+	if in.Facts["rpc"] != "" {
+		t.Fatalf("a directory is not the file: %q", in.Facts["rpc"])
 	}
 }

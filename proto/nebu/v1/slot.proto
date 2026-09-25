@@ -56,6 +56,8 @@ message Slot {
   Placement placement = 18;
   // Extra public names, each a route serving the slot's model.
   repeated SlotAlias aliases = 19;
+  // The formation a mesh slot runs, empty for a slot on this node alone
+  string formation_id = 20;
 }
 
 // Creates a slot

@@ -14,6 +14,7 @@ import { fail, started, settle as settleToast } from './toast.svelte';
 import type { Source, SourceStatus } from '$proto/source_pb';
 import type { Settings } from '$proto/settings_pb';
 import type { Bot, BotActivity } from '$proto/bot_pb';
+import { NodeState, FormationState, AdmissionState, type Node, type Formation, type MeshStatus, type StoredSummary } from '$proto/mesh_pb';
 import { newestFirst } from './format';
 import { weightsName } from './catalog';
 import { refreshAuth } from './auth.svelte';
@@ -44,7 +45,12 @@ export const live = $state({
   traces: new SvelteMap<string, Trace>(),
   bots: new SvelteMap<string, Bot>(),
   // Oldest first, keyed by bot ID.
-  botActivity: new SvelteMap<string, BotActivity[]>()
+  botActivity: new SvelteMap<string, BotActivity[]>(),
+  // Mesh members, this node among them, and formations conducted anywhere on the mesh
+  nodes: new SvelteMap<string, Node>(),
+  formations: new SvelteMap<string, Formation>(),
+  // The mesh from this node: membership, what is nearby, and admissions under way
+  mesh: null as MeshStatus | null
 });
 
 // Refresh on connection and after SOURCE, HOST, and INSTALL events.
@@ -91,7 +97,9 @@ const maps: Maps = {
   [EventKind.BUILD]: live.builds,
   [EventKind.MODEL]: live.models,
   [EventKind.SOURCE]: live.sources,
-  [EventKind.BOT]: live.bots
+  [EventKind.BOT]: live.bots,
+  [EventKind.NODE]: live.nodes,
+  [EventKind.FORMATION]: live.formations
 };
 
 // Track snapshot keys to remove stale entries after reconnecting.
@@ -209,6 +217,10 @@ function apply(ev: Event) {
   }
   if (ev.kind === EventKind.BOT_ACTIVITY) {
     if (p.case === 'botActivity') keepActivity([p.value]);
+    return;
+  }
+  if (ev.kind === EventKind.MESH) {
+    if (p.case === 'meshStatus') live.mesh = p.value;
     return;
   }
   const map = maps[ev.kind];
@@ -442,4 +454,108 @@ export function tracesOf(route = ''): Trace[] {
 // Exclude token-count requests.
 export function answersOf(route = ''): Trace[] {
   return tracesOf(route).filter((t) => t.kind !== TraceKind.COUNT);
+}
+
+// Mesh members, this node first, then by name
+export function meshNodes(): Node[] {
+  return [...live.nodes.values()].sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+}
+
+export function selfNode(): Node | undefined {
+  return [...live.nodes.values()].find((n) => n.self);
+}
+
+// A member's name, its id when unknown
+export function nodeName(id: string | undefined): string {
+  if (!id) return '';
+  return live.nodes.get(id)?.name || id.slice(0, 8);
+}
+
+export function nodeReady(n: Node): boolean {
+  return n.self || n.state === NodeState.READY;
+}
+
+// Whether this node belongs to a mesh with other members
+export function inMesh(): boolean {
+  return live.nodes.size > 1;
+}
+
+// Whether this node belongs to a mesh at all
+export function joinedMesh(): boolean {
+  return !!live.mesh?.mesh;
+}
+
+// Admissions waiting on a decision here: nodes that asked, on a member; invitations, outside
+export function pendingAdmissions(): number {
+  return (live.mesh?.admissions ?? []).filter((a) => a.state === AdmissionState.PENDING && (live.mesh?.mesh ? a.asked : a.invited && !a.asked)).length;
+}
+
+export function formationLive(f: Formation | undefined): boolean {
+  return !!f && f.state !== FormationState.STOPPED && f.state !== FormationState.FAILED;
+}
+
+export function liveFormations(): Formation[] {
+  return [...live.formations.values()].filter(formationLive).sort(byCreated);
+}
+
+export function orderedFormations(): Formation[] {
+  return [...live.formations.values()].sort(byCreated);
+}
+
+export function formationByRef(ref: string): Formation | undefined {
+  return live.formations.get(ref) ?? [...live.formations.values()].filter((f) => f.name === ref).sort((a, b) => Number(formationLive(b)) - Number(formationLive(a)) || Number((b.createdAt?.seconds ?? 0n) - (a.createdAt?.seconds ?? 0n)))[0];
+}
+
+// Members holding a stored model
+export function holdersOf(m: { sourceId: string; repo: string; group: string }): Node[] {
+  return meshNodes().filter((n) => n.stored.some((s) => s.repo === m.repo && s.group === m.group && s.sourceId === m.sourceId));
+}
+
+// A model other members hold and this node does not: its summary as the first member lists it,
+// and every member holding it, by name
+export interface HeldElsewhere {
+  key: string;
+  summary: StoredSummary;
+  holders: Node[];
+}
+
+export function heldElsewhere(): HeldElsewhere[] {
+  const out = new Map<string, HeldElsewhere>();
+  for (const n of meshNodes()) {
+    if (n.self) continue;
+    for (const s of n.stored) {
+      const key = modelKey(s);
+      if (live.models.has(key)) continue;
+      const row = out.get(key);
+      if (row) row.holders.push(n);
+      else out.set(key, { key, summary: s, holders: [n] });
+    }
+  }
+  return [...out.values()];
+}
+
+// Accelerators on every member, ids node qualified for other nodes and bare for this one, the
+// way slot device lists name them
+export function meshGpus(): Device[] {
+  return meshGpuGroups().flatMap((g) => g.devices);
+}
+
+// One group per member holding accelerators, this node first, each device id node qualified
+// for other nodes and bare for this one
+export interface DeviceGroup {
+  nodeId: string;
+  node: string;
+  self: boolean;
+  ready: boolean;
+  devices: Device[];
+}
+
+export function meshGpuGroups(): DeviceGroup[] {
+  const out: DeviceGroup[] = [];
+  for (const n of meshNodes()) {
+    const devices = (n.profile?.devices ?? []).filter((d) => d.kind !== DeviceKind.CPU).map((d) => ({ ...d, id: n.self ? d.id : `${n.id}/${d.id}` }) as Device);
+    if (!devices.length) continue;
+    out.push({ nodeId: n.id, node: n.self ? 'This node' : n.name || n.id.slice(0, 8), self: n.self, ready: nodeReady(n), devices });
+  }
+  return out;
 }

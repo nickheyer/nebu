@@ -104,6 +104,8 @@ func commands() []command {
 			{name: "trace", summary: "show one request with its bodies", run: runGatewayTrace},
 		}},
 		{name: "chat", summary: "talk to a running model through the gateway", run: runChat},
+		meshCommands(),
+		formationCommands(),
 		botCommands(),
 		userCommands(),
 		{name: "events", summary: "stream daemon events as JSON lines", run: runEvents},

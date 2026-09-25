@@ -111,6 +111,14 @@ func (LlamaCpp) Params() []*v1.Param {
 		{Name: "mmproj", Label: "Projector", Type: v1.ParamType_PARAM_TYPE_PATH, Default: Auto, Solved: true, Group: "Identity", Advanced: true, Flag: "--mmproj", Picks: "projector",
 			Rule: "the projector stored with the model, when it has one. Set none to serve text only"},
 		{Name: "log_verbosity", Label: "Log level", Type: v1.ParamType_PARAM_TYPE_INT, Default: "4", Min: 0, Max: 5, Step: 1, Group: "Diagnostics", Advanced: true, Flag: "--log-verbosity"},
+		{Name: "draft_model", Label: "Draft model", Type: v1.ParamType_PARAM_TYPE_PATH, Group: "Speculative decoding", Advanced: true, Picks: "weights",
+			Description: "a smaller model of the same family whose tokens the target verifies, as store://source/repo#group or a GGUF path"},
+		{Name: "draft_max", Label: "Draft tokens per round", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 1, Max: 64, Step: 1, Group: "Speculative decoding", Advanced: true,
+			Rule: "five tokens per round when a draft model is configured"},
+		{Name: "direct_io", Label: "Direct file reads", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: "Placement", Advanced: true,
+			Description: "read weights without the page cache, what a share over 100 GiB on a unified memory device wants"},
+		{Name: "cuda_disable_graphs", Label: "Disable CUDA graphs", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: "Diagnostics", Advanced: true, Env: "GGML_CUDA_DISABLE_GRAPHS",
+			Description: "for a driver that leaks compute graphs under the rpc server"},
 	}
 }
 
@@ -137,7 +145,34 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 		}
 	}
 	args := []string{"--model", weights, "--host", in.Host, "--port", strconv.Itoa(in.Port)}
+	// Draft flags use the spellings recorded for this install.
+	draft := p.Str("draft_model")
+	hasDraft := draft != "" && !strings.EqualFold(draft, None)
+	p["draft_model"] = ""
+	if !hasDraft && in.Draft == "" {
+		delete(p, "draft_max")
+	}
 	flags, env, emitted := Flags(r.Params(), p)
+	if hasDraft {
+		if !has(in.InstallRecord, factDraftModel) {
+			return nil, fmt.Errorf("%w: this llama-server lists no draft model flag, so it cannot run speculative decoding", ErrParam)
+		}
+		flags = append(flags, in.InstallRecord.GetFacts()[factDraftModel], draft)
+		emitted["draft_model"] = draft
+	}
+	if max := emitted["draft_max"]; max != "" {
+		if !has(in.InstallRecord, factDraftMax) {
+			return nil, fmt.Errorf("%w: this llama-server lists no draft token limit flag", ErrParam)
+		}
+		flags = append(flags, in.InstallRecord.GetFacts()[factDraftMax], max)
+	}
+	// Reading without the page cache has two spellings across builds, recorded by the install's facts.
+	if p.Bool("direct_io") {
+		if !has(in.InstallRecord, factDirectIO) {
+			return nil, fmt.Errorf("%w: this llama-server lists no direct io flag, so it cannot read weights without the page cache", ErrParam)
+		}
+		flags = append(flags, directIOArgs(in.InstallRecord.GetFacts()[factDirectIO])...)
+	}
 	if hostOnly {
 		hideDevices(env)
 	} else {
@@ -159,7 +194,7 @@ func (LlamaCpp) StopGrace() time.Duration { return 15 * time.Second }
 func (LlamaCpp) Triage() []triage.Set     { return []triage.Set{triage.LlamaCpp{}} }
 
 func (LlamaCpp) Probes() []Probe {
-	return []Probe{
+	return append([]Probe{
 		{Key: "version", Args: []string{"--version"}, Parse: func(out string) (string, bool) {
 			for _, line := range strings.Split(out, "\n") {
 				if i := strings.Index(line, "version:"); i >= 0 {
@@ -184,10 +219,12 @@ func (LlamaCpp) Probes() []Probe {
 			}
 			return strings.Join(names, ","), len(names) > 0
 		}},
-	}
+	}, llamaShapeProbes()...)
 }
 
-// Parses model, KV cache, and compute buffer allocations for device and host backends.
+// Parses model, KV cache, and compute buffer allocations for device and host backends. Buffers on
+// RPC backends are the tensors the head streamed to stages. The transport a seat negotiated, when
+// a line names it, is a measurement too.
 func (LlamaCpp) Measure(lines []string) []*v1.Measurement {
 	var m measurements
 	for _, line := range lines {
@@ -206,13 +243,16 @@ func (LlamaCpp) Measure(lines []string) []*v1.Measurement {
 				continue
 			}
 			side := "device"
-			if strings.HasPrefix(backend, "CPU") || strings.HasSuffix(backend, "_Host") {
+			switch {
+			case strings.HasPrefix(backend, "CPU"), strings.HasSuffix(backend, "_Host"):
 				side = "host"
+			case strings.HasPrefix(backend, "RPC"):
+				side = "rpc"
 			}
 			m.add(side+"."+what, n, line)
 		}
 	}
-	return m.list
+	return append(m.list, transportMeasurement(lines)...)
 }
 
 // Quantized weights default to an 8-bit cache. Other weights use f16. Quantized value caches
@@ -227,6 +267,9 @@ func llamaCacheType(s *estimate.Scope, value bool) string {
 func (LlamaCpp) Policy() *estimate.Policy {
 	device := v1.PoolKind_POOL_KIND_DEVICE
 	return &estimate.Policy{
+		// The head carries every crossing itself in float32, the prompt goes through the stages in one
+		// pass, and a relay writes the cache to disk on one seat and reads it on the other.
+		Shapes: &estimate.ShapeFacts{Ring: false, ActivationBytes: 4, ChunksInFlight: 1, RelayOverlap: false, RelayDisk: true, ReductionsPerLayer: 2, ChainAggregate: false, ChainSpeculative: true, Handoff: estimate.HandoffLlamaSlot},
 		Groups: []estimate.GroupRule{
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_EMBEDDING, Pool: v1.PoolKind_POOL_KIND_HOST},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, Pool: device, Param: "n_gpu_layers", SpillPriority: 10},
@@ -263,6 +306,9 @@ func (LlamaCpp) Policy() *estimate.Policy {
 			if s.Params.IsAuto("cache_type_v") {
 				s.Params["cache_type_v"] = llamaCacheType(s, true)
 			}
+			if s.Params.IsAuto("draft_max") {
+				s.Params["draft_max"] = int64(5)
+			}
 		},
 		States: func(s *estimate.Scope) ([]*v1.ParamState, string) {
 			threads := cpuThreads(s.Host)
@@ -275,6 +321,7 @@ func (LlamaCpp) Policy() *estimate.Policy {
 				bounds("n_batch", 32, float64(s.Params.Int("n_ctx")), 32),
 				bounds("n_ubatch", 32, float64(s.Params.Int("n_batch")), 32),
 				bounds("log_verbosity", 0, 5, 1),
+				bounds("draft_max", 1, 64, 1),
 			}
 			value := &v1.ParamState{Name: "cache_type_v"}
 			refusal := ""

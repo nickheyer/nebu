@@ -653,19 +653,14 @@ func (g *Gateway) cancelJob(target *url.URL, id string, policy *v1.Policy) error
 	}
 }
 
-// Generates media while holding the route until the job ends.
-func (g *Gateway) media(w *traceWriter, r *http.Request, body []byte, name string, route *v1.Route, policy *v1.Policy, release func()) {
+// Generates media while holding the route until the job ends, on the first seat that takes the
+// job: a seat that refuses or fails to take it passes the job to the next, once
+func (g *Gateway) media(w *traceWriter, r *http.Request, body []byte, name string, route *v1.Route, policy *v1.Policy, targets []target, hold *seatHold, release func()) {
 	t := w.t
 	client := flavorOf(clientFlavor(r))
 	if route.GetApi() != v1.ApiFlavor_API_FLAVOR_SDCPP {
 		release()
 		g.refuse(w, client, http.StatusBadRequest, "model "+name+" is a language model and generates no images or video", "invalid_request_error")
-		return
-	}
-	target, err := url.Parse(route.GetEndpoint())
-	if err != nil {
-		release()
-		g.refuse(w, client, http.StatusBadGateway, err.Error(), "server_error")
 		return
 	}
 	req, err := parseMedia(r, body)
@@ -675,15 +670,39 @@ func (g *Gateway) media(w *traceWriter, r *http.Request, body []byte, name strin
 		return
 	}
 	if t.GetKind() == v1.TraceKind_TRACE_KIND_VIDEO {
-		g.startVideo(w, req, name, route, target, policy, release)
+		g.startVideo(w, req, name, route, targets, hold, policy, release)
 		return
 	}
 	defer release()
-	g.image(w, r, req, name, route, target, policy)
+	g.image(w, r, req, name, route, targets, hold, policy)
+}
+
+// Whether a failed submission may go to another seat: the seat never answered, or refused the job
+func passable(err error) bool {
+	var refusal *upstreamRefusal
+	if errors.As(err, &refusal) {
+		return refused(refusal.status)
+	}
+	return retryable(err)
+}
+
+// Submits a job to the first seat that takes it, the count following the job, and returns the
+// seat it landed on
+func (g *Gateway) submitTo(ctx context.Context, targets []target, hold *seatHold, path string, job map[string]any, policy *v1.Policy, name string) (*sdJob, []byte, int, error) {
+	for i, tg := range targets {
+		hold.to(i)
+		accepted, sent, err := g.submit(ctx, tg.url, path, job, policy)
+		if err != nil && i < len(targets)-1 && passable(err) {
+			g.log.Warn("seat did not take the job, passing it to the next", "model", name, "seat", tg.url.Host, "err", err)
+			continue
+		}
+		return accepted, sent, i, err
+	}
+	return nil, nil, -1, errors.New("no seat to send to")
 }
 
 // Returns generated images within the policy's request timeout.
-func (g *Gateway) image(w *traceWriter, r *http.Request, req *mediaRequest, name string, route *v1.Route, target *url.URL, policy *v1.Policy) {
+func (g *Gateway) image(w *traceWriter, r *http.Request, req *mediaRequest, name string, route *v1.Route, targets []target, hold *seatHold, policy *v1.Policy) {
 	t := w.t
 	client := flavorOf(clientFlavor(r))
 	if !hasMode(route, "img_gen") {
@@ -701,12 +720,14 @@ func (g *Gateway) image(w *traceWriter, r *http.Request, req *mediaRequest, name
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(d)*time.Millisecond)
 		defer cancel()
 	}
-	accepted, sent, err := g.submit(ctx, target, sdcppImageJob, job, policy)
+	accepted, sent, used, err := g.submitTo(ctx, targets, hold, sdcppImageJob, job, policy, name)
 	t.UpstreamRequest = capped(sent)
 	if err != nil {
 		g.mediaError(w, client, t, name, err)
 		return
 	}
+	target := targets[used].url
+	g.served(t, route, targets, used, "")
 	t.FirstByteAt = timestamppb.Now()
 	done, err := g.await(ctx, target, accepted.ID, policy, func() { t.FirstTokenAt = timestamppb.Now() })
 	if err != nil {
@@ -919,7 +940,7 @@ func (s *videoStore) pruneLocked() {
 }
 
 // Starts a video job, returns its status, and tracks completion in the background.
-func (g *Gateway) startVideo(w *traceWriter, req *mediaRequest, name string, route *v1.Route, target *url.URL, policy *v1.Policy, release func()) {
+func (g *Gateway) startVideo(w *traceWriter, req *mediaRequest, name string, route *v1.Route, targets []target, hold *seatHold, policy *v1.Policy, release func()) {
 	t := w.t
 	client := flavorOf(v1.ApiFlavor_API_FLAVOR_OPENAI)
 	if !hasMode(route, "vid_gen") {
@@ -938,7 +959,7 @@ func (g *Gateway) startVideo(w *traceWriter, req *mediaRequest, name string, rou
 	if d := policy.GetRequestTimeoutMs(); d > 0 {
 		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(d)*time.Millisecond)
 	}
-	accepted, sent, err := g.submit(ctx, target, sdcppVideoJob, job, policy)
+	accepted, sent, used, err := g.submitTo(ctx, targets, hold, sdcppVideoJob, job, policy, name)
 	t.UpstreamRequest = capped(sent)
 	if err != nil {
 		cancel()
@@ -946,6 +967,8 @@ func (g *Gateway) startVideo(w *traceWriter, req *mediaRequest, name string, rou
 		g.mediaError(w, client, t, name, err)
 		return
 	}
+	target := targets[used].url
+	g.served(t, route, targets, used, "")
 	width, height, _ := req.shape()
 	frames, fps := req.frames()
 	format := firstOf(req.OutputFormat, "webm")
@@ -1048,6 +1071,11 @@ func (g *Gateway) video(w http.ResponseWriter, r *http.Request, client Flavor) {
 	id, sub, _ := strings.Cut(rest, "/")
 	v, ok := g.videos.get(id)
 	if !ok {
+		// A job another member's gateway accepted is polled, read, and cancelled there.
+		if node, forwarded := g.jobs.node(id); forwarded {
+			g.forwardVideo(w, r, client, id, node)
+			return
+		}
 		client.Error(w, http.StatusNotFound, "video "+id+" not found. Finished videos are kept for one day", "not_found_error")
 		return
 	}

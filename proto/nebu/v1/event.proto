@@ -7,6 +7,7 @@ import "nebu/v1/bot.proto";
 import "nebu/v1/gateway.proto";
 import "nebu/v1/host.proto";
 import "nebu/v1/instance.proto";
+import "nebu/v1/mesh.proto";
 import "nebu/v1/recipe.proto";
 import "nebu/v1/runtime.proto";
 import "nebu/v1/settings.proto";
@@ -39,6 +40,12 @@ enum EventKind {
   EVENT_KIND_BOT = 17;
   // Discord bot activity or failure.
   EVENT_KIND_BOT_ACTIVITY = 18;
+  // A mesh member's record, this node's or a copy of another's
+  EVENT_KIND_NODE = 19;
+  // A formation, conducted here or copied from its conductor
+  EVENT_KIND_FORMATION = 20;
+  // The mesh from this node: membership, nodes and meshes heard on the network, admissions under way
+  EVENT_KIND_MESH = 21;
 }
 
 // How it changed
@@ -72,6 +79,9 @@ message Event {
     Trace trace = 25;
     Bot bot = 26;
     BotActivity bot_activity = 27;
+    Node node = 28;
+    Formation formation = 29;
+    MeshStatus mesh_status = 30;
   }
 }
 

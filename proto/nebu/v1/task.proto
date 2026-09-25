@@ -21,6 +21,10 @@ message TaskProgress {
   uint64 done = 1;
   uint64 total = 2;
   string message = 3;
+  // Parts of the work that advance on their own, one row each, a seat's pull among them
+  repeated TaskProgress rows = 4;
+  // What a row tracks, the same across its updates
+  string key = 5;
 }
 
 // One long running operation

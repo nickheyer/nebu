@@ -599,11 +599,18 @@ func (m *Manager) Remove(ctx context.Context, id string) (*v1.Install, error) {
 	return in, nil
 }
 
-// Runs the runtime's probes against an install and stores what they read
+// Runs the runtime's probes against an install and stores what they read: a file probe records
+// the first of its candidate files present, a command probe what its parser reads from the output
 func (m *Manager) probe(ctx context.Context, rt runtimes.Runtime, in *v1.Install) {
 	in.Facts = map[string]string{}
 	view := runtimes.Install{Path: in.GetPath(), Dir: in.GetDir(), Version: in.GetVersion()}
 	for _, p := range rt.Probes() {
+		if p.Files != nil {
+			if found := firstFile(view, p.Files(view)); found != "" {
+				in.Facts[p.Key] = found
+			}
+			continue
+		}
 		timeout := probeTimeout
 		if p.Timeout > 0 {
 			timeout = p.Timeout
@@ -625,6 +632,25 @@ func (m *Manager) probe(ctx context.Context, rt runtimes.Runtime, in *v1.Install
 	if in.Version == "" {
 		in.Version = in.Facts["version"]
 	}
+}
+
+// The first candidate file present: each as given, then beside the install's binary, then by name
+// anywhere under the install's directory, where an archive keeps its bin directory
+func firstFile(in runtimes.Install, candidates []string) string {
+	for _, c := range candidates {
+		base := filepath.Base(c)
+		for _, place := range []string{c, filepath.Join(filepath.Dir(in.Path), base)} {
+			if info, err := os.Stat(place); err == nil && !info.IsDir() {
+				return place
+			}
+		}
+		if in.Dir != "" {
+			if found, err := findBinary(in.Dir, base); err == nil {
+				return found
+			}
+		}
+	}
+	return ""
 }
 
 func installID(runtimeID, path string) string {

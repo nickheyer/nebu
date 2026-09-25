@@ -45,6 +45,72 @@ message TemplateProbe {
   string error = 3;
 }
 
+// Another seat of the formation a seat talks to, with the address it reaches it at
+message SeatPeer {
+  string node_id = 1;
+  string role = 2;
+  uint32 rank = 3;
+  // host:port the seat reaches the peer at
+  string address = 4;
+  // Devices the peer's seat holds
+  uint32 devices = 5;
+  // Layer range the peer holds, from inclusive to exclusive; every layer when both are zero
+  uint32 layer_from = 6;
+  uint32 layer_to = 7;
+}
+
+// The place an instance takes in a formation, carried by its run request
+message SeatSpec {
+  string formation_id = 1;
+  Shape shape = 2;
+  string role = 3;
+  uint32 rank = 4;
+  // Seats in the formation, ranks that rendezvous counting every rank
+  uint32 count = 5;
+  // host:port the ranks rendezvous at
+  string rendezvous = 6;
+  repeated SeatPeer peers = 7;
+  // Layer range the seat holds, from inclusive to exclusive; every layer when both are zero
+  uint32 layer_from = 8;
+  uint32 layer_to = 9;
+  // The node id of the conductor
+  string conductor = 10;
+  // The formation's name, the route the head answers
+  string name = 11;
+  // The port the seat's guard listener or the seat itself takes on the mesh address
+  uint32 port = 12;
+  // The mesh address of this node, what peers dial
+  string address = 13;
+  // Whether the seat binds the mesh address itself instead of a guard forwarder
+  bool exposed = 14;
+  // Member addresses the guard listener admits
+  repeated string admit = 15;
+  // The interface the link to the peers leaves through, and its RDMA devices
+  string interface = 16;
+  repeated string rdma_devices = 17;
+  // Planned bytes per device in device order, what a tensor split follows
+  repeated string devices = 18;
+  repeated uint64 device_bytes = 19;
+  // The draft model's weights, for a draft head
+  string draft = 20;
+  // Where a stage keeps streamed tensors between starts
+  string cache_dir = 21;
+  // The context the plan chose, shared by every seat
+  uint32 context = 22;
+  // Layers the head keeps on listed devices, stages and its own, the rest on its CPU
+  uint32 gpu_layers = 23;
+  // A second port the seat's own protocol takes on the mesh address: a NIXL side channel or a bootstrap port
+  uint32 aux_port = 24;
+  // The seat's memory plan on its node, as the formation planner laid it out
+  MemoryPlan memory = 26;
+  // The port the seat's process binds on loopback behind a guard listener
+  uint32 local_port = 27;
+  // Where a relay seat saves and restores slot files: <cache dir>/slots/<formation>
+  string slot_dir = 28;
+  // The key of the model's tensor cache on the seat's node, the same across relaunches
+  string cache_key = 29;
+}
+
 // A runtime process serving one stored model
 message Instance {
   string id = 1;
@@ -71,6 +137,10 @@ message Instance {
   bool desired_running = 22;
   string slot_id = 23;
   TemplateProbe template = 24;
+  // The seat this instance takes in a formation, unset for a solo instance
+  SeatSpec seat = 25;
+  // Measured from the seat's log: the transport its collective took, rdma or sockets
+  string transport = 26;
 }
 
 // Start a stored model. Request parameters override slot defaults, which override manifest defaults.
@@ -84,6 +154,17 @@ message RunRequest {
   map<string, string> params = 7;
   string slot_id = 8;
   bool force = 9;
+  // The nodes and devices the run may use: node ids, or node/device for one device on a node.
+  // Empty means this node alone.
+  repeated string span = 10;
+  // The shape to run, auto when unspecified
+  Shape shape = 11;
+  // The seat block a conductor gives a seat's node
+  SeatSpec seat = 12;
+  // Which numbers the planner weighs
+  PlanProfile profile = 13;
+  // Plan against free memory instead of total, as a launch does, so a swap sees the occupant it replaces
+  bool free = 14;
 }
 
 // Returns the instance and its startup task

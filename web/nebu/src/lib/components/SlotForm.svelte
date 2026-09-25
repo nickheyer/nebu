@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '$lib/api';
-  import { live, cached, orderedSlots, hostGpus } from '$lib/state.svelte';
+  import { live, cached, orderedSlots, hostGpus, meshGpus, meshGpuGroups, inMesh } from '$lib/state.svelte';
   import { slotOccupied } from '$lib/launch';
   import { placements, placementId, placementOf } from '$lib/instances';
   import { policyFields, policyFrom, profileValue, profileFrom } from '$lib/gateway';
@@ -54,7 +54,8 @@
   let saving = $state(false);
 
   const creating = $derived(!slot);
-  const gpus = $derived(hostGpus());
+  const mesh = $derived(inMesh());
+  const gpus = $derived(mesh ? meshGpus() : hostGpus());
   const gpuIds = $derived(gpus.map((d) => d.id));
   const ram = $derived(live.host?.pools.find((p) => p.kind === PoolKind.HOST || p.kind === PoolKind.UNIFIED));
   const hostOnly = $derived(placement === 'host');
@@ -151,8 +152,8 @@
         <div id="slot-placement"><Segmented size="lg" bind:value={placement} tabs={placementTabs} /></div>
       </Field>
       {#if pickDevices}
-        <Field label="GPUs" for="slot-devices">
-          <DevicePicker id="slot-devices" bind:value={() => chosen, (v) => (devices = v)} />
+        <Field label="GPUs" for="slot-devices" description={mesh ? 'Select GPUs from one or more nodes.' : undefined}>
+          <DevicePicker id="slot-devices" groups={mesh ? meshGpuGroups() : undefined} bind:value={() => chosen, (v) => (devices = v)} />
         </Field>
       {/if}
       <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">

@@ -39,7 +39,11 @@ type Puller struct {
 	Keep func(*v1.StoredModel) bool
 	// Bytes the store's filesystem keeps free after a pull
 	MinFree uint64
+	// Members holding models, looked at before the internet. Nil outside a mesh.
+	Mesh Mesh
 }
+
+type groupT = formats.Group
 
 // One group to download and store.
 type landing struct {
@@ -77,11 +81,20 @@ func (p *Puller) sizes(landings []*landing) (total, need uint64) {
 // Checks disk space, including space recoverable through eviction.
 func (p *Puller) room(landings []*landing) error {
 	_, need := p.sizes(landings)
+	return p.roomBytes(need)
+}
+
+// Checks disk space for a number of bytes, including space recoverable through eviction
+func (p *Puller) roomBytes(need uint64) error {
 	st, err := host.Stat(p.Store.Root())
 	if err != nil {
-		return nil
+		return fmt.Errorf("room in %s: %w", p.Store.Root(), err)
 	}
-	free := st.GetFreeBytes() + p.Store.Evictable(need, p.Keep)
+	freeable, err := p.Store.Evictable(need, p.Keep)
+	if err != nil {
+		return fmt.Errorf("room in %s: %w", p.Store.Root(), err)
+	}
+	free := st.GetFreeBytes() + freeable
 	if need+p.MinFree <= free {
 		return nil
 	}
@@ -92,6 +105,17 @@ func (p *Puller) room(landings []*landing) error {
 // unresolved required parts fail before the task starts. Alone skips those checks
 // and downloads only the requested group.
 func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error) {
+	// Members holding the model are nearer than any source, serve a repair its missing blobs, and
+	// name the group when the request does not.
+	if p.Mesh != nil {
+		named, holders, err := p.meshHolders(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		if len(holders) > 0 {
+			return p.pullFromMesh(ctx, named, holders)
+		}
+	}
 	src, model, err := p.Inspector.Resolve(ctx, req.GetSourceId(), req.GetRepo(), req.GetRevision())
 	if err != nil {
 		return nil, err
@@ -312,11 +336,15 @@ func (p *Puller) fetch(ctx context.Context, h *tasks.Handle, src sources.Source,
 		if err := p.Store.Adopt(path, digest); err != nil {
 			return "", err
 		}
-		h.Logf("%s adopted as %s", a.GetPath(), digest)
+		h.Logf("%s adopted as %s from %s", a.GetPath(), digest, model.GetSourceId())
 		return digest, nil
 	}
 	key := partialKey(model, a)
-	unlock := p.Store.Lock("blob:" + key)
+	lock := "blob:" + key
+	if a.GetSha256() != "" {
+		lock = "blob:" + store.Digest(a.GetSha256())
+	}
+	unlock := p.Store.Lock(lock)
 	defer unlock()
 	if a.GetSha256() != "" && p.Store.HasBlob(store.Digest(a.GetSha256())) {
 		h.Add(size)
@@ -332,13 +360,15 @@ func (p *Puller) fetch(ctx context.Context, h *tasks.Handle, src sources.Source,
 	if err := p.Store.Commit(p.Store.PartialPath(key), digest); err != nil {
 		return "", err
 	}
-	h.Logf("%s verified %s", a.GetPath(), digest)
+	h.Logf("%s verified %s from %s", a.GetPath(), digest, model.GetSourceId())
 	return digest, nil
 }
 
+// The partial file's key for an artifact: its digest when the source states one, the same key
+// the mesh path lands it under, else a name for the source, repo, and path until it is hashed
 func partialKey(model *v1.Model, a *v1.Artifact) string {
 	if a.GetSha256() != "" {
-		return "sha256-" + strings.ToLower(a.GetSha256())
+		return blobKey(store.Digest(a.GetSha256()))
 	}
 	sum := sha256.Sum256([]byte(model.GetSourceId() + "\x00" + model.GetRepo() + "\x00" + a.GetPath()))
 	return "pending-" + hex.EncodeToString(sum[:16])

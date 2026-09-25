@@ -85,11 +85,19 @@ func (VLLM) Health() Health {
 func (VLLM) StopGrace() time.Duration { return 30 * time.Second }
 func (VLLM) Triage() []triage.Set     { return []triage.Set{triage.VLLM{}} }
 
+// The shape probes import the engine, which takes longer than a binary's help
 func (VLLM) Probes() []Probe {
-	return []Probe{{Key: "version", Args: []string{"--version"}, Parse: versionField}}
+	nnodes := flagProbe(factNNodes, []string{"serve", "--help"}, "--nnodes")
+	nnodes.Timeout = time.Minute
+	return []Probe{
+		{Key: "version", Args: []string{"--version"}, Parse: versionField},
+		nnodes,
+		nixlConnectorProbe(),
+	}
 }
 
-// vLLM logs the weights it loaded as one line, Model loading took 12.34 GiB
+// vLLM logs the weights it loaded as one line, Model loading took 12.34 GiB, and NCCL names the net
+// its ranks took, NET/IB or NET/Socket, which is a measurement too
 func (VLLM) Measure(lines []string) []*v1.Measurement {
 	var m measurements
 	for _, line := range lines {
@@ -97,12 +105,15 @@ func (VLLM) Measure(lines []string) []*v1.Measurement {
 			m.add("device.weights", n, line)
 		}
 	}
-	return m.list
+	return append(m.list, transportMeasurement(lines)...)
 }
 
 func (VLLM) Policy() *estimate.Policy {
 	device := v1.PoolKind_POOL_KIND_DEVICE
 	return &estimate.Policy{
+		// Ranks pass half precision activations rank to rank, and the NIXL connector streams the
+		// cache layer by layer over the RDMA device when the link has one.
+		Shapes: &estimate.ShapeFacts{Ring: true, ActivationBytes: 2, ChunksInFlight: 1, RelayOverlap: true, RelayRDMA: true, ReductionsPerLayer: 2, ChainAggregate: true, ChainSpeculative: false, Handoff: estimate.HandoffNIXL},
 		Groups: []estimate.GroupRule{
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_EMBEDDING, Pool: device},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, Pool: device},

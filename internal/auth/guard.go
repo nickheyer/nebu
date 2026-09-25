@@ -6,15 +6,25 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 )
 
+// Answers whether a bearer token is a mesh session another member holds, and which member
+type Peers interface {
+	Peer(token string) (nodeID string, ok bool)
+}
+
 // Checks the credentials API and gateway requests carry: the daemon token from
-// auth.token, an API token a user made, or the browser session cookie.
+// auth.token, an API token a user made, or the browser session cookie. Mesh members carry a
+// session token instead, which opens node to node calls and nothing else.
 type Guard struct {
 	token    string
 	sessions *Sessions
 	tokens   *Tokens
 	err      error
+
+	mu    sync.RWMutex
+	peers Peers
 }
 
 // Builds the guard. An empty token with nil sessions is auth.disabled, where every request passes.
@@ -29,6 +39,13 @@ func NewGuard(token string, sessions *Sessions, tokens *Tokens) *Guard {
 		g.err = errors.New("missing credentials")
 	}
 	return g
+}
+
+// Installs the mesh session table, so members' tokens are recognized
+func (g *Guard) SetPeers(p Peers) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.peers = p
 }
 
 // Whether requests need credentials at all
@@ -62,6 +79,21 @@ func (g *Guard) Identify(h http.Header) (*Session, bool) {
 		return g.sessions.Session(h)
 	}
 	return nil, false
+}
+
+// The mesh member behind the request's bearer token, false for every other credential
+func (g *Guard) PeerOf(h http.Header) (string, bool) {
+	bearer := Bearer(h)
+	if bearer == "" {
+		return "", false
+	}
+	g.mu.RLock()
+	peers := g.peers
+	g.mu.RUnlock()
+	if peers == nil {
+		return "", false
+	}
+	return peers.Peer(bearer)
 }
 
 // The token in the Authorization bearer header, or the X-Api-Key header Anthropic clients send

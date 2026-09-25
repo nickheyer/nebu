@@ -1,0 +1,1015 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nebu/v1/estimate.proto";
+import "nebu/v1/gateway.proto";
+import "nebu/v1/host.proto";
+import "nebu/v1/instance.proto";
+import "nebu/v1/model.proto";
+import "nebu/v1/runtime.proto";
+import "nebu/v1/store.proto";
+import "nebu/v1/task.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Whether a member answers syncs
+enum NodeState {
+  NODE_STATE_UNSPECIFIED = 0;
+  NODE_STATE_READY = 1;
+  // Missed three syncs
+  NODE_STATE_UNREACHABLE = 2;
+  // Missing for ten minutes, until it syncs again
+  NODE_STATE_GONE = 3;
+}
+
+// Lifecycle of a formation
+enum FormationState {
+  FORMATION_STATE_UNSPECIFIED = 0;
+  FORMATION_STATE_STARTING = 1;
+  FORMATION_STATE_READY = 2;
+  // A seat left ready, the rest are being stopped
+  FORMATION_STATE_DEGRADED = 3;
+  FORMATION_STATE_STOPPING = 4;
+  FORMATION_STATE_STOPPED = 5;
+  FORMATION_STATE_FAILED = 6;
+  // The conductor missed three syncs, seen from another member
+  FORMATION_STATE_UNREACHABLE = 7;
+}
+
+// The mesh this node belongs to
+message Mesh {
+  string id = 1;
+  string name = 2;
+  // Whether members verify each other with the mesh certificate authority
+  bool tls = 3;
+  // This node's id
+  string self = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp joined_at = 6;
+  // The address this node tells other members
+  string address = 7;
+  // Whether multicast beacons are on
+  bool announce = 8;
+  // guard or direct, how seats other seats connect to are exposed
+  string exposure = 9;
+  uint32 members = 10;
+}
+
+// One stored weight group as a member advertises it
+message StoredSummary {
+  string source_id = 1;
+  string repo = 2;
+  string revision = 3;
+  string commit = 4;
+  string group = 5;
+  string format_id = 6;
+  uint64 bytes = 7;
+  // sha256 of the descriptor, so a puller knows the model the moment the pull ends
+  string descriptor_digest = 8;
+  google.protobuf.Timestamp pulled_at = 9;
+  google.protobuf.Timestamp used_at = 10;
+  ModelKind kind = 11;
+  string architecture = 12;
+  uint64 parameter_count = 13;
+}
+
+// The measured connection from one node to another
+message Link {
+  string from = 1;
+  string to = 2;
+  // Median and 95th percentile of 20 HTTP/2 ping frames
+  uint32 rtt_us = 3;
+  uint32 rtt_p95_us = 4;
+  // One connection sending 64 MiB
+  uint64 stream_bytes_per_second = 5;
+  // Four connections at once
+  uint64 aggregate_bytes_per_second = 6;
+  // The local interface the route to the peer leaves through
+  string interface = 7;
+  uint64 interface_bits_per_second = 8;
+  string rdma_device = 9;
+  LinkClass class = 10;
+  google.protobuf.Timestamp measured_at = 11;
+  uint32 mtu = 12;
+  // Whether the peer is on the interface's own subnet
+  bool subnet = 13;
+  // Why the class is what it is
+  string detail = 14;
+  // The last bandwidth run was skipped because a formation was serving
+  bool bandwidth_held = 15;
+}
+
+// Learned numbers of one device
+message Throughput {
+  string device_id = 1;
+  // Bytes per second the device streams weights at during decode
+  double stream_bytes_per_second = 2;
+  // Floating point operations per second during prefill
+  double compute_flops = 3;
+  // Fixed cost per forward pass
+  double fixed_seconds = 4;
+  // Draft tokens accepted per offered
+  double acceptance = 5;
+  // Requests learned from in all, decode and prefill together
+  uint32 samples = 6;
+  // learned, or the device profile pattern the numbers came from
+  string source = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  // Decode requests the streaming bandwidth and fixed cost were learned from, and prefill requests the compute was
+  uint32 stream_samples = 9;
+  uint32 compute_samples = 10;
+  // Requests the draft acceptance was learned from
+  uint32 acceptance_samples = 11;
+}
+
+// The shapes one runtime install supports, from its facts
+message Capability {
+  string runtime_id = 1;
+  string install_id = 2;
+  repeated Shape shapes = 3;
+  string version = 4;
+}
+
+// A seat hosted on a node, as its record advertises it
+message SeatRef {
+  string formation_id = 1;
+  string instance_id = 2;
+  string role = 3;
+  uint32 rank = 4;
+  InstanceState state = 5;
+  string transport = 6;
+  string error = 7;
+  // The triage hits of a seat that failed, until its conductor has taken them
+  repeated TriageHit triage = 8;
+}
+
+// A slot on a node, as its record advertises it
+message SlotRef {
+  string id = 1;
+  string name = 2;
+  string formation_id = 3;
+  repeated string device_ids = 4;
+}
+
+// What every other member knows about a node
+message Node {
+  string id = 1;
+  string name = 2;
+  repeated string addresses = 3;
+  string version = 4;
+  HostProfile profile = 5;
+  repeated Install installs = 6;
+  repeated StoredSummary stored = 7;
+  repeated Capability capabilities = 8;
+  repeated Throughput throughput = 9;
+  repeated Link links = 10;
+  NodeState state = 11;
+  uint64 sequence = 12;
+  google.protobuf.Timestamp seen_at = 13;
+  bool self = 14;
+  // Formations conducted on the node
+  repeated string formation_ids = 15;
+  repeated SeatRef seats = 16;
+  repeated SlotRef slots = 17;
+  repeated Route routes = 18;
+  // The node's Ed25519 public key and the fingerprint of the certificate it listens with
+  bytes public_key = 19;
+  string tls_fingerprint = 20;
+  string os = 21;
+  string arch = 22;
+  // The mesh address the node listens on for node traffic
+  string address = 23;
+  // Whether the node serves TLS on its mesh address
+  bool tls = 24;
+}
+
+// One node's place in a formation
+message Seat {
+  string node_id = 1;
+  string role = 2;
+  uint32 rank = 3;
+  string instance_id = 4;
+  InstanceState state = 5;
+  string error = 6;
+  repeated GroupPlacement placements = 7;
+  string endpoint = 8;
+  string transport = 9;
+  string node_name = 10;
+  // Layer range the seat holds, from inclusive to exclusive; every layer when both are zero
+  uint32 layer_from = 11;
+  uint32 layer_to = 12;
+  // Bytes a token reads on the seat, and the cache it holds at the planned context
+  uint64 read_bytes = 13;
+  uint64 cache_bytes = 14;
+  // Weights the seat holds
+  uint64 weight_bytes = 15;
+  // The seat's memory plan on its node
+  MemoryPlan memory = 16;
+  string install_id = 17;
+  // Whether the seat is reachable on the mesh address itself
+  bool exposed = 18;
+  // Launch phase, lower first
+  uint32 phase = 19;
+  // Devices the seat holds in tensor order and the planned bytes on each, what a tensor split follows. A
+  // chain head whose runtime carries the stages as devices of its own, as llama.cpp does with --device and
+  // --tensor-split, lists the stage devices first, one entry per stage device in seat order named
+  // <node id>/<device id>, then its own devices last, so the output projection sits on its own device; the
+  // runtime renders the device list and the split in that order, and the seat's node pins only the
+  // entries naming its own devices. Every other seat lists its own devices alone
+  repeated string device_ids = 20;
+  repeated uint64 device_bytes = 21;
+  uint32 gpu_layers = 22;
+  // The seat's mesh host and the port its own protocol takes there
+  string address = 23;
+  uint32 aux_port = 24;
+  // What the seat's runtime parsed from its log, and the triage hits when it failed
+  repeated Measurement measurements = 25;
+  repeated TriageHit triage = 26;
+}
+
+// Every seat's measurements on one node, summed by key
+message NodeMeasurements {
+  string node_id = 1;
+  string node_name = 2;
+  repeated Measurement measurements = 3;
+}
+
+// One shape and node set the planner priced
+message Candidate {
+  Shape shape = 1;
+  repeated string node_ids = 2;
+  FitVerdict verdict = 3;
+  double score = 4;
+  double prefill_seconds = 5;
+  double decode_seconds_per_token = 6;
+  string reason = 7;
+  // The head or conductor seat's node
+  string head = 8;
+  double requests_per_second = 9;
+  // Predicted tokens per second and the gain over the best solo candidate
+  double tokens_per_second = 10;
+  double speedup = 11;
+  // Draft tokens per round when the candidate drafts, beside the head or on a stage, zero otherwise
+  uint32 draft_tokens = 12;
+}
+
+// The cost model's prefill as a function of prompt tokens: fixed seconds plus seconds per prompt token
+message PrefillCost {
+  double fixed_seconds = 1;
+  double seconds_per_prompt_token = 2;
+}
+
+// What the planner chose, with everything it rejected
+message FormationPlan {
+  Shape shape = 1;
+  repeated Seat seats = 2;
+  MemoryPlan memory = 3;
+  double prefill_seconds = 4;
+  double decode_seconds_per_token = 5;
+  double requests_per_second = 6;
+  uint32 reference_prompt = 7;
+  uint32 relay_break_even_prompt = 8;
+  repeated Candidate candidates = 9;
+  string detail = 10;
+  string runtime_id = 11;
+  FitVerdict verdict = 12;
+  uint32 context = 13;
+  PlanProfile profile = 14;
+  // The head seat's node
+  string head = 15;
+  uint32 reference_completion = 16;
+  double tokens_per_second = 17;
+  // Draft tokens per round and the acceptance used, for a draft formation
+  uint32 draft_tokens = 18;
+  double acceptance = 19;
+  // The ratio applied from earlier formations of this shape, runtime, and link class
+  double ttft_ratio = 20;
+  double tpt_ratio = 21;
+  // A note per number source, such as which devices planned from the profile table
+  repeated string sources = 22;
+  // The slowest link class among the seats, what the ratio table is keyed by
+  LinkClass link_class = 23;
+  // The gain over the best solo candidate that fits: its seconds per token over the plan's, zero when none fits
+  double speedup = 24;
+  // The affinity policy the gateway applies to a replicas route, unset for other shapes
+  AffinityPolicy affinity = 25;
+  // The cost model's own prices before the learned ratio, what a trace's prediction is re-priced from at
+  // its prompt length: prefill is the largest piece at that length, decode is per token
+  repeated PrefillCost prefill_cost = 26;
+  double model_decode_seconds_per_token = 27;
+  // Formation runs the applied ratios were learned from
+  uint32 ratio_samples = 28;
+}
+
+// One model running in one shape across nodes, written by its conductor
+message Formation {
+  string id = 1;
+  string name = 2;
+  string conductor = 3;
+  Shape shape = 4;
+  repeated Seat seats = 5;
+  FormationPlan plan = 6;
+  RunRequest request = 7;
+  FormationState state = 8;
+  string error = 9;
+  string task_id = 10;
+  string slot_id = 11;
+  bool desired_running = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp ready_at = 14;
+  google.protobuf.Timestamp stopped_at = 15;
+  uint64 sequence = 16;
+  string runtime_id = 17;
+  // The route's endpoint, the conductor's gateway
+  string endpoint = 18;
+  // Bytes the head streamed to stages at start
+  uint64 bytes_moved = 19;
+  string conductor_name = 20;
+  google.protobuf.Timestamp updated_at = 21;
+  string source_id = 22;
+  string repo = 23;
+  string group = 24;
+  // The address rendezvous ranks met at, kept so a relaunch meets at the same one
+  string rendezvous = 25;
+  // The key stages keep the model's tensor cache under, stable across relaunches
+  string cache_key = 26;
+  // Every seat's measurements summed by node
+  repeated NodeMeasurements measurements = 27;
+}
+
+// Learned correction for one shape, runtime, and link class
+message FormationRatio {
+  Shape shape = 1;
+  string runtime_id = 2;
+  LinkClass link_class = 3;
+  double ttft_ratio = 4;
+  double tpt_ratio = 5;
+  uint32 samples = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// Declared numbers for devices matching a name pattern, used before anything is learned
+message DeviceProfile {
+  string pattern = 1;
+  double stream_bytes_per_second = 2;
+  double compute_flops = 3;
+  double fixed_seconds = 4;
+  // Whether nebu shipped it or a person set it
+  bool builtin = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// One member as gossip carries it
+message Member {
+  string id = 1;
+  string name = 2;
+  repeated string addresses = 3;
+  string address = 4;
+  string tls_fingerprint = 5;
+  NodeState state = 6;
+  google.protobuf.Timestamp seen_at = 7;
+  uint64 sequence = 8;
+  bool tls = 9;
+}
+
+// Makes a mesh on this node
+message InitRequest {
+  string name = 1;
+  // Make a certificate authority so members verify each other
+  bool tls = 2;
+}
+
+// Returns the mesh and a join token
+message InitResponse {
+  Mesh mesh = 1;
+  string token = 2;
+}
+
+// Asks for a join token
+message TokenRequest {}
+
+// Returns a join token naming this node as the bootstrap member
+message TokenResponse {
+  string token = 1;
+}
+
+// Joins the mesh a token names
+message JoinRequest {
+  string token = 1;
+}
+
+// Returns the mesh and the bootstrap member's record
+message JoinResponse {
+  Mesh mesh = 1;
+  Node bootstrap = 2;
+  // Warnings such as plain listeners
+  repeated string warnings = 3;
+}
+
+// Leaves the mesh and tells the others
+message LeaveRequest {}
+
+// Returns the mesh that was left
+message LeaveResponse {
+  Mesh mesh = 1;
+}
+
+// Issues a new secret to every reachable member
+message RotateRequest {}
+
+// Returns which members took the new secret and which must join again
+message RotateResponse {
+  Mesh mesh = 1;
+  repeated string rotated = 2;
+  repeated string missed = 3;
+}
+
+// Asks for the mesh profile
+message GetMeshRequest {}
+
+// Returns the mesh, every member, every formation, and the learned tables
+message GetMeshResponse {
+  Mesh mesh = 1;
+  repeated Node nodes = 2;
+  repeated Formation formations = 3;
+  repeated FormationRatio ratios = 4;
+  repeated DeviceProfile profiles = 5;
+}
+
+// Lists members
+message ListNodesRequest {}
+
+// Returns members, this node first
+message ListNodesResponse {
+  repeated Node nodes = 1;
+}
+
+// Measures links to every member, or one
+message ProbeRequest {
+  string node_id = 1;
+  // Run the bandwidth measurements even when a formation is serving
+  bool force = 2;
+}
+
+// Returns the links measured
+message ProbeResponse {
+  repeated Link links = 1;
+}
+
+// Sets declared numbers for devices matching a pattern
+message SetDeviceProfileRequest {
+  DeviceProfile profile = 1;
+}
+
+// Returns every profile after the change
+message SetDeviceProfileResponse {
+  repeated DeviceProfile profiles = 1;
+}
+
+// Removes numbers a person set for a pattern; devices it named fall back to the shipped table
+message DeleteDeviceProfileRequest {
+  string pattern = 1;
+}
+
+// Returns every profile after the change
+message DeleteDeviceProfileResponse {
+  repeated DeviceProfile profiles = 1;
+}
+
+// Plans a formation without launching it. The model comes from a source or the store.
+message PlanFormationRequest {
+  RunRequest run = 1;
+  string revision = 2;
+}
+
+// Returns the plan with every candidate
+message PlanFormationResponse {
+  FormationPlan plan = 1;
+  Descriptor descriptor = 2;
+}
+
+// Plans and launches a formation across the span
+message RunFormationRequest {
+  RunRequest run = 1;
+}
+
+// Returns the formation and the conductor's task
+message RunFormationResponse {
+  Formation formation = 1;
+  Task task = 2;
+}
+
+// Lists formations known to this node
+message ListFormationsRequest {
+  bool running_only = 1;
+}
+
+// Returns formations newest first
+message ListFormationsResponse {
+  repeated Formation formations = 1;
+}
+
+// Fetches one formation by id or name
+message GetFormationRequest {
+  string id = 1;
+}
+
+// Returns one formation
+message GetFormationResponse {
+  Formation formation = 1;
+}
+
+// Stops one formation
+message StopFormationRequest {
+  string id = 1;
+}
+
+// Returns the formation after stop
+message StopFormationResponse {
+  Formation formation = 1;
+}
+
+// Streams one seat's output, the head when no role is named
+message FormationLogsRequest {
+  string id = 1;
+  string node_id = 2;
+  string role = 3;
+  bool follow = 4;
+  uint32 tail = 5;
+}
+
+// Batch of log lines from one seat
+message FormationLogsResponse {
+  repeated string lines = 1;
+  string node_id = 2;
+  string role = 3;
+}
+
+// The first call carries a nonce and no proof, the second the proof of the callee's nonce and the caller's record
+message HelloRequest {
+  string node_id = 1;
+  bytes nonce = 2;
+  // sha256 of the mesh id, so a node answers only for its own mesh
+  bytes mesh_hash = 3;
+  // HMAC under the secret of the callee's nonce, empty on the first call
+  bytes proof = 4;
+  Node node = 5;
+  string version = 6;
+  // The certificate the caller listens with, for members without a certificate authority
+  string tls_fingerprint = 7;
+}
+
+// The callee's proof on the first call, its session token and mesh material on the second
+message HelloResponse {
+  string node_id = 1;
+  bytes nonce = 2;
+  // HMAC under the secret of the caller's nonce and both ids
+  bytes proof = 3;
+  string session_token = 4;
+  Node node = 5;
+  repeated Member members = 6;
+  Mesh mesh = 7;
+  // The mesh certificate authority and the certificate issued to the caller, when the mesh has TLS
+  bytes ca_certificate = 8;
+  bytes ca_key = 9;
+  bytes certificate = 10;
+  google.protobuf.Timestamp expires_at = 11;
+}
+
+// The sender's record, member list, and the formations it conducts
+message SyncRequest {
+  Node node = 1;
+  repeated Member members = 2;
+  repeated Formation formations = 3;
+  // Admissions this member holds for nodes outside, so any member's page shows and decides them
+  repeated Admission admissions = 4;
+}
+
+// The callee's record, member list, formations, and the renewed session expiry
+message SyncResponse {
+  Node node = 1;
+  repeated Member members = 2;
+  repeated Formation formations = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  repeated Admission admissions = 5;
+}
+
+// Asks for a stream of bytes to measure
+message StreamRequest {
+  uint64 bytes = 1;
+}
+
+// One chunk of the stream
+message StreamResponse {
+  bytes chunk = 1;
+}
+
+// A conductor asks a member to start a seat
+message RunSeatRequest {
+  RunRequest run = 1;
+}
+
+// Returns the seat's instance and its startup task
+message RunSeatResponse {
+  Instance instance = 1;
+  Task task = 2;
+}
+
+// A conductor asks a member to stop a seat
+message StopSeatRequest {
+  string instance_id = 1;
+  string formation_id = 2;
+}
+
+// Returns the instance after stop
+message StopSeatResponse {
+  Instance instance = 1;
+}
+
+// Asks a decode node to fetch a saved slot from the prefill node
+message MoveSlotRequest {
+  string formation_id = 1;
+  string from_node_id = 2;
+  string file = 3;
+}
+
+// Returns the path the slot landed at
+message MoveSlotResponse {
+  string path = 1;
+  uint64 bytes = 2;
+}
+
+// A conductor asks a member to remove a relay's slot file once the decode seat restored it
+message DropSlotRequest {
+  string formation_id = 1;
+  string file = 2;
+}
+
+message DropSlotResponse {}
+
+// A conductor asks a seat's node for the seat's instance
+message GetSeatRequest {
+  string instance_id = 1;
+}
+
+// Returns the seat's instance as its node records it
+message GetSeatResponse {
+  Instance instance = 1;
+}
+
+// A conductor asks a member to pull a model, from the mesh before the internet
+message PullSeatRequest {
+  string source_id = 1;
+  string repo = 2;
+  string revision = 3;
+  string group = 4;
+  bool alone = 5;
+}
+
+// Returns the member's pull task
+message PullSeatResponse {
+  Task task = 1;
+}
+
+// Follows a task on a member
+message WatchPullRequest {
+  string task_id = 1;
+}
+
+// One snapshot of the member's task with new log lines
+message WatchPullResponse {
+  Task task = 1;
+  repeated string logs = 2;
+}
+
+// Streams a seat's output from its node
+message SeatLogsRequest {
+  string instance_id = 1;
+  bool follow = 2;
+  uint32 tail = 3;
+}
+
+// Batch of log lines from the seat
+message SeatLogsResponse {
+  repeated string lines = 1;
+}
+
+// Asks a member for the manifest of a model it holds
+message GetStoredRequest {
+  string source_id = 1;
+  string repo = 2;
+  string group = 3;
+}
+
+// Returns the manifest with its descriptor
+message GetStoredResponse {
+  StoredModel model = 1;
+}
+
+// Hands a member the new secret during rotation
+message RekeyRequest {
+  bytes secret = 1;
+}
+
+// Acknowledges the new secret
+message RekeyResponse {
+  string node_id = 1;
+}
+
+// Tells members this node left
+message ByeRequest {
+  string node_id = 1;
+}
+
+// Acknowledges the departure
+message ByeResponse {}
+
+// Which side of an admission this node is on
+enum AdmissionSide {
+  ADMISSION_SIDE_UNSPECIFIED = 0;
+  // This node is a member deciding whether a node outside joins
+  ADMISSION_SIDE_MEMBER = 1;
+  // This node is outside, joining a mesh nearby
+  ADMISSION_SIDE_CANDIDATE = 2;
+}
+
+// Where an admission stands. Later states win when members' copies differ.
+enum AdmissionState {
+  ADMISSION_STATE_UNSPECIFIED = 0;
+  // Waiting on a decision: a member's when the candidate asked, the candidate's when a member invited
+  ADMISSION_STATE_PENDING = 1;
+  // A member refused the candidate
+  ADMISSION_STATE_DENIED = 2;
+  // The candidate refused the invitation
+  ADMISSION_STATE_DECLINED = 3;
+  // Nobody decided in time
+  ADMISSION_STATE_EXPIRED = 4;
+  // The token could not be delivered, detail says why
+  ADMISSION_STATE_FAILED = 5;
+  // A member sent the candidate the join token
+  ADMISSION_STATE_ADMITTED = 6;
+  // The candidate is a member
+  ADMISSION_STATE_JOINED = 7;
+  // Cleared from the page
+  ADMISSION_STATE_DISMISSED = 8;
+}
+
+// A node heard on the network by beacon, in this mesh, another, or none
+message NearbyNode {
+  string id = 1;
+  string name = 2;
+  // The address the node listens on for node traffic, empty when it listens on loopback alone
+  string address = 3;
+  bool tls = 4;
+  string tls_fingerprint = 5;
+  string version = 6;
+  string os = 7;
+  string arch = 8;
+  // sha256 of the mesh id the node belongs to, in hex, empty when it belongs to none
+  string mesh_hash = 9;
+  string mesh_name = 10;
+  uint32 mesh_members = 11;
+  bool mesh_tls = 12;
+  google.protobuf.Timestamp heard_at = 13;
+  // Whether the node is a member of this node's mesh
+  bool member = 14;
+  // The address the beacon came from
+  string from = 15;
+}
+
+// A mesh heard on the network, from its members' beacons
+message NearbyMesh {
+  string hash = 1;
+  string name = 2;
+  uint32 members = 3;
+  bool tls = 4;
+  // The members heard
+  repeated NearbyNode nodes = 5;
+  google.protobuf.Timestamp heard_at = 6;
+}
+
+// One node's standing with one mesh while admission is decided. A member keeps one per node
+// outside asking or invited; a node outside keeps one per mesh it asked or was invited to.
+message Admission {
+  string id = 1;
+  AdmissionSide side = 2;
+  AdmissionState state = 3;
+  // The node across: on a member the candidate, on a candidate the member spoken to
+  NearbyNode node = 4;
+  string mesh_hash = 5;
+  string mesh_name = 6;
+  uint32 mesh_members = 7;
+  bool mesh_tls = 8;
+  // Whether a member invited the candidate, and whether the candidate asked
+  bool invited = 9;
+  bool asked = 10;
+  // The member that invited, admitted, or denied, as its name
+  string by = 11;
+  string detail = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+  google.protobuf.Timestamp expires_at = 15;
+  // Whether the node across answered at the address on record: its beacon came from it, or a call reached it
+  bool reached = 16;
+}
+
+// The mesh from this node: the mesh it belongs to, the nodes and meshes heard on the network,
+// and the admissions under way
+message MeshStatus {
+  // Nil when the node belongs to no mesh
+  Mesh mesh = 1;
+  string node_id = 2;
+  string node_name = 3;
+  // The address node traffic listens on, empty when none is bound
+  string listen = 4;
+  // The address other nodes reach this one at, empty when it listens on loopback alone
+  string address = 5;
+  bool announce = 6;
+  repeated NearbyNode nodes = 7;
+  repeated NearbyMesh meshes = 8;
+  repeated Admission admissions = 9;
+  // Why no node traffic listener is bound, when the default address could not be taken
+  string listen_error = 10;
+}
+
+// Asks for the mesh status
+message DiscoverRequest {}
+
+message DiscoverResponse {
+  MeshStatus status = 1;
+}
+
+// A member invites a node heard on the network, or one at an address on a network that passes no beacons
+message InviteRequest {
+  string node_id = 1;
+  string address = 2;
+}
+
+message InviteResponse {
+  Admission admission = 1;
+}
+
+// A node outside asks to join a mesh heard on the network, through one member or the freshest heard,
+// or the mesh of a member at an address on a network that passes no beacons
+message AskRequest {
+  string mesh_hash = 1;
+  string node_id = 2;
+  string address = 3;
+}
+
+message AskResponse {
+  Admission admission = 1;
+}
+
+// A member admits a candidate that asked
+message AdmitRequest {
+  string admission_id = 1;
+}
+
+message AdmitResponse {
+  Admission admission = 1;
+}
+
+// A member denies a candidate, or a candidate declines an invitation
+message RefuseRequest {
+  string admission_id = 1;
+}
+
+message RefuseResponse {
+  Admission admission = 1;
+}
+
+// Clears a settled admission from the page
+message DismissRequest {
+  string admission_id = 1;
+}
+
+message DismissResponse {}
+
+// Node to node: a node outside asks a member to join, answers an invitation, or declines one
+message KnockRequest {
+  NearbyNode node = 1;
+  string mesh_hash = 2;
+  // Whether the knock answers an invitation
+  bool invited = 3;
+  bool declined = 4;
+}
+
+message KnockResponse {
+  AdmissionState state = 1;
+  // The member answering, with its mesh
+  NearbyNode member = 2;
+}
+
+// Node to node: a member invites a node outside
+message OfferRequest {
+  NearbyNode member = 1;
+  string mesh_hash = 2;
+  string mesh_name = 3;
+  uint32 mesh_members = 4;
+  bool mesh_tls = 5;
+}
+
+message OfferResponse {
+  AdmissionState state = 1;
+  // The node answering
+  NearbyNode node = 2;
+}
+
+// Node to node: a member hands a candidate the join token, or tells it no
+message WelcomeRequest {
+  NearbyNode member = 1;
+  string mesh_hash = 2;
+  string token = 3;
+  bool denied = 4;
+  string detail = 5;
+}
+
+message WelcomeResponse {
+  bool joined = 1;
+  string node_id = 2;
+}
+
+// Membership, links, planning, and formations across nodes
+service MeshService {
+  // Makes a mesh on this node
+  rpc Init(InitRequest) returns (InitResponse);
+  // Joins the mesh a token names
+  rpc Join(JoinRequest) returns (JoinResponse);
+  // Leaves the mesh
+  rpc Leave(LeaveRequest) returns (LeaveResponse);
+  // Issues a new secret to every reachable member
+  rpc Rotate(RotateRequest) returns (RotateResponse);
+  // Returns the mesh profile
+  rpc GetMesh(GetMeshRequest) returns (GetMeshResponse);
+  // Lists members
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  // Prints a join token
+  rpc Token(TokenRequest) returns (TokenResponse);
+  // Measures links now
+  rpc Probe(ProbeRequest) returns (ProbeResponse);
+  // Sets declared numbers for a device pattern
+  rpc SetDeviceProfile(SetDeviceProfileRequest) returns (SetDeviceProfileResponse);
+  // Removes declared numbers a person set for a device pattern
+  rpc DeleteDeviceProfile(DeleteDeviceProfileRequest) returns (DeleteDeviceProfileResponse);
+  // The mesh status: membership, what is nearby, and admissions under way
+  rpc Discover(DiscoverRequest) returns (DiscoverResponse);
+  // Invites a node heard on the network
+  rpc Invite(InviteRequest) returns (InviteResponse);
+  // Asks to join a mesh heard on the network, or accepts its invitation
+  rpc Ask(AskRequest) returns (AskResponse);
+  // Admits a candidate that asked
+  rpc Admit(AdmitRequest) returns (AdmitResponse);
+  // Denies a candidate, or declines an invitation
+  rpc Refuse(RefuseRequest) returns (RefuseResponse);
+  // Clears a settled admission
+  rpc Dismiss(DismissRequest) returns (DismissResponse);
+  // Plans a formation
+  rpc PlanFormation(PlanFormationRequest) returns (PlanFormationResponse);
+  // Plans and launches a formation
+  rpc RunFormation(RunFormationRequest) returns (RunFormationResponse);
+  // Lists formations
+  rpc ListFormations(ListFormationsRequest) returns (ListFormationsResponse);
+  // Fetches one formation
+  rpc GetFormation(GetFormationRequest) returns (GetFormationResponse);
+  // Stops one formation
+  rpc StopFormation(StopFormationRequest) returns (StopFormationResponse);
+  // Streams a seat's output
+  rpc FormationLogs(FormationLogsRequest) returns (stream FormationLogsResponse);
+  // Node to node, without a credential: a node outside asks to join, answers or declines an invitation
+  rpc Knock(KnockRequest) returns (KnockResponse);
+  // Node to node, without a credential: a member invites a node outside
+  rpc Offer(OfferRequest) returns (OfferResponse);
+  // Node to node, without a credential: a member hands a candidate the join token, or a refusal
+  rpc Welcome(WelcomeRequest) returns (WelcomeResponse);
+  // Node to node, the handshake that admits a member
+  rpc Hello(HelloRequest) returns (HelloResponse);
+  // Node to node, exchanges records and member lists
+  rpc Sync(SyncRequest) returns (SyncResponse);
+  // Node to node, streams bytes for a bandwidth measurement
+  rpc Stream(StreamRequest) returns (stream StreamResponse);
+  // Node to node, starts a seat here
+  rpc RunSeat(RunSeatRequest) returns (RunSeatResponse);
+  // Node to node, stops a seat here
+  rpc StopSeat(StopSeatRequest) returns (StopSeatResponse);
+  // Node to node, fetches a saved slot from another member
+  rpc MoveSlot(MoveSlotRequest) returns (MoveSlotResponse);
+  // Node to node, removes a relay's slot file after its move
+  rpc DropSlot(DropSlotRequest) returns (DropSlotResponse);
+  // Node to node, reads a seat's instance
+  rpc GetSeat(GetSeatRequest) returns (GetSeatResponse);
+  // Node to node, asks the member to pull a model onto itself
+  rpc PullSeat(PullSeatRequest) returns (PullSeatResponse);
+  // Node to node, follows a task on the member
+  rpc WatchPull(WatchPullRequest) returns (stream WatchPullResponse);
+  // Node to node, streams a seat's output
+  rpc SeatLogs(SeatLogsRequest) returns (stream SeatLogsResponse);
+  // Node to node, reads the manifest of a model the member holds
+  rpc GetStored(GetStoredRequest) returns (GetStoredResponse);
+  // Node to node, takes a new secret
+  rpc Rekey(RekeyRequest) returns (RekeyResponse);
+  // Node to node, notes a departure
+  rpc Bye(ByeRequest) returns (ByeResponse);
+}

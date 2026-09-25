@@ -85,16 +85,17 @@ func (SDCpp) Sandbox() Sandbox {
 func (SDCpp) Steps(b *Build) []Step {
 	configure := command("cmake", "-S", ".", "-B", "build",
 		"-DCMAKE_BUILD_TYPE="+arg(b.Vars, "build_type"), arg(b.Vars, "backend"), arg(b.Vars, "archs"),
-		"-DSD_BUILD_SHARED_LIBS=OFF", "-DSD_BUILD_EXAMPLES=ON", "-DSD_SERVER_BUILD_FRONTEND=OFF")
+		"-DSD_BUILD_SHARED_LIBS=OFF", "-DSD_BUILD_EXAMPLES=ON", "-DSD_SERVER_BUILD_FRONTEND=OFF", "-DGGML_RPC=ON")
 	configure = append(configure, args(b.Vars, "extra")...)
 	return []Step{
 		{Name: "submodules", Command: command("git", "submodule", "update", "--init", "--recursive", "--depth", "1")},
 		{Name: "configure", Command: configure},
-		{Name: "compile", Command: command("cmake", "--build", "build", "--config", arg(b.Vars, "build_type"), "--target", "sd-server", "-j", strconv.Itoa(b.Jobs))},
+		{Name: "compile", Command: command("cmake", "--build", "build", "--config", arg(b.Vars, "build_type"), "--target", "sd-server", "--target", "rpc-server", "-j", strconv.Itoa(b.Jobs))},
 	}
 }
 
-func (SDCpp) Outputs() []string      { return []string{"build/bin/sd-server"} }
+// The server and the rpc server that lets it put its denoiser on another node
+func (SDCpp) Outputs() []string      { return []string{"build/bin/sd-server", "build/bin/rpc-server"} }
 func (SDCpp) Binary() string         { return "sd-server" }
 func (SDCpp) Timeout() time.Duration { return 3 * time.Hour }
 

@@ -11,8 +11,10 @@ import (
 	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/bots"
 	"github.com/nickheyer/nebu/internal/chats"
+	"github.com/nickheyer/nebu/internal/formations"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
+	"github.com/nickheyer/nebu/internal/mesh"
 	"github.com/nickheyer/nebu/internal/settings"
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
@@ -38,10 +40,12 @@ func wrap(err error) error {
 		errors.Is(err, installs.ErrUnknownInstall), errors.Is(err, instances.ErrUnknownInstance),
 		errors.Is(err, installs.ErrUnknownBuild), errors.Is(err, build.ErrUnknownRecipe),
 		errors.Is(err, slots.ErrUnknownSlot), errors.Is(err, bots.ErrUnknownBot), errors.Is(err, auth.ErrUnknownUser), errors.Is(err, auth.ErrUnknownToken),
-		errors.Is(err, chats.ErrUnknownConversation):
+		errors.Is(err, chats.ErrUnknownConversation), errors.Is(err, mesh.ErrUnknownNode), errors.Is(err, formations.ErrUnknownFormation):
 		return connect.NewError(connect.CodeNotFound, err)
-	case errors.Is(err, bots.ErrNotRunning), errors.Is(err, auth.ErrLastUser):
+	case errors.Is(err, bots.ErrNotRunning), errors.Is(err, auth.ErrLastUser), errors.Is(err, mesh.ErrNoMesh):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
+	case errors.Is(err, mesh.ErrMesh), errors.Is(err, formations.ErrFormation):
+		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, runtimes.ErrParam), errors.Is(err, build.ErrSelection), errors.Is(err, slots.ErrSlot), errors.Is(err, sources.ErrSource),
 		errors.Is(err, settings.ErrSetting), errors.Is(err, bots.ErrBot), errors.Is(err, auth.ErrUser), errors.Is(err, auth.ErrToken), errors.Is(err, chats.ErrChat):
 		return connect.NewError(connect.CodeInvalidArgument, err)

@@ -103,8 +103,44 @@ type GroupRule struct {
 	Loaded func(s *Scope) bool
 }
 
+// Per shape cost facts a runtime declares, what the formation planner prices links with
+type ShapeFacts struct {
+	// Whether a chain passes activations rank to rank in a ring, or the head carries every crossing in a star
+	Ring bool
+	// Bytes per hidden unit an activation moves across a link, 4 for float32 and 2 for half precision
+	ActivationBytes float64
+	// Prompt chunks a chain keeps in flight, dividing the boundary term of prefill
+	ChunksInFlight float64
+	// Whether relay streams the cache layer by layer while later layers compute
+	RelayOverlap bool
+	// Whether a relay moves the cache over the RDMA device when the link has one, taking the aggregate bandwidth
+	RelayRDMA bool
+	// Whether relay writes the cache to disk on one seat and reads it on the other
+	RelayDisk bool
+	// Reductions per layer per token in lockstep
+	ReductionsPerLayer float64
+	// Whether a chain's transport takes a link's aggregate bandwidth, as a collective over many connections or
+	// the RDMA device does, or one stream, as one TCP connection per stage does
+	ChainAggregate bool
+	// Whether a chain head keeps the request's speculative settings: a draft beside the head composes with the
+	// chain when true, and the settings are off in chain when the runtime does not compose them with pipeline parallel
+	ChainSpeculative bool
+	// The relay handoff the gateway drives between the prefill and decode seats, one of the Handoff constants
+	Handoff string
+}
+
+// Relay handoffs a runtime declares: vLLM's NIXL connector parameters, SGLang's bootstrap room,
+// and llama.cpp's saved slot file
+const (
+	HandoffNIXL            = "nixl"
+	HandoffSGLangBootstrap = "sglang-bootstrap"
+	HandoffLlamaSlot       = "llamacpp-slot"
+)
+
 // Memory planning rules of one runtime
 type Policy struct {
+	// Cost facts per shape, nil for a runtime that runs solo only
+	Shapes *ShapeFacts
 	Groups []GroupRule
 	// Cache bytes at the resolved context length.
 	CacheBytes func(s *Scope) uint64

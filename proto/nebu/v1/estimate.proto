@@ -8,6 +8,51 @@ import "nebu/v1/model.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
 
+// A way of spreading one model over the nodes of a mesh
+enum Shape {
+  SHAPE_UNSPECIFIED = 0;
+  // Everything on one node
+  SHAPE_SOLO = 1;
+  // Consecutive layer ranges on stages, the head sampling
+  SHAPE_CHAIN = 2;
+  // Every layer split across every seat, two reductions per layer per token
+  SHAPE_LOCKSTEP = 3;
+  // One seat prefills, another decodes, the cache crossing once per request
+  SHAPE_RELAY = 4;
+  // The whole model on every seat, requests spread by the gateway
+  SHAPE_REPLICAS = 5;
+  // The target on the head, a draft model on another node
+  SHAPE_DRAFT = 6;
+  // A diffusion denoiser on one node, its encoders and decoder on another
+  SHAPE_STAGES = 7;
+}
+
+// What a link carries well, from its measurements
+enum LinkClass {
+  LINK_CLASS_UNSPECIFIED = 0;
+  // RDMA both ends, round trip under 100 us, aggregate 100 Gb/s or more
+  LINK_CLASS_FABRIC = 1;
+  // Round trip under 300 us, stream 10 Gb/s or more
+  LINK_CLASS_FAST = 2;
+  // Round trip under 2 ms, stream 1 Gb/s or more
+  LINK_CLASS_LAN = 3;
+  // Anything else
+  LINK_CLASS_SLOW = 4;
+}
+
+// Which numbers a route cares about, weighting the planner's score
+enum PlanProfile {
+  PLAN_PROFILE_UNSPECIFIED = 0;
+  // Short prompts, short answers, balanced at 2048 prompt tokens
+  PLAN_PROFILE_CHAT = 1;
+  // Long prompts, short answers, prefill weighted at the route's median prompt
+  PLAN_PROFILE_AGENT = 2;
+  // Many concurrent requests, throughput weighted
+  PLAN_PROFILE_BATCH = 3;
+  // Learned from the route's last 200 traces
+  PLAN_PROFILE_AUTO = 4;
+}
+
 // Whether a plan fits the primary pools
 enum FitVerdict {
   FIT_VERDICT_UNSPECIFIED = 0;

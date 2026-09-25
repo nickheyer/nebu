@@ -57,6 +57,8 @@ type Table struct {
 	// Routes with pending counter updates, flushed by a shared timer.
 	dirty map[string]bool
 	flush *time.Timer
+	// The relay handoff each runtime declares, for relay formation routes
+	handoffs func(runtimeID string) string
 }
 
 // Loads every route from the store
@@ -415,8 +417,8 @@ func (t *Table) Acquire(name string, served bool) (*v1.Route, *v1.Policy, func()
 		return nil, nil, nil, ErrDraining
 	}
 	policy := Effective(r.GetPolicy(), t.defaults)
-	counter := t.counterLocked(r.GetInstanceId())
-	if cap := policy.GetMaxInFlight(); cap > 0 && counter.Load() >= int32(cap) {
+	counter := t.counterLocked(counterKey(r))
+	if cap := routeCap(r, policy); cap > 0 && counter.Load() >= int32(cap) {
 		return nil, nil, nil, ErrBusy
 	}
 	if policy.GetRequestsPerSecond() > 0 && !t.limiterLocked(name, policy).Allow() {
@@ -473,6 +475,22 @@ func (t *Table) counterLocked(instanceID string) *atomic.Int32 {
 	return c
 }
 
+// Requests a route may have in flight at once: the policy's cap, and for replicas the cap on
+// every ready seat, since each seat takes the cap on its own
+func routeCap(r *v1.Route, policy *v1.Policy) uint32 {
+	cap := policy.GetMaxInFlight()
+	if cap == 0 || r.GetShape() != v1.Shape_SHAPE_REPLICAS {
+		return cap
+	}
+	ready := uint32(0)
+	for _, s := range r.GetSeats() {
+		if s.GetState() == v1.InstanceState_INSTANCE_STATE_READY && s.GetEndpoint() != "" {
+			ready++
+		}
+	}
+	return cap * max(ready, 1)
+}
+
 // Reports requests in flight on an instance
 func (t *Table) InFlight(instanceID string) int {
 	t.mu.Lock()
@@ -499,8 +517,13 @@ func (t *Table) WaitDrained(ctx context.Context, instanceID string, limit time.D
 
 func (t *Table) snapshotLocked(r *v1.Route) *v1.Route {
 	out := proto.Clone(r).(*v1.Route)
-	if c, ok := t.inflight[r.GetInstanceId()]; ok && r.GetInstanceId() != "" {
+	if c, ok := t.inflight[counterKey(r)]; ok {
 		out.InFlight = uint32(max(c.Load(), 0))
+	}
+	for _, s := range out.GetSeats() {
+		if c, ok := t.inflight[s.GetInstanceId()]; ok && s.GetInstanceId() != "" {
+			s.InFlight = uint32(max(c.Load(), 0))
+		}
 	}
 	return out
 }

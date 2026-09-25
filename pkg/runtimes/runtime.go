@@ -60,6 +60,12 @@ type Launch struct {
 	// Stored model and its pipeline files.
 	Model *v1.StoredModel
 	Force bool
+	// The seat this launch takes in a formation, nil for a solo run
+	Seat *v1.SeatSpec
+	// The install as recorded, for the facts a seat command depends on
+	InstallRecord *v1.Install
+	// The draft model's weights, for a draft head
+	Draft string
 }
 
 // Resolved command and parameters.
@@ -122,6 +128,8 @@ type Probe struct {
 	Timeout time.Duration
 	// Parses a fact from command output.
 	Parse func(output string) (string, bool)
+	// Files whose existence is the fact and whose first present path is its value, instead of a command
+	Files func(in Install) []string
 }
 
 // Runtime installation, launch, probes, memory policy, and failure rules.
@@ -152,6 +160,14 @@ type Runtime interface {
 	// Memory allocations parsed from logs, summed by key.
 	Measure(lines []string) []*v1.Measurement
 	Triage() []triage.Set
+	// Shapes the install supports, from its facts: the binaries it ships, the flags it accepts, the modules it imports.
+	Shapes(in *v1.Install) []v1.Shape
+	// Roles of a shape in launch order: phases launch one after another, seats within a phase together.
+	Roles(shape v1.Shape) []Role
+	// Renders one seat. The launch carries the seat block: role, rank, rendezvous address, peers with addresses and ports.
+	LaunchSeat(in Launch) (*Command, error)
+	// The transport a seat negotiated as its log names it: rdma, sockets, or empty until a line says
+	Transport(lines []string) string
 }
 
 // Runtimes ordered by id
@@ -563,13 +579,19 @@ func Flags(params []*v1.Param, values estimate.Params) (args []string, env map[s
 			text = fmt.Sprint(v)
 		}
 		emitted[p.GetName()] = text
+		b, isBool := value.(bool)
 		if p.GetEnv() != "" {
-			env[p.GetEnv()] = text
+			// A switch is exported only when on, since a variable set to anything is set.
+			if !isBool {
+				env[p.GetEnv()] = text
+			} else if b {
+				env[p.GetEnv()] = "1"
+			}
 		}
 		if p.GetFlag() == "" {
 			continue
 		}
-		if b, isBool := value.(bool); isBool {
+		if isBool {
 			if b {
 				args = append(args, p.GetFlag())
 			}

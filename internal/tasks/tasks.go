@@ -416,6 +416,20 @@ func (h *Handle) Message(message string) {
 	h.e.update(func(t *v1.Task) { t.Progress.Message = message }, false)
 }
 
+// Sets one row of the progress by key, adding the row when it is new: a part of the work that
+// advances on its own, such as one seat's pull
+func (h *Handle) Row(key string, done, total uint64, message string) {
+	h.e.update(func(t *v1.Task) {
+		for _, r := range t.Progress.Rows {
+			if r.GetKey() == key {
+				r.Done, r.Total, r.Message = done, total, message
+				return
+			}
+		}
+		t.Progress.Rows = append(t.Progress.Rows, &v1.TaskProgress{Key: key, Done: done, Total: total, Message: message})
+	}, false)
+}
+
 // Appends a log line, stores it, and notifies watchers
 func (h *Handle) Logf(format string, args ...any) {
 	line := launch.Clean(fmt.Sprintf(format, args...))

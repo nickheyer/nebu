@@ -15,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +69,9 @@ type Reservation struct {
 	RuntimeID   string
 	Params      map[string]string
 	InstanceID  string
+	// The formation serving the slot, when one does
+	FormationID   string
+	FormationName string
 }
 
 func (r *Reservation) placement() v1.Placement {
@@ -84,12 +88,26 @@ func WithSwap(ctx context.Context) context.Context { return context.WithValue(ct
 
 func fromSwap(ctx context.Context) bool { v, _ := ctx.Value(swapKey{}).(bool); return v }
 
+// Whether the context marks a swap, so a replacement may launch beside the occupant it replaces
+func FromSwap(ctx context.Context) bool { return fromSwap(ctx) }
+
 // Slot manager interface for bound instances.
 type Slots interface {
 	Reservation(ctx context.Context, slotID string) (*Reservation, error)
 	// Called after every state change, outside the instance lock
 	OnInstance(*v1.Instance)
 }
+
+// What a seat's node asks about the formation a seat serves: for a stage adopted after a restart
+// while a head holds it, the conductor's record is the evidence that the head is ready on it
+type Formations interface {
+	// Waits until a record of the formation's conductor written after since says the head is ready,
+	// and returns why not when the record says otherwise or ctx ends first
+	HeadReady(ctx context.Context, formationID string, since time.Time) error
+}
+
+// An adopted stage a head holds waits this long for the conductor's record
+const adoptConfirmWindow = 2 * time.Minute
 
 // Manages daemon instances.
 type Manager struct {
@@ -107,7 +125,9 @@ type Manager struct {
 	Events      *events.Bus
 	// Set by the daemon once slots exist, nil until then
 	Slots Slots
-	Log   *slog.Logger
+	// Set by the daemon once the conductor exists, nil until then
+	Formations Formations
+	Log        *slog.Logger
 
 	mu   sync.Mutex
 	list []*instance
@@ -122,6 +142,8 @@ type instance struct {
 	log      *launch.Log
 	exited   chan struct{}
 	exitOnce sync.Once
+	// The guard listener in front of a seat, nil for a solo instance or an exposed seat
+	guard *forwarder
 }
 
 func (m *Manager) newInstance(rec *v1.Instance, rt runtimes.Runtime) *instance {
@@ -151,6 +173,13 @@ func (in *instance) update(fn func(*v1.Instance)) {
 	in.mgr.changed(rec, before)
 	// Publish exits before releasing stop waiters.
 	if Terminal(rec.GetState()) {
+		in.mu.Lock()
+		g := in.guard
+		in.guard = nil
+		in.mu.Unlock()
+		if g != nil {
+			g.Close()
+		}
 		in.exitOnce.Do(func() { close(in.exited) })
 	}
 }
@@ -162,6 +191,8 @@ func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
 	case m.Routes == nil:
 	case Terminal(rec.GetState()) && !Terminal(before):
 		m.Routes.RemoveInstance(rec.GetId())
+	case rec.GetSeat() != nil:
+		// The conductor routes formations.
 	case slotted:
 	case rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY:
 		m.Routes.Serve(rec.GetName(), rec, m.Runtimes.API(rec.GetRuntimeId()), "", nil, nil)
@@ -220,6 +251,9 @@ type prepared struct {
 	plan       *v1.MemoryPlan
 	// Other stored models available as companion parts.
 	companions []*v1.StoredModel
+	// The seat block and its role, for a seat of a formation
+	seat *v1.SeatSpec
+	role runtimes.Role
 }
 
 // Plans a run without launching it
@@ -242,10 +276,13 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 	}
 	if p.res != nil && p.res.InstanceID != "" && !fromSwap(ctx) {
 		if cur, err := m.Get(p.res.InstanceID); err == nil && !Terminal(cur.GetState()) {
-			return nil, nil, fmt.Errorf("%w: slot %s serves %s, use nebu swap", runtimes.ErrParam, p.res.Name, cur.GetName())
+			return nil, nil, fmt.Errorf("%w: slot %s serves %s, swap instead", runtimes.ErrParam, p.res.Name, cur.GetName())
 		}
 	}
-	if p.plan != nil && p.plan.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO && !p.req.GetForce() {
+	if p.res != nil && p.res.FormationID != "" && !fromSwap(ctx) {
+		return nil, nil, fmt.Errorf("%w: slot %s serves formation %s, swap instead", runtimes.ErrParam, p.res.Name, p.res.FormationName)
+	}
+	if p.seat == nil && p.plan != nil && p.plan.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO && !p.req.GetForce() {
 		return nil, nil, fmt.Errorf("%w: %s does not fit, %s. Pass force to run anyway", runtimes.ErrParam, p.name, p.plan.GetDetail())
 	}
 	return m.launch(ctx, p)
@@ -253,6 +290,9 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 
 // Resolves model, runtime, install, reservation, and plan
 func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, error) {
+	if req.GetSeat() != nil {
+		return m.prepareSeat(ctx, req)
+	}
 	req = proto.Clone(req).(*v1.RunRequest)
 	stored, err := m.Store.ReadManifest(req.GetSourceId(), req.GetRepo(), req.GetGroup())
 	if err != nil {
@@ -355,6 +395,9 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 
 // Renders and launches a prepared run
 func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Task, error) {
+	if p.seat != nil {
+		return m.launchSeat(ctx, p)
+	}
 	req, stored, rt, install, name, descriptor, profile, params, plan := p.req, p.stored, p.rt, p.install, p.name, p.descriptor, p.profile, p.params, p.plan
 	port, err := freePort()
 	if err != nil {
@@ -372,19 +415,20 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	m.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_UPDATED, key, touched)
 	artifacts := m.artifacts(stored, rt)
 	input := runtimes.Launch{
-		Name:       name,
-		Params:     params,
-		Artifacts:  artifacts,
-		Host:       bindHost,
-		Port:       port,
-		Install:    runtimes.Install{Path: install.GetPath(), Dir: install.GetDir(), Version: install.GetVersion()},
-		Devices:    slotDevices(p.planned, p.res),
-		Placement:  p.res.placement(),
-		Descriptor: descriptor,
-		Plan:       plan,
-		Stored:     p.companions,
-		Model:      stored,
-		Force:      req.GetForce(),
+		Name:          name,
+		Params:        params,
+		Artifacts:     artifacts,
+		Host:          bindHost,
+		Port:          port,
+		Install:       runtimes.Install{Path: install.GetPath(), Dir: install.GetDir(), Version: install.GetVersion()},
+		Devices:       slotDevices(p.planned, p.res),
+		Placement:     p.res.placement(),
+		Descriptor:    descriptor,
+		Plan:          plan,
+		Stored:        p.companions,
+		Model:         stored,
+		Force:         req.GetForce(),
+		InstallRecord: install,
 	}
 	var prep *runtimes.Command
 	if rt.Prepares(stored.GetFormatId()) {
@@ -811,7 +855,7 @@ func (m *Manager) Constrain(ctx context.Context, slotID string, profile *v1.Host
 
 // Relaunch wanted, nonfailed instances outside slots. Slots manage their own recovery.
 func relaunches(rec *v1.Instance) bool {
-	return rec.GetDesiredRunning() && rec.GetState() != v1.InstanceState_INSTANCE_STATE_FAILED && rec.GetSlotId() == ""
+	return rec.GetDesiredRunning() && rec.GetState() != v1.InstanceState_INSTANCE_STATE_FAILED && rec.GetSlotId() == "" && rec.GetSeat() == nil
 }
 
 // Lists live instances bound to a slot, newest first
@@ -1012,6 +1056,10 @@ func (m *Manager) adopt(ctx context.Context, in *instance) {
 	proc := launch.Adopt(int(rec.GetPid()), m.logPath(rec.GetId()))
 	in.attach(proc)
 	go m.supervise(in)
+	if rec.GetSeat() != nil {
+		m.adoptSeat(ctx, in, proc)
+		return
+	}
 	url := rec.GetEndpoint() + in.rt.Health().Path
 	if rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY && launch.Healthy(&http.Client{Timeout: probeTimeout}, url) {
 		proc.Sync()
@@ -1273,4 +1321,101 @@ func freePort() (int, error) {
 // Reports whether an instance state is final
 func Terminal(s v1.InstanceState) bool {
 	return s == v1.InstanceState_INSTANCE_STATE_STOPPED || s == v1.InstanceState_INSTANCE_STATE_FAILED
+}
+
+// Adopts a seat left running: its guard listener comes back on the port peers know, its readiness
+// is checked by its role's health with evidence, a head's template is probed again, and only then
+// is it ready
+func (m *Manager) adoptSeat(ctx context.Context, in *instance, proc launch.Handle) {
+	rec := in.snapshot()
+	m.restoreGuard(in)
+	if Terminal(in.snapshot().GetState()) {
+		return
+	}
+	role, err := runtimes.RoleOf(in.rt, rec.GetSeat())
+	if err != nil {
+		m.fail(in, err)
+		proc.Stop(in.grace())
+		return
+	}
+	since := time.Now()
+	in.update(func(r *v1.Instance) {
+		r.State = v1.InstanceState_INSTANCE_STATE_STARTING
+		r.ReadyAt = nil
+	})
+	m.Log.Info("adopted seat, verifying it", "name", rec.GetName(), "pid", rec.GetPid(), "formation", rec.GetSeat().GetFormationId())
+	task := m.Tasks.Start(kindRun, "adopt "+rec.GetName(), map[string]string{"instance": rec.GetId(), "name": rec.GetName(), "formation": rec.GetSeat().GetFormationId(), "role": rec.GetSeat().GetRole()}, func(ctx context.Context, h *tasks.Handle) error {
+		h.Logf("adopted pid %d left running by the previous daemon", rec.GetPid())
+		if err := m.verifyAdopted(ctx, h, in, proc, since); err != nil {
+			return err
+		}
+		proc.Sync()
+		lines := proc.Log().Tail(0)
+		transport := in.rt.Transport(lines)
+		in.update(func(r *v1.Instance) { r.Transport = transport })
+		if transport != "" {
+			h.Logf("transport %s", transport)
+		}
+		var probe *v1.TemplateProbe
+		if role.Head {
+			probe = m.probeTemplate(ctx, h.Logf, in)
+		}
+		m.ready(h, in, in.rt.Measure(lines), probe)
+		return nil
+	})
+	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })
+}
+
+// Checks an adopted seat by its role's health: an HTTP path answering, the process alive, a hello
+// from a stage no client holds, or the conductor's record that the head is ready on a stage a
+// head holds, since a stage in use cannot take a hello
+func (m *Manager) verifyAdopted(ctx context.Context, h *tasks.Handle, in *instance, proc launch.Handle, since time.Time) error {
+	rec := in.snapshot()
+	health, err := runtimes.SeatHealth(in.rt, rec.GetSeat())
+	if err != nil {
+		return err
+	}
+	if health.Kind != runtimes.HealthHello {
+		return m.waitSeatReady(ctx, h, in, proc)
+	}
+	seat := rec.GetSeat()
+	g := in.guardOf()
+	if g != nil && g.Active() == 0 {
+		addr := net.JoinHostPort(bindHost, strconv.Itoa(int(seat.GetLocalPort())))
+		h.Message("hello to the idle stage at " + addr)
+		version, err := rpcHello(ctx, addr)
+		if err != nil {
+			return m.adoptFailed(h, in, proc, fmt.Errorf("no hello from the adopted stage at %s: %w", addr, err))
+		}
+		h.Logf("rpc server speaks protocol %s", version)
+		return nil
+	}
+	holder := "its head holds the exposed stage"
+	if g != nil {
+		holder = fmt.Sprintf("%d connections hold the stage through its guard", g.Active())
+	}
+	h.Message("waiting for the conductor's record to confirm the head: " + holder)
+	if m.Formations == nil {
+		return m.adoptFailed(h, in, proc, errors.New(holder+", and this node has no conductor record to confirm the head by"))
+	}
+	cctx, cancel := context.WithTimeout(ctx, adoptConfirmWindow)
+	defer cancel()
+	if err := m.Formations.HeadReady(cctx, seat.GetFormationId(), since); err != nil {
+		return m.adoptFailed(h, in, proc, fmt.Errorf("%s, and the conductor did not confirm the head on it: %w", holder, err))
+	}
+	h.Logf("the conductor's record confirms the head is ready on this stage")
+	return nil
+}
+
+// Fails an adopted seat that did not verify, stopping its process and logging its triage
+func (m *Manager) adoptFailed(h *tasks.Handle, in *instance, proc launch.Handle, err error) error {
+	hits := m.fail(in, err)
+	proc.Stop(in.grace())
+	for _, hit := range hits {
+		h.Logf("triage %s: %s. %s", hit.GetId(), hit.GetSummary(), hit.GetHint())
+	}
+	if len(hits) > 0 {
+		return fmt.Errorf("%s: %s", hits[0].GetSummary(), hits[0].GetHint())
+	}
+	return err
 }

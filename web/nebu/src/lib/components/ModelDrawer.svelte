@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import { Code } from '@connectrpc/connect';
   import { api, code, message } from '$lib/api';
-  import { live, clock, taskFor, modelKey, hostName, runtimeName, instanceLive, installsOf, storeMount, poolName, orderedSlots, startedTask, instancesOnPool } from '$lib/state.svelte';
+  import { live, clock, taskFor, modelKey, hostName, runtimeName, instanceLive, installsOf, storeMount, poolName, orderedSlots, startedTask, instancesOnPool, holdersOf } from '$lib/state.svelte';
   import { runModel } from '$lib/actions.svelte';
   import { isComponent, kindLabel, partWord } from '$lib/diffusion';
   import { ModelKind } from '$proto/model_pb';
@@ -295,11 +295,15 @@
       const r = await api.store.pull({ sourceId, repo: model.repo, revision: model.revision, group: d.group });
       startedTask(`Downloading ${model.repo}`, `Downloaded ${model.repo}`, names[d.group], r.task);
     } catch (err) {
-      fail(err, 'Download refused');
+      fail(err, 'Download failed');
     }
   }
   function storedModel(group: string) {
     return live.models.get(modelKey({ sourceId, repo: curRepo, group }));
+  }
+  // Other members holding a variant, so a download here lands from them before the source
+  function heldOn(group: string) {
+    return holdersOf({ sourceId, repo: curRepo, group }).filter((n) => !n.self);
   }
   function pulling(group: string) {
     return model ? taskFor('pull', { source: sourceId, repo: model.repo, group }) : undefined;
@@ -389,9 +393,8 @@
   <div class="px-6 py-5">
     {#if shownTab === 'weights'}
       {#if gated}
-        <Empty icon={Lock} title="Gated on {siteName}">
+        <Empty icon={Lock} title="Gated on {siteName}" description="Set {caps?.tokenEnv || 'a token'} for the daemon after accepting the license.">
           {#if pageUrl}<Button size="sm" href={pageUrl} icon={ExternalLink}>Accept the license on {siteName}</Button>{/if}
-          <span class="text-xs text-fg-faint">Then set {caps?.tokenEnv || 'a token'} for the daemon.</span>
         </Empty>
       {:else if inspecting && !inspect}
         <table class="tbl" aria-busy="true">
@@ -445,6 +448,7 @@
                 {#each ordered as d (descriptorKey(d))}
                   {@const stored = storedModel(d.group)}
                   {@const task = pulling(d.group)}
+                  {@const held = heldOn(d.group)}
                   {@const p = d.precision}
                   {@const row = cells.get(d.group)}
                   {@const plan = cellPlan(row)}
@@ -476,6 +480,11 @@
                                 <Tip text="Largest context that fits, capped at the trained context length"><span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{fmtCtx(plannedContext(row))} ctx</span></Tip>
                               {/if}
                             </div>
+                          {/if}
+                          {#if held.length}
+                            <Tip class="max-w-full" text="Stored on {held.map((n) => n.name || n.id.slice(0, 8)).join(', ')}">
+                              <span class="truncate text-xs text-fg-muted">On {held[0].name || held[0].id.slice(0, 8)}{#if held.length > 1} +{held.length - 1}{/if}</span>
+                            </Tip>
                           {/if}
                         </div>
                       </div>
@@ -622,9 +631,8 @@
       </div>
     {:else if shownTab === 'files'}
       {#if gated}
-        <Empty icon={Lock} title="Gated on {siteName}">
+        <Empty icon={Lock} title="Gated on {siteName}" description="Set {caps?.tokenEnv || 'a token'} for the daemon after accepting the license.">
           {#if pageUrl}<Button size="sm" href={pageUrl} icon={ExternalLink}>Accept the license on {siteName}</Button>{/if}
-          <span class="text-xs text-fg-faint">Then set {caps?.tokenEnv || 'a token'} for the daemon.</span>
         </Empty>
       {:else if inspecting && !inspect}
         <table class="tbl" aria-busy="true">

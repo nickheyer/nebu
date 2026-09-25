@@ -44,6 +44,9 @@ message StoreStatus {
   uint64 partial_bytes = 6;
   // Blob storage limit in bytes. Zero disables the limit.
   uint64 max_bytes = 7;
+  // Tensor caches formation stages keep on disk, counted against the limit
+  uint64 caches = 8;
+  uint64 cache_bytes = 9;
 }
 
 // Download a weight group and its blueprint dependencies.
@@ -54,6 +57,8 @@ message PullRequest {
   string group = 4;
   // Download only this group, excluding blueprint dependencies.
   bool alone = 5;
+  // Pull onto another mesh member, this node when empty
+  string node_id = 6;
 }
 
 // Returns the pull task

@@ -21,8 +21,11 @@ const (
 	// Maximum retained bytes per trace body.
 	traceBodyCap = 64 << 10
 	// Response header containing the trace ID.
-	traceHeader = "X-Nebu-Trace"
+	traceHeader = TraceHeader
 )
+
+// The header a gateway answer carries its trace id in
+const TraceHeader = "X-Nebu-Trace"
 
 // Records recent gateway requests and publishes trace events.
 // The serving goroutine owns each trace and publishes copies at start and finish.
@@ -244,6 +247,9 @@ func (s *traceSink) first() {
 // Records a finished answer
 func (s *traceSink) result(res *Result) {
 	s.t.PromptTokens, s.t.CompletionTokens, s.t.Stop = uint32(res.In), uint32(res.Out), res.Stop
+	if res.DraftOffered > 0 {
+		s.t.DraftOffered, s.t.DraftAccepted = uint32(res.DraftOffered), uint32(res.DraftAccepted)
+	}
 	if res.Text != "" && s.text.Len() == 0 {
 		s.text.WriteString(res.Text)
 	}

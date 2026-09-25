@@ -4,9 +4,9 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { Tooltip } from 'bits-ui';
-  import { connect, disconnect, live, activeTasks, hostName, hostLabeled } from '$lib/state.svelte';
+  import { connect, disconnect, live, activeTasks, hostName, hostLabeled, pendingAdmissions } from '$lib/state.svelte';
   import { signInOffered } from '$lib/auth.svelte';
-  import { LayoutGrid, Boxes, MessageSquare, ListChecks, Cpu, Settings, WifiOff, KeyRound, Menu as MenuIcon, X, Activity, Bot } from '@lucide/svelte';
+  import { LayoutGrid, Boxes, MessageSquare, ListChecks, Cpu, Settings, WifiOff, KeyRound, Menu as MenuIcon, X, Activity, Bot, Network } from '@lucide/svelte';
   import { sweepStale } from '$lib/images';
   import Logo from '$lib/components/Logo.svelte';
   import Spinner from '$lib/components/ui/Spinner.svelte';
@@ -36,7 +36,8 @@
     [
       { href: '/requests', label: 'Requests', icon: Activity },
       { href: '/tasks', label: 'Tasks', icon: ListChecks, count: activeTasks().length || undefined, busy: activeTasks().length > 0 },
-      { href: '/runtimes', label: 'Runtimes', icon: Cpu }
+      { href: '/runtimes', label: 'Runtimes', icon: Cpu },
+      { href: '/mesh', label: 'Mesh', icon: Network, also: ['/formations'], count: pendingAdmissions() || [...live.formations.values()].filter((f) => f.state === 2 || f.state === 1).length || undefined, busy: pendingAdmissions() > 0 }
     ]
   ]);
 

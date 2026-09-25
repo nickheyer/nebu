@@ -483,6 +483,10 @@ func runInspect(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("inspect")
 	source := fs.String("source", "", "source id (default: first configured)")
 	slot := fs.String("slot", "", "slot id or name to plan inside, its devices, budget, and defaults")
+	meshFit := fs.Bool("mesh", false, "the fit table across the mesh: every shape and node set for the stored groups")
+	span := fs.String("span", "", "with --mesh, the nodes the plan may use, comma separated")
+	shape := fs.String("shape", "", "with --mesh, one shape instead of every shape")
+	profile := fs.String("profile", "", "with --mesh, what the planner weighs: chat, agent, batch, or auto")
 	var runtimes, groups, contexts, params multi
 	fs.Var(&runtimes, "runtime", "runtime id, repeatable")
 	fs.Var(&groups, "group", "weight group name, repeatable")
@@ -496,6 +500,21 @@ func runInspect(ctx context.Context, e *env, args []string) error {
 	paramMap, err := pairs(params, "param")
 	if err != nil {
 		return err
+	}
+	if *meshFit {
+		shapeValue, err := parseShape(*shape)
+		if err != nil {
+			return err
+		}
+		profileValue, err := parseProfile(*profile)
+		if err != nil {
+			return err
+		}
+		runtimeID := ""
+		if len(runtimes) > 0 {
+			runtimeID = runtimes[0]
+		}
+		return e.inspectMesh(ctx, *source, repo, groups, runtimeID, paramMap, parseSpan(*span), shapeValue, profileValue)
 	}
 	req := &v1.InspectRequest{SourceId: *source, Repo: repo, Revision: revision, Groups: groups, RuntimeIds: runtimes, Params: paramMap, SlotId: *slot}
 	for _, c := range contexts {

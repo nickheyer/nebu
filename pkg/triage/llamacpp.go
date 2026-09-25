@@ -1,5 +1,7 @@
 package triage
 
+import "strings"
+
 // The failures llama-server prints
 type LlamaCpp struct{}
 
@@ -79,14 +81,32 @@ func (LlamaCpp) Rules() []Rule {
 		},
 		{
 			ID:      "bad-flag",
-			Summary: "this build rejected a flag nebu passed",
-			Hint:    "set the rejected parameter to a supported value or update the runtime",
+			Summary: "llama.cpp rejected ${flag}",
+			Hint:    "${hint}",
 			Match: func(line string) (map[string]string, bool) {
+				names := map[string]string{
+					"flag": "a launch argument",
+					"hint": "Check the argument and its value against this runtime's supported options.",
+				}
 				if flag, ok := quotedAfter(line, `error while handling argument "`, `"`); ok {
-					return map[string]string{"flag": flag}, true
+					names["flag"] = flag
+					if replacement, ok := tailAfter(line, "the argument has been removed. use "); ok && replacement != "" {
+						names["hint"] = "Use " + strings.TrimSuffix(replacement, ".") + "."
+					}
+					return names, true
 				}
 				_, ok := anyOf("error: invalid argument", "error: unknown argument", "error: unrecognized argument")(line)
-				return nil, ok
+				if !ok {
+					return nil, false
+				}
+				for _, word := range strings.Fields(line) {
+					word = strings.Trim(word, `"':,.`)
+					if strings.HasPrefix(word, "-") {
+						names["flag"], _, _ = strings.Cut(word, "=")
+						break
+					}
+				}
+				return names, true
 			},
 		},
 		{
@@ -94,6 +114,20 @@ func (LlamaCpp) Rules() []Rule {
 			Summary: "a file the runtime needs is missing",
 			Hint:    "run nebu store verify and pull again",
 			Match:   anyOf("no such file or directory", "failed to open"),
+		},
+		{
+			ID:      "rpc-graph-leak",
+			Summary: "CUDA graph execution failed on a worker",
+			Hint:    "enable cuda_disable_graphs on the affected worker",
+			Fix:     map[string]string{"cuda_disable_graphs": "true"},
+			Match:   anyOf("cudaGraphInstantiate", "cudaGraphLaunch", "cudaGraphExecUpdate", "CUDA graph update failed", "graph capture failed", "cudaErrorGraphExecUpdateFailure"),
+		},
+		{
+			ID:      "rpc-share-mmap",
+			Summary: "the primary node could not map the model file",
+			Hint:    "enable direct_io on the primary node to read model weights without memory mapping",
+			Fix:     map[string]string{"direct_io": "true"},
+			Match:   anyOf("mmap failed:", "MapViewOfFile failed:", "CreateFileMappingA failed:"),
 		},
 	}
 }

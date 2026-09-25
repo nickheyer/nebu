@@ -95,6 +95,8 @@ type Result struct {
 	In, Out int
 	Vectors [][]float64
 	Extra   map[string]json.RawMessage
+	// Speculative decoding counters, when the runtime reports them
+	DraftOffered, DraftAccepted int
 }
 
 // Stream event. Start includes ID and model. Text carries a fragment. Tool

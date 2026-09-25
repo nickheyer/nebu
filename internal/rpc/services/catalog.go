@@ -426,16 +426,24 @@ func (s *EstimateService) Parts(ctx context.Context, req *connect.Request[v1.Par
 
 // Serves the model store
 type StoreService struct {
+	pullTo PullTo
 	store  *store.Store
 	puller *pull.Puller
 	events *events.Bus
 }
 
-func NewStoreService(st *store.Store, p *pull.Puller, bus *events.Bus) *StoreService {
-	return &StoreService{store: st, puller: p, events: bus}
+// Pulls a model onto another member, following that member's pull in one task here
+type PullTo func(ctx context.Context, nodeID string, req *v1.PullRequest) (*v1.Task, error)
+
+func NewStoreService(st *store.Store, p *pull.Puller, bus *events.Bus, to PullTo) *StoreService {
+	return &StoreService{pullTo: to, store: st, puller: p, events: bus}
 }
 
 func (s *StoreService) Pull(ctx context.Context, req *connect.Request[v1.PullRequest]) (*connect.Response[v1.PullResponse], error) {
+	if req.Msg.GetNodeId() != "" {
+		task, err := s.pullTo(ctx, req.Msg.GetNodeId(), req.Msg)
+		return reply(&v1.PullResponse{Task: task}, err)
+	}
 	task, err := s.puller.Pull(ctx, req.Msg)
 	return reply(&v1.PullResponse{Task: task}, err)
 }

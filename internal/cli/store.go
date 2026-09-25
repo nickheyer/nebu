@@ -21,6 +21,7 @@ func runPull(ctx context.Context, e *env, args []string) error {
 	group := fs.String("group", "", "weight group (required if the repo has several)")
 	alone := fs.Bool("alone", false, "download only this group")
 	detach := fs.Bool("detach", false, "start the task and return its id")
+	to := fs.String("to", "", "pull onto another mesh member, by name or id")
 	positional, err := e.parse(fs, args, 1, 1, "pull <repo>[@revision] [flags]")
 	if err != nil {
 		return err
@@ -31,7 +32,7 @@ func runPull(ctx context.Context, e *env, args []string) error {
 		}
 	}
 	repo, revision := splitRef(positional[0])
-	resp, err := e.cl.store.Pull(ctx, connect.NewRequest(&v1.PullRequest{SourceId: *source, Repo: repo, Revision: revision, Group: *group, Alone: *alone}))
+	resp, err := e.cl.store.Pull(ctx, connect.NewRequest(&v1.PullRequest{SourceId: *source, Repo: repo, Revision: revision, Group: *group, Alone: *alone, NodeId: *to}))
 	if err != nil {
 		return err
 	}
@@ -166,9 +167,10 @@ func runStoreStatus(ctx context.Context, e *env, args []string) error {
 		if st.GetMaxBytes() > 0 {
 			cap = estimate.Human(st.GetMaxBytes())
 		}
-		table(w, []string{"PATH", "MODELS", "BLOBS", "BLOB BYTES", "CAP", "PARTIALS", "PARTIAL BYTES"}, [][]string{{
+		table(w, []string{"PATH", "MODELS", "BLOBS", "BLOB BYTES", "CAP", "PARTIALS", "PARTIAL BYTES", "CACHES", "CACHE BYTES"}, [][]string{{
 			st.GetPath(), strconv.FormatUint(st.GetModels(), 10), strconv.FormatUint(st.GetBlobs(), 10), estimate.Human(st.GetBlobBytes()), cap,
 			strconv.FormatUint(st.GetPartials(), 10), estimate.Human(st.GetPartialBytes()),
+			strconv.FormatUint(st.GetCaches(), 10), estimate.Human(st.GetCacheBytes()),
 		}})
 	})
 }

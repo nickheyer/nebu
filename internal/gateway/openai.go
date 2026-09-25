@@ -187,6 +187,12 @@ type oaiChoice struct {
 	FinishReason *string     `json:"finish_reason"`
 }
 
+// Per request timings a llama.cpp server adds, with the speculative decoding counters
+type oaiTimings struct {
+	DraftN         int `json:"draft_n"`
+	DraftNAccepted int `json:"draft_n_accepted"`
+}
+
 type oaiResponse struct {
 	ID      string      `json:"id"`
 	Object  string      `json:"object"`
@@ -194,6 +200,7 @@ type oaiResponse struct {
 	Model   string      `json:"model"`
 	Choices []oaiChoice `json:"choices"`
 	Usage   *oaiUsage   `json:"usage,omitempty"`
+	Timings *oaiTimings `json:"timings,omitempty"`
 	Data    []struct {
 		Embedding []float64 `json:"embedding"`
 	} `json:"data,omitempty"`
@@ -477,6 +484,9 @@ func (openai) ParseResult(c *Chat, body []byte) (*Result, error) {
 	if resp.Usage != nil {
 		r.In, r.Out = resp.Usage.PromptTokens, resp.Usage.CompletionTokens
 	}
+	if resp.Timings != nil {
+		r.DraftOffered, r.DraftAccepted = resp.Timings.DraftN, resp.Timings.DraftNAccepted
+	}
 	for _, d := range resp.Data {
 		r.Vectors = append(r.Vectors, d.Embedding)
 	}
@@ -543,6 +553,9 @@ func (openai) ParseStream(rd io.Reader, emit func(Event) error) error {
 		}
 		if chunk.Usage != nil {
 			final.In, final.Out = chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens
+		}
+		if chunk.Timings != nil {
+			final.DraftOffered, final.DraftAccepted = chunk.Timings.DraftN, chunk.Timings.DraftNAccepted
 		}
 		for _, ch := range chunk.Choices {
 			if ch.Text != "" {

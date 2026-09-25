@@ -80,6 +80,9 @@ func (f *Fetcher) Hold(ctx context.Context) error { return f.wait(ctx, 0) }
 
 // Rate-limits a read of n bytes and waits through paused windows.
 func (f *Fetcher) wait(ctx context.Context, n int) error {
+	if ctx.Value(unscheduledKey{}) != nil {
+		return nil
+	}
 	for {
 		bps, pause := f.Schedule.At(time.Now())
 		if pause && n > 0 {
@@ -351,4 +354,11 @@ func HashFile(path string, progress Progress) (string, error) {
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+type unscheduledKey struct{}
+
+// Marks a transfer as one between mesh members, which the schedule and its windows leave alone
+func WithoutSchedule(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unscheduledKey{}, true)
 }

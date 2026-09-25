@@ -49,7 +49,9 @@ CREATE TABLE instances (
   created_at TEXT NOT NULL,
   ready_at TEXT,
   stopped_at TEXT,
-  slot_id TEXT NOT NULL DEFAULT ''
+  slot_id TEXT NOT NULL DEFAULT '',
+  seat TEXT NOT NULL DEFAULT '',
+  transport TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX instances_by_created ON instances (created_at);
 
@@ -77,7 +79,11 @@ CREATE TABLE instance_requests (
   install_id TEXT NOT NULL,
   name TEXT NOT NULL,
   slot_id TEXT NOT NULL DEFAULT '',
-  force INTEGER NOT NULL DEFAULT 0
+  force INTEGER NOT NULL DEFAULT 0,
+  span TEXT NOT NULL DEFAULT '',
+  shape TEXT NOT NULL DEFAULT '',
+  seat TEXT NOT NULL DEFAULT '',
+  profile TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE instance_request_params (
@@ -251,7 +257,8 @@ CREATE TABLE slots (
   burst INTEGER NOT NULL DEFAULT 0,
   request_timeout_ms INTEGER NOT NULL DEFAULT 0,
   upstream_timeout_ms INTEGER NOT NULL DEFAULT 0,
-  system_messages TEXT NOT NULL DEFAULT ''
+  system_messages TEXT NOT NULL DEFAULT '',
+  formation_id TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE slot_devices (
@@ -292,7 +299,10 @@ CREATE TABLE slot_requests (
   runtime_id TEXT NOT NULL,
   install_id TEXT NOT NULL,
   name TEXT NOT NULL,
-  force INTEGER NOT NULL DEFAULT 0
+  force INTEGER NOT NULL DEFAULT 0,
+  span TEXT NOT NULL DEFAULT '',
+  shape TEXT NOT NULL DEFAULT '',
+  profile TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE slot_request_params (
@@ -425,3 +435,192 @@ CREATE TABLE chat_files (
   created_at TEXT NOT NULL
 );
 CREATE INDEX chat_files_owner ON chat_files (provider, subject);
+
+-- This node's identity in any mesh: a random 128 bit id and an Ed25519 key pair made on first start
+CREATE TABLE mesh_identity (
+  id TEXT PRIMARY KEY,
+  public_key BLOB NOT NULL,
+  private_key BLOB NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+-- The mesh this node belongs to, one row: the shared secret and the certificate authority when it has one
+CREATE TABLE mesh (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  secret BLOB NOT NULL,
+  tls INTEGER NOT NULL DEFAULT 0,
+  ca_certificate BLOB NOT NULL DEFAULT X'',
+  ca_key BLOB NOT NULL DEFAULT X'',
+  certificate BLOB NOT NULL DEFAULT X'',
+  created_at TEXT NOT NULL,
+  joined_at TEXT NOT NULL
+);
+
+-- Every other member's record as last synced, the node record kept as JSON beside its sequence
+CREATE TABLE mesh_members (
+  id TEXT PRIMARY KEY,
+  state TEXT NOT NULL,
+  seen_at TEXT,
+  record TEXT NOT NULL DEFAULT ''
+);
+
+-- Admissions under way: on a member one per node outside asking or invited, on a node outside
+-- one per mesh it asked or was invited to, the record kept as JSON beside its keys
+CREATE TABLE mesh_admissions (
+  id TEXT PRIMARY KEY,
+  side TEXT NOT NULL,
+  state TEXT NOT NULL,
+  node_id TEXT NOT NULL DEFAULT '',
+  mesh_hash TEXT NOT NULL DEFAULT '',
+  record TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  expires_at TEXT
+);
+CREATE INDEX mesh_admissions_node ON mesh_admissions (node_id);
+
+-- Session tokens minted at the handshake: what we accept from a peer and what we send it
+CREATE TABLE mesh_sessions (
+  peer_id TEXT PRIMARY KEY,
+  accept TEXT NOT NULL,
+  send TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  granted_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX mesh_sessions_accept ON mesh_sessions (accept);
+
+-- What the link prober measured from this node to each member
+CREATE TABLE mesh_links (
+  from_id TEXT NOT NULL,
+  to_id TEXT NOT NULL,
+  rtt_us INTEGER NOT NULL DEFAULT 0,
+  rtt_p95_us INTEGER NOT NULL DEFAULT 0,
+  stream_bps INTEGER NOT NULL DEFAULT 0,
+  aggregate_bps INTEGER NOT NULL DEFAULT 0,
+  interface TEXT NOT NULL DEFAULT '',
+  interface_bps INTEGER NOT NULL DEFAULT 0,
+  rdma_device TEXT NOT NULL DEFAULT '',
+  class TEXT NOT NULL DEFAULT '',
+  measured_at TEXT,
+  mtu INTEGER NOT NULL DEFAULT 0,
+  subnet INTEGER NOT NULL DEFAULT 0,
+  detail TEXT NOT NULL DEFAULT '',
+  bandwidth_held INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (from_id, to_id)
+);
+
+-- Learned streaming bandwidth, compute, fixed cost, and draft acceptance per device, with the
+-- regression sums the fixed cost intercept comes from
+CREATE TABLE throughput (
+  device_id TEXT PRIMARY KEY,
+  stream_bps REAL NOT NULL DEFAULT 0,
+  compute_flops REAL NOT NULL DEFAULT 0,
+  fixed_seconds REAL NOT NULL DEFAULT 0,
+  acceptance REAL NOT NULL DEFAULT 0,
+  samples INTEGER NOT NULL DEFAULT 0,
+  acceptance_samples INTEGER NOT NULL DEFAULT 0,
+  sum_x REAL NOT NULL DEFAULT 0,
+  sum_y REAL NOT NULL DEFAULT 0,
+  sum_xy REAL NOT NULL DEFAULT 0,
+  sum_xx REAL NOT NULL DEFAULT 0,
+  points INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  compute_samples INTEGER NOT NULL DEFAULT 0
+);
+
+-- Ratio of predicted to measured time to first token and time per token, by shape, runtime, and link class
+CREATE TABLE formation_ratios (
+  shape TEXT NOT NULL,
+  runtime_id TEXT NOT NULL,
+  link_class TEXT NOT NULL,
+  ttft_ratio REAL NOT NULL DEFAULT 1,
+  tpt_ratio REAL NOT NULL DEFAULT 1,
+  samples INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (shape, runtime_id, link_class)
+);
+
+-- Declared device numbers a person set, over the table nebu ships
+CREATE TABLE device_profiles (
+  pattern TEXT PRIMARY KEY,
+  stream_bps REAL NOT NULL,
+  compute_flops REAL NOT NULL,
+  fixed_seconds REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+
+-- Formations conducted here and copies of every other conductor's, the request and the plan's
+-- own numbers as JSON, the seats and candidates in their own tables
+CREATE TABLE formations (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  conductor TEXT NOT NULL,
+  conductor_name TEXT NOT NULL DEFAULT '',
+  shape TEXT NOT NULL,
+  state TEXT NOT NULL,
+  error TEXT NOT NULL DEFAULT '',
+  task_id TEXT NOT NULL DEFAULT '',
+  slot_id TEXT NOT NULL DEFAULT '',
+  desired_running INTEGER NOT NULL DEFAULT 0,
+  runtime_id TEXT NOT NULL DEFAULT '',
+  endpoint TEXT NOT NULL DEFAULT '',
+  bytes_moved INTEGER NOT NULL DEFAULT 0,
+  sequence INTEGER NOT NULL DEFAULT 0,
+  source_id TEXT NOT NULL DEFAULT '',
+  repo TEXT NOT NULL DEFAULT '',
+  weight_group TEXT NOT NULL DEFAULT '',
+  request TEXT NOT NULL DEFAULT '{}',
+  plan TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  ready_at TEXT,
+  stopped_at TEXT,
+  updated_at TEXT NOT NULL,
+  rendezvous TEXT NOT NULL DEFAULT '',
+  cache_key TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX formations_by_created ON formations (created_at);
+
+CREATE TABLE formation_seats (
+  formation_id TEXT NOT NULL REFERENCES formations (id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  node_id TEXT NOT NULL,
+  node_name TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL,
+  rank INTEGER NOT NULL DEFAULT 0,
+  instance_id TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL,
+  error TEXT NOT NULL DEFAULT '',
+  endpoint TEXT NOT NULL DEFAULT '',
+  transport TEXT NOT NULL DEFAULT '',
+  layer_from INTEGER NOT NULL DEFAULT 0,
+  layer_to INTEGER NOT NULL DEFAULT 0,
+  read_bytes INTEGER NOT NULL DEFAULT 0,
+  cache_bytes INTEGER NOT NULL DEFAULT 0,
+  weight_bytes INTEGER NOT NULL DEFAULT 0,
+  install_id TEXT NOT NULL DEFAULT '',
+  exposed INTEGER NOT NULL DEFAULT 0,
+  phase INTEGER NOT NULL DEFAULT 0,
+  placements TEXT NOT NULL DEFAULT '[]',
+  memory TEXT NOT NULL DEFAULT '',
+  triage TEXT NOT NULL DEFAULT '[]',
+  measurements TEXT NOT NULL DEFAULT '[]',
+  PRIMARY KEY (formation_id, position)
+);
+
+CREATE TABLE formation_candidates (
+  formation_id TEXT NOT NULL REFERENCES formations (id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  shape TEXT NOT NULL,
+  node_ids TEXT NOT NULL DEFAULT '',
+  verdict TEXT NOT NULL,
+  score REAL NOT NULL DEFAULT 0,
+  prefill_seconds REAL NOT NULL DEFAULT 0,
+  decode_seconds_per_token REAL NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL DEFAULT '',
+  head TEXT NOT NULL DEFAULT '',
+  requests_per_second REAL NOT NULL DEFAULT 0,
+  tokens_per_second REAL NOT NULL DEFAULT 0,
+  speedup REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (formation_id, position)
+);

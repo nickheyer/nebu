@@ -33,3 +33,7 @@ make build
 ```
 
 See [Makefile](Makefile) for other commands.
+
+## Mesh
+
+Several nebu daemons on one network pool their devices: a model that fits no single machine runs across several, and a model that fits one gains speed from the others. Membership runs from the Mesh page of any node: make a mesh on one, and the others show up there as they are heard on the network, to be invited or to ask; any member admits. See [MESH.md](MESH.md) for the shapes, the planner, and the settings under `mesh:` in [packaging/config.yaml](packaging/config.yaml).

@@ -37,10 +37,12 @@ const (
 )
 
 // Answers whether requests need credentials at all and whether one request carries a valid one:
-// the daemon token, a user's API token, or a signed-in browser session
+// the daemon token, a user's API token, or a signed-in browser session. A mesh member's session
+// is recognized apart, since it opens forwarded requests alone
 type Credentials interface {
 	Enabled() bool
 	Authenticated(http.Header) bool
+	PeerOf(http.Header) (nodeID string, ok bool)
 }
 
 // Marks requests made in process, which pass without credentials
@@ -62,13 +64,21 @@ type Gateway struct {
 	transports map[uint32]*http.Transport
 	// Active and completed video jobs by ID.
 	videos *videoStore
+	// Connections to other members, for routes conducted elsewhere and relay slot moves
+	peers Peers
+	// Which seat a conversation's prefix was last sent to, so its cache answers again
+	affinity *affinityTable
+	// Video jobs forwarded to other members, by job id
+	jobs *forwardedJobs
+	// Sequence slots in use on llama.cpp relay seats
+	slots *slotPool
 }
 
 // Creates a gateway with bearer keys, default route policy, and allowed origins.
 // Records requests and publishes recent traces.
 func New(table *Table, keys, origins []string, policy *v1.Policy, bus *events.Bus, log *slog.Logger) *Gateway {
 	table.SetDefaults(policy)
-	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing, countRing), transports: map[uint32]*http.Transport{}, videos: newVideoStore()}
+	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing, countRing), transports: map[uint32]*http.Transport{}, videos: newVideoStore(), affinity: newAffinity(), jobs: newForwardedJobs(), slots: newSlotPool()}
 }
 
 // Returns the request recorder
@@ -225,7 +235,8 @@ func (g *Gateway) auth(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// In-process callers pass. Others need a gateway key, or a credential the daemon accepts.
+// In-process callers pass. Others need a gateway key, or a credential the daemon accepts. A
+// request another member forwarded here carries that member's session, which passes on its own
 func (g *Gateway) authorized(r *http.Request) bool {
 	if r.Context().Value(localKey{}) != nil {
 		return true
@@ -239,7 +250,17 @@ func (g *Gateway) authorized(r *http.Request) bool {
 			return true
 		}
 	}
-	return g.creds != nil && g.creds.Authenticated(r.Header)
+	if g.creds == nil {
+		return false
+	}
+	if g.creds.Authenticated(r.Header) {
+		return true
+	}
+	if r.Header.Get(entryHeader) != "" {
+		_, ok := g.creds.PeerOf(r.Header)
+		return ok
+	}
+	return false
 }
 
 func (g *Gateway) health(w http.ResponseWriter, r *http.Request) {
@@ -446,24 +467,78 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t.InstanceId, t.SlotId, t.UpstreamApi = route.GetInstanceId(), route.GetSlotId(), route.GetApi()
-	// Hold the route while the native media job runs.
+	// A route conducted elsewhere is answered by that node's gateway.
+	entry := r.Header.Get(entryHeader)
+	if route.GetForwarded() {
+		defer release()
+		if entry != "" {
+			g.refuse(w, client, http.StatusBadGateway, "model "+name+" is forwarded here from "+entry+" and forwarded on from here, so no node answers it", "server_error")
+			return
+		}
+		g.forward(w, r, body, name, route, policy, client)
+		return
+	}
+	if g.peers != nil && route.GetFormationId() != "" {
+		t.NodeId = g.peers.Self()
+	}
+	// Hold the route while the native media job runs, one job per seat for replicas.
 	if t.GetKind() == v1.TraceKind_TRACE_KIND_IMAGE || t.GetKind() == v1.TraceKind_TRACE_KIND_VIDEO {
-		g.media(w, r, body, name, route, policy, release)
+		targets, _, err := g.targets(route, r.URL.Path, body, client, entry, 1)
+		if err != nil {
+			release()
+			g.refuseSeats(w, client, name, err)
+			return
+		}
+		hold := g.holder(route, targets)
+		g.media(w, r, body, name, route, policy, targets, hold, func() {
+			hold.done()
+			release()
+		})
 		return
 	}
 	defer release()
-	target, err := url.Parse(route.GetEndpoint())
-	if err != nil {
-		g.refuse(w, client, http.StatusBadGateway, err.Error(), "server_error")
+	if route.GetShape() == v1.Shape_SHAPE_RELAY && len(route.GetSeats()) >= 2 && (t.GetKind() == v1.TraceKind_TRACE_KIND_CHAT || t.GetKind() == v1.TraceKind_TRACE_KIND_GENERATE) {
+		g.relay(w, r, body, name, route, policy, client)
 		return
 	}
+	targets, key, err := g.targets(route, r.URL.Path, body, client, entry, policy.GetMaxInFlight())
+	if err != nil {
+		g.refuseSeats(w, client, name, err)
+		return
+	}
+	hold := g.holder(route, targets)
+	defer hold.done()
+	g.dispatch(w, r, body, name, route, policy, client, targets, hold, key)
+}
+
+// Answers a request no seat can take: busy seats with 429, none ready with 503, and a route
+// whose seats cannot be picked with 502
+func (g *Gateway) refuseSeats(w *traceWriter, client Flavor, name string, err error) {
+	switch {
+	case errors.Is(err, errSeatsBusy):
+		w.Header().Set("Retry-After", retryAfter)
+		g.refuse(w, client, http.StatusTooManyRequests, "model "+name+" has every allowed request in flight on every seat, retry shortly", "rate_limit_error")
+	case errors.Is(err, errNoSeat):
+		w.Header().Set("Retry-After", retryAfter)
+		g.refuse(w, client, http.StatusServiceUnavailable, "model "+name+" has no seat ready, retry shortly", "model_starting")
+	default:
+		g.refuse(w, client, http.StatusBadGateway, err.Error(), "server_error")
+	}
+}
+
+// Sends a request to the first target that takes it, translating when the client's protocol
+// differs from the runtime's, and records the seat that served it
+func (g *Gateway) dispatch(w *traceWriter, r *http.Request, body []byte, name string, route *v1.Route, policy *v1.Policy, client Flavor, targets []target, hold *seatHold, key string) {
+	t := w.t
 	mode := g.table.SystemMode(route)
 	// Translate when client and runtime protocols differ.
 	if clientFlavor(r) != route.GetApi() || r.URL.Path == anthropicCount {
 		t.Translated = true
-		g.translate(w, r, body, name, route.GetServed(), mode, target, policy, client, flavorOf(route.GetApi()))
+		used := g.translate(w, r, body, name, route.GetServed(), mode, targets, hold, policy, client, flavorOf(route.GetApi()))
+		g.served(t, route, targets, used, key)
 		return
 	}
+	var err error
 	// Replace the route alias with the runtime's model name.
 	if served := route.GetServed(); served != "" && served != name {
 		if body, err = renameModel(body, served); err != nil {
@@ -506,14 +581,21 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(d)*time.Millisecond)
 		defer cancel()
 	}
+	first := targets[0].url
+	hops := &failover{targets: targets, hold: hold, next: &sameHostRedirects{next: g.transport(policy.GetUpstreamTimeoutMs()), body: body}, log: g.log}
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(target)
+			pr.SetURL(first)
 			pr.Out.URL.Path = r.URL.Path
 			pr.Out.URL.RawPath = r.URL.RawPath
-			pr.Out.Host = target.Host
+			pr.Out.Host = first.Host
+			// The credential headers stay with the gateway.
+			pr.Out.Header.Del("Authorization")
+			pr.Out.Header.Del("X-Api-Key")
+			pr.Out.Header.Del("Cookie")
+			pr.Out.Header.Del(entryHeader)
 		},
-		Transport:     &sameHostRedirects{next: g.transport(policy.GetUpstreamTimeoutMs()), body: body},
+		Transport:     hops,
 		FlushInterval: -1,
 		ErrorHandler:  func(w http.ResponseWriter, _ *http.Request, err error) { g.upstreamError(w, t, client, name, err) },
 	}
@@ -521,6 +603,7 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
 	rp.ServeHTTP(w, r)
+	g.served(t, route, targets, hops.used, key)
 }
 
 // Sends a rendered request with policy timeouts. The client's capability and
@@ -530,7 +613,12 @@ func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []
 	if d := policy.GetRequestTimeoutMs(); d > 0 {
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(d)*time.Millisecond)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.ResolveReference(&url.URL{Path: path}).String(), bytes.NewReader(out))
+	ref, err := url.Parse(path)
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.ResolveReference(ref).String(), bytes.NewReader(out))
 	if err != nil {
 		cancel()
 		return nil, nil, err
@@ -567,13 +655,14 @@ func relayHeaders(to, from http.Header) {
 	}
 }
 
-// Translates requests and responses between protocols.
-func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, served string, mode v1.SystemMessages, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
+// Translates requests and responses between protocols, returning the index of the target that
+// served, or -1 when none did
+func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, served string, mode v1.SystemMessages, targets []target, hold *seatHold, policy *v1.Policy, client, upstream Flavor) int {
 	t := w.t
 	chat, err := client.ParseRequest(r.URL.Path, body)
 	if err != nil {
 		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
-		return
+		return -1
 	}
 	// Use the runtime model name upstream and the requested alias in responses.
 	if served != "" {
@@ -581,28 +670,68 @@ func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, 
 	}
 	foldSystem(chat, mode)
 	if chat.Kind == "count" {
-		g.count(w, r, chat, name, target, policy, client, upstream)
-		return
+		hold.to(0)
+		g.count(w, r, chat, name, targets[0].url, policy, client, upstream)
+		return 0
 	}
 	if upstream.InlineImages() {
 		if err := g.inlineImages(r.Context(), chat, policy); err != nil {
 			g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
-			return
+			return -1
 		}
 	}
 	path, out, err := upstream.RenderRequest(chat)
 	if err != nil {
 		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
-		return
+		return -1
 	}
 	t.UpstreamRequest = capped(out)
-
 	chat.Model = name
-	resp, cancel, err := g.send(r.Context(), target, path, out, chat.Stream, policy, r.Header)
-	if err != nil {
-		g.upstreamError(w, t, client, name, err)
-		return
+	return g.exchange(w, r, chat, name, path, out, targets, hold, policy, client, upstream)
+}
+
+// Opens a rendered request at the first target that takes it: a seat that refuses or fails
+// before answering passes the request to the next, once, the count following the request.
+// Returns the answer, its cancel, and the index of the target that answered
+func (g *Gateway) open(ctx context.Context, targets []target, hold *seatHold, path string, out []byte, stream bool, policy *v1.Policy, from http.Header, name string) (*http.Response, context.CancelFunc, int, error) {
+	for i, tg := range targets {
+		hold.to(i)
+		resp, cancel, err := g.send(ctx, tg.url, path, out, stream, policy, from)
+		last := i == len(targets)-1
+		switch {
+		case err != nil && !last && retryable(err):
+			g.log.Warn("seat did not answer, passing the request to the next", "model", name, "seat", tg.url.Host, "err", err)
+			continue
+		case err != nil:
+			return nil, nil, i, err
+		case !last && refused(resp.StatusCode):
+			io.Copy(io.Discard, io.LimitReader(resp.Body, maxBody))
+			resp.Body.Close()
+			cancel()
+			g.log.Warn("seat refused, passing the request to the next", "model", name, "seat", tg.url.Host, "status", resp.StatusCode)
+			continue
+		}
+		return resp, cancel, i, nil
 	}
+	return nil, nil, -1, errors.New("no seat to send to")
+}
+
+// Sends a rendered request to the first target that takes it and returns its answer in the
+// client's format, streaming when the client asked to. Returns the index of the target that
+// answered, or -1 when none did
+func (g *Gateway) exchange(w *traceWriter, r *http.Request, chat *Chat, name, path string, out []byte, targets []target, hold *seatHold, policy *v1.Policy, client, upstream Flavor) int {
+	resp, cancel, used, err := g.open(r.Context(), targets, hold, path, out, chat.Stream, policy, r.Header, name)
+	if err != nil {
+		g.upstreamError(w, w.t, client, name, err)
+		return -1
+	}
+	g.deliver(w, r, chat, name, resp, cancel, client, upstream)
+	return used
+}
+
+// Returns an opened answer to the client in its format, streaming when it asked to
+func (g *Gateway) deliver(w *traceWriter, r *http.Request, chat *Chat, name string, resp *http.Response, cancel context.CancelFunc, client, upstream Flavor) {
+	t := w.t
 	defer cancel()
 	defer resp.Body.Close()
 	t.FirstByteAt = timestamppb.Now()

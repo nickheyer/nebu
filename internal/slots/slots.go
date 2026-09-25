@@ -44,6 +44,8 @@ type Manager struct {
 	Events       *events.Bus
 	DrainTimeout time.Duration
 	Log          *slog.Logger
+	// The conductor, set by the daemon once formations exist
+	Formations Formations
 
 	mu    sync.Mutex
 	slots map[string]*v1.Slot
@@ -101,6 +103,10 @@ func (m *Manager) Recover(ctx context.Context) error {
 	for _, s := range m.List() {
 		live := m.liveInstance(s)
 		switch {
+		case s.GetFormationId() != "" && s.GetRequest() != nil && s.GetState() != v1.SlotState_SLOT_STATE_FAILED:
+			// The conductor adopts or relaunches the formation; the slot follows its record.
+			s = m.update(s.GetId(), func(sl *v1.Slot) { sl.InstanceId, sl.State, sl.Error = "", v1.SlotState_SLOT_STATE_STARTING, "" })
+			m.pending(s, modelOf(s.GetRequest()))
 		case live != nil:
 			s = m.update(s.GetId(), func(sl *v1.Slot) {
 				sl.InstanceId = live.GetId()
@@ -319,16 +325,35 @@ func (m *Manager) Reservation(ctx context.Context, id string) (*instances.Reserv
 	if err != nil {
 		return nil, err
 	}
-	return &instances.Reservation{
+	res := &instances.Reservation{
 		SlotID:      s.GetId(),
 		Name:        s.GetName(),
-		DeviceIDs:   s.GetDeviceIds(),
+		DeviceIDs:   m.localDevices(s.GetDeviceIds()),
 		MemoryBytes: s.GetMemoryBytes(),
 		Placement:   s.GetPlacement(),
 		RuntimeID:   s.GetRuntimeId(),
 		Params:      s.GetParams(),
 		InstanceID:  s.GetInstanceId(),
-	}, nil
+	}
+	if f := m.liveFormation(s); f != nil {
+		res.FormationID, res.FormationName = f.GetId(), f.GetName()
+	}
+	return res, nil
+}
+
+// The slot's device ids as this node's prober names them: a pin written as this node's id over
+// a device is the device itself
+func (m *Manager) localDevices(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		node, device := m.splitDevice(id)
+		if node == "" || m.Formations != nil && node == m.Formations.Self() {
+			out = append(out, device)
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // Requires a nonempty name unused by other slots or routes.
@@ -491,7 +516,24 @@ func (m *Manager) checkDevices(ctx context.Context, ids []string) error {
 		known[d.GetId()] = true
 	}
 	for _, id := range ids {
-		if !known[id] {
+		node, device := m.splitDevice(id)
+		if node != "" && m.Formations != nil && node != m.Formations.Self() {
+			rec, err := m.Formations.Node(node)
+			if err != nil {
+				return fmt.Errorf("%w: device %q names a node this mesh does not have: %v", ErrSlot, id, err)
+			}
+			found := false
+			for _, d := range rec.GetProfile().GetDevices() {
+				if d.GetId() == device {
+					found = true
+				}
+			}
+			if !found {
+				return fmt.Errorf("%w: %s has no device %q, see nebu mesh nodes", ErrSlot, rec.GetName(), device)
+			}
+			continue
+		}
+		if !known[device] {
 			return fmt.Errorf("%w: device %q was not probed, see nebu host", ErrSlot, id)
 		}
 	}
@@ -656,6 +698,14 @@ func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Slot, 
 			return nil, err
 		}
 	}
+	if f := m.liveFormation(s); f != nil {
+		if !force {
+			return nil, fmt.Errorf("%w: slot %s serves formation %s, evict it or pass --force", ErrSlot, s.GetName(), f.GetName())
+		}
+		if _, err := m.Formations.Stop(ctx, f.GetId()); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := m.DB.DeleteSlot(ctx, s.GetId()); err != nil {
 		return nil, err
 	}
@@ -678,13 +728,11 @@ func (m *Manager) Evict(ctx context.Context, id string) (*v1.Slot, error) {
 		return nil, err
 	}
 	defer m.release(s.GetId())
-	for _, in := range m.Instances.InSlot(s.GetId()) {
-		if err := m.retire(ctx, in.GetId()); err != nil {
-			return nil, err
-		}
+	if err := m.retireAll(ctx, s); err != nil {
+		return nil, err
 	}
 	next := m.update(s.GetId(), func(sl *v1.Slot) {
-		sl.InstanceId, sl.State, sl.Error, sl.TaskId, sl.Request = "", v1.SlotState_SLOT_STATE_EMPTY, "", "", nil
+		sl.InstanceId, sl.FormationId, sl.State, sl.Error, sl.TaskId, sl.Request = "", "", v1.SlotState_SLOT_STATE_EMPTY, "", "", nil
 	})
 	m.pending(next, "")
 	return next, nil
@@ -706,8 +754,18 @@ func (m *Manager) Relaunch(ctx context.Context, id string) (*v1.Slot, *v1.Instan
 	if live := m.liveInstance(s); live != nil {
 		return nil, nil, nil, fmt.Errorf("%w: slot %s serves %s, swap or evict instead", ErrSlot, s.GetName(), live.GetName())
 	}
+	if f := m.liveFormation(s); f != nil {
+		return nil, nil, nil, fmt.Errorf("%w: slot %s serves formation %s, swap or evict instead", ErrSlot, s.GetName(), f.GetName())
+	}
 	run := proto.Clone(s.GetRequest()).(*v1.RunRequest)
 	run.SlotId, run.Name = s.GetId(), s.GetName()
+	if m.meshRun(s, run) {
+		_, task, err := m.launchFormation(ctx, s, run)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return m.mustFind(s.GetId()), nil, task, nil
+	}
 	in, task, err := m.Instances.Run(ctx, run)
 	if err != nil {
 		next := m.update(s.GetId(), func(sl *v1.Slot) {
@@ -748,6 +806,9 @@ func (m *Manager) Swap(ctx context.Context, req *v1.SwapRequest) (*v1.Slot, *v1.
 		return nil, nil, nil, err
 	}
 	defer m.release(s.GetId())
+	if m.meshRun(s, run) || m.liveFormation(s) != nil {
+		return m.swapFormation(ctx, req, s, run)
+	}
 	old := m.liveInstance(s)
 	plan, err := m.Instances.Plan(ctx, run)
 	if err != nil {
@@ -918,6 +979,10 @@ func (m *Manager) OnInstance(rec *v1.Instance) {
 		return
 	}
 	if rec.GetId() != s.GetInstanceId() {
+		// A slot served by a formation keeps it; a stray instance does not take the slot over.
+		if m.liveFormation(s) != nil {
+			return
+		}
 		if s.GetInstanceId() != "" {
 			if cur, err := m.Instances.Get(s.GetInstanceId()); err == nil && !instances.Terminal(cur.GetState()) {
 				return
@@ -962,4 +1027,13 @@ func modelOf(req *v1.RunRequest) string {
 		return ""
 	}
 	return req.GetRepo() + ":" + req.GetGroup()
+}
+
+// Every slot as the node record advertises it
+func (m *Manager) Refs() []*v1.SlotRef {
+	var out []*v1.SlotRef
+	for _, s := range m.List() {
+		out = append(out, &v1.SlotRef{Id: s.GetId(), Name: s.GetName(), FormationId: s.GetFormationId(), DeviceIds: s.GetDeviceIds()})
+	}
+	return out
 }

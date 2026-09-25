@@ -3,6 +3,8 @@ syntax = "proto3";
 package nebu.v1;
 
 import "google/protobuf/timestamp.proto";
+import "nebu/v1/estimate.proto";
+import "nebu/v1/instance.proto";
 import "nebu/v1/runtime.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
@@ -46,6 +48,32 @@ message Profile {
   SystemMessages system_messages = 1;
 }
 
+// How a replicas route keeps a conversation on the seat whose cache holds its prefix. It lives
+// beside Route, which carries it, since the mesh messages import this file
+message AffinityPolicy {
+  // Seconds a prefix sent to a seat keeps later requests with that prefix on it
+  uint32 window_seconds = 1;
+  // Whether the prefix hash covers the system message, and the first user message
+  bool system_message = 2;
+  bool first_user_message = 3;
+}
+
+// One seat a route sends requests to
+message RouteSeat {
+  string node_id = 1;
+  string instance_id = 2;
+  string endpoint = 3;
+  string role = 4;
+  uint32 rank = 5;
+  InstanceState state = 6;
+  uint32 in_flight = 7;
+  // The seat's mesh host and the port its own protocol takes there: a relay's side channel or bootstrap port
+  string address = 8;
+  uint32 aux_port = 9;
+  // Sequence slots a llama.cpp relay seat serves at once, one relay in flight per slot
+  uint32 slots = 10;
+}
+
 // A public model name mapped to an instance
 message Route {
   string name = 1;
@@ -65,6 +93,23 @@ message Route {
   Profile profile = 13;
   // Generation modes from the capabilities endpoint: img_gen and vid_gen. Empty for language models.
   repeated string modes = 14;
+  // The node whose gateway answers the route, empty for this node
+  string node_id = 15;
+  // The shape behind the route, solo for an instance
+  Shape shape = 16;
+  // Seats the gateway sends to: replicas, or a relay's prefill and decode seats
+  repeated RouteSeat seats = 17;
+  string formation_id = 18;
+  // Whether requests go to another node's gateway
+  bool forwarded = 19;
+  // Prompt length above which a relay pays, shorter prompts going to the decode seat alone
+  uint32 relay_break_even_prompt = 20;
+  // The runtime behind the route, what a relay's handoff protocol follows
+  string runtime_id = 21;
+  // How a replicas route pins conversations to seats, from the plan
+  AffinityPolicy affinity = 22;
+  // The relay handoff the runtime declares: nixl, sglang-bootstrap, or llamacpp-slot
+  string relay_handoff = 23;
 }
 
 // Gateway listener address.
@@ -185,6 +230,19 @@ message Trace {
   string remote = 25;
   // Runtime tool calls with names and arguments.
   repeated TraceToolCall tool_calls = 26;
+  // Whether the request went to another node's gateway
+  bool forwarded = 27;
+  // The node that answered a forwarded request, or the conductor of a formation route
+  string node_id = 28;
+  // The trace id the conductor recorded for a forwarded request
+  string conductor_trace = 29;
+  // Instance ids of the seats the request touched
+  repeated string seats = 30;
+  // How a relay request went: prefill+decode, decode-only, or prefill-failed
+  string relay = 31;
+  // Speculative decoding counters from the runtime's timings
+  uint32 draft_offered = 32;
+  uint32 draft_accepted = 33;
 }
 
 // One tool call in a traced answer

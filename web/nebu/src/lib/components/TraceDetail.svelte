@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, message } from '$lib/api';
-  import { live, slotName } from '$lib/state.svelte';
+  import { live, slotName, nodeName } from '$lib/state.svelte';
+  import { seatLabel } from '$lib/mesh';
   import { enumLabel, millisBetween, ms, rate, when, bytes } from '$lib/format';
   import { TraceKind, type Trace } from '$proto/gateway_pb';
   import { ApiFlavor } from '$proto/runtime_pb';
@@ -38,6 +39,7 @@
   });
 
   const flavor = (f: ApiFlavor) => enumLabel(ApiFlavor, f).replace('unspecified', 'openai');
+  const relayLabels: Record<string, string> = { 'prefill+decode': 'Prefill and decode', 'decode-only': 'Decode only', 'prefill-failed': 'Prefill failed' };
   const firstByte = $derived(millisBetween(trace?.startedAt, trace?.firstByteAt));
   const firstToken = $derived(millisBetween(trace?.startedAt, trace?.firstTokenAt));
   const total = $derived(millisBetween(trace?.startedAt, trace?.finishedAt));
@@ -76,6 +78,18 @@
       {#if trace.remote}<span class="kv"><span>from</span><span>{trace.remote}</span></span>{/if}
       {#if trace.slotId}<span class="kv"><span>slot</span><a class="link font-mono" href="/slots/{trace.slotId}">{slotName(trace.slotId)}</a></span>{/if}
       {#if trace.instanceId}<span class="kv"><span>instance</span><a class="link font-mono" href="/instances/{trace.instanceId}">{trace.instanceId.slice(0, 12)}</a></span>{/if}
+      {#if trace.nodeId}<span class="kv"><span>{trace.forwarded ? 'answered by' : 'coordinator'}</span><span>{nodeName(trace.nodeId)}</span></span>{/if}
+      {#if trace.conductorTrace}<span class="kv"><span>coordinator request</span><span class="font-mono" title={trace.conductorTrace}>{trace.conductorTrace.slice(0, 12)}</span></span>{/if}
+      {#if trace.relay}<span class="kv"><span>relay</span><span>{relayLabels[trace.relay] ?? trace.relay}</span></span>{/if}
+      {#if trace.seats.length}
+        <span class="kv"><span>workers</span><span>
+          {#each trace.seats as workerId, i (workerId)}
+            {@const worker = live.instances.get(workerId)}
+            {#if i > 0}, {/if}{#if worker}<a class="link" href="/instances/{workerId}" title={workerId}>{worker.seat ? seatLabel(worker.seat.role, worker.seat.rank) : worker.name}</a>{:else}<span class="font-mono" title={workerId}>{workerId.slice(0, 12)}</span>{/if}
+          {/each}
+        </span></span>
+      {/if}
+      {#if trace.draftOffered}<span class="kv"><span>draft tokens</span><span>{trace.draftAccepted.toLocaleString()} of {trace.draftOffered.toLocaleString()} accepted</span></span>{/if}
       <span class="kv"><span>started</span><span>{when(trace.startedAt)}</span></span>
     </div>
     <div>

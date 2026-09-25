@@ -51,6 +51,19 @@ func NewHTTP(endpoint, token string) (*HTTP, error) {
 	return &HTTP{http: &http.Client{Transport: newTransport()}, base: base, token: token, scheme: "Bearer"}, nil
 }
 
+// Builds a client over an HTTP client made elsewhere, one that already carries its credential
+// and trusts its peer, as mesh members do
+func NewHTTPWith(endpoint string, client *http.Client) (*HTTP, error) {
+	base, err := url.Parse(strings.TrimRight(endpoint, "/"))
+	if err != nil {
+		return nil, err
+	}
+	if base.Scheme == "" {
+		return nil, fmt.Errorf("endpoint %q needs a scheme", endpoint)
+	}
+	return &HTTP{http: client, base: base}, nil
+}
+
 // Bounds connection, TLS handshake, and response header waits. Body reads have no deadline because
 // transfer schedules may pause them.
 func newTransport() *http.Transport {

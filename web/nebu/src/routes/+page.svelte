@@ -1,10 +1,12 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { live, clock, liveInstances, instanceLive, slotName, groupLabel, orderedSlots, answersOf, runtimeName, taskFor } from '$lib/state.svelte';
+  import { live, clock, liveInstances, instanceLive, slotName, groupLabel, orderedSlots, answersOf, runtimeName, taskFor, liveFormations } from '$lib/state.svelte';
+  import { shapeLabel } from '$lib/mesh';
+  import { FormationState, type Formation } from '$proto/mesh_pb';
   import { launch, slotOccupied } from '$lib/launch';
   import { instanceMemory } from '$lib/instances';
   import { swapSlot, evictSlot, deleteSlot, relaunchSlot, stopInstance } from '$lib/actions.svelte';
-  import { ago, count, duration, newestFirst, tail, when } from '$lib/format';
+  import { ago, bytes, count, duration, newestFirst, plural, tail, when } from '$lib/format';
   import { InstanceState, type Instance } from '$proto/instance_pb';
   import { SlotState, type Slot } from '$proto/slot_pb';
   import { RouteState } from '$proto/gateway_pb';
@@ -28,7 +30,8 @@
   const loading = $derived(!live.ready && !live.error);
   const slots = $derived(orderedSlots());
   const serving = $derived(slots.filter((s) => s.state === SlotState.READY).length);
-  const standalone = $derived(liveInstances().filter((i) => !i.slotId));
+  const standalone = $derived(liveInstances().filter((i) => !i.slotId && !i.seat));
+  const formations = $derived(liveFormations().filter((f) => !f.slotId));
   const past = $derived([...live.instances.values()].filter((i) => !instanceLive(i)).sort(newestFirst((i) => i.createdAt)));
   const failed = $derived(past.filter((i) => i.state === InstanceState.FAILED));
   const history = $derived(historyView === 'failed' ? failed : past);
@@ -38,6 +41,11 @@
   function instanceOf(s: Slot): Instance | undefined {
     return s.instanceId ? live.instances.get(s.instanceId) : undefined;
   }
+  function formationMemory(f: Formation): string {
+    const total = f.seats.reduce((sum, s) => sum + (s.memory ? s.memory.weightsBytes + s.memory.cacheBytes + s.memory.overheadBytes : s.weightBytes + s.cacheBytes), 0n);
+    return total ? bytes(total) : '–';
+  }
+  const formationNodes = (f: Formation) => plural(new Set(f.seats.map((s) => s.nodeId)).size, 'node');
   async function stop(i: Instance) {
     await stopInstance(i.id, i.name);
   }
@@ -62,7 +70,7 @@
             {#each [0, 1] as i (i)}
               <tr aria-busy="true"><td colspan="8"><div class="skeleton h-4"></div></td></tr>
             {/each}
-          {:else if slots.length === 0 && standalone.length === 0}
+          {:else if slots.length === 0 && standalone.length === 0 && formations.length === 0}
             <tr>
               <td colspan="8" class="!p-0">
                 <Empty compact class="border-0" title={firstStep === 'runtime' ? 'Install a runtime to start serving' : firstStep === 'model' ? 'Download a model to start serving' : 'No slots yet'}>
@@ -79,6 +87,7 @@
           {:else}
             {#each slots as s (s.id)}
               {@const instance = instanceOf(s)}
+              {@const formation = s.formationId ? live.formations.get(s.formationId) : undefined}
               {@const route = live.routes.get(s.name)}
               {@const occupied = slotOccupied(s.id)}
               {@const answering = route?.state === RouteState.READY}
@@ -96,16 +105,20 @@
                   {:else}
                     <span class="text-fg-faint">Empty</span>
                   {/if}
+                  {#if formation}
+                    <a class="link text-xs" href="/formations/{formation.id}" onclick={(e) => e.stopPropagation()}>{shapeLabel(formation.shape)} · {formationNodes(formation)}</a>
+                  {/if}
                   {#if swapTask}<div class="mt-1"><TaskChip task={swapTask} label="Swapping" /></div>{/if}
                   {#if failedSlot && s.error}<div class="max-w-md truncate text-xs text-bad" title={s.error}>{s.error}</div>{/if}
                 </td>
-                <td class="text-fg-muted">{instance ? runtimeName(instance.runtimeId) : s.runtimeId ? runtimeName(s.runtimeId) : '–'}</td>
+                <td class="text-fg-muted">{instance ? runtimeName(instance.runtimeId) : formation ? runtimeName(formation.runtimeId) : s.runtimeId ? runtimeName(s.runtimeId) : '–'}</td>
                 <td>
                   <State values={SlotState} value={s.state} />
                   {#if occupied && instance}<span class="ml-2 text-xs tabular-nums text-fg-faint">{duration(instance.readyAt ?? instance.createdAt, undefined, clock.now)}</span>{/if}
+                  {#if occupied && formation?.readyAt}<span class="ml-2 text-xs tabular-nums text-fg-faint">{duration(formation.readyAt, undefined, clock.now)}</span>{/if}
                 </td>
                 <td class="num text-fg-muted">{occupied ? count(route?.requests ?? 0n) : '–'}{#if route?.inFlight}<span class="text-fg-faint"> · {route.inFlight} live</span>{/if}</td>
-                <td class="num text-fg-muted">{instance ? instanceMemory(instance) || '–' : '–'}</td>
+                <td class="num text-fg-muted" title={formation ? 'Estimated memory across all workers' : undefined}>{instance ? instanceMemory(instance) || '–' : formation ? formationMemory(formation) : '–'}</td>
                 <td class="actions" onclick={(e) => e.stopPropagation()}>
                   <span>
                     {#if answering}<IconButton size="xs" icon={MessageSquare} label="Chat" href="/chat?model={encodeURIComponent(s.name)}" />{/if}
@@ -126,6 +139,21 @@
                       ]}
                     />
                   </span>
+                </td>
+              </tr>
+            {/each}
+            {#each formations as f (f.id)}
+              {@const route = live.routes.get(f.name)}
+              <tr class="row-link" onclick={() => goto(`/formations/${f.id}`)}>
+                <td class="text-fg-faint">–</td>
+                <td><div class="font-mono text-xs text-fg">{f.name}</div><div class="text-xs text-fg-faint">{shapeLabel(f.shape)} · {formationNodes(f)}</div></td>
+                <td><div class="truncate text-fg" title={f.repo}>{tail(f.repo)} <span class="font-mono text-xs text-fg-muted">{f.group}</span></div></td>
+                <td class="text-fg-muted">{runtimeName(f.runtimeId)}</td>
+                <td><State values={FormationState} value={f.state} />{#if f.readyAt}<span class="ml-2 text-xs tabular-nums text-fg-faint">{duration(f.readyAt, undefined, clock.now)}</span>{/if}</td>
+                <td class="num text-fg-muted">{count(route?.requests ?? 0n)}{#if route?.inFlight}<span class="text-fg-faint"> · {route.inFlight} live</span>{/if}</td>
+                <td class="num text-fg-muted" title="Estimated memory across all workers">{formationMemory(f)}</td>
+                <td class="actions" onclick={(e) => e.stopPropagation()}>
+                  <span>{#if route?.state === RouteState.READY}<IconButton size="xs" icon={MessageSquare} label="Chat" href="/chat?model={encodeURIComponent(f.name)}" />{/if}</span>
                 </td>
               </tr>
             {/each}
