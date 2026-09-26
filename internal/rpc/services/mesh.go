@@ -63,6 +63,16 @@ func (s *MeshService) Leave(ctx context.Context, req *connect.Request[v1.LeaveRe
 	return reply(&v1.LeaveResponse{Mesh: m}, err)
 }
 
+func (s *MeshService) ForgetNode(ctx context.Context, req *connect.Request[v1.ForgetNodeRequest]) (*connect.Response[v1.ForgetNodeResponse], error) {
+	n, err := s.mesh.Forget(ctx, req.Msg.GetNodeId(), req.Msg.GetTell())
+	return reply(&v1.ForgetNodeResponse{Node: n}, err)
+}
+
+func (s *MeshService) ResetMesh(ctx context.Context, req *connect.Request[v1.ResetMeshRequest]) (*connect.Response[v1.ResetMeshResponse], error) {
+	m, err := s.mesh.Reset(ctx)
+	return reply(&v1.ResetMeshResponse{Mesh: m}, err)
+}
+
 func (s *MeshService) Rotate(ctx context.Context, req *connect.Request[v1.RotateRequest]) (*connect.Response[v1.RotateResponse], error) {
 	m, rotated, missed, err := s.mesh.Rotate(ctx)
 	return reply(&v1.RotateResponse{Mesh: m, Rotated: rotated, Missed: missed}, err)
@@ -157,6 +167,11 @@ func (s *MeshService) GetFormation(ctx context.Context, req *connect.Request[v1.
 func (s *MeshService) StopFormation(ctx context.Context, req *connect.Request[v1.StopFormationRequest]) (*connect.Response[v1.StopFormationResponse], error) {
 	f, err := s.formations.Stop(ctx, req.Msg.GetId())
 	return reply(&v1.StopFormationResponse{Formation: f}, err)
+}
+
+func (s *MeshService) DeleteFormation(ctx context.Context, req *connect.Request[v1.DeleteFormationRequest]) (*connect.Response[v1.DeleteFormationResponse], error) {
+	f, err := s.formations.Delete(ctx, req.Msg.GetId())
+	return reply(&v1.DeleteFormationResponse{Formation: f}, err)
 }
 
 func (s *MeshService) FormationLogs(ctx context.Context, req *connect.Request[v1.FormationLogsRequest], stream *connect.ServerStream[v1.FormationLogsResponse]) error {

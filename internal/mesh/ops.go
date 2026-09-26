@@ -202,7 +202,7 @@ func (m *Manager) Join(ctx context.Context, token string) (*v1.Mesh, *v1.Node, [
 	return mesh, bootstrap, warnings, nil
 }
 
-// Leaves the mesh, telling every member, and forgets it
+// Leaves the mesh, its formations stopped and records dropped
 func (m *Manager) Leave(ctx context.Context) (*v1.Mesh, error) {
 	m.mu.Lock()
 	if m.mesh == nil {
@@ -216,6 +216,9 @@ func (m *Manager) Leave(ctx context.Context) (*v1.Mesh, error) {
 		ids = append(ids, id)
 	}
 	m.mu.Unlock()
+	if m.Formations != nil {
+		m.Formations.Clear(ctx)
+	}
 	var wg sync.WaitGroup
 	for _, id := range ids {
 		wg.Add(1)
@@ -235,23 +238,15 @@ func (m *Manager) Leave(ctx context.Context) (*v1.Mesh, error) {
 	}
 	wg.Wait()
 	m.mu.Lock()
-	members := m.members
-	m.members = map[string]*member{}
-	m.sessions = map[string]*session{}
-	m.accept = map[string]string{}
-	m.links = map[string]*v1.Link{}
-	m.admissions = map[string]*v1.Admission{}
 	m.mesh = nil
 	m.running = false
 	m.mu.Unlock()
-	if err := m.DB.DeleteMesh(ctx); err != nil {
+	if err := m.clearState(ctx); err != nil {
 		return nil, err
 	}
-	for id, mb := range members {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_DELETED, id, mb.rec)
-		if m.Formations != nil {
-			m.Formations.MemberState(id, v1.NodeState_NODE_STATE_GONE)
-		}
+	// Copies a late sync brought go too
+	if m.Formations != nil {
+		m.Formations.Clear(ctx)
 	}
 	m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_DELETED, m.identity.ID, &v1.Node{Id: m.identity.ID, Self: true})
 	if wasTLS && m.APITLS == nil {
@@ -262,6 +257,88 @@ func (m *Manager) Leave(ctx context.Context) (*v1.Mesh, error) {
 	m.Log.Info("mesh left", "mesh", out.GetId(), "name", out.GetName())
 	m.publishStatus()
 	return out, nil
+}
+
+// Forgets members, sessions, links, and admissions everywhere
+func (m *Manager) clearState(ctx context.Context) error {
+	m.mu.Lock()
+	members := m.members
+	m.members = map[string]*member{}
+	m.sessions = map[string]*session{}
+	m.accept = map[string]string{}
+	m.links = map[string]*v1.Link{}
+	m.admissions = map[string]*v1.Admission{}
+	m.forgotten = map[string]time.Time{}
+	m.mu.Unlock()
+	if err := m.DB.DeleteMesh(ctx); err != nil {
+		return err
+	}
+	for id, mb := range members {
+		m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_DELETED, id, mb.rec)
+	}
+	return nil
+}
+
+// Leaves any mesh and clears every trace of it
+func (m *Manager) Reset(ctx context.Context) (*v1.Mesh, error) {
+	if m.Joined() {
+		return m.Leave(ctx)
+	}
+	if m.Formations != nil {
+		m.Formations.Clear(ctx)
+	}
+	if err := m.clearState(ctx); err != nil {
+		return nil, err
+	}
+	m.Log.Info("mesh state reset")
+	m.publishStatus()
+	return nil, nil
+}
+
+// Forgets a member, on every reachable member with tell
+func (m *Manager) Forget(ctx context.Context, ref string, tell bool) (*v1.Node, error) {
+	if !m.Joined() {
+		return nil, ErrNoMesh
+	}
+	rec, err := m.Node(ref)
+	if err != nil {
+		return nil, err
+	}
+	if rec.GetSelf() {
+		return nil, fmt.Errorf("%w: this node cannot forget itself, leave the mesh instead", ErrMesh)
+	}
+	id := rec.GetId()
+	m.mu.Lock()
+	m.forgotten[id] = time.Now()
+	ids := make([]string, 0, len(m.members))
+	for other := range m.members {
+		if other != id {
+			ids = append(ids, other)
+		}
+	}
+	m.mu.Unlock()
+	m.forget(id)
+	if tell {
+		var wg sync.WaitGroup
+		for _, other := range ids {
+			wg.Add(1)
+			go func(other string) {
+				defer wg.Done()
+				cl, err := m.Client(ctx, other)
+				if err == nil {
+					cctx, cancel := context.WithTimeout(ctx, callTimeout)
+					defer cancel()
+					_, err = cl.Mesh.ForgetNode(cctx, connect.NewRequest(&v1.ForgetNodeRequest{NodeId: id}))
+				}
+				if err != nil {
+					m.Log.Warn("forget: member not told, it learns from the missed syncs", "node", other, "forgotten", id, "err", err)
+				}
+			}(other)
+		}
+		wg.Wait()
+	}
+	m.Log.Info("mesh member forgotten", "node", id, "name", rec.GetName(), "told", tell)
+	return rec, nil
 }
 
 // Issues a new secret to every reachable member. Members unreachable now must join again.

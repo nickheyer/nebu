@@ -417,12 +417,18 @@ func (m *Manager) pruneLocked() {
 // Takes the formations a member conducts, as its sync carried them: a copy with a higher sequence
 // replaces ours, and one at the same sequence replaces a copy this node marked unreachable, since
 // that mark is not the conductor's write. Ready ones are routed through the conductor's gateway
-// and seats hosted here of ended ones are reaped
+// and seats hosted here of ended ones are reaped. A copy the conductor no longer lists was
+// deleted there, and goes here too
 func (m *Manager) Merge(conductor string, list []*v1.Formation) {
+	if !m.Mesh.Joined() {
+		return
+	}
+	listed := map[string]bool{}
 	for _, f := range list {
 		if f.GetConductor() != conductor || f.GetId() == "" {
 			continue
 		}
+		listed[f.GetId()] = true
 		m.mu.Lock()
 		have, known := m.list[f.GetId()]
 		if known && have.GetConductor() == m.self() {
@@ -452,6 +458,84 @@ func (m *Manager) Merge(conductor string, list []*v1.Formation) {
 		if terminal(copyOf.GetState()) {
 			go m.reapSeats(m.Instances.SeatsOf(copyOf.GetId()), fmt.Sprintf("%s reports %s %s", copyOf.GetConductorName(), copyOf.GetName(), formationWord(copyOf.GetState())))
 		}
+	}
+	for _, f := range m.copiesOf(conductor) {
+		if !listed[f.GetId()] {
+			m.remove(f, fmt.Sprintf("%s no longer lists %s", f.GetConductorName(), f.GetName()))
+		}
+	}
+}
+
+// The copies held here of the formations a member conducts
+func (m *Manager) copiesOf(conductor string) []*v1.Formation {
+	if conductor == m.self() {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*v1.Formation
+	for _, f := range m.list {
+		if f.GetConductor() == conductor {
+			out = append(out, proto.Clone(f).(*v1.Formation))
+		}
+	}
+	return out
+}
+
+// Removes a formation record, a running one stopped first
+func (m *Manager) Delete(ctx context.Context, id string) (*v1.Formation, error) {
+	f, err := m.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if f.GetConductor() == m.self() {
+		if !terminal(f.GetState()) {
+			if f, err = m.Stop(ctx, f.GetId()); err != nil {
+				return nil, err
+			}
+		}
+	} else if rec, err := m.Mesh.Node(f.GetConductor()); err == nil && rec.GetState() == v1.NodeState_NODE_STATE_READY {
+		return nil, fmt.Errorf("%w: %s is conducted by %s, delete it there", ErrFormation, f.GetName(), f.GetConductorName())
+	}
+	m.remove(f, "the formation was deleted")
+	m.Mesh.Bump()
+	return f, nil
+}
+
+// Stops conducted formations and drops every record
+func (m *Manager) Clear(ctx context.Context) {
+	for _, f := range m.List(false) {
+		if f.GetConductor() == m.self() && !terminal(f.GetState()) {
+			if _, err := m.Stop(ctx, f.GetId()); err != nil {
+				m.Log.Warn("formation stop before leaving the mesh failed", "formation", f.GetName(), "err", err)
+			}
+		}
+		m.remove(f, "this node left its mesh")
+	}
+}
+
+// Drops a forgotten member's formation copies
+func (m *Manager) Forget(nodeID string) {
+	m.MemberState(nodeID, v1.NodeState_NODE_STATE_GONE)
+	for _, f := range m.copiesOf(nodeID) {
+		m.remove(f, fmt.Sprintf("their conductor %s was forgotten", f.GetConductorName()))
+	}
+}
+
+// Drops a formation record with its routes and seats here
+func (m *Manager) remove(f *v1.Formation, why string) {
+	m.mu.Lock()
+	delete(m.list, f.GetId())
+	delete(m.merged, f.GetId())
+	delete(m.stopping, f.GetId())
+	m.mu.Unlock()
+	m.Routes.RemoveFormation(f.GetId())
+	if _, err := m.DB.DeleteFormation(context.Background(), f.GetId()); err != nil {
+		m.Log.Warn("formation record delete failed", "id", f.GetId(), "err", err)
+	}
+	m.Events.Publish(v1.EventKind_EVENT_KIND_FORMATION, v1.EventAction_EVENT_ACTION_DELETED, f.GetId(), f)
+	if seats := m.Instances.SeatsOf(f.GetId()); len(seats) > 0 {
+		go m.reapSeats(seats, why)
 	}
 }
 

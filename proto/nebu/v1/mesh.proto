@@ -531,6 +531,35 @@ message StopFormationResponse {
   Formation formation = 1;
 }
 
+// Removes a formation record, stopping a running one first
+message DeleteFormationRequest {
+  string id = 1;
+}
+
+// Returns the formation removed
+message DeleteFormationResponse {
+  Formation formation = 1;
+}
+
+// Forgets a member, on every reachable member with tell
+message ForgetNodeRequest {
+  string node_id = 1;
+  bool tell = 2;
+}
+
+// Returns the member forgotten
+message ForgetNodeResponse {
+  Node node = 1;
+}
+
+// Leaves any mesh and clears every trace of it, formations included
+message ResetMeshRequest {}
+
+// Returns the mesh left, when there was one
+message ResetMeshResponse {
+  Mesh mesh = 1;
+}
+
 // Streams one seat's output, the head when no role is named
 message FormationLogsRequest {
   string id = 1;
@@ -940,6 +969,10 @@ service MeshService {
   rpc Join(JoinRequest) returns (JoinResponse);
   // Leaves the mesh
   rpc Leave(LeaveRequest) returns (LeaveResponse);
+  // Forgets a member that is gone, telling the others
+  rpc ForgetNode(ForgetNodeRequest) returns (ForgetNodeResponse);
+  // Leaves any mesh and clears every trace of it
+  rpc ResetMesh(ResetMeshRequest) returns (ResetMeshResponse);
   // Issues a new secret to every reachable member
   rpc Rotate(RotateRequest) returns (RotateResponse);
   // Returns the mesh profile
@@ -976,6 +1009,8 @@ service MeshService {
   rpc GetFormation(GetFormationRequest) returns (GetFormationResponse);
   // Stops one formation
   rpc StopFormation(StopFormationRequest) returns (StopFormationResponse);
+  // Removes a formation record, stopping a running one first
+  rpc DeleteFormation(DeleteFormationRequest) returns (DeleteFormationResponse);
   // Streams a seat's output
   rpc FormationLogs(FormationLogsRequest) returns (stream FormationLogsResponse);
   // Node to node, without a credential: a node outside asks to join, answers or declines an invitation

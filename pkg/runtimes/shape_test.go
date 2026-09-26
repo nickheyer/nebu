@@ -89,6 +89,29 @@ func TestRPCDeviceNames(t *testing.T) {
 	}
 }
 
+// Device names follow the install's device fact
+func TestGGMLDevices(t *testing.T) {
+	apple := []*v1.Device{{Id: "gpu0", Vendor: "apple", Kind: v1.DeviceKind_DEVICE_KIND_GPU}, {Id: "cpu", Vendor: "apple", Kind: v1.DeviceKind_DEVICE_KIND_CPU}}
+	nvidia := []*v1.Device{{Id: "gpu1", Vendor: "nvidia", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Facts: map[string]string{"index": "1"}}}
+	cases := []struct {
+		facts   string
+		devices []*v1.Device
+		want    string
+	}{
+		{"MTL0,BLAS", apple, "MTL0"},
+		{"Metal0,BLAS", apple, "Metal0"},
+		{"", apple, "MTL0"},
+		{"CUDA0,CUDA1", nvidia, "CUDA1"},
+		{"Vulkan0,Vulkan1", nvidia, "Vulkan1"},
+	}
+	for _, c := range cases {
+		in := &v1.Install{Facts: map[string]string{"devices": c.facts}}
+		if got := strings.Join(ggmlDevices(in, c.devices), ","); got != c.want {
+			t.Errorf("facts %q: %q, want %q", c.facts, got, c.want)
+		}
+	}
+}
+
 func TestRankHelpers(t *testing.T) {
 	seat := &v1.SeatSpec{Shape: v1.Shape_SHAPE_LOCKSTEP, Role: RoleRank, Rank: 1, Count: 3, LayerFrom: 20, LayerTo: 40, Peers: []*v1.SeatPeer{
 		{NodeId: "h", Role: RoleHead, Rank: 0, Devices: 2, LayerFrom: 0, LayerTo: 20},

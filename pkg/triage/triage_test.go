@@ -45,6 +45,8 @@ func TestShippedRules(t *testing.T) {
 		{LlamaCpp{}, "llama_model_load: error loading model: unknown model architecture: 'qwen9'", "unknown-arch"},
 		{LlamaCpp{}, "V cache quantization requires flash_attn", "cache-quant-needs-flash"},
 		{LlamaCpp{}, `error while handling argument "--nope": unknown`, "bad-flag"},
+		{LlamaCpp{}, "error: unknown device: Metal0", "unknown-device"},
+		{LlamaCpp{}, `error while handling argument "--device": invalid device: Metal0`, "unknown-device"},
 		{LlamaCpp{}, "llama_model_load: error loading model: error loading model hyperparameters: key qwen35.rope.dimension_sections has wrong array length; expected 4, got 3", "gguf-hparams"},
 		{VLLM{}, "torch.OutOfMemoryError: CUDA out of memory", "device-oom"},
 		{VLLM{}, "ValueError: Model architectures ['FooForCausalLM'] are not supported for now", "unsupported-arch"},
@@ -68,6 +70,17 @@ func TestShippedRules(t *testing.T) {
 	unknown := LlamaCpp{}.Rules()[1]
 	if names, ok := unknown.Match("unknown model architecture: 'x'"); !ok || names["arch"] != "x" {
 		t.Fatalf("arch capture %v %v", names, ok)
+	}
+}
+
+// A rejected device name outranks the bad flag
+func TestLlamaCppUnknownDevice(t *testing.T) {
+	hits := Scan([]Set{LlamaCpp{}}, []string{`error while handling argument "--device": invalid device: Metal0`, "available devices:", "  MTL0: Apple M1 Max (53084 MiB, 53083 MiB free)"})
+	if len(hits) < 2 || hits[0].GetId() != "unknown-device" || hits[0].GetSummary() != "this build has no device named Metal0" || hits[1].GetId() != "bad-flag" {
+		t.Fatalf("hits %v", hits)
+	}
+	if len(Scan([]Set{LlamaCpp{}}, []string{"  MTL0: Apple M1 Max (53084 MiB, 53083 MiB free)", "ggml_metal_device_init: GPU name:   MTL0 (Apple M1 Max)"})) != 0 {
+		t.Fatal("device listings are not failures")
 	}
 }
 

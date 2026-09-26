@@ -2,14 +2,14 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { api, message } from '$lib/api';
-  import { live, clock, meshNodes, nodeName, orderedFormations } from '$lib/state.svelte';
+  import { live, clock, meshNodes, nodeName, orderedFormations, formationLive } from '$lib/state.svelte';
   import { classLabel, classTone, nodeStateLabel, nodeTone, gbits, gbytes, tflops, micros, shapeLabel, seatLabel, tps, admissionLabel, admissionTone, admissionWhat } from '$lib/mesh';
   import { ago, count, plural, when } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { DeviceKind } from '$proto/host_pb';
-  import { FormationState, AdmissionSide, AdmissionState, type DeviceProfile, type FormationRatio, type Node, type NearbyNode, type NearbyMesh, type Admission } from '$proto/mesh_pb';
-  import { Network, Plus, LogIn, LogOut, KeyRound, RefreshCw, Radar, Copy as CopyIcon, Check, X, Send, UserPlus, Trash2, RotateCcw } from '@lucide/svelte';
+  import { FormationState, NodeState, AdmissionSide, AdmissionState, type DeviceProfile, type FormationRatio, type Formation, type Node, type NearbyNode, type NearbyMesh, type Admission } from '$proto/mesh_pb';
+  import { Network, Plus, LogIn, LogOut, KeyRound, RefreshCw, Radar, Copy as CopyIcon, Check, X, Send, UserPlus, UserX, Trash2, RotateCcw, Eraser } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
@@ -63,14 +63,14 @@
   const links = $derived(nodes.flatMap((n) => n.links));
   // Which mesh devices each profile row prices: the first pattern a device's name holds, else its kind row
   const profileUse = $derived.by(() => {
-    const use = new Map<string, string[]>();
+    const use = new Map<string, { key: string; label: string }[]>();
     for (const n of nodes) {
-      for (const d of n.profile?.devices ?? []) {
+      for (const [i, d] of (n.profile?.devices ?? []).entries()) {
         const name = d.name.toLowerCase();
         const kind = 'kind:' + DeviceKind[d.kind].toLowerCase();
         const row = profiles.find((p) => !p.pattern.startsWith('kind:') && name.includes(p.pattern.toLowerCase())) ?? profiles.find((p) => p.pattern === kind);
         if (!row) continue;
-        use.set(row.pattern, [...(use.get(row.pattern) ?? []), `${n.name || n.id.slice(0, 8)} ${d.name}`]);
+        use.set(row.pattern, [...(use.get(row.pattern) ?? []), { key: `${n.id}/${i}`, label: `${n.name || n.id.slice(0, 8)} ${d.name}` }]);
       }
     }
     return use;
@@ -164,7 +164,7 @@
   }
 
   async function leave() {
-    const yes = await confirm({ title: `Leave ${mesh?.name}?`, message: 'This node will disconnect from the mesh. Formations it coordinates will stop.', action: 'Leave mesh', tone: 'bad' });
+    const yes = await confirm({ title: `Leave ${mesh?.name}?`, message: 'This node will disconnect from the mesh. Formations it coordinates stop, and every formation record on this node is removed.', action: 'Leave mesh', tone: 'bad' });
     if (!yes) return;
     try {
       await api.mesh.leave({});
@@ -185,6 +185,62 @@
       fail(err, 'Could not rotate mesh secret');
     } finally {
       rotating = false;
+    }
+  }
+
+  async function resetMesh() {
+    const yes = await confirm({
+      title: mesh ? `Reset ${mesh.name}?` : 'Clear mesh data?',
+      message: 'Leaves the mesh, stops every formation this node coordinates, and forgets every member, link, and formation record. The node keeps its identity.',
+      action: mesh ? 'Reset mesh' : 'Clear data',
+      tone: 'bad'
+    });
+    if (!yes) return;
+    busy = true;
+    try {
+      await api.mesh.resetMesh({});
+      ok(mesh ? 'Mesh reset' : 'Mesh data cleared');
+    } catch (err) {
+      fail(err, 'Could not reset mesh');
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function forgetNode(n: Node) {
+    const name = n.name || n.id.slice(0, 8);
+    const yes = await confirm({
+      title: `Forget ${name}?`,
+      message:
+        n.state === NodeState.READY
+          ? 'The node is still reachable. Every member forgets it, but it returns on its next sync unless it leaves or the mesh secret is rotated.'
+          : 'Every reachable member forgets the node, its links, and the formations it coordinated. It can join again later.',
+      action: 'Forget node',
+      tone: 'bad'
+    });
+    if (!yes) return;
+    hold(n.id, true);
+    try {
+      await api.mesh.forgetNode({ nodeId: n.id, tell: true });
+      ok(`Forgot ${name}`);
+    } catch (err) {
+      fail(err, `Could not forget ${name}`);
+    } finally {
+      hold(n.id, false);
+    }
+  }
+
+  async function deleteFormation(f: Formation) {
+    const yes = await confirm({ title: `Delete ${f.name}?`, message: formationLive(f) ? 'Stops every worker first, then removes the record.' : 'Removes the record from this node.', action: 'Delete', tone: 'bad' });
+    if (!yes) return;
+    hold(f.id, true);
+    try {
+      await api.mesh.deleteFormation({ id: f.id });
+      ok(`Deleted ${f.name}`);
+    } catch (err) {
+      fail(err, `Could not delete ${f.name}`);
+    } finally {
+      hold(f.id, false);
     }
   }
 
@@ -338,11 +394,13 @@
     <Button variant="primary" icon={UserPlus} onclick={() => (inviteOpen = true)}>Invite node</Button>
     <Menu items={[
       { label: 'Rotate secret', icon: RefreshCw, disabled: rotating, onSelect: rotate },
-      { label: 'Leave mesh', icon: LogOut, tone: 'bad', onSelect: leave }
+      { label: 'Leave mesh', icon: LogOut, tone: 'bad', onSelect: leave },
+      { label: 'Reset mesh', icon: Eraser, tone: 'bad', disabled: busy, onSelect: resetMesh }
     ]} />
   {:else if loaded}
     <Button icon={LogIn} onclick={() => (joinOpen = true)}>Join mesh</Button>
     <Button variant="primary" icon={Plus} onclick={() => (initOpen = true)}>Create mesh</Button>
+    {#if formations.length}<Menu items={[{ label: 'Clear mesh data', icon: Eraser, tone: 'bad', disabled: busy, onSelect: resetMesh }]} />{/if}
   {/if}
 </PageHeader>
 
@@ -495,6 +553,7 @@
           <Card title={n.name || n.id.slice(0, 12)} meta={n.address || undefined}>
             {#snippet actions()}
               <State tone={nodeTone(n)} label={nodeStateLabel(n)} pulse={!n.self && n.state === 0} />
+              {#if !n.self}<IconButton size="xs" icon={UserX} label="Forget node" loading={acting.has(n.id)} onclick={() => forgetNode(n)} />{/if}
             {/snippet}
             <div class="flex flex-col gap-4">
               <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted">
@@ -537,7 +596,7 @@
               {#if n.routes.length || n.slots.length || n.formationIds.length || n.seats.length}
                 <div class="flex flex-wrap items-center gap-1.5 text-xs text-fg-muted">
                   {#if n.formationIds.length}<span>Coordinates {plural(n.formationIds.length, 'formation')}</span>{/if}
-                  {#each n.seats as s (s.formationId + s.role + s.rank)}
+                  {#each n.seats as s (s.instanceId || s.formationId + s.role + s.rank)}
                     <Chip text={seatLabel(s.role, s.rank)} mono={false} title={`Formation ${s.formationId.slice(0, 8)}${s.transport ? ' · ' + s.transport : ''}`} />
                   {/each}
                   {#each n.slots as sl (sl.id)}<Chip text={sl.name} title={sl.formationId ? 'mesh slot' : 'slot'} />{/each}
@@ -671,7 +730,7 @@
       {:else}
         <div class="tbl-wrap">
           <table class="tbl">
-            <thead><tr><th>Name</th><th>Distribution</th><th>State</th><th>Coordinator</th><th>Nodes</th><th class="num">Est. tokens/s</th></tr></thead>
+            <thead><tr><th>Name</th><th>Distribution</th><th>State</th><th>Coordinator</th><th>Nodes</th><th class="num">Est. tokens/s</th><th class="actions"></th></tr></thead>
             <tbody>
               {#each formations as f (f.id)}
                 <tr class="row-link" onclick={() => goto(`/formations/${f.id}`)}>
@@ -690,6 +749,7 @@
                     </div>
                   </td>
                   <td class="num">{tps(f.plan?.tokensPerSecond)}</td>
+                  <td class="actions"><div class="flex justify-end"><IconButton size="xs" icon={Trash2} label="Delete" loading={acting.has(f.id)} onclick={(e) => { e.stopPropagation(); deleteFormation(f); }} /></div></td>
                 </tr>
               {/each}
             </tbody>
@@ -711,7 +771,7 @@
             {#each profileRows as p (p.pattern)}
               <tr class={profileUse.has(p.pattern) ? 'row-active' : ''}>
                 <td class="font-mono text-xs text-fg">{p.pattern}</td>
-                <td class="text-xs text-fg-muted">{#each profileUse.get(p.pattern) ?? [] as d (d)}<div>{d}</div>{:else}-{/each}</td>
+                <td class="text-xs text-fg-muted">{#each profileUse.get(p.pattern) ?? [] as d (d.key)}<div>{d.label}</div>{:else}-{/each}</td>
                 <td class="num">{gbytes(p.streamBytesPerSecond)}</td>
                 <td class="num">{tflops(p.computeFlops)}</td>
                 <td class="text-fg-muted">{p.builtin ? 'Default' : 'Custom'}{#if !p.builtin && p.updatedAt}<span class="ml-2 text-xs" title={when(p.updatedAt)}>{ago(p.updatedAt, clock.now)}</span>{/if}</td>

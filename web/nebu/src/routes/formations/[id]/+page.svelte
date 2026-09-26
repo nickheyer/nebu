@@ -1,5 +1,6 @@
 <script lang="ts">
   import { page } from '$app/state';
+  import { goto } from '$app/navigation';
   import { tabState } from '$lib/tabs.svelte';
   import { api } from '$lib/api';
   import { live, clock, formationByRef, formationLive, nodeName, answersOf, runtimeName, slotName } from '$lib/state.svelte';
@@ -8,10 +9,10 @@
   import { bytes, when, duration, count, plural } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
-  import { FormationState } from '$proto/mesh_pb';
+  import { FormationState, NodeState } from '$proto/mesh_pb';
   import { InstanceState } from '$proto/instance_pb';
   import { RouteState, type Trace } from '$proto/gateway_pb';
-  import { Square, RotateCcw, MessageSquare, ChevronDown, ChevronRight } from '@lucide/svelte';
+  import { Square, RotateCcw, MessageSquare, ChevronDown, ChevronRight, Trash2 } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Tabs from '$lib/components/ui/Tabs.svelte';
   import Kv from '$lib/components/ui/Kv.svelte';
@@ -43,11 +44,13 @@
   const plan = $derived(formation?.plan);
   const nodeCount = $derived(new Set(formation?.seats.map((s) => s.nodeId)).size);
   const mine = $derived(!!formation && live.nodes.get(formation.conductor)?.self === true);
+  const conductorReady = $derived(!!formation && live.nodes.get(formation.conductor)?.state === NodeState.READY);
   const tab = tabState(() => tabs.map((t) => t.id), () => 'overview');
   let seat = $state('');
   let expandedWorker = $state('');
   let selectedTrace = $state('');
   let stopping = $state(false);
+  let deleting = $state(false);
 
   const workers = $derived((formation?.seats ?? []).map((s) => ({ ...s, key: `${s.nodeId}|${s.role}|${s.rank}`, label: `${seatLabel(s.role, s.rank)} · ${s.nodeName || nodeName(s.nodeId)}` })));
   const pickedSeat = $derived(workers.find((s) => s.key === seat) ?? workers.find((s) => s.role === 'head') ?? workers[0]);
@@ -64,6 +67,22 @@
       fail(err, 'Stop failed');
     } finally {
       stopping = false;
+    }
+  }
+
+  async function del() {
+    if (!formation) return;
+    const yes = await confirm({ title: `Delete ${formation.name}?`, message: alive ? 'Stops every worker first, then removes the record.' : 'Removes the record from this node.', action: 'Delete', tone: 'bad' });
+    if (!yes) return;
+    deleting = true;
+    try {
+      await api.mesh.deleteFormation({ id: formation.id });
+      ok(`Deleted ${formation.name}`);
+      await goto('/mesh');
+    } catch (err) {
+      fail(err, 'Delete failed');
+    } finally {
+      deleting = false;
     }
   }
 
@@ -91,6 +110,7 @@
     {#if alive}
       {#if route?.state === RouteState.READY}<Button icon={MessageSquare} href="/chat?model={encodeURIComponent(formation.name)}">Chat</Button>{/if}
       {#if mine}<Button variant="danger" icon={Square} loading={stopping} onclick={stop}>Stop</Button>{/if}
+      {#if mine || !conductorReady}<Button variant="danger" icon={Trash2} loading={deleting} onclick={del}>Delete</Button>{/if}
     {:else if formation.request && mine}
       <Button variant="primary" icon={RotateCcw} onclick={() => again()}>Run again</Button>
     {/if}

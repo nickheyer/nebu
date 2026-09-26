@@ -229,12 +229,15 @@ func (t *Table) Throughputs() []*v1.Throughput {
 	return out
 }
 
-// Every profile, a person's rows first
+// Every profile, shipped rows set over left out
 func (t *Table) Profiles() []*v1.DeviceProfile {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var out []*v1.DeviceProfile
 	for _, p := range merged(t.custom) {
+		if p.GetBuiltin() && shadowed(t.custom, p.GetPattern()) {
+			continue
+		}
 		out = append(out, proto.Clone(p).(*v1.DeviceProfile))
 	}
 	return out

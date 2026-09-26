@@ -183,19 +183,20 @@ var openProcedures = map[string]bool{
 // Procedures a member's session token opens: the calls members make to each other, and none of
 // the ones that decide what this node does
 var peerProcedures = map[string]bool{
-	nebuv1connect.MeshServiceSyncProcedure:      true,
-	nebuv1connect.MeshServiceStreamProcedure:    true,
-	nebuv1connect.MeshServiceRunSeatProcedure:   true,
-	nebuv1connect.MeshServiceStopSeatProcedure:  true,
-	nebuv1connect.MeshServiceMoveSlotProcedure:  true,
-	nebuv1connect.MeshServiceDropSlotProcedure:  true,
-	nebuv1connect.MeshServiceGetSeatProcedure:   true,
-	nebuv1connect.MeshServicePullSeatProcedure:  true,
-	nebuv1connect.MeshServiceWatchPullProcedure: true,
-	nebuv1connect.MeshServiceSeatLogsProcedure:  true,
-	nebuv1connect.MeshServiceGetStoredProcedure: true,
-	nebuv1connect.MeshServiceRekeyProcedure:     true,
-	nebuv1connect.MeshServiceByeProcedure:       true,
+	nebuv1connect.MeshServiceSyncProcedure:       true,
+	nebuv1connect.MeshServiceStreamProcedure:     true,
+	nebuv1connect.MeshServiceRunSeatProcedure:    true,
+	nebuv1connect.MeshServiceStopSeatProcedure:   true,
+	nebuv1connect.MeshServiceMoveSlotProcedure:   true,
+	nebuv1connect.MeshServiceDropSlotProcedure:   true,
+	nebuv1connect.MeshServiceGetSeatProcedure:    true,
+	nebuv1connect.MeshServicePullSeatProcedure:   true,
+	nebuv1connect.MeshServiceWatchPullProcedure:  true,
+	nebuv1connect.MeshServiceSeatLogsProcedure:   true,
+	nebuv1connect.MeshServiceGetStoredProcedure:  true,
+	nebuv1connect.MeshServiceRekeyProcedure:      true,
+	nebuv1connect.MeshServiceByeProcedure:        true,
+	nebuv1connect.MeshServiceForgetNodeProcedure: true,
 }
 
 // Whether a call may proceed

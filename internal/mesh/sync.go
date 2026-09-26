@@ -3,6 +3,7 @@ package mesh
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -98,6 +99,10 @@ func (m *Manager) syncOne(ctx context.Context, id string, rec *v1.Node, members 
 		m.absorb(nil, resp.Msg.GetMembers(), false)
 		m.reached(id)
 	}
+	// An answer from a member forgotten meanwhile changes nothing more
+	if _, ok := m.Member(id); !ok {
+		return
+	}
 	if m.Formations != nil {
 		m.Formations.Merge(id, resp.Msg.GetFormations())
 	}
@@ -189,6 +194,11 @@ func (m *Manager) mergeRecord(rec *v1.Node, direct bool) {
 	rec = proto.Clone(rec).(*v1.Node)
 	rec.Self = false
 	m.mu.Lock()
+	// A forgotten member returns by handshake alone
+	if m.forgottenLocked(rec.GetId()) && m.sessions[rec.GetId()] == nil {
+		m.mu.Unlock()
+		return
+	}
 	mb, known := m.members[rec.GetId()]
 	action := v1.EventAction_EVENT_ACTION_UPDATED
 	stateBefore := v1.NodeState_NODE_STATE_UNSPECIFIED
@@ -216,6 +226,7 @@ func (m *Manager) mergeRecord(rec *v1.Node, direct bool) {
 			rec.State = v1.NodeState_NODE_STATE_READY
 			rec.SeenAt = timestamppb.Now()
 			mb.missed = 0
+			delete(m.forgotten, rec.GetId())
 		} else {
 			rec.State = mb.rec.GetState()
 			rec.SeenAt = mb.rec.GetSeenAt()
@@ -226,6 +237,7 @@ func (m *Manager) mergeRecord(rec *v1.Node, direct bool) {
 		if direct {
 			rec.State = v1.NodeState_NODE_STATE_READY
 			rec.SeenAt = timestamppb.Now()
+			delete(m.forgotten, rec.GetId())
 		}
 		m.members[rec.GetId()] = &member{rec: rec, sketch: rec.GetProfile() == nil && !direct}
 	}
@@ -248,7 +260,7 @@ func (m *Manager) mergeMembers(list []*v1.Member) {
 	var created []*v1.Node
 	m.mu.Lock()
 	for _, mem := range list {
-		if mem.GetId() == "" || mem.GetId() == m.identity.ID {
+		if mem.GetId() == "" || mem.GetId() == m.identity.ID || m.forgottenLocked(mem.GetId()) {
 			continue
 		}
 		mb, known := m.members[mem.GetId()]
@@ -276,6 +288,16 @@ func (m *Manager) mergeMembers(list []*v1.Member) {
 		default:
 		}
 	}
+}
+
+// Whether a member forgotten lately is still refused from gossip
+func (m *Manager) forgottenLocked(id string) bool {
+	at, ok := m.forgotten[id]
+	if ok && time.Since(at) < GoneAfter {
+		return true
+	}
+	delete(m.forgotten, id)
+	return false
 }
 
 // Writes a member's record
@@ -307,6 +329,10 @@ func (m *Manager) Sync(ctx context.Context, peer string, req *v1.SyncRequest) (*
 	} else {
 		m.absorb(nil, req.GetMembers(), false)
 		m.reached(peer)
+	}
+	// A sync sent before its sender was forgotten here changes nothing more
+	if _, ok := m.Member(peer); !ok {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: %s is not a member here, handshake again", ErrMesh, peer))
 	}
 	if m.Formations != nil {
 		m.Formations.Merge(peer, req.GetFormations())
@@ -348,7 +374,7 @@ func (m *Manager) forget(id string) {
 	if ok {
 		m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_DELETED, id, mb.rec)
 		if m.Formations != nil {
-			m.Formations.MemberState(id, v1.NodeState_NODE_STATE_GONE)
+			m.Formations.Forget(id)
 		}
 		m.bump()
 		m.publishStatus()

@@ -416,7 +416,7 @@ Nothing is measured by a benchmark step. The first plan on a fresh node uses the
 - TLS on the API listener covers node traffic. The join token pins the bootstrap member's certificate fingerprint, and a first contact by address pins the certificate it found. Making a mesh with TLS on makes a mesh certificate authority and every join issues the joining node a certificate, so members verify each other and no fingerprint is pinned after the first contact. Without TLS the daemon warns at join, as it warns about public listeners today.
 - Seat processes listen on loopback, as instances do today. A seat that other seats connect to gets a guard listener on the mesh address: a TCP forwarder that accepts connections from the member addresses the role names and forwards to loopback, one connection when the role says so. The forwarder is a kernel splice on Linux, one extra hop of a few microseconds. `mesh.exposure: direct` binds the seat process to the mesh address itself for links where every microsecond counts, and the Mesh page shows which seats are exposed. RDMA transports connect by the link's own address and bypass the forwarder, so a seat that negotiates RDMA is exposed on that link and the Mesh page says so.
 - Blob and file serving between members needs the session credential. The web session and API tokens do not open them.
-- A node leaving takes its session tokens with it. Rotating the secret is `nebu mesh rotate` on any member: it issues a new secret to every reachable member over the sessions, and members unreachable at rotation must join again.
+- A node leaving takes its session tokens with it, stops the formations it conducts while the members can still be reached, and drops every formation record it holds, so a mesh made later starts without them. A member that is gone is forgotten with `nebu mesh forget <node>` on any member: its record, session, links, and formation copies go there and on every reachable member, and gossip naming it is refused for ten minutes so a member told late does not bring it back. A member that is up and holds the secret returns on its next sync; rotating the secret keeps it out. `nebu mesh reset` leaves any mesh and clears every trace of it, members and formations included, and works outside a mesh too, for what an older daemon left behind. Rotating the secret is `nebu mesh rotate` on any member: it issues a new secret to every reachable member over the sessions, and members unreachable at rotation must join again.
 
 ## API
 
@@ -588,6 +588,8 @@ service MeshService {
   rpc Init(InitMeshRequest) returns (InitMeshResponse);
   rpc Join(JoinMeshRequest) returns (JoinMeshResponse);
   rpc Leave(LeaveMeshRequest) returns (LeaveMeshResponse);
+  rpc ForgetNode(ForgetNodeRequest) returns (ForgetNodeResponse);
+  rpc ResetMesh(ResetMeshRequest) returns (ResetMeshResponse);
   rpc Rotate(RotateMeshRequest) returns (RotateMeshResponse);
   rpc GetMesh(GetMeshRequest) returns (GetMeshResponse);
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
@@ -610,6 +612,7 @@ service MeshService {
   rpc ListFormations(ListFormationsRequest) returns (ListFormationsResponse);
   rpc GetFormation(GetFormationRequest) returns (GetFormationResponse);
   rpc StopFormation(StopFormationRequest) returns (StopFormationResponse);
+  rpc DeleteFormation(DeleteFormationRequest) returns (DeleteFormationResponse);
   rpc FormationLogs(FormationLogsRequest) returns (stream FormationLogsResponse);
   // Node to node: the handshake admits itself, the rest take the session credential
   rpc Hello(HelloRequest) returns (HelloResponse);
@@ -649,7 +652,9 @@ nebu mesh refuse <node|mesh>        deny a node that asked, or decline an invita
 nebu mesh dismiss <node|mesh>       clear a settled admission
 nebu mesh token                     print a join token, for a node no address reaches
 nebu mesh join <token>
-nebu mesh leave
+nebu mesh leave                     its formations stopped and forgotten too
+nebu mesh forget <node> [--here]    forget a member that is gone, on every reachable member
+nebu mesh reset                     leave any mesh and clear every trace of it
 nebu mesh status                    nodes, links, and formations
 nebu mesh nodes
 nebu mesh links [--probe]
@@ -657,11 +662,11 @@ nebu mesh rotate
 nebu mesh profile set <device pattern> --stream <GB/s> --compute <TFLOPS>
 nebu inspect <repo> --mesh          the fit table with every shape and node set
 nebu run <repo> --span a,b,c --shape auto|chain|lockstep|relay|replicas|draft|stages
-nebu formations [list|show|stop|logs]
+nebu formations [list|show|stop|delete|logs]
 nebu pull <repo> --to <node>
 ```
 
-The Mesh page, beside Host in the navigation, is where a mesh is made, joined, and run; nothing about membership needs the CLI. Outside a mesh it lists the meshes heard on the network with Ask to join beside each, the invitations received with Accept and Decline, an address field for a network that passes no beacons, and Make a mesh. Inside one it lists the nodes heard that are in no mesh with Invite beside each, the admissions under way with Admit, Deny, and Dismiss, then a node grid with device meters as the Host page draws them, a link matrix with round trip, bandwidth, and class, the formations with a seat row per node showing its transport, and the secret's rotation. Everything on it is live: a MESH event carries the status whenever a beacon, an admission, or the membership changes. The run dialog gains a span picker and a shape row that shows the planner's candidate table with predicted time to first token and tokens per second, the chosen shape first and every rejected one with its reason. The slot form's device picker lists devices under their nodes. The Models page shows which nodes hold each model and pulls to any of them.
+The Mesh page, beside Host in the navigation, is where a mesh is made, joined, and run; nothing about membership needs the CLI. Outside a mesh it lists the meshes heard on the network with Ask to join beside each, the invitations received with Accept and Decline, an address field for a network that passes no beacons, and Make a mesh. Inside one it lists the nodes heard that are in no mesh with Invite beside each, the admissions under way with Admit, Deny, and Dismiss, then a node grid with device meters as the Host page draws them and Forget beside every other node, a link matrix with round trip, bandwidth, and class, the formations with a seat row per node showing its transport and Delete beside each, and the secret's rotation and the mesh's reset. Everything on it is live: a MESH event carries the status whenever a beacon, an admission, or the membership changes. The run dialog gains a span picker and a shape row that shows the planner's candidate table with predicted time to first token and tokens per second, the chosen shape first and every rejected one with its reason. The slot form's device picker lists devices under their nodes. The Models page shows which nodes hold each model and pulls to any of them.
 
 ## Walkthroughs
 

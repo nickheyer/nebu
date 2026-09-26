@@ -230,7 +230,8 @@ func rankPartition(seat *v1.SeatSpec, layers int) (string, error) {
 }
 
 // Names the devices a ggml backend enumerates them by, matching the install's device fact:
-// CUDA0, ROCm0, Vulkan0, or Metal0, in the order the seat lists them
+// CUDA0, ROCm0, Vulkan0, MTL0, or Metal0 on builds before ggml shortened the Metal name, in
+// the order the seat lists them
 func ggmlDevices(in *v1.Install, devices []*v1.Device) []string {
 	known := strings.Split(in.GetFacts()["devices"], ",")
 	prefixFor := func(d *v1.Device) string {
@@ -241,9 +242,9 @@ func ggmlDevices(in *v1.Install, devices []*v1.Device) []string {
 		case "amd":
 			candidates = []string{"ROCm", "HIP", "Vulkan"}
 		case "apple":
-			candidates = []string{"Metal"}
+			candidates = []string{"MTL", "Metal"}
 		default:
-			candidates = []string{"Vulkan", "CUDA", "ROCm", "Metal"}
+			candidates = []string{"Vulkan", "CUDA", "ROCm", "MTL", "Metal"}
 		}
 		for _, c := range candidates {
 			for _, k := range known {

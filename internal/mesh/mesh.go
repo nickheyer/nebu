@@ -87,6 +87,10 @@ type Formations interface {
 	Merge(conductor string, list []*v1.Formation)
 	// Tells the conductor a member changed state, so its formations follow
 	MemberState(nodeID string, state v1.NodeState)
+	// Drops a forgotten member's formation copies
+	Forget(nodeID string)
+	// Stops every formation conducted here and drops every record
+	Clear(ctx context.Context)
 }
 
 // A member as this node tracks it
@@ -155,6 +159,8 @@ type Manager struct {
 	// Nodes heard by beacon, and admissions under way, both sides
 	nearby     map[string]*heard
 	admissions map[string]*v1.Admission
+	// Members forgotten lately, refused from gossip until they call directly
+	forgotten map[string]time.Time
 	// Why the node traffic listener is not bound, when the default address could not be taken
 	listenErr string
 	statusAt  *time.Timer
@@ -189,6 +195,7 @@ func (m *Manager) Open(ctx context.Context) error {
 	m.links = map[string]*v1.Link{}
 	m.nearby = map[string]*heard{}
 	m.admissions = map[string]*v1.Admission{}
+	m.forgotten = map[string]time.Time{}
 	m.h2 = map[string]http.RoundTripper{}
 	m.wake = make(chan struct{}, 1)
 	m.prober = &links.Prober{Log: m.Log}
@@ -214,13 +221,34 @@ func (m *Manager) Open(ctx context.Context) error {
 	}
 	if err == nil {
 		m.mesh = row
+		if err := m.loadMembers(ctx); err != nil {
+			return err
+		}
 	}
+	admissions, err := m.DB.ListAdmissions(ctx)
+	if err != nil {
+		return err
+	}
+	for _, a := range admissions {
+		m.admissions[a.GetId()] = a
+	}
+	if m.Guard != nil {
+		m.Guard.SetPeers(m)
+	}
+	if m.Perf != nil {
+		m.Perf.OnChange = m.bump
+	}
+	return nil
+}
+
+// Loads members, sessions, and links written last
+func (m *Manager) loadMembers(ctx context.Context) error {
 	recs, err := m.DB.ListMembers(ctx)
 	if err != nil {
 		return err
 	}
 	for _, rec := range recs {
-		if rec.GetId() == id.ID {
+		if rec.GetId() == m.identity.ID {
 			continue
 		}
 		m.members[rec.GetId()] = &member{rec: rec, sketch: rec.GetProfile() == nil}
@@ -238,25 +266,12 @@ func (m *Manager) Open(ctx context.Context) error {
 			m.accept[s.Accept] = s.PeerID
 		}
 	}
-	list, err := m.DB.ListLinks(ctx, id.ID)
+	list, err := m.DB.ListLinks(ctx, m.identity.ID)
 	if err != nil {
 		return err
 	}
 	for _, l := range list {
 		m.links[l.GetTo()] = l
-	}
-	admissions, err := m.DB.ListAdmissions(ctx)
-	if err != nil {
-		return err
-	}
-	for _, a := range admissions {
-		m.admissions[a.GetId()] = a
-	}
-	if m.Guard != nil {
-		m.Guard.SetPeers(m)
-	}
-	if m.Perf != nil {
-		m.Perf.OnChange = m.bump
 	}
 	return nil
 }

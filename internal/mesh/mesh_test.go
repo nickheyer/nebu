@@ -212,3 +212,91 @@ func TestHandshakeNeedsTheSecret(t *testing.T) {
 		t.Fatal("a forged token must not admit a node")
 	}
 }
+
+// Forget spreads, gossip does not undo it, reset clears all
+func TestForgetAndReset(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newNode(t, ctx)
+	b := newNode(t, ctx)
+	c := newNode(t, ctx)
+	if _, _, err := a.Init(ctx, "three", false); err != nil {
+		t.Fatal(err)
+	}
+	token, err := a.Token()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []*mesh.Manager{b, c} {
+		if _, _, _, err := n.Join(ctx, token); err != nil {
+			t.Fatal(err)
+		}
+	}
+	knows := func(m *mesh.Manager, id string) bool {
+		for _, n := range m.Nodes() {
+			if n.GetId() == id {
+				return true
+			}
+		}
+		return false
+	}
+	// A record with a profile came from the member itself, so every handshake is over.
+	met := func(m *mesh.Manager, id string) bool {
+		for _, n := range m.Nodes() {
+			if n.GetId() == id && n.GetProfile() != nil {
+				return true
+			}
+		}
+		return false
+	}
+	eventually(t, "every member has met every other", func() bool {
+		for _, pair := range [][2]*mesh.Manager{{a, b}, {a, c}, {b, a}, {b, c}, {c, a}, {c, b}} {
+			if !met(pair[0], pair[1].Self()) {
+				return false
+			}
+		}
+		return true
+	})
+	if _, err := a.Forget(ctx, a.Self(), true); err == nil {
+		t.Fatal("a node cannot forget itself")
+	}
+	b.Close()
+	rec, err := a.Forget(ctx, b.Self(), true)
+	if err != nil || rec.GetId() != b.Self() {
+		t.Fatalf("forget: %v %v", rec, err)
+	}
+	if knows(a, b.Self()) {
+		t.Fatal("a still lists b")
+	}
+	eventually(t, "c forgets b", func() bool { return !knows(c, b.Self()) })
+	// Gossip from a member that still names b does not bring it back.
+	if _, err := a.Sync(ctx, c.Self(), &v1.SyncRequest{Members: []*v1.Member{{Id: b.Self(), Name: "b", Address: "127.0.0.1:1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if knows(a, b.Self()) {
+		t.Fatal("gossip brought b back")
+	}
+	if members, err := a.DB.ListMembers(ctx); err != nil || len(members) != 1 {
+		t.Fatalf("members on record after the forget: %v %v", members, err)
+	}
+	left, err := a.Reset(ctx)
+	if err != nil || left == nil || a.Joined() {
+		t.Fatalf("reset: %v %v joined %v", left, err, a.Joined())
+	}
+	if n := a.Nodes(); len(n) != 1 || !n[0].GetSelf() {
+		t.Fatalf("nodes after the reset: %v", n)
+	}
+	if members, err := a.DB.ListMembers(ctx); err != nil || len(members) != 0 {
+		t.Fatalf("members on record after the reset: %v %v", members, err)
+	}
+	eventually(t, "c forgets a", func() bool { return !knows(c, a.Self()) })
+	if m, err := a.Reset(ctx); err != nil || m != nil {
+		t.Fatalf("a reset outside any mesh: %v %v", m, err)
+	}
+	if _, _, err := a.Init(ctx, "again", false); err != nil {
+		t.Fatal(err)
+	}
+	if n := a.Nodes(); len(n) != 1 || !n[0].GetSelf() {
+		t.Fatalf("a new mesh starts with this node alone: %v", n)
+	}
+}

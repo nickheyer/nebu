@@ -98,6 +98,19 @@ func (LlamaCpp) Rules() []Rule {
 			Match:   anyOf("error loading model", "failed to load model", "unable to load model"),
 		},
 		{
+			ID:      "unknown-device",
+			Summary: "this build has no device named ${device}",
+			Hint:    "compare it with the names llama-server --list-devices prints for this install, and reprobe the runtime if they differ from its recorded device fact",
+			Match: func(line string) (map[string]string, bool) {
+				for _, phrase := range []string{"unknown device: ", "invalid device: "} {
+					if device, ok := tailAfter(line, phrase); ok && device != "" {
+						return map[string]string{"device": device}, true
+					}
+				}
+				return nil, false
+			},
+		},
+		{
 			ID:      "bad-flag",
 			Summary: "llama.cpp rejected ${flag}",
 			Hint:    "${hint}",

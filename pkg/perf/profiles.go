@@ -112,3 +112,13 @@ func merged(custom []*v1.DeviceProfile) []*v1.DeviceProfile {
 	out := append([]*v1.DeviceProfile{}, custom...)
 	return append(out, builtin...)
 }
+
+// Whether a person's row names a pattern
+func shadowed(custom []*v1.DeviceProfile, pattern string) bool {
+	for _, c := range custom {
+		if strings.EqualFold(c.GetPattern(), pattern) {
+			return true
+		}
+	}
+	return false
+}

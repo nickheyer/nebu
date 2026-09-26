@@ -222,6 +222,23 @@ func TestDeleteProfile(t *testing.T) {
 	if err := table.DeleteProfile(ctx, "Test Card"); err == nil {
 		t.Fatal("removing twice fails")
 	}
+	if err := table.SetProfile(ctx, &v1.DeviceProfile{Pattern: "h100", StreamBytesPerSecond: 1e12, ComputeFlops: 1e15}); err != nil {
+		t.Fatal(err)
+	}
+	if len(table.Profiles()) != shipped {
+		t.Fatalf("%d profiles with a shipped pattern set over, want %d with the shipped row covered", len(table.Profiles()), shipped)
+	}
+	for _, p := range table.Profiles() {
+		if p.GetPattern() == "H100" && p.GetBuiltin() {
+			t.Fatal("the shipped H100 row shows beside the one set over it")
+		}
+	}
+	if err := table.DeleteProfile(ctx, "H100"); err != nil {
+		t.Fatal(err)
+	}
+	if len(table.Profiles()) != shipped {
+		t.Fatalf("%d profiles after removing the one set over a shipped row", len(table.Profiles()))
+	}
 	var builtin string
 	for _, p := range table.Profiles() {
 		if p.GetBuiltin() {

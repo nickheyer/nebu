@@ -20,7 +20,9 @@ func meshCommands() command {
 		{name: "init", summary: "make a mesh on this node", run: runMeshInit},
 		{name: "token", summary: "print a join token", run: runMeshToken},
 		{name: "join", summary: "join the mesh a token names", run: runMeshJoin},
-		{name: "leave", summary: "leave the mesh", run: runMeshLeave},
+		{name: "leave", summary: "leave the mesh, its formations stopped and forgotten", run: runMeshLeave},
+		{name: "forget", summary: "forget a member that is gone, on every reachable member", run: runMeshForget},
+		{name: "reset", summary: "leave any mesh and clear every trace of it, formations included", run: runMeshReset},
 		{name: "status", summary: "nodes, links, and formations", run: runMeshStatus},
 		{name: "nearby", summary: "nodes and meshes heard on the network, and admissions under way", run: runMeshNearby},
 		{name: "invite", summary: "invite a node heard on the network, or one at an address", run: runMeshInvite},
@@ -44,6 +46,7 @@ func formationCommands() command {
 		{name: "list", summary: "list formations", run: runFormationsList},
 		{name: "show", summary: "show a formation with its seats and the shapes rejected", run: runFormationsShow},
 		{name: "stop", summary: "stop a formation", run: runFormationsStop},
+		{name: "delete", summary: "remove a formation, stopping it first", run: runFormationsDelete},
 		{name: "logs", summary: "show or follow a seat's output", run: runFormationsLogs},
 	}}
 }
@@ -105,6 +108,39 @@ func runMeshLeave(ctx context.Context, e *env, args []string) error {
 	}
 	return e.print(resp.Msg, func(w io.Writer) {
 		fmt.Fprintf(w, "left %s %s\n", resp.Msg.GetMesh().GetName(), resp.Msg.GetMesh().GetId())
+	})
+}
+
+func runMeshForget(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("mesh forget")
+	here := fs.Bool("here", false, "forget the member on this node alone, the others not told")
+	positional, err := e.parse(fs, args, 1, 1, "mesh forget <node name|id> [--here]")
+	if err != nil {
+		return err
+	}
+	resp, err := e.cl.mesh.ForgetNode(ctx, connect.NewRequest(&v1.ForgetNodeRequest{NodeId: positional[0], Tell: !*here}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		fmt.Fprintf(w, "forgot %s %s\n", resp.Msg.GetNode().GetName(), resp.Msg.GetNode().GetId())
+	})
+}
+
+func runMeshReset(ctx context.Context, e *env, args []string) error {
+	if _, err := e.parse(e.flags("mesh reset"), args, 0, 0, "mesh reset"); err != nil {
+		return err
+	}
+	resp, err := e.cl.mesh.ResetMesh(ctx, connect.NewRequest(&v1.ResetMeshRequest{}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		if m := resp.Msg.GetMesh(); m != nil {
+			fmt.Fprintf(w, "left %s %s and cleared every trace of it\n", m.GetName(), m.GetId())
+			return
+		}
+		fmt.Fprintln(w, "cleared every trace of any mesh")
 	})
 }
 
@@ -651,6 +687,20 @@ func runFormationsStop(ctx context.Context, e *env, args []string) error {
 	}
 	return e.print(resp.Msg, func(w io.Writer) {
 		fmt.Fprintf(w, "%s %s\n", resp.Msg.GetFormation().GetName(), text.Enum(resp.Msg.GetFormation().GetState()))
+	})
+}
+
+func runFormationsDelete(ctx context.Context, e *env, args []string) error {
+	positional, err := e.parse(e.flags("formations delete"), args, 1, 1, "formations delete <name|id>")
+	if err != nil {
+		return err
+	}
+	resp, err := e.cl.mesh.DeleteFormation(ctx, connect.NewRequest(&v1.DeleteFormationRequest{Id: positional[0]}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		fmt.Fprintf(w, "deleted %s\n", resp.Msg.GetFormation().GetName())
 	})
 }
 
