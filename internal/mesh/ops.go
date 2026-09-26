@@ -186,14 +186,14 @@ func (m *Manager) Join(ctx context.Context, token string) (*v1.Mesh, *v1.Node, [
 	}
 	m.Log.Info("mesh joined", "mesh", row.ID, "name", row.Name, "through", t.Address, "tls", row.TLS)
 	m.settleAfterJoin(row.ID)
-	m.startLoops()
+	loops := m.startLoops()
 	m.bump()
 	m.publishStatus()
 	go func() {
 		select {
-		case <-m.base.Done():
+		case <-loops.Done():
 		case <-time.After(SyncInterval):
-			if _, err := m.Probe(m.base, "", false); err != nil {
+			if _, err := m.Probe(loops, "", false); err != nil && loops.Err() == nil {
 				m.Log.Warn("link probe after join failed", "err", err)
 			}
 		}
@@ -237,9 +237,9 @@ func (m *Manager) Leave(ctx context.Context) (*v1.Mesh, error) {
 		}(id)
 	}
 	wg.Wait()
+	m.stopLoops()
 	m.mu.Lock()
 	m.mesh = nil
-	m.running = false
 	m.mu.Unlock()
 	if err := m.clearState(ctx); err != nil {
 		return nil, err
@@ -309,7 +309,6 @@ func (m *Manager) Forget(ctx context.Context, ref string, tell bool) (*v1.Node, 
 	}
 	id := rec.GetId()
 	m.mu.Lock()
-	m.forgotten[id] = time.Now()
 	ids := make([]string, 0, len(m.members))
 	for other := range m.members {
 		if other != id {

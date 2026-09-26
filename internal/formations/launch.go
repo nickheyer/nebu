@@ -1233,7 +1233,11 @@ func headStreamed(lines []string, address string) (uint64, bool) {
 	found := false
 	for _, line := range lines {
 		i := strings.Index(line, phrase)
-		if i < 0 || !strings.Contains(line[:i], "RPC["+address+"]") {
+		if i < 0 {
+			continue
+		}
+		fields := strings.Fields(line[:i])
+		if len(fields) == 0 || !rpcBufferAt(fields[len(fields)-1], address) {
 			continue
 		}
 		n, ok := parseBytes(line[i+len(phrase):])
@@ -1244,6 +1248,26 @@ func headStreamed(lines []string, address string) (uint64, bool) {
 		found = true
 	}
 	return total, found
+}
+
+// Whether a ggml buffer name is an rpc buffer at an address. ggml names them RPC<n>[<address>],
+// n the device's index on that server, and builds before servers exposed several devices left
+// the index out
+func rpcBufferAt(name, address string) bool {
+	index, ok := strings.CutPrefix(name, "RPC")
+	if !ok {
+		return false
+	}
+	index, ok = strings.CutSuffix(index, "["+address+"]")
+	if !ok {
+		return false
+	}
+	for _, r := range index {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // A byte count as a runtime logs it: a number and a unit

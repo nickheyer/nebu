@@ -97,6 +97,10 @@ func TestLlamaCppChainHead(t *testing.T) {
 	if cmd.Params["rpc"] != "10.0.0.2:50052,10.0.0.3:50052" || cmd.Params["tensor_split"] != "10737418240,21474836480,32212254720,42949672960" || cmd.Params["n_gpu_layers"] != "81" || cmd.Params["device"] != "RPC0,RPC1,RPC2,CUDA0" {
 		t.Fatalf("params %v", cmd.Params)
 	}
+	// llama-server resolves --device as it parses it, so the rpc list comes first.
+	if rpc, dev := strings.Index(line, "--rpc "), strings.Index(line, "--device "); rpc < 0 || dev < 0 || rpc > dev {
+		t.Fatalf("--rpc at %d, --device at %d in %s", rpc, dev, line)
+	}
 	// The head's own devices follow the plan's order, not the profile's.
 	in.Devices = []*v1.Device{gpu("GPU-h1", "1"), gpu("GPU-h0", "0")}
 	seat.Devices = []string{"a/GPU-a0", "a/GPU-a1", "b/GPU-b0", "GPU-h0", "GPU-h1"}

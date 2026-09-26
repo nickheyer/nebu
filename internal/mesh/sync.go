@@ -194,12 +194,14 @@ func (m *Manager) mergeRecord(rec *v1.Node, direct bool) {
 	rec = proto.Clone(rec).(*v1.Node)
 	rec.Self = false
 	m.mu.Lock()
-	// A forgotten member returns by handshake alone
-	if m.forgottenLocked(rec.GetId()) && m.sessions[rec.GetId()] == nil {
+	mb, known := m.members[rec.GetId()]
+
+	// NOTE: Some race conditions occur here because peers re-ping or retry to join after host intended
+	//		 to forget
+	if m.mesh == nil || (!known && m.sessions[rec.GetId()] == nil) {
 		m.mu.Unlock()
 		return
 	}
-	mb, known := m.members[rec.GetId()]
 	action := v1.EventAction_EVENT_ACTION_UPDATED
 	stateBefore := v1.NodeState_NODE_STATE_UNSPECIFIED
 	if known {
@@ -259,6 +261,10 @@ func (m *Manager) mergeRecord(rec *v1.Node, direct bool) {
 func (m *Manager) mergeMembers(list []*v1.Member) {
 	var created []*v1.Node
 	m.mu.Lock()
+	if m.mesh == nil {
+		m.mu.Unlock()
+		return
+	}
 	for _, mem := range list {
 		if mem.GetId() == "" || mem.GetId() == m.identity.ID || m.forgottenLocked(mem.GetId()) {
 			continue
@@ -359,6 +365,7 @@ func (m *Manager) Bye(peer string) {
 // Drops a member with its links and session
 func (m *Manager) forget(id string) {
 	m.mu.Lock()
+	m.forgotten[id] = time.Now()
 	mb, ok := m.members[id]
 	delete(m.members, id)
 	if s := m.sessions[id]; s != nil {

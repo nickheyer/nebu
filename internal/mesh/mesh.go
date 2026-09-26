@@ -176,7 +176,9 @@ type Manager struct {
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 	wake       chan struct{}
-	running    bool
+	loopCtx    context.Context
+	loopCancel context.CancelFunc
+	loops      sync.WaitGroup
 }
 
 // Loads the identity, making one on first start, and the mesh with its members, sessions, and links
@@ -404,24 +406,41 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Starts the loops a member runs, once
-func (m *Manager) startLoops() {
+// Starts the loops a member runs, once per membership, and returns the context they run under
+func (m *Manager) startLoops() context.Context {
 	m.mu.Lock()
-	if m.running {
+	if m.loopCancel != nil {
+		ctx := m.loopCtx
 		m.mu.Unlock()
-		return
+		return ctx
 	}
-	m.running = true
+	ctx, cancel := context.WithCancel(m.base)
+	m.loopCtx, m.loopCancel = ctx, cancel
 	m.mu.Unlock()
 	m.wg.Add(2)
+	m.loops.Add(2)
 	go func() {
 		defer m.wg.Done()
-		m.syncLoop(m.base)
+		defer m.loops.Done()
+		m.syncLoop(ctx)
 	}()
 	go func() {
 		defer m.wg.Done()
-		m.probeLoop(m.base)
+		defer m.loops.Done()
+		m.probeLoop(ctx)
 	}()
+	return ctx
+}
+
+func (m *Manager) stopLoops() {
+	m.mu.Lock()
+	cancel := m.loopCancel
+	m.loopCtx, m.loopCancel = nil, nil
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	m.loops.Wait()
 }
 
 // Stops loops and the listener

@@ -155,6 +155,21 @@ func (m *Manager) Client(ctx context.Context, nodeID string) (*Client, error) {
 		if resp.GetNodeId() != nodeID {
 			return nil, fmt.Errorf("%w: %s answered as %s, not %s", ErrMesh, address, resp.GetNodeId(), nodeID)
 		}
+		// Forget member until handshake happens again
+		m.mu.Lock()
+		_, still := m.members[nodeID]
+		dropped := false
+		if s := m.sessions[nodeID]; !still && s != nil && s.accept == "" {
+			delete(m.sessions, nodeID)
+			dropped = true
+		}
+		m.mu.Unlock()
+		if !still {
+			if dropped {
+				m.DB.DeleteSession(context.Background(), nodeID)
+			}
+			return nil, fmt.Errorf("%w %q", ErrUnknownNode, nodeID)
+		}
 		m.absorb(resp.GetNode(), resp.GetMembers(), true)
 		token = resp.GetSessionToken()
 	}

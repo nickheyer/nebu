@@ -279,6 +279,8 @@ func TestForgetAndReset(t *testing.T) {
 	if members, err := a.DB.ListMembers(ctx); err != nil || len(members) != 1 {
 		t.Fatalf("members on record after the forget: %v %v", members, err)
 	}
+	// Late attempt to join after a forget event occurs, should be ignored
+	late := a.Record()
 	left, err := a.Reset(ctx)
 	if err != nil || left == nil || a.Joined() {
 		t.Fatalf("reset: %v %v joined %v", left, err, a.Joined())
@@ -290,6 +292,13 @@ func TestForgetAndReset(t *testing.T) {
 		t.Fatalf("members on record after the reset: %v %v", members, err)
 	}
 	eventually(t, "c forgets a", func() bool { return !knows(c, a.Self()) })
+	// Refuse late sync
+	if _, err := c.Sync(ctx, a.Self(), &v1.SyncRequest{Node: late}); err == nil {
+		t.Fatal("a sync from a departed member must be refused")
+	}
+	if knows(c, a.Self()) {
+		t.Fatal("a late sync brought a back")
+	}
 	if m, err := a.Reset(ctx); err != nil || m != nil {
 		t.Fatalf("a reset outside any mesh: %v %v", m, err)
 	}

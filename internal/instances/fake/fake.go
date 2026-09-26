@@ -497,7 +497,7 @@ func (p *Proc) stream(peer string) {
 		p.write("stream to " + peer + " failed: " + err.Error())
 		return
 	}
-	p.write(fmt.Sprintf("load_tensors: RPC[%s] model buffer size = %.2f MiB", peer, float64(StreamBytes)/(1<<20)))
+	p.write(fmt.Sprintf("load_tensors: RPC0[%s] model buffer size = %.2f MiB", peer, float64(StreamBytes)/(1<<20)))
 }
 
 func (p *Proc) Pid() int              { return p.cmd.Process.Pid }

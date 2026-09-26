@@ -238,10 +238,11 @@ func deviceByID(devices []*v1.Device, id string) *v1.Device {
 	return nil
 }
 
-// The chain head: the solo command with every stage's devices as RPC devices before its own, in
-// the plan's order, the plan's bytes per device as the tensor split, every layer and the output
-// offloaded across them, and the runtime's own fitting off. The plan's device list names each
-// stage device as <node id>/<device id> and the head's own by their ids
+// The chain head: the solo command with the rpc list ahead of every other flag, every stage's
+// devices as RPC devices before its own, in the plan's order, the plan's bytes per device as the
+// tensor split, every layer and the output offloaded across them, and the runtime's own fitting
+// off. The plan's device list names each stage device as <node id>/<device id> and the head's own
+// by their ids
 func (r LlamaCpp) chainHead(in Launch, stages []*v1.SeatPeer, facts map[string]string) (*Command, error) {
 	seat := in.Seat
 	names, err := rpcDeviceNames(stages)
@@ -289,7 +290,10 @@ func (r LlamaCpp) chainHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 	if err != nil {
 		return nil, err
 	}
-	cmd.Args = append(cmd.Args, facts[factRPCFlag], strings.Join(addresses, ","), "--tensor-split", tensorSplit(seat.GetDeviceBytes()))
+	// llama-server resolves each --device name as it parses that flag, and the rpc devices exist
+	// only once --rpc has connected to the stages, so the rpc list leads the command line
+	cmd.Args = append([]string{facts[factRPCFlag], strings.Join(addresses, ",")}, cmd.Args...)
+	cmd.Args = append(cmd.Args, "--tensor-split", tensorSplit(seat.GetDeviceBytes()))
 	if has(in.InstallRecord, factFitFlag) {
 		cmd.Args = append(cmd.Args, facts[factFitFlag], "off")
 	}
