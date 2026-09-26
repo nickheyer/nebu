@@ -144,7 +144,7 @@ func nodeFor(b box, runtime string, shapes []v1.Shape) *mesh.Node {
 		profile.Pools = append(profile.Pools, &v1.MemoryPool{Id: b.id + "-gpu", Kind: kind, DeviceId: b.id + "-gpu", TotalBytes: b.device, FreeBytes: b.device})
 	}
 	rec := &v1.Node{Id: b.id, Name: b.name, Profile: profile, Installs: []*v1.Install{{Id: b.id + "-" + runtime, RuntimeId: runtime, Version: b.version}}}
-	return mesh.NodeOf(rec, runtime, map[string][]v1.Shape{b.id + "-" + runtime: shapes}, numbersOf(b))
+	return mesh.NodeOf(rec, runtime, "", map[string][]v1.Shape{b.id + "-" + runtime: shapes}, numbersOf(b))
 }
 
 func node(b box, shapes []v1.Shape) *mesh.Node { return nodeFor(b, "llamacpp", shapes) }
@@ -284,8 +284,8 @@ func TestWalkthroughFabricPair(t *testing.T) {
 
 // Walkthrough two: a desktop with a 24 GiB device, a 128 GiB unified memory box, and a laptop with
 // host memory alone on a 2.5 Gb/s switch. The 70B model chains over the two devices at nine tokens
-// per second with a prompt near nine seconds, the laptop dropped with the reason, lockstep and relay
-// rejected with theirs
+// per second with a prompt near nine seconds, the chains through the laptop's host memory priced
+// beneath it, lockstep priced on the lan link, relay rejected with its reason
 func TestWalkthroughLanChain(t *testing.T) {
 	desktop := node(box{id: "desk", name: "desktop", device: 24 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "b1"}, allShapes)
 	unified := node(box{id: "box", name: "box", device: 128 * gib, unified: true, stream: 256 * gbps, compute: 20e12, vendor: "apple", version: "b1"}, allShapes)
@@ -324,22 +324,30 @@ func TestWalkthroughLanChain(t *testing.T) {
 			t.Fatalf("the head holds the last layers: %v", s)
 		}
 	}
-	dropped := false
+	// The laptop's host memory seats layers too: every chain through it is priced and scores below.
+	listed := false
 	for _, c := range all(plan, v1.Shape_SHAPE_CHAIN) {
-		if len(c.GetNodeIds()) == 1 && c.GetNodeIds()[0] == "lap" && strings.Contains(c.GetReason(), "no device pool") {
-			dropped = true
+		for _, id := range c.GetNodeIds() {
+			if id != "lap" {
+				continue
+			}
+			listed = true
+			if c.GetVerdict() == v1.FitVerdict_FIT_VERDICT_FITS && c.GetScore() <= best.GetScore() {
+				t.Fatalf("a chain through the laptop scores below the plan: %v", c)
+			}
 		}
 	}
-	if !dropped {
-		t.Fatal("the laptop is listed as a rejected chain seat with its reason")
+	if !listed {
+		t.Fatal("the chains through the laptop are in the table")
 	}
-	// Lockstep is a rank engine's shape: on the same switch vLLM rejects it for the link.
-	vdesk := nodeFor(box{id: "desk", name: "desktop", device: 24 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "0.11"}, "vllm", rankShapes)
+	// Lockstep is a rank engine's shape: on the same switch vLLM prices it and names the link. Each
+	// rank holds half the model with half the cache, 23.5 GiB, so the desktop here has 32 GiB.
+	vdesk := nodeFor(box{id: "desk", name: "desktop", device: 32 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "0.11"}, "vllm", rankShapes)
 	vbox := nodeFor(box{id: "box", name: "box", device: 128 * gib, unified: true, stream: 256 * gbps, compute: 20e12, vendor: "nvidia", version: "0.11"}, "vllm", rankShapes)
 	vplan := mustPlan(t, vllmRequest(dense70B()), mesh.New([]*mesh.Node{vdesk, vbox}, lan("desk", "box", 180, 2.3), "desk"))
 	lock := find(vplan, v1.Shape_SHAPE_LOCKSTEP)
-	if lock == nil || lock.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || !strings.Contains(lock.GetReason(), "link class lan, 180 µs") || !strings.Contains(lock.GetReason(), "needs fabric") {
-		t.Fatalf("lockstep is rejected for the lan link: %v", lock)
+	if lock == nil || lock.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || !strings.Contains(lock.GetReason(), "link class lan, 180 µs") || !strings.Contains(lock.GetReason(), "every reduction pays it") {
+		t.Fatalf("lockstep is priced on the lan link and says so: %v", lock)
 	}
 	relay := find(plan, v1.Shape_SHAPE_RELAY)
 	if relay == nil || relay.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || !strings.Contains(relay.GetReason(), "does not fit the model alone") {
@@ -383,8 +391,8 @@ func TestWalkthroughDraft(t *testing.T) {
 	if plan.GetDraftTokens() != 5 || math.Abs(plan.GetAcceptance()-0.7) > 1e-9 {
 		t.Fatalf("draft tokens %d acceptance %.2f", plan.GetDraftTokens(), plan.GetAcceptance())
 	}
-	if plan.GetCandidates()[0].GetShape() != v1.Shape_SHAPE_DRAFT || plan.GetCandidates()[1].GetShape() != v1.Shape_SHAPE_SOLO {
-		t.Fatalf("the table shows solo beneath the draft: %v", plan.GetCandidates()[:2])
+	if plan.GetCandidates()[0].GetShape() != v1.Shape_SHAPE_DRAFT || solo.GetScore() <= plan.GetCandidates()[0].GetScore() {
+		t.Fatalf("the table shows solo beneath the draft: %v", plan.GetCandidates())
 	}
 	// Every draft token accepted yields gamma plus one tokens per round, a finite number.
 	sure := node(box{id: "work", name: "workstation", device: 48 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "b1", acceptance: 1}, allShapes)
@@ -683,28 +691,29 @@ func TestChainWithLocalDraft(t *testing.T) {
 	}
 }
 
-// Every seat of a formation runs the same install version: chain, relay, and draft candidates
-// across mismatched installs are rejected with the reason, and a ring chain's ranks match in
-// vendor and device count too
-func TestMismatchedInstallRejects(t *testing.T) {
+// Seats on different install versions still form: chain, relay, and draft candidates across
+// mismatched installs are priced and the plan notes both builds, and ranks that differ in vendor
+// or version form too with the difference noted
+func TestMismatchedInstallRuns(t *testing.T) {
 	draft := model(shape{layers: 28, layerBytes: 48 * mib, embedding: 1536, kvHeads: 2, density: 1})
+	notes := func(plan *v1.FormationPlan) bool {
+		for _, line := range plan.GetSources() {
+			if strings.Contains(line, "b1") && strings.Contains(line, "b2") && strings.Contains(line, "different builds") {
+				return true
+			}
+		}
+		return false
+	}
 	// Chain: a pair neither of which fits the model alone.
 	desktop := node(box{id: "desk", name: "desktop", device: 24 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "b1"}, allShapes)
 	unified := node(box{id: "box", name: "box", device: 128 * gib, unified: true, stream: 256 * gbps, compute: 20e12, vendor: "apple", version: "b2"}, allShapes)
 	pair := mesh.New([]*mesh.Node{desktop, unified}, lan("desk", "box", 180, 2.3), "desk")
 	plan := mustPlan(t, request(dense70B()), pair)
-	chains := all(plan, v1.Shape_SHAPE_CHAIN)
-	if len(chains) == 0 {
-		t.Fatal("chain is in the table")
+	if c := find(plan, v1.Shape_SHAPE_CHAIN); c == nil || c.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
+		t.Fatalf("chain across b1 and b2 fits: %v", c)
 	}
-	for _, c := range chains {
-		if c.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || !strings.Contains(c.GetReason(), "b1") || !strings.Contains(c.GetReason(), "b2") || !strings.Contains(c.GetReason(), "same install version") {
-			t.Fatalf("chain across b1 and b2 is rejected naming both: %v", c)
-		}
-	}
-	unified.Install.Version = "b1"
-	if c := find(mustPlan(t, request(dense70B()), pair), v1.Shape_SHAPE_CHAIN); c == nil || c.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
-		t.Fatalf("matching versions chain: %v", c)
+	if !notes(plan) {
+		t.Fatalf("the plan names both builds: %v", plan.GetSources())
 	}
 	// Relay and draft: a pair that fits the model alone.
 	a := node(box{id: "a", name: "a", device: 48 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "b1"}, allShapes)
@@ -714,40 +723,42 @@ func TestMismatchedInstallRejects(t *testing.T) {
 	req.Draft, req.DraftFamily = draft, archs.Default{}
 	plan = mustPlan(t, req, m)
 	for _, shape := range []v1.Shape{v1.Shape_SHAPE_RELAY, v1.Shape_SHAPE_DRAFT} {
-		cs := all(plan, shape)
-		if len(cs) == 0 {
-			t.Fatalf("%v is in the table", shape)
-		}
-		for _, c := range cs {
-			if c.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || !strings.Contains(c.GetReason(), "b1") || !strings.Contains(c.GetReason(), "b2") || !strings.Contains(c.GetReason(), "same install version") {
-				t.Fatalf("%v across b1 and b2 is rejected naming both: %v", shape, c)
-			}
-		}
-	}
-	if plan.GetShape() != v1.Shape_SHAPE_SOLO {
-		t.Fatalf("solo remains: %v", plan.GetShape())
-	}
-	b.Install.Version = "b1"
-	plan = mustPlan(t, req, m)
-	for _, shape := range []v1.Shape{v1.Shape_SHAPE_RELAY, v1.Shape_SHAPE_DRAFT} {
 		fits := false
 		for _, c := range all(plan, shape) {
 			if c.GetVerdict() == v1.FitVerdict_FIT_VERDICT_FITS {
 				fits = true
 			}
+			if strings.Contains(c.GetReason(), "install version") {
+				t.Fatalf("%v is not rejected for its install version: %v", shape, c)
+			}
 		}
 		if !fits {
-			t.Fatalf("%v fits across matching installs: %v", shape, all(plan, shape))
+			t.Fatalf("%v fits across b1 and b2: %v", shape, all(plan, shape))
 		}
 	}
-	// A ring chain's ranks must match in vendor as well.
+	if !notes(plan) {
+		t.Fatalf("the plan names both builds: %v", plan.GetSources())
+	}
+	// Ranks of different vendors form, the plan noting the difference.
 	va := nodeFor(box{id: "a", name: "a", device: 24 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "0.11"}, "vllm", rankShapes)
 	vb := nodeFor(box{id: "b", name: "b", device: 48 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "amd", version: "0.11"}, "vllm", rankShapes)
 	vreq := vllmRequest(dense70B())
 	vreq.Shape = v1.Shape_SHAPE_CHAIN
 	vplan := mustPlan(t, vreq, mesh.New([]*mesh.Node{va, vb}, lan("a", "b", 200, 2.5), "a"))
-	if c := find(vplan, v1.Shape_SHAPE_CHAIN); c == nil || c.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || !strings.Contains(c.GetReason(), "ranks must match") {
-		t.Fatalf("mixed vendors cannot be ranks: %v", c)
+	if c := find(vplan, v1.Shape_SHAPE_CHAIN); c == nil || c.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || strings.Contains(c.GetReason(), "ranks must match") {
+		t.Fatalf("mixed vendors form ranks: %v", c)
+	}
+	if !strings.Contains(strings.Join(vplan.GetSources(), "\n"), "a has nvidia devices and b has amd, the ranks differ in vendor") {
+		t.Fatalf("the plan notes the vendor difference: %v", vplan.GetSources())
+	}
+	// Ranks on different versions form too.
+	vb.Vendor, vb.Install.Version = "nvidia", "0.12"
+	vplan = mustPlan(t, vreq, mesh.New([]*mesh.Node{va, vb}, lan("a", "b", 200, 2.5), "a"))
+	if c := find(vplan, v1.Shape_SHAPE_CHAIN); c == nil || c.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || strings.Contains(c.GetReason(), "ranks must match") {
+		t.Fatalf("ranks on 0.11 and 0.12 form: %v", c)
+	}
+	if !strings.Contains(strings.Join(vplan.GetSources(), "\n"), "a runs vllm 0.11 and b runs 0.12, the seats run different builds") {
+		t.Fatalf("the plan notes the build difference: %v", vplan.GetSources())
 	}
 }
 
@@ -774,8 +785,9 @@ func TestSourcesNameEveryNumber(t *testing.T) {
 	}
 }
 
-// Every assignment a shape cannot make is in the table with its reason: nodes the caller left out,
-// a node without a device pool, unmeasured links, and a seat the faster seats leave nothing for
+// Every assignment a shape cannot make is in the table with its reason: nodes the caller left out
+// and a node not one layer fits on. An unmeasured link is priced at a slow guess until a probe
+// runs, and the plan's sources say so
 func TestRejectionsAreListed(t *testing.T) {
 	desktop := node(box{id: "desk", name: "desktop", device: 24 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "b1"}, allShapes)
 	unified := node(box{id: "box", name: "box", device: 128 * gib, unified: true, stream: 256 * gbps, compute: 20e12, vendor: "apple", version: "b1"}, allShapes)
@@ -790,36 +802,43 @@ func TestRejectionsAreListed(t *testing.T) {
 	for _, c := range plan.GetCandidates() {
 		reasons[c.GetReason()] = true
 	}
-	for _, want := range []string{"gone is unreachable since 2026-09-25 10:00:00", "link desktop to tiny unmeasured", "nano holds no layer: not one fits on it with its cache at 8192 context"} {
+	for _, want := range []string{"gone is unreachable since 2026-09-25 10:00:00", "nano holds no layer: not one fits on it with its cache at 8192 context"} {
 		if !reasons[want] {
 			t.Fatalf("the table lists %q:\n%v", want, plan.GetCandidates())
 		}
 	}
-	// A chain the caller asks for across an unmeasured link is rejected, not priced with a guess.
+	const guess = "unmeasured, priced at 10 ms round trip and 0.1 Gb/s until a probe runs"
+	if !strings.Contains(strings.Join(plan.GetSources(), "\n"), "link desktop to tiny "+guess) {
+		t.Fatalf("the sources name the unmeasured link and its guess: %v", plan.GetSources())
+	}
+	// A chain the caller asks for across an unmeasured link is priced with the guess.
 	req.Excluded = nil
 	req.Shape = v1.Shape_SHAPE_CHAIN
 	req.Span = []string{"desk", "tiny"}
 	plan = mustPlan(t, req, m)
-	if plan.GetVerdict() == v1.FitVerdict_FIT_VERDICT_FITS {
-		t.Fatalf("no link between desktop and tiny: %s", plan.GetDetail())
+	if !strings.Contains(strings.Join(plan.GetSources(), "\n"), guess) {
+		t.Fatalf("the sources name the unmeasured link and its guess: %v", plan.GetSources())
 	}
-	found := false
-	for _, c := range plan.GetCandidates() {
-		if strings.Contains(c.GetReason(), "unmeasured") {
-			found = true
+	priced := false
+	for _, c := range all(plan, v1.Shape_SHAPE_CHAIN) {
+		if c.GetDecodeSecondsPerToken() > 0 {
+			priced = true
 		}
 	}
-	if !found {
-		t.Fatalf("the rejection names the unmeasured link: %v", plan.GetCandidates())
+	if !priced {
+		t.Fatalf("the chain across the unmeasured link is priced: %v", plan.GetCandidates())
 	}
-	// A lockstep across an unmeasured link is rejected the same way.
+	// A lockstep with no link measured is priced the same way, its reason naming the guess.
 	va := nodeFor(box{id: "a", name: "a", device: 48 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "0.11"}, "vllm", rankShapes)
 	vb := nodeFor(box{id: "b", name: "b", device: 48 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "0.11"}, "vllm", rankShapes)
 	vreq := vllmRequest(dense70B())
 	vreq.Shape = v1.Shape_SHAPE_LOCKSTEP
 	vplan := mustPlan(t, vreq, mesh.New([]*mesh.Node{va, vb}, nil, "a"))
-	if c := find(vplan, v1.Shape_SHAPE_LOCKSTEP); c == nil || c.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || c.GetReason() != "link a to b unmeasured" || c.GetDecodeSecondsPerToken() != 0 {
-		t.Fatalf("lockstep across an unmeasured link is rejected without a number: %v", c)
+	if c := find(vplan, v1.Shape_SHAPE_LOCKSTEP); c == nil || c.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || !strings.Contains(c.GetReason(), "link a to b unmeasured, priced at 10 ms round trip") || c.GetDecodeSecondsPerToken() <= 0 {
+		t.Fatalf("lockstep across an unmeasured link is priced with the guess: %v", c)
+	}
+	if !strings.Contains(strings.Join(vplan.GetSources(), "\n"), "link a to b "+guess) {
+		t.Fatalf("the sources name the unmeasured link and its guess: %v", vplan.GetSources())
 	}
 }
 

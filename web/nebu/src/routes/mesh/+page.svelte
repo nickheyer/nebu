@@ -61,6 +61,21 @@
   const nodes = $derived(meshNodes());
   const formations = $derived(orderedFormations());
   const links = $derived(nodes.flatMap((n) => n.links));
+  // Which mesh devices each profile row prices: the first pattern a device's name holds, else its kind row
+  const profileUse = $derived.by(() => {
+    const use = new Map<string, string[]>();
+    for (const n of nodes) {
+      for (const d of n.profile?.devices ?? []) {
+        const name = d.name.toLowerCase();
+        const kind = 'kind:' + DeviceKind[d.kind].toLowerCase();
+        const row = profiles.find((p) => !p.pattern.startsWith('kind:') && name.includes(p.pattern.toLowerCase())) ?? profiles.find((p) => p.pattern === kind);
+        if (!row) continue;
+        use.set(row.pattern, [...(use.get(row.pattern) ?? []), `${n.name || n.id.slice(0, 8)} ${d.name}`]);
+      }
+    }
+    return use;
+  });
+  const profileRows = $derived([...profiles].sort((a, b) => Number(profileUse.has(b.pattern)) - Number(profileUse.has(a.pattern))));
   const others = $derived(nodes.filter((n) => !n.self));
   const nearby = $derived(status?.nodes ?? []);
   const admissions = $derived(status?.admissions ?? []);
@@ -176,7 +191,7 @@
   async function probe() {
     probing = true;
     try {
-      const r = await api.mesh.probe({});
+      const r = await api.mesh.probe({ force: true });
       ok(`Measured ${plural(r.links.length, 'link')}`);
     } catch (err) {
       fail(err, 'Could not measure links');
@@ -620,7 +635,8 @@
                         <div class="flex flex-col gap-0.5" title={l.detail}>
                           <State tone={classTone(l.class)} label={classLabel(l.class)} />
                           <span class="whitespace-nowrap text-xs tabular-nums text-fg-muted">{micros(l.rttUs)} · {gbits(l.streamBytesPerSecond)}</span>
-                          <span class="text-xs text-fg-muted">{l.interface}{#if l.bandwidthHeld} · saved bandwidth{/if}</span>
+                          <span class="text-xs text-fg-muted">{l.interface}{#if l.bandwidthHeld} · bandwidth from the last run{/if}</span>
+                          {#if l.detail}<span class="max-w-xs text-xs leading-5 text-fg-muted wrap-anywhere">{l.detail}</span>{/if}
                           <Disclosure label="Details">
                             <Kv items={[
                               ['Round trip', micros(l.rttUs)],
@@ -687,14 +703,15 @@
       {#snippet actions()}
         <Button size="sm" icon={Plus} onclick={() => (profileOpen = true)}>Add profile</Button>
       {/snippet}
-      <p class="text-sm text-fg-muted">Starting estimates for each device. Measurements from model runs improve them over time.</p>
+      <p class="text-sm text-fg-muted">Bandwidth and compute the planner prices a device with until requests through it teach real numbers. Rows in use by this mesh come first.</p>
       <div class="tbl-wrap">
         <table class="tbl dense">
-          <thead><tr><th>Device pattern</th><th class="num">Memory bandwidth</th><th class="num">Compute</th><th>Source</th><th class="actions"></th></tr></thead>
+          <thead><tr><th>Device pattern</th><th>Prices</th><th class="num">Memory bandwidth</th><th class="num">Compute</th><th>Source</th><th class="actions"></th></tr></thead>
           <tbody>
-            {#each profiles as p (p.pattern)}
-              <tr>
+            {#each profileRows as p (p.pattern)}
+              <tr class={profileUse.has(p.pattern) ? 'row-active' : ''}>
                 <td class="font-mono text-xs text-fg">{p.pattern}</td>
+                <td class="text-xs text-fg-muted">{#each profileUse.get(p.pattern) ?? [] as d (d)}<div>{d}</div>{:else}-{/each}</td>
                 <td class="num">{gbytes(p.streamBytesPerSecond)}</td>
                 <td class="num">{tflops(p.computeFlops)}</td>
                 <td class="text-fg-muted">{p.builtin ? 'Default' : 'Custom'}{#if !p.builtin && p.updatedAt}<span class="ml-2 text-xs" title={when(p.updatedAt)}>{ago(p.updatedAt, clock.now)}</span>{/if}</td>

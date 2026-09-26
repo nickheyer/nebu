@@ -138,8 +138,22 @@ func hostOf(address string) string {
 	return strings.Trim(address, "[]")
 }
 
-// A free port on the given host
-func freePortOn(host string) (int, error) {
+// A free port on the given host: the lowest free one in the mesh port range when one is set,
+// any free one otherwise
+func (m *Manager) freePortOn(host string) (int, error) {
+	if m.MeshPorts != nil {
+		if from, to, ok := m.MeshPorts(); ok {
+			for port := from; port <= to; port++ {
+				ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+				if err != nil {
+					continue
+				}
+				ln.Close()
+				return port, nil
+			}
+			return 0, fmt.Errorf("no free port on %s in the mesh port range %d-%d", host, from, to)
+		}
+	}
 	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
 	if err != nil {
 		return 0, err
@@ -182,7 +196,7 @@ func (m *Manager) launchSeat(ctx context.Context, p *prepared) (*v1.Instance, *v
 			return nil, nil, fmt.Errorf("%w: an exposed seat needs the mesh address to bind", runtimes.ErrParam)
 		}
 		host = hostOf(seat.GetAddress())
-		if localPort, err = freePortOn(host); err != nil {
+		if localPort, err = m.freePortOn(host); err != nil {
 			return nil, nil, err
 		}
 		seat.Port = uint32(localPort)
@@ -198,7 +212,11 @@ func (m *Manager) launchSeat(ctx context.Context, p *prepared) (*v1.Instance, *v
 		if seat.GetAddress() == "" {
 			return nil, nil, fmt.Errorf("%w: a seat other seats connect to needs the mesh address for its guard listener", runtimes.ErrParam)
 		}
-		guard, err = newForwarder(net.JoinHostPort(hostOf(seat.GetAddress()), "0"), net.JoinHostPort(bindHost, strconv.Itoa(localPort)), seat.GetAdmit(), p.role.Single, name, m.Log)
+		guardPort, err := m.freePortOn(hostOf(seat.GetAddress()))
+		if err != nil {
+			return nil, nil, err
+		}
+		guard, err = newForwarder(net.JoinHostPort(hostOf(seat.GetAddress()), strconv.Itoa(guardPort)), net.JoinHostPort(bindHost, strconv.Itoa(localPort)), seat.GetAdmit(), p.role.Single, name, m.Log)
 		if err != nil {
 			return nil, nil, err
 		}

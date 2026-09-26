@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -597,6 +598,37 @@ func (m *Manager) Remove(ctx context.Context, id string) (*v1.Install, error) {
 		}
 	}
 	return in, nil
+}
+
+// Reads every install's facts again and saves the ones that changed, keeping the facts a build
+// recorded that no probe owns
+func (m *Manager) Refresh(ctx context.Context) {
+	list, err := m.List(ctx, "")
+	if err != nil {
+		return
+	}
+	for _, in := range list {
+		rt, err := m.Runtimes.Get(in.GetRuntimeId())
+		if err != nil {
+			continue
+		}
+		before := in.GetFacts()
+		owned := map[string]bool{}
+		for _, p := range rt.Probes() {
+			owned[p.Key] = true
+		}
+		m.probe(ctx, rt, in)
+		for k, v := range before {
+			if _, ok := in.Facts[k]; !ok && !owned[k] {
+				in.Facts[k] = v
+			}
+		}
+		if !maps.Equal(before, in.Facts) {
+			if err := m.saveInstall(ctx, in); err != nil && m.Log != nil {
+				m.Log.Warn("install facts", "id", in.GetId(), "err", err)
+			}
+		}
+	}
 }
 
 // Runs the runtime's probes against an install and stores what they read: a file probe records

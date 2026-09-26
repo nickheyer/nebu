@@ -109,12 +109,14 @@ func (LlamaCpp) Steps(b *Build) []Step {
 	configure = append(configure, args(b.Vars, "extra")...)
 	return []Step{
 		{Name: "configure", Command: configure},
-		{Name: "compile", Command: command("cmake", "--build", "build", "--config", arg(b.Vars, "build_type"), "--target", "llama-server", "--target", "rpc-server", "-j", strconv.Itoa(b.Jobs))},
+		{Name: "compile", Command: command("cmake", "--build", "build", "--config", arg(b.Vars, "build_type"), "-j", strconv.Itoa(b.Jobs))},
 	}
 }
 
-// The server and the rpc server that lets it head a chain or draft formation
-func (LlamaCpp) Outputs() []string      { return []string{"build/bin/llama-server", "build/bin/rpc-server"} }
+// The server and the rpc server under whatever name this revision builds it
+func (LlamaCpp) Outputs() []string {
+	return []string{"build/bin/llama-server", "build/bin/*rpc-server*"}
+}
 func (LlamaCpp) Binary() string         { return "llama-server" }
 func (LlamaCpp) Timeout() time.Duration { return 3 * time.Hour }
 func (LlamaCpp) Patches() []Patch       { return nil }

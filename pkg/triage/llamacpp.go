@@ -74,6 +74,24 @@ func (LlamaCpp) Rules() []Rule {
 			},
 		},
 		{
+			ID:      "unknown-tensor-type",
+			Summary: "the GGUF uses a tensor type this build does not know${detail}",
+			Hint:    "the file was quantized by a fork of llama.cpp with its own types. Run it with the build that made it, or pull a GGUF quantized with upstream types",
+			Match: func(line string) (map[string]string, bool) {
+				if !contains(line, "invalid ggml type") {
+					return nil, false
+				}
+				names := map[string]string{"detail": ""}
+				if tensor, ok := quotedAfter(line, "tensor '", "'"); ok {
+					names["detail"] = ": " + tensor
+					if kind, ok := quotedAfter(line, "invalid ggml type ", "."); ok {
+						names["detail"] += " is type " + kind
+					}
+				}
+				return names, true
+			},
+		},
+		{
 			ID:      "model-load",
 			Summary: "the model failed to load",
 			Hint:    "run nebu store verify and check the preceding log lines",

@@ -145,11 +145,18 @@ func (m *Mesh) Node(id string) *Node {
 
 // Builds a node from a member's record: its devices with pools and numbers, the runtime's install
 // and shapes, and the CPU with the host pool
-func NodeOf(rec *v1.Node, runtimeID string, capabilities map[string][]v1.Shape, numbers func(*v1.Device) perf.Numbers) *Node {
+func NodeOf(rec *v1.Node, runtimeID, installID string, capabilities map[string][]v1.Shape, numbers func(*v1.Device) perf.Numbers) *Node {
 	profile := rec.GetProfile()
 	n := &Node{ID: rec.GetId(), Name: rec.GetName(), Profile: profile}
 	for _, in := range rec.GetInstalls() {
-		if in.GetRuntimeId() == runtimeID && (n.Install == nil || in.GetCreatedAt().AsTime().After(n.Install.GetCreatedAt().AsTime())) {
+		if in.GetRuntimeId() != runtimeID {
+			continue
+		}
+		if in.GetId() == installID {
+			n.Install = in
+			break
+		}
+		if n.Install == nil || in.GetCreatedAt().AsTime().After(n.Install.GetCreatedAt().AsTime()) {
 			n.Install = in
 		}
 	}

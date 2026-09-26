@@ -512,8 +512,11 @@ func (m *Manager) Ask(ctx context.Context, meshHash, nodeID, address string) (*v
 		return fail(fmt.Errorf("it belongs to another mesh, %s", member.GetMeshName()))
 	}
 	m.mu.Lock()
-	if have := m.admissionByMeshLocked(member.GetMeshHash()); have != nil && have.GetId() != a.GetId() {
-		delete(m.admissions, a.GetId())
+	// The token may have landed while the knock was out
+	if have := m.admissionByMeshLocked(member.GetMeshHash()); have != nil {
+		if have.GetId() != a.GetId() {
+			delete(m.admissions, a.GetId())
+		}
 		have.Asked = true
 		a = have
 	}

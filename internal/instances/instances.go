@@ -111,8 +111,10 @@ const adoptConfirmWindow = 2 * time.Minute
 
 // Manages daemon instances.
 type Manager struct {
-	DB          *db.DB
-	Dir         string
+	DB  *db.DB
+	Dir string
+	// The mesh port range seats and guards bind in, nil or false when any port will do
+	MeshPorts   func() (int, int, bool)
 	Store       *store.Store
 	Runtimes    *runtimes.Registry
 	Installs    *installs.Manager
@@ -281,9 +283,6 @@ func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v
 	}
 	if p.res != nil && p.res.FormationID != "" && !fromSwap(ctx) {
 		return nil, nil, fmt.Errorf("%w: slot %s serves formation %s, swap instead", runtimes.ErrParam, p.res.Name, p.res.FormationName)
-	}
-	if p.seat == nil && p.plan != nil && p.plan.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO && !p.req.GetForce() {
-		return nil, nil, fmt.Errorf("%w: %s does not fit, %s. Pass force to run anyway", runtimes.ErrParam, p.name, p.plan.GetDetail())
 	}
 	return m.launch(ctx, p)
 }

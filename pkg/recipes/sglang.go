@@ -50,6 +50,7 @@ func (SGLang) Steps(b *Build) []Step {
 		{Name: "venv", Command: command("python3", "-m", "venv", b.Out+"/venv")},
 		{Name: "pip", Command: command(python, "-m", "pip", "install", "--upgrade", "pip")},
 		{Name: "install", Command: command(python, "-m", "pip", "install", pin("sglang[all]", arg(b.Vars, "version")), arg(b.Vars, "index"))},
+		{Name: "nixl", Command: command(python, "-m", "pip", "install", "nixl; platform_system == 'Linux'")},
 	}
 }
 

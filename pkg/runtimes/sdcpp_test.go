@@ -241,7 +241,8 @@ func TestSDCppPolicySolvesCompanions(t *testing.T) {
 	}
 }
 
-// Force launches a denoiser whose tensor names nebu did not identify, leaving sd-server to judge it.
+// A denoiser whose tensor names nebu did not identify launches, sd-server judging it, and the
+// plan says so.
 func TestSDCppLaunchForce(t *testing.T) {
 	rt := SDCpp{}
 	prepared := t.TempDir()
@@ -252,13 +253,9 @@ func TestSDCppLaunchForce(t *testing.T) {
 	d := &v1.Descriptor{FormatId: "gguf", Group: "Q8_0", Architecture: "qwen_image21_future", Kind: v1.ModelKind_MODEL_KIND_DIFFUSION, Metadata: map[string]string{diffusion.KeyDetected: "false"}, Params: map[string]float64{"n_embd": 4096}}
 	d.Groups = append(d.Groups, &v1.TensorGroup{Id: "diffusion", Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DIFFUSION, Layer: -1, Bytes: 7 << 30})
 	launch := Launch{Name: "q", Params: params, Artifacts: map[string]string{"weights": "/store/q8.gguf", "prepared_dir": prepared}, Install: Install{Path: "/bin/sd-server"}, Descriptor: d}
-	if _, err := rt.Launch(launch); err == nil || !strings.Contains(err.Error(), "Q8_0") || !strings.Contains(strings.ToLower(err.Error()), "pass force") {
-		t.Fatalf("an unidentified denoiser is refused until forced: %v", err)
+	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: d, Params: params.Clone()}); !strings.Contains(refusal, "Q8_0") || !strings.Contains(refusal, "sd-server will try it") {
+		t.Fatalf("the plan says sd-server judges it: %q", refusal)
 	}
-	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: d, Params: params.Clone()}); !strings.Contains(strings.ToLower(refusal), "pass force") {
-		t.Fatalf("the plan names force: %q", refusal)
-	}
-	launch.Force = true
 	cmd, err := rt.Launch(launch)
 	if err != nil {
 		t.Fatalf("force launches: %v", err)
@@ -517,7 +514,7 @@ func TestSDCppShardedCompanions(t *testing.T) {
 	}
 }
 
-// A denoiser whose tensor names identify no family is refused before launch, naming where the
+// A denoiser whose tensor names identify no family launches anyway, the plan naming where the
 // layout stable-diffusion.cpp loads is published.
 func TestSDCppUndetected(t *testing.T) {
 	rt := SDCpp{}
@@ -526,12 +523,12 @@ func TestSDCppUndetected(t *testing.T) {
 	d.Group = "transformer"
 	d.Metadata[diffusion.KeyDetected] = "false"
 	_, refusal := rt.Policy().States(&estimate.Scope{Descriptor: d, Params: params.Clone(), Repo: "FastVideo/FastVideo-FastH3-8-Step-V2"})
-	for _, want := range []string{"transformer's tensor names are not the MiniMax-H3 layout", "Comfy-Org/MiniMax-H3 or leejet/MiniMax-H3-GGUF", "pass force"} {
+	for _, want := range []string{"transformer's tensor names are not the MiniMax-H3 layout", "Comfy-Org/MiniMax-H3 or leejet/MiniMax-H3-GGUF", "sd-server will try it"} {
 		if !strings.Contains(refusal, want) {
 			t.Errorf("refusal %q lacks %q", refusal, want)
 		}
 	}
-	if _, err := rt.Launch(Launch{Name: "h3", Params: params, Artifacts: map[string]string{"weights": "/w.safetensors", "prepared_dir": t.TempDir()}, Install: Install{Path: "/bin/sd-server"}, Descriptor: d}); err == nil || !strings.Contains(err.Error(), "tensor names") {
+	if _, err := rt.Launch(Launch{Name: "h3", Params: params, Artifacts: map[string]string{"weights": "/w.safetensors", "prepared_dir": t.TempDir()}, Install: Install{Path: "/bin/sd-server"}, Descriptor: d}); err != nil {
 		t.Fatalf("launch %v", err)
 	}
 	d.Metadata[diffusion.KeyDetected] = "true"

@@ -42,6 +42,12 @@ func (SDCpp) Rules() []Rule {
 			Match:   tensorLine("' has wrong shape in model metadata"),
 		},
 		{
+			ID:      "unknown-tensor-type",
+			Summary: "the GGUF uses a tensor type this build does not know",
+			Hint:    "the file was quantized by a fork with its own types. Run it with the build that made it, or pull a GGUF quantized with upstream types",
+			Match:   anyOf("invalid ggml type"),
+		},
+		{
 			ID:      "model-load",
 			Summary: "the model failed to load",
 			Hint:    "run nebu store verify and check the preceding log lines",

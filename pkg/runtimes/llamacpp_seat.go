@@ -71,9 +71,9 @@ func directIOArgs(flag string) []string {
 
 func (LlamaCpp) Shapes(in *v1.Install) []v1.Shape {
 	out := []v1.Shape{v1.Shape_SHAPE_SOLO, v1.Shape_SHAPE_REPLICAS}
-	if has(in, factRPC) && has(in, factRPCFlag) {
+	if has(in, factRPC) || has(in, factRPCFlag) {
 		out = append(out, v1.Shape_SHAPE_CHAIN)
-		if has(in, factDraftDevice) && has(in, factDraftModel) {
+		if has(in, factRPC) || (has(in, factDraftDevice) && has(in, factDraftModel)) {
 			out = append(out, v1.Shape_SHAPE_DRAFT)
 		}
 	}
@@ -191,14 +191,22 @@ func exposedLaunch(in Launch) Launch {
 // the params say otherwise, and the graph workaround its param asks for
 func rpcServerCommand(in Launch, bin string) (*Command, error) {
 	if bin == "" {
-		return nil, fmt.Errorf("%w: the install ships no rpc server beside its binary, build it with GGML_RPC=ON", ErrParam)
+		return nil, fmt.Errorf("%w: this install ships no rpc server beside its binary. Installs made by nebu, built or downloaded, include it, so reinstall llama.cpp from the Runtimes page", ErrParam)
 	}
 	if in.Seat.GetCacheDir() == "" {
 		return nil, fmt.Errorf("%w: a stage needs a cache directory for the tensors the head streams", ErrParam)
 	}
 	host, port := seatBind(in)
 	args := []string{"-H", host, "-p", strconv.Itoa(port), "-c"}
-	if devices := ggmlDevices(in.InstallRecord, in.Devices); len(devices) > 0 {
+	devices := ggmlDevices(in.InstallRecord, in.Devices)
+	if len(devices) == 0 {
+		for _, d := range in.Devices {
+			if d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
+				devices = []string{"CPU"}
+			}
+		}
+	}
+	if len(devices) > 0 {
 		args = append(args, "-d", strings.Join(devices, ","))
 	}
 	threads := in.Params.Int("threads")

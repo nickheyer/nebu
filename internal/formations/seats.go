@@ -56,7 +56,7 @@ func (m *Manager) RunSeat(ctx context.Context, conductor string, run *v1.RunRequ
 	// A relay seat's own protocol takes a second port on the mesh address, a side channel or a
 	// bootstrap port, and it saves slot files where the gateway's relay moves them from.
 	if seat.GetShape() == v1.Shape_SHAPE_RELAY {
-		port, err := freePortOn(seat.Address)
+		port, err := m.freePortOn(seat.Address)
 		if err != nil {
 			return nil, nil, fmt.Errorf("side channel port on %s: %w", seat.Address, err)
 		}
@@ -88,7 +88,7 @@ func (m *Manager) rendezvousRank(rt runtimes.Runtime, seat *v1.SeatSpec) bool {
 // when a relaunch carries it, checked free here, else a free port allocated now
 func (m *Manager) rendezvousAddress(seat *v1.SeatSpec) (string, error) {
 	if seat.GetRendezvous() == "" {
-		port, err := freePortOn(seat.GetAddress())
+		port, err := m.freePortOn(seat.GetAddress())
 		if err != nil {
 			return "", fmt.Errorf("rendezvous port on %s: %w", seat.GetAddress(), err)
 		}

@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -319,6 +320,28 @@ func (m *Manager) Exposure() string {
 		return ExposureDirect
 	}
 	return ExposureGuard
+}
+
+// The port range seats, guards, and rendezvous take on the mesh address, from-to inclusive, and
+// whether one is configured
+func (m *Manager) Ports() (int, int, bool) {
+	spec := strings.TrimSpace(m.Config.GetPorts())
+	if spec == "" {
+		return 0, 0, false
+	}
+	lo, hi, found := strings.Cut(spec, "-")
+	if !found {
+		hi = lo
+	}
+	from, err := strconv.Atoi(strings.TrimSpace(lo))
+	if err != nil || from <= 0 || from > 65535 {
+		return 0, 0, false
+	}
+	to, err := strconv.Atoi(strings.TrimSpace(hi))
+	if err != nil || to < from || to > 65535 {
+		return 0, 0, false
+	}
+	return from, to, true
 }
 
 // Starts the node traffic listener, the beacon that makes the node discoverable, and the sync

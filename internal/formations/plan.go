@@ -171,7 +171,7 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool) (
 			rec = proto.Clone(rec).(*v1.Node)
 			rec.Profile = instances.Constrain(rec.GetProfile(), pins, budget, placement)
 		}
-		members = append(members, planner.NodeOf(rec, rt.ID(), caps, numbers))
+		members = append(members, planner.NodeOf(rec, rt.ID(), run.GetInstallId(), caps, numbers))
 	}
 	plan, err := planner.Plan(req, planner.New(members, m.Mesh.Links(), m.self()))
 	if err != nil {

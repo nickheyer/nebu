@@ -103,9 +103,6 @@ func (m *Manager) relaunch(ctx context.Context, prev *v1.Formation) (*v1.Formati
 // Records a planned formation and starts its launch task
 func (m *Manager) start(ctx context.Context, run *v1.RunRequest, p *planned, prev *v1.Formation) (*v1.Formation, *v1.Task, error) {
 	plan := p.plan
-	if plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS && !run.GetForce() {
-		return nil, nil, fmt.Errorf("%w: %s does not fit the span, %s. Pass force to run anyway", ErrFormation, p.name, plan.GetDetail())
-	}
 	if len(plan.GetSeats()) == 0 {
 		return nil, nil, fmt.Errorf("%w: %s has no seats: %s", ErrFormation, p.name, plan.GetDetail())
 	}
@@ -263,8 +260,12 @@ func (m *Manager) launch(ctx context.Context, h *tasks.Handle, id string, p *pla
 	}
 	h.Logf("%s", f.GetPlan().GetDetail())
 	for _, c := range f.GetPlan().GetCandidates() {
-		if c.GetShape() != f.GetShape() || c.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
-			h.Logf("rejected %s on %s: %s", shapeWord(c.GetShape()), strings.Join(c.GetNodeIds(), ","), c.GetReason())
+		switch {
+		case c.GetShape() == f.GetShape() && c.GetVerdict() == v1.FitVerdict_FIT_VERDICT_FITS:
+		case c.GetVerdict() == v1.FitVerdict_FIT_VERDICT_FITS:
+			h.Logf("not chosen: %s on %s, %s", shapeWord(c.GetShape()), strings.Join(c.GetNodeIds(), ","), c.GetReason())
+		default:
+			h.Logf("cannot run: %s on %s, %s", shapeWord(c.GetShape()), strings.Join(c.GetNodeIds(), ","), c.GetReason())
 		}
 	}
 	fail := func(err error) error {
@@ -1027,6 +1028,11 @@ func (m *Manager) seatChanged(formationID, instanceID string, state v1.InstanceS
 		m.mu.Unlock()
 		return
 	}
+	// A lagging node record never revives an instance already ended
+	if instances.Terminal(seat.GetState()) && !instances.Terminal(state) {
+		m.mu.Unlock()
+		return
+	}
 	fState := f.GetState()
 	m.mu.Unlock()
 	m.update(formationID, func(r *v1.Formation) {
@@ -1144,8 +1150,20 @@ func hostOf(address string) string {
 	return strings.Trim(address, "[]")
 }
 
-// A free port on a host
-func freePortOn(host string) (int, error) {
+// A free port on a host: the first free one in the mesh's port range when one is set, any
+// free one otherwise
+func (m *Manager) freePortOn(host string) (int, error) {
+	if from, to, ok := m.Mesh.Ports(); ok {
+		for port := to; port >= from; port-- {
+			ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+			if err != nil {
+				continue
+			}
+			ln.Close()
+			return port, nil
+		}
+		return 0, fmt.Errorf("no free port on %s in the mesh port range %d-%d", host, from, to)
+	}
 	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
 	if err != nil {
 		return 0, err

@@ -251,7 +251,7 @@
     }
   });
 
-  const disabled = $derived(!current || component || (!meshMode && (!effectiveRuntime || !installs.length || !local)) || invalid > 0 || (refused && !force));
+  const disabled = $derived(!current || component || (!meshMode && (!effectiveRuntime || !installs.length || !local)) || invalid > 0);
 
   const downloadable = $derived(missing.filter((p) => !p.error && !p.stored && !p.bundled));
   const downloadBytes = $derived(downloadable.reduce((n, p) => n + p.sizeBytes, 0n));
@@ -456,7 +456,7 @@
           {/if}
           {#if plan?.detail && plan.verdict !== FitVerdict.FITS}<p class="mt-3 text-xs leading-5 text-fg-muted">{plan.detail}</p>{/if}
           {#if refused || force}
-            <div class="mt-4 border-t border-line pt-3"><Checkbox bind:checked={force} label="Run anyway" /></div>
+            <div class="mt-4 border-t border-line pt-3"><Checkbox bind:checked={force} label="Run past the estimate's refusal" /></div>
           {/if}
         </section>
       {/if}

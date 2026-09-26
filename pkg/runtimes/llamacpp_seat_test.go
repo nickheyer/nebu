@@ -46,13 +46,13 @@ func TestLlamaCppStageCommand(t *testing.T) {
 	if line := strings.Join(cmd.Args, " "); line != "-H 10.0.0.2 -p 50052 -c -d CUDA1 -t 6" || cmd.Env["GGML_CUDA_DISABLE_GRAPHS"] != "1" {
 		t.Fatalf("exposed stage %s %v", line, cmd.Env)
 	}
-	// A CPU only stage exposes what the server finds.
+	// A CPU only stage serves the CPU backend.
 	in.Devices = []*v1.Device{{Id: "cpu", Kind: v1.DeviceKind_DEVICE_KIND_CPU}}
-	if cmd, err = rt.LaunchSeat(in); err != nil || strings.Contains(strings.Join(cmd.Args, " "), "-d ") {
+	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "-d CPU") {
 		t.Fatalf("cpu stage %v %v", cmd, err)
 	}
 	in.InstallRecord = recorded(map[string]string{})
-	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "GGML_RPC=ON") {
+	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "no rpc server") {
 		t.Fatalf("no rpc server: %v", err)
 	}
 	in.InstallRecord, seat.CacheDir = recorded(facts), ""
@@ -305,14 +305,14 @@ func TestLlamaCppShapesAndProbes(t *testing.T) {
 	if shapes(nil) != "solo,replicas" {
 		t.Fatalf("bare %s", shapes(nil))
 	}
-	if got := shapes(map[string]string{factRPC: "/bin/rpc-server", factRPCFlag: "--rpc"}); got != "solo,replicas,chain" {
-		t.Fatalf("chain %s", got)
+	if got := shapes(map[string]string{factRPC: "/bin/rpc-server", factRPCFlag: "--rpc"}); got != "solo,replicas,chain,draft" {
+		t.Fatalf("chain, and a draft stage: %s", got)
 	}
 	if got := shapes(map[string]string{factRPC: "/bin/rpc-server", factRPCFlag: "--rpc", factDraftDevice: "--spec-draft-device", factDraftModel: "--spec-draft-model", factSlotSave: "--slot-save-path"}); got != "solo,replicas,chain,draft,relay" {
 		t.Fatalf("all %s", got)
 	}
-	if got := shapes(map[string]string{factRPCFlag: "--rpc", factDraftDevice: "--spec-draft-device", factDraftModel: "--spec-draft-model"}); got != "solo,replicas" {
-		t.Fatalf("no rpc server, no chain: %s", got)
+	if got := shapes(map[string]string{factRPCFlag: "--rpc", factDraftDevice: "--spec-draft-device", factDraftModel: "--spec-draft-model"}); got != "solo,replicas,chain,draft" {
+		t.Fatalf("no rpc server, still a head: %s", got)
 	}
 	byKey := map[string]Probe{}
 	for _, p := range rt.Probes() {

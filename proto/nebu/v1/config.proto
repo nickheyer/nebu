@@ -139,6 +139,8 @@ message MeshConfig {
   optional bool announce = 3;
   // guard, a forwarder in front of seats other seats connect to, or direct, the seat on the mesh address itself
   string exposure = 4;
+  // Ports seats, guards, and rendezvous take on the mesh address, as from-to, for a host behind a port map
+  string ports = 5;
 }
 
 // Daemon and client configuration

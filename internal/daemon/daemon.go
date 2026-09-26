@@ -410,6 +410,7 @@ func (d *Daemon) openMesh(ctx context.Context, store *db.DB, prober *host.Prober
 	d.Mesh.Formations = d.Formations
 	d.Slots.Formations = d.Formations
 	d.Instances.Formations = d.Formations
+	d.Instances.MeshPorts = d.Mesh.Ports
 	blobStore.CacheDir, blobStore.KeepCache = d.Formations.CacheDir, d.Formations.Live
 	d.Puller.Mesh = mesh.Source{Mesh: d.Mesh}
 	d.Gateway.SetPeers(d.Formations)
@@ -675,6 +676,7 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 		return err
 	}
 	d.Formations.Start()
+	go d.Installs.Refresh(d.base)
 	// Cancel request contexts when serving stops.
 	requests, endRequests := context.WithCancel(context.Background())
 	defer endRequests()

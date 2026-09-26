@@ -92,6 +92,7 @@ func Load(path string) (*v1.Config, error) {
 	v.SetDefault("mesh.advertise", "")
 	v.SetDefault("mesh.announce", true)
 	v.SetDefault("mesh.exposure", "guard")
+	v.SetDefault("mesh.ports", "")
 
 	if err := v.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError

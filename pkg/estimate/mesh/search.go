@@ -92,6 +92,29 @@ func (pl *planner) supporting(shape v1.Shape) []*Node {
 	return out
 }
 
+// The nodes of the span whose install does not advertise a shape, as one reason line
+func (pl *planner) lacking(shape v1.Shape) string {
+	var out []string
+	for _, n := range pl.nodes {
+		if !n.Supports(shape) {
+			out = append(out, fmt.Sprintf("%s's %s %s does not advertise %s", n.label(), pl.req.Runtime.ID(), n.Install.GetVersion(), shapeName(shape)))
+		}
+	}
+	return strings.Join(out, "; ")
+}
+
+// Lists a shape fewer than two nodes support, naming the nodes that lack it
+func (pl *planner) short(shape v1.Shape) []*candidate {
+	if len(pl.nodes) < 2 {
+		return nil
+	}
+	reason := pl.lacking(shape)
+	if reason == "" {
+		return nil
+	}
+	return []*candidate{{shape: shape, nodes: nodeIDs(pl.nodes), verdict: v1.FitVerdict_FIT_VERDICT_NO, reason: reason}}
+}
+
 // Records an assignment a shape could not make, once per node set and reason
 func (pl *planner) reject(shape v1.Shape, nodes []*Node, reason string) {
 	ids := nodeIDs(nodes)
@@ -198,14 +221,14 @@ func (pl *planner) solos() []*candidate {
 func (pl *planner) chains() []*candidate {
 	var nodes []*Node
 	for _, n := range pl.supporting(v1.Shape_SHAPE_CHAIN) {
-		if len(n.Devices) == 0 {
-			pl.reject(v1.Shape_SHAPE_CHAIN, []*Node{n}, fmt.Sprintf("%s has no device pool, a chain seat needs one", n.label()))
+		if len(n.Devices) == 0 && n.CPU == nil {
+			pl.reject(v1.Shape_SHAPE_CHAIN, []*Node{n}, fmt.Sprintf("%s has no memory pool, a chain seat needs one", n.label()))
 			continue
 		}
 		nodes = append(nodes, n)
 	}
 	if len(nodes) < 2 {
-		return nil
+		return pl.short(v1.Shape_SHAPE_CHAIN)
 	}
 	sort.SliceStable(nodes, func(i, j int) bool { return nodes[i].beta() > nodes[j].beta() })
 	if len(nodes) > MaxChainNodes {
@@ -256,11 +279,9 @@ func (pl *planner) chain(members []*Node, hi int, headRole, stageRole runtimes.R
 	ids := nodeIDs(members)
 	ring := pl.facts.Ring
 	if ring {
-		if why := pl.mismatch(members); why != "" {
-			return &candidate{shape: v1.Shape_SHAPE_CHAIN, nodes: ids, verdict: v1.FitVerdict_FIT_VERDICT_NO, reason: why}
-		}
-	} else if why := pl.sameInstall(members); why != "" {
-		return &candidate{shape: v1.Shape_SHAPE_CHAIN, nodes: ids, verdict: v1.FitVerdict_FIT_VERDICT_NO, reason: why}
+		pl.noteRanks(members)
+	} else {
+		pl.noteBuilds(members)
 	}
 	var order []*Node
 	if ring {
@@ -328,25 +349,17 @@ func (pl *planner) chain(members []*Node, hi int, headRole, stageRole runtimes.R
 			break
 		}
 	}
-	if counts[head] == 0 {
-		if capacities[head] == 0 {
-			pl.reject(v1.Shape_SHAPE_CHAIN, members, fmt.Sprintf("%s cannot head: not one layer fits on it beside the embedding and output", head.label()))
-		} else {
-			pl.reject(v1.Shape_SHAPE_CHAIN, members, fmt.Sprintf("%s would head nothing: the faster seats hold every layer before it", head.label()))
-		}
-		return nil
-	}
-	for _, n := range order {
-		if n == head || counts[n] > 0 {
+	for _, n := range members {
+		if capacities[n] > 0 {
 			continue
 		}
-		if capacities[n] == 0 {
-			pl.reject(v1.Shape_SHAPE_CHAIN, []*Node{n}, fmt.Sprintf("%s holds no layer: not one fits on it with its cache at %d context", n.label(), pl.context))
-		} else {
-			pl.reject(v1.Shape_SHAPE_CHAIN, members, fmt.Sprintf("%s holds no layer behind the faster seats, so the chain without it is the candidate", n.label()))
+		why := fmt.Sprintf("%s holds no layer: not one fits on it with its cache at %d context", n.label(), pl.context)
+		if n == head {
+			why = fmt.Sprintf("%s cannot head: not one layer fits on it beside the embedding and output", head.label())
 		}
-		return nil
+		return &candidate{shape: v1.Shape_SHAPE_CHAIN, nodes: ids, verdict: v1.FitVerdict_FIT_VERDICT_NO, reason: why}
 	}
+	pl.spread(members, counts, capacities, L)
 	remaining := L
 	for _, n := range members {
 		remaining -= counts[n]
@@ -378,13 +391,18 @@ func (pl *planner) chain(members []*Node, hi int, headRole, stageRole runtimes.R
 	// A seat's layers land on its devices: a runtime renders a seat from its device list, and a seat
 	// whose plan spills every layer to its host memory has none to render.
 	for _, s := range seats {
-		if s.verdict == v1.FitVerdict_FIT_VERDICT_FITS && len(s.devices) == 0 {
-			s.verdict = v1.FitVerdict_FIT_VERDICT_NO
-			s.detail = fmt.Sprintf("layers %d-%d land on no device of %s", s.from, s.to-1, s.node.label())
-			c.verdict = v1.FitVerdict_FIT_VERDICT_NO
-			if c.reason == "" {
-				c.reason = shortfall(s)
-			}
+		if s.verdict != v1.FitVerdict_FIT_VERDICT_FITS || len(s.devices) > 0 {
+			continue
+		}
+		if s != c.head && s.node.CPU != nil && s.hostBytes > 0 {
+			s.devices, s.deviceBytes = []*Device{s.node.CPU}, []uint64{s.hostBytes}
+			continue
+		}
+		s.verdict = v1.FitVerdict_FIT_VERDICT_NO
+		s.detail = fmt.Sprintf("layers %d-%d land on no device of %s", s.from, s.to-1, s.node.label())
+		c.verdict = v1.FitVerdict_FIT_VERDICT_NO
+		if c.reason == "" {
+			c.reason = shortfall(s)
 		}
 	}
 	if !ring {
@@ -400,6 +418,39 @@ func (pl *planner) chain(members []*Node, hi int, headRole, stageRole runtimes.R
 	}
 	pl.priceChain(c)
 	return c
+}
+
+// Gives every seat the faster ones left empty its share of the layers by bandwidth, at least
+// one, taken from the seats holding the most, within its capacity
+func (pl *planner) spread(members []*Node, counts, capacities map[*Node]int, L int) {
+	var total float64
+	for _, n := range members {
+		total += n.beta()
+	}
+	for _, n := range members {
+		if counts[n] > 0 {
+			continue
+		}
+		want := 1
+		if total > 0 {
+			want = max(1, int(math.Round(float64(L)*n.beta()/total)))
+		}
+		want = min(want, capacities[n])
+		for want > 0 {
+			var donor *Node
+			for _, d := range members {
+				if d != n && counts[d] > 1 && (donor == nil || counts[d] > counts[donor]) {
+					donor = d
+				}
+			}
+			if donor == nil {
+				break
+			}
+			counts[donor]--
+			counts[n]++
+			want--
+		}
+	}
 }
 
 // Plans every seat of a chain exactly over its own range under the runtime's rules
@@ -426,19 +477,44 @@ func (pl *planner) chainSeats(c *candidate, extrasOf func(*Node) []*v1.TensorGro
 	}
 }
 
+// What an unmeasured link is priced as until a probe runs
+const (
+	unmeasuredRTT       = 0.010
+	unmeasuredBandwidth = 100e6 / 8
+)
+
+// Round trip between two nodes, the slower direction, a slow guess when unmeasured
+func (pl *planner) linkRTT(a, b string) float64 {
+	if rtt, ok := pl.mesh.rtt(a, b); ok {
+		return rtt
+	}
+	pl.noteUnmeasured(a, b)
+	return unmeasuredRTT
+}
+
+// Bandwidth from one node to another, a slow guess when unmeasured
+func (pl *planner) linkBandwidth(from, to string, aggregate bool) float64 {
+	if w, ok := pl.mesh.bandwidth(from, to, aggregate); ok {
+		return w
+	}
+	pl.noteUnmeasured(from, to)
+	return unmeasuredBandwidth
+}
+
+func (pl *planner) noteUnmeasured(a, b string) {
+	pl.note(fmt.Sprintf("link %s to %s unmeasured, priced at %s round trip and %s until a probe runs", pl.mesh.Node(a).label(), pl.mesh.Node(b).label(), seconds(unmeasuredRTT), gbits(unmeasuredBandwidth)))
+}
+
 // The link cost of one crossing: per token, and per prompt token as fixed seconds plus seconds
 // per token, over the bandwidth the runtime's transport takes
-func (pl *planner) crossing(from, to *seat, bytesPerToken float64) (float64, piece, bool) {
-	rtt, ok := pl.mesh.rtt(from.node.ID, to.node.ID)
-	w, ok2 := pl.mesh.bandwidth(from.node.ID, to.node.ID, pl.facts.ChainAggregate)
-	if !ok || !ok2 {
-		return 0, piece{}, false
-	}
+func (pl *planner) crossing(from, to *seat, bytesPerToken float64) (float64, piece) {
+	rtt := pl.linkRTT(from.node.ID, to.node.ID)
+	w := pl.linkBandwidth(from.node.ID, to.node.ID, pl.facts.ChainAggregate)
 	chunks := pl.facts.ChunksInFlight
 	if chunks < 1 {
 		chunks = 1
 	}
-	return rtt + bytesPerToken/w, piece{fixed: rtt, perToken: bytesPerToken / w / chunks}, true
+	return rtt + bytesPerToken/w, piece{fixed: rtt, perToken: bytesPerToken / w / chunks}
 }
 
 // Prices a chain: every seat's own pass plus the links crossed per token and per prompt
@@ -460,11 +536,6 @@ func (pl *planner) priceChain(c *candidate) {
 			stages = append(stages, s)
 		}
 	}
-	unmeasured := func(from, to *seat) {
-		c.verdict = v1.FitVerdict_FIT_VERDICT_NO
-		c.reason = fmt.Sprintf("link %s to %s unmeasured", from.node.label(), to.node.label())
-		c.class, _, _ = pl.mesh.worstClass(c.nodeIDs())
-	}
 	var linkDecode float64
 	var linkPrefill piece
 	var notes []string
@@ -473,24 +544,16 @@ func (pl *planner) priceChain(c *candidate) {
 		sort.SliceStable(order, func(i, j int) bool { return order[i].from < order[j].from })
 		for i := 0; i+1 < len(order); i++ {
 			from, to := order[i], order[i+1]
-			dec, pre, ok := pl.crossing(from, to, act*d)
-			if !ok {
-				unmeasured(from, to)
-				return
-			}
+			dec, pre := pl.crossing(from, to, act*d)
 			linkDecode += dec
 			linkPrefill = linkPrefill.add(pre)
 		}
 		notes = append(notes, fmt.Sprintf("ring chain, %d boundaries each one hop", len(order)-1))
 	} else {
 		for _, s := range stages {
-			out, outPre, ok := pl.crossing(c.head, s, act*d)
-			back, backPre, ok2 := pl.crossing(s, c.head, act*d)
-			if !ok || !ok2 {
-				unmeasured(c.head, s)
-				return
-			}
-			rtt, _ := pl.mesh.rtt(c.head.node.ID, s.node.ID)
+			out, outPre := pl.crossing(c.head, s, act*d)
+			back, backPre := pl.crossing(s, c.head, act*d)
+			rtt := pl.linkRTT(c.head.node.ID, s.node.ID)
 			linkDecode += out + back - rtt
 			linkPrefill = linkPrefill.add(piece{fixed: rtt, perToken: outPre.perToken + backPre.perToken})
 		}
@@ -594,7 +657,7 @@ func tokensPerRound(alpha, gamma float64) float64 {
 func (pl *planner) locksteps() []*candidate {
 	nodes := pl.supporting(v1.Shape_SHAPE_LOCKSTEP)
 	if len(nodes) < 2 {
-		return nil
+		return pl.short(v1.Shape_SHAPE_LOCKSTEP)
 	}
 	headRole, rankRole, ok := pl.roles(v1.Shape_SHAPE_LOCKSTEP)
 	if !ok {
@@ -625,21 +688,15 @@ func (pl *planner) locksteps() []*candidate {
 		}
 		ids := nodeIDs(members)
 		c := &candidate{shape: v1.Shape_SHAPE_LOCKSTEP, nodes: ids}
-		if why := pl.mismatch(members); why != "" {
-			c.reason, c.verdict = why, v1.FitVerdict_FIT_VERDICT_NO
-			out = append(out, c)
-			continue
-		}
-		if a, b, unmeasured := pl.mesh.unmeasured(ids); unmeasured {
-			c.reason, c.verdict = fmt.Sprintf("link %s to %s unmeasured", pl.mesh.Node(a).label(), pl.mesh.Node(b).label()), v1.FitVerdict_FIT_VERDICT_NO
-			out = append(out, c)
-			continue
-		}
+		pl.noteRanks(members)
 		class, slowest, _ := pl.mesh.worstClass(ids)
 		c.class = class
-		if class != v1.LinkClass_LINK_CLASS_FABRIC {
-			c.reason = fmt.Sprintf("link class %s, %s round trip between %s and %s, needs fabric", className(class), seconds(float64(slowest.GetRttUs())/1e6), pl.mesh.Node(slowest.GetFrom()).label(), pl.mesh.Node(slowest.GetTo()).label())
-			c.verdict = v1.FitVerdict_FIT_VERDICT_NO
+		var linkNote string
+		if a, b, unmeasured := pl.mesh.unmeasured(ids); unmeasured {
+			pl.noteUnmeasured(a, b)
+			linkNote = fmt.Sprintf("link %s to %s unmeasured, priced at %s round trip until a probe runs, every reduction pays it", pl.mesh.Node(a).label(), pl.mesh.Node(b).label(), seconds(unmeasuredRTT))
+		} else if class != v1.LinkClass_LINK_CLASS_FABRIC {
+			linkNote = fmt.Sprintf("link class %s, %s round trip between %s and %s, every reduction pays it", className(class), seconds(float64(slowest.GetRttUs())/1e6), pl.mesh.Node(slowest.GetFrom()).label(), pl.mesh.Node(slowest.GetTo()).label())
 		}
 		sliced := pl.parts.slice(k)
 		for rank, n := range members {
@@ -677,29 +734,21 @@ func (pl *planner) locksteps() []*candidate {
 		}
 		// The slowest reduction sets the pace: a fabric figure, or twice the round trip on sockets.
 		var a, wWorst float64
-		var slowLink string
 		for i, x := range ids {
 			for _, y := range ids[i+1:] {
-				rtt, _ := pl.mesh.rtt(x, y)
+				rtt := pl.linkRTT(x, y)
 				lat := 2 * rtt
 				if pl.mesh.rdma(x, y) && class == v1.LinkClass_LINK_CLASS_FABRIC {
 					lat = fabricReduction
 				}
 				a = math.Max(a, lat)
 				for _, pair := range [][2]string{{x, y}, {y, x}} {
-					w, ok := pl.mesh.aggregate(pair[0], pair[1])
-					if !ok {
-						slowLink = fmt.Sprintf("bandwidth %s to %s unmeasured", pl.mesh.Node(pair[0]).label(), pl.mesh.Node(pair[1]).label())
-					} else if wWorst == 0 || w < wWorst {
+					w := pl.linkBandwidth(pair[0], pair[1], true)
+					if wWorst == 0 || w < wWorst {
 						wWorst = w
 					}
 				}
 			}
-		}
-		if slowLink != "" {
-			c.reason, c.verdict = slowLink, v1.FitVerdict_FIT_VERDICT_NO
-			out = append(out, c)
-			continue
 		}
 		var decode float64
 		for _, s := range c.seats {
@@ -709,40 +758,42 @@ func (pl *planner) locksteps() []*candidate {
 		}
 		c.decode = decode + reductions*L*a
 		pl.price(c)
+		summary := fmt.Sprintf("%d seats each read %s per token, %.0f reductions at %s", k, human(uint64(c.seats[0].read)), reductions*L, seconds(a))
+		if linkNote != "" {
+			summary += "; " + linkNote
+		}
 		if c.reason == "" {
-			c.reason = fmt.Sprintf("%d seats each read %s per token, %.0f reductions at %s", k, human(uint64(c.seats[0].read)), reductions*L, seconds(a))
+			c.reason = summary
+		} else {
+			c.reason += "; " + summary
 		}
 		out = append(out, c)
 	}
 	return out
 }
 
-// Why nodes cannot be symmetric ranks: vendor, install version, or device count differ
-func (pl *planner) mismatch(nodes []*Node) string {
+// Notes ranks that differ in vendor or device count, so the plan says so and the runtime decides
+func (pl *planner) noteRanks(nodes []*Node) {
 	first := nodes[0]
 	for _, n := range nodes[1:] {
-		switch {
-		case n.Vendor != first.Vendor:
-			return fmt.Sprintf("%s has %s devices and %s has %s, ranks must match", first.label(), first.Vendor, n.label(), n.Vendor)
-		case n.Install.GetVersion() != first.Install.GetVersion():
-			return fmt.Sprintf("%s runs %s %s and %s runs %s, ranks must match", first.label(), pl.req.Runtime.ID(), first.Install.GetVersion(), n.label(), n.Install.GetVersion())
-		case len(n.Devices) != len(first.Devices):
-			return fmt.Sprintf("%s has %d devices and %s has %d, ranks must match", first.label(), len(first.Devices), n.label(), len(n.Devices))
+		if n.Vendor != first.Vendor {
+			pl.note(fmt.Sprintf("%s has %s devices and %s has %s, the ranks differ in vendor", first.label(), first.Vendor, n.label(), n.Vendor))
+		}
+		if len(n.Devices) != len(first.Devices) {
+			pl.note(fmt.Sprintf("%s has %d devices and %s has %d, the ranks differ in device count", first.label(), len(first.Devices), n.label(), len(n.Devices)))
 		}
 	}
-	return ""
+	pl.noteBuilds(nodes)
 }
 
-// Why nodes cannot share a formation: their install versions differ, and every seat of a formation
-// runs the same build
-func (pl *planner) sameInstall(nodes []*Node) string {
+// Notes seats on different builds, so the plan says so and the runtime decides
+func (pl *planner) noteBuilds(nodes []*Node) {
 	first := nodes[0]
 	for _, n := range nodes[1:] {
 		if n.Install.GetVersion() != first.Install.GetVersion() {
-			return fmt.Sprintf("%s runs %s %s and %s runs %s, every seat of a formation runs the same install version", first.label(), pl.req.Runtime.ID(), first.Install.GetVersion(), n.label(), n.Install.GetVersion())
+			pl.note(fmt.Sprintf("%s runs %s %s and %s runs %s, the seats run different builds", first.label(), pl.req.Runtime.ID(), first.Install.GetVersion(), n.label(), n.Install.GetVersion()))
 		}
 	}
-	return ""
 }
 
 // Relay: every ordered pair that fits solo, the prefill seat computing the prompt and the decode
@@ -750,7 +801,7 @@ func (pl *planner) sameInstall(nodes []*Node) string {
 func (pl *planner) relays() []*candidate {
 	nodes := pl.supporting(v1.Shape_SHAPE_RELAY)
 	if len(nodes) < 2 {
-		return nil
+		return pl.short(v1.Shape_SHAPE_RELAY)
 	}
 	decodeRole, prefillRole, ok := pl.roles(v1.Shape_SHAPE_RELAY)
 	if !ok {
@@ -790,11 +841,7 @@ func (pl *planner) relays() []*candidate {
 				out = append(out, c)
 				continue
 			}
-			if why := pl.sameInstall([]*Node{p, q}); why != "" {
-				c.verdict, c.reason = v1.FitVerdict_FIT_VERDICT_NO, why
-				out = append(out, c)
-				continue
-			}
+			pl.noteBuilds([]*Node{p, q})
 			if why := cacheTypesDiffer(&pre, &dec); why != "" {
 				c.verdict, c.reason = v1.FitVerdict_FIT_VERDICT_NO, why
 				out = append(out, c)
@@ -805,12 +852,7 @@ func (pl *planner) relays() []*candidate {
 				out = append(out, c)
 				continue
 			}
-			w, ok := pl.relayBandwidth(p.ID, q.ID)
-			if !ok {
-				c.verdict, c.reason = v1.FitVerdict_FIT_VERDICT_NO, fmt.Sprintf("link %s to %s unmeasured", p.label(), q.label())
-				out = append(out, c)
-				continue
-			}
+			w := pl.relayBandwidth(p.ID, q.ID)
 			perToken := pre.cache / float64(pl.context)
 			move := piece{perToken: perToken / w}
 			if pl.facts.RelayDisk {
@@ -892,11 +934,8 @@ func cacheTypesDiffer(a, b *seat) string {
 
 // Bandwidth a relay's cache moves at: the aggregate over an RDMA device when the runtime takes
 // it, the stream otherwise
-func (pl *planner) relayBandwidth(from, to string) (float64, bool) {
-	if pl.facts.RelayRDMA && pl.mesh.rdma(from, to) {
-		return pl.mesh.aggregate(from, to)
-	}
-	return pl.mesh.stream(from, to)
+func (pl *planner) relayBandwidth(from, to string) float64 {
+	return pl.linkBandwidth(from, to, pl.facts.RelayRDMA && pl.mesh.rdma(from, to))
 }
 
 // Replicas: every node that fits solo, throughput summed, latency the conductor's seat's
@@ -963,7 +1002,7 @@ func (pl *planner) replicas() []*candidate {
 func (pl *planner) drafts() []*candidate {
 	nodes := pl.supporting(v1.Shape_SHAPE_DRAFT)
 	if len(nodes) < 2 {
-		return nil
+		return pl.short(v1.Shape_SHAPE_DRAFT)
 	}
 	if pl.req.Draft == nil {
 		return []*candidate{{shape: v1.Shape_SHAPE_DRAFT, nodes: nodeIDs(nodes), verdict: v1.FitVerdict_FIT_VERDICT_NO, reason: "no draft model named: set draft_model to a stored companion as store://source/repo#group to draft on another node"}}
@@ -995,12 +1034,7 @@ func (pl *planner) drafts() []*candidate {
 			stage := &seat{node: s, role: stageRole.Name, rank: 1, phase: stageRole.Phase, exposed: stageRole.Rendezvous, to: dp.layerCount()}
 			c := &candidate{shape: v1.Shape_SHAPE_DRAFT, seats: []*seat{stage, head}, head: head, draftTokens: uint32(gamma)}
 			c.class, _, _ = pl.mesh.worstClass([]string{h.ID, s.ID})
-			if why := pl.sameInstall([]*Node{h, s}); why != "" {
-				stage.plan = &v1.MemoryPlan{Verdict: v1.FitVerdict_FIT_VERDICT_NO}
-				c.verdict, c.reason = v1.FitVerdict_FIT_VERDICT_NO, why
-				out = append(out, c)
-				continue
-			}
+			pl.noteBuilds([]*Node{h, s})
 			plan, err := pl.fitDraft(s, "draft", s.Profile)
 			if err != nil || plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
 				stage.plan = plan
@@ -1026,17 +1060,7 @@ func (pl *planner) drafts() []*candidate {
 				out = append(out, c)
 				continue
 			}
-			rtt, ok := pl.mesh.rtt(h.ID, s.ID)
-			if !ok {
-				c.verdict, c.reason = v1.FitVerdict_FIT_VERDICT_NO, fmt.Sprintf("link %s to %s unmeasured", h.label(), s.label())
-				out = append(out, c)
-				continue
-			}
-			if c.class == v1.LinkClass_LINK_CLASS_SLOW {
-				c.verdict, c.reason = v1.FitVerdict_FIT_VERDICT_NO, fmt.Sprintf("link class slow between %s and %s, a draft needs at least lan", h.label(), s.label())
-				out = append(out, c)
-				continue
-			}
+			rtt := pl.linkRTT(h.ID, s.ID)
 			alpha := head.node.acceptance()
 			c.acceptance = alpha
 			round := gamma*(rtt+stage.decode()) + head.decode()
@@ -1256,14 +1280,9 @@ func (pl *planner) stages() []*candidate {
 					c.reason = fmt.Sprintf("the encoders and decoder do not fit %s's host memory: %s", hn.label(), head.detail)
 				}
 			}
-			w, ok := pl.mesh.stream(hn.ID, dn.ID)
-			wBack, ok2 := pl.mesh.stream(dn.ID, hn.ID)
-			rtt, ok3 := pl.mesh.rtt(hn.ID, dn.ID)
-			if !ok || !ok2 || !ok3 {
-				c.verdict, c.reason = v1.FitVerdict_FIT_VERDICT_NO, fmt.Sprintf("link %s to %s unmeasured", hn.label(), dn.label())
-				out = append(out, c)
-				continue
-			}
+			w := pl.linkBandwidth(hn.ID, dn.ID, false)
+			wBack := pl.linkBandwidth(dn.ID, hn.ID, false)
+			rtt := pl.linkRTT(hn.ID, dn.ID)
 			cost, note, err := pl.pipeline(head, den, head, &crossings{embeddingPerToken: sz.embeddingPerToken, latent: sz.latent, toDenoiser: w, back: wBack, rtt: rtt})
 			if err != nil {
 				c.verdict, c.reason = v1.FitVerdict_FIT_VERDICT_NO, err.Error()
