@@ -2,9 +2,11 @@ package mesh
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
+	"github.com/nickheyer/nebu/pkg/archs"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/formats"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -104,8 +106,8 @@ func groupTotals(groups []*v1.TensorGroup) (bytes, params float64) {
 	return bytes, params
 }
 
-// A descriptor holding a layer range and extras, its layer count adjusted so the cache the
-// family computes covers the range alone
+// A descriptor holding a layer range and extras; its layers keep their indexes, so the family
+// sizes the cache of the range's own layers
 func (p *parts) sub(from, to int, extras []*v1.TensorGroup) *v1.Descriptor {
 	d := proto.Clone(p.descriptor).(*v1.Descriptor)
 	d.Groups = nil
@@ -120,10 +122,6 @@ func (p *parts) sub(from, to int, extras []*v1.TensorGroup) *v1.Descriptor {
 			d.TotalBytes += g.GetBytes()
 		}
 	}
-	if d.Params == nil {
-		d.Params = map[string]float64{}
-	}
-	d.Params["n_layer"] = float64(to - from)
 	return d
 }
 
@@ -187,6 +185,31 @@ type planner struct {
 	rejectedSeen map[string]bool
 	// Solver answers by node, range, extras, placement, and context
 	fits map[string]fitResult
+	// Cache elements per token on each layer at the pass's context, and the context they hold for
+	cacheElems        []float64
+	cacheElemsContext int64
+	cacheElemsKnown   bool
+}
+
+// Cache elements per token on each layer of the model at the pass's context, as the family
+// shapes them, every layer zero for a runtime whose policy sizes no cache
+func (pl *planner) layerCache() ([]float64, error) {
+	if pl.cacheElemsKnown && pl.cacheElemsContext == pl.context {
+		return pl.cacheElems, nil
+	}
+	elems := make([]float64, pl.parts.layerCount())
+	if pl.policy.CacheBytes != nil {
+		var run archs.Run
+		if pl.policy.Shape != nil {
+			run = pl.policy.Shape(pl.fixed())
+		}
+		var err error
+		if elems, err = pl.req.Family.CacheLayers(pl.parts.model, run); err != nil {
+			return nil, err
+		}
+	}
+	pl.cacheElems, pl.cacheElemsContext, pl.cacheElemsKnown = elems, pl.context, true
+	return elems, nil
 }
 
 // Plans a descriptor on one node with the node's own profile and correction, under the runtime's
@@ -208,15 +231,160 @@ func (pl *planner) plan(n *Node, d *v1.Descriptor, params estimate.Params, place
 	return pl.policy.Plan(in)
 }
 
-// Plans a layer range with extras on a node at the pass's context, once per distinct request
+// Plans a layer range with extras on a node at the pass's context, once per distinct request. A
+// runtime that splits layers over a node's devices gets the split the seat will render checked
+// device by device: a range whose whole layers overflow one device does not fit, whatever the
+// solver's pooled sum says
 func (pl *planner) fit(n *Node, from, to int, extras []*v1.TensorGroup, placement v1.Placement) (*v1.MemoryPlan, error) {
 	key := fmt.Sprintf("%s|%d|%d|%s|%d|%d", n.ID, from, to, groupIDs(extras), placement, pl.context)
 	if r, ok := pl.fits[key]; ok {
 		return r.plan, r.err
 	}
 	plan, err := pl.plan(n, pl.parts.sub(from, to, extras), pl.fixed(), placement)
+	if err == nil && !pl.facts.Ring && plan.GetVerdict() == v1.FitVerdict_FIT_VERDICT_FITS {
+		elems, cerr := pl.layerCache()
+		if cerr != nil {
+			pl.fits[key] = fitResult{nil, cerr}
+			return nil, cerr
+		}
+		if pc := pl.place(n, plan, pl.parts.layers[from:to], extras, elems); pc.over != nil {
+			plan = proto.Clone(plan).(*v1.MemoryPlan)
+			plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
+			plan.Detail = fmt.Sprintf("%s of %s takes %d of layers %d-%d whole with their cache, the overhead share of its pool%s, %s: %s over the %s it has", pc.over.label(), n.label(), pc.overLayers, from, to-1, pc.overExtras, estimate.Human(pc.held), estimate.Human(pc.held-pc.cap), estimate.Human(pc.cap))
+		}
+	}
 	pl.fits[key] = fitResult{plan, err}
 	return plan, err
+}
+
+// How a plan's layers land on a node's devices for a runtime that splits layers over devices, as
+// the seat renders the split: the layers the plan keeps on devices are the last of the range, cut
+// into whole layers per device in proportion to the bytes the plan pooled on each. A device then
+// holds the weights of its layers' groups kept on devices, the cache of its layers, the share of
+// the plan's overhead its pool's capacity earns, and the last device the extras kept on devices. A
+// unified pool holds the host side beside them
+type placed struct {
+	devices []*Device
+	bytes   []uint64
+	layers  []uint32
+	// The first device over its pool's capacity under the policy's margin, the layers it takes,
+	// what else it takes, what it holds, and the capacity
+	over       *Device
+	overLayers uint32
+	overExtras string
+	held, cap  uint64
+}
+
+func (pl *planner) place(n *Node, plan *v1.MemoryPlan, layers [][]*v1.TensorGroup, extras []*v1.TensorGroup, elems []float64) placed {
+	devices, pooled, _ := pl.layout(n, plan)
+	out := placed{devices: devices, bytes: make([]uint64, len(devices)), layers: make([]uint32, len(devices))}
+	if len(devices) == 0 {
+		return out
+	}
+	// Each layer's cache is its share of the plan's total by the family's shape, even shares
+	// when the layers carry no index
+	span := len(layers)
+	var rangeElems float64
+	indexed := false
+	for _, layer := range layers {
+		if len(layer) > 0 && layer[0].GetLayer() >= 0 && int(layer[0].GetLayer()) < len(elems) {
+			indexed = true
+			rangeElems += elems[layer[0].GetLayer()]
+		}
+	}
+	cacheOf := func(i int) uint64 {
+		if !indexed {
+			return plan.GetCacheBytes() / uint64(span)
+		}
+		il := layers[i][0].GetLayer()
+		if rangeElems <= 0 || il < 0 || int(il) >= len(elems) {
+			return 0
+		}
+		return uint64(float64(plan.GetCacheBytes()) * elems[il] / rangeElems)
+	}
+	hostPool := text.Enum(v1.PoolKind_POOL_KIND_HOST)
+	onDevice := map[v1.TensorGroupKind]uint32{}
+	var expertsAll, expertsDevice uint32
+	for _, p := range plan.GetPlacements() {
+		if p.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_EXPERTS {
+			expertsAll += p.GetCount()
+		}
+		if p.GetPoolId() != hostPool {
+			onDevice[p.GetKind()] += p.GetCount()
+		}
+	}
+	expertsDevice = onDevice[v1.TensorGroupKind_TENSOR_GROUP_KIND_EXPERTS]
+	devLayers := min(int(onDevice[v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER]), span)
+	out.layers = splitLayers(devLayers, pooled)
+	// The solver spills the lowest layers first, and the experts of the lowest layers bearing them
+	var hostSide uint64
+	first := span - devLayers
+	expertsSeen := uint32(0)
+	expertsOnHost := func(g *v1.TensorGroup) bool {
+		if g.GetKind() != v1.TensorGroupKind_TENSOR_GROUP_KIND_EXPERTS {
+			return false
+		}
+		expertsSeen++
+		return expertsSeen <= expertsAll-expertsDevice
+	}
+	for i := 0; i < first; i++ {
+		for _, g := range layers[i] {
+			expertsOnHost(g)
+			hostSide += g.GetBytes()
+		}
+		hostSide += cacheOf(i)
+	}
+	at := first
+	for i := range devices {
+		var b uint64
+		for range out.layers[i] {
+			for _, g := range layers[at] {
+				if expertsOnHost(g) {
+					hostSide += g.GetBytes()
+					continue
+				}
+				b += g.GetBytes()
+			}
+			b += cacheOf(at)
+			at++
+		}
+		out.bytes[i] = b
+	}
+	last := len(devices) - 1
+	var extraNames []string
+	for _, g := range extras {
+		if onDevice[g.GetKind()] > 0 {
+			out.bytes[last] += g.GetBytes()
+			extraNames = append(extraNames, strings.ToLower(strings.TrimPrefix(g.GetKind().String(), "TENSOR_GROUP_KIND_")))
+		} else {
+			hostSide += g.GetBytes()
+		}
+	}
+	caps := make([]uint64, len(devices))
+	var total float64
+	for i, d := range devices {
+		caps[i] = estimate.Capacity(d.Pool, pl.req.Free)
+		total += float64(caps[i])
+	}
+	total = max(total, 1)
+	for i, d := range devices {
+		out.bytes[i] += uint64(float64(plan.GetOverheadBytes()) * float64(caps[i]) / total)
+		if d.Pool.GetKind() == v1.PoolKind_POOL_KIND_UNIFIED {
+			out.bytes[i] += uint64(float64(hostSide) * float64(caps[i]) / total)
+		}
+	}
+	margin := 1 - pl.policy.Margin
+	for i, d := range devices {
+		cap := uint64(float64(caps[i]) * margin)
+		if out.bytes[i] > cap {
+			out.over, out.overLayers, out.held, out.cap = d, out.layers[i], out.bytes[i], cap
+			if i == last && len(extraNames) > 0 {
+				out.overExtras = " and the " + strings.Join(extraNames, ", ")
+			}
+			break
+		}
+	}
+	return out
 }
 
 // Plans any descriptor on a node at the pass's context, once per distinct request
@@ -293,17 +461,60 @@ type seat struct {
 	// Reads split by the side holding them: device pools and the host pool
 	readDevice, readHost     float64
 	paramsDevice, paramsHost float64
-	// Devices in tensor order with the bytes each holds, and bytes left on the host pool
-	devices     []*Device
-	deviceBytes []uint64
-	hostBytes   uint64
-	gpuLayers   int
-	exposed     bool
-	verdict     v1.FitVerdict
-	detail      string
+	// Devices in tensor order with the bytes and the layers of the range each holds, and bytes left
+	// on the host pool
+	devices      []*Device
+	deviceBytes  []uint64
+	deviceLayers []uint32
+	hostBytes    uint64
+	gpuLayers    int
+	exposed      bool
+	verdict      v1.FitVerdict
+	detail       string
 	// Stage devices a head carries as devices of its own, listed before its own in the seat record
 	stageDevices []string
 	stageBytes   []uint64
+	stageLayers  []uint32
+}
+
+// Splits layers over devices in proportion to the bytes each holds: whole layers per device
+// summing to the count, the remainder after the whole shares going one at a time to the devices
+// with the largest fractional shares, the earlier device on a tie. One device takes every layer,
+// and devices holding no bytes take none unless nothing holds any
+func splitLayers(layers int, bytes []uint64) []uint32 {
+	out := make([]uint32, len(bytes))
+	if len(bytes) == 0 || layers <= 0 {
+		return out
+	}
+	var total float64
+	for _, b := range bytes {
+		total += float64(b)
+	}
+	if total == 0 {
+		out[0] = uint32(layers)
+		return out
+	}
+	given := 0
+	fractions := make([]float64, len(bytes))
+	for i, b := range bytes {
+		quota := float64(layers) * float64(b) / total
+		whole := int(math.Floor(quota))
+		out[i] = uint32(whole)
+		given += whole
+		fractions[i] = quota - float64(whole)
+	}
+	for given < layers {
+		best := 0
+		for i, f := range fractions {
+			if f > fractions[best] {
+				best = i
+			}
+		}
+		out[best]++
+		fractions[best] = -1
+		given++
+	}
+	return out
 }
 
 // Lays a plan's pools out over the node's devices: bytes per device pool in the node's device
@@ -390,6 +601,7 @@ func (pl *planner) finish(s *seat, expertShare float64) error {
 	} else {
 		s.gpuLayers = s.to - s.from
 	}
+	s.deviceLayers = splitLayers(int(layersDevice), s.deviceBytes)
 	for _, d := range s.devices {
 		pl.use(s.node, d)
 	}
@@ -541,9 +753,11 @@ func (s *seat) proto() *v1.Seat {
 	}
 	out.DeviceIds = append(out.DeviceIds, s.stageDevices...)
 	out.DeviceBytes = append(out.DeviceBytes, s.stageBytes...)
+	out.DeviceLayers = append(out.DeviceLayers, s.stageLayers...)
 	for i, d := range s.devices {
 		out.DeviceIds = append(out.DeviceIds, d.ID())
 		out.DeviceBytes = append(out.DeviceBytes, s.deviceBytes[i])
+		out.DeviceLayers = append(out.DeviceLayers, s.deviceLayers[i])
 	}
 	return out
 }

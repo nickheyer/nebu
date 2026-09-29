@@ -20,7 +20,9 @@ const (
 
 // A guard listener in front of a seat: a TCP forwarder on the mesh address that admits the
 // member addresses the role names and forwards to the seat's loopback port. Copies between two
-// TCP connections use the kernel's splice on Linux, one hop of a few microseconds.
+// TCP connections use the kernel's splice on Linux, one hop of a few microseconds. A seat that
+// serves one client admits one address at a time: every connection that address opens, in turn
+// or at once, and no other address while one of them is open
 type forwarder struct {
 	ln     net.Listener
 	target string
@@ -33,6 +35,8 @@ type forwarder struct {
 	active int
 	closed bool
 	conns  map[net.Conn]struct{}
+	// The address whose connections are open, for a seat that serves one client
+	client net.IP
 	// Bytes forwarded to the seat, what its head streamed to it
 	received atomic.Int64
 }
@@ -82,17 +86,27 @@ func (f *forwarder) accept() {
 			}
 			return
 		}
-		if !f.admits(conn.RemoteAddr()) {
+		ip, ok := f.admits(conn.RemoteAddr())
+		if !ok {
 			f.log.Warn("guard refused a connection from an address the role does not admit", "seat", f.name, "from", conn.RemoteAddr().String())
 			conn.Close()
 			continue
 		}
 		f.mu.Lock()
-		if f.closed || f.single && f.active > 0 {
+		if f.closed {
 			f.mu.Unlock()
-			f.log.Warn("guard refused a second connection to a seat that serves one client", "seat", f.name, "from", conn.RemoteAddr().String())
+			conn.Close()
+			return
+		}
+		if f.single && f.active > 0 && !f.client.Equal(ip) {
+			serving := f.client.String()
+			f.mu.Unlock()
+			f.log.Warn("guard refused a connection from a second address to a seat that serves one client", "seat", f.name, "from", conn.RemoteAddr().String(), "serving", serving)
 			conn.Close()
 			continue
+		}
+		if f.active == 0 {
+			f.client = ip
 		}
 		f.active++
 		f.conns[conn] = struct{}{}
@@ -108,19 +122,19 @@ func (f *forwarder) Active() int {
 	return f.active
 }
 
-// Whether the remote address is one the role admits: nothing is admitted when none is named
-func (f *forwarder) admits(addr net.Addr) bool {
+// The remote address's IP when it is one the role admits: nothing is admitted when none is named
+func (f *forwarder) admits(addr net.Addr) (net.IP, bool) {
 	host, _, err := net.SplitHostPort(addr.String())
 	if err != nil {
-		return false
+		return nil, false
 	}
 	ip := net.ParseIP(host)
 	for _, a := range f.admit {
 		if a.Equal(ip) {
-			return true
+			return ip, true
 		}
 	}
-	return false
+	return nil, false
 }
 
 // Splices one admitted connection to the seat's loopback port until either side closes
@@ -128,6 +142,9 @@ func (f *forwarder) serve(client net.Conn) {
 	defer func() {
 		f.mu.Lock()
 		f.active--
+		if f.active == 0 {
+			f.client = nil
+		}
 		delete(f.conns, client)
 		f.mu.Unlock()
 		client.Close()

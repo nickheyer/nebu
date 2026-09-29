@@ -2,6 +2,7 @@ import { api } from './api';
 import { live, instanceLive, formationLive, startedTask } from './state.svelte';
 import { fail } from './toast.svelte';
 import { Shape, PlanProfile } from '$proto/estimate_pb';
+import type { Instance, RunRequest } from '$proto/instance_pb';
 
 export interface RunSpec {
   sourceId: string;
@@ -18,6 +19,15 @@ export interface RunSpec {
   span?: string[];
   shape?: Shape;
   profile?: PlanProfile;
+}
+
+// The request that runs an instance again: its own, or for a seat of a formation the formation's
+// request, since a seat's request names the seat and carries its block. Undefined for a seat whose
+// formation this node no longer holds
+export function requestOf(i: Instance | undefined): RunRequest | undefined {
+  if (!i) return undefined;
+  if (i.seat) return live.formations.get(i.seat.formationId)?.request;
+  return i.request;
 }
 
 // Whether a run spans the mesh: it names nodes or a shape

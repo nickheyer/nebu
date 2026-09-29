@@ -18,9 +18,9 @@ func (MLA) Matches(architecture string) bool {
 	return strings.HasPrefix(strings.ToLower(architecture), "deepseek")
 }
 
-func (MLA) CachePerToken(p formats.Params, _ Run) (float64, error) {
+func (MLA) CacheLayers(p formats.Params, _ Run) ([]float64, error) {
 	if needs := missing(p.Layers, "n_layer", p.KVLoraRank, "kv_lora_rank", p.RopeDim, "rope_dim"); needs != nil {
-		return 0, needs
+		return nil, needs
 	}
-	return p.Layers * (p.KVLoraRank + p.RopeDim), nil
+	return eachLayer(p, func(int) float64 { return p.KVLoraRank + p.RopeDim }), nil
 }

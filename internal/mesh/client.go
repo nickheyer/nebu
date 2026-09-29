@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,12 +82,58 @@ func (m *Manager) roundTripper(address, fingerprint string, cfg *tls.Config) htt
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.h2 == nil {
+		m.h2 = map[string]http.RoundTripper{}
+	}
 	if rt, ok := m.h2[key]; ok {
 		return rt
 	}
 	rt := transport(cfg)
 	m.h2[key] = rt
 	return rt
+}
+
+// The lock every handshake this node opens to a member takes, one per member: a second handshake
+// opened while the first is under way replaces its nonce on the peer and fails it, so the client
+// path and the beacon path hold this before they call
+func (m *Manager) dialLock(nodeID string) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.dialing == nil {
+		m.dialing = map[string]*sync.Mutex{}
+	}
+	dial := m.dialing[nodeID]
+	if dial == nil {
+		dial = &sync.Mutex{}
+		m.dialing[nodeID] = dial
+	}
+	return dial
+}
+
+// Drops the transports held for an address, closing the connections they keep idle: what a member
+// forgotten, moved, or left behind held here. Every transport when the address is empty
+func (m *Manager) dropTransports(address string) {
+	m.mu.Lock()
+	var dropped []http.RoundTripper
+	for key, rt := range m.h2 {
+		if address == "" || strings.HasPrefix(key, address+"|") {
+			dropped = append(dropped, rt)
+			delete(m.h2, key)
+		}
+	}
+	m.mu.Unlock()
+	for _, rt := range dropped {
+		if closer, ok := rt.(interface{ CloseIdleConnections() }); ok {
+			closer.CloseIdleConnections()
+		}
+	}
+}
+
+// Transports held, one per address and trust
+func (m *Manager) transports() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.h2)
 }
 
 // A client with no credential, for the handshake and the admission calls. The fingerprint keys
@@ -134,13 +181,7 @@ func (m *Manager) Client(ctx context.Context, nodeID string) (*Client, error) {
 		return nil, fmt.Errorf("%w: %s has no mesh address yet", ErrMesh, nodeID)
 	}
 	if token == "" {
-		m.mu.Lock()
-		dial := m.dialing[nodeID]
-		if dial == nil {
-			dial = &sync.Mutex{}
-			m.dialing[nodeID] = dial
-		}
-		m.mu.Unlock()
+		dial := m.dialLock(nodeID)
 		dial.Lock()
 		defer dial.Unlock()
 		if _, _, _, _, token, err = m.dialFacts(nodeID); err != nil {

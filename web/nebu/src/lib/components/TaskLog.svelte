@@ -28,15 +28,18 @@
     return { known: true, text: `${text} · ${pct(p.done, p.total).toFixed(0)}%${p.message ? ' · ' + p.message : ''}` };
   });
 
+  const target = $derived(id);
+
   $effect(() => {
     const controller = new AbortController();
-    const current = id;
+    const current = target;
     lines = [];
     streamed = null;
     error = '';
     (async () => {
       try {
         for await (const msg of api.tasks.watchTask({ id: current }, { signal: controller.signal })) {
+          if (controller.signal.aborted) break;
           if (msg.task) streamed = msg.task;
           if (msg.logs.length) {
             lines.push(...msg.logs);

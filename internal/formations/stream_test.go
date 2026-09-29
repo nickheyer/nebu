@@ -1,6 +1,10 @@
 package formations
 
-import "testing"
+import (
+	"testing"
+
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+)
 
 // The head's log names the buffer it placed on a stage RPC<n>[<address>], n the device's index on
 // that server, and the bytes placed there sum over its model buffer lines
@@ -31,5 +35,18 @@ func TestHeadStreamed(t *testing.T) {
 	}
 	if rpcBufferAt("RPCx[10.0.0.3:50052]", "10.0.0.3:50052") || rpcBufferAt("RPC0[10.0.0.3:50052]", "10.0.0.3:5005") {
 		t.Fatal("a name that is not an index, or an address that is only a prefix")
+	}
+}
+
+// Fresh measurements replace the old ones by key and keys only the old list held stay
+func TestMergeMeasurements(t *testing.T) {
+	old := []*v1.Measurement{{Key: "device.weights", Bytes: 1}, {Key: "guard.received", Bytes: 7}}
+	fresh := []*v1.Measurement{{Key: "device.weights", Bytes: 2, Line: "new"}, {Key: "device.failed", Bytes: 3}}
+	got := mergeMeasurements(old, fresh)
+	if len(got) != 3 || got[0].GetKey() != "device.weights" || got[0].GetBytes() != 2 || got[1].GetKey() != "device.failed" || got[2].GetKey() != "guard.received" || got[2].GetBytes() != 7 {
+		t.Fatalf("merged %v", got)
+	}
+	if len(mergeMeasurements(old, nil)) != 2 {
+		t.Fatal("nothing fresh keeps the old")
 	}
 }

@@ -276,8 +276,15 @@ func TestForgetAndReset(t *testing.T) {
 	if knows(a, b.Self()) {
 		t.Fatal("gossip brought b back")
 	}
-	if members, err := a.DB.ListMembers(ctx); err != nil || len(members) != 1 {
+	// The member c stays on record, and b's row stays as the refusal
+	members, err := a.DB.ListMembers(ctx)
+	if err != nil || len(members) != 2 {
 		t.Fatalf("members on record after the forget: %v %v", members, err)
+	}
+	for _, rec := range members {
+		if (rec.GetId() == b.Self()) != (rec.GetState() == v1.NodeState_NODE_STATE_FORGOTTEN) {
+			t.Fatalf("b's row is the forgotten one: %v", members)
+		}
 	}
 	// Late attempt to join after a forget event occurs, should be ignored
 	late := a.Record()
@@ -308,4 +315,48 @@ func TestForgetAndReset(t *testing.T) {
 	if n := a.Nodes(); len(n) != 1 || !n[0].GetSelf() {
 		t.Fatalf("a new mesh starts with this node alone: %v", n)
 	}
+}
+
+// An instance event bumps the node record only when it brings a state this node has not seen for
+// that instance: a seat's measurements refresh every second while its conductor waits, and the
+// mesh hears nothing of it; a new instance, a state change, and a deletion each bump once
+func TestInstanceEventsBumpOnStateChangesOnly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := newNode(t, ctx)
+	if _, _, err := m.Init(ctx, "solo", false); err != nil {
+		t.Fatal(err)
+	}
+	seq := func() uint64 { return m.Record().GetSequence() }
+	settle := func() uint64 {
+		last := seq()
+		quiet := time.Now()
+		for time.Since(quiet) < 500*time.Millisecond {
+			time.Sleep(50 * time.Millisecond)
+			if now := seq(); now != last {
+				last, quiet = now, time.Now()
+			}
+		}
+		return last
+	}
+	publish := func(action v1.EventAction, state v1.InstanceState, bytes uint64) {
+		m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, action, "in1", &v1.Instance{Id: "in1", State: state, Measurements: []*v1.Measurement{{Key: "guard.received", Bytes: bytes}}})
+	}
+	before := settle()
+	publish(v1.EventAction_EVENT_ACTION_UPDATED, v1.InstanceState_INSTANCE_STATE_STARTING, 0)
+	eventually(t, "a new instance bumps the record", func() bool { return seq() > before })
+	settled := settle()
+	publish(v1.EventAction_EVENT_ACTION_UPDATED, v1.InstanceState_INSTANCE_STATE_STARTING, 100)
+	publish(v1.EventAction_EVENT_ACTION_UPDATED, v1.InstanceState_INSTANCE_STATE_STARTING, 200)
+	if after := settle(); after != settled {
+		t.Fatalf("measurement refreshes bumped the record from %d to %d", settled, after)
+	}
+	publish(v1.EventAction_EVENT_ACTION_UPDATED, v1.InstanceState_INSTANCE_STATE_READY, 200)
+	eventually(t, "a state change bumps the record", func() bool { return seq() > settled })
+	ready := settle()
+	publish(v1.EventAction_EVENT_ACTION_DELETED, v1.InstanceState_INSTANCE_STATE_READY, 200)
+	eventually(t, "a deletion bumps the record", func() bool { return seq() > ready })
+	gone := settle()
+	publish(v1.EventAction_EVENT_ACTION_UPDATED, v1.InstanceState_INSTANCE_STATE_READY, 200)
+	eventually(t, "an instance seen again after deletion bumps the record", func() bool { return seq() > gone })
 }

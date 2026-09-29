@@ -88,7 +88,7 @@ message SeatSpec {
   // The interface the link to the peers leaves through, and its RDMA devices
   string interface = 16;
   repeated string rdma_devices = 17;
-  // Planned bytes per device in device order, what a tensor split follows
+  // Devices in tensor order and the planned bytes on each
   repeated string devices = 18;
   repeated uint64 device_bytes = 19;
   // The draft model's weights, for a draft head
@@ -109,6 +109,8 @@ message SeatSpec {
   string slot_dir = 28;
   // The key of the model's tensor cache on the seat's node, the same across relaunches
   string cache_key = 29;
+  // Layers of the seat's range each device in devices holds, what a tensor split follows
+  repeated uint32 device_layers = 30;
 }
 
 // A runtime process serving one stored model

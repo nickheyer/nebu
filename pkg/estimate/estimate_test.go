@@ -627,3 +627,53 @@ func TestParamsAccessors(t *testing.T) {
 		t.Fatal("clone should not share")
 	}
 }
+
+// A hybrid model's cache follows its full attention layers: a range holding only recurrent layers
+// carries no cache, one holding a full layer carries that layer's whole cache, and the plan sizes
+// each layer's cache by its own kind rather than the average
+func TestHybridLayersCarryTheirOwnCache(t *testing.T) {
+	params := map[string]float64{"n_layer": 8, "n_head_kv": 8, "head_dim": 128, "head_dim_v": 128, "n_embd": 4096, "n_vocab": 32000, "attn_interval": 4}
+	rng := func(from, to int32) *v1.Descriptor {
+		d := &v1.Descriptor{Architecture: "qwen3next", Family: "default", Params: params}
+		for i := from; i < to; i++ {
+			d.Groups = append(d.Groups, &v1.TensorGroup{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, Layer: i, Bytes: 100 * mib})
+		}
+		return d
+	}
+	p, defaultsOf := policy(t, "llamacpp")
+	host := &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "g", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 80 * gib}, {Id: "h", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 80 * gib}}}
+	plan := func(d *v1.Descriptor) *v1.MemoryPlan {
+		out, err := p.Plan(estimate.Input{Descriptor: d, Family: archs.Default{}, Host: host, Params: defaults(defaultsOf, map[string]any{"n_ctx": int64(8192)})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	fullLayer := uint64(8192) * 8 * 256 * 2
+	if got := plan(rng(0, 3)).GetCacheBytes(); got != 0 {
+		t.Fatalf("recurrent layers 0-2 carry no cache: %s", estimate.Human(got))
+	}
+	if got := plan(rng(3, 4)).GetCacheBytes(); got != fullLayer {
+		t.Fatalf("layer 3 keeps a full cache: %s, want %s", estimate.Human(got), estimate.Human(fullLayer))
+	}
+	if got := plan(rng(0, 8)).GetCacheBytes(); got != 2*fullLayer {
+		t.Fatalf("the whole model keeps two: %s", estimate.Human(got))
+	}
+	// The solver keeps the highest layers on the device. Layers 1-3 need their weights, layer 3's
+	// full cache, and the overhead; the averaged cache would put a quarter of it on each and need
+	// less, so a device with room between the two keeps two layers by the family's shape
+	overhead := plan(rng(0, 4)).GetOverheadBytes()
+	shaped := 3*100*mib + fullLayer + overhead
+	averaged := 3*100*mib + 3*fullLayer/4 + overhead
+	device := func(room uint64) *v1.HostProfile {
+		return &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "g", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: uint64(float64(room)/0.95) + 2}, {Id: "h", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 80 * gib}}}
+	}
+	out, err := p.Plan(estimate.Input{Descriptor: rng(0, 4), Family: archs.Default{}, Host: device(4*100*mib + fullLayer + overhead), Params: defaults(defaultsOf, map[string]any{"n_ctx": int64(8192)})})
+	if err != nil || out.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
+		t.Fatalf("layers 0-3 fit with the one full cache: %v %v", out.GetVerdict(), err)
+	}
+	out, err = p.Plan(estimate.Input{Descriptor: rng(0, 4), Family: archs.Default{}, Host: device((shaped + averaged) / 2), Params: defaults(defaultsOf, map[string]any{"n_ctx": int64(8192)})})
+	if err != nil || out.GetVerdict() != v1.FitVerdict_FIT_VERDICT_PARTIAL || out.GetParams()["n_gpu_layers"] != "2" {
+		t.Fatalf("between the shaped and the averaged need, two layers stay: %v %v %v", out.GetVerdict(), out.GetParams()["n_gpu_layers"], err)
+	}
+}

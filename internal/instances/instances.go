@@ -162,23 +162,29 @@ func (in *instance) snapshot() *v1.Instance {
 	return proto.Clone(in.rec).(*v1.Instance)
 }
 
-// Applies and stores a state change, then wakes waiters and publishes it.
 func (in *instance) update(fn func(*v1.Instance)) {
 	in.mu.Lock()
-	before := in.rec.GetState()
+	before := proto.Clone(in.rec).(*v1.Instance)
 	fn(in.rec)
-	if err := in.mgr.DB.PutInstance(context.Background(), in.rec); err != nil {
-		in.mgr.Log.Warn("instance record write failed", "id", in.rec.GetId(), "err", err)
+	changed := !proto.Equal(before, in.rec)
+	var rec *v1.Instance
+	if changed {
+		if err := in.mgr.DB.PutInstance(context.Background(), in.rec); err != nil {
+			in.mgr.Log.Warn("instance record write failed", "id", in.rec.GetId(), "err", err)
+		}
+		rec = proto.Clone(in.rec).(*v1.Instance)
+		in.mgr.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_UPDATED, rec.GetId(), rec)
 	}
-	rec := proto.Clone(in.rec).(*v1.Instance)
+	terminal := Terminal(in.rec.GetState())
+	var g *forwarder
+	if terminal {
+		g, in.guard = in.guard, nil
+	}
 	in.mu.Unlock()
-	in.mgr.changed(rec, before)
-	// Publish exits before releasing stop waiters.
-	if Terminal(rec.GetState()) {
-		in.mu.Lock()
-		g := in.guard
-		in.guard = nil
-		in.mu.Unlock()
+	if changed {
+		in.mgr.changed(rec, before.GetState())
+	}
+	if terminal {
 		if g != nil {
 			g.Close()
 		}
@@ -186,7 +192,6 @@ func (in *instance) update(fn func(*v1.Instance)) {
 	}
 }
 
-// Publishes instance changes and updates routes. Slots manage their own routes.
 func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
 	slotted := rec.GetSlotId() != ""
 	switch {
@@ -201,7 +206,6 @@ func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
 	case rec.GetState() == v1.InstanceState_INSTANCE_STATE_DRAINING && before != v1.InstanceState_INSTANCE_STATE_DRAINING:
 		m.Routes.Drain(rec.GetId())
 	}
-	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_UPDATED, rec.GetId(), rec)
 	if m.Slots != nil {
 		m.Slots.OnInstance(rec)
 	}
@@ -448,8 +452,9 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	if err != nil {
 		return nil, nil, err
 	}
+	id := db.NewID()
 	in := m.newInstance(&v1.Instance{
-		Id:             db.NewID(),
+		Id:             id,
 		Name:           name,
 		SourceId:       stored.GetSourceId(),
 		Repo:           stored.GetRepo(),
@@ -473,11 +478,11 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	}
 	m.list = append(m.list, in)
 	m.pruneLocked()
+	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_CREATED, id, in.snapshot())
 	m.mu.Unlock()
-	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_CREATED, in.rec.GetId(), in.snapshot())
 	prepDir := artifacts["prepared_dir"]
 	prepTimeout := rt.PrepareTimeout()
-	task := m.Tasks.Start(kindRun, "run "+name, map[string]string{"instance": in.rec.GetId(), "name": name}, func(ctx context.Context, h *tasks.Handle) error {
+	task := m.Tasks.Start(kindRun, "run "+name, map[string]string{"instance": id, "name": name}, func(ctx context.Context, h *tasks.Handle) error {
 		if prep != nil {
 			if err := m.runPrepare(ctx, h, in, prep, install.GetDir(), prepDir, prepTimeout, req.GetForce()); err != nil {
 				return err
@@ -703,9 +708,12 @@ func mergeMeasurements(old, fresh []*v1.Measurement) []*v1.Measurement {
 	return out
 }
 
-// Marks an instance failed unless terminal, returning triage hits
+// Marks an instance failed unless terminal, returning triage hits. The log's measurements go on
+// the record with the hits, so what the runtime allocated and failed to allocate before it died
+// is read from the record, on this node and over the mesh
 func (m *Manager) fail(in *instance, err error) []*v1.TriageHit {
 	var hits []*v1.TriageHit
+	var measurements []*v1.Measurement
 	in.mu.Lock()
 	log, proc := in.log, in.proc
 	in.mu.Unlock()
@@ -713,7 +721,9 @@ func (m *Manager) fail(in *instance, err error) []*v1.TriageHit {
 		proc.Sync()
 	}
 	if log != nil && in.rt != nil {
-		hits = triage.Scan(in.rt.Triage(), log.Tail(0))
+		lines := log.Tail(0)
+		hits = triage.Scan(in.rt.Triage(), lines)
+		measurements = in.rt.Measure(lines)
 	}
 	in.update(func(r *v1.Instance) {
 		if Terminal(r.State) || r.State == v1.InstanceState_INSTANCE_STATE_STOPPING {
@@ -723,6 +733,7 @@ func (m *Manager) fail(in *instance, err error) []*v1.TriageHit {
 		r.State = v1.InstanceState_INSTANCE_STATE_FAILED
 		r.Error = err.Error()
 		r.Triage = hits
+		r.Measurements = mergeMeasurements(r.Measurements, measurements)
 		r.StoppedAt = timestamppb.Now()
 	})
 	return hits
@@ -733,7 +744,7 @@ func (m *Manager) supervise(in *instance) {
 	<-proc.Done()
 	exitErr := proc.Err()
 	in.mu.Lock()
-	state := in.rec.State
+	state, name := in.rec.State, in.rec.GetName()
 	in.mu.Unlock()
 	switch state {
 	case v1.InstanceState_INSTANCE_STATE_STOPPING, v1.InstanceState_INSTANCE_STATE_DRAINING:
@@ -747,7 +758,7 @@ func (m *Manager) supervise(in *instance) {
 			detail = "exited: " + exitErr.Error()
 		}
 		hits := m.fail(in, errors.New(detail))
-		m.Log.Warn("instance exited", "name", in.rec.GetName(), "err", exitErr, "triage", len(hits))
+		m.Log.Warn("instance exited", "name", name, "err", exitErr, "triage", len(hits))
 	}
 }
 
@@ -882,8 +893,8 @@ func (m *Manager) Drain(ctx context.Context, id string, limit time.Duration) (*v
 		}
 	})
 	if draining && m.Routes != nil {
-		m.Routes.Drain(in.rec.GetId())
-		m.Routes.WaitDrained(ctx, in.rec.GetId(), limit)
+		m.Routes.Drain(id)
+		m.Routes.WaitDrained(ctx, id, limit)
 	}
 	return in.snapshot(), nil
 }
@@ -1148,10 +1159,10 @@ func (m *Manager) pruneLocked() {
 		}
 	}
 	for i := 0; i < len(m.list) && finished > historyMax; i++ {
-		in := m.list[i]
-		if Terminal(in.snapshot().GetState()) {
+		rec := m.list[i].snapshot()
+		if Terminal(rec.GetState()) {
 			m.list = append(m.list[:i], m.list[i+1:]...)
-			m.forget(in.rec.GetId())
+			m.forget(rec.GetId())
 			finished--
 			i--
 		}

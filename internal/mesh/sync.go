@@ -195,15 +195,15 @@ func (m *Manager) mergeRecord(rec *v1.Node, direct bool) {
 	rec.Self = false
 	m.mu.Lock()
 	mb, known := m.members[rec.GetId()]
-
-	// NOTE: Some race conditions occur here because peers re-ping or retry to join after host intended
-	//		 to forget
+	// A record from a node that is no member here and holds no session is not taken: a node enters
+	// by handshake alone, and a forgotten one is refused there
 	if m.mesh == nil || (!known && m.sessions[rec.GetId()] == nil) {
 		m.mu.Unlock()
 		return
 	}
 	action := v1.EventAction_EVENT_ACTION_UPDATED
 	stateBefore := v1.NodeState_NODE_STATE_UNSPECIFIED
+	var moved string
 	if known {
 		stateBefore = mb.rec.GetState()
 		if !mb.sketch && rec.GetSequence() < mb.rec.GetSequence() {
@@ -228,10 +228,12 @@ func (m *Manager) mergeRecord(rec *v1.Node, direct bool) {
 			rec.State = v1.NodeState_NODE_STATE_READY
 			rec.SeenAt = timestamppb.Now()
 			mb.missed = 0
-			delete(m.forgotten, rec.GetId())
 		} else {
 			rec.State = mb.rec.GetState()
 			rec.SeenAt = mb.rec.GetSeenAt()
+		}
+		if old := mb.rec.GetAddress(); old != "" && old != rec.GetAddress() {
+			moved = old
 		}
 		mb.rec, mb.sketch = rec, rec.GetProfile() == nil && !direct
 	} else {
@@ -239,13 +241,16 @@ func (m *Manager) mergeRecord(rec *v1.Node, direct bool) {
 		if direct {
 			rec.State = v1.NodeState_NODE_STATE_READY
 			rec.SeenAt = timestamppb.Now()
-			delete(m.forgotten, rec.GetId())
 		}
 		m.members[rec.GetId()] = &member{rec: rec, sketch: rec.GetProfile() == nil && !direct}
 	}
 	m.reclassifyLocked(rec.GetId())
 	out := proto.Clone(rec).(*v1.Node)
 	m.mu.Unlock()
+	if moved != "" {
+		// The member moved: the transport to its old address holds connections to nothing
+		m.dropTransports(moved)
+	}
 	m.persist(out)
 	m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, action, out.GetId(), out)
 	if m.Formations != nil && out.GetState() != stateBefore {
@@ -296,14 +301,40 @@ func (m *Manager) mergeMembers(list []*v1.Member) {
 	}
 }
 
-// Whether a member forgotten lately is still refused from gossip
+// Whether a node was forgotten here and stays refused
 func (m *Manager) forgottenLocked(id string) bool {
-	at, ok := m.forgotten[id]
-	if ok && time.Since(at) < GoneAfter {
-		return true
-	}
+	_, ok := m.forgotten[id]
+	return ok
+}
+
+// Lets a forgotten node back: what an invite or an admission of it means, and what rotating the
+// secret does for every forgotten node, since none of them holds the new one
+func (m *Manager) readmit(id string) {
+	m.mu.Lock()
+	_, was := m.forgotten[id]
 	delete(m.forgotten, id)
-	return false
+	m.mu.Unlock()
+	if was {
+		if err := m.DB.DeleteMember(context.Background(), id); err != nil {
+			m.Log.Warn("forgotten row not dropped", "node", id, "err", err)
+		}
+	}
+}
+
+// Clears the forgotten set, rows included
+func (m *Manager) readmitAll() {
+	m.mu.Lock()
+	ids := make([]string, 0, len(m.forgotten))
+	for id := range m.forgotten {
+		ids = append(ids, id)
+	}
+	m.forgotten = map[string]time.Time{}
+	m.mu.Unlock()
+	for _, id := range ids {
+		if err := m.DB.DeleteMember(context.Background(), id); err != nil {
+			m.Log.Warn("forgotten row not dropped", "node", id, "err", err)
+		}
+	}
 }
 
 // Writes a member's record
@@ -330,15 +361,16 @@ func (m *Manager) Sync(ctx context.Context, peer string, req *v1.SyncRequest) (*
 	if !m.Joined() {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, ErrNoMesh)
 	}
+	// A sync from a node that is not a member here, one forgotten since it handshook, changes
+	// nothing: neither its record nor the members it names are taken
+	if _, ok := m.Member(peer); !ok {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: %s is not a member here, handshake again", ErrMesh, peer))
+	}
 	if node := req.GetNode(); node != nil && node.GetId() == peer {
 		m.absorb(node, req.GetMembers(), true)
 	} else {
 		m.absorb(nil, req.GetMembers(), false)
 		m.reached(peer)
-	}
-	// A sync sent before its sender was forgotten here changes nothing more
-	if _, ok := m.Member(peer); !ok {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: %s is not a member here, handshake again", ErrMesh, peer))
 	}
 	if m.Formations != nil {
 		m.Formations.Merge(peer, req.GetFormations())
@@ -365,7 +397,8 @@ func (m *Manager) Bye(peer string) {
 // Drops a member with its links and session
 func (m *Manager) forget(id string) {
 	m.mu.Lock()
-	m.forgotten[id] = time.Now()
+	now := time.Now()
+	m.forgotten[id] = now
 	mb, ok := m.members[id]
 	delete(m.members, id)
 	if s := m.sessions[id]; s != nil {
@@ -374,8 +407,15 @@ func (m *Manager) forget(id string) {
 	}
 	delete(m.links, id)
 	m.mu.Unlock()
+	if mb.GetAddress() != "" {
+		m.dropTransports(mb.GetAddress())
+	}
 	ctx := context.Background()
-	m.DB.DeleteMember(ctx, id)
+	// The row stays as the refusal, with the name and address the node was known by
+	row := &v1.Node{Id: id, Name: mb.GetName(), Address: mb.GetAddress(), State: v1.NodeState_NODE_STATE_FORGOTTEN, SeenAt: timestamppb.New(now)}
+	if err := m.DB.PutMember(ctx, row); err != nil {
+		m.Log.Warn("forgotten row not written", "node", id, "err", err)
+	}
 	m.DB.DeleteSession(ctx, id)
 	m.DB.DeleteLinks(ctx, id)
 	if ok {

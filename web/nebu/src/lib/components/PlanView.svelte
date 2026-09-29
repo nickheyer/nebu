@@ -19,8 +19,8 @@
     plan,
     compact = false,
     params = true,
-    except = ''
-  }: { plan: MemoryPlan; compact?: boolean; params?: boolean; except?: string } = $props();
+    instance = ''
+  }: { plan: MemoryPlan; compact?: boolean; params?: boolean; instance?: string } = $props();
 
   const kinds: Record<number, string> = { [PoolKind.DEVICE]: 'device', [PoolKind.HOST]: 'host', [PoolKind.UNIFIED]: 'unified' };
   const solved = $derived(solvedParams(plan));
@@ -43,16 +43,16 @@
     const word = enumLabel(TensorGroupKind, p.kind);
     return p.count > 1 ? `${word} ×${p.count}` : word;
   }
-  // Separate nebu's allocations from other memory usage.
+  // Separate nebu's allocations from other memory usage
   function overlays(pool: MemoryPlan['pools'][number]) {
     const whole = pool.totalBytes || pool.capacityBytes;
     const inUse = whole > pool.freeBytes ? whole - pool.freeBytes : 0n;
-    const ours = instancesOnPool(pool.poolId, except);
+    const ours = instancesOnPool(pool.poolId, instance);
     const others = inUse > ours ? inUse - ours : 0n;
     const items = [];
     if (others > 0n) items.push({ size: others, tone: 'neutral' as const });
-    if (ours > 0n) items.push({ label: 'instances', size: ours, tone: 'info' as const });
-    items.push({ label: 'this run', size: pool.usedBytes, tone: pool.usedBytes > pool.capacityBytes ? ('bad' as const) : ('accent' as const) });
+    if (ours > 0n) items.push({ label: instance ? 'other instances' : 'instances', size: ours, tone: 'info' as const });
+    items.push({ label: instance ? 'this instance' : 'this run', size: pool.usedBytes, tone: pool.usedBytes > pool.capacityBytes ? ('bad' as const) : ('accent' as const) });
     return [{ start: 'left' as const, items }];
   }
 </script>

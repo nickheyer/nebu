@@ -137,7 +137,7 @@
               {#if instance.plan}
                 <div>
                   <div class="caps mb-2 text-fg-faint">Memory plan</div>
-                  <PlanView plan={instance.plan} compact />
+                  <PlanView plan={instance.plan} compact instance={instance.id} />
                 </div>
               {/if}
               {#if Object.keys(instance.params).length}

@@ -225,6 +225,10 @@ func (LlamaCpp) Probes() []Probe {
 // Parses model, KV cache, and compute buffer allocations for device and host backends. Buffers on
 // RPC backends are the tensors the head streamed to stages. The transport a seat negotiated, when
 // a line names it, is a measurement too.
+// What a llama.cpp log says about memory: the weight, cache, and compute buffers it allocated on
+// each side, summed per side; the allocations that failed, summed per side under <side>.failed;
+// and from the memory breakdown it prints, each device side's total, free, and unaccounted bytes
+// as of the latest print. The side is the process's own device, its host, or an rpc device
 func (LlamaCpp) Measure(lines []string) []*v1.Measurement {
 	var m measurements
 	for _, line := range lines {
@@ -237,22 +241,74 @@ func (LlamaCpp) Measure(lines []string) []*v1.Measurement {
 			if len(fields) == 0 {
 				continue
 			}
-			backend := fields[len(fields)-1]
 			n, ok := bytesAfter(line, phrase)
 			if !ok {
 				continue
 			}
-			side := "device"
-			switch {
-			case strings.HasPrefix(backend, "CPU"), strings.HasSuffix(backend, "_Host"):
-				side = "host"
-			case strings.HasPrefix(backend, "RPC"):
-				side = "rpc"
+			m.add(memorySide(fields[len(fields)-1])+"."+what, n, line)
+		}
+		if n, ok := bytesAfter(line, ": allocating "); ok && strings.Contains(line, " failed") {
+			m.add("device.failed", n, line)
+		}
+		if i := strings.Index(line, "failed to allocate "); i >= 0 {
+			fields := strings.Fields(line[i+len("failed to allocate "):])
+			if len(fields) >= 5 && fields[1] == "buffer" && fields[2] == "of" && fields[3] == "size" {
+				if n, err := strconv.ParseUint(strings.TrimRight(fields[4], ",.;"), 10, 64); err == nil {
+					m.add(memorySide(fields[0])+".failed", n, line)
+				}
 			}
-			m.add(side+"."+what, n, line)
+		}
+		if side, numbers, ok := breakdownRow(line); ok {
+			m.set(side+".total", numbers[0]<<20, line)
+			m.set(side+".free", numbers[1]<<20, line)
+			m.set(side+".unaccounted", numbers[6]<<20, line)
 		}
 	}
 	return append(m.list, transportMeasurement(lines)...)
+}
+
+// The side a ggml backend or device name belongs to
+func memorySide(backend string) string {
+	switch {
+	case strings.HasPrefix(backend, "CPU"), strings.HasSuffix(backend, "_Host"), backend == "Host":
+		return "host"
+	case strings.HasPrefix(backend, "RPC"):
+		return "rpc"
+	}
+	return "device"
+}
+
+// A device row of llama.cpp's memory breakdown table, "| - <device> | total = free + (self = model
+// + context + compute) + unaccounted |" in MiB: the side and the seven numbers, unaccounted read
+// as zero when llama.cpp prints it negative. The host row carries four numbers and is no device row
+func breakdownRow(line string) (string, []uint64, bool) {
+	if !strings.Contains(line, "memory_breakdown") {
+		return "", nil, false
+	}
+	cells := strings.Split(line, "|")
+	if len(cells) < 3 {
+		return "", nil, false
+	}
+	name := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(cells[1]), "-"))
+	if name == "" {
+		return "", nil, false
+	}
+	var numbers []uint64
+	for _, f := range strings.FieldsFunc(cells[2], func(r rune) bool { return r == ' ' || r == '=' || r == '+' || r == '(' || r == ')' }) {
+		if strings.HasPrefix(f, "-") {
+			numbers = append(numbers, 0)
+			continue
+		}
+		n, err := strconv.ParseUint(f, 10, 64)
+		if err != nil {
+			return "", nil, false
+		}
+		numbers = append(numbers, n)
+	}
+	if len(numbers) != 7 {
+		return "", nil, false
+	}
+	return memorySide(strings.Fields(name)[0]), numbers, true
 }
 
 // Quantized weights default to an 8-bit cache. Other weights use f16. Quantized value caches

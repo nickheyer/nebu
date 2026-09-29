@@ -69,12 +69,15 @@ func TestLlamaCppChainHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Peers arrive in any order; the stages take the rpc list in rank order, their devices first.
-	seat := &v1.SeatSpec{FormationId: "f1", Shape: v1.Shape_SHAPE_CHAIN, Role: RoleHead, Rank: 0, Count: 3,
-		Devices:     []string{"a/GPU-a0", "a/GPU-a1", "b/GPU-b0", "GPU-h0"},
-		DeviceBytes: []uint64{10 << 30, 20 << 30, 30 << 30, 40 << 30},
+	// The plan's layer counts follow the device list: stage a holds layers 0-29 over two devices,
+	// stage b layers 30-59, the head layers 60-79 and the output.
+	seat := &v1.SeatSpec{FormationId: "f1", Shape: v1.Shape_SHAPE_CHAIN, Role: RoleHead, Rank: 0, Count: 3, LayerFrom: 60, LayerTo: 80,
+		Devices:      []string{"a/GPU-a0", "a/GPU-a1", "b/GPU-b0", "GPU-h0"},
+		DeviceBytes:  []uint64{10 << 30, 20 << 30, 30 << 30, 40 << 30},
+		DeviceLayers: []uint32{10, 20, 30, 20},
 		Peers: []*v1.SeatPeer{
-			{NodeId: "b", Role: RoleStage, Rank: 2, Address: "10.0.0.3:50052", Devices: 1},
-			{NodeId: "a", Role: RoleStage, Rank: 1, Address: "10.0.0.2:50052", Devices: 2},
+			{NodeId: "b", Role: RoleStage, Rank: 2, Address: "10.0.0.3:50052", Devices: 1, LayerFrom: 30, LayerTo: 60},
+			{NodeId: "a", Role: RoleStage, Rank: 1, Address: "10.0.0.2:50052", Devices: 2, LayerFrom: 0, LayerTo: 30},
 		}}
 	in := Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}, Devices: []*v1.Device{gpu("GPU-h0", "0")}, Descriptor: layered(80), Seat: seat, InstallRecord: recorded(facts)}
 	cmd, err := rt.LaunchSeat(in)
@@ -87,31 +90,47 @@ func TestLlamaCppChainHead(t *testing.T) {
 		"--device RPC0,RPC1,RPC2,CUDA0",
 		"--n-gpu-layers 81",
 		"--rpc 10.0.0.2:50052,10.0.0.3:50052",
-		"--tensor-split 10737418240,21474836480,32212254720,42949672960",
+		"--tensor-split 10,20,30,21",
 		"--fit off",
 	} {
 		if !strings.Contains(line, want) {
 			t.Errorf("missing %s in %s", want, line)
 		}
 	}
-	if cmd.Params["rpc"] != "10.0.0.2:50052,10.0.0.3:50052" || cmd.Params["tensor_split"] != "10737418240,21474836480,32212254720,42949672960" || cmd.Params["n_gpu_layers"] != "81" || cmd.Params["device"] != "RPC0,RPC1,RPC2,CUDA0" {
+	if strings.Contains(line, "10737418240") {
+		t.Fatalf("the split carries layer counts, not bytes: %s", line)
+	}
+	if cmd.Params["rpc"] != "10.0.0.2:50052,10.0.0.3:50052" || cmd.Params["tensor_split"] != "10,20,30,21" || cmd.Params["n_gpu_layers"] != "81" || cmd.Params["device"] != "RPC0,RPC1,RPC2,CUDA0" {
 		t.Fatalf("params %v", cmd.Params)
 	}
 	// llama-server resolves --device as it parses it, so the rpc list comes first.
 	if rpc, dev := strings.Index(line, "--rpc "), strings.Index(line, "--device "); rpc < 0 || dev < 0 || rpc > dev {
 		t.Fatalf("--rpc at %d, --device at %d in %s", rpc, dev, line)
 	}
+	if cmd.Env["LLAMA_ARG_FIT"] != "off" {
+		t.Fatalf("fitting stays off through the environment: %v", cmd.Env)
+	}
+	// A build whose help lists no --fit still gets fitting turned off through the environment.
+	in.InstallRecord = recorded(map[string]string{factRPC: "/bin/rpc-server", factRPCFlag: "--rpc", "devices": "CUDA0"})
+	if cmd, err = rt.LaunchSeat(in); err != nil || strings.Contains(strings.Join(cmd.Args, " "), "--fit") || cmd.Env["LLAMA_ARG_FIT"] != "off" {
+		t.Fatalf("no fit flag %v %v", cmd, err)
+	}
+	in.InstallRecord = recorded(facts)
 	// The head's own devices follow the plan's order, not the profile's.
 	in.Devices = []*v1.Device{gpu("GPU-h1", "1"), gpu("GPU-h0", "0")}
 	seat.Devices = []string{"a/GPU-a0", "a/GPU-a1", "b/GPU-b0", "GPU-h0", "GPU-h1"}
 	seat.DeviceBytes = []uint64{1, 2, 3, 4, 5}
-	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--device RPC0,RPC1,RPC2,CUDA0,CUDA1 ") {
+	seat.DeviceLayers = []uint32{10, 20, 30, 8, 12}
+	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--device RPC0,RPC1,RPC2,CUDA0,CUDA1 ") || !strings.Contains(strings.Join(cmd.Args, " "), "--tensor-split 10,20,30,8,13 ") {
 		t.Fatalf("own device order %v %v", cmd, err)
 	}
-	// A head without an accelerator lists the stages' devices alone.
+	// A head without an accelerator lists the stages' devices alone, and the output lands on the
+	// last of them.
 	in.Devices = nil
-	seat.Devices, seat.DeviceBytes = []string{"a/GPU-a0", "a/GPU-a1", "b/GPU-b0"}, []uint64{1, 2, 3}
-	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--device RPC0,RPC1,RPC2 ") || !strings.Contains(strings.Join(cmd.Args, " "), "--tensor-split 1,2,3") {
+	seat.Devices, seat.DeviceBytes, seat.DeviceLayers = []string{"a/GPU-a0", "a/GPU-a1", "b/GPU-b0"}, []uint64{1, 2, 3}, []uint32{10, 20, 50}
+	seat.LayerFrom, seat.LayerTo = 80, 80
+	seat.Peers[0].LayerTo = 80
+	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--device RPC0,RPC1,RPC2 ") || !strings.Contains(strings.Join(cmd.Args, " "), "--tensor-split 10,20,51 ") {
 		t.Fatalf("cpu head %v %v", cmd, err)
 	}
 	cases := []struct {
@@ -119,7 +138,10 @@ func TestLlamaCppChainHead(t *testing.T) {
 		edit func()
 		want string
 	}{
-		{"shares", func() { seat.DeviceBytes = []uint64{1, 2} }, "2 device shares for 3 devices"},
+		{"counts", func() { seat.DeviceLayers = []uint32{1, 2} }, "2 device layer counts for 3 devices"},
+		{"stage layers", func() { seat.DeviceLayers = []uint32{20, 20, 40} }, "puts 40 layers on the devices of stage 1 on a, which holds 30"},
+		{"head layers", func() { seat.LayerFrom, seat.LayerTo = 70, 80 }, "puts 0 layers on this node's devices and the head holds 10"},
+		{"layer total", func() { seat.Peers[0].LayerTo = 70; seat.DeviceLayers = []uint32{10, 20, 40} }, "sum to 70 and the model has 80 layers"},
 		{"unqualified stage device", func() { seat.Devices = []string{"GPU-a0", "a/GPU-a1", "b/GPU-b0"} }, "stage 1 on a exposes 2 devices"},
 		{"stage short", func() { seat.Devices = []string{"a/GPU-a0", "a/GPU-a1"}; seat.DeviceBytes = []uint64{1, 2} }, "stage 2 on b exposes 1 devices"},
 		{"unknown own device", func() {
@@ -138,8 +160,9 @@ func TestLlamaCppChainHead(t *testing.T) {
 	}
 	for _, c := range cases {
 		in.Devices, in.Descriptor, in.InstallRecord = nil, layered(80), recorded(facts)
-		seat.Devices, seat.DeviceBytes = []string{"a/GPU-a0", "a/GPU-a1", "b/GPU-b0"}, []uint64{1, 2, 3}
-		seat.Peers = []*v1.SeatPeer{{NodeId: "b", Role: RoleStage, Rank: 2, Address: "10.0.0.3:50052", Devices: 1}, {NodeId: "a", Role: RoleStage, Rank: 1, Address: "10.0.0.2:50052", Devices: 2}}
+		seat.Devices, seat.DeviceBytes, seat.DeviceLayers = []string{"a/GPU-a0", "a/GPU-a1", "b/GPU-b0"}, []uint64{1, 2, 3}, []uint32{10, 20, 50}
+		seat.LayerFrom, seat.LayerTo = 80, 80
+		seat.Peers = []*v1.SeatPeer{{NodeId: "b", Role: RoleStage, Rank: 2, Address: "10.0.0.3:50052", Devices: 1, LayerFrom: 30, LayerTo: 80}, {NodeId: "a", Role: RoleStage, Rank: 1, Address: "10.0.0.2:50052", Devices: 2, LayerFrom: 0, LayerTo: 30}}
 		c.edit()
 		if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", c.name, err)
@@ -158,7 +181,7 @@ func TestLlamaCppDraftHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := strings.Join(cmd.Args, " ")
-	if !strings.HasSuffix(line, "--rpc 10.0.0.2:50052 --spec-draft-model /d.gguf --spec-draft-device RPC0") || !strings.Contains(line, "--spec-draft-n-max 4") || strings.Contains(line, "--draft-max") || strings.Contains(line, "--tensor-split") {
+	if !strings.HasSuffix(line, "--rpc 10.0.0.2:50052 --spec-draft-model /d.gguf --spec-draft-device RPC0") || !strings.Contains(line, "--spec-draft-n-max 4") || strings.Contains(line, "--draft-max") || strings.Contains(line, "--tensor-split") || cmd.Env["LLAMA_ARG_FIT"] != "off" {
 		t.Fatalf("draft head %s", line)
 	}
 	if cmd.Params["draft_device"] != "RPC0" || cmd.Params["draft_model"] != "/d.gguf" || cmd.Params["rpc"] != "10.0.0.2:50052" {
@@ -291,7 +314,7 @@ func TestLlamaCppDirectIO(t *testing.T) {
 	in.InstallRecord = recorded(map[string]string{factRPC: "/bin/rpc-server", factRPCFlag: "--rpc", factDirectIO: "--load-mode", "devices": "CUDA0"})
 	in.Descriptor = layered(32)
 	in.Devices = []*v1.Device{gpu("GPU-h0", "0")}
-	in.Seat = &v1.SeatSpec{FormationId: "f1", Shape: v1.Shape_SHAPE_CHAIN, Role: RoleHead, Count: 2, Devices: []string{"a/GPU-a0", "GPU-h0"}, DeviceBytes: []uint64{1, 2}, Peers: []*v1.SeatPeer{{NodeId: "a", Role: RoleStage, Rank: 1, Address: "10.0.0.2:50052", Devices: 1}}}
+	in.Seat = &v1.SeatSpec{FormationId: "f1", Shape: v1.Shape_SHAPE_CHAIN, Role: RoleHead, Count: 2, LayerFrom: 16, LayerTo: 32, Devices: []string{"a/GPU-a0", "GPU-h0"}, DeviceBytes: []uint64{1, 2}, DeviceLayers: []uint32{16, 16}, Peers: []*v1.SeatPeer{{NodeId: "a", Role: RoleStage, Rank: 1, Address: "10.0.0.2:50052", Devices: 1, LayerFrom: 0, LayerTo: 16}}}
 	if cmd, err := rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), " --load-mode dio ") {
 		t.Fatalf("chain head direct io %v %v", cmd, err)
 	}

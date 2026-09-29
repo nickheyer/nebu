@@ -3,7 +3,7 @@
   import { live, clock, liveInstances, instanceLive, slotName, groupLabel, orderedSlots, answersOf, runtimeName, taskFor, liveFormations } from '$lib/state.svelte';
   import { shapeLabel } from '$lib/mesh';
   import { FormationState, type Formation } from '$proto/mesh_pb';
-  import { launch, slotOccupied } from '$lib/launch';
+  import { launch, slotOccupied, requestOf } from '$lib/launch';
   import { instanceMemory } from '$lib/instances';
   import { swapSlot, evictSlot, deleteSlot, relaunchSlot, stopInstance } from '$lib/actions.svelte';
   import { ago, bytes, count, duration, newestFirst, plural, tail, when } from '$lib/format';
@@ -219,7 +219,7 @@
                   <td class="font-mono text-xs text-fg-muted">{i.slotId ? slotName(i.slotId) : '–'}</td>
                   <td class="text-fg-muted whitespace-nowrap" title={when(i.stoppedAt ?? i.createdAt)}>{ago(i.stoppedAt ?? i.createdAt, clock.now)}</td>
                   <td class="actions" onclick={(e) => e.stopPropagation()}>
-                    <span>{#if i.request}<IconButton size="xs" icon={RotateCcw} label="Run again" onclick={() => launch({ ...i.request! })} />{/if}</span>
+                    <span>{#if requestOf(i)}<IconButton size="xs" icon={RotateCcw} label={i.seat ? 'Run its formation again' : 'Run again'} onclick={() => launch({ ...requestOf(i)! })} />{/if}</span>
                   </td>
                 </tr>
               {/each}

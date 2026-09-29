@@ -247,6 +247,19 @@ func (m *Manager) heard(ctx context.Context, payload []byte, source string, trie
 	}
 	tried.Store(b.Node, time.Now())
 	go func() {
+		// The contact holds the node's dialing lock like a client handshake does, and a client
+		// handshake that met the node meanwhile leaves nothing to do
+		dial := m.dialLock(b.Node)
+		dial.Lock()
+		defer dial.Unlock()
+		m.mu.Lock()
+		mb, known := m.members[b.Node]
+		s := m.sessions[b.Node]
+		metNow := known && !mb.sketch && mb.rec.GetAddress() == b.Address || s != nil && s.send != ""
+		m.mu.Unlock()
+		if metNow {
+			return
+		}
 		resp, err := m.handshake(ctx, b.Address, b.TLS, b.Fingerprint, nil, nil)
 		if err != nil {
 			m.Log.Debug("mesh beacon contact failed", "node", b.Node, "address", b.Address, "err", err)

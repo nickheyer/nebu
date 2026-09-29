@@ -677,6 +677,16 @@ type measurements struct {
 }
 
 func (m *measurements) add(key string, bytes uint64, line string) {
+	m.entry(key, line).Bytes += bytes
+}
+
+// Records a reading that stands alone, the latest line replacing an earlier one
+func (m *measurements) set(key string, bytes uint64, line string) {
+	ms := m.entry(key, line)
+	ms.Bytes, ms.Line = bytes, line
+}
+
+func (m *measurements) entry(key, line string) *v1.Measurement {
 	if m.byKey == nil {
 		m.byKey = map[string]*v1.Measurement{}
 	}
@@ -686,7 +696,7 @@ func (m *measurements) add(key string, bytes uint64, line string) {
 		m.byKey[key] = ms
 		m.list = append(m.list, ms)
 	}
-	ms.Bytes += bytes
+	return ms
 }
 
 // Returns the first dotted version in command output.

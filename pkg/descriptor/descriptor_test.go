@@ -58,7 +58,7 @@ func perToken(t *testing.T, b *Builder, d *v1.Descriptor) float64 {
 	if family == nil {
 		t.Fatalf("no family for %q", d.GetFamily())
 	}
-	v, err := family.CachePerToken(formats.ParamsOf(d.GetParams()), archs.Run{})
+	v, err := archs.CachePerToken(family, formats.ParamsOf(d.GetParams()), archs.Run{})
 	if err != nil {
 		t.Fatal(err)
 	}

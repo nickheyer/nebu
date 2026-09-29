@@ -104,6 +104,22 @@ type member struct {
 	sketch bool
 }
 
+// The name the member is known by, empty for no member
+func (mb *member) GetName() string {
+	if mb == nil {
+		return ""
+	}
+	return mb.rec.GetName()
+}
+
+// The address the member is known at, empty for no member
+func (mb *member) GetAddress() string {
+	if mb == nil {
+		return ""
+	}
+	return mb.rec.GetAddress()
+}
+
 // A session with one peer: the token it sends us and the token we send it
 type session struct {
 	peer    string
@@ -159,7 +175,8 @@ type Manager struct {
 	// Nodes heard by beacon, and admissions under way, both sides
 	nearby     map[string]*heard
 	admissions map[string]*v1.Admission
-	// Members forgotten lately, refused from gossip until they call directly
+	// Members forgotten here, by when: refused at the handshake and from gossip until invited or
+	// admitted again or the secret rotates, kept as rows so a restart forgets nothing
 	forgotten map[string]time.Time
 	// Why the node traffic listener is not bound, when the default address could not be taken
 	listenErr string
@@ -251,6 +268,10 @@ func (m *Manager) loadMembers(ctx context.Context) error {
 	}
 	for _, rec := range recs {
 		if rec.GetId() == m.identity.ID {
+			continue
+		}
+		if rec.GetState() == v1.NodeState_NODE_STATE_FORGOTTEN {
+			m.forgotten[rec.GetId()] = rec.GetSeenAt().AsTime()
 			continue
 		}
 		m.members[rec.GetId()] = &member{rec: rec, sketch: rec.GetProfile() == nil}
@@ -537,6 +558,10 @@ func (m *Manager) publishStatus() {
 func (m *Manager) watch(ctx context.Context) {
 	kinds := []v1.EventKind{v1.EventKind_EVENT_KIND_HOST, v1.EventKind_EVENT_KIND_INSTALL, v1.EventKind_EVENT_KIND_MODEL, v1.EventKind_EVENT_KIND_STORE, v1.EventKind_EVENT_KIND_ROUTE, v1.EventKind_EVENT_KIND_SLOT, v1.EventKind_EVENT_KIND_INSTANCE, v1.EventKind_EVENT_KIND_FORMATION, v1.EventKind_EVENT_KIND_SETTINGS}
 	sub := m.Events.Subscribe(ctx, kinds)
+	// The node record carries each seat instance's state and nothing else of an instance, so an
+	// instance event bumps the record only when it brings a state this loop has not seen: a seat's
+	// measurements and transport change without a word to the mesh
+	states := map[string]v1.InstanceState{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -545,6 +570,15 @@ func (m *Manager) watch(ctx context.Context) {
 			// A copy of another member's formation changes nothing about this node.
 			if f := ev.GetFormation(); f != nil && f.GetConductor() != m.identity.ID {
 				continue
+			}
+			if in := ev.GetInstance(); in != nil {
+				if ev.GetAction() == v1.EventAction_EVENT_ACTION_DELETED {
+					delete(states, in.GetId())
+				} else if last, seen := states[in.GetId()]; seen && last == in.GetState() {
+					continue
+				} else {
+					states[in.GetId()] = in.GetState()
+				}
 			}
 			if ev.GetSeq() > 0 {
 				m.bump()

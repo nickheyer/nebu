@@ -2,7 +2,7 @@
   import { page } from '$app/state';
   import { tabState } from '$lib/tabs.svelte';
   import { live, clock, instanceLive, slotName, groupLabel, runtimeName, answersOf } from '$lib/state.svelte';
-  import { launch } from '$lib/launch';
+  import { launch, requestOf } from '$lib/launch';
   import { stopInstance } from '$lib/actions.svelte';
   import { bytes, when, duration, count, commandLines, tail } from '$lib/format';
   import { templateText } from '$lib/gateway';
@@ -62,7 +62,7 @@
   }
 
   async function again(fix: Record<string, string> = {}) {
-    const r = instance?.request;
+    const r = requestOf(instance);
     if (!r) return;
     await launch({ ...r, params: { ...r.params, ...fix } });
   }
@@ -84,8 +84,8 @@
     {#if alive}
       {#if route?.state === RouteState.READY}<Button icon={MessageSquare} href="/chat?model={encodeURIComponent(routeName)}">Chat</Button>{/if}
       <Button variant="danger" icon={Square} loading={stopping} onclick={stop}>Stop</Button>
-    {:else if instance.request}
-      <Button variant="primary" icon={RotateCcw} onclick={() => again()}>Run again</Button>
+    {:else if requestOf(instance)}
+      <Button variant="primary" icon={RotateCcw} onclick={() => again()}>{instance.seat ? 'Run its formation again' : 'Run again'}</Button>
     {/if}
     {#snippet below()}
       <Tabs tabs={tabs.map((t) => (t.id === 'triage' ? { ...t, count: instance.triage.length || undefined } : t.id === 'requests' ? { ...t, count: traces.length || undefined } : t))} bind:value={tab.value} />
@@ -105,7 +105,7 @@
       </div>
       {#if instance.plan}
         <Card title="Memory">
-          <PlanView plan={instance.plan} params={false} except={instance.id} />
+          <PlanView plan={instance.plan} params={false} instance={instance.id} />
         </Card>
       {/if}
       <div class="grid grid-cols-1 gap-5 xl:grid-cols-2">
@@ -175,7 +175,7 @@
             {#if Object.keys(hit.fix).length}
               <div class="mt-3 flex flex-wrap items-center gap-3">
                 <ParamList params={hit.fix} />
-                {#if instance.request && !alive}
+                {#if requestOf(instance) && !alive}
                   <Button size="sm" variant="primary" icon={Wrench} class="ml-auto" onclick={() => again(hit.fix)}>Run again with this fix</Button>
                 {/if}
               </div>

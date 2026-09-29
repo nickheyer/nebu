@@ -14,13 +14,22 @@ func (Default) Description() string {
 func (Default) Priority() int       { return 0 }
 func (Default) Matches(string) bool { return true }
 
-func (Default) CachePerToken(p formats.Params, _ Run) (float64, error) {
+// Every layer keeps a full cache, or one layer in attn_interval for a hybrid model, the last of
+// each interval as llama.cpp lays the layers out, the rest holding a recurrent state and no cache
+// per token
+func (Default) CacheLayers(p formats.Params, _ Run) ([]float64, error) {
 	if needs := missing(p.Layers, "n_layer", p.HeadsKV, "n_head_kv", p.HeadDim, "head_dim"); needs != nil {
-		return 0, needs
+		return nil, needs
 	}
-	interval := p.AttentionInterval
+	interval := int(p.AttentionInterval)
 	if interval <= 0 {
 		interval = 1
 	}
-	return p.Layers / interval * p.HeadsKV * (p.HeadDim + p.HeadDimV), nil
+	full := p.HeadsKV * (p.HeadDim + p.HeadDimV)
+	return eachLayer(p, func(il int) float64 {
+		if (il+1)%interval == 0 {
+			return full
+		}
+		return 0
+	}), nil
 }

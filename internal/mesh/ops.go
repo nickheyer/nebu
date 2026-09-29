@@ -270,6 +270,7 @@ func (m *Manager) clearState(ctx context.Context) error {
 	m.admissions = map[string]*v1.Admission{}
 	m.forgotten = map[string]time.Time{}
 	m.mu.Unlock()
+	m.dropTransports("")
 	if err := m.DB.DeleteMesh(ctx); err != nil {
 		return err
 	}
@@ -383,6 +384,8 @@ func (m *Manager) Rotate(ctx context.Context) (*v1.Mesh, []string, []string, err
 	if err := m.Rekey(secret); err != nil {
 		return nil, nil, nil, err
 	}
+	// No forgotten node holds the new secret, so none needs refusing by name any more
+	m.readmitAll()
 	m.Log.Info("mesh secret rotated", "rotated", len(rotated), "missed", len(missed))
 	m.publishStatus()
 	mesh, _ := m.Mesh()

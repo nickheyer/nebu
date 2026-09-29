@@ -5,16 +5,19 @@
   let { id, follow = true, height = 'h-96' }: { id: string; follow?: boolean; height?: string } = $props();
   let lines = $state<string[]>([]);
   let error = $state('');
+  const target = $derived(id);
+  const following = $derived(follow);
 
   $effect(() => {
     const controller = new AbortController();
-    const current = id;
-    const f = follow;
+    const current = target;
+    const f = following;
     lines = [];
     error = '';
     (async () => {
       try {
         for await (const msg of api.instances.logs({ id: current, follow: f, tail: 1000 }, { signal: controller.signal })) {
+          if (controller.signal.aborted) break;
           lines.push(...msg.lines);
           if (lines.length > 5000) lines.splice(0, lines.length - 5000);
         }

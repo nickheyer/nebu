@@ -139,6 +139,12 @@ func (m *Manager) Hello(ctx context.Context, req *v1.HelloRequest) (*v1.HelloRes
 	if caller == "" || caller == m.identity.ID {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%w: a handshake names the calling node", ErrMesh))
 	}
+	m.mu.Lock()
+	forgotten := m.forgottenLocked(caller)
+	m.mu.Unlock()
+	if forgotten {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: %s was forgotten here; invite it again to let it back, or rotate the mesh secret to keep it out of every member", ErrMesh, caller))
+	}
 	if len(req.GetProof()) == 0 {
 		nonceB, err := nonce()
 		if err != nil {

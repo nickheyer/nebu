@@ -56,7 +56,8 @@ type Role struct {
 	Health RoleHealth
 	// Whether other seats or the conductor's gateway connect to it, so it gets a guard listener
 	Listens bool
-	// Whether the guard listener admits exactly one connection at a time
+	// Whether the seat serves one client: its guard listener admits one address at a time, every
+	// connection that address opens, and refuses other addresses while one of them is open
 	Single bool
 	// Whether ranks rendezvous at one address and launch together
 	Rendezvous bool
@@ -298,11 +299,14 @@ func rpcDeviceNames(stages []*v1.SeatPeer) ([][]string, error) {
 	return out, nil
 }
 
-// Joins planned bytes per device into a tensor split
-func tensorSplit(bytes []uint64) string {
-	parts := make([]string, len(bytes))
-	for i, b := range bytes {
-		parts[i] = strconv.FormatUint(b, 10)
+// Joins layer counts per device into a tensor split. llama.cpp normalises the values to proportions
+// of the layers it offloads and hands each layer to the first device whose cumulative proportion
+// exceeds the layer's own, so counts summing to the offloaded layers place every layer on the
+// device the plan sized for it
+func tensorSplit(layers []uint32) string {
+	parts := make([]string, len(layers))
+	for i, n := range layers {
+		parts[i] = strconv.FormatUint(uint64(n), 10)
 	}
 	return strings.Join(parts, ",")
 }

@@ -18,6 +18,6 @@ func (GPTOSS) Matches(architecture string) bool {
 	a := strings.ToLower(architecture)
 	return a == "gptoss" || a == "gpt-oss" || a == "gpt_oss"
 }
-func (GPTOSS) CachePerToken(p formats.Params, run Run) (float64, error) {
+func (GPTOSS) CacheLayers(p formats.Params, run Run) ([]float64, error) {
 	return slidingWindow(p, run, 2)
 }

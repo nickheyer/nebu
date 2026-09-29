@@ -11,6 +11,6 @@ func (Llama4) Description() string {
 }
 func (Llama4) Priority() int                    { return 5 }
 func (Llama4) Matches(architecture string) bool { return is(architecture, "llama4") }
-func (Llama4) CachePerToken(p formats.Params, run Run) (float64, error) {
+func (Llama4) CacheLayers(p formats.Params, run Run) ([]float64, error) {
 	return slidingWindow(p, run, 4)
 }

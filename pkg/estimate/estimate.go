@@ -79,8 +79,10 @@ type Scope struct {
 	Model      formats.Params
 	Host       *v1.HostProfile
 	Params     Params
-	// Cache elements per context token for this run.
+	// Cache elements per context token for this run, summed over the descriptor's layers
 	CachePerToken float64
+	// Cache elements per context token on each layer of the model, by layer index
+	CacheLayers []float64
 	// Other stored models available as companions.
 	Companions []*v1.StoredModel
 	// Source repository, preferred when selecting companions.
@@ -347,7 +349,7 @@ func (p *Policy) perToken(in Input, s *Scope) error {
 	if p.Shape != nil {
 		run = p.Shape(s.Params)
 	}
-	per, err := in.Family.CachePerToken(s.Model, run)
+	layers, err := in.Family.CacheLayers(s.Model, run)
 	if err != nil {
 		var needs *archs.Needs
 		if errors.As(err, &needs) {
@@ -355,7 +357,27 @@ func (p *Policy) perToken(in Input, s *Scope) error {
 		}
 		return err
 	}
-	s.CachePerToken = per
+	s.CacheLayers = layers
+	// The descriptor's layers name their index, so a range of a model carries the cache of its
+	// own layers; a header indexing no layer carries the whole model's
+	var total float64
+	indexed := false
+	for _, g := range s.Descriptor.GetGroups() {
+		if g.GetKind() != v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER || g.GetLayer() < 0 {
+			continue
+		}
+		if int(g.GetLayer()) >= len(layers) {
+			return fmt.Errorf("layer %d is beyond the %d layers the header counts", g.GetLayer(), len(layers))
+		}
+		indexed = true
+		total += layers[g.GetLayer()]
+	}
+	if !indexed {
+		for _, l := range layers {
+			total += l
+		}
+	}
+	s.CachePerToken = total
 	return nil
 }
 
@@ -474,11 +496,24 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 			layers++
 		}
 	}
-	// Cache follows its layers, or the full weight group for unlayered models.
-	var cachePerLayer uint64
-	if layers > 0 {
-		cachePerLayer = cacheTotal / uint64(layers)
-	} else {
+	// Cache follows its layers, each taking its own share of the total by the family's shape of
+	// it, evenly when the header indexes no layer, or the full weight group for unlayered models
+	indexed := false
+	for _, g := range s.Descriptor.GetGroups() {
+		if g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER && g.GetLayer() >= 0 {
+			indexed = true
+		}
+	}
+	cacheOf := func(g *v1.TensorGroup) uint64 {
+		if !indexed {
+			return cacheTotal / uint64(layers)
+		}
+		if s.CachePerToken <= 0 || g.GetLayer() < 0 || int(g.GetLayer()) >= len(s.CacheLayers) {
+			return 0
+		}
+		return uint64(float64(cacheTotal) * s.CacheLayers[g.GetLayer()] / s.CachePerToken)
+	}
+	if layers == 0 {
 		sv.beside(cacheTotal)
 	}
 	byParam := map[string]*bucket{}
@@ -492,7 +527,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		weights += g.GetBytes()
 		it := item{kind: g.GetKind(), layer: g.GetLayer(), weights: g.GetBytes()}
 		if g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER {
-			it.cache = cachePerLayer
+			it.cache = cacheOf(g)
 		}
 		rule, known := p.rule(g.GetKind())
 		if !known || rule.Param == "" {
@@ -914,6 +949,9 @@ func plannedAt(h *v1.HostProfile) *timestamppb.Timestamp {
 	}
 	return timestamppb.Now()
 }
+
+// Capacity a plan measures a pool by: free bytes when asked and known, else total
+func Capacity(pl *v1.MemoryPool, free bool) uint64 { return capacity(pl, free) }
 
 // Uses free bytes when asked and known, else total
 func capacity(pl *v1.MemoryPool, free bool) uint64 {

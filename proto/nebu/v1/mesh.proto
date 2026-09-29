@@ -22,6 +22,9 @@ enum NodeState {
   NODE_STATE_UNREACHABLE = 2;
   // Missing for ten minutes, until it syncs again
   NODE_STATE_GONE = 3;
+  // Forgotten here: refused at the handshake and from gossip until it is invited or admitted again
+  // or the mesh secret rotates. A forgotten node is no member and its row keeps only the refusal
+  NODE_STATE_FORGOTTEN = 4;
 }
 
 // Lifecycle of a formation
@@ -212,15 +215,20 @@ message Seat {
   bool exposed = 18;
   // Launch phase, lower first
   uint32 phase = 19;
-  // Devices the seat holds in tensor order and the planned bytes on each, what a tensor split follows. A
+  // Devices the seat holds in tensor order, the planned bytes on each, and the layers each holds. A
   // chain head whose runtime carries the stages as devices of its own, as llama.cpp does with --device and
   // --tensor-split, lists the stage devices first, one entry per stage device in seat order named
   // <node id>/<device id>, then its own devices last, so the output projection sits on its own device; the
-  // runtime renders the device list and the split in that order, and the seat's node pins only the
+  // runtime renders the device list and the layer counts in that order, and the seat's node pins only the
   // entries naming its own devices. Every other seat lists its own devices alone
   repeated string device_ids = 20;
   repeated uint64 device_bytes = 21;
   uint32 gpu_layers = 22;
+  // Layers each device in device_ids holds. A runtime that splits layers over devices renders these
+  // counts, which sum to the layers the seat keeps on devices, so each device takes exactly the layers
+  // the plan sized it for; a runtime that shards every layer across a seat's devices holds the seat's
+  // range on each
+  repeated uint32 device_layers = 27;
   // The seat's mesh host and the port its own protocol takes there
   string address = 23;
   uint32 aux_port = 24;
@@ -337,6 +345,10 @@ message Formation {
   string cache_key = 26;
   // Every seat's measurements summed by node
   repeated NodeMeasurements measurements = 27;
+  // Relaunches in a row whose predecessor ended before it had served a stretch: one for the first
+  // relaunch after a formation that was never ready or degraded soon after ready, zero for a fresh
+  // run or a relaunch after a long stretch ready. A formation degraded past the limit stays failed
+  uint32 relaunches = 28;
 }
 
 // Learned correction for one shape, runtime, and link class

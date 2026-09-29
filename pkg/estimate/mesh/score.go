@@ -87,20 +87,23 @@ func (pl *planner) score(c *candidate) (ttftRatio, tptRatio float64) {
 	return ttftRatio, tptRatio
 }
 
-// Orders candidates: fitting first, then partial, then rejected, by score within each, an equal
-// score going to the candidate whose head is the conductor, then to the fewer seats
-func order(list []*candidate, self string) {
+// Orders candidates: fitting first, then partial, then rejected. The head runs on the conductor:
+// among candidates of one verdict, those the conductor heads come first when the conductor has
+// an accelerator to head with, the weights staying where the run was asked for and the route
+// answering on the node that holds it. A conductor without an accelerator leaves the head to the
+// score. Score orders the rest, an equal score going to the fewer seats
+func order(list []*candidate, self string, selfHeads bool) {
 	conducts := func(c *candidate) bool { return c.head != nil && c.head.node.ID == self }
 	sort.SliceStable(list, func(i, j int) bool {
 		a, b := list[i], list[j]
 		if a.verdict != b.verdict {
 			return rank(a.verdict) < rank(b.verdict)
 		}
+		if selfHeads && conducts(a) != conducts(b) {
+			return conducts(a)
+		}
 		if a.score != b.score {
 			return a.score < b.score
-		}
-		if conducts(a) != conducts(b) {
-			return conducts(a)
 		}
 		return len(a.seats) < len(b.seats)
 	})
@@ -131,6 +134,8 @@ func Plan(req Request, m *Mesh) (*v1.FormationPlan, error) {
 	for id, why := range req.Excluded {
 		pl.excluded[id] = why
 	}
+	self := m.Node(m.Self)
+	selfHeads := self != nil && len(self.Devices) > 0
 	span := map[string]bool{}
 	for _, id := range req.Span {
 		span[id] = true
@@ -188,7 +193,7 @@ func Plan(req Request, m *Mesh) (*v1.FormationPlan, error) {
 		for _, c := range list {
 			pl.score(c)
 		}
-		order(list, m.Self)
+		order(list, m.Self, selfHeads)
 		best, chosenContext = list, ctx
 		if len(list) > 0 && list[0].verdict == v1.FitVerdict_FIT_VERDICT_FITS {
 			break

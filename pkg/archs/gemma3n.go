@@ -11,6 +11,6 @@ func (Gemma3n) Description() string {
 }
 func (Gemma3n) Priority() int                    { return 5 }
 func (Gemma3n) Matches(architecture string) bool { return is(architecture, "gemma3n") }
-func (Gemma3n) CachePerToken(p formats.Params, run Run) (float64, error) {
+func (Gemma3n) CacheLayers(p formats.Params, run Run) ([]float64, error) {
 	return slidingWindow(p, run, 5)
 }

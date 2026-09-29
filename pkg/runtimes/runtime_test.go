@@ -231,3 +231,46 @@ func TestMerge(t *testing.T) {
 		t.Fatalf("merge %v", out)
 	}
 }
+
+// A llama.cpp log names the allocations that failed, on its own device and on an rpc device, and
+// its memory breakdown gives each device's total, free, and unaccounted bytes as of the latest print
+func TestLlamaCppMeasuresFailedAllocationsAndBreakdown(t *testing.T) {
+	lines := []string{
+		"load_tensors: RPC0 model buffer size = 8500.00 MiB",
+		"ggml_backend_cuda_buffer_type_alloc_buffer: allocating 2974.77 MiB on device 0: cudaMalloc failed: out of memory",
+		"ggml_backend_cuda_buffer_type_alloc_buffer: allocating 1577.29 MiB on device 0: cudaMalloc failed: out of memory",
+		"ggml_backend_cuda_buffer_type_alloc_buffer: allocating 512.00 MiB on device 0",
+		"alloc_tensor_range: failed to allocate RPC0 buffer of size 3119317504",
+		"llama_kv_cache: failed to allocate buffer for kv cache",
+		"0.00.538.566 I common_memory_breakdown_print: | memory breakdown [MiB]    | total   free    self   model   context   compute    unaccounted |",
+		"0.00.538.568 I common_memory_breakdown_print: |   - Vulkan0 (RTX 3080 Ti) | 12534 = 9533 + (7262 =  4812 +    2226 +     224) +       -4262 |",
+		"0.00.538.568 I common_memory_breakdown_print: |   - Host                  |                  689 =   545 +       0 +     144                |",
+		"0.49.208.248 I common_memory_breakdown_print: |   - Vulkan0 (RTX 3080 Ti) | 12534 = 2260 + (7262 =  4812 +    2226 +     224) +        3010 |",
+	}
+	got := map[string]*v1.Measurement{}
+	for _, ms := range (LlamaCpp{}).Measure(lines) {
+		got[ms.GetKey()] = ms
+	}
+	mib := float64(1 << 20)
+	failed := uint64(2974.77*mib) + uint64(1577.29*mib)
+	if got["device.failed"].GetBytes() != failed || !strings.Contains(got["device.failed"].GetLine(), "2974.77 MiB") {
+		t.Fatalf("device.failed %v", got["device.failed"])
+	}
+	if got["rpc.failed"].GetBytes() != 3119317504 || got["rpc.weights"].GetBytes() != 8500<<20 {
+		t.Fatalf("rpc %v %v", got["rpc.failed"], got["rpc.weights"])
+	}
+	if got["device.total"].GetBytes() != 12534<<20 || got["device.free"].GetBytes() != 2260<<20 || got["device.unaccounted"].GetBytes() != 3010<<20 {
+		t.Fatalf("breakdown %v %v %v", got["device.total"], got["device.free"], got["device.unaccounted"])
+	}
+	if !strings.Contains(got["device.free"].GetLine(), "0.49.208.248") {
+		t.Fatalf("the latest print stands: %v", got["device.free"])
+	}
+	for _, key := range []string{"host.total", "host.free", "host.failed", "device.weights"} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("%s is not in these lines: %v", key, got[key])
+		}
+	}
+	if len(got) != 6 {
+		t.Fatalf("measurements %v", got)
+	}
+}

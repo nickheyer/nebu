@@ -395,7 +395,7 @@ func (pl *planner) chain(members []*Node, hi int, headRole, stageRole runtimes.R
 			continue
 		}
 		if s != c.head && s.node.CPU != nil && s.hostBytes > 0 {
-			s.devices, s.deviceBytes = []*Device{s.node.CPU}, []uint64{s.hostBytes}
+			s.devices, s.deviceBytes, s.deviceLayers = []*Device{s.node.CPU}, []uint64{s.hostBytes}, []uint32{uint32(s.to - s.from)}
 			continue
 		}
 		s.verdict = v1.FitVerdict_FIT_VERDICT_NO
@@ -413,6 +413,7 @@ func (pl *planner) chain(members []*Node, hi int, headRole, stageRole runtimes.R
 			for i, d := range s.devices {
 				c.head.stageDevices = append(c.head.stageDevices, s.node.ID+"/"+d.ID())
 				c.head.stageBytes = append(c.head.stageBytes, s.deviceBytes[i])
+				c.head.stageLayers = append(c.head.stageLayers, s.deviceLayers[i])
 			}
 		}
 	}
@@ -466,6 +467,18 @@ func (pl *planner) chainSeats(c *candidate, extrasOf func(*Node) []*v1.TensorGro
 			s.params = pl.parts.readParams(s.from, s.to) + extraParams
 			if err := pl.finish(s, pl.parts.expertShare); err != nil {
 				pl.refused(s, err)
+			} else if pl.facts.Ring {
+				// A rank shards every layer of its range across its devices
+				for i := range s.deviceLayers {
+					s.deviceLayers[i] = uint32(s.to - s.from)
+				}
+			} else if elems, err := pl.layerCache(); err != nil {
+				pl.refused(s, err)
+			} else {
+				// The seat renders this split, so its record carries the whole layers and the bytes
+				// each device then holds
+				pc := pl.place(s.node, plan, pl.parts.layers[s.from:s.to], extras, elems)
+				s.devices, s.deviceBytes, s.deviceLayers = pc.devices, pc.bytes, pc.layers
 			}
 		}
 		if s.verdict != v1.FitVerdict_FIT_VERDICT_FITS && c.reason == "" {

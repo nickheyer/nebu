@@ -10,7 +10,7 @@ Nebu manages model weights and inference runtimes. Named after the Nebuchadnezza
 - Discord: text, images, video, personas, automations, and sharding
 - Platforms: Linux, macOS, Windows, and FreeBSD
 - SSO/OIDC: Supports all OpenID Connect Providers. See `compose.yaml` or `packaging/config.yaml`
-- Local Auth: Enabled by default. The web UI signs in with an account, API and gateway clients send an API token made in Settings
+- Local Auth: Local username/password enabled by default in the web ui. Token auth enabled after a token is generated in user settings.
 
 # Install
 
@@ -34,6 +34,3 @@ make build
 
 See [Makefile](Makefile) for other commands.
 
-## Mesh
-
-Several nebu daemons on one network pool their devices: a model that fits no single machine runs across several, and a model that fits one gains speed from the others. Membership runs from the Mesh page of any node: make a mesh on one, and the others show up there as they are heard on the network, to be invited or to ask; any member admits. See [MESH.md](MESH.md) for the shapes, the planner, and the settings under `mesh:` in [packaging/config.yaml](packaging/config.yaml).

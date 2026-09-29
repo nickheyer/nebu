@@ -54,6 +54,11 @@ var (
 	ErrFormation = errors.New("formation")
 	// A formation whose seat died while serving launches again after this long
 	relaunchDelay = 10 * time.Second
+	// A formation ready for this long before it degraded served a stretch, and its relaunch starts
+	// the count over
+	relaunchStable = 5 * time.Minute
+	// Relaunches in a row without a stretch served before a degraded formation stays failed
+	maxRelaunches uint32 = 3
 )
 
 // Slots on this node: their refs for the node record, the names a slot's formation answers to,

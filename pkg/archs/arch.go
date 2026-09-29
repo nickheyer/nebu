@@ -26,8 +26,22 @@ type Arch interface {
 	Priority() int
 	// Whether the family covers an architecture as a header names it
 	Matches(architecture string) bool
-	// Cache elements per token of context, an error naming what the header lacked
-	CachePerToken(p formats.Params, run Run) (float64, error)
+	// Cache elements per token of context on each layer, in layer order, an error naming what
+	// the header lacked. A layer without a per token cache, one holding a recurrent state, is zero
+	CacheLayers(p formats.Params, run Run) ([]float64, error)
+}
+
+// Cache elements per token of context over every layer of a family's model
+func CachePerToken(a Arch, p formats.Params, run Run) (float64, error) {
+	layers, err := a.CacheLayers(p, run)
+	if err != nil {
+		return 0, err
+	}
+	var total float64
+	for _, l := range layers {
+		total += l
+	}
+	return total, nil
 }
 
 // Every family, in priority order
@@ -71,7 +85,7 @@ func (r *Registry) Pick(architecture string, p formats.Params) Arch {
 			continue
 		}
 		last = a
-		if _, err := a.CachePerToken(p, Run{}); err == nil {
+		if _, err := a.CacheLayers(p, Run{}); err == nil {
 			return a
 		}
 	}
@@ -107,23 +121,35 @@ func missing(pairs ...any) error {
 	return &Needs{Names: names}
 }
 
-// Calculates cache for alternating attention. Every pattern-th layer uses full context. Other
-// layers use the window plus prefill batch. Zero means all layers use sliding windows.
-func slidingWindow(p formats.Params, run Run, pattern float64) (float64, error) {
+// Cache elements per token on each layer of alternating attention: every pattern-th layer, the
+// last of each group as llama.cpp lays the pattern out, keeps the full context, the others the
+// window plus the prefill batch. A pattern of zero means every layer keeps a sliding window
+func slidingWindow(p formats.Params, run Run, pattern float64) ([]float64, error) {
 	if needs := missing(p.Layers, "n_layer", p.HeadsKV, "n_head_kv", p.HeadDim, "head_dim"); needs != nil {
-		return 0, needs
+		return nil, needs
 	}
 	if p.SlidingPattern > 0 {
 		pattern = p.SlidingPattern
-	}
-	swaLayers := p.Layers
-	if pattern > 0 {
-		swaLayers = p.Layers - math.Floor(p.Layers/pattern)
 	}
 	ctx := math.Max(run.Context, 1)
 	swaTokens := ctx
 	if p.SlidingWindow > 0 && run.Context > 0 {
 		swaTokens = math.Min(run.Context, p.SlidingWindow+run.UBatch)
 	}
-	return p.HeadsKV * (p.HeadDim + p.HeadDimV) * ((p.Layers - swaLayers) + swaLayers*swaTokens/ctx), nil
+	full := p.HeadsKV * (p.HeadDim + p.HeadDimV)
+	return eachLayer(p, func(il int) float64 {
+		if pattern > 0 && (il+1)%int(pattern) == 0 {
+			return full
+		}
+		return full * swaTokens / ctx
+	}), nil
+}
+
+// The cache of every layer of a model by its index
+func eachLayer(p formats.Params, cache func(il int) float64) []float64 {
+	out := make([]float64, int(p.Layers))
+	for il := range out {
+		out[il] = cache(il)
+	}
+	return out
 }

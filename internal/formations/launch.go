@@ -46,6 +46,11 @@ const (
 
 // Plans and launches a formation across the span
 func (m *Manager) Run(ctx context.Context, run *v1.RunRequest) (*v1.Formation, *v1.Task, error) {
+	// A seat's request names the seat and carries its block; run again, it would conduct a
+	// formation named for the seat, whose seats take a second suffix
+	if seat := run.GetSeat(); seat != nil {
+		return nil, nil, fmt.Errorf("%w: %s is a %s seat of the formation %s, not a formation of its own; run %s", ErrFormation, run.GetName(), seat.GetRole(), seat.GetName(), seat.GetName())
+	}
 	if run.GetSlotId() != "" {
 		if m.SlotView == nil {
 			return nil, nil, fmt.Errorf("%w: slot %s: no slots are wired to the conductor", ErrFormation, run.GetSlotId())
@@ -143,6 +148,7 @@ func (m *Manager) start(ctx context.Context, run *v1.RunRequest, p *planned, pre
 	}
 	if prev != nil {
 		f.Rendezvous = carryRendezvous(prev, f.Seats)
+		f.Relaunches = nextRelaunches(prev)
 	}
 	m.mu.Lock()
 	m.list[f.GetId()] = f
@@ -276,6 +282,7 @@ func (m *Manager) launch(ctx context.Context, h *tasks.Handle, id string, p *pla
 		m.Routes.RemoveFormation(id)
 		cleanup, cancel := context.WithTimeout(m.base, stopTimeout)
 		defer cancel()
+		m.gatherSeatLogs(cleanup, h, id, p)
 		if current, err := m.Get(id); err == nil {
 			m.stopSeats(cleanup, current, h)
 		}
@@ -809,22 +816,23 @@ func (m *Manager) seatRequest(f *v1.Formation, p *planned, s *v1.Seat, rendezvou
 	}
 	run.Params = params
 	spec := &v1.SeatSpec{
-		FormationId: f.GetId(),
-		Shape:       f.GetShape(),
-		Role:        s.GetRole(),
-		Rank:        s.GetRank(),
-		Count:       uint32(len(f.GetSeats())),
-		Rendezvous:  rendezvous,
-		LayerFrom:   s.GetLayerFrom(),
-		LayerTo:     s.GetLayerTo(),
-		Conductor:   m.self(),
-		Name:        f.GetName(),
-		Devices:     s.GetDeviceIds(),
-		DeviceBytes: s.GetDeviceBytes(),
-		Context:     f.GetPlan().GetContext(),
-		GpuLayers:   s.GetGpuLayers(),
-		Memory:      s.GetMemory(),
-		CacheKey:    f.GetCacheKey(),
+		FormationId:  f.GetId(),
+		Shape:        f.GetShape(),
+		Role:         s.GetRole(),
+		Rank:         s.GetRank(),
+		Count:        uint32(len(f.GetSeats())),
+		Rendezvous:   rendezvous,
+		LayerFrom:    s.GetLayerFrom(),
+		LayerTo:      s.GetLayerTo(),
+		Conductor:    m.self(),
+		Name:         f.GetName(),
+		Devices:      s.GetDeviceIds(),
+		DeviceBytes:  s.GetDeviceBytes(),
+		DeviceLayers: s.GetDeviceLayers(),
+		Context:      f.GetPlan().GetContext(),
+		GpuLayers:    s.GetGpuLayers(),
+		Memory:       s.GetMemory(),
+		CacheKey:     f.GetCacheKey(),
 	}
 	if f.GetShape() == v1.Shape_SHAPE_DRAFT && p.draftKey != "" {
 		spec.Draft = p.draftKey
@@ -1130,6 +1138,15 @@ func (m *Manager) degrade(id, why string) {
 	if !f.GetDesiredRunning() {
 		return
 	}
+	if next := nextRelaunches(f); next > maxRelaunches {
+		m.Log.Warn("formation degraded repeatedly, not relaunched", "formation", f.GetName(), "relaunches", f.GetRelaunches())
+		m.update(id, func(r *v1.Formation) {
+			r.Error = fmt.Sprintf("%s; degraded %d times in a row within %s of ready, so it stays stopped; run it again to retry", why, f.GetRelaunches()+1, relaunchStable)
+			r.DesiredRunning = false
+		})
+		m.Mesh.Bump()
+		return
+	}
 	m.Log.Info("formation relaunches", "formation", f.GetName(), "in", relaunchDelay)
 	select {
 	case <-m.base.Done():
@@ -1140,6 +1157,18 @@ func (m *Manager) degrade(id, why string) {
 		m.Log.Warn("formation relaunch failed", "formation", f.GetName(), "err", err)
 		m.update(id, func(r *v1.Formation) { r.Error = why + "; relaunch failed: " + err.Error() })
 	}
+}
+
+// The relaunch count a formation launched after prev carries: one more than prev's when prev
+// never reached ready or degraded within relaunchStable of it, one when prev served a stretch
+func nextRelaunches(prev *v1.Formation) uint32 {
+	if prev == nil {
+		return 0
+	}
+	if prev.GetReadyAt() != nil && prev.GetStoppedAt() != nil && prev.GetStoppedAt().AsTime().Sub(prev.GetReadyAt().AsTime()) >= relaunchStable {
+		return 1
+	}
+	return prev.GetRelaunches() + 1
 }
 
 // The host of a mesh address
@@ -1182,11 +1211,12 @@ func (m *Manager) bytesMoved(ctx context.Context, h *tasks.Handle, id string, p 
 	}
 	var total uint64
 	var headLines []string
-	if head := m.headSeat(f); head != nil && head.GetNodeId() == m.self() && head.GetInstanceId() != "" {
-		m.Instances.Logs(ctx, head.GetInstanceId(), false, 0, func(lines []string) error {
-			headLines = append(headLines, lines...)
-			return nil
-		})
+	if head := m.headSeat(f); head != nil && head.GetInstanceId() != "" {
+		lines, err := m.seatLines(ctx, head)
+		if err != nil {
+			h.Logf("the head's log on %s not read: %v", head.GetNodeName(), err)
+		}
+		headLines = lines
 	}
 	for _, s := range f.GetSeats() {
 		role, err := runtimes.RoleOf(p.rt, &v1.SeatSpec{Shape: f.GetShape(), Role: s.GetRole()})
@@ -1223,6 +1253,88 @@ func (m *Manager) bytesMoved(ctx context.Context, h *tasks.Handle, id string, p 
 		h.Logf("%s on %s is exposed and the head's log names no buffer on %s, so nothing was counted for it", s.GetRole(), s.GetNodeName(), address)
 	}
 	return total
+}
+
+// Every line a seat's instance has logged, read on this node or streamed from the seat's node
+func (m *Manager) seatLines(ctx context.Context, s *v1.Seat) ([]string, error) {
+	var out []string
+	collect := func(lines []string) error {
+		out = append(out, lines...)
+		return nil
+	}
+	if s.GetNodeId() == m.self() {
+		return out, m.Instances.Logs(ctx, s.GetInstanceId(), false, 0, collect)
+	}
+	cl, err := m.Mesh.Client(ctx, s.GetNodeId())
+	if err != nil {
+		return nil, err
+	}
+	cctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	stream, err := cl.Mesh.SeatLogs(cctx, connect.NewRequest(&v1.SeatLogsRequest{InstanceId: s.GetInstanceId(), Follow: false, Tail: 0}))
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+	for stream.Receive() {
+		collect(stream.Msg().GetLines())
+	}
+	return out, stream.Err()
+}
+
+// Reads every launched seat's log when a formation fails and puts what the runtime measures in
+// it on the seat's record: the buffers each seat allocated and the allocations that failed, on
+// the head's node or a stage's, so the formation record says where memory ran out. Every failed
+// allocation is named in the task log
+func (m *Manager) gatherSeatLogs(ctx context.Context, h *tasks.Handle, id string, p *planned) {
+	f, err := m.Get(id)
+	if err != nil {
+		return
+	}
+	for _, s := range f.GetSeats() {
+		if s.GetInstanceId() == "" {
+			continue
+		}
+		lines, err := m.seatLines(ctx, s)
+		if err != nil {
+			h.Logf("the log of %s on %s not read: %v", s.GetRole(), s.GetNodeName(), err)
+			continue
+		}
+		measured := p.rt.Measure(lines)
+		if len(measured) == 0 {
+			continue
+		}
+		m.update(id, func(r *v1.Formation) {
+			for _, rs := range r.GetSeats() {
+				if sameSeat(rs, s) {
+					rs.Measurements = mergeMeasurements(rs.Measurements, measured)
+				}
+			}
+		})
+		for _, ms := range measured {
+			if strings.HasSuffix(ms.GetKey(), ".failed") {
+				h.Logf("%s on %s failed to allocate %s: %s", s.GetRole(), s.GetNodeName(), human(ms.GetBytes()), strings.TrimSpace(ms.GetLine()))
+			}
+		}
+	}
+}
+
+// Merges measurements by key, the fresh ones replacing the old and old-only keys staying
+func mergeMeasurements(old, fresh []*v1.Measurement) []*v1.Measurement {
+	if len(fresh) == 0 {
+		return old
+	}
+	seen := map[string]bool{}
+	for _, ms := range fresh {
+		seen[ms.GetKey()] = true
+	}
+	out := append([]*v1.Measurement(nil), fresh...)
+	for _, ms := range old {
+		if !seen[ms.GetKey()] {
+			out = append(out, ms)
+		}
+	}
+	return out
 }
 
 // Bytes the head's log says it placed on an rpc backend at an address, summed over the model

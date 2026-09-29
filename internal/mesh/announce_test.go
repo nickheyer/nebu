@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +29,11 @@ func bare(t *testing.T, id string) *Manager {
 		members:    map[string]*member{},
 		nearby:     map[string]*heard{},
 		admissions: map[string]*v1.Admission{},
+		sessions:   map[string]*session{},
+		accept:     map[string]string{},
+		links:      map[string]*v1.Link{},
+		forgotten:  map[string]time.Time{},
+		pendings:   map[string]*pending{},
 	}
 	return m
 }
@@ -190,5 +197,64 @@ func TestMergeAdmissions(t *testing.T) {
 	list, err := database.ListAdmissions(context.Background())
 	if err != nil || len(list) != 2 {
 		t.Fatalf("persisted %v %v", list, err)
+	}
+}
+
+// A beacon's contact takes the node's dialing lock, the one a client handshake to the same node
+// holds, so the two never race on the peer's nonce; a node met while the lock was held is not
+// contacted, and one still unmet is
+func TestBeaconContactSharesTheDialingLock(t *testing.T) {
+	m := bare(t, "self")
+	m.mesh = &db.MeshRow{ID: "id", Name: "home", Secret: make([]byte, 32)}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var conns atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conns.Add(1)
+			c.Close()
+		}
+	}()
+	address := ln.Addr().String()
+	ctx := context.Background()
+	m.mu.Lock()
+	m.members["c"] = &member{rec: &v1.Node{Id: "c", Address: "10.0.0.6:8485"}}
+	m.mu.Unlock()
+	dial := m.dialLock("c")
+	dial.Lock()
+	var tried sync.Map
+	m.heard(ctx, payload(beacon{Node: "c", Name: "box", Address: address, Mesh: meshHex("id")}), "127.0.0.1", &tried)
+	time.Sleep(200 * time.Millisecond)
+	if conns.Load() != 0 {
+		t.Fatal("the beacon contacted the node while a handshake held its lock")
+	}
+	// A handshake met the node at the beacon's address meanwhile
+	m.mu.Lock()
+	m.members["c"].rec.Address = address
+	m.mu.Unlock()
+	dial.Unlock()
+	time.Sleep(300 * time.Millisecond)
+	if conns.Load() != 0 {
+		t.Fatal("the beacon contacted a node met while it waited")
+	}
+	// Still unmet, the beacon's contact dials the node once the lock is free
+	m.mu.Lock()
+	m.members["c"].rec.Address = "10.0.0.6:8485"
+	m.mu.Unlock()
+	var again sync.Map
+	m.heard(ctx, payload(beacon{Node: "c", Name: "box", Address: address, Mesh: meshHex("id")}), "127.0.0.1", &again)
+	deadline := time.Now().Add(5 * time.Second)
+	for conns.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if conns.Load() == 0 {
+		t.Fatal("the beacon did not contact an unmet node")
 	}
 }

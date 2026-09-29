@@ -239,10 +239,11 @@ func deviceByID(devices []*v1.Device, id string) *v1.Device {
 }
 
 // The chain head: the solo command with the rpc list ahead of every other flag, every stage's
-// devices as RPC devices before its own, in the plan's order, the plan's bytes per device as the
-// tensor split, every layer and the output offloaded across them, and the runtime's own fitting
-// off. The plan's device list names each stage device as <node id>/<device id> and the head's own
-// by their ids
+// devices as RPC devices before its own, in the plan's order, the plan's layers per device as the
+// tensor split with the output counted on the last device, every layer and the output offloaded
+// across them, and the runtime's own fitting off. The plan's device list names each stage device
+// as <node id>/<device id> and the head's own by their ids, and its layer counts follow the same
+// order: each stage's devices together hold the stage's layer range, and the head's own hold its
 func (r LlamaCpp) chainHead(in Launch, stages []*v1.SeatPeer, facts map[string]string) (*Command, error) {
 	seat := in.Seat
 	names, err := rpcDeviceNames(stages)
@@ -274,16 +275,43 @@ func (r LlamaCpp) chainHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 		own = append(own, d)
 	}
 	devices = append(devices, ggmlDevices(in.InstallRecord, own)...)
-	if len(seat.GetDeviceBytes()) != len(devices) {
-		return nil, fmt.Errorf("%w: the plan gives %d device shares for %d devices", ErrParam, len(seat.GetDeviceBytes()), len(devices))
+	counts := seat.GetDeviceLayers()
+	if len(counts) != len(devices) {
+		return nil, fmt.Errorf("%w: the plan gives %d device layer counts for %d devices", ErrParam, len(counts), len(devices))
 	}
 	layers := int(formats.ParamsOf(in.Descriptor.GetParams()).Layers)
 	if layers <= 0 {
 		return nil, fmt.Errorf("%w: the descriptor counts no layers, so the head cannot say how many to offload", ErrParam)
 	}
+	at := 0
+	for i, s := range stages {
+		var held uint32
+		for range names[i] {
+			held += counts[at]
+			at++
+		}
+		if span := layerSpan(s.GetLayerFrom(), s.GetLayerTo(), layers); held != span {
+			return nil, fmt.Errorf("%w: the plan puts %d layers on the devices of stage %d on %s, which holds %d", ErrParam, held, s.GetRank(), s.GetNodeId(), span)
+		}
+	}
+	var mine, total uint32
+	for _, c := range counts[at:] {
+		mine += c
+	}
+	if span := layerSpan(seat.GetLayerFrom(), seat.GetLayerTo(), layers); mine != span {
+		return nil, fmt.Errorf("%w: the plan puts %d layers on this node's devices and the head holds %d", ErrParam, mine, span)
+	}
+	for _, c := range counts {
+		total += c
+	}
+	if int(total) != layers {
+		return nil, fmt.Errorf("%w: the plan's device layers sum to %d and the model has %d layers", ErrParam, total, layers)
+	}
+	// llama.cpp counts the output as one more layer than the model has, and offloads it with the last
+	split := append([]uint32(nil), counts...)
+	split[len(split)-1]++
 	p := in.Params.Clone()
 	p["device"] = strings.Join(devices, ",")
-	// llama.cpp counts the output as one more layer than the model has, and offloads it with the last
 	p["n_gpu_layers"] = int64(layers + 1)
 	in.Params = p
 	cmd, err := r.Launch(in)
@@ -293,13 +321,34 @@ func (r LlamaCpp) chainHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 	// llama-server resolves each --device name as it parses that flag, and the rpc devices exist
 	// only once --rpc has connected to the stages, so the rpc list leads the command line
 	cmd.Args = append([]string{facts[factRPCFlag], strings.Join(addresses, ",")}, cmd.Args...)
-	cmd.Args = append(cmd.Args, "--tensor-split", tensorSplit(seat.GetDeviceBytes()))
+	cmd.Args = append(cmd.Args, "--tensor-split", tensorSplit(split))
+	fitOff(cmd, in, facts)
+	cmd.Params["rpc"] = strings.Join(addresses, ",")
+	cmd.Params["tensor_split"] = tensorSplit(split)
+	return cmd, nil
+}
+
+// Turns llama.cpp's own fitting off for a head attached to rpc devices. A build that fits by
+// default loads the model once without buffers to measure it, over the rpc links here, before it
+// finds the layer count and the split already set and abandons the fit, so the head gains nothing
+// from it. The environment variable reaches every build that fits, whether or not the install's
+// help probe recorded the flag, and the flag joins it on a build whose help lists it
+func fitOff(cmd *Command, in Launch, facts map[string]string) {
+	if cmd.Env == nil {
+		cmd.Env = map[string]string{}
+	}
+	cmd.Env["LLAMA_ARG_FIT"] = "off"
 	if has(in.InstallRecord, factFitFlag) {
 		cmd.Args = append(cmd.Args, facts[factFitFlag], "off")
 	}
-	cmd.Params["rpc"] = strings.Join(addresses, ",")
-	cmd.Params["tensor_split"] = tensorSplit(seat.GetDeviceBytes())
-	return cmd, nil
+}
+
+// Layers a seat holds from its range, every layer of the model when the range is unset
+func layerSpan(from, to uint32, layers int) uint32 {
+	if from == 0 && to == 0 {
+		return uint32(layers)
+	}
+	return to - from
 }
 
 // The draft head: the solo command with the draft model on the stage's first RPC device
@@ -323,6 +372,7 @@ func (r LlamaCpp) draftHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 		return nil, err
 	}
 	cmd.Args = append(cmd.Args, facts[factRPCFlag], stage.GetAddress(), facts[factDraftModel], in.Draft, facts[factDraftDevice], device)
+	fitOff(cmd, in, facts)
 	cmd.Params["rpc"] = stage.GetAddress()
 	cmd.Params["draft_model"] = in.Draft
 	cmd.Params["draft_device"] = device

@@ -10,6 +10,7 @@ import (
 
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/pkg/archs"
+	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/estimate/mesh"
 	"github.com/nickheyer/nebu/pkg/formats/diffusion"
 	"github.com/nickheyer/nebu/pkg/perf"
@@ -38,6 +39,8 @@ type shape struct {
 	expertBytes   uint64
 	experts, used float64
 	contextTrain  float64
+	// Layers between full attention layers of a hybrid model, zero for full attention throughout
+	interval float64
 }
 
 func model(s shape) *v1.Descriptor {
@@ -52,6 +55,9 @@ func model(s shape) *v1.Descriptor {
 	d := &v1.Descriptor{Kind: v1.ModelKind_MODEL_KIND_LANGUAGE, Params: map[string]float64{"n_layer": float64(s.layers), "n_head": 64, "n_head_kv": kv, "head_dim": 128, "head_dim_v": 128, "n_embd": s.embedding, "n_ctx_train": ctx}}
 	if s.experts > 0 {
 		d.Params["n_expert"], d.Params["n_expert_used"] = s.experts, s.used
+	}
+	if s.interval > 0 {
+		d.Params["attn_interval"] = s.interval
 	}
 	elements := func(b uint64) uint64 { return uint64(float64(b) * s.density) }
 	d.Groups = append(d.Groups, &v1.TensorGroup{Id: "embedding", Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_EMBEDDING, Layer: -1, Bytes: 256 * mib, Elements: elements(256 * mib)})
@@ -635,12 +641,12 @@ func TestBatchAndAutoProfiles(t *testing.T) {
 
 // Chain and a local draft compose on llama.cpp: the draft fits beside the head's layers and a
 // round of draft tokens is verified in one pass through the chain, so the chain's link cost is
-// paid once per round
+// paid once per round. The unified box conducts, so it heads and the draft sits beside its layers
 func TestChainWithLocalDraft(t *testing.T) {
 	draft := model(shape{layers: 28, layerBytes: 48 * mib, embedding: 1536, kvHeads: 2, density: 1})
 	desktop := node(box{id: "desk", name: "desktop", device: 24 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "b1"}, allShapes)
 	unified := node(box{id: "box", name: "box", device: 128 * gib, unified: true, stream: 256 * gbps, compute: 20e12, vendor: "apple", version: "b1"}, allShapes)
-	m := mesh.New([]*mesh.Node{desktop, unified}, lan("desk", "box", 180, 2.3), "desk")
+	m := mesh.New([]*mesh.Node{desktop, unified}, lan("desk", "box", 180, 2.3), "box")
 	req := request(dense70B())
 	req.Shape = v1.Shape_SHAPE_CHAIN
 	req.Draft, req.DraftFamily, req.DraftRepo = draft, archs.Default{}, "hf/draft"
@@ -675,6 +681,7 @@ func TestChainWithLocalDraft(t *testing.T) {
 		}
 	}
 	// vLLM does not compose speculative settings with pipeline parallel, and its chain says so.
+	// A rank shards every layer of its range across its devices
 	va := nodeFor(box{id: "a", name: "a", device: 24 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "0.11"}, "vllm", rankShapes)
 	vb := nodeFor(box{id: "b", name: "b", device: 48 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "0.11"}, "vllm", rankShapes)
 	vreq := vllmRequest(dense70B())
@@ -740,6 +747,7 @@ func TestMismatchedInstallRuns(t *testing.T) {
 		t.Fatalf("the plan names both builds: %v", plan.GetSources())
 	}
 	// Ranks of different vendors form, the plan noting the difference.
+	// A rank shards every layer of its range across its devices
 	va := nodeFor(box{id: "a", name: "a", device: 24 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "0.11"}, "vllm", rankShapes)
 	vb := nodeFor(box{id: "b", name: "b", device: 48 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "amd", version: "0.11"}, "vllm", rankShapes)
 	vreq := vllmRequest(dense70B())
@@ -876,6 +884,16 @@ func TestChainSeatsFollowRuntimeRoles(t *testing.T) {
 	if len(stage.GetDeviceIds()) != 1 || stage.GetDeviceIds()[0] != stage.GetNodeId()+"-gpu" {
 		t.Fatalf("a stage lists its own devices: %v", stage.GetDeviceIds())
 	}
+	// Each device's layer count is the layers of the seat's range it holds: the stage's one device
+	// holds the stage's range, and the head carries that count ahead of its own
+	stageSpan, headSpan := stage.GetLayerTo()-stage.GetLayerFrom(), head.GetLayerTo()-head.GetLayerFrom()
+	if len(stage.GetDeviceLayers()) != 1 || stage.GetDeviceLayers()[0] != stageSpan {
+		t.Fatalf("the stage's device holds its range %d: %v", stageSpan, stage.GetDeviceLayers())
+	}
+	if len(head.GetDeviceLayers()) != 2 || head.GetDeviceLayers()[0] != stageSpan || head.GetDeviceLayers()[1] != headSpan {
+		t.Fatalf("the head lists the stage's %d layers then its own %d: %v", stageSpan, headSpan, head.GetDeviceLayers())
+	}
+	// A rank shards every layer of its range across its devices
 	va := nodeFor(box{id: "a", name: "a", device: 24 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "0.11"}, "vllm", rankShapes)
 	vb := nodeFor(box{id: "b", name: "b", device: 48 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "0.11"}, "vllm", rankShapes)
 	vreq := vllmRequest(dense70B())
@@ -903,24 +921,49 @@ func TestChainSeatsFollowRuntimeRoles(t *testing.T) {
 		if len(s.GetDeviceIds()) != 1 || strings.Contains(s.GetDeviceIds()[0], "/") {
 			t.Fatalf("a rank lists its own devices: %v", s.GetDeviceIds())
 		}
+		if len(s.GetDeviceLayers()) != 1 || s.GetDeviceLayers()[0] != s.GetLayerTo()-s.GetLayerFrom() {
+			t.Fatalf("a rank shards every layer of its range across its devices: %v for %d-%d", s.GetDeviceLayers(), s.GetLayerFrom(), s.GetLayerTo())
+		}
 	}
 }
 
-// Equal scores go to the candidate whose head is the conductor, and nothing else reorders by score
-func TestEqualScorePrefersConductor(t *testing.T) {
+// The head runs on the conductor: a conductor with an accelerator heads every fitting plan, a
+// faster peer included, and only a conductor without one leaves the head to the score
+func TestConductorHeads(t *testing.T) {
 	a := node(box{id: "a", name: "a", device: 48 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "b1"}, allShapes)
 	b := node(box{id: "b", name: "b", device: 48 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "b1"}, allShapes)
 	links := lan("a", "b", 200, 2.5)
 	if p := mustPlan(t, request(dense70B()), mesh.New([]*mesh.Node{a, b}, links, "b")); p.GetShape() != v1.Shape_SHAPE_SOLO || p.GetHead() != "b" {
-		t.Fatalf("twins tie, the conductor heads: %v on %s", p.GetShape(), p.GetHead())
+		t.Fatalf("twins, the conductor heads: %v on %s", p.GetShape(), p.GetHead())
 	}
 	if p := mustPlan(t, request(dense70B()), mesh.New([]*mesh.Node{a, b}, links, "a")); p.GetHead() != "a" {
 		t.Fatalf("the conductor heads: %s", p.GetHead())
 	}
-	// A faster node wins over the conductor by score alone.
+	// A faster peer scores better and still stages: the conductor heads, and every candidate the
+	// conductor heads lists ahead of the peer's
 	fast := node(box{id: "b", name: "b", device: 48 * gib, host: 64 * gib, stream: 950 * gbps, compute: 80e12, vendor: "nvidia", version: "b1"}, allShapes)
-	if p := mustPlan(t, request(dense70B()), mesh.New([]*mesh.Node{a, fast}, links, "a")); p.GetHead() != "b" {
-		t.Fatalf("the better score wins over the conductor: %s %s", p.GetHead(), p.GetDetail())
+	p := mustPlan(t, request(dense70B()), mesh.New([]*mesh.Node{a, fast}, links, "a"))
+	if p.GetHead() != "a" || p.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
+		t.Fatalf("the conductor heads over a faster peer: %s %s", p.GetHead(), p.GetDetail())
+	}
+	seenPeer := false
+	for _, c := range p.GetCandidates() {
+		if c.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS {
+			break
+		}
+		if c.GetHead() != "a" {
+			seenPeer = true
+		} else if seenPeer {
+			t.Fatalf("a candidate the conductor heads lists after one the peer heads: %v", p.GetCandidates())
+		}
+	}
+	if !seenPeer {
+		t.Fatalf("the peer's candidates are still offered: %v", p.GetCandidates())
+	}
+	// A conductor without an accelerator leaves the head to the score
+	cpu := node(box{id: "c", name: "c", host: 64 * gib, stream: 900 * gbps, compute: 80e12, version: "b1"}, allShapes)
+	if p := mustPlan(t, request(dense70B()), mesh.New([]*mesh.Node{cpu, fast}, lan("c", "b", 200, 2.5), "c")); p.GetHead() != "b" {
+		t.Fatalf("a conductor without an accelerator does not head: %s %s", p.GetHead(), p.GetDetail())
 	}
 }
 
@@ -937,5 +980,105 @@ func TestUnsupportedShape(t *testing.T) {
 	}
 	if _, err := mesh.Plan(request(small), mesh.New(nil, nil, "a")); err == nil {
 		t.Fatal("an empty span cannot be planned")
+	}
+}
+
+// A node with a second accelerator beside the one the box describes
+func withSecondGPU(n *mesh.Node, id string, bytes uint64) *mesh.Node {
+	rec := &v1.Node{Id: n.ID, Name: n.Name, Profile: n.Profile, Installs: []*v1.Install{n.Install}}
+	rec.Profile.Devices = append(rec.Profile.Devices, &v1.Device{Id: id, Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Name: "gpu2", Facts: map[string]string{"index": "1"}})
+	rec.Profile.Pools = append(rec.Profile.Pools, &v1.MemoryPool{Id: id, Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: id, TotalBytes: bytes, FreeBytes: bytes})
+	numbers := numbersOf(box{stream: 900 * gbps, compute: 80e12})
+	return mesh.NodeOf(rec, "llamacpp", n.Install.GetId(), map[string][]v1.Shape{n.Install.GetId(): allShapes}, numbers)
+}
+
+// A stage with two accelerators takes whole layers on each, in proportion to the bytes the plan
+// pools on them, and its record carries the bytes each device then holds: its layers' weights, their
+// cache, and its capacity share of the overhead, every device within its capacity under the margin.
+// The head carries the stage's counts ahead of its own
+func TestChainSplitsWholeLayersAcrossADeviceStage(t *testing.T) {
+	stageNode := withSecondGPU(node(box{id: "two", name: "two", device: 20 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "b1"}, allShapes), "two-gpu2", 6*gib)
+	headNode := node(box{id: "desk", name: "desktop", device: 24 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "b1"}, allShapes)
+	req := request(dense70B())
+	req.Shape = v1.Shape_SHAPE_CHAIN
+	plan := mustPlan(t, req, mesh.New([]*mesh.Node{stageNode, headNode}, lan("two", "desk", 180, 2.3), "desk"))
+	if plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || len(plan.GetSeats()) != 2 {
+		t.Fatalf("%s", plan.GetDetail())
+	}
+	var head, stage *v1.Seat
+	for _, s := range plan.GetSeats() {
+		if s.GetNodeId() == "two" {
+			stage = s
+		} else {
+			head = s
+		}
+	}
+	if stage.GetRole() != runtimes.RoleStage || head.GetRole() != runtimes.RoleHead {
+		t.Fatalf("the two accelerator node stages: %v %v", stage, head)
+	}
+	span := stage.GetLayerTo() - stage.GetLayerFrom()
+	if len(stage.GetDeviceIds()) != 2 || len(stage.GetDeviceLayers()) != 2 || stage.GetDeviceLayers()[0]+stage.GetDeviceLayers()[1] != span || stage.GetDeviceLayers()[1] == 0 {
+		t.Fatalf("whole layers over two devices summing to %d: %v %v", span, stage.GetDeviceIds(), stage.GetDeviceLayers())
+	}
+	pools := map[string]*v1.MemoryPool{}
+	var capTotal float64
+	for _, p := range stageNode.Profile.GetPools() {
+		pools[p.GetId()] = p
+		if p.GetKind() == v1.PoolKind_POOL_KIND_DEVICE {
+			capTotal += float64(p.GetFreeBytes())
+		}
+	}
+	mem := stage.GetMemory()
+	for i, id := range stage.GetDeviceIds() {
+		layers := uint64(stage.GetDeviceLayers()[i])
+		cap := pools[id].GetFreeBytes()
+		want := layers*512*mib + mem.GetCacheBytes()/uint64(span)*layers + uint64(float64(mem.GetOverheadBytes())*float64(cap)/capTotal)
+		if stage.GetDeviceBytes()[i] != want {
+			t.Fatalf("device %s holds %d layers, %d bytes, want %d", id, layers, stage.GetDeviceBytes()[i], want)
+		}
+		if float64(stage.GetDeviceBytes()[i]) > float64(cap)*0.95 {
+			t.Fatalf("device %s holds %d bytes of its %d", id, stage.GetDeviceBytes()[i], cap)
+		}
+	}
+	if len(head.GetDeviceLayers()) != 3 || head.GetDeviceLayers()[0] != stage.GetDeviceLayers()[0] || head.GetDeviceLayers()[1] != stage.GetDeviceLayers()[1] || head.GetDeviceLayers()[2] != head.GetLayerTo()-head.GetLayerFrom() {
+		t.Fatalf("the head carries the stage's counts then its own: %v", head.GetDeviceLayers())
+	}
+	if head.GetDeviceBytes()[0] != stage.GetDeviceBytes()[0] || head.GetDeviceBytes()[1] != stage.GetDeviceBytes()[1] {
+		t.Fatalf("the head carries the stage's bytes: %v %v", head.GetDeviceBytes(), stage.GetDeviceBytes())
+	}
+}
+
+// A chain over a hybrid model charges each seat the cache of the full attention layers it holds:
+// the last layer of every four keeps a cache, the rest none, so a seat's cache is a whole number
+// of full layer caches and the two seats together hold the model's
+func TestChainChargesHybridLayersTheirOwnCache(t *testing.T) {
+	desktop := node(box{id: "desk", name: "desktop", device: 24 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "b1"}, allShapes)
+	other := node(box{id: "box", name: "box", device: 24 * gib, host: 64 * gib, stream: 900 * gbps, compute: 80e12, vendor: "nvidia", version: "b1"}, allShapes)
+	req := request(model(shape{layers: 80, layerBytes: 512 * mib, embedding: 8192, density: q4, interval: 4}))
+	req.Shape = v1.Shape_SHAPE_CHAIN
+	plan := mustPlan(t, req, mesh.New([]*mesh.Node{desktop, other}, lan("desk", "box", 180, 2.3), "desk"))
+	if plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || len(plan.GetSeats()) != 2 {
+		t.Fatalf("%s", plan.GetDetail())
+	}
+	// Twenty of the eighty layers keep a cache, the same on each, so the seats' caches divide by
+	// twenty into one full layer's cache
+	var total uint64
+	for _, s := range plan.GetSeats() {
+		total += s.GetCacheBytes()
+	}
+	fullLayer := total / 20
+	if fullLayer == 0 || total%20 != 0 || fullLayer < uint64(8192)*8*256 {
+		t.Fatalf("the seats hold the model's twenty full caches: %s", estimate.Human(total))
+	}
+	for _, s := range plan.GetSeats() {
+		full := uint64(0)
+		for il := s.GetLayerFrom(); il < s.GetLayerTo(); il++ {
+			if (il+1)%4 == 0 {
+				full++
+			}
+		}
+		if s.GetCacheBytes() != full*fullLayer || s.GetMemory().GetCacheBytes() != full*fullLayer {
+			t.Fatalf("%s holds layers %d-%d with %d full caches, %s planned against %s each", s.GetRole(), s.GetLayerFrom(), s.GetLayerTo()-1, full, estimate.Human(s.GetCacheBytes()), estimate.Human(fullLayer))
+		}
 	}
 }

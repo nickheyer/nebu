@@ -11,6 +11,6 @@ func (Cohere2) Description() string {
 }
 func (Cohere2) Priority() int                    { return 5 }
 func (Cohere2) Matches(architecture string) bool { return is(architecture, "cohere2") }
-func (Cohere2) CachePerToken(p formats.Params, run Run) (float64, error) {
+func (Cohere2) CacheLayers(p formats.Params, run Run) ([]float64, error) {
 	return slidingWindow(p, run, 4)
 }

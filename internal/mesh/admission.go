@@ -287,6 +287,12 @@ func (m *Manager) Invite(ctx context.Context, nodeID, address string) (*v1.Admis
 		m.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s is a member already", ErrMesh, target.GetName())
 	}
+	// An invite lets a forgotten node back
+	if target.GetId() != "" && m.forgottenLocked(target.GetId()) {
+		m.mu.Unlock()
+		m.readmit(target.GetId())
+		m.mu.Lock()
+	}
 	own := meshHex(m.mesh.ID)
 	if target.GetMeshHash() != "" && target.GetMeshHash() != own {
 		m.mu.Unlock()
@@ -635,6 +641,8 @@ func (m *Manager) Admit(ctx context.Context, ref string) (*v1.Admission, error) 
 	}
 	a.State, a.By, a.Detail = v1.AdmissionState_ADMISSION_STATE_ADMITTED, by, ""
 	m.saveAdmission(a)
+	// Admitting a node that asked lets a forgotten one back
+	m.readmit(a.GetNode().GetId())
 	if err := m.deliver(ctx, a); err != nil {
 		return nil, err
 	}

@@ -5,18 +5,23 @@
   let { id, nodeId = '', role = '', follow = true, height = 'h-96' }: { id: string; nodeId?: string; role?: string; follow?: boolean; height?: string } = $props();
   let lines = $state<string[]>([]);
   let error = $state('');
+  const target = $derived(id);
+  const onNode = $derived(nodeId);
+  const ofRole = $derived(role);
+  const following = $derived(follow);
 
   $effect(() => {
     const controller = new AbortController();
-    const current = id;
-    const node = nodeId;
-    const seat = role;
-    const f = follow;
+    const current = target;
+    const node = onNode;
+    const seat = ofRole;
+    const f = following;
     lines = [];
     error = '';
     (async () => {
       try {
         for await (const msg of api.mesh.formationLogs({ id: current, nodeId: node, role: seat, follow: f, tail: 1000 }, { signal: controller.signal })) {
+          if (controller.signal.aborted) break;
           lines.push(...msg.lines);
           if (lines.length > 5000) lines.splice(0, lines.length - 5000);
         }
