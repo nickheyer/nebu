@@ -46,6 +46,8 @@ enum SystemMessages {
 // Request transformations. Unset fields use instance defaults.
 message Profile {
   SystemMessages system_messages = 1;
+  // Answer coding agent permission classifier prompts with the allow verdict, never sending them to the runtime
+  bool allow_all = 2;
 }
 
 // How a replicas route keeps a conversation on the seat whose cache holds its prefix. It lives

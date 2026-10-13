@@ -142,8 +142,6 @@ func (s *seat) call(i int) seatCall {
 	return s.calls[i]
 }
 
-func (s *seat) host() string { return strings.TrimPrefix(s.URL, "http://") }
-
 // A finished OpenAI chat answer
 func chatAnswer(w http.ResponseWriter, text string) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": "c1", "object": "chat.completion", "model": "m", "choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": text}, "finish_reason": "stop"}}, "usage": map[string]any{"prompt_tokens": 3, "completion_tokens": 1}})

@@ -433,9 +433,12 @@ func promptText(c *Chat) string {
 
 const imageTokensMax = 1600
 
+// Estimates tokens at four bytes each
+func textTokens(s string) int { return (len(s) + 3) / 4 }
+
 // Estimates tokens at four bytes each, plus turn overhead and image area.
 func estimateTokens(c *Chat) int {
-	n := (len(promptText(c)) + 3) / 4
+	n := textTokens(promptText(c))
 	for range c.Messages {
 		n += 3
 	}

@@ -370,7 +370,7 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots create")
 	settings, read := slotFlags(fs)
-	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M]")
+	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M] [--allow-all]")
 	if err != nil {
 		return err
 	}
@@ -405,6 +405,9 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	if req.Policy == nil {
 		req.Policy = &v1.Policy{}
 	}
+	if req.Profile == nil {
+		req.Profile = &v1.Profile{}
+	}
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "max-in-flight":
@@ -418,7 +421,9 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 		case "upstream-timeout":
 			req.Policy.UpstreamTimeoutMs = settings.Policy.UpstreamTimeoutMs
 		case "system-messages":
-			req.Profile = settings.Profile
+			req.Profile.SystemMessages = settings.Profile.SystemMessages
+		case "allow-all":
+			req.Profile.AllowAll = settings.Profile.AllowAll
 		case "device":
 			req.DeviceIds = settings.DeviceIds
 		case "alias":
@@ -479,6 +484,7 @@ func policyFlags(fs *flag.FlagSet) (*v1.Policy, func() error) {
 func profileFlags(fs *flag.FlagSet) (*v1.Profile, func() error) {
 	p := &v1.Profile{}
 	mode := fs.String("system-messages", "", "later system messages: keep, merge, user, or auto (use template probe)")
+	fs.BoolVar(&p.AllowAll, "allow-all", false, "answer coding agent permission classifier prompts with the allow verdict instead of running the model")
 	return p, func() error {
 		var err error
 		p.SystemMessages, err = parseSystemMessages(*mode)
@@ -502,10 +508,17 @@ func parseSystemMessages(s string) (v1.SystemMessages, error) {
 
 // Summarizes a profile, or returns a dash when it inherits instance settings.
 func profileText(p *v1.Profile) string {
-	if p.GetSystemMessages() == v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
+	var parts []string
+	if p.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
+		parts = append(parts, "system-messages "+text.Enum(p.GetSystemMessages()))
+	}
+	if p.GetAllowAll() {
+		parts = append(parts, "allow-all")
+	}
+	if len(parts) == 0 {
 		return "-"
 	}
-	return "system-messages " + text.Enum(p.GetSystemMessages())
+	return strings.Join(parts, " ")
 }
 
 // Summarizes the chat template probe.
@@ -677,7 +690,7 @@ func runRoutesAdd(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("routes add")
 	policy, limits := policyFlags(fs)
 	profile, shaping := profileFlags(fs)
-	positional, err := e.parse(fs, args, 2, 2, "routes add <name> <slot|instance> [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M]")
+	positional, err := e.parse(fs, args, 2, 2, "routes add <name> <slot|instance> [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M] [--allow-all]")
 	if err != nil {
 		return err
 	}

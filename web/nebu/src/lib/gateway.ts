@@ -143,22 +143,32 @@ export const systemMessageItems: { value: string; label: string; detail: string 
 
 const modeOf: Record<string, SystemMessages> = { keep: SystemMessages.KEEP, merge: SystemMessages.MERGE, user: SystemMessages.USER };
 
-export function profileFrom(mode: string): Profile {
-  return { systemMessages: modeOf[mode] ?? SystemMessages.UNSPECIFIED } as Profile;
+export interface ProfileFields {
+  systemMessages: string;
+  allowAll: boolean;
 }
 
-export function profileValue(p: Profile | undefined): string {
-  return Object.entries(modeOf).find(([, m]) => m === p?.systemMessages)?.[0] ?? 'auto';
+export function profileFields(p: Profile | undefined): ProfileFields {
+  return { systemMessages: Object.entries(modeOf).find(([, m]) => m === p?.systemMessages)?.[0] ?? 'auto', allowAll: p?.allowAll ?? false };
+}
+
+export function profileFrom(f: ProfileFields): Profile {
+  return { systemMessages: modeOf[f.systemMessages] ?? SystemMessages.UNSPECIFIED, allowAll: f.allowAll } as Profile;
 }
 
 const modeLabel = (mode: string) => systemMessageItems.find((i) => i.value === mode)?.label.toLowerCase() ?? mode;
 
-export function profileText(p: Profile | undefined, template?: TemplateProbe): string {
-  const mode = profileValue(p);
+function systemText(mode: string, template?: TemplateProbe): string {
   if (mode !== 'auto') return `System messages: ${modeLabel(mode)}`;
   if (!template) return 'System messages: template decides';
   if (template.error) return 'System messages: kept · probe failed';
   return template.lateSystem ? 'System messages: kept · supported by template' : 'System messages: merged · unsupported by template';
+}
+
+export function profileText(p: Profile | undefined, template?: TemplateProbe): string {
+  const f = profileFields(p);
+  const text = systemText(f.systemMessages, template);
+  return f.allowAll ? `${text} · Agent approvals: allow all` : text;
 }
 
 export function templateText(t: TemplateProbe | undefined): string {

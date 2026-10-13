@@ -435,6 +435,9 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		t.Status, t.ResponseBytes = uint32(w.status), w.bytes
 		g.traces.Finish(t)
 	}()
+	if g.allowAll(w, r, body, name, client) {
+		return
+	}
 	// Exclude token counts from served request counters.
 	served := t.GetKind() != v1.TraceKind_TRACE_KIND_COUNT
 	route, policy, release, err := g.table.Acquire(name, served)

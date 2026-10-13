@@ -1,4 +1,4 @@
-.PHONY: gen proto-clean proto-lint web web-install web-check prepare build build-cli run test lint vet cgo-guard clean dev release release-check migrate-diff migrate-reset migrate-hash migrate-validate migrate-status
+.PHONY: gen proto-clean proto-lint web web-install web-check prepare build build-cli run test lint vet cgo-guard clean dev release release-check migrate
 
 BIN := build/nebu
 BUF ?= buf
@@ -15,9 +15,6 @@ ATLAS_RUN := docker run --rm \
 	--user "$(shell id -u):$(shell id -g)" \
 	--env HOME=/tmp \
 	$(ATLAS_IMAGE)
-
-LOCAL_NEBU := $(HOME)/.local/share/nebu
-DB_FILE ?= $(LOCAL_NEBU)/nebu.db
 
 # Generate protobuf, Connect, Connect-ES, and OpenAPI files.
 gen: proto-clean
@@ -82,31 +79,10 @@ release-check:
 release:
 	GORELEASER="$(GORELEASER)" ./scripts/release.sh
 
-# Generate a migration from schema.sql changes.
-migrate-diff:
-	@test -n "$(NAME)" || { echo "usage: make migrate-diff NAME=<name>"; exit 1; }
-	$(ATLAS_RUN) migrate diff $(NAME) --env local
-
-# Replace all migrations with one init migration until release.
-migrate-reset:
-	rm -f internal/db/migrations/*.sql internal/db/migrations/atlas.sum
-	$(ATLAS_RUN) migrate diff init --env local
-
-migrate-hash:
+# Rehash existing migrations, then generate one from schema.sql changes.
+migrate:
 	$(ATLAS_RUN) migrate hash --env local
-
-migrate-validate:
-	$(ATLAS_RUN) migrate validate --env local
-
-# Mount the daemon's database to read migration status.
-migrate-status:
-	docker run --rm \
-		--volume "$(shell pwd):/workspace" \
-		--volume "$(dir $(abspath $(DB_FILE))):/db" \
-		--workdir /workspace \
-		--user "$(shell id -u):$(shell id -g)" \
-		--env HOME=/tmp \
-		$(ATLAS_IMAGE) migrate status --env local --url "sqlite:///db/$(notdir $(DB_FILE))"
+	$(ATLAS_RUN) migrate diff $(NAME) --env local
 
 clean:
 	rm -rf build dist $(WEB)/.svelte-kit

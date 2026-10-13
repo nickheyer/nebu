@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from '$lib/api';
   import { live, cached, slotName, groupLabel, instanceLive, orderedSlots } from '$lib/state.svelte';
-  import { policyText, policyFields, policyFrom, profileText, profileFrom } from '$lib/gateway';
+  import { policyText, policyFields, policyFrom, profileText, profileFields, profileFrom } from '$lib/gateway';
   import { byName, count, tail } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
@@ -26,7 +26,7 @@
   // slot:<id> or instance:<id>
   let target = $state('');
   let policy = $state(policyFields(undefined));
-  let systemMessages = $state('auto');
+  let profile = $state(profileFields(undefined));
   let adding = $state(false);
 
   const routes = $derived([...live.routes.values()].sort(byName((r) => r.name)));
@@ -47,7 +47,7 @@
     aliasName = '';
     target = targets[0]?.value ?? '';
     policy = policyFields(undefined);
-    systemMessages = 'auto';
+    profile = profileFields(undefined);
     open = true;
   }
 
@@ -55,7 +55,7 @@
     adding = true;
     const [kind, id] = target.split(':', 2);
     try {
-      await api.gateway.setRoute({ name: aliasName.trim(), slotId: kind === 'slot' ? id : '', instanceId: kind === 'instance' ? id : '', policy: policyFrom(policy), profile: profileFrom(systemMessages) });
+      await api.gateway.setRoute({ name: aliasName.trim(), slotId: kind === 'slot' ? id : '', instanceId: kind === 'instance' ? id : '', policy: policyFrom(policy), profile: profileFrom(profile) });
       ok(`Added ${aliasName.trim()}`);
       open = false;
     } catch (err) {
@@ -139,7 +139,7 @@
     </div>
     <div class="flex flex-col gap-3">
       <h3 class="caps text-fg-faint">Shaping</h3>
-      <ProfileForm bind:value={systemMessages} idPrefix="alias" />
+      <ProfileForm bind:fields={profile} idPrefix="alias" />
     </div>
     <button type="submit" class="hidden" aria-hidden="true" tabindex="-1"></button>
   </form>

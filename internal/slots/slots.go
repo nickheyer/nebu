@@ -410,7 +410,7 @@ func (m *Manager) checkAliases(list []*v1.SlotAlias, self, primary string) ([]*v
 		if p := a.GetPolicy(); p.GetMaxInFlight()+p.GetBurst()+p.GetRequestTimeoutMs()+p.GetUpstreamTimeoutMs() > 0 || p.GetRequestsPerSecond() > 0 {
 			clean.Policy = proto.Clone(p).(*v1.Policy)
 		}
-		if a.GetProfile().GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
+		if gateway.ProfileSet(a.GetProfile()) {
 			clean.Profile = proto.Clone(a.GetProfile()).(*v1.Profile)
 		}
 		out = append(out, clean)
@@ -433,14 +433,11 @@ func settingsFor(s *v1.Slot, name string) (*v1.Policy, *v1.Profile) {
 		if a.GetName() != name {
 			continue
 		}
-		policy, profile := s.GetPolicy(), s.GetProfile()
+		policy := s.GetPolicy()
 		if a.GetPolicy() != nil {
 			policy = gateway.Effective(a.GetPolicy(), s.GetPolicy())
 		}
-		if a.GetProfile().GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
-			profile = a.GetProfile()
-		}
-		return policy, profile
+		return policy, gateway.EffectiveProfile(a.GetProfile(), s.GetProfile())
 	}
 	return s.GetPolicy(), s.GetProfile()
 }

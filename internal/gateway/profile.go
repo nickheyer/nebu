@@ -52,6 +52,23 @@ func foldSystem(c *Chat, mode v1.SystemMessages) {
 	}
 }
 
+// Reports whether a profile sets anything, an empty one inheriting everything
+func ProfileSet(p *v1.Profile) bool {
+	return p.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED || p.GetAllowAll()
+}
+
+// Merges an alias profile over its slot's, unset fields inheriting
+func EffectiveProfile(alias, slot *v1.Profile) *v1.Profile {
+	if !ProfileSet(alias) {
+		return slot
+	}
+	out := &v1.Profile{SystemMessages: slot.GetSystemMessages(), AllowAll: slot.GetAllowAll() || alias.GetAllowAll()}
+	if alias.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
+		out.SystemMessages = alias.GetSystemMessages()
+	}
+	return out
+}
+
 // Combines plain text parts for templates
 func appendText(parts []Part, text string) []Part {
 	for _, p := range parts {

@@ -3,7 +3,7 @@
   import { live, cached, orderedSlots, hostGpus, meshGpus, meshGpuGroups, inMesh } from '$lib/state.svelte';
   import { slotOccupied } from '$lib/launch';
   import { placements, placementId, placementOf } from '$lib/instances';
-  import { policyFields, policyFrom, profileValue, profileFrom } from '$lib/gateway';
+  import { policyFields, policyFrom, profileFields, profileFrom } from '$lib/gateway';
   import { gib, fromGib } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { PoolKind } from '$proto/host_pb';
@@ -36,7 +36,7 @@
       runtimeId: slot?.runtimeId ?? '',
       params: { ...(slot?.params ?? {}) } as Record<string, string>,
       policy: policyFields(slot?.policy),
-      profile: profileValue(slot?.profile)
+      profile: profileFields(slot?.profile)
     };
   }
   const start = initial();
@@ -180,7 +180,7 @@
   </Card>
 
   <Card title="Shaping">
-    <ProfileForm bind:value={profile} idPrefix="slot" />
+    <ProfileForm bind:fields={profile} idPrefix="slot" />
   </Card>
 
   <div class="flex items-center justify-end gap-2">
