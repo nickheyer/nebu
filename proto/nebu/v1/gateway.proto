@@ -245,6 +245,8 @@ message Trace {
   // Speculative decoding counters from the runtime's timings
   uint32 draft_offered = 32;
   uint32 draft_accepted = 33;
+  // Web searches the gateway ran for the Anthropic web_search tool
+  uint32 web_searches = 34;
 }
 
 // One tool call in a traced answer

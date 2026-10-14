@@ -148,8 +148,23 @@ type antToolChoice struct {
 }
 
 type antUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens   int               `json:"input_tokens"`
+	OutputTokens  int               `json:"output_tokens"`
+	ServerToolUse *antServerToolUse `json:"server_tool_use,omitempty"`
+}
+
+// Server tool counts in a usage object
+type antServerToolUse struct {
+	WebSearchRequests int `json:"web_search_requests"`
+}
+
+// The usage of a result, with its web searches when there were any
+func antUsageOf(r *Result) antUsage {
+	u := antUsage{InputTokens: r.In, OutputTokens: r.Out}
+	if r.Searches > 0 {
+		u.ServerToolUse = &antServerToolUse{WebSearchRequests: r.Searches}
+	}
+	return u
 }
 
 // A message read from a runtime
@@ -275,17 +290,25 @@ func (anthropic) ParseRequest(path string, body []byte) (*Chat, error) {
 		msg := Message{Role: m.Role}
 		for _, b := range blocks {
 			switch b.Type {
-			case "tool_use":
+			case "tool_use", "server_tool_use":
 				msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: b.ID, Name: b.Name, Args: string(b.Input)})
-			case "tool_result":
+			case "tool_result", "web_search_tool_result":
 				// Convert each result to a separate tool turn.
-				inner, err := antBlocks(b.Content)
-				if err != nil {
-					return nil, err
-				}
-				parts, err := antParts(inner, false)
-				if err != nil {
-					return nil, err
+				var parts []Part
+				if b.Type == "web_search_tool_result" {
+					text, err := searchResultText(b.Content)
+					if err != nil {
+						return nil, err
+					}
+					parts = []Part{{Type: "text", Text: text}}
+				} else {
+					inner, err := antBlocks(b.Content)
+					if err != nil {
+						return nil, err
+					}
+					if parts, err = antParts(inner, false); err != nil {
+						return nil, err
+					}
 				}
 				if len(msg.Parts) > 0 || len(msg.ToolCalls) > 0 {
 					msg.Extra, extra = extra, nil
@@ -557,7 +580,7 @@ func (anthropic) RenderResult(c *Chat, r *Result) ([]byte, error) {
 		}
 		content = append(content, antBlock{Type: "tool_use", ID: antToolID(t.ID), Name: t.Name, Input: input})
 	}
-	resp := antReply{ID: antID(), Type: "message", Role: "assistant", Model: r.Model, Content: content, StopReason: ptr(antReason(r.Stop)), Usage: antUsage{InputTokens: r.In, OutputTokens: r.Out}, Extra: r.Extra}
+	resp := antReply{ID: antID(), Type: "message", Role: "assistant", Model: r.Model, Content: content, StopReason: ptr(antReason(r.Stop)), Usage: antUsageOf(r), Extra: r.Extra}
 	return json.Marshal(resp)
 }
 
@@ -663,12 +686,35 @@ type antStream struct {
 // sees the message before the model has produced anything. Pings follow while
 // it works. Input tokens arrive in the closing message_delta.
 func (anthropic) Stream(w http.ResponseWriter, c *Chat) StreamWriter {
+	return newAntStream(w, c.Model)
+}
+
+func newAntStream(w http.ResponseWriter, model string) *antStream {
 	streamHeaders(w, "text/event-stream")
 	s := &antStream{live: newLiveWriter(w, antPing), index: -1, done: map[int]bool{}}
-	msg := antReply{ID: antID(), Type: "message", Role: "assistant", Model: c.Model, Content: []any{}}
+	msg := antReply{ID: antID(), Type: "message", Role: "assistant", Model: model, Content: []any{}}
 	s.live.sse("message_start", map[string]any{"type": "message_start", "message": msg})
 	return s
 }
+
+// Writes a whole block of its own, the input streamed as one delta the way the API sends it
+func (s *antStream) block(b antBlock, input json.RawMessage) error {
+	if err := s.settle(); err != nil {
+		return err
+	}
+	if err := s.open(b, b.Type); err != nil {
+		return err
+	}
+	if len(input) > 0 {
+		if err := s.delta(map[string]any{"type": "input_json_delta", "partial_json": string(input)}); err != nil {
+			return err
+		}
+	}
+	return s.close()
+}
+
+// Ends the stream with an error event, the only way a stream carries one
+func (s *antStream) fail(_ int, message, _ string) { s.Write(Event{Kind: "error", Text: message}) }
 
 func antPing(w http.ResponseWriter) error {
 	return writeSSE(w, "ping", map[string]any{"type": "ping"})
@@ -777,7 +823,7 @@ func (s *antStream) Write(ev Event) error {
 				delta[k] = v
 			}
 		}
-		if err := s.live.sse("message_delta", map[string]any{"type": "message_delta", "delta": delta, "usage": map[string]any{"input_tokens": res.In, "output_tokens": res.Out}}); err != nil {
+		if err := s.live.sse("message_delta", map[string]any{"type": "message_delta", "delta": delta, "usage": antUsageOf(res)}); err != nil {
 			return err
 		}
 		return s.live.sse("message_stop", map[string]any{"type": "message_stop"})

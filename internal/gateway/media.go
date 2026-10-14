@@ -529,6 +529,7 @@ func (g *Gateway) submit(ctx context.Context, target *url.URL, path string, job 
 type upstreamRefusal struct {
 	status  int
 	message string
+	kind    string
 }
 
 func (e *upstreamRefusal) Error() string { return e.message }

@@ -10,6 +10,18 @@ message Settings {
   string host_label = 1;
   reserved 2;
   reserved "setup_dismissed";
+  // Provider behind the Anthropic web_search tool for runtimes without one
+  WebSearch web_search = 3;
+}
+
+// Where the gateway sends web searches. Empty provider turns the tool away.
+message WebSearch {
+  // searxng or brave
+  string provider = 1;
+  // Base URL of a SearXNG instance with the json format enabled
+  string searxng_url = 2;
+  // Brave Search API subscription token
+  string brave_key = 3;
 }
 
 // Asks for the settings

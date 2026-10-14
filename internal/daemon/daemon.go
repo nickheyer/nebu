@@ -296,6 +296,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	d.Notifier = &notify.Notifier{Webhooks: cfg.GetNotify().GetWebhooks(), Events: bus, Log: log}
 	d.Gateway = gateway.New(d.Routes, cfg.GetGateway().GetApiKeys(), cfg.GetGateway().GetCorsOrigins(), cfg.GetGateway().GetPolicy(), bus, log)
 	d.Gateway.SetVersion(Version)
+	d.Gateway.SetWebSearch(func() *v1.WebSearch { return d.Settings.Get().GetWebSearch() })
 	if err = d.openAuth(store); err != nil {
 		return nil, err
 	}

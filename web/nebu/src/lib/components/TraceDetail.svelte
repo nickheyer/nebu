@@ -90,6 +90,7 @@
         </span></span>
       {/if}
       {#if trace.draftOffered}<span class="kv"><span>draft tokens</span><span>{trace.draftAccepted.toLocaleString()} of {trace.draftOffered.toLocaleString()} accepted</span></span>{/if}
+      {#if trace.webSearches}<span class="kv"><span>web searches</span><span>{trace.webSearches.toLocaleString()}</span></span>{/if}
       <span class="kv"><span>started</span><span>{when(trace.startedAt)}</span></span>
     </div>
     <div>

@@ -5,6 +5,8 @@
   import { confirm } from '$lib/confirm.svelte';
   import { fail, ok } from '$lib/toast.svelte';
   import type { ApiToken, User } from '$proto/auth_pb';
+  import { WebSearchSchema } from '$proto/settings_pb';
+  import { create } from '@bufbuild/protobuf';
   import { when } from '$lib/format';
   import { KeyRound, Eye, EyeOff, Plug, LogIn, LogOut, UserPlus, Trash2 } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
@@ -12,6 +14,7 @@
   import Copy from '$lib/components/ui/Copy.svelte';
   import IconButton from '$lib/components/ui/IconButton.svelte';
   import Section from '$lib/components/ui/Section.svelte';
+  import Select from '$lib/components/ui/Select.svelte';
   import State from '$lib/components/ui/State.svelte';
   import TextInput from '$lib/components/ui/TextInput.svelte';
 
@@ -22,6 +25,19 @@
   let label = $state('');
   let labelSaving = $state(false);
   let labelSeeded = false;
+
+  // Web search provider behind the Anthropic web_search tool
+  const providers = [
+    { value: '', label: 'Off' },
+    { value: 'searxng', label: 'SearXNG' },
+    { value: 'brave', label: 'Brave Search' }
+  ];
+  let provider = $state('');
+  let searxngUrl = $state('');
+  let braveKey = $state('');
+  let showKey = $state(false);
+  let searchSaving = $state(false);
+  let searchSeeded = false;
 
   // Password change
   let current = $state('');
@@ -44,6 +60,12 @@
   let revealed = $state<Record<string, boolean>>({});
 
   const labelDirty = $derived(label.trim() !== (live.settings?.hostLabel ?? ''));
+  const searchDirty = $derived(
+    provider !== (live.settings?.webSearch?.provider ?? '') ||
+      searxngUrl.trim() !== (live.settings?.webSearch?.searxngUrl ?? '') ||
+      braveKey.trim() !== (live.settings?.webSearch?.braveKey ?? '')
+  );
+  const searchReady = $derived(provider === '' || (provider === 'searxng' && !!searxngUrl.trim()) || (provider === 'brave' && !!braveKey.trim()));
   const tokenDirty = $derived(value.trim() !== token());
   const me = $derived(auth.user?.provider === 'local' ? auth.user : null);
 
@@ -51,6 +73,15 @@
     if (live.settings && !labelSeeded) {
       label = live.settings.hostLabel;
       labelSeeded = true;
+    }
+  });
+
+  $effect(() => {
+    if (live.settings && !searchSeeded) {
+      provider = live.settings.webSearch?.provider ?? '';
+      searxngUrl = live.settings.webSearch?.searxngUrl ?? '';
+      braveKey = live.settings.webSearch?.braveKey ?? '';
+      searchSeeded = true;
     }
   });
 
@@ -66,6 +97,13 @@
     labelSaving = true;
     if (await updateSettings({ hostLabel: label.trim() })) ok(label.trim() ? `Label set to ${label.trim()}` : 'Label cleared');
     labelSaving = false;
+  }
+
+  async function saveSearch() {
+    searchSaving = true;
+    const webSearch = create(WebSearchSchema, { provider, searxngUrl: searxngUrl.trim(), braveKey: braveKey.trim() });
+    if (await updateSettings({ webSearch })) ok(provider ? `Web search through ${providers.find((p) => p.value === provider)?.label}` : 'Web search turned off');
+    searchSaving = false;
   }
 
   function save() {
@@ -236,6 +274,42 @@
       {/snippet}
       {@render row('Platform', undefined, undefined, platformControl)}
     </div>
+  </Section>
+
+  <Section title="Web search">
+    <form
+      class="divide-y divide-line/70 border-y border-line"
+      onsubmit={(e) => {
+        e.preventDefault();
+        saveSearch();
+      }}
+    >
+      {#snippet providerControl()}
+        <div class="flex max-w-lg items-center gap-2">
+          <Select id="search-provider" class="w-56" bind:value={provider} items={providers} />
+          <Button type="submit" variant="primary" loading={searchSaving} disabled={!searchDirty || !searchReady}>Save</Button>
+        </div>
+      {/snippet}
+      {@render row('Provider', 'Runs the Anthropic web_search tool for models served by this node.', 'search-provider', providerControl)}
+      {#if provider === 'searxng'}
+        {#snippet searxngControl()}
+          <TextInput id="searxng-url" class="max-w-lg" mono bind:value={searxngUrl} empty="https://searx.example" />
+        {/snippet}
+        {@render row('SearXNG URL', 'The instance needs json in search.formats.', 'searxng-url', searxngControl)}
+      {:else if provider === 'brave'}
+        {#snippet braveControl()}
+          <div class="relative max-w-lg">
+            <TextInput id="brave-key" mono type={showKey ? 'text' : 'password'} bind:value={braveKey} empty="Subscription token" inputClass="pr-9">
+              {#snippet leading()}<KeyRound size={13} />{/snippet}
+            </TextInput>
+            <button type="button" class="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-sm p-1 text-fg-faint hover:text-fg" onclick={() => (showKey = !showKey)} aria-label={showKey ? 'Hide token' : 'Show token'}>
+              {#if showKey}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+            </button>
+          </div>
+        {/snippet}
+        {@render row('Brave token', 'From the Brave Search API dashboard.', 'brave-key', braveControl)}
+      {/if}
+    </form>
   </Section>
 
   {#if auth.local}

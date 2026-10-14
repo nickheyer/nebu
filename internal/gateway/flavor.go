@@ -97,6 +97,8 @@ type Result struct {
 	Extra   map[string]json.RawMessage
 	// Speculative decoding counters, when the runtime reports them
 	DraftOffered, DraftAccepted int
+	// Web searches the gateway ran for the answer
+	Searches int
 }
 
 // Stream event. Start includes ID and model. Text carries a fragment. Tool

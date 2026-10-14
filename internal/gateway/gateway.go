@@ -72,6 +72,8 @@ type Gateway struct {
 	jobs *forwardedJobs
 	// Sequence slots in use on llama.cpp relay seats
 	slots *slotPool
+	// The host's web search provider, read per request
+	webSearch func() *v1.WebSearch
 }
 
 // Creates a gateway with bearer keys, default route policy, and allowed origins.
@@ -89,6 +91,9 @@ func (g *Gateway) SetVersion(v string) { g.version = v }
 
 // Requires credentials whenever they are enabled, and accepts them where a gateway key would do.
 func (g *Gateway) SetCredentials(c Credentials) { g.creds = c }
+
+// Reads the web search provider behind the Anthropic web_search tool from the host settings
+func (g *Gateway) SetWebSearch(fn func() *v1.WebSearch) { g.webSearch = fn }
 
 // Whether requests must carry a gateway key or a daemon credential
 func (g *Gateway) required() bool {
@@ -683,6 +688,15 @@ func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, 
 			return -1
 		}
 	}
+	// A web search tool goes to the gateway, which runs the searches the runtime cannot.
+	tool, searching, err := takeWebSearch(chat)
+	if err != nil {
+		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		return -1
+	}
+	if searching {
+		return g.search(w, r, chat, tool, name, targets, hold, policy, client, upstream)
+	}
 	path, out, err := upstream.RenderRequest(chat)
 	if err != nil {
 		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
@@ -814,16 +828,19 @@ func (g *Gateway) answer(w *traceWriter, client Flavor, chat *Chat, res *Result)
 // Maps runtime exchange timeouts to 504 and other failures to 502.
 func (g *Gateway) upstreamError(w http.ResponseWriter, t *v1.Trace, client Flavor, name string, err error) {
 	g.log.Warn("gateway upstream", "model", name, "err", err)
-	message := "upstream error: " + err.Error()
-	status := http.StatusBadGateway
-	kind := "server_error"
-	if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
-		message, status, kind = fmt.Sprintf("model %s did not answer within its timeout", name), http.StatusGatewayTimeout, "timeout_error"
-	}
+	status, message, kind := upstreamFailure(name, err)
 	if t.Error == "" {
 		t.Error = message
 	}
 	client.Error(w, status, message, kind)
+}
+
+// The status, message, and kind a client gets when the runtime could not be reached
+func upstreamFailure(name string, err error) (int, string, string) {
+	if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
+		return http.StatusGatewayTimeout, fmt.Sprintf("model %s did not answer within its timeout", name), "timeout_error"
+	}
+	return http.StatusBadGateway, "upstream error: " + err.Error(), "server_error"
 }
 
 // Uses the runtime tokenizer when available, otherwise estimates tokens.
