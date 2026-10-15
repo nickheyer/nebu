@@ -145,6 +145,10 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 		}
 	}
 	args := []string{"--model", weights, "--host", in.Host, "--port", strconv.Itoa(in.Port)}
+	// Tools need the jinja renderer, which older builds turn on by this flag alone
+	if has(in.InstallRecord, factJinja) {
+		args = append(args, in.InstallRecord.GetFacts()[factJinja])
+	}
 	// Draft flags use the spellings recorded for this install.
 	draft := p.Str("draft_model")
 	hasDraft := draft != "" && !strings.EqualFold(draft, None)

@@ -254,6 +254,9 @@ func (s *traceSink) result(res *Result) {
 		s.text.WriteString(res.Text)
 	}
 	s.t.ToolCalls = nil
+	for _, run := range res.Runs {
+		s.t.ToolCalls = append(s.t.ToolCalls, traceRun(run))
+	}
 	for _, c := range res.ToolCalls {
 		s.t.ToolCalls = append(s.t.ToolCalls, &v1.TraceToolCall{Id: c.ID, Name: c.Name, Arguments: c.Args})
 	}

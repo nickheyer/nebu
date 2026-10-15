@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nickheyer/nebu/internal/db"
+	"github.com/nickheyer/nebu/internal/tools"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -29,17 +30,20 @@ type antSource struct {
 }
 
 type antBlock struct {
-	Type      string                     `json:"type"`
-	Text      string                     `json:"text,omitempty"`
-	ID        string                     `json:"id,omitempty"`
-	Name      string                     `json:"name,omitempty"`
-	Input     json.RawMessage            `json:"input,omitempty"`
-	ToolUseID string                     `json:"tool_use_id,omitempty"`
-	Content   json.RawMessage            `json:"content,omitempty"`
-	Source    *antSource                 `json:"source,omitempty"`
-	Thinking  string                     `json:"thinking,omitempty"`
-	Signature string                     `json:"signature,omitempty"`
-	Extra     map[string]json.RawMessage `json:"-"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
+	Source    *antSource      `json:"source,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
+	// The server of an mcp_tool_use and the outcome of an mcp_tool_result
+	ServerName string                     `json:"server_name,omitempty"`
+	IsError    *bool                      `json:"is_error,omitempty"`
+	Extra      map[string]json.RawMessage `json:"-"`
 }
 
 func (b *antBlock) UnmarshalJSON(data []byte) error {
@@ -98,6 +102,7 @@ type antRequest struct {
 	Stream        bool                       `json:"stream,omitempty"`
 	Tools         []antTool                  `json:"tools,omitempty"`
 	ToolChoice    *antToolChoice             `json:"tool_choice,omitempty"`
+	MCPServers    []antMCPServer             `json:"mcp_servers,omitempty"`
 	Extra         map[string]json.RawMessage `json:"-"`
 }
 
@@ -156,15 +161,7 @@ type antUsage struct {
 // Server tool counts in a usage object
 type antServerToolUse struct {
 	WebSearchRequests int `json:"web_search_requests"`
-}
-
-// The usage of a result, with its web searches when there were any
-func antUsageOf(r *Result) antUsage {
-	u := antUsage{InputTokens: r.In, OutputTokens: r.Out}
-	if r.Searches > 0 {
-		u.ServerToolUse = &antServerToolUse{WebSearchRequests: r.Searches}
-	}
-	return u
+	WebFetchRequests  int `json:"web_fetch_requests,omitempty"`
 }
 
 // A message read from a runtime
@@ -292,16 +289,29 @@ func (anthropic) ParseRequest(path string, body []byte) (*Chat, error) {
 			switch b.Type {
 			case "tool_use", "server_tool_use":
 				msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: b.ID, Name: b.Name, Args: string(b.Input)})
-			case "tool_result", "web_search_tool_result":
+			case "mcp_tool_use":
+				msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: b.ID, Name: b.ServerName + tools.Join + b.Name, Args: string(b.Input)})
+			case "tool_result", "web_search_tool_result", "web_fetch_tool_result", "mcp_tool_result":
 				// Convert each result to a separate tool turn.
 				var parts []Part
-				if b.Type == "web_search_tool_result" {
+				switch b.Type {
+				case "web_search_tool_result":
 					text, err := searchResultText(b.Content)
 					if err != nil {
 						return nil, err
 					}
 					parts = []Part{{Type: "text", Text: text}}
-				} else {
+				case "web_fetch_tool_result":
+					text, err := fetchResultText(b.Content)
+					if err != nil {
+						return nil, err
+					}
+					parts = []Part{{Type: "text", Text: text}}
+				case "mcp_tool_result":
+					if parts, err = mcpResultParts(b); err != nil {
+						return nil, err
+					}
+				default:
 					inner, err := antBlocks(b.Content)
 					if err != nil {
 						return nil, err
@@ -332,6 +342,22 @@ func (anthropic) ParseRequest(path string, body []byte) (*Chat, error) {
 	}
 	for _, t := range req.Tools {
 		c.Tools = append(c.Tools, Tool{Type: t.Type, Name: t.Name, Description: t.Description, Schema: t.InputSchema, Strict: t.Strict, Extra: t.Extra})
+	}
+	for _, s := range req.MCPServers {
+		if s.Type != "url" {
+			return nil, bad("mcp server %s has type %q, and url is the one the gateway connects", s.Name, s.Type)
+		}
+		if s.Name == "" || s.URL == "" {
+			return nil, bad("an mcp server needs a name and a url")
+		}
+		server := MCPServer{Name: s.Name, URL: s.URL, Token: s.Authorization}
+		if cfg := s.Configuration; cfg != nil {
+			if cfg.Enabled != nil && !*cfg.Enabled {
+				continue
+			}
+			server.Allowed = cfg.AllowedTools
+		}
+		c.MCPServers = append(c.MCPServers, server)
 	}
 	if req.ToolChoice != nil {
 		switch req.ToolChoice.Type {

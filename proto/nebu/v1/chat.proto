@@ -23,7 +23,7 @@ message ChatFile {
 
 // One message of a saved conversation
 message ChatTurn {
-  // user or assistant
+  // user, assistant, or tool
   string role = 1;
   string text = 2;
   // Images attached to a user turn.
@@ -43,6 +43,8 @@ message ChatTurn {
   string stop = 13;
   // Wire format the turn was made with: openai, anthropic, or ollama.
   string dialect = 14;
+  // The call a tool turn answers
+  string tool_call_id = 15;
 }
 
 // Request settings a conversation was made with
@@ -58,6 +60,11 @@ message ChatSettings {
   string seed = 9;
   // Tool definitions as a JSON array.
   string tools = 10;
+  // Tool servers attached to every request
+  repeated string tool_servers = 11;
+  bool mutating_tools = 12;
+  // Whether gateway tools wait for approval in the chat before they run
+  bool approve_tools = 13;
 }
 
 // A saved conversation, owned by the account that made it

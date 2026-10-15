@@ -121,6 +121,15 @@ func (g *Gateway) relay(w *traceWriter, r *http.Request, body []byte, name strin
 		g.refuse(w, client, http.StatusServiceUnavailable, "model "+name+" cannot relay: "+err.Error(), "server_error")
 		return
 	}
+	decodeTarget := []target{{url: decodeURL, seat: decode.GetInstanceId()}}
+	hold := g.holder(route, decodeTarget)
+	hold.to(0)
+	defer hold.done()
+	open := g.relayOpener(t, r, name, route, policy, handoff, prefill, decode, decodeURL, decodeTarget)
+	mode := g.table.SystemMode(route)
+	if _, done := g.serveTools(w, r, body, name, route, policy, client, mode, open); done {
+		return
+	}
 	upstream := flavorOf(route.GetApi())
 	chat, err := client.ParseRequest(r.URL.Path, body)
 	if err != nil {
@@ -130,7 +139,7 @@ func (g *Gateway) relay(w *traceWriter, r *http.Request, body []byte, name strin
 	if served := route.GetServed(); served != "" {
 		chat.Model = served
 	}
-	foldSystem(chat, g.table.SystemMode(route))
+	foldSystem(chat, mode)
 	t.Translated = clientFlavor(r) != route.GetApi()
 	if upstream.InlineImages() {
 		if err := g.inlineImages(r.Context(), chat, policy); err != nil {
@@ -144,79 +153,104 @@ func (g *Gateway) relay(w *traceWriter, r *http.Request, body []byte, name strin
 		return
 	}
 	chat.Model = name
-	prompt := estimateTokens(chat)
-	decodeTarget := []target{{url: decodeURL, seat: decode.GetInstanceId()}}
-	hold := g.holder(route, decodeTarget)
-	hold.to(0)
-	defer hold.done()
-	decodeOnly := func(why string) {
-		t.Relay, t.Seats = why, []string{decode.GetInstanceId()}
-		t.UpstreamRequest = capped(out)
-		g.exchange(w, r, chat, name, path, out, decodeTarget, nil, policy, client, upstream)
-	}
-	breakEven := route.GetRelayBreakEvenPrompt()
-	if prefill == nil || prefill.GetState() != v1.InstanceState_INSTANCE_STATE_READY || prefill.GetEndpoint() == "" || breakEven == 0 || uint32(prompt) < breakEven {
-		decodeOnly(relayDecode)
-		return
-	}
-	prefillURL, err := url.Parse(prefill.GetEndpoint())
-	if err != nil {
-		g.log.Warn("relay prefill seat has an endpoint the gateway cannot parse, decoding alone", "model", name, "seat", prefill.GetInstanceId(), "err", err)
-		decodeOnly(relayNoPrefill)
-		return
-	}
-	releasePrefill := g.table.HoldSeat(prefill.GetInstanceId())
-	defer releasePrefill()
-	ctx, cancel := context.WithTimeout(r.Context(), handoffTimeout)
-	defer cancel()
-	c := &relayCall{g: g, ctx: ctx, cancel: cancel, route: route, prefill: prefill, decode: decode, prefillURL: prefillURL, decodeURL: decodeURL, path: path, out: out, policy: policy, from: r.Header, traceID: t.GetId()}
-	defer handoff.release(c)
-	prefillBody, err := handoff.prefill(c)
+	resp, cancel, _, err := open(r.Context(), chat, path, out)
 	if err != nil {
 		if errors.Is(err, errSlotsBusy) {
 			w.Header().Set("Retry-After", retryAfter)
-			g.refuse(w, client, http.StatusTooManyRequests, "model "+name+" cannot relay now: "+err.Error()+", retry shortly", "rate_limit_error")
-			return
 		}
-		g.log.Warn("relay prefill request could not be made, decoding alone", "model", name, "err", err)
-		decodeOnly(relayNoPrefill)
+		g.upstreamError(w, t, client, name, err)
 		return
 	}
-	if handoff.together() {
-		decodeBody, err := handoff.decode(c)
-		if err != nil {
-			g.log.Warn("relay decode request could not be made, decoding alone", "model", name, "err", err)
-			decodeOnly(relayNoPrefill)
-			return
-		}
-		g.relayTogether(w, r, chat, name, c, handoff, prefillBody, decodeBody, decodeTarget, client, upstream, decodeOnly)
-		return
-	}
-	answer, err := g.sendJSON(ctx, prefillURL, path, prefillBody, policy, r.Header)
-	if err == nil {
-		err = handoff.take(ctx, c, answer)
-	}
-	if err != nil {
-		g.log.Warn("relay prefill failed, decoding alone", "model", name, "seat", prefillURL.Host, "err", err)
-		decodeOnly(relayNoPrefill)
-		return
-	}
-	decodeBody, err := handoff.decode(c)
-	if err != nil {
-		g.log.Warn("relay decode request could not be made, decoding alone", "model", name, "err", err)
-		decodeOnly(relayNoPrefill)
-		return
-	}
-	t.Relay, t.Seats = relayBoth, []string{prefill.GetInstanceId(), decode.GetInstanceId()}
-	t.UpstreamRequest = capped(decodeBody)
-	g.exchange(w, r, chat, name, path, decodeBody, decodeTarget, nil, policy, client, upstream)
+	g.deliver(w, r, chat, name, resp, cancel, client, upstream)
 }
 
-// Sends the request to both seats at once, the decode seat's answer streaming once the prefill
-// seat's outcome is known. A prefill that fails before anything streamed sends the request to
-// the decode seat alone
-func (g *Gateway) relayTogether(w *traceWriter, r *http.Request, chat *Chat, name string, c *relayCall, handoff relayHandoff, prefillBody, decodeBody []byte, decodeTarget []target, client, upstream Flavor, decodeOnly func(string)) {
-	t := w.t
+// Opens the decode seat's answer to one rendered request, the prefill seat going first when it pays
+func (g *Gateway) relayOpener(t *v1.Trace, r *http.Request, name string, route *v1.Route, policy *v1.Policy, handoff relayHandoff, prefill, decode *v1.RouteSeat, decodeURL *url.URL, decodeTarget []target) opener {
+	return func(ctx context.Context, chat *Chat, path string, out []byte) (*http.Response, context.CancelFunc, int, error) {
+		decodeOnly := func(why string) (*http.Response, context.CancelFunc, int, error) {
+			t.Relay, t.Seats = why, []string{decode.GetInstanceId()}
+			t.UpstreamRequest = capped(out)
+			resp, cancel, err := g.send(ctx, decodeURL, path, out, chat.Stream, policy, r.Header)
+			return resp, cancel, 0, err
+		}
+		prompt := estimateTokens(chat)
+		breakEven := route.GetRelayBreakEvenPrompt()
+		if prefill == nil || prefill.GetState() != v1.InstanceState_INSTANCE_STATE_READY || prefill.GetEndpoint() == "" || breakEven == 0 || uint32(prompt) < breakEven {
+			return decodeOnly(relayDecode)
+		}
+		prefillURL, err := url.Parse(prefill.GetEndpoint())
+		if err != nil {
+			g.log.Warn("relay prefill seat has an endpoint the gateway cannot parse, decoding alone", "model", name, "seat", prefill.GetInstanceId(), "err", err)
+			return decodeOnly(relayNoPrefill)
+		}
+		releasePrefill := g.table.HoldSeat(prefill.GetInstanceId())
+		hctx, hcancel := context.WithTimeout(ctx, handoffTimeout)
+		c := &relayCall{g: g, ctx: hctx, cancel: hcancel, route: route, prefill: prefill, decode: decode, prefillURL: prefillURL, decodeURL: decodeURL, path: path, out: out, policy: policy, from: r.Header, traceID: t.GetId()}
+		free := func() {
+			handoff.release(c)
+			hcancel()
+			releasePrefill()
+		}
+		prefillBody, err := handoff.prefill(c)
+		if err != nil {
+			free()
+			if errors.Is(err, errSlotsBusy) {
+				return nil, nil, -1, err
+			}
+			g.log.Warn("relay prefill request could not be made, decoding alone", "model", name, "err", err)
+			return decodeOnly(relayNoPrefill)
+		}
+		decodeBody, err := handoff.decode(c)
+		if err != nil && handoff.together() {
+			free()
+			g.log.Warn("relay decode request could not be made, decoding alone", "model", name, "err", err)
+			return decodeOnly(relayNoPrefill)
+		}
+		var resp *http.Response
+		var cancel context.CancelFunc
+		if handoff.together() {
+			var prefillErr error
+			resp, cancel, prefillErr, err = g.relayTogether(ctx, chat, name, c, handoff, prefillBody, decodeBody, decodeTarget)
+			if err != nil {
+				free()
+				return nil, nil, -1, err
+			}
+			if prefillErr != nil {
+				free()
+				g.log.Warn("relay prefill failed, decoding alone", "model", name, "seat", prefillURL.Host, "err", prefillErr)
+				return decodeOnly(relayNoPrefill)
+			}
+		} else {
+			answer, err := g.sendJSON(hctx, prefillURL, path, prefillBody, policy, r.Header)
+			if err == nil {
+				err = handoff.take(hctx, c, answer)
+			}
+			if err != nil {
+				free()
+				g.log.Warn("relay prefill failed, decoding alone", "model", name, "seat", prefillURL.Host, "err", err)
+				return decodeOnly(relayNoPrefill)
+			}
+			if decodeBody, err = handoff.decode(c); err != nil {
+				free()
+				g.log.Warn("relay decode request could not be made, decoding alone", "model", name, "err", err)
+				return decodeOnly(relayNoPrefill)
+			}
+			if resp, cancel, _, err = g.open(ctx, decodeTarget, nil, path, decodeBody, chat.Stream, policy, r.Header, name); err != nil {
+				free()
+				return nil, nil, -1, err
+			}
+		}
+		t.Relay, t.Seats = relayBoth, []string{prefill.GetInstanceId(), decode.GetInstanceId()}
+		t.UpstreamRequest = capped(decodeBody)
+		return resp, func() {
+			cancel()
+			free()
+		}, 0, nil
+	}
+}
+
+// Sends the request to both seats at once, answering the prefill failure apart so the caller decodes alone
+func (g *Gateway) relayTogether(ctx context.Context, chat *Chat, name string, c *relayCall, handoff relayHandoff, prefillBody, decodeBody []byte, decodeTarget []target) (*http.Response, context.CancelFunc, error, error) {
 	prefilled := make(chan error, 1)
 	go func() {
 		answer, err := g.sendJSON(c.ctx, c.prefillURL, c.path, prefillBody, c.policy, c.from)
@@ -230,8 +264,7 @@ func (g *Gateway) relayTogether(w *traceWriter, r *http.Request, chat *Chat, nam
 		cancel context.CancelFunc
 		err    error
 	}
-	dctx, dcancel := context.WithCancel(r.Context())
-	defer dcancel()
+	dctx, dcancel := context.WithCancel(ctx)
 	openCh := make(chan opened, 1)
 	go func() {
 		resp, cancel, _, err := g.open(dctx, decodeTarget, nil, c.path, decodeBody, chat.Stream, c.policy, c.from, name)
@@ -256,24 +289,24 @@ func (g *Gateway) relayTogether(w *traceWriter, r *http.Request, chat *Chat, nam
 			// The decode seat never joined, so the prefill seat has no one to hand off to.
 			c.cancel()
 			<-prefilled
-			g.upstreamError(w, t, client, name, o.err)
-			return
+			dcancel()
+			return nil, nil, nil, o.err
 		}
 		prefillErr = <-prefilled
 	}
 	if prefillErr != nil {
 		drop(o)
-		g.log.Warn("relay prefill failed, decoding alone", "model", name, "seat", c.prefillURL.Host, "err", prefillErr)
-		decodeOnly(relayNoPrefill)
-		return
+		dcancel()
+		return nil, nil, prefillErr, nil
 	}
 	if o.err != nil {
-		g.upstreamError(w, t, client, name, o.err)
-		return
+		dcancel()
+		return nil, nil, nil, o.err
 	}
-	t.Relay, t.Seats = relayBoth, []string{c.prefill.GetInstanceId(), c.decode.GetInstanceId()}
-	t.UpstreamRequest = capped(decodeBody)
-	g.deliver(w, r, chat, name, o.resp, o.cancel, client, upstream)
+	return o.resp, func() {
+		o.cancel()
+		dcancel()
+	}, nil, nil
 }
 
 // Adds fields to a JSON object body

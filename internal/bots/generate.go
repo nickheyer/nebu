@@ -115,7 +115,7 @@ func (r *runner) chat(ctx context.Context, p *v1.Persona, model string, chat *ga
 	if err != nil {
 		return nil, err
 	}
-	resp, err := r.post(ctx, path, "application/json", body)
+	resp, err := r.post(ctx, path, "application/json", body, toolHeaders(p))
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func (r *runner) images(ctx context.Context, p *v1.Persona, model, prompt, initI
 		req["init_image"] = initImage
 	}
 	body, _ := json.Marshal(req)
-	resp, err := r.post(ctx, "/v1/images/generations", "application/json", body)
+	resp, err := r.post(ctx, "/v1/images/generations", "application/json", body, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -234,7 +234,7 @@ func (r *runner) video(ctx context.Context, p *v1.Persona, model, prompt, initIm
 		req["control_frames"] = controlFrames
 	}
 	body, _ := json.Marshal(req)
-	resp, err := r.post(ctx, "/v1/videos", "application/json", body)
+	resp, err := r.post(ctx, "/v1/videos", "application/json", body, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -303,13 +303,29 @@ func (r *runner) video(ctx context.Context, p *v1.Persona, model, prompt, initIm
 	}
 }
 
-func (r *runner) post(ctx context.Context, path, contentType string, body []byte) (*http.Response, error) {
+// Posts to the gateway in process, the headers a persona's tools call for going along
+func (r *runner) post(ctx context.Context, path, contentType string, body []byte, headers http.Header) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.m.Gateway.LocalBase()+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
+	for k, v := range headers {
+		req.Header[k] = v
+	}
 	req.Header.Set("Content-Type", contentType)
 	return r.client.Do(req)
+}
+
+// The headers that attach a persona's tool servers to its chats
+func toolHeaders(p *v1.Persona) http.Header {
+	h := http.Header{}
+	if len(p.GetToolServers()) > 0 {
+		h.Set(gateway.ToolsHeader, strings.Join(p.GetToolServers(), ","))
+		if p.GetMutatingTools() {
+			h.Set(gateway.MutatingHeader, "true")
+		}
+	}
+	return h
 }
 
 func (r *runner) get(ctx context.Context, path string) (*http.Response, error) {

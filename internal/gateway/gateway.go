@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/nebu/internal/db"
+	"github.com/nickheyer/nebu/internal/tools"
 	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -72,15 +73,15 @@ type Gateway struct {
 	jobs *forwardedJobs
 	// Sequence slots in use on llama.cpp relay seats
 	slots *slotPool
-	// The host's web search provider, read per request
-	webSearch func() *v1.WebSearch
+	// The tool servers routes, personas, and requests attach
+	tools *tools.Registry
 }
 
 // Creates a gateway with bearer keys, default route policy, and allowed origins.
 // Records requests and publishes recent traces.
 func New(table *Table, keys, origins []string, policy *v1.Policy, bus *events.Bus, log *slog.Logger) *Gateway {
 	table.SetDefaults(policy)
-	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing, countRing), transports: map[uint32]*http.Transport{}, videos: newVideoStore(), affinity: newAffinity(), jobs: newForwardedJobs(), slots: newSlotPool()}
+	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing, countRing), transports: map[uint32]*http.Transport{}, videos: newVideoStore(), affinity: newAffinity(), jobs: newForwardedJobs(), slots: newSlotPool(), tools: tools.New(log, bus)}
 }
 
 // Returns the request recorder
@@ -91,9 +92,6 @@ func (g *Gateway) SetVersion(v string) { g.version = v }
 
 // Requires credentials whenever they are enabled, and accepts them where a gateway key would do.
 func (g *Gateway) SetCredentials(c Credentials) { g.creds = c }
-
-// Reads the web search provider behind the Anthropic web_search tool from the host settings
-func (g *Gateway) SetWebSearch(fn func() *v1.WebSearch) { g.webSearch = fn }
 
 // Whether requests must carry a gateway key or a daemon credential
 func (g *Gateway) required() bool {
@@ -539,6 +537,15 @@ func (g *Gateway) refuseSeats(w *traceWriter, client Flavor, name string, err er
 func (g *Gateway) dispatch(w *traceWriter, r *http.Request, body []byte, name string, route *v1.Route, policy *v1.Policy, client Flavor, targets []target, hold *seatHold, key string) {
 	t := w.t
 	mode := g.table.SystemMode(route)
+	if t.Kind == v1.TraceKind_TRACE_KIND_CHAT {
+		open := func(ctx context.Context, chat *Chat, path string, out []byte) (*http.Response, context.CancelFunc, int, error) {
+			return g.open(ctx, targets, hold, path, out, chat.Stream, policy, r.Header, name)
+		}
+		if used, done := g.serveTools(w, r, body, name, route, policy, client, mode, open); done {
+			g.served(t, route, targets, used, key)
+			return
+		}
+	}
 	// Translate when client and runtime protocols differ.
 	if clientFlavor(r) != route.GetApi() || r.URL.Path == anthropicCount {
 		t.Translated = true
@@ -688,15 +695,6 @@ func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, 
 			return -1
 		}
 	}
-	// A web search tool goes to the gateway, which runs the searches the runtime cannot.
-	tool, searching, err := takeWebSearch(chat)
-	if err != nil {
-		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
-		return -1
-	}
-	if searching {
-		return g.search(w, r, chat, tool, name, targets, hold, policy, client, upstream)
-	}
 	path, out, err := upstream.RenderRequest(chat)
 	if err != nil {
 		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
@@ -837,6 +835,9 @@ func (g *Gateway) upstreamError(w http.ResponseWriter, t *v1.Trace, client Flavo
 
 // The status, message, and kind a client gets when the runtime could not be reached
 func upstreamFailure(name string, err error) (int, string, string) {
+	if errors.Is(err, errSlotsBusy) {
+		return http.StatusTooManyRequests, "model " + name + " cannot relay now: " + err.Error() + ", retry shortly", "rate_limit_error"
+	}
 	if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
 		return http.StatusGatewayTimeout, fmt.Sprintf("model %s did not answer within its timeout", name), "timeout_error"
 	}
@@ -994,4 +995,40 @@ func (t *sameHostRedirects) RoundTrip(req *http.Request) (*http.Response, error)
 		next.ContentLength = int64(len(t.body))
 		req = next
 	}
+}
+
+// Serves a chat whose tools the gateway runs or writes into the prompt, reporting whether it did
+func (g *Gateway) serveTools(w *traceWriter, r *http.Request, body []byte, name string, route *v1.Route, policy *v1.Policy, client Flavor, mode v1.SystemMessages, open opener) (int, bool) {
+	t := w.t
+	chat, err := client.ParseRequest(r.URL.Path, body)
+	if err != nil {
+		return -1, false
+	}
+	emulate := g.table.ToolSupport(route) == v1.ToolSupport_TOOL_SUPPORT_EMULATED
+	plan, err := g.plan(r.Context(), chat, route, r.Header)
+	if err != nil {
+		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		return -1, true
+	}
+	if !plan.active() && !(emulate && len(chat.Tools) > 0) {
+		plan.close()
+		return -1, false
+	}
+	upstream := flavorOf(route.GetApi())
+	t.Translated = clientFlavor(r) != route.GetApi()
+	if served := route.GetServed(); served != "" {
+		chat.Model = served
+	}
+	foldSystem(chat, mode)
+	if upstream.InlineImages() {
+		if err := g.inlineImages(r.Context(), chat, policy); err != nil {
+			plan.close()
+			g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
+			return -1, true
+		}
+	}
+	if emulate {
+		upstream = emulated{upstream}
+	}
+	return g.loop(w, r, chat, plan, name, open, client, upstream), true
 }

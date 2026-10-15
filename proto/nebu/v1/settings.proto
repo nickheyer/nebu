@@ -8,20 +8,47 @@ option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
 message Settings {
   // Display name, defaulting to the hostname.
   string host_label = 1;
-  reserved 2;
-  reserved "setup_dismissed";
-  // Provider behind the Anthropic web_search tool for runtimes without one
-  WebSearch web_search = 3;
+  reserved 2, 3;
+  reserved "setup_dismissed", "web_search";
+  // Sources of tools the gateway runs for models, in the order they were added
+  repeated ToolServer tool_servers = 4;
 }
 
-// Where the gateway sends web searches. Empty provider turns the tool away.
-message WebSearch {
-  // searxng or brave
-  string provider = 1;
+// Where a tool server's tools come from
+enum ToolServerKind {
+  TOOL_SERVER_KIND_UNSPECIFIED = 0;
+  // Web search through SearXNG or Brave, run by the gateway and offered as web_search
+  TOOL_SERVER_KIND_SEARCH = 1;
+  // Web pages read as text, run by the gateway and offered as web_fetch
+  TOOL_SERVER_KIND_FETCH = 2;
+  // A command speaking MCP over its standard streams
+  TOOL_SERVER_KIND_STDIO = 3;
+  // An MCP endpoint over streamable HTTP
+  TOOL_SERVER_KIND_HTTP = 4;
+}
+
+// A source of tools the gateway runs on a model's behalf
+message ToolServer {
+  string id = 1;
+  // The name routes, personas, and requests attach the server by. MCP tools are offered as name__tool
+  string name = 2;
+  bool enabled = 3;
+  ToolServerKind kind = 4;
+  // The search provider, searxng or brave
+  string provider = 5;
   // Base URL of a SearXNG instance with the json format enabled
-  string searxng_url = 2;
+  string searxng_url = 6;
   // Brave Search API subscription token
-  string brave_key = 3;
+  string brave_key = 7;
+  // The command of a stdio server, with its arguments and environment
+  string command = 8;
+  repeated string args = 9;
+  map<string, string> env = 10;
+  // The endpoint of an HTTP server, with the headers every request carries
+  string url = 11;
+  map<string, string> headers = 12;
+  // Tools the server may offer, every tool when empty
+  repeated string allowed_tools = 13;
 }
 
 // Asks for the settings

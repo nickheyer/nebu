@@ -186,6 +186,7 @@ func normalize(botName string, s *v1.BotSpec) error {
 		ids[p.Id] = true
 		p.WakeWords = trimAll(p.WakeWords)
 		p.ChannelIds = trimAll(p.ChannelIds)
+		p.ToolServers = trimAll(p.ToolServers)
 		p.Model, p.ImageModel, p.VideoModel = strings.TrimSpace(p.Model), strings.TrimSpace(p.ImageModel), strings.TrimSpace(p.VideoModel)
 		if p.Sampling == nil {
 			p.Sampling = &v1.Sampling{}

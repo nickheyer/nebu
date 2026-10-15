@@ -69,7 +69,7 @@ func (r VLLM) Launch(in Launch) (*Command, error) {
 	if p.Str("served_model_name") == "" {
 		p["served_model_name"] = in.Name
 	}
-	args := []string{"serve", dir, "--host", in.Host, "--port", strconv.Itoa(in.Port)}
+	args := []string{"serve", dir, "--host", in.Host, "--port", strconv.Itoa(in.Port), "--enable-auto-tool-choice", "--tool-call-parser", vllmToolParser(in)}
 	flags, env, emitted := Flags(r.Params(), p)
 	setEnv(env, "CUDA_VISIBLE_DEVICES", visible(in.Devices, "nvidia", false))
 	setEnv(env, "ROCR_VISIBLE_DEVICES", visible(in.Devices, "amd", true))
@@ -89,9 +89,12 @@ func (VLLM) Triage() []triage.Set     { return []triage.Set{triage.VLLM{}} }
 func (VLLM) Probes() []Probe {
 	nnodes := flagProbe(factNNodes, []string{"serve", "--help"}, "--nnodes")
 	nnodes.Timeout = time.Minute
+	parsers := choicesProbe(factToolParsers, []string{"serve", "--help"}, "--tool-call-parser")
+	parsers.Timeout = time.Minute
 	return []Probe{
 		{Key: "version", Args: []string{"--version"}, Parse: versionField},
 		nnodes,
+		parsers,
 		nixlConnectorProbe(),
 	}
 }

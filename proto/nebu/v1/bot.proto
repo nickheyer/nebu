@@ -141,6 +141,10 @@ message Persona {
   string negative_prompt = 15;
   // Edit the message during generation.
   bool stream = 16;
+  // Tool servers whose tools the persona's chats get, by name, node qualified for another member's
+  repeated string tool_servers = 17;
+  // Whether tools that change what they touch are offered too, read only tools alone otherwise
+  bool mutating_tools = 18;
 }
 
 // Bot response rules.

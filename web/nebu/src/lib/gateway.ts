@@ -1,5 +1,6 @@
 import { SystemMessages, type Policy, type Profile } from '$proto/gateway_pb';
-import type { TemplateProbe } from '$proto/instance_pb';
+import { ToolSupport, type TemplateProbe } from '$proto/instance_pb';
+import { attachmentText } from './tools';
 
 // Use the page's hostname for wildcard listener addresses.
 export function listenerUrl(addr: string, tls: boolean): string {
@@ -146,14 +147,16 @@ const modeOf: Record<string, SystemMessages> = { keep: SystemMessages.KEEP, merg
 export interface ProfileFields {
   systemMessages: string;
   allowAll: boolean;
+  toolServers: string[];
+  mutatingTools: boolean;
 }
 
 export function profileFields(p: Profile | undefined): ProfileFields {
-  return { systemMessages: Object.entries(modeOf).find(([, m]) => m === p?.systemMessages)?.[0] ?? 'auto', allowAll: p?.allowAll ?? false };
+  return { systemMessages: Object.entries(modeOf).find(([, m]) => m === p?.systemMessages)?.[0] ?? 'auto', allowAll: p?.allowAll ?? false, toolServers: [...(p?.toolServers ?? [])], mutatingTools: p?.mutatingTools ?? false };
 }
 
 export function profileFrom(f: ProfileFields): Profile {
-  return { systemMessages: modeOf[f.systemMessages] ?? SystemMessages.UNSPECIFIED, allowAll: f.allowAll } as Profile;
+  return { systemMessages: modeOf[f.systemMessages] ?? SystemMessages.UNSPECIFIED, allowAll: f.allowAll, toolServers: [...f.toolServers], mutatingTools: f.toolServers.length ? f.mutatingTools : false } as Profile;
 }
 
 const modeLabel = (mode: string) => systemMessageItems.find((i) => i.value === mode)?.label.toLowerCase() ?? mode;
@@ -167,8 +170,12 @@ function systemText(mode: string, template?: TemplateProbe): string {
 
 export function profileText(p: Profile | undefined, template?: TemplateProbe): string {
   const f = profileFields(p);
-  const text = systemText(f.systemMessages, template);
-  return f.allowAll ? `${text} · Agent approvals: allow all` : text;
+  const parts = [systemText(f.systemMessages, template)];
+  if (template?.tools === ToolSupport.EMULATED) parts.push('Tools: emulated by the gateway');
+  if (f.allowAll) parts.push('Agent approvals: allow all');
+  const tools = attachmentText(f.toolServers, f.mutatingTools);
+  if (tools) parts.push(tools);
+  return parts.join(' · ');
 }
 
 export function templateText(t: TemplateProbe | undefined): string {
@@ -176,3 +183,20 @@ export function templateText(t: TemplateProbe | undefined): string {
   if (t.error) return `Probe failed: ${t.error}`;
   return t.lateSystem ? 'Supports later system messages' : `Later system messages are unsupported: ${t.refusal}`;
 }
+
+// How a runtime takes tools, as the probe found
+export function toolSupportText(t: TemplateProbe | undefined, api?: number, sdcpp?: number): string {
+  if (api !== undefined && sdcpp !== undefined && api === sdcpp) return 'None, a diffusion model';
+  if (!t || t.error) return 'Not probed, definitions pass through as sent';
+  switch (t.tools) {
+    case ToolSupport.NATIVE:
+      return 'Native, the runtime parses tool calls';
+    case ToolSupport.EMULATED:
+      return `Emulated, the gateway writes tools into the prompt and parses the calls: ${t.toolsRefusal}`;
+    case ToolSupport.NONE:
+      return 'None';
+    default:
+      return 'Not probed, definitions pass through as sent';
+  }
+}
+

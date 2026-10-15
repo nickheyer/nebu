@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "nebu/v1/settings.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Whether a tool server's tools can be called right now
+enum ToolServerState {
+  TOOL_SERVER_STATE_UNSPECIFIED = 0;
+  // Turned off in Settings
+  TOOL_SERVER_STATE_DISABLED = 1;
+  // Connecting, or waiting to connect again after a failure
+  TOOL_SERVER_STATE_CONNECTING = 2;
+  TOOL_SERVER_STATE_READY = 3;
+  TOOL_SERVER_STATE_FAILED = 4;
+}
+
+// One tool a server offers, as the model is offered it
+message ToolInfo {
+  // The name the model calls the tool by
+  string name = 1;
+  string description = 2;
+  // The JSON schema of the arguments
+  string schema = 3;
+  // Whether the tool changes nothing it touches
+  bool read_only = 4;
+}
+
+// A tool server with its connection state and the tools it offers
+message ToolServerStatus {
+  ToolServer server = 1;
+  ToolServerState state = 2;
+  // Why the server is not ready, empty when it is
+  string error = 3;
+  repeated ToolInfo tools = 4;
+  // The mesh member running the server, empty for this node
+  string node_id = 5;
+  // The name routes and personas attach the server by, node qualified for another member's
+  string ref = 6;
+}
+
+// Lists tool servers, this node's and every member's when mesh is set
+message ListToolServersRequest {
+  bool mesh = 1;
+}
+
+// Returns tool servers with their states and tools
+message ListToolServersResponse {
+  repeated ToolServerStatus servers = 1;
+}
+
+// Runs one tool by the name the model calls it, with JSON arguments
+message CallToolRequest {
+  string name = 1;
+  string arguments = 2;
+  // The mesh member whose server runs it, this node when empty
+  string node_id = 3;
+}
+
+// One part of a tool's answer, text or a base64 image
+message ToolPart {
+  string type = 1;
+  string text = 2;
+  string media_type = 3;
+  string data = 4;
+}
+
+// Returns what the tool answered
+message CallToolResponse {
+  repeated ToolPart parts = 1;
+  // Whether the tool reported a failure
+  bool failed = 2;
+  uint32 took_ms = 3;
+}
+
+// Tool servers and the tools they offer
+service ToolService {
+  // Lists tool servers with their states and tools
+  rpc ListToolServers(ListToolServersRequest) returns (ListToolServersResponse);
+  // Runs one tool
+  rpc CallTool(CallToolRequest) returns (CallToolResponse);
+}

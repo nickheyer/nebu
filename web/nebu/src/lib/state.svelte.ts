@@ -14,6 +14,7 @@ import { fail, started, settle as settleToast } from './toast.svelte';
 import type { Source, SourceStatus } from '$proto/source_pb';
 import type { Settings } from '$proto/settings_pb';
 import type { Bot, BotActivity } from '$proto/bot_pb';
+import type { ToolServerStatus } from '$proto/tools_pb';
 import { NodeState, FormationState, AdmissionState, type Node, type Formation, type MeshStatus, type StoredSummary } from '$proto/mesh_pb';
 import { newestFirst } from './format';
 import { weightsName } from './catalog';
@@ -50,7 +51,9 @@ export const live = $state({
   nodes: new SvelteMap<string, Node>(),
   formations: new SvelteMap<string, Formation>(),
   // The mesh from this node: membership, what is nearby, and admissions under way
-  mesh: null as MeshStatus | null
+  mesh: null as MeshStatus | null,
+  // This node's tool servers with their states and tools, by name
+  toolServers: new SvelteMap<string, ToolServerStatus>()
 });
 
 // Refresh on connection and after SOURCE, HOST, and INSTALL events.
@@ -99,7 +102,8 @@ const maps: Maps = {
   [EventKind.SOURCE]: live.sources,
   [EventKind.BOT]: live.bots,
   [EventKind.NODE]: live.nodes,
-  [EventKind.FORMATION]: live.formations
+  [EventKind.FORMATION]: live.formations,
+  [EventKind.TOOL_SERVER]: live.toolServers
 };
 
 // Track snapshot keys to remove stale entries after reconnecting.

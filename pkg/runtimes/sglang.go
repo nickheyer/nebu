@@ -73,7 +73,7 @@ func (r SGLang) Launch(in Launch) (*Command, error) {
 	if p.Str("served_model_name") == "" {
 		p["served_model_name"] = in.Name
 	}
-	args := []string{"-m", "sglang.launch_server", "--model-path", dir, "--host", in.Host, "--port", strconv.Itoa(in.Port)}
+	args := []string{"-m", "sglang.launch_server", "--model-path", dir, "--host", in.Host, "--port", strconv.Itoa(in.Port), "--tool-call-parser", sglangToolParser(in)}
 	flags, env, emitted := Flags(r.Params(), p)
 	setEnv(env, "CUDA_VISIBLE_DEVICES", visible(in.Devices, "nvidia", false))
 	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}, nil
@@ -95,9 +95,11 @@ func (SGLang) Probes() []Probe {
 	disaggregation := flagProbe(factDisaggregation, help, "--disaggregation-mode")
 	disaggregation.Timeout = time.Minute
 	nixl := sglangNIXLProbe()
+	parsers := choicesProbe(factToolParsers, help, "--tool-call-parser")
+	parsers.Timeout = time.Minute
 	return []Probe{
 		{Key: "version", Args: []string{"-c", "import sglang; print(sglang.__version__)"}, Timeout: time.Minute, Parse: versionField},
-		nnodes, disaggregation, nixl,
+		nnodes, disaggregation, nixl, parsers,
 	}
 }
 

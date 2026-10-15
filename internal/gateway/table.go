@@ -174,13 +174,14 @@ func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, ap
 		slotID = r.GetSlotId()
 	}
 	// Skip unchanged routes.
-	if ok && r.GetInstanceId() == instanceID && r.GetEndpoint() == endpoint && r.GetModel() == model && r.GetServed() == served && r.GetApi() == api && r.GetSlotId() == slotID && r.GetState() == state && proto.Equal(r.GetPolicy(), policy) && proto.Equal(r.GetProfile(), profile) && slices.Equal(r.GetModes(), t.modes[instanceID]) {
+	if ok && r.GetInstanceId() == instanceID && r.GetEndpoint() == endpoint && r.GetModel() == model && r.GetServed() == served && r.GetApi() == api && r.GetSlotId() == slotID && r.GetState() == state && proto.Equal(r.GetPolicy(), policy) && proto.Equal(r.GetProfile(), profile) && slices.Equal(r.GetModes(), t.modes[instanceID]) && r.GetTools() == t.toolSupportLocked(instanceID) {
 		return t.snapshotLocked(r)
 	}
 	r.InstanceId, r.Endpoint, r.Model, r.Served, r.Api, r.SlotId, r.State = instanceID, endpoint, model, served, api, slotID, state
 	r.Policy = proto.Clone(policy).(*v1.Policy)
 	r.Profile = proto.Clone(profile).(*v1.Profile)
 	r.Modes = append([]string(nil), t.modes[instanceID]...)
+	r.Tools = t.toolSupportLocked(instanceID)
 	t.save(r, action)
 	if slotID == "" && state == v1.RouteState_ROUTE_STATE_READY {
 		t.readoptLocked(instanceID, endpoint, model, served, api)
@@ -195,6 +196,7 @@ func (t *Table) readoptLocked(instanceID, endpoint, model, served string, api v1
 		}
 		r.Endpoint, r.Model, r.Served, r.Api, r.State = endpoint, model, served, api, v1.RouteState_ROUTE_STATE_READY
 		r.Modes = append([]string(nil), t.modes[instanceID]...)
+		r.Tools = t.toolSupportLocked(instanceID)
 		t.save(r, v1.EventAction_EVENT_ACTION_UPDATED)
 	}
 }
@@ -222,6 +224,23 @@ func (t *Table) Serve(name string, in *v1.Instance, api v1.ApiFlavor, slotID str
 	}
 	t.mu.Unlock()
 	return t.Set(name, in.GetId(), slotID, in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), in.GetName(), api, policy, profile)
+}
+
+// How the instance behind a route takes tools, as its probe found, none for a diffusion route
+func (t *Table) ToolSupport(r *v1.Route) v1.ToolSupport {
+	if r.GetApi() == v1.ApiFlavor_API_FLAVOR_SDCPP {
+		return v1.ToolSupport_TOOL_SUPPORT_NONE
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.toolSupportLocked(r.GetInstanceId())
+}
+
+func (t *Table) toolSupportLocked(instanceID string) v1.ToolSupport {
+	if probe, ok := t.templates[instanceID]; ok {
+		return probe.GetTools()
+	}
+	return v1.ToolSupport_TOOL_SUPPORT_UNSPECIFIED
 }
 
 // Uses the route's system message mode. Auto merges later system messages if
@@ -525,5 +544,22 @@ func (t *Table) snapshotLocked(r *v1.Route) *v1.Route {
 			s.InFlight = uint32(max(c.Load(), 0))
 		}
 	}
+	return out
+}
+
+// Names the routes whose profile attaches a tool server
+func (t *Table) ToolServerUsers(name string) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []string
+	for _, r := range t.routes {
+		for _, ref := range r.GetProfile().GetToolServers() {
+			if ref == name {
+				out = append(out, "route "+r.GetName())
+				break
+			}
+		}
+	}
+	sort.Strings(out)
 	return out
 }

@@ -91,6 +91,7 @@ func (t *Table) ServeFormationAs(name string, f *v1.Formation, head *v1.Instance
 		r.Profile = proto.Clone(profile).(*v1.Profile)
 	}
 	r.Modes = append([]string(nil), t.modes[head.GetId()]...)
+	r.Tools = t.toolSupportLocked(head.GetId())
 	t.save(r, action)
 	return t.snapshotLocked(r)
 }

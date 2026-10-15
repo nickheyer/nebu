@@ -54,17 +54,20 @@ func foldSystem(c *Chat, mode v1.SystemMessages) {
 
 // Reports whether a profile sets anything, an empty one inheriting everything
 func ProfileSet(p *v1.Profile) bool {
-	return p.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED || p.GetAllowAll()
+	return p.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED || p.GetAllowAll() || len(p.GetToolServers()) > 0 || p.GetMutatingTools()
 }
 
-// Merges an alias profile over its slot's, unset fields inheriting
+// Merges an alias profile over its slot's, the alias's tool servers replacing the slot's when named
 func EffectiveProfile(alias, slot *v1.Profile) *v1.Profile {
 	if !ProfileSet(alias) {
 		return slot
 	}
-	out := &v1.Profile{SystemMessages: slot.GetSystemMessages(), AllowAll: slot.GetAllowAll() || alias.GetAllowAll()}
+	out := &v1.Profile{SystemMessages: slot.GetSystemMessages(), AllowAll: slot.GetAllowAll() || alias.GetAllowAll(), ToolServers: append([]string(nil), slot.GetToolServers()...), MutatingTools: slot.GetMutatingTools()}
 	if alias.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
 		out.SystemMessages = alias.GetSystemMessages()
+	}
+	if len(alias.GetToolServers()) > 0 {
+		out.ToolServers, out.MutatingTools = append([]string(nil), alias.GetToolServers()...), alias.GetMutatingTools()
 	}
 	return out
 }
@@ -199,9 +202,7 @@ func appendContent(raw json.RawMessage, text string) json.RawMessage {
 	return out
 }
 
-// Probes support for later system messages with two one-token requests.
-// The baseline starts with a system message. The second adds one after an
-// assistant turn. A baseline failure makes the probe inconclusive.
+// Probes later system messages and tools with three one token requests, a baseline failure being inconclusive
 func ProbeTemplate(ctx context.Context, client *http.Client, endpoint string, api v1.ApiFlavor, model string) *v1.TemplateProbe {
 	target, err := url.Parse(endpoint)
 	if err != nil {
@@ -226,15 +227,38 @@ func ProbeTemplate(ctx context.Context, client *http.Client, endpoint string, ap
 	if err != nil {
 		return &v1.TemplateProbe{Error: "the chat request with a late system message failed: " + err.Error()}
 	}
-	if status >= http.StatusMultipleChoices {
-		return &v1.TemplateProbe{LateSystem: false, Refusal: message}
+	out := &v1.TemplateProbe{LateSystem: status < http.StatusMultipleChoices}
+	if !out.LateSystem {
+		out.Refusal = message
 	}
-	return &v1.TemplateProbe{LateSystem: true}
+	status, message, err = renderTool(ctx, client, target, upstream, model, control)
+	switch {
+	case err != nil:
+		out.Error = "the chat request with a tool failed: " + err.Error()
+	case status >= http.StatusMultipleChoices:
+		out.Tools, out.ToolsRefusal = v1.ToolSupport_TOOL_SUPPORT_EMULATED, message
+	default:
+		out.Tools = v1.ToolSupport_TOOL_SUPPORT_NATIVE
+	}
+	return out
+}
+
+// The tool the probe offers
+var probeTool = Tool{Name: "probe", Description: "Reports whether the runtime takes tools", Schema: json.RawMessage(`{"type":"object","properties":{}}`)}
+
+// Sends a one-token chat offering a tool and returns its status and any runtime error
+func renderTool(ctx context.Context, client *http.Client, target *url.URL, upstream Flavor, model string, messages []Message) (int, string, error) {
+	return sendOnce(ctx, client, target, upstream, &Chat{Kind: "chat", Model: model, MaxTokens: 1, Messages: messages, Tools: []Tool{probeTool}, ToolChoice: "auto"})
 }
 
 // Sends a one-token chat and returns its status and any runtime error.
 func renderOnce(ctx context.Context, client *http.Client, target *url.URL, upstream Flavor, model string, messages []Message) (int, string, error) {
-	path, out, err := upstream.RenderRequest(&Chat{Kind: "chat", Model: model, MaxTokens: 1, Messages: messages})
+	return sendOnce(ctx, client, target, upstream, &Chat{Kind: "chat", Model: model, MaxTokens: 1, Messages: messages})
+}
+
+// Sends one chat and returns its status and any runtime error
+func sendOnce(ctx context.Context, client *http.Client, target *url.URL, upstream Flavor, chat *Chat) (int, string, error) {
+	path, out, err := upstream.RenderRequest(chat)
 	if err != nil {
 		return 0, "", err
 	}
