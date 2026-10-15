@@ -7,7 +7,8 @@ Nebu manages model weights and inference runtimes. Named after the Nebuchadnezza
 - Runtime installation: use an existing binary, download one, or build from source
 - Model sources: Hugging Face, GitHub, Ollama, ModelScope, Civitai, Kaggle, NGC, CSGHub, OCI registries, git, mirrors, and local directories
 - APIs: OpenAI, Anthropic, Ollama
-- Web search: the Anthropic web_search tool for any served model, through SearXNG or Brave Search
+- Tools: Shipped with web search through SearXNG or Brave
+- MCP: Available at `/mcp` for Claude Code, Claude Desktop, and other clients
 - Discord: text, images, video, personas, automations, and sharding
 - Platforms: Linux, macOS, Windows, and FreeBSD
 - SSO/OIDC: Supports all OpenID Connect Providers. See `compose.yaml` or `packaging/config.yaml`

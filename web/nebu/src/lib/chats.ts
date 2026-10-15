@@ -17,8 +17,10 @@ export interface Media {
 }
 
 export interface Turn {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   text: string;
+  // The call a tool turn answers
+  toolCallId?: string;
   images?: Attachment[];
   media?: Media[];
   toolCalls?: ToolCall[];
@@ -45,9 +47,12 @@ export interface Session {
   stop: string;
   seed: string;
   tools: string;
+  toolServers: string[];
+  mutatingTools: boolean;
+  approveTools: boolean;
 }
 
-export const blank = (): Session => ({ turns: [], system: '', dialect: 'openai', stream: true, temperature: '', topP: '', topK: '', maxTokens: '', stop: '', seed: '', tools: '' });
+export const blank = (): Session => ({ turns: [], system: '', dialect: 'openai', stream: true, temperature: '', topP: '', topK: '', maxTokens: '', stop: '', seed: '', tools: '', toolServers: [], mutatingTools: false, approveTools: true });
 
 // A session with the same settings and no turns.
 export const fresh = (from: Session): Session => ({ ...from, turns: [] });
@@ -93,12 +98,14 @@ function turnToProto(t: Turn): MessageInitShape<typeof ChatTurnSchema> {
     promptTokens: t.promptTokens ?? 0,
     completionTokens: t.completionTokens ?? 0,
     stop: t.stop ?? '',
-    dialect: t.dialect ?? ''
+    dialect: t.dialect ?? '',
+    toolCallId: t.toolCallId ?? ''
   };
 }
 
 function turnFromProto(t: ChatTurn): Turn {
-  const out: Turn = { role: t.role === 'assistant' ? 'assistant' : 'user', text: t.text };
+  const out: Turn = { role: t.role === 'assistant' ? 'assistant' : t.role === 'tool' ? 'tool' : 'user', text: t.text };
+  if (t.toolCallId) out.toolCallId = t.toolCallId;
   if (t.images.length) out.images = t.images.map(attachmentOf);
   if (t.media.length) out.media = t.media.map(mediaOf);
   if (t.toolCalls.length) out.toolCalls = t.toolCalls.map((c) => ({ id: c.id, name: c.name, arguments: c.arguments }));
@@ -123,7 +130,7 @@ export function toConversation(id: string, title: string, model: string, s: Sess
     id,
     title,
     model,
-    settings: { system: s.system, dialect: s.dialect, stream: s.stream, temperature: s.temperature, topP: s.topP, topK: s.topK, maxTokens: s.maxTokens, stop: s.stop, seed: s.seed, tools: s.tools },
+    settings: { system: s.system, dialect: s.dialect, stream: s.stream, temperature: s.temperature, topP: s.topP, topK: s.topK, maxTokens: s.maxTokens, stop: s.stop, seed: s.seed, tools: s.tools, toolServers: s.toolServers, mutatingTools: s.mutatingTools, approveTools: s.approveTools },
     turns: s.turns.map(turnToProto)
   };
 }
@@ -142,7 +149,10 @@ export function fromConversation(c: Conversation): Session {
     maxTokens: st?.maxTokens ?? '',
     stop: st?.stop ?? '',
     seed: st?.seed ?? '',
-    tools: st?.tools ?? ''
+    tools: st?.tools ?? '',
+    toolServers: [...(st?.toolServers ?? [])],
+    mutatingTools: st?.mutatingTools ?? false,
+    approveTools: st ? st.approveTools : true
   };
 }
 

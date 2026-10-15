@@ -11,7 +11,9 @@
   import { byName, bytes, enumLabel, ms, rate, duration, millisBetween, ago } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
-  import { send, countTokens, type ChatMessage, type Sampling, type ToolCall, type Sent } from '$lib/chatClient';
+  import { send, countTokens, toolHeaders, type ChatMessage, type Sampling, type ToolCall, type Sent } from '$lib/chatClient';
+  import { gatewayTools } from '$lib/tools';
+  import ToolServerPicker from '$lib/components/ToolServerPicker.svelte';
   import { blank, fresh, fileIds, fromConversation, toConversation, loadFile, uploadFile, deleteFiles, previewTitle, type Session, type Turn, type Media } from '$lib/chats';
   import { capabilities, createVideo, deleteVideo, fetchVideo, figure, generateImages, getVideo, lorasText, modeKey, namedChoice, parseLoras, readHistory, writeHistory, type Capabilities, type Generation, type MediaRequest } from '$lib/generate';
   import { prepareImage, storeImage, storeBlob, fetchImage, putImage, getImage, deleteImages, toBase64, newId, type Attachment } from '$lib/images';
@@ -576,22 +578,51 @@
     session.turns = session.turns.filter((_, j) => j !== i);
   }
 
-  // Exclude unanswered turns from history.
+  // Exclude unanswered turns from history. Tool turns answer the calls of the assistant turn before them.
   function conversation(upTo = session.turns.length): Outgoing[] {
     const out: Outgoing[] = [];
     const past = session.turns.slice(0, upTo);
     for (let i = 0; i < past.length; i++) {
       const t = past[i];
-      if (t.role !== 'user') continue;
-      const answer = past[i + 1];
-      if (answer?.role === 'assistant' && (answer.text || answer.toolCalls?.length) && !answer.error) {
-        out.push({ role: 'user', content: t.text, attachments: t.images });
-        out.push({ role: 'assistant', content: answer.text, toolCalls: answer.toolCalls?.length ? answer.toolCalls : undefined });
-      } else if (i === past.length - 1) {
-        out.push({ role: 'user', content: t.text, attachments: t.images });
+      if (t.role === 'user') {
+        const answer = past[i + 1];
+        const answered = answer?.role === 'assistant' && (answer.text || answer.toolCalls?.length) && !answer.error;
+        if (answered || i === past.length - 1) out.push({ role: 'user', content: t.text, attachments: t.images });
+        continue;
       }
+      if (t.role === 'assistant') {
+        if ((t.text || t.toolCalls?.length) && !t.error) out.push({ role: 'assistant', content: t.text, toolCalls: t.toolCalls?.length ? t.toolCalls : undefined });
+        continue;
+      }
+      out.push({ role: 'tool', content: t.text, toolCallId: t.toolCallId });
     }
     return out;
+  }
+
+  // The gateway's tools the last answer asked to run, with whether a tool turn answered each
+  function pendingCalls(i: number): { call: ToolCall; answered: boolean }[] {
+    const t = session.turns[i];
+    if (t?.role !== 'assistant' || !session.approveTools) return [];
+    const known = gatewayTools();
+    const answered = new Set(session.turns.slice(i + 1).filter((x) => x.role === 'tool').map((x) => x.toolCallId));
+    return (t.toolCalls ?? []).filter((c) => known.has(c.name)).map((c) => ({ call: c, answered: answered.has(c.id) }));
+  }
+
+  // Answers one of the last answer's calls, running it or declining it, and asks again once every call is answered
+  async function settleCall(i: number, c: ToolCall, run: boolean) {
+    let text = 'The user declined to run this tool.';
+    if (run) {
+      try {
+        const r = await api.tools.callTool({ name: c.name, arguments: c.arguments });
+        text = r.parts.map((p) => (p.type === 'image' ? `[image ${p.mediaType}]` : p.text)).join('\n') || 'The tool answered with nothing.';
+        if (r.failed) text = 'The tool failed: ' + text;
+      } catch (err) {
+        text = 'The tool could not be called: ' + message(err);
+      }
+    }
+    const after = session.turns.slice(i + 1).filter((x) => x.role === 'tool');
+    session.turns = [...session.turns.slice(0, i + 1), ...after, { role: 'tool', text, toolCallId: c.id }];
+    if (pendingCalls(i).every((p) => p.answered)) ask(session.turns.length - 1);
   }
 
   async function encode(a: Attachment): Promise<{ mediaType: string; data: string }> {
@@ -638,19 +669,20 @@
       .catch((err) => set({ error: err instanceof Error ? err.message : String(err) }));
   }
 
-  async function ask(userIndex: number) {
+  // Asks for an answer to the turns up to index, a user turn or the last tool turn of an approval
+  async function ask(index: number) {
     if (busy || !chosen || !chosenReady) return;
-    drop(fileIds(session.turns.slice(userIndex + 1)));
-    session.turns = [...session.turns.slice(0, userIndex + 1), { role: 'assistant', text: '', dialect: session.dialect, startedAt: Date.now() }];
+    drop(fileIds(session.turns.slice(index + 1)));
+    session.turns = [...session.turns.slice(0, index + 1), { role: 'assistant', text: '', dialect: session.dialect, startedAt: Date.now() }];
     const turn = session.turns[session.turns.length - 1];
     busy = true;
     controller = new AbortController();
     const calls = new Map<number, ToolCall>();
     scroll();
     try {
-      const messages = await wire(conversation(userIndex + 1));
+      const messages = await wire(conversation(index + 1));
       await send(
-        { base: gatewayBase, dialect: session.dialect, model: chosen.name, messages, system: session.system.trim(), sampling, stream: session.stream, tools, key, signal: controller.signal },
+        { base: gatewayBase, dialect: session.dialect, model: chosen.name, messages, system: session.system.trim(), sampling, stream: session.stream, tools, key, headers: toolHeaders(session.toolServers, session.mutatingTools, session.approveTools), signal: controller.signal },
         (ev) => {
           switch (ev.kind) {
             case 'text':
@@ -1314,7 +1346,15 @@
             {/each}
           {:else}
             {#each session.turns as t, i (i)}
-              {#if t.role === 'user'}
+              {#if t.role === 'tool'}
+                <div class="group flex items-start gap-2 pl-8">
+                  <div class="min-w-0 flex-1 rounded-md border border-line bg-sunken px-3 py-2 text-xs text-fg-muted">
+                    <div class="mb-1 flex items-center gap-2"><Wrench size={11} class="text-fg-faint" /><span class="font-mono text-fg-faint">{t.toolCallId}</span></div>
+                    <pre class="max-h-40 overflow-auto whitespace-pre-wrap">{t.text}</pre>
+                  </div>
+                  <button type="button" class="mt-2 rounded-md p-1 text-fg-faint opacity-0 transition-opacity group-hover:opacity-100 hover:bg-raised hover:text-fg" aria-label="Remove" onclick={() => removeTurn(i)}><X size={13} /></button>
+                </div>
+              {:else if t.role === 'user'}
                 <div class="group flex items-start justify-end gap-2">
                   <button type="button" class="mt-2 rounded-md p-1 text-fg-faint opacity-0 transition-opacity group-hover:opacity-100 hover:bg-raised hover:text-fg" aria-label="Remove" onclick={() => removeTurn(i)}><X size={13} /></button>
                   <div class="max-w-[85%] rounded-xl rounded-br-sm bg-raised px-4 py-2.5 text-sm text-fg">
@@ -1331,6 +1371,7 @@
                 {@const total = t.startedAt && t.finishedAt ? t.finishedAt - t.startedAt : undefined}
                 {@const gen = t.firstTokenAt && t.finishedAt ? t.finishedAt - t.firstTokenAt : undefined}
                 {@const trace = t.trace ? live.traces.get(t.trace) : undefined}
+                {@const pending = i === session.turns.length - 1 ? pendingCalls(i) : []}
                 <div class="flex gap-3">
                   <Logo size={18} class="mt-1 shrink-0 text-fg-faint" />
                   <div class="min-w-0 flex-1">
@@ -1353,10 +1394,25 @@
                         <div class="mt-2 flex h-24 w-32 items-center justify-center rounded-md border border-line"><Spinner size={14} class="text-fg-faint" /></div>
                       {/if}
                     {/each}
+                    {#each (trace?.toolCalls ?? []).filter((c) => c.server) as c, ci (ci)}
+                      <div class="card mt-2 p-3">
+                        <div class="mb-2 flex flex-wrap items-center gap-2 text-xs"><Wrench size={12} class="text-accent" /><span class="font-mono text-fg">{c.name}</span><span class="text-fg-faint">ran through {c.server}{c.failed ? ', failed' : ''}{c.tookMs ? ` in ${ms(c.tookMs)}` : ''}</span></div>
+                        <Json text={c.arguments} height="max-h-32" empty="No arguments" />
+                        <pre class="code mt-2 max-h-40 overflow-auto text-xs whitespace-pre-wrap">{c.result || 'No answer'}</pre>
+                      </div>
+                    {/each}
                     {#each t.toolCalls ?? [] as c, ci (ci)}
+                      {@const ask_ = pending.find((p) => p.call.id === c.id)}
                       <div class="card mt-2 p-3">
                         <div class="mb-2 flex items-center gap-2 text-xs"><Wrench size={12} class="text-accent" /><span class="font-mono text-fg">{c.name || 'tool'}</span>{#if c.id}<span class="font-mono text-fg-faint">{c.id}</span>{/if}</div>
                         <Json text={c.arguments} height="max-h-48" empty="No arguments" />
+                        {#if ask_ && !ask_.answered}
+                          <div class="mt-2 flex items-center gap-2">
+                            <span class="text-xs text-fg-muted">This tool changes something. Run it?</span>
+                            <Button size="sm" variant="primary" icon={Check} disabled={busy} onclick={() => settleCall(i, c, true)}>Run</Button>
+                            <Button size="sm" variant="ghost" icon={X} disabled={busy} onclick={() => settleCall(i, c, false)}>Decline</Button>
+                          </div>
+                        {/if}
                       </div>
                     {/each}
                     {#if t.error}
@@ -1508,7 +1564,13 @@
                   <Field label="Seed" for="chat-seed"><NumberInput id="chat-seed" integer min={0} bind:value={session.seed} /></Field>
                   <Field label="Stop sequences" for="chat-stop"><TextInput id="chat-stop" mono bind:value={session.stop} empty="###, User:" /></Field>
                 </div>
-                <Field label="Tools" for="chat-tools" error={toolsProblem || undefined}>
+                <Field label="Tool servers" for="chat-tool-servers" description="The gateway runs these for the model.">
+                  <div id="chat-tool-servers"><ToolServerPicker bind:refs={session.toolServers} bind:mutating={session.mutatingTools} /></div>
+                </Field>
+                {#if session.toolServers.length && session.mutatingTools}
+                  <SwitchRow bind:checked={session.approveTools} label="Approve mutating tools" description="Calls that change something wait for Run or Decline here." />
+                {/if}
+                <Field label="Custom tools (JSON)" for="chat-tools" description="Functions this page answers itself, for trying tool calling by hand." error={toolsProblem || undefined}>
                   <TextArea id="chat-tools" mono height="h-36" bind:value={session.tools} empty={'[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}]'} invalid={!!toolsProblem} />
                 </Field>
                 {#if status?.auth && !auth.user}

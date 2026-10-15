@@ -42,7 +42,20 @@ export interface ChatRequest {
   stream: boolean;
   tools?: unknown[];
   key?: string;
+  // Headers that attach the gateway's tool servers and ask for approval
+  headers?: Record<string, string>;
   signal: AbortSignal;
+}
+
+// The headers a session's tool settings call for
+export function toolHeaders(servers: string[], mutating: boolean, approve: boolean): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (servers.length) {
+    out['X-Nebu-Tools'] = servers.join(',');
+    if (mutating) out['X-Nebu-Tools-Mutating'] = 'true';
+  }
+  if (approve) out['X-Nebu-Approve-Tools'] = 'mutating';
+  return out;
 }
 
 export interface ChatEvent {
@@ -181,6 +194,7 @@ export function errorMessage(raw: string): string {
 
 export async function send(req: ChatRequest, emit: (ev: ChatEvent) => void, onSent?: (sent: Sent) => void): Promise<void> {
   const { path, body, headers } = render(req);
+  Object.assign(headers, req.headers ?? {});
   if (req.key) {
     if (req.dialect === 'anthropic') headers['x-api-key'] = req.key;
     else headers.Authorization = 'Bearer ' + req.key;

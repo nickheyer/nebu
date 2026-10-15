@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/tools"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -40,9 +41,20 @@ type Chat struct {
 	Tools       []Tool
 	// Empty, auto, none, required, or a tool name
 	ToolChoice string
+	// MCP endpoints the request asked the gateway to connect, in the Anthropic shape
+	MCPServers []MCPServer
 	// Texts to embed when Kind is embed
 	Inputs []string
 	Extra  map[string]json.RawMessage
+}
+
+// An MCP endpoint a request names, connected for the request alone
+type MCPServer struct {
+	Name  string
+	URL   string
+	Token string
+	// Tools the endpoint may offer, every tool when empty
+	Allowed []string
 }
 
 // Chat turn with a system, user, assistant, or tool role.
@@ -97,8 +109,22 @@ type Result struct {
 	Extra   map[string]json.RawMessage
 	// Speculative decoding counters, when the runtime reports them
 	DraftOffered, DraftAccepted int
-	// Web searches the gateway ran for the answer
-	Searches int
+	// Tool calls the gateway ran itself on the way to the answer, in order
+	Runs []*ToolRun
+}
+
+// A tool call the gateway ran itself, with what the tool answered
+type ToolRun struct {
+	// The call as the model made it
+	Call   ToolCall
+	Server string
+	// The server's own name for the tool
+	Tool string
+	Kind v1.ToolServerKind
+	// Whether the server was one the request named rather than one Settings hold
+	AdHoc  bool
+	Result *tools.Result
+	Took   time.Duration
 }
 
 // Stream event. Start includes ID and model. Text carries a fragment. Tool

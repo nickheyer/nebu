@@ -44,6 +44,8 @@
   const firstToken = $derived(millisBetween(trace?.startedAt, trace?.firstTokenAt));
   const total = $derived(millisBetween(trace?.startedAt, trace?.finishedAt));
   const generating = $derived(millisBetween(trace?.firstTokenAt, trace?.finishedAt));
+  // The calls the gateway ran itself
+  const ran = $derived((trace?.toolCalls ?? []).filter((c) => c.server));
   const tabs = $derived([
     { id: 'request', label: 'Request' },
     ...(trace?.translated || full?.upstreamRequest ? [{ id: 'upstream', label: 'Sent to runtime' }] : []),
@@ -90,7 +92,7 @@
         </span></span>
       {/if}
       {#if trace.draftOffered}<span class="kv"><span>draft tokens</span><span>{trace.draftAccepted.toLocaleString()} of {trace.draftOffered.toLocaleString()} accepted</span></span>{/if}
-      {#if trace.webSearches}<span class="kv"><span>web searches</span><span>{trace.webSearches.toLocaleString()}</span></span>{/if}
+      {#if ran.length}<span class="kv"><span>tools run</span><span>{ran.length.toLocaleString()}</span></span>{/if}
       <span class="kv"><span>started</span><span>{when(trace.startedAt)}</span></span>
     </div>
     <div>
@@ -117,10 +119,21 @@
         {/if}
       {:else if shownTab === 'tools'}
         <div class="flex flex-col gap-3">
-          {#each full.toolCalls as c (c.id + c.name)}
+          {#each full.toolCalls as c, i (i)}
             <div class="card p-3">
-              <div class="mb-2 flex items-baseline gap-2"><span class="font-mono text-sm text-fg">{c.name}</span><span class="font-mono text-xs text-fg-faint">{c.id}</span></div>
+              <div class="mb-2 flex flex-wrap items-baseline gap-2">
+                <span class="font-mono text-sm text-fg">{c.name}</span>
+                <span class="font-mono text-xs text-fg-faint">{c.id}</span>
+                {#if c.server}
+                  <span class="text-xs {c.failed ? 'text-bad' : 'text-fg-muted'}">run by the gateway through {c.server}{c.failed ? ', failed' : ''}{c.tookMs ? ` in ${ms(c.tookMs)}` : ''}</span>
+                {:else}
+                  <span class="text-xs text-fg-muted">for the client to run</span>
+                {/if}
+              </div>
               <Json text={c.arguments} height="max-h-60" empty="No arguments" />
+              {#if c.server}
+                <pre class="code mt-2 max-h-60 overflow-auto whitespace-pre-wrap">{c.result || 'No answer'}</pre>
+              {/if}
             </div>
           {/each}
         </div>

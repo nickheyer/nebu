@@ -52,6 +52,8 @@ type Manager struct {
 	dial dialer
 	// Token lookup, replaced in tests.
 	probe func(ctx context.Context, token string) (*v1.ProbeBotTokenResponse, error)
+	// Whether Settings hold a tool server a persona names, every name passing when unset
+	Tools interface{ Known(ref string) bool }
 
 	mu   sync.Mutex
 	bots map[string]*entry
@@ -201,6 +203,9 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateBotRequest) (*v1.Bot
 	if err := normalize(name, spec); err != nil {
 		return nil, err
 	}
+	if err := m.checkTools(spec); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.nameTakenLocked(name, "") {
@@ -241,6 +246,10 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateBotRequest) (*v1.Bot
 		spec = &v1.BotSpec{}
 	}
 	if err := normalize(name, spec); err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	if err := m.checkTools(spec); err != nil {
 		m.mu.Unlock()
 		return nil, err
 	}
@@ -546,4 +555,38 @@ func inviteURL(appID string) string {
 		return ""
 	}
 	return fmt.Sprintf("https://discord.com/oauth2/authorize?client_id=%s&scope=bot%%20applications.commands&permissions=%d", appID, invitePermissions)
+}
+
+// Refuses a persona naming a tool server Settings do not hold
+func (m *Manager) checkTools(spec *v1.BotSpec) error {
+	if m.Tools == nil {
+		return nil
+	}
+	for _, p := range spec.GetPersonas() {
+		for _, ref := range p.GetToolServers() {
+			if !m.Tools.Known(ref) {
+				return fmt.Errorf("%w: persona %s names tool server %s, which Settings do not hold", ErrBot, p.GetName(), ref)
+			}
+		}
+	}
+	return nil
+}
+
+// Names the personas whose chats attach a tool server
+func (m *Manager) ToolServerUsers(name string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for _, e := range m.bots {
+		for _, p := range e.bot.GetSpec().GetPersonas() {
+			for _, ref := range p.GetToolServers() {
+				if ref == name {
+					out = append(out, "persona "+p.GetName()+" of bot "+e.bot.GetName())
+					break
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }

@@ -10,6 +10,7 @@
   import ModelSelect from './ModelSelect.svelte';
   import HumanizeForm from './HumanizeForm.svelte';
   import ChannelPicker from './ChannelPicker.svelte';
+  import ToolServerPicker from '../ToolServerPicker.svelte';
 
   let { persona = $bindable(), idPrefix, pickerBot = '' }: { persona: PersonaFields; idPrefix: string; pickerBot?: string } = $props();
 
@@ -82,6 +83,10 @@
       </IdList>
     </Field>
   </div>
+
+  <Field label="Tool servers" for="{idPrefix}-tools" description="The persona's chats get these tools, run by the gateway.">
+    <div id="{idPrefix}-tools"><ToolServerPicker bind:refs={persona.toolServers} bind:mutating={persona.mutatingTools} /></div>
+  </Field>
 
   <Disclosure label="Sampling" summary={samplingSummary} bind:open={samplingOpen}>
     <div class="flex flex-col gap-4">

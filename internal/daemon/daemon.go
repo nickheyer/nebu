@@ -25,6 +25,7 @@ import (
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
+	"github.com/nickheyer/nebu/internal/mcpserver"
 	"github.com/nickheyer/nebu/internal/mesh"
 	"github.com/nickheyer/nebu/internal/notify"
 	"github.com/nickheyer/nebu/internal/pull"
@@ -33,6 +34,7 @@ import (
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/sso"
 	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/internal/tools"
 	"github.com/nickheyer/nebu/pkg/archs"
 	"github.com/nickheyer/nebu/pkg/build"
 	"github.com/nickheyer/nebu/pkg/cache"
@@ -97,6 +99,8 @@ type Daemon struct {
 	Guard *auth.Guard
 	// Single sign-on, nil when auth.oidc is unset
 	SSO *sso.Service
+	// The tool servers Settings hold, run for models by the gateway
+	Tools *tools.Registry
 	// The mesh this node belongs to, the conductor of formations, and the numbers they learn
 	Mesh       *mesh.Manager
 	Formations *formations.Manager
@@ -296,7 +300,11 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	d.Notifier = &notify.Notifier{Webhooks: cfg.GetNotify().GetWebhooks(), Events: bus, Log: log}
 	d.Gateway = gateway.New(d.Routes, cfg.GetGateway().GetApiKeys(), cfg.GetGateway().GetCorsOrigins(), cfg.GetGateway().GetPolicy(), bus, log)
 	d.Gateway.SetVersion(Version)
-	d.Gateway.SetWebSearch(func() *v1.WebSearch { return d.Settings.Get().GetWebSearch() })
+	// Tool servers follow Settings, and a server a route or persona attaches stays until they let go
+	d.Tools = tools.New(log, bus)
+	d.Tools.Apply(base, d.Settings.Get().GetToolServers())
+	d.Gateway.SetTools(d.Tools)
+	d.Settings.OnUpdate = func(ctx context.Context, s *v1.Settings) { d.Tools.Apply(base, s.GetToolServers()) }
 	if err = d.openAuth(store); err != nil {
 		return nil, err
 	}
@@ -306,8 +314,12 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	}
 	// Load bots now and connect enabled bots when serving starts.
 	d.Bots = bots.New(base, store, d.Gateway, bus, log, cfg.GetDiscord().GetFfmpeg())
+	d.Bots.Tools = d.Tools
 	if err = d.Bots.Load(context.Background()); err != nil {
 		return nil, err
+	}
+	d.Settings.Referenced = func(name string) []string {
+		return append(d.Routes.ToolServerUsers(name), d.Bots.ToolServerUsers(name)...)
 	}
 	d.Chats = &chats.Manager{DB: store, Log: log}
 	var ui http.Handler
@@ -348,7 +360,9 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		Formations:    d.Formations,
 		Perf:          d.Perf,
 		CacheDir:      d.Formations.CacheDir,
+		Tools:         d.Tools,
 	}
+	deps.MCP = mcpserver.Handler(mcpserver.Deps{Host: prober, Doctor: d.Doctor, Sources: srcMgr, Inspector: d.Inspector, Formats: fmts, Runtimes: rts, Store: blobStore, Puller: d.Puller, Tasks: d.Tasks, Installs: d.Installs, Instances: d.Instances, Slots: d.Slots, Gateway: d.Gateway, Mesh: d.Mesh, Formations: d.Formations, Perf: d.Perf, Guard: d.Guard, Tools: d.Tools, Events: bus, Version: Version, Log: log})
 	d.handler = rpc.NewHandler(deps)
 	// Node traffic gets the same services with the gateway mounted, whatever the gateway listens on.
 	meshDeps := deps
@@ -415,6 +429,7 @@ func (d *Daemon) openMesh(ctx context.Context, store *db.DB, prober *host.Prober
 	blobStore.CacheDir, blobStore.KeepCache = d.Formations.CacheDir, d.Formations.Live
 	d.Puller.Mesh = mesh.Source{Mesh: d.Mesh}
 	d.Gateway.SetPeers(d.Formations)
+	d.Tools.SetPeers(d.Formations)
 	keep := d.Puller.Keep
 	d.Puller.Keep = func(m *v1.StoredModel) bool {
 		if keep(m) {
@@ -495,6 +510,9 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 		}
 	}
 	add(v1.EventKind_EVENT_KIND_SETTINGS, settings.ID, d.Settings.Get())
+	for _, st := range d.Tools.Status() {
+		add(v1.EventKind_EVENT_KIND_TOOL_SERVER, st.GetServer().GetName(), st)
+	}
 	for _, s := range d.Sources.List() {
 		add(v1.EventKind_EVENT_KIND_SOURCE, s.GetId(), s)
 	}
@@ -547,6 +565,7 @@ func (d *Daemon) snapshot(ctx context.Context, kinds []v1.EventKind) []*v1.Event
 func (d *Daemon) Close() {
 	d.closeOnce.Do(func() {
 		d.Bots.Close()
+		d.Tools.Close()
 		d.Formations.Close()
 		d.Instances.Close()
 		d.Mesh.Close()

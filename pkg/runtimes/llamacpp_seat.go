@@ -25,6 +25,8 @@ const (
 	factFitFlag     = "fit_flag"
 	factSlotsFlag   = "slots_flag"
 	factDirectIO    = "direct_io"
+	// Whether the build takes the flag that renders chat templates with tools
+	factJinja = "jinja"
 )
 
 // The rpc server names ggml ships it under, beside the runtime's own binary
@@ -57,6 +59,7 @@ func llamaShapeProbes() []Probe {
 		flagProbe(factFitFlag, help, "--fit"),
 		flagProbe(factSlotsFlag, help, "--slots"),
 		flagProbe(factDirectIO, help, "--direct-io", "--load-mode"),
+		flagProbe(factJinja, help, "--jinja"),
 	}
 }
 

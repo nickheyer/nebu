@@ -51,3 +51,16 @@ func (d *DB) PutSettings(ctx context.Context, s *v1.Settings) error {
 		return nil
 	})
 }
+
+// Reads one stored settings field as JSON, false when no row holds it
+func (d *DB) SettingRow(ctx context.Context, key string) (json.RawMessage, bool, error) {
+	rows, err := list(ctx, d, `SELECT value FROM settings WHERE key = ?`, func(rows *sql.Rows) (string, error) {
+		var v string
+		err := rows.Scan(&v)
+		return v, err
+	}, key)
+	if err != nil || len(rows) == 0 {
+		return nil, false, err
+	}
+	return json.RawMessage(rows[0]), true, nil
+}

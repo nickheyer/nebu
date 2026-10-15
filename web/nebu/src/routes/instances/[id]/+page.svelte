@@ -1,11 +1,12 @@
 <script lang="ts">
   import { page } from '$app/state';
   import { tabState } from '$lib/tabs.svelte';
-  import { live, clock, instanceLive, slotName, groupLabel, runtimeName, answersOf } from '$lib/state.svelte';
+  import { live, clock, instanceLive, slotName, groupLabel, runtimeName, runtimeStatus, answersOf } from '$lib/state.svelte';
   import { launch, requestOf } from '$lib/launch';
   import { stopInstance } from '$lib/actions.svelte';
   import { bytes, when, duration, count, commandLines, tail } from '$lib/format';
-  import { templateText } from '$lib/gateway';
+  import { templateText, toolSupportText } from '$lib/gateway';
+  import { ApiFlavor } from '$proto/runtime_pb';
   import { InstanceState } from '$proto/instance_pb';
   import { RouteState, type Trace } from '$proto/gateway_pb';
   import { Square, RotateCcw, Wrench, MessageSquare } from '@lucide/svelte';
@@ -117,6 +118,7 @@
               ['Install', install ? `${install.version || install.id} · ${install.path}` : instance.installId],
               ['Slot', instance.slotId ? slotName(instance.slotId) : 'None'],
               ['Chat template', templateText(instance.template)],
+              ['Tools', toolSupportText(instance.template, runtimeStatus(instance.runtimeId)?.runtime?.api, ApiFlavor.SDCPP)],
               ['Created', when(instance.createdAt)],
               ['Ready', when(instance.readyAt)],
               ['Stopped', when(instance.stoppedAt)],

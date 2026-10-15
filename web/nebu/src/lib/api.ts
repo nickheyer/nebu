@@ -16,6 +16,7 @@ import { SlotService } from '$proto/slot_pb';
 import { SourceService } from '$proto/source_pb';
 import { StoreService } from '$proto/store_pb';
 import { TaskService } from '$proto/task_pb';
+import { ToolService } from '$proto/tools_pb';
 import { readLocal, writeLocal } from './persist';
 
 const tokenKey = 'nebu.token';
@@ -53,7 +54,8 @@ export const api = {
   bots: createClient(BotService, transport),
   auth: createClient(AuthService, transport),
   chats: createClient(ChatService, transport),
-  mesh: createClient(MeshService, transport)
+  mesh: createClient(MeshService, transport),
+  tools: createClient(ToolService, transport)
 };
 
 // Include the API token in file URLs when authentication is required.

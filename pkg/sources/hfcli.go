@@ -3,10 +3,13 @@ package sources
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -102,8 +105,11 @@ func (h *HFCLI) download(ctx context.Context, repo, ref, rel string, progress fu
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	// The CLI writes into .cache/huggingface under the local dir before moving the file into place
-	incomplete := filepath.Join(local, ".cache", "huggingface", "download", filepath.FromSlash(rel))
+	// The CLI stages under .cache/huggingface/download as <rel>.<etag>.incomplete or, since hub 0.28, <hash>.<etag>.incomplete
+	staging := filepath.Join(local, ".cache", "huggingface", "download")
+	incomplete := filepath.Join(staging, filepath.FromSlash(rel))
+	sum := sha1.Sum([]byte(path.Base(rel) + ".metadata"))
+	hashed := filepath.Join(staging, filepath.FromSlash(path.Dir(rel)), base64.URLEncoding.EncodeToString(sum[:]))
 	var seen int64
 	report := func() {
 		var size int64
@@ -112,7 +118,8 @@ func (h *HFCLI) download(ctx context.Context, repo, ref, rel string, progress fu
 				size = info.Size()
 			}
 		}
-		if matches, _ := filepath.Glob(incomplete + "*.incomplete"); len(matches) > 0 {
+		for _, pattern := range []string{incomplete + "*.incomplete", hashed + ".*.incomplete"} {
+			matches, _ := filepath.Glob(pattern)
 			for _, m := range matches {
 				if info, err := os.Stat(m); err == nil && info.Size() > size {
 					size = info.Size()

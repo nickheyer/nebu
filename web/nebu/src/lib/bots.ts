@@ -104,6 +104,8 @@ export interface PersonaFields {
   negativePrompt: string;
   wakeWords: string[];
   channelIds: string[];
+  toolServers: string[];
+  mutatingTools: boolean;
   sampling: SamplingFields;
   humanize: HumanizeFields;
 }
@@ -225,6 +227,8 @@ export function personaFields(p?: Persona): PersonaFields {
     negativePrompt: p?.negativePrompt ?? '',
     wakeWords: [...(p?.wakeWords ?? [])],
     channelIds: [...(p?.channelIds ?? [])],
+    toolServers: [...(p?.toolServers ?? [])],
+    mutatingTools: p?.mutatingTools ?? false,
     sampling: samplingFields(p?.sampling),
     humanize: humanizeFields(p?.humanize)
   };
@@ -329,6 +333,8 @@ export function specFrom(f: SpecFields): BotSpec {
       negativePrompt: p.negativePrompt.trim(),
       wakeWords: trimmed(p.wakeWords),
       channelIds: trimmed(p.channelIds),
+      toolServers: trimmed(p.toolServers),
+      mutatingTools: p.toolServers.length ? p.mutatingTools : false,
       sampling: { temperature: optNum(p.sampling.temperature), topP: optNum(p.sampling.topP), topK: optWhole(p.sampling.topK), maxTokens: optWhole(p.sampling.maxTokens), stop: trimmed(p.sampling.stop), seed: seed(p.sampling.seed) },
       humanize: {
         enabled: p.humanize.enabled,

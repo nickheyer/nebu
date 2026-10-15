@@ -1,4 +1,4 @@
-package gateway
+package tools
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"golang.org/x/text/language"
@@ -17,16 +18,17 @@ import (
 
 const (
 	searchTimeout = 20 * time.Second
+	// Results handed to the model per search
+	searchHits = 10
 	// Characters Brave takes in one query
 	braveQueryMax = 400
+	// Bytes read from a provider's answer at most
+	maxBody = 16 << 20
 )
 
 var braveEndpoint = "https://api.search.brave.com/res/v1/web/search"
 
-// One page a search turned up
-type searchHit struct {
-	Title, URL, Snippet, Age string
-}
+var searchSchema = json.RawMessage(`{"type":"object","properties":{"query":{"type":"string","description":"What to search for"}},"required":["query"]}`)
 
 // A query and the country its results are localized to
 type searchAsk struct {
@@ -34,7 +36,7 @@ type searchAsk struct {
 	Country string
 }
 
-// A search that did not happen, with the web_search_tool_result_error code that stands for it
+// A search that did not happen, with the code that stands for it
 type searchError struct {
 	code    string
 	message string
@@ -42,15 +44,111 @@ type searchError struct {
 
 func (e *searchError) Error() string { return e.message }
 
-// Runs web searches for the web_search tool
+// Runs web searches
 type searcher interface {
-	search(ctx context.Context, ask searchAsk) ([]searchHit, error)
+	search(ctx context.Context, ask searchAsk) ([]Hit, error)
 	// Characters a query may run to, zero for no bound
 	queryMax() int
 }
 
-// The provider the host settings name
-func searcherFor(w *v1.WebSearch, client *http.Client) (searcher, error) {
+// A search server, offering web_search through SearXNG or Brave
+type searchServer struct {
+	name     string
+	provider searcher
+}
+
+func newSearch(spec *v1.ToolServer) (*searchServer, error) {
+	provider, err := searcherFor(spec, &http.Client{Timeout: searchTimeout})
+	if err != nil {
+		return nil, err
+	}
+	return &searchServer{name: spec.GetName(), provider: provider}, nil
+}
+
+func (s *searchServer) Name() string            { return s.name }
+func (s *searchServer) Kind() v1.ToolServerKind { return v1.ToolServerKind_TOOL_SERVER_KIND_SEARCH }
+
+func (s *searchServer) Tools() []Tool {
+	return []Tool{{Name: SearchTool, Inner: SearchTool, ReadOnly: true, Schema: searchSchema, Description: "Searches the web and answers with numbered results carrying title, URL, snippet, and date. Search again with another query to find more"}}
+}
+
+// Runs one search under the call's limits, a code naming why it did not happen
+func (s *searchServer) Call(ctx context.Context, c Call) (*Result, error) {
+	var in struct {
+		Query string `json:"query"`
+	}
+	json.Unmarshal(c.Args, &in)
+	query := strings.TrimSpace(in.Query)
+	switch {
+	case query == "":
+		return searchFailure("invalid_input"), nil
+	case c.Exhausted:
+		return searchFailure("max_uses_exceeded"), nil
+	case s.provider.queryMax() > 0 && utf8.RuneCountInString(query) > s.provider.queryMax():
+		return searchFailure("query_too_long"), nil
+	}
+	hits, err := s.provider.search(ctx, searchAsk{Query: query, Country: c.Country})
+	if err != nil {
+		code := "unavailable"
+		if failure, ok := errors.AsType[*searchError](err); ok {
+			code = failure.code
+		}
+		out := searchFailure(code)
+		out.Asked = true
+		return out, fmt.Errorf("web_search %q: %w", query, err)
+	}
+	kept := make([]Hit, 0, len(hits))
+	for _, h := range hits {
+		if len(c.Allowed) > 0 && !underDomains(h.URL, c.Allowed) || len(c.Blocked) > 0 && underDomains(h.URL, c.Blocked) {
+			continue
+		}
+		kept = append(kept, h)
+		if len(kept) == searchHits {
+			break
+		}
+	}
+	return &Result{Parts: []Part{{Type: "text", Text: SearchText(kept, "")}}, Hits: kept, Asked: true}, nil
+}
+
+// The result of a search that did not happen
+func searchFailure(code string) *Result {
+	return &Result{Parts: []Part{{Type: "text", Text: SearchText(nil, code)}}, Failed: true, Code: code}
+}
+
+// Search results as a model reads them, or what kept the search from happening
+func SearchText(hits []Hit, code string) string {
+	switch code {
+	case "":
+	case "max_uses_exceeded":
+		return "No more web searches are allowed in this request. Answer with what you have."
+	case "invalid_input":
+		return "A web_search call needs a query string."
+	case "query_too_long":
+		return "The query is too long for the search provider. Shorten it."
+	case "too_many_requests":
+		return "The search provider is rate limiting. Try again later."
+	default:
+		return "Web search is unavailable right now."
+	}
+	if len(hits) == 0 {
+		return "No results."
+	}
+	var b strings.Builder
+	b.WriteString("Search results:\n")
+	for i, h := range hits {
+		fmt.Fprintf(&b, "\n%d. %s\n   %s\n", i+1, h.Title, h.URL)
+		if h.Snippet != "" {
+			fmt.Fprintf(&b, "   %s\n", h.Snippet)
+		}
+		if h.Age != "" {
+			fmt.Fprintf(&b, "   published %s\n", h.Age)
+		}
+	}
+	return b.String()
+}
+
+// The provider a server's settings name
+func searcherFor(w *v1.ToolServer, client *http.Client) (searcher, error) {
 	switch w.GetProvider() {
 	case "searxng":
 		base, err := url.Parse(w.GetSearxngUrl())
@@ -98,7 +196,7 @@ type searxng struct {
 
 func (s searxng) queryMax() int { return 0 }
 
-func (s searxng) search(ctx context.Context, ask searchAsk) ([]searchHit, error) {
+func (s searxng) search(ctx context.Context, ask searchAsk) ([]Hit, error) {
 	who := "SearXNG at " + s.base.Host
 	q := url.Values{"q": {ask.Query}, "format": {"json"}}
 	if locale := searxngLocale(ask.Country); locale != "" {
@@ -130,9 +228,9 @@ func (s searxng) search(ctx context.Context, ask searchAsk) ([]searchHit, error)
 	case status >= http.StatusMultipleChoices:
 		return nil, &searchError{code: "unavailable", message: fmt.Sprintf("%s answered %d", who, status)}
 	}
-	out := make([]searchHit, 0, len(body.Results))
+	out := make([]Hit, 0, len(body.Results))
 	for _, r := range body.Results {
-		hit := searchHit{Title: r.Title, URL: r.URL, Snippet: r.Content}
+		hit := Hit{Title: r.Title, URL: r.URL, Snippet: r.Content}
 		json.Unmarshal(r.PublishedDate, &hit.Age)
 		out = append(out, hit)
 	}
@@ -172,7 +270,7 @@ var braveCountries = map[string]bool{
 	"SE": true, "CH": true, "TW": true, "TR": true, "GB": true, "US": true,
 }
 
-func (b brave) search(ctx context.Context, ask searchAsk) ([]searchHit, error) {
+func (b brave) search(ctx context.Context, ask searchAsk) ([]Hit, error) {
 	who := "Brave Search"
 	q := url.Values{"q": {ask.Query}, "count": {"20"}}
 	if braveCountries[strings.ToUpper(ask.Country)] {
@@ -206,14 +304,14 @@ func (b brave) search(ctx context.Context, ask searchAsk) ([]searchHit, error) {
 	case status >= http.StatusMultipleChoices:
 		return nil, &searchError{code: "unavailable", message: fmt.Sprintf("%s answered %d", who, status)}
 	}
-	out := make([]searchHit, 0, len(body.Web.Results))
+	out := make([]Hit, 0, len(body.Web.Results))
 	for _, r := range body.Web.Results {
 		snippet := strings.Join(append([]string{r.Description}, r.ExtraSnippets...), " ")
 		age := r.PageAge
 		if age == "" {
 			age = r.Age
 		}
-		out = append(out, searchHit{Title: r.Title, URL: r.URL, Snippet: strings.TrimSpace(snippet), Age: age})
+		out = append(out, Hit{Title: r.Title, URL: r.URL, Snippet: strings.TrimSpace(snippet), Age: age})
 	}
 	return out, nil
 }

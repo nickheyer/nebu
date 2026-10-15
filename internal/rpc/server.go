@@ -3,6 +3,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/sso"
 	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/internal/tools"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/formats"
 	"github.com/nickheyer/nebu/pkg/host"
@@ -82,6 +84,10 @@ type Deps struct {
 	Perf       *perf.Table
 	// Where formation stages and relay seats keep their files
 	CacheDir string
+	// The tool servers Settings hold
+	Tools *tools.Registry
+	// Nebu's own MCP server, mounted for MCP clients
+	MCP http.Handler
 }
 
 // Builds the h2c handler serving every service
@@ -104,6 +110,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.Handle(nebuv1connect.NewAuthServiceHandler(services.NewAuthService(d.Users, d.Tokens, d.Guard), opts))
 	mux.Handle(nebuv1connect.NewChatServiceHandler(services.NewChatService(d.Chats, d.Guard), opts))
 	mux.Handle(nebuv1connect.NewMeshServiceHandler(services.NewMeshService(d.Mesh, d.Formations, d.Puller, d.Tasks, d.Store, d.Perf, d.Instances, d.Guard), opts))
+	mux.Handle(nebuv1connect.NewToolServiceHandler(services.NewToolService(d.Tools, d.Mesh), opts))
 	reflector := grpcreflect.NewStaticReflector(
 		nebuv1connect.HostServiceName,
 		nebuv1connect.SettingsServiceName,
@@ -121,6 +128,7 @@ func NewHandler(d Deps) http.Handler {
 		nebuv1connect.AuthServiceName,
 		nebuv1connect.ChatServiceName,
 		nebuv1connect.MeshServiceName,
+		nebuv1connect.ToolServiceName,
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))
@@ -131,6 +139,9 @@ func NewHandler(d Deps) http.Handler {
 		entry.SSO, entry.SSOHandler = d.SSO.Name(), sso.Handler(d.SSO)
 	}
 	mux.Handle(auth.BasePath, auth.Handler(entry))
+	if d.MCP != nil {
+		mux.Handle(mcpPath, &credentialed{guard: d.Guard, next: d.MCP})
+	}
 	if d.Gateway != nil && d.GatewayShared {
 		d.Gateway.Mount(mux)
 	} else {
@@ -145,6 +156,26 @@ func NewHandler(d Deps) http.Handler {
 		mux.Handle("/", d.Web)
 	}
 	return h2c.NewHandler(mux, &http2.Server{})
+}
+
+// Where MCP clients reach nebu's own tool server
+const mcpPath = "/mcp"
+
+// Serves requests carrying a daemon credential and refuses the rest in JSON
+type credentialed struct {
+	guard *auth.Guard
+	next  http.Handler
+}
+
+func (c *credentialed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !c.guard.Authenticated(r.Header) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="nebu"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]any{"error": c.guard.Err().Error()})
+		return
+	}
+	c.next.ServeHTTP(w, r)
 }
 
 // Logs every call with duration and outcome
@@ -183,20 +214,22 @@ var openProcedures = map[string]bool{
 // Procedures a member's session token opens: the calls members make to each other, and none of
 // the ones that decide what this node does
 var peerProcedures = map[string]bool{
-	nebuv1connect.MeshServiceSyncProcedure:       true,
-	nebuv1connect.MeshServiceStreamProcedure:     true,
-	nebuv1connect.MeshServiceRunSeatProcedure:    true,
-	nebuv1connect.MeshServiceStopSeatProcedure:   true,
-	nebuv1connect.MeshServiceMoveSlotProcedure:   true,
-	nebuv1connect.MeshServiceDropSlotProcedure:   true,
-	nebuv1connect.MeshServiceGetSeatProcedure:    true,
-	nebuv1connect.MeshServicePullSeatProcedure:   true,
-	nebuv1connect.MeshServiceWatchPullProcedure:  true,
-	nebuv1connect.MeshServiceSeatLogsProcedure:   true,
-	nebuv1connect.MeshServiceGetStoredProcedure:  true,
-	nebuv1connect.MeshServiceRekeyProcedure:      true,
-	nebuv1connect.MeshServiceByeProcedure:        true,
-	nebuv1connect.MeshServiceForgetNodeProcedure: true,
+	nebuv1connect.MeshServiceSyncProcedure:            true,
+	nebuv1connect.MeshServiceStreamProcedure:          true,
+	nebuv1connect.MeshServiceRunSeatProcedure:         true,
+	nebuv1connect.MeshServiceStopSeatProcedure:        true,
+	nebuv1connect.MeshServiceMoveSlotProcedure:        true,
+	nebuv1connect.MeshServiceDropSlotProcedure:        true,
+	nebuv1connect.MeshServiceGetSeatProcedure:         true,
+	nebuv1connect.MeshServicePullSeatProcedure:        true,
+	nebuv1connect.MeshServiceWatchPullProcedure:       true,
+	nebuv1connect.MeshServiceSeatLogsProcedure:        true,
+	nebuv1connect.MeshServiceGetStoredProcedure:       true,
+	nebuv1connect.MeshServiceRekeyProcedure:           true,
+	nebuv1connect.MeshServiceByeProcedure:             true,
+	nebuv1connect.MeshServiceForgetNodeProcedure:      true,
+	nebuv1connect.ToolServiceListToolServersProcedure: true,
+	nebuv1connect.ToolServiceCallToolProcedure:        true,
 }
 
 // Whether a call may proceed

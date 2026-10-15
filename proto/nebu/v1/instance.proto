@@ -35,7 +35,19 @@ message Measurement {
   string line = 3;
 }
 
-// Chat template support probed with two requests at startup.
+// How a runtime takes tool definitions
+enum ToolSupport {
+  // Not probed, tools pass through as the client sent them
+  TOOL_SUPPORT_UNSPECIFIED = 0;
+  // The runtime takes tool definitions and parses the calls itself
+  TOOL_SUPPORT_NATIVE = 1;
+  // The runtime refuses tool definitions, so the gateway writes them into the prompt and parses the calls
+  TOOL_SUPPORT_EMULATED = 2;
+  // The model cannot take tools at all
+  TOOL_SUPPORT_NONE = 3;
+}
+
+// Chat template support probed with three requests at startup.
 message TemplateProbe {
   // Whether the template supports later system messages.
   bool late_system = 1;
@@ -43,6 +55,9 @@ message TemplateProbe {
   string refusal = 2;
   // Probe error. Empty on success.
   string error = 3;
+  ToolSupport tools = 4;
+  // What the runtime answered a request carrying a tool, empty when it took it
+  string tools_refusal = 5;
 }
 
 // Another seat of the formation a seat talks to, with the address it reaches it at

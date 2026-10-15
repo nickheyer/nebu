@@ -46,6 +46,10 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     && groupadd --gid 10001 nebu \
     && useradd --uid 10001 --gid nebu --home-dir /var/lib/nebu --no-create-home nebu \
     && install -d -o nebu -g nebu /var/lib/nebu /var/cache/nebu /etc/nebu
+RUN --mount=type=cache,target=/root/.cache/pip \
+    HF_HOME=/opt/hf HF_CLI_BIN_DIR=/usr/local/bin \
+    sh -c 'curl -LsSf https://hf.co/cli/install.sh | bash -s -- --no-modify-path --exclude-skill' \
+    && hf version
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY packaging/config.yaml /etc/nebu/config.yaml
 ENV HOME=/var/lib/nebu \

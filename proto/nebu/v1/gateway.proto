@@ -48,6 +48,10 @@ message Profile {
   SystemMessages system_messages = 1;
   // Answer coding agent permission classifier prompts with the allow verdict, never sending them to the runtime
   bool allow_all = 2;
+  // Tool servers whose tools every request on the route gets, by name, node qualified for another member's
+  repeated string tool_servers = 3;
+  // Whether tools that change what they touch are offered too, read only tools alone otherwise
+  bool mutating_tools = 4;
 }
 
 // How a replicas route keeps a conversation on the seat whose cache holds its prefix. It lives
@@ -112,6 +116,8 @@ message Route {
   AffinityPolicy affinity = 22;
   // The relay handoff the runtime declares: nixl, sglang-bootstrap, or llamacpp-slot
   string relay_handoff = 23;
+  // How the route takes tools, from the probe of the instance serving it
+  ToolSupport tools = 24;
 }
 
 // Gateway listener address.
@@ -245,15 +251,22 @@ message Trace {
   // Speculative decoding counters from the runtime's timings
   uint32 draft_offered = 32;
   uint32 draft_accepted = 33;
-  // Web searches the gateway ran for the Anthropic web_search tool
-  uint32 web_searches = 34;
+  reserved 34;
+  reserved "web_searches";
 }
 
-// One tool call in a traced answer
+// One tool call in a traced answer, run by the gateway when it names a server
 message TraceToolCall {
   string id = 1;
   string name = 2;
   string arguments = 3;
+  // The tool server that ran the call, empty when the client runs it
+  string server = 4;
+  // What the tool answered, capped
+  string result = 5;
+  // Whether the tool reported a failure
+  bool failed = 6;
+  uint32 took_ms = 7;
 }
 
 // Lists traces newest first, one route's or every route's
