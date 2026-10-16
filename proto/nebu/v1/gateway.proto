@@ -60,11 +60,13 @@ message Profile {
   optional bool strip_extras = 7;
   // A JSON object whose fields are written over every request the runtime gets
   string overrides = 8;
+  // Tools the runtime is not offered, by name, a * matching any run of characters
+  repeated string hidden_tools = 9;
 }
 
 // What the runtime gets as the system prompt
 enum SystemPrompt {
-  // Inherit, the client's when nothing inherits
+  // Inherit, facts for a coding agent harness and the client's for anything else when nothing inherits
   SYSTEM_PROMPT_UNSPECIFIED = 0;
   // The client's, as sent
   SYSTEM_PROMPT_KEEP = 1;
@@ -72,6 +74,8 @@ enum SystemPrompt {
   SYSTEM_PROMPT_DROP = 2;
   // The profile's system_text
   SYSTEM_PROMPT_REPLACE = 3;
+  // The gateway's own, holding only the environment facts the client states
+  SYSTEM_PROMPT_FACTS = 4;
 }
 
 // How a replicas route keeps a conversation on the seat whose cache holds its prefix. It lives

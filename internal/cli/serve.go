@@ -371,7 +371,7 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots create")
 	settings, read := slotFlags(fs)
-	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M] [--checks C] [--system-prompt P] [--system-text T] [--extras E] [--overrides JSON]")
+	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M] [--checks C] [--system-prompt P] [--system-text T] [--extras E] [--overrides JSON] [--hide-tool NAME]")
 	if err != nil {
 		return err
 	}
@@ -436,6 +436,8 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 			req.Profile.StripExtras = settings.Profile.StripExtras
 		case "overrides":
 			req.Profile.Overrides = settings.Profile.Overrides
+		case "hide-tool":
+			req.Profile.HiddenTools = settings.Profile.HiddenTools
 		case "device":
 			req.DeviceIds = settings.DeviceIds
 		case "alias":
@@ -500,7 +502,9 @@ func profileFlags(fs *flag.FlagSet) (*v1.Profile, func() error) {
 	p := &v1.Profile{}
 	mode := fs.String("system-messages", "", "later system messages: keep, merge, user, or auto (use template probe)")
 	checks := fs.String("checks", "", "coding agent permission checks: inherit, allow (answered as allowed, the default), or model (the model answers them)")
-	prompt := fs.String("system-prompt", "", "the system prompt the runtime gets: inherit, keep, drop, or replace")
+	prompt := fs.String("system-prompt", "", "the system prompt the runtime gets: inherit, keep, drop, replace, or facts")
+	var hide multi
+	fs.Var(&hide, "hide-tool", "a tool the runtime is not offered, by name with * for any run of characters, repeatable")
 	fs.StringVar(&p.SystemText, "system-text", "", "the system prompt sent in place of the client's when --system-prompt is replace")
 	extras := fs.String("extras", "", "what a client sends beyond the model's needs: inherit (stripped for Anthropic clients), strip, or pass")
 	fs.StringVar(&p.Overrides, "overrides", "", "a JSON object written over every request the runtime gets, its fields winning")
@@ -515,8 +519,15 @@ func profileFlags(fs *flag.FlagSet) (*v1.Profile, func() error) {
 		if p.AllowAll, err = parseTriState(*checks, "checks", "allow", "model"); err != nil {
 			return err
 		}
-		p.StripExtras, err = parseTriState(*extras, "extras", "strip", "pass")
-		return err
+		if p.StripExtras, err = parseTriState(*extras, "extras", "strip", "pass"); err != nil {
+			return err
+		}
+		for _, h := range hide {
+			if h = strings.TrimSpace(h); h != "" {
+				p.HiddenTools = append(p.HiddenTools, h)
+			}
+		}
+		return nil
 	}
 }
 
@@ -551,8 +562,10 @@ func parseSystemPrompt(s string) (v1.SystemPrompt, error) {
 		return v1.SystemPrompt_SYSTEM_PROMPT_DROP, nil
 	case "replace":
 		return v1.SystemPrompt_SYSTEM_PROMPT_REPLACE, nil
+	case "facts":
+		return v1.SystemPrompt_SYSTEM_PROMPT_FACTS, nil
 	}
-	return v1.SystemPrompt_SYSTEM_PROMPT_UNSPECIFIED, fmt.Errorf("system-prompt: %q is not inherit, keep, drop, or replace", s)
+	return v1.SystemPrompt_SYSTEM_PROMPT_UNSPECIFIED, fmt.Errorf("system-prompt: %q is not inherit, keep, drop, replace, or facts", s)
 }
 
 func parseSystemMessages(s string) (v1.SystemMessages, error) {
@@ -586,6 +599,9 @@ func profileText(p *v1.Profile) string {
 	}
 	if p.GetOverrides() != "" {
 		parts = append(parts, "overrides "+p.GetOverrides())
+	}
+	if len(p.GetHiddenTools()) > 0 {
+		parts = append(parts, "hide-tool "+strings.Join(p.GetHiddenTools(), ","))
 	}
 	if len(parts) == 0 {
 		return "-"
@@ -762,7 +778,7 @@ func runRoutesAdd(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("routes add")
 	policy, limits := policyFlags(fs)
 	profile, shaping := profileFlags(fs)
-	positional, err := e.parse(fs, args, 2, 2, "routes add <name> <slot|instance> [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M] [--checks C] [--system-prompt P] [--system-text T] [--extras E] [--overrides JSON]")
+	positional, err := e.parse(fs, args, 2, 2, "routes add <name> <slot|instance> [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M] [--checks C] [--system-prompt P] [--system-text T] [--extras E] [--overrides JSON] [--hide-tool NAME]")
 	if err != nil {
 		return err
 	}

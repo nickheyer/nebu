@@ -141,7 +141,7 @@ func (g *Gateway) relay(w *traceWriter, r *http.Request, in *inbound, name strin
 	}
 	foldSystem(chat, mode)
 	shape(chat, route.GetProfile())
-	t.Translated = clientFlavor(r) != route.GetApi() || Shaped(route.GetProfile(), clientFlavor(r))
+	t.Translated = clientFlavor(r) != route.GetApi() || Shaped(route.GetProfile(), clientFlavor(r), in.harness())
 	if upstream.InlineImages() {
 		if err := g.inlineImages(r.Context(), chat, policy); err != nil {
 			g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")

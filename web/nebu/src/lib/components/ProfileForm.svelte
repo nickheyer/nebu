@@ -3,6 +3,7 @@
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
   import TextArea from './ui/TextArea.svelte';
+  import TextInput from './ui/TextInput.svelte';
   import ToolServerPicker from './ToolServerPicker.svelte';
 
   let { fields = $bindable(), idPrefix = 'profile' }: { fields: ProfileFields; idPrefix?: string } = $props();
@@ -34,6 +35,9 @@
       <TextArea id="{idPrefix}-overrides" bind:value={fields.overrides} mono height="h-20" empty={'{"temperature": 0.6, "chat_template_kwargs": {"enable_thinking": false}}'} invalid={error.startsWith('Overrides')} />
     </Field>
   </div>
+  <Field label="Hidden tools" for="{idPrefix}-hidden" description="Tools the runtime is never offered, by name, comma separated, * matching any run of characters.">
+    <TextInput id="{idPrefix}-hidden" bind:value={fields.hiddenTools} mono empty="Artifact, Monitor, Cron*, mcp__plugin_*" />
+  </Field>
   <Field label="Tool servers" for="{idPrefix}-tools" description="Every request on the route gets these tools, whatever client sends it.">
     <div id="{idPrefix}-tools"><ToolServerPicker bind:refs={fields.toolServers} bind:mutating={fields.mutatingTools} /></div>
   </Field>

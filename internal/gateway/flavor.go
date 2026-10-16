@@ -48,6 +48,8 @@ type Chat struct {
 	Safeguards []Safeguard
 	// Whether the gateway answers those checks itself with every tool call not flagged
 	Allowed bool
+	// Whether a coding agent harness sent the request, by its headers or its system prompt
+	Harness bool
 	// Texts to embed when Kind is embed
 	Inputs []string
 	Extra  map[string]json.RawMessage

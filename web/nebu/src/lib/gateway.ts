@@ -145,13 +145,17 @@ export const systemMessageItems: { value: string; label: string; detail: string 
 const modeOf: Record<string, SystemMessages> = { keep: SystemMessages.KEEP, merge: SystemMessages.MERGE, user: SystemMessages.USER };
 
 export const systemPromptItems: { value: string; label: string; detail: string }[] = [
-  { value: 'inherit', label: 'Inherit', detail: "The slot's setting, the client's prompt when nothing sets one" },
+  { value: 'inherit', label: 'Inherit', detail: "The slot's setting, facts for a coding agent and the client's prompt" },
   { value: 'keep', label: 'Keep', detail: "The client's prompt as sent" },
+  { value: 'facts', label: 'Facts', detail: "The gateway's own prompt, the environment facts from client" },
   { value: 'drop', label: 'Drop', detail: 'No system prompt reaches the runtime' },
   { value: 'replace', label: 'Replace', detail: "The text below in place of the client's" }
 ];
 
-const promptOf: Record<string, SystemPrompt> = { keep: SystemPrompt.KEEP, drop: SystemPrompt.DROP, replace: SystemPrompt.REPLACE };
+const promptOf: Record<string, SystemPrompt> = { keep: SystemPrompt.KEEP, facts: SystemPrompt.FACTS, drop: SystemPrompt.DROP, replace: SystemPrompt.REPLACE };
+
+// Tool patterns as one comma separated line and back
+const patternsOf = (s: string) => s.split(',').map((p) => p.trim()).filter(Boolean);
 
 export const checksItems: { value: string; label: string; detail: string }[] = [
   { value: 'inherit', label: 'Inherit', detail: "The slot's setting, allowed when nothing sets one" },
@@ -178,6 +182,7 @@ export interface ProfileFields {
   systemText: string;
   extras: string;
   overrides: string;
+  hiddenTools: string;
 }
 
 export function profileFields(p: Profile | undefined): ProfileFields {
@@ -189,7 +194,8 @@ export function profileFields(p: Profile | undefined): ProfileFields {
     systemPrompt: Object.entries(promptOf).find(([, m]) => m === p?.systemPrompt)?.[0] ?? 'inherit',
     systemText: p?.systemText ?? '',
     extras: triState(p?.stripExtras, 'strip', 'pass'),
-    overrides: p?.overrides ?? ''
+    overrides: p?.overrides ?? '',
+    hiddenTools: (p?.hiddenTools ?? []).join(', ')
   };
 }
 
@@ -202,7 +208,8 @@ export function profileFrom(f: ProfileFields): Profile {
     systemPrompt: promptOf[f.systemPrompt] ?? SystemPrompt.UNSPECIFIED,
     systemText: f.systemPrompt === 'replace' ? f.systemText : '',
     stripExtras: triValue(f.extras, 'strip'),
-    overrides: f.overrides.trim()
+    overrides: f.overrides.trim(),
+    hiddenTools: patternsOf(f.hiddenTools)
   } as Profile;
 }
 
@@ -235,6 +242,7 @@ export function profileText(p: Profile | undefined, template?: TemplateProbe): s
   if (f.systemPrompt !== 'inherit') parts.push(`System prompt: ${f.systemPrompt}`);
   if (f.extras !== 'inherit') parts.push(`Client extras: ${f.extras}`);
   if (f.overrides) parts.push('Overrides: set');
+  if (patternsOf(f.hiddenTools).length) parts.push(`Hidden tools: ${patternsOf(f.hiddenTools).join(', ')}`);
   if (template?.tools === ToolSupport.EMULATED) parts.push('Tools: emulated by the gateway');
   if (f.checks !== 'inherit') parts.push(f.checks === 'allow' ? 'Agent checks: allowed' : 'Agent checks: model decides');
   const tools = attachmentText(f.toolServers, f.mutatingTools);

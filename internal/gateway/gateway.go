@@ -59,6 +59,9 @@ type inbound struct {
 	from http.Header
 }
 
+// Whether a coding agent harness sent the request
+func (in *inbound) harness() bool { return in.chat != nil && in.chat.Harness }
+
 // The client headers a runtime gets, none when the profile leaves the client's extras out
 func passHeaders(r *http.Request, p *v1.Profile, format v1.ApiFlavor) http.Header {
 	if StripsExtras(p, format) {
@@ -513,6 +516,7 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	in.from = passHeaders(r, route.GetProfile(), api)
 	if in.chat != nil {
 		in.chat.Allowed = AllowsAll(route.GetProfile())
+		in.chat.Harness = isHarness(r.Header, in.chat)
 		for _, s := range in.chat.Safeguards {
 			if in.chat.Allowed && s.Type != dangerousToolUse {
 				g.log.Warn("a check the request asked for is not one the gateway answers", "model", name, "safeguard", s.Type)
@@ -594,7 +598,7 @@ func (g *Gateway) dispatch(w *traceWriter, r *http.Request, in *inbound, name st
 		}
 	}
 	// Translate when client and runtime protocols differ, and when the profile shapes the request
-	if clientFlavor(r) != route.GetApi() || r.URL.Path == anthropicCount || Shaped(route.GetProfile(), clientFlavor(r)) {
+	if clientFlavor(r) != route.GetApi() || r.URL.Path == anthropicCount || Shaped(route.GetProfile(), clientFlavor(r), in.harness()) {
 		t.Translated = true
 		used := g.translate(w, r, in, name, route, mode, targets, hold, policy, client, flavorOf(route.GetApi()))
 		g.served(t, route, targets, used, key)
@@ -1064,7 +1068,7 @@ func (g *Gateway) serveTools(w *traceWriter, r *http.Request, in *inbound, name 
 		return -1, false
 	}
 	upstream := flavorOf(route.GetApi())
-	t.Translated = clientFlavor(r) != route.GetApi() || Shaped(route.GetProfile(), clientFlavor(r))
+	t.Translated = clientFlavor(r) != route.GetApi() || Shaped(route.GetProfile(), clientFlavor(r), in.harness())
 	if served := route.GetServed(); served != "" {
 		chat.Model = served
 	}

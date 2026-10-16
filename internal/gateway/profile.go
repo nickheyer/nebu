@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -56,7 +57,81 @@ func foldSystem(c *Chat, mode v1.SystemMessages) {
 // Reports whether a profile sets anything, an empty one inheriting everything
 func ProfileSet(p *v1.Profile) bool {
 	return p.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED || p.GetAllowAll() || len(p.GetToolServers()) > 0 || p.GetMutatingTools() ||
-		p.GetSystemPrompt() != v1.SystemPrompt_SYSTEM_PROMPT_UNSPECIFIED || p.GetOverrides() != "" || p != nil && (p.AllowAll != nil || p.StripExtras != nil)
+		p.GetSystemPrompt() != v1.SystemPrompt_SYSTEM_PROMPT_UNSPECIFIED || p.GetOverrides() != "" || len(p.GetHiddenTools()) > 0 || p != nil && (p.AllowAll != nil || p.StripExtras != nil)
+}
+
+// The identity line a coding agent harness opens its system prompt with
+const harnessIdentity = "You are Claude Code"
+
+// The prefix of the headers a coding agent harness names its session, agent, and prompt in
+const harnessHeaders = "X-Claude-Code-"
+
+// Whether a coding agent harness sent the request, by its headers or its identity line
+func isHarness(h http.Header, c *Chat) bool {
+	for name := range h {
+		if strings.HasPrefix(name, harnessHeaders) {
+			return true
+		}
+	}
+	if c == nil {
+		return false
+	}
+	for _, m := range c.Messages {
+		if m.Role != "system" {
+			continue
+		}
+		for _, p := range m.Parts {
+			if p.Type == "text" && strings.HasPrefix(strings.TrimSpace(p.Text), harnessIdentity) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The system prompt mode a profile resolves to, facts for a harness and keep for any other client
+func systemPromptOf(p *v1.Profile, harness bool) v1.SystemPrompt {
+	if mode := p.GetSystemPrompt(); mode != v1.SystemPrompt_SYSTEM_PROMPT_UNSPECIFIED {
+		return mode
+	}
+	if harness {
+		return v1.SystemPrompt_SYSTEM_PROMPT_FACTS
+	}
+	return v1.SystemPrompt_SYSTEM_PROMPT_KEEP
+}
+
+// The environment facts a harness states that the facts prompt carries, by the name it gives each
+var harnessFacts = []struct{ name, label string }{
+	{"Primary working directory", "Working directory"},
+	{"Additional working directories", "Additional working directories"},
+	{"Is a git repository", "Git repository"},
+	{"Platform", "Platform"},
+	{"Shell", "Shell"},
+	{"OS Version", "OS version"},
+	{"Scratchpad directory", "Scratchpad directory"},
+}
+
+// The opening of the gateway's own system prompt
+const factsOpening = "You are a coding agent in the user's terminal, acting through the tools offered. The user's own instructions arrive in the conversation."
+
+// The gateway's own system prompt, the environment facts found in the system text and nothing else of it
+func factsPrompt(messages []Message) string {
+	var b strings.Builder
+	b.WriteString(factsOpening)
+	for _, m := range messages {
+		if m.Role != "system" {
+			continue
+		}
+		for _, line := range strings.Split(textOf(m.Parts), "\n") {
+			line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
+			for _, f := range harnessFacts {
+				if value, ok := strings.CutPrefix(line, f.name+":"); ok {
+					fmt.Fprintf(&b, "\n%s: %s", f.label, strings.TrimSpace(value))
+				}
+			}
+		}
+	}
+	return b.String()
 }
 
 // Whether permission checks are answered as allowed, which a profile that says nothing does
@@ -92,6 +167,11 @@ func ValidateProfile(p *v1.Profile) error {
 			return fmt.Errorf("overrides must be a JSON object: %w", err)
 		}
 	}
+	for _, pattern := range p.GetHiddenTools() {
+		if strings.TrimSpace(pattern) == "" {
+			return errors.New("a hidden tool pattern is empty")
+		}
+	}
 	return nil
 }
 
@@ -107,6 +187,10 @@ func EffectiveProfile(alias, slot *v1.Profile) *v1.Profile {
 		SystemMessages: slot.GetSystemMessages(), AllowAll: slot.AllowAll,
 		ToolServers: append([]string(nil), slot.GetToolServers()...), MutatingTools: slot.GetMutatingTools(),
 		SystemPrompt: slot.GetSystemPrompt(), SystemText: slot.GetSystemText(), StripExtras: slot.StripExtras, Overrides: slot.GetOverrides(),
+		HiddenTools: append([]string(nil), slot.GetHiddenTools()...),
+	}
+	if len(alias.GetHiddenTools()) > 0 {
+		out.HiddenTools = append([]string(nil), alias.GetHiddenTools()...)
 	}
 	if alias.AllowAll != nil {
 		out.AllowAll = alias.AllowAll
@@ -130,21 +214,45 @@ func EffectiveProfile(alias, slot *v1.Profile) *v1.Profile {
 }
 
 // Whether a profile changes what the runtime gets beyond what passing the body through would
-func Shaped(p *v1.Profile, format v1.ApiFlavor) bool {
-	return p.GetSystemPrompt() == v1.SystemPrompt_SYSTEM_PROMPT_DROP || p.GetSystemPrompt() == v1.SystemPrompt_SYSTEM_PROMPT_REPLACE || StripsExtras(p, format) || p.GetOverrides() != ""
+func Shaped(p *v1.Profile, format v1.ApiFlavor, harness bool) bool {
+	return systemPromptOf(p, harness) != v1.SystemPrompt_SYSTEM_PROMPT_KEEP || StripsExtras(p, format) || p.GetOverrides() != "" || len(p.GetHiddenTools()) > 0
 }
 
-// Applies the profile's system prompt and field stripping to a chat before rendering
+// Applies the profile's system prompt, tool hiding, and field stripping to a chat before rendering
 func shape(c *Chat, p *v1.Profile) {
-	switch p.GetSystemPrompt() {
+	switch systemPromptOf(p, c.Harness) {
 	case v1.SystemPrompt_SYSTEM_PROMPT_DROP:
 		c.Messages = withoutSystem(c.Messages)
 	case v1.SystemPrompt_SYSTEM_PROMPT_REPLACE:
 		c.Messages = append([]Message{{Role: "system", Parts: []Part{{Type: "text", Text: p.GetSystemText()}}}}, withoutSystem(c.Messages)...)
+	case v1.SystemPrompt_SYSTEM_PROMPT_FACTS:
+		c.Messages = append([]Message{{Role: "system", Parts: []Part{{Type: "text", Text: factsPrompt(c.Messages)}}}}, withoutSystem(c.Messages)...)
+	}
+	if patterns := p.GetHiddenTools(); len(patterns) > 0 {
+		kept := c.Tools[:0]
+		for _, t := range c.Tools {
+			if !hidden(t.Name, patterns) {
+				kept = append(kept, t)
+			}
+		}
+		c.Tools = kept
+		if len(c.Tools) == 0 {
+			c.ToolChoice = ""
+		}
 	}
 	if StripsExtras(p, c.Format) {
 		stripExtras(c)
 	}
+}
+
+// Whether a tool name matches any pattern, a * standing for any run of characters
+func hidden(name string, patterns []string) bool {
+	for _, pattern := range patterns {
+		if matched, err := path.Match(strings.TrimSpace(pattern), name); err == nil && matched {
+			return true
+		}
+	}
+	return false
 }
 
 // The turns that are not system turns
