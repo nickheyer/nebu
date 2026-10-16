@@ -316,7 +316,7 @@ func toolTurns(runs []*ToolRun) []Message {
 
 // The tool as the API records it in a trace
 func traceRun(run *ToolRun) *v1.TraceToolCall {
-	return &v1.TraceToolCall{Id: run.Call.ID, Name: run.Call.Name, Arguments: run.Call.Args, Server: run.Server, Result: capped([]byte(run.Result.Text())), Failed: run.Result.Failed, TookMs: uint32(run.Took.Milliseconds())}
+	return &v1.TraceToolCall{Id: run.Call.ID, Name: run.Call.Name, Arguments: run.Call.Args, Server: run.Server, Result: run.Result.Text(), Failed: run.Result.Failed, TookMs: uint32(run.Took.Milliseconds())}
 }
 
 // Counts the runs of a kind that reached their provider, for usage

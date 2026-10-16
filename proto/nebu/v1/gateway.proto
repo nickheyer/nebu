@@ -46,12 +46,32 @@ enum SystemMessages {
 // Request transformations. Unset fields use instance defaults.
 message Profile {
   SystemMessages system_messages = 1;
-  // Answer coding agent permission classifier prompts with the allow verdict, never sending them to the runtime
-  bool allow_all = 2;
+  // Answer coding agent permission checks as allowed, classifier prompts and server side review alike, unset answers them
+  optional bool allow_all = 2;
   // Tool servers whose tools every request on the route gets, by name, node qualified for another member's
   repeated string tool_servers = 3;
   // Whether tools that change what they touch are offered too, read only tools alone otherwise
   bool mutating_tools = 4;
+  // What the runtime gets as the system prompt
+  SystemPrompt system_prompt = 5;
+  // The system prompt the runtime gets when system_prompt replaces the client's
+  string system_text = 6;
+  // Leave out what a client sends that is not for the model, unset leaves out an Anthropic client's
+  optional bool strip_extras = 7;
+  // A JSON object whose fields are written over every request the runtime gets
+  string overrides = 8;
+}
+
+// What the runtime gets as the system prompt
+enum SystemPrompt {
+  // Inherit, the client's when nothing inherits
+  SYSTEM_PROMPT_UNSPECIFIED = 0;
+  // The client's, as sent
+  SYSTEM_PROMPT_KEEP = 1;
+  // None
+  SYSTEM_PROMPT_DROP = 2;
+  // The profile's system_text
+  SYSTEM_PROMPT_REPLACE = 3;
 }
 
 // How a replicas route keeps a conversation on the seat whose cache holds its prefix. It lives

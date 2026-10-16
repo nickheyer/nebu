@@ -15,6 +15,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/text"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -370,11 +371,14 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots create")
 	settings, read := slotFlags(fs)
-	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M] [--allow-all]")
+	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M] [--checks C] [--system-prompt P] [--system-text T] [--extras E] [--overrides JSON]")
 	if err != nil {
 		return err
 	}
 	if err := read(); err != nil {
+		return err
+	}
+	if err := gateway.ValidateProfile(settings.Profile); err != nil {
 		return err
 	}
 	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Aliases: settings.Aliases, Placement: settings.Placement, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, RuntimeId: settings.RuntimeId, Params: settings.Params, Policy: settings.Policy, Profile: settings.Profile, Position: settings.Position}))
@@ -422,8 +426,16 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 			req.Policy.UpstreamTimeoutMs = settings.Policy.UpstreamTimeoutMs
 		case "system-messages":
 			req.Profile.SystemMessages = settings.Profile.SystemMessages
-		case "allow-all":
+		case "checks":
 			req.Profile.AllowAll = settings.Profile.AllowAll
+		case "system-prompt":
+			req.Profile.SystemPrompt = settings.Profile.SystemPrompt
+		case "system-text":
+			req.Profile.SystemText = settings.Profile.SystemText
+		case "extras":
+			req.Profile.StripExtras = settings.Profile.StripExtras
+		case "overrides":
+			req.Profile.Overrides = settings.Profile.Overrides
 		case "device":
 			req.DeviceIds = settings.DeviceIds
 		case "alias":
@@ -452,6 +464,9 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 			req.Name = *rename
 		}
 	})
+	if err := gateway.ValidateProfile(req.Profile); err != nil {
+		return err
+	}
 	resp, err := e.cl.slots.UpdateSlot(ctx, connect.NewRequest(req))
 	if err != nil {
 		return err
@@ -484,12 +499,60 @@ func policyFlags(fs *flag.FlagSet) (*v1.Policy, func() error) {
 func profileFlags(fs *flag.FlagSet) (*v1.Profile, func() error) {
 	p := &v1.Profile{}
 	mode := fs.String("system-messages", "", "later system messages: keep, merge, user, or auto (use template probe)")
-	fs.BoolVar(&p.AllowAll, "allow-all", false, "answer coding agent permission classifier prompts with the allow verdict instead of running the model")
+	checks := fs.String("checks", "", "coding agent permission checks: inherit, allow (answered as allowed, the default), or model (the model answers them)")
+	prompt := fs.String("system-prompt", "", "the system prompt the runtime gets: inherit, keep, drop, or replace")
+	fs.StringVar(&p.SystemText, "system-text", "", "the system prompt sent in place of the client's when --system-prompt is replace")
+	extras := fs.String("extras", "", "what a client sends beyond the model's needs: inherit (stripped for Anthropic clients), strip, or pass")
+	fs.StringVar(&p.Overrides, "overrides", "", "a JSON object written over every request the runtime gets, its fields winning")
 	return p, func() error {
 		var err error
-		p.SystemMessages, err = parseSystemMessages(*mode)
+		if p.SystemMessages, err = parseSystemMessages(*mode); err != nil {
+			return err
+		}
+		if p.SystemPrompt, err = parseSystemPrompt(*prompt); err != nil {
+			return err
+		}
+		if p.AllowAll, err = parseTriState(*checks, "checks", "allow", "model"); err != nil {
+			return err
+		}
+		p.StripExtras, err = parseTriState(*extras, "extras", "strip", "pass")
 		return err
 	}
+}
+
+// Reads a flag that inherits when empty, on at its first word and off at its second
+func parseTriState(s, name, on, off string) (*bool, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "inherit":
+		return nil, nil
+	case on:
+		return proto.Bool(true), nil
+	case off:
+		return proto.Bool(false), nil
+	}
+	return nil, fmt.Errorf("%s: %q is not inherit, %s, or %s", name, s, on, off)
+}
+
+// The word for a tri state flag's value
+func triState(b *bool, on, off string) string {
+	if *b {
+		return on
+	}
+	return off
+}
+
+func parseSystemPrompt(s string) (v1.SystemPrompt, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "inherit":
+		return v1.SystemPrompt_SYSTEM_PROMPT_UNSPECIFIED, nil
+	case "keep":
+		return v1.SystemPrompt_SYSTEM_PROMPT_KEEP, nil
+	case "drop":
+		return v1.SystemPrompt_SYSTEM_PROMPT_DROP, nil
+	case "replace":
+		return v1.SystemPrompt_SYSTEM_PROMPT_REPLACE, nil
+	}
+	return v1.SystemPrompt_SYSTEM_PROMPT_UNSPECIFIED, fmt.Errorf("system-prompt: %q is not inherit, keep, drop, or replace", s)
 }
 
 func parseSystemMessages(s string) (v1.SystemMessages, error) {
@@ -512,8 +575,17 @@ func profileText(p *v1.Profile) string {
 	if p.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
 		parts = append(parts, "system-messages "+text.Enum(p.GetSystemMessages()))
 	}
-	if p.GetAllowAll() {
-		parts = append(parts, "allow-all")
+	if p != nil && p.AllowAll != nil {
+		parts = append(parts, "checks "+triState(p.AllowAll, "allow", "model"))
+	}
+	if p.GetSystemPrompt() != v1.SystemPrompt_SYSTEM_PROMPT_UNSPECIFIED {
+		parts = append(parts, "system-prompt "+text.Enum(p.GetSystemPrompt()))
+	}
+	if p != nil && p.StripExtras != nil {
+		parts = append(parts, "extras "+triState(p.StripExtras, "strip", "pass"))
+	}
+	if p.GetOverrides() != "" {
+		parts = append(parts, "overrides "+p.GetOverrides())
 	}
 	if len(parts) == 0 {
 		return "-"
@@ -690,7 +762,7 @@ func runRoutesAdd(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("routes add")
 	policy, limits := policyFlags(fs)
 	profile, shaping := profileFlags(fs)
-	positional, err := e.parse(fs, args, 2, 2, "routes add <name> <slot|instance> [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M] [--allow-all]")
+	positional, err := e.parse(fs, args, 2, 2, "routes add <name> <slot|instance> [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M] [--checks C] [--system-prompt P] [--system-text T] [--extras E] [--overrides JSON]")
 	if err != nil {
 		return err
 	}
@@ -698,6 +770,9 @@ func runRoutesAdd(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 	if err := shaping(); err != nil {
+		return err
+	}
+	if err := gateway.ValidateProfile(profile); err != nil {
 		return err
 	}
 	req := &v1.SetRouteRequest{Name: positional[0], Policy: policy, Profile: profile}

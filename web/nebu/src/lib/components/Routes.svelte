@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from '$lib/api';
   import { live, cached, slotName, groupLabel, instanceLive, orderedSlots } from '$lib/state.svelte';
-  import { policyText, policyFields, policyFrom, profileText, profileFields, profileFrom } from '$lib/gateway';
+  import { policyText, policyFields, policyFrom, profileText, profileFields, profileFrom, profileError } from '$lib/gateway';
   import { byName, count, tail } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
@@ -41,7 +41,7 @@
   const nameTaken = $derived(live.routes.has(aliasName.trim()) || slots.some((s) => s.name === aliasName.trim() || s.aliases.some((a) => a.name === aliasName.trim())));
   const badName = $derived(/[\s/]/.test(aliasName));
   const defaults = $derived(cached.gateway?.policy);
-  const canAdd = $derived(!!aliasName.trim() && !nameTaken && !badName && !!target);
+  const canAdd = $derived(!!aliasName.trim() && !nameTaken && !badName && !!target && !profileError(profile));
 
   function openForm() {
     aliasName = '';

@@ -28,9 +28,18 @@ type oaiMessage struct {
 	Name       string          `json:"name,omitempty"`
 	ToolCalls  []oaiToolCall   `json:"tool_calls,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
-	// Reasoning in assistant turns, as llama.cpp and vLLM name it.
+	// Reasoning in assistant turns, under the llama.cpp name and the newer vLLM name
 	ReasoningContent string                     `json:"reasoning_content,omitempty"`
+	Reasoning        string                     `json:"reasoning,omitempty"`
 	Extra            map[string]json.RawMessage `json:"-"`
+}
+
+// The reasoning a message carries under either name
+func (m *oaiMessage) reasoning() string {
+	if m.ReasoningContent != "" {
+		return m.ReasoningContent
+	}
+	return m.Reasoning
 }
 
 func (m *oaiMessage) UnmarshalJSON(data []byte) error {
@@ -240,11 +249,11 @@ func (openai) ParseRequest(path string, body []byte) (*Chat, error) {
 	}
 	for _, m := range req.Messages {
 		msg := Message{Role: m.Role, ToolID: m.ToolCallID, Extra: m.Extra}
-		if m.ReasoningContent != "" {
+		if reasoning := m.reasoning(); reasoning != "" {
 			if m.Role != "assistant" {
 				return nil, bad("reasoning_content belongs in assistant turns, not %s turns", m.Role)
 			}
-			msg.Parts = append(msg.Parts, Part{Type: "thinking", Text: m.ReasoningContent})
+			msg.Parts = append(msg.Parts, Part{Type: "thinking", Text: reasoning})
 		}
 		parts, err := oaiParts(m.Content)
 		if err != nil {
@@ -495,6 +504,7 @@ func (openai) ParseResult(c *Chat, body []byte) (*Result, error) {
 		r.Text = ch.Text
 		if ch.Message != nil {
 			json.Unmarshal(ch.Message.Content, &r.Text)
+			r.Thinking = ch.Message.reasoning()
 			for _, t := range ch.Message.ToolCalls {
 				r.ToolCalls = append(r.ToolCalls, ToolCall{ID: t.ID, Name: t.Function.Name, Args: t.Function.Arguments})
 			}
@@ -522,7 +532,7 @@ func (openai) RenderResult(c *Chat, r *Result) ([]byte, error) {
 		resp.Choices = []oaiChoice{{Text: r.Text, FinishReason: &reason}}
 		return json.Marshal(resp)
 	}
-	msg := &oaiMessage{Role: "assistant", ToolCalls: oaiCalls(r.ToolCalls)}
+	msg := &oaiMessage{Role: "assistant", ReasoningContent: r.Thinking, ToolCalls: oaiCalls(r.ToolCalls)}
 	msg.Content, _ = json.Marshal(r.Text)
 	resp.Choices = []oaiChoice{{Message: msg, FinishReason: &reason}}
 	return json.Marshal(resp)
@@ -564,6 +574,11 @@ func (openai) ParseStream(rd io.Reader, emit func(Event) error) error {
 				}
 			}
 			if ch.Delta != nil {
+				if reasoning := ch.Delta.reasoning(); reasoning != "" {
+					if err := emit(Event{Kind: "thinking", Text: reasoning}); err != nil {
+						return err
+					}
+				}
 				var text string
 				if json.Unmarshal(ch.Delta.Content, &text) == nil && text != "" {
 					if err := emit(Event{Kind: "text", Text: text}); err != nil {
@@ -640,6 +655,11 @@ func (s *oaiStream) Write(ev Event) error {
 		delta := &oaiMessage{}
 		delta.Content, _ = json.Marshal(ev.Text)
 		return s.chunk(delta, ev.Text, nil, nil, nil)
+	case "thinking":
+		if s.c.Kind == "generate" {
+			return nil
+		}
+		return s.chunk(&oaiMessage{ReasoningContent: ev.Text}, "", nil, nil, nil)
 	case "tool":
 		s.tools.add(ev)
 		tc := oaiToolCall{Index: ptr(ev.Index), ID: ev.Tool.ID, Type: "function"}

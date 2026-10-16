@@ -3,7 +3,7 @@
   import { live, cached, orderedSlots, hostGpus, meshGpus, meshGpuGroups, inMesh } from '$lib/state.svelte';
   import { slotOccupied } from '$lib/launch';
   import { placements, placementId, placementOf } from '$lib/instances';
-  import { policyFields, policyFrom, profileFields, profileFrom } from '$lib/gateway';
+  import { policyFields, policyFrom, profileFields, profileFrom, profileError } from '$lib/gateway';
   import { gib, fromGib } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { PoolKind } from '$proto/host_pb';
@@ -93,7 +93,7 @@
   const runtime = $derived(cached.runtimes.find((r) => r.runtime?.id === runtimeId)?.runtime);
   const occupied = $derived(!!slot && slotOccupied(slot.id));
   const count = $derived(orderedSlots().length);
-  const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && !aliasProblem && invalid === 0);
+  const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && !aliasProblem && invalid === 0 && !profileError(profile));
   // Clear parameters when the runtime changes.
   $effect(() => {
     if (runtimeId !== start.runtimeId) params = {};

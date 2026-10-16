@@ -18,8 +18,8 @@ const (
 	traceRing = 500
 	// Maximum retained token count traces, stored separately.
 	countRing = 50
-	// Maximum retained bytes per trace body.
-	traceBodyCap = 64 << 10
+	// Bytes of request and response bodies held across every retained trace
+	traceBudget = 256 << 20
 	// Response header containing the trace ID.
 	traceHeader = TraceHeader
 )
@@ -27,9 +27,7 @@ const (
 // The header a gateway answer carries its trace id in
 const TraceHeader = "X-Nebu-Trace"
 
-// Records recent gateway requests and publishes trace events.
-// The serving goroutine owns each trace and publishes copies at start and finish.
-// Token counts use a separate ring so they cannot evict inference traces.
+// Keeps recent requests whole in two rings, the oldest inference traces leaving past the byte budget
 type Recorder struct {
 	events *events.Bus
 
@@ -37,6 +35,8 @@ type Recorder struct {
 	main   ring
 	counts ring
 	byID   map[string]*v1.Trace
+	// Bytes of bodies held across both rings, and the most allowed
+	held, budget int
 }
 
 // Traces in start order, evicting the oldest at capacity.
@@ -45,16 +45,22 @@ type ring struct {
 	items []*v1.Trace
 }
 
-// Appends a trace and returns evicted IDs.
-func (r *ring) add(t *v1.Trace) []string {
+// Appends a trace and returns the traces evicted
+func (r *ring) add(t *v1.Trace) []*v1.Trace {
 	r.items = append(r.items, t)
-	var dropped []string
+	var dropped []*v1.Trace
 	for len(r.items) > r.size {
-		dropped = append(dropped, r.items[0].GetId())
-		r.items[0] = nil
-		r.items = r.items[1:]
+		dropped = append(dropped, r.evict())
 	}
 	return dropped
+}
+
+// Removes the oldest trace
+func (r *ring) evict() *v1.Trace {
+	t := r.items[0]
+	r.items[0] = nil
+	r.items = r.items[1:]
+	return t
 }
 
 // Replaces a trace by ID.
@@ -75,7 +81,7 @@ func NewRecorder(bus *events.Bus, size, counts int) *Recorder {
 	if counts <= 0 {
 		counts = countRing
 	}
-	return &Recorder{events: bus, main: ring{size: size}, counts: ring{size: counts}, byID: map[string]*v1.Trace{}}
+	return &Recorder{events: bus, main: ring{size: size}, counts: ring{size: counts}, byID: map[string]*v1.Trace{}, budget: traceBudget}
 }
 
 // Records a trace as it starts
@@ -103,16 +109,37 @@ func (r *Recorder) put(t *v1.Trace, action v1.EventAction) {
 	snapshot := proto.Clone(t).(*v1.Trace)
 	r.mu.Lock()
 	rg := r.ringOf(snapshot)
-	if _, known := r.byID[snapshot.GetId()]; !known {
-		for _, id := range rg.add(snapshot) {
-			delete(r.byID, id)
-		}
-	} else {
+	if old, known := r.byID[snapshot.GetId()]; known {
+		r.held -= weight(old)
 		rg.replace(snapshot)
+	} else {
+		for _, gone := range rg.add(snapshot) {
+			r.forget(gone)
+		}
 	}
 	r.byID[snapshot.GetId()] = snapshot
+	r.held += weight(snapshot)
+	// The newest trace stays whatever its size
+	for r.held > r.budget && len(r.main.items) > 1 {
+		r.forget(r.main.evict())
+	}
 	r.mu.Unlock()
 	r.events.Publish(v1.EventKind_EVENT_KIND_TRACE, action, snapshot.GetId(), summary(snapshot))
+}
+
+// Drops an evicted trace from the index and the bytes held
+func (r *Recorder) forget(t *v1.Trace) {
+	delete(r.byID, t.GetId())
+	r.held -= weight(t)
+}
+
+// Bytes of bodies a trace holds
+func weight(t *v1.Trace) int {
+	n := len(t.GetRequest()) + len(t.GetUpstreamRequest()) + len(t.GetResponse())
+	for _, c := range t.GetToolCalls() {
+		n += len(c.GetArguments()) + len(c.GetResult())
+	}
+	return n
 }
 
 func startedBefore(a, b *v1.Trace) bool {
@@ -168,14 +195,6 @@ func summary(t *v1.Trace) *v1.Trace {
 	return out
 }
 
-// Truncates a body for trace storage.
-func capped(b []byte) string {
-	if len(b) <= traceBodyCap {
-		return string(b)
-	}
-	return string(b[:traceBodyCap])
-}
-
 // Classifies request paths, using other for unparsed proxy requests.
 func kindOf(api v1.ApiFlavor, path string) v1.TraceKind {
 	switch api {
@@ -222,10 +241,8 @@ func (s *traceSink) event(ev Event) {
 	switch ev.Kind {
 	case "text":
 		s.first()
-		if s.text.Len() < traceBodyCap {
-			s.text.WriteString(ev.Text)
-		}
-	case "tool":
+		s.text.WriteString(ev.Text)
+	case "thinking", "tool":
 		s.first()
 	case "stop":
 		if ev.Res != nil {
@@ -265,7 +282,7 @@ func (s *traceSink) result(res *Result) {
 // Response representation stored in the trace.
 func (s *traceSink) close() {
 	if s.text.Len() > 0 {
-		s.t.Response = capped([]byte(s.text.String()))
+		s.t.Response = s.text.String()
 	}
 }
 
@@ -364,17 +381,11 @@ func (p *passthroughReader) close() {
 	<-p.done
 }
 
-// Stores a prefix of unparsed responses.
+// Keeps an unparsed response whole
 type rawCapture struct {
 	buf bytes.Buffer
 }
 
 func (c *rawCapture) Write(b []byte) (int, error) {
-	if room := traceBodyCap - c.buf.Len(); room > 0 {
-		if len(b) > room {
-			b = b[:room]
-		}
-		c.buf.Write(b)
-	}
-	return len(b), nil
+	return c.buf.Write(b)
 }

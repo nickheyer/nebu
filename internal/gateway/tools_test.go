@@ -17,6 +17,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nickheyer/nebu/internal/tools"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 const kittenTool = `{"type":"web_search_20250305","name":"web_search","max_uses":8,"user_location":{"type":"approximate","city":"Portland","country":"US"}}`
@@ -1131,7 +1132,7 @@ func TestProbeTemplateTools(t *testing.T) {
 // the slot's, an alias naming none inherits them
 func TestEffectiveProfileTools(t *testing.T) {
 	slot := &v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_KEEP, ToolServers: []string{"web"}, MutatingTools: true}
-	got := EffectiveProfile(&v1.Profile{AllowAll: true}, slot)
+	got := EffectiveProfile(&v1.Profile{AllowAll: proto.Bool(true)}, slot)
 	if strings.Join(got.GetToolServers(), ",") != "web" || !got.GetMutatingTools() || !got.GetAllowAll() {
 		t.Fatalf("inherited %v", got)
 	}

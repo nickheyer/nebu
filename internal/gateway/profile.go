@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,22 +55,171 @@ func foldSystem(c *Chat, mode v1.SystemMessages) {
 
 // Reports whether a profile sets anything, an empty one inheriting everything
 func ProfileSet(p *v1.Profile) bool {
-	return p.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED || p.GetAllowAll() || len(p.GetToolServers()) > 0 || p.GetMutatingTools()
+	return p.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED || p.GetAllowAll() || len(p.GetToolServers()) > 0 || p.GetMutatingTools() ||
+		p.GetSystemPrompt() != v1.SystemPrompt_SYSTEM_PROMPT_UNSPECIFIED || p.GetOverrides() != "" || p != nil && (p.AllowAll != nil || p.StripExtras != nil)
 }
 
-// Merges an alias profile over its slot's, the alias's tool servers replacing the slot's when named
+// Whether permission checks are answered as allowed, which a profile that says nothing does
+func AllowsAll(p *v1.Profile) bool {
+	if p == nil || p.AllowAll == nil {
+		return true
+	}
+	return *p.AllowAll
+}
+
+// Whether a client's extras stay out, which a profile that says nothing does for an Anthropic client
+func StripsExtras(p *v1.Profile, format v1.ApiFlavor) bool {
+	if p == nil || p.StripExtras == nil {
+		return format == v1.ApiFlavor_API_FLAVOR_ANTHROPIC
+	}
+	return *p.StripExtras
+}
+
+// The opening of the block a coding agent harness prepends to its system prompt for attribution
+const attributionMarker = "x-anthropic-billing-header"
+
+// Refuses a profile whose shaping cannot be applied as written
+func ValidateProfile(p *v1.Profile) error {
+	if p.GetSystemPrompt() == v1.SystemPrompt_SYSTEM_PROMPT_REPLACE && strings.TrimSpace(p.GetSystemText()) == "" {
+		return errors.New("a profile that replaces the system prompt needs system text")
+	}
+	if p.GetSystemPrompt() != v1.SystemPrompt_SYSTEM_PROMPT_REPLACE && p.GetSystemText() != "" {
+		return errors.New("system text is set, so the system prompt must be replace")
+	}
+	if o := p.GetOverrides(); o != "" {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(o), &fields); err != nil {
+			return fmt.Errorf("overrides must be a JSON object: %w", err)
+		}
+	}
+	return nil
+}
+
+// Merges an alias profile over its slot's, every alias field that is set winning
 func EffectiveProfile(alias, slot *v1.Profile) *v1.Profile {
 	if !ProfileSet(alias) {
 		return slot
 	}
-	out := &v1.Profile{SystemMessages: slot.GetSystemMessages(), AllowAll: slot.GetAllowAll() || alias.GetAllowAll(), ToolServers: append([]string(nil), slot.GetToolServers()...), MutatingTools: slot.GetMutatingTools()}
+	if slot == nil {
+		slot = &v1.Profile{}
+	}
+	out := &v1.Profile{
+		SystemMessages: slot.GetSystemMessages(), AllowAll: slot.AllowAll,
+		ToolServers: append([]string(nil), slot.GetToolServers()...), MutatingTools: slot.GetMutatingTools(),
+		SystemPrompt: slot.GetSystemPrompt(), SystemText: slot.GetSystemText(), StripExtras: slot.StripExtras, Overrides: slot.GetOverrides(),
+	}
+	if alias.AllowAll != nil {
+		out.AllowAll = alias.AllowAll
+	}
+	if alias.StripExtras != nil {
+		out.StripExtras = alias.StripExtras
+	}
 	if alias.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
 		out.SystemMessages = alias.GetSystemMessages()
 	}
 	if len(alias.GetToolServers()) > 0 {
 		out.ToolServers, out.MutatingTools = append([]string(nil), alias.GetToolServers()...), alias.GetMutatingTools()
 	}
+	if alias.GetSystemPrompt() != v1.SystemPrompt_SYSTEM_PROMPT_UNSPECIFIED {
+		out.SystemPrompt, out.SystemText = alias.GetSystemPrompt(), alias.GetSystemText()
+	}
+	if alias.GetOverrides() != "" {
+		out.Overrides = alias.GetOverrides()
+	}
 	return out
+}
+
+// Whether a profile changes what the runtime gets beyond what passing the body through would
+func Shaped(p *v1.Profile, format v1.ApiFlavor) bool {
+	return p.GetSystemPrompt() == v1.SystemPrompt_SYSTEM_PROMPT_DROP || p.GetSystemPrompt() == v1.SystemPrompt_SYSTEM_PROMPT_REPLACE || StripsExtras(p, format) || p.GetOverrides() != ""
+}
+
+// Applies the profile's system prompt and field stripping to a chat before rendering
+func shape(c *Chat, p *v1.Profile) {
+	switch p.GetSystemPrompt() {
+	case v1.SystemPrompt_SYSTEM_PROMPT_DROP:
+		c.Messages = withoutSystem(c.Messages)
+	case v1.SystemPrompt_SYSTEM_PROMPT_REPLACE:
+		c.Messages = append([]Message{{Role: "system", Parts: []Part{{Type: "text", Text: p.GetSystemText()}}}}, withoutSystem(c.Messages)...)
+	}
+	if StripsExtras(p, c.Format) {
+		stripExtras(c)
+	}
+}
+
+// The turns that are not system turns
+func withoutSystem(messages []Message) []Message {
+	out := make([]Message, 0, len(messages))
+	for _, m := range messages {
+		if m.Role != "system" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// Removes every field the gateway has no mapping for at every level, and the attribution block
+func stripExtras(c *Chat) {
+	c.Extra = nil
+	kept := c.Messages[:0]
+	for _, m := range c.Messages {
+		m.Extra = nil
+		parts := m.Parts[:0]
+		for _, p := range m.Parts {
+			if m.Role == "system" && p.Type == "text" && strings.HasPrefix(strings.TrimSpace(p.Text), attributionMarker) {
+				continue
+			}
+			p.Extra = nil
+			parts = append(parts, p)
+		}
+		m.Parts = parts
+		if m.Role == "system" && len(m.Parts) == 0 {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	c.Messages = kept
+	for i := range c.Tools {
+		c.Tools[i].Extra = nil
+	}
+}
+
+// Renders requests through a flavor with the profile's overrides written over chats and prompts
+type shaped struct {
+	Flavor
+	overrides string
+}
+
+// The upstream flavor with the profile's overrides, the flavor itself when it has none
+func shapeFlavor(f Flavor, p *v1.Profile) Flavor {
+	if p.GetOverrides() == "" {
+		return f
+	}
+	return shaped{Flavor: f, overrides: p.GetOverrides()}
+}
+
+func (s shaped) RenderRequest(c *Chat) (string, []byte, error) {
+	path, body, err := s.Flavor.RenderRequest(c)
+	if err != nil || c.Kind != "chat" && c.Kind != "generate" {
+		return path, body, err
+	}
+	body, err = withOverrides(body, s.overrides)
+	return path, body, err
+}
+
+// Writes the fields of a JSON object over a JSON body's, the overrides winning
+func withOverrides(body []byte, overrides string) ([]byte, error) {
+	var fields, over map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, fmt.Errorf("request is not a JSON object: %w", err)
+	}
+	if err := json.Unmarshal([]byte(overrides), &over); err != nil {
+		return nil, fmt.Errorf("overrides are not a JSON object: %w", err)
+	}
+	for k, v := range over {
+		fields[k] = v
+	}
+	return json.Marshal(fields)
 }
 
 // Combines plain text parts for templates

@@ -74,33 +74,40 @@ type antWriter interface {
 type antWhole struct {
 	w      http.ResponseWriter
 	client Flavor
+	chat   *Chat
 	model  string
 	blocks []any
-	text   strings.Builder
+	said   textGather
 	tools  toolGather
 }
 
+// Writes the thinking and text gathered so far as blocks of their own
 func (a *antWhole) flush() {
-	if a.text.Len() > 0 {
-		a.blocks = append(a.blocks, antText{Type: "text", Text: a.text.String()})
-		a.text.Reset()
+	if a.said.thinking.Len() > 0 {
+		a.blocks = append(a.blocks, antThinking{Type: "thinking", Thinking: a.said.thinking.String()})
+		a.said.thinking.Reset()
+	}
+	if a.said.text.Len() > 0 {
+		a.blocks = append(a.blocks, antText{Type: "text", Text: a.said.text.String()})
+		a.said.text.Reset()
 	}
 }
 
 func (a *antWhole) Write(ev Event) error {
 	switch ev.Kind {
-	case "text":
-		a.text.WriteString(ev.Text)
+	case "text", "thinking":
+		a.said.add(ev)
 	case "tool":
 		a.tools.add(ev)
 	case "stop":
 		a.flush()
-		for _, c := range a.tools.list() {
+		calls := antToolIDs(a.tools.list())
+		for _, c := range calls {
 			input, ok := jsonArgs(c.Args)
 			if !ok {
 				return &toolArgsError{name: c.Name}
 			}
-			a.blocks = append(a.blocks, antBlock{Type: "tool_use", ID: antToolID(c.ID), Name: c.Name, Input: input})
+			a.blocks = append(a.blocks, antBlock{Type: "tool_use", ID: c.ID, Name: c.Name, Input: input})
 		}
 		res := ev.Res
 		if res == nil {
@@ -109,7 +116,7 @@ func (a *antWhole) Write(ev Event) error {
 		if a.blocks == nil {
 			a.blocks = []any{}
 		}
-		reply := antReply{ID: antID(), Type: "message", Role: "assistant", Model: a.model, Content: a.blocks, StopReason: ptr(antReason(stopOf(res.Stop, len(a.tools.order)))), Usage: antUsageOf(res), Extra: res.Extra}
+		reply := antReply{ID: antID(), Type: "message", Role: "assistant", Model: a.model, Content: a.blocks, StopReason: ptr(antReason(stopOf(res.Stop, len(a.tools.order)))), Usage: antUsageOf(res), SafeguardResults: safeguardResults(a.chat, calls), Extra: res.Extra}
 		data, err := json.Marshal(reply)
 		if err != nil {
 			return err

@@ -1,4 +1,4 @@
-h1:vecXk+Yc0GbD3TtSUUcnLdmPuFWjyupcReTTIqX7uXE=
+h1:NlwXI7Q98Yisq4xqyWu+IiUMAxMTDiu3GyblcJILhDw=
 20260907055342_init.sql h1:lCpOos3kdDH1PA87ABrmyEXW0PuAXKFmyIER0/kZ+3E=
 20260917013548_route_profiles.sql h1:imiPc5UMI9dQoKDy46B6WTcKz/BiJAlUvZorFtgaR5E=
 20260917054526_slot_placement.sql h1:T8SbGI0v8FU5F/NU8n/mQ98vyf0g7tyrR06EqQnuC/4=
@@ -8,3 +8,4 @@ h1:vecXk+Yc0GbD3TtSUUcnLdmPuFWjyupcReTTIqX7uXE=
 20260924010000_slot_aliases_chats.sql h1:ItGIAVdmrBK0k8SS8h2vgqP8KgChnVwpWLUsopOMDxQ=
 20260925041805_mesh.sql h1:qs7NsDj87q6o+j0FohGeFRLNegDouvv0bQI9+q8Ugrw=
 20261013082747.sql h1:oKd7A+kO7k3/1+CVkP5XGbw4ii1JUxAIyz4cQXBCfKc=
+20261016033855_profile_json.sql h1:vQILmTEOFTxl2HgX0zAAymyUaTPmCCZV3X+nl0c7ZYY=

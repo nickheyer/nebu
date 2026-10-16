@@ -237,7 +237,7 @@ CREATE TABLE build_patches (
   PRIMARY KEY (build_id, position)
 );
 
--- Reservations of devices and memory with one public name each, and the limits their route enforces
+-- Reservations of devices and memory with one public name each, the limits their route enforces, and its shaping as JSON
 CREATE TABLE slots (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
@@ -257,9 +257,8 @@ CREATE TABLE slots (
   burst INTEGER NOT NULL DEFAULT 0,
   request_timeout_ms INTEGER NOT NULL DEFAULT 0,
   upstream_timeout_ms INTEGER NOT NULL DEFAULT 0,
-  system_messages TEXT NOT NULL DEFAULT '',
   formation_id TEXT NOT NULL DEFAULT '',
-  allow_all INTEGER NOT NULL DEFAULT 0
+  profile TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE slot_devices (
@@ -286,8 +285,7 @@ CREATE TABLE slot_aliases (
   burst INTEGER NOT NULL DEFAULT 0,
   request_timeout_ms INTEGER NOT NULL DEFAULT 0,
   upstream_timeout_ms INTEGER NOT NULL DEFAULT 0,
-  system_messages TEXT NOT NULL DEFAULT '',
-  allow_all INTEGER NOT NULL DEFAULT 0,
+  profile TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (slot_id, position)
 );
 CREATE UNIQUE INDEX slot_aliases_name ON slot_aliases (name);
@@ -326,8 +324,7 @@ CREATE TABLE routes (
   requests INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL,
   served TEXT NOT NULL DEFAULT '',
-  system_messages TEXT NOT NULL DEFAULT '',
-  allow_all INTEGER NOT NULL DEFAULT 0
+  profile TEXT NOT NULL DEFAULT ''
 );
 
 -- Configured places models come from, one row per source, seeded defaults included

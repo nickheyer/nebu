@@ -149,7 +149,7 @@ func servedBySeats(r *v1.Route) bool {
 // for a route one server answers, and for replicas the seat whose cache holds the conversation's
 // prefix, then the least loaded under its cap, ties to the best link from the entry node, two at
 // most so a seat that refuses or fails passes the request on once
-func (g *Gateway) targets(route *v1.Route, path string, body []byte, client Flavor, entry string, cap uint32) ([]target, string, error) {
+func (g *Gateway) targets(route *v1.Route, in *inbound, entry string, cap uint32) ([]target, string, error) {
 	if route.GetShape() != v1.Shape_SHAPE_REPLICAS {
 		u, err := url.Parse(route.GetEndpoint())
 		if err != nil {
@@ -183,10 +183,7 @@ func (g *Gateway) targets(route *v1.Route, path string, body []byte, client Flav
 		}
 		return nil, "", errNoSeat
 	}
-	key := ""
-	if chat, err := client.ParseRequest(path, body); err == nil {
-		key = prefixKey(route.GetName(), chat, policy)
-	}
+	key := prefixKey(route.GetName(), in.chat, policy)
 	sort.SliceStable(ready, func(i, j int) bool {
 		a, b := ready[i], ready[j]
 		la, lb := g.table.SeatInFlight(a.GetInstanceId()), g.table.SeatInFlight(b.GetInstanceId())
@@ -366,8 +363,9 @@ func (f *failover) RoundTrip(req *http.Request) (*http.Response, error) {
 // session, and records the conductor's trace id. The entry node's id goes with it, so the
 // conductor breaks seat ties by this node's links. A video job the conductor accepted is
 // remembered by its id, so polling and cancelling it from here reach the conductor
-func (g *Gateway) forward(w *traceWriter, r *http.Request, body []byte, name string, route *v1.Route, policy *v1.Policy, client Flavor) {
+func (g *Gateway) forward(w *traceWriter, r *http.Request, in *inbound, name string, route *v1.Route, policy *v1.Policy, client Flavor) {
 	t := w.t
+	body := in.body
 	t.Forwarded, t.NodeId = true, route.GetNodeId()
 	if g.peers == nil {
 		g.refuse(w, client, http.StatusServiceUnavailable, "model "+name+" is served by another node and this node belongs to no mesh", "model_unavailable")
@@ -384,13 +382,10 @@ func (g *Gateway) forward(w *traceWriter, r *http.Request, body []byte, name str
 		return
 	}
 	// The conductor answers in the client's own protocol, so its answer is parsed for the trace.
-	upstream := flavorOf(clientFlavor(r))
-	if t.Kind != v1.TraceKind_TRACE_KIND_OTHER {
-		if chat, perr := upstream.ParseRequest(r.URL.Path, body); perr == nil {
-			reader := readPassthrough(t, upstream, chat)
-			w.tee = reader.pw
-			defer reader.close()
-		}
+	if in.chat != nil {
+		reader := readPassthrough(t, client, in.chat)
+		w.tee = reader.pw
+		defer reader.close()
 	}
 	ctx := r.Context()
 	if d := policy.GetRequestTimeoutMs(); d > 0 {

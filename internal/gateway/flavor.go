@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -43,9 +44,19 @@ type Chat struct {
 	ToolChoice string
 	// MCP endpoints the request asked the gateway to connect, in the Anthropic shape
 	MCPServers []MCPServer
+	// Server side checks the request asked for on the answer's tool calls, in the Anthropic shape
+	Safeguards []Safeguard
+	// Whether the gateway answers those checks itself with every tool call not flagged
+	Allowed bool
 	// Texts to embed when Kind is embed
 	Inputs []string
 	Extra  map[string]json.RawMessage
+}
+
+// A server side check a client asked for, with the context it gave the classifier
+type Safeguard struct {
+	Type    string
+	Context json.RawMessage
 }
 
 // An MCP endpoint a request names, connected for the request alone
@@ -98,9 +109,11 @@ type Tool struct {
 
 // Complete answer or embedding vectors.
 type Result struct {
-	ID        string
-	Model     string
-	Text      string
+	ID    string
+	Model string
+	Text  string
+	// The reasoning the model wrote before its answer, when the runtime reports it apart
+	Thinking  string
 	ToolCalls []ToolCall
 	// stop, length, tool, or filter
 	Stop    string
@@ -127,9 +140,9 @@ type ToolRun struct {
 	Took   time.Duration
 }
 
-// Stream event. Start includes ID and model. Text carries a fragment. Tool
-// carries a call or indexed fragment, named in the first fragment. Stop includes
-// reason and usage. Error carries the failure message.
+// Stream event. Start includes ID and model. Text carries a fragment of the answer and
+// thinking a fragment of the reasoning before it. Tool carries a call or indexed fragment,
+// named in the first fragment. Stop includes reason and usage. Error carries the failure message.
 type Event struct {
 	Kind  string
 	Text  string
@@ -246,6 +259,20 @@ func (e *toolArgsError) Error() string {
 	return "model answered tool call " + e.name + " with arguments that are not a JSON object"
 }
 
+// Gathers streamed text and thinking into a whole answer
+type textGather struct {
+	text, thinking strings.Builder
+}
+
+func (t *textGather) add(ev Event) {
+	switch ev.Kind {
+	case "text":
+		t.text.WriteString(ev.Text)
+	case "thinking":
+		t.thinking.WriteString(ev.Text)
+	}
+}
+
 // Joins the thinking parts of a message
 func thinkingOf(parts []Part) string {
 	var b strings.Builder
@@ -279,24 +306,59 @@ func resultID(r *Result, prefix string) string {
 	return newID(prefix)
 }
 
+// The json names each wire struct maps, read from its tags once
+var knownFields sync.Map
+
+func fieldNames(known any) map[string]bool {
+	t := reflect.TypeOf(known)
+	if names, ok := knownFields.Load(t); ok {
+		return names.(map[string]bool)
+	}
+	names := map[string]bool{}
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name == "" {
+			name = t.Field(i).Name
+		}
+		names[name] = true
+	}
+	knownFields.Store(t, names)
+	return names
+}
+
 // Fields of a JSON object that a wire struct has no tag for
 func extraFields(raw []byte, known any) map[string]json.RawMessage {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &fields) != nil {
 		return nil
 	}
-	t := reflect.TypeOf(known)
-	for i := 0; i < t.NumField(); i++ {
-		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
-		if name == "" {
-			name = t.Field(i).Name
-		}
+	for name := range fieldNames(known) {
 		delete(fields, name)
 	}
 	if len(fields) == 0 {
 		return nil
 	}
 	return fields
+}
+
+// Refusals that mean the prompt outgrew the context, as llama.cpp, vLLM, and SGLang word them
+var contextRefusal = regexp.MustCompile(`(?i)exceeds? the (available |model'?s )?context|maximum context length|context (length|window|size)[^.]*exceed|longer than the (maximum|model)|too many tokens`)
+
+// Rewords a context overflow the way the Claude API refuses one, which clients compact on
+func promptTooLong(message string) string {
+	if strings.HasPrefix(message, "prompt is too long") || !contextRefusal.MatchString(message) {
+		return message
+	}
+	return "prompt is too long: " + message
+}
+
+// A refusal in the runtime's own words, the body when it names no message, reworded on context overflow
+func upstreamMessage(upstream Flavor, raw []byte) string {
+	message := upstream.ErrorMessage(raw)
+	if message == "" {
+		message = strings.TrimSpace(string(raw))
+	}
+	return promptTooLong(message)
 }
 
 // Marshals v and adds the extra fields v does not set itself

@@ -406,6 +406,9 @@ func (m *Manager) checkAliases(list []*v1.SlotAlias, self, primary string) ([]*v
 			return nil, err
 		}
 		seen[name] = true
+		if err := gateway.ValidateProfile(a.GetProfile()); err != nil {
+			return nil, fmt.Errorf("%w: alias %s: %v", ErrSlot, name, err)
+		}
 		clean := &v1.SlotAlias{Name: name}
 		if p := a.GetPolicy(); p.GetMaxInFlight()+p.GetBurst()+p.GetRequestTimeoutMs()+p.GetUpstreamTimeoutMs() > 0 || p.GetRequestsPerSecond() > 0 {
 			clean.Policy = proto.Clone(p).(*v1.Policy)
@@ -455,6 +458,9 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 	name := strings.TrimSpace(req.GetName())
 	if err := m.checkName(name, ""); err != nil {
 		return nil, err
+	}
+	if err := gateway.ValidateProfile(req.GetProfile()); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSlot, err)
 	}
 	aliases, err := m.checkAliases(req.GetAliases(), "", name)
 	if err != nil {
@@ -542,6 +548,9 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 	s, err := m.find(req.GetId())
 	if err != nil {
 		return nil, err
+	}
+	if err := gateway.ValidateProfile(req.GetProfile()); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSlot, err)
 	}
 	devices := devicesFor(req.GetPlacement(), req.GetDeviceIds())
 	if err := m.checkDevices(ctx, devices); err != nil {

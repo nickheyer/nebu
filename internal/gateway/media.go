@@ -722,7 +722,7 @@ func (g *Gateway) image(w *traceWriter, r *http.Request, req *mediaRequest, name
 		defer cancel()
 	}
 	accepted, sent, used, err := g.submitTo(ctx, targets, hold, sdcppImageJob, job, policy, name)
-	t.UpstreamRequest = capped(sent)
+	t.UpstreamRequest = string(sent)
 	if err != nil {
 		g.mediaError(w, client, t, name, err)
 		return
@@ -961,7 +961,7 @@ func (g *Gateway) startVideo(w *traceWriter, req *mediaRequest, name string, rou
 		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(d)*time.Millisecond)
 	}
 	accepted, sent, used, err := g.submitTo(ctx, targets, hold, sdcppVideoJob, job, policy, name)
-	t.UpstreamRequest = capped(sent)
+	t.UpstreamRequest = string(sent)
 	if err != nil {
 		cancel()
 		release()

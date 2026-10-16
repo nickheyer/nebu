@@ -278,7 +278,7 @@ func (ollama) ParseResult(c *Chat, body []byte) (*Result, error) {
 		r.Vectors = [][]float64{resp.Embedding}
 	}
 	if resp.Message != nil {
-		r.Text = resp.Message.Content
+		r.Text, r.Thinking = resp.Message.Content, resp.Message.Thinking
 		r.ToolCalls = olCalls(resp.Message.ToolCalls)
 	} else if resp.Response != nil {
 		r.Text = *resp.Response
@@ -320,7 +320,7 @@ func (ollama) RenderResult(c *Chat, r *Result) ([]byte, error) {
 		if broken != "" {
 			return nil, &toolArgsError{name: broken}
 		}
-		resp.Message = &olMessage{Role: "assistant", Content: r.Text, ToolCalls: calls}
+		resp.Message = &olMessage{Role: "assistant", Content: r.Text, Thinking: r.Thinking, ToolCalls: calls}
 	}
 	return json.Marshal(resp)
 }
@@ -354,6 +354,11 @@ func (ollama) ParseStream(rd io.Reader, emit func(Event) error) error {
 		text := ""
 		if chunk.Message != nil {
 			text = chunk.Message.Content
+			if chunk.Message.Thinking != "" {
+				if err := emit(Event{Kind: "thinking", Text: chunk.Message.Thinking}); err != nil {
+					return err
+				}
+			}
 			for _, t := range olCalls(chunk.Message.ToolCalls) {
 				call := t
 				final.ToolCalls = append(final.ToolCalls, call)
@@ -433,6 +438,14 @@ func (s *olStream) Write(ev Event) error {
 			return s.line(olResponse{Response: ptr(ev.Text)})
 		}
 		return s.line(olResponse{Message: &olMessage{Role: "assistant", Content: ev.Text}})
+	case "thinking":
+		if s.c.Kind == "generate" {
+			return nil
+		}
+		if err := s.flushTool(); err != nil {
+			return err
+		}
+		return s.line(olResponse{Message: &olMessage{Role: "assistant", Thinking: ev.Text}})
 	case "tool":
 		if s.open != nil && *s.open != ev.Index {
 			if err := s.flushTool(); err != nil {

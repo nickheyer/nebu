@@ -27,6 +27,8 @@ type antSource struct {
 	MediaType string `json:"media_type,omitempty"`
 	Data      string `json:"data,omitempty"`
 	URL       string `json:"url,omitempty"`
+	// The blocks of a document whose source is content
+	Content json.RawMessage `json:"content,omitempty"`
 }
 
 type antBlock struct {
@@ -68,6 +70,13 @@ type antText struct {
 	Text string `json:"text"`
 }
 
+// A thinking block written to clients, its signature empty since no runtime here signs reasoning
+type antThinking struct {
+	Type      string `json:"type"`
+	Thinking  string `json:"thinking"`
+	Signature string `json:"signature"`
+}
+
 type antMessage struct {
 	Role    string                     `json:"role"`
 	Content json.RawMessage            `json:"content"`
@@ -103,7 +112,53 @@ type antRequest struct {
 	Tools         []antTool                  `json:"tools,omitempty"`
 	ToolChoice    *antToolChoice             `json:"tool_choice,omitempty"`
 	MCPServers    []antMCPServer             `json:"mcp_servers,omitempty"`
+	Safeguards    []antSafeguard             `json:"safeguards,omitempty"`
 	Extra         map[string]json.RawMessage `json:"-"`
+}
+
+// A server side check a request asks for on the answer's tool calls
+type antSafeguard struct {
+	Type    string          `json:"type"`
+	Context json.RawMessage `json:"classifier_context,omitempty"`
+}
+
+// The outcome of a server side check, one verdict per tool use id
+type antSafeguardResult struct {
+	Type   string             `json:"type"`
+	Status antSafeguardStatus `json:"status"`
+}
+
+type antSafeguardStatus struct {
+	Type     string                `json:"type"`
+	ToolUses map[string]antVerdict `json:"tool_uses"`
+}
+
+type antVerdict struct {
+	Type    string `json:"type"`
+	Outcome string `json:"outcome"`
+}
+
+// The check the gateway answers itself
+const dangerousToolUse = "dangerous_tool_use"
+
+// Answers the checks a request asked for with every tool call not flagged, none unless the
+// route allows all
+func safeguardResults(c *Chat, calls []ToolCall) []antSafeguardResult {
+	if c == nil || !c.Allowed {
+		return nil
+	}
+	var out []antSafeguardResult
+	for _, s := range c.Safeguards {
+		if s.Type != dangerousToolUse {
+			continue
+		}
+		uses := map[string]antVerdict{}
+		for _, call := range calls {
+			uses[call.ID] = antVerdict{Type: "evaluated", Outcome: "not_flagged"}
+		}
+		out = append(out, antSafeguardResult{Type: s.Type, Status: antSafeguardStatus{Type: "available", ToolUses: uses}})
+	}
+	return out
 }
 
 func (r *antRequest) UnmarshalJSON(data []byte) error {
@@ -190,15 +245,16 @@ func (r *antResponse) UnmarshalJSON(data []byte) error {
 
 // A message written to a client
 type antReply struct {
-	ID           string                     `json:"id"`
-	Type         string                     `json:"type"`
-	Role         string                     `json:"role"`
-	Model        string                     `json:"model"`
-	Content      []any                      `json:"content"`
-	StopReason   *string                    `json:"stop_reason"`
-	StopSequence *string                    `json:"stop_sequence"`
-	Usage        antUsage                   `json:"usage"`
-	Extra        map[string]json.RawMessage `json:"-"`
+	ID               string                     `json:"id"`
+	Type             string                     `json:"type"`
+	Role             string                     `json:"role"`
+	Model            string                     `json:"model"`
+	Content          []any                      `json:"content"`
+	StopReason       *string                    `json:"stop_reason"`
+	StopSequence     *string                    `json:"stop_sequence"`
+	Usage            antUsage                   `json:"usage"`
+	SafeguardResults []antSafeguardResult       `json:"safeguard_results,omitempty"`
+	Extra            map[string]json.RawMessage `json:"-"`
 }
 
 func (r antReply) MarshalJSON() ([]byte, error) {
@@ -210,6 +266,7 @@ func (r antReply) MarshalJSON() ([]byte, error) {
 type antDelta struct {
 	Type        string                     `json:"type"`
 	Text        string                     `json:"text"`
+	Thinking    string                     `json:"thinking"`
 	PartialJSON string                     `json:"partial_json"`
 	StopReason  *string                    `json:"stop_reason"`
 	Extra       map[string]json.RawMessage `json:"-"`
@@ -341,7 +398,15 @@ func (anthropic) ParseRequest(path string, body []byte) (*Chat, error) {
 		}
 	}
 	for _, t := range req.Tools {
+		// Every tool is offered upfront, since no runtime here searches tools for the model
+		if strings.HasPrefix(t.Type, "tool_search_tool") {
+			continue
+		}
+		delete(t.Extra, "defer_loading")
 		c.Tools = append(c.Tools, Tool{Type: t.Type, Name: t.Name, Description: t.Description, Schema: t.InputSchema, Strict: t.Strict, Extra: t.Extra})
+	}
+	for _, s := range req.Safeguards {
+		c.Safeguards = append(c.Safeguards, Safeguard{Type: s.Type, Context: s.Context})
 	}
 	for _, s := range req.MCPServers {
 		if s.Type != "url" {
@@ -372,8 +437,7 @@ func (anthropic) ParseRequest(path string, body []byte) (*Chat, error) {
 	return c, nil
 }
 
-// Turns text and image blocks into parts, plus thinking blocks in assistant
-// turns. Any other block type is refused by name.
+// Turns blocks into parts, documents as text, opaque and reference blocks left out, the rest refused by name
 func antParts(blocks []antBlock, assistant bool) ([]Part, error) {
 	var out []Part
 	for _, b := range blocks {
@@ -390,11 +454,39 @@ func antParts(blocks []antBlock, assistant bool) ([]Part, error) {
 				return nil, bad("thinking blocks belong in assistant turns")
 			}
 			out = append(out, Part{Type: "thinking", Text: b.Thinking, Data: b.Signature, Extra: b.Extra})
+		case "document":
+			out = append(out, Part{Type: "text", Text: documentText(b)})
+		case "redacted_thinking", "tool_reference":
 		default:
 			return nil, bad("%s blocks are not content the gateway can pass to a model", b.Type)
 		}
 	}
 	return out, nil
+}
+
+// The text a model reads for a document block, under its title when it has one
+func documentText(b antBlock) string {
+	var text string
+	switch src := b.Source; {
+	case src == nil:
+	case src.Type == "text":
+		text = src.Data
+	case src.Type == "content":
+		if blocks, err := antBlocks(src.Content); err == nil {
+			parts, _ := antParts(blocks, false)
+			text = textOf(parts)
+		}
+	case src.Type == "url":
+		text = "[a document at " + src.URL + " the model cannot read]"
+	default:
+		text = "[a " + src.MediaType + " document the model cannot read]"
+	}
+	var title string
+	json.Unmarshal(b.Extra["title"], &title)
+	if title != "" {
+		return title + "\n" + text
+	}
+	return text
 }
 
 // Renders parts as blocks. Blank text is left out because the API refuses it.
@@ -442,6 +534,12 @@ func (anthropic) RenderRequest(c *Chat) (string, []byte, error) {
 	req := antRequest{Model: c.Model, MaxTokens: c.MaxTokens, Temperature: c.Temperature, TopP: c.TopP, TopK: c.TopK, StopSequences: c.Stop, Stream: c.Stream, Extra: keep(c.Extra)}
 	if req.MaxTokens == 0 {
 		req.MaxTokens = anthropicMaxTokens
+	}
+	// The checks go on to a runtime of this API only when the gateway does not answer them
+	if native && !c.Allowed {
+		for _, s := range c.Safeguards {
+			req.Safeguards = append(req.Safeguards, antSafeguard{Type: s.Type, Context: s.Context})
+		}
 	}
 	// The API samples with temperature or top_p, never both. A top_p of 1 changes nothing and is dropped.
 	if req.Temperature != nil && req.TopP != nil {
@@ -572,6 +670,8 @@ func (anthropic) ParseResult(c *Chat, body []byte) (*Result, error) {
 		switch b.Type {
 		case "text":
 			r.Text += b.Text
+		case "thinking":
+			r.Thinking += b.Thinking
 		case "tool_use":
 			r.ToolCalls = append(r.ToolCalls, ToolCall{ID: b.ID, Name: b.Name, Args: string(b.Input)})
 		}
@@ -596,18 +696,32 @@ func (anthropic) RenderResult(c *Chat, r *Result) ([]byte, error) {
 		return json.Marshal(map[string]any{"input_tokens": r.In})
 	}
 	content := []any{}
+	if r.Thinking != "" {
+		content = append(content, antThinking{Type: "thinking", Thinking: r.Thinking})
+	}
 	if r.Text != "" {
 		content = append(content, antText{Type: "text", Text: r.Text})
 	}
-	for _, t := range r.ToolCalls {
+	calls := antToolIDs(r.ToolCalls)
+	for _, t := range calls {
 		input, ok := jsonArgs(t.Args)
 		if !ok {
 			return nil, &toolArgsError{name: t.Name}
 		}
-		content = append(content, antBlock{Type: "tool_use", ID: antToolID(t.ID), Name: t.Name, Input: input})
+		content = append(content, antBlock{Type: "tool_use", ID: t.ID, Name: t.Name, Input: input})
 	}
-	resp := antReply{ID: antID(), Type: "message", Role: "assistant", Model: r.Model, Content: content, StopReason: ptr(antReason(r.Stop)), Usage: antUsageOf(r), Extra: r.Extra}
+	resp := antReply{ID: antID(), Type: "message", Role: "assistant", Model: r.Model, Content: content, StopReason: ptr(antReason(r.Stop)), Usage: antUsageOf(r), SafeguardResults: safeguardResults(c, calls), Extra: r.Extra}
 	return json.Marshal(resp)
+}
+
+// The calls with the ids they are written to the client under
+func antToolIDs(calls []ToolCall) []ToolCall {
+	out := make([]ToolCall, 0, len(calls))
+	for _, c := range calls {
+		c.ID = antToolID(c.ID)
+		out = append(out, c)
+	}
+	return out
 }
 
 func (anthropic) ParseStream(rd io.Reader, emit func(Event) error) error {
@@ -668,6 +782,9 @@ func (anthropic) ParseStream(rd io.Reader, emit func(Event) error) error {
 				tools.add(e)
 				return emit(e)
 			}
+			if ev.Delta.Type == "thinking_delta" && ev.Delta.Thinking != "" {
+				return emit(Event{Kind: "thinking", Text: ev.Delta.Thinking})
+			}
 			if ev.Delta.Text != "" {
 				return emit(Event{Kind: "text", Text: ev.Delta.Text})
 			}
@@ -697,6 +814,7 @@ func (anthropic) ParseStream(rd io.Reader, emit func(Event) error) error {
 
 type antStream struct {
 	live *liveWriter
+	chat *Chat
 	// Open content block index and kind. Kind is empty between blocks.
 	index int
 	kind  string
@@ -712,12 +830,12 @@ type antStream struct {
 // sees the message before the model has produced anything. Pings follow while
 // it works. Input tokens arrive in the closing message_delta.
 func (anthropic) Stream(w http.ResponseWriter, c *Chat) StreamWriter {
-	return newAntStream(w, c.Model)
+	return newAntStream(w, c, c.Model)
 }
 
-func newAntStream(w http.ResponseWriter, model string) *antStream {
+func newAntStream(w http.ResponseWriter, c *Chat, model string) *antStream {
 	streamHeaders(w, "text/event-stream")
-	s := &antStream{live: newLiveWriter(w, antPing), index: -1, done: map[int]bool{}}
+	s := &antStream{live: newLiveWriter(w, antPing), chat: c, index: -1, done: map[int]bool{}}
 	msg := antReply{ID: antID(), Type: "message", Role: "assistant", Model: model, Content: []any{}}
 	s.live.sse("message_start", map[string]any{"type": "message_start", "message": msg})
 	return s
@@ -804,6 +922,16 @@ func (s *antStream) Write(ev Event) error {
 			}
 		}
 		return s.delta(map[string]any{"type": "text_delta", "text": ev.Text})
+	case "thinking":
+		if s.kind != "thinking" {
+			if err := s.settle(); err != nil {
+				return err
+			}
+			if err := s.open(antThinking{Type: "thinking"}, "thinking"); err != nil {
+				return err
+			}
+		}
+		return s.delta(map[string]any{"type": "thinking_delta", "thinking": ev.Text})
 	case "tool":
 		s.tools.add(ev)
 		if s.kind != "tool_use" || s.tool != ev.Index {
@@ -841,9 +969,12 @@ func (s *antStream) Write(ev Event) error {
 			res = &Result{}
 		}
 		reason := antReason(stopOf(res.Stop, len(s.tools.order)))
-		// The delta carries the message's closing fields: the stop reason, input
-		// tokens the runtime counted late, and every other top-level key it added.
+		// The delta carries the message's closing fields, the verdicts of the checks the request
+		// asked for, and every other top-level key the runtime added
 		delta := map[string]any{"stop_reason": reason, "stop_sequence": nil}
+		if results := safeguardResults(s.chat, s.tools.list()); results != nil {
+			delta["safeguard_results"] = results
+		}
 		for k, v := range res.Extra {
 			if _, taken := delta[k]; !taken {
 				delta[k] = v

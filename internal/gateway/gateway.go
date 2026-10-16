@@ -49,6 +49,45 @@ type Credentials interface {
 // Marks requests made in process, which pass without credentials
 type localKey struct{}
 
+// A request as the client sent it and, when the path is a chat, parsed once for every step
+type inbound struct {
+	body []byte
+	chat *Chat
+	// Why there is no chat, for the steps that need one
+	err error
+	// The client headers the runtime gets, none when the route leaves the client's extras out
+	from http.Header
+}
+
+// The client headers a runtime gets, none when the profile leaves the client's extras out
+func passHeaders(r *http.Request, p *v1.Profile, format v1.ApiFlavor) http.Header {
+	if StripsExtras(p, format) {
+		return nil
+	}
+	return r.Header
+}
+
+// Removes the headers a client identifies its session and capabilities with
+func dropIdentity(h http.Header) {
+	for name := range h {
+		if strings.HasPrefix(name, "Anthropic-") || strings.HasPrefix(name, "X-Claude-Code-") {
+			delete(h, name)
+		}
+	}
+}
+
+// Reads a request once, parsing the body when the path is a chat, prompt, embedding, or count
+func (g *Gateway) read(r *http.Request, api v1.ApiFlavor, body []byte) *inbound {
+	in := &inbound{body: body}
+	switch kindOf(api, r.URL.Path) {
+	case v1.TraceKind_TRACE_KIND_CHAT, v1.TraceKind_TRACE_KIND_GENERATE, v1.TraceKind_TRACE_KIND_EMBED, v1.TraceKind_TRACE_KIND_COUNT:
+		in.chat, in.err = flavorOf(api).ParseRequest(r.URL.Path, body)
+	default:
+		in.err = bad("%s is not an endpoint the gateway translates", r.URL.Path)
+	}
+	return in
+}
+
 // Routes requests by model and translates OpenAI, Anthropic, and Ollama protocols.
 type Gateway struct {
 	table     *Table
@@ -388,8 +427,8 @@ func (g *Gateway) about(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"version": g.version})
 }
 
-// Starts a request trace with caller, model, and protocol.
-func (g *Gateway) trace(r *http.Request, name string, body []byte, api v1.ApiFlavor) *v1.Trace {
+// Starts a request trace with caller, model, protocol, and the body whole
+func (g *Gateway) trace(r *http.Request, name string, in *inbound, api v1.ApiFlavor) *v1.Trace {
 	t := &v1.Trace{
 		Id:           db.NewID(),
 		Route:        name,
@@ -397,14 +436,10 @@ func (g *Gateway) trace(r *http.Request, name string, body []byte, api v1.ApiFla
 		Path:         r.URL.Path,
 		Kind:         kindOf(api, r.URL.Path),
 		StartedAt:    timestamppb.Now(),
-		RequestBytes: uint64(len(body)),
-		Request:      capped(body),
+		RequestBytes: uint64(len(in.body)),
+		Request:      string(in.body),
 		Remote:       r.RemoteAddr,
-	}
-	if t.Kind != v1.TraceKind_TRACE_KIND_OTHER {
-		if chat, err := flavorOf(api).ParseRequest(r.URL.Path, body); err == nil {
-			t.Stream = chat.Stream
-		}
+		Stream:       in.chat != nil && in.chat.Stream,
 	}
 	g.traces.Start(t)
 	return t
@@ -417,7 +452,8 @@ func (g *Gateway) refuse(w *traceWriter, client Flavor, status int, message, kin
 }
 
 func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
-	client := flavorOf(clientFlavor(r))
+	api := clientFlavor(r)
+	client := flavorOf(api)
 	// Video operations use the job ID.
 	if strings.HasPrefix(r.URL.Path, videosPath) && r.Method != http.MethodPost {
 		g.video(rw, r, client)
@@ -427,8 +463,9 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	name := modelName(r, body)
-	t := g.trace(r, name, body, clientFlavor(r))
+	in := g.read(r, api, body)
+	name := modelName(r, in)
+	t := g.trace(r, name, in, api)
 	rw.Header().Set(traceHeader, t.GetId())
 	w := &traceWriter{ResponseWriter: rw, t: t}
 	defer func() {
@@ -438,7 +475,7 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		t.Status, t.ResponseBytes = uint32(w.status), w.bytes
 		g.traces.Finish(t)
 	}()
-	if g.allowAll(w, r, body, name, client) {
+	if g.allowAll(w, in, name, client) {
 		return
 	}
 	// Exclude token counts from served request counters.
@@ -473,6 +510,15 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t.InstanceId, t.SlotId, t.UpstreamApi = route.GetInstanceId(), route.GetSlotId(), route.GetApi()
+	in.from = passHeaders(r, route.GetProfile(), api)
+	if in.chat != nil {
+		in.chat.Allowed = AllowsAll(route.GetProfile())
+		for _, s := range in.chat.Safeguards {
+			if in.chat.Allowed && s.Type != dangerousToolUse {
+				g.log.Warn("a check the request asked for is not one the gateway answers", "model", name, "safeguard", s.Type)
+			}
+		}
+	}
 	// A route conducted elsewhere is answered by that node's gateway.
 	entry := r.Header.Get(entryHeader)
 	if route.GetForwarded() {
@@ -481,7 +527,7 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 			g.refuse(w, client, http.StatusBadGateway, "model "+name+" is forwarded here from "+entry+" and forwarded on from here, so no node answers it", "server_error")
 			return
 		}
-		g.forward(w, r, body, name, route, policy, client)
+		g.forward(w, r, in, name, route, policy, client)
 		return
 	}
 	if g.peers != nil && route.GetFormationId() != "" {
@@ -489,7 +535,7 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	}
 	// Hold the route while the native media job runs, one job per seat for replicas.
 	if t.GetKind() == v1.TraceKind_TRACE_KIND_IMAGE || t.GetKind() == v1.TraceKind_TRACE_KIND_VIDEO {
-		targets, _, err := g.targets(route, r.URL.Path, body, client, entry, 1)
+		targets, _, err := g.targets(route, in, entry, 1)
 		if err != nil {
 			release()
 			g.refuseSeats(w, client, name, err)
@@ -504,17 +550,17 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	if route.GetShape() == v1.Shape_SHAPE_RELAY && len(route.GetSeats()) >= 2 && (t.GetKind() == v1.TraceKind_TRACE_KIND_CHAT || t.GetKind() == v1.TraceKind_TRACE_KIND_GENERATE) {
-		g.relay(w, r, body, name, route, policy, client)
+		g.relay(w, r, in, name, route, policy, client)
 		return
 	}
-	targets, key, err := g.targets(route, r.URL.Path, body, client, entry, policy.GetMaxInFlight())
+	targets, key, err := g.targets(route, in, entry, policy.GetMaxInFlight())
 	if err != nil {
 		g.refuseSeats(w, client, name, err)
 		return
 	}
 	hold := g.holder(route, targets)
 	defer hold.done()
-	g.dispatch(w, r, body, name, route, policy, client, targets, hold, key)
+	g.dispatch(w, r, in, name, route, policy, client, targets, hold, key)
 }
 
 // Answers a request no seat can take: busy seats with 429, none ready with 503, and a route
@@ -534,22 +580,23 @@ func (g *Gateway) refuseSeats(w *traceWriter, client Flavor, name string, err er
 
 // Sends a request to the first target that takes it, translating when the client's protocol
 // differs from the runtime's, and records the seat that served it
-func (g *Gateway) dispatch(w *traceWriter, r *http.Request, body []byte, name string, route *v1.Route, policy *v1.Policy, client Flavor, targets []target, hold *seatHold, key string) {
+func (g *Gateway) dispatch(w *traceWriter, r *http.Request, in *inbound, name string, route *v1.Route, policy *v1.Policy, client Flavor, targets []target, hold *seatHold, key string) {
 	t := w.t
+	body := in.body
 	mode := g.table.SystemMode(route)
 	if t.Kind == v1.TraceKind_TRACE_KIND_CHAT {
 		open := func(ctx context.Context, chat *Chat, path string, out []byte) (*http.Response, context.CancelFunc, int, error) {
-			return g.open(ctx, targets, hold, path, out, chat.Stream, policy, r.Header, name)
+			return g.open(ctx, targets, hold, path, out, chat.Stream, policy, in.from, name)
 		}
-		if used, done := g.serveTools(w, r, body, name, route, policy, client, mode, open); done {
+		if used, done := g.serveTools(w, r, in, name, route, policy, client, mode, open); done {
 			g.served(t, route, targets, used, key)
 			return
 		}
 	}
-	// Translate when client and runtime protocols differ.
-	if clientFlavor(r) != route.GetApi() || r.URL.Path == anthropicCount {
+	// Translate when client and runtime protocols differ, and when the profile shapes the request
+	if clientFlavor(r) != route.GetApi() || r.URL.Path == anthropicCount || Shaped(route.GetProfile(), clientFlavor(r)) {
 		t.Translated = true
-		used := g.translate(w, r, body, name, route.GetServed(), mode, targets, hold, policy, client, flavorOf(route.GetApi()))
+		used := g.translate(w, r, in, name, route, mode, targets, hold, policy, client, flavorOf(route.GetApi()))
 		g.served(t, route, targets, used, key)
 		return
 	}
@@ -569,19 +616,14 @@ func (g *Gateway) dispatch(w *traceWriter, r *http.Request, body []byte, name st
 			return
 		}
 		if !bytes.Equal(shaped, body) {
-			t.UpstreamRequest = capped(shaped)
+			t.UpstreamRequest = string(shaped)
 		}
 		body = shaped
 	}
-	// Parse tokens and text into the trace during proxying. Keep a response prefix
-	// for unsupported paths or unreadable bodies.
+	// Parse tokens and text into the trace during proxying, keeping unparsed answers whole
 	upstream := flavorOf(route.GetApi())
-	chat, perr := (*Chat)(nil), error(nil)
-	if t.Kind != v1.TraceKind_TRACE_KIND_OTHER {
-		chat, perr = upstream.ParseRequest(r.URL.Path, body)
-	}
-	if chat != nil && perr == nil {
-		reader := readPassthrough(t, upstream, chat)
+	if in.chat != nil {
+		reader := readPassthrough(t, upstream, in.chat)
 		w.tee = reader.pw
 		defer reader.close()
 	} else {
@@ -609,6 +651,9 @@ func (g *Gateway) dispatch(w *traceWriter, r *http.Request, body []byte, name st
 			pr.Out.Header.Del("X-Api-Key")
 			pr.Out.Header.Del("Cookie")
 			pr.Out.Header.Del(entryHeader)
+			if in.from == nil {
+				dropIdentity(pr.Out.Header)
+			}
 		},
 		Transport:     hops,
 		FlushInterval: -1,
@@ -670,23 +715,25 @@ func relayHeaders(to, from http.Header) {
 	}
 }
 
-// Translates requests and responses between protocols, returning the index of the target that
-// served, or -1 when none did
-func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, served string, mode v1.SystemMessages, targets []target, hold *seatHold, policy *v1.Policy, client, upstream Flavor) int {
+// Translates requests and responses between protocols, shaping the request as the route's
+// profile says, returning the index of the target that served, or -1 when none did
+func (g *Gateway) translate(w *traceWriter, r *http.Request, in *inbound, name string, route *v1.Route, mode v1.SystemMessages, targets []target, hold *seatHold, policy *v1.Policy, client, upstream Flavor) int {
 	t := w.t
-	chat, err := client.ParseRequest(r.URL.Path, body)
-	if err != nil {
-		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
+	chat := in.chat
+	if chat == nil {
+		g.refuse(w, client, http.StatusBadRequest, in.err.Error(), "invalid_request_error")
 		return -1
 	}
 	// Use the runtime model name upstream and the requested alias in responses.
-	if served != "" {
+	if served := route.GetServed(); served != "" {
 		chat.Model = served
 	}
 	foldSystem(chat, mode)
+	shape(chat, route.GetProfile())
+	upstream = shapeFlavor(upstream, route.GetProfile())
 	if chat.Kind == "count" {
 		hold.to(0)
-		g.count(w, r, chat, name, targets[0].url, policy, client, upstream)
+		g.count(w, r, chat, name, targets[0].url, policy, client, upstream, in.from)
 		return 0
 	}
 	if upstream.InlineImages() {
@@ -700,9 +747,9 @@ func (g *Gateway) translate(w *traceWriter, r *http.Request, body []byte, name, 
 		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return -1
 	}
-	t.UpstreamRequest = capped(out)
+	t.UpstreamRequest = string(out)
 	chat.Model = name
-	return g.exchange(w, r, chat, name, path, out, targets, hold, policy, client, upstream)
+	return g.exchange(w, r, chat, name, path, out, targets, hold, policy, client, upstream, in.from)
 }
 
 // Opens a rendered request at the first target that takes it: a seat that refuses or fails
@@ -734,8 +781,8 @@ func (g *Gateway) open(ctx context.Context, targets []target, hold *seatHold, pa
 // Sends a rendered request to the first target that takes it and returns its answer in the
 // client's format, streaming when the client asked to. Returns the index of the target that
 // answered, or -1 when none did
-func (g *Gateway) exchange(w *traceWriter, r *http.Request, chat *Chat, name, path string, out []byte, targets []target, hold *seatHold, policy *v1.Policy, client, upstream Flavor) int {
-	resp, cancel, used, err := g.open(r.Context(), targets, hold, path, out, chat.Stream, policy, r.Header, name)
+func (g *Gateway) exchange(w *traceWriter, r *http.Request, chat *Chat, name, path string, out []byte, targets []target, hold *seatHold, policy *v1.Policy, client, upstream Flavor, from http.Header) int {
+	resp, cancel, used, err := g.open(r.Context(), targets, hold, path, out, chat.Stream, policy, from, name)
 	if err != nil {
 		g.upstreamError(w, w.t, client, name, err)
 		return -1
@@ -753,11 +800,8 @@ func (g *Gateway) deliver(w *traceWriter, r *http.Request, chat *Chat, name stri
 	relayHeaders(w.Header(), resp.Header)
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-		message := upstream.ErrorMessage(raw)
-		if message == "" {
-			message = strings.TrimSpace(string(raw))
-		}
 		// The runtime's own words reach the client, which matches on them to recover.
+		message := upstreamMessage(upstream, raw)
 		t.Error = "upstream: " + message
 		client.Error(w, resp.StatusCode, message, errorKind(resp.StatusCode, raw))
 		return
@@ -793,8 +837,9 @@ func (g *Gateway) deliver(w *traceWriter, r *http.Request, chat *Chat, name stri
 	res, err := upstream.ParseResult(chat, raw)
 	if err != nil {
 		if refusal, ok := errors.AsType[*upstreamRefusal](err); ok {
-			t.Error = "upstream: " + refusal.message
-			client.Error(w, refusal.status, refusal.message, errorKind(refusal.status, raw))
+			message := promptTooLong(refusal.message)
+			t.Error = "upstream: " + message
+			client.Error(w, refusal.status, message, errorKind(refusal.status, raw))
 			return
 		}
 		g.refuse(w, client, http.StatusBadGateway, "upstream answered in a shape the gateway could not read: "+err.Error(), "server_error")
@@ -845,9 +890,9 @@ func upstreamFailure(name string, err error) (int, string, string) {
 }
 
 // Uses the runtime tokenizer when available, otherwise estimates tokens.
-func (g *Gateway) count(w *traceWriter, r *http.Request, chat *Chat, name string, target *url.URL, policy *v1.Policy, client, upstream Flavor) {
+func (g *Gateway) count(w *traceWriter, r *http.Request, chat *Chat, name string, target *url.URL, policy *v1.Policy, client, upstream Flavor, from http.Header) {
 	res := &Result{Model: name}
-	n, err := g.countUpstream(r.Context(), chat, target, policy, upstream, r.Header)
+	n, err := g.countUpstream(r.Context(), chat, target, policy, upstream, from)
 	if err != nil {
 		g.log.Debug("gateway count estimated", "model", name, "err", err)
 		n = estimateTokens(chat)
@@ -937,14 +982,18 @@ func isTimeout(err error) bool {
 	return errors.As(err, &t) && t.Timeout()
 }
 
-// Finds the model in the header, query, or body
-func modelName(r *http.Request, body []byte) string {
+// Finds the model in the header, query, the parsed chat, or the body
+func modelName(r *http.Request, in *inbound) string {
 	if v := r.Header.Get(modelHeader); v != "" {
 		return v
 	}
 	if v := r.URL.Query().Get("model"); v != "" {
 		return v
 	}
+	if in.chat != nil {
+		return in.chat.Model
+	}
+	body := in.body
 	if len(body) > 0 && strings.HasPrefix(strings.TrimSpace(r.Header.Get("Content-Type")), "application/json") || bytes.HasPrefix(bytes.TrimSpace(body), []byte("{")) {
 		var probe struct {
 			Model string `json:"model"`
@@ -998,10 +1047,10 @@ func (t *sameHostRedirects) RoundTrip(req *http.Request) (*http.Response, error)
 }
 
 // Serves a chat whose tools the gateway runs or writes into the prompt, reporting whether it did
-func (g *Gateway) serveTools(w *traceWriter, r *http.Request, body []byte, name string, route *v1.Route, policy *v1.Policy, client Flavor, mode v1.SystemMessages, open opener) (int, bool) {
+func (g *Gateway) serveTools(w *traceWriter, r *http.Request, in *inbound, name string, route *v1.Route, policy *v1.Policy, client Flavor, mode v1.SystemMessages, open opener) (int, bool) {
 	t := w.t
-	chat, err := client.ParseRequest(r.URL.Path, body)
-	if err != nil {
+	chat := in.chat
+	if chat == nil {
 		return -1, false
 	}
 	emulate := g.table.ToolSupport(route) == v1.ToolSupport_TOOL_SUPPORT_EMULATED
@@ -1015,11 +1064,12 @@ func (g *Gateway) serveTools(w *traceWriter, r *http.Request, body []byte, name 
 		return -1, false
 	}
 	upstream := flavorOf(route.GetApi())
-	t.Translated = clientFlavor(r) != route.GetApi()
+	t.Translated = clientFlavor(r) != route.GetApi() || Shaped(route.GetProfile(), clientFlavor(r))
 	if served := route.GetServed(); served != "" {
 		chat.Model = served
 	}
 	foldSystem(chat, mode)
+	shape(chat, route.GetProfile())
 	if upstream.InlineImages() {
 		if err := g.inlineImages(r.Context(), chat, policy); err != nil {
 			plan.close()
@@ -1030,5 +1080,6 @@ func (g *Gateway) serveTools(w *traceWriter, r *http.Request, body []byte, name 
 	if emulate {
 		upstream = emulated{upstream}
 	}
+	upstream = shapeFlavor(upstream, route.GetProfile())
 	return g.loop(w, r, chat, plan, name, open, client, upstream), true
 }
