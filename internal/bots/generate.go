@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/internal/gateway"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
@@ -99,19 +100,19 @@ func hasMode(rt *v1.Route, mode string) bool {
 }
 
 // Sends chat through the gateway and calls onDelta for streamed fragments.
-func (r *runner) chat(ctx context.Context, p *v1.Persona, model string, chat *gateway.Chat, onDelta func(string)) (*answer, error) {
-	chat.Kind, chat.Model, chat.Stream = "chat", model, onDelta != nil
+func (r *runner) chat(ctx context.Context, p *v1.Persona, model string, req *chat.Request, onDelta func(string)) (*answer, error) {
+	req.Kind, req.Model, req.Stream = chat.Chat, model, onDelta != nil
 	s := p.GetSampling()
-	chat.Temperature, chat.TopP, chat.TopK, chat.Stop = s.Temperature, s.TopP, nil, s.GetStop()
+	req.Temperature, req.TopP, req.TopK, req.Stop = s.Temperature, s.TopP, nil, s.GetStop()
 	if s.TopK != nil {
 		k := int(s.GetTopK())
-		chat.TopK = &k
+		req.TopK = &k
 	}
 	if s.MaxTokens != nil {
-		chat.MaxTokens = int(s.GetMaxTokens())
+		req.MaxTokens = int(s.GetMaxTokens())
 	}
-	flavor := gateway.FlavorFor(v1.ApiFlavor_API_FLAVOR_OPENAI)
-	path, body, err := flavor.RenderRequest(chat)
+	flavor := chat.RuntimeOf(v1.ApiFlavor_API_FLAVOR_OPENAI)
+	path, body, err := flavor.Render(req)
 	if err != nil {
 		return nil, err
 	}
@@ -124,12 +125,12 @@ func (r *runner) chat(ctx context.Context, p *v1.Persona, model string, chat *ga
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		return out, gatewayError(flavor, resp)
 	}
-	if !chat.Stream {
+	if !req.Stream {
 		raw, err := io.ReadAll(io.LimitReader(resp.Body, attachmentMax))
 		if err != nil {
 			return out, err
 		}
-		res, err := flavor.ParseResult(chat, raw)
+		res, err := flavor.ParseResult(req, raw)
 		if err != nil {
 			return out, err
 		}
@@ -138,13 +139,13 @@ func (r *runner) chat(ctx context.Context, p *v1.Persona, model string, chat *ga
 	}
 	var text strings.Builder
 	var failed error
-	err = flavor.ParseStream(resp.Body, func(ev gateway.Event) error {
+	err = flavor.ParseStream(resp.Body, func(ev chat.Event) error {
 		switch ev.Kind {
-		case "text":
+		case chat.Said:
 			text.WriteString(ev.Text)
 			onDelta(ev.Text)
-		case "error":
-			failed = errors.New(ev.Text)
+		case chat.Failed:
+			failed = errors.New(ev.Failure.Message)
 		}
 		return nil
 	})
@@ -182,7 +183,7 @@ func (r *runner) images(ctx context.Context, p *v1.Persona, model, prompt, initI
 	defer resp.Body.Close()
 	trace := resp.Header.Get(traceHeader)
 	if resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, trace, gatewayError(gateway.FlavorFor(v1.ApiFlavor_API_FLAVOR_OPENAI), resp)
+		return nil, trace, gatewayError(chat.RuntimeOf(v1.ApiFlavor_API_FLAVOR_OPENAI), resp)
 	}
 	var res struct {
 		OutputFormat string `json:"output_format"`
@@ -239,7 +240,7 @@ func (r *runner) video(ctx context.Context, p *v1.Persona, model, prompt, initIm
 		return nil, "", err
 	}
 	trace := resp.Header.Get(traceHeader)
-	flavor := gateway.FlavorFor(v1.ApiFlavor_API_FLAVOR_OPENAI)
+	flavor := chat.RuntimeOf(v1.ApiFlavor_API_FLAVOR_OPENAI)
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		defer resp.Body.Close()
 		return nil, trace, gatewayError(flavor, resp)
@@ -350,7 +351,7 @@ func (r *runner) delete(videoID string) {
 }
 
 // Extracts the gateway error message.
-func gatewayError(flavor gateway.Flavor, resp *http.Response) error {
+func gatewayError(flavor chat.Runtime, resp *http.Response) error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	message := flavor.ErrorMessage(raw)
 	if message == "" {
@@ -408,8 +409,8 @@ func isVideo(a *discordgo.MessageAttachment) bool {
 
 // Converts attachments into chat parts and samples configured video frames.
 // Videos that cannot be sampled are described in text.
-func (r *runner) attachmentParts(ctx context.Context, m *discordgo.Message) ([]gateway.Part, []string, error) {
-	var parts []gateway.Part
+func (r *runner) attachmentParts(ctx context.Context, m *discordgo.Message) ([]chat.Part, []string, error) {
+	var parts []chat.Part
 	var notes []string
 	for _, a := range m.Attachments {
 		switch {
@@ -418,7 +419,7 @@ func (r *runner) attachmentParts(ctx context.Context, m *discordgo.Message) ([]g
 			if err != nil {
 				return nil, nil, fmt.Errorf("image %s: %w", a.Filename, err)
 			}
-			parts = append(parts, gateway.Part{Type: "image", MediaType: strings.Split(a.ContentType, ";")[0], Data: base64.StdEncoding.EncodeToString(data)})
+			parts = append(parts, chat.Part{Type: "image", MediaType: strings.Split(a.ContentType, ";")[0], Data: base64.StdEncoding.EncodeToString(data)})
 		case isVideo(a):
 			frames := int(r.spec.GetMedia().GetVideoFrames())
 			if frames == 0 {
@@ -435,7 +436,7 @@ func (r *runner) attachmentParts(ctx context.Context, m *discordgo.Message) ([]g
 			}
 			notes = append(notes, fmt.Sprintf("[video attachment %s, %d frames follow in order]", a.Filename, len(sampled)))
 			for _, f := range sampled {
-				parts = append(parts, gateway.Part{Type: "image", MediaType: "image/png", Data: f})
+				parts = append(parts, chat.Part{Type: "image", MediaType: "image/png", Data: f})
 			}
 		default:
 			notes = append(notes, "[attachment: "+a.Filename+"]")

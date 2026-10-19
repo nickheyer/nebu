@@ -19,14 +19,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/chat"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 const (
-	// Carries the id of the node a forwarded request entered the mesh at, so the conductor breaks
-	// seat ties by that node's links and admits the member session that brought it
+	// The node a forwarded request entered the mesh at, for seat ties and admitting the member session
 	entryHeader = "X-Nebu-Entry"
-	// Seats a request may pass through: the one picked and, when it refuses or fails, the next
+	// Seats a request may pass through, the one picked and the next when it refuses or fails
 	seatsPerRequest = 2
 )
 
@@ -92,14 +92,13 @@ func (a *affinityTable) set(key, seat string, window time.Duration) {
 	}
 }
 
-// The hash of a conversation's prefix under the route's policy: the system message and the
-// first user message, whichever the policy covers, empty when the policy covers nothing
-func prefixKey(route string, chat *Chat, policy *v1.AffinityPolicy) string {
-	if chat == nil || policy == nil || !policy.GetSystemMessage() && !policy.GetFirstUserMessage() {
+// The hash of the system and first user messages the policy covers, empty when it covers nothing
+func prefixKey(route string, req *chat.Request, policy *v1.AffinityPolicy) string {
+	if req == nil || policy == nil || !policy.GetSystemMessage() && !policy.GetFirstUserMessage() {
 		return ""
 	}
 	var system, user string
-	for _, m := range chat.Messages {
+	for _, m := range req.Messages {
 		text := ""
 		for _, p := range m.Parts {
 			if p.Type == "text" {
@@ -133,8 +132,7 @@ func prefixKey(route string, chat *Chat, policy *v1.AffinityPolicy) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// A seat a request may go to: its endpoint and the instance counted for it, empty for a solo
-// instance whose route counter already counts it
+// A seat a request may go to, its endpoint and the instance counted, empty when the route counter counts it
 type target struct {
 	url  *url.URL
 	seat string
@@ -145,10 +143,7 @@ func servedBySeats(r *v1.Route) bool {
 	return r.GetShape() == v1.Shape_SHAPE_REPLICAS || r.GetShape() == v1.Shape_SHAPE_RELAY
 }
 
-// The seats a request may go to in order, and the key its conversation is pinned by: one target
-// for a route one server answers, and for replicas the seat whose cache holds the conversation's
-// prefix, then the least loaded under its cap, ties to the best link from the entry node, two at
-// most so a seat that refuses or fails passes the request on once
+// The seats a request may try, the pinned one first, then least loaded and nearest, with its pin key
 func (g *Gateway) targets(route *v1.Route, in *inbound, entry string, cap uint32) ([]target, string, error) {
 	if route.GetShape() != v1.Shape_SHAPE_REPLICAS {
 		u, err := url.Parse(route.GetEndpoint())
@@ -183,7 +178,7 @@ func (g *Gateway) targets(route *v1.Route, in *inbound, entry string, cap uint32
 		}
 		return nil, "", errNoSeat
 	}
-	key := prefixKey(route.GetName(), in.chat, policy)
+	key := prefixKey(route.GetName(), in.req, policy)
 	sort.SliceStable(ready, func(i, j int) bool {
 		a, b := ready[i], ready[j]
 		la, lb := g.table.SeatInFlight(a.GetInstanceId()), g.table.SeatInFlight(b.GetInstanceId())
@@ -256,8 +251,7 @@ func (g *Gateway) linkBetween(from, to string) int {
 	return g.peers.LinkBetween(from, to)
 }
 
-// Counts a request on the seat it is with, moving the count when the request passes to another
-// seat, and nothing for a route whose own counter already counts its server
+// Counts a request on the seat it is with, moving along, nothing when the route counter already counts it
 type seatHold struct {
 	table   *Table
 	targets []target
@@ -292,8 +286,7 @@ func (h *seatHold) done() {
 	}
 }
 
-// Whether a failed exchange may go to another seat: the connection never opened or dropped
-// before an answer, so nothing reached the client
+// Whether a failed exchange may go to another seat, nothing having reached the client
 func retryable(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
@@ -305,14 +298,12 @@ func retryable(err error) bool {
 	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
-// Whether a seat's answer refuses the request rather than answering it: over its limits, or
-// failing on its side, before anything of an answer was sent
+// Whether a status refuses the request rather than answering it, over its limits or failing on its side
 func refused(status int) bool {
 	return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
 }
 
-// Sends each request to the first target that takes it: a target that refuses or fails before
-// answering passes the request to the next, once, and the count follows the request
+// Sends each request to the first target that takes it, passing it on once with the count following
 type failover struct {
 	targets []target
 	hold    *seatHold
@@ -359,31 +350,28 @@ func (f *failover) RoundTrip(req *http.Request) (*http.Response, error) {
 	return nil, errors.New("no seat to send to")
 }
 
-// Sends a request for a route another member conducts to that member's gateway, under the mesh
-// session, and records the conductor's trace id. The entry node's id goes with it, so the
-// conductor breaks seat ties by this node's links. A video job the conductor accepted is
-// remembered by its id, so polling and cancelling it from here reach the conductor
-func (g *Gateway) forward(w *traceWriter, r *http.Request, in *inbound, name string, route *v1.Route, policy *v1.Policy, client Flavor) {
+// Sends a request to the member conducting its route under the mesh session, recording the conductor's trace id
+func (g *Gateway) forward(w *traceWriter, r *http.Request, in *inbound, name string, api v1.ApiFlavor, route *v1.Route, policy *v1.Policy, client chat.Client) {
 	t := w.t
 	body := in.body
 	t.Forwarded, t.NodeId = true, route.GetNodeId()
 	if g.peers == nil {
-		g.refuse(w, client, http.StatusServiceUnavailable, "model "+name+" is served by another node and this node belongs to no mesh", "model_unavailable")
+		g.refuse(w, client, http.StatusServiceUnavailable, "model "+name+" is served by another node and this node belongs to no mesh", chat.CodeModelUnavailable)
 		return
 	}
 	base, hc, err := g.peers.Dial(r.Context(), route.GetNodeId())
 	if err != nil {
-		g.refuse(w, client, http.StatusBadGateway, "the node serving "+name+" cannot be reached: "+err.Error(), "server_error")
+		g.refuse(w, client, http.StatusBadGateway, "the node serving "+name+" cannot be reached: "+err.Error(), chat.CodeServer)
 		return
 	}
 	target, err := url.Parse(base)
 	if err != nil {
-		g.refuse(w, client, http.StatusBadGateway, err.Error(), "server_error")
+		g.refuse(w, client, http.StatusBadGateway, err.Error(), chat.CodeServer)
 		return
 	}
-	// The conductor answers in the client's own protocol, so its answer is parsed for the trace.
-	if in.chat != nil {
-		reader := readPassthrough(t, client, in.chat)
+	// The conductor answers in the client's own protocol, so its answer is parsed for the trace
+	if in.req != nil {
+		reader := readPassthrough(t, chat.RuntimeOf(api), in.req)
 		w.tee = reader.pw
 		defer reader.close()
 	}
@@ -401,7 +389,7 @@ func (g *Gateway) forward(w *traceWriter, r *http.Request, in *inbound, name str
 			pr.Out.URL.RawPath = r.URL.RawPath
 			pr.Out.URL.RawQuery = r.URL.RawQuery
 			pr.Out.Host = target.Host
-			// The client's credential stays here; the session credential goes with the request.
+			// The client's credential stays here and the session credential goes with the request
 			pr.Out.Header.Del("Authorization")
 			pr.Out.Header.Del("X-Api-Key")
 			pr.Out.Header.Del("Cookie")
@@ -426,8 +414,7 @@ func (g *Gateway) forward(w *traceWriter, r *http.Request, in *inbound, name str
 	rp.ServeHTTP(w, r)
 }
 
-// Video jobs other members' gateways accepted for requests forwarded from here, by job id, so
-// their polling, download, and cancel reach the member that runs them
+// Video jobs other members accepted for requests forwarded from here, by id, so later calls reach them
 type forwardedJobs struct {
 	mu   sync.Mutex
 	byID map[string]forwardedJob
@@ -440,8 +427,7 @@ type forwardedJob struct {
 
 func newForwardedJobs() *forwardedJobs { return &forwardedJobs{byID: map[string]forwardedJob{}} }
 
-// Reads the job id out of the conductor's answer and keeps the conductor for it, handing the
-// answer back whole
+// Reads the job id out of the conductor's answer and keeps the conductor for it, the answer handed back whole
 func (j *forwardedJobs) remember(resp *http.Response, node string) error {
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	resp.Body.Close()
@@ -494,19 +480,19 @@ func (j *forwardedJobs) forget(id string) {
 }
 
 // Sends a video job's poll, download, or cancel to the member running it
-func (g *Gateway) forwardVideo(w http.ResponseWriter, r *http.Request, client Flavor, id, node string) {
+func (g *Gateway) forwardVideo(w http.ResponseWriter, r *http.Request, client chat.Client, id, node string) {
 	if g.peers == nil {
-		client.Error(w, http.StatusServiceUnavailable, "video "+id+" runs on another node and this node belongs to no mesh", "model_unavailable")
+		client.Error(w, failure(http.StatusServiceUnavailable, "video "+id+" runs on another node and this node belongs to no mesh", chat.CodeModelUnavailable))
 		return
 	}
 	base, hc, err := g.peers.Dial(r.Context(), node)
 	if err != nil {
-		client.Error(w, http.StatusBadGateway, "the node running video "+id+" cannot be reached: "+err.Error(), "server_error")
+		client.Error(w, failure(http.StatusBadGateway, "the node running video "+id+" cannot be reached: "+err.Error(), chat.CodeServer))
 		return
 	}
 	target, err := url.Parse(base)
 	if err != nil {
-		client.Error(w, http.StatusBadGateway, err.Error(), "server_error")
+		client.Error(w, failure(http.StatusBadGateway, err.Error(), chat.CodeServer))
 		return
 	}
 	self := g.peers.Self()
@@ -532,7 +518,7 @@ func (g *Gateway) forwardVideo(w http.ResponseWriter, r *http.Request, client Fl
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			g.log.Warn("gateway video forward", "video", id, "node", node, "err", err)
-			client.Error(w, http.StatusBadGateway, "the node running video "+id+" did not answer: "+err.Error(), "server_error")
+			client.Error(w, failure(http.StatusBadGateway, "the node running video "+id+" did not answer: "+err.Error(), chat.CodeServer))
 		},
 	}
 	rp.ServeHTTP(w, r)

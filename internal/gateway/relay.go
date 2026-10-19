@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
@@ -31,8 +32,7 @@ const (
 // Returned when every slot of a llama.cpp relay seat has a relay in flight
 var errSlotsBusy = errors.New("every relay slot is in use")
 
-// Everything one relay works with: the seats, the rendered request, and what the prefill seat
-// handed off
+// Everything one relay works with, the seats, the rendered request, and what the prefill seat handed off
 type relayCall struct {
 	g                     *Gateway
 	ctx                   context.Context
@@ -55,13 +55,11 @@ type relayCall struct {
 	file                    string
 }
 
-// The three moves of a relay handoff: the prefill seat's request, taking what it answered, and
-// the decode seat's request carrying the handoff
+// The moves of a relay handoff, the prefill request, taking its answer, and the decode request carrying it
 type relayHandoff interface {
-	// Whether both seats take the request at once, the prefill seat waiting for the decode seat
-	// to join, so the prefill's outcome is awaited beside the decode seat's answer
+	// Whether both seats take the request at once, the prefill outcome awaited beside the decode answer
 	together() bool
-	// The prefill seat's request: the prompt for one token with the handoff parameters
+	// The prefill seat's request, the prompt for one token with the handoff parameters
 	prefill(c *relayCall) ([]byte, error)
 	// Takes what the prefill seat answered, moving whatever must reach the decode seat first
 	take(ctx context.Context, c *relayCall, answer []byte) error
@@ -99,82 +97,44 @@ func relaySeats(route *v1.Route) (prefill, decode *v1.RouteSeat) {
 	return prefill, decode
 }
 
-// Serves a relay: the prompt goes to the prefill seat for one token with the runtime's handoff,
-// then the request goes to the decode seat with what came back and its answer streams. A prompt
-// under the plan's break even goes to the decode seat alone, and so does one whose prefill fails.
-// The trace names both seats and says which path the request took
-func (g *Gateway) relay(w *traceWriter, r *http.Request, in *inbound, name string, route *v1.Route, policy *v1.Policy, client Flavor) {
-	t := w.t
+// Serves a relay, the prefill seat computing the prompt and the decode seat answering with what it handed off
+func (x *exchange) serveRelay() {
+	g, t, route, name := x.g, x.w.t, x.route, x.name
 	prefill, decode := relaySeats(route)
 	if decode == nil || decode.GetEndpoint() == "" {
-		w.Header().Set("Retry-After", retryAfter)
-		g.refuse(w, client, http.StatusServiceUnavailable, "model "+name+" has no decode seat ready", "model_starting")
+		x.w.Header().Set("Retry-After", retryAfter)
+		x.refuse(failure(http.StatusServiceUnavailable, "model "+name+" has no decode seat ready", chat.CodeModelStarting))
 		return
 	}
 	decodeURL, err := url.Parse(decode.GetEndpoint())
 	if err != nil {
-		g.refuse(w, client, http.StatusBadGateway, "the decode seat of "+name+" has an endpoint the gateway cannot parse: "+err.Error(), "server_error")
+		x.refuse(failure(http.StatusBadGateway, "the decode seat of "+name+" has an endpoint the gateway cannot parse: "+err.Error(), chat.CodeServer))
 		return
 	}
 	handoff, err := handoffFor(route.GetRuntimeId(), route.GetRelayHandoff())
 	if err != nil {
-		g.refuse(w, client, http.StatusServiceUnavailable, "model "+name+" cannot relay: "+err.Error(), "server_error")
+		x.refuse(failure(http.StatusServiceUnavailable, "model "+name+" cannot relay: "+err.Error(), chat.CodeServer))
 		return
 	}
 	decodeTarget := []target{{url: decodeURL, seat: decode.GetInstanceId()}}
 	hold := g.holder(route, decodeTarget)
 	hold.to(0)
 	defer hold.done()
-	open := g.relayOpener(t, in.from, name, route, policy, handoff, prefill, decode, decodeURL, decodeTarget)
-	mode := g.table.SystemMode(route)
-	if _, done := g.serveTools(w, r, in, name, route, policy, client, mode, open); done {
-		return
-	}
-	upstream := shapeFlavor(flavorOf(route.GetApi()), route.GetProfile())
-	chat := in.chat
-	if chat == nil {
-		g.refuse(w, client, http.StatusBadRequest, in.err.Error(), "invalid_request_error")
-		return
-	}
-	if served := route.GetServed(); served != "" {
-		chat.Model = served
-	}
-	foldSystem(chat, mode)
-	shape(chat, route.GetProfile())
-	t.Translated = clientFlavor(r) != route.GetApi() || Shaped(route.GetProfile(), clientFlavor(r), in.harness())
-	if upstream.InlineImages() {
-		if err := g.inlineImages(r.Context(), chat, policy); err != nil {
-			g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
-			return
-		}
-	}
-	path, out, err := upstream.RenderRequest(chat)
-	if err != nil {
-		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
-		return
-	}
-	chat.Model = name
-	resp, cancel, _, err := open(r.Context(), chat, path, out)
-	if err != nil {
-		if errors.Is(err, errSlotsBusy) {
-			w.Header().Set("Retry-After", retryAfter)
-		}
-		g.upstreamError(w, t, client, name, err)
-		return
-	}
-	g.deliver(w, r, chat, name, resp, cancel, client, upstream)
+	x.targets, x.hold, x.relay = decodeTarget, hold, true
+	x.open = g.relayOpener(t, x.in.from, name, route, x.policy, handoff, prefill, decode, decodeURL, decodeTarget)
+	x.serve()
 }
 
 // Opens the decode seat's answer to one rendered request, the prefill seat going first when it pays
 func (g *Gateway) relayOpener(t *v1.Trace, from http.Header, name string, route *v1.Route, policy *v1.Policy, handoff relayHandoff, prefill, decode *v1.RouteSeat, decodeURL *url.URL, decodeTarget []target) opener {
-	return func(ctx context.Context, chat *Chat, path string, out []byte) (*http.Response, context.CancelFunc, int, error) {
+	return func(ctx context.Context, req *chat.Request, path string, out []byte) (*http.Response, context.CancelFunc, int, error) {
 		decodeOnly := func(why string) (*http.Response, context.CancelFunc, int, error) {
 			t.Relay, t.Seats = why, []string{decode.GetInstanceId()}
 			t.UpstreamRequest = string(out)
-			resp, cancel, err := g.send(ctx, decodeURL, path, out, chat.Stream, policy, from)
+			resp, cancel, err := g.send(ctx, decodeURL, path, out, req.Stream, policy, from)
 			return resp, cancel, 0, err
 		}
-		prompt := estimateTokens(chat)
+		prompt := chat.EstimateTokens(req)
 		breakEven := route.GetRelayBreakEvenPrompt()
 		if prefill == nil || prefill.GetState() != v1.InstanceState_INSTANCE_STATE_READY || prefill.GetEndpoint() == "" || breakEven == 0 || uint32(prompt) < breakEven {
 			return decodeOnly(relayDecode)
@@ -211,7 +171,7 @@ func (g *Gateway) relayOpener(t *v1.Trace, from http.Header, name string, route 
 		var cancel context.CancelFunc
 		if handoff.together() {
 			var prefillErr error
-			resp, cancel, prefillErr, err = g.relayTogether(ctx, chat, name, c, handoff, prefillBody, decodeBody, decodeTarget)
+			resp, cancel, prefillErr, err = g.relayTogether(ctx, req, name, c, handoff, prefillBody, decodeBody, decodeTarget)
 			if err != nil {
 				free()
 				return nil, nil, -1, err
@@ -236,7 +196,7 @@ func (g *Gateway) relayOpener(t *v1.Trace, from http.Header, name string, route 
 				g.log.Warn("relay decode request could not be made, decoding alone", "model", name, "err", err)
 				return decodeOnly(relayNoPrefill)
 			}
-			if resp, cancel, _, err = g.open(ctx, decodeTarget, nil, path, decodeBody, chat.Stream, policy, from, name); err != nil {
+			if resp, cancel, _, err = g.open(ctx, decodeTarget, nil, path, decodeBody, req.Stream, policy, from, name); err != nil {
 				free()
 				return nil, nil, -1, err
 			}
@@ -251,7 +211,7 @@ func (g *Gateway) relayOpener(t *v1.Trace, from http.Header, name string, route 
 }
 
 // Sends the request to both seats at once, answering the prefill failure apart so the caller decodes alone
-func (g *Gateway) relayTogether(ctx context.Context, chat *Chat, name string, c *relayCall, handoff relayHandoff, prefillBody, decodeBody []byte, decodeTarget []target) (*http.Response, context.CancelFunc, error, error) {
+func (g *Gateway) relayTogether(ctx context.Context, req *chat.Request, name string, c *relayCall, handoff relayHandoff, prefillBody, decodeBody []byte, decodeTarget []target) (*http.Response, context.CancelFunc, error, error) {
 	prefilled := make(chan error, 1)
 	go func() {
 		answer, err := g.sendJSON(c.ctx, c.prefillURL, c.path, prefillBody, c.policy, c.from)
@@ -268,7 +228,7 @@ func (g *Gateway) relayTogether(ctx context.Context, chat *Chat, name string, c 
 	dctx, dcancel := context.WithCancel(ctx)
 	openCh := make(chan opened, 1)
 	go func() {
-		resp, cancel, _, err := g.open(dctx, decodeTarget, nil, c.path, decodeBody, chat.Stream, c.policy, c.from, name)
+		resp, cancel, _, err := g.open(dctx, decodeTarget, nil, c.path, decodeBody, req.Stream, c.policy, c.from, name)
 		openCh <- opened{resp: resp, cancel: cancel, err: err}
 	}()
 	drop := func(o opened) {
@@ -287,7 +247,7 @@ func (g *Gateway) relayTogether(ctx context.Context, chat *Chat, name string, c 
 		o = <-openCh
 	case o = <-openCh:
 		if o.err != nil {
-			// The decode seat never joined, so the prefill seat has no one to hand off to.
+			// The decode seat never joined, so the prefill seat has no one to hand off to
 			c.cancel()
 			<-prefilled
 			dcancel()
@@ -344,8 +304,7 @@ func (g *Gateway) sendJSON(ctx context.Context, target *url.URL, path string, bo
 	return raw, nil
 }
 
-// The vLLM handoff: the prefill seat computes the prompt for one token and answers with the
-// connector's transfer parameters, which the decode request carries so the cache moves to it
+// The vLLM handoff, the prefill seat answering with connector parameters the decode request carries
 type nixlHandoff struct{}
 
 func (nixlHandoff) together() bool { return false }
@@ -383,8 +342,7 @@ func (nixlHandoff) decode(c *relayCall) ([]byte, error) {
 
 func (nixlHandoff) release(*relayCall) {}
 
-// The SGLang handoff: the client hands the decode seat the prefill seat's bootstrap address and
-// a room id, and both seats take the request at once
+// The SGLang handoff, both seats taking the request at once with the prefill seat's bootstrap address and room
 type bootstrapHandoff struct{}
 
 func (bootstrapHandoff) together() bool { return true }
@@ -416,9 +374,7 @@ func (h bootstrapHandoff) decode(c *relayCall) ([]byte, error) {
 
 func (bootstrapHandoff) release(*relayCall) {}
 
-// The llama.cpp handoff: the prefill seat computes the prompt into a slot and saves it, the file
-// moves to the decode seat's node over the mesh blob channel, the decode seat restores it into a
-// slot of its own and continues with prompt caching on, and the file leaves both disks
+// The llama.cpp handoff, a saved prefill slot moved over the mesh and restored into a decode slot
 type slotHandoff struct{}
 
 func (slotHandoff) together() bool { return false }
@@ -449,7 +405,7 @@ func (slotHandoff) take(ctx context.Context, c *relayCall, _ []byte) error {
 	if _, err := c.g.sendJSON(ctx, c.prefillURL, slotsPath+strconv.Itoa(c.prefillSlot)+"?action=save", save, c.policy, nil); err != nil {
 		return fmt.Errorf("slot save: %w", err)
 	}
-	// The prefill slot is free once its state is on disk.
+	// The prefill slot is free once its state is on disk
 	c.g.slots.give(c.prefill.GetInstanceId(), c.prefillSlot)
 	c.prefillHeld = false
 	formation, prefillNode, decodeNode := c.route.GetFormationId(), c.prefill.GetNodeId(), c.decode.GetNodeId()
@@ -486,8 +442,7 @@ func (slotHandoff) release(c *relayCall) {
 	}
 }
 
-// Removes a relay's slot file from a node once it is no longer read, on its own deadline so a
-// request already answered is not held up
+// Removes a relay's slot file from a node on its own deadline, so an answered request is not held up
 func (g *Gateway) dropSlot(nodeID, formationID, file string) {
 	ctx, cancel := context.WithTimeout(context.Background(), handoffTimeout)
 	defer cancel()

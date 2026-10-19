@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nickheyer/nebu/internal/chat"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -108,7 +109,7 @@ func TestProfileShaping(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			g, base := seatGateway(t, model, tc.profile)
 			before := model.count()
-			r, trace := ask(t, g, base, http.MethodPost, anthropicMessages, agentRequest, headers)
+			r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, agentRequest, headers)
 			if r.status != http.StatusOK {
 				t.Fatalf("status %d: %s", r.status, r.body)
 			}
@@ -126,14 +127,14 @@ func TestOpenAIExtrasPassByDefault(t *testing.T) {
 	body := `{"model":"m","min_p":0.05,"messages":[{"role":"user","content":"hi"}]}`
 	headers := map[string]string{"anthropic-beta": "x"}
 	g, base := seatGateway(t, model, nil)
-	if r, trace := ask(t, g, base, http.MethodPost, openaiChat, body, headers); r.status != http.StatusOK || trace.GetTranslated() {
+	if r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, body, headers); r.status != http.StatusOK || trace.GetTranslated() {
 		t.Fatalf("status %d translated %v: %s", r.status, trace.GetTranslated(), r.body)
 	}
 	if call := model.call(0); call.body["min_p"] != 0.05 || call.header.Get("Anthropic-Beta") != "x" {
 		t.Fatalf("an OpenAI client's extras were stripped by default: %v %v", call.body, call.header)
 	}
 	g, base = seatGateway(t, model, &v1.Profile{StripExtras: proto.Bool(true)})
-	if r, _ := ask(t, g, base, http.MethodPost, openaiChat, body, headers); r.status != http.StatusOK {
+	if r, _ := ask(t, g, base, http.MethodPost, chat.OpenAIChat, body, headers); r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
 	if call := model.call(1); call.body["min_p"] != nil || call.header.Get("Anthropic-Beta") != "" {
@@ -145,7 +146,7 @@ func TestOpenAIExtrasPassByDefault(t *testing.T) {
 func TestProfileShapesPassthrough(t *testing.T) {
 	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "ok") })
 	g, base := seatGateway(t, model, &v1.Profile{SystemPrompt: v1.SystemPrompt_SYSTEM_PROMPT_DROP, Overrides: `{"top_p":0.9}`})
-	r, trace := ask(t, g, base, http.MethodPost, openaiChat, chatBody, nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, chatBody, nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -178,7 +179,7 @@ func TestOverridesInToolLoop(t *testing.T) {
 	})
 	g, table, base := toolGateway(t, model, searxngServer(searx))
 	table.Set("m", "i1", "", model.URL, "r:g", "m", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, &v1.Profile{Overrides: `{"min_p":0.05}`})
-	r, _ := ask(t, g, base, http.MethodPost, anthropicMessages, searchBody(false, kittenTool), nil)
+	r, _ := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, searchBody(false, kittenTool), nil)
 	if r.status != http.StatusOK || model.count() != 2 {
 		t.Fatalf("status %d after %d calls: %s", r.status, model.count(), r.body)
 	}
@@ -216,6 +217,18 @@ func TestProfileMergeAndValidation(t *testing.T) {
 	}
 }
 
+// The outcome of a server side check as the API writes it
+type safeguardResult struct {
+	Type   string `json:"type"`
+	Status struct {
+		Type     string `json:"type"`
+		ToolUses map[string]struct {
+			Type    string `json:"type"`
+			Outcome string `json:"outcome"`
+		} `json:"tool_uses"`
+	} `json:"status"`
+}
+
 // The request Claude Code sends under server side review, with the check it asks for
 func reviewBody(stream bool) string {
 	return fmt.Sprintf(`{"model":"m","max_tokens":50,"stream":%v,"messages":[{"role":"user","content":"list the dir"}],"tools":[{"name":"Bash","description":"Runs","input_schema":{"type":"object"}}],"safeguards":[{"type":"dangerous_tool_use","classifier_context":{"v":1,"permission_mode":"auto","live_cwd":"/w","trusted_directories":["/w"]}}]}`, stream)
@@ -236,27 +249,27 @@ func TestServerSideReview(t *testing.T) {
 	})
 	g, base := seatGateway(t, model, nil)
 	headers := map[string]string{"anthropic-beta": "dangerous-tool-use-2026-09-03"}
-	r, _ := ask(t, g, base, http.MethodPost, anthropicMessages, reviewBody(false), headers)
+	r, _ := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, reviewBody(false), headers)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
 	var reply struct {
-		SafeguardResults []antSafeguardResult `json:"safeguard_results"`
+		SafeguardResults []safeguardResult `json:"safeguard_results"`
 	}
 	json.Unmarshal(r.body, &reply)
-	if len(reply.SafeguardResults) != 1 || reply.SafeguardResults[0].Type != dangerousToolUse || reply.SafeguardResults[0].Status.Type != "available" {
+	if len(reply.SafeguardResults) != 1 || reply.SafeguardResults[0].Type != chat.DangerousToolUse || reply.SafeguardResults[0].Status.Type != "available" {
 		t.Fatalf("results %s", r.body)
 	}
 	if v := reply.SafeguardResults[0].Status.ToolUses["call_9"]; v.Type != "evaluated" || v.Outcome != "not_flagged" || len(reply.SafeguardResults[0].Status.ToolUses) != 1 {
 		t.Fatalf("verdicts %v", reply.SafeguardResults[0].Status.ToolUses)
 	}
-	r, _ = ask(t, g, base, http.MethodPost, anthropicMessages, reviewBody(true), headers)
+	r, _ = ask(t, g, base, http.MethodPost, chat.AnthropicMessages, reviewBody(true), headers)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
 	events := eventsOf(t, r.body)
 	var toolID string
-	var results []antSafeguardResult
+	var results []safeguardResult
 	for _, ev := range events {
 		switch ev["type"] {
 		case "content_block_start":
@@ -274,9 +287,9 @@ func TestServerSideReview(t *testing.T) {
 	// An answer without tool calls still carries the check as answered, so the session stays reviewed
 	plain := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "done") })
 	g, base = seatGateway(t, plain, nil)
-	r, _ = ask(t, g, base, http.MethodPost, anthropicMessages, reviewBody(false), headers)
+	r, _ = ask(t, g, base, http.MethodPost, chat.AnthropicMessages, reviewBody(false), headers)
 	var empty struct {
-		SafeguardResults []antSafeguardResult `json:"safeguard_results"`
+		SafeguardResults []safeguardResult `json:"safeguard_results"`
 	}
 	json.Unmarshal(r.body, &empty)
 	if len(empty.SafeguardResults) != 1 || len(empty.SafeguardResults[0].Status.ToolUses) != 0 {
@@ -294,7 +307,7 @@ func TestServerSideReviewNotClaimed(t *testing.T) {
 		toolAnswer(w, "Running.", toolCall("call_9", "Bash", `{"command":"ls"}`))
 	})
 	g, base := seatGateway(t, model, &v1.Profile{AllowAll: proto.Bool(false)})
-	r, _ := ask(t, g, base, http.MethodPost, anthropicMessages, reviewBody(false), map[string]string{"anthropic-beta": "dangerous-tool-use-2026-09-03"})
+	r, _ := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, reviewBody(false), map[string]string{"anthropic-beta": "dangerous-tool-use-2026-09-03"})
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -302,30 +315,6 @@ func TestServerSideReviewNotClaimed(t *testing.T) {
 	json.Unmarshal(r.body, &reply)
 	if _, has := reply["safeguard_results"]; has {
 		t.Fatalf("a route whose checks the model answers claimed review: %s", r.body)
-	}
-}
-
-// The check goes on to an Anthropic runtime only when the gateway does not answer it
-func TestSafeguardsForwardedToAnthropicRuntime(t *testing.T) {
-	chat, err := (anthropic{}).ParseRequest(anthropicMessages, []byte(reviewBody(false)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(chat.Safeguards) != 1 || chat.Safeguards[0].Type != dangerousToolUse {
-		t.Fatalf("parsed %v", chat.Safeguards)
-	}
-	_, body, err := (anthropic{}).RenderRequest(chat)
-	if err != nil || !strings.Contains(string(body), `"safeguards":[{"type":"dangerous_tool_use"`) {
-		t.Fatalf("forwarded %s: %v", body, err)
-	}
-	chat.Allowed = true
-	_, body, _ = (anthropic{}).RenderRequest(chat)
-	if strings.Contains(string(body), "safeguards") {
-		t.Fatalf("an answered check was forwarded: %s", body)
-	}
-	_, body, _ = (openai{}).RenderRequest(chat)
-	if strings.Contains(string(body), "safeguards") {
-		t.Fatalf("the check reached an OpenAI body: %s", body)
 	}
 }
 
@@ -369,7 +358,7 @@ func TestHarnessPromptByDefault(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			g, base := seatGateway(t, model, tc.profile)
 			before := model.count()
-			r, _ := ask(t, g, base, http.MethodPost, anthropicMessages, tc.body, tc.headers)
+			r, _ := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, tc.body, tc.headers)
 			if r.status != http.StatusOK {
 				t.Fatalf("status %d: %s", r.status, r.body)
 			}
@@ -401,7 +390,7 @@ func TestHarnessPromptByDefault(t *testing.T) {
 func TestHiddenTools(t *testing.T) {
 	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "ok") })
 	g, base := seatGateway(t, model, &v1.Profile{HiddenTools: []string{"Artifact", "Cron*", "mcp__plugin_*"}})
-	r, trace := ask(t, g, base, http.MethodPost, anthropicMessages, harnessBody(true), nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, harnessBody(true), nil)
 	if r.status != http.StatusOK || !trace.GetTranslated() {
 		t.Fatalf("status %d translated %v: %s", r.status, trace.GetTranslated(), r.body)
 	}

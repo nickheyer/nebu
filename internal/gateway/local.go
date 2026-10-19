@@ -6,26 +6,20 @@ import (
 	"io"
 	"net/http"
 	"sync"
-
-	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// In-process request address, recorded as the trace's remote address.
+// In process request address, recorded as the trace's remote address
 const localBase = "http://nebu.gateway"
 
-// Returns an in-process gateway client with an origin label. Its requests are
-// trusted without credentials and use normal gateway limits and tracing.
+// An in process client with an origin label, trusted without credentials under normal limits and tracing
 func (g *Gateway) Client(origin string) *http.Client {
 	return &http.Client{Transport: &localTransport{handler: g.Handler(), origin: origin}}
 }
 
-// Base URL for in-process client requests.
+// Base URL for in process client requests
 func (g *Gateway) LocalBase() string { return localBase }
 
-// Returns a protocol adapter for callers that render and parse requests.
-func FlavorFor(api v1.ApiFlavor) Flavor { return flavorOf(api) }
-
-// Serves handler responses through a pipe for streaming.
+// Serves handler responses through a pipe for streaming
 type localTransport struct {
 	handler http.Handler
 	origin  string
@@ -59,7 +53,7 @@ func (t *localTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// Streams handler output through a pipe, fixing headers on the first write.
+// Streams handler output through a pipe, fixing headers on the first write
 type pipeWriter struct {
 	header   http.Header
 	snapshot http.Header

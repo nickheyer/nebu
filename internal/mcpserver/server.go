@@ -15,6 +15,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nickheyer/nebu/internal/auth"
+	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/internal/doctor"
 	"github.com/nickheyer/nebu/internal/formations"
 	"github.com/nickheyer/nebu/internal/gateway"
@@ -451,13 +452,13 @@ func formationRun(in formationIn) (*v1.RunRequest, error) {
 
 // Asks a served model through the gateway in process
 func (n *nebu) chat(ctx context.Context, _ *mcp.CallToolRequest, in chatIn) (*mcp.CallToolResult, any, error) {
-	chat := &gateway.Chat{Kind: "chat", Model: in.Model, MaxTokens: in.MaxTokens}
+	req := &chat.Request{Kind: chat.Chat, Model: in.Model, MaxTokens: in.MaxTokens}
 	if in.System != "" {
-		chat.Messages = append(chat.Messages, gateway.Message{Role: "system", Parts: []gateway.Part{{Type: "text", Text: in.System}}})
+		req.Messages = append(req.Messages, chat.Message{Role: "system", Parts: []chat.Part{{Type: "text", Text: in.System}}})
 	}
-	chat.Messages = append(chat.Messages, gateway.Message{Role: "user", Parts: []gateway.Part{{Type: "text", Text: in.Prompt}}})
-	flavor := gateway.FlavorFor(v1.ApiFlavor_API_FLAVOR_OPENAI)
-	path, body, err := flavor.RenderRequest(chat)
+	req.Messages = append(req.Messages, chat.Message{Role: "user", Parts: []chat.Part{{Type: "text", Text: in.Prompt}}})
+	flavor := chat.RuntimeOf(v1.ApiFlavor_API_FLAVOR_OPENAI)
+	path, body, err := flavor.Render(req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -465,7 +466,7 @@ func (n *nebu) chat(ctx context.Context, _ *mcp.CallToolRequest, in chatIn) (*mc
 	if err != nil {
 		return nil, nil, err
 	}
-	res, err := flavor.ParseResult(chat, raw)
+	res, err := flavor.ParseResult(req, raw)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -525,7 +526,7 @@ func (n *nebu) post(ctx context.Context, path string, body []byte) ([]byte, erro
 		return nil, err
 	}
 	if resp.StatusCode >= http.StatusMultipleChoices {
-		message := gateway.FlavorFor(v1.ApiFlavor_API_FLAVOR_OPENAI).ErrorMessage(raw)
+		message := chat.RuntimeOf(v1.ApiFlavor_API_FLAVOR_OPENAI).ErrorMessage(raw)
 		if message == "" {
 			message = strings.TrimSpace(string(raw))
 		}

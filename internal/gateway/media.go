@@ -19,30 +19,31 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/internal/db"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// OpenAI image and video endpoints backed by stable-diffusion.cpp jobs.
-// Image requests wait for results. Video requests return a job to poll and download.
-// Sampler settings are extra fields. Image inputs accept base64 or data URLs.
+// OpenAI image and video endpoints backed by stable-diffusion.cpp jobs, images awaited and videos polled
 
 const (
-	imagesPath = "/v1/images/generations"
-	editsPath  = "/v1/images/edits"
-	videosPath = "/v1/videos"
+	// Native stable-diffusion.cpp paths
+	sdcppCapabilities = "/sdcpp/v1/capabilities"
+	sdcppImageJob     = "/sdcpp/v1/img_gen"
+	sdcppVideoJob     = "/sdcpp/v1/vid_gen"
+	sdcppJobs         = "/sdcpp/v1/jobs/"
 
-	// Job polling interval and completed video retention time.
+	// Job polling interval and completed video retention time
 	jobPoll = 500 * time.Millisecond
 	// How long a cancelled job may keep running before the gateway reports it as stuck
 	cancelWait = 2 * time.Minute
 	videoKeep  = 24 * time.Hour
-	// Maximum retained videos. Evicts the oldest completed videos.
+	// Maximum retained videos, the oldest completed ones evicted past it
 	videoLimit = 32
 )
 
-// Media request with OpenAI fields and native sampler settings.
+// Media request with OpenAI fields and native sampler settings
 type mediaRequest struct {
 	Model          string   `json:"model"`
 	Prompt         string   `json:"prompt"`
@@ -62,7 +63,7 @@ type mediaRequest struct {
 	Scheduler      string   `json:"scheduler"`
 	ClipSkip       *int     `json:"clip_skip"`
 	Strength       *float64 `json:"strength"`
-	// Input images for edits and video generation.
+	// Input images for edits and video generation
 	InitImage       string          `json:"init_image"`
 	Image           json.RawMessage `json:"image"`
 	MaskImage       string          `json:"mask_image"`
@@ -92,11 +93,11 @@ type mediaRequest struct {
 	OutputFormat      string `json:"output_format"`
 	OutputCompression *int   `json:"output_compression"`
 	ResponseFormat    string `json:"response_format"`
-	// Native schema fields that override the fields above.
+	// Native schema fields that override the fields above
 	SDCpp map[string]json.RawMessage `json:"sd_cpp"`
 }
 
-// Sampler settings for one stage, including the high-noise stage.
+// Sampler settings for one stage, including the high-noise stage
 type sampleParams struct {
 	Steps     int      `json:"steps"`
 	CfgScale  *float64 `json:"cfg_scale"`
@@ -106,7 +107,7 @@ type sampleParams struct {
 	Scheduler string   `json:"scheduler"`
 }
 
-// Multipart fields and files by name.
+// Multipart fields and files by name
 type form struct {
 	fields map[string][]string
 	files  map[string][][]byte
@@ -149,7 +150,7 @@ func parseForm(r *http.Request, body []byte) (*form, error) {
 	}
 }
 
-// Parses JSON requests or multipart image edits.
+// Parses JSON requests or multipart image edits
 func parseMedia(r *http.Request, body []byte) (*mediaRequest, error) {
 	req := &mediaRequest{}
 	if f, err := parseForm(r, body); err == nil {
@@ -191,7 +192,7 @@ func parseMedia(r *http.Request, body []byte) (*mediaRequest, error) {
 	if err := json.Unmarshal(body, req); err != nil {
 		return nil, bad("%v", err)
 	}
-	// Map OpenAI image and mask fields to native inputs.
+	// Maps OpenAI image and mask fields to native inputs
 	if len(req.Image) > 0 {
 		var one string
 		var many []string
@@ -215,7 +216,7 @@ func firstOf(values ...string) string {
 	return ""
 }
 
-// Reads dimensions from width and height fields or a WIDTHxHEIGHT size.
+// Reads dimensions from width and height fields or a WIDTHxHEIGHT size
 func (m *mediaRequest) shape() (int, int, error) {
 	w, h := m.Width, m.Height
 	if m.Size != "" && (w == 0 || h == 0) {
@@ -233,7 +234,7 @@ func (m *mediaRequest) shape() (int, int, error) {
 	return w, h, nil
 }
 
-// Maps explicit request settings to native fields, preserving server defaults.
+// Maps explicit request settings to native fields, preserving server defaults
 func sampling(steps int, cfg, img, guidance, flow, eta *float64, sampler, scheduler string, slg json.RawMessage) map[string]any {
 	out := map[string]any{}
 	if steps > 0 {
@@ -270,7 +271,7 @@ func sampling(steps int, cfg, img, guidance, flow, eta *float64, sampler, schedu
 	return out
 }
 
-// Builds the native image job body.
+// Builds the native image job body
 func (m *mediaRequest) imageJob() (map[string]any, error) {
 	if strings.TrimSpace(m.Prompt) == "" {
 		return nil, bad("prompt is required")
@@ -341,7 +342,7 @@ func (m *mediaRequest) imageJob() (map[string]any, error) {
 	return job, nil
 }
 
-// Calculates frames from a count or duration and FPS, rounded up to 4n+1.
+// Calculates frames from a count or duration and FPS, rounded up to 4n+1
 func (m *mediaRequest) frames() (int, int) {
 	fps := m.FPS
 	frames := firstInt(m.Frames, m.VideoFrames)
@@ -352,7 +353,7 @@ func (m *mediaRequest) frames() (int, int) {
 		}
 		frames = int(math.Round(m.Seconds * float64(rate)))
 	}
-	// Round up to the sampler's 4n+1 frame count.
+	// Rounds up to the sampler's 4n+1 frame count
 	if frames > 1 {
 		frames = ((frames-2)/4+1)*4 + 1
 	}
@@ -368,7 +369,7 @@ func firstInt(values ...int) int {
 	return 0
 }
 
-// Builds the native video job body.
+// Builds the native video job body
 func (m *mediaRequest) videoJob() (map[string]any, error) {
 	if strings.TrimSpace(m.Prompt) == "" {
 		return nil, bad("prompt is required")
@@ -452,7 +453,7 @@ func (m *mediaRequest) videoJob() (map[string]any, error) {
 	return job, nil
 }
 
-// Native job status.
+// Native job status
 type sdJob struct {
 	ID            string          `json:"id"`
 	Kind          string          `json:"kind"`
@@ -466,12 +467,12 @@ type sdJob struct {
 	} `json:"error"`
 }
 
-// Reports whether the job is terminal.
+// Reports whether the job is terminal
 func (j *sdJob) done() bool {
 	return j.Status == "completed" || j.Status == "failed" || j.Status == "cancelled"
 }
 
-// Error message for a failed or cancelled job.
+// Error message for a failed or cancelled job
 func (j *sdJob) failure() string {
 	if j.Error != nil && j.Error.Message != "" {
 		return j.Error.Message
@@ -479,7 +480,7 @@ func (j *sdJob) failure() string {
 	return "job " + j.Status
 }
 
-// Calls the native API with the policy's response header timeout.
+// Calls the native API with the policy's response header timeout
 func (g *Gateway) native(ctx context.Context, method string, target *url.URL, path string, body []byte, policy *v1.Policy) (int, []byte, error) {
 	var reader io.Reader
 	if body != nil {
@@ -512,11 +513,11 @@ func (g *Gateway) submit(ctx context.Context, target *url.URL, path string, job 
 		return nil, body, err
 	}
 	if status != http.StatusAccepted && status != http.StatusOK {
-		message := sdcpp{}.ErrorMessage(raw)
+		message := chat.RuntimeOf(v1.ApiFlavor_API_FLAVOR_SDCPP).ErrorMessage(raw)
 		if message == "" {
 			message = strings.TrimSpace(string(raw))
 		}
-		return nil, body, &upstreamRefusal{status: status, message: message}
+		return nil, body, &chat.Failure{Status: status, Message: message}
 	}
 	var accepted sdJob
 	if err := json.Unmarshal(raw, &accepted); err != nil || accepted.ID == "" {
@@ -525,17 +526,7 @@ func (g *Gateway) submit(ctx context.Context, target *url.URL, path string, job 
 	return &accepted, body, nil
 }
 
-// Returns the runtime error with its HTTP status.
-type upstreamRefusal struct {
-	status  int
-	message string
-	kind    string
-}
-
-func (e *upstreamRefusal) Error() string { return e.message }
-
-// Polls until completion or cancellation. Calls started when the job leaves the
-// queue and cancels the upstream job if the caller's context ends.
+// Polls until the job ends, calling started when it leaves the queue and cancelling it when the caller goes
 func (g *Gateway) await(ctx context.Context, target *url.URL, id string, policy *v1.Policy, started func()) (*sdJob, error) {
 	begun := false
 	for {
@@ -573,8 +564,7 @@ func (g *Gateway) await(ctx context.Context, target *url.URL, id string, policy 
 	}
 }
 
-// The caller's context ended before the job did. Keeps the runtime's answer to the cancel
-// that followed, since the job keeps running when the runtime refuses it.
+// A job the caller left before it ended, with the runtime's answer to the cancel that followed
 type abandoned struct {
 	cause error
 	stop  error
@@ -593,7 +583,7 @@ func (e *abandoned) Error() string {
 
 func (e *abandoned) Unwrap() error { return e.cause }
 
-// Cancels the job after the caller's context ends and reports whether the runtime stopped it.
+// Cancels the job after the caller's context ends and reports whether the runtime stopped it
 func (g *Gateway) abandon(ctx context.Context, target *url.URL, id string, policy *v1.Policy) error {
 	left := &abandoned{cause: ctx.Err(), stop: g.cancelJob(target, id, policy)}
 	if left.stop != nil {
@@ -602,8 +592,7 @@ func (g *Gateway) abandon(ctx context.Context, target *url.URL, id string, polic
 	return left
 }
 
-// Cancels the job with a separate timeout and waits until the runtime reports it ended.
-// Returns why it could not when the runtime refuses the cancel or the job keeps running.
+// Cancels the job on its own timeout and waits until the runtime reports it ended, answering why it could not
 func (g *Gateway) cancelJob(target *url.URL, id string, policy *v1.Policy) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cancelWait)
 	defer cancel()
@@ -614,10 +603,10 @@ func (g *Gateway) cancelJob(target *url.URL, id string, policy *v1.Policy) error
 	switch status {
 	case http.StatusOK, http.StatusAccepted:
 	case http.StatusNotFound, http.StatusGone:
-		// The runtime already dropped the job, so nothing runs for it.
+		// The runtime already dropped the job, so nothing runs for it
 		return nil
 	default:
-		message := sdcpp{}.ErrorMessage(raw)
+		message := chat.RuntimeOf(v1.ApiFlavor_API_FLAVOR_SDCPP).ErrorMessage(raw)
 		if message == "" {
 			message = strings.TrimSpace(string(raw))
 		}
@@ -654,11 +643,10 @@ func (g *Gateway) cancelJob(target *url.URL, id string, policy *v1.Policy) error
 	}
 }
 
-// Generates media while holding the route until the job ends, on the first seat that takes the
-// job: a seat that refuses or fails to take it passes the job to the next, once
+// Generates media holding the route until the job ends, a seat that refuses the job passing it on once
 func (g *Gateway) media(w *traceWriter, r *http.Request, body []byte, name string, route *v1.Route, policy *v1.Policy, targets []target, hold *seatHold, release func()) {
 	t := w.t
-	client := flavorOf(clientFlavor(r))
+	client := chat.ClientOf(chat.Detect(r))
 	if route.GetApi() != v1.ApiFlavor_API_FLAVOR_SDCPP {
 		release()
 		g.refuse(w, client, http.StatusBadRequest, "model "+name+" is a language model and generates no images or video", "invalid_request_error")
@@ -678,17 +666,16 @@ func (g *Gateway) media(w *traceWriter, r *http.Request, body []byte, name strin
 	g.image(w, r, req, name, route, targets, hold, policy)
 }
 
-// Whether a failed submission may go to another seat: the seat never answered, or refused the job
+// Whether a failed submission may go to another seat, the seat having never answered or refused the job
 func passable(err error) bool {
-	var refusal *upstreamRefusal
+	var refusal *chat.Failure
 	if errors.As(err, &refusal) {
-		return refused(refusal.status)
+		return refused(refusal.Status)
 	}
 	return retryable(err)
 }
 
-// Submits a job to the first seat that takes it, the count following the job, and returns the
-// seat it landed on
+// Submits a job to the first seat that takes it, the count following, and answers the seat it landed on
 func (g *Gateway) submitTo(ctx context.Context, targets []target, hold *seatHold, path string, job map[string]any, policy *v1.Policy, name string) (*sdJob, []byte, int, error) {
 	for i, tg := range targets {
 		hold.to(i)
@@ -702,12 +689,12 @@ func (g *Gateway) submitTo(ctx context.Context, targets []target, hold *seatHold
 	return nil, nil, -1, errors.New("no seat to send to")
 }
 
-// Returns generated images within the policy's request timeout.
+// Returns generated images within the policy's request timeout
 func (g *Gateway) image(w *traceWriter, r *http.Request, req *mediaRequest, name string, route *v1.Route, targets []target, hold *seatHold, policy *v1.Policy) {
 	t := w.t
-	client := flavorOf(clientFlavor(r))
+	client := chat.ClientOf(chat.Detect(r))
 	if !hasMode(route, "img_gen") {
-		g.refuse(w, client, http.StatusBadRequest, "model "+name+" generates video, not images: send it to "+videosPath, "invalid_request_error")
+		g.refuse(w, client, http.StatusBadRequest, "model "+name+" generates video, not images: send it to "+chat.OpenAIVideos, "invalid_request_error")
 		return
 	}
 	job, err := req.imageJob()
@@ -776,12 +763,12 @@ func (g *Gateway) image(w *traceWriter, r *http.Request, req *mediaRequest, name
 	writeJSON(w, http.StatusOK, answer)
 }
 
-// Preserves runtime error statuses. Maps timeouts to 504 and other errors to 502.
-func (g *Gateway) mediaError(w http.ResponseWriter, client Flavor, t *v1.Trace, name string, err error) {
-	var refusal *upstreamRefusal
+// Keeps runtime error statuses, timeouts becoming 504 and other errors 502
+func (g *Gateway) mediaError(w http.ResponseWriter, client chat.Client, t *v1.Trace, name string, err error) {
+	var refusal *chat.Failure
 	if errors.As(err, &refusal) {
-		t.Error = refusal.message
-		client.Error(w, refusal.status, "upstream: "+refusal.message, "upstream_error")
+		t.Error = refusal.Message
+		client.Error(w, failure(refusal.Status, "upstream: "+refusal.Message, chat.CodeUpstream))
 		return
 	}
 	g.upstreamError(w, t, client, name, err)
@@ -796,7 +783,7 @@ func hasMode(route *v1.Route, mode string) bool {
 	return false
 }
 
-// Video request, job state, and output file.
+// Video request, job state, and output file
 type video struct {
 	mu         sync.Mutex
 	id         string
@@ -822,7 +809,7 @@ type video struct {
 	cancel     context.CancelFunc
 }
 
-// Video API response.
+// Video API response
 func (v *video) object() map[string]any {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -874,7 +861,7 @@ func (v *video) object() map[string]any {
 	return out
 }
 
-// Videos indexed by ID, with oldest completed videos evicted at capacity.
+// Videos indexed by ID, with oldest completed videos evicted at capacity
 type videoStore struct {
 	mu   sync.Mutex
 	byID map[string]*video
@@ -904,7 +891,7 @@ func (s *videoStore) remove(id string) (*video, bool) {
 	return v, ok
 }
 
-// Lists videos newest first.
+// Lists videos newest first
 func (s *videoStore) list() []*video {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -917,7 +904,7 @@ func (s *videoStore) list() []*video {
 	return out
 }
 
-// Evicts expired videos, then oldest completed videos above the limit.
+// Evicts expired videos, then oldest completed videos above the limit
 func (s *videoStore) pruneLocked() {
 	var finished []*video
 	for id, v := range s.byID {
@@ -940,13 +927,13 @@ func (s *videoStore) pruneLocked() {
 	}
 }
 
-// Starts a video job, returns its status, and tracks completion in the background.
+// Starts a video job, returns its status, and tracks completion in the background
 func (g *Gateway) startVideo(w *traceWriter, req *mediaRequest, name string, route *v1.Route, targets []target, hold *seatHold, policy *v1.Policy, release func()) {
 	t := w.t
-	client := flavorOf(v1.ApiFlavor_API_FLAVOR_OPENAI)
+	client := chat.ClientOf(v1.ApiFlavor_API_FLAVOR_OPENAI)
 	if !hasMode(route, "vid_gen") {
 		release()
-		g.refuse(w, client, http.StatusBadRequest, "model "+name+" generates images, not video: send it to "+imagesPath, "invalid_request_error")
+		g.refuse(w, client, http.StatusBadRequest, "model "+name+" generates images, not video: send it to "+chat.OpenAIImages, "invalid_request_error")
 		return
 	}
 	job, err := req.videoJob()
@@ -955,7 +942,7 @@ func (g *Gateway) startVideo(w *traceWriter, req *mediaRequest, name string, rou
 		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
-	// Use the policy timeout independently of the client's context.
+	// The policy timeout applies apart from the client's context
 	ctx, cancel := context.WithCancel(context.Background())
 	if d := policy.GetRequestTimeoutMs(); d > 0 {
 		ctx, cancel = context.WithTimeout(context.Background(), time.Duration(d)*time.Millisecond)
@@ -976,13 +963,13 @@ func (g *Gateway) startVideo(w *traceWriter, req *mediaRequest, name string, rou
 	v := &video{id: "video_" + db.NewID(), model: name, route: name, trace: t.GetId(), prompt: req.Prompt, status: "queued", created: time.Now(), width: width, height: height, frames: frames, fps: fps, format: format, mime: videoMime(format), cancel: cancel}
 	g.videos.add(v)
 	t.FirstByteAt = timestamppb.Now()
-	// Keep the trace open for the job's duration.
+	// The trace stays open for the job's duration
 	w.detached = true
 	writeJSON(w, http.StatusAccepted, v.object())
 	go g.followVideo(ctx, cancel, release, v, t, target, accepted.ID, policy)
 }
 
-// Tracks a video job and retains its output file.
+// Tracks a video job and retains its output file
 func (g *Gateway) followVideo(ctx context.Context, cancel context.CancelFunc, release func(), v *video, t *v1.Trace, target *url.URL, jobID string, policy *v1.Policy) {
 	defer cancel()
 	defer release()
@@ -1053,12 +1040,12 @@ func videoMime(format string) string {
 	return "video/webm"
 }
 
-// Handles video listing, status, downloads, and deletion.
-func (g *Gateway) video(w http.ResponseWriter, r *http.Request, client Flavor) {
-	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, videosPath), "/")
+// Handles video listing, status, downloads, and deletion
+func (g *Gateway) video(w http.ResponseWriter, r *http.Request, client chat.Client) {
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, chat.OpenAIVideos), "/")
 	if rest == "" {
 		if r.Method != http.MethodGet {
-			client.Error(w, http.StatusMethodNotAllowed, "videos are listed with GET and made with POST", "invalid_request_error")
+			client.Error(w, failure(http.StatusMethodNotAllowed, "videos are listed with GET and made with POST", chat.CodeInvalidRequest))
 			return
 		}
 		list := g.videos.list()
@@ -1072,12 +1059,12 @@ func (g *Gateway) video(w http.ResponseWriter, r *http.Request, client Flavor) {
 	id, sub, _ := strings.Cut(rest, "/")
 	v, ok := g.videos.get(id)
 	if !ok {
-		// A job another member's gateway accepted is polled, read, and cancelled there.
+		// A job another member's gateway accepted is polled, read, and cancelled there
 		if node, forwarded := g.jobs.node(id); forwarded {
 			g.forwardVideo(w, r, client, id, node)
 			return
 		}
-		client.Error(w, http.StatusNotFound, "video "+id+" not found. Finished videos are kept for one day", "not_found_error")
+		client.Error(w, failure(http.StatusNotFound, "video "+id+" not found. Finished videos are kept for one day", chat.CodeNotFound))
 		return
 	}
 	switch {
@@ -1089,7 +1076,7 @@ func (g *Gateway) video(w http.ResponseWriter, r *http.Request, client Flavor) {
 		writeJSON(w, http.StatusOK, v.object())
 	case r.Method == http.MethodGet && sub == "content":
 		v.mu.Lock()
-		status, data, mimeType, format, failure := v.status, v.data, v.mime, v.format, v.failure
+		status, data, mimeType, format, failed := v.status, v.data, v.mime, v.format, v.failure
 		v.mu.Unlock()
 		switch status {
 		case "completed":
@@ -1099,12 +1086,42 @@ func (g *Gateway) video(w http.ResponseWriter, r *http.Request, client Flavor) {
 			w.WriteHeader(http.StatusOK)
 			w.Write(data)
 		case "failed":
-			client.Error(w, http.StatusBadGateway, "video "+id+" failed: "+failure.message, failure.code)
+			client.Error(w, chat.Failure{Status: http.StatusBadGateway, Code: failed.code, Message: "video " + id + " failed: " + failed.message})
 		default:
 			w.Header().Set("Retry-After", retryAfter)
 			writeJSON(w, http.StatusAccepted, v.object())
 		}
 	default:
-		client.Error(w, http.StatusNotFound, "no such video endpoint", "not_found_error")
+		client.Error(w, failure(http.StatusNotFound, "no such video endpoint", chat.CodeNotFound))
 	}
+}
+
+// Reads img_gen and vid_gen support from a stable-diffusion.cpp server
+func Capabilities(ctx context.Context, client *http.Client, endpoint string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(endpoint, "/")+sdcppCapabilities, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("capabilities answered %d", resp.StatusCode)
+	}
+	var caps struct {
+		SupportedModes []string `json:"supported_modes"`
+	}
+	if err := json.Unmarshal(raw, &caps); err != nil {
+		return nil, fmt.Errorf("capabilities: %w", err)
+	}
+	if len(caps.SupportedModes) == 0 {
+		return nil, fmt.Errorf("capabilities list no generation mode")
+	}
+	return caps.SupportedModes, nil
 }

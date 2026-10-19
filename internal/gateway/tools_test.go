@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/internal/tools"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
@@ -198,7 +199,7 @@ func blocksOf(t *testing.T, body []byte) (map[string]any, []map[string]any) {
 func eventsOf(t *testing.T, body []byte) []map[string]any {
 	t.Helper()
 	var out []map[string]any
-	if err := readSSE(strings.NewReader(string(body)), func(_ string, data []byte) error {
+	if err := chat.ReadSSE(strings.NewReader(string(body)), func(_ string, data []byte) error {
 		if string(data) == "[DONE]" {
 			return nil
 		}
@@ -239,7 +240,7 @@ func TestWebSearchWhole(t *testing.T) {
 		toolAnswer(w, "Let me look.", searchCall("call_1", "cute kittens"))
 	})
 	g, _, base := toolGateway(t, model, searxngServer(searx))
-	r, trace := ask(t, g, base, http.MethodPost, anthropicMessages, searchBody(false, kittenTool), nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, searchBody(false, kittenTool), nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -266,7 +267,7 @@ func TestWebSearchWhole(t *testing.T) {
 	if first["type"] != "web_search_result" || first["url"] != "https://cats.example/kittens" || first["title"] != "Kittens" || first["page_age"] != "2024-05-01" {
 		t.Fatalf("first result: %v", first)
 	}
-	if snippet, ok := openSnippet(first["encrypted_content"].(string)); !ok || snippet != "Very small cats." {
+	if snippet, ok := chat.OpenSnippet(first["encrypted_content"].(string)); !ok || snippet != "Very small cats." {
 		t.Fatalf("sealed snippet: %q %v", snippet, ok)
 	}
 	if results[1].(map[string]any)["page_age"] != nil {
@@ -329,7 +330,7 @@ func TestWebSearchStream(t *testing.T) {
 	})
 	g, _, base := toolGateway(t, model, searxngServer(searx))
 	later := strings.Replace(kittenTool, "web_search_20250305", "web_search_20260301", 1)
-	r, trace := ask(t, g, base, http.MethodPost, anthropicMessages, searchBody(true, later), nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, searchBody(true, later), nil)
 	if r.status != http.StatusOK || !strings.Contains(r.header.Get("Content-Type"), "text/event-stream") {
 		t.Fatalf("status %d %s: %s", r.status, r.header.Get("Content-Type"), r.body)
 	}
@@ -388,24 +389,32 @@ func TestServerToolVersions(t *testing.T) {
 	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "never") })
 	g, table, _ := toolGateway(t, model, searxngServer(searx), fetchServer())
 	route, _ := table.Lookup("m")
-	for _, kind := range []string{"web_search", "web_search_20250305", "web_search_20260301", "web_search_20301231"} {
-		chat := &Chat{Format: v1.ApiFlavor_API_FLAVOR_ANTHROPIC, Tools: []Tool{{Type: kind, Name: "web_search"}, {Name: "other"}}}
-		plan, err := g.plan(context.Background(), chat, route, http.Header{})
-		if err != nil || !plan.active() || len(chat.Tools) != 2 || chat.Tools[0].Name != "other" || chat.Tools[1].Name != tools.SearchTool || chat.Tools[1].Type != "" {
-			t.Fatalf("%s: %v %v", kind, err, chat.Tools)
+	parse := func(tools string) *chat.Request {
+		t.Helper()
+		req, err := chat.ClientOf(v1.ApiFlavor_API_FLAVOR_ANTHROPIC).Parse(chat.AnthropicMessages, []byte(searchBody(false, tools)))
+		if err != nil {
+			t.Fatal(err)
 		}
-		if l := plan.tools[tools.SearchTool].limits; l == nil || l.maxUses != serverToolUses {
+		return req
+	}
+	for _, kind := range []string{"web_search", "web_search_20250305", "web_search_20260301", "web_search_20301231"} {
+		req := parse(fmt.Sprintf(`{"type":%q,"name":"web_search"},{"name":"other"}`, kind))
+		plan, err := g.plan(context.Background(), req, route, http.Header{})
+		if err != nil || !plan.active() || len(req.Tools) != 2 || req.Tools[0].Name != "other" || req.Tools[1].Name != tools.SearchTool || req.Tools[1].Type != "" {
+			t.Fatalf("%s: %v %v", kind, err, req.Tools)
+		}
+		if l := plan.tools[tools.SearchTool].limits; l == nil || l.MaxUses != chat.ProvidedUses {
 			t.Fatalf("%s: default limits %v", kind, l)
 		}
 	}
-	chat := &Chat{Format: v1.ApiFlavor_API_FLAVOR_ANTHROPIC, Tools: []Tool{{Type: "web_fetch_20250910", Name: "web_fetch", Extra: map[string]json.RawMessage{"max_content_tokens": json.RawMessage("100")}}}}
-	plan, err := g.plan(context.Background(), chat, route, http.Header{})
-	if err != nil || len(chat.Tools) != 1 || chat.Tools[0].Name != tools.FetchTool || plan.tools[tools.FetchTool].limits.maxChars != 400 {
-		t.Fatalf("fetch: %v %v", err, chat.Tools)
+	req := parse(`{"type":"web_fetch_20250910","name":"web_fetch","max_content_tokens":100}`)
+	plan, err := g.plan(context.Background(), req, route, http.Header{})
+	if err != nil || len(req.Tools) != 1 || req.Tools[0].Name != tools.FetchTool || plan.tools[tools.FetchTool].limits.MaxChars != 400 {
+		t.Fatalf("fetch: %v %v", err, req.Tools)
 	}
 	for _, kind := range []string{"web_searching", "text_editor_20250124", "custom", ""} {
-		chat := &Chat{Format: v1.ApiFlavor_API_FLAVOR_ANTHROPIC, Tools: []Tool{{Type: kind, Name: "editor"}}}
-		if plan, err := g.plan(context.Background(), chat, route, http.Header{}); err != nil || plan.active() {
+		req := parse(fmt.Sprintf(`{"type":%q,"name":"editor","input_schema":{"type":"object"}}`, kind))
+		if plan, err := g.plan(context.Background(), req, route, http.Header{}); err != nil || plan.active() {
 			t.Fatalf("%s taken as a server tool: %v", kind, err)
 		}
 	}
@@ -424,7 +433,7 @@ func TestWebSearchLimits(t *testing.T) {
 	})
 	g, _, base := toolGateway(t, model, searxngServer(searx))
 	tool := `{"type":"web_search_20250305","name":"web_search","max_uses":1}`
-	r, trace := ask(t, g, base, http.MethodPost, anthropicMessages, searchBody(false, tool), nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, searchBody(false, tool), nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -473,7 +482,7 @@ func TestWebSearchBesideClientTool(t *testing.T) {
 	})
 	g, _, base := toolGateway(t, model, searxngServer(searx))
 	withWeather := kittenTool + `,{"name":"get_weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}`
-	r, trace := ask(t, g, base, http.MethodPost, anthropicMessages, searchBody(false, withWeather), nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, searchBody(false, withWeather), nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -507,7 +516,7 @@ func TestWebSearchDomains(t *testing.T) {
 	})
 	g, _, base := toolGateway(t, model, searxngServer(searx))
 	urls := func(tool string) []string {
-		r, _ := ask(t, g, base, http.MethodPost, anthropicMessages, searchBody(false, tool), nil)
+		r, _ := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, searchBody(false, tool), nil)
 		if r.status != http.StatusOK {
 			t.Fatalf("status %d: %s", r.status, r.body)
 		}
@@ -524,7 +533,7 @@ func TestWebSearchDomains(t *testing.T) {
 	if got := urls(`{"type":"web_search_20250305","name":"web_search","blocked_domains":["cats.example"]}`); strings.Join(got, " ") != "https://dogs.example/puppies" {
 		t.Fatalf("blocked: %v", got)
 	}
-	r, _ := ask(t, g, base, http.MethodPost, anthropicMessages, searchBody(false, `{"type":"web_search_20250305","name":"web_search","allowed_domains":["a.example"],"blocked_domains":["b.example"]}`), nil)
+	r, _ := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, searchBody(false, `{"type":"web_search_20250305","name":"web_search","allowed_domains":["a.example"],"blocked_domains":["b.example"]}`), nil)
 	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), "not both") {
 		t.Fatalf("both lists: %d %s", r.status, r.body)
 	}
@@ -536,7 +545,7 @@ func TestWebSearchUnset(t *testing.T) {
 		chatAnswer(w, "never")
 	})
 	g, _, base := toolGateway(t, model)
-	r, trace := ask(t, g, base, http.MethodPost, anthropicMessages, searchBody(true, kittenTool), nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, searchBody(true, kittenTool), nil)
 	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), "web search tool server is added in Settings") {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -563,7 +572,7 @@ func TestWebSearchEngineDown(t *testing.T) {
 		code   string
 	}{{http.StatusForbidden, "unavailable"}, {http.StatusTooManyRequests, "too_many_requests"}, {http.StatusBadGateway, "unavailable"}} {
 		status.Store(int32(c.status))
-		r, trace := ask(t, g, base, http.MethodPost, anthropicMessages, searchBody(false, kittenTool), nil)
+		r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, searchBody(false, kittenTool), nil)
 		if r.status != http.StatusOK {
 			t.Fatalf("status %d: %s", r.status, r.body)
 		}
@@ -589,7 +598,7 @@ func TestToolHistory(t *testing.T) {
 		chatAnswer(w, "Still kittens.")
 	})
 	g, _, base := toolGateway(t, model)
-	sealed := sealSnippet("Very small cats.")
+	sealed := chat.SealSnippet("Very small cats.")
 	history := fmt.Sprintf(`{"model":"m","max_tokens":50,"messages":[
 		{"role":"user","content":"Find kittens"},
 		{"role":"assistant","content":[
@@ -604,7 +613,7 @@ func TestToolHistory(t *testing.T) {
 		]},
 		{"role":"user","content":"And now?"}
 	]}`, sealed)
-	r, _ := ask(t, g, base, http.MethodPost, anthropicMessages, history, nil)
+	r, _ := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, history, nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -636,12 +645,12 @@ func TestToolHistory(t *testing.T) {
 		t.Fatalf("trailing text: %v", after)
 	}
 	foreign := strings.Replace(history, sealed, "EqwOTQ3NjI1YWY1ZGVjNjNmY2E5Y2E1OWJkNmU2OWVjZj", 1)
-	r, _ = ask(t, g, base, http.MethodPost, anthropicMessages, foreign, nil)
+	r, _ = ask(t, g, base, http.MethodPost, chat.AnthropicMessages, foreign, nil)
 	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), "did not write") {
 		t.Fatalf("foreign content: %d %s", r.status, r.body)
 	}
 	failed := strings.Replace(history, fmt.Sprintf(`[{"type":"web_search_result","title":"Kittens","url":"https://cats.example/kittens","encrypted_content":%q,"page_age":"2024-05-01"}]`, sealed), `{"type":"web_search_tool_result_error","error_code":"unavailable"}`, 1)
-	r, _ = ask(t, g, base, http.MethodPost, anthropicMessages, failed, nil)
+	r, _ = ask(t, g, base, http.MethodPost, chat.AnthropicMessages, failed, nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("failed search in history: %d %s", r.status, r.body)
 	}
@@ -662,7 +671,7 @@ func TestToolRuntimeFails(t *testing.T) {
 		searchStream(w, "kittens")
 	})
 	g, _, base := toolGateway(t, model, searxngServer(searx))
-	r, trace := ask(t, g, base, http.MethodPost, anthropicMessages, searchBody(true, kittenTool), nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, searchBody(true, kittenTool), nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -678,7 +687,7 @@ func TestToolRuntimeFails(t *testing.T) {
 		refuse(w, http.StatusInternalServerError)
 	})
 	g, _, base = toolGateway(t, broken, searxngServer(searx))
-	r, _ = ask(t, g, base, http.MethodPost, anthropicMessages, searchBody(false, kittenTool), nil)
+	r, _ = ask(t, g, base, http.MethodPost, chat.AnthropicMessages, searchBody(false, kittenTool), nil)
 	if r.status != http.StatusInternalServerError || !strings.Contains(string(r.body), "seat refuses") {
 		t.Fatalf("first round failure: %d %s", r.status, r.body)
 	}
@@ -697,18 +706,18 @@ func TestToolClash(t *testing.T) {
 		searchBody(false, `{"type":"web_search_20250305","name":"web_search","max_uses":0}`):    "at least 1",
 		searchBody(false, `{"type":"text_editor_20250124","name":"str_replace_editor"}`):        "expected tags: 'custom'",
 	} {
-		r, _ := ask(t, g, base, http.MethodPost, anthropicMessages, body, nil)
+		r, _ := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, body, nil)
 		if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), want) {
 			t.Fatalf("%s: %d %s", want, r.status, r.body)
 		}
 	}
 	// A client's own function cannot take a name a route's tool server offers.
 	table.Set("m", "i1", "", model.URL, "r:g", "m", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, &v1.Profile{ToolServers: []string{"web"}})
-	r, _ := ask(t, g, base, http.MethodPost, openaiChat, oaiBody(false, `[{"type":"function","function":{"name":"web_search","parameters":{"type":"object"}}}]`), nil)
+	r, _ := ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, `[{"type":"function","function":{"name":"web_search","parameters":{"type":"object"}}}]`), nil)
 	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), "belongs to tool server web") {
 		t.Fatalf("route clash: %d %s", r.status, r.body)
 	}
-	r, _ = ask(t, g, base, http.MethodPost, openaiChat, oaiBody(false, ""), map[string]string{ApproveHeader: "sometimes"})
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, ""), map[string]string{ApproveHeader: "sometimes"})
 	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), "mutating, all, or unset") {
 		t.Fatalf("bad approval header: %d %s", r.status, r.body)
 	}
@@ -733,7 +742,7 @@ func TestWebFetch(t *testing.T) {
 	})
 	g, _, base := toolGateway(t, model, fetchServer())
 	tool := `{"type":"web_fetch_20250910","name":"web_fetch","max_uses":5}`
-	r, trace := ask(t, g, base, http.MethodPost, anthropicMessages, searchBody(false, tool), nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, searchBody(false, tool), nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -779,7 +788,7 @@ func TestRouteTools(t *testing.T) {
 	})
 	g, table, base := toolGateway(t, model, searxngServer(searx))
 	table.Set("m", "i1", "", model.URL, "r:g", "m", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, &v1.Profile{ToolServers: []string{"web"}})
-	r, trace := ask(t, g, base, http.MethodPost, openaiChat, oaiBody(false, ""), nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, ""), nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -796,16 +805,16 @@ func TestRouteTools(t *testing.T) {
 	if trace.GetTranslated() || trace.GetPromptTokens() != 13 {
 		t.Fatalf("trace %v", trace)
 	}
-	r, _ = ask(t, g, base, http.MethodPost, openaiChat, oaiBody(true, ""), nil)
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(true, ""), nil)
 	if r.status != http.StatusOK || !strings.Contains(string(r.body), `"content":"Kittens found."`) || strings.Contains(string(r.body), "tool_calls") {
 		t.Fatalf("streamed: %d %s", r.status, r.body)
 	}
-	r, _ = ask(t, g, base, http.MethodPost, ollamaChat, `{"model":"m","stream":false,"messages":[{"role":"user","content":"Find kittens"}]}`, nil)
+	r, _ = ask(t, g, base, http.MethodPost, chat.OllamaChat, `{"model":"m","stream":false,"messages":[{"role":"user","content":"Find kittens"}]}`, nil)
 	if r.status != http.StatusOK || !strings.Contains(string(r.body), `"content":"Kittens found."`) {
 		t.Fatalf("ollama: %d %s", r.status, r.body)
 	}
 	// A client's own tools stay beside the route's.
-	r, _ = ask(t, g, base, http.MethodPost, openaiChat, oaiBody(false, `[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}]`), nil)
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, `[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}]`), nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -814,7 +823,7 @@ func TestRouteTools(t *testing.T) {
 	}
 	// A route naming a server Settings no longer hold serves without it.
 	table.Set("m", "i1", "", model.URL, "r:g", "m", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, &v1.Profile{ToolServers: []string{"gone"}})
-	r, _ = ask(t, g, base, http.MethodPost, openaiChat, oaiBody(false, ""), nil)
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, ""), nil)
 	if r.status != http.StatusOK || toolNames(model.call(model.count()-1).body) != nil {
 		t.Fatalf("missing server: %d %s %v", r.status, r.body, toolNames(model.call(model.count()-1).body))
 	}
@@ -832,7 +841,7 @@ func TestHeaderTools(t *testing.T) {
 		toolAnswer(w, "", toolCall("call_1", "fake__echo", `{"text":"hi"}`), toolCall("call_2", "fake__write_file", `{"path":"/x"}`))
 	})
 	g, _, base := toolGateway(t, model, mcpServer("fake", fake.URL))
-	r, trace := ask(t, g, base, http.MethodPost, openaiChat, oaiBody(false, ""), map[string]string{ToolsHeader: "fake"})
+	r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, ""), map[string]string{ToolsHeader: "fake"})
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -847,7 +856,7 @@ func TestHeaderTools(t *testing.T) {
 	if runs := trace.GetToolCalls(); len(runs) != 2 || runs[0].GetServer() != "fake" || runs[0].GetResult() != "echo: hi" || runs[1].GetServer() != "" {
 		t.Fatalf("trace %v", runs)
 	}
-	r, trace = ask(t, g, base, http.MethodPost, openaiChat, oaiBody(false, ""), map[string]string{ToolsHeader: "fake", MutatingHeader: "true"})
+	r, trace = ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, ""), map[string]string{ToolsHeader: "fake", MutatingHeader: "true"})
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -860,7 +869,7 @@ func TestHeaderTools(t *testing.T) {
 	if runs := trace.GetToolCalls(); len(runs) != 2 || runs[1].GetResult() != "wrote /x" {
 		t.Fatalf("trace %v", runs)
 	}
-	r, _ = ask(t, g, base, http.MethodPost, openaiChat, oaiBody(false, ""), map[string]string{ToolsHeader: "nope"})
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, ""), map[string]string{ToolsHeader: "nope"})
 	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), "unknown tool server") {
 		t.Fatalf("unknown server: %d %s", r.status, r.body)
 	}
@@ -879,7 +888,7 @@ func TestApproval(t *testing.T) {
 	})
 	g, _, base := toolGateway(t, model, mcpServer("fake", fake.URL))
 	headers := map[string]string{ToolsHeader: "fake", MutatingHeader: "true", ApproveHeader: "mutating"}
-	r, trace := ask(t, g, base, http.MethodPost, openaiChat, oaiBody(false, ""), headers)
+	r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, ""), headers)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -892,7 +901,7 @@ func TestApproval(t *testing.T) {
 		t.Fatalf("trace %v", runs)
 	}
 	headers[ApproveHeader] = "all"
-	r, _ = ask(t, g, base, http.MethodPost, openaiChat, oaiBody(false, ""), headers)
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, ""), headers)
 	if msg, _ := oaiAnswer(t, r.body); len(msg["tool_calls"].([]any)) != 2 {
 		t.Fatalf("all held %v", msg)
 	}
@@ -911,7 +920,7 @@ func TestMCPServersRequest(t *testing.T) {
 	})
 	g, _, base := toolGateway(t, model)
 	body := fmt.Sprintf(`{"model":"m","max_tokens":50,"messages":[{"role":"user","content":"hi"}],"mcp_servers":[{"type":"url","url":%q,"name":"tools","authorization_token":"tok","tool_configuration":{"allowed_tools":["echo"]}}]}`, fake.URL)
-	r, trace := ask(t, g, base, http.MethodPost, anthropicMessages, body, nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, body, nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -936,7 +945,7 @@ func TestMCPServersRequest(t *testing.T) {
 	if runs := trace.GetToolCalls(); len(runs) != 1 || runs[0].GetServer() != "tools" {
 		t.Fatalf("trace %v", runs)
 	}
-	r, _ = ask(t, g, base, http.MethodPost, anthropicMessages, strings.Replace(body, fake.URL, "http://127.0.0.1:1/mcp", 1), nil)
+	r, _ = ask(t, g, base, http.MethodPost, chat.AnthropicMessages, strings.Replace(body, fake.URL, "http://127.0.0.1:1/mcp", 1), nil)
 	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), "could not be reached") {
 		t.Fatalf("unreachable: %d %s", r.status, r.body)
 	}
@@ -955,7 +964,7 @@ func TestRoundCap(t *testing.T) {
 	})
 	g, table, base := toolGateway(t, model, searxngServer(searx))
 	table.Set("m", "i1", "", model.URL, "r:g", "m", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, &v1.Profile{ToolServers: []string{"web"}})
-	r, trace := ask(t, g, base, http.MethodPost, openaiChat, oaiBody(false, ""), nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, ""), nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -981,7 +990,7 @@ func TestEmulated(t *testing.T) {
 		}
 		msgs := body["messages"].([]any)
 		last, _ := msgs[len(msgs)-1].(map[string]any)["content"].(string)
-		if strings.Contains(last, responseOpen) {
+		if strings.Contains(last, chat.ResponseOpen) {
 			chatAnswer(w, "It is sunny in Portland.")
 			return
 		}
@@ -1003,7 +1012,7 @@ func TestEmulated(t *testing.T) {
 		t.Fatalf("route tools %v", route.GetTools())
 	}
 	weather := `[{"type":"function","function":{"name":"get_weather","description":"Reads the weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}]`
-	r, trace := ask(t, g, base, http.MethodPost, openaiChat, oaiBody(false, weather), nil)
+	r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, weather), nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -1028,7 +1037,7 @@ func TestEmulated(t *testing.T) {
 		t.Fatalf("trace %v", trace.GetToolCalls())
 	}
 	// Streamed, the call arrives once its block closes, the text before it as it came.
-	r, _ = ask(t, g, base, http.MethodPost, openaiChat, oaiBody(true, weather), nil)
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(true, weather), nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -1051,7 +1060,7 @@ func TestEmulated(t *testing.T) {
 	}
 	// The result turn reaches the runtime as a user turn carrying the response block.
 	followup := `{"model":"m","messages":[{"role":"user","content":"Weather?"},{"role":"assistant","content":"Checking.","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Portland\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"sunny"}],"tools":` + weather + `}`
-	r, _ = ask(t, g, base, http.MethodPost, openaiChat, followup, nil)
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, followup, nil)
 	if r.status != http.StatusOK {
 		t.Fatalf("status %d: %s", r.status, r.body)
 	}
@@ -1062,46 +1071,8 @@ func TestEmulated(t *testing.T) {
 	assistant, _ := msgs[2].(map[string]any)["content"].(string)
 	user := msgs[3].(map[string]any)
 	userText, _ := user["content"].(string)
-	if !strings.Contains(assistant, callOpen) || !strings.Contains(assistant, `"get_weather"`) || user["role"] != "user" || !strings.Contains(userText, `<tool_response id="call_1">`) || !strings.Contains(userText, "sunny") {
+	if !strings.Contains(assistant, chat.CallOpen) || !strings.Contains(assistant, `"get_weather"`) || user["role"] != "user" || !strings.Contains(userText, `<tool_response id="call_1">`) || !strings.Contains(userText, "sunny") {
 		t.Fatalf("folded turns %v", msgs)
-	}
-}
-
-// The call parser splits text from calls as pieces arrive, takes fences and the parameters
-// spelling, and leaves a block that holds no call as text
-func TestCallParser(t *testing.T) {
-	run := func(pieces ...string) (string, []ToolCall) {
-		var text strings.Builder
-		var calls []ToolCall
-		p := &callParser{emit: func(ev Event) error {
-			if ev.Kind == "text" {
-				text.WriteString(ev.Text)
-			} else {
-				calls = append(calls, *ev.Tool)
-			}
-			return nil
-		}}
-		for _, s := range pieces {
-			p.text(s)
-		}
-		p.flush()
-		return text.String(), calls
-	}
-	text, calls := run("Hi <", "tool_cal", `l>{"name":"a","arguments":{"x":1}}</tool_call> bye <tool_call>`, "```json\n{\"name\":\"b\",\"parameters\":\"{\\\"y\\\":2}\"}\n```", "</tool_call>")
-	if text != "Hi  bye " || len(calls) != 2 || calls[0].Name != "a" || calls[0].Args != `{"x":1}` || calls[1].Name != "b" || calls[1].Args != `{"y":2}` {
-		t.Fatalf("%q %v", text, calls)
-	}
-	text, calls = run("<tool_call>not json</tool_call> and <tool_call>{\"name\":\"c\"}")
-	if text != "<tool_call>not json</tool_call> and " || len(calls) != 1 || calls[0].Name != "c" || calls[0].Args != "{}" {
-		t.Fatalf("%q %v", text, calls)
-	}
-	text, calls = run("<tool_call>never closed")
-	if text != "<tool_call>never closed" || len(calls) != 0 {
-		t.Fatalf("%q %v", text, calls)
-	}
-	text, _ = run("a < b and <tool", "s> are fine")
-	if text != "a < b and <tools> are fine" {
-		t.Fatalf("%q", text)
 	}
 }
 

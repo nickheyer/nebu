@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/internal/db"
-	"github.com/nickheyer/nebu/internal/gateway"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -418,7 +418,7 @@ func (r *runner) reply(sess session, m *discordgo.Message, p *v1.Persona, conten
 }
 
 // Streams a reply by editing one message, then posts any overflow.
-func (r *runner) streamed(ctx context.Context, sp *speaker, m *discordgo.Message, p *v1.Persona, model string, chat *gateway.Chat, ref *discordgo.MessageReference) {
+func (r *runner) streamed(ctx context.Context, sp *speaker, m *discordgo.Message, p *v1.Persona, model string, req *chat.Request, ref *discordgo.MessageReference) {
 	var mu sync.Mutex
 	var buf strings.Builder
 	var first *discordgo.Message
@@ -455,7 +455,7 @@ func (r *runner) streamed(ctx context.Context, sp *speaker, m *discordgo.Message
 			}
 		}
 	}()
-	ans, err := r.chat(ctx, p, model, chat, func(delta string) {
+	ans, err := r.chat(ctx, p, model, req, func(delta string) {
 		mu.Lock()
 		buf.WriteString(delta)
 		mu.Unlock()
@@ -527,11 +527,11 @@ func (r *runner) style(p *v1.Persona, text string) string {
 type turn struct {
 	role  string
 	text  string
-	parts []gateway.Part
+	parts []chat.Part
 }
 
 // Builds chat input from the persona prompt, context, history, and message.
-func (r *runner) buildChat(ctx context.Context, sess session, p *v1.Persona, m *discordgo.Message, content string) (*gateway.Chat, error) {
+func (r *runner) buildChat(ctx context.Context, sess session, p *v1.Persona, m *discordgo.Message, content string) (*chat.Request, error) {
 	mem := r.spec.GetMemory()
 	c := r.channel(m.ChannelID)
 	r.mu.Lock()
@@ -594,26 +594,26 @@ func (r *runner) buildChat(ctx context.Context, sess session, p *v1.Persona, m *
 	}
 	turns = append(turns, last)
 	turns = trimTurns(mergeTurns(turns), int(mem.GetMaxChars()))
-	chat := &gateway.Chat{Messages: []gateway.Message{{Role: "system", Parts: []gateway.Part{{Type: "text", Text: r.systemPrompt(sess, p, m)}}}}}
+	req := &chat.Request{Messages: []chat.Message{{Role: "system", Parts: []chat.Part{{Type: "text", Text: r.systemPrompt(sess, p, m)}}}}}
 	for _, t := range turns {
-		msg := gateway.Message{Role: t.role, Parts: append([]gateway.Part(nil), t.parts...)}
+		msg := chat.Message{Role: t.role, Parts: append([]chat.Part(nil), t.parts...)}
 		if t.text != "" {
-			msg.Parts = append(msg.Parts, gateway.Part{Type: "text", Text: t.text})
+			msg.Parts = append(msg.Parts, chat.Part{Type: "text", Text: t.text})
 		}
-		chat.Messages = append(chat.Messages, msg)
+		req.Messages = append(req.Messages, msg)
 	}
-	return chat, nil
+	return req, nil
 }
 
 // Builds chat input for manual and scheduled posts.
-func (r *runner) freshChat(p *v1.Persona, sess session, channelID, content string) *gateway.Chat {
+func (r *runner) freshChat(p *v1.Persona, sess session, channelID, content string) *chat.Request {
 	m := &discordgo.Message{ChannelID: channelID}
 	if c, err := sess.Channel(channelID); err == nil {
 		m.GuildID = c.GuildID
 	}
-	return &gateway.Chat{Messages: []gateway.Message{
-		{Role: "system", Parts: []gateway.Part{{Type: "text", Text: r.systemPrompt(sess, p, m)}}},
-		{Role: "user", Parts: []gateway.Part{{Type: "text", Text: content}}},
+	return &chat.Request{Messages: []chat.Message{
+		{Role: "system", Parts: []chat.Part{{Type: "text", Text: r.systemPrompt(sess, p, m)}}},
+		{Role: "user", Parts: []chat.Part{{Type: "text", Text: content}}},
 	}}
 }
 

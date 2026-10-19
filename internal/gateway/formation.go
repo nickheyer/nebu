@@ -11,8 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// The counter a route's requests in flight are kept under: its instance, or the route itself
-// when its requests are counted on the seats that serve them, or forwarded to another node
+// The counter a route's in flight requests use, its instance unless seats or another node serve it
 func counterKey(r *v1.Route) string {
 	if r.GetInstanceId() != "" && !servedBySeats(r) {
 		return r.GetInstanceId()
@@ -96,10 +95,7 @@ func (t *Table) ServeFormationAs(name string, f *v1.Formation, head *v1.Instance
 	return t.snapshotLocked(r)
 }
 
-// Adds a route for a formation another member conducts, its requests going to that member's
-// gateway. A ready formation's route is ready, a degraded one's draining, a starting one's
-// pending. A name a route here already holds for something else is a collision the caller
-// records on the formation, and a formation without an endpoint cannot be forwarded
+// Adds a route forwarding a formation another member conducts, its state following the formation's
 func (t *Table) Forward(f *v1.Formation, api v1.ApiFlavor) (*v1.Route, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -154,10 +150,7 @@ func gatewayBase(node *v1.Node) string {
 	return "http://" + node.GetAddress()
 }
 
-// Keeps the routes of a member's instances on this gateway, from its record: every ready route
-// it serves is forwarded to its gateway, a draining one drains here, and one it no longer
-// serves leaves. Formation routes are the conductor's record's, kept by Forward. A name a route
-// here holds for something else is a collision, returned with the rest
+// Forwards every ready route of a member's record here, drains draining ones, and drops ones it no longer serves
 func (t *Table) ForwardNode(node *v1.Node) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -233,8 +226,7 @@ func (t *Table) RemoveNode(nodeID string) []*v1.Route {
 	return gone
 }
 
-// Follows the members' records on the event bus, forwarding the routes of every member here
-// and dropping a member's routes when it leaves or goes quiet
+// Follows member records on the event bus, forwarding their routes here and dropping them when they leave
 func (t *Table) Follow(ctx context.Context) {
 	sub := t.events.Subscribe(ctx, []v1.EventKind{v1.EventKind_EVENT_KIND_NODE})
 	go func() {

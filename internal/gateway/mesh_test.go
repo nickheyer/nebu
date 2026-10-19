@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -251,10 +252,10 @@ func TestForwardedRequest(t *testing.T) {
 	defer esrv.Close()
 
 	body := `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`
-	if r, _ := ask(t, entry, esrv.URL, http.MethodPost, openaiChat, body, nil); r.status != http.StatusUnauthorized {
+	if r, _ := ask(t, entry, esrv.URL, http.MethodPost, chat.OpenAIChat, body, nil); r.status != http.StatusUnauthorized {
 		t.Fatalf("no key: %d %s", r.status, r.body)
 	}
-	r, trace := ask(t, entry, esrv.URL, http.MethodPost, openaiChat, body, map[string]string{"Authorization": "Bearer entry-key"})
+	r, trace := ask(t, entry, esrv.URL, http.MethodPost, chat.OpenAIChat, body, map[string]string{"Authorization": "Bearer entry-key"})
 	if r.status != http.StatusOK || !strings.Contains(string(r.body), "Hello") || !strings.Contains(r.header.Get("Content-Type"), "text/event-stream") {
 		t.Fatalf("forwarded stream: %d %s %s", r.status, r.header.Get("Content-Type"), r.body)
 	}
@@ -273,13 +274,13 @@ func TestForwardedRequest(t *testing.T) {
 		t.Fatal("the client's credential must not reach the model")
 	}
 	// The conductor saw the entry node and the member session, and nothing else opens the path.
-	if r, _ := ask(t, conductor, csrv.URL, http.MethodPost, openaiChat, body, map[string]string{"Authorization": "Bearer sess-n1"}); r.status != http.StatusUnauthorized {
+	if r, _ := ask(t, conductor, csrv.URL, http.MethodPost, chat.OpenAIChat, body, map[string]string{"Authorization": "Bearer sess-n1"}); r.status != http.StatusUnauthorized {
 		t.Fatalf("a member session without the entry header must not pass: %d", r.status)
 	}
-	if r, _ := ask(t, conductor, csrv.URL, http.MethodPost, openaiChat, body, map[string]string{"Authorization": "Bearer sess-n1", entryHeader: "n1"}); r.status != http.StatusOK {
+	if r, _ := ask(t, conductor, csrv.URL, http.MethodPost, chat.OpenAIChat, body, map[string]string{"Authorization": "Bearer sess-n1", entryHeader: "n1"}); r.status != http.StatusOK {
 		t.Fatalf("a member session with the entry header passes: %d %s", r.status, r.body)
 	}
-	if r, _ := ask(t, conductor, csrv.URL, http.MethodPost, openaiChat, body, map[string]string{"Authorization": "Bearer stranger", entryHeader: "n1"}); r.status != http.StatusUnauthorized {
+	if r, _ := ask(t, conductor, csrv.URL, http.MethodPost, chat.OpenAIChat, body, map[string]string{"Authorization": "Bearer stranger", entryHeader: "n1"}); r.status != http.StatusUnauthorized {
 		t.Fatalf("a stranger with the entry header must not pass: %d", r.status)
 	}
 	// A route forwarded on both nodes is refused rather than bounced between them.
@@ -287,7 +288,7 @@ func TestForwardedRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	loop := `{"model":"loop","messages":[{"role":"user","content":"hi"}]}`
-	if r, _ := ask(t, conductor, csrv.URL, http.MethodPost, openaiChat, loop, map[string]string{"Authorization": "Bearer sess-n1", entryHeader: "n1"}); r.status != http.StatusBadGateway {
+	if r, _ := ask(t, conductor, csrv.URL, http.MethodPost, chat.OpenAIChat, loop, map[string]string{"Authorization": "Bearer sess-n1", entryHeader: "n1"}); r.status != http.StatusBadGateway {
 		t.Fatalf("a forwarded route reached by a forwarded request: %d %s", r.status, r.body)
 	}
 	// Every member's gateway lists the route.
@@ -330,7 +331,7 @@ func TestForwardedVideoJob(t *testing.T) {
 	}
 	esrv := httptest.NewServer(entry.Handler())
 	defer esrv.Close()
-	r, trace := ask(t, entry, esrv.URL, http.MethodPost, videosPath, `{"model":"v","prompt":"a cat","seconds":1}`, nil)
+	r, trace := ask(t, entry, esrv.URL, http.MethodPost, chat.OpenAIVideos, `{"model":"v","prompt":"a cat","seconds":1}`, nil)
 	if r.status != http.StatusAccepted || trace == nil || !trace.GetForwarded() {
 		t.Fatalf("forwarded video: %d %s", r.status, r.body)
 	}
@@ -340,19 +341,19 @@ func TestForwardedVideoJob(t *testing.T) {
 	if json.Unmarshal(r.body, &job) != nil || job.ID == "" {
 		t.Fatalf("job id: %s", r.body)
 	}
-	r, _ = ask(t, nil, esrv.URL, http.MethodGet, videosPath+"/"+job.ID, "", nil)
+	r, _ = ask(t, nil, esrv.URL, http.MethodGet, chat.OpenAIVideos+"/"+job.ID, "", nil)
 	if r.status != http.StatusOK || !strings.Contains(string(r.body), `"id":"`+job.ID+`"`) {
 		t.Fatalf("poll through the entry node: %d %s", r.status, r.body)
 	}
-	r, _ = ask(t, nil, esrv.URL, http.MethodGet, videosPath+"/"+job.ID+"/content", "", nil)
+	r, _ = ask(t, nil, esrv.URL, http.MethodGet, chat.OpenAIVideos+"/"+job.ID+"/content", "", nil)
 	if r.status != http.StatusAccepted {
 		t.Fatalf("content of a running job through the entry node: %d %s", r.status, r.body)
 	}
-	r, _ = ask(t, nil, esrv.URL, http.MethodDelete, videosPath+"/"+job.ID, "", nil)
+	r, _ = ask(t, nil, esrv.URL, http.MethodDelete, chat.OpenAIVideos+"/"+job.ID, "", nil)
 	if r.status != http.StatusOK || !strings.Contains(string(r.body), `"deleted":true`) {
 		t.Fatalf("cancel through the entry node: %d %s", r.status, r.body)
 	}
-	if r, _ = ask(t, nil, esrv.URL, http.MethodGet, videosPath+"/"+job.ID, "", nil); r.status != http.StatusNotFound {
+	if r, _ = ask(t, nil, esrv.URL, http.MethodGet, chat.OpenAIVideos+"/"+job.ID, "", nil); r.status != http.StatusNotFound {
 		t.Fatalf("a cancelled job is forgotten: %d", r.status)
 	}
 }
@@ -393,7 +394,7 @@ func TestRelayNIXL(t *testing.T) {
 	relayRoute(t, table, "vllm", estimate.HandoffNIXL, 4, &v1.RouteSeat{InstanceId: "ip", Endpoint: prefill.URL, NodeId: "n1", Role: "prefill", State: v1.InstanceState_INSTANCE_STATE_READY}, &v1.RouteSeat{InstanceId: "id", Endpoint: decode.URL, NodeId: "n2", Role: "decode", State: v1.InstanceState_INSTANCE_STATE_READY})
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
-	r, trace := ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil)
+	r, trace := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil)
 	if r.status != http.StatusOK || !strings.Contains(string(r.body), "decoded") {
 		t.Fatalf("relay: %d %s", r.status, r.body)
 	}
@@ -405,7 +406,7 @@ func TestRelayNIXL(t *testing.T) {
 		t.Fatalf("decode request carried %v", decode.call(0).body)
 	}
 	fail = true
-	r, trace = ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil)
+	r, trace = ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil)
 	if r.status != http.StatusOK || trace.GetRelay() != relayNoPrefill || strings.Join(trace.GetSeats(), ",") != "id" {
 		t.Fatalf("prefill failure: %d relay %q seats %v", r.status, trace.GetRelay(), trace.GetSeats())
 	}
@@ -433,12 +434,12 @@ func TestRelayBreakEven(t *testing.T) {
 	relayRoute(t, table, "vllm", estimate.HandoffNIXL, 0, seatP, seatD)
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
-	r, trace := ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil)
+	r, trace := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil)
 	if r.status != http.StatusOK || trace.GetRelay() != relayDecode || strings.Join(trace.GetSeats(), ",") != "id" {
 		t.Fatalf("break even 0: %d relay %q seats %v", r.status, trace.GetRelay(), trace.GetSeats())
 	}
 	relayRoute(t, table, "vllm", estimate.HandoffNIXL, 100000, seatP, seatD)
-	if _, trace = ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil); trace.GetRelay() != relayDecode {
+	if _, trace = ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil); trace.GetRelay() != relayDecode {
 		t.Fatalf("short prompt: relay %q", trace.GetRelay())
 	}
 	if prefill.count() != 0 {
@@ -446,7 +447,7 @@ func TestRelayBreakEven(t *testing.T) {
 	}
 	// A runtime declaring no handoff cannot relay.
 	relayRoute(t, table, "nemo", "", 4, seatP, seatD)
-	if r, _ := ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil); r.status != http.StatusServiceUnavailable || !strings.Contains(string(r.body), "nemo declares no relay handoff") {
+	if r, _ := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil); r.status != http.StatusServiceUnavailable || !strings.Contains(string(r.body), "nemo declares no relay handoff") {
 		t.Fatalf("no handoff: %d %s", r.status, r.body)
 	}
 }
@@ -480,7 +481,7 @@ func TestRelayBootstrap(t *testing.T) {
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
 	body := `{"model":"m","stream":true,"messages":[{"role":"user","content":"hello there, how are you today"}]}`
-	r, trace := ask(t, g, srv.URL, http.MethodPost, openaiChat, body, nil)
+	r, trace := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, body, nil)
 	if r.status != http.StatusOK || !strings.Contains(string(r.body), "decoded") || trace.GetRelay() != relayBoth || strings.Join(trace.GetSeats(), ",") != "ip,id" {
 		t.Fatalf("relay: %d relay %q seats %v %s", r.status, trace.GetRelay(), trace.GetSeats(), r.body)
 	}
@@ -489,7 +490,7 @@ func TestRelayBootstrap(t *testing.T) {
 		t.Fatalf("seats met in different rooms: %v %v", p, d)
 	}
 	fail = true
-	r, trace = ask(t, g, srv.URL, http.MethodPost, openaiChat, body, nil)
+	r, trace = ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, body, nil)
 	if r.status != http.StatusOK || !strings.Contains(string(r.body), "decoded") || trace.GetRelay() != relayNoPrefill || strings.Join(trace.GetSeats(), ",") != "id" {
 		t.Fatalf("prefill failure: %d relay %q seats %v %s", r.status, trace.GetRelay(), trace.GetSeats(), r.body)
 	}
@@ -510,7 +511,7 @@ func TestRelaySlot(t *testing.T) {
 	blocking := false
 	prefill := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
 		switch {
-		case r.URL.Path == openaiChat:
+		case r.URL.Path == chat.OpenAIChat:
 			if body["id_slot"] != float64(0) || body["cache_prompt"] != true || body["max_tokens"] != float64(1) {
 				t.Errorf("prefill request %v", body)
 			}
@@ -524,7 +525,7 @@ func TestRelaySlot(t *testing.T) {
 	})
 	decode := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
 		switch {
-		case r.URL.Path == openaiChat:
+		case r.URL.Path == chat.OpenAIChat:
 			if _, relayed := body["id_slot"]; relayed && (body["id_slot"] != float64(0) || body["cache_prompt"] != true) {
 				t.Errorf("decode request %v", body)
 			}
@@ -545,7 +546,7 @@ func TestRelaySlot(t *testing.T) {
 	relayRoute(t, table, "llamacpp", estimate.HandoffLlamaSlot, 4, &v1.RouteSeat{InstanceId: "ip", Endpoint: prefill.URL, NodeId: "n1", Role: "prefill", State: v1.InstanceState_INSTANCE_STATE_READY}, &v1.RouteSeat{InstanceId: "id", Endpoint: decode.URL, NodeId: "n2", Role: "decode", State: v1.InstanceState_INSTANCE_STATE_READY})
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
-	r, trace := ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil)
+	r, trace := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil)
 	if r.status != http.StatusOK || trace.GetRelay() != relayBoth || strings.Join(trace.GetSeats(), ",") != "ip,id" {
 		t.Fatalf("relay: %d relay %q seats %v %s", r.status, trace.GetRelay(), trace.GetSeats(), r.body)
 	}
@@ -563,14 +564,14 @@ func TestRelaySlot(t *testing.T) {
 	blocking = true
 	first := make(chan reply, 1)
 	go func() {
-		r, _ := ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil)
+		r, _ := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil)
 		first <- r
 	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for decode.count() < 3 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if r, _ := ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil); r.status != http.StatusTooManyRequests || !strings.Contains(string(r.body), "slot") {
+	if r, _ := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil); r.status != http.StatusTooManyRequests || !strings.Contains(string(r.body), "slot") {
 		t.Fatalf("second relay with the slot held: %d %s", r.status, r.body)
 	}
 	close(block)
@@ -581,7 +582,7 @@ func TestRelaySlot(t *testing.T) {
 	blocking = false
 	peers.move = errors.New("link down")
 	peers.moved, peers.drops = nil, nil
-	r, trace = ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil)
+	r, trace = ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil)
 	if r.status != http.StatusOK || trace.GetRelay() != relayNoPrefill {
 		t.Fatalf("move failure: %d relay %q", r.status, trace.GetRelay())
 	}
@@ -626,21 +627,21 @@ func TestFailoverOnce(t *testing.T) {
 		mu.Unlock()
 	}
 	set("a", http.StatusServiceUnavailable)
-	r, trace := ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil)
+	r, trace := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil)
 	if r.status != http.StatusOK || !strings.Contains(string(r.body), "from b") || strings.Join(trace.GetSeats(), ",") != "ib" {
 		t.Fatalf("passed once: %d %s seats %v", r.status, r.body, trace.GetSeats())
 	}
 	// The conversation now sticks to b, which refuses: it passes to the next once and stops there.
 	set("b", http.StatusTooManyRequests)
 	set("a", 0)
-	r, _ = ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil)
+	r, _ = ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil)
 	if r.status != http.StatusOK || !strings.Contains(string(r.body), "from a") {
 		t.Fatalf("refusal by the pinned seat passes on: %d %s", r.status, r.body)
 	}
 	set("a", http.StatusInternalServerError)
 	set("b", http.StatusInternalServerError)
 	other := `{"model":"m","messages":[{"role":"user","content":"a fresh conversation"}]}`
-	r, _ = ask(t, g, srv.URL, http.MethodPost, openaiChat, other, nil)
+	r, _ = ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, other, nil)
 	if r.status != http.StatusInternalServerError || c.count() != 0 {
 		t.Fatalf("two refusals reach the client, the third seat untouched: %d, c asked %d", r.status, c.count())
 	}
@@ -648,7 +649,7 @@ func TestFailoverOnce(t *testing.T) {
 	a.Close()
 	set("b", 0)
 	anthropic := `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"a fresh conversation"}]}`
-	r, trace = ask(t, g, srv.URL, http.MethodPost, anthropicMessages, anthropic, map[string]string{"anthropic-version": "2023-06-01"})
+	r, trace = ask(t, g, srv.URL, http.MethodPost, chat.AnthropicMessages, anthropic, map[string]string{"anthropic-version": "2023-06-01"})
 	if r.status != http.StatusOK || !strings.Contains(string(r.body), "from b") || strings.Join(trace.GetSeats(), ",") != "ib" || !trace.GetTranslated() {
 		t.Fatalf("translated failover: %d %s seats %v", r.status, r.body, trace.GetSeats())
 	}
@@ -672,32 +673,32 @@ func TestReplicaPicking(t *testing.T) {
 	replicaRoute(table, seats, nil, nil)
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
-	if r, _ := ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil); r.status != http.StatusBadGateway || !strings.Contains(string(r.body), "affinity policy") {
+	if r, _ := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil); r.status != http.StatusBadGateway || !strings.Contains(string(r.body), "affinity policy") {
 		t.Fatalf("no affinity policy: %d %s", r.status, r.body)
 	}
 	replicaRoute(table, seats, policy, &v1.Policy{MaxInFlight: 1})
 	// Idle seats tie, and the link from the entry node decides: from here a is nearer, from n3 b is.
-	r, trace := ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil)
+	r, trace := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil)
 	if !strings.Contains(string(r.body), "from a") || strings.Join(trace.GetSeats(), ",") != "ia" {
 		t.Fatalf("nearest seat from here: %s %v", r.body, trace.GetSeats())
 	}
 	fresh := `{"model":"m","messages":[{"role":"user","content":"another conversation"}]}`
-	if r, _ := ask(t, g, srv.URL, http.MethodPost, openaiChat, fresh, map[string]string{entryHeader: "n3"}); !strings.Contains(string(r.body), "from b") {
+	if r, _ := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, fresh, map[string]string{entryHeader: "n3"}); !strings.Contains(string(r.body), "from b") {
 		t.Fatalf("nearest seat from the entry node: %s", r.body)
 	}
 	// The first conversation stays on a even while a is busier.
 	releaseA := table.HoldSeat("ia")
-	if r, _ := ask(t, g, srv.URL, http.MethodPost, openaiChat, `{"model":"m","messages":[{"role":"user","content":"yet another"}]}`, nil); !strings.Contains(string(r.body), "from b") {
+	if r, _ := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, `{"model":"m","messages":[{"role":"user","content":"yet another"}]}`, nil); !strings.Contains(string(r.body), "from b") {
 		t.Fatalf("least loaded: %s", r.body)
 	}
 	releaseA()
 	// The affinity pins the conversation to a even over the cap: with a at its cap, b takes it.
 	releaseA = table.HoldSeat("ia")
-	if r, _ := ask(t, g, srv.URL, http.MethodPost, openaiChat, chatBody, nil); !strings.Contains(string(r.body), "from b") {
+	if r, _ := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil); !strings.Contains(string(r.body), "from b") {
 		t.Fatalf("a seat at its cap takes nothing: %s", r.body)
 	}
 	releaseB := table.HoldSeat("ib")
-	if r, _ := ask(t, g, srv.URL, http.MethodPost, openaiChat, fresh, nil); r.status != http.StatusTooManyRequests {
+	if r, _ := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, fresh, nil); r.status != http.StatusTooManyRequests {
 		t.Fatalf("every seat at its cap: %d %s", r.status, r.body)
 	}
 	rt, _ := table.Lookup("m")
@@ -706,7 +707,7 @@ func TestReplicaPicking(t *testing.T) {
 	}
 	releaseA()
 	releaseB()
-	if key := prefixKey("m", &Chat{Messages: []Message{{Role: "user", Parts: []Part{{Type: "text", Text: "hi"}}}}}, &v1.AffinityPolicy{}); key != "" {
+	if key := prefixKey("m", &chat.Request{Messages: []chat.Message{{Role: "user", Parts: []chat.Part{{Type: "text", Text: "hi"}}}}}, &v1.AffinityPolicy{}); key != "" {
 		t.Fatal("a policy covering nothing pins nothing")
 	}
 }
@@ -738,23 +739,23 @@ func TestMediaReplicas(t *testing.T) {
 	srv := httptest.NewServer(g.Handler())
 	defer srv.Close()
 	body := `{"model":"v","prompt":"a cat","size":"64x64"}`
-	r, trace := ask(t, g, srv.URL, http.MethodPost, imagesPath, body, nil)
+	r, trace := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIImages, body, nil)
 	if r.status != http.StatusOK || strings.Join(trace.GetSeats(), ",") != "ib" {
 		t.Fatalf("passed once: %d %s seats %v", r.status, r.body, trace.GetSeats())
 	}
 	// One job per seat: with b busy only a is free, and a refuses, so nothing else is tried.
 	releaseB := table.HoldSeat("ib")
-	if r, _ := ask(t, g, srv.URL, http.MethodPost, imagesPath, body, nil); r.status != http.StatusServiceUnavailable {
+	if r, _ := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIImages, body, nil); r.status != http.StatusServiceUnavailable {
 		t.Fatalf("the one free seat refused: %d %s", r.status, r.body)
 	}
 	releaseA := table.HoldSeat("ia")
-	if r, _ := ask(t, g, srv.URL, http.MethodPost, imagesPath, body, nil); r.status != http.StatusTooManyRequests {
+	if r, _ := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIImages, body, nil); r.status != http.StatusTooManyRequests {
 		t.Fatalf("every seat has a job: %d %s", r.status, r.body)
 	}
 	releaseA()
 	releaseB()
 	refusing = false
-	if r, trace := ask(t, g, srv.URL, http.MethodPost, imagesPath, body, nil); r.status != http.StatusOK || strings.Join(trace.GetSeats(), ",") != "ia" {
+	if r, trace := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIImages, body, nil); r.status != http.StatusOK || strings.Join(trace.GetSeats(), ",") != "ia" {
 		t.Fatalf("free seats take the job: %d seats %v", r.status, trace.GetSeats())
 	}
 	if table.InFlight("ia") != 0 || table.InFlight("ib") != 0 {

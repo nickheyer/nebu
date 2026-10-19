@@ -1,85 +1,86 @@
-package gateway
+package chat
 
 import (
 	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
-
-	"github.com/nickheyer/nebu/internal/db"
 )
 
+// The tags a model writes calls in and reads results from when tools live in the prompt
 const (
-	callOpen      = "<tool_call>"
-	callClose     = "</tool_call>"
-	responseOpen  = "<tool_response"
-	responseClose = "</tool_response>"
+	CallOpen      = "<tool_call>"
+	CallClose     = "</tool_call>"
+	ResponseOpen  = "<tool_response"
+	ResponseClose = "</tool_response>"
 )
 
-// Serves tools to a runtime that refuses tool definitions by writing them into the prompt
+// A runtime that refuses tool definitions, served by writing them into the prompt
 type emulated struct {
-	Flavor
+	Runtime
 }
 
-// Renders the chat with its tools written into the prompt and its tool turns written as text
-func (e emulated) RenderRequest(c *Chat) (string, []byte, error) {
-	return e.Flavor.RenderRequest(foldTools(c))
+// Wraps a runtime so its tools go in the prompt and the calls come out of the text
+func Emulate(rt Runtime) Runtime { return emulated{rt} }
+
+func (e emulated) Render(c *Request) (string, []byte, error) {
+	return e.Runtime.Render(foldTools(c))
 }
 
 // Reads a whole answer, the calls the model wrote taken out of its text
-func (e emulated) ParseResult(c *Chat, body []byte) (*Result, error) {
-	res, err := e.Flavor.ParseResult(c, body)
+func (e emulated) ParseResult(c *Request, body []byte) (*Result, error) {
+	res, err := e.Runtime.ParseResult(c, body)
 	if err != nil {
 		return nil, err
 	}
 	var text strings.Builder
 	var calls []ToolCall
-	p := &callParser{emit: func(ev Event) error {
+	p := &CallParser{Emit: func(ev Event) error {
 		switch ev.Kind {
-		case "text":
+		case Said:
 			text.WriteString(ev.Text)
-		case "tool":
+		case Called:
 			calls = append(calls, *ev.Tool)
 		}
 		return nil
 	}}
-	p.text(res.Text)
-	p.flush()
+	p.Text(res.Text)
+	p.Flush()
 	res.Text = text.String()
 	res.ToolCalls = append(res.ToolCalls, calls...)
-	res.Stop = stopOf(res.Stop, len(res.ToolCalls))
+	res.Stop = StopOf(res.Stop, len(res.ToolCalls))
 	return res, nil
 }
 
 // Reads a streamed answer, text going out as it arrives and each call once its block closes
 func (e emulated) ParseStream(r io.Reader, emit func(Event) error) error {
 	var calls []ToolCall
-	p := &callParser{emit: func(ev Event) error {
-		if ev.Kind == "tool" {
+	p := &CallParser{Emit: func(ev Event) error {
+		if ev.Kind == Called {
 			calls = append(calls, *ev.Tool)
 		}
 		return emit(ev)
 	}}
-	return e.Flavor.ParseStream(r, func(ev Event) error {
+	return e.Runtime.ParseStream(r, func(ev Event) error {
 		switch ev.Kind {
-		case "text":
-			return p.text(ev.Text)
-		case "stop":
-			if err := p.flush(); err != nil {
+		case Said:
+			return p.Text(ev.Text)
+		case Stopped:
+			if err := p.Flush(); err != nil {
 				return err
 			}
 			if ev.Res == nil {
 				ev.Res = &Result{}
 			}
 			ev.Res.ToolCalls = append(ev.Res.ToolCalls, calls...)
-			ev.Res.Stop = stopOf(ev.Res.Stop, len(ev.Res.ToolCalls))
+			ev.Res.Stop = StopOf(ev.Res.Stop, len(ev.Res.ToolCalls))
 		}
 		return emit(ev)
 	})
 }
 
-// A copy of the chat with tools in the system prompt and calls and results written as text
-func foldTools(c *Chat) *Chat {
+// A copy of the request with tools in the system prompt and calls and results written as text
+func foldTools(c *Request) *Request {
 	out := *c
 	out.Tools, out.ToolChoice, out.Messages = nil, "", nil
 	for _, m := range c.Messages {
@@ -87,7 +88,7 @@ func foldTools(c *Chat) *Chat {
 		switch m.Role {
 		case "assistant":
 			if len(m.ToolCalls) > 0 {
-				text := textOf(m.Parts)
+				text := TextOf(m.Parts)
 				for _, call := range m.ToolCalls {
 					text = strings.TrimRight(text, "\n") + "\n" + callText(call) + "\n"
 				}
@@ -113,7 +114,7 @@ func foldTools(c *Chat) *Chat {
 	}
 	prompt := toolPrompt(c.Tools, c.ToolChoice)
 	if len(out.Messages) > 0 && out.Messages[0].Role == "system" {
-		out.Messages[0].Parts = appendText(out.Messages[0].Parts, prompt)
+		out.Messages[0].Parts = AppendText(out.Messages[0].Parts, prompt)
 		return &out
 	}
 	out.Messages = append([]Message{{Role: "system", Parts: []Part{{Type: "text", Text: prompt}}}}, out.Messages...)
@@ -127,15 +128,15 @@ func callText(call ToolCall) string {
 		args = json.RawMessage("{}")
 	}
 	body, _ := json.Marshal(map[string]any{"name": call.Name, "arguments": args})
-	return callOpen + "\n" + string(body) + "\n" + callClose
+	return CallOpen + "\n" + string(body) + "\n" + CallClose
 }
 
 // A tool turn as a user turn, the text in a response block with images beside it
 func responseParts(m Message) []Part {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s id=%q>\n", responseOpen, m.ToolID)
-	b.WriteString(textOf(m.Parts))
-	b.WriteString("\n" + responseClose)
+	fmt.Fprintf(&b, "%s id=%q>\n", ResponseOpen, m.ToolID)
+	b.WriteString(TextOf(m.Parts))
+	b.WriteString("\n" + ResponseClose)
 	out := []Part{{Type: "text", Text: b.String()}}
 	for _, p := range m.Parts {
 		if p.Type == "image" {
@@ -158,12 +159,25 @@ func joinParts(a, b []Part) []Part {
 	return out
 }
 
+// Adds text to a run of parts, joined onto plain text and appended as a part beside anything else
+func AppendText(parts []Part, text string) []Part {
+	for _, p := range parts {
+		if p.Type != "text" || len(p.Extra) > 0 {
+			return append(parts, Part{Type: "text", Text: "\n\n" + text})
+		}
+	}
+	if have := TextOf(parts); have != "" {
+		text = have + "\n\n" + text
+	}
+	return []Part{{Type: "text", Text: text}}
+}
+
 // The system text that offers tools and says how to call them
 func toolPrompt(tools []Tool, choice string) string {
 	var b strings.Builder
-	b.WriteString("# Tools\n\nYou can call the tools listed below. To call one, write a " + callOpen + " block holding a JSON object with the tool's name and its arguments, one block per call, after any text you want to say first, then stop and wait:\n\n")
-	b.WriteString(callOpen + "\n{\"name\": \"tool_name\", \"arguments\": {\"argument\": \"value\"}}\n" + callClose + "\n\n")
-	b.WriteString("Each result comes back in a " + responseOpen + "> block. Never write " + responseOpen + "> blocks yourself.\n")
+	b.WriteString("# Tools\n\nYou can call the tools listed below. To call one, write a " + CallOpen + " block holding a JSON object with the tool's name and its arguments, one block per call, after any text you want to say first, then stop and wait:\n\n")
+	b.WriteString(CallOpen + "\n{\"name\": \"tool_name\", \"arguments\": {\"argument\": \"value\"}}\n" + CallClose + "\n\n")
+	b.WriteString("Each result comes back in a " + ResponseOpen + "> block. Never write " + ResponseOpen + "> blocks yourself.\n")
 	switch choice {
 	case "", "auto":
 	case "required":
@@ -185,41 +199,41 @@ func toolPrompt(tools []Tool, choice string) string {
 	return strings.TrimSpace(b.String())
 }
 
-// Splits the model's text into text and the calls it wrote, as the text arrives
-type callParser struct {
-	emit func(Event) error
+// Splits a model's text into text and the calls it wrote, as the text arrives
+type CallParser struct {
+	Emit func(Event) error
 	buf  string
 	// Whether a call block is open, its body gathering in buf
 	open bool
 	n    int
 }
 
-func (p *callParser) text(s string) error {
+func (p *CallParser) Text(s string) error {
 	p.buf += s
 	for {
 		if p.open {
-			i := strings.Index(p.buf, callClose)
+			i := strings.Index(p.buf, CallClose)
 			if i < 0 {
 				return nil
 			}
 			body := p.buf[:i]
-			p.buf = p.buf[i+len(callClose):]
+			p.buf = p.buf[i+len(CallClose):]
 			p.open = false
 			if err := p.call(body); err != nil {
 				return err
 			}
 			continue
 		}
-		i := strings.Index(p.buf, callOpen)
+		i := strings.Index(p.buf, CallOpen)
 		if i >= 0 {
 			if err := p.say(p.buf[:i]); err != nil {
 				return err
 			}
-			p.buf = p.buf[i+len(callOpen):]
+			p.buf = p.buf[i+len(CallOpen):]
 			p.open = true
 			continue
 		}
-		keep := partialPrefix(p.buf, callOpen)
+		keep := partialPrefix(p.buf, CallOpen)
 		if err := p.say(p.buf[:len(p.buf)-keep]); err != nil {
 			return err
 		}
@@ -228,38 +242,38 @@ func (p *callParser) text(s string) error {
 	}
 }
 
-func (p *callParser) say(s string) error {
+func (p *CallParser) say(s string) error {
 	if s == "" {
 		return nil
 	}
-	return p.emit(Event{Kind: "text", Text: s})
+	return p.Emit(Event{Kind: Said, Text: s})
 }
 
 // Emits a call from a block's body, or the block as text when it holds no call
-func (p *callParser) call(body string) error {
+func (p *CallParser) call(body string) error {
 	call, ok := parseCall(body)
 	if !ok {
-		return p.say(callOpen + body + callClose)
+		return p.say(CallOpen + body + CallClose)
 	}
-	call.ID = "call_" + db.NewID()
-	ev := Event{Kind: "tool", Index: p.n, Tool: &call}
+	call.ID = "call_" + randomID()
+	ev := Event{Kind: Called, Index: p.n, Tool: &call}
 	p.n++
-	return p.emit(ev)
+	return p.Emit(ev)
 }
 
 // Emits what is left once the text ends, an unclosed block as a call when it parses
-func (p *callParser) flush() error {
+func (p *CallParser) Flush() error {
 	rest := p.buf
 	p.buf = ""
 	if p.open {
 		p.open = false
 		if call, ok := parseCall(rest); ok {
-			call.ID = "call_" + db.NewID()
-			ev := Event{Kind: "tool", Index: p.n, Tool: &call}
+			call.ID = "call_" + randomID()
+			ev := Event{Kind: Called, Index: p.n, Tool: &call}
 			p.n++
-			return p.emit(ev)
+			return p.Emit(ev)
 		}
-		return p.say(callOpen + rest)
+		return p.say(CallOpen + rest)
 	}
 	return p.say(rest)
 }

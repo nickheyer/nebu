@@ -22,7 +22,7 @@ import (
 
 const (
 	drainPoll = 50 * time.Millisecond
-	// Minimum interval between route counter updates.
+	// Minimum interval between route counter updates
 	counterFlush = time.Second
 )
 
@@ -39,7 +39,7 @@ var (
 	ErrThrottled = errors.New("route throttled")
 )
 
-// Persistent route aliases, counters, and limits.
+// Persistent route aliases, counters, and limits
 type Table struct {
 	store    *db.DB
 	events   *events.Bus
@@ -49,12 +49,12 @@ type Table struct {
 	inflight map[string]*atomic.Int32
 	limiters map[string]*rate.Limiter
 	defaults *v1.Policy
-	// Chat template probe results for automatic system message handling.
+	// Chat template probe results for automatic system message handling
 	templates map[string]*v1.TemplateProbe
-	// Diffusion capabilities per instance: img_gen and vid_gen.
+	// Diffusion capabilities per instance, img_gen and vid_gen
 	modes map[string][]string
 	total atomic.Uint64
-	// Routes with pending counter updates, flushed by a shared timer.
+	// Routes with pending counter updates, flushed by a shared timer
 	dirty map[string]bool
 	flush *time.Timer
 	// The relay handoff each runtime declares, for relay formation routes
@@ -100,7 +100,7 @@ func (t *Table) save(r *v1.Route, action v1.EventAction) {
 	t.events.Publish(v1.EventKind_EVENT_KIND_ROUTE, action, r.GetName(), r)
 }
 
-// Queues a route counter update for the next flush.
+// Queues a route counter update for the next flush
 func (t *Table) touchLocked(name string) {
 	t.dirty[name] = true
 	if t.flush == nil {
@@ -120,21 +120,21 @@ func (t *Table) publishCounters() {
 	t.flush = nil
 }
 
-// Sets the default route policy.
+// Sets the default route policy
 func (t *Table) SetDefaults(p *v1.Policy) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.defaults = p
 }
 
-// Returns the default route policy.
+// Returns the default route policy
 func (t *Table) Defaults() *v1.Policy {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return proto.Clone(t.defaults).(*v1.Policy)
 }
 
-// Merges route policy with defaults. Zero fields inherit.
+// Merges route policy with defaults, zero fields inheriting
 func Effective(route, defaults *v1.Policy) *v1.Policy {
 	pick := func(a, b uint32) uint32 {
 		if a != 0 {
@@ -155,7 +155,7 @@ func Effective(route, defaults *v1.Policy) *v1.Policy {
 	return out
 }
 
-// Maps a route to a ready instance and its served name, policy, and profile.
+// Maps a route to a ready instance and its served name, policy, and profile
 func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, api v1.ApiFlavor, policy *v1.Policy, profile *v1.Profile) *v1.Route {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -173,7 +173,7 @@ func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, ap
 	if slotID == "" {
 		slotID = r.GetSlotId()
 	}
-	// Skip unchanged routes.
+	// Skip unchanged routes
 	if ok && r.GetInstanceId() == instanceID && r.GetEndpoint() == endpoint && r.GetModel() == model && r.GetServed() == served && r.GetApi() == api && r.GetSlotId() == slotID && r.GetState() == state && proto.Equal(r.GetPolicy(), policy) && proto.Equal(r.GetProfile(), profile) && slices.Equal(r.GetModes(), t.modes[instanceID]) && r.GetTools() == t.toolSupportLocked(instanceID) {
 		return t.snapshotLocked(r)
 	}
@@ -201,7 +201,7 @@ func (t *Table) readoptLocked(instanceID, endpoint, model, served string, api v1
 	}
 }
 
-// Updates capabilities on all routes for an instance.
+// Updates capabilities on all routes for an instance
 func (t *Table) SetModes(instanceID string, modes []string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -214,7 +214,7 @@ func (t *Table) SetModes(instanceID string, modes []string) {
 	}
 }
 
-// Maps a name to a ready instance, copying slot policy, profile, and template probe.
+// Maps a name to a ready instance, copying slot policy, profile, and template probe
 func (t *Table) Serve(name string, in *v1.Instance, api v1.ApiFlavor, slotID string, policy *v1.Policy, profile *v1.Profile) *v1.Route {
 	t.mu.Lock()
 	if probe := in.GetTemplate(); probe != nil {
@@ -243,8 +243,7 @@ func (t *Table) toolSupportLocked(instanceID string) v1.ToolSupport {
 	return v1.ToolSupport_TOOL_SUPPORT_UNSPECIFIED
 }
 
-// Uses the route's system message mode. Auto merges later system messages if
-// the template probe rejected them, otherwise keeps them.
+// The route's system message mode, merging later ones when the probe found the template rejects them
 func (t *Table) SystemMode(r *v1.Route) v1.SystemMessages {
 	if mode := r.GetProfile().GetSystemMessages(); mode != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
 		return mode
@@ -257,7 +256,7 @@ func (t *Table) SystemMode(r *v1.Route) v1.SystemMessages {
 	return v1.SystemMessages_SYSTEM_MESSAGES_KEEP
 }
 
-// Keeps a route pending without an instance.
+// Keeps a route pending without an instance
 func (t *Table) Pending(name, slotID, model string, policy *v1.Policy, profile *v1.Profile) *v1.Route {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -306,7 +305,7 @@ func (t *Table) Rename(from, to string) (*v1.Route, error) {
 	return t.snapshotLocked(r), nil
 }
 
-// Removes a route and its counter if no other route shares the instance.
+// Removes a route and its counter if no other route shares the instance
 func (t *Table) Delete(name string) (*v1.Route, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -332,7 +331,7 @@ func (t *Table) deleteLocked(name string) (*v1.Route, bool) {
 	return t.snapshotLocked(r), true
 }
 
-// Removes every route keep rejects and returns them.
+// Removes every route keep rejects and returns them
 func (t *Table) Prune(keep func(*v1.Route) bool) []*v1.Route {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -361,7 +360,7 @@ func (t *Table) Drain(instanceID string) {
 	}
 }
 
-// Detaches an instance. Slot routes stay pending, other routes are removed.
+// Detaches an instance, slot routes staying pending and other routes leaving
 func (t *Table) RemoveInstance(instanceID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -406,7 +405,7 @@ func (t *Table) List() []*v1.Route {
 	return out
 }
 
-// Lists ready routes.
+// Lists ready routes
 func (t *Table) Ready() []*v1.Route {
 	var out []*v1.Route
 	for _, r := range t.List() {
@@ -420,8 +419,7 @@ func (t *Table) Ready() []*v1.Route {
 // Counts requests served through every route
 func (t *Table) Requests() uint64 { return t.total.Load() }
 
-// Claims a route under its effective policy and returns a release function.
-// Token counts are excluded from served request counters.
+// Claims a route under its effective policy and returns a release, token counts left out of served counters
 func (t *Table) Acquire(name string, served bool) (*v1.Route, *v1.Policy, func(), error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -462,7 +460,7 @@ func (t *Table) Acquire(name string, served bool) (*v1.Route, *v1.Policy, func()
 	return out, policy, release, nil
 }
 
-// Returns the route's token bucket, updating it after policy changes.
+// Returns the route's token bucket, updating it after policy changes
 func (t *Table) limiterLocked(name string, p *v1.Policy) *rate.Limiter {
 	burst := int(p.GetBurst())
 	if burst == 0 {
@@ -494,8 +492,7 @@ func (t *Table) counterLocked(instanceID string) *atomic.Int32 {
 	return c
 }
 
-// Requests a route may have in flight at once: the policy's cap, and for replicas the cap on
-// every ready seat, since each seat takes the cap on its own
+// Requests a route may have in flight at once, the policy's cap on every ready seat for replicas
 func routeCap(r *v1.Route, policy *v1.Policy) uint32 {
 	cap := policy.GetMaxInFlight()
 	if cap == 0 || r.GetShape() != v1.Shape_SHAPE_REPLICAS {

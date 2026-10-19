@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
@@ -14,13 +15,12 @@ import (
 )
 
 const (
-	// Maximum retained inference traces.
+	// Maximum retained inference traces
 	traceRing = 500
-	// Maximum retained token count traces, stored separately.
+	// Maximum retained token count traces, stored separately
 	countRing = 50
 	// Bytes of request and response bodies held across every retained trace
 	traceBudget = 256 << 20
-	// Response header containing the trace ID.
 	traceHeader = TraceHeader
 )
 
@@ -39,7 +39,7 @@ type Recorder struct {
 	held, budget int
 }
 
-// Traces in start order, evicting the oldest at capacity.
+// Traces in start order, evicting the oldest at capacity
 type ring struct {
 	size  int
 	items []*v1.Trace
@@ -63,7 +63,7 @@ func (r *ring) evict() *v1.Trace {
 	return t
 }
 
-// Replaces a trace by ID.
+// Replaces a trace by id
 func (r *ring) replace(t *v1.Trace) {
 	for i, old := range r.items {
 		if old.GetId() == t.GetId() {
@@ -73,7 +73,7 @@ func (r *ring) replace(t *v1.Trace) {
 	}
 }
 
-// Creates a recorder with separate inference and token count capacities. Zero uses defaults.
+// Creates a recorder with separate inference and token count capacities, zero using the defaults
 func NewRecorder(bus *events.Bus, size, counts int) *Recorder {
 	if size <= 0 {
 		size = traceRing
@@ -97,7 +97,7 @@ func (r *Recorder) Finish(t *v1.Trace) {
 	r.put(t, v1.EventAction_EVENT_ACTION_UPDATED)
 }
 
-// Selects the trace ring by request kind.
+// Selects the trace ring by request kind
 func (r *Recorder) ringOf(t *v1.Trace) *ring {
 	if t.GetKind() == v1.TraceKind_TRACE_KIND_COUNT {
 		return &r.counts
@@ -150,7 +150,7 @@ func startedBefore(a, b *v1.Trace) bool {
 	return x.GetNanos() < y.GetNanos()
 }
 
-// Lists traces newest first without bodies. Optional route and limit narrow the results.
+// Lists traces newest first without bodies, a route and limit narrowing the results
 func (r *Recorder) List(route string, limit int) []*v1.Trace {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -158,7 +158,7 @@ func (r *Recorder) List(route string, limit int) []*v1.Trace {
 	i, j := len(r.main.items)-1, len(r.counts.items)-1
 	for i >= 0 || j >= 0 {
 		var t *v1.Trace
-		// Merge newest first, preferring inference traces on ties.
+		// Newest first, inference traces winning ties
 		if j < 0 || (i >= 0 && !startedBefore(r.main.items[i], r.counts.items[j])) {
 			t = r.main.items[i]
 			i--
@@ -188,69 +188,33 @@ func (r *Recorder) Get(id string) (*v1.Trace, bool) {
 	return proto.Clone(t).(*v1.Trace), true
 }
 
-// Copies trace metadata without bodies for lists and events.
+// Copies trace metadata without bodies for lists and events
 func summary(t *v1.Trace) *v1.Trace {
 	out := proto.Clone(t).(*v1.Trace)
 	out.Request, out.UpstreamRequest, out.Response = "", "", ""
 	return out
 }
 
-// Classifies request paths, using other for unparsed proxy requests.
-func kindOf(api v1.ApiFlavor, path string) v1.TraceKind {
-	switch api {
-	case v1.ApiFlavor_API_FLAVOR_ANTHROPIC:
-		switch path {
-		case anthropicMessages:
-			return v1.TraceKind_TRACE_KIND_CHAT
-		case anthropicCount:
-			return v1.TraceKind_TRACE_KIND_COUNT
-		}
-	case v1.ApiFlavor_API_FLAVOR_OLLAMA:
-		switch path {
-		case ollamaChat:
-			return v1.TraceKind_TRACE_KIND_CHAT
-		case ollamaGenerate:
-			return v1.TraceKind_TRACE_KIND_GENERATE
-		case ollamaEmbed, ollamaEmbeddings:
-			return v1.TraceKind_TRACE_KIND_EMBED
-		}
-	default:
-		switch path {
-		case openaiChat:
-			return v1.TraceKind_TRACE_KIND_CHAT
-		case openaiCompletions:
-			return v1.TraceKind_TRACE_KIND_GENERATE
-		case openaiEmbeddings:
-			return v1.TraceKind_TRACE_KIND_EMBED
-		case imagesPath, editsPath:
-			return v1.TraceKind_TRACE_KIND_IMAGE
-		case videosPath:
-			return v1.TraceKind_TRACE_KIND_VIDEO
-		}
-	}
-	return v1.TraceKind_TRACE_KIND_OTHER
-}
-
-// Records first token timing, response text, tool calls, and usage.
+// Records first token timing, response text, tool calls, and usage
 type traceSink struct {
 	t    *v1.Trace
 	text strings.Builder
 }
 
-func (s *traceSink) event(ev Event) {
+func (s *traceSink) event(ev chat.Event) {
 	switch ev.Kind {
-	case "text":
+	case chat.Said:
 		s.first()
 		s.text.WriteString(ev.Text)
-	case "thinking", "tool":
+	case chat.Thought, chat.Called:
 		s.first()
-	case "stop":
+	case chat.Stopped:
 		if ev.Res != nil {
 			s.result(ev.Res)
 		}
-	case "error":
+	case chat.Failed:
 		if s.t.Error == "" {
-			s.t.Error = ev.Text
+			s.t.Error = ev.Failure.Message
 		}
 	}
 }
@@ -262,10 +226,10 @@ func (s *traceSink) first() {
 }
 
 // Records a finished answer
-func (s *traceSink) result(res *Result) {
-	s.t.PromptTokens, s.t.CompletionTokens, s.t.Stop = uint32(res.In), uint32(res.Out), res.Stop
-	if res.DraftOffered > 0 {
-		s.t.DraftOffered, s.t.DraftAccepted = uint32(res.DraftOffered), uint32(res.DraftAccepted)
+func (s *traceSink) result(res *chat.Result) {
+	s.t.PromptTokens, s.t.CompletionTokens, s.t.Stop = uint32(res.Usage.In), uint32(res.Usage.Out), res.Stop
+	if res.Usage.DraftOffered > 0 {
+		s.t.DraftOffered, s.t.DraftAccepted = uint32(res.Usage.DraftOffered), uint32(res.Usage.DraftAccepted)
 	}
 	if res.Text != "" && s.text.Len() == 0 {
 		s.text.WriteString(res.Text)
@@ -279,25 +243,14 @@ func (s *traceSink) result(res *Result) {
 	}
 }
 
-// Response representation stored in the trace.
+// Keeps the answer's text on the trace
 func (s *traceSink) close() {
 	if s.text.Len() > 0 {
 		s.t.Response = s.text.String()
 	}
 }
 
-// Stream writer that records events before forwarding them.
-type tracedStream struct {
-	StreamWriter
-	sink *traceSink
-}
-
-func (s tracedStream) Write(ev Event) error {
-	s.sink.event(ev)
-	return s.StreamWriter.Write(ev)
-}
-
-// Records response status, first byte timing, and size while copying the body.
+// Records response status, first byte timing, and size while copying the body
 type traceWriter struct {
 	http.ResponseWriter
 	t      *v1.Trace
@@ -305,7 +258,7 @@ type traceWriter struct {
 	bytes  uint64
 	tee    io.Writer
 	wrote  bool
-	// Whether an asynchronous job closes the trace.
+	// Whether an asynchronous job closes the trace
 	detached bool
 }
 
@@ -331,25 +284,26 @@ func (w *traceWriter) Write(b []byte) (int, error) {
 }
 
 func (w *traceWriter) Flush() {
-	flush(w.ResponseWriter)
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
-// Parses proxied responses into traces through a pipe. Streams are parsed
-// as events arrive. Complete responses are parsed after the body ends.
+// Parses a proxied answer into the trace through a pipe, streams as events arrive and whole answers at the end
 type passthroughReader struct {
 	pw   *io.PipeWriter
 	done chan struct{}
 }
 
-func readPassthrough(t *v1.Trace, upstream Flavor, c *Chat) *passthroughReader {
+func readPassthrough(t *v1.Trace, runtime chat.Runtime, req *chat.Request) *passthroughReader {
 	pr, pw := io.Pipe()
 	p := &passthroughReader{pw: pw, done: make(chan struct{})}
 	sink := &traceSink{t: t}
 	go func() {
 		defer close(p.done)
 		defer io.Copy(io.Discard, pr)
-		if c.Stream {
-			if err := upstream.ParseStream(pr, func(ev Event) error {
+		if req.Stream {
+			if err := runtime.ParseStream(pr, func(ev chat.Event) error {
 				sink.event(ev)
 				return nil
 			}); err != nil && t.Error == "" {
@@ -363,7 +317,7 @@ func readPassthrough(t *v1.Trace, upstream Flavor, c *Chat) *passthroughReader {
 				}
 				return
 			}
-			if res, err := upstream.ParseResult(c, raw); err == nil {
+			if res, err := runtime.ParseResult(req, raw); err == nil {
 				sink.first()
 				sink.result(res)
 			} else if t.Error == "" {
@@ -375,13 +329,13 @@ func readPassthrough(t *v1.Trace, upstream Flavor, c *Chat) *passthroughReader {
 	return p
 }
 
-// Closes the body copy and waits for parsing.
+// Closes the body copy and waits for parsing
 func (p *passthroughReader) close() {
 	p.pw.Close()
 	<-p.done
 }
 
-// Keeps an unparsed response whole
+// Keeps an unparsed answer whole
 type rawCapture struct {
 	buf bytes.Buffer
 }
