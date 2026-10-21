@@ -158,7 +158,7 @@ func searcherFor(w *v1.ToolServer, client *http.Client) (searcher, error) {
 		return searxng{base: base, client: client}, nil
 	case "brave":
 		if w.GetBraveKey() == "" {
-			return nil, errors.New("Brave Search has no subscription token")
+			return nil, errors.New("the Brave Search subscription token is empty")
 		}
 		return brave{key: w.GetBraveKey(), client: client}, nil
 	}

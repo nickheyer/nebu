@@ -129,9 +129,6 @@ func (s *GatewayService) ListRoutes(ctx context.Context, req *connect.Request[v1
 // Adds an alias. Slots, named directly or through the instance serving them,
 // keep the alias with their settings. Instances outside slots must be ready.
 func (s *GatewayService) SetRoute(ctx context.Context, req *connect.Request[v1.SetRouteRequest]) (*connect.Response[v1.SetRouteResponse], error) {
-	if err := gateway.ValidateProfile(req.Msg.GetProfile()); err != nil {
-		return nil, wrap(fmt.Errorf("%w: %v", runtimes.ErrParam, err))
-	}
 	name := strings.TrimSpace(req.Msg.GetName())
 	alias := &v1.SlotAlias{Name: name, Policy: req.Msg.GetPolicy(), Profile: req.Msg.GetProfile()}
 	if req.Msg.GetSlotId() != "" {
@@ -154,6 +151,9 @@ func (s *GatewayService) SetRoute(ctx context.Context, req *connect.Request[v1.S
 	}
 	if name == "" || strings.ContainsAny(name, " \t\n/") {
 		return nil, wrap(fmt.Errorf("%w: an alias is a name without spaces or slashes", runtimes.ErrParam))
+	}
+	if err := gateway.CheckProfile(req.Msg.GetProfile()); err != nil {
+		return nil, wrap(fmt.Errorf("%w: %v", runtimes.ErrParam, err))
 	}
 	if r, ok := s.gateway.Table().Lookup(name); ok && r.GetSlotId() != "" {
 		return nil, wrap(fmt.Errorf("%w: %s belongs to a slot", runtimes.ErrParam, name))

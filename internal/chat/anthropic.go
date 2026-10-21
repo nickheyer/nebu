@@ -123,7 +123,6 @@ type antRequest struct {
 	Tools         []antTool                  `json:"tools,omitempty"`
 	ToolChoice    *antToolChoice             `json:"tool_choice,omitempty"`
 	MCPServers    []antMCPServer             `json:"mcp_servers,omitempty"`
-	Safeguards    []antSafeguard             `json:"safeguards,omitempty"`
 	Extra         map[string]json.RawMessage `json:"-"`
 }
 
@@ -153,44 +152,6 @@ type antMCPServer struct {
 		Enabled      *bool    `json:"enabled"`
 		AllowedTools []string `json:"allowed_tools"`
 	} `json:"tool_configuration,omitempty"`
-}
-
-// A server side check a request asks for on the answer's tool calls
-type antSafeguard struct {
-	Type    string          `json:"type"`
-	Context json.RawMessage `json:"classifier_context,omitempty"`
-}
-
-// The outcome of a server side check, one verdict per tool use id
-type antSafeguardResult struct {
-	Type   string             `json:"type"`
-	Status antSafeguardStatus `json:"status"`
-}
-
-type antSafeguardStatus struct {
-	Type     string                `json:"type"`
-	ToolUses map[string]antVerdict `json:"tool_uses"`
-}
-
-type antVerdict struct {
-	Type    string `json:"type"`
-	Outcome string `json:"outcome"`
-}
-
-// The checks the gateway answered, every call not flagged
-func safeguardResults(req *Request, calls []ToolCall) []antSafeguardResult {
-	var out []antSafeguardResult
-	for _, c := range req.Checks {
-		if c.Verdict != Allowed {
-			continue
-		}
-		uses := map[string]antVerdict{}
-		for _, call := range calls {
-			uses[call.ID] = antVerdict{Type: "evaluated", Outcome: "not_flagged"}
-		}
-		out = append(out, antSafeguardResult{Type: c.Type, Status: antSafeguardStatus{Type: "available", ToolUses: uses}})
-	}
-	return out
 }
 
 type antTool struct {
@@ -296,16 +257,15 @@ func (r *antResponse) UnmarshalJSON(data []byte) error {
 
 // A message written to a client
 type antReply struct {
-	ID               string                     `json:"id"`
-	Type             string                     `json:"type"`
-	Role             string                     `json:"role"`
-	Model            string                     `json:"model"`
-	Content          []any                      `json:"content"`
-	StopReason       *string                    `json:"stop_reason"`
-	StopSequence     *string                    `json:"stop_sequence"`
-	Usage            antUsage                   `json:"usage"`
-	SafeguardResults []antSafeguardResult       `json:"safeguard_results,omitempty"`
-	Extra            map[string]json.RawMessage `json:"-"`
+	ID           string                     `json:"id"`
+	Type         string                     `json:"type"`
+	Role         string                     `json:"role"`
+	Model        string                     `json:"model"`
+	Content      []any                      `json:"content"`
+	StopReason   *string                    `json:"stop_reason"`
+	StopSequence *string                    `json:"stop_sequence"`
+	Usage        antUsage                   `json:"usage"`
+	Extra        map[string]json.RawMessage `json:"-"`
 }
 
 func (r antReply) MarshalJSON() ([]byte, error) {
@@ -366,8 +326,6 @@ type antFetchDocument struct {
 		Data      string `json:"data"`
 	} `json:"source"`
 }
-
-func (anthropic) headers() []string { return []string{"Anthropic-"} }
 
 func (anthropic) Endpoint(path string) Kind {
 	switch path {
@@ -438,9 +396,6 @@ func (anthropic) Parse(path string, body []byte) (*Request, error) {
 	}
 	if c.Tools, err = antTools(req.Tools); err != nil {
 		return nil, err
-	}
-	for _, s := range req.Safeguards {
-		c.Checks = append(c.Checks, Check{Type: s.Type, Context: s.Context})
 	}
 	for _, s := range req.MCPServers {
 		if s.Type != "url" {
@@ -706,12 +661,6 @@ func (anthropic) Render(c *Request) (string, []byte, error) {
 	req := antRequest{Model: c.Model, MaxTokens: c.MaxTokens, Temperature: c.Temperature, TopP: c.TopP, TopK: c.TopK, StopSequences: c.Stop, Stream: c.Stream, Extra: c.Extra}
 	if req.MaxTokens == 0 {
 		req.MaxTokens = anthropicMaxTokens
-	}
-	// A check the gateway answered itself does not go on to the runtime
-	for _, s := range c.Checks {
-		if s.Verdict == "" {
-			req.Safeguards = append(req.Safeguards, antSafeguard{Type: s.Type, Context: s.Context})
-		}
 	}
 	// The API samples with temperature or top_p, never both, and a top_p of 1 changes nothing
 	if req.Temperature != nil && req.TopP != nil {
@@ -1026,7 +975,7 @@ func (a *antWhole) Write(ev Event) error {
 		if a.blocks == nil {
 			a.blocks = []any{}
 		}
-		reply := antReply{ID: antID(), Type: "message", Role: "assistant", Model: a.model, Content: a.blocks, StopReason: ptr(antReason(StopOf(res.Stop, len(a.tools.order)))), Usage: antUsageOf(res), SafeguardResults: safeguardResults(a.req, calls), Extra: res.Extra}
+		reply := antReply{ID: antID(), Type: "message", Role: "assistant", Model: a.model, Content: a.blocks, StopReason: ptr(antReason(StopOf(res.Stop, len(a.tools.order)))), Usage: antUsageOf(res), Extra: res.Extra}
 		data, err := json.Marshal(reply)
 		if err != nil {
 			return err
@@ -1211,7 +1160,6 @@ func mcpResultParts(b antBlock) ([]Part, error) {
 
 type antStream struct {
 	live *liveWriter
-	req  *Request
 	// The open content block's index and kind, the kind empty between blocks
 	index int
 	kind  string
@@ -1229,7 +1177,7 @@ func (a anthropic) Answer(w http.ResponseWriter, req *Request, model string) Wri
 		return &antWhole{w: w, req: req, model: model}
 	}
 	streamHeaders(w, "text/event-stream")
-	s := &antStream{live: newLiveWriter(w, antPing), req: req, index: -1, done: map[int]bool{}}
+	s := &antStream{live: newLiveWriter(w, antPing), index: -1, done: map[int]bool{}}
 	msg := antReply{ID: antID(), Type: "message", Role: "assistant", Model: model, Content: []any{}}
 	s.live.sse("message_start", map[string]any{"type": "message_start", "message": msg})
 	return s
@@ -1360,11 +1308,8 @@ func (s *antStream) Write(ev Event) error {
 			res = &Result{}
 		}
 		reason := antReason(StopOf(res.Stop, len(s.tools.order)))
-		// The delta carries the closing fields, the verdicts of the checks, and every other key the runtime added
+		// The delta carries the closing fields and every other key the runtime added
 		delta := map[string]any{"stop_reason": reason, "stop_sequence": nil}
-		if results := safeguardResults(s.req, s.tools.list()); results != nil {
-			delta["safeguard_results"] = results
-		}
 		for k, v := range res.Extra {
 			if _, taken := delta[k]; !taken {
 				delta[k] = v

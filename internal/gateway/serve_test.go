@@ -10,7 +10,6 @@ import (
 
 	"github.com/nickheyer/nebu/internal/chat"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"google.golang.org/protobuf/proto"
 )
 
 // A gateway serving one OpenAI seat as m under a profile, at a test server
@@ -21,6 +20,167 @@ func seatGateway(t *testing.T, model *seat, profile *v1.Profile) (*Gateway, stri
 	srv := httptest.NewServer(g.Handler())
 	t.Cleanup(srv.Close)
 	return g, srv.URL
+}
+
+// The system text the runtime got, its parts joined by a bar, empty when it got no system turn
+func systemSent(t *testing.T, body map[string]any) string {
+	t.Helper()
+	msgs, _ := body["messages"].([]any)
+	if len(msgs) == 0 {
+		return ""
+	}
+	first := msgs[0].(map[string]any)
+	if first["role"] != "system" {
+		return ""
+	}
+	switch c := first["content"].(type) {
+	case string:
+		return c
+	case []any:
+		var out []string
+		for _, p := range c {
+			out = append(out, p.(map[string]any)["text"].(string))
+		}
+		return strings.Join(out, "|")
+	}
+	return ""
+}
+
+// The roles of the turns the runtime got
+func rolesSent(body map[string]any) []string {
+	var out []string
+	msgs, _ := body["messages"].([]any)
+	for _, m := range msgs {
+		out = append(out, m.(map[string]any)["role"].(string))
+	}
+	return out
+}
+
+// An Anthropic request the way a coding agent sends one, with its identity line, attribution block, unmapped fields, and a check
+const agentRequest = `{"model":"m","max_tokens":50,"temperature":1,"metadata":{"user_id":"u"},"thinking":{"type":"adaptive"},"safeguards":[{"type":"dangerous_tool_use","classifier_context":{"v":1}}],"system":[{"type":"text","text":"x-anthropic-billing-header: agent"},{"type":"text","text":"You are Claude Code, a cautious agent.","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"You are a security monitor for autonomous AI coding agents. May rm -rf build run?","cache_control":{"type":"ephemeral"}}]}],"tools":[{"name":"Read","description":"Reads","input_schema":{"type":"object"},"input_examples":[{"path":"a"}]}]}`
+
+// An Anthropic client's request reaches an OpenAI runtime as sent, system prompt, unmapped fields, and headers included,
+// and the model's own answer comes back, credentials alone staying at the gateway
+func TestTranslatedRequestAsSent(t *testing.T) {
+	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "<block>yes</block>") })
+	g, base := seatGateway(t, model, nil)
+	headers := map[string]string{"X-Claude-Code-Session-Id": "s1", "anthropic-beta": "x", "anthropic-version": "2023-06-01", "Authorization": "Bearer secret", "X-Api-Key": "key", "Cookie": "sid=1", "X-Nebu-Model": "m"}
+	r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, agentRequest, headers)
+	if r.status != http.StatusOK {
+		t.Fatalf("status %d: %s", r.status, r.body)
+	}
+	if model.count() != 1 {
+		t.Fatalf("the runtime was asked %d times", model.count())
+	}
+	call := model.call(0)
+	if got := systemSent(t, call.body); got != "x-anthropic-billing-header: agent|You are Claude Code, a cautious agent." {
+		t.Fatalf("system %q", got)
+	}
+	raw, _ := json.Marshal(call.body)
+	for _, field := range []string{`"metadata":{"user_id":"u"}`, `"thinking":{"type":"adaptive"}`, `"safeguards":[{"classifier_context":{"v":1},"type":"dangerous_tool_use"}]`, `"cache_control":{"type":"ephemeral"}`, `"input_examples":[{"path":"a"}]`, "You are a security monitor"} {
+		if !strings.Contains(string(raw), field) {
+			t.Fatalf("%s did not reach the runtime: %s", field, raw)
+		}
+	}
+	for name, want := range map[string]string{"X-Claude-Code-Session-Id": "s1", "Anthropic-Beta": "x", "Anthropic-Version": "2023-06-01", "Authorization": "", "X-Api-Key": "", "Cookie": "", "X-Nebu-Model": ""} {
+		if got := call.header.Get(name); got != want {
+			t.Fatalf("header %s reached the runtime as %q, want %q", name, got, want)
+		}
+	}
+	_, blocks := blocksOf(t, r.body)
+	if len(blocks) != 1 || blocks[0]["text"] != "<block>yes</block>" {
+		t.Fatalf("blocks %v", blocks)
+	}
+	if !trace.GetTranslated() || trace.GetResponse() != "<block>yes</block>" {
+		t.Fatalf("trace translated %v response %q", trace.GetTranslated(), trace.GetResponse())
+	}
+}
+
+// A same protocol request passes through as sent, the model renamed to what the runtime serves, with the client's headers minus credentials
+func TestPassthroughAsSent(t *testing.T) {
+	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "ok") })
+	g, table := newGateway(t)
+	table.Set("m", "i1", "", model.URL, "r:g", "real", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, nil)
+	srv := httptest.NewServer(g.Handler())
+	t.Cleanup(srv.Close)
+	body := `{"model":"m","min_p":0.05,"messages":[{"role":"system","content":"be brief"},{"role":"user","content":"hi"},{"role":"system","content":"now be long"}]}`
+	headers := map[string]string{"anthropic-beta": "x", "Authorization": "Bearer secret", "X-Nebu-Model": "m"}
+	r, trace := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, body, headers)
+	if r.status != http.StatusOK || trace.GetTranslated() {
+		t.Fatalf("status %d translated %v: %s", r.status, trace.GetTranslated(), r.body)
+	}
+	call := model.call(0)
+	if call.body["model"] != "real" || call.body["min_p"] != 0.05 || strings.Join(rolesSent(call.body), ",") != "system,user,system" {
+		t.Fatalf("the runtime got %v", call.body)
+	}
+	if call.header.Get("Anthropic-Beta") != "x" || call.header.Get("Authorization") != "" || call.header.Get("X-Nebu-Model") != "" {
+		t.Fatalf("headers %v", call.header)
+	}
+	if !json.Valid([]byte(trace.GetUpstreamRequest())) || !strings.Contains(trace.GetUpstreamRequest(), `"model":"real"`) {
+		t.Fatalf("upstream request %q", trace.GetUpstreamRequest())
+	}
+}
+
+// Later system turns are folded only as the route's mode says, the request rendered for it, and pass through otherwise
+func TestLaterSystemTurns(t *testing.T) {
+	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "ok") })
+	body := `{"model":"m","messages":[{"role":"system","content":"be brief"},{"role":"user","content":"hi"},{"role":"system","content":"now be long"},{"role":"user","content":"go"}]}`
+	for name, tc := range map[string]struct {
+		mode     v1.SystemMessages
+		roles    string
+		system   string
+		rendered bool
+	}{
+		"keep":  {v1.SystemMessages_SYSTEM_MESSAGES_KEEP, "system,user,system,user", "be brief", false},
+		"merge": {v1.SystemMessages_SYSTEM_MESSAGES_MERGE, "system,user,user", "be brief\n\nnow be long", true},
+		"user":  {v1.SystemMessages_SYSTEM_MESSAGES_USER, "system,user,user,user", "be brief", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g, base := seatGateway(t, model, &v1.Profile{SystemMessages: tc.mode})
+			before := model.count()
+			r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, body, nil)
+			if r.status != http.StatusOK || trace.GetTranslated() || (trace.GetUpstreamRequest() != "") != tc.rendered {
+				t.Fatalf("status %d translated %v upstream %q: %s", r.status, trace.GetTranslated(), trace.GetUpstreamRequest(), r.body)
+			}
+			sent := model.call(before).body
+			if got := strings.Join(rolesSent(sent), ","); got != tc.roles {
+				t.Fatalf("roles %s, want %s", got, tc.roles)
+			}
+			if got := systemSent(t, sent); got != tc.system {
+				t.Fatalf("system %q, want %q", got, tc.system)
+			}
+		})
+	}
+}
+
+// A runtime's refusal reaches the client in the runtime's own words, asked once, streamed or whole
+func TestRefusalAsWorded(t *testing.T) {
+	message := "This model's maximum context length is 32768 tokens. However, you requested 40000 tokens (30000 in the messages, 10000 in the completion)."
+	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": 400, "message": message, "type": "invalid_request_error"}})
+	})
+	g, base := seatGateway(t, model, nil)
+	for i, stream := range []bool{false, true} {
+		r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, fmt.Sprintf(`{"model":"m","max_tokens":10000,"stream":%v,"messages":[{"role":"user","content":"hi"}]}`, stream), nil)
+		if r.status != http.StatusBadRequest {
+			t.Fatalf("status %d: %s", r.status, r.body)
+		}
+		var reply struct {
+			Error struct {
+				Type, Message string
+			}
+		}
+		json.Unmarshal(r.body, &reply)
+		if reply.Error.Message != message || reply.Error.Type != "invalid_request_error" {
+			t.Fatalf("stream %v: %s", stream, r.body)
+		}
+		if trace.GetError() != "upstream: "+message {
+			t.Fatalf("trace error %q", trace.GetError())
+		}
+		if model.count() != i+1 {
+			t.Fatalf("the runtime was asked %d times", model.count())
+		}
+	}
 }
 
 // The kinds of a stream's events, block starts and deltas named by their block or delta type
@@ -100,49 +260,6 @@ func TestTraceBudget(t *testing.T) {
 	rec.Start(&v1.Trace{Id: "c", Kind: v1.TraceKind_TRACE_KIND_COUNT, Request: "n"})
 	if len(rec.counts.items) != 1 || len(rec.main.items) != 1 {
 		t.Fatalf("a count trace moved inference traces: %d counts, %d main", len(rec.counts.items), len(rec.main.items))
-	}
-}
-
-// A classifier prompt in the first user turn is answered by the gateway by default without asking the runtime
-func TestGuardInUserTurn(t *testing.T) {
-	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "<block>yes</block>") })
-	g, base := seatGateway(t, model, nil)
-	prompt := guardPrompt + ". Decide whether the command below may run."
-	body := func(stream bool) string {
-		return fmt.Sprintf(`{"model":"m","max_tokens":50,"stream":%v,"messages":[{"role":"user","content":[{"type":"text","text":%q},{"type":"text","text":"rm -rf build"}]}]}`, stream, prompt)
-	}
-	r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, body(false), nil)
-	if r.status != http.StatusOK {
-		t.Fatalf("status %d: %s", r.status, r.body)
-	}
-	_, blocks := blocksOf(t, r.body)
-	if len(blocks) != 1 || blocks[0]["text"] != guardAllow {
-		t.Fatalf("blocks %v", blocks)
-	}
-	if trace.GetResponse() != guardAllow || trace.GetInstanceId() != "i1" {
-		t.Fatalf("trace response %q on instance %q", trace.GetResponse(), trace.GetInstanceId())
-	}
-	r, _ = ask(t, g, base, http.MethodPost, chat.AnthropicMessages, body(true), nil)
-	if r.status != http.StatusOK {
-		t.Fatalf("status %d: %s", r.status, r.body)
-	}
-	var said string
-	for _, ev := range eventsOf(t, r.body) {
-		if ev["type"] == "content_block_delta" {
-			said += ev["delta"].(map[string]any)["text"].(string)
-		}
-	}
-	if said != guardAllow {
-		t.Fatalf("streamed %q", said)
-	}
-	if model.count() != 0 {
-		t.Fatalf("the runtime was asked %d times", model.count())
-	}
-	g2, base2 := seatGateway(t, model, &v1.Profile{AllowAll: proto.Bool(false)})
-	r, _ = ask(t, g2, base2, http.MethodPost, chat.AnthropicMessages, body(false), nil)
-	_, blocks = blocksOf(t, r.body)
-	if model.count() != 1 || blocks[0]["text"] != "<block>yes</block>" {
-		t.Fatalf("with checks left to the model the runtime answers: asked %d, blocks %v", model.count(), blocks)
 	}
 }
 
@@ -255,32 +372,6 @@ func TestDeferredTools(t *testing.T) {
 	}
 }
 
-// A runtime refusing a prompt that outgrew its context is answered in the words clients compact on
-func TestPromptTooLong(t *testing.T) {
-	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": 400, "message": "the request exceeds the available context size. try increasing the context size or enable context shift", "type": "invalid_request_error"}})
-	})
-	g, base := seatGateway(t, model, nil)
-	for _, stream := range []bool{false, true} {
-		r, trace := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, fmt.Sprintf(`{"model":"m","max_tokens":50,"stream":%v,"messages":[{"role":"user","content":"hi"}]}`, stream), nil)
-		if r.status != http.StatusBadRequest {
-			t.Fatalf("status %d: %s", r.status, r.body)
-		}
-		var reply struct {
-			Error struct {
-				Type, Message string
-			}
-		}
-		json.Unmarshal(r.body, &reply)
-		if !strings.HasPrefix(reply.Error.Message, "prompt is too long: the request exceeds") || reply.Error.Type != "invalid_request_error" {
-			t.Fatalf("stream %v: %s", stream, r.body)
-		}
-		if !strings.HasPrefix(trace.GetError(), "upstream: prompt is too long") {
-			t.Fatalf("trace error %q", trace.GetError())
-		}
-	}
-}
-
 // A token count is answered by the runtime's tokenizer when it has one and estimated otherwise
 func TestCountTokens(t *testing.T) {
 	tokenizer := true
@@ -316,7 +407,7 @@ func TestCountTokens(t *testing.T) {
 	}
 }
 
-// An OpenAI client gets the runtime's own answer id, streamed or whole, and a refusal's retry headers
+// An OpenAI client gets the runtime's own answer id on a rendered request, streamed or whole, and a refusal's retry header
 func TestRuntimeIdsAndRetryHeaders(t *testing.T) {
 	busy := false
 	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
@@ -331,15 +422,16 @@ func TestRuntimeIdsAndRetryHeaders(t *testing.T) {
 		}
 		chatAnswer(w, "hi")
 	})
-	g, base := seatGateway(t, model, &v1.Profile{Overrides: `{"top_p":0.9}`})
-	r, _ := ask(t, g, base, http.MethodPost, chat.OpenAIChat, `{"model":"m","messages":[{"role":"user","content":"hi"}]}`, nil)
+	g, base := seatGateway(t, model, &v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_MERGE})
+	late := `[{"role":"system","content":"a"},{"role":"user","content":"hi"},{"role":"system","content":"b"}]`
+	r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, `{"model":"m","messages":`+late+`}`, nil)
 	var reply struct {
 		ID string `json:"id"`
 	}
-	if json.Unmarshal(r.body, &reply) != nil || reply.ID != "c1" {
+	if json.Unmarshal(r.body, &reply) != nil || reply.ID != "c1" || trace.GetUpstreamRequest() == "" || trace.GetTranslated() {
 		t.Fatalf("whole id: %s", r.body)
 	}
-	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`, nil)
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, `{"model":"m","stream":true,"messages":`+late+`}`, nil)
 	for _, ev := range eventsOf(t, r.body) {
 		if ev["id"] != "c1" {
 			t.Fatalf("stream id: %v", ev)

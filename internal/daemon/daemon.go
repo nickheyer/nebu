@@ -27,6 +27,7 @@ import (
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/mcpserver"
 	"github.com/nickheyer/nebu/internal/mesh"
+	"github.com/nickheyer/nebu/internal/mesh/links"
 	"github.com/nickheyer/nebu/internal/notify"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc"
@@ -701,7 +702,7 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 	requests, endRequests := context.WithCancel(context.Background())
 	defer endRequests()
 	base := func(net.Listener) context.Context { return requests }
-	servers := []*http.Server{{Handler: d.handler, ReadHeaderTimeout: readHeaderTimeout, BaseContext: base}}
+	servers := []*http.Server{{Handler: d.handler, ReadHeaderTimeout: readHeaderTimeout, BaseContext: base, Protocols: links.Protocols()}}
 	listeners := []net.Listener{ln}
 	d.Gateway.SetListeners([]*v1.Listener{{Addr: d.addr, Shared: true}}, d.secure)
 	if gatewayLn != nil {

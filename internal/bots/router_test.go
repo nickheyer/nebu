@@ -406,8 +406,7 @@ func TestSendNowAndGuilds(t *testing.T) {
 	if err != nil || resp.GetTrace() == "" {
 		t.Fatalf("chat send %v %v", resp, err)
 	}
-	resp, err = h.m.Send(context.Background(), &v1.SendBotMessageRequest{BotId: bot.GetId(), ChannelId: "c1", Kind: v1.ActionKind_ACTION_KIND_IMAGE, Content: "a lighthouse"})
-	if err != nil {
+	if _, err := h.m.Send(context.Background(), &v1.SendBotMessageRequest{BotId: bot.GetId(), ChannelId: "c1", Kind: v1.ActionKind_ACTION_KIND_IMAGE, Content: "a lighthouse"}); err != nil {
 		t.Fatal(err)
 	}
 	snap := s.sentSnapshot()

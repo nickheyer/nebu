@@ -220,7 +220,6 @@ type Launcher struct {
 	// Launch and stop order by seat name
 	Launched []string
 	Stopped  []string
-	nextPid  int
 }
 
 // A fake seat process

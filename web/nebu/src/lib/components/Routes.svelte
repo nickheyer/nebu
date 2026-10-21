@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from '$lib/api';
   import { live, cached, slotName, groupLabel, instanceLive, orderedSlots } from '$lib/state.svelte';
-  import { policyText, policyFields, policyFrom, profileText, profileFields, profileFrom, profileError } from '$lib/gateway';
+  import { policyText, policyFields, policyFrom, profileText, profileFields, profileFrom } from '$lib/gateway';
   import { byName, count, tail } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
@@ -41,7 +41,7 @@
   const nameTaken = $derived(live.routes.has(aliasName.trim()) || slots.some((s) => s.name === aliasName.trim() || s.aliases.some((a) => a.name === aliasName.trim())));
   const badName = $derived(/[\s/]/.test(aliasName));
   const defaults = $derived(cached.gateway?.policy);
-  const canAdd = $derived(!!aliasName.trim() && !nameTaken && !badName && !!target && !profileError(profile));
+  const canAdd = $derived(!!aliasName.trim() && !nameTaken && !badName && !!target);
 
   function openForm() {
     aliasName = '';
@@ -92,7 +92,7 @@
   {:else}
     <div class="tbl-wrap">
       <table class="tbl">
-        <thead><tr><th>Name</th><th>State</th><th>Serves</th><th>Endpoint</th><th class="num">Requests</th><th>Limits</th><th>Shaping</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>State</th><th>Serves</th><th>Endpoint</th><th class="num">Requests</th><th>Limits</th><th>Profile</th><th></th></tr></thead>
         <tbody>
           {#each routes as r (r.name)}
             {@const inst = r.instanceId ? live.instances.get(r.instanceId) : undefined}
@@ -138,7 +138,7 @@
       <PolicyForm bind:fields={policy} defaults={defaults} idPrefix="alias" />
     </div>
     <div class="flex flex-col gap-3">
-      <h3 class="caps text-fg-faint">Shaping</h3>
+      <h3 class="caps text-fg-faint">Profile</h3>
       <ProfileForm bind:fields={profile} idPrefix="alias" />
     </div>
     <button type="submit" class="hidden" aria-hidden="true" tabindex="-1"></button>

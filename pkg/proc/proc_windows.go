@@ -79,6 +79,12 @@ func attr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP}
 }
 
+// A started process with everything it spawns, stoppable as one through its job object
+type Tree struct {
+	pid int
+	job uintptr
+}
+
 // Creates a job for the process tree, nested in the daemon job when available.
 func adopt(pid int) *Tree {
 	t := &Tree{pid: pid}

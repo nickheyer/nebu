@@ -121,7 +121,7 @@ func (x *exchange) serveRelay() {
 	hold.to(0)
 	defer hold.done()
 	x.targets, x.hold, x.relay = decodeTarget, hold, true
-	x.open = g.relayOpener(t, x.in.from, name, route, x.policy, handoff, prefill, decode, decodeURL, decodeTarget)
+	x.open = g.relayOpener(t, x.r.Header, name, route, x.policy, handoff, prefill, decode, decodeURL, decodeTarget)
 	x.serve()
 }
 

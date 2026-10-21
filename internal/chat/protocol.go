@@ -49,8 +49,6 @@ type Writer interface {
 type protocol interface {
 	Client
 	Runtime
-	// Prefixes of the headers its clients send for the runtime and read from it
-	headers() []string
 }
 
 var protocols = map[v1.ApiFlavor]protocol{
@@ -74,36 +72,21 @@ func ClientOf(api v1.ApiFlavor) Client { return of(api) }
 // The runtime side of an api's protocol
 func RuntimeOf(api v1.ApiFlavor) Runtime { return of(api) }
 
-// The protocol a request speaks, by its path and headers
+// The protocol a request speaks, by its path, the Anthropic version header deciding paths the protocols share
 func Detect(r *http.Request) v1.ApiFlavor {
 	switch {
 	case strings.HasPrefix(r.URL.Path, sdcppPrefix):
 		return v1.ApiFlavor_API_FLAVOR_SDCPP
 	case strings.HasPrefix(r.URL.Path, ollamaPrefix):
 		return v1.ApiFlavor_API_FLAVOR_OLLAMA
-	case strings.HasPrefix(r.URL.Path, anthropicMessages) || r.Header.Get("anthropic-version") != "":
+	case strings.HasPrefix(r.URL.Path, anthropicMessages):
+		return v1.ApiFlavor_API_FLAVOR_ANTHROPIC
+	case openai{}.Endpoint(r.URL.Path) != None:
+		return v1.ApiFlavor_API_FLAVOR_OPENAI
+	case r.Header.Get("anthropic-version") != "":
 		return v1.ApiFlavor_API_FLAVOR_ANTHROPIC
 	}
 	return v1.ApiFlavor_API_FLAVOR_OPENAI
-}
-
-// Prefixes of the headers any protocol's clients send for the runtime and read from it
-func HeaderPrefixes() []string {
-	var out []string
-	for _, api := range []v1.ApiFlavor{v1.ApiFlavor_API_FLAVOR_OPENAI, v1.ApiFlavor_API_FLAVOR_ANTHROPIC, v1.ApiFlavor_API_FLAVOR_OLLAMA} {
-		out = append(out, protocols[api].headers()...)
-	}
-	return out
-}
-
-// Whether a header name opens with one of the prefixes
-func HasPrefix(name string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if strings.HasPrefix(name, p) {
-			return true
-		}
-	}
-	return false
 }
 
 // Removes every unmapped field at every level, for a runtime that refuses them

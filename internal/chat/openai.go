@@ -234,8 +234,6 @@ func (r oaiResponse) MarshalJSON() ([]byte, error) {
 	return withExtra(plain(r), r.Extra)
 }
 
-func (openai) headers() []string { return []string{"Openai-"} }
-
 func (openai) Endpoint(path string) Kind {
 	switch path {
 	case OpenAIChat:
@@ -386,7 +384,7 @@ func toolsToOAI(tools []Tool) ([]oaiTool, error) {
 	var out []oaiTool
 	for _, t := range tools {
 		if t.Type != "" && t.Type != "custom" {
-			return nil, bad("Input tag '%s' found using 'type' does not match any of the expected tags: 'custom'", t.Type)
+			return nil, bad("tool %s has type %s, and the runtime accepts only tools defined by a schema", t.Name, t.Type)
 		}
 		tool := oaiTool{Type: "function", Extra: t.Extra}
 		tool.Function = oaiFunction{Name: t.Name, Description: t.Description, Parameters: t.Schema, Strict: t.Strict}

@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -73,5 +72,3 @@ func VerifyPassword(encoded, pw string) bool {
 	got := argon2.IDKey([]byte(pw), salt, iterations, memory, threads, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
-
-var errNoHash = errors.New("no password hash")

@@ -417,3 +417,12 @@ func seconds(d time.Duration) string {
 func ClassName(c v1.LinkClass) string {
 	return strings.ToLower(strings.TrimPrefix(c.String(), "LINK_CLASS_"))
 }
+
+// The protocols every listener speaks, HTTP/1, HTTP/2 over TLS, and cleartext HTTP/2 for connect clients
+func Protocols() *http.Protocols {
+	p := new(http.Protocols)
+	p.SetHTTP1(true)
+	p.SetHTTP2(true)
+	p.SetUnencryptedHTTP2(true)
+	return p
+}

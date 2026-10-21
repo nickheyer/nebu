@@ -182,12 +182,14 @@ type Manager struct {
 	listenErr string
 	statusAt  *time.Timer
 	// Connections by member address and TLS state
-	h2         map[string]http.RoundTripper
-	seq        uint64
-	dirty      bool
-	publishAt  *time.Timer
-	listener   net.Listener
-	server     *http.Server
+	h2        map[string]http.RoundTripper
+	seq       uint64
+	dirty     bool
+	publishAt *time.Timer
+	listener  net.Listener
+	server    *http.Server
+	// Closed once the server stopped accepting, so a rebind can take the address
+	served     chan struct{}
 	listenAddr string
 	base       context.Context
 	cancel     context.CancelFunc

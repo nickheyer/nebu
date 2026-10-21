@@ -3,7 +3,7 @@
   import { live, cached, orderedSlots, hostGpus, meshGpus, meshGpuGroups, inMesh } from '$lib/state.svelte';
   import { slotOccupied } from '$lib/launch';
   import { placements, placementId, placementOf } from '$lib/instances';
-  import { policyFields, policyFrom, profileFields, profileFrom, profileError } from '$lib/gateway';
+  import { policyFields, policyFrom, profileFields, profileFrom } from '$lib/gateway';
   import { gib, fromGib } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { PoolKind } from '$proto/host_pb';
@@ -77,7 +77,7 @@
   const badBudget = $derived(memory.trim() !== '' && budget === 0n);
   const badName = $derived(/[\s/]/.test(name));
   const nameTaken = $derived(name.trim() !== slot?.name && [...live.slots.values()].some((s) => s.name === name.trim()));
-  // Aliases keep the limits and shaping they were given in the Serve page's alias dialog.
+  // Aliases keep the limits and profile they were given in the Serve page's alias dialog.
   const aliasProblem = $derived.by(() => {
     for (const a of aliases) {
       if (/[\s/]/.test(a)) return `${a} has a space or slash`;
@@ -93,7 +93,7 @@
   const runtime = $derived(cached.runtimes.find((r) => r.runtime?.id === runtimeId)?.runtime);
   const occupied = $derived(!!slot && slotOccupied(slot.id));
   const count = $derived(orderedSlots().length);
-  const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && !aliasProblem && invalid === 0 && !profileError(profile));
+  const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && !aliasProblem && invalid === 0);
   // Clear parameters when the runtime changes.
   $effect(() => {
     if (runtimeId !== start.runtimeId) params = {};
@@ -179,7 +179,7 @@
     <PolicyForm bind:fields={policy} defaults={cached.gateway?.policy} idPrefix="slot" />
   </Card>
 
-  <Card title="Shaping">
+  <Card title="Profile">
     <ProfileForm bind:fields={profile} idPrefix="slot" />
   </Card>
 

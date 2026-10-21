@@ -39,8 +39,6 @@ import (
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
 	"github.com/nickheyer/nebu/pkg/transfer"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -137,7 +135,7 @@ func newNode(t *testing.T, ctx context.Context, name string) *node {
 	mux := http.NewServeMux()
 	mux.Handle(nebuv1connect.NewMeshServiceHandler(svc))
 	rpc.MountMesh(mux, guard, blobs, filepath.Join(dir, "rpc"))
-	m.Handler = h2c.NewHandler(mux, &http2.Server{})
+	m.Handler = mux
 	if err := m.Start(ctx); err != nil {
 		t.Fatal(err)
 	}

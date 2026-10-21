@@ -3,38 +3,13 @@ package chat
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
-
-// The request Claude Code sends under server side review, with the check it asks for
-const reviewBody = `{"model":"m","max_tokens":50,"messages":[{"role":"user","content":"list the dir"}],"tools":[{"name":"Bash","description":"Runs","input_schema":{"type":"object"}}],"safeguards":[{"type":"dangerous_tool_use","classifier_context":{"v":1,"permission_mode":"auto"}}]}`
-
-// A check goes on to an Anthropic runtime only while the gateway has not answered it, and never to an OpenAI one
-func TestChecksForwarded(t *testing.T) {
-	req, err := (anthropic{}).Parse(AnthropicMessages, []byte(reviewBody))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(req.Checks) != 1 || req.Checks[0].Type != DangerousToolUse {
-		t.Fatalf("parsed %v", req.Checks)
-	}
-	_, body, err := (anthropic{}).Render(req)
-	if err != nil || !strings.Contains(string(body), `"safeguards":[{"type":"dangerous_tool_use"`) {
-		t.Fatalf("forwarded %s: %v", body, err)
-	}
-	req.Checks[0].Verdict = Allowed
-	_, body, _ = (anthropic{}).Render(req)
-	if strings.Contains(string(body), "safeguards") {
-		t.Fatalf("an answered check was forwarded: %s", body)
-	}
-	_, body, _ = (openai{}).Render(req)
-	if strings.Contains(string(body), "safeguards") {
-		t.Fatalf("the check reached an OpenAI body: %s", body)
-	}
-}
 
 // Server tools parse as provided tools with their limits, MCP endpoints as sources, and the API's rules hold
 func TestAnthropicProvidedTools(t *testing.T) {
@@ -67,27 +42,6 @@ func TestAnthropicProvidedTools(t *testing.T) {
 		if _, err := (anthropic{}).Parse(AnthropicMessages, body(tools)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s: %v", want, err)
 		}
-	}
-}
-
-// Context overflow refusals are reworded the way agent clients compact on, and sized ones give the room left
-func TestPromptTooLong(t *testing.T) {
-	for message, reworded := range map[string]bool{
-		"This model's maximum context length is 32768 tokens. However, you requested 40000 tokens.":   true,
-		"request (50000 tokens) exceeds the available context size (32768 tokens), try increasing it": true,
-		"prompt is too long: 213462 tokens > 200000 maximum":                                          false,
-		"unknown model": false,
-	} {
-		out := PromptTooLong(message)
-		if reworded && out != "prompt is too long: "+message || !reworded && out != message {
-			t.Fatalf("%q became %q", message, out)
-		}
-	}
-	if room, ok := CompletionRoom("This model's maximum context length is 32768 tokens. However, you requested 40000 tokens (30000 in the messages, 10000 in the completion)."); !ok || room != 2768 {
-		t.Fatalf("room %d %v", room, ok)
-	}
-	if _, ok := CompletionRoom("request (50000 tokens) exceeds the available context size (32768 tokens)"); ok {
-		t.Fatal("a prompt that alone overflows leaves no room")
 	}
 }
 
@@ -215,6 +169,30 @@ func BenchmarkRenderAgentRequest(b *testing.B) {
 	for b.Loop() {
 		if _, _, err := (openai{}).Render(req); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+// A request's path names its protocol, the Anthropic version header deciding only paths the protocols share
+func TestDetect(t *testing.T) {
+	for _, tc := range []struct {
+		path, version string
+		want          v1.ApiFlavor
+	}{
+		{OpenAIChat, "2023-06-01", v1.ApiFlavor_API_FLAVOR_OPENAI},
+		{OpenAIEmbeddings, "2023-06-01", v1.ApiFlavor_API_FLAVOR_OPENAI},
+		{AnthropicMessages, "", v1.ApiFlavor_API_FLAVOR_ANTHROPIC},
+		{AnthropicCount, "", v1.ApiFlavor_API_FLAVOR_ANTHROPIC},
+		{"/v1/models", "2023-06-01", v1.ApiFlavor_API_FLAVOR_ANTHROPIC},
+		{"/v1/models", "", v1.ApiFlavor_API_FLAVOR_OPENAI},
+		{OllamaChat, "2023-06-01", v1.ApiFlavor_API_FLAVOR_OLLAMA},
+	} {
+		r := httptest.NewRequest(http.MethodPost, tc.path, nil)
+		if tc.version != "" {
+			r.Header.Set("anthropic-version", tc.version)
+		}
+		if got := Detect(r); got != tc.want {
+			t.Fatalf("%s with version %q detected as %v, want %v", tc.path, tc.version, got, tc.want)
 		}
 	}
 }

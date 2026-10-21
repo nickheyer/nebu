@@ -53,8 +53,6 @@ type inbound struct {
 	req  *chat.Request
 	// Why there is no request, for the steps that need one
 	err error
-	// The client headers the runtime gets, none when the route leaves the client's extras out
-	from http.Header
 }
 
 // Routes requests by model and translates between the protocols clients and runtimes speak
@@ -460,14 +458,6 @@ func (g *Gateway) refuse(w *traceWriter, client chat.Client, status int, message
 	client.Error(w, failure(status, message, code))
 }
 
-// The client headers a runtime gets, none when the profile leaves the client's extras out
-func passHeaders(r *http.Request, p *v1.Profile, api v1.ApiFlavor) http.Header {
-	if StripsExtras(p, api) {
-		return nil
-	}
-	return r.Header
-}
-
 func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	api := chat.Detect(r)
 	client := chat.ClientOf(api)
@@ -492,9 +482,6 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		t.Status, t.ResponseBytes = uint32(w.status), w.bytes
 		g.traces.Finish(t)
 	}()
-	if g.allowAll(w, in, name, client) {
-		return
-	}
 	served := kind != v1.TraceKind_TRACE_KIND_COUNT
 	route, policy, release, err := g.table.Acquire(name, served)
 	if errors.Is(err, ErrNoRoute) && name == "" {
@@ -526,7 +513,6 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t.InstanceId, t.SlotId, t.UpstreamApi = route.GetInstanceId(), route.GetSlotId(), route.GetApi()
-	in.from = passHeaders(r, route.GetProfile(), api)
 	entry := r.Header.Get(entryHeader)
 	if route.GetForwarded() {
 		defer release()
@@ -569,7 +555,7 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	hold := g.holder(route, targets)
 	defer hold.done()
 	x.targets, x.hold = targets, hold
-	x.open = g.opener(targets, hold, policy, in.from, name)
+	x.open = g.opener(targets, hold, policy, r.Header, name)
 	g.served(t, route, targets, x.serve(), key)
 }
 
@@ -590,14 +576,14 @@ func (g *Gateway) refuseSeats(w *traceWriter, client chat.Client, name string, e
 // Opens the runtime's answer to one rendered request, answering the index of the seat that took it
 type opener func(ctx context.Context, req *chat.Request, path string, body []byte) (*http.Response, context.CancelFunc, int, error)
 
-// An opener over a route's targets, the count following the request between seats
+// An opener over a route's targets with the client's headers, the count following the request between seats
 func (g *Gateway) opener(targets []target, hold *seatHold, policy *v1.Policy, from http.Header, name string) opener {
 	return func(ctx context.Context, req *chat.Request, path string, body []byte) (*http.Response, context.CancelFunc, int, error) {
 		return g.open(ctx, targets, hold, path, body, req.Stream, policy, from, name)
 	}
 }
 
-// Sends a rendered request with policy timeouts and the client's capability and session headers
+// Sends a rendered request with policy timeouts and the client's headers as a runtime gets them
 func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []byte, stream bool, policy *v1.Policy, from http.Header) (*http.Response, context.CancelFunc, error) {
 	cancel := context.CancelFunc(func() {})
 	if d := policy.GetRequestTimeoutMs(); d > 0 {
@@ -613,7 +599,7 @@ func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []
 		cancel()
 		return nil, nil, err
 	}
-	forwardHeaders(req.Header, from)
+	req.Header = runtimeHeaders(from)
 	req.Header.Set("Content-Type", "application/json")
 	if stream {
 		req.Header.Set("Accept", "text/event-stream, application/x-ndjson, application/json")
@@ -650,39 +636,31 @@ func (g *Gateway) open(ctx context.Context, targets []target, hold *seatHold, pa
 	return nil, nil, -1, errors.New("no seat to send to")
 }
 
-// Prefixes of the headers clients announce capabilities and identify sessions with
-func passPrefixes() []string {
-	return append(chat.HeaderPrefixes(), harnessHeaders)
+// Headers a runtime never gets, credentials, forwarding marks, and what the connection itself sets
+var clientOnlyHeaders = map[string]bool{
+	"Authorization": true, "X-Api-Key": true, "Cookie": true,
+	"Forwarded": true, "X-Forwarded-For": true, "X-Forwarded-Host": true, "X-Forwarded-Proto": true,
+	"Content-Length": true, "Accept-Encoding": true, "Expect": true, "Connection": true, "Keep-Alive": true,
+	"Proxy-Authenticate": true, "Proxy-Authorization": true, "Proxy-Connection": true, "Te": true, "Trailer": true, "Transfer-Encoding": true, "Upgrade": true,
 }
 
-// Copies the headers a client uses to announce capabilities and identify its session
-func forwardHeaders(to, from http.Header) {
-	prefixes := passPrefixes()
-	for name, values := range from {
-		if chat.HasPrefix(name, prefixes) {
-			to[name] = append([]string(nil), values...)
-		}
-	}
-}
-
-// Removes the headers a client identifies its session and capabilities with
-func dropIdentity(h http.Header) {
-	prefixes := passPrefixes()
+// Removes the headers a runtime never gets, the gateway's own among them
+func dropClientOnly(h http.Header) {
 	for name := range h {
-		if chat.HasPrefix(name, prefixes) {
+		if clientOnlyHeaders[name] || strings.HasPrefix(name, "X-Nebu-") {
 			delete(h, name)
 		}
 	}
 }
 
-// Copies the headers a client reads for retries and usage limits
-func relayHeaders(to, from http.Header) {
-	prefixes := chat.HeaderPrefixes()
-	for name, values := range from {
-		if chat.HasPrefix(name, prefixes) || name == "Retry-After" || name == "X-Should-Retry" {
-			to[name] = append([]string(nil), values...)
-		}
+// The client's headers as a runtime gets them
+func runtimeHeaders(from http.Header) http.Header {
+	out := from.Clone()
+	if out == nil {
+		out = http.Header{}
 	}
+	dropClientOnly(out)
+	return out
 }
 
 // Answers a runtime that could not be reached, timeouts as 504 and the rest as 502

@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
-	"strconv"
 	"strings"
 )
 
@@ -97,50 +95,11 @@ func CodeOf(status int, body []byte) string {
 	return CodeAPI
 }
 
-// A runtime's refusal in its own words, the body when it names no message, reworded on context overflow
+// A runtime's refusal in its own words, the body when it names no message
 func Refusal(rt Runtime, status int, body []byte) *Failure {
 	message := rt.ErrorMessage(body)
 	if message == "" {
 		message = strings.TrimSpace(string(body))
 	}
-	return &Failure{Status: status, Code: CodeOf(status, body), Message: PromptTooLong(message)}
-}
-
-// Refusals that mean the prompt outgrew the context, as llama.cpp, vLLM, and SGLang word them
-var contextRefusal = regexp.MustCompile(`(?i)exceeds? the (available |model'?s )?context|maximum context length|context (length|window|size)[^.]*exceed|longer than the (maximum|model)|too many tokens`)
-
-// The context limit and the prompt's size in a refusal that names both
-var (
-	contextLimit = regexp.MustCompile(`(?i)(?:maximum context length (?:is|of)|context limit: \d[\d,]* \+ \d[\d,]* >|allowed length(?: is| of)? \(?|available context size \()\s*(\d[\d,]*)`)
-	promptSize   = regexp.MustCompile(`(?i)(?:context limit: |\brequest \()(\d[\d,]*)|(\d[\d,]*) (?:tokens )?(?:in|from) (?:the |your )?(?:input |prompt )?(?:messages|prompt|input)\b`)
-)
-
-// The completion tokens a sized context refusal leaves, none when the prompt alone overflows
-func CompletionRoom(message string) (int, bool) {
-	limit := contextLimit.FindStringSubmatch(message)
-	prompt := promptSize.FindStringSubmatch(message)
-	if limit == nil || prompt == nil {
-		return 0, false
-	}
-	size := prompt[1]
-	if size == "" {
-		size = prompt[2]
-	}
-	max, err := strconv.Atoi(strings.ReplaceAll(limit[1], ",", ""))
-	if err != nil {
-		return 0, false
-	}
-	used, err := strconv.Atoi(strings.ReplaceAll(size, ",", ""))
-	if err != nil || used >= max {
-		return 0, false
-	}
-	return max - used, true
-}
-
-// Rewords a context overflow the way agent clients expect one, so they compact
-func PromptTooLong(message string) string {
-	if strings.HasPrefix(message, "prompt is too long") || !contextRefusal.MatchString(message) {
-		return message
-	}
-	return "prompt is too long: " + message
+	return &Failure{Status: status, Code: CodeOf(status, body), Message: message}
 }

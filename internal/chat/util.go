@@ -186,21 +186,6 @@ func mergeExtra(into, from map[string]json.RawMessage) map[string]json.RawMessag
 	return into
 }
 
-// Writes the fields of a JSON object over a JSON body's, the overrides winning
-func Override(body []byte, overrides string) ([]byte, error) {
-	var fields, over map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
-		return nil, fmt.Errorf("request is not a JSON object: %w", err)
-	}
-	if err := json.Unmarshal([]byte(overrides), &over); err != nil {
-		return nil, fmt.Errorf("overrides are not a JSON object: %w", err)
-	}
-	for k, v := range over {
-		fields[k] = v
-	}
-	return json.Marshal(fields)
-}
-
 // Reads a string or a list of strings
 func strs(raw json.RawMessage) []string {
 	if len(raw) == 0 {

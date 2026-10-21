@@ -197,7 +197,7 @@
               ['Aliases', slot.aliases.length ? slot.aliases.map((a) => a.name).join(', ') : 'None'],
               ['Runtime', slot.runtimeId ? runtimeName(slot.runtimeId) : 'Any'],
               ['Limits', policyText(slot.policy, cached.gateway?.policy)],
-              ['Shaping', profileText(slot.profile, instance?.template)],
+              ['Profile', profileText(slot.profile, instance?.template)],
               ['Route', route ? `${route.state === RouteState.READY ? 'Ready' : route.state === RouteState.DRAINING ? 'Draining' : 'Waiting'} · ${count(route.requests)} requests` : '–'],
               ['Created', when(slot.createdAt)],
               ['Updated', when(slot.updatedAt)]

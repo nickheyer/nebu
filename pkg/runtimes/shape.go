@@ -236,7 +236,7 @@ func rankPartition(seat *v1.SeatSpec, layers int) (string, error) {
 func ggmlDevices(in *v1.Install, devices []*v1.Device) []string {
 	known := strings.Split(in.GetFacts()["devices"], ",")
 	prefixFor := func(d *v1.Device) string {
-		candidates := []string{}
+		var candidates []string
 		switch d.GetVendor() {
 		case "nvidia":
 			candidates = []string{"CUDA", "Vulkan"}

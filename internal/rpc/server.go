@@ -36,8 +36,6 @@ import (
 	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 // Everything the handlers need
@@ -155,7 +153,7 @@ func NewHandler(d Deps) http.Handler {
 	if d.Web != nil {
 		mux.Handle("/", d.Web)
 	}
-	return h2c.NewHandler(mux, &http2.Server{})
+	return mux
 }
 
 // Where MCP clients reach nebu's own tool server

@@ -1,4 +1,4 @@
-import { SystemMessages, SystemPrompt, type Policy, type Profile } from '$proto/gateway_pb';
+import { SystemMessages, type Policy, type Profile } from '$proto/gateway_pb';
 import { ToolSupport, type TemplateProbe } from '$proto/instance_pb';
 import { attachmentText } from './tools';
 
@@ -144,87 +144,26 @@ export const systemMessageItems: { value: string; label: string; detail: string 
 
 const modeOf: Record<string, SystemMessages> = { keep: SystemMessages.KEEP, merge: SystemMessages.MERGE, user: SystemMessages.USER };
 
-export const systemPromptItems: { value: string; label: string; detail: string }[] = [
-  { value: 'inherit', label: 'Inherit', detail: "The slot's setting, facts for a coding agent and the client's prompt" },
-  { value: 'keep', label: 'Keep', detail: "The client's prompt as sent" },
-  { value: 'facts', label: 'Facts', detail: "The gateway's own prompt, the environment facts from client" },
-  { value: 'drop', label: 'Drop', detail: 'No system prompt reaches the runtime' },
-  { value: 'replace', label: 'Replace', detail: "The text below in place of the client's" }
-];
-
-const promptOf: Record<string, SystemPrompt> = { keep: SystemPrompt.KEEP, facts: SystemPrompt.FACTS, drop: SystemPrompt.DROP, replace: SystemPrompt.REPLACE };
-
-// Tool patterns as one comma separated line and back
-const patternsOf = (s: string) => s.split(',').map((p) => p.trim()).filter(Boolean);
-
-export const checksItems: { value: string; label: string; detail: string }[] = [
-  { value: 'inherit', label: 'Inherit', detail: "The slot's setting, allowed when nothing sets one" },
-  { value: 'allow', label: 'Allowed', detail: 'Classifier prompts and server side review answered as allowed without the model' },
-  { value: 'model', label: 'Model decides', detail: 'The model answers the classifier prompts the agent sends' }
-];
-
-export const extrasItems: { value: string; label: string; detail: string }[] = [
-  { value: 'inherit', label: 'Inherit', detail: "The slot's setting, stripped for Anthropic clients when nothing sets one" },
-  { value: 'strip', label: 'Strip', detail: 'Only what the gateway maps reaches the runtime, no attribution block or identity headers' },
-  { value: 'pass', label: 'Pass', detail: 'Every field and header the client sends reaches the runtime' }
-];
-
-// A tri state field as its word, inherit when unset
-const triState = (v: boolean | undefined, on: string, off: string) => (v === undefined ? 'inherit' : v ? on : off);
-const triValue = (s: string, on: string) => (s === 'inherit' ? undefined : s === on);
-
 export interface ProfileFields {
   systemMessages: string;
-  checks: string;
   toolServers: string[];
   mutatingTools: boolean;
-  systemPrompt: string;
-  systemText: string;
-  extras: string;
-  overrides: string;
-  hiddenTools: string;
 }
 
 export function profileFields(p: Profile | undefined): ProfileFields {
   return {
     systemMessages: Object.entries(modeOf).find(([, m]) => m === p?.systemMessages)?.[0] ?? 'auto',
-    checks: triState(p?.allowAll, 'allow', 'model'),
     toolServers: [...(p?.toolServers ?? [])],
-    mutatingTools: p?.mutatingTools ?? false,
-    systemPrompt: Object.entries(promptOf).find(([, m]) => m === p?.systemPrompt)?.[0] ?? 'inherit',
-    systemText: p?.systemText ?? '',
-    extras: triState(p?.stripExtras, 'strip', 'pass'),
-    overrides: p?.overrides ?? '',
-    hiddenTools: (p?.hiddenTools ?? []).join(', ')
+    mutatingTools: p?.mutatingTools ?? false
   };
 }
 
 export function profileFrom(f: ProfileFields): Profile {
   return {
     systemMessages: modeOf[f.systemMessages] ?? SystemMessages.UNSPECIFIED,
-    allowAll: triValue(f.checks, 'allow'),
     toolServers: [...f.toolServers],
-    mutatingTools: f.toolServers.length ? f.mutatingTools : false,
-    systemPrompt: promptOf[f.systemPrompt] ?? SystemPrompt.UNSPECIFIED,
-    systemText: f.systemPrompt === 'replace' ? f.systemText : '',
-    stripExtras: triValue(f.extras, 'strip'),
-    overrides: f.overrides.trim(),
-    hiddenTools: patternsOf(f.hiddenTools)
+    mutatingTools: f.toolServers.length ? f.mutatingTools : false
   } as Profile;
-}
-
-// Why the profile cannot be saved as filled in, empty when it can
-export function profileError(f: ProfileFields): string {
-  if (f.systemPrompt === 'replace' && !f.systemText.trim()) return 'Replacing the system prompt needs text';
-  if (f.overrides.trim()) {
-    try {
-      const parsed = JSON.parse(f.overrides);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'Overrides must be a JSON object';
-    } catch {
-      return 'Overrides must be a JSON object';
-    }
-  }
-  return '';
 }
 
 const modeLabel = (mode: string) => systemMessageItems.find((i) => i.value === mode)?.label.toLowerCase() ?? mode;
@@ -239,12 +178,7 @@ function systemText(mode: string, template?: TemplateProbe): string {
 export function profileText(p: Profile | undefined, template?: TemplateProbe): string {
   const f = profileFields(p);
   const parts = [systemText(f.systemMessages, template)];
-  if (f.systemPrompt !== 'inherit') parts.push(`System prompt: ${f.systemPrompt}`);
-  if (f.extras !== 'inherit') parts.push(`Client extras: ${f.extras}`);
-  if (f.overrides) parts.push('Overrides: set');
-  if (patternsOf(f.hiddenTools).length) parts.push(`Hidden tools: ${patternsOf(f.hiddenTools).join(', ')}`);
   if (template?.tools === ToolSupport.EMULATED) parts.push('Tools: emulated by the gateway');
-  if (f.checks !== 'inherit') parts.push(f.checks === 'allow' ? 'Agent checks: allowed' : 'Agent checks: model decides');
   const tools = attachmentText(f.toolServers, f.mutatingTools);
   if (tools) parts.push(tools);
   return parts.join(' · ');

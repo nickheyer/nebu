@@ -21,8 +21,6 @@ import (
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
 	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/store"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -69,7 +67,7 @@ func newNode(t *testing.T, ctx context.Context) *mesh.Manager {
 	mux := http.NewServeMux()
 	mux.Handle(nebuv1connect.NewMeshServiceHandler(svc))
 	mux.HandleFunc(links.SinkPath, links.Sink)
-	m.Handler = h2c.NewHandler(mux, &http2.Server{})
+	m.Handler = mux
 	if err := m.Start(ctx); err != nil {
 		t.Fatal(err)
 	}

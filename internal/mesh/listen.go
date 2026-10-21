@@ -1,6 +1,7 @@
 package mesh
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -8,9 +9,15 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/nickheyer/nebu/internal/mesh/links"
 )
 
-const readHeaderTimeout = 10 * time.Second
+const (
+	readHeaderTimeout = 10 * time.Second
+	// How long a server replaced by a rebind may finish the requests it already took
+	rebindDrain = 30 * time.Second
+)
 
 // Whether an address binds loopback or nothing routable
 func loopbackOnly(addr string) bool {
@@ -55,10 +62,12 @@ func (m *Manager) bindLocked(addr string) error {
 	if cfg := m.serverTLSLocked(); cfg != nil {
 		ln = tls.NewListener(ln, cfg)
 	}
-	srv := &http.Server{Handler: m.Handler, ReadHeaderTimeout: readHeaderTimeout}
-	m.listener, m.server, m.listenAddr = ln, srv, ln.Addr().String()
+	srv := &http.Server{Handler: m.Handler, ReadHeaderTimeout: readHeaderTimeout, Protocols: links.Protocols()}
+	served := make(chan struct{})
+	m.listener, m.server, m.served, m.listenAddr = ln, srv, served, ln.Addr().String()
 	m.Log.Info("mesh listening", "addr", m.listenAddr, "tls", m.serverTLSLocked() != nil)
 	go func() {
+		defer close(served)
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			m.Log.Warn("mesh listener stopped", "addr", addr, "err", err)
 		}
@@ -66,18 +75,23 @@ func (m *Manager) bindLocked(addr string) error {
 	return nil
 }
 
-// Binds the listener again after the certificate it serves changed
+// Binds the listener again after its certificate changed, the old server first answering what it already took
 func (m *Manager) rebind() error {
 	m.mu.Lock()
-	srv, ln := m.server, m.listener
-	addr := m.listenAddr
-	m.server, m.listener = nil, nil
+	srv, served, addr := m.server, m.served, m.listenAddr
+	m.server, m.listener, m.served = nil, nil, nil
 	m.mu.Unlock()
 	if srv == nil {
 		return m.listen()
 	}
-	srv.Close()
-	ln.Close()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), rebindDrain)
+		defer cancel()
+		if srv.Shutdown(ctx) != nil {
+			srv.Close()
+		}
+	}()
+	<-served
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.bindLocked(addr)

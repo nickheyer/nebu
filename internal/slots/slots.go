@@ -406,12 +406,12 @@ func (m *Manager) checkAliases(list []*v1.SlotAlias, self, primary string) ([]*v
 			return nil, err
 		}
 		seen[name] = true
-		if err := gateway.ValidateProfile(a.GetProfile()); err != nil {
-			return nil, fmt.Errorf("%w: alias %s: %v", ErrSlot, name, err)
-		}
 		clean := &v1.SlotAlias{Name: name}
 		if p := a.GetPolicy(); p.GetMaxInFlight()+p.GetBurst()+p.GetRequestTimeoutMs()+p.GetUpstreamTimeoutMs() > 0 || p.GetRequestsPerSecond() > 0 {
 			clean.Policy = proto.Clone(p).(*v1.Policy)
+		}
+		if err := gateway.CheckProfile(a.GetProfile()); err != nil {
+			return nil, fmt.Errorf("%w: alias %q: %v", ErrSlot, name, err)
 		}
 		if gateway.ProfileSet(a.GetProfile()) {
 			clean.Profile = proto.Clone(a.GetProfile()).(*v1.Profile)
@@ -430,7 +430,7 @@ func names(s *v1.Slot) []string {
 	return out
 }
 
-// Limits and shaping for one of the slot's names. Alias fields override the slot's.
+// Limits and profile for one of the slot's names. Alias fields override the slot's.
 func settingsFor(s *v1.Slot, name string) (*v1.Policy, *v1.Profile) {
 	for _, a := range s.GetAliases() {
 		if a.GetName() != name {
@@ -459,7 +459,7 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 	if err := m.checkName(name, ""); err != nil {
 		return nil, err
 	}
-	if err := gateway.ValidateProfile(req.GetProfile()); err != nil {
+	if err := gateway.CheckProfile(req.GetProfile()); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSlot, err)
 	}
 	aliases, err := m.checkAliases(req.GetAliases(), "", name)
@@ -549,12 +549,12 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 	if err != nil {
 		return nil, err
 	}
-	if err := gateway.ValidateProfile(req.GetProfile()); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrSlot, err)
-	}
 	devices := devicesFor(req.GetPlacement(), req.GetDeviceIds())
 	if err := m.checkDevices(ctx, devices); err != nil {
 		return nil, err
+	}
+	if err := gateway.CheckProfile(req.GetProfile()); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSlot, err)
 	}
 	name := strings.TrimSpace(req.GetName())
 	if name == "" {
@@ -634,7 +634,7 @@ func (m *Manager) apply(s *v1.Slot) {
 	}
 }
 
-// Adds an alias to a slot, or updates its limits and shaping, and returns the alias route.
+// Adds an alias to a slot, or updates its limits and profile, and returns the alias route.
 func (m *Manager) AddAlias(ctx context.Context, id string, alias *v1.SlotAlias) (*v1.Slot, *v1.Route, error) {
 	s, err := m.find(id)
 	if err != nil {

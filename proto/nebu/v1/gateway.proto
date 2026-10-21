@@ -43,39 +43,13 @@ enum SystemMessages {
   SYSTEM_MESSAGES_USER = 3;
 }
 
-// Request transformations. Unset fields use instance defaults.
+// How a route handles the requests it takes, every unset field inheriting
 message Profile {
   SystemMessages system_messages = 1;
-  // Answer coding agent permission checks as allowed, classifier prompts and server side review alike, unset answers them
-  optional bool allow_all = 2;
   // Tool servers whose tools every request on the route gets, by name, node qualified for another member's
   repeated string tool_servers = 3;
   // Whether tools that change what they touch are offered too, read only tools alone otherwise
   bool mutating_tools = 4;
-  // What the runtime gets as the system prompt
-  SystemPrompt system_prompt = 5;
-  // The system prompt the runtime gets when system_prompt replaces the client's
-  string system_text = 6;
-  // Leave out what a client sends that is not for the model, unset leaves out an Anthropic client's
-  optional bool strip_extras = 7;
-  // A JSON object whose fields are written over every request the runtime gets
-  string overrides = 8;
-  // Tools the runtime is not offered, by name, a * matching any run of characters
-  repeated string hidden_tools = 9;
-}
-
-// What the runtime gets as the system prompt
-enum SystemPrompt {
-  // Inherit, facts for a coding agent harness and the client's for anything else when nothing inherits
-  SYSTEM_PROMPT_UNSPECIFIED = 0;
-  // The client's, as sent
-  SYSTEM_PROMPT_KEEP = 1;
-  // None
-  SYSTEM_PROMPT_DROP = 2;
-  // The profile's system_text
-  SYSTEM_PROMPT_REPLACE = 3;
-  // The gateway's own, holding only the environment facts the client states
-  SYSTEM_PROMPT_FACTS = 4;
 }
 
 // How a replicas route keeps a conversation on the seat whose cache holds its prefix. It lives
@@ -275,8 +249,6 @@ message Trace {
   // Speculative decoding counters from the runtime's timings
   uint32 draft_offered = 32;
   uint32 draft_accepted = 33;
-  reserved 34;
-  reserved "web_searches";
 }
 
 // One tool call in a traced answer, run by the gateway when it names a server

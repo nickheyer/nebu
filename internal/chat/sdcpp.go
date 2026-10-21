@@ -19,8 +19,6 @@ func notChat() error {
 	return bad("this model generates images and video: send images to %s or %s and video to %s", OpenAIImages, OpenAIEdits, OpenAIVideos)
 }
 
-func (sdcpp) headers() []string { return nil }
-
 func (sdcpp) Endpoint(string) Kind { return None }
 
 func (sdcpp) Parse(string, []byte) (*Request, error) { return nil, notChat() }

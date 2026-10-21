@@ -437,9 +437,7 @@ func (i *Inspector) fitIn(ctx context.Context, src sources.Source, model *v1.Mod
 	best := fits[0]
 	pick := &Pick{Fill: fill, Source: src, Model: model, Group: best.g, Descriptor: best.d}
 	if fill.Kind == "tokenizer" {
-		for _, a := range best.g.Files[v1.ArtifactRole_ARTIFACT_ROLE_TOKENIZER] {
-			pick.Files = append(pick.Files, a)
-		}
+		pick.Files = append(pick.Files, best.g.Files[v1.ArtifactRole_ARTIFACT_ROLE_TOKENIZER]...)
 		if len(pick.Files) == 0 {
 			return nil, fmt.Errorf("%s %s has no tokenizer files", model.GetRepo(), best.g.Name)
 		}

@@ -8,8 +8,6 @@ option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
 message Settings {
   // Display name, defaulting to the hostname.
   string host_label = 1;
-  reserved 2, 3;
-  reserved "setup_dismissed", "web_search";
   // Sources of tools the gateway runs for models, in the order they were added
   repeated ToolServer tool_servers = 4;
 }

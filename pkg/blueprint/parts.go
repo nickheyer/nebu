@@ -117,8 +117,6 @@ var (
 
 	tokenizerGPTOSS = Part{Kind: "tokenizer", Name: "the gpt-oss tokenizer.json", Names: []string{"gpt-oss", "gpt_oss", "gptoss"}, Arch: []string{"gpt-oss", "gptoss", "gpt_oss"}, Repos: []string{"openai/gpt-oss-20b"}}
 	tokenizerGemma2 = Part{Kind: "tokenizer", Name: "the Gemma-2-2B tokenizer.json", Names: []string{"gemma-2-2b", "gemma_2_2b", "gemma2-2b", "gemma2"}, Arch: []string{"gemma2"}, Repos: []string{"google/gemma-2-2b", "unsloth/gemma-2-2b-it"}}
-
-	taesd = Part{Kind: "taesd", Name: "TAESD, TAESDXL, TAESD3, TAEF1, or TAEHV", Names: []string{"taesd", "taesdxl", "taesd3", "taef1", "taehv", "taew2.1", "tae"}, Repos: []string{"madebyollin/taesd", "madebyollin/taesdxl", "madebyollin/taesd3", "madebyollin/taef1", "madebyollin/taehv"}}
 )
 
 // Reports whether the group is the low noise expert of a paired denoiser.

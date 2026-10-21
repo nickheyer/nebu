@@ -9,6 +9,9 @@ import (
 // Nothing to claim, a signal reaches any process we may signal
 func Init() {}
 
+// A started process with everything it spawns, stoppable as one through its process group
+type Tree struct{ pid int }
+
 func adopt(pid int) *Tree { return &Tree{pid: pid} }
 
 func interruptTree(t *Tree) { signalGroup(t.pid, syscall.SIGTERM) }

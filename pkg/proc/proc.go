@@ -18,12 +18,6 @@ const (
 // How long a cancelled command may keep its output open before it is abandoned
 const WaitDelay = 5 * time.Second
 
-// A started process with everything it spawns, stoppable as one
-type Tree struct {
-	pid int
-	job uintptr
-}
-
 // Returns the attributes that put a child in its own group, tied to us where the OS can
 func Attr() *syscall.SysProcAttr { return attr() }
 

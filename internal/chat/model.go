@@ -30,12 +30,6 @@ const (
 	StopFilter = "filter"
 )
 
-// The verdict of a check the gateway answered itself
-const Allowed = "allowed"
-
-// The check type the gateway answers itself
-const DangerousToolUse = "dangerous_tool_use"
-
 // One request to a model, as every protocol reads and writes it
 type Request struct {
 	Kind        Kind
@@ -52,8 +46,6 @@ type Request struct {
 	ToolChoice string
 	// Tool endpoints the request asks the gateway to connect for it alone
 	Sources []Source
-	// Server side checks the request asks for on the answer's tool calls
-	Checks []Check
 	// Texts to embed
 	Inputs []string
 	// Fields of the wire request no protocol maps, carried as they are
@@ -67,14 +59,6 @@ type Source struct {
 	Token string
 	// Tools the endpoint may offer, every tool when empty
 	Allowed []string
-}
-
-// A server side check a client asked for, with the context it gave the reviewer
-type Check struct {
-	Type    string
-	Context json.RawMessage
-	// Empty while the runtime answers the check, Allowed once the gateway did
-	Verdict string
 }
 
 // One turn with a system, user, assistant, or tool role

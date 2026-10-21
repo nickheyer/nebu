@@ -11,8 +11,6 @@ import (
 	"github.com/nickheyer/nebu/internal/mesh/links"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 // The class cutoffs follow the measured numbers, an RDMA device on both ends making a fabric
@@ -56,7 +54,8 @@ func TestMeasureOverLoopback(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle(nebuv1connect.NewMeshServiceHandler(streamer{}))
 	mux.HandleFunc(links.SinkPath, links.Sink)
-	srv := httptest.NewUnstartedServer(h2c.NewHandler(mux, &http2.Server{}))
+	srv := httptest.NewUnstartedServer(mux)
+	srv.Config.Protocols = links.Protocols()
 	srv.Start()
 	defer srv.Close()
 	p := &links.Prober{}

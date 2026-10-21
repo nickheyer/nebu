@@ -60,11 +60,6 @@ func pythonProbe(key, script, marker, value string) Probe {
 	}}
 }
 
-// A probe that imports a module in the install's environment
-func importProbe(key, module string) Probe {
-	return pythonProbe(key, "import "+module+"; print('imports "+module+"')", "imports "+module, module)
-}
-
 // The import that proves the NIXL agent binding is in an environment: the nixl package, or the
 // nixl_rocm package vLLM takes on ROCm
 const nixlAgentImport = `try:

@@ -73,15 +73,16 @@ func (k jwk) public() (crypto.PublicKey, error) {
 		default:
 			return nil, fmt.Errorf("unsupported curve %q", k.Crv)
 		}
-		x, err := bigInt(k.X)
+		size := (curve.Params().BitSize + 7) / 8
+		x, err := coordinate(k.X, size)
 		if err != nil {
 			return nil, fmt.Errorf("ec x: %w", err)
 		}
-		y, err := bigInt(k.Y)
+		y, err := coordinate(k.Y, size)
 		if err != nil {
 			return nil, fmt.Errorf("ec y: %w", err)
 		}
-		return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
+		return ecdsa.ParseUncompressedPublicKey(curve, append(append([]byte{4}, x...), y...))
 	case "OKP":
 		if k.Crv != "Ed25519" {
 			return nil, fmt.Errorf("unsupported curve %q", k.Crv)
@@ -109,6 +110,20 @@ func keyType(alg string) string {
 		return "OKP"
 	}
 	return ""
+}
+
+// Decodes a base64url curve coordinate to the curve's width, shorter ones padded with leading zeros
+func coordinate(s string, size int) ([]byte, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || len(raw) > size {
+		return nil, fmt.Errorf("%d bytes, the curve takes %d", len(raw), size)
+	}
+	out := make([]byte, size)
+	copy(out[size-len(raw):], raw)
+	return out, nil
 }
 
 func bigInt(s string) (*big.Int, error) {

@@ -126,8 +126,6 @@ func (r olResponse) MarshalJSON() ([]byte, error) {
 	return withExtra(plain(r), r.Extra)
 }
 
-func (ollama) headers() []string { return nil }
-
 func (ollama) Endpoint(path string) Kind {
 	switch path {
 	case OllamaChat:

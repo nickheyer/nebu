@@ -649,13 +649,13 @@ func (g *Gateway) media(w *traceWriter, r *http.Request, body []byte, name strin
 	client := chat.ClientOf(chat.Detect(r))
 	if route.GetApi() != v1.ApiFlavor_API_FLAVOR_SDCPP {
 		release()
-		g.refuse(w, client, http.StatusBadRequest, "model "+name+" is a language model and generates no images or video", "invalid_request_error")
+		g.refuse(w, client, http.StatusBadRequest, "model "+name+" is a language model and generates no images or video", chat.CodeInvalidRequest)
 		return
 	}
 	req, err := parseMedia(r, body)
 	if err != nil {
 		release()
-		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		g.refuse(w, client, http.StatusBadRequest, err.Error(), chat.CodeInvalidRequest)
 		return
 	}
 	if t.GetKind() == v1.TraceKind_TRACE_KIND_VIDEO {
@@ -694,12 +694,12 @@ func (g *Gateway) image(w *traceWriter, r *http.Request, req *mediaRequest, name
 	t := w.t
 	client := chat.ClientOf(chat.Detect(r))
 	if !hasMode(route, "img_gen") {
-		g.refuse(w, client, http.StatusBadRequest, "model "+name+" generates video, not images: send it to "+chat.OpenAIVideos, "invalid_request_error")
+		g.refuse(w, client, http.StatusBadRequest, "model "+name+" generates video, not images: send it to "+chat.OpenAIVideos, chat.CodeInvalidRequest)
 		return
 	}
 	job, err := req.imageJob()
 	if err != nil {
-		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		g.refuse(w, client, http.StatusBadRequest, err.Error(), chat.CodeInvalidRequest)
 		return
 	}
 	ctx := r.Context()
@@ -731,7 +731,7 @@ func (g *Gateway) image(w *traceWriter, r *http.Request, req *mediaRequest, name
 	}
 	if done.Status != "completed" {
 		t.Stop = done.Status
-		g.refuse(w, client, http.StatusBadGateway, "upstream: "+done.failure(), "upstream_error")
+		g.refuse(w, client, http.StatusBadGateway, "upstream: "+done.failure(), chat.CodeUpstream)
 		return
 	}
 	var result struct {
@@ -742,7 +742,7 @@ func (g *Gateway) image(w *traceWriter, r *http.Request, req *mediaRequest, name
 		} `json:"images"`
 	}
 	if err := json.Unmarshal(done.Result, &result); err != nil || len(result.Images) == 0 {
-		g.refuse(w, client, http.StatusBadGateway, "upstream answered with no images", "upstream_error")
+		g.refuse(w, client, http.StatusBadGateway, "upstream answered with no images", chat.CodeUpstream)
 		return
 	}
 	data := make([]map[string]any, 0, len(result.Images))
@@ -933,13 +933,13 @@ func (g *Gateway) startVideo(w *traceWriter, req *mediaRequest, name string, rou
 	client := chat.ClientOf(v1.ApiFlavor_API_FLAVOR_OPENAI)
 	if !hasMode(route, "vid_gen") {
 		release()
-		g.refuse(w, client, http.StatusBadRequest, "model "+name+" generates images, not video: send it to "+chat.OpenAIImages, "invalid_request_error")
+		g.refuse(w, client, http.StatusBadRequest, "model "+name+" generates images, not video: send it to "+chat.OpenAIImages, chat.CodeInvalidRequest)
 		return
 	}
 	job, err := req.videoJob()
 	if err != nil {
 		release()
-		g.refuse(w, client, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		g.refuse(w, client, http.StatusBadRequest, err.Error(), chat.CodeInvalidRequest)
 		return
 	}
 	// The policy timeout applies apart from the client's context
@@ -990,7 +990,7 @@ func (g *Gateway) followVideo(ctx context.Context, cancel context.CancelFunc, re
 		if errors.As(err, &left) {
 			message = left.Error()
 		}
-		v.failure = &struct{ code, message string }{"upstream_error", message}
+		v.failure = &struct{ code, message string }{chat.CodeUpstream, message}
 		t.Error, t.Stop, t.Status = message, "failed", http.StatusBadGateway
 		return
 	}
@@ -1009,14 +1009,14 @@ func (g *Gateway) followVideo(ctx context.Context, cancel context.CancelFunc, re
 	}
 	if err := json.Unmarshal(done.Result, &result); err != nil || result.B64JSON == "" {
 		v.status = "failed"
-		v.failure = &struct{ code, message string }{"upstream_error", "the runtime finished the job without a video"}
+		v.failure = &struct{ code, message string }{chat.CodeUpstream, "the runtime finished the job without a video"}
 		t.Error, t.Stop, t.Status = v.failure.message, "failed", http.StatusBadGateway
 		return
 	}
 	data, err := base64.StdEncoding.DecodeString(result.B64JSON)
 	if err != nil {
 		v.status = "failed"
-		v.failure = &struct{ code, message string }{"upstream_error", "the video's bytes could not be decoded: " + err.Error()}
+		v.failure = &struct{ code, message string }{chat.CodeUpstream, "the video's bytes could not be decoded: " + err.Error()}
 		t.Error, t.Stop, t.Status = v.failure.message, "failed", http.StatusBadGateway
 		return
 	}

@@ -541,7 +541,7 @@ func TestSignatureAlgorithms(t *testing.T) {
 		return hmacSum(b, "secret")
 	})
 	keys := []jwk{
-		{Kty: "EC", Kid: "ec", Crv: "P-256", X: base64.RawURLEncoding.EncodeToString(ecKey.X.Bytes()), Y: base64.RawURLEncoding.EncodeToString(ecKey.Y.Bytes())},
+		{Kty: "EC", Kid: "ec", Crv: "P-256", X: base64.RawURLEncoding.EncodeToString(ecKey.X.FillBytes(make([]byte, 32))), Y: base64.RawURLEncoding.EncodeToString(ecKey.Y.FillBytes(make([]byte, 32)))},
 		{Kty: "OKP", Kid: "ed", Crv: "Ed25519", X: base64.RawURLEncoding.EncodeToString(edPub)},
 		{Kty: "RSA", Kid: "rsa", N: base64.RawURLEncoding.EncodeToString(rsaKey.N.Bytes()), E: base64.RawURLEncoding.EncodeToString(big.NewInt(int64(rsaKey.E)).Bytes())},
 	}

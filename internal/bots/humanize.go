@@ -139,9 +139,7 @@ func chunk(text string, limit int) []string {
 			continue
 		}
 		flush()
-		for _, piece := range splitLong(para, limit) {
-			out = append(out, piece)
-		}
+		out = append(out, splitLong(para, limit)...)
 	}
 	flush()
 	return out

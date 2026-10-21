@@ -46,19 +46,17 @@ func (x *exchange) refuse(f chat.Failure) {
 	x.g.refuse(x.w, x.client, f.Status, f.Message, f.Code)
 }
 
-// Serves the request, passing it through unchanged when nothing needs translating, and answers the seat index used
+// Serves the request as the client sent it unless the runtime needs it rendered, answering the seat index used
 func (x *exchange) serve() int {
 	t, in, route := x.w.t, x.in, x.route
 	mode := x.g.table.SystemMode(route)
-	profile := route.GetProfile()
-	harness := isHarness(x.r.Header, in.req)
-	shaped := x.api != route.GetApi() || Shaped(profile, x.api, harness)
+	same := x.api == route.GetApi()
 	if in.req == nil {
-		if shaped || x.relay {
+		if !same || x.relay {
 			x.refuse(chat.FailureOf(in.err))
 			return -1
 		}
-		return x.passthrough(mode)
+		return x.passthrough()
 	}
 	req := in.req
 	x.runtime = chat.RuntimeOf(route.GetApi())
@@ -73,26 +71,16 @@ func (x *exchange) serve() int {
 	}
 	defer x.plan.close()
 	emulate := x.g.table.ToolSupport(route) == v1.ToolSupport_TOOL_SUPPORT_EMULATED && len(req.Tools) > 0
-	if !x.plan.active() && !emulate && !shaped && req.Kind != chat.Count && !x.relay {
-		return x.passthrough(mode)
+	if same && !x.plan.active() && !emulate && !foldsSystem(req, mode) && req.Kind != chat.Count && !x.relay {
+		return x.passthrough()
 	}
-	t.Translated = shaped || req.Kind == chat.Count
+	t.Translated = !same
 	if served := route.GetServed(); served != "" {
 		req.Model = served
 	}
 	foldSystem(req, mode)
-	shape(req, profile, x.api, harness)
-	if x.runtime.Traits().Strict && x.api != route.GetApi() {
+	if x.runtime.Traits().Strict && !same {
 		chat.DropExtras(req)
-	}
-	allowed := AllowsAll(profile)
-	for i, c := range req.Checks {
-		switch {
-		case allowed && c.Type == chat.DangerousToolUse:
-			req.Checks[i].Verdict = chat.Allowed
-		case allowed:
-			x.g.log.Warn("a check the request asked for is not one the gateway answers", "model", x.name, "check", c.Type)
-		}
 	}
 	if req.Kind == chat.Count {
 		return x.count()
@@ -109,20 +97,8 @@ func (x *exchange) serve() int {
 	return x.rounds()
 }
 
-// Renders the request for the runtime, the profile's overrides written over chats and prompts
-func (x *exchange) render(req *chat.Request) (string, []byte, error) {
-	path, body, err := x.runtime.Render(req)
-	if err != nil || req.Kind != chat.Chat && req.Kind != chat.Generate {
-		return path, body, err
-	}
-	if overrides := x.route.GetProfile().GetOverrides(); overrides != "" {
-		body, err = chat.Override(body, overrides)
-	}
-	return path, body, err
-}
-
-// Proxies the body as the client sent it, the model renamed and later system turns folded as the route says
-func (x *exchange) passthrough(mode v1.SystemMessages) int {
+// Proxies the body as the client sent it, the model renamed to what the runtime serves
+func (x *exchange) passthrough() int {
 	g, t, r, in := x.g, x.w.t, x.r, x.in
 	body := in.body
 	if served := x.route.GetServed(); served != "" && served != x.name {
@@ -131,17 +107,7 @@ func (x *exchange) passthrough(mode v1.SystemMessages) int {
 			x.refuse(failure(http.StatusBadRequest, err.Error(), chat.CodeInvalidRequest))
 			return -1
 		}
-	}
-	if bytes.HasPrefix(bytes.TrimSpace(body), []byte("{")) {
-		shaped, err := rewriteSystem(body, mode)
-		if err != nil {
-			x.refuse(failure(http.StatusBadRequest, err.Error(), chat.CodeInvalidRequest))
-			return -1
-		}
-		if !bytes.Equal(shaped, body) {
-			t.UpstreamRequest = string(shaped)
-		}
-		body = shaped
+		t.UpstreamRequest = string(body)
 	}
 	// The answer is parsed into the trace as it passes, an unparsed one kept whole
 	if in.req != nil {
@@ -167,13 +133,7 @@ func (x *exchange) passthrough(mode v1.SystemMessages) int {
 			pr.Out.URL.Path = r.URL.Path
 			pr.Out.URL.RawPath = r.URL.RawPath
 			pr.Out.Host = first.Host
-			pr.Out.Header.Del("Authorization")
-			pr.Out.Header.Del("X-Api-Key")
-			pr.Out.Header.Del("Cookie")
-			pr.Out.Header.Del(entryHeader)
-			if in.from == nil {
-				dropIdentity(pr.Out.Header)
-			}
+			dropClientOnly(pr.Out.Header)
 		},
 		Transport:     hops,
 		FlushInterval: -1,
@@ -210,10 +170,11 @@ func (x *exchange) count() int {
 // Asks the runtime's tokenizer, answering the count and the seat that gave it
 func (x *exchange) countUpstream() (int, int, error) {
 	req := x.in.req
-	path, out, err := x.render(req)
+	path, out, err := x.runtime.Render(req)
 	if err != nil {
 		return 0, -1, err
 	}
+	x.w.t.UpstreamRequest = string(out)
 	resp, cancel, used, err := x.open(x.r.Context(), req, path, out)
 	if err != nil {
 		return 0, used, err
@@ -250,10 +211,8 @@ func (x *exchange) rounds() int {
 	}
 	total := &chat.Result{Model: x.name}
 	used := -1
-	// Whether this round's completion budget was already lowered to fit the context
-	fitted := false
 	for round := 0; ; round++ {
-		path, body, err := x.render(req)
+		path, body, err := x.runtime.Render(req)
 		if err != nil {
 			fail(chat.FailureOf(err))
 			break
@@ -270,7 +229,9 @@ func (x *exchange) rounds() int {
 		}
 		used = i
 		if out == nil {
-			relayHeaders(x.w.Header(), resp.Header)
+			if after := resp.Header.Get("Retry-After"); after != "" {
+				x.w.Header().Set("Retry-After", after)
+			}
 		}
 		if out == nil && resp.StatusCode < http.StatusMultipleChoices {
 			t.FirstByteAt = timestamppb.Now()
@@ -285,11 +246,6 @@ func (x *exchange) rounds() int {
 			return out.Write(ev)
 		})
 		cancel()
-		if refusal, ok := errors.AsType[*chat.Failure](err); ok && !fitted && x.fitCompletion(refusal.Message) {
-			fitted = true
-			round--
-			continue
-		}
 		if err != nil {
 			switch {
 			case r.Context().Err() != nil:
@@ -308,7 +264,6 @@ func (x *exchange) rounds() int {
 			}
 			break
 		}
-		fitted = false
 		if total.ID == "" {
 			total.ID = res.ID
 		}
@@ -385,18 +340,6 @@ func mergeExtra(into, from map[string]json.RawMessage) map[string]json.RawMessag
 	return into
 }
 
-// Lowers the completion budget to what a sized refusal says the context leaves, reporting whether to send again
-func (x *exchange) fitCompletion(message string) bool {
-	req := x.in.req
-	room, ok := chat.CompletionRoom(message)
-	if !ok || req.MaxTokens > 0 && room >= req.MaxTokens {
-		return false
-	}
-	x.g.log.Info("completion budget lowered to fit the context", "model", x.name, "max_tokens", req.MaxTokens, "room", room)
-	req.MaxTokens = room
-	return true
-}
-
 // Reads one answer, thinking and text as they arrive, calls and usage whole, the thinking kept on the result
 func (x *exchange) round(resp *http.Response, emit func(chat.Event) error) (*chat.Result, error) {
 	defer resp.Body.Close()
@@ -435,11 +378,8 @@ func (x *exchange) round(resp *http.Response, emit func(chat.Event) error) (*cha
 	}
 	res, err := x.runtime.ParseResult(req, raw)
 	if err != nil {
-		if refusal, ok := errors.AsType[*chat.Failure](err); ok {
-			refusal.Message = chat.PromptTooLong(refusal.Message)
-			if refusal.Code == "" {
-				refusal.Code = chat.CodeOf(refusal.Status, raw)
-			}
+		if refusal, ok := errors.AsType[*chat.Failure](err); ok && refusal.Code == "" {
+			refusal.Code = chat.CodeOf(refusal.Status, raw)
 		}
 		return nil, err
 	}

@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -18,7 +17,6 @@ import (
 	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/internal/tools"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"google.golang.org/protobuf/proto"
 )
 
 const kittenTool = `{"type":"web_search_20250305","name":"web_search","max_uses":8,"user_location":{"type":"approximate","city":"Portland","country":"US"}}`
@@ -704,7 +702,7 @@ func TestToolClash(t *testing.T) {
 		searchBody(false, kittenTool+`,{"type":"web_search_20260301","name":"web_search"}`):     "one web search tool",
 		searchBody(false, `{"type":"web_search_20250305","name":"search"}`):                     "named web_search",
 		searchBody(false, `{"type":"web_search_20250305","name":"web_search","max_uses":0}`):    "at least 1",
-		searchBody(false, `{"type":"text_editor_20250124","name":"str_replace_editor"}`):        "expected tags: 'custom'",
+		searchBody(false, `{"type":"text_editor_20250124","name":"str_replace_editor"}`):        "only tools defined by a schema",
 	} {
 		r, _ := ask(t, g, base, http.MethodPost, chat.AnthropicMessages, body, nil)
 		if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), want) {
@@ -1103,8 +1101,8 @@ func TestProbeTemplateTools(t *testing.T) {
 // the slot's, an alias naming none inherits them
 func TestEffectiveProfileTools(t *testing.T) {
 	slot := &v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_KEEP, ToolServers: []string{"web"}, MutatingTools: true}
-	got := EffectiveProfile(&v1.Profile{AllowAll: proto.Bool(true)}, slot)
-	if strings.Join(got.GetToolServers(), ",") != "web" || !got.GetMutatingTools() || !got.GetAllowAll() {
+	got := EffectiveProfile(&v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_MERGE}, slot)
+	if strings.Join(got.GetToolServers(), ",") != "web" || !got.GetMutatingTools() || got.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_MERGE {
 		t.Fatalf("inherited %v", got)
 	}
 	got = EffectiveProfile(&v1.Profile{ToolServers: []string{"fs"}}, slot)
@@ -1114,7 +1112,7 @@ func TestEffectiveProfileTools(t *testing.T) {
 	if !ProfileSet(&v1.Profile{MutatingTools: true}) || ProfileSet(&v1.Profile{}) {
 		t.Fatal("set")
 	}
-	if _, err := errors.New("x"), error(nil); err != nil {
-		t.Fatal(err)
+	if CheckProfile(&v1.Profile{MutatingTools: true}) == nil || CheckProfile(&v1.Profile{ToolServers: []string{"fs"}, MutatingTools: true}) != nil || CheckProfile(nil) != nil {
+		t.Fatal("mutating tools are refused without a tool server and accepted with one")
 	}
 }
