@@ -454,5 +454,5 @@ func (ollamaAPI) Open(ctx context.Context, c *Client, model *v1.Model, artifact 
 		return nil, unknown(artifact.GetPath(), "digest")
 	}
 	name, _ := olSplit(model.GetRepo(), model.GetRevision())
-	return c.Distribution().Blob(namespaced(name, olNamespace), "sha256:"+artifact.GetSha256(), int64(artifact.GetSizeBytes()))
+	return c.Distribution().Blob(ctx, namespaced(name, olNamespace), "sha256:"+artifact.GetSha256(), int64(artifact.GetSizeBytes()))
 }

@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"mime"
-	"net"
 	"net/http"
 	"time"
 )
@@ -117,7 +116,7 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	user, err := h.Users.Login(r.Context(), clientAddr(r), c.Username, c.Password)
+	user, err := h.Users.Login(r.Context(), h.clientAddr(r), c.Username, c.Password)
 	switch {
 	case errors.Is(err, ErrThrottled):
 		w.Header().Set("Retry-After", "60")
@@ -170,7 +169,7 @@ func (h *handler) setup(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, http.StatusInternalServerError, errors.New("could not start the session"))
 		return
 	}
-	h.Log.Info("first account created", "username", user.GetUsername(), "client", clientAddr(r))
+	h.Log.Info("first account created", "username", user.GetUsername(), "client", h.clientAddr(r))
 	writeJSON(w, http.StatusOK, map[string]any{"user": userInfo{Subject: sess.Subject, Name: sess.Name, Provider: sess.Provider, Expires: sess.Expires}})
 }
 
@@ -193,13 +192,13 @@ func (h *handler) refuse(w http.ResponseWriter, code int, err error) {
 	writeJSON(w, code, map[string]string{"error": err.Error()})
 }
 
-// The client's address without its port, for throttling
-func clientAddr(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+// The client's address for throttling, read through the trusted proxies when there are any
+func (h *handler) clientAddr(r *http.Request) string {
+	var p Proxies
+	if h.Sessions != nil {
+		p = h.Sessions.Proxies()
 	}
-	return host
+	return p.Client(r)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

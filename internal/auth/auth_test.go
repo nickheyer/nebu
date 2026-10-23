@@ -47,6 +47,12 @@ func TestSessionsSurviveRestartExpireAndBindPurpose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The test request arrives from 192.0.2.1, which the proxy setting then vouches for
+	proxies, err := ParseProxies([]string{"192.0.2.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.SetProxies(proxies)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")

@@ -13,7 +13,6 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +46,8 @@ type Sessions struct {
 	mu sync.RWMutex
 	// Extra checks a session must pass, such as its account still existing
 	validators []func(*Session) bool
+	// Proxies whose forwarded headers decide whether a cookie is marked secure
+	proxies Proxies
 }
 
 // Loads the cookie key, creating it on first use
@@ -90,6 +91,20 @@ func (s *Sessions) Validate(fn func(*Session) bool) {
 	s.validators = append(s.validators, fn)
 }
 
+// Believes forwarded headers from these proxies when reading requests and sending cookies
+func (s *Sessions) SetProxies(p Proxies) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.proxies = p
+}
+
+// The proxies whose forwarded headers are believed
+func (s *Sessions) Proxies() Proxies {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.proxies
+}
+
 // Starts a session for the browser, stamping its lifetime
 func (s *Sessions) Issue(w http.ResponseWriter, r *http.Request, sess Session) (*Session, error) {
 	sess.Issued = s.now()
@@ -98,7 +113,7 @@ func (s *Sessions) Issue(w http.ResponseWriter, r *http.Request, sess Session) (
 	if err != nil {
 		return nil, err
 	}
-	SetCookie(w, r, c)
+	s.Proxies().SetCookie(w, r, c)
 	return &sess, nil
 }
 
@@ -113,7 +128,7 @@ func (s *Sessions) Cookie(sess Session) (*http.Cookie, error) {
 
 // Ends the browser's session
 func (s *Sessions) Clear(w http.ResponseWriter, r *http.Request) {
-	ClearCookie(w, r, sessionCookie)
+	s.Proxies().ClearCookie(w, r, sessionCookie)
 }
 
 // Reports whether the headers carry a live session
@@ -177,24 +192,9 @@ func (s *Sessions) Open(purpose, value string, v any) error {
 	return json.Unmarshal(plain, v)
 }
 
-// Reports whether the browser reached the daemon over HTTPS, directly or through a proxy
-func Secure(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
-}
-
 // A browser-only cookie scoped to the whole app
 func NewCookie(name, value string, ttl time.Duration) *http.Cookie {
 	return &http.Cookie{Name: name, Value: value, Path: "/", MaxAge: int(ttl / time.Second), HttpOnly: true, SameSite: http.SameSiteLaxMode}
-}
-
-// Sends the cookie, marking it secure when the browser used HTTPS
-func SetCookie(w http.ResponseWriter, r *http.Request, c *http.Cookie) {
-	c.Secure = Secure(r)
-	http.SetCookie(w, c)
-}
-
-func ClearCookie(w http.ResponseWriter, r *http.Request, name string) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: Secure(r), SameSite: http.SameSiteLaxMode})
 }
 
 // A random URL safe string with n bytes of entropy

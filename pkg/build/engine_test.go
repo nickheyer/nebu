@@ -76,7 +76,7 @@ func server(t *testing.T) (*httptest.Server, *int) {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/repos/"):
 			github(w, r)
-		case r.URL.Path == "/fake-2.1.tar.gz":
+		case r.URL.Path == "/fake-2.1.tar.gz" || r.URL.Path == "/fake-c0ffee.tar.gz":
 			if r.Method == http.MethodGet {
 				downloads++
 			}
@@ -149,7 +149,7 @@ func TestEngineBuildsFromArchiveWithPatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
-	if b.GetCommit() != "2.1" || !strings.HasSuffix(b.GetBinary(), filepath.Join("out", "bin")) {
+	if b.GetCommit() != "c0ffee" || !strings.HasSuffix(b.GetBinary(), filepath.Join("out", "bin")) {
 		t.Fatalf("build after run %v", b)
 	}
 	got, _ := exec.Command(b.GetBinary()).Output()
@@ -161,7 +161,7 @@ func TestEngineBuildsFromArchiveWithPatches(t *testing.T) {
 		t.Fatalf("patches applied in order: %q", notes)
 	}
 	text := out.String()
-	for _, want := range []string{"commit=2.1 jobs=3", "root=" + b.GetDir(), "dir=" + filepath.Join(b.GetDir(), "src"), "patch inline applied", "patch fromurl applied"} {
+	for _, want := range []string{"commit=c0ffee jobs=3", "root=" + b.GetDir(), "dir=" + filepath.Join(b.GetDir(), "src"), "patch inline applied", "patch fromurl applied"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("transcript missing %q:\n%s", want, text)
 		}

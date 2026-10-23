@@ -336,7 +336,7 @@ func (c *HTTP) Open(ctx context.Context, locator string, size int64) (Blob, erro
 			return nil, unknown(rawURL, "size")
 		}
 	}
-	return NewRangeBlob(c, rawURL, size), nil
+	return NewRangeBlob(ctx, c, rawURL, size), nil
 }
 
 type listResult struct {
@@ -465,6 +465,8 @@ type Resolver func(ctx context.Context) (string, http.Header, error)
 
 // Blob served through HTTP range requests
 type RangeBlob struct {
+	// The context of the open that made the blob, which bounds reads through ReadAt
+	ctx      context.Context
 	client   *HTTP
 	url      string
 	size     int64
@@ -472,9 +474,9 @@ type RangeBlob struct {
 	mu       sync.Mutex
 }
 
-// Wraps a URL as a range readable blob
-func NewRangeBlob(c *HTTP, rawURL string, size int64) *RangeBlob {
-	return &RangeBlob{client: c, url: rawURL, size: size}
+// Wraps a URL as a range readable blob whose reads end with ctx
+func NewRangeBlob(ctx context.Context, c *HTTP, rawURL string, size int64) *RangeBlob {
+	return &RangeBlob{ctx: ctx, client: c, url: rawURL, size: size}
 }
 
 // Asks for fresh headers before every range request, for tokens that expire
@@ -522,11 +524,11 @@ func (b *RangeBlob) ReadAt(p []byte, off int64) (int, error) {
 	if end >= b.size {
 		end = b.size - 1
 	}
-	rawURL, header, err := b.prepare(context.Background(), fmt.Sprintf("bytes=%d-%d", off, end))
+	rawURL, header, err := b.prepare(b.ctx, fmt.Sprintf("bytes=%d-%d", off, end))
 	if err != nil {
 		return 0, err
 	}
-	resp, err := b.client.Do(context.Background(), http.MethodGet, rawURL, nil, header)
+	resp, err := b.client.Do(b.ctx, http.MethodGet, rawURL, nil, header)
 	if err != nil {
 		return 0, err
 	}

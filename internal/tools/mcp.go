@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nickheyer/nebu/pkg/proc"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -122,7 +122,7 @@ func (m *mcpServer) connect(ctx context.Context) (*mcp.ClientSession, error) {
 	switch m.spec.GetKind() {
 	case v1.ToolServerKind_TOOL_SERVER_KIND_STDIO:
 		cmd := exec.CommandContext(ctx, m.spec.GetCommand(), m.spec.GetArgs()...)
-		cmd.Env = os.Environ()
+		cmd.Env = proc.Environ()
 		for k, v := range m.spec.GetEnv() {
 			cmd.Env = append(cmd.Env, k+"="+v)
 		}

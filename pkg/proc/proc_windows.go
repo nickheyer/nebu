@@ -134,7 +134,7 @@ func interrupt(pid int) {
 		return
 	}
 	helper := exec.Command(exe)
-	helper.Env = append(os.Environ(), breakEnv+"="+strconv.Itoa(pid))
+	helper.Env = append(Environ(), breakEnv+"="+strconv.Itoa(pid))
 	helper.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW}
 	helper.Run()
 }

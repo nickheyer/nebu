@@ -412,7 +412,7 @@ func TestProviderNegotiation(t *testing.T) {
 	idp := newIdP(t)
 	idp.claims["email"] = "ann@example.com"
 	idp.pkce = []string{"plain"}
-	_, srv, client := harness(t, idp, &v1.Oidc{})
+	svc, srv, client := harness(t, idp, &v1.Oidc{})
 	cb, q := signIn(t, idp, srv, client, "/")
 	cb.Body.Close()
 	if cb.StatusCode != http.StatusSeeOther || q.Get("code_challenge") != "" {
@@ -460,9 +460,23 @@ func TestProviderNegotiation(t *testing.T) {
 	if loc.Query().Get("redirect_uri") != "https://nebu.example.com"+callbackPath || loc.Path != "/authorize" || loc.Query().Get("tenant") != "x" {
 		t.Fatalf("public url redirect %s", loc)
 	}
+	// Forwarded headers count once the proxy sending them, loopback here, is trusted
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+loginPath, nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
 	req.Header.Set("X-Forwarded-Host", "proxy.example.com")
+	if plain, err := client.Do(req); err != nil {
+		t.Fatal(err)
+	} else {
+		plain.Body.Close()
+		if loc, _ := url.Parse(plain.Header.Get("Location")); loc.Query().Get("redirect_uri") != srv.URL+callbackPath {
+			t.Fatalf("untrusted forwarded headers should be ignored: %s", loc.Query().Get("redirect_uri"))
+		}
+	}
+	proxies, err := auth.ParseProxies([]string{"127.0.0.0/8", "::1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.sessions.SetProxies(proxies)
 	resp, err = client.Do(req)
 	if err != nil {
 		t.Fatal(err)

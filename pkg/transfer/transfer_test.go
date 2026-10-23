@@ -71,7 +71,7 @@ func TestFetchParallelAndVerify(t *testing.T) {
 	srv, requests := blobServer(t, data, nil)
 	defer srv.Close()
 	client, _ := sources.NewHTTP(srv.URL, "")
-	blob := sources.NewRangeBlob(client, srv.URL+"/blob", int64(len(data)))
+	blob := sources.NewRangeBlob(context.Background(), client, srv.URL+"/blob", int64(len(data)))
 	partial := filepath.Join(t.TempDir(), "x.partial")
 	var progress int64
 	digest, err := fetcher(65536).Fetch(context.Background(), blob, partial, digestOf(data), func(d int64) { atomic.AddInt64(&progress, d) })
@@ -96,7 +96,7 @@ func TestFetchResumesAndRetries(t *testing.T) {
 	srv, requests := blobServer(t, data, &fail)
 	defer srv.Close()
 	client, _ := sources.NewHTTP(srv.URL, "")
-	blob := sources.NewRangeBlob(client, srv.URL+"/blob", int64(len(data)))
+	blob := sources.NewRangeBlob(context.Background(), client, srv.URL+"/blob", int64(len(data)))
 	partial := filepath.Join(t.TempDir(), "x.partial")
 	f := fetcher(10000)
 	st := &state{Size: int64(len(data)), Chunk: 10000, Done: make([]bool, 10)}
@@ -127,7 +127,7 @@ func TestFetchDigestMismatch(t *testing.T) {
 	srv, _ := blobServer(t, data, nil)
 	defer srv.Close()
 	client, _ := sources.NewHTTP(srv.URL, "")
-	blob := sources.NewRangeBlob(client, srv.URL+"/blob", int64(len(data)))
+	blob := sources.NewRangeBlob(context.Background(), client, srv.URL+"/blob", int64(len(data)))
 	partial := filepath.Join(t.TempDir(), "x.partial")
 	_, err := fetcher(4096).Fetch(context.Background(), blob, partial, digestOf([]byte("other")), nil)
 	if err == nil || !isMismatch(err) {

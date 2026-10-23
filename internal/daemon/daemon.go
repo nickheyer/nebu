@@ -65,6 +65,8 @@ const (
 	profileTTL        = 30 * time.Second
 	shutdownTimeout   = 10 * time.Second
 	readHeaderTimeout = 10 * time.Second
+	// How long a kept alive connection may sit between requests before it is closed
+	idleTimeout = 2 * time.Minute
 	// Seals single sign-on cookies, kept in the data directory
 	sessionKeyFile = "session.key"
 )
@@ -464,6 +466,11 @@ func (d *Daemon) openAuth(store *db.DB) error {
 	if d.Sessions, err = auth.OpenSessions(filepath.Join(cfg.GetDataDir(), sessionKeyFile), ttl); err != nil {
 		return err
 	}
+	proxies, err := auth.ParseProxies(a.GetTrustedProxies())
+	if err != nil {
+		return err
+	}
+	d.Sessions.SetProxies(proxies)
 	if a.GetToken() == "" {
 		path := filepath.Join(cfg.GetDataDir(), config.TokenFile)
 		token, created, err := auth.LoadOrCreateToken(path)
@@ -596,12 +603,14 @@ func (d *Daemon) ListenAndServe(ctx context.Context) error {
 	}
 	ln, err := listen(d.Config.GetListen())
 	if err != nil {
+		d.Close()
 		return err
 	}
 	var gatewayLn net.Listener
 	if addr := d.Config.GetGateway().GetListen(); addr != "" {
 		if gatewayLn, err = listen(addr); err != nil {
 			ln.Close()
+			d.Close()
 			return err
 		}
 	}
@@ -659,6 +668,7 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 			if gatewayLn != nil {
 				gatewayLn.Close()
 			}
+			d.Close()
 			return err
 		}
 	}
@@ -694,6 +704,7 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 		if gatewayLn != nil {
 			gatewayLn.Close()
 		}
+		d.Close()
 		return err
 	}
 	d.Formations.Start()
@@ -702,11 +713,11 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 	requests, endRequests := context.WithCancel(context.Background())
 	defer endRequests()
 	base := func(net.Listener) context.Context { return requests }
-	servers := []*http.Server{{Handler: d.handler, ReadHeaderTimeout: readHeaderTimeout, BaseContext: base, Protocols: links.Protocols()}}
+	servers := []*http.Server{{Handler: d.handler, ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout, BaseContext: base, Protocols: links.Protocols()}}
 	listeners := []net.Listener{ln}
 	d.Gateway.SetListeners([]*v1.Listener{{Addr: d.addr, Shared: true}}, d.secure)
 	if gatewayLn != nil {
-		servers = append(servers, &http.Server{Handler: d.Gateway.Handler(), ReadHeaderTimeout: readHeaderTimeout, BaseContext: base})
+		servers = append(servers, &http.Server{Handler: d.Gateway.Handler(), ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout, BaseContext: base})
 		listeners = append(listeners, gatewayLn)
 		d.Gateway.SetListeners([]*v1.Listener{{Addr: gatewayLn.Addr().String()}}, d.secure)
 		d.Log.Info("gateway listening", "addr", gatewayLn.Addr().String(), "tls", d.secure)

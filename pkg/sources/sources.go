@@ -125,6 +125,8 @@ func RangeOf(ctx context.Context, b Blob, off, length int64) (io.ReadCloser, err
 
 // File downloaded on first access and then read locally.
 type lazyBlob struct {
+	// The context of the open that made the blob, which bounds reads through ReadAt
+	ctx  context.Context
 	size int64
 	// Downloads the file and reports progress when supported.
 	land func(ctx context.Context, progress func(int64)) (Blob, error)
@@ -149,7 +151,7 @@ func (b *lazyBlob) open(ctx context.Context, progress func(int64)) (Blob, error)
 }
 
 func (b *lazyBlob) ReadAt(p []byte, off int64) (int, error) {
-	f, err := b.open(context.Background(), nil)
+	f, err := b.open(b.ctx, nil)
 	if err != nil {
 		return 0, err
 	}

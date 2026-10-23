@@ -39,6 +39,40 @@ func latestTag(ctx context.Context, srcs *sources.Registry, sourceID, repo strin
 	return "", fmt.Errorf("no release with a tag in %s at %s", repo, src.Spec().GetId())
 }
 
+// Pins a ref to the commit it names, a hex ref standing as its own commit
+func pinRef(ctx context.Context, srcs *sources.Registry, sourceID, repo, ref string) (string, error) {
+	if isCommit(ref) {
+		return ref, nil
+	}
+	if srcs == nil {
+		return "", fmt.Errorf("no sources to resolve %s in %s", ref, repo)
+	}
+	src, err := srcs.Get(sourceID)
+	if err != nil {
+		return "", err
+	}
+	namer, ok := src.(interface {
+		Commit(ctx context.Context, repo, ref string) (string, error)
+	})
+	if !ok {
+		return "", fmt.Errorf("%s cannot name the commit %s points at in %s", sourceID, ref, repo)
+	}
+	return namer.Commit(ctx, repo, ref)
+}
+
+// Whether a ref is a commit hash, abbreviated or whole
+func isCommit(ref string) bool {
+	if len(ref) < 7 || len(ref) > 40 {
+		return false
+	}
+	for _, c := range ref {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // Downloads with transfer limits, resume, and retries, reusing complete files.
 func (e *Engine) download(ctx context.Context, rawURL, dest string, out io.Writer) error {
 	if info, err := os.Stat(dest); err == nil && info.Size() > 0 {

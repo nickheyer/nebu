@@ -86,7 +86,7 @@ func (l *ProcessLauncher) Launch(ctx context.Context, spec Spec) (Handle, error)
 	}
 	cmd := exec.Command(spec.Command, spec.Args...)
 	cmd.Dir = spec.Dir
-	cmd.Env = os.Environ()
+	cmd.Env = proc.Environ()
 	for k, v := range spec.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}

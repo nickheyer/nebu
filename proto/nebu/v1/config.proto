@@ -107,6 +107,9 @@ message Auth {
   bool disabled = 4;
   // Browser session lifetime such as 24h or 30m. 24h when empty.
   string session_ttl = 5;
+  // Proxy addresses as CIDRs whose X-Forwarded-For, X-Forwarded-Proto, and X-Forwarded-Host
+  // headers are believed. Requests from other addresses are read as they arrive.
+  repeated string trusted_proxies = 6;
 }
 
 // Build defaults

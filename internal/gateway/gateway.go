@@ -18,10 +18,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/tools"
 	"github.com/nickheyer/nebu/pkg/events"
+	"github.com/nickheyer/nebu/pkg/outbound"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -259,10 +261,7 @@ func (g *Gateway) authorized(r *http.Request) bool {
 	if r.Context().Value(localKey{}) != nil {
 		return true
 	}
-	token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
-	if token == "" {
-		token = r.Header.Get("X-Api-Key")
-	}
+	token := auth.Bearer(r.Header)
 	for _, k := range g.keys {
 		if token != "" && subtle.ConstantTimeCompare([]byte(k), []byte(token)) == 1 {
 			return true
@@ -686,7 +685,11 @@ func upstreamFailure(name string, err error) chat.Failure {
 
 // Fetches image URLs into bytes for runtimes that take images inline
 func (g *Gateway) inlineImages(ctx context.Context, req *chat.Request, policy *v1.Policy) error {
-	client := &http.Client{Transport: g.transport(policy.GetUpstreamTimeoutMs())}
+	// Image links come from the client, so the fetch never reaches this host's own services
+	transport := outbound.Transport()
+	transport.ResponseHeaderTimeout = time.Duration(policy.GetUpstreamTimeoutMs()) * time.Millisecond
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
 	for mi := range req.Messages {
 		for pi, p := range req.Messages[mi].Parts {
 			if p.Type != "image" || p.Data != "" || p.URL == "" {

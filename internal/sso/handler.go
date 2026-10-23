@@ -73,7 +73,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusInternalServerError, "Could not start sign-in.", err)
 		return
 	}
-	auth.SetCookie(w, r, auth.NewCookie(loginCookie, value, loginTTL))
+	s.sessions.Proxies().SetCookie(w, r, auth.NewCookie(loginCookie, value, loginTTL))
 	sep := "?"
 	if strings.Contains(p.doc.Authorization, "?") {
 		sep = "&"
@@ -89,7 +89,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, "No sign-in is in progress in this browser. Start again.", err)
 		return
 	}
-	auth.ClearCookie(w, r, loginCookie)
+	s.sessions.Proxies().ClearCookie(w, r, loginCookie)
 	var st loginState
 	if err := s.sessions.Open(loginCookie, c.Value, &st); err != nil {
 		s.fail(w, http.StatusBadRequest, "The sign-in cookie is not one this daemon issued. Start again.", err)
@@ -155,19 +155,16 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, st.Next, http.StatusSeeOther)
 }
 
-// The callback URL registered with the provider, from public_url or the request
+// The callback URL registered with the provider, from public_url or the request as the trusted proxies relay it
 func (s *Service) redirectURI(r *http.Request) string {
 	base := strings.TrimSuffix(s.cfg.GetPublicUrl(), "/")
 	if base == "" {
+		proxies := s.sessions.Proxies()
 		scheme := "http"
-		if auth.Secure(r) {
+		if proxies.Secure(r) {
 			scheme = "https"
 		}
-		host := r.Header.Get("X-Forwarded-Host")
-		if host == "" {
-			host = r.Host
-		}
-		base = scheme + "://" + host
+		base = scheme + "://" + proxies.Host(r)
 	}
 	return base + callbackPath
 }

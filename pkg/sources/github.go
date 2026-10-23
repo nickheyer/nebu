@@ -320,6 +320,15 @@ func ghCommit(ctx context.Context, c *Client, owner, name, ref string) (string, 
 	return strings.TrimSpace(sha), nil
 }
 
+// The commit a tag, branch, or abbreviated hash names
+func (githubAPI) Commit(ctx context.Context, c *Client, repo, ref string) (string, error) {
+	owner, name, err := ghSplit(repo)
+	if err != nil {
+		return "", err
+	}
+	return ghCommit(ctx, c, owner, name, ref)
+}
+
 // A release resolves to its assets, any other ref to the tree at that commit
 func (githubAPI) Resolve(ctx context.Context, c *Client, repo, revision string) (*v1.Model, error) {
 	owner, name, err := ghSplit(repo)

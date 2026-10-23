@@ -322,11 +322,11 @@ func (d *Distribution) BlobJSON(ctx context.Context, repo, digest string, out an
 }
 
 // Opens a layer as a range readable blob, refreshing the token as it expires
-func (d *Distribution) Blob(repo, digest string, size int64) (Blob, error) {
+func (d *Distribution) Blob(ctx context.Context, repo, digest string, size int64) (Blob, error) {
 	if size <= 0 {
 		return nil, unknown(digest, "size")
 	}
-	return NewRangeBlob(d.http, d.http.URL("v2", repo, "blobs", digest), size).WithHeaderFunc(func(ctx context.Context) (http.Header, error) {
+	return NewRangeBlob(ctx, d.http, d.http.URL("v2", repo, "blobs", digest), size).WithHeaderFunc(func(ctx context.Context) (http.Header, error) {
 		return d.PullHeaders(ctx, repo)
 	}), nil
 }
@@ -375,7 +375,7 @@ func (d *Distribution) Open(ctx context.Context, locator string, size int64) (Bl
 		resp.Body.Close()
 		size = resp.ContentLength
 	}
-	return d.Blob(repo, digest, size)
+	return d.Blob(ctx, repo, digest, size)
 }
 
 // Reads a blob whole by repo@digest, capped

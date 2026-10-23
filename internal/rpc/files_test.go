@@ -1,12 +1,14 @@
 package rpc
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nickheyer/nebu/internal/auth"
@@ -74,18 +76,25 @@ func TestFilesStreamsOneFileThroughTheDaemon(t *testing.T) {
 			t.Fatalf("%s should not be served", q)
 		}
 	}
+	// A link request without a JSON body is refused, and other methods are not served
 	resp, _ = http.Post(srv.URL+"/files?source=disk&repo=org/model&path=sub/notes.txt", "text/plain", nil)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
+	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("post %d", resp.StatusCode)
+	}
+	req, _ = http.NewRequest(http.MethodPut, srv.URL+"/files", nil)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("put %d", resp.StatusCode)
 	}
 }
 
-// Authenticated downloads require the token.
-func TestFilesRequireTheToken(t *testing.T) {
+// Authenticated downloads carry the token in a header, or a link the token asked for
+func TestFilesRequireTheTokenOrALink(t *testing.T) {
 	srv := fileServer(t, "secret")
-	get := func(url string, header string) int {
-		req, _ := http.NewRequest(http.MethodGet, url, nil)
+	call := func(method, url, header, body string) (int, string) {
+		req, _ := http.NewRequest(method, url, strings.NewReader(body))
 		if header != "" {
 			req.Header.Set("Authorization", header)
 		}
@@ -93,14 +102,36 @@ func TestFilesRequireTheToken(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		out, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return resp.StatusCode
+		return resp.StatusCode, string(out)
+	}
+	get := func(url, header string) int {
+		code, _ := call(http.MethodGet, url, header, "")
+		return code
 	}
 	base := srv.URL + "/files?source=disk&repo=org/model&path=sub/notes.txt"
-	if get(base, "") != http.StatusUnauthorized || get(base+"&token=wrong", "") != http.StatusUnauthorized {
-		t.Fatal("a missing or wrong token is refused")
+	if get(base, "") != http.StatusUnauthorized || get(base+"&token=secret", "") != http.StatusUnauthorized || get(base+"&grant=forged", "") != http.StatusUnauthorized {
+		t.Fatal("a missing token, a token in the query, and a forged link are refused")
 	}
-	if get(base+"&token=secret", "") != http.StatusOK || get(base, "Bearer secret") != http.StatusOK {
-		t.Fatal("the token in the link or the header is accepted")
+	if get(base, "Bearer secret") != http.StatusOK {
+		t.Fatal("the token in the header is accepted")
+	}
+	ask := `{"source":"disk","repo":"org/model","path":"sub/notes.txt"}`
+	if code, _ := call(http.MethodPost, srv.URL+"/files", "", ask); code != http.StatusUnauthorized {
+		t.Fatalf("a link without the token %d", code)
+	}
+	code, body := call(http.MethodPost, srv.URL+"/files", "Bearer secret", ask)
+	var link struct {
+		URL string `json:"url"`
+	}
+	if code != http.StatusOK || json.Unmarshal([]byte(body), &link) != nil || !strings.HasPrefix(link.URL, "/files?") {
+		t.Fatalf("link %d %s", code, body)
+	}
+	if get(srv.URL+link.URL, "") != http.StatusOK {
+		t.Fatal("the link downloads without a header")
+	}
+	if get(strings.Replace(srv.URL+link.URL, "notes.txt", "other.txt", 1), "") != http.StatusUnauthorized {
+		t.Fatal("the link opens only the file it was made for")
 	}
 }

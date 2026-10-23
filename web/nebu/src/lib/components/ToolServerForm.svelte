@@ -71,5 +71,8 @@
       <IdList id="{idPrefix}-allowed" bind:items={fields.allowedTools} empty="read_file" />
     </Field>
   {/if}
+  {#if kind === ToolServerKind.FETCH}
+    <SwitchRow bind:checked={fields.local} label="Read this host" description="Lets pages on this machine's own addresses be fetched. Off keeps models away from the daemon's own services." />
+  {/if}
   <SwitchRow bind:checked={fields.enabled} label="Enabled" description="A server that is off keeps its settings and offers nothing." />
 </div>

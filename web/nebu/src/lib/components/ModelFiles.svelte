@@ -2,7 +2,7 @@
   import { ArtifactRole, type Artifact } from '$proto/model_pb';
   import { enumLabel, storage, plural } from '$lib/format';
   import { weightsName } from '$lib/catalog';
-  import { fileUrl } from '$lib/api';
+  import { fileDownloadUrl } from '$lib/api';
   import { copyText, downloadUrl } from '$lib/clipboard';
   import { ok, fail } from '$lib/toast.svelte';
   import { TableSort } from '$lib/sort.svelte';
@@ -93,10 +93,17 @@
     if (await copyText(path)) ok('Copied ' + path);
     else fail('The clipboard refused', 'Copy failed');
   }
+  async function download(a: Artifact, name: string) {
+    try {
+      downloadUrl(await fileDownloadUrl(sourceId, repo, revision, a.path), name);
+    } catch (err) {
+      fail(err, 'Download failed');
+    }
+  }
   function items(a: Artifact) {
     const name = a.path.split('/').pop() ?? a.path;
     const list: { label: string; icon: Component<any>; detail?: string; onSelect: () => void }[] = [
-      { label: 'Download file', icon: Download, detail: storage(a.sizeBytes), onSelect: () => downloadUrl(fileUrl(sourceId, repo, revision, a.path), name) },
+      { label: 'Download file', icon: Download, detail: storage(a.sizeBytes), onSelect: () => download(a, name) },
       { label: 'Copy path', icon: Link, onSelect: () => copyPath(a.path) }
     ];
     if (a.url) {

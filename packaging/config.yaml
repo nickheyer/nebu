@@ -24,6 +24,7 @@ logging:
 # auth:
 #   disabled: false # if true, sso/accounts/token requirements all bypassed or disabled
 #   session_ttl: 24h
+#   trusted_proxies: [10.0.0.0/8] # reverse proxies whose X-Forwarded headers are believed
 #   token: change-me # or NEBU_AUTH_TOKEN
 #   oidc:
 #     issuer: https://accounts.google.com

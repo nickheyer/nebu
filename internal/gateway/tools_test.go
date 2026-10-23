@@ -150,8 +150,9 @@ func searxngServer(e *engine) *v1.ToolServer {
 	return &v1.ToolServer{Name: "web", Enabled: true, Kind: v1.ToolServerKind_TOOL_SERVER_KIND_SEARCH, Provider: "searxng", SearxngUrl: e.URL}
 }
 
+// A fetch server allowed to read the test sites on this host
 func fetchServer() *v1.ToolServer {
-	return &v1.ToolServer{Name: "fetch", Enabled: true, Kind: v1.ToolServerKind_TOOL_SERVER_KIND_FETCH}
+	return &v1.ToolServer{Name: "fetch", Enabled: true, Kind: v1.ToolServerKind_TOOL_SERVER_KIND_FETCH, Local: true}
 }
 
 // An MCP server over HTTP with a read only echo and a mutating write

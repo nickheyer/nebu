@@ -38,20 +38,41 @@ func TestPublishSubscribeFilter(t *testing.T) {
 	}
 }
 
-func TestSlowSubscriberDropsOldest(t *testing.T) {
+// A full queue takes a record's newer update in place of its pending one, and drops the oldest
+// event only when every pending record is a different one
+func TestSlowSubscriberCoalescesThenDropsOldest(t *testing.T) {
 	b := New()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s := b.Subscribe(ctx, nil)
-	for i := 0; i < subscriberBuffer+10; i++ {
+	drain := func(from uint64) (n int, last uint64) {
+		last = from
+		for {
+			select {
+			case ev := <-s.Events():
+				if ev.GetSeq() <= last {
+					t.Fatalf("seq %d after %d", ev.GetSeq(), last)
+				}
+				last, n = ev.GetSeq(), n+1
+			case <-time.After(100 * time.Millisecond):
+				return n, last
+			}
+		}
+	}
+	published := uint64(subscriberBuffer + 10)
+	for i := uint64(0); i < published; i++ {
 		b.Publish(v1.EventKind_EVENT_KIND_TASK, v1.EventAction_EVENT_ACTION_UPDATED, "t", nil)
 	}
-	if s.Dropped() != 10 {
-		t.Fatalf("dropped %d want 10", s.Dropped())
+	n, last := drain(0)
+	if s.Dropped() != 0 || last != published || n > subscriberBuffer+1 {
+		t.Fatalf("same record: dropped %d, last seq %d of %d, delivered %d", s.Dropped(), last, published, n)
 	}
-	first := <-s.Events()
-	if first.GetSeq() != 11 {
-		t.Fatalf("oldest retained seq %d want 11", first.GetSeq())
+	for i := uint64(0); i < published; i++ {
+		b.Publish(v1.EventKind_EVENT_KIND_TASK, v1.EventAction_EVENT_ACTION_UPDATED, "t"+string(rune('a'+i%26))+string(rune('a'+i/26)), nil)
+	}
+	n, last = drain(published)
+	if s.Dropped() == 0 || uint64(n)+s.Dropped() != published || last != 2*published {
+		t.Fatalf("distinct records: dropped %d, delivered %d of %d, last seq %d", s.Dropped(), n, published, last)
 	}
 }
 

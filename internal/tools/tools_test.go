@@ -191,6 +191,11 @@ func TestFetch(t *testing.T) {
 	t.Cleanup(site.Close)
 	f := newFetch(&v1.ToolServer{Name: "fetch"})
 	ctx := context.Background()
+	// A fetch server reaches this host only when its settings allow local addresses
+	if res, _ := f.Call(ctx, Call{Name: FetchTool, Args: json.RawMessage(`{"url":"` + site.URL + `/page"}`)}); !res.Failed || res.Code != "url_not_accessible" {
+		t.Fatalf("this host should be refused: %+v", res)
+	}
+	f = newFetch(&v1.ToolServer{Name: "fetch", Local: true})
 	call := func(url string) *Result {
 		res, _ := f.Call(ctx, Call{Name: FetchTool, Args: json.RawMessage(`{"url":"` + url + `"}`)})
 		return res

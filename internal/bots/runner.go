@@ -150,6 +150,7 @@ func (r *runner) run() {
 		for id, at := range last {
 			if t, err := time.Parse(time.RFC3339Nano, at); err == nil {
 				r.lastRun[id] = t
+				r.lastCron[id] = t.Truncate(time.Minute)
 			}
 		}
 	}

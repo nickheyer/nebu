@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/nebu/pkg/proc"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -219,6 +220,12 @@ func newClient(cat *Catalog, spec *v1.Source, cacheDir string) (*Client, error) 
 	cfg, err := resolveConfig(cat.Fields(), spec.GetConfig())
 	if err != nil {
 		return nil, err
+	}
+	// The variables holding this source's secrets stay out of every child process
+	for _, f := range cat.Fields() {
+		if f.GetType() == v1.ConfigType_CONFIG_TYPE_ENV && cfg[f.GetName()] != "" {
+			proc.Hide(cfg[f.GetName()])
+		}
 	}
 	c := &Client{cat: cat, spec: spec, cfg: cfg, transports: map[string]Transport{}, facets: Memo[[]*v1.Facet]{TTL: facetTTL}}
 	for _, u := range cat.Transports {
@@ -542,6 +549,20 @@ func (c *Client) Card(ctx context.Context, repo, revision string) (*v1.ModelCard
 		return nil, fmt.Errorf("model card: %w", ErrUnsupported)
 	}
 	return cd.Card(ctx, c, repo, revision)
+}
+
+// API that names the commit a ref points at without listing its tree
+type Committer interface {
+	Commit(ctx context.Context, c *Client, repo, ref string) (string, error)
+}
+
+// The commit a ref names, ErrUnsupported when the provider cannot say
+func (c *Client) Commit(ctx context.Context, repo, ref string) (string, error) {
+	cm, ok := c.cat.API.(Committer)
+	if !ok {
+		return "", fmt.Errorf("commit of %s: %w", ref, ErrUnsupported)
+	}
+	return cm.Commit(ctx, c, repo, ref)
 }
 
 func (c *Client) Open(ctx context.Context, model *v1.Model, artifact *v1.Artifact) (Blob, error) {

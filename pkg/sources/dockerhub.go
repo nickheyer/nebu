@@ -464,5 +464,5 @@ func (d dockerhubAPI) Open(ctx context.Context, c *Client, model *v1.Model, arti
 			return nil, unknown(artifact.GetPath(), "digest")
 		}
 	}
-	return c.Distribution().Blob(name, "sha256:"+digest, int64(artifact.GetSizeBytes()))
+	return c.Distribution().Blob(ctx, name, "sha256:"+digest, int64(artifact.GetSizeBytes()))
 }

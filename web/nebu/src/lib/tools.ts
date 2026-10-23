@@ -31,6 +31,7 @@ export interface ToolServerFields {
   url: string;
   headers: string;
   allowedTools: string[];
+  local: boolean;
 }
 
 export function toolServerFields(s?: ToolServer): ToolServerFields {
@@ -47,7 +48,8 @@ export function toolServerFields(s?: ToolServer): ToolServerFields {
     env: pairsText(s?.env),
     url: s?.url ?? '',
     headers: pairsText(s?.headers),
-    allowedTools: [...(s?.allowedTools ?? [])]
+    allowedTools: [...(s?.allowedTools ?? [])],
+    local: s?.local ?? false
   };
 }
 
@@ -66,7 +68,8 @@ export function toolServerFrom(f: ToolServerFields): ToolServer {
     env: kind === ToolServerKind.STDIO ? pairsFrom(f.env) : {},
     url: kind === ToolServerKind.HTTP ? f.url.trim() : '',
     headers: kind === ToolServerKind.HTTP ? pairsFrom(f.headers) : {},
-    allowedTools: f.allowedTools.map((a) => a.trim()).filter(Boolean)
+    allowedTools: f.allowedTools.map((a) => a.trim()).filter(Boolean),
+    local: kind === ToolServerKind.FETCH && f.local
   } as ToolServer;
 }
 

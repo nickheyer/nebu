@@ -58,13 +58,15 @@ export const api = {
   tools: createClient(ToolService, transport)
 };
 
-// Include the API token in file URLs when authentication is required.
-export function fileUrl(sourceId: string, repo: string, revision: string, path: string): string {
-  const p = new URLSearchParams({ source: sourceId, repo, path });
-  if (revision) p.set('revision', revision);
+// Asks the daemon for a short lived link to one repository file, made for this browser's credentials.
+export async function fileDownloadUrl(sourceId: string, repo: string, revision: string, path: string): Promise<string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const t = token();
-  if (t) p.set('token', t);
-  return `${baseUrl}/files?${p.toString()}`;
+  if (t) headers.Authorization = 'Bearer ' + t;
+  const resp = await fetch(baseUrl + '/files', { method: 'POST', headers, body: JSON.stringify({ source: sourceId, repo, revision, path }) });
+  if (!resp.ok) throw new Error(`${resp.status}: ${await resp.text()}`);
+  const { url } = (await resp.json()) as { url: string };
+  return baseUrl + url;
 }
 
 export function message(err: unknown): string {

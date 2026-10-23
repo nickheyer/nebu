@@ -505,7 +505,7 @@ func (p *Puller) landBlob(ctx context.Context, h *tasks.Handle, l *meshLanding, 
 		head.Body.Close()
 		h.Message("fetching " + a.GetPath() + " from " + from.Name)
 		var added atomic.Int64
-		hexDigest, err := p.Fetcher.Fetch(mctx, sources.NewRangeBlob(client, url, size), partial, store.Hex(digest), func(d int64) {
+		hexDigest, err := p.Fetcher.Fetch(mctx, sources.NewRangeBlob(mctx, client, url, size), partial, store.Hex(digest), func(d int64) {
 			added.Add(d)
 			h.Add(d)
 		})

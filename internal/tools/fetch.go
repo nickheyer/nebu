@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nickheyer/nebu/pkg/outbound"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"golang.org/x/net/html"
 )
@@ -34,8 +35,13 @@ type fetchServer struct {
 	client *http.Client
 }
 
+// Builds a fetch server, one reading this host's own addresses only when its settings say so
 func newFetch(spec *v1.ToolServer) *fetchServer {
-	return &fetchServer{name: spec.GetName(), client: &http.Client{Timeout: fetchTimeout}}
+	client := outbound.Client(fetchTimeout)
+	if spec.GetLocal() {
+		client = &http.Client{Timeout: fetchTimeout}
+	}
+	return &fetchServer{name: spec.GetName(), client: client}
 }
 
 func (f *fetchServer) Name() string            { return f.name }

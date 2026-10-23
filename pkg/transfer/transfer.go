@@ -222,7 +222,7 @@ func (f *Fetcher) FetchURL(ctx context.Context, client *sources.HTTP, rawURL, pa
 	if resp, err := client.Do(ctx, http.MethodHead, rawURL, nil, nil); err == nil {
 		resp.Body.Close()
 		if resp.ContentLength > 0 && resp.Header.Get("Accept-Ranges") == "bytes" {
-			return f.Fetch(ctx, sources.NewRangeBlob(client, rawURL, resp.ContentLength), partial, "", progress)
+			return f.Fetch(ctx, sources.NewRangeBlob(ctx, client, rawURL, resp.ContentLength), partial, "", progress)
 		}
 	}
 	if progress == nil {

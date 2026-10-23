@@ -49,7 +49,7 @@ func (h *Host) Run(ctx context.Context, step Step, out io.Writer) error {
 	}
 	cmd := exec.CommandContext(ctx, step.Command[0], step.Command[1:]...)
 	cmd.Dir = h.Path(step.Dir)
-	cmd.Env = append(os.Environ(), envList(step.Env)...)
+	cmd.Env = append(proc.Environ(), envList(step.Env)...)
 	cmd.Stdout, cmd.Stderr = out, out
 	// Cancel the full process tree.
 	return proc.Run(cmd)

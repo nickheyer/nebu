@@ -75,6 +75,13 @@ func (e *Engine) Resolve(ctx context.Context, s *Selection, b *v1.Build) error {
 	if src.Archive != nil && b.Ref == "" {
 		return fmt.Errorf("%w: recipe %s needs a ref for its archive", ErrSelection, rc.ID())
 	}
+	if src.Releases != "" {
+		commit, err := pinRef(ctx, e.Sources, recipes.ReleaseSource, src.Releases, b.Ref)
+		if err != nil {
+			return fmt.Errorf("resolve %s: %w", b.Ref, err)
+		}
+		b.Commit = commit
+	}
 	s.Ref = b.Ref
 	b.Vars = s.Vars
 	if b.Image != "" || s.Sandbox != v1.SandboxKind_SANDBOX_KIND_OCI {
@@ -187,10 +194,15 @@ func (e *Engine) fetch(ctx context.Context, s *Selection, b *v1.Build, out io.Wr
 	dest := filepath.Join(b.GetDir(), srcDir)
 	switch {
 	case src.Archive != nil:
-		if err := e.fetchArchive(ctx, src.Archive(b.GetRef()), dest, src.Subdir, out); err != nil {
+		// The archive of the pinned commit, so a moved tag cannot change what is built
+		at := b.GetCommit()
+		if at == "" {
+			at = b.GetRef()
+		}
+		if err := e.fetchArchive(ctx, src.Archive(at), dest, src.Subdir, out); err != nil {
 			return "", err
 		}
-		return b.GetRef(), nil
+		return at, nil
 	case src.Repo != "":
 		// Respect paused windows before starting git.
 		if e.Fetcher != nil {
@@ -198,7 +210,14 @@ func (e *Engine) fetch(ctx context.Context, s *Selection, b *v1.Build, out io.Wr
 				return "", err
 			}
 		}
-		return sources.Checkout(ctx, src.Repo, b.GetRef(), dest, out)
+		sha, err := sources.Checkout(ctx, src.Repo, b.GetRef(), dest, out)
+		if err != nil {
+			return "", err
+		}
+		if pinned := b.GetCommit(); pinned != "" && !strings.HasPrefix(sha, pinned) {
+			return "", fmt.Errorf("%s now points at %s, not the %s the build was resolved to", b.GetRef(), sha, pinned)
+		}
+		return sha, nil
 	}
 	return b.GetRef(), os.MkdirAll(dest, 0o755)
 }

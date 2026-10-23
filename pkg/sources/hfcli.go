@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nickheyer/nebu/pkg/proc"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -49,7 +50,7 @@ func (h *HFCLI) Open(ctx context.Context, locator string, size int64) (Blob, err
 	if repo == "" || rel == "" {
 		return nil, fmt.Errorf("locator %q: want repo@revision/path", locator)
 	}
-	return &lazyBlob{size: size, land: func(ctx context.Context, progress func(int64)) (Blob, error) {
+	return &lazyBlob{ctx: ctx, size: size, land: func(ctx context.Context, progress func(int64)) (Blob, error) {
 		path, err := h.download(ctx, repo, ref, rel, progress)
 		if err != nil {
 			return nil, err
@@ -90,7 +91,7 @@ func (h *HFCLI) download(ctx context.Context, repo, ref, rel string, progress fu
 		args = append(args, "--revision", ref)
 	}
 	cmd := exec.CommandContext(ctx, h.command, args...)
-	cmd.Env = append(os.Environ(), "HF_HUB_DISABLE_PROGRESS_BARS=1", "HF_HUB_DISABLE_TELEMETRY=1", "HF_HUB_ENABLE_HF_TRANSFER=0")
+	cmd.Env = append(proc.Environ(), "HF_HUB_DISABLE_PROGRESS_BARS=1", "HF_HUB_DISABLE_TELEMETRY=1", "HF_HUB_ENABLE_HF_TRANSFER=0")
 	if h.endpoint != "" {
 		cmd.Env = append(cmd.Env, "HF_ENDPOINT="+h.endpoint)
 	}

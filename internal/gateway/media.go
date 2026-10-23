@@ -41,6 +41,8 @@ const (
 	videoKeep  = 24 * time.Hour
 	// Maximum retained videos, the oldest completed ones evicted past it
 	videoLimit = 32
+	// Bytes of video output held in memory at most, the oldest completed ones evicted past it
+	videoBytes = 1 << 30
 )
 
 // Media request with OpenAI fields and native sampler settings
@@ -904,25 +906,31 @@ func (s *videoStore) list() []*video {
 	return out
 }
 
-// Evicts expired videos, then oldest completed videos above the limit
+// Evicts expired videos, then the oldest completed videos above the count or byte limit
 func (s *videoStore) pruneLocked() {
 	var finished []*video
+	held := 0
 	for id, v := range s.byID {
 		v.mu.Lock()
 		done := v.status == "completed" || v.status == "failed"
 		old := done && time.Since(v.created) > videoKeep
+		size := len(v.data)
 		v.mu.Unlock()
 		if old {
 			delete(s.byID, id)
 			continue
 		}
+		held += size
 		if done {
 			finished = append(finished, v)
 		}
 	}
 	sort.Slice(finished, func(i, j int) bool { return finished[i].created.Before(finished[j].created) })
-	for len(s.byID) > videoLimit && len(finished) > 0 {
+	for (len(s.byID) > videoLimit || held > videoBytes) && len(finished) > 0 {
 		delete(s.byID, finished[0].id)
+		finished[0].mu.Lock()
+		held -= len(finished[0].data)
+		finished[0].mu.Unlock()
 		finished = finished[1:]
 	}
 }

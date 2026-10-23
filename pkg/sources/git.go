@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/nebu/pkg/proc"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -125,20 +126,26 @@ func (g *Git) basic() string {
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(g.username+":"+g.token))
 }
 
+// The environment git runs with, prompts off and the token passed as config no process list shows
+func (g *Git) env() []string {
+	env := append(proc.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if auth := g.basic(); auth != "" {
+		env = append(env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0=Authorization: "+auth)
+	}
+	return env
+}
+
 // Runs git with prompts off, LFS smudging off, and the token as basic auth
 func (g *Git) git(ctx context.Context, dir string, stdin io.Reader, args ...string) ([]byte, error) {
 	if _, err := exec.LookPath("git"); err != nil {
 		return nil, fmt.Errorf("git is not installed on this host")
 	}
 	full := []string{}
-	if auth := g.basic(); auth != "" {
-		full = append(full, "-c", "http.extraHeader=Authorization: "+auth)
-	}
 	if dir != "" {
 		full = append(full, "-C", dir)
 	}
 	cmd := exec.CommandContext(ctx, "git", append(full, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_LFS_SKIP_SMUDGE=1")
+	cmd.Env = append(g.env(), "GIT_LFS_SKIP_SMUDGE=1")
 	cmd.Stdin = stdin
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -443,10 +450,10 @@ func (g *Git) Open(ctx context.Context, locator string, size int64) (Blob, error
 		return nil, fmt.Errorf("%s: no file %s at %s", repo, rel, ref)
 	}
 	if e.lfs {
-		return g.lfsBlob(repo, e), nil
+		return g.lfsBlob(ctx, repo, e), nil
 	}
 	// Delay extraction until the transfer schedule permits it.
-	return &lazyBlob{size: e.size, whole: true, land: func(ctx context.Context, _ func(int64)) (Blob, error) {
+	return &lazyBlob{ctx: ctx, size: e.size, whole: true, land: func(ctx context.Context, _ func(int64)) (Blob, error) {
 		return g.extract(ctx, repo, e)
 	}}, nil
 }
@@ -484,10 +491,7 @@ func (g *Git) extract(ctx context.Context, repo string, e *gitEntry) (Blob, erro
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "cat-file", "blob", e.oid)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	if auth := g.basic(); auth != "" {
-		cmd.Args = append([]string{cmd.Args[0], "-c", "http.extraHeader=Authorization: " + auth}, cmd.Args[1:]...)
-	}
+	cmd.Env = g.env()
 	var stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = f, &stderr
 	err = cmd.Run()
@@ -530,7 +534,7 @@ func (g *Git) lfsURL(repo string) string {
 }
 
 // Opens an LFS object as a range blob whose download link is fetched from the batch API and refreshed as it expires
-func (g *Git) lfsBlob(repo string, e *gitEntry) Blob {
+func (g *Git) lfsBlob(ctx context.Context, repo string, e *gitEntry) Blob {
 	var mu sync.Mutex
 	var href string
 	var header http.Header
@@ -584,7 +588,7 @@ func (g *Git) lfsBlob(repo string, e *gitEntry) Blob {
 		until = time.Now().Add(ttl - gitLFSGrace)
 		return href, header, nil
 	}
-	return NewRangeBlob(g.plain, "", e.size).WithResolver(resolve)
+	return NewRangeBlob(ctx, g.plain, "", e.size).WithResolver(resolve)
 }
 
 func mergeHeader(base, extra http.Header) http.Header {
@@ -608,7 +612,7 @@ func Checkout(ctx context.Context, remote, ref, dest string, out io.Writer) (str
 	run := func(args ...string) error {
 		cmd := exec.CommandContext(ctx, "git", args...)
 		cmd.Stdout, cmd.Stderr = out, out
-		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		cmd.Env = append(proc.Environ(), "GIT_TERMINAL_PROMPT=0")
 		return cmd.Run()
 	}
 	clone := func(args ...string) error {

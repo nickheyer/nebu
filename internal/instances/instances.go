@@ -517,7 +517,7 @@ func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance,
 	defer cancel()
 	cmd := exec.CommandContext(pctx, prep.Command, prep.Args...)
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = proc.Environ()
 	for k, v := range prep.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}

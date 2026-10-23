@@ -75,7 +75,9 @@ func (r *runner) schedule() {
 			if !due {
 				continue
 			}
-			r.m.DB.PutBotSchedule(context.Background(), r.id, a.a.GetId(), now.UTC().Format(time.RFC3339Nano))
+			if err := r.m.DB.PutBotSchedule(context.Background(), r.id, a.a.GetId(), now.UTC().Format(time.RFC3339Nano)); err != nil {
+				r.activity("error", "automation", a.a.GetName()+": the run time was not saved, so a restart this minute runs it again: "+err.Error(), "", "", "", "")
+			}
 			if !roll(chanceOf(a.a)) {
 				continue
 			}

@@ -78,6 +78,7 @@ func Load(path string) (*v1.Config, error) {
 	v.SetDefault("auth.oidc.groups_claim", "groups")
 	v.SetDefault("auth.disabled", false)
 	v.SetDefault("auth.session_ttl", "24h")
+	v.SetDefault("auth.trusted_proxies", []string{})
 	v.SetDefault("builds.sandbox", "unspecified")
 	v.SetDefault("builds.image", "")
 	v.SetDefault("builds.cli", []string{"podman", "docker", "nerdctl"})

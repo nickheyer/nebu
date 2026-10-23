@@ -47,6 +47,9 @@ message ToolServer {
   map<string, string> headers = 12;
   // Tools the server may offer, every tool when empty
   repeated string allowed_tools = 13;
+  // Whether a fetch server may read this host's own addresses, loopback and link local included,
+  // which it refuses otherwise so a model cannot reach the daemon's own services through it
+  bool local = 14;
 }
 
 // Asks for the settings

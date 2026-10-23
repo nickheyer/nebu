@@ -15,6 +15,8 @@ import (
 
 const (
 	readHeaderTimeout = 10 * time.Second
+	// How long a kept alive connection may sit between requests before it is closed
+	idleTimeout = 2 * time.Minute
 	// How long a server replaced by a rebind may finish the requests it already took
 	rebindDrain = 30 * time.Second
 )
@@ -62,7 +64,7 @@ func (m *Manager) bindLocked(addr string) error {
 	if cfg := m.serverTLSLocked(); cfg != nil {
 		ln = tls.NewListener(ln, cfg)
 	}
-	srv := &http.Server{Handler: m.Handler, ReadHeaderTimeout: readHeaderTimeout, Protocols: links.Protocols()}
+	srv := &http.Server{Handler: m.Handler, ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout, Protocols: links.Protocols()}
 	served := make(chan struct{})
 	m.listener, m.server, m.served, m.listenAddr = ln, srv, served, ln.Addr().String()
 	m.Log.Info("mesh listening", "addr", m.listenAddr, "tls", m.serverTLSLocked() != nil)
