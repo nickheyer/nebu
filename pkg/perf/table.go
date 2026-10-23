@@ -320,7 +320,7 @@ type Sample struct {
 	TimePerToken float64
 	// Parameters a token touched, experts at their share, for prefill compute
 	Parameters float64
-	// Prompt tokens and seconds to the first token
+	// Tokens the runtime prefilled and seconds to the first token
 	PromptTokens float64
 	TimeToFirst  float64
 	// Whether each number is usable: enough completion tokens for the first, enough prompt for the second

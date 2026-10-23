@@ -841,7 +841,7 @@ func runGatewayTrace(ctx context.Context, e *env, args []string) error {
 			{"first token", traceMillis(t.GetStartedAt(), t.GetFirstTokenAt())},
 			{"total", traceMillis(t.GetStartedAt(), t.GetFinishedAt())},
 			{"status", strconv.Itoa(int(t.GetStatus()))},
-			{"tokens", fmt.Sprintf("%d in, %d out", t.GetPromptTokens(), t.GetCompletionTokens())},
+			{"tokens", traceTokens(t)},
 			{"stop", t.GetStop()},
 			{"bytes", fmt.Sprintf("%d in, %d out", t.GetRequestBytes(), t.GetResponseBytes())},
 		}
@@ -915,4 +915,12 @@ func runEvents(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 	return nil
+}
+
+func traceTokens(t *v1.Trace) string {
+	out := fmt.Sprintf("%d in, %d out", t.GetPromptTokens(), t.GetCompletionTokens())
+	if t.GetCachedTokens() > 0 {
+		out += fmt.Sprintf(", %d cached", t.GetCachedTokens())
+	}
+	return out
 }

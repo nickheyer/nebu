@@ -477,7 +477,7 @@ func respUsage(u Usage) map[string]any {
 		"input_tokens":          u.In,
 		"output_tokens":         u.Out,
 		"total_tokens":          u.In + u.Out,
-		"input_tokens_details":  map[string]any{"cached_tokens": 0},
+		"input_tokens_details":  map[string]any{"cached_tokens": u.Cached},
 		"output_tokens_details": map[string]any{"reasoning_tokens": 0},
 	}
 }

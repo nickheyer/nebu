@@ -249,6 +249,8 @@ message Trace {
   // Speculative decoding counters from the runtime's timings
   uint32 draft_offered = 32;
   uint32 draft_accepted = 33;
+  // Prompt tokens the runtime served from its cache
+  uint32 cached_tokens = 34;
 }
 
 // One tool call in a traced answer, run by the gateway when it names a server

@@ -269,6 +269,7 @@ func (x *exchange) rounds() int {
 			total.ID = res.ID
 		}
 		total.Usage.In, total.Usage.Out, total.Stop, total.Extra = total.Usage.In+res.Usage.In, total.Usage.Out+res.Usage.Out, res.Stop, mergeExtra(total.Extra, res.Extra)
+		total.Usage.Cached += res.Usage.Cached
 		total.Usage.DraftOffered, total.Usage.DraftAccepted = total.Usage.DraftOffered+res.Usage.DraftOffered, total.Usage.DraftAccepted+res.Usage.DraftAccepted
 		total.Usage.Rounds = append(total.Usage.Rounds, res.Usage.RoundsOrSelf()...)
 		if len(res.ToolCalls) > 0 {

@@ -185,11 +185,18 @@ type antToolChoice struct {
 }
 
 type antUsage struct {
-	InputTokens   int               `json:"input_tokens"`
-	OutputTokens  int               `json:"output_tokens"`
-	ServerToolUse *antServerToolUse `json:"server_tool_use,omitempty"`
+	InputTokens              int               `json:"input_tokens"`
+	OutputTokens             int               `json:"output_tokens"`
+	CacheCreationInputTokens int               `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int               `json:"cache_read_input_tokens"`
+	ServerToolUse            *antServerToolUse `json:"server_tool_use,omitempty"`
 	// One entry per model round when the answer took more than one
 	Iterations []antIteration `json:"iterations,omitempty"`
+}
+
+// Fresh plus cached tokens, the whole prompt
+func (u antUsage) prompt() int {
+	return u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
 }
 
 // The tokens of one model round, as the API lists them under usage
@@ -219,6 +226,10 @@ type antServerToolUse struct {
 // The usage of a result, with the server tools it ran when it ran any
 func antUsageOf(r *Result) antUsage {
 	u := antUsage{InputTokens: r.Usage.In, OutputTokens: r.Usage.Out}
+	// Wire input excludes what the cache served
+	if r.Usage.Cached > 0 && r.Usage.Cached <= r.Usage.In {
+		u.InputTokens, u.CacheReadInputTokens = r.Usage.In-r.Usage.Cached, r.Usage.Cached
+	}
 	if len(r.Usage.Rounds) > 1 {
 		for _, it := range r.Usage.Rounds {
 			u.Iterations = append(u.Iterations, antIteration{Type: "message", InputTokens: it.In, OutputTokens: it.Out})
@@ -785,7 +796,7 @@ func (anthropic) ParseResult(c *Request, body []byte) (*Result, error) {
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, err
 	}
-	r := &Result{ID: resp.ID, Model: resp.Model, Usage: Usage{In: resp.Usage.InputTokens, Out: resp.Usage.OutputTokens, Rounds: roundsOf(resp.Usage)}, Extra: resp.Extra}
+	r := &Result{ID: resp.ID, Model: resp.Model, Usage: Usage{In: resp.Usage.prompt(), Out: resp.Usage.OutputTokens, Cached: resp.Usage.CacheReadInputTokens, Rounds: roundsOf(resp.Usage)}, Extra: resp.Extra}
 	for _, b := range resp.Content {
 		switch b.Type {
 		case "text":
@@ -854,10 +865,11 @@ func (anthropic) ParseStream(rd io.Reader, emit func(Event) error) error {
 			return errors.New(message)
 		case "message_start":
 			if ev.Message != nil {
-				final.ID, final.Model, final.Usage.In = ev.Message.ID, ev.Message.Model, ev.Message.Usage.InputTokens
+				final.ID, final.Model = ev.Message.ID, ev.Message.Model
+				final.Usage.In, final.Usage.Cached = ev.Message.Usage.prompt(), ev.Message.Usage.CacheReadInputTokens
 				final.Extra = mergeExtra(final.Extra, ev.Message.Extra)
 			}
-			return emit(Event{Kind: Started, Res: &Result{ID: final.ID, Model: final.Model, Usage: Usage{In: final.Usage.In}}})
+			return emit(Event{Kind: Started, Res: &Result{ID: final.ID, Model: final.Model, Usage: Usage{In: final.Usage.In, Cached: final.Usage.Cached}}})
 		case "content_block_start":
 			if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
 				n := len(order)
@@ -894,8 +906,8 @@ func (anthropic) ParseStream(rd io.Reader, emit func(Event) error) error {
 			}
 			if ev.Usage != nil {
 				final.Usage.Out = ev.Usage.OutputTokens
-				if ev.Usage.InputTokens > 0 {
-					final.Usage.In = ev.Usage.InputTokens
+				if ev.Usage.prompt() > 0 {
+					final.Usage.In, final.Usage.Cached = ev.Usage.prompt(), ev.Usage.CacheReadInputTokens
 				}
 				if rounds := roundsOf(*ev.Usage); len(rounds) > 0 {
 					final.Usage.Rounds = rounds

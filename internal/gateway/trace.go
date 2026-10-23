@@ -232,6 +232,7 @@ func (s *traceSink) first() {
 // Records a finished answer
 func (s *traceSink) result(res *chat.Result) {
 	s.t.PromptTokens, s.t.CompletionTokens, s.t.Stop = uint32(res.Usage.In), uint32(res.Usage.Out), res.Stop
+	s.t.CachedTokens = uint32(res.Usage.Cached)
 	if res.Usage.DraftOffered > 0 {
 		s.t.DraftOffered, s.t.DraftAccepted = uint32(res.Usage.DraftOffered), uint32(res.Usage.DraftAccepted)
 	}

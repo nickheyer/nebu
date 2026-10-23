@@ -185,9 +185,30 @@ func (t oaiTool) MarshalJSON() ([]byte, error) {
 }
 
 type oaiUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int               `json:"prompt_tokens"`
+	CompletionTokens    int               `json:"completion_tokens"`
+	TotalTokens         int               `json:"total_tokens"`
+	PromptTokensDetails *oaiPromptDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+// Cached prompt tokens, as llama.cpp, vllm and sglang report them
+type oaiPromptDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+func (u oaiUsage) cached() int {
+	if u.PromptTokensDetails == nil {
+		return 0
+	}
+	return u.PromptTokensDetails.CachedTokens
+}
+
+func oaiUsageOf(u Usage) *oaiUsage {
+	out := &oaiUsage{PromptTokens: u.In, CompletionTokens: u.Out, TotalTokens: u.In + u.Out}
+	if u.Cached > 0 {
+		out.PromptTokensDetails = &oaiPromptDetails{CachedTokens: u.Cached}
+	}
+	return out
 }
 
 type oaiChoice struct {
@@ -548,7 +569,7 @@ func (openai) ParseResult(c *Request, body []byte) (*Result, error) {
 	}
 	r := &Result{ID: resp.ID, Model: resp.Model, Extra: resp.Extra}
 	if resp.Usage != nil {
-		r.Usage.In, r.Usage.Out = resp.Usage.PromptTokens, resp.Usage.CompletionTokens
+		r.Usage.In, r.Usage.Out, r.Usage.Cached = resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.cached()
 	}
 	if resp.Timings != nil {
 		r.Usage.DraftOffered, r.Usage.DraftAccepted = resp.Timings.DraftN, resp.Timings.DraftNAccepted
@@ -583,7 +604,7 @@ func (openai) renderResult(c *Request, r *Result) ([]byte, error) {
 		}
 		return withExtra(map[string]any{"object": "list", "data": data, "model": r.Model, "usage": oaiUsage{PromptTokens: r.Usage.In, TotalTokens: r.Usage.In}}, r.Extra)
 	}
-	resp := oaiResponse{ID: resultID(r, "chatcmpl"), Object: "chat.completion", Created: time.Now().Unix(), Model: r.Model, Usage: &oaiUsage{PromptTokens: r.Usage.In, CompletionTokens: r.Usage.Out, TotalTokens: r.Usage.In + r.Usage.Out}, Extra: r.Extra}
+	resp := oaiResponse{ID: resultID(r, "chatcmpl"), Object: "chat.completion", Created: time.Now().Unix(), Model: r.Model, Usage: oaiUsageOf(r.Usage), Extra: r.Extra}
 	reason := oaiReason(r.Stop)
 	if c.Kind == Generate {
 		resp.Object = "text_completion"
@@ -620,7 +641,7 @@ func (openai) ParseStream(rd io.Reader, emit func(Event) error) error {
 			}
 		}
 		if chunk.Usage != nil {
-			final.Usage.In, final.Usage.Out = chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens
+			final.Usage.In, final.Usage.Out, final.Usage.Cached = chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.cached()
 		}
 		if chunk.Timings != nil {
 			final.Usage.DraftOffered, final.Usage.DraftAccepted = chunk.Timings.DraftN, chunk.Timings.DraftNAccepted
@@ -744,7 +765,7 @@ func (s *oaiStream) Write(ev Event) error {
 			return nil
 		}
 		// The usage goes last in a chunk of its own with no choices, as the API sends it
-		last := oaiResponse{ID: s.id, Object: "chat.completion.chunk", Created: s.created, Model: s.model, Choices: []oaiChoice{}, Usage: &oaiUsage{PromptTokens: res.Usage.In, CompletionTokens: res.Usage.Out, TotalTokens: res.Usage.In + res.Usage.Out}}
+		last := oaiResponse{ID: s.id, Object: "chat.completion.chunk", Created: s.created, Model: s.model, Choices: []oaiChoice{}, Usage: oaiUsageOf(res.Usage)}
 		if s.req.Kind == Generate {
 			last.Object = "text_completion"
 		}

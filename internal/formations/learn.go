@@ -95,7 +95,7 @@ func (m *Manager) learnFormation(ctx context.Context, f *v1.Formation, t *v1.Tra
 	}
 	switch relayPath(f.GetShape(), t) {
 	case pathFormation:
-		predictedTTFT, predictedTPT := predicted(plan, t.GetPromptTokens())
+		predictedTTFT, predictedTPT := predicted(plan, prefilled(t))
 		m.Perf.RecordRatio(f.GetShape(), f.GetRuntimeId(), plan.GetLinkClass(), predictedTTFT, ttft, predictedTPT, tpt)
 	case pathDecodeAlone:
 		head := m.headSeat(f)
@@ -139,6 +139,14 @@ func relayPath(shape v1.Shape, t *v1.Trace) learnPath {
 		return pathDecodeAlone
 	}
 	return pathNone
+}
+
+// Prompt tokens the runtime computed, less what its cache served
+func prefilled(t *v1.Trace) uint32 {
+	if t.GetCachedTokens() >= t.GetPromptTokens() {
+		return 0
+	}
+	return t.GetPromptTokens() - t.GetCachedTokens()
 }
 
 // The plan's own prediction for a request: its prefill re-priced by the cost model at the
@@ -197,10 +205,10 @@ func soloSample(device string, plan *v1.MemoryPlan, ctxParam string, d *v1.Descr
 		BytesPerToken: deviceWeights + perToken*context,
 		TimePerToken:  tpt,
 		Parameters:    activeParams(d, share),
-		PromptTokens:  float64(t.GetPromptTokens()),
+		PromptTokens:  float64(prefilled(t)),
 		TimeToFirst:   ttft,
 		Decode:        t.GetCompletionTokens() >= learnCompletion && tpt > 0,
-		Prefill:       t.GetPromptTokens() >= learnPrompt && ttft > 0,
+		Prefill:       prefilled(t) >= learnPrompt && ttft > 0,
 	}, nil
 }
 

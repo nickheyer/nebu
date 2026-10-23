@@ -47,6 +47,14 @@ func TestSoloSample(t *testing.T) {
 	if err != nil || short.Decode || short.Prefill {
 		t.Fatalf("short request %+v %v", short, err)
 	}
+	// Cached prefix skips prefill, only fresh tokens teach compute
+	cached, err := soloSample("gpu0", plan, "n_ctx", d, &v1.Trace{PromptTokens: 1000, CachedTokens: 900, CompletionTokens: 200}, 0.1, 0.05)
+	if err != nil || cached.PromptTokens != 100 || cached.Prefill || !cached.Decode || math.Abs(cached.BytesPerToken-wantBytes) > 1 {
+		t.Fatalf("cached request %+v %v", cached, err)
+	}
+	if prefilled(&v1.Trace{PromptTokens: 10, CachedTokens: 10}) != 0 || prefilled(&v1.Trace{PromptTokens: 10, CachedTokens: 400}) != 0 {
+		t.Fatal("a cache serving the whole prompt leaves nothing prefilled")
+	}
 	// A cache with no context length behind it is an error, not a guess.
 	if _, err := soloSample("gpu0", plan, "", d, trace, 1.5, 0.05); err == nil || !strings.Contains(err.Error(), "context param") {
 		t.Fatalf("no context param: %v", err)

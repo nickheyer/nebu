@@ -134,7 +134,9 @@ type Result struct {
 // Tokens of an answer, by round when it took more than one
 type Usage struct {
 	In, Out int
-	Rounds  []Round
+	// Prompt tokens the runtime served from its cache
+	Cached int
+	Rounds []Round
 	// Speculative decoding counters when the runtime reports them
 	DraftOffered, DraftAccepted int
 }

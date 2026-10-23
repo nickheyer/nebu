@@ -62,15 +62,15 @@
     <div class="grid grid-cols-3 gap-x-5 gap-y-4">
       <Stat label="Status" value={finished ? String(trace.status) : 'In flight'} tone={!finished ? 'default' : trace.status >= 500 ? 'bad' : trace.status >= 400 ? 'warn' : 'ok'} />
       <Stat label="Kind" value={enumLabel(TraceKind, trace.kind)} sub={trace.stream ? 'streamed' : ''} />
-      <Stat label="Format" value={trace.translated ? `${flavor(trace.clientApi)} → ${flavor(trace.upstreamApi)}` : flavor(trace.clientApi)} mono />
+      <Stat label="Format" value={trace.translated ? `${flavor(trace.clientApi)} \u2192 ${flavor(trace.upstreamApi)}` : flavor(trace.clientApi)} mono />
       <Stat label="First byte" value={ms(firstByte)} />
       <Stat label="First token" value={ms(firstToken)} />
       <Stat label="Total" value={ms(total)} />
-      <Stat label="Prompt" value={trace.promptTokens || '–'} sub={trace.promptTokens ? 'tokens' : ''} />
-      <Stat label="Output" value={trace.completionTokens || '–'} sub={trace.completionTokens ? 'tokens' : ''} />
+      <Stat label="Prompt" value={trace.promptTokens || '\u2013'} sub={trace.cachedTokens ? `${trace.cachedTokens} cached` : trace.promptTokens ? 'tokens' : ''} />
+      <Stat label="Output" value={trace.completionTokens || '\u2013'} sub={trace.completionTokens ? 'tokens' : ''} />
       <Stat label="Speed" value={rate(trace.completionTokens, generating)} />
-      <Stat label="Model" value={trace.route || '–'} mono />
-      <Stat label="Stop" value={trace.stop || '–'} />
+      <Stat label="Model" value={trace.route || '\u2013'} mono />
+      <Stat label="Stop" value={trace.stop || '\u2013'} />
       <Stat label="Bytes" value={`${bytes(trace.requestBytes, 0)} in, ${bytes(trace.responseBytes, 0)} out`} />
     </div>
     {#if trace.error}<div class="note note-bad">{trace.error}</div>{/if}
