@@ -40,9 +40,9 @@ func (d *DB) tx(ctx context.Context, fn func(exec execFn) error) error {
 	return tx.Commit()
 }
 
-// Scans rows and closes the cursor before returning.
+// Scans rows from the read pool and closes the cursor before returning
 func list[T any](ctx context.Context, d *DB, query string, scan func(*sql.Rows) (T, error), args ...any) ([]T, error) {
-	rows, err := d.sql.QueryContext(ctx, query, args...)
+	rows, err := d.reads.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

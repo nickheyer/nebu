@@ -1,9 +1,11 @@
 package store
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
@@ -117,4 +119,84 @@ func TestLock(t *testing.T) {
 	}
 	unlock()
 	<-done
+}
+
+// A key's lock leaves the table once its last holder lets go, and waiters keep it there meanwhile
+func TestLockForgotten(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	unlock := s.Lock("k")
+	waited := make(chan struct{})
+	go func() {
+		u := s.Lock("k")
+		u()
+		close(waited)
+	}()
+	for {
+		s.mu.Lock()
+		waiting := s.locks["k"] != nil && s.locks["k"].holders == 2
+		s.mu.Unlock()
+		if waiting {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	unlock()
+	<-waited
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.locks) != 0 {
+		t.Fatalf("%d locks kept after every holder let go", len(s.locks))
+	}
+}
+
+// Every write and removal keeps the index current, a second store reading the same from disk
+func TestManifestIndex(t *testing.T) {
+	s, _ := Open(t.TempDir())
+	first := &v1.StoredModel{SourceId: "hf", Repo: "org/a", Group: "q4", Bytes: 3, Artifacts: []*v1.StoredArtifact{{Digest: Digest("aa"), Path: "a.gguf"}}}
+	if err := s.WriteManifest(first); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.ListManifests()
+	if err != nil || len(list) != 1 || list[0].GetRepo() != "org/a" {
+		t.Fatalf("list %v %v", list, err)
+	}
+	// A copy handed out does not reach the index
+	list[0].Bytes = 99
+	if got, _ := s.ReadManifest("hf", "org/a", "q4"); got.GetBytes() != 3 {
+		t.Fatalf("the index was changed through a copy: %v", got)
+	}
+	second := &v1.StoredModel{SourceId: "hf", Repo: "org/b", Group: "q8", Bytes: 5}
+	if err := s.WriteManifest(second); err != nil {
+		t.Fatal(err)
+	}
+	second.Bytes = 7
+	if got, _ := s.ReadManifest("hf", "org/b", "q8"); got.GetBytes() != 5 {
+		t.Fatalf("the index holds what was written, not what the caller changed later: %v", got)
+	}
+	if list, _ = s.ListManifests(); len(list) != 2 || list[1].GetRepo() != "org/b" {
+		t.Fatalf("list after a second write %v", list)
+	}
+	if st, _ := s.Status(); st.GetModels() != 2 {
+		t.Fatalf("status counts %d models", st.GetModels())
+	}
+	if _, err := s.Touch("hf", "org/a", "q4"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ReadManifest("hf", "org/a", "q4"); got.GetUsedAt() == nil {
+		t.Fatal("a touch reaches the index")
+	}
+	if got, _ := s.RemoveManifest("hf", "org/a", "q4"); got.GetRepo() != "org/a" {
+		t.Fatalf("removed %v", got)
+	}
+	if _, err := s.ReadManifest("hf", "org/a", "q4"); !errors.Is(err, ErrNotStored) {
+		t.Fatalf("read after removal: %v", err)
+	}
+	if list, _ = s.ListManifests(); len(list) != 1 || list[0].GetRepo() != "org/b" {
+		t.Fatalf("list after removal %v", list)
+	}
+	// A store opened over the same directory reads what the first wrote
+	again, _ := Open(s.Root())
+	if list, _ = again.ListManifests(); len(list) != 1 || list[0].GetRepo() != "org/b" || list[0].GetBytes() != 5 {
+		t.Fatalf("list from disk %v", list)
+	}
 }

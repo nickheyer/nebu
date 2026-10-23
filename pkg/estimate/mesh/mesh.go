@@ -20,6 +20,8 @@ import (
 const (
 	// Nodes a chain may hold, the fastest kept beyond
 	MaxChainNodes = 8
+	// Nodes a lockstep may hold, the fastest kept beyond
+	MaxLockstepNodes = 8
 	// Reference sizes of the chat profile
 	ChatPrompt     = 2048
 	ChatCompletion = 256

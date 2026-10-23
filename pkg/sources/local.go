@@ -80,14 +80,10 @@ func (localAPI) Search(ctx context.Context, c *Client, req *v1.SearchRequest, so
 		if info, err := os.Stat(dir); err == nil {
 			hit.UpdatedAt = timestamppb.New(info.ModTime())
 		}
-		// Distinguish transformers safetensors by their accompanying config.
-		files, err := root.List(ctx, repo)
+		// Formats come from names alone, transformers safetensors told by their accompanying config
+		paths, err := root.Names(ctx, repo)
 		if err != nil {
 			return err
-		}
-		paths := make([]string, 0, len(files))
-		for _, f := range files {
-			paths = append(paths, f.GetPath())
 		}
 		hit.Formats = FormatsOf(paths)
 		if AdmitsFormats(req, hit.Formats) {

@@ -42,9 +42,7 @@ func TestNumbersLearnAndCarry(t *testing.T) {
 	table.OnChange = func() { changes++ }
 	ctx := context.Background()
 	// A prefill only sample teaches compute and nothing else.
-	if err := table.Record(ctx, perf.Sample{DeviceID: "gpu0", Parameters: 70e9, PromptTokens: 2048, TimeToFirst: 2, Prefill: true}); err != nil {
-		t.Fatal(err)
-	}
+	table.Record(perf.Sample{DeviceID: "gpu0", Parameters: 70e9, PromptTokens: 2048, TimeToFirst: 2, Prefill: true})
 	n = table.Numbers(gpu)
 	if n.Compute != 2*70e9*2048/2 || n.ComputeSamples != 1 || n.ComputeSource != "learned from 1 samples" {
 		t.Fatalf("compute %+v", n)
@@ -52,9 +50,7 @@ func TestNumbersLearnAndCarry(t *testing.T) {
 	if n.Stream != 1008e9 || n.StreamSamples != 0 || n.StreamSource != "profile RTX 4090" {
 		t.Fatalf("a prefill sample must not touch the bandwidth: %+v", n)
 	}
-	if err := table.Record(ctx, perf.Sample{DeviceID: "gpu0", BytesPerToken: 40e9, TimePerToken: 0.05, Decode: true}); err != nil {
-		t.Fatal(err)
-	}
+	table.Record(perf.Sample{DeviceID: "gpu0", BytesPerToken: 40e9, TimePerToken: 0.05, Decode: true})
 	n = table.Numbers(gpu)
 	if n.Stream != 800e9 || n.StreamSamples != 1 || n.ComputeSamples != 1 || n.Samples != 2 || n.StreamSource != "learned from 1 samples" {
 		t.Fatalf("learned numbers %+v", n)
@@ -62,8 +58,13 @@ func TestNumbersLearnAndCarry(t *testing.T) {
 	if !strings.Contains(n.Describe(), "bandwidth 800 GB/s learned from 1 samples") || !strings.Contains(n.Describe(), "fixed cost 2.0 ms shipped default") || !strings.Contains(n.Describe(), "2 requests learned from in all") {
 		t.Fatalf("describe %q", n.Describe())
 	}
-	if changes != 2 {
-		t.Fatalf("the change hook fired %d times", changes)
+	// Samples are written together, the listener told once they are
+	if changes != 0 {
+		t.Fatalf("the change hook fired %d times before the write", changes)
+	}
+	table.Flush()
+	if changes != 1 {
+		t.Fatalf("the change hook fired %d times after the write", changes)
 	}
 	// Another node's record carries its learned rows, each number only when its samples say so.
 	other := table.NumbersFor(gpu, []*v1.Throughput{{DeviceId: "gpu0", StreamBytesPerSecond: 500e9, StreamSamples: 3, Samples: 3, FixedSeconds: 0.001}})
@@ -73,27 +74,22 @@ func TestNumbersLearnAndCarry(t *testing.T) {
 	if other.Fixed != perf.DefaultFixedSeconds || other.FixedSource != "shipped default" {
 		t.Fatalf("a fixed cost under %d samples stays shipped: %+v", perf.InterceptSamples, other)
 	}
-	if err := table.RecordAcceptance(ctx, "gpu0", 10, 7); err != nil {
-		t.Fatal(err)
-	}
+	table.RecordAcceptance("gpu0", 10, 7)
 	n = table.Numbers(gpu)
 	if n.Acceptance != 0.7 || n.AcceptanceSamples != 1 || n.AcceptanceSource != "learned from 1 samples" {
 		t.Fatalf("acceptance %+v", n)
 	}
-	if err := table.RecordRatio(ctx, v1.Shape_SHAPE_CHAIN, "llamacpp", v1.LinkClass_LINK_CLASS_LAN, 1, 1.5, 0.1, 0.15); err != nil {
-		t.Fatal(err)
-	}
+	table.RecordRatio(v1.Shape_SHAPE_CHAIN, "llamacpp", v1.LinkClass_LINK_CLASS_LAN, 1, 1.5, 0.1, 0.15)
 	ttft, tpt, samples := table.Ratio(v1.Shape_SHAPE_CHAIN, "llamacpp", v1.LinkClass_LINK_CLASS_LAN)
 	if math.Abs(ttft-1.5) > 1e-9 || math.Abs(tpt-1.5) > 1e-9 || samples != 1 {
 		t.Fatalf("ratio %v %v %d", ttft, tpt, samples)
 	}
-	if err := table.RecordRatio(ctx, v1.Shape_SHAPE_CHAIN, "llamacpp", v1.LinkClass_LINK_CLASS_LAN, 0, 0, 0, 0); err != nil {
-		t.Fatal(err)
-	}
+	table.RecordRatio(v1.Shape_SHAPE_CHAIN, "llamacpp", v1.LinkClass_LINK_CLASS_LAN, 0, 0, 0, 0)
 	if _, _, samples := table.Ratio(v1.Shape_SHAPE_CHAIN, "llamacpp", v1.LinkClass_LINK_CLASS_LAN); samples != 1 {
 		t.Fatalf("a request with no usable timing teaches nothing, samples %d", samples)
 	}
 	// Everything survives a reopen, sample counts included.
+	table.Flush()
 	again, err := perf.Open(ctx, database)
 	if err != nil {
 		t.Fatal(err)
@@ -136,14 +132,11 @@ func TestSetProfile(t *testing.T) {
 // twentieth decode sample on, a zero intercept counting as learned
 func TestInterceptLearnedAtTwentySamples(t *testing.T) {
 	table, _ := open(t)
-	ctx := context.Background()
 	gpu := &v1.Device{Id: "gpu1", Name: "RTX 3090", Kind: v1.DeviceKind_DEVICE_KIND_GPU}
 	const beta, fixed = 900e9, 0.004
 	for i := 0; i < perf.InterceptSamples; i++ {
 		bytes := 10e9 + float64(i)*2e9
-		if err := table.Record(ctx, perf.Sample{DeviceID: "gpu1", BytesPerToken: bytes, TimePerToken: fixed + bytes/beta, Decode: true}); err != nil {
-			t.Fatal(err)
-		}
+		table.Record(perf.Sample{DeviceID: "gpu1", BytesPerToken: bytes, TimePerToken: fixed + bytes/beta, Decode: true})
 		n := table.Numbers(gpu)
 		if i < perf.InterceptSamples-1 && (n.FixedSource != "shipped default" || n.Fixed != perf.DefaultFixedSeconds) {
 			t.Fatalf("sample %d: the fixed cost stays shipped under %d samples: %+v", i+1, perf.InterceptSamples, n)
@@ -156,9 +149,7 @@ func TestInterceptLearnedAtTwentySamples(t *testing.T) {
 	// A device whose passes cost nothing beyond the bytes learns an intercept of zero, and zero is learned.
 	for i := 0; i < perf.InterceptSamples; i++ {
 		bytes := 10e9 + float64(i)*2e9
-		if err := table.Record(ctx, perf.Sample{DeviceID: "gpu2", BytesPerToken: bytes, TimePerToken: bytes / beta, Decode: true}); err != nil {
-			t.Fatal(err)
-		}
+		table.Record(perf.Sample{DeviceID: "gpu2", BytesPerToken: bytes, TimePerToken: bytes / beta, Decode: true})
 	}
 	zero := table.Numbers(&v1.Device{Id: "gpu2", Name: "RTX 3090", Kind: v1.DeviceKind_DEVICE_KIND_GPU})
 	if zero.Fixed > 1e-9 || zero.FixedSource != "learned from 20 samples" {
@@ -174,20 +165,15 @@ func TestInterceptLearnedAtTwentySamples(t *testing.T) {
 // A relay's saved cache moving through the disk teaches the disk's throughput
 func TestRecordDisk(t *testing.T) {
 	table, _ := open(t)
-	ctx := context.Background()
 	if table.Disk().Stream != 1e9 || table.Disk().StreamSource != "profile disk" {
 		t.Fatalf("shipped disk %+v", table.Disk())
 	}
-	if err := table.RecordDisk(ctx, 2<<30, 1); err != nil {
-		t.Fatal(err)
-	}
+	table.RecordDisk(2<<30, 1)
 	d := table.Disk()
 	if d.Stream != float64(2<<30) || d.StreamSamples != 1 || d.StreamSource != "learned from 1 samples" {
 		t.Fatalf("learned disk %+v", d)
 	}
-	if err := table.RecordDisk(ctx, 0, 1); err != nil {
-		t.Fatal(err)
-	}
+	table.RecordDisk(0, 1)
 	if table.Disk().StreamSamples != 1 {
 		t.Fatal("an empty move teaches nothing")
 	}

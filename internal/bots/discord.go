@@ -53,6 +53,9 @@ type handlers struct {
 // Opens sessions, one per shard
 type dialer func(token string, shard, count int, intents discordgo.Intent, h handlers) (session, error)
 
+// Messages kept per channel, a full history read plus the replies that land meanwhile
+const messageCache = maxHistory + 8
+
 // The discordgo session behind the interface
 type dgSession struct {
 	s *discordgo.Session
@@ -67,11 +70,15 @@ func dialDiscord(token string, shard, count int, intents discordgo.Intent, h han
 	s.Identify.Intents = intents
 	s.Identify.Shard = &[2]int{shard, count}
 	s.StateEnabled = true
-	s.State.MaxMessageCount = 0
+	s.State.MaxMessageCount = messageCache
 	s.State.TrackVoice = false
 	s.State.TrackPresences = false
 	s.UserAgent = "nebu (https://github.com/nickheyer/nebu)"
-	s.AddHandler(func(_ *discordgo.Session, r *discordgo.Ready) { h.ready(shard, r) })
+	// A fresh identify lost whatever happened while the session was down, so the cache starts over
+	s.AddHandler(func(_ *discordgo.Session, r *discordgo.Ready) {
+		forgetMessages(s.State)
+		h.ready(shard, r)
+	})
 	s.AddHandler(func(_ *discordgo.Session, _ *discordgo.Resumed) { h.resumed(shard) })
 	s.AddHandler(func(_ *discordgo.Session, _ *discordgo.Disconnect) { h.disconnect(shard) })
 	s.AddHandler(func(_ *discordgo.Session, m *discordgo.MessageCreate) { h.message(shard, m.Message) })
@@ -121,8 +128,61 @@ func (d *dgSession) EditMessage(channelID, messageID, content string) (*discordg
 
 func (d *dgSession) Typing(channelID string) error { return d.s.ChannelTyping(channelID) }
 
+// Reads channel history from the cache the gateway fills, Discord answering what it lacks
 func (d *dgSession) Messages(channelID string, limit int, beforeID string) ([]*discordgo.Message, error) {
+	if cached, ok := cachedHistory(d.s.State, channelID, limit, beforeID); ok {
+		return cached, nil
+	}
 	return d.s.ChannelMessages(channelID, limit, beforeID, "", "")
+}
+
+// The newest limit messages before one, newest first, when the cache holds every one of them
+func cachedHistory(st *discordgo.State, channelID string, limit int, beforeID string) ([]*discordgo.Message, bool) {
+	if st == nil || limit <= 0 || limit > st.MaxMessageCount {
+		return nil, false
+	}
+	c, err := st.Channel(channelID)
+	if err != nil {
+		return nil, false
+	}
+	st.RLock()
+	defer st.RUnlock()
+	end := len(c.Messages)
+	if beforeID != "" {
+		end = -1
+		for i, m := range c.Messages {
+			if m.ID == beforeID {
+				end = i
+				break
+			}
+		}
+	}
+	if end < limit {
+		return nil, false
+	}
+	out := make([]*discordgo.Message, 0, limit)
+	for i := end - 1; i >= end-limit; i-- {
+		m := *c.Messages[i]
+		out = append(out, &m)
+	}
+	return out, true
+}
+
+// Drops every cached message
+func forgetMessages(st *discordgo.State) {
+	st.Lock()
+	defer st.Unlock()
+	for _, g := range st.Guilds {
+		for _, c := range g.Channels {
+			c.Messages = nil
+		}
+		for _, c := range g.Threads {
+			c.Messages = nil
+		}
+	}
+	for _, c := range st.PrivateChannels {
+		c.Messages = nil
+	}
 }
 
 func (d *dgSession) React(channelID, messageID, emoji string) error {

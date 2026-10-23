@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -57,23 +58,26 @@ func (d *DB) SetUserPassword(ctx context.Context, username, hash string, changed
 	return n > 0, err
 }
 
-// Removes an account and the API tokens it made, reporting existence
-func (d *DB) DeleteUser(ctx context.Context, username string) (bool, error) {
+// Removes an account and the API tokens it made, returning the account id, empty when there was none
+func (d *DB) DeleteUser(ctx context.Context, username string) (string, error) {
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM api_tokens WHERE provider = ? AND subject IN (SELECT id FROM users WHERE username = ?)`, LocalProvider, username); err != nil {
-		return false, err
+	var id string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM users WHERE username = ?`, username).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM users WHERE username = ?`, username)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
+	if _, err := tx.ExecContext(ctx, `DELETE FROM api_tokens WHERE provider = ? AND subject = ?`, LocalProvider, id); err != nil {
+		return "", err
 	}
-	return n > 0, tx.Commit()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id); err != nil {
+		return "", err
+	}
+	return id, tx.Commit()
 }

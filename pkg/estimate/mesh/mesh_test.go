@@ -574,9 +574,7 @@ func TestRatioChangesPrediction(t *testing.T) {
 	if len(before.GetPrefillCost()) == 0 || before.GetModelDecodeSecondsPerToken() != before.GetDecodeSecondsPerToken() {
 		t.Fatalf("the plan carries its cost model: %v %v", before.GetPrefillCost(), before.GetModelDecodeSecondsPerToken())
 	}
-	if err := table.RecordRatio(context.Background(), v1.Shape_SHAPE_CHAIN, "llamacpp", v1.LinkClass_LINK_CLASS_LAN, 1, 1.5, 0.1, 0.2); err != nil {
-		t.Fatal(err)
-	}
+	table.RecordRatio(v1.Shape_SHAPE_CHAIN, "llamacpp", v1.LinkClass_LINK_CLASS_LAN, 1, 1.5, 0.1, 0.2)
 	after := mustPlan(t, req, m)
 	if math.Abs(after.GetDecodeSecondsPerToken()-2*before.GetDecodeSecondsPerToken()) > 1e-9 || math.Abs(after.GetPrefillSeconds()-1.5*before.GetPrefillSeconds()) > 1e-9 {
 		t.Fatalf("the ratio multiplies the prediction: %v -> %v, %v -> %v", before.GetDecodeSecondsPerToken(), after.GetDecodeSecondsPerToken(), before.GetPrefillSeconds(), after.GetPrefillSeconds())

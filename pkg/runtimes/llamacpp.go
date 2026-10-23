@@ -358,8 +358,8 @@ func (LlamaCpp) Probes() []Probe {
 func (LlamaCpp) Measure(lines []string) []*v1.Measurement {
 	var m measurements
 	for _, line := range lines {
-		for phrase, what := range map[string]string{" model buffer size = ": "weights", " KV buffer size = ": "cache", " compute buffer size = ": "compute"} {
-			i := strings.Index(line, phrase)
+		for _, b := range llamaBuffers {
+			i := strings.Index(line, b.phrase)
 			if i < 0 {
 				continue
 			}
@@ -367,11 +367,11 @@ func (LlamaCpp) Measure(lines []string) []*v1.Measurement {
 			if len(fields) == 0 {
 				continue
 			}
-			n, ok := bytesAfter(line, phrase)
+			n, ok := bytesAfter(line, b.phrase)
 			if !ok {
 				continue
 			}
-			m.add(memorySide(fields[len(fields)-1])+"."+what, n, line)
+			m.add(memorySide(fields[len(fields)-1])+"."+b.what, n, line)
 		}
 		if n, ok := bytesAfter(line, ": allocating "); ok && strings.Contains(line, " failed") {
 			m.add("device.failed", n, line)
@@ -391,6 +391,13 @@ func (LlamaCpp) Measure(lines []string) []*v1.Measurement {
 		}
 	}
 	return append(m.list, transportMeasurement(lines)...)
+}
+
+// The buffer allocation phrases llama.cpp logs and what each one measures
+var llamaBuffers = []struct{ phrase, what string }{
+	{" model buffer size = ", "weights"},
+	{" KV buffer size = ", "cache"},
+	{" compute buffer size = ", "compute"},
 }
 
 // The side a ggml backend or device name belongs to

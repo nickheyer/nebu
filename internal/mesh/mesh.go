@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -182,9 +183,12 @@ type Manager struct {
 	listenErr string
 	statusAt  *time.Timer
 	// Connections by member address and TLS state
-	h2        map[string]http.RoundTripper
-	seq       uint64
-	dirty     bool
+	h2  map[string]http.RoundTripper
+	seq uint64
+	// Whether the record changed since it was last built
+	dirty bool
+	// The record as last built, handed out until a bump marks it stale
+	record    *v1.Node
 	publishAt *time.Timer
 	listener  net.Listener
 	server    *http.Server
@@ -589,8 +593,27 @@ func (m *Manager) watch(ctx context.Context) {
 	}
 }
 
-// This node's record as every other member sees it
+// This node's record as every other member sees it, rebuilt only once something in it changed
 func (m *Manager) Record() *v1.Node {
+	addresses := m.addresses()
+	m.mu.Lock()
+	rec := m.record
+	stale := rec == nil || m.dirty || !slices.Equal(rec.GetAddresses(), addresses)
+	m.dirty = false
+	m.mu.Unlock()
+	if stale {
+		rec = m.build(addresses)
+		m.mu.Lock()
+		m.record = rec
+		m.mu.Unlock()
+	}
+	out := proto.Clone(rec).(*v1.Node)
+	out.SeenAt = timestamppb.Now()
+	return out
+}
+
+// Gathers the record from every part of the daemon it describes
+func (m *Manager) build(addresses []string) *v1.Node {
 	m.mu.Lock()
 	seq := m.seq
 	links := make([]*v1.Link, 0, len(m.links))
@@ -616,7 +639,7 @@ func (m *Manager) Record() *v1.Node {
 		Arch:           runtime.GOARCH,
 		Address:        address,
 		Tls:            hasTLS,
-		Addresses:      m.addresses(),
+		Addresses:      addresses,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()

@@ -70,7 +70,7 @@ type Gateway struct {
 	traces    *Recorder
 
 	mu         sync.Mutex
-	transports map[uint32]*http.Transport
+	transports map[transportKey]*http.Transport
 	// Active and completed video jobs by id
 	videos *videoStore
 	// Connections to other members, for routes conducted elsewhere and relay slot moves
@@ -88,7 +88,7 @@ type Gateway struct {
 // Creates a gateway with bearer keys, default route policy, and allowed origins
 func New(table *Table, keys, origins []string, policy *v1.Policy, bus *events.Bus, log *slog.Logger) *Gateway {
 	table.SetDefaults(policy)
-	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing, countRing), transports: map[uint32]*http.Transport{}, videos: newVideoStore(), affinity: newAffinity(), jobs: newForwardedJobs(), slots: newSlotPool(), tools: tools.New(log, bus)}
+	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing, countRing), transports: map[transportKey]*http.Transport{}, videos: newVideoStore(), affinity: newAffinity(), jobs: newForwardedJobs(), slots: newSlotPool(), tools: tools.New(log, bus)}
 }
 
 // Returns the request recorder
@@ -108,15 +108,31 @@ func (g *Gateway) required() bool {
 	return len(g.keys) > 0 || (g.creds != nil && g.creds.Enabled())
 }
 
-// Caches transports by response header timeout
-func (g *Gateway) transport(upstreamMs uint32) *http.Transport {
+// What a policy decides about the transport its requests go out on
+type transportKey struct {
+	upstreamMs uint32
+	// Idle connections kept per upstream host
+	idle int
+}
+
+// Idle connections kept per upstream host for a route with no in-flight cap
+const idleUncapped = 256
+
+// Caches transports by header timeout and idle connections per host, the route's in-flight cap
+func (g *Gateway) transport(policy *v1.Policy) *http.Transport {
+	key := transportKey{upstreamMs: policy.GetUpstreamTimeoutMs(), idle: int(policy.GetMaxInFlight())}
+	if key.idle == 0 {
+		key.idle = idleUncapped
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	t, ok := g.transports[upstreamMs]
+	t, ok := g.transports[key]
 	if !ok {
 		t = http.DefaultTransport.(*http.Transport).Clone()
-		t.ResponseHeaderTimeout = time.Duration(upstreamMs) * time.Millisecond
-		g.transports[upstreamMs] = t
+		t.ResponseHeaderTimeout = time.Duration(key.upstreamMs) * time.Millisecond
+		t.MaxIdleConns = 0
+		t.MaxIdleConnsPerHost = key.idle
+		g.transports[key] = t
 	}
 	return t
 }
@@ -603,7 +619,7 @@ func (g *Gateway) send(ctx context.Context, target *url.URL, path string, out []
 	if stream {
 		req.Header.Set("Accept", "text/event-stream, application/x-ndjson, application/json")
 	}
-	resp, err := (&sameHostRedirects{next: g.transport(policy.GetUpstreamTimeoutMs()), body: out}).RoundTrip(req)
+	resp, err := (&sameHostRedirects{next: g.transport(policy), body: out}).RoundTrip(req)
 	if err != nil {
 		cancel()
 		return nil, nil, err

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,6 +25,10 @@ const (
 	touchGap = time.Minute
 	// Prune the last-used table once it holds this many entries
 	touchKeys = 1000
+	// How long a token found in the store answers requests without it
+	cacheTTL = 30 * time.Second
+	// Prune the lookup cache of expired entries once it holds this many
+	cacheKeys = 1000
 )
 
 var (
@@ -42,10 +47,18 @@ type Tokens struct {
 
 	mu      sync.Mutex
 	touched map[string]time.Time
+	// Rows found in the store by the hash of their secret, each answering until it expires
+	cache map[[sha256.Size]byte]cachedToken
+}
+
+// A token row and when it stops answering without the store
+type cachedToken struct {
+	row     db.TokenRow
+	expires time.Time
 }
 
 func NewTokens(store *db.DB, log *slog.Logger) *Tokens {
-	return &Tokens{db: store, log: log, now: time.Now, touched: map[string]time.Time{}}
+	return &Tokens{db: store, log: log, now: time.Now, touched: map[string]time.Time{}, cache: map[[sha256.Size]byte]cachedToken{}}
 }
 
 // The account behind a bearer token, recording the use. Lookups that fail refuse the token.
@@ -53,16 +66,57 @@ func (t *Tokens) Identify(ctx context.Context, secret string) (*Session, bool) {
 	if secret == "" {
 		return nil, false
 	}
-	row, err := t.db.FindToken(ctx, secret)
-	if db.IsNotFound(err) {
-		return nil, false
+	key := sha256.Sum256([]byte(secret))
+	now := t.now()
+	t.mu.Lock()
+	c, cached := t.cache[key]
+	t.mu.Unlock()
+	if !cached || !now.Before(c.expires) {
+		row, err := t.db.FindToken(ctx, secret)
+		if db.IsNotFound(err) {
+			if cached {
+				t.forget(func(r db.TokenRow) bool { return r.Token.GetId() == c.row.Token.GetId() })
+			}
+			return nil, false
+		}
+		if err != nil {
+			t.log.Error("token lookup failed", "err", err)
+			return nil, false
+		}
+		c = cachedToken{row: row, expires: now.Add(cacheTTL)}
+		t.mu.Lock()
+		if len(t.cache) >= cacheKeys {
+			for k, old := range t.cache {
+				if !now.Before(old.expires) {
+					delete(t.cache, k)
+				}
+			}
+		}
+		t.cache[key] = c
+		t.mu.Unlock()
 	}
-	if err != nil {
-		t.log.Error("token lookup failed", "err", err)
-		return nil, false
-	}
+	row := c.row
 	t.touch(ctx, row.Token.GetId())
 	return &Session{Subject: row.Subject, Name: row.Owner, Email: row.Email, Provider: row.Provider, Issued: row.Token.GetCreatedAt().AsTime()}, true
+}
+
+// Drops cached rows the predicate names, so a revoked token stops answering at once
+func (t *Tokens) forget(gone func(db.TokenRow) bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for k, c := range t.cache {
+		if gone(c.row) {
+			delete(t.cache, k)
+		}
+	}
+}
+
+// Drops every cached token of an account after the account is removed, a nil table holding none
+func (t *Tokens) ForgetAccount(provider, subject string) {
+	if t == nil {
+		return
+	}
+	t.forget(func(r db.TokenRow) bool { return r.Provider == provider && r.Subject == subject })
 }
 
 // Stamps the token's last use, at most once per gap
@@ -144,6 +198,7 @@ func (t *Tokens) Delete(ctx context.Context, who *Session, id string) error {
 	t.mu.Lock()
 	delete(t.touched, id)
 	t.mu.Unlock()
+	t.forget(func(r db.TokenRow) bool { return r.Token.GetId() == id })
 	t.log.Info("api token revoked", "owner", who.Name, "provider", who.Provider, "id", id)
 	return nil
 }

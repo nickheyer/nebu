@@ -89,9 +89,7 @@ func (m *Manager) MoveSlot(ctx context.Context, formationID, fromNode, file stri
 		return "", 0, err
 	}
 	if m.Perf != nil {
-		if err := m.Perf.RecordDisk(ctx, uint64(n), time.Since(start).Seconds()); err != nil {
-			m.Log.Warn("disk throughput write failed", "err", err)
-		}
+		m.Perf.RecordDisk(uint64(n), time.Since(start).Seconds())
 	}
 	return dest, uint64(n), nil
 }

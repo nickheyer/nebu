@@ -35,7 +35,6 @@ func (m *Manager) syncLoop(ctx context.Context) {
 // Syncs with every member at once, gone members on a slower cadence
 func (m *Manager) syncAll(ctx context.Context) {
 	m.mu.Lock()
-	m.dirty = false
 	var due []string
 	now := time.Now()
 	for id, mb := range m.members {

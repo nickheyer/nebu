@@ -64,6 +64,27 @@ func (f *File) List(ctx context.Context, locator string) ([]*v1.Artifact, error)
 	return out, err
 }
 
+// Lists the relative path of every file under a directory, no file read or stated
+func (f *File) Names(ctx context.Context, locator string) ([]string, error) {
+	dir, err := f.Path(locator)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return ctx.Err()
+		}
+		rel, _ := filepath.Rel(dir, p)
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	return out, err
+}
+
 // Lists the directories directly under a directory
 func (f *File) Dirs(locator string) ([]string, error) {
 	dir, err := f.Path(locator)

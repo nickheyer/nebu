@@ -41,10 +41,14 @@ var (
 
 // Persistent route aliases, counters, and limits
 type Table struct {
-	store    *db.DB
-	events   *events.Bus
-	log      *slog.Logger
-	mu       sync.Mutex
+	store  *db.DB
+	events *events.Bus
+	log    *slog.Logger
+	mu     sync.Mutex
+	// Record writes queued under mu, written in order once it is released
+	queue []routeWrite
+	// Held by whoever is writing the queue, so records land in the order they were queued
+	wmu      sync.Mutex
 	routes   map[string]*v1.Route
 	inflight map[string]*atomic.Int32
 	limiters map[string]*rate.Limiter
@@ -84,11 +88,47 @@ func OpenTable(ctx context.Context, store *db.DB, bus *events.Bus, log *slog.Log
 	return t, nil
 }
 
+// A route record write and its event, waiting for the request lock to be released
+type routeWrite struct {
+	route  *v1.Route
+	action v1.EventAction
+}
+
+// Queues the route's record write and event, done once the request lock is released
 func (t *Table) save(r *v1.Route, action v1.EventAction) {
 	r.UpdatedAt = timestamppb.Now()
+	t.queue = append(t.queue, routeWrite{route: proto.Clone(r).(*v1.Route), action: action})
+}
+
+// Releases the request lock, then writes what was queued under it
+func (t *Table) unlock() {
+	t.mu.Unlock()
+	t.drain()
+}
+
+// Writes queued records and publishes their events in order, requests never waiting on the store
+func (t *Table) drain() {
+	t.wmu.Lock()
+	defer t.wmu.Unlock()
+	for {
+		t.mu.Lock()
+		queued := t.queue
+		t.queue = nil
+		t.mu.Unlock()
+		if len(queued) == 0 {
+			return
+		}
+		for _, w := range queued {
+			t.write(w)
+		}
+	}
+}
+
+func (t *Table) write(w routeWrite) {
+	r := w.route
 	if t.store != nil {
 		var err error
-		if action == v1.EventAction_EVENT_ACTION_DELETED {
+		if w.action == v1.EventAction_EVENT_ACTION_DELETED {
 			err = t.store.DeleteRoute(context.Background(), r.GetName())
 		} else {
 			err = t.store.PutRoute(context.Background(), r)
@@ -97,7 +137,7 @@ func (t *Table) save(r *v1.Route, action v1.EventAction) {
 			t.log.Warn("route record write failed", "name", r.GetName(), "err", err)
 		}
 	}
-	t.events.Publish(v1.EventKind_EVENT_KIND_ROUTE, action, r.GetName(), r)
+	t.events.Publish(v1.EventKind_EVENT_KIND_ROUTE, w.action, r.GetName(), r)
 }
 
 // Queues a route counter update for the next flush
@@ -158,7 +198,7 @@ func Effective(route, defaults *v1.Policy) *v1.Policy {
 // Maps a route to a ready instance and its served name, policy, and profile
 func (t *Table) Set(name, instanceID, slotID, endpoint, model, served string, api v1.ApiFlavor, policy *v1.Policy, profile *v1.Profile) *v1.Route {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	defer t.unlock()
 	r, ok := t.routes[name]
 	action := v1.EventAction_EVENT_ACTION_UPDATED
 	if !ok {
@@ -204,7 +244,7 @@ func (t *Table) readoptLocked(instanceID, endpoint, model, served string, api v1
 // Updates capabilities on all routes for an instance
 func (t *Table) SetModes(instanceID string, modes []string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	defer t.unlock()
 	t.modes[instanceID] = append([]string(nil), modes...)
 	for _, r := range t.routes {
 		if r.GetInstanceId() == instanceID {
@@ -259,7 +299,7 @@ func (t *Table) SystemMode(r *v1.Route) v1.SystemMessages {
 // Keeps a route pending without an instance
 func (t *Table) Pending(name, slotID, model string, policy *v1.Policy, profile *v1.Profile) *v1.Route {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	defer t.unlock()
 	r, ok := t.routes[name]
 	action := v1.EventAction_EVENT_ACTION_UPDATED
 	if !ok {
@@ -280,7 +320,7 @@ func (t *Table) Pending(name, slotID, model string, policy *v1.Policy, profile *
 // Moves a route to a new name, refusing one already taken
 func (t *Table) Rename(from, to string) (*v1.Route, error) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	defer t.unlock()
 	if from == to {
 		if r, ok := t.routes[from]; ok {
 			return t.snapshotLocked(r), nil
@@ -308,7 +348,7 @@ func (t *Table) Rename(from, to string) (*v1.Route, error) {
 // Removes a route and its counter if no other route shares the instance
 func (t *Table) Delete(name string) (*v1.Route, bool) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	defer t.unlock()
 	return t.deleteLocked(name)
 }
 
@@ -334,7 +374,7 @@ func (t *Table) deleteLocked(name string) (*v1.Route, bool) {
 // Removes every route keep rejects and returns them
 func (t *Table) Prune(keep func(*v1.Route) bool) []*v1.Route {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	defer t.unlock()
 	var gone []*v1.Route
 	for name, r := range t.routes {
 		if keep(t.snapshotLocked(r)) {
@@ -351,7 +391,7 @@ func (t *Table) Prune(keep func(*v1.Route) bool) []*v1.Route {
 // Marks an instance's routes draining so new requests are refused
 func (t *Table) Drain(instanceID string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	defer t.unlock()
 	for _, r := range t.routes {
 		if r.GetInstanceId() == instanceID && r.GetState() == v1.RouteState_ROUTE_STATE_READY {
 			r.State = v1.RouteState_ROUTE_STATE_DRAINING
@@ -363,7 +403,7 @@ func (t *Table) Drain(instanceID string) {
 // Detaches an instance, slot routes staying pending and other routes leaving
 func (t *Table) RemoveInstance(instanceID string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	defer t.unlock()
 	for name, r := range t.routes {
 		if r.GetInstanceId() != instanceID {
 			continue

@@ -24,8 +24,8 @@ func openAuth(t *testing.T) (*auth.Users, *auth.Tokens, *auth.Sessions, *auth.Gu
 	}
 	t.Cleanup(func() { store.Close() })
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	users := auth.NewUsers(store, log)
 	tokens := auth.NewTokens(store, log)
+	users := auth.NewUsers(store, log, tokens)
 	sessions, _ := auth.OpenSessions(filepath.Join(dir, "k"), time.Hour)
 	sessions.Validate(users.Valid)
 	return users, tokens, sessions, auth.NewGuard("daemon-token", sessions, tokens)

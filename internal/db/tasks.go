@@ -24,10 +24,19 @@ func (d *DB) PutTask(ctx context.Context, t *v1.Task) error {
 	})
 }
 
-// Appends one log line at an absolute position
-func (d *DB) AppendTaskLog(ctx context.Context, id string, position int, line string) error {
-	_, err := d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO task_logs (task_id, position, line) VALUES (?, ?, ?)`, id, position, line)
-	return err
+// Appends log lines at consecutive positions from first, all in one transaction
+func (d *DB) AppendTaskLogs(ctx context.Context, id string, first int, lines []string) error {
+	if len(lines) == 0 {
+		return nil
+	}
+	return d.tx(ctx, func(exec execFn) error {
+		for i, line := range lines {
+			if err := exec(`INSERT OR REPLACE INTO task_logs (task_id, position, line) VALUES (?, ?, ?)`, id, first+i, line); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // Returns one task with its logs in order

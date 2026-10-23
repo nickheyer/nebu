@@ -161,13 +161,15 @@ func TestTasks(t *testing.T) {
 	if err := d.PutTask(ctx, running); err != nil {
 		t.Fatal(err)
 	}
-	for i, line := range []string{"a", "b"} {
-		if err := d.AppendTaskLog(ctx, "t1", i, line); err != nil {
-			t.Fatal(err)
-		}
+	if err := d.AppendTaskLogs(ctx, "t1", 0, []string{"a", "b"}); err != nil {
+		t.Fatal(err)
+	}
+	// A batch at a later position lands in order, one written again replaces itself
+	if err := d.AppendTaskLogs(ctx, "t1", 1, []string{"b", "c"}); err != nil {
+		t.Fatal(err)
 	}
 	got, logs, err := d.GetTask(ctx, "t1")
-	if err != nil || !proto.Equal(got, running) || len(logs) != 2 || logs[1] != "b" {
+	if err != nil || !proto.Equal(got, running) || len(logs) != 3 || logs[1] != "b" || logs[2] != "c" {
 		t.Fatalf("get %v %v %v", got, logs, err)
 	}
 	running.State = v1.TaskState_TASK_STATE_SUCCEEDED
@@ -175,7 +177,7 @@ func TestTasks(t *testing.T) {
 	if err := d.PutTask(ctx, running); err != nil {
 		t.Fatal(err)
 	}
-	if _, logs, _ = d.GetTask(ctx, "t1"); len(logs) != 2 {
+	if _, logs, _ = d.GetTask(ctx, "t1"); len(logs) != 3 {
 		t.Fatal("logs should survive a task update")
 	}
 	for i := 0; i < 5; i++ {

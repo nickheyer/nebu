@@ -70,9 +70,7 @@ func (m *Manager) learnTrace(ctx context.Context, t *v1.Trace) {
 		return
 	}
 	if t.GetDraftOffered() > 0 {
-		if err := m.Perf.RecordAcceptance(ctx, device, t.GetDraftOffered(), t.GetDraftAccepted()); err != nil {
-			m.Log.Warn("acceptance write failed", "err", err)
-		}
+		m.Perf.RecordAcceptance(device, t.GetDraftOffered(), t.GetDraftAccepted())
 	}
 	stored, err := m.Store.ReadManifest(in.GetSourceId(), in.GetRepo(), in.GetGroup())
 	if err != nil {
@@ -92,17 +90,13 @@ func (m *Manager) learnFormation(ctx context.Context, f *v1.Formation, t *v1.Tra
 	plan := f.GetPlan()
 	if t.GetDraftOffered() > 0 {
 		if head := m.headSeat(f); head != nil && len(head.GetDeviceIds()) > 0 {
-			if err := m.Perf.RecordAcceptance(ctx, head.GetDeviceIds()[0], t.GetDraftOffered(), t.GetDraftAccepted()); err != nil {
-				m.Log.Warn("acceptance write failed", "err", err)
-			}
+			m.Perf.RecordAcceptance(head.GetDeviceIds()[0], t.GetDraftOffered(), t.GetDraftAccepted())
 		}
 	}
 	switch relayPath(f.GetShape(), t) {
 	case pathFormation:
 		predictedTTFT, predictedTPT := predicted(plan, t.GetPromptTokens())
-		if err := m.Perf.RecordRatio(ctx, f.GetShape(), f.GetRuntimeId(), plan.GetLinkClass(), predictedTTFT, ttft, predictedTPT, tpt); err != nil {
-			m.Log.Warn("ratio write failed", "err", err)
-		}
+		m.Perf.RecordRatio(f.GetShape(), f.GetRuntimeId(), plan.GetLinkClass(), predictedTTFT, ttft, predictedTPT, tpt)
 	case pathDecodeAlone:
 		head := m.headSeat(f)
 		if head == nil || head.GetNodeId() != m.self() || len(head.GetDeviceIds()) == 0 {
@@ -165,9 +159,7 @@ func (m *Manager) learnSolo(ctx context.Context, device string, plan *v1.MemoryP
 		m.Log.Warn("throughput sample skipped", "route", t.GetRoute(), "err", err)
 		return
 	}
-	if err := m.Perf.Record(ctx, sample); err != nil {
-		m.Log.Warn("throughput write failed", "err", err)
-	}
+	m.Perf.Record(sample)
 }
 
 // The sample a request teaches: bytes a token read, the device weights at the share a token

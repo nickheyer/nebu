@@ -380,6 +380,7 @@ func (d *Daemon) openMesh(ctx context.Context, store *db.DB, prober *host.Prober
 	if err != nil {
 		return err
 	}
+	table.Log = log
 	d.Perf = table
 	d.Mesh = &mesh.Manager{
 		DB:        store,
@@ -482,19 +483,19 @@ func (d *Daemon) openAuth(store *db.DB) error {
 			d.Log.Info("api token created for CLI and SDK clients", "file", path)
 		}
 	}
+	d.Tokens = auth.NewTokens(store, d.Log)
 	if oidc := a.GetOidc(); oidc.GetIssuer() != "" {
 		if d.SSO, err = sso.New(oidc, d.Sessions, d.Log); err != nil {
 			return err
 		}
 		d.Log.Info("single sign-on enabled", "issuer", oidc.GetIssuer(), "name", oidc.GetName())
 	} else {
-		d.Users = auth.NewUsers(store, d.Log)
+		d.Users = auth.NewUsers(store, d.Log, d.Tokens)
 		if err := d.Users.Load(context.Background()); err != nil {
 			return err
 		}
 		d.Sessions.Validate(d.Users.Valid)
 	}
-	d.Tokens = auth.NewTokens(store, d.Log)
 	d.Guard = auth.NewGuard(a.GetToken(), d.Sessions, d.Tokens)
 	return nil
 }
@@ -582,6 +583,7 @@ func (d *Daemon) Close() {
 		drain, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		d.Tasks.Drain(drain)
+		d.Perf.Flush()
 		if err := d.DB.Close(); err != nil {
 			d.Log.Warn("store close failed", "err", err)
 		}

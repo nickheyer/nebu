@@ -42,10 +42,10 @@ func TestUsersTable(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("list %v", list)
 	}
-	if ok, err := d.DeleteUser(ctx, "ann"); err != nil || !ok {
-		t.Fatal("delete", ok, err)
+	if id, err := d.DeleteUser(ctx, "ann"); err != nil || id == "" {
+		t.Fatal("delete", id, err)
 	}
-	if ok, _ := d.DeleteUser(ctx, "ann"); ok {
+	if id, _ := d.DeleteUser(ctx, "ann"); id != "" {
 		t.Fatal("delete twice")
 	}
 }
@@ -91,8 +91,8 @@ func TestApiTokensTable(t *testing.T) {
 		t.Fatal("delete", ok, err)
 	}
 	// Removing the account removes its tokens and nobody else's
-	if ok, err := d.DeleteUser(ctx, "ann"); err != nil || !ok {
-		t.Fatal("delete user", ok, err)
+	if id, err := d.DeleteUser(ctx, "ann"); err != nil || id == "" {
+		t.Fatal("delete user", id, err)
 	}
 	if _, err := d.FindToken(ctx, "s2"); !IsNotFound(err) {
 		t.Fatalf("token after account removal %v", err)

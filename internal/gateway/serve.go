@@ -126,7 +126,7 @@ func (x *exchange) passthrough() int {
 		defer cancel()
 	}
 	first := x.targets[0].url
-	hops := &failover{targets: x.targets, hold: x.hold, next: &sameHostRedirects{next: g.transport(x.policy.GetUpstreamTimeoutMs()), body: body}, log: g.log}
+	hops := &failover{targets: x.targets, hold: x.hold, next: &sameHostRedirects{next: g.transport(x.policy), body: body}, log: g.log}
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(first)

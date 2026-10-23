@@ -62,6 +62,8 @@ type Users struct {
 	db  *db.DB
 	log *slog.Logger
 	now func() time.Time
+	// Where the accounts' API tokens are cached, told when an account is removed
+	tokens *Tokens
 
 	mu sync.Mutex
 	// Password change times by username. Sessions issued earlier are revoked.
@@ -69,8 +71,9 @@ type Users struct {
 	failures map[string]*attempts
 }
 
-func NewUsers(store *db.DB, log *slog.Logger) *Users {
-	return &Users{db: store, log: log, now: time.Now, accounts: map[string]time.Time{}, failures: map[string]*attempts{}}
+// Accounts over the store, their API tokens cached in the table given
+func NewUsers(store *db.DB, log *slog.Logger, tokens *Tokens) *Users {
+	return &Users{db: store, log: log, now: time.Now, tokens: tokens, accounts: map[string]time.Time{}, failures: map[string]*attempts{}}
 }
 
 // Reads every account's password change time for session checks
@@ -165,14 +168,17 @@ func (u *Users) Delete(ctx context.Context, username string) error {
 	if last {
 		return ErrLastUser
 	}
-	if ok, err := u.db.DeleteUser(ctx, name); err != nil {
+	id, err := u.db.DeleteUser(ctx, name)
+	if err != nil {
 		return err
-	} else if !ok {
+	}
+	if id == "" {
 		return fmt.Errorf("%w: %s", ErrUnknownUser, name)
 	}
 	u.mu.Lock()
 	delete(u.accounts, name)
 	u.mu.Unlock()
+	u.tokens.ForgetAccount(ProviderLocal, id)
 	u.log.Info("account removed", "username", name)
 	return nil
 }

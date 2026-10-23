@@ -3,6 +3,7 @@ package mesh
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -665,7 +666,7 @@ func tokensPerRound(alpha, gamma float64) float64 {
 	return (1 - math.Pow(alpha, gamma+1)) / (1 - alpha)
 }
 
-// Lockstep: matching nodes on fabric links, every layer divided by the seat count
+// Lockstep over every subset of the fastest matching nodes, every layer divided by the seat count
 func (pl *planner) locksteps() []*candidate {
 	nodes := pl.supporting(v1.Shape_SHAPE_LOCKSTEP)
 	if len(nodes) < 2 {
@@ -675,6 +676,18 @@ func (pl *planner) locksteps() []*candidate {
 	if !ok {
 		pl.reject(v1.Shape_SHAPE_LOCKSTEP, nodes, fmt.Sprintf("%s declares no lockstep roles", pl.req.Runtime.ID()))
 		return nil
+	}
+	if len(nodes) > MaxLockstepNodes {
+		byBandwidth := append([]*Node(nil), nodes...)
+		sort.SliceStable(byBandwidth, func(i, j int) bool { return byBandwidth[i].beta() > byBandwidth[j].beta() })
+		kept := map[*Node]bool{}
+		for _, n := range byBandwidth[:MaxLockstepNodes] {
+			kept[n] = true
+		}
+		for _, n := range byBandwidth[MaxLockstepNodes:] {
+			pl.reject(v1.Shape_SHAPE_LOCKSTEP, []*Node{n}, fmt.Sprintf("%s is beyond the %d fastest nodes of the span, which a lockstep keeps", n.label(), MaxLockstepNodes))
+		}
+		nodes = slices.DeleteFunc(nodes, func(n *Node) bool { return !kept[n] })
 	}
 	var out []*candidate
 	L := float64(pl.parts.layerCount())

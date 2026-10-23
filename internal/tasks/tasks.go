@@ -24,6 +24,10 @@ const (
 	historyMax     = 200
 	logMax         = 2000
 	notifyInterval = 100 * time.Millisecond
+	// How long log lines wait for company before they are stored together
+	logFlush = 250 * time.Millisecond
+	// Lines that are stored at once rather than waiting for the timer
+	logBatch = 500
 )
 
 // Returned when a task id is not known
@@ -51,6 +55,10 @@ type entry struct {
 	watchers map[chan struct{}]struct{}
 	last     time.Time
 	timer    *time.Timer
+	// Lines not yet stored, the position of the first, and the timer that stores them
+	pending  []string
+	first    int
+	logTimer *time.Timer
 }
 
 // Lets a running task report progress and logs
@@ -115,6 +123,7 @@ func (m *Manager) execute(ctx context.Context, e *entry, h *Handle, run func(con
 	}, true)
 	m.save(e)
 	err := runSafely(ctx, h, run)
+	e.flushLogs()
 	e.update(func(t *v1.Task) {
 		t.FinishedAt = timestamppb.Now()
 		t.Progress.Done = h.done.Load()
@@ -430,22 +439,48 @@ func (h *Handle) Row(key string, done, total uint64, message string) {
 	}, false)
 }
 
-// Appends a log line, stores it, and notifies watchers
+// Appends a log line, queues it for the store, and notifies watchers
 func (h *Handle) Logf(format string, args ...any) {
 	line := launch.Clean(fmt.Sprintf(format, args...))
-	h.e.mu.Lock()
-	h.e.logs = append(h.e.logs, line)
-	if len(h.e.logs) > logMax {
-		drop := len(h.e.logs) - logMax
-		h.e.logs = h.e.logs[drop:]
-		h.e.dropped += drop
+	e := h.e
+	e.mu.Lock()
+	e.logs = append(e.logs, line)
+	if len(e.logs) > logMax {
+		drop := len(e.logs) - logMax
+		e.logs = e.logs[drop:]
+		e.dropped += drop
 	}
-	position := h.e.dropped + len(h.e.logs) - 1
-	id := h.e.task.Id
-	h.e.notifyLocked(false)
-	h.e.mu.Unlock()
-	if err := h.m.store.AppendTaskLog(context.Background(), id, position, line); err != nil {
-		h.m.log.Warn("task log write failed", "id", id, "err", err)
+	if len(e.pending) == 0 {
+		e.first = e.dropped + len(e.logs) - 1
+	}
+	e.pending = append(e.pending, line)
+	// A line after the task ended is stored at once, the task may already have left memory
+	now := len(e.pending) >= logBatch || terminal(e.task.GetState())
+	if !now && e.logTimer == nil {
+		e.logTimer = time.AfterFunc(logFlush, e.flushLogs)
+	}
+	e.notifyLocked(false)
+	e.mu.Unlock()
+	if now {
+		e.flushLogs()
+	}
+}
+
+// Stores the lines waiting in one write
+func (e *entry) flushLogs() {
+	e.mu.Lock()
+	if e.logTimer != nil {
+		e.logTimer.Stop()
+		e.logTimer = nil
+	}
+	lines, first, id := e.pending, e.first, e.task.Id
+	e.pending = nil
+	e.mu.Unlock()
+	if len(lines) == 0 {
+		return
+	}
+	if err := e.m.store.AppendTaskLogs(context.Background(), id, first, lines); err != nil {
+		e.m.log.Warn("task log write failed", "id", id, "err", err)
 	}
 }
 

@@ -3,10 +3,12 @@ package perf
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/nickheyer/nebu/internal/db"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -16,6 +18,9 @@ import (
 
 // Exponential weight of a fresh sample
 const smoothing = 0.3
+
+// How long changed rows wait for more samples before they are written
+const flushDelay = 2 * time.Second
 
 // Where a number that no sample taught came from
 const shippedDefault = "shipped default"
@@ -105,8 +110,14 @@ type Table struct {
 	// A person's profiles, over the shipped table
 	custom []*v1.DeviceProfile
 	ratios map[string]*v1.FormationRatio
-	// Called after every learned number changes, so the node record carries it
+	// Rows and ratios changed since the last write, and the timer that writes them
+	dirtyRows   map[string]bool
+	dirtyRatios map[string]bool
+	flushAt     *time.Timer
+	// Called after learned numbers are written, so the node record carries them
 	OnChange func()
+	// Where failed writes are reported, the default logger when nil
+	Log *slog.Logger
 }
 
 // Tells the listener a number changed
@@ -118,7 +129,7 @@ func (t *Table) changed() {
 
 // Loads every learned number and profile from the store
 func Open(ctx context.Context, store *db.DB) (*Table, error) {
-	t := &Table{store: store, rows: map[string]*db.ThroughputRow{}, ratios: map[string]*v1.FormationRatio{}}
+	t := &Table{store: store, rows: map[string]*db.ThroughputRow{}, ratios: map[string]*v1.FormationRatio{}, dirtyRows: map[string]bool{}, dirtyRatios: map[string]bool{}}
 	rows, err := store.ListThroughput(ctx)
 	if err != nil {
 		return nil, err
@@ -325,15 +336,65 @@ func (t *Table) row(deviceID string) *db.ThroughputRow {
 	return row
 }
 
+// Marks a device row or ratio changed and arms the write, with the table lock held
+func (t *Table) touchLocked(dirty map[string]bool, key string) {
+	dirty[key] = true
+	if t.flushAt == nil {
+		t.flushAt = time.AfterFunc(flushDelay, t.Flush)
+	}
+}
+
+// Writes every changed row and ratio now, then tells the listener
+func (t *Table) Flush() {
+	t.mu.Lock()
+	if t.flushAt != nil {
+		t.flushAt.Stop()
+		t.flushAt = nil
+	}
+	rows := make([]*db.ThroughputRow, 0, len(t.dirtyRows))
+	for id := range t.dirtyRows {
+		r := t.rows[id]
+		rows = append(rows, &db.ThroughputRow{Throughput: proto.Clone(r.Throughput).(*v1.Throughput), AcceptanceSamples: r.AcceptanceSamples, SumX: r.SumX, SumY: r.SumY, SumXY: r.SumXY, SumXX: r.SumXX, Points: r.Points})
+	}
+	ratios := make([]*v1.FormationRatio, 0, len(t.dirtyRatios))
+	for key := range t.dirtyRatios {
+		ratios = append(ratios, proto.Clone(t.ratios[key]).(*v1.FormationRatio))
+	}
+	clear(t.dirtyRows)
+	clear(t.dirtyRatios)
+	t.mu.Unlock()
+	if len(rows) == 0 && len(ratios) == 0 {
+		return
+	}
+	ctx := context.Background()
+	for _, r := range rows {
+		if err := t.store.PutThroughput(ctx, r); err != nil {
+			t.logger().Warn("throughput write failed", "device", r.Throughput.GetDeviceId(), "err", err)
+		}
+	}
+	for _, r := range ratios {
+		if err := t.store.PutRatio(ctx, r); err != nil {
+			t.logger().Warn("ratio write failed", "shape", r.GetShape(), "runtime", r.GetRuntimeId(), "err", err)
+		}
+	}
+	t.changed()
+}
+
+func (t *Table) logger() *slog.Logger {
+	if t.Log != nil {
+		return t.Log
+	}
+	return slog.Default()
+}
+
 // Learns streaming bandwidth from decode, compute from prefill, and the fixed cost from the
 // intercept of time per token against bytes per token once it has its samples
-func (t *Table) Record(ctx context.Context, s Sample) error {
+func (t *Table) Record(s Sample) {
 	decode := s.Decode && s.TimePerToken > 0 && s.BytesPerToken > 0
 	prefill := s.Prefill && s.TimeToFirst > 0 && s.Parameters > 0 && s.PromptTokens > 0
 	if !decode && !prefill {
-		return nil
+		return
 	}
-	defer t.changed()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	row := t.row(s.DeviceID)
@@ -358,15 +419,14 @@ func (t *Table) Record(ctx context.Context, s Sample) error {
 	}
 	th.Samples++
 	th.UpdatedAt = timestamppb.Now()
-	return t.store.PutThroughput(ctx, row)
+	t.touchLocked(t.dirtyRows, s.DeviceID)
 }
 
 // Learns draft acceptance from a request's speculative counters
-func (t *Table) RecordAcceptance(ctx context.Context, deviceID string, offered, accepted uint32) error {
+func (t *Table) RecordAcceptance(deviceID string, offered, accepted uint32) {
 	if offered == 0 {
-		return nil
+		return
 	}
-	defer t.changed()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	row := t.row(deviceID)
@@ -375,15 +435,15 @@ func (t *Table) RecordAcceptance(ctx context.Context, deviceID string, offered, 
 	row.AcceptanceSamples++
 	row.Throughput.AcceptanceSamples = row.AcceptanceSamples
 	row.Throughput.UpdatedAt = timestamppb.Now()
-	return t.store.PutThroughput(ctx, row)
+	t.touchLocked(t.dirtyRows, deviceID)
 }
 
 // Learns a disk's throughput from a relay's saved cache moving through it
-func (t *Table) RecordDisk(ctx context.Context, bytes uint64, seconds float64) error {
+func (t *Table) RecordDisk(bytes uint64, seconds float64) {
 	if bytes == 0 || seconds <= 0 {
-		return nil
+		return
 	}
-	return t.Record(ctx, Sample{DeviceID: DiskDevice, BytesPerToken: float64(bytes), TimePerToken: seconds, Decode: true})
+	t.Record(Sample{DeviceID: DiskDevice, BytesPerToken: float64(bytes), TimePerToken: seconds, Decode: true})
 }
 
 // The intercept of time per token against bytes per token, the cost a pass pays with nothing to read
@@ -420,13 +480,12 @@ func (t *Table) Ratio(shape v1.Shape, runtime string, class v1.LinkClass) (ttft,
 }
 
 // Learns how far the model's prediction was from a measured request on a formation
-func (t *Table) RecordRatio(ctx context.Context, shape v1.Shape, runtime string, class v1.LinkClass, predictedTTFT, measuredTTFT, predictedTPT, measuredTPT float64) error {
+func (t *Table) RecordRatio(shape v1.Shape, runtime string, class v1.LinkClass, predictedTTFT, measuredTTFT, predictedTPT, measuredTPT float64) {
 	ttft := predictedTTFT > 0 && measuredTTFT > 0
 	tpt := predictedTPT > 0 && measuredTPT > 0
 	if !ttft && !tpt {
-		return nil
+		return
 	}
-	defer t.changed()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	key := ratioKey(shape, runtime, class)
@@ -444,7 +503,7 @@ func (t *Table) RecordRatio(ctx context.Context, shape v1.Shape, runtime string,
 	}
 	r.Samples++
 	r.UpdatedAt = timestamppb.Now()
-	return t.store.PutRatio(ctx, r)
+	t.touchLocked(t.dirtyRatios, key)
 }
 
 // Every ratio learned

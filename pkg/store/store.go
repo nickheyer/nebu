@@ -15,6 +15,7 @@ import (
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -39,9 +40,13 @@ var (
 
 // Store rooted at one directory
 type Store struct {
-	root  string
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	root string
+	mu   sync.Mutex
+	// Key locks held or waited for, each gone again once its last holder lets go
+	locks map[string]*keyLock
+	// Every manifest by key, read from disk once and kept current by each write and removal
+	index   map[string]*v1.StoredModel
+	indexMu sync.Mutex
 	// Pulls hold a shared lock until their manifests exist. Sweeps hold it exclusively.
 	sweep sync.RWMutex
 	// Reserved bytes for active pulls, counted against the cap.
@@ -66,7 +71,7 @@ func Open(root string) (*Store, error) {
 			return nil, err
 		}
 	}
-	return &Store{root: abs, locks: map[string]*sync.Mutex{}}, nil
+	return &Store{root: abs, locks: map[string]*keyLock{}}, nil
 }
 
 // Returns the store root
@@ -142,17 +147,32 @@ func (s *Store) RemoveBlob(digest string) error {
 	return err
 }
 
-// Serializes work on a key and returns the unlock
+// A key's lock with the count of goroutines holding or waiting for it
+type keyLock struct {
+	sync.Mutex
+	holders int
+}
+
+// Serializes work on a key and returns the unlock, the key forgotten once nobody holds it
 func (s *Store) Lock(key string) func() {
 	s.mu.Lock()
-	m, ok := s.locks[key]
+	l, ok := s.locks[key]
 	if !ok {
-		m = &sync.Mutex{}
-		s.locks[key] = m
+		l = &keyLock{}
+		s.locks[key] = l
 	}
+	l.holders++
 	s.mu.Unlock()
-	m.Lock()
-	return m.Unlock
+	l.Lock()
+	return func() {
+		l.Unlock()
+		s.mu.Lock()
+		l.holders--
+		if l.holders == 0 {
+			delete(s.locks, key)
+		}
+		s.mu.Unlock()
+	}
 }
 
 // Blocks sweeps until the pull writes its manifest. Returns the release function.
@@ -200,32 +220,57 @@ func (s *Store) WriteManifest(m *v1.StoredModel) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	s.indexMu.Lock()
+	if s.index != nil {
+		s.index[Key(m.GetSourceId(), m.GetRepo(), m.GetGroup())] = proto.Clone(m).(*v1.StoredModel)
+	}
+	s.indexMu.Unlock()
+	return nil
 }
 
 // Reads one manifest
 func (s *Store) ReadManifest(source, repo, group string) (*v1.StoredModel, error) {
-	path, err := s.manifestPath(source, repo, group)
-	if err != nil {
+	if _, err := s.manifestPath(source, repo, group); err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	if err := s.loadLocked(); err != nil {
+		return nil, err
+	}
+	m, ok := s.index[Key(source, repo, group)]
+	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNotStored, Key(source, repo, group))
 	}
-	if err != nil {
-		return nil, err
-	}
-	m := &v1.StoredModel{}
-	if err := protojson.Unmarshal(data, m); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	return m, nil
+	return proto.Clone(m).(*v1.StoredModel), nil
 }
 
 // Lists every manifest sorted by key
 func (s *Store) ListManifests() ([]*v1.StoredModel, error) {
-	var out []*v1.StoredModel
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	if err := s.loadLocked(); err != nil {
+		return nil, err
+	}
+	out := make([]*v1.StoredModel, 0, len(s.index))
+	for _, m := range s.index {
+		out = append(out, proto.Clone(m).(*v1.StoredModel))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return Key(out[i].GetSourceId(), out[i].GetRepo(), out[i].GetGroup()) < Key(out[j].GetSourceId(), out[j].GetRepo(), out[j].GetGroup())
+	})
+	return out, nil
+}
+
+// Reads every manifest on disk into the index unless it is loaded, with the index lock held
+func (s *Store) loadLocked() error {
+	if s.index != nil {
+		return nil
+	}
+	index := map[string]*v1.StoredModel{}
 	root := filepath.Join(s.root, manifestsDir)
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, manifestExt) {
@@ -239,16 +284,14 @@ func (s *Store) ListManifests() ([]*v1.StoredModel, error) {
 		if err := protojson.Unmarshal(data, m); err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
-		out = append(out, m)
+		index[Key(m.GetSourceId(), m.GetRepo(), m.GetGroup())] = m
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return Key(out[i].GetSourceId(), out[i].GetRepo(), out[i].GetGroup()) < Key(out[j].GetSourceId(), out[j].GetRepo(), out[j].GetGroup())
-	})
-	return out, nil
+	s.index = index
+	return nil
 }
 
 // Marks a model used now, so eviction takes it last
@@ -410,12 +453,13 @@ func (s *Store) dropOrphans(m *v1.StoredModel) (uint64, error) {
 
 // Names the blob files every manifest points at
 func (s *Store) referenced() (map[string]bool, error) {
-	manifests, err := s.ListManifests()
-	if err != nil {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	if err := s.loadLocked(); err != nil {
 		return nil, err
 	}
 	out := map[string]bool{}
-	for _, m := range manifests {
+	for _, m := range s.index {
 		for _, a := range m.GetArtifacts() {
 			out[filepath.Base(s.BlobPath(a.GetDigest()))] = true
 		}
@@ -451,6 +495,9 @@ func (s *Store) RemoveManifest(source, repo, group string) (*v1.StoredModel, err
 	}
 	s.pruneEmpty(filepath.Dir(path), filepath.Join(s.root, manifestsDir))
 	s.pruneEmpty(filepath.Dir(dir), filepath.Join(s.root, modelsDir))
+	s.indexMu.Lock()
+	delete(s.index, Key(source, repo, group))
+	s.indexMu.Unlock()
 	return m, nil
 }
 
@@ -638,11 +685,14 @@ func (s *Store) collectCaches() (uint64, error) {
 
 // Counts models, blobs, and partials
 func (s *Store) Status() (*v1.StoreStatus, error) {
-	manifests, err := s.ListManifests()
+	s.indexMu.Lock()
+	err := s.loadLocked()
+	models := len(s.index)
+	s.indexMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	st := &v1.StoreStatus{Path: s.root, Models: uint64(len(manifests)), MaxBytes: s.MaxBytes}
+	st := &v1.StoreStatus{Path: s.root, Models: uint64(models), MaxBytes: s.MaxBytes}
 	entries, err := os.ReadDir(filepath.Join(s.root, blobsDir))
 	if err != nil {
 		return nil, err

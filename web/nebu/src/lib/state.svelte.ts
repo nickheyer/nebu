@@ -125,7 +125,7 @@ function settle() {
 let answersHeld = 0;
 let countsHeld = 0;
 
-// Drop the oldest trace of this kind at capacity.
+// Drop the oldest traces of this kind at capacity, the map keeping start order
 function keepTrace(t: Trace) {
   const counting = t.kind === TraceKind.COUNT;
   if (!live.traces.has(t.id)) {
@@ -134,12 +134,15 @@ function keepTrace(t: Trace) {
   }
   live.traces.set(t.id, t);
   const limit = counting ? countLimit : traceLimit;
-  const held = counting ? countsHeld : answersHeld;
-  if (held <= limit) return;
-  const oldest = [...live.traces.values()].filter((x) => (x.kind === TraceKind.COUNT) === counting).sort((a, b) => Number((a.startedAt?.seconds ?? 0n) - (b.startedAt?.seconds ?? 0n)));
-  for (const x of oldest.slice(0, held - limit)) live.traces.delete(x.id);
-  if (counting) countsHeld = limit;
-  else answersHeld = limit;
+  let held = counting ? countsHeld : answersHeld;
+  for (const x of live.traces.values()) {
+    if (held <= limit) break;
+    if ((x.kind === TraceKind.COUNT) !== counting) continue;
+    live.traces.delete(x.id);
+    held--;
+  }
+  if (counting) countsHeld = held;
+  else answersHeld = held;
 }
 
 function sameActivity(a: BotActivity, b: BotActivity): boolean {
@@ -246,7 +249,8 @@ async function loadTraces(signal: AbortSignal) {
     const r = await api.gateway.listTraces({ limit: traceLimit }, { signal });
     live.traces.clear();
     answersHeld = countsHeld = 0;
-    for (const t of r.traces) keepTrace(t);
+    // The list comes newest first, the map keeps start order
+    for (let i = r.traces.length - 1; i >= 0; i--) keepTrace(r.traces[i]);
   } catch (err) {
     if (!signal.aborted) live.error = message(err);
   }

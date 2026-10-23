@@ -495,7 +495,7 @@ func (g *Gateway) native(ctx context.Context, method string, target *url.URL, pa
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := g.transport(policy.GetUpstreamTimeoutMs()).RoundTrip(req)
+	resp, err := g.transport(policy).RoundTrip(req)
 	if err != nil {
 		return 0, nil, err
 	}

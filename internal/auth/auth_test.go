@@ -29,7 +29,7 @@ func openUsers(t *testing.T) (*Users, *Sessions) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	users := NewUsers(store, quiet())
+	users := NewUsers(store, quiet(), NewTokens(store, quiet()))
 	if err := users.Load(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestUsersLifecycleAndSessionRevocation(t *testing.T) {
 		t.Fatalf("list %v", list)
 	}
 	// A fresh Users over the same database sees the accounts
-	reloaded := NewUsers(users.db, quiet())
+	reloaded := NewUsers(users.db, quiet(), users.tokens)
 	if err := reloaded.Load(ctx); err != nil || reloaded.Count() != 1 {
 		t.Fatalf("reload %v %d", err, reloaded.Count())
 	}
@@ -386,7 +386,7 @@ func TestTokenFile(t *testing.T) {
 
 func TestGuardAndUserTokens(t *testing.T) {
 	users, sessions := openUsers(t)
-	tokens := NewTokens(users.db, quiet())
+	tokens := users.tokens
 	guard := NewGuard("daemon-token", sessions, tokens)
 	ctx := context.Background()
 	ann, err := users.Create(ctx, "ann", "ann-password")

@@ -105,8 +105,10 @@ func (r *Recorder) ringOf(t *v1.Trace) *ring {
 	return &r.main
 }
 
+// Keeps one copy of the trace with its bodies, the event carrying a copy without them
 func (r *Recorder) put(t *v1.Trace, action v1.EventAction) {
 	snapshot := proto.Clone(t).(*v1.Trace)
+	brief := summary(snapshot)
 	r.mu.Lock()
 	rg := r.ringOf(snapshot)
 	if old, known := r.byID[snapshot.GetId()]; known {
@@ -124,7 +126,7 @@ func (r *Recorder) put(t *v1.Trace, action v1.EventAction) {
 		r.forget(r.main.evict())
 	}
 	r.mu.Unlock()
-	r.events.Publish(v1.EventKind_EVENT_KIND_TRACE, action, snapshot.GetId(), summary(snapshot))
+	r.events.Publish(v1.EventKind_EVENT_KIND_TRACE, action, brief.GetId(), brief)
 }
 
 // Drops an evicted trace from the index and the bytes held
@@ -188,10 +190,12 @@ func (r *Recorder) Get(id string) (*v1.Trace, bool) {
 	return proto.Clone(t).(*v1.Trace), true
 }
 
-// Copies trace metadata without bodies for lists and events
+// Copies trace metadata without bodies for lists and events, the bodies set aside while it copies
 func summary(t *v1.Trace) *v1.Trace {
+	request, upstream, response := t.Request, t.UpstreamRequest, t.Response
+	t.Request, t.UpstreamRequest, t.Response = "", "", ""
 	out := proto.Clone(t).(*v1.Trace)
-	out.Request, out.UpstreamRequest, out.Response = "", "", ""
+	t.Request, t.UpstreamRequest, t.Response = request, upstream, response
 	return out
 }
 

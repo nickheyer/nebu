@@ -26,7 +26,11 @@ var migrationFiles embed.FS
 //go:embed schema.sql
 var desiredSchema string
 
-const operator = "nebu"
+const (
+	operator = "nebu"
+	// Connections reads share beside the one writer, each on its own WAL snapshot
+	readConns = 4
+)
 
 // Returned when a record is not in the store
 var ErrNotFound = errors.New("not found")
@@ -36,8 +40,11 @@ func IsNotFound(err error) bool { return errors.Is(err, ErrNotFound) }
 
 // Open store
 type DB struct {
-	sql  *sql.DB
-	path string
+	// The writer, one connection so writes queue instead of failing busy
+	sql *sql.DB
+	// The readers, a pool that never waits behind the writer
+	reads *sql.DB
+	path  string
 	// Backup path for a pre-Atlas database, or empty.
 	SetAside string
 	// Differences between the live schema and schema.sql.
@@ -63,11 +70,19 @@ func Open(path string) (*DB, error) {
 		sqldb.Close()
 		return nil, err
 	}
+	reads, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		sqldb.Close()
+		return nil, err
+	}
+	reads.SetMaxOpenConns(readConns)
+	reads.SetMaxIdleConns(readConns)
+	d.reads = reads
 	return d, nil
 }
 
-// Closes the database
-func (d *DB) Close() error { return d.sql.Close() }
+// Closes the readers and the writer
+func (d *DB) Close() error { return errors.Join(d.reads.Close(), d.sql.Close()) }
 
 // Backs up databases from the old migration runner and returns the backup path.
 // Those migrations are unavailable, so startup creates a new database.
