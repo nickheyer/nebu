@@ -394,7 +394,7 @@ func TestWalkthroughDraft(t *testing.T) {
 	if c := find(plan, v1.Shape_SHAPE_RELAY); c == nil || c.GetVerdict() != v1.FitVerdict_FIT_VERDICT_NO || c.GetReason() == "" {
 		t.Fatalf("relay must be rejected with a reason: %v", c)
 	}
-	if plan.GetDraftTokens() != 5 || math.Abs(plan.GetAcceptance()-0.7) > 1e-9 {
+	if plan.GetDraftTokens() != 3 || math.Abs(plan.GetAcceptance()-0.7) > 1e-9 {
 		t.Fatalf("draft tokens %d acceptance %.2f", plan.GetDraftTokens(), plan.GetAcceptance())
 	}
 	if plan.GetCandidates()[0].GetShape() != v1.Shape_SHAPE_DRAFT || solo.GetScore() <= plan.GetCandidates()[0].GetScore() {
@@ -406,8 +406,8 @@ func TestWalkthroughDraft(t *testing.T) {
 	if plan.GetShape() != v1.Shape_SHAPE_DRAFT || math.IsNaN(plan.GetDecodeSecondsPerToken()) || plan.GetDecodeSecondsPerToken() <= 0 {
 		t.Fatalf("acceptance one prices the limit: %v %s", plan.GetShape(), plan.GetDetail())
 	}
-	if !strings.Contains(plan.GetDetail(), "6.0 tokens per round") {
-		t.Fatalf("every token accepted yields six per round: %s", plan.GetDetail())
+	if !strings.Contains(plan.GetDetail(), "4.0 tokens per round") {
+		t.Fatalf("every token accepted yields four per round at llama.cpp's three draft tokens: %s", plan.GetDetail())
 	}
 }
 
@@ -650,6 +650,7 @@ func TestChainWithLocalDraft(t *testing.T) {
 	req := request(dense70B())
 	req.Shape = v1.Shape_SHAPE_CHAIN
 	req.Draft, req.DraftFamily, req.DraftRepo = draft, archs.Default{}, "hf/draft"
+	req.Params["draft_model"] = "/drafts/draft-Q4.gguf"
 	plan := mustPlan(t, req, m)
 	var plain, drafted *v1.Candidate
 	for _, c := range all(plan, v1.Shape_SHAPE_CHAIN) {
@@ -665,19 +666,22 @@ func TestChainWithLocalDraft(t *testing.T) {
 	if plain == nil || drafted == nil {
 		t.Fatalf("the table prices the chain with and without the draft: %v", plan.GetCandidates())
 	}
-	if !strings.Contains(drafted.GetReason(), "draft beside the head") || drafted.GetDraftTokens() != 5 {
+	if !strings.Contains(drafted.GetReason(), "draft beside the head") || drafted.GetDraftTokens() != 3 {
 		t.Fatalf("the drafted chain says so: %v", drafted)
 	}
 	if drafted.GetDecodeSecondsPerToken() >= plain.GetDecodeSecondsPerToken() {
 		t.Fatalf("the draft divides the chain's step by the tokens per round: %v against %v", drafted.GetDecodeSecondsPerToken(), plain.GetDecodeSecondsPerToken())
 	}
-	if plan.GetDraftTokens() != 5 || plan.GetAcceptance() != 0.7 || plan.GetShape() != v1.Shape_SHAPE_CHAIN {
+	if plan.GetDraftTokens() != 3 || plan.GetAcceptance() != 0.7 || plan.GetShape() != v1.Shape_SHAPE_CHAIN {
 		t.Fatalf("the drafted chain is the plan: %v", plan.GetDetail())
 	}
-	// The head's memory carries the draft beside its layers.
+	// The head's memory carries the draft beside its layers, and the method a plain draft model drafts with
 	for _, s := range plan.GetSeats() {
 		if s.GetNodeId() == plan.GetHead() && s.GetMemory().GetWeightsBytes() <= 20*gib {
 			t.Fatalf("the head's plan holds the draft too: %v", s.GetMemory().GetWeightsBytes())
+		}
+		if s.GetNodeId() == plan.GetHead() && s.GetMemory().GetParams()["spec_type"] != "draft-simple" {
+			t.Fatalf("the head drafts with draft-simple: %v", s.GetMemory().GetParams()["spec_type"])
 		}
 	}
 	// vLLM does not compose speculative settings with pipeline parallel, and its chain says so.

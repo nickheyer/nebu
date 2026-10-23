@@ -31,8 +31,6 @@ const (
 	fabricReduction = 45e-6
 	// Prompt lengths a relay's break even is searched up to
 	relayMaxPrompt = 131072
-	// Draft tokens per round before the head's parameter says otherwise
-	defaultDraftTokens = 5
 	// Seconds a replicas route keeps a conversation on the seat whose cache holds its prefix
 	AffinityWindowSeconds = 600
 	// The param group speculative settings live in on every runtime

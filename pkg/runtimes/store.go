@@ -116,6 +116,15 @@ func PartFile(m *v1.StoredModel, p *v1.Param) (string, error) {
 			return f, nil
 		}
 		return "", fmt.Errorf("%w: %s holds no projector file", ErrParam, name)
+	case "draft":
+		switch files := roleFiles(m, v1.ArtifactRole_ARTIFACT_ROLE_DRAFT); {
+		case len(files) == 1:
+			return files[0], nil
+		case len(files) > 1:
+			return "", fmt.Errorf("%w: %s holds %d draft files, %s. Set the path of one", ErrParam, name, len(files), strings.Join(files, ", "))
+		case kind != v1.ModelKind_MODEL_KIND_LANGUAGE:
+			return "", fmt.Errorf("%w: %s is %s, not a draft model", ErrParam, name, what(m))
+		}
 	case "checkpoint":
 		if kind != v1.ModelKind_MODEL_KIND_LANGUAGE || m.GetFormatId() != "safetensors" || m.GetPath() == "" {
 			return "", fmt.Errorf("%w: %s is %s, not a transformers checkpoint", ErrParam, name, what(m))
@@ -155,6 +164,8 @@ func checkStorePath(value string, p *v1.Param, models []*v1.StoredModel) error {
 		part = "tokenizer"
 	case v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR:
 		part = "projector"
+	case v1.ArtifactRole_ARTIFACT_ROLE_DRAFT:
+		part = "draft"
 	case v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS, v1.ArtifactRole_ARTIFACT_ROLE_INDEX:
 		base := filepath.Base(value)
 		if _, i, n, ok := formats.Shard(strings.TrimSuffix(base, filepath.Ext(base))); a.GetRole() == v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS && ok && n > 1 {
@@ -214,6 +225,8 @@ func accepts(p *v1.Param, part string) bool {
 		return part == blueprint.SlotDenoiser
 	case picks == "llm":
 		return part == blueprint.SlotTextEncoderLLM
+	case picks == "draft":
+		return part == "llm"
 	}
 	return false
 }
@@ -249,6 +262,8 @@ func picksWord(picks string) string {
 		return "a language model"
 	case "projector":
 		return "a vision projector"
+	case "draft":
+		return "a draft model or MTP head file"
 	case "tokenizer":
 		return "a tokenizer"
 	case "checkpoint":
@@ -260,6 +275,8 @@ func picksWord(picks string) string {
 // Words for a stored file's part, a slot or a component kind.
 func partWord(part string) string {
 	switch {
+	case part == "draft":
+		return "a draft or MTP head file"
 	case blueprint.IsSlot(part):
 		return "the " + strings.ToLower(blueprint.Label(part))
 	case part == "diffusion":
@@ -291,6 +308,17 @@ func within(name string, weights []string, index string, dir bool) (string, erro
 		}
 	}
 	return d, nil
+}
+
+// Every stored file of a role, in stored order
+func roleFiles(m *v1.StoredModel, role v1.ArtifactRole) []string {
+	var out []string
+	for _, sa := range m.GetArtifacts() {
+		if sa.GetArtifact().GetRole() == role {
+			out = append(out, sa.GetPath())
+		}
+	}
+	return out
 }
 
 // Every stored tokenizer.json.

@@ -10,8 +10,11 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/calibrate"
@@ -65,6 +68,8 @@ type Inspector struct {
 	// Reports installed runtimes. Nil treats all runtimes as installed.
 	Installed func(runtimeID string) bool
 	Log       *slog.Logger
+	// Descriptors read from local files, keyed by path, size, and modification time
+	headers sync.Map
 }
 
 func (i *Inspector) installed(rt runtimes.Runtime) bool {
@@ -256,7 +261,7 @@ func (i *Inspector) Describe(ctx context.Context, src sources.Source, model *v1.
 
 // Builds planning input from overrides, available or total memory, and calibration. Path
 // parameters naming stored groups resolve to the files those groups hold.
-func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (estimate.Input, error) {
+func (i *Inspector) input(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (estimate.Input, error) {
 	if rt.Policy() == nil {
 		return estimate.Input{}, fmt.Errorf("runtime %s has no estimate policy", rt.ID())
 	}
@@ -272,7 +277,11 @@ func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.Hos
 	if err != nil {
 		return estimate.Input{}, err
 	}
-	return estimate.Input{
+	draft, err := i.draftOf(ctx, rt, params, models, self)
+	if err != nil {
+		return estimate.Input{}, err
+	}
+	in := estimate.Input{
 		Descriptor:    d,
 		Family:        i.Builder.Family(d),
 		Host:          profile,
@@ -282,12 +291,103 @@ func (i *Inspector) input(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.Hos
 		Placement:     placement,
 		Companions:    companions,
 		Repo:          repo,
-	}, nil
+	}
+	if draft != nil {
+		in.Draft, in.DraftFamily = draft, i.Builder.Family(draft)
+	}
+	return in, nil
+}
+
+// The draft model the runtime's draft picking param names, from its stored descriptor or its own header
+func (i *Inspector) draftOf(ctx context.Context, rt runtimes.Runtime, params estimate.Params, models []*v1.StoredModel, self *v1.StoredModel) (*v1.Descriptor, error) {
+	var path string
+	for _, p := range rt.Params() {
+		if p.GetPicks() == "draft" {
+			path = strings.TrimSpace(params.Str(p.GetName()))
+		}
+	}
+	if path == "" || strings.EqualFold(path, runtimes.None) {
+		return nil, nil
+	}
+	for _, m := range models {
+		for _, sa := range m.GetArtifacts() {
+			role := sa.GetArtifact().GetRole()
+			if filepath.Clean(sa.GetPath()) != filepath.Clean(path) || (role != v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS && role != v1.ArtifactRole_ARTIFACT_ROLE_INDEX) {
+				continue
+			}
+			switch {
+			case m == self:
+				return nil, fmt.Errorf("%w: draft model %s is the model itself", runtimes.ErrParam, path)
+			case !slices.Contains(rt.Formats(), m.GetFormatId()):
+				return nil, fmt.Errorf("%w: draft model %s %s is %s, and %s serves %s", runtimes.ErrParam, m.GetRepo(), m.GetGroup(), m.GetFormatId(), rt.ID(), strings.Join(rt.Formats(), ", "))
+			case m.GetDescriptor_() == nil:
+				return nil, fmt.Errorf("draft model %s %s has no descriptor, pull it again", m.GetRepo(), m.GetGroup())
+			}
+			return m.GetDescriptor_(), nil
+		}
+	}
+	d, err := i.header(ctx, rt, path)
+	if err != nil {
+		return nil, fmt.Errorf("draft model %s: %w", path, err)
+	}
+	return d, nil
+}
+
+// Describes a local file and its sibling shards from their headers, in a format the runtime serves
+func (i *Inspector) header(ctx context.Context, rt runtimes.Runtime, path string) (*v1.Descriptor, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	key := fmt.Sprintf("%s\x00%d\x00%d", path, info.Size(), info.ModTime().UnixNano())
+	if d, ok := i.headers.Load(key); ok {
+		return d.(*v1.Descriptor), nil
+	}
+	for _, id := range rt.Formats() {
+		f := i.Formats.Get(id)
+		if f == nil {
+			continue
+		}
+		if _, ok := f.Classify(filepath.Base(path)); !ok {
+			continue
+		}
+		g := &formats.Group{FormatID: id, Name: filepath.Base(path), Files: map[v1.ArtifactRole][]*v1.Artifact{}}
+		for _, shard := range shards(path) {
+			g.Weights = append(g.Weights, &v1.Artifact{Path: shard, FormatId: id, Role: v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS})
+		}
+		open := func(_ context.Context, a *v1.Artifact) (sources.Blob, error) { return sources.OpenFile(a.GetPath()) }
+		raw, err := f.Read(ctx, open, g)
+		if err != nil {
+			return nil, err
+		}
+		d, err := i.Builder.Build(raw)
+		if err != nil {
+			return nil, err
+		}
+		i.headers.Store(key, d)
+		return d, nil
+	}
+	return nil, fmt.Errorf("%s reads none of %s from it", rt.ID(), strings.Join(rt.Formats(), ", "))
+}
+
+// Every shard of a split file in order, the file alone when it is not one
+func shards(path string) []string {
+	dir, base := filepath.Split(path)
+	ext := filepath.Ext(base)
+	stem, _, count, ok := formats.Shard(strings.TrimSuffix(base, ext))
+	if !ok || count <= 1 {
+		return []string{path}
+	}
+	out := make([]string, 0, count)
+	for n := uint32(1); n <= count; n++ {
+		out = append(out, filepath.Join(dir, fmt.Sprintf("%s-%05d-of-%05d%s", stem, n, count, ext)))
+	}
+	return out
 }
 
 // Estimates memory fit without rejecting unsupported runtime params.
-func (i *Inspector) fit(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (*v1.MemoryPlan, error) {
-	in, err := i.input(rt, d, profile, overrides, free, placement, repo, self, companions)
+func (i *Inspector) fit(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (*v1.MemoryPlan, error) {
+	in, err := i.input(ctx, rt, d, profile, overrides, free, placement, repo, self, companions)
 	if err != nil {
 		return nil, err
 	}
@@ -296,8 +396,8 @@ func (i *Inspector) fit(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostP
 }
 
 // Plans memory use and validates runtime params
-func (i *Inspector) Plan(rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel, force bool) (*v1.MemoryPlan, error) {
-	in, err := i.input(rt, d, profile, overrides, free, placement, repo, self, companions)
+func (i *Inspector) Plan(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel, force bool) (*v1.MemoryPlan, error) {
+	in, err := i.input(ctx, rt, d, profile, overrides, free, placement, repo, self, companions)
 	if err != nil {
 		return nil, err
 	}
@@ -402,10 +502,10 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 				overrides := withContext(layered, rt.Policy().ContextParam, n)
 				// Report fit against both available and total memory.
 				self := i.stored(req.GetSourceId(), req.GetRepo(), d.GetGroup())
-				plan, err := i.fit(rt, d, profile, overrides, false, c.Placement, req.GetRepo(), self, companions)
+				plan, err := i.fit(ctx, rt, d, profile, overrides, false, c.Placement, req.GetRepo(), self, companions)
 				var now *v1.MemoryPlan
 				if err == nil {
-					now, err = i.fit(rt, d, profile, overrides, true, c.Placement, req.GetRepo(), self, companions)
+					now, err = i.fit(ctx, rt, d, profile, overrides, true, c.Placement, req.GetRepo(), self, companions)
 				}
 				if err != nil {
 					warn("%s", planFailure(d, rt, err))
@@ -469,7 +569,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 		return nil, err
 	}
 	// Return estimates with param errors for the form to display.
-	in, err := i.input(rt, d, profile, overrides, req.GetFree(), c.Placement, req.GetRepo(), i.stored(req.GetSourceId(), req.GetRepo(), req.GetGroup()), companions)
+	in, err := i.input(ctx, rt, d, profile, overrides, req.GetFree(), c.Placement, req.GetRepo(), i.stored(req.GetSourceId(), req.GetRepo(), req.GetGroup()), companions)
 	if err != nil {
 		return nil, err
 	}
@@ -563,19 +663,18 @@ func selectGroups(groups []*formats.Group, names []string) []*formats.Group {
 	return out
 }
 
-// Sets the context length, using auto when the planner should solve it.
+// Sets a grid row's context length, the solved row keeping a context the slot or request sets
 func withContext(params map[string]string, name string, n uint32) map[string]string {
 	out := make(map[string]string, len(params)+1)
 	for k, v := range params {
 		out[k] = v
 	}
-	if name == "" {
-		return out
-	}
-	if n == 0 {
-		out[name] = estimate.Auto
-	} else {
+	switch {
+	case name == "":
+	case n > 0:
 		out[name] = fmt.Sprint(n)
+	case strings.TrimSpace(out[name]) == "":
+		out[name] = estimate.Auto
 	}
 	return out
 }

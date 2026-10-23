@@ -1,6 +1,7 @@
 package formats_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/nickheyer/nebu/pkg/formats"
@@ -196,5 +197,29 @@ func TestDescribe(t *testing.T) {
 	}
 	if _, err := formats.New([]formats.Format{c.Get("gguf"), c.Get("gguf")}); err == nil {
 		t.Fatal("duplicate format should fail")
+	}
+}
+
+// Per layer counts survive the descriptor's map, layers without heads coming back as zero
+func TestPerLayerCountsRoundTrip(t *testing.T) {
+	if formats.PerLayer("2,2,2") != nil || formats.PerLayer("2") != nil || formats.PerLayer("2,x") != nil {
+		t.Fatal("one count for every layer, or an unreadable list, is no per layer list")
+	}
+	heads := formats.PerLayer("0, 2,0,2")
+	if !slices.Equal(heads, []float64{0, 2, 0, 2}) {
+		t.Fatalf("list %v", heads)
+	}
+	m := formats.Params{Layers: 4, HeadsKV: 2, HeadsKVLayers: heads}.Map()
+	if m["n_head_kv_layers"] != 4 || m["n_head_kv.1"] != 2 || m["n_head_kv.3"] != 2 {
+		t.Fatalf("map %v", m)
+	}
+	if _, zero := m["n_head_kv.0"]; zero {
+		t.Fatal("zeros stay out of the map")
+	}
+	if back := formats.ParamsOf(m); !slices.Equal(back.HeadsKVLayers, heads) {
+		t.Fatalf("round trip %v", back.HeadsKVLayers)
+	}
+	if formats.ParamsOf(formats.Params{Layers: 4, HeadsKV: 2}.Map()).HeadsKVLayers != nil {
+		t.Fatal("a uniform model carries no per layer list")
 	}
 }

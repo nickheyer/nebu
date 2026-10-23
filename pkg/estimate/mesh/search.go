@@ -645,13 +645,12 @@ func (pl *planner) chainWithDraft(c *candidate) *candidate {
 	return d
 }
 
-// Draft tokens per round: the resolved param, else the default
+// Draft tokens per round, the resolved param or else the runtime's own default
 func (pl *planner) draftTokens() float64 {
-	gamma := float64(pl.params.Int("draft_max"))
-	if gamma <= 0 {
-		gamma = defaultDraftTokens
+	if gamma := float64(pl.params.Int("draft_max")); gamma > 0 {
+		return gamma
 	}
-	return gamma
+	return pl.facts.DraftTokens
 }
 
 // Tokens a round of gamma draft tokens yields at an acceptance per token, gamma plus one when every
@@ -1096,14 +1095,17 @@ func (pl *planner) fitDraft(n *Node, key string, profile *v1.HostProfile) (*v1.M
 		return r.plan, r.err
 	}
 	in := estimate.Input{
-		Descriptor: pl.req.Draft,
-		Family:     pl.req.DraftFamily,
-		Host:       profile,
-		Params:     pl.fixed(),
-		Free:       pl.req.Free,
-		Placement:  pl.req.Placement,
-		Companions: pl.req.Companions,
-		Repo:       pl.req.DraftRepo,
+		Descriptor:  pl.req.Draft,
+		Family:      pl.req.DraftFamily,
+		Host:        profile,
+		Params:      pl.fixed(),
+		Free:        pl.req.Free,
+		Placement:   pl.req.Placement,
+		Companions:  pl.req.Companions,
+		Repo:        pl.req.DraftRepo,
+		Draft:       pl.req.Draft,
+		DraftFamily: pl.req.DraftFamily,
+		Part:        true,
 	}
 	if pl.req.Calibration != nil {
 		in.OverheadDelta = pl.req.Calibration(n.ID)

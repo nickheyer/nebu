@@ -179,6 +179,7 @@ func (Format) Params(raw *v1.RawModel) formats.Params {
 		RopeDim:           formats.Num(m, key("rope.dimension_count")),
 		SlidingWindow:     formats.Num(m, key("attention.sliding_window")),
 		SlidingPattern:    formats.Num(m, key("attention.sliding_window_pattern")),
+		HeadsKVLayers:     formats.PerLayer(m[key("attention.head_count_kv")]),
 	}
 }
 

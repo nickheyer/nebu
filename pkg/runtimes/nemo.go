@@ -130,7 +130,7 @@ func (NeMo) Policy() *estimate.Policy {
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_VISION, Pool: device},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_AUDIO, Pool: device},
 			// This serving mode does not load prediction heads.
-			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT, Pool: device, Loaded: func(*estimate.Scope) bool { return false }},
+			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT, Pool: device, Loaded: func(*estimate.Scope, *v1.TensorGroup) bool { return false }},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_OTHER, Pool: device},
 		},
 		// Each batched sequence keeps a full-length KV cache.

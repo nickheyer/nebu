@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,6 +185,14 @@ func TestInspectLeadsWithTheSolvedContext(t *testing.T) {
 	if free := solved.GetFree().GetPools()[0]; free.GetCapacityBytes() != 20<<30 || !solved.GetFree().GetAgainstFree() {
 		t.Fatalf("the free plan is capped at what is free: %+v", free)
 	}
+	// A context the params set is the solved row's context, never replaced by a solved one
+	resp, err = i.Inspect(context.Background(), &v1.InspectRequest{SourceId: "disk", Repo: "org/model", RuntimeIds: []string{"llamacpp"}, Params: map[string]string{"n_ctx": "1024"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set := resp.GetRows()[0]; set.GetContext() != 0 || set.GetPlan().GetParams()["n_ctx"] != "1024" || set.GetFree().GetParams()["n_ctx"] != "1024" {
+		t.Fatalf("the set context is planned %+v", set)
+	}
 	// Explicit contexts omit the automatically solved row.
 	resp, err = i.Inspect(context.Background(), &v1.InspectRequest{SourceId: "disk", Repo: "org/model", Contexts: []uint32{1024}})
 	if err != nil {
@@ -210,15 +219,83 @@ func TestInspectLeadsWithTheSolvedContext(t *testing.T) {
 	}
 }
 
+// The solved row keeps a set context and solves only an unset one, the grid rows set their own
 func TestWithContext(t *testing.T) {
 	base := map[string]string{"a": "1", "n_ctx": "512"}
-	if got := withContext(base, "n_ctx", 0); got["n_ctx"] != estimate.Auto || got["a"] != "1" || base["n_ctx"] != "512" {
-		t.Fatalf("auto %v", got)
+	if got := withContext(base, "n_ctx", 0); got["n_ctx"] != "512" || got["a"] != "1" {
+		t.Fatalf("a set context is kept %v", got)
+	}
+	for _, unset := range []map[string]string{{"a": "1"}, {"a": "1", "n_ctx": ""}, {"a": "1", "n_ctx": estimate.Auto}} {
+		if got := withContext(unset, "n_ctx", 0); got["n_ctx"] != estimate.Auto || got["a"] != "1" {
+			t.Fatalf("an unset context is solved %v", got)
+		}
 	}
 	if got := withContext(base, "n_ctx", 2048); got["n_ctx"] != strconv.Itoa(2048) {
 		t.Fatalf("named %v", got)
 	}
 	if got := withContext(base, "", 2048); got["n_ctx"] != "512" || len(got) != 2 {
 		t.Fatalf("no context param leaves the params alone %v", got)
+	}
+}
+
+// A draft path is read from its header, a stored draft from its descriptor, and the plan carries both
+func TestDraftSizedFromItsFile(t *testing.T) {
+	i := inspector(t)
+	rt, err := i.Runtimes.Get("llamacpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "draft-tiny-Q4_K_M.gguf")
+	if err := os.WriteFile(path, ggufFixture(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := &v1.Descriptor{Architecture: "llama", Family: "default", Kind: v1.ModelKind_MODEL_KIND_LANGUAGE, Params: map[string]float64{"n_layer": 2, "n_head_kv": 8, "head_dim": 128, "head_dim_v": 128, "n_embd": 4096, "n_ctx_train": 8192}}
+	for l := int32(0); l < 2; l++ {
+		target.Groups = append(target.Groups, &v1.TensorGroup{Id: "layer." + strconv.Itoa(int(l)), Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, Layer: l, Bytes: 1 << 20})
+	}
+	profile, err := i.Host.Profile(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrides := map[string]string{"n_ctx": "4096", "spec_type": "draft-simple", "draft_model": path}
+	in, err := i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Draft == nil || in.Draft.GetArchitecture() != "llama" || in.DraftFamily == nil || in.Draft.GetParams()["n_layer"] != 2 {
+		t.Fatalf("draft read from its header: %v %v", in.Draft, in.DraftFamily)
+	}
+	plan, err := rt.Policy().Plan(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fixture's two layers of 2 heads at width 16 keep 4096 f16 tokens each, beside the target's own cache
+	draftCache := uint64(4096 * 2 * 2 * 32 * 2)
+	target4096 := uint64(4096 * 2 * 8 * 256 * 2)
+	if plan.GetCacheBytes() != target4096+draftCache || plan.GetWeightsBytes() <= 2<<20 {
+		t.Fatalf("the plan carries the draft: cache %d weights %d", plan.GetCacheBytes(), plan.GetWeightsBytes())
+	}
+	// Left unset, the method is the one a plain draft model drafts with
+	unset := map[string]string{"n_ctx": "4096", "draft_model": path}
+	if plan, err = i.Plan(context.Background(), rt, target, profile, unset, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil, false); err != nil || plan.GetParams()["spec_type"] != "draft-simple" {
+		t.Fatalf("a plain draft model drafts with draft-simple: %v %v", plan.GetParams()["spec_type"], err)
+	}
+	// A stored draft uses its descriptor, the model itself or another format is refused
+	stored := &v1.StoredModel{SourceId: "disk", Repo: "org/small", Group: "Q4_K_M", FormatId: "gguf", Descriptor_: target, Artifacts: []*v1.StoredArtifact{{Path: "/store/small.gguf", Artifact: &v1.Artifact{Path: "small.gguf", Role: v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS}}}}
+	overrides["draft_model"] = "/store/small.gguf"
+	if in, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, []*v1.StoredModel{stored}); err != nil || in.Draft != target {
+		t.Fatalf("stored draft: %v %v", in.Draft, err)
+	}
+	if _, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", stored, nil); err == nil || !strings.Contains(err.Error(), "is the model itself") {
+		t.Fatalf("the model as its own draft: %v", err)
+	}
+	stored.FormatId = "safetensors"
+	if _, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, []*v1.StoredModel{stored}); err == nil || !strings.Contains(err.Error(), "llamacpp serves gguf") {
+		t.Fatalf("a draft in another format: %v", err)
+	}
+	overrides["draft_model"] = filepath.Join(dir, "gone.gguf")
+	if _, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil); err == nil || !strings.Contains(err.Error(), "gone.gguf") {
+		t.Fatalf("a missing draft: %v", err)
 	}
 }

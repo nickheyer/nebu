@@ -1,20 +1,15 @@
 <script lang="ts">
   import { DeviceKind, PoolKind, type HostProfile, type MemoryPool } from '$proto/host_pb';
-  import { instancesOnPool } from '$lib/state.svelte';
   import { Cpu, MemoryStick, Microchip } from '@lucide/svelte';
   import Meters, { type Meter } from './ui/Meters.svelte';
   import type { SizeItem } from './ui/SizeBar.svelte';
 
   let { host }: { host: HostProfile } = $props();
 
-  function items(total: bigint, free: bigint, pool?: MemoryPool): SizeItem[] {
+  // Used memory as the host reports it
+  function items(total: bigint, free: bigint): SizeItem[] {
     const used = total > free ? total - free : 0n;
-    const ours = pool ? instancesOnPool(pool.id) : 0n;
-    const others = used > ours ? used - ours : 0n;
-    const out: SizeItem[] = [];
-    if (others > 0n) out.push({ size: others, tone: 'neutral' });
-    if (ours > 0n) out.push({ label: 'instances', size: ours, tone: 'info' });
-    return out;
+    return used > 0n ? [{ size: used, tone: 'info' }] : [];
   }
 
   const meters = $derived.by((): Meter[] => {
@@ -40,14 +35,14 @@
         icon: d.kind === DeviceKind.CPU ? Cpu : Microchip,
         name: d.name || d.id,
         total,
-        items: items(total, free, pool),
+        items: items(total, free),
         facts: { id: d.id, vendor: d.vendor, ...d.facts }
       };
     });
     // Show memory pools even when no matching processor was found.
     for (const p of loose) {
       if (!users.has(p.id)) {
-        out.push({ id: p.id, icon: MemoryStick, name: p.kind === PoolKind.UNIFIED ? 'Unified memory' : 'System memory', total: p.totalBytes, items: items(p.totalBytes, p.freeBytes, p), facts: {} });
+        out.push({ id: p.id, icon: MemoryStick, name: p.kind === PoolKind.UNIFIED ? 'Unified memory' : 'System memory', total: p.totalBytes, items: items(p.totalBytes, p.freeBytes), facts: {} });
       }
     }
     return out;

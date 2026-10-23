@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/formats"
@@ -384,11 +386,11 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	p := &prepared{req: req, stored: stored, rt: rt, install: install, name: name, descriptor: descriptor, profile: profile, planned: planProfile, res: res, params: params}
 	p.companions = companions
 	if rt.Policy() != nil {
-		if p.plan, err = m.Inspector.Plan(rt, descriptor, planProfile, layered, true, res.placement(), stored.GetRepo(), stored, companions, req.GetForce()); err != nil {
+		if p.plan, err = m.Inspector.Plan(ctx, rt, descriptor, planProfile, layered, true, res.placement(), stored.GetRepo(), stored, companions, req.GetForce()); err != nil {
 			return nil, err
 		}
 		for k, v := range p.plan.GetParams() {
-			if params.IsAuto(k) {
+			if _, deferred := rt.Policy().Deferred[k]; params.IsAuto(k) && !deferred {
 				params[k] = v
 			}
 		}
@@ -591,7 +593,9 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 		return err
 	}
 	proc.Sync()
-	measurements := in.rt.Measure(proc.Log().Tail(0))
+	lines := proc.Log().Tail(0)
+	measurements := in.rt.Measure(lines)
+	m.chosen(h.Logf, in, lines)
 	if after, perr := m.Host.Profile(ctx, true); perr == nil {
 		used := deviceFree(before) - deviceFree(after)
 		if used > 0 {
@@ -606,6 +610,37 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 	}
 	m.ready(h, in, measurements, m.probeTemplate(ctx, h.Logf, in))
 	return nil
+}
+
+// Records the auto params the runtime picked itself, read from its log, as the instance's params
+func (m *Manager) chosen(logf func(string, ...any), in *instance, lines []string) {
+	policy := in.rt.Policy()
+	if policy == nil {
+		return
+	}
+	rec := in.snapshot()
+	picked := map[string]string{}
+	for name, read := range policy.Deferred {
+		if _, set := rec.GetParams()[name]; set {
+			continue
+		}
+		v, ok := read(lines)
+		if !ok {
+			logf("%s left %s to the runtime and its log names no value for it", rec.GetName(), name)
+			continue
+		}
+		picked[name] = v
+		logf("%s %s, chosen by %s", name, v, rec.GetRuntimeId())
+	}
+	if len(picked) == 0 {
+		return
+	}
+	in.update(func(r *v1.Instance) {
+		if r.Params == nil {
+			r.Params = map[string]string{}
+		}
+		maps.Copy(r.Params, picked)
+	})
 }
 
 // Probes chat template support and logs gateway system message handling.
@@ -1171,7 +1206,7 @@ func (m *Manager) pruneLocked() {
 
 // Returns the stored descriptor, rebuilding missing or outdated descriptors from local files.
 func (m *Manager) describe(ctx context.Context, stored *v1.StoredModel) (*v1.Descriptor, error) {
-	if d := stored.GetDescriptor_(); d != nil && d.GetKind() != v1.ModelKind_MODEL_KIND_UNSPECIFIED {
+	if d := stored.GetDescriptor_(); d != nil && d.GetKind() != v1.ModelKind_MODEL_KIND_UNSPECIFIED && descriptor.Current(d) {
 		return d, nil
 	}
 	return m.rebuild(ctx, stored)
@@ -1189,7 +1224,7 @@ func (m *Manager) RefreshDescriptors(ctx context.Context) {
 			return
 		}
 		d := stored.GetDescriptor_()
-		if d == nil || d.GetKind() == v1.ModelKind_MODEL_KIND_UNSPECIFIED || diffusion.Undetected(d) {
+		if d == nil || d.GetKind() == v1.ModelKind_MODEL_KIND_UNSPECIFIED || diffusion.Undetected(d) || !descriptor.Current(d) {
 			var err error
 			if d, err = m.rebuild(ctx, stored); err != nil {
 				m.Log.Warn("refresh descriptor", "repo", stored.GetRepo(), "group", stored.GetGroup(), "err", err)

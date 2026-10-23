@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import { Code } from '@connectrpc/connect';
   import { api, code, message } from '$lib/api';
-  import { live, clock, taskFor, modelKey, hostName, runtimeName, instanceLive, installsOf, storeMount, poolName, orderedSlots, startedTask, instancesOnPool, holdersOf } from '$lib/state.svelte';
+  import { live, clock, taskFor, modelKey, hostName, runtimeName, runtimeStatus, instanceLive, installsOf, storeMount, poolName, orderedSlots, startedTask, instancesOnPool, holdersOf } from '$lib/state.svelte';
   import { runModel } from '$lib/actions.svelte';
   import { isComponent, kindLabel, partWord } from '$lib/diffusion';
   import { ModelKind } from '$proto/model_pb';
@@ -10,7 +10,7 @@
   import { readLocal, writeLocal } from '$lib/persist';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
-  import { cellPlan, descriptorKey, facetValueLabel, hitChips, locked, orderDescriptors, plannedContext, precisionShort, recommended, rowAt, weightsName } from '$lib/catalog';
+  import { cellPlan, contextRule, descriptorKey, facetValueLabel, hitChips, locked, orderDescriptors, plannedContext, precisionShort, recommended, rowAt, weightsName } from '$lib/catalog';
   import { FitVerdict, type InspectResponse, type MemoryPlan, type PartsResponse } from '$proto/estimate_pb';
   import { PoolKind } from '$proto/host_pb';
   import type { SearchHit, SourceCapabilities, Revision, ModelCard } from '$proto/source_pb';
@@ -85,6 +85,11 @@
   const rest = $derived(author && curRepo.startsWith(author + '/') ? curRepo.slice(author.length + 1) : curRepo);
   const authorHref = $derived(author && caps?.facets.some((f) => f.id === 'author') ? `/catalog?source=${encodeURIComponent(sourceId)}&f.author=${encodeURIComponent(author)}` : '');
   const slots = $derived(orderedSlots());
+  // The context length the picked slot sets, empty when the slot leaves it unset
+  const slotContext = $derived.by(() => {
+    const v = (slotId ? live.slots.get(slotId)?.params['n_ctx'] : '')?.trim() ?? '';
+    return v.toLowerCase() === 'auto' ? '' : v;
+  });
   const installed = (id: string) => installsOf(id).length > 0;
   let pickedRuntime = $state('');
   const planRuntimes = $derived([...new Set((inspect?.rows ?? []).map((r) => r.runtimeId))]);
@@ -424,7 +429,7 @@
                 {#if contexts.length > 1}
                   <span class="inline-flex items-center gap-2">
                     <span>Context</span>
-                    <Segmented size="sm" tabs={contexts.map((c) => ({ id: String(c), label: c === 0 ? 'Largest that fits' : fmtCtx(c) }))} bind:value={() => String(context), (v) => pickContext(Number(v))} />
+                    <Segmented size="sm" tabs={contexts.map((c) => ({ id: String(c), label: c === 0 ? (slotContext ? 'Set on the slot' : 'Largest that fits') : fmtCtx(c) }))} bind:value={() => String(context), (v) => pickContext(Number(v))} />
                   </span>
                 {/if}
                 {#if planRuntimes.length > 1}
@@ -477,7 +482,7 @@
                                 </Tip>
                               {/if}
                               {#if context === 0 && plan}
-                                <Tip text="Largest context that fits, capped at the trained context length"><span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{fmtCtx(plannedContext(row))} ctx</span></Tip>
+                                <Tip text={slotContext ? `Context length set on slot ${live.slots.get(slotId)?.name ?? slotId}` : contextRule(row, (id) => runtimeStatus(id)?.runtime?.params.find((x) => x.name === 'n_ctx')?.rule ?? '')}><span class="rounded-sm bg-raised px-1.5 text-[11px] whitespace-nowrap text-fg-muted">{fmtCtx(plannedContext(row))} ctx</span></Tip>
                               {/if}
                             </div>
                           {/if}

@@ -87,6 +87,11 @@ type Scope struct {
 	Companions []*v1.StoredModel
 	// Source repository, preferred when selecting companions.
 	Repo string
+	// The draft model loaded beside the target, with its attention family, nil when none
+	Draft       *v1.Descriptor
+	DraftFamily archs.Arch
+	// Part of a run whose files the policy already counted, a seat's share or a draft on its node
+	Part bool
 }
 
 // Placement rule for one tensor group kind
@@ -101,8 +106,8 @@ type GroupRule struct {
 	SpillPriority uint32
 	// Kind whose device count limits this kind, such as layers limiting experts.
 	Requires v1.TensorGroupKind
-	// Loading condition, nil for unconditional loading.
-	Loaded func(s *Scope) bool
+	// Whether one group of the kind loads under the params, nil for unconditional loading
+	Loaded func(s *Scope, g *v1.TensorGroup) bool
 }
 
 // Per shape cost facts a runtime declares, what the formation planner prices links with
@@ -129,6 +134,8 @@ type ShapeFacts struct {
 	ChainSpeculative bool
 	// The relay handoff the gateway drives between the prefill and decode seats, one of the Handoff constants
 	Handoff string
+	// Tokens a draft round proposes when no param sets them, the runtime's own default
+	DraftTokens float64
 }
 
 // Relay handoffs a runtime declares: vLLM's NIXL connector parameters, SGLang's bootstrap room,
@@ -156,6 +163,12 @@ type Policy struct {
 	ContextMin, ContextStep int64
 	// Maximum trained context length, zero if unknown.
 	ContextMax func(s *Scope) int64
+	// Sequences the context splits over, scaling its bounds and step, nil for one
+	ContextScale func(s *Scope) int64
+	// Auto params the runtime picks itself, each read back from its log once it runs
+	Deferred map[string]func(lines []string) (string, bool)
+	// Cache a group outside the layers keeps beside its weights, such as a draft context's
+	GroupCache func(s *Scope, g *v1.TensorGroup) (uint64, error)
 	// Device count parameter. Limits capacity to the largest selected pools. Empty uses all devices.
 	DevicesParam string
 	// Context and batch dimensions for cache sizing.
@@ -192,6 +205,11 @@ type Input struct {
 	Companions []*v1.StoredModel
 	// Source repository, preferred when selecting companions.
 	Repo string
+	// The draft model loaded beside the target, with its attention family, nil when none
+	Draft       *v1.Descriptor
+	DraftFamily archs.Arch
+	// Part of a run whose files the policy already counted, a seat's share or a draft on its node
+	Part bool
 }
 
 // Reports header fields required for memory planning.
@@ -225,7 +243,7 @@ func joinOr(names []string) string {
 }
 
 func (p *Policy) scope(in Input, params Params) *Scope {
-	return &Scope{Descriptor: in.Descriptor, Model: formats.ParamsOf(in.Descriptor.GetParams()), Host: in.Host, Params: params, Companions: in.Companions, Repo: in.Repo}
+	return &Scope{Descriptor: in.Descriptor, Model: formats.ParamsOf(in.Descriptor.GetParams()), Host: in.Host, Params: params, Companions: in.Companions, Repo: in.Repo, Draft: in.Draft, DraftFamily: in.DraftFamily, Part: in.Part}
 }
 
 // Plans model placement and resolves auto parameters, using the largest context that fits.
@@ -248,25 +266,11 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 // Finds the largest allowed context that preserves the minimum context's placement verdict, capped
 // at the trained length.
 func (p *Policy) solveContext(in Input, s *Scope) (*v1.MemoryPlan, error) {
-	step := p.ContextStep
-	if step <= 0 {
-		step = 1
-	}
-	lo := p.ContextMin
-	if lo <= 0 {
-		lo = step
-	}
-	hi := lo
-	if p.ContextMax != nil {
-		hi = p.ContextMax(s)
-	}
-	if hi < lo {
-		hi = lo
-	}
+	lo, hi, step := p.ContextBounds(s)
 	at := func(n int64) (*v1.MemoryPlan, error) {
 		ps := s.Params.Clone()
 		ps[p.ContextParam] = n
-		return p.plan(in, &Scope{Descriptor: s.Descriptor, Model: s.Model, Host: s.Host, Params: ps, Companions: s.Companions, Repo: s.Repo})
+		return p.plan(in, &Scope{Descriptor: s.Descriptor, Model: s.Model, Host: s.Host, Params: ps, Companions: s.Companions, Repo: s.Repo, Draft: s.Draft, DraftFamily: s.DraftFamily, Part: s.Part})
 	}
 	best, err := at(lo)
 	if err != nil || best.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO {
@@ -294,6 +298,27 @@ func (p *Policy) solveContext(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		}
 	}
 	return best, nil
+}
+
+// Smallest, largest, and step of an auto context, scaled by the sequences and never past the trained length
+func (p *Policy) ContextBounds(s *Scope) (lo, hi, step int64) {
+	scale := int64(1)
+	if p.ContextScale != nil {
+		scale = max(p.ContextScale(s), 1)
+	}
+	step = max(p.ContextStep, 1) * scale
+	lo = p.ContextMin * scale
+	if lo <= 0 {
+		lo = step
+	}
+	hi = lo
+	if p.ContextMax != nil {
+		if trained := p.ContextMax(s) * scale; trained > 0 {
+			hi = trained
+		}
+	}
+	lo = min(lo, hi)
+	return lo, hi, step
 }
 
 // Parameter bounds, excluded choices, and launch refusal under resolved values.
@@ -465,11 +490,9 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	if in.OverheadDelta != 0 {
 		overhead = uint64(max(float64(overhead)+in.OverheadDelta, 0))
 	}
-	unloaded := map[v1.TensorGroupKind]bool{}
-	for _, g := range p.Groups {
-		if g.Loaded != nil && !g.Loaded(s) {
-			unloaded[g.Kind] = true
-		}
+	loads := func(g *v1.TensorGroup) bool {
+		rule, known := p.rule(g.GetKind())
+		return !known || rule.Loaded == nil || rule.Loaded(s, g)
 	}
 	primary, host := pools(in.Host)
 	primary = p.spanned(primary, s.Params)
@@ -492,7 +515,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	sv.beside(overhead)
 	layers := 0
 	for _, g := range s.Descriptor.GetGroups() {
-		if g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER && !unloaded[g.GetKind()] {
+		if g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER && loads(g) {
 			layers++
 		}
 	}
@@ -518,16 +541,24 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	}
 	byParam := map[string]*bucket{}
 	skipped := newPlacements()
-	var weights uint64
+	var weights, sideCache uint64
 	for _, g := range s.Descriptor.GetGroups() {
-		if unloaded[g.GetKind()] {
+		if !loads(g) {
 			skipped.add(g.GetKind(), v1.PoolKind_POOL_KIND_UNSPECIFIED, g.GetBytes(), 1)
 			continue
 		}
 		weights += g.GetBytes()
 		it := item{kind: g.GetKind(), layer: g.GetLayer(), weights: g.GetBytes()}
-		if g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER {
+		switch {
+		case g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER:
 			it.cache = cacheOf(g)
+		case p.GroupCache != nil:
+			bytes, err := p.GroupCache(s, g)
+			if err != nil {
+				return nil, err
+			}
+			it.cache = bytes
+			sideCache += bytes
 		}
 		rule, known := p.rule(g.GetKind())
 		if !known || rule.Param == "" {
@@ -551,7 +582,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	})
 	plan := &v1.MemoryPlan{
 		WeightsBytes:  weights,
-		CacheBytes:    cacheTotal,
+		CacheBytes:    cacheTotal + sideCache,
 		OverheadBytes: overhead,
 		OverheadDelta: in.OverheadDelta,
 		Params:        stringParams(s.Params),
@@ -1026,10 +1057,13 @@ func pools(h *v1.HostProfile) (primary, host []*v1.MemoryPool) {
 	return primary, host
 }
 
+// Params as text, leaving out the ones left unset
 func stringParams(params Params) map[string]string {
 	out := make(map[string]string, len(params))
 	for k, v := range params {
-		out[k] = fmt.Sprint(v)
+		if v != nil {
+			out[k] = fmt.Sprint(v)
+		}
 	}
 	return out
 }

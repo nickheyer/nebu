@@ -519,20 +519,19 @@ func convert(p *v1.Param, raw string) (any, error) {
 	if len(p.GetChoices()) > 0 && p.GetPicks() == "" && !slices.Contains(p.GetChoices(), raw) {
 		return nil, fmt.Errorf("param %s: %q not in %v", p.GetName(), raw, p.GetChoices())
 	}
+	// An empty number is unset, so no flag carries it and the runtime keeps its own default
+	numeric := p.GetType() == v1.ParamType_PARAM_TYPE_INT || p.GetType() == v1.ParamType_PARAM_TYPE_FLOAT
+	if numeric && raw == "" {
+		return nil, nil
+	}
 	switch p.GetType() {
 	case v1.ParamType_PARAM_TYPE_INT:
-		if raw == "" {
-			return int64(0), nil
-		}
 		n, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("param %s: %w", p.GetName(), err)
 		}
 		return n, nil
 	case v1.ParamType_PARAM_TYPE_FLOAT:
-		if raw == "" {
-			return float64(0), nil
-		}
 		f, err := strconv.ParseFloat(raw, 64)
 		if err != nil {
 			return nil, fmt.Errorf("param %s: %w", p.GetName(), err)

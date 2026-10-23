@@ -29,6 +29,8 @@ type planned struct {
 	stored     *v1.StoredModel
 	rt         runtimes.Runtime
 	name       string
+	// Run params over the slot's, what every seat launches with
+	params map[string]string
 	// The draft model's store key, for a draft head
 	draftKey string
 	draft    *v1.StoredModel
@@ -137,7 +139,7 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool) (
 			return 0
 		},
 	}
-	out := &planned{descriptor: descriptor, stored: stored, rt: rt, name: name}
+	out := &planned{descriptor: descriptor, stored: stored, rt: rt, name: name, params: params}
 	draft, err := m.draft(ctx, params, rt, stored, companions, nodes)
 	if err != nil {
 		return nil, err

@@ -29,6 +29,26 @@ func (LlamaCpp) Rules() []Rule {
 			},
 		},
 		{
+			ID:      "unknown-projector",
+			Summary: "this build does not know projector type ${type}",
+			Hint:    "clear mmproj to serve text only, or adopt or build a llama.cpp that supports ${type}",
+			Fix:     map[string]string{"mmproj": "none"},
+			Match: func(line string) (map[string]string, bool) {
+				kind, ok := tailAfter(line, "unknown projector type: ")
+				if !ok || kind == "" {
+					return nil, false
+				}
+				return map[string]string{"type": strings.Fields(kind)[0]}, true
+			},
+		},
+		{
+			ID:      "projector-load",
+			Summary: "the projector failed to load",
+			Hint:    "clear mmproj to serve text only, or name a projector made for this model and this llama.cpp build",
+			Fix:     map[string]string{"mmproj": "none"},
+			Match:   anyOf("failed to load multimodal model", "Failed to load CLIP model"),
+		},
+		{
 			ID:      "unknown-pretokenizer",
 			Summary: "the tokenizer is newer than this build",
 			Hint:    "adopt or build a newer runtime",

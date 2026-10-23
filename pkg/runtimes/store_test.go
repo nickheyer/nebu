@@ -159,3 +159,68 @@ func TestResolveStoreReferencesAndChecksPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A draft pick takes a group's one head file, asks for a path among several, or takes a model's weights
+func TestDraftPicksHeadFilesAndModels(t *testing.T) {
+	rt := LlamaCpp{}
+	file := func(p string, role v1.ArtifactRole) *v1.StoredArtifact {
+		return &v1.StoredArtifact{Artifact: &v1.Artifact{Path: p, Role: role}, Path: "/store/" + p}
+	}
+	language := &v1.Descriptor{Kind: v1.ModelKind_MODEL_KIND_LANGUAGE}
+	gemma := &v1.StoredModel{SourceId: "hf", Repo: "unsloth/gemma-4-31B-it-GGUF", Group: "Q4_K_M", FormatId: "gguf", Descriptor_: language, Artifacts: []*v1.StoredArtifact{
+		file("gemma-4-31B-it-Q4_K_M.gguf", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS),
+		file("mtp-gemma-4-31B-it.gguf", v1.ArtifactRole_ARTIFACT_ROLE_DRAFT),
+		file("mmproj-F16.gguf", v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR),
+	}}
+	twin := &v1.StoredModel{SourceId: "hf", Repo: "org/twin", Group: "Q8_0", FormatId: "gguf", Descriptor_: language, Artifacts: []*v1.StoredArtifact{
+		file("twin-Q8_0.gguf", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS),
+		file("MTP/mtp-model-Q8_0.gguf", v1.ArtifactRole_ARTIFACT_ROLE_DRAFT),
+		file("MTP/mtp-model-shared-Q4_K_M.gguf", v1.ArtifactRole_ARTIFACT_ROLE_DRAFT),
+	}}
+	small := &v1.StoredModel{SourceId: "hf", Repo: "org/small", Group: "Q4_0", FormatId: "gguf", Descriptor_: language, Artifacts: []*v1.StoredArtifact{file("small-Q4_0.gguf", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS)}}
+	vae := &v1.StoredModel{SourceId: "hf", Repo: "org/vae", Group: "vae", FormatId: "gguf", Descriptor_: &v1.Descriptor{Kind: v1.ModelKind_MODEL_KIND_COMPONENT}, Artifacts: []*v1.StoredArtifact{file("vae.gguf", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS)}}
+	models := []*v1.StoredModel{gemma, twin, small, vae}
+	out, err := ResolveStore(rt, map[string]string{"draft_model": StoreRef(gemma)}, models)
+	if err != nil || out["draft_model"] != "/store/mtp-gemma-4-31B-it.gguf" {
+		t.Fatalf("the one head file: %v %v", out, err)
+	}
+	if out, err = ResolveStore(rt, map[string]string{"draft_model": StoreRef(small)}, models); err != nil || out["draft_model"] != "/store/small-Q4_0.gguf" {
+		t.Fatalf("a draft model's weights: %v %v", out, err)
+	}
+	if _, err = ResolveStore(rt, map[string]string{"draft_model": StoreRef(twin)}, models); err == nil || !strings.Contains(err.Error(), "holds 2 draft files") {
+		t.Fatalf("several head files ask for a path: %v", err)
+	}
+	if _, err = ResolveStore(rt, map[string]string{"draft_model": StoreRef(vae)}, models); err == nil || !strings.Contains(err.Error(), "not a draft model") {
+		t.Fatalf("a component is no draft: %v", err)
+	}
+	// Explicit paths to head files and weights pass as drafts, and a head file is no projector
+	for _, path := range []string{"/store/MTP/mtp-model-shared-Q4_K_M.gguf", "/store/small-Q4_0.gguf"} {
+		if _, err := ResolveStore(rt, map[string]string{"draft_model": path}, models); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+	}
+	if _, err := ResolveStore(rt, map[string]string{"mmproj": "/store/mtp-gemma-4-31B-it.gguf"}, models); err == nil || !strings.Contains(err.Error(), "a draft or MTP head file") {
+		t.Fatalf("a head file as projector: %v", err)
+	}
+	if _, err := ResolveStore(rt, map[string]string{"mmproj": StoreRef(gemma)}, models); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An empty number is unset, so the runtime keeps its default and no flag carries a zero
+func TestUnsetNumbersCarryNoFlag(t *testing.T) {
+	params, err := Resolve(SGLang{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["speculative_num_steps"] != nil {
+		t.Fatalf("unset steps %v", params["speculative_num_steps"])
+	}
+	args, _, emitted := Flags(SGLang{}.Params(), params)
+	if line := strings.Join(args, " "); strings.Contains(line, "--speculative-num-steps") || strings.Contains(line, "--speculative-eagle-topk") || emitted["speculative_num_draft_tokens"] != "" {
+		t.Fatalf("unset numbers emitted: %s", line)
+	}
+	if params, err = Resolve(SGLang{}, map[string]string{"speculative_num_steps": "3"}); err != nil || params.Int("speculative_num_steps") != 3 {
+		t.Fatalf("a set number %v %v", params, err)
+	}
+}

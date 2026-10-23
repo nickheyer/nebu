@@ -150,6 +150,12 @@ export function rowAt(rows: FitRow[], group: string, context: number): FitRow | 
   return rows.find((r) => r.group === group && r.context === context);
 }
 
+// What the row's runtime resolves an auto context to, in the runtime's own words
+export function contextRule(row: FitRow | undefined, rule: (runtimeId: string) => string): string {
+  const text = rule(row?.runtimeId ?? '');
+  return text ? text[0].toUpperCase() + text.slice(1) : 'The context the planner solved';
+}
+
 export function plannedContext(row: FitRow | undefined): number {
   const n = Number(cellPlan(row)?.params['n_ctx'] ?? 0);
   return Number.isFinite(n) ? n : 0;

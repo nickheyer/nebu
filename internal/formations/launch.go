@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"sort"
@@ -497,7 +498,7 @@ func parseStoreRef(ref string) (source, repo, group string, ok bool) {
 }
 
 // Pulls onto every seat's node the files its role reads: the model and the draft model for a
-// head holding weights, and for a head holding parts every part the request's parameters name
+// head holding weights, and for a head holding parts every part the slot's and request's parameters name
 // and every stored component the blueprint fills its slots from. Seats pull at once, one
 // progress row each, a seat's files in order.
 func (m *Manager) weights(ctx context.Context, h *tasks.Handle, f *v1.Formation, p *planned) error {
@@ -537,7 +538,7 @@ func (m *Manager) weights(ctx context.Context, h *tasks.Handle, f *v1.Formation,
 				if param.GetType() != v1.ParamType_PARAM_TYPE_PATH {
 					continue
 				}
-				if source, repo, group, ok := parseStoreRef(f.GetRequest().GetParams()[param.GetName()]); ok {
+				if source, repo, group, ok := parseStoreRef(p.params[param.GetName()]); ok {
 					add(s, source, repo, group, "")
 				}
 			}
@@ -800,21 +801,14 @@ func seatEndpoint(in *v1.Instance, remote bool) string {
 	return scheme + "://" + net.JoinHostPort(hostOf(seat.GetAddress()), strconv.Itoa(int(seat.GetPort())))
 }
 
-// The run request a seat launches with: the formation's request narrowed to one seat
+// The formation's request narrowed to one seat, with the slot's params beneath the request's
 func (m *Manager) seatRequest(f *v1.Formation, p *planned, s *v1.Seat, rendezvous string, started *launched) *v1.RunRequest {
 	run := proto.Clone(f.GetRequest()).(*v1.RunRequest)
 	run.Name = fmt.Sprintf("%s/%s%d", f.GetName(), s.GetRole(), s.GetRank())
 	run.SlotId, run.Span, run.Shape = "", nil, f.GetShape()
 	run.RuntimeId, run.InstallId = f.GetRuntimeId(), s.GetInstallId()
 	run.SourceId, run.Repo, run.Group = f.GetSourceId(), f.GetRepo(), f.GetGroup()
-	params := map[string]string{}
-	for k, v := range f.GetRequest().GetParams() {
-		params[k] = v
-	}
-	if ctxParam := p.rt.Policy().ContextParam; ctxParam != "" && f.GetPlan().GetContext() > 0 {
-		params[ctxParam] = strconv.FormatUint(uint64(f.GetPlan().GetContext()), 10)
-	}
-	run.Params = params
+	run.Params = seatParams(f, p)
 	spec := &v1.SeatSpec{
 		FormationId:  f.GetId(),
 		Shape:        f.GetShape(),
@@ -849,6 +843,18 @@ func (m *Manager) seatRequest(f *v1.Formation, p *planned, s *v1.Seat, rendezvou
 	}
 	run.Seat = spec
 	return run
+}
+
+// Params every seat launches with, the slot's beneath the request's, at the context the plan holds
+func seatParams(f *v1.Formation, p *planned) map[string]string {
+	params := maps.Clone(p.params)
+	if params == nil {
+		params = map[string]string{}
+	}
+	if ctxParam := p.rt.Policy().ContextParam; ctxParam != "" && f.GetPlan().GetContext() > 0 {
+		params[ctxParam] = strconv.FormatUint(uint64(f.GetPlan().GetContext()), 10)
+	}
+	return params
 }
 
 // The detail of a seat that ended: its first triage hit's summary and hint, else its error,

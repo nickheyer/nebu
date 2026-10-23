@@ -16,6 +16,15 @@ import (
 	"github.com/nickheyer/nebu/pkg/text"
 )
 
+// Metadata key naming the builder revision that made a descriptor
+const RevisionKey = "nebu.descriptor_revision"
+
+// Builder revision, raised whenever a descriptor from an older builder lacks what planning reads
+const Revision = "2"
+
+// Whether the current builder revision made the descriptor
+func Current(d *v1.Descriptor) bool { return d.GetMetadata()[RevisionKey] == Revision }
+
 // Builds descriptors using format readers, attention families, and precision tables.
 type Builder struct {
 	Formats *formats.Registry
@@ -89,6 +98,10 @@ func (b *Builder) Build(raw *v1.RawModel) (*v1.Descriptor, error) {
 	if d.Kind == v1.ModelKind_MODEL_KIND_DIFFUSION {
 		d.Generates = diffusion.Generates(diffusion.FamilyOf(d))
 	}
+	if d.Metadata == nil {
+		d.Metadata = map[string]string{}
+	}
+	d.Metadata[RevisionKey] = Revision
 	return d, nil
 }
 

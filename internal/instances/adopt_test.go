@@ -17,6 +17,7 @@ import (
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances/fake"
 	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -70,7 +71,7 @@ func newSeatNode(t *testing.T, ctx context.Context) *seatNode {
 	if err := os.WriteFile(weights, []byte("weights"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := blobs.WriteManifest(&v1.StoredModel{SourceId: "src", Repo: "org/model", Group: "q4", FormatId: fake.Format, Path: modelDir, Descriptor_: &v1.Descriptor{Kind: v1.ModelKind_MODEL_KIND_LANGUAGE, Architecture: "fake"}, Artifacts: []*v1.StoredArtifact{{Digest: "sha256:m", Path: weights, Artifact: &v1.Artifact{Path: "weights.fake", Role: v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS}}}}); err != nil {
+	if err := blobs.WriteManifest(&v1.StoredModel{SourceId: "src", Repo: "org/model", Group: "q4", FormatId: fake.Format, Path: modelDir, Descriptor_: &v1.Descriptor{Kind: v1.ModelKind_MODEL_KIND_LANGUAGE, Architecture: "fake", Metadata: map[string]string{descriptor.RevisionKey: descriptor.Revision}}, Artifacts: []*v1.StoredArtifact{{Digest: "sha256:m", Path: weights, Artifact: &v1.Artifact{Path: "weights.fake", Role: v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS}}}}); err != nil {
 		t.Fatal(err)
 	}
 	return &seatNode{dir: dir, db: database, store: blobs, launcher: fake.New(), install: install}

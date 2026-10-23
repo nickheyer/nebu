@@ -210,21 +210,7 @@ func (pl *planner) contexts(scope *estimate.Scope) []int64 {
 	if !pl.params.IsAuto(pl.policy.ContextParam) {
 		return []int64{pl.params.Int(pl.policy.ContextParam)}
 	}
-	step := pl.policy.ContextStep
-	if step <= 0 {
-		step = 1
-	}
-	lo := pl.policy.ContextMin
-	if lo <= 0 {
-		lo = step
-	}
-	hi := lo
-	if pl.policy.ContextMax != nil {
-		hi = pl.policy.ContextMax(scope)
-	}
-	if hi < lo {
-		hi = lo
-	}
+	lo, hi, step := pl.policy.ContextBounds(scope)
 	var out []int64
 	for c := hi; c > lo; c /= 2 {
 		out = append(out, c/step*step)
@@ -351,10 +337,13 @@ func (pl *planner) result(list []*candidate, context int64) *v1.FormationPlan {
 	return plan
 }
 
+// Params as text, leaving out the ones left unset
 func stringParams(p estimate.Params) map[string]string {
 	out := make(map[string]string, len(p))
 	for k, v := range p {
-		out[k] = fmt.Sprint(v)
+		if v != nil {
+			out[k] = fmt.Sprint(v)
+		}
 	}
 	return out
 }

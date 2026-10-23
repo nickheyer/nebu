@@ -136,13 +136,25 @@ func slidingWindow(p formats.Params, run Run, pattern float64) ([]float64, error
 	if p.SlidingWindow > 0 && run.Context > 0 {
 		swaTokens = math.Min(run.Context, p.SlidingWindow+run.UBatch)
 	}
-	full := p.HeadsKV * (p.HeadDim + p.HeadDimV)
+	dims := p.HeadDim + p.HeadDimV
 	return eachLayer(p, func(il int) float64 {
+		full := kvHeads(p, il) * dims
 		if pattern > 0 && (il+1)%int(pattern) == 0 {
 			return full
 		}
 		return full * swaTokens / ctx
 	}), nil
+}
+
+// KV heads on one layer, from the per layer counts when the header gives them
+func kvHeads(p formats.Params, il int) float64 {
+	if len(p.HeadsKVLayers) == 0 {
+		return p.HeadsKV
+	}
+	if il < len(p.HeadsKVLayers) {
+		return p.HeadsKVLayers[il]
+	}
+	return 0
 }
 
 // The cache of every layer of a model by its index

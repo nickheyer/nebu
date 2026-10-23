@@ -216,14 +216,17 @@ func (pl *planner) layerCache() ([]float64, error) {
 // rules: a refused param is an error naming the rule
 func (pl *planner) plan(n *Node, d *v1.Descriptor, params estimate.Params, placement v1.Placement) (*v1.MemoryPlan, error) {
 	in := estimate.Input{
-		Descriptor: d,
-		Family:     pl.req.Family,
-		Host:       n.Profile,
-		Params:     params,
-		Free:       pl.req.Free,
-		Placement:  placement,
-		Companions: pl.req.Companions,
-		Repo:       pl.req.Repo,
+		Descriptor:  d,
+		Family:      pl.req.Family,
+		Host:        n.Profile,
+		Params:      params,
+		Free:        pl.req.Free,
+		Placement:   placement,
+		Companions:  pl.req.Companions,
+		Repo:        pl.req.Repo,
+		Draft:       pl.req.Draft,
+		DraftFamily: pl.req.DraftFamily,
+		Part:        true,
 	}
 	if pl.req.Calibration != nil {
 		in.OverheadDelta = pl.req.Calibration(n.ID)

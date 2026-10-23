@@ -116,13 +116,28 @@ func TestResolveAndFlags(t *testing.T) {
 	if len(env) != 0 || emitted["n_ctx"] != "4096" || emitted["n_gpu_layers"] != "" {
 		t.Fatalf("env %v emitted %v", env, emitted)
 	}
-	cmd, err := rt.Launch(Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.gguf", "projector": "/p.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}, Devices: []*v1.Device{{Id: "GPU-1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Facts: map[string]string{"index": "0"}}}})
+	in := Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.gguf", "projector": "/p.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}, Devices: []*v1.Device{{Id: "GPU-1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Facts: map[string]string{"index": "0"}}}}
+	cmd, err := rt.Launch(in)
 	if err != nil {
 		t.Fatal(err)
 	}
 	line := strings.Join(cmd.Args, " ")
-	if cmd.Command != "/bin/llama-server" || !strings.HasPrefix(line, "--model /w.gguf --host 127.0.0.1 --port 9") || !strings.Contains(line, "--alias m") || !strings.Contains(line, "--mmproj /p.gguf") {
+	if cmd.Command != "/bin/llama-server" || !strings.HasPrefix(line, "--model /w.gguf --host 127.0.0.1 --port 9") || !strings.Contains(line, "--alias m") {
 		t.Fatalf("launch %v", cmd)
+	}
+	// A stored projector stays off until the param names it, and unset settings carry no flag
+	for _, flag := range []string{"--mmproj", "--cache-type-k", "--cache-type-v", "--spec-", "--draft"} {
+		if strings.Contains(line, flag) {
+			t.Fatalf("%s without a value set: %s", flag, line)
+		}
+	}
+	named, err := Resolve(rt, map[string]string{"n_ctx": "4096", "mmproj": "/p.gguf", "cache_type_k": "q4_0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Params = named
+	if cmd, err = rt.Launch(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--mmproj /p.gguf") || !strings.Contains(strings.Join(cmd.Args, " "), "--cache-type-k q4_0") || cmd.Params["mmproj"] != "/p.gguf" {
+		t.Fatalf("named projector and cache type %v %v", cmd, err)
 	}
 	if cmd.Env["CUDA_VISIBLE_DEVICES"] != "GPU-1" || cmd.Env["GGML_VK_VISIBLE_DEVICES"] != "0" || cmd.Env["ROCR_VISIBLE_DEVICES"] != "" {
 		t.Fatalf("env %v", cmd.Env)

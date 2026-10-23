@@ -1,6 +1,10 @@
 package formats
 
-import "math"
+import (
+	"math"
+	"strconv"
+	"strings"
+)
 
 // Architecture parameters from headers. Zero means unknown. Derive infers missing KV head count,
 // head width, and layer count when possible.
@@ -23,6 +27,8 @@ type Params struct {
 	SlidingPattern    float64
 	// Elements of the word embedding, for headers that count no vocabulary
 	EmbeddingElements float64
+	// KV heads of each layer when the header counts them per layer, zero on a layer without attention
+	HeadsKVLayers []float64
 }
 
 // Fills the parameters that follow from others, layersSeen being the layers counted among the tensors
@@ -68,8 +74,15 @@ func (p Params) Map() map[string]float64 {
 	put("rope_dim", p.RopeDim)
 	put("n_swa", p.SlidingWindow)
 	put("swa_pattern", p.SlidingPattern)
+	put("n_head_kv_layers", float64(len(p.HeadsKVLayers)))
+	for il, n := range p.HeadsKVLayers {
+		put(headsKVKey+strconv.Itoa(il), n)
+	}
 	return out
 }
+
+// Prefix of the per layer KV head counts in the map, one key per layer that has attention
+const headsKVKey = "n_head_kv."
 
 // Reads the parameters back from the map a descriptor carries
 func ParamsOf(m map[string]float64) Params {
@@ -90,5 +103,45 @@ func ParamsOf(m map[string]float64) Params {
 		RopeDim:           m["rope_dim"],
 		SlidingWindow:     m["n_swa"],
 		SlidingPattern:    m["swa_pattern"],
+		HeadsKVLayers:     headsKVLayers(m),
 	}
+}
+
+// Rebuilds the per layer KV head counts, layers absent from the map holding none
+func headsKVLayers(m map[string]float64) []float64 {
+	n := int(m["n_head_kv_layers"])
+	if n <= 0 {
+		return nil
+	}
+	out := make([]float64, n)
+	for k, v := range m {
+		if rest, ok := strings.CutPrefix(k, headsKVKey); ok {
+			if il, err := strconv.Atoi(rest); err == nil && il >= 0 && il < n {
+				out[il] = v
+			}
+		}
+	}
+	return out
+}
+
+// Per layer counts from a header list, nil when the header gives one count for every layer
+func PerLayer(list string) []float64 {
+	if !strings.Contains(list, ",") {
+		return nil
+	}
+	parts := strings.Split(list, ",")
+	out := make([]float64, len(parts))
+	for i, part := range parts {
+		n, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+		if err != nil {
+			return nil
+		}
+		out[i] = n
+	}
+	for _, n := range out[1:] {
+		if n != out[0] {
+			return out
+		}
+	}
+	return nil
 }

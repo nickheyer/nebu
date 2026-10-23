@@ -233,6 +233,34 @@ func TestPerLayerEmbeddingAndHybridInterval(t *testing.T) {
 	}
 }
 
+// A hybrid header counting KV heads per layer, as Nemotron-H does, keeps a cache on its attention layers alone
+func TestPerLayerKVHeadsAndRevision(t *testing.T) {
+	b := builder(t)
+	raw := moeRaw("nemotron_h_moe")
+	raw.Metadata["nemotron_h_moe.block_count"] = "5"
+	raw.Metadata["nemotron_h_moe.attention.head_count_kv"] = "0,0,2,0,2"
+	raw.Metadata["nemotron_h_moe.nextn_predict_layers"] = "1"
+	raw.Tensors = append(raw.Tensors, &v1.TensorInfo{Name: "blk.4.nextn.eh_proj.weight", Bytes: 64, Elements: 8})
+	d, err := b.Build(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := formats.ParamsOf(d.GetParams())
+	if len(p.HeadsKVLayers) != 5 || p.HeadsKVLayers[2] != 2 || p.HeadsKVLayers[0] != 0 || p.HeadsKV != 2 {
+		t.Fatalf("per layer heads %v", p.HeadsKVLayers)
+	}
+	// Two attention layers of 2 heads at 64 wide keys and values
+	if v := perToken(t, b, d); v != 512 {
+		t.Fatalf("cache_per_token %v", v)
+	}
+	if !Current(d) || d.GetMetadata()[RevisionKey] != Revision {
+		t.Fatalf("the builder stamps its revision: %v", d.GetMetadata())
+	}
+	if Current(&v1.Descriptor{}) || Current(&v1.Descriptor{Metadata: map[string]string{RevisionKey: "1"}}) {
+		t.Fatal("an older descriptor is not current")
+	}
+}
+
 func TestEncodersAndDraftHeads(t *testing.T) {
 	b := builder(t)
 	raw := &v1.RawModel{FormatId: "safetensors", Group: "default", Metadata: map[string]string{

@@ -27,6 +27,8 @@ const (
 	factDirectIO    = "direct_io"
 	// Whether the build takes the flag that renders chat templates with tools
 	factJinja = "jinja"
+	// Speculative methods the build's --spec-type takes, comma separated
+	factSpecTypes = "spec_types"
 )
 
 // The rpc server names ggml ships it under, beside the runtime's own binary
@@ -60,6 +62,31 @@ func llamaShapeProbes() []Probe {
 		flagProbe(factSlotsFlag, help, "--slots"),
 		flagProbe(factDirectIO, help, "--direct-io", "--load-mode"),
 		flagProbe(factJinja, help, "--jinja"),
+		{Key: factSpecTypes, Args: help, Parse: specTypes},
+	}
+}
+
+// Methods the help lists after --spec-type, as none,draft-simple or [none|draft-simple] by build
+func specTypes(out string) (string, bool) {
+	for rest := out; ; {
+		i := strings.Index(rest, "--spec-type")
+		if i < 0 {
+			return "", false
+		}
+		rest = rest[i+len("--spec-type"):]
+		fields := strings.Fields(rest)
+		if len(fields) == 0 || !strings.ContainsAny(fields[0], ",|[") {
+			continue
+		}
+		var names []string
+		for _, name := range strings.FieldsFunc(strings.Trim(fields[0], "[]"), func(r rune) bool { return r == ',' || r == '|' }) {
+			if name != "" && strings.Trim(name, "abcdefghijklmnopqrstuvwxyz0123456789-") == "" {
+				names = append(names, name)
+			}
+		}
+		if len(names) > 0 {
+			return strings.Join(names, ","), true
+		}
 	}
 }
 
@@ -369,6 +396,13 @@ func (r LlamaCpp) draftHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 	stage, device := stages[0], names[0][0]
 	p := in.Params.Clone()
 	p["draft_model"] = ""
+	switch method := p.Str("spec_type"); method {
+	case "draft-simple":
+	case Auto:
+		p["spec_type"] = "draft-simple"
+	default:
+		return nil, fmt.Errorf("%w: a draft formation drafts with draft-simple on the draft model's node, not %s", ErrParam, method)
+	}
 	in.Params = p
 	cmd, err := r.Launch(in)
 	if err != nil {

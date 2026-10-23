@@ -113,6 +113,11 @@ export function pathLabel(value: string): string {
   return `${tail(repoPath ?? '')} · ${group || 'weights'}`;
 }
 
+// The draft and MTP head files a stored group holds
+export function draftFiles(m: StoredModel): StoredModel['artifacts'] {
+  return m.artifacts.filter((a) => a.artifact?.role === ArtifactRole.DRAFT);
+}
+
 function hasTokenizer(m: StoredModel): boolean {
   return m.artifacts.some((a) => a.artifact?.role === ArtifactRole.TOKENIZER && a.artifact.path.endsWith('tokenizer.json'));
 }
@@ -134,6 +139,8 @@ export function picksModel(m: StoredModel, p: Param): boolean {
       return hasTokenizer(m);
     case 'checkpoint':
       return d?.kind === ModelKind.LANGUAGE && m.formatId === 'safetensors' && m.path !== '';
+    case 'draft':
+      return draftFiles(m).length > 0 || d?.kind === ModelKind.LANGUAGE;
     case 'diffusion':
       return d?.kind === ModelKind.DIFFUSION;
   }

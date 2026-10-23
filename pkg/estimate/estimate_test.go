@@ -254,11 +254,22 @@ func TestAutoContextSolvesToTheLargestThatFits(t *testing.T) {
 			t.Fatalf("%s: solved context %d off the grid", id, n)
 		}
 	}
-	// A header that names no trained length solves to the floor of the grid
+	// A header that names no trained length solves to the floor llama.cpp's fit keeps
 	p, params := policy(t, "llamacpp")
 	plan, err := p.Plan(input(descriptor(4, 100*mib, 0), host(24*gib, 64*gib), params))
-	if err != nil || plan.GetParams()["n_ctx"] != "256" {
+	if err != nil || plan.GetParams()["n_ctx"] != "4096" {
 		t.Fatalf("no trained length: %v %v", plan.GetParams(), err)
+	}
+	// A trained length under the floor is what llama.cpp runs, and parallel sequences each take one
+	short := descriptor(4, 100*mib, 0)
+	short.Params["n_ctx_train"] = 2048
+	if plan, err = p.Plan(input(short, host(24*gib, 64*gib), params)); err != nil || plan.GetParams()["n_ctx"] != "2048" {
+		t.Fatalf("short trained length: %v %v", plan.GetParams(), err)
+	}
+	four := params.Clone()
+	four["n_parallel"] = int64(4)
+	if plan, err = p.Plan(input(short, host(24*gib, 64*gib), four)); err != nil || plan.GetParams()["n_ctx"] != "8192" {
+		t.Fatalf("four sequences: %v %v", plan.GetParams(), err)
 	}
 }
 
@@ -281,6 +292,15 @@ func TestParamStatesAndRefusal(t *testing.T) {
 	}
 	if byName["n_ctx"].GetMax() != 8192 || byName["n_gpu_layers"].GetMax() != 4 || byName["n_ubatch"].GetMax() != 2048 {
 		t.Fatalf("bounds %v", states)
+	}
+	// Parallel sequences each hold the trained length, so a set context may reach their sum
+	four := input(d, host(24*gib, 64*gib), defaults(params, map[string]any{"n_parallel": int64(4), "n_ctx": int64(32768)}))
+	plan, err = p.Plan(four)
+	if err != nil || plan.GetParams()["n_ctx"] != "32768" {
+		t.Fatalf("the set context is planned as set: %v %v", plan.GetParams(), err)
+	}
+	if states, _ := p.ParamStates(four, plan); states[0].GetName() != "n_ctx" || states[0].GetMax() != 32768 {
+		t.Fatalf("four sequences bound the context at four trained lengths: %v", states)
 	}
 	in.Params = defaults(params, map[string]any{"flash_attn": "off", "cache_type_v": "q8_0"})
 	if _, err := p.Plan(in); !errors.Is(err, estimate.ErrRefused) {
@@ -306,17 +326,22 @@ func TestParamStatesAndRefusal(t *testing.T) {
 			t.Fatalf("every quantized type is disabled without flash attention: %v", s)
 		}
 	}
-	// Quantized weights default to an 8-bit cache. Other weights use f16.
-	auto := params.Clone()
-	auto["n_ctx"] = int64(1024)
-	plan, err = p.Plan(input(d, host(24*gib, 64*gib), auto))
-	if err != nil || plan.GetParams()["cache_type_k"] != "q8_0" || plan.GetParams()["cache_type_v"] != "q8_0" {
-		t.Fatalf("quantized weights: %v %v", plan.GetParams(), err)
+	// Empty cache types stay empty and size the cache as llama.cpp's f16 does
+	sized := func(k, v string) (uint64, map[string]string) {
+		ps := params.Clone()
+		ps["n_ctx"] = int64(1024)
+		ps["cache_type_k"], ps["cache_type_v"] = k, v
+		plan, err := p.Plan(input(d, host(24*gib, 64*gib), ps))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return plan.GetCacheBytes(), plan.GetParams()
 	}
-	d.BitsPerWeight = 16
-	plan, err = p.Plan(input(d, host(24*gib, 64*gib), auto))
-	if err != nil || plan.GetParams()["cache_type_k"] != "f16" || plan.GetParams()["cache_type_v"] != "f16" {
-		t.Fatalf("full width weights: %v %v", plan.GetParams(), err)
+	unset, solved := sized("", "")
+	f16, _ := sized("f16", "f16")
+	q8, _ := sized("q8_0", "q8_0")
+	if unset != f16 || q8 >= f16 || solved["cache_type_k"] != "" || solved["cache_type_v"] != "" {
+		t.Fatalf("unset %d f16 %d q8 %d params %v", unset, f16, q8, solved)
 	}
 }
 
@@ -584,13 +609,102 @@ func TestUnloadedKindsStayOnDisk(t *testing.T) {
 			t.Fatalf("%s: drafts should sit on device: %d", id, estimate.PlannedDevice(plan))
 		}
 	}
-	// llama.cpp and NeMo never draft with them
-	for _, id := range []string{"llamacpp", "nemo"} {
-		p, params := policy(t, id)
-		plan, err := p.Plan(input(d, host(24*gib, 64*gib), defaults(params, nil)))
-		if err != nil || plan.GetWeightsBytes() != uint64(base) || len(plan.GetSkipped()) != 1 {
-			t.Fatalf("%s: %+v %v", id, plan, err)
+	// NeMo never drafts with them
+	p, params := policy(t, "nemo")
+	plan, err := p.Plan(input(d, host(24*gib, 64*gib), defaults(params, nil)))
+	if err != nil || plan.GetWeightsBytes() != uint64(base) || len(plan.GetSkipped()) != 1 {
+		t.Fatalf("nemo: %+v %v", plan, err)
+	}
+}
+
+func TestLlamaCppLoadsWhatTheParamsName(t *testing.T) {
+	p, params := policy(t, "llamacpp")
+	// Four trunk layers, one MTP head layer past them, and the projector stored with the model
+	d := descriptor(4, 100*mib, 0)
+	d.Params["n_layer"], d.Params["n_layer_draft"] = 5, 1
+	d.Groups = append(d.Groups, &v1.TensorGroup{Id: "draft.4", Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT, Layer: 4, Bytes: 200 * mib})
+	d.Groups = append(d.Groups, &v1.TensorGroup{Id: "vision", Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_VISION, Layer: -1, Bytes: 500 * mib})
+	trunk := uint64(4*100*mib + 600*mib)
+	// Eight KV heads of 128 wide keys and values, f16, over 8192 tokens
+	perLayer := uint64(8192 * 8 * 256 * 2)
+	plan, err := p.Plan(input(d, host(24*gib, 64*gib), defaults(params, nil)))
+	if err != nil || plan.GetWeightsBytes() != trunk || plan.GetCacheBytes() != 4*perLayer || len(plan.GetSkipped()) != 2 {
+		t.Fatalf("the projector and heads stay on disk until named: %+v %v", plan, err)
+	}
+	// draft-mtp loads the heads, whose context keeps an f16 cache of its own layer
+	plan, err = p.Plan(input(d, host(24*gib, 64*gib), defaults(params, map[string]any{"spec_type": "draft-mtp"})))
+	if err != nil || plan.GetWeightsBytes() != trunk+200*mib || plan.GetCacheBytes() != 5*perLayer {
+		t.Fatalf("mtp heads: weights %d cache %d %v", plan.GetWeightsBytes(), plan.GetCacheBytes(), err)
+	}
+	var heads bool
+	for _, pl := range plan.GetPlacements() {
+		heads = heads || (pl.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT && pl.GetPoolId() == "device" && pl.GetBytes() == 200*mib)
+	}
+	if !heads {
+		t.Fatalf("the heads sit on device: %v", plan.GetPlacements())
+	}
+	// A named projector loads whole at its file's size, the stored one staying on disk
+	projector := filepath.Join(t.TempDir(), "mmproj-other.gguf")
+	if err := os.WriteFile(projector, make([]byte, 3*mib), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan, err = p.Plan(input(d, host(24*gib, 64*gib), defaults(params, map[string]any{"mmproj": projector})))
+	if err != nil || plan.GetWeightsBytes() != trunk+3*mib {
+		t.Fatalf("named projector: %+v %v", plan, err)
+	}
+	if _, err := p.Plan(input(d, host(24*gib, 64*gib), defaults(params, map[string]any{"mmproj": projector + ".gone"}))); !errors.Is(err, estimate.ErrRefused) || !strings.Contains(err.Error(), "projector") {
+		t.Fatalf("a missing projector is refused: %v", err)
+	}
+	// draft-mtp on a model without heads is refused before launch
+	if _, err := p.Plan(input(descriptor(4, 100*mib, 0), host(24*gib, 64*gib), defaults(params, map[string]any{"spec_type": "draft-mtp"}))); !errors.Is(err, estimate.ErrRefused) || !strings.Contains(err.Error(), "MTP heads") {
+		t.Fatalf("mtp without heads: %v", err)
+	}
+	// A draft model loads its trunk and own cache on device, an assistant sharing the target's cache keeps none
+	draft := &v1.Descriptor{Architecture: "llama", Params: map[string]float64{"n_layer": 2, "n_head_kv": 4, "head_dim": 64, "head_dim_v": 64}}
+	for i := int32(0); i < 2; i++ {
+		draft.Groups = append(draft.Groups, &v1.TensorGroup{Id: "layer." + strconv.Itoa(int(i)), Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, Layer: i, Bytes: 50 * mib})
+	}
+	draft.Groups = append(draft.Groups, &v1.TensorGroup{Id: "output", Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_OUTPUT, Layer: -1, Bytes: 10 * mib})
+	in := input(d, host(24*gib, 64*gib), defaults(params, map[string]any{"spec_type": "draft-simple", "draft_model": "/drafts/small.gguf"}))
+	in.Draft, in.DraftFamily = draft, archs.Default{}
+	plan, err = p.Plan(in)
+	if err != nil || plan.GetWeightsBytes() != trunk+110*mib || plan.GetCacheBytes() != 4*perLayer+uint64(8192*2*4*128*2) {
+		t.Fatalf("draft model: weights %d cache %d %v", plan.GetWeightsBytes(), plan.GetCacheBytes(), err)
+	}
+	draft.Architecture = "gemma4-assistant"
+	if plan, err = p.Plan(in); err != nil || plan.GetCacheBytes() != 4*perLayer {
+		t.Fatalf("an assistant shares the target's cache: %d %v", plan.GetCacheBytes(), err)
+	}
+	// An unset method takes the one the draft file is made for, and a set one stays as set
+	if plan, err = p.Plan(input(d, host(24*gib, 64*gib), defaults(params, nil))); err != nil || plan.GetParams()["spec_type"] != "none" {
+		t.Fatalf("no draft model drafts nothing: %v %v", plan.GetParams()["spec_type"], err)
+	}
+	in.Params = defaults(params, map[string]any{"draft_model": "/drafts/small.gguf"})
+	for arch, want := range map[string]string{"llama": "draft-simple", "gemma4-assistant": "draft-mtp", "dflash": estimate.Auto} {
+		draft.Architecture = arch
+		if plan, err = p.Plan(in); err != nil || plan.GetParams()["spec_type"] != want {
+			t.Fatalf("%s draft: %v %v", arch, plan.GetParams()["spec_type"], err)
 		}
+	}
+	nextn := &v1.Descriptor{Architecture: "qwen35", Params: map[string]float64{"n_layer": 1, "n_layer_draft": 1, "n_head_kv": 4, "head_dim": 64, "head_dim_v": 64},
+		Groups: []*v1.TensorGroup{{Id: "draft.0", Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT, Layer: 0, Bytes: 20 * mib}}}
+	in.Draft = nextn
+	if plan, err = p.Plan(in); err != nil || plan.GetParams()["spec_type"] != "draft-mtp" {
+		t.Fatalf("a nextn head file: %v %v", plan.GetParams()["spec_type"], err)
+	}
+	in.Draft, draft.Architecture = draft, "gemma4-assistant"
+	in.Params = defaults(params, map[string]any{"spec_type": "draft-simple", "draft_model": "/drafts/small.gguf"})
+	if plan, err = p.Plan(in); err != nil || plan.GetParams()["spec_type"] != "draft-simple" {
+		t.Fatalf("a set method is kept: %v %v", plan.GetParams()["spec_type"], err)
+	}
+	in.Params = defaults(params, map[string]any{"spec_type": "none", "draft_model": "/drafts/small.gguf"})
+	if _, err := p.Plan(in); !errors.Is(err, estimate.ErrRefused) || !strings.Contains(err.Error(), "idle") {
+		t.Fatalf("none beside a draft model is refused: %v", err)
+	}
+	// A seat's share of a solved descriptor takes no file the params name a second time
+	in.Part, in.Params = true, defaults(params, map[string]any{"mmproj": projector})
+	if plan, err = p.Plan(in); err != nil || plan.GetWeightsBytes() != trunk {
+		t.Fatalf("a part adds no files: %+v %v", plan, err)
 	}
 }
 

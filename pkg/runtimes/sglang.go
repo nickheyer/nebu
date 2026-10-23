@@ -131,7 +131,7 @@ func (SGLang) Policy() *estimate.Policy {
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_OUTPUT, Pool: device},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_VISION, Pool: device},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_AUDIO, Pool: device},
-			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT, Pool: device, Loaded: func(s *estimate.Scope) bool { return s.Params.Str("speculative_algorithm") != "" }},
+			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT, Pool: device, Loaded: func(s *estimate.Scope, _ *v1.TensorGroup) bool { return s.Params.Str("speculative_algorithm") != "" }},
 			{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_OTHER, Pool: device},
 		},
 		CacheBytes: func(s *estimate.Scope) uint64 {

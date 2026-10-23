@@ -35,6 +35,18 @@ func TestScan(t *testing.T) {
 	}
 }
 
+func TestProjectorTriageLeadsWithTheType(t *testing.T) {
+	lines := []string{
+		"0.16.588.512 E clip_init: failed to load model '/m/mmproj.gguf': load_hparams: unknown projector type: nemotron_omni",
+		"0.16.588.583 E mtmd_init_from_file: error: Failed to load CLIP model from /m/mmproj.gguf",
+		"0.16.588.589 E srv    load_model: failed to load multimodal model, '/m/mmproj.gguf'",
+	}
+	hits := Scan([]Set{LlamaCpp{}}, lines)
+	if len(hits) == 0 || hits[0].GetId() != "unknown-projector" || hits[0].GetSummary() != "this build does not know projector type nemotron_omni" || hits[0].GetFix()["mmproj"] != "none" {
+		t.Fatalf("hits %v", hits)
+	}
+}
+
 func TestShippedRules(t *testing.T) {
 	cases := []struct {
 		set  Set
@@ -48,6 +60,8 @@ func TestShippedRules(t *testing.T) {
 		{LlamaCpp{}, "error: unknown device: Metal0", "unknown-device"},
 		{LlamaCpp{}, `error while handling argument "--device": invalid device: Metal0`, "unknown-device"},
 		{LlamaCpp{}, "llama_model_load: error loading model: error loading model hyperparameters: key qwen35.rope.dimension_sections has wrong array length; expected 4, got 3", "gguf-hparams"},
+		{LlamaCpp{}, "0.16.588.512 E clip_init: failed to load model '/m/mmproj.gguf': load_hparams: unknown projector type: nemotron_omni", "unknown-projector"},
+		{LlamaCpp{}, "0.16.588.589 E srv    load_model: failed to load multimodal model, '/m/mmproj.gguf'", "projector-load"},
 		{VLLM{}, "torch.OutOfMemoryError: CUDA out of memory", "device-oom"},
 		{VLLM{}, "ValueError: Model architectures ['FooForCausalLM'] are not supported for now", "unsupported-arch"},
 		{SGLang{}, "RuntimeError: Not enough memory. Please try to increase --mem-fraction-static", "pool-too-small"},

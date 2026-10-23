@@ -33,6 +33,21 @@ func TestDefaultCacheLayers(t *testing.T) {
 	}
 }
 
+// A header counting KV heads per layer gives each layer its own cache, none where a layer has no attention
+func TestPerLayerKVHeads(t *testing.T) {
+	p := params(5, 4)
+	p.HeadsKV, p.HeadsKVLayers = 2, []float64{0, 0, 2, 0, 2}
+	got, err := Default{}.CacheLayers(p, Run{})
+	if err != nil || !slices.Equal(got, []float64{0, 0, 512, 0, 512}) {
+		t.Fatalf("per layer heads outrank the interval: %v %v", got, err)
+	}
+	p.SlidingWindow = 1024
+	got, err = slidingWindow(p, Run{Context: 4096}, 0)
+	if err != nil || !slices.Equal(got, []float64{0, 0, 128, 0, 128}) {
+		t.Fatalf("a window layer keeps its own heads' share: %v %v", got, err)
+	}
+}
+
 // Sliding window families keep the full context on the last layer of each pattern and the window
 // plus a batch on the others, every layer a window when the pattern is zero
 func TestSlidingWindowCacheLayers(t *testing.T) {
