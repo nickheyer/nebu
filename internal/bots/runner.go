@@ -553,7 +553,7 @@ func (r *runner) saveChannel(c *channelState) error {
 }
 
 // Lists the guilds every shard sees with their text channels
-func (r *runner) guilds(ctx context.Context) ([]*v1.BotGuild, error) {
+func (r *runner) guilds(_ context.Context) ([]*v1.BotGuild, error) {
 	var out []*v1.BotGuild
 	for _, sh := range r.snapshotShards() {
 		if !sh.connected || sh.sess == nil {

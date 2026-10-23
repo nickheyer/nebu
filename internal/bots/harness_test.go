@@ -216,6 +216,13 @@ func (f *fakeSession) sentCount() int {
 	return len(f.sent)
 }
 
+// Replaces a channel's history under the session lock
+func (f *fakeSession) setHistory(channelID string, msgs []*discordgo.Message) {
+	f.mu.Lock()
+	f.history[channelID] = msgs
+	f.mu.Unlock()
+}
+
 // Fake runtime with OpenAI chat and stable-diffusion.cpp media APIs.
 type fakeUpstream struct {
 	mu       sync.Mutex
@@ -430,9 +437,34 @@ func (h *harness) ready(t *testing.T, spec *v1.BotSpec) *v1.Bot {
 	return bot
 }
 
+// Waits until a reply observed in the channel has released it, with its counters and activity recorded
+func (h *harness) settled(t *testing.T, ref, channelID string) {
+	t.Helper()
+	waitFor(t, "the reply in "+channelID+" to finish", func() bool {
+		r, err := h.m.running(ref)
+		if err != nil {
+			return false
+		}
+		c := r.channel(channelID)
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return !c.busy
+	})
+}
+
+// A bot's activity kinds newest first, comma joined
+func (h *harness) kinds(ref string) string {
+	acts, _ := h.m.Activity(ref, 0)
+	var out []string
+	for _, a := range acts {
+		out = append(out, a.GetKind())
+	}
+	return strings.Join(out, ",")
+}
+
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return

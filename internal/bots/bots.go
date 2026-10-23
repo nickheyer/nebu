@@ -56,9 +56,10 @@ type Manager struct {
 	// Whether Settings hold a tool server a persona names, every name passing when unset
 	Tools interface{ Known(ref string) bool }
 
-	mu   sync.Mutex
-	bots map[string]*entry
-	base context.Context
+	mu       sync.Mutex
+	bots     map[string]*entry
+	base     context.Context
+	recordMu sync.Mutex
 }
 
 type entry struct {
@@ -493,24 +494,29 @@ func (m *Manager) status(r *runner, fn func(*v1.BotStatus)) {
 	}
 }
 
-// Records an activity entry in memory and the store, then publishes it
+// Stores an activity line, then mirrors it in memory so readers never see what the store lacks
 func (m *Manager) record(r *runner, a *v1.BotActivity) {
 	a.BotId, a.At = r.id, timestamppb.Now()
+	m.recordMu.Lock()
 	m.mu.Lock()
-	e, ok := m.bots[r.id]
-	if ok {
+	_, ok := m.bots[r.id]
+	m.mu.Unlock()
+	if !ok {
+		m.recordMu.Unlock()
+		return
+	}
+	if err := m.DB.PutBotActivity(m.base, a, activityMax); err != nil {
+		m.Log.Warn("bot activity not saved", "bot", r.name, "err", err)
+	}
+	m.mu.Lock()
+	if e, ok := m.bots[r.id]; ok {
 		e.activity = append(e.activity, a)
 		if len(e.activity) > activityMax {
 			e.activity = e.activity[len(e.activity)-activityMax:]
 		}
 	}
 	m.mu.Unlock()
-	if !ok {
-		return
-	}
-	if err := m.DB.PutBotActivity(m.base, a, activityMax); err != nil {
-		m.Log.Warn("bot activity not saved", "bot", r.name, "err", err)
-	}
+	m.recordMu.Unlock()
 	attrs := []any{"bot", r.name, "kind", a.GetKind(), "channel", a.GetChannelId()}
 	switch a.GetLevel() {
 	case "error":

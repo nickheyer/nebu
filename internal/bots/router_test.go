@@ -32,9 +32,10 @@ func TestBotConnectsRegistersAndAnswersMentions(t *testing.T) {
 	if s.sentCount() != 0 {
 		t.Fatalf("answered an unaddressed message: %v", s.sent)
 	}
-	s.history["c1"] = []*discordgo.Message{plain("1", "just chatting")}
+	s.setHistory("c1", []*discordgo.Message{plain("1", "just chatting")})
 	s.h.message(0, mention("2", "hello there"))
 	waitFor(t, "an answer", func() bool { return s.sentCount() == 1 })
+	h.settled(t, bot.GetId(), "c1")
 	if s.sent[0].msg.Content != "Hello from llm." {
 		t.Fatalf("answer %q", s.sent[0].msg.Content)
 	}
@@ -84,15 +85,16 @@ func TestWakeWordsPickThePersonaAndWebhooksWearIt(t *testing.T) {
 	if s.sentCount() != 0 {
 		t.Fatal("a webhook persona must not post as the bot")
 	}
+	h.settled(t, bot.GetId(), "c1")
 	rows, err := h.m.DB.ListBotChannels(context.Background(), bot.GetId())
 	if err != nil || len(rows) != 1 || rows[0].WebhookID != "hook-c1" {
 		t.Fatalf("webhook not remembered: %v %v", rows, err)
 	}
 	// Own webhook messages are assistant turns. Other personas are user turns.
-	s.history["c1"] = []*discordgo.Message{
+	s.setHistory("c1", []*discordgo.Message{
 		{ID: "5", ChannelID: "c1", Content: "sam what do you think", Author: &discordgo.User{ID: "u1", Username: "nick"}, Timestamp: time.Now()},
 		{ID: "6", ChannelID: "c1", Content: "Hello from llm.", Author: &discordgo.User{ID: "hook-c1", Username: "Sam", Bot: true}, WebhookID: "hook-c1", Timestamp: time.Now()},
-	}
+	})
 	s.h.message(0, plain("7", "sam, again?"))
 	waitFor(t, "a second webhook post", func() bool {
 		s.mu.Lock()
@@ -257,7 +259,7 @@ func TestSlashCommandsAnswerWithFollowups(t *testing.T) {
 	if len(rows) != 1 || rows[0].PersonaID != bot.GetSpec().GetPersonas()[1].GetId() {
 		t.Fatalf("channel persona not saved: %+v", rows)
 	}
-	s.history["c1"] = []*discordgo.Message{plain("40", "old news"), plain("41", "older news")}
+	s.setHistory("c1", []*discordgo.Message{plain("40", "old news"), plain("41", "older news")})
 	reset := &discordgo.Interaction{Type: discordgo.InteractionApplicationCommand, ChannelID: "c1", GuildID: "g1", Member: &discordgo.Member{User: &discordgo.User{ID: "u1", Username: "nick"}},
 		Data: discordgo.ApplicationCommandInteractionData{Name: "reset"}}
 	s.h.interact(0, reset)
@@ -371,10 +373,10 @@ func TestBotChainAndCooldown(t *testing.T) {
 	spec.Engagement.AnswerBots = true
 	spec.Engagement.MaxBotChain = 2
 	spec.Engagement.CooldownMs = 60000
-	h.ready(t, spec)
+	bot := h.ready(t, spec)
 	s := h.session()
 	other := &discordgo.User{ID: "b2", Username: "otherbot", Bot: true}
-	s.history["c1"] = []*discordgo.Message{{ID: "70", ChannelID: "c1", Content: "beep", Author: other, Timestamp: time.Now()}}
+	s.setHistory("c1", []*discordgo.Message{{ID: "70", ChannelID: "c1", Content: "beep", Author: other, Timestamp: time.Now()}})
 	chained := &discordgo.Message{ID: "71", ChannelID: "c1", GuildID: "g1", Content: "<@1001> boop", Author: other, Mentions: []*discordgo.User{{ID: "1001"}}, Timestamp: time.Now()}
 	s.h.message(0, chained)
 	time.Sleep(150 * time.Millisecond)
@@ -383,6 +385,7 @@ func TestBotChainAndCooldown(t *testing.T) {
 	}
 	s.h.message(0, mention("72", "first"))
 	waitFor(t, "first answer", func() bool { return s.sentCount() == 1 })
+	h.settled(t, bot.GetId(), "c1")
 	s.h.message(0, mention("73", "second, too soon"))
 	time.Sleep(150 * time.Millisecond)
 	if s.sentCount() != 1 {
@@ -488,11 +491,13 @@ func TestActivityIsKeptAcrossManagers(t *testing.T) {
 	h := newHarness(t)
 	bot := h.ready(t, quickSpec())
 	s := h.session()
+	waitFor(t, "the command registration line", func() bool { return strings.Contains(h.kinds(bot.GetId()), "command") })
 	s.h.message(0, mention("2", "hello there"))
 	waitFor(t, "an answer", func() bool { return s.sentCount() == 1 })
+	h.settled(t, bot.GetId(), "c1")
 	before, _ := h.m.Activity(bot.GetId(), 0)
-	if len(before) == 0 {
-		t.Fatal("no activity recorded")
+	if kinds := h.kinds(bot.GetId()); kinds != "reply,command,shard" {
+		t.Fatalf("activity before reload %q", kinds)
 	}
 	again := New(context.Background(), h.m.DB, h.m.Gateway, h.m.Events, h.m.Log, "")
 	if err := again.Load(context.Background()); err != nil {
