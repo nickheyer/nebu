@@ -2,6 +2,7 @@ import { errorMessage } from './chatClient';
 import { gatewayCredentials } from './auth.svelte';
 import { deleteImages, type Attachment } from './images';
 import { readLocal, writeLocal } from './persist';
+import { ms } from './format';
 
 export interface MediaRequest {
   model: string;
@@ -230,4 +231,21 @@ export function writeHistory(list: Generation[]) {
 
 export function historyFileIds(): string[] {
   return readHistory().flatMap((g) => [...g.files, ...(g.inputs ?? [])].map((f) => f.id));
+}
+
+// The size, steps, sampler, seed, and time of a generation, for its caption
+export function summaryOf(g: Generation): string[] {
+  const r = g.request;
+  const out = [`${r.width}×${r.height}`];
+  if (g.kind === 'video') out.push(`${g.video?.frames ?? r.frames ?? '?'} frames · ${g.video?.fps ?? r.fps ?? '?'} fps`);
+  const steps = r.steps ?? g.applied?.steps;
+  if (steps) out.push(`${steps} steps`);
+  const cfg = r.cfg_scale ?? g.applied?.cfg;
+  if (cfg !== undefined) out.push(`cfg ${cfg}`);
+  const sampler = r.sampler ?? g.applied?.sampler;
+  if (sampler) out.push(sampler);
+  if (r.lora?.length) out.push(`${r.lora.length} LoRA${r.lora.length > 1 ? 's' : ''}`);
+  if (r.seed !== undefined) out.push(`seed ${r.seed}`);
+  if (g.elapsedMs) out.push(ms(g.elapsedMs));
+  return out;
 }

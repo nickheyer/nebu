@@ -81,6 +81,14 @@ func (g *Guard) Identify(h http.Header) (*Session, bool) {
 	return nil, false
 }
 
+// The host the browser addressed, X-Forwarded-Host behind a proxy the sessions trust
+func (g *Guard) Host(r *http.Request) string {
+	if g.sessions == nil {
+		return r.Host
+	}
+	return g.sessions.Proxies().Host(r)
+}
+
 // The mesh member behind the request's bearer token, false for every other credential
 func (g *Guard) PeerOf(h http.Header) (string, bool) {
 	bearer := Bearer(h)

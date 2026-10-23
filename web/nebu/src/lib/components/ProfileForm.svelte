@@ -11,7 +11,7 @@
   <Field label="System messages after the first" for="{idPrefix}-system">
     <Select id="{idPrefix}-system" bind:value={fields.systemMessages} items={systemMessageItems} />
   </Field>
-  <Field label="Tool servers" for="{idPrefix}-tools" description="Every request on the route gets these tools, whatever client sends it.">
+  <Field label="Tool servers" for="{idPrefix}-tools" description="Offered on every request to the route.">
     <div id="{idPrefix}-tools"><ToolServerPicker bind:refs={fields.toolServers} bind:mutating={fields.mutatingTools} /></div>
   </Field>
 </div>

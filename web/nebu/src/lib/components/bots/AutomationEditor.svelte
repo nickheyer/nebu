@@ -67,7 +67,7 @@
           <TextInput id="{idPrefix}-command" mono bind:value={automation.command} empty="roll" />
         </Field>
       {:else if trigger === TriggerKind.MEMBER_JOIN}
-        <div class="text-xs leading-5 text-fg-muted sm:pt-6">Enable Member events and Discord's Server Members intent.</div>
+        <div class="text-xs leading-5 text-fg-muted sm:pt-6">Needs the Server Members intent.</div>
       {/if}
     </div>
     <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">

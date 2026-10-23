@@ -118,6 +118,8 @@ type Daemon struct {
 	base       context.Context
 	addr       string
 	secure     bool
+	// Ownership of the data directory, let go on close
+	lock *dirLock
 }
 
 // Builds every manager from config
@@ -127,6 +129,16 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 			return nil, err
 		}
 	}
+	// One process at a time owns the database and store, named in the lock once it listens
+	lock, err := lockDir(cfg.GetDataDir())
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			lock.release()
+		}
+	}()
 	prober := host.New(probes.All(), []string{cfg.GetStoreDir(), cfg.GetDataDir(), cfg.GetCacheDir()}, profileTTL)
 	fmts, err := formatsall.Registry()
 	if err != nil {
@@ -170,10 +182,11 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	if fetcher.Schedule, err = transfer.NewSchedule(tr.GetMaxBytesPerSecond(), tr.GetWindows()); err != nil {
 		return nil, fmt.Errorf("transfer windows: %w", err)
 	}
-	store, err := db.Open(filepath.Join(cfg.GetDataDir(), "nebu.db"))
+	store, err := db.Open(filepath.Join(cfg.GetDataDir(), "nebu.db"), chats.Upgrade(blobStore))
 	if err != nil {
 		return nil, err
 	}
+	blobStore.Refs = func() ([]string, error) { return store.ChatFileDigests(context.Background()) }
 	// Close the store if initialization fails.
 	defer func() {
 		if err != nil {
@@ -211,6 +224,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		Log:     log,
 		cancel:  cancel,
 		base:    base,
+		lock:    lock,
 	}
 	if d.tls, err = d.tlsConfig(); err != nil {
 		return nil, err
@@ -324,7 +338,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	d.Settings.Referenced = func(name string) []string {
 		return append(d.Routes.ToolServerUsers(name), d.Bots.ToolServerUsers(name)...)
 	}
-	d.Chats = &chats.Manager{DB: store, Log: log}
+	d.Chats = &chats.Manager{DB: store, Blobs: blobStore, Log: log}
 	var ui http.Handler
 	if !cfg.GetWeb().GetDisabled() {
 		ui = web.Handler()
@@ -587,6 +601,9 @@ func (d *Daemon) Close() {
 		if err := d.DB.Close(); err != nil {
 			d.Log.Warn("store close failed", "err", err)
 		}
+		if err := d.lock.release(); err != nil {
+			d.Log.Warn("data directory lock not released", "err", err)
+		}
 	})
 }
 
@@ -605,6 +622,11 @@ func (d *Daemon) ListenAndServe(ctx context.Context) error {
 	}
 	ln, err := listen(d.Config.GetListen())
 	if err != nil {
+		d.Close()
+		return err
+	}
+	if err := d.lock.name(ln.Addr().String()); err != nil {
+		ln.Close()
 		d.Close()
 		return err
 	}

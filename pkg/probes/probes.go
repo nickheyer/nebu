@@ -24,6 +24,7 @@ func All() []host.Probe {
 	return []host.Probe{
 		nvidiaSMI{},
 		rocmSMI{},
+		drmSysfs{},
 		cpuinfo{},
 		meminfo{},
 		darwinCPU{},

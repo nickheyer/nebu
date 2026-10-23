@@ -157,7 +157,7 @@
         {/each}
         <td class="num">
           {#if onDisk > 0n}
-            <Tip text="Loaded into memory. Another {bytes(onDisk)} stays on disk: {skippedWords}.">{bytes(need)}</Tip>
+            <Tip text="In memory. {bytes(onDisk)} stays on disk: {skippedWords}.">{bytes(need)}</Tip>
           {:else}
             {bytes(need)}
           {/if}

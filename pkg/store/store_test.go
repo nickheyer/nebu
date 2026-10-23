@@ -200,3 +200,48 @@ func TestManifestIndex(t *testing.T) {
 		t.Fatalf("list from disk %v", list)
 	}
 }
+
+func TestPutBlobReleaseAndHeldReferences(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := s.PutBlob([]byte("hello"))
+	if err != nil || digest != "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" || !s.HasBlob(digest) {
+		t.Fatalf("put %q %v", digest, err)
+	}
+	if again, err := s.PutBlob([]byte("hello")); err != nil || again != digest {
+		t.Fatalf("same bytes same blob: %q %v", again, err)
+	}
+	if data, err := os.ReadFile(s.BlobPath(digest)); err != nil || string(data) != "hello" {
+		t.Fatalf("blob bytes %q %v", data, err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(s.root, blobsDir)); len(entries) != 1 {
+		t.Fatalf("temporary files left behind: %d entries", len(entries))
+	}
+	other, _ := s.PutBlob([]byte("other"))
+	named, _ := s.PutBlob([]byte("named"))
+	m := &v1.StoredModel{SourceId: "src", Repo: "org/repo", Group: "Q4", Bytes: 5, Artifacts: []*v1.StoredArtifact{{Digest: named, Path: "m.gguf", Artifact: &v1.Artifact{Path: "m.gguf"}}}}
+	if err := s.WriteManifest(m); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := s.Release(named); err != nil || removed || !s.HasBlob(named) {
+		t.Fatalf("a manifest's blob stays: %v %v", removed, err)
+	}
+	if removed, err := s.Release(other); err != nil || !removed || s.HasBlob(other) {
+		t.Fatalf("release %v %v", removed, err)
+	}
+	if removed, err := s.Release(other); err != nil || removed {
+		t.Fatalf("releasing twice: %v %v", removed, err)
+	}
+	s.Refs = func() ([]string, error) { return []string{digest}, nil }
+	loose, _ := s.PutBlob([]byte("loose"))
+	resp, err := s.Gc(false)
+	if err != nil || resp.GetRemoved() != 1 || s.HasBlob(loose) || !s.HasBlob(digest) || !s.HasBlob(named) {
+		t.Fatalf("gc keeps held and named blobs: %v %v", resp, err)
+	}
+	s.Refs = func() ([]string, error) { return nil, errors.New("no list") }
+	if _, err := s.Gc(false); err == nil {
+		t.Fatal("a sweep that cannot learn the held blobs must not run")
+	}
+}

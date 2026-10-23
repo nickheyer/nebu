@@ -53,8 +53,11 @@ type DB struct {
 	Baselined string
 }
 
-// Opens the database and applies embedded migrations.
-func Open(path string) (*DB, error) {
+// Work a release does on the data once its migrations have run, before the schema is checked
+type Upgrade func(ctx context.Context, d *DB) error
+
+// Opens the database, applies embedded migrations, and runs the upgrades over the migrated rows
+func Open(path string, upgrades ...Upgrade) (*DB, error) {
 	aside, err := setAsideLegacy(path)
 	if err != nil {
 		return nil, err
@@ -65,11 +68,6 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 	sqldb.SetMaxOpenConns(1)
-	d := &DB{sql: sqldb, path: path, SetAside: aside}
-	if err := d.migrate(context.Background()); err != nil {
-		sqldb.Close()
-		return nil, err
-	}
 	reads, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		sqldb.Close()
@@ -77,7 +75,11 @@ func Open(path string) (*DB, error) {
 	}
 	reads.SetMaxOpenConns(readConns)
 	reads.SetMaxIdleConns(readConns)
-	d.reads = reads
+	d := &DB{sql: sqldb, reads: reads, path: path, SetAside: aside}
+	if err := d.migrate(context.Background(), upgrades); err != nil {
+		d.Close()
+		return nil, err
+	}
 	return d, nil
 }
 
@@ -114,8 +116,8 @@ func setAsideLegacy(path string) (string, error) {
 	return aside, nil
 }
 
-// Applies pending migrations with atlas and records them in its revision table
-func (d *DB) migrate(ctx context.Context) error {
+// Applies pending migrations, runs the upgrades over the migrated rows, and notes the drift left
+func (d *DB) migrate(ctx context.Context, upgrades []Upgrade) error {
 	dir, err := migrationDir()
 	if err != nil {
 		return err
@@ -123,35 +125,59 @@ func (d *DB) migrate(ctx context.Context) error {
 	if err := migrate.Validate(dir); err != nil {
 		return fmt.Errorf("migration directory: %w", err)
 	}
+	if err := d.apply(ctx, dir); err != nil {
+		return err
+	}
+	// The writer is free again here, so upgrades may write through the store's own methods
+	for _, up := range upgrades {
+		if err := up(ctx, d); err != nil {
+			return fmt.Errorf("upgrade: %w", err)
+		}
+	}
+	return d.withDriver(ctx, func(drv migrate.Driver, conn *sql.Conn) error {
+		changes, err := schemaChanges(ctx, drv)
+		if err != nil {
+			return err
+		}
+		d.Drift = describe(changes)
+		return nil
+	})
+}
+
+// Applies pending migrations with atlas and records them in its revision table
+func (d *DB) apply(ctx context.Context, dir migrate.Dir) error {
+	return d.withDriver(ctx, func(drv migrate.Driver, conn *sql.Conn) error {
+		if _, err := conn.ExecContext(ctx, revisionTableDDL); err != nil {
+			return fmt.Errorf("create revision table: %w", err)
+		}
+		revs := revisionStore{conn}
+		var err error
+		if d.Baselined, err = baseline(ctx, drv, conn, d.path, dir, revs); err != nil {
+			return err
+		}
+		ex, err := migrate.NewExecutor(drv, dir, revs, migrate.WithOperatorVersion(operator))
+		if err != nil {
+			return err
+		}
+		if err := ex.ExecuteN(ctx, 0); err != nil && !errors.Is(err, migrate.ErrNoPendingFiles) {
+			return fmt.Errorf("migrate: %w", err)
+		}
+		return nil
+	})
+}
+
+// Runs fn with an atlas driver over the writer connection, held for fn alone
+func (d *DB) withDriver(ctx context.Context, fn func(drv migrate.Driver, conn *sql.Conn) error) error {
 	conn, err := d.sql.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, revisionTableDDL); err != nil {
-		return fmt.Errorf("create revision table: %w", err)
-	}
 	drv, err := sqlite.Open(conn)
 	if err != nil {
 		return err
 	}
-	revs := revisionStore{conn}
-	if d.Baselined, err = baseline(ctx, drv, conn, d.path, dir, revs); err != nil {
-		return err
-	}
-	ex, err := migrate.NewExecutor(drv, dir, revs, migrate.WithOperatorVersion(operator))
-	if err != nil {
-		return err
-	}
-	if err := ex.ExecuteN(ctx, 0); err != nil && !errors.Is(err, migrate.ErrNoPendingFiles) {
-		return fmt.Errorf("migrate: %w", err)
-	}
-	changes, err := schemaChanges(ctx, drv)
-	if err != nil {
-		return err
-	}
-	d.Drift = describe(changes)
-	return nil
+	return fn(drv, conn)
 }
 
 // Reconciles databases whose recorded revisions are absent from the directory.
@@ -269,18 +295,19 @@ func applyChanges(ctx context.Context, drv migrate.Driver, conn *sql.Conn, path 
 	return run(after)
 }
 
-// Checkpoints the WAL and creates a dated database backup.
+// Writes a dated backup of the database through VACUUM INTO, a consistent copy made page by page
 func copyAside(ctx context.Context, conn *sql.Conn, path, why string) (string, error) {
 	if path == "" || path == ":memory:" {
 		return "", nil
 	}
-	conn.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
-	data, err := os.ReadFile(path)
-	if err != nil {
+	aside := fmt.Sprintf("%s.%s.%s", path, why, time.Now().UTC().Format("20060102T150405"))
+	if err := os.Remove(aside); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", err
 	}
-	aside := fmt.Sprintf("%s.%s.%s", path, why, time.Now().UTC().Format("20060102T150405"))
-	return aside, os.WriteFile(aside, data, 0o600)
+	if _, err := conn.ExecContext(ctx, `VACUUM INTO ?`, aside); err != nil {
+		return "", fmt.Errorf("backup to %s: %w", aside, err)
+	}
+	return aside, os.Chmod(aside, 0o600)
 }
 
 // Copies the embedded migration files into an atlas memory dir

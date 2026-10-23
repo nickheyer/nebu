@@ -2,6 +2,8 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -58,6 +60,8 @@ type Store struct {
 	CacheDir string
 	// Whether a formation's tensor cache is still wanted, nil keeps every one
 	KeepCache func(formationID string) bool
+	// Digests held outside any manifest, which a sweep keeps, nil for none
+	Refs func() ([]string, error)
 }
 
 // Opens or creates a store
@@ -106,6 +110,50 @@ func (s *Store) Commit(partial, digest string) error {
 		return os.Remove(partial)
 	}
 	return os.Rename(partial, dest)
+}
+
+// Writes bytes as a blob and answers the digest they live under, one already there left as it is
+func (s *Store) PutBlob(data []byte) (string, error) {
+	sum := sha256.Sum256(data)
+	digest := Digest(hex.EncodeToString(sum[:]))
+	if s.HasBlob(digest) {
+		return digest, nil
+	}
+	tmp, err := os.CreateTemp(filepath.Join(s.root, blobsDir), "put-*"+partialSuffix)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	if err := s.Commit(tmp.Name(), digest); err != nil {
+		os.Remove(tmp.Name())
+		return "", err
+	}
+	return digest, nil
+}
+
+// Removes a blob no manifest names, answering whether it was there
+func (s *Store) Release(digest string) (bool, error) {
+	referenced, err := s.referenced()
+	if err != nil {
+		return false, err
+	}
+	path := s.BlobPath(digest)
+	if referenced[filepath.Base(path)] {
+		return false, nil
+	}
+	err = os.Remove(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // Adopts a local file by hard link, else copy
@@ -566,6 +614,15 @@ func (s *Store) Gc(partials bool) (*v1.GcResponse, error) {
 	referenced, err := s.referenced()
 	if err != nil {
 		return nil, err
+	}
+	if s.Refs != nil {
+		held, err := s.Refs()
+		if err != nil {
+			return nil, err
+		}
+		for _, digest := range held {
+			referenced[filepath.Base(s.BlobPath(digest))] = true
+		}
 	}
 	entries, err := os.ReadDir(filepath.Join(s.root, blobsDir))
 	if err != nil {

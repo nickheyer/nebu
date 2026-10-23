@@ -44,6 +44,8 @@ type Credentials interface {
 	Enabled() bool
 	Authenticated(http.Header) bool
 	PeerOf(http.Header) (nodeID string, ok bool)
+	// The host the browser addressed, as forwarded by a trusted proxy
+	Host(*http.Request) string
 }
 
 // Marks requests made in process, which pass without credentials
@@ -190,7 +192,8 @@ func (g *Gateway) cors(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// Whether browsers at origin may send cookies, the request's own host on any port or an origin listed by name
+// Whether browsers at origin may send cookies, an origin listed by name, the request's own origin,
+// or the daemon's own host on the port of another of its listeners, where the web UI reaches the gateway
 func (g *Gateway) credentialed(origin string, r *http.Request) bool {
 	for _, o := range g.origins {
 		if o != "*" && strings.EqualFold(o, origin) {
@@ -202,10 +205,30 @@ func (g *Gateway) credentialed(origin string, r *http.Request) bool {
 		return false
 	}
 	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
+	if g.creds != nil {
+		host = g.creds.Host(r)
 	}
-	return strings.EqualFold(u.Hostname(), strings.Trim(host, "[]"))
+	ownHost, ownPort := splitHost(host)
+	if !strings.EqualFold(u.Hostname(), ownHost) {
+		return false
+	}
+	if port := u.Port(); port == ownPort || port == "" && ownPort == "" {
+		return true
+	}
+	for _, l := range g.listeners {
+		if _, port := splitHost(l.GetAddr()); port != "" && port == u.Port() {
+			return true
+		}
+	}
+	return false
+}
+
+// A host and its port, the port empty when the address names none
+func splitHost(addr string) (string, string) {
+	if h, p, err := net.SplitHostPort(addr); err == nil {
+		return strings.Trim(h, "[]"), p
+	}
+	return strings.Trim(addr, "[]"), ""
 }
 
 func (g *Gateway) originAllowed(origin string) bool {

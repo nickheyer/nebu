@@ -355,7 +355,7 @@
                   {#if r.model}
                     <div class="flex flex-wrap gap-1">
                       {#each runtimesOf(r.model.runtimes, cached.runtimes) as x (x.runtime?.id)}
-                        <Chip text={x.runtime?.name ?? x.runtime?.id ?? ''} mono={false} title={x.compatible ? `${x.runtime?.name} serves this model` : `${x.runtime?.name} serves this model, but is not compatible with this host`} class={x.compatible ? '' : 'opacity-50'} />
+                        <Chip text={x.runtime?.name ?? x.runtime?.id ?? ''} mono={false} title={x.compatible ? `${x.runtime?.name} serves this model` : `${x.runtime?.name} serves this model, but not on this host`} class={x.compatible ? '' : 'opacity-50'} />
                       {:else}
                         <span class="text-xs text-fg-faint" title="No compatible runtime">{isComponent(r.model.descriptor) ? 'part' : '–'}</span>
                       {/each}

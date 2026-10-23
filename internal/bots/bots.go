@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -88,7 +89,12 @@ func (m *Manager) Load(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, r := range rows {
-		e := &entry{bot: r.Bot, token: r.Token}
+		recent, err := m.DB.ListBotActivity(ctx, r.Bot.GetId(), activityMax)
+		if err != nil {
+			return err
+		}
+		slices.Reverse(recent)
+		e := &entry{bot: r.Bot, token: r.Token, activity: recent}
 		r.Bot.State = v1.BotState_BOT_STATE_STOPPED
 		r.Bot.Status = &v1.BotStatus{}
 		// Mark invalid stored settings as failed.
@@ -487,7 +493,7 @@ func (m *Manager) status(r *runner, fn func(*v1.BotStatus)) {
 	}
 }
 
-// Records and publishes an activity entry.
+// Records an activity entry in memory and the store, then publishes it
 func (m *Manager) record(r *runner, a *v1.BotActivity) {
 	a.BotId, a.At = r.id, timestamppb.Now()
 	m.mu.Lock()
@@ -501,6 +507,9 @@ func (m *Manager) record(r *runner, a *v1.BotActivity) {
 	m.mu.Unlock()
 	if !ok {
 		return
+	}
+	if err := m.DB.PutBotActivity(m.base, a, activityMax); err != nil {
+		m.Log.Warn("bot activity not saved", "bot", r.name, "err", err)
 	}
 	attrs := []any{"bot", r.name, "kind", a.GetKind(), "channel", a.GetChannelId()}
 	switch a.GetLevel() {

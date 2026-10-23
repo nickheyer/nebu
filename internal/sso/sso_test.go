@@ -35,11 +35,18 @@ type view struct {
 
 // A provider under test control: it signs with RSA, checks the exchange, and serves userinfo
 type fakeIdP struct {
-	srv    *httptest.Server
-	key    *rsa.PrivateKey
-	mu     sync.Mutex
-	nonce  string
-	claims map[string]any
+	srv *httptest.Server
+	key *rsa.PrivateKey
+	mu  sync.Mutex
+	// The key id tokens are signed under, the path discovery names for the key set, and how
+	// often discovery was read
+	kid         string
+	jwksPath    string
+	discoveries int
+	// The first key, served at /jwks after the key set moves elsewhere
+	firstKey *rsa.PrivateKey
+	nonce    string
+	claims   map[string]any
 	// Userinfo claims, nil for no userinfo endpoint
 	userinfo map[string]any
 	// Overrides for token contents
@@ -60,15 +67,18 @@ func newIdP(t *testing.T) *fakeIdP {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &fakeIdP{key: key, claims: map[string]any{}, exp: time.Now().Add(time.Hour)}
+	p := &fakeIdP{key: key, firstKey: key, kid: "k1", jwksPath: "/jwks", claims: map[string]any{}, exp: time.Now().Add(time.Hour)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+		p.mu.Lock()
+		p.discoveries++
 		doc := map[string]any{
 			"issuer":                 p.srv.URL + "/",
 			"authorization_endpoint": p.srv.URL + "/authorize?tenant=x",
 			"token_endpoint":         p.srv.URL + "/token",
-			"jwks_uri":               p.srv.URL + "/jwks",
+			"jwks_uri":               p.srv.URL + p.jwksPath,
 		}
+		p.mu.Unlock()
 		if p.userinfo != nil {
 			doc["userinfo_endpoint"] = p.srv.URL + "/userinfo"
 		}
@@ -80,14 +90,23 @@ func newIdP(t *testing.T) *fakeIdP {
 		}
 		json.NewEncoder(w).Encode(doc)
 	})
-	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
-		pub := p.key.PublicKey
+	// The announced path serves the current key, any other the first one
+	keySet := func(w http.ResponseWriter, r *http.Request) {
+		p.mu.Lock()
+		key, kid := p.firstKey, "k1"
+		if r.URL.Path == p.jwksPath {
+			key, kid = p.key, p.kid
+		}
+		p.mu.Unlock()
+		pub := key.PublicKey
 		json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]any{{
-			"kty": "RSA", "kid": "k1", "use": "sig", "alg": "RS256",
+			"kty": "RSA", "kid": kid, "use": "sig", "alg": "RS256",
 			"n": base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
 			"e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
 		}}})
-	})
+	}
+	mux.HandleFunc("/jwks", keySet)
+	mux.HandleFunc("/jwks-v2", keySet)
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 		p.mu.Lock()
@@ -112,7 +131,7 @@ func newIdP(t *testing.T) *fakeIdP {
 		for k, v := range p.claims {
 			claims[k] = v
 		}
-		json.NewEncoder(w).Encode(map[string]string{"id_token": signRS256(t, p.key, "k1", claims), "access_token": "at-1", "token_type": "Bearer"})
+		json.NewEncoder(w).Encode(map[string]string{"id_token": signRS256(t, p.key, p.kid, claims), "access_token": "at-1", "token_type": "Bearer"})
 	})
 	mux.HandleFunc("/userinfo", func(w http.ResponseWriter, r *http.Request) {
 		p.mu.Lock()
@@ -264,6 +283,63 @@ func TestCodeFlowSignsInAndOut(t *testing.T) {
 	}
 	if st := sessionStatus(t, srv, client); st.User != nil {
 		t.Fatal("still signed in after logout")
+	}
+}
+
+func TestDiscoveryIsReadAgainOnAgeAndOnUnknownKeys(t *testing.T) {
+	idp := newIdP(t)
+	idp.exp = time.Now().Add(72 * time.Hour)
+	svc, srv, client := harness(t, idp, &v1.Oidc{})
+	base := time.Now()
+	offset := time.Duration(0)
+	svc.now = func() time.Time { return base.Add(offset) }
+	discoveries := func() int {
+		idp.mu.Lock()
+		defer idp.mu.Unlock()
+		return idp.discoveries
+	}
+	signedIn := func(want bool) {
+		t.Helper()
+		cb, _ := signIn(t, idp, srv, client, "/")
+		body, _ := io.ReadAll(cb.Body)
+		cb.Body.Close()
+		if got := cb.StatusCode == http.StatusSeeOther; got != want {
+			t.Fatalf("sign-in %d %s, wanted success %v", cb.StatusCode, body, want)
+		}
+	}
+	signedIn(true)
+	signedIn(true)
+	if n := discoveries(); n != 1 {
+		t.Fatalf("discovery read %d times for two sign-ins", n)
+	}
+	// The provider rotates its key and moves the key set, the old path still serving the old key
+	rotated, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idp.mu.Lock()
+	idp.key, idp.kid, idp.jwksPath = rotated, "k2", "/jwks-v2"
+	idp.mu.Unlock()
+	offset = 2 * time.Minute
+	signedIn(true)
+	if n := discoveries(); n != 2 {
+		t.Fatalf("an unknown key should read discovery again, read %d times", n)
+	}
+	// A key no key set has fails without reading discovery again inside the refresh gap
+	idp.mu.Lock()
+	idp.kid = "k3"
+	idp.mu.Unlock()
+	signedIn(false)
+	if n := discoveries(); n != 2 {
+		t.Fatalf("discovery read %d times inside the refresh gap", n)
+	}
+	idp.mu.Lock()
+	idp.kid = "k2"
+	idp.mu.Unlock()
+	offset = discoveryTTL + 3*time.Minute
+	signedIn(true)
+	if n := discoveries(); n != 3 {
+		t.Fatalf("discovery should be read again after its ttl, read %d times", n)
 	}
 }
 

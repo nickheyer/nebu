@@ -44,7 +44,7 @@ function open(): Promise<IDBDatabase> {
   if (db) return db;
   const opening = new Promise<IDBDatabase>((resolve, reject) => {
     if (typeof indexedDB === 'undefined') {
-      reject(new Error('This browser has no IndexedDB, which images are kept in'));
+      reject(new Error('This browser has no IndexedDB for images'));
       return;
     }
     const req = indexedDB.open(dbName, 1);

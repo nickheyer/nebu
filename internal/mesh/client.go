@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/mesh/links"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
-	"golang.org/x/net/http2"
 )
 
 const dialTimeout = 5 * time.Second
@@ -46,32 +46,30 @@ func (b bearer) RoundTrip(req *http.Request) (*http.Response, error) {
 	return b.next.RoundTrip(req)
 }
 
-// An HTTP/2 transport to an address: prior knowledge over plain TCP, or TLS
+// An HTTP/2 transport to an address, prior knowledge over plain TCP or TLS, pinged while idle
 func transport(cfg *tls.Config) http.RoundTripper {
 	d := &net.Dialer{Timeout: dialTimeout}
+	t := &http.Transport{
+		Protocols:   links.ClientProtocols(),
+		HTTP2:       &http.HTTP2Config{SendPingTimeout: 30 * time.Second, PingTimeout: 10 * time.Second},
+		DialContext: d.DialContext,
+	}
 	if cfg == nil {
-		return &http2.Transport{
-			AllowHTTP: true,
-			DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-				return d.DialContext(ctx, network, addr)
-			},
-			ReadIdleTimeout: 30 * time.Second,
-			PingTimeout:     10 * time.Second,
+		return t
+	}
+	t.TLSClientConfig = cfg
+	t.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c := cfg.Clone()
+		if c.ServerName == "" {
+			host, _, _ := net.SplitHostPort(addr)
+			c.ServerName = host
 		}
+		if len(c.NextProtos) == 0 {
+			c.NextProtos = []string{"h2"}
+		}
+		return (&tls.Dialer{NetDialer: d, Config: c}).DialContext(ctx, network, addr)
 	}
-	return &http2.Transport{
-		TLSClientConfig: cfg,
-		DialTLSContext: func(ctx context.Context, network, addr string, c *tls.Config) (net.Conn, error) {
-			c = c.Clone()
-			if c.ServerName == "" {
-				host, _, _ := net.SplitHostPort(addr)
-				c.ServerName = host
-			}
-			return (&tls.Dialer{NetDialer: d, Config: c}).DialContext(ctx, network, addr)
-		},
-		ReadIdleTimeout: 30 * time.Second,
-		PingTimeout:     10 * time.Second,
-	}
+	return t
 }
 
 // A transport to an address, shared across calls while the way to trust it stays the same

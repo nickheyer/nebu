@@ -74,8 +74,8 @@
     <div class="flex max-w-xl flex-col gap-3 text-left text-sm leading-6 text-fg-muted">
       <ol class="list-decimal space-y-1 pl-5">
         <li>Create a <a class="link" href="https://discord.com/developers/applications" target="_blank" rel="noreferrer">Discord application</a>.</li>
-        <li>Under Bot, reset and copy the token. Enable Message Content Intent and, for member events, Server Members Intent.</li>
-        <li>Add the bot here, then use its invite link to join a server.</li>
+        <li>Under Bot, reset and copy the token and enable the Message Content intent.</li>
+        <li>Add the bot here and open its invite link.</li>
       </ol>
       <div><Button size="sm" variant="primary" icon={Plus} href="/bots/new">New bot</Button></div>
     </div>

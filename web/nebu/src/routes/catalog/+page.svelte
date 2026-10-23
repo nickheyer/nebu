@@ -432,7 +432,7 @@
         </Empty>
       {:else if !searching && hits.length === 0}
         {#if !caps?.browse && browsing && !all}
-          <Empty compact title={caps?.repoExample ? `This source cannot be browsed. Type a repository name such as ${caps.repoExample}.` : 'This source cannot be browsed. Type a repository name.'} />
+          <Empty compact title={caps?.repoExample ? `No browsing. Type a repository name such as ${caps.repoExample}.` : 'No browsing. Type a repository name.'} />
         {:else if !searchable}
           <Empty compact title="{name} cannot be searched" />
         {:else}
@@ -487,7 +487,7 @@
                       <td class="whitespace-nowrap">
                         <div class="flex gap-1">
                           {#each runtimesOf(h.runtimes, cached.runtimes) as r (r.runtime?.id)}
-                            <Chip text={r.runtime?.name ?? r.runtime?.id ?? ''} mono={false} title={r.compatible ? `${r.runtime?.name} serves what this is listed as` : `${r.runtime?.name} serves this, but is not compatible with this host`} class={r.compatible ? '' : 'opacity-50'} />
+                            <Chip text={r.runtime?.name ?? r.runtime?.id ?? ''} mono={false} title={r.compatible ? `${r.runtime?.name} serves this format` : `${r.runtime?.name} serves this format, but not on this host`} class={r.compatible ? '' : 'opacity-50'} />
                           {:else}
                             <span class="text-xs text-fg-faint" title={hitKindLabel(h.kind) ? 'No compatible runtime' : 'Unknown model type'}>{hitKindLabel(h.kind) || '–'}</span>
                           {/each}

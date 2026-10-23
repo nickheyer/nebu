@@ -111,7 +111,7 @@
               submitToken();
             }}
           >
-            <Field label="API token" for="login-token" description="An API token made in Settings, or the daemon's api.token file. Stored in this browser.">
+            <Field label="API token" for="login-token" description="From Settings or the daemon's api.token file. Kept in this browser.">
               <TextInput id="login-token" mono type="password" bind:value={token}>
                 {#snippet leading()}<KeyRound size={13} />{/snippet}
               </TextInput>

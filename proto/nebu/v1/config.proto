@@ -48,7 +48,7 @@ message Store {
 message Gateway {
   string listen = 1;
   repeated string api_keys = 2;
-  string api_key_env = 3;
+  reserved 3;
   uint32 drain_timeout_ms = 4;
   // Default route limits, overridable by slot.
   Policy policy = 5;
@@ -76,9 +76,7 @@ message Oidc {
   string issuer = 1;
   string client_id = 2;
   string client_secret = 3;
-  // Environment variable holding the client secret, read when client_secret is empty.
-  // NEBU_OIDC_CLIENT_SECRET when empty.
-  string client_secret_env = 4;
+  reserved 4;
   // Scopes to request. openid, profile, and email when empty.
   repeated string scopes = 5;
   // Origin browsers reach the daemon at, such as https://nebu.example.com.
@@ -100,7 +98,7 @@ message Oidc {
 message Auth {
   // Bearer token for API clients. Generated into <data_dir>/api.token when empty.
   string token = 1;
-  string token_env = 2;
+  reserved 2;
   // Single sign-on. Replaces local accounts when set.
   Oidc oidc = 3;
   // Turns authentication off: no accounts, no single sign-on, and no token check.

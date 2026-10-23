@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -13,6 +14,7 @@ import (
 	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/db"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/store"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -37,12 +39,33 @@ var (
 	ErrChat = errors.New("invalid chat request")
 )
 
-// Saved conversations and their images
+// Saved conversations and their images, the bytes in the content store under their digest
 type Manager struct {
-	DB  *db.DB
-	Log *slog.Logger
+	DB    *db.DB
+	Blobs *store.Store
+	Log   *slog.Logger
 	// Overridable for tests
 	Now func() time.Time
+}
+
+// Moves image bytes a database from before this release still holds into the content store
+func Upgrade(blobs *store.Store) db.Upgrade {
+	return func(ctx context.Context, d *db.DB) error {
+		files, err := d.LegacyChatFiles(ctx)
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			digest, err := blobs.PutBlob(f.Data)
+			if err != nil {
+				return fmt.Errorf("chat image %s: %w", f.ID, err)
+			}
+			if err := d.SetChatFileDigest(ctx, f.ID, digest); err != nil {
+				return err
+			}
+		}
+		return d.DropLegacyChatFiles(ctx)
+	}
 }
 
 // The store a request reaches: the account behind its session or API token,
@@ -175,7 +198,7 @@ func (m *Manager) Delete(ctx context.Context, owner db.ChatOwner, id string) err
 		return fmt.Errorf("%w %q", ErrUnknownConversation, id)
 	}
 	if ids := FileIDs(c); len(ids) > 0 {
-		if err := m.DB.DeleteChatFiles(ctx, owner, ids); err != nil {
+		if err := m.DeleteFiles(ctx, owner, ids); err != nil {
 			m.Log.Warn("chat images not removed with their conversation", "conversation", id, "err", err)
 		}
 	}
@@ -202,7 +225,11 @@ func (m *Manager) PutFile(ctx context.Context, owner db.ChatOwner, f *v1.ChatFil
 	saved := proto.Clone(f).(*v1.ChatFile)
 	saved.SizeBytes = uint64(len(data))
 	saved.Url, saved.Error = "", ""
-	stored, err := m.DB.PutChatFile(ctx, owner, saved, data, m.now().UTC().Format(time.RFC3339Nano))
+	digest, err := m.Blobs.PutBlob(data)
+	if err != nil {
+		return nil, err
+	}
+	stored, err := m.DB.PutChatFile(ctx, owner, saved, digest, m.now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, err
 	}
@@ -214,21 +241,37 @@ func (m *Manager) PutFile(ctx context.Context, owner db.ChatOwner, f *v1.ChatFil
 
 // Fetches one of the owner's stored images with its bytes
 func (m *Manager) GetFile(ctx context.Context, owner db.ChatOwner, id string) (*v1.ChatFile, []byte, error) {
-	f, data, err := m.DB.GetChatFile(ctx, owner, id)
+	f, digest, err := m.DB.GetChatFile(ctx, owner, id)
 	if db.IsNotFound(err) {
 		return nil, nil, fmt.Errorf("%w: image %q", ErrUnknownConversation, id)
 	}
-	return f, data, err
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := os.ReadFile(m.Blobs.BlobPath(digest))
+	if err != nil {
+		return nil, nil, fmt.Errorf("image %s: %w", id, err)
+	}
+	return f, data, nil
 }
 
-// Removes stored images of the owner's
+// Removes stored images of the owner's, their bytes going with the last image to use them
 func (m *Manager) DeleteFiles(ctx context.Context, owner db.ChatOwner, ids []string) error {
 	for _, id := range ids {
 		if err := checkID(id, "image"); err != nil {
 			return err
 		}
 	}
-	return m.DB.DeleteChatFiles(ctx, owner, ids)
+	orphaned, err := m.DB.DeleteChatFiles(ctx, owner, ids)
+	if err != nil {
+		return err
+	}
+	for _, digest := range orphaned {
+		if _, err := m.Blobs.Release(digest); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Ids of every image stored for the conversation, excluding ones kept by link

@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"slices"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -86,13 +88,13 @@ func (d *DB) DeleteConversation(ctx context.Context, owner ChatOwner, id string)
 	return n > 0, err
 }
 
-// Stores an image for the owner's conversations, replacing one with the same id.
-// Reports false when the id belongs to another account.
-func (d *DB) PutChatFile(ctx context.Context, owner ChatOwner, f *v1.ChatFile, data []byte, created string) (bool, error) {
-	res, err := d.sql.ExecContext(ctx, `INSERT INTO chat_files (id, provider, subject, media_type, name, width, height, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (id) DO UPDATE SET media_type = excluded.media_type, name = excluded.name, width = excluded.width, height = excluded.height, data = excluded.data
+// Records an image of the owner's, its bytes already in the content store under the digest,
+// replacing one with the same id, false when the id belongs to another account
+func (d *DB) PutChatFile(ctx context.Context, owner ChatOwner, f *v1.ChatFile, digest, created string) (bool, error) {
+	res, err := d.sql.ExecContext(ctx, `INSERT INTO chat_files (id, provider, subject, media_type, name, width, height, size_bytes, digest, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET media_type = excluded.media_type, name = excluded.name, width = excluded.width, height = excluded.height, size_bytes = excluded.size_bytes, digest = excluded.digest
 		WHERE chat_files.provider = excluded.provider AND chat_files.subject = excluded.subject`,
-		f.GetId(), owner.Provider, owner.Subject, f.GetMediaType(), f.GetName(), f.GetWidth(), f.GetHeight(), data, created)
+		f.GetId(), owner.Provider, owner.Subject, f.GetMediaType(), f.GetName(), f.GetWidth(), f.GetHeight(), f.GetSizeBytes(), digest, created)
 	if err != nil {
 		return false, err
 	}
@@ -100,36 +102,90 @@ func (d *DB) PutChatFile(ctx context.Context, owner ChatOwner, f *v1.ChatFile, d
 	return n > 0, err
 }
 
-// Fetches one of the owner's stored images with its bytes
-func (d *DB) GetChatFile(ctx context.Context, owner ChatOwner, id string) (*v1.ChatFile, []byte, error) {
+// Fetches one of the owner's stored images with the digest its bytes are stored under
+func (d *DB) GetChatFile(ctx context.Context, owner ChatOwner, id string) (*v1.ChatFile, string, error) {
 	type row struct {
-		file *v1.ChatFile
-		data []byte
+		file   *v1.ChatFile
+		digest string
 	}
-	rows, err := list(ctx, d, `SELECT id, media_type, name, width, height, data FROM chat_files WHERE id = ? AND provider = ? AND subject = ?`, func(rows *sql.Rows) (row, error) {
+	rows, err := list(ctx, d, `SELECT id, media_type, name, width, height, size_bytes, digest FROM chat_files WHERE id = ? AND provider = ? AND subject = ?`, func(rows *sql.Rows) (row, error) {
 		f := &v1.ChatFile{}
-		var data []byte
-		if err := rows.Scan(&f.Id, &f.MediaType, &f.Name, &f.Width, &f.Height, &data); err != nil {
+		var digest string
+		if err := rows.Scan(&f.Id, &f.MediaType, &f.Name, &f.Width, &f.Height, &f.SizeBytes, &digest); err != nil {
 			return row{}, err
 		}
-		f.SizeBytes = uint64(len(data))
-		return row{file: f, data: data}, nil
+		return row{file: f, digest: digest}, nil
 	}, id, owner.Provider, owner.Subject)
 	got, err := one(rows, err, "chat file", id)
 	if err != nil {
-		return nil, nil, err
+		return nil, "", err
 	}
-	return got.file, got.data, nil
+	return got.file, got.digest, nil
 }
 
-// Removes the owner's stored images with the given ids, skipping ids it does not own
-func (d *DB) DeleteChatFiles(ctx context.Context, owner ChatOwner, ids []string) error {
-	return d.tx(ctx, func(exec execFn) error {
-		for _, id := range ids {
-			if err := exec(`DELETE FROM chat_files WHERE id = ? AND provider = ? AND subject = ?`, id, owner.Provider, owner.Subject); err != nil {
-				return err
-			}
+// Removes the owner's stored images with the given ids, skipping ids it does not own, and
+// answers the digests no remaining row refers to
+func (d *DB) DeleteChatFiles(ctx context.Context, owner ChatOwner, ids []string) ([]string, error) {
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var orphaned []string
+	for _, id := range ids {
+		var digest string
+		err := tx.QueryRowContext(ctx, `SELECT digest FROM chat_files WHERE id = ? AND provider = ? AND subject = ?`, id, owner.Provider, owner.Subject).Scan(&digest)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
 		}
-		return nil
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM chat_files WHERE id = ?`, id); err != nil {
+			return nil, err
+		}
+		var left int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM chat_files WHERE digest = ?`, digest).Scan(&left); err != nil {
+			return nil, err
+		}
+		if left == 0 && digest != "" && !slices.Contains(orphaned, digest) {
+			orphaned = append(orphaned, digest)
+		}
+	}
+	return orphaned, tx.Commit()
+}
+
+// The digests every stored image's bytes live under, what the content store keeps through a sweep
+func (d *DB) ChatFileDigests(ctx context.Context) ([]string, error) {
+	return d.strings(ctx, `SELECT DISTINCT digest FROM chat_files WHERE digest != '' ORDER BY digest`)
+}
+
+// One image whose bytes a database from before the content store move still holds
+type LegacyChatFile struct {
+	ID   string
+	Data []byte
+}
+
+// The images still held as bytes in the database, none once the table from before the move is gone
+func (d *DB) LegacyChatFiles(ctx context.Context) ([]LegacyChatFile, error) {
+	tables, err := d.strings(ctx, `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chat_files_legacy'`)
+	if err != nil || len(tables) == 0 {
+		return nil, err
+	}
+	return list(ctx, d, `SELECT id, data FROM chat_files_legacy ORDER BY id`, func(rows *sql.Rows) (LegacyChatFile, error) {
+		var f LegacyChatFile
+		return f, rows.Scan(&f.ID, &f.Data)
 	})
+}
+
+// Records where an image's bytes went in the content store
+func (d *DB) SetChatFileDigest(ctx context.Context, id, digest string) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE chat_files SET digest = ? WHERE id = ?`, digest, id)
+	return err
+}
+
+// Drops the bytes kept from before the content store move, once every image is there
+func (d *DB) DropLegacyChatFiles(ctx context.Context) error {
+	_, err := d.sql.ExecContext(ctx, `DROP TABLE IF EXISTS chat_files_legacy`)
+	return err
 }

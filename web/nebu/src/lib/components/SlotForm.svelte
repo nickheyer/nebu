@@ -140,7 +140,7 @@
       </Field>
     </div>
     <div class="mt-4">
-      <Field label="Aliases" for="slot-aliases" description="Other model names clients can send. They follow the slot's model through swaps and restarts." error={aliasProblem || undefined}>
+      <Field label="Aliases" for="slot-aliases" description="Other model names for clients. They follow the slot through swaps and restarts." error={aliasProblem || undefined}>
         <IdList id="slot-aliases" bind:items={aliases} empty="gpt-4" />
       </Field>
     </div>

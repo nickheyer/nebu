@@ -52,7 +52,8 @@ func (x *exchange) serve() int {
 	mode := x.g.table.SystemMode(route)
 	same := x.api == route.GetApi()
 	if in.req == nil {
-		if !same || x.relay {
+		// A Responses API body no runtime reads is refused here rather than passed to one
+		if !same || x.relay || x.r.URL.Path == chat.OpenAIResponses {
 			x.refuse(chat.FailureOf(in.err))
 			return -1
 		}
@@ -71,7 +72,7 @@ func (x *exchange) serve() int {
 	}
 	defer x.plan.close()
 	emulate := x.g.table.ToolSupport(route) == v1.ToolSupport_TOOL_SUPPORT_EMULATED && len(req.Tools) > 0
-	if same && !x.plan.active() && !emulate && !foldsSystem(req, mode) && req.Kind != chat.Count && !x.relay {
+	if same && !x.plan.active() && !emulate && !foldsSystem(req, mode) && req.Kind != chat.Count && !x.relay && !req.Responses {
 		return x.passthrough()
 	}
 	t.Translated = !same

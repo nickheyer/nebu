@@ -126,7 +126,7 @@
     {#if editing && !editing.source?.seeded}
       <Button variant="ghost" size="sm" icon={Trash2} class="text-bad hover:text-bad" onclick={remove}>Remove</Button>
     {:else if editing?.source?.seeded}
-      <span class="text-xs text-fg-faint">Built-in source. It can be edited but not removed.</span>
+      <span class="text-xs text-fg-faint">Built-in source, editable but not removable.</span>
     {/if}
     {#if missing.length}<span class="text-sm text-warn">Required: {missing.join(', ')}</span>{/if}
     <span class="ml-auto flex gap-2">

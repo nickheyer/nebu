@@ -381,6 +381,21 @@ CREATE TABLE bot_schedules (
   PRIMARY KEY (bot_id, automation_id)
 );
 
+-- What each bot did and what went wrong, the newest rows kept per bot
+CREATE TABLE bot_activity (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  bot_id TEXT NOT NULL REFERENCES bots (id) ON DELETE CASCADE,
+  at TEXT NOT NULL,
+  level TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  message TEXT NOT NULL,
+  guild_id TEXT NOT NULL DEFAULT '',
+  channel_id TEXT NOT NULL DEFAULT '',
+  persona TEXT NOT NULL DEFAULT '',
+  trace TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX bot_activity_by_bot ON bot_activity (bot_id, seq);
+
 -- Local accounts for the web UI. Usernames are stored lowercase.
 CREATE TABLE users (
   id TEXT PRIMARY KEY,
@@ -422,7 +437,8 @@ CREATE TABLE conversations (
 );
 CREATE INDEX conversations_owner ON conversations (provider, subject, updated_at);
 
--- Images attached to or answered in saved conversations, bytes included, owned like the conversations
+-- Images attached to or answered in saved conversations, owned like the conversations, the bytes
+-- in the content store under the digest
 CREATE TABLE chat_files (
   id TEXT PRIMARY KEY,
   provider TEXT NOT NULL,
@@ -431,10 +447,12 @@ CREATE TABLE chat_files (
   name TEXT NOT NULL DEFAULT '',
   width INTEGER NOT NULL DEFAULT 0,
   height INTEGER NOT NULL DEFAULT 0,
-  data BLOB NOT NULL,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  digest TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 CREATE INDEX chat_files_owner ON chat_files (provider, subject);
+CREATE INDEX chat_files_digest ON chat_files (digest);
 
 -- This node's identity in any mesh: a random 128 bit id and an Ed25519 key pair made on first start
 CREATE TABLE mesh_identity (

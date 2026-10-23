@@ -5,15 +5,14 @@
   import { replaceState } from '$app/navigation';
   import { api, baseUrl, gatewayKey, setGatewayKey, token, message } from '$lib/api';
   import { listenerUrl } from '$lib/gateway';
-  import { live, cached, slotByRef, instanceLive, runtimeName, modelKey, clock } from '$lib/state.svelte';
+  import { live, cached, slotByRef, instanceLive, modelKey } from '$lib/state.svelte';
   import { auth } from '$lib/auth.svelte';
   import { readLocal, writeLocal } from '$lib/persist';
-  import { byName, bytes, enumLabel, ms, rate, duration, millisBetween, ago } from '$lib/format';
+  import { byName, enumLabel } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { send, countTokens, toolHeaders, type ChatMessage, type Sampling, type ToolCall, type Sent } from '$lib/chatClient';
   import { gatewayTools } from '$lib/tools';
-  import ToolServerPicker from '$lib/components/ToolServerPicker.svelte';
   import { blank, fresh, fileIds, fromConversation, toConversation, loadFile, uploadFile, deleteFiles, previewTitle, type Session, type Turn, type Media } from '$lib/chats';
   import { capabilities, createVideo, deleteVideo, fetchVideo, figure, generateImages, getVideo, lorasText, modeKey, namedChoice, parseLoras, readHistory, writeHistory, type Capabilities, type Generation, type MediaRequest } from '$lib/generate';
   import { prepareImage, storeImage, storeBlob, fetchImage, putImage, getImage, deleteImages, toBase64, newId, type Attachment } from '$lib/images';
@@ -21,29 +20,24 @@
   import { ApiFlavor } from '$proto/runtime_pb';
   import { ArtifactRole, TensorGroupKind } from '$proto/model_pb';
   import type { Conversation } from '$proto/chat_pb';
-  import { MessageSquare, MessageSquarePlus, Ghost, Square, Trash2, ArrowUp, RotateCcw, PanelRightClose, PanelRightOpen, Pencil, Check, Wrench, X, FileJson, ImagePlus, ImageOff, Download, Film, Settings2 } from '@lucide/svelte';
+  import { MessageSquare, MessageSquarePlus, Ghost, ImagePlus, ImageOff } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import IconButton from '$lib/components/ui/IconButton.svelte';
-  import Field from '$lib/components/ui/Field.svelte';
-  import Select from '$lib/components/ui/Select.svelte';
-  import Segmented from '$lib/components/ui/Segmented.svelte';
-  import SwitchRow from '$lib/components/ui/SwitchRow.svelte';
-  import NumberInput from '$lib/components/ui/NumberInput.svelte';
-  import TextInput from '$lib/components/ui/TextInput.svelte';
-  import TextArea from '$lib/components/ui/TextArea.svelte';
-  import Tabs from '$lib/components/ui/Tabs.svelte';
   import Empty from '$lib/components/ui/Empty.svelte';
-  import Markdown from '$lib/components/ui/Markdown.svelte';
-  import Copy from '$lib/components/ui/Copy.svelte';
-  import Json from '$lib/components/ui/Json.svelte';
-  import State from '$lib/components/ui/State.svelte';
-  import Spinner from '$lib/components/ui/Spinner.svelte';
   import Lightbox from '$lib/components/ui/Lightbox.svelte';
   import Logo from '$lib/components/Logo.svelte';
   import InstanceLog from '$lib/components/InstanceLog.svelte';
   import TraceDetail from '$lib/components/TraceDetail.svelte';
-  import MediaSettings, { type MediaForm } from '$lib/components/chat/MediaSettings.svelte';
+  import { type MediaForm } from '$lib/components/chat/MediaSettings.svelte';
+  import ChatHeader from '$lib/components/chat/ChatHeader.svelte';
+  import ChatTurns from '$lib/components/chat/ChatTurns.svelte';
+  import MediaHistory from '$lib/components/chat/MediaHistory.svelte';
+  import Composer from '$lib/components/chat/Composer.svelte';
+  import ChatInspector from '$lib/components/chat/ChatInspector.svelte';
+  import ChatList from '$lib/components/chat/ChatList.svelte';
+  import ChatSettings from '$lib/components/chat/ChatSettings.svelte';
+  import RequestPane from '$lib/components/chat/RequestPane.svelte';
 
   type Mode = 'image' | 'video';
 
@@ -66,8 +60,6 @@
   let chatsLoaded = $state(false);
   let chatsError = $state('');
   let opening = $state('');
-  let renaming = $state('');
-  let renameText = $state('');
   let draft = $state('');
   let busy = $state(false);
   // The API token this browser sends to the daemon opens the gateway too
@@ -79,7 +71,7 @@
   let promptTokens = $state<number | null>(null);
   let countError = $state('');
   let log: HTMLDivElement | undefined = $state();
-  let box: HTMLTextAreaElement | undefined = $state();
+  let composer = $state<ReturnType<typeof Composer>>();
   let controller: AbortController | null = null;
   let countController: AbortController | null = null;
 
@@ -87,7 +79,6 @@
   let attaching = $state(0);
   let dragDepth = $state(0);
   const dropping = $derived(dragDepth > 0);
-  let picker: HTMLInputElement | undefined = $state();
   let lightbox = $state('');
   let lightboxAlt = $state('');
   const urls = new SvelteMap<string, string>();
@@ -100,40 +91,6 @@
   let history = $state<Generation[]>([]);
   let caps = $state<Capabilities | null>(null);
   let capsError = $state('');
-
-  const widthKey = 'nebu.chat.inspector';
-  const minWidth = 320;
-  let width = $state(384);
-  let dragging = $state(false);
-  const savedWidth = parseInt(readLocal(widthKey), 10);
-  if (savedWidth >= minWidth) width = clampWidth(savedWidth);
-
-  function clampWidth(w: number): number {
-    return Math.min(Math.max(w, minWidth), Math.max(window.innerWidth * 0.6, minWidth));
-  }
-
-  function startDrag(e: PointerEvent) {
-    e.preventDefault();
-    dragging = true;
-    const target = e.currentTarget as HTMLElement;
-    const startX = e.clientX;
-    const startWidth = width;
-    target.setPointerCapture(e.pointerId);
-    const move = (ev: PointerEvent) => {
-      width = clampWidth(startWidth + (startX - ev.clientX));
-    };
-    const stop = () => {
-      dragging = false;
-      target.releasePointerCapture(e.pointerId);
-      target.removeEventListener('pointermove', move);
-      target.removeEventListener('pointerup', stop);
-      target.removeEventListener('pointercancel', stop);
-      writeLocal(widthKey, String(Math.round(width)));
-    };
-    target.addEventListener('pointermove', move);
-    target.addEventListener('pointerup', stop);
-    target.addEventListener('pointercancel', stop);
-  }
 
   const loading = $derived(!live.ready && !live.error);
   const status = $derived(cached.gateway);
@@ -182,7 +139,6 @@
     return { temperature: num(session.temperature), topP: num(session.topP), topK: int(session.topK), maxTokens: int(session.maxTokens), seed: int(session.seed), stop: stops.length ? stops : undefined };
   });
   const lastAnswer = $derived([...session.turns].reverse().find((t) => t.role === 'assistant'));
-  const shownBody = $derived(lastSent ? elide(lastSent.body) : '');
   const inspectorTabs = $derived([
     { id: 'chats', label: 'Chats', count: chats.length || undefined },
     { id: 'settings', label: 'Settings' },
@@ -353,7 +309,7 @@
       if (c.model && live.routes.has(c.model)) model = c.model;
       upsertChat({ ...c, turns: [], settings: undefined });
       scroll();
-      box?.focus();
+      composer?.focus();
     } catch (err) {
       fail(err, 'Could not open the chat');
     } finally {
@@ -372,7 +328,7 @@
     saveError = '';
     lastSent = null;
     shownTrace = '';
-    box?.focus();
+    composer?.focus();
   }
 
   async function startNew() {
@@ -405,16 +361,7 @@
     }
   }
 
-  function startRename(c: Conversation) {
-    renaming = c.id;
-    renameText = c.title;
-  }
-
-  async function finishRename() {
-    const id = renaming;
-    const title = renameText.trim();
-    renaming = '';
-    if (!id || !title) return;
+  async function renameChat(id: string, title: string) {
     try {
       const r = await api.chats.renameConversation({ id, title });
       if (r.conversation) {
@@ -554,7 +501,7 @@
       for (const g of shown) remove(g);
       lastSent = null;
       shownTrace = '';
-      box?.focus();
+      composer?.focus();
       return;
     }
     if (saved) {
@@ -736,7 +683,7 @@
       busy = false;
       controller = null;
       scroll();
-      box?.focus();
+      composer?.focus();
     }
   }
 
@@ -855,7 +802,7 @@
       busy = false;
       controller = null;
       scroll();
-      box?.focus();
+      composer?.focus();
     }
   }
 
@@ -950,8 +897,8 @@
     inspector = true;
     ok('Settings restored', 'The prompt, size, seed, and sampler are back as they were');
     tick().then(() => {
-      grow();
-      box?.focus();
+      composer?.grow();
+      composer?.focus();
     });
   }
 
@@ -966,29 +913,13 @@
     document.body.removeChild(a);
   }
 
-  function summary(g: Generation): string[] {
-    const r = g.request;
-    const out = [`${r.width}×${r.height}`];
-    if (g.kind === 'video') out.push(`${g.video?.frames ?? r.frames ?? '?'} frames · ${g.video?.fps ?? r.fps ?? '?'} fps`);
-    const steps = r.steps ?? g.applied?.steps;
-    if (steps) out.push(`${steps} steps`);
-    const cfg = r.cfg_scale ?? g.applied?.cfg;
-    if (cfg !== undefined) out.push(`cfg ${cfg}`);
-    const sampler = r.sampler ?? g.applied?.sampler;
-    if (sampler) out.push(sampler);
-    if (r.lora?.length) out.push(`${r.lora.length} LoRA${r.lora.length > 1 ? 's' : ''}`);
-    if (r.seed !== undefined) out.push(`seed ${r.seed}`);
-    if (g.elapsedMs) out.push(ms(g.elapsedMs));
-    return out;
-  }
-
   function submit() {
     if (!canSend || !chosen) return;
     const text = draft.trim();
     const images = pending;
     pending = [];
     draft = '';
-    if (box) box.style.height = '';
+    composer?.reset();
     if (media) {
       generate(text, images[0] ?? null, mode === 'video' ? (images[1] ?? null) : null);
       forget(images.slice(mode === 'video' ? 2 : 1).map((a) => a.id));
@@ -1020,19 +951,6 @@
     const userIndex = session.turns[i].role === 'assistant' ? i - 1 : i;
     if (userIndex < 0 || session.turns[userIndex].role !== 'user') return;
     ask(userIndex);
-  }
-
-  function onKey(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    }
-  }
-
-  function grow() {
-    if (!box) return;
-    box.style.height = '';
-    box.style.height = Math.min(box.scrollHeight, 200) + 'px';
   }
 
   const attachLimit = $derived(!media ? Infinity : mode === 'video' ? 2 : 1);
@@ -1070,25 +988,12 @@
         attaching--;
       }
     }
-    box?.focus();
+    composer?.focus();
   }
 
   function unattach(a: Attachment) {
     pending = pending.filter((p) => p.id !== a.id);
     forget([a.id]);
-  }
-
-  function onPick(e: Event) {
-    const el = e.currentTarget as HTMLInputElement;
-    attach([...(el.files ?? [])]);
-    el.value = '';
-  }
-
-  function onPaste(e: ClipboardEvent) {
-    const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
-    if (!files.length) return;
-    e.preventDefault();
-    attach(files);
   }
 
   // Track drag depth because entering a child fires dragleave on its parent.
@@ -1164,38 +1069,18 @@
     };
   });
 
-  const stopWord = (s: string | undefined) => (s === 'end_turn' ? 'stop' : s === 'max_tokens' ? 'length' : s === 'tool_calls' || s === 'tool_use' ? 'tool' : s);
-  function stopNote(s: string | undefined): string {
-    const w = stopWord(s);
-    if (!w || w === 'stop') return '';
-    if (w === 'length') return 'cut off at max tokens';
-    if (w === 'tool') return 'stopped to call a tool';
-    return `stopped: ${w}`;
-  }
-
-  // Replace image bytes with their size in the inspector.
-  function elide(body: string): string {
-    return body.replace(/[A-Za-z0-9+/]{256,}={0,2}(?=")/g, (m) => `…${bytes((m.length * 3) / 4, 0)} of image data…`);
-  }
-
   const emptyTurns = $derived(media ? shown.length === 0 : session.turns.length === 0);
   const hasTurns = $derived(!emptyTurns);
   const heading = $derived(ghost ? 'Ghost chat' : convTitle || (session.turns.length ? previewTitle(session.turns) : 'New chat'));
+
+  function openTrace(trace: string) {
+    shownTrace = trace;
+    pane = 'trace';
+    inspector = true;
+  }
 </script>
 
 <svelte:head><title>Chat · nebu</title></svelte:head>
-
-{#snippet thumb(a: Attachment, size: string)}
-  {#if missing.has(a.id)}
-    <div class="flex {size} flex-col items-center justify-center gap-1 rounded-md border border-dashed border-line text-xs text-fg-faint" title="{a.name} could not be loaded"><ImageOff size={16} />image missing</div>
-  {:else if urls.has(a.id)}
-    <button type="button" class="block overflow-hidden rounded-md border border-line" onclick={() => show(urls.get(a.id), a.name)} aria-label="Open {a.name}">
-      <img src={urls.get(a.id)} alt={a.name} width={a.width} height={a.height} class="block h-auto max-h-64 w-auto max-w-full object-contain" />
-    </button>
-  {:else}
-    <div class="flex {size} items-center justify-center rounded-md border border-line"><Spinner size={14} class="text-fg-faint" /></div>
-  {/if}
-{/snippet}
 
 {#if loading || routes.length === 0}
   <PageHeader title="Chat" />
@@ -1203,7 +1088,7 @@
   <PageHeader title="Chat">
     {#snippet meta()}
       {#if ghost}
-        <span class="inline-flex items-center gap-1.5 rounded-full border border-line bg-raised/60 px-2 py-0.5 text-xs text-fg" title="This chat is not saved and is gone when you leave the page"><Ghost size={12} class="text-accent" />Ghost mode</span>
+        <span class="inline-flex items-center gap-1.5 rounded-full border border-line bg-raised/60 px-2 py-0.5 text-xs text-fg" title="Not saved, gone when you leave the page"><Ghost size={12} class="text-accent" />Ghost mode</span>
       {:else if saveError}
         <span class="text-warn" title={saveError}>Not saved: {saveError}</span>
       {:else}
@@ -1211,7 +1096,7 @@
         {#if saved}<span class="text-fg-faint">saved</span>{/if}
       {/if}
     {/snippet}
-    <IconButton size="sm" icon={Ghost} variant={ghost ? 'primary' : 'secondary'} aria-pressed={ghost} label={ghost ? 'Ghost mode is on. Turn it off to start a chat that is saved.' : 'Ghost mode: start a chat that is never saved'} onclick={toggleGhost} />
+    <IconButton size="sm" icon={Ghost} variant={ghost ? 'primary' : 'secondary'} aria-pressed={ghost} label={ghost ? 'Ghost mode on. Turn it off to save chats again.' : 'Ghost mode: a chat that is never saved'} onclick={toggleGhost} />
     <Button size="sm" variant="primary" icon={MessageSquarePlus} onclick={startNew} disabled={busy}>New chat</Button>
   </PageHeader>
 {/if}
@@ -1219,11 +1104,11 @@
 {#if loading}
   <div class="h-[calc(100vh-8rem)]" aria-busy="true"></div>
 {:else if routes.length === 0}
-  <Empty icon={MessageSquare} title="Run a model to chat or generate images and video.">
+  <Empty icon={MessageSquare} title="Run a model to chat or make images and video.">
     {#if live.models.size}<Button variant="primary" href="/store">Library</Button>{:else}<Button variant="primary" href="/catalog">Browse catalog</Button>{/if}
   </Empty>
 {:else}
-  <div class="flex h-[calc(100vh-8rem)] min-h-[32rem] gap-4 lg:h-[calc(100vh-6rem)] {dragging ? 'select-none' : ''}">
+  <div class="flex h-[calc(100vh-8rem)] min-h-[32rem] gap-4 lg:h-[calc(100vh-6rem)]">
     <section class="card relative flex min-w-0 flex-1 flex-col" aria-label="Conversation" ondragenter={onDragEnter} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop}>
       {#if dropping}
         <div class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed bg-bg/80 {blind ? 'border-warn' : 'border-accent'}">
@@ -1232,32 +1117,10 @@
           </div>
         </div>
       {/if}
-      <header class="flex items-center gap-3 border-b border-line px-4 py-2.5">
-        <Select size="sm" class="w-80 max-w-[40%] shrink-0" mono bind:value={model} label="Model" items={modelItems} />
-        {#if chosen}
-          <State values={RouteState} value={chosen.state} class="shrink-0" />
-          {#if media && canImage && canVideo}
-            <Segmented bind:value={mode} tabs={modeItems} class="shrink-0" />
-          {/if}
-          {#if instance}
-            <span class="hidden min-w-0 flex-1 items-center gap-x-3 overflow-hidden text-xs whitespace-nowrap text-fg-muted md:flex">
-              <span class="kv"><span>runtime</span><span>{runtimeName(instance.runtimeId)}{install?.version ? ` ${install.version}` : ''}</span></span>
-              {#if instance.params.n_ctx}<span class="kv"><span>ctx</span><span>{instance.params.n_ctx}</span></span>{/if}
-              {#if media}<span class="kv"><span>makes</span><span>{canImage && canVideo ? 'images, video' : canVideo ? 'video' : 'images'}</span></span>{:else if vision}<span class="kv" title="The model has a vision encoder"><span>sees</span><span>images</span></span>{/if}
-              {#if slot}<a class="kv link" href="/slots/{slot.id}"><span>slot</span><span>{slot.name}</span></a>{:else}<a class="link" href="/instances/{instance.id}">Open instance</a>{/if}
-              {#if instanceLive(instance)}<span class="kv"><span>up</span><span>{duration(instance.readyAt ?? instance.createdAt, undefined, clock.now)}</span></span>{/if}
-            </span>
-          {/if}
-        {/if}
-        <span class="ml-auto flex shrink-0 items-center gap-1">
-          <IconButton size="sm" icon={RotateCcw} label={media ? 'Make the last prompt again' : 'Regenerate the last answer'} onclick={regenerate} disabled={busy || !hasTurns} />
-          <IconButton size="sm" icon={Trash2} label={media ? 'Clear the generations shown' : saved ? 'Delete this chat' : 'Discard this chat'} onclick={clear} disabled={!hasTurns || busy} />
-          <IconButton size="sm" icon={inspector ? PanelRightClose : PanelRightOpen} label={inspector ? 'Hide the side panel' : 'Show the side panel'} onclick={() => (inspector = !inspector)} />
-        </span>
-      </header>
+      <ChatHeader bind:model bind:mode bind:inspector {modelItems} {chosen} {media} {canImage} {canVideo} {modeItems} {instance} {install} {slot} {vision} {hasTurns} {busy} {saved} onregenerate={regenerate} onclear={clear} />
 
       {#if chosen && !chosenReady}
-        <div class="note note-warn m-4 mb-0">{chosen.name} is {enumLabel(RouteState, chosen.state)}. Requests will wait until it is ready.</div>
+        <div class="note note-warn m-4 mb-0">{chosen.name} is {enumLabel(RouteState, chosen.state)}. Requests wait until it is ready.</div>
       {/if}
       {#if media && capsError}
         <div class="note note-bad m-4 mb-0">Could not load {chosenName} capabilities: {capsError}</div>
@@ -1270,356 +1133,59 @@
               <Logo size={36} class="text-fg-faint" />
               <div class="font-mono text-sm text-fg-muted">{chosen?.name}</div>
               {#if ghost && !media}
-                <div class="inline-flex items-center gap-1.5 text-xs text-fg-faint"><Ghost size={12} />This chat is not saved</div>
+                <div class="inline-flex items-center gap-1.5 text-xs text-fg-faint"><Ghost size={12} />Not saved</div>
               {/if}
               {#if media}
-                <div class="text-xs text-fg-faint">{canVideo && canImage ? 'Describe an image or a video to make. Paste or drop an image to start from one.' : canVideo ? 'Describe a video to make. Paste or drop an image to start from it.' : 'Describe an image to make. Paste or drop an image to start from it.'}</div>
+                <div class="text-xs text-fg-faint">{canVideo && canImage ? 'Describe an image or a video. Paste or drop an image to start from it.' : canVideo ? 'Describe a video. Paste or drop an image to start from it.' : 'Describe an image. Paste or drop an image to start from it.'}</div>
               {:else if vision}
                 <div class="text-xs text-fg-faint">Paste, drop, or attach an image to ask about it</div>
               {/if}
             </div>
           {/if}
           {#if media}
-            {#each shown as g (g.id)}
-              <div class="group flex items-start justify-end gap-2">
-                <button type="button" class="mt-2 rounded-md p-1 text-fg-faint opacity-0 transition-opacity group-hover:opacity-100 hover:bg-raised hover:text-fg" aria-label="Remove" onclick={() => remove(g)}><X size={13} /></button>
-                <div class="max-w-[85%] rounded-xl rounded-br-sm bg-raised px-4 py-2.5 text-sm text-fg">
-                  {#if g.inputs?.length}
-                    <div class="mb-2 flex flex-wrap justify-end gap-2">
-                      {#each g.inputs as a (a.id)}{@render thumb(a, 'h-24 w-32')}{/each}
-                    </div>
-                  {/if}
-                  <div class="whitespace-pre-wrap">{g.request.prompt}</div>
-                  {#if g.request.negative_prompt}<div class="mt-1 text-xs text-fg-faint">not: {g.request.negative_prompt}</div>{/if}
-                </div>
-              </div>
-              <div class="flex gap-3">
-                <Logo size={18} class="mt-1 shrink-0 text-fg-faint" />
-                <div class="min-w-0 flex-1">
-                  {#if g.error}
-                    <div class="note note-bad">{g.error}</div>
-                  {:else if g.video && g.video.status !== 'completed'}
-                    <div class="flex items-center gap-3 rounded-md border border-line bg-sunken px-4 py-4 text-sm text-fg-muted">
-                      <Spinner size={16} class="text-accent" />
-                      <span>{g.video.status === 'queued' ? 'Queued' : 'Making'} {g.request.frames ?? ''} frames at {g.request.width}×{g.request.height}</span>
-                      <span class="ml-auto"><Button size="sm" variant="danger" icon={Square} onclick={() => cancel(g)}>Cancel</Button></span>
-                    </div>
-                  {:else if g.files.length === 0}
-                    <div class="flex items-center gap-3 rounded-md border border-line bg-sunken px-4 py-4 text-sm text-fg-muted"><Spinner size={16} class="text-accent" /> Making {g.kind === 'video' ? 'a video' : (g.request.n ?? 1) > 1 ? `${g.request.n} images` : 'an image'} at {g.request.width}×{g.request.height}…</div>
-                  {:else}
-                    <div class="flex flex-wrap gap-3">
-                      {#each g.files as f (f.id)}
-                        {@const url = urls.get(f.id)}
-                        <div class="group/file relative max-w-full">
-                          {#if missing.has(f.id)}
-                            <div class="flex h-40 w-56 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-line text-xs text-fg-faint"><ImageOff size={16} />file missing</div>
-                          {:else if !url}
-                            <div class="flex h-40 w-56 items-center justify-center rounded-md border border-line"><Spinner size={14} class="text-fg-faint" /></div>
-                          {:else if g.mime.startsWith('video/') && g.mime !== 'video/x-msvideo'}
-                            <!-- svelte-ignore a11y_media_has_caption -->
-                            <video src={url} controls loop muted playsinline class="block max-h-[28rem] max-w-full rounded-md border border-line bg-sunken" style="width: {g.request.width}px"></video>
-                          {:else if g.mime === 'video/x-msvideo'}
-                            <div class="flex h-40 w-56 flex-col items-center justify-center gap-2 rounded-md border border-line text-xs text-fg-muted"><Film size={18} /><span>AVI video · {bytes(f.bytes)}</span><Button size="sm" icon={Download} onclick={() => download(f)}>Download</Button></div>
-                          {:else}
-                            <button type="button" class="block overflow-hidden rounded-md border border-line" onclick={() => show(url, g.request.prompt)} aria-label="Open image">
-                              <img src={url} alt={g.request.prompt} class="block h-auto max-h-[28rem] w-auto max-w-full object-contain" loading="lazy" />
-                            </button>
-                          {/if}
-                          {#if url && !missing.has(f.id)}
-                            <button type="button" class="absolute top-2 right-2 rounded-md border border-line bg-raised/90 p-1.5 text-fg-muted opacity-0 transition-opacity group-hover/file:opacity-100 hover:text-fg" aria-label="Download" onclick={() => download(f)}><Download size={13} /></button>
-                          {/if}
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
-                  <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-fg-faint">
-                    {#each summary(g) as s (s)}<span>{s}</span>{/each}
-                    <span>{new Date(g.createdAt).toLocaleString()}</span>
-                    {#if g.trace}
-                      <button type="button" class="inline-flex items-center gap-1 text-fg-muted hover:text-fg" onclick={() => { shownTrace = g.trace!; pane = 'trace'; inspector = true; }}><FileJson size={12} /> trace</button>
-                    {/if}
-                    <button type="button" class="inline-flex items-center gap-1 text-fg-muted hover:text-fg" onclick={() => reuse(g)}><Settings2 size={12} /> reuse settings</button>
-                    <Copy text={g.request.prompt} size={12} class="h-6 w-6" label="Copy the prompt" />
-                  </div>
-                </div>
-              </div>
-            {/each}
+            <MediaHistory {shown} {urls} {missing} onremove={remove} oncancel={cancel} onreuse={reuse} ondownload={download} onshow={show} ontrace={openTrace} />
           {:else}
-            {#each session.turns as t, i (i)}
-              {#if t.role === 'tool'}
-                <div class="group flex items-start gap-2 pl-8">
-                  <div class="min-w-0 flex-1 rounded-md border border-line bg-sunken px-3 py-2 text-xs text-fg-muted">
-                    <div class="mb-1 flex items-center gap-2"><Wrench size={11} class="text-fg-faint" /><span class="font-mono text-fg-faint">{t.toolCallId}</span></div>
-                    <pre class="max-h-40 overflow-auto whitespace-pre-wrap">{t.text}</pre>
-                  </div>
-                  <button type="button" class="mt-2 rounded-md p-1 text-fg-faint opacity-0 transition-opacity group-hover:opacity-100 hover:bg-raised hover:text-fg" aria-label="Remove" onclick={() => removeTurn(i)}><X size={13} /></button>
-                </div>
-              {:else if t.role === 'user'}
-                <div class="group flex items-start justify-end gap-2">
-                  <button type="button" class="mt-2 rounded-md p-1 text-fg-faint opacity-0 transition-opacity group-hover:opacity-100 hover:bg-raised hover:text-fg" aria-label="Remove" onclick={() => removeTurn(i)}><X size={13} /></button>
-                  <div class="max-w-[85%] rounded-xl rounded-br-sm bg-raised px-4 py-2.5 text-sm text-fg">
-                    {#if t.images?.length}
-                      <div class="flex flex-wrap justify-end gap-2 {t.text ? 'mb-2' : ''}">
-                        {#each t.images as a (a.id)}{@render thumb(a, 'h-24 w-32')}{/each}
-                      </div>
-                    {/if}
-                    {#if t.text}<div class="whitespace-pre-wrap">{t.text}</div>{/if}
-                  </div>
-                </div>
-              {:else}
-                {@const ttft = t.startedAt && t.firstTokenAt ? t.firstTokenAt - t.startedAt : undefined}
-                {@const total = t.startedAt && t.finishedAt ? t.finishedAt - t.startedAt : undefined}
-                {@const gen = t.firstTokenAt && t.finishedAt ? t.finishedAt - t.firstTokenAt : undefined}
-                {@const trace = t.trace ? live.traces.get(t.trace) : undefined}
-                {@const pending = i === session.turns.length - 1 ? pendingCalls(i) : []}
-                <div class="flex gap-3">
-                  <Logo size={18} class="mt-1 shrink-0 text-fg-faint" />
-                  <div class="min-w-0 flex-1">
-                    {#if t.text}
-                      <Markdown markdown={t.text} />
-                    {:else if !t.error && !t.toolCalls?.length && !t.media?.length}
-                      <span class="text-fg-faint">{t.finishedAt ? 'Empty answer' : '…'}</span>
-                    {/if}
-                    {#each t.media ?? [] as m, mi (m.key)}
-                      {@const src = m.url ?? (m.id ? urls.get(m.id) : undefined)}
-                      {#if m.error}
-                        <div class="note note-bad mt-2">Could not save image {mi + 1}: {m.error}</div>
-                      {:else if m.id && missing.has(m.id)}
-                        <div class="mt-2 flex h-24 w-32 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-line text-xs text-fg-faint"><ImageOff size={16} />image missing</div>
-                      {:else if src}
-                        <button type="button" class="mt-2 block overflow-hidden rounded-md border border-line" onclick={() => show(src, `Image ${mi + 1} from ${t.dialect ?? 'the answer'}`)} aria-label="Open image {mi + 1}">
-                          <img {src} alt="Image {mi + 1} of the answer" class="block h-auto max-h-96 w-auto max-w-full object-contain" loading="lazy" />
-                        </button>
-                      {:else}
-                        <div class="mt-2 flex h-24 w-32 items-center justify-center rounded-md border border-line"><Spinner size={14} class="text-fg-faint" /></div>
-                      {/if}
-                    {/each}
-                    {#each (trace?.toolCalls ?? []).filter((c) => c.server) as c, ci (ci)}
-                      <div class="card mt-2 p-3">
-                        <div class="mb-2 flex flex-wrap items-center gap-2 text-xs"><Wrench size={12} class="text-accent" /><span class="font-mono text-fg">{c.name}</span><span class="text-fg-faint">ran through {c.server}{c.failed ? ', failed' : ''}{c.tookMs ? ` in ${ms(c.tookMs)}` : ''}</span></div>
-                        <Json text={c.arguments} height="max-h-32" empty="No arguments" />
-                        <pre class="code mt-2 max-h-40 overflow-auto text-xs whitespace-pre-wrap">{c.result || 'No answer'}</pre>
-                      </div>
-                    {/each}
-                    {#each t.toolCalls ?? [] as c, ci (ci)}
-                      {@const ask_ = pending.find((p) => p.call.id === c.id)}
-                      <div class="card mt-2 p-3">
-                        <div class="mb-2 flex items-center gap-2 text-xs"><Wrench size={12} class="text-accent" /><span class="font-mono text-fg">{c.name || 'tool'}</span>{#if c.id}<span class="font-mono text-fg-faint">{c.id}</span>{/if}</div>
-                        <Json text={c.arguments} height="max-h-48" empty="No arguments" />
-                        {#if ask_ && !ask_.answered}
-                          <div class="mt-2 flex items-center gap-2">
-                            <span class="text-xs text-fg-muted">This tool changes something. Run it?</span>
-                            <Button size="sm" variant="primary" icon={Check} disabled={busy} onclick={() => settleCall(i, c, true)}>Run</Button>
-                            <Button size="sm" variant="ghost" icon={X} disabled={busy} onclick={() => settleCall(i, c, false)}>Decline</Button>
-                          </div>
-                        {/if}
-                      </div>
-                    {/each}
-                    {#if t.error}
-                      <div class="note note-bad {t.text ? 'mt-3' : ''}">{t.error}</div>
-                    {/if}
-                    {#if t.finishedAt}
-                      <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-fg-faint">
-                        <span title="Time to first token">{ms(ttft)} first token</span>
-                        <span title="Whole request">{ms(total)} total</span>
-                        {#if t.promptTokens || trace?.promptTokens}<span>{t.promptTokens || trace?.promptTokens} in</span>{/if}
-                        {#if t.completionTokens || trace?.completionTokens}<span>{t.completionTokens || trace?.completionTokens} out</span>{/if}
-                        <span>{rate(t.completionTokens || trace?.completionTokens, gen)}</span>
-                        {#if stopNote(t.stop || trace?.stop)}<span class="text-warn">{stopNote(t.stop || trace?.stop)}</span>{/if}
-                        {#if t.dialect}<span class="font-mono">{t.dialect}</span>{/if}
-                        {#if trace && trace.firstTokenAt}<span title="As measured by the gateway">gateway {ms(millisBetween(trace.startedAt, trace.firstTokenAt))} · {ms(millisBetween(trace.startedAt, trace.finishedAt))}</span>{/if}
-                        {#if t.trace}
-                          <button type="button" class="inline-flex items-center gap-1 text-fg-muted hover:text-fg" onclick={() => { shownTrace = t.trace!; pane = 'trace'; inspector = true; }}><FileJson size={12} /> trace</button>
-                        {/if}
-                        {#if t.text}<Copy text={t.text} size={12} class="h-6 w-6" />{/if}
-                      </div>
-                    {/if}
-                  </div>
-                </div>
-              {/if}
-            {/each}
+            <ChatTurns turns={session.turns} {urls} {missing} {busy} {pendingCalls} onremove={removeTurn} onsettle={settleCall} onshow={show} ontrace={openTrace} />
           {/if}
         </div>
       </div>
 
-      <div class="border-t border-line p-3">
-        <div class="mx-auto flex max-w-3xl flex-col gap-1.5">
-          <div class="rounded-xl border bg-sunken transition-colors focus-within:border-accent {dropping ? 'border-dashed border-accent' : 'border-line'}">
-            {#if pending.length || attaching}
-              <div class="flex flex-wrap gap-2 px-3 pt-3">
-                {#each pending as a, ai (a.id)}
-                  <div class="relative">
-                    <button type="button" class="block overflow-hidden rounded-md border border-line" onclick={() => show(urls.get(a.id), a.name)} aria-label="Open {a.name}" title="{a.name} · {a.width}×{a.height} · {bytes(a.bytes)}">
-                      <img src={urls.get(a.id)} alt={a.name} class="block h-16 w-16 object-cover" />
-                    </button>
-                    {#if media}<span class="absolute bottom-0.5 left-0.5 rounded-sm bg-bg/80 px-1 text-[10px] text-fg-muted">{ai === 0 ? 'start' : 'last frame'}</span>{/if}
-                    <button type="button" class="absolute -top-1.5 -right-1.5 rounded-full border border-line bg-raised p-0.5 text-fg-muted transition-colors hover:bg-line-strong hover:text-fg" aria-label="Remove {a.name}" onclick={() => unattach(a)}><X size={11} /></button>
-                  </div>
-                {/each}
-                {#each { length: attaching } as _, ai (ai)}
-                  <div class="flex h-16 w-16 items-center justify-center rounded-md border border-line" aria-label="Reading an image"><Spinner size={14} class="text-fg-faint" /></div>
-                {/each}
-              </div>
-            {/if}
-            <textarea
-              bind:this={box}
-              class="block max-h-[200px] w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-sm leading-6 text-fg placeholder:text-fg-faint focus:outline-none"
-              rows="1"
-              placeholder={!chosen ? 'Pick a model' : media ? (mode === 'video' ? `Describe a video for ${chosen.name}` : `Describe an image for ${chosen.name}`) : `Message ${chosen.name}`}
-              bind:value={draft}
-              onkeydown={onKey}
-              oninput={grow}
-              onpaste={onPaste}
-            ></textarea>
-            <div class="flex items-center gap-1 px-1.5 pb-1.5">
-              <IconButton icon={ImagePlus} label={attachNote} onclick={() => picker?.click()} disabled={blind || busy} />
-              <input bind:this={picker} type="file" accept="image/*" multiple={!media} class="hidden" onchange={onPick} />
-              <span class="ml-auto hidden items-center gap-1 text-xs text-fg-faint sm:inline-flex"><kbd class="kbd">Enter</kbd> sends, <kbd class="kbd">Shift</kbd>+<kbd class="kbd">Enter</kbd> breaks a line</span>
-              {#if busy}
-                <Button variant="danger" icon={Square} onclick={stop} aria-label="Stop" />
-              {:else}
-                <Button variant="primary" icon={ArrowUp} onclick={submit} disabled={!canSend} aria-label="Send" />
-              {/if}
-            </div>
-          </div>
-          <div class="flex flex-wrap items-center gap-x-3 px-1 text-xs text-fg-faint">
-            {#if media}
-              <span class="font-mono">{mode}</span>
-              {#each applied as s (s)}<span class="tabular-nums">{s}</span>{/each}
-              {#if init}<span>{mode === 'video' ? 'image to video' : 'image to image'}</span>{/if}
-              {#if last}<span>with a last frame</span>{/if}
-              {#if busyHere && !busy}<span>a video is still being made</span>{/if}
-            {:else}
-              <span class="font-mono">{session.dialect}{session.stream ? ' · stream' : ''}</span>
-              {#if promptTokens !== null}<span title="Counted by the gateway, through the runtime's tokenizer when it has one, each image by its area">{promptTokens} prompt tokens{instance?.params.n_ctx ? ` of ${instance.params.n_ctx}` : ''}</span>{:else if countError}<span class="text-warn" title={countError}>token count unavailable</span>{/if}
-            {/if}
-          </div>
-        </div>
-      </div>
+      <Composer bind:this={composer} bind:draft {pending} {attaching} {busy} {canSend} {blind} {attachNote} {dropping} {media} {mode} modelName={chosen?.name ?? ''} {urls} onsubmit={submit} onstop={stop} onattach={attach} onunattach={unattach} onshow={show}>
+        {#if media}
+          <span class="font-mono">{mode}</span>
+          {#each applied as s (s)}<span class="tabular-nums">{s}</span>{/each}
+          {#if init}<span>{mode === 'video' ? 'image to video' : 'image to image'}</span>{/if}
+          {#if last}<span>with a last frame</span>{/if}
+          {#if busyHere && !busy}<span>a video is still being made</span>{/if}
+        {:else}
+          <span class="font-mono">{session.dialect}{session.stream ? ' · stream' : ''}</span>
+          {#if promptTokens !== null}<span title="Counted by the gateway with the runtime's tokenizer">{promptTokens} prompt tokens{instance?.params.n_ctx ? ` of ${instance.params.n_ctx}` : ''}</span>{:else if countError}<span class="text-warn" title={countError}>token count unavailable</span>{/if}
+        {/if}
+      </Composer>
     </section>
 
     {#if inspector}
-      <aside class="card relative flex shrink-0 flex-col" style="width: {width}px">
-        <div role="separator" aria-orientation="vertical" aria-label="Resize" class="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize" onpointerdown={startDrag}>
-          <div class="mx-auto h-full w-px bg-transparent transition-colors group-hover:bg-accent/60 {dragging ? 'bg-accent' : ''}"></div>
-        </div>
-        <Tabs size="sm" bind:value={pane} tabs={inspectorTabs} class="px-3 pt-1" />
-        <div class="@container min-h-0 flex-1 overflow-y-auto {pane === 'chats' ? 'p-2' : 'p-4'}">
-          {#if pane === 'chats'}
-            {#if !chatsLoaded}
-              <div class="skeleton m-2 h-24" aria-busy="true"></div>
-            {:else if chatsError}
-              <div class="note note-bad m-2 text-xs">{chatsError}</div>
-            {:else if chats.length === 0}
-              <p class="px-2 py-8 text-center text-sm text-fg-faint">Your chats are listed here once a model answers.</p>
-            {:else}
-              <div class="flex flex-col gap-0.5">
-                {#each chats as c (c.id)}
-                  {@const on = c.id === convId && !ghost}
-                  <div class="group relative rounded-md {on ? 'bg-raised/70' : 'hover:bg-raised/40'}">
-                    {#if renaming === c.id}
-                      <div class="flex items-center gap-1 p-1.5">
-                        <TextInput size="sm" class="flex-1" bind:value={renameText} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); finishRename(); } else if (e.key === 'Escape') renaming = ''; }} onblur={finishRename} autofocus />
-                        <IconButton size="xs" icon={Check} label="Save the name" onclick={finishRename} />
-                      </div>
-                    {:else}
-                      <button type="button" class="block w-full px-2.5 py-2 text-left" onclick={() => openChat(c.id)} disabled={opening === c.id} aria-current={on ? 'true' : undefined}>
-                        <div class="truncate pr-14 text-sm {on ? 'text-fg' : 'text-fg-muted group-hover:text-fg'}">{c.title || 'Untitled'}</div>
-                        <div class="mt-0.5 flex items-center gap-1.5 truncate text-[11px] text-fg-faint"><span class="truncate font-mono">{c.model}</span><span>·</span><span class="shrink-0">{ago(c.updatedAt, clock.now)}</span>{#if opening === c.id}<Spinner size={10} class="ml-auto shrink-0" />{/if}</div>
-                      </button>
-                      <span class="absolute top-1.5 right-1.5 flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                        <IconButton size="xs" icon={Pencil} label="Rename" onclick={() => startRename(c)} />
-                        <IconButton size="xs" icon={Trash2} label="Delete" onclick={() => deleteChat(c)} />
-                      </span>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          {:else if pane === 'settings'}
-            {#if media}
-              <div class="flex flex-col gap-5">
-                <MediaSettings bind:form {mode} {caps} hasInit={!!init} />
-                {#if status?.auth && !auth.user}
-                  <Field label="API key" for="chat-key">
-                    <TextInput id="chat-key" mono type="password" bind:value={key} onchange={() => setGatewayKey(key.trim())} />
-                  </Field>
-                {/if}
-                <p class="truncate font-mono text-xs text-fg-faint" title={gatewayBase}>{gatewayBase}</p>
-              </div>
-            {:else}
-              <div class="flex flex-col gap-5">
-                <Field label="Wire format">
-                  <Segmented bind:value={session.dialect} tabs={[{ id: 'openai', label: 'OpenAI' }, { id: 'anthropic', label: 'Anthropic' }, { id: 'ollama', label: 'Ollama' }]} />
-                </Field>
-                <SwitchRow bind:checked={session.stream} label="Stream" />
-                <Field label="System prompt" for="chat-system">
-                  <TextArea id="chat-system" bind:value={session.system} />
-                </Field>
-                <div class="grid grid-cols-2 gap-3 @lg:grid-cols-3">
-                  <Field label="Temperature" for="chat-temp"><NumberInput id="chat-temp" min={0} max={2} step={0.1} bind:value={session.temperature} /></Field>
-                  <Field label="Top P" for="chat-topp"><NumberInput id="chat-topp" min={0} max={1} step={0.05} bind:value={session.topP} /></Field>
-                  <Field label="Top K" for="chat-topk"><NumberInput id="chat-topk" integer min={0} bind:value={session.topK} /></Field>
-                  <Field label="Max tokens" for="chat-max"><NumberInput id="chat-max" integer min={1} step={64} bind:value={session.maxTokens} /></Field>
-                  <Field label="Seed" for="chat-seed"><NumberInput id="chat-seed" integer min={0} bind:value={session.seed} /></Field>
-                  <Field label="Stop sequences" for="chat-stop"><TextInput id="chat-stop" mono bind:value={session.stop} empty="###, User:" /></Field>
-                </div>
-                <Field label="Tool servers" for="chat-tool-servers" description="The gateway runs these for the model.">
-                  <div id="chat-tool-servers"><ToolServerPicker bind:refs={session.toolServers} bind:mutating={session.mutatingTools} /></div>
-                </Field>
-                {#if session.toolServers.length && session.mutatingTools}
-                  <SwitchRow bind:checked={session.approveTools} label="Approve mutating tools" description="Calls that change something wait for Run or Decline here." />
-                {/if}
-                <Field label="Custom tools (JSON)" for="chat-tools" description="Functions this page answers itself, for trying tool calling by hand." error={toolsProblem || undefined}>
-                  <TextArea id="chat-tools" mono height="h-36" bind:value={session.tools} empty={'[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}]'} invalid={!!toolsProblem} />
-                </Field>
-                {#if status?.auth && !auth.user}
-                  <Field label="API key" for="chat-key">
-                    <TextInput id="chat-key" mono type="password" bind:value={key} onchange={() => setGatewayKey(key.trim())} />
-                  </Field>
-                {/if}
-                <p class="truncate font-mono text-xs text-fg-faint" title={gatewayBase}>{gatewayBase}</p>
-              </div>
-            {/if}
-          {:else if pane === 'request'}
-            {#if lastSent}
-              <div class="flex flex-col gap-4">
-                <div class="grid grid-cols-2 gap-3">
-                  <div class="stat"><dt>Path</dt><dd class="font-mono wrap-anywhere">{lastSent.path}</dd></div>
-                  <div class="stat"><dt>Status</dt><dd>{lastSent.status}</dd></div>
-                </div>
-                {#if Object.keys(lastSent.headers ?? {}).length}
-                  <div>
-                    <div class="caps mb-2 text-fg-faint">Headers</div>
-                    <pre class="code whitespace-pre-wrap">{Object.entries(lastSent.headers).map(([k, v]) => `${k}: ${k.toLowerCase() === 'authorization' || k.toLowerCase() === 'x-api-key' ? '••••' : v}`).join('\n')}</pre>
-                  </div>
-                {/if}
-                <div>
-                  <div class="mb-2 flex items-center gap-2">
-                    <span class="caps text-fg-faint">Body</span>
-                    {#if shownBody !== lastSent.body}<span class="text-xs text-fg-faint">image bytes shortened</span><Copy text={lastSent.body} size={12} class="h-6 w-6" label="Copy the exact body" />{/if}
-                  </div>
-                  <Json text={shownBody} height="max-h-[32rem]" />
-                </div>
-              </div>
-            {:else}
-              <p class="text-sm text-fg-faint">No request sent yet</p>
-            {/if}
-          {:else if pane === 'trace'}
-            {#if shownTrace}
-              <TraceDetail id={shownTrace} />
-            {:else}
-              <p class="text-sm text-fg-faint">No trace yet</p>
-            {/if}
-          {:else if pane === 'log'}
-            {#if instance}
-              {#key instance.id}<InstanceLog id={instance.id} follow={instanceLive(instance)} height="h-[calc(100vh-14rem)]" />{/key}
-            {:else}
-              <p class="text-sm text-fg-faint">No instance yet</p>
-            {/if}
+      <ChatInspector bind:pane tabs={inspectorTabs} padded={pane !== 'chats'}>
+        {#if pane === 'chats'}
+          <ChatList {chats} current={ghost ? '' : convId} loaded={chatsLoaded} error={chatsError} {opening} onopen={openChat} onrename={renameChat} ondelete={deleteChat} />
+        {:else if pane === 'settings'}
+          <ChatSettings bind:session bind:form bind:key {media} {mode} {caps} hasInit={!!init} {toolsProblem} needsKey={!!status?.auth && !auth.user} onkey={() => setGatewayKey(key.trim())} {gatewayBase} />
+        {:else if pane === 'request'}
+          <RequestPane sent={lastSent} />
+        {:else if pane === 'trace'}
+          {#if shownTrace}
+            <TraceDetail id={shownTrace} />
+          {:else}
+            <p class="text-sm text-fg-faint">No trace yet</p>
           {/if}
-        </div>
-      </aside>
+        {:else if pane === 'log'}
+          {#if instance}
+            {#key instance.id}<InstanceLog id={instance.id} follow={instanceLive(instance)} height="h-[calc(100vh-14rem)]" />{/key}
+          {:else}
+            <p class="text-sm text-fg-faint">No instance yet</p>
+          {/if}
+        {/if}
+      </ChatInspector>
     {/if}
   </div>
   <Lightbox bind:src={lightbox} alt={lightboxAlt} />

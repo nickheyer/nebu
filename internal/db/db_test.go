@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -210,5 +211,34 @@ func TestTasks(t *testing.T) {
 	}
 	if _, _, err := d.GetTask(ctx, "nope"); !IsNotFound(err) {
 		t.Fatal("missing task should be not found")
+	}
+}
+
+func TestCopyAsideWritesAReadableBackup(t *testing.T) {
+	d, dir := open(t)
+	ctx := context.Background()
+	if _, err := d.sql.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES ('k', '"v"')`); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := d.sql.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	aside, err := copyAside(ctx, conn, filepath.Join(dir, "nebu.db"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copy, err := sql.Open("sqlite", "file:"+aside+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer copy.Close()
+	var value string
+	if err := copy.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'k'`).Scan(&value); err != nil || value != `"v"` {
+		t.Fatalf("backup row %q %v", value, err)
+	}
+	if _, err := copyAside(ctx, conn, ":memory:", "test"); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -7,6 +7,7 @@ package links
 import (
 	"context"
 	"crypto/tls"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -157,19 +158,15 @@ func (p *Prober) interfaceFacts(address string, link *v1.Link) error {
 
 // Median and 95th percentile of ping frames on one HTTP/2 connection
 func (p *Prober) roundTrip(ctx context.Context, t Target) (time.Duration, time.Duration, error) {
-	conn, cc, err := dialH2(ctx, t)
+	pg, err := dialH2(ctx, t)
 	if err != nil {
 		return 0, 0, err
 	}
-	defer conn.Close()
-	defer cc.Close()
+	defer pg.Close()
 	samples := make([]time.Duration, 0, Pings)
 	for i := 0; i < Pings; i++ {
-		pctx, cancel := context.WithTimeout(ctx, pingTimeout)
 		start := time.Now()
-		err := cc.Ping(pctx)
-		cancel()
-		if err != nil {
+		if err := pg.ping(ctx); err != nil {
 			return 0, 0, err
 		}
 		samples = append(samples, time.Since(start))
@@ -297,22 +294,95 @@ func Classify(l *v1.Link, peerRDMA string) (v1.LinkClass, string) {
 	return v1.LinkClass_LINK_CLASS_SLOW, "slow: " + facts + why
 }
 
+// One HTTP/2 connection to the target that carries ping frames alone, opened with the
+// preface and settings exchange the protocol starts with
+type pinger struct {
+	conn net.Conn
+	fr   *http2.Framer
+	// Each ping's payload, counted up so an acknowledgement matches the ping it answers
+	seq uint64
+}
+
 // Opens one HTTP/2 connection to the target, plain prior knowledge or TLS
-func dialH2(ctx context.Context, t Target) (net.Conn, *http2.ClientConn, error) {
+func dialH2(ctx context.Context, t Target) (*pinger, error) {
 	dctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 	conn, err := dial(dctx, t)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	tr := &http2.Transport{AllowHTTP: t.TLS == nil}
-	cc, err := tr.NewClientConn(conn)
-	if err != nil {
+	pg := &pinger{conn: conn, fr: http2.NewFramer(conn, conn)}
+	if err := pg.open(); err != nil {
 		conn.Close()
-		return nil, nil, err
+		return nil, fmt.Errorf("http/2 handshake with %s: %w", t.Address, err)
 	}
-	return conn, cc, nil
+	return pg, nil
 }
+
+// Sends the client preface and settings, then acknowledges the server's settings
+func (pg *pinger) open() error {
+	if err := pg.conn.SetDeadline(time.Now().Add(dialTimeout)); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(pg.conn, http2.ClientPreface); err != nil {
+		return err
+	}
+	if err := pg.fr.WriteSettings(); err != nil {
+		return err
+	}
+	for {
+		f, err := pg.fr.ReadFrame()
+		if err != nil {
+			return err
+		}
+		switch f := f.(type) {
+		case *http2.SettingsFrame:
+			if !f.IsAck() {
+				return pg.fr.WriteSettingsAck()
+			}
+		case *http2.GoAwayFrame:
+			return fmt.Errorf("the peer closed the connection, %v", f.ErrCode)
+		}
+	}
+}
+
+// Sends one ping frame and waits for its acknowledgement, pingTimeout at most
+func (pg *pinger) ping(ctx context.Context) error {
+	deadline := time.Now().Add(pingTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err := pg.conn.SetDeadline(deadline); err != nil {
+		return err
+	}
+	pg.seq++
+	var data [8]byte
+	binary.BigEndian.PutUint64(data[:], pg.seq)
+	if err := pg.fr.WritePing(false, data); err != nil {
+		return err
+	}
+	for {
+		f, err := pg.fr.ReadFrame()
+		if err != nil {
+			return err
+		}
+		switch f := f.(type) {
+		case *http2.PingFrame:
+			if f.IsAck() && f.Data == data {
+				return nil
+			}
+			if !f.IsAck() {
+				if err := pg.fr.WritePing(true, f.Data); err != nil {
+					return err
+				}
+			}
+		case *http2.GoAwayFrame:
+			return fmt.Errorf("the peer closed the connection, %v", f.ErrCode)
+		}
+	}
+}
+
+func (pg *pinger) Close() error { return pg.conn.Close() }
 
 // Dials the target over TCP, wrapping TLS when the target has it
 func dial(ctx context.Context, t Target) (net.Conn, error) {
@@ -333,13 +403,8 @@ func dial(ctx context.Context, t Target) (net.Conn, error) {
 
 // An HTTP/2 client that holds one connection to the target
 func httpClient(t Target) *http.Client {
-	tr := &http2.Transport{
-		AllowHTTP: t.TLS == nil,
-		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-			return dial(ctx, t)
-		},
-	}
-	return &http.Client{Transport: tr}
+	through := func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx, t) }
+	return &http.Client{Transport: &http.Transport{Protocols: ClientProtocols(), DialContext: through, DialTLSContext: through}}
 }
 
 func base(t Target) string {
@@ -422,6 +487,14 @@ func ClassName(c v1.LinkClass) string {
 func Protocols() *http.Protocols {
 	p := new(http.Protocols)
 	p.SetHTTP1(true)
+	p.SetHTTP2(true)
+	p.SetUnencryptedHTTP2(true)
+	return p
+}
+
+// HTTP/2 alone for clients, over TLS or by prior knowledge on a plain listener
+func ClientProtocols() *http.Protocols {
+	p := new(http.Protocols)
 	p.SetHTTP2(true)
 	p.SetUnencryptedHTTP2(true)
 	return p

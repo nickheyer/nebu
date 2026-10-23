@@ -198,7 +198,7 @@ export function toolSupportText(t: TemplateProbe | undefined, api?: number, sdcp
     case ToolSupport.NATIVE:
       return 'Native, the runtime parses tool calls';
     case ToolSupport.EMULATED:
-      return `Emulated, the gateway writes tools into the prompt and parses the calls: ${t.toolsRefusal}`;
+      return `Emulated, tools in the prompt and calls parsed from the answer: ${t.toolsRefusal}`;
     case ToolSupport.NONE:
       return 'None';
     default:

@@ -144,7 +144,7 @@
   }
   async function remove() {
     if (!bot) return;
-    if (!(await confirm({ title: `Delete bot ${bot.name}?`, message: 'Disconnects the bot and deletes its settings, personas, and automations. Keeps the Discord application.', action: 'Delete', tone: 'bad' }))) return;
+    if (!(await confirm({ title: `Delete bot ${bot.name}?`, message: 'Removes the bot with its personas and automations. The Discord application stays.', action: 'Delete', tone: 'bad' }))) return;
     try {
       await api.bots.deleteBot({ id: bot.id });
       live.bots.delete(bot.id);

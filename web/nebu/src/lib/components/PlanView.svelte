@@ -66,7 +66,7 @@
     <dl class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums">
       <div class="flex gap-1.5"><dt class="text-fg-muted">Weights</dt><dd>{bytes(plan.weightsBytes)}</dd></div>
       <div class="flex gap-1.5"><dt class="text-fg-muted">Cache</dt><dd>{bytes(plan.cacheBytes)}</dd></div>
-      <div class="flex gap-1.5" title={plan.overheadDelta ? `${deltaBytes(plan.overheadDelta)} correction learned from measured runs` : undefined}><dt class="text-fg-muted">Overhead</dt><dd>{bytes(plan.overheadBytes)}</dd></div>
+      <div class="flex gap-1.5" title={plan.overheadDelta ? `${deltaBytes(plan.overheadDelta)} correction from measured runs` : undefined}><dt class="text-fg-muted">Overhead</dt><dd>{bytes(plan.overheadBytes)}</dd></div>
       {#if onDisk > 0n}<div class="flex gap-1.5" title="Tensors this runtime never loads with these parameters"><dt class="text-fg-muted">On disk</dt><dd>{bytes(onDisk)}</dd></div>{/if}
     </dl>
   </div>

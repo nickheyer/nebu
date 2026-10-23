@@ -34,6 +34,8 @@ func (c fakeCreds) Authenticated(h http.Header) bool {
 	return c.key != "" && bearerOf(h) == c.key
 }
 
+func (c fakeCreds) Host(r *http.Request) string { return r.Host }
+
 func (c fakeCreds) PeerOf(h http.Header) (string, bool) {
 	id, ok := c.peers[bearerOf(h)]
 	return id, ok

@@ -1,9 +1,11 @@
-.PHONY: gen proto-clean proto-lint web web-install web-check prepare build build-cli run test lint vet cgo-guard clean dev release release-check migrate
+.PHONY: gen proto-clean proto-lint web web-install web-check prepare build build-cli run test lint vet staticcheck govulncheck cgo-guard clean dev release release-check migrate
 
 BIN := build/nebu
 BUF ?= buf
 NPM ?= npm
 GORELEASER ?= goreleaser
+STATICCHECK ?= go run honnef.co/go/tools/cmd/staticcheck@v0.8.2
+GOVULNCHECK ?= go run golang.org/x/vuln/cmd/govulncheck@v1.9.0
 WEB := web/nebu
 export CGO_ENABLED = 0
 
@@ -66,11 +68,18 @@ test: gen
 vet: gen
 	go vet ./...
 
+staticcheck: gen
+	$(STATICCHECK) ./...
+
+# Fail on known vulnerabilities reachable from this module.
+govulncheck: gen
+	$(GOVULNCHECK) ./...
+
 # Reject dependencies that need cgo.
 cgo-guard: gen
 	./scripts/cgo-guard.sh
 
-lint: proto-lint vet cgo-guard web-check
+lint: proto-lint vet staticcheck govulncheck cgo-guard web-check
 
 release-check:
 	$(GORELEASER) check

@@ -482,3 +482,29 @@ func TestLoadRecoversEnabledBots(t *testing.T) {
 		return err == nil && b.GetState() == v1.BotState_BOT_STATE_READY
 	})
 }
+
+// Activity survives a restart, a new manager over the same store lists what the old one recorded
+func TestActivityIsKeptAcrossManagers(t *testing.T) {
+	h := newHarness(t)
+	bot := h.ready(t, quickSpec())
+	s := h.session()
+	s.h.message(0, mention("2", "hello there"))
+	waitFor(t, "an answer", func() bool { return s.sentCount() == 1 })
+	before, _ := h.m.Activity(bot.GetId(), 0)
+	if len(before) == 0 {
+		t.Fatal("no activity recorded")
+	}
+	again := New(context.Background(), h.m.DB, h.m.Gateway, h.m.Events, h.m.Log, "")
+	if err := again.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	after, err := again.Activity(bot.GetId(), 0)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("loaded %d of %d entries: %v", len(after), len(before), err)
+	}
+	for i := range before {
+		if before[i].GetMessage() != after[i].GetMessage() || before[i].GetKind() != after[i].GetKind() || before[i].GetTrace() != after[i].GetTrace() || !before[i].GetAt().AsTime().Equal(after[i].GetAt().AsTime()) {
+			t.Fatalf("entry %d differs: %v vs %v", i, before[i], after[i])
+		}
+	}
+}

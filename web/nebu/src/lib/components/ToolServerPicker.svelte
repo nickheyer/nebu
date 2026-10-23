@@ -48,7 +48,7 @@
     </div>
     {#if remoteError}<p class="text-xs text-warn">Members' servers could not be listed: {remoteError}</p>{/if}
     {#if refs.length}
-      <SwitchRow bind:checked={mutating} label="Mutating tools" description="Offer tools that change what they touch too. Read only tools alone otherwise." />
+      <SwitchRow bind:checked={mutating} label="Mutating tools" description="Also offer tools that change things." />
     {/if}
   {/if}
 </div>

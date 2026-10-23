@@ -2,6 +2,7 @@ package links_test
 
 import (
 	"context"
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -82,5 +83,28 @@ func TestMeasureOverLoopback(t *testing.T) {
 	}
 	if !held.GetBandwidthHeld() || held.GetStreamBytesPerSecond() != link.GetStreamBytesPerSecond() {
 		t.Fatalf("a held run keeps the last bandwidth: %v", held)
+	}
+}
+
+// A TLS listener is pinged and measured over h2 the same way
+func TestMeasureOverTLS(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.Handle(nebuv1connect.NewMeshServiceHandler(streamer{}))
+	mux.HandleFunc(links.SinkPath, links.Sink)
+	srv := httptest.NewUnstartedServer(mux)
+	srv.Config.Protocols = links.Protocols()
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+	p := &links.Prober{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	target := links.Target{ID: "b", Address: srv.Listener.Addr().String(), TLS: &tls.Config{InsecureSkipVerify: true}, Header: http.Header{}}
+	link, err := p.Measure(ctx, "a", target, &v1.Link{StreamBytesPerSecond: 1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.GetRttUs() == 0 || link.GetStreamBytesPerSecond() == 0 {
+		t.Fatalf("link %v", link)
 	}
 }

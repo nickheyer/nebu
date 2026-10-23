@@ -41,7 +41,11 @@ type Request struct {
 	TopK        *int
 	Stop        []string
 	Stream      bool
-	Tools       []Tool
+	// Whether a streamed answer ends with a chunk of usage alone, as OpenAI clients ask with stream_options
+	IncludeUsage bool
+	// Whether the answer goes out in the OpenAI Responses shape rather than chat completions
+	Responses bool
+	Tools     []Tool
 	// Empty, auto, none, required, or a tool name
 	ToolChoice string
 	// Tool endpoints the request asks the gateway to connect for it alone

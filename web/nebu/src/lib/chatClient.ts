@@ -228,7 +228,14 @@ export async function send(req: ChatRequest, emit: (ev: ChatEvent) => void, onSe
   if (req.dialect === 'ollama') {
     for await (const line of lines()) {
       if (!line.trim()) continue;
-      readOllama(JSON.parse(line), emit);
+      let chunk: Record<string, unknown>;
+      try {
+        chunk = JSON.parse(line);
+      } catch {
+        emit({ kind: 'error', error: `the gateway sent a line that is not JSON: ${line.slice(0, 200)}` });
+        continue;
+      }
+      readOllama(chunk, emit);
     }
     return;
   }
@@ -339,7 +346,13 @@ function readOllama(chunk: Record<string, unknown>, emit: (ev: ChatEvent) => voi
 }
 
 function readWhole(dialect: Dialect, raw: string, emit: (ev: ChatEvent) => void) {
-  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    emit({ kind: 'error', error: `the gateway answered with something other than JSON: ${raw.slice(0, 200)}` });
+    return;
+  }
   if (dialect === 'ollama') {
     readOllama(parsed, emit);
     return;

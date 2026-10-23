@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"sync"
 	"time"
 
@@ -108,8 +109,8 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 		if res.Status != v1.ProbeStatus_PROBE_STATUS_OK {
 			continue
 		}
-		profile.Devices = append(profile.Devices, res.Devices...)
-		profile.Pools = append(profile.Pools, res.Pools...)
+		profile.Devices = mergeDevices(profile.Devices, res.Devices)
+		profile.Pools = mergePools(profile.Pools, res.Pools)
 		for k, v := range res.Facts {
 			profile.Facts[k] = v
 		}
@@ -132,6 +133,44 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 		return nil, fmt.Errorf("probe: %w", err)
 	}
 	return profile, nil
+}
+
+// Adds devices by id, one two probes both found keeping the first probe's numbers and
+// taking the facts and names it lacked from the second
+func mergeDevices(have, more []*v1.Device) []*v1.Device {
+	for _, d := range more {
+		i := slices.IndexFunc(have, func(h *v1.Device) bool { return h.GetId() == d.GetId() })
+		if i == -1 {
+			have = append(have, d)
+			continue
+		}
+		h := have[i]
+		if h.Name == "" {
+			h.Name = d.GetName()
+		}
+		if h.MemoryTotalBytes == 0 {
+			h.MemoryTotalBytes, h.MemoryFreeBytes = d.GetMemoryTotalBytes(), d.GetMemoryFreeBytes()
+		}
+		if h.Facts == nil && len(d.GetFacts()) > 0 {
+			h.Facts = map[string]string{}
+		}
+		for k, v := range d.GetFacts() {
+			if _, ok := h.Facts[k]; !ok {
+				h.Facts[k] = v
+			}
+		}
+	}
+	return have
+}
+
+// Adds pools by id, the first probe's numbers kept for one two probes both found
+func mergePools(have, more []*v1.MemoryPool) []*v1.MemoryPool {
+	for _, p := range more {
+		if !slices.ContainsFunc(have, func(h *v1.MemoryPool) bool { return h.GetId() == p.GetId() }) {
+			have = append(have, p)
+		}
+	}
+	return have
 }
 
 // Reads the filesystem holding a path, its mount and free bytes

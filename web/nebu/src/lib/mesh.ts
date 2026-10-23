@@ -225,3 +225,12 @@ export function admissionWhat(a: Admission): string {
   if (a.invited) return 'Invitation';
   return 'Join request';
 }
+
+export function admissionPending(a: Admission | undefined): boolean {
+  return a?.state === AdmissionState.PENDING;
+}
+
+// Whether an admission ended without the node joining
+export function admissionSettled(a: Admission | undefined): boolean {
+  return !!a && a.state !== AdmissionState.PENDING && a.state !== AdmissionState.ADMITTED;
+}

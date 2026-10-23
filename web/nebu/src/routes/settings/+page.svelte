@@ -115,7 +115,7 @@
   }
 
   async function removeServer(s: ToolServer) {
-    if (!(await confirm({ title: `Remove ${s.name}?`, message: 'Routes and personas attaching it are refused until they let go of it.', action: 'Remove', tone: 'bad' }))) return;
+    if (!(await confirm({ title: `Remove ${s.name}?`, message: 'Routes and personas that attach it must let go first.', action: 'Remove', tone: 'bad' }))) return;
     await saveServers(servers.filter((x) => x.id !== s.id), `Removed ${s.name}`);
   }
 
@@ -294,7 +294,7 @@
       <Button size="sm" icon={Plus} onclick={addServer}>Add server</Button>
     {/snippet}
     <div class="flex flex-col gap-4">
-      <p class="text-sm text-fg-muted">Tools the gateway runs for models: web search, web fetch, and MCP servers. Attach them to routes, personas, or a chat, and any client of any format gets them.</p>
+      <p class="text-sm text-fg-muted">Web search, web fetch, and MCP servers the gateway runs for models, attached to routes, personas, or chats.</p>
       {#if !servers.length}
         <p class="text-sm text-fg-faint">None yet.</p>
       {:else}
@@ -319,7 +319,7 @@
             </tbody>
           </table>
         </div>
-        <p class="text-xs text-fg-faint">Tools marked * change what they touch and are offered only where mutating tools are allowed.</p>
+        <p class="text-xs text-fg-faint">Tools marked * change things and are offered only where mutating tools are allowed.</p>
       {/if}
     </div>
   </Section>
@@ -333,7 +333,7 @@
           <Copy text={mcpUrl} label="Copy the MCP URL" size={13} />
         </div>
       {/snippet}
-      {@render row('Endpoint', 'Claude Code, Claude Desktop, and other MCP clients add this URL as a streamable HTTP server, sending an API token as a bearer token. It offers the models, runtimes, routes, traces, mesh, and tool servers of this node.', undefined, mcpControl)}
+      {@render row('Endpoint', 'Add this URL to Claude Code, Claude Desktop, or another MCP client as a streamable HTTP server, with an API token as the bearer token.', undefined, mcpControl)}
     </div>
   </Section>
 
@@ -505,7 +505,7 @@
             <Button type="submit" variant="primary" disabled={!tokenDirty}>Save</Button>
           </form>
         {/snippet}
-        {@render row('API token', 'Stored in this browser. A token made in Settings while signed in, or the daemon\'s api.token file.', 'token', tokenControl)}
+        {@render row('API token', 'Kept in this browser. A token from Settings, or the daemon\'s api.token file.', 'token', tokenControl)}
       {/if}
     </div>
   </Section>

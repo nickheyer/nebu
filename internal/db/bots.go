@@ -83,3 +83,25 @@ func (d *DB) PutBotSchedule(ctx context.Context, botID, automationID string, las
 func (d *DB) ListBotSchedules(ctx context.Context, botID string) (map[string]string, error) {
 	return d.stringMap(ctx, `SELECT automation_id, last_run_at FROM bot_schedules WHERE bot_id = ?`, botID)
 }
+
+// Appends an activity row, keeping only the newest keep rows of the bot
+func (d *DB) PutBotActivity(ctx context.Context, a *v1.BotActivity, keep int) error {
+	return d.tx(ctx, func(exec execFn) error {
+		if err := exec(`INSERT INTO bot_activity (bot_id, at, level, kind, message, guild_id, channel_id, persona, trace) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			a.GetBotId(), stamp(a.GetAt().AsTime()), a.GetLevel(), a.GetKind(), a.GetMessage(), a.GetGuildId(), a.GetChannelId(), a.GetPersona(), a.GetTrace()); err != nil {
+			return err
+		}
+		return exec(`DELETE FROM bot_activity WHERE bot_id = ? AND seq <= (SELECT seq FROM bot_activity WHERE bot_id = ? ORDER BY seq DESC LIMIT 1 OFFSET ?)`, a.GetBotId(), a.GetBotId(), keep)
+	})
+}
+
+// Lists a bot's activity rows newest first, every row kept when limit is zero
+func (d *DB) ListBotActivity(ctx context.Context, botID string, limit int) ([]*v1.BotActivity, error) {
+	if limit <= 0 {
+		limit = -1
+	}
+	return list(ctx, d, `SELECT bot_id, at, level, kind, message, guild_id, channel_id, persona, trace FROM bot_activity WHERE bot_id = ? ORDER BY seq DESC LIMIT ?`, func(rows *sql.Rows) (*v1.BotActivity, error) {
+		a := &v1.BotActivity{}
+		return a, rows.Scan(&a.BotId, at{&a.At}, &a.Level, &a.Kind, &a.Message, &a.GuildId, &a.ChannelId, &a.Persona, &a.Trace)
+	}, botID, limit)
+}

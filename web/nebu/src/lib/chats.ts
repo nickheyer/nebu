@@ -191,3 +191,14 @@ export function previewTitle(turns: Turn[]): string {
   if (!line) return first.images && first.images.length > 1 ? `${first.images.length} images` : 'Image';
   return line.length > 60 ? line.slice(0, 60).trim() + '…' : line;
 }
+
+const stopWord = (s: string | undefined) => (s === 'end_turn' ? 'stop' : s === 'max_tokens' ? 'length' : s === 'tool_calls' || s === 'tool_use' ? 'tool' : s);
+
+// Why an answer ended early, empty for a plain stop
+export function stopNote(s: string | undefined): string {
+  const w = stopWord(s);
+  if (!w || w === 'stop') return '';
+  if (w === 'length') return 'cut off at max tokens';
+  if (w === 'tool') return 'stopped to call a tool';
+  return `stopped: ${w}`;
+}

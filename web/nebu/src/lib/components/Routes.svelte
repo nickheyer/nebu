@@ -71,7 +71,7 @@
   }
 
   async function remove(name: string) {
-    const yes = await confirm({ title: `Remove ${name}?`, message: `Requests for "${name}" will get 404.`, action: 'Remove', tone: 'bad' });
+    const yes = await confirm({ title: `Remove ${name}?`, message: `Requests for "${name}" get 404.`, action: 'Remove', tone: 'bad' });
     if (!yes) return;
     try {
       await api.gateway.deleteRoute({ name });
@@ -117,7 +117,7 @@
 </Section>
 {/if}
 
-<Dialog bind:open title="Add alias" description="Another model name clients can send. Slot aliases stay through swaps and restarts." size="lg">
+<Dialog bind:open title="Add alias" description="Another model name for clients. Slot aliases survive swaps and restarts." size="lg">
   <form
     class="flex flex-col gap-5"
     onsubmit={(e) => {

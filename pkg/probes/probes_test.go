@@ -1,6 +1,10 @@
 package probes
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -90,5 +94,96 @@ func TestAllProbesAreNamed(t *testing.T) {
 			t.Fatalf("probe %q", p.ID())
 		}
 		seen[p.ID()] = true
+	}
+}
+
+// A sysfs tree with one AMD card, one Intel card under xe, one Intel integrated card, and an NVIDIA card
+func fakeSysfs(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	write := func(path, value string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(value+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	card := func(n int, bus, driver string, attrs map[string]string) {
+		t.Helper()
+		dev := filepath.Join(root, "bus", "pci", "devices", bus)
+		for name, value := range attrs {
+			write(filepath.Join(dev, name), value)
+		}
+		if err := os.MkdirAll(filepath.Join(root, "bus", "pci", "drivers", driver), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join("..", "..", "..", "bus", "pci", "drivers", driver), filepath.Join(dev, "driver")); err != nil {
+			t.Fatal(err)
+		}
+		cardDir := filepath.Join(root, "class", "drm", fmt.Sprintf("card%d", n))
+		if err := os.MkdirAll(cardDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join("..", "..", "..", "bus", "pci", "devices", bus), filepath.Join(cardDir, "device")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(root, "class", "drm", fmt.Sprintf("card%d-DP-1", n)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	card(0, "0000:01:00.0", "nvidia", map[string]string{"vendor": "0x10de", "device": "0x2208"})
+	card(1, "0000:03:00.0", "amdgpu", map[string]string{"vendor": "0x1002", "device": "0x744c", "subsystem_vendor": "0x1da2", "subsystem_device": "0x471e", "unique_id": "0x1F9EBF1B8F9E4D8A", "mem_info_vram_total": "25753026560", "mem_info_vram_used": "753026560"})
+	card(2, "0000:05:00.0", "xe", map[string]string{"vendor": "0x8086", "device": "0x56a0", "tile0/physical_vram_size_bytes": "17179869184"})
+	card(3, "0000:00:02.0", "i915", map[string]string{"vendor": "0x8086", "device": "0x4680"})
+	write(filepath.Join(root, "pci.ids"), "# ids\n1002  Advanced Micro Devices, Inc. [AMD/ATI]\n\t744c  Navi 31 [Radeon RX 7900 XT/7900 XTX]\n\t\t1da2 471e  PULSE RX 7900 XTX\n8086  Intel Corporation\n\t4680  AlderLake-S GT1\n\t56a0  DG2 [Arc A770]\n")
+	return root
+}
+
+func TestDRMSysfsReadsAMDAndIntelCards(t *testing.T) {
+	root := fakeSysfs(t)
+	res := drmSysfs{root: root, ids: []string{filepath.Join(root, "pci.ids")}}.Run(context.Background())
+	if res.Status != v1.ProbeStatus_PROBE_STATUS_OK || len(res.Devices) != 3 || len(res.Pools) != 2 {
+		t.Fatalf("result %+v", res)
+	}
+	amd := res.Devices[0]
+	if amd.GetId() != "amd-1f9ebf1b8f9e4d8a" || amd.GetVendor() != "amd" || amd.GetName() != "PULSE RX 7900 XTX" || amd.GetMemoryTotalBytes() != 25753026560 || amd.GetMemoryFreeBytes() != 25000000000 {
+		t.Fatalf("amd %+v", amd)
+	}
+	if f := amd.GetFacts(); f["index"] != "1" || f["pci_bus_id"] != "0000:03:00.0" || f["driver"] != "amdgpu" || f["unique_id"] != "1f9ebf1b8f9e4d8a" || f["device_id"] != "0x744c" {
+		t.Fatalf("amd facts %v", f)
+	}
+	if p := res.Pools[0]; p.GetId() != amd.GetId() || p.GetDeviceId() != amd.GetId() || p.GetKind() != v1.PoolKind_POOL_KIND_DEVICE || p.GetTotalBytes() != 25753026560 {
+		t.Fatalf("amd pool %+v", p)
+	}
+	arc := res.Devices[1]
+	if arc.GetId() != "intel-0000:05:00.0" || arc.GetVendor() != "intel" || arc.GetName() != "DG2 [Arc A770]" || arc.GetMemoryTotalBytes() != 17179869184 || res.Pools[1].GetDeviceId() != arc.GetId() {
+		t.Fatalf("arc %+v %+v", arc, res.Pools[1])
+	}
+	igpu := res.Devices[2]
+	if igpu.GetId() != "intel-0000:00:02.0" || igpu.GetName() != "AlderLake-S GT1" || igpu.GetMemoryTotalBytes() != 0 || igpu.GetFacts()["memory"] != "shared" || igpu.GetFacts()["driver"] != "i915" {
+		t.Fatalf("integrated %+v", igpu)
+	}
+	if res := (drmSysfs{root: filepath.Join(root, "nowhere")}).Run(context.Background()); res.Status != v1.ProbeStatus_PROBE_STATUS_SKIPPED {
+		t.Fatalf("no sysfs is skipped: %+v", res)
+	}
+}
+
+func TestROCmSMIKeysDevicesOnTheUniqueID(t *testing.T) {
+	cards := map[string]map[string]any{
+		"card0":  {"VRAM Total Memory (B)": "25753026560", "VRAM Total Used Memory (B)": "1000", "Card Series": "Radeon RX 7900 XTX", "Card Model": "0x744c", "Unique ID": "0x1F9EBF1B8F9E4D8A", "PCI Bus": "0000:03:00.0"},
+		"card1":  {"VRAM Total Memory (B)": "1024", "VRAM Total Used Memory (B)": "0", "Card Series": "APU", "Unique ID": "0x0", "PCI Bus": "0000:0C:00.0"},
+		"system": {"Driver version": "6.8"},
+	}
+	res := parseROCmSMI(cards)
+	if res.Status != v1.ProbeStatus_PROBE_STATUS_OK || len(res.Devices) != 2 {
+		t.Fatalf("result %+v", res)
+	}
+	if d := res.Devices[0]; d.GetId() != "amd-1f9ebf1b8f9e4d8a" || d.GetFacts()["unique_id"] != "1f9ebf1b8f9e4d8a" || d.GetFacts()["pci_bus_id"] != "0000:03:00.0" || d.GetFacts()["index"] != "0" || res.Pools[0].GetId() != d.GetId() {
+		t.Fatalf("device %+v", d)
+	}
+	if d := res.Devices[1]; d.GetId() != "amd-0000:0c:00.0" || d.GetFacts()["unique_id"] != "0" {
+		t.Fatalf("an all zero unique id falls back to the bus: %+v", d)
 	}
 }

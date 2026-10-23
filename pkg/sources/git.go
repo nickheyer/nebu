@@ -653,7 +653,7 @@ var gitrepo = &Catalog{
 	Configured:    true,
 	NoBrowse:      true,
 	NoSearch:      true,
-	Description:   "Any git host such as GitLab, Gitea, or a forge of your own, repositories under one URL with LFS weights",
+	Description:   "GitLab, Forgejo, Github, or any git server host with LFS weights",
 	RepoExample:   "owner/repo",
 	RepoPattern:   `^[\w.-]+(/[\w.-]+)+$`,
 	RevisionLabel: "branch or tag",

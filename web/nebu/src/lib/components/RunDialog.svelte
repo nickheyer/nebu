@@ -342,7 +342,7 @@
             <h2 id="run-mesh-title" class="text-sm font-semibold text-fg">Mesh nodes</h2>
             {#if span.length}<span class="text-xs text-fg-muted">{span.length} selected</span>{/if}
           </div>
-          <p class="mt-1 text-xs leading-5 text-fg-muted">Select the nodes this run may use. With none selected it runs on this node alone.</p>
+          <p class="mt-1 text-xs leading-5 text-fg-muted">Nodes this run may use. None means this node alone.</p>
           {#if !local && holders.length}<p class="mt-1 text-xs leading-5 text-fg-muted wrap-anywhere">Model available on {holders.map((n) => n.name || n.id.slice(0, 8)).join(', ')}.</p>{/if}
           <div class="mt-3 flex flex-col gap-3">
             <div class="divide-y divide-line overflow-hidden rounded-md border border-line bg-sunken/40">
@@ -424,7 +424,7 @@
               </Disclosure>
             {/if}
           {:else if !meshMode && !local && current}
-            <div class="note note-info">Select a mesh node above, or download this model to run it here.</div>
+            <div class="note note-info">Pick a mesh node, or download the model to run it here.</div>
           {:else if plan}
             <PlanView {plan} compact />
           {:else if checking}

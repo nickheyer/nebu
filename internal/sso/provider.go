@@ -19,9 +19,11 @@ const (
 	discoveryPath = "/.well-known/openid-configuration"
 	// Largest provider response read
 	maxResponse = 1 << 20
-	// Minimum gap between key set refreshes for unknown key ids
+	// Minimum gap between key set refreshes for unknown key ids, and between discovery refreshes for the same
 	jwksRefreshGap = time.Minute
-	clockSkew      = 5 * time.Minute
+	// Age at which the discovery document is read again
+	discoveryTTL = time.Hour
+	clockSkew    = 5 * time.Minute
 )
 
 // The provider's discovery document
@@ -35,11 +37,14 @@ type discovery struct {
 	PKCE          []string `json:"code_challenge_methods_supported"`
 }
 
-// Discovery and the signing keys it points at
+// Discovery and the signing keys it points at, replaced whole when the document is read again
 type provider struct {
-	doc     discovery
-	keys    []jwk
+	doc discovery
+	// When the document was read
 	fetched time.Time
+	keys    []jwk
+	// When the keys were read
+	keysAt time.Time
 }
 
 // The token endpoint's answer to a code exchange
@@ -50,13 +55,27 @@ type tokenResponse struct {
 	Description string `json:"error_description"`
 }
 
-// Fetches and caches the discovery document
+// The discovery document, read on first use and again once it is discoveryTTL old
 func (s *Service) provider(ctx context.Context) (*provider, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.prov != nil {
+	if s.prov != nil && s.now().Sub(s.prov.fetched) < discoveryTTL {
 		return s.prov, nil
 	}
+	return s.discoverLocked(ctx)
+}
+
+// The discovery document read again whatever its age, for a key set the document no longer points at
+func (s *Service) rediscover(ctx context.Context) (*provider, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.prov != nil && s.now().Sub(s.prov.fetched) < jwksRefreshGap {
+		return s.prov, nil
+	}
+	return s.discoverLocked(ctx)
+}
+
+func (s *Service) discoverLocked(ctx context.Context) (*provider, error) {
 	issuer := strings.TrimSuffix(s.cfg.GetIssuer(), "/")
 	var doc discovery
 	if err := s.getJSON(ctx, issuer+discoveryPath, "", &doc); err != nil {
@@ -68,7 +87,7 @@ func (s *Service) provider(ctx context.Context) (*provider, error) {
 	if doc.Authorization == "" || doc.Token == "" {
 		return nil, errors.New("discovery lacks authorization_endpoint or token_endpoint")
 	}
-	s.prov = &provider{doc: doc}
+	s.prov = &provider{doc: doc, fetched: s.now()}
 	return s.prov, nil
 }
 
@@ -76,7 +95,7 @@ func (s *Service) provider(ctx context.Context) (*provider, error) {
 func (s *Service) keys(ctx context.Context, p *provider, refresh bool) ([]jwk, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fresh := s.now().Sub(p.fetched) < jwksRefreshGap
+	fresh := s.now().Sub(p.keysAt) < jwksRefreshGap
 	if p.keys != nil && (!refresh || fresh) {
 		return p.keys, nil
 	}
@@ -89,7 +108,7 @@ func (s *Service) keys(ctx context.Context, p *provider, refresh bool) ([]jwk, e
 	if err := s.getJSON(ctx, p.doc.JWKS, "", &set); err != nil {
 		return nil, fmt.Errorf("jwks: %w", err)
 	}
-	p.keys, p.fetched = set.Keys, s.now()
+	p.keys, p.keysAt = set.Keys, s.now()
 	return p.keys, nil
 }
 
@@ -224,7 +243,8 @@ func (s *Service) verifyIDToken(ctx context.Context, p *provider, raw, nonce str
 	return c, nil
 }
 
-// Verifies with the client secret or the published keys, refreshing them once for an unknown key id
+// Verifies with the client secret or the published keys, an unknown key id refreshing the keys
+// and then the discovery document itself, since a provider may have moved its key set
 func (s *Service) verifySignature(ctx context.Context, p *provider, tok *token) error {
 	if strings.HasPrefix(tok.alg, "HS") {
 		return tok.verify(nil, s.cfg.GetClientSecret())
@@ -233,11 +253,23 @@ func (s *Service) verifySignature(ctx context.Context, p *provider, tok *token) 
 	if err != nil {
 		return err
 	}
-	err = tok.verify(keys, "")
-	if !errors.Is(err, errUnknownKey) {
+	if err = tok.verify(keys, ""); !errors.Is(err, errUnknownKey) {
 		return err
 	}
 	if keys, err = s.keys(ctx, p, true); err != nil {
+		return err
+	}
+	if err = tok.verify(keys, ""); !errors.Is(err, errUnknownKey) {
+		return err
+	}
+	fresh, err := s.rediscover(ctx)
+	if err != nil {
+		return err
+	}
+	if fresh == p {
+		return errUnknownKey
+	}
+	if keys, err = s.keys(ctx, fresh, false); err != nil {
 		return err
 	}
 	return tok.verify(keys, "")

@@ -25,7 +25,7 @@ export function swapSlot(slot: Slot) {
 }
 
 export async function deleteSlot(slot: Slot): Promise<boolean> {
-  const yes = await confirm({ title: `Delete slot ${slot.name}?`, message: `Requests for "${slot.name}" will get 404. Stored models are not affected.`, action: 'Delete', tone: 'bad' });
+  const yes = await confirm({ title: `Delete slot ${slot.name}?`, message: `Requests for "${slot.name}" get 404. Stored models stay.`, action: 'Delete', tone: 'bad' });
   if (!yes) return false;
   try {
     await api.slots.deleteSlot({ id: slot.id, force: false });

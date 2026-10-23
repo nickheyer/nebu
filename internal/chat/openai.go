@@ -246,16 +246,22 @@ func (openai) Endpoint(path string) Kind {
 		return Image
 	case OpenAIVideos:
 		return Video
+	case OpenAIResponses:
+		return Chat
 	}
 	return None
 }
 
 func (openai) Parse(path string, body []byte) (*Request, error) {
+	if path == OpenAIResponses {
+		return parseResponses(body)
+	}
 	var req oaiRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, bad("%v", err)
 	}
 	c := &Request{Kind: Chat, Model: req.Model, MaxTokens: max(req.MaxTokens, req.MaxCompletionTokens), Temperature: req.Temperature, TopP: req.TopP, Stop: strs(req.Stop), Stream: req.Stream, Extra: req.Extra}
+	c.IncludeUsage = req.Stream && req.StreamOptions != nil && req.StreamOptions.IncludeUsage
 	switch path {
 	case OpenAIEmbeddings:
 		c.Kind, c.Inputs = Embed, strs(req.Input)
@@ -674,6 +680,9 @@ type oaiStream struct {
 }
 
 func (o openai) Answer(w http.ResponseWriter, req *Request, model string) Writer {
+	if req.Responses {
+		return o.answerResponses(w, req, model)
+	}
 	if !req.Stream {
 		return &whole{w: w, req: req, model: model, client: o, render: o.renderResult}
 	}
@@ -728,7 +737,18 @@ func (s *oaiStream) Write(ev Event) error {
 			res = &Result{}
 		}
 		reason := oaiReason(StopOf(res.Stop, len(s.tools.order)))
-		return s.chunk(&oaiMessage{}, "", &reason, &oaiUsage{PromptTokens: res.Usage.In, CompletionTokens: res.Usage.Out, TotalTokens: res.Usage.In + res.Usage.Out}, res.Extra)
+		if err := s.chunk(&oaiMessage{}, "", &reason, nil, res.Extra); err != nil {
+			return err
+		}
+		if !s.req.IncludeUsage {
+			return nil
+		}
+		// The usage goes last in a chunk of its own with no choices, as the API sends it
+		last := oaiResponse{ID: s.id, Object: "chat.completion.chunk", Created: s.created, Model: s.model, Choices: []oaiChoice{}, Usage: &oaiUsage{PromptTokens: res.Usage.In, CompletionTokens: res.Usage.Out, TotalTokens: res.Usage.In + res.Usage.Out}}
+		if s.req.Kind == Generate {
+			last.Object = "text_completion"
+		}
+		return s.live.sse("", last)
 	case Failed:
 		code := ev.Failure.Code
 		if code == "" {

@@ -165,7 +165,7 @@
           <Field label="Token" for="bot-token" required={creating} description={bot?.tokenSet ? 'Stored on the daemon.' : 'Discord Developer Portal > Bot > Token.'}>
             <div class="flex items-center gap-2">
               <div class="relative flex-1">
-                <TextInput id="bot-token" mono type={showToken ? 'text' : 'password'} bind:value={token} inputClass="pr-9" empty={bot?.tokenSet ? 'Leave empty to keep current token' : ''} autocomplete="off">
+                <TextInput id="bot-token" mono type={showToken ? 'text' : 'password'} bind:value={token} inputClass="pr-9" empty={bot?.tokenSet ? 'Empty keeps the current token' : ''} autocomplete="off">
                   {#snippet leading()}<KeyRound size={13} />{/snippet}
                 </TextInput>
                 <button type="button" class="absolute top-1/2 right-1.5 -translate-y-1/2 rounded-sm p-1 text-fg-faint hover:text-fg" onclick={() => (showToken = !showToken)} aria-label={showToken ? 'Hide token' : 'Show token'}>

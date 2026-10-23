@@ -181,7 +181,7 @@
           {:else if slot.request}
             <div class="flex flex-col gap-3">
               <div class="text-sm text-fg">{slot.request.repo} <span class="font-mono text-xs text-fg-muted">{groupLabel(slot.request)}</span></div>
-              <p class="text-sm text-fg-muted">{slot.state === SlotState.FAILED ? 'The last launch failed. Relaunch to try again, or swap in another model.' : 'Starting.'}</p>
+              <p class="text-sm text-fg-muted">{slot.state === SlotState.FAILED ? 'The last launch failed. Relaunch or swap in another model.' : 'Starting.'}</p>
             </div>
           {:else}
             <Empty compact title="Nothing is running in this slot">

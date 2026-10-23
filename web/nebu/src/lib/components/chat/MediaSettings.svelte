@@ -139,7 +139,7 @@
           <Field label="High noise guidance" for="gen-hcfg"><NumberInput id="gen-hcfg" min={0} max={20} step={0.5} empty={figure(hn?.guidance.txt_cfg)} bind:value={form.highCfg} /></Field>
         </div>
       {/if}
-      <Field label="LoRAs" for="gen-loras" description={loraNames.length ? `Available: ${loraNames.join(', ')}. Use name:weight or high:name:weight for the high noise stage.` : "Use name:weight from the runtime's LoRA directory. Prefix with high: for the high noise stage."}>
+      <Field label="LoRAs" for="gen-loras" description={loraNames.length ? `Available: ${loraNames.join(', ')}. name:weight, or high:name:weight for the high noise stage.` : "name:weight from the runtime's LoRA directory, high:name:weight for the high noise stage."}>
         <TextInput id="gen-loras" mono bind:value={form.loras} empty={loraNames.length ? `${loraNames[0]}:0.8` : 'name:0.8, high:other:1'} />
       </Field>
       <SwitchRow bind:checked={form.vaeTiling} label="VAE tiling" />
