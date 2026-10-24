@@ -56,8 +56,8 @@ func (p *toolPlan) close() {
 	}
 }
 
-// Takes provided tools and sources out of the request and offers the model what the gateway runs
-func (g *Gateway) plan(ctx context.Context, req *chat.Request, route *v1.Route, h http.Header) (*toolPlan, error) {
+// Takes provided tools and sources out of the request and offers what the gateway runs, bare requests skipping route servers
+func (g *Gateway) plan(ctx context.Context, req *chat.Request, route *v1.Route, h http.Header, bare bool) (*toolPlan, error) {
 	p := emptyPlan(g)
 	switch h.Get(ApproveHeader) {
 	case "", "mutating", "all":
@@ -96,7 +96,11 @@ func (g *Gateway) plan(ctx context.Context, req *chat.Request, route *v1.Route, 
 			return nil, err
 		}
 	}
-	for _, ref := range route.GetProfile().GetToolServers() {
+	routed := route.GetProfile().GetToolServers()
+	if bare {
+		routed = nil
+	}
+	for _, ref := range routed {
 		server, err := g.tools.Server(ctx, ref)
 		if err != nil {
 			g.log.Warn("tool server attached to a route is not offered", "model", route.GetName(), "server", ref, "err", err)

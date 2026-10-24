@@ -29,7 +29,9 @@ type Exchange struct {
 	SystemMode v1.SystemMessages
 	// Whether the gateway keeps no trace, publishes no event, and pins no seat for the request
 	Ghost bool
-	// Whether the client set the system prompt, turning guards off for the rest of the request
+	// Whether the gateway attaches no tool server of the route to the request
+	Bare bool
+	// Whether the client's system prompt stands as sent, turning guards off for the rest of the request
 	Pinned bool
 }
 
@@ -46,7 +48,7 @@ type Interceptor interface {
 type Chain []Interceptor
 
 // The gateway's interceptors, the system prompt leading the request stage so its pin turns off the guards after it
-var Default = Chain{Ghost{}, System{}, Fold{}}
+var Default = Chain{Ghost{}, Bare{}, System{}, Fold{}}
 
 // Runs the stage's interceptors in order, answering whether any changed the exchange
 func (c Chain) Run(stage Stage, x *Exchange) (bool, error) {

@@ -65,7 +65,7 @@ func (x *exchange) serve() int {
 	x.runtime = chat.RuntimeOf(route.GetApi())
 	x.plan = emptyPlan(x.g)
 	if req.Kind == chat.Chat {
-		plan, err := x.g.plan(x.r.Context(), req, route, x.r.Header)
+		plan, err := x.g.plan(x.r.Context(), req, route, x.r.Header, x.ix.Bare)
 		if err != nil {
 			x.refuse(chat.FailureOf(err))
 			return -1

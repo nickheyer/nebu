@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/internal/tools"
+	"github.com/nickheyer/nebu/pkg/interceptors"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -398,7 +399,7 @@ func TestServerToolVersions(t *testing.T) {
 	}
 	for _, kind := range []string{"web_search", "web_search_20250305", "web_search_20260301", "web_search_20301231"} {
 		req := parse(fmt.Sprintf(`{"type":%q,"name":"web_search"},{"name":"other"}`, kind))
-		plan, err := g.plan(context.Background(), req, route, http.Header{})
+		plan, err := g.plan(context.Background(), req, route, http.Header{}, false)
 		if err != nil || !plan.active() || len(req.Tools) != 2 || req.Tools[0].Name != "other" || req.Tools[1].Name != tools.SearchTool || req.Tools[1].Type != "" {
 			t.Fatalf("%s: %v %v", kind, err, req.Tools)
 		}
@@ -407,13 +408,13 @@ func TestServerToolVersions(t *testing.T) {
 		}
 	}
 	req := parse(`{"type":"web_fetch_20250910","name":"web_fetch","max_content_tokens":100}`)
-	plan, err := g.plan(context.Background(), req, route, http.Header{})
+	plan, err := g.plan(context.Background(), req, route, http.Header{}, false)
 	if err != nil || len(req.Tools) != 1 || req.Tools[0].Name != tools.FetchTool || plan.tools[tools.FetchTool].limits.MaxChars != 400 {
 		t.Fatalf("fetch: %v %v", err, req.Tools)
 	}
 	for _, kind := range []string{"web_searching", "text_editor_20250124", "custom", ""} {
 		req := parse(fmt.Sprintf(`{"type":%q,"name":"editor","input_schema":{"type":"object"}}`, kind))
-		if plan, err := g.plan(context.Background(), req, route, http.Header{}); err != nil || plan.active() {
+		if plan, err := g.plan(context.Background(), req, route, http.Header{}, false); err != nil || plan.active() {
 			t.Fatalf("%s taken as a server tool: %v", kind, err)
 		}
 	}
@@ -819,6 +820,15 @@ func TestRouteTools(t *testing.T) {
 	}
 	if names := toolNames(model.call(model.count() - 2).body); strings.Join(names, ",") != "get_weather,web_search" {
 		t.Fatalf("the model was offered %v", names)
+	}
+	// A bare request is offered none of the route's tools, a client's own staying.
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, `[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}]`), map[string]string{interceptors.BareHeader: "1"})
+	if names := toolNames(model.call(model.count() - 1).body); r.status != http.StatusOK || strings.Join(names, ",") != "get_weather" {
+		t.Fatalf("bare: %d %s %v", r.status, r.body, names)
+	}
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, ""), map[string]string{interceptors.BareHeader: "maybe"})
+	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), interceptors.BareHeader) {
+		t.Fatalf("bad bare header: %d %s", r.status, r.body)
 	}
 	// A route naming a server Settings no longer hold serves without it.
 	table.Set("m", "i1", "", model.URL, "r:g", "m", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, &v1.Profile{ToolServers: []string{"gone"}})

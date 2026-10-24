@@ -13,13 +13,21 @@ func (Ghost) Stage() Stage { return Inbound }
 func (Ghost) Guard() bool { return false }
 
 func (Ghost) Intercept(x *Exchange) (bool, error) {
-	switch v := x.Header.Get(GhostHeader); {
-	case v == "" || v == "0" || strings.EqualFold(v, "false"):
-		return false, nil
-	case v == "1" || strings.EqualFold(v, "true"):
-		x.Ghost = true
-		return true, nil
-	default:
-		return false, bad("%s is 1, true, 0, false, or unset, not %q", GhostHeader, v)
+	on, err := switched(GhostHeader, x.Header.Get(GhostHeader))
+	if !on || err != nil {
+		return false, err
 	}
+	x.Ghost = true
+	return true, nil
+}
+
+// Whether a mode header turns its mode on, 1 or true on, 0, false or unset off, anything else refused
+func switched(name, value string) (bool, error) {
+	switch {
+	case value == "" || value == "0" || strings.EqualFold(value, "false"):
+		return false, nil
+	case value == "1" || strings.EqualFold(value, "true"):
+		return true, nil
+	}
+	return false, bad("%s is 1, true, 0, false, or unset, not %q", name, value)
 }

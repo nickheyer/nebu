@@ -94,6 +94,26 @@ func TestGhost(t *testing.T) {
 	}
 }
 
+// Bare mode pins the request for 1 or true, so guards stay off, stays off for 0, false, or no header, and refuses anything else
+func TestBare(t *testing.T) {
+	for value, want := range map[string]bool{"": false, "0": false, "false": false, "1": true, "TRUE": true} {
+		x := &Exchange{Header: http.Header{}, Req: &chat.Request{Kind: chat.Chat, Messages: []chat.Message{turn("system", "mine"), turn("user", "hi")}}}
+		x.Header.Set(BareHeader, value)
+		changed, err := Default.Run(Inbound, x)
+		if err != nil || changed != want || x.Bare != want || x.Pinned != want {
+			t.Fatalf("%q: changed %v bare %v pinned %v err %v", value, changed, x.Bare, x.Pinned, err)
+		}
+		var ran bool
+		if _, err := (Chain{guard{&ran}}).Run(Request, x); err != nil || ran == want || turns(x.Req) != "system=mine,user=hi" {
+			t.Fatalf("%q: guard ran %v turns %s", value, ran, turns(x.Req))
+		}
+	}
+	x := &Exchange{Header: http.Header{BareHeader: {"yes"}}}
+	if _, err := Default.Run(Inbound, x); err == nil || !strings.Contains(err.Error(), BareHeader) || x.Bare || x.Pinned {
+		t.Fatalf("yes: bare %v pinned %v err %v", x.Bare, x.Pinned, err)
+	}
+}
+
 // The header's prompt replaces every system and developer turn, leaves embeddings alone, and must be base64 UTF-8
 func TestSystem(t *testing.T) {
 	chatReq := &chat.Request{Kind: chat.Chat, Messages: []chat.Message{turn("system", "a"), turn("developer", "b"), turn("user", "hi"), turn("system", "c"), turn("user", "go")}}
