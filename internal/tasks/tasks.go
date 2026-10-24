@@ -73,6 +73,9 @@ func New(base context.Context, log *slog.Logger, store *db.DB, bus *events.Bus) 
 	return &Manager{base: base, log: log, store: store, events: bus, byID: map[string]*entry{}}
 }
 
+// Whether the daemon is shutting down, so a task started now would be cancelled at once
+func (m *Manager) Closed() bool { return m.base.Err() != nil }
+
 // Marks tasks a previous daemon left unfinished as failed
 func (m *Manager) Recover(ctx context.Context) error {
 	n, err := m.store.FailUnfinishedTasks(ctx)

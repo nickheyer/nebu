@@ -11,7 +11,7 @@
   import { byName, enumLabel } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
-  import { send, countTokens, toolHeaders, type ChatMessage, type Sampling, type ToolCall, type Sent } from '$lib/chatClient';
+  import { send, countTokens, toolHeaders, ghostHeaders, type ChatMessage, type Sampling, type ToolCall, type Sent } from '$lib/chatClient';
   import { gatewayTools } from '$lib/tools';
   import { blank, fresh, fileIds, fromConversation, toConversation, loadFile, uploadFile, deleteFiles, previewTitle, type Session, type Turn, type Media } from '$lib/chats';
   import { capabilities, createVideo, deleteVideo, fetchVideo, figure, generateImages, getVideo, lorasText, modeKey, namedChoice, parseLoras, readHistory, writeHistory, type Capabilities, type Generation, type MediaRequest } from '$lib/generate';
@@ -629,7 +629,7 @@
     try {
       const messages = await wire(conversation(index + 1));
       await send(
-        { base: gatewayBase, dialect: session.dialect, model: chosen.name, messages, system: session.system.trim(), sampling, stream: session.stream, tools, key, headers: toolHeaders(session.toolServers, session.mutatingTools, session.approveTools), signal: controller.signal },
+        { base: gatewayBase, dialect: session.dialect, model: chosen.name, messages, system: session.system.trim(), sampling, stream: session.stream, tools, key, headers: { ...toolHeaders(session.toolServers, session.mutatingTools, session.approveTools), ...(ghost ? ghostHeaders : {}) }, signal: controller.signal },
         (ev) => {
           switch (ev.kind) {
             case 'text':
@@ -771,7 +771,7 @@
     scroll();
     try {
       if (kind === 'image') {
-        const { images, format } = await generateImages(gatewayBase, entry.request, key, controller.signal, (sent) => {
+        const { images, format } = await generateImages(gatewayBase, entry.request, key, ghost, controller.signal, (sent) => {
           lastSent = sent;
           shownTrace = sent.trace;
           update(entry.id, { trace: sent.trace });
@@ -784,7 +784,7 @@
         }
         update(entry.id, { files, format, mime, elapsedMs: Date.now() - startedAt });
       } else {
-        const video = await createVideo(gatewayBase, entry.request, key, controller.signal, (sent) => {
+        const video = await createVideo(gatewayBase, entry.request, key, ghost, controller.signal, (sent) => {
           lastSent = sent;
           shownTrace = sent.trace;
           update(entry.id, { trace: sent.trace });
@@ -1054,7 +1054,7 @@
           promptTokens = null;
           return;
         }
-        promptTokens = await countTokens(gatewayBase, name, sys.trim(), await wire(messages), key, c.signal);
+        promptTokens = await countTokens(gatewayBase, name, sys.trim(), await wire(messages), key, ghost, c.signal);
         countError = '';
       } catch (err) {
         if (!c.signal.aborted) {

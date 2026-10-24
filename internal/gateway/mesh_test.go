@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/nickheyer/nebu/internal/chat"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/events"
+	"github.com/nickheyer/nebu/pkg/interceptors"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -297,6 +299,37 @@ func TestForwardedRequest(t *testing.T) {
 	r, _ = ask(t, nil, esrv.URL, http.MethodGet, modelsPath, "", map[string]string{"Authorization": "Bearer entry-key"})
 	if !strings.Contains(string(r.body), `"id":"m"`) {
 		t.Fatalf("models on the entry node: %s", r.body)
+	}
+}
+
+// Ghost mode and a pinned system prompt travel with a forwarded request, neither node keeping a trace
+// and the conducting member's runtime getting the pinned prompt
+func TestForwardedGhostAndSystem(t *testing.T) {
+	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "ok") })
+	conductor, ctable := newGateway(t)
+	conductor.SetPeers(&fakePeers{self: "n2"})
+	ctable.Set("m", "i1", "", model.URL, "r:g", "m", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, nil)
+	csrv := httptest.NewServer(conductor.Handler())
+	defer csrv.Close()
+	entry, etable := newGateway(t)
+	entry.SetPeers(&fakePeers{self: "n1", bases: map[string]string{"n2": csrv.URL}})
+	if _, err := etable.Forward(&v1.Formation{Id: "f1", Name: "m", Conductor: "n2", Shape: v1.Shape_SHAPE_CHAIN, State: v1.FormationState_FORMATION_STATE_READY, Endpoint: csrv.URL, Repo: "r", Group: "g", RuntimeId: "llamacpp"}, v1.ApiFlavor_API_FLAVOR_OPENAI); err != nil {
+		t.Fatal(err)
+	}
+	esrv := httptest.NewServer(entry.Handler())
+	defer esrv.Close()
+	headers := map[string]string{interceptors.GhostHeader: "1", interceptors.SystemHeader: base64.StdEncoding.EncodeToString([]byte("pinned"))}
+	r, trace := ask(t, entry, esrv.URL, http.MethodPost, chat.OpenAIChat, chatBody, headers)
+	if r.status != http.StatusOK || trace != nil || model.count() != 1 {
+		t.Fatalf("forwarded ghost: %d trace header %q, runtime asked %d times: %s", r.status, r.header.Get(traceHeader), model.count(), r.body)
+	}
+	settled(t, etable, "m")
+	settled(t, ctable, "m")
+	if e, c := len(entry.Traces().List("", 0)), len(conductor.Traces().List("", 0)); e != 0 || c != 0 {
+		t.Fatalf("traces kept: %d on the entry node, %d on the conductor", e, c)
+	}
+	if got := systemSent(t, model.call(0).body); got != "pinned" {
+		t.Fatalf("system %q", got)
 	}
 }
 

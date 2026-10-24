@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/nebu/internal/chat"
+	"github.com/nickheyer/nebu/pkg/interceptors"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -39,6 +40,8 @@ type exchange struct {
 	plan    *toolPlan
 	// Whether the route is a relay, whose requests are always rendered
 	relay bool
+	// What the interceptors read and change, from the inbound stage on
+	ix *interceptors.Exchange
 }
 
 // Answers an error in the client's protocol and records it on the trace
@@ -49,7 +52,6 @@ func (x *exchange) refuse(f chat.Failure) {
 // Serves the request as the client sent it unless the runtime needs it rendered, answering the seat index used
 func (x *exchange) serve() int {
 	t, in, route := x.w.t, x.in, x.route
-	mode := x.g.table.SystemMode(route)
 	same := x.api == route.GetApi()
 	if in.req == nil {
 		// A Responses API body no runtime reads is refused here rather than passed to one
@@ -71,15 +73,20 @@ func (x *exchange) serve() int {
 		x.plan = plan
 	}
 	defer x.plan.close()
+	x.ix.Req, x.ix.SystemMode = req, x.g.table.SystemMode(route)
+	changed, err := interceptors.Default.Run(interceptors.Request, x.ix)
+	if err != nil {
+		x.refuse(chat.FailureOf(err))
+		return -1
+	}
 	emulate := x.g.table.ToolSupport(route) == v1.ToolSupport_TOOL_SUPPORT_EMULATED && len(req.Tools) > 0
-	if same && !x.plan.active() && !emulate && !foldsSystem(req, mode) && req.Kind != chat.Count && !x.relay && !req.Responses {
+	if same && !changed && !x.plan.active() && !emulate && req.Kind != chat.Count && !x.relay && !req.Responses {
 		return x.passthrough()
 	}
 	t.Translated = !same
 	if served := route.GetServed(); served != "" {
 		req.Model = served
 	}
-	foldSystem(req, mode)
 	if x.runtime.Traits().Strict && !same {
 		chat.DropExtras(req)
 	}

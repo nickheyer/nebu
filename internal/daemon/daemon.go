@@ -344,6 +344,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 		ui = web.Handler()
 	}
 	d.Doctor = &doctor.Doctor{Host: prober, Runtimes: rts, Sources: srcs, Store: blobStore, Installs: d.Installs, Tasks: d.Tasks, MinFree: cfg.GetMinFreeBytes()}
+	d.Instances.Probe = d.Doctor.Force
 	deps := rpc.Deps{
 		Host:      prober,
 		Doctor:    d.Doctor,

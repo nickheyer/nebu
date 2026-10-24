@@ -58,6 +58,9 @@ export function toolHeaders(servers: string[], mutating: boolean, approve: boole
   return out;
 }
 
+// The header that keeps the gateway from tracing a ghost chat
+export const ghostHeaders: Record<string, string> = { 'X-Nebu-Ghost': '1' };
+
 export interface ChatEvent {
   kind: 'text' | 'tool' | 'image' | 'usage' | 'stop' | 'error';
   text?: string;
@@ -375,11 +378,12 @@ function readWhole(dialect: Dialect, raw: string, emit: (ev: ChatEvent) => void)
   readOpenai(parsed, emit);
 }
 
-export async function countTokens(base: string, model: string, system: string, messages: ChatMessage[], key: string, signal: AbortSignal): Promise<number> {
+export async function countTokens(base: string, model: string, system: string, messages: ChatMessage[], key: string, ghost: boolean, signal: AbortSignal): Promise<number> {
   const { path, body, headers } = render({ dialect: 'anthropic', model, messages, system, sampling: {}, stream: false });
   delete body.max_tokens;
   delete body.stream;
   if (key) headers['x-api-key'] = key;
+  if (ghost) Object.assign(headers, ghostHeaders);
   const resp = await fetch(base + path.replace('/v1/messages', '/v1/messages/count_tokens'), { method: 'POST', headers, body: JSON.stringify(body), signal, credentials: gatewayCredentials() });
   if (!resp.ok) throw new Error(`${resp.status}: ${errorMessage(await resp.text())}`);
   const parsed = (await resp.json()) as { input_tokens?: number };

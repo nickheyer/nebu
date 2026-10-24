@@ -131,10 +131,14 @@ type Manager struct {
 	Slots Slots
 	// Set by the daemon once the conductor exists, nil until then
 	Formations Formations
-	Log        *slog.Logger
+	// Set by the daemon once the doctor exists, called as each runtime exits so the host is probed again
+	Probe func()
+	Log   *slog.Logger
 
 	mu   sync.Mutex
 	list []*instance
+	// Whether the daemon is stopping every instance on its way out
+	closing bool
 }
 
 type instance struct {
@@ -795,6 +799,13 @@ func (m *Manager) supervise(in *instance) {
 		hits := m.fail(in, errors.New(detail))
 		m.Log.Warn("instance exited", "name", name, "err", exitErr, "triage", len(hits))
 	}
+	// The runtime's memory is free once it exits, and a daemon on its way out plans nothing more
+	m.mu.Lock()
+	closing := m.closing
+	m.mu.Unlock()
+	if m.Probe != nil && !closing {
+		m.Probe()
+	}
 }
 
 // Lists instances newest first
@@ -1019,6 +1030,9 @@ func (m *Manager) logOf(in *instance) *launch.Log {
 
 // Stops every live instance for shutdown, keeping their relaunch intent
 func (m *Manager) Close() {
+	m.mu.Lock()
+	m.closing = true
+	m.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer cancel()
 	var wg sync.WaitGroup

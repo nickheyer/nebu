@@ -9,6 +9,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -257,6 +258,49 @@ func TestFailedSeatKeepsMeasurements(t *testing.T) {
 	}
 	if weights == nil || weights.GetBytes() != 1000 {
 		t.Fatalf("the failed seat keeps its measurements: %v", failed.GetMeasurements())
+	}
+}
+
+// A runtime drained and stopped as an eviction retires it probes the host once it has exited, one
+// that starts or serves probes nothing, and runtimes the daemon stops on its way out probe nothing
+func TestRuntimeExitProbesHost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := newSeatNode(t, ctx)
+	m := n.manager(t, ctx, nil)
+	var probes atomic.Int32
+	m.Probe = func() { probes.Add(1) }
+	in, _, err := m.Run(ctx, seatRun(runtimes.RoleStage, 1, false, n.dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
+	if got := probes.Load(); got != 0 {
+		t.Fatalf("a runtime that started probed the host %d times", got)
+	}
+	if _, err := m.Drain(ctx, in.GetId(), time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Stop(ctx, in.GetId()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for probes.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := probes.Load(); got != 1 {
+		t.Fatalf("the retired runtime probed the host %d times", got)
+	}
+	next, _, err := m.Run(ctx, seatRun(runtimes.RoleStage, 1, false, n.dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, next.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
+	m.Close()
+	waitState(t, m, next.GetId(), v1.InstanceState_INSTANCE_STATE_STOPPED)
+	time.Sleep(200 * time.Millisecond)
+	if got := probes.Load(); got != 1 {
+		t.Fatalf("a runtime stopped on the way out probed the host, %d probes", got)
 	}
 }
 

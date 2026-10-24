@@ -23,6 +23,7 @@ import (
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/tools"
 	"github.com/nickheyer/nebu/pkg/events"
+	"github.com/nickheyer/nebu/pkg/interceptors"
 	"github.com/nickheyer/nebu/pkg/outbound"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -472,7 +473,7 @@ func traceKind(kind chat.Kind) v1.TraceKind {
 	return v1.TraceKind_TRACE_KIND_OTHER
 }
 
-// Starts a request trace with caller, model, protocol, and the body whole
+// A request trace with caller, model, protocol, and the body whole
 func (g *Gateway) trace(r *http.Request, name string, in *inbound, api v1.ApiFlavor, kind v1.TraceKind) *v1.Trace {
 	t := &v1.Trace{
 		Id:           db.NewID(),
@@ -486,7 +487,6 @@ func (g *Gateway) trace(r *http.Request, name string, in *inbound, api v1.ApiFla
 		Remote:       r.RemoteAddr,
 		Stream:       in.req != nil && in.req.Stream,
 	}
-	g.traces.Start(t)
 	return t
 }
 
@@ -507,14 +507,22 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	ix := &interceptors.Exchange{Header: r.Header}
+	if _, err := interceptors.Default.Run(interceptors.Inbound, ix); err != nil {
+		client.Error(rw, chat.FailureOf(err))
+		return
+	}
 	in := g.read(r, client, body)
 	name := modelName(r, in)
 	kind := traceKind(client.Endpoint(r.URL.Path))
 	t := g.trace(r, name, in, api, kind)
-	rw.Header().Set(traceHeader, t.GetId())
-	w := &traceWriter{ResponseWriter: rw, t: t}
+	w := &traceWriter{ResponseWriter: rw, t: t, ghost: ix.Ghost}
+	if !w.ghost {
+		g.traces.Start(t)
+		rw.Header().Set(traceHeader, t.GetId())
+	}
 	defer func() {
-		if w.detached {
+		if w.detached || w.ghost {
 			return
 		}
 		t.Status, t.ResponseBytes = uint32(w.status), w.bytes
@@ -580,7 +588,7 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	x := &exchange{g: g, w: w, r: r, in: in, name: name, api: api, client: client, route: route, policy: policy}
+	x := &exchange{g: g, w: w, r: r, in: in, name: name, api: api, client: client, route: route, policy: policy, ix: ix}
 	if route.GetShape() == v1.Shape_SHAPE_RELAY && len(route.GetSeats()) >= 2 && (kind == v1.TraceKind_TRACE_KIND_CHAT || kind == v1.TraceKind_TRACE_KIND_GENERATE) {
 		x.serveRelay()
 		return
@@ -594,7 +602,7 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 	defer hold.done()
 	x.targets, x.hold = targets, hold
 	x.open = g.opener(targets, hold, policy, r.Header, name)
-	g.served(t, route, targets, x.serve(), key)
+	g.served(w, route, targets, x.serve(), key)
 }
 
 // Answers a request no seat can take, busy seats as 429, none ready as 503, no pick as 502

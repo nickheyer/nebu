@@ -717,7 +717,7 @@ func (g *Gateway) image(w *traceWriter, r *http.Request, req *mediaRequest, name
 		return
 	}
 	target := targets[used].url
-	g.served(t, route, targets, used, "")
+	g.served(w, route, targets, used, "")
 	t.FirstByteAt = timestamppb.Now()
 	done, err := g.await(ctx, target, accepted.ID, policy, func() { t.FirstTokenAt = timestamppb.Now() })
 	if err != nil {
@@ -809,6 +809,8 @@ type video struct {
 	failure    *struct{ code, message string }
 	data       []byte
 	cancel     context.CancelFunc
+	// Whether the job stays out of listings and its trace is kept nowhere
+	ghost bool
 }
 
 // Video API response
@@ -893,14 +895,16 @@ func (s *videoStore) remove(id string) (*video, bool) {
 	return v, ok
 }
 
-// Lists videos newest first
+// Lists videos newest first, ghost jobs left out
 func (s *videoStore) list() []*video {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked()
 	out := make([]*video, 0, len(s.byID))
 	for _, v := range s.byID {
-		out = append(out, v)
+		if !v.ghost {
+			out = append(out, v)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].created.After(out[j].created) })
 	return out
@@ -964,11 +968,15 @@ func (g *Gateway) startVideo(w *traceWriter, req *mediaRequest, name string, rou
 		return
 	}
 	target := targets[used].url
-	g.served(t, route, targets, used, "")
+	g.served(w, route, targets, used, "")
 	width, height, _ := req.shape()
 	frames, fps := req.frames()
 	format := firstOf(req.OutputFormat, "webm")
-	v := &video{id: "video_" + db.NewID(), model: name, route: name, trace: t.GetId(), prompt: req.Prompt, status: "queued", created: time.Now(), width: width, height: height, frames: frames, fps: fps, format: format, mime: videoMime(format), cancel: cancel}
+	trace := t.GetId()
+	if w.ghost {
+		trace = ""
+	}
+	v := &video{id: "video_" + db.NewID(), model: name, route: name, trace: trace, prompt: req.Prompt, status: "queued", created: time.Now(), width: width, height: height, frames: frames, fps: fps, format: format, mime: videoMime(format), cancel: cancel, ghost: w.ghost}
 	g.videos.add(v)
 	t.FirstByteAt = timestamppb.Now()
 	// The trace stays open for the job's duration
@@ -981,7 +989,9 @@ func (g *Gateway) startVideo(w *traceWriter, req *mediaRequest, name string, rou
 func (g *Gateway) followVideo(ctx context.Context, cancel context.CancelFunc, release func(), v *video, t *v1.Trace, target *url.URL, jobID string, policy *v1.Policy) {
 	defer cancel()
 	defer release()
-	defer g.traces.Finish(t)
+	if !v.ghost {
+		defer g.traces.Finish(t)
+	}
 	done, err := g.await(ctx, target, jobID, policy, func() {
 		v.mu.Lock()
 		v.status = "in_progress"

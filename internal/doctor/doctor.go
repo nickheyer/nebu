@@ -52,6 +52,10 @@ type Doctor struct {
 
 	mu      sync.Mutex
 	running *v1.Task
+	// Whether a check task is running, cleared as its run returns
+	busy bool
+	// Whether a probe was forced while one ran, so another starts once it ends
+	again bool
 }
 
 // Starts a check task or returns the active one. Logs each result and fails
@@ -59,18 +63,43 @@ type Doctor struct {
 func (d *Doctor) Start(ctx context.Context) (*v1.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.running != nil {
-		if t, _, err := d.Tasks.Get(d.running.GetId()); err == nil && !terminal(t.GetState()) {
-			return t, nil
-		}
+	if d.busy {
+		t, _, err := d.Tasks.Get(d.running.GetId())
+		return t, err
 	}
-	task := d.Tasks.Start(Kind, "Probe host", nil, d.run)
-	d.running = task
-	return task, nil
+	return d.startLocked(), nil
 }
 
-func terminal(s v1.TaskState) bool {
-	return s == v1.TaskState_TASK_STATE_SUCCEEDED || s == v1.TaskState_TASK_STATE_FAILED || s == v1.TaskState_TASK_STATE_CANCELED
+// Starts a check task that probes the host after this call, queued behind one already running
+func (d *Doctor) Force() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.busy {
+		d.again = true
+		return
+	}
+	d.startLocked()
+}
+
+// Starts a check task, busy until its run returns
+func (d *Doctor) startLocked() *v1.Task {
+	d.busy = true
+	d.running = d.Tasks.Start(Kind, "Probe host", nil, func(ctx context.Context, h *tasks.Handle) error {
+		defer d.finished()
+		return d.run(ctx, h)
+	})
+	return d.running
+}
+
+// Ends a check task, starting the one forced while it ran unless the daemon is shutting down
+func (d *Doctor) finished() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.busy = false
+	if d.again && !d.Tasks.Closed() {
+		d.again = false
+		d.startLocked()
+	}
 }
 
 // Check result and suggested action.

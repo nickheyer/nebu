@@ -1,4 +1,4 @@
-import { errorMessage } from './chatClient';
+import { errorMessage, ghostHeaders } from './chatClient';
 import { gatewayCredentials } from './auth.svelte';
 import { deleteImages, type Attachment } from './images';
 import { readLocal, writeLocal } from './persist';
@@ -154,9 +154,9 @@ export async function capabilities(base: string, model: string, key: string, sig
   return (await resp.json()) as Capabilities;
 }
 
-export async function generateImages(base: string, req: MediaRequest, key: string, signal: AbortSignal, onSent?: (s: Sent) => void): Promise<{ images: string[]; format: string }> {
+export async function generateImages(base: string, req: MediaRequest, key: string, ghost: boolean, signal: AbortSignal, onSent?: (s: Sent) => void): Promise<{ images: string[]; format: string }> {
   const body = JSON.stringify(req);
-  const h = headers(key);
+  const h = { ...headers(key), ...(ghost ? ghostHeaders : {}) };
   const resp = await fetch(base + '/v1/images/generations', { method: 'POST', headers: h, body, signal, credentials: gatewayCredentials() });
   onSent?.({ path: '/v1/images/generations', headers: h, body, status: resp.status, trace: resp.headers.get('X-Nebu-Trace') ?? '' });
   if (!resp.ok) await refuse(resp);
@@ -164,9 +164,9 @@ export async function generateImages(base: string, req: MediaRequest, key: strin
   return { images: parsed.data.map((d) => d.b64_json), format: parsed.output_format || 'png' };
 }
 
-export async function createVideo(base: string, req: MediaRequest, key: string, signal: AbortSignal, onSent?: (s: Sent) => void): Promise<VideoObject> {
+export async function createVideo(base: string, req: MediaRequest, key: string, ghost: boolean, signal: AbortSignal, onSent?: (s: Sent) => void): Promise<VideoObject> {
   const body = JSON.stringify(req);
-  const h = headers(key);
+  const h = { ...headers(key), ...(ghost ? ghostHeaders : {}) };
   const resp = await fetch(base + '/v1/videos', { method: 'POST', headers: h, body, signal, credentials: gatewayCredentials() });
   onSent?.({ path: '/v1/videos', headers: h, body, status: resp.status, trace: resp.headers.get('X-Nebu-Trace') ?? '' });
   if (!resp.ok) await refuse(resp);

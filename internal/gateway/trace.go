@@ -265,6 +265,8 @@ type traceWriter struct {
 	wrote  bool
 	// Whether an asynchronous job closes the trace
 	detached bool
+	// Whether the request leaves no trace, event, or seat pin behind
+	ghost bool
 }
 
 func (w *traceWriter) WriteHeader(status int) {

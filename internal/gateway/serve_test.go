@@ -1,14 +1,17 @@
 package gateway
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nickheyer/nebu/internal/chat"
+	"github.com/nickheyer/nebu/pkg/interceptors"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -441,5 +444,135 @@ func TestRuntimeIdsAndRetryHeaders(t *testing.T) {
 	r, _ = ask(t, g, base, http.MethodPost, chat.AnthropicMessages, `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}`, nil)
 	if r.status != http.StatusTooManyRequests || r.header.Get("Retry-After") != "7" {
 		t.Fatalf("refusal: %d retry after %q", r.status, r.header.Get("Retry-After"))
+	}
+}
+
+// Waits until a route and its seats have nothing in flight, which is after the gateway is done with every request
+func settled(t *testing.T, table *Table, name string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		rt, _ := table.Lookup(name)
+		busy := rt.GetInFlight()
+		for _, s := range rt.GetSeats() {
+			busy += s.GetInFlight()
+		}
+		if busy == 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("route %s never settled", name)
+}
+
+// A system prompt header replaces every system and developer turn the client sent in any protocol, never reaching
+// the runtime itself, and a header that is not base64 is refused before the runtime is asked
+func TestSystemHeader(t *testing.T) {
+	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "ok") })
+	g, base := seatGateway(t, model, &v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_USER})
+	pinned := "line one\nline two"
+	headers := map[string]string{interceptors.SystemHeader: base64.StdEncoding.EncodeToString([]byte(pinned))}
+	body := `{"model":"m","messages":[{"role":"system","content":"be brief"},{"role":"developer","content":"rules"},{"role":"user","content":"hi"},{"role":"system","content":"now be long"},{"role":"user","content":"go"}]}`
+	r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, body, headers)
+	if r.status != http.StatusOK || trace.GetUpstreamRequest() == "" {
+		t.Fatalf("status %d upstream %q: %s", r.status, trace.GetUpstreamRequest(), r.body)
+	}
+	call := model.call(0)
+	if got := strings.Join(rolesSent(call.body), ","); got != "system,user,user" {
+		t.Fatalf("roles %s", got)
+	}
+	if got := systemSent(t, call.body); got != pinned {
+		t.Fatalf("system %q", got)
+	}
+	if call.header.Get(interceptors.SystemHeader) != "" {
+		t.Fatal("the system prompt header reached the runtime")
+	}
+	r, _ = ask(t, g, base, http.MethodPost, chat.AnthropicMessages, `{"model":"m","max_tokens":5,"system":"be brief","messages":[{"role":"user","content":"hi"}]}`, headers)
+	if r.status != http.StatusOK || systemSent(t, model.call(1).body) != pinned {
+		t.Fatalf("anthropic: %d system %q", r.status, systemSent(t, model.call(1).body))
+	}
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, body, map[string]string{interceptors.SystemHeader: "rules!"})
+	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), interceptors.SystemHeader) || model.count() != 2 {
+		t.Fatalf("not base64: %d %s, runtime asked %d times", r.status, r.body, model.count())
+	}
+}
+
+// A ghost request is answered with no trace kept or named and no seat pinned to its prefix, a ghost header that is
+// neither on nor off is refused before anything is kept, and the same request without the header is traced and pinned
+func TestGhostHeader(t *testing.T) {
+	a := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "ok") })
+	g, table := newGateway(t)
+	replicaRoute(table, []*v1.RouteSeat{readySeat("ia", a.URL, "", 0)}, &v1.AffinityPolicy{WindowSeconds: 600, SystemMessage: true, FirstUserMessage: true}, nil)
+	srv := httptest.NewServer(g.Handler())
+	defer srv.Close()
+	pins := func() int {
+		g.affinity.mu.Lock()
+		defer g.affinity.mu.Unlock()
+		return len(g.affinity.entries)
+	}
+	for _, stream := range []string{"false", "true"} {
+		body := strings.Replace(chatBody, `"model":"m"`, `"model":"m","stream":`+stream, 1)
+		r, trace := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, body, map[string]string{interceptors.GhostHeader: "1"})
+		settled(t, table, "m")
+		if r.status != http.StatusOK || trace != nil || r.header.Get(traceHeader) != "" {
+			t.Fatalf("stream %s: status %d trace header %q: %s", stream, r.status, r.header.Get(traceHeader), r.body)
+		}
+		if n := len(g.Traces().List("", 0)); n != 0 || pins() != 0 {
+			t.Fatalf("stream %s: %d traces and %d pins kept", stream, n, pins())
+		}
+	}
+	r, _ := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, map[string]string{interceptors.GhostHeader: "maybe"})
+	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), interceptors.GhostHeader) || a.count() != 2 || len(g.Traces().List("", 0)) != 0 {
+		t.Fatalf("maybe: %d %s, runtime asked %d times", r.status, r.body, a.count())
+	}
+	if _, trace := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIChat, chatBody, nil); trace == nil || pins() != 1 {
+		t.Fatalf("without the header: trace %v, %d pins", trace, pins())
+	}
+}
+
+// A ghost video job is accepted and read by its id, kept out of the listing, and leaves no trace even once it ends
+func TestGhostVideoJob(t *testing.T) {
+	done := make(chan struct{})
+	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
+		switch {
+		case r.URL.Path == sdcppVideoJob:
+			writeJSON(w, http.StatusAccepted, map[string]any{"id": "job1", "status": "queued"})
+		case strings.HasSuffix(r.URL.Path, "/cancel"):
+			close(done)
+			writeJSON(w, http.StatusOK, map[string]any{"id": "job1", "status": "cancelled"})
+		default:
+			select {
+			case <-done:
+				writeJSON(w, http.StatusOK, map[string]any{"id": "job1", "status": "cancelled"})
+			default:
+				writeJSON(w, http.StatusOK, map[string]any{"id": "job1", "status": "processing"})
+			}
+		}
+	})
+	g, table := newGateway(t)
+	table.SetModes("i1", []string{"vid_gen"})
+	table.Set("v", "i1", "", model.URL, "r:g", "v", v1.ApiFlavor_API_FLAVOR_SDCPP, nil, nil)
+	srv := httptest.NewServer(g.Handler())
+	defer srv.Close()
+	r, trace := ask(t, g, srv.URL, http.MethodPost, chat.OpenAIVideos, `{"model":"v","prompt":"a cat","seconds":1}`, map[string]string{interceptors.GhostHeader: "true"})
+	var job struct {
+		ID    string `json:"id"`
+		Trace string `json:"trace"`
+	}
+	if r.status != http.StatusAccepted || trace != nil || json.Unmarshal(r.body, &job) != nil || job.ID == "" || job.Trace != "" {
+		t.Fatalf("ghost video: %d trace header %q: %s", r.status, r.header.Get(traceHeader), r.body)
+	}
+	if r, _ = ask(t, nil, srv.URL, http.MethodGet, chat.OpenAIVideos, "", nil); r.status != http.StatusOK || strings.Contains(string(r.body), job.ID) {
+		t.Fatalf("listing: %d %s", r.status, r.body)
+	}
+	if r, _ = ask(t, nil, srv.URL, http.MethodGet, chat.OpenAIVideos+"/"+job.ID, "", nil); r.status != http.StatusOK {
+		t.Fatalf("read by id: %d %s", r.status, r.body)
+	}
+	if r, _ = ask(t, nil, srv.URL, http.MethodDelete, chat.OpenAIVideos+"/"+job.ID, "", nil); r.status != http.StatusOK {
+		t.Fatalf("cancel: %d %s", r.status, r.body)
+	}
+	settled(t, table, "v")
+	if n := len(g.Traces().List("", 0)); n != 0 {
+		t.Fatalf("%d traces kept", n)
 	}
 }

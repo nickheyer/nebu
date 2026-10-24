@@ -224,14 +224,14 @@ func affinityWindow(p *v1.AffinityPolicy) time.Duration {
 	return time.Duration(p.GetWindowSeconds()) * time.Second
 }
 
-// Records the seat that served a request on its trace, and pins the conversation's prefix to it
-func (g *Gateway) served(t *v1.Trace, route *v1.Route, targets []target, used int, key string) {
+// Records the seat that served a request on its trace, and pins the prefix of a request that is no ghost to it
+func (g *Gateway) served(w *traceWriter, route *v1.Route, targets []target, used int, key string) {
 	if used < 0 || used >= len(targets) {
 		return
 	}
 	if seat := targets[used].seat; seat != "" {
-		t.Seats = []string{seat}
-		if key != "" {
+		w.t.Seats = []string{seat}
+		if key != "" && !w.ghost {
 			g.affinity.set(key, seat, affinityWindow(route.GetAffinity()))
 		}
 	}
