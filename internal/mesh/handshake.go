@@ -95,6 +95,10 @@ func (m *Manager) handshake(ctx context.Context, address string, useTLS bool, fi
 		return nil, fmt.Errorf("%w: %s admitted this node without a session token", ErrMesh, address)
 	}
 	m.mu.Lock()
+	if m.mesh == nil || m.mesh.ID != meshID {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: this node left the mesh while the handshake with %s was under way", ErrMesh, address)
+	}
 	s := m.sessions[peer]
 	if s == nil {
 		s = &session{peer: peer, granted: time.Now()}
@@ -105,12 +109,27 @@ func (m *Manager) handshake(ctx context.Context, address string, useTLS bool, fi
 	if resp.GetExpiresAt() == nil {
 		s.sendExpires = time.Now().Add(SessionTTL)
 	}
-	row := s.row()
 	m.mu.Unlock()
-	if err := m.DB.PutSession(context.Background(), row); err != nil {
+	if err := m.persistSession(peer); err != nil {
 		m.Log.Warn("session write failed", "peer", peer, "err", err)
 	}
 	return resp, nil
+}
+
+// Writes a peer's session as it stands now, or drops its row once the session is gone
+func (m *Manager) persistSession(peer string) error {
+	m.rows.Lock()
+	defer m.rows.Unlock()
+	m.mu.Lock()
+	var row *db.SessionRow
+	if s := m.sessions[peer]; s != nil {
+		row = s.row()
+	}
+	m.mu.Unlock()
+	if row == nil {
+		return m.DB.DeleteSession(context.Background(), peer)
+	}
+	return m.DB.PutSession(context.Background(), row)
 }
 
 // The session as stored
@@ -128,6 +147,10 @@ func (s *session) row() *db.SessionRow {
 func (m *Manager) Hello(ctx context.Context, req *v1.HelloRequest) (*v1.HelloResponse, error) {
 	m.mu.Lock()
 	mesh := m.mesh
+	var secret []byte
+	if mesh != nil {
+		secret = mesh.Secret
+	}
 	m.mu.Unlock()
 	if mesh == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, ErrNoMesh)
@@ -158,7 +181,7 @@ func (m *Manager) Hello(ctx context.Context, req *v1.HelloRequest) (*v1.HelloRes
 			}
 		}
 		m.mu.Unlock()
-		return &v1.HelloResponse{NodeId: m.identity.ID, Nonce: nonceB, Proof: proof(mesh.Secret, req.GetNonce(), caller, m.identity.ID)}, nil
+		return &v1.HelloResponse{NodeId: m.identity.ID, Nonce: nonceB, Proof: proof(secret, req.GetNonce(), caller, m.identity.ID)}, nil
 	}
 	m.mu.Lock()
 	p := m.pendings[caller]
@@ -167,10 +190,10 @@ func (m *Manager) Hello(ctx context.Context, req *v1.HelloRequest) (*v1.HelloRes
 	if p == nil || time.Now().After(p.expires) || !bytes.Equal(p.nonceA, req.GetNonce()) {
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: no handshake is open for %s, start again", ErrMesh, caller))
 	}
-	if !hmac.Equal(req.GetProof(), proof(mesh.Secret, p.nonceB, m.identity.ID, caller)) {
+	if !hmac.Equal(req.GetProof(), proof(secret, p.nonceB, m.identity.ID, caller)) {
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: %s does not hold this mesh's secret", ErrMesh, caller))
 	}
-	token, err := m.mint(caller)
+	token, err := m.mint(caller, mesh.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -210,13 +233,17 @@ func (m *Manager) Hello(ctx context.Context, req *v1.HelloRequest) (*v1.HelloRes
 	return resp, nil
 }
 
-// Mints the token a peer sends us, replacing any earlier one
-func (m *Manager) mint(peer string) (string, error) {
+// Mints the token a peer of the mesh sends us, replacing any earlier one
+func (m *Manager) mint(peer, meshID string) (string, error) {
 	token, err := randomToken()
 	if err != nil {
 		return "", err
 	}
 	m.mu.Lock()
+	if m.mesh == nil || m.mesh.ID != meshID {
+		m.mu.Unlock()
+		return "", connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("%w: this node left the mesh during the handshake", ErrMesh))
+	}
 	s := m.sessions[peer]
 	if s == nil {
 		s = &session{peer: peer}
@@ -227,9 +254,8 @@ func (m *Manager) mint(peer string) (string, error) {
 	}
 	s.accept, s.expires, s.granted = token, time.Now().Add(SessionTTL), time.Now()
 	m.accept[token] = peer
-	row := s.row()
 	m.mu.Unlock()
-	if err := m.DB.PutSession(context.Background(), row); err != nil {
+	if err := m.persistSession(peer); err != nil {
 		return "", err
 	}
 	return token, nil
@@ -238,19 +264,18 @@ func (m *Manager) mint(peer string) (string, error) {
 // Extends the token a peer sends us, on every sync it makes
 func (m *Manager) renew(peer string) time.Time {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	s := m.sessions[peer]
 	if s == nil {
+		m.mu.Unlock()
 		return time.Time{}
 	}
 	s.expires = time.Now().Add(SessionTTL)
-	row := s.row()
-	go func() {
-		if err := m.DB.PutSession(context.Background(), row); err != nil {
-			m.Log.Warn("session write failed", "peer", peer, "err", err)
-		}
-	}()
-	return s.expires
+	expires := s.expires
+	m.mu.Unlock()
+	if err := m.persistSession(peer); err != nil {
+		m.Log.Warn("session write failed", "peer", peer, "err", err)
+	}
+	return expires
 }
 
 // Forgets the token we send a peer, so the next call handshakes again

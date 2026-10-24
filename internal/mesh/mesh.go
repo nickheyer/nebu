@@ -72,6 +72,8 @@ var (
 	ErrMesh = errors.New("mesh")
 	// Returned when a node id names no member
 	ErrUnknownNode = errors.New("unknown node")
+	// Returned once Close began
+	errClosed = fmt.Errorf("%w: this node is shutting down", ErrMesh)
 )
 
 // What the formation conductor tells the mesh about this node, and takes from other members
@@ -164,7 +166,14 @@ type Manager struct {
 	identity *db.Identity
 	prober   *links.Prober
 
-	mu       sync.Mutex
+	// One membership change at a time across make, join, leave, reset, forget, and rotate
+	changing sync.Mutex
+	// Held from reading a record to writing it, so a write never lands after the clear that dropped it
+	rows sync.Mutex
+
+	mu sync.Mutex
+	// Set once Close began, after which nothing binds or starts
+	closed   bool
 	mesh     *db.MeshRow
 	members  map[string]*member
 	sessions map[string]*session
@@ -409,19 +418,11 @@ func (m *Manager) Start(ctx context.Context) error {
 			m.Log.Warn("node traffic listener not bound, other nodes cannot invite this one until mesh.listen names a free address", "err", err)
 		}
 	}
-	m.wg.Add(3)
-	go func() {
-		defer m.wg.Done()
-		m.watch(m.base)
-	}()
-	go func() {
-		defer m.wg.Done()
-		m.announceLoop(m.base)
-	}()
-	go func() {
-		defer m.wg.Done()
-		m.admissionLoop(m.base)
-	}()
+	for _, loop := range []func(context.Context){m.watch, m.announceLoop, m.admissionLoop} {
+		if !m.spawn(func() { loop(m.base) }) {
+			return errClosed
+		}
+	}
 	if joined {
 		m.startLoops()
 		m.publishSelf()
@@ -436,27 +437,61 @@ func (m *Manager) Start(ctx context.Context) error {
 // Starts the loops a member runs, once per membership, and returns the context they run under
 func (m *Manager) startLoops() context.Context {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.loopCancel != nil {
-		ctx := m.loopCtx
-		m.mu.Unlock()
-		return ctx
+		return m.loopCtx
 	}
 	ctx, cancel := context.WithCancel(m.base)
+	if m.closed {
+		cancel()
+		return ctx
+	}
 	m.loopCtx, m.loopCancel = ctx, cancel
-	m.mu.Unlock()
-	m.wg.Add(2)
 	m.loops.Add(2)
-	go func() {
-		defer m.wg.Done()
+	m.spawnLocked(func() {
 		defer m.loops.Done()
 		m.syncLoop(ctx)
-	}()
-	go func() {
-		defer m.wg.Done()
+	})
+	m.spawnLocked(func() {
 		defer m.loops.Done()
 		m.probeLoop(ctx)
-	}()
+	})
 	return ctx
+}
+
+// Counts work Close waits for, false once Close began
+func (m *Manager) holdLocked() bool {
+	if m.closed {
+		return false
+	}
+	m.wg.Add(1)
+	return true
+}
+
+// Counts work Close waits for, false once Close began
+func (m *Manager) hold() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.holdLocked()
+}
+
+// Runs work in the background with Close waiting for it, false once Close began
+func (m *Manager) spawnLocked(work func()) bool {
+	if !m.holdLocked() {
+		return false
+	}
+	go func() {
+		defer m.wg.Done()
+		work()
+	}()
+	return true
+}
+
+// Runs work in the background with Close waiting for it, false once Close began
+func (m *Manager) spawn(work func()) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.spawnLocked(work)
 }
 
 func (m *Manager) stopLoops() {
@@ -470,18 +505,21 @@ func (m *Manager) stopLoops() {
 	m.loops.Wait()
 }
 
-// Stops loops and the listener
+// Stops loops and the listener, returning once every request and background task has ended
 func (m *Manager) Close() {
-	if m.cancel != nil {
-		m.cancel()
-	}
 	m.mu.Lock()
+	m.closed = true
 	srv, ln := m.server, m.listener
 	m.server, m.listener = nil, nil
 	m.mu.Unlock()
+	if m.cancel != nil {
+		m.cancel()
+	}
 	if srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		srv.Shutdown(ctx)
+		if srv.Shutdown(ctx) != nil {
+			srv.Close()
+		}
 		cancel()
 	}
 	if ln != nil {
@@ -500,7 +538,12 @@ func (m *Manager) bump() {
 		m.publishAt = time.AfterFunc(publishDelay, func() {
 			m.mu.Lock()
 			m.publishAt = nil
+			held := m.holdLocked()
 			m.mu.Unlock()
+			if !held {
+				return
+			}
+			defer m.wg.Done()
 			m.publishSelf()
 		})
 	}
@@ -554,7 +597,12 @@ func (m *Manager) publishStatus() {
 	m.statusAt = time.AfterFunc(publishDelay, func() {
 		m.mu.Lock()
 		m.statusAt = nil
+		held := m.holdLocked()
 		m.mu.Unlock()
+		if !held {
+			return
+		}
+		defer m.wg.Done()
 		m.Events.Publish(v1.EventKind_EVENT_KIND_MESH, v1.EventAction_EVENT_ACTION_UPDATED, "mesh", m.Status())
 	})
 	m.mu.Unlock()
@@ -604,7 +652,12 @@ func (m *Manager) Record() *v1.Node {
 	if stale {
 		rec = m.build(addresses)
 		m.mu.Lock()
-		m.record = rec
+		// A build that began before another one finished must not replace the newer record
+		if m.record != nil && m.record.GetSequence() > rec.GetSequence() {
+			rec = m.record
+		} else {
+			m.record = rec
+		}
 		m.mu.Unlock()
 	}
 	out := proto.Clone(rec).(*v1.Node)

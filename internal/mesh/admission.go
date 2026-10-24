@@ -157,17 +157,31 @@ func (m *Manager) Admissions() []*v1.Admission {
 
 // Stores an admission, tells the page, and for a member's copy the other members on the next sync
 func (m *Manager) saveAdmission(a *v1.Admission) *v1.Admission {
+	fresh := a.GetUpdatedAt() == nil
 	a.UpdatedAt = timestamppb.Now()
 	if a.GetCreatedAt() == nil {
 		a.CreatedAt = a.UpdatedAt
 	}
+	m.rows.Lock()
 	m.mu.Lock()
+	if _, have := m.admissions[a.GetId()]; !have && !fresh {
+		// Another member's copy of the record took its place under that copy's id, else a clear dropped it for good
+		other := m.admissionByNodeLocked(a.GetNode().GetId())
+		if a.GetSide() != v1.AdmissionSide_ADMISSION_SIDE_MEMBER || other == nil || other.GetMeshHash() != a.GetMeshHash() {
+			m.mu.Unlock()
+			m.rows.Unlock()
+			return proto.Clone(a).(*v1.Admission)
+		}
+		a.Id, a.CreatedAt = other.GetId(), other.GetCreatedAt()
+		a.Invited, a.Asked, a.Reached = a.GetInvited() || other.GetInvited(), a.GetAsked() || other.GetAsked(), a.GetReached() || other.GetReached()
+	}
 	m.admissions[a.GetId()] = proto.Clone(a).(*v1.Admission)
 	member := a.GetSide() == v1.AdmissionSide_ADMISSION_SIDE_MEMBER
 	m.mu.Unlock()
 	if err := m.DB.PutAdmission(context.Background(), a); err != nil {
 		m.Log.Warn("admission write failed", "id", a.GetId(), "err", err)
 	}
+	m.rows.Unlock()
 	m.publishStatus()
 	if member {
 		m.bump()
@@ -177,12 +191,14 @@ func (m *Manager) saveAdmission(a *v1.Admission) *v1.Admission {
 
 // Drops an admission
 func (m *Manager) dropAdmission(id string) {
+	m.rows.Lock()
 	m.mu.Lock()
 	delete(m.admissions, id)
 	m.mu.Unlock()
 	if err := m.DB.DeleteAdmission(context.Background(), id); err != nil {
 		m.Log.Warn("admission delete failed", "id", id, "err", err)
 	}
+	m.rows.Unlock()
 	m.publishStatus()
 }
 
@@ -421,11 +437,14 @@ func (m *Manager) Offer(ctx context.Context, req *v1.OfferRequest) (*v1.OfferRes
 	m.Log.Info("mesh invitation received", "mesh", req.GetMeshName(), "from", member.GetName(), "address", member.GetAddress())
 	if out.GetAsked() && out.GetState() == v1.AdmissionState_ADMISSION_STATE_PENDING {
 		// The admin here asked before the invitation came: answer it now.
-		go func() {
+		if !m.spawn(func() {
 			if _, err := m.Ask(m.base, out.GetMeshHash(), "", ""); err != nil {
 				m.Log.Warn("mesh invitation could not be answered", "mesh", req.GetMeshName(), "err", err)
 			}
-		}()
+		}) {
+			a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_FAILED, "this node shut down before it answered the invitation"
+			out = m.saveAdmission(a)
+		}
 	}
 	return &v1.OfferResponse{State: out.GetState(), Node: self}, nil
 }
@@ -606,11 +625,15 @@ func (m *Manager) Knock(ctx context.Context, req *v1.KnockRequest) (*v1.KnockRes
 		// The invitation stands as the decision.
 		a.State = v1.AdmissionState_ADMISSION_STATE_ADMITTED
 		out := m.saveAdmission(a)
-		go func() {
+		if !m.spawn(func() {
 			if err := m.deliver(m.base, a); err != nil {
 				m.Log.Warn("mesh token delivery failed", "node", node.GetName(), "err", err)
 			}
-		}()
+		}) {
+			a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_FAILED, "this node shut down before the token went out"
+			m.saveAdmission(a)
+			return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("%w: %s", ErrMesh, a.GetDetail()))
+		}
 		m.Log.Info("mesh invitation accepted", "node", node.GetId(), "name", node.GetName())
 		return &v1.KnockResponse{State: out.GetState(), Member: self}, nil
 	}
@@ -829,6 +852,7 @@ func (m *Manager) mergeAdmissions(list []*v1.Admission) {
 	}
 	var changed []*v1.Admission
 	var dropped []string
+	m.rows.Lock()
 	m.mu.Lock()
 	own := ""
 	if m.mesh != nil {
@@ -886,6 +910,7 @@ func (m *Manager) mergeAdmissions(list []*v1.Admission) {
 			m.Log.Warn("admission write failed", "id", a.GetId(), "err", err)
 		}
 	}
+	m.rows.Unlock()
 	if len(changed) > 0 || len(dropped) > 0 {
 		m.publishStatus()
 	}
@@ -933,12 +958,14 @@ func (m *Manager) settleAfterJoin(meshID string) {
 
 // Forgets every admission, when the node leaves its mesh or makes one
 func (m *Manager) clearAdmissions() {
+	m.rows.Lock()
 	m.mu.Lock()
 	m.admissions = map[string]*v1.Admission{}
 	m.mu.Unlock()
 	if err := m.DB.DeleteAdmissions(context.Background()); err != nil {
 		m.Log.Warn("admissions delete failed", "err", err)
 	}
+	m.rows.Unlock()
 	m.publishStatus()
 }
 

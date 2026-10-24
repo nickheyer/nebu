@@ -137,7 +137,7 @@ func (m *Manager) missed(id string, err error) {
 		return
 	}
 	m.Log.Warn("mesh member "+stateWord(after), "node", id, "name", rec.GetName(), "err", err)
-	m.persist(rec)
+	m.persist(id)
 	m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_UPDATED, id, rec)
 	if m.Formations != nil {
 		m.Formations.MemberState(id, after)
@@ -159,7 +159,7 @@ func (m *Manager) reached(id string) {
 	rec := proto.Clone(mb.rec).(*v1.Node)
 	m.mu.Unlock()
 	if before != v1.NodeState_NODE_STATE_READY {
-		m.persist(rec)
+		m.persist(id)
 		m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_UPDATED, id, rec)
 		if m.Formations != nil {
 			m.Formations.MemberState(id, v1.NodeState_NODE_STATE_READY)
@@ -215,7 +215,7 @@ func (m *Manager) mergeRecord(rec *v1.Node, direct bool) {
 			out := proto.Clone(mb.rec).(*v1.Node)
 			m.mu.Unlock()
 			if direct && stateBefore != v1.NodeState_NODE_STATE_READY {
-				m.persist(out)
+				m.persist(out.GetId())
 				m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, action, out.GetId(), out)
 				if m.Formations != nil {
 					m.Formations.MemberState(out.GetId(), v1.NodeState_NODE_STATE_READY)
@@ -243,14 +243,18 @@ func (m *Manager) mergeRecord(rec *v1.Node, direct bool) {
 		}
 		m.members[rec.GetId()] = &member{rec: rec, sketch: rec.GetProfile() == nil && !direct}
 	}
-	m.reclassifyLocked(rec.GetId())
+	relinked := m.reclassifyLocked(rec.GetId())
 	out := proto.Clone(rec).(*v1.Node)
 	m.mu.Unlock()
 	if moved != "" {
 		// The member moved: the transport to its old address holds connections to nothing
 		m.dropTransports(moved)
 	}
-	m.persist(out)
+	if relinked {
+		m.persistLink(out.GetId())
+		m.bump()
+	}
+	m.persist(out.GetId())
 	m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, action, out.GetId(), out)
 	if m.Formations != nil && out.GetState() != stateBefore {
 		m.Formations.MemberState(out.GetId(), out.GetState())
@@ -286,7 +290,7 @@ func (m *Manager) mergeMembers(list []*v1.Member) {
 	}
 	m.mu.Unlock()
 	for _, rec := range created {
-		m.persist(rec)
+		m.persist(rec.GetId())
 		m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_CREATED, rec.GetId(), rec)
 		m.Log.Info("mesh member learned from gossip", "node", rec.GetId(), "name", rec.GetName(), "address", rec.GetAddress())
 		m.markJoined(rec.GetId())
@@ -309,6 +313,8 @@ func (m *Manager) forgottenLocked(id string) bool {
 // Lets a forgotten node back: what an invite or an admission of it means, and what rotating the
 // secret does for every forgotten node, since none of them holds the new one
 func (m *Manager) readmit(id string) {
+	m.rows.Lock()
+	defer m.rows.Unlock()
 	m.mu.Lock()
 	_, was := m.forgotten[id]
 	delete(m.forgotten, id)
@@ -322,6 +328,8 @@ func (m *Manager) readmit(id string) {
 
 // Clears the forgotten set, rows included
 func (m *Manager) readmitAll() {
+	m.rows.Lock()
+	defer m.rows.Unlock()
 	m.mu.Lock()
 	ids := make([]string, 0, len(m.forgotten))
 	for id := range m.forgotten {
@@ -336,10 +344,21 @@ func (m *Manager) readmitAll() {
 	}
 }
 
-// Writes a member's record
-func (m *Manager) persist(rec *v1.Node) {
+// Writes a member's record as it stands now, nothing once it is no member
+func (m *Manager) persist(id string) {
+	m.rows.Lock()
+	defer m.rows.Unlock()
+	m.mu.Lock()
+	var rec *v1.Node
+	if mb, ok := m.members[id]; ok {
+		rec = proto.Clone(mb.rec).(*v1.Node)
+	}
+	m.mu.Unlock()
+	if rec == nil {
+		return
+	}
 	if err := m.DB.PutMember(context.Background(), rec); err != nil {
-		m.Log.Warn("member record write failed", "node", rec.GetId(), "err", err)
+		m.Log.Warn("member record write failed", "node", id, "err", err)
 	}
 }
 
@@ -395,6 +414,7 @@ func (m *Manager) Bye(peer string) {
 
 // Drops a member with its links and session
 func (m *Manager) forget(id string) {
+	m.rows.Lock()
 	m.mu.Lock()
 	now := time.Now()
 	m.forgotten[id] = now
@@ -406,9 +426,6 @@ func (m *Manager) forget(id string) {
 	}
 	delete(m.links, id)
 	m.mu.Unlock()
-	if mb.GetAddress() != "" {
-		m.dropTransports(mb.GetAddress())
-	}
 	ctx := context.Background()
 	// The row stays as the refusal, with the name and address the node was known by
 	row := &v1.Node{Id: id, Name: mb.GetName(), Address: mb.GetAddress(), State: v1.NodeState_NODE_STATE_FORGOTTEN, SeenAt: timestamppb.New(now)}
@@ -417,6 +434,10 @@ func (m *Manager) forget(id string) {
 	}
 	m.DB.DeleteSession(ctx, id)
 	m.DB.DeleteLinks(ctx, id)
+	m.rows.Unlock()
+	if mb.GetAddress() != "" {
+		m.dropTransports(mb.GetAddress())
+	}
 	if ok {
 		m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_DELETED, id, mb.rec)
 		if m.Formations != nil {
@@ -432,6 +453,8 @@ func (m *Manager) Rekey(secret []byte) error {
 	if len(secret) != 32 {
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("a mesh secret holds 32 bytes"))
 	}
+	m.rows.Lock()
+	defer m.rows.Unlock()
 	m.mu.Lock()
 	if m.mesh == nil {
 		m.mu.Unlock()

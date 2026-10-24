@@ -13,6 +13,7 @@ import (
 	"github.com/nickheyer/nebu/internal/mesh/links"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
+	"google.golang.org/protobuf/proto"
 )
 
 const dialTimeout = 5 * time.Second
@@ -205,7 +206,9 @@ func (m *Manager) Client(ctx context.Context, nodeID string) (*Client, error) {
 		m.mu.Unlock()
 		if !still {
 			if dropped {
-				m.DB.DeleteSession(context.Background(), nodeID)
+				if err := m.persistSession(nodeID); err != nil {
+					m.Log.Warn("session delete failed", "peer", nodeID, "err", err)
+				}
 			}
 			return nil, fmt.Errorf("%w %q", ErrUnknownNode, nodeID)
 		}
@@ -236,5 +239,5 @@ func (m *Manager) Member(nodeID string) (*v1.Node, bool) {
 	if !ok {
 		return nil, false
 	}
-	return mb.rec, true
+	return proto.Clone(mb.rec).(*v1.Node), true
 }

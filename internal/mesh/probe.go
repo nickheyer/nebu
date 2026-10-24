@@ -130,11 +130,13 @@ func (m *Manager) probeOne(ctx context.Context, id string, force bool) (*v1.Link
 		return nil, err
 	}
 	m.mu.Lock()
+	if m.members[id] == nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w %q", ErrUnknownNode, id)
+	}
 	m.links[id] = link
 	m.mu.Unlock()
-	if err := m.DB.PutLink(context.Background(), link); err != nil {
-		m.Log.Warn("link write failed", "to", id, "err", err)
-	}
+	m.persistLink(id)
 	m.Log.Info("link measured", "to", id, "class", links.ClassName(link.GetClass()), "rtt_us", link.GetRttUs(), "stream_bps", link.GetStreamBytesPerSecond(), "aggregate_bps", link.GetAggregateBytesPerSecond(), "interface", link.GetInterface(), "rdma", link.GetRdmaDevice())
 	m.bump()
 	return proto.Clone(link).(*v1.Link), nil
@@ -150,25 +152,37 @@ func peerRDMALocked(rec *v1.Node, self string) string {
 	return ""
 }
 
-// Sorts this node's link to a member again once the member's own link facts arrive
-func (m *Manager) reclassifyLocked(id string) {
+// Sorts the link to a member again from the member's own link facts, true when its class changed
+func (m *Manager) reclassifyLocked(id string) bool {
 	link, ok := m.links[id]
 	mb := m.members[id]
 	if !ok || mb == nil || link.GetMeasuredAt() == nil {
-		return
+		return false
 	}
 	class, detail := links.Classify(link, peerRDMALocked(mb.rec, m.identity.ID))
 	if class == link.GetClass() {
-		return
+		return false
 	}
 	link.Class, link.Detail = class, detail
-	row := proto.Clone(link).(*v1.Link)
-	go func() {
-		if err := m.DB.PutLink(context.Background(), row); err != nil {
-			m.Log.Warn("link write failed", "to", id, "err", err)
-		}
-		m.bump()
-	}()
+	return true
+}
+
+// Writes the link to a member as it stands now, nothing once it is no member
+func (m *Manager) persistLink(id string) {
+	m.rows.Lock()
+	defer m.rows.Unlock()
+	m.mu.Lock()
+	var row *v1.Link
+	if l, ok := m.links[id]; ok && m.members[id] != nil {
+		row = proto.Clone(l).(*v1.Link)
+	}
+	m.mu.Unlock()
+	if row == nil {
+		return
+	}
+	if err := m.DB.PutLink(context.Background(), row); err != nil {
+		m.Log.Warn("link write failed", "to", id, "err", err)
+	}
 }
 
 // The link measured from this node to a member, nil when unmeasured

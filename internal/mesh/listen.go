@@ -57,6 +57,9 @@ func (m *Manager) listen() error {
 }
 
 func (m *Manager) bindLocked(addr string) error {
+	if m.closed {
+		return errClosed
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("mesh.listen %s: %w", addr, err)
@@ -64,7 +67,8 @@ func (m *Manager) bindLocked(addr string) error {
 	if cfg := m.serverTLSLocked(); cfg != nil {
 		ln = tls.NewListener(ln, cfg)
 	}
-	srv := &http.Server{Handler: m.Handler, ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout, Protocols: links.Protocols()}
+	base := m.base
+	srv := &http.Server{Handler: m.counted(m.Handler), ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: idleTimeout, Protocols: links.Protocols(), BaseContext: func(net.Listener) context.Context { return base }}
 	served := make(chan struct{})
 	m.listener, m.server, m.served, m.listenAddr = ln, srv, served, ln.Addr().String()
 	m.Log.Info("mesh listening", "addr", m.listenAddr, "tls", m.serverTLSLocked() != nil)
@@ -77,22 +81,40 @@ func (m *Manager) bindLocked(addr string) error {
 	return nil
 }
 
+// Serves requests while the manager is open, each one counted so Close waits for it
+func (m *Manager) counted(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !m.hold() {
+			http.Error(w, "mesh: this node is shutting down", http.StatusServiceUnavailable)
+			return
+		}
+		defer m.wg.Done()
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Binds the listener again after its certificate changed, the old server first answering what it already took
 func (m *Manager) rebind() error {
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return errClosed
+	}
 	srv, served, addr := m.server, m.served, m.listenAddr
 	m.server, m.listener, m.served = nil, nil, nil
-	m.mu.Unlock()
 	if srv == nil {
+		m.mu.Unlock()
 		return m.listen()
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), rebindDrain)
+	base := m.base
+	m.spawnLocked(func() {
+		ctx, cancel := context.WithTimeout(base, rebindDrain)
 		defer cancel()
 		if srv.Shutdown(ctx) != nil {
 			srv.Close()
 		}
-	}()
+	})
+	m.mu.Unlock()
 	<-served
 	m.mu.Lock()
 	defer m.mu.Unlock()

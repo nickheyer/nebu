@@ -84,7 +84,9 @@ func (m *Manager) announceLoop(ctx context.Context) {
 	sender.SetMulticastTTL(1)
 	sender.SetMulticastLoopback(true)
 	var tried sync.Map
+	received := make(chan struct{})
 	go func() {
+		defer close(received)
 		buf := make([]byte, 4096)
 		for {
 			n, _, from, err := receiver.ReadFrom(buf)
@@ -100,6 +102,11 @@ func (m *Manager) announceLoop(ctx context.Context) {
 			}
 			m.heard(ctx, buf[:n], source, &tried)
 		}
+	}()
+	// The receiver ends once the group socket closes
+	defer func() {
+		listener.Close()
+		<-received
 	}()
 	ticker := time.NewTicker(AnnounceInterval)
 	defer ticker.Stop()
@@ -246,7 +253,7 @@ func (m *Manager) heard(ctx context.Context, payload []byte, source string, trie
 		return
 	}
 	tried.Store(b.Node, time.Now())
-	go func() {
+	m.spawn(func() {
 		// The contact holds the node's dialing lock like a client handshake does, and a client
 		// handshake that met the node meanwhile leaves nothing to do
 		dial := m.dialLock(b.Node)
@@ -271,7 +278,7 @@ func (m *Manager) heard(ctx context.Context, payload []byte, source string, trie
 		case m.wake <- struct{}{}:
 		default:
 		}
-	}()
+	})
 }
 
 // Whether two beacons say the same about a node, the time heard aside

@@ -20,6 +20,8 @@ func (m *Manager) Init(ctx context.Context, name string, useTLS bool) (*v1.Mesh,
 	if name == "" {
 		name = "mesh"
 	}
+	m.changing.Lock()
+	defer m.changing.Unlock()
 	m.mu.Lock()
 	if m.mesh != nil {
 		have := m.mesh.Name
@@ -99,6 +101,8 @@ func (m *Manager) Join(ctx context.Context, token string) (*v1.Mesh, *v1.Node, [
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	m.changing.Lock()
+	defer m.changing.Unlock()
 	m.mu.Lock()
 	if m.mesh != nil {
 		have := m.mesh.Name
@@ -126,6 +130,8 @@ func (m *Manager) Join(ctx context.Context, token string) (*v1.Mesh, *v1.Node, [
 	}
 	resp, err := m.handshake(ctx, t.Address, t.TLS, t.Fingerprint, &t, verified)
 	if err != nil {
+		m.rows.Lock()
+		defer m.rows.Unlock()
 		m.mu.Lock()
 		joined := m.mesh == provisional
 		if joined {
@@ -161,12 +167,19 @@ func (m *Manager) Join(ctx context.Context, token string) (*v1.Mesh, *v1.Node, [
 	if row.TLS && len(row.Certificate) == 0 {
 		return nil, nil, nil, fmt.Errorf("%w: the mesh has TLS but %s issued no certificate", ErrMesh, t.Address)
 	}
+	m.rows.Lock()
+	m.mu.Lock()
+	// A rotation that landed during the handshake replaced the secret the token carried
+	row.Secret = m.mesh.Secret
+	m.mu.Unlock()
 	if err := m.DB.PutMesh(ctx, row); err != nil {
+		m.rows.Unlock()
 		return nil, nil, nil, err
 	}
 	m.mu.Lock()
 	m.mesh = row
 	m.mu.Unlock()
+	m.rows.Unlock()
 	bootstrap := resp.GetNode()
 	m.absorb(bootstrap, resp.GetMembers(), true)
 	var warnings []string
@@ -189,7 +202,7 @@ func (m *Manager) Join(ctx context.Context, token string) (*v1.Mesh, *v1.Node, [
 	loops := m.startLoops()
 	m.bump()
 	m.publishStatus()
-	go func() {
+	m.spawn(func() {
 		select {
 		case <-loops.Done():
 		case <-time.After(SyncInterval):
@@ -197,13 +210,19 @@ func (m *Manager) Join(ctx context.Context, token string) (*v1.Mesh, *v1.Node, [
 				m.Log.Warn("link probe after join failed", "err", err)
 			}
 		}
-	}()
+	})
 	mesh, _ := m.Mesh()
 	return mesh, bootstrap, warnings, nil
 }
 
 // Leaves the mesh, its formations stopped and records dropped
 func (m *Manager) Leave(ctx context.Context) (*v1.Mesh, error) {
+	m.changing.Lock()
+	defer m.changing.Unlock()
+	return m.leave(ctx)
+}
+
+func (m *Manager) leave(ctx context.Context) (*v1.Mesh, error) {
 	m.mu.Lock()
 	if m.mesh == nil {
 		m.mu.Unlock()
@@ -261,6 +280,7 @@ func (m *Manager) Leave(ctx context.Context) (*v1.Mesh, error) {
 
 // Forgets members, sessions, links, and admissions everywhere
 func (m *Manager) clearState(ctx context.Context) error {
+	m.rows.Lock()
 	m.mu.Lock()
 	members := m.members
 	m.members = map[string]*member{}
@@ -270,8 +290,10 @@ func (m *Manager) clearState(ctx context.Context) error {
 	m.admissions = map[string]*v1.Admission{}
 	m.forgotten = map[string]time.Time{}
 	m.mu.Unlock()
+	err := m.DB.DeleteMesh(ctx)
+	m.rows.Unlock()
 	m.dropTransports("")
-	if err := m.DB.DeleteMesh(ctx); err != nil {
+	if err != nil {
 		return err
 	}
 	for id, mb := range members {
@@ -282,8 +304,10 @@ func (m *Manager) clearState(ctx context.Context) error {
 
 // Leaves any mesh and clears every trace of it
 func (m *Manager) Reset(ctx context.Context) (*v1.Mesh, error) {
+	m.changing.Lock()
+	defer m.changing.Unlock()
 	if m.Joined() {
-		return m.Leave(ctx)
+		return m.leave(ctx)
 	}
 	if m.Formations != nil {
 		m.Formations.Clear(ctx)
@@ -298,6 +322,8 @@ func (m *Manager) Reset(ctx context.Context) (*v1.Mesh, error) {
 
 // Forgets a member, on every reachable member with tell
 func (m *Manager) Forget(ctx context.Context, ref string, tell bool) (*v1.Node, error) {
+	m.changing.Lock()
+	defer m.changing.Unlock()
 	if !m.Joined() {
 		return nil, ErrNoMesh
 	}
@@ -343,6 +369,8 @@ func (m *Manager) Forget(ctx context.Context, ref string, tell bool) (*v1.Node, 
 
 // Issues a new secret to every reachable member. Members unreachable now must join again.
 func (m *Manager) Rotate(ctx context.Context) (*v1.Mesh, []string, []string, error) {
+	m.changing.Lock()
+	defer m.changing.Unlock()
 	m.mu.Lock()
 	if m.mesh == nil {
 		m.mu.Unlock()

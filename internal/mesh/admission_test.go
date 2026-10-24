@@ -2,7 +2,9 @@ package mesh_test
 
 import (
 	"context"
+	"net"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/mesh"
@@ -132,6 +134,33 @@ func TestInviteAcceptJoin(t *testing.T) {
 	// A member cannot be invited again.
 	if _, err := a.Invite(ctx, "", b.Address()); err == nil {
 		t.Fatal("a member is not invited")
+	}
+}
+
+// Closing a node mid join waits for the join, and a closed node binds and starts nothing
+func TestCloseDuringJoin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newNode(t, ctx)
+	b := newNode(t, ctx)
+	if _, _, err := a.Init(ctx, "home", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Invite(ctx, "", b.Address()); err != nil {
+		t.Fatal(err)
+	}
+	offer := admissionFor(b, a.Self())
+	if _, err := b.Ask(ctx, offer.GetMeshHash(), "", ""); err != nil {
+		t.Fatal(err)
+	}
+	address := b.Address()
+	b.Close()
+	if conn, err := net.DialTimeout("tcp", address, time.Second); err == nil {
+		conn.Close()
+		t.Fatal("a closed node still listens")
+	}
+	if err := b.Start(ctx); err == nil {
+		t.Fatal("a closed node starts nothing")
 	}
 }
 
