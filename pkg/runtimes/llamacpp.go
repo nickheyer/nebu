@@ -212,7 +212,7 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}, nil
 }
 
-// Speculative flags as this install spells them, refusing settings llama-server would reject or leave idle
+// Speculative flags as this install spells them, refusing settings llama-server would reject or leave idle unless forced
 func llamaSpeculative(in Launch, p estimate.Params) ([]string, map[string]string, error) {
 	method, draft, tokens := p.Str("spec_type"), llamaFile(p, "draft_model"), p["draft_max"]
 	if method == "" {
@@ -221,8 +221,10 @@ func llamaSpeculative(in Launch, p estimate.Params) ([]string, map[string]string
 	delete(p, "spec_type")
 	delete(p, "draft_model")
 	delete(p, "draft_max")
-	if refusal := llamaSpecRefusal(in.Descriptor, method, draft != "" || in.Draft != "", tokens != nil); refusal != "" {
-		return nil, nil, fmt.Errorf("%w: %s", ErrParam, refusal)
+	if !in.Force {
+		if refusal := llamaSpecRefusal(in.Descriptor, method, draft != "" || in.Draft != "", tokens != nil); refusal != "" {
+			return nil, nil, fmt.Errorf("%w: %s", ErrParam, refusal)
+		}
 	}
 	facts := in.InstallRecord.GetFacts()
 	listed := has(in.InstallRecord, factSpecTypes)

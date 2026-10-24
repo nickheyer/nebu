@@ -221,6 +221,7 @@ func TestLlamaCppSpeculative(t *testing.T) {
 		overrides map[string]string
 		facts     map[string]string
 		model     *v1.Descriptor
+		force     bool
 		want, err string
 	}{
 		{name: "nothing set", facts: modern, want: ""},
@@ -228,6 +229,9 @@ func TestLlamaCppSpeculative(t *testing.T) {
 		{name: "mtp heads with a limit", overrides: map[string]string{"spec_type": "draft-mtp", "draft_max": "2"}, facts: modern, model: heads, want: "--spec-type draft-mtp --spec-draft-n-max 2"},
 		{name: "mtp head file", overrides: map[string]string{"spec_type": "draft-mtp", "draft_model": "/mtp.gguf"}, facts: modern, want: "--spec-type draft-mtp --spec-draft-model /mtp.gguf"},
 		{name: "mtp without heads", overrides: map[string]string{"spec_type": "draft-mtp"}, facts: modern, err: "carries no MTP heads"},
+		{name: "mtp without heads forced", overrides: map[string]string{"spec_type": "draft-mtp"}, facts: modern, force: true, want: "--spec-type draft-mtp"},
+		{name: "draft method without a draft forced", overrides: map[string]string{"spec_type": "draft-simple"}, facts: modern, force: true, want: "--spec-type draft-simple"},
+		{name: "limit without a draft method forced", overrides: map[string]string{"draft_max": "4"}, facts: modern, force: true, want: "--spec-draft-n-max 4"},
 		{name: "mtp with the draft cleared", overrides: map[string]string{"spec_type": "draft-mtp", "draft_model": None}, facts: modern, model: heads, want: "--spec-type draft-mtp"},
 		{name: "draft model", overrides: map[string]string{"spec_type": "draft-simple", "draft_model": "/draft.gguf"}, facts: modern, want: "--spec-type draft-simple --spec-draft-model /draft.gguf"},
 		{name: "draft model with a limit", overrides: map[string]string{"spec_type": "draft-simple", "draft_model": "/draft.gguf", "draft_max": "9"}, facts: modern, want: "--spec-type draft-simple --spec-draft-model /draft.gguf --spec-draft-n-max 9"},
@@ -254,7 +258,7 @@ func TestLlamaCppSpeculative(t *testing.T) {
 			if model == nil {
 				model = plain
 			}
-			cmd, err := rt.Launch(Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}, Descriptor: model, InstallRecord: recorded(c.facts)})
+			cmd, err := rt.Launch(Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}, Descriptor: model, InstallRecord: recorded(c.facts), Force: c.force})
 			if c.err != "" {
 				if err == nil || !strings.Contains(err.Error(), c.err) {
 					t.Fatalf("want %q, got %v", c.err, err)
