@@ -1,6 +1,6 @@
 package interceptors
 
-// The header that asks the gateway to add nothing of its own to a request, 1 or true turning it on
+// The header asking the gateway to add nothing of its own to a request, 1 or true turning it on
 const BareHeader = "X-Nebu-Bare"
 
 // Pins a request whose header asks for it bare, so no guard runs and no route tool server attaches

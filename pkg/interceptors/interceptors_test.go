@@ -94,7 +94,7 @@ func TestGhost(t *testing.T) {
 	}
 }
 
-// Bare mode pins the request for 1 or true, so guards stay off, stays off for 0, false, or no header, and refuses anything else
+// Bare pins for 1 or true so guards stay off, leaves 0, false or none alone and refuses the rest
 func TestBare(t *testing.T) {
 	for value, want := range map[string]bool{"": false, "0": false, "false": false, "1": true, "TRUE": true} {
 		x := &Exchange{Header: http.Header{}, Req: &chat.Request{Kind: chat.Chat, Messages: []chat.Message{turn("system", "mine"), turn("user", "hi")}}}

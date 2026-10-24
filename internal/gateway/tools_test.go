@@ -821,7 +821,7 @@ func TestRouteTools(t *testing.T) {
 	if names := toolNames(model.call(model.count() - 2).body); strings.Join(names, ",") != "get_weather,web_search" {
 		t.Fatalf("the model was offered %v", names)
 	}
-	// A bare request is offered none of the route's tools, a client's own staying.
+	// A bare request is offered none of the route's tools, a client's own staying
 	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, oaiBody(false, `[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}]`), map[string]string{interceptors.BareHeader: "1"})
 	if names := toolNames(model.call(model.count() - 1).body); r.status != http.StatusOK || strings.Join(names, ",") != "get_weather" {
 		t.Fatalf("bare: %d %s %v", r.status, r.body, names)
