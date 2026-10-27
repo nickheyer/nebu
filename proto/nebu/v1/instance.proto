@@ -170,18 +170,16 @@ message RunRequest {
   string name = 6;
   map<string, string> params = 7;
   string slot_id = 8;
-  bool force = 9;
-  // The nodes and devices the run may use: node ids, or node/device for one device on a node.
-  // Empty means this node alone.
-  repeated string span = 10;
+  // The nodes and devices the run may use
+  repeated string span = 9;
   // The shape to run, auto when unspecified
-  Shape shape = 11;
+  Shape shape = 10;
   // The seat block a conductor gives a seat's node
-  SeatSpec seat = 12;
+  SeatSpec seat = 11;
   // Which numbers the planner weighs
-  PlanProfile profile = 13;
+  PlanProfile profile = 12;
   // Plan against free memory instead of total, as a launch does, so a swap sees the occupant it replaces
-  bool free = 14;
+  bool free = 13;
 }
 
 // Returns the instance and its startup task

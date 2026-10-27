@@ -126,27 +126,30 @@ func (i *Inspector) constraint(ctx context.Context, slotID string) (*Constraint,
 	return i.Constrain.Constrain(ctx, slotID, profile)
 }
 
-// Selects a compatible runtime, preferring installed ones.
+// Selects a runtime reading the format on this host, preferring one serving the model's kind,
+// then an installed one
 func (i *Inspector) DefaultRuntime(profile *v1.HostProfile, formatID string, kind v1.ModelKind) (runtimes.Runtime, error) {
-	var first runtimes.Runtime
+	var best runtimes.Runtime
+	bestRank := -1
 	for _, rt := range i.Runtimes.List() {
-		if ok, _ := runtimes.Compatible(rt, profile); !ok || !runtimes.Accepts(rt, formatID, kind) {
+		if ok, _ := runtimes.Compatible(rt, profile); !ok || !slices.Contains(rt.Formats(), formatID) {
 			continue
 		}
+		rank := 0
+		if runtimes.Accepts(rt, formatID, kind) {
+			rank += 2
+		}
 		if i.installed(rt) {
-			return rt, nil
+			rank++
 		}
-		if first == nil {
-			first = rt
+		if rank > bestRank {
+			best, bestRank = rt, rank
 		}
 	}
-	if first == nil {
-		if kind == v1.ModelKind_MODEL_KIND_COMPONENT {
-			return nil, fmt.Errorf("%w: a component is loaded beside a diffusion model, not served on its own", runtimes.ErrParam)
-		}
-		return nil, fmt.Errorf("%w: no compatible runtime accepts %s", runtimes.ErrParam, formatID)
+	if best == nil {
+		return nil, fmt.Errorf("%w: no runtime on this host reads %s", runtimes.ErrParam, formatID)
 	}
-	return first, nil
+	return best, nil
 }
 
 // Other stored models available as companion parts.
@@ -259,11 +262,10 @@ func (i *Inspector) Describe(ctx context.Context, src sources.Source, model *v1.
 	return i.Builder.Build(raw)
 }
 
-// Builds planning input from overrides, available or total memory, and calibration. Path
-// parameters naming stored groups resolve to the files those groups hold.
-func (i *Inspector) input(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (estimate.Input, error) {
+// Builds planning input from resolved overrides, memory, and calibration, with what the plan leaves uncounted
+func (i *Inspector) input(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (estimate.Input, string, error) {
 	if rt.Policy() == nil {
-		return estimate.Input{}, fmt.Errorf("runtime %s has no estimate policy", rt.ID())
+		return estimate.Input{}, "", fmt.Errorf("runtime %s has no estimate policy", rt.ID())
 	}
 	models := companions
 	if self != nil {
@@ -271,16 +273,13 @@ func (i *Inspector) input(ctx context.Context, rt runtimes.Runtime, d *v1.Descri
 	}
 	overrides, err := runtimes.ResolveStore(rt, overrides, models)
 	if err != nil {
-		return estimate.Input{}, err
+		return estimate.Input{}, "", err
 	}
 	params, err := runtimes.Resolve(rt, overrides)
 	if err != nil {
-		return estimate.Input{}, err
+		return estimate.Input{}, "", err
 	}
-	draft, err := i.draftOf(ctx, rt, params, models, self)
-	if err != nil {
-		return estimate.Input{}, err
-	}
+	draft, warning := i.draftOf(ctx, rt, params, models)
 	in := estimate.Input{
 		Descriptor:    d,
 		Family:        i.Builder.Family(d),
@@ -295,11 +294,11 @@ func (i *Inspector) input(ctx context.Context, rt runtimes.Runtime, d *v1.Descri
 	if draft != nil {
 		in.Draft, in.DraftFamily = draft, i.Builder.Family(draft)
 	}
-	return in, nil
+	return in, warning, nil
 }
 
-// The draft model the runtime's draft picking param names, from its stored descriptor or its own header
-func (i *Inspector) draftOf(ctx context.Context, rt runtimes.Runtime, params estimate.Params, models []*v1.StoredModel, self *v1.StoredModel) (*v1.Descriptor, error) {
+// The named draft model from its stored descriptor or its header, with why it is uncounted when neither reads
+func (i *Inspector) draftOf(ctx context.Context, rt runtimes.Runtime, params estimate.Params, models []*v1.StoredModel) (*v1.Descriptor, string) {
 	var path string
 	for _, p := range rt.Params() {
 		if p.GetPicks() == "draft" {
@@ -307,30 +306,21 @@ func (i *Inspector) draftOf(ctx context.Context, rt runtimes.Runtime, params est
 		}
 	}
 	if path == "" || strings.EqualFold(path, runtimes.None) {
-		return nil, nil
+		return nil, ""
 	}
 	for _, m := range models {
 		for _, sa := range m.GetArtifacts() {
 			role := sa.GetArtifact().GetRole()
-			if filepath.Clean(sa.GetPath()) != filepath.Clean(path) || (role != v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS && role != v1.ArtifactRole_ARTIFACT_ROLE_INDEX) {
-				continue
+			if filepath.Clean(sa.GetPath()) == filepath.Clean(path) && (role == v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS || role == v1.ArtifactRole_ARTIFACT_ROLE_INDEX) && m.GetDescriptor_() != nil {
+				return m.GetDescriptor_(), ""
 			}
-			switch {
-			case m == self:
-				return nil, fmt.Errorf("%w: draft model %s is the model itself", runtimes.ErrParam, path)
-			case !slices.Contains(rt.Formats(), m.GetFormatId()):
-				return nil, fmt.Errorf("%w: draft model %s %s is %s, and %s serves %s", runtimes.ErrParam, m.GetRepo(), m.GetGroup(), m.GetFormatId(), rt.ID(), strings.Join(rt.Formats(), ", "))
-			case m.GetDescriptor_() == nil:
-				return nil, fmt.Errorf("draft model %s %s has no descriptor, pull it again", m.GetRepo(), m.GetGroup())
-			}
-			return m.GetDescriptor_(), nil
 		}
 	}
 	d, err := i.header(ctx, rt, path)
 	if err != nil {
-		return nil, fmt.Errorf("draft model %s: %w", path, err)
+		return nil, fmt.Sprintf("draft model %s is not counted, %v", path, err)
 	}
-	return d, nil
+	return d, ""
 }
 
 // Describes a local file and its sibling shards from their headers, in a format the runtime serves
@@ -385,24 +375,29 @@ func shards(path string) []string {
 	return out
 }
 
-// Estimates memory fit without rejecting unsupported runtime params.
-func (i *Inspector) fit(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (*v1.MemoryPlan, error) {
-	in, err := i.input(ctx, rt, d, profile, overrides, free, placement, repo, self, companions)
+// Plans memory use, with what the plan leaves uncounted
+func (i *Inspector) Plan(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (*v1.MemoryPlan, string, error) {
+	in, warning, err := i.input(ctx, rt, d, profile, overrides, free, placement, repo, self, companions)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	in.SkipRules = true
-	return rt.Policy().Plan(in)
+	plan, err := rt.Policy().Plan(in)
+	if err != nil {
+		return nil, "", err
+	}
+	_, planWarning := rt.Policy().ParamStates(in, plan)
+	return plan, joinWarnings(warning, planWarning), nil
 }
 
-// Plans memory use and validates runtime params
-func (i *Inspector) Plan(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel, force bool) (*v1.MemoryPlan, error) {
-	in, err := i.input(ctx, rt, d, profile, overrides, free, placement, repo, self, companions)
-	if err != nil {
-		return nil, err
+// Warnings joined as sentences, the empty ones left out
+func joinWarnings(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
 	}
-	in.SkipRules = force
-	return rt.Policy().Plan(in)
+	return strings.Join(out, ". ")
 }
 
 // Builds the full fit table for a model
@@ -502,15 +497,18 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 				overrides := withContext(layered, rt.Policy().ContextParam, n)
 				// Report fit against both available and total memory.
 				self := i.stored(req.GetSourceId(), req.GetRepo(), d.GetGroup())
-				plan, err := i.fit(ctx, rt, d, profile, overrides, false, c.Placement, req.GetRepo(), self, companions)
+				plan, warning, err := i.Plan(ctx, rt, d, profile, overrides, false, c.Placement, req.GetRepo(), self, companions)
 				var now *v1.MemoryPlan
 				if err == nil {
-					now, err = i.fit(ctx, rt, d, profile, overrides, true, c.Placement, req.GetRepo(), self, companions)
+					now, _, err = i.Plan(ctx, rt, d, profile, overrides, true, c.Placement, req.GetRepo(), self, companions)
 				}
 				if err != nil {
 					warn("%s", planFailure(d, rt, err))
 					i.Log.Debug("plan failed", "group", d.GetGroup(), "runtime", rt.ID(), "err", err)
 					continue
+				}
+				if warning != "" {
+					warn("%s: %s", d.GetGroup(), warning)
 				}
 				resp.Rows = append(resp.Rows, &v1.FitRow{Group: d.GetGroup(), RuntimeId: rt.ID(), Context: n, Plan: plan, Free: now})
 			}
@@ -568,22 +566,20 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	// Return estimates with param errors for the form to display.
-	in, err := i.input(ctx, rt, d, profile, overrides, req.GetFree(), c.Placement, req.GetRepo(), i.stored(req.GetSourceId(), req.GetRepo(), req.GetGroup()), companions)
+	in, warning, err := i.input(ctx, rt, d, profile, overrides, req.GetFree(), c.Placement, req.GetRepo(), i.stored(req.GetSourceId(), req.GetRepo(), req.GetGroup()), companions)
 	if err != nil {
 		return nil, err
 	}
-	in.SkipRules = true
 	plan, err := rt.Policy().Plan(in)
 	if err != nil {
 		return nil, err
 	}
-	states, refusal := rt.Policy().ParamStates(in, plan)
+	states, planWarning := rt.Policy().ParamStates(in, plan)
 	missing, err := i.missing(ctx, src, model, g, d, rt.Policy().MissingParts(in, plan))
 	if err != nil {
 		return nil, err
 	}
-	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Params: states, Refusal: refusal, Missing: missing}, nil
+	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Params: states, Warning: joinWarnings(warning, planWarning), Missing: missing}, nil
 }
 
 // Resolves missing slots and associates each part with its runtime param.

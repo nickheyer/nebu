@@ -59,7 +59,6 @@ type Launch struct {
 	Stored []*v1.StoredModel
 	// Stored model and its pipeline files.
 	Model *v1.StoredModel
-	Force bool
 	// The seat this launch takes in a formation, nil for a solo run
 	Seat *v1.SeatSpec
 	// The install as recorded, for the facts a seat command depends on
@@ -516,9 +515,6 @@ func convert(p *v1.Param, raw string) (any, error) {
 	if p.GetType() == v1.ParamType_PARAM_TYPE_PATH && strings.EqualFold(raw, None) {
 		return None, nil
 	}
-	if len(p.GetChoices()) > 0 && p.GetPicks() == "" && !slices.Contains(p.GetChoices(), raw) {
-		return nil, fmt.Errorf("param %s: %q not in %v", p.GetName(), raw, p.GetChoices())
-	}
 	// An empty number is unset, so no flag carries it and the runtime keeps its own default
 	numeric := p.GetType() == v1.ParamType_PARAM_TYPE_INT || p.GetType() == v1.ParamType_PARAM_TYPE_FLOAT
 	if numeric && raw == "" {
@@ -637,14 +633,6 @@ func setEnv(env map[string]string, key, value string) {
 func hideDevices(env map[string]string) {
 	env["CUDA_VISIBLE_DEVICES"] = ""
 	env["ROCR_VISIBLE_DEVICES"] = ""
-}
-
-// Rejects host placement for device-only runtimes.
-func deviceBound(in Launch, name string) error {
-	if in.Placement == v1.Placement_PLACEMENT_HOST {
-		return fmt.Errorf("%w: %s runs in device memory only, but the slot keeps the model in host memory", ErrParam, name)
-	}
-	return nil
 }
 
 // Parses a number and unit following a log phrase, such as 5123.45 MiB.

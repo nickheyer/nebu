@@ -9,11 +9,10 @@
   import IconButton from './ui/IconButton.svelte';
   import TextInput from './ui/TextInput.svelte';
   import TextArea from './ui/TextArea.svelte';
+  import Combo from './ui/Combo.svelte';
   import StoreFileSelect from './StoreFileSelect.svelte';
   import PartsList from './PartsList.svelte';
-  import { live } from '$lib/state.svelte';
-  import { pathLabel, picksModel } from '$lib/diffusion';
-  import { byName, tail } from '$lib/format';
+  import { pathLabel } from '$lib/diffusion';
 
   let {
     params = [],
@@ -62,15 +61,6 @@
 
   const isPath = (p: Param) => p.type === ParamType.PATH;
 
-  // Add compatible stored groups to the parameter's choices.
-  function storeChoices(p: Param): { value: string; label: string; detail: string }[] {
-    if (!p.choices.length || !p.picks) return [];
-    return [...live.models.values()]
-      .filter((m) => picksModel(m, p))
-      .sort(byName((m) => m.group + m.repo))
-      .map((m) => ({ value: m.group, label: m.group, detail: tail(m.repo) }));
-  }
-
   // Default precedence: slot, plan, runtime.
   function beneath(p: Param): string {
     const v = inherited[p.name];
@@ -83,7 +73,7 @@
     return p.default;
   }
 
-  // Prefer planned bounds over runtime defaults.
+  // Planned bounds over runtime defaults, the range a slider spans and nothing more
   function bounds(p: Param): { min: number; max: number; step: number } {
     const s = stateOf.get(p.name);
     const min = s && (s.min !== 0 || s.max !== 0) ? s.min : p.min;
@@ -94,31 +84,19 @@
     const b = bounds(p);
     return numeric(p) && b.max !== 0 && b.max > b.min;
   };
-  function disabledChoices(p: Param): Map<string, string> {
-    return new Map((stateOf.get(p.name)?.disabled ?? []).map((d) => [d.value, d.message]));
-  }
 
   function numeric(p: Param): boolean {
     return p.type === ParamType.INT || p.type === ParamType.FLOAT;
   }
 
+  // Only a value the parameter's type cannot carry is a problem, the runtime judges the rest
   function problem(p: Param, v: string | undefined): string {
     if (!v) return '';
     if (p.solved && v.toLowerCase() === 'auto') return '';
-    if (p.choices.length) {
-      if (!p.choices.includes(v) && !storeChoices(p).some((c) => c.value === v)) return `One of ${p.choices.filter(Boolean).join(', ')}`;
-      return disabledChoices(p).get(v) ?? '';
-    }
     if (p.type === ParamType.BOOL) return /^(true|false)$/i.test(v) ? '' : 'true or false';
     if (numeric(p)) {
       const ok = p.type === ParamType.INT ? /^-?\d+$/.test(v) : /^-?\d*\.?\d+([eE][-+]?\d+)?$/.test(v);
       if (!ok) return p.type === ParamType.INT ? 'A whole number' : 'A number';
-      const n = parseFloat(v);
-      const b = bounds(p);
-      if (b.min !== 0 || b.max !== 0) {
-        if (n < b.min) return `At least ${b.min}`;
-        if (b.max !== 0 && n > b.max) return `At most ${b.max}`;
-      }
     }
     return '';
   }
@@ -141,7 +119,6 @@
   {@const err = problem(p, v)}
   {@const multiline = p.advanced && p.type === ParamType.STRING && !p.choices.length}
   {@const b = bounds(p)}
-  {@const off = disabledChoices(p)}
   {@const part = missingOf.get(p.name)}
   <div class="param-row" class:wide={multiline}>
     <div class="flex min-h-9 min-w-0 flex-col justify-center">
@@ -154,14 +131,7 @@
     </div>
     <div class="min-w-0">
       {#if p.choices.length}
-        <Select
-          id={fid}
-          mono
-          unset
-          value={v}
-          onchange={(next) => set(p.name, next)}
-          items={[{ value: '', label: beneath(p) || '–' }, ...p.choices.filter((c) => c !== '' && (p.solved || c !== p.default)).map((c) => ({ value: c, label: c, disabled: off.has(c), detail: off.get(c) })), ...storeChoices(p)]}
-        />
+        <Combo id={fid} mono value={v} empty={beneath(p) || '–'} onchange={(next) => set(p.name, next)} items={p.choices.filter((c) => c !== '').map((c) => ({ value: c, label: c }))} />
       {:else if p.type === ParamType.BOOL}
         <Select id={fid} unset value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneath(p) === 'true' ? 'On' : beneath(p) === 'false' ? 'Off' : '–' }, { value: 'true', label: 'On' }, { value: 'false', label: 'Off' }]} />
       {:else if ranged(p)}

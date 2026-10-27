@@ -18,9 +18,6 @@ import (
 // Placeholder for parameters resolved by the planner.
 const Auto = "auto"
 
-// Invalid parameter combination.
-var ErrRefused = errors.New("params refused")
-
 // Resolved parameters: int64, float64, bool, string, or Auto.
 type Params map[string]any
 
@@ -175,7 +172,7 @@ type Policy struct {
 	Shape func(p Params) archs.Run
 	// Resolves auto parameters before context sizing. May extend the descriptor with companion groups.
 	Solve func(s *Scope)
-	// Parameter bounds, excluded choices, and launch refusal under resolved values.
+	// Parameter bounds and what the plan could not account for under resolved values
 	States func(s *Scope) ([]*v1.ParamState, string)
 	// Required companion slots left unresolved. Nil when the runtime has no companion files.
 	Missing func(s *Scope) []Missing
@@ -197,8 +194,6 @@ type Input struct {
 	Params        Params
 	Free          bool
 	OverheadDelta float64
-	// Returns an estimate with the refusal instead of failing immediately.
-	SkipRules bool
 	// Allowed memory placement: shared, device only, or host only.
 	Placement v1.Placement
 	// Other stored models available as companions.
@@ -251,11 +246,6 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 	s := p.scope(in, in.Params.Clone())
 	if p.Solve != nil {
 		p.Solve(s)
-	}
-	if !in.SkipRules && p.States != nil {
-		if _, refusal := p.States(s); refusal != "" {
-			return nil, fmt.Errorf("%w: %s", ErrRefused, refusal)
-		}
 	}
 	if p.ContextParam != "" && s.Params.IsAuto(p.ContextParam) {
 		return p.solveContext(in, s)
@@ -321,7 +311,7 @@ func (p *Policy) ContextBounds(s *Scope) (lo, hi, step int64) {
 	return lo, hi, step
 }
 
-// Parameter bounds, excluded choices, and launch refusal under resolved values.
+// Parameter bounds and what the plan could not account for under resolved values
 func (p *Policy) ParamStates(in Input, plan *v1.MemoryPlan) ([]*v1.ParamState, string) {
 	if p.States == nil {
 		return nil, ""
@@ -590,7 +580,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		AgainstFree:   in.Free,
 		PlannedAt:     plannedAt(in.Host),
 	}
-	// Preserve invalid explicit placement in the estimate and report its refusal.
+	// Preserve invalid explicit placement in the estimate and say why it does not fit
 	if detail := sv.contradiction(); detail != "" {
 		plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
 		plan.Detail = detail

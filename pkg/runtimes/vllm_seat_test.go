@@ -95,7 +95,6 @@ func TestVLLMRankSeats(t *testing.T) {
 		edit func()
 		want string
 	}{
-		{"no nnodes", func() { in.InstallRecord = recorded(nil) }, "does not accept --nnodes"},
 		{"no rendezvous", func() { in.Seat.Rendezvous = "" }, "rendezvous address"},
 		{"no gpus", func() { in.Devices = nil }, "at least one GPU"},
 		{"count", func() { in.Seat.Count = 3 }, "counts 3 ranks and lists 1 peers"},
@@ -138,9 +137,10 @@ func TestVLLMRelaySeats(t *testing.T) {
 	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "side channel port") {
 		t.Fatalf("no side channel: %v", err)
 	}
+	// An environment the NIXL probe did not pass still renders the relay, vllm judging it
 	seat.AuxPort, in.InstallRecord = 5600, recorded(nil)
-	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "NIXL connector") {
-		t.Fatalf("no connector: %v", err)
+	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--kv-transfer-config") {
+		t.Fatalf("unprobed connector: %v %v", cmd, err)
 	}
 	replica := &v1.SeatSpec{FormationId: "f1", Shape: v1.Shape_SHAPE_REPLICAS, Role: RoleReplica, Address: "10.0.0.1", Port: 8000, Exposed: true}
 	in.Seat = replica

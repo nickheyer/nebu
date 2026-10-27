@@ -90,20 +90,14 @@ var llamaCacheTypes = []string{"f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4
 // Cache type choices, empty leaving llama.cpp's own f16
 var llamaCacheChoices = append([]string{""}, llamaCacheTypes...)
 
-// Speculative methods --spec-type takes, none being llama.cpp's own default
+// Speculative methods --spec-type has taken, suggestions beside whatever the build takes
 var llamaSpecTypes = []string{"none", "draft-mtp", "draft-simple", "draft-eagle3", "draft-dflash", "draft-dspark", "ngram-mod", "ngram-simple", "ngram-map-k", "ngram-map-k4v", "ngram-cache"}
-
-// Speculative methods that draft with a separate draft model file
-var llamaDraftFileTypes = []string{"draft-simple", "draft-eagle3", "draft-dflash", "draft-dspark"}
 
 // Draft architectures whose layers read the target's cache instead of keeping their own
 var llamaSharedCacheArchs = []string{"gemma4-assistant"}
 
 // Draft architectures that are MTP head files without nextn tensors, drafting only with draft-mtp
 var llamaHeadArchs = []string{"gemma4-assistant"}
-
-// Draft architecture llama.cpp reads draft-dflash or draft-dspark from on its own
-const llamaDFlashArch = "dflash"
 
 // Ids of the groups Solve adds for the projector and draft files the params name
 const (
@@ -121,9 +115,6 @@ const llamaFitContext = 4096
 const llamaContextRule = "llama.cpp's own choice, the trained length for each parallel sequence cut to fit free device memory but not below 4096 tokens"
 
 var llamaCacheBytes = map[string]float64{"f32": 4, "f16": 2, "bf16": 2, "q8_0": 1.0625, "q5_1": 0.75, "q5_0": 0.6875, "q4_1": 0.625, "q4_0": 0.5625}
-
-// Quantized value caches require flash attention.
-var llamaQuantizedCache = []string{"q8_0", "q5_1", "q5_0", "q4_1", "q4_0"}
 
 func (LlamaCpp) Params() []*v1.Param {
 	return []*v1.Param{
@@ -150,10 +141,10 @@ func (LlamaCpp) Params() []*v1.Param {
 			Description: "a stored projector or GGUF path for image and audio input, empty serves text only"},
 		{Name: "log_verbosity", Label: "Log level", Type: v1.ParamType_PARAM_TYPE_INT, Default: "4", Min: 0, Max: 5, Step: 1, Group: "Diagnostics", Advanced: true, Flag: "--log-verbosity"},
 		{Name: "spec_type", Label: "Speculative method", Type: v1.ParamType_PARAM_TYPE_STRING, Default: Auto, Solved: true, Choices: llamaSpecTypes, Group: "Speculative decoding", Advanced: true,
-			Description: "draft-mtp uses the model's MTP heads or a head file, other draft methods a draft model, ngram methods the prompt",
-			Rule:        "the method the draft model is made for, draft-mtp for an MTP head file, draft-simple for a plain model, llama.cpp's own pick for a DFlash draft, none without a draft model"},
+			Description: "passed to --spec-type as typed, draft-mtp for MTP heads, other draft methods for a draft model, ngram methods for the prompt",
+			Rule:        "draft-mtp for an MTP head file, otherwise llama.cpp's own pick"},
 		{Name: "draft_model", Label: "Draft model", Type: v1.ParamType_PARAM_TYPE_PATH, Group: "Speculative decoding", Advanced: true, Picks: "draft",
-			Description: "a smaller model of the same family, or an MTP head file such as mtp-*.gguf, as store://source/repo#group or a GGUF path"},
+			Description: "a stored file or any GGUF path, a smaller model of the same family or an MTP head file"},
 		{Name: "draft_max", Label: "Draft tokens per round", Type: v1.ParamType_PARAM_TYPE_INT, Unit: "tokens", Min: 1, Max: 64, Step: 1, Group: "Speculative decoding", Advanced: true,
 			Description: "empty keeps llama.cpp's 3"},
 		{Name: "direct_io", Label: "Direct file reads", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: "Placement", Advanced: true,
@@ -172,34 +163,22 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 	if p.Str("alias") == "" {
 		p["alias"] = in.Name
 	}
-	// Host placement disables GPU offload and hides accelerators.
+	// Host placement hides accelerators and leaves the device list to the params
 	hostOnly := in.Placement == v1.Placement_PLACEMENT_HOST
-	if hostOnly {
-		switch p.Str("device") {
-		case "", "none":
-			p["device"] = "none"
-		default:
-			return nil, fmt.Errorf("%w: device %s names an accelerator, but the slot keeps the model in host memory", ErrParam, p.Str("device"))
-		}
+	if hostOnly && p.Str("device") == "" {
+		p["device"] = "none"
 	}
 	args := []string{"--model", weights, "--host", in.Host, "--port", strconv.Itoa(in.Port)}
 	// Tools need the jinja renderer, which older builds turn on by this flag alone
 	if has(in.InstallRecord, factJinja) {
 		args = append(args, in.InstallRecord.GetFacts()[factJinja])
 	}
-	spec, specEmitted, err := llamaSpeculative(in, p)
-	if err != nil {
-		return nil, err
-	}
+	spec, specEmitted := llamaSpeculative(in, p)
 	flags, env, emitted := Flags(r.Params(), p)
 	flags = append(flags, spec...)
 	maps.Copy(emitted, specEmitted)
-	// Reading without the page cache has two spellings across builds, recorded by the install's facts.
 	if p.Bool("direct_io") {
-		if !has(in.InstallRecord, factDirectIO) {
-			return nil, fmt.Errorf("%w: this llama-server lists no direct io flag, so it cannot read weights without the page cache", ErrParam)
-		}
-		flags = append(flags, directIOArgs(in.InstallRecord.GetFacts()[factDirectIO])...)
+		flags = append(flags, directIOArgs(flagOf(in.InstallRecord, factDirectIO))...)
 	}
 	if hostOnly {
 		hideDevices(env)
@@ -212,83 +191,36 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}, nil
 }
 
-// Speculative flags as this install spells them, refusing settings llama-server would reject or leave idle unless forced
-func llamaSpeculative(in Launch, p estimate.Params) ([]string, map[string]string, error) {
+// Speculative flags as the params say them and this install spells them, an unset method left to llama.cpp
+func llamaSpeculative(in Launch, p estimate.Params) ([]string, map[string]string) {
 	method, draft, tokens := p.Str("spec_type"), llamaFile(p, "draft_model"), p["draft_max"]
-	if method == "" {
-		method = Auto
-	}
 	delete(p, "spec_type")
 	delete(p, "draft_model")
 	delete(p, "draft_max")
-	if !in.Force {
-		if refusal := llamaSpecRefusal(in.Descriptor, method, draft != "" || in.Draft != "", tokens != nil); refusal != "" {
-			return nil, nil, fmt.Errorf("%w: %s", ErrParam, refusal)
-		}
-	}
-	facts := in.InstallRecord.GetFacts()
-	listed := has(in.InstallRecord, factSpecTypes)
 	var args []string
 	emitted := map[string]string{}
-	switch {
-	case method == Auto || method == "none":
-		// None is llama.cpp's default, and auto leaves it to read the method from the draft file
-	case listed:
-		if types := strings.Split(facts[factSpecTypes], ","); !slices.Contains(types, method) {
-			return nil, nil, fmt.Errorf("%w: this llama-server's --spec-type takes %s, not %s", ErrParam, strings.Join(types, ", "), method)
-		}
+	if method != "" && method != Auto {
 		args = append(args, "--spec-type", method)
 		emitted["spec_type"] = method
-	case method == "draft-simple" && (draft != "" || in.Draft != ""):
-		// A build before --spec-type drafts plainly with any draft model it loads
-		emitted["spec_type"] = method
-	default:
-		return nil, nil, fmt.Errorf("%w: this llama-server lists no --spec-type, so it cannot run %s", ErrParam, method)
 	}
 	if draft != "" {
-		if !has(in.InstallRecord, factDraftModel) {
-			return nil, nil, fmt.Errorf("%w: this llama-server lists no draft model flag, so it cannot run speculative decoding", ErrParam)
-		}
-		args = append(args, facts[factDraftModel], draft)
+		args = append(args, flagOf(in.InstallRecord, factDraftModel), draft)
 		emitted["draft_model"] = draft
 	}
 	if tokens != nil {
-		if !has(in.InstallRecord, factDraftMax) {
-			return nil, nil, fmt.Errorf("%w: this llama-server lists no draft token limit flag", ErrParam)
-		}
 		n := fmt.Sprint(tokens)
-		args = append(args, facts[factDraftMax], n)
+		args = append(args, flagOf(in.InstallRecord, factDraftMax), n)
 		emitted["draft_max"] = n
 	}
-	return args, emitted, nil
+	return args, emitted
 }
 
-// Why speculative settings cannot run on the model, empty when they can
-func llamaSpecRefusal(d *v1.Descriptor, method string, drafted, tokens bool) string {
-	switch {
-	case slices.Contains(llamaDraftFileTypes, method) && !drafted:
-		return method + " drafts with a draft model, so draft_model needs one"
-	case method == "draft-mtp" && !drafted && !llamaHeads(d):
-		return "the model's file carries no MTP heads, so draft-mtp needs an MTP head file such as mtp-*.gguf as draft_model"
-	case (method == "none" || strings.HasPrefix(method, "ngram-")) && drafted:
-		return method + " leaves a draft model idle, so clear draft_model or set spec_type to a draft method"
-	case tokens && !strings.HasPrefix(method, "draft-") && !(method == Auto && drafted):
-		return "draft tokens per round sets how far a draft model or MTP heads look ahead, so spec_type needs a draft method"
-	}
-	return ""
-}
-
-// The method an unset spec_type takes, the one the draft file is made for, auto where llama.cpp reads it
+// The method an unset spec_type takes, draft-mtp for a named head file, llama.cpp's own pick otherwise
 func llamaAutoMethod(s *estimate.Scope) string {
-	switch d := s.Draft; {
-	case llamaFile(s.Params, "draft_model") == "":
-		return "none"
-	case d == nil || d.GetArchitecture() == llamaDFlashArch:
-		return Auto
-	case llamaHeads(d) || slices.Contains(llamaHeadArchs, d.GetArchitecture()):
+	if d := s.Draft; d != nil && llamaFile(s.Params, "draft_model") != "" && (llamaHeads(d) || slices.Contains(llamaHeadArchs, d.GetArchitecture())) {
 		return "draft-mtp"
 	}
-	return "draft-simple"
+	return Auto
 }
 
 // Whether the model's file carries MTP heads, the nextn layers past its trunk
@@ -603,21 +535,7 @@ func (LlamaCpp) Policy() *estimate.Policy {
 				bounds("log_verbosity", 0, 5, 1),
 				bounds("draft_max", 1, 64, 1),
 			}
-			value := &v1.ParamState{Name: "cache_type_v"}
-			refusal := ""
-			if s.Params.Str("flash_attn") == "off" {
-				const why = "a quantized value cache needs flash attention on"
-				for _, q := range llamaQuantizedCache {
-					value.Disabled = append(value.Disabled, &v1.DisabledChoice{Value: q, Message: why})
-					if s.Params.Str("cache_type_v") == q {
-						refusal = "value cache type " + q + ": " + why
-					}
-				}
-			}
-			if refusal == "" && !s.Part {
-				refusal = llamaFileRefusal(s)
-			}
-			return append(states, value), refusal
+			return states, llamaWarning(s)
 		},
 	}
 }
@@ -627,16 +545,14 @@ func llamaProjectorLoads(_ *estimate.Scope, g *v1.TensorGroup) bool {
 	return g.GetId() == llamaProjectorGroup
 }
 
-// Why the files or speculative settings the params name cannot run, empty when they can
-func llamaFileRefusal(s *estimate.Scope) string {
-	if path := llamaFile(s.Params, "mmproj"); path != "" {
-		if info, err := os.Stat(path); err != nil {
-			return "projector " + err.Error()
-		} else if info.IsDir() {
-			return "projector " + path + " is a directory, not a GGUF file"
+// What the plan left uncounted, a projector file it could not size
+func llamaWarning(s *estimate.Scope) string {
+	if path := llamaFile(s.Params, "mmproj"); path != "" && !s.Part {
+		if info, err := os.Stat(path); err != nil || info.IsDir() {
+			return "projector " + path + " is not a file the plan can size, so it is not counted"
 		}
 	}
-	return llamaSpecRefusal(s.Descriptor, s.Params.Str("spec_type"), llamaFile(s.Params, "draft_model") != "", s.Params["draft_max"] != nil)
+	return ""
 }
 
 // Context size llama.cpp logs for the target, the first context it builds past the fit's debug level trials

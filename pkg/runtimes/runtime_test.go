@@ -103,10 +103,14 @@ func TestResolveAndFlags(t *testing.T) {
 	if params.Int("n_ctx") != 4096 || params.Str("flash_attn") != "on" || !params.IsAuto("n_gpu_layers") || params.Int("n_batch") != 64 || params.Int("log_verbosity") != 4 {
 		t.Fatalf("params %v", params)
 	}
-	for _, bad := range []map[string]string{{"nope": "1"}, {"n_ctx": "many"}, {"flash_attn": "maybe"}, {"cache_type_k": "q9"}} {
+	for _, bad := range []map[string]string{{"nope": "1"}, {"n_ctx": "many"}, {"direct_io": "maybe"}} {
 		if _, err := Resolve(rt, bad); err == nil {
 			t.Errorf("%v should be refused", bad)
 		}
+	}
+	// A choice outside the suggestions passes, the runtime judging it
+	if params, err := Resolve(rt, map[string]string{"cache_type_k": "q9", "flash_attn": "maybe"}); err != nil || params.Str("cache_type_k") != "q9" || params.Str("flash_attn") != "maybe" {
+		t.Fatalf("a choice outside the suggestions: %v %v", params, err)
 	}
 	args, env, emitted := Flags(rt.Params(), params)
 	joined := strings.Join(args, " ")

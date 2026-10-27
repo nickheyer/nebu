@@ -207,7 +207,7 @@ func TestInspectLeadsWithTheSolvedContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if est.GetPlan().GetParams()["n_ctx"] != "2048" || len(est.GetParams()) == 0 || est.GetRefusal() != "" {
+	if est.GetPlan().GetParams()["n_ctx"] != "2048" || len(est.GetParams()) == 0 || est.GetWarning() != "" {
 		t.Fatalf("estimate %+v", est)
 	}
 	states := map[string]*v1.ParamState{}
@@ -259,9 +259,9 @@ func TestDraftSizedFromItsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	overrides := map[string]string{"n_ctx": "4096", "spec_type": "draft-simple", "draft_model": path}
-	in, err := i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil)
-	if err != nil {
-		t.Fatal(err)
+	in, warning, err := i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil)
+	if err != nil || warning != "" {
+		t.Fatal(err, warning)
 	}
 	if in.Draft == nil || in.Draft.GetArchitecture() != "llama" || in.DraftFamily == nil || in.Draft.GetParams()["n_layer"] != 2 {
 		t.Fatalf("draft read from its header: %v %v", in.Draft, in.DraftFamily)
@@ -276,26 +276,23 @@ func TestDraftSizedFromItsFile(t *testing.T) {
 	if plan.GetCacheBytes() != target4096+draftCache || plan.GetWeightsBytes() <= 2<<20 {
 		t.Fatalf("the plan carries the draft: cache %d weights %d", plan.GetCacheBytes(), plan.GetWeightsBytes())
 	}
-	// Left unset, the method is the one a plain draft model drafts with
+	// Left unset, the method of a plain draft model is llama.cpp's own pick
 	unset := map[string]string{"n_ctx": "4096", "draft_model": path}
-	if plan, err = i.Plan(context.Background(), rt, target, profile, unset, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil, false); err != nil || plan.GetParams()["spec_type"] != "draft-simple" {
-		t.Fatalf("a plain draft model drafts with draft-simple: %v %v", plan.GetParams()["spec_type"], err)
+	if plan, _, err = i.Plan(context.Background(), rt, target, profile, unset, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil); err != nil || plan.GetParams()["spec_type"] != estimate.Auto {
+		t.Fatalf("a plain draft model leaves the method to llama.cpp: %v %v", plan.GetParams()["spec_type"], err)
 	}
-	// A stored draft uses its descriptor, the model itself or another format is refused
+	// A stored draft uses its descriptor, the model itself included
 	stored := &v1.StoredModel{SourceId: "disk", Repo: "org/small", Group: "Q4_K_M", FormatId: "gguf", Descriptor_: target, Artifacts: []*v1.StoredArtifact{{Path: "/store/small.gguf", Artifact: &v1.Artifact{Path: "small.gguf", Role: v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS}}}}
 	overrides["draft_model"] = "/store/small.gguf"
-	if in, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, []*v1.StoredModel{stored}); err != nil || in.Draft != target {
+	if in, _, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, []*v1.StoredModel{stored}); err != nil || in.Draft != target {
 		t.Fatalf("stored draft: %v %v", in.Draft, err)
 	}
-	if _, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", stored, nil); err == nil || !strings.Contains(err.Error(), "is the model itself") {
-		t.Fatalf("the model as its own draft: %v", err)
+	if in, _, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", stored, nil); err != nil || in.Draft != target {
+		t.Fatalf("the model as its own draft: %v %v", in.Draft, err)
 	}
-	stored.FormatId = "safetensors"
-	if _, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, []*v1.StoredModel{stored}); err == nil || !strings.Contains(err.Error(), "llamacpp serves gguf") {
-		t.Fatalf("a draft in another format: %v", err)
-	}
+	// A draft file no header reads plans uncounted, and the plan says so
 	overrides["draft_model"] = filepath.Join(dir, "gone.gguf")
-	if _, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil); err == nil || !strings.Contains(err.Error(), "gone.gguf") {
-		t.Fatalf("a missing draft: %v", err)
+	if in, warning, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil); err != nil || in.Draft != nil || !strings.Contains(warning, "gone.gguf") || !strings.Contains(warning, "not counted") {
+		t.Fatalf("a missing draft: %v %q %v", in.Draft, warning, err)
 	}
 }

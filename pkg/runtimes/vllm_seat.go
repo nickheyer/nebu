@@ -224,9 +224,6 @@ func (r VLLM) LaunchSeat(in Launch) (*Command, error) {
 	case v1.Shape_SHAPE_REPLICAS:
 		return r.Launch(exposedLaunch(in))
 	case v1.Shape_SHAPE_CHAIN, v1.Shape_SHAPE_LOCKSTEP:
-		if !has(in.InstallRecord, factNNodes) {
-			return nil, fmt.Errorf("%w: this vllm does not accept --nnodes, so it cannot run across nodes", ErrParam)
-		}
 		host, port, err := rendezvousOf(seat)
 		if err != nil {
 			return nil, err
@@ -266,9 +263,6 @@ func (r VLLM) LaunchSeat(in Launch) (*Command, error) {
 		cmd.Params["master"] = seat.GetRendezvous()
 		return cmd, nil
 	case v1.Shape_SHAPE_RELAY:
-		if !has(in.InstallRecord, factNIXL) {
-			return nil, fmt.Errorf("%w: the NIXL connector does not import in this vllm's environment, so it cannot relay", ErrParam)
-		}
 		if seat.GetAuxPort() == 0 {
 			return nil, fmt.Errorf("%w: a relay seat needs a side channel port", ErrParam)
 		}

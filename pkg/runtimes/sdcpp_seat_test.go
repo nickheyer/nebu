@@ -38,9 +38,10 @@ func TestSDCppStagesSeats(t *testing.T) {
 		t.Fatalf("two denoisers: %v", err)
 	}
 	head.Peers = head.Peers[:1]
+	// A build whose help listed no rpc servers flag still gets it, sd-server judging it
 	in.InstallRecord = recorded(map[string]string{factRPC: "/bin/rpc-server"})
-	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "--rpc-servers") {
-		t.Fatalf("no rpc servers flag: %v", err)
+	if cmd, err := rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--rpc-servers 10.0.0.2:50052") {
+		t.Fatalf("unprobed rpc servers flag: %v %v", cmd, err)
 	}
 	in.InstallRecord = recorded(facts)
 	head.Peers[0].Devices = 0

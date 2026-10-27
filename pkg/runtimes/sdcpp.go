@@ -359,9 +359,6 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 	if weights == "" {
 		return nil, fmt.Errorf("%w: the stored group has no weights file", ErrParam)
 	}
-	if in.Descriptor.GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT {
-		return nil, fmt.Errorf("%w: %s is %s, a part loaded beside a diffusion model rather than one served on its own", ErrParam, in.Name, diffusion.Describe(in.Descriptor.GetArchitecture()))
-	}
 	p := in.Params.Clone()
 	args := []string{"--listen-ip", in.Host, "--listen-port", strconv.Itoa(in.Port)}
 	if diffusers.Pipeline(in.Descriptor) {
@@ -372,13 +369,11 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 		}
 		args = append(args, "--diffusion-model", denoiser)
 	} else {
-		// Load sharded checkpoints through their index.
+		// Sharded checkpoints load through their index when the group holds one
 		if _, _, count, ok := formats.Shard(strings.TrimSuffix(path.Base(weights), path.Ext(weights))); ok && count > 1 {
-			index := in.Artifacts[text.Enum(v1.ArtifactRole_ARTIFACT_ROLE_INDEX)]
-			if index == "" {
-				return nil, fmt.Errorf("%w: no index for this group's %d shards. Pull a single checkpoint file or GGUF", ErrParam, count)
+			if index := in.Artifacts[text.Enum(v1.ArtifactRole_ARTIFACT_ROLE_INDEX)]; index != "" {
+				weights = index
 			}
-			weights = index
 		}
 		if bundled(in.Descriptor) {
 			args = append(args, "--model", weights)
@@ -397,9 +392,6 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 		}
 		p[name] = dir
 	}
-	if msg := sdUpscalerProblem(p.Str("hires_upscaler"), in.Stored); msg != "" {
-		return nil, fmt.Errorf("%w: %s", ErrParam, msg)
-	}
 	// Enable offload when the plan or on_device leaves components in host memory.
 	offload := p.Str("offload") == "on"
 	if p.Str("offload") == "auto" {
@@ -407,13 +399,8 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 	}
 	p["offload"] = ""
 	hostOnly := in.Placement == v1.Placement_PLACEMENT_HOST
-	if hostOnly {
-		switch p.Str("backend") {
-		case "", "cpu":
-			p["backend"] = "cpu"
-		default:
-			return nil, fmt.Errorf("%w: backend %s names an accelerator, but the slot keeps the model in host memory", ErrParam, p.Str("backend"))
-		}
+	if hostOnly && p.Str("backend") == "" {
+		p["backend"] = "cpu"
 	}
 	flags, env, emitted := Flags(r.Params(), p)
 	if offload {
@@ -515,15 +502,23 @@ func linkDir(prepared, sub string, stored []*v1.StoredModel, picks string) (stri
 		if diffusion.PartOf(m.GetDescriptor_()) != picks || m.GetDescriptor_().GetKind() != v1.ModelKind_MODEL_KIND_COMPONENT {
 			continue
 		}
-		if weights, _ := storedWeights(m); len(weights) == 0 {
+		weights, index := storedWeights(m)
+		if len(weights) == 0 {
 			continue
 		}
-		file, err := companionWeights(m)
-		if err != nil {
-			return "", fmt.Errorf("%w: cannot lay out %s: %v", ErrParam, sub, err)
+		// A group loading through one file links that file, any other links every file it holds
+		files := weights
+		if file, err := loadable(linkName(m), weights, index); err == nil {
+			files = []string{file}
 		}
-		if err := os.Symlink(file, filepath.Join(dir, linkName(m)+filepath.Ext(file))); err != nil {
-			return "", err
+		for i, file := range files {
+			name := linkName(m)
+			if len(files) > 1 {
+				name += "-" + strconv.Itoa(i+1)
+			}
+			if err := os.Symlink(file, filepath.Join(dir, name+filepath.Ext(file))); err != nil {
+				return "", err
+			}
 		}
 	}
 	return dir, nil
@@ -913,12 +908,9 @@ func sdUndetected(d *v1.Descriptor) string {
 	return fmt.Sprintf("%s's tensor names are not the %s layout sd-server loads, sd-server will try it. The checkpoint from %s is the known layout", d.GetGroup(), f.Name, strings.Join(blueprint.Published(f), " or "))
 }
 
-// Reports unsupported models or slots and missing required components.
-func sdRefusal(s *estimate.Scope) string {
+// What the plan could not account for, an unknown layout, an unstored upscaler, or unfilled parts
+func sdWarning(s *estimate.Scope) string {
 	d := s.Descriptor
-	if d.GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT {
-		return fmt.Sprintf("%s is %s, a part loaded beside a diffusion model rather than one served on its own", d.GetGroup(), diffusion.Describe(d.GetArchitecture()))
-	}
 	if msg := sdUndetected(d); msg != "" {
 		return msg
 	}
@@ -1060,7 +1052,7 @@ func (SDCpp) Policy() *estimate.Policy {
 				bounds("on_device", 0, float64(sdPartCount(s.Descriptor)), 1),
 				bounds("threads", -1, cpuThreads(s.Host), 1),
 			}
-			return states, sdRefusal(s)
+			return states, sdWarning(s)
 		},
 	}
 }

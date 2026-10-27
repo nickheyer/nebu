@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,8 +15,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Opens a database with every migration but the last skip applied
-func openBefore(t *testing.T, path string, skip int) *sql.DB {
+// Opens a database with every migration before the named one applied
+func openBefore(t *testing.T, path string, before string) *sql.DB {
 	t.Helper()
 	ctx := context.Background()
 	sqldb, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
@@ -46,7 +47,16 @@ func openBefore(t *testing.T, path string, skip int) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ex.ExecuteN(ctx, len(files)-skip); err != nil {
+	n := -1
+	for i, f := range files {
+		if strings.HasPrefix(f.Name(), before) {
+			n = i
+		}
+	}
+	if n < 0 {
+		t.Fatalf("no migration named %s", before)
+	}
+	if err := ex.ExecuteN(ctx, n); err != nil {
 		t.Fatal(err)
 	}
 	return sqldb
@@ -55,7 +65,7 @@ func openBefore(t *testing.T, path string, skip int) *sql.DB {
 // The old shaping columns fold into the profile JSON, bare rows staying bare
 func TestProfileMigration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nebu.db")
-	old := openBefore(t, path, 2)
+	old := openBefore(t, path, "20261016033855_profile_json")
 	for _, stmt := range []string{
 		`INSERT INTO slots (id, name, state, created_at, updated_at, system_messages, allow_all) VALUES ('s1', 'shaped', 'ready', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'merge', 1)`,
 		`INSERT INTO slots (id, name, state, created_at, updated_at) VALUES ('s2', 'plain', 'empty', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
@@ -130,7 +140,7 @@ func TestProfileRoundTrip(t *testing.T) {
 // Image bytes from before the content store move stay readable until an upgrade has placed them
 func TestChatFilesMigrationKeepsBytesForTheUpgrade(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nebu.db")
-	old := openBefore(t, path, 1)
+	old := openBefore(t, path, "20261022000000_bot_activity_chat_blobs")
 	if _, err := old.Exec(`INSERT INTO chat_files (id, provider, subject, media_type, name, width, height, data, created_at) VALUES ('img1', 'local', 'u1', 'image/png', 'a.png', 2, 3, X'0102030405', '2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}

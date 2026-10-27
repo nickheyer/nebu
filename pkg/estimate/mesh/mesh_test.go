@@ -673,13 +673,13 @@ func TestChainWithLocalDraft(t *testing.T) {
 	if plan.GetDraftTokens() != 3 || plan.GetAcceptance() != 0.7 || plan.GetShape() != v1.Shape_SHAPE_CHAIN {
 		t.Fatalf("the drafted chain is the plan: %v", plan.GetDetail())
 	}
-	// The head's memory carries the draft beside its layers, and the method a plain draft model drafts with
+	// The head's memory carries the draft beside its layers, the method of a plain draft model left to llama.cpp
 	for _, s := range plan.GetSeats() {
 		if s.GetNodeId() == plan.GetHead() && s.GetMemory().GetWeightsBytes() <= 20*gib {
 			t.Fatalf("the head's plan holds the draft too: %v", s.GetMemory().GetWeightsBytes())
 		}
-		if s.GetNodeId() == plan.GetHead() && s.GetMemory().GetParams()["spec_type"] != "draft-simple" {
-			t.Fatalf("the head drafts with draft-simple: %v", s.GetMemory().GetParams()["spec_type"])
+		if s.GetNodeId() == plan.GetHead() && s.GetMemory().GetParams()["spec_type"] != estimate.Auto {
+			t.Fatalf("the head leaves the method to llama.cpp: %v", s.GetMemory().GetParams()["spec_type"])
 		}
 	}
 	// vLLM does not compose speculative settings with pipeline parallel, and its chain says so.

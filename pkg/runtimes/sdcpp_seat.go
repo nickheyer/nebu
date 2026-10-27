@@ -78,9 +78,6 @@ func (r SDCpp) LaunchSeat(in Launch) (*Command, error) {
 		if len(stages) != 1 {
 			return nil, fmt.Errorf("%w: a stages head needs exactly one denoiser peer, got %d", ErrParam, len(stages))
 		}
-		if !has(in.InstallRecord, factRPCServers) {
-			return nil, fmt.Errorf("%w: this sd-server does not accept --rpc-servers, so it cannot head a stages formation", ErrParam)
-		}
 		names, err := rpcDeviceNames(stages)
 		if err != nil {
 			return nil, err

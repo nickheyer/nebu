@@ -78,7 +78,6 @@ func TestSGLangRankSeats(t *testing.T) {
 		edit func()
 		want string
 	}{
-		{"no nnodes", func() { in.InstallRecord = recorded(nil) }, "does not accept --nnodes"},
 		{"no rendezvous", func() { in.Seat.Rendezvous = "10.0.0.5" }, "rendezvous address"},
 		{"no gpus", func() { in.Devices = nil }, "at least one GPU"},
 		{"count", func() { in.Seat.Count = 4 }, "counts 4 ranks and lists 1 peers"},
@@ -118,9 +117,10 @@ func TestSGLangRelaySeats(t *testing.T) {
 	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "bootstrap port") {
 		t.Fatalf("no bootstrap port: %v", err)
 	}
+	// An environment the NIXL probe did not pass still renders the relay, sglang judging it
 	seat.AuxPort, in.InstallRecord = 8998, recorded(map[string]string{factDisaggregation: "--disaggregation-mode"})
-	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "NIXL disaggregation") {
-		t.Fatalf("no nixl: %v", err)
+	if cmd, err := rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--disaggregation-transfer-backend nixl") {
+		t.Fatalf("unprobed nixl: %v %v", cmd, err)
 	}
 }
 

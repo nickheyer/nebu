@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { Code } from '@connectrpc/connect';
-  import { api, code, message } from '$lib/api';
+  import { api, message } from '$lib/api';
   import { live, cached, modelKey, orderedSlots, runtimeName, startedTask, taskFor, joinedMesh, meshNodes, nodeReady, holdersOf } from '$lib/state.svelte';
   import { shapeItems, profileItems, shapeOf, profileOf, shapeLabel, seatLabel, verdictLabel, verdictTone, seconds, tps } from '$lib/mesh';
   import { fail } from '$lib/toast.svelte';
@@ -19,7 +18,6 @@
   import { Play, ArrowLeftRight, ChevronRight, Download } from '@lucide/svelte';
   import Dialog from './ui/Dialog.svelte';
   import Button from './ui/Button.svelte';
-  import Checkbox from './ui/Checkbox.svelte';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
   import Choices from './ui/Choices.svelte';
@@ -41,12 +39,11 @@
   let values = $state<Record<string, string>>({});
   let invalid = $state(0);
   let swapMode = $state('overlap');
-  let force = $state(false);
   let showParams = $state(true);
   let plan = $state<MemoryPlan | null>(null);
   let states = $state<ParamState[]>([]);
   let missing = $state<Part[]>([]);
-  let planRefusal = $state('');
+  let planWarning = $state('');
   let planError = $state('');
   let refusal = $state<unknown>(null);
   let checking = $state(false);
@@ -118,6 +115,7 @@
   const formatId = $derived(current?.formatId ?? '');
   const kind = $derived(kindOf(current?.descriptor));
   const component = $derived(isComponent(current?.descriptor));
+  // Runtimes the model's format and kind match come first, every other stays pickable
   const compatible = $derived(cached.runtimes.filter((r) => r.compatible && !!current && runsOn(current.runtimes, r)));
   const others = $derived(cached.runtimes.filter((r) => !compatible.includes(r)));
   const solved = $derived(Object.fromEntries(Object.entries(plan?.params ?? {}).filter(([, v]) => v !== 'auto')));
@@ -127,7 +125,6 @@
   const inherited = $derived(selectedSlot?.params ?? {});
   const installs = $derived([...live.installs.values()].filter((i) => i.runtimeId === effectiveRuntime));
   const setCount = $derived(Object.keys(values).length);
-  const refused = $derived(plan?.verdict === FitVerdict.NO || fplan?.verdict === FitVerdict.NO || !!planRefusal || (code(refusal) === Code.InvalidArgument && message(refusal).toLowerCase().includes('pass force')));
 
   function spec() {
     return {
@@ -139,7 +136,6 @@
       name: slot ? '' : name,
       params: values,
       slotId: slot,
-      force,
       span: meshMode ? span : [],
       shape: meshMode ? shapeOf(shapeId) : Shape.UNSPECIFIED,
       profile: meshMode ? profileOf(planProfile) : PlanProfile.UNSPECIFIED
@@ -154,13 +150,13 @@
     try {
       const s = spec();
       if (meshMode) {
-        const resp = await api.mesh.planFormation({ run: { sourceId: s.sourceId, repo: s.repo, group: s.group, runtimeId: effectiveRuntime, installId: '', name: '', params: s.params, slotId: s.slotId, force: false, span: s.span, shape: s.shape, profile: s.profile } });
+        const resp = await api.mesh.planFormation({ run: { sourceId: s.sourceId, repo: s.repo, group: s.group, runtimeId: effectiveRuntime, installId: '', name: '', params: s.params, slotId: s.slotId, span: s.span, shape: s.shape, profile: s.profile } });
         if (gen !== generation) return;
         fplan = resp.plan ?? null;
         plan = null;
         states = [];
         missing = [];
-        planRefusal = '';
+        planWarning = '';
         return;
       }
       if (!local) {
@@ -175,7 +171,7 @@
       plan = resp.plan ?? null;
       states = resp.params;
       missing = resp.missing;
-      planRefusal = resp.refusal;
+      planWarning = resp.warning;
     } catch (err) {
       if (gen === generation) planError = message(err);
     } finally {
@@ -204,7 +200,7 @@
       fplan = null;
       states = [];
       missing = [];
-      planRefusal = '';
+      planWarning = '';
     }
     planError = '';
     refusal = null;
@@ -234,7 +230,6 @@
       installId = name = '';
       values = {};
       swapMode = 'overlap';
-      force = false;
       showParams = true;
       span = [];
       shapeId = 'auto';
@@ -251,7 +246,7 @@
     }
   });
 
-  const disabled = $derived(!current || component || (!meshMode && (!effectiveRuntime || !installs.length || !local)) || invalid > 0);
+  const disabled = $derived(!current || (!meshMode && (!effectiveRuntime || !installs.length || !local)) || invalid > 0);
 
   const downloadable = $derived(missing.filter((p) => !p.error && !p.stored && !p.bundled));
   const downloadBytes = $derived(downloadable.reduce((n, p) => n + p.sizeBytes, 0n));
@@ -308,10 +303,10 @@
         {/if}
 
         {#if component}
-          <div class="note note-warn">This {partWord(current.descriptor)} requires a diffusion model.</div>
+          <div class="note note-warn">This {partWord(current.descriptor)} is a part a diffusion model loads beside itself.</div>
         {/if}
         <div class="setup-grid">
-          <Field label="Runtime" for="run-runtime" error={!meshMode && !compatible.length && !component ? `No runtime for ${formatId} ${kind === 2 ? 'diffusion' : 'language'} models` : undefined}>
+          <Field label="Runtime" for="run-runtime">
             <Select
               id="run-runtime"
               unset
@@ -319,7 +314,7 @@
               items={[
                 { value: '', label: selectedSlot?.runtimeId ? runtimeName(selectedSlot.runtimeId) : (compatible[0]?.runtime?.name ?? '–') },
                 ...compatible.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '' })),
-                ...others.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: !rt.compatible ? 'unsupported host' : rt.runtime?.kind !== kind ? servesWord(rt.runtime?.kind ?? 1) : `no ${formatId}`, disabled: true }))
+                ...others.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: !rt.compatible ? 'unsupported host' : rt.runtime?.kind !== kind ? servesWord(rt.runtime?.kind ?? 1) : `no ${formatId}` }))
               ]}
             />
           </Field>
@@ -451,13 +446,10 @@
               </div>
               <PartsList parts={missing} compact />
             </div>
-          {:else if planRefusal}
-            <div class="note note-warn mt-3">{planRefusal}</div>
+          {:else if planWarning}
+            <div class="note note-warn mt-3">{planWarning}</div>
           {/if}
           {#if plan?.detail && plan.verdict !== FitVerdict.FITS}<p class="mt-3 text-xs leading-5 text-fg-muted">{plan.detail}</p>{/if}
-          {#if refused || force}
-            <div class="mt-4 border-t border-line pt-3"><Checkbox bind:checked={force} label="Run past the estimate's refusal" /></div>
-          {/if}
         </section>
       {/if}
 

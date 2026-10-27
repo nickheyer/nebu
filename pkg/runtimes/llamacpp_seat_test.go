@@ -154,7 +154,6 @@ func TestLlamaCppChainHead(t *testing.T) {
 		}, "lists the CPU cpu"},
 		{"no layers", func() { in.Descriptor = layered(0) }, "counts no layers"},
 		{"no stages", func() { seat.Peers = nil }, "no stage peers"},
-		{"no rpc flag", func() { in.InstallRecord = recorded(map[string]string{factRPC: "/bin/rpc-server"}) }, "does not accept --rpc"},
 		{"stage without devices", func() { seat.Peers[1].Devices = 0 }, "exposes no device"},
 	}
 	for _, c := range cases {
@@ -186,85 +185,64 @@ func TestLlamaCppDraftHead(t *testing.T) {
 	if cmd.Params["draft_device"] != "RPC0" || cmd.Params["draft_model"] != "/d.gguf" || cmd.Params["rpc"] != "10.0.0.2:50052" {
 		t.Fatalf("params %v", cmd.Params)
 	}
-	// A build listing speculative methods drafts only when told draft-simple, and a draft formation takes no other method
-	facts[factSpecTypes] = "none,draft-simple,draft-mtp"
-	in.InstallRecord = recorded(facts)
+	// An unset method drafts plainly, and a set one is passed as set
 	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--spec-type draft-simple") || cmd.Params["spec_type"] != "draft-simple" {
 		t.Fatalf("draft head method %v %v", cmd, err)
 	}
 	mtp, _ := Resolve(rt, map[string]string{"spec_type": "draft-mtp"})
 	in.Params = mtp
-	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "drafts with draft-simple") {
-		t.Fatalf("mtp in a draft formation: %v", err)
+	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--spec-type draft-mtp") {
+		t.Fatalf("mtp in a draft formation: %v %v", cmd, err)
 	}
 	in.Params = params
 	in.Draft = ""
 	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "draft model's weights") {
 		t.Fatalf("no draft: %v", err)
 	}
-	in.Draft, in.InstallRecord = "/d.gguf", recorded(map[string]string{factRPC: "/bin/rpc-server", factRPCFlag: "--rpc"})
-	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "draft device flag") {
-		t.Fatalf("no draft flags: %v", err)
+	// A build whose help was not read gets the newest spellings
+	in.Draft, in.InstallRecord = "/d.gguf", recorded(map[string]string{factRPC: "/bin/rpc-server"})
+	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.HasSuffix(strings.Join(cmd.Args, " "), "--rpc 10.0.0.2:50052 --spec-draft-model /d.gguf --spec-draft-device RPC0") {
+		t.Fatalf("unprobed draft flags: %v %v", cmd, err)
 	}
 }
 
+// Speculative settings render as set, in the spelling the build's help listed or the newest one,
+// and llama-server judges them
 func TestLlamaCppSpeculative(t *testing.T) {
 	rt := LlamaCpp{}
-	modern := map[string]string{factDraftModel: "--spec-draft-model", factDraftMax: "--spec-draft-n-max", factSpecTypes: "none,draft-simple,draft-mtp,ngram-mod"}
+	modern := map[string]string{factDraftModel: "--spec-draft-model", factDraftMax: "--spec-draft-n-max"}
 	legacy := map[string]string{factDraftModel: "--model-draft", factDraftMax: "--draft-max"}
 	plain := layered(4)
-	heads := layered(5)
-	heads.Params["n_layer_draft"] = 1
-	heads.Groups = []*v1.TensorGroup{{Id: "draft.4", Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_DRAFT, Layer: 4, Bytes: 1}}
 	for _, c := range []struct {
 		name      string
 		overrides map[string]string
 		facts     map[string]string
-		model     *v1.Descriptor
-		force     bool
-		want, err string
+		want      string
 	}{
 		{name: "nothing set", facts: modern, want: ""},
-		{name: "mtp heads in the model", overrides: map[string]string{"spec_type": "draft-mtp"}, facts: modern, model: heads, want: "--spec-type draft-mtp"},
-		{name: "mtp heads with a limit", overrides: map[string]string{"spec_type": "draft-mtp", "draft_max": "2"}, facts: modern, model: heads, want: "--spec-type draft-mtp --spec-draft-n-max 2"},
+		{name: "mtp heads in the model", overrides: map[string]string{"spec_type": "draft-mtp"}, facts: modern, want: "--spec-type draft-mtp"},
+		{name: "mtp heads with a limit", overrides: map[string]string{"spec_type": "draft-mtp", "draft_max": "2"}, facts: modern, want: "--spec-type draft-mtp --spec-draft-n-max 2"},
 		{name: "mtp head file", overrides: map[string]string{"spec_type": "draft-mtp", "draft_model": "/mtp.gguf"}, facts: modern, want: "--spec-type draft-mtp --spec-draft-model /mtp.gguf"},
-		{name: "mtp without heads", overrides: map[string]string{"spec_type": "draft-mtp"}, facts: modern, err: "carries no MTP heads"},
-		{name: "mtp without heads forced", overrides: map[string]string{"spec_type": "draft-mtp"}, facts: modern, force: true, want: "--spec-type draft-mtp"},
-		{name: "draft method without a draft forced", overrides: map[string]string{"spec_type": "draft-simple"}, facts: modern, force: true, want: "--spec-type draft-simple"},
-		{name: "limit without a draft method forced", overrides: map[string]string{"draft_max": "4"}, facts: modern, force: true, want: "--spec-draft-n-max 4"},
-		{name: "mtp with the draft cleared", overrides: map[string]string{"spec_type": "draft-mtp", "draft_model": None}, facts: modern, model: heads, want: "--spec-type draft-mtp"},
+		{name: "draft method without a draft", overrides: map[string]string{"spec_type": "draft-simple"}, facts: modern, want: "--spec-type draft-simple"},
+		{name: "limit without a method", overrides: map[string]string{"draft_max": "4"}, facts: modern, want: "--spec-draft-n-max 4"},
+		{name: "mtp with the draft cleared", overrides: map[string]string{"spec_type": "draft-mtp", "draft_model": None}, facts: modern, want: "--spec-type draft-mtp"},
 		{name: "draft model", overrides: map[string]string{"spec_type": "draft-simple", "draft_model": "/draft.gguf"}, facts: modern, want: "--spec-type draft-simple --spec-draft-model /draft.gguf"},
 		{name: "draft model with a limit", overrides: map[string]string{"spec_type": "draft-simple", "draft_model": "/draft.gguf", "draft_max": "9"}, facts: modern, want: "--spec-type draft-simple --spec-draft-model /draft.gguf --spec-draft-n-max 9"},
 		{name: "draft model with the method left to llama.cpp", overrides: map[string]string{"draft_model": "/draft.gguf"}, facts: modern, want: "--spec-draft-model /draft.gguf"},
-		{name: "none beside a draft", overrides: map[string]string{"spec_type": "none", "draft_model": "/draft.gguf"}, facts: modern, err: "leaves a draft model idle"},
-		{name: "none alone", overrides: map[string]string{"spec_type": "none"}, facts: modern, want: ""},
-		{name: "legacy draft model drafting plainly", overrides: map[string]string{"spec_type": "draft-simple", "draft_model": "/draft.gguf"}, facts: legacy, want: "--model-draft /draft.gguf"},
-		{name: "draft method without a draft", overrides: map[string]string{"spec_type": "draft-simple"}, facts: modern, err: "draft_model needs one"},
-		{name: "ngram beside a draft", overrides: map[string]string{"spec_type": "ngram-mod", "draft_model": "/draft.gguf"}, facts: modern, err: "clear draft_model"},
+		{name: "none beside a draft", overrides: map[string]string{"spec_type": "none", "draft_model": "/draft.gguf"}, facts: modern, want: "--spec-type none --spec-draft-model /draft.gguf"},
+		{name: "none alone", overrides: map[string]string{"spec_type": "none"}, facts: modern, want: "--spec-type none"},
+		{name: "legacy draft model", overrides: map[string]string{"spec_type": "draft-simple", "draft_model": "/draft.gguf"}, facts: legacy, want: "--spec-type draft-simple --model-draft /draft.gguf"},
 		{name: "ngram", overrides: map[string]string{"spec_type": "ngram-mod"}, facts: modern, want: "--spec-type ngram-mod"},
-		{name: "limit without a draft method", overrides: map[string]string{"draft_max": "4"}, facts: modern, err: "needs a draft method"},
-		{name: "limit on ngram", overrides: map[string]string{"spec_type": "ngram-mod", "draft_max": "4"}, facts: modern, err: "needs a draft method"},
-		{name: "method the build lacks", overrides: map[string]string{"spec_type": "draft-eagle3", "draft_model": "/e.gguf"}, facts: modern, err: "takes none, draft-simple, draft-mtp, ngram-mod, not draft-eagle3"},
-		{name: "build without spec types", overrides: map[string]string{"spec_type": "draft-mtp"}, facts: legacy, model: heads, err: "lists no --spec-type"},
-		{name: "legacy draft model", overrides: map[string]string{"draft_model": "/draft.gguf", "draft_max": "5"}, facts: legacy, want: "--model-draft /draft.gguf --draft-max 5"},
-		{name: "unprobed limit flag", overrides: map[string]string{"spec_type": "draft-mtp", "draft_max": "2"}, facts: map[string]string{factSpecTypes: "draft-mtp"}, model: heads, err: "draft token limit flag"},
+		{name: "a method the suggestions lack", overrides: map[string]string{"spec_type": "draft-future", "draft_model": "/e.gguf"}, facts: modern, want: "--spec-type draft-future --spec-draft-model /e.gguf"},
+		{name: "legacy limit", overrides: map[string]string{"draft_model": "/draft.gguf", "draft_max": "5"}, facts: legacy, want: "--model-draft /draft.gguf --draft-max 5"},
+		{name: "unprobed flags", overrides: map[string]string{"draft_model": "/draft.gguf", "draft_max": "2"}, facts: map[string]string{}, want: "--spec-draft-model /draft.gguf --spec-draft-n-max 2"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			params, err := Resolve(rt, c.overrides)
 			if err != nil {
 				t.Fatal(err)
 			}
-			model := c.model
-			if model == nil {
-				model = plain
-			}
-			cmd, err := rt.Launch(Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}, Descriptor: model, InstallRecord: recorded(c.facts), Force: c.force})
-			if c.err != "" {
-				if err == nil || !strings.Contains(err.Error(), c.err) {
-					t.Fatalf("want %q, got %v", c.err, err)
-				}
-				return
-			}
+			cmd, err := rt.Launch(Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}, Descriptor: plain, InstallRecord: recorded(c.facts)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -345,9 +323,10 @@ func TestLlamaCppRelayAndReplicaSeats(t *testing.T) {
 	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "slot directory") {
 		t.Fatalf("no slot dir: %v", err)
 	}
+	// A build whose help was not read gets the flag's one spelling
 	seat.SlotDir, in.InstallRecord = slots, recorded(nil)
-	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "--slot-save-path") {
-		t.Fatalf("no slot flag: %v", err)
+	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--slot-save-path "+slots) {
+		t.Fatalf("unprobed slot flag: %v %v", cmd, err)
 	}
 	replica := &v1.SeatSpec{FormationId: "f1", Shape: v1.Shape_SHAPE_REPLICAS, Role: RoleReplica, Address: "10.0.0.1", Port: 7000, Exposed: true}
 	in.Seat = replica
@@ -372,9 +351,10 @@ func TestLlamaCppDirectIO(t *testing.T) {
 	if cmd, err := rt.Launch(in); err != nil || !strings.HasSuffix(strings.Join(cmd.Args, " "), " --load-mode dio") {
 		t.Fatalf("load-mode dio %v %v", cmd, err)
 	}
+	// A build whose help was not read gets the newest spelling
 	in.InstallRecord = recorded(nil)
-	if _, err := rt.Launch(in); err == nil || !strings.Contains(err.Error(), "direct io flag") {
-		t.Fatalf("no flag: %v", err)
+	if cmd, err := rt.Launch(in); err != nil || !strings.HasSuffix(strings.Join(cmd.Args, " "), " --load-mode dio") {
+		t.Fatalf("unprobed flag: %v %v", cmd, err)
 	}
 	params["direct_io"] = false
 	if cmd, err := rt.Launch(in); err != nil || strings.Contains(strings.Join(cmd.Args, " "), "--load-mode") || strings.Contains(strings.Join(cmd.Args, " "), "--direct-io") {
@@ -433,16 +413,6 @@ func TestLlamaCppShapesAndProbes(t *testing.T) {
 	}
 	if v, ok := byKey[factDraftDevice].Parse("--spec-draft-device DEV"); !ok || v != "--spec-draft-device" {
 		t.Fatalf("draft device %q", v)
-	}
-	for _, c := range []struct{ help, want string }{
-		{"--spec-type none,draft-simple,draft-eagle3,draft-mtp,ngram-mod   comma-separated list of types", "none,draft-simple,draft-eagle3,draft-mtp,ngram-mod"},
-		{"--spec-type [none|draft-simple|draft-mtp|ngram-cache]\n  comma-separated list", "none,draft-simple,draft-mtp,ngram-cache"},
-		{"sharded drafts need an explicit --spec-type\n--spec-type none,draft-mtp  types", "none,draft-mtp"},
-		{"--spec-draft-n-max N", ""},
-	} {
-		if v, ok := byKey[factSpecTypes].Parse(c.help); v != c.want || ok != (c.want != "") {
-			t.Errorf("speculative methods in %q: %q %v", c.help, v, ok)
-		}
 	}
 	for _, c := range []struct{ help, want string }{
 		{"--spec-draft-n-max N", "--spec-draft-n-max"},

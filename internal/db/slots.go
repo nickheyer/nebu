@@ -39,8 +39,8 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 			return err
 		}
 		if req := s.GetRequest(); req != nil {
-			if err := exec(`INSERT INTO slot_requests (slot_id, source_id, repo, weight_group, runtime_id, install_id, name, force, span, shape, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), boolCol(req.GetForce()), strings.Join(req.GetSpan(), ","), enumCol(req.GetShape()), enumCol(req.GetProfile())); err != nil {
+			if err := exec(`INSERT INTO slot_requests (slot_id, source_id, repo, weight_group, runtime_id, install_id, name, span, shape, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), strings.Join(req.GetSpan(), ","), enumCol(req.GetShape()), enumCol(req.GetProfile())); err != nil {
 				return err
 			}
 			if err := putMap(exec, `INSERT INTO slot_request_params (slot_id, name, value) VALUES (?, ?, ?)`, id, req.GetParams()); err != nil {
@@ -78,10 +78,10 @@ func (d *DB) ListSlots(ctx context.Context) ([]*v1.Slot, error) {
 		if s.Params, err = d.stringMap(ctx, `SELECT name, value FROM slot_params WHERE slot_id = ? ORDER BY name`, s.GetId()); err != nil {
 			return nil, err
 		}
-		requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, force, span, shape, profile FROM slot_requests WHERE slot_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
+		requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, span, shape, profile FROM slot_requests WHERE slot_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
 			req := &v1.RunRequest{SlotId: s.GetId()}
 			var span spanAt
-			err := rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, (*flag)(&req.Force), &span, enumAt[v1.Shape]{&req.Shape}, enumAt[v1.PlanProfile]{&req.Profile})
+			err := rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &span, enumAt[v1.Shape]{&req.Shape}, enumAt[v1.PlanProfile]{&req.Profile})
 			req.Span = span.ids
 			return req, err
 		}, s.GetId())

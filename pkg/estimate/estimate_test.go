@@ -302,28 +302,18 @@ func TestParamStatesAndRefusal(t *testing.T) {
 	if states, _ := p.ParamStates(four, plan); states[0].GetName() != "n_ctx" || states[0].GetMax() != 32768 {
 		t.Fatalf("four sequences bound the context at four trained lengths: %v", states)
 	}
+	// A quantized value cache without flash attention plans, llama.cpp judging the pair
 	in.Params = defaults(params, map[string]any{"flash_attn": "off", "cache_type_v": "q8_0"})
-	if _, err := p.Plan(in); !errors.Is(err, estimate.ErrRefused) {
-		t.Fatalf("a quantized value cache without flash attention should be refused: %v", err)
-	}
-	in.SkipRules = true
 	plan, err = p.Plan(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, refusal = p.ParamStates(in, plan)
-	if !strings.Contains(refusal, "q8_0") {
-		t.Fatalf("the refusal should name the choice: %q", refusal)
+	if _, warning := p.ParamStates(in, plan); warning != "" {
+		t.Fatalf("nothing to warn of: %q", warning)
 	}
 	for _, s := range states {
-		if s.GetName() == "cache_type_v" && len(s.GetDisabled()) != 0 {
-			t.Fatal("with flash attention on nothing is disabled")
-		}
-	}
-	states, _ = p.ParamStates(in, plan)
-	for _, s := range states {
-		if s.GetName() == "cache_type_v" && len(s.GetDisabled()) != 5 {
-			t.Fatalf("every quantized type is disabled without flash attention: %v", s)
+		if s.GetName() == "cache_type_v" {
+			t.Fatal("the value cache type has no state of its own")
 		}
 	}
 	// Empty cache types stay empty and size the cache as llama.cpp's f16 does
@@ -652,12 +642,18 @@ func TestLlamaCppLoadsWhatTheParamsName(t *testing.T) {
 	if err != nil || plan.GetWeightsBytes() != trunk+3*mib {
 		t.Fatalf("named projector: %+v %v", plan, err)
 	}
-	if _, err := p.Plan(input(d, host(24*gib, 64*gib), defaults(params, map[string]any{"mmproj": projector + ".gone"}))); !errors.Is(err, estimate.ErrRefused) || !strings.Contains(err.Error(), "projector") {
-		t.Fatalf("a missing projector is refused: %v", err)
+	// A projector the plan cannot size plans uncounted, and the plan says so
+	gone := input(d, host(24*gib, 64*gib), defaults(params, map[string]any{"mmproj": projector + ".gone"}))
+	plan, err = p.Plan(gone)
+	if err != nil || plan.GetWeightsBytes() != trunk {
+		t.Fatalf("a missing projector is not counted: %+v %v", plan, err)
 	}
-	// draft-mtp on a model without heads is refused before launch
-	if _, err := p.Plan(input(descriptor(4, 100*mib, 0), host(24*gib, 64*gib), defaults(params, map[string]any{"spec_type": "draft-mtp"}))); !errors.Is(err, estimate.ErrRefused) || !strings.Contains(err.Error(), "MTP heads") {
-		t.Fatalf("mtp without heads: %v", err)
+	if _, warning := p.ParamStates(gone, plan); !strings.Contains(warning, "projector") || !strings.Contains(warning, "not counted") {
+		t.Fatalf("the plan names the projector it left out: %q", warning)
+	}
+	// draft-mtp on a model without heads plans, llama.cpp judging it
+	if plan, err := p.Plan(input(descriptor(4, 100*mib, 0), host(24*gib, 64*gib), defaults(params, map[string]any{"spec_type": "draft-mtp"}))); err != nil || plan.GetParams()["spec_type"] != "draft-mtp" {
+		t.Fatalf("mtp without heads: %v %v", plan.GetParams(), err)
 	}
 	// A draft model loads its trunk and own cache on device, an assistant sharing the target's cache keeps none
 	draft := &v1.Descriptor{Architecture: "llama", Params: map[string]float64{"n_layer": 2, "n_head_kv": 4, "head_dim": 64, "head_dim_v": 64}}
@@ -675,12 +671,12 @@ func TestLlamaCppLoadsWhatTheParamsName(t *testing.T) {
 	if plan, err = p.Plan(in); err != nil || plan.GetCacheBytes() != 4*perLayer {
 		t.Fatalf("an assistant shares the target's cache: %d %v", plan.GetCacheBytes(), err)
 	}
-	// An unset method takes the one the draft file is made for, and a set one stays as set
-	if plan, err = p.Plan(input(d, host(24*gib, 64*gib), defaults(params, nil))); err != nil || plan.GetParams()["spec_type"] != "none" {
-		t.Fatalf("no draft model drafts nothing: %v %v", plan.GetParams()["spec_type"], err)
+	// An unset method is draft-mtp for a head file and llama.cpp's own pick otherwise, a set one stays as set
+	if plan, err = p.Plan(input(d, host(24*gib, 64*gib), defaults(params, nil))); err != nil || plan.GetParams()["spec_type"] != estimate.Auto {
+		t.Fatalf("no draft model leaves the method to llama.cpp: %v %v", plan.GetParams()["spec_type"], err)
 	}
 	in.Params = defaults(params, map[string]any{"draft_model": "/drafts/small.gguf"})
-	for arch, want := range map[string]string{"llama": "draft-simple", "gemma4-assistant": "draft-mtp", "dflash": estimate.Auto} {
+	for arch, want := range map[string]string{"llama": estimate.Auto, "gemma4-assistant": "draft-mtp", "dflash": estimate.Auto} {
 		draft.Architecture = arch
 		if plan, err = p.Plan(in); err != nil || plan.GetParams()["spec_type"] != want {
 			t.Fatalf("%s draft: %v %v", arch, plan.GetParams()["spec_type"], err)
@@ -698,8 +694,8 @@ func TestLlamaCppLoadsWhatTheParamsName(t *testing.T) {
 		t.Fatalf("a set method is kept: %v %v", plan.GetParams()["spec_type"], err)
 	}
 	in.Params = defaults(params, map[string]any{"spec_type": "none", "draft_model": "/drafts/small.gguf"})
-	if _, err := p.Plan(in); !errors.Is(err, estimate.ErrRefused) || !strings.Contains(err.Error(), "idle") {
-		t.Fatalf("none beside a draft model is refused: %v", err)
+	if plan, err := p.Plan(in); err != nil || plan.GetParams()["spec_type"] != "none" {
+		t.Fatalf("none beside a draft model plans as set: %v %v", plan.GetParams(), err)
 	}
 	// A seat's share of a solved descriptor takes no file the params name a second time
 	in.Part, in.Params = true, defaults(params, map[string]any{"mmproj": projector})

@@ -531,8 +531,6 @@
                           <TaskChip {task} label="Downloading" />
                         {:else if stored && partial(stored, d)}
                           <Tip text="{plural(stored.artifacts.length, 'file')} stored. Download the weights and required parts to run it"><Button size="xs" variant={best ? 'primary' : 'ghost'} icon={Download} onclick={() => pull(d)}>Download the rest</Button></Tip>
-                        {:else if stored && isComponent(d)}
-                          <span class="text-xs text-fg-faint">downloaded</span>
                         {:else if stored}
                           <Button size="xs" variant={best ? 'primary' : 'secondary'} icon={Play} onclick={() => runModel(stored)}>Run</Button>
                         {:else}
@@ -595,10 +593,10 @@
               <span class="font-mono text-sm text-fg">{weightsName(m.group, m.formatId)}</span>
               <span class="text-xs text-fg-faint">{storage(m.bytes)} · downloaded {ago(m.pulledAt, clock.now)}{m.usedAt ? ` · last run ${ago(m.usedAt, clock.now)}` : ''}</span>
               {#each serving as name (name)}<State tone="ok" label="Serving as {name}" />{/each}
-              {#if incomplete}<State tone="warn" label="{plural(m.artifacts.length, 'file')} of the group, not runnable until the rest land" />{/if}
+              {#if incomplete}<State tone="warn" label="{plural(m.artifacts.length, 'file')} of the group downloaded" />{/if}
               {#if task}<TaskChip {task} />{/if}
               <span class="ml-auto flex items-center gap-1">
-                {#if !incomplete}<Button size="sm" variant="primary" icon={Play} onclick={() => runModel(m)}>Run</Button>{/if}
+                <Button size="sm" variant="primary" icon={Play} onclick={() => runModel(m)}>Run</Button>
                 <Button size="sm" variant="ghost" icon={ShieldCheck} onclick={() => verify(m)}>Verify</Button>
                 <Button size="sm" variant="ghost" icon={Trash2} class="text-bad hover:text-bad" disabled={serving.length > 0} onclick={() => remove(m)}>Remove</Button>
               </span>

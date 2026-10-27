@@ -69,7 +69,7 @@ func (m *Manager) prepareSeat(ctx context.Context, req *v1.RunRequest) (*prepare
 	if err != nil {
 		return nil, err
 	}
-	if err := m.roomForSeat(profile, seat, rt, name, req.GetForce()); err != nil {
+	if err := seatPlanned(profile, seat); err != nil {
 		return nil, err
 	}
 	p := &prepared{req: req, rt: rt, install: install, name: name, profile: profile, planned: profile, seat: seat, role: role}
@@ -85,9 +85,6 @@ func (m *Manager) prepareSeat(ctx context.Context, req *v1.RunRequest) (*prepare
 		p.stored = stored
 		if p.descriptor, err = m.describe(ctx, stored); err != nil {
 			return nil, err
-		}
-		if !runtimes.Accepts(rt, stored.GetFormatId(), p.descriptor.GetKind()) {
-			return nil, fmt.Errorf("%w: runtime %s does not serve %s %s models", runtimes.ErrParam, rt.ID(), stored.GetFormatId(), strings.ToLower(strings.TrimPrefix(p.descriptor.GetKind().String(), "MODEL_KIND_")))
 		}
 		if p.companions, err = m.Inspector.Companions(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup()); err != nil {
 			return nil, err
@@ -111,31 +108,8 @@ func (m *Manager) prepareSeat(ctx context.Context, req *v1.RunRequest) (*prepare
 	return p, nil
 }
 
-// Checks a seat's plan against the memory this node has free now. The conductor planned the seat
-// over this node's profile as it stood at the last sync, so the seat launches only when every
-// device of this node the plan names still has room for the bytes the plan puts on it, and the
-// host pool for what the plan keeps in host memory, each under the runtime's margin. A forced
-// run launches past a refusal, logged
-func (m *Manager) roomForSeat(profile *v1.HostProfile, seat *v1.SeatSpec, rt runtimes.Runtime, name string, force bool) error {
-	var margin float64
-	if rt.Policy() != nil {
-		margin = rt.Policy().Margin
-	}
-	room := func(pool *v1.MemoryPool) uint64 {
-		free := pool.GetFreeBytes()
-		if free == 0 {
-			free = pool.GetTotalBytes()
-		}
-		return uint64(float64(free) * (1 - margin))
-	}
-	refuse := func(where string, planned, have uint64) error {
-		err := fmt.Errorf("%w: the plan puts %s on %s of this node, %s over the %s free on it under the runtime's margin; plan the formation again", runtimes.ErrParam, estimate.Human(planned), where, estimate.Human(planned-have), estimate.Human(have))
-		if force {
-			m.Log.Warn("seat launches forced past its memory check", "seat", name, "err", err)
-			return nil
-		}
-		return err
-	}
+// Checks that the devices and host pools a seat's plan names exist on this node
+func seatPlanned(profile *v1.HostProfile, seat *v1.SeatSpec) error {
 	ids, bytes := seat.GetDevices(), seat.GetDeviceBytes()
 	for i, id := range ids {
 		if strings.Contains(id, "/") {
@@ -144,32 +118,13 @@ func (m *Manager) roomForSeat(profile *v1.HostProfile, seat *v1.SeatSpec, rt run
 		if i >= len(bytes) {
 			return fmt.Errorf("%w: the plan lists %d devices and %d byte shares", runtimes.ErrParam, len(ids), len(bytes))
 		}
-		d := deviceIn(profile, id)
-		if d == nil {
+		if deviceIn(profile, id) == nil {
 			return fmt.Errorf("%w: the plan names device %s, which this node does not hold", runtimes.ErrParam, id)
-		}
-		pool := poolOf(profile, d)
-		if pool == nil {
-			return fmt.Errorf("%w: device %s has no memory pool in this node's profile", runtimes.ErrParam, id)
-		}
-		if have := room(pool); bytes[i] > have {
-			if err := refuse(deviceLabel(d), bytes[i], have); err != nil {
-				return err
-			}
 		}
 	}
 	for _, pu := range seat.GetMemory().GetPools() {
-		if pu.GetKind() != v1.PoolKind_POOL_KIND_HOST {
-			continue
-		}
-		pool := poolByID(profile, pu.GetPoolId())
-		if pool == nil {
+		if pu.GetKind() == v1.PoolKind_POOL_KIND_HOST && poolByID(profile, pu.GetPoolId()) == nil {
 			return fmt.Errorf("%w: the plan keeps %s in host pool %s, which this node's profile does not list", runtimes.ErrParam, estimate.Human(pu.GetUsedBytes()), pu.GetPoolId())
-		}
-		if have := room(pool); pu.GetUsedBytes() > have {
-			if err := refuse("host memory", pu.GetUsedBytes(), have); err != nil {
-				return err
-			}
 		}
 	}
 	return nil
@@ -193,40 +148,6 @@ func poolByID(profile *v1.HostProfile, id string) *v1.MemoryPool {
 		}
 	}
 	return nil
-}
-
-// The pool a device draws on, as the planner maps them: a CPU the host pool, else the unified
-// pool; an accelerator the pool naming it, else the unified pool
-func poolOf(profile *v1.HostProfile, d *v1.Device) *v1.MemoryPool {
-	var host, unified, own *v1.MemoryPool
-	for _, p := range profile.GetPools() {
-		switch {
-		case p.GetDeviceId() != "" && p.GetDeviceId() == d.GetId() && own == nil:
-			own = p
-		case p.GetKind() == v1.PoolKind_POOL_KIND_HOST && host == nil:
-			host = p
-		case p.GetKind() == v1.PoolKind_POOL_KIND_UNIFIED && unified == nil:
-			unified = p
-		}
-	}
-	if d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
-		if host != nil {
-			return host
-		}
-		return unified
-	}
-	if own != nil {
-		return own
-	}
-	return unified
-}
-
-// A device's name for a refusal, its id without one
-func deviceLabel(d *v1.Device) string {
-	if d.GetName() != "" {
-		return d.GetName()
-	}
-	return d.GetId()
 }
 
 // The devices a seat pins on this node: the bare ids the plan lists, since an id qualified by a
@@ -382,7 +303,6 @@ func (m *Manager) launchSeat(ctx context.Context, p *prepared) (*v1.Instance, *v
 		Plan:          p.plan,
 		Stored:        p.companions,
 		Model:         p.stored,
-		Force:         p.req.GetForce(),
 		Seat:          seat,
 		InstallRecord: install,
 		Draft:         draft,
@@ -449,7 +369,7 @@ func (m *Manager) launchSeat(ctx context.Context, p *prepared) (*v1.Instance, *v
 	labels := map[string]string{"instance": rec.GetId(), "name": name, "formation": seat.GetFormationId(), "role": seat.GetRole()}
 	task := m.Tasks.Start(kindRun, "seat "+name, labels, func(ctx context.Context, h *tasks.Handle) error {
 		if prep != nil {
-			if err := m.runPrepare(ctx, h, in, prep, install.GetDir(), prepDir, prepTimeout, p.req.GetForce()); err != nil {
+			if err := m.runPrepare(ctx, h, in, prep, install.GetDir(), prepDir, prepTimeout); err != nil {
 				return err
 			}
 		}

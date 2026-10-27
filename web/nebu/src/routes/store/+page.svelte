@@ -231,13 +231,6 @@
     if (!m) {
       return [{ label: 'Download', icon: Download, detail: 'To this node', onSelect: () => pullTo(r) }, ...pullItems(r)];
     }
-    if (isComponent(m.descriptor)) {
-      return [
-        ...pullItems(r),
-        { label: 'Verify', icon: ShieldCheck, onSelect: () => verify(m) },
-        { label: 'Remove', icon: Trash2, tone: 'bad' as const, onSelect: () => remove(m), disabled: servingAs(r).length > 0 }
-      ];
-    }
     return [
       ...slots.map((s) => ({ label: slotOccupied(s.id) ? `Swap into ${s.position}. ${s.name}` : `Run in ${s.position}. ${s.name}`, icon: slotOccupied(s.id) ? ArrowLeftRight : Play, detail: slotOccupied(s.id) ? `replaces ${tail(s.request?.repo ?? '')}` : 'empty', onSelect: () => launch({ sourceId: m.sourceId, repo: m.repo, group: m.group, slotId: s.id }) })),
       { label: 'Run with options…', icon: SlidersHorizontal, onSelect: () => runModel(m) },
@@ -357,7 +350,7 @@
                       {#each runtimesOf(r.model.runtimes, cached.runtimes) as x (x.runtime?.id)}
                         <Chip text={x.runtime?.name ?? x.runtime?.id ?? ''} mono={false} title={x.compatible ? `${x.runtime?.name} serves this model` : `${x.runtime?.name} serves this model, but not on this host`} class={x.compatible ? '' : 'opacity-50'} />
                       {:else}
-                        <span class="text-xs text-fg-faint" title="No compatible runtime">{isComponent(r.model.descriptor) ? 'part' : '–'}</span>
+                        <span class="text-xs text-fg-faint" title="No runtime lists this format and kind, any can still be picked">{isComponent(r.model.descriptor) ? 'part' : '–'}</span>
                       {/each}
                     </div>
                   {:else}
@@ -381,7 +374,7 @@
                       <TaskChip {task} label="Downloading" />
                     {:else if !r.model}
                       <Button size="xs" variant="primary" icon={Download} title="Download to this node" onclick={() => pullTo(r)}>Download</Button>
-                    {:else if !isComponent(r.model.descriptor)}
+                    {:else}
                       <Button size="xs" variant="primary" icon={Play} onclick={() => runModel(r.model)}>Run</Button>
                     {/if}
                     <Menu size="xs" items={runItems(r)} />

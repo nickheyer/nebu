@@ -80,8 +80,8 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			if err != nil {
 				return err
 			}
-			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id, force, span, shape, seat, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId(), boolCol(req.GetForce()), strings.Join(req.GetSpan(), ","), enumCol(req.GetShape()), reqSeat, enumCol(req.GetProfile())); err != nil {
+			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id, span, shape, seat, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId(), strings.Join(req.GetSpan(), ","), enumCol(req.GetShape()), reqSeat, enumCol(req.GetProfile())); err != nil {
 				return err
 			}
 			if err := putMap(exec, `INSERT INTO instance_request_params (instance_id, name, value) VALUES (?, ?, ?)`, id, req.GetParams()); err != nil {
@@ -158,11 +158,11 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 	if in.Command, err = d.strings(ctx, `SELECT arg FROM instance_command WHERE instance_id = ? ORDER BY position`, id); err != nil {
 		return err
 	}
-	requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, force, span, shape, seat, profile FROM instance_requests WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
+	requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, span, shape, seat, profile FROM instance_requests WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
 		req := &v1.RunRequest{}
 		var span spanAt
 		var seat seatAt
-		err := rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, (*flag)(&req.Force), &span, enumAt[v1.Shape]{&req.Shape}, &seat, enumAt[v1.PlanProfile]{&req.Profile})
+		err := rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, &span, enumAt[v1.Shape]{&req.Shape}, &seat, enumAt[v1.PlanProfile]{&req.Profile})
 		req.Span, req.Seat = span.ids, seat.s
 		return req, err
 	}, id)

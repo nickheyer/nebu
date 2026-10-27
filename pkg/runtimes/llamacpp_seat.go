@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -27,9 +28,28 @@ const (
 	factDirectIO    = "direct_io"
 	// Whether the build takes the flag that renders chat templates with tools
 	factJinja = "jinja"
-	// Speculative methods the build's --spec-type takes, comma separated
-	factSpecTypes = "spec_types"
 )
+
+// The spellings each flag has had across builds, newest first, what the help probe looks for
+var llamaFlags = map[string][]string{
+	factRPCFlag:     {"--rpc"},
+	factDraftDevice: {"--spec-draft-device", "--device-draft"},
+	factDraftModel:  {"--spec-draft-model", "--model-draft"},
+	factDraftMax:    {"--spec-draft-n-max", "--draft-max"},
+	factSlotSave:    {"--slot-save-path"},
+	factFitFlag:     {"--fit"},
+	factSlotsFlag:   {"--slots"},
+	factDirectIO:    {"--load-mode", "--direct-io"},
+	factJinja:       {"--jinja"},
+}
+
+// A flag as the install's help spelled it, the newest spelling when the help was not read
+func flagOf(in *v1.Install, key string) string {
+	if f := strings.TrimSpace(in.GetFacts()[key]); f != "" {
+		return f
+	}
+	return llamaFlags[key][0]
+}
 
 // The rpc server names ggml ships it under, beside the runtime's own binary
 var rpcServerNames = []string{"rpc-server", "ggml-rpc-server", "llama-rpc-server"}
@@ -47,47 +67,18 @@ func rpcServerCandidates(in Install) []string {
 	return out
 }
 
-// Probes recording which flags this build accepts and whether it ships the rpc server. Direct
-// reads were --direct-io before llama.cpp folded them into --load-mode dio, so both are looked for
+// Probes recording how this build spells each flag and whether it ships the rpc server
 func llamaShapeProbes() []Probe {
-	help := []string{"--help"}
-	return []Probe{
-		{Key: factRPC, Files: rpcServerCandidates},
-		flagProbe(factRPCFlag, help, "--rpc"),
-		flagProbe(factDraftDevice, help, "--device-draft", "--spec-draft-device"),
-		flagProbe(factDraftModel, help, "--model-draft", "--spec-draft-model"),
-		flagProbe(factDraftMax, help, "--spec-draft-n-max", "--draft-max"),
-		flagProbe(factSlotSave, help, "--slot-save-path"),
-		flagProbe(factFitFlag, help, "--fit"),
-		flagProbe(factSlotsFlag, help, "--slots"),
-		flagProbe(factDirectIO, help, "--direct-io", "--load-mode"),
-		flagProbe(factJinja, help, "--jinja"),
-		{Key: factSpecTypes, Args: help, Parse: specTypes},
+	out := []Probe{{Key: factRPC, Files: rpcServerCandidates}}
+	keys := make([]string, 0, len(llamaFlags))
+	for key := range llamaFlags {
+		keys = append(keys, key)
 	}
-}
-
-// Methods the help lists after --spec-type, as none,draft-simple or [none|draft-simple] by build
-func specTypes(out string) (string, bool) {
-	for rest := out; ; {
-		i := strings.Index(rest, "--spec-type")
-		if i < 0 {
-			return "", false
-		}
-		rest = rest[i+len("--spec-type"):]
-		fields := strings.Fields(rest)
-		if len(fields) == 0 || !strings.ContainsAny(fields[0], ",|[") {
-			continue
-		}
-		var names []string
-		for _, name := range strings.FieldsFunc(strings.Trim(fields[0], "[]"), func(r rune) bool { return r == ',' || r == '|' }) {
-			if name != "" && strings.Trim(name, "abcdefghijklmnopqrstuvwxyz0123456789-") == "" {
-				names = append(names, name)
-			}
-		}
-		if len(names) > 0 {
-			return strings.Join(names, ","), true
-		}
+	sort.Strings(keys)
+	for _, key := range keys {
+		out = append(out, flagProbe(key, []string{"--help"}, llamaFlags[key]...))
 	}
+	return out
 }
 
 // The arguments that read weights without the page cache on this build: the flag alone when the
@@ -177,17 +168,11 @@ func (r LlamaCpp) LaunchSeat(in Launch) (*Command, error) {
 		if len(stages) == 0 {
 			return nil, fmt.Errorf("%w: the head of a %s formation has no stage peers", ErrParam, shapeWord(seat.GetShape()))
 		}
-		if !has(in.InstallRecord, factRPCFlag) {
-			return nil, fmt.Errorf("%w: this llama-server does not accept --rpc, so it cannot head a chain", ErrParam)
-		}
 		if seat.GetShape() == v1.Shape_SHAPE_DRAFT {
 			return r.draftHead(in, stages, facts)
 		}
 		return r.chainHead(in, stages, facts)
 	case RolePrefill, RoleDecode:
-		if !has(in.InstallRecord, factSlotSave) {
-			return nil, fmt.Errorf("%w: this llama-server does not accept --slot-save-path, so it cannot relay", ErrParam)
-		}
 		if seat.GetSlotDir() == "" {
 			return nil, fmt.Errorf("%w: a relay seat needs a slot directory for its saved caches", ErrParam)
 		}
@@ -198,7 +183,7 @@ func (r LlamaCpp) LaunchSeat(in Launch) (*Command, error) {
 		if err := os.MkdirAll(seat.GetSlotDir(), 0o755); err != nil {
 			return nil, err
 		}
-		cmd.Args = append(cmd.Args, facts[factSlotSave], seat.GetSlotDir())
+		cmd.Args = append(cmd.Args, flagOf(in.InstallRecord, factSlotSave), seat.GetSlotDir())
 		if has(in.InstallRecord, factSlotsFlag) {
 			cmd.Args = append(cmd.Args, facts[factSlotsFlag])
 		}
@@ -350,7 +335,7 @@ func (r LlamaCpp) chainHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 	}
 	// llama-server resolves each --device name as it parses that flag, and the rpc devices exist
 	// only once --rpc has connected to the stages, so the rpc list leads the command line
-	cmd.Args = append([]string{facts[factRPCFlag], strings.Join(addresses, ",")}, cmd.Args...)
+	cmd.Args = append([]string{flagOf(in.InstallRecord, factRPCFlag), strings.Join(addresses, ",")}, cmd.Args...)
 	cmd.Args = append(cmd.Args, "--tensor-split", tensorSplit(split))
 	fitOff(cmd, in, facts)
 	cmd.Params["rpc"] = strings.Join(addresses, ",")
@@ -381,13 +366,10 @@ func layerSpan(from, to uint32, layers int) uint32 {
 	return to - from
 }
 
-// The draft head: the solo command with the draft model on the stage's first RPC device
+// The solo command with the draft model on the stage's first RPC device, drafting plainly unless a method is set
 func (r LlamaCpp) draftHead(in Launch, stages []*v1.SeatPeer, facts map[string]string) (*Command, error) {
 	if in.Draft == "" {
 		return nil, fmt.Errorf("%w: a draft head needs the draft model's weights", ErrParam)
-	}
-	if !has(in.InstallRecord, factDraftDevice) || !has(in.InstallRecord, factDraftModel) {
-		return nil, fmt.Errorf("%w: this llama-server accepts no draft device flag, so it cannot head a draft formation", ErrParam)
 	}
 	names, err := rpcDeviceNames(stages[:1])
 	if err != nil {
@@ -396,19 +378,15 @@ func (r LlamaCpp) draftHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 	stage, device := stages[0], names[0][0]
 	p := in.Params.Clone()
 	p["draft_model"] = ""
-	switch method := p.Str("spec_type"); method {
-	case "draft-simple":
-	case Auto:
+	if p.Str("spec_type") == Auto || p.Str("spec_type") == "" {
 		p["spec_type"] = "draft-simple"
-	default:
-		return nil, fmt.Errorf("%w: a draft formation drafts with draft-simple on the draft model's node, not %s", ErrParam, method)
 	}
 	in.Params = p
 	cmd, err := r.Launch(in)
 	if err != nil {
 		return nil, err
 	}
-	cmd.Args = append(cmd.Args, facts[factRPCFlag], stage.GetAddress(), facts[factDraftModel], in.Draft, facts[factDraftDevice], device)
+	cmd.Args = append(cmd.Args, flagOf(in.InstallRecord, factRPCFlag), stage.GetAddress(), flagOf(in.InstallRecord, factDraftModel), in.Draft, flagOf(in.InstallRecord, factDraftDevice), device)
 	fitOff(cmd, in, facts)
 	cmd.Params["rpc"] = stage.GetAddress()
 	cmd.Params["draft_model"] = in.Draft

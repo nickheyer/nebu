@@ -13,8 +13,6 @@ export interface RunSpec {
   name?: string;
   params?: Record<string, string>;
   slotId?: string;
-  // Override the plan refusal and repeat preparation.
-  force?: boolean;
   // Mesh nodes the run may use, which makes it a formation, with the shape and profile the planner takes
   span?: string[];
   shape?: Shape;

@@ -171,10 +171,9 @@ func (memoryProbe) Description() string               { return "devices and pool
 func (memoryProbe) Runs(string, string) bool          { return true }
 func (p memoryProbe) Run(context.Context) host.Result { return p.res }
 
-// A seat launches only when every device the plan names still has room for the bytes the plan
-// puts on it, and the host pool for what the plan keeps in host memory; a forced run launches past
-// the refusal
-func TestSeatRefusedWithoutRoom(t *testing.T) {
+// A seat launches when the devices and host pools its plan names exist on this node, whatever
+// room they have left, the runtime judging the memory
+func TestSeatPlanNamesThisNode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	n := newSeatNode(t, ctx)
@@ -189,15 +188,7 @@ func TestSeatRefusedWithoutRoom(t *testing.T) {
 	}}}, nil, time.Minute)
 	run := seatRun(runtimes.RoleStage, 1, false, n.dir)
 	run.Seat.Devices, run.Seat.DeviceBytes, run.Seat.DeviceLayers = []string{"other/gpu9", "gpu0"}, []uint64{20 << 30, 9 << 30}, []uint32{10, 5}
-	if _, _, err := m.Run(ctx, run); err == nil || !strings.Contains(err.Error(), "puts 9.0 GiB on small gpu of this node, 1.0 GiB over the 8.0 GiB free on it under the runtime's margin") {
-		t.Fatalf("the device lacks room: %v", err)
-	}
-	run.Seat.DeviceBytes[1] = 7 << 30
-	run.Seat.Memory = &v1.MemoryPlan{Pools: []*v1.PoolUsage{{PoolId: "host", Kind: v1.PoolKind_POOL_KIND_HOST, UsedBytes: 40 << 30}}}
-	if _, _, err := m.Run(ctx, run); err == nil || !strings.Contains(err.Error(), "puts 40.0 GiB on host memory of this node, 8.0 GiB over the 32.0 GiB") {
-		t.Fatalf("the host lacks room: %v", err)
-	}
-	run.Seat.Memory.Pools[0].PoolId = "elsewhere"
+	run.Seat.Memory = &v1.MemoryPlan{Pools: []*v1.PoolUsage{{PoolId: "elsewhere", Kind: v1.PoolKind_POOL_KIND_HOST, UsedBytes: 40 << 30}}}
 	if _, _, err := m.Run(ctx, run); err == nil || !strings.Contains(err.Error(), "host pool elsewhere, which this node's profile does not list") {
 		t.Fatalf("an unknown pool: %v", err)
 	}
@@ -210,22 +201,11 @@ func TestSeatRefusedWithoutRoom(t *testing.T) {
 	if _, _, err := m.Run(ctx, run); err == nil || !strings.Contains(err.Error(), "lists 2 devices and 1 byte shares") {
 		t.Fatalf("shares short: %v", err)
 	}
-	// Within room on both, the seat launches
-	run.Seat.DeviceBytes, run.Seat.Memory.Pools[0].UsedBytes = []uint64{20 << 30, 7 << 30}, 30<<30
+	// With the plan naming what this node holds, the seat launches past the room the plan asked for
+	run.Seat.DeviceBytes = []uint64{20 << 30, 9 << 30}
 	in, _, err := m.Run(ctx, run)
 	if err != nil {
 		t.Fatal(err)
-	}
-	waitState(t, m, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
-	if _, err := m.Stop(ctx, in.GetId()); err != nil {
-		t.Fatal(err)
-	}
-	waitState(t, m, in.GetId(), v1.InstanceState_INSTANCE_STATE_STOPPED)
-	// Forced, a seat launches past the refusal
-	run.Name, run.Force, run.Seat.DeviceBytes[1] = "chain/forced", true, 9<<30
-	in, _, err = m.Run(ctx, run)
-	if err != nil {
-		t.Fatalf("forced: %v", err)
 	}
 	waitState(t, m, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
 	if _, err := m.Stop(ctx, in.GetId()); err != nil {

@@ -294,9 +294,6 @@ func (m *Manager) draft(ctx context.Context, params map[string]string, rt runtim
 	}
 	for _, c := range append(append([]*v1.StoredModel{}, companions...), target) {
 		if c.GetSourceId() == source && c.GetRepo() == repo && c.GetGroup() == group {
-			if c == target {
-				return nil, fmt.Errorf("%w: draft_model names the target itself, %s %s", ErrFormation, repo, group)
-			}
 			return c, nil
 		}
 	}

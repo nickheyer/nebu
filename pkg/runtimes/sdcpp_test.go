@@ -105,18 +105,20 @@ func TestSDCppLaunch(t *testing.T) {
 	if !strings.Contains(line, "--model /store/sd_xl_base_1.0.safetensors") || strings.Contains(line, "--diffusion-model") || !strings.Contains(line, "--backend cpu") || cmd.Env["CUDA_VISIBLE_DEVICES"] != "" {
 		t.Fatalf("bundled launch %s %v", line, cmd.Env)
 	}
-	// Reject unsupported layouts and placement.
-	if _, err := rt.Launch(Launch{Params: params, Artifacts: map[string]string{"weights": "/store/model-00001-of-00003.safetensors", "prepared_dir": prepared}, Descriptor: sdDescriptor("flux", false, false)}); err == nil {
-		t.Fatal("shards should be refused")
+	// Shards without an index, a component, and an accelerator backend in host memory all launch as set, sd-server judging them
+	cmd, err = rt.Launch(Launch{Params: params, Artifacts: map[string]string{"weights": "/store/model-00001-of-00003.safetensors", "prepared_dir": prepared}, Descriptor: sdDescriptor("flux", false, false)})
+	if err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--diffusion-model /store/model-00001-of-00003.safetensors") {
+		t.Fatalf("a shard without an index passes as given: %v %v", cmd, err)
 	}
 	part := sdDescriptor("vae", false, false)
 	part.Kind = v1.ModelKind_MODEL_KIND_COMPONENT
-	if _, err := rt.Launch(Launch{Name: "ae", Params: params, Artifacts: map[string]string{"weights": "/store/ae.safetensors", "prepared_dir": prepared}, Descriptor: part}); err == nil || !strings.Contains(err.Error(), "a VAE") {
-		t.Fatalf("a component should be refused: %v", err)
+	if _, err := rt.Launch(Launch{Name: "ae", Params: params, Artifacts: map[string]string{"weights": "/store/ae.safetensors", "prepared_dir": prepared}, Descriptor: part}); err != nil {
+		t.Fatalf("a component launches: %v", err)
 	}
 	params["backend"] = "cuda0"
-	if _, err := rt.Launch(Launch{Params: params, Artifacts: map[string]string{"weights": "/w.gguf", "prepared_dir": prepared}, Descriptor: sdDescriptor("flux", false, false), Placement: v1.Placement_PLACEMENT_HOST}); err == nil {
-		t.Fatal("an accelerator backend in host memory should be refused")
+	cmd, err = rt.Launch(Launch{Params: params, Artifacts: map[string]string{"weights": "/w.gguf", "prepared_dir": prepared}, Descriptor: sdDescriptor("flux", false, false), Placement: v1.Placement_PLACEMENT_HOST})
+	if err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--backend cuda0") || cmd.Env["CUDA_VISIBLE_DEVICES"] != "" {
+		t.Fatalf("a set backend stays set with accelerators hidden: %v %v", cmd, err)
 	}
 	if _, err := rt.Launch(Launch{Params: params, Artifacts: map[string]string{"weights": "/w.gguf"}, Descriptor: sdDescriptor("flux", false, false)}); err == nil {
 		t.Fatal("no prepared directory should be refused")
@@ -221,7 +223,7 @@ func TestSDCppPolicySolvesCompanions(t *testing.T) {
 	if !qs.Params.IsAuto("vae") {
 		t.Fatal("wan's vae is not qwen image's")
 	}
-	// Missing encoders reject launch with source information.
+	// Missing encoders warn with source information
 	bare := &estimate.Scope{Descriptor: sdDescriptor("wan", false, false), Params: params.Clone(), Companions: companions[:2], Repo: "Comfy-Org/Wan_2.2"}
 	rt.Policy().Solve(bare)
 	if _, refusal := rt.Policy().States(bare); !strings.Contains(refusal, "t5xxl") || !strings.Contains(refusal, "UMT5-XXL") || !strings.Contains(refusal, "city96/umt5-xxl-encoder-gguf") || strings.Contains(refusal, "vae (") || strings.Contains(refusal, "high_noise_model") {
@@ -230,20 +232,20 @@ func TestSDCppPolicySolvesCompanions(t *testing.T) {
 	if missing := sdMissing(bare); len(missing) != 1 || missing[0].Param != "t5xxl" || missing[0].Slot != "text_encoder.t5" {
 		t.Fatalf("missing %+v", missing)
 	}
-	// Bundled checkpoints need no companions. Standalone components cannot run.
+	// Bundled checkpoints need no companions, and a standalone component plans without a word
 	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: sdDescriptor("sdxl", true, false), Params: params.Clone()}); refusal != "" {
 		t.Fatalf("sdxl bundles everything: %s", refusal)
 	}
 	part := sdDescriptor("t5", false, false)
 	part.Kind = v1.ModelKind_MODEL_KIND_COMPONENT
-	if _, refusal := rt.Policy().States(&estimate.Scope{Descriptor: part, Params: params.Clone()}); !strings.Contains(refusal, "T5 text encoder") {
-		t.Fatalf("component refusal %q", refusal)
+	if _, warning := rt.Policy().States(&estimate.Scope{Descriptor: part, Params: params.Clone()}); warning != "" {
+		t.Fatalf("component warning %q", warning)
 	}
 }
 
 // A denoiser whose tensor names nebu did not identify launches, sd-server judging it, and the
 // plan says so.
-func TestSDCppLaunchForce(t *testing.T) {
+func TestSDCppLaunchUndetectedFamily(t *testing.T) {
 	rt := SDCpp{}
 	prepared := t.TempDir()
 	params, err := Resolve(rt, map[string]string{"vae": "/store/qwen_image_2.1_vae_bf16.safetensors", "llm": "/store/qwen3vl_8b_bf16.safetensors"})
@@ -258,11 +260,11 @@ func TestSDCppLaunchForce(t *testing.T) {
 	}
 	cmd, err := rt.Launch(launch)
 	if err != nil {
-		t.Fatalf("force launches: %v", err)
+		t.Fatalf("launches: %v", err)
 	}
 	joined := strings.Join(cmd.Args, " ")
 	if !strings.Contains(joined, "--diffusion-model /store/q8.gguf") || !strings.Contains(joined, "--vae /store/qwen_image_2.1_vae_bf16.safetensors") || !strings.Contains(joined, "--llm /store/qwen3vl_8b_bf16.safetensors") {
-		t.Fatalf("forced args %q", joined)
+		t.Fatalf("args %q", joined)
 	}
 }
 
@@ -313,8 +315,8 @@ func TestSDCppHiresUpscaler(t *testing.T) {
 		t.Fatalf("refusal %q", refusal)
 	}
 	launch := Launch{Name: "sdxl", Params: params, Artifacts: map[string]string{"weights": "/store/sd_xl_base_1.0.safetensors", "prepared_dir": t.TempDir()}, Install: Install{Path: "/bin/sd-server"}, Descriptor: sdDescriptor("sdxl", true, false)}
-	if _, err := rt.Launch(launch); err == nil || !strings.Contains(err.Error(), "RealESRGAN_x4plus") {
-		t.Fatalf("launch without the upscaler stored: %v", err)
+	if cmd, err := rt.Launch(launch); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--hires-upscaler RealESRGAN_x4plus") {
+		t.Fatalf("launch without the upscaler stored passes the name as given: %v %v", cmd, err)
 	}
 	launch.Stored = []*v1.StoredModel{esrgan}
 	cmd, err := rt.Launch(launch)
@@ -448,7 +450,7 @@ func TestRuntimeBits(t *testing.T) {
 }
 
 // Sharded companions load through their index and count every shard's bytes. Shards without an
-// index cannot load, and the refusal says so instead of loading one shard.
+// index stay unresolved, and the plan says so
 func TestSDCppShardedCompanions(t *testing.T) {
 	rt := SDCpp{}
 	params, _ := Resolve(rt, nil)
@@ -504,13 +506,19 @@ func TestSDCppShardedCompanions(t *testing.T) {
 	if n := companionBytes(blueprint.SlotVAE, pair); n != pair.GetBytes() {
 		t.Fatalf("unloadable groups count their stored size, got %d", n)
 	}
-	// Sharded adapters cannot lay out as one link.
+	// An adapter group loading through no one file lays out every file it holds
 	lora := &v1.StoredModel{Repo: "x/loras", Group: "split", Descriptor_: &v1.Descriptor{Architecture: "lora", Kind: v1.ModelKind_MODEL_KIND_COMPONENT}, Artifacts: []*v1.StoredArtifact{
 		file("split-00001-of-00002.safetensors", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS, 1),
 		file("split-00002-of-00002.safetensors", v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS, 1),
 	}}
-	if _, err := linkDir(t.TempDir(), "loras", []*v1.StoredModel{lora}, "lora"); err == nil || !strings.Contains(err.Error(), "x/loras/split is split into 2 shards") {
+	dir, err := linkDir(t.TempDir(), "loras", []*v1.StoredModel{lora}, "lora")
+	if err != nil {
 		t.Fatalf("link %v", err)
+	}
+	for _, name := range []string{"split-1.safetensors", "split-2.safetensors"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("every file links: %v", err)
+		}
 	}
 }
 

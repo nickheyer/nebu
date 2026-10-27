@@ -135,19 +135,12 @@ message EstimateRequest {
   bool free = 8;
 }
 
-// Disabled parameter choice and reason.
-message DisabledChoice {
-  string value = 1;
-  string message = 2;
-}
-
-// Parameter bounds and disabled choices for the current model, host, and settings.
+// Parameter bounds for the current model, host, and settings.
 message ParamState {
   string name = 1;
   double min = 2;
   double max = 3;
   double step = 4;
-  repeated DisabledChoice disabled = 5;
 }
 
 // Resolved blueprint dependency.
@@ -183,8 +176,7 @@ message EstimateResponse {
   MemoryPlan plan = 1;
   Descriptor descriptor = 2;
   repeated ParamState params = 3;
-  // Launch refusal reason. Empty when allowed.
-  string refusal = 4;
+  string warning = 4;
   // Missing dependencies and their download locations.
   repeated Part missing = 5;
 }

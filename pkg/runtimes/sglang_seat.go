@@ -62,9 +62,6 @@ func (r SGLang) LaunchSeat(in Launch) (*Command, error) {
 	case v1.Shape_SHAPE_REPLICAS:
 		return r.Launch(exposedLaunch(in))
 	case v1.Shape_SHAPE_CHAIN, v1.Shape_SHAPE_LOCKSTEP:
-		if !has(in.InstallRecord, factNNodes) {
-			return nil, fmt.Errorf("%w: this sglang does not accept --nnodes, so it cannot run across nodes", ErrParam)
-		}
 		if _, _, err := rendezvousOf(seat); err != nil {
 			return nil, err
 		}
@@ -103,9 +100,6 @@ func (r SGLang) LaunchSeat(in Launch) (*Command, error) {
 		cmd.Params["dist_init_addr"] = seat.GetRendezvous()
 		return cmd, nil
 	case v1.Shape_SHAPE_RELAY:
-		if !has(in.InstallRecord, factDisaggregation) || !has(in.InstallRecord, factNIXL) {
-			return nil, fmt.Errorf("%w: this sglang has no NIXL disaggregation, so it cannot relay", ErrParam)
-		}
 		if seat.GetAuxPort() == 0 {
 			return nil, fmt.Errorf("%w: a relay seat needs a bootstrap port", ErrParam)
 		}

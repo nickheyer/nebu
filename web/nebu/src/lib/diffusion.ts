@@ -1,7 +1,5 @@
 import { ModelKind, type Descriptor } from '$proto/model_pb';
 import type { StoredModel } from '$proto/store_pb';
-import type { Param } from '$proto/runtime_pb';
-import { ArtifactRole } from '$proto/model_pb';
 import { tail } from './format';
 
 // Normalize header, Diffusers, and stable-diffusion.cpp names to daemon IDs.
@@ -111,40 +109,4 @@ export function pathLabel(value: string): string {
   if (!isStoreRef(value)) return tail(value);
   const [repoPath, group] = value.slice(storeScheme.length).split('#');
   return `${tail(repoPath ?? '')} · ${group || 'weights'}`;
-}
-
-// The draft and MTP head files a stored group holds
-export function draftFiles(m: StoredModel): StoredModel['artifacts'] {
-  return m.artifacts.filter((a) => a.artifact?.role === ArtifactRole.DRAFT);
-}
-
-function hasTokenizer(m: StoredModel): boolean {
-  return m.artifacts.some((a) => a.artifact?.role === ArtifactRole.TOKENIZER && a.artifact.path.endsWith('tokenizer.json'));
-}
-
-// Whether a stored group can supply what a parameter takes. Pipelines supply the parts they
-// bundle in declared subfolders.
-export function picksModel(m: StoredModel, p: Param): boolean {
-  const d = m.descriptor;
-  const arch = partOf(d);
-  switch (p.picks) {
-    case '':
-    case 'model':
-      return true;
-    case 'llm':
-      return d?.kind === ModelKind.LANGUAGE || (d?.kind === ModelKind.COMPONENT && arch === 'llm');
-    case 'projector':
-      return m.artifacts.some((a) => a.artifact?.role === ArtifactRole.PROJECTOR);
-    case 'tokenizer':
-      return hasTokenizer(m);
-    case 'checkpoint':
-      return d?.kind === ModelKind.LANGUAGE && m.formatId === 'safetensors' && m.path !== '';
-    case 'draft':
-      return draftFiles(m).length > 0 || d?.kind === ModelKind.LANGUAGE;
-    case 'diffusion':
-      return d?.kind === ModelKind.DIFFUSION;
-  }
-  if (d?.kind === ModelKind.COMPONENT) return arch === p.picks;
-  const bundled = (d?.metadata['diffusion.slots'] ?? '').split(',');
-  return d?.kind === ModelKind.DIFFUSION && p.slots.some((s) => bundled.includes(s));
 }

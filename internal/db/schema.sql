@@ -79,7 +79,6 @@ CREATE TABLE instance_requests (
   install_id TEXT NOT NULL,
   name TEXT NOT NULL,
   slot_id TEXT NOT NULL DEFAULT '',
-  force INTEGER NOT NULL DEFAULT 0,
   span TEXT NOT NULL DEFAULT '',
   shape TEXT NOT NULL DEFAULT '',
   seat TEXT NOT NULL DEFAULT '',
@@ -299,7 +298,6 @@ CREATE TABLE slot_requests (
   runtime_id TEXT NOT NULL,
   install_id TEXT NOT NULL,
   name TEXT NOT NULL,
-  force INTEGER NOT NULL DEFAULT 0,
   span TEXT NOT NULL DEFAULT '',
   shape TEXT NOT NULL DEFAULT '',
   profile TEXT NOT NULL DEFAULT ''

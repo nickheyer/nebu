@@ -261,6 +261,8 @@ type prepared struct {
 	res        *Reservation
 	params     estimate.Params
 	plan       *v1.MemoryPlan
+	// What the plan left uncounted, logged when the run starts
+	warning string
 	// Other stored models available as companion parts.
 	companions []*v1.StoredModel
 	// The seat block and its role, for a seat of a formation
@@ -339,12 +341,6 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 		return nil, err
 	}
 	req.RuntimeId = rt.ID()
-	if !runtimes.Accepts(rt, stored.GetFormatId(), descriptor.GetKind()) {
-		if descriptor.GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT {
-			return nil, fmt.Errorf("%w: %s is a part loaded beside a diffusion model, not one served on its own", runtimes.ErrParam, stored.GetGroup())
-		}
-		return nil, fmt.Errorf("%w: runtime %s does not serve %s %s models", runtimes.ErrParam, rt.ID(), stored.GetFormatId(), strings.ToLower(strings.TrimPrefix(descriptor.GetKind().String(), "MODEL_KIND_")))
-	}
 	var install *v1.Install
 	if req.GetInstallId() != "" {
 		install, err = m.Installs.Get(ctx, req.GetInstallId())
@@ -390,7 +386,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	p := &prepared{req: req, stored: stored, rt: rt, install: install, name: name, descriptor: descriptor, profile: profile, planned: planProfile, res: res, params: params}
 	p.companions = companions
 	if rt.Policy() != nil {
-		if p.plan, err = m.Inspector.Plan(ctx, rt, descriptor, planProfile, layered, true, res.placement(), stored.GetRepo(), stored, companions, req.GetForce()); err != nil {
+		if p.plan, p.warning, err = m.Inspector.Plan(ctx, rt, descriptor, planProfile, layered, true, res.placement(), stored.GetRepo(), stored, companions); err != nil {
 			return nil, err
 		}
 		for k, v := range p.plan.GetParams() {
@@ -436,7 +432,6 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 		Plan:          plan,
 		Stored:        p.companions,
 		Model:         stored,
-		Force:         req.GetForce(),
 		InstallRecord: install,
 	}
 	var prep *runtimes.Command
@@ -489,8 +484,11 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	prepDir := artifacts["prepared_dir"]
 	prepTimeout := rt.PrepareTimeout()
 	task := m.Tasks.Start(kindRun, "run "+name, map[string]string{"instance": id, "name": name}, func(ctx context.Context, h *tasks.Handle) error {
+		if p.warning != "" {
+			h.Logf("plan: %s", p.warning)
+		}
 		if prep != nil {
-			if err := m.runPrepare(ctx, h, in, prep, install.GetDir(), prepDir, prepTimeout, req.GetForce()); err != nil {
+			if err := m.runPrepare(ctx, h, in, prep, install.GetDir(), prepDir, prepTimeout); err != nil {
 				return err
 			}
 		}
@@ -500,9 +498,9 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	return in.snapshot(), task, nil
 }
 
-func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance, prep *runtimes.Command, dir, prepDir string, timeout time.Duration, force bool) error {
+func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance, prep *runtimes.Command, dir, prepDir string, timeout time.Duration) error {
 	marker := filepath.Join(prepDir, ".prepared")
-	if _, err := os.Stat(marker); err == nil && !force {
+	if _, err := os.Stat(marker); err == nil {
 		h.Logf("prepared earlier at %s", prepDir)
 		return nil
 	}
