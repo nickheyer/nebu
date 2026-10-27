@@ -27,6 +27,7 @@ import (
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/pkg/chattemplate"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/events"
@@ -51,8 +52,8 @@ const (
 	bindHost     = "127.0.0.1"
 	closeTimeout = 30 * time.Second
 	probeTimeout = 2 * time.Second
-	// Combined timeout for both chat template probes.
-	templateTimeout = 2 * time.Minute
+	// Timeout for reading a diffusion runtime's capabilities
+	modesTimeout = 2 * time.Minute
 )
 
 var (
@@ -613,7 +614,7 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 			}
 		}
 	}
-	m.ready(h, in, measurements, m.probeTemplate(ctx, h.Logf, in))
+	m.ready(h, in, measurements, m.readTemplate(ctx, h.Logf, in))
 	return nil
 }
 
@@ -665,32 +666,36 @@ func (m *Manager) replan(ctx context.Context, logf func(string, ...any), in *ins
 	in.update(func(r *v1.Instance) { r.Plan = plan })
 }
 
-// Probes chat template support and logs gateway system message handling.
-func (m *Manager) probeTemplate(ctx context.Context, logf func(string, ...any), in *instance) *v1.TemplateProbe {
+// Reads the chat template from the model's files, a diffusion runtime's modes read instead
+func (m *Manager) readTemplate(ctx context.Context, logf func(string, ...any), in *instance) *v1.ChatTemplate {
 	rec := in.snapshot()
-	// Probe diffusion capabilities and update its routes.
 	if m.Runtimes.API(rec.GetRuntimeId()) == v1.ApiFlavor_API_FLAVOR_SDCPP {
 		m.probeModes(ctx, logf, in)
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, templateTimeout)
-	defer cancel()
-	probe := gateway.ProbeTemplate(ctx, &http.Client{}, rec.GetEndpoint(), m.Runtimes.API(rec.GetRuntimeId()), rec.GetName())
-	switch {
-	case probe.GetError() != "":
-		logf("chat template probe: %s. The gateway preserves system messages", probe.GetError())
-	case probe.GetLateSystem():
-		logf("chat template renders a system message after the first")
-	default:
-		logf("later system message rejected: %s. The gateway merges system messages unless the route overrides it", probe.GetRefusal())
+	var tpl *v1.ChatTemplate
+	if m.Store == nil {
+		tpl = &v1.ChatTemplate{Error: "no store holds the model's files"}
+	} else if stored, err := m.Store.ReadManifest(rec.GetSourceId(), rec.GetRepo(), rec.GetGroup()); err != nil {
+		tpl = &v1.ChatTemplate{Error: "manifest: " + err.Error()}
+	} else {
+		tpl = chattemplate.Inspect(stored)
 	}
-	return probe
+	switch {
+	case tpl.GetError() != "":
+		logf("chat template: %s. Tool definitions pass through as the client sends them", tpl.GetError())
+	case tpl.GetTools() == v1.ToolSupport_TOOL_SUPPORT_NATIVE:
+		logf("chat template %s renders tools", tpl.GetSource())
+	default:
+		logf("chat template %s renders no tools. The gateway writes them into the prompt and parses the calls", tpl.GetSource())
+	}
+	return tpl
 }
 
 // Reads diffusion capabilities for gateway image and video routing.
 func (m *Manager) probeModes(ctx context.Context, logf func(string, ...any), in *instance) {
 	rec := in.snapshot()
-	ctx, cancel := context.WithTimeout(ctx, templateTimeout)
+	ctx, cancel := context.WithTimeout(ctx, modesTimeout)
 	defer cancel()
 	modes, err := gateway.Capabilities(ctx, &http.Client{}, rec.GetEndpoint())
 	if err != nil {
@@ -728,8 +733,8 @@ func (m *Manager) waitReady(ctx context.Context, h *tasks.Handle, in *instance, 
 	return err
 }
 
-// Marks active instances ready and records measurements and template probe results.
-func (m *Manager) ready(h *tasks.Handle, in *instance, measurements []*v1.Measurement, probe *v1.TemplateProbe) {
+// Marks active instances ready and records measurements and the chat template read
+func (m *Manager) ready(h *tasks.Handle, in *instance, measurements []*v1.Measurement, tpl *v1.ChatTemplate) {
 	var rec *v1.Instance
 	in.update(func(r *v1.Instance) {
 		if r.State == v1.InstanceState_INSTANCE_STATE_STARTING {
@@ -737,7 +742,7 @@ func (m *Manager) ready(h *tasks.Handle, in *instance, measurements []*v1.Measur
 			r.ReadyAt = timestamppb.Now()
 		}
 		r.Measurements = mergeMeasurements(r.Measurements, measurements)
-		r.Template = probe
+		r.Template = tpl
 		rec = proto.Clone(r).(*v1.Instance)
 	})
 	for _, ms := range measurements {
@@ -1143,11 +1148,11 @@ func (m *Manager) adopt(ctx context.Context, in *instance) {
 		measurements := in.rt.Measure(proc.Log().Tail(0))
 		in.update(func(r *v1.Instance) { r.Measurements = mergeMeasurements(r.Measurements, measurements) })
 		m.Log.Info("adopted running instance", "name", rec.GetName(), "pid", rec.GetPid(), "endpoint", rec.GetEndpoint())
-		// Probe missing or failed template results asynchronously during recovery.
+		// A template missing or unread before is read again during recovery
 		if rec.GetTemplate() == nil || rec.GetTemplate().GetError() != "" {
 			go func() {
-				probe := m.probeTemplate(ctx, func(format string, args ...any) { m.Log.Info(fmt.Sprintf(format, args...), "name", rec.GetName()) }, in)
-				in.update(func(r *v1.Instance) { r.Template = probe })
+				tpl := m.readTemplate(ctx, func(format string, args ...any) { m.Log.Info(fmt.Sprintf(format, args...), "name", rec.GetName()) }, in)
+				in.update(func(r *v1.Instance) { r.Template = tpl })
 			}()
 		}
 		return
@@ -1163,7 +1168,7 @@ func (m *Manager) adopt(ctx context.Context, in *instance) {
 			return err
 		}
 		proc.Sync()
-		m.ready(h, in, in.rt.Measure(proc.Log().Tail(0)), m.probeTemplate(ctx, h.Logf, in))
+		m.ready(h, in, in.rt.Measure(proc.Log().Tail(0)), m.readTemplate(ctx, h.Logf, in))
 		return nil
 	})
 	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })
@@ -1401,7 +1406,7 @@ func Terminal(s v1.InstanceState) bool {
 }
 
 // Adopts a seat left running: its guard listener comes back on the port peers know, its readiness
-// is checked by its role's health with evidence, a head's template is probed again, and only then
+// is checked by its role's health with evidence, a head's chat template is read again, and only then
 // is it ready
 func (m *Manager) adoptSeat(ctx context.Context, in *instance, proc launch.Handle) {
 	rec := in.snapshot()
@@ -1433,11 +1438,11 @@ func (m *Manager) adoptSeat(ctx context.Context, in *instance, proc launch.Handl
 		if transport != "" {
 			h.Logf("transport %s", transport)
 		}
-		var probe *v1.TemplateProbe
+		var tpl *v1.ChatTemplate
 		if role.Head {
-			probe = m.probeTemplate(ctx, h.Logf, in)
+			tpl = m.readTemplate(ctx, h.Logf, in)
 		}
-		m.ready(h, in, in.rt.Measure(lines), probe)
+		m.ready(h, in, in.rt.Measure(lines), tpl)
 		return nil
 	})
 	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })

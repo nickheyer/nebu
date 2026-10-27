@@ -101,6 +101,11 @@ type tensorEntry struct {
 	offset uint64
 }
 
+// Reads a file's metadata and tensor headers, the tensor data left unread
+func ReadHeader(ra io.ReaderAt, size int64) (map[string]string, []*v1.TensorInfo, error) {
+	return parse(ra, size)
+}
+
 func parse(ra io.ReaderAt, size int64) (map[string]string, []*v1.TensorInfo, error) {
 	cr := newChunkReader(ra, size)
 	var m [4]byte

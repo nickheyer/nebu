@@ -73,7 +73,7 @@ func (x *exchange) serve() int {
 		x.plan = plan
 	}
 	defer x.plan.close()
-	x.ix.Req, x.ix.SystemMode = req, x.g.table.SystemMode(route)
+	x.ix.Req = req
 	changed, err := interceptors.Default.Run(interceptors.Request, x.ix)
 	if err != nil {
 		x.refuse(chat.FailureOf(err))

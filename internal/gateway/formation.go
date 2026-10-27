@@ -51,8 +51,8 @@ func (t *Table) ServeFormation(f *v1.Formation, head *v1.Instance, api v1.ApiFla
 func (t *Table) ServeFormationAs(name string, f *v1.Formation, head *v1.Instance, api v1.ApiFlavor, seats []*v1.RouteSeat, policy *v1.Policy, profile *v1.Profile) *v1.Route {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if probe := head.GetTemplate(); probe != nil {
-		t.templates[head.GetId()] = proto.Clone(probe).(*v1.TemplateProbe)
+	if tpl := head.GetTemplate(); tpl != nil {
+		t.templates[head.GetId()] = proto.Clone(tpl).(*v1.ChatTemplate)
 	} else {
 		delete(t.templates, head.GetId())
 	}

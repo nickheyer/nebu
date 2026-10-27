@@ -368,7 +368,7 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots create")
 	settings, read := slotFlags(fs)
-	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M] [--tool-server REF] [--mutating-tools]")
+	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF] [--mutating-tools]")
 	if err != nil {
 		return err
 	}
@@ -418,8 +418,6 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 			req.Policy.RequestTimeoutMs = settings.Policy.RequestTimeoutMs
 		case "upstream-timeout":
 			req.Policy.UpstreamTimeoutMs = settings.Policy.UpstreamTimeoutMs
-		case "system-messages":
-			req.Profile.SystemMessages = settings.Profile.SystemMessages
 		case "tool-server":
 			req.Profile.ToolServers = settings.Profile.ToolServers
 		case "mutating-tools":
@@ -483,15 +481,10 @@ func policyFlags(fs *flag.FlagSet) (*v1.Policy, func() error) {
 // Defines profile flags and returns a function to populate the profile.
 func profileFlags(fs *flag.FlagSet) (*v1.Profile, func() error) {
 	p := &v1.Profile{}
-	mode := fs.String("system-messages", "", "later system messages: keep, merge, user, or auto (use template probe)")
 	var servers multi
 	fs.Var(&servers, "tool-server", "tool server every request on the route gets, by name or node/name for a member's, repeatable")
 	mutating := fs.Bool("mutating-tools", false, "offer the tool servers' mutating tools too, read only tools alone otherwise")
 	return p, func() error {
-		var err error
-		if p.SystemMessages, err = parseSystemMessages(*mode); err != nil {
-			return err
-		}
 		p.ToolServers = nil
 		for _, ref := range servers {
 			if ref = strings.TrimSpace(ref); ref != "" {
@@ -503,26 +496,9 @@ func profileFlags(fs *flag.FlagSet) (*v1.Profile, func() error) {
 	}
 }
 
-func parseSystemMessages(s string) (v1.SystemMessages, error) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "", "auto":
-		return v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED, nil
-	case "keep":
-		return v1.SystemMessages_SYSTEM_MESSAGES_KEEP, nil
-	case "merge":
-		return v1.SystemMessages_SYSTEM_MESSAGES_MERGE, nil
-	case "user":
-		return v1.SystemMessages_SYSTEM_MESSAGES_USER, nil
-	}
-	return v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED, fmt.Errorf("system-messages: %q is not auto, keep, merge, or user", s)
-}
-
 // Summarizes a profile, or returns a dash when it inherits instance settings.
 func profileText(p *v1.Profile) string {
 	var parts []string
-	if p.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
-		parts = append(parts, "system-messages "+text.Enum(p.GetSystemMessages()))
-	}
 	if len(p.GetToolServers()) > 0 {
 		parts = append(parts, "tool-servers "+strings.Join(p.GetToolServers(), ","))
 	}
@@ -535,17 +511,17 @@ func profileText(p *v1.Profile) string {
 	return strings.Join(parts, " ")
 }
 
-// Summarizes the chat template probe.
-func templateText(tp *v1.TemplateProbe) string {
+// Summarizes the chat template an instance read from its model's files
+func templateText(tp *v1.ChatTemplate) string {
 	switch {
 	case tp == nil:
-		return "not probed"
+		return "not read"
 	case tp.GetError() != "":
-		return "probe failed: " + tp.GetError()
-	case tp.GetLateSystem():
-		return "renders a system message after the first"
+		return "not read: " + tp.GetError()
+	case tp.GetTools() == v1.ToolSupport_TOOL_SUPPORT_NATIVE:
+		return tp.GetSource() + ", renders tools"
 	}
-	return "refuses a system message after the first: " + tp.GetRefusal()
+	return tp.GetSource() + ", renders no tools, so the gateway writes them into the prompt"
 }
 
 func parseMillis(s string) (uint32, error) {
@@ -704,7 +680,7 @@ func runRoutesAdd(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("routes add")
 	policy, limits := policyFlags(fs)
 	profile, readProfile := profileFlags(fs)
-	positional, err := e.parse(fs, args, 2, 2, "routes add <name> <slot|instance> [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--system-messages M] [--tool-server REF] [--mutating-tools]")
+	positional, err := e.parse(fs, args, 2, 2, "routes add <name> <slot|instance> [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF] [--mutating-tools]")
 	if err != nil {
 		return err
 	}

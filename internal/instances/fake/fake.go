@@ -1,6 +1,6 @@
 // Package fake is a runtime and a launcher for tests of the seat and formation lifecycle: seats
 // are real processes with fake servers beside them, so adoption by pid, hello checks, HTTP health,
-// guard listeners, template probes, and relay handoffs all run without a model.
+// guard listeners, chat template reads, and relay handoffs all run without a model.
 package fake
 
 import (

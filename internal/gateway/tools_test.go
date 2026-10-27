@@ -1016,7 +1016,7 @@ func TestEmulated(t *testing.T) {
 		chatAnswer(w, "Checking.\n<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"city\": \"Portland\"}}\n</tool_call>")
 	})
 	g, table, base := toolGateway(t, model)
-	table.Serve("m", &v1.Instance{Id: "i1", Endpoint: model.URL, Name: "m", Template: &v1.TemplateProbe{Tools: v1.ToolSupport_TOOL_SUPPORT_EMULATED}}, v1.ApiFlavor_API_FLAVOR_OPENAI, "", nil, nil)
+	table.Serve("m", &v1.Instance{Id: "i1", Endpoint: model.URL, Name: "m", Template: &v1.ChatTemplate{Source: "chat_template.jinja", Tools: v1.ToolSupport_TOOL_SUPPORT_EMULATED}}, v1.ApiFlavor_API_FLAVOR_OPENAI, "", nil, nil)
 	if route, _ := table.Lookup("m"); route.GetTools() != v1.ToolSupport_TOOL_SUPPORT_EMULATED {
 		t.Fatalf("route tools %v", route.GetTools())
 	}
@@ -1085,39 +1085,16 @@ func TestEmulated(t *testing.T) {
 	}
 }
 
-// The template probe reports whether a runtime takes tools, and names its refusal otherwise
-func TestProbeTemplateTools(t *testing.T) {
-	refusing := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
-		if _, has := body["tools"]; has {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "tools need --jinja"}})
-			return
-		}
-		chatAnswer(w, "ok")
-	})
-	probe := ProbeTemplate(context.Background(), &http.Client{}, refusing.URL, v1.ApiFlavor_API_FLAVOR_OPENAI, "m")
-	if probe.GetError() != "" || !probe.GetLateSystem() || probe.GetTools() != v1.ToolSupport_TOOL_SUPPORT_EMULATED || probe.GetToolsRefusal() != "tools need --jinja" {
-		t.Fatalf("probe %v", probe)
-	}
-	taking := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "ok") })
-	probe = ProbeTemplate(context.Background(), &http.Client{}, taking.URL, v1.ApiFlavor_API_FLAVOR_OPENAI, "m")
-	if probe.GetTools() != v1.ToolSupport_TOOL_SUPPORT_NATIVE || probe.GetToolsRefusal() != "" {
-		t.Fatalf("probe %v", probe)
-	}
-	if calls := taking.count(); calls != 3 {
-		t.Fatalf("%d probe requests", calls)
-	}
-}
-
 // Profiles merge their tool servers the way they merge the rest: an alias naming any replaces
 // the slot's, an alias naming none inherits them
 func TestEffectiveProfileTools(t *testing.T) {
-	slot := &v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_KEEP, ToolServers: []string{"web"}, MutatingTools: true}
-	got := EffectiveProfile(&v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_MERGE}, slot)
-	if strings.Join(got.GetToolServers(), ",") != "web" || !got.GetMutatingTools() || got.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_MERGE {
+	slot := &v1.Profile{ToolServers: []string{"web"}, MutatingTools: true}
+	got := EffectiveProfile(&v1.Profile{}, slot)
+	if strings.Join(got.GetToolServers(), ",") != "web" || !got.GetMutatingTools() {
 		t.Fatalf("inherited %v", got)
 	}
 	got = EffectiveProfile(&v1.Profile{ToolServers: []string{"fs"}}, slot)
-	if strings.Join(got.GetToolServers(), ",") != "fs" || got.GetMutatingTools() || got.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_KEEP {
+	if strings.Join(got.GetToolServers(), ",") != "fs" || got.GetMutatingTools() {
 		t.Fatalf("replaced %v", got)
 	}
 	if !ProfileSet(&v1.Profile{MutatingTools: true}) || ProfileSet(&v1.Profile{}) {

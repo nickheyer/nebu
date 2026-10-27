@@ -1,5 +1,5 @@
-import { SystemMessages, type Policy, type Profile } from '$proto/gateway_pb';
-import { ToolSupport, type TemplateProbe } from '$proto/instance_pb';
+import type { Policy, Profile } from '$proto/gateway_pb';
+import { ToolSupport, type ChatTemplate } from '$proto/instance_pb';
 import { attachmentText } from './tools';
 
 // Use the page's hostname for wildcard listener addresses.
@@ -135,24 +135,13 @@ export function policyCount(f: PolicyFields): number {
   return [f.maxInFlight, f.rps, f.burst, f.timeout, f.upstream].filter((v) => v.trim()).length;
 }
 
-export const systemMessageItems: { value: string; label: string }[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'keep', label: 'Keep' },
-  { value: 'merge', label: 'Merge into first' },
-  { value: 'user', label: 'As user turns' }
-];
-
-const modeOf: Record<string, SystemMessages> = { keep: SystemMessages.KEEP, merge: SystemMessages.MERGE, user: SystemMessages.USER };
-
 export interface ProfileFields {
-  systemMessages: string;
   toolServers: string[];
   mutatingTools: boolean;
 }
 
 export function profileFields(p: Profile | undefined): ProfileFields {
   return {
-    systemMessages: Object.entries(modeOf).find(([, m]) => m === p?.systemMessages)?.[0] ?? 'auto',
     toolServers: [...(p?.toolServers ?? [])],
     mutatingTools: p?.mutatingTools ?? false
   };
@@ -160,49 +149,40 @@ export function profileFields(p: Profile | undefined): ProfileFields {
 
 export function profileFrom(f: ProfileFields): Profile {
   return {
-    systemMessages: modeOf[f.systemMessages] ?? SystemMessages.UNSPECIFIED,
     toolServers: [...f.toolServers],
     mutatingTools: f.toolServers.length ? f.mutatingTools : false
   } as Profile;
 }
 
-const modeLabel = (mode: string) => systemMessageItems.find((i) => i.value === mode)?.label.toLowerCase() ?? mode;
-
-function systemText(mode: string, template?: TemplateProbe): string {
-  if (mode !== 'auto') return `System messages ${modeLabel(mode)}`;
-  if (!template) return 'System messages auto';
-  if (template.error) return 'System messages kept';
-  return template.lateSystem ? 'System messages kept' : 'System messages merged';
-}
-
-export function profileText(p: Profile | undefined, template?: TemplateProbe): string {
+export function profileText(p: Profile | undefined, template?: ChatTemplate): string {
   const f = profileFields(p);
-  const parts = [systemText(f.systemMessages, template)];
+  const parts: string[] = [];
   if (template?.tools === ToolSupport.EMULATED) parts.push('Tools emulated');
   const tools = attachmentText(f.toolServers, f.mutatingTools);
   if (tools) parts.push(tools);
-  return parts.join(' · ');
+  return parts.length ? parts.join(' · ') : 'No tool servers';
 }
 
-export function templateText(t: TemplateProbe | undefined): string {
-  if (!t) return 'Not probed';
-  if (t.error) return `Probe failed: ${t.error}`;
-  return t.lateSystem ? 'Supports later system messages' : `Later system messages are unsupported: ${t.refusal}`;
+// Where the instance read its chat template, or why it read none
+export function templateText(t: ChatTemplate | undefined): string {
+  if (!t) return 'Not read';
+  if (t.error) return `Not read: ${t.error}`;
+  return `Read from ${t.source}`;
 }
 
-// How a runtime takes tools, as the probe found
-export function toolSupportText(t: TemplateProbe | undefined, api?: number, sdcpp?: number): string {
+// How the gateway offers tools, by what the chat template renders
+export function toolSupportText(t: ChatTemplate | undefined, api?: number, sdcpp?: number): string {
   if (api !== undefined && sdcpp !== undefined && api === sdcpp) return 'None, a diffusion model';
-  if (!t || t.error) return 'Not probed, definitions pass through as sent';
+  if (!t || t.error) return 'No template read, definitions pass through as sent';
   switch (t.tools) {
     case ToolSupport.NATIVE:
-      return 'Native, the runtime parses tool calls';
+      return 'Native, the template renders tools and the runtime parses the calls';
     case ToolSupport.EMULATED:
-      return `Emulated, tools in the prompt and calls parsed from the answer: ${t.toolsRefusal}`;
+      return 'Emulated, the template renders no tools, so they go in the prompt and the calls are parsed from the answer';
     case ToolSupport.NONE:
       return 'None';
     default:
-      return 'Not probed, definitions pass through as sent';
+      return 'No template read, definitions pass through as sent';
   }
 }
 

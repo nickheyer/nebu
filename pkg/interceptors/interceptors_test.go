@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/nickheyer/nebu/internal/chat"
-	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 // A request stage guard that records whether it ran
@@ -53,7 +52,7 @@ func TestPinTurnsGuardsOff(t *testing.T) {
 			if tc.header != "" {
 				x.Header.Set(SystemHeader, tc.header)
 			}
-			if _, err := (Chain{System{}, guard{&ran}, Fold{}}).Run(Request, x); err != nil {
+			if _, err := (Chain{System{}, guard{&ran}}).Run(Request, x); err != nil {
 				t.Fatal(err)
 			}
 			if ran != tc.ran || x.Pinned == tc.ran {
@@ -66,15 +65,14 @@ func TestPinTurnsGuardsOff(t *testing.T) {
 	}
 }
 
-// The fold runs on a pinned request, and an inbound run leaves request interceptors alone
-func TestFoldRunsPinned(t *testing.T) {
-	x := &Exchange{Header: http.Header{SystemHeader: {encoded("rules")}}, Pinned: true, SystemMode: v1.SystemMessages_SYSTEM_MESSAGES_USER, Req: &chat.Request{Kind: chat.Chat, Messages: []chat.Message{turn("user", "hi"), turn("system", "late")}}}
-	if changed, err := Default.Run(Inbound, x); err != nil || changed || turns(x.Req) != "user=hi,system=late" {
-		t.Fatalf("inbound run changed %v err %v turns %s", changed, err, turns(x.Req))
+// An inbound run leaves request interceptors alone, which the request run then applies
+func TestInboundLeavesTurns(t *testing.T) {
+	x := &Exchange{Header: http.Header{SystemHeader: {encoded("rules")}}, Req: &chat.Request{Kind: chat.Chat, Messages: []chat.Message{turn("user", "hi"), turn("system", "late")}}}
+	if changed, err := Default.Run(Inbound, x); err != nil || changed || x.Pinned || turns(x.Req) != "user=hi,system=late" {
+		t.Fatalf("inbound run changed %v pinned %v err %v turns %s", changed, x.Pinned, err, turns(x.Req))
 	}
-	x.Header.Del(SystemHeader)
-	if changed, err := Default.Run(Request, x); err != nil || !changed || turns(x.Req) != "user=hi\n\nlate" {
-		t.Fatalf("request run changed %v err %v turns %s", changed, err, turns(x.Req))
+	if changed, err := Default.Run(Request, x); err != nil || !changed || !x.Pinned || turns(x.Req) != "system=rules,user=hi" {
+		t.Fatalf("request run changed %v pinned %v err %v turns %s", changed, x.Pinned, err, turns(x.Req))
 	}
 }
 
@@ -133,57 +131,5 @@ func TestSystem(t *testing.T) {
 		if _, err := (System{}).Intercept(x); err == nil || !strings.Contains(err.Error(), SystemHeader) || x.Pinned || turns(x.Req) != "system=a" {
 			t.Fatalf("%s: pinned %v err %v turns %s", name, x.Pinned, err, turns(x.Req))
 		}
-	}
-}
-
-// Merging late system turns with no leading one creates it, and keep mode changes nothing
-func TestFold(t *testing.T) {
-	x := &Exchange{SystemMode: v1.SystemMessages_SYSTEM_MESSAGES_MERGE, Req: &chat.Request{Messages: []chat.Message{turn("user", "hi"), turn("system", "a"), turn("system", "b")}}}
-	if changed, _ := (Fold{}).Intercept(x); !changed || turns(x.Req) != "system=a\n\nb,user=hi" {
-		t.Fatalf("merge changed %v turns %q", changed, turns(x.Req))
-	}
-	x = &Exchange{SystemMode: v1.SystemMessages_SYSTEM_MESSAGES_KEEP, Req: &chat.Request{Messages: []chat.Message{turn("user", "hi"), turn("system", "a")}}}
-	if changed, _ := (Fold{}).Intercept(x); changed || turns(x.Req) != "user=hi,system=a" {
-		t.Fatalf("keep changed %v turns %q", changed, turns(x.Req))
-	}
-}
-
-// User mode joins a late system turn to the user turn before or after it, else keeps it alone
-func TestFoldJoinsUserTurns(t *testing.T) {
-	for name, tc := range map[string]struct {
-		in   []chat.Message
-		want string
-	}{
-		"before":  {[]chat.Message{turn("system", "s"), turn("user", "q"), turn("system", "late")}, "system=s,user=q\n\nlate"},
-		"after":   {[]chat.Message{turn("system", "s"), turn("system", "env"), turn("user", "q")}, "system=s,user=env\n\nq"},
-		"between": {[]chat.Message{turn("user", "q"), turn("assistant", "a"), turn("system", "note"), turn("user", "more")}, "user=q,assistant=a,user=note\n\nmore"},
-		"alone":   {[]chat.Message{turn("user", "q"), turn("assistant", "a"), turn("system", "note")}, "user=q,assistant=a,user=note"},
-		"none":    {[]chat.Message{turn("system", "s"), turn("user", "q")}, "system=s,user=q"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			x := &Exchange{SystemMode: v1.SystemMessages_SYSTEM_MESSAGES_USER, Req: &chat.Request{Messages: tc.in}}
-			changed, err := (Fold{}).Intercept(x)
-			if err != nil || changed != (tc.want != turns(&chat.Request{Messages: tc.in})) || turns(x.Req) != tc.want {
-				t.Fatalf("changed %v err %v turns %q, want %q", changed, err, turns(x.Req), tc.want)
-			}
-		})
-	}
-}
-
-// Developer turns become system turns in every mode, so the route's rule covers them too
-func TestFoldDeveloperTurns(t *testing.T) {
-	for mode, want := range map[v1.SystemMessages]string{
-		v1.SystemMessages_SYSTEM_MESSAGES_KEEP:  "system=a,system=b,user=hi,system=c",
-		v1.SystemMessages_SYSTEM_MESSAGES_MERGE: "system=a\n\nb\n\nc,user=hi",
-		v1.SystemMessages_SYSTEM_MESSAGES_USER:  "system=a,user=b\n\nhi\n\nc",
-	} {
-		x := &Exchange{SystemMode: mode, Req: &chat.Request{Messages: []chat.Message{turn("system", "a"), turn("developer", "b"), turn("user", "hi"), turn("developer", "c")}}}
-		if changed, err := (Fold{}).Intercept(x); err != nil || !changed || turns(x.Req) != want {
-			t.Fatalf("%s: changed %v err %v turns %q, want %q", mode, changed, err, turns(x.Req), want)
-		}
-	}
-	x := &Exchange{SystemMode: v1.SystemMessages_SYSTEM_MESSAGES_KEEP, Req: &chat.Request{Messages: []chat.Message{turn("developer", "only"), turn("user", "hi")}}}
-	if changed, err := (Fold{}).Intercept(x); err != nil || !changed || turns(x.Req) != "system=only,user=hi" {
-		t.Fatalf("changed %v err %v turns %q", changed, err, turns(x.Req))
 	}
 }

@@ -148,11 +148,11 @@ CREATE TABLE instance_triage (
   PRIMARY KEY (instance_id, position)
 );
 
--- What the runtime's chat template accepted, one row once the instance was probed
+-- The chat template read from the model's files, one row once the instance read it
 CREATE TABLE instance_templates (
   instance_id TEXT PRIMARY KEY REFERENCES instances (id) ON DELETE CASCADE,
-  late_system INTEGER NOT NULL DEFAULT 0,
-  refusal TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT '',
+  tools TEXT NOT NULL DEFAULT '',
   error TEXT NOT NULL DEFAULT ''
 );
 

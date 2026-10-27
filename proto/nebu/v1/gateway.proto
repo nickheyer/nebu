@@ -31,25 +31,12 @@ message Policy {
   uint32 upstream_timeout_ms = 5;
 }
 
-// Handling of system messages after the first message.
-enum SystemMessages {
-  // Keep if the template probe accepts later system messages, otherwise merge.
-  SYSTEM_MESSAGES_UNSPECIFIED = 0;
-  // Send unchanged.
-  SYSTEM_MESSAGES_KEEP = 1;
-  // Merge into the first system message, creating it if absent.
-  SYSTEM_MESSAGES_MERGE = 2;
-  // Convert to user messages in place.
-  SYSTEM_MESSAGES_USER = 3;
-}
-
 // How a route handles the requests it takes, every unset field inheriting
 message Profile {
-  SystemMessages system_messages = 1;
   // Tool servers whose tools every request on the route gets, by name, node qualified for another member's
-  repeated string tool_servers = 3;
+  repeated string tool_servers = 1;
   // Whether tools that change what they touch are offered too, read only tools alone otherwise
-  bool mutating_tools = 4;
+  bool mutating_tools = 2;
 }
 
 // How a replicas route keeps a conversation on the seat whose cache holds its prefix. It lives

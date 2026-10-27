@@ -124,40 +124,31 @@ func TestPassthroughAsSent(t *testing.T) {
 	}
 }
 
-// Later system turns fold as the route's mode says and the request renders, passing through otherwise
+// Later system turns reach the runtime as the client sent them, passed through or rendered for another protocol
 func TestLaterSystemTurns(t *testing.T) {
 	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "ok") })
-	body := `{"model":"m","messages":[{"role":"system","content":"be brief"},{"role":"user","content":"hi"},{"role":"system","content":"now be long"},{"role":"user","content":"go"}]}`
-	for name, tc := range map[string]struct {
-		mode     v1.SystemMessages
-		roles    string
-		system   string
-		rendered bool
-	}{
-		"keep":  {v1.SystemMessages_SYSTEM_MESSAGES_KEEP, "system,user,system,user", "be brief", false},
-		"merge": {v1.SystemMessages_SYSTEM_MESSAGES_MERGE, "system,user,user", "be brief\n\nnow be long", true},
-		"user":  {v1.SystemMessages_SYSTEM_MESSAGES_USER, "system,user,user", "be brief", true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			g, base := seatGateway(t, model, &v1.Profile{SystemMessages: tc.mode})
-			before := model.count()
-			r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, body, nil)
-			if r.status != http.StatusOK || trace.GetTranslated() || (trace.GetUpstreamRequest() != "") != tc.rendered {
-				t.Fatalf("status %d translated %v upstream %q: %s", r.status, trace.GetTranslated(), trace.GetUpstreamRequest(), r.body)
-			}
-			sent := model.call(before).body
-			if got := strings.Join(rolesSent(sent), ","); got != tc.roles {
-				t.Fatalf("roles %s, want %s", got, tc.roles)
-			}
-			if got := systemSent(t, sent); got != tc.system {
-				t.Fatalf("system %q, want %q", got, tc.system)
-			}
-			if tc.mode == v1.SystemMessages_SYSTEM_MESSAGES_USER {
-				if first := sent["messages"].([]any)[1].(map[string]any)["content"]; first != "hi\n\nnow be long" {
-					t.Fatalf("the late system turn joins the user turn before it: %v", first)
-				}
-			}
-		})
+	g, base := seatGateway(t, model, nil)
+	turns := `[{"role":"system","content":"be brief"},{"role":"user","content":"hi"},{"role":"system","content":"now be long"},{"role":"user","content":"go"}]`
+	r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, `{"model":"m","messages":`+turns+`}`, nil)
+	if r.status != http.StatusOK || trace.GetTranslated() || trace.GetUpstreamRequest() != "" {
+		t.Fatalf("status %d translated %v upstream %q: %s", r.status, trace.GetTranslated(), trace.GetUpstreamRequest(), r.body)
+	}
+	if got := strings.Join(rolesSent(model.call(0).body), ","); got != "system,user,system,user" {
+		t.Fatalf("passed through roles %s", got)
+	}
+	r, trace = ask(t, g, base, http.MethodPost, chat.OllamaChat, `{"model":"m","stream":false,"messages":`+turns+`}`, nil)
+	if r.status != http.StatusOK || !trace.GetTranslated() || trace.GetUpstreamRequest() == "" {
+		t.Fatalf("status %d translated %v upstream %q: %s", r.status, trace.GetTranslated(), trace.GetUpstreamRequest(), r.body)
+	}
+	sent := model.call(1).body
+	if got := strings.Join(rolesSent(sent), ","); got != "system,user,system,user" {
+		t.Fatalf("rendered roles %s", got)
+	}
+	if got := systemSent(t, sent); got != "be brief" {
+		t.Fatalf("system %q", got)
+	}
+	if late := sent["messages"].([]any)[2].(map[string]any)["content"]; late != "now be long" {
+		t.Fatalf("the late system turn stands as sent: %v", late)
 	}
 }
 
@@ -430,16 +421,18 @@ func TestRuntimeIdsAndRetryHeaders(t *testing.T) {
 		}
 		chatAnswer(w, "hi")
 	})
-	g, base := seatGateway(t, model, &v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_MERGE})
-	late := `[{"role":"system","content":"a"},{"role":"user","content":"hi"},{"role":"system","content":"b"}]`
-	r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, `{"model":"m","messages":`+late+`}`, nil)
+	g, base := seatGateway(t, model, nil)
+	// The system prompt header changes the request, so the gateway renders it rather than passing it through
+	rendered := map[string]string{interceptors.SystemHeader: base64.StdEncoding.EncodeToString([]byte("rules"))}
+	turns := `[{"role":"system","content":"a"},{"role":"user","content":"hi"}]`
+	r, trace := ask(t, g, base, http.MethodPost, chat.OpenAIChat, `{"model":"m","messages":`+turns+`}`, rendered)
 	var reply struct {
 		ID string `json:"id"`
 	}
 	if json.Unmarshal(r.body, &reply) != nil || reply.ID != "c1" || trace.GetUpstreamRequest() == "" || trace.GetTranslated() {
 		t.Fatalf("whole id: %s", r.body)
 	}
-	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, `{"model":"m","stream":true,"messages":`+late+`}`, nil)
+	r, _ = ask(t, g, base, http.MethodPost, chat.OpenAIChat, `{"model":"m","stream":true,"messages":`+turns+`}`, rendered)
 	for _, ev := range eventsOf(t, r.body) {
 		if ev["id"] != "c1" {
 			t.Fatalf("stream id: %v", ev)
@@ -474,7 +467,7 @@ func settled(t *testing.T, table *Table, name string) {
 // the runtime itself, and a header that is not base64 is refused before the runtime is asked
 func TestSystemHeader(t *testing.T) {
 	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "ok") })
-	g, base := seatGateway(t, model, &v1.Profile{SystemMessages: v1.SystemMessages_SYSTEM_MESSAGES_USER})
+	g, base := seatGateway(t, model, nil)
 	pinned := "line one\nline two"
 	headers := map[string]string{interceptors.SystemHeader: base64.StdEncoding.EncodeToString([]byte(pinned))}
 	body := `{"model":"m","messages":[{"role":"system","content":"be brief"},{"role":"developer","content":"rules"},{"role":"user","content":"hi"},{"role":"system","content":"now be long"},{"role":"user","content":"go"}]}`

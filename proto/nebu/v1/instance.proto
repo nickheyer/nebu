@@ -37,27 +37,24 @@ message Measurement {
 
 // How a runtime takes tool definitions
 enum ToolSupport {
-  // Not probed, tools pass through as the client sent them
+  // No template was read, tools pass through as the client sent them
   TOOL_SUPPORT_UNSPECIFIED = 0;
-  // The runtime takes tool definitions and parses the calls itself
+  // The template renders tool definitions and the runtime parses the calls
   TOOL_SUPPORT_NATIVE = 1;
-  // The runtime refuses tool definitions, so the gateway writes them into the prompt and parses the calls
+  // The template renders no tools, so the gateway writes them into the prompt and parses the calls
   TOOL_SUPPORT_EMULATED = 2;
   // The model cannot take tools at all
   TOOL_SUPPORT_NONE = 3;
 }
 
-// Chat template support probed with three requests at startup.
-message TemplateProbe {
-  // Whether the template supports later system messages.
-  bool late_system = 1;
-  // Template refusal message. Empty when supported.
-  string refusal = 2;
-  // Probe error. Empty on success.
+// The chat template read from the model's files when the instance starts
+message ChatTemplate {
+  // The file or GGUF metadata key the template was read from
+  string source = 1;
+  // How the gateway offers tools, by whether the template renders them
+  ToolSupport tools = 2;
+  // Why no template was read, empty when one was
   string error = 3;
-  ToolSupport tools = 4;
-  // What the runtime answered a request carrying a tool, empty when it took it
-  string tools_refusal = 5;
 }
 
 // Another seat of the formation a seat talks to, with the address it reaches it at
@@ -153,7 +150,7 @@ message Instance {
   RunRequest request = 21;
   bool desired_running = 22;
   string slot_id = 23;
-  TemplateProbe template = 24;
+  ChatTemplate template = 24;
   // The seat this instance takes in a formation, unset for a solo instance
   SeatSpec seat = 25;
   // Measured from the seat's log: the transport its collective took, rdma or sockets

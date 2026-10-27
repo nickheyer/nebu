@@ -107,7 +107,7 @@ func sampleInstance() *v1.Instance {
 		Measurements:   []*v1.Measurement{{Key: "device.weights", Bytes: 9, Line: "x"}, {Key: "device.used", Bytes: 11}},
 		Request:        &v1.RunRequest{SourceId: "hf", Repo: "org/repo", Group: "Q4", RuntimeId: "llamacpp", Name: "qwen", Params: map[string]string{"n_ctx": "8192"}},
 		DesiredRunning: true,
-		Template:       &v1.TemplateProbe{LateSystem: false, Refusal: "System message must be at the beginning."},
+		Template:       &v1.ChatTemplate{Source: "tokenizer.chat_template", Tools: v1.ToolSupport_TOOL_SUPPORT_NATIVE},
 	}
 }
 
@@ -135,7 +135,7 @@ func TestInstances(t *testing.T) {
 	in.State = v1.InstanceState_INSTANCE_STATE_STOPPED
 	in.DesiredRunning = false
 	in.Triage = nil
-	in.Template = &v1.TemplateProbe{LateSystem: true}
+	in.Template = &v1.ChatTemplate{Error: "no chat template among the model's files"}
 	in.StoppedAt = timestamppb.New(time.Unix(2000, 0))
 	if err := d.PutInstance(ctx, in); err != nil {
 		t.Fatal(err)

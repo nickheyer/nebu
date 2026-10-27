@@ -426,11 +426,11 @@ func (m *Manager) startSeat(ctx context.Context, h *tasks.Handle, in *instance, 
 	} else {
 		go m.watchTransport(in)
 	}
-	var probe *v1.TemplateProbe
+	var tpl *v1.ChatTemplate
 	if role, err := runtimes.RoleOf(in.rt, rec.GetSeat()); err == nil && role.Head {
-		probe = m.probeTemplate(ctx, h.Logf, in)
+		tpl = m.readTemplate(ctx, h.Logf, in)
 	}
-	m.ready(h, in, measurements, probe)
+	m.ready(h, in, measurements, tpl)
 	return nil
 }
 

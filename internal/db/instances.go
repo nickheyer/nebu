@@ -63,7 +63,7 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			return err
 		}
 		if tp := in.GetTemplate(); tp != nil {
-			if err := exec(`INSERT INTO instance_templates (instance_id, late_system, refusal, error) VALUES (?, ?, ?, ?)`, id, boolCol(tp.GetLateSystem()), tp.GetRefusal(), tp.GetError()); err != nil {
+			if err := exec(`INSERT INTO instance_templates (instance_id, source, tools, error) VALUES (?, ?, ?, ?)`, id, tp.GetSource(), enumCol(tp.GetTools()), tp.GetError()); err != nil {
 				return err
 			}
 		}
@@ -234,9 +234,9 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 			h.Fix = fix
 		}
 	}
-	templates, err := list(ctx, d, `SELECT late_system, refusal, error FROM instance_templates WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.TemplateProbe, error) {
-		tp := &v1.TemplateProbe{}
-		return tp, rows.Scan((*flag)(&tp.LateSystem), &tp.Refusal, &tp.Error)
+	templates, err := list(ctx, d, `SELECT source, tools, error FROM instance_templates WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.ChatTemplate, error) {
+		tp := &v1.ChatTemplate{}
+		return tp, rows.Scan(&tp.Source, enumAt[v1.ToolSupport]{&tp.Tools}, &tp.Error)
 	}, id)
 	if err != nil {
 		return err

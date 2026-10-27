@@ -53,8 +53,8 @@ type Table struct {
 	inflight map[string]*atomic.Int32
 	limiters map[string]*rate.Limiter
 	defaults *v1.Policy
-	// Chat template probe results for automatic system message handling
-	templates map[string]*v1.TemplateProbe
+	// The chat template each instance read, for how its routes offer tools
+	templates map[string]*v1.ChatTemplate
 	// Diffusion capabilities per instance, img_gen and vid_gen
 	modes map[string][]string
 	total atomic.Uint64
@@ -70,7 +70,7 @@ func OpenTable(ctx context.Context, store *db.DB, bus *events.Bus, log *slog.Log
 	if log == nil {
 		log = slog.Default()
 	}
-	t := &Table{store: store, events: bus, log: log, routes: map[string]*v1.Route{}, inflight: map[string]*atomic.Int32{}, limiters: map[string]*rate.Limiter{}, templates: map[string]*v1.TemplateProbe{}, modes: map[string][]string{}, dirty: map[string]bool{}}
+	t := &Table{store: store, events: bus, log: log, routes: map[string]*v1.Route{}, inflight: map[string]*atomic.Int32{}, limiters: map[string]*rate.Limiter{}, templates: map[string]*v1.ChatTemplate{}, modes: map[string][]string{}, dirty: map[string]bool{}}
 	if store == nil {
 		return t, nil
 	}
@@ -254,11 +254,11 @@ func (t *Table) SetModes(instanceID string, modes []string) {
 	}
 }
 
-// Maps a name to a ready instance, copying slot policy, profile, and template probe
+// Maps a name to a ready instance, copying slot policy, profile, and chat template
 func (t *Table) Serve(name string, in *v1.Instance, api v1.ApiFlavor, slotID string, policy *v1.Policy, profile *v1.Profile) *v1.Route {
 	t.mu.Lock()
-	if probe := in.GetTemplate(); probe != nil {
-		t.templates[in.GetId()] = proto.Clone(probe).(*v1.TemplateProbe)
+	if tpl := in.GetTemplate(); tpl != nil {
+		t.templates[in.GetId()] = proto.Clone(tpl).(*v1.ChatTemplate)
 	} else {
 		delete(t.templates, in.GetId())
 	}
@@ -266,7 +266,7 @@ func (t *Table) Serve(name string, in *v1.Instance, api v1.ApiFlavor, slotID str
 	return t.Set(name, in.GetId(), slotID, in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), in.GetName(), api, policy, profile)
 }
 
-// How the instance behind a route takes tools, as its probe found, none for a diffusion route
+// How the instance behind a route takes tools, as its chat template renders them, none for a diffusion route
 func (t *Table) ToolSupport(r *v1.Route) v1.ToolSupport {
 	if r.GetApi() == v1.ApiFlavor_API_FLAVOR_SDCPP {
 		return v1.ToolSupport_TOOL_SUPPORT_NONE
@@ -277,23 +277,10 @@ func (t *Table) ToolSupport(r *v1.Route) v1.ToolSupport {
 }
 
 func (t *Table) toolSupportLocked(instanceID string) v1.ToolSupport {
-	if probe, ok := t.templates[instanceID]; ok {
-		return probe.GetTools()
+	if tpl, ok := t.templates[instanceID]; ok {
+		return tpl.GetTools()
 	}
 	return v1.ToolSupport_TOOL_SUPPORT_UNSPECIFIED
-}
-
-// The route's system message mode, merging later ones when the probe found the template rejects them
-func (t *Table) SystemMode(r *v1.Route) v1.SystemMessages {
-	if mode := r.GetProfile().GetSystemMessages(); mode != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
-		return mode
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if probe, ok := t.templates[r.GetInstanceId()]; ok && probe.GetError() == "" && !probe.GetLateSystem() {
-		return v1.SystemMessages_SYSTEM_MESSAGES_MERGE
-	}
-	return v1.SystemMessages_SYSTEM_MESSAGES_KEEP
 }
 
 // Keeps a route pending without an instance

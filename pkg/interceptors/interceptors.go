@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/nickheyer/nebu/internal/chat"
-	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 // Where on a request's way through the gateway an interceptor runs
@@ -25,8 +24,6 @@ type Exchange struct {
 	Header http.Header
 	// The parsed request, set for the request stage
 	Req *chat.Request
-	// How the route handles system turns after the first
-	SystemMode v1.SystemMessages
 	// Whether the gateway keeps no trace, publishes no event, and pins no seat for the request
 	Ghost bool
 	// Whether the gateway attaches no tool server of the route to the request
@@ -48,7 +45,7 @@ type Interceptor interface {
 type Chain []Interceptor
 
 // The gateway's interceptors, the system prompt leading the request stage so its pin turns off the guards after it
-var Default = Chain{Ghost{}, Bare{}, System{}, Fold{}}
+var Default = Chain{Ghost{}, Bare{}, System{}}
 
 // Runs the stage's interceptors in order, answering whether any changed the exchange
 func (c Chain) Run(stage Stage, x *Exchange) (bool, error) {

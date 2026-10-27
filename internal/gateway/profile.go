@@ -16,7 +16,7 @@ func CheckProfile(p *v1.Profile) error {
 
 // Reports whether a profile sets anything, an empty one inheriting everything
 func ProfileSet(p *v1.Profile) bool {
-	return p.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED || len(p.GetToolServers()) > 0 || p.GetMutatingTools()
+	return len(p.GetToolServers()) > 0 || p.GetMutatingTools()
 }
 
 // Merges an alias profile over its slot's, every alias field that is set winning
@@ -24,10 +24,7 @@ func EffectiveProfile(alias, slot *v1.Profile) *v1.Profile {
 	if !ProfileSet(alias) {
 		return slot
 	}
-	out := &v1.Profile{SystemMessages: slot.GetSystemMessages(), ToolServers: append([]string(nil), slot.GetToolServers()...), MutatingTools: slot.GetMutatingTools()}
-	if alias.GetSystemMessages() != v1.SystemMessages_SYSTEM_MESSAGES_UNSPECIFIED {
-		out.SystemMessages = alias.GetSystemMessages()
-	}
+	out := &v1.Profile{ToolServers: append([]string(nil), slot.GetToolServers()...), MutatingTools: slot.GetMutatingTools()}
 	if len(alias.GetToolServers()) > 0 {
 		out.ToolServers, out.MutatingTools = append([]string(nil), alias.GetToolServers()...), alias.GetMutatingTools()
 	}

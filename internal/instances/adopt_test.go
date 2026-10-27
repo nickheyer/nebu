@@ -71,7 +71,15 @@ func newSeatNode(t *testing.T, ctx context.Context) *seatNode {
 	if err := os.WriteFile(weights, []byte("weights"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := blobs.WriteManifest(&v1.StoredModel{SourceId: "src", Repo: "org/model", Group: "q4", FormatId: fake.Format, Path: modelDir, Descriptor_: &v1.Descriptor{Kind: v1.ModelKind_MODEL_KIND_LANGUAGE, Architecture: "fake", Metadata: map[string]string{descriptor.RevisionKey: descriptor.Revision}}, Artifacts: []*v1.StoredArtifact{{Digest: "sha256:m", Path: weights, Artifact: &v1.Artifact{Path: "weights.fake", Role: v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS}}}}); err != nil {
+	template := filepath.Join(modelDir, "chat_template.jinja")
+	if err := os.WriteFile(template, []byte("{%- if tools %}{{ tools | tojson }}{%- endif %}{{ messages }}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	artifacts := []*v1.StoredArtifact{
+		{Digest: "sha256:m", Path: weights, Artifact: &v1.Artifact{Path: "weights.fake", Role: v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS}},
+		{Digest: "sha256:t", Path: template, Artifact: &v1.Artifact{Path: "chat_template.jinja", Role: v1.ArtifactRole_ARTIFACT_ROLE_TEMPLATE}},
+	}
+	if err := blobs.WriteManifest(&v1.StoredModel{SourceId: "src", Repo: "org/model", Group: "q4", FormatId: fake.Format, Path: modelDir, Descriptor_: &v1.Descriptor{Kind: v1.ModelKind_MODEL_KIND_LANGUAGE, Architecture: "fake", Metadata: map[string]string{descriptor.RevisionKey: descriptor.Revision}}, Artifacts: artifacts}); err != nil {
 		t.Fatal(err)
 	}
 	return &seatNode{dir: dir, db: database, store: blobs, launcher: fake.New(), install: install}
@@ -225,8 +233,8 @@ func TestAdoptHeldStageAsksTheConductor(t *testing.T) {
 	}
 }
 
-// A head adopted after a restart is probed for its template again before it is ready
-func TestAdoptHeadProbesTemplate(t *testing.T) {
+// A head reads its chat template from the model's files, asking the runtime nothing, and an adoption after a restart reads it again
+func TestAdoptHeadReadsTemplate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	n := newSeatNode(t, ctx)
@@ -235,11 +243,13 @@ func TestAdoptHeadProbesTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitState(t, first, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
+	launched := waitState(t, first, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
 	proc := n.launcher.Proc("chain/head")
-	probed := proc.Chats.Load()
-	if probed == 0 {
-		t.Fatal("the launch probed the template")
+	if proc.Chats.Load() != 0 {
+		t.Fatal("the launch asked the runtime for a chat")
+	}
+	if tpl := launched.GetTemplate(); tpl.GetSource() != "chat_template.jinja" || tpl.GetTools() != v1.ToolSupport_TOOL_SUPPORT_NATIVE || tpl.GetError() != "" {
+		t.Fatalf("the launch read the template: %v", tpl)
 	}
 	dropGuard(t, first, in.GetId())
 	second := n.manager(t, ctx, nil)
@@ -247,11 +257,11 @@ func TestAdoptHeadProbesTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	adopted := waitState(t, second, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
-	if proc.Chats.Load() <= probed {
-		t.Fatal("the adoption probed the template again")
+	if proc.Chats.Load() != 0 {
+		t.Fatal("the adoption asked the runtime for a chat")
 	}
-	if adopted.GetTemplate() == nil {
-		t.Fatal("the adopted head keeps its template probe")
+	if tpl := adopted.GetTemplate(); tpl.GetSource() != "chat_template.jinja" || tpl.GetTools() != v1.ToolSupport_TOOL_SUPPORT_NATIVE {
+		t.Fatalf("the adopted head keeps its template: %v", tpl)
 	}
 	if _, err := second.Stop(ctx, in.GetId()); err != nil {
 		t.Fatal(err)
