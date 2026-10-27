@@ -8,10 +8,10 @@
 </script>
 
 <div class="flex flex-col gap-4">
-  <Field label="System messages after the first" for="{idPrefix}-system">
+  <Field label="System messages" for="{idPrefix}-system">
     <Select id="{idPrefix}-system" bind:value={fields.systemMessages} items={systemMessageItems} />
   </Field>
-  <Field label="Tool servers" for="{idPrefix}-tools" description="Offered on every request to the route.">
+  <Field label="Tool servers" for="{idPrefix}-tools">
     <div id="{idPrefix}-tools"><ToolServerPicker bind:refs={fields.toolServers} bind:mutating={fields.mutatingTools} /></div>
   </Field>
 </div>

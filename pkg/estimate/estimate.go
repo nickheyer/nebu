@@ -253,8 +253,7 @@ func (p *Policy) Plan(in Input) (*v1.MemoryPlan, error) {
 	return p.plan(in, s)
 }
 
-// Finds the largest allowed context that preserves the minimum context's placement verdict, capped
-// at the trained length.
+// Finds the largest context keeping the floor context's verdict and every weight it put on the device
 func (p *Policy) solveContext(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	lo, hi, step := p.ContextBounds(s)
 	at := func(n int64) (*v1.MemoryPlan, error) {
@@ -262,11 +261,14 @@ func (p *Policy) solveContext(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		ps[p.ContextParam] = n
 		return p.plan(in, &Scope{Descriptor: s.Descriptor, Model: s.Model, Host: s.Host, Params: ps, Companions: s.Companions, Repo: s.Repo, Draft: s.Draft, DraftFamily: s.DraftFamily, Part: s.Part})
 	}
-	best, err := at(lo)
-	if err != nil || best.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO {
-		return best, err
+	floor, err := at(lo)
+	if err != nil || floor.GetVerdict() == v1.FitVerdict_FIT_VERDICT_NO {
+		return floor, err
 	}
-	target := best.GetVerdict()
+	keeps := func(plan *v1.MemoryPlan) bool {
+		return plan.GetVerdict() <= floor.GetVerdict() && holdsDevice(plan, floor)
+	}
+	best := floor
 	steps := (hi - lo) / step
 	l, r := int64(0), steps
 	for l < r {
@@ -275,7 +277,7 @@ func (p *Policy) solveContext(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		if err != nil {
 			return nil, err
 		}
-		if plan.GetVerdict() <= target {
+		if keeps(plan) {
 			best, l = plan, mid
 		} else {
 			r = mid - 1
@@ -283,11 +285,31 @@ func (p *Policy) solveContext(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	}
 	// Also try the ceiling when it falls between increments.
 	if l == steps && lo+steps*step < hi {
-		if plan, err := at(hi); err == nil && plan.GetVerdict() <= target {
+		if plan, err := at(hi); err == nil && keeps(plan) {
 			best = plan
 		}
 	}
 	return best, nil
+}
+
+// Whether a plan keeps on the device at least the weights of every kind the base plan put there
+func holdsDevice(plan, base *v1.MemoryPlan) bool {
+	device := text.Enum(v1.PoolKind_POOL_KIND_DEVICE)
+	on := func(p *v1.MemoryPlan, kind v1.TensorGroupKind) uint64 {
+		var total uint64
+		for _, pl := range p.GetPlacements() {
+			if pl.GetPoolId() == device && pl.GetKind() == kind {
+				total += pl.GetBytes()
+			}
+		}
+		return total
+	}
+	for _, pl := range base.GetPlacements() {
+		if pl.GetPoolId() == device && on(plan, pl.GetKind()) < pl.GetBytes() {
+			return false
+		}
+	}
+	return true
 }
 
 // Smallest, largest, and step of an auto context, scaled by the sequences and never past the trained length

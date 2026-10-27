@@ -16,6 +16,13 @@
 
   // Binary units for memory, decimal for storage.
   export type Units = 'binary' | 'decimal';
+
+  // A line across the bar at a size, such as a budget the bar must stay under
+  export interface Mark {
+    at: bigint | number;
+    label: string;
+    tone?: Tone;
+  }
 </script>
 
 <script lang="ts">
@@ -27,6 +34,7 @@
     units = 'binary',
     figure,
     free,
+    marks = [],
     dense = false,
     class: cls = ''
   }: {
@@ -35,6 +43,7 @@
     units?: Units;
     figure?: 'left' | 'right';
     free?: string;
+    marks?: Mark[];
     dense?: boolean;
     class?: string;
   } = $props();
@@ -104,8 +113,12 @@
   const markers = $derived.by((): Marker[] => {
     const out = layers.filter((l) => l.overlay.markers !== false).flatMap((l) => l.markers);
     if (free && remaining > 0) out.push({ at: pct(scale - reach('right')), text: `${format(remaining)} ${free}`, tone: 'neutral', hollow: true, side: 'left' });
+    for (const m of marks) {
+      if (n(m.at) > 0) out.push({ at: pct(Math.min(n(m.at), scale)), text: `${m.label} ${format(m.at)}`, tone: m.tone ?? 'warn', hollow: true, side: 'right' });
+    }
     return out.sort((a, b) => a.at - b.at);
   });
+  const lines: Record<Tone, string> = { ok: 'bg-ok', warn: 'bg-warn', bad: 'bg-bad', info: 'bg-info', accent: 'bg-accent', neutral: 'bg-fg-muted' };
 
   // Measure markers to avoid overlapping labels.
   let width = $state(0);
@@ -160,6 +173,11 @@
       {#if over > 0}
         <div class="absolute inset-y-0 w-px bg-fg" style="left: {pct(totalN)}%; z-index: {layers.length + 1}" title="{format(total)} total"></div>
       {/if}
+      {#each marks as m, i (i)}
+        {#if n(m.at) > 0}
+          <div class="absolute inset-y-0 w-0.5 {lines[m.tone ?? 'warn']}" style="left: calc({pct(Math.min(n(m.at), scale))}% - 1px); z-index: {layers.length + 2}" title="{m.label} {format(m.at)}"></div>
+        {/if}
+      {/each}
     </div>
     <!-- Reserve marker height even when the bar is empty. -->
     {#if !dense}

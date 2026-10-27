@@ -273,6 +273,38 @@ func TestAutoContextSolvesToTheLargestThatFits(t *testing.T) {
 	}
 }
 
+func TestAutoContextKeepsTheMinimumContextLayers(t *testing.T) {
+	p, params := policy(t, "llamacpp")
+	// Forty layers of 400 MiB on a 12 GiB device: the floor context already spills layers to the host
+	d := descriptor(40, 400*mib, 0)
+	d.Params["n_ctx_train"] = 131072
+	plan, err := p.Plan(input(d, host(12*gib, 64*gib), params))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_PARTIAL {
+		t.Fatalf("verdict %v", plan.GetVerdict())
+	}
+	fixed := params.Clone()
+	fixed["n_ctx"] = int64(4096)
+	floor, err := p.Plan(input(d, host(12*gib, 64*gib), fixed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.GetParams()["n_gpu_layers"] != floor.GetParams()["n_gpu_layers"] {
+		t.Fatalf("auto context traded layers for context: %v against %v at the floor", plan.GetParams(), floor.GetParams())
+	}
+	n, _ := strconv.Atoi(plan.GetParams()["n_ctx"])
+	if n < 4096 || n >= 131072 {
+		t.Fatalf("solved context %d", n)
+	}
+	// Room for every layer grows the context until the cache no longer fits beside them
+	plan, err = p.Plan(input(descriptor(4, 100*mib, 0), host(12*gib, 64*gib), params))
+	if err != nil || plan.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || plan.GetParams()["n_ctx"] != "4096" {
+		t.Fatalf("roomy device: %v %v", plan.GetParams(), err)
+	}
+}
+
 func TestParamStatesAndRefusal(t *testing.T) {
 	p, params := policy(t, "llamacpp")
 	d := descriptor(4, 100*mib, 0)

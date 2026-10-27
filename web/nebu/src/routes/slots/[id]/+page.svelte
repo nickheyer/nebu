@@ -2,7 +2,7 @@
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { tabState } from '$lib/tabs.svelte';
-  import { live, cached, clock, instanceLive, taskFor, deviceName, groupLabel, runtimeName, slotByRef, answersOf, formationLive, nodeName } from '$lib/state.svelte';
+  import { live, cached, clock, instanceLive, taskFor, groupLabel, runtimeName, runtimeStatus, slotByRef, answersOf, formationLive, nodeName, hostGpus, meshGpuGroups, inMesh, type DeviceGroup } from '$lib/state.svelte';
   import { shapeLabel, seatLabel } from '$lib/mesh';
   import { FormationState } from '$proto/mesh_pb';
   import FormationLog from '$lib/components/FormationLog.svelte';
@@ -27,6 +27,7 @@
   import Stat from '$lib/components/ui/Stat.svelte';
   import ParamList from '$lib/components/ui/ParamList.svelte';
   import PlanView from '$lib/components/PlanView.svelte';
+  import DeviceRows from '$lib/components/DeviceRows.svelte';
   import InstanceLog from '$lib/components/InstanceLog.svelte';
   import TaskChip from '$lib/components/TaskChip.svelte';
   import SlotForm from '$lib/components/SlotForm.svelte';
@@ -53,15 +54,15 @@
   const answering = $derived(route?.state === RouteState.READY);
   const swapTask = $derived(slot ? taskFor('swap', { slot: slot.id }) : undefined);
   const install = $derived(instance?.installId ? live.installs.get(instance.installId) : undefined);
-  const devices = $derived((slot?.deviceIds ?? []).map(deviceName));
-  const reservation = $derived.by((): [string, string][] => {
-    if (!slot) return [];
-    const host = slot.placement === Placement.HOST;
-    const out: [string, string][] = [['Placement', placementLabel(slot.placement)]];
-    if (!host) out.push(['GPUs', devices.length ? devices.join(', ') : 'Every GPU']);
-    out.push(['Memory cap', slot.memoryBytes ? `${bytes(slot.memoryBytes)} ${host ? 'of RAM' : 'per GPU'}` : 'None']);
-    return out;
+  const hostOnly = $derived(slot?.placement === Placement.HOST);
+  // The GPUs the slot pins, every GPU when it pins none, under their nodes on a mesh
+  const pinned = $derived.by((): DeviceGroup[] => {
+    if (!slot || hostOnly) return [];
+    const ids = new Set(slot.deviceIds);
+    const groups = inMesh() ? meshGpuGroups() : [{ nodeId: '', node: '', self: true, ready: true, devices: hostGpus() }];
+    return groups.map((g) => ({ ...g, devices: ids.size ? g.devices.filter((d) => ids.has(d.id)) : g.devices })).filter((g) => g.devices.length);
   });
+  const runtimeParams = $derived(instance ? (runtimeStatus(instance.runtimeId)?.runtime?.params ?? []) : []);
   const history = $derived(
     [...live.instances.values()]
       .filter((i) => i.slotId === slot?.id && i.id !== slot?.instanceId)
@@ -136,8 +137,8 @@
               </div>
               {#if instance.plan}
                 <div>
-                  <div class="caps mb-2 text-fg-faint">Memory plan</div>
-                  <PlanView plan={instance.plan} compact instance={instance.id} />
+                  <div class="caps mb-2 text-fg-faint">Placement</div>
+                  <PlanView plan={instance.plan} compact instance={instance.id} params={runtimeParams} measurements={instance.measurements} />
                 </div>
               {/if}
               {#if Object.keys(instance.params).length}
@@ -190,10 +191,18 @@
           {/if}
         </Card>
 
-        <Card title="Reservation">
+        <Card title="Placement">
+          <div class="mb-4 flex flex-col gap-3">
+            <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
+              <span class="text-fg">{placementLabel(slot.placement)}</span>
+              {#if slot.memoryBytes}<span class="text-fg-muted">cap {bytes(slot.memoryBytes)}</span>{/if}
+            </div>
+            {#if pinned.length}
+              <DeviceRows groups={pinned} cap={slot.memoryBytes} instance={slot.instanceId} highlight="this slot" exceptSlot={slot.id} />
+            {/if}
+          </div>
           <Kv
             items={[
-              ...reservation,
               ['Aliases', slot.aliases.length ? slot.aliases.map((a) => a.name).join(', ') : 'None'],
               ['Runtime', slot.runtimeId ? runtimeName(slot.runtimeId) : 'Any'],
               ['Limits', policyText(slot.policy, cached.gateway?.policy)],

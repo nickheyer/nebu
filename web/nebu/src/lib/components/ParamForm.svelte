@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ParamType, type Param } from '$proto/runtime_pb';
   import type { Part, ParamState } from '$proto/estimate_pb';
+  import type { StoredModel } from '$proto/store_pb';
   import { ChevronRight, Plus, X } from '@lucide/svelte';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
@@ -10,9 +11,9 @@
   import TextInput from './ui/TextInput.svelte';
   import TextArea from './ui/TextArea.svelte';
   import Combo from './ui/Combo.svelte';
-  import StoreFileSelect from './StoreFileSelect.svelte';
+  import PartPicker from './PartPicker.svelte';
   import PartsList from './PartsList.svelte';
-  import { pathLabel } from '$lib/diffusion';
+  import { bundled } from '$lib/parts';
 
   let {
     params = [],
@@ -22,34 +23,64 @@
     states = [],
     solved = {},
     missing = [],
-    idPrefix = 'param'
-  }: { params?: Param[]; values?: Record<string, string>; invalid?: number; inherited?: Record<string, string>; states?: ParamState[]; solved?: Record<string, string>; missing?: Part[]; idPrefix?: string } = $props();
+    idPrefix = 'param',
+    model = null,
+    filter = () => true,
+    extras = true,
+    flat = false,
+    advancedLabel = 'Advanced'
+  }: {
+    params?: Param[];
+    values?: Record<string, string>;
+    invalid?: number;
+    inherited?: Record<string, string>;
+    states?: ParamState[];
+    solved?: Record<string, string>;
+    missing?: Part[];
+    idPrefix?: string;
+    // The model the run loads, which ranks the parts a path parameter can pick
+    model?: StoredModel | null;
+    // Which of the runtime's parameters this form shows
+    filter?: (p: Param) => boolean;
+    // Whether to list values naming no parameter and offer adding one when the runtime has none
+    extras?: boolean;
+    // Shows every parameter whatever its advanced flag, folding only solved files the plan left unused
+    flat?: boolean;
+    advancedLabel?: string;
+  } = $props();
 
   let showAdvanced = $state(false);
   let newName = $state('');
   let newValue = $state('');
 
+  const shown = $derived(params.filter(filter));
   // Preserve runtime group order, with ungrouped params first.
   const groups = $derived.by(() => {
     const out: { name: string; params: Param[] }[] = [];
-    for (const p of params) {
+    for (const p of shown) {
       let g = out.find((x) => x.name === p.group);
       if (!g) out.push((g = { name: p.group, params: [] }));
       g.params.push(p);
     }
     return out.sort((a, b) => Number(!!a.name) - Number(!!b.name));
   });
-  const advancedCount = $derived(params.filter((p) => p.advanced).length);
-  const regularGroups = $derived(groups.map((g) => ({ ...g, params: g.params.filter((p) => !p.advanced) })).filter((g) => g.params.length));
-  const advancedGroups = $derived(groups.map((g) => ({ ...g, params: g.params.filter((p) => p.advanced) })).filter((g) => g.params.length));
-  // Keep unknown parameters editable after runtime changes.
-  const known = $derived(new Set(params.map((p) => p.name)));
-  const extra = $derived(Object.keys(values).filter((k) => !known.has(k)).sort());
   const stateOf = $derived(new Map(states.map((s) => [s.name, s])));
   const missingOf = $derived(new Map(missing.map((m) => [m.param, m])));
+  // A solved file the plan resolved to nothing, with no value, no part to download, and nothing bundled
+  const idle = (p: Param) => {
+    const v = (solved[p.name] ?? '').toLowerCase();
+    return p.type === ParamType.PATH && p.solved && !values[p.name] && !missingOf.has(p.name) && !bundled(model, p) && (v === '' || v === 'auto' || v === 'none');
+  };
+  const folded = (p: Param) => (flat ? idle(p) : p.advanced);
+  const advancedCount = $derived(shown.filter(folded).length);
+  const regularGroups = $derived(groups.map((g) => ({ ...g, params: g.params.filter((p) => !folded(p)) })).filter((g) => g.params.length));
+  const advancedGroups = $derived(groups.map((g) => ({ ...g, params: g.params.filter(folded) })).filter((g) => g.params.length));
+  // Keep unknown parameters editable after runtime changes.
+  const known = $derived(new Set(params.map((p) => p.name)));
+  const extra = $derived(extras ? Object.keys(values).filter((k) => !known.has(k)).sort() : []);
   // Always show required and explicitly set parameters.
   $effect(() => {
-    if (params.some((p) => p.advanced && (values[p.name] || missingOf.has(p.name)))) showAdvanced = true;
+    if (!flat && shown.some((p) => p.advanced && (values[p.name] || missingOf.has(p.name)))) showAdvanced = true;
   });
 
   function set(name: string, v: string) {
@@ -61,17 +92,18 @@
 
   const isPath = (p: Param) => p.type === ParamType.PATH;
 
-  // Default precedence: slot, plan, runtime.
+  // Defaults come from the slot, then the plan, then the runtime
   function beneath(p: Param): string {
     const v = inherited[p.name];
-    if (v !== undefined && v !== '') return isPath(p) ? pathLabel(v) : v;
+    if (v !== undefined && v !== '') return v;
     if (p.solved) {
       const s = solved[p.name];
-      if (s !== undefined && s !== '' && s.toLowerCase() !== 'auto') return isPath(p) ? pathLabel(s) : s;
-      return 'auto';
+      if (s !== undefined && s !== '' && s.toLowerCase() !== 'auto') return s;
+      return isPath(p) ? '' : 'auto';
     }
     return p.default;
   }
+  const fromSlot = (p: Param) => inherited[p.name] !== undefined && inherited[p.name] !== '';
 
   // Planned bounds over runtime defaults, the range a slider spans and nothing more
   function bounds(p: Param): { min: number; max: number; step: number } {
@@ -102,7 +134,7 @@
   }
 
   $effect(() => {
-    invalid = params.filter((p) => problem(p, values[p.name])).length;
+    invalid = shown.filter((p) => problem(p, values[p.name])).length;
   });
 
   function add() {
@@ -130,7 +162,9 @@
       {/if}
     </div>
     <div class="min-w-0">
-      {#if p.choices.length}
+      {#if isPath(p)}
+        <PartPicker id={fid} param={p} {model} auto={beneath(p)} inherited={fromSlot(p)} missing={part} bind:value={() => v, (next) => set(p.name, next)} />
+      {:else if p.choices.length}
         <Combo id={fid} mono value={v} empty={beneath(p) || '–'} onchange={(next) => set(p.name, next)} items={p.choices.filter((c) => c !== '').map((c) => ({ value: c, label: c }))} />
       {:else if p.type === ParamType.BOOL}
         <Select id={fid} unset value={v} onchange={(next) => set(p.name, next)} items={[{ value: '', label: beneath(p) === 'true' ? 'On' : beneath(p) === 'false' ? 'Off' : '–' }, { value: 'true', label: 'On' }, { value: 'false', label: 'Off' }]} />
@@ -138,8 +172,6 @@
         <RangeInput id={fid} min={b.min} max={b.max} step={b.step || (p.type === ParamType.INT ? 1 : 0.01)} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {:else if numeric(p)}
         <NumberInput id={fid} min={b.min || undefined} max={b.max || undefined} step={b.step || undefined} unit={p.unit || undefined} integer={p.type === ParamType.INT} empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
-      {:else if isPath(p)}
-        <StoreFileSelect id={fid} param={p} empty={beneath(p)} bind:value={() => v, (next) => set(p.name, next)} />
       {:else if multiline}
         <TextArea id={fid} mono rows={3} empty={beneath(p)} invalid={!!err} bind:value={() => v, (next) => set(p.name, next)} />
       {:else}
@@ -167,10 +199,10 @@
   {@render groupList(regularGroups)}
 
   {#if advancedCount}
-    <div class="border-t border-line pt-3">
+    <div class="{regularGroups.length ? 'border-t border-line pt-3' : ''}">
       <button type="button" class="flex w-full items-center gap-2 rounded-md py-1 text-left text-sm text-fg-muted transition-colors hover:text-fg" aria-expanded={showAdvanced} aria-controls="{idPrefix}-advanced" onclick={() => (showAdvanced = !showAdvanced)}>
         <ChevronRight size={14} class="shrink-0 transition-transform {showAdvanced ? 'rotate-90' : ''}" />
-        Advanced
+        {advancedLabel}
         <span class="ml-auto text-xs tabular-nums text-fg-faint">{advancedCount}</span>
       </button>
       <div id="{idPrefix}-advanced" hidden={!showAdvanced}>
@@ -198,7 +230,7 @@
     </fieldset>
   {/if}
 
-  {#if params.length === 0}
+  {#if extras && params.length === 0}
     <div class="flex items-end gap-2">
       <Field label="Parameter" for="{idPrefix}-new-name" class="flex-1">
         <TextInput id="{idPrefix}-new-name" mono bind:value={newName} onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} />

@@ -36,7 +36,7 @@
 
 <div class="flex flex-col gap-2">
   {#if !choices.length && !orphans.length}
-    <p class="text-sm text-fg-faint">No tool servers in <a class="link" href="/settings">Settings</a> yet.</p>
+    <p class="text-sm text-fg-faint">None. <a class="link" href="/settings">Settings</a></p>
   {:else}
     <div class="flex flex-col rounded-md border border-line px-3 py-1">
       {#each choices as s (s.ref)}
@@ -48,7 +48,7 @@
     </div>
     {#if remoteError}<p class="text-xs text-warn">Members' servers could not be listed: {remoteError}</p>{/if}
     {#if refs.length}
-      <SwitchRow bind:checked={mutating} label="Mutating tools" description="Also offer tools that change things." />
+      <SwitchRow bind:checked={mutating} label="Mutating tools" />
     {/if}
   {/if}
 </div>

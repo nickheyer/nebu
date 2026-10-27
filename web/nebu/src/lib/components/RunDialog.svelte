@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, message } from '$lib/api';
-  import { live, cached, modelKey, orderedSlots, runtimeName, startedTask, taskFor, joinedMesh, meshNodes, nodeReady, holdersOf } from '$lib/state.svelte';
+  import { live, cached, modelKey, orderedSlots, runtimeName, startedTask, taskFor, joinedMesh, meshNodes, nodeReady, holdersOf, deviceName } from '$lib/state.svelte';
   import { shapeItems, profileItems, shapeOf, profileOf, shapeLabel, seatLabel, verdictLabel, verdictTone, seconds, tps } from '$lib/mesh';
   import { fail } from '$lib/toast.svelte';
   import { runUi } from '$lib/actions.svelte';
@@ -8,12 +8,14 @@
   import { createForm } from '$lib/form.svelte';
   import { byName, bytes, params as fmtParams, storage, tail } from '$lib/format';
   import { weightsName } from '$lib/catalog';
-  import { isComponent, kindOf, partWord } from '$lib/diffusion';
+  import { isComponent, kindOf, kindLabel, partWord } from '$lib/diffusion';
   import { runsOn, servesWord } from '$lib/runtimes';
   import type { MemoryPlan, Part, ParamState } from '$proto/estimate_pb';
-  import { FitVerdict, Shape, PlanProfile } from '$proto/estimate_pb';
+  import { FitVerdict, Shape, PlanProfile, Placement } from '$proto/estimate_pb';
   import type { FormationPlan, StoredSummary, Node } from '$proto/mesh_pb';
   import type { StoredModel } from '$proto/store_pb';
+  import type { Slot } from '$proto/slot_pb';
+  import { ParamType, type Param } from '$proto/runtime_pb';
   import { DeviceKind } from '$proto/host_pb';
   import { Play, ArrowLeftRight, ChevronRight, Download } from '@lucide/svelte';
   import Dialog from './ui/Dialog.svelte';
@@ -24,11 +26,11 @@
   import Segmented from './ui/Segmented.svelte';
   import Spinner from './ui/Spinner.svelte';
   import State from './ui/State.svelte';
+  import Chip from './ui/Chip.svelte';
   import Disclosure from './ui/Disclosure.svelte';
   import TextInput from './ui/TextInput.svelte';
   import PlanView from './PlanView.svelte';
   import CandidateTable from './CandidateTable.svelte';
-  import PartsList from './PartsList.svelte';
   import ParamForm from './ParamForm.svelte';
 
   let pickedKey = $state('');
@@ -37,7 +39,9 @@
   let name = $state('');
   let slot = $state('');
   let values = $state<Record<string, string>>({});
-  let invalid = $state(0);
+  let invalidFiles = $state(0);
+  let invalidPlacement = $state(0);
+  let invalidOther = $state(0);
   let swapMode = $state('overlap');
   let showParams = $state(true);
   let plan = $state<MemoryPlan | null>(null);
@@ -125,6 +129,29 @@
   const inherited = $derived(selectedSlot?.params ?? {});
   const installs = $derived([...live.installs.values()].filter((i) => i.runtimeId === effectiveRuntime));
   const setCount = $derived(Object.keys(values).length);
+  const invalid = $derived(invalidFiles + invalidPlacement + invalidOther);
+
+  // Files load beside the weights, placement decides where bytes land, the rest tunes the runtime
+  const placementGroups = new Set(['Context', 'Placement', 'Memory', 'Cache', 'Parallelism']);
+  const isFile = (p: Param) => p.type === ParamType.PATH;
+  const isPlacement = (p: Param) => !isFile(p) && !p.advanced && placementGroups.has(p.group);
+  const isOther = (p: Param) => !isFile(p) && !isPlacement(p);
+  const runtimeParams = $derived(runtime?.params ?? []);
+  const fileParams = $derived(runtimeParams.filter(isFile));
+  const fileSet = $derived(fileParams.filter((p) => values[p.name]).length);
+  const placementParams = $derived(runtimeParams.filter(isPlacement));
+  const otherParams = $derived(runtimeParams.filter(isOther));
+  const otherSet = $derived(otherParams.filter((p) => values[p.name]).length);
+
+  // The slot's reservation in a line, what it serves, which GPUs, the cap, its runtime
+  function slotDetail(s: Slot): string {
+    const parts = [slotOccupied(s.id) ? `serving ${tail(s.request?.repo ?? '')}` : 'empty'];
+    if (s.placement === Placement.HOST) parts.push('RAM only');
+    else if (s.deviceIds.length) parts.push(s.deviceIds.map(deviceName).join(', '));
+    if (s.memoryBytes) parts.push(`cap ${bytes(s.memoryBytes, 0)}`);
+    if (s.runtimeId) parts.push(runtimeName(s.runtimeId));
+    return parts.join(' · ');
+  }
 
   function spec() {
     return {
@@ -160,7 +187,7 @@
         return;
       }
       if (!local) {
-        // The model sits on other members: the solo plan waits for a pull or a span.
+        // The model sits on other members, so the solo plan waits for a pull or a span
         fplan = null;
         plan = null;
         return;
@@ -217,7 +244,7 @@
     };
   });
   $effect(() => {
-    if (setCount > 0 || missing.length > 0) showParams = true;
+    if (otherSet > 0) showParams = true;
   });
 
   const form = createForm({
@@ -246,10 +273,19 @@
     }
   });
 
-  const disabled = $derived(!current || (!meshMode && (!effectiveRuntime || !installs.length || !local)) || invalid > 0);
+  const disabled = $derived(!current);
+  // What the daemon is likely to answer, said before the run is asked for
+  const cautions = $derived.by(() => {
+    const out: string[] = [];
+    if (!meshMode && current && !local) out.push('Not stored on this node');
+    if (!meshMode && effectiveRuntime && !installs.length) out.push(`${runtimeName(effectiveRuntime)} not installed`);
+    if (invalid > 0) out.push(`${invalid} invalid ${invalid === 1 ? 'value' : 'values'}`);
+    return out;
+  });
 
   const downloadable = $derived(missing.filter((p) => !p.error && !p.stored && !p.bundled));
   const downloadBytes = $derived(downloadable.reduce((n, p) => n + p.sizeBytes, 0n));
+  const required = $derived(missing.filter((p) => p.required));
   const pulling = $derived(current ? taskFor('pull', { source: current.sourceId, repo: current.repo, group: current.group }) : undefined);
   async function downloadParts() {
     if (!current) return;
@@ -262,180 +298,115 @@
   }
 </script>
 
-<Dialog bind:open={runUi.open} size="lg" title={swap ? `Swap into ${selectedSlot?.name}` : 'Run a model'} description={current ? `${current.repo} · ${weightsName(current.group, current.formatId)}` : undefined}>
+{#snippet heading(id: string, title: string, aside?: string)}
+  <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+    <h2 {id} class="text-sm font-semibold text-fg">{title}</h2>
+    {#if aside}<span class="text-xs text-fg-muted">{aside}</span>{/if}
+  </div>
+{/snippet}
+
+<Dialog bind:open={runUi.open} size="xl" title={swap ? `Swap into ${selectedSlot?.name}` : selectedSlot ? `Run in ${selectedSlot.name}` : 'Run a model'} description={current ? `${current.repo} · ${weightsName(current.group, current.formatId)}` : undefined}>
   <form
-    class="run-form flex min-w-0 flex-col gap-6"
+    class="run-form flex min-w-0 flex-col"
     onsubmit={(e) => {
       e.preventDefault();
       if (!disabled && !form.saving) form.run();
     }}
   >
-    {#if !model}
-      <Field label="Model" for="run-model" error={stored.length ? undefined : 'No models downloaded'}>
-        <Select id="run-model" mono bind:value={pickedKey} disabled={!stored.length} items={stored.map((m) => ({ value: modelKey(m), label: m.repo, detail: weightsName(m.group, m.formatId) }))} />
-      </Field>
-    {/if}
-
-    {#if current}
-      <section class="flex min-w-0 flex-col gap-4" aria-labelledby="run-setup-title">
-        <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-          <h2 id="run-setup-title" class="text-sm font-semibold text-fg">Run configuration</h2>
-          <details class="model-details text-xs text-fg-muted">
-            <summary class="cursor-pointer rounded-sm transition-colors hover:text-fg">{fmtParams(current.descriptor?.parameterCount)} parameters · {bytes(current.bytes)}</summary>
-            <dl class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
-              <div class="flex gap-1.5"><dt>Format</dt><dd class="font-mono text-fg">{current.formatId}</dd></div>
-              {#if current.descriptor?.architecture}<div class="flex gap-1.5"><dt>Architecture</dt><dd class="font-mono text-fg wrap-anywhere">{current.descriptor.architecture}</dd></div>{/if}
-              {#if current.descriptor?.bitsPerWeight}<div class="flex gap-1.5"><dt>Bits/weight</dt><dd class="font-mono text-fg">{current.descriptor.bitsPerWeight.toFixed(1)}</dd></div>{/if}
-            </dl>
-          </details>
-        </div>
-        {#if slots.length}
-          <Field label="Run in" for="run-target">
-            <Choices
-              label="Run in"
-              bind:value={slot}
-              items={[
-                { id: '', label: 'No slot' },
-                ...slots.map((s) => ({ id: s.id, label: `${s.position}. ${s.name}`, mono: true, detail: slotOccupied(s.id) ? tail(s.request?.repo ?? '') : undefined, warn: slotOccupied(s.id) }))
-              ]}
-            />
+    <div class="run-grid">
+      <div class="flex min-w-0 flex-col gap-6">
+        {#if !model}
+          <Field label="Model" for="run-model" error={stored.length ? undefined : 'No models downloaded'}>
+            <Select id="run-model" mono bind:value={pickedKey} disabled={!stored.length} items={stored.map((m) => ({ value: modelKey(m), label: m.repo, detail: weightsName(m.group, m.formatId) }))} />
           </Field>
         {/if}
 
-        {#if component}
-          <div class="note note-warn">This {partWord(current.descriptor)} is a part a diffusion model loads beside itself.</div>
-        {/if}
-        <div class="setup-grid">
-          <Field label="Runtime" for="run-runtime">
-            <Select
-              id="run-runtime"
-              unset
-              bind:value={runtimeId}
-              items={[
-                { value: '', label: selectedSlot?.runtimeId ? runtimeName(selectedSlot.runtimeId) : (compatible[0]?.runtime?.name ?? '–') },
-                ...compatible.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '' })),
-                ...others.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: !rt.compatible ? 'unsupported host' : rt.runtime?.kind !== kind ? servesWord(rt.runtime?.kind ?? 1) : `no ${formatId}` }))
-              ]}
-            />
-          </Field>
-          {#if !meshMode}
-            <Field label="Install" for="run-install" error={effectiveRuntime && !installs.length ? `${runtimeName(effectiveRuntime)} is not installed` : undefined}>
-              <Select id="run-install" unset bind:value={installId} disabled={!installs.length} items={[{ value: '', label: installs.length ? installs[0].version || installs[0].id : '–' }, ...installs.map((i) => ({ value: i.id, label: i.version || i.id }))]} />
-            </Field>
-          {/if}
-          {#if !slot}
-            <Field label="Model name" for="run-name" class="col-span-full">
-              <TextInput id="run-name" mono bind:value={name} empty="{tail(current.repo)}:{current.group}" />
-            </Field>
-          {/if}
-        </div>
-      </section>
-
-      {#if mesh}
-        <section class="border-t border-line pt-4" aria-labelledby="run-mesh-title">
-          <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-            <h2 id="run-mesh-title" class="text-sm font-semibold text-fg">Mesh nodes</h2>
-            {#if span.length}<span class="text-xs text-fg-muted">{span.length} selected</span>{/if}
+        {#if current}
+          <div class="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-fg-muted">
+            {#if current.descriptor?.parameterCount}<Chip text="{fmtParams(current.descriptor.parameterCount)} params" mono={false} />{/if}
+            <Chip text={storage(current.bytes)} mono={false} title="On disk" />
+            <Chip text={current.formatId} title="Format" />
+            {#if current.descriptor?.architecture}<Chip text={current.descriptor.architecture} title="Architecture" />{/if}
+            {#if current.descriptor?.bitsPerWeight}<Chip text="{current.descriptor.bitsPerWeight.toFixed(1)} bits/weight" mono={false} />{/if}
+            {#if kindLabel(current.descriptor)}<Chip text={kindLabel(current.descriptor)} mono={false} />{/if}
+            {#if !local && holders.length}<span class="text-fg-muted">Stored on {holders.map((n) => n.name || n.id.slice(0, 8)).join(', ')}, not here</span>{/if}
           </div>
-          <p class="mt-1 text-xs leading-5 text-fg-muted">Nodes this run may use. None means this node alone.</p>
-          {#if !local && holders.length}<p class="mt-1 text-xs leading-5 text-fg-muted wrap-anywhere">Model available on {holders.map((n) => n.name || n.id.slice(0, 8)).join(', ')}.</p>{/if}
-          <div class="mt-3 flex flex-col gap-3">
-            <div class="divide-y divide-line overflow-hidden rounded-md border border-line bg-sunken/40">
-              {#each nodes as n (n.id)}
-                {@const ready = nodeReady(n)}
-                {@const count = gpuCount(n)}
-                <label class="flex min-h-12 items-center gap-3 px-3 py-2 text-sm {ready ? 'cursor-pointer hover:bg-raised/30' : 'cursor-not-allowed'}">
-                  <input type="checkbox" class="checkbox shrink-0" checked={span.includes(n.id)} disabled={!ready} onchange={(e) => toggleNode(n.id, e.currentTarget.checked)} />
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate text-fg">{n.name || n.id.slice(0, 8)}</span>
-                    <span class="block text-xs text-fg-muted">{count} {count === 1 ? 'GPU' : 'GPUs'} · {n.stored.length} {n.stored.length === 1 ? 'model' : 'models'}</span>
-                  </span>
-                  {#if !ready}<span class="shrink-0 text-xs text-warn">Unreachable</span>{:else if n.self}<span class="shrink-0 text-xs text-fg-muted">This node</span>{/if}
-                </label>
-              {/each}
-            </div>
+          {#if component}
+            <div class="note note-warn">This {partWord(current.descriptor)} is a part a diffusion model loads beside itself.</div>
+          {/if}
+
+          <section class="flex min-w-0 flex-col gap-4" aria-labelledby="run-where-title">
+            {@render heading('run-where-title', 'Target')}
+            {#if slots.length}
+              <Choices
+                label="Target"
+                bind:value={slot}
+                items={[
+                  { id: '', label: 'No slot' },
+                  ...slots.map((s) => ({ id: s.id, label: `${s.position}. ${s.name}`, mono: true, detail: slotDetail(s), warn: slotOccupied(s.id) }))
+                ]}
+              />
+            {/if}
             <div class="setup-grid">
-              <Field label="Distribution" for="run-shape" description={shapeItems.find((x) => x.id === shapeId)?.detail}>
-                <Select id="run-shape" bind:value={shapeId} items={shapeItems.map((x) => ({ value: x.id, label: x.label }))} />
+              <Field label="Runtime" for="run-runtime">
+                <Select
+                  id="run-runtime"
+                  unset
+                  bind:value={runtimeId}
+                  items={[
+                    { value: '', label: selectedSlot?.runtimeId ? runtimeName(selectedSlot.runtimeId) : (compatible[0]?.runtime?.name ?? '–') },
+                    ...compatible.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '' })),
+                    ...others.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: !rt.compatible ? 'incompatible' : rt.runtime?.kind !== kind ? servesWord(rt.runtime?.kind ?? 1) : `no ${formatId}` }))
+                  ]}
+                />
               </Field>
-              <Field label="Workload" for="run-profile" description={profileItems.find((x) => x.id === planProfile)?.detail}>
-                <Select id="run-profile" bind:value={planProfile} items={profileItems.map((x) => ({ value: x.id, label: x.label }))} />
-              </Field>
+              {#if !meshMode}
+                <Field label="Install" for="run-install" error={effectiveRuntime && !installs.length ? 'Not installed' : undefined}>
+                  <Select id="run-install" unset bind:value={installId} disabled={!installs.length} items={[{ value: '', label: installs.length ? installs[0].version || installs[0].id : '–' }, ...installs.map((i) => ({ value: i.id, label: i.version || i.id }))]} />
+                </Field>
+              {/if}
+              {#if !slot}
+                <Field label="Model name" for="run-name" class="col-span-full">
+                  <TextInput id="run-name" mono bind:value={name} empty="{tail(current.repo)}:{current.group}" />
+                </Field>
+              {/if}
             </div>
-          </div>
-        </section>
-      {/if}
+          </section>
 
-      {#if swap}
-        <section class="border-t border-line pt-4" aria-labelledby="run-swap-title">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <h2 id="run-swap-title" class="text-sm font-semibold text-fg">Swap behavior</h2>
-            <Segmented bind:value={swapMode} tabs={[{ id: 'overlap', label: 'Side by side' }, { id: 'drain', label: 'Stop first' }]} />
-          </div>
-        </section>
-      {/if}
-
-      {#if effectiveRuntime || meshMode}
-        <section class="rounded-lg border border-line bg-sunken/40 p-4" aria-labelledby="run-memory-title" aria-busy={checking}>
-          <div class="mb-3 flex flex-wrap items-center gap-2">
-            <h2 id="run-memory-title" class="text-sm font-semibold text-fg">{meshMode ? 'Run plan' : 'Memory'}</h2>
-            {#if selectedSlot}<span class="text-xs text-fg-muted">{selectedSlot.name}</span>{/if}
-            {#if checking}<Spinner size={13} class="ml-auto text-fg-muted" />{/if}
-          </div>
-          {#if meshMode && fplan}
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <span class="text-sm font-medium text-fg">{shapeLabel(fplan.shape)}</span>
-              <State tone={verdictTone(fplan.verdict)} label={verdictLabel(fplan.verdict)} />
-            </div>
-            {#if fplan.verdict !== FitVerdict.FITS && fplan.detail}<p class="mt-2 text-sm leading-5 text-fg-muted wrap-anywhere">{fplan.detail}</p>{/if}
-            {#if fplan.prefillSeconds > 0 || fplan.tokensPerSecond > 0}
-              <dl class="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-xs tabular-nums">
-                {#if fplan.prefillSeconds > 0}<div class="flex gap-2"><dt class="text-fg-muted">Est. first token</dt><dd class="text-fg">{seconds(fplan.prefillSeconds)}</dd></div>{/if}
-                {#if fplan.tokensPerSecond > 0}<div class="flex gap-2"><dt class="text-fg-muted">Est. tokens/s</dt><dd class="text-fg">{tps(fplan.tokensPerSecond)}</dd></div>{/if}
-              </dl>
-            {/if}
-            {#if fplan.seats.length}
-              <ul class="mt-3 divide-y divide-line border-y border-line">
-                {#each fplan.seats as s, i (i)}
-                  <li class="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2 text-xs">
-                    <span class="min-w-0 flex-1 text-fg wrap-anywhere">{s.nodeName || s.nodeId.slice(0, 8)}</span>
-                    <span class="text-fg-muted">{seatLabel(s.role, s.rank)}</span>
-                    {#if s.layerTo > s.layerFrom}<span class="text-fg-muted tabular-nums">Layers {s.layerFrom}–{s.layerTo - 1}</span>{/if}
-                  </li>
+          {#if mesh}
+            <section class="flex flex-col gap-3 border-t border-line pt-4" aria-labelledby="run-mesh-title">
+              {@render heading('run-mesh-title', 'Mesh nodes', span.length ? `${span.length} selected` : undefined)}
+              <div class="divide-y divide-line overflow-hidden rounded-md border border-line bg-sunken/40">
+                {#each nodes as n (n.id)}
+                  {@const ready = nodeReady(n)}
+                  {@const count = gpuCount(n)}
+                  <label class="flex min-h-12 cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-raised/30">
+                    <input type="checkbox" class="checkbox shrink-0" checked={span.includes(n.id)} onchange={(e) => toggleNode(n.id, e.currentTarget.checked)} />
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-fg">{n.name || n.id.slice(0, 8)}</span>
+                      <span class="block text-xs text-fg-muted">{count} {count === 1 ? 'GPU' : 'GPUs'} · {n.stored.length} {n.stored.length === 1 ? 'model' : 'models'}</span>
+                    </span>
+                    {#if !ready}<span class="shrink-0 text-xs text-warn">Unreachable</span>{:else if n.self}<span class="shrink-0 text-xs text-fg-muted">This node</span>{/if}
+                  </label>
                 {/each}
-              </ul>
-            {/if}
-            <Disclosure label="Compare distributions" class="mt-3">
-              <CandidateTable plan={fplan} compact />
-            </Disclosure>
-            {#if (fplan.detail && fplan.verdict === FitVerdict.FITS) || fplan.sources.length}
-              <Disclosure label="Plan details">
-                {#if fplan.detail && fplan.verdict === FitVerdict.FITS}<p class="text-xs leading-5 text-fg-muted wrap-anywhere">{fplan.detail}</p>{/if}
-                {#if fplan.sources.length}
-                  <ul class="mt-2 flex flex-col gap-1 text-xs leading-5 text-fg-muted">
-                    {#each fplan.sources as source}<li class="wrap-anywhere">{source}</li>{/each}
-                  </ul>
-                {/if}
-              </Disclosure>
-            {/if}
-          {:else if !meshMode && !local && current}
-            <div class="note note-info">Pick a mesh node, or download the model to run it here.</div>
-          {:else if plan}
-            <PlanView {plan} compact />
-          {:else if checking}
-            <div class="flex flex-col gap-4" aria-busy="true">
-              <div class="flex flex-col gap-2"><div class="skeleton h-7 w-24"></div><div class="skeleton h-3 w-72 max-w-full"></div></div>
-              <div class="flex flex-col gap-4 border-t border-line pt-3">
-                <div class="flex flex-col gap-1.5"><div class="skeleton h-3 w-40"></div><div class="skeleton h-4 w-full"></div><div class="h-4"></div></div>
-                <div class="flex flex-col gap-1.5"><div class="skeleton h-3 w-32"></div><div class="skeleton h-4 w-full"></div><div class="h-4"></div></div>
               </div>
-            </div>
+              <div class="setup-grid">
+                <Field label="Distribution" for="run-shape">
+                  <Select id="run-shape" bind:value={shapeId} items={shapeItems.map((x) => ({ value: x.id, label: x.label }))} />
+                </Field>
+                <Field label="Workload" for="run-profile">
+                  <Select id="run-profile" bind:value={planProfile} items={profileItems.map((x) => ({ value: x.id, label: x.label }))} />
+                </Field>
+              </div>
+            </section>
           {/if}
-          {#if planError}<div class="note note-bad mt-3">{planError}</div>{/if}
-          {#if missing.length}
-            <div class="mt-3 flex flex-col gap-2 rounded-md border border-line bg-raised/30 p-3">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="text-sm font-medium text-fg">Missing parts</span>
+
+          {#if fileParams.length}
+            <section class="flex flex-col gap-3 border-t border-line pt-4" aria-labelledby="run-files-title">
+              <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <h2 id="run-files-title" class="text-sm font-semibold text-fg">Files</h2>
+                {#if fileSet}<span class="text-xs text-fg-muted">{fileSet} set</span>{/if}
+                {#if required.length}<State tone="warn" label="{required.length} missing" />{/if}
                 <span class="ml-auto shrink-0">
                   {#if pulling}
                     <span class="text-xs text-fg-muted">Downloading…</span>
@@ -444,33 +415,109 @@
                   {/if}
                 </span>
               </div>
-              <PartsList parts={missing} compact />
-            </div>
-          {:else if planWarning}
-            <div class="note note-warn mt-3">{planWarning}</div>
+              <ParamForm params={runtimeParams} filter={isFile} extras={false} flat advancedLabel="More files" model={local ? current : null} bind:values bind:invalid={invalidFiles} {inherited} {states} {solved} {missing} idPrefix="run" />
+            </section>
           {/if}
-          {#if plan?.detail && plan.verdict !== FitVerdict.FITS}<p class="mt-3 text-xs leading-5 text-fg-muted">{plan.detail}</p>{/if}
-        </section>
-      {/if}
 
-      <section class="border-t border-line pt-4" aria-labelledby="run-params-title">
-        <h2 id="run-params-title">
-          <button type="button" class="flex w-full items-center gap-2 rounded-sm text-left text-sm text-fg" aria-expanded={showParams} aria-controls="run-parameters" onclick={() => (showParams = !showParams)}>
-            <ChevronRight size={14} class="shrink-0 text-fg-muted transition-transform {showParams ? 'rotate-90' : ''}" />
-            <span class="font-semibold">Parameters</span>
-            {#if setCount}<span class="ml-auto text-xs font-normal text-fg-muted">{setCount} set</span>{/if}
-          </button>
-        </h2>
-        <div id="run-parameters" class="mt-3" hidden={!showParams}>
-          <ParamForm params={runtime?.params ?? []} bind:values bind:invalid {inherited} {states} {solved} {missing} idPrefix="run" />
-        </div>
-      </section>
-    {/if}
+          {#if otherParams.length || !runtimeParams.length}
+            <section class="border-t border-line pt-4" aria-labelledby="run-params-title">
+              <h2 id="run-params-title">
+                <button type="button" class="flex w-full items-center gap-2 rounded-sm text-left text-sm text-fg" aria-expanded={showParams} aria-controls="run-parameters" onclick={() => (showParams = !showParams)}>
+                  <ChevronRight size={14} class="shrink-0 text-fg-muted transition-transform {showParams ? 'rotate-90' : ''}" />
+                  <span class="font-semibold">Parameters</span>
+                  {#if otherSet}<span class="ml-auto text-xs font-normal text-fg-muted">{otherSet} set</span>{/if}
+                </button>
+              </h2>
+              <div id="run-parameters" class="mt-3" hidden={!showParams}>
+                <ParamForm params={runtimeParams} filter={isOther} model={local ? current : null} bind:values bind:invalid={invalidOther} {inherited} {states} {solved} {missing} idPrefix="run" />
+              </div>
+            </section>
+          {/if}
+
+          {#if swap}
+            <section class="border-t border-line pt-4" aria-labelledby="run-swap-title">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <h2 id="run-swap-title" class="text-sm font-semibold text-fg">Swap</h2>
+                <Segmented bind:value={swapMode} tabs={[{ id: 'overlap', label: 'Side by side' }, { id: 'drain', label: 'Stop first' }]} />
+              </div>
+            </section>
+          {/if}
+        {/if}
+      </div>
+
+      {#if current && (effectiveRuntime || meshMode)}
+        <aside class="run-aside">
+          <section class="flex flex-col gap-4 rounded-lg border border-line bg-sunken/40 p-4" aria-labelledby="run-placement-title" aria-busy={checking}>
+            <div class="flex flex-wrap items-center gap-2">
+              <h2 id="run-placement-title" class="text-sm font-semibold text-fg">{meshMode ? 'Run plan' : 'Placement'}</h2>
+              {#if selectedSlot}<span class="truncate text-xs text-fg-muted">{selectedSlot.name}</span>{/if}
+              {#if checking}<Spinner size={13} class="ml-auto text-fg-muted" />{/if}
+            </div>
+            {#if meshMode && fplan}
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <span class="text-sm font-medium text-fg">{shapeLabel(fplan.shape)}</span>
+                <State tone={verdictTone(fplan.verdict)} label={verdictLabel(fplan.verdict)} />
+              </div>
+              {#if fplan.verdict !== FitVerdict.FITS && fplan.detail}<p class="text-sm leading-5 text-fg-muted wrap-anywhere">{fplan.detail}</p>{/if}
+              {#if fplan.prefillSeconds > 0 || fplan.tokensPerSecond > 0}
+                <dl class="flex flex-wrap gap-x-6 gap-y-2 text-xs tabular-nums">
+                  {#if fplan.prefillSeconds > 0}<div class="flex gap-2"><dt class="text-fg-muted">Est. first token</dt><dd class="text-fg">{seconds(fplan.prefillSeconds)}</dd></div>{/if}
+                  {#if fplan.tokensPerSecond > 0}<div class="flex gap-2"><dt class="text-fg-muted">Est. tokens/s</dt><dd class="text-fg">{tps(fplan.tokensPerSecond)}</dd></div>{/if}
+                </dl>
+              {/if}
+              {#if fplan.seats.length}
+                <ul class="divide-y divide-line border-y border-line">
+                  {#each fplan.seats as s, i (i)}
+                    <li class="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2 text-xs">
+                      <span class="min-w-0 flex-1 text-fg wrap-anywhere">{s.nodeName || s.nodeId.slice(0, 8)}</span>
+                      <span class="text-fg-muted">{seatLabel(s.role, s.rank)}</span>
+                      {#if s.layerTo > s.layerFrom}<span class="text-fg-muted tabular-nums">Layers {s.layerFrom}–{s.layerTo - 1}</span>{/if}
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+              <Disclosure label="Compare distributions">
+                <CandidateTable plan={fplan} compact />
+              </Disclosure>
+              {#if (fplan.detail && fplan.verdict === FitVerdict.FITS) || fplan.sources.length}
+                <Disclosure label="Plan details">
+                  {#if fplan.detail && fplan.verdict === FitVerdict.FITS}<p class="text-xs leading-5 text-fg-muted wrap-anywhere">{fplan.detail}</p>{/if}
+                  {#if fplan.sources.length}
+                    <ul class="mt-2 flex flex-col gap-1 text-xs leading-5 text-fg-muted">
+                      {#each fplan.sources as source}<li class="wrap-anywhere">{source}</li>{/each}
+                    </ul>
+                  {/if}
+                </Disclosure>
+              {/if}
+            {:else if !meshMode && !local}
+              <div class="note note-info">Not stored on this node</div>
+            {:else if plan}
+              <PlanView {plan} compact params={runtimeParams} />
+            {:else if checking}
+              <div class="flex flex-col gap-4" aria-busy="true">
+                <div class="flex gap-3"><div class="skeleton h-4 w-14"></div><div class="skeleton h-4 w-32"></div></div>
+                <div class="flex flex-col gap-1.5"><div class="skeleton h-3 w-24"></div><div class="skeleton h-2.5 w-full"></div></div>
+                <div class="flex flex-col gap-1.5"><div class="skeleton h-3 w-32"></div><div class="skeleton h-2.5 w-full"></div></div>
+                <div class="skeleton h-3 w-3/4"></div>
+              </div>
+            {/if}
+            {#if planError}<div class="note note-bad">{planError}</div>{/if}
+            {#if planWarning && !missing.length}<div class="note note-warn">{planWarning}</div>{/if}
+            {#if placementParams.length && !meshMode && local}
+              <div class="border-t border-line pt-3">
+                <ParamForm params={runtimeParams} filter={isPlacement} extras={false} model={current} bind:values bind:invalid={invalidPlacement} {inherited} {states} {solved} {missing} idPrefix="run-place" />
+              </div>
+            {/if}
+          </section>
+        </aside>
+      {/if}
+    </div>
     <button type="submit" class="hidden" aria-hidden="true" tabindex="-1"></button>
   </form>
 
   {#snippet footer()}
     <Button variant="ghost" onclick={() => (runUi.open = false)}>Cancel</Button>
+    {#if cautions.length}<span class="min-w-0 truncate text-xs text-warn" title={cautions.join('. ')}>{cautions.join(' · ')}</span>{/if}
     <span class="ml-auto"><Button variant="primary" icon={swap ? ArrowLeftRight : Play} loading={form.saving} {disabled} onclick={form.run}>{swap ? 'Swap' : 'Run'}</Button></span>
   {/snippet}
 </Dialog>
@@ -480,20 +527,33 @@
     container-type: inline-size;
   }
 
+  .run-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.5rem;
+  }
+
   .setup-grid {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
   }
 
-  .model-details[open] {
-    flex-basis: 100%;
-  }
-
   @container (min-width: 30rem) {
     .setup-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
       column-gap: 1.25rem;
+    }
+  }
+
+  @container (min-width: 54rem) {
+    .run-grid {
+      grid-template-columns: minmax(0, 1fr) 21rem;
+      align-items: start;
+    }
+    .run-aside {
+      position: sticky;
+      top: 0;
     }
   }
 </style>

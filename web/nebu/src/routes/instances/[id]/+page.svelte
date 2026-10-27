@@ -105,8 +105,8 @@
         <Stat label="Requests" value={count(route?.requests ?? 0n)} sub={route?.inFlight ? `${route.inFlight} in flight` : ''} />
       </div>
       {#if instance.plan}
-        <Card title="Memory">
-          <PlanView plan={instance.plan} params={false} instance={instance.id} />
+        <Card title="Placement">
+          <PlanView plan={instance.plan} instance={instance.id} params={runtimeStatus(instance.runtimeId)?.runtime?.params ?? []} measurements={instance.measurements} />
         </Card>
       {/if}
       <div class="grid grid-cols-1 gap-5 xl:grid-cols-2">

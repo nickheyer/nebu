@@ -261,6 +261,8 @@ type prepared struct {
 	res        *Reservation
 	params     estimate.Params
 	plan       *v1.MemoryPlan
+	// Slot defaults under request params, stored groups resolved to files, what the plan was made from
+	layered map[string]string
 	// What the plan left uncounted, logged when the run starts
 	warning string
 	// Other stored models available as companion parts.
@@ -383,7 +385,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if err != nil {
 		return nil, err
 	}
-	p := &prepared{req: req, stored: stored, rt: rt, install: install, name: name, descriptor: descriptor, profile: profile, planned: planProfile, res: res, params: params}
+	p := &prepared{req: req, stored: stored, rt: rt, install: install, name: name, descriptor: descriptor, profile: profile, planned: planProfile, res: res, params: params, layered: layered}
 	p.companions = companions
 	if rt.Policy() != nil {
 		if p.plan, p.warning, err = m.Inspector.Plan(ctx, rt, descriptor, planProfile, layered, true, res.placement(), stored.GetRepo(), stored, companions); err != nil {
@@ -403,7 +405,7 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	if p.seat != nil {
 		return m.launchSeat(ctx, p)
 	}
-	req, stored, rt, install, name, descriptor, profile, params, plan := p.req, p.stored, p.rt, p.install, p.name, p.descriptor, p.profile, p.params, p.plan
+	req, stored, rt, install, name, descriptor, params, plan := p.req, p.stored, p.rt, p.install, p.name, p.descriptor, p.params, p.plan
 	port, err := freePort()
 	if err != nil {
 		return nil, nil, err
@@ -492,7 +494,7 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 				return err
 			}
 		}
-		return m.start(ctx, h, in, rendered, install, descriptor, profile)
+		return m.start(ctx, h, in, rendered, p)
 	})
 	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })
 	return in.snapshot(), task, nil
@@ -563,7 +565,8 @@ func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance,
 	return os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
 }
 
-func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rendered *runtimes.Command, install *v1.Install, d *v1.Descriptor, before *v1.HostProfile) error {
+func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rendered *runtimes.Command, p *prepared) error {
+	install, d, before := p.install, p.descriptor, p.profile
 	rec := in.snapshot()
 	h.Logf("command: %s", strings.Join(rec.GetCommand(), " "))
 	h.Progress(0, 0, "launching")
@@ -597,12 +600,12 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 	proc.Sync()
 	lines := proc.Log().Tail(0)
 	measurements := in.rt.Measure(lines)
-	m.chosen(h.Logf, in, lines)
+	m.replan(ctx, h.Logf, in, p, m.chosen(h.Logf, in, lines))
 	if after, perr := m.Host.Profile(ctx, true); perr == nil {
 		used := deviceFree(before) - deviceFree(after)
 		if used > 0 {
 			measurements = append(measurements, &v1.Measurement{Key: estimate.DeviceUsedKey, Bytes: uint64(used)})
-			if plan := rec.GetPlan(); plan != nil {
+			if plan := in.snapshot().GetPlan(); plan != nil {
 				base := max(float64(estimate.PlannedDevice(plan))-plan.GetOverheadDelta(), 0)
 				if cerr := m.Calibration.Record(ctx, in.rt.ID(), d.GetArchitecture(), uint64(used), uint64(base)); cerr != nil {
 					m.Log.Warn("calibration write failed", "err", cerr)
@@ -615,10 +618,10 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 }
 
 // Records the auto params the runtime picked itself, read from its log, as the instance's params
-func (m *Manager) chosen(logf func(string, ...any), in *instance, lines []string) {
+func (m *Manager) chosen(logf func(string, ...any), in *instance, lines []string) map[string]string {
 	policy := in.rt.Policy()
 	if policy == nil {
-		return
+		return nil
 	}
 	rec := in.snapshot()
 	picked := map[string]string{}
@@ -635,7 +638,7 @@ func (m *Manager) chosen(logf func(string, ...any), in *instance, lines []string
 		logf("%s %s, chosen by %s", name, v, rec.GetRuntimeId())
 	}
 	if len(picked) == 0 {
-		return
+		return nil
 	}
 	in.update(func(r *v1.Instance) {
 		if r.Params == nil {
@@ -643,6 +646,23 @@ func (m *Manager) chosen(logf func(string, ...any), in *instance, lines []string
 		}
 		maps.Copy(r.Params, picked)
 	})
+	return picked
+}
+
+// Plans the run again at the values the runtime chose, so the record holds the context it runs
+func (m *Manager) replan(ctx context.Context, logf func(string, ...any), in *instance, p *prepared, picked map[string]string) {
+	if len(picked) == 0 || p.plan == nil || p.rt.Policy() == nil {
+		return
+	}
+	plan, warning, err := m.Inspector.Plan(ctx, p.rt, p.descriptor, p.planned, runtimes.Merge(p.layered, picked), true, p.res.placement(), p.stored.GetRepo(), p.stored, p.companions)
+	if err != nil {
+		logf("plan at the chosen values failed: %v", err)
+		return
+	}
+	if warning != "" {
+		logf("plan: %s", warning)
+	}
+	in.update(func(r *v1.Instance) { r.Plan = plan })
 }
 
 // Probes chat template support and logs gateway system message handling.

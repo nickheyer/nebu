@@ -135,11 +135,11 @@ export function policyCount(f: PolicyFields): number {
   return [f.maxInFlight, f.rps, f.burst, f.timeout, f.upstream].filter((v) => v.trim()).length;
 }
 
-export const systemMessageItems: { value: string; label: string; detail: string }[] = [
-  { value: 'auto', label: 'Template decides', detail: 'Keep if supported by the template, otherwise merge' },
-  { value: 'keep', label: 'Keep', detail: 'Send unchanged' },
-  { value: 'merge', label: 'Merge', detail: 'Combine with the first system message' },
-  { value: 'user', label: 'User turns', detail: 'Join to the user turns beside them' }
+export const systemMessageItems: { value: string; label: string }[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'keep', label: 'Keep' },
+  { value: 'merge', label: 'Merge into first' },
+  { value: 'user', label: 'As user turns' }
 ];
 
 const modeOf: Record<string, SystemMessages> = { keep: SystemMessages.KEEP, merge: SystemMessages.MERGE, user: SystemMessages.USER };
@@ -169,16 +169,16 @@ export function profileFrom(f: ProfileFields): Profile {
 const modeLabel = (mode: string) => systemMessageItems.find((i) => i.value === mode)?.label.toLowerCase() ?? mode;
 
 function systemText(mode: string, template?: TemplateProbe): string {
-  if (mode !== 'auto') return `System messages: ${modeLabel(mode)}`;
-  if (!template) return 'System messages: template decides';
-  if (template.error) return 'System messages: kept · probe failed';
-  return template.lateSystem ? 'System messages: kept · supported by template' : 'System messages: merged · unsupported by template';
+  if (mode !== 'auto') return `System messages ${modeLabel(mode)}`;
+  if (!template) return 'System messages auto';
+  if (template.error) return 'System messages kept';
+  return template.lateSystem ? 'System messages kept' : 'System messages merged';
 }
 
 export function profileText(p: Profile | undefined, template?: TemplateProbe): string {
   const f = profileFields(p);
   const parts = [systemText(f.systemMessages, template)];
-  if (template?.tools === ToolSupport.EMULATED) parts.push('Tools: emulated by the gateway');
+  if (template?.tools === ToolSupport.EMULATED) parts.push('Tools emulated');
   const tools = attachmentText(f.toolServers, f.mutatingTools);
   if (tools) parts.push(tools);
   return parts.join(' · ');

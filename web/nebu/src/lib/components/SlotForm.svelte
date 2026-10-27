@@ -4,10 +4,11 @@
   import { slotOccupied } from '$lib/launch';
   import { placements, placementId, placementOf } from '$lib/instances';
   import { policyFields, policyFrom, profileFields, profileFrom } from '$lib/gateway';
-  import { gib, fromGib } from '$lib/format';
+  import { gib, fromGib, bytes } from '$lib/format';
   import { fail, ok } from '$lib/toast.svelte';
   import { PoolKind } from '$proto/host_pb';
   import type { Slot } from '$proto/slot_pb';
+  import { ParamType, type Param } from '$proto/runtime_pb';
   import Field from './ui/Field.svelte';
   import Select from './ui/Select.svelte';
   import Segmented from './ui/Segmented.svelte';
@@ -48,7 +49,8 @@
   let memory = $state(start.memory);
   let runtimeId = $state(start.runtimeId);
   let params = $state<Record<string, string>>(start.params);
-  let invalid = $state(0);
+  let invalidFiles = $state(0);
+  let invalidOther = $state(0);
   let policy = $state(start.policy);
   let profile = $state(start.profile);
   let saving = $state(false);
@@ -59,11 +61,8 @@
   const gpuIds = $derived(gpus.map((d) => d.id));
   const ram = $derived(live.host?.pools.find((p) => p.kind === PoolKind.HOST || p.kind === PoolKind.UNIFIED));
   const hostOnly = $derived(placement === 'host');
-  const placementTabs = $derived(placements.map((p) => ({ id: p.id, label: p.label, unmet: p.id !== 'host' && live.host && gpus.length === 0 ? 'No GPU probed on this host' : undefined })));
-  $effect(() => {
-    if (live.host && gpus.length === 0 && placement !== 'host') placement = 'host';
-  });
-  const pickDevices = $derived(!hostOnly && gpus.length > 1);
+  const placementTabs = $derived(placements.map((p) => ({ id: p.id, label: p.label })));
+  const pickDevices = $derived(!hostOnly && gpus.length > 0);
   const chosen = $derived(devices ?? gpuIds);
   // Selecting all GPUs also includes GPUs discovered later.
   const deviceIds = $derived(pickDevices && chosen.length < gpuIds.length ? chosen : []);
@@ -91,9 +90,12 @@
   });
   const aliasList = $derived(aliases.map((n) => slot?.aliases.find((a) => a.name === n) ?? { name: n }));
   const runtime = $derived(cached.runtimes.find((r) => r.runtime?.id === runtimeId)?.runtime);
+  const isFile = (p: Param) => p.type === ParamType.PATH;
+  const isOther = (p: Param) => !isFile(p);
+  const fileParams = $derived((runtime?.params ?? []).filter(isFile));
   const occupied = $derived(!!slot && slotOccupied(slot.id));
   const count = $derived(orderedSlots().length);
-  const formOk = $derived(!!name.trim() && !badName && !nameTaken && !badBudget && !aliasProblem && invalid === 0);
+  const defaultsSet = $derived(Object.keys(params).length);
   // Clear parameters when the runtime changes.
   $effect(() => {
     if (runtimeId !== start.runtimeId) params = {};
@@ -127,7 +129,7 @@
   class="flex flex-col gap-5"
   onsubmit={(e) => {
     e.preventDefault();
-    if (formOk && !saving) save();
+    if (!saving) save();
   }}
 >
   <Card title="Slot">
@@ -140,20 +142,20 @@
       </Field>
     </div>
     <div class="mt-4">
-      <Field label="Aliases" for="slot-aliases" description="Other model names for clients. They follow the slot through swaps and restarts." error={aliasProblem || undefined}>
+      <Field label="Aliases" for="slot-aliases" error={aliasProblem || undefined}>
         <IdList id="slot-aliases" bind:items={aliases} empty="gpt-4" />
       </Field>
     </div>
   </Card>
 
-  <Card title="Memory" meta={occupied ? 'Applies to the next run' : undefined}>
-    <div class="flex flex-col gap-4">
-      <Field label="Placement" for="slot-placement">
+  <Card title="Placement" meta={occupied ? 'Applies to the next run' : undefined}>
+    <div class="flex flex-col gap-5">
+      <Field label="Memory" for="slot-placement">
         <div id="slot-placement"><Segmented size="lg" bind:value={placement} tabs={placementTabs} /></div>
       </Field>
       {#if pickDevices}
-        <Field label="GPUs" for="slot-devices" description={mesh ? 'Select GPUs from one or more nodes.' : undefined}>
-          <DevicePicker id="slot-devices" groups={mesh ? meshGpuGroups() : undefined} bind:value={() => chosen, (v) => (devices = v)} />
+        <Field label="GPUs" for="slot-devices">
+          <DevicePicker id="slot-devices" groups={mesh ? meshGpuGroups() : undefined} cap={budget} exceptSlot={slot?.id ?? ''} bind:value={() => chosen, (v) => (devices = v)} />
         </Field>
       {/if}
       <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
@@ -161,17 +163,23 @@
           <NumberInput id="slot-memory" min={0} step={0.5} unit="GiB" bind:value={memory} empty={poolGib} invalid={badBudget} />
         </Field>
         <Field label="Runtime" for="slot-runtime">
-          <Select id="slot-runtime" bind:value={runtimeId} items={[{ value: '', label: 'Any', detail: 'the first that reads the model' }, ...cached.runtimes.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: rt.compatible ? undefined : 'not compatible with this host', disabled: !rt.compatible }))]} />
+          <Select id="slot-runtime" bind:value={runtimeId} items={[{ value: '', label: 'Any' }, ...cached.runtimes.map((rt) => ({ value: rt.runtime?.id ?? '', label: rt.runtime?.name ?? rt.runtime?.id ?? '', detail: rt.compatible ? undefined : 'incompatible' }))]} />
         </Field>
       </div>
     </div>
   </Card>
 
-  <Card title="Parameters" meta={runtime?.name}>
+  <Card title="Defaults" meta={runtime ? `${runtime.name}${defaultsSet ? ` · ${defaultsSet} set` : ''}` : undefined}>
     {#if runtime}
-      <ParamForm params={runtime.params} bind:values={params} bind:invalid idPrefix="slot" />
+      <ParamForm params={runtime.params} filter={isOther} bind:values={params} bind:invalid={invalidOther} idPrefix="slot" />
+      {#if fileParams.length}
+        <div class="mt-5 flex flex-col gap-3 border-t border-line pt-4">
+          <h3 class="text-sm font-semibold text-fg">Files</h3>
+          <ParamForm params={runtime.params} filter={isFile} flat extras={false} advancedLabel="More files" bind:values={params} bind:invalid={invalidFiles} idPrefix="slot" />
+        </div>
+      {/if}
     {:else}
-      <p class="text-sm text-fg-faint">Pick a runtime first</p>
+      <p class="text-sm text-fg-faint">Pick a runtime</p>
     {/if}
   </Card>
 
@@ -185,6 +193,6 @@
 
   <div class="flex items-center justify-end gap-2">
     <Button variant="ghost" href={cancelHref}>Cancel</Button>
-    <Button type="submit" variant="primary" loading={saving} disabled={!formOk}>{creating ? 'Create slot' : 'Save'}</Button>
+    <Button type="submit" variant="primary" loading={saving}>{creating ? 'Create slot' : 'Save'}</Button>
   </div>
 </form>

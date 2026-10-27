@@ -24,6 +24,7 @@
   import Routes from '$lib/components/Routes.svelte';
   import ActiveTasks from '$lib/components/ActiveTasks.svelte';
   import TraceTable from '$lib/components/TraceTable.svelte';
+  import DeviceMap from '$lib/components/DeviceMap.svelte';
 
   let historyView = $state('all');
 
@@ -62,6 +63,9 @@
   <ActiveTasks />
 
   <Section title="Slots" count={slots.length || undefined}>
+    {#if live.host}
+      <div class="mb-2"><DeviceMap /></div>
+    {/if}
     <div class="tbl-wrap">
       <table class="tbl">
         <thead><tr><th class="w-8">#</th><th>Name</th><th>Model</th><th>Runtime</th><th>State</th><th class="num">Requests</th><th class="num">Memory</th><th></th></tr></thead>
