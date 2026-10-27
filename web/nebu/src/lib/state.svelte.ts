@@ -359,10 +359,11 @@ export function activeTasks(): Task[] {
 }
 
 // Return the newest task matching the kind and labels.
-export function taskFor(kind: string, labels: Record<string, string>, activeOnly = true): Task | undefined {
+// The newest task of a kind carrying every label given and none of those to leave out
+export function taskFor(kind: string, labels: Record<string, string>, activeOnly = true, without: string[] = []): Task | undefined {
   const want = Object.entries(labels);
   return [...live.tasks.values()]
-    .filter((t) => t.kind === kind && (!activeOnly || taskActive(t)) && want.every(([k, v]) => t.labels[k] === v))
+    .filter((t) => t.kind === kind && (!activeOnly || taskActive(t)) && want.every(([k, v]) => t.labels[k] === v) && without.every((k) => !(k in t.labels)))
     .sort(byCreated)[0];
 }
 

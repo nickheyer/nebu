@@ -79,6 +79,12 @@ func (x *exchange) serve() int {
 		x.refuse(chat.FailureOf(err))
 		return -1
 	}
+	// An answer echoed without the tool rounds the gateway ran for it gets them back
+	if req.Kind == chat.Chat && !x.ix.Bare {
+		if msgs, spliced := x.g.rounds.splice(route.GetName(), req.Messages); spliced {
+			req.Messages, changed = msgs, true
+		}
+	}
 	emulate := x.g.table.ToolSupport(route) == v1.ToolSupport_TOOL_SUPPORT_EMULATED && len(req.Tools) > 0
 	if same && !changed && !x.plan.active() && !emulate && req.Kind != chat.Count && !x.relay && !req.Responses {
 		return x.passthrough()
@@ -219,6 +225,14 @@ func (x *exchange) rounds() int {
 	}
 	total := &chat.Result{Model: x.name}
 	used := -1
+	// The client's turns end here, the turns the gateway adds by running tools following
+	clientTurns := len(req.Messages)
+	var prev *chat.Message
+	if clientTurns > 0 {
+		last := req.Messages[clientTurns-1]
+		prev = &last
+	}
+	var allSaid strings.Builder
 	for round := 0; ; round++ {
 		path, body, err := x.runtime.Render(req)
 		if err != nil {
@@ -254,6 +268,7 @@ func (x *exchange) rounds() int {
 			return out.Write(ev)
 		})
 		cancel()
+		allSaid.WriteString(said.String())
 		if err != nil {
 			switch {
 			case r.Context().Err() != nil:
@@ -298,6 +313,13 @@ func (x *exchange) rounds() int {
 				return used
 			}
 		}
+		var parts []chat.Part
+		if res.Thinking != "" {
+			parts = append(parts, chat.Part{Type: "thinking", Text: res.Thinking})
+		}
+		if said.Len() > 0 {
+			parts = append(parts, chat.Part{Type: "text", Text: said.String()})
+		}
 		if len(runs) == 0 || len(held) > 0 {
 			for i, c := range held {
 				if err := out.Write(chat.Event{Kind: chat.Called, Index: i, Tool: &chat.ToolCall{ID: c.ID, Name: c.Name, Args: c.Args}}); err != nil {
@@ -305,19 +327,15 @@ func (x *exchange) rounds() int {
 				}
 			}
 			total.ToolCalls = held
+			if len(req.Messages) > clientTurns || len(runs) > 0 {
+				x.keepRounds(clientTurns, prev, allSaid.String(), parts, runs, held)
+			}
 			if err := out.Write(chat.Event{Kind: chat.Stopped, Res: total}); err != nil {
 				if _, ok := errors.AsType[*chat.ToolArgsError](err); ok {
 					fail(failure(http.StatusBadGateway, "upstream: "+err.Error(), chat.CodeUpstream))
 				}
 			}
 			break
-		}
-		var parts []chat.Part
-		if res.Thinking != "" {
-			parts = append(parts, chat.Part{Type: "thinking", Text: res.Thinking})
-		}
-		if said.Len() > 0 {
-			parts = append(parts, chat.Part{Type: "text", Text: said.String()})
 		}
 		req.Messages = append(append(req.Messages, chat.Message{Role: "assistant", Parts: parts, ToolCalls: res.ToolCalls}), toolTurns(runs)...)
 		// A forced first call has been made, the rest of the turn is the model's
@@ -333,6 +351,18 @@ func (x *exchange) rounds() int {
 		out.Close()
 	}
 	return used
+}
+
+// Keeps the answer's tool rounds, the final turn carrying the calls it ran before those handed back
+func (x *exchange) keepRounds(clientTurns int, prev *chat.Message, text string, parts []chat.Part, runs []*chat.Run, held []chat.ToolCall) {
+	before := append([]chat.Message(nil), x.in.req.Messages[clientTurns:]...)
+	final := chat.Message{Role: "assistant", Parts: parts}
+	for _, run := range runs {
+		final.ToolCalls = append(final.ToolCalls, run.Call)
+	}
+	heldFrom := len(final.ToolCalls)
+	final.ToolCalls = append(final.ToolCalls, held...)
+	x.g.rounds.put(roundKey(x.route.GetName(), prev, text, held), before, final, toolTurns(runs), heldFrom)
 }
 
 // Adds from's fields to into, later values winning

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -183,7 +184,7 @@ func (m *Manager) PullTo(ctx context.Context, nodeID string, req *v1.PullRequest
 		return nil, err
 	}
 	if rec.GetId() == m.self() {
-		req = &v1.PullRequest{SourceId: req.GetSourceId(), Repo: req.GetRepo(), Revision: req.GetRevision(), Group: req.GetGroup(), Alone: req.GetAlone()}
+		req = &v1.PullRequest{SourceId: req.GetSourceId(), Repo: req.GetRepo(), Revision: req.GetRevision(), Group: req.GetGroup(), Alone: req.GetAlone(), Paths: req.GetPaths()}
 		return m.Puller.Pull(ctx, req)
 	}
 	if rec.GetState() != v1.NodeState_NODE_STATE_READY {
@@ -191,7 +192,14 @@ func (m *Manager) PullTo(ctx context.Context, nodeID string, req *v1.PullRequest
 	}
 	labels := map[string]string{"source": req.GetSourceId(), "repo": req.GetRepo(), "group": req.GetGroup(), "node": rec.GetId()}
 	title := fmt.Sprintf("pull %s %s onto %s", req.GetRepo(), req.GetGroup(), rec.GetName())
+	if paths := req.GetPaths(); len(paths) == 1 {
+		labels["files"], labels["path"] = "1", paths[0]
+		title = fmt.Sprintf("pull %s %s onto %s", req.GetRepo(), paths[0], rec.GetName())
+	} else if len(paths) > 1 {
+		labels["files"] = strconv.Itoa(len(paths))
+		title = fmt.Sprintf("pull %s %d files onto %s", req.GetRepo(), len(paths), rec.GetName())
+	}
 	return m.Tasks.Start(kindPull, title, labels, func(ctx context.Context, h *tasks.Handle) error {
-		return m.ensure(ctx, h, h.Progress, rec.GetId(), req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRevision())
+		return m.ensure(ctx, h, h.Progress, rec.GetId(), req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRevision(), req.GetPaths())
 	}), nil
 }

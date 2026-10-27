@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/formats"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -53,6 +54,8 @@ type meshLanding struct {
 	descriptor *v1.Descriptor
 	// The same group at its source, for blobs no member serves. Nil when the source did not answer.
 	net *landing
+	// Whether the landed files join what the group already holds instead of replacing it
+	merge bool
 }
 
 // The member's artifacts this landing takes: the selected files, or every one
@@ -432,7 +435,23 @@ func (p *Puller) landMesh(ctx context.Context, h *tasks.Handle, l *meshLanding) 
 		out.Artifacts = append(out.Artifacts, &v1.StoredArtifact{Artifact: a, Digest: digest, Path: linked})
 		out.Bytes += a.GetSizeBytes()
 	}
+	local, _ := p.Store.ReadManifest(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
 	switch {
+	case l.merge:
+		if local != nil {
+			joinStored(out, local)
+		}
+		d := l.descriptor
+		if d == nil {
+			d = stored.GetDescriptor_()
+		}
+		var all []*v1.Artifact
+		if l.net != nil {
+			all = inspect.GroupArtifacts(l.net.g)
+		}
+		if !p.settle(out, d, all) {
+			h.Logf("%s %s holds %d of %d files, kept as a component until the rest land", stored.GetRepo(), stored.GetGroup(), len(out.GetArtifacts()), len(all))
+		}
 	case l.files != nil && l.slot != "":
 		// A part landed as selected files is a component, such as a tokenizer
 		out.Descriptor_ = &v1.Descriptor{FormatId: stored.GetFormatId(), Group: stored.GetGroup(), Architecture: strings.TrimPrefix(l.slot, "text_encoder."), Kind: v1.ModelKind_MODEL_KIND_COMPONENT}
@@ -452,10 +471,7 @@ func (p *Puller) landMesh(ctx context.Context, h *tasks.Handle, l *meshLanding) 
 	}
 	out.Path = dir
 	out.PulledAt = timestamppb.Now()
-	out.UsedAt = nil
-	if local, err := p.Store.ReadManifest(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup()); err == nil {
-		out.UsedAt = local.GetUsedAt()
-	}
+	out.UsedAt = local.GetUsedAt()
 	if err := p.Store.WriteManifest(out); err != nil {
 		return err
 	}

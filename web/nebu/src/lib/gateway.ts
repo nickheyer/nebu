@@ -139,7 +139,7 @@ export const systemMessageItems: { value: string; label: string; detail: string 
   { value: 'auto', label: 'Template decides', detail: 'Keep if supported by the template, otherwise merge' },
   { value: 'keep', label: 'Keep', detail: 'Send unchanged' },
   { value: 'merge', label: 'Merge', detail: 'Combine with the first system message' },
-  { value: 'user', label: 'User turns', detail: 'Convert to user messages in place' }
+  { value: 'user', label: 'User turns', detail: 'Join to the user turns beside them' }
 ];
 
 const modeOf: Record<string, SystemMessages> = { keep: SystemMessages.KEEP, merge: SystemMessages.MERGE, user: SystemMessages.USER };

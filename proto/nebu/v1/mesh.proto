@@ -707,6 +707,8 @@ message PullSeatRequest {
   string revision = 3;
   string group = 4;
   bool alone = 5;
+  // Files of the repository to download on their own, each joining the stored group it belongs to
+  repeated string paths = 6;
 }
 
 // Returns the member's pull task

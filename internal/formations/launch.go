@@ -582,7 +582,7 @@ func (m *Manager) weights(ctx context.Context, h *tasks.Handle, f *v1.Formation,
 					}
 					h.Row(row, uint64(j), uint64(len(files)), message)
 				}
-				if err := m.ensure(ctx, h, progress, s.GetNodeId(), n.source, n.repo, n.group, n.revise); err != nil {
+				if err := m.ensure(ctx, h, progress, s.GetNodeId(), n.source, n.repo, n.group, n.revise, nil); err != nil {
 					h.Row(row, uint64(j), uint64(len(files)), name+": "+err.Error())
 					errs[i] = fmt.Errorf("%s on %s: %w", name, m.nodeName(s.GetNodeId()), err)
 					return
@@ -613,14 +613,14 @@ func (m *Manager) nodeName(id string) string {
 
 // Makes sure a node holds a model, pulling it there when it does not, the pull's byte progress
 // reported through progress
-func (m *Manager) ensure(ctx context.Context, h *tasks.Handle, progress func(done, total uint64, message string), node, source, repo, group, revision string) error {
+func (m *Manager) ensure(ctx context.Context, h *tasks.Handle, progress func(done, total uint64, message string), node, source, repo, group, revision string, paths []string) error {
 	if node == m.self() {
-		if _, err := m.Store.ReadManifest(source, repo, group); err == nil {
+		if _, err := m.Store.ReadManifest(source, repo, group); err == nil && len(paths) == 0 {
 			h.Logf("%s %s already on %s", repo, group, m.nodeName(node))
 			progress(1, 1, fmt.Sprintf("%s %s already here", repo, group))
 			return nil
 		}
-		task, err := m.Puller.Pull(ctx, &v1.PullRequest{SourceId: source, Repo: repo, Group: group, Revision: revision})
+		task, err := m.Puller.Pull(ctx, &v1.PullRequest{SourceId: source, Repo: repo, Group: group, Revision: revision, Paths: paths})
 		if err != nil {
 			return err
 		}
@@ -646,7 +646,7 @@ func (m *Manager) ensure(ctx context.Context, h *tasks.Handle, progress func(don
 	if err != nil {
 		return err
 	}
-	if holds(rec, source, repo, group) {
+	if len(paths) == 0 && holds(rec, source, repo, group) {
 		h.Logf("%s %s already on %s", repo, group, rec.GetName())
 		progress(1, 1, fmt.Sprintf("%s %s already on %s", repo, group, rec.GetName()))
 		return nil
@@ -656,7 +656,7 @@ func (m *Manager) ensure(ctx context.Context, h *tasks.Handle, progress func(don
 		return err
 	}
 	cctx, cancel := context.WithTimeout(ctx, callTimeout)
-	resp, err := cl.Mesh.PullSeat(cctx, connect.NewRequest(&v1.PullSeatRequest{SourceId: source, Repo: repo, Revision: revision, Group: group}))
+	resp, err := cl.Mesh.PullSeat(cctx, connect.NewRequest(&v1.PullSeatRequest{SourceId: source, Repo: repo, Revision: revision, Group: group, Paths: paths}))
 	cancel()
 	if err != nil {
 		return err

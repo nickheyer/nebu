@@ -124,7 +124,7 @@ func TestPassthroughAsSent(t *testing.T) {
 	}
 }
 
-// Later system turns are folded only as the route's mode says, the request rendered for it, and pass through otherwise
+// Later system turns fold as the route's mode says and the request renders, passing through otherwise
 func TestLaterSystemTurns(t *testing.T) {
 	model := newSeat(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) { chatAnswer(w, "ok") })
 	body := `{"model":"m","messages":[{"role":"system","content":"be brief"},{"role":"user","content":"hi"},{"role":"system","content":"now be long"},{"role":"user","content":"go"}]}`
@@ -136,7 +136,7 @@ func TestLaterSystemTurns(t *testing.T) {
 	}{
 		"keep":  {v1.SystemMessages_SYSTEM_MESSAGES_KEEP, "system,user,system,user", "be brief", false},
 		"merge": {v1.SystemMessages_SYSTEM_MESSAGES_MERGE, "system,user,user", "be brief\n\nnow be long", true},
-		"user":  {v1.SystemMessages_SYSTEM_MESSAGES_USER, "system,user,user,user", "be brief", true},
+		"user":  {v1.SystemMessages_SYSTEM_MESSAGES_USER, "system,user,user", "be brief", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			g, base := seatGateway(t, model, &v1.Profile{SystemMessages: tc.mode})
@@ -151,6 +151,11 @@ func TestLaterSystemTurns(t *testing.T) {
 			}
 			if got := systemSent(t, sent); got != tc.system {
 				t.Fatalf("system %q, want %q", got, tc.system)
+			}
+			if tc.mode == v1.SystemMessages_SYSTEM_MESSAGES_USER {
+				if first := sent["messages"].([]any)[1].(map[string]any)["content"]; first != "hi\n\nnow be long" {
+					t.Fatalf("the late system turn joins the user turn before it: %v", first)
+				}
 			}
 		})
 	}

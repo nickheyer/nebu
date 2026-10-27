@@ -83,7 +83,7 @@ func TestCallParser(t *testing.T) {
 	}
 }
 
-// An Anthropic request renders to OpenAI and back without losing turns, calls, or tool results
+// An Anthropic request renders to OpenAI and back whole, text after a result staying in its turn
 func TestRoundTrip(t *testing.T) {
 	body := `{"model":"m","max_tokens":50,"system":"be brief","messages":[
 		{"role":"user","content":"read my notes"},
@@ -94,7 +94,7 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(req.Messages) != 5 || req.Messages[0].Role != "system" || req.Messages[3].Role != "tool" || req.Messages[3].ToolID != "t1" || req.ToolChoice != "required" {
+	if len(req.Messages) != 4 || req.Messages[0].Role != "system" || req.Messages[3].Role != "tool" || req.Messages[3].ToolID != "t1" || req.ToolChoice != "required" {
 		t.Fatalf("parsed %+v", req.Messages)
 	}
 	path, out, err := (openai{}).Render(req)
@@ -116,7 +116,7 @@ func TestRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(out, &sent); err != nil {
 		t.Fatal(err)
 	}
-	if len(sent.Messages) != 5 || sent.Messages[2].Reasoning != "hm" || sent.Messages[2].ToolCalls[0].ID != "t1" || sent.Messages[3].ToolCallID != "t1" || string(sent.Messages[3].Content) != `"buy milk"` || sent.ToolChoice != "required" {
+	if len(sent.Messages) != 4 || sent.Messages[2].Reasoning != "hm" || sent.Messages[2].ToolCalls[0].ID != "t1" || sent.Messages[3].ToolCallID != "t1" || string(sent.Messages[3].Content) != `"buy milk\n\nthanks"` || sent.ToolChoice != "required" {
 		t.Fatalf("sent %s", out)
 	}
 	back, err := (openai{}).Parse(OpenAIChat, out)

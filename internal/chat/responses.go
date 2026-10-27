@@ -310,6 +310,9 @@ func respMessages(raw json.RawMessage) ([]Message, error) {
 			if b.Len() > 0 {
 				thinking = append(thinking, Part{Type: "thinking", Text: b.String()})
 			}
+		case "web_search_call", "mcp_call":
+			// A tool the gateway ran, whose turns it keeps and puts back behind the answer they led to
+			continue
 		case "item_reference":
 			return nil, bad("input item %d refers to a stored item, and the gateway stores none, so send the item itself", i+1)
 		default:

@@ -104,7 +104,7 @@ func foldTools(c *Request) *Request {
 			msg.Parts = responseParts(m)
 		}
 		if n := len(out.Messages); n > 0 && out.Messages[n-1].Role == "user" && msg.Role == "user" {
-			out.Messages[n-1].Parts = joinParts(out.Messages[n-1].Parts, msg.Parts)
+			out.Messages[n-1].Parts = JoinParts(out.Messages[n-1].Parts, msg.Parts)
 			continue
 		}
 		out.Messages = append(out.Messages, msg)
@@ -146,8 +146,8 @@ func responseParts(m Message) []Part {
 	return out
 }
 
-// Joins two turns' parts, text with a blank line between
-func joinParts(a, b []Part) []Part {
+// Joins two runs of parts, adjacent text with a blank line between
+func JoinParts(a, b []Part) []Part {
 	out := append([]Part(nil), a...)
 	for _, p := range b {
 		if p.Type == "text" && len(out) > 0 && out[len(out)-1].Type == "text" {

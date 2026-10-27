@@ -287,7 +287,7 @@ func (s *MeshService) PullSeat(ctx context.Context, req *connect.Request[v1.Pull
 	if _, err := s.peer(req.Header()); err != nil {
 		return nil, err
 	}
-	task, err := s.puller.Pull(ctx, &v1.PullRequest{SourceId: req.Msg.GetSourceId(), Repo: req.Msg.GetRepo(), Revision: req.Msg.GetRevision(), Group: req.Msg.GetGroup(), Alone: req.Msg.GetAlone()})
+	task, err := s.puller.Pull(ctx, &v1.PullRequest{SourceId: req.Msg.GetSourceId(), Repo: req.Msg.GetRepo(), Revision: req.Msg.GetRevision(), Group: req.Msg.GetGroup(), Alone: req.Msg.GetAlone(), Paths: req.Msg.GetPaths()})
 	return reply(&v1.PullSeatResponse{Task: task}, err)
 }
 

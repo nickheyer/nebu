@@ -2,16 +2,18 @@
   import { ArtifactRole, type Artifact } from '$proto/model_pb';
   import { enumLabel, storage, plural } from '$lib/format';
   import { weightsName } from '$lib/catalog';
-  import { fileDownloadUrl } from '$lib/api';
+  import { api, fileDownloadUrl } from '$lib/api';
   import { copyText, downloadUrl } from '$lib/clipboard';
   import { ok, fail } from '$lib/toast.svelte';
+  import { startedTask, taskFor } from '$lib/state.svelte';
   import { TableSort } from '$lib/sort.svelte';
-  import { Folder, File, FileCode, FileText, Check, ChevronRight, CornerLeftUp, Download, ExternalLink, Link } from '@lucide/svelte';
+  import { Folder, File, FileCode, FileText, Check, ChevronRight, CornerLeftUp, Download, ExternalLink, HardDriveDownload, Link } from '@lucide/svelte';
   import type { Component } from 'svelte';
   import Empty from './ui/Empty.svelte';
   import Tip from './ui/Tip.svelte';
   import SortTh from './ui/SortTh.svelte';
   import Menu from './ui/Menu.svelte';
+  import TaskChip from './TaskChip.svelte';
 
   let {
     files,
@@ -93,6 +95,19 @@
     if (await copyText(path)) ok('Copied ' + path);
     else fail('The clipboard refused', 'Copy failed');
   }
+  // Pulls one file into the store, where it joins the group it belongs to
+  async function pull(a: Artifact, name: string) {
+    try {
+      const r = await api.store.pull({ sourceId, repo, revision, paths: [a.path] });
+      startedTask(`Downloading ${name}`, `Downloaded ${name}`, repo, r.task);
+    } catch (err) {
+      fail(err, 'Download failed');
+    }
+  }
+  function pulling(a: Artifact) {
+    return taskFor('pull', { source: sourceId, repo, path: a.path });
+  }
+  // Streams the file to this browser
   async function download(a: Artifact, name: string) {
     try {
       downloadUrl(await fileDownloadUrl(sourceId, repo, revision, a.path), name);
@@ -102,8 +117,10 @@
   }
   function items(a: Artifact) {
     const name = a.path.split('/').pop() ?? a.path;
-    const list: { label: string; icon: Component<any>; detail?: string; onSelect: () => void }[] = [
-      { label: 'Download file', icon: Download, detail: storage(a.sizeBytes), onSelect: () => download(a, name) },
+    const loose = a.role === ArtifactRole.OTHER;
+    const list: { label: string; icon: Component<any>; detail?: string; disabled?: boolean; onSelect: () => void }[] = [
+      { label: 'Download to store', icon: HardDriveDownload, detail: loose ? 'Not part of a weight group' : storage(a.sizeBytes), disabled: loose, onSelect: () => pull(a, name) },
+      { label: 'Save to this device', icon: Download, detail: storage(a.sizeBytes), onSelect: () => download(a, name) },
       { label: 'Copy path', icon: Link, onSelect: () => copyPath(a.path) }
     ];
     if (a.url) {
@@ -173,6 +190,7 @@
             {@const Icon = icons[a.role] ?? File}
             {@const variant = belongs(a)}
             {@const part = shard(a)}
+            {@const task = pulling(a)}
             <tr class="group">
               <td class="w-full max-w-0" title={a.path}>
                 <div class="flex min-w-0 items-center gap-2 font-mono text-xs"><Icon size={13} class="shrink-0 text-fg-faint" /><span class="truncate text-fg">{r.name}</span></div>
@@ -183,8 +201,8 @@
                 {#if part}<span class="ml-2 text-xs text-fg-faint">{part}</span>{/if}
               </td>
               <td class="num">{storage(a.sizeBytes)}</td>
-              <td class="w-8 text-right">
-                {#if stored.has(a.path)}<Tip text="Downloaded"><Check size={13} class="text-ok" /></Tip>{/if}
+              <td class="text-right whitespace-nowrap {task ? '' : 'w-8'}">
+                {#if task}<TaskChip {task} label="Downloading" />{:else if stored.has(a.path)}<Tip text="Downloaded"><Check size={13} class="text-ok" /></Tip>{/if}
               </td>
               <td class="w-8 !py-0 text-right">
                 <span class="inline-flex invisible group-hover:visible has-[[data-state=open]]:visible"><Menu size="xs" items={items(a)} /></span>

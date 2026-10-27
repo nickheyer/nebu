@@ -438,6 +438,7 @@ func (anthropic) Parse(path string, body []byte) (*Request, error) {
 }
 
 // The turns one message makes, each tool result a tool turn of its own
+// The turns of one message, results as tool turns, what follows a user turn's last result joining it
 func antTurns(m antMessage) ([]Message, error) {
 	blocks, err := antBlocks(m.Content)
 	if err != nil {
@@ -472,6 +473,11 @@ func antTurns(m antMessage) ([]Message, error) {
 			}
 			msg.Parts = append(msg.Parts, parts...)
 		}
+	}
+	if n := len(out); m.Role == "user" && n > 0 && out[n-1].Role == "tool" && len(msg.Parts) > 0 {
+		out[n-1].Parts = JoinParts(out[n-1].Parts, msg.Parts)
+		out[n-1].Extra = mergeExtra(out[n-1].Extra, extra)
+		return out, nil
 	}
 	if len(msg.Parts) > 0 || len(msg.ToolCalls) > 0 {
 		msg.Extra = extra

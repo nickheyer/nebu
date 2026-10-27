@@ -86,12 +86,14 @@ type Gateway struct {
 	slots *slotPool
 	// The tool servers routes, personas, and requests attach
 	tools *tools.Registry
+	// The tool rounds of recent answers, for clients whose protocol cannot carry them back
+	rounds *roundStore
 }
 
 // Creates a gateway with bearer keys, default route policy, and allowed origins
 func New(table *Table, keys, origins []string, policy *v1.Policy, bus *events.Bus, log *slog.Logger) *Gateway {
 	table.SetDefaults(policy)
-	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing, countRing), transports: map[transportKey]*http.Transport{}, videos: newVideoStore(), affinity: newAffinity(), jobs: newForwardedJobs(), slots: newSlotPool(), tools: tools.New(log, bus)}
+	return &Gateway{table: table, keys: keys, origins: origins, log: log, traces: NewRecorder(bus, traceRing, countRing), transports: map[transportKey]*http.Transport{}, videos: newVideoStore(), affinity: newAffinity(), jobs: newForwardedJobs(), slots: newSlotPool(), tools: tools.New(log, bus), rounds: newRoundStore()}
 }
 
 // Returns the request recorder

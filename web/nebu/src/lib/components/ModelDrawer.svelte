@@ -6,7 +6,7 @@
   import { runModel } from '$lib/actions.svelte';
   import { isComponent, kindLabel, partWord } from '$lib/diffusion';
   import { ModelKind } from '$proto/model_pb';
-  import { ago, ratioBytes, ratioStorage, storage, count, params as fmtParams, enumLabel, byName, ctx as fmtCtx } from '$lib/format';
+  import { ago, ratioBytes, ratioStorage, storage, count, params as fmtParams, enumLabel, byName, ctx as fmtCtx, plural } from '$lib/format';
   import { readLocal, writeLocal } from '$lib/persist';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
@@ -310,8 +310,13 @@
   function heldOn(group: string) {
     return holdersOf({ sourceId, repo: curRepo, group }).filter((n) => !n.self);
   }
+  // The group's own pull, file pulls into it aside
   function pulling(group: string) {
-    return model ? taskFor('pull', { source: sourceId, repo: model.repo, group }) : undefined;
+    return model ? taskFor('pull', { source: sourceId, repo: model.repo, group }, true, ['files']) : undefined;
+  }
+  // Whether the store holds only some files of a group, kept as a component until the rest land
+  function partial(m: StoredModel, d: Descriptor | undefined) {
+    return isComponent(m.descriptor) && !!d && !isComponent(d);
   }
   function servingAs(m: StoredModel): string[] {
     return [...live.instances.values()].filter((i) => i.sourceId === m.sourceId && i.repo === m.repo && i.group === m.group && instanceLive(i)).map((i) => (i.slotId ? (live.slots.get(i.slotId)?.name ?? i.name) : i.name));
@@ -524,6 +529,8 @@
                       >
                         {#if task}
                           <TaskChip {task} label="Downloading" />
+                        {:else if stored && partial(stored, d)}
+                          <Tip text="{plural(stored.artifacts.length, 'file')} stored. Download the weights and required parts to run it"><Button size="xs" variant={best ? 'primary' : 'ghost'} icon={Download} onclick={() => pull(d)}>Download the rest</Button></Tip>
                         {:else if stored && isComponent(d)}
                           <span class="text-xs text-fg-faint">downloaded</span>
                         {:else if stored}
@@ -582,14 +589,16 @@
         {#each storedGroups as m (modelKey(m))}
           {@const serving = servingAs(m)}
           {@const task = taskFor('verify', { source: m.sourceId, repo: m.repo, group: m.group }) ?? taskFor('export', { source: m.sourceId, repo: m.repo, group: m.group })}
+          {@const incomplete = partial(m, ordered.find((d) => d.group === m.group))}
           <div class="flex flex-col gap-4 rounded-md border border-line p-4">
             <div class="flex flex-wrap items-center gap-3">
               <span class="font-mono text-sm text-fg">{weightsName(m.group, m.formatId)}</span>
               <span class="text-xs text-fg-faint">{storage(m.bytes)} · downloaded {ago(m.pulledAt, clock.now)}{m.usedAt ? ` · last run ${ago(m.usedAt, clock.now)}` : ''}</span>
               {#each serving as name (name)}<State tone="ok" label="Serving as {name}" />{/each}
+              {#if incomplete}<State tone="warn" label="{plural(m.artifacts.length, 'file')} of the group, not runnable until the rest land" />{/if}
               {#if task}<TaskChip {task} />{/if}
               <span class="ml-auto flex items-center gap-1">
-                <Button size="sm" variant="primary" icon={Play} onclick={() => runModel(m)}>Run</Button>
+                {#if !incomplete}<Button size="sm" variant="primary" icon={Play} onclick={() => runModel(m)}>Run</Button>{/if}
                 <Button size="sm" variant="ghost" icon={ShieldCheck} onclick={() => verify(m)}>Verify</Button>
                 <Button size="sm" variant="ghost" icon={Trash2} class="text-bad hover:text-bad" disabled={serving.length > 0} onclick={() => remove(m)}>Remove</Button>
               </span>

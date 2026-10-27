@@ -22,7 +22,9 @@ func runPull(ctx context.Context, e *env, args []string) error {
 	alone := fs.Bool("alone", false, "download only this group")
 	detach := fs.Bool("detach", false, "start the task and return its id")
 	to := fs.String("to", "", "pull onto another mesh member, by name or id")
-	positional, err := e.parse(fs, args, 1, 1, "pull <repo>[@revision] [flags]")
+	var files multi
+	fs.Var(&files, "file", "download one file of the repository into the stored group it belongs to, repeatable")
+	positional, err := e.parse(fs, args, 1, 1, "pull <repo>[@revision] [--file PATH]... [flags]")
 	if err != nil {
 		return err
 	}
@@ -32,7 +34,7 @@ func runPull(ctx context.Context, e *env, args []string) error {
 		}
 	}
 	repo, revision := splitRef(positional[0])
-	resp, err := e.cl.store.Pull(ctx, connect.NewRequest(&v1.PullRequest{SourceId: *source, Repo: repo, Revision: revision, Group: *group, Alone: *alone, NodeId: *to}))
+	resp, err := e.cl.store.Pull(ctx, connect.NewRequest(&v1.PullRequest{SourceId: *source, Repo: repo, Revision: revision, Group: *group, Alone: *alone, NodeId: *to, Paths: files}))
 	if err != nil {
 		return err
 	}

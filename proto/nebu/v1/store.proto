@@ -59,6 +59,8 @@ message PullRequest {
   bool alone = 5;
   // Pull onto another mesh member, this node when empty
   string node_id = 6;
+  // Files of the repository to download on their own, each joining the stored group it belongs to
+  repeated string paths = 7;
 }
 
 // Returns the pull task

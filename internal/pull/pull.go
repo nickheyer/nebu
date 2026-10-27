@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -56,6 +57,8 @@ type landing struct {
 	descriptor *v1.Descriptor
 	// Companion slot, or empty for the model itself.
 	slot string
+	// Whether the landed files join what the group already holds instead of replacing it
+	merge bool
 }
 
 func (l *landing) artifacts() []*v1.Artifact {
@@ -105,6 +108,9 @@ func (p *Puller) roomBytes(need uint64) error {
 // unresolved required parts fail before the task starts. Alone skips those checks
 // and downloads only the requested group.
 func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error) {
+	if len(req.GetPaths()) > 0 {
+		return p.pullFiles(ctx, req)
+	}
 	// Members holding the model are nearer than any source, serve a repair its missing blobs, and
 	// name the group when the request does not.
 	if p.Mesh != nil {
@@ -172,6 +178,191 @@ func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error
 		}
 		return p.run(ctx, h, landings)
 	}), nil
+}
+
+// Pulls named files of a repository into the groups they belong to, members serving them before the source
+func (p *Puller) pullFiles(ctx context.Context, req *v1.PullRequest) (*v1.Task, error) {
+	src, model, err := p.Inspector.Resolve(ctx, req.GetSourceId(), req.GetRepo(), req.GetRevision())
+	if err != nil {
+		return nil, err
+	}
+	groups := p.Inspector.Formats.Groups(model)
+	var named *formats.Group
+	if req.GetGroup() != "" {
+		if named, err = formats.FindGroup(groups, req.GetGroup()); err != nil {
+			return nil, err
+		}
+	}
+	byGroup := map[*formats.Group][]*v1.Artifact{}
+	var order []*formats.Group
+	var paths []string
+	for _, path := range req.GetPaths() {
+		if slices.Contains(paths, path) {
+			continue
+		}
+		a := fileOf(model, path)
+		if a == nil {
+			return nil, fmt.Errorf("%s has no file %s at %s", model.GetRepo(), path, model.GetRevision())
+		}
+		g, err := p.groupOf(groups, named, model, a)
+		if err != nil {
+			return nil, err
+		}
+		if _, seen := byGroup[g]; !seen {
+			order = append(order, g)
+		}
+		byGroup[g] = append(byGroup[g], a)
+		paths = append(paths, path)
+	}
+	var notes []string
+	var fromNet []*landing
+	var fromMesh []*meshLanding
+	for _, g := range order {
+		l := &landing{src: src, model: model, g: g, files: byGroup[g], merge: true}
+		if l.descriptor, err = p.Inspector.Describe(ctx, src, model, g); err != nil {
+			notes = append(notes, fmt.Sprintf("%s %s: no readable header, the files land without a descriptor: %v", model.GetRepo(), g.Name, err))
+		}
+		if p.Mesh != nil {
+			if hs := p.Mesh.Holders(ctx, model.GetSourceId(), model.GetRepo(), g.Name); len(hs) > 0 {
+				ml, err := p.meshLanding(ctx, hs, model.GetSourceId(), model.GetRepo(), g.Name, l.files, "", &notes)
+				if err == nil {
+					ml.net, ml.descriptor, ml.merge = l, l.descriptor, true
+					fromMesh = append(fromMesh, ml)
+					continue
+				}
+				notes = append(notes, fmt.Sprintf("%s %s: %v, pulling from %s", model.GetRepo(), g.Name, err, model.GetSourceId()))
+			}
+		}
+		fromNet = append(fromNet, l)
+	}
+	if err := p.roomFor(fromMesh, fromNet); err != nil {
+		return nil, err
+	}
+	labels := map[string]string{"source": model.GetSourceId(), "repo": model.GetRepo(), "files": strconv.Itoa(len(paths))}
+	if len(order) == 1 {
+		labels["group"] = order[0].Name
+	}
+	title := fmt.Sprintf("pull %s %d files", model.GetRepo(), len(paths))
+	if len(paths) == 1 {
+		labels["path"] = paths[0]
+		title = fmt.Sprintf("pull %s %s", model.GetRepo(), paths[0])
+	}
+	return p.Tasks.Start(kindPull, title, labels, func(ctx context.Context, h *tasks.Handle) error {
+		for _, n := range notes {
+			h.Logf("%s", n)
+		}
+		if len(fromMesh) > 0 {
+			return p.runMesh(ctx, h, fromMesh, fromNet)
+		}
+		return p.run(ctx, h, fromNet)
+	}), nil
+}
+
+// The group a file lands in, the named one, else a stored group holding it, else the first
+func (p *Puller) groupOf(groups []*formats.Group, named *formats.Group, model *v1.Model, a *v1.Artifact) (*formats.Group, error) {
+	if named != nil {
+		if holdsPath(named, a.GetPath()) {
+			return named, nil
+		}
+		return nil, fmt.Errorf("%s is not a file of %s %s", a.GetPath(), model.GetRepo(), named.Name)
+	}
+	var holding []*formats.Group
+	for _, g := range groups {
+		if holdsPath(g, a.GetPath()) {
+			holding = append(holding, g)
+		}
+	}
+	if len(holding) == 0 {
+		return nil, fmt.Errorf("%s is not part of any weight group of %s, so the store has no group to keep it in", a.GetPath(), model.GetRepo())
+	}
+	for _, g := range holding {
+		if _, err := p.Store.ReadManifest(model.GetSourceId(), model.GetRepo(), g.Name); err == nil {
+			return g, nil
+		}
+	}
+	return holding[0], nil
+}
+
+// The repository's artifact at a path, nil when it lists none there
+func fileOf(model *v1.Model, path string) *v1.Artifact {
+	for _, a := range model.GetArtifacts() {
+		if a.GetPath() == path {
+			return a
+		}
+	}
+	return nil
+}
+
+// Whether a group's weights or attached files include the path
+func holdsPath(g *formats.Group, path string) bool {
+	for _, a := range inspect.GroupArtifacts(g) {
+		if a.GetPath() == path {
+			return true
+		}
+	}
+	for _, list := range g.Files {
+		for _, a := range list {
+			if a.GetPath() == path {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Adds the files a group already holds to a manifest of those just landed, a landed file replacing its namesake
+func joinStored(stored, have *v1.StoredModel) {
+	landed := map[string]bool{}
+	for _, sa := range stored.GetArtifacts() {
+		landed[sa.GetArtifact().GetPath()] = true
+	}
+	for _, sa := range have.GetArtifacts() {
+		if landed[sa.GetArtifact().GetPath()] {
+			continue
+		}
+		stored.Artifacts = append(stored.Artifacts, sa)
+		stored.Bytes += sa.GetArtifact().GetSizeBytes()
+	}
+	if stored.Descriptor_ == nil {
+		stored.Descriptor_ = have.GetDescriptor_()
+	}
+	stored.UsedAt = have.GetUsedAt()
+}
+
+// Marks a manifest a model once it holds every file of its group and a component until then, answering which
+func (p *Puller) settle(stored *v1.StoredModel, d *v1.Descriptor, all []*v1.Artifact) bool {
+	held := map[string]bool{}
+	for _, sa := range stored.GetArtifacts() {
+		held[sa.GetArtifact().GetPath()] = true
+	}
+	complete := all != nil
+	for _, a := range all {
+		if !held[a.GetPath()] {
+			complete = false
+			break
+		}
+	}
+	if !complete {
+		arch := d.GetArchitecture()
+		if arch == "" {
+			arch = stored.GetDescriptor_().GetArchitecture()
+		}
+		stored.Descriptor_ = &v1.Descriptor{FormatId: stored.GetFormatId(), Group: stored.GetGroup(), Architecture: arch, Kind: v1.ModelKind_MODEL_KIND_COMPONENT}
+		stored.Runtimes = 0
+		return false
+	}
+	switch {
+	case d != nil:
+		stored.Descriptor_ = d
+	case stored.GetDescriptor_().GetKind() == v1.ModelKind_MODEL_KIND_COMPONENT:
+		// The placeholder of a partial group, with no header read to replace it
+		stored.Descriptor_ = nil
+	}
+	stored.Runtimes = 0
+	if sd := stored.GetDescriptor_(); sd != nil {
+		stored.Runtimes = p.Inspector.Runtimes.Mask(stored.GetFormatId(), sd.GetKind())
+	}
+	return true
 }
 
 // Downloads the model and its parts with shared progress.
@@ -268,6 +459,14 @@ func (p *Puller) land(ctx context.Context, h *tasks.Handle, l *landing) error {
 		}
 		stored.Artifacts = append(stored.Artifacts, &v1.StoredArtifact{Artifact: a, Digest: digest, Path: linked})
 		stored.Bytes += a.GetSizeBytes()
+	}
+	if l.merge {
+		if have, err := p.Store.ReadManifest(model.GetSourceId(), model.GetRepo(), g.Name); err == nil {
+			joinStored(stored, have)
+		}
+		if all := inspect.GroupArtifacts(g); !p.settle(stored, l.descriptor, all) {
+			h.Logf("%s %s holds %d of %d files, kept as a component until the rest land", model.GetRepo(), g.Name, len(stored.GetArtifacts()), len(all))
+		}
 	}
 	dir, err := p.Store.GroupDir(model.GetSourceId(), model.GetRepo(), g.Name)
 	if err != nil {
