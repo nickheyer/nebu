@@ -6,6 +6,7 @@
   import { Tooltip } from 'bits-ui';
   import { connect, disconnect, live, activeTasks, hostName, hostLabeled, pendingAdmissions } from '$lib/state.svelte';
   import { signInOffered } from '$lib/auth.svelte';
+  import { theater, loadTheater, setTheater } from '$lib/theater.svelte';
   import { LayoutGrid, Boxes, MessageSquare, ListChecks, Cpu, Settings, WifiOff, KeyRound, Menu as MenuIcon, X, Activity, Bot, Network } from '@lucide/svelte';
   import { sweepStale } from '$lib/images';
   import Logo from '$lib/components/Logo.svelte';
@@ -46,6 +47,15 @@
   const wide = $derived(page.url.pathname === '/chat');
   // The sign-in page stands alone, without the app chrome.
   const bare = $derived(page.url.pathname === '/login');
+  // Theater mode gives the chat the whole window. Escape leaves it.
+  const stage = $derived(wide && theater.on);
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key !== 'Escape' || !stage || e.defaultPrevented) return;
+    // Dialogs and menus close on Escape themselves; leave the stage only when none is open.
+    if (document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')) return;
+    setTheater(false);
+  }
 
   // Send unauthenticated browsers to sign in when the daemon offers a way.
   $effect(() => {
@@ -61,6 +71,7 @@
   }
 
   onMount(() => {
+    loadTheater();
     connect();
     // Remove unreferenced files once per page load.
     sweepStale().catch(() => {});
@@ -94,9 +105,16 @@
   </a>
 {/snippet}
 
+<svelte:window onkeydown={onKey} />
+
 <Tooltip.Provider delayDuration={250}>
   {#if bare}
     <main class="min-h-screen">{@render children()}</main>
+    <Toaster />
+  {:else if stage}
+    <main class="h-screen w-full">{@render children()}</main>
+    <RunDialog />
+    <Confirmer />
     <Toaster />
   {:else}
   <div class="flex min-h-screen">

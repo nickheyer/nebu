@@ -65,6 +65,10 @@ message ChatSettings {
   bool mutating_tools = 12;
   // Whether gateway tools wait for approval in the chat before they run
   bool approve_tools = 13;
+  // Display name for the person typing, shown over their turns. Empty means "You".
+  string user_name = 14;
+  // Display name for the model's character, shown over its turns. Empty means the model name.
+  string assistant_name = 15;
 }
 
 // A saved conversation, owned by the account that made it

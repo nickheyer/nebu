@@ -3,7 +3,8 @@
   import { readLocal, writeLocal } from '$lib/persist';
   import Tabs, { type Tab } from '$lib/components/ui/Tabs.svelte';
 
-  let { pane = $bindable(''), tabs, padded, children }: { pane?: string; tabs: Tab[]; padded: boolean; children: Snippet } = $props();
+  // Flush drops the card frame so the panel sits against the window edge in theater mode.
+  let { pane = $bindable(''), tabs, padded, flush = false, children }: { pane?: string; tabs: Tab[]; padded: boolean; flush?: boolean; children: Snippet } = $props();
 
   const widthKey = 'nebu.chat.inspector';
   const minWidth = 320;
@@ -40,7 +41,7 @@
   }
 </script>
 
-<aside class="card relative flex shrink-0 flex-col {dragging ? 'select-none' : ''}" style="width: {width}px">
+<aside class="relative flex shrink-0 flex-col {flush ? 'border-l border-line bg-bg' : 'card'} {dragging ? 'select-none' : ''}" style="width: {width}px">
   <div role="separator" aria-orientation="vertical" aria-label="Resize" class="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize" onpointerdown={startDrag}>
     <div class="mx-auto h-full w-px bg-transparent transition-colors group-hover:bg-accent/60 {dragging ? 'bg-accent' : ''}"></div>
   </div>

@@ -50,9 +50,12 @@ export interface Session {
   toolServers: string[];
   mutatingTools: boolean;
   approveTools: boolean;
+  // Speaker names shown over each side of the dialogue, empty for the defaults
+  userName: string;
+  assistantName: string;
 }
 
-export const blank = (): Session => ({ turns: [], system: '', dialect: 'openai', stream: true, temperature: '', topP: '', topK: '', maxTokens: '', stop: '', seed: '', tools: '', toolServers: [], mutatingTools: false, approveTools: true });
+export const blank = (): Session => ({ turns: [], system: '', dialect: 'openai', stream: true, temperature: '', topP: '', topK: '', maxTokens: '', stop: '', seed: '', tools: '', toolServers: [], mutatingTools: false, approveTools: true, userName: '', assistantName: '' });
 
 // A session with the same settings and no turns.
 export const fresh = (from: Session): Session => ({ ...from, turns: [] });
@@ -130,7 +133,7 @@ export function toConversation(id: string, title: string, model: string, s: Sess
     id,
     title,
     model,
-    settings: { system: s.system, dialect: s.dialect, stream: s.stream, temperature: s.temperature, topP: s.topP, topK: s.topK, maxTokens: s.maxTokens, stop: s.stop, seed: s.seed, tools: s.tools, toolServers: s.toolServers, mutatingTools: s.mutatingTools, approveTools: s.approveTools },
+    settings: { system: s.system, dialect: s.dialect, stream: s.stream, temperature: s.temperature, topP: s.topP, topK: s.topK, maxTokens: s.maxTokens, stop: s.stop, seed: s.seed, tools: s.tools, toolServers: s.toolServers, mutatingTools: s.mutatingTools, approveTools: s.approveTools, userName: s.userName, assistantName: s.assistantName },
     turns: s.turns.map(turnToProto)
   };
 }
@@ -152,7 +155,9 @@ export function fromConversation(c: Conversation): Session {
     tools: st?.tools ?? '',
     toolServers: [...(st?.toolServers ?? [])],
     mutatingTools: st?.mutatingTools ?? false,
-    approveTools: st ? st.approveTools : true
+    approveTools: st ? st.approveTools : true,
+    userName: st?.userName ?? '',
+    assistantName: st?.assistantName ?? ''
   };
 }
 

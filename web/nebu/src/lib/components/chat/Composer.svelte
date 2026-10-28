@@ -20,6 +20,7 @@
     media,
     mode,
     modelName,
+    speaker = '',
     urls,
     children,
     onsubmit,
@@ -40,6 +41,8 @@
     mode: 'image' | 'video';
     // Empty when no model is picked
     modelName: string;
+    // The character being spoken to, when the chat names one
+    speaker?: string;
     urls: SvelteMap<string, string>;
     // The status line under the box
     children: Snippet;
@@ -57,18 +60,20 @@
     box?.focus();
   }
 
-  // Fits the box to its text, up to a few lines
+  // Fits the box to its text, up to about ten lines
   export function grow() {
     if (!box) return;
     box.style.height = '';
-    box.style.height = Math.min(box.scrollHeight, 200) + 'px';
+    box.style.height = Math.min(box.scrollHeight, 280) + 'px';
   }
 
   export function reset() {
     if (box) box.style.height = '';
   }
 
-  const placeholder = $derived(!modelName ? 'Pick a model' : media ? (mode === 'video' ? `Describe a video for ${modelName}` : `Describe an image for ${modelName}`) : `Message ${modelName}`);
+  const placeholder = $derived(
+    !modelName ? 'Pick a model' : media ? (mode === 'video' ? `Describe a video for ${modelName}` : `Describe an image for ${modelName}`) : speaker.trim() ? `Say something to ${speaker.trim()}` : `Message ${modelName}`
+  );
 
   function onKey(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -112,7 +117,7 @@
       {/if}
       <textarea
         bind:this={box}
-        class="block max-h-[200px] w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-sm leading-6 text-fg placeholder:text-fg-faint focus:outline-none"
+        class="block max-h-[280px] w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-[15px] leading-6 text-fg placeholder:text-fg-faint focus:outline-none"
         rows="1"
         {placeholder}
         bind:value={draft}
@@ -123,7 +128,7 @@
       <div class="flex items-center gap-1 px-1.5 pb-1.5">
         <IconButton icon={ImagePlus} label={attachNote} onclick={() => picker?.click()} disabled={blind || busy} />
         <input bind:this={picker} type="file" accept="image/*" multiple={!media} class="hidden" onchange={onPick} />
-        <span class="ml-auto hidden items-center gap-1 text-xs text-fg-faint sm:inline-flex"><kbd class="kbd">Enter</kbd> sends, <kbd class="kbd">Shift</kbd>+<kbd class="kbd">Enter</kbd> breaks a line</span>
+        <span class="ml-auto hidden items-center gap-1 text-xs text-fg-faint sm:inline-flex"><kbd class="kbd">Shift</kbd>+<kbd class="kbd">Enter</kbd> for a new line</span>
         {#if busy}
           <Button variant="danger" icon={Square} onclick={onstop} aria-label="Stop" />
         {:else}

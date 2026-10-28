@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { RotateCcw, Trash2, PanelRightClose, PanelRightOpen } from '@lucide/svelte';
+  import { RotateCcw, Trash2, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Ghost, MessageSquarePlus } from '@lucide/svelte';
+  import { theater, toggleTheater } from '$lib/theater.svelte';
   import { instanceLive, runtimeName, clock } from '$lib/state.svelte';
   import { enumLabel, duration } from '$lib/format';
   import { RouteState, type Route } from '$proto/gateway_pb';
@@ -28,8 +29,11 @@
     hasTurns,
     busy,
     saved,
+    ghost,
     onregenerate,
-    onclear
+    onclear,
+    onghost,
+    onnew
   }: {
     model?: string;
     modelItems: SelectItem[];
@@ -48,8 +52,11 @@
     hasTurns: boolean;
     busy: boolean;
     saved: boolean;
+    ghost: boolean;
     onregenerate: () => void;
     onclear: () => void;
+    onghost: () => void;
+    onnew: () => void;
   } = $props();
 </script>
 
@@ -71,8 +78,15 @@
     {/if}
   {/if}
   <span class="ml-auto flex shrink-0 items-center gap-1">
+    {#if theater.on}
+      <!-- The page header is hidden on stage, so its actions live here instead. -->
+      <IconButton size="sm" icon={Ghost} variant={ghost ? 'primary' : 'secondary'} aria-pressed={ghost} label={ghost ? 'Ghost mode on. Turn it off to save chats again.' : 'Ghost mode: a chat that is never saved'} onclick={onghost} />
+      <IconButton size="sm" icon={MessageSquarePlus} label="New chat" onclick={onnew} disabled={busy} />
+      <span class="mx-1 h-4 w-px bg-line" aria-hidden="true"></span>
+    {/if}
     <IconButton size="sm" icon={RotateCcw} label={media ? 'Make the last prompt again' : 'Regenerate the last answer'} onclick={onregenerate} disabled={busy || !hasTurns} />
     <IconButton size="sm" icon={Trash2} label={media ? 'Clear the generations shown' : saved ? 'Delete this chat' : 'Discard this chat'} onclick={onclear} disabled={!hasTurns || busy} />
     <IconButton size="sm" icon={inspector ? PanelRightClose : PanelRightOpen} label={inspector ? 'Hide the side panel' : 'Show the side panel'} onclick={() => (inspector = !inspector)} />
+    <IconButton size="sm" icon={theater.on ? Minimize2 : Maximize2} aria-pressed={theater.on} label={theater.on ? 'Leave theater mode (Esc)' : 'Theater mode: hide everything but the chat'} onclick={toggleTheater} />
   </span>
 </header>

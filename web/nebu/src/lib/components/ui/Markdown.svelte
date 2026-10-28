@@ -26,16 +26,17 @@
     return doc.body.innerHTML;
   }
 
-  // Strip YAML front matter before rendering and sanitizing Markdown.
-  function renderMarkdown(md: string): string {
+  // Strip YAML front matter before rendering and sanitizing Markdown. With
+  // breaks, a single newline becomes a line break, as in typed dialogue.
+  function renderMarkdown(md: string, breaks: boolean): string {
     const body = md.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
-    return harden(DOMPurify.sanitize(marked.parse(body, { async: false }) as string, allowed));
+    return harden(DOMPurify.sanitize(marked.parse(body, { async: false, breaks }) as string, allowed));
   }
 </script>
 
 <script lang="ts">
-  let { markdown = '', html = '' }: { markdown?: string; html?: string } = $props();
-  const rendered = $derived(markdown ? renderMarkdown(markdown) : html ? harden(DOMPurify.sanitize(html, allowed)) : '');
+  let { markdown = '', html = '', breaks = false }: { markdown?: string; html?: string; breaks?: boolean } = $props();
+  const rendered = $derived(markdown ? renderMarkdown(markdown, breaks) : html ? harden(DOMPurify.sanitize(html, allowed)) : '');
 </script>
 
 <div class="prose-nebu">{@html rendered}</div>

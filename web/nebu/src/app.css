@@ -537,6 +537,98 @@
   color: var(--color-fg);
 }
 
+/* The chat transcript. Turns read like a script: a speaker name, then their
+   lines, with *actions* set off in italics the way role-players write them. */
+.dialogue {
+  --you: oklch(0.8 0.1 290);
+  --them: var(--color-accent);
+}
+.dialogue .speaker {
+  color: var(--color-fg-faint);
+}
+.dialogue .speaker-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+.dialogue .speaker-you .speaker-dot {
+  background: var(--you);
+}
+.dialogue .speaker-them .speaker-dot {
+  background: var(--them);
+}
+.dialogue .turn .prose-nebu {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--color-fg);
+}
+.dialogue .turn .prose-nebu p {
+  margin-bottom: 0.7em;
+}
+.dialogue .turn .prose-nebu > :last-child {
+  margin-bottom: 0;
+}
+.dialogue .turn .prose-nebu em {
+  color: var(--color-fg-muted);
+}
+.dialogue .turn-you .prose-nebu {
+  color: var(--color-fg-muted);
+}
+.dialogue .turn-you .prose-nebu strong {
+  color: var(--color-fg);
+}
+/* A soft caret follows the last line while the answer streams in. */
+.dialogue .streaming .prose-nebu > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 0.15em;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+  background: var(--them);
+  animation: caret 1s steps(2, jump-none) infinite;
+}
+.dialogue .thinking span {
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: var(--color-fg-faint);
+  animation: breathe 1.2s ease-in-out infinite;
+}
+.dialogue .thinking span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.dialogue .thinking span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes caret {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dialogue .streaming .prose-nebu > :last-child::after,
+  .dialogue .thinking span {
+    animation: none;
+  }
+}
+
 @layer components {
   /* The control sets the slider fill percentage. */
   .range {

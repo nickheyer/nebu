@@ -20,7 +20,8 @@
   import { ApiFlavor } from '$proto/runtime_pb';
   import { ArtifactRole, TensorGroupKind } from '$proto/model_pb';
   import type { Conversation } from '$proto/chat_pb';
-  import { MessageSquare, MessageSquarePlus, Ghost, ImagePlus, ImageOff } from '@lucide/svelte';
+  import { MessageSquare, MessageSquarePlus, Ghost, ImagePlus, ImageOff, ArrowDown } from '@lucide/svelte';
+  import { theater } from '$lib/theater.svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Button from '$lib/components/ui/Button.svelte';
   import IconButton from '$lib/components/ui/IconButton.svelte';
@@ -308,7 +309,7 @@
       shownTrace = lastAnswer?.trace ?? '';
       if (c.model && live.routes.has(c.model)) model = c.model;
       upsertChat({ ...c, turns: [], settings: undefined });
-      scroll();
+      scroll(true);
       composer?.focus();
     } catch (err) {
       fail(err, 'Could not open the chat');
@@ -469,9 +470,25 @@
     }
   });
 
-  async function scroll() {
+  let following = $state(true);
+  const followSlack = 48;
+
+  function onLogScroll() {
+    if (!log) return;
+    following = log.scrollHeight - log.scrollTop - log.clientHeight < followSlack;
+  }
+
+  async function scroll(force = false) {
+    if (!force && !following) return;
     await tick();
-    log?.scrollTo({ top: log.scrollHeight });
+    if (!log) return;
+    log.scrollTo({ top: log.scrollHeight, behavior: force ? 'smooth' : 'auto' });
+    following = true;
+  }
+
+  function jumpToLatest() {
+    following = true;
+    scroll(true);
   }
 
   function stop() {
@@ -625,7 +642,7 @@
     busy = true;
     controller = new AbortController();
     const calls = new Map<number, ToolCall>();
-    scroll();
+    scroll(true);
     try {
       const messages = await wire(conversation(index + 1));
       await send(
@@ -768,7 +785,7 @@
     const applied = { steps: sp?.sample_steps, cfg: sp?.guidance.txt_cfg, sampler: namedChoice(sp?.sample_method) || undefined, scheduler: namedChoice(sp?.scheduler) || undefined };
     const entry: Generation = { id: newId(), kind, model: chosen.name, createdAt: startedAt, request: req, files: [], format: '', mime: '', inputs: [start, end].filter((a): a is Attachment => !!a), applied };
     history = [entry, ...history];
-    scroll();
+    scroll(true);
     try {
       if (kind === 'image') {
         const { images, format } = await generateImages(gatewayBase, entry.request, key, ghost, controller.signal, (sent) => {
@@ -1084,7 +1101,7 @@
 
 {#if loading || routes.length === 0}
   <PageHeader title="Chat" />
-{:else}
+{:else if !theater.on}
   <PageHeader title="Chat">
     {#snippet meta()}
       {#if ghost}
@@ -1108,8 +1125,8 @@
     {#if live.models.size}<Button variant="primary" href="/store">Library</Button>{:else}<Button variant="primary" href="/catalog">Browse catalog</Button>{/if}
   </Empty>
 {:else}
-  <div class="flex h-[calc(100vh-8rem)] min-h-[32rem] gap-4 lg:h-[calc(100vh-6rem)]">
-    <section class="card relative flex min-w-0 flex-1 flex-col" aria-label="Conversation" ondragenter={onDragEnter} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop}>
+  <div class="flex min-h-[32rem] {theater.on ? 'h-screen' : 'h-[calc(100vh-8rem)] gap-4 lg:h-[calc(100vh-6rem)]'}">
+    <section class="relative flex min-w-0 flex-1 flex-col {theater.on ? 'bg-bg' : 'card'}" aria-label="Conversation" ondragenter={onDragEnter} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop}>
       {#if dropping}
         <div class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed bg-bg/80 {blind ? 'border-warn' : 'border-accent'}">
           <div class="flex items-center gap-2 text-sm {blind ? 'text-warn' : 'text-fg'}">
@@ -1117,7 +1134,7 @@
           </div>
         </div>
       {/if}
-      <ChatHeader bind:model bind:mode bind:inspector {modelItems} {chosen} {media} {canImage} {canVideo} {modeItems} {instance} {install} {slot} {vision} {hasTurns} {busy} {saved} onregenerate={regenerate} onclear={clear} />
+      <ChatHeader bind:model bind:mode bind:inspector {modelItems} {chosen} {media} {canImage} {canVideo} {modeItems} {instance} {install} {slot} {vision} {hasTurns} {busy} {saved} {ghost} onregenerate={regenerate} onclear={clear} onghost={toggleGhost} onnew={startNew} />
 
       {#if chosen && !chosenReady}
         <div class="note note-warn m-4 mb-0">{chosen.name} is {enumLabel(RouteState, chosen.state)}. Requests wait until it is ready.</div>
@@ -1126,31 +1143,41 @@
         <div class="note note-bad m-4 mb-0">Could not load {chosenName} capabilities: {capsError}</div>
       {/if}
 
-      <div bind:this={log} class="min-h-0 flex-1 overflow-y-auto px-4">
-        <div class="mx-auto flex max-w-3xl flex-col gap-5 py-4">
-          {#if emptyTurns}
-            <div class="flex flex-col items-center justify-center gap-3 py-20 text-center">
-              <Logo size={36} class="text-fg-faint" />
-              <div class="font-mono text-sm text-fg-muted">{chosen?.name}</div>
-              {#if ghost && !media}
-                <div class="inline-flex items-center gap-1.5 text-xs text-fg-faint"><Ghost size={12} />Not saved</div>
-              {/if}
-              {#if media}
-                <div class="text-xs text-fg-faint">{canVideo && canImage ? 'Describe an image or a video. Paste or drop an image to start from it.' : canVideo ? 'Describe a video. Paste or drop an image to start from it.' : 'Describe an image. Paste or drop an image to start from it.'}</div>
-              {:else if vision}
-                <div class="text-xs text-fg-faint">Paste, drop, or attach an image to ask about it</div>
-              {/if}
-            </div>
-          {/if}
-          {#if media}
-            <MediaHistory {shown} {urls} {missing} onremove={remove} oncancel={cancel} onreuse={reuse} ondownload={download} onshow={show} ontrace={openTrace} />
-          {:else}
-            <ChatTurns turns={session.turns} {urls} {missing} {busy} {pendingCalls} onremove={removeTurn} onsettle={settleCall} onshow={show} ontrace={openTrace} />
-          {/if}
+      <div class="relative min-h-0 flex-1">
+        <div bind:this={log} class="h-full overflow-y-auto overscroll-contain px-4" onscroll={onLogScroll}>
+          <div class="mx-auto flex flex-col gap-6 {theater.on ? 'max-w-4xl py-10' : 'max-w-3xl py-6'}">
+            {#if emptyTurns}
+              <div class="flex flex-col items-center justify-center gap-3 py-20 text-center">
+                <Logo size={36} class="text-fg-faint" />
+                <div class="font-mono text-sm text-fg-muted">{chosen?.name}</div>
+                {#if ghost && !media}
+                  <div class="inline-flex items-center gap-1.5 text-xs text-fg-faint"><Ghost size={12} />Not saved</div>
+                {/if}
+                {#if media}
+                  <div class="text-xs text-fg-faint">{canVideo && canImage ? 'Describe an image or a video. Paste or drop an image to start from it.' : canVideo ? 'Describe a video. Paste or drop an image to start from it.' : 'Describe an image. Paste or drop an image to start from it.'}</div>
+                {:else}
+                  <div class="max-w-sm text-xs leading-5 text-fg-faint">
+                    Say hi to ai. System prompts can be set in <button type="button" class="link" onclick={() => { pane = 'settings'; inspector = true; }}>settings</button>, or just start talking.
+                    {#if vision}<br />Paste, drop, or attach an image to ask about it.{/if}
+                  </div>
+                {/if}
+              </div>
+            {/if}
+            {#if media}
+              <MediaHistory {shown} {urls} {missing} onremove={remove} oncancel={cancel} onreuse={reuse} ondownload={download} onshow={show} ontrace={openTrace} />
+            {:else}
+              <ChatTurns turns={session.turns} {urls} {missing} {busy} {pendingCalls} userName={session.userName} assistantName={session.assistantName || chosen?.name || ''} onremove={removeTurn} onsettle={settleCall} onshow={show} ontrace={openTrace} />
+            {/if}
+          </div>
         </div>
+        {#if !following && hasTurns}
+          <button type="button" class="fade absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-raised/95 px-3 py-1.5 text-xs text-fg shadow-pop backdrop-blur transition-colors hover:border-line-strong" onclick={jumpToLatest}>
+            <ArrowDown size={13} />{busy ? 'Go to end' : 'Jump to latest'}
+          </button>
+        {/if}
       </div>
 
-      <Composer bind:this={composer} bind:draft {pending} {attaching} {busy} {canSend} {blind} {attachNote} {dropping} {media} {mode} modelName={chosen?.name ?? ''} {urls} onsubmit={submit} onstop={stop} onattach={attach} onunattach={unattach} onshow={show}>
+      <Composer bind:this={composer} bind:draft {pending} {attaching} {busy} {canSend} {blind} {attachNote} {dropping} {media} {mode} modelName={chosen?.name ?? ''} speaker={session.assistantName} {urls} onsubmit={submit} onstop={stop} onattach={attach} onunattach={unattach} onshow={show}>
         {#if media}
           <span class="font-mono">{mode}</span>
           {#each applied as s (s)}<span class="tabular-nums">{s}</span>{/each}
@@ -1165,11 +1192,11 @@
     </section>
 
     {#if inspector}
-      <ChatInspector bind:pane tabs={inspectorTabs} padded={pane !== 'chats'}>
+      <ChatInspector bind:pane tabs={inspectorTabs} padded={pane !== 'chats'} flush={theater.on}>
         {#if pane === 'chats'}
           <ChatList {chats} current={ghost ? '' : convId} loaded={chatsLoaded} error={chatsError} {opening} onopen={openChat} onrename={renameChat} ondelete={deleteChat} />
         {:else if pane === 'settings'}
-          <ChatSettings bind:session bind:form bind:key {media} {mode} {caps} hasInit={!!init} {toolsProblem} needsKey={!!status?.auth && !auth.user} onkey={() => setGatewayKey(key.trim())} {gatewayBase} />
+          <ChatSettings bind:session bind:form bind:key {media} {mode} {caps} hasInit={!!init} {toolsProblem} needsKey={!!status?.auth && !auth.user} onkey={() => setGatewayKey(key.trim())} {gatewayBase} modelName={chosen?.name ?? ''} />
         {:else if pane === 'request'}
           <RequestPane sent={lastSent} />
         {:else if pane === 'trace'}
