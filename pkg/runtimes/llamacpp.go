@@ -91,7 +91,10 @@ var llamaCacheTypes = []string{"f32", "f16", "bf16", "q8_0", "q5_1", "q5_0", "q4
 var llamaCacheChoices = append([]string{""}, llamaCacheTypes...)
 
 // Speculative methods --spec-type has taken, suggestions beside whatever the build takes
-var llamaSpecTypes = []string{"none", "draft-mtp", "draft-simple", "draft-eagle3", "draft-dflash", "draft-dspark", "ngram-mod", "ngram-simple", "ngram-map-k", "ngram-map-k4v", "ngram-cache"}
+var llamaSpecTypes = []string{"none", "draft-mtp", "draft-mtp-adaptive", "draft-simple", "draft-eagle3", "draft-dflash", "draft-dspark", "draft-self", "ngram-mod", "ngram-simple", "ngram-map-k", "ngram-map-k4v", "ngram-cache"}
+
+// Speculative methods that draft with the model's own MTP heads
+var llamaMTPMethods = []string{"draft-mtp", "draft-mtp-adaptive"}
 
 // Draft architectures whose layers read the target's cache instead of keeping their own
 var llamaSharedCacheArchs = []string{"gemma4-assistant"}
@@ -141,7 +144,7 @@ func (LlamaCpp) Params() []*v1.Param {
 			Description: "image and audio input"},
 		{Name: "log_verbosity", Label: "Log level", Type: v1.ParamType_PARAM_TYPE_INT, Default: "4", Min: 0, Max: 5, Step: 1, Group: "Diagnostics", Advanced: true, Flag: "--log-verbosity"},
 		{Name: "spec_type", Label: "Speculative method", Type: v1.ParamType_PARAM_TYPE_STRING, Default: Auto, Solved: true, Choices: llamaSpecTypes, Group: "Speculative decoding", Advanced: true,
-			Description: "draft-mtp for MTP heads, ngram methods need no draft model",
+			Description: "draft-mtp and draft-mtp-adaptive for MTP heads, draft-self and ngram methods need no draft model",
 			Rule:        "draft-mtp for an MTP head file, otherwise llama.cpp's own pick"},
 		{Name: "draft_model", Label: "Draft model", Type: v1.ParamType_PARAM_TYPE_PATH, Group: "Speculative decoding", Advanced: true, Picks: "draft",
 			Description: "a smaller model of the same family, or MTP heads"},
@@ -387,7 +390,7 @@ func llamaCacheType(p estimate.Params, name string) string {
 }
 
 // Whether the speculative method drafts with MTP heads, which llama.cpp then loads
-func llamaMTP(p estimate.Params) bool { return p.Str("spec_type") == "draft-mtp" }
+func llamaMTP(p estimate.Params) bool { return slices.Contains(llamaMTPMethods, p.Str("spec_type")) }
 
 // Cache elements per token the draft model keeps, its trunk's layers or the heads of a heads only file
 func llamaDraftElements(s *estimate.Scope, run archs.Run) (float64, error) {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -210,6 +211,17 @@ func TestLlamaCppDraftHead(t *testing.T) {
 // and llama-server judges them
 func TestLlamaCppSpeculative(t *testing.T) {
 	rt := LlamaCpp{}
+	var choices []string
+	for _, p := range rt.Params() {
+		if p.GetName() == "spec_type" {
+			choices = p.GetChoices()
+		}
+	}
+	for _, want := range []string{"none", "draft-mtp", "draft-mtp-adaptive", "draft-simple", "draft-eagle3", "draft-dflash", "draft-dspark", "draft-self", "ngram-mod", "ngram-simple", "ngram-map-k", "ngram-map-k4v", "ngram-cache"} {
+		if !slices.Contains(choices, want) {
+			t.Fatalf("the method choices lack %s: %v", want, choices)
+		}
+	}
 	modern := map[string]string{factDraftModel: "--spec-draft-model", factDraftMax: "--spec-draft-n-max"}
 	legacy := map[string]string{factDraftModel: "--model-draft", factDraftMax: "--draft-max"}
 	plain := layered(4)
@@ -223,6 +235,8 @@ func TestLlamaCppSpeculative(t *testing.T) {
 		{name: "mtp heads in the model", overrides: map[string]string{"spec_type": "draft-mtp"}, facts: modern, want: "--spec-type draft-mtp"},
 		{name: "mtp heads with a limit", overrides: map[string]string{"spec_type": "draft-mtp", "draft_max": "2"}, facts: modern, want: "--spec-type draft-mtp --spec-draft-n-max 2"},
 		{name: "mtp head file", overrides: map[string]string{"spec_type": "draft-mtp", "draft_model": "/mtp.gguf"}, facts: modern, want: "--spec-type draft-mtp --spec-draft-model /mtp.gguf"},
+		{name: "adaptive mtp heads with a limit", overrides: map[string]string{"spec_type": "draft-mtp-adaptive", "draft_max": "12"}, facts: modern, want: "--spec-type draft-mtp-adaptive --spec-draft-n-max 12"},
+		{name: "self drafting", overrides: map[string]string{"spec_type": "draft-self"}, facts: modern, want: "--spec-type draft-self"},
 		{name: "draft method without a draft", overrides: map[string]string{"spec_type": "draft-simple"}, facts: modern, want: "--spec-type draft-simple"},
 		{name: "limit without a method", overrides: map[string]string{"draft_max": "4"}, facts: modern, want: "--spec-draft-n-max 4"},
 		{name: "mtp with the draft cleared", overrides: map[string]string{"spec_type": "draft-mtp", "draft_model": None}, facts: modern, want: "--spec-type draft-mtp"},

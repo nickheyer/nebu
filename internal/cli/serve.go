@@ -332,6 +332,7 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 	fs.StringVar(&req.RuntimeId, "runtime", "", "default runtime for models run in the slot")
 	fs.UintVar(&position, "position", 0, "place in the slot list, one based, last when 0")
 	fs.Var(&params, "param", "default runtime param as name=value, repeatable")
+	fs.StringVar(&req.Args, "args", "", "extra words for the server command, split like a shell, with templates such as {{.Name}}, {{.Port}}, {{.Model}}, {{.Params.n_ctx}}, {{env \"KEY\"}}")
 	policy, limits := policyFlags(fs)
 	req.Policy = policy
 	profile, readProfile := profileFlags(fs)
@@ -368,14 +369,14 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots create")
 	settings, read := slotFlags(fs)
-	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF] [--mutating-tools]")
+	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--args \"--flag {{.Name}}\"] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF] [--mutating-tools]")
 	if err != nil {
 		return err
 	}
 	if err := read(); err != nil {
 		return err
 	}
-	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Aliases: settings.Aliases, Placement: settings.Placement, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, RuntimeId: settings.RuntimeId, Params: settings.Params, Policy: settings.Policy, Profile: settings.Profile, Position: settings.Position}))
+	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Aliases: settings.Aliases, Placement: settings.Placement, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, RuntimeId: settings.RuntimeId, Params: settings.Params, Args: settings.Args, Policy: settings.Policy, Profile: settings.Profile, Position: settings.Position}))
 	if err != nil {
 		return err
 	}
@@ -399,7 +400,7 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	}
 	// Updates replace all fields. Merge flag changes into the current slot.
 	cur := current.Msg.GetSlot()
-	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Aliases: cur.GetAliases(), Placement: cur.GetPlacement(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams(), Policy: cur.GetPolicy(), Profile: cur.GetProfile()}
+	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Aliases: cur.GetAliases(), Placement: cur.GetPlacement(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams(), Args: cur.GetArgs(), Policy: cur.GetPolicy(), Profile: cur.GetProfile()}
 	if req.Policy == nil {
 		req.Policy = &v1.Policy{}
 	}
@@ -444,6 +445,8 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 			req.RuntimeId = settings.RuntimeId
 		case "param":
 			req.Params = settings.Params
+		case "args":
+			req.Args = settings.Args
 		case "position":
 			req.Position = settings.Position
 		case "name":
@@ -590,6 +593,7 @@ func runSlotsShow(ctx context.Context, e *env, args []string) error {
 			{"budget", estimate.Human(s.GetMemoryBytes())},
 			{"runtime", s.GetRuntimeId()},
 			{"params", compact(s.GetParams())},
+			{"args", s.GetArgs()},
 			{"limits", policyText(s.GetPolicy())},
 			{"profile", profileText(s.GetProfile())},
 			{"model", modelText(s.GetRequest())},

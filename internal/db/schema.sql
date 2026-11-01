@@ -257,7 +257,8 @@ CREATE TABLE slots (
   request_timeout_ms INTEGER NOT NULL DEFAULT 0,
   upstream_timeout_ms INTEGER NOT NULL DEFAULT 0,
   formation_id TEXT NOT NULL DEFAULT '',
-  profile TEXT NOT NULL DEFAULT ''
+  profile TEXT NOT NULL DEFAULT '',
+  args TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE slot_devices (

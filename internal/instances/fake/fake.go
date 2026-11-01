@@ -135,7 +135,7 @@ func (Runtime) Roles(shape v1.Shape) []runtimes.Role {
 	switch shape {
 	case v1.Shape_SHAPE_CHAIN:
 		return []runtimes.Role{
-			{Name: runtimes.RoleStage, Phase: 1, Files: runtimes.FilesNone, Health: hello, Listens: true, Single: true, ConnectsFrom: []string{runtimes.RoleHead}},
+			{Name: runtimes.RoleStage, Phase: 1, Files: runtimes.FilesNone, Health: hello, Listens: true, Single: true, Helper: true, ConnectsFrom: []string{runtimes.RoleHead}},
 			{Name: runtimes.RoleHead, Phase: 2, Files: runtimes.FilesWeights, Health: httpHealth, Head: true, ConnectsFrom: []string{runtimes.RoleConductor}},
 		}
 	case v1.Shape_SHAPE_RELAY:
@@ -150,7 +150,7 @@ func (Runtime) Roles(shape v1.Shape) []runtimes.Role {
 		}
 	case v1.Shape_SHAPE_STAGES:
 		return []runtimes.Role{
-			{Name: runtimes.RoleDenoiser, Phase: 1, Files: runtimes.FilesNone, Health: hello, Listens: true, Single: true, ConnectsFrom: []string{runtimes.RoleHead}},
+			{Name: runtimes.RoleDenoiser, Phase: 1, Files: runtimes.FilesNone, Health: hello, Listens: true, Single: true, Helper: true, ConnectsFrom: []string{runtimes.RoleHead}},
 			{Name: runtimes.RoleHead, Phase: 2, Files: runtimes.FilesParts, Health: httpHealth, Head: true, ConnectsFrom: []string{runtimes.RoleConductor}},
 		}
 	case v1.Shape_SHAPE_SOLO:

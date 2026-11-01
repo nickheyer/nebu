@@ -111,7 +111,7 @@ func (LlamaCpp) Roles(shape v1.Shape) []Role {
 	switch shape {
 	case v1.Shape_SHAPE_CHAIN, v1.Shape_SHAPE_DRAFT:
 		return []Role{
-			{Name: RoleStage, Phase: 1, Files: FilesNone, Health: rpcStageHealth, Listens: true, Single: true, ConnectsFrom: []string{RoleHead}},
+			{Name: RoleStage, Phase: 1, Files: FilesNone, Health: rpcStageHealth, Listens: true, Single: true, Helper: true, ConnectsFrom: []string{RoleHead}},
 			{Name: RoleHead, Phase: 2, Files: FilesWeights, Health: RoleHealth{Kind: HealthHTTP}, Head: true},
 		}
 	case v1.Shape_SHAPE_RELAY:

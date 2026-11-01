@@ -75,6 +75,8 @@ type Reservation struct {
 	// The formation serving the slot, when one does
 	FormationID   string
 	FormationName string
+	// Extra words for the server command, templates rendered at launch
+	Args string
 }
 
 func (r *Reservation) placement() v1.Placement {
@@ -82,6 +84,14 @@ func (r *Reservation) placement() v1.Placement {
 		return v1.Placement_PLACEMENT_UNSPECIFIED
 	}
 	return r.Placement
+}
+
+// The slot's extra words, none outside a slot
+func (r *Reservation) args() string {
+	if r == nil {
+		return ""
+	}
+	return r.Args
 }
 
 type swapKey struct{}
@@ -456,6 +466,11 @@ func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Ta
 	if err != nil {
 		return nil, nil, err
 	}
+	extra, err := runtimes.RenderArgs(p.res.args(), runtimes.ScopeOf(input, rendered))
+	if err != nil {
+		return nil, nil, err
+	}
+	rendered.Args = append(rendered.Args, extra...)
 	id := db.NewID()
 	in := m.newInstance(&v1.Instance{
 		Id:             id,

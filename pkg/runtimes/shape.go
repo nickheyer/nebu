@@ -63,6 +63,8 @@ type Role struct {
 	Rendezvous bool
 	// Whether the seat answers the route
 	Head bool
+	// Whether the seat runs a helper such as an rpc server, which a slot's extra arguments skip
+	Helper bool
 	// The roles whose seats connect to this one, RoleConductor standing for the conductor's gateway
 	// and readiness checks, so the guard listener admits their addresses and refuses every other
 	ConnectsFrom []string

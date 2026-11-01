@@ -29,7 +29,7 @@ func (SDCpp) Roles(shape v1.Shape) []Role {
 	switch shape {
 	case v1.Shape_SHAPE_STAGES:
 		return []Role{
-			{Name: RoleDenoiser, Phase: 1, Files: FilesNone, Health: rpcStageHealth, Listens: true, Single: true, ConnectsFrom: []string{RoleHead}},
+			{Name: RoleDenoiser, Phase: 1, Files: FilesNone, Health: rpcStageHealth, Listens: true, Single: true, Helper: true, ConnectsFrom: []string{RoleHead}},
 			{Name: RoleHead, Phase: 2, Files: FilesParts, Health: RoleHealth{Kind: HealthHTTP}, Head: true},
 		}
 	case v1.Shape_SHAPE_REPLICAS:
