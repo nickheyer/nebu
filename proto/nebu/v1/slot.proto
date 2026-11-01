@@ -58,6 +58,8 @@ message Slot {
   repeated SlotAlias aliases = 19;
   // The formation a mesh slot runs, empty for a slot on this node alone
   string formation_id = 20;
+  // Extra words for the runtime's server command, split by shell quoting, each a template over the launch
+  string args = 21;
 }
 
 // Creates a slot
@@ -75,6 +77,8 @@ message CreateSlotRequest {
   Placement placement = 10;
   // Extra public names for the slot.
   repeated SlotAlias aliases = 11;
+  // Extra words for the runtime's server command, templates over the launch
+  string args = 12;
 }
 
 // Returns the new slot
@@ -118,6 +122,8 @@ message UpdateSlotRequest {
   Placement placement = 11;
   // Extra public names, replacing the current list. Names dropped stop answering.
   repeated SlotAlias aliases = 12;
+  // Extra words for the runtime's server command, templates over the launch
+  string args = 13;
 }
 
 // Returns the updated slot

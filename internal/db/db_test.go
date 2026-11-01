@@ -105,7 +105,7 @@ func sampleInstance() *v1.Instance {
 		},
 		Triage:         []*v1.TriageHit{{Id: "oom", Summary: "out of memory", Hint: "lower ctx", Line: "CUDA out of memory", Fix: map[string]string{"n_ctx": "1024"}}, {Id: "assert", Summary: "s", Hint: "h", Line: "l"}},
 		Measurements:   []*v1.Measurement{{Key: "device.weights", Bytes: 9, Line: "x"}, {Key: "device.used", Bytes: 11}},
-		Request:        &v1.RunRequest{SourceId: "hf", Repo: "org/repo", Group: "Q4", RuntimeId: "llamacpp", Name: "qwen", Params: map[string]string{"n_ctx": "8192"}},
+		Request:        &v1.RunRequest{SourceId: "hf", Repo: "org/repo", Group: "Q4", RuntimeId: "llamacpp", Name: "qwen", Params: map[string]string{"n_ctx": "8192"}, Args: "--cache-reuse 256"},
 		DesiredRunning: true,
 		Template:       &v1.ChatTemplate{Source: "tokenizer.chat_template", Tools: v1.ToolSupport_TOOL_SUPPORT_NATIVE},
 	}

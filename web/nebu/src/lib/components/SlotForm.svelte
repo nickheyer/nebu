@@ -36,6 +36,7 @@
       memory: gib(slot?.memoryBytes),
       runtimeId: slot?.runtimeId ?? '',
       params: { ...(slot?.params ?? {}) } as Record<string, string>,
+      args: slot?.args ?? '',
       policy: policyFields(slot?.policy),
       profile: profileFields(slot?.profile)
     };
@@ -49,6 +50,7 @@
   let memory = $state(start.memory);
   let runtimeId = $state(start.runtimeId);
   let params = $state<Record<string, string>>(start.params);
+  let args = $state(start.args);
   let invalidFiles = $state(0);
   let invalidOther = $state(0);
   let policy = $state(start.policy);
@@ -103,7 +105,7 @@
 
   async function save() {
     saving = true;
-    const body = { placement: placementOf(placement), deviceIds, memoryBytes: budget, runtimeId, params, policy: policyFrom(policy), profile: profileFrom(profile), position: Math.max(0, parseInt(position, 10) || 0), aliases: aliasList };
+    const body = { placement: placementOf(placement), deviceIds, memoryBytes: budget, runtimeId, params, args: args.trim(), policy: policyFrom(policy), profile: profileFrom(profile), position: Math.max(0, parseInt(position, 10) || 0), aliases: aliasList };
     try {
       if (slot) {
         const r = await api.slots.updateSlot({ id: slot.id, name: name.trim(), ...body });
@@ -181,6 +183,11 @@
     {:else}
       <p class="text-sm text-fg-faint">Pick a runtime</p>
     {/if}
+    <div class="mt-5 flex flex-col gap-3 border-t border-line pt-4">
+      <Field label="Extra arguments" for="slot-args" description={'Appended to the server command on every run, split like a shell. {{.Name}}, {{.Port}}, {{.Model}}, {{.Params.n_ctx}}, {{.Devices}} and {{env "KEY"}} fill in at launch.'}>
+        <TextInput id="slot-args" mono bind:value={args} empty={'--cache-reuse 256 --slot-save-path /var/cache/{{.Name}}'} />
+      </Field>
+    </div>
   </Card>
 
   <Card title="Limits">

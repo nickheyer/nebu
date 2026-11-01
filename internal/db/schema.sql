@@ -82,7 +82,8 @@ CREATE TABLE instance_requests (
   span TEXT NOT NULL DEFAULT '',
   shape TEXT NOT NULL DEFAULT '',
   seat TEXT NOT NULL DEFAULT '',
-  profile TEXT NOT NULL DEFAULT ''
+  profile TEXT NOT NULL DEFAULT '',
+  args TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE instance_request_params (
@@ -257,7 +258,8 @@ CREATE TABLE slots (
   request_timeout_ms INTEGER NOT NULL DEFAULT 0,
   upstream_timeout_ms INTEGER NOT NULL DEFAULT 0,
   formation_id TEXT NOT NULL DEFAULT '',
-  profile TEXT NOT NULL DEFAULT ''
+  profile TEXT NOT NULL DEFAULT '',
+  args TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE slot_devices (
@@ -300,7 +302,8 @@ CREATE TABLE slot_requests (
   name TEXT NOT NULL,
   span TEXT NOT NULL DEFAULT '',
   shape TEXT NOT NULL DEFAULT '',
-  profile TEXT NOT NULL DEFAULT ''
+  profile TEXT NOT NULL DEFAULT '',
+  args TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE slot_request_params (

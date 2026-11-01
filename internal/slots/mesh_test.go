@@ -41,7 +41,11 @@ func TestLocalDevicesAndMeshRun(t *testing.T) {
 	if !m.meshRun(remote, &v1.RunRequest{}) {
 		t.Fatal("a device on another node makes a formation")
 	}
-	req := m.meshRequest(remote, &v1.RunRequest{Repo: "org/m", Params: map[string]string{"temp": "1"}})
+	remote.Args = "--cache-reuse 256"
+	req := m.meshRequest(remote, &v1.RunRequest{Repo: "org/m", Params: map[string]string{"temp": "1"}, Args: "--cache-reuse 512"})
+	if req.GetArgs() != "--cache-reuse 512" {
+		t.Fatalf("the planner joins the slot's words, the request keeps its own: %q", req.GetArgs())
+	}
 	if req.GetSlotId() != "s" || req.GetName() != "big" || req.GetRuntimeId() != "llamacpp" || len(req.GetSpan()) != 2 || req.GetSpan()[0] != "self/gpu0" || req.GetSpan()[1] != "other/gpu0" {
 		t.Fatalf("mesh request %v", req)
 	}

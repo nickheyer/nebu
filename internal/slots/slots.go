@@ -19,6 +19,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/text"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -334,6 +335,7 @@ func (m *Manager) Reservation(ctx context.Context, id string) (*instances.Reserv
 		RuntimeID:   s.GetRuntimeId(),
 		Params:      s.GetParams(),
 		InstanceID:  s.GetInstanceId(),
+		Args:        s.GetArgs(),
 	}
 	if f := m.liveFormation(s); f != nil {
 		res.FormationID, res.FormationName = f.GetId(), f.GetName()
@@ -421,6 +423,15 @@ func (m *Manager) checkAliases(list []*v1.SlotAlias, self, primary string) ([]*v
 	return out, nil
 }
 
+// Trims a slot's extra words and refuses ones that would not render at launch
+func checkArgs(args string) (string, error) {
+	args = strings.TrimSpace(args)
+	if err := runtimes.CheckArgs(args); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrSlot, err)
+	}
+	return args, nil
+}
+
 // Every public name of the slot: its own, then its aliases in order
 func names(s *v1.Slot) []string {
 	out := []string{s.GetName()}
@@ -466,6 +477,10 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 	if err != nil {
 		return nil, err
 	}
+	args, err := checkArgs(req.GetArgs())
+	if err != nil {
+		return nil, err
+	}
 	devices := devicesFor(req.GetPlacement(), req.GetDeviceIds())
 	if err := m.checkDevices(ctx, devices); err != nil {
 		return nil, err
@@ -479,6 +494,7 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 		MemoryBytes: req.GetMemoryBytes(),
 		RuntimeId:   req.GetRuntimeId(),
 		Params:      req.GetParams(),
+		Args:        args,
 		Policy:      req.GetPolicy(),
 		Profile:     req.GetProfile(),
 		State:       v1.SlotState_SLOT_STATE_EMPTY,
@@ -564,6 +580,10 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 	if err != nil {
 		return nil, err
 	}
+	args, err := checkArgs(req.GetArgs())
+	if err != nil {
+		return nil, err
+	}
 	if name != s.GetName() {
 		if err := m.checkName(name, s.GetId()); err != nil {
 			return nil, err
@@ -588,6 +608,7 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 		sl.MemoryBytes = req.GetMemoryBytes()
 		sl.RuntimeId = req.GetRuntimeId()
 		sl.Params = req.GetParams()
+		sl.Args = args
 		sl.Policy = req.GetPolicy()
 		sl.Profile = req.GetProfile()
 		if sl.Request != nil {

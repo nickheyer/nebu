@@ -801,11 +801,11 @@ func seatEndpoint(in *v1.Instance, remote bool) string {
 	return scheme + "://" + net.JoinHostPort(hostOf(seat.GetAddress()), strconv.Itoa(int(seat.GetPort())))
 }
 
-// The formation's request narrowed to one seat, with the slot's params beneath the request's
+// The formation's request narrowed to one seat, slot params beneath the request's, extra words in its block
 func (m *Manager) seatRequest(f *v1.Formation, p *planned, s *v1.Seat, rendezvous string, started *launched) *v1.RunRequest {
 	run := proto.Clone(f.GetRequest()).(*v1.RunRequest)
 	run.Name = fmt.Sprintf("%s/%s%d", f.GetName(), s.GetRole(), s.GetRank())
-	run.SlotId, run.Span, run.Shape = "", nil, f.GetShape()
+	run.SlotId, run.Span, run.Shape, run.Args = "", nil, f.GetShape(), ""
 	run.RuntimeId, run.InstallId = f.GetRuntimeId(), s.GetInstallId()
 	run.SourceId, run.Repo, run.Group = f.GetSourceId(), f.GetRepo(), f.GetGroup()
 	run.Params = seatParams(f, p)
@@ -827,6 +827,7 @@ func (m *Manager) seatRequest(f *v1.Formation, p *planned, s *v1.Seat, rendezvou
 		GpuLayers:    s.GetGpuLayers(),
 		Memory:       s.GetMemory(),
 		CacheKey:     f.GetCacheKey(),
+		Args:         p.args,
 	}
 	if f.GetShape() == v1.Shape_SHAPE_DRAFT && p.draftKey != "" {
 		spec.Draft = p.draftKey

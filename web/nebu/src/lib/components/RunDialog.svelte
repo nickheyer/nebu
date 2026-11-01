@@ -39,6 +39,7 @@
   let name = $state('');
   let slot = $state('');
   let values = $state<Record<string, string>>({});
+  let args = $state('');
   let invalidFiles = $state(0);
   let invalidPlacement = $state(0);
   let invalidOther = $state(0);
@@ -142,6 +143,8 @@
   const placementParams = $derived(runtimeParams.filter(isPlacement));
   const otherParams = $derived(runtimeParams.filter(isOther));
   const otherSet = $derived(otherParams.filter((p) => values[p.name]).length);
+  // What the extra words add to, the slot's own when it has any
+  const argsHelp = $derived(`${selectedSlot?.args ? `Follows the slot's ${selectedSlot.args} on this run` : 'Appended to the server command on this run'}, split like a shell. {{.Name}}, {{.Port}}, {{.Model}}, {{.Params.n_ctx}}, {{.Devices}} and {{env "KEY"}} fill in at launch.`);
 
   // The slot's reservation in a line, what it serves, which GPUs, the cap, its runtime
   function slotDetail(s: Slot): string {
@@ -162,6 +165,7 @@
       installId,
       name: slot ? '' : name,
       params: values,
+      args: args.trim(),
       slotId: slot,
       span: meshMode ? span : [],
       shape: meshMode ? shapeOf(shapeId) : Shape.UNSPECIFIED,
@@ -256,6 +260,7 @@
       runtimeId = runUi.runtimeId;
       installId = name = '';
       values = {};
+      args = '';
       swapMode = 'overlap';
       showParams = true;
       span = [];
@@ -433,6 +438,12 @@
               </div>
             </section>
           {/if}
+
+          <section class="border-t border-line pt-4">
+            <Field label="Extra arguments" for="run-args" description={argsHelp}>
+              <TextInput id="run-args" mono bind:value={args} empty={'--cache-reuse 256 --slot-save-path /var/cache/{{.Name}}'} />
+            </Field>
+          </section>
 
           {#if swap}
             <section class="border-t border-line pt-4" aria-labelledby="run-swap-title">

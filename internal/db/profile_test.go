@@ -111,11 +111,15 @@ func TestProfileMigration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if err = rows.Err(); err != nil {
+			t.Fatal(err)
+		}
 		for rows.Next() {
 			var s string
 			rows.Scan(&s)
 			raw = append(raw, s)
 		}
+
 		rows.Close()
 	}
 	if got := strings.Join(raw, "|"); strings.Contains(got, "systemMessages") || got != `|{"allowAll":true}||{"allowAll":true}|` {

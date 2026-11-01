@@ -123,6 +123,8 @@ message SeatSpec {
   string cache_key = 29;
   // Layers of the seat's range each device in devices holds, what a tensor split follows
   repeated uint32 device_layers = 30;
+  // The slot's and the run's extra words for the runtime's server command, which a helper seat leaves out
+  string args = 31;
 }
 
 // A runtime process serving one stored model
@@ -177,6 +179,8 @@ message RunRequest {
   PlanProfile profile = 12;
   // Plan against free memory instead of total, as a launch does, so a swap sees the occupant it replaces
   bool free = 13;
+  // Extra words for the runtime's server command, after the slot's, split like a shell, templates rendered at launch
+  string args = 14;
 }
 
 // Returns the instance and its startup task

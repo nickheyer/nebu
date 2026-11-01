@@ -326,6 +326,14 @@ func (m *Manager) launchSeat(ctx context.Context, p *prepared) (*v1.Instance, *v
 	if err != nil {
 		return fail(err)
 	}
+	// A helper seat such as an rpc server runs its own program, which the extra words are not for
+	if !p.role.Helper {
+		extra, err := runtimes.RenderArgs(seat.GetArgs(), runtimes.ScopeOf(input, rendered))
+		if err != nil {
+			return fail(err)
+		}
+		rendered.Args = append(rendered.Args, extra...)
+	}
 	health, err := runtimes.SeatHealth(rt, seat)
 	if err != nil {
 		return fail(err)

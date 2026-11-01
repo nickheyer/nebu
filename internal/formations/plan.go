@@ -31,6 +31,8 @@ type planned struct {
 	name       string
 	// Run params over the slot's, what every seat launches with
 	params map[string]string
+	// The slot's and the run's extra words for every seat that runs the runtime's server
+	args string
 	// The draft model's store key, for a draft head
 	draftKey string
 	draft    *v1.StoredModel
@@ -58,6 +60,9 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool) (
 	}
 	if run.GetRepo() == "" || run.GetGroup() == "" {
 		return nil, fmt.Errorf("%w: a formation names a repo and a weight group", ErrFormation)
+	}
+	if err := runtimes.CheckArgs(run.GetArgs()); err != nil {
+		return nil, err
 	}
 	nodes := m.Mesh.Nodes()
 	span := map[string]bool{}
@@ -105,6 +110,7 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool) (
 	}
 	params := run.GetParams()
 	var budget uint64
+	var slotArgs string
 	placement := v1.Placement_PLACEMENT_UNSPECIFIED
 	if run.GetSlotId() != "" {
 		if m.SlotView == nil {
@@ -115,7 +121,7 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool) (
 			return nil, fmt.Errorf("%w: slot %s: %v", ErrFormation, run.GetSlotId(), err)
 		}
 		params = runtimes.Merge(slot.GetParams(), run.GetParams())
-		budget, placement = slot.GetMemoryBytes(), slot.GetPlacement()
+		budget, placement, slotArgs = slot.GetMemoryBytes(), slot.GetPlacement(), slot.GetArgs()
 	}
 	req := planner.Request{
 		Descriptor: descriptor,
@@ -139,7 +145,7 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool) (
 			return 0
 		},
 	}
-	out := &planned{descriptor: descriptor, stored: stored, rt: rt, name: name, params: params}
+	out := &planned{descriptor: descriptor, stored: stored, rt: rt, name: name, params: params, args: runtimes.JoinArgs(slotArgs, run.GetArgs())}
 	draft, err := m.draft(ctx, params, rt, stored, companions, nodes)
 	if err != nil {
 		return nil, err

@@ -205,6 +205,7 @@
             items={[
               ['Aliases', slot.aliases.length ? slot.aliases.map((a) => a.name).join(', ') : 'None'],
               ['Runtime', slot.runtimeId ? runtimeName(slot.runtimeId) : 'Any'],
+              ['Arguments', slot.args],
               ['Limits', policyText(slot.policy, cached.gateway?.policy)],
               ['Profile', profileText(slot.profile, instance?.template)],
               ['Route', route ? `${route.state === RouteState.READY ? 'Ready' : route.state === RouteState.DRAINING ? 'Draining' : 'Waiting'} · ${count(route.requests)} requests` : '–'],

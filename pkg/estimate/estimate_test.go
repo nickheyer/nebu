@@ -665,6 +665,16 @@ func TestLlamaCppLoadsWhatTheParamsName(t *testing.T) {
 	if !heads {
 		t.Fatalf("the heads sit on device: %v", plan.GetPlacements())
 	}
+	// draft-mtp-adaptive drafts with the same heads
+	plan, err = p.Plan(input(d, host(24*gib, 64*gib), defaults(params, map[string]any{"spec_type": "draft-mtp-adaptive"})))
+	if err != nil || plan.GetWeightsBytes() != trunk+200*mib || plan.GetCacheBytes() != 5*perLayer {
+		t.Fatalf("adaptive mtp heads: weights %d cache %d %v", plan.GetWeightsBytes(), plan.GetCacheBytes(), err)
+	}
+	// draft-self drafts within the model, loading neither the heads nor a draft file
+	plan, err = p.Plan(input(d, host(24*gib, 64*gib), defaults(params, map[string]any{"spec_type": "draft-self"})))
+	if err != nil || plan.GetWeightsBytes() != trunk || plan.GetCacheBytes() != 4*perLayer || len(plan.GetSkipped()) != 2 {
+		t.Fatalf("self drafting: %+v %v", plan, err)
+	}
 	// A named projector loads whole at its file's size, the stored one staying on disk
 	projector := filepath.Join(t.TempDir(), "mmproj-other.gguf")
 	if err := os.WriteFile(projector, make([]byte, 3*mib), 0o644); err != nil {

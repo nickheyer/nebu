@@ -12,6 +12,8 @@ export interface RunSpec {
   installId?: string;
   name?: string;
   params?: Record<string, string>;
+  // Extra words for the server command, after the slot's
+  args?: string;
   slotId?: string;
   // Mesh nodes the run may use, which makes it a formation, with the shape and profile the planner takes
   span?: string[];
