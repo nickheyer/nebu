@@ -312,6 +312,7 @@
 
 <Dialog bind:open={runUi.open} size="xl" title={swap ? `Swap into ${selectedSlot?.name}` : selectedSlot ? `Run in ${selectedSlot.name}` : 'Run a model'} description={current ? `${current.repo} · ${weightsName(current.group, current.formatId)}` : undefined}>
   <form
+    novalidate
     class="run-form flex min-w-0 flex-col"
     onsubmit={(e) => {
       e.preventDefault();

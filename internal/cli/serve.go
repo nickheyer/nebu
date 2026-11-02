@@ -210,9 +210,6 @@ func renderInstance(w io.Writer, in *v1.Instance, profile *v1.HostProfile) {
 		section(w, "triage")
 		for _, hit := range in.GetTriage() {
 			fmt.Fprintf(w, "%s: %s\n  hint: %s\n", hit.GetId(), hit.GetSummary(), hit.GetHint())
-			if len(hit.GetFix()) > 0 {
-				fmt.Fprintf(w, "  try: --param %s\n", strings.ReplaceAll(compact(hit.GetFix()), " ", " --param "))
-			}
 			fmt.Fprintf(w, "  line: %s\n", hit.GetLine())
 		}
 	}
@@ -784,10 +781,18 @@ func runGatewayTraces(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, t := range resp.Msg.GetTraces() {
-			rows = append(rows, []string{t.GetId(), when(t.GetStartedAt(), time.RFC3339), t.GetRoute(), text.Enum(t.GetKind()), traceFormat(t), strconv.Itoa(int(t.GetStatus())), traceMillis(t.GetStartedAt(), t.GetFirstTokenAt()), traceMillis(t.GetStartedAt(), t.GetFinishedAt()), strconv.Itoa(int(t.GetPromptTokens())), strconv.Itoa(int(t.GetCompletionTokens())), t.GetStop(), t.GetError()})
+			rows = append(rows, []string{t.GetId(), when(t.GetStartedAt(), time.RFC3339), t.GetRoute(), text.Enum(t.GetKind()), traceFormat(t), strconv.Itoa(int(t.GetStatus())), traceQueued(t), traceMillis(t.GetStartedAt(), t.GetFirstTokenAt()), traceMillis(t.GetStartedAt(), t.GetFinishedAt()), strconv.Itoa(int(t.GetPromptTokens())), strconv.Itoa(int(t.GetCompletionTokens())), t.GetStop(), t.GetError()})
 		}
-		table(w, []string{"ID", "STARTED", "ROUTE", "KIND", "FORMAT", "STATUS", "FIRST TOKEN", "TOTAL", "IN", "OUT", "STOP", "ERROR"}, rows)
+		table(w, []string{"ID", "STARTED", "ROUTE", "KIND", "FORMAT", "STATUS", "QUEUED", "FIRST TOKEN", "TOTAL", "IN", "OUT", "STOP", "ERROR"}, rows)
 	})
+}
+
+// How many requests a trace waited behind for a sequence slot, a dash when a slot was free
+func traceQueued(t *v1.Trace) string {
+	if t.GetQueuedBehind() == 0 {
+		return "-"
+	}
+	return "behind " + strconv.Itoa(int(t.GetQueuedBehind()))
 }
 
 // Formats trace protocols, combining identical client and runtime protocols.

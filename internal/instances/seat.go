@@ -449,25 +449,31 @@ func (m *Manager) waitSeatReady(ctx context.Context, h *tasks.Handle, in *instan
 	if err != nil {
 		return err
 	}
-	interval, timeout := health.Interval, health.Timeout
+	interval, slowAfter := health.Interval, health.SlowAfter
 	if interval <= 0 {
 		interval = time.Second
 	}
-	if timeout <= 0 {
-		timeout = 5 * time.Minute
+	if slowAfter <= 0 {
+		slowAfter = 5 * time.Minute
+	}
+	slow := func(what string) func(time.Duration) {
+		return func(waited time.Duration) {
+			h.Logf("%s has not %s after %s, waiting for as long as the process lives", rec.GetName(), what, waited)
+			m.Log.Warn("seat slow to become ready", "name", rec.GetName(), "waited", waited)
+		}
 	}
 	switch health.Kind {
 	case runtimes.HealthHTTP:
 		url := rec.GetEndpoint() + health.Path
 		h.Message("waiting for " + url)
-		err = launch.WaitHealthy(ctx, proc, url, interval, timeout)
+		err = launch.WaitHealthy(ctx, proc, url, interval, slowAfter, slow("answered "+url))
 	case runtimes.HealthHello:
 		addr := net.JoinHostPort(bindHost, strconv.Itoa(int(rec.GetSeat().GetLocalPort())))
 		if rec.GetSeat().GetExposed() {
 			addr = net.JoinHostPort(hostOf(rec.GetSeat().GetAddress()), strconv.Itoa(int(rec.GetSeat().GetPort())))
 		}
 		h.Message("waiting for a hello from " + addr)
-		err = waitHello(ctx, proc, addr, interval, timeout, func(version string) { h.Logf("rpc server speaks protocol %s", version) })
+		err = waitHello(ctx, proc, addr, interval, slowAfter, slow("answered a hello"), func(version string) { h.Logf("rpc server speaks protocol %s", version) })
 	case runtimes.HealthProcess:
 		h.Message("waiting for the process to settle")
 		err = waitProcess(ctx, proc, processSettle)
@@ -492,20 +498,19 @@ func (m *Manager) waitSeatReady(ctx context.Context, h *tasks.Handle, in *instan
 }
 
 // Polls a ggml rpc server with the hello command until it answers or the process exits
-func waitHello(ctx context.Context, proc launch.Handle, addr string, interval, timeout time.Duration, spoke func(string)) error {
-	deadline := time.Now().Add(timeout)
-	var last error
+func waitHello(ctx context.Context, proc launch.Handle, addr string, interval, slowAfter time.Duration, slow func(time.Duration), spoke func(string)) error {
+	start := time.Now()
+	warn := time.NewTicker(slowAfter)
+	defer warn.Stop()
 	for {
 		version, err := rpcHello(ctx, addr)
 		if err == nil {
 			spoke(version)
 			return nil
 		}
-		last = err
-		if time.Now().After(deadline) {
-			return fmt.Errorf("no hello within %s: %w", timeout, last)
-		}
 		select {
+		case <-warn.C:
+			slow(time.Since(start).Round(time.Second))
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-proc.Done():

@@ -187,7 +187,7 @@ func TestRoles(t *testing.T) {
 		}
 		// The decode seat is ready on its node by its HTTP path; the canary is the conductor's step.
 		h, err := SeatHealth(rt, &v1.SeatSpec{Shape: v1.Shape_SHAPE_RELAY, Role: RoleDecode})
-		if err != nil || h.Kind != HealthHTTP || h.Path != "/health" || h.Interval <= 0 || h.Timeout <= 0 {
+		if err != nil || h.Kind != HealthHTTP || h.Path != "/health" || h.Interval <= 0 || h.SlowAfter <= 0 {
 			t.Errorf("%s: decode seat health %+v %v", rt.ID(), h, err)
 		}
 	}

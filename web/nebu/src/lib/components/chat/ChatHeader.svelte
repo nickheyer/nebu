@@ -2,7 +2,8 @@
   import { RotateCcw, Trash2, PanelRightClose, PanelRightOpen, Maximize2, Minimize2, Ghost, MessageSquarePlus } from '@lucide/svelte';
   import { theater, toggleTheater } from '$lib/theater.svelte';
   import { instanceLive, runtimeName, clock } from '$lib/state.svelte';
-  import { enumLabel, duration } from '$lib/format';
+  import { enumLabel, duration, ctx } from '$lib/format';
+  import { contextText } from '$lib/runtimes';
   import { RouteState, type Route } from '$proto/gateway_pb';
   import type { Instance } from '$proto/instance_pb';
   import type { Install } from '$proto/runtime_pb';
@@ -70,7 +71,7 @@
     {#if instance}
       <span class="hidden min-w-0 flex-1 items-center gap-x-3 overflow-hidden text-xs whitespace-nowrap text-fg-muted md:flex">
         <span class="kv"><span>runtime</span><span>{runtimeName(instance.runtimeId)}{install?.version ? ` ${install.version}` : ''}</span></span>
-        {#if instance.params.n_ctx}<span class="kv"><span>ctx</span><span>{instance.params.n_ctx}</span></span>{/if}
+        {#if contextText(instance.params, ctx).text}<span class="kv" title={contextText(instance.params, ctx).title}><span>ctx</span><span>{contextText(instance.params, ctx).text}</span></span>{/if}
         {#if media}<span class="kv"><span>makes</span><span>{canImage && canVideo ? 'images, video' : canVideo ? 'video' : 'images'}</span></span>{:else if vision}<span class="kv" title="The model has a vision encoder"><span>sees</span><span>images</span></span>{/if}
         {#if slot}<a class="kv link" href="/slots/{slot.id}"><span>slot</span><span>{slot.name}</span></a>{:else}<a class="link" href="/instances/{instance.id}">Open instance</a>{/if}
         {#if instanceLive(instance)}<span class="kv"><span>up</span><span>{duration(instance.readyAt ?? instance.createdAt, undefined, clock.now)}</span></span>{/if}

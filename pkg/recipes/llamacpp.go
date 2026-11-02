@@ -119,4 +119,34 @@ func (LlamaCpp) Outputs() []string {
 }
 func (LlamaCpp) Binary() string         { return "llama-server" }
 func (LlamaCpp) Timeout() time.Duration { return 3 * time.Hour }
-func (LlamaCpp) Patches() []Patch       { return nil }
+
+// Yields a slot whose cache a request would mostly discard to an empty slot, so conversations stop evicting each other
+const llamaEmptySlotFirst = `--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -1856,9 +1856,21 @@
+                             f_sim_best, slot_prompt_similarity, f_keep);
+                 }
+ 
+                 // if we are about to lose a large portion of the existing context - save it in the prompt cache
+                 if (f_keep < 0.5f) {
+                     update_cache = true;
+                 }
++
++                // a weak match would evict most of this slot's conversation while an empty slot sits idle,
++                // so the empty slot takes the request and this cache stays with its own conversation
++                if (f_keep < 0.5f && task.id_slot == -1) {
++                    for (server_slot & slot : slots) {
++                        if (!slot.is_processing() && slot.prompt.tokens.empty()) {
++                            SLT_INF(slot, "selected empty slot over a weak match, f_sim_best = %.3f, f_keep = %.3f\n", f_sim_best, f_keep);
++                            ret = nullptr;
++                            break;
++                        }
++                    }
++                }
+             }
+         }
+`
+
+func (LlamaCpp) Patches() []Patch {
+	return []Patch{{ID: "server-empty-slot-first", Content: []byte(llamaEmptySlotFirst)}}
+}

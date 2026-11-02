@@ -50,8 +50,6 @@
       {value}
       placeholder={empty}
       oninput={(e) => (value = e.currentTarget.value)}
-      {min}
-      {max}
       {step}
       {disabled}
       aria-invalid={invalid}

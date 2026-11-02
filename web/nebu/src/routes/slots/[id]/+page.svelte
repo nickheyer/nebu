@@ -132,7 +132,7 @@
               <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <Stat label="Runtime" value={runtimeName(instance.runtimeId)} sub={install?.version} />
                 <Stat label="Uptime" value={alive ? duration(instance.readyAt ?? instance.createdAt, undefined, clock.now) : '–'} />
-                <Stat label="Requests" value={count(route?.requests ?? 0n)} sub={route?.inFlight ? `${route.inFlight} in flight` : ''} />
+                <Stat label="Requests" value={count(route?.requests ?? 0n)} sub={route?.inFlight ? `${route.inFlight} in flight${route.slots && route.inFlight > route.slots ? `, ${route.inFlight - route.slots} waiting for a slot` : ''}` : ''} />
                 <Stat label="Endpoint" value={instance.endpoint || '–'} mono />
               </div>
               {#if instance.plan}
@@ -159,7 +159,7 @@
                 <Stat label="Distribution" value={shapeLabel(formation.shape)} sub={plural(new Set(formation.seats.map((s) => s.nodeId)).size, 'node')} />
                 <Stat label="Runtime" value={runtimeName(formation.runtimeId)} />
                 <Stat label="Uptime" value={alive && formation.readyAt ? duration(formation.readyAt, undefined, clock.now) : '–'} />
-                <Stat label="Requests" value={count(route?.requests ?? 0n)} sub={route?.inFlight ? `${route.inFlight} in flight` : ''} />
+                <Stat label="Requests" value={count(route?.requests ?? 0n)} sub={route?.inFlight ? `${route.inFlight} in flight${route.slots && route.inFlight > route.slots ? `, ${route.inFlight - route.slots} waiting for a slot` : ''}` : ''} />
               </div>
               <div class="tbl-wrap contain-inline-size">
                 <table class="tbl dense">

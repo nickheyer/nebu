@@ -66,7 +66,7 @@ func (Runtime) PrepareTimeout() time.Duration  { return 0 }
 func (Runtime) StopGrace() time.Duration       { return time.Second }
 func (Runtime) Probes() []runtimes.Probe       { return nil }
 func (Runtime) Health() runtimes.Health {
-	return runtimes.Health{Path: "/health", Interval: 50 * time.Millisecond, Timeout: 10 * time.Second}
+	return runtimes.Health{Path: "/health", Interval: 50 * time.Millisecond, SlowAfter: 10 * time.Second}
 }
 func (Runtime) Policy() *estimate.Policy {
 	return &estimate.Policy{Shapes: &estimate.ShapeFacts{Handoff: estimate.HandoffNIXL}}
@@ -130,7 +130,7 @@ func (boomSet) Rules() []triage.Rule {
 // whose decode seat wants the canary, lockstep ranks that rendezvous, and stages with a head
 // holding parts
 func (Runtime) Roles(shape v1.Shape) []runtimes.Role {
-	hello := runtimes.RoleHealth{Kind: runtimes.HealthHello, Interval: 50 * time.Millisecond, Timeout: 10 * time.Second}
+	hello := runtimes.RoleHealth{Kind: runtimes.HealthHello, Interval: 50 * time.Millisecond, SlowAfter: 10 * time.Second}
 	httpHealth := runtimes.RoleHealth{Kind: runtimes.HealthHTTP}
 	switch shape {
 	case v1.Shape_SHAPE_CHAIN:

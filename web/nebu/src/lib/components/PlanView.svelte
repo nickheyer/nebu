@@ -16,6 +16,7 @@
   import type { Measurement } from '$proto/instance_pb';
   import { clock, poolName } from '$lib/state.svelte';
   import { pathLabel } from '$lib/diffusion';
+  import { contextText } from '$lib/runtimes';
   import SizeBar from './ui/SizeBar.svelte';
   import State from './ui/State.svelte';
 
@@ -163,7 +164,7 @@
 
   {#if context || layers || experts || chosen.length}
     <dl class="flex flex-wrap gap-x-4 gap-y-1 border-t border-line pt-2 text-xs tabular-nums">
-      {#if context}<div class="flex gap-1.5"><dt class="text-fg-muted">Context</dt><dd class="text-fg" title={plural(context, 'token')}>{ctx(context)}</dd></div>{/if}
+      {#if context}<div class="flex gap-1.5"><dt class="text-fg-muted">Context</dt><dd class="text-fg" title={contextText(plan.params, ctx).title || plural(context, 'token')}>{contextText(plan.params, ctx).text || ctx(context)}</dd></div>{/if}
       {#if layers && layers.count > 0}<div class="flex gap-1.5"><dt class="text-fg-muted">Layers on GPU</dt><dd class="text-fg">{layers.device?.count ?? 0}/{layers.count}</dd></div>{/if}
       {#if experts && experts.count > 0}<div class="flex gap-1.5"><dt class="text-fg-muted">Experts on GPU</dt><dd class="text-fg">{experts.device?.count ?? 0}/{experts.count}</dd></div>{/if}
       {#each chosen as [k, v] (k)}<div class="flex gap-1.5"><dt class="text-fg-muted">{paramOf(k)?.label ?? k}</dt><dd class="font-mono text-fg">{v}</dd></div>{/each}

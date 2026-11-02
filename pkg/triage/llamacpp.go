@@ -32,7 +32,6 @@ func (LlamaCpp) Rules() []Rule {
 			ID:      "unknown-projector",
 			Summary: "this build does not know projector type ${type}",
 			Hint:    "clear mmproj to serve text only, or adopt or build a llama.cpp that supports ${type}",
-			Fix:     map[string]string{"mmproj": "none"},
 			Match: func(line string) (map[string]string, bool) {
 				kind, ok := tailAfter(line, "unknown projector type: ")
 				if !ok || kind == "" {
@@ -45,7 +44,6 @@ func (LlamaCpp) Rules() []Rule {
 			ID:      "projector-load",
 			Summary: "the projector failed to load",
 			Hint:    "clear mmproj to serve text only, or name a projector made for this model and this llama.cpp build",
-			Fix:     map[string]string{"mmproj": "none"},
 			Match:   anyOf("failed to load multimodal model", "Failed to load CLIP model"),
 		},
 		{
@@ -66,7 +64,6 @@ func (LlamaCpp) Rules() []Rule {
 			ID:      "cache-quant-needs-flash",
 			Summary: "a quantized V cache needs flash attention",
 			Hint:    "set flash_attn on or use cache_type_v f16",
-			Fix:     map[string]string{"flash_attn": "on"},
 			Match:   anyOf("V cache quantization requires flash_attn", "quantized V cache requires flash attention"),
 		},
 		{
@@ -170,14 +167,12 @@ func (LlamaCpp) Rules() []Rule {
 			ID:      "rpc-graph-leak",
 			Summary: "CUDA graph execution failed on a worker",
 			Hint:    "enable cuda_disable_graphs on the affected worker",
-			Fix:     map[string]string{"cuda_disable_graphs": "true"},
 			Match:   anyOf("cudaGraphInstantiate", "cudaGraphLaunch", "cudaGraphExecUpdate", "CUDA graph update failed", "graph capture failed", "cudaErrorGraphExecUpdateFailure"),
 		},
 		{
 			ID:      "rpc-share-mmap",
 			Summary: "the primary node could not map the model file",
 			Hint:    "enable direct_io on the primary node to read model weights without memory mapping",
-			Fix:     map[string]string{"direct_io": "true"},
 			Match:   anyOf("mmap failed:", "MapViewOfFile failed:", "CreateFileMappingA failed:"),
 		},
 	}

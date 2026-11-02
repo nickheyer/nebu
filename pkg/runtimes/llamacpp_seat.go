@@ -105,7 +105,7 @@ func (LlamaCpp) Shapes(in *v1.Install) []v1.Shape {
 }
 
 // A stage is a ggml rpc server: alive and answering one hello before the head launches
-var rpcStageHealth = RoleHealth{Kind: HealthHello, Interval: time.Second, Timeout: 2 * time.Minute}
+var rpcStageHealth = RoleHealth{Kind: HealthHello, Interval: time.Second, SlowAfter: 2 * time.Minute}
 
 func (LlamaCpp) Roles(shape v1.Shape) []Role {
 	switch shape {

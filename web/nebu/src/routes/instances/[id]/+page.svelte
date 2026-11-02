@@ -9,7 +9,7 @@
   import { ApiFlavor } from '$proto/runtime_pb';
   import { InstanceState } from '$proto/instance_pb';
   import { RouteState, type Trace } from '$proto/gateway_pb';
-  import { Square, RotateCcw, Wrench, MessageSquare } from '@lucide/svelte';
+  import { Square, RotateCcw, MessageSquare } from '@lucide/svelte';
   import PageHeader from '$lib/components/ui/PageHeader.svelte';
   import Tabs from '$lib/components/ui/Tabs.svelte';
   import Kv from '$lib/components/ui/Kv.svelte';
@@ -62,10 +62,10 @@
     stopping = false;
   }
 
-  async function again(fix: Record<string, string> = {}) {
+  async function again() {
     const r = requestOf(instance);
     if (!r) return;
-    await launch({ ...r, params: { ...r.params, ...fix } });
+    await launch(r);
   }
 </script>
 
@@ -102,7 +102,7 @@
         <Stat label="PID" value={instance.pid || '–'} mono />
         <Stat label="Uptime" value={alive ? duration(instance.readyAt ?? instance.createdAt, undefined, clock.now) : '–'} />
         <Stat label="Startup" value={instance.readyAt ? duration(instance.createdAt, instance.readyAt) : '–'} />
-        <Stat label="Requests" value={count(route?.requests ?? 0n)} sub={route?.inFlight ? `${route.inFlight} in flight` : ''} />
+        <Stat label="Requests" value={count(route?.requests ?? 0n)} sub={route?.inFlight ? `${route.inFlight} in flight${route.slots && route.inFlight > route.slots ? `, ${route.inFlight - route.slots} waiting for a slot` : ''}` : ''} />
       </div>
       {#if instance.plan}
         <Card title="Placement">
@@ -174,14 +174,6 @@
             <div class="text-sm font-medium text-fg">{hit.summary}</div>
             {#if hit.hint}<p class="mt-1 text-sm leading-6 text-fg-muted">{hit.hint}</p>{/if}
             {#if hit.line}<pre class="code mt-3 whitespace-pre-wrap">{hit.line}</pre>{/if}
-            {#if Object.keys(hit.fix).length}
-              <div class="mt-3 flex flex-wrap items-center gap-3">
-                <ParamList params={hit.fix} />
-                {#if requestOf(instance) && !alive}
-                  <Button size="sm" variant="primary" icon={Wrench} class="ml-auto" onclick={() => again(hit.fix)}>Run again with this fix</Button>
-                {/if}
-              </div>
-            {/if}
           </div>
         {/each}
       </div>

@@ -1,4 +1,5 @@
 import type { ConfigField, Facet, SearchHit, SourceCapabilities, SourceStatus } from '$proto/source_pb';
+import { sequenceContext } from './runtimes';
 import { ConfigType, SourceKind } from '$proto/source_pb';
 import type { FitRow, MemoryPlan } from '$proto/estimate_pb';
 import { FitVerdict } from '$proto/estimate_pb';
@@ -156,9 +157,9 @@ export function contextRule(row: FitRow | undefined, rule: (runtimeId: string) =
   return text ? text[0].toUpperCase() + text.slice(1) : 'The context the planner solved';
 }
 
+// The context each sequence of the planned run holds, the pool split the way llama.cpp splits it
 export function plannedContext(row: FitRow | undefined): number {
-  const n = Number(cellPlan(row)?.params['n_ctx'] ?? 0);
-  return Number.isFinite(n) ? n : 0;
+  return sequenceContext(cellPlan(row)?.params).perSequence;
 }
 
 // Omit the quantization name already shown in the group label.

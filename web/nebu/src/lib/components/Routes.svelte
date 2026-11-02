@@ -104,7 +104,7 @@
                 {#if r.served && r.served !== r.name}<div class="font-mono text-xs text-fg-faint">runtime name {r.served}</div>{/if}
               </td>
               <td class="font-mono text-xs text-fg-muted">{r.endpoint || '–'}</td>
-              <td class="num">{count(r.requests)}{#if r.inFlight}<span class="text-fg-faint">{' · '}{r.inFlight} live</span>{/if}</td>
+              <td class="num">{count(r.requests)}{#if r.inFlight}<span class="text-fg-faint">{' · '}{r.inFlight} live</span>{/if}{#if r.slots && r.inFlight > r.slots}<span class="text-warn" title="The runtime serves {r.slots} sequences at once, the rest wait in its queue">{' · '}{r.inFlight - r.slots} waiting for a slot</span>{/if}</td>
               <td class="text-xs text-fg-muted">{policyText(r.policy, defaults)}</td>
               <td class="text-xs text-fg-muted">{profileText(r.profile, inst?.template)}</td>
               <td class="actions"><span>{#if removable(r)}<IconButton size="xs" icon={Trash2} label="Remove" onclick={() => remove(r.name)} />{/if}</span></td>

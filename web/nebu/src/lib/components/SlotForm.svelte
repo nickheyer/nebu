@@ -128,6 +128,7 @@
 </script>
 
 <form
+  novalidate
   class="flex flex-col gap-5"
   onsubmit={(e) => {
     e.preventDefault();

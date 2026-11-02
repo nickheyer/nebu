@@ -125,7 +125,7 @@
                   {#if occupied && instance}<span class="ml-2 text-xs tabular-nums text-fg-faint">{duration(instance.readyAt ?? instance.createdAt, undefined, clock.now)}</span>{/if}
                   {#if occupied && formation?.readyAt}<span class="ml-2 text-xs tabular-nums text-fg-faint">{duration(formation.readyAt, undefined, clock.now)}</span>{/if}
                 </td>
-                <td class="num text-fg-muted">{occupied ? count(route?.requests ?? 0n) : '–'}{#if route?.inFlight}<span class="text-fg-faint"> · {route.inFlight} live</span>{/if}</td>
+                <td class="num text-fg-muted">{occupied ? count(route?.requests ?? 0n) : '–'}{#if route?.inFlight}<span class="text-fg-faint"> · {route.inFlight} live</span>{/if}{#if route?.slots && route.inFlight > route.slots}<span class="text-warn" title="The runtime serves {route.slots} sequences at once, the rest wait in its queue"> · {route.inFlight - route.slots} waiting for a slot</span>{/if}</td>
                 <td class="num text-fg-muted">{instance ? instanceMemory(instance) || '–' : formation ? formationMemory(formation) : '–'}</td>
                 <td class="actions" onclick={(e) => e.stopPropagation()}>
                   <span>
@@ -158,7 +158,7 @@
                 <td><div class="truncate text-fg" title={f.repo}>{tail(f.repo)} <span class="font-mono text-xs text-fg-muted">{f.group}</span></div></td>
                 <td class="text-fg-muted">{runtimeName(f.runtimeId)}</td>
                 <td><State values={FormationState} value={f.state} />{#if f.readyAt}<span class="ml-2 text-xs tabular-nums text-fg-faint">{duration(f.readyAt, undefined, clock.now)}</span>{/if}</td>
-                <td class="num text-fg-muted">{count(route?.requests ?? 0n)}{#if route?.inFlight}<span class="text-fg-faint"> · {route.inFlight} live</span>{/if}</td>
+                <td class="num text-fg-muted">{count(route?.requests ?? 0n)}{#if route?.inFlight}<span class="text-fg-faint"> · {route.inFlight} live</span>{/if}{#if route?.slots && route.inFlight > route.slots}<span class="text-warn" title="The runtime serves {route.slots} sequences at once, the rest wait in its queue"> · {route.inFlight - route.slots} waiting for a slot</span>{/if}</td>
                 <td class="num text-fg-muted">{formationMemory(f)}</td>
                 <td class="actions" onclick={(e) => e.stopPropagation()}>
                   <span>{#if route?.state === RouteState.READY}<IconButton size="xs" icon={MessageSquare} label="Chat" href="/chat?model={encodeURIComponent(f.name)}" />{/if}</span>
@@ -173,7 +173,7 @@
                 <td><div class="truncate text-fg" title={i.repo}>{tail(i.repo)} <span class="font-mono text-xs text-fg-muted">{groupLabel(i)}</span></div></td>
                 <td class="text-fg-muted">{runtimeName(i.runtimeId)}</td>
                 <td><State values={InstanceState} value={i.state} /><span class="ml-2 text-xs tabular-nums text-fg-faint">{duration(i.readyAt ?? i.createdAt, undefined, clock.now)}</span></td>
-                <td class="num text-fg-muted">{count(route?.requests ?? 0n)}{#if route?.inFlight}<span class="text-fg-faint"> · {route.inFlight} live</span>{/if}</td>
+                <td class="num text-fg-muted">{count(route?.requests ?? 0n)}{#if route?.inFlight}<span class="text-fg-faint"> · {route.inFlight} live</span>{/if}{#if route?.slots && route.inFlight > route.slots}<span class="text-warn" title="The runtime serves {route.slots} sequences at once, the rest wait in its queue"> · {route.inFlight - route.slots} waiting for a slot</span>{/if}</td>
                 <td class="num text-fg-muted">{instanceMemory(i) || '–'}</td>
                 <td class="actions" onclick={(e) => e.stopPropagation()}>
                   <span>

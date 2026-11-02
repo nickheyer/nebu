@@ -80,7 +80,7 @@ func (SGLang) Prepares(string) bool             { return false }
 func (SGLang) Prepare(Launch) (*Command, error) { return nil, nil }
 func (SGLang) PrepareTimeout() time.Duration    { return 0 }
 func (SGLang) Health() Health {
-	return Health{Path: "/health", Interval: 2 * time.Second, Timeout: 30 * time.Minute}
+	return Health{Path: "/health", Interval: 2 * time.Second, SlowAfter: 30 * time.Minute}
 }
 func (SGLang) StopGrace() time.Duration { return 30 * time.Second }
 func (SGLang) Triage() []triage.Set     { return []triage.Set{triage.SGLang{}} }

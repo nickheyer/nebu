@@ -744,11 +744,13 @@ func (m *Manager) awaitSeat(ctx context.Context, h *tasks.Handle, f *v1.Formatio
 	if err != nil {
 		return in, err
 	}
-	timeout := health.Timeout
-	if timeout <= 0 {
-		timeout = 5 * time.Minute
+	slowAfter := health.SlowAfter
+	if slowAfter <= 0 {
+		slowAfter = 5 * time.Minute
 	}
-	ready, err := m.waitSeat(ctx, s, in.GetId(), timeout+seatGrace)
+	ready, err := m.waitSeat(ctx, s, in.GetId(), slowAfter+seatGrace, func(waited time.Duration) {
+		h.Logf("seat %s on %s is not ready after %s, waiting for as long as it lives", in.GetName(), s.GetNodeName(), waited)
+	})
 	if err != nil {
 		m.update(f.GetId(), func(r *v1.Formation) {
 			for _, rs := range r.GetSeats() {
@@ -870,9 +872,11 @@ func seatDetail(in *v1.Instance) string {
 	return instanceWord(in.GetState())
 }
 
-// Waits for a seat's instance to be ready, reading it from this node or its node
-func (m *Manager) waitSeat(ctx context.Context, s *v1.Seat, instanceID string, timeout time.Duration) (*v1.Instance, error) {
-	deadline := time.Now().Add(timeout)
+// Waits for a seat's instance to be ready, reading it from this node or its node and warning each slowAfter it is not
+func (m *Manager) waitSeat(ctx context.Context, s *v1.Seat, instanceID string, slowAfter time.Duration, slow func(time.Duration)) (*v1.Instance, error) {
+	start := time.Now()
+	warn := time.NewTicker(slowAfter)
+	defer warn.Stop()
 	var last *v1.Instance
 	for {
 		var in *v1.Instance
@@ -891,15 +895,11 @@ func (m *Manager) waitSeat(ctx context.Context, s *v1.Seat, instanceID string, t
 				return in, errors.New(seatDetail(in))
 			}
 		}
-		if time.Now().After(deadline) {
-			if err != nil {
-				return last, fmt.Errorf("not ready within %s: %w", timeout, err)
-			}
-			return last, fmt.Errorf("not ready within %s", timeout)
-		}
 		select {
 		case <-ctx.Done():
 			return last, ctx.Err()
+		case <-warn.C:
+			slow(time.Since(start).Round(time.Second))
 		case <-time.After(seatPoll):
 		}
 	}

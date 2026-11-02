@@ -35,9 +35,14 @@ func (t *Table) handoffLocked(runtimeID string) string {
 
 // Sequence slots a llama.cpp relay seat serves at once, from the formation's request
 func relaySlots(f *v1.Formation) uint32 {
-	n, err := strconv.ParseUint(f.GetRequest().GetParams()["n_parallel"], 10, 32)
-	if err != nil || n == 0 {
-		return 1
+	return max(sequenceSlots(f.GetRequest().GetParams()), 1)
+}
+
+// Sequence slots a runtime serves at once as its params say, zero when they do not say
+func sequenceSlots(params map[string]string) uint32 {
+	n, err := strconv.ParseUint(params["n_parallel"], 10, 32)
+	if err != nil {
+		return 0
 	}
 	return uint32(n)
 }
@@ -75,6 +80,7 @@ func (t *Table) ServeFormationAs(name string, f *v1.Formation, head *v1.Instance
 		r.RelayHandoff = t.handoffLocked(f.GetRuntimeId())
 	}
 	slots := relaySlots(f)
+	r.Slots = sequenceSlots(f.GetRequest().GetParams())
 	r.Seats = nil
 	for _, s := range seats {
 		seat := proto.Clone(s).(*v1.RouteSeat)

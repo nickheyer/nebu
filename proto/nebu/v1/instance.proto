@@ -25,7 +25,7 @@ message TriageHit {
   string summary = 2;
   string hint = 3;
   string line = 4;
-  map<string, string> fix = 5;
+  reserved 5;
 }
 
 // One allocation reported by the runtime or measured on the host

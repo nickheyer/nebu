@@ -37,12 +37,12 @@ const (
 	HealthCanary
 )
 
-// Readiness of one role
+// Readiness of one role, SlowAfter the wait that is reported as slow while the process lives
 type RoleHealth struct {
-	Kind     HealthKind
-	Path     string
-	Interval time.Duration
-	Timeout  time.Duration
+	Kind      HealthKind
+	Path      string
+	Interval  time.Duration
+	SlowAfter time.Duration
 }
 
 // One role of a shape: what the seat runs, when it launches, what it needs, and how it is known ready
@@ -138,8 +138,8 @@ func (r Role) health(base Health) RoleHealth {
 	if h.Interval <= 0 {
 		h.Interval = base.Interval
 	}
-	if h.Timeout <= 0 {
-		h.Timeout = base.Timeout
+	if h.SlowAfter <= 0 {
+		h.SlowAfter = base.SlowAfter
 	}
 	return h
 }

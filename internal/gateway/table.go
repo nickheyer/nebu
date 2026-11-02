@@ -263,7 +263,23 @@ func (t *Table) Serve(name string, in *v1.Instance, api v1.ApiFlavor, slotID str
 		delete(t.templates, in.GetId())
 	}
 	t.mu.Unlock()
-	return t.Set(name, in.GetId(), slotID, in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), in.GetName(), api, policy, profile)
+	t.Set(name, in.GetId(), slotID, in.GetEndpoint(), in.GetRepo()+":"+in.GetGroup(), in.GetName(), api, policy, profile)
+	return t.slots(name, sequenceSlots(in.GetParams()))
+}
+
+// Records the sequence slots behind a route, the count a request past them waits in the runtime's queue for
+func (t *Table) slots(name string, slots uint32) *v1.Route {
+	t.mu.Lock()
+	defer t.unlock()
+	r, ok := t.routes[name]
+	if !ok {
+		return nil
+	}
+	if r.GetSlots() != slots {
+		r.Slots = slots
+		t.save(r, v1.EventAction_EVENT_ACTION_UPDATED)
+	}
+	return t.snapshotLocked(r)
 }
 
 // How the instance behind a route takes tools, as its chat template renders them, none for a diffusion route
@@ -446,27 +462,28 @@ func (t *Table) Ready() []*v1.Route {
 // Counts requests served through every route
 func (t *Table) Requests() uint64 { return t.total.Load() }
 
-// Claims a route under its effective policy and returns a release, token counts left out of served counters
-func (t *Table) Acquire(name string, served bool) (*v1.Route, *v1.Policy, func(), error) {
+// Claims a route under its policy, answering the requests already in flight on it and a release
+func (t *Table) Acquire(name string, served bool) (*v1.Route, *v1.Policy, uint32, func(), error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	r, ok := t.routes[name]
 	if !ok {
-		return nil, nil, nil, ErrNoRoute
+		return nil, nil, 0, nil, ErrNoRoute
 	}
 	switch r.GetState() {
 	case v1.RouteState_ROUTE_STATE_PENDING:
-		return nil, nil, nil, ErrPending
+		return nil, nil, 0, nil, ErrPending
 	case v1.RouteState_ROUTE_STATE_DRAINING:
-		return nil, nil, nil, ErrDraining
+		return nil, nil, 0, nil, ErrDraining
 	}
 	policy := Effective(r.GetPolicy(), t.defaults)
 	counter := t.counterLocked(counterKey(r))
+	ahead := uint32(max(counter.Load(), 0))
 	if cap := routeCap(r, policy); cap > 0 && counter.Load() >= int32(cap) {
-		return nil, nil, nil, ErrBusy
+		return nil, nil, 0, nil, ErrBusy
 	}
 	if policy.GetRequestsPerSecond() > 0 && !t.limiterLocked(name, policy).Allow() {
-		return nil, nil, nil, ErrThrottled
+		return nil, nil, 0, nil, ErrThrottled
 	}
 	counter.Add(1)
 	if served {
@@ -484,7 +501,7 @@ func (t *Table) Acquire(name string, served bool) (*v1.Route, *v1.Policy, func()
 	if out.GetApi() == v1.ApiFlavor_API_FLAVOR_UNSPECIFIED {
 		out.Api = v1.ApiFlavor_API_FLAVOR_OPENAI
 	}
-	return out, policy, release, nil
+	return out, policy, ahead, release, nil
 }
 
 // Returns the route's token bucket, updating it after policy changes

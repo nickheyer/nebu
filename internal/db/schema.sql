@@ -159,14 +159,6 @@ CREATE TABLE instance_templates (
   error TEXT NOT NULL DEFAULT ''
 );
 
-CREATE TABLE instance_triage_fixes (
-  instance_id TEXT NOT NULL REFERENCES instances (id) ON DELETE CASCADE,
-  position INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  value TEXT NOT NULL,
-  PRIMARY KEY (instance_id, position, name)
-);
-
 -- Long running operations and their logs
 CREATE TABLE tasks (
   id TEXT PRIMARY KEY,

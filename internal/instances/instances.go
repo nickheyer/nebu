@@ -795,12 +795,15 @@ func (m *Manager) probeModes(ctx context.Context, logf func(string, ...any), in 
 	}
 }
 
-// Polls health, recording triage and stopping the process on failure
+// Polls health for as long as the process lives, warning when it is slow, recording triage once it has exited
 func (m *Manager) waitReady(ctx context.Context, h *tasks.Handle, in *instance, proc launch.Handle) error {
 	health := in.rt.Health()
 	url := in.snapshot().GetEndpoint() + health.Path
 	h.Message("waiting for " + url)
-	err := launch.WaitHealthy(ctx, proc, url, health.Interval, health.Timeout)
+	err := launch.WaitHealthy(ctx, proc, url, health.Interval, health.SlowAfter, func(waited time.Duration) {
+		h.Logf("%s is not healthy after %s, waiting for as long as the process lives", in.snapshot().GetName(), waited)
+		m.Log.Warn("instance slow to become healthy", "name", in.snapshot().GetName(), "waited", waited, "url", url)
+	})
 	if err == nil {
 		return nil
 	}

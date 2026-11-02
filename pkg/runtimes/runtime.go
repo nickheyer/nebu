@@ -75,11 +75,11 @@ type Command struct {
 	Params  map[string]string
 }
 
-// Readiness probe of a running instance
+// Readiness probe of a running instance, SlowAfter the wait that is reported as slow while the process lives
 type Health struct {
-	Path     string
-	Interval time.Duration
-	Timeout  time.Duration
+	Path      string
+	Interval  time.Duration
+	SlowAfter time.Duration
 }
 
 // Release asset filename matcher.

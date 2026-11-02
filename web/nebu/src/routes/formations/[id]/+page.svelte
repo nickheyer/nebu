@@ -127,7 +127,7 @@
         <Stat label="Coordinator" value={formation.conductorName || nodeName(formation.conductor)} />
         <Stat label="Runtime" value={runtimeName(formation.runtimeId)} />
         <Stat label="Uptime" value={alive && formation.readyAt ? duration(formation.readyAt, undefined, clock.now) : '–'} />
-        <Stat label="Requests" value={count(route?.requests ?? 0n)} sub={route?.inFlight ? `${route.inFlight} in flight` : ''} />
+        <Stat label="Requests" value={count(route?.requests ?? 0n)} sub={route?.inFlight ? `${route.inFlight} in flight${route.slots && route.inFlight > route.slots ? `, ${route.inFlight - route.slots} waiting for a slot` : ''}` : ''} />
       </div>
       <Card title="Workers">
         <div class="tbl-wrap contain-inline-size">

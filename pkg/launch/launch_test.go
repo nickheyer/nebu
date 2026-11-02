@@ -2,6 +2,7 @@ package launch
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -115,19 +116,27 @@ func TestWaitHealthy(t *testing.T) {
 	defer srv.Close()
 	p, _ := launcher().Launch(context.Background(), Spec{Command: "sleep", Args: []string{"30"}, LogPath: logPath(t)})
 	defer p.Stop(time.Second)
-	if err := WaitHealthy(context.Background(), p, srv.URL, 10*time.Millisecond, 5*time.Second); err != nil {
+	if err := WaitHealthy(context.Background(), p, srv.URL, 10*time.Millisecond, 5*time.Second, func(time.Duration) { t.Fatal("a healthy start is not slow") }); err != nil {
 		t.Fatal(err)
 	}
 	dead, _ := launcher().Launch(context.Background(), Spec{Command: "sh", Args: []string{"-c", "exit 3"}, LogPath: logPath(t)})
-	err := WaitHealthy(context.Background(), dead, "http://127.0.0.1:1/health", 10*time.Millisecond, 5*time.Second)
+	err := WaitHealthy(context.Background(), dead, "http://127.0.0.1:1/health", 10*time.Millisecond, 5*time.Second, func(time.Duration) {})
 	if err == nil || !strings.Contains(err.Error(), "exited") {
 		t.Fatalf("expected exit error, got %v", err)
 	}
+	// A live process that stays unhealthy is reported slow, over and over, and never given up on
 	alive, _ := launcher().Launch(context.Background(), Spec{Command: "sleep", Args: []string{"30"}, LogPath: logPath(t)})
 	defer alive.Stop(time.Second)
-	err = WaitHealthy(context.Background(), alive, "http://127.0.0.1:1/health", 10*time.Millisecond, 50*time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "not healthy") {
-		t.Fatalf("expected timeout, got %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	var slow []time.Duration
+	err = WaitHealthy(ctx, alive, "http://127.0.0.1:1/health", 10*time.Millisecond, 20*time.Millisecond, func(waited time.Duration) {
+		slow = append(slow, waited)
+		if len(slow) == 3 {
+			cancel()
+		}
+	})
+	if !errors.Is(err, context.Canceled) || len(slow) < 3 {
+		t.Fatalf("expected the wait to outlive three slow reports, got %v after %v", err, slow)
 	}
 }
 

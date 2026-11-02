@@ -103,6 +103,8 @@ message Route {
   string relay_handoff = 23;
   // How the route takes tools, from the probe of the instance serving it
   ToolSupport tools = 24;
+  // Sequence slots the runtime serves at once, from its n_parallel, zero when the runtime does not say
+  uint32 slots = 25;
 }
 
 // Gateway listener address.
@@ -238,6 +240,8 @@ message Trace {
   uint32 draft_accepted = 33;
   // Prompt tokens the runtime served from its cache
   uint32 cached_tokens = 34;
+  // Requests already past the route's sequence slots when this one was admitted, so it waited in the runtime's queue for one
+  uint32 queued_behind = 35;
 }
 
 // One tool call in a traced answer, run by the gateway when it names a server

@@ -9,6 +9,7 @@
   import { auth } from '$lib/auth.svelte';
   import { readLocal, writeLocal } from '$lib/persist';
   import { byName, enumLabel } from '$lib/format';
+  import { sequenceContext } from '$lib/runtimes';
   import { fail, ok } from '$lib/toast.svelte';
   import { confirm } from '$lib/confirm.svelte';
   import { send, countTokens, toolHeaders, ghostHeaders, type ChatMessage, type Sampling, type ToolCall, type Sent } from '$lib/chatClient';
@@ -1186,7 +1187,7 @@
           {#if busyHere && !busy}<span>a video is still being made</span>{/if}
         {:else}
           <span class="font-mono">{session.dialect}{session.stream ? ' · stream' : ''}</span>
-          {#if promptTokens !== null}<span title="Counted by the gateway with the runtime's tokenizer">{promptTokens} prompt tokens{instance?.params.n_ctx ? ` of ${instance.params.n_ctx}` : ''}</span>{:else if countError}<span class="text-warn" title={countError}>token count unavailable</span>{/if}
+          {#if promptTokens !== null}<span title="Counted by the gateway with the runtime's tokenizer">{promptTokens} prompt tokens{sequenceContext(instance?.params).perSequence ? ` of ${sequenceContext(instance?.params).perSequence.toLocaleString()} a sequence holds` : ''}</span>{:else if countError}<span class="text-warn" title={countError}>token count unavailable</span>{/if}
         {/if}
       </Composer>
     </section>

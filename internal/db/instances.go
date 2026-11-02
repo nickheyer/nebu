@@ -59,7 +59,7 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			id, in.GetName(), in.GetSourceId(), in.GetRepo(), in.GetGroup(), in.GetRuntimeId(), in.GetInstallId(), in.GetEndpoint(), enumCol(in.GetState()), in.GetPid(), in.GetError(), in.GetTaskId(), boolCol(in.GetDesiredRunning()), stamp(in.GetCreatedAt().AsTime()), timeCol(in.GetReadyAt()), timeCol(in.GetStoppedAt()), in.GetSlotId(), seat, in.GetTransport()); err != nil {
 			return err
 		}
-		if err := clearChildren(exec, "instance_id", id, "instance_params", "instance_command", "instance_requests", "instance_request_params", "instance_plans", "instance_plan_pools", "instance_plan_placements", "instance_plan_params", "instance_measurements", "instance_triage", "instance_triage_fixes", "instance_templates"); err != nil {
+		if err := clearChildren(exec, "instance_id", id, "instance_params", "instance_command", "instance_requests", "instance_request_params", "instance_plans", "instance_plan_pools", "instance_plan_placements", "instance_plan_params", "instance_measurements", "instance_triage", "instance_templates"); err != nil {
 			return err
 		}
 		if tp := in.GetTemplate(); tp != nil {
@@ -118,11 +118,6 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 		for i, h := range in.GetTriage() {
 			if err := exec(`INSERT INTO instance_triage (instance_id, position, rule_id, summary, hint, line) VALUES (?, ?, ?, ?, ?, ?)`, id, i, h.GetId(), h.GetSummary(), h.GetHint(), h.GetLine()); err != nil {
 				return err
-			}
-			for name, value := range h.GetFix() {
-				if err := exec(`INSERT INTO instance_triage_fixes (instance_id, position, name, value) VALUES (?, ?, ?, ?)`, id, i, name, value); err != nil {
-					return err
-				}
 			}
 		}
 		return nil
@@ -215,24 +210,11 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 	}, id); err != nil {
 		return err
 	}
-	var positions []int
-	if in.Triage, err = list(ctx, d, `SELECT position, rule_id, summary, hint, line FROM instance_triage WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.TriageHit, error) {
+	if in.Triage, err = list(ctx, d, `SELECT rule_id, summary, hint, line FROM instance_triage WHERE instance_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.TriageHit, error) {
 		h := &v1.TriageHit{}
-		var pos int
-		err := rows.Scan(&pos, &h.Id, &h.Summary, &h.Hint, &h.Line)
-		positions = append(positions, pos)
-		return h, err
+		return h, rows.Scan(&h.Id, &h.Summary, &h.Hint, &h.Line)
 	}, id); err != nil {
 		return err
-	}
-	for i, h := range in.Triage {
-		fix, err := d.stringMap(ctx, `SELECT name, value FROM instance_triage_fixes WHERE instance_id = ? AND position = ? ORDER BY name`, id, positions[i])
-		if err != nil {
-			return err
-		}
-		if len(fix) > 0 {
-			h.Fix = fix
-		}
 	}
 	templates, err := list(ctx, d, `SELECT source, tools, error FROM instance_templates WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.ChatTemplate, error) {
 		tp := &v1.ChatTemplate{}

@@ -1,4 +1,4 @@
-// Package triage matches runtime failures and suggests fixes.
+// Package triage matches runtime failures and explains them, warning and nothing more.
 package triage
 
 import (
@@ -7,13 +7,11 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// Runtime failure pattern, explanation, and fix.
+// Runtime failure pattern and its explanation
 type Rule struct {
 	ID      string
 	Summary string
 	Hint    string
-	// Params that fix it, applied to the next run
-	Fix map[string]string
 	// Matches a log line and extracts summary and hint variables.
 	Match func(line string) (map[string]string, bool)
 }
@@ -40,7 +38,6 @@ func Scan(sets []Set, lines []string) []*v1.TriageHit {
 					Summary: fill(r.Summary, names),
 					Hint:    fill(r.Hint, names),
 					Line:    line,
-					Fix:     r.Fix,
 				})
 				break
 			}

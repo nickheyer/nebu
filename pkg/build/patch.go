@@ -267,7 +267,7 @@ func locate(lines, pattern []string, expected int) (int, bool) {
 		}
 		return true
 	}
-	for d := 0; d <= limit; d++ {
+	for d := 0; ; d++ {
 		for _, pos := range []int{expected - d, expected + d} {
 			if pos >= 0 && pos <= limit && matches(pos) {
 				return pos, true

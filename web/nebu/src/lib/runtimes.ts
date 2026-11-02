@@ -84,6 +84,24 @@ export function paramGroups(params: Param[]): { name: string; params: Param[] }[
   return out.sort((a, b) => Number(!!a.name) - Number(!!b.name));
 }
 
+// Each parallel sequence gets n_ctx / n_parallel of the pool unless kv_unified shares the whole pool, as llama.cpp divides it
+export function sequenceContext(params: Record<string, string> | undefined): { total: number; perSequence: number; sequences: number } {
+  const total = Number(params?.['n_ctx'] ?? 0);
+  if (!Number.isFinite(total) || total <= 0) return { total: 0, perSequence: 0, sequences: 1 };
+  const parallel = Math.max(1, Math.floor(Number(params?.['n_parallel'] ?? 1) || 1));
+  const unified = /^(true|on|1)$/i.test(params?.['kv_unified'] ?? '');
+  const sequences = unified ? 1 : parallel;
+  return { total, perSequence: unified ? total : Math.ceil(total / parallel / 256) * 256, sequences };
+}
+
+// A context length for display, each sequence's share with the pool and sequence count behind it
+export function contextText(params: Record<string, string> | undefined, format: (n: number) => string): { text: string; title: string } {
+  const c = sequenceContext(params);
+  if (!c.total) return { text: '', title: '' };
+  if (c.sequences === 1) return { text: format(c.perSequence), title: `${c.total.toLocaleString()} tokens` };
+  return { text: `${format(c.perSequence)} × ${c.sequences}`, title: `${c.perSequence.toLocaleString()} tokens for each of ${c.sequences} parallel sequences, ${c.total.toLocaleString()} in the pool` };
+}
+
 export function accepts(p: Param): string {
   if (p.choices.length) return p.choices.filter(Boolean).join(', ');
   switch (p.type) {

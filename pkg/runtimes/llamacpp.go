@@ -117,13 +117,22 @@ const llamaFitContext = 4096
 // What an auto context resolves to, the choice llama.cpp makes when nebu passes none
 const llamaContextRule = "llama.cpp's own choice, the trained length for each parallel sequence cut to fit free device memory but not below 4096 tokens"
 
+// Values of a switch llama.cpp spells as --flag and --no-flag, empty leaving its own default
+var llamaSwitchChoices = []string{"", "on", "off"}
+
 var llamaCacheBytes = map[string]float64{"f32": 4, "f16": 2, "bf16": 2, "q8_0": 1.0625, "q5_1": 0.75, "q5_0": 0.6875, "q4_1": 0.625, "q4_0": 0.5625}
 
 func (LlamaCpp) Params() []*v1.Param {
 	return []*v1.Param{
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: "Context", Flag: "--ctx-size",
-			Rule: llamaContextRule},
-		{Name: "n_parallel", Label: "Parallel sequences", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "sequences", Min: 1, Max: 256, Step: 1, Group: "Context", Flag: "--parallel"},
+			Description: "the whole cache pool, each parallel sequence gets n_ctx / n_parallel of it unless kv_unified is on",
+			Rule:        llamaContextRule},
+		{Name: "n_parallel", Label: "Parallel sequences", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "sequences", Min: 1, Max: 256, Step: 1, Group: "Context", Flag: "--parallel",
+			Description: "server slots, a request past them waits for one to free"},
+		{Name: "kv_unified", Label: "Unified cache pool", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: "Context", Flag: "--kv-unified",
+			Description: "every sequence draws from one pool, so a sequence may use up to the whole n_ctx"},
+		{Name: "slot_prompt_similarity", Label: "Slot reuse similarity", Type: v1.ParamType_PARAM_TYPE_FLOAT, Unit: "share", Min: 0, Max: 1, Step: 0.05, Group: "Context", Flag: "--slot-prompt-similarity",
+			Description: "prefix share a request must have with an idle slot's cache to take that slot over an empty one, empty keeps llama.cpp's 0.10, 0 always takes the empty or least recently used slot"},
 		{Name: "n_gpu_layers", Label: "GPU layers", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "layers", Min: 0, Step: 1, Group: "Placement", Flag: "--n-gpu-layers",
 			Rule: "fit layers on device and place the rest in system memory"},
 		{Name: "n_cpu_moe", Label: "Expert layers on CPU", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "layers", Min: 0, Step: 1, Group: "Placement", Flag: "--n-cpu-moe",
@@ -137,8 +146,19 @@ func (LlamaCpp) Params() []*v1.Param {
 		{Name: "cache_type_v", Label: "Value cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Choices: llamaCacheChoices, Group: "Cache", Flag: "--cache-type-v",
 			Description: "empty keeps llama.cpp's f16, a quantized type needs flash attention"},
 		{Name: "flash_attn", Label: "Flash attention", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "auto", Choices: []string{"auto", "on", "off"}, Group: "Cache", Flag: "--flash-attn"},
+		{Name: "cache_ram", Label: "Prompt cache in RAM", Type: v1.ParamType_PARAM_TYPE_INT, Unit: "MiB", Min: -1, Step: 1024, Group: "Cache", Flag: "--cache-ram",
+			Description: "host memory for the states of conversations evicted from a slot, empty keeps llama.cpp's 8192, -1 unlimited, 0 off"},
+		{Name: "cache_idle_slots", Label: "Save idle slots", Type: v1.ParamType_PARAM_TYPE_STRING, Choices: llamaSwitchChoices, Group: "Cache", Advanced: true,
+			Description: "copy every idle slot's state into the RAM cache when a request starts, empty keeps llama.cpp's on"},
+		{Name: "ctx_checkpoints", Label: "Context checkpoints", Type: v1.ParamType_PARAM_TYPE_INT, Unit: "per slot", Min: 0, Max: 256, Step: 1, Group: "Cache", Advanced: true, Flag: "--ctx-checkpoints",
+			Description: "state snapshots a slot keeps so a turn that rewrites earlier tokens re-prefills from the nearest one, empty keeps llama.cpp's 32, 0 off"},
+		{Name: "checkpoint_min_step", Label: "Checkpoint spacing", Type: v1.ParamType_PARAM_TYPE_INT, Unit: "tokens", Min: 0, Step: 256, Group: "Cache", Advanced: true, Flag: "--checkpoint-min-step",
+			Description: "fewest tokens between checkpoints, empty keeps llama.cpp's 8192, a smaller step costs memory and re-prefills less"},
+		{Name: "cache_reuse", Label: "Cache reuse chunk", Type: v1.ParamType_PARAM_TYPE_INT, Unit: "tokens", Min: 0, Step: 32, Group: "Cache", Advanced: true, Flag: "--cache-reuse",
+			Description: "smallest chunk reused by shifting the KV cache, empty keeps llama.cpp's off, no effect on hybrid and recurrent models"},
 		{Name: "n_batch", Label: "Batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "2048", Unit: "tokens", Min: 32, Step: 32, Group: "Batching", Advanced: true, Flag: "--batch-size"},
-		{Name: "n_ubatch", Label: "Micro-batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "512", Unit: "tokens", Min: 32, Step: 32, Group: "Batching", Advanced: true, Flag: "--ubatch-size"},
+		{Name: "n_ubatch", Label: "Micro-batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "512", Unit: "tokens", Min: 32, Step: 32, Group: "Batching", Advanced: true, Flag: "--ubatch-size",
+			Description: "tokens per forward pass, the chunk of one slot's prefill that every other slot's decoding waits behind"},
 		{Name: "alias", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Flag: "--alias"},
 		{Name: "mmproj", Label: "Projector", Type: v1.ParamType_PARAM_TYPE_PATH, Group: "Identity", Advanced: true, Flag: "--mmproj", Picks: "projector",
 			Description: "image and audio input"},
@@ -153,7 +173,7 @@ func (LlamaCpp) Params() []*v1.Param {
 		{Name: "direct_io", Label: "Direct file reads", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: "Placement", Advanced: true,
 			Description: "read weights without the page cache, for shares over 100 GiB on unified memory"},
 		{Name: "cuda_disable_graphs", Label: "Disable CUDA graphs", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: "Diagnostics", Advanced: true, Env: "GGML_CUDA_DISABLE_GRAPHS",
-			Description: "for a driver that leaks compute graphs under the rpc server"},
+			Description: "runs every batch without ggml's CUDA graphs, slower decoding, only for a driver that fails cudaGraphLaunch under the rpc server"},
 	}
 }
 
@@ -177,9 +197,12 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 		args = append(args, in.InstallRecord.GetFacts()[factJinja])
 	}
 	spec, specEmitted := llamaSpeculative(in, p)
+	switches, switchEmitted := llamaSwitches(p)
 	flags, env, emitted := Flags(r.Params(), p)
 	flags = append(flags, spec...)
+	flags = append(flags, switches...)
 	maps.Copy(emitted, specEmitted)
+	maps.Copy(emitted, switchEmitted)
 	if p.Bool("direct_io") {
 		flags = append(flags, directIOArgs(flagOf(in.InstallRecord, factDirectIO))...)
 	}
@@ -218,6 +241,24 @@ func llamaSpeculative(in Launch, p estimate.Params) ([]string, map[string]string
 	return args, emitted
 }
 
+// Flags of the on or off switches llama.cpp spells as --flag and --no-flag, an empty one left to llama.cpp
+func llamaSwitches(p estimate.Params) ([]string, map[string]string) {
+	var args []string
+	emitted := map[string]string{}
+	for name, flag := range map[string]string{"cache_idle_slots": "--cache-idle-slots"} {
+		switch v := strings.ToLower(strings.TrimSpace(p.Str(name))); v {
+		case "on", "true":
+			args = append(args, flag)
+			emitted[name] = "on"
+		case "off", "false":
+			args = append(args, "--no"+strings.TrimPrefix(flag, "-"))
+			emitted[name] = "off"
+		}
+		delete(p, name)
+	}
+	return args, emitted
+}
+
 // The method an unset spec_type takes, draft-mtp for a named head file, llama.cpp's own pick otherwise
 func llamaAutoMethod(s *estimate.Scope) string {
 	if d := s.Draft; d != nil && llamaFile(s.Params, "draft_model") != "" && (llamaHeads(d) || slices.Contains(llamaHeadArchs, d.GetArchitecture())) {
@@ -251,7 +292,7 @@ func (LlamaCpp) Prepares(string) bool             { return false }
 func (LlamaCpp) Prepare(Launch) (*Command, error) { return nil, nil }
 func (LlamaCpp) PrepareTimeout() time.Duration    { return 0 }
 func (LlamaCpp) Health() Health {
-	return Health{Path: "/health", Interval: time.Second, Timeout: 10 * time.Minute}
+	return Health{Path: "/health", Interval: time.Second, SlowAfter: 10 * time.Minute}
 }
 func (LlamaCpp) StopGrace() time.Duration { return 15 * time.Second }
 func (LlamaCpp) Triage() []triage.Set     { return []triage.Set{triage.LlamaCpp{}} }
@@ -510,8 +551,8 @@ func (LlamaCpp) Policy() *estimate.Policy {
 		ContextMin:   llamaFitContext,
 		ContextStep:  256,
 		ContextMax:   func(s *estimate.Scope) int64 { return int64(s.Model.ContextTrain) },
-		// Parallel sequences each get the trained length, as llama.cpp splits an unset context over them
-		ContextScale: func(s *estimate.Scope) int64 { return s.Params.Int("n_parallel") },
+		// Parallel sequences each get the trained length, as llama.cpp splits an unset context over them, one shared pool when unified
+		ContextScale: llamaSequences,
 		Deferred:     map[string]func([]string) (string, bool){"n_ctx": llamaContext},
 		Shape: func(p estimate.Params) archs.Run {
 			return archs.Run{Context: float64(p.Int("n_ctx")), UBatch: float64(p.Int("n_ubatch"))}
@@ -527,10 +568,15 @@ func (LlamaCpp) Policy() *estimate.Policy {
 		States: func(s *estimate.Scope) ([]*v1.ParamState, string) {
 			threads := cpuThreads(s.Host)
 			// The trained length for each parallel sequence, the most llama.cpp keeps per sequence
-			trained := s.Model.ContextTrain * float64(max(s.Params.Int("n_parallel"), 1))
+			trained := s.Model.ContextTrain * float64(llamaSequences(s))
 			states := []*v1.ParamState{
 				bounds("n_ctx", 256, trained, 256),
 				bounds("n_parallel", 1, 256, 1),
+				bounds("slot_prompt_similarity", 0, 1, 0.05),
+				bounds("cache_ram", -1, float64(hostMemory(s.Host)>>20), 1024),
+				bounds("ctx_checkpoints", 0, 256, 1),
+				bounds("checkpoint_min_step", 0, float64(s.Params.Int("n_ctx")), 256),
+				bounds("cache_reuse", 0, float64(s.Params.Int("n_ctx")), 32),
 				bounds("n_gpu_layers", 0, s.Model.Layers, 1),
 				bounds("n_cpu_moe", 0, s.Model.Layers, 1),
 				bounds("threads", -1, threads, 1),
@@ -542,6 +588,25 @@ func (LlamaCpp) Policy() *estimate.Policy {
 			return states, llamaWarning(s)
 		},
 	}
+}
+
+// Bytes of system memory the host profile reports across its host pools
+func hostMemory(h *v1.HostProfile) uint64 {
+	var total uint64
+	for _, p := range h.GetPools() {
+		if p.GetKind() == v1.PoolKind_POOL_KIND_HOST {
+			total += p.GetTotalBytes()
+		}
+	}
+	return total
+}
+
+// Sequences the cache pool is split over, one when every sequence draws from a unified pool
+func llamaSequences(s *estimate.Scope) int64 {
+	if s.Params.Bool("kv_unified") {
+		return 1
+	}
+	return max(s.Params.Int("n_parallel"), 1)
 }
 
 // Whether a vision or audio group is the projector file the param names

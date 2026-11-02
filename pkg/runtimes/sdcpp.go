@@ -592,7 +592,7 @@ func (SDCpp) PrepareTimeout() time.Duration    { return 0 }
 
 // The capabilities endpoint responds after all components load.
 func (SDCpp) Health() Health {
-	return Health{Path: "/sdcpp/v1/capabilities", Interval: 2 * time.Second, Timeout: 30 * time.Minute}
+	return Health{Path: "/sdcpp/v1/capabilities", Interval: 2 * time.Second, SlowAfter: 30 * time.Minute}
 }
 func (SDCpp) StopGrace() time.Duration { return 20 * time.Second }
 func (SDCpp) Triage() []triage.Set     { return []triage.Set{triage.SDCpp{}} }

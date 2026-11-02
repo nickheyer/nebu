@@ -14,7 +14,6 @@ func (SDCpp) Rules() []Rule {
 			ID:      "device-oom",
 			Summary: "device ran out of memory while loading or sampling",
 			Hint:    "turn offload on to keep the weights in system memory, set a smaller width and height, turn vae_tiling on, or pick a smaller weight_type",
-			Fix:     map[string]string{"offload": "on"},
 			Match:   anyOf("out of memory", "failed to allocate", "cannot make enough memory available", "alloc params backend buffer failed", "cudaMalloc failed", "not enough space in the buffer", "needs", "is available under current VRAM limits"),
 		},
 		{

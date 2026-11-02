@@ -26,6 +26,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/interceptors"
 	"github.com/nickheyer/nebu/pkg/outbound"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -531,12 +532,12 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		g.traces.Finish(t)
 	}()
 	served := kind != v1.TraceKind_TRACE_KIND_COUNT
-	route, policy, release, err := g.table.Acquire(name, served)
+	route, policy, ahead, release, err := g.table.Acquire(name, served)
 	if errors.Is(err, ErrNoRoute) && name == "" {
 		if ready := g.table.Ready(); len(ready) == 1 {
 			name = ready[0].GetName()
 			t.Route = name
-			route, policy, release, err = g.table.Acquire(name, served)
+			route, policy, ahead, release, err = g.table.Acquire(name, served)
 		}
 	}
 	switch {
@@ -561,6 +562,12 @@ func (g *Gateway) proxy(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t.InstanceId, t.SlotId, t.UpstreamApi = route.GetInstanceId(), route.GetSlotId(), route.GetApi()
+	// Past the runtime's sequence slots a request waits in its queue, so a busy runtime is not a dead one
+	if slots := route.GetSlots(); slots > 0 && ahead >= slots && !route.GetForwarded() {
+		t.QueuedBehind = ahead - slots + 1
+		policy = proto.Clone(policy).(*v1.Policy)
+		policy.UpstreamTimeoutMs = 0
+	}
 	entry := r.Header.Get(entryHeader)
 	if route.GetForwarded() {
 		defer release()

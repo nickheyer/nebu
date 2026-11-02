@@ -33,12 +33,10 @@
   const decimals = $derived(Math.max(0, (String(stepBy).split('.')[1] ?? '').length));
   const blank = $derived(value.trim() === '');
 
-  // Start stepping from the value, then a numeric placeholder, then the minimum.
+  // Start stepping from the value, then a numeric placeholder, then the minimum, the planned range a hint and never a wall
   function nudge(sign: number) {
     const base = parseFloat(blank ? empty : value);
-    let next = (Number.isFinite(base) ? base : min ?? 0) + sign * stepBy;
-    if (min !== undefined) next = Math.max(min, next);
-    if (max !== undefined && max !== 0) next = Math.min(max, next);
+    const next = (Number.isFinite(base) ? base : min ?? 0) + sign * stepBy;
     value = integer ? String(Math.round(next)) : next.toFixed(decimals);
   }
 </script>
@@ -52,8 +50,6 @@
     {value}
     placeholder={empty}
     oninput={(e) => (value = e.currentTarget.value)}
-    {min}
-    max={max || undefined}
     step={stepBy}
     {disabled}
     aria-invalid={invalid}

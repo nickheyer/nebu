@@ -77,7 +77,7 @@ func (VLLM) Prepares(string) bool             { return false }
 func (VLLM) Prepare(Launch) (*Command, error) { return nil, nil }
 func (VLLM) PrepareTimeout() time.Duration    { return 0 }
 func (VLLM) Health() Health {
-	return Health{Path: "/health", Interval: 2 * time.Second, Timeout: 30 * time.Minute}
+	return Health{Path: "/health", Interval: 2 * time.Second, SlowAfter: 30 * time.Minute}
 }
 func (VLLM) StopGrace() time.Duration { return 30 * time.Second }
 func (VLLM) Triage() []triage.Set     { return []triage.Set{triage.VLLM{}} }

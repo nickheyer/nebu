@@ -34,7 +34,6 @@ func (NeMo) Rules() []Rule {
 			ID:      "state-dict-mismatch",
 			Summary: "the checkpoint keys do not match the model the config builds",
 			Hint:    "turn on legacy_ckpt for checkpoints written before Megatron Bridge",
-			Fix:     map[string]string{"legacy_ckpt": "true"},
 			Match:   anyOf("Missing key(s) in state_dict", "Unexpected key(s) in state_dict", "legacy checkpoint"),
 		},
 		{

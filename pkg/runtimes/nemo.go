@@ -98,7 +98,7 @@ func (NeMo) Prepare(in Launch) (*Command, error) {
 
 func (NeMo) PrepareTimeout() time.Duration { return 2 * time.Hour }
 func (NeMo) Health() Health {
-	return Health{Path: "/v1/health", Interval: 5 * time.Second, Timeout: time.Hour}
+	return Health{Path: "/v1/health", Interval: 5 * time.Second, SlowAfter: time.Hour}
 }
 func (NeMo) StopGrace() time.Duration { return time.Minute }
 func (NeMo) Triage() []triage.Set     { return []triage.Set{triage.NeMo{}} }

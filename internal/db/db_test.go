@@ -103,7 +103,7 @@ func sampleInstance() *v1.Instance {
 			Placements:   []*v1.GroupPlacement{{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, PoolId: "gpu0", Bytes: 9, Count: 28}},
 			WeightsBytes: 9, CacheBytes: 1, OverheadBytes: 1, Params: map[string]string{"n_gpu_layers": "28"}, Detail: "ok",
 		},
-		Triage:         []*v1.TriageHit{{Id: "oom", Summary: "out of memory", Hint: "lower ctx", Line: "CUDA out of memory", Fix: map[string]string{"n_ctx": "1024"}}, {Id: "assert", Summary: "s", Hint: "h", Line: "l"}},
+		Triage:         []*v1.TriageHit{{Id: "oom", Summary: "out of memory", Hint: "lower ctx", Line: "CUDA out of memory"}, {Id: "assert", Summary: "s", Hint: "h", Line: "l"}},
 		Measurements:   []*v1.Measurement{{Key: "device.weights", Bytes: 9, Line: "x"}, {Key: "device.used", Bytes: 11}},
 		Request:        &v1.RunRequest{SourceId: "hf", Repo: "org/repo", Group: "Q4", RuntimeId: "llamacpp", Name: "qwen", Params: map[string]string{"n_ctx": "8192"}, Args: "--cache-reuse 256"},
 		DesiredRunning: true,

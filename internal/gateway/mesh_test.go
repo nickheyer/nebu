@@ -807,14 +807,14 @@ func TestForwardTransitions(t *testing.T) {
 	if err != nil || r.GetState() != v1.RouteState_ROUTE_STATE_PENDING || !r.GetForwarded() || r.GetNodeId() != "n2" {
 		t.Fatalf("starting: %v %v", r, err)
 	}
-	if _, _, _, err := table.Acquire("big", true); !errors.Is(err, ErrPending) {
+	if _, _, _, _, err := table.Acquire("big", true); !errors.Is(err, ErrPending) {
 		t.Fatalf("pending, got %v", err)
 	}
 	f.State = v1.FormationState_FORMATION_STATE_READY
 	if r, err = table.Forward(f, v1.ApiFlavor_API_FLAVOR_OPENAI); err != nil || r.GetState() != v1.RouteState_ROUTE_STATE_READY {
 		t.Fatalf("ready: %v %v", r, err)
 	}
-	got, _, release, err := table.Acquire("big", true)
+	got, _, _, release, err := table.Acquire("big", true)
 	if err != nil || got.GetInFlight() != 1 {
 		t.Fatalf("acquire %v %v", got, err)
 	}
@@ -823,7 +823,7 @@ func TestForwardTransitions(t *testing.T) {
 	if r, err = table.Forward(f, v1.ApiFlavor_API_FLAVOR_OPENAI); err != nil || r.GetState() != v1.RouteState_ROUTE_STATE_DRAINING {
 		t.Fatalf("degraded: %v %v", r, err)
 	}
-	if _, _, _, err := table.Acquire("big", true); !errors.Is(err, ErrDraining) {
+	if _, _, _, _, err := table.Acquire("big", true); !errors.Is(err, ErrDraining) {
 		t.Fatalf("draining, got %v", err)
 	}
 	other := &v1.Formation{Id: "f2", Name: "big", Conductor: "n3", ConductorName: "other", State: v1.FormationState_FORMATION_STATE_READY, Endpoint: "http://10.0.0.3:8485"}

@@ -121,6 +121,16 @@
     return p.type === ParamType.INT || p.type === ParamType.FLOAT;
   }
 
+  // A numeric value past the planned range, said and never clamped or refused
+  function beyond(p: Param, v: string | undefined): string {
+    if (!v || !numeric(p) || problem(p, v)) return '';
+    const n = parseFloat(v);
+    const b = bounds(p);
+    if (b.max !== 0 && n > b.max) return `Above the planned ${b.max.toLocaleString()}${p.unit ? ` ${p.unit}` : ''}, the runtime decides`;
+    if ((b.min !== 0 || b.max !== 0) && n < b.min) return `Below the planned ${b.min.toLocaleString()}${p.unit ? ` ${p.unit}` : ''}, the runtime decides`;
+    return '';
+  }
+
   // Only a value the parameter's type cannot carry is a problem, the runtime judges the rest
   function problem(p: Param, v: string | undefined): string {
     if (!v) return '';
@@ -157,6 +167,8 @@
       <label for={fid} class="text-[13px] leading-5 font-medium text-fg" title={p.flag || p.env || p.name}>{p.label || p.name}</label>
       {#if err}
         <p class="text-xs leading-4 text-bad" role="alert">{err}</p>
+      {:else if beyond(p, v)}
+        <p class="text-xs leading-4 text-warn">{beyond(p, v)}</p>
       {:else if p.description}
         <p class="font-mono text-xs leading-4 text-fg-faint wrap-anywhere">{p.description}</p>
       {/if}

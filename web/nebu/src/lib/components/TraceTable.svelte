@@ -40,7 +40,7 @@
             <td class="text-fg-muted">{enumLabel(TraceKind, t.kind)}</td>
             <td class="font-mono text-xs text-fg-muted">{format(t)}</td>
             <td class="whitespace-nowrap tabular-nums {statusTone(t)}">{t.finishedAt ? t.status : 'live'}{#if t.error}<span class="ml-2 inline-block {compact ? 'max-w-[7rem]' : 'max-w-[14rem]'} truncate align-bottom text-xs text-bad" title={t.error}>{t.error}</span>{/if}</td>
-            <td class="num text-fg-muted">{ms(millisBetween(t.startedAt, t.firstTokenAt))}</td>
+            <td class="num text-fg-muted" title={t.queuedBehind ? `Waited for a sequence slot behind ${t.queuedBehind} ${t.queuedBehind === 1 ? 'request' : 'requests'}` : ''}>{ms(millisBetween(t.startedAt, t.firstTokenAt))}{#if t.queuedBehind}<span class="ml-1 text-xs text-warn">queued</span>{/if}</td>
             <td class="num">{ms(millisBetween(t.startedAt, t.finishedAt))}</td>
             <td class="num text-fg-muted">{t.promptTokens || '–'}</td>
             <td class="num text-fg-muted">{t.completionTokens || '–'}</td>

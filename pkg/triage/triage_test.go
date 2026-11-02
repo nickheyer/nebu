@@ -13,7 +13,7 @@ func (s fakeSet) Rules() []Rule     { return s.rules }
 
 func TestScan(t *testing.T) {
 	set := fakeSet{rules: []Rule{
-		{ID: "arch", Summary: "no ${arch}", Hint: "build for ${arch}", Fix: map[string]string{"a": "b"}, Match: func(line string) (map[string]string, bool) {
+		{ID: "arch", Summary: "no ${arch}", Hint: "build for ${arch}", Match: func(line string) (map[string]string, bool) {
 			arch, ok := quotedAfter(line, "unknown model architecture: '", "'")
 			if !ok {
 				return nil, false
@@ -24,7 +24,7 @@ func TestScan(t *testing.T) {
 	}}
 	lines := []string{"loading", "unknown model architecture: 'qwen9'", "CUDA out of memory", "unknown model architecture: 'other'"}
 	hits := Scan([]Set{set}, lines)
-	if len(hits) != 2 || hits[0].GetId() != "arch" || hits[0].GetSummary() != "no qwen9" || hits[0].GetHint() != "build for qwen9" || hits[0].GetFix()["a"] != "b" {
+	if len(hits) != 2 || hits[0].GetId() != "arch" || hits[0].GetSummary() != "no qwen9" || hits[0].GetHint() != "build for qwen9" {
 		t.Fatalf("hits %v", hits)
 	}
 	if hits[1].GetId() != "oom" || hits[1].GetLine() != "CUDA out of memory" {
@@ -42,7 +42,7 @@ func TestProjectorTriageLeadsWithTheType(t *testing.T) {
 		"0.16.588.589 E srv    load_model: failed to load multimodal model, '/m/mmproj.gguf'",
 	}
 	hits := Scan([]Set{LlamaCpp{}}, lines)
-	if len(hits) == 0 || hits[0].GetId() != "unknown-projector" || hits[0].GetSummary() != "this build does not know projector type nemotron_omni" || hits[0].GetFix()["mmproj"] != "none" {
+	if len(hits) == 0 || hits[0].GetId() != "unknown-projector" || hits[0].GetSummary() != "this build does not know projector type nemotron_omni" {
 		t.Fatalf("hits %v", hits)
 	}
 }
@@ -160,12 +160,12 @@ func TestLlamaCppDirectIO(t *testing.T) {
 		hits := Scan([]Set{LlamaCpp{}}, []string{line})
 		found := false
 		for _, h := range hits {
-			if h.GetId() == "rpc-share-mmap" && h.GetFix()["direct_io"] == "true" {
+			if h.GetId() == "rpc-share-mmap" && strings.Contains(h.GetHint(), "direct_io") {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("%q should hit rpc-share-mmap with the direct_io fix, got %v", line, hits)
+			t.Errorf("%q should hit rpc-share-mmap naming direct_io, got %v", line, hits)
 		}
 	}
 	for _, line := range []string{

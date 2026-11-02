@@ -335,16 +335,18 @@ func ReadTail(path string, n int) ([]string, error) {
 	return out, nil
 }
 
-// Polls a URL until 200, exit, or timeout
-func WaitHealthy(ctx context.Context, h Handle, url string, interval, timeout time.Duration) error {
+// Polls a URL until 200 or exit, reporting each slowAfter that passes without one and never giving up on a live process
+func WaitHealthy(ctx context.Context, h Handle, url string, interval, slowAfter time.Duration, slow func(waited time.Duration)) error {
 	if interval <= 0 {
 		interval = time.Second
 	}
-	if timeout <= 0 {
-		timeout = 10 * time.Minute
+	if slowAfter <= 0 {
+		slowAfter = 10 * time.Minute
 	}
 	client := &http.Client{Timeout: interval * 2}
-	deadline := time.After(timeout)
+	start := time.Now()
+	warn := time.NewTicker(slowAfter)
+	defer warn.Stop()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -356,8 +358,8 @@ func WaitHealthy(ctx context.Context, h Handle, url string, interval, timeout ti
 			return ctx.Err()
 		case <-h.Done():
 			return fmt.Errorf("process exited before becoming healthy: %v", exitDetail(h.Err()))
-		case <-deadline:
-			return fmt.Errorf("not healthy after %s", timeout)
+		case <-warn.C:
+			slow(time.Since(start).Round(time.Second))
 		case <-ticker.C:
 		}
 	}
