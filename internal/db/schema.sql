@@ -28,6 +28,8 @@ CREATE TABLE calibrations (
   overhead_delta REAL NOT NULL,
   samples INTEGER NOT NULL,
   updated_at TEXT NOT NULL,
+  cache_ratio REAL NOT NULL DEFAULT 0,
+  cache_samples INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (runtime_id, architecture)
 );
 

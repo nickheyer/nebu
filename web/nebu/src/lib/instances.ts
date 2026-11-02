@@ -1,14 +1,14 @@
-import { PoolKind } from '$proto/host_pb';
 import { Placement } from '$proto/estimate_pb';
 import type { Instance } from '$proto/instance_pb';
 import { bytes } from './format';
+import { instanceUsage } from './state.svelte';
 
-// Prefer measured device memory over the plan. Return empty if neither is known.
+// Device memory the host attributes to the instance's processes now, else what it measured when the instance became ready
 export function instanceMemory(i: Instance): string {
-  const m = i.measurements.find((x) => x.key === 'device.used') ?? i.measurements.find((x) => x.key.endsWith('.used'));
-  if (m) return bytes(m.bytes);
-  const planned = i.plan?.pools.filter((p) => p.kind === PoolKind.DEVICE || p.kind === PoolKind.UNIFIED).reduce((a, p) => a + p.usedBytes, 0n) ?? 0n;
-  return planned ? '≈ ' + bytes(planned) : '';
+  const now = instanceUsage(i.id);
+  if (now > 0n) return bytes(now);
+  const m = i.measurements.find((x) => x.key === 'device.used');
+  return m ? bytes(m.bytes) : '';
 }
 
 export const placements: { id: string; label: string; value: Placement }[] = [

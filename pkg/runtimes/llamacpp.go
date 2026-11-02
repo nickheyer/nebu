@@ -334,6 +334,7 @@ func (LlamaCpp) Measure(lines []string) []*v1.Measurement {
 var llamaBuffers = []struct{ phrase, what string }{
 	{" model buffer size = ", "weights"},
 	{" KV buffer size = ", "cache"},
+	{" RS buffer size = ", "cache"},
 	{" compute buffer size = ", "compute"},
 }
 

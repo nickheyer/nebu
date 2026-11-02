@@ -79,6 +79,14 @@ func runHost(ctx context.Context, e *env, args []string) error {
 			rows = append(rows, []string{st.GetPath(), st.GetFilesystem(), estimate.Human(st.GetTotalBytes()), estimate.Human(st.GetFreeBytes()), strings.Join(st.GetUses(), " ")})
 		}
 		table(w, []string{"MOUNT", "FS", "TOTAL", "FREE", "USED BY"}, rows)
+		if len(p.GetProcesses()) > 0 {
+			section(w, "processes")
+			rows = nil
+			for _, pu := range p.GetProcesses() {
+				rows = append(rows, []string{strconv.Itoa(int(pu.GetPid())), pu.GetDeviceId(), estimate.Human(pu.GetBytes()), pu.GetInstanceName()})
+			}
+			table(w, []string{"PID", "DEVICE", "MEMORY", "INSTANCE"}, rows)
+		}
 		section(w, "probes")
 		rows = nil
 		for _, pr := range p.GetProbes() {

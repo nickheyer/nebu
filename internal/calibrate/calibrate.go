@@ -3,6 +3,7 @@ package calibrate
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/nickheyer/nebu/internal/db"
@@ -55,12 +56,7 @@ func (t *Table) Record(ctx context.Context, runtimeID, architecture string, meas
 	observed := float64(measured) - float64(planned)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	key := Key(runtimeID, architecture)
-	c, ok := t.entries[key]
-	if !ok {
-		c = &v1.Calibration{}
-		t.entries[key] = c
-	}
+	c := t.entry(runtimeID, architecture)
 	if c.Samples == 0 {
 		c.OverheadDelta = observed
 	} else {
@@ -69,4 +65,47 @@ func (t *Table) Record(ctx context.Context, runtimeID, architecture string, meas
 	c.Samples++
 	c.UpdatedAt = timestamppb.Now()
 	return t.store.PutCalibration(ctx, runtimeID, architecture, c)
+}
+
+// Learned factor on the planned cache, one until a run of the runtime and architecture reports its cache
+func (t *Table) Ratio(runtimeID, architecture string) float64 {
+	if t == nil {
+		return 1
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if c, ok := t.entries[Key(runtimeID, architecture)]; ok && c.GetCacheRatio() > 0 {
+		return c.GetCacheRatio()
+	}
+	return 1
+}
+
+// Updates the cache factor from a run's allocated cache against its plan's unfactored cache
+func (t *Table) RecordCache(ctx context.Context, runtimeID, architecture string, measured, planned uint64) error {
+	if measured == 0 || planned == 0 {
+		return fmt.Errorf("cache ratio needs a measured and a planned cache, got %d and %d", measured, planned)
+	}
+	observed := float64(measured) / float64(planned)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c := t.entry(runtimeID, architecture)
+	if c.CacheSamples == 0 {
+		c.CacheRatio = observed
+	} else {
+		c.CacheRatio = (1-smoothing)*c.CacheRatio + smoothing*observed
+	}
+	c.CacheSamples++
+	c.UpdatedAt = timestamppb.Now()
+	return t.store.PutCalibration(ctx, runtimeID, architecture, c)
+}
+
+// The entry for a runtime and architecture, made on first use, the lock held by the caller
+func (t *Table) entry(runtimeID, architecture string) *v1.Calibration {
+	key := Key(runtimeID, architecture)
+	c, ok := t.entries[key]
+	if !ok {
+		c = &v1.Calibration{}
+		t.entries[key] = c
+	}
+	return c
 }

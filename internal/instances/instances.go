@@ -619,14 +619,22 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 	proc.Sync()
 	lines := proc.Log().Tail(0)
 	measurements := in.rt.Measure(lines)
-	m.replan(ctx, h.Logf, in, p, m.chosen(h.Logf, in, lines))
+	picked := m.chosen(h.Logf, in, lines)
+	m.replan(ctx, h.Logf, in, p, picked)
+	// The runtime's allocated cache teaches the architecture's cache factor, then the plan is drawn again with it
+	if m.learnCache(ctx, h.Logf, in, d, measurements) {
+		m.replan(ctx, h.Logf, in, p, picked)
+	}
 	if after, perr := m.Host.Profile(ctx, true); perr == nil {
-		used := deviceFree(before) - deviceFree(after)
+		used := host.InstanceBytes(after, rec.GetId())
+		if used == 0 {
+			used = uint64(max(deviceFree(before)-deviceFree(after), 0))
+		}
 		if used > 0 {
-			measurements = append(measurements, &v1.Measurement{Key: estimate.DeviceUsedKey, Bytes: uint64(used)})
-			if plan := in.snapshot().GetPlan(); plan != nil {
+			measurements = append(measurements, &v1.Measurement{Key: estimate.DeviceUsedKey, Bytes: used})
+			if plan := in.snapshot().GetPlan(); plan != nil && m.Calibration != nil {
 				base := max(float64(estimate.PlannedDevice(plan))-plan.GetOverheadDelta(), 0)
-				if cerr := m.Calibration.Record(ctx, in.rt.ID(), d.GetArchitecture(), uint64(used), uint64(base)); cerr != nil {
+				if cerr := m.Calibration.Record(ctx, in.rt.ID(), d.GetArchitecture(), used, uint64(base)); cerr != nil {
 					m.Log.Warn("calibration write failed", "err", cerr)
 				}
 			}
@@ -634,6 +642,67 @@ func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rend
 	}
 	m.ready(h, in, measurements, m.readTemplate(ctx, h.Logf, in))
 	return nil
+}
+
+// Records the cache the runtime reports against the plan's cache before its factor, true when one was read
+func (m *Manager) learnCache(ctx context.Context, logf func(string, ...any), in *instance, d *v1.Descriptor, measurements []*v1.Measurement) bool {
+	plan := in.snapshot().GetPlan()
+	measured := cacheMeasured(measurements)
+	if m.Calibration == nil || plan == nil || plan.GetCacheBytes() == 0 || measured == 0 {
+		return false
+	}
+	base := float64(plan.GetCacheBytes())
+	if r := plan.GetCacheRatio(); r > 0 {
+		base /= r
+	}
+	if err := m.Calibration.RecordCache(ctx, in.rt.ID(), d.GetArchitecture(), measured, uint64(base)); err != nil {
+		m.Log.Warn("cache calibration write failed", "err", err)
+		return false
+	}
+	logf("cache %s allocated against %s planned, %s plans now scale their cache by %.2f", estimate.Human(measured), estimate.Human(uint64(base)), d.GetArchitecture(), m.Calibration.Ratio(in.rt.ID(), d.GetArchitecture()))
+	return true
+}
+
+// The cache bytes a runtime's log reported on every side
+func cacheMeasured(measurements []*v1.Measurement) uint64 {
+	var total uint64
+	for _, ms := range measurements {
+		if strings.HasSuffix(ms.GetKey(), ".cache") {
+			total += ms.GetBytes()
+		}
+	}
+	return total
+}
+
+// Stamps each process the host lists with the live instance whose process tree holds its pid
+func (m *Manager) Attribute(profile *v1.HostProfile) {
+	if len(profile.GetProcesses()) == 0 {
+		return
+	}
+	type owner struct{ id, name string }
+	roots := map[int]owner{}
+	m.mu.Lock()
+	for _, in := range m.list {
+		in.mu.Lock()
+		if !Terminal(in.rec.GetState()) && in.rec.GetPid() > 0 {
+			roots[int(in.rec.GetPid())] = owner{in.rec.GetId(), in.rec.GetName()}
+		}
+		in.mu.Unlock()
+	}
+	m.mu.Unlock()
+	if len(roots) == 0 {
+		return
+	}
+	pids := make([]int, 0, len(roots))
+	for pid := range roots {
+		pids = append(pids, pid)
+	}
+	owners := proc.Owners(pids)
+	for _, pu := range profile.GetProcesses() {
+		if root, ok := owners[int(pu.GetPid())]; ok {
+			pu.InstanceId, pu.InstanceName = roots[root].id, roots[root].name
+		}
+	}
 }
 
 // Records the auto params the runtime picked itself, read from its log, as the instance's params
@@ -670,7 +739,7 @@ func (m *Manager) chosen(logf func(string, ...any), in *instance, lines []string
 
 // Plans the run again at the values the runtime chose, so the record holds the context it runs
 func (m *Manager) replan(ctx context.Context, logf func(string, ...any), in *instance, p *prepared, picked map[string]string) {
-	if len(picked) == 0 || p.plan == nil || p.rt.Policy() == nil {
+	if p.plan == nil || p.rt.Policy() == nil {
 		return
 	}
 	plan, warning, err := m.Inspector.Plan(ctx, p.rt, p.descriptor, p.planned, runtimes.Merge(p.layered, picked), true, p.res.placement(), p.stored.GetRepo(), p.stored, p.companions)

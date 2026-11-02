@@ -198,7 +198,7 @@
               {#if slot.memoryBytes}<span class="text-fg-muted">cap {bytes(slot.memoryBytes)}</span>{/if}
             </div>
             {#if pinned.length}
-              <DeviceRows groups={pinned} cap={slot.memoryBytes} instance={slot.instanceId} highlight="this slot" exceptSlot={slot.id} />
+              <DeviceRows groups={pinned} cap={slot.memoryBytes} exceptSlot={slot.id} />
             {/if}
           </div>
           <Kv

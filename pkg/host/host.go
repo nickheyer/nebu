@@ -29,20 +29,24 @@ type Probe interface {
 type Result struct {
 	Devices []*v1.Device
 	Pools   []*v1.MemoryPool
-	Facts   map[string]string
-	Status  v1.ProbeStatus
-	Detail  string
+	// Processes holding device memory, as the vendor tool or the kernel lists them
+	Processes []*v1.ProcessUse
+	Facts     map[string]string
+	Status    v1.ProbeStatus
+	Detail    string
 }
 
 // Runs probes and caches the resulting profile
 type Prober struct {
 	// Called with a copy after every fresh probe, outside the lock
 	OnProbe func(*v1.HostProfile)
-	probes  []Probe
-	paths   []string
-	ttl     time.Duration
-	mu      sync.Mutex
-	cached  *v1.HostProfile
+	// Called on every fresh profile before it is cached, filling in what only the daemon knows
+	Decorate func(*v1.HostProfile)
+	probes   []Probe
+	paths    []string
+	ttl      time.Duration
+	mu       sync.Mutex
+	cached   *v1.HostProfile
 }
 
 // Keeps the probes that run on this OS and architecture and remembers the storage paths to measure
@@ -111,6 +115,7 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 		}
 		profile.Devices = mergeDevices(profile.Devices, res.Devices)
 		profile.Pools = mergePools(profile.Pools, res.Pools)
+		profile.Processes = mergeProcesses(profile.Processes, res.Processes)
 		for k, v := range res.Facts {
 			profile.Facts[k] = v
 		}
@@ -131,6 +136,9 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("probe: %w", err)
+	}
+	if p.Decorate != nil {
+		p.Decorate(profile)
 	}
 	return profile, nil
 }
@@ -171,6 +179,30 @@ func mergePools(have, more []*v1.MemoryPool) []*v1.MemoryPool {
 		}
 	}
 	return have
+}
+
+// Adds processes by device and pid, the first probe's bytes kept for one two probes both listed
+func mergeProcesses(have, more []*v1.ProcessUse) []*v1.ProcessUse {
+	for _, p := range more {
+		if !slices.ContainsFunc(have, func(h *v1.ProcessUse) bool { return h.GetDeviceId() == p.GetDeviceId() && h.GetPid() == p.GetPid() }) {
+			have = append(have, p)
+		}
+	}
+	return have
+}
+
+// Device memory the profile attributes to an instance's processes, summed over every device
+func InstanceBytes(p *v1.HostProfile, instanceID string) uint64 {
+	var total uint64
+	if instanceID == "" {
+		return 0
+	}
+	for _, pu := range p.GetProcesses() {
+		if pu.GetInstanceId() == instanceID {
+			total += pu.GetBytes()
+		}
+	}
+	return total
 }
 
 // Reads the filesystem holding a path, its mount and free bytes

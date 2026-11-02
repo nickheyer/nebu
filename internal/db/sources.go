@@ -53,15 +53,15 @@ type CalibrationRow struct {
 
 // Inserts or replaces one calibration
 func (d *DB) PutCalibration(ctx context.Context, runtimeID, architecture string, c *v1.Calibration) error {
-	_, err := d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO calibrations (runtime_id, architecture, overhead_delta, samples, updated_at) VALUES (?, ?, ?, ?, ?)`,
-		runtimeID, architecture, c.GetOverheadDelta(), c.GetSamples(), stamp(c.GetUpdatedAt().AsTime()))
+	_, err := d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO calibrations (runtime_id, architecture, overhead_delta, samples, updated_at, cache_ratio, cache_samples) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		runtimeID, architecture, c.GetOverheadDelta(), c.GetSamples(), stamp(c.GetUpdatedAt().AsTime()), c.GetCacheRatio(), c.GetCacheSamples())
 	return err
 }
 
 // Lists every calibration
 func (d *DB) ListCalibrations(ctx context.Context) ([]CalibrationRow, error) {
-	return list(ctx, d, `SELECT runtime_id, architecture, overhead_delta, samples, updated_at FROM calibrations ORDER BY runtime_id, architecture`, func(rows *sql.Rows) (CalibrationRow, error) {
+	return list(ctx, d, `SELECT runtime_id, architecture, overhead_delta, samples, updated_at, cache_ratio, cache_samples FROM calibrations ORDER BY runtime_id, architecture`, func(rows *sql.Rows) (CalibrationRow, error) {
 		r := CalibrationRow{Calibration: &v1.Calibration{}}
-		return r, rows.Scan(&r.RuntimeID, &r.Architecture, &r.Calibration.OverheadDelta, &r.Calibration.Samples, at{&r.Calibration.UpdatedAt})
+		return r, rows.Scan(&r.RuntimeID, &r.Architecture, &r.Calibration.OverheadDelta, &r.Calibration.Samples, at{&r.Calibration.UpdatedAt}, &r.Calibration.CacheRatio, &r.Calibration.CacheSamples)
 	})
 }

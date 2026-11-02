@@ -194,6 +194,8 @@ type Input struct {
 	Params        Params
 	Free          bool
 	OverheadDelta float64
+	// Learned factor on the policy's cache, zero or one leaving it as the policy sizes it
+	CacheRatio float64
 	// Allowed memory placement: shared, device only, or host only.
 	Placement v1.Placement
 	// Other stored models available as companions.
@@ -494,7 +496,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	}
 	var cacheTotal, overhead uint64
 	if p.CacheBytes != nil {
-		cacheTotal = p.CacheBytes(s)
+		cacheTotal = scaled(p.CacheBytes(s), in.CacheRatio)
 	}
 	if p.OverheadBytes != nil {
 		overhead = p.OverheadBytes(s)
@@ -569,8 +571,8 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 			if err != nil {
 				return nil, err
 			}
-			it.cache = bytes
-			sideCache += bytes
+			it.cache = scaled(bytes, in.CacheRatio)
+			sideCache += it.cache
 		}
 		rule, known := p.rule(g.GetKind())
 		if !known || rule.Param == "" {
@@ -597,6 +599,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		CacheBytes:    cacheTotal + sideCache,
 		OverheadBytes: overhead,
 		OverheadDelta: in.OverheadDelta,
+		CacheRatio:    in.CacheRatio,
 		Params:        stringParams(s.Params),
 		Skipped:       skipped.list(),
 		AgainstFree:   in.Free,
@@ -659,6 +662,14 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		plan.Detail = fmt.Sprintf("device need %s exceeds capacity %s", Human(least), Human(sv.devCap))
 	}
 	return plan, nil
+}
+
+// A cache under a learned factor, untouched by a factor of zero or one
+func scaled(n uint64, ratio float64) uint64 {
+	if ratio <= 0 || ratio == 1 {
+		return n
+	}
+	return uint64(float64(n) * ratio)
 }
 
 // Reports explicit parameters that conflict with placement.

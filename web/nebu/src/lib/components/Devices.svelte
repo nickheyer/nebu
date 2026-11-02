@@ -1,16 +1,20 @@
+<script lang="ts" module>
+  import type { SizeItem } from './ui/SizeBar.svelte';
+
+  // Used memory as the host reports it
+  export function hostItems(total: bigint, free: bigint): SizeItem[] {
+    const used = total > free ? total - free : 0n;
+    return used > 0n ? [{ size: used, tone: 'info' }] : [];
+  }
+</script>
+
 <script lang="ts">
   import { DeviceKind, PoolKind, type HostProfile, type MemoryPool } from '$proto/host_pb';
   import { Cpu, MemoryStick, Microchip } from '@lucide/svelte';
   import Meters, { type Meter } from './ui/Meters.svelte';
-  import type { SizeItem } from './ui/SizeBar.svelte';
 
   let { host }: { host: HostProfile } = $props();
-
-  // Used memory as the host reports it
-  function items(total: bigint, free: bigint): SizeItem[] {
-    const used = total > free ? total - free : 0n;
-    return used > 0n ? [{ size: used, tone: 'info' }] : [];
-  }
+  const items = hostItems;
 
   const meters = $derived.by((): Meter[] => {
     const owned = new Map<string, MemoryPool>();

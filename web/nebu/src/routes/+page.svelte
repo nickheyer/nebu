@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { live, clock, liveInstances, instanceLive, slotName, groupLabel, orderedSlots, answersOf, runtimeName, taskFor, liveFormations } from '$lib/state.svelte';
+  import { live, clock, liveInstances, instanceLive, instanceUsage, nodeProfile, slotName, groupLabel, orderedSlots, answersOf, runtimeName, taskFor, liveFormations } from '$lib/state.svelte';
   import { shapeLabel } from '$lib/mesh';
   import { FormationState, type Formation } from '$proto/mesh_pb';
   import { launch, slotOccupied, requestOf } from '$lib/launch';
@@ -24,7 +24,7 @@
   import Routes from '$lib/components/Routes.svelte';
   import ActiveTasks from '$lib/components/ActiveTasks.svelte';
   import TraceTable from '$lib/components/TraceTable.svelte';
-  import DeviceMap from '$lib/components/DeviceMap.svelte';
+  import Devices from '$lib/components/Devices.svelte';
 
   let historyView = $state('all');
 
@@ -42,8 +42,9 @@
   function instanceOf(s: Slot): Instance | undefined {
     return s.instanceId ? live.instances.get(s.instanceId) : undefined;
   }
+  // Device memory each seat's host attributes to the seat's processes, summed over the formation
   function formationMemory(f: Formation): string {
-    const total = f.seats.reduce((sum, s) => sum + (s.memory ? s.memory.weightsBytes + s.memory.cacheBytes + s.memory.overheadBytes : s.weightBytes + s.cacheBytes), 0n);
+    const total = f.seats.reduce((sum, s) => sum + instanceUsage(s.instanceId, nodeProfile(s.nodeId)), 0n);
     return total ? bytes(total) : '–';
   }
   const formationNodes = (f: Formation) => plural(new Set(f.seats.map((s) => s.nodeId)).size, 'node');
@@ -62,10 +63,13 @@
 <div class="flex flex-col gap-10">
   <ActiveTasks />
 
+  {#if live.host}
+    <Section title="Devices" count={live.host.devices.length || undefined}>
+      <Devices host={live.host} />
+    </Section>
+  {/if}
+
   <Section title="Slots" count={slots.length || undefined}>
-    {#if live.host}
-      <div class="mb-2"><DeviceMap /></div>
-    {/if}
     <div class="tbl-wrap">
       <table class="tbl">
         <thead><tr><th class="w-8">#</th><th>Name</th><th>Model</th><th>Runtime</th><th>State</th><th class="num">Requests</th><th class="num">Memory</th><th></th></tr></thead>
@@ -122,7 +126,7 @@
                   {#if occupied && formation?.readyAt}<span class="ml-2 text-xs tabular-nums text-fg-faint">{duration(formation.readyAt, undefined, clock.now)}</span>{/if}
                 </td>
                 <td class="num text-fg-muted">{occupied ? count(route?.requests ?? 0n) : '–'}{#if route?.inFlight}<span class="text-fg-faint"> · {route.inFlight} live</span>{/if}</td>
-                <td class="num text-fg-muted" title={formation ? 'Estimated memory across all workers' : undefined}>{instance ? instanceMemory(instance) || '–' : formation ? formationMemory(formation) : '–'}</td>
+                <td class="num text-fg-muted">{instance ? instanceMemory(instance) || '–' : formation ? formationMemory(formation) : '–'}</td>
                 <td class="actions" onclick={(e) => e.stopPropagation()}>
                   <span>
                     {#if answering}<IconButton size="xs" icon={MessageSquare} label="Chat" href="/chat?model={encodeURIComponent(s.name)}" />{/if}
@@ -155,7 +159,7 @@
                 <td class="text-fg-muted">{runtimeName(f.runtimeId)}</td>
                 <td><State values={FormationState} value={f.state} />{#if f.readyAt}<span class="ml-2 text-xs tabular-nums text-fg-faint">{duration(f.readyAt, undefined, clock.now)}</span>{/if}</td>
                 <td class="num text-fg-muted">{count(route?.requests ?? 0n)}{#if route?.inFlight}<span class="text-fg-faint"> · {route.inFlight} live</span>{/if}</td>
-                <td class="num text-fg-muted" title="Estimated memory across all workers">{formationMemory(f)}</td>
+                <td class="num text-fg-muted">{formationMemory(f)}</td>
                 <td class="actions" onclick={(e) => e.stopPropagation()}>
                   <span>{#if route?.state === RouteState.READY}<IconButton size="xs" icon={MessageSquare} label="Chat" href="/chat?model={encodeURIComponent(f.name)}" />{/if}</span>
                 </td>

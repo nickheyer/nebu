@@ -32,6 +32,8 @@ type drmSysfs struct {
 	root string
 	// The PCI id database files tried in order
 	ids []string
+	// The procfs mount whose fdinfo files name each process's device memory, /proc outside tests
+	proc string
 }
 
 func (drmSysfs) ID() string          { return "drm-sysfs" }
@@ -49,6 +51,10 @@ func (p drmSysfs) Run(ctx context.Context) host.Result {
 	if ids == nil {
 		ids = pciIDFiles
 	}
+	procRoot := p.proc
+	if procRoot == "" {
+		procRoot = "/proc"
+	}
 	entries, err := os.ReadDir(filepath.Join(root, "class", "drm"))
 	if err != nil {
 		return skipped(err.Error())
@@ -63,6 +69,7 @@ func (p drmSysfs) Run(ctx context.Context) host.Result {
 	names := pciNames{files: ids}
 	var devices []*v1.Device
 	var pools []*v1.MemoryPool
+	byBus := map[string]string{}
 	for _, card := range cards {
 		dev := filepath.Join(root, "class", "drm", card, "device")
 		vendor := sysfsValue(dev, "vendor")
@@ -76,9 +83,116 @@ func (p drmSysfs) Run(ctx context.Context) host.Result {
 		devices = append(devices, d)
 		if pool != nil {
 			pools = append(pools, pool)
+			byBus[strings.ToLower(d.GetFacts()["pci_bus_id"])] = d.GetId()
 		}
 	}
-	return found(devices, pools, nil, rows(len(devices)))
+	res := found(devices, pools, nil, rows(len(devices)))
+	res.Processes = drmProcesses(procRoot, byBus)
+	return res
+}
+
+// Dedicated memory each process holds on the cards, read from its open DRM nodes' fdinfo, one count per client
+func drmProcesses(procRoot string, byBus map[string]string) []*v1.ProcessUse {
+	entries, err := os.ReadDir(procRoot)
+	if err != nil || len(byBus) == 0 {
+		return nil
+	}
+	var out []*v1.ProcessUse
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(procRoot, e.Name())
+		fds, err := os.ReadDir(filepath.Join(dir, "fd"))
+		if err != nil {
+			continue
+		}
+		seen := map[string]bool{}
+		bytesOn := map[string]uint64{}
+		for _, fd := range fds {
+			target, err := os.Readlink(filepath.Join(dir, "fd", fd.Name()))
+			if err != nil || !strings.HasPrefix(target, "/dev/dri/") {
+				continue
+			}
+			info, err := os.ReadFile(filepath.Join(dir, "fdinfo", fd.Name()))
+			if err != nil {
+				continue
+			}
+			bus, client, n, ok := drmFdinfo(string(info))
+			if !ok || seen[bus+"/"+client] {
+				continue
+			}
+			seen[bus+"/"+client] = true
+			bytesOn[bus] += n
+		}
+		for bus, n := range bytesOn {
+			if id, ok := byBus[bus]; ok && n > 0 {
+				out = append(out, &v1.ProcessUse{DeviceId: id, Pid: int32(pid), Bytes: n})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].GetPid() < out[j].GetPid() || (out[i].GetPid() == out[j].GetPid() && out[i].GetDeviceId() < out[j].GetDeviceId())
+	})
+	return out
+}
+
+// The PCI address, client id, and dedicated memory one fdinfo reports, resident counts preferred over the legacy totals
+func drmFdinfo(info string) (bus, client string, n uint64, ok bool) {
+	var resident, memory uint64
+	hasResident := false
+	for _, line := range strings.Split(info, "\n") {
+		key, value, found := strings.Cut(line, ":")
+		if !found {
+			continue
+		}
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		switch {
+		case key == "drm-pdev":
+			bus = strings.ToLower(value)
+		case key == "drm-client-id":
+			client = value
+		case strings.HasPrefix(key, "drm-resident-") && dedicatedRegion(strings.TrimPrefix(key, "drm-resident-")):
+			hasResident = true
+			resident += fdinfoBytes(value)
+		case strings.HasPrefix(key, "drm-memory-") && dedicatedRegion(strings.TrimPrefix(key, "drm-memory-")):
+			memory += fdinfoBytes(value)
+		}
+	}
+	if bus == "" {
+		return "", "", 0, false
+	}
+	if hasResident {
+		return bus, client, resident, true
+	}
+	return bus, client, memory, true
+}
+
+// Whether an fdinfo region is the card's own memory, vram on amdgpu and xe, local on i915
+func dedicatedRegion(region string) bool {
+	return strings.HasPrefix(region, "vram") || strings.HasPrefix(region, "local")
+}
+
+// A count fdinfo writes in bytes, KiB, or MiB
+func fdinfoBytes(value string) uint64 {
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return 0
+	}
+	n, err := strconv.ParseUint(fields[0], 10, 64)
+	if err != nil {
+		return 0
+	}
+	if len(fields) > 1 {
+		switch fields[1] {
+		case "KiB":
+			n <<= 10
+		case "MiB":
+			n <<= 20
+		}
+	}
+	return n
 }
 
 // One card as a device, with a pool when the driver reports dedicated memory

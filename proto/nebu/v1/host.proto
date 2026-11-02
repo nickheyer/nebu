@@ -51,6 +51,15 @@ message MemoryPool {
   uint64 free_bytes = 5;
 }
 
+// Device memory one process holds as the host reports it, stamped with the live instance owning the pid
+message ProcessUse {
+  string device_id = 1;
+  int32 pid = 2;
+  uint64 bytes = 3;
+  string instance_id = 4;
+  string instance_name = 5;
+}
+
 // Filesystem holding nebu data, one entry per mount
 message Storage {
   string path = 1;
@@ -80,6 +89,8 @@ message HostProfile {
   repeated ProbeResult probes = 9;
   // The daemon's home directory
   string home = 10;
+  // Processes holding device memory at probe time
+  repeated ProcessUse processes = 11;
 }
 
 // Asks for the host profile

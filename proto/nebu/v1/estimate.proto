@@ -108,6 +108,8 @@ message MemoryPlan {
   bool against_free = 11;
   // Host snapshot time used by this plan.
   google.protobuf.Timestamp planned_at = 12;
+  // Learned factor applied to cache_bytes, zero when none was learned
+  double cache_ratio = 13;
 }
 
 // Learned correction for one runtime and architecture
@@ -115,6 +117,9 @@ message Calibration {
   double overhead_delta = 1;
   uint32 samples = 2;
   google.protobuf.Timestamp updated_at = 3;
+  // Measured cache over planned cache, zero until a run reports its cache
+  double cache_ratio = 4;
+  uint32 cache_samples = 5;
 }
 
 // Learned corrections keyed by runtime and architecture.

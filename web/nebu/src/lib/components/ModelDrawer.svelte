@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import { Code } from '@connectrpc/connect';
   import { api, code, message } from '$lib/api';
-  import { live, clock, taskFor, modelKey, hostName, runtimeName, runtimeStatus, instanceLive, installsOf, storeMount, poolName, orderedSlots, startedTask, instancesOnPool, holdersOf } from '$lib/state.svelte';
+  import { live, clock, taskFor, modelKey, hostName, runtimeName, runtimeStatus, instanceLive, installsOf, storeMount, poolName, orderedSlots, startedTask, holdersOf } from '$lib/state.svelte';
   import { runModel } from '$lib/actions.svelte';
   import { isComponent, kindLabel, partWord } from '$lib/diffusion';
   import { ModelKind } from '$proto/model_pb';
@@ -138,12 +138,9 @@
   }
   function poolOverlays(pool: { id: string; used: bigint; cap: bigint; total: bigint; free: bigint }, verdict: FitVerdict | undefined) {
     const inUse = pool.total > pool.free ? pool.total - pool.free : 0n;
-    const ours = instancesOnPool(pool.id);
-    const others = inUse > ours ? inUse - ours : 0n;
     const over = pool.used > pool.cap || verdict === FitVerdict.NO;
     const items = [];
-    if (others > 0n) items.push({ size: others, tone: 'neutral' as const });
-    if (ours > 0n) items.push({ label: 'instances', size: ours, tone: 'info' as const });
+    if (inUse > 0n) items.push({ label: 'in use', size: inUse, tone: 'neutral' as const });
     items.push({ label: 'this', size: pool.used, tone: over ? ('bad' as const) : ('accent' as const) });
     return [{ start: 'left' as const, items }];
   }

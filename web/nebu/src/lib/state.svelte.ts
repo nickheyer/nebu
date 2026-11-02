@@ -106,6 +106,12 @@ const maps: Maps = {
   [EventKind.TOOL_SERVER]: live.toolServers
 };
 
+// What a host profile says about runtime compatibility, memory and processes left out, so refreshes keep the cached lists
+function hostShape(h: HostProfile | null): string {
+  if (!h) return '';
+  return JSON.stringify([h.hostname, h.os, h.arch, h.facts, h.devices.map((d) => [d.id, d.kind, d.vendor, d.name, d.facts]), h.probes.map((p) => [p.probeId, p.status, p.detail]), h.storage.map((s) => [s.path, s.filesystem])]);
+}
+
 // Track snapshot keys to remove stale entries after reconnecting.
 let snapshotSeen: Map<EventKind, Set<string>> | null = null;
 let settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -205,9 +211,12 @@ function apply(ev: Event) {
   if (ev.kind === EventKind.TASK && p.case === 'task') settleTask(p.value);
   if (ev.kind === EventKind.INSTANCE && p.case === 'instance') settleStop(p.value);
   // Installs can change the available runtime methods.
-  if (ev.seq > 0n && (ev.kind === EventKind.HOST || ev.kind === EventKind.SOURCE || ev.kind === EventKind.INSTALL)) invalidateCached();
+  if (ev.seq > 0n && (ev.kind === EventKind.SOURCE || ev.kind === EventKind.INSTALL)) invalidateCached();
   if (ev.kind === EventKind.HOST) {
-    if (p.case === 'host') live.host = p.value;
+    if (p.case === 'host') {
+      if (ev.seq > 0n && hostShape(p.value) !== hostShape(live.host)) invalidateCached();
+      live.host = p.value;
+    }
     return;
   }
   if (ev.kind === EventKind.STORE) {
@@ -412,13 +421,18 @@ export function runtimeStatus(id: string): RuntimeStatus | undefined {
   return cached.runtimes.find((r) => r.runtime?.id === id);
 }
 
-// Sum planned memory for live instances, excluding the given instance.
-export function instancesOnPool(poolId: string, except = ''): bigint {
+// The host profile a mesh node last reported, this node's live one for itself or outside a mesh
+export function nodeProfile(nodeId: string): HostProfile | null {
+  const n = live.nodes.get(nodeId);
+  if (!n || n.self) return live.host;
+  return n.profile ?? null;
+}
+
+// Device memory the host attributes to an instance's processes, summed over every device
+export function instanceUsage(instanceId: string, profile: HostProfile | null = live.host): bigint {
   let total = 0n;
-  for (const i of live.instances.values()) {
-    if (i.id === except || !instanceLive(i)) continue;
-    for (const p of i.plan?.pools ?? []) if (p.poolId === poolId) total += p.usedBytes;
-  }
+  if (!instanceId) return 0n;
+  for (const p of profile?.processes ?? []) if (p.instanceId === instanceId) total += p.bytes;
   return total;
 }
 

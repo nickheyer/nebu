@@ -829,3 +829,33 @@ func TestHybridLayersCarryTheirOwnCache(t *testing.T) {
 		t.Fatalf("between the shaped and the averaged need, two layers stay: %v %v %v", out.GetVerdict(), out.GetParams()["n_gpu_layers"], err)
 	}
 }
+
+// A learned cache factor scales the layer cache and the draft's side cache alike, the plan recording the factor
+func TestCacheRatioScalesEveryCache(t *testing.T) {
+	params := map[string]float64{"n_layer": 4, "n_head_kv": 8, "head_dim": 128, "head_dim_v": 128, "n_embd": 4096, "n_vocab": 32000}
+	d := &v1.Descriptor{Architecture: "llama", Family: "default", Params: params}
+	for i := int32(0); i < 4; i++ {
+		d.Groups = append(d.Groups, &v1.TensorGroup{Kind: v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER, Layer: i, Bytes: 100 * mib})
+	}
+	p, defaultsOf := policy(t, "llamacpp")
+	host := &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "g", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 80 * gib}, {Id: "h", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 80 * gib}}}
+	plan := func(ratio float64) *v1.MemoryPlan {
+		out, err := p.Plan(estimate.Input{Descriptor: d, Family: archs.Default{}, Host: host, Params: defaults(defaultsOf, map[string]any{"n_ctx": int64(8192)}), CacheRatio: ratio})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	whole := plan(0)
+	full := uint64(8192) * 4 * 8 * 256 * 2
+	if whole.GetCacheBytes() != full || whole.GetCacheRatio() != 0 || plan(1).GetCacheBytes() != full {
+		t.Fatalf("unscaled cache %s, want %s", estimate.Human(whole.GetCacheBytes()), estimate.Human(full))
+	}
+	quarter := plan(0.25)
+	if quarter.GetCacheBytes() != full/4 || quarter.GetCacheRatio() != 0.25 {
+		t.Fatalf("quarter cache %s ratio %v", estimate.Human(quarter.GetCacheBytes()), quarter.GetCacheRatio())
+	}
+	if estimate.PlannedDevice(whole)-estimate.PlannedDevice(quarter) != full-full/4 {
+		t.Fatalf("the device need drops by the cache cut: %s vs %s", estimate.Human(estimate.PlannedDevice(whole)), estimate.Human(estimate.PlannedDevice(quarter)))
+	}
+}

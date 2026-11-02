@@ -12,6 +12,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/pkg/estimate"
+	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/text"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -91,6 +92,10 @@ func runPs(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
+	profile, err := e.cl.host.GetProfile(ctx, connect.NewRequest(&v1.GetProfileRequest{}))
+	if err != nil {
+		return err
+	}
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, in := range resp.Msg.GetInstances() {
@@ -98,20 +103,21 @@ func runPs(ctx context.Context, e *env, args []string) error {
 			if len(in.GetTriage()) > 0 {
 				detail = in.GetTriage()[0].GetSummary()
 			}
-			rows = append(rows, []string{in.GetId(), in.GetName(), loud(in.GetState()), in.GetRuntimeId(), strconv.Itoa(int(in.GetPid())), in.GetEndpoint(), measured(in), detail})
+			rows = append(rows, []string{in.GetId(), in.GetName(), loud(in.GetState()), in.GetRuntimeId(), strconv.Itoa(int(in.GetPid())), in.GetEndpoint(), measured(in, profile.Msg.GetProfile()), detail})
 		}
 		table(w, []string{"ID", "NAME", "STATE", "RUNTIME", "PID", "ENDPOINT", "DEVICE", "DETAIL"}, rows)
 	})
 }
 
-func measured(in *v1.Instance) string {
+// Device memory the host holds for the instance now, else what it measured at ready, else a dash
+func measured(in *v1.Instance, profile *v1.HostProfile) string {
+	if n := host.InstanceBytes(profile, in.GetId()); n > 0 {
+		return estimate.Human(n)
+	}
 	for _, m := range in.GetMeasurements() {
 		if m.GetKey() == estimate.DeviceUsedKey {
 			return estimate.Human(m.GetBytes())
 		}
-	}
-	if in.GetPlan() != nil {
-		return "~" + estimate.Human(estimate.PlannedDevice(in.GetPlan()))
 	}
 	return "-"
 }
@@ -160,17 +166,21 @@ func runShow(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	return e.print(resp.Msg, func(w io.Writer) { renderInstance(w, resp.Msg.GetInstance()) })
+	profile, err := e.cl.host.GetProfile(ctx, connect.NewRequest(&v1.GetProfileRequest{}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) { renderInstance(w, resp.Msg.GetInstance(), profile.Msg.GetProfile()) })
 }
 
-func renderInstance(w io.Writer, in *v1.Instance) {
+func renderInstance(w io.Writer, in *v1.Instance, profile *v1.HostProfile) {
 	fmt.Fprintf(w, "%s %s %s\n", in.GetId(), in.GetName(), loud(in.GetState()))
 	rows := [][]string{
 		{"model", in.GetSourceId() + "/" + in.GetRepo() + " " + in.GetGroup()},
 		{"runtime", in.GetRuntimeId() + " install " + in.GetInstallId()},
 		{"endpoint", in.GetEndpoint()},
 		{"pid", strconv.Itoa(int(in.GetPid()))},
-		{"device", measured(in)},
+		{"device", measured(in, profile)},
 		{"created", when(in.GetCreatedAt(), time.RFC3339)},
 		{"ready", when(in.GetReadyAt(), time.RFC3339)},
 		{"stopped", when(in.GetStoppedAt(), time.RFC3339)},
@@ -583,6 +593,10 @@ func runSlotsShow(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
+	profile, err := e.cl.host.GetProfile(ctx, connect.NewRequest(&v1.GetProfileRequest{}))
+	if err != nil {
+		return err
+	}
 	return e.print(resp.Msg, func(w io.Writer) {
 		s := resp.Msg.GetSlot()
 		fmt.Fprintf(w, "%s %s %s\n", s.GetId(), s.GetName(), loud(s.GetState()))
@@ -608,7 +622,7 @@ func runSlotsShow(ctx context.Context, e *env, args []string) error {
 		table(w, nil, rows)
 		if in := resp.Msg.GetInstance(); in != nil {
 			section(w, "occupant")
-			renderInstance(w, in)
+			renderInstance(w, in, profile.Msg.GetProfile())
 		}
 	})
 }

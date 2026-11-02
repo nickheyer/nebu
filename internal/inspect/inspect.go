@@ -287,6 +287,7 @@ func (i *Inspector) input(ctx context.Context, rt runtimes.Runtime, d *v1.Descri
 		Params:        params,
 		Free:          free,
 		OverheadDelta: i.Calibration.Delta(rt.ID(), d.GetArchitecture()),
+		CacheRatio:    i.Calibration.Ratio(rt.ID(), d.GetArchitecture()),
 		Placement:     placement,
 		Companions:    companions,
 		Repo:          repo,

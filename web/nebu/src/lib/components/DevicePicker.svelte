@@ -23,7 +23,7 @@
 </script>
 
 <div {id}>
-  <DeviceRows groups={shown} {cap} {exceptSlot} highlight="this slot">
+  <DeviceRows groups={shown} {cap} {exceptSlot}>
     {#snippet lead(d)}
       <input type="checkbox" class="checkbox shrink-0" aria-label="Use {d.name || d.id}" checked={value.includes(d.id)} onchange={(e) => toggle(d.id, e.currentTarget.checked)} />
     {/snippet}

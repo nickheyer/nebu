@@ -63,6 +63,7 @@ var Version = "dev"
 
 const (
 	profileTTL        = 30 * time.Second
+	liveProbeInterval = 5 * time.Second
 	shutdownTimeout   = 10 * time.Second
 	readHeaderTimeout = 10 * time.Second
 	// How long a kept alive connection may sit between requests before it is closed
@@ -345,6 +346,7 @@ func New(cfg *v1.Config, log *slog.Logger, recent *launch.Log) (d *Daemon, err e
 	}
 	d.Doctor = &doctor.Doctor{Host: prober, Runtimes: rts, Sources: srcs, Store: blobStore, Installs: d.Installs, Tasks: d.Tasks, MinFree: cfg.GetMinFreeBytes()}
 	d.Instances.Probe = d.Doctor.Force
+	prober.Decorate = d.Instances.Attribute
 	deps := rpc.Deps{
 		Host:      prober,
 		Doctor:    d.Doctor,
@@ -513,6 +515,24 @@ func (d *Daemon) openAuth(store *db.DB) error {
 	}
 	d.Guard = auth.NewGuard(a.GetToken(), d.Sessions, d.Tokens)
 	return nil
+}
+
+// Probes the host every few seconds while a runtime runs, else once per profile lifetime, keeping device meters current
+func (d *Daemon) watchHost(ctx context.Context) {
+	for {
+		wait := profileTTL
+		if len(d.Instances.List(true)) > 0 {
+			wait = liveProbeInterval
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		if _, err := d.Host.Profile(ctx, true); err != nil && ctx.Err() == nil {
+			d.Log.Warn("host probe failed", "err", err)
+		}
+	}
 }
 
 // Produces the current state of requested kinds as created events
@@ -718,6 +738,11 @@ func (d *Daemon) Serve(ctx context.Context, ln, gatewayLn net.Listener) error {
 	go func() {
 		defer d.background.Done()
 		d.Instances.RefreshDescriptors(d.base)
+	}()
+	d.background.Add(1)
+	go func() {
+		defer d.background.Done()
+		d.watchHost(d.base)
 	}()
 	// Run a host check at startup.
 	if _, err := d.Doctor.Start(ctx); err != nil {

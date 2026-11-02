@@ -14,7 +14,7 @@
   import { FitVerdict, type GroupPlacement as Placement } from '$proto/estimate_pb';
   import { ParamType, type Param } from '$proto/runtime_pb';
   import type { Measurement } from '$proto/instance_pb';
-  import { clock, instancesOnPool, poolName } from '$lib/state.svelte';
+  import { clock, poolName } from '$lib/state.svelte';
   import { pathLabel } from '$lib/diffusion';
   import SizeBar from './ui/SizeBar.svelte';
   import State from './ui/State.svelte';
@@ -106,15 +106,12 @@
     })
   );
 
-  // Separate nebu's allocations from other memory usage
+  // The pool as the plan saw it, what the host held then and what this run adds
   function overlays(pool: MemoryPlan['pools'][number]) {
     const whole = pool.totalBytes || pool.capacityBytes;
     const inUse = whole > pool.freeBytes ? whole - pool.freeBytes : 0n;
-    const ours = instancesOnPool(pool.poolId, instance);
-    const others = inUse > ours ? inUse - ours : 0n;
     const items = [];
-    if (others > 0n) items.push({ size: others, tone: 'neutral' as const });
-    if (ours > 0n) items.push({ label: instance ? 'other instances' : 'instances', size: ours, tone: 'info' as const });
+    if (inUse > 0n) items.push({ label: 'in use', size: inUse, tone: 'neutral' as const });
     items.push({ label: instance ? 'this instance' : 'this run', size: pool.usedBytes, tone: pool.usedBytes > pool.capacityBytes ? ('bad' as const) : ('accent' as const) });
     return [{ start: 'left' as const, items }];
   }
@@ -158,7 +155,7 @@
 
   <dl class="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums">
     <div class="flex gap-1.5"><dt class="text-fg-muted">Weights</dt><dd class="text-fg">{bytes(plan.weightsBytes)}</dd></div>
-    {#if plan.cacheBytes > 0n}<div class="flex gap-1.5"><dt class="text-fg-muted">Cache</dt><dd class="text-fg">{bytes(plan.cacheBytes)}</dd></div>{/if}
+    {#if plan.cacheBytes > 0n}<div class="flex gap-1.5" title={plan.cacheRatio && plan.cacheRatio !== 1 ? `${plan.cacheRatio.toFixed(2)}× the formula, learned from what measured runs allocated` : undefined}><dt class="text-fg-muted">Cache</dt><dd class="text-fg">{bytes(plan.cacheBytes)}</dd></div>{/if}
     <div class="flex gap-1.5" title={plan.overheadDelta ? `${deltaBytes(plan.overheadDelta)} learned from measured runs` : undefined}><dt class="text-fg-muted">Overhead</dt><dd class="text-fg">{bytes(plan.overheadBytes)}</dd></div>
     {#if onDisk > 0n}<div class="flex gap-1.5" title="Tensors this runtime never loads with these parameters"><dt class="text-fg-muted">On disk</dt><dd class="text-fg">{bytes(onDisk)}</dd></div>{/if}
     <div class="flex gap-1.5"><dt class="text-fg-muted">Total</dt><dd class="text-fg">{bytes(total)}</dd></div>

@@ -68,6 +68,66 @@ func TestNvidiaSMIRowsBecomeDevicesAndPools(t *testing.T) {
 	}
 }
 
+// Process rows name a probed device by uuid with memory in MiB, withheld or unknown device rows dropped
+func TestNvidiaSMIProcessRowsBecomeProcessUse(t *testing.T) {
+	devices := []*v1.Device{{Id: "GPU-aaaa"}, {Id: "GPU-bbbb"}}
+	out := "1234, 6442, GPU-aaaa\n1234, 100, GPU-bbbb\n[N/A], 50, GPU-aaaa\n77, [Insufficient Permissions], GPU-aaaa\n99, 10, GPU-zzzz\n\n"
+	procs, err := parseNvidiaApps([]byte(out), devices)
+	if err != nil || len(procs) != 2 {
+		t.Fatalf("procs %v %v", procs, err)
+	}
+	if p := procs[0]; p.GetPid() != 1234 || p.GetDeviceId() != "GPU-aaaa" || p.GetBytes() != 6442<<20 {
+		t.Fatalf("first %+v", p)
+	}
+	if p := procs[1]; p.GetPid() != 1234 || p.GetDeviceId() != "GPU-bbbb" || p.GetBytes() != 100<<20 {
+		t.Fatalf("second %+v", p)
+	}
+	if _, err := parseNvidiaApps([]byte("1234, 6442\n"), devices); err == nil {
+		t.Fatal("short rows fail")
+	}
+}
+
+// Each process's open DRM nodes name the card by PCI address and its resident memory there, counted once per client
+func TestDRMFdinfoNamesEachProcessMemoryOnTheCards(t *testing.T) {
+	root := fakeSysfs(t)
+	proc := t.TempDir()
+	open := func(pid int, fd string, info string) {
+		t.Helper()
+		dir := filepath.Join(proc, fmt.Sprint(pid))
+		if err := os.MkdirAll(filepath.Join(dir, "fd"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "fdinfo"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("/dev/dri/renderD128", filepath.Join(dir, "fd", fd)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "fdinfo", fd), []byte(info), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	amd := "drm-driver:\tamdgpu\ndrm-client-id:\t4\ndrm-pdev:\t0000:03:00.0\ndrm-memory-vram:\t2048 KiB\ndrm-memory-gtt:\t512 KiB\ndrm-resident-vram:\t1024 KiB\n"
+	open(500, "7", amd)
+	open(500, "8", amd)
+	open(500, "9", "drm-driver:\tamdgpu\ndrm-client-id:\t5\ndrm-pdev:\t0000:03:00.0\ndrm-memory-vram:\t3 MiB\n")
+	open(600, "3", "drm-driver:\txe\ndrm-client-id:\t9\ndrm-pdev:\t0000:05:00.0\ndrm-total-vram0:\t900 KiB\ndrm-resident-vram0:\t700 KiB\ndrm-resident-system:\t100 KiB\n")
+	open(700, "3", "drm-driver:\ti915\ndrm-pdev:\t0000:00:02.0\ndrm-memory-local0:\t64 KiB\n")
+	if err := os.MkdirAll(filepath.Join(proc, "self", "fd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := drmSysfs{root: root, ids: []string{filepath.Join(root, "pci.ids")}, proc: proc}.Run(context.Background())
+	if res.Status != v1.ProbeStatus_PROBE_STATUS_OK || len(res.Processes) != 2 {
+		t.Fatalf("result %+v", res)
+	}
+	if p := res.Processes[0]; p.GetPid() != 500 || p.GetDeviceId() != "amd-1f9ebf1b8f9e4d8a" || p.GetBytes() != 1024<<10+3<<20 {
+		t.Fatalf("amd process %+v", p)
+	}
+	if p := res.Processes[1]; p.GetPid() != 600 || p.GetDeviceId() != "intel-0000:05:00.0" || p.GetBytes() != 700<<10 {
+		t.Fatalf("xe process %+v", p)
+	}
+}
+
 func TestKVBlocksAndBytes(t *testing.T) {
 	blocks := kvBlocks([]byte("a: 1\nb = two\n\n\nc: 3\nno separator here\n"))
 	if len(blocks) != 2 || blocks[0]["a"] != "1" || blocks[0]["b"] != "two" || blocks[1]["c"] != "3" || len(blocks[1]) != 1 {
@@ -143,7 +203,7 @@ func fakeSysfs(t *testing.T) string {
 
 func TestDRMSysfsReadsAMDAndIntelCards(t *testing.T) {
 	root := fakeSysfs(t)
-	res := drmSysfs{root: root, ids: []string{filepath.Join(root, "pci.ids")}}.Run(context.Background())
+	res := drmSysfs{root: root, ids: []string{filepath.Join(root, "pci.ids")}, proc: t.TempDir()}.Run(context.Background())
 	if res.Status != v1.ProbeStatus_PROBE_STATUS_OK || len(res.Devices) != 3 || len(res.Pools) != 2 {
 		t.Fatalf("result %+v", res)
 	}
