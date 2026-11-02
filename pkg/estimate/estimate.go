@@ -158,6 +158,8 @@ type Policy struct {
 	ContextParam string
 	// Allowed context increments.
 	ContextMin, ContextStep int64
+	// Smallest auto context under the resolved params, replacing ContextMin when it answers above zero
+	ContextFloor func(s *Scope) int64
 	// Maximum trained context length, zero if unknown.
 	ContextMax func(s *Scope) int64
 	// Sequences the context splits over, scaling its bounds and step, nil for one
@@ -321,7 +323,13 @@ func (p *Policy) ContextBounds(s *Scope) (lo, hi, step int64) {
 		scale = max(p.ContextScale(s), 1)
 	}
 	step = max(p.ContextStep, 1) * scale
-	lo = p.ContextMin * scale
+	floor := p.ContextMin
+	if p.ContextFloor != nil {
+		if f := p.ContextFloor(s); f > 0 {
+			floor = f
+		}
+	}
+	lo = floor * scale
 	if lo <= 0 {
 		lo = step
 	}

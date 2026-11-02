@@ -242,12 +242,14 @@ func (r VLLM) LaunchSeat(in Launch) (*Command, error) {
 			}
 		}
 		p["tensor_parallel_size"] = int64(tp)
+		p["pipeline_parallel_size"] = int64(pp)
+		p["distributed_executor_backend"] = "mp"
 		in.Params = p
 		cmd, err := r.Launch(exposedLaunch(in))
 		if err != nil {
 			return nil, err
 		}
-		cmd.Args = append(cmd.Args, "--pipeline-parallel-size", strconv.Itoa(pp), "--nnodes", strconv.FormatUint(uint64(seat.GetCount()), 10), "--node-rank", strconv.FormatUint(uint64(seat.GetRank()), 10), "--master-addr", host, "--master-port", port, "--distributed-executor-backend", "mp")
+		cmd.Args = append(cmd.Args, "--nnodes", strconv.FormatUint(uint64(seat.GetCount()), 10), "--node-rank", strconv.FormatUint(uint64(seat.GetRank()), 10), "--master-addr", host, "--master-port", port)
 		if role.Name == RoleRank {
 			cmd.Args = append(cmd.Args, "--headless")
 		}
@@ -257,7 +259,6 @@ func (r VLLM) LaunchSeat(in Launch) (*Command, error) {
 			cmd.Params["pp_layer_partition"] = partition
 		}
 		collectiveEnv(cmd.Env, seat, grace)
-		cmd.Params["pipeline_parallel_size"] = strconv.Itoa(pp)
 		cmd.Params["nnodes"] = strconv.FormatUint(uint64(seat.GetCount()), 10)
 		cmd.Params["node_rank"] = strconv.FormatUint(uint64(seat.GetRank()), 10)
 		cmd.Params["master"] = seat.GetRendezvous()

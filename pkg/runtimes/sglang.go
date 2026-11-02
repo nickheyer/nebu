@@ -41,23 +41,87 @@ func (SGLang) Methods() []Method {
 	}
 }
 
-var sglangCacheBytes = map[string]float64{"auto": 2, "fp8_e5m2": 1, "fp8_e4m3": 1}
+// The cache data types --kv-cache-dtype takes, as SGLang lists them
+var sglangCacheDTypes = []string{"auto", "fp8_e5m2", "fp8_e4m3", "mxfp8", "bf16", "bfloat16", "nvfp4", "fp4_mx_block16"}
+
+var sglangCacheBytes = map[string]float64{"auto": 2, "bf16": 2, "bfloat16": 2, "fp8_e5m2": 1, "fp8_e4m3": 1, "mxfp8": 1, "nvfp4": 0.5625, "fp4_mx_block16": 0.5625}
+
+// The speculative algorithms SGLang builds in, with NEXTN as its alias of EAGLE for MTP heads
+var sglangSpecAlgorithms = []string{"", "EAGLE", "EAGLE3", "NEXTN", "STANDALONE", "NGRAM", "DFLASH", "DSPARK", "UNO"}
 
 func (SGLang) Params() []*v1.Param {
+	const (
+		groupContext     = "Context"
+		groupMemory      = "Memory"
+		groupParallel    = "Parallelism"
+		groupModel       = "Model"
+		groupIdentity    = "Identity"
+		groupChat        = "Chat"
+		groupSpeculative = "Speculative decoding"
+		groupDiagnostics = "Diagnostics"
+	)
+	intParam := func(name, label, group, flag, def, unit, description string, min, max, step float64, advanced bool) *v1.Param {
+		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_INT, Default: def, Unit: unit, Min: min, Max: max, Step: step, Group: group, Flag: flag, Advanced: advanced, Description: description}
+	}
+	boolParam := func(name, label, group, flag, description string) *v1.Param {
+		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: group, Flag: flag, Advanced: true, Description: description}
+	}
+	strParam := func(name, label, group, flag, def, description string, choices []string, advanced bool) *v1.Param {
+		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_STRING, Default: def, Choices: choices, Group: group, Flag: flag, Advanced: advanced, Description: description}
+	}
 	return []*v1.Param{
-		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: "Context", Flag: "--context-length",
+		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: groupContext, Flag: "--context-length",
 			Rule: contextRule},
-		{Name: "chunked_prefill_size", Label: "Chunked prefill", Type: v1.ParamType_PARAM_TYPE_INT, Default: "8192", Unit: "tokens", Min: -1, Step: 512, Group: "Context", Advanced: true, Flag: "--chunked-prefill-size",
-			Description: "-1 off"},
-		{Name: "mem_fraction_static", Label: "Static memory fraction", Type: v1.ParamType_PARAM_TYPE_FLOAT, Default: "0.88", Min: 0.05, Max: 1, Step: 0.01, Group: "Memory", Flag: "--mem-fraction-static"},
-		{Name: "kv_cache_dtype", Label: "KV cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "auto", Choices: []string{"auto", "fp8_e5m2", "fp8_e4m3"}, Group: "Memory", Flag: "--kv-cache-dtype"},
-		{Name: "tp_size", Label: "Tensor parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--tp-size"},
-		{Name: "served_model_name", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Flag: "--served-model-name"},
-		{Name: "speculative_algorithm", Label: "Draft method", Type: v1.ParamType_PARAM_TYPE_STRING, Choices: []string{"", "NEXTN", "EAGLE", "EAGLE3"}, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-algorithm"},
-		{Name: "speculative_draft_model_path", Label: "Draft model", Type: v1.ParamType_PARAM_TYPE_PATH, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-draft-model-path", Picks: "checkpoint"},
-		{Name: "speculative_num_steps", Label: "Draft steps", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Step: 1, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-num-steps"},
-		{Name: "speculative_eagle_topk", Label: "Draft branches", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Step: 1, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-eagle-topk"},
-		{Name: "speculative_num_draft_tokens", Label: "Draft tokens", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Step: 1, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-num-draft-tokens"},
+		intParam("chunked_prefill_size", "Chunked prefill", groupContext, "--chunked-prefill-size", "", "tokens", "tokens in one prefill chunk, empty keeps SGLang's choice by device memory, -1 off", -1, 0, 512, true),
+		intParam("max_running_requests", "Max running requests", groupContext, "--max-running-requests", "", "requests", "empty keeps SGLang's choice by cache size", 1, 0, 1, false),
+		intParam("max_queued_requests", "Max queued requests", groupContext, "--max-queued-requests", "", "requests", "empty keeps SGLang's no limit", 1, 0, 1, true),
+		intParam("max_total_tokens", "Cache pool tokens", groupContext, "--max-total-tokens", "", "tokens", "tokens the cache pool holds, empty keeps SGLang's choice by the memory fraction", 256, 0, 256, true),
+		intParam("max_prefill_tokens", "Max prefill tokens", groupContext, "--max-prefill-tokens", "", "tokens", "tokens one prefill batch holds, at least the context length, empty keeps SGLang's own", 256, 0, 256, true),
+		strParam("schedule_policy", "Schedule policy", groupContext, "--schedule-policy", "", "order requests are served in, empty keeps SGLang's own", []string{"", "lpm", "random", "fcfs", "dfs-weight", "lof", "priority", "routing-key", "hrrn"}, true),
+		boolParam("enable_mixed_chunk", "Mixed chunks", groupContext, "--enable-mixed-chunk", "batch decoding with prefill chunks"),
+		boolParam("disable_radix_cache", "Disable prefix cache", groupContext, "--disable-radix-cache", "serve without the radix prefix cache"),
+		intParam("num_continuous_decode_steps", "Decode steps per schedule", groupContext, "--num-continuous-decode-steps", "", "steps", "decode steps run between scheduler passes, empty keeps SGLang's 1", 1, 0, 1, true),
+		{Name: "mem_fraction_static", Label: "Static memory fraction", Type: v1.ParamType_PARAM_TYPE_FLOAT, Min: 0.05, Max: 1, Step: 0.01, Group: groupMemory, Flag: "--mem-fraction-static",
+			Description: "share of device memory for weights and the cache pool, empty keeps SGLang's choice by model and device"},
+		{Name: "kv_cache_dtype", Label: "KV cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "auto", Choices: sglangCacheDTypes, Group: groupMemory, Flag: "--kv-cache-dtype",
+			Description: "auto keeps the model's type, the fp8 types need CUDA 11.8, mxfp8 the FA4 backend, the fp4 types CUDA 12.8"},
+		intParam("page_size", "Page size", groupMemory, "--page-size", "", "tokens", "tokens in one cache page, empty keeps SGLang's choice by the backend", 1, 0, 1, true),
+		{Name: "tp_size", Label: "Tensor parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: groupParallel, Flag: "--tp-size"},
+		intParam("pp_size", "Pipeline parallel", groupParallel, "--pp-size", "", "stages", "empty keeps SGLang's 1, a chain formation sets it per rank", 1, 0, 1, true),
+		intParam("dp_size", "Data parallel", groupParallel, "--dp-size", "", "replicas", "empty keeps SGLang's 1", 1, 0, 1, true),
+		intParam("ep_size", "Expert parallel", groupParallel, "--ep-size", "", "devices", "empty keeps SGLang's 1", 1, 0, 1, true),
+		boolParam("enable_p2p_check", "Check peer access", groupParallel, "--enable-p2p-check", "verify device to device access before enabling it"),
+		strParam("dtype", "Weight type", groupModel, "--dtype", "", "type weights and activations run in, empty keeps SGLang's auto, bfloat16 for bfloat16 models and float16 otherwise", []string{"", "auto", "half", "float16", "bfloat16", "float", "float32"}, false),
+		strParam("quantization", "Quantization", groupModel, "--quantization", "", "quantization method of the weights, such as awq, gptq, fp8, empty keeps the checkpoint's", nil, true),
+		strParam("load_format", "Load format", groupModel, "--load-format", "", "weight file format to load, empty keeps SGLang's auto", nil, true),
+		strParam("attention_backend", "Attention backend", groupModel, "--attention-backend", "", "kernel for attention, such as flashinfer, fa3, fa4, triton, trtllm_mha, empty keeps SGLang's choice", nil, true),
+		boolParam("trust_remote_code", "Trust remote code", groupModel, "--trust-remote-code", "run the modeling code a checkpoint ships"),
+		boolParam("is_embedding", "Embedding model", groupModel, "--is-embedding", "serve a causal model as an embedding model"),
+		intParam("random_seed", "Seed", groupModel, "--random-seed", "", "", "sampling seed, empty keeps SGLang's random", 0, 0, 1, true),
+		intParam("cuda_graph_max_bs", "CUDA graph batch", groupModel, "--cuda-graph-max-bs", "", "requests", "largest batch captured as a CUDA graph, empty keeps SGLang's choice", 1, 0, 1, true),
+		boolParam("enable_torch_compile", "torch.compile", groupModel, "--enable-torch-compile", "compile the model with torch, slower starts and faster steps"),
+		intParam("torch_compile_max_bs", "Compiled batch", groupModel, "--torch-compile-max-bs", "", "requests", "largest batch torch compiles, empty keeps SGLang's 32", 1, 0, 1, true),
+		boolParam("enable_lora", "LoRA adapters", groupModel, "--enable-lora", "accept LoRA adapters named by requests"),
+		boolParam("sleep_on_idle", "Sleep when idle", groupModel, "--sleep-on-idle", "lower CPU use while no request runs"),
+		{Name: "served_model_name", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: groupIdentity, Flag: "--served-model-name"},
+		strParam("chat_template", "Chat template", groupChat, "--chat-template", "", "a built in template name or a template file, empty keeps the model's", nil, true),
+		strParam("default_chat_template_kwargs", "Template arguments", groupChat, "--default-chat-template-kwargs", "", "a JSON object of values the template reads on every request", nil, true),
+		strParam("reasoning_parser", "Reasoning parser", groupChat, "--reasoning-parser", "", "parser that splits reasoning from the answer, auto detects it from the template, empty leaves reasoning in the content", nil, true),
+		strParam("tool_call_parser", "Tool call parser", groupChat, "", "", "parser for tool calls, empty picks one for the model family", nil, true),
+		strParam("sampling_defaults", "Sampling defaults", groupChat, "--sampling-defaults", "", "where unset sampling values come from, empty keeps SGLang's model", []string{"", "openai", "model"}, true),
+		intParam("stream_interval", "Stream interval", groupChat, "--stream-interval", "", "tokens", "tokens between streamed chunks, empty keeps SGLang's 1", 1, 0, 1, true),
+		{Name: "speculative_algorithm", Label: "Draft method", Type: v1.ParamType_PARAM_TYPE_STRING, Choices: sglangSpecAlgorithms, Group: groupSpeculative, Advanced: true, Flag: "--speculative-algorithm",
+			Description: "EAGLE and EAGLE3 take a draft model, NEXTN the model's own MTP heads, STANDALONE a plain draft model, NGRAM needs none"},
+		{Name: "speculative_draft_model_path", Label: "Draft model", Type: v1.ParamType_PARAM_TYPE_PATH, Group: groupSpeculative, Advanced: true, Flag: "--speculative-draft-model-path", Picks: "checkpoint"},
+		{Name: "speculative_num_steps", Label: "Draft steps", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Step: 1, Group: groupSpeculative, Advanced: true, Flag: "--speculative-num-steps", Description: "empty keeps SGLang's choice for the algorithm"},
+		{Name: "speculative_eagle_topk", Label: "Draft branches", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Step: 1, Group: groupSpeculative, Advanced: true, Flag: "--speculative-eagle-topk", Description: "empty keeps SGLang's choice for the algorithm"},
+		{Name: "speculative_num_draft_tokens", Label: "Draft tokens", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Step: 1, Group: groupSpeculative, Advanced: true, Flag: "--speculative-num-draft-tokens", Description: "empty keeps SGLang's choice for the algorithm"},
+		strParam("log_level", "Log level", groupDiagnostics, "--log-level", "", "empty keeps SGLang's info", []string{"", "debug", "info", "warning", "error"}, true),
+		boolParam("enable_metrics", "Prometheus metrics", groupDiagnostics, "--enable-metrics", "serve the metrics endpoint"),
+		{Name: "watchdog_timeout", Label: "Watchdog timeout", Type: v1.ParamType_PARAM_TYPE_FLOAT, Min: 1, Step: 30, Unit: "seconds", Group: groupDiagnostics, Advanced: true, Flag: "--watchdog-timeout",
+			Description: "a forward batch past this long crashes the server, empty keeps SGLang's 300, a formation sets its stop grace"},
+		boolParam("enable_dynamic_chunking", "Dynamic chunking", groupDiagnostics, "--enable-dynamic-chunking", "size pipeline chunks as they run, a chain formation turns it on"),
+		boolParam("disable_overlap_schedule", "Disable overlap schedule", groupDiagnostics, "--disable-overlap-schedule", "run the scheduler and the workers in turn, a chain formation turns it on"),
 	}
 }
 
@@ -70,8 +134,14 @@ func (r SGLang) Launch(in Launch) (*Command, error) {
 	if p.Str("served_model_name") == "" {
 		p["served_model_name"] = in.Name
 	}
-	args := []string{"-m", "sglang.launch_server", "--model-path", dir, "--host", in.Host, "--port", strconv.Itoa(in.Port), "--tool-call-parser", sglangToolParser(in)}
+	parser := p.Str("tool_call_parser")
+	delete(p, "tool_call_parser")
+	if parser == "" {
+		parser = sglangToolParser(in)
+	}
+	args := []string{"-m", "sglang.launch_server", "--model-path", dir, "--host", in.Host, "--port", strconv.Itoa(in.Port), "--tool-call-parser", parser}
 	flags, env, emitted := Flags(r.Params(), p)
+	emitted["tool_call_parser"] = parser
 	setEnv(env, "CUDA_VISIBLE_DEVICES", visible(in.Devices, "nvidia", false))
 	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}, nil
 }
@@ -100,7 +170,7 @@ func (SGLang) Probes() []Probe {
 	}
 }
 
-// SGLang logs the weights it loaded, Load weight end. ... mem usage=12.34 GiB, and NCCL names the
+// SGLang logs the weights it loaded, Load weight end. ... mem usage=12.34 GB, and NCCL names the
 // net its ranks took, NET/IB or NET/Socket, which is a measurement too
 func (SGLang) Measure(lines []string) []*v1.Measurement {
 	var m measurements
@@ -144,11 +214,17 @@ func (SGLang) Policy() *estimate.Policy {
 		Shape:         func(p estimate.Params) archs.Run { return archs.Run{Context: float64(p.Int("n_ctx"))} },
 		States: func(s *estimate.Scope) ([]*v1.ParamState, string) {
 			gpus := float64(len(host.Kind(s.Host, v1.DeviceKind_DEVICE_KIND_GPU)))
+			ctx := float64(s.Params.Int("n_ctx"))
 			return []*v1.ParamState{
 				bounds("n_ctx", 256, s.Model.ContextTrain, 256),
-				bounds("chunked_prefill_size", -1, float64(s.Params.Int("n_ctx")), 512),
+				bounds("chunked_prefill_size", -1, ctx, 512),
+				bounds("max_total_tokens", 256, 0, 256),
+				bounds("max_prefill_tokens", ctx, 0, 256),
 				bounds("mem_fraction_static", 0.05, 1, 0.01),
 				bounds("tp_size", 1, gpus, 1),
+				bounds("pp_size", 1, max(gpus, 1), 1),
+				bounds("dp_size", 1, max(gpus, 1), 1),
+				bounds("ep_size", 1, max(gpus, 1), 1),
 			}, ""
 		},
 	}

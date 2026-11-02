@@ -23,7 +23,7 @@ func TestSGLangRankSeats(t *testing.T) {
 	if cmd.Command != "/venv/bin/python" || !strings.HasPrefix(line, "-m sglang.launch_server --model-path /w --host 10.0.0.1 --port 8000") {
 		t.Fatalf("head %s %s", cmd.Command, line)
 	}
-	for _, want := range []string{"--tp-size 2", "--chunked-prefill-size 8192", "--pp-size 2 --nnodes 2 --node-rank 0 --dist-init-addr 10.0.0.5:29500 --watchdog-timeout 30 --enable-dynamic-chunking --disable-overlap-schedule"} {
+	for _, want := range []string{"--tp-size 2", "--pp-size 2", "--watchdog-timeout 30", "--enable-dynamic-chunking", "--disable-overlap-schedule", "--nnodes 2 --node-rank 0 --dist-init-addr 10.0.0.5:29500"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("missing %s in %s", want, line)
 		}
@@ -62,7 +62,7 @@ func TestSGLangRankSeats(t *testing.T) {
 		t.Fatal(err)
 	}
 	line = strings.Join(cmd.Args, " ")
-	for _, want := range []string{"--tp-size 6", "--pp-size 1 --nnodes 3 --node-rank 0 --dist-init-addr 10.0.0.5:29500 --watchdog-timeout 30", "--speculative-algorithm EAGLE", "--speculative-draft-model-path /d", "--speculative-num-steps 3", "--speculative-eagle-topk 1", "--speculative-num-draft-tokens 4"} {
+	for _, want := range []string{"--tp-size 6", "--pp-size 1", "--watchdog-timeout 30", "--nnodes 3 --node-rank 0 --dist-init-addr 10.0.0.5:29500", "--speculative-algorithm EAGLE", "--speculative-draft-model-path /d", "--speculative-num-steps 3", "--speculative-eagle-topk 1", "--speculative-num-draft-tokens 4"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("missing %s in %s", want, line)
 		}
@@ -102,7 +102,7 @@ func TestSGLangRelaySeats(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := strings.Join(cmd.Args, " ")
-	if !strings.HasPrefix(line, "-m sglang.launch_server --model-path /w --host 127.0.0.1 --port 9") || !strings.HasSuffix(line, "--disaggregation-mode prefill --disaggregation-transfer-backend nixl --watchdog-timeout 30 --disaggregation-bootstrap-port 8998 --disaggregation-ib-device mlx5_0,mlx5_1") {
+	if !strings.HasPrefix(line, "-m sglang.launch_server --model-path /w --host 127.0.0.1 --port 9") || !strings.HasSuffix(line, "--disaggregation-mode prefill --disaggregation-transfer-backend nixl --disaggregation-bootstrap-port 8998 --disaggregation-ib-device mlx5_0,mlx5_1") || !strings.Contains(line, "--watchdog-timeout 30") {
 		t.Fatalf("prefill %s", line)
 	}
 	if cmd.Env["NCCL_IB_HCA"] != "mlx5_0,mlx5_1" || cmd.Env["NCCL_IB_MERGE_NICS"] != "1" || cmd.Env["NCCL_SOCKET_IFNAME"] != "ib0" || cmd.Params["disaggregation_mode"] != RolePrefill || cmd.Params["disaggregation_ib_device"] != "mlx5_0,mlx5_1" {
@@ -110,7 +110,7 @@ func TestSGLangRelaySeats(t *testing.T) {
 	}
 	seat.Role, seat.RdmaDevices = RoleDecode, nil
 	cmd, err = rt.LaunchSeat(in)
-	if err != nil || !strings.HasSuffix(strings.Join(cmd.Args, " "), "--disaggregation-mode decode --disaggregation-transfer-backend nixl --watchdog-timeout 30") || cmd.Env["NCCL_NET"] != "" {
+	if err != nil || !strings.HasSuffix(strings.Join(cmd.Args, " "), "--disaggregation-mode decode --disaggregation-transfer-backend nixl") || !strings.Contains(strings.Join(cmd.Args, " "), "--watchdog-timeout 30") || cmd.Env["NCCL_NET"] != "" {
 		t.Fatalf("decode %v %v", cmd, err)
 	}
 	seat.AuxPort = 0

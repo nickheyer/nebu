@@ -127,6 +127,10 @@ type Probe struct {
 	Timeout time.Duration
 	// Parses a fact from command output.
 	Parse func(output string) (string, bool)
+	// Parses several facts from one command output, each under its own key, instead of Parse
+	Facts func(output string) map[string]string
+	// Every key Facts may record, so a refresh knows which facts this probe owns
+	Keys []string
 	// Files whose existence is the fact and whose first present path is its value, instead of a command
 	Files func(in Install) []string
 }
@@ -599,6 +603,45 @@ func Flags(params []*v1.Param, values estimate.Params) (args []string, env map[s
 		}
 	}
 	return args, env, emitted
+}
+
+// Values of a switch a runtime spells as --flag and --no-flag, empty leaving its own default
+var switchChoices = []string{"", "on", "off"}
+
+// Flags of on or off switches spelled --flag and --no-flag, by param name in sorted order, each
+// value removed from the params so the plain flags skip it
+func switchFlags(p estimate.Params, flags map[string]string) ([]string, map[string]string) {
+	names := make([]string, 0, len(flags))
+	for name := range flags {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var args []string
+	emitted := map[string]string{}
+	for _, name := range names {
+		flag := flags[name]
+		switch v := strings.ToLower(strings.TrimSpace(p.Str(name))); v {
+		case "on", "true", "1":
+			args = append(args, flag)
+			emitted[name] = "on"
+		case "off", "false", "0":
+			args = append(args, "--no"+strings.TrimPrefix(flag, "-"))
+			emitted[name] = "off"
+		}
+		delete(p, name)
+	}
+	return args, emitted
+}
+
+// Whether a switch param is on, by its value or by the default given for an unset one
+func switchOn(p estimate.Params, name string, unset bool) bool {
+	switch strings.ToLower(strings.TrimSpace(p.Str(name))) {
+	case "on", "true", "1":
+		return true
+	case "off", "false", "0":
+		return false
+	}
+	return unset
 }
 
 // Returns assigned device IDs or driver indexes for the vendor, separated by commas.

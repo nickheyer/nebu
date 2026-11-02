@@ -70,7 +70,7 @@ func TestSDCppLaunch(t *testing.T) {
 	if cmd.Command != "/bin/sd-server" || !strings.HasPrefix(line, "--listen-ip 127.0.0.1 --listen-port 9 --diffusion-model /store/wan.gguf") {
 		t.Fatalf("launch %s", line)
 	}
-	for _, want := range []string{"--vae /store/vae.safetensors", "--t5xxl /store/umt5.gguf", "--width 832", "--height 480", "--diffusion-fa", "--log-level debug", "--auto-fit on", "--lora-model-dir " + filepath.Join(prepared, "loras")} {
+	for _, want := range []string{"--vae /store/vae.safetensors", "--t5xxl /store/umt5.gguf", "--width 832", "--height 480", "--log-level debug", "--lora-model-dir " + filepath.Join(prepared, "loras")} {
 		if !strings.Contains(line, want) {
 			t.Errorf("missing %s in %s", want, line)
 		}
@@ -354,7 +354,7 @@ func TestSDCppPlan(t *testing.T) {
 		t.Fatal("a larger default size needs more compute memory")
 	}
 	noFA := params.Clone()
-	noFA["diffusion_fa"] = false
+	noFA["flash_attn"] = "off"
 	if sdOverhead(&estimate.Scope{Descriptor: d, Params: noFA, Model: estimateModel(d)}) <= sdOverhead(&estimate.Scope{Descriptor: d, Params: params, Model: estimateModel(d)}) {
 		t.Fatal("attention without flash attention needs more compute memory")
 	}

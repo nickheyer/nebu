@@ -7,14 +7,23 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// Install facts the stages shape depends on: the rpc server beside sd-server and its flag
-const factRPCServers = "rpc_servers_flag"
+// Install facts the stages shape and the module flags depend on, the rpc server beside
+// sd-server and the flags its help lists
+const (
+	factRPCServers   = "rpc_servers_flag"
+	factSDFlashAttn  = "flash_attn_flag"
+	factSDConvDirect = "conv_direct_flag"
+)
+
+// The flags sd-server has renamed across builds, what the help probe looks for
+var sdFlags = map[string][]string{
+	factRPCServers:   {"--rpc-servers"},
+	factSDFlashAttn:  {"--flash-attn"},
+	factSDConvDirect: {"--conv-direct"},
+}
 
 func sdShapeProbes() []Probe {
-	return []Probe{
-		{Key: factRPC, Files: rpcServerCandidates},
-		flagProbe(factRPCServers, []string{"--help"}, "--rpc-servers"),
-	}
+	return []Probe{{Key: factRPC, Files: rpcServerCandidates}, helpProbe([]string{"--help"}, sdFlags)}
 }
 
 func (SDCpp) Shapes(in *v1.Install) []v1.Shape {
@@ -82,17 +91,17 @@ func (r SDCpp) LaunchSeat(in Launch) (*Command, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Only the denoiser runs on the stage, every other module on the head's own first device
+		// or its CPU when it has none
+		own := "cpu"
+		if devices := ggmlDevices(in.InstallRecord, in.Devices); len(devices) > 0 {
+			own = devices[0]
+		}
 		p := in.Params.Clone()
 		p["rpc_servers"] = stages[0].GetAddress()
-		p["backend"] = names[0][0]
+		p["backend"] = own + ",diffusion=" + names[0][0]
 		in.Params = p
-		cmd, err := r.Launch(in)
-		if err != nil {
-			return nil, err
-		}
-		// The text encoders and the decoder stay on the head, only the denoiser runs on the stage.
-		cmd.Args = append(cmd.Args, "--clip-on-cpu", "--vae-on-cpu")
-		return cmd, nil
+		return r.Launch(in)
 	}
 	return nil, fmt.Errorf("%w: stable-diffusion.cpp renders no command for role %s", ErrParam, role.Name)
 }

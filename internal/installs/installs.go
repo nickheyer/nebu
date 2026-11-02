@@ -616,6 +616,9 @@ func (m *Manager) Refresh(ctx context.Context) {
 		owned := map[string]bool{}
 		for _, p := range rt.Probes() {
 			owned[p.Key] = true
+			for _, key := range p.Keys {
+				owned[key] = true
+			}
 		}
 		m.probe(ctx, rt, in)
 		for k, v := range before {
@@ -657,6 +660,14 @@ func (m *Manager) probe(ctx context.Context, rt runtimes.Runtime, in *v1.Install
 		cmd.Stdout, cmd.Stderr = &out, &out
 		cmd.Run()
 		cancel()
+		if p.Facts != nil {
+			for key, value := range p.Facts(out.String()) {
+				if value = strings.TrimSpace(value); value != "" {
+					in.Facts[key] = value
+				}
+			}
+			continue
+		}
 		if value, ok := p.Parse(out.String()); ok {
 			in.Facts[p.Key] = strings.TrimSpace(value)
 		}

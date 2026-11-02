@@ -172,7 +172,7 @@ func (LlamaCpp) Rules() []Rule {
 		{
 			ID:      "rpc-share-mmap",
 			Summary: "the primary node could not map the model file",
-			Hint:    "enable direct_io on the primary node to read model weights without memory mapping",
+			Hint:    "set load_mode to dio on the primary node to read model weights without memory mapping",
 			Match:   anyOf("mmap failed:", "MapViewOfFile failed:", "CreateFileMappingA failed:"),
 		},
 	}

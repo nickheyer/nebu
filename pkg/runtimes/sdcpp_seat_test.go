@@ -22,17 +22,23 @@ func TestSDCppStagesSeats(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := strings.Join(cmd.Args, " ")
-	if cmd.Command != "/bin/sd-server" || !strings.HasPrefix(line, "--listen-ip 127.0.0.1 --listen-port 9 --model /store/sd_xl_base_1.0.safetensors") || !strings.HasSuffix(line, "--clip-on-cpu --vae-on-cpu") {
+	if cmd.Command != "/bin/sd-server" || !strings.HasPrefix(line, "--listen-ip 127.0.0.1 --listen-port 9 --model /store/sd_xl_base_1.0.safetensors") || strings.Contains(line, "--clip-on-cpu") {
 		t.Fatalf("head %s %s", cmd.Command, line)
 	}
-	for _, want := range []string{"--rpc-servers 10.0.0.2:50052", "--backend RPC0"} {
+	for _, want := range []string{"--rpc-servers 10.0.0.2:50052", "--backend cpu,diffusion=RPC0"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("missing %s in %s", want, line)
 		}
 	}
-	if cmd.Params["backend"] != "RPC0" || cmd.Params["rpc_servers"] != "10.0.0.2:50052" {
+	if cmd.Params["backend"] != "cpu,diffusion=RPC0" || cmd.Params["rpc_servers"] != "10.0.0.2:50052" {
 		t.Fatalf("params %v", cmd.Params)
 	}
+	// A head with a device of its own keeps the other modules on it
+	in.Devices = []*v1.Device{gpu("GPU-0", "0")}
+	if cmd, err := rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--backend CUDA0,diffusion=RPC0") {
+		t.Fatalf("head with a device: %v %v", cmd, err)
+	}
+	in.Devices = nil
 	head.Peers = append(head.Peers, &v1.SeatPeer{NodeId: "b", Role: RoleDenoiser, Rank: 2, Address: "10.0.0.3:50052", Devices: 1})
 	if _, err := rt.LaunchSeat(in); err == nil || !strings.Contains(err.Error(), "exactly one denoiser") {
 		t.Fatalf("two denoisers: %v", err)
@@ -67,5 +73,60 @@ func TestSDCppStagesSeats(t *testing.T) {
 		if p.Key == factRPC && (p.Files == nil || p.Parse != nil) {
 			t.Fatal("the rpc server is a file probe")
 		}
+	}
+}
+
+// Module assignments render as --flash-attn and --conv-direct on a build listing them, as the
+// older per module flags on one that does not, and are refused there when they name a module
+// the old flags could not
+func TestSDCppModuleFlags(t *testing.T) {
+	rt := SDCpp{}
+	launch := func(overrides map[string]string, facts map[string]string) (string, error) {
+		params, err := Resolve(rt, overrides)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd, err := rt.Launch(Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.safetensors", "prepared_dir": t.TempDir()}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/sd-server"}, Descriptor: sdDescriptor("sdxl", true, false), InstallRecord: recorded(facts)})
+		if err != nil {
+			return "", err
+		}
+		return strings.Join(cmd.Args, " "), nil
+	}
+	modern := map[string]string{factSDFlashAttn: "--flash-attn", factSDConvDirect: "--conv-direct"}
+	for _, c := range []struct {
+		overrides map[string]string
+		facts     map[string]string
+		want      []string
+		absent    []string
+	}{
+		{nil, modern, nil, []string{"--flash-attn", "--conv-direct", "--fa", "--diffusion-fa"}},
+		{map[string]string{"flash_attn": "auto,te=off", "conv_direct": "auto,vae=off"}, modern, []string{"--flash-attn auto,te=off", "--conv-direct auto,vae=off"}, []string{"--fa", "--diffusion-fa"}},
+		{map[string]string{"flash_attn": "on", "conv_direct": "on"}, nil, []string{"--fa", "--diffusion-conv-direct --vae-conv-direct"}, []string{"--flash-attn", "--conv-direct"}},
+		{map[string]string{"flash_attn": "off,diffusion=on", "conv_direct": "diffusion=on"}, nil, []string{"--diffusion-fa", "--diffusion-conv-direct"}, []string{"--fa ", "--vae-conv-direct"}},
+		{map[string]string{"flash_attn": "off", "conv_direct": "on,vae=off"}, nil, []string{"--diffusion-conv-direct"}, []string{"--fa", "--diffusion-fa", "--vae-conv-direct"}},
+	} {
+		line, err := launch(c.overrides, c.facts)
+		if err != nil {
+			t.Fatalf("%v: %v", c.overrides, err)
+		}
+		for _, w := range c.want {
+			if !strings.Contains(line, w) {
+				t.Errorf("%v on %v: missing %s in %s", c.overrides, c.facts, w, line)
+			}
+		}
+		for _, a := range c.absent {
+			if strings.Contains(line, a) {
+				t.Errorf("%v on %v: %s in %s", c.overrides, c.facts, a, line)
+			}
+		}
+	}
+	if _, err := launch(map[string]string{"flash_attn": "auto,te=off"}, nil); err == nil || !strings.Contains(err.Error(), "flash_attn") {
+		t.Fatalf("an old build cannot name the text encoder: %v", err)
+	}
+	if _, err := launch(map[string]string{"conv_direct": "controlnet=on"}, nil); err == nil || !strings.Contains(err.Error(), "conv_direct") {
+		t.Fatalf("an old build cannot name the controlnet: %v", err)
+	}
+	if !sdFlashAttn("") || !sdFlashAttn("auto") || sdFlashAttn("off") || !sdFlashAttn("off,diffusion=on") || sdFlashAttn("on,diffusion=off") {
+		t.Fatal("the denoiser runs with flash attention unless its module or the whole value says off")
 	}
 }

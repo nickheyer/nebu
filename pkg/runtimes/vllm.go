@@ -37,23 +37,101 @@ func (VLLM) Unmet(h *v1.HostProfile) []string {
 func (VLLM) Methods() []Method {
 	return []Method{
 		{ID: "adopt", Description: "Use an installed vllm", Kind: v1.InstallKind_INSTALL_KIND_ADOPTED, Binaries: []string{"vllm"}},
-		{ID: "source", Description: "Install vllm from PyPI in a virtual environment", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "vllm"},
+		{ID: "source", Description: "Install vllm from its wheel index in a virtual environment", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "vllm"},
 	}
 }
 
-var vllmCacheBytes = map[string]float64{"auto": 2, "fp8": 1, "fp8_e5m2": 1, "fp8_e4m3": 1}
+// The cache data types --kv-cache-dtype takes, as vLLM lists them
+var vllmCacheDTypes = []string{"auto", "float16", "bfloat16", "fp8", "fp8_e4m3", "fp8_e5m2", "fp8_inc", "fp8_ds_mla", "nvfp4_ds_mla", "turboquant_k8v4", "turboquant_4bit_nc", "turboquant_k3v4_nc", "turboquant_3bit_nc", "octave_k3v4", "octave_k3v3", "octave_k3v3_compact", "ultraquant_4bit", "int4_per_token_head", "int8_per_token_head", "fp8_per_token_head", "nvfp4", "nvfp4_4over6"}
+
+// Bytes per cache element of each type, the key and value averaged where they differ
+var vllmCacheBytes = map[string]float64{
+	"auto": 2, "float16": 2, "bfloat16": 2,
+	"fp8": 1, "fp8_e4m3": 1, "fp8_e5m2": 1, "fp8_inc": 1, "fp8_ds_mla": 1, "fp8_per_token_head": 1, "int8_per_token_head": 1,
+	"nvfp4": 0.5625, "nvfp4_ds_mla": 0.5625, "nvfp4_4over6": 0.5625, "int4_per_token_head": 0.5, "ultraquant_4bit": 0.5, "turboquant_4bit_nc": 0.5,
+	"turboquant_k8v4": 0.75, "turboquant_k3v4_nc": 0.4375, "octave_k3v4": 0.4375, "turboquant_3bit_nc": 0.375, "octave_k3v3": 0.375, "octave_k3v3_compact": 0.375,
+}
+
+// The switches vllm serve spells as --flag and --no-flag, by param name
+var vllmSwitches = map[string]string{
+	"enable_prefix_caching":  "--enable-prefix-caching",
+	"enable_chunked_prefill": "--enable-chunked-prefill",
+	"async_scheduling":       "--async-scheduling",
+}
 
 func (VLLM) Params() []*v1.Param {
+	const (
+		groupContext     = "Context"
+		groupMemory      = "Memory"
+		groupParallel    = "Parallelism"
+		groupModel       = "Model"
+		groupIdentity    = "Identity"
+		groupChat        = "Chat"
+		groupAdapters    = "Adapters"
+		groupSpeculative = "Speculative decoding"
+		groupDiagnostics = "Diagnostics"
+	)
+	intParam := func(name, label, group, flag, def, unit, description string, min, max, step float64, advanced bool) *v1.Param {
+		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_INT, Default: def, Unit: unit, Min: min, Max: max, Step: step, Group: group, Flag: flag, Advanced: advanced, Description: description}
+	}
+	boolParam := func(name, label, group, flag, description string) *v1.Param {
+		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: group, Flag: flag, Advanced: true, Description: description}
+	}
+	strParam := func(name, label, group, flag, def, description string, choices []string, advanced bool) *v1.Param {
+		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_STRING, Default: def, Choices: choices, Group: group, Flag: flag, Advanced: advanced, Description: description}
+	}
+	switchParam := func(name, label, group, description string) *v1.Param {
+		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_STRING, Choices: switchChoices, Group: group, Advanced: true, Description: description}
+	}
+	mambaTypes := []string{"auto", "float32", "float16", "bfloat16"}
 	return []*v1.Param{
-		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: "Context", Flag: "--max-model-len",
+		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: groupContext, Flag: "--max-model-len",
 			Rule: contextRule},
-		{Name: "max_num_seqs", Label: "Max sequences", Type: v1.ParamType_PARAM_TYPE_INT, Default: "256", Unit: "sequences", Min: 1, Step: 1, Group: "Context", Flag: "--max-num-seqs"},
-		{Name: "gpu_memory_utilization", Label: "GPU memory fraction", Type: v1.ParamType_PARAM_TYPE_FLOAT, Default: "0.9", Min: 0.05, Max: 1, Step: 0.01, Group: "Memory", Flag: "--gpu-memory-utilization"},
-		{Name: "kv_cache_dtype", Label: "KV cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "auto", Choices: []string{"auto", "fp8", "fp8_e5m2", "fp8_e4m3"}, Group: "Memory", Flag: "--kv-cache-dtype"},
-		{Name: "tensor_parallel_size", Label: "Tensor parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: "Parallelism", Flag: "--tensor-parallel-size"},
-		{Name: "served_model_name", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Identity", Flag: "--served-model-name"},
-		{Name: "speculative_config", Label: "Speculative config", Type: v1.ParamType_PARAM_TYPE_STRING, Group: "Speculative decoding", Advanced: true, Flag: "--speculative-config",
-			Description: `{"method":"mtp","num_speculative_tokens":1}`},
+		intParam("max_num_seqs", "Max sequences", groupContext, "--max-num-seqs", "", "sequences", "requests one scheduler step may run, empty keeps vLLM's 256, or 1024 on a device with 70 GiB or more", 1, 0, 1, false),
+		intParam("max_num_batched_tokens", "Max batched tokens", groupContext, "--max-num-batched-tokens", "", "tokens", "tokens one scheduler step may hold, empty keeps vLLM's 2048, 8192 or 16384 on larger devices", 1, 0, 256, true),
+		switchParam("enable_prefix_caching", "Prefix caching", groupContext, "reuse cache blocks of a shared prompt prefix, empty keeps vLLM's on"),
+		switchParam("enable_chunked_prefill", "Chunked prefill", groupContext, "split long prompts into chunks batched with decoding, empty keeps vLLM's on"),
+		switchParam("async_scheduling", "Async scheduling", groupContext, "overlap scheduling with the model's forward pass, empty keeps vLLM's choice"),
+		{Name: "gpu_memory_utilization", Label: "GPU memory fraction", Type: v1.ParamType_PARAM_TYPE_FLOAT, Min: 0.05, Max: 1, Step: 0.01, Group: groupMemory, Flag: "--gpu-memory-utilization",
+			Description: "share of each device this instance takes for weights, cache, and activations, empty keeps vLLM's 0.92, or 1 when it sizes the cache from measured memory"},
+		strParam("kv_cache_memory_bytes", "Cache memory", groupMemory, "--kv-cache-memory-bytes", "", "bytes of cache on each device, such as 4GiB, which replaces the memory fraction for the cache", nil, true),
+		{Name: "kv_cache_dtype", Label: "KV cache type", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "auto", Choices: vllmCacheDTypes, Group: groupMemory, Flag: "--kv-cache-dtype",
+			Description: "auto keeps the model's type, fp8 needs CUDA 11.8 or ROCm, the 4 bit types need their kernels"},
+		intParam("block_size", "Cache block size", groupMemory, "--block-size", "", "tokens", "tokens in one cache block, empty keeps vLLM's choice for the backend", 1, 0, 16, true),
+		{Name: "cpu_offload_gb", Label: "Weights offloaded to host", Type: v1.ParamType_PARAM_TYPE_FLOAT, Min: 0, Step: 1, Group: groupMemory, Flag: "--cpu-offload-gb", Advanced: true, Unit: "GiB",
+			Description: "weights kept in system memory and streamed each step, empty keeps vLLM's 0"},
+		strParam("mamba_cache_dtype", "Mamba cache type", groupMemory, "--mamba-cache-dtype", "", "state type of Mamba layers, empty keeps vLLM's auto", append([]string{""}, mambaTypes...), true),
+		strParam("mamba_ssm_cache_dtype", "Mamba SSM cache type", groupMemory, "--mamba-ssm-cache-dtype", "", "state type of the SSM state alone, empty follows the Mamba cache type", append([]string{""}, mambaTypes...), true),
+		{Name: "tensor_parallel_size", Label: "Tensor parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: groupParallel, Flag: "--tensor-parallel-size"},
+		intParam("pipeline_parallel_size", "Pipeline parallel", groupParallel, "--pipeline-parallel-size", "", "stages", "empty keeps vLLM's 1, a chain formation sets it per rank", 1, 0, 1, true),
+		intParam("data_parallel_size", "Data parallel", groupParallel, "--data-parallel-size", "", "replicas", "empty keeps vLLM's 1", 1, 0, 1, true),
+		boolParam("enable_expert_parallel", "Expert parallel", groupParallel, "--enable-expert-parallel", "shard experts over the tensor parallel devices instead of replicating them"),
+		strParam("distributed_executor_backend", "Executor backend", groupParallel, "--distributed-executor-backend", "", "how workers are spawned, empty keeps vLLM's choice, a formation sets mp", []string{"", "mp", "ray", "uni", "external_launcher"}, true),
+		strParam("dtype", "Weight type", groupModel, "--dtype", "", "type weights and activations run in, empty keeps vLLM's auto, bfloat16 for bfloat16 models and float16 otherwise", []string{"", "auto", "half", "float16", "bfloat16", "float", "float32"}, false),
+		strParam("quantization", "Quantization", groupModel, "--quantization", "", "quantization method of the weights, such as awq, gptq, fp8, empty keeps the checkpoint's", nil, true),
+		strParam("load_format", "Load format", groupModel, "--load-format", "", "weight file format to load, empty keeps vLLM's auto", nil, true),
+		strParam("tokenizer_mode", "Tokenizer mode", groupModel, "--tokenizer-mode", "", "auto, hf, slow, mistral, or custom, empty keeps vLLM's auto", nil, true),
+		boolParam("trust_remote_code", "Trust remote code", groupModel, "--trust-remote-code", "run the modeling code a checkpoint ships"),
+		boolParam("enforce_eager", "Eager execution", groupModel, "--enforce-eager", "run without CUDA graphs, slower decoding and faster starts"),
+		intParam("seed", "Seed", groupModel, "--seed", "", "", "sampling seed, empty keeps vLLM's 0", 0, 0, 1, true),
+		intParam("max_logprobs", "Max logprobs", groupModel, "--max-logprobs", "", "", "most log probabilities a request may ask for, empty keeps vLLM's 20", 0, 0, 1, true),
+		strParam("hf_overrides", "Config overrides", groupModel, "--hf-overrides", "", "a JSON object merged over the checkpoint's config", nil, true),
+		strParam("limit_mm_per_prompt", "Media per prompt", groupModel, "--limit-mm-per-prompt", "", "a JSON object of how many items of each modality a prompt may carry, such as {\"image\":4}", nil, true),
+		boolParam("enable_prompt_embeds", "Prompt embeddings", groupModel, "--enable-prompt-embeds", "accept prompts given as embeddings"),
+		boolParam("disable_sliding_window", "Disable sliding window", groupModel, "--disable-sliding-window", "cap the context at the sliding window instead of using it"),
+		boolParam("enable_sleep_mode", "Sleep mode", groupModel, "--enable-sleep-mode", "allow the engine to release device memory while asleep"),
+		strParam("compilation_config", "Compilation config", groupModel, "--compilation-config", "", "a compilation level 0 to 3 or a JSON object for torch.compile", nil, true),
+		{Name: "served_model_name", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: groupIdentity, Flag: "--served-model-name"},
+		strParam("generation_config", "Generation config", groupChat, "--generation-config", "", "auto takes the checkpoint's generation config as sampling defaults, vllm takes vLLM's own, or a path to one, empty keeps vLLM's auto", nil, true),
+		strParam("override_generation_config", "Generation overrides", groupChat, "--override-generation-config", "", "a JSON object of sampling defaults over the generation config", nil, true),
+		strParam("reasoning_parser", "Reasoning parser", groupChat, "--reasoning-parser", "", "parser that splits reasoning from the answer, such as deepseek_r1 or qwen3, empty leaves reasoning in the content", nil, true),
+		strParam("tool_call_parser", "Tool call parser", groupChat, "", "", "parser for tool calls, empty picks one for the model family", nil, true),
+		boolParam("enable_lora", "LoRA adapters", groupAdapters, "--enable-lora", "accept LoRA adapters named by requests"),
+		intParam("max_loras", "Max adapters per batch", groupAdapters, "--max-loras", "", "adapters", "empty keeps vLLM's 1", 1, 0, 1, true),
+		intParam("max_lora_rank", "Max adapter rank", groupAdapters, "--max-lora-rank", "", "", "empty keeps vLLM's 16", 1, 0, 8, true),
+		intParam("max_cpu_loras", "Adapters held in host memory", groupAdapters, "--max-cpu-loras", "", "adapters", "empty keeps vLLM's same as max_loras", 1, 0, 1, true),
+		strParam("speculative_config", "Speculative config", groupSpeculative, "--speculative-config", "", "a JSON object such as {\"method\":\"ngram\",\"num_speculative_tokens\":4}, methods ngram, suffix, draft_model, eagle, eagle3, dflash, dspark, or an MTP type", nil, true),
+		boolParam("disable_log_stats", "Disable stats", groupDiagnostics, "--disable-log-stats", "leave throughput statistics out of the log"),
 	}
 }
 
@@ -66,8 +144,19 @@ func (r VLLM) Launch(in Launch) (*Command, error) {
 	if p.Str("served_model_name") == "" {
 		p["served_model_name"] = in.Name
 	}
-	args := []string{"serve", dir, "--host", in.Host, "--port", strconv.Itoa(in.Port), "--enable-auto-tool-choice", "--tool-call-parser", vllmToolParser(in)}
+	parser := p.Str("tool_call_parser")
+	delete(p, "tool_call_parser")
+	if parser == "" {
+		parser = vllmToolParser(in)
+	}
+	args := []string{"serve", dir, "--host", in.Host, "--port", strconv.Itoa(in.Port), "--enable-auto-tool-choice", "--tool-call-parser", parser}
+	switches, switchEmitted := switchFlags(p, vllmSwitches)
 	flags, env, emitted := Flags(r.Params(), p)
+	flags = append(flags, switches...)
+	for k, v := range switchEmitted {
+		emitted[k] = v
+	}
+	emitted["tool_call_parser"] = parser
 	setEnv(env, "CUDA_VISIBLE_DEVICES", visible(in.Devices, "nvidia", false))
 	setEnv(env, "ROCR_VISIBLE_DEVICES", visible(in.Devices, "amd", true))
 	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}, nil
@@ -140,8 +229,11 @@ func (VLLM) Policy() *estimate.Policy {
 			return []*v1.ParamState{
 				bounds("n_ctx", 256, s.Model.ContextTrain, 256),
 				bounds("max_num_seqs", 1, 0, 1),
+				bounds("max_num_batched_tokens", 1, 0, 256),
 				bounds("gpu_memory_utilization", 0.05, 1, 0.01),
 				bounds("tensor_parallel_size", 1, gpus, 1),
+				bounds("pipeline_parallel_size", 1, max(gpus, 1), 1),
+				bounds("data_parallel_size", 1, max(gpus, 1), 1),
 			}, ""
 		},
 	}

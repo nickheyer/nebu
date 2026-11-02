@@ -14,8 +14,8 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// Install facts the llama.cpp shapes depend on: the rpc server beside llama-server and the
-// flags its help lists
+// Install facts the llama.cpp shapes and flags depend on, the rpc server beside llama-server
+// and the spelling its help lists for each flag that has been renamed across builds
 const (
 	factRPC         = "rpc"
 	factRPCFlag     = "rpc_flag"
@@ -25,22 +25,50 @@ const (
 	factSlotSave    = "slot_save"
 	factFitFlag     = "fit_flag"
 	factSlotsFlag   = "slots_flag"
-	factDirectIO    = "direct_io"
+	factLoadMode    = "load_mode"
 	// Whether the build takes the flag that renders chat templates with tools
 	factJinja = "jinja"
+	// The draft model flags that were renamed when the speculative options took the spec prefix
+	factDraftMin          = "draft_min"
+	factDraftPMin         = "draft_p_min"
+	factDraftPSplit       = "draft_p_split"
+	factDraftLayers       = "draft_layers"
+	factDraftCacheK       = "draft_cache_k"
+	factDraftCacheV       = "draft_cache_v"
+	factDraftThreads      = "draft_threads"
+	factDraftThreadsBatch = "draft_threads_batch"
+	factDraftCPUMoE       = "draft_cpu_moe"
+	factDraftNCPUMoE      = "draft_n_cpu_moe"
+	factDraftOverride     = "draft_override_tensor"
+	// The flags whose removal the launch must know, a build without them taking the older form
+	factNoMmap = "no_mmap"
+	factMlock  = "mlock"
 )
 
 // The spellings each flag has had across builds, newest first, what the help probe looks for
 var llamaFlags = map[string][]string{
-	factRPCFlag:     {"--rpc"},
-	factDraftDevice: {"--spec-draft-device", "--device-draft"},
-	factDraftModel:  {"--spec-draft-model", "--model-draft"},
-	factDraftMax:    {"--spec-draft-n-max", "--draft-max"},
-	factSlotSave:    {"--slot-save-path"},
-	factFitFlag:     {"--fit"},
-	factSlotsFlag:   {"--slots"},
-	factDirectIO:    {"--load-mode", "--direct-io"},
-	factJinja:       {"--jinja"},
+	factRPCFlag:           {"--rpc"},
+	factDraftDevice:       {"--spec-draft-device", "--device-draft"},
+	factDraftModel:        {"--spec-draft-model", "--model-draft"},
+	factDraftMax:          {"--spec-draft-n-max", "--draft-max"},
+	factDraftMin:          {"--spec-draft-n-min", "--draft-min"},
+	factDraftPMin:         {"--spec-draft-p-min", "--draft-p-min"},
+	factDraftPSplit:       {"--spec-draft-p-split", "--draft-p-split"},
+	factDraftLayers:       {"--spec-draft-ngl", "--n-gpu-layers-draft"},
+	factDraftCacheK:       {"--spec-draft-type-k", "--cache-type-k-draft"},
+	factDraftCacheV:       {"--spec-draft-type-v", "--cache-type-v-draft"},
+	factDraftThreads:      {"--spec-draft-threads", "--threads-draft"},
+	factDraftThreadsBatch: {"--spec-draft-threads-batch", "--threads-batch-draft"},
+	factDraftCPUMoE:       {"--spec-draft-cpu-moe", "--cpu-moe-draft"},
+	factDraftNCPUMoE:      {"--spec-draft-n-cpu-moe", "--n-cpu-moe-draft"},
+	factDraftOverride:     {"--spec-draft-override-tensor", "--override-tensor-draft"},
+	factSlotSave:          {"--slot-save-path"},
+	factFitFlag:           {"--fit"},
+	factSlotsFlag:         {"--slots"},
+	factLoadMode:          {"--load-mode", "--direct-io"},
+	factNoMmap:            {"--no-mmap"},
+	factMlock:             {"--mlock"},
+	factJinja:             {"--jinja"},
 }
 
 // A flag as the install's help spelled it, the newest spelling when the help was not read
@@ -67,27 +95,69 @@ func rpcServerCandidates(in Install) []string {
 	return out
 }
 
-// Probes recording how this build spells each flag and whether it ships the rpc server
+// Probes recording whether this build ships the rpc server and, from one reading of its help,
+// how it spells every flag that has been renamed
 func llamaShapeProbes() []Probe {
-	out := []Probe{{Key: factRPC, Files: rpcServerCandidates}}
-	keys := make([]string, 0, len(llamaFlags))
-	for key := range llamaFlags {
+	return []Probe{{Key: factRPC, Files: rpcServerCandidates}, helpProbe([]string{"--help"}, llamaFlags)}
+}
+
+// A probe reading one help text for every flag spelling the map lists, the first listed
+// spelling of each key winning, the keys of flags the help lacks left unset
+func helpProbe(args []string, flags map[string][]string) Probe {
+	keys := make([]string, 0, len(flags))
+	for key := range flags {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	for _, key := range keys {
-		out = append(out, flagProbe(key, []string{"--help"}, llamaFlags[key]...))
-	}
-	return out
+	return Probe{Key: keys[0], Keys: keys, Args: args, Facts: func(out string) map[string]string {
+		facts := map[string]string{}
+		for _, key := range keys {
+			for _, f := range flags[key] {
+				if listsFlag(out, f) {
+					facts[key] = f
+					break
+				}
+			}
+		}
+		return facts
+	}}
 }
 
-// The arguments that read weights without the page cache on this build: the flag alone when the
-// build lists --direct-io, the dio load mode when it lists --load-mode
-func directIOArgs(flag string) []string {
-	if flag == "--load-mode" {
-		return []string{flag, "dio"}
+// Whether a help text lists a flag as a word of its own, not as the prefix of a longer one
+func listsFlag(help, flag string) bool {
+	for rest := help; ; {
+		i := strings.Index(rest, flag)
+		if i < 0 {
+			return false
+		}
+		after := rest[i+len(flag):]
+		if after == "" || !(after[0] == '-' || after[0] == '_' || after[0] >= 'a' && after[0] <= 'z' || after[0] >= '0' && after[0] <= '9') {
+			return true
+		}
+		rest = after
 	}
-	return []string{flag}
+}
+
+// The arguments that load weights the way a load mode names on this build. A build listing
+// --load-mode takes the mode itself. Older builds spell the modes as separate flags, direct io
+// as --direct-io, mmap off as --no-mmap, and locking as --mlock, and take mmap and auto as
+// their own default
+func loadModeArgs(in *v1.Install, mode string) []string {
+	if flag := flagOf(in, factLoadMode); flag == "--load-mode" {
+		return []string{flag, mode}
+	}
+	var args []string
+	switch mode {
+	case "dio":
+		args = append(args, "--direct-io")
+	case "none":
+		args = append(args, flagOf(in, factNoMmap))
+	case "mlock":
+		args = append(args, flagOf(in, factNoMmap), flagOf(in, factMlock))
+	case "mmap+mlock":
+		args = append(args, flagOf(in, factMlock))
+	}
+	return args
 }
 
 func (LlamaCpp) Shapes(in *v1.Install) []v1.Shape {
@@ -328,6 +398,8 @@ func (r LlamaCpp) chainHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 	p := in.Params.Clone()
 	p["device"] = strings.Join(devices, ",")
 	p["n_gpu_layers"] = int64(layers + 1)
+	p["tensor_split"] = tensorSplit(split)
+	p["fit"] = ""
 	in.Params = p
 	cmd, err := r.Launch(in)
 	if err != nil {
@@ -336,10 +408,8 @@ func (r LlamaCpp) chainHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 	// llama-server resolves each --device name as it parses that flag, and the rpc devices exist
 	// only once --rpc has connected to the stages, so the rpc list leads the command line
 	cmd.Args = append([]string{flagOf(in.InstallRecord, factRPCFlag), strings.Join(addresses, ",")}, cmd.Args...)
-	cmd.Args = append(cmd.Args, "--tensor-split", tensorSplit(split))
 	fitOff(cmd, in, facts)
 	cmd.Params["rpc"] = strings.Join(addresses, ",")
-	cmd.Params["tensor_split"] = tensorSplit(split)
 	return cmd, nil
 }
 
@@ -356,6 +426,7 @@ func fitOff(cmd *Command, in Launch, facts map[string]string) {
 	if has(in.InstallRecord, factFitFlag) {
 		cmd.Args = append(cmd.Args, facts[factFitFlag], "off")
 	}
+	cmd.Params["fit"] = "off"
 }
 
 // Layers a seat holds from its range, every layer of the model when the range is unset
@@ -377,7 +448,9 @@ func (r LlamaCpp) draftHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 	}
 	stage, device := stages[0], names[0][0]
 	p := in.Params.Clone()
-	p["draft_model"] = ""
+	p["draft_model"] = in.Draft
+	p["draft_device"] = device
+	p["fit"] = ""
 	if p.Str("spec_type") == Auto || p.Str("spec_type") == "" {
 		p["spec_type"] = "draft-simple"
 	}
@@ -386,11 +459,9 @@ func (r LlamaCpp) draftHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 	if err != nil {
 		return nil, err
 	}
-	cmd.Args = append(cmd.Args, flagOf(in.InstallRecord, factRPCFlag), stage.GetAddress(), flagOf(in.InstallRecord, factDraftModel), in.Draft, flagOf(in.InstallRecord, factDraftDevice), device)
+	cmd.Args = append(cmd.Args, flagOf(in.InstallRecord, factRPCFlag), stage.GetAddress())
 	fitOff(cmd, in, facts)
 	cmd.Params["rpc"] = stage.GetAddress()
-	cmd.Params["draft_model"] = in.Draft
-	cmd.Params["draft_device"] = device
 	return cmd, nil
 }
 

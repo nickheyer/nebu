@@ -180,7 +180,7 @@ func TestLlamaCppDraftHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := strings.Join(cmd.Args, " ")
-	if !strings.HasSuffix(line, "--rpc 10.0.0.2:50052 --spec-draft-model /d.gguf --spec-draft-device RPC0") || !strings.Contains(line, "--spec-draft-n-max 4") || strings.Contains(line, "--draft-max") || strings.Contains(line, "--tensor-split") || cmd.Env["LLAMA_ARG_FIT"] != "off" {
+	if !strings.HasSuffix(line, "--rpc 10.0.0.2:50052") || !strings.Contains(line, "--spec-draft-model /d.gguf") || !strings.Contains(line, "--spec-draft-device RPC0") || !strings.Contains(line, "--spec-draft-n-max 4") || strings.Contains(line, "--draft-max") || strings.Contains(line, "--tensor-split") || cmd.Env["LLAMA_ARG_FIT"] != "off" {
 		t.Fatalf("draft head %s", line)
 	}
 	if cmd.Params["draft_device"] != "RPC0" || cmd.Params["draft_model"] != "/d.gguf" || cmd.Params["rpc"] != "10.0.0.2:50052" {
@@ -202,7 +202,7 @@ func TestLlamaCppDraftHead(t *testing.T) {
 	}
 	// A build whose help was not read gets the newest spellings
 	in.Draft, in.InstallRecord = "/d.gguf", recorded(map[string]string{factRPC: "/bin/rpc-server"})
-	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.HasSuffix(strings.Join(cmd.Args, " "), "--rpc 10.0.0.2:50052 --spec-draft-model /d.gguf --spec-draft-device RPC0") {
+	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.HasSuffix(strings.Join(cmd.Args, " "), "--rpc 10.0.0.2:50052") || !strings.Contains(strings.Join(cmd.Args, " "), "--spec-draft-model /d.gguf") || !strings.Contains(strings.Join(cmd.Args, " "), "--spec-draft-device RPC0") {
 		t.Fatalf("unprobed draft flags: %v %v", cmd, err)
 	}
 }
@@ -217,13 +217,13 @@ func TestLlamaCppSpeculative(t *testing.T) {
 			choices = p.GetChoices()
 		}
 	}
-	for _, want := range []string{"none", "draft-mtp", "draft-mtp-adaptive", "draft-simple", "draft-eagle3", "draft-dflash", "draft-dspark", "draft-self", "ngram-mod", "ngram-simple", "ngram-map-k", "ngram-map-k4v", "ngram-cache"} {
+	for _, want := range []string{"none", "draft-simple", "draft-eagle3", "draft-mtp", "draft-dflash", "draft-dspark", "ngram-simple", "ngram-map-k", "ngram-map-k4v", "ngram-mod", "ngram-cache"} {
 		if !slices.Contains(choices, want) {
 			t.Fatalf("the method choices lack %s: %v", want, choices)
 		}
 	}
-	modern := map[string]string{factDraftModel: "--spec-draft-model", factDraftMax: "--spec-draft-n-max"}
-	legacy := map[string]string{factDraftModel: "--model-draft", factDraftMax: "--draft-max"}
+	modern := map[string]string{factDraftModel: "--spec-draft-model", factDraftMax: "--spec-draft-n-max", factDraftMin: "--spec-draft-n-min", factDraftPMin: "--spec-draft-p-min", factDraftLayers: "--spec-draft-ngl", factDraftDevice: "--spec-draft-device", factDraftCacheK: "--spec-draft-type-k"}
+	legacy := map[string]string{factDraftModel: "--model-draft", factDraftMax: "--draft-max", factDraftLayers: "--n-gpu-layers-draft", factDraftCPUMoE: "--cpu-moe-draft"}
 	plain := layered(4)
 	for _, c := range []struct {
 		name      string
@@ -235,8 +235,9 @@ func TestLlamaCppSpeculative(t *testing.T) {
 		{name: "mtp heads in the model", overrides: map[string]string{"spec_type": "draft-mtp"}, facts: modern, want: "--spec-type draft-mtp"},
 		{name: "mtp heads with a limit", overrides: map[string]string{"spec_type": "draft-mtp", "draft_max": "2"}, facts: modern, want: "--spec-type draft-mtp --spec-draft-n-max 2"},
 		{name: "mtp head file", overrides: map[string]string{"spec_type": "draft-mtp", "draft_model": "/mtp.gguf"}, facts: modern, want: "--spec-type draft-mtp --spec-draft-model /mtp.gguf"},
-		{name: "adaptive mtp heads with a limit", overrides: map[string]string{"spec_type": "draft-mtp-adaptive", "draft_max": "12"}, facts: modern, want: "--spec-type draft-mtp-adaptive --spec-draft-n-max 12"},
-		{name: "self drafting", overrides: map[string]string{"spec_type": "draft-self"}, facts: modern, want: "--spec-type draft-self"},
+		{name: "eagle heads with a floor", overrides: map[string]string{"spec_type": "draft-eagle3", "draft_model": "/e.gguf", "draft_min": "2", "draft_p_min": "0.5"}, facts: modern, want: "--spec-type draft-eagle3 --spec-draft-model /e.gguf --spec-draft-n-min 2 --spec-draft-p-min 0.5"},
+		{name: "draft placement", overrides: map[string]string{"draft_model": "/d.gguf", "draft_layers": "all", "draft_device": "CUDA1", "draft_cache_type_k": "q8_0"}, facts: modern, want: "--spec-draft-model /d.gguf --spec-draft-ngl all --spec-draft-device CUDA1 --spec-draft-type-k q8_0"},
+		{name: "legacy draft placement", overrides: map[string]string{"draft_model": "/d.gguf", "draft_layers": "20", "draft_cpu_moe": "true"}, facts: legacy, want: "--model-draft /d.gguf --n-gpu-layers-draft 20 --cpu-moe-draft"},
 		{name: "draft method without a draft", overrides: map[string]string{"spec_type": "draft-simple"}, facts: modern, want: "--spec-type draft-simple"},
 		{name: "limit without a method", overrides: map[string]string{"draft_max": "4"}, facts: modern, want: "--spec-draft-n-max 4"},
 		{name: "mtp with the draft cleared", overrides: map[string]string{"spec_type": "draft-mtp", "draft_model": None}, facts: modern, want: "--spec-type draft-mtp"},
@@ -352,36 +353,61 @@ func TestLlamaCppRelayAndReplicaSeats(t *testing.T) {
 	}
 }
 
-// Direct reads are rendered on every llama-server command from the install's spelling of the flag
-func TestLlamaCppDirectIO(t *testing.T) {
+// A load mode is rendered on every llama-server command as the install spells it, the mode itself
+// on a build with --load-mode and the older flags each mode stood for before
+func TestLlamaCppLoadMode(t *testing.T) {
 	rt := LlamaCpp{}
-	params, _ := Resolve(rt, map[string]string{"direct_io": "true"})
-	in := Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}}
-	in.InstallRecord = recorded(map[string]string{factDirectIO: "--direct-io"})
-	if cmd, err := rt.Launch(in); err != nil || !strings.HasSuffix(strings.Join(cmd.Args, " "), " --direct-io") || cmd.Params["direct_io"] != "true" {
-		t.Fatalf("direct-io %v %v", cmd, err)
+	launch := func(mode string, facts map[string]string) string {
+		params, err := Resolve(rt, map[string]string{"load_mode": mode})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd, err := rt.Launch(Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}, InstallRecord: recorded(facts)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cmd.Params["load_mode"] != mode {
+			t.Fatalf("mode %s emitted as %v", mode, cmd.Params)
+		}
+		return strings.Join(cmd.Args, " ")
 	}
-	in.InstallRecord = recorded(map[string]string{factDirectIO: "--load-mode"})
-	if cmd, err := rt.Launch(in); err != nil || !strings.HasSuffix(strings.Join(cmd.Args, " "), " --load-mode dio") {
-		t.Fatalf("load-mode dio %v %v", cmd, err)
+	modern := map[string]string{factLoadMode: "--load-mode"}
+	legacy := map[string]string{factLoadMode: "--direct-io", factNoMmap: "--no-mmap", factMlock: "--mlock"}
+	for _, c := range []struct {
+		mode  string
+		facts map[string]string
+		want  string
+	}{
+		{"dio", modern, " --load-mode dio"},
+		{"mlock", modern, " --load-mode mlock"},
+		{"dio", nil, " --load-mode dio"},
+		{"dio", legacy, " --direct-io"},
+		{"none", legacy, " --no-mmap"},
+		{"mlock", legacy, " --no-mmap --mlock"},
+		{"mmap+mlock", legacy, " --mlock"},
+	} {
+		if line := launch(c.mode, c.facts); !strings.HasSuffix(line, c.want) {
+			t.Errorf("%s on %v: %s, want the suffix %q", c.mode, c.facts, line, c.want)
+		}
 	}
-	// A build whose help was not read gets the newest spelling
-	in.InstallRecord = recorded(nil)
-	if cmd, err := rt.Launch(in); err != nil || !strings.HasSuffix(strings.Join(cmd.Args, " "), " --load-mode dio") {
-		t.Fatalf("unprobed flag: %v %v", cmd, err)
+	for _, mode := range []string{"auto", "mmap"} {
+		if line := launch(mode, legacy); strings.Contains(line, "--no-mmap") || strings.Contains(line, "--mlock") || strings.Contains(line, "--direct-io") {
+			t.Errorf("%s is the old default and takes no flag: %s", mode, line)
+		}
 	}
-	params["direct_io"] = false
-	if cmd, err := rt.Launch(in); err != nil || strings.Contains(strings.Join(cmd.Args, " "), "--load-mode") || strings.Contains(strings.Join(cmd.Args, " "), "--direct-io") {
-		t.Fatalf("off %v %v", cmd, err)
+	params, _ := Resolve(rt, nil)
+	in := Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}, InstallRecord: recorded(modern)}
+	if cmd, err := rt.Launch(in); err != nil || strings.Contains(strings.Join(cmd.Args, " "), "--load-mode") || cmd.Params["load_mode"] != "" {
+		t.Fatalf("unset %v %v", cmd, err)
 	}
-	// The chain head takes the flag through the same command.
-	params["direct_io"] = true
-	in.InstallRecord = recorded(map[string]string{factRPC: "/bin/rpc-server", factRPCFlag: "--rpc", factDirectIO: "--load-mode", "devices": "CUDA0"})
+	// The chain head takes the mode through the same command.
+	params["load_mode"] = "dio"
+	in.InstallRecord = recorded(map[string]string{factRPC: "/bin/rpc-server", factRPCFlag: "--rpc", factLoadMode: "--load-mode", "devices": "CUDA0"})
 	in.Descriptor = layered(32)
 	in.Devices = []*v1.Device{gpu("GPU-h0", "0")}
 	in.Seat = &v1.SeatSpec{FormationId: "f1", Shape: v1.Shape_SHAPE_CHAIN, Role: RoleHead, Count: 2, LayerFrom: 16, LayerTo: 32, Devices: []string{"a/GPU-a0", "GPU-h0"}, DeviceBytes: []uint64{1, 2}, DeviceLayers: []uint32{16, 16}, Peers: []*v1.SeatPeer{{NodeId: "a", Role: RoleStage, Rank: 1, Address: "10.0.0.2:50052", Devices: 1, LayerFrom: 0, LayerTo: 16}}}
-	if cmd, err := rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), " --load-mode dio ") {
-		t.Fatalf("chain head direct io %v %v", cmd, err)
+	if cmd, err := rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), " --load-mode dio") {
+		t.Fatalf("chain head load mode %v %v", cmd, err)
 	}
 }
 
@@ -406,36 +432,39 @@ func TestLlamaCppShapesAndProbes(t *testing.T) {
 	if got := shapes(map[string]string{factRPCFlag: "--rpc", factDraftDevice: "--spec-draft-device", factDraftModel: "--spec-draft-model"}); got != "solo,replicas,chain,draft" {
 		t.Fatalf("no rpc server, still a head: %s", got)
 	}
-	byKey := map[string]Probe{}
+	var files, help Probe
 	for _, p := range rt.Probes() {
-		byKey[p.Key] = p
+		switch {
+		case p.Key == factRPC:
+			files = p
+		case p.Facts != nil:
+			help = p
+		}
 	}
-	if byKey[factRPC].Files == nil || byKey[factRPC].Parse != nil {
+	if files.Files == nil || files.Parse != nil {
 		t.Fatal("the rpc server is a file probe")
 	}
-	if c := byKey[factRPC].Files(Install{Path: "/opt/llama/bin/llama-server"}); len(c) != 3 || c[0] != "/opt/llama/bin/rpc-server" || c[1] != "/opt/llama/bin/ggml-rpc-server" {
+	if c := files.Files(Install{Path: "/opt/llama/bin/llama-server"}); len(c) != 3 || c[0] != "/opt/llama/bin/rpc-server" || c[1] != "/opt/llama/bin/ggml-rpc-server" {
 		t.Fatalf("candidates %v", c)
 	}
-	if v, ok := byKey[factDirectIO].Parse("  -lm, --load-mode MODE   model loading mode\n- dio: use DirectIO if available"); !ok || v != "--load-mode" {
-		t.Fatalf("load-mode spelling %q %v", v, ok)
+	// One reading of the help records every renamed flag's spelling
+	if help.Facts == nil || len(help.Keys) != len(llamaFlags) || help.Args[0] != "--help" {
+		t.Fatalf("the help probe reads every flag at once: %+v", help)
 	}
-	if v, ok := byKey[factDirectIO].Parse("  -dio, --direct-io   use direct I/O if available"); !ok || v != "--direct-io" {
-		t.Fatalf("direct-io spelling %q %v", v, ok)
-	}
-	if _, ok := byKey[factDirectIO].Parse("  -ngl N"); ok {
-		t.Fatal("no direct io")
-	}
-	if v, ok := byKey[factDraftDevice].Parse("--spec-draft-device DEV"); !ok || v != "--spec-draft-device" {
-		t.Fatalf("draft device %q", v)
-	}
-	for _, c := range []struct{ help, want string }{
-		{"--spec-draft-n-max N", "--spec-draft-n-max"},
-		{"--draft-max N", "--draft-max"},
-		{"--draft-max N (removed)\n--spec-draft-n-max N", "--spec-draft-n-max"},
-		{"--spec-ngram-mod-n-max N", ""},
-	} {
-		if v, ok := byKey[factDraftMax].Parse(c.help); v != c.want || ok != (c.want != "") {
-			t.Errorf("draft token limit in %q: %q %v", c.help, v, ok)
+	facts := help.Facts("  -lm, --load-mode MODE   model loading mode\n- dio: use DirectIO if available\n--spec-draft-device DEV\n--draft-max N (removed)\n--spec-draft-n-max N\n--spec-ngram-mod-n-max N\n--rpc SERVERS\n--spec-draft-ngl N")
+	for key, want := range map[string]string{factLoadMode: "--load-mode", factDraftDevice: "--spec-draft-device", factDraftMax: "--spec-draft-n-max", factRPCFlag: "--rpc", factDraftLayers: "--spec-draft-ngl", factSlotSave: "", factNoMmap: ""} {
+		if facts[key] != want {
+			t.Errorf("%s read as %q, want %q", key, facts[key], want)
 		}
+	}
+	legacy := help.Facts("  -dio, --direct-io   use direct I/O if available\n--draft-max N\n--no-mmap\n--mlock\n--model-draft FNAME")
+	for key, want := range map[string]string{factLoadMode: "--direct-io", factDraftMax: "--draft-max", factNoMmap: "--no-mmap", factMlock: "--mlock", factDraftModel: "--model-draft", factDraftMin: ""} {
+		if legacy[key] != want {
+			t.Errorf("legacy %s read as %q, want %q", key, legacy[key], want)
+		}
+	}
+	// A flag is only listed as a word of its own, not as the start of a longer one
+	if f := help.Facts("--spec-draft-n-max-extra N"); f[factDraftMax] != "" {
+		t.Fatalf("a longer flag is not the flag: %v", f)
 	}
 }

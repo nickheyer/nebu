@@ -20,22 +20,15 @@ func (SGLang) Vars() []Var {
 	return []Var{{Name: "version", Label: "Version", Description: "PyPI version, latest when empty"}}
 }
 
+// The wheels are built for CUDA 13 and need Python 3.11 or newer
 func (SGLang) Variants() []Variant {
 	return []Variant{
 		{
 			ID:          "cuda",
-			Description: "The PyPI wheels, built for CUDA",
+			Description: "The PyPI wheels, built for CUDA 13",
 			Requires:    "an NVIDIA device",
 			Applies:     func(h *v1.HostProfile) bool { return host.HasVendor(h, "nvidia") },
 			Vars:        func(*v1.HostProfile) map[string]string { return nil },
-		},
-		{
-			ID:          "cpu",
-			Description: "Install with CPU torch. Serving requires an NVIDIA GPU",
-			Applies:     func(*v1.HostProfile) bool { return true },
-			Vars: func(*v1.HostProfile) map[string]string {
-				return map[string]string{"index": "--extra-index-url=https://download.pytorch.org/whl/cpu"}
-			},
 		},
 	}
 }
@@ -44,13 +37,15 @@ func (SGLang) Sandbox() Sandbox {
 	return Sandbox{Kind: v1.SandboxKind_SANDBOX_KIND_HOST, CLIs: []string{"podman", "docker", "nerdctl"}}
 }
 
+// uv installs sglang as its guide says, with pre-releases allowed for the dependencies that
+// publish none other
 func (SGLang) Steps(b *Build) []Step {
 	python := b.Out + "/venv/bin/python"
 	return []Step{
 		{Name: "venv", Command: command("python3", "-m", "venv", b.Out+"/venv")},
-		{Name: "pip", Command: command(python, "-m", "pip", "install", "--upgrade", "pip")},
-		{Name: "install", Command: command(python, "-m", "pip", "install", pin("sglang[all]", arg(b.Vars, "version")), arg(b.Vars, "index"))},
-		{Name: "nixl", Command: command(python, "-m", "pip", "install", "nixl; platform_system == 'Linux'")},
+		{Name: "pip", Command: command(python, "-m", "pip", "install", "--upgrade", "pip", "uv")},
+		{Name: "install", Command: command(python, "-m", "uv", "pip", "install", "--python", python, "--prerelease=allow", pin("sglang", arg(b.Vars, "version")))},
+		{Name: "nixl", Command: command(python, "-m", "uv", "pip", "install", "--python", python, "nixl; platform_system == 'Linux'")},
 	}
 }
 

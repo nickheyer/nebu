@@ -160,12 +160,12 @@ func TestLlamaCppDirectIO(t *testing.T) {
 		hits := Scan([]Set{LlamaCpp{}}, []string{line})
 		found := false
 		for _, h := range hits {
-			if h.GetId() == "rpc-share-mmap" && strings.Contains(h.GetHint(), "direct_io") {
+			if h.GetId() == "rpc-share-mmap" && strings.Contains(h.GetHint(), "load_mode") {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("%q should hit rpc-share-mmap naming direct_io, got %v", line, hits)
+			t.Errorf("%q should hit rpc-share-mmap naming load_mode, got %v", line, hits)
 		}
 	}
 	for _, line := range []string{

@@ -105,7 +105,7 @@ func (LlamaCpp) Sandbox() Sandbox {
 func (LlamaCpp) Steps(b *Build) []Step {
 	configure := command("cmake", "-S", ".", "-B", "build",
 		"-DCMAKE_BUILD_TYPE="+arg(b.Vars, "build_type"), arg(b.Vars, "backend"), arg(b.Vars, "archs"),
-		"-DBUILD_SHARED_LIBS=OFF", "-DLLAMA_CURL=OFF", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_BUILD_SERVER=ON", "-DLLAMA_BUILD_TOOLS=ON", "-DGGML_RPC=ON")
+		"-DBUILD_SHARED_LIBS=OFF", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_EXAMPLES=OFF", "-DLLAMA_BUILD_SERVER=ON", "-DLLAMA_BUILD_TOOLS=ON", "-DGGML_RPC=ON")
 	configure = append(configure, args(b.Vars, "extra")...)
 	return []Step{
 		{Name: "configure", Command: configure},

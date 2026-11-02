@@ -114,14 +114,16 @@ var sdDirs = map[string]struct{ label, picks, flag, sub string }{
 	"upscalers_dir": {"highres fix upscalers", "upscaler", "--hires-upscalers-dir", "upscalers"},
 }
 
+// The names stable-diffusion.cpp lists for each choice, in its own order
 var (
 	sdSamplers   = []string{"euler", "euler_a", "heun", "dpm2", "dpm++2s_a", "dpm++2m", "dpm++2mv2", "ipndm", "ipndm_v", "lcm", "ddim_trailing", "tcd", "res_multistep", "res_2s", "er_sde", "euler_cfg_pp", "euler_a_cfg_pp", "euler_ge", "dpm++2m_sde", "dpm++2m_sde_bt", "lms"}
-	sdSchedulers = []string{"discrete", "karras", "exponential", "ays", "gits", "sgm_uniform", "simple", "smoothstep", "kl_optimal", "lcm", "bong_tangent", "ltx2", "logit_normal", "flux2", "flux", "beta"}
-	sdTypes      = []string{"", "f32", "f16", "bf16", "q8_0", "q6_K", "q5_K", "q5_1", "q5_0", "q4_K", "q4_1", "q4_0", "q3_K", "q2_K"}
-	sdPrediction = []string{"", "eps", "v", "edm_v", "sd3_flow", "flux_flow", "sefi_flow", "minit2i_flow", "sensenova_u1_flow"}
+	sdSchedulers = []string{"discrete", "karras", "exponential", "ays", "gits", "sgm_uniform", "simple", "smoothstep", "kl_optimal", "lcm", "bong_tangent", "ltx2", "logit_normal", "flux2", "flux", "beta", "llada_image"}
+	sdTypes      = []string{"", "f32", "f16", "bf16", "f8_e4m3", "f8_e5m2", "q8_0", "q6_K", "q5_K", "q5_1", "q5_0", "q4_K", "q4_1", "q4_0", "q3_K", "q2_K", "iq4_nl", "iq4_xs", "iq3_s", "iq3_xxs", "iq2_s", "iq2_xs", "iq2_xxs", "iq1_m", "iq1_s", "mxfp4", "nvfp4", "tq2_0", "tq1_0", "q2_0", "q1_0"}
+	sdPrediction = []string{"", "eps", "v", "edm_v", "sd3_flow", "flux_flow", "sefi_flow", "minit2i_flow", "sensenova_u1_flow", "flux3_flow", "h3_av_flow", "ming_image_flow"}
 	sdRNG        = []string{"std_default", "cuda", "cpu"}
-	sdCacheModes = []string{"", "disabled", "easycache", "ucache", "dbcache", "taylorseer", "cache-dit", "spectrum"}
+	sdCacheModes = []string{"", "easycache", "ucache", "dbcache", "taylorseer", "cache-dit", "spectrum"}
 	sdUpscalers  = []string{"Latent", "Lanczos", "Nearest", "Latent (nearest)", "Latent (nearest-exact)", "Latent (antialiased)", "Latent (bicubic)", "Latent (bicubic antialiased)"}
+	sdOnOff      = []string{"", "on", "off"}
 )
 
 const (
@@ -193,6 +195,7 @@ func (SDCpp) Params() []*v1.Param {
 		dir("embd_dir", "Embeddings directory"),
 		dir("upscalers_dir", "Upscalers directory"),
 		pathParam("taesd", "Tiny autoencoder", groupAdapters, "--taesd", "taesd", false),
+		boolParam("taesd_preview_only", "Tiny autoencoder for previews only", groupAdapters, "--taesd-preview-only", true),
 		pathParam("control_net", "ControlNet", groupAdapters, "--control-net", "controlnet", false),
 		pathParam("ip_adapter", "IP-Adapter", groupAdapters, "--ip-adapter", "ip_adapter", false),
 		pathParam("photo_maker", "PhotoMaker", groupAdapters, "--photo-maker", "photo_maker", true),
@@ -212,37 +215,38 @@ func (SDCpp) Params() []*v1.Param {
 		strParam("rpc_servers", "RPC servers", groupPlacement, "--rpc-servers", "", "host:port, comma separated", nil, true),
 		boolParam("mmap", "Memory map weights", groupPlacement, "--mmap", true),
 		boolParam("eager_load", "Load every part at start", groupPlacement, "--eager-load", true),
-		strParam("auto_fit", "Automatic fit", groupPlacement, "--auto-fit", "on", "", []string{"on", "off"}, true),
+		strParam("auto_fit", "Automatic fit", groupPlacement, "--auto-fit", "", "place weights on the compute device, RAM, another device, or disk by free memory, empty keeps sd-server's on", sdOnOff, true),
 		boolParam("disable_prefetch", "Disable weight prefetch", groupPlacement, "--disable-prefetch", true),
 		boolParam("disable_segmented_compute", "Disable segmented compute", groupPlacement, "--disable-segmented-compute", true),
+		intParam("conditioning_cache_size", "Conditioning cache", groupPlacement, "--conditioning-cache-size", "", "prompts", "encoded prompts kept per model, empty keeps sd-server's 4, 0 off", 0, 0, 1, true),
 
 		// Compute settings.
-		{Name: "diffusion_fa", Label: "Flash attention in the denoiser", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "true", Group: groupCompute, Flag: "--diffusion-fa"},
-		boolParam("fa", "Flash attention everywhere", groupCompute, "--fa", true),
-		strParam("weight_type", "Weight type", groupCompute, "--type", "", "", sdTypes, false),
+		strParam("flash_attn", "Flash attention", groupCompute, "", "", "on, off, auto, or module assignments such as auto,te=off,vae=on, empty keeps sd-server's auto", nil, false),
+		boolParam("sage_attn", "SageAttention in the denoiser", groupCompute, "--sage-attn", true),
+		strParam("weight_type", "Weight type", groupCompute, "--type", "", "empty keeps the weight file's type", sdTypes, false),
 		strParam("tensor_type_rules", "Tensor type rules", groupCompute, "--tensor-type-rules", "", `^vae\.=f16,model\.=q8_0`, nil, true),
-		strParam("vae_format", "VAE latent format", groupCompute, "--vae-format", "auto", "", []string{"auto", "flux", "sd3", "flux2", "wan"}, true),
-		boolParam("diffusion_conv_direct", "Direct convolution in the denoiser", groupCompute, "--diffusion-conv-direct", true),
-		boolParam("vae_conv_direct", "Direct convolution in the VAE", groupCompute, "--vae-conv-direct", true),
+		strParam("vae_format", "VAE latent format", groupCompute, "--vae-format", "", "empty keeps sd-server's auto", []string{"", "auto", "flux", "sd3", "flux2", "wan"}, true),
+		strParam("conv_direct", "Direct convolution", groupCompute, "", "", "on, off, auto, or diffusion, vae, and controlnet assignments such as auto,vae=off, empty keeps sd-server's auto", nil, true),
+		strParam("batched_cfg", "Batched CFG", groupCompute, "--batched-cfg", "", "run the conditional and unconditional branches in one forward pass, empty keeps sd-server's on", sdOnOff, true),
 		boolParam("force_sdxl_vae_conv_scale", "Force SDXL VAE conv scale", groupCompute, "--force-sdxl-vae-conv-scale", true),
 		strParam("model_args", "Model arguments", groupCompute, "--model-args", "", pairs, nil, true),
-		strParam("lora_apply_mode", "LoRA apply mode", groupCompute, "--lora-apply-mode", "auto", "", []string{"auto", "immediately", "at_runtime"}, true),
-		strParam("rng", "Random number generator", groupCompute, "--rng", "cuda", "", sdRNG, true),
+		strParam("lora_apply_mode", "LoRA apply mode", groupCompute, "--lora-apply-mode", "", "empty keeps sd-server's auto, at_runtime for quantized weights and immediately otherwise", []string{"", "auto", "immediately", "at_runtime"}, true),
+		strParam("rng", "Random number generator", groupCompute, "--rng", "", "empty keeps sd-server's cuda, the noise sd-webui makes, cpu for comfyui's", append([]string{""}, sdRNG...), true),
 		strParam("sampler_rng", "Sampler random number generator", groupCompute, "--sampler-rng", "", "", append([]string{""}, sdRNG...), true),
 		strParam("prediction", "Prediction type", groupCompute, "--prediction", "", "", sdPrediction, true),
 		floatParam("linear_scale", "Linear input scale", groupCompute, "--linear-scale", "0", "0 uses the model default", 0, 0, 0.05, true),
 		floatParam("attn_scale", "Attention K/V scale", groupCompute, "--attn-scale", "0", "0 uses the model default", 0, 0, 0.05, true),
 
 		// Generation defaults.
-		intParam("width", "Width", groupDefaults, "--width", "1024", "px", "", 64, 4096, 16, false),
-		intParam("height", "Height", groupDefaults, "--height", "1024", "px", "", 64, 4096, 16, false),
+		intParam("width", "Width", groupDefaults, "--width", "1024", "px", "sd-server's own default is 512", 64, 4096, 16, false),
+		intParam("height", "Height", groupDefaults, "--height", "1024", "px", "sd-server's own default is 512", 64, 4096, 16, false),
 		sampling("steps", "Steps", groupDefaults, "--steps", v1.ParamType_PARAM_TYPE_INT, "steps", nil, 1, 150, 1,
 			"family step count, reduced for distilled variants such as Turbo, schnell, and Lightning"),
 		sampling("sampling_method", "Sampler", groupDefaults, "--sampling-method", v1.ParamType_PARAM_TYPE_STRING, "", sdSamplers, 0, 0, 0,
 			"euler for transformers, lcm for PiD, euler_a for UNets"),
 		sampling("scheduler", "Scheduler", groupDefaults, "--scheduler", v1.ParamType_PARAM_TYPE_STRING, "", sdSchedulers, 0, 0, 0,
 			"family scheduler: flux, flux2, ltx2, logit_normal, lcm, or discrete"),
-		intParam("seed", "Seed", groupDefaults, "--seed", "-1", "", "-1 for random", -1, 0, 1, true),
+		intParam("seed", "Seed", groupDefaults, "--seed", "-1", "", "-1 for random, sd-server's own default is 42", -1, 0, 1, true),
 		intParam("batch_count", "Images per request", groupDefaults, "--batch-count", "1", "images", "", 1, 64, 1, true),
 		intParam("clip_skip", "CLIP skip", groupDefaults, "--clip-skip", "-1", "", "-1 uses the family default", -1, 12, 1, true),
 		floatParam("strength", "Strength", groupDefaults, "--strength", "0.75", "", 0, 1, 0.05, true),
@@ -256,6 +260,7 @@ func (SDCpp) Params() []*v1.Param {
 		floatParam("pulid_id_weight", "PuLID identity weight", groupDefaults, "--pulid-id-weight", "1", "", 0, 2, 0.05, true),
 		strParam("extra_sample_args", "Extra sampler arguments", groupDefaults, "--extra-sample-args", "", pairs, nil, true),
 		strParam("ref_image_args", "Reference image arguments", groupDefaults, "--ref-image-args", "", pairs, nil, true),
+		strParam("image_preprocess", "Image preprocessing", groupDefaults, "--image-preprocess", "", "target=init,mode=crop-resize,width=W,height=H rules, semicolon separated", nil, true),
 		boolParam("increase_ref_index", "Number reference images", groupDefaults, "--increase-ref-index", true),
 		boolParam("disable_auto_resize_ref_image", "Keep reference image size", groupDefaults, "--disable-auto-resize-ref-image", true),
 		boolParam("circular", "Circular padding", groupDefaults, "--circular", true),
@@ -319,7 +324,7 @@ func (SDCpp) Params() []*v1.Param {
 		intParam("upscale_tile_size", "Upscale tile size", groupUpscale, "--upscale-tile-size", "128", "px", "", 32, 1024, 32, true),
 
 		// Caching across steps
-		strParam("cache_mode", "Cache mode", groupCache, "--cache-mode", "", "", sdCacheModes, false),
+		strParam("cache_mode", "Cache mode", groupCache, "--cache-mode", "", "skip denoiser work across steps, easycache for DiT, ucache for UNet, the rest block level, empty off", sdCacheModes, false),
 		strParam("cache_option", "Cache options", groupCache, "--cache-option", "", pairs, nil, true),
 		strParam("scm_mask", "SCM steps mask", groupCache, "--scm-mask", "", "1,1,0,1,0", nil, true),
 		strParam("scm_policy", "SCM policy", groupCache, "--scm-policy", "dynamic", "", []string{"dynamic", "static"}, true),
@@ -331,7 +336,7 @@ func (SDCpp) Params() []*v1.Param {
 		strParam("extra_ad_args", "Extra ADetailer arguments", groupDetailer, "--extra-ad-args", "", pairs, nil, true),
 
 		// Diagnostics
-		strParam("log_level", "Log level", groupDiagnostics, "--log-level", "debug", "", []string{"debug", "verbose", "info", "warn", "error"}, true),
+		strParam("log_level", "Log level", groupDiagnostics, "--log-level", "debug", "sd-server's own is info, verbose and debug log the buffer sizes nebu measures", []string{"debug", "verbose", "info", "warn", "error"}, true),
 		boolParam("color", "Colored log", groupDiagnostics, "--color", true),
 	}
 }
@@ -403,6 +408,16 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 		p["backend"] = "cpu"
 	}
 	flags, env, emitted := Flags(r.Params(), p)
+	for _, m := range []struct {
+		fact, flag, param string
+		legacy            func(string) ([]string, error)
+	}{{factSDFlashAttn, "--flash-attn", "flash_attn", sdLegacyFlashAttn}, {factSDConvDirect, "--conv-direct", "conv_direct", sdLegacyConvDirect}} {
+		rendered, err := sdModuleFlags(in.InstallRecord, m.fact, m.flag, p.Str(m.param), m.legacy)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s: %v", ErrParam, m.param, err)
+		}
+		flags = append(flags, rendered...)
+	}
 	if offload {
 		flags = append(flags, "--offload-to-cpu")
 		emitted["offload"] = "on"
@@ -417,6 +432,87 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 		setEnv(env, "GGML_VK_VISIBLE_DEVICES", visible(in.Devices, "", true))
 	}
 	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}, nil
+}
+
+// A module assignment flag as this build spells it, the flag with its value on a build whose help
+// lists it, the older per module flags the legacy table maps the value to on one that does not
+func sdModuleFlags(in *v1.Install, fact, flag, value string, legacy func(string) ([]string, error)) ([]string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if has(in, fact) {
+		return []string{flag, value}, nil
+	}
+	return legacy(value)
+}
+
+// The modules a module assignment turns on, the bare value for every module and each name=on
+// listed, as on, off, or auto by module
+func sdModuleStates(value string) (base string, modules map[string]string) {
+	modules = map[string]string{}
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if name, state, ok := strings.Cut(part, "="); ok {
+			modules[strings.TrimSpace(name)] = strings.TrimSpace(state)
+		} else if part != "" {
+			base = part
+		}
+	}
+	return base, modules
+}
+
+// The flash attention flags of a build before --flash-attn, which had --fa for every module and
+// --diffusion-fa for the denoiser alone and no way to name any other module
+func sdLegacyFlashAttn(value string) ([]string, error) {
+	base, modules := sdModuleStates(value)
+	for name := range modules {
+		if name != "diffusion" {
+			return nil, fmt.Errorf("this build lists no --flash-attn, so it takes on, off, auto, or a diffusion assignment, not %q", value)
+		}
+	}
+	if base == "on" && modules["diffusion"] != "off" {
+		return []string{"--fa"}, nil
+	}
+	if modules["diffusion"] == "on" {
+		return []string{"--diffusion-fa"}, nil
+	}
+	return nil, nil
+}
+
+// The direct convolution flags of a build before --conv-direct, one each for the denoiser and
+// the VAE, which could name no other module
+func sdLegacyConvDirect(value string) ([]string, error) {
+	base, modules := sdModuleStates(value)
+	for name := range modules {
+		if name != "diffusion" && name != "vae" {
+			return nil, fmt.Errorf("this build lists no --conv-direct, so it takes on, off, auto, or diffusion and vae assignments, not %q", value)
+		}
+	}
+	on := func(module string) bool {
+		if state, ok := modules[module]; ok {
+			return state == "on"
+		}
+		return base == "on"
+	}
+	var out []string
+	if on("diffusion") {
+		out = append(out, "--diffusion-conv-direct")
+	}
+	if on("vae") {
+		out = append(out, "--vae-conv-direct")
+	}
+	return out, nil
+}
+
+// Whether the denoiser runs with flash attention under a module assignment, as it does unless
+// the value or its diffusion module says off
+func sdFlashAttn(value string) bool {
+	base, modules := sdModuleStates(value)
+	if state, ok := modules["diffusion"]; ok {
+		return state != "off"
+	}
+	return base != "off"
 }
 
 // Resolves pipeline component paths and returns the denoiser path. Sharded components use index
@@ -998,7 +1094,7 @@ func sdOverhead(s *estimate.Scope) uint64 {
 	// Eight pixels to a latent, two latents to a token, four frames to a latent frame
 	tokens := math.Ceil(width/16) * math.Ceil(height/16) * math.Ceil((frames+3)/4)
 	activations := tokens * hidden * 48
-	if !s.Params.Bool("diffusion_fa") && !s.Params.Bool("fa") {
+	if !sdFlashAttn(s.Params.Str("flash_attn")) {
 		activations += tokens * tokens * math.Max(hidden/128, 1) * 2
 	}
 	decode := width * height * frames * 1024

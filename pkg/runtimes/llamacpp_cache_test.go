@@ -20,7 +20,8 @@ func TestLlamaCppCacheFlags(t *testing.T) {
 		{name: "nothing set", want: ""},
 		{name: "ram cache and similarity", overrides: map[string]string{"cache_ram": "32768", "slot_prompt_similarity": "0.5"}, want: "--slot-prompt-similarity 0.5 --cache-ram 32768", emitted: map[string]string{"cache_ram": "32768", "slot_prompt_similarity": "0.5"}},
 		{name: "checkpoints", overrides: map[string]string{"ctx_checkpoints": "64", "checkpoint_min_step": "2048", "cache_reuse": "256"}, want: "--ctx-checkpoints 64 --checkpoint-min-step 2048 --cache-reuse 256"},
-		{name: "unified pool", overrides: map[string]string{"kv_unified": "true"}, want: "--kv-unified", emitted: map[string]string{"kv_unified": "true"}},
+		{name: "unified pool", overrides: map[string]string{"kv_unified": "true"}, want: "--kv-unified", emitted: map[string]string{"kv_unified": "on"}},
+		{name: "pool split by slot", overrides: map[string]string{"kv_unified": "off"}, want: "--no-kv-unified", emitted: map[string]string{"kv_unified": "off"}},
 		{name: "idle slots on", overrides: map[string]string{"cache_idle_slots": "on"}, want: "--cache-idle-slots", emitted: map[string]string{"cache_idle_slots": "on"}},
 		{name: "idle slots off", overrides: map[string]string{"cache_idle_slots": "off"}, want: "--no-cache-idle-slots", emitted: map[string]string{"cache_idle_slots": "off"}},
 	} {
@@ -34,7 +35,7 @@ func TestLlamaCppCacheFlags(t *testing.T) {
 				t.Fatal(err)
 			}
 			args := " " + strings.Join(cmd.Args, " ") + " "
-			for _, flag := range []string{"--cache-ram", "--slot-prompt-similarity", "--ctx-checkpoints", "--checkpoint-min-step", "--cache-reuse", "--kv-unified", "--cache-idle-slots", "--no-cache-idle-slots"} {
+			for _, flag := range []string{"--cache-ram", "--slot-prompt-similarity", "--ctx-checkpoints", "--checkpoint-min-step", "--cache-reuse", "--kv-unified", "--no-kv-unified", "--cache-idle-slots", "--no-cache-idle-slots"} {
 				if strings.Contains(args, " "+flag+" ") != strings.Contains(" "+c.want+" ", " "+flag+" ") {
 					t.Fatalf("flags %q, want %q among them", args, c.want)
 				}
@@ -64,8 +65,10 @@ func TestLlamaCppSequencesSplitTheContext(t *testing.T) {
 	}{
 		{params: estimate.Params{}, want: 1},
 		{params: estimate.Params{"n_parallel": int64(3)}, want: 3},
-		{params: estimate.Params{"n_parallel": int64(3), "kv_unified": true}, want: 1},
+		{params: estimate.Params{"n_parallel": int64(3), "kv_unified": "on"}, want: 1},
 		{params: estimate.Params{"n_parallel": int64(0)}, want: 1},
+		{params: estimate.Params{"n_parallel": int64(-1)}, want: 1},
+		{params: estimate.Params{"n_parallel": int64(-1), "kv_unified": "off"}, want: 1},
 	} {
 		if got := llamaSequences(&estimate.Scope{Params: c.params}); got != c.want {
 			t.Errorf("%v: %d sequences, want %d", c.params, got, c.want)

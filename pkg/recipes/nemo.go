@@ -32,7 +32,7 @@ func (NeMo) Facts() []string { return []string{"device.vendor", "device.compute_
 func (NeMo) Vars() []Var {
 	return []Var{
 		{Name: "version", Label: "Version", Description: "PyPI version, release tag when empty"},
-		{Name: "converter", Label: "Converter version", Default: "2.5.3", Description: "nemo_toolkit converter version"},
+		{Name: "converter", Label: "Converter version", Default: "2.4.1", Description: "nemo_toolkit version carrying the NeMo 1 converter, the last being 2.4.1"},
 	}
 }
 
@@ -40,17 +40,10 @@ func (NeMo) Variants() []Variant {
 	return []Variant{
 		{
 			ID:          "py312",
-			Description: "Python 3.12 for Export-Deploy wheels",
+			Description: "Python 3.12, the one version Export-Deploy's wheels take",
 			Tools:       []string{"python3.12"},
 			Applies:     func(*v1.HostProfile) bool { return true },
 			Vars:        func(*v1.HostProfile) map[string]string { return map[string]string{"python": "python3.12"} },
-		},
-		{
-			ID:          "py3",
-			Description: "The host's python3",
-			Tools:       []string{"python3"},
-			Applies:     func(*v1.HostProfile) bool { return true },
-			Vars:        func(*v1.HostProfile) map[string]string { return map[string]string{"python": "python3"} },
 		},
 	}
 }
@@ -75,7 +68,7 @@ func (NeMo) Steps(b *Build) []Step {
 		{Name: "script", Command: command("cp", "scripts/deploy/nlp/deploy_ray_inframework.py", b.Out+"/deploy_ray_inframework.py")},
 		{Name: "venv-convert", Command: command(python, "-m", "venv", b.Out+"/venv-convert")},
 		{Name: "install-converter", Command: command(convert, "-m", "pip", "install", "nemo_toolkit[nlp]=="+converter)},
-		{Name: "converter", Command: command("curl", "-fsSL", "https://raw.githubusercontent.com/NVIDIA/NeMo/v"+converter+"/scripts/checkpoint_converters/convert_nemo1_to_nemo2.py", "-o", b.Out+"/convert_nemo1_to_nemo2.py")},
+		{Name: "converter", Command: command("curl", "-fsSL", "https://raw.githubusercontent.com/NVIDIA-NeMo/NeMo/v"+converter+"/scripts/checkpoint_converters/convert_nemo1_to_nemo2.py", "-o", b.Out+"/convert_nemo1_to_nemo2.py")},
 	}
 }
 

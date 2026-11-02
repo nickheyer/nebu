@@ -36,7 +36,7 @@ func TestVLLMRankSeats(t *testing.T) {
 	if cmd.Command != "/venv/bin/vllm" || !strings.HasPrefix(line, "serve /w --host 10.0.0.1 --port 8000") {
 		t.Fatalf("head %s %s", cmd.Command, line)
 	}
-	for _, want := range []string{"--tensor-parallel-size 2", "--pipeline-parallel-size 2 --nnodes 2 --node-rank 0 --master-addr 10.0.0.5 --master-port 29500 --distributed-executor-backend mp"} {
+	for _, want := range []string{"--tensor-parallel-size 2", "--pipeline-parallel-size 2", "--distributed-executor-backend mp", "--nnodes 2 --node-rank 0 --master-addr 10.0.0.5 --master-port 29500"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("missing %s in %s", want, line)
 		}
@@ -66,7 +66,7 @@ func TestVLLMRankSeats(t *testing.T) {
 		t.Fatal(err)
 	}
 	line = strings.Join(cmd.Args, " ")
-	if !strings.Contains(line, "--node-rank 1 --master-addr 10.0.0.5 --master-port 29500 --distributed-executor-backend mp --headless") || cmd.Env["VLLM_PP_LAYER_PARTITION"] != "20,12" || cmd.Env["NCCL_IB_HCA"] != "mlx5_0" || cmd.Env["NCCL_IB_MERGE_NICS"] != "" {
+	if !strings.Contains(line, "--node-rank 1 --master-addr 10.0.0.5 --master-port 29500 --headless") || !strings.Contains(line, "--distributed-executor-backend mp") || cmd.Env["VLLM_PP_LAYER_PARTITION"] != "20,12" || cmd.Env["NCCL_IB_HCA"] != "mlx5_0" || cmd.Env["NCCL_IB_MERGE_NICS"] != "" {
 		t.Fatalf("rank 1 %s %v", line, cmd.Env)
 	}
 	// A link without RDMA devices takes sockets on the interface alone.
@@ -84,7 +84,7 @@ func TestVLLMRankSeats(t *testing.T) {
 		t.Fatal(err)
 	}
 	line = strings.Join(cmd.Args, " ")
-	if !strings.Contains(line, "--tensor-parallel-size 6") || !strings.Contains(line, "--pipeline-parallel-size 1 --nnodes 3 --node-rank 1 --master-addr fd00::5 --master-port 29500") || !strings.Contains(line, "--speculative-config ") || !strings.Contains(line, "--headless") {
+	if !strings.Contains(line, "--tensor-parallel-size 6") || !strings.Contains(line, "--pipeline-parallel-size 1") || !strings.Contains(line, "--nnodes 3 --node-rank 1 --master-addr fd00::5 --master-port 29500") || !strings.Contains(line, "--speculative-config ") || !strings.Contains(line, "--headless") {
 		t.Fatalf("lockstep %s", line)
 	}
 	if _, set := cmd.Env["VLLM_PP_LAYER_PARTITION"]; set {

@@ -78,23 +78,25 @@ func (r SGLang) LaunchSeat(in Launch) (*Command, error) {
 			if partition, err = chainPartition(in); err != nil {
 				return nil, err
 			}
+			// The pipeline overlaps prompt chunks, sized as it runs, and its scheduler cannot overlap the
+			// CPU with the workers across stages.
+			p["enable_dynamic_chunking"] = true
+			p["disable_overlap_schedule"] = true
 		}
 		p["tp_size"] = int64(tp)
+		p["pp_size"] = int64(pp)
+		p["watchdog_timeout"] = float64(grace)
 		in.Params = p
 		cmd, err := r.Launch(exposedLaunch(in))
 		if err != nil {
 			return nil, err
 		}
-		cmd.Args = append(cmd.Args, "--pp-size", strconv.Itoa(pp), "--nnodes", strconv.FormatUint(uint64(seat.GetCount()), 10), "--node-rank", strconv.FormatUint(uint64(seat.GetRank()), 10), "--dist-init-addr", seat.GetRendezvous(), "--watchdog-timeout", strconv.Itoa(grace))
+		cmd.Args = append(cmd.Args, "--nnodes", strconv.FormatUint(uint64(seat.GetCount()), 10), "--node-rank", strconv.FormatUint(uint64(seat.GetRank()), 10), "--dist-init-addr", seat.GetRendezvous())
 		if partition != "" {
-			// The pipeline overlaps prompt chunks, sized as it runs, and its scheduler cannot overlap the
-			// CPU with the workers across stages.
-			cmd.Args = append(cmd.Args, "--enable-dynamic-chunking", "--disable-overlap-schedule")
 			cmd.Env["SGLANG_PP_LAYER_PARTITION"] = partition
 			cmd.Params["pp_layer_partition"] = partition
 		}
 		collectiveEnv(cmd.Env, seat, grace)
-		cmd.Params["pp_size"] = strconv.Itoa(pp)
 		cmd.Params["nnodes"] = strconv.FormatUint(uint64(seat.GetCount()), 10)
 		cmd.Params["node_rank"] = strconv.FormatUint(uint64(seat.GetRank()), 10)
 		cmd.Params["dist_init_addr"] = seat.GetRendezvous()
@@ -103,11 +105,14 @@ func (r SGLang) LaunchSeat(in Launch) (*Command, error) {
 		if seat.GetAuxPort() == 0 {
 			return nil, fmt.Errorf("%w: a relay seat needs a bootstrap port", ErrParam)
 		}
+		p := in.Params.Clone()
+		p["watchdog_timeout"] = float64(grace)
+		in.Params = p
 		cmd, err := r.Launch(exposedLaunch(in))
 		if err != nil {
 			return nil, err
 		}
-		cmd.Args = append(cmd.Args, "--disaggregation-mode", role.Name, "--disaggregation-transfer-backend", "nixl", "--watchdog-timeout", strconv.Itoa(grace))
+		cmd.Args = append(cmd.Args, "--disaggregation-mode", role.Name, "--disaggregation-transfer-backend", "nixl")
 		if role.Name == RolePrefill {
 			cmd.Args = append(cmd.Args, "--disaggregation-bootstrap-port", strconv.FormatUint(uint64(seat.GetAuxPort()), 10))
 		}
