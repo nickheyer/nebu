@@ -605,16 +605,16 @@ func TestBatchAndAutoProfiles(t *testing.T) {
 	if len(plan.GetSeats()) != 2 || plan.GetRequestsPerSecond() <= find(plan, v1.Shape_SHAPE_SOLO).GetRequestsPerSecond()*1.9 {
 		t.Fatalf("replicas add throughput: %v rps, solo %v", plan.GetRequestsPerSecond(), find(plan, v1.Shape_SHAPE_SOLO).GetRequestsPerSecond())
 	}
-	if af := plan.GetAffinity(); af.GetWindowSeconds() != 600 || !af.GetSystemMessage() || !af.GetFirstUserMessage() {
-		t.Fatalf("a replicas plan carries the affinity policy: %v", af)
+	if plan.GetSchedulerConfig() != mesh.ReplicasSchedulerConfig {
+		t.Fatalf("a replicas plan names the replicas scheduler config: %q", plan.GetSchedulerConfig())
 	}
 	if !strings.Contains(find(plan, v1.Shape_SHAPE_REPLICAS).GetReason(), "each request as fast as its seat alone") {
 		t.Fatal("replicas say per request latency does not change")
 	}
 	// A chat profile on the same pair keeps a single seat: latency, not throughput.
 	req.Profile = v1.PlanProfile_PLAN_PROFILE_CHAT
-	if p := mustPlan(t, req, m); p.GetShape() != v1.Shape_SHAPE_SOLO || p.GetAffinity() != nil {
-		t.Fatalf("chat picks solo without affinity: %v", p.GetShape())
+	if p := mustPlan(t, req, m); p.GetShape() != v1.Shape_SHAPE_SOLO || p.GetSchedulerConfig() != "" {
+		t.Fatalf("chat picks solo without a scheduler config: %v", p.GetShape())
 	}
 	// Auto learns from the route's traces.
 	req.Profile = v1.PlanProfile_PLAN_PROFILE_AUTO

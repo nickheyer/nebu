@@ -60,7 +60,7 @@ func TestBuildsRoundTrip(t *testing.T) {
 func TestSlotsRoutesRoundTrip(t *testing.T) {
 	d, _ := open(t)
 	ctx := context.Background()
-	s := &v1.Slot{Id: "s1", Name: "main", Position: 2, Placement: v1.Placement_PLACEMENT_HOST, DeviceIds: []string{"g1", "g0"}, MemoryBytes: 1 << 33, RuntimeId: "rt", Params: map[string]string{"n_ctx": "1"}, Args: `--alias {{.Name}} "quoted words"`, InstanceId: "i", State: v1.SlotState_SLOT_STATE_READY, Error: "", TaskId: "t", Request: &v1.RunRequest{SourceId: "src", Repo: "r", Group: "g", RuntimeId: "rt", Name: "main", SlotId: "s1", Params: map[string]string{"k": "v"}, Args: "--cache-reuse 256"}, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0)), Profile: &v1.Profile{ToolServers: []string{"web"}}}
+	s := &v1.Slot{Id: "s1", Name: "main", Position: 2, Placement: v1.Placement_PLACEMENT_HOST, DeviceIds: []string{"g1", "g0"}, MemoryBytes: 1 << 33, RuntimeId: "rt", Params: map[string]string{"n_ctx": "1"}, Args: `--alias {{.Name}} "quoted words"`, InstanceId: "i", State: v1.SlotState_SLOT_STATE_READY, Error: "", TaskId: "t", Request: &v1.RunRequest{SourceId: "src", Repo: "r", Group: "g", RuntimeId: "rt", Name: "main", SlotId: "s1", Params: map[string]string{"k": "v"}, Args: "--cache-reuse 256", Snapshot: true}, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0)), Profile: &v1.Profile{ToolServers: []string{"web"}}}
 	if err := d.PutSlot(ctx, s); err != nil {
 		t.Fatal(err)
 	}
@@ -81,19 +81,19 @@ func TestSlotsRoutesRoundTrip(t *testing.T) {
 	if ok, _ := d.DeleteSlot(ctx, "s1"); !ok {
 		t.Fatal("delete slot")
 	}
-	r := &v1.Route{Name: "main", InstanceId: "i", SlotId: "s1", Endpoint: "http://x", Api: v1.ApiFlavor_API_FLAVOR_OPENAI, State: v1.RouteState_ROUTE_STATE_READY, Model: "r:g", Requests: 7, UpdatedAt: timestamppb.New(time.Unix(3, 0)), Profile: &v1.Profile{ToolServers: []string{"fs"}, MutatingTools: true}}
+	r := &v1.Route{Name: "main", OwnerKind: "slot", OwnerId: "s1", NodeId: "n1", Meta: &v1.ObjectMeta{Generation: 3, CreatedAt: timestamppb.New(time.Unix(3, 0))}, Spec: &v1.RouteSpec{Rules: []*v1.RewriteRule{{Match: "main", Targets: []*v1.RewriteTarget{{PoolId: "p1", Model: "m", Weight: 10}}}}, Profile: &v1.Profile{ToolServers: []string{"fs"}, MutatingTools: true}}, Status: &v1.RouteStatus{State: v1.RouteState_ROUTE_STATE_READY, Requests: 7, PoolIds: []string{"p1"}}}
 	if err := d.PutRoute(ctx, r); err != nil {
 		t.Fatal(err)
 	}
 	routes, _ := d.ListRoutes(ctx)
-	if len(routes) != 1 || !proto.Equal(routes[0], r) {
-		t.Fatalf("route round trip %v", routes)
+	if len(routes) != 1 || routes[0].GetOwnerId() != "s1" || routes[0].GetNodeId() != "n1" || routes[0].GetMeta().GetGeneration() != 3 || !routes[0].GetMeta().GetCreatedAt().AsTime().Equal(time.Unix(3, 0)) {
+		t.Fatalf("route round trip: %v", routes)
 	}
-	// Routes that inherit instance handling retain a nil profile.
-	r.Profile = nil
-	d.PutRoute(ctx, r)
-	if routes, _ = d.ListRoutes(ctx); routes[0].GetProfile() != nil {
-		t.Fatalf("empty profile should come back nil %v", routes[0])
+	if got := routes[0].GetSpec(); len(got.GetRules()) != 1 || got.GetRules()[0].GetTargets()[0].GetPoolId() != "p1" || got.GetRules()[0].GetTargets()[0].GetWeight() != 10 || !got.GetProfile().GetMutatingTools() {
+		t.Fatalf("route spec round trip: %v", got)
+	}
+	if st := routes[0].GetStatus(); st.GetState() != v1.RouteState_ROUTE_STATE_READY || st.GetRequests() != 7 || len(st.GetPoolIds()) != 1 {
+		t.Fatalf("route status round trip: %v", st)
 	}
 	d.DeleteRoute(ctx, "main")
 	if routes, _ := d.ListRoutes(ctx); len(routes) != 0 {

@@ -2,20 +2,24 @@ package mesh
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/nickheyer/nebu/internal/db"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
 )
 
-// Makes a mesh on this node and returns it with a join token
-func (m *Manager) Init(ctx context.Context, name string, useTLS bool) (*v1.Mesh, string, error) {
+// Makes a mesh on this node, which holds its authority as issuer, and returns it with a join token
+func (m *Manager) Init(ctx context.Context, name string) (*v1.Mesh, string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "mesh"
@@ -35,71 +39,59 @@ func (m *Manager) Init(ctx context.Context, name string, useTLS bool) (*v1.Mesh,
 	if err := m.requireReachable(); err != nil {
 		return nil, "", err
 	}
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		return nil, "", err
-	}
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, "", err
 	}
 	now := time.Now()
-	row := &db.MeshRow{ID: hex.EncodeToString(raw), Name: name, Secret: secret, TLS: useTLS, CreatedAt: now, JoinedAt: now}
-	if useTLS {
-		ca, key, err := newCA(name)
-		if err != nil {
-			return nil, "", err
-		}
-		cert, err := issue(ca, key, m.identity.PublicKey, m.identity.ID, m.name())
-		if err != nil {
-			return nil, "", err
-		}
-		row.CACertificate, row.CAKey, row.Certificate = ca, key, cert
+	caDER, caKey, err := newCA(name, now)
+	if err != nil {
+		return nil, "", err
+	}
+	ca, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		return nil, "", err
+	}
+	key, err := newKey()
+	if err != nil {
+		return nil, "", err
+	}
+	certDER, _, err := signNode(ca, caKey, key.Public().(ed25519.PublicKey), m.identity.ID, now)
+	if err != nil {
+		return nil, "", err
+	}
+	creds, err := newCredentials(caDER, certDER, key, caKey)
+	if err != nil {
+		return nil, "", err
+	}
+	row, err := newMeshRow(hex.EncodeToString(raw), name, m.identity.ID, 0, creds, now)
+	if err != nil {
+		return nil, "", err
 	}
 	if err := m.DB.PutMesh(ctx, row); err != nil {
 		return nil, "", err
 	}
 	m.mu.Lock()
-	m.mesh = row
+	m.mesh, m.creds = row, creds
 	m.mu.Unlock()
-	if useTLS && m.APITLS == nil {
-		if err := m.rebind(); err != nil {
-			return nil, "", err
-		}
-	}
-	m.Log.Info("mesh made", "mesh", row.ID, "name", name, "tls", useTLS)
+	m.Log.Info("mesh made", "mesh", row.ID, "name", name, "authority", creds.caFingerprint()[:16])
 	m.clearAdmissions()
 	m.startLoops()
 	m.bump()
 	m.publishStatus()
-	token, err := m.Token()
+	token, _, err := m.Token(ctx, 0)
 	if err != nil {
 		return nil, "", err
 	}
-	mesh, _ := m.Mesh()
-	return mesh, token, nil
+	mesh, err := m.Mesh()
+	return mesh, token, err
 }
 
-// A join token naming this node as the member to contact
-func (m *Manager) Token() (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.mesh == nil {
-		return "", ErrNoMesh
-	}
-	address := m.advertiseLocked()
-	if address == "" {
-		return "", fmt.Errorf("%w: this node listens on loopback alone, so no other node can join through it. Set mesh.listen or mesh.advertise", ErrMesh)
-	}
-	fingerprint, hasTLS := m.servedCertLocked()
-	return encodeToken(joinToken{ID: m.mesh.ID, Name: m.mesh.Name, Secret: m.mesh.Secret, Address: address, TLS: hasTLS, Fingerprint: fingerprint}), nil
-}
-
-// Joins the mesh a token names through the member it names
-func (m *Manager) Join(ctx context.Context, token string) (*v1.Mesh, *v1.Node, []string, error) {
-	t, err := decodeToken(token)
+// Joins the mesh a token names, the issuer signing a request for a fresh key this node makes
+func (m *Manager) Join(ctx context.Context, token string) (*v1.Mesh, *v1.Node, error) {
+	h, err := decodeGrant(token)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	m.changing.Lock()
 	defer m.changing.Unlock()
@@ -107,97 +99,71 @@ func (m *Manager) Join(ctx context.Context, token string) (*v1.Mesh, *v1.Node, [
 	if m.mesh != nil {
 		have := m.mesh.Name
 		m.mu.Unlock()
-		return nil, nil, nil, fmt.Errorf("%w: this node already belongs to %s and must leave it first", ErrMesh, have)
+		return nil, nil, fmt.Errorf("%w: this node already belongs to %s and must leave it first", ErrMesh, have)
 	}
 	m.mu.Unlock()
+	if time.Now().After(h.Expires) {
+		return nil, nil, fmt.Errorf("%w: the join token expired at %s", ErrMesh, h.Expires.Format(time.RFC3339))
+	}
 	if err := m.listen(); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	if err := m.requireReachable(); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	// The mesh is on record as soon as the member proves the secret, so its first sync, which
-	// follows its admission at once, finds this node a member; a failed second call takes it back.
-	provisional := &db.MeshRow{ID: t.ID, Name: t.Name, Secret: t.Secret, CreatedAt: time.Now(), JoinedAt: time.Now()}
-	verified := func() error {
-		if err := m.DB.PutMesh(ctx, provisional); err != nil {
-			return err
-		}
-		m.mu.Lock()
-		m.mesh = provisional
-		m.mu.Unlock()
-		return nil
-	}
-	resp, err := m.handshake(ctx, t.Address, t.TLS, t.Fingerprint, &t, verified)
+	key, err := newKey()
 	if err != nil {
-		m.rows.Lock()
-		defer m.rows.Unlock()
-		m.mu.Lock()
-		joined := m.mesh == provisional
-		if joined {
-			m.mesh = nil
-		}
-		m.mu.Unlock()
-		if joined {
-			if derr := m.DB.DeleteMesh(ctx); derr != nil {
-				return nil, nil, nil, fmt.Errorf("%w; the provisional membership could not be taken back either: %v", err, derr)
-			}
-		}
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	created := time.Now()
-	if resp.GetMesh().GetCreatedAt() != nil {
-		created = resp.GetMesh().GetCreatedAt().AsTime()
+	csr, err := newCSR(key, m.identity.ID)
+	if err != nil {
+		return nil, nil, err
 	}
-	name := resp.GetMesh().GetName()
-	if name == "" {
-		name = t.Name
+	rt := transport(grantDialConfig(h))
+	defer rt.CloseIdleConnections()
+	issuer := nebuv1connect.NewMeshPeerServiceClient(&http.Client{Transport: rt}, "https://"+h.Address)
+	cctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	resp, err := issuer.Enroll(cctx, connect.NewRequest(&v1.EnrollRequest{Csr: csr, Node: m.Record()}))
+	if err != nil {
+		return nil, nil, fmt.Errorf("enroll with %s: %w", h.Address, err)
 	}
-	row := &db.MeshRow{
-		ID:            t.ID,
-		Name:          name,
-		Secret:        t.Secret,
-		TLS:           resp.GetMesh().GetTls(),
-		CACertificate: resp.GetCaCertificate(),
-		CAKey:         resp.GetCaKey(),
-		Certificate:   resp.GetCertificate(),
-		CreatedAt:     created,
-		JoinedAt:      time.Now(),
+	out := resp.Msg
+	if fingerprintOf(out.GetCaCertificate()) != h.ca {
+		return nil, nil, fmt.Errorf("%w: the issuer answered with another authority than the token pins", ErrMesh)
 	}
-	if row.TLS && len(row.Certificate) == 0 {
-		return nil, nil, nil, fmt.Errorf("%w: the mesh has TLS but %s issued no certificate", ErrMesh, t.Address)
+	creds, err := newCredentials(out.GetCaCertificate(), out.GetCertificate(), key, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: the certificate the issuer signed is not usable: %v", ErrMesh, err)
+	}
+	if id, ok := nodeIDOf(creds.leaf); !ok || id != m.identity.ID {
+		return nil, nil, fmt.Errorf("%w: the issuer signed a certificate for another node", ErrMesh)
+	}
+	meshInfo := out.GetMesh()
+	if meshHex(meshInfo.GetId()) != h.MeshHash {
+		return nil, nil, fmt.Errorf("%w: the issuer answered for another mesh than the token names", ErrMesh)
+	}
+	row, err := newMeshRow(meshInfo.GetId(), meshInfo.GetName(), h.Issuer, meshInfo.GetIssuerEpoch(), creds, meshInfo.GetCreatedAt().AsTime())
+	if err != nil {
+		return nil, nil, err
 	}
 	m.rows.Lock()
-	m.mu.Lock()
-	// A rotation that landed during the handshake replaced the secret the token carried
-	row.Secret = m.mesh.Secret
-	m.mu.Unlock()
 	if err := m.DB.PutMesh(ctx, row); err != nil {
 		m.rows.Unlock()
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	m.mu.Lock()
-	m.mesh = row
+	m.mesh, m.creds = row, creds
 	m.mu.Unlock()
 	m.rows.Unlock()
-	bootstrap := resp.GetNode()
-	m.absorb(bootstrap, resp.GetMembers(), true)
-	var warnings []string
-	if row.TLS && m.APITLS == nil {
-		if err := m.rebind(); err != nil {
-			return nil, nil, nil, err
+	bootstrap := out.GetIssuer()
+	m.mergeMembers(out.GetMembers())
+	for _, r := range meshInfo.GetRevocations() {
+		if _, err := m.revoke(r); err != nil {
+			m.Log.Error("revocation from the issuer not held, the next exchange carries it again", "serial", r.GetSerial(), "err", err)
 		}
 	}
-	if !bootstrap.GetTls() {
-		warnings = append(warnings, fmt.Sprintf("node traffic with %s is plain HTTP; make meshes with TLS on, or set tls.cert_file on every member", bootstrap.GetName()))
-	}
-	m.mu.Lock()
-	_, served := m.servedCertLocked()
-	m.mu.Unlock()
-	if !served {
-		warnings = append(warnings, "this node serves node traffic over plain HTTP")
-	}
-	m.Log.Info("mesh joined", "mesh", row.ID, "name", row.Name, "through", t.Address, "tls", row.TLS)
+	m.Log.Info("mesh joined", "mesh", row.ID, "name", row.Name, "issuer", h.Issuer, "through", h.Address)
 	m.settleAfterJoin(row.ID)
 	loops := m.startLoops()
 	m.bump()
@@ -205,60 +171,78 @@ func (m *Manager) Join(ctx context.Context, token string) (*v1.Mesh, *v1.Node, [
 	m.spawn(func() {
 		select {
 		case <-loops.Done():
-		case <-time.After(SyncInterval):
+		case <-time.After(m.interval):
 			if _, err := m.Probe(loops, "", false); err != nil && loops.Err() == nil {
 				m.Log.Warn("link probe after join failed", "err", err)
 			}
 		}
 	})
-	mesh, _ := m.Mesh()
-	return mesh, bootstrap, warnings, nil
+	mesh, err := m.Mesh()
+	return mesh, bootstrap, err
 }
 
-// Leaves the mesh, its formations stopped and records dropped
+// Leaves the mesh, handing the issuer role on first, telling members so each revokes this node's certificate
 func (m *Manager) Leave(ctx context.Context) (*v1.Mesh, error) {
 	m.changing.Lock()
 	defer m.changing.Unlock()
-	return m.leave(ctx)
+	return m.leave(ctx, true)
 }
 
-func (m *Manager) leave(ctx context.Context) (*v1.Mesh, error) {
+// Leaves with the membership lock held, the issuer role handed to a ready member first when asked
+func (m *Manager) leave(ctx context.Context, handOff bool) (*v1.Mesh, error) {
 	m.mu.Lock()
 	if m.mesh == nil {
 		m.mu.Unlock()
 		return nil, ErrNoMesh
 	}
 	out := m.meshLocked()
-	wasTLS := m.mesh.TLS
+	issuer := m.creds.caKey != nil
+	var ready []string
 	ids := make([]string, 0, len(m.members))
-	for id := range m.members {
+	for id, mb := range m.members {
 		ids = append(ids, id)
+		if mb.rec.GetState() == v1.NodeState_NODE_STATE_READY {
+			ready = append(ready, id)
+		}
 	}
 	m.mu.Unlock()
+	sort.Strings(ready)
+	if issuer && handOff && len(ids) > 0 {
+		var errs []string
+		handed := false
+		for _, id := range ready {
+			if _, err := m.handOff(ctx, id); err != nil {
+				errs = append(errs, err.Error())
+				continue
+			}
+			handed = true
+			break
+		}
+		if !handed {
+			return nil, fmt.Errorf("%w: this node is the issuer and no member took the role, so leaving would strand the mesh without an authority key; reset the mesh to leave regardless: %s", ErrMesh, strings.Join(errs, "; "))
+		}
+	}
 	if m.Formations != nil {
 		m.Formations.Clear(ctx)
 	}
 	var wg sync.WaitGroup
 	for _, id := range ids {
-		wg.Add(1)
-		go func(id string) {
-			defer wg.Done()
-			cl, err := m.Client(ctx, id)
+		wg.Go(func() {
+			cl, err := m.peer(id)
+			if err == nil {
+				cctx, cancel := context.WithTimeout(ctx, callTimeout)
+				defer cancel()
+				_, err = cl.Bye(cctx, connect.NewRequest(&v1.ByeRequest{}))
+			}
 			if err != nil {
-				m.Log.Warn("leave: member not told, it learns from the missed syncs", "node", id, "err", err)
-				return
+				m.Log.Warn("leave: member not told, it learns from gossip as others revoke this node", "node", id, "err", err)
 			}
-			cctx, cancel := context.WithTimeout(ctx, callTimeout)
-			defer cancel()
-			if _, err := cl.Mesh.Bye(cctx, connect.NewRequest(&v1.ByeRequest{NodeId: m.identity.ID})); err != nil {
-				m.Log.Warn("leave: member not told, it learns from the missed syncs", "node", id, "err", err)
-			}
-		}(id)
+		})
 	}
 	wg.Wait()
 	m.stopLoops()
 	m.mu.Lock()
-	m.mesh = nil
+	m.mesh, m.creds = nil, nil
 	m.mu.Unlock()
 	if err := m.clearState(ctx); err != nil {
 		return nil, err
@@ -268,17 +252,12 @@ func (m *Manager) leave(ctx context.Context) (*v1.Mesh, error) {
 		m.Formations.Clear(ctx)
 	}
 	m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_DELETED, m.identity.ID, &v1.Node{Id: m.identity.ID, Self: true})
-	if wasTLS && m.APITLS == nil {
-		if err := m.rebind(); err != nil {
-			return nil, err
-		}
-	}
 	m.Log.Info("mesh left", "mesh", out.GetId(), "name", out.GetName())
 	m.publishStatus()
 	return out, nil
 }
 
-// Forgets members, sessions, links, and admissions everywhere
+// Forgets members, sessions, links, revocations, imports and admissions everywhere
 func (m *Manager) clearState(ctx context.Context) error {
 	m.rows.Lock()
 	m.mu.Lock()
@@ -288,26 +267,25 @@ func (m *Manager) clearState(ctx context.Context) error {
 	m.accept = map[string]string{}
 	m.links = map[string]*v1.Link{}
 	m.admissions = map[string]*v1.Admission{}
-	m.forgotten = map[string]time.Time{}
+	m.grants = map[string]string{}
+	m.revoked = map[string]*v1.Revocation{}
 	m.mu.Unlock()
 	err := m.DB.DeleteMesh(ctx)
 	m.rows.Unlock()
 	m.dropTransports("")
-	if err != nil {
-		return err
-	}
 	for id, mb := range members {
+		m.dropImports(ctx, id)
 		m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_DELETED, id, mb.rec)
 	}
-	return nil
+	return err
 }
 
-// Leaves any mesh and clears every trace of it
+// Leaves any mesh without handing the issuer role on, and clears every trace of it
 func (m *Manager) Reset(ctx context.Context) (*v1.Mesh, error) {
 	m.changing.Lock()
 	defer m.changing.Unlock()
 	if m.Joined() {
-		return m.leave(ctx)
+		return m.leave(ctx, false)
 	}
 	if m.Formations != nil {
 		m.Formations.Clear(ctx)
@@ -320,8 +298,8 @@ func (m *Manager) Reset(ctx context.Context) (*v1.Mesh, error) {
 	return nil, nil
 }
 
-// Forgets a member, on every reachable member with tell
-func (m *Manager) Forget(ctx context.Context, ref string, tell bool) (*v1.Node, error) {
+// Revokes a member's certificate, the revocation reaching every member in gossip so each drops it
+func (m *Manager) Forget(ctx context.Context, ref string) (*v1.Node, error) {
 	m.changing.Lock()
 	defer m.changing.Unlock()
 	if !m.Joined() {
@@ -334,88 +312,12 @@ func (m *Manager) Forget(ctx context.Context, ref string, tell bool) (*v1.Node, 
 	if rec.GetSelf() {
 		return nil, fmt.Errorf("%w: this node cannot forget itself, leave the mesh instead", ErrMesh)
 	}
-	id := rec.GetId()
-	m.mu.Lock()
-	ids := make([]string, 0, len(m.members))
-	for other := range m.members {
-		if other != id {
-			ids = append(ids, other)
-		}
+	if rec.GetIssuer() {
+		return nil, fmt.Errorf("%w: %s holds the issuer role, hand it to another member before forgetting it", ErrMesh, rec.GetName())
 	}
-	m.mu.Unlock()
-	m.forget(id)
-	if tell {
-		var wg sync.WaitGroup
-		for _, other := range ids {
-			wg.Add(1)
-			go func(other string) {
-				defer wg.Done()
-				cl, err := m.Client(ctx, other)
-				if err == nil {
-					cctx, cancel := context.WithTimeout(ctx, callTimeout)
-					defer cancel()
-					_, err = cl.Mesh.ForgetNode(cctx, connect.NewRequest(&v1.ForgetNodeRequest{NodeId: id}))
-				}
-				if err != nil {
-					m.Log.Warn("forget: member not told, it learns from the missed syncs", "node", other, "forgotten", id, "err", err)
-				}
-			}(other)
-		}
-		wg.Wait()
+	if err := m.revokeMember(rec.GetId()); err != nil {
+		return nil, err
 	}
-	m.Log.Info("mesh member forgotten", "node", id, "name", rec.GetName(), "told", tell)
+	m.Log.Info("mesh member forgotten", "node", rec.GetId(), "name", rec.GetName())
 	return rec, nil
-}
-
-// Issues a new secret to every reachable member. Members unreachable now must join again.
-func (m *Manager) Rotate(ctx context.Context) (*v1.Mesh, []string, []string, error) {
-	m.changing.Lock()
-	defer m.changing.Unlock()
-	m.mu.Lock()
-	if m.mesh == nil {
-		m.mu.Unlock()
-		return nil, nil, nil, ErrNoMesh
-	}
-	ids := make([]string, 0, len(m.members))
-	for id := range m.members {
-		ids = append(ids, id)
-	}
-	m.mu.Unlock()
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		return nil, nil, nil, err
-	}
-	var mu sync.Mutex
-	var rotated, missed []string
-	var wg sync.WaitGroup
-	for _, id := range ids {
-		wg.Add(1)
-		go func(id string) {
-			defer wg.Done()
-			cl, err := m.Client(ctx, id)
-			if err == nil {
-				cctx, cancel := context.WithTimeout(ctx, callTimeout)
-				defer cancel()
-				_, err = cl.Mesh.Rekey(cctx, connect.NewRequest(&v1.RekeyRequest{Secret: secret}))
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				m.Log.Warn("rotate: member missed, it must join again", "node", id, "err", err)
-				missed = append(missed, id)
-				return
-			}
-			rotated = append(rotated, id)
-		}(id)
-	}
-	wg.Wait()
-	if err := m.Rekey(secret); err != nil {
-		return nil, nil, nil, err
-	}
-	// No forgotten node holds the new secret, so none needs refusing by name any more
-	m.readmitAll()
-	m.Log.Info("mesh secret rotated", "rotated", len(rotated), "missed", len(missed))
-	m.publishStatus()
-	mesh, _ := m.Mesh()
-	return mesh, rotated, missed, nil
 }

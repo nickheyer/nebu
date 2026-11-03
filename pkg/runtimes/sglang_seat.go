@@ -62,6 +62,9 @@ func (r SGLang) LaunchSeat(in Launch) (*Command, error) {
 	case v1.Shape_SHAPE_REPLICAS:
 		return r.Launch(exposedLaunch(in))
 	case v1.Shape_SHAPE_CHAIN, v1.Shape_SHAPE_LOCKSTEP:
+		if err := oneRankSeat(in, "dp_size"); err != nil {
+			return nil, err
+		}
 		if _, _, err := rendezvousOf(seat); err != nil {
 			return nil, err
 		}
@@ -102,6 +105,9 @@ func (r SGLang) LaunchSeat(in Launch) (*Command, error) {
 		cmd.Params["dist_init_addr"] = seat.GetRendezvous()
 		return cmd, nil
 	case v1.Shape_SHAPE_RELAY:
+		if err := oneRankSeat(in, "dp_size"); err != nil {
+			return nil, err
+		}
 		if seat.GetAuxPort() == 0 {
 			return nil, fmt.Errorf("%w: a relay seat needs a bootstrap port", ErrParam)
 		}

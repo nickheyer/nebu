@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// The media line ifconfig prints, such as "media: autoselect (10Gbase-T <full-duplex>)"
+// The rate in the media line ifconfig prints, such as 10Gbase-T
 var mediaRate = regexp.MustCompile(`(\d+)(G|M)?base`)
 
 // The interface's reported speed in bits per second, from the media line ifconfig prints for it
@@ -44,6 +44,5 @@ func speedOf(name string) uint64 {
 	return 0
 }
 
-// The RDMA transports nebu drives bind through the Linux class tree, which these systems do not
-// have, so a link here is sockets and the class reflects that
+// No RDMA device binds here since the transports nebu drives use the Linux class tree
 func rdmaOf(string) string { return "" }

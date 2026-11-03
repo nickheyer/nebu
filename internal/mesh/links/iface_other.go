@@ -2,10 +2,8 @@
 
 package links
 
-// These systems publish no interface speed to a user process, so the measured bandwidth stands
-// as the link's figure
+// No interface speed reaches a user process here, so measured bandwidth stands alone
 func speedOf(string) uint64 { return 0 }
 
-// The RDMA transports nebu drives bind through the Linux class tree, so a link here is sockets
-// and the class reflects that
+// No RDMA device binds here since the transports nebu drives use the Linux class tree
 func rdmaOf(string) string { return "" }

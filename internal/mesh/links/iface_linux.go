@@ -7,8 +7,7 @@ import (
 	"strings"
 )
 
-// The interface's reported speed in bits per second, from the kernel's class tree. Virtual
-// interfaces report none.
+// The interface's speed in bits per second from the kernel's class tree, zero for virtual ones
 func speedOf(name string) uint64 {
 	data, err := os.ReadFile(filepath.Join("/sys/class/net", name, "speed"))
 	if err != nil {
@@ -21,8 +20,7 @@ func speedOf(name string) uint64 {
 	return uint64(mbps) * 1e6
 }
 
-// The RDMA device bound to the interface, from the kernel's class tree: the device's own
-// infiniband entry, or the infiniband device whose net entry names the interface
+// The infiniband device bound to the interface in the kernel's class tree
 func rdmaOf(name string) string {
 	if entries, err := os.ReadDir(filepath.Join("/sys/class/net", name, "device", "infiniband")); err == nil && len(entries) > 0 {
 		return entries[0].Name()

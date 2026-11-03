@@ -48,13 +48,15 @@ type Launch struct {
 	Host      string
 	Port      int
 	Install   Install
-	// Assigned devices. Empty allows all devices.
+	// Devices a slot assigned, empty pinning the devices the plan priced
 	Devices []*v1.Device
 	// Memory placement. Host placement disables accelerators.
 	Placement  v1.Placement
 	Descriptor *v1.Descriptor
 	// Resolved memory plan, or nil if unsupported.
 	Plan *v1.MemoryPlan
+	// Host profile the plan was priced against, naming the devices its pools hold
+	Profile *v1.HostProfile
 	// Other stored models available as components.
 	Stored []*v1.StoredModel
 	// Stored model and its pipeline files.
@@ -65,6 +67,8 @@ type Launch struct {
 	InstallRecord *v1.Install
 	// The draft model's weights, for a draft head
 	Draft string
+	// The data parallel rank the command runs, zero for a launch of one rank
+	Rank int
 }
 
 // Resolved command and parameters.
@@ -73,6 +77,10 @@ type Command struct {
 	Args    []string
 	Env     map[string]string
 	Params  map[string]string
+	// Devices the command is pinned to, in the order its visibility variables list them
+	Devices []*v1.Device
+	// The port the command serves HTTP on, zero when it serves the launch port
+	Port int
 }
 
 // Readiness probe of a running instance, SlowAfter the wait that is reported as slow while the process lives
@@ -171,6 +179,32 @@ type Runtime interface {
 	LaunchSeat(in Launch) (*Command, error)
 	// The transport a seat negotiated as its log names it: rdma, sockets, or empty until a line says
 	Transport(lines []string) string
+	// Prometheus names the runtime serves its load gauges under, nil when it serves none
+	Metrics() *v1.MetricNames
+	// Port a launch on port serves its metrics path on
+	MetricsPort(params map[string]string, port int) int
+	// Protocol the gateway speaks to a launch with these params
+	AppProtocol(params map[string]string) v1.AppProtocol
+	// Port a launch on port serves gRPC on, zero when it serves none
+	GRPCPort(params map[string]string, port int) int
+	// Consecutive ports from the launch port that every rank of the launch binds
+	PortSpan(in Launch) int
+	// Data parallel ranks a launch with these params runs, each a process serving a port of its own
+	Ranks(params map[string]string) int
+	// Devices one launch spreads each expert layer over, one for a launch replicating its experts
+	ExpertParallel(params map[string]string) int
+	// Requests a launch runs at once, zero until the runtime's own pick is recorded in params
+	Capacity(params map[string]string) uint32
+	// KV cache tokens a launch holds for a runtime that reports KV use per slot, zero for one with block gauges
+	KVCapacity(params map[string]string, plan *v1.MemoryPlan) uint32
+	// Loads and unloads adapters on a running endpoint, nil when the launch switches none
+	Adapters(endpoint string, params map[string]string) AdapterClient
+	// Puts a running endpoint to sleep and wakes it, nil when the launch cannot sleep
+	Sleeper(endpoint string, params map[string]string) SleepClient
+	// Context, quantization, accelerator, modalities and throughput class of a launch
+	Inventory(in Launch, params map[string]string) (*v1.RuntimeInventory, error)
+	// Triage rule matching a log line that says a port of the launch was taken, port naming it when the line does
+	PortRule() triage.Rule
 }
 
 // Runtimes ordered by id
@@ -238,6 +272,9 @@ func New(list []Runtime) (*Registry, error) {
 		}
 		if policy := rt.Policy(); policy != nil && policy.ContextParam != "" && !seen[policy.ContextParam] {
 			return nil, fmt.Errorf("runtime %s: context param %s is not a param", rt.ID(), policy.ContextParam)
+		}
+		if rt.Health().Interval <= 0 {
+			return nil, fmt.Errorf("runtime %s: health declares no probe interval", rt.ID())
 		}
 		r.list = append(r.list, rt)
 		r.byID[rt.ID()] = rt

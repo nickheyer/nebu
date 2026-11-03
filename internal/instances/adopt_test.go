@@ -17,6 +17,7 @@ import (
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances/fake"
 	"github.com/nickheyer/nebu/internal/tasks"
+	"github.com/nickheyer/nebu/pkg/archs"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
@@ -37,14 +38,15 @@ func (f *fakeFormations) HeadReady(ctx context.Context, formationID string, sinc
 	return f.err
 }
 
-// One daemon's instances manager over a database, the fake runtime installed, a store with the
-// model, and the fake launcher whose processes outlive the manager
+// One daemon's manager over a database, store, fake runtime and a launcher whose processes outlive it
 type seatNode struct {
-	dir      string
-	db       *db.DB
-	store    *store.Store
-	launcher *fake.Launcher
-	install  *v1.Install
+	dir       string
+	db        *db.DB
+	store     *store.Store
+	launcher  *fake.Launcher
+	install   *v1.Install
+	registrar *fake.Registrar
+	traffic   *fake.Traffic
 }
 
 func newSeatNode(t *testing.T, ctx context.Context) *seatNode {
@@ -82,7 +84,7 @@ func newSeatNode(t *testing.T, ctx context.Context) *seatNode {
 	if err := blobs.WriteManifest(&v1.StoredModel{SourceId: "src", Repo: "org/model", Group: "q4", FormatId: fake.Format, Path: modelDir, Descriptor_: &v1.Descriptor{Kind: v1.ModelKind_MODEL_KIND_LANGUAGE, Architecture: "fake", Metadata: map[string]string{descriptor.RevisionKey: descriptor.Revision}}, Artifacts: artifacts}); err != nil {
 		t.Fatal(err)
 	}
-	return &seatNode{dir: dir, db: database, store: blobs, launcher: fake.New(), install: install}
+	return &seatNode{dir: dir, db: database, store: blobs, launcher: fake.New(), install: install, registrar: fake.NewRegistrar(), traffic: fake.NewTraffic()}
 }
 
 // A manager as one daemon would hold it
@@ -94,19 +96,29 @@ func (n *seatNode) manager(t *testing.T, ctx context.Context, formations Formati
 	}
 	bus := events.New()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	families, err := archs.New(archs.All())
+	if err != nil {
+		t.Fatal(err)
+	}
 	return &Manager{
-		DB:         n.db,
-		Dir:        filepath.Join(n.dir, "instances"),
-		Store:      n.store,
-		Runtimes:   rts,
-		Installs:   &installs.Manager{DB: n.db},
-		Inspector:  &inspect.Inspector{Stored: n.store.ListManifests},
-		Launcher:   n.launcher,
-		Tasks:      tasks.New(ctx, log, n.db, bus),
-		Host:       host.New(nil, nil, time.Minute),
-		Events:     bus,
-		Formations: formations,
-		Log:        log,
+		DB:           n.db,
+		Dir:          filepath.Join(n.dir, "instances"),
+		Store:        n.store,
+		Runtimes:     rts,
+		Installs:     &installs.Manager{DB: n.db},
+		Inspector:    &inspect.Inspector{Builder: &descriptor.Builder{Archs: families}, Stored: n.store.ListManifests},
+		Launcher:     n.launcher,
+		Tasks:        tasks.New(ctx, log, n.db, bus),
+		Host:         host.New(nil, nil, time.Minute),
+		Registrar:    n.registrar,
+		InFlight:     n.traffic.InFlight,
+		Dispatched:   n.traffic.Dispatched,
+		Load:         n.traffic.Load,
+		Listening:    n.launcher.Listening,
+		DrainTimeout: 5 * time.Second,
+		Events:       bus,
+		Formations:   formations,
+		Log:          log,
 	}
 }
 
@@ -147,8 +159,7 @@ func dropGuard(t *testing.T, m *Manager, id string) {
 	}
 }
 
-// A stage adopted after a restart with no client on its guard is verified by a hello on its
-// loopback port, and its guard listener comes back on the port peers know
+// An idle stage adopted after a restart verifies by a hello and gets its guard back on its port
 func TestAdoptIdleStageByHello(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -185,8 +196,7 @@ func TestAdoptIdleStageByHello(t *testing.T) {
 	}
 }
 
-// A stage a head holds cannot take a hello, so its adoption is confirmed by the conductor's
-// record of the head, and fails when the record says otherwise
+// A stage a head holds is confirmed by the conductor's record and fails when the record refuses
 func TestAdoptHeldStageAsksTheConductor(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -233,7 +243,7 @@ func TestAdoptHeldStageAsksTheConductor(t *testing.T) {
 	}
 }
 
-// A head reads its chat template from the model's files, asking the runtime nothing, and an adoption after a restart reads it again
+// A head reads its chat template from the model's files at launch and again after adoption
 func TestAdoptHeadReadsTemplate(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -244,7 +254,7 @@ func TestAdoptHeadReadsTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 	launched := waitState(t, first, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
-	proc := n.launcher.Proc("chain/head")
+	proc := n.launcher.Proc("chain/head0")
 	if proc.Chats.Load() != 0 {
 		t.Fatal("the launch asked the runtime for a chat")
 	}

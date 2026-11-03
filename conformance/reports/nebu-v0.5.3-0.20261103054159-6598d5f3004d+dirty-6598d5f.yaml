@@ -1,0 +1,243 @@
+date: "2026-11-03T09:56:58Z"
+features:
+- checks:
+  - detail: 60 of 60 answers, 20 of them streamed, named the stub that received the
+      request, spread map[conformance-268b75-served-a:18 conformance-268b75-served-b:21
+      conformance-268b75-served-c:21]
+    name: served header names the serving endpoint
+    passed: true
+  - detail: every answer carried the X-Stub-Id of the stub that received it
+    name: answer comes from the named endpoint
+    passed: true
+  - detail: 3 of 3 stubs served at least once, map[conformance-268b75-served-a:18
+      conformance-268b75-served-b:21 conformance-268b75-served-c:21]
+    name: every endpoint of the pool served
+    passed: true
+  description: Every response names the endpoint that actually served it in X-Gateway-Destination-Endpoint-Served
+  durationMs: 46
+  name: EndpointServed
+  outcome: passed
+- checks:
+  - detail: 20 of 20 requests served inside [127.0.0.1:43419] with a matching served
+      header, by address map[127.0.0.1:43419:20]
+    name: subset of conformance-268b75-subset-a alone
+    passed: true
+  - detail: 20 of 20 requests served inside [127.0.0.1:34795] with a matching served
+      header, by address map[127.0.0.1:34795:20]
+    name: subset of conformance-268b75-subset-b alone
+    passed: true
+  - detail: 20 of 20 requests served inside [127.0.0.1:43811] with a matching served
+      header, by address map[127.0.0.1:43811:20]
+    name: subset of conformance-268b75-subset-c alone
+    passed: true
+  - detail: 20 of 20 requests served inside [127.0.0.1:43419 127.0.0.1:34795] with
+      a matching served header, by address map[127.0.0.1:34795:8 127.0.0.1:43419:12]
+    name: subset of two endpoints
+    passed: true
+  - detail: 10 of 10 answered 503, stub requests before map[conformance-268b75-subset-a:32
+      conformance-268b75-subset-b:29 conformance-268b75-subset-c:20 conformance-268b75-subset-outside:0]
+      after map[conformance-268b75-subset-a:32 conformance-268b75-subset-b:29 conformance-268b75-subset-c:20
+      conformance-268b75-subset-outside:0]
+    name: subset naming only an endpoint outside the pool answers 503
+    passed: true
+  - detail: 10 of 10 answered 503, stub requests before map[conformance-268b75-subset-a:32
+      conformance-268b75-subset-b:29 conformance-268b75-subset-c:20 conformance-268b75-subset-outside:0]
+      after map[conformance-268b75-subset-a:32 conformance-268b75-subset-b:29 conformance-268b75-subset-c:20
+      conformance-268b75-subset-outside:0]
+    name: subset naming only a dead address answers 503
+    passed: true
+  description: X-Gateway-Destination-Endpoint-Subset confines every pick to the named
+    endpoints and answers 503 when none is eligible
+  durationMs: 54
+  name: EndpointConfinement
+  outcome: passed
+- checks:
+  - detail: spec target_ports [38581 42329], created with [38581 42329]
+    name: target ports read back
+    passed: true
+  - detail: status endpoints [127.0.0.1:38581 127.0.0.1:42329], want [127.0.0.1:38581
+      127.0.0.1:42329]
+    name: one endpoint per target port
+    passed: true
+  - detail: 40 of 40 answers served from [127.0.0.1:42329 127.0.0.1:38581], unlisted
+      port 42841 received 0
+    name: concurrent traffic stays on listed ports
+    passed: true
+  - detail: 10 of 10 requests served inside [127.0.0.1:42329] with a matching served
+      header, by address map[127.0.0.1:42329:10]
+    name: rank 0 port reachable alone
+    passed: true
+  - detail: 10 of 10 requests served inside [127.0.0.1:38581] with a matching served
+      header, by address map[127.0.0.1:38581:10]
+    name: rank 1 port reachable alone
+    passed: true
+  - detail: 10 of 10 answered 503, stub requests before map[conformance-268b75-dp-rank0:29
+      conformance-268b75-dp-rank1:32 conformance-268b75-dp-unlisted:0] after map[conformance-268b75-dp-rank0:29
+      conformance-268b75-dp-rank1:32 conformance-268b75-dp-unlisted:0]
+    name: unlisted port of the same host never serves
+    passed: true
+  - detail: 'target_ports [42329 38581] with an endpoint at 127.0.0.1:42841 answered
+      put pool conformance-268b75-dp-stray: invalid_argument: invalid resource: pool
+      conformance-268b75-dp-stray static endpoint 127.0.0.1:42841 port is not a target
+      port'
+    name: endpoint on a port outside target_ports refused
+    passed: true
+  description: Each target port of one host is its own endpoint and a port outside
+    target_ports never serves
+  durationMs: 25
+  name: DataParallelPortConfinement
+  outcome: passed
+- checks:
+  - detail: status pool_ids [conformance-268b75-split-heavy conformance-268b75-split-light]
+    name: route resolves both pools
+    passed: true
+  - detail: 2000 of 2000 answered 200, stubs received 2000
+    name: every split request served
+    passed: true
+  - detail: weight 70 pool received 1418 and weight 30 pool received 582, share 0.709
+      against 0.70 within 0.05
+    name: split follows the weights
+    passed: true
+  description: A route splits traffic over pool targets in proportion to their weights
+  durationMs: 129
+  name: WeightedSplit
+  outcome: passed
+- checks:
+  - detail: config conformance-268b75-failopen-remote at dead address 127.0.0.1:45329,
+      Accepted TRUE/Accepted (the configuration loads)
+    name: remote scheduler config accepted
+    passed: true
+  - detail: failure mode FAILURE_MODE_FAIL_OPEN, Accepted TRUE/Accepted (the pool
+      spec is valid)
+    name: pool conformance-268b75-failopen-open accepted with the remote config
+    passed: true
+  - detail: failure mode FAILURE_MODE_FAIL_CLOSE, Accepted TRUE/Accepted (the pool
+      spec is valid)
+    name: pool conformance-268b75-failopen-close accepted with the remote config
+    passed: true
+  - detail: first 200 after 1 tries <nil>
+    name: FAIL_OPEN pool serves with the scheduler down
+    passed: true
+  - detail: 20 of 20 requests served inside [127.0.0.1:38123] with a matching served
+      header, by address map[127.0.0.1:38123:20]
+    name: FAIL_OPEN pool keeps serving
+    passed: true
+  - detail: 20 of 20 answered 503, stub requests before map[conformance-268b75-failopen-close:0
+      conformance-268b75-failopen-open:21] after map[conformance-268b75-failopen-close:0
+      conformance-268b75-failopen-open:21]
+    name: FAIL_CLOSE pool answers 503 with the scheduler down
+    passed: true
+  description: With the scheduler unreachable a FAIL_OPEN pool still serves and a
+    FAIL_CLOSE pool answers 503
+  durationMs: 32
+  name: FailOpen
+  outcome: passed
+- checks:
+  - detail: ResolvedRefs FALSE/InvalidPoolRef (target pools conformance-268b75-invalidref
+      do not exist)
+    name: ResolvedRefs False with InvalidPoolRef
+    passed: true
+  - detail: Accepted TRUE/Accepted (the route spec is valid)
+    name: route stays Accepted
+    passed: true
+  - detail: Ready FALSE/NoReadyEndpoints (no target pool has a ready endpoint)
+    name: route not Ready
+    passed: true
+  - detail: 10 of 10 answered 503, stub requests before map[conformance-268b75-invalidref:1]
+      after map[conformance-268b75-invalidref:1]
+    name: accepted route with no pool answers 503
+    passed: true
+  - detail: route conformance-268b75-invalidref
+    name: ResolvedRefs True once the pool returns
+    passed: true
+  - detail: 10 of 10 requests served inside [127.0.0.1:34329] with a matching served
+      header, by address map[127.0.0.1:34329:10]
+    name: restored route serves its pool
+    passed: true
+  description: A route whose target pool does not exist reports ResolvedRefs False
+    with reason InvalidPoolRef and answers 503
+  durationMs: 15
+  name: InvalidPoolRef
+  outcome: passed
+- checks:
+  - detail: failure mode FAILURE_MODE_FAIL_OPEN, Accepted FALSE/UnknownSchedulerConfig
+      (scheduler config conformance-268b75-missingref-config does not exist)
+    name: pool conformance-268b75-missingref-fail_open Accepted False with UnknownSchedulerConfig
+    passed: true
+  - detail: parents ResolvedRefs FALSE/UnknownSchedulerConfig (scheduler config conformance-268b75-missingref-config
+      does not exist)
+    name: pool conformance-268b75-missingref-fail_open ResolvedRefs False with UnknownSchedulerConfig
+    passed: true
+  - detail: 10 of 10 answered 503, stub requests before map[conformance-268b75-missingref-fail_open:0
+      conformance-268b75-missingref-unspecified:0] after map[conformance-268b75-missingref-fail_open:0
+      conformance-268b75-missingref-unspecified:0]
+    name: pool conformance-268b75-missingref-fail_open fails closed under FAILURE_MODE_FAIL_OPEN
+    passed: true
+  - detail: failure mode FAILURE_MODE_UNSPECIFIED, Accepted FALSE/UnknownSchedulerConfig
+      (scheduler config conformance-268b75-missingref-config does not exist)
+    name: pool conformance-268b75-missingref-unspecified Accepted False with UnknownSchedulerConfig
+    passed: true
+  - detail: parents ResolvedRefs FALSE/UnknownSchedulerConfig (scheduler config conformance-268b75-missingref-config
+      does not exist)
+    name: pool conformance-268b75-missingref-unspecified ResolvedRefs False with UnknownSchedulerConfig
+    passed: true
+  - detail: 10 of 10 answered 503, stub requests before map[conformance-268b75-missingref-fail_open:0
+      conformance-268b75-missingref-unspecified:0] after map[conformance-268b75-missingref-fail_open:0
+      conformance-268b75-missingref-unspecified:0]
+    name: pool conformance-268b75-missingref-unspecified fails closed under FAILURE_MODE_UNSPECIFIED
+    passed: true
+  - detail: Accepted TRUE/Accepted (the pool spec is valid) parents ResolvedRefs TRUE/ResolvedRefs
+      (scheduler config conformance-268b75-missingref-config loads)
+    name: pool conformance-268b75-missingref-fail_open Accepted once the config exists
+    passed: true
+  - detail: 10 of 10 requests served inside [127.0.0.1:33903] with a matching served
+      header, by address map[127.0.0.1:33903:10]
+    name: pool conformance-268b75-missingref-fail_open serves once the config exists
+    passed: true
+  - detail: Accepted TRUE/Accepted (the pool spec is valid) parents ResolvedRefs TRUE/ResolvedRefs
+      (scheduler config conformance-268b75-missingref-config loads)
+    name: pool conformance-268b75-missingref-unspecified Accepted once the config
+      exists
+    passed: true
+  - detail: 10 of 10 requests served inside [127.0.0.1:44567] with a matching served
+      header, by address map[127.0.0.1:44567:10]
+    name: pool conformance-268b75-missingref-unspecified serves once the config exists
+    passed: true
+  description: A pool naming an unknown scheduler config reports UnknownSchedulerConfig
+    and answers 503 under every failure mode
+  durationMs: 27
+  name: MissingSchedulerRef
+  outcome: passed
+- checks:
+  - detail: PutPool answered app_protocol APP_PROTOCOL_HTTP
+    name: created pool reports APP_PROTOCOL_HTTP
+    passed: true
+  - detail: GetPool answered app_protocol APP_PROTOCOL_HTTP
+    name: pool reads back APP_PROTOCOL_HTTP
+    passed: true
+  - detail: 10 of 10 requests served inside [127.0.0.1:42483] with a matching served
+      header, by address map[127.0.0.1:42483:10]
+    name: HTTP/1.1 only stub serves the default pool
+    passed: true
+  - detail: stub received requests by protocol map[HTTP/1.1:11]
+    name: default pool speaks HTTP/1.1
+    passed: true
+  - detail: 10 of 10 requests served inside [127.0.0.1:38891] with a matching served
+      header, by address map[127.0.0.1:38891:10]
+    name: h2c stub serves the H2C pool
+    passed: true
+  - detail: stub received requests by protocol map[HTTP/2.0:11]
+    name: H2C pool speaks HTTP/2 so the default is a choice
+    passed: true
+  description: A pool created without app_protocol reads back APP_PROTOCOL_HTTP and
+    reaches its endpoints over HTTP/1.1
+  durationMs: 18
+  name: AppProtocolDefaults
+  outcome: passed
+implementation:
+  name: nebu
+  version: v0.5.3-0.20261103054159-6598d5f3004d+dirty 6598d5f
+schema: conformance.nebu/v1
+summary:
+  failed: 0
+  passed: 8

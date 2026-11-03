@@ -15,27 +15,27 @@ type whole struct {
 	model  string
 	client Client
 	render func(req *Request, res *Result) ([]byte, error)
-	said   textGather
-	tools  toolGather
+	// Whether the protocol writes several choices, events for a later choice being refused otherwise
+	choices  bool
+	gathered answerGather
 }
 
 func (p *whole) Write(ev Event) error {
+	if !p.choices {
+		if err := oneChoice(ev, "client's"); err != nil {
+			return err
+		}
+	}
+	if p.gathered == nil {
+		p.gathered = answerGather{}
+	}
 	switch ev.Kind {
-	case Said, Thought:
-		p.said.add(ev)
-	case Called:
-		p.tools.add(ev)
+	case Said, Thought, Called:
+		p.gathered.add(ev)
 	case Failed:
 		p.client.Error(p.w, *ev.Failure)
 	case Stopped:
-		res := ev.Res
-		if res == nil {
-			res = &Result{}
-		}
-		out := *res
-		out.Model, out.Text, out.Thinking, out.ToolCalls = p.model, p.said.text.String(), p.said.thinking.String(), p.tools.list()
-		out.Stop = StopOf(res.Stop, len(out.ToolCalls))
-		data, err := p.render(p.req, &out)
+		data, err := p.render(p.req, p.gathered.result(ev.Res, p.model))
 		if err != nil {
 			return err
 		}

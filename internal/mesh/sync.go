@@ -1,292 +1,233 @@
 package mesh
 
 import (
+	"bytes"
 	"context"
-	"errors"
+	"crypto/sha256"
+	"crypto/x509"
 	"fmt"
-	"sync"
+	"slices"
+	"sort"
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/nickheyer/nebu/internal/db"
+	"github.com/nickheyer/nebu/pkg/config"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Syncs with every member every interval and whenever this node's record changes
-func (m *Manager) syncLoop(ctx context.Context) {
-	ticker := time.NewTicker(SyncInterval)
-	defer ticker.Stop()
-	m.syncAll(ctx)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		case <-m.wake:
-		}
-		if !m.Joined() {
-			continue
-		}
-		m.syncAll(ctx)
-	}
-}
-
-// Syncs with every member at once, gone members on a slower cadence
-func (m *Manager) syncAll(ctx context.Context) {
+// Syncs with one member, sending the parts it lacks and taking the parts this node lacks of its record
+func (m *Manager) syncWith(ctx context.Context, id string) error {
 	m.mu.Lock()
-	var due []string
-	now := time.Now()
-	for id, mb := range m.members {
-		if mb.rec.GetState() == v1.NodeState_NODE_STATE_GONE && now.Sub(mb.lastTried) < goneRetry {
-			continue
-		}
-		mb.lastTried = now
-		due = append(due, id)
+	mb, ok := m.members[id]
+	if m.mesh == nil || m.creds == nil {
+		m.mu.Unlock()
+		return ErrNoMesh
 	}
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("%w %q", ErrUnknownNode, id)
+	}
+	address, held, sent, seen := mb.rec.GetAddress(), mb.held(), mb.sent, mb.digest
+	mb.lastTried = time.Now()
+	// A spoke exchanges records with its hubs alone, any other sync carrying membership and a session only
+	bare := m.topology() == config.MeshTopologySpoke && !slices.Contains(m.hubsLocked(), id)
 	m.mu.Unlock()
-	if len(due) == 0 {
-		return
+	if address == "" {
+		return fmt.Errorf("%w: %s has no mesh address yet", ErrMesh, id)
 	}
-	rec := m.Record()
-	var formations []*v1.Formation
-	if m.Formations != nil {
-		formations = m.Formations.Conducted()
+	node, formations, admissions := m.outgoing(sent)
+	mode := m.syncMode()
+	if mode == config.MeshSyncPull || bare {
+		// A pull carries nothing of this node's record, the callee learning it from the pushes of others
+		node, formations, admissions = &v1.Node{Id: m.identity.ID}, nil, nil
 	}
-	m.mu.Lock()
-	members := m.memberListLocked()
-	admissions := m.admissionsForSyncLocked()
-	m.mu.Unlock()
-	var wg sync.WaitGroup
-	for _, id := range due {
-		wg.Add(1)
-		go func(id string) {
-			defer wg.Done()
-			m.syncOne(ctx, id, rec, members, formations, admissions)
-		}(id)
-	}
-	wg.Wait()
-}
-
-// One sync with one member: our record, member list, formations, and admissions for theirs
-func (m *Manager) syncOne(ctx context.Context, id string, rec *v1.Node, members []*v1.Member, formations []*v1.Formation, admissions []*v1.Admission) {
-	cl, err := m.Client(ctx, id)
-	if err != nil {
-		m.missed(id, err)
-		return
+	state, digest := m.meshState()
+	req := &v1.SyncRequest{Node: node, Formations: formations, Admissions: admissions, Members: m.memberList(), DeltaBase: held, MeshDigest: digest}
+	if !bytes.Equal(digest, seen) {
+		req.Mesh = state
 	}
 	cctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
-	resp, err := cl.Mesh.Sync(cctx, connect.NewRequest(&v1.SyncRequest{Node: rec, Members: members, Formations: formations, Admissions: admissions}))
+	resp, err := m.peerClient(id, address).Sync(cctx, connect.NewRequest(req))
 	if err != nil {
-		if connect.CodeOf(err) == connect.CodeUnauthenticated || connect.CodeOf(err) == connect.CodePermissionDenied {
-			m.dropSend(id)
-		}
-		m.missed(id, err)
-		return
+		m.Log.Debug("mesh sync missed", "node", id, "err", err)
+		return err
 	}
-	if resp.Msg.GetExpiresAt() != nil {
-		m.mu.Lock()
-		if s := m.sessions[id]; s != nil {
-			s.sendExpires = resp.Msg.GetExpiresAt().AsTime()
-		}
-		m.mu.Unlock()
-	}
-	if node := resp.Msg.GetNode(); node != nil && node.GetId() == id {
-		m.absorb(node, resp.Msg.GetMembers(), true)
-	} else {
-		m.absorb(nil, resp.Msg.GetMembers(), false)
-		m.reached(id)
-	}
-	// An answer from a member forgotten meanwhile changes nothing more
-	if _, ok := m.Member(id); !ok {
-		return
-	}
-	if m.Formations != nil {
-		m.Formations.Merge(id, resp.Msg.GetFormations())
-	}
-	m.mergeAdmissions(resp.Msg.GetAdmissions())
-}
-
-// Counts a missed sync and moves the member through unreachable to gone
-func (m *Manager) missed(id string, err error) {
+	out := resp.Msg
 	m.mu.Lock()
-	mb, ok := m.members[id]
-	if !ok {
-		m.mu.Unlock()
-		return
+	if mb, ok := m.members[id]; ok {
+		mb.sent, mb.digest = out.GetHeld(), out.GetMeshDigest()
 	}
-	mb.missed++
-	before := mb.rec.GetState()
-	seen := mb.lastTried
-	if mb.rec.GetSeenAt() != nil {
-		seen = mb.rec.GetSeenAt().AsTime()
+	if s := m.sessions[id]; s != nil || out.GetSessionToken() != "" {
+		if s == nil {
+			s = &session{peer: id, granted: time.Now()}
+			m.sessions[id] = s
+		}
+		s.send, s.sendExpires = out.GetSessionToken(), out.GetExpiresAt().AsTime()
 	}
-	switch {
-	case time.Since(seen) > GoneAfter:
-		mb.rec.State = v1.NodeState_NODE_STATE_GONE
-	case mb.missed >= UnreachableAfter:
-		mb.rec.State = v1.NodeState_NODE_STATE_UNREACHABLE
-	}
-	after := mb.rec.GetState()
-	count := mb.missed
-	rec := proto.Clone(mb.rec).(*v1.Node)
 	m.mu.Unlock()
-	if after == before {
-		m.Log.Debug("mesh sync missed", "node", id, "missed", count, "err", err)
-		return
+	if err := m.persistSession(id); err != nil {
+		m.Log.Warn("session write failed", "peer", id, "err", err)
 	}
-	m.Log.Warn("mesh member "+stateWord(after), "node", id, "name", rec.GetName(), "err", err)
-	m.persist(id)
-	m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_UPDATED, id, rec)
-	if m.Formations != nil {
-		m.Formations.MemberState(id, after)
+	if mode != config.MeshSyncPush && !bare {
+		m.take(id, nil, out.GetNode(), out.GetFormations(), out.GetAdmissions())
 	}
+	m.mergeMembers(out.GetMembers())
+	m.mergeMeshState(out.GetMesh())
+	return nil
 }
 
-// Marks a member reached without a new record
-func (m *Manager) reached(id string) {
+// Answers a member's sync, taking its record parts, members and mesh state and returning this node's with a renewed bearer
+func (m *Manager) sync(ctx context.Context, c caller, req *v1.SyncRequest) (*v1.SyncResponse, error) {
+	if !m.Joined() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, ErrNoMesh)
+	}
+	if req.GetNode().GetId() != c.id {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%w: a sync carries the caller's own record", ErrMesh))
+	}
+	if m.isRevoked(serialOf(c.cert)) {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: certificate %s is revoked", ErrMesh, serialOf(c.cert)))
+	}
+	held := m.take(c.id, c.cert, req.GetNode(), req.GetFormations(), req.GetAdmissions())
+	m.mergeMembers(req.GetMembers())
+	m.mergeMeshState(req.GetMesh())
+	token, expires, err := m.renewSession(c.id)
+	if err != nil {
+		return nil, err
+	}
+	node, formations, admissions := m.outgoing(req.GetDeltaBase())
+	state, digest := m.meshState()
+	resp := &v1.SyncResponse{Node: node, Formations: formations, Admissions: admissions, Members: m.memberList(), SessionToken: token, ExpiresAt: timestamppb.New(expires), Held: held, MeshDigest: digest}
+	if !bytes.Equal(digest, req.GetMeshDigest()) {
+		resp.Mesh = state
+	}
+	return resp, nil
+}
+
+// Takes a member's own record copy, its certificate admitting it, and returns the sequence held whole
+func (m *Manager) take(id string, cert *x509.Certificate, in *v1.Node, formations []*v1.Formation, admissions []*v1.Admission) uint64 {
+	if in.GetId() != id || id == m.identity.ID {
+		return 0
+	}
 	m.mu.Lock()
-	mb, ok := m.members[id]
-	if !ok {
+	if m.mesh == nil {
 		m.mu.Unlock()
-		return
+		return 0
 	}
-	before := mb.rec.GetState()
-	mb.missed = 0
-	mb.rec.State = v1.NodeState_NODE_STATE_READY
-	mb.rec.SeenAt = timestamppb.Now()
-	rec := proto.Clone(mb.rec).(*v1.Node)
-	m.mu.Unlock()
-	if before != v1.NodeState_NODE_STATE_READY {
-		m.persist(id)
-		m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_UPDATED, id, rec)
-		if m.Formations != nil {
-			m.Formations.MemberState(id, v1.NodeState_NODE_STATE_READY)
-		}
-	}
-}
-
-func stateWord(s v1.NodeState) string {
-	switch s {
-	case v1.NodeState_NODE_STATE_READY:
-		return "ready"
-	case v1.NodeState_NODE_STATE_UNREACHABLE:
-		return "unreachable"
-	case v1.NodeState_NODE_STATE_GONE:
-		return "gone"
-	}
-	return "unknown"
-}
-
-// Takes a member's record and the members it knows. A record that came from the member itself
-// marks it ready; one relayed by gossip only fills what was missing.
-func (m *Manager) absorb(rec *v1.Node, members []*v1.Member, direct bool) {
-	if rec != nil && rec.GetId() != "" && rec.GetId() != m.identity.ID {
-		m.mergeRecord(rec, direct)
-	}
-	m.mergeMembers(members)
-}
-
-// Keeps the higher sequence of a member's record, publishing the change
-func (m *Manager) mergeRecord(rec *v1.Node, direct bool) {
-	rec = proto.Clone(rec).(*v1.Node)
-	rec.Self = false
-	m.mu.Lock()
-	mb, known := m.members[rec.GetId()]
-	// A record from a node that is no member here and holds no session is not taken: a node enters
-	// by handshake alone, and a forgotten one is refused there
-	if m.mesh == nil || (!known && m.sessions[rec.GetId()] == nil) {
+	mb, known := m.members[id]
+	if !known && cert == nil {
+		// An answer from a member dropped while the sync was out brings nothing back
 		m.mu.Unlock()
-		return
+		return 0
 	}
-	action := v1.EventAction_EVENT_ACTION_UPDATED
-	stateBefore := v1.NodeState_NODE_STATE_UNSPECIFIED
-	var moved string
-	if known {
-		stateBefore = mb.rec.GetState()
-		if !mb.sketch && rec.GetSequence() < mb.rec.GetSequence() {
-			// An older copy: keep ours, but a direct contact still proves the member is up.
-			if direct {
-				mb.missed = 0
-				mb.rec.State = v1.NodeState_NODE_STATE_READY
-				mb.rec.SeenAt = timestamppb.Now()
-			}
-			out := proto.Clone(mb.rec).(*v1.Node)
-			m.mu.Unlock()
-			if direct && stateBefore != v1.NodeState_NODE_STATE_READY {
-				m.persist(out.GetId())
-				m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, action, out.GetId(), out)
-				if m.Formations != nil {
-					m.Formations.MemberState(out.GetId(), v1.NodeState_NODE_STATE_READY)
-				}
-			}
-			return
-		}
-		if direct {
-			rec.State = v1.NodeState_NODE_STATE_READY
-			rec.SeenAt = timestamppb.Now()
-			mb.missed = 0
-		} else {
-			rec.State = mb.rec.GetState()
-			rec.SeenAt = mb.rec.GetSeenAt()
-		}
-		if old := mb.rec.GetAddress(); old != "" && old != rec.GetAddress() {
-			moved = old
-		}
-		mb.rec, mb.sketch = rec, rec.GetProfile() == nil && !direct
-	} else {
-		action = v1.EventAction_EVENT_ACTION_CREATED
-		if direct {
-			rec.State = v1.NodeState_NODE_STATE_READY
-			rec.SeenAt = timestamppb.Now()
-		}
-		m.members[rec.GetId()] = &member{rec: rec, sketch: rec.GetProfile() == nil && !direct}
+	if !known {
+		mb = &member{rec: &v1.Node{Id: id}, sketch: true}
+		m.members[id] = mb
 	}
-	relinked := m.reclassifyLocked(rec.GetId())
-	out := proto.Clone(rec).(*v1.Node)
+	stateBefore := mb.rec.GetState()
+	oldAddress := mb.rec.GetAddress()
+	now := time.Now()
+	mb.direct, mb.seenAt = now, now
+	mb.rec.State, mb.rec.SeenAt = v1.NodeState_NODE_STATE_READY, timestamppb.New(now)
+	held, changed := m.applyRecordLocked(mb, in)
+	if cert != nil {
+		mb.rec.Certificate = cert.Raw
+	}
+	if serial := recordSerial(mb.rec); serial != "" {
+		mb.serial = serial
+	}
+	relinked := m.reclassifyLocked(id)
+	out := proto.Clone(mb.rec).(*v1.Node)
 	m.mu.Unlock()
-	if moved != "" {
-		// The member moved: the transport to its old address holds connections to nothing
-		m.dropTransports(moved)
+	if oldAddress != "" && oldAddress != out.GetAddress() {
+		m.dropTransports(oldAddress)
 	}
 	if relinked {
-		m.persistLink(out.GetId())
+		m.persistLink(id)
 		m.bump()
 	}
-	m.persist(out.GetId())
-	m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, action, out.GetId(), out)
-	if m.Formations != nil && out.GetState() != stateBefore {
-		m.Formations.MemberState(out.GetId(), out.GetState())
+	if len(changed) > 0 || !known || stateBefore != v1.NodeState_NODE_STATE_READY {
+		m.persist(id)
+		action := v1.EventAction_EVENT_ACTION_UPDATED
+		if !known {
+			action = v1.EventAction_EVENT_ACTION_CREATED
+		}
+		m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, action, id, out)
 	}
-	if action == v1.EventAction_EVENT_ACTION_CREATED {
-		m.markJoined(out.GetId())
+	if m.Formations != nil && stateBefore != v1.NodeState_NODE_STATE_READY {
+		m.Formations.MemberState(id, v1.NodeState_NODE_STATE_READY)
+	}
+	for _, p := range changed {
+		switch p {
+		case v1.RecordPart_RECORD_PART_FORMATIONS:
+			if m.Formations != nil {
+				m.Formations.Merge(id, formations)
+			}
+		case v1.RecordPart_RECORD_PART_ADMISSIONS:
+			m.mergeAdmissions(admissions)
+		}
+	}
+	if !known {
+		m.Log.Info("mesh member met", "node", id, "name", out.GetName(), "address", out.GetAddress())
+		m.markJoined(id)
 		m.publishStatus()
 	}
+	if !known || stateBefore != v1.NodeState_NODE_STATE_READY || touchesImports(changed) {
+		m.importFrom(context.Background(), id)
+	}
+	return held
 }
 
-// Adds members gossip names that this node has not met, so one address reaches the whole mesh
+// Whether changed parts touch what this node imports from the member
+func touchesImports(changed []v1.RecordPart) bool {
+	for _, p := range changed {
+		if p == v1.RecordPart_RECORD_PART_POOLS || p == v1.RecordPart_RECORD_PART_ROUTES || p == v1.RecordPart_RECORD_PART_OBJECTIVES {
+			return true
+		}
+	}
+	return false
+}
+
+// Adds members gossip names that this node has not met and raises the heartbeats and sequences it heard
 func (m *Manager) mergeMembers(list []*v1.Member) {
 	var created []*v1.Node
+	now := time.Now()
 	m.mu.Lock()
 	if m.mesh == nil {
 		m.mu.Unlock()
 		return
 	}
 	for _, mem := range list {
-		if mem.GetId() == "" || mem.GetId() == m.identity.ID || m.forgottenLocked(mem.GetId()) {
+		if mem.GetId() == "" || mem.GetId() == m.identity.ID {
 			continue
 		}
 		mb, known := m.members[mem.GetId()]
-		if known {
-			if mb.sketch && mem.GetAddress() != "" && mb.rec.GetAddress() != mem.GetAddress() {
-				mb.rec.Address, mb.rec.Addresses, mb.rec.Tls, mb.rec.TlsFingerprint = mem.GetAddress(), mem.GetAddresses(), mem.GetTls(), mem.GetTlsFingerprint()
+		if !known {
+			// A member is learned from gossip only under a certificate serial that is not revoked
+			if mem.GetSerial() == "" || m.revoked[mem.GetSerial()] != nil {
+				continue
 			}
+			rec := &v1.Node{Id: mem.GetId(), Name: mem.GetName(), Address: mem.GetAddress(), Addresses: mem.GetAddresses(), State: v1.NodeState_NODE_STATE_READY, SeenAt: timestamppb.New(now)}
+			mb = &member{rec: rec, sketch: true, seenAt: now, heartbeat: mem.GetHeartbeat(), advertised: mem.GetSequence(), serial: mem.GetSerial()}
+			m.members[mem.GetId()] = mb
+			created = append(created, proto.Clone(rec).(*v1.Node))
 			continue
 		}
-		rec := &v1.Node{Id: mem.GetId(), Name: mem.GetName(), Address: mem.GetAddress(), Addresses: mem.GetAddresses(), Tls: mem.GetTls(), TlsFingerprint: mem.GetTlsFingerprint()}
-		m.members[mem.GetId()] = &member{rec: rec, sketch: true}
-		created = append(created, proto.Clone(rec).(*v1.Node))
+		if mb.serial == "" && m.revoked[mem.GetSerial()] == nil {
+			mb.serial = mem.GetSerial()
+		}
+		if mem.GetHeartbeat() > mb.heartbeat {
+			mb.heartbeat, mb.seenAt = mem.GetHeartbeat(), now
+		}
+		if mem.GetSequence() > mb.advertised {
+			mb.advertised = mem.GetSequence()
+		}
+		if mb.sketch && mem.GetAddress() != "" && mb.rec.GetAddress() != mem.GetAddress() {
+			mb.rec.Address, mb.rec.Addresses, mb.rec.Name = mem.GetAddress(), mem.GetAddresses(), mem.GetName()
+		}
 	}
 	m.mu.Unlock()
 	for _, rec := range created {
@@ -297,50 +238,206 @@ func (m *Manager) mergeMembers(list []*v1.Member) {
 	}
 	if len(created) > 0 {
 		m.publishStatus()
-		select {
-		case m.wake <- struct{}{}:
-		default:
-		}
 	}
 }
 
-// Whether a node was forgotten here and stays refused
-func (m *Manager) forgottenLocked(id string) bool {
-	_, ok := m.forgotten[id]
-	return ok
-}
-
-// Lets a forgotten node back: what an invite or an admission of it means, and what rotating the
-// secret does for every forgotten node, since none of them holds the new one
-func (m *Manager) readmit(id string) {
-	m.rows.Lock()
-	defer m.rows.Unlock()
+// This node and every member as gossip carries them, with heartbeats and the serials that keep revoked members out
+func (m *Manager) memberList() []*v1.Member {
+	name := m.name()
 	m.mu.Lock()
-	_, was := m.forgotten[id]
-	delete(m.forgotten, id)
+	defer m.mu.Unlock()
+	self := &v1.Member{Id: m.identity.ID, Name: name, Address: m.advertiseLocked(), Sequence: m.seq, Heartbeat: m.heartbeat}
+	if m.creds != nil {
+		self.Serial = serialOf(m.creds.leaf)
+	}
+	out := []*v1.Member{self}
+	for _, mb := range m.members {
+		r := mb.rec
+		out = append(out, &v1.Member{Id: r.GetId(), Name: r.GetName(), Addresses: r.GetAddresses(), Address: r.GetAddress(), Sequence: max(mb.held(), mb.advertised), Heartbeat: mb.heartbeat, Serial: mb.serial})
+	}
+	return out
+}
+
+// The serial of the certificate a record carries, empty when it carries none
+func recordSerial(rec *v1.Node) string {
+	if len(rec.GetCertificate()) == 0 {
+		return ""
+	}
+	cert, err := x509.ParseCertificate(rec.GetCertificate())
+	if err != nil {
+		return ""
+	}
+	return serialOf(cert)
+}
+
+// The mesh state gossip carries, issuer and revocations under the current authority, with its digest
+func (m *Manager) meshState() (*v1.Mesh, []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mesh == nil || m.creds == nil {
+		return nil, nil
+	}
+	state := &v1.Mesh{Id: m.mesh.ID, Issuer: m.mesh.Issuer, IssuerEpoch: m.mesh.IssuerEpoch, CaFingerprint: m.creds.caFingerprint(), Revocations: m.revocationsLocked()}
+	h := sha256.New()
+	fmt.Fprintf(h, "%s|%s|%d", state.GetCaFingerprint(), state.GetIssuer(), state.GetIssuerEpoch())
+	for _, r := range state.GetRevocations() {
+		fmt.Fprintf(h, "|%s", r.GetSerial())
+	}
+	return state, h.Sum(nil)
+}
+
+// Revocations held, by serial
+func (m *Manager) revocationsLocked() []*v1.Revocation {
+	out := make([]*v1.Revocation, 0, len(m.revoked))
+	for _, r := range m.revoked {
+		out = append(out, proto.Clone(r).(*v1.Revocation))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].GetSerial() < out[j].GetSerial() })
+	return out
+}
+
+// Whether a serial is revoked
+func (m *Manager) isRevoked(serial string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.revoked[serial] != nil
+}
+
+// Takes another member's mesh state under the same authority, the higher issuer epoch winning and revocations joined
+func (m *Manager) mergeMeshState(state *v1.Mesh) {
+	if state == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.mesh == nil || m.creds == nil || state.GetId() != m.mesh.ID || state.GetCaFingerprint() != m.creds.caFingerprint() {
+		m.mu.Unlock()
+		return
+	}
+	issuerMoved := state.GetIssuerEpoch() > m.mesh.IssuerEpoch
 	m.mu.Unlock()
-	if was {
-		if err := m.DB.DeleteMember(context.Background(), id); err != nil {
-			m.Log.Warn("forgotten row not dropped", "node", id, "err", err)
+	if issuerMoved {
+		m.followIssuer(state.GetIssuer(), state.GetIssuerEpoch())
+	}
+	for _, r := range state.GetRevocations() {
+		if _, err := m.revoke(r); err != nil {
+			m.Log.Error("revocation from gossip not held, the next exchange carries it again", "serial", r.GetSerial(), "err", err)
 		}
 	}
 }
 
-// Clears the forgotten set, rows included
-func (m *Manager) readmitAll() {
-	m.rows.Lock()
-	defer m.rows.Unlock()
-	m.mu.Lock()
-	ids := make([]string, 0, len(m.forgotten))
-	for id := range m.forgotten {
-		ids = append(ids, id)
+// Records a revocation and drops the member it removes, a renewal leaving its node a member, true when new and an error when it could not be written
+func (m *Manager) revoke(r *v1.Revocation) (bool, error) {
+	if r.GetSerial() == "" || time.Now().After(r.GetNotAfter().AsTime()) {
+		return false, nil
 	}
-	m.forgotten = map[string]time.Time{}
+	m.rows.Lock()
+	m.mu.Lock()
+	if m.mesh == nil || m.revoked[r.GetSerial()] != nil {
+		m.mu.Unlock()
+		m.rows.Unlock()
+		return false, nil
+	}
 	m.mu.Unlock()
-	for _, id := range ids {
-		if err := m.DB.DeleteMember(context.Background(), id); err != nil {
-			m.Log.Warn("forgotten row not dropped", "node", id, "err", err)
+	if err := m.DB.PutRevocation(context.Background(), r); err != nil {
+		m.rows.Unlock()
+		return false, fmt.Errorf("revocation of %s not written: %w", r.GetSerial(), err)
+	}
+	m.mu.Lock()
+	m.revoked[r.GetSerial()] = proto.Clone(r).(*v1.Revocation)
+	var drop string
+	for id, mb := range m.members {
+		if mb.serial == r.GetSerial() && !r.GetRenewed() {
+			drop = id
 		}
+	}
+	m.mu.Unlock()
+	m.rows.Unlock()
+	m.Log.Info("mesh certificate revoked", "serial", r.GetSerial(), "node", r.GetNodeId())
+	if drop != "" {
+		m.drop(drop)
+	}
+	m.wakeLoop()
+	m.publishStatus()
+	return true, nil
+}
+
+// Revokes the certificate a member holds, dropping it here and on every member the revocation reaches
+func (m *Manager) revokeMember(id string) error {
+	m.mu.Lock()
+	mb, ok := m.members[id]
+	var cert []byte
+	var serial string
+	if ok {
+		cert, serial = mb.rec.GetCertificate(), mb.serial
+	}
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("%w %q", ErrUnknownNode, id)
+	}
+	r := &v1.Revocation{Serial: serial, NodeId: id, NotAfter: timestamppb.New(time.Now().Add(CertificateLifetime)), RevokedAt: timestamppb.Now()}
+	if parsed, err := x509.ParseCertificate(cert); err == nil && serialOf(parsed) == serial {
+		r = revocationOf(parsed, id)
+	}
+	if serial == "" {
+		m.drop(id)
+		return nil
+	}
+	held, err := m.revoke(r)
+	if err != nil {
+		return err
+	}
+	if !held {
+		m.drop(id)
+	}
+	return nil
+}
+
+// The revocation of one certificate whose node is removed
+func revocationOf(cert *x509.Certificate, nodeID string) *v1.Revocation {
+	return &v1.Revocation{Serial: serialOf(cert), NodeId: nodeID, NotAfter: timestamppb.New(cert.NotAfter), RevokedAt: timestamppb.Now()}
+}
+
+// The revocation of a certificate a renewal replaced, its node staying a member
+func renewalOf(cert *x509.Certificate, nodeID string) *v1.Revocation {
+	r := revocationOf(cert, nodeID)
+	r.Renewed = true
+	return r
+}
+
+// Drops a member with its links, session, imports and formation copies
+func (m *Manager) drop(id string) {
+	m.rows.Lock()
+	m.mu.Lock()
+	mb, ok := m.members[id]
+	delete(m.members, id)
+	if s := m.sessions[id]; s != nil {
+		delete(m.accept, s.accept)
+		delete(m.sessions, id)
+	}
+	delete(m.links, id)
+	m.mu.Unlock()
+	ctx := context.Background()
+	if err := m.DB.DeleteMember(ctx, id); err != nil {
+		m.Log.Warn("member delete failed", "node", id, "err", err)
+	}
+	if err := m.DB.DeleteSession(ctx, id); err != nil {
+		m.Log.Warn("session delete failed", "node", id, "err", err)
+	}
+	if err := m.DB.DeleteLinks(ctx, id); err != nil {
+		m.Log.Warn("links delete failed", "node", id, "err", err)
+	}
+	m.rows.Unlock()
+	if mb.GetAddress() != "" {
+		m.dropTransports(mb.GetAddress())
+	}
+	m.dropImports(ctx, id)
+	if ok {
+		m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_DELETED, id, mb.rec)
+		if m.Formations != nil {
+			m.Formations.Forget(id)
+		}
+		m.bump()
+		m.publishStatus()
 	}
 }
 
@@ -362,106 +459,67 @@ func (m *Manager) persist(id string) {
 	}
 }
 
-// This node and every member as gossip carries them
-func (m *Manager) memberListLocked() []*v1.Member {
-	fingerprint, hasTLS := m.servedCertLocked()
-	out := []*v1.Member{{Id: m.identity.ID, Name: m.name(), Address: m.advertiseLocked(), TlsFingerprint: fingerprint, Tls: hasTLS, State: v1.NodeState_NODE_STATE_READY, SeenAt: timestamppb.Now(), Sequence: m.seq}}
-	for _, mb := range m.members {
-		r := mb.rec
-		out = append(out, &v1.Member{Id: r.GetId(), Name: r.GetName(), Addresses: r.GetAddresses(), Address: r.GetAddress(), TlsFingerprint: r.GetTlsFingerprint(), State: r.GetState(), SeenAt: r.GetSeenAt(), Sequence: r.GetSequence(), Tls: r.GetTls()})
-	}
-	return out
-}
-
-// Answers a member's sync: takes its record, members, and formations, renews its session,
-// and returns ours
-func (m *Manager) Sync(ctx context.Context, peer string, req *v1.SyncRequest) (*v1.SyncResponse, error) {
-	if !m.Joined() {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, ErrNoMesh)
-	}
-	// A sync from a node that is not a member here, one forgotten since it handshook, changes
-	// nothing: neither its record nor the members it names are taken
-	if _, ok := m.Member(peer); !ok {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: %s is not a member here, handshake again", ErrMesh, peer))
-	}
-	if node := req.GetNode(); node != nil && node.GetId() == peer {
-		m.absorb(node, req.GetMembers(), true)
-	} else {
-		m.absorb(nil, req.GetMembers(), false)
-		m.reached(peer)
-	}
-	if m.Formations != nil {
-		m.Formations.Merge(peer, req.GetFormations())
-	}
-	m.mergeAdmissions(req.GetAdmissions())
-	expires := m.renew(peer)
-	var formations []*v1.Formation
-	if m.Formations != nil {
-		formations = m.Formations.Conducted()
-	}
+// Mints or extends the bearer a member sends this node, returning it with its expiry
+func (m *Manager) renewSession(peer string) (string, time.Time, error) {
 	m.mu.Lock()
-	members := m.memberListLocked()
-	admissions := m.admissionsForSyncLocked()
-	m.mu.Unlock()
-	return &v1.SyncResponse{Node: m.Record(), Members: members, Formations: formations, ExpiresAt: timestamppb.New(expires), Admissions: admissions}, nil
-}
-
-// Takes a member's departure
-func (m *Manager) Bye(peer string) {
-	m.forget(peer)
-	m.Log.Info("mesh member left", "node", peer)
-}
-
-// Drops a member with its links and session
-func (m *Manager) forget(id string) {
-	m.rows.Lock()
-	m.mu.Lock()
-	now := time.Now()
-	m.forgotten[id] = now
-	mb, ok := m.members[id]
-	delete(m.members, id)
-	if s := m.sessions[id]; s != nil {
-		delete(m.accept, s.accept)
-		delete(m.sessions, id)
+	s := m.sessions[peer]
+	if s == nil {
+		s = &session{peer: peer}
+		m.sessions[peer] = s
 	}
-	delete(m.links, id)
-	m.mu.Unlock()
-	ctx := context.Background()
-	// The row stays as the refusal, with the name and address the node was known by
-	row := &v1.Node{Id: id, Name: mb.GetName(), Address: mb.GetAddress(), State: v1.NodeState_NODE_STATE_FORGOTTEN, SeenAt: timestamppb.New(now)}
-	if err := m.DB.PutMember(ctx, row); err != nil {
-		m.Log.Warn("forgotten row not written", "node", id, "err", err)
-	}
-	m.DB.DeleteSession(ctx, id)
-	m.DB.DeleteLinks(ctx, id)
-	m.rows.Unlock()
-	if mb.GetAddress() != "" {
-		m.dropTransports(mb.GetAddress())
-	}
-	if ok {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_DELETED, id, mb.rec)
-		if m.Formations != nil {
-			m.Formations.Forget(id)
+	if s.accept == "" || time.Now().After(s.expires) {
+		token, err := randomToken()
+		if err != nil {
+			m.mu.Unlock()
+			return "", time.Time{}, err
 		}
-		m.bump()
-		m.publishStatus()
+		delete(m.accept, s.accept)
+		s.accept, s.granted = token, time.Now()
+		m.accept[token] = peer
 	}
+	s.expires = time.Now().Add(SessionTTL)
+	token, expires := s.accept, s.expires
+	m.mu.Unlock()
+	if err := m.persistSession(peer); err != nil {
+		m.Log.Warn("session write failed", "peer", peer, "err", err)
+	}
+	return token, expires, nil
 }
 
-// Takes a new secret during rotation
-func (m *Manager) Rekey(secret []byte) error {
-	if len(secret) != 32 {
-		return connect.NewError(connect.CodeInvalidArgument, errors.New("a mesh secret holds 32 bytes"))
-	}
+// Writes a peer's session as it stands now, or drops its row once the session is gone
+func (m *Manager) persistSession(peer string) error {
 	m.rows.Lock()
 	defer m.rows.Unlock()
 	m.mu.Lock()
-	if m.mesh == nil {
-		m.mu.Unlock()
-		return connect.NewError(connect.CodeFailedPrecondition, ErrNoMesh)
+	var row *db.SessionRow
+	if s := m.sessions[peer]; s != nil {
+		row = s.row()
 	}
-	m.mesh.Secret = secret
-	row := *m.mesh
 	m.mu.Unlock()
-	return m.DB.PutMesh(context.Background(), &row)
+	if row == nil {
+		return m.DB.DeleteSession(context.Background(), peer)
+	}
+	return m.DB.PutSession(context.Background(), row)
+}
+
+// Takes a member's departure, revoking the certificate it left with
+func (m *Manager) bye(c caller) error {
+	held, err := m.revoke(revocationOf(c.cert, c.id))
+	if err != nil {
+		return err
+	}
+	if !held {
+		m.drop(c.id)
+	}
+	m.Log.Info("mesh member left", "node", c.id)
+	return nil
+}
+
+// The session as stored, expiring with the later of the two tokens
+func (s *session) row() *db.SessionRow {
+	expires := s.expires
+	if s.sendExpires.After(expires) {
+		expires = s.sendExpires
+	}
+	return &db.SessionRow{PeerID: s.peer, Accept: s.accept, Send: s.send, Expires: expires, Granted: s.granted}
 }

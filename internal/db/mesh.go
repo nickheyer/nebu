@@ -43,23 +43,28 @@ func (d *DB) PutIdentity(ctx context.Context, id *Identity) error {
 // The mesh this node belongs to
 type MeshRow struct {
 	ID, Name      string
-	Secret        []byte
-	TLS           bool
 	CACertificate []byte
-	CAKey         []byte
-	Certificate   []byte
-	CreatedAt     time.Time
-	JoinedAt      time.Time
+	// The authority's PKCS 8 key, held by the issuer alone
+	CAKey []byte
+	// This node's certificate and its PKCS 8 key
+	Certificate []byte
+	Key         []byte
+	Issuer      string
+	IssuerEpoch uint64
+	CreatedAt   time.Time
+	JoinedAt    time.Time
 }
 
 // Reads the mesh row, ErrNotFound when the node belongs to none
 func (d *DB) GetMesh(ctx context.Context) (*MeshRow, error) {
-	items, err := list(ctx, d, `SELECT id, name, secret, tls, ca_certificate, ca_key, certificate, created_at, joined_at FROM mesh LIMIT 1`, func(rows *sql.Rows) (*MeshRow, error) {
+	items, err := list(ctx, d, `SELECT id, name, ca_certificate, ca_key, certificate, key, issuer, issuer_epoch, created_at, joined_at FROM mesh LIMIT 1`, func(rows *sql.Rows) (*MeshRow, error) {
 		m := &MeshRow{}
 		var created, joined string
-		if err := rows.Scan(&m.ID, &m.Name, &m.Secret, (*flag)(&m.TLS), &m.CACertificate, &m.CAKey, &m.Certificate, &created, &joined); err != nil {
+		var epoch int64
+		if err := rows.Scan(&m.ID, &m.Name, &m.CACertificate, &m.CAKey, &m.Certificate, &m.Key, &m.Issuer, &epoch, &created, &joined); err != nil {
 			return nil, err
 		}
+		m.IssuerEpoch = uint64(epoch)
 		m.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 		m.JoinedAt, _ = time.Parse(time.RFC3339Nano, joined)
 		return m, nil
@@ -73,8 +78,8 @@ func (d *DB) PutMesh(ctx context.Context, m *MeshRow) error {
 		if err := exec(`DELETE FROM mesh`); err != nil {
 			return err
 		}
-		return exec(`INSERT INTO mesh (id, name, secret, tls, ca_certificate, ca_key, certificate, created_at, joined_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			m.ID, m.Name, m.Secret, boolCol(m.TLS), blobCol(m.CACertificate), blobCol(m.CAKey), blobCol(m.Certificate), stamp(m.CreatedAt), stamp(m.JoinedAt))
+		return exec(`INSERT INTO mesh (id, name, ca_certificate, ca_key, certificate, key, issuer, issuer_epoch, created_at, joined_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			m.ID, m.Name, blobCol(m.CACertificate), blobCol(m.CAKey), blobCol(m.Certificate), blobCol(m.Key), m.Issuer, int64(m.IssuerEpoch), stamp(m.CreatedAt), stamp(m.JoinedAt))
 	})
 }
 
@@ -86,16 +91,55 @@ func blobCol(b []byte) []byte {
 	return b
 }
 
-// Forgets the mesh with its members, sessions, and links
+// Forgets the mesh with its members, sessions, links, admissions, revocations and grants
 func (d *DB) DeleteMesh(ctx context.Context) error {
 	return d.tx(ctx, func(exec execFn) error {
-		for _, table := range []string{"mesh", "mesh_members", "mesh_sessions", "mesh_links", "mesh_admissions"} {
+		for _, table := range []string{"mesh", "mesh_members", "mesh_sessions", "mesh_links", "mesh_admissions", "mesh_revocations", "mesh_grants"} {
 			if err := exec(`DELETE FROM ` + table); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+// Writes one revoked certificate serial
+func (d *DB) PutRevocation(ctx context.Context, r *v1.Revocation) error {
+	_, err := d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO mesh_revocations (serial, node_id, not_after, revoked_at) VALUES (?, ?, ?, ?)`,
+		r.GetSerial(), r.GetNodeId(), stamp(r.GetNotAfter().AsTime()), stamp(r.GetRevokedAt().AsTime()))
+	return err
+}
+
+// Lists every revoked serial
+func (d *DB) ListRevocations(ctx context.Context) ([]*v1.Revocation, error) {
+	return list(ctx, d, `SELECT serial, node_id, not_after, revoked_at FROM mesh_revocations ORDER BY serial`, func(rows *sql.Rows) (*v1.Revocation, error) {
+		r := &v1.Revocation{}
+		return r, rows.Scan(&r.Serial, &r.NodeId, at{&r.NotAfter}, at{&r.RevokedAt})
+	})
+}
+
+// Removes revocations whose certificates expired before a time, every one when the time is zero
+func (d *DB) DeleteRevocations(ctx context.Context, before time.Time) error {
+	if before.IsZero() {
+		_, err := d.sql.ExecContext(ctx, `DELETE FROM mesh_revocations`)
+		return err
+	}
+	_, err := d.sql.ExecContext(ctx, `DELETE FROM mesh_revocations WHERE not_after < ?`, stamp(before))
+	return err
+}
+
+// Takes a grant nonce once, false when it was taken before, dropping nonces of expired grants
+func (d *DB) UseGrant(ctx context.Context, nonce string, expires time.Time) (bool, error) {
+	now := time.Now()
+	if _, err := d.sql.ExecContext(ctx, `DELETE FROM mesh_grants WHERE expires_at < ?`, stamp(now)); err != nil {
+		return false, err
+	}
+	res, err := d.sql.ExecContext(ctx, `INSERT OR IGNORE INTO mesh_grants (nonce, expires_at, used_at) VALUES (?, ?, ?)`, nonce, stamp(expires), stamp(now))
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // Writes a member's record as last synced
@@ -137,7 +181,7 @@ func (d *DB) DeleteMember(ctx context.Context, id string) error {
 	return err
 }
 
-// Session tokens with one peer
+// Bearer tokens with one peer
 type SessionRow struct {
 	PeerID string
 	// The token the peer sends us and the token we send the peer
@@ -218,7 +262,7 @@ func (d *DB) ListThroughput(ctx context.Context) ([]*ThroughputRow, error) {
 		if err := rows.Scan(&t.DeviceId, &t.StreamBytesPerSecond, &t.ComputeFlops, &t.FixedSeconds, &t.Acceptance, &t.Samples, &r.AcceptanceSamples, &r.SumX, &r.SumY, &r.SumXY, &r.SumXX, &r.Points, at{&t.UpdatedAt}, &t.ComputeSamples); err != nil {
 			return nil, err
 		}
-		// Every decode sample is a point of the intercept fit, so the points are the stream samples.
+		// Every decode sample is a point of the intercept fit, so the points are the stream samples
 		t.StreamSamples = r.Points
 		return r, nil
 	})
@@ -260,7 +304,7 @@ func (d *DB) PutFormation(ctx context.Context, f *v1.Formation) error {
 	if err != nil {
 		return err
 	}
-	// Seats and candidates live in their own tables.
+	// Seats and candidates live in their own tables
 	bare := proto.Clone(f.GetPlan()).(*v1.FormationPlan)
 	if bare == nil {
 		bare = &v1.FormationPlan{}
@@ -270,10 +314,15 @@ func (d *DB) PutFormation(ctx context.Context, f *v1.Formation) error {
 	if err != nil {
 		return err
 	}
+	conditions, err := conditionsCol(f.GetConditions())
+	if err != nil {
+		return err
+	}
 	return d.tx(ctx, func(exec execFn) error {
 		id := f.GetId()
-		if err := exec(`INSERT OR REPLACE INTO formations (id, name, conductor, conductor_name, shape, state, error, task_id, slot_id, desired_running, runtime_id, endpoint, bytes_moved, sequence, source_id, repo, weight_group, request, plan, created_at, ready_at, stopped_at, updated_at, rendezvous, cache_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, f.GetName(), f.GetConductor(), f.GetConductorName(), enumCol(f.GetShape()), enumCol(f.GetState()), f.GetError(), f.GetTaskId(), f.GetSlotId(), boolCol(f.GetDesiredRunning()), f.GetRuntimeId(), f.GetEndpoint(), int64(f.GetBytesMoved()), int64(f.GetSequence()), f.GetSourceId(), f.GetRepo(), f.GetGroup(), string(request), string(plan), stamp(f.GetCreatedAt().AsTime()), timeCol(f.GetReadyAt()), timeCol(f.GetStoppedAt()), stamp(f.GetUpdatedAt().AsTime()), f.GetRendezvous(), f.GetCacheKey()); err != nil {
+		if err := exec(`INSERT OR REPLACE INTO formations (id, name, conductor, conductor_name, shape, state, error, task_id, slot_id, desired_running, runtime_id, endpoint, bytes_moved, sequence, source_id, repo, weight_group, request, plan, created_at, ready_at, stopped_at, updated_at, rendezvous, cache_key, generation, observed_generation, conditions, relaunches) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, f.GetName(), f.GetConductor(), f.GetConductorName(), enumCol(f.GetShape()), enumCol(f.GetState()), f.GetError(), f.GetTaskId(), f.GetSlotId(), boolCol(f.GetDesiredRunning()), f.GetRuntimeId(), f.GetEndpoint(), int64(f.GetBytesMoved()), int64(f.GetSequence()), f.GetSourceId(), f.GetRepo(), f.GetGroup(), string(request), string(plan), stamp(f.GetCreatedAt().AsTime()), timeCol(f.GetReadyAt()), timeCol(f.GetStoppedAt()), stamp(f.GetUpdatedAt().AsTime()), f.GetRendezvous(), f.GetCacheKey(),
+			int64(f.GetGeneration()), int64(f.GetObservedGeneration()), conditions, f.GetRelaunches()); err != nil {
 			return err
 		}
 		if err := clearChildren(exec, "formation_id", id, "formation_seats", "formation_candidates"); err != nil {
@@ -292,7 +341,7 @@ func (d *DB) PutFormation(ctx context.Context, f *v1.Formation) error {
 				}
 				memory = string(raw)
 			}
-			// Triage and measurements travel in the same wrapper as placements.
+			// Triage and measurements travel in the same wrapper as placements
 			triage, err := protojson.Marshal(&v1.FormationPlan{Seats: []*v1.Seat{{Triage: s.GetTriage()}}})
 			if err != nil {
 				return err
@@ -301,8 +350,16 @@ func (d *DB) PutFormation(ctx context.Context, f *v1.Formation) error {
 			if err != nil {
 				return err
 			}
-			if err := exec(`INSERT INTO formation_seats (formation_id, position, node_id, node_name, role, rank, instance_id, state, error, endpoint, transport, layer_from, layer_to, read_bytes, cache_bytes, weight_bytes, install_id, exposed, phase, placements, memory, triage, measurements) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, i, s.GetNodeId(), s.GetNodeName(), s.GetRole(), s.GetRank(), s.GetInstanceId(), enumCol(s.GetState()), s.GetError(), s.GetEndpoint(), s.GetTransport(), s.GetLayerFrom(), s.GetLayerTo(), int64(s.GetReadBytes()), int64(s.GetCacheBytes()), int64(s.GetWeightBytes()), s.GetInstallId(), boolCol(s.GetExposed()), s.GetPhase(), string(placements), memory, string(triage), string(measurements)); err != nil {
+			seatConditions, err := conditionsCol(s.GetConditions())
+			if err != nil {
+				return err
+			}
+			seatRanks, err := ranksCol(s.GetRanks())
+			if err != nil {
+				return err
+			}
+			if err := exec(`INSERT INTO formation_seats (formation_id, position, node_id, node_name, role, rank, instance_id, state, error, endpoint, transport, layer_from, layer_to, read_bytes, cache_bytes, weight_bytes, install_id, exposed, phase, placements, memory, triage, measurements, conditions, ranks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, i, s.GetNodeId(), s.GetNodeName(), s.GetRole(), s.GetRank(), s.GetInstanceId(), enumCol(s.GetState()), s.GetError(), s.GetEndpoint(), s.GetTransport(), s.GetLayerFrom(), s.GetLayerTo(), int64(s.GetReadBytes()), int64(s.GetCacheBytes()), int64(s.GetWeightBytes()), s.GetInstallId(), boolCol(s.GetExposed()), s.GetPhase(), string(placements), memory, string(triage), string(measurements), seatConditions, seatRanks); err != nil {
 				return err
 			}
 		}
@@ -332,14 +389,20 @@ func (d *DB) DeleteFormation(ctx context.Context, id string) (bool, error) {
 }
 
 func (d *DB) formations(ctx context.Context, where string, args ...any) ([]*v1.Formation, error) {
-	out, err := list(ctx, d, `SELECT id, name, conductor, conductor_name, shape, state, error, task_id, slot_id, desired_running, runtime_id, endpoint, bytes_moved, sequence, source_id, repo, weight_group, request, plan, created_at, ready_at, stopped_at, updated_at, rendezvous, cache_key FROM formations `+where+` ORDER BY created_at, id`, func(rows *sql.Rows) (*v1.Formation, error) {
+	out, err := list(ctx, d, `SELECT id, name, conductor, conductor_name, shape, state, error, task_id, slot_id, desired_running, runtime_id, endpoint, bytes_moved, sequence, source_id, repo, weight_group, request, plan, created_at, ready_at, stopped_at, updated_at, rendezvous, cache_key, generation, observed_generation, conditions, relaunches FROM formations `+where+` ORDER BY created_at, id`, func(rows *sql.Rows) (*v1.Formation, error) {
 		f := &v1.Formation{}
-		var request, plan string
-		var moved, sequence int64
-		if err := rows.Scan(&f.Id, &f.Name, &f.Conductor, &f.ConductorName, enumAt[v1.Shape]{&f.Shape}, enumAt[v1.FormationState]{&f.State}, &f.Error, &f.TaskId, &f.SlotId, (*flag)(&f.DesiredRunning), &f.RuntimeId, &f.Endpoint, &moved, &sequence, &f.SourceId, &f.Repo, &f.Group, &request, &plan, at{&f.CreatedAt}, at{&f.ReadyAt}, at{&f.StoppedAt}, at{&f.UpdatedAt}, &f.Rendezvous, &f.CacheKey); err != nil {
+		var request, plan, conditions string
+		var moved, sequence, generation, observed int64
+		if err := rows.Scan(&f.Id, &f.Name, &f.Conductor, &f.ConductorName, enumAt[v1.Shape]{&f.Shape}, enumAt[v1.FormationState]{&f.State}, &f.Error, &f.TaskId, &f.SlotId, (*flag)(&f.DesiredRunning), &f.RuntimeId, &f.Endpoint, &moved, &sequence, &f.SourceId, &f.Repo, &f.Group, &request, &plan, at{&f.CreatedAt}, at{&f.ReadyAt}, at{&f.StoppedAt}, at{&f.UpdatedAt}, &f.Rendezvous, &f.CacheKey,
+			&generation, &observed, &conditions, &f.Relaunches); err != nil {
 			return nil, err
 		}
 		f.BytesMoved, f.Sequence = uint64(moved), uint64(sequence)
+		f.Generation, f.ObservedGeneration = uint64(generation), uint64(observed)
+		var err error
+		if f.Conditions, err = conditionsOf(conditions); err != nil {
+			return nil, err
+		}
 		f.Request = &v1.RunRequest{}
 		if err := protojson.Unmarshal([]byte(request), f.Request); err != nil {
 			return nil, err
@@ -354,11 +417,19 @@ func (d *DB) formations(ctx context.Context, where string, args ...any) ([]*v1.F
 		return nil, err
 	}
 	for _, f := range out {
-		if f.Seats, err = list(ctx, d, `SELECT node_id, node_name, role, rank, instance_id, state, error, endpoint, transport, layer_from, layer_to, read_bytes, cache_bytes, weight_bytes, install_id, exposed, phase, placements, memory, triage, measurements FROM formation_seats WHERE formation_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.Seat, error) {
+		if f.Seats, err = list(ctx, d, `SELECT node_id, node_name, role, rank, instance_id, state, error, endpoint, transport, layer_from, layer_to, read_bytes, cache_bytes, weight_bytes, install_id, exposed, phase, placements, memory, triage, measurements, conditions, ranks FROM formation_seats WHERE formation_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.Seat, error) {
 			s := &v1.Seat{}
 			var read, cache, weight int64
-			var placements, memory, triage, measurements string
-			if err := rows.Scan(&s.NodeId, &s.NodeName, &s.Role, &s.Rank, &s.InstanceId, enumAt[v1.InstanceState]{&s.State}, &s.Error, &s.Endpoint, &s.Transport, &s.LayerFrom, &s.LayerTo, &read, &cache, &weight, &s.InstallId, (*flag)(&s.Exposed), &s.Phase, &placements, &memory, &triage, &measurements); err != nil {
+			var placements, memory, triage, measurements, seatConditions, seatRanks string
+			if err := rows.Scan(&s.NodeId, &s.NodeName, &s.Role, &s.Rank, &s.InstanceId, enumAt[v1.InstanceState]{&s.State}, &s.Error, &s.Endpoint, &s.Transport, &s.LayerFrom, &s.LayerTo, &read, &cache, &weight, &s.InstallId, (*flag)(&s.Exposed), &s.Phase, &placements, &memory, &triage, &measurements, &seatConditions, &seatRanks); err != nil {
+				return nil, err
+			}
+			conds, err := conditionsOf(seatConditions)
+			if err != nil {
+				return nil, err
+			}
+			s.Conditions = conds
+			if s.Ranks, err = ranksOf(seatRanks); err != nil {
 				return nil, err
 			}
 			s.ReadBytes, s.CacheBytes, s.WeightBytes = uint64(read), uint64(cache), uint64(weight)
@@ -406,15 +477,27 @@ func (d *DB) formations(ctx context.Context, where string, args ...any) ([]*v1.F
 	return out, nil
 }
 
-// Writes an admission, replacing the earlier copy
+// Writes an admission, replacing the earlier copy and keeping the grant it holds
 func (d *DB) PutAdmission(ctx context.Context, a *v1.Admission) error {
 	record, err := protojson.Marshal(a)
 	if err != nil {
 		return err
 	}
-	_, err = d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO mesh_admissions (id, side, state, node_id, mesh_hash, record, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = d.sql.ExecContext(ctx, `INSERT INTO mesh_admissions (id, side, state, node_id, mesh_hash, record, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET side = excluded.side, state = excluded.state, node_id = excluded.node_id, mesh_hash = excluded.mesh_hash, record = excluded.record, created_at = excluded.created_at, updated_at = excluded.updated_at, expires_at = excluded.expires_at`,
 		a.GetId(), enumCol(a.GetSide()), enumCol(a.GetState()), a.GetNode().GetId(), a.GetMeshHash(), string(record), stamp(a.GetCreatedAt().AsTime()), stamp(a.GetUpdatedAt().AsTime()), timeCol(a.GetExpiresAt()))
 	return err
+}
+
+// Sets the join grant an invitation handed an admission
+func (d *DB) SetAdmissionGrant(ctx context.Context, id, grant string) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE mesh_admissions SET join_grant = ? WHERE id = ?`, grant, id)
+	return err
+}
+
+// The join grant of every admission holding one, by admission id
+func (d *DB) AdmissionGrants(ctx context.Context) (map[string]string, error) {
+	return d.stringMap(ctx, `SELECT id, join_grant FROM mesh_admissions WHERE join_grant != ''`)
 }
 
 // Lists every admission, oldest first

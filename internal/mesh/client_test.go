@@ -2,51 +2,37 @@ package mesh
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/nickheyer/nebu/internal/db"
-	"github.com/nickheyer/nebu/internal/installs"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/store"
 )
 
-// The transport cache holds one transport per address and trust, and drops an address's
-// transports when a member there is forgotten or moves, and every transport when the mesh is left
+// Transports are held per address and trust and dropped when their member is dropped, moves, or the mesh is left
 func TestTransportsDropWithTheirMembers(t *testing.T) {
 	m := bare(t, "self")
-	database, err := db.Open(filepath.Join(t.TempDir(), "nebu.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { database.Close() })
-	blobs, err := store.Open(filepath.Join(t.TempDir(), "store"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.DB, m.Installs, m.Store = database, &installs.Manager{DB: database}, blobs
-	m.roundTripper("10.0.0.5:8485", "", nil)
-	m.roundTripper("10.0.0.5:8485", "", nil)
-	m.roundTripper("10.0.0.6:8485", "", nil)
-	m.roundTripper("10.0.0.7:8485", "", nil)
+	m.mesh = &db.MeshRow{ID: "id", Name: "home"}
+	m.peerClient("b", "10.0.0.5:8485")
+	m.peerClient("b", "10.0.0.5:8485")
+	m.peerClient("c", "10.0.0.6:8485")
+	m.admissionClient("10.0.0.7:8485", "d", "pin")
 	if m.transports() != 3 {
-		t.Fatalf("one transport per address: %d", m.transports())
+		t.Fatalf("one transport per address and trust: %d", m.transports())
 	}
 	m.mu.Lock()
-	m.members["b"] = &member{rec: &v1.Node{Id: "b", Name: "desk", Address: "10.0.0.5:8485"}}
-	m.members["c"] = &member{rec: &v1.Node{Id: "c", Name: "box", Address: "10.0.0.6:8485", Sequence: 1}}
+	m.members["b"] = &member{rec: &v1.Node{Id: "b", Address: "10.0.0.5:8485"}}
+	m.members["c"] = &member{rec: &v1.Node{Id: "c", Address: "10.0.0.6:8485", Sequence: 1}}
 	m.mu.Unlock()
-	m.forget("b")
+	m.drop("b")
 	if m.transports() != 2 {
-		t.Fatalf("a forgotten member's transport is dropped: %d", m.transports())
+		t.Fatalf("a dropped member's transport goes: %d", m.transports())
 	}
 	// A member that moved leaves its old address's transport behind
-	m.mesh = &db.MeshRow{ID: "id", Name: "home", Secret: make([]byte, 32)}
-	m.mergeRecord(&v1.Node{Id: "c", Name: "box", Address: "10.0.0.8:8485", Sequence: 2}, true)
+	moved := &v1.Node{Id: "c", Address: "10.0.0.8:8485", Sequence: 2, Parts: []*v1.NodePart{{Part: v1.RecordPart_RECORD_PART_IDENTITY, Sequence: 2}}}
+	m.take("c", nil, moved, nil, nil)
 	if m.transports() != 1 {
-		t.Fatalf("a moved member's old transport is dropped: %d", m.transports())
+		t.Fatalf("a moved member's old transport goes: %d", m.transports())
 	}
-	m.roundTripper("10.0.0.8:8485", "", nil)
 	if err := m.clearState(context.Background()); err != nil {
 		t.Fatal(err)
 	}

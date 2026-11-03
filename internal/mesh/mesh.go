@@ -1,7 +1,4 @@
-// Package mesh joins nebu daemons on one network into a mesh: identity, the shared secret, the
-// handshake that admits members, the session tokens node to node calls carry, the sync that
-// keeps every member's record on every node, discovery by multicast beacon, and the measured
-// links between members.
+// Package mesh joins nebu daemons under one certificate authority with gossip, beacons, links and exported pools
 package mesh
 
 import (
@@ -10,13 +7,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -26,9 +24,9 @@ import (
 
 	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/db"
-	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/mesh/links"
+	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/internal/settings"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
@@ -41,28 +39,28 @@ import (
 )
 
 const (
-	// Every member syncs with every other member this often, and on every change it makes
+	// A gossip round lasts this long, each one syncing with the fan-out and counting liveness
 	SyncInterval = 5 * time.Second
-	// Syncs a member may miss before it is unreachable
+	// Rounds a member may go unseen in every peer's view before it is unreachable
 	UnreachableAfter = 3
-	// How long a member may be missing before it is gone
+	// How long a member may go unseen before it is gone
 	GoneAfter = 10 * time.Minute
-	// Syncs to a gone member slow to this interval until it answers again
+	// A gone member is synced with at most this often until it is seen again
 	goneRetry = time.Minute
 	// A session token lasts this long, renewed on every sync
-	SessionTTL = time.Hour
+	SessionTTL = 15 * time.Minute
 	// Links are measured this often, and on join
 	ProbeInterval = 5 * time.Minute
-	// The mesh listener bound when the API listener stays on loopback
+	// The mesh listener bound when mesh.listen names none, once the node belongs to a mesh or starts an admission
 	DefaultListen = "0.0.0.0:8485"
 	// Exposure settings for seats other seats connect to
 	ExposureGuard  = "guard"
 	ExposureDirect = "direct"
-	// A pending handshake waits this long for its second call
-	handshakeTTL = 30 * time.Second
-	// Self record events coalesce over this window
+	// Record changes coalesce over this window
 	publishDelay = 200 * time.Millisecond
 	callTimeout  = 10 * time.Second
+	// A failed renewal is tried again after this long
+	renewRetry = time.Minute
 )
 
 var (
@@ -99,12 +97,30 @@ type Formations interface {
 // A member as this node tracks it
 type member struct {
 	rec *v1.Node
-	// Syncs missed in a row, and when the last attempt was
-	missed    int
-	lastTried time.Time
-	probedAt  time.Time
 	// Whether the record came from gossip alone and no sync has filled it yet
 	sketch bool
+	// The sequence of this node's record the member holds whole, as its last answer said
+	sent uint64
+	// The highest heartbeat heard for the member in any view, when it last rose, and the last direct contact
+	heartbeat uint64
+	seenAt    time.Time
+	direct    time.Time
+	// The highest sequence of the member's record gossip named
+	advertised uint64
+	// The serial of the member's certificate, from its record or the gossip that named it
+	serial string
+	// The mesh state digest the member last sent
+	digest    []byte
+	lastTried time.Time
+	probedAt  time.Time
+}
+
+// The sequence of the member's record held whole, zero for a sketch
+func (mb *member) held() uint64 {
+	if mb.sketch {
+		return 0
+	}
+	return mb.rec.GetSequence()
 }
 
 // The name the member is known by, empty for no member
@@ -123,7 +139,7 @@ func (mb *member) GetAddress() string {
 	return mb.rec.GetAddress()
 }
 
-// A session with one peer: the token it sends us and the token we send it
+// The bearer a peer sends this node and the bearer this node sends it
 type session struct {
 	peer    string
 	accept  string
@@ -134,13 +150,13 @@ type session struct {
 	sendExpires time.Time
 }
 
-// A handshake awaiting its second call
-type pending struct {
-	nonceA, nonceB []byte
-	expires        time.Time
+// One part of this node's record with the sequence it last changed at and its digest
+type partState struct {
+	seq  uint64
+	hash [32]byte
 }
 
-// Membership, sessions, sync, discovery, and links
+// Membership, certificates, gossip, discovery, links, and the pools members export
 type Manager struct {
 	DB       *db.DB
 	Config   *v1.MeshConfig
@@ -149,59 +165,96 @@ type Manager struct {
 	Runtimes *runtimes.Registry
 	Store    *store.Store
 	Perf     *perf.Table
-	Routes   *gateway.Table
-	Settings *settings.Manager
-	Events   *events.Bus
-	Guard    *auth.Guard
-	Log      *slog.Logger
-	Version  string
-	// The API listener's address and TLS, node traffic sharing it when it is not loopback
-	APIListen string
-	APITLS    *tls.Config
-	// The API handler, served on the mesh listener too
+	// The pools and routes this node serves, read into its record
+	Pools pools.View
+	// Where pools and routes other members export are published
+	Registrar pools.Registrar
+	Settings  *settings.Manager
+	Events    *events.Bus
+	Guard     *auth.Guard
+	Log       *slog.Logger
+	Version   string
+	// The API handler members reach on the mesh listener
 	Handler http.Handler
 	// Set by the daemon once the conductor exists
 	Formations Formations
+	// Requests in flight on an instance through this node's gateway, read while a withdrawn import drains
+	InFlight func(instanceID string) int
+	// How long a withdrawn import waits for its requests in flight before it is unpublished
+	DrainTimeout time.Duration
 
 	identity *db.Identity
-	prober   *links.Prober
+	// Pools published for each exporter by pool id and the objectives held for it by name, guarded by importing
+	imports    map[string]map[string]*imported
+	objectives map[string]map[string][32]byte
+	// Not published conditions of imports by pool id, guarded by viewing
+	viewing     sync.Mutex
+	unpublished map[string]*v1.Condition
+	// Exported local addresses served over TLS on the mesh host, guarded by relaying
+	relaying sync.Mutex
+	relays   map[string]*relay
+	// Where imported endpoint addresses lead, guarded by mu
+	remoteAddrs map[string]remoteTarget
+	// Nodes of other meshes this node imports from and exports to, guarded by mu
+	exporters map[string]*federated
+	importers map[string]*v1.Node
+	// The address bound when mesh.listen names none
+	defaultListen string
+	// Signs one member's key under a new authority and hands it over, swapped by tests
+	reissueMember func(ctx context.Context, id string, current []byte, ca *x509.Certificate, caKey ed25519.PrivateKey, now time.Time) error
+	// The self signed certificate admissions run on, made at each start
+	ident  tls.Certificate
+	prober *links.Prober
+	// How long a gossip round lasts
+	interval time.Duration
 
-	// One membership change at a time across make, join, leave, reset, forget, and rotate
+	// One membership change at a time across make, join, leave, reset, forget, rotate and handoff
 	changing sync.Mutex
 	// Held from reading a record to writing it, so a write never lands after the clear that dropped it
 	rows sync.Mutex
+	// One record rebuild at a time, so a slower one never replaces a newer one
+	building sync.Mutex
+	// Guards the imports table across registrar calls
+	importing sync.Mutex
+	// One change of this node's credentials at a time, from reading them to installing the next
+	crediting sync.Mutex
 
 	mu sync.Mutex
 	// Set once Close began, after which nothing binds or starts
-	closed   bool
-	mesh     *db.MeshRow
-	members  map[string]*member
+	closed  bool
+	mesh    *db.MeshRow
+	creds   *credentials
+	revoked map[string]*v1.Revocation
+	members map[string]*member
+	// Bearer tokens by peer, and the peer each accepted token names
 	sessions map[string]*session
 	accept   map[string]string
-	pendings map[string]*pending
-	// One handshake at a time per peer, so callers wanting the same session share one
-	dialing map[string]*sync.Mutex
-	links   map[string]*v1.Link
-	// Nodes heard by beacon, and admissions under way, both sides
+	links    map[string]*v1.Link
+	// Nodes heard by beacon, admissions under way on both sides, and grants invitations carried
 	nearby     map[string]*heard
 	admissions map[string]*v1.Admission
-	// Members forgotten here, by when: refused at the handshake and from gossip until invited or
-	// admitted again or the secret rotates, kept as rows so a restart forgets nothing
-	forgotten map[string]time.Time
-	// Why the node traffic listener is not bound, when the default address could not be taken
-	listenErr string
-	statusAt  *time.Timer
-	// Connections by member address and TLS state
-	h2  map[string]http.RoundTripper
-	seq uint64
-	// Whether the record changed since it was last built
-	dirty bool
-	// The record as last built, handed out until a bump marks it stale
-	record    *v1.Node
-	publishAt *time.Timer
-	listener  net.Listener
-	server    *http.Server
-	// Closed once the server stopped accepting, so a rebind can take the address
+	grants     map[string]string
+	statusAt   *time.Timer
+	// Transports by member address and trust
+	h2 map[string]http.RoundTripper
+	// The record sequence, the sequence this run began at, and the heartbeat counted each round
+	seq       uint64
+	epoch     uint64
+	heartbeat uint64
+	parts     map[v1.RecordPart]*partState
+	// The record as last built with the formations and admissions it shares
+	record     *v1.Node
+	formations []*v1.Formation
+	shared     []*v1.Admission
+	dirty      bool
+	// Whether a rebuild changed a part the fan-out hears of at once, and the sequence last published as an event
+	unpushed   bool
+	announced  uint64
+	publishAt  *time.Timer
+	renewTried time.Time
+	listener   net.Listener
+	server     *http.Server
+	// Closed once the server stopped accepting
 	served     chan struct{}
 	listenAddr string
 	base       context.Context
@@ -213,51 +266,72 @@ type Manager struct {
 	loops      sync.WaitGroup
 }
 
-// Loads the identity, making one on first start, and the mesh with its members, sessions, and links
+// Loads the identity, making one on first start, and the mesh with its credentials, members, sessions, links and revocations
 func (m *Manager) Open(ctx context.Context) error {
+	if m.Pools == nil || m.Registrar == nil {
+		return fmt.Errorf("%w: the pool view and registrar are wired before the mesh opens", ErrMesh)
+	}
 	if m.Log == nil {
 		m.Log = slog.Default()
 	}
 	if m.Config == nil {
 		m.Config = &v1.MeshConfig{}
 	}
+	if m.interval == 0 {
+		m.interval = SyncInterval
+	}
 	m.members = map[string]*member{}
 	m.sessions = map[string]*session{}
 	m.accept = map[string]string{}
-	m.pendings = map[string]*pending{}
-	m.dialing = map[string]*sync.Mutex{}
 	m.links = map[string]*v1.Link{}
 	m.nearby = map[string]*heard{}
 	m.admissions = map[string]*v1.Admission{}
-	m.forgotten = map[string]time.Time{}
+	m.grants = map[string]string{}
+	m.revoked = map[string]*v1.Revocation{}
+	m.parts = map[v1.RecordPart]*partState{}
 	m.h2 = map[string]http.RoundTripper{}
 	m.wake = make(chan struct{}, 1)
 	m.prober = &links.Prober{Log: m.Log}
-	// Sequences climb across restarts, so a returning node's record wins over stale copies.
+	m.imports = map[string]map[string]*imported{}
+	m.objectives = map[string]map[string][32]byte{}
+	m.unpublished = map[string]*v1.Condition{}
+	m.relays = map[string]*relay{}
+	m.remoteAddrs = map[string]remoteTarget{}
+	m.exporters = map[string]*federated{}
+	m.importers = map[string]*v1.Node{}
+	if m.defaultListen == "" {
+		m.defaultListen = DefaultListen
+	}
+	if m.reissueMember == nil {
+		m.reissueMember = m.reissueOne
+	}
+	// Sequences and heartbeats climb across restarts, so a returning node's record and liveness win over stale copies
 	m.seq = uint64(time.Now().UnixMilli())
-	id, err := m.DB.GetIdentity(ctx)
-	if db.IsNotFound(err) {
-		id, err = newIdentity()
-		if err != nil {
-			return err
-		}
-		if err := m.DB.PutIdentity(ctx, id); err != nil {
-			return err
-		}
-		m.Log.Info("mesh identity made", "node", id.ID)
-	} else if err != nil {
+	m.epoch, m.heartbeat = m.seq, m.seq
+	id, made, err := loadIdentity(ctx, m.DB)
+	if err != nil {
 		return err
 	}
+	if made {
+		m.Log.Info("mesh identity made", "node", id.ID)
+	}
 	m.identity = id
+	if m.ident, err = identityCertificate(id.ID, ed25519.PrivateKey(id.PrivateKey), id.CreatedAt); err != nil {
+		return err
+	}
 	row, err := m.DB.GetMesh(ctx)
 	if err != nil && !db.IsNotFound(err) {
 		return err
 	}
 	if err == nil {
-		m.mesh = row
-		if err := m.loadMembers(ctx); err != nil {
-			return err
+		creds, err := credentialsOf(row)
+		if err != nil {
+			return fmt.Errorf("%w: the mesh credentials on record are unreadable, reset the mesh: %v", ErrMesh, err)
 		}
+		m.mesh, m.creds = row, creds
+	}
+	if err := m.loadMembers(ctx); err != nil {
+		return err
 	}
 	admissions, err := m.DB.ListAdmissions(ctx)
 	if err != nil {
@@ -265,6 +339,9 @@ func (m *Manager) Open(ctx context.Context) error {
 	}
 	for _, a := range admissions {
 		m.admissions[a.GetId()] = a
+	}
+	if m.grants, err = m.DB.AdmissionGrants(ctx); err != nil {
+		return err
 	}
 	if m.Guard != nil {
 		m.Guard.SetPeers(m)
@@ -275,21 +352,49 @@ func (m *Manager) Open(ctx context.Context) error {
 	return nil
 }
 
-// Loads members, sessions, and links written last
+// The credentials a mesh row holds
+func credentialsOf(row *db.MeshRow) (*credentials, error) {
+	key, err := parseKey(row.Key)
+	if err != nil {
+		return nil, err
+	}
+	var caKey ed25519.PrivateKey
+	if len(row.CAKey) > 0 {
+		if caKey, err = parseKey(row.CAKey); err != nil {
+			return nil, err
+		}
+	}
+	return newCredentials(row.CACertificate, row.Certificate, key, caKey)
+}
+
+// Loads members, sessions, links and revocations written last
 func (m *Manager) loadMembers(ctx context.Context) error {
+	revs, err := m.DB.ListRevocations(ctx)
+	if err != nil {
+		return err
+	}
+	for _, r := range revs {
+		m.revoked[r.GetSerial()] = r
+	}
 	recs, err := m.DB.ListMembers(ctx)
 	if err != nil {
 		return err
 	}
 	for _, rec := range recs {
-		if rec.GetId() == m.identity.ID {
+		switch {
+		case rec.GetId() == m.identity.ID:
+			continue
+		case rec.GetFederation().GetRole() == v1.FederationRole_FEDERATION_ROLE_EXPORTER:
+			m.exporters[rec.GetId()] = &federated{rec: rec}
+			continue
+		case rec.GetFederation().GetRole() == v1.FederationRole_FEDERATION_ROLE_IMPORTER:
+			m.importers[rec.GetId()] = rec
+			continue
+		case m.mesh == nil:
 			continue
 		}
-		if rec.GetState() == v1.NodeState_NODE_STATE_FORGOTTEN {
-			m.forgotten[rec.GetId()] = rec.GetSeenAt().AsTime()
-			continue
-		}
-		m.members[rec.GetId()] = &member{rec: rec, sketch: rec.GetProfile() == nil}
+		mb := &member{rec: rec, sketch: rec.GetSequence() == 0, seenAt: rec.GetSeenAt().AsTime(), serial: recordSerial(rec)}
+		m.members[rec.GetId()] = mb
 	}
 	sessions, err := m.DB.ListSessions(ctx)
 	if err != nil {
@@ -348,18 +453,25 @@ func (m *Manager) Mesh() (*v1.Mesh, error) {
 }
 
 func (m *Manager) meshLocked() *v1.Mesh {
-	return &v1.Mesh{
-		Id:        m.mesh.ID,
-		Name:      m.mesh.Name,
-		Tls:       m.mesh.TLS,
-		Self:      m.identity.ID,
-		CreatedAt: timestamppb.New(m.mesh.CreatedAt),
-		JoinedAt:  timestamppb.New(m.mesh.JoinedAt),
-		Address:   m.advertiseLocked(),
-		Announce:  m.announceOn(),
-		Exposure:  m.Exposure(),
-		Members:   uint32(len(m.members) + 1),
+	out := &v1.Mesh{
+		Id:          m.mesh.ID,
+		Name:        m.mesh.Name,
+		Self:        m.identity.ID,
+		CreatedAt:   timestamppb.New(m.mesh.CreatedAt),
+		JoinedAt:    timestamppb.New(m.mesh.JoinedAt),
+		Address:     m.advertiseLocked(),
+		Announce:    m.announceOn(),
+		Exposure:    m.Exposure(),
+		Members:     uint32(len(m.members) + 1),
+		Issuer:      m.mesh.Issuer,
+		IssuerEpoch: m.mesh.IssuerEpoch,
+		Revocations: m.revocationsLocked(),
 	}
+	if m.creds != nil {
+		out.CaFingerprint = m.creds.caFingerprint()
+		out.CertificateExpiresAt = timestamppb.New(m.creds.leaf.NotAfter)
+	}
+	return out
 }
 
 // Whether multicast beacons are on
@@ -367,7 +479,7 @@ func (m *Manager) announceOn() bool {
 	return m.Config.Announce == nil || m.Config.GetAnnounce()
 }
 
-// How seats other seats connect to are exposed: guard or direct
+// How seats other seats connect to are exposed, guard or direct
 func (m *Manager) Exposure() string {
 	if strings.EqualFold(m.Config.GetExposure(), ExposureDirect) {
 		return ExposureDirect
@@ -375,8 +487,7 @@ func (m *Manager) Exposure() string {
 	return ExposureGuard
 }
 
-// The port range seats, guards, and rendezvous take on the mesh address, from-to inclusive, and
-// whether one is configured
+// The inclusive port range seats, guards and rendezvous take on the mesh address, if configured
 func (m *Manager) Ports() (int, int, bool) {
 	spec := strings.TrimSpace(m.Config.GetPorts())
 	if spec == "" {
@@ -397,11 +508,14 @@ func (m *Manager) Ports() (int, int, bool) {
 	return from, to, true
 }
 
-// Starts the node traffic listener, the beacon that makes the node discoverable, and the sync
-// and probe loops when the node belongs to a mesh. The listener binds whenever beacons are on,
-// so a node outside any mesh can be invited from another node's page; a listener config names
-// must bind, the default one reports on the page when it cannot.
+// Starts beacons, admission expiry and the import pulls, the listener once a mesh exists or mesh.listen names it, and the gossip and probe loops inside a mesh
 func (m *Manager) Start(ctx context.Context) error {
+	if m.Handler == nil {
+		return fmt.Errorf("%w: the API handler is wired before the mesh starts", ErrMesh)
+	}
+	if m.InFlight == nil {
+		return fmt.Errorf("%w: the gateway's in flight counter is wired before the mesh starts", ErrMesh)
+	}
 	m.base, m.cancel = context.WithCancel(ctx)
 	m.mu.Lock()
 	joined := m.mesh != nil
@@ -410,15 +524,8 @@ func (m *Manager) Start(ctx context.Context) error {
 		if err := m.listen(); err != nil {
 			return err
 		}
-	} else if m.announceOn() {
-		if err := m.listen(); err != nil {
-			m.mu.Lock()
-			m.listenErr = err.Error()
-			m.mu.Unlock()
-			m.Log.Warn("node traffic listener not bound, other nodes cannot invite this one until mesh.listen names a free address", "err", err)
-		}
 	}
-	for _, loop := range []func(context.Context){m.watch, m.announceLoop, m.admissionLoop} {
+	for _, loop := range []func(context.Context){m.watch, m.announceLoop, m.admissionLoop, m.federationLoop} {
 		if !m.spawn(func() { loop(m.base) }) {
 			return errClosed
 		}
@@ -428,7 +535,14 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.publishSelf()
 		for id, mb := range m.snapshotMembers() {
 			m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_CREATED, id, mb)
+			m.importFrom(m.base, id)
 		}
+	}
+	m.mu.Lock()
+	exporters := slices.Sorted(maps.Keys(m.exporters))
+	m.mu.Unlock()
+	for _, id := range exporters {
+		m.importFrom(m.base, id)
 	}
 	m.publishStatus()
 	return nil
@@ -450,7 +564,7 @@ func (m *Manager) startLoops() context.Context {
 	m.loops.Add(2)
 	m.spawnLocked(func() {
 		defer m.loops.Done()
-		m.syncLoop(ctx)
+		m.gossipLoop(ctx)
 	})
 	m.spawnLocked(func() {
 		defer m.loops.Done()
@@ -494,6 +608,7 @@ func (m *Manager) spawn(work func()) bool {
 	return m.spawnLocked(work)
 }
 
+// Stops the member loops and waits for them
 func (m *Manager) stopLoops() {
 	m.mu.Lock()
 	cancel := m.loopCancel
@@ -525,34 +640,47 @@ func (m *Manager) Close() {
 	if ln != nil {
 		ln.Close()
 	}
+	m.closeRelays()
 	m.wg.Wait()
+	m.dropTransports("")
 }
 
-// Marks this node's record changed: the sequence climbs and the next sync carries it
+// Marks this node's record for a rebuild, the parts that changed pushed to the fan-out
 func (m *Manager) bump() {
 	m.mu.Lock()
-	m.seq++
+	defer m.mu.Unlock()
 	m.dirty = true
-	joined := m.mesh != nil
-	if m.publishAt == nil {
-		m.publishAt = time.AfterFunc(publishDelay, func() {
-			m.mu.Lock()
-			m.publishAt = nil
-			held := m.holdLocked()
-			m.mu.Unlock()
-			if !held {
-				return
-			}
-			defer m.wg.Done()
-			m.publishSelf()
-		})
+	if m.publishAt != nil {
+		return
 	}
-	m.mu.Unlock()
-	if joined {
-		select {
-		case m.wake <- struct{}{}:
-		default:
+	m.publishAt = time.AfterFunc(publishDelay, func() {
+		m.mu.Lock()
+		m.publishAt = nil
+		held := m.holdLocked()
+		m.mu.Unlock()
+		if !held {
+			return
 		}
+		defer m.wg.Done()
+		m.refresh()
+		m.mu.Lock()
+		push, announce := m.unpushed, m.seq > m.announced
+		m.unpushed, m.announced = false, m.seq
+		m.mu.Unlock()
+		if announce {
+			m.publishSelf()
+		}
+		if push {
+			m.wakeLoop()
+		}
+	})
+}
+
+// Wakes the gossip loop for an immediate push to the fan-out
+func (m *Manager) wakeLoop() {
+	select {
+	case m.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -565,8 +693,7 @@ func (m *Manager) publishSelf() {
 	m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_UPDATED, rec.GetId(), rec)
 }
 
-// The mesh from this node: membership, the nodes and meshes heard on the network, and the
-// admissions under way. The Mesh page draws it and the MESH event carries every change.
+// Membership, the nodes and meshes heard nearby, and admissions under way, as the Mesh page draws them
 func (m *Manager) Status() *v1.MeshStatus {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -576,10 +703,10 @@ func (m *Manager) Status() *v1.MeshStatus {
 		Listen:      m.listenAddr,
 		Address:     m.advertiseLocked(),
 		Announce:    m.announceOn(),
-		ListenError: m.listenErr,
 		Nodes:       m.nearbyListLocked(),
 		Meshes:      m.meshesNearbyLocked(),
 		Admissions:  m.admissionListLocked(),
+		Federations: m.federationsLocked(),
 	}
 	if m.mesh != nil {
 		st.Mesh = m.meshLocked()
@@ -590,8 +717,8 @@ func (m *Manager) Status() *v1.MeshStatus {
 // Publishes the status, changes within a short window folded into one event
 func (m *Manager) publishStatus() {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.statusAt != nil {
-		m.mu.Unlock()
 		return
 	}
 	m.statusAt = time.AfterFunc(publishDelay, func() {
@@ -605,34 +732,20 @@ func (m *Manager) publishStatus() {
 		defer m.wg.Done()
 		m.Events.Publish(v1.EventKind_EVENT_KIND_MESH, v1.EventAction_EVENT_ACTION_UPDATED, "mesh", m.Status())
 	})
-	m.mu.Unlock()
 }
 
-// Marks the record changed whenever what it carries changes
+// Marks the record for a rebuild whenever something it carries may have changed
 func (m *Manager) watch(ctx context.Context) {
-	kinds := []v1.EventKind{v1.EventKind_EVENT_KIND_HOST, v1.EventKind_EVENT_KIND_INSTALL, v1.EventKind_EVENT_KIND_MODEL, v1.EventKind_EVENT_KIND_STORE, v1.EventKind_EVENT_KIND_ROUTE, v1.EventKind_EVENT_KIND_SLOT, v1.EventKind_EVENT_KIND_INSTANCE, v1.EventKind_EVENT_KIND_FORMATION, v1.EventKind_EVENT_KIND_SETTINGS}
+	kinds := []v1.EventKind{v1.EventKind_EVENT_KIND_HOST, v1.EventKind_EVENT_KIND_INSTALL, v1.EventKind_EVENT_KIND_MODEL, v1.EventKind_EVENT_KIND_STORE, v1.EventKind_EVENT_KIND_ROUTE, v1.EventKind_EVENT_KIND_POOL, v1.EventKind_EVENT_KIND_SLOT, v1.EventKind_EVENT_KIND_INSTANCE, v1.EventKind_EVENT_KIND_FORMATION, v1.EventKind_EVENT_KIND_SETTINGS}
 	sub := m.Events.Subscribe(ctx, kinds)
-	// The node record carries each seat instance's state and nothing else of an instance, so an
-	// instance event bumps the record only when it brings a state this loop has not seen: a seat's
-	// measurements and transport change without a word to the mesh
-	states := map[string]v1.InstanceState{}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case ev := <-sub.Events():
-			// A copy of another member's formation changes nothing about this node.
+			// A copy of another member's formation changes nothing about this node
 			if f := ev.GetFormation(); f != nil && f.GetConductor() != m.identity.ID {
 				continue
-			}
-			if in := ev.GetInstance(); in != nil {
-				if ev.GetAction() == v1.EventAction_EVENT_ACTION_DELETED {
-					delete(states, in.GetId())
-				} else if last, seen := states[in.GetId()]; seen && last == in.GetState() {
-					continue
-				} else {
-					states[in.GetId()] = in.GetState()
-				}
 			}
 			if ev.GetSeq() > 0 {
 				m.bump()
@@ -641,101 +754,7 @@ func (m *Manager) watch(ctx context.Context) {
 	}
 }
 
-// This node's record as every other member sees it, rebuilt only once something in it changed
-func (m *Manager) Record() *v1.Node {
-	addresses := m.addresses()
-	m.mu.Lock()
-	rec := m.record
-	stale := rec == nil || m.dirty || !slices.Equal(rec.GetAddresses(), addresses)
-	m.dirty = false
-	m.mu.Unlock()
-	if stale {
-		rec = m.build(addresses)
-		m.mu.Lock()
-		// A build that began before another one finished must not replace the newer record
-		if m.record != nil && m.record.GetSequence() > rec.GetSequence() {
-			rec = m.record
-		} else {
-			m.record = rec
-		}
-		m.mu.Unlock()
-	}
-	out := proto.Clone(rec).(*v1.Node)
-	out.SeenAt = timestamppb.Now()
-	return out
-}
-
-// Gathers the record from every part of the daemon it describes
-func (m *Manager) build(addresses []string) *v1.Node {
-	m.mu.Lock()
-	seq := m.seq
-	links := make([]*v1.Link, 0, len(m.links))
-	for _, l := range m.links {
-		links = append(links, proto.Clone(l).(*v1.Link))
-	}
-	address := m.advertiseLocked()
-	fingerprint, hasTLS := m.servedCertLocked()
-	m.mu.Unlock()
-	sort.Slice(links, func(i, j int) bool { return links[i].GetTo() < links[j].GetTo() })
-	rec := &v1.Node{
-		Id:             m.identity.ID,
-		Name:           m.name(),
-		Version:        m.Version,
-		Links:          links,
-		State:          v1.NodeState_NODE_STATE_READY,
-		Sequence:       seq,
-		SeenAt:         timestamppb.Now(),
-		Self:           true,
-		PublicKey:      m.identity.PublicKey,
-		TlsFingerprint: fingerprint,
-		Os:             runtime.GOOS,
-		Arch:           runtime.GOARCH,
-		Address:        address,
-		Tls:            hasTLS,
-		Addresses:      addresses,
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-	defer cancel()
-	if profile, err := m.Host.Profile(ctx, false); err == nil {
-		rec.Profile = profile
-	}
-	if list, err := m.Installs.List(ctx, ""); err == nil {
-		rec.Installs = list
-		for _, in := range list {
-			rt, err := m.Runtimes.Get(in.GetRuntimeId())
-			if err != nil {
-				continue
-			}
-			rec.Capabilities = append(rec.Capabilities, &v1.Capability{RuntimeId: rt.ID(), InstallId: in.GetId(), Version: in.GetVersion(), Shapes: rt.Shapes(in)})
-		}
-	}
-	if manifests, err := m.Store.ListManifests(); err == nil {
-		for _, s := range manifests {
-			rec.Stored = append(rec.Stored, Summary(s))
-		}
-	}
-	if m.Perf != nil {
-		rec.Throughput = m.Perf.Throughputs()
-	}
-	if m.Routes != nil {
-		for _, r := range m.Routes.List() {
-			if !r.GetForwarded() {
-				rec.Routes = append(rec.Routes, r)
-			}
-		}
-	}
-	if m.Formations != nil {
-		for _, f := range m.Formations.Conducted() {
-			rec.FormationIds = append(rec.FormationIds, f.GetId())
-		}
-		rec.Seats = m.Formations.Seats()
-		rec.Slots = m.Formations.Slots()
-	}
-	return rec
-}
-
-// A stored model as a member advertises it, its descriptor digested so a puller knows the model
-// the moment the pull ends
+// A stored model as a member advertises it, with its descriptor digest
 func Summary(s *v1.StoredModel) *v1.StoredSummary {
 	out := &v1.StoredSummary{
 		SourceId:       s.GetSourceId(),
@@ -755,7 +774,7 @@ func Summary(s *v1.StoredModel) *v1.StoredSummary {
 	return out
 }
 
-// The name other members show for this node: the host label, else the hostname
+// The host label, else the hostname, other members show for this node
 func (m *Manager) name() string {
 	if m.Settings != nil {
 		if label := m.Settings.Get().GetHostLabel(); label != "" {
@@ -770,7 +789,7 @@ func (m *Manager) name() string {
 	return m.identity.ID[:8]
 }
 
-// Every address this node can be reached at: each non loopback interface address on the mesh port
+// Each non loopback interface address on the mesh port
 func (m *Manager) addresses() []string {
 	m.mu.Lock()
 	port := m.portLocked()
@@ -803,7 +822,7 @@ func (m *Manager) addresses() []string {
 	return out
 }
 
-// Members' records, newest sequence copies, this node excluded
+// Members' records, this node excluded
 func (m *Manager) snapshotMembers() map[string]*v1.Node {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -837,19 +856,32 @@ func (m *Manager) Node(id string) (*v1.Node, error) {
 		return m.Record(), nil
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if mb, ok := m.members[id]; ok {
+		defer m.mu.Unlock()
 		return proto.Clone(mb.rec).(*v1.Node), nil
 	}
 	for _, mb := range m.members {
 		if mb.rec.GetName() == id {
+			defer m.mu.Unlock()
 			return proto.Clone(mb.rec).(*v1.Node), nil
 		}
 	}
+	m.mu.Unlock()
 	if m.name() == id {
 		return m.Record(), nil
 	}
 	return nil, fmt.Errorf("%w %q", ErrUnknownNode, id)
+}
+
+// The member record behind a client, for callers that need its facts
+func (m *Manager) Member(nodeID string) (*v1.Node, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mb, ok := m.members[nodeID]
+	if !ok {
+		return nil, false
+	}
+	return proto.Clone(mb.rec).(*v1.Node), true
 }
 
 // Every link measured by every member, this node's first
@@ -874,7 +906,7 @@ func (m *Manager) Links() []*v1.Link {
 	return out
 }
 
-// The mesh session token a peer sends, if it is one we minted and it has not expired
+// The member a bearer token names, when this node minted it and it has not expired
 func (m *Manager) Peer(token string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -889,16 +921,52 @@ func (m *Manager) Peer(token string) (string, bool) {
 	return id, true
 }
 
-// A random URL safe token
+// A random URL safe token of 32 bytes
 func randomToken() (string, error) {
-	return auth.RandomString(32)
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw), nil
 }
 
-// The hash of a mesh id that beacons and handshakes carry, so a node answers only for its mesh
+// The hash of a mesh id that beacons, admissions and grants carry, so a node answers only for its mesh
 func meshHash(id string) []byte {
 	sum := sha256.Sum256([]byte("nebu-mesh:" + id))
 	return sum[:]
 }
 
-// Marks this node's record changed, for the conductor after a formation change
+// Reads this node's identity, making and storing one on first start, true when it was made
+func loadIdentity(ctx context.Context, store *db.DB) (*db.Identity, bool, error) {
+	id, err := store.GetIdentity(ctx)
+	if err == nil || !db.IsNotFound(err) {
+		return id, false, err
+	}
+	if id, err = newIdentity(); err != nil {
+		return nil, false, err
+	}
+	if err := store.PutIdentity(ctx, id); err != nil {
+		return nil, false, err
+	}
+	return id, true, nil
+}
+
+// This node's id, made and stored on first start, for managers built before the mesh opens
+func NodeID(ctx context.Context, store *db.DB) (string, error) {
+	id, _, err := loadIdentity(ctx, store)
+	if err != nil {
+		return "", err
+	}
+	return id.ID, nil
+}
+
+// The hash of a mesh id in hex
+func meshHex(id string) string {
+	return hex.EncodeToString(meshHash(id))
+}
+
+// The hash of a mesh id as beacons and admissions carry it, for callers outside the package
+func HashOf(id string) string { return meshHex(id) }
+
+// Marks this node's record for a rebuild, for the conductor after a formation change
 func (m *Manager) Bump() { m.bump() }

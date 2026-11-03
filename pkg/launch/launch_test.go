@@ -57,7 +57,7 @@ func TestLaunchLogsAndStop(t *testing.T) {
 		t.Fatal("running process should have no exit error")
 	}
 	start := time.Now()
-	if err := p.Stop(2 * time.Second); err != nil {
+	if err := p.Stop(context.Background(), 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if time.Since(start) > 3*time.Second {
@@ -115,7 +115,7 @@ func TestWaitHealthy(t *testing.T) {
 	}))
 	defer srv.Close()
 	p, _ := launcher().Launch(context.Background(), Spec{Command: "sleep", Args: []string{"30"}, LogPath: logPath(t)})
-	defer p.Stop(time.Second)
+	defer p.Stop(context.Background(), time.Second)
 	if err := WaitHealthy(context.Background(), p, srv.URL, 10*time.Millisecond, 5*time.Second, func(time.Duration) { t.Fatal("a healthy start is not slow") }); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestWaitHealthy(t *testing.T) {
 	}
 	// A live process that stays unhealthy is reported slow, over and over, and never given up on
 	alive, _ := launcher().Launch(context.Background(), Spec{Command: "sleep", Args: []string{"30"}, LogPath: logPath(t)})
-	defer alive.Stop(time.Second)
+	defer alive.Stop(context.Background(), time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	var slow []time.Duration
 	err = WaitHealthy(ctx, alive, "http://127.0.0.1:1/health", 10*time.Millisecond, 20*time.Millisecond, func(waited time.Duration) {
@@ -156,14 +156,14 @@ func TestRunningAndTerminate(t *testing.T) {
 	if proc.Running(pid, nil) {
 		t.Fatal("empty command must not match")
 	}
-	if !proc.Terminate(pid, 2*time.Second) {
+	if !proc.Terminate(context.Background(), pid, 2*time.Second) {
 		t.Fatal("terminate should report the process gone")
 	}
 	<-p.Done()
 	if proc.Running(pid, []string{"sleep", "30"}) {
 		t.Fatal("terminated process must not be running")
 	}
-	if !proc.Terminate(pid, time.Second) {
+	if !proc.Terminate(context.Background(), pid, time.Second) {
 		t.Fatal("terminate on a gone pid is true")
 	}
 }
@@ -175,14 +175,17 @@ func TestAdoptIgnoringTerm(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitLines(t, p.Log(), 2)
-	a := Adopt(p.Pid(), path)
+	a, err := Adopt(p.Pid(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if a.Pid() != p.Pid() || a.Err() != nil {
 		t.Fatal("adopted handle should mirror the pid with no exit yet")
 	}
 	before := len(waitLines(t, a.Log(), 3))
 	waitLines(t, a.Log(), before+2)
 	start := time.Now()
-	if err := a.Stop(300 * time.Millisecond); err != nil {
+	if err := a.Stop(context.Background(), 300*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	if time.Since(start) > 6*time.Second {
@@ -193,15 +196,34 @@ func TestAdoptIgnoringTerm(t *testing.T) {
 	default:
 		t.Fatal("adopted done should be closed after stop")
 	}
-	if a.Err() != ErrUnknownExit {
-		t.Fatalf("adopted exit error %v", a.Err())
+	if a.Err() != nil {
+		t.Fatalf("an exit this daemon asked for is clean, got %v", a.Err())
 	}
 	<-p.Done()
 	if proc.Running(p.Pid(), []string{"sh"}) {
 		t.Fatal("process should be gone")
 	}
-	if a.Stop(time.Second) != nil {
+	if a.Stop(context.Background(), time.Second) != nil {
 		t.Fatal("stop after done is a no-op")
+	}
+}
+
+// An adopted process leaving on its own reports an unknown exit, the stop it never got telling it from a clean one
+func TestAdoptedUnaskedExitIsUnknown(t *testing.T) {
+	path := logPath(t)
+	p, err := launcher().Launch(context.Background(), Spec{Command: "sh", Args: []string{"-c", `echo one; sleep 0.3; echo two; exit 0`}, LogPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLines(t, p.Log(), 1)
+	a, err := Adopt(p.Pid(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-a.Done()
+	<-p.Done()
+	if !errors.Is(a.Err(), ErrUnknownExit) {
+		t.Fatalf("an exit nobody asked for is unknown, got %v", a.Err())
 	}
 }
 
@@ -210,7 +232,7 @@ func TestRotateAndReadTail(t *testing.T) {
 	LogFileMax = 1500
 	defer func() { LogFileMax = old }()
 	path := logPath(t)
-	p, err := launcher().Launch(context.Background(), Spec{Command: "sh", Args: []string{"-c", `for i in $(seq 1 300); do echo line$i; done; sleep 0.5; echo last`}, LogPath: path})
+	p, err := launcher().Launch(context.Background(), Spec{Command: "sh", Args: []string{"-c", `seq -f 'line%g' 1 300; sleep 0.5; echo last`}, LogPath: path})
 	if err != nil {
 		t.Fatal(err)
 	}

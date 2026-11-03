@@ -103,13 +103,31 @@ func (s *Service) identityFrom(claims map[string]any) identity {
 	return id
 }
 
-// Whether the ID token left out claims the allow lists need, which userinfo may carry
+// Whether the ID token left out claims the allow lists or role groups need, which userinfo may carry
 func (s *Service) needsUserinfo(id identity) bool {
 	if id.email == "" {
 		return true
 	}
-	return len(s.cfg.GetAllowedGroups()) > 0 && len(id.groups) == 0
+	groupsUsed := len(s.cfg.GetAllowedGroups()) > 0 || len(s.cfg.GetAdminGroups()) > 0 || len(s.cfg.GetOperatorGroups()) > 0
+	return groupsUsed && len(id.groups) == 0
 }
+
+// The role a signed-in user gets, admin for admin_groups, operator for operator_groups, inference otherwise
+func (s *Service) role(id identity) v1.Role {
+	in := func(groups []string) bool {
+		return slices.ContainsFunc(groups, func(g string) bool { return slices.Contains(id.groups, g) })
+	}
+	switch {
+	case in(s.cfg.GetAdminGroups()):
+		return v1.Role_ROLE_ADMIN
+	case in(s.cfg.GetOperatorGroups()):
+		return v1.Role_ROLE_OPERATOR
+	}
+	return v1.Role_ROLE_INFERENCE
+}
+
+// Whether some group signs users in as admins, so single sign-on can administer nebu
+func (s *Service) HasAdmins() bool { return len(s.cfg.GetAdminGroups()) > 0 }
 
 // Fills claims the ID token lacks from userinfo
 func merge(base, extra map[string]any) map[string]any {

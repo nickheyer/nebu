@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "nebu/v1/gateway.proto";
 
@@ -95,7 +96,7 @@ message ListConversationsResponse {
 
 // Fetches one of the caller's conversations with its turns
 message GetConversationRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the conversation
@@ -105,7 +106,7 @@ message GetConversationResponse {
 
 // Saves a conversation, replacing one with the same id
 message PutConversationRequest {
-  Conversation conversation = 1;
+  Conversation conversation = 1 [(buf.validate.field).required = true];
 }
 
 // Returns the saved conversation with its timestamps
@@ -115,7 +116,7 @@ message PutConversationResponse {
 
 // Renames one of the caller's conversations
 message RenameConversationRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
   string title = 2;
 }
 
@@ -126,7 +127,7 @@ message RenameConversationResponse {
 
 // Removes one of the caller's conversations and the images stored for it
 message DeleteConversationRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Confirms the removal
@@ -134,8 +135,8 @@ message DeleteConversationResponse {}
 
 // Stores an image for the caller's conversations
 message PutChatFileRequest {
-  ChatFile file = 1;
-  bytes data = 2;
+  ChatFile file = 1 [(buf.validate.field).required = true];
+  bytes data = 2 [(buf.validate.field).bytes.min_len = 1];
 }
 
 // Returns the stored image's record
@@ -145,7 +146,7 @@ message PutChatFileResponse {
 
 // Fetches one of the caller's stored images
 message GetChatFileRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the image with its bytes
@@ -156,7 +157,12 @@ message GetChatFileResponse {
 
 // Removes stored images no conversation refers to any more
 message DeleteChatFilesRequest {
-  repeated string ids = 1;
+  repeated string ids = 1 [(buf.validate.field).repeated = {
+    min_items: 1
+    items: {
+      string: {min_len: 1}
+    }
+  }];
 }
 
 // Confirms the removal

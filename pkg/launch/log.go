@@ -48,6 +48,8 @@ type Log struct {
 	dropped  int
 	closed   bool
 	subs     map[chan struct{}]struct{}
+	// Logs every written line is copied into
+	tees []*Log
 }
 
 // Builds a log keeping the last capacity lines
@@ -66,7 +68,20 @@ func (l *Log) Write(line string) {
 		l.lines = l.lines[drop:]
 		l.dropped += drop
 	}
+	for _, t := range l.tees {
+		t.Write(line)
+	}
 	l.wakeLocked()
+}
+
+// Copies the retained lines into another log and every line written later as it is written
+func (l *Log) Tee(to *Log) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, line := range l.lines {
+		to.Write(line)
+	}
+	l.tees = append(l.tees, to)
 }
 
 // Returns the last n retained lines, all when zero

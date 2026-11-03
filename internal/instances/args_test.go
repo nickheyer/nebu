@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	"github.com/nickheyer/nebu/internal/instances/fake"
-	"github.com/nickheyer/nebu/pkg/archs"
-	"github.com/nickheyer/nebu/pkg/descriptor"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/runtimes"
 )
@@ -18,6 +16,7 @@ type oneSlot struct{ res *Reservation }
 
 func (s oneSlot) Reservation(context.Context, string) (*Reservation, error) { return s.res, nil }
 func (oneSlot) OnInstance(*v1.Instance)                                     {}
+func (s oneSlot) Owns(name string) bool                                     { return name == s.res.Name }
 
 // A run's words follow the slot's in the command, persist on its request, and bad words are refused
 func TestRunArgs(t *testing.T) {
@@ -25,11 +24,6 @@ func TestRunArgs(t *testing.T) {
 	defer cancel()
 	n := newSeatNode(t, ctx)
 	m := n.manager(t, ctx, nil)
-	families, err := archs.New(archs.All())
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.Inspector.Builder = &descriptor.Builder{Archs: families}
 	m.Slots = oneSlot{&Reservation{SlotID: "s", Name: "main", Args: "--cache-reuse 256"}}
 	run := &v1.RunRequest{SourceId: "src", Repo: "org/model", Group: "q4", RuntimeId: fake.RuntimeID, SlotId: "s", Args: `--cache-reuse 512 --alias "{{.Name}} run"`}
 
@@ -42,15 +36,14 @@ func TestRunArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := in.GetCommand()
+	if in.GetRequest().GetArgs() != run.GetArgs() {
+		t.Fatalf("request args %q", in.GetRequest().GetArgs())
+	}
+	cmd := waitState(t, m, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY).GetCommand()
 	want := []string{"--cache-reuse", "256", "--cache-reuse", "512", "--alias", "main run"}
 	if len(cmd) < len(want) || !slices.Equal(cmd[len(cmd)-len(want):], want) {
 		t.Fatalf("command %q ends in %q", cmd, want)
 	}
-	if in.GetRequest().GetArgs() != run.GetArgs() {
-		t.Fatalf("request args %q", in.GetRequest().GetArgs())
-	}
-	waitState(t, m, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
 	if _, err := m.Stop(ctx, in.GetId()); err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +71,7 @@ func TestSeatArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stage = waitState(t, m, stage.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
 	if slices.Contains(stage.GetCommand(), "--cache-reuse") {
 		t.Fatalf("helper command %q", stage.GetCommand())
 	}
@@ -91,7 +85,7 @@ func TestSeatArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := head.GetCommand()
+	cmd := waitState(t, m, head.GetId(), v1.InstanceState_INSTANCE_STATE_READY).GetCommand()
 	if len(cmd) < len(want) || !slices.Equal(cmd[len(cmd)-len(want):], want) {
 		t.Fatalf("command %q ends in %q", cmd, want)
 	}

@@ -3,6 +3,7 @@ package chat
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/tools"
@@ -32,15 +33,20 @@ const (
 
 // One request to a model, as every protocol reads and writes it
 type Request struct {
-	Kind        Kind
-	Model       string
+	Kind  Kind
+	Model string
+	// The turns of a chat, or for Generate any system turns then one user turn per prompt
 	Messages    []Message
 	MaxTokens   int
 	Temperature *float64
 	TopP        *float64
 	TopK        *int
 	Stop        []string
-	Stream      bool
+	// Choices the client asked for, zero or one meaning a single answer
+	N int
+	// Whether the prompt reaches the model as written, with no chat template around it
+	Raw    bool
+	Stream bool
 	// Whether a streamed answer ends with a chunk of usage alone, as OpenAI clients ask with stream_options
 	IncludeUsage bool
 	// Whether the answer goes out in the OpenAI Responses shape rather than chat completions
@@ -50,10 +56,24 @@ type Request struct {
 	ToolChoice string
 	// Tool endpoints the request asks the gateway to connect for it alone
 	Sources []Source
-	// Texts to embed
-	Inputs []string
+	// Texts or token id lists to embed, one part each
+	Inputs []Part
 	// Fields of the wire request no protocol maps, carried as they are
 	Extra map[string]json.RawMessage
+	// The request as the client sent it, for a runtime that serves the client's endpoint itself
+	Origin *Origin
+}
+
+// The client's own request, which a runtime serving the same endpoint takes with only the model renamed
+type Origin struct {
+	Path string
+	// The body Parse read, held without copying
+	Body []byte
+	// Why translating into another protocol would drop something the client asked for, nil when nothing would be lost
+	Untranslatable error
+	// Where Body names what to run, both offsets zero when it names nothing, and the name it gave
+	model [2]int
+	named string
 }
 
 // A tool endpoint a request names, connected for the request alone
@@ -75,14 +95,18 @@ type Message struct {
 	Extra  map[string]json.RawMessage
 }
 
-// Text, an image as base64 or a URL, or thinking with its signature in Data
+// Text, thinking with its signature in Data, an image as base64 or a URL, or a prompt of token ids
 type Part struct {
 	Type      string
 	Text      string
 	MediaType string
 	Data      string
 	URL       string
-	Extra     map[string]json.RawMessage
+	// How closely the model looks at an image, low, high, or auto, empty leaving it to the runtime
+	Detail string
+	// The ids of a tokens part
+	Tokens []int
+	Extra  map[string]json.RawMessage
 }
 
 // A tool call with JSON arguments
@@ -119,16 +143,24 @@ type Provided struct {
 type Result struct {
 	ID    string
 	Model string
-	Text  string
+	// The index of the choice this answer is, zero unless the request asked for several
+	Choice int
+	Text   string
 	// The reasoning the model wrote before its answer
 	Thinking  string
 	ToolCalls []ToolCall
 	Stop      string
-	Usage     Usage
-	Vectors   [][]float64
+	// Tokens of the whole answer, every choice together, carried on the first choice
+	Usage   Usage
+	Vectors [][]float64
 	// Tool calls the gateway ran itself on the way to the answer, in order
-	Runs  []*Run
+	Runs []*Run
+	// The choices after this one when the request asked for several, in index order
+	More  []*Result
 	Extra map[string]json.RawMessage
+	// The ids of the answer tokens and of the prompt, when the gateway or the runtime reports them
+	TokenIDs       []int
+	PromptTokenIDs []int
 }
 
 // Tokens of an answer, by round when it took more than one
@@ -144,6 +176,8 @@ type Usage struct {
 // The prompt and completion tokens of one model round
 type Round struct {
 	In, Out int
+	// The choice the round answered, zero unless the request asked for several
+	Choice int
 }
 
 // A tool call the gateway ran itself, with what the tool answered
@@ -173,7 +207,7 @@ const (
 	Called
 	// A tool the gateway ran, with its answer
 	Ran
-	// The stop reason and usage
+	// The stop reason and usage, with every choice's result when there are several
 	Stopped
 	// The failure that ended the answer
 	Failed
@@ -181,10 +215,15 @@ const (
 
 // One piece of an answer
 type Event struct {
-	Kind    EventKind
-	Text    string
-	Tool    *ToolCall
-	Index   int
+	Kind EventKind
+	Text string
+	// The ids of the tokens a Said delta carries, when the gateway decoded them itself
+	TokenIDs []int
+	Tool     *ToolCall
+	// The tool call a Called fragment belongs to, counted within its choice
+	Index int
+	// The choice the event belongs to, zero unless the request asked for several
+	Choice  int
 	Run     *Run
 	Res     *Result
 	Failure *Failure
@@ -201,7 +240,35 @@ func (r *Result) RunsOf(kind v1.ToolServerKind) int {
 	return n
 }
 
-// The answer's rounds, the answer itself when the runtime lists none
+// This choice and every one after it, in index order
+func (r *Result) All() []*Result {
+	return append([]*Result{r}, r.More...)
+}
+
+// Joins answers from separate calls into one answer of several choices, the i-th answer becoming choice i
+func Combine(answers []*Result) *Result {
+	out := *answers[0]
+	out.Choice, out.More, out.Usage = 0, nil, Usage{}
+	for i, a := range answers {
+		out.Usage.In += a.Usage.In
+		out.Usage.Out += a.Usage.Out
+		out.Usage.Cached += a.Usage.Cached
+		out.Usage.DraftOffered += a.Usage.DraftOffered
+		out.Usage.DraftAccepted += a.Usage.DraftAccepted
+		for _, round := range a.Usage.RoundsOrSelf() {
+			round.Choice = i
+			out.Usage.Rounds = append(out.Usage.Rounds, round)
+		}
+		if i > 0 {
+			c := *a
+			c.Choice, c.More, c.Usage = i, nil, Usage{}
+			out.More = append(out.More, &c)
+		}
+	}
+	return &out
+}
+
+// The answer's rounds, the answer itself as one round when the runtime lists none
 func (u Usage) RoundsOrSelf() []Round {
 	if len(u.Rounds) > 0 {
 		return u.Rounds
@@ -218,4 +285,21 @@ func StopOf(reason string, calls int) string {
 		return StopEnd
 	}
 	return reason
+}
+
+// Orders per choice results by index, the lowest first and the rest under it
+func choices(byIndex map[int]*Result) *Result {
+	if len(byIndex) == 0 {
+		return &Result{}
+	}
+	keys := make([]int, 0, len(byIndex))
+	for k := range byIndex {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	first := byIndex[keys[0]]
+	for _, k := range keys[1:] {
+		first.More = append(first.More, byIndex[k])
+	}
+	return first
 }

@@ -1,0 +1,19 @@
+@use '../styles/layers' as layers;
+@use '../styles/reset' as reset;
+@use '../styles/theme' as theme;
+
+/*
+  Layer order is declared exactly once, here, by the mandatory provider mount.
+  Component scoped styles use `layers.neo-components / neo-variants / neo-states`
+  to opt their rules into the cascade. Unlayered consumer rules beat every
+  neo-* layer regardless of specificity. See `src/lib/styles/layers.scss`.
+*/
+@include layers.order;
+
+@include layers.neo-reset {
+  @include reset.nested;
+}
+
+@include layers.neo-theme {
+  @include theme.theme;
+}

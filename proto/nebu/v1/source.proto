@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "nebu/v1/model.proto";
 
@@ -207,7 +208,7 @@ message SearchRequest {
   string source_id = 1;
   string query = 2;
   repeated string tags = 3;
-  uint32 limit = 4;
+  uint32 limit = 4 [(buf.validate.field).uint32.lte = 10000];
   string sort = 5;
   bool ascending = 6;
   // Facet id to value, comma separated for multi valued facets
@@ -228,8 +229,8 @@ message SearchResponse {
 
 // Resolves a repo and revision to artifacts
 message ResolveRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string revision = 3;
 }
 
@@ -240,8 +241,8 @@ message ResolveResponse {
 
 // Lists revisions of a repository
 message ListRevisionsRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns revisions, default first
@@ -251,7 +252,7 @@ message ListRevisionsResponse {
 
 // Creates a source
 message CreateSourceRequest {
-  Source source = 1;
+  Source source = 1 [(buf.validate.field).required = true];
 }
 
 // Return the new source and its capabilities.
@@ -261,7 +262,7 @@ message CreateSourceResponse {
 
 // Replace source name and settings. Keep its ID and kind.
 message UpdateSourceRequest {
-  Source source = 1;
+  Source source = 1 [(buf.validate.field).required = true];
 }
 
 // Return the updated source and its capabilities.
@@ -271,7 +272,7 @@ message UpdateSourceResponse {
 
 // Remove a source. Seeded defaults cannot be removed.
 message DeleteSourceRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the removed source
@@ -281,8 +282,8 @@ message DeleteSourceResponse {
 
 // Fetches the description of a repository
 message GetModelCardRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string revision = 3;
 }
 

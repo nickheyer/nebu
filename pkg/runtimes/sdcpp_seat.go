@@ -93,8 +93,16 @@ func (r SDCpp) LaunchSeat(in Launch) (*Command, error) {
 		}
 		// Only the denoiser runs on the stage, every other module on the head's own first device
 		// or its CPU when it has none
+		pinned, err := launchDevices(in)
+		if err != nil {
+			return nil, err
+		}
+		devices, err := ggmlDevices(in.InstallRecord, pinned, pinned)
+		if err != nil {
+			return nil, err
+		}
 		own := "cpu"
-		if devices := ggmlDevices(in.InstallRecord, in.Devices); len(devices) > 0 {
+		if len(devices) > 0 {
 			own = devices[0]
 		}
 		p := in.Params.Clone()

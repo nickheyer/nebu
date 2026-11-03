@@ -50,6 +50,57 @@ func TestDefaultsAndDerivedKeys(t *testing.T) {
 	if got := cfg.GetContexts(); len(got) != 3 || got[2] != 131072 {
 		t.Fatalf("contexts %v", got)
 	}
+	fc := cfg.GetGateway().GetFlowControl()
+	if fc.GetQueueCapacity() != 1024 || fc.GetQueueTimeoutMs() != 30000 || fc.GetSheddableBelow() != -1 || fc.GetSaturationQueueDepth() != 5 || fc.GetSaturationKvUtilization() != 0.8 || fc.GetMetricsStalenessMs() != 2000 {
+		t.Fatalf("flow control defaults %v", fc)
+	}
+	if cfg.GetGateway().GetTraceRetention() != "168h" || cfg.GetGateway().GetTraceRing() != 1024 || cfg.GetGateway().GetDefaultOutputTokens() != 256 {
+		t.Fatalf("gateway trace defaults %v", cfg.GetGateway())
+	}
+	if cfg.GetTelemetry().GetSampleRatio() != 0.1 || cfg.GetTelemetry().GetEndpoint() != "" || cfg.GetMetrics().GetListen() != "" {
+		t.Fatalf("telemetry and metrics defaults %v %v", cfg.GetTelemetry(), cfg.GetMetrics())
+	}
+}
+
+// Values outside the schema's rules are refused at load, nested and environment ones included
+func TestSchemaRulesRefuse(t *testing.T) {
+	cases := map[string]string{
+		"telemetry:\n  sample_ratio: 1.5":                             "telemetry.sample_ratio",
+		"gateway:\n  flow_control:\n    queue_capacity: 0":            "gateway.flow_control.queue_capacity",
+		"gateway:\n  flow_control:\n    saturation_kv_utilization: 0": "gateway.flow_control.saturation_kv_utilization",
+		"gateway:\n  trace_ring: 0":                                   "gateway.trace_ring",
+	}
+	for text, want := range cases {
+		if _, err := load(t, text, nil); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: want error naming %s, got %v", text, want, err)
+		}
+	}
+	if _, err := load(t, "", map[string]string{"NEBU_GATEWAY_FLOW_CONTROL_SATURATION_QUEUE_DEPTH": "0"}); err == nil || !strings.Contains(err.Error(), "saturation_queue_depth") {
+		t.Fatalf("env value under its rule: %v", err)
+	}
+	cfg, err := load(t, "metrics:\n  listen: 127.0.0.1:9090\ntelemetry:\n  endpoint: otel:4318\n  sample_ratio: 1\n", map[string]string{"NEBU_GATEWAY_TRACE_RETENTION": "24h"})
+	if err != nil || cfg.GetMetrics().GetListen() != "127.0.0.1:9090" || cfg.GetTelemetry().GetEndpoint() != "otel:4318" || cfg.GetTelemetry().GetSampleRatio() != 1 || cfg.GetGateway().GetTraceRetention() != "24h" {
+		t.Fatalf("valid values %v %v", cfg, err)
+	}
+}
+
+// The listener pair defaults to one generated in data_dir, unless tls names one or plaintext is chosen
+func TestTLSDefaults(t *testing.T) {
+	cfg, err := load(t, "data_dir: /var/lib/nebu\n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GetTls().GetCertFile() != filepath.Join("/var/lib/nebu", CertFile) || cfg.GetTls().GetKeyFile() != filepath.Join("/var/lib/nebu", KeyFile) {
+		t.Fatalf("generated pair %v", cfg.GetTls())
+	}
+	cfg, err = load(t, "tls:\n  cert_file: /etc/nebu/c.pem\n  key_file: /etc/nebu/k.pem\n", nil)
+	if err != nil || cfg.GetTls().GetCertFile() != "/etc/nebu/c.pem" || cfg.GetTls().GetKeyFile() != "/etc/nebu/k.pem" {
+		t.Fatalf("configured pair %v %v", cfg.GetTls(), err)
+	}
+	cfg, err = load(t, "", map[string]string{"NEBU_TLS_DISABLED": "true"})
+	if err != nil || cfg.GetTls().GetCertFile() != "" || cfg.GetTls().GetKeyFile() != "" || !cfg.GetTls().GetDisabled() {
+		t.Fatalf("plaintext %v %v", cfg.GetTls(), err)
+	}
 }
 
 func TestFileOverridesDefaultsAndKeepsSiblings(t *testing.T) {
@@ -193,5 +244,33 @@ func TestSearchPathSkipsTheWorkingDirectory(t *testing.T) {
 	}
 	if cfg, err = load(t, "", nil); err != nil || cfg.GetListen() != "127.0.0.1:2" {
 		t.Fatalf("home config: %v %v", cfg.GetListen(), err)
+	}
+}
+
+// Mesh topology, sync and routing settings default to full, push-pull and endpoint and refuse other words
+func TestMeshTopologyAndRoutingSettings(t *testing.T) {
+	cfg, err := load(t, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := cfg.GetMesh(); m.GetTopology() != MeshTopologyFull || m.GetSync() != MeshSyncPushPull || m.GetRoutingMode() != RoutingEndpoint || cfg.GetScheduler().GetListen() != "" {
+		t.Fatalf("mesh defaults %v scheduler %v", m, cfg.GetScheduler())
+	}
+	cfg, err = load(t, "mesh:\n  topology: spoke\n  hubs: [hub-a, hub-b]\n  sync: pull\n  routing_mode: parent\n  import_routing:\n    vllm/hf:org/m:Q4: endpoint\nscheduler:\n  listen: 127.0.0.1:8486\n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := cfg.GetMesh()
+	if m.GetTopology() != MeshTopologySpoke || len(m.GetHubs()) != 2 || m.GetSync() != MeshSyncPull || m.GetRoutingMode() != RoutingParent || m.GetImportRouting()["vllm/hf:org/m:Q4"] != RoutingEndpoint || cfg.GetScheduler().GetListen() != "127.0.0.1:8486" {
+		t.Fatalf("mesh file settings %v scheduler %v", m, cfg.GetScheduler())
+	}
+	for _, text := range []string{"mesh:\n  topology: ring\n", "mesh:\n  sync: both\n", "mesh:\n  routing_mode: direct\n", "mesh:\n  import_routing:\n    p: sideways\n"} {
+		if _, err := load(t, text, nil); err == nil {
+			t.Fatalf("%q is accepted", text)
+		}
+	}
+	cfg, err = load(t, "", map[string]string{"NEBU_MESH_TOPOLOGY": "hub", "NEBU_MESH_HUBS": "a,b", "NEBU_SCHEDULER_LISTEN": "0.0.0.0:8486"})
+	if err != nil || cfg.GetMesh().GetTopology() != MeshTopologyHub || len(cfg.GetMesh().GetHubs()) != 2 || cfg.GetScheduler().GetListen() != "0.0.0.0:8486" {
+		t.Fatalf("environment %v %v", cfg.GetMesh(), err)
 	}
 }

@@ -62,7 +62,7 @@ func TestSDCppLaunch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd, err := rt.Launch(Launch{Name: "wan", Params: params, Artifacts: map[string]string{"weights": "/store/wan.gguf", "prepared_dir": prepared}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/sd-server"}, Descriptor: sdDescriptor("wan", false, false), Devices: []*v1.Device{{Id: "GPU-1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Facts: map[string]string{"index": "0"}}}, Stored: []*v1.StoredModel{lora, adapter}})
+	cmd, err := rt.Launch(Launch{Name: "wan", Params: params, Artifacts: map[string]string{"weights": "/store/wan.gguf", "prepared_dir": prepared}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/sd-server"}, Descriptor: sdDescriptor("wan", false, false), Devices: []*v1.Device{{Id: "GPU-1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", MemoryTotalBytes: 24 << 30, Facts: map[string]string{"index": "0"}}}, Stored: []*v1.StoredModel{lora, adapter}})
 	if err != nil {
 		t.Fatal(err)
 	}

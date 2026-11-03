@@ -4,10 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -32,16 +30,17 @@ func ReadSSE(r io.Reader, fn func(event string, data []byte) error) error {
 		return err
 	}
 	for sc.Scan() {
-		line := sc.Text()
+		line := sc.Bytes()
 		switch {
-		case line == "":
+		case len(line) == 0:
 			if err := flush(); err != nil {
 				return err
 			}
-		case strings.HasPrefix(line, "event:"):
-			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		case strings.HasPrefix(line, "data:"):
-			data.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		case bytes.HasPrefix(line, []byte("event:")):
+			event = string(bytes.TrimSpace(line[len("event:"):]))
+		case bytes.HasPrefix(line, []byte("data:")):
+			line = line[len("data:"):]
+			data.Write(bytes.TrimPrefix(line, []byte(" ")))
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -56,14 +55,38 @@ func writeSSE(w http.ResponseWriter, event string, v any) error {
 	if err != nil {
 		return err
 	}
-	if event != "" {
-		fmt.Fprintf(w, "event: %s\n", event)
-	}
-	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+	return writeSSEData(w, event, data)
+}
+
+// Writes one server sent event of data already in JSON and flushes it
+func writeSSEData(w http.ResponseWriter, event string, data []byte) error {
+	if _, err := w.Write(sseEvent(event, data)); err != nil {
 		return err
 	}
 	flush(w)
 	return nil
+}
+
+// One server sent event of data already in JSON, named when event is set
+func sseEvent(event string, data []byte) []byte {
+	buf := make([]byte, 0, len(data)+len(event)+16)
+	if event != "" {
+		buf = append(buf, "event: "...)
+		buf = append(buf, event...)
+		buf = append(buf, '\n')
+	}
+	buf = append(buf, "data: "...)
+	buf = append(buf, data...)
+	return append(buf, '\n', '\n')
+}
+
+// One server sent event of v encoded as JSON
+func sseJSON(event string, v any) ([]byte, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return sseEvent(event, data), nil
 }
 
 func flush(w http.ResponseWriter) {
@@ -88,7 +111,7 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-// Serializes stream writes and pings when the stream has been silent, so idle watchdogs hold on
+// Serializes stream writes and writes a keepalive once the stream has been silent for keepaliveEvery
 type liveWriter struct {
 	w    http.ResponseWriter
 	ping func(http.ResponseWriter) error
@@ -106,21 +129,29 @@ func newLiveWriter(w http.ResponseWriter, ping func(http.ResponseWriter) error) 
 	return l
 }
 
+// Wakes when the silence since the last write would reach keepaliveEvery, pinging only if it has
 func (l *liveWriter) run() {
 	defer close(l.done)
-	ticker := time.NewTicker(keepaliveEvery / 3)
-	defer ticker.Stop()
+	timer := time.NewTimer(keepaliveEvery)
+	defer timer.Stop()
 	for {
 		select {
 		case <-l.stop:
 			return
-		case now := <-ticker.C:
+		case <-timer.C:
 			l.mu.Lock()
-			if l.err == nil && now.Sub(l.last) >= keepaliveEvery {
+			now := time.Now()
+			wait := keepaliveEvery - now.Sub(l.last)
+			if wait <= 0 && l.err == nil {
 				l.err = l.ping(l.w)
-				l.last = now
+				l.last, wait = now, keepaliveEvery
 			}
+			failed := l.err != nil
 			l.mu.Unlock()
+			if failed {
+				return
+			}
+			timer.Reset(wait)
 		}
 	}
 }
@@ -139,6 +170,11 @@ func (l *liveWriter) write(fn func(http.ResponseWriter) error) error {
 
 func (l *liveWriter) sse(event string, v any) error {
 	return l.write(func(w http.ResponseWriter) error { return writeSSE(w, event, v) })
+}
+
+// Writes one event whose data is already JSON
+func (l *liveWriter) sseData(event string, data []byte) error {
+	return l.write(func(w http.ResponseWriter) error { return writeSSEData(w, event, data) })
 }
 
 // Stops keepalives and waits for one in progress to finish

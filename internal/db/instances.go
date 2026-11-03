@@ -47,6 +47,24 @@ func (a *spanAt) Scan(v any) error {
 	return nil
 }
 
+// Stores data parallel ranks as JSON inside an instance wrapper, empty text when there are none
+func ranksCol(list []*v1.InstanceRank) (string, error) {
+	if len(list) == 0 {
+		return "", nil
+	}
+	data, err := protojson.Marshal(&v1.Instance{Ranks: list})
+	return string(data), err
+}
+
+// Reads ranks stored by ranksCol, none for empty text
+func ranksOf(s string) ([]*v1.InstanceRank, error) {
+	wrapped := &v1.Instance{}
+	if err := unmarshalJSON(s, wrapped); err != nil {
+		return nil, err
+	}
+	return wrapped.GetRanks(), nil
+}
+
 // Inserts or replaces an instance with every child row
 func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 	return d.tx(ctx, func(exec execFn) error {
@@ -55,8 +73,17 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 		if err != nil {
 			return err
 		}
-		if err := exec(`INSERT OR REPLACE INTO instances (id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id, seat, transport) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, in.GetName(), in.GetSourceId(), in.GetRepo(), in.GetGroup(), in.GetRuntimeId(), in.GetInstallId(), in.GetEndpoint(), enumCol(in.GetState()), in.GetPid(), in.GetError(), in.GetTaskId(), boolCol(in.GetDesiredRunning()), stamp(in.GetCreatedAt().AsTime()), timeCol(in.GetReadyAt()), timeCol(in.GetStoppedAt()), in.GetSlotId(), seat, in.GetTransport()); err != nil {
+		conditions, err := conditionsCol(in.GetConditions())
+		if err != nil {
+			return err
+		}
+		ranks, err := ranksCol(in.GetRanks())
+		if err != nil {
+			return err
+		}
+		if err := exec(`INSERT OR REPLACE INTO instances (id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id, seat, transport, generation, observed_generation, restarts, last_health_at, healthy, conditions, ranks, inventory) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, in.GetName(), in.GetSourceId(), in.GetRepo(), in.GetGroup(), in.GetRuntimeId(), in.GetInstallId(), in.GetEndpoint(), enumCol(in.GetState()), in.GetPid(), in.GetError(), in.GetTaskId(), boolCol(in.GetDesiredRunning()), stamp(in.GetCreatedAt().AsTime()), timeCol(in.GetReadyAt()), timeCol(in.GetStoppedAt()), in.GetSlotId(), seat, in.GetTransport(),
+			int64(in.GetGeneration()), int64(in.GetObservedGeneration()), in.GetRestarts(), timeCol(in.GetLastHealthAt()), boolCol(in.GetHealthy()), conditions, ranks, messageCol(in.GetInventory())); err != nil {
 			return err
 		}
 		if err := clearChildren(exec, "instance_id", id, "instance_params", "instance_command", "instance_requests", "instance_request_params", "instance_plans", "instance_plan_pools", "instance_plan_placements", "instance_plan_params", "instance_measurements", "instance_triage", "instance_templates"); err != nil {
@@ -80,8 +107,8 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 			if err != nil {
 				return err
 			}
-			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id, span, shape, seat, profile, args) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId(), strings.Join(req.GetSpan(), ","), enumCol(req.GetShape()), reqSeat, enumCol(req.GetProfile()), req.GetArgs()); err != nil {
+			if err := exec(`INSERT INTO instance_requests (instance_id, source_id, repo, weight_group, runtime_id, install_id, name, slot_id, span, shape, seat, profile, args, route_policy, route_profile, idle_unload_seconds, snapshot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				id, req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRuntimeId(), req.GetInstallId(), req.GetName(), req.GetSlotId(), strings.Join(req.GetSpan(), ","), enumCol(req.GetShape()), reqSeat, enumCol(req.GetProfile()), req.GetArgs(), messageCol(req.GetPolicy()), profileCol(req.GetRouteProfile()), req.GetIdleUnloadSeconds(), boolCol(req.GetSnapshot())); err != nil {
 				return err
 			}
 			if err := putMap(exec, `INSERT INTO instance_request_params (instance_id, name, value) VALUES (?, ?, ?)`, id, req.GetParams()); err != nil {
@@ -126,11 +153,28 @@ func (d *DB) PutInstance(ctx context.Context, in *v1.Instance) error {
 
 // Lists every instance oldest first with all child rows
 func (d *DB) ListInstances(ctx context.Context) ([]*v1.Instance, error) {
-	out, err := list(ctx, d, `SELECT id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id, seat, transport FROM instances ORDER BY created_at, id`, func(rows *sql.Rows) (*v1.Instance, error) {
+	out, err := list(ctx, d, `SELECT id, name, source_id, repo, weight_group, runtime_id, install_id, endpoint, state, pid, error, task_id, desired_running, created_at, ready_at, stopped_at, slot_id, seat, transport, generation, observed_generation, restarts, last_health_at, healthy, conditions, ranks, inventory FROM instances ORDER BY created_at, id`, func(rows *sql.Rows) (*v1.Instance, error) {
 		in := &v1.Instance{}
 		var seat seatAt
-		err := rows.Scan(&in.Id, &in.Name, &in.SourceId, &in.Repo, &in.Group, &in.RuntimeId, &in.InstallId, &in.Endpoint, enumAt[v1.InstanceState]{&in.State}, &in.Pid, &in.Error, &in.TaskId, (*flag)(&in.DesiredRunning), at{&in.CreatedAt}, at{&in.ReadyAt}, at{&in.StoppedAt}, &in.SlotId, &seat, &in.Transport)
+		var generation, observed int64
+		var conditions, ranks, inventory string
+		if err := rows.Scan(&in.Id, &in.Name, &in.SourceId, &in.Repo, &in.Group, &in.RuntimeId, &in.InstallId, &in.Endpoint, enumAt[v1.InstanceState]{&in.State}, &in.Pid, &in.Error, &in.TaskId, (*flag)(&in.DesiredRunning), at{&in.CreatedAt}, at{&in.ReadyAt}, at{&in.StoppedAt}, &in.SlotId, &seat, &in.Transport,
+			&generation, &observed, &in.Restarts, at{&in.LastHealthAt}, (*flag)(&in.Healthy), &conditions, &ranks, &inventory); err != nil {
+			return nil, err
+		}
 		in.Seat = seat.s
+		if inventory != "" {
+			in.Inventory = &v1.RuntimeInventory{}
+			if err := unmarshalJSON(inventory, in.Inventory); err != nil {
+				return nil, err
+			}
+		}
+		in.Generation, in.ObservedGeneration = uint64(generation), uint64(observed)
+		var err error
+		if in.Conditions, err = conditionsOf(conditions); err != nil {
+			return nil, err
+		}
+		in.Ranks, err = ranksOf(ranks)
 		return in, err
 	})
 	if err != nil {
@@ -153,12 +197,14 @@ func (d *DB) fillInstance(ctx context.Context, in *v1.Instance) error {
 	if in.Command, err = d.strings(ctx, `SELECT arg FROM instance_command WHERE instance_id = ? ORDER BY position`, id); err != nil {
 		return err
 	}
-	requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, span, shape, seat, profile, args FROM instance_requests WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
+	requests, err := list(ctx, d, `SELECT source_id, repo, weight_group, runtime_id, install_id, name, slot_id, span, shape, seat, profile, args, route_policy, route_profile, idle_unload_seconds, snapshot FROM instance_requests WHERE instance_id = ?`, func(rows *sql.Rows) (*v1.RunRequest, error) {
 		req := &v1.RunRequest{}
 		var span spanAt
 		var seat seatAt
-		err := rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, &span, enumAt[v1.Shape]{&req.Shape}, &seat, enumAt[v1.PlanProfile]{&req.Profile}, &req.Args)
-		req.Span, req.Seat = span.ids, seat.s
+		var policy policyAt
+		var profile profileAt
+		err := rows.Scan(&req.SourceId, &req.Repo, &req.Group, &req.RuntimeId, &req.InstallId, &req.Name, &req.SlotId, &span, enumAt[v1.Shape]{&req.Shape}, &seat, enumAt[v1.PlanProfile]{&req.Profile}, &req.Args, &policy, &profile, &req.IdleUnloadSeconds, (*flag)(&req.Snapshot))
+		req.Span, req.Seat, req.Policy, req.RouteProfile = span.ids, seat.s, policy.p, profile.p
 		return req, err
 	}, id)
 	if err != nil {

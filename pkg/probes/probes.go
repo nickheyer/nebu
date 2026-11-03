@@ -34,6 +34,7 @@ func All() []host.Probe {
 		windowsCPU{},
 		windowsGPU{},
 		windowsMemory{},
+		checkpointTools{},
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/perf"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/text"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -20,8 +21,7 @@ const (
 	relayDecode = "decode-only"
 )
 
-// Learns node numbers from the gateway's traces: streaming bandwidth and prefill compute from solo
-// instances, the ratio of predicted to measured timings from formations, and draft acceptance from both
+// Learns node numbers from traces, bandwidth and prefill compute from solo instances, timing ratios from formations, acceptance from both
 func (m *Manager) learn(ctx context.Context) {
 	sub := m.Events.Subscribe(ctx, []v1.EventKind{v1.EventKind_EVENT_KIND_TRACE})
 	for {
@@ -29,39 +29,47 @@ func (m *Manager) learn(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case ev := <-sub.Events():
-			t := ev.GetTrace()
-			if t == nil || t.GetFinishedAt() == nil || t.GetError() != "" || t.GetForwarded() {
-				continue
+			if t := ev.GetTrace(); learnable(t) {
+				m.learnTrace(ctx, t)
 			}
-			if t.GetKind() != v1.TraceKind_TRACE_KIND_CHAT && t.GetKind() != v1.TraceKind_TRACE_KIND_GENERATE {
-				continue
-			}
-			m.learnTrace(ctx, t)
 		}
 	}
 }
 
+// Whether a trace teaches timings, a finished local chat or generate answered without a gateway run tool
+func learnable(t *v1.Trace) bool {
+	if t == nil || t.GetFinishedAt() == nil || t.GetError() != "" || t.GetForwarded() {
+		return false
+	}
+	if t.GetKind() != v1.TraceKind_TRACE_KIND_CHAT && t.GetKind() != v1.TraceKind_TRACE_KIND_GENERATE {
+		return false
+	}
+	return !ranTools(t)
+}
+
+// Whether the gateway ran a tool for the trace, its stamps then spanning the tool and later rounds
+func ranTools(t *v1.Trace) bool {
+	for _, c := range t.GetToolCalls() {
+		if c.GetServer() != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) learnTrace(ctx context.Context, t *v1.Trace) {
-	route, ok := m.Routes.Lookup(t.GetRoute())
-	if !ok || m.Perf == nil {
+	if m.Perf == nil || t.GetInstanceId() == "" {
 		return
 	}
 	ttft, tpt := timings(t)
 	if t.GetCompletionTokens() < learnCompletion {
 		tpt = 0
 	}
-	if route.GetFormationId() != "" {
-		f, err := m.Get(route.GetFormationId())
-		if err != nil || f.GetConductor() != m.self() {
-			return
-		}
+	if f := m.servedBy(t.GetInstanceId()); f != nil {
 		m.learnFormation(ctx, f, t, ttft, tpt)
 		return
 	}
-	if route.GetInstanceId() == "" {
-		return
-	}
-	in, err := m.Instances.Get(route.GetInstanceId())
+	in, err := m.Instances.Get(t.GetInstanceId())
 	if err != nil || in.GetSeat() != nil || in.GetPlan() == nil {
 		return
 	}
@@ -83,9 +91,24 @@ func (m *Manager) learnTrace(ctx context.Context, t *v1.Trace) {
 	m.learnSolo(ctx, device, in.GetPlan(), rt.Policy().ContextParam, stored.GetDescriptor_(), t, ttft, tpt)
 }
 
-// Learns from a formation's trace: the ratio of predicted to measured timings for its shape, and
-// the acceptance of its draft. A relay request the decode seat answered alone is a solo request
-// of that seat and teaches its node's numbers instead.
+// The formation conducted here one of whose seats is the instance, nil when none is
+func (m *Manager) servedBy(instanceID string) *v1.Formation {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, f := range m.list {
+		if f.GetConductor() != m.self() {
+			continue
+		}
+		for _, s := range f.GetSeats() {
+			if s.GetInstanceId() == instanceID {
+				return proto.Clone(f).(*v1.Formation)
+			}
+		}
+	}
+	return nil
+}
+
+// Learns timing ratios and draft acceptance from a formation's trace, a decode-only relay request teaching that seat's node numbers
 func (m *Manager) learnFormation(ctx context.Context, f *v1.Formation, t *v1.Trace, ttft, tpt float64) {
 	plan := f.GetPlan()
 	if t.GetDraftOffered() > 0 {
@@ -118,16 +141,15 @@ func (m *Manager) learnFormation(ctx context.Context, f *v1.Formation, t *v1.Tra
 type learnPath int
 
 const (
-	// Nothing: the request went a way the model does not price
+	// Nothing, the request went a way the model does not price
 	pathNone learnPath = iota
-	// The formation's ratio: the request went through every seat the plan prices
+	// The formation ratio, the request crossed every seat the plan prices
 	pathFormation
-	// The decode seat's own numbers: a relay request the decode seat answered alone
+	// The decode seat's own numbers, the decode seat answered a relay request alone
 	pathDecodeAlone
 )
 
-// Which numbers a formation's trace feeds: relay traces say which seats they went through, and
-// only the ones through both seats measure the relay the plan priced
+// Which numbers a formation trace feeds, only relay traces through both seats measuring the priced relay
 func relayPath(shape v1.Shape, t *v1.Trace) learnPath {
 	if shape != v1.Shape_SHAPE_RELAY {
 		return pathFormation
@@ -149,8 +171,7 @@ func prefilled(t *v1.Trace) uint32 {
 	return t.GetPromptTokens() - t.GetCachedTokens()
 }
 
-// The plan's own prediction for a request: its prefill re-priced by the cost model at the
-// request's prompt length, and its decode per token, both before the learned ratio
+// The plan's own prediction for a request, prefill re-priced at its prompt length and decode per token, before the ratio
 func predicted(plan *v1.FormationPlan, prompt uint32) (ttft, tpt float64) {
 	for i, p := range plan.GetPrefillCost() {
 		if v := p.GetFixedSeconds() + p.GetSecondsPerPromptToken()*float64(prompt); i == 0 || v > ttft {
@@ -170,12 +191,10 @@ func (m *Manager) learnSolo(ctx context.Context, device string, plan *v1.MemoryP
 	m.Perf.Record(sample)
 }
 
-// The sample a request teaches: bytes a token read, the device weights at the share a token
-// touches plus the cache at the request's context, over the time per completion token; and the
-// parameters a token touched, experts at their share, over the time to the first token
+// The sample a request teaches, bytes read per token over time per token, parameters touched over time to first
 func soloSample(device string, plan *v1.MemoryPlan, ctxParam string, d *v1.Descriptor, t *v1.Trace, ttft, tpt float64) (perf.Sample, error) {
 	share := expertShare(d)
-	// A placement names the kind of pool it landed in, device class or host.
+	// A placement names the kind of pool it landed in, device class or host
 	deviceKind, unifiedKind := text.Enum(v1.PoolKind_POOL_KIND_DEVICE), text.Enum(v1.PoolKind_POOL_KIND_UNIFIED)
 	var deviceWeights float64
 	for _, p := range plan.GetPlacements() {
@@ -221,8 +240,7 @@ func expertShare(d *v1.Descriptor) float64 {
 	return 1
 }
 
-// Parameters a token touches: every group whole but the experts at their share, what the planner
-// prices prefill with; the header's count when the descriptor lists no groups
+// Parameters a token touches, experts at their share, or the header's count when the descriptor lists no groups
 func activeParams(d *v1.Descriptor, share float64) float64 {
 	if len(d.GetGroups()) == 0 {
 		return float64(d.GetParameterCount())
@@ -272,7 +290,7 @@ func (m *Manager) primaryDevice(plan *v1.MemoryPlan) string {
 			if pool.GetDeviceId() != "" {
 				return pool.GetDeviceId()
 			}
-			// A unified pool belongs to the accelerator sharing it.
+			// A unified pool belongs to the accelerator sharing it
 			for _, d := range profile.GetDevices() {
 				if d.GetKind() != v1.DeviceKind_DEVICE_KIND_CPU {
 					return d.GetId()

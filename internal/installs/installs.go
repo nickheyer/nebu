@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/text"
 	"github.com/nickheyer/nebu/pkg/transfer"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -40,6 +42,9 @@ const (
 
 // Returned when an install id is not known
 var ErrUnknownInstall = errors.New("unknown install")
+
+// Returned when a slot, a live formation or a live instance still names the install
+var ErrInUse = errors.New("install in use")
 
 // Records installs in the store and obtains new ones
 type Manager struct {
@@ -61,8 +66,11 @@ type Manager struct {
 	installing map[string]*v1.Task
 }
 
-// Writes an install row and tells the stream
+// Writes an install row with its generation and observed status and tells the stream
 func (m *Manager) saveInstall(ctx context.Context, in *v1.Install) error {
+	if err := m.observe(ctx, in); err != nil {
+		return err
+	}
 	if err := m.DB.PutInstall(ctx, in); err != nil {
 		return err
 	}
@@ -578,11 +586,16 @@ func (m *Manager) resolveAssets(ctx context.Context, releases string, rule runti
 	return nil, fmt.Errorf("no release of %s at %s carries every asset of %s", releases, recipes.ReleaseSource, strings.Join(wanted, ", "))
 }
 
-// Removes an install record and its downloaded directory
+// Removes an install record and its downloaded directory, refusing one a slot, formation or instance still names
 func (m *Manager) Remove(ctx context.Context, id string) (*v1.Install, error) {
 	in, err := m.Get(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if holder, err := m.holder(ctx, id); err != nil {
+		return nil, err
+	} else if holder != "" {
+		return nil, fmt.Errorf("%w: %s names install %s", ErrInUse, holder, id)
 	}
 	if err := m.dropInstall(ctx, in); err != nil {
 		return nil, err
@@ -600,6 +613,41 @@ func (m *Manager) Remove(ctx context.Context, id string) (*v1.Install, error) {
 	return in, nil
 }
 
+// The slot, live formation or live instance naming the install, empty when nothing does
+func (m *Manager) holder(ctx context.Context, id string) (string, error) {
+	slots, err := m.DB.ListSlots(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, s := range slots {
+		if s.GetRequest().GetInstallId() == id {
+			return "slot " + s.GetName(), nil
+		}
+	}
+	formations, err := m.DB.ListFormations(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, f := range formations {
+		if f.GetState() == v1.FormationState_FORMATION_STATE_STOPPED || f.GetState() == v1.FormationState_FORMATION_STATE_FAILED {
+			continue
+		}
+		if f.GetRequest().GetInstallId() == id || slices.ContainsFunc(f.GetSeats(), func(s *v1.Seat) bool { return s.GetInstallId() == id }) {
+			return "formation " + f.GetName(), nil
+		}
+	}
+	instances, err := m.DB.ListInstances(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, in := range instances {
+		if in.GetInstallId() == id && in.GetState() != v1.InstanceState_INSTANCE_STATE_STOPPED && in.GetState() != v1.InstanceState_INSTANCE_STATE_FAILED {
+			return "instance " + in.GetName(), nil
+		}
+	}
+	return "", nil
+}
+
 // Reads every install's facts again and saves the ones that changed, keeping the facts a build
 // recorded that no probe owns
 func (m *Manager) Refresh(ctx context.Context) {
@@ -613,6 +661,7 @@ func (m *Manager) Refresh(ctx context.Context) {
 			continue
 		}
 		before := in.GetFacts()
+		was := proto.Clone(in).(*v1.Install)
 		owned := map[string]bool{}
 		for _, p := range rt.Probes() {
 			owned[p.Key] = true
@@ -626,8 +675,12 @@ func (m *Manager) Refresh(ctx context.Context) {
 				in.Facts[k] = v
 			}
 		}
-		if !maps.Equal(before, in.Facts) {
-			if err := m.saveInstall(ctx, in); err != nil && m.Log != nil {
+		if err := m.observe(ctx, in); err != nil {
+			m.Log.Warn("install status", "id", in.GetId(), "err", err)
+			continue
+		}
+		if !maps.Equal(before, in.Facts) || !proto.Equal(was.GetStatus(), in.GetStatus()) {
+			if err := m.saveInstall(ctx, in); err != nil {
 				m.Log.Warn("install facts", "id", in.GetId(), "err", err)
 			}
 		}

@@ -68,13 +68,13 @@ func Upgrade(blobs *store.Store) db.Upgrade {
 	}
 }
 
-// The store a request reaches: the account behind its session or API token,
-// or the daemon's shared store for the daemon token and auth.disabled.
-func OwnerOf(sess *auth.Session) db.ChatOwner {
-	if sess == nil {
+// The store a request reaches, the account behind its session or API token, or the
+// daemon's shared store for the daemon token and auth.disabled, which name no subject
+func OwnerOf(id auth.Identity) db.ChatOwner {
+	if id.Subject == "" {
 		return db.ChatOwner{Provider: daemonProvider}
 	}
-	return db.ChatOwner{Provider: sess.Provider, Subject: sess.Subject}
+	return db.ChatOwner{Provider: id.Provider, Subject: id.Subject}
 }
 
 func (m *Manager) now() time.Time {

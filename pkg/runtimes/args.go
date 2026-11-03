@@ -25,7 +25,7 @@ type ArgScope struct {
 	Artifacts map[string]string
 	// Every param the command carries, as text
 	Params map[string]string
-	// The ids of the devices the run may use
+	// The ids of the devices the run is pinned to
 	Devices []string
 	Install Install
 	// The seat in a formation, nil for a solo run
@@ -41,15 +41,19 @@ func ScopeOf(in Launch, cmd *Command) ArgScope {
 	for name, value := range cmd.Params {
 		params[name] = value
 	}
-	devices := make([]string, 0, len(in.Devices))
-	for _, d := range in.Devices {
+	devices := make([]string, 0, len(cmd.Devices))
+	for _, d := range cmd.Devices {
 		devices = append(devices, d.GetId())
 	}
 	model := in.Artifacts["weights"]
 	if model == "" {
 		model = in.Artifacts["weights_dir"]
 	}
-	return ArgScope{Name: in.Name, Host: in.Host, Port: in.Port, Model: model, Artifacts: in.Artifacts, Params: params, Devices: devices, Install: in.Install, Seat: in.Seat}
+	port := in.Port
+	if cmd.Port != 0 {
+		port = cmd.Port
+	}
+	return ArgScope{Name: in.Name, Host: in.Host, Port: port, Model: model, Artifacts: in.Artifacts, Params: params, Devices: devices, Install: in.Install, Seat: in.Seat}
 }
 
 // Joins a slot's extra words and a run's, the run's last so a repeated flag takes its value

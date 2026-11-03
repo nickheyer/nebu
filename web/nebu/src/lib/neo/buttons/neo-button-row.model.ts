@@ -1,0 +1,47 @@
+import type { Snippet } from 'svelte';
+
+import type { NeoButtonGroupContext, NeoButtonGroupProps } from '#lib/neo/buttons/neo-button-group.model.js';
+import type { NeoButtonProps } from '#lib/neo/buttons/neo-button.model.js';
+import type { NeoDividerProps } from '#lib/neo/divider/neo-divider.model.js';
+import type { NeoMenuItem } from '#lib/neo/floating/menu/neo-menu-list-item.model.js';
+import type { NeoMenuProps } from '#lib/neo/floating/menu/neo-menu.model.js';
+import type { NeoIconBouncingDotsProps } from '#lib/neo/icons/neo-icon.model.js';
+
+export interface NeoButtonRowItemButton extends NeoButtonProps {
+  menuProps?: Partial<NeoMenuItem>;
+  label?: string | undefined;
+  icon?: Snippet<[unknown]>;
+}
+
+export interface NeoButtonRowItemDivider extends NeoDividerProps {
+  divider: true;
+}
+
+export type NeoButtonRowItem = NeoButtonRowItemButton | NeoButtonRowItemDivider;
+
+export const isButtonRowDivider = (item: NeoButtonRowItem): item is NeoButtonRowItemDivider => item && 'divider' in item && item.divider;
+
+export interface NeoButtonRowContext {
+  items?: NeoMenuItem[];
+  threshold?: number;
+  menuProps?: Partial<NeoMenuProps>;
+  iconProps?: NeoIconBouncingDotsProps;
+  collapseProps?: NeoButtonProps;
+}
+
+export interface NeoButtonRowProps extends Omit<NeoButtonRowContext, 'items'>, Omit<NeoButtonGroupProps, 'children'> {
+  // Snippets
+  children?: Snippet<[NeoButtonGroupContext, NeoButtonRowContext]>;
+  collapsed?: Snippet<[NeoButtonGroupContext, NeoButtonRowContext]>;
+
+  // States
+  ref?: NeoButtonGroupProps['ref'];
+  items: NeoButtonRowItem[];
+
+  // Button props
+  hovered?: NeoButtonProps['hovered'];
+  focused?: NeoButtonProps['focused'];
+
+  // Other props
+  buttonProps?: NeoButtonProps;
+}

@@ -27,53 +27,80 @@ func (e emulated) Render(c *Request) (string, []byte, error) {
 	return e.Runtime.Render(foldTools(c))
 }
 
-// Reads a whole answer, the calls the model wrote taken out of its text
+// Takes no request natively, since the runtime it wraps cannot read the tools the client sent
+func (e emulated) Native(*Request) (string, []byte, error) {
+	return "", nil, bad("the runtime reads tools only from the prompt, so the request needs translating")
+}
+
+// Reads a whole answer, the calls the model wrote taken out of each choice's text
 func (e emulated) ParseResult(c *Request, body []byte) (*Result, error) {
 	res, err := e.Runtime.ParseResult(c, body)
 	if err != nil {
 		return nil, err
 	}
-	var text strings.Builder
-	var calls []ToolCall
-	p := &CallParser{Emit: func(ev Event) error {
-		switch ev.Kind {
-		case Said:
-			text.WriteString(ev.Text)
-		case Called:
-			calls = append(calls, *ev.Tool)
-		}
-		return nil
-	}}
-	p.Text(res.Text)
-	p.Flush()
-	res.Text = text.String()
-	res.ToolCalls = append(res.ToolCalls, calls...)
-	res.Stop = StopOf(res.Stop, len(res.ToolCalls))
+	for _, r := range res.All() {
+		var text strings.Builder
+		var calls []ToolCall
+		p := &CallParser{Emit: func(ev Event) error {
+			switch ev.Kind {
+			case Said:
+				text.WriteString(ev.Text)
+			case Called:
+				calls = append(calls, *ev.Tool)
+			}
+			return nil
+		}}
+		p.Text(r.Text)
+		p.Flush()
+		r.Text = text.String()
+		r.ToolCalls = append(r.ToolCalls, calls...)
+		r.Stop = StopOf(r.Stop, len(r.ToolCalls))
+	}
 	return res, nil
 }
 
-// Reads a streamed answer, text going out as it arrives and each call once its block closes
+// Reads a streamed answer per choice, text going out as it arrives and each call once its block closes
 func (e emulated) ParseStream(r io.Reader, emit func(Event) error) error {
-	var calls []ToolCall
-	p := &CallParser{Emit: func(ev Event) error {
-		if ev.Kind == Called {
-			calls = append(calls, *ev.Tool)
+	calls := map[int][]ToolCall{}
+	parsers := map[int]*CallParser{}
+	parser := func(choice int) *CallParser {
+		p, ok := parsers[choice]
+		if !ok {
+			p = &CallParser{Emit: func(ev Event) error {
+				ev.Choice = choice
+				if ev.Kind == Called {
+					calls[choice] = append(calls[choice], *ev.Tool)
+				}
+				return emit(ev)
+			}}
+			parsers[choice] = p
 		}
-		return emit(ev)
-	}}
+		return p
+	}
 	return e.Runtime.ParseStream(r, func(ev Event) error {
 		switch ev.Kind {
 		case Said:
-			return p.Text(ev.Text)
+			return parser(ev.Choice).Text(ev.Text)
 		case Stopped:
-			if err := p.Flush(); err != nil {
-				return err
-			}
 			if ev.Res == nil {
 				ev.Res = &Result{}
 			}
-			ev.Res.ToolCalls = append(ev.Res.ToolCalls, calls...)
-			ev.Res.Stop = StopOf(ev.Res.Stop, len(ev.Res.ToolCalls))
+			byIndex := map[int]*Result{}
+			for _, r := range ev.Res.All() {
+				byIndex[r.Choice] = r
+			}
+			for choice, p := range parsers {
+				if err := p.Flush(); err != nil {
+					return err
+				}
+				r, ok := byIndex[choice]
+				if !ok {
+					r = &Result{Choice: choice}
+					ev.Res.More = append(ev.Res.More, r)
+				}
+				r.ToolCalls = append(r.ToolCalls, calls[choice]...)
+				r.Stop = StopOf(r.Stop, len(r.ToolCalls))
+			}
 		}
 		return emit(ev)
 	})

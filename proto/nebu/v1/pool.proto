@@ -1,0 +1,166 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "nebu/v1/meta.proto";
+import "nebu/v1/runtime.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// How the gateway speaks to the endpoints of a pool
+enum AppProtocol {
+  APP_PROTOCOL_UNSPECIFIED = 0;
+  APP_PROTOCOL_HTTP = 1;
+  APP_PROTOCOL_H2C = 2;
+  APP_PROTOCOL_GRPC = 3;
+}
+
+// What the gateway does when the scheduler cannot answer
+enum FailureMode {
+  FAILURE_MODE_UNSPECIFIED = 0;
+  FAILURE_MODE_FAIL_CLOSE = 1;
+  FAILURE_MODE_FAIL_OPEN = 2;
+}
+
+// The metric names a runtime emits, read by the scrape source
+message MetricNames {
+  string queued_requests = 1;
+  string running_requests = 2;
+  string kv_cache_utilization = 3;
+  string cache_config_info = 4;
+  string block_size_label = 5;
+  string num_blocks_label = 6;
+  string lora_info = 7;
+  string max_lora_label = 8;
+  string running_adapters_label = 9;
+  string waiting_adapters_label = 10;
+  string metrics_path = 11;
+  string health_path = 12;
+  // JSON slot listing KV use is summed from when the runtime exports no KV gauge
+  string slots_path = 13;
+  // Port serving the metrics path when the runtime serves it apart from the endpoint port
+  uint32 metrics_port = 14;
+  // Label values a series must match to count toward the gauge of the same name, an absent label matching empty
+  map<string, string> queued_requests_match = 15;
+  map<string, string> running_requests_match = 16;
+  map<string, string> kv_cache_utilization_match = 17;
+  // Gauges holding block size and total blocks for a runtime without a cache config info gauge
+  string block_size = 18;
+  map<string, string> block_size_match = 19;
+  string num_blocks = 20;
+  map<string, string> num_blocks_match = 21;
+  // JSON listing of loaded adapters, llamacpp or openai format, for a runtime without a LoRA info gauge
+  string adapters_path = 22;
+  string adapters_format = 23;
+  // JSON document and field holding how many adapters one batch runs
+  string max_lora_path = 24;
+  string max_lora_field = 25;
+  // Whether every running request holds a full length cache, KV use being running over capacity
+  bool static_cache = 26;
+  // Label naming the scheduler replica a series reports, series sharing its value counting once at their largest
+  string replica_label = 27;
+}
+
+// An externally managed server joined to a pool by address
+message StaticEndpoint {
+  string address = 1 [(buf.validate.field).string.host_and_port = true];
+  string role = 2;
+  uint32 rank = 3;
+  // KV cache tokens the server's whole pool holds, needed for a runtime whose metrics state only per slot context
+  uint32 kv_capacity = 4;
+}
+
+// The desired shape of a pool
+message PoolSpec {
+  // The base model every endpoint serves
+  string model = 1 [(buf.validate.field).string.min_len = 1];
+  string runtime_id = 2;
+  // Labels an endpoint must carry to join
+  map<string, string> selector = 3;
+  repeated uint32 target_ports = 4 [(buf.validate.field).repeated = {
+    min_items: 1
+    max_items: 8
+    items: {
+      uint32: {
+        gte: 1
+        lte: 65535
+      }
+    }
+  }];
+  AppProtocol app_protocol = 5;
+  FailureMode failure_mode = 6;
+  // The scheduler configuration the pool's requests run through, by name
+  string scheduler_config = 7;
+  MetricNames metrics = 8;
+  // Servers the pool reaches that nebu does not manage
+  repeated StaticEndpoint static_endpoints = 9;
+  // Whether the pool is offered to every member of the mesh, an owner derived pool exporting unless set false
+  optional bool export = 10;
+  // Requests one endpoint may run at once when the runtime reports no capacity
+  uint32 concurrency = 11;
+  // The accelerator class every endpoint runs on, such as 2x NVIDIA H100 80GB HBM3 or cpu, part of a derived pool id
+  string accelerator = 12;
+  // Context length, quantization, accelerator, modalities and throughput class the owner's launch reports
+  RuntimeInventory inventory = 13;
+  // Whether the gateway encodes prompts itself and sends token ids, decoding answers from ids where the endpoint protocol returns them
+  bool tokens_in_out = 14;
+}
+
+// The scraped state of one endpoint
+message EndpointMetrics {
+  uint32 queued_requests = 1;
+  uint32 running_requests = 2;
+  double kv_cache_utilization = 3;
+  uint32 block_size = 4;
+  uint32 num_blocks = 5;
+  uint32 max_lora = 6;
+  repeated string running_adapters = 7;
+  repeated string waiting_adapters = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+// One process port a request can be sent to
+message Endpoint {
+  string id = 1;
+  string pool_id = 2;
+  string address = 3;
+  string node_id = 4;
+  string instance_id = 5;
+  string role = 6;
+  uint32 rank = 7;
+  bool ready = 8;
+  bool healthy = 9;
+  EndpointMetrics metrics = 10;
+  // Requests this gateway dispatched that the metrics do not yet show
+  uint32 assumed_requests = 11;
+  map<string, string> labels = 12;
+  // Predicted time to first token and per output token for an average request
+  uint32 predicted_ttft_ms = 13;
+  uint32 predicted_tpot_ms = 14;
+  // Ports metrics and health are served on when they differ from the address port
+  uint32 metrics_port = 15;
+  uint32 health_port = 16;
+}
+
+// What the gateway observes of a pool
+message PoolStatus {
+  repeated ParentStatus parents = 1;
+  repeated Condition conditions = 2;
+  uint32 ready_endpoints = 3;
+  uint32 total_endpoints = 4;
+  repeated Endpoint endpoints = 5;
+  uint64 observed_generation = 6;
+}
+
+// A group of endpoints sharing base model, runtime and accelerator class
+message Pool {
+  string id = 1;
+  ObjectMeta meta = 2;
+  PoolSpec spec = 3;
+  PoolStatus status = 4;
+  // The resource that owns the pool, empty for a user authored pool
+  string owner_kind = 5;
+  string owner_id = 6;
+}

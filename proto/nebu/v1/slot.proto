@@ -2,10 +2,12 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "nebu/v1/estimate.proto";
 import "nebu/v1/gateway.proto";
 import "nebu/v1/instance.proto";
+import "nebu/v1/meta.proto";
 import "nebu/v1/task.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
@@ -19,6 +21,8 @@ enum SlotState {
   SLOT_STATE_SWAPPING = 4;
   SLOT_STATE_DRAINING = 5;
   SLOT_STATE_FAILED = 6;
+  // The occupant unloaded after its idle window and loads again on the next request
+  SLOT_STATE_IDLE = 7;
 }
 
 // Another public name a slot answers to
@@ -60,6 +64,11 @@ message Slot {
   string formation_id = 20;
   // Extra words for the runtime's server command, split by shell quoting, each a template over the launch
   string args = 21;
+  repeated Condition conditions = 22;
+  ObjectMeta meta = 23;
+  uint64 observed_generation = 24;
+  // Whether the slot is asked to be serving, restarting its request after a crash
+  bool desired_running = 25;
 }
 
 // Creates a slot
@@ -96,7 +105,7 @@ message ListSlotsResponse {
 
 // Fetches one slot by id or name
 message GetSlotRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns one slot with its occupant
@@ -107,7 +116,7 @@ message GetSlotResponse {
 
 // Update slot settings
 message UpdateSlotRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
   string description = 2;
   repeated string device_ids = 3;
   uint64 memory_bytes = 4;
@@ -133,7 +142,7 @@ message UpdateSlotResponse {
 
 // Deletes a slot, stopping its occupant when forced
 message DeleteSlotRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
   bool force = 2;
 }
 
@@ -144,9 +153,17 @@ message DeleteSlotResponse {
 
 // Replace the model while keeping the slot's public name.
 message SwapRequest {
-  string slot_id = 1;
-  RunRequest run = 2;
+  string slot_id = 1 [(buf.validate.field).string.min_len = 1];
+  RunRequest run = 2 [(buf.validate.field).required = true];
   bool drain_first = 3;
+  // Percent of the slot's traffic the new occupant takes in the first canary step, zero skipping the canary
+  uint32 canary_percent = 4 [(buf.validate.field).uint32.lte = 99];
+  // Seconds each canary step lasts before its share grows, the swap completes, or it rolls back, at most a day
+  uint32 canary_seconds = 5 [(buf.validate.field).uint32.lte = 86400];
+  // Percent added to the new occupant's share after each step it passes, zero completing after the first step
+  uint32 canary_step_percent = 6 [(buf.validate.field).uint32.lte = 99];
+  // Points the new occupant's error rate and objective attainment, and percent its mean TTFT and TPOT, may trail the old, 10 when unset
+  optional uint32 canary_max_regression_percent = 7 [(buf.validate.field).uint32.lte = 100];
 }
 
 // Returns the slot, the incoming instance, and the swap task
@@ -158,7 +175,7 @@ message SwapResponse {
 
 // Stops the occupant of a slot, keeping the slot
 message EvictSlotRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the emptied slot
@@ -168,7 +185,7 @@ message EvictSlotResponse {
 
 // Relaunch the slot's saved request.
 message RelaunchSlotRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the slot, the new instance, and its startup task

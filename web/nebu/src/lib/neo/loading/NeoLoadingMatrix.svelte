@@ -1,0 +1,72 @@
+<script lang="ts">
+  import type { NeoLoadingMatrixProps } from '#lib/neo/loading/neo-loading-matrix.model.js';
+
+  import NeoIconLoadingMatrix from '#lib/neo/icons/NeoIconLoadingMatrix.svelte';
+  import { toSize } from '#lib/neo/utils/style.utils.js';
+
+  const {
+    // State
+    tag = 'div',
+
+    // Size
+    width: _width,
+    height: _height,
+
+    // Flex
+    flex,
+    align,
+    justify,
+
+    ...rest
+  }: NeoLoadingMatrixProps = $props();
+
+  const width = $derived(toSize(_width));
+  const height = $derived(toSize(_height));
+</script>
+
+<svelte:element
+  this={tag}
+  class:neo-loading-matrix={true}
+  style:flex
+  style:align-items={align}
+  style:justify-content={justify}
+  style:--neo-loader-width={width?.absolute}
+  style:--neo-loader-max-width={width?.max}
+  style:--neo-loader-min-width={width?.min}
+  style:--neo-loader-height={height?.absolute}
+  style:--neo-loader-max-height={height?.max}
+  style:--neo-loader-min-height={height?.min}
+  {...rest}
+>
+  <NeoIconLoadingMatrix class="neo-loader" />
+</svelte:element>
+
+<style lang="scss">
+  @use '../styles/layers' as layers;
+
+  @include layers.neo-components {
+    .neo-loading-matrix {
+      display: flex;
+      flex: 1 1 auto;
+      align-items: center;
+      justify-content: center;
+      opacity: 1;
+      transition: opacity 1s ease-in 0.2s;
+
+      :global(> .neo-loader) {
+        width: var(--neo-loader-width, 3rem);
+        min-width: var(--neo-loader-min-width, 3rem);
+        max-width: var(--neo-loader-max-width, 8dvh);
+        height: var(--neo-loader-height, 3rem);
+        min-height: var(--neo-loader-min-height, 3rem);
+        max-height: var(--neo-loader-max-height, 8dvh);
+        margin: var(--neo-loader-margin, 2rem);
+
+        /* Adds 0.2s delay and 1s transition to loading indicator to prevent flashing */
+        @starting-style {
+          opacity: 0;
+        }
+      }
+    }
+  }
+</style>

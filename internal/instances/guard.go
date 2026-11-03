@@ -18,14 +18,10 @@ const (
 	guardCopyRound = 256 << 10
 )
 
-// A guard listener in front of a seat: a TCP forwarder on the mesh address that admits the
-// member addresses the role names and forwards to the seat's loopback port. Copies between two
-// TCP connections use the kernel's splice on Linux, one hop of a few microseconds. A seat that
-// serves one client admits one address at a time: every connection that address opens, in turn
-// or at once, and no other address while one of them is open
+// A mesh address forwarder admitting the addresses a role names, one client address at a time for single seats
 type forwarder struct {
 	ln     net.Listener
-	target string
+	target atomic.Value
 	admit  []net.IP
 	single bool
 	log    *slog.Logger
@@ -50,7 +46,8 @@ func newForwarder(bind, target string, admit []string, single bool, name string,
 	if err != nil {
 		return nil, fmt.Errorf("guard listener %s: %w", bind, err)
 	}
-	f := &forwarder{ln: ln, target: target, single: single, log: log, name: name, conns: map[net.Conn]struct{}{}}
+	f := &forwarder{ln: ln, single: single, log: log, name: name, conns: map[net.Conn]struct{}{}}
+	f.target.Store(target)
 	for _, a := range admit {
 		host := a
 		if h, _, err := net.SplitHostPort(a); err == nil {
@@ -73,6 +70,9 @@ func newForwarder(bind, target string, admit []string, single bool, name string,
 
 // The address the guard listens on
 func (f *forwarder) Addr() string { return f.ln.Addr().String() }
+
+// Points connections accepted from now on at another seat port
+func (f *forwarder) Retarget(target string) { f.target.Store(target) }
 
 // The port the guard listens on
 func (f *forwarder) Port() int { return f.ln.Addr().(*net.TCPAddr).Port }
@@ -122,7 +122,7 @@ func (f *forwarder) Active() int {
 	return f.active
 }
 
-// The remote address's IP when it is one the role admits: nothing is admitted when none is named
+// The remote IP when the role admits it, nothing admitted when the role names no address
 func (f *forwarder) admits(addr net.Addr) (net.IP, bool) {
 	host, _, err := net.SplitHostPort(addr.String())
 	if err != nil {
@@ -150,10 +150,11 @@ func (f *forwarder) serve(client net.Conn) {
 		client.Close()
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), guardDialTimeout)
-	upstream, err := (&net.Dialer{}).DialContext(ctx, "tcp", f.target)
+	target := f.target.Load().(string)
+	upstream, err := (&net.Dialer{}).DialContext(ctx, "tcp", target)
 	cancel()
 	if err != nil {
-		f.log.Warn("guard could not reach the seat", "seat", f.name, "target", f.target, "err", err)
+		f.log.Warn("guard could not reach the seat", "seat", f.name, "target", target, "err", err)
 		return
 	}
 	defer upstream.Close()
@@ -164,8 +165,7 @@ func (f *forwarder) serve(client net.Conn) {
 		tc.SetNoDelay(true)
 	}
 	done := make(chan struct{}, 2)
-	// Copies in bounded rounds, so the counter moves while the connection stays open. A bounded
-	// copy between two TCP connections still takes the kernel's splice.
+	// Copies in bounded rounds so the counter moves while open, each round still using the kernel splice
 	pipe := func(dst, src net.Conn, count bool) {
 		for {
 			n, err := io.CopyN(dst, src, guardCopyRound)

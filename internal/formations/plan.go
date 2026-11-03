@@ -8,9 +8,11 @@ import (
 	"strings"
 
 	"connectrpc.com/connect"
+	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/mesh"
 	planner "github.com/nickheyer/nebu/pkg/estimate/mesh"
+	"github.com/nickheyer/nebu/pkg/host"
 	"github.com/nickheyer/nebu/pkg/perf"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/runtimes"
@@ -38,23 +40,29 @@ type planned struct {
 	draft    *v1.StoredModel
 }
 
-// Plans a formation for a run request over the mesh profile without launching it. A request that
-// asks for free memory, or one bound to a slot, plans against what is free, so a swap sees the
-// occupant it replaces; every other preview plans against total memory, as the fit table does.
+// Previews a formation plan without launching, free memory for slot or free requests so swaps see occupants, total otherwise
 func (m *Manager) Plan(ctx context.Context, run *v1.RunRequest) (*v1.FormationPlan, *v1.Descriptor, error) {
-	p, err := m.planWith(ctx, run, run.GetFree() || run.GetSlotId() != "")
+	p, err := m.planWith(ctx, run, run.GetFree() || run.GetSlotId() != "", nil)
 	if err != nil {
 		return nil, nil, err
 	}
 	return p.plan, p.descriptor, nil
 }
 
-// Plans a launch: against free memory, as a solo launch plans on its node
+// Prices a launch against free memory as a solo launch does on its node
 func (m *Manager) plan(ctx context.Context, run *v1.RunRequest) (*planned, error) {
-	return m.planWith(ctx, run, true)
+	return m.planWith(ctx, run, true, nil)
 }
 
-func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool) (*planned, error) {
+// Prices a launch with each node held to the install a pin names, so a relaunch never moves a seat to a newer install
+func (m *Manager) planPinned(ctx context.Context, run *v1.RunRequest, pinned map[string]string) (*planned, error) {
+	if m.planner != nil {
+		return m.planner(ctx, run)
+	}
+	return m.planWith(ctx, run, true, pinned)
+}
+
+func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool, pinned map[string]string) (*planned, error) {
 	if !m.Mesh.Joined() {
 		return nil, mesh.ErrNoMesh
 	}
@@ -80,6 +88,13 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool) (
 		}
 		span[rec.GetId()] = true
 		if device != "" {
+			d := host.Device(rec.GetProfile(), device)
+			if d == nil {
+				return nil, fmt.Errorf("%w: span: %s has no device %q, see nebu mesh nodes", ErrFormation, nodeName(rec), device)
+			}
+			if !host.OwnMemory(rec.GetProfile(), d) {
+				return nil, fmt.Errorf("%w: span: device %q (%s) on %s has no memory of its own, so a seat cannot pin it", ErrFormation, device, d.GetName(), nodeName(rec))
+			}
 			if allowed[rec.GetId()] == nil {
 				allowed[rec.GetId()] = map[string]bool{}
 			}
@@ -105,6 +120,10 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool) (
 		name = path.Base(stored.GetRepo()) + ":" + stored.GetGroup()
 	}
 	companions, err := m.Inspector.Companions(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
+	if err != nil {
+		return nil, err
+	}
+	stats, err := m.stats(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +154,7 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool) (
 		Free:       free,
 		Repo:       stored.GetRepo(),
 		Companions: companions,
-		Stats:      m.stats(name),
+		Stats:      stats,
 		Table:      m.Perf,
 		Excluded:   map[string]string{},
 		Calibration: func(nodeID string) float64 {
@@ -174,12 +193,16 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool) (
 		}
 		sort.Strings(pins)
 		numbers := m.numbersFor(rec)
-		// A slot's budget, placement, and device pins bound every seat as they bound a solo run.
+		// A slot's budget, placement and device pins bound every seat as they bound a solo run
 		if len(pins) > 0 || budget > 0 {
 			rec = proto.Clone(rec).(*v1.Node)
 			rec.Profile = instances.Constrain(rec.GetProfile(), pins, budget, placement)
 		}
-		members = append(members, planner.NodeOf(rec, rt.ID(), run.GetInstallId(), caps, numbers))
+		installID := run.GetInstallId()
+		if held, ok := pinned[rec.GetId()]; ok {
+			installID = held
+		}
+		members = append(members, planner.NodeOf(rec, rt.ID(), installID, caps, numbers))
 	}
 	plan, err := planner.Plan(req, planner.New(members, m.Mesh.Links(), m.self()))
 	if err != nil {
@@ -202,8 +225,7 @@ func nodeName(rec *v1.Node) string {
 	return rec.GetId()
 }
 
-// The numbers a node's devices plan with: this node's learned table, or the throughput rows the
-// member's record carries over the profile table
+// The device numbers a node plans with, this node's learned table or the throughput rows its record carries
 func (m *Manager) numbersFor(rec *v1.Node) func(*v1.Device) perf.Numbers {
 	if rec.GetId() == m.self() {
 		return m.Perf.Numbers
@@ -250,8 +272,7 @@ func holds(rec *v1.Node, sourceID, repo, group string) bool {
 	return false
 }
 
-// The runtime to plan with: the one the request names, else the first in registry order that
-// accepts the model and is installed on a node of the span
+// The runtime planned with, the one named or the first registered accepting the model and installed in the span
 func (m *Manager) runtime(run *v1.RunRequest, stored *v1.StoredModel, d *v1.Descriptor, nodes []*v1.Node, span map[string]bool) (runtimes.Runtime, error) {
 	if run.GetRuntimeId() != "" {
 		return m.Runtimes.Get(run.GetRuntimeId())
@@ -278,9 +299,7 @@ func (m *Manager) runtime(run *v1.RunRequest, stored *v1.StoredModel, d *v1.Desc
 	return nil, fmt.Errorf("%w: no runtime installed on the span serves %s %s models, installed: %s", ErrFormation, stored.GetFormatId(), strings.ToLower(strings.TrimPrefix(d.GetKind().String(), "MODEL_KIND_")), strings.Join(names, ", "))
 }
 
-// The draft model the request's draft_model param names, resolved the way the speculative
-// decoding params resolve companions: a store reference among the target's stored companions,
-// or the same group on a member holding it. Nil when the param names none.
+// The draft model the draft_model param names, a stored companion or the same group on a member, nil when unnamed
 func (m *Manager) draft(ctx context.Context, params map[string]string, rt runtimes.Runtime, target *v1.StoredModel, companions []*v1.StoredModel, nodes []*v1.Node) (*v1.StoredModel, error) {
 	if !supportsDraft(rt) {
 		return nil, nil
@@ -315,13 +334,13 @@ func supportsDraft(rt runtimes.Runtime) bool {
 	return len(rt.Roles(v1.Shape_SHAPE_DRAFT)) > 0
 }
 
-// What the route's recent traces say: median prompt and completion tokens and peak concurrency
-func (m *Manager) stats(route string) planner.Stats {
+// Median prompt and completion tokens and peak concurrency of the route's recent stored traces
+func (m *Manager) stats(ctx context.Context, route string) (planner.Stats, error) {
 	var out planner.Stats
-	if m.Traces == nil {
-		return out
+	traces, err := m.DB.ListTraces(ctx, db.TraceQuery{AllOwners: true, Route: route, Limit: statsTraces})
+	if err != nil {
+		return out, fmt.Errorf("traces of %s: %w", route, err)
 	}
-	traces := m.Traces.List(route, statsTraces)
 	var prompts, completions []int
 	type edge struct {
 		at    int64
@@ -366,5 +385,5 @@ func (m *Manager) stats(route string) planner.Stats {
 		}
 	}
 	out.PeakConcurrency = uint32(peak)
-	return out
+	return out, nil
 }

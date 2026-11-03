@@ -254,9 +254,6 @@ func (r LlamaCpp) LaunchSeat(in Launch) (*Command, error) {
 			return nil, err
 		}
 		cmd.Args = append(cmd.Args, flagOf(in.InstallRecord, factSlotSave), seat.GetSlotDir())
-		if has(in.InstallRecord, factSlotsFlag) {
-			cmd.Args = append(cmd.Args, facts[factSlotsFlag])
-		}
 		cmd.Params["slot_save_path"] = seat.GetSlotDir()
 		return cmd, nil
 	case RoleReplica:
@@ -283,9 +280,16 @@ func rpcServerCommand(in Launch, bin string) (*Command, error) {
 	}
 	host, port := seatBind(in)
 	args := []string{"-H", host, "-p", strconv.Itoa(port), "-c"}
-	devices := ggmlDevices(in.InstallRecord, in.Devices)
+	pinned, err := launchDevices(in)
+	if err != nil {
+		return nil, err
+	}
+	devices, err := ggmlDevices(in.InstallRecord, pinned, pinned)
+	if err != nil {
+		return nil, err
+	}
 	if len(devices) == 0 {
-		for _, d := range in.Devices {
+		for _, d := range pinned {
 			if d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
 				devices = []string{"CPU"}
 			}
@@ -303,14 +307,12 @@ func rpcServerCommand(in Launch, bin string) (*Command, error) {
 		return nil, err
 	}
 	env := map[string]string{"LLAMA_CACHE": in.Seat.GetCacheDir()}
-	setEnv(env, "CUDA_VISIBLE_DEVICES", visible(in.Devices, "nvidia", false))
-	setEnv(env, "ROCR_VISIBLE_DEVICES", visible(in.Devices, "amd", true))
-	setEnv(env, "GGML_VK_VISIBLE_DEVICES", visible(in.Devices, "", true))
+	pinEnv(env, pinned)
 	if in.Params.Bool("cuda_disable_graphs") {
 		env["GGML_CUDA_DISABLE_GRAPHS"] = "1"
 	}
 	params := map[string]string{"cache_dir": in.Seat.GetCacheDir(), "host": host, "port": strconv.Itoa(port), "threads": strconv.FormatInt(threads, 10)}
-	return &Command{Command: bin, Args: args, Env: env, Params: params}, nil
+	return &Command{Command: bin, Args: args, Env: env, Params: params, Devices: pinned}, nil
 }
 
 // The seat's device with an id
@@ -359,7 +361,11 @@ func (r LlamaCpp) chainHead(in Launch, stages []*v1.SeatPeer, facts map[string]s
 		}
 		own = append(own, d)
 	}
-	devices = append(devices, ggmlDevices(in.InstallRecord, own)...)
+	ownNames, err := ggmlDevices(in.InstallRecord, in.Devices, own)
+	if err != nil {
+		return nil, err
+	}
+	devices = append(devices, ownNames...)
 	counts := seat.GetDeviceLayers()
 	if len(counts) != len(devices) {
 		return nil, fmt.Errorf("%w: the plan gives %d device layer counts for %d devices", ErrParam, len(counts), len(devices))

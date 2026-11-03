@@ -6,14 +6,29 @@ import (
 	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
+
+// A status message as stored, empty text for one never set
+func statusCol(m proto.Message) (string, error) {
+	if m == nil || !m.ProtoReflect().IsValid() {
+		return "", nil
+	}
+	data, err := protojson.Marshal(m)
+	return string(data), err
+}
 
 // Inserts or replaces an install and its facts
 func (d *DB) PutInstall(ctx context.Context, in *v1.Install) error {
 	return d.tx(ctx, func(exec execFn) error {
 		id := in.GetId()
-		if err := exec(`INSERT OR REPLACE INTO installs (id, runtime_id, kind, path, dir, version, origin, created_at, build_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, in.GetRuntimeId(), enumCol(in.GetKind()), in.GetPath(), in.GetDir(), in.GetVersion(), in.GetOrigin(), stamp(in.GetCreatedAt().AsTime()), in.GetBuildId()); err != nil {
+		status, err := statusCol(in.GetStatus())
+		if err != nil {
+			return err
+		}
+		if err := exec(`INSERT OR REPLACE INTO installs (id, runtime_id, kind, path, dir, version, origin, created_at, build_id, status, generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, in.GetRuntimeId(), enumCol(in.GetKind()), in.GetPath(), in.GetDir(), in.GetVersion(), in.GetOrigin(), stamp(in.GetCreatedAt().AsTime()), in.GetBuildId(), status, int64(in.GetGeneration())); err != nil {
 			return err
 		}
 		if err := clearChildren(exec, "install_id", id, "install_facts"); err != nil {
@@ -43,9 +58,21 @@ func (d *DB) DeleteInstall(ctx context.Context, id string) (bool, error) {
 }
 
 func (d *DB) installs(ctx context.Context, where string, args ...any) ([]*v1.Install, error) {
-	out, err := list(ctx, d, `SELECT id, runtime_id, kind, path, dir, version, origin, created_at, build_id FROM installs `+where+` ORDER BY created_at DESC, id`, func(rows *sql.Rows) (*v1.Install, error) {
+	out, err := list(ctx, d, `SELECT id, runtime_id, kind, path, dir, version, origin, created_at, build_id, status, generation FROM installs `+where+` ORDER BY created_at DESC, id`, func(rows *sql.Rows) (*v1.Install, error) {
 		in := &v1.Install{}
-		return in, rows.Scan(&in.Id, &in.RuntimeId, enumAt[v1.InstallKind]{&in.Kind}, &in.Path, &in.Dir, &in.Version, &in.Origin, at{&in.CreatedAt}, &in.BuildId)
+		var status string
+		var generation int64
+		if err := rows.Scan(&in.Id, &in.RuntimeId, enumAt[v1.InstallKind]{&in.Kind}, &in.Path, &in.Dir, &in.Version, &in.Origin, at{&in.CreatedAt}, &in.BuildId, &status, &generation); err != nil {
+			return nil, err
+		}
+		in.Generation = uint64(generation)
+		if status != "" {
+			in.Status = &v1.InstallStatus{}
+			if err := unmarshalJSON(status, in.Status); err != nil {
+				return nil, err
+			}
+		}
+		return in, nil
 	}, args...)
 	if err != nil {
 		return nil, err

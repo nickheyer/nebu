@@ -33,48 +33,6 @@ type anthropic struct{}
 // The server tools the gateway stands in for, by the name each is called
 var providedKinds = map[string]v1.ToolServerKind{tools.SearchTool: v1.ToolServerKind_TOOL_SERVER_KIND_SEARCH, tools.FetchTool: v1.ToolServerKind_TOOL_SERVER_KIND_FETCH}
 
-type antSource struct {
-	Type      string `json:"type"`
-	MediaType string `json:"media_type,omitempty"`
-	Data      string `json:"data,omitempty"`
-	URL       string `json:"url,omitempty"`
-	// The blocks of a document whose source is content
-	Content json.RawMessage `json:"content,omitempty"`
-}
-
-type antBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
-	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   json.RawMessage `json:"content,omitempty"`
-	Source    *antSource      `json:"source,omitempty"`
-	Thinking  string          `json:"thinking,omitempty"`
-	Signature string          `json:"signature,omitempty"`
-	// The server of an mcp_tool_use and the outcome of an mcp_tool_result
-	ServerName string                     `json:"server_name,omitempty"`
-	IsError    *bool                      `json:"is_error,omitempty"`
-	Extra      map[string]json.RawMessage `json:"-"`
-}
-
-func (b *antBlock) UnmarshalJSON(data []byte) error {
-	type plain antBlock
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*b = antBlock(p)
-	b.Extra = extraFields(data, plain{})
-	return nil
-}
-
-func (b antBlock) MarshalJSON() ([]byte, error) {
-	type plain antBlock
-	return withExtra(plain(b), b.Extra)
-}
-
 // A text block written to clients, which always carries its text field
 type antText struct {
 	Type string `json:"type"`
@@ -86,112 +44,6 @@ type antThinking struct {
 	Type      string `json:"type"`
 	Thinking  string `json:"thinking"`
 	Signature string `json:"signature"`
-}
-
-type antMessage struct {
-	Role    string                     `json:"role"`
-	Content json.RawMessage            `json:"content"`
-	Extra   map[string]json.RawMessage `json:"-"`
-}
-
-func (m *antMessage) UnmarshalJSON(data []byte) error {
-	type plain antMessage
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*m = antMessage(p)
-	m.Extra = extraFields(data, plain{})
-	return nil
-}
-
-func (m antMessage) MarshalJSON() ([]byte, error) {
-	type plain antMessage
-	return withExtra(plain(m), m.Extra)
-}
-
-type antRequest struct {
-	Model         string                     `json:"model"`
-	System        json.RawMessage            `json:"system,omitempty"`
-	Messages      []antMessage               `json:"messages"`
-	MaxTokens     int                        `json:"max_tokens,omitempty"`
-	Temperature   *float64                   `json:"temperature,omitempty"`
-	TopP          *float64                   `json:"top_p,omitempty"`
-	TopK          *int                       `json:"top_k,omitempty"`
-	StopSequences []string                   `json:"stop_sequences,omitempty"`
-	Stream        bool                       `json:"stream,omitempty"`
-	Tools         []antTool                  `json:"tools,omitempty"`
-	ToolChoice    *antToolChoice             `json:"tool_choice,omitempty"`
-	MCPServers    []antMCPServer             `json:"mcp_servers,omitempty"`
-	Extra         map[string]json.RawMessage `json:"-"`
-}
-
-func (r *antRequest) UnmarshalJSON(data []byte) error {
-	type plain antRequest
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*r = antRequest(p)
-	r.Extra = extraFields(data, plain{})
-	return nil
-}
-
-func (r antRequest) MarshalJSON() ([]byte, error) {
-	type plain antRequest
-	return withExtra(plain(r), r.Extra)
-}
-
-// An MCP endpoint as a request names it
-type antMCPServer struct {
-	Type          string `json:"type"`
-	URL           string `json:"url"`
-	Name          string `json:"name"`
-	Authorization string `json:"authorization_token,omitempty"`
-	Configuration *struct {
-		Enabled      *bool    `json:"enabled"`
-		AllowedTools []string `json:"allowed_tools"`
-	} `json:"tool_configuration,omitempty"`
-}
-
-type antTool struct {
-	Type        string                     `json:"type,omitempty"`
-	Name        string                     `json:"name"`
-	Description string                     `json:"description,omitempty"`
-	InputSchema json.RawMessage            `json:"input_schema,omitempty"`
-	Strict      *bool                      `json:"strict,omitempty"`
-	Extra       map[string]json.RawMessage `json:"-"`
-}
-
-func (t *antTool) UnmarshalJSON(data []byte) error {
-	type plain antTool
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*t = antTool(p)
-	t.Extra = extraFields(data, plain{})
-	return nil
-}
-
-func (t antTool) MarshalJSON() ([]byte, error) {
-	type plain antTool
-	return withExtra(plain(t), t.Extra)
-}
-
-type antToolChoice struct {
-	Type string `json:"type"`
-	Name string `json:"name,omitempty"`
-}
-
-type antUsage struct {
-	InputTokens              int               `json:"input_tokens"`
-	OutputTokens             int               `json:"output_tokens"`
-	CacheCreationInputTokens int               `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int               `json:"cache_read_input_tokens"`
-	ServerToolUse            *antServerToolUse `json:"server_tool_use,omitempty"`
-	// One entry per model round when the answer took more than one
-	Iterations []antIteration `json:"iterations,omitempty"`
 }
 
 // Fresh plus cached tokens, the whole prompt
@@ -223,10 +75,9 @@ type antServerToolUse struct {
 	WebFetchRequests  int `json:"web_fetch_requests,omitempty"`
 }
 
-// The usage of a result, with the server tools it ran when it ran any
+// The usage of a result, input excluding what the cache served, with any server tools it ran
 func antUsageOf(r *Result) antUsage {
 	u := antUsage{InputTokens: r.Usage.In, OutputTokens: r.Usage.Out}
-	// Wire input excludes what the cache served
 	if r.Usage.Cached > 0 && r.Usage.Cached <= r.Usage.In {
 		u.InputTokens, u.CacheReadInputTokens = r.Usage.In-r.Usage.Cached, r.Usage.Cached
 	}
@@ -240,69 +91,6 @@ func antUsageOf(r *Result) antUsage {
 		u.ServerToolUse = &antServerToolUse{WebSearchRequests: searches, WebFetchRequests: fetches}
 	}
 	return u
-}
-
-// A message read from a runtime
-type antResponse struct {
-	ID           string                     `json:"id"`
-	Type         string                     `json:"type"`
-	Role         string                     `json:"role"`
-	Model        string                     `json:"model"`
-	Content      []antBlock                 `json:"content"`
-	StopReason   *string                    `json:"stop_reason"`
-	StopSequence *string                    `json:"stop_sequence"`
-	Usage        antUsage                   `json:"usage"`
-	Extra        map[string]json.RawMessage `json:"-"`
-}
-
-func (r *antResponse) UnmarshalJSON(data []byte) error {
-	type plain antResponse
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*r = antResponse(p)
-	r.Extra = extraFields(data, plain{})
-	return nil
-}
-
-// A message written to a client
-type antReply struct {
-	ID           string                     `json:"id"`
-	Type         string                     `json:"type"`
-	Role         string                     `json:"role"`
-	Model        string                     `json:"model"`
-	Content      []any                      `json:"content"`
-	StopReason   *string                    `json:"stop_reason"`
-	StopSequence *string                    `json:"stop_sequence"`
-	Usage        antUsage                   `json:"usage"`
-	Extra        map[string]json.RawMessage `json:"-"`
-}
-
-func (r antReply) MarshalJSON() ([]byte, error) {
-	type plain antReply
-	return withExtra(plain(r), r.Extra)
-}
-
-// The delta of a message_delta or content_block_delta event
-type antDelta struct {
-	Type        string                     `json:"type"`
-	Text        string                     `json:"text"`
-	Thinking    string                     `json:"thinking"`
-	PartialJSON string                     `json:"partial_json"`
-	StopReason  *string                    `json:"stop_reason"`
-	Extra       map[string]json.RawMessage `json:"-"`
-}
-
-func (d *antDelta) UnmarshalJSON(data []byte) error {
-	type plain antDelta
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*d = antDelta(p)
-	d.Extra = extraFields(data, plain{})
-	return nil
 }
 
 // A search result block written to the client, the snippet sealed into encrypted_content
@@ -351,38 +139,19 @@ func (anthropic) Endpoint(path string) Kind {
 // Message ids the gateway hands out
 func antID() string { return "msg_" + randomID() }
 
-// Parses blocks, a bare string being one text block
-func antBlocks(raw json.RawMessage) ([]antBlock, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
-	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		if text == "" {
-			return nil, nil
-		}
-		return []antBlock{{Type: "text", Text: text}}, nil
-	}
-	var blocks []antBlock
-	if err := json.Unmarshal(raw, &blocks); err != nil {
-		return nil, bad("content must be a string or a list of blocks")
-	}
-	return blocks, nil
-}
-
 func (anthropic) Parse(path string, body []byte) (*Request, error) {
 	if path != AnthropicMessages && path != AnthropicCount {
 		return nil, bad("%s is not an endpoint the anthropic protocol serves", path)
 	}
 	var req antRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := decodeRequest(body, req.read); err != nil {
 		return nil, bad("%v", err)
 	}
-	c := &Request{Kind: Chat, Model: req.Model, MaxTokens: req.MaxTokens, Temperature: req.Temperature, TopP: req.TopP, TopK: req.TopK, Stop: req.StopSequences, Stream: req.Stream, Extra: req.Extra}
+	c := &Request{Kind: Chat, Model: req.Model, MaxTokens: req.MaxTokens, Temperature: req.Temperature, TopP: req.TopP, TopK: req.TopK, Stop: req.StopSequences, Stream: req.Stream, Extra: req.Extra, Origin: originOf(path, body, req.model, req.Model)}
 	if path == AnthropicCount {
 		c.Kind, c.Stream = Count, false
 	}
-	blocks, err := antBlocks(req.System)
+	blocks, err := req.System.blocks()
 	if err != nil {
 		return nil, err
 	}
@@ -415,14 +184,10 @@ func (anthropic) Parse(path string, body []byte) (*Request, error) {
 		if s.Name == "" || s.URL == "" {
 			return nil, bad("an mcp server needs a name and a url")
 		}
-		source := Source{Name: s.Name, URL: s.URL, Token: s.Authorization}
-		if cfg := s.Configuration; cfg != nil {
-			if cfg.Enabled != nil && !*cfg.Enabled {
-				continue
-			}
-			source.Allowed = cfg.AllowedTools
+		if s.Disabled {
+			continue
 		}
-		c.Sources = append(c.Sources, source)
+		c.Sources = append(c.Sources, Source{Name: s.Name, URL: s.URL, Token: s.Authorization, Allowed: s.Allowed})
 	}
 	if req.ToolChoice != nil {
 		switch req.ToolChoice.Type {
@@ -437,10 +202,9 @@ func (anthropic) Parse(path string, body []byte) (*Request, error) {
 	return c, nil
 }
 
-// The turns one message makes, each tool result a tool turn of its own
 // The turns of one message, results as tool turns, what follows a user turn's last result joining it
 func antTurns(m antMessage) ([]Message, error) {
-	blocks, err := antBlocks(m.Content)
+	blocks, err := m.Content.blocks()
 	if err != nil {
 		return nil, err
 	}
@@ -490,13 +254,13 @@ func antTurns(m antMessage) ([]Message, error) {
 func antResultParts(b antBlock) ([]Part, error) {
 	switch b.Type {
 	case "web_search_tool_result":
-		text, err := searchResultText(b.Content)
+		text, err := searchResultText(&b.Content)
 		if err != nil {
 			return nil, err
 		}
 		return []Part{{Type: "text", Text: text}}, nil
 	case "web_fetch_tool_result":
-		text, err := fetchResultText(b.Content)
+		text, err := fetchResultText(&b.Content)
 		if err != nil {
 			return nil, err
 		}
@@ -504,23 +268,21 @@ func antResultParts(b antBlock) ([]Part, error) {
 	case "mcp_tool_result":
 		return mcpResultParts(b)
 	}
-	inner, err := antBlocks(b.Content)
+	inner, err := b.Content.blocks()
 	if err != nil {
 		return nil, err
 	}
 	return antParts(inner, false)
 }
 
-// The tools a request offers, server tools marked as provided and the tool search tool left out
+// The tools a request offers upfront, server tools marked as provided and the tool search tool left out
 func antTools(list []antTool) ([]Tool, error) {
 	var out []Tool
 	found := map[string]bool{}
 	for _, t := range list {
-		// Every tool is offered upfront, since no runtime here searches tools for the model
 		if strings.HasPrefix(t.Type, "tool_search_tool") {
 			continue
 		}
-		delete(t.Extra, "defer_loading")
 		tool := Tool{Type: t.Type, Name: t.Name, Description: t.Description, Schema: t.InputSchema, Strict: t.Strict, Extra: t.Extra}
 		base := providedBase(t.Type)
 		if base == "" {
@@ -558,22 +320,10 @@ func providedBase(typ string) string {
 	return ""
 }
 
-// The limits a server tool definition carries
+// The limits a server tool definition carries, read in the same pass as the tool
 func providedLimits(t antTool) (*Provided, error) {
-	var opts struct {
-		MaxUses  *int     `json:"max_uses"`
-		Allowed  []string `json:"allowed_domains"`
-		Blocked  []string `json:"blocked_domains"`
-		Location *struct {
-			Country string `json:"country"`
-		} `json:"user_location"`
-		MaxTokens *int `json:"max_content_tokens"`
-	}
-	raw, _ := json.Marshal(t.Extra)
-	if err := json.Unmarshal(raw, &opts); err != nil {
-		return nil, bad("%s: %v", t.Name, err)
-	}
-	limits := &Provided{MaxUses: ProvidedUses, Allowed: opts.Allowed, Blocked: opts.Blocked}
+	opts := t.limits
+	limits := &Provided{MaxUses: ProvidedUses, Allowed: opts.Allowed, Blocked: opts.Blocked, Country: opts.Country}
 	if opts.MaxUses != nil {
 		if *opts.MaxUses < 1 {
 			return nil, bad("%s max_uses must be at least 1", t.Name)
@@ -582,9 +332,6 @@ func providedLimits(t antTool) (*Provided, error) {
 	}
 	if len(opts.Allowed) > 0 && len(opts.Blocked) > 0 {
 		return nil, bad("%s takes allowed_domains or blocked_domains, not both", t.Name)
-	}
-	if opts.Location != nil {
-		limits.Country = opts.Location.Country
 	}
 	if opts.MaxTokens != nil {
 		if *opts.MaxTokens < 1 {
@@ -630,7 +377,7 @@ func documentText(b antBlock) string {
 	case src.Type == "text":
 		text = src.Data
 	case src.Type == "content":
-		if blocks, err := antBlocks(src.Content); err == nil {
+		if blocks, err := src.Content.blocks(); err == nil {
 			parts, _ := antParts(blocks, false)
 			text = TextOf(parts)
 		}
@@ -639,16 +386,14 @@ func documentText(b antBlock) string {
 	default:
 		text = "[a " + src.MediaType + " document the model cannot read]"
 	}
-	var title string
-	json.Unmarshal(b.Extra["title"], &title)
-	if title != "" {
-		return title + "\n" + text
+	if b.Title != "" {
+		return b.Title + "\n" + text
 	}
 	return text
 }
 
 // Renders parts as blocks, blank text left out because the API refuses it
-func antContent(parts []Part) []antBlock {
+func antBlocksOf(parts []Part) []antBlock {
 	var out []antBlock
 	for _, p := range parts {
 		switch p.Type {
@@ -671,9 +416,38 @@ func antContent(parts []Part) []antBlock {
 	return out
 }
 
+// Refuses a raw prompt, token ids, or several prompts, none of which a runtime templating every chat takes
+func chatOnly(c *Request, protocol string) error {
+	if c.Kind == Generate && c.Raw {
+		return bad("the %s protocol puts every prompt in the model's chat template, so a raw prompt cannot reach it as written", protocol)
+	}
+	prompts := 0
+	for _, m := range c.Messages {
+		if hasTokens(m.Parts) {
+			return bad("the %s protocol takes prompts as text, not token ids", protocol)
+		}
+		if m.Role == "user" {
+			prompts++
+		}
+	}
+	if c.Kind == Generate && prompts > 1 {
+		return bad("the %s protocol takes one prompt a request, and this request holds %d", protocol, prompts)
+	}
+	return nil
+}
+
 func (anthropic) Render(c *Request) (string, []byte, error) {
+	if err := translatable(c); err != nil {
+		return "", nil, err
+	}
 	if c.Kind == Embed {
 		return "", nil, bad("the anthropic protocol has no embeddings endpoint")
+	}
+	if err := choicesFit(anthropic{}, c, "anthropic"); err != nil {
+		return "", nil, err
+	}
+	if err := chatOnly(c, "anthropic"); err != nil {
+		return "", nil, err
 	}
 	req := antRequest{Model: c.Model, MaxTokens: c.MaxTokens, Temperature: c.Temperature, TopP: c.TopP, TopK: c.TopK, StopSequences: c.Stop, Stream: c.Stream, Extra: c.Extra}
 	if req.MaxTokens == 0 {
@@ -697,15 +471,14 @@ func (anthropic) Render(c *Request) (string, []byte, error) {
 		}
 	}
 	if len(system) > 0 {
-		req.System, _ = json.Marshal(system)
+		req.System = blocksContent(system)
 	}
 	// Adjacent same role turns merge, and tool results ride in user turns
-	var last *antMessage
+	req.Messages = make([]antMessage, 0, len(c.Messages))
 	push := func(role string, blocks []antBlock, extra map[string]json.RawMessage) {
-		if last != nil && last.Role == role {
-			var have []antBlock
-			json.Unmarshal(last.Content, &have)
-			last.Content, _ = json.Marshal(append(have, blocks...))
+		if n := len(req.Messages); n > 0 && req.Messages[n-1].Role == role {
+			last := &req.Messages[n-1]
+			last.Content.Blocks = append(last.Content.Blocks, blocks...)
 			for k, v := range extra {
 				if _, taken := last.Extra[k]; !taken {
 					last.Extra = mergeExtra(last.Extra, map[string]json.RawMessage{k: v})
@@ -713,21 +486,19 @@ func (anthropic) Render(c *Request) (string, []byte, error) {
 			}
 			return
 		}
-		data, _ := json.Marshal(blocks)
-		req.Messages = append(req.Messages, antMessage{Role: role, Content: data, Extra: extra})
-		last = &req.Messages[len(req.Messages)-1]
+		req.Messages = append(req.Messages, antMessage{Role: role, Content: blocksContent(blocks), Extra: extra})
 	}
 	for _, m := range c.Messages {
 		switch m.Role {
 		case "system":
 		case "tool":
 			block := antBlock{Type: "tool_result", ToolUseID: m.ToolID}
-			if blocks := antContent(m.Parts); len(blocks) > 0 {
-				block.Content, _ = json.Marshal(blocks)
+			if blocks := antBlocksOf(m.Parts); len(blocks) > 0 {
+				block.Content = blocksContent(blocks)
 			}
 			push("user", []antBlock{block}, m.Extra)
 		case "assistant":
-			blocks := antContent(m.Parts)
+			blocks := antBlocksOf(m.Parts)
 			for _, t := range m.ToolCalls {
 				input, ok := jsonArgs(t.Args)
 				if !ok {
@@ -739,7 +510,7 @@ func (anthropic) Render(c *Request) (string, []byte, error) {
 				push("assistant", blocks, m.Extra)
 			}
 		default:
-			if blocks := antContent(m.Parts); len(blocks) > 0 {
+			if blocks := antBlocksOf(m.Parts); len(blocks) > 0 {
 				push("user", blocks, m.Extra)
 			}
 		}
@@ -761,13 +532,14 @@ func (anthropic) Render(c *Request) (string, []byte, error) {
 	default:
 		req.ToolChoice = &antToolChoice{Type: "tool", Name: c.ToolChoice}
 	}
+	b := renderBuffer(c)
 	if c.Kind == Count {
 		req.MaxTokens, req.Temperature, req.TopP, req.TopK, req.StopSequences, req.Stream = 0, nil, nil, nil, nil, false
-		data, err := json.Marshal(req)
-		return AnthropicCount, data, err
+		req.appendTo(&b)
+		return anthropic{}.Traits().TokenizePath, b, nil
 	}
-	data, err := json.Marshal(req)
-	return AnthropicMessages, data, err
+	req.appendTo(&b)
+	return AnthropicMessages, b, nil
 }
 
 func antStop(reason string) string {
@@ -793,14 +565,14 @@ func antReason(stop string) string {
 func (anthropic) ParseResult(c *Request, body []byte) (*Result, error) {
 	if c.Kind == Count {
 		var count antUsage
-		if err := json.Unmarshal(body, &count); err != nil {
-			return nil, err
+		if err := decode(body, count.read); err != nil {
+			return nil, malformed(err)
 		}
 		return &Result{Model: c.Model, Usage: Usage{In: count.InputTokens}}, nil
 	}
 	var resp antResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, err
+	if err := decode(body, resp.read); err != nil {
+		return nil, malformed(err)
 	}
 	r := &Result{ID: resp.ID, Model: resp.Model, Usage: Usage{In: resp.Usage.prompt(), Out: resp.Usage.OutputTokens, Cached: resp.Usage.CacheReadInputTokens, Rounds: roundsOf(resp.Usage)}, Extra: resp.Extra}
 	for _, b := range resp.Content {
@@ -844,27 +616,13 @@ func (anthropic) ParseStream(rd io.Reader, emit func(Event) error) error {
 	// Tool calls numbered in order of appearance, since content block indexes also count text blocks
 	order := map[int]int{}
 	err := ReadSSE(rd, func(event string, data []byte) error {
-		var ev struct {
-			Type         string       `json:"type"`
-			Index        int          `json:"index"`
-			Message      *antResponse `json:"message"`
-			ContentBlock *antBlock    `json:"content_block"`
-			Delta        *antDelta    `json:"delta"`
-			Usage        *antUsage    `json:"usage"`
-			Error        *struct {
-				Type    string `json:"type"`
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if err := json.Unmarshal(data, &ev); err != nil {
-			return err
+		var ev antEvent
+		if err := decode(data, ev.read); err != nil {
+			return malformed(err)
 		}
 		switch ev.Type {
 		case "error":
-			message := ""
-			if ev.Error != nil {
-				message = ev.Error.Message
-			}
+			message := ev.ErrorMessage
 			if message == "" {
 				message = strings.TrimSpace(string(data))
 			}
@@ -959,6 +717,9 @@ func (a *antWhole) flush() {
 }
 
 func (a *antWhole) Write(ev Event) error {
+	if err := oneChoice(ev, "anthropic"); err != nil {
+		return err
+	}
 	switch ev.Kind {
 	case Said, Thought:
 		a.said.add(ev)
@@ -993,8 +754,8 @@ func (a *antWhole) Write(ev Event) error {
 		if a.blocks == nil {
 			a.blocks = []any{}
 		}
-		reply := antReply{ID: antID(), Type: "message", Role: "assistant", Model: a.model, Content: a.blocks, StopReason: ptr(antReason(StopOf(res.Stop, len(a.tools.order)))), Usage: antUsageOf(res), Extra: res.Extra}
-		data, err := json.Marshal(reply)
+		reply := antReply{ID: antID(), Model: a.model, Content: a.blocks, StopReason: ptr(antReason(StopOf(res.Stop, len(a.tools.order)))), Usage: antUsageOf(res), Extra: res.Extra}
+		data, err := reply.MarshalJSON()
 		if err != nil {
 			return err
 		}
@@ -1029,20 +790,19 @@ func antRan(w antWriter, run *Run) error {
 		if err := w.block(antBlock{Type: "server_tool_use", ID: id, Name: tools.SearchTool, Input: json.RawMessage("{}")}, serverToolInput(input, "query")); err != nil {
 			return err
 		}
-		return w.block(antBlock{Type: "web_search_tool_result", ToolUseID: id, Content: searchContent(run.Result)}, nil)
+		return w.block(antBlock{Type: "web_search_tool_result", ToolUseID: id, Content: rawContent(searchContent(run.Result))}, nil)
 	case run.Kind == v1.ToolServerKind_TOOL_SERVER_KIND_FETCH && !run.AdHoc:
 		id := "srvtoolu_" + randomID()
 		if err := w.block(antBlock{Type: "server_tool_use", ID: id, Name: tools.FetchTool, Input: json.RawMessage("{}")}, serverToolInput(input, "url")); err != nil {
 			return err
 		}
-		return w.block(antBlock{Type: "web_fetch_tool_result", ToolUseID: id, Content: fetchContent(run.Result)}, nil)
+		return w.block(antBlock{Type: "web_fetch_tool_result", ToolUseID: id, Content: rawContent(fetchContent(run.Result))}, nil)
 	}
 	id := "mcptoolu_" + randomID()
 	if err := w.block(antBlock{Type: "mcp_tool_use", ID: id, Name: run.Tool, ServerName: run.Server, Input: json.RawMessage("{}")}, input); err != nil {
 		return err
 	}
-	content, _ := json.Marshal(antContent(ResultParts(run.Result)))
-	return w.block(antBlock{Type: "mcp_tool_result", ToolUseID: id, IsError: ptr(run.Result.Failed), Content: content}, nil)
+	return w.block(antBlock{Type: "mcp_tool_result", ToolUseID: id, IsError: ptr(run.Result.Failed), Content: blocksContent(antBlocksOf(ResultParts(run.Result)))}, nil)
 }
 
 // The input of a server tool as the API writes it, its one field or empty
@@ -1115,17 +875,15 @@ func OpenSnippet(s string) (string, bool) {
 }
 
 // The text a model reads for a web_search_tool_result block a client sent back
-func searchResultText(content json.RawMessage) (string, error) {
-	var failure antToolError
-	if json.Unmarshal(content, &failure) == nil && failure.Type == "web_search_tool_result_error" {
-		return tools.SearchText(nil, failure.ErrorCode), nil
+func searchResultText(content *antContent) (string, error) {
+	if content.kind == contentObject && content.Object.Type == "web_search_tool_result_error" {
+		return tools.SearchText(nil, content.Object.ErrorCode), nil
 	}
-	var results []antSearchResult
-	if err := json.Unmarshal(content, &results); err != nil {
+	if content.kind != contentList {
 		return "", bad("web_search_tool_result content must be a list of results or an error")
 	}
-	hits := make([]tools.Hit, 0, len(results))
-	for _, r := range results {
+	hits := make([]tools.Hit, 0, len(content.Blocks))
+	for _, r := range content.Blocks {
 		snippet, ok := OpenSnippet(r.EncryptedContent)
 		if !ok {
 			return "", bad("web_search_tool_result carries content this gateway did not write")
@@ -1140,29 +898,37 @@ func searchResultText(content json.RawMessage) (string, error) {
 }
 
 // The text a model reads for a web_fetch_tool_result block a client sent back
-func fetchResultText(content json.RawMessage) (string, error) {
-	var failure antToolError
-	if json.Unmarshal(content, &failure) == nil && failure.Type == "web_fetch_tool_result_error" {
-		return tools.FetchText(nil, failure.ErrorCode), nil
-	}
-	var res antFetchResult
-	if err := json.Unmarshal(content, &res); err != nil || res.Type != "web_fetch_result" {
+func fetchResultText(content *antContent) (string, error) {
+	if content.kind != contentObject {
 		return "", bad("web_fetch_tool_result content must be a web_fetch_result or an error")
 	}
-	page := &tools.Page{URL: res.URL, Title: res.Content.Title, Text: res.Content.Source.Data}
-	if res.Content.Source.Type == "base64" {
-		page.Text = "[a " + res.Content.Source.MediaType + " document the model cannot read]"
+	res := content.Object
+	switch res.Type {
+	case "web_fetch_tool_result_error":
+		return tools.FetchText(nil, res.ErrorCode), nil
+	case "web_fetch_result":
+	default:
+		return "", bad("web_fetch_tool_result content must be a web_fetch_result or an error")
+	}
+	page := &tools.Page{URL: res.URL}
+	if doc := res.Content.Object; res.Content.kind == contentObject {
+		page.Title = doc.Title
+		if src := doc.Source; src != nil {
+			page.Text = src.Data
+			if src.Type == "base64" {
+				page.Text = "[a " + src.MediaType + " document the model cannot read]"
+			}
+		}
 	}
 	return tools.FetchText(page, ""), nil
 }
 
 // The parts a model reads for an mcp_tool_result block a client sent back
 func mcpResultParts(b antBlock) ([]Part, error) {
-	var text string
-	if json.Unmarshal(b.Content, &text) == nil {
-		return []Part{{Type: "text", Text: text}}, nil
+	if b.Content.kind == contentText {
+		return []Part{{Type: "text", Text: b.Content.Text}}, nil
 	}
-	inner, err := antBlocks(b.Content)
+	inner, err := b.Content.blocks()
 	if err != nil {
 		return nil, err
 	}
@@ -1196,7 +962,7 @@ func (a anthropic) Answer(w http.ResponseWriter, req *Request, model string) Wri
 	}
 	streamHeaders(w, "text/event-stream")
 	s := &antStream{live: newLiveWriter(w, antPing), index: -1, done: map[int]bool{}}
-	msg := antReply{ID: antID(), Type: "message", Role: "assistant", Model: model, Content: []any{}}
+	msg := antReply{ID: antID(), Model: model, Content: []any{}}
 	s.live.sse("message_start", map[string]any{"type": "message_start", "message": msg})
 	return s
 }
@@ -1262,6 +1028,9 @@ func (s *antStream) settle() error {
 }
 
 func (s *antStream) Write(ev Event) error {
+	if err := oneChoice(ev, "anthropic"); err != nil {
+		return err
+	}
 	switch ev.Kind {
 	case Said:
 		if s.kind == "tool_use" {
@@ -1338,13 +1107,23 @@ func (s *antStream) Write(ev Event) error {
 		}
 		return s.live.sse("message_stop", map[string]any{"type": "message_stop"})
 	case Failed:
-		code := ev.Failure.Code
-		if code == "" {
-			code = CodeAPI
-		}
-		return s.live.sse("error", map[string]any{"type": "error", "error": map[string]any{"type": code, "message": ev.Failure.Message}})
+		return s.live.sse("error", antStreamFailure(*ev.Failure))
 	}
 	return nil
+}
+
+// The error event a Messages stream ends with
+func antStreamFailure(f Failure) map[string]any {
+	code := f.Code
+	if code == "" {
+		code = CodeAPI
+	}
+	return map[string]any{"type": "error", "error": map[string]any{"type": code, "message": f.Message}}
+}
+
+// Ends a Messages stream with its error event
+func (anthropic) StreamFailure(_ StreamAt, f Failure) ([]byte, error) {
+	return sseJSON("error", antStreamFailure(f))
 }
 
 func (s *antStream) Close() error {
@@ -1353,10 +1132,15 @@ func (s *antStream) Close() error {
 }
 
 // The count endpoint sizes image blocks itself, and the API refuses fields it does not know
-func (anthropic) Traits() Traits { return Traits{CountsImages: true, Strict: true} }
+func (anthropic) Traits() Traits {
+	return Traits{CountsImages: true, Strict: true, TokenizePath: AnthropicCount}
+}
+
+func (a anthropic) Native(req *Request) (string, []byte, error) { return native(a, req) }
 
 func (anthropic) ErrorMessage(body []byte) string { return errorField(body) }
 
 func (anthropic) Error(w http.ResponseWriter, f Failure) {
+	retryHeader(w, f)
 	WriteJSON(w, f.Status, map[string]any{"type": "error", "error": map[string]any{"type": f.Code, "message": f.Message}})
 }

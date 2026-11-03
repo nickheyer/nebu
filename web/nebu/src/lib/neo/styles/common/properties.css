@@ -1,0 +1,47 @@
+@property --neo-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@property --neo-progress {
+  syntax: '<percentage>';
+  inherits: true;
+  initial-value: 0%;
+}
+
+@property --neo-source-color {
+  syntax: '<color>';
+  initial-value: transparent;
+  inherits: false;
+}
+
+@property --neo-target-color {
+  syntax: '<color>';
+  initial-value: transparent;
+  inherits: false;
+}
+
+@property --neo-thumb-color {
+  syntax: '<color>';
+  initial-value: transparent;
+  inherits: true;
+}
+
+@property --neo-rotation {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@property --neo-scale {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 1;
+}
+
+@property --neo-time {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0;
+}

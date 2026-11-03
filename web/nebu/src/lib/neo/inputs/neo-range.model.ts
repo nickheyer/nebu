@@ -1,0 +1,250 @@
+import type { Snippet } from 'svelte';
+
+import type { offset, PopoverOptions } from '#lib/neo/floating/common/popover/index.js';
+import type { NeoFormType } from '#lib/neo/form/neo-form-context.svelte.js';
+import type { NeoInputValidationProps } from '#lib/neo/inputs/common/neo-input-validation.model.js';
+import type { NeoLabelProps } from '#lib/neo/inputs/common/neo-label.model.js';
+import type { NeoValidationFieldContext, NeoValidationState } from '#lib/neo/inputs/common/neo-validation.model.js';
+import type { HTMLActionProps } from '#lib/neo/utils/action.utils.js';
+import type { BorderRadiusInput } from '#lib/neo/utils/border.utils.js';
+import type { Color } from '#lib/neo/utils/colors.utils.js';
+import type { HTMLNeoBaseElement, HTMLRefProps, HTMLTagProps } from '#lib/neo/utils/html-element.utils.js';
+import type { ShadowShallowElevation, ShadowShallowElevationString } from '#lib/neo/utils/shadow.utils.js';
+import type { SizeInput } from '#lib/neo/utils/style.utils.js';
+
+export type NeoRangeValue = number | [number, number];
+export type NeoRangeElevation = ShadowShallowElevation | ShadowShallowElevationString;
+
+export interface NeoRangeStates {
+  /**
+   * If the input is currently focused.
+   */
+  focused?: boolean;
+  /**
+   * If the input is currently hovered.
+   */
+  hovered?: boolean;
+  /**
+   * If true, the input will be disabled.
+   */
+  disabled?: boolean;
+  /**
+   * If true, the input will be readonly.
+   */
+  readonly?: boolean;
+  /**
+   * Display a loading spinner inside the input.
+   */
+  loading?: boolean;
+  /**
+   * Minimum value of the range.
+   *
+   * @default 0
+   */
+  min?: number;
+  /**
+   * Maximum value of the range.
+   *
+   * @default 100
+   */
+  max?: number;
+  /**
+   * Step value of the range.
+   *
+   * @default 1
+   */
+  step?: number;
+}
+
+export interface NeoRangeStyles {
+  /**
+   * If true, the input will show step markers.
+   * If an array is provided, the input will show the markers at the given values.
+   *
+   * @see step
+   */
+  ticks?: boolean | number[];
+  /**
+   * If true, the input value will be displayed as tooltip on hover/focus.
+   *
+   * @default true
+   */
+  tooltips?: boolean;
+  /**
+   * If true, the input will have a rounded border.
+   */
+  rounded?: BorderRadiusInput;
+  /**
+   * If true, the input will be displayed with a glass effect.
+   */
+  glass?: boolean;
+  /**
+   * Tints the input with the current color.
+   */
+  tinted?: boolean;
+  /**
+   * Text color to use for the input.
+   */
+  color?: Color | CSSStyleDeclaration['color'];
+  /**
+   * If true, the input input start as flat on first render.
+   * @see [@starting-style](https://developer.mozilla.org/en-US/docs/Web/CSS/@starting-style) for browser support
+   */
+  start?: boolean;
+  /**
+   * If true, the input will be disabled and a loading skeleton will be displayed instead of the text.
+   */
+  skeleton?: boolean;
+  /**
+   * Input elevation.
+   * @default 2
+   */
+  elevation?: NeoRangeElevation;
+}
+
+export interface NeoRangeTooltipContext {
+  lower?: boolean;
+  upper?: boolean;
+  value?: number;
+}
+
+export interface NeoRangeTickContext {
+  index: number;
+  filled?: boolean;
+}
+
+export type NeoRangeProps = Pick<NeoInputValidationProps, 'valid' | 'validation' | 'error' | 'context' | 'message' | 'messageProps'>
+  & NeoValidationState<NeoRangeValue> & {
+    // Snippets
+    /**
+     * A snippet or a string to display as the input label.
+     */
+    label?: NeoLabelProps['label'];
+    /**
+     * A snippet to display as value labels.
+     */
+    tooltip?: Snippet<[NeoRangeTooltipContext, NeoValidationFieldContext]>;
+    /**
+     * A snippet to display as a tick mark.
+     */
+    mark?: Snippet<[NeoRangeTickContext, NeoValidationFieldContext]>;
+    /**
+     * A snippet to display as the input prefix.
+     */
+    before?: Snippet<[NeoValidationFieldContext]>;
+    /**
+     * A snippet to display as the input suffix.
+     */
+    after?: Snippet<[NeoValidationFieldContext]>;
+
+    // States
+    /**
+     * Unique identifier of the input.
+     * @default neo-range-{uuid}
+     */
+    id?: HTMLElement['id'];
+    /**
+     * Optional name of the input (for validation purposes).
+     */
+    name?: HTMLInputElement['name'];
+    /**
+     * Optional form id for validation.
+     */
+    form?: NeoFormType;
+    /**
+     * If false, the input will not be registered with the form context.
+     */
+    register?: NeoInputValidationProps['register'];
+
+    // Sizing
+    /**
+     * Optional flex strategy for the container
+     */
+    flex?: CSSStyleDeclaration['flex'];
+    /**
+     * Optional width constraints.
+     */
+    width?: SizeInput<'width'>;
+    /**
+     * Optional height constraints.
+     */
+    height?: SizeInput<'height'>;
+
+    // Other props
+    /**
+     * The HTML tag to use for the validation container.
+     */
+    validationRef?: HTMLRefProps['ref'];
+    /**
+     * The props to pass to the validation component.
+     */
+    validationProps?: NeoInputValidationProps;
+
+    /**
+     * The props to pass to the input container.
+     */
+    containerProps?: HTMLNeoBaseElement & HTMLTagProps;
+
+    /**
+     * The props to pass to the label.
+     */
+    labelProps?: NeoLabelProps;
+    /**
+     * The ref to bind to the label.
+     */
+    labelRef?: HTMLLabelElement;
+
+    /**
+     * The props to pass to the floating label.
+     */
+    floatingProps?: HTMLNeoBaseElement<HTMLSpanElement>;
+    /**
+     * Distance between the trigger and the floating tooltip, forwarded to
+     * `@floating-ui/dom`'s `offset()` middleware.
+     *
+     * @default 6
+     */
+    floatingOffset?: Parameters<typeof offset>[0];
+    /**
+     * Options forwarded to the underlying `Popover` instances backing the
+     * lower/upper value tooltips.
+     *
+     * Pass each reactive field as a getter (`{ get placement() { … } }`)
+     * — spreading a static object into the prop freezes its values at
+     * first render.
+     *
+     * Excluded fields and why:
+     * - `open` — NeoRange owns the tooltip open state via
+     *   `tooltips && (focused || hovered)`.
+     * - `middleware` — NeoRange owns positioning (`flip()` + `offset()`);
+     *   use the top-level `floatingOffset` prop to tune spacing.
+     * - `interactions` — read **once** at construction by the underlying
+     *   class; exposing it would mislead consumers into expecting
+     *   reactivity.
+     */
+    floatingOptions?: Pick<PopoverOptions, 'placement' | 'target' | 'autoUpdate' | 'onOpenChange'>;
+  } & NeoRangeStates
+  & NeoRangeStyles
+  & HTMLActionProps
+  & HTMLRefProps
+  & HTMLNeoBaseElement<HTMLSpanElement>;
+
+export type NeoRangeValidationState = NeoValidationState<NeoRangeValue>;
+
+export interface NeoRangeMethods<T extends NeoRangeValue = NeoRangeValue> {
+  /**
+   * Increment the input value.
+   * @param index
+   */
+  stepUp: (index?: 0 | 1) => T;
+  /**
+   * Decrement the input value.
+   * @param index
+   */
+  stepDown: (index?: 0 | 1) => T;
+}
+
+export type NeoRangeContext<T extends NeoRangeValue = NeoRangeValue> = NeoValidationFieldContext
+  & NeoRangeStates
+  & NeoRangeStyles
+  & NeoRangeMethods<T>;

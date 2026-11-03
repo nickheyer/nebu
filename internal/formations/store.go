@@ -22,13 +22,12 @@ import (
 
 const kindPull = "pull"
 
-// The directory a formation's relay seats save slots in on this node: <cache dir>/slots/<formation>
+// The directory this node keeps a formation's relay slot files in, under the cache's slots directory
 func (m *Manager) slotDir(formationID string) string {
 	return filepath.Join(m.CacheDir, "slots", formationID)
 }
 
-// Fetches a relay's saved slot from the prefill seat's node into this node's slot directory, the
-// cache moving over the mesh blob channel, and returns where it landed
+// Fetches a relay's saved slot from the prefill node over the mesh blob channel and returns where it landed
 func (m *Manager) MoveSlot(ctx context.Context, formationID, fromNode, file string) (string, uint64, error) {
 	if formationID == "" || file == "" || strings.ContainsAny(formationID+file, "/\\") || strings.HasPrefix(file, ".") {
 		return "", 0, fmt.Errorf("%w: a slot move names a formation and a file", ErrFormation)
@@ -146,38 +145,7 @@ func (m *Manager) Dial(ctx context.Context, nodeID string) (string, *http.Client
 	return cl.Base, cl.HTTP, nil
 }
 
-// How far two nodes are apart by the class of the link between them as either measured it: the
-// same node first, then fabric, fast, lan, slow, and unmeasured last
-func (m *Manager) LinkBetween(from, to string) int {
-	if from == to {
-		return 0
-	}
-	rank := 10
-	for _, l := range m.Mesh.Links() {
-		if l.GetFrom() == from && l.GetTo() == to || l.GetFrom() == to && l.GetTo() == from {
-			rank = min(rank, classRank(l.GetClass()))
-		}
-	}
-	return rank
-}
-
-// How near a link's class puts two nodes
-func classRank(c v1.LinkClass) int {
-	switch c {
-	case v1.LinkClass_LINK_CLASS_FABRIC:
-		return 1
-	case v1.LinkClass_LINK_CLASS_FAST:
-		return 2
-	case v1.LinkClass_LINK_CLASS_LAN:
-		return 3
-	case v1.LinkClass_LINK_CLASS_SLOW:
-		return 4
-	}
-	return 9
-}
-
-// Pulls a model onto a member, following the member's pull in one task here whose progress
-// mirrors the member's byte progress
+// Pulls a model onto a member, mirroring the member's byte progress in one task here
 func (m *Manager) PullTo(ctx context.Context, nodeID string, req *v1.PullRequest) (*v1.Task, error) {
 	rec, err := m.Mesh.Node(nodeID)
 	if err != nil {

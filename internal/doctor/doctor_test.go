@@ -132,8 +132,7 @@ func TestForceQueuesOneProbe(t *testing.T) {
 	}
 }
 
-// A probe forced while one runs still starts when that one is cancelled, and none starts once the
-// daemon is shutting down
+// A probe forced while one runs starts its task when that one is cancelled, joining the probe still running, and none starts once the daemon shuts down
 func TestForceOutlivesCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -145,14 +144,18 @@ func TestForceOutlivesCancel(t *testing.T) {
 	if _, err := d.Tasks.Cancel(probeTasks(d)[0].GetId()); err != nil {
 		t.Fatal(err)
 	}
-	<-g.started
-	if n := len(probeTasks(d)); n != 2 {
-		t.Fatalf("%d probe tasks after cancelling the first", n)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(probeTasks(d)) != 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d probe tasks after cancelling the first", len(probeTasks(d)))
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	d.Force()
 	cancel()
 	settled(t, d)
 	if n := len(probeTasks(d)); n != 2 || len(g.started) != 0 {
-		t.Fatalf("%d probe tasks and %d probes waiting after shutdown", n, len(g.started))
+		t.Fatalf("%d probe tasks and %d probes started beside the first after shutdown", n, len(g.started))
 	}
+	g.release <- struct{}{}
 }

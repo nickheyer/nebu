@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,8 +18,8 @@ import (
 	"github.com/nickheyer/nebu/internal/instances/fake"
 	"github.com/nickheyer/nebu/internal/mesh"
 	"github.com/nickheyer/nebu/internal/settings"
-	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/pkg/archs"
+	"github.com/nickheyer/nebu/pkg/datalayer"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/host"
@@ -33,9 +34,9 @@ import (
 // A slot view holding one slot
 type oneSlot struct{ slot *v1.Slot }
 
-func (oneSlot) Refs() []*v1.SlotRef            { return nil }
-func (oneSlot) Names(string) []slots.RouteName { return nil }
-func (oneSlot) OnFormation(*v1.Formation)      {}
+func (oneSlot) Refs() []*v1.SlotRef       { return nil }
+func (s oneSlot) Owns(name string) bool   { return s.slot.GetName() == name }
+func (oneSlot) OnFormation(*v1.Formation) {}
 func (s oneSlot) Get(string) (*v1.Slot, *v1.Instance, error) {
 	return s.slot, nil, nil
 }
@@ -43,16 +44,28 @@ func (oneSlot) Claim(_ context.Context, _ string, run *v1.RunRequest) (*v1.RunRe
 	return run, nil
 }
 
+// A pool view holding nothing, what a mesh reads its record's pools and routes from
+type emptyView struct{}
+
+func (emptyView) Store() datalayer.Store                 { return datalayer.NewStore() }
+func (emptyView) Pools() []*v1.Pool                      { return nil }
+func (emptyView) Pool(string) (*v1.Pool, bool)           { return nil, false }
+func (emptyView) Routes() []*v1.Route                    { return nil }
+func (emptyView) Route(string) (*v1.Route, bool)         { return nil, false }
+func (emptyView) RouteView(string) (*v1.Route, bool)     { return nil, false }
+func (emptyView) Exported() []*v1.Pool                   { return nil }
+func (emptyView) Objective(string) (*v1.Objective, bool) { return nil, false }
+
 // A probe answering with a CPU and its host memory
 type argsProbe struct{}
 
 func (argsProbe) ID() string               { return "memory" }
-func (argsProbe) Description() string      { return "a CPU and host memory" }
+func (argsProbe) Description() string      { return "a CPU, host memory and an iGPU sharing it" }
 func (argsProbe) Runs(string, string) bool { return true }
 func (argsProbe) Run(context.Context) host.Result {
 	return host.Result{
 		Status:  v1.ProbeStatus_PROBE_STATUS_OK,
-		Devices: []*v1.Device{{Id: "cpu0", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Name: "cpu"}},
+		Devices: []*v1.Device{{Id: "cpu0", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Name: "cpu"}, {Id: "igpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "shared igpu", Facts: map[string]string{"memory": "shared"}}},
 		Pools:   []*v1.MemoryPool{{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 64 << 30, FreeBytes: 32 << 30}},
 	}
 }
@@ -102,25 +115,28 @@ func argsConductor(t *testing.T, ctx context.Context) *Manager {
 		Runtimes:  rts,
 		Store:     blobs,
 		Perf:      table,
+		Pools:     emptyView{},
+		Registrar: fake.NewRegistrar(),
 		Settings:  set,
 		Events:    bus,
 		Guard:     auth.NewGuard("", nil, nil),
 		Log:       log,
 		Version:   "test",
-		APIListen: "127.0.0.1:0",
 	}
 	if err := node.Open(ctx); err != nil {
 		t.Fatal(err)
 	}
 	node.Handler = http.NewServeMux()
+	node.InFlight = func(string) int { return 0 }
 	if err := node.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(node.Close)
-	if _, _, err := node.Init(ctx, "test", false); err != nil {
+	if _, _, err := node.Init(ctx, "test"); err != nil {
 		t.Fatal(err)
 	}
 	return &Manager{
+		DB:        database,
 		Mesh:      node,
 		Store:     blobs,
 		Runtimes:  rts,
@@ -167,5 +183,20 @@ func TestFormationArgs(t *testing.T) {
 	bad.Args = `--alias "open`
 	if _, err := m.plan(ctx, bad); !errors.Is(err, runtimes.ErrParam) {
 		t.Fatalf("unclosed quote: %v", err)
+	}
+}
+
+// A span pins devices a member holds with memory of their own, and nothing else
+func TestPlanRefusesSpanDevicesWithoutMemory(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := argsConductor(t, ctx)
+	run := &v1.RunRequest{SourceId: "src", Repo: "org/model", Group: "q4", RuntimeId: fake.RuntimeID, Name: "pinned", Span: []string{m.self() + "/igpu0"}}
+	if _, err := m.plan(ctx, run); err == nil || !strings.Contains(err.Error(), `span: device "igpu0" (shared igpu) on `) || !strings.Contains(err.Error(), "has no memory of its own, so a seat cannot pin it") {
+		t.Fatalf("a span on the igpu: %v", err)
+	}
+	run.Span = []string{m.self() + "/gpu9"}
+	if _, err := m.plan(ctx, run); err == nil || !strings.Contains(err.Error(), `has no device "gpu9", see nebu mesh nodes`) {
+		t.Fatalf("a span on a device the node lacks: %v", err)
 	}
 }

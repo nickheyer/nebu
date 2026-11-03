@@ -1,0 +1,26 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package
+      path: vllm
+      value: github.com/nickheyer/nebu/pkg/transcode/gen/vllm;vllmpb
+    - file_option: go_package
+      path: sglang/runtime/v1
+      value: github.com/nickheyer/nebu/pkg/transcode/gen/sglang/runtime/v1;runtimev1
+    - file_option: go_package
+      path: sglang/api/v1
+      value: github.com/nickheyer/nebu/pkg/transcode/gen/sglang/api/v1;apiv1
+    - file_option: go_package
+      path: sglang/json/v1
+      value: github.com/nickheyer/nebu/pkg/transcode/gen/sglang/json/v1;jsonv1
+    - file_option: go_package
+      path: sglang/router
+      value: github.com/nickheyer/nebu/pkg/transcode/gen/sglang/router;kvindexerv1
+plugins:
+  - local: protoc-gen-go
+    out: ../../pkg/transcode/gen
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: ../../pkg/transcode/gen
+    opt: paths=source_relative

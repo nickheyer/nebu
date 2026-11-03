@@ -2,8 +2,12 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "nebu/v1/estimate.proto";
+import "nebu/v1/gateway.proto";
+import "nebu/v1/meta.proto";
+import "nebu/v1/runtime.proto";
 import "nebu/v1/task.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
@@ -17,6 +21,8 @@ enum InstanceState {
   INSTANCE_STATE_STOPPED = 4;
   INSTANCE_STATE_FAILED = 5;
   INSTANCE_STATE_DRAINING = 6;
+  // Unloaded after its idle window with relaunch intent kept, woken by the next request
+  INSTANCE_STATE_IDLE = 7;
 }
 
 // One matched triage rule with its hint
@@ -125,6 +131,7 @@ message SeatSpec {
   repeated uint32 device_layers = 30;
   // The slot's and the run's extra words for the runtime's server command, which a helper seat leaves out
   string args = 31;
+  reserved 25;
 }
 
 // A runtime process serving one stored model
@@ -157,6 +164,32 @@ message Instance {
   SeatSpec seat = 25;
   // Measured from the seat's log: the transport its collective took, rdma or sockets
   string transport = 26;
+  repeated Condition conditions = 27;
+  // Incremented on every change to the request
+  uint64 generation = 28;
+  uint64 observed_generation = 29;
+  // Times the reconciler restarted the process after a crash
+  uint32 restarts = 30;
+  google.protobuf.Timestamp last_health_at = 31;
+  // Whether every rank answered its last health probe
+  bool healthy = 32;
+  // Every data parallel rank when the launch runs several, rank 0 first, each a process serving its own port
+  repeated InstanceRank ranks = 33;
+  // Context length, quantization, accelerator, modalities and throughput class the runtime reports for the launch
+  RuntimeInventory inventory = 34;
+}
+
+// One data parallel rank of an instance, a process of its own on a port of its own
+message InstanceRank {
+  uint32 rank = 1;
+  // Where the rank answers HTTP on this node
+  string endpoint = 2;
+  int32 pid = 3;
+  repeated string command = 4;
+  // Whether the rank answers its health probes, its endpoint leaving rotation while it does not
+  bool healthy = 5;
+  // The mesh port other nodes reach a seat's rank at, its guard or exposed port, zero for a solo instance
+  uint32 port = 6;
 }
 
 // Start a stored model. Request parameters override slot defaults, which override manifest defaults.
@@ -181,6 +214,14 @@ message RunRequest {
   bool free = 13;
   // Extra words for the runtime's server command, after the slot's, split like a shell, templates rendered at launch
   string args = 14;
+  // Limits of the route the instance names for itself
+  Policy policy = 15;
+  // Request shaping of the route the instance names for itself
+  Profile route_profile = 16;
+  // Seconds without requests after which the process unloads, zero keeping it loaded
+  uint32 idle_unload_seconds = 17;
+  // Snapshot the process with CRIU once ready, later launches of the same run restoring the image instead of starting cold
+  bool snapshot = 18;
 }
 
 // Returns the instance and its startup task
@@ -201,7 +242,7 @@ message ListInstancesResponse {
 
 // Fetches one instance by id or name
 message GetInstanceRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns one instance
@@ -211,7 +252,7 @@ message GetInstanceResponse {
 
 // Stops one instance by id or name
 message StopInstanceRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the instance after stop
@@ -221,14 +262,56 @@ message StopInstanceResponse {
 
 // Streams runtime output
 message LogsRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
   bool follow = 2;
-  uint32 tail = 3;
+  uint32 tail = 3 [(buf.validate.field).uint32.lte = 100000];
 }
 
 // Batch of log lines
 message LogsResponse {
   repeated string lines = 1;
+}
+
+// Loads an adapter into a ready instance through its runtime's adapter API
+message LoadAdapterRequest {
+  // The instance by id or name
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  // The name requests put in the model field to select the adapter
+  string name = 2 [(buf.validate.field).string.min_len = 1];
+  // The adapter's file or directory on the instance's node, empty for one the runtime loaded at launch
+  string path = 3;
+}
+
+// Returns the instance with the adapter published
+message LoadAdapterResponse {
+  Instance instance = 1;
+}
+
+// Unloads an adapter from a ready instance
+message UnloadAdapterRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  string name = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+// Returns the instance without the adapter
+message UnloadAdapterResponse {
+  Instance instance = 1;
+}
+
+// One adapter a ready instance applies
+message LoadedAdapter {
+  string name = 1;
+  string path = 2;
+}
+
+// Lists the adapters a ready instance applies now
+message ListAdaptersRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// Returns the adapters loaded on the instance
+message ListAdaptersResponse {
+  repeated LoadedAdapter adapters = 1;
 }
 
 // Running models
@@ -243,4 +326,10 @@ service InstanceService {
   rpc StopInstance(StopInstanceRequest) returns (StopInstanceResponse);
   // Streams runtime output
   rpc Logs(LogsRequest) returns (stream LogsResponse);
+  // Loads an adapter into a ready instance at runtime
+  rpc LoadAdapter(LoadAdapterRequest) returns (LoadAdapterResponse);
+  // Unloads an adapter from a ready instance at runtime
+  rpc UnloadAdapter(UnloadAdapterRequest) returns (UnloadAdapterResponse);
+  // Lists the adapters a ready instance applies
+  rpc ListAdapters(ListAdaptersRequest) returns (ListAdaptersResponse);
 }

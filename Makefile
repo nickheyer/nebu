@@ -1,4 +1,4 @@
-.PHONY: gen proto-clean proto-lint web web-install web-check prepare build build-cli run test lint vet staticcheck govulncheck cgo-guard clean dev release release-check migrate
+.PHONY: gen proto-clean proto-lint web web-install web-check prepare build build-cli run test lint vet staticcheck govulncheck cgo-guard clean dev release release-check migrate conformance
 
 BIN := build/nebu
 BUF ?= buf
@@ -41,7 +41,7 @@ dev: clean web
 	@trap 'echo "Stopping processes..."; kill $$(jobs -p) 2>/dev/null; wait; exit' INT TERM; \
 	cd $(WEB) && npm run dev & \
 	FRONTEND_PID=$$!; \
-	go run cmd/nebu/main.go serve & \
+	NEBU_TLS_DISABLED=true go run cmd/nebu/main.go serve & \
 	BACKEND_PID=$$!; \
 	wait $$BACKEND_PID $$FRONTEND_PID
 
@@ -95,3 +95,8 @@ migrate:
 
 clean:
 	rm -rf build dist $(WEB)/.svelte-kit
+
+# Runs the conformance suite against a fresh daemon and writes its report to conformance/reports
+conformance:
+	go build -trimpath -ldflags "-X github.com/nickheyer/nebu/internal/cli.releaseVersion=$(RELEASE_VERSION) -X github.com/nickheyer/nebu/internal/cli.releaseCommit=$(RELEASE_COMMIT)" -o $(BIN) ./cmd/nebu
+	./conformance/run.sh $(BIN)

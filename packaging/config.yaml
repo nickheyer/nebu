@@ -18,6 +18,20 @@ logging:
 #   announce: true         # multicast beacons, so nodes and meshes on the network find each other
 #   exposure: guard        # guard: seats other seats connect to sit behind a forwarder; direct: on the mesh address
 
+# gateway:
+#   listen: 127.0.0.1:8486         # a listener of its own, the API listener when unset
+#   trace_retention: 168h
+#   flow_control:
+#     queue_capacity: 1024
+#     queue_timeout_ms: 30000
+#     saturation_queue_depth: 5
+#     saturation_kv_utilization: 0.8
+# telemetry:
+#   endpoint: otel-collector:4318  # OTLP over HTTP
+#   sample_ratio: 0.1
+# metrics:
+#   listen: 127.0.0.1:9464         # metrics, liveness and readiness alone
+
 # ffmpeg samples video attachments. Defaults to ffmpeg on PATH.
 # discord:
 #   ffmpeg: /usr/bin/ffmpeg

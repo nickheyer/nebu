@@ -4,19 +4,20 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/formations"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/mesh"
-	"github.com/nickheyer/nebu/internal/mesh/links"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/perf"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
 	"github.com/nickheyer/nebu/pkg/store"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var _ nebuv1connect.MeshServiceHandler = (*MeshService)(nil)
@@ -49,13 +50,13 @@ func (s *MeshService) peer(h http.Header) (string, error) {
 }
 
 func (s *MeshService) Init(ctx context.Context, req *connect.Request[v1.InitRequest]) (*connect.Response[v1.InitResponse], error) {
-	m, token, err := s.mesh.Init(ctx, req.Msg.GetName(), req.Msg.GetTls())
+	m, token, err := s.mesh.Init(ctx, req.Msg.GetName())
 	return reply(&v1.InitResponse{Mesh: m, Token: token}, err)
 }
 
 func (s *MeshService) Join(ctx context.Context, req *connect.Request[v1.JoinRequest]) (*connect.Response[v1.JoinResponse], error) {
-	m, bootstrap, warnings, err := s.mesh.Join(ctx, req.Msg.GetToken())
-	return reply(&v1.JoinResponse{Mesh: m, Bootstrap: bootstrap, Warnings: warnings}, err)
+	m, bootstrap, err := s.mesh.Join(ctx, req.Msg.GetToken())
+	return reply(&v1.JoinResponse{Mesh: m, Bootstrap: bootstrap}, err)
 }
 
 func (s *MeshService) Leave(ctx context.Context, req *connect.Request[v1.LeaveRequest]) (*connect.Response[v1.LeaveResponse], error) {
@@ -64,8 +65,13 @@ func (s *MeshService) Leave(ctx context.Context, req *connect.Request[v1.LeaveRe
 }
 
 func (s *MeshService) ForgetNode(ctx context.Context, req *connect.Request[v1.ForgetNodeRequest]) (*connect.Response[v1.ForgetNodeResponse], error) {
-	n, err := s.mesh.Forget(ctx, req.Msg.GetNodeId(), req.Msg.GetTell())
+	n, err := s.mesh.Forget(ctx, req.Msg.GetNodeId())
 	return reply(&v1.ForgetNodeResponse{Node: n}, err)
+}
+
+func (s *MeshService) HandOffIssuer(ctx context.Context, req *connect.Request[v1.HandOffIssuerRequest]) (*connect.Response[v1.HandOffIssuerResponse], error) {
+	m, err := s.mesh.HandOff(ctx, req.Msg.GetNodeId())
+	return reply(&v1.HandOffIssuerResponse{Mesh: m}, err)
 }
 
 func (s *MeshService) ResetMesh(ctx context.Context, req *connect.Request[v1.ResetMeshRequest]) (*connect.Response[v1.ResetMeshResponse], error) {
@@ -94,8 +100,8 @@ func (s *MeshService) ListNodes(ctx context.Context, req *connect.Request[v1.Lis
 }
 
 func (s *MeshService) Token(ctx context.Context, req *connect.Request[v1.TokenRequest]) (*connect.Response[v1.TokenResponse], error) {
-	token, err := s.mesh.Token()
-	return reply(&v1.TokenResponse{Token: token}, err)
+	token, expires, err := s.mesh.Token(ctx, time.Duration(req.Msg.GetTtlSeconds())*time.Second)
+	return reply(&v1.TokenResponse{Token: token, ExpiresAt: timestamppb.New(expires)}, err)
 }
 
 func (s *MeshService) Probe(ctx context.Context, req *connect.Request[v1.ProbeRequest]) (*connect.Response[v1.ProbeResponse], error) {
@@ -180,69 +186,6 @@ func (s *MeshService) FormationLogs(ctx context.Context, req *connect.Request[v1
 	}))
 }
 
-// A node outside holds no session, so the admission calls carry no credential: the manager
-// decides what each may do
-func (s *MeshService) Knock(ctx context.Context, req *connect.Request[v1.KnockRequest]) (*connect.Response[v1.KnockResponse], error) {
-	resp, err := s.mesh.Knock(ctx, req.Msg)
-	if err != nil {
-		return nil, passConnect(err)
-	}
-	return connect.NewResponse(resp), nil
-}
-
-func (s *MeshService) Offer(ctx context.Context, req *connect.Request[v1.OfferRequest]) (*connect.Response[v1.OfferResponse], error) {
-	resp, err := s.mesh.Offer(ctx, req.Msg)
-	if err != nil {
-		return nil, passConnect(err)
-	}
-	return connect.NewResponse(resp), nil
-}
-
-func (s *MeshService) Welcome(ctx context.Context, req *connect.Request[v1.WelcomeRequest]) (*connect.Response[v1.WelcomeResponse], error) {
-	resp, err := s.mesh.Welcome(ctx, req.Msg)
-	if err != nil {
-		return nil, passConnect(err)
-	}
-	return connect.NewResponse(resp), nil
-}
-
-// A connect error as the manager coded it, any other wrapped by kind
-func passConnect(err error) error {
-	var ce *connect.Error
-	if errors.As(err, &ce) {
-		return err
-	}
-	return wrap(err)
-}
-
-// The handshake itself admits the caller, so it carries no credential
-func (s *MeshService) Hello(ctx context.Context, req *connect.Request[v1.HelloRequest]) (*connect.Response[v1.HelloResponse], error) {
-	resp, err := s.mesh.Hello(ctx, req.Msg)
-	if err != nil {
-		return nil, passConnect(err)
-	}
-	return connect.NewResponse(resp), nil
-}
-
-func (s *MeshService) Sync(ctx context.Context, req *connect.Request[v1.SyncRequest]) (*connect.Response[v1.SyncResponse], error) {
-	peer, err := s.peer(req.Header())
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.mesh.Sync(ctx, peer, req.Msg)
-	if err != nil {
-		return nil, err
-	}
-	return connect.NewResponse(resp), nil
-}
-
-func (s *MeshService) Stream(ctx context.Context, req *connect.Request[v1.StreamRequest], stream *connect.ServerStream[v1.StreamResponse]) error {
-	if _, err := s.peer(req.Header()); err != nil {
-		return err
-	}
-	return links.Stream(ctx, req.Msg.GetBytes(), stream.Send)
-}
-
 func (s *MeshService) RunSeat(ctx context.Context, req *connect.Request[v1.RunSeatRequest]) (*connect.Response[v1.RunSeatResponse], error) {
 	peer, err := s.peer(req.Header())
 	if err != nil {
@@ -317,21 +260,17 @@ func (s *MeshService) GetStored(ctx context.Context, req *connect.Request[v1.Get
 	return reply(&v1.GetStoredResponse{Model: m}, err)
 }
 
-func (s *MeshService) Rekey(ctx context.Context, req *connect.Request[v1.RekeyRequest]) (*connect.Response[v1.RekeyResponse], error) {
-	if _, err := s.peer(req.Header()); err != nil {
-		return nil, err
-	}
-	if err := s.mesh.Rekey(req.Msg.GetSecret()); err != nil {
-		return nil, err
-	}
-	return connect.NewResponse(&v1.RekeyResponse{NodeId: s.mesh.Self()}), nil
+func (s *MeshService) ExportToken(ctx context.Context, req *connect.Request[v1.ExportTokenRequest]) (*connect.Response[v1.ExportTokenResponse], error) {
+	token, expires, err := s.mesh.ExportToken(ctx, time.Duration(req.Msg.GetTtlSeconds())*time.Second)
+	return reply(&v1.ExportTokenResponse{Token: token, ExpiresAt: timestamppb.New(expires)}, err)
 }
 
-func (s *MeshService) Bye(ctx context.Context, req *connect.Request[v1.ByeRequest]) (*connect.Response[v1.ByeResponse], error) {
-	peer, err := s.peer(req.Header())
-	if err != nil {
-		return nil, err
-	}
-	s.mesh.Bye(peer)
-	return connect.NewResponse(&v1.ByeResponse{}), nil
+func (s *MeshService) ImportMesh(ctx context.Context, req *connect.Request[v1.ImportMeshRequest]) (*connect.Response[v1.ImportMeshResponse], error) {
+	n, err := s.mesh.ImportMesh(ctx, req.Msg.GetToken())
+	return reply(&v1.ImportMeshResponse{Node: n}, err)
+}
+
+func (s *MeshService) DropFederation(ctx context.Context, req *connect.Request[v1.DropFederationRequest]) (*connect.Response[v1.DropFederationResponse], error) {
+	n, err := s.mesh.DropFederation(ctx, req.Msg.GetNodeId())
+	return reply(&v1.DropFederationResponse{Node: n}, err)
 }

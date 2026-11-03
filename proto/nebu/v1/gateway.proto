@@ -3,8 +3,10 @@ syntax = "proto3";
 package nebu.v1;
 
 import "google/protobuf/timestamp.proto";
+import "buf/validate/validate.proto";
 import "nebu/v1/estimate.proto";
-import "nebu/v1/instance.proto";
+import "nebu/v1/meta.proto";
+import "nebu/v1/pool.proto";
 import "nebu/v1/runtime.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
@@ -20,15 +22,18 @@ enum RouteState {
 // Route request limits. Zero inherits the gateway default.
 message Policy {
   // Requests in flight at once
-  uint32 max_in_flight = 1;
+  uint32 max_in_flight = 1 [(buf.validate.field).uint32.lte = 1000000];
   // Sustained requests per second
-  double requests_per_second = 2;
+  double requests_per_second = 2 [(buf.validate.field).double = {
+    gte: 0
+    finite: true
+  }];
   // Burst capacity. Zero uses the request rate rounded up.
-  uint32 burst = 3;
-  // The whole exchange, first byte in to last byte out
-  uint32 request_timeout_ms = 4;
-  // Maximum wait for the runtime response.
-  uint32 upstream_timeout_ms = 5;
+  uint32 burst = 3 [(buf.validate.field).uint32.lte = 1000000];
+  // The whole exchange, first byte in to last byte out, at most a day
+  uint32 request_timeout_ms = 4 [(buf.validate.field).uint32.lte = 86400000];
+  // Maximum wait for the runtime response, at most a day
+  uint32 upstream_timeout_ms = 5 [(buf.validate.field).uint32.lte = 86400000];
 }
 
 // How a route handles the requests it takes, every unset field inheriting
@@ -39,72 +44,122 @@ message Profile {
   bool mutating_tools = 2;
 }
 
-// How a replicas route keeps a conversation on the seat whose cache holds its prefix. It lives
-// beside Route, which carries it, since the mesh messages import this file
-message AffinityPolicy {
-  // Seconds a prefix sent to a seat keeps later requests with that prefix on it
-  uint32 window_seconds = 1;
-  // Whether the prefix hash covers the system message, and the first user message
-  bool system_message = 2;
-  bool first_user_message = 3;
+// One weighted destination of a rewrite rule
+message RewriteTarget {
+  // The pool the request goes to
+  string pool_id = 1 [(buf.validate.field).string.min_len = 1];
+  // The model name written into the request, the pool's model when empty
+  string model = 2;
+  uint32 weight = 3 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 1000000
+  }];
 }
 
-// One seat a route sends requests to
-message RouteSeat {
-  string node_id = 1;
-  string instance_id = 2;
-  string endpoint = 3;
-  string role = 4;
-  uint32 rank = 5;
-  InstanceState state = 6;
-  uint32 in_flight = 7;
-  // The seat's mesh host and the port its own protocol takes there: a relay's side channel or bootstrap port
-  string address = 8;
-  uint32 aux_port = 9;
-  // Sequence slots a llama.cpp relay seat serves at once, one relay in flight per slot
-  uint32 slots = 10;
+// Matches a client model name and splits its traffic over weighted targets
+message RewriteRule {
+  // Exact client model name, every request when empty
+  string match = 1;
+  repeated RewriteTarget targets = 2 [(buf.validate.field).repeated.min_items = 1];
 }
 
-// A public model name mapped to an instance
+// How a rule picks between its targets beyond their static weights
+enum RouteBalance {
+  // Static weights alone
+  ROUTE_BALANCE_UNSPECIFIED = 0;
+  // Each weight scaled by the target pool's ready endpoint count
+  ROUTE_BALANCE_READY_ENDPOINTS = 1;
+  // Each weight scaled by the request capacity the target pool's ready endpoints have free
+  ROUTE_BALANCE_FREE_CAPACITY = 2;
+}
+
+// What a route is asked to do
+message RouteSpec {
+  // Rules in order, the first exact match winning over a catch-all
+  repeated RewriteRule rules = 1;
+  Policy policy = 2;
+  Profile profile = 3;
+  // The objective every request on the route carries unless it names its own
+  string objective = 4;
+  // How every rule weighs its targets, targets without a ready healthy endpoint dropped while another has one
+  RouteBalance balance = 5;
+}
+
+// What the gateway observes of a route
+message RouteStatus {
+  RouteState state = 1;
+  repeated Condition conditions = 2;
+  uint64 requests = 3;
+  uint32 in_flight = 4;
+  // Pools the rules resolved to, in rule order
+  repeated string pool_ids = 5;
+  uint64 observed_generation = 6;
+  // The shape of the formation serving the route, unspecified for a route no formation serves
+  Shape shape = 7;
+  // Instance ids of the seats serving the route, in seat order
+  repeated string seats = 8;
+  // Each gateway controller's own entry, never written by another
+  repeated ParentStatus parents = 9;
+  // Context length, quantization, accelerator, modalities and throughput class of the launch serving the route
+  RuntimeInventory inventory = 10;
+}
+
+// A public model name and where its requests go
 message Route {
+  // Numbers and names of the record before the spec and status split, never reused
+  reserved 2 to 20;
+  reserved "instance_id", "slot_id", "endpoint", "api", "state", "model", "requests", "served", "updated_at", "shape", "seats", "formation_id", "forwarded";
   string name = 1;
-  string instance_id = 2;
-  string slot_id = 3;
-  string endpoint = 4;
-  ApiFlavor api = 5;
-  RouteState state = 6;
-  uint64 requests = 7;
-  uint32 in_flight = 8;
-  string model = 9;
-  google.protobuf.Timestamp updated_at = 10;
-  Policy policy = 11;
-  // Upstream model name, replacing the public route name.
-  string served = 12;
-  // Request transformations for this route.
-  Profile profile = 13;
-  // Generation modes from the capabilities endpoint: img_gen and vid_gen. Empty for language models.
-  repeated string modes = 14;
-  // The node whose gateway answers the route, empty for this node
-  string node_id = 15;
-  // The shape behind the route, solo for an instance
-  Shape shape = 16;
-  // Seats the gateway sends to: replicas, or a relay's prefill and decode seats
-  repeated RouteSeat seats = 17;
-  string formation_id = 18;
-  // Whether requests go to another node's gateway
-  bool forwarded = 19;
-  // Prompt length above which a relay pays, shorter prompts going to the decode seat alone
-  uint32 relay_break_even_prompt = 20;
-  // The runtime behind the route, what a relay's handoff protocol follows
-  string runtime_id = 21;
-  // How a replicas route pins conversations to seats, from the plan
-  AffinityPolicy affinity = 22;
-  // The relay handoff the runtime declares: nixl, sglang-bootstrap, or llamacpp-slot
-  string relay_handoff = 23;
-  // How the route takes tools, from the probe of the instance serving it
-  ToolSupport tools = 24;
-  // Sequence slots the runtime serves at once, from its n_parallel, zero when the runtime does not say
-  uint32 slots = 25;
+  ObjectMeta meta = 21;
+  RouteSpec spec = 22;
+  RouteStatus status = 23;
+  // The slot, instance or formation that owns the route, empty for a user authored one
+  string owner_kind = 24;
+  string owner_id = 25;
+  // The node whose gateway answers the route, empty for this node, forwarding every request there when set
+  string node_id = 26;
+}
+
+// A named latency objective and priority band requests reference by header
+message Objective {
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+  // Higher sheds later under saturation, zero the default band
+  int32 priority = 2 [(buf.validate.field).int32 = {
+    gte: -1000
+    lte: 1000
+  }];
+  uint32 ttft_ms = 3;
+  uint32 tpot_ms = 4;
+  ObjectMeta meta = 5;
+  ObjectiveStatus status = 6;
+}
+
+// What the gateway observes of an objective
+message ObjectiveStatus {
+  repeated Condition conditions = 1;
+  uint64 observed_generation = 2;
+}
+
+// What a scheduler configuration is asked to run
+message SchedulerConfigSpec {
+  // The configuration in YAML, plugins, profiles and the profile handler
+  string yaml = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// What the gateway observes of a scheduler configuration
+message SchedulerConfigStatus {
+  repeated Condition conditions = 1;
+  uint64 observed_generation = 2;
+}
+
+// A scheduler configuration pools reference by name
+message SchedulerConfig {
+  reserved 2, 4;
+  reserved "yaml", "conditions";
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+  ObjectMeta meta = 3;
+  SchedulerConfigSpec spec = 5 [(buf.validate.field).required = true];
+  SchedulerConfigStatus status = 6;
 }
 
 // Gateway listener address.
@@ -123,6 +178,12 @@ message GatewayStatus {
   Policy policy = 5;
   // Whether the listeners speak TLS
   bool tls = 6;
+  repeated Pool pools = 7;
+  // Where metrics are scraped from
+  string metrics_addr = 8;
+  // The software answering as this gateway and its build version
+  string implementation = 9;
+  string version = 10;
 }
 
 // Asks for the gateway view
@@ -141,27 +202,127 @@ message ListRoutesResponse {
   repeated Route routes = 1;
 }
 
-// Maps an extra public name onto a slot or a running instance
-message SetRouteRequest {
-  string name = 1;
-  // A ready instance. Its slot takes the alias when it serves one.
-  string instance_id = 2;
-  // Alias limits. Zero fields inherit the slots, then gateway defaults.
-  Policy policy = 3;
-  // Alias request transformations. Unset fields use the slots, then instance defaults.
-  Profile profile = 4;
-  // A slot by id or name, taking the alias even before a model runs in it.
-  string slot_id = 5;
+// Creates or replaces a route's spec
+message PutRouteRequest {
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+  RouteSpec spec = 2;
 }
 
 // Returns the route
-message SetRouteResponse {
+message PutRouteResponse {
   Route route = 1;
 }
 
-// Removes an alias by name. Slot names are removed with their slot.
+// Fetches one route
+message GetRouteRequest {
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// Returns one route
+message GetRouteResponse {
+  Route route = 1;
+}
+
+// Lists pools
+message ListPoolsRequest {}
+
+// Returns pools with their endpoints
+message ListPoolsResponse {
+  repeated Pool pools = 1;
+}
+
+// Fetches one pool
+message GetPoolRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// Returns one pool
+message GetPoolResponse {
+  Pool pool = 1;
+}
+
+// Creates or replaces a user authored pool of static endpoints
+message PutPoolRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  PoolSpec spec = 2;
+}
+
+// Returns the pool
+message PutPoolResponse {
+  Pool pool = 1;
+}
+
+// Removes a user authored pool
+message DeletePoolRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// Returns the removed pool
+message DeletePoolResponse {
+  Pool pool = 1;
+}
+
+// Lists objectives
+message ListObjectivesRequest {}
+
+// Returns objectives
+message ListObjectivesResponse {
+  repeated Objective objectives = 1;
+}
+
+// Creates or replaces an objective
+message PutObjectiveRequest {
+  Objective objective = 1 [(buf.validate.field).required = true];
+}
+
+// Returns the objective
+message PutObjectiveResponse {
+  Objective objective = 1;
+}
+
+// Removes an objective
+message DeleteObjectiveRequest {
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// Returns the removed objective
+message DeleteObjectiveResponse {
+  Objective objective = 1;
+}
+
+// Lists scheduler configurations
+message ListSchedulerConfigsRequest {}
+
+// Returns scheduler configurations
+message ListSchedulerConfigsResponse {
+  repeated SchedulerConfig configs = 1;
+}
+
+// Creates or replaces a scheduler configuration, refused when its YAML does not load
+message PutSchedulerConfigRequest {
+  SchedulerConfig config = 1 [(buf.validate.field).required = true];
+  // Loads the YAML and reports the outcome without storing anything
+  bool validate_only = 2;
+}
+
+// Returns the configuration
+message PutSchedulerConfigResponse {
+  SchedulerConfig config = 1;
+}
+
+// Removes a scheduler configuration no pool references
+message DeleteSchedulerConfigRequest {
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// Returns the removed configuration
+message DeleteSchedulerConfigResponse {
+  SchedulerConfig config = 1;
+}
+
+// Removes a user authored route
 message DeleteRouteRequest {
-  string name = 1;
+  string name = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the removed route
@@ -207,7 +368,9 @@ message Trace {
   uint32 status = 14;
   // Why the request failed, empty on success
   string error = 15;
+  // Prompt tokens of the first round, later tool rounds left out
   uint32 prompt_tokens = 16;
+  // Completion tokens over every round
   uint32 completion_tokens = 17;
   // stop, length, tool, or filter
   string stop = 18;
@@ -233,7 +396,7 @@ message Trace {
   string conductor_trace = 29;
   // Instance ids of the seats the request touched
   repeated string seats = 30;
-  // How a relay request went: prefill+decode, decode-only, or prefill-failed
+  // How a relay request went: prefill+decode, prefill-failed, or decode+slot-warm, its -failed or -pending when the warm failed or outlasted the request
   string relay = 31;
   // Speculative decoding counters from the runtime's timings
   uint32 draft_offered = 32;
@@ -242,6 +405,59 @@ message Trace {
   uint32 cached_tokens = 34;
   // Requests already past the route's sequence slots when this one was admitted, so it waited in the runtime's queue for one
   uint32 queued_behind = 35;
+  // The endpoint that served the request, host colon port
+  string endpoint = 36;
+  string pool_id = 37;
+  // The scheduler profile whose pick was used and the score it gave the endpoint
+  string profile = 38;
+  double score = 39;
+  // Time the request waited in flow control
+  uint32 queue_wait_ms = 40;
+  string fairness_id = 41;
+  int32 priority = 42;
+  string objective = 43;
+  // Whether the objective's TTFT and TPOT were met, unset when the request carried none
+  bool objective_attained = 44;
+  // Whether the scheduler failed and the pool's failure mode let the request through
+  bool failed_open = 45;
+  // Number and name of the address list the retry records replaced, never reused
+  reserved 46;
+  string request_id = 47;
+  // The node the request entered the mesh at when another gateway forwarded it here
+  string entry_node = 48;
+  // The account the request was made under, whose readers alone receive the trace
+  string owner = 49;
+  // The filters the picked profile ran in order, each with the endpoints it dropped
+  repeated TraceFilter filters = 50;
+  // Every candidate the picked profile scored, highest first
+  repeated TraceScore candidates = 51;
+  // Every retry decision, the endpoint left and what had reached it and the client by then
+  repeated TraceFallback fallbacks = 52;
+}
+
+// One endpoint the request left for the next, with the state the retry decision was made in
+message TraceFallback {
+  // Host colon port of the endpoint that did not take the request
+  string address = 1;
+  // The error or status it answered
+  string reason = 2;
+  // Whether the whole request had been written to it, after which a non idempotent request is never resent
+  bool request_written = 3;
+  // Bytes the client had received when the decision was made
+  uint64 bytes_to_client = 4;
+}
+
+// One filter of a profile run and the endpoints it removed, host colon port each
+message TraceFilter {
+  string name = 1;
+  repeated string dropped = 2;
+}
+
+// One candidate endpoint of a profile run with its combined score and each scorer's raw score
+message TraceScore {
+  string endpoint = 1;
+  double score = 2;
+  map<string, double> by_scorer = 3;
 }
 
 // One tool call in a traced answer, run by the gateway when it names a server
@@ -262,7 +478,7 @@ message TraceToolCall {
 message ListTracesRequest {
   string route = 1;
   // Maximum results. Zero returns the full buffer.
-  uint32 limit = 2;
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 100000];
 }
 
 // Returns traces without bodies
@@ -272,7 +488,7 @@ message ListTracesResponse {
 
 // Fetches one trace with its bodies
 message GetTraceRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns one trace
@@ -280,18 +496,23 @@ message GetTraceResponse {
   Trace trace = 1;
 }
 
-// Routes and listeners of the OpenAI compatible gateway
+// Routes, pools, objectives and traces of the inference gateway
 service GatewayService {
-  // Returns listeners, routes, and counters
   rpc GetGatewayStatus(GetGatewayStatusRequest) returns (GetGatewayStatusResponse);
-  // Lists routes
   rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse);
-  // Adds an alias for a slot or a running instance
-  rpc SetRoute(SetRouteRequest) returns (SetRouteResponse);
-  // Removes an alias, from its slot when it has one
+  rpc GetRoute(GetRouteRequest) returns (GetRouteResponse);
+  rpc PutRoute(PutRouteRequest) returns (PutRouteResponse);
   rpc DeleteRoute(DeleteRouteRequest) returns (DeleteRouteResponse);
-  // Lists recent requests
+  rpc ListPools(ListPoolsRequest) returns (ListPoolsResponse);
+  rpc GetPool(GetPoolRequest) returns (GetPoolResponse);
+  rpc PutPool(PutPoolRequest) returns (PutPoolResponse);
+  rpc DeletePool(DeletePoolRequest) returns (DeletePoolResponse);
+  rpc ListObjectives(ListObjectivesRequest) returns (ListObjectivesResponse);
+  rpc PutObjective(PutObjectiveRequest) returns (PutObjectiveResponse);
+  rpc DeleteObjective(DeleteObjectiveRequest) returns (DeleteObjectiveResponse);
+  rpc ListSchedulerConfigs(ListSchedulerConfigsRequest) returns (ListSchedulerConfigsResponse);
+  rpc PutSchedulerConfig(PutSchedulerConfigRequest) returns (PutSchedulerConfigResponse);
+  rpc DeleteSchedulerConfig(DeleteSchedulerConfigRequest) returns (DeleteSchedulerConfigResponse);
   rpc ListTraces(ListTracesRequest) returns (ListTracesResponse);
-  // Fetches one request with its bodies
   rpc GetTrace(GetTraceRequest) returns (GetTraceResponse);
 }

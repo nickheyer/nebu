@@ -3,55 +3,29 @@ package mesh
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
-	"net"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/db"
-	"github.com/nickheyer/nebu/pkg/events"
-	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// A manager with what hearing beacons and merging admissions need, and nothing listening
-func bare(t *testing.T, id string) *Manager {
-	t.Helper()
-	m := &Manager{
-		Config:     &v1.MeshConfig{},
-		Host:       host.New(nil, nil, time.Minute),
-		Events:     events.New(),
-		Log:        slog.Default(),
-		identity:   &db.Identity{ID: id},
-		members:    map[string]*member{},
-		nearby:     map[string]*heard{},
-		admissions: map[string]*v1.Admission{},
-		sessions:   map[string]*session{},
-		accept:     map[string]string{},
-		links:      map[string]*v1.Link{},
-		forgotten:  map[string]time.Time{},
-		pendings:   map[string]*pending{},
-	}
-	return m
-}
-
+// A beacon as it travels
 func payload(b beacon) []byte {
 	body, _ := json.Marshal(b)
 	return append([]byte(beaconMagic), body...)
 }
 
-// Beacons fill the nearby table: nodes in a mesh group under it, nodes in none stand alone, a
-// node's own beacon is ignored, and a node unheard past the TTL leaves
+// Beacons fill the nearby table grouped by mesh, ignoring this node's own and dropping silent nodes
 func TestHeardBeacons(t *testing.T) {
 	m := bare(t, "self")
 	var tried sync.Map
 	ctx := context.Background()
 	m.heard(ctx, payload(beacon{Node: "self", Name: "me", Address: "10.0.0.1:8485"}), "10.0.0.1", &tried)
-	m.heard(ctx, payload(beacon{Node: "b", Name: "desk", Address: "10.0.0.5:8485", Mesh: "abc", MeshName: "home", Members: 2, MeshTLS: true, OS: "linux", Arch: "amd64", Version: "1"}), "10.0.0.5", &tried)
-	m.heard(ctx, payload(beacon{Node: "c", Name: "box", Address: "10.0.0.6:8485", Mesh: "abc", MeshName: "home", Members: 2, MeshTLS: true}), "10.0.0.6", &tried)
+	m.heard(ctx, payload(beacon{Node: "b", Name: "desk", Address: "10.0.0.5:8485", Fingerprint: "f1", Mesh: "abc", MeshName: "home", Members: 2, OS: "linux", Arch: "amd64", Version: "1"}), "10.0.0.5", &tried)
+	m.heard(ctx, payload(beacon{Node: "c", Name: "box", Address: "10.0.0.6:8485", Mesh: "abc", MeshName: "home", Members: 2}), "10.0.0.6", &tried)
 	m.heard(ctx, payload(beacon{Node: "d", Name: "laptop", Address: "10.0.0.7:8485"}), "10.0.0.7", &tried)
 	m.heard(ctx, payload(beacon{Node: "e", Name: "other", Address: "10.0.0.8:8485", Mesh: "zzz", MeshName: "lab", Members: 1}), "10.0.0.8", &tried)
 	m.heard(ctx, []byte("not a beacon"), "10.0.0.9", &tried)
@@ -68,7 +42,7 @@ func TestHeardBeacons(t *testing.T) {
 			home = nm
 		}
 	}
-	if home == nil || home.GetHash() != "abc" || home.GetMembers() != 2 || !home.GetTls() || len(home.GetNodes()) != 2 {
+	if home == nil || home.GetHash() != "abc" || home.GetMembers() != 2 || len(home.GetNodes()) != 2 {
 		t.Fatalf("home %v", home)
 	}
 	for _, n := range st.GetNodes() {
@@ -78,12 +52,12 @@ func TestHeardBeacons(t *testing.T) {
 				t.Fatalf("laptop %v", n)
 			}
 		case "b":
-			if n.GetOs() != "linux" || n.GetVersion() != "1" || n.GetMeshName() != "home" {
+			if n.GetOs() != "linux" || n.GetVersion() != "1" || n.GetMeshName() != "home" || n.GetTlsFingerprint() != "f1" {
 				t.Fatalf("desk %v", n)
 			}
 		}
 	}
-	// The freshest member of a mesh is the one to ask through.
+	// The freshest member of a mesh is the one to ask through
 	m.mu.Lock()
 	m.nearby["b"].at = time.Now().Add(-20 * time.Second)
 	fresh := m.freshestMemberLocked("abc")
@@ -91,7 +65,7 @@ func TestHeardBeacons(t *testing.T) {
 	if fresh.GetId() != "c" {
 		t.Fatalf("freshest %v", fresh)
 	}
-	// Silence past the TTL drops a node.
+	// Silence past the TTL drops a node
 	m.mu.Lock()
 	m.nearby["d"].at = time.Now().Add(-NearbyTTL - time.Second)
 	m.mu.Unlock()
@@ -99,7 +73,7 @@ func TestHeardBeacons(t *testing.T) {
 	if len(m.Status().GetNodes()) != 3 {
 		t.Fatalf("after expiry %v", m.Status().GetNodes())
 	}
-	// A member's beacon marks it a member and does not list its mesh as one to ask.
+	// A member's beacon marks it a member and its mesh is not one to ask
 	m.mu.Lock()
 	m.mesh = &db.MeshRow{ID: "id", Name: "home"}
 	m.members["c"] = &member{rec: &v1.Node{Id: "c"}}
@@ -137,38 +111,30 @@ func TestBeaconMarksReached(t *testing.T) {
 	}
 }
 
-// Members' copies of an admission converge: the copy changed last wins, the flags hold once set,
-// two records for one node fold into the older id, and a member's arrival settles its record
+// Members' admission copies converge with the latest winning, flags holding, twins folding, and members arriving joined
 func TestMergeAdmissions(t *testing.T) {
 	m := bare(t, "self")
 	m.mesh = &db.MeshRow{ID: "id", Name: "home"}
 	own := meshHex("id")
-	dir := t.TempDir()
-	database, err := db.Open(dir + "/nebu.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	m.DB = database
 	now := time.Now()
 	older := &v1.Admission{Id: "one", Side: v1.AdmissionSide_ADMISSION_SIDE_MEMBER, State: v1.AdmissionState_ADMISSION_STATE_PENDING, Node: &v1.NearbyNode{Id: "x", Name: "x"}, MeshHash: own, Asked: true, CreatedAt: timestamppb.New(now.Add(-time.Minute)), UpdatedAt: timestamppb.New(now.Add(-time.Minute))}
 	m.mergeAdmissions([]*v1.Admission{older})
 	if got := m.admissionByNodeLocked("x"); got == nil || got.GetId() != "one" {
 		t.Fatalf("taken %v", got)
 	}
-	// A newer copy from another member with a decision wins.
+	// A newer copy from another member with a decision wins
 	decided := &v1.Admission{Id: "one", Side: v1.AdmissionSide_ADMISSION_SIDE_MEMBER, State: v1.AdmissionState_ADMISSION_STATE_DENIED, By: "desk", Node: &v1.NearbyNode{Id: "x", Name: "x"}, MeshHash: own, Asked: true, CreatedAt: older.GetCreatedAt(), UpdatedAt: timestamppb.New(now)}
 	m.mergeAdmissions([]*v1.Admission{decided})
 	if got := m.admissionByNodeLocked("x"); got.GetState() != v1.AdmissionState_ADMISSION_STATE_DENIED || got.GetBy() != "desk" {
 		t.Fatalf("newer copy wins %v", got)
 	}
-	// An older copy carrying a flag sets the flag and nothing else.
+	// An older copy carrying a flag sets the flag and nothing else
 	invited := &v1.Admission{Id: "one", Side: v1.AdmissionSide_ADMISSION_SIDE_MEMBER, State: v1.AdmissionState_ADMISSION_STATE_PENDING, Node: &v1.NearbyNode{Id: "x", Name: "x"}, MeshHash: own, Invited: true, CreatedAt: older.GetCreatedAt(), UpdatedAt: timestamppb.New(now.Add(-time.Hour))}
 	m.mergeAdmissions([]*v1.Admission{invited})
 	if got := m.admissionByNodeLocked("x"); got.GetState() != v1.AdmissionState_ADMISSION_STATE_DENIED || !got.GetInvited() || !got.GetAsked() {
 		t.Fatalf("flags hold %v", got)
 	}
-	// Two records for one node opened before syncing fold into the older id.
+	// Two records for one node opened before syncing fold into the older id
 	twin := &v1.Admission{Id: "zero", Side: v1.AdmissionSide_ADMISSION_SIDE_MEMBER, State: v1.AdmissionState_ADMISSION_STATE_PENDING, Node: &v1.NearbyNode{Id: "x", Name: "x"}, MeshHash: own, Asked: true, CreatedAt: timestamppb.New(now.Add(-2 * time.Minute)), UpdatedAt: timestamppb.New(now.Add(-2 * time.Minute))}
 	m.mergeAdmissions([]*v1.Admission{twin})
 	got := m.admissionByNodeLocked("x")
@@ -178,7 +144,7 @@ func TestMergeAdmissions(t *testing.T) {
 	if len(m.admissions) != 1 {
 		t.Fatalf("%d records for one node", len(m.admissions))
 	}
-	// Copies for another mesh, for this node, or from the candidate side are not taken.
+	// Copies for another mesh, for this node, or from the candidate side are not taken
 	m.mergeAdmissions([]*v1.Admission{
 		{Id: "a", Side: v1.AdmissionSide_ADMISSION_SIDE_MEMBER, Node: &v1.NearbyNode{Id: "y"}, MeshHash: "other", UpdatedAt: timestamppb.Now()},
 		{Id: "b", Side: v1.AdmissionSide_ADMISSION_SIDE_CANDIDATE, Node: &v1.NearbyNode{Id: "y"}, MeshHash: own, UpdatedAt: timestamppb.Now()},
@@ -187,74 +153,15 @@ func TestMergeAdmissions(t *testing.T) {
 	if len(m.admissions) != 1 {
 		t.Fatalf("%d records after foreign copies", len(m.admissions))
 	}
-	// A node that is a member already arrives as joined.
+	// A node that is a member already arrives as joined
 	m.members["z"] = &member{rec: &v1.Node{Id: "z"}}
 	m.mergeAdmissions([]*v1.Admission{{Id: "zz", Side: v1.AdmissionSide_ADMISSION_SIDE_MEMBER, State: v1.AdmissionState_ADMISSION_STATE_PENDING, Node: &v1.NearbyNode{Id: "z"}, MeshHash: own, Asked: true, CreatedAt: timestamppb.Now(), UpdatedAt: timestamppb.Now()}})
 	if got := m.admissionByNodeLocked("z"); got.GetState() != v1.AdmissionState_ADMISSION_STATE_JOINED {
 		t.Fatalf("member arrives joined %v", got)
 	}
-	// Records survive a restart.
-	list, err := database.ListAdmissions(context.Background())
+	// Records survive a restart
+	list, err := m.DB.ListAdmissions(context.Background())
 	if err != nil || len(list) != 2 {
 		t.Fatalf("persisted %v %v", list, err)
-	}
-}
-
-// A beacon's contact takes the node's dialing lock, the one a client handshake to the same node
-// holds, so the two never race on the peer's nonce; a node met while the lock was held is not
-// contacted, and one still unmet is
-func TestBeaconContactSharesTheDialingLock(t *testing.T) {
-	m := bare(t, "self")
-	m.mesh = &db.MeshRow{ID: "id", Name: "home", Secret: make([]byte, 32)}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	var conns atomic.Int32
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			conns.Add(1)
-			c.Close()
-		}
-	}()
-	address := ln.Addr().String()
-	ctx := context.Background()
-	m.mu.Lock()
-	m.members["c"] = &member{rec: &v1.Node{Id: "c", Address: "10.0.0.6:8485"}}
-	m.mu.Unlock()
-	dial := m.dialLock("c")
-	dial.Lock()
-	var tried sync.Map
-	m.heard(ctx, payload(beacon{Node: "c", Name: "box", Address: address, Mesh: meshHex("id")}), "127.0.0.1", &tried)
-	time.Sleep(200 * time.Millisecond)
-	if conns.Load() != 0 {
-		t.Fatal("the beacon contacted the node while a handshake held its lock")
-	}
-	// A handshake met the node at the beacon's address meanwhile
-	m.mu.Lock()
-	m.members["c"].rec.Address = address
-	m.mu.Unlock()
-	dial.Unlock()
-	time.Sleep(300 * time.Millisecond)
-	if conns.Load() != 0 {
-		t.Fatal("the beacon contacted a node met while it waited")
-	}
-	// Still unmet, the beacon's contact dials the node once the lock is free
-	m.mu.Lock()
-	m.members["c"].rec.Address = "10.0.0.6:8485"
-	m.mu.Unlock()
-	var again sync.Map
-	m.heard(ctx, payload(beacon{Node: "c", Name: "box", Address: address, Mesh: meshHex("id")}), "127.0.0.1", &again)
-	deadline := time.Now().Add(5 * time.Second)
-	for conns.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if conns.Load() == 0 {
-		t.Fatal("the beacon did not contact an unmet node")
 	}
 }

@@ -1,149 +1,66 @@
-package mesh_test
+package mesh
 
 import (
 	"context"
-	"log/slog"
+	"crypto/tls"
+	"crypto/x509"
+	"io"
 	"net/http"
-	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/nickheyer/nebu/internal/auth"
-	"github.com/nickheyer/nebu/internal/db"
-	"github.com/nickheyer/nebu/internal/installs"
-	"github.com/nickheyer/nebu/internal/mesh"
-	"github.com/nickheyer/nebu/internal/mesh/links"
-	"github.com/nickheyer/nebu/internal/rpc/services"
-	"github.com/nickheyer/nebu/pkg/events"
-	"github.com/nickheyer/nebu/pkg/host"
-	"github.com/nickheyer/nebu/pkg/perf"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
-	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
-	"github.com/nickheyer/nebu/pkg/runtimes"
-	"github.com/nickheyer/nebu/pkg/store"
 	"google.golang.org/protobuf/proto"
 )
 
-// A node with its own store, listening on loopback and advertising it
-func newNode(t *testing.T, ctx context.Context) *mesh.Manager {
-	t.Helper()
-	dir := t.TempDir()
-	database, err := db.Open(filepath.Join(dir, "nebu.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { database.Close() })
-	blobs, err := store.Open(filepath.Join(dir, "store"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	rts, err := runtimes.New(runtimes.All())
-	if err != nil {
-		t.Fatal(err)
-	}
-	table, err := perf.Open(ctx, database)
-	if err != nil {
-		t.Fatal(err)
-	}
-	guard := auth.NewGuard("", nil, nil)
-	m := &mesh.Manager{
-		DB:        database,
-		Config:    &v1.MeshConfig{Listen: "127.0.0.1:0", Advertise: "127.0.0.1", Announce: proto.Bool(false)},
-		Host:      host.New(nil, nil, time.Minute),
-		Installs:  &installs.Manager{DB: database},
-		Runtimes:  rts,
-		Store:     blobs,
-		Perf:      table,
-		Events:    events.New(),
-		Guard:     guard,
-		Log:       slog.Default(),
-		Version:   "test",
-		APIListen: "127.0.0.1:0",
-	}
-	if err := m.Open(ctx); err != nil {
-		t.Fatal(err)
-	}
-	svc := services.NewMeshService(m, nil, nil, nil, blobs, table, nil, guard)
-	mux := http.NewServeMux()
-	mux.Handle(nebuv1connect.NewMeshServiceHandler(svc))
-	mux.HandleFunc(links.SinkPath, links.Sink)
-	m.Handler = mux
-	if err := m.Start(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(m.Close)
-	return m
-}
-
-func eventually(t *testing.T, what string, ok func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if ok() {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("%s did not happen within 10 s", what)
-}
-
-// Two nodes: one makes a mesh, the other joins with the token, both see each other's records,
-// a change on one reaches the other, the link between them measures, and leaving forgets
+// Two nodes join by certificate, sync, probe under mutual TLS, bind bearers to certificates and part
 func TestInitJoinSyncProbeLeave(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a := newNode(t, ctx)
-	b := newNode(t, ctx)
-	if _, err := a.Token(); err == nil {
+	a := newNode(t, ctx, 200*time.Millisecond)
+	b := newNode(t, ctx, 200*time.Millisecond)
+	if _, _, err := a.Token(ctx, 0); err == nil {
 		t.Fatal("a token before a mesh exists is refused")
 	}
-	meshA, token, err := a.Init(ctx, "test", true)
+	meshA, token, err := a.Init(ctx, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meshA.GetName() != "test" || !meshA.GetTls() || token == "" {
+	if meshA.GetName() != "test" || meshA.GetIssuer() != a.Self() || meshA.GetCaFingerprint() == "" || token == "" {
 		t.Fatalf("mesh %v token %q", meshA, token)
 	}
-	meshB, bootstrap, _, err := b.Join(ctx, token)
+	meshB, bootstrap, err := b.Join(ctx, token)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meshB.GetId() != meshA.GetId() || bootstrap.GetId() != a.Self() || !meshB.GetTls() {
+	if meshB.GetId() != meshA.GetId() || bootstrap.GetId() != a.Self() || meshB.GetIssuer() != a.Self() || meshB.GetCaFingerprint() != meshA.GetCaFingerprint() {
 		t.Fatalf("joined %v through %v", meshB, bootstrap)
 	}
-	eventually(t, "a learns b", func() bool {
-		for _, n := range a.Nodes() {
-			if n.GetId() == b.Self() && n.GetState() == v1.NodeState_NODE_STATE_READY && n.GetProfile() != nil {
-				return true
-			}
-		}
-		return false
-	})
-	eventually(t, "b learns a", func() bool {
-		for _, n := range b.Nodes() {
-			if n.GetId() == a.Self() && n.GetState() == v1.NodeState_NODE_STATE_READY {
-				return true
-			}
-		}
-		return false
-	})
-	// A change on b carries a higher sequence to a on the next sync.
-	var before uint64
-	for _, n := range a.Nodes() {
-		if n.GetId() == b.Self() {
-			before = n.GetSequence()
-		}
+	creds := b.currentCreds()
+	if creds.caKey != nil {
+		t.Fatal("the authority key never leaves the issuer")
 	}
+	row, err := b.DB.GetMesh(ctx)
+	if err != nil || len(row.CAKey) != 0 || len(row.Key) == 0 {
+		t.Fatalf("b's row holds its own key and no authority key: %v", err)
+	}
+	if id, ok := nodeIDOf(creds.leaf); !ok || id != b.Self() || creds.leaf.URIs[0].String() != "nebu://node/"+b.Self() {
+		t.Fatalf("b's certificate names it by URI: %v", creds.leaf.URIs)
+	}
+	if life := time.Until(creds.leaf.NotAfter); life < CertificateLifetime-time.Hour || life > CertificateLifetime {
+		t.Fatalf("b's certificate lasts 90 days, %s left", life)
+	}
+	eventually(t, "a and b meet", 10*time.Second, func() bool { return allMet(a, b) })
+	// A change on b carries a higher sequence to a
+	before, _ := a.Member(b.Self())
+	b.pools.set([]*v1.Pool{testPool(b.Self(), "127.0.0.1:9100", true)}, nil)
 	b.Bump()
-	eventually(t, "a takes b's newer record", func() bool {
-		for _, n := range a.Nodes() {
-			if n.GetId() == b.Self() && n.GetSequence() > before {
-				return true
-			}
-		}
-		return false
+	eventually(t, "a takes b's newer record", 10*time.Second, func() bool {
+		rec, _ := a.Member(b.Self())
+		return rec.GetSequence() > before.GetSequence() && len(rec.GetPools()) == 1
 	})
-	// The link measures over the members' TLS listeners, the certificates the mesh authority issued.
+	// The link measures over the members' mutual TLS listeners
 	linksOut, err := b.Probe(ctx, a.Self(), true)
 	if err != nil {
 		t.Fatal(err)
@@ -151,10 +68,7 @@ func TestInitJoinSyncProbeLeave(t *testing.T) {
 	if len(linksOut) != 1 || linksOut[0].GetRttUs() == 0 || linksOut[0].GetStreamBytesPerSecond() == 0 || linksOut[0].GetClass() == v1.LinkClass_LINK_CLASS_UNSPECIFIED {
 		t.Fatalf("links %v", linksOut)
 	}
-	if b.Link(a.Self()) == nil {
-		t.Fatal("the link is kept")
-	}
-	eventually(t, "a sees b's link to it", func() bool {
+	eventually(t, "a sees b's link to it", 10*time.Second, func() bool {
 		for _, l := range a.Links() {
 			if l.GetFrom() == b.Self() && l.GetTo() == a.Self() {
 				return true
@@ -162,130 +76,115 @@ func TestInitJoinSyncProbeLeave(t *testing.T) {
 		}
 		return false
 	})
-	// A second join with the same token is refused while a member.
-	if _, _, _, err := b.Join(ctx, token); err == nil {
+	// The API handler on the mesh listener sees the member its certificate proves and the bearer naming the same member
+	cl, err := b.Client(ctx, a.Self())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := cl.HTTP.Get(cl.Base + "/test/peer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) != b.Self()+"|"+b.Self() {
+		t.Fatalf("the API sees %q", body)
+	}
+	// A bearer a minted for b is refused on any other member's certificate
+	c := newNode(t, ctx, 200*time.Millisecond)
+	tokenC, _, err := a.Token(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Join(ctx, tokenC); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "a meets c", 10*time.Second, func() bool { return met(a.Manager, c.Self()) })
+	stolen := cl.Header.Get("Authorization")
+	req, _ := http.NewRequest(http.MethodGet, "https://"+a.Address()+"/test/peer", nil)
+	req.Header.Set("Authorization", stolen)
+	resp, err = (&http.Client{Transport: transport(c.memberDialConfig(a.Self()))}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a bearer on another member's certificate answered %d", resp.StatusCode)
+	}
+	if _, _, err := b.Join(ctx, token); err == nil {
 		t.Fatal("a member cannot join twice")
 	}
+	serial := serialOf(creds.leaf)
 	if _, err := b.Leave(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if b.Joined() {
 		t.Fatal("b left")
 	}
-	eventually(t, "a forgets b", func() bool {
-		for _, n := range a.Nodes() {
-			if n.GetId() == b.Self() {
-				return false
-			}
-		}
-		return true
+	eventually(t, "a drops b and revokes its certificate", 10*time.Second, func() bool {
+		_, still := a.Member(b.Self())
+		return !still && a.isRevoked(serial)
+	})
+	eventually(t, "c learns the revocation and drops b", 10*time.Second, func() bool {
+		_, still := c.Member(b.Self())
+		return !still && c.isRevoked(serial)
 	})
 }
 
-// A node holding no mesh secret cannot be admitted
-func TestHandshakeNeedsTheSecret(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	a := newNode(t, ctx)
-	b := newNode(t, ctx)
-	if _, _, err := a.Init(ctx, "one", false); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := b.Init(ctx, "two", false); err != nil {
-		t.Fatal(err)
-	}
-	tokenB, err := b.Token()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, err := a.Join(ctx, tokenB); err == nil {
-		t.Fatal("a member of one mesh cannot join another without leaving")
-	}
-	if _, err := a.Leave(ctx); err != nil {
-		t.Fatal(err)
-	}
-	// A token for another mesh, with a wrong secret, is refused by the handshake.
-	forged := tokenB[:len(tokenB)-4] + "AAAA"
-	if _, _, _, err := a.Join(ctx, forged); err == nil {
-		t.Fatal("a forged token must not admit a node")
+// A pool of one endpoint on a node, exported to the mesh
+func testPool(nodeID, address string, ready bool) *v1.Pool {
+	return &v1.Pool{
+		Id:   "vllm/hf:org/model:Q4",
+		Spec: &v1.PoolSpec{Model: "hf:org/model:Q4", RuntimeId: "vllm", AppProtocol: v1.AppProtocol_APP_PROTOCOL_HTTP, Concurrency: 4, Export: proto.Bool(true), Metrics: &v1.MetricNames{QueuedRequests: "q", SlotsPath: "/slots"}},
+		Status: &v1.PoolStatus{Endpoints: []*v1.Endpoint{{
+			Id: "ep1", Address: address, NodeId: nodeID, InstanceId: "in-" + nodeID, Ready: ready, Healthy: ready,
+			Labels: map[string]string{"adapter": "sql", "kv-capacity": "8192"}, Metrics: &v1.EndpointMetrics{QueuedRequests: 3},
+		}}},
 	}
 }
 
-// Forget spreads, gossip does not undo it, reset clears all
+// Forgetting revokes a member everywhere, gossip naming it brings nothing back, and a reset leaves its certificate refused
 func TestForgetAndReset(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a := newNode(t, ctx)
-	b := newNode(t, ctx)
-	c := newNode(t, ctx)
-	if _, _, err := a.Init(ctx, "three", false); err != nil {
-		t.Fatal(err)
-	}
-	token, err := a.Token()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, n := range []*mesh.Manager{b, c} {
-		if _, _, _, err := n.Join(ctx, token); err != nil {
-			t.Fatal(err)
-		}
-	}
-	knows := func(m *mesh.Manager, id string) bool {
-		for _, n := range m.Nodes() {
-			if n.GetId() == id {
-				return true
-			}
-		}
-		return false
-	}
-	// A record with a profile came from the member itself, so every handshake is over.
-	met := func(m *mesh.Manager, id string) bool {
-		for _, n := range m.Nodes() {
-			if n.GetId() == id && n.GetProfile() != nil {
-				return true
-			}
-		}
-		return false
-	}
-	eventually(t, "every member has met every other", func() bool {
-		for _, pair := range [][2]*mesh.Manager{{a, b}, {a, c}, {b, a}, {b, c}, {c, a}, {c, b}} {
-			if !met(pair[0], pair[1].Self()) {
-				return false
-			}
-		}
-		return true
-	})
-	if _, err := a.Forget(ctx, a.Self(), true); err == nil {
+	a := newNode(t, ctx, 200*time.Millisecond)
+	b := newNode(t, ctx, 200*time.Millisecond)
+	c := newNode(t, ctx, 200*time.Millisecond)
+	formMesh(t, ctx, a, b, c)
+	eventually(t, "every member meets every other", 15*time.Second, func() bool { return allMet(a, b, c) })
+	if _, err := a.Forget(ctx, a.Self()); err == nil {
 		t.Fatal("a node cannot forget itself")
 	}
+	if _, err := c.Forget(ctx, a.Self()); err == nil || !strings.Contains(err.Error(), "issuer") {
+		t.Fatalf("the issuer is not forgotten: %v", err)
+	}
+	bSerial := serialOf(b.currentCreds().leaf)
 	b.Close()
-	rec, err := a.Forget(ctx, b.Self(), true)
+	rec, err := a.Forget(ctx, b.Self())
 	if err != nil || rec.GetId() != b.Self() {
 		t.Fatalf("forget: %v %v", rec, err)
 	}
-	if knows(a, b.Self()) {
+	if _, still := a.Member(b.Self()); still || !a.isRevoked(bSerial) {
 		t.Fatal("a still lists b")
 	}
-	eventually(t, "c forgets b", func() bool { return !knows(c, b.Self()) })
-	// Gossip from a member that still names b does not bring it back.
-	if _, err := a.Sync(ctx, c.Self(), &v1.SyncRequest{Members: []*v1.Member{{Id: b.Self(), Name: "b", Address: "127.0.0.1:1"}}}); err != nil {
-		t.Fatal(err)
-	}
-	if knows(a, b.Self()) {
+	eventually(t, "c drops b on the revocation", 10*time.Second, func() bool {
+		_, still := c.Member(b.Self())
+		return !still && c.isRevoked(bSerial)
+	})
+	// Gossip that still names b does not bring it back
+	a.mergeMembers([]*v1.Member{{Id: b.Self(), Name: "b", Address: "127.0.0.1:1", Serial: bSerial, Heartbeat: 1 << 62}})
+	if _, still := a.Member(b.Self()); still {
 		t.Fatal("gossip brought b back")
 	}
-	// The member c stays on record, and b's row stays as the refusal
-	members, err := a.DB.ListMembers(ctx)
-	if err != nil || len(members) != 2 {
-		t.Fatalf("members on record after the forget: %v %v", members, err)
+	rows, err := a.DB.ListMembers(ctx)
+	if err != nil || len(rows) != 1 || rows[0].GetId() != c.Self() {
+		t.Fatalf("members on record after the forget: %v %v", rows, err)
 	}
-	for _, rec := range members {
-		if (rec.GetId() == b.Self()) != (rec.GetState() == v1.NodeState_NODE_STATE_FORGOTTEN) {
-			t.Fatalf("b's row is the forgotten one: %v", members)
-		}
+	revs, err := a.DB.ListRevocations(ctx)
+	if err != nil || len(revs) != 1 || revs[0].GetSerial() != bSerial {
+		t.Fatalf("revocations on record: %v %v", revs, err)
 	}
-	// Late attempt to join after a forget event occurs, should be ignored
-	late := a.Record()
+	old := a.currentCreds()
 	left, err := a.Reset(ctx)
 	if err != nil || left == nil || a.Joined() {
 		t.Fatalf("reset: %v %v joined %v", left, err, a.Joined())
@@ -293,21 +192,26 @@ func TestForgetAndReset(t *testing.T) {
 	if n := a.Nodes(); len(n) != 1 || !n[0].GetSelf() {
 		t.Fatalf("nodes after the reset: %v", n)
 	}
-	if members, err := a.DB.ListMembers(ctx); err != nil || len(members) != 0 {
-		t.Fatalf("members on record after the reset: %v %v", members, err)
+	if rows, err := a.DB.ListMembers(ctx); err != nil || len(rows) != 0 {
+		t.Fatalf("members on record after the reset: %v %v", rows, err)
 	}
-	eventually(t, "c forgets a", func() bool { return !knows(c, a.Self()) })
-	// Refuse late sync
-	if _, err := c.Sync(ctx, a.Self(), &v1.SyncRequest{Node: late}); err == nil {
-		t.Fatal("a sync from a departed member must be refused")
+	eventually(t, "c drops a", 10*time.Second, func() bool {
+		_, still := c.Member(a.Self())
+		return !still && c.isRevoked(serialOf(old.leaf))
+	})
+	// The certificate a left with is refused at c's listener
+	stale := &tls.Config{
+		MinVersion: tls.VersionTLS13, ServerName: meshServerName, NextProtos: []string{"h2"}, InsecureSkipVerify: true,
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &old.tlsCert, nil },
 	}
-	if knows(c, a.Self()) {
-		t.Fatal("a late sync brought a back")
+	if resp, err := (&http.Client{Transport: transport(stale)}).Get("https://" + c.Address() + "/test/peer"); err == nil {
+		resp.Body.Close()
+		t.Fatalf("a revoked certificate reached c's API, %d", resp.StatusCode)
 	}
 	if m, err := a.Reset(ctx); err != nil || m != nil {
 		t.Fatalf("a reset outside any mesh: %v %v", m, err)
 	}
-	if _, _, err := a.Init(ctx, "again", false); err != nil {
+	if _, _, err := a.Init(ctx, "again"); err != nil {
 		t.Fatal(err)
 	}
 	if n := a.Nodes(); len(n) != 1 || !n[0].GetSelf() {
@@ -315,46 +219,103 @@ func TestForgetAndReset(t *testing.T) {
 	}
 }
 
-// An instance event bumps the node record only when it brings a state this node has not seen for
-// that instance: a seat's measurements refresh every second while its conductor waits, and the
-// mesh hears nothing of it; a new instance, a state change, and a deletion each bump once
-func TestInstanceEventsBumpOnStateChangesOnly(t *testing.T) {
+// Traffic counters on exported endpoints and routes never move the record's sequence, a readiness change does
+func TestTrafficNeverMovesTheRecord(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m := newNode(t, ctx)
-	if _, _, err := m.Init(ctx, "solo", false); err != nil {
+	m := newNode(t, ctx, time.Hour)
+	if _, _, err := m.Init(ctx, "solo"); err != nil {
 		t.Fatal(err)
 	}
-	seq := func() uint64 { return m.Record().GetSequence() }
-	settle := func() uint64 {
-		last := seq()
-		quiet := time.Now()
-		for time.Since(quiet) < 500*time.Millisecond {
-			time.Sleep(50 * time.Millisecond)
-			if now := seq(); now != last {
-				last, quiet = now, time.Now()
-			}
+	pool := testPool(m.Self(), "127.0.0.1:9100", true)
+	route := &v1.Route{Name: "model", Spec: &v1.RouteSpec{Objective: "fast"}, Status: &v1.RouteStatus{PoolIds: []string{pool.GetId()}, Requests: 1}}
+	m.pools.set([]*v1.Pool{pool}, []*v1.Route{route})
+	m.refresh()
+	settled := m.Record().GetSequence()
+	for i := range 5 {
+		pool = proto.Clone(pool).(*v1.Pool)
+		pool.Status.Endpoints[0].Metrics = &v1.EndpointMetrics{QueuedRequests: uint32(i), RunningRequests: uint32(i * 2), KvCacheUtilization: float64(i) / 10}
+		pool.Status.Endpoints[0].AssumedRequests = uint32(i)
+		route = proto.Clone(route).(*v1.Route)
+		route.Status.Requests, route.Status.InFlight = uint64(100+i), uint32(i)
+		m.pools.set([]*v1.Pool{pool}, []*v1.Route{route})
+		m.refresh()
+	}
+	if after := m.Record().GetSequence(); after != settled {
+		t.Fatalf("traffic moved the record from %d to %d", settled, after)
+	}
+	pool = proto.Clone(pool).(*v1.Pool)
+	pool.Status.Endpoints[0].Ready = false
+	m.pools.set([]*v1.Pool{pool}, []*v1.Route{route})
+	m.refresh()
+	if after := m.Record().GetSequence(); after <= settled {
+		t.Fatal("a readiness change moves the record")
+	}
+}
+
+// A certificate chain that verifies against a pool for client use, for asserting what a member holds
+func chainsTo(cert *x509.Certificate, pool *x509.CertPool) bool {
+	_, err := verifyChain([]*x509.Certificate{cert}, pool, x509.ExtKeyUsageClientAuth, time.Now())
+	return err == nil
+}
+
+// The mesh listener stays closed until the node makes, joins or asks to join a mesh, and binds when mesh.listen names an address
+func TestListenerClosedUntilMesh(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	lazy := func(m *Manager) {
+		m.Config = &v1.MeshConfig{Advertise: "127.0.0.1", Announce: proto.Bool(true)}
+		m.defaultListen = "127.0.0.1:0"
+	}
+	a := newNode(t, ctx, 200*time.Millisecond, lazy)
+	b := newNode(t, ctx, 200*time.Millisecond, lazy)
+	c := newNode(t, ctx, 200*time.Millisecond, lazy)
+	explicit := newNode(t, ctx, 200*time.Millisecond, func(m *Manager) {
+		m.Config = &v1.MeshConfig{Listen: "127.0.0.1:0", Advertise: "127.0.0.1", Announce: proto.Bool(true)}
+	})
+	for _, n := range []*testNode{a, b, c} {
+		if st := n.Status(); st.GetListen() != "" || st.GetAddress() != "" || !st.GetAnnounce() {
+			t.Fatalf("a node outside a mesh listens: %v", st)
 		}
-		return last
 	}
-	publish := func(action v1.EventAction, state v1.InstanceState, bytes uint64) {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, action, "in1", &v1.Instance{Id: "in1", State: state, Measurements: []*v1.Measurement{{Key: "guard.received", Bytes: bytes}}})
+	if st := explicit.Status(); st.GetListen() == "" {
+		t.Fatalf("mesh.listen binds at start: %v", st)
 	}
-	before := settle()
-	publish(v1.EventAction_EVENT_ACTION_UPDATED, v1.InstanceState_INSTANCE_STATE_STARTING, 0)
-	eventually(t, "a new instance bumps the record", func() bool { return seq() > before })
-	settled := settle()
-	publish(v1.EventAction_EVENT_ACTION_UPDATED, v1.InstanceState_INSTANCE_STATE_STARTING, 100)
-	publish(v1.EventAction_EVENT_ACTION_UPDATED, v1.InstanceState_INSTANCE_STATE_STARTING, 200)
-	if after := settle(); after != settled {
-		t.Fatalf("measurement refreshes bumped the record from %d to %d", settled, after)
+	_, token, err := a.Init(ctx, "lazy")
+	if err != nil {
+		t.Fatal(err)
 	}
-	publish(v1.EventAction_EVENT_ACTION_UPDATED, v1.InstanceState_INSTANCE_STATE_READY, 200)
-	eventually(t, "a state change bumps the record", func() bool { return seq() > settled })
-	ready := settle()
-	publish(v1.EventAction_EVENT_ACTION_DELETED, v1.InstanceState_INSTANCE_STATE_READY, 200)
-	eventually(t, "a deletion bumps the record", func() bool { return seq() > ready })
-	gone := settle()
-	publish(v1.EventAction_EVENT_ACTION_UPDATED, v1.InstanceState_INSTANCE_STATE_READY, 200)
-	eventually(t, "an instance seen again after deletion bumps the record", func() bool { return seq() > gone })
+	if st := a.Status(); st.GetListen() == "" || st.GetAddress() == "" {
+		t.Fatalf("making a mesh binds the listener: %v", st)
+	}
+	if _, _, err := b.Join(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if st := b.Status(); st.GetListen() == "" {
+		t.Fatalf("joining binds the listener: %v", st)
+	}
+	if _, err := c.Ask(ctx, "", "", a.Address()); err != nil {
+		t.Fatal(err)
+	}
+	if st := c.Status(); st.GetListen() == "" {
+		t.Fatalf("asking to join binds the listener for the grant to arrive on: %v", st)
+	}
+	// A node joined before a restart binds at start
+	b.Close()
+	again := &Manager{
+		DB: b.DB, Config: b.Config, Host: b.Host, Installs: b.Installs, Runtimes: b.Runtimes, Store: b.Store, Perf: b.Perf,
+		Pools: b.pools, Registrar: b.pools, Events: b.Events, Guard: b.Guard, Log: quietLog(), Version: "test", InFlight: b.pools.InFlight, interval: b.interval,
+	}
+	lazy(again)
+	if err := again.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	again.Handler = http.NewServeMux()
+	if err := again.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(again.Close)
+	if st := again.Status(); st.GetListen() == "" || st.GetMesh() == nil {
+		t.Fatalf("a member binds at start: %v", st)
+	}
 }

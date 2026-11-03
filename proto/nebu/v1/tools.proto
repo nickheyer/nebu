@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "nebu/v1/settings.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
@@ -53,7 +54,7 @@ message ListToolServersResponse {
 
 // Runs one tool by the name the model calls it, with JSON arguments
 message CallToolRequest {
-  string name = 1;
+  string name = 1 [(buf.validate.field).string.min_len = 1];
   string arguments = 2;
   // The mesh member whose server runs it, this node when empty
   string node_id = 3;

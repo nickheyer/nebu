@@ -70,8 +70,8 @@ func TestProfileMigration(t *testing.T) {
 		`INSERT INTO slots (id, name, state, created_at, updated_at, system_messages, allow_all) VALUES ('s1', 'shaped', 'ready', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'merge', 1)`,
 		`INSERT INTO slots (id, name, state, created_at, updated_at) VALUES ('s2', 'plain', 'empty', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
 		`INSERT INTO slot_aliases (slot_id, position, name, system_messages, allow_all) VALUES ('s1', 0, 'alias', 'user', 0)`,
-		`INSERT INTO routes (name, state, updated_at, system_messages, allow_all) VALUES ('r1', 'ready', '2026-01-01T00:00:00Z', '', 1)`,
-		`INSERT INTO routes (name, state, updated_at) VALUES ('r2', 'ready', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO routes (name, slot_id, state, updated_at, system_messages, allow_all) VALUES ('r1', 's1', 'ready', '2026-01-01T00:00:00Z', '', 1)`,
+		`INSERT INTO routes (name, instance_id, state, updated_at) VALUES ('r2', 'i2', 'ready', '2026-01-01T00:00:00Z')`,
 	} {
 		if _, err := old.Exec(stmt); err != nil {
 			t.Fatalf("%s: %v", stmt, err)
@@ -106,7 +106,7 @@ func TestProfileMigration(t *testing.T) {
 		t.Fatalf("alias profile %v", aliases)
 	}
 	var raw []string
-	for _, q := range []string{`SELECT profile FROM slots ORDER BY name`, `SELECT profile FROM slot_aliases`, `SELECT profile FROM routes ORDER BY name`} {
+	for _, q := range []string{`SELECT profile FROM slots ORDER BY name`, `SELECT profile FROM slot_aliases`} {
 		rows, err := d.sql.Query(q)
 		if err != nil {
 			t.Fatal(err)
@@ -122,15 +122,18 @@ func TestProfileMigration(t *testing.T) {
 
 		rows.Close()
 	}
-	if got := strings.Join(raw, "|"); strings.Contains(got, "systemMessages") || got != `|{"allowAll":true}||{"allowAll":true}|` {
+	if got := strings.Join(raw, "|"); strings.Contains(got, "systemMessages") || got != `|{"allowAll":true}|` {
 		t.Fatalf("stored profiles %q", got)
 	}
 	routes, err := d.ListRoutes(context.Background())
 	if err != nil || len(routes) != 2 {
 		t.Fatalf("routes %v: %v", routes, err)
 	}
-	if !proto.Equal(routes[0].GetProfile(), &v1.Profile{}) || routes[1].GetProfile() != nil {
-		t.Fatalf("route profiles %v / %v", routes[0].GetProfile(), routes[1].GetProfile())
+	if routes[0].GetName() != "r1" || routes[0].GetOwnerKind() != "slot" || routes[0].GetOwnerId() != "s1" || routes[0].GetSpec().GetProfile() == nil || !proto.Equal(routes[0].GetSpec().GetProfile(), &v1.Profile{}) {
+		t.Fatalf("the slot route keeps its owner and profile %v", routes[0])
+	}
+	if routes[1].GetName() != "r2" || routes[1].GetOwnerKind() != "instance" || routes[1].GetOwnerId() != "i2" || routes[1].GetSpec().GetProfile() != nil {
+		t.Fatalf("the instance route keeps its owner and stays bare %v", routes[1])
 	}
 }
 
@@ -147,12 +150,12 @@ func TestProfileRoundTrip(t *testing.T) {
 	if err != nil || len(slots) != 1 || !proto.Equal(slots[0], s) {
 		t.Fatalf("slot round trip\n got %v\nwant %v\nerr %v", slots, s, err)
 	}
-	r := &v1.Route{Name: "main", State: v1.RouteState_ROUTE_STATE_READY, UpdatedAt: timestamppb.New(time.Unix(3, 0)), Profile: profile}
+	r := &v1.Route{Name: "main", Spec: &v1.RouteSpec{Profile: profile}, Status: &v1.RouteStatus{State: v1.RouteState_ROUTE_STATE_READY}}
 	if err := d.PutRoute(ctx, r); err != nil {
 		t.Fatal(err)
 	}
 	routes, err := d.ListRoutes(ctx)
-	if err != nil || len(routes) != 1 || !proto.Equal(routes[0], r) {
+	if err != nil || len(routes) != 1 || !proto.Equal(routes[0].GetSpec(), r.GetSpec()) || !proto.Equal(routes[0].GetStatus(), r.GetStatus()) {
 		t.Fatalf("route round trip %v: %v", routes, err)
 	}
 }

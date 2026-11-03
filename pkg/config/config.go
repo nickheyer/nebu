@@ -1,4 +1,4 @@
-// Package config loads daemon and client configuration.
+// Package config loads daemon and client configuration
 package config
 
 import (
@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"buf.build/go/protovalidate"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -22,8 +23,23 @@ import (
 const (
 	// API token the daemon generates in data_dir when auth.token is empty
 	TokenFile = "api.token"
+	// Self-signed listener pair the daemon generates in data_dir when tls names none and is not disabled
+	CertFile = "tls.crt"
+	KeyFile  = "tls.key"
 	// Environment variables NEBU_ plus the upper case key path, dots as underscores, override every key
 	envPrefix = "NEBU"
+)
+
+// Mesh topologies, sync exchanges and import routing modes mesh settings name
+const (
+	MeshTopologyFull  = "full"
+	MeshTopologyHub   = "hub"
+	MeshTopologySpoke = "spoke"
+	MeshSyncPushPull  = "push-pull"
+	MeshSyncPush      = "push"
+	MeshSyncPull      = "pull"
+	RoutingEndpoint   = "endpoint"
+	RoutingParent     = "parent"
 )
 
 var (
@@ -62,6 +78,9 @@ func Load(path string) (*v1.Config, error) {
 		return nil, err
 	}
 	derive(cfg)
+	if err := protovalidate.Validate(cfg); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
 	return cfg, nil
 }
 
@@ -75,15 +94,28 @@ func defaults(dataDir, cacheDir string) *v1.Config {
 		Contexts:     []uint32{8192, 32768, 131072},
 		MinFreeBytes: 50 << 30,
 		Transfer:     &v1.Transfer{Workers: 8, ChunkBytes: 32 << 20, Retries: 5},
-		Gateway:      &v1.Gateway{DrainTimeoutMs: 30000, Policy: &v1.Policy{UpstreamTimeoutMs: 600000}},
-		Auth:         &v1.Auth{Oidc: &v1.Oidc{Scopes: []string{"openid", "profile", "email"}, GroupsClaim: "groups"}, SessionTtl: "24h"},
-		Builds:       &v1.Builds{Cli: []string{"podman", "docker", "nerdctl"}, Jobs: uint32(runtime.NumCPU())},
-		Web:          &v1.Web{},
-		Store:        &v1.Store{},
-		Tls:          &v1.Tls{},
-		Notify:       &v1.Notify{},
-		Discord:      &v1.Discord{},
-		Mesh:         &v1.MeshConfig{Announce: proto.Bool(true), Exposure: "guard"},
+		Gateway: &v1.Gateway{
+			DrainTimeoutMs: 30000,
+			Policy:         &v1.Policy{UpstreamTimeoutMs: 600000},
+			FlowControl: &v1.FlowControl{
+				QueueCapacity: 1024, QueueTimeoutMs: 30000, SheddableBelow: -1,
+				SaturationQueueDepth: 5, SaturationKvUtilization: 0.8, MetricsStalenessMs: 2000,
+			},
+			TraceRetention:      "168h",
+			TraceRing:           1024,
+			DefaultOutputTokens: 256,
+		},
+		Telemetry: &v1.Telemetry{SampleRatio: 0.1},
+		Metrics:   &v1.Metrics{},
+		Auth:      &v1.Auth{Oidc: &v1.Oidc{Scopes: []string{"openid", "profile", "email"}, GroupsClaim: "groups"}, SessionTtl: "24h"},
+		Builds:    &v1.Builds{Cli: []string{"podman", "docker", "nerdctl"}, Jobs: uint32(runtime.NumCPU())},
+		Web:       &v1.Web{},
+		Store:     &v1.Store{},
+		Tls:       &v1.Tls{},
+		Notify:    &v1.Notify{},
+		Discord:   &v1.Discord{},
+		Mesh:      &v1.MeshConfig{Announce: proto.Bool(true), Exposure: "guard", Topology: MeshTopologyFull, Sync: MeshSyncPushPull, RoutingMode: RoutingEndpoint},
+		Scheduler: &v1.Scheduler{},
 	}
 }
 
@@ -97,6 +129,17 @@ func derive(cfg *v1.Config) {
 	}
 	if cfg.Auth.Oidc.Name == "" {
 		cfg.Auth.Oidc.Name = issuerHost(cfg.GetAuth().GetOidc().GetIssuer())
+	}
+	DeriveTLS(cfg)
+}
+
+// Points tls at the pair generated in data_dir when it names none and plaintext is not chosen
+func DeriveTLS(cfg *v1.Config) {
+	if cfg.Tls == nil {
+		cfg.Tls = &v1.Tls{}
+	}
+	if !cfg.Tls.Disabled && cfg.Tls.CertFile == "" && cfg.Tls.KeyFile == "" {
+		cfg.Tls.CertFile, cfg.Tls.KeyFile = filepath.Join(cfg.GetDataDir(), CertFile), filepath.Join(cfg.GetDataDir(), KeyFile)
 	}
 }
 
@@ -172,7 +215,7 @@ func set(m protoreflect.Message, fd protoreflect.FieldDescriptor, value any, key
 		}
 		mp := m.Mutable(fd).Map()
 		for k, v := range tree {
-			val, err := scalar(fd.MapValue(), v, key+"."+k)
+			val, err := mapValue(mp, fd.MapValue(), v, key+"."+k)
 			if err != nil {
 				return err
 			}
@@ -238,6 +281,22 @@ func listOf(value any, fd protoreflect.FieldDescriptor, key string) ([]any, erro
 		return out, nil
 	}
 	return nil, fmt.Errorf("%s: expected a list", key)
+}
+
+// One map value, a nested mapping applied to a fresh message or a scalar as the field's kind
+func mapValue(mp protoreflect.Map, fd protoreflect.FieldDescriptor, value any, key string) (protoreflect.Value, error) {
+	if fd.Kind() != protoreflect.MessageKind {
+		return scalar(fd, value, key)
+	}
+	tree, ok := value.(map[string]any)
+	if !ok {
+		return protoreflect.Value{}, fmt.Errorf("%s: expected a mapping", key)
+	}
+	val := mp.NewValue()
+	if err := apply(val.Message(), tree, key+"."); err != nil {
+		return protoreflect.Value{}, err
+	}
+	return val, nil
 }
 
 // One scalar as the field's kind, strings parsed for numbers, booleans, and enum names

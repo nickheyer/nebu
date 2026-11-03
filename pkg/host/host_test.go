@@ -2,6 +2,10 @@ package host
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,5 +83,111 @@ func TestProcessesMergeAndTheDecoratorStampsFreshProfiles(t *testing.T) {
 	cached, err := p.Profile(context.Background(), false)
 	if err != nil || InstanceBytes(cached, "in1") != 55 {
 		t.Fatalf("cached %v %v", cached, err)
+	}
+}
+
+// A probe that counts its runs and blocks until released
+type gateProbe struct {
+	runs    *atomic.Int32
+	started chan struct{}
+	release chan struct{}
+}
+
+func (gateProbe) ID() string               { return "gate" }
+func (gateProbe) Description() string      { return "gate" }
+func (gateProbe) Runs(string, string) bool { return true }
+func (g gateProbe) Run(context.Context) Result {
+	g.runs.Add(1)
+	g.started <- struct{}{}
+	<-g.release
+	return Result{Status: v1.ProbeStatus_PROBE_STATUS_OK, Devices: []*v1.Device{{Id: "gpu"}}}
+}
+
+// Concurrent refreshes share one probe, and a cached read never waits behind it
+func TestConcurrentProfilesShareOneProbe(t *testing.T) {
+	g := gateProbe{runs: &atomic.Int32{}, started: make(chan struct{}, 8), release: make(chan struct{})}
+	p := New([]Probe{g}, nil, time.Hour)
+	first := make(chan error, 1)
+	go func() {
+		_, err := p.Profile(context.Background(), true)
+		first <- err
+	}()
+	<-g.started
+	close(g.release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	g.release = make(chan struct{})
+	p.probes = []Probe{g}
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	var entered sync.WaitGroup
+	entered.Add(8)
+	for range 8 {
+		wg.Go(func() {
+			entered.Done()
+			profile, err := p.Profile(context.Background(), true)
+			if err == nil && len(profile.GetDevices()) != 1 {
+				err = fmt.Errorf("devices %v", profile.GetDevices())
+			}
+			errs <- err
+		})
+	}
+	<-g.started
+	cached := make(chan error, 1)
+	go func() {
+		_, err := p.Profile(context.Background(), false)
+		cached <- err
+	}()
+	select {
+	case err := <-cached:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a cached read waited behind the probe")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := p.Profile(ctx, true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a caller whose context ends leaves the shared probe: %v", err)
+	}
+	entered.Wait()
+	time.Sleep(50 * time.Millisecond)
+	close(g.release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := g.runs.Load(); n != 2 {
+		t.Fatalf("probe ran %d times, want one for the first read and one shared by eight refreshes", n)
+	}
+}
+
+// A device holds memory of its own when it reports some, or a device or unified pool of the profile is its, and is found by id
+func TestOwnMemoryAndDevice(t *testing.T) {
+	gpu := &v1.Device{Id: "gpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Name: "big"}
+	igpu := &v1.Device{Id: "intel-0000:00:02.0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Name: "AlderLake-S GT1", Facts: map[string]string{"memory": "shared"}}
+	reported := &v1.Device{Id: "nv0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, MemoryTotalBytes: 1 << 30}
+	p := &v1.HostProfile{Devices: []*v1.Device{gpu, igpu, reported}, Pools: []*v1.MemoryPool{
+		{Id: "gpu0", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "gpu0", TotalBytes: 1},
+		{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 1},
+	}}
+	if !OwnMemory(p, gpu) || OwnMemory(p, igpu) || !OwnMemory(p, reported) || !OwnMemory(nil, reported) || OwnMemory(nil, gpu) {
+		t.Fatal("a device pool or a reported total is memory of the device's own, a host pool is not")
+	}
+	cpu := &v1.Device{Id: "cpu0", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Name: "cpu"}
+	if !OwnMemory(p, cpu) || OwnMemory(nil, cpu) {
+		t.Fatal("the host pool is a CPU's own memory")
+	}
+	unified := &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "unified", Kind: v1.PoolKind_POOL_KIND_UNIFIED, TotalBytes: 1}}}
+	if !OwnMemory(unified, gpu) {
+		t.Fatal("a unified pool is shared with every device")
+	}
+	if Device(p, "gpu0") != gpu || Device(p, "nope") != nil || Device(nil, "gpu0") != nil {
+		t.Fatal("device lookup by id")
 	}
 }

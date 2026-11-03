@@ -1,4 +1,4 @@
-// Package host probes the machine into a profile of devices, memory pools, storage, and facts.
+// Package host probes the machine into a profile of devices, memory pools, storage, and facts
 package host
 
 import (
@@ -11,12 +11,12 @@ import (
 	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Probe of devices, memory pools, and host facts. Missing tools are skipped. Failed probes are
-// recorded without failing the profile.
+// Finds devices, memory pools, and host facts, a failed probe recorded without failing the profile
 type Probe interface {
 	ID() string
 	Description() string
@@ -47,6 +47,8 @@ type Prober struct {
 	ttl      time.Duration
 	mu       sync.Mutex
 	cached   *v1.HostProfile
+	// Shares one running probe among every caller that needs a fresh profile
+	flight singleflight.Group
 }
 
 // Keeps the probes that run on this OS and architecture and remembers the storage paths to measure
@@ -60,7 +62,7 @@ func New(probes []Probe, paths []string, ttl time.Duration) *Prober {
 	return p
 }
 
-// Returns cached profile or probes again when stale or forced
+// Returns the cached profile, or joins the one probe running outside the lock when stale or forced
 func (p *Prober) Profile(ctx context.Context, refresh bool) (*v1.HostProfile, error) {
 	p.mu.Lock()
 	if !refresh && p.cached != nil && time.Since(p.cached.GetProbedAt().AsTime()) < p.ttl {
@@ -68,18 +70,30 @@ func (p *Prober) Profile(ctx context.Context, refresh bool) (*v1.HostProfile, er
 		p.mu.Unlock()
 		return out, nil
 	}
-	profile, err := p.probe(ctx)
-	if err != nil {
-		p.mu.Unlock()
-		return nil, err
-	}
-	p.cached = profile
-	out := proto.Clone(profile).(*v1.HostProfile)
 	p.mu.Unlock()
-	if p.OnProbe != nil {
-		p.OnProbe(proto.Clone(profile).(*v1.HostProfile))
+	// The shared probe outlives any one caller, each probe command bounding itself by its own timeout
+	result := p.flight.DoChan("probe", func() (any, error) {
+		profile, err := p.probe(context.WithoutCancel(ctx))
+		if err != nil {
+			return nil, err
+		}
+		p.mu.Lock()
+		p.cached = profile
+		p.mu.Unlock()
+		if p.OnProbe != nil {
+			p.OnProbe(proto.Clone(profile).(*v1.HostProfile))
+		}
+		return profile, nil
+	})
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("probe: %w", ctx.Err())
+	case r := <-result:
+		if r.Err != nil {
+			return nil, r.Err
+		}
+		return proto.Clone(r.Val.(*v1.HostProfile)).(*v1.HostProfile), nil
 	}
-	return out, nil
 }
 
 func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
@@ -133,9 +147,6 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 		st.Uses = []string{path}
 		byMount[st.GetPath()] = st
 		profile.Storage = append(profile.Storage, st)
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("probe: %w", err)
 	}
 	if p.Decorate != nil {
 		p.Decorate(profile)
@@ -230,6 +241,39 @@ func Kind(p *v1.HostProfile, kind v1.DeviceKind) []*v1.Device {
 		}
 	}
 	return out
+}
+
+// Whether a device holds memory of its own, reported on the device, a device or unified pool of the profile, or the host pool for a CPU
+func OwnMemory(p *v1.HostProfile, d *v1.Device) bool {
+	if d.GetMemoryTotalBytes() > 0 {
+		return true
+	}
+	cpu := d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU
+	for _, pl := range p.GetPools() {
+		switch pl.GetKind() {
+		case v1.PoolKind_POOL_KIND_UNIFIED:
+			return true
+		case v1.PoolKind_POOL_KIND_HOST:
+			if cpu {
+				return true
+			}
+		case v1.PoolKind_POOL_KIND_DEVICE:
+			if !cpu && (pl.GetDeviceId() == d.GetId() || pl.GetId() == d.GetId()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// The profile's device with an id, nil when it holds none
+func Device(p *v1.HostProfile, id string) *v1.Device {
+	for _, d := range p.GetDevices() {
+		if d.GetId() == id {
+			return d
+		}
+	}
+	return nil
 }
 
 // Whether any device is of the vendor

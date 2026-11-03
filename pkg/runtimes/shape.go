@@ -232,10 +232,8 @@ func rankPartition(seat *v1.SeatSpec, layers int) (string, error) {
 	return strings.Join(counts, ","), nil
 }
 
-// Names the devices a ggml backend enumerates them by, matching the install's device fact:
-// CUDA0, ROCm0, Vulkan0, MTL0, or Metal0 on builds before ggml shortened the Metal name, in
-// the order the seat lists them
-func ggmlDevices(in *v1.Install, devices []*v1.Device) []string {
+// Names devices as ggml enumerates them under the visibility variables pinned to the launch's devices, CUDA0 the first pinned NVIDIA device
+func ggmlDevices(in *v1.Install, pinned, named []*v1.Device) ([]string, error) {
 	known := strings.Split(in.GetFacts()["devices"], ",")
 	prefixFor := func(d *v1.Device) string {
 		var candidates []string
@@ -259,17 +257,43 @@ func ggmlDevices(in *v1.Install, devices []*v1.Device) []string {
 		return candidates[0]
 	}
 	var out []string
-	for _, d := range devices {
+	for _, d := range named {
 		if d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
 			continue
 		}
-		index := d.GetFacts()["index"]
-		if index == "" {
-			index = strconv.Itoa(len(out))
+		prefix := prefixFor(d)
+		index, ok := visibleIndex(pinned, d, prefix)
+		if !ok {
+			return nil, fmt.Errorf("%w: device %s is not among the devices the launch pins", ErrParam, d.GetId())
 		}
-		out = append(out, prefixFor(d)+index)
+		out = append(out, prefix+strconv.Itoa(index))
 	}
-	return out
+	return out, nil
+}
+
+// Position of a device among those its backend's visibility variable lists, the order the backend renumbers them in
+func visibleIndex(pinned []*v1.Device, d *v1.Device, prefix string) (int, bool) {
+	listed := func(p *v1.Device) bool {
+		switch prefix {
+		case "CUDA":
+			return p.GetVendor() == "nvidia"
+		case "ROCm", "HIP":
+			return p.GetVendor() == "amd" && p.GetFacts()["index"] != ""
+		case "MTL", "Metal":
+			return p.GetVendor() == "apple" && p.GetKind() != v1.DeviceKind_DEVICE_KIND_CPU
+		}
+		return p.GetKind() == v1.DeviceKind_DEVICE_KIND_GPU && p.GetFacts()["index"] != ""
+	}
+	n := 0
+	for _, p := range pinned {
+		if p.GetId() == d.GetId() {
+			return n, listed(p)
+		}
+		if listed(p) {
+			n++
+		}
+	}
+	return 0, false
 }
 
 // The host and port a seat process binds: loopback, or the mesh address when exposed

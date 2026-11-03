@@ -59,6 +59,8 @@ func (SGLang) Params() []*v1.Param {
 		groupChat        = "Chat"
 		groupSpeculative = "Speculative decoding"
 		groupDiagnostics = "Diagnostics"
+		groupAdapters    = "Adapters"
+		groupServing     = "Serving"
 	)
 	intParam := func(name, label, group, flag, def, unit, description string, min, max, step float64, advanced bool) *v1.Param {
 		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_INT, Default: def, Unit: unit, Min: min, Max: max, Step: step, Group: group, Flag: flag, Advanced: advanced, Description: description}
@@ -73,13 +75,13 @@ func (SGLang) Params() []*v1.Param {
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: groupContext, Flag: "--context-length",
 			Rule: contextRule},
 		intParam("chunked_prefill_size", "Chunked prefill", groupContext, "--chunked-prefill-size", "", "tokens", "tokens in one prefill chunk, empty keeps SGLang's choice by device memory, -1 off", -1, 0, 512, true),
-		intParam("max_running_requests", "Max running requests", groupContext, "--max-running-requests", "", "requests", "empty keeps SGLang's choice by cache size", 1, 0, 1, false),
+		intParam("max_running_requests", "Max running requests", groupContext, "--max-running-requests", "", "requests", "empty keeps SGLang's choice by cache size, read back from its log as the route's capacity", 1, 0, 1, false),
 		intParam("max_queued_requests", "Max queued requests", groupContext, "--max-queued-requests", "", "requests", "empty keeps SGLang's no limit", 1, 0, 1, true),
 		intParam("max_total_tokens", "Cache pool tokens", groupContext, "--max-total-tokens", "", "tokens", "tokens the cache pool holds, empty keeps SGLang's choice by the memory fraction", 256, 0, 256, true),
 		intParam("max_prefill_tokens", "Max prefill tokens", groupContext, "--max-prefill-tokens", "", "tokens", "tokens one prefill batch holds, at least the context length, empty keeps SGLang's own", 256, 0, 256, true),
 		strParam("schedule_policy", "Schedule policy", groupContext, "--schedule-policy", "", "order requests are served in, empty keeps SGLang's own", []string{"", "lpm", "random", "fcfs", "dfs-weight", "lof", "priority", "routing-key", "hrrn"}, true),
 		boolParam("enable_mixed_chunk", "Mixed chunks", groupContext, "--enable-mixed-chunk", "batch decoding with prefill chunks"),
-		boolParam("disable_radix_cache", "Disable prefix cache", groupContext, "--disable-radix-cache", "serve without the radix prefix cache"),
+		boolParam("disable_radix_cache", "Disable prefix cache", groupContext, "--disable-radix-cache", "serve without the radix prefix cache that prefix aware routing counts on"),
 		intParam("num_continuous_decode_steps", "Decode steps per schedule", groupContext, "--num-continuous-decode-steps", "", "steps", "decode steps run between scheduler passes, empty keeps SGLang's 1", 1, 0, 1, true),
 		{Name: "mem_fraction_static", Label: "Static memory fraction", Type: v1.ParamType_PARAM_TYPE_FLOAT, Min: 0.05, Max: 1, Step: 0.01, Group: groupMemory, Flag: "--mem-fraction-static",
 			Description: "share of device memory for weights and the cache pool, empty keeps SGLang's choice by model and device"},
@@ -88,7 +90,7 @@ func (SGLang) Params() []*v1.Param {
 		intParam("page_size", "Page size", groupMemory, "--page-size", "", "tokens", "tokens in one cache page, empty keeps SGLang's choice by the backend", 1, 0, 1, true),
 		{Name: "tp_size", Label: "Tensor parallel", Type: v1.ParamType_PARAM_TYPE_INT, Default: "1", Unit: "devices", Min: 1, Step: 1, Group: groupParallel, Flag: "--tp-size"},
 		intParam("pp_size", "Pipeline parallel", groupParallel, "--pp-size", "", "stages", "empty keeps SGLang's 1, a chain formation sets it per rank", 1, 0, 1, true),
-		intParam("dp_size", "Data parallel", groupParallel, "--dp-size", "", "replicas", "empty keeps SGLang's 1", 1, 0, 1, true),
+		intParam("dp_size", "Data parallel", groupParallel, "--dp-size", "", "ranks", "ranks each serving its own port as a server of its own on tensor parallel devices of its own, empty keeps one", 1, 0, 1, true),
 		intParam("ep_size", "Expert parallel", groupParallel, "--ep-size", "", "devices", "empty keeps SGLang's 1", 1, 0, 1, true),
 		boolParam("enable_p2p_check", "Check peer access", groupParallel, "--enable-p2p-check", "verify device to device access before enabling it"),
 		strParam("dtype", "Weight type", groupModel, "--dtype", "", "type weights and activations run in, empty keeps SGLang's auto, bfloat16 for bfloat16 models and float16 otherwise", []string{"", "auto", "half", "float16", "bfloat16", "float", "float32"}, false),
@@ -101,7 +103,12 @@ func (SGLang) Params() []*v1.Param {
 		intParam("cuda_graph_max_bs", "CUDA graph batch", groupModel, "--cuda-graph-max-bs", "", "requests", "largest batch captured as a CUDA graph, empty keeps SGLang's choice", 1, 0, 1, true),
 		boolParam("enable_torch_compile", "torch.compile", groupModel, "--enable-torch-compile", "compile the model with torch, slower starts and faster steps"),
 		intParam("torch_compile_max_bs", "Compiled batch", groupModel, "--torch-compile-max-bs", "", "requests", "largest batch torch compiles, empty keeps SGLang's 32", 1, 0, 1, true),
-		boolParam("enable_lora", "LoRA adapters", groupModel, "--enable-lora", "accept LoRA adapters named by requests"),
+		boolParam("enable_lora", "LoRA adapters", groupAdapters, "--enable-lora", "accept LoRA adapters named by requests and loaded at runtime"),
+		strParam("lora_paths", "Adapters at launch", groupAdapters, "", "", "name=path pairs, comma separated, served from the start and turning LoRA on", nil, true),
+		intParam("max_loras_per_batch", "Adapters per batch", groupAdapters, "--max-loras-per-batch", "", "adapters", "distinct adapters one batch runs, base requests counting as one, empty keeps SGLang's 8", 1, 0, 1, true),
+		intParam("max_loaded_loras", "Adapters in host memory", groupAdapters, "--max-loaded-loras", "", "adapters", "adapters held in host memory at once, at least the per batch count, empty keeps SGLang's no limit", 1, 0, 1, true),
+		intParam("max_lora_rank", "Max adapter rank", groupAdapters, "--max-lora-rank", "", "", "largest rank an adapter loaded at runtime may have, empty infers it from the launch adapters", 1, 0, 8, true),
+		strParam("lora_target_modules", "Adapter target modules", groupAdapters, "", "", "modules adapters loaded at runtime may target, comma separated or all, empty infers them from the launch adapters", nil, true),
 		boolParam("sleep_on_idle", "Sleep when idle", groupModel, "--sleep-on-idle", "lower CPU use while no request runs"),
 		{Name: "served_model_name", Label: "Served name", Type: v1.ParamType_PARAM_TYPE_STRING, Group: groupIdentity, Flag: "--served-model-name"},
 		strParam("chat_template", "Chat template", groupChat, "--chat-template", "", "a built in template name or a template file, empty keeps the model's", nil, true),
@@ -117,11 +124,13 @@ func (SGLang) Params() []*v1.Param {
 		{Name: "speculative_eagle_topk", Label: "Draft branches", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Step: 1, Group: groupSpeculative, Advanced: true, Flag: "--speculative-eagle-topk", Description: "empty keeps SGLang's choice for the algorithm"},
 		{Name: "speculative_num_draft_tokens", Label: "Draft tokens", Type: v1.ParamType_PARAM_TYPE_INT, Min: 1, Step: 1, Group: groupSpeculative, Advanced: true, Flag: "--speculative-num-draft-tokens", Description: "empty keeps SGLang's choice for the algorithm"},
 		strParam("log_level", "Log level", groupDiagnostics, "--log-level", "", "empty keeps SGLang's info", []string{"", "debug", "info", "warning", "error"}, true),
-		boolParam("enable_metrics", "Prometheus metrics", groupDiagnostics, "--enable-metrics", "serve the metrics endpoint"),
+		{Name: "enable_metrics", Label: "Prometheus metrics", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "true", Group: groupDiagnostics, Flag: "--enable-metrics", Advanced: true,
+			Description: "serve the metrics endpoint the router reads queue depth and cache use from"},
 		{Name: "watchdog_timeout", Label: "Watchdog timeout", Type: v1.ParamType_PARAM_TYPE_FLOAT, Min: 1, Step: 30, Unit: "seconds", Group: groupDiagnostics, Advanced: true, Flag: "--watchdog-timeout",
 			Description: "a forward batch past this long crashes the server, empty keeps SGLang's 300, a formation sets its stop grace"},
 		boolParam("enable_dynamic_chunking", "Dynamic chunking", groupDiagnostics, "--enable-dynamic-chunking", "size pipeline chunks as they run, a chain formation turns it on"),
 		boolParam("disable_overlap_schedule", "Disable overlap schedule", groupDiagnostics, "--disable-overlap-schedule", "run the scheduler and the workers in turn, a chain formation turns it on"),
+		boolParam("grpc", "gRPC server", groupServing, "", "serve the native SglangService on the port after the HTTP port, beside HTTP"),
 	}
 }
 
@@ -139,11 +148,53 @@ func (r SGLang) Launch(in Launch) (*Command, error) {
 	if parser == "" {
 		parser = sglangToolParser(in)
 	}
-	args := []string{"-m", "sglang.launch_server", "--model-path", dir, "--host", in.Host, "--port", strconv.Itoa(in.Port), "--tool-call-parser", parser}
+	paths, err := loraPairs("lora_paths", p.Str("lora_paths"))
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) > 0 {
+		p["enable_lora"] = true
+	}
+	// Every rank is a server of its own with data parallel one, as SGLang's router launches its workers
+	ranks := launchRanks(p, "dp_size")
+	if ranks > 1 {
+		delete(p, "dp_size")
+	}
+	port := in.Port + in.Rank*rankSpan(p)
+	args := []string{"-m", "sglang.launch_server", "--model-path", dir, "--host", in.Host, "--port", strconv.Itoa(port), "--tool-call-parser", parser}
 	flags, env, emitted := Flags(r.Params(), p)
 	emitted["tool_call_parser"] = parser
-	setEnv(env, "CUDA_VISIBLE_DEVICES", visible(in.Devices, "nvidia", false))
-	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}, nil
+	if ranks > 1 {
+		emitted["dp_size"] = strconv.Itoa(ranks)
+	}
+	if len(paths) > 0 {
+		flags = append(append(flags, "--lora-paths"), paths...)
+	}
+	if kv := sglangKVEventsConfig(in, p, ranks); kv != "" {
+		flags = append(flags, "--kv-events-config", kv)
+	}
+	if modules := strings.FieldsFunc(p.Str("lora_target_modules"), func(r rune) bool { return r == ',' || r == ' ' }); len(modules) > 0 {
+		flags = append(append(flags, "--lora-target-modules"), modules...)
+	}
+	if p.Bool("grpc") {
+		flag := in.InstallRecord.GetFacts()[factGRPCPort]
+		if flag == "" {
+			return nil, fmt.Errorf("%w: grpc serves through the native --grpc-port, which this SGLang install's launch_server help does not list, so upgrade SGLang or turn grpc off", ErrParam)
+		}
+		grpc := strconv.Itoa(port + 1)
+		flags = append(flags, flag, grpc)
+		emitted["grpc_port"] = grpc
+	}
+	launched, err := launchDevices(in)
+	if err != nil {
+		return nil, err
+	}
+	devices, err := rankPins(in, launched, ranks, int(max(p.Int("tp_size"), 1)*max(p.Int("pp_size"), 1)))
+	if err != nil {
+		return nil, err
+	}
+	pinEnv(env, devices)
+	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted, Devices: devices, Port: port}, nil
 }
 
 func (SGLang) Prepares(string) bool             { return false }
@@ -164,9 +215,11 @@ func (SGLang) Probes() []Probe {
 	nixl := sglangNIXLProbe()
 	parsers := choicesProbe(factToolParsers, help, "--tool-call-parser")
 	parsers.Timeout = time.Minute
+	grpc := flagProbe(factGRPCPort, help, "--grpc-port")
+	grpc.Timeout = time.Minute
 	return []Probe{
 		{Key: "version", Args: []string{"-c", "import sglang; print(sglang.__version__)"}, Timeout: time.Minute, Parse: versionField},
-		nnodes, disaggregation, nixl, parsers,
+		nnodes, disaggregation, nixl, parsers, grpc,
 	}
 }
 
@@ -211,6 +264,8 @@ func (SGLang) Policy() *estimate.Policy {
 		ContextStep:   256,
 		ContextMax:    func(s *estimate.Scope) int64 { return int64(s.Model.ContextTrain) },
 		DevicesParam:  "tp_size",
+		RanksParam:    "dp_size",
+		Deferred:      map[string]func([]string) (string, bool){"max_running_requests": sglangRunning},
 		Shape:         func(p estimate.Params) archs.Run { return archs.Run{Context: float64(p.Int("n_ctx"))} },
 		States: func(s *estimate.Scope) ([]*v1.ParamState, string) {
 			gpus := float64(len(host.Kind(s.Host, v1.DeviceKind_DEVICE_KIND_GPU)))

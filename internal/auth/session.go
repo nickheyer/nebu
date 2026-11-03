@@ -1,5 +1,4 @@
-// Package auth guards the API listener and web UI: sealed browser sessions,
-// local accounts, and the API token.
+// Package auth guards the API listener and web UI with sealed sessions, local accounts, roles, and scoped tokens
 package auth
 
 import (
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/nebu/internal/db"
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 const (
@@ -33,6 +33,7 @@ type Session struct {
 	Email    string    `json:"email,omitempty"`
 	Name     string    `json:"name,omitempty"`
 	Provider string    `json:"prv"`
+	Role     v1.Role   `json:"rol"`
 	Issued   time.Time `json:"iat"`
 	Expires  time.Time `json:"exp"`
 }
@@ -137,7 +138,7 @@ func (s *Sessions) Authenticated(h http.Header) bool {
 	return ok
 }
 
-// Reads the session cookie from request headers
+// Reads a live session holding a known role from request headers, so cookies from before roles sign in again
 func (s *Sessions) Session(h http.Header) (*Session, bool) {
 	req := http.Request{Header: h}
 	c, err := req.Cookie(sessionCookie)
@@ -148,7 +149,7 @@ func (s *Sessions) Session(h http.Header) (*Session, bool) {
 	if err := s.Open(sessionCookie, c.Value, &sess); err != nil {
 		return nil, false
 	}
-	if !s.now().Before(sess.Expires) {
+	if !s.now().Before(sess.Expires) || RoleScopes(sess.Role) == nil {
 		return nil, false
 	}
 	s.mu.RLock()
@@ -161,7 +162,7 @@ func (s *Sessions) Session(h http.Header) (*Session, bool) {
 	return &sess, true
 }
 
-// Encrypts a value for a cookie. The purpose binds the value to one cookie name.
+// Encrypts a value for a cookie, the purpose binding it to one cookie name
 func (s *Sessions) Seal(purpose string, v any) (string, error) {
 	plain, err := json.Marshal(v)
 	if err != nil {

@@ -1,7 +1,9 @@
-// Package proc starts, finds, and stops process trees the same way on every OS.
+// Package proc starts, finds, and stops process trees the same way on every OS
 package proc
 
 import (
+	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"sync"
@@ -10,9 +12,9 @@ import (
 )
 
 const (
-	killWait     = 5 * time.Second
-	settleWait   = 500 * time.Millisecond
-	pollInterval = 100 * time.Millisecond
+	killWait   = 5 * time.Second
+	settleWait = 500 * time.Millisecond
+	settleStep = 20 * time.Millisecond
 )
 
 // How long a cancelled command may keep its output open before it is abandoned
@@ -70,24 +72,38 @@ func (t *Tree) Kill() { killTree(t) }
 // Releases what the OS handed out, once the root has exited
 func (t *Tree) Close() { closeTree(t) }
 
-// Interrupts the tree, then kills it once grace passes without done closing
-func (t *Tree) Terminate(grace time.Duration, done <-chan struct{}) {
+// Interrupts the tree and kills it once grace or ctx ends first, returning when done closes or ctx ends
+func (t *Tree) Terminate(ctx context.Context, grace time.Duration, done <-chan struct{}) {
 	t.Interrupt()
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
 	select {
 	case <-done:
 		return
-	case <-time.After(grace):
+	case <-timer.C:
+	case <-ctx.Done():
 	}
 	t.Kill()
-	<-done
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
-// Checks the PID and command line, ignoring quotes added by the OS.
+// Whether pid runs the command line given, ignoring quotes the OS adds
 func Running(pid int, command []string) bool {
-	if pid <= 0 || len(command) == 0 || !Exists(pid) {
+	if len(command) == 0 {
 		return false
 	}
 	want := strings.ReplaceAll(strings.Join(command, " "), `"`, "")
+	return RunningMatch(pid, func(line string) bool { return strings.HasSuffix(line, want) })
+}
+
+// Whether pid is alive with a command line, quotes removed, that match accepts
+func RunningMatch(pid int, match func(line string) bool) bool {
+	if pid <= 0 || !Exists(pid) {
+		return false
+	}
 	deadline := time.Now().Add(settleWait)
 	for {
 		line, err := cmdline(pid)
@@ -95,40 +111,64 @@ func Running(pid int, command []string) bool {
 			return false
 		}
 		if line != "" {
-			return strings.HasSuffix(strings.ReplaceAll(line, `"`, ""), want)
+			return match(strings.ReplaceAll(line, `"`, ""))
 		}
-		// Empty right after exec, or a zombie
-		if time.Now().After(deadline) || !Exists(pid) {
+		// An empty line comes right after exec or from a zombie, so look again unless it exits first
+		left := time.Until(deadline)
+		if left <= 0 {
 			return false
 		}
-		time.Sleep(pollInterval / 5)
+		ctx, cancel := context.WithTimeout(context.Background(), min(left, settleStep))
+		err = WaitExit(ctx, pid)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return false
+		}
 	}
 }
 
-// Stops a process this daemon did not start, with its tree, escalating after grace
-func Terminate(pid int, grace time.Duration) bool {
+// Stops a process this daemon did not start with its tree, killing it once grace or ctx ends
+func Terminate(ctx context.Context, pid int, grace time.Duration) bool {
 	if !Exists(pid) {
 		return true
 	}
 	interrupt(pid)
-	if WaitGone(pid, grace) {
+	graceCtx, cancel := context.WithTimeout(ctx, grace)
+	err := WaitExit(graceCtx, pid)
+	cancel()
+	if err == nil {
 		return true
 	}
 	kill(pid)
-	return WaitGone(pid, killWait)
+	killCtx, cancel := context.WithTimeout(ctx, killWait)
+	defer cancel()
+	return WaitExit(killCtx, pid) == nil
 }
 
-// Polls until pid is gone, giving up after limit when it is positive
-func WaitGone(pid int, limit time.Duration) bool {
-	var deadline time.Time
-	if limit > 0 {
-		deadline = time.Now().Add(limit)
+// Blocks until pid is gone or ctx ends, nil once gone and the ctx error when ctx ends first
+func WaitExit(ctx context.Context, pid int) error {
+	exit, err := Watch(pid)
+	if err != nil {
+		return err
 	}
-	for Exists(pid) {
-		if !deadline.IsZero() && !time.Now().Before(deadline) {
-			return false
+	return exit.Wait(ctx)
+}
+
+// Runs wake once ctx ends and never after the returned release has returned
+func onDone(ctx context.Context, wake func()) (release func()) {
+	var mu sync.Mutex
+	released := false
+	stop := context.AfterFunc(ctx, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !released {
+			wake()
 		}
-		time.Sleep(pollInterval)
+	})
+	return func() {
+		stop()
+		mu.Lock()
+		released = true
+		mu.Unlock()
 	}
-	return true
 }

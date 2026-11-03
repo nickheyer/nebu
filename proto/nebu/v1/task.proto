@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
@@ -54,7 +55,7 @@ message ListTasksResponse {
 
 // Fetches one task
 message GetTaskRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns one task with its log tail
@@ -65,7 +66,7 @@ message GetTaskResponse {
 
 // Streams one task until it ends
 message WatchTaskRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Snapshot plus new log lines on a watch stream
@@ -76,7 +77,7 @@ message WatchTaskResponse {
 
 // Cancels one task
 message CancelTaskRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the task after cancel

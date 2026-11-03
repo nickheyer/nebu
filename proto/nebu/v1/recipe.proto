@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "nebu/v1/task.proto";
 
@@ -110,6 +111,11 @@ message ListRecipesResponse {
 
 // Builds a runtime from a recipe
 message BuildRequest {
+  option (buf.validate.message).cel = {
+    id: "runtime_or_recipe"
+    message: "a runtime id or a recipe id is required"
+    expression: "this.runtime_id != '' || this.recipe_id != ''"
+  };
   string runtime_id = 1;
   string recipe_id = 2;
   string variant = 3;
@@ -138,7 +144,7 @@ message ListBuildsResponse {
 
 // Fetches one build
 message GetBuildRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns one build
@@ -148,7 +154,7 @@ message GetBuildResponse {
 
 // Removes a build and its tree
 message RemoveBuildRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the removed build

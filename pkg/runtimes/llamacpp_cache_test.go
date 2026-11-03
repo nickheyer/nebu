@@ -7,7 +7,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/estimate"
 )
 
-// The cache and slot params render as llama-server spells them, a switch as --flag or --no-flag
+// The cache and slot params render as llama-server spells them, a switch as --flag or --no-flag, prompt caching and cache reuse on by default
 func TestLlamaCppCacheFlags(t *testing.T) {
 	rt := LlamaCpp{}
 	plain := layered(4)
@@ -17,13 +17,14 @@ func TestLlamaCppCacheFlags(t *testing.T) {
 		want      string
 		emitted   map[string]string
 	}{
-		{name: "nothing set", want: ""},
-		{name: "ram cache and similarity", overrides: map[string]string{"cache_ram": "32768", "slot_prompt_similarity": "0.5"}, want: "--slot-prompt-similarity 0.5 --cache-ram 32768", emitted: map[string]string{"cache_ram": "32768", "slot_prompt_similarity": "0.5"}},
-		{name: "checkpoints", overrides: map[string]string{"ctx_checkpoints": "64", "checkpoint_min_step": "2048", "cache_reuse": "256"}, want: "--ctx-checkpoints 64 --checkpoint-min-step 2048 --cache-reuse 256"},
-		{name: "unified pool", overrides: map[string]string{"kv_unified": "true"}, want: "--kv-unified", emitted: map[string]string{"kv_unified": "on"}},
-		{name: "pool split by slot", overrides: map[string]string{"kv_unified": "off"}, want: "--no-kv-unified", emitted: map[string]string{"kv_unified": "off"}},
-		{name: "idle slots on", overrides: map[string]string{"cache_idle_slots": "on"}, want: "--cache-idle-slots", emitted: map[string]string{"cache_idle_slots": "on"}},
-		{name: "idle slots off", overrides: map[string]string{"cache_idle_slots": "off"}, want: "--no-cache-idle-slots", emitted: map[string]string{"cache_idle_slots": "off"}},
+		{name: "nothing set", want: "--cache-reuse 256", emitted: map[string]string{"cache_reuse": "256", "cache_prompt": "on", "metrics": "true"}},
+		{name: "ram cache and similarity", overrides: map[string]string{"cache_ram": "32768", "slot_prompt_similarity": "0.5"}, want: "--slot-prompt-similarity 0.5 --cache-ram 32768 --cache-reuse 256", emitted: map[string]string{"cache_ram": "32768", "slot_prompt_similarity": "0.5"}},
+		{name: "checkpoints", overrides: map[string]string{"ctx_checkpoints": "64", "checkpoint_min_step": "2048", "cache_reuse": "512"}, want: "--ctx-checkpoints 64 --checkpoint-min-step 2048 --cache-reuse 512"},
+		{name: "reuse off", overrides: map[string]string{"cache_reuse": "0"}, want: "--cache-reuse 0", emitted: map[string]string{"cache_reuse": "0"}},
+		{name: "unified pool", overrides: map[string]string{"kv_unified": "true"}, want: "--kv-unified --cache-reuse 256", emitted: map[string]string{"kv_unified": "on"}},
+		{name: "pool split by slot", overrides: map[string]string{"kv_unified": "off"}, want: "--no-kv-unified --cache-reuse 256", emitted: map[string]string{"kv_unified": "off"}},
+		{name: "idle slots on", overrides: map[string]string{"cache_idle_slots": "on"}, want: "--cache-idle-slots --cache-reuse 256", emitted: map[string]string{"cache_idle_slots": "on"}},
+		{name: "idle slots off", overrides: map[string]string{"cache_idle_slots": "off"}, want: "--no-cache-idle-slots --cache-reuse 256", emitted: map[string]string{"cache_idle_slots": "off"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			params, err := Resolve(rt, c.overrides)
@@ -52,6 +53,9 @@ func TestLlamaCppCacheFlags(t *testing.T) {
 			}
 			if _, ok := cmd.Params["cache_idle_slots"]; ok && c.emitted["cache_idle_slots"] == "" {
 				t.Fatalf("an unset switch is left to llama.cpp, got %v", cmd.Params)
+			}
+			if !strings.Contains(args, " --cache-prompt ") || !strings.Contains(args, " --metrics ") {
+				t.Fatalf("prompt caching and the metrics endpoint are on by default: %q", args)
 			}
 		})
 	}

@@ -18,6 +18,8 @@ const (
 	factNNodes         = "nnodes"
 	factNIXL           = "nixl"
 	factDisaggregation = "disaggregation"
+	// The flag serving the native gRPC services beside HTTP
+	factGRPCPort = "grpc_port"
 )
 
 // The interpreter an install's environment runs: the venv's python beside the binary, the
@@ -224,6 +226,9 @@ func (r VLLM) LaunchSeat(in Launch) (*Command, error) {
 	case v1.Shape_SHAPE_REPLICAS:
 		return r.Launch(exposedLaunch(in))
 	case v1.Shape_SHAPE_CHAIN, v1.Shape_SHAPE_LOCKSTEP:
+		if err := oneRankSeat(in, "data_parallel_size"); err != nil {
+			return nil, err
+		}
 		host, port, err := rendezvousOf(seat)
 		if err != nil {
 			return nil, err
@@ -264,6 +269,9 @@ func (r VLLM) LaunchSeat(in Launch) (*Command, error) {
 		cmd.Params["master"] = seat.GetRendezvous()
 		return cmd, nil
 	case v1.Shape_SHAPE_RELAY:
+		if err := oneRankSeat(in, "data_parallel_size"); err != nil {
+			return nil, err
+		}
 		if seat.GetAuxPort() == 0 {
 			return nil, fmt.Errorf("%w: a relay seat needs a side channel port", ErrParam)
 		}

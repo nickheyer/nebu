@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/nebu/internal/auth"
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 func TestAuthAcceptsTokenOrSession(t *testing.T) {
@@ -15,7 +16,7 @@ func TestAuthAcceptsTokenOrSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := sessions.Cookie(auth.Session{Subject: "u1", Provider: auth.ProviderLocal, Issued: time.Now(), Expires: time.Now().Add(time.Hour)})
+	c, err := sessions.Cookie(auth.Session{Subject: "u1", Provider: auth.ProviderOIDC, Role: v1.Role_ROLE_ADMIN, Issued: time.Now(), Expires: time.Now().Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,20 +25,21 @@ func TestAuthAcceptsTokenOrSession(t *testing.T) {
 	withToken := http.Header{"Authorization": {"Bearer tok"}}
 	withWrong := http.Header{"Authorization": {"Bearer nope"}, "Cookie": {"nebu_session=garbage"}}
 
+	reads := func(g *auth.Guard, h http.Header) bool { return g.Scoped(h, v1.Scope_SCOPE_READ) }
 	both := auth.NewGuard("tok", sessions, nil)
-	if !both.Authenticated(withCookie) || !both.Authenticated(withToken) || both.Authenticated(withWrong) || both.Authenticated(http.Header{}) {
+	if !reads(both, withCookie) || !reads(both, withToken) || reads(both, withWrong) || reads(both, http.Header{}) {
 		t.Fatal("token or session should pass, nothing else")
 	}
 	only := auth.NewGuard("", sessions, nil)
-	if !only.Authenticated(withCookie) || only.Authenticated(withToken) || only.Authenticated(http.Header{}) {
+	if !reads(only, withCookie) || reads(only, withToken) || reads(only, http.Header{}) {
 		t.Fatal("with sessions alone only the cookie passes")
 	}
 	token := auth.NewGuard("tok", nil, nil)
-	if !token.Authenticated(withToken) || token.Authenticated(withCookie) {
+	if !reads(token, withToken) || reads(token, withCookie) {
 		t.Fatal("without sessions the cookie means nothing")
 	}
 	open := auth.NewGuard("", nil, nil)
-	if !open.Authenticated(http.Header{}) {
+	if !reads(open, http.Header{}) {
 		t.Fatal("auth.disabled should pass everything")
 	}
 	// The file download path honors the cookie too

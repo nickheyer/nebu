@@ -16,10 +16,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Starts a seat on this node for a conductor: the seat block gets this node's mesh address, the
-// interface and RDMA devices of the links to its peers, its cache directory, its exposure, the
-// addresses its guard listener admits, and, for the rank the others rendezvous with, the
-// rendezvous address allocated here
+// Starts a conductor's seat here, filling its mesh address, links, cache, exposure, admitted hosts and any rendezvous address
 func (m *Manager) RunSeat(ctx context.Context, conductor string, run *v1.RunRequest) (*v1.Instance, *v1.Task, error) {
 	seat := run.GetSeat()
 	if seat == nil {
@@ -53,8 +50,7 @@ func (m *Manager) RunSeat(ctx context.Context, conductor string, run *v1.RunRequ
 		seat.CacheDir = filepath.Join(m.CacheDir, seat.GetFormationId())
 	}
 	seat.Exposed = m.Mesh.Exposure() == mesh.ExposureDirect
-	// A relay seat's own protocol takes a second port on the mesh address, a side channel or a
-	// bootstrap port, and it saves slot files where the gateway's relay moves them from.
+	// A relay seat takes a second mesh port for its side channel and saves slot files where the relay reads
 	if seat.GetShape() == v1.Shape_SHAPE_RELAY {
 		port, err := m.freePortOn(seat.Address)
 		if err != nil {
@@ -74,7 +70,7 @@ func (m *Manager) RunSeat(ctx context.Context, conductor string, run *v1.RunRequ
 	return m.Instances.Run(ctx, run)
 }
 
-// Whether this seat is the rank the others rendezvous with: the head among the ranks, else rank 0
+// Whether this seat is the rank others rendezvous with, the head among the ranks or else rank 0
 func (m *Manager) rendezvousRank(rt runtimes.Runtime, seat *v1.SeatSpec) bool {
 	for _, r := range rt.Roles(seat.GetShape()) {
 		if r.Rendezvous && r.Head {
@@ -84,8 +80,7 @@ func (m *Manager) rendezvousRank(rt runtimes.Runtime, seat *v1.SeatSpec) bool {
 	return seat.GetRank() == 0
 }
 
-// The address the ranks rendezvous at, on this node's mesh address: the one the seat block names
-// when a relaunch carries it, checked free here, else a free port allocated now
+// The ranks' rendezvous address on this node, the one a relaunch carries checked free, or a newly allocated port
 func (m *Manager) rendezvousAddress(seat *v1.SeatSpec) (string, error) {
 	if seat.GetRendezvous() == "" {
 		port, err := m.freePortOn(seat.GetAddress())
@@ -109,8 +104,7 @@ func (m *Manager) rendezvousAddress(seat *v1.SeatSpec) (string, error) {
 	return seat.GetRendezvous(), nil
 }
 
-// The interface the links to the seat's peers and conductor leave through and the RDMA devices
-// bound on them, from this node's link records
+// The interface and RDMA devices the links to the seat's peers and conductor leave through, from this node's link records
 func (m *Manager) linkFacts(conductor string, seat *v1.SeatSpec) (string, []string) {
 	var others []string
 	seen := map[string]bool{}
@@ -149,9 +143,7 @@ func (m *Manager) linkFacts(conductor string, seat *v1.SeatSpec) (string, []stri
 	return iface, rdma
 }
 
-// The hosts a seat's guard listener admits: the conductor, which connects as the route's gateway
-// and for readiness, and the seats of the roles the runtime says connect to this one. Every one
-// must have a known address, so the guard never admits by guesswork.
+// The hosts a seat's guard admits, the conductor and the connecting roles' seats, each with a known address
 func (m *Manager) admitted(conductor string, role runtimes.Role, seat *v1.SeatSpec) ([]string, error) {
 	var admit []string
 	seen := map[string]bool{}
@@ -184,7 +176,7 @@ func (m *Manager) admitted(conductor string, role runtimes.Role, seat *v1.SeatSp
 	return admit, nil
 }
 
-// The mesh host of a node: this node's own address, or the member's record address
+// The mesh host of a node, this node's own address or the member's record address
 func (m *Manager) nodeHost(id string) (string, error) {
 	if id == m.self() {
 		address := m.Mesh.Address()
@@ -213,7 +205,7 @@ func (m *Manager) GetSeat(instanceID string) (*v1.Instance, error) {
 	return m.Instances.Refresh(instanceID)
 }
 
-// Streams a seat's output: the head when no role is named, from its node
+// Streams a seat's output from its node, the head when no role is named
 func (m *Manager) Logs(ctx context.Context, id, nodeID, role string, follow bool, tail int, send func(node, role string, lines []string) error) error {
 	f, err := m.Get(id)
 	if err != nil {

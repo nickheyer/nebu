@@ -1,0 +1,187 @@
+<script lang="ts">
+  import type { FormEventHandler, KeyboardEventHandler } from 'svelte/elements';
+
+  import type { NeoListSearchProps } from '#lib/neo/list/neo-list-search.model.js';
+  import type { NeoListItemOrSection } from '#lib/neo/list/neo-list.model.js';
+
+  import { getFocusableElement } from '@dvcol/common-utils/common/element';
+  import { debounced } from '@dvcol/svelte-utils/debounce';
+
+  import NeoButton from '#lib/neo/buttons/NeoButton.svelte';
+  import NeoIconAlignBottom from '#lib/neo/icons/NeoIconAlignBottom.svelte';
+  import NeoIconAlignMiddle from '#lib/neo/icons/NeoIconAlignMiddle.svelte';
+  import NeoIconAlignTop from '#lib/neo/icons/NeoIconAlignTop.svelte';
+  import NeoIconSearch from '#lib/neo/icons/NeoIconSearch.svelte';
+  import NeoInput from '#lib/neo/inputs/common/NeoInput.svelte';
+  import { itemLabelSort, itemSearchFilter } from '#lib/neo/list/neo-list-search.model.js';
+  import { Logger } from '#lib/neo/utils/logger.utils.js';
+
+  let {
+    // State
+    tag = 'div',
+    ref = $bindable(),
+    delay = 250,
+    invert = $bindable(),
+    filter = itemSearchFilter,
+    sort = itemLabelSort,
+
+    // List Context
+    context,
+
+    // Input props
+    value = $bindable(),
+    valid = $bindable(),
+    dirty = $bindable(false),
+    touched = $bindable(false),
+    hovered = $bindable(false),
+    focused = $bindable(false),
+    focusin = $bindable(false),
+
+    loading,
+    elevation = 0,
+    hover = 0,
+    blur,
+    rounded,
+    pressed,
+    placeholder = 'Search...',
+    borderless,
+    glass,
+    tinted,
+    color,
+    disabled,
+    readonly,
+    skeleton,
+
+    // Other props
+    inputProps,
+    ...rest
+  }: NeoListSearchProps = $props();
+
+  let typed = $state<string | undefined>(undefined);
+
+  const filterDebounced = debounced({
+    value: () => typed,
+    get delay() {
+      return delay;
+    },
+  });
+
+  $effect(() => {
+    if (filterDebounced.current === undefined) return;
+    if (!context) return Logger.warn('NeoListSearch: No `highlight` context is missing or invalid.', context);
+    context.highlight = filterDebounced.current;
+  });
+
+  const oninput: FormEventHandler<HTMLInputElement> = (e) => {
+    typed = e?.currentTarget?.value ?? '';
+    inputProps?.oninput?.(e);
+  };
+
+  const onkeydown: KeyboardEventHandler<HTMLInputElement> = (e) => {
+    if (e.key !== 'ArrowDown' || !(e.target instanceof HTMLElement)) return;
+    const target = e.target.parentElement?.parentElement?.querySelector('.neo-list-item.neo-list-item-select');
+    if (target) e.preventDefault();
+    getFocusableElement(target)?.focus();
+    inputProps?.onkeydown?.(e);
+  };
+
+  const sortFunction = $derived(sort ? (a: NeoListItemOrSection, b: NeoListItemOrSection) => sort(a, b, invert) : undefined);
+  const onclick: FormEventHandler<HTMLButtonElement> = () => {
+    if (!context) return;
+    if (invert === false) {
+      context.sort = () => 0;
+      invert = undefined;
+      return;
+    }
+    if (context.sort !== sortFunction) context.sort = sortFunction;
+    invert = !invert;
+  };
+  const title = $derived.by(() => {
+    if (invert === undefined) return 'Initial sorting order';
+    return invert ? 'Alphabetical order (descending)' : 'Alphabetical order (ascending)';
+  });
+
+  const filterFunction = $derived((item: NeoListItemOrSection) => filter(item, context?.highlight));
+  $effect(() => {
+    if (!context || context?.filter === filterFunction) return;
+    context.filter = filterFunction;
+  });
+</script>
+
+{#snippet before()}
+  <NeoIconSearch size="1.25rem" />
+{/snippet}
+
+{#snippet after()}
+  <NeoButton text rounded {title} aria-label="Change sorting order" {onclick}>
+    {#snippet icon()}
+      {#if invert === undefined}
+        <NeoIconAlignMiddle size="1.25rem" stroke="1.5" />
+      {:else if invert}
+        <NeoIconAlignBottom />
+      {:else}
+        <NeoIconAlignTop />
+      {/if}
+    {/snippet}
+  </NeoButton>
+{/snippet}
+
+<svelte:element this={tag} class:neo-list-search={true} class:neo-flip={context?.flip} class:neo-rounded={rounded} {...rest}>
+  <NeoInput
+    bind:ref
+    bind:value
+    bind:valid
+    bind:dirty
+    bind:touched
+    bind:hovered
+    bind:focused
+    bind:focusin
+    type="search"
+    size={1}
+    clearable
+    {placeholder}
+    {oninput}
+    {elevation}
+    {hover}
+    {blur}
+    {rounded}
+    {pressed}
+    {borderless}
+    {glass}
+    {tinted}
+    {color}
+    {disabled}
+    {readonly}
+    loading={loading ?? context?.loading}
+    {skeleton}
+    {before}
+    after={sort ? after : undefined}
+    {onkeydown}
+    {...inputProps}
+    containerProps={{
+      ...inputProps?.containerProps,
+      class: ['neo-list-search-input', inputProps?.containerProps?.class],
+    }}
+  />
+</svelte:element>
+
+<style lang="scss">
+  @use '../styles/layers' as layers;
+
+  @include layers.neo-components {
+    .neo-list-search {
+      display: inline-flex;
+      flex-direction: column;
+
+      // keep: order
+      &:not(.neo-flip) :global(> .neo-list-search-input) {
+        margin-bottom: 0;
+      }
+
+      &.neo-flip :global(.neo-list-search-input) {
+        margin-top: 0;
+      }
+    }
+
+  }
+</style>

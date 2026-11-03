@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "nebu/v1/gateway.proto";
 import "nebu/v1/recipe.proto";
 import "nebu/v1/source.proto";
@@ -44,6 +45,44 @@ message Store {
   uint64 max_bytes = 1;
 }
 
+// Queueing, shedding and saturation thresholds of the gateway's flow control
+message FlowControl {
+  // Requests a pool holds queued across its bands before a lower band is displaced or the arrival refused
+  uint32 queue_capacity = 1 [(buf.validate.field).uint32.gte = 1];
+  // Longest wait in a queue before the request is refused
+  uint32 queue_timeout_ms = 2 [(buf.validate.field).uint32.gte = 1];
+  // Bands at or below this priority are shed instead of queued under saturation
+  int32 sheddable_below = 3 [(buf.validate.field).int32 = {
+    gte: -1001
+    lte: 1000
+  }];
+  // Requests waiting on an endpoint at which it counts as saturated
+  uint32 saturation_queue_depth = 4 [(buf.validate.field).uint32.gte = 1];
+  // KV cache utilization from zero to one at which an endpoint counts as saturated
+  double saturation_kv_utilization = 5 [(buf.validate.field).double = {
+    gt: 0
+    lte: 1
+  }];
+  // Age past which scraped endpoint metrics no longer count
+  uint32 metrics_staleness_ms = 6 [(buf.validate.field).uint32.gte = 1];
+  // The quota of every fairness id without one of its own
+  Quota quota = 7;
+  // Quotas per fairness id, replacing the default
+  map<string, Quota> quotas = 8;
+}
+
+// Tokens and requests one fairness id may use per window, zero limits meaning unlimited
+message Quota {
+  option (buf.validate.message).cel = {
+    id: "quota_window"
+    message: "window_ms must be set when tokens or requests are limited"
+    expression: "(this.tokens == 0u && this.requests == 0u) || this.window_ms > 0u"
+  };
+  uint64 tokens = 1;
+  uint64 requests = 2;
+  uint32 window_ms = 3;
+}
+
 // OpenAI compatible gateway settings
 message Gateway {
   string listen = 1;
@@ -54,6 +93,37 @@ message Gateway {
   Policy policy = 5;
   // Allowed browser origins. Empty allows any origin.
   repeated string cors_origins = 6;
+  FlowControl flow_control = 7;
+  // How long persisted request traces are kept, such as 168h
+  string trace_retention = 8 [(buf.validate.field).string.min_len = 1];
+  // Recent traces kept in memory for listing
+  uint32 trace_ring = 9 [(buf.validate.field).uint32 = {
+    gte: 1
+    lte: 1000000
+  }];
+  // Output tokens counted for a request that sets no bound
+  uint32 default_output_tokens = 10 [(buf.validate.field).uint32.gte = 1];
+  // Path of a YAML document ordering the request control plugins, the built in chain when empty
+  string request_chain = 11;
+}
+
+// OpenTelemetry tracing of gateway requests
+message Telemetry {
+  // Host and port of an OTLP HTTP collector, spans kept in memory alone when empty
+  string endpoint = 1;
+  // Sends plain HTTP to the collector instead of HTTPS
+  bool insecure = 2;
+  // Fraction of requests traced, from zero to one
+  double sample_ratio = 3 [(buf.validate.field).double = {
+    gte: 0
+    lte: 1
+  }];
+}
+
+// A listener serving metrics, liveness and readiness alone
+message Metrics {
+  // Address the listener binds, none when empty
+  string listen = 1;
 }
 
 // External failure notifications.
@@ -62,10 +132,13 @@ message Notify {
   repeated string webhooks = 1;
 }
 
-// Certificate for the API and gateway listeners, plain HTTP when unset
+// Certificate for the API, gateway and metrics listeners, generated when unset and plain HTTP when disabled
 message Tls {
+  // A self-signed pair generated in data_dir when both are empty and disabled is false
   string cert_file = 1;
   string key_file = 2;
+  // Serves the API, gateway and metrics listeners in plaintext
+  bool disabled = 3;
 }
 
 // Single sign-on through an OpenID Connect provider. Any provider with a
@@ -91,6 +164,9 @@ message Oidc {
   repeated string allowed_groups = 10;
   // Claim listing the user's groups, dotted for nested claims such as realm_access.roles. groups when empty.
   string groups_claim = 11;
+  // Groups whose members sign in as admins, then as operators. Everyone else signs in with the inference role
+  repeated string admin_groups = 12;
+  repeated string operator_groups = 13;
 }
 
 // API listener and web UI authentication. On by default: browsers sign in with a
@@ -142,10 +218,27 @@ message MeshConfig {
   string exposure = 4;
   // Ports seats, guards, and rendezvous take on the mesh address, as from-to, for a host behind a port map
   string ports = 5;
+  // full, every member syncing with a log fan-out of the others, hub, or spoke, syncing with the hubs alone
+  string topology = 6 [(buf.validate.field).string = {in: ["", "full", "hub", "spoke"]}];
+  // Members spokes sync with, by id or name
+  repeated string hubs = 7;
+  // push-pull, push, or pull, what a sync carries and takes
+  string sync = 8 [(buf.validate.field).string = {in: ["", "push-pull", "push", "pull"]}];
+  // endpoint, routing straight to exported endpoints the exporter's scheduler picks, or parent, through the exporter's gateway
+  string routing_mode = 9 [(buf.validate.field).string = {in: ["", "endpoint", "parent"]}];
+  // Routing mode per imported pool id, over routing_mode
+  map<string, string> import_routing = 10 [(buf.validate.field).map.values.string = {in: ["endpoint", "parent"]}];
+}
+
+// The out of process scheduler listener this daemon serves its schedulers on
+message Scheduler {
+  // Address the scheduler listener binds, none when empty
+  string listen = 1;
 }
 
 // Daemon and client configuration
 message Config {
+  reserved 5, 14;
   string listen = 1;
   string addr = 2;
   string data_dir = 3;
@@ -165,4 +258,7 @@ message Config {
   Notify notify = 19;
   Discord discord = 20;
   MeshConfig mesh = 21;
+  Telemetry telemetry = 22;
+  Metrics metrics = 23;
+  Scheduler scheduler = 24;
 }

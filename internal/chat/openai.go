@@ -3,8 +3,10 @@ package chat
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -17,243 +19,12 @@ const (
 	OpenAIImages      = "/v1/images/generations"
 	OpenAIEdits       = "/v1/images/edits"
 	OpenAIVideos      = "/v1/videos"
-	// The tokenizer endpoint llama.cpp, vLLM, and SGLang share
+	// The tokenizer endpoint llama.cpp and vLLM share
 	openaiTokenize = "/tokenize"
 )
 
 // The OpenAI chat completions protocol
 type openai struct{}
-
-type oaiMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	ToolCalls  []oaiToolCall   `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	// Reasoning under the llama.cpp name and the newer vLLM name
-	ReasoningContent string                     `json:"reasoning_content,omitempty"`
-	Reasoning        string                     `json:"reasoning,omitempty"`
-	Extra            map[string]json.RawMessage `json:"-"`
-}
-
-// The reasoning a message carries under either name
-func (m *oaiMessage) reasoning() string {
-	if m.ReasoningContent != "" {
-		return m.ReasoningContent
-	}
-	return m.Reasoning
-}
-
-func (m *oaiMessage) UnmarshalJSON(data []byte) error {
-	type plain oaiMessage
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*m = oaiMessage(p)
-	m.Extra = extraFields(data, plain{})
-	return nil
-}
-
-func (m oaiMessage) MarshalJSON() ([]byte, error) {
-	type plain oaiMessage
-	return withExtra(plain(m), m.Extra)
-}
-
-type oaiToolCall struct {
-	Index    *int   `json:"index,omitempty"`
-	ID       string `json:"id,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Function struct {
-		Name      string `json:"name,omitempty"`
-		Arguments string `json:"arguments,omitempty"`
-	} `json:"function"`
-}
-
-// A content part, text or an image URL
-type oaiPart struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	ImageURL *struct {
-		URL string `json:"url"`
-	} `json:"image_url,omitempty"`
-	Extra map[string]json.RawMessage `json:"-"`
-}
-
-func (p *oaiPart) UnmarshalJSON(data []byte) error {
-	type plain oaiPart
-	var v plain
-	if err := json.Unmarshal(data, &v); err != nil {
-		return err
-	}
-	*p = oaiPart(v)
-	p.Extra = extraFields(data, plain{})
-	return nil
-}
-
-// Writes the field its type calls for, so a text part always carries text
-func (p oaiPart) MarshalJSON() ([]byte, error) {
-	fields := map[string]any{"type": p.Type}
-	switch p.Type {
-	case "text":
-		fields["text"] = p.Text
-	case "image_url":
-		fields["image_url"] = p.ImageURL
-	}
-	return withExtra(fields, p.Extra)
-}
-
-type oaiRequest struct {
-	Model               string          `json:"model"`
-	Messages            []oaiMessage    `json:"messages,omitempty"`
-	Prompt              json.RawMessage `json:"prompt,omitempty"`
-	Input               json.RawMessage `json:"input,omitempty"`
-	MaxTokens           int             `json:"max_tokens,omitempty"`
-	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
-	Temperature         *float64        `json:"temperature,omitempty"`
-	TopP                *float64        `json:"top_p,omitempty"`
-	Stop                json.RawMessage `json:"stop,omitempty"`
-	Stream              bool            `json:"stream,omitempty"`
-	StreamOptions       *struct {
-		IncludeUsage bool `json:"include_usage"`
-	} `json:"stream_options,omitempty"`
-	Tools      []oaiTool                  `json:"tools,omitempty"`
-	ToolChoice json.RawMessage            `json:"tool_choice,omitempty"`
-	Extra      map[string]json.RawMessage `json:"-"`
-}
-
-func (r *oaiRequest) UnmarshalJSON(data []byte) error {
-	type plain oaiRequest
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*r = oaiRequest(p)
-	r.Extra = extraFields(data, plain{})
-	return nil
-}
-
-func (r oaiRequest) MarshalJSON() ([]byte, error) {
-	type plain oaiRequest
-	return withExtra(plain(r), r.Extra)
-}
-
-type oaiFunction struct {
-	Name        string                     `json:"name"`
-	Description string                     `json:"description,omitempty"`
-	Parameters  json.RawMessage            `json:"parameters,omitempty"`
-	Strict      *bool                      `json:"strict,omitempty"`
-	Extra       map[string]json.RawMessage `json:"-"`
-}
-
-func (f *oaiFunction) UnmarshalJSON(data []byte) error {
-	type plain oaiFunction
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*f = oaiFunction(p)
-	f.Extra = extraFields(data, plain{})
-	return nil
-}
-
-func (f oaiFunction) MarshalJSON() ([]byte, error) {
-	type plain oaiFunction
-	return withExtra(plain(f), f.Extra)
-}
-
-type oaiTool struct {
-	Type     string                     `json:"type"`
-	Function oaiFunction                `json:"function"`
-	Extra    map[string]json.RawMessage `json:"-"`
-}
-
-func (t *oaiTool) UnmarshalJSON(data []byte) error {
-	type plain oaiTool
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*t = oaiTool(p)
-	t.Extra = extraFields(data, plain{})
-	return nil
-}
-
-func (t oaiTool) MarshalJSON() ([]byte, error) {
-	type plain oaiTool
-	return withExtra(plain(t), t.Extra)
-}
-
-type oaiUsage struct {
-	PromptTokens        int               `json:"prompt_tokens"`
-	CompletionTokens    int               `json:"completion_tokens"`
-	TotalTokens         int               `json:"total_tokens"`
-	PromptTokensDetails *oaiPromptDetails `json:"prompt_tokens_details,omitempty"`
-}
-
-// Cached prompt tokens, as llama.cpp, vllm and sglang report them
-type oaiPromptDetails struct {
-	CachedTokens int `json:"cached_tokens"`
-}
-
-func (u oaiUsage) cached() int {
-	if u.PromptTokensDetails == nil {
-		return 0
-	}
-	return u.PromptTokensDetails.CachedTokens
-}
-
-func oaiUsageOf(u Usage) *oaiUsage {
-	out := &oaiUsage{PromptTokens: u.In, CompletionTokens: u.Out, TotalTokens: u.In + u.Out}
-	if u.Cached > 0 {
-		out.PromptTokensDetails = &oaiPromptDetails{CachedTokens: u.Cached}
-	}
-	return out
-}
-
-type oaiChoice struct {
-	Index        int         `json:"index"`
-	Message      *oaiMessage `json:"message,omitempty"`
-	Delta        *oaiMessage `json:"delta,omitempty"`
-	Text         string      `json:"text,omitempty"`
-	FinishReason *string     `json:"finish_reason"`
-}
-
-// Per request timings a llama.cpp server adds, with the speculative decoding counters
-type oaiTimings struct {
-	DraftN         int `json:"draft_n"`
-	DraftNAccepted int `json:"draft_n_accepted"`
-}
-
-type oaiResponse struct {
-	ID      string      `json:"id"`
-	Object  string      `json:"object"`
-	Created int64       `json:"created"`
-	Model   string      `json:"model"`
-	Choices []oaiChoice `json:"choices"`
-	Usage   *oaiUsage   `json:"usage,omitempty"`
-	Timings *oaiTimings `json:"timings,omitempty"`
-	Data    []struct {
-		Embedding []float64 `json:"embedding"`
-	} `json:"data,omitempty"`
-	Extra map[string]json.RawMessage `json:"-"`
-}
-
-func (r *oaiResponse) UnmarshalJSON(data []byte) error {
-	type plain oaiResponse
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*r = oaiResponse(p)
-	r.Extra = extraFields(data, plain{})
-	return nil
-}
-
-func (r oaiResponse) MarshalJSON() ([]byte, error) {
-	type plain oaiResponse
-	return withExtra(plain(r), r.Extra)
-}
 
 func (openai) Endpoint(path string) Kind {
 	switch path {
@@ -278,18 +49,24 @@ func (openai) Parse(path string, body []byte) (*Request, error) {
 		return parseResponses(body)
 	}
 	var req oaiRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := decodeRequest(body, req.read); err != nil {
 		return nil, bad("%v", err)
 	}
-	c := &Request{Kind: Chat, Model: req.Model, MaxTokens: max(req.MaxTokens, req.MaxCompletionTokens), Temperature: req.Temperature, TopP: req.TopP, Stop: strs(req.Stop), Stream: req.Stream, Extra: req.Extra}
-	c.IncludeUsage = req.Stream && req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+	c := &Request{Kind: Chat, Model: req.Model, MaxTokens: req.MaxTokens, Temperature: req.Temperature, TopP: req.TopP, TopK: req.TopK, N: req.N, Stop: req.Stop, Stream: req.Stream, Extra: req.Extra, Origin: originOf(path, body, req.model, req.Model)}
+	c.IncludeUsage = req.Stream && req.IncludeUsage
 	switch path {
 	case OpenAIEmbeddings:
-		c.Kind, c.Inputs = Embed, strs(req.Input)
+		c.Kind, c.Inputs = Embed, req.Input
 		return c, nil
 	case OpenAICompletions:
-		c.Kind = Generate
-		c.Messages = []Message{{Role: "user", Parts: []Part{{Type: "text", Text: strings.Join(strs(req.Prompt), "")}}}}
+		c.Kind, c.Raw = Generate, true
+		prompts := req.Prompt
+		if len(prompts) == 0 {
+			prompts = []Part{{Type: "text"}}
+		}
+		for _, p := range prompts {
+			c.Messages = append(c.Messages, Message{Role: "user", Parts: []Part{p}})
+		}
 		return c, nil
 	}
 	for _, m := range req.Messages {
@@ -306,54 +83,33 @@ func (openai) Parse(path string, body []byte) (*Request, error) {
 		}
 		msg.Parts = append(msg.Parts, parts...)
 		for _, t := range m.ToolCalls {
-			msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: t.ID, Name: t.Function.Name, Args: t.Function.Arguments})
+			msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: t.ID, Name: t.Name, Args: t.Arguments})
 		}
 		c.Messages = append(c.Messages, msg)
 	}
 	c.Tools = toolsFromOAI(req.Tools)
-	if len(req.ToolChoice) > 0 {
-		var s string
-		if json.Unmarshal(req.ToolChoice, &s) == nil {
-			c.ToolChoice = s
-		} else {
-			var named struct {
-				Function struct {
-					Name string `json:"name"`
-				} `json:"function"`
-			}
-			json.Unmarshal(req.ToolChoice, &named)
-			c.ToolChoice = named.Function.Name
-		}
-	}
+	c.ToolChoice = req.ToolChoice
 	return c, nil
 }
 
-// Reads message content as a string or a list of text and image parts, any other part refused by name
-func oaiParts(raw json.RawMessage) ([]Part, error) {
-	if len(raw) == 0 || string(raw) == "null" {
+// Reads message content as text and image parts, any other part refused by name
+func oaiParts(content *oaiContent) ([]Part, error) {
+	if content == nil {
 		return nil, nil
 	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		if text == "" {
+	if !content.List {
+		if content.Text == "" {
 			return nil, nil
 		}
-		return []Part{{Type: "text", Text: text}}, nil
-	}
-	var list []oaiPart
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, bad("message content must be a string or a list of parts")
+		return []Part{{Type: "text", Text: content.Text}}, nil
 	}
 	var out []Part
-	for _, p := range list {
+	for _, p := range content.Parts {
 		switch p.Type {
 		case "text":
 			out = append(out, Part{Type: "text", Text: p.Text, Extra: p.Extra})
 		case "image_url":
-			part := Part{Type: "image", Extra: p.Extra}
-			if p.ImageURL != nil {
-				part.URL = p.ImageURL.URL
-			}
+			part := Part{Type: "image", URL: p.URL, Detail: p.Detail, Extra: p.Extra}
 			if mt, data, ok := DataURL(part.URL); ok {
 				part.MediaType, part.Data, part.URL = mt, data, ""
 			}
@@ -366,7 +122,7 @@ func oaiParts(raw json.RawMessage) ([]Part, error) {
 }
 
 // Renders parts, a bare string for one plain text part and a part list otherwise
-func oaiContent(parts []Part) json.RawMessage {
+func oaiContentOf(parts []Part) *oaiContent {
 	var list []oaiPart
 	for _, p := range parts {
 		switch p.Type {
@@ -377,20 +133,16 @@ func oaiContent(parts []Part) json.RawMessage {
 			if url == "" {
 				url = "data:" + p.MediaType + ";base64," + p.Data
 			}
-			list = append(list, oaiPart{Type: "image_url", ImageURL: &struct {
-				URL string `json:"url"`
-			}{url}, Extra: p.Extra})
+			list = append(list, oaiPart{Type: "image_url", URL: url, Detail: p.Detail, Extra: p.Extra})
 		}
 	}
 	if len(list) == 0 {
-		return json.RawMessage(`""`)
+		return &oaiContent{}
 	}
 	if len(list) == 1 && list[0].Type == "text" && len(list[0].Extra) == 0 {
-		out, _ := json.Marshal(list[0].Text)
-		return out
+		return &oaiContent{Text: list[0].Text}
 	}
-	out, _ := json.Marshal(list)
-	return out
+	return &oaiContent{Parts: list, List: true}
 }
 
 // OpenAI tool definitions, which Ollama shares
@@ -413,9 +165,7 @@ func toolsToOAI(tools []Tool) ([]oaiTool, error) {
 		if t.Type != "" && t.Type != "custom" {
 			return nil, bad("tool %s has type %s, and the runtime accepts only tools defined by a schema", t.Name, t.Type)
 		}
-		tool := oaiTool{Type: "function", Extra: t.Extra}
-		tool.Function = oaiFunction{Name: t.Name, Description: t.Description, Parameters: t.Schema, Strict: t.Strict}
-		out = append(out, tool)
+		out = append(out, oaiTool{Type: "function", Function: oaiFunction{Name: t.Name, Description: t.Description, Parameters: t.Schema, Strict: t.Strict}, Extra: t.Extra})
 	}
 	return out, nil
 }
@@ -424,69 +174,63 @@ func toolsToOAI(tools []Tool) ([]oaiTool, error) {
 func oaiCalls(calls []ToolCall) []oaiToolCall {
 	var out []oaiToolCall
 	for _, t := range calls {
-		tc := oaiToolCall{ID: t.ID, Type: "function"}
-		tc.Function.Name, tc.Function.Arguments = t.Name, t.Args
-		out = append(out, tc)
+		out = append(out, oaiToolCall{ID: t.ID, Type: "function", Name: t.Name, Arguments: t.Args})
 	}
 	return out
 }
 
-// Reads an error a runtime put in a 200 body or stream chunk, an object, a string, or vLLM's shape
-func oaiFailure(data []byte) string {
-	var body struct {
-		Error   json.RawMessage `json:"error"`
-		Object  string          `json:"object"`
-		Message string          `json:"message"`
+// The body a request renders to, sized to the client's body when there is one
+func renderBuffer(c *Request) []byte {
+	n := 512
+	if c.Origin != nil {
+		n += len(c.Origin.Body) + len(c.Origin.Body)/8
 	}
-	if json.Unmarshal(data, &body) != nil {
-		return ""
-	}
-	if len(body.Error) > 0 && string(body.Error) != "null" {
-		var text string
-		if json.Unmarshal(body.Error, &text) == nil && text != "" {
-			return text
-		}
-		if message := errorField(data); message != "" {
-			return message
-		}
-		return strings.TrimSpace(string(body.Error))
-	}
-	if body.Object == "error" {
-		if body.Message != "" {
-			return body.Message
-		}
-		return strings.TrimSpace(string(data))
-	}
-	return ""
+	return make([]byte, 0, n)
 }
 
 func (openai) Render(c *Request) (string, []byte, error) {
+	if err := translatable(c); err != nil {
+		return "", nil, err
+	}
+	b := renderBuffer(c)
 	if c.Kind == Count {
 		text := promptText(c)
-		data, err := json.Marshal(map[string]any{"model": c.Model, "content": text, "prompt": text})
-		return openaiTokenize, data, err
+		o := begin(&b)
+		o.str("model", c.Model)
+		o.str("content", text)
+		o.str("prompt", text)
+		o.close(nil)
+		return openai{}.Traits().TokenizePath, b, nil
 	}
-	req := oaiRequest{Model: c.Model, MaxTokens: c.MaxTokens, Temperature: c.Temperature, TopP: c.TopP, Stream: c.Stream, Extra: c.Extra}
-	if len(c.Stop) > 0 {
-		req.Stop, _ = json.Marshal(c.Stop)
+	req := oaiRequest{Model: c.Model, MaxTokens: c.MaxTokens, Temperature: c.Temperature, TopP: c.TopP, TopK: c.TopK, N: c.N, Stop: c.Stop, Stream: c.Stream, Extra: c.Extra}
+	switch {
+	case c.Kind == Embed:
+		req.Input, req.Stream = c.Inputs, false
+		if req.Input == nil {
+			req.Input = []Part{}
+		}
+		req.appendTo(&b)
+		return OpenAIEmbeddings, b, nil
+	case c.Kind == Generate && c.Raw:
+		prompts, err := rawPrompts(c)
+		if err != nil {
+			return "", nil, err
+		}
+		req.Prompt, req.IncludeUsage = prompts, c.Stream
+		req.appendTo(&b)
+		return OpenAICompletions, b, nil
 	}
-	if c.Kind == Embed {
-		req.Input, _ = json.Marshal(c.Inputs)
-		req.Stream = false
-		data, err := json.Marshal(req)
-		return OpenAIEmbeddings, data, err
-	}
-	if c.Stream {
-		req.StreamOptions = &struct {
-			IncludeUsage bool `json:"include_usage"`
-		}{true}
-	}
+	req.IncludeUsage = c.Stream
+	req.Messages = make([]oaiMessage, 0, len(c.Messages))
 	// Tool turns carry text only, their images following the run of tool turns as a user turn
 	var held []Part
 	for i, m := range c.Messages {
+		if hasTokens(m.Parts) {
+			return "", nil, bad("a chat turn carries text, not token ids")
+		}
 		msg := oaiMessage{Role: m.Role, ToolCallID: m.ToolID, Extra: m.Extra}
 		if m.Role == "tool" {
-			msg.Content, _ = json.Marshal(TextOf(m.Parts))
+			msg.Content = &oaiContent{Text: TextOf(m.Parts)}
 			req.Messages = append(req.Messages, msg)
 			for _, p := range m.Parts {
 				if p.Type == "image" {
@@ -494,12 +238,12 @@ func (openai) Render(c *Request) (string, []byte, error) {
 				}
 			}
 			if len(held) > 0 && (i+1 == len(c.Messages) || c.Messages[i+1].Role != "tool") {
-				req.Messages = append(req.Messages, oaiMessage{Role: "user", Content: oaiContent(held)})
+				req.Messages = append(req.Messages, oaiMessage{Role: "user", Content: oaiContentOf(held)})
 				held = nil
 			}
 			continue
 		}
-		msg.Content = oaiContent(m.Parts)
+		msg.Content = oaiContentOf(m.Parts)
 		if m.Role == "assistant" {
 			msg.ReasoningContent = thinkingOf(m.Parts)
 		}
@@ -510,16 +254,31 @@ func (openai) Render(c *Request) (string, []byte, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	req.Tools = tools
-	switch c.ToolChoice {
-	case "":
-	case "auto", "none", "required":
-		req.ToolChoice, _ = json.Marshal(c.ToolChoice)
-	default:
-		req.ToolChoice, _ = json.Marshal(map[string]any{"type": "function", "function": map[string]any{"name": c.ToolChoice}})
+	req.Tools, req.ToolChoice = tools, c.ToolChoice
+	req.appendTo(&b)
+	return OpenAIChat, b, nil
+}
+
+// The prompts of a raw Generate request, one per user turn, each its own element
+func rawPrompts(c *Request) ([]Part, error) {
+	if len(c.Tools) > 0 {
+		return nil, bad("a raw prompt cannot offer tools")
 	}
-	data, err := json.Marshal(req)
-	return OpenAIChat, data, err
+	out := make([]Part, 0, len(c.Messages))
+	for _, m := range c.Messages {
+		if m.Role != "user" {
+			return nil, bad("a raw prompt is written as is, with no %s turn around it", m.Role)
+		}
+		switch {
+		case len(m.Parts) == 1 && m.Parts[0].Type == "tokens":
+			out = append(out, m.Parts[0])
+		case slices.ContainsFunc(m.Parts, func(p Part) bool { return p.Type != "text" }):
+			return nil, bad("a raw prompt holds text or one list of token ids")
+		default:
+			out = append(out, Part{Type: "text", Text: TextOf(m.Parts)})
+		}
+	}
+	return out, nil
 }
 
 func oaiStop(reason string) string {
@@ -546,158 +305,393 @@ func oaiReason(stop string) string {
 	return "stop"
 }
 
+// Reads a tokenizer's answer, a count or the list of tokens
+func countOf(body []byte) (int, error) {
+	count, tokens, listed := 0, 0, false
+	err := decode(body, func(s *scan) error {
+		return s.object(func(k []byte) error {
+			var err error
+			switch string(k) {
+			case "count":
+				count, err = s.integer()
+			case "tokens":
+				listed = s.peek() == '['
+				err = s.array(func() error {
+					tokens++
+					return s.skip()
+				})
+			default:
+				err = s.skip()
+			}
+			return err
+		})
+	})
+	if err != nil {
+		return 0, malformed(err)
+	}
+	if count == 0 && !listed {
+		return 0, bad("the tokenizer answered without a count")
+	}
+	return max(count, tokens), nil
+}
+
 func (openai) ParseResult(c *Request, body []byte) (*Result, error) {
 	if c.Kind == Count {
-		var count struct {
-			Count  int               `json:"count"`
-			Tokens []json.RawMessage `json:"tokens"`
-		}
-		if err := json.Unmarshal(body, &count); err != nil {
+		n, err := countOf(body)
+		if err != nil {
 			return nil, err
 		}
-		if count.Count == 0 && count.Tokens == nil {
-			return nil, bad("the tokenizer answered without a count")
-		}
-		return &Result{Model: c.Model, Usage: Usage{In: max(count.Count, len(count.Tokens))}}, nil
+		return &Result{Model: c.Model, Usage: Usage{In: n}}, nil
 	}
-	if message := oaiFailure(body); message != "" {
+	var a oaiAnswer
+	if err := decode(body, a.read); err != nil {
+		return nil, malformed(err)
+	}
+	if message := a.failure(body); message != "" {
 		return nil, &Failure{Status: http.StatusBadGateway, Message: message}
 	}
-	var resp oaiResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, err
+	if resp := a.responseObject(); resp != nil {
+		return resp.result(), nil
 	}
-	r := &Result{ID: resp.ID, Model: resp.Model, Extra: resp.Extra}
-	if resp.Usage != nil {
-		r.Usage.In, r.Usage.Out, r.Usage.Cached = resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.cached()
-	}
-	if resp.Timings != nil {
-		r.Usage.DraftOffered, r.Usage.DraftAccepted = resp.Timings.DraftN, resp.Timings.DraftNAccepted
-	}
-	for _, d := range resp.Data {
-		r.Vectors = append(r.Vectors, d.Embedding)
-	}
-	if len(resp.Choices) > 0 {
-		ch := resp.Choices[0]
-		r.Text = ch.Text
-		if ch.Message != nil {
-			json.Unmarshal(ch.Message.Content, &r.Text)
-			r.Thinking = ch.Message.reasoning()
-			for _, t := range ch.Message.ToolCalls {
-				r.ToolCalls = append(r.ToolCalls, ToolCall{ID: t.ID, Name: t.Function.Name, Args: t.Function.Arguments})
+	byIndex := map[int]*Result{}
+	for _, ch := range a.Choices {
+		r := &Result{Choice: ch.Index, Text: ch.Text, TokenIDs: ch.TokenIDs, PromptTokenIDs: ch.PromptTokenIDs}
+		if m := ch.Message; m != nil {
+			r.Text, r.Thinking = m.Content.text(), m.reasoning()
+			for _, t := range m.ToolCalls {
+				r.ToolCalls = append(r.ToolCalls, ToolCall{ID: t.ID, Name: t.Name, Args: t.Arguments})
 			}
 		}
 		if ch.FinishReason != nil {
 			r.Stop = oaiStop(*ch.FinishReason)
 		}
+		r.Stop = StopOf(r.Stop, len(r.ToolCalls))
+		byIndex[ch.Index] = r
+	}
+	r := choices(byIndex)
+	r.ID, r.Model, r.Vectors, r.Extra, r.Usage = a.ID, a.Model, a.Data, a.Extra, a.usage()
+	if a.PromptTokenIDs != nil {
+		r.PromptTokenIDs = a.PromptTokenIDs
 	}
 	r.Stop = StopOf(r.Stop, len(r.ToolCalls))
 	return r, nil
 }
 
-// A whole answer in the OpenAI shape
-func (openai) renderResult(c *Request, r *Result) ([]byte, error) {
-	if c.Kind == Embed {
-		data := make([]map[string]any, 0, len(r.Vectors))
-		for i, v := range r.Vectors {
-			data = append(data, map[string]any{"object": "embedding", "index": i, "embedding": v})
+// The tokens an answer reports, cached ones from the usage details or llama.cpp's timings
+func (a *oaiAnswer) usage() Usage {
+	var u Usage
+	if a.Usage != nil {
+		u.In, u.Out, u.Cached = a.Usage.In, a.Usage.Out, a.Usage.Cached
+	}
+	if t := a.Timings; t != nil {
+		u.DraftOffered, u.DraftAccepted = t.DraftN, t.DraftNAccepted
+		if u.Cached == 0 {
+			u.Cached = t.CacheN
 		}
-		return withExtra(map[string]any{"object": "list", "data": data, "model": r.Model, "usage": oaiUsage{PromptTokens: r.Usage.In, TotalTokens: r.Usage.In}}, r.Extra)
 	}
-	resp := oaiResponse{ID: resultID(r, "chatcmpl"), Object: "chat.completion", Created: time.Now().Unix(), Model: r.Model, Usage: oaiUsageOf(r.Usage), Extra: r.Extra}
-	reason := oaiReason(r.Stop)
+	return u
+}
+
+// Adds a chunk's usage to what the stream has reported, later counts replacing earlier ones
+func (u *Usage) update(from Usage, usage, timings bool) {
+	if usage {
+		u.In, u.Out = from.In, from.Out
+		if from.Cached > 0 {
+			u.Cached = from.Cached
+		}
+	}
+	if timings {
+		u.DraftOffered, u.DraftAccepted = from.DraftOffered, from.DraftAccepted
+		if from.Cached > 0 {
+			u.Cached = from.Cached
+		}
+	}
+}
+
+// A whole answer in the OpenAI shape, every choice in its slot
+func (openai) renderResult(c *Request, r *Result) ([]byte, error) {
+	b := make([]byte, 0, 512+len(r.Text))
+	if c.Kind == Embed {
+		o := begin(&b)
+		o.str("object", "list")
+		o.key("data")
+		b = append(b, '[')
+		for i, v := range r.Vectors {
+			if i > 0 {
+				b = append(b, ',')
+			}
+			e := begin(&b)
+			e.str("object", "embedding")
+			e.num("index", i)
+			e.key("embedding")
+			appendVector(&b, v)
+			e.close(nil)
+		}
+		b = append(b, ']')
+		o.str("model", r.Model)
+		o.key("usage")
+		u := begin(&b)
+		u.num("prompt_tokens", r.Usage.In)
+		u.num("completion_tokens", 0)
+		u.num("total_tokens", r.Usage.In)
+		u.close(nil)
+		o.close(r.Extra)
+		return b, nil
+	}
+	reply := oaiReply{ID: resultID(r, "chatcmpl"), Object: "chat.completion", Created: time.Now().Unix(), Model: r.Model, Usage: &r.Usage, Extra: r.Extra, PromptTokenIDs: r.PromptTokenIDs}
 	if c.Kind == Generate {
-		resp.Object = "text_completion"
-		resp.Choices = []oaiChoice{{Text: r.Text, FinishReason: &reason}}
-		return json.Marshal(resp)
+		reply.Object, reply.PromptTokenIDs = "text_completion", nil
 	}
-	msg := &oaiMessage{Role: "assistant", ReasoningContent: r.Thinking, ToolCalls: oaiCalls(r.ToolCalls)}
-	msg.Content, _ = json.Marshal(r.Text)
-	resp.Choices = []oaiChoice{{Message: msg, FinishReason: &reason}}
-	return json.Marshal(resp)
+	for _, ch := range r.All() {
+		reason := oaiReason(ch.Stop)
+		choice := oaiReplyChoice{Index: ch.Choice, FinishReason: &reason, TokenIDs: ch.TokenIDs}
+		if c.Kind == Generate {
+			choice.Text, choice.PromptTokenIDs = &ch.Text, ch.PromptTokenIDs
+		} else {
+			choice.Message = &oaiMessage{Role: "assistant", Content: &oaiContent{Text: ch.Text}, ReasoningContent: ch.Thinking, ToolCalls: oaiCalls(ch.ToolCalls)}
+		}
+		reply.Choices = append(reply.Choices, choice)
+	}
+	reply.appendTo(&b)
+	return b, nil
+}
+
+// Reads a chat completions or Responses stream into events, each choice of the first kept apart
+type oaiStreamRead struct {
+	emit    func(Event) error
+	started bool
+	final   Result
+	// Per choice tool calls and stop reasons of a chat stream
+	tools map[int]*toolGather
+	stops map[int]string
+	// A Responses stream's tool calls by item id and output index, and which have had arguments
+	calls   toolGather
+	byItem  map[string]int
+	byIndex map[int]int
+	argued  map[int]bool
+	native  bool
 }
 
 func (openai) ParseStream(rd io.Reader, emit func(Event) error) error {
-	started := false
-	final := &Result{}
-	var tools toolGather
-	err := ReadSSE(rd, func(_ string, data []byte) error {
-		if string(data) == "[DONE]" {
-			return nil
+	p := &oaiStreamRead{emit: emit, tools: map[int]*toolGather{}, stops: map[int]string{}, byItem: map[string]int{}, byIndex: map[int]int{}, argued: map[int]bool{}}
+	if err := ReadSSE(rd, p.event); err != nil {
+		return err
+	}
+	return p.stop()
+}
+
+func (p *oaiStreamRead) event(_ string, data []byte) error {
+	if string(data) == "[DONE]" {
+		return nil
+	}
+	var a oaiAnswer
+	if err := decode(data, a.read); err != nil {
+		return malformed(err)
+	}
+	if message := a.failure(data); message != "" {
+		return errors.New(message)
+	}
+	if a.Type == "error" || strings.HasPrefix(a.Type, "response.") {
+		p.native = true
+		return p.responses(&a)
+	}
+	p.final.Extra = mergeExtra(p.final.Extra, a.Extra)
+	promptIDs := a.PromptTokenIDs
+	for _, ch := range a.Choices {
+		if ch.PromptTokenIDs != nil {
+			promptIDs = ch.PromptTokenIDs
 		}
-		if message := oaiFailure(data); message != "" {
-			return errors.New(message)
-		}
-		var chunk oaiResponse
-		if err := json.Unmarshal(data, &chunk); err != nil {
-			return err
-		}
-		final.Extra = mergeExtra(final.Extra, chunk.Extra)
-		if !started {
-			started = true
-			final.ID, final.Model = chunk.ID, chunk.Model
-			if err := emit(Event{Kind: Started, Res: &Result{ID: chunk.ID, Model: chunk.Model}}); err != nil {
+	}
+	if err := p.start(a.ID, a.Model, promptIDs); err != nil {
+		return err
+	}
+	if promptIDs != nil {
+		p.final.PromptTokenIDs = promptIDs
+	}
+	p.final.Usage.update(a.usage(), a.Usage != nil, a.Timings != nil)
+	for _, ch := range a.Choices {
+		tools := p.toolsOf(ch.Index)
+		ids := ch.TokenIDs
+		if ch.Text != "" || (ch.Delta == nil && len(ids) > 0) {
+			if err := p.emit(Event{Kind: Said, Text: ch.Text, Choice: ch.Index, TokenIDs: ids}); err != nil {
 				return err
 			}
+			ids = nil
 		}
-		if chunk.Usage != nil {
-			final.Usage.In, final.Usage.Out, final.Usage.Cached = chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.cached()
-		}
-		if chunk.Timings != nil {
-			final.Usage.DraftOffered, final.Usage.DraftAccepted = chunk.Timings.DraftN, chunk.Timings.DraftNAccepted
-		}
-		for _, ch := range chunk.Choices {
-			if ch.Text != "" {
-				if err := emit(Event{Kind: Said, Text: ch.Text}); err != nil {
+		if d := ch.Delta; d != nil {
+			if reasoning := d.reasoning(); reasoning != "" {
+				if err := p.emit(Event{Kind: Thought, Text: reasoning, Choice: ch.Index}); err != nil {
 					return err
 				}
 			}
-			if ch.Delta != nil {
-				if reasoning := ch.Delta.reasoning(); reasoning != "" {
-					if err := emit(Event{Kind: Thought, Text: reasoning}); err != nil {
-						return err
-					}
-				}
-				var text string
-				if json.Unmarshal(ch.Delta.Content, &text) == nil && text != "" {
-					if err := emit(Event{Kind: Said, Text: text}); err != nil {
-						return err
-					}
-				}
-				for i, t := range ch.Delta.ToolCalls {
-					idx := i
-					if t.Index != nil {
-						idx = *t.Index
-					}
-					ev := Event{Kind: Called, Index: idx, Tool: &ToolCall{ID: t.ID, Name: t.Function.Name, Args: t.Function.Arguments}}
-					tools.add(ev)
-					if err := emit(ev); err != nil {
-						return err
-					}
+			if text := d.Content.text(); text != "" || len(ids) > 0 {
+				if err := p.emit(Event{Kind: Said, Text: text, Choice: ch.Index, TokenIDs: ids}); err != nil {
+					return err
 				}
 			}
-			if ch.FinishReason != nil && *ch.FinishReason != "" {
-				final.Stop = oaiStop(*ch.FinishReason)
+			for i, t := range d.ToolCalls {
+				idx := i
+				if t.Index != nil {
+					idx = *t.Index
+				}
+				ev := Event{Kind: Called, Index: idx, Choice: ch.Index, Tool: &ToolCall{ID: t.ID, Name: t.Name, Args: t.Arguments}}
+				tools.add(ev)
+				if err := p.emit(ev); err != nil {
+					return err
+				}
 			}
 		}
+		if ch.FinishReason != nil && *ch.FinishReason != "" {
+			p.stops[ch.Index] = oaiStop(*ch.FinishReason)
+		}
+	}
+	return nil
+}
+
+func (p *oaiStreamRead) toolsOf(choice int) *toolGather {
+	t, ok := p.tools[choice]
+	if !ok {
+		t = &toolGather{}
+		p.tools[choice] = t
+	}
+	return t
+}
+
+// Emits the answer's id, model and prompt ids once, ahead of anything else
+func (p *oaiStreamRead) start(id, model string, promptIDs []int) error {
+	if p.started {
 		return nil
-	})
-	if err != nil {
+	}
+	p.started = true
+	p.final.ID, p.final.Model = id, model
+	return p.emit(Event{Kind: Started, Res: &Result{ID: id, Model: model, PromptTokenIDs: promptIDs}})
+}
+
+// Reads one event of a Responses stream from a runtime serving the API natively
+func (p *oaiStreamRead) responses(a *oaiAnswer) error {
+	id, model := "", ""
+	if a.Response != nil {
+		id, model = a.Response.ID, a.Response.Model
+	}
+	if err := p.start(id, model, nil); err != nil {
 		return err
 	}
-	final.ToolCalls = tools.list()
-	final.Stop = StopOf(final.Stop, len(final.ToolCalls))
-	return emit(Event{Kind: Stopped, Res: final})
+	switch a.Type {
+	case "error":
+		return fmt.Errorf("%s: %s", a.Code, a.Message)
+	case "response.failed":
+		message := "the response failed"
+		if a.Response != nil && a.Response.Error != "" {
+			message = a.Response.Error
+		}
+		return errors.New(message)
+	case "response.output_text.delta", "response.refusal.delta":
+		return p.emit(Event{Kind: Said, Text: a.Delta})
+	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+		return p.emit(Event{Kind: Thought, Text: a.Delta})
+	case "response.output_item.added", "response.output_item.done":
+		if a.Item == nil || a.Item.Type != "function_call" {
+			return nil
+		}
+		n, known := p.callIndex(a.Item.ID, a.OutputIndex)
+		ev := Event{Kind: Called, Index: n, Tool: &ToolCall{}}
+		if !known {
+			ev.Tool.ID, ev.Tool.Name = a.Item.CallID, a.Item.Name
+		}
+		if !p.argued[n] && a.Item.Arguments != "" {
+			ev.Tool.Args = a.Item.Arguments
+			p.argued[n] = true
+		}
+		if known && ev.Tool.Args == "" {
+			return nil
+		}
+		p.calls.add(ev)
+		return p.emit(ev)
+	case "response.function_call_arguments.delta", "response.function_call_arguments.done":
+		n, _ := p.callIndex(a.ItemID, a.OutputIndex)
+		args := a.Delta
+		if a.Type == "response.function_call_arguments.done" {
+			if p.argued[n] {
+				return nil
+			}
+			args = a.Arguments
+		}
+		if args == "" {
+			return nil
+		}
+		p.argued[n] = true
+		ev := Event{Kind: Called, Index: n, Tool: &ToolCall{Args: args}}
+		p.calls.add(ev)
+		return p.emit(ev)
+	case "response.completed", "response.incomplete":
+		if r := a.Response; r != nil {
+			if r.Usage != nil {
+				p.final.Usage.In, p.final.Usage.Out, p.final.Usage.Cached = r.Usage.In, r.Usage.Out, r.Usage.Cached
+			}
+			p.stops[0] = respStop(r.Status, r.Incomplete)
+		}
+	}
+	return nil
+}
+
+// The call index of a Responses function call item, numbered in order of appearance, and whether it was seen before
+func (p *oaiStreamRead) callIndex(item string, output int) (int, bool) {
+	if n, ok := p.byItem[item]; ok && item != "" {
+		return n, true
+	}
+	if n, ok := p.byIndex[output]; ok {
+		return n, true
+	}
+	n := len(p.byIndex)
+	p.byIndex[output] = n
+	if item != "" {
+		p.byItem[item] = n
+	}
+	return n, false
+}
+
+// Emits Stopped with every choice's calls and stop reason, the answer's fields on the first
+func (p *oaiStreamRead) stop() error {
+	if p.native {
+		res := p.final
+		res.ToolCalls = p.calls.list()
+		res.Stop = StopOf(p.stops[0], len(res.ToolCalls))
+		return p.emit(Event{Kind: Stopped, Res: &res})
+	}
+	byIndex := map[int]*Result{}
+	for choice, tools := range p.tools {
+		byIndex[choice] = &Result{Choice: choice, ToolCalls: tools.list()}
+	}
+	for choice, stop := range p.stops {
+		if _, ok := byIndex[choice]; !ok {
+			byIndex[choice] = &Result{Choice: choice}
+		}
+		byIndex[choice].Stop = stop
+	}
+	for _, r := range byIndex {
+		r.Stop = StopOf(r.Stop, len(r.ToolCalls))
+	}
+	first := choices(byIndex)
+	first.ID, first.Model, first.Usage, first.Extra = p.final.ID, p.final.Model, p.final.Usage, p.final.Extra
+	first.Stop = StopOf(first.Stop, len(first.ToolCalls))
+	return p.emit(Event{Kind: Stopped, Res: first})
+}
+
+// One choice's state in a stream written to a client
+type oaiChoiceOut struct {
+	sentRole bool
+	tools    toolGather
 }
 
 type oaiStream struct {
-	live     *liveWriter
-	req      *Request
-	id       string
-	model    string
-	created  int64
-	tools    toolGather
-	sentRole bool
+	live    *liveWriter
+	req     *Request
+	id      string
+	model   string
+	created int64
+	choices map[int]*oaiChoiceOut
+	// Prompt token ids announced at the start, written on the first chunk
+	promptIDs []int
 }
 
 func (o openai) Answer(w http.ResponseWriter, req *Request, model string) Writer {
@@ -705,27 +699,40 @@ func (o openai) Answer(w http.ResponseWriter, req *Request, model string) Writer
 		return o.answerResponses(w, req, model)
 	}
 	if !req.Stream {
-		return &whole{w: w, req: req, model: model, client: o, render: o.renderResult}
+		return &whole{w: w, req: req, model: model, client: o, render: o.renderResult, choices: true}
 	}
 	streamHeaders(w, "text/event-stream")
-	return &oaiStream{live: newLiveWriter(w, pingComment), req: req, id: newID("chatcmpl"), model: model, created: time.Now().Unix()}
+	return &oaiStream{live: newLiveWriter(w, pingComment), req: req, id: newID("chatcmpl"), model: model, created: time.Now().Unix(), choices: map[int]*oaiChoiceOut{}}
 }
 
-func (s *oaiStream) chunk(delta *oaiMessage, text string, finish *string, usage *oaiUsage, extra map[string]json.RawMessage) error {
-	resp := oaiResponse{ID: s.id, Object: "chat.completion.chunk", Created: s.created, Model: s.model, Usage: usage, Extra: extra}
+func (s *oaiStream) choice(i int) *oaiChoiceOut {
+	c, ok := s.choices[i]
+	if !ok {
+		c = &oaiChoiceOut{}
+		s.choices[i] = c
+	}
+	return c
+}
+
+// Writes one delta for a choice, the role on the choice's first
+func (s *oaiStream) chunk(choice int, delta *oaiMessage, text string, finish *string, extra map[string]json.RawMessage, tokens []int) error {
+	reply := oaiReply{ID: s.id, Object: "chat.completion.chunk", Created: s.created, Model: s.model, Extra: extra, PromptTokenIDs: s.promptIDs}
+	s.promptIDs = nil
+	out := oaiReplyChoice{Index: choice, FinishReason: finish, TokenIDs: tokens}
 	if s.req.Kind == Generate {
-		resp.Object = "text_completion"
-		resp.Choices = []oaiChoice{{Text: text, FinishReason: finish}}
+		reply.Object = "text_completion"
+		out.Text, out.PromptTokenIDs, reply.PromptTokenIDs = &text, reply.PromptTokenIDs, nil
 	} else {
 		if delta == nil {
 			delta = &oaiMessage{}
 		}
-		if !s.sentRole {
-			delta.Role, s.sentRole = "assistant", true
+		if c := s.choice(choice); !c.sentRole {
+			delta.Role, c.sentRole = "assistant", true
 		}
-		resp.Choices = []oaiChoice{{Delta: delta, FinishReason: finish}}
+		out.Delta = delta
 	}
-	return s.live.sse("", resp)
+	reply.Choices = []oaiReplyChoice{out}
+	return s.live.sseData("", reply.json())
 }
 
 func (s *oaiStream) Write(ev Event) error {
@@ -734,50 +741,81 @@ func (s *oaiStream) Write(ev Event) error {
 		if ev.Res != nil && ev.Res.ID != "" {
 			s.id = ev.Res.ID
 		}
+		if ev.Res != nil && ev.Res.PromptTokenIDs != nil {
+			s.promptIDs = ev.Res.PromptTokenIDs
+		}
 		return nil
 	case Said:
-		delta := &oaiMessage{}
-		delta.Content, _ = json.Marshal(ev.Text)
-		return s.chunk(delta, ev.Text, nil, nil, nil)
+		return s.chunk(ev.Choice, &oaiMessage{Content: &oaiContent{Text: ev.Text}}, ev.Text, nil, nil, ev.TokenIDs)
 	case Thought:
 		if s.req.Kind == Generate {
 			return nil
 		}
-		return s.chunk(&oaiMessage{ReasoningContent: ev.Text}, "", nil, nil, nil)
+		return s.chunk(ev.Choice, &oaiMessage{ReasoningContent: ev.Text}, "", nil, nil, nil)
 	case Called:
-		s.tools.add(ev)
-		tc := oaiToolCall{Index: ptr(ev.Index), ID: ev.Tool.ID, Type: "function"}
-		tc.Function.Name, tc.Function.Arguments = ev.Tool.Name, ev.Tool.Args
-		if tc.ID == "" && tc.Function.Name == "" {
+		s.choice(ev.Choice).tools.add(ev)
+		tc := oaiToolCall{Index: ptr(ev.Index), ID: ev.Tool.ID, Type: "function", Name: ev.Tool.Name, Arguments: ev.Tool.Args}
+		if tc.ID == "" && tc.Name == "" {
 			tc.Type = ""
 		}
-		return s.chunk(&oaiMessage{ToolCalls: []oaiToolCall{tc}}, "", nil, nil, nil)
+		return s.chunk(ev.Choice, &oaiMessage{ToolCalls: []oaiToolCall{tc}}, "", nil, nil, nil)
 	case Stopped:
 		res := ev.Res
 		if res == nil {
 			res = &Result{}
 		}
-		reason := oaiReason(StopOf(res.Stop, len(s.tools.order)))
-		if err := s.chunk(&oaiMessage{}, "", &reason, nil, res.Extra); err != nil {
-			return err
+		stops := map[int]string{}
+		for _, r := range res.All() {
+			stops[r.Choice] = r.Stop
+		}
+		for choice := range s.choices {
+			if _, ok := stops[choice]; !ok {
+				stops[choice] = ""
+			}
+		}
+		order := make([]int, 0, len(stops))
+		for choice := range stops {
+			order = append(order, choice)
+		}
+		slices.Sort(order)
+		for _, choice := range order {
+			reason := oaiReason(StopOf(stops[choice], len(s.choice(choice).tools.order)))
+			if err := s.chunk(choice, &oaiMessage{}, "", &reason, res.Extra, nil); err != nil {
+				return err
+			}
 		}
 		if !s.req.IncludeUsage {
 			return nil
 		}
 		// The usage goes last in a chunk of its own with no choices, as the API sends it
-		last := oaiResponse{ID: s.id, Object: "chat.completion.chunk", Created: s.created, Model: s.model, Choices: []oaiChoice{}, Usage: oaiUsageOf(res.Usage)}
+		last := oaiReply{ID: s.id, Object: "chat.completion.chunk", Created: s.created, Model: s.model, Choices: []oaiReplyChoice{}, Usage: &res.Usage}
 		if s.req.Kind == Generate {
 			last.Object = "text_completion"
 		}
-		return s.live.sse("", last)
+		return s.live.sseData("", last.json())
 	case Failed:
-		code := ev.Failure.Code
-		if code == "" {
-			code = CodeUpstream
-		}
-		return s.live.sse("", map[string]any{"error": map[string]any{"message": ev.Failure.Message, "type": code, "code": code}})
+		return s.live.sse("", oaiStreamFailure(*ev.Failure))
 	}
 	return nil
+}
+
+// The data event carrying the error object that ends a chat or completions stream
+func oaiStreamFailure(f Failure) map[string]any {
+	code := f.Code
+	if code == "" {
+		code = CodeUpstream
+	}
+	return map[string]any{"error": map[string]any{"message": f.Message, "type": code, "code": code}}
+}
+
+// Ends a chat or completions stream with the error object, a Responses stream with the error event numbered next
+func (openai) StreamFailure(at StreamAt, f Failure) ([]byte, error) {
+	if at.Path == OpenAIResponses {
+		fields := respFailure(f)
+		fields["type"], fields["sequence_number"] = "error", at.Seq
+		return sseJSON("error", fields)
+	}
+	return sseJSON("", oaiStreamFailure(f))
 }
 
 func (s *oaiStream) Close() error {
@@ -790,10 +828,16 @@ func (s *oaiStream) Close() error {
 	return err
 }
 
-func (openai) Traits() Traits { return Traits{} }
+// Serves Responses itself, choices by n, and counts tokens at /tokenize as llama.cpp and vLLM do
+func (openai) Traits() Traits {
+	return Traits{Responses: true, Choices: true, TokenizePath: openaiTokenize}
+}
+
+func (o openai) Native(req *Request) (string, []byte, error) { return native(o, req) }
 
 func (openai) ErrorMessage(body []byte) string { return errorField(body) }
 
 func (openai) Error(w http.ResponseWriter, f Failure) {
+	retryHeader(w, f)
 	WriteJSON(w, f.Status, map[string]any{"error": map[string]any{"message": f.Message, "type": f.Code, "code": f.Code}})
 }

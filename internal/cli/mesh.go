@@ -21,7 +21,8 @@ func meshCommands() command {
 		{name: "token", summary: "print a join token", run: runMeshToken},
 		{name: "join", summary: "join the mesh a token names", run: runMeshJoin},
 		{name: "leave", summary: "leave the mesh, its formations stopped and forgotten", run: runMeshLeave},
-		{name: "forget", summary: "forget a member that is gone, on every reachable member", run: runMeshForget},
+		{name: "forget", summary: "revoke a member's certificate, every member refusing it from then on", run: runMeshForget},
+		{name: "hand-off-issuer", summary: "hand the issuer role and certificate authority key to another member", run: runMeshHandOffIssuer},
 		{name: "reset", summary: "leave any mesh and clear every trace of it, formations included", run: runMeshReset},
 		{name: "status", summary: "nodes, links, and formations", run: runMeshStatus},
 		{name: "nearby", summary: "nodes and meshes heard on the network, and admissions under way", run: runMeshNearby},
@@ -32,7 +33,11 @@ func meshCommands() command {
 		{name: "dismiss", summary: "clear a settled admission", run: runMeshDismiss},
 		{name: "nodes", summary: "list members", run: runMeshNodes},
 		{name: "links", summary: "measured links, measuring them again with --probe", run: runMeshLinks},
-		{name: "rotate", summary: "issue a new secret to every reachable member", run: runMeshRotate},
+		{name: "rotate", summary: "make a new certificate authority and reissue every reachable member's certificate", run: runMeshRotate},
+		{name: "export-token", summary: "print a token a node of another mesh imports this node's exported pools with", run: runMeshExportToken},
+		{name: "import", summary: "import the exported pools of the node of another mesh a token names", run: runMeshImport},
+		{name: "unimport", summary: "end a cross mesh export or import with a node", run: runMeshUnimport},
+		{name: "federations", summary: "nodes of other meshes exported to or imported from", run: runMeshFederations},
 		{name: "profile", summary: "declared device numbers the planner starts from", run: runMeshProfiles, sub: []command{
 			{name: "list", summary: "list device profiles", run: runMeshProfiles},
 			{name: "set", summary: "set numbers for devices matching a pattern", run: runMeshProfileSet},
@@ -54,30 +59,38 @@ func formationCommands() command {
 func runMeshInit(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("mesh init")
 	name := fs.String("name", "", "mesh name")
-	useTLS := fs.Bool("tls", false, "make a certificate authority so members verify each other")
-	if _, err := e.parse(fs, args, 0, 0, "mesh init [--name NAME] [--tls]"); err != nil {
+	if _, err := e.parse(fs, args, 0, 0, "mesh init [--name NAME]"); err != nil {
 		return err
 	}
-	resp, err := e.cl.mesh.Init(ctx, connect.NewRequest(&v1.InitRequest{Name: *name, Tls: *useTLS}))
+	resp, err := e.cl.mesh.Init(ctx, connect.NewRequest(&v1.InitRequest{Name: *name}))
 	if err != nil {
 		return err
 	}
 	return e.print(resp.Msg, func(w io.Writer) {
 		m := resp.Msg.GetMesh()
-		fmt.Fprintf(w, "mesh %s %s at %s, tls %s\n", m.GetName(), m.GetId(), m.GetAddress(), yes(m.GetTls()))
+		fmt.Fprintf(w, "mesh %s %s at %s, certificate authority sha256 %s\n", m.GetName(), m.GetId(), m.GetAddress(), m.GetCaFingerprint())
 		fmt.Fprintf(w, "other nodes ask to join from their Mesh page or with nebu mesh ask; on a network that passes no beacons, this join token joins one:\n%s\n", resp.Msg.GetToken())
 	})
 }
 
 func runMeshToken(ctx context.Context, e *env, args []string) error {
-	if _, err := e.parse(e.flags("mesh token"), args, 0, 0, "mesh token"); err != nil {
+	fs := e.flags("mesh token")
+	ttl := fs.String("ttl", "", "how long the token stays valid, such as 30m or 24h, an hour when empty")
+	if _, err := e.parse(fs, args, 0, 0, "mesh token [--ttl DURATION]"); err != nil {
 		return err
 	}
-	resp, err := e.cl.mesh.Token(ctx, connect.NewRequest(&v1.TokenRequest{}))
+	seconds, err := parseSeconds(*ttl)
+	if err != nil {
+		return fmt.Errorf("ttl: %w", err)
+	}
+	resp, err := e.cl.mesh.Token(ctx, connect.NewRequest(&v1.TokenRequest{TtlSeconds: seconds}))
 	if err != nil {
 		return err
 	}
-	return e.print(resp.Msg, func(w io.Writer) { fmt.Fprintln(w, resp.Msg.GetToken()) })
+	return e.print(resp.Msg, func(w io.Writer) {
+		fmt.Fprintln(w, resp.Msg.GetToken())
+		fmt.Fprintf(w, "expires %s\n", when(resp.Msg.GetExpiresAt(), time.RFC3339))
+	})
 }
 
 func runMeshJoin(ctx context.Context, e *env, args []string) error {
@@ -91,10 +104,7 @@ func runMeshJoin(ctx context.Context, e *env, args []string) error {
 	}
 	return e.print(resp.Msg, func(w io.Writer) {
 		m, b := resp.Msg.GetMesh(), resp.Msg.GetBootstrap()
-		fmt.Fprintf(w, "joined %s %s through %s at %s, %d members\n", m.GetName(), m.GetId(), b.GetName(), b.GetAddress(), m.GetMembers())
-		for _, warn := range resp.Msg.GetWarnings() {
-			fmt.Fprintln(w, "warning:", warn)
-		}
+		fmt.Fprintf(w, "joined %s %s through %s %s at %s, %d members\n", m.GetName(), m.GetId(), b.GetName(), shortID(b.GetId()), b.GetAddress(), m.GetMembers())
 	})
 }
 
@@ -112,18 +122,31 @@ func runMeshLeave(ctx context.Context, e *env, args []string) error {
 }
 
 func runMeshForget(ctx context.Context, e *env, args []string) error {
-	fs := e.flags("mesh forget")
-	here := fs.Bool("here", false, "forget the member on this node alone, the others not told")
-	positional, err := e.parse(fs, args, 1, 1, "mesh forget <node name|id> [--here]")
+	positional, err := e.parse(e.flags("mesh forget"), args, 1, 1, "mesh forget <node name|id>")
 	if err != nil {
 		return err
 	}
-	resp, err := e.cl.mesh.ForgetNode(ctx, connect.NewRequest(&v1.ForgetNodeRequest{NodeId: positional[0], Tell: !*here}))
+	resp, err := e.cl.mesh.ForgetNode(ctx, connect.NewRequest(&v1.ForgetNodeRequest{NodeId: positional[0]}))
 	if err != nil {
 		return err
 	}
 	return e.print(resp.Msg, func(w io.Writer) {
-		fmt.Fprintf(w, "forgot %s %s\n", resp.Msg.GetNode().GetName(), resp.Msg.GetNode().GetId())
+		fmt.Fprintf(w, "forgot %s %s, its certificate revoked\n", resp.Msg.GetNode().GetName(), resp.Msg.GetNode().GetId())
+	})
+}
+
+func runMeshHandOffIssuer(ctx context.Context, e *env, args []string) error {
+	positional, err := e.parse(e.flags("mesh hand-off-issuer"), args, 1, 1, "mesh hand-off-issuer <node name|id>")
+	if err != nil {
+		return err
+	}
+	resp, err := e.cl.mesh.HandOffIssuer(ctx, connect.NewRequest(&v1.HandOffIssuerRequest{NodeId: positional[0]}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		m := resp.Msg.GetMesh()
+		fmt.Fprintf(w, "%s %s now holds the issuer role of %s, epoch %d\n", positional[0], shortID(m.GetIssuer()), m.GetName(), m.GetIssuerEpoch())
 	})
 }
 
@@ -153,7 +176,7 @@ func runMeshRotate(ctx context.Context, e *env, args []string) error {
 		return err
 	}
 	return e.print(resp.Msg, func(w io.Writer) {
-		fmt.Fprintf(w, "rotated the secret of %s: %d members took it", resp.Msg.GetMesh().GetName(), len(resp.Msg.GetRotated()))
+		fmt.Fprintf(w, "rotated the certificate authority of %s: %d members took a new certificate", resp.Msg.GetMesh().GetName(), len(resp.Msg.GetRotated()))
 		if len(resp.Msg.GetMissed()) > 0 {
 			fmt.Fprintf(w, ", %d must join again: %s", len(resp.Msg.GetMissed()), strings.Join(resp.Msg.GetMissed(), ", "))
 		}
@@ -179,9 +202,6 @@ func renderStatus(w io.Writer, st *v1.MeshStatus) {
 	default:
 		fmt.Fprintf(w, "this node is %s %s, in no mesh, reached at %s\n", st.GetNodeName(), st.GetNodeId()[:min(12, len(st.GetNodeId()))], orDash(st.GetAddress()))
 	}
-	if st.GetListenError() != "" {
-		fmt.Fprintf(w, "node traffic listener not bound: %s\n", st.GetListenError())
-	}
 	if !st.GetAnnounce() {
 		fmt.Fprintln(w, "beacons are off (mesh.announce), so nothing is heard; invite and ask by address")
 	}
@@ -192,9 +212,9 @@ func renderStatus(w io.Writer, st *v1.MeshStatus) {
 		for _, n := range nm.GetNodes() {
 			names = append(names, n.GetName())
 		}
-		rows = append(rows, []string{nm.GetName(), nm.GetHash()[:min(12, len(nm.GetHash()))], strconv.Itoa(int(nm.GetMembers())), yes(nm.GetTls()), strings.Join(names, ", "), when(nm.GetHeardAt(), time.Kitchen)})
+		rows = append(rows, []string{nm.GetName(), nm.GetHash()[:min(12, len(nm.GetHash()))], strconv.Itoa(int(nm.GetMembers())), strings.Join(names, ", "), when(nm.GetHeardAt(), time.Kitchen)})
 	}
-	table(w, []string{"MESH", "HASH", "MEMBERS", "TLS", "HEARD FROM", "HEARD"}, rows)
+	table(w, []string{"MESH", "HASH", "MEMBERS", "HEARD FROM", "HEARD"}, rows)
 	section(w, "nodes heard")
 	rows = nil
 	for _, n := range st.GetNodes() {
@@ -356,7 +376,7 @@ func runMeshStatus(ctx context.Context, e *env, args []string) error {
 			fmt.Fprintln(w, "this node belongs to no mesh. nebu mesh nearby lists the meshes heard on the network, nebu mesh ask joins one, nebu mesh init makes one")
 			return
 		}
-		fmt.Fprintf(w, "mesh %s %s: %d members, tls %s, announce %s, exposure %s, this node at %s\n", m.GetName(), m.GetId(), m.GetMembers(), yes(m.GetTls()), yes(m.GetAnnounce()), m.GetExposure(), orDash(m.GetAddress()))
+		fmt.Fprintf(w, "mesh %s %s: %d members, issuer %s, announce %s, exposure %s, this node at %s\n", m.GetName(), m.GetId(), m.GetMembers(), nodeName(resp.Msg.GetNodes(), m.GetIssuer()), yes(m.GetAnnounce()), m.GetExposure(), orDash(m.GetAddress()))
 		section(w, "nodes")
 		nodesTable(w, resp.Msg.GetNodes())
 		section(w, "links")
@@ -628,6 +648,12 @@ func renderFormation(w io.Writer, f *v1.Formation) {
 		rows = append(rows, []string{s.GetRole(), strconv.Itoa(int(s.GetRank())), orDash(s.GetNodeName()), loud(s.GetState()), layers, estimate.Human(s.GetWeightBytes()), estimate.Human(s.GetCacheBytes()), orDash(s.GetInstanceId()), orDash(s.GetEndpoint()), orDash(s.GetTransport()), truncate(s.GetError(), 40)})
 	}
 	table(w, []string{"ROLE", "RANK", "NODE", "STATE", "LAYERS", "WEIGHTS", "CACHE", "INSTANCE", "ENDPOINT", "TRANSPORT", "ERROR"}, rows)
+	for _, s := range f.GetSeats() {
+		if len(s.GetRanks()) > 0 {
+			section(w, fmt.Sprintf("ranks of %s%d on %s", s.GetRole(), s.GetRank(), orDash(s.GetNodeName())))
+			rankTable(w, s.GetRanks())
+		}
+	}
 	if plan := f.GetPlan(); plan != nil {
 		section(w, "plan")
 		fmt.Fprintln(w, plan.GetDetail())
@@ -638,7 +664,7 @@ func renderFormation(w io.Writer, f *v1.Formation) {
 	}
 }
 
-// The planner's table: the shape chosen first, every rejected one with its reason
+// Prints the planner's table, the shape chosen first and every rejected one with its reason
 func candidateTable(w io.Writer, plan *v1.FormationPlan) {
 	var rows [][]string
 	for _, c := range plan.GetCandidates() {
@@ -663,6 +689,11 @@ func candidateTable(w io.Writer, plan *v1.FormationPlan) {
 	}
 	fmt.Fprintf(w, "at %d prompt and %d completion tokens\n", plan.GetReferencePrompt(), plan.GetReferenceCompletion())
 	table(w, []string{"SHAPE", "NODES", "VERDICT", "TTFT", "TPS", "REQ/S", "SPEEDUP", "REASON"}, rows)
+}
+
+// The first twelve characters of an id, a dash when empty
+func shortID(id string) string {
+	return orDash(id[:min(12, len(id))])
 }
 
 func shortIDs(ids []string) []string {
@@ -851,4 +882,80 @@ func (e *env) inspectMesh(ctx context.Context, source, repo string, groups []str
 		return e.print(out, nil)
 	}
 	return nil
+}
+
+func runMeshExportToken(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("mesh export-token")
+	ttl := fs.String("ttl", "", "how long the token stays valid, such as 30m or 24h, an hour when empty")
+	if _, err := e.parse(fs, args, 0, 0, "mesh export-token [--ttl DURATION]"); err != nil {
+		return err
+	}
+	seconds, err := parseSeconds(*ttl)
+	if err != nil {
+		return fmt.Errorf("ttl: %w", err)
+	}
+	resp, err := e.cl.mesh.ExportToken(ctx, connect.NewRequest(&v1.ExportTokenRequest{TtlSeconds: seconds}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		fmt.Fprintln(w, resp.Msg.GetToken())
+		fmt.Fprintf(w, "expires %s; a node of another mesh runs nebu mesh import with it\n", when(resp.Msg.GetExpiresAt(), time.RFC3339))
+	})
+}
+
+func runMeshImport(ctx context.Context, e *env, args []string) error {
+	positional, err := e.parse(e.flags("mesh import"), args, 1, 1, "mesh import <export token>")
+	if err != nil {
+		return err
+	}
+	resp, err := e.cl.mesh.ImportMesh(ctx, connect.NewRequest(&v1.ImportMeshRequest{Token: positional[0]}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		n := resp.Msg.GetNode()
+		fmt.Fprintf(w, "importing from %s %s of mesh %s at %s, %d pools exported\n", n.GetName(), shortID(n.GetId()), n.GetFederation().GetMeshName(), n.GetFederation().GetAddress(), len(n.GetPools()))
+	})
+}
+
+func runMeshUnimport(ctx context.Context, e *env, args []string) error {
+	positional, err := e.parse(e.flags("mesh unimport"), args, 1, 1, "mesh unimport <node name|id>")
+	if err != nil {
+		return err
+	}
+	resp, err := e.cl.mesh.DropFederation(ctx, connect.NewRequest(&v1.DropFederationRequest{NodeId: positional[0]}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		n := resp.Msg.GetNode()
+		fmt.Fprintf(w, "dropped %s %s of mesh %s, its imports draining\n", n.GetName(), shortID(n.GetId()), n.GetFederation().GetMeshName())
+	})
+}
+
+func runMeshFederations(ctx context.Context, e *env, args []string) error {
+	if _, err := e.parse(e.flags("mesh federations"), args, 0, 0, "mesh federations"); err != nil {
+		return err
+	}
+	resp, err := e.cl.mesh.Discover(ctx, connect.NewRequest(&v1.DiscoverRequest{}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		var rows [][]string
+		for _, n := range resp.Msg.GetStatus().GetFederations() {
+			f := n.GetFederation()
+			role := "imports from"
+			if f.GetRole() == v1.FederationRole_FEDERATION_ROLE_IMPORTER {
+				role = "exports to"
+			}
+			rows = append(rows, []string{role, n.GetName(), shortID(n.GetId()), f.GetMeshName(), f.GetAddress(), strings.ToLower(strings.TrimPrefix(n.GetState().String(), "NODE_STATE_")), strconv.Itoa(len(n.GetPools()))})
+		}
+		if len(rows) == 0 {
+			fmt.Fprintln(w, "no node of another mesh is exported to or imported from; nebu mesh export-token mints a token another mesh imports with")
+			return
+		}
+		table(w, []string{"ROLE", "NAME", "ID", "MESH", "ADDRESS", "STATE", "POOLS"}, rows)
+	})
 }

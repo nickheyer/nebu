@@ -120,7 +120,7 @@ func TestResolveAndFlags(t *testing.T) {
 	if len(env) != 0 || emitted["n_ctx"] != "4096" || emitted["n_gpu_layers"] != "" {
 		t.Fatalf("env %v emitted %v", env, emitted)
 	}
-	in := Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.gguf", "projector": "/p.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}, Devices: []*v1.Device{{Id: "GPU-1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Facts: map[string]string{"index": "0"}}}}
+	in := Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": "/w.gguf", "projector": "/p.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/llama-server"}, Devices: []*v1.Device{{Id: "GPU-1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", MemoryTotalBytes: 24 << 30, Facts: map[string]string{"index": "0"}}}}
 	cmd, err := rt.Launch(in)
 	if err != nil {
 		t.Fatal(err)

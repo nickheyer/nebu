@@ -9,27 +9,53 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
+// Returned when the first account is created after another account exists
+var ErrAccountsExist = errors.New("an account already exists")
+
 // A local account with its password hash
 type UserRow struct {
 	User *v1.User
 	Hash string
 }
 
-// Inserts an account. Duplicate usernames fail on the unique index.
+const userColumns = `id, username, password_hash, role, created_at, updated_at`
+
+// Inserts an account, a duplicate username failing on the unique index
 func (d *DB) PutUser(ctx context.Context, u *v1.User, hash string) error {
-	_, err := d.sql.ExecContext(ctx, `INSERT INTO users (id, username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-		u.GetId(), u.GetUsername(), hash, stamp(u.GetCreatedAt().AsTime()), stamp(u.GetUpdatedAt().AsTime()))
+	_, err := d.sql.ExecContext(ctx, `INSERT INTO users (`+userColumns+`) VALUES (?, ?, ?, ?, ?, ?)`,
+		u.GetId(), u.GetUsername(), hash, enumCol(u.GetRole()), stamp(u.GetCreatedAt().AsTime()), stamp(u.GetUpdatedAt().AsTime()))
 	return err
+}
+
+// Inserts the first account in one transaction that fails with ErrAccountsExist when any account exists
+func (d *DB) CreateFirstUser(ctx context.Context, u *v1.User, hash string) error {
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return ErrAccountsExist
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO users (`+userColumns+`) VALUES (?, ?, ?, ?, ?, ?)`,
+		u.GetId(), u.GetUsername(), hash, enumCol(u.GetRole()), stamp(u.GetCreatedAt().AsTime()), stamp(u.GetUpdatedAt().AsTime())); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Lists accounts by username
 func (d *DB) ListUsers(ctx context.Context) ([]UserRow, error) {
-	return list(ctx, d, `SELECT id, username, password_hash, created_at, updated_at FROM users ORDER BY username`, scanUser)
+	return list(ctx, d, `SELECT `+userColumns+` FROM users ORDER BY username`, scanUser)
 }
 
 // Finds one account by username
 func (d *DB) GetUser(ctx context.Context, username string) (UserRow, error) {
-	rows, err := list(ctx, d, `SELECT id, username, password_hash, created_at, updated_at FROM users WHERE username = ?`, scanUser, username)
+	rows, err := list(ctx, d, `SELECT `+userColumns+` FROM users WHERE username = ?`, scanUser, username)
 	if err != nil {
 		return UserRow{}, err
 	}
@@ -42,7 +68,7 @@ func (d *DB) GetUser(ctx context.Context, username string) (UserRow, error) {
 func scanUser(rows *sql.Rows) (UserRow, error) {
 	u := &v1.User{}
 	var hash string
-	if err := rows.Scan(&u.Id, &u.Username, &hash, at{&u.CreatedAt}, at{&u.UpdatedAt}); err != nil {
+	if err := rows.Scan(&u.Id, &u.Username, &hash, enumAt[v1.Role]{&u.Role}, at{&u.CreatedAt}, at{&u.UpdatedAt}); err != nil {
 		return UserRow{}, err
 	}
 	return UserRow{User: u, Hash: hash}, nil
@@ -80,4 +106,10 @@ func (d *DB) DeleteUser(ctx context.Context, username string) (string, error) {
 		return "", err
 	}
 	return id, tx.Commit()
+}
+
+// Makes every account from before roles an admin, the full access each held
+func adminLegacyUsers(ctx context.Context, d *DB) error {
+	_, err := d.sql.ExecContext(ctx, `UPDATE users SET role = ? WHERE role = ''`, enumCol(v1.Role_ROLE_ADMIN))
+	return err
 }

@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// Whether a condition holds
+enum ConditionStatus {
+  CONDITION_STATUS_UNSPECIFIED = 0;
+  CONDITION_STATUS_TRUE = 1;
+  CONDITION_STATUS_FALSE = 2;
+  CONDITION_STATUS_UNKNOWN = 3;
+}
+
+// One observed aspect of a resource, with why it last changed
+message Condition {
+  string type = 1;
+  ConditionStatus status = 2;
+  string reason = 3;
+  string message = 4;
+  google.protobuf.Timestamp last_transition_time = 5;
+  // The spec generation this condition describes
+  uint64 observed_generation = 6;
+}
+
+// Identifies the resource a status entry is reported against
+message ParentReference {
+  string group = 1;
+  string kind = 2;
+  string name = 3;
+  string namespace = 4;
+}
+
+// One controller's view of a resource from one parent, never touched by another controller
+message ParentStatus {
+  ParentReference parent_ref = 1;
+  // Domain slash path naming the controller that wrote the entry
+  string controller_name = 2;
+  repeated Condition conditions = 3;
+}
+
+// Bookkeeping every resource carries
+message ObjectMeta {
+  // Incremented on every spec change
+  uint64 generation = 1;
+  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Timestamp updated_at = 3;
+  map<string, string> labels = 4;
+  map<string, string> annotations = 5;
+}

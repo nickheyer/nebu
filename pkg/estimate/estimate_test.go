@@ -854,3 +854,78 @@ func TestCacheRatioScalesEveryCache(t *testing.T) {
 		t.Fatalf("the device need drops by the cache cut: %s vs %s", estimate.Human(estimate.PlannedDevice(whole)), estimate.Human(estimate.PlannedDevice(quarter)))
 	}
 }
+
+// A data parallel launch prices one rank per group of tensor parallel devices, the ranks sharing a mixture's experts
+func TestDataParallelRanksTakeTheirOwnDevices(t *testing.T) {
+	four := &v1.HostProfile{}
+	for _, id := range []string{"a", "b", "c", "d"} {
+		four.Pools = append(four.Pools, &v1.MemoryPool{Id: id, Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: id, TotalBytes: 24 * gib})
+	}
+	four.Pools = append(four.Pools, &v1.MemoryPool{Id: "h", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 64 * gib})
+	device := func(plan *v1.MemoryPlan) map[string]uint64 {
+		out := map[string]uint64{}
+		for _, pu := range plan.GetPools() {
+			if pu.GetKind() == v1.PoolKind_POOL_KIND_DEVICE && pu.GetUsedBytes() > 0 {
+				out[pu.GetPoolId()] = pu.GetUsedBytes()
+			}
+		}
+		return out
+	}
+	cases := []struct {
+		name    string
+		runtime string
+		model   *v1.Descriptor
+		params  map[string]any
+		verdict v1.FitVerdict
+		pools   int
+		weights uint64
+		detail  string
+	}{
+		{name: "one rank on one device", runtime: "vllm", model: descriptor(8, gib, 0), params: map[string]any{"n_ctx": int64(4096)}, verdict: v1.FitVerdict_FIT_VERDICT_FITS, pools: 1, weights: 8*gib + 600*mib},
+		{name: "two dense ranks hold the model twice", runtime: "vllm", model: descriptor(8, gib, 0), params: map[string]any{"n_ctx": int64(4096), "data_parallel_size": int64(2)}, verdict: v1.FitVerdict_FIT_VERDICT_FITS, pools: 2, weights: 2 * (8*gib + 600*mib)},
+		{name: "two ranks of two devices take all four", runtime: "vllm", model: descriptor(8, gib, 0), params: map[string]any{"n_ctx": int64(4096), "data_parallel_size": int64(2), "tensor_parallel_size": int64(2)}, verdict: v1.FitVerdict_FIT_VERDICT_FITS, pools: 4, weights: 2 * (8*gib + 600*mib)},
+		{name: "expert ranks hold the experts once between them", runtime: "vllm", model: descriptor(8, gib, 4*gib), params: map[string]any{"n_ctx": int64(4096), "data_parallel_size": int64(4)}, verdict: v1.FitVerdict_FIT_VERDICT_FITS, pools: 4, weights: 4*(8*gib+600*mib) + 32*gib},
+		{name: "SGLang ranks each hold the experts whole", runtime: "sglang", model: descriptor(4, gib, 3*gib), params: map[string]any{"n_ctx": int64(4096), "dp_size": int64(2)}, verdict: v1.FitVerdict_FIT_VERDICT_FITS, pools: 2, weights: 2 * (16*gib + 600*mib)},
+		{name: "ranks past the devices do not fit", runtime: "vllm", model: descriptor(8, gib, 0), params: map[string]any{"n_ctx": int64(4096), "data_parallel_size": int64(3), "tensor_parallel_size": int64(2)}, verdict: v1.FitVerdict_FIT_VERDICT_NO, pools: 4, detail: "3 data parallel ranks of 2 devices each need 6 devices, the host holds 4"},
+	}
+	for _, c := range cases {
+		p, params := policy(t, c.runtime)
+		plan, err := p.Plan(input(c.model, four, defaults(params, c.params)))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		used := device(plan)
+		if plan.GetVerdict() != c.verdict || len(used) != c.pools || (c.detail != "" && plan.GetDetail() != c.detail) {
+			t.Fatalf("%s: verdict %s pools %v detail %q", c.name, plan.GetVerdict(), used, plan.GetDetail())
+		}
+		if c.weights != 0 && plan.GetWeightsBytes() != c.weights {
+			t.Errorf("%s: weights %s, want %s", c.name, estimate.Human(plan.GetWeightsBytes()), estimate.Human(c.weights))
+		}
+		if c.verdict != v1.FitVerdict_FIT_VERDICT_FITS {
+			continue
+		}
+		var first uint64
+		for _, n := range used {
+			if first == 0 {
+				first = n
+			}
+			if n != first {
+				t.Errorf("%s: every rank's devices carry the same load, got %v", c.name, used)
+			}
+		}
+	}
+	// Ranks share the host pool, so each rank's share of it shrinks with their count
+	p, params := policy(t, "vllm")
+	small := &v1.HostProfile{Pools: []*v1.MemoryPool{
+		{Id: "a", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 24 * gib}, {Id: "b", Kind: v1.PoolKind_POOL_KIND_DEVICE, TotalBytes: 24 * gib},
+		{Id: "h", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 2 * gib},
+	}}
+	one, err := p.Plan(input(descriptor(8, gib, 0), small, defaults(params, map[string]any{"n_ctx": int64(4096), "cpu_offload_gb": 1.0})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := p.Plan(input(descriptor(8, gib, 0), small, defaults(params, map[string]any{"n_ctx": int64(4096), "data_parallel_size": int64(2)})))
+	if err != nil || one.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || two.GetVerdict() != v1.FitVerdict_FIT_VERDICT_FITS || two.GetCacheBytes() != 2*one.GetCacheBytes() || two.GetOverheadBytes() != 2*one.GetOverheadBytes() {
+		t.Fatalf("two ranks count every rank's cache and overhead: one %v two %v %v", one, two, err)
+	}
+}

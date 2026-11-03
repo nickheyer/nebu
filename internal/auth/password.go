@@ -32,7 +32,7 @@ func checkPassword(pw string) error {
 	return nil
 }
 
-// Hashes a password in PHC form: $argon2id$v=19$m=...,t=...,p=...$salt$hash
+// Hashes a password in PHC form, $argon2id$v=19$m=...,t=...,p=...$salt$hash
 func HashPassword(pw string) (string, error) {
 	if err := checkPassword(pw); err != nil {
 		return "", err

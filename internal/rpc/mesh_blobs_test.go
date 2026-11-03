@@ -15,6 +15,7 @@ import (
 
 	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/db"
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/store"
 )
 
@@ -80,14 +81,15 @@ func get(t *testing.T, srv *httptest.Server, path string, set func(*http.Request
 // token do not open it, and a member reads whole blobs and ranges of them
 func TestBlobsServePeersAlone(t *testing.T) {
 	srv, guard, sessions, tokens, digest, data := blobNode(t)
-	cookie, err := sessions.Cookie(auth.Session{Subject: "u1", Name: "User", Provider: auth.ProviderLocal, Expires: time.Now().Add(time.Hour)})
+	cookie, err := sessions.Cookie(auth.Session{Subject: "u1", Name: "User", Provider: auth.ProviderLocal, Role: v1.Role_ROLE_ADMIN, Expires: time.Now().Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := guard.Identify(http.Header{"Cookie": {cookie.String()}}); !ok {
 		t.Fatal("the web session is one the guard accepts for the API")
 	}
-	apiToken, err := tokens.Create(context.Background(), &auth.Session{Subject: "u1", Name: "User", Provider: auth.ProviderLocal}, "cli")
+	user := auth.Identity{Subject: "u1", Name: "User", Provider: auth.ProviderLocal, Role: v1.Role_ROLE_ADMIN, Scopes: auth.RoleScopes(v1.Role_ROLE_ADMIN)}
+	apiToken, err := tokens.Create(context.Background(), user, "cli", user.Scopes)
 	if err != nil {
 		t.Fatal(err)
 	}

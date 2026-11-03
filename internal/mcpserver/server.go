@@ -1,4 +1,4 @@
-// Package mcpserver offers nebu's models, runtimes, routes, traces, mesh, and tools to MCP clients.
+// Package mcpserver offers models, runtimes, pools, routes, objectives, scheduler configs, traces, mesh and tools to MCP clients
 package mcpserver
 
 import (
@@ -23,6 +23,7 @@ import (
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/mesh"
+	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc/services"
 	"github.com/nickheyer/nebu/internal/slots"
@@ -54,6 +55,7 @@ type Deps struct {
 	Installs   *installs.Manager
 	Instances  *instances.Manager
 	Slots      *slots.Manager
+	Pools      *pools.Manager
 	Gateway    *gateway.Gateway
 	Mesh       *mesh.Manager
 	Formations *formations.Manager
@@ -75,6 +77,7 @@ type nebu struct {
 	instance *services.InstanceService
 	slots    *services.SlotService
 	gateway  *services.GatewayService
+	imports  *services.PoolImportService
 	tasks    *services.TaskService
 	mesh     *services.MeshService
 	tools    *services.ToolService
@@ -82,9 +85,11 @@ type nebu struct {
 }
 
 // The streamable HTTP handler of nebu's MCP server, one server for every session
-func Handler(d Deps) http.Handler {
-	server := New(d)
-	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{DisableLocalhostProtection: true, Logger: d.Log})
+func Handler(d Deps) http.Handler { return streamable(New(d), d.Log) }
+
+// Serves one server over streamable HTTP with localhost protection, refusing loopback requests naming another host
+func streamable(server *mcp.Server, log *slog.Logger) http.Handler {
+	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Logger: log})
 }
 
 // Builds the server with every tool and resource
@@ -97,7 +102,8 @@ func New(d Deps) *mcp.Server {
 		store:    services.NewStoreService(d.Store, d.Puller, d.Events, d.Formations.PullTo),
 		instance: services.NewInstanceService(d.Instances),
 		slots:    services.NewSlotService(d.Slots),
-		gateway:  services.NewGatewayService(d.Gateway, d.Instances, d.Slots),
+		gateway:  services.NewGatewayService(d.Gateway, d.Pools, d.Guard),
+		imports:  services.NewPoolImportService(d.Mesh, d.Events),
 		tasks:    services.NewTaskService(d.Tasks),
 		mesh:     services.NewMeshService(d.Mesh, d.Formations, d.Puller, d.Tasks, d.Store, d.Perf, d.Instances, d.Guard),
 		tools:    services.NewToolService(d.Tools, d.Mesh),
@@ -185,14 +191,6 @@ type swapSlotIn struct {
 	RuntimeID  string            `json:"runtime_id,omitempty"`
 	Params     map[string]string `json:"params,omitempty"`
 	DrainFirst bool              `json:"drain_first,omitempty" jsonschema:"whether to let the occupant finish its requests before it stops"`
-}
-
-type setRouteIn struct {
-	Name          string   `json:"name" jsonschema:"the model name clients send"`
-	SlotID        string   `json:"slot_id,omitempty" jsonschema:"the slot the name maps to"`
-	InstanceID    string   `json:"instance_id,omitempty" jsonschema:"the ready instance the name maps to, when no slot"`
-	ToolServers   []string `json:"tool_servers,omitempty" jsonschema:"tool servers every request on the route gets"`
-	MutatingTools bool     `json:"mutating_tools,omitempty"`
 }
 
 type nameIn struct {
@@ -317,28 +315,37 @@ func (n *nebu) addTools(s *mcp.Server) {
 		r, err := n.gateway.ListRoutes(ctx, connect.NewRequest(&v1.ListRoutesRequest{}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "set_route", Description: "Maps a model name onto a slot or a running instance, with the tool servers its requests get"}, func(ctx context.Context, _ *mcp.CallToolRequest, in setRouteIn) (*mcp.CallToolResult, any, error) {
-		var profile *v1.Profile
-		if len(in.ToolServers) > 0 {
-			profile = &v1.Profile{ToolServers: in.ToolServers, MutatingTools: in.MutatingTools}
+	mcp.AddTool(s, &mcp.Tool{Name: "get_route", Description: "Reads one route with its rules, weighted pool targets, policy, objective and conditions", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {
+		r, err := n.gateway.GetRoute(ctx, connect.NewRequest(&v1.GetRouteRequest{Name: in.Name}))
+		return answer(r, err)
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "put_route", Description: "Creates or replaces a route splitting a model name over weighted pool targets, or sets policy, tools and objective over a route a slot or instance owns"}, func(ctx context.Context, _ *mcp.CallToolRequest, in putRouteIn) (*mcp.CallToolResult, any, error) {
+		spec, err := n.routeSpec(ctx, in)
+		if err != nil {
+			return nil, nil, err
 		}
-		r, err := n.gateway.SetRoute(ctx, connect.NewRequest(&v1.SetRouteRequest{Name: in.Name, SlotId: in.SlotID, InstanceId: in.InstanceID, Profile: profile}))
+		req, err := checked(&v1.PutRouteRequest{Name: in.Name, Spec: spec})
+		if err != nil {
+			return nil, nil, err
+		}
+		r, err := n.gateway.PutRoute(ctx, req)
 		return answer(r, err)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "delete_route", Description: "Removes a model name the gateway serves", Annotations: &mcp.ToolAnnotations{DestructiveHint: ptr(true)}}, func(ctx context.Context, _ *mcp.CallToolRequest, in nameIn) (*mcp.CallToolResult, any, error) {
 		r, err := n.gateway.DeleteRoute(ctx, connect.NewRequest(&v1.DeleteRouteRequest{Name: in.Name}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "list_traces", Description: "Lists recent gateway requests newest first, with timings, tokens, and tool calls", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in listTracesIn) (*mcp.CallToolResult, any, error) {
+	n.addPoolTools(s, ro)
+	mcp.AddTool(s, &mcp.Tool{Name: "list_traces", Description: "Lists recent gateway requests newest first, with timings, tokens, tool calls, the endpoint and pool that served each, the scheduler profile and score, queue wait, priority, objective outcome, fallbacks and request id", Annotations: ro}, func(ctx context.Context, req *mcp.CallToolRequest, in listTracesIn) (*mcp.CallToolResult, any, error) {
 		limit := uint32(in.Limit)
 		if limit == 0 {
 			limit = 50
 		}
-		r, err := n.gateway.ListTraces(ctx, connect.NewRequest(&v1.ListTracesRequest{Route: in.Route, Limit: limit}))
+		r, err := n.gateway.ListTraces(ctx, carry(req.Extra, &v1.ListTracesRequest{Route: in.Route, Limit: limit}))
 		return answer(r, err)
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "get_trace", Description: "Reads one gateway request with its bodies and the tools the gateway ran", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
-		r, err := n.gateway.GetTrace(ctx, connect.NewRequest(&v1.GetTraceRequest{Id: in.ID}))
+	mcp.AddTool(s, &mcp.Tool{Name: "get_trace", Description: "Reads one gateway request with its bodies, the tools the gateway ran, and the scheduler decision that placed it", Annotations: ro}, func(ctx context.Context, req *mcp.CallToolRequest, in idIn) (*mcp.CallToolResult, any, error) {
+		r, err := n.gateway.GetTrace(ctx, carry(req.Extra, &v1.GetTraceRequest{Id: in.ID}))
 		return answer(r, err)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "host_profile", Description: "Reads the host's devices, memory pools, and storage", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, in hostProfileIn) (*mcp.CallToolResult, any, error) {
@@ -548,40 +555,32 @@ func (n *nebu) addResources(s *mcp.Server) {
 		})
 	}
 	read("nebu://routes", "routes", "The model names the gateway serves", func(ctx context.Context) (proto.Message, error) {
-		r, err := n.gateway.ListRoutes(ctx, connect.NewRequest(&v1.ListRoutesRequest{}))
-		return r.Msg, err
+		return msgOf(n.gateway.ListRoutes(ctx, connect.NewRequest(&v1.ListRoutesRequest{})))
 	})
 	read("nebu://models", "models", "The models stored on this node", func(ctx context.Context) (proto.Message, error) {
-		r, err := n.store.ListModels(ctx, connect.NewRequest(&v1.ListModelsRequest{}))
-		return r.Msg, err
+		return msgOf(n.store.ListModels(ctx, connect.NewRequest(&v1.ListModelsRequest{})))
 	})
 	read("nebu://instances", "instances", "Running and past model instances", func(ctx context.Context) (proto.Message, error) {
-		r, err := n.instance.ListInstances(ctx, connect.NewRequest(&v1.ListInstancesRequest{}))
-		return r.Msg, err
+		return msgOf(n.instance.ListInstances(ctx, connect.NewRequest(&v1.ListInstancesRequest{})))
 	})
 	read("nebu://slots", "slots", "The slots models run in", func(ctx context.Context) (proto.Message, error) {
-		r, err := n.slots.ListSlots(ctx, connect.NewRequest(&v1.ListSlotsRequest{}))
-		return r.Msg, err
+		return msgOf(n.slots.ListSlots(ctx, connect.NewRequest(&v1.ListSlotsRequest{})))
 	})
 	read("nebu://host", "host", "The host's devices, memory pools, and storage", func(ctx context.Context) (proto.Message, error) {
-		r, err := n.host.GetProfile(ctx, connect.NewRequest(&v1.GetProfileRequest{}))
-		return r.Msg, err
+		return msgOf(n.host.GetProfile(ctx, connect.NewRequest(&v1.GetProfileRequest{})))
 	})
 	read("nebu://mesh", "mesh", "The mesh this node belongs to", func(ctx context.Context) (proto.Message, error) {
-		r, err := n.mesh.GetMesh(ctx, connect.NewRequest(&v1.GetMeshRequest{}))
-		return r.Msg, err
+		return msgOf(n.mesh.GetMesh(ctx, connect.NewRequest(&v1.GetMeshRequest{})))
 	})
 	read("nebu://tools", "tool servers", "The tool servers Settings hold and the tools they offer", func(ctx context.Context) (proto.Message, error) {
-		r, err := n.tools.ListToolServers(ctx, connect.NewRequest(&v1.ListToolServersRequest{}))
-		return r.Msg, err
+		return msgOf(n.tools.ListToolServers(ctx, connect.NewRequest(&v1.ListToolServersRequest{})))
 	})
-	s.AddResourceTemplate(&mcp.ResourceTemplate{URITemplate: "nebu://traces/{id}", Name: "trace", Description: "One gateway request with its bodies and tool calls", MIMEType: "application/json"}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-		id := strings.TrimPrefix(req.Params.URI, "nebu://traces/")
-		r, err := n.gateway.GetTrace(ctx, connect.NewRequest(&v1.GetTraceRequest{Id: id}))
+	n.addPoolResources(s, read)
+	n.template(s, "nebu://traces/{id}", "trace", "One gateway request with its bodies, tool calls and scheduler decision", func(ctx context.Context, req *mcp.ReadResourceRequest, id string) (proto.Message, error) {
+		r, err := n.gateway.GetTrace(ctx, carry(req.Extra, &v1.GetTraceRequest{Id: id}))
 		if err != nil {
-			return nil, mcp.ResourceNotFoundError(req.Params.URI)
+			return nil, err
 		}
-		data, _ := protojson.MarshalOptions{UseProtoNames: true}.Marshal(r.Msg)
-		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: req.Params.URI, MIMEType: "application/json", Text: string(data)}}}, nil
+		return r.Msg, nil
 	})
 }

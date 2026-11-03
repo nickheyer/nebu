@@ -2,9 +2,12 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "nebu/v1/estimate.proto";
 import "nebu/v1/gateway.proto";
+import "nebu/v1/meta.proto";
+import "nebu/v1/pool.proto";
 import "nebu/v1/host.proto";
 import "nebu/v1/instance.proto";
 import "nebu/v1/model.proto";
@@ -14,17 +17,39 @@ import "nebu/v1/task.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
 
-// Whether a member answers syncs
+// Whether a member is heard in gossip rounds
 enum NodeState {
+  reserved 4;
+  reserved "NODE_STATE_FORGOTTEN";
   NODE_STATE_UNSPECIFIED = 0;
   NODE_STATE_READY = 1;
-  // Missed three syncs
+  // Unseen for three rounds in every peer's view
   NODE_STATE_UNREACHABLE = 2;
-  // Missing for ten minutes, until it syncs again
+  // Unseen for ten minutes, until it is seen again
   NODE_STATE_GONE = 3;
-  // Forgotten here: refused at the handshake and from gossip until it is invited or admitted again
-  // or the mesh secret rotates. A forgotten node is no member and its row keeps only the refusal
-  NODE_STATE_FORGOTTEN = 4;
+}
+
+// One part of a node record, each carrying the sequence it last changed at so a sync sends deltas
+enum RecordPart {
+  RECORD_PART_UNSPECIFIED = 0;
+  // Name, version, addresses, platform, certificate and issuer flag
+  RECORD_PART_IDENTITY = 1;
+  RECORD_PART_PROFILE = 2;
+  RECORD_PART_INSTALLS = 3;
+  RECORD_PART_STORED = 4;
+  RECORD_PART_CAPABILITIES = 5;
+  RECORD_PART_THROUGHPUT = 6;
+  RECORD_PART_LINKS = 7;
+  RECORD_PART_ROUTES = 8;
+  RECORD_PART_POOLS = 9;
+  RECORD_PART_SEATS = 10;
+  RECORD_PART_SLOTS = 11;
+  // Formations conducted on the node with their ids
+  RECORD_PART_FORMATIONS = 12;
+  // Admissions the node holds for nodes outside
+  RECORD_PART_ADMISSIONS = 13;
+  // Objectives the node's shared routes name
+  RECORD_PART_OBJECTIVES = 14;
 }
 
 // Lifecycle of a formation
@@ -43,10 +68,10 @@ enum FormationState {
 
 // The mesh this node belongs to
 message Mesh {
+  reserved 3;
+  reserved "tls";
   string id = 1;
   string name = 2;
-  // Whether members verify each other with the mesh certificate authority
-  bool tls = 3;
   // This node's id
   string self = 4;
   google.protobuf.Timestamp created_at = 5;
@@ -58,6 +83,33 @@ message Mesh {
   // guard or direct, how seats other seats connect to are exposed
   string exposure = 9;
   uint32 members = 10;
+  // The member holding the certificate authority key, the only one signing certificates and grants
+  string issuer = 11;
+  // Handoffs of the issuer role so far, the higher count winning when views differ
+  uint64 issuer_epoch = 12;
+  // sha256 of the mesh certificate authority in hex
+  string ca_fingerprint = 13;
+  // When this node's certificate expires, renewed by the issuer within thirty days of it
+  google.protobuf.Timestamp certificate_expires_at = 14;
+  // Certificates refused at every handshake until they expire
+  repeated Revocation revocations = 15;
+}
+
+// A certificate refused at every handshake
+message Revocation {
+  // The certificate serial in hex
+  string serial = 1;
+  string node_id = 2;
+  google.protobuf.Timestamp not_after = 3;
+  google.protobuf.Timestamp revoked_at = 4;
+  // The certificate was replaced by renewal, its node staying a member
+  bool renewed = 5;
+}
+
+// One record part with the sequence it last changed at
+message NodePart {
+  RecordPart part = 1;
+  uint64 sequence = 2;
 }
 
 // One stored weight group as a member advertises it
@@ -146,6 +198,10 @@ message SeatRef {
   string error = 7;
   // The triage hits of a seat that failed, until its conductor has taken them
   repeated TriageHit triage = 8;
+  // The seat instance's conditions as its node observes them
+  repeated Condition conditions = 9;
+  // The seat's data parallel ranks with the health of each as its node observes it
+  repeated InstanceRank ranks = 10;
 }
 
 // A slot on a node, as its record advertises it
@@ -158,6 +214,8 @@ message SlotRef {
 
 // What every other member knows about a node
 message Node {
+  reserved 19, 20, 24;
+  reserved "public_key", "tls_fingerprint", "tls";
   string id = 1;
   string name = 2;
   repeated string addresses = 3;
@@ -176,16 +234,50 @@ message Node {
   repeated string formation_ids = 15;
   repeated SeatRef seats = 16;
   repeated SlotRef slots = 17;
+  // Routes the node serves, carried without traffic counters
   repeated Route routes = 18;
-  // The node's Ed25519 public key and the fingerprint of the certificate it listens with
-  bytes public_key = 19;
-  string tls_fingerprint = 20;
   string os = 21;
   string arch = 22;
   // The mesh address the node listens on for node traffic
   string address = 23;
-  // Whether the node serves TLS on its mesh address
-  bool tls = 24;
+  // Reachable, Synced and CertificateValid as this node observes them, never synced
+  repeated Condition conditions = 25;
+  // Pools the node exports to the mesh, with the endpoints it serves
+  repeated Pool pools = 26;
+  // The sequence the parts this copy carries are relative to, zero for a full snapshot
+  uint64 delta_base = 27;
+  // The parts this copy carries with the sequence each last changed at
+  repeated NodePart parts = 28;
+  // The node's mesh certificate in DER
+  bytes certificate = 29;
+  // Whether the node holds the issuer role
+  bool issuer = 30;
+  // Objectives the node's shared routes name, so an importer holds them before naming the routes
+  repeated Objective objectives = 31;
+  // Set on a node of another mesh this node exports to or imports from
+  Federation federation = 32;
+}
+
+// Which side of a cross mesh export a node is on
+enum FederationRole {
+  FEDERATION_ROLE_UNSPECIFIED = 0;
+  // The node exports its pools to this one
+  FEDERATION_ROLE_EXPORTER = 1;
+  // The node imports this one's pools
+  FEDERATION_ROLE_IMPORTER = 2;
+}
+
+// A node of another mesh pools are exported to or imported from, known by its identity certificate
+message Federation {
+  // The hash of the other node's mesh
+  string mesh_hash = 1;
+  string mesh_name = 2;
+  // sha256 of the other node's identity certificate in hex, pinned at every dial
+  string fingerprint = 3;
+  FederationRole role = 4;
+  // The other node's mesh address
+  string address = 5;
+  google.protobuf.Timestamp since = 6;
 }
 
 // One node's place in a formation
@@ -200,7 +292,7 @@ message Seat {
   string endpoint = 8;
   string transport = 9;
   string node_name = 10;
-  // Layer range the seat holds, from inclusive to exclusive; every layer when both are zero
+  // Layer range the seat holds from inclusive to exclusive, every layer when both are zero
   uint32 layer_from = 11;
   uint32 layer_to = 12;
   // Bytes a token reads on the seat, and the cache it holds at the planned context
@@ -215,19 +307,11 @@ message Seat {
   bool exposed = 18;
   // Launch phase, lower first
   uint32 phase = 19;
-  // Devices the seat holds in tensor order, the planned bytes on each, and the layers each holds. A
-  // chain head whose runtime carries the stages as devices of its own, as llama.cpp does with --device and
-  // --tensor-split, lists the stage devices first, one entry per stage device in seat order named
-  // <node id>/<device id>, then its own devices last, so the output projection sits on its own device; the
-  // runtime renders the device list and the layer counts in that order, and the seat's node pins only the
-  // entries naming its own devices. Every other seat lists its own devices alone
+  // Devices in tensor order, a chain head listing stage devices as node slash device before its own
   repeated string device_ids = 20;
   repeated uint64 device_bytes = 21;
   uint32 gpu_layers = 22;
-  // Layers each device in device_ids holds. A runtime that splits layers over devices renders these
-  // counts, which sum to the layers the seat keeps on devices, so each device takes exactly the layers
-  // the plan sized it for; a runtime that shards every layer across a seat's devices holds the seat's
-  // range on each
+  // Layers each device in device_ids holds, summing to the layers the seat keeps on devices
   repeated uint32 device_layers = 27;
   // The seat's mesh host and the port its own protocol takes there
   string address = 23;
@@ -235,6 +319,10 @@ message Seat {
   // What the seat's runtime parsed from its log, and the triage hits when it failed
   repeated Measurement measurements = 25;
   repeated TriageHit triage = 26;
+  // The seat instance conditions as its node last reported them
+  repeated Condition conditions = 28;
+  // The seat's data parallel ranks when it runs several, each with its mesh port and health
+  repeated InstanceRank ranks = 29;
 }
 
 // Every seat's measurements on one node, summed by key
@@ -263,7 +351,7 @@ message Candidate {
   uint32 draft_tokens = 12;
 }
 
-// The cost model's prefill as a function of prompt tokens: fixed seconds plus seconds per prompt token
+// The cost model's prefill as fixed seconds plus seconds per prompt token
 message PrefillCost {
   double fixed_seconds = 1;
   double seconds_per_prompt_token = 2;
@@ -299,12 +387,11 @@ message FormationPlan {
   repeated string sources = 22;
   // The slowest link class among the seats, what the ratio table is keyed by
   LinkClass link_class = 23;
-  // The gain over the best solo candidate that fits: its seconds per token over the plan's, zero when none fits
+  // The best fitting solo candidate's seconds per token over the plan's, zero when none fits
   double speedup = 24;
-  // The affinity policy the gateway applies to a replicas route, unset for other shapes
-  AffinityPolicy affinity = 25;
-  // The cost model's own prices before the learned ratio, what a trace's prediction is re-priced from at
-  // its prompt length: prefill is the largest piece at that length, decode is per token
+  // The scheduler configuration the gateway runs a replicas route through, by name
+  string scheduler_config = 25;
+  // The cost model's prefill and decode prices before the learned ratio, re-priced per trace prompt length
   repeated PrefillCost prefill_cost = 26;
   double model_decode_seconds_per_token = 27;
   // Formation runs the applied ratios were learned from
@@ -345,10 +432,12 @@ message Formation {
   string cache_key = 26;
   // Every seat's measurements summed by node
   repeated NodeMeasurements measurements = 27;
-  // Relaunches in a row whose predecessor ended before it had served a stretch: one for the first
-  // relaunch after a formation that was never ready or degraded soon after ready, zero for a fresh
-  // run or a relaunch after a long stretch ready. A formation degraded past the limit stays failed
+  // Relaunches in a row whose predecessor ended before serving a stretch, past the limit staying failed
   uint32 relaunches = 28;
+  repeated Condition conditions = 29;
+  uint64 observed_generation = 30;
+  // Incremented on every change to the request
+  uint64 generation = 31;
 }
 
 // Learned correction for one shape, runtime, and link class
@@ -375,22 +464,25 @@ message DeviceProfile {
 
 // One member as gossip carries it
 message Member {
+  reserved 5, 6, 7, 9;
+  reserved "tls_fingerprint", "state", "seen_at", "tls";
   string id = 1;
   string name = 2;
   repeated string addresses = 3;
   string address = 4;
-  string tls_fingerprint = 5;
-  NodeState state = 6;
-  google.protobuf.Timestamp seen_at = 7;
+  // The latest sequence of the member's record the sender knows of
   uint64 sequence = 8;
-  bool tls = 9;
+  // Rounds the member has run as counted by itself, a higher count anywhere proving it alive
+  uint64 heartbeat = 10;
+  // The serial of the member's certificate in hex, so gossip never revives a revoked member
+  string serial = 11;
 }
 
-// Makes a mesh on this node
+// Makes a mesh on this node, with a certificate authority it holds as issuer
 message InitRequest {
-  string name = 1;
-  // Make a certificate authority so members verify each other
-  bool tls = 2;
+  reserved 2;
+  reserved "tls";
+  string name = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the mesh and a join token
@@ -399,25 +491,29 @@ message InitResponse {
   string token = 2;
 }
 
-// Asks for a join token
-message TokenRequest {}
+// Asks the issuer for a join token
+message TokenRequest {
+  // Lifetime of the token, an hour when zero, at most a month
+  uint32 ttl_seconds = 1 [(buf.validate.field).uint32.lte = 2678400];
+}
 
-// Returns a join token naming this node as the bootstrap member
+// Returns a single use join token the issuer signed
 message TokenResponse {
   string token = 1;
+  google.protobuf.Timestamp expires_at = 2;
 }
 
 // Joins the mesh a token names
 message JoinRequest {
-  string token = 1;
+  string token = 1 [(buf.validate.field).string.min_len = 1];
 }
 
-// Returns the mesh and the bootstrap member's record
+// Returns the mesh and the issuer's record
 message JoinResponse {
+  reserved 3;
+  reserved "warnings";
   Mesh mesh = 1;
   Node bootstrap = 2;
-  // Warnings such as plain listeners
-  repeated string warnings = 3;
 }
 
 // Leaves the mesh and tells the others
@@ -428,10 +524,10 @@ message LeaveResponse {
   Mesh mesh = 1;
 }
 
-// Issues a new secret to every reachable member
+// Makes a new certificate authority on the issuer and reissues every reachable member's certificate
 message RotateRequest {}
 
-// Returns which members took the new secret and which must join again
+// Returns which members took a certificate under the new authority and which must join again
 message RotateResponse {
   Mesh mesh = 1;
   repeated string rotated = 2;
@@ -472,7 +568,7 @@ message ProbeResponse {
 
 // Sets declared numbers for devices matching a pattern
 message SetDeviceProfileRequest {
-  DeviceProfile profile = 1;
+  DeviceProfile profile = 1 [(buf.validate.field).required = true];
 }
 
 // Returns every profile after the change
@@ -480,9 +576,9 @@ message SetDeviceProfileResponse {
   repeated DeviceProfile profiles = 1;
 }
 
-// Removes numbers a person set for a pattern; devices it named fall back to the shipped table
+// Removes numbers a person set for a pattern, its devices falling back to the shipped table
 message DeleteDeviceProfileRequest {
-  string pattern = 1;
+  string pattern = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns every profile after the change
@@ -490,9 +586,9 @@ message DeleteDeviceProfileResponse {
   repeated DeviceProfile profiles = 1;
 }
 
-// Plans a formation without launching it. The model comes from a source or the store.
+// Plans a formation without launching it, the model coming from a source or the store
 message PlanFormationRequest {
-  RunRequest run = 1;
+  RunRequest run = 1 [(buf.validate.field).required = true];
   string revision = 2;
 }
 
@@ -504,7 +600,7 @@ message PlanFormationResponse {
 
 // Plans and launches a formation across the span
 message RunFormationRequest {
-  RunRequest run = 1;
+  RunRequest run = 1 [(buf.validate.field).required = true];
 }
 
 // Returns the formation and the conductor's task
@@ -525,7 +621,7 @@ message ListFormationsResponse {
 
 // Fetches one formation by id or name
 message GetFormationRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns one formation
@@ -535,7 +631,7 @@ message GetFormationResponse {
 
 // Stops one formation
 message StopFormationRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the formation after stop
@@ -545,7 +641,7 @@ message StopFormationResponse {
 
 // Removes a formation record, stopping a running one first
 message DeleteFormationRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the formation removed
@@ -553,15 +649,26 @@ message DeleteFormationResponse {
   Formation formation = 1;
 }
 
-// Forgets a member, on every reachable member with tell
+// Revokes a member's certificate, the revocation reaching every member in gossip
 message ForgetNodeRequest {
-  string node_id = 1;
-  bool tell = 2;
+  reserved 2;
+  reserved "tell";
+  string node_id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the member forgotten
 message ForgetNodeResponse {
   Node node = 1;
+}
+
+// Hands the issuer role and the certificate authority key to another member
+message HandOffIssuerRequest {
+  string node_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// Returns the mesh with its new issuer
+message HandOffIssuerResponse {
+  Mesh mesh = 1;
 }
 
 // Leaves any mesh and clears every trace of it, formations included
@@ -574,7 +681,7 @@ message ResetMeshResponse {
 
 // Streams one seat's output, the head when no role is named
 message FormationLogsRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
   string node_id = 2;
   string role = 3;
   bool follow = 4;
@@ -588,58 +695,105 @@ message FormationLogsResponse {
   string role = 3;
 }
 
-// The first call carries a nonce and no proof, the second the proof of the callee's nonce and the caller's record
-message HelloRequest {
-  string node_id = 1;
-  bytes nonce = 2;
-  // sha256 of the mesh id, so a node answers only for its own mesh
-  bytes mesh_hash = 3;
-  // HMAC under the secret of the callee's nonce, empty on the first call
-  bytes proof = 4;
-  Node node = 5;
-  string version = 6;
-  // The certificate the caller listens with, for members without a certificate authority
-  string tls_fingerprint = 7;
+// A node holding a join grant asks the issuer to sign its certificate signing request
+message EnrollRequest {
+  // PKCS 10 request in DER for the node's fresh Ed25519 key, naming the node as a URI
+  bytes csr = 1 [(buf.validate.field).bytes.min_len = 1];
+  Node node = 2 [(buf.validate.field).required = true];
 }
 
-// The callee's proof on the first call, its session token and mesh material on the second
-message HelloResponse {
-  string node_id = 1;
-  bytes nonce = 2;
-  // HMAC under the secret of the caller's nonce and both ids
-  bytes proof = 3;
-  string session_token = 4;
-  Node node = 5;
-  repeated Member members = 6;
-  Mesh mesh = 7;
-  // The mesh certificate authority and the certificate issued to the caller, when the mesh has TLS
-  bytes ca_certificate = 8;
-  bytes ca_key = 9;
-  bytes certificate = 10;
-  google.protobuf.Timestamp expires_at = 11;
+// Returns the certificate the issuer signed with the authority and the mesh to sync with
+message EnrollResponse {
+  Mesh mesh = 1;
+  bytes ca_certificate = 2;
+  bytes certificate = 3;
+  Node issuer = 4;
+  repeated Member members = 5;
 }
 
-// The sender's record, member list, and the formations it conducts
+// A member asks the issuer to sign a fresh key before its certificate expires
+message RenewRequest {
+  bytes csr = 1 [(buf.validate.field).bytes.min_len = 1];
+}
+
+// Returns the renewed certificate, the one it replaces revoked
+message RenewResponse {
+  bytes certificate = 1;
+}
+
+// A member asks the issuer for a join token to hand a node outside
+message GrantRequest {
+  // Lifetime of the token, an hour when zero, at most a month
+  uint32 ttl_seconds = 1 [(buf.validate.field).uint32.lte = 2678400];
+}
+
+// Returns the token with its expiry
+message GrantResponse {
+  string token = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+// The issuer hands a member a certificate under a new authority during rotation
+message ReissueRequest {
+  bytes ca_certificate = 1 [(buf.validate.field).bytes.min_len = 1];
+  bytes certificate = 2 [(buf.validate.field).bytes.min_len = 1];
+}
+
+// Acknowledges the new certificate
+message ReissueResponse {
+  string node_id = 1;
+}
+
+// The issuer hands a member its role and the authority key
+message TakeIssuerRequest {
+  // PKCS 8 private key of the mesh certificate authority
+  bytes ca_key = 1 [(buf.validate.field).bytes.min_len = 1];
+  uint64 issuer_epoch = 2;
+}
+
+// Acknowledges the role
+message TakeIssuerResponse {}
+
+// The caller's record parts changed since the callee last held it, the members it knows, and its mesh state
 message SyncRequest {
-  Node node = 1;
+  // The caller's record carrying the parts its parts list names
+  Node node = 1 [(buf.validate.field).required = true];
   repeated Member members = 2;
+  // Present when the record's parts list names formations
   repeated Formation formations = 3;
-  // Admissions this member holds for nodes outside, so any member's page shows and decides them
+  // Present when the record's parts list names admissions
   repeated Admission admissions = 4;
+  // The sequence of the callee's record the caller holds whole, zero when it holds none
+  uint64 delta_base = 5;
+  // sha256 of the caller's issuer, issuer epoch, authority and revocations
+  bytes mesh_digest = 6;
+  // The caller's mesh state, sent when its digest differs from the one the callee last sent
+  Mesh mesh = 7;
 }
 
-// The callee's record, member list, formations, and the renewed session expiry
+// The callee's record parts changed since the caller's delta base, its members, mesh state and the caller's session
 message SyncResponse {
   Node node = 1;
   repeated Member members = 2;
   repeated Formation formations = 3;
+  // When the session token expires
   google.protobuf.Timestamp expires_at = 4;
   repeated Admission admissions = 5;
+  // The bearer the caller sends on HTTP calls to the callee, renewed on every sync
+  string session_token = 6;
+  // The sequence of the caller's record the callee now holds whole
+  uint64 held = 7;
+  bytes mesh_digest = 8;
+  Mesh mesh = 9;
 }
 
 // Asks for a stream of bytes to measure
 message StreamRequest {
-  uint64 bytes = 1;
+  // Bytes the peer streams back for a bandwidth probe, at most a gibibyte
+  uint64 bytes = 1 [(buf.validate.field).uint64 = {
+    gte: 1
+    lte: 1073741824
+  }];
 }
 
 // One chunk of the stream
@@ -649,7 +803,7 @@ message StreamResponse {
 
 // A conductor asks a member to start a seat
 message RunSeatRequest {
-  RunRequest run = 1;
+  RunRequest run = 1 [(buf.validate.field).required = true];
 }
 
 // Returns the seat's instance and its startup task
@@ -660,7 +814,7 @@ message RunSeatResponse {
 
 // A conductor asks a member to stop a seat
 message StopSeatRequest {
-  string instance_id = 1;
+  string instance_id = 1 [(buf.validate.field).string.min_len = 1];
   string formation_id = 2;
 }
 
@@ -671,9 +825,9 @@ message StopSeatResponse {
 
 // Asks a decode node to fetch a saved slot from the prefill node
 message MoveSlotRequest {
-  string formation_id = 1;
-  string from_node_id = 2;
-  string file = 3;
+  string formation_id = 1 [(buf.validate.field).string.min_len = 1];
+  string from_node_id = 2 [(buf.validate.field).string.min_len = 1];
+  string file = 3 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the path the slot landed at
@@ -684,15 +838,15 @@ message MoveSlotResponse {
 
 // A conductor asks a member to remove a relay's slot file once the decode seat restored it
 message DropSlotRequest {
-  string formation_id = 1;
-  string file = 2;
+  string formation_id = 1 [(buf.validate.field).string.min_len = 1];
+  string file = 2 [(buf.validate.field).string.min_len = 1];
 }
 
 message DropSlotResponse {}
 
 // A conductor asks a seat's node for the seat's instance
 message GetSeatRequest {
-  string instance_id = 1;
+  string instance_id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the seat's instance as its node records it
@@ -702,8 +856,8 @@ message GetSeatResponse {
 
 // A conductor asks a member to pull a model, from the mesh before the internet
 message PullSeatRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string revision = 3;
   string group = 4;
   bool alone = 5;
@@ -718,7 +872,7 @@ message PullSeatResponse {
 
 // Follows a task on a member
 message WatchPullRequest {
-  string task_id = 1;
+  string task_id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // One snapshot of the member's task with new log lines
@@ -729,9 +883,9 @@ message WatchPullResponse {
 
 // Streams a seat's output from its node
 message SeatLogsRequest {
-  string instance_id = 1;
+  string instance_id = 1 [(buf.validate.field).string.min_len = 1];
   bool follow = 2;
-  uint32 tail = 3;
+  uint32 tail = 3 [(buf.validate.field).uint32.lte = 100000];
 }
 
 // Batch of log lines from the seat
@@ -741,8 +895,8 @@ message SeatLogsResponse {
 
 // Asks a member for the manifest of a model it holds
 message GetStoredRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string group = 3;
 }
 
@@ -751,20 +905,8 @@ message GetStoredResponse {
   StoredModel model = 1;
 }
 
-// Hands a member the new secret during rotation
-message RekeyRequest {
-  bytes secret = 1;
-}
-
-// Acknowledges the new secret
-message RekeyResponse {
-  string node_id = 1;
-}
-
-// Tells members this node left
-message ByeRequest {
-  string node_id = 1;
-}
+// Tells members this node left, its certificate revoked by each
+message ByeRequest {}
 
 // Acknowledges the departure
 message ByeResponse {}
@@ -778,10 +920,10 @@ enum AdmissionSide {
   ADMISSION_SIDE_CANDIDATE = 2;
 }
 
-// Where an admission stands. Later states win when members' copies differ.
+// Where an admission stands, later states winning when members' copies differ
 enum AdmissionState {
   ADMISSION_STATE_UNSPECIFIED = 0;
-  // Waiting on a decision: a member's when the candidate asked, the candidate's when a member invited
+  // Waiting on a member's decision when the candidate asked, the candidate's when a member invited
   ADMISSION_STATE_PENDING = 1;
   // A member refused the candidate
   ADMISSION_STATE_DENIED = 2;
@@ -791,7 +933,7 @@ enum AdmissionState {
   ADMISSION_STATE_EXPIRED = 4;
   // The token could not be delivered, detail says why
   ADMISSION_STATE_FAILED = 5;
-  // A member sent the candidate the join token
+  // A member sent the candidate a join grant
   ADMISSION_STATE_ADMITTED = 6;
   // The candidate is a member
   ADMISSION_STATE_JOINED = 7;
@@ -801,11 +943,13 @@ enum AdmissionState {
 
 // A node heard on the network by beacon, in this mesh, another, or none
 message NearbyNode {
+  reserved 4, 12;
+  reserved "tls", "mesh_tls";
   string id = 1;
   string name = 2;
   // The address the node listens on for node traffic, empty when it listens on loopback alone
   string address = 3;
-  bool tls = 4;
+  // sha256 of the self signed identity certificate the node answers admissions with
   string tls_fingerprint = 5;
   string version = 6;
   string os = 7;
@@ -814,7 +958,6 @@ message NearbyNode {
   string mesh_hash = 9;
   string mesh_name = 10;
   uint32 mesh_members = 11;
-  bool mesh_tls = 12;
   google.protobuf.Timestamp heard_at = 13;
   // Whether the node is a member of this node's mesh
   bool member = 14;
@@ -824,27 +967,28 @@ message NearbyNode {
 
 // A mesh heard on the network, from its members' beacons
 message NearbyMesh {
+  reserved 4;
+  reserved "tls";
   string hash = 1;
   string name = 2;
   uint32 members = 3;
-  bool tls = 4;
   // The members heard
   repeated NearbyNode nodes = 5;
   google.protobuf.Timestamp heard_at = 6;
 }
 
-// One node's standing with one mesh while admission is decided. A member keeps one per node
-// outside asking or invited; a node outside keeps one per mesh it asked or was invited to.
+// One node's standing with one mesh while admission is decided, kept per node or per mesh
 message Admission {
+  reserved 8;
+  reserved "mesh_tls";
   string id = 1;
   AdmissionSide side = 2;
   AdmissionState state = 3;
-  // The node across: on a member the candidate, on a candidate the member spoken to
+  // The node across, the candidate on a member and the member spoken to on a candidate
   NearbyNode node = 4;
   string mesh_hash = 5;
   string mesh_name = 6;
   uint32 mesh_members = 7;
-  bool mesh_tls = 8;
   // Whether a member invited the candidate, and whether the candidate asked
   bool invited = 9;
   bool asked = 10;
@@ -854,12 +998,11 @@ message Admission {
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp updated_at = 14;
   google.protobuf.Timestamp expires_at = 15;
-  // Whether the node across answered at the address on record: its beacon came from it, or a call reached it
+  // Whether the node across answered at the address on record by beacon or call
   bool reached = 16;
 }
 
-// The mesh from this node: the mesh it belongs to, the nodes and meshes heard on the network,
-// and the admissions under way
+// The mesh this node belongs to, the nodes and meshes heard nearby, and admissions under way
 message MeshStatus {
   // Nil when the node belongs to no mesh
   Mesh mesh = 1;
@@ -873,8 +1016,10 @@ message MeshStatus {
   repeated NearbyNode nodes = 7;
   repeated NearbyMesh meshes = 8;
   repeated Admission admissions = 9;
-  // Why no node traffic listener is bound, when the default address could not be taken
-  string listen_error = 10;
+  reserved 10;
+  reserved "listen_error";
+  // Nodes of other meshes this node exports to or imports from
+  repeated Node federations = 11;
 }
 
 // Asks for the mesh status
@@ -884,8 +1029,13 @@ message DiscoverResponse {
   MeshStatus status = 1;
 }
 
-// A member invites a node heard on the network, or one at an address on a network that passes no beacons
+// A member invites a node heard on the network or one named by address
 message InviteRequest {
+  option (buf.validate.message).cel = {
+    id: "node_or_address"
+    message: "a node id or an address is required"
+    expression: "this.node_id != '' || this.address != ''"
+  };
   string node_id = 1;
   string address = 2;
 }
@@ -894,10 +1044,9 @@ message InviteResponse {
   Admission admission = 1;
 }
 
-// A node outside asks to join a mesh heard on the network, through one member or the freshest heard,
-// or the mesh of a member at an address on a network that passes no beacons
+// A node outside asks to join a mesh heard nearby or the mesh of a member named by address
 message AskRequest {
-  string mesh_hash = 1;
+  string mesh_hash = 1 [(buf.validate.field).string.min_len = 1];
   string node_id = 2;
   string address = 3;
 }
@@ -908,7 +1057,7 @@ message AskResponse {
 
 // A member admits a candidate that asked
 message AdmitRequest {
-  string admission_id = 1;
+  string admission_id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 message AdmitResponse {
@@ -917,7 +1066,7 @@ message AdmitResponse {
 
 // A member denies a candidate, or a candidate declines an invitation
 message RefuseRequest {
-  string admission_id = 1;
+  string admission_id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 message RefuseResponse {
@@ -926,17 +1075,17 @@ message RefuseResponse {
 
 // Clears a settled admission from the page
 message DismissRequest {
-  string admission_id = 1;
+  string admission_id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 message DismissResponse {}
 
-// Node to node: a node outside asks a member to join, answers an invitation, or declines one
+// Node to node, a node outside asks a member to join or declines an invitation
 message KnockRequest {
-  NearbyNode node = 1;
-  string mesh_hash = 2;
-  // Whether the knock answers an invitation
-  bool invited = 3;
+  reserved 3;
+  reserved "invited";
+  NearbyNode node = 1 [(buf.validate.field).required = true];
+  string mesh_hash = 2 [(buf.validate.field).string.min_len = 1];
   bool declined = 4;
 }
 
@@ -946,13 +1095,15 @@ message KnockResponse {
   NearbyNode member = 2;
 }
 
-// Node to node: a member invites a node outside
+// Node to node, a member invites a node outside with the grant it joins with on accepting
 message OfferRequest {
-  NearbyNode member = 1;
-  string mesh_hash = 2;
+  reserved 5;
+  reserved "mesh_tls";
+  NearbyNode member = 1 [(buf.validate.field).required = true];
+  string mesh_hash = 2 [(buf.validate.field).string.min_len = 1];
   string mesh_name = 3;
   uint32 mesh_members = 4;
-  bool mesh_tls = 5;
+  string grant = 6;
 }
 
 message OfferResponse {
@@ -961,39 +1112,98 @@ message OfferResponse {
   NearbyNode node = 2;
 }
 
-// Node to node: a member hands a candidate the join token, or tells it no
+// Node to node, a member hands a candidate a join grant or tells it no
 message WelcomeRequest {
-  NearbyNode member = 1;
-  string mesh_hash = 2;
-  string token = 3;
+  NearbyNode member = 1 [(buf.validate.field).required = true];
+  string mesh_hash = 2 [(buf.validate.field).string.min_len = 1];
+  string grant = 3;
   bool denied = 4;
   string detail = 5;
 }
 
+// The candidate's answer, with the certificate the issuer signed for it once it joined
 message WelcomeResponse {
   bool joined = 1;
   string node_id = 2;
+  bytes certificate = 3;
+}
+
+// A node of another mesh presents an export token to import the exporter's pools
+message FederateRequest {
+  string token = 1 [(buf.validate.field).string.min_len = 1];
+  // The importer's id, name and mesh address
+  NearbyNode node = 2 [(buf.validate.field).required = true];
+}
+
+// The exporter's mesh, its exported record, and the importer's session
+message FederateResponse {
+  string mesh_hash = 1;
+  string mesh_name = 2;
+  Node node = 3;
+  string session_token = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+// An importer of another mesh asks for the exporter's exported record
+message ExportsRequest {}
+
+// The exporter's exported pools, routes and objectives with a renewed session
+message ExportsResponse {
+  Node node = 1;
+  string mesh_hash = 2;
+  string session_token = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+// Mints a token a node of another mesh imports this node's pools with
+message ExportTokenRequest {
+  uint32 ttl_seconds = 1;
+}
+
+message ExportTokenResponse {
+  string token = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+// Imports the pools of the node of another mesh an export token names
+message ImportMeshRequest {
+  string token = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ImportMeshResponse {
+  Node node = 1;
+}
+
+// Ends a cross mesh export or import with a node
+message DropFederationRequest {
+  string node_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message DropFederationResponse {
+  Node node = 1;
 }
 
 // Membership, links, planning, and formations across nodes
 service MeshService {
-  // Makes a mesh on this node
+  // Makes a mesh on this node, which holds its certificate authority as issuer
   rpc Init(InitRequest) returns (InitResponse);
   // Joins the mesh a token names
   rpc Join(JoinRequest) returns (JoinResponse);
-  // Leaves the mesh
+  // Leaves the mesh, its certificate revoked by every member
   rpc Leave(LeaveRequest) returns (LeaveResponse);
-  // Forgets a member that is gone, telling the others
+  // Revokes a member's certificate everywhere
   rpc ForgetNode(ForgetNodeRequest) returns (ForgetNodeResponse);
   // Leaves any mesh and clears every trace of it
   rpc ResetMesh(ResetMeshRequest) returns (ResetMeshResponse);
-  // Issues a new secret to every reachable member
+  // Makes a new certificate authority and reissues every reachable member's certificate
   rpc Rotate(RotateRequest) returns (RotateResponse);
+  // Hands the issuer role to another member
+  rpc HandOffIssuer(HandOffIssuerRequest) returns (HandOffIssuerResponse);
   // Returns the mesh profile
   rpc GetMesh(GetMeshRequest) returns (GetMeshResponse);
   // Lists members
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
-  // Prints a join token
+  // Prints a single use join token the issuer signed
   rpc Token(TokenRequest) returns (TokenResponse);
   // Measures links now
   rpc Probe(ProbeRequest) returns (ProbeResponse);
@@ -1001,7 +1211,7 @@ service MeshService {
   rpc SetDeviceProfile(SetDeviceProfileRequest) returns (SetDeviceProfileResponse);
   // Removes declared numbers a person set for a device pattern
   rpc DeleteDeviceProfile(DeleteDeviceProfileRequest) returns (DeleteDeviceProfileResponse);
-  // The mesh status: membership, what is nearby, and admissions under way
+  // The mesh status with membership, what is nearby, and admissions under way
   rpc Discover(DiscoverRequest) returns (DiscoverResponse);
   // Invites a node heard on the network
   rpc Invite(InviteRequest) returns (InviteResponse);
@@ -1027,18 +1237,6 @@ service MeshService {
   rpc DeleteFormation(DeleteFormationRequest) returns (DeleteFormationResponse);
   // Streams a seat's output
   rpc FormationLogs(FormationLogsRequest) returns (stream FormationLogsResponse);
-  // Node to node, without a credential: a node outside asks to join, answers or declines an invitation
-  rpc Knock(KnockRequest) returns (KnockResponse);
-  // Node to node, without a credential: a member invites a node outside
-  rpc Offer(OfferRequest) returns (OfferResponse);
-  // Node to node, without a credential: a member hands a candidate the join token, or a refusal
-  rpc Welcome(WelcomeRequest) returns (WelcomeResponse);
-  // Node to node, the handshake that admits a member
-  rpc Hello(HelloRequest) returns (HelloResponse);
-  // Node to node, exchanges records and member lists
-  rpc Sync(SyncRequest) returns (SyncResponse);
-  // Node to node, streams bytes for a bandwidth measurement
-  rpc Stream(StreamRequest) returns (stream StreamResponse);
   // Node to node, starts a seat here
   rpc RunSeat(RunSeatRequest) returns (RunSeatResponse);
   // Node to node, stops a seat here
@@ -1047,6 +1245,12 @@ service MeshService {
   rpc MoveSlot(MoveSlotRequest) returns (MoveSlotResponse);
   // Node to node, removes a relay's slot file after its move
   rpc DropSlot(DropSlotRequest) returns (DropSlotResponse);
+  // Mints a token a node of another mesh imports this node's pools with
+  rpc ExportToken(ExportTokenRequest) returns (ExportTokenResponse);
+  // Imports the pools of the node of another mesh a token names
+  rpc ImportMesh(ImportMeshRequest) returns (ImportMeshResponse);
+  // Ends a cross mesh export or import with a node
+  rpc DropFederation(DropFederationRequest) returns (DropFederationResponse);
   // Node to node, reads a seat's instance
   rpc GetSeat(GetSeatRequest) returns (GetSeatResponse);
   // Node to node, asks the member to pull a model onto itself
@@ -1057,8 +1261,34 @@ service MeshService {
   rpc SeatLogs(SeatLogsRequest) returns (stream SeatLogsResponse);
   // Node to node, reads the manifest of a model the member holds
   rpc GetStored(GetStoredRequest) returns (GetStoredResponse);
-  // Node to node, takes a new secret
-  rpc Rekey(RekeyRequest) returns (RekeyResponse);
-  // Node to node, notes a departure
+}
+
+// Node to node membership, served by the mesh listener under mutual TLS
+service MeshPeerService {
+  // A node holding a join grant has its certificate signed by the issuer
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  // A member has a fresh key signed before its certificate expires
+  rpc Renew(RenewRequest) returns (RenewResponse);
+  // A member asks the issuer for a join token
+  rpc Grant(GrantRequest) returns (GrantResponse);
+  // The issuer hands a member its certificate under a new authority
+  rpc Reissue(ReissueRequest) returns (ReissueResponse);
+  // The issuer hands a member its role
+  rpc TakeIssuer(TakeIssuerRequest) returns (TakeIssuerResponse);
+  // Exchanges record deltas, member lists and mesh state
+  rpc Sync(SyncRequest) returns (SyncResponse);
+  // Notes a departure and revokes the caller's certificate
   rpc Bye(ByeRequest) returns (ByeResponse);
+  // Streams bytes for a bandwidth measurement
+  rpc Stream(StreamRequest) returns (stream StreamResponse);
+  // A node outside asks to join, or declines an invitation
+  rpc Knock(KnockRequest) returns (KnockResponse);
+  // A member invites a node outside
+  rpc Offer(OfferRequest) returns (OfferResponse);
+  // A member hands a candidate a join grant, or a refusal
+  rpc Welcome(WelcomeRequest) returns (WelcomeResponse);
+  // A node of another mesh presents an export token and becomes an importer
+  rpc Federate(FederateRequest) returns (FederateResponse);
+  // An importer of another mesh takes the exported record
+  rpc Exports(ExportsRequest) returns (ExportsResponse);
 }

@@ -6,7 +6,7 @@ import (
 
 // An NVIDIA GPU a seat holds, with the driver index ggml and CUDA name it by
 func gpu(id, index string) *v1.Device {
-	return &v1.Device{Id: id, Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Facts: map[string]string{"index": index}}
+	return &v1.Device{Id: id, Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", MemoryTotalBytes: 80 << 30, Facts: map[string]string{"index": index}}
 }
 
 // A language model descriptor with a layer count

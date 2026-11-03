@@ -45,7 +45,7 @@ func runPull(ctx context.Context, e *env, args []string) error {
 	return e.done(e.follow(ctx, task.GetId()))
 }
 
-// Lists a group's parts and their sources.
+// Lists a group's parts and their sources
 func runParts(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("parts")
 	source := fs.String("source", "", "source id (default: first configured)")
@@ -123,7 +123,7 @@ func runList(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, m := range resp.Msg.GetModels() {
-			// Eviction uses last run time, or pull time for models never run.
+			// Eviction uses last run time, or pull time for models never run
 			rows = append(rows, []string{m.GetSourceId(), m.GetRepo(), m.GetGroup(), m.GetFormatId(), m.GetDescriptor_().GetArchitecture(), kindWord(m.GetDescriptor_().GetKind()), names.of(m.GetRuntimes()), estimate.Human(m.GetBytes()), when(m.GetPulledAt(), time.DateTime), when(cmp.Or(m.GetUsedAt(), m.GetPulledAt()), time.DateTime), m.GetPath()})
 		}
 		table(w, []string{"SOURCE", "REPO", "GROUP", "FORMAT", "ARCH", "KIND", "RUNS ON", "SIZE", "PULLED", "USED", "PATH"}, rows)

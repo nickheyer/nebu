@@ -7,83 +7,63 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/mesh/links"
-	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
-	"google.golang.org/protobuf/proto"
 )
 
 const dialTimeout = 5 * time.Second
 
-// A connection to one member under its session credential
+// A connection to one member under mutual TLS, its API calls carrying the session bearer
 type Client struct {
 	NodeID  string
 	Address string
-	// http or https and the address
+	// https and the address
 	Base string
-	// Carries the session credential on every request
+	// Carries the session bearer on every request
 	HTTP *http.Client
 	Mesh nebuv1connect.MeshServiceClient
-	// The credential alone, for requests built elsewhere
+	// The bearer alone, for requests built elsewhere
 	Header http.Header
-	// The configuration the member is dialed with, nil for a plain listener
+	// The configuration the member is dialed with
 	TLS *tls.Config
 }
 
-// Adds the bearer token to every request
+// Adds the member's current session bearer to every request, syncing for a fresh one when none is live
 type bearer struct {
-	next  http.RoundTripper
-	token string
+	next http.RoundTripper
+	m    *Manager
+	node string
 }
 
 func (b bearer) RoundTrip(req *http.Request) (*http.Response, error) {
-	if b.token != "" {
-		req = req.Clone(req.Context())
-		req.Header.Set("Authorization", "Bearer "+b.token)
+	token, err := b.m.sessionToken(req.Context(), b.node)
+	if err != nil {
+		return nil, err
 	}
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+token)
 	return b.next.RoundTrip(req)
 }
 
-// An HTTP/2 transport to an address, prior knowledge over plain TCP or TLS, pinged while idle
-func transport(cfg *tls.Config) http.RoundTripper {
+// An HTTP/2 transport over TLS to an address, pinged while idle
+func transport(cfg *tls.Config) *http.Transport {
 	d := &net.Dialer{Timeout: dialTimeout}
-	t := &http.Transport{
-		Protocols:   links.ClientProtocols(),
-		HTTP2:       &http.HTTP2Config{SendPingTimeout: 30 * time.Second, PingTimeout: 10 * time.Second},
-		DialContext: d.DialContext,
+	return &http.Transport{
+		Protocols:       links.ClientProtocols(),
+		HTTP2:           &http.HTTP2Config{SendPingTimeout: 30 * time.Second, PingTimeout: 10 * time.Second},
+		TLSClientConfig: cfg,
+		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return (&tls.Dialer{NetDialer: d, Config: cfg.Clone()}).DialContext(ctx, network, addr)
+		},
 	}
-	if cfg == nil {
-		return t
-	}
-	t.TLSClientConfig = cfg
-	t.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		c := cfg.Clone()
-		if c.ServerName == "" {
-			host, _, _ := net.SplitHostPort(addr)
-			c.ServerName = host
-		}
-		if len(c.NextProtos) == 0 {
-			c.NextProtos = []string{"h2"}
-		}
-		return (&tls.Dialer{NetDialer: d, Config: c}).DialContext(ctx, network, addr)
-	}
-	return t
 }
 
-// A transport to an address, shared across calls while the way to trust it stays the same
-func (m *Manager) roundTripper(address, fingerprint string, cfg *tls.Config) http.RoundTripper {
-	key := address + "|plain"
-	if cfg != nil {
-		key = address + "|tls|" + fingerprint
-	}
+// A transport per address and trust, shared across calls while the way to trust the address stays the same
+func (m *Manager) roundTripper(key string, cfg *tls.Config) http.RoundTripper {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.h2 == nil {
-		m.h2 = map[string]http.RoundTripper{}
-	}
 	if rt, ok := m.h2[key]; ok {
 		return rt
 	}
@@ -92,25 +72,7 @@ func (m *Manager) roundTripper(address, fingerprint string, cfg *tls.Config) htt
 	return rt
 }
 
-// The lock every handshake this node opens to a member takes, one per member: a second handshake
-// opened while the first is under way replaces its nonce on the peer and fails it, so the client
-// path and the beacon path hold this before they call
-func (m *Manager) dialLock(nodeID string) *sync.Mutex {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.dialing == nil {
-		m.dialing = map[string]*sync.Mutex{}
-	}
-	dial := m.dialing[nodeID]
-	if dial == nil {
-		dial = &sync.Mutex{}
-		m.dialing[nodeID] = dial
-	}
-	return dial
-}
-
-// Drops the transports held for an address, closing the connections they keep idle: what a member
-// forgotten, moved, or left behind held here. Every transport when the address is empty
+// Drops the transports held for an address, every one when the address is empty, closing idle connections
 func (m *Manager) dropTransports(address string) {
 	m.mu.Lock()
 	var dropped []http.RoundTripper
@@ -135,91 +97,91 @@ func (m *Manager) transports() int {
 	return len(m.h2)
 }
 
-// A client with no credential, for the handshake and the admission calls. The fingerprint keys
-// the transport, so a member whose certificate changed is dialed afresh.
-func (m *Manager) anonymous(address string, cfg *tls.Config, fingerprint string) *Client {
-	if cfg == nil {
-		fingerprint = ""
-	}
-	base := "http://" + address
-	if cfg != nil {
-		base = "https://" + address
-	}
-	client := &http.Client{Transport: m.roundTripper(address, fingerprint, cfg)}
-	return &Client{Address: address, Base: base, HTTP: client, Mesh: nebuv1connect.NewMeshServiceClient(client, base), Header: http.Header{}, TLS: cfg}
+// The membership client to a member at an address under mutual TLS
+func (m *Manager) peerClient(nodeID, address string) nebuv1connect.MeshPeerServiceClient {
+	rt := m.roundTripper(address+"|member|"+nodeID, m.memberDialConfig(nodeID))
+	return nebuv1connect.NewMeshPeerServiceClient(&http.Client{Transport: rt}, "https://"+address)
 }
 
-// The member's address, how to trust it, and the session token it takes, empty when none is held
-func (m *Manager) dialFacts(nodeID string) (address string, useTLS bool, fingerprint string, cfg *tls.Config, token string, err error) {
+// The membership client to a member by id, certificate alone authenticating its calls
+func (m *Manager) peer(nodeID string) (nebuv1connect.MeshPeerServiceClient, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	mb, ok := m.members[nodeID]
+	address := mb.GetAddress()
+	m.mu.Unlock()
 	if !ok {
-		return "", false, "", nil, "", fmt.Errorf("%w %q", ErrUnknownNode, nodeID)
-	}
-	rec := mb.rec
-	address, useTLS, fingerprint = rec.GetAddress(), rec.GetTls(), rec.GetTlsFingerprint()
-	if useTLS {
-		cfg = m.dialTLSLocked(fingerprint)
-	}
-	if s := m.sessions[nodeID]; s != nil && s.send != "" && time.Now().Before(s.sendExpires) {
-		token = s.send
-	}
-	return address, useTLS, fingerprint, cfg, token, nil
-}
-
-// A client to a member under a live session, handshaking first when none is held. Callers
-// wanting the same member at once share one handshake, since a second one opened while the
-// first is under way replaces its nonce on the peer and fails it.
-func (m *Manager) Client(ctx context.Context, nodeID string) (*Client, error) {
-	address, useTLS, fingerprint, cfg, token, err := m.dialFacts(nodeID)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w %q", ErrUnknownNode, nodeID)
 	}
 	if address == "" {
 		return nil, fmt.Errorf("%w: %s has no mesh address yet", ErrMesh, nodeID)
 	}
-	if token == "" {
-		dial := m.dialLock(nodeID)
-		dial.Lock()
-		defer dial.Unlock()
-		if _, _, _, _, token, err = m.dialFacts(nodeID); err != nil {
-			return nil, err
-		}
+	return m.peerClient(nodeID, address), nil
+}
+
+// The admission client to a node by its identity certificate, the id and pin checked when known
+func (m *Manager) admissionClient(address, expectID, pin string) nebuv1connect.MeshPeerServiceClient {
+	rt := m.roundTripper(address+"|admission|"+expectID+"|"+pin, m.admissionDialConfig(expectID, pin, nil))
+	return nebuv1connect.NewMeshPeerServiceClient(&http.Client{Transport: rt}, "https://"+address)
+}
+
+// The bearer a member or an exporter of another mesh takes, syncing or pulling first when none is live
+func (m *Manager) sessionToken(ctx context.Context, nodeID string) (string, error) {
+	if token := m.liveToken(nodeID); token != "" {
+		return token, nil
 	}
-	if token == "" {
-		resp, err := m.handshake(ctx, address, useTLS, fingerprint, nil, nil)
-		if err != nil {
-			return nil, err
-		}
-		if resp.GetNodeId() != nodeID {
-			return nil, fmt.Errorf("%w: %s answered as %s, not %s", ErrMesh, address, resp.GetNodeId(), nodeID)
-		}
-		// Forget member until handshake happens again
-		m.mu.Lock()
-		_, still := m.members[nodeID]
-		dropped := false
-		if s := m.sessions[nodeID]; !still && s != nil && s.accept == "" {
-			delete(m.sessions, nodeID)
-			dropped = true
-		}
-		m.mu.Unlock()
-		if !still {
-			if dropped {
-				if err := m.persistSession(nodeID); err != nil {
-					m.Log.Warn("session delete failed", "peer", nodeID, "err", err)
-				}
-			}
-			return nil, fmt.Errorf("%w %q", ErrUnknownNode, nodeID)
-		}
-		m.absorb(resp.GetNode(), resp.GetMembers(), true)
-		token = resp.GetSessionToken()
+	m.mu.Lock()
+	_, federated := m.exporters[nodeID]
+	m.mu.Unlock()
+	refresh := m.syncWith
+	if federated {
+		refresh = m.pullExports
 	}
-	base := "http://" + address
-	if cfg != nil {
-		base = "https://" + address
+	if err := refresh(ctx, nodeID); err != nil {
+		return "", err
 	}
-	client := &http.Client{Transport: bearer{next: m.roundTripper(address, fingerprint, cfg), token: token}}
+	if token := m.liveToken(nodeID); token != "" {
+		return token, nil
+	}
+	return "", fmt.Errorf("%w: %s answered the sync without a session token", ErrMesh, nodeID)
+}
+
+// The bearer held for a member while it is live, empty otherwise
+func (m *Manager) liveToken(nodeID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s := m.sessions[nodeID]; s != nil && s.send != "" && time.Now().Before(s.sendExpires) {
+		return s.send
+	}
+	return ""
+}
+
+// A client to a member under mutual TLS, or to an exporter of another mesh by pinned certificate, carrying a live bearer
+func (m *Manager) Client(ctx context.Context, nodeID string) (*Client, error) {
+	m.mu.Lock()
+	mb, ok := m.members[nodeID]
+	address := mb.GetAddress()
+	f, federated := m.exporters[nodeID]
+	if federated {
+		address = f.rec.GetFederation().GetAddress()
+	}
+	m.mu.Unlock()
+	if !ok && !federated {
+		return nil, fmt.Errorf("%w %q", ErrUnknownNode, nodeID)
+	}
+	if address == "" {
+		return nil, fmt.Errorf("%w: %s has no mesh address yet", ErrMesh, nodeID)
+	}
+	token, err := m.sessionToken(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	cfg, key := m.memberDialConfig(nodeID), address+"|member|"+nodeID
+	if federated {
+		cfg, key = m.exporterDialConfig(nodeID), address+"|federated|"+nodeID
+	}
+	rt := m.roundTripper(key, cfg)
+	base := "https://" + address
+	client := &http.Client{Transport: bearer{next: rt, m: m, node: nodeID}}
 	return &Client{
 		NodeID:  nodeID,
 		Address: address,
@@ -229,15 +191,4 @@ func (m *Manager) Client(ctx context.Context, nodeID string) (*Client, error) {
 		Header:  http.Header{"Authorization": {"Bearer " + token}},
 		TLS:     cfg,
 	}, nil
-}
-
-// The member record behind a client, for callers that need its facts
-func (m *Manager) Member(nodeID string) (*v1.Node, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	mb, ok := m.members[nodeID]
-	if !ok {
-		return nil, false
-	}
-	return proto.Clone(mb.rec).(*v1.Node), true
 }

@@ -1,0 +1,103 @@
+// Import common styles
+@use './common/colors' as colors;
+@use './common/easing' as easing;
+@use './common/typography' as typography;
+@use './common/shadows' as shadows;
+@use './common/spacing' as spacing;
+@use './common/utils' as utils;
+@use './common/properties';
+
+// Import transition styles
+@use './transition' as transition;
+
+@mixin theme($root: neo-theme-root) {
+  /*
+    Dual heads — `[neo-theme-root]` matches descendants (document or shadow tree),
+    `:host([neo-theme-root])` matches the shadow host itself when the sheet is
+    adopted onto a `ShadowRoot`. Compound-modifier rules below must be flattened
+    to top-level so that `:host(...)` can carry the modifier inside its parens
+    instead of being dangerously nested under another selector.
+  */
+  [#{$root}],
+  :host([#{$root}]) {
+    color: var(--neo-text-color);
+    font-family: var(--neo-font-family), sans-serif;
+    line-height: var(--neo-line-height);
+    background-color: var(--neo-background-color);
+
+    /* touch highlight */
+    -webkit-tap-highlight-color: transparent;
+
+    @include easing.easing;
+    @include utils.utils;
+    @include utils.z-index;
+    @include spacing.spacing;
+    @include typography.typography;
+    @include utils.filters;
+    @include colors.colors;
+    @include shadows.shadows;
+    @include typography.heading;
+
+    /* cursor highlight */
+    *::selection {
+      background-color: var(--neo-text-highlight-color);
+    }
+
+    @media (width <= 768px) {
+      --neo-h1-font-size: var(--neo-font-size-xxl);
+      --neo-h2-font-size: var(--neo-font-size-xl);
+      --neo-h3-font-size: var(--neo-font-size-lg);
+      --neo-h4-font-size: var(--neo-font-size-md);
+      --neo-h5-font-size: var(--neo-font-size);
+    }
+
+    @media (width <= 375px) {
+      --neo-h1-font-size: var(--neo-font-size-xl);
+      --neo-h2-font-size: var(--neo-font-size-lg);
+      --neo-h4-font-size: var(--neo-font-size);
+    }
+  }
+
+  [#{$root}][neo-transition='false'],
+  :host([#{$root}][neo-transition='false']) {
+    *,
+    *::before,
+    *::after {
+      transition: none !important;
+    }
+  }
+
+  [#{$root}][neo-transition='neo-spin'],
+  :host([#{$root}][neo-transition='neo-spin']) {
+    @include transition.spin-transition;
+  }
+
+  [#{$root}][neo-transition='neo-wave'],
+  :host([#{$root}][neo-transition='neo-wave']) {
+    @include transition.wave-transition;
+  }
+
+  [#{$root}][neo-transition='neo-circle'],
+  :host([#{$root}][neo-transition='neo-circle']) {
+    @include transition.circle-transition;
+  }
+
+  [#{$root}][neo-in-flight='true'],
+  :host([#{$root}][neo-in-flight='true']) {
+    cursor: not-allowed;
+  }
+
+  /* override semantic color if dark mode is enabled */
+  [#{$root}][neo-theme='dark'],
+  :host([#{$root}][neo-theme='dark']) {
+    @include colors.dark-theme;
+  }
+
+  /* apply dark mode if not overridden */
+  @media (prefers-color-scheme: dark) {
+    [#{$root}]:not([neo-theme='light']),
+    :host([#{$root}]:not([neo-theme='light'])) {
+      @include colors.dark-theme;
+    }
+  }
+}

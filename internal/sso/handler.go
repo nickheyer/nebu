@@ -146,11 +146,12 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusForbidden, "This account is not allowed to use nebu.", err)
 		return
 	}
-	if _, err := s.sessions.Issue(w, r, auth.Session{Subject: id.subject, Email: id.email, Name: id.name, Provider: auth.ProviderOIDC}); err != nil {
+	role := s.role(id)
+	if _, err := s.sessions.Issue(w, r, auth.Session{Subject: id.subject, Email: id.email, Name: id.name, Provider: auth.ProviderOIDC, Role: role}); err != nil {
 		s.fail(w, http.StatusInternalServerError, "Could not create the session.", err)
 		return
 	}
-	s.log.Info("signed in", "subject", id.subject, "email", id.email, "name", id.name)
+	s.log.Info("signed in", "subject", id.subject, "email", id.email, "name", id.name, "role", auth.RoleName(role))
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, st.Next, http.StatusSeeOther)
 }

@@ -10,7 +10,9 @@ CREATE TABLE installs (
   version TEXT NOT NULL DEFAULT '',
   origin TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
-  build_id TEXT NOT NULL DEFAULT ''
+  build_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT '',
+  generation INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX installs_by_runtime ON installs (runtime_id, created_at);
 
@@ -53,7 +55,15 @@ CREATE TABLE instances (
   stopped_at TEXT,
   slot_id TEXT NOT NULL DEFAULT '',
   seat TEXT NOT NULL DEFAULT '',
-  transport TEXT NOT NULL DEFAULT ''
+  transport TEXT NOT NULL DEFAULT '',
+  generation INTEGER NOT NULL DEFAULT 0,
+  observed_generation INTEGER NOT NULL DEFAULT 0,
+  restarts INTEGER NOT NULL DEFAULT 0,
+  last_health_at TEXT,
+  healthy INTEGER NOT NULL DEFAULT 0,
+  conditions TEXT NOT NULL DEFAULT '',
+  ranks TEXT NOT NULL DEFAULT '',
+  inventory TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX instances_by_created ON instances (created_at);
 
@@ -85,7 +95,11 @@ CREATE TABLE instance_requests (
   shape TEXT NOT NULL DEFAULT '',
   seat TEXT NOT NULL DEFAULT '',
   profile TEXT NOT NULL DEFAULT '',
-  args TEXT NOT NULL DEFAULT ''
+  args TEXT NOT NULL DEFAULT '',
+  route_policy TEXT NOT NULL DEFAULT '',
+  route_profile TEXT NOT NULL DEFAULT '',
+  idle_unload_seconds INTEGER NOT NULL DEFAULT 0,
+  snapshot INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE instance_request_params (
@@ -253,7 +267,11 @@ CREATE TABLE slots (
   upstream_timeout_ms INTEGER NOT NULL DEFAULT 0,
   formation_id TEXT NOT NULL DEFAULT '',
   profile TEXT NOT NULL DEFAULT '',
-  args TEXT NOT NULL DEFAULT ''
+  args TEXT NOT NULL DEFAULT '',
+  desired_running INTEGER NOT NULL DEFAULT 0,
+  conditions TEXT NOT NULL DEFAULT '',
+  meta TEXT NOT NULL DEFAULT '',
+  observed_generation INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE slot_devices (
@@ -297,7 +315,11 @@ CREATE TABLE slot_requests (
   span TEXT NOT NULL DEFAULT '',
   shape TEXT NOT NULL DEFAULT '',
   profile TEXT NOT NULL DEFAULT '',
-  args TEXT NOT NULL DEFAULT ''
+  args TEXT NOT NULL DEFAULT '',
+  route_policy TEXT NOT NULL DEFAULT '',
+  route_profile TEXT NOT NULL DEFAULT '',
+  idle_unload_seconds INTEGER NOT NULL DEFAULT 0,
+  snapshot INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE slot_request_params (
@@ -307,19 +329,59 @@ CREATE TABLE slot_request_params (
   PRIMARY KEY (slot_id, name)
 );
 
--- Public model names the gateway answers for
+-- Public model names the gateway answers for, spec and status as protobuf JSON
 CREATE TABLE routes (
   name TEXT PRIMARY KEY,
-  instance_id TEXT NOT NULL DEFAULT '',
-  slot_id TEXT NOT NULL DEFAULT '',
-  endpoint TEXT NOT NULL DEFAULT '',
-  api TEXT NOT NULL DEFAULT '',
-  state TEXT NOT NULL,
-  model TEXT NOT NULL DEFAULT '',
-  requests INTEGER NOT NULL DEFAULT 0,
+  owner_kind TEXT NOT NULL DEFAULT '',
+  owner_id TEXT NOT NULL DEFAULT '',
+  node_id TEXT NOT NULL DEFAULT '',
+  generation INTEGER NOT NULL DEFAULT 0,
+  spec TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Limits, profile and objective a user set on a route an owner names, spec as protobuf JSON
+CREATE TABLE route_overrides (
+  name TEXT PRIMARY KEY,
+  spec TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Pools a user authored, spec as protobuf JSON, derived pools are rebuilt at start
+CREATE TABLE pools (
+  id TEXT PRIMARY KEY,
+  owner_kind TEXT NOT NULL DEFAULT '',
+  owner_id TEXT NOT NULL DEFAULT '',
+  generation INTEGER NOT NULL DEFAULT 0,
+  spec TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Named latency objectives and priority bands with the owners holding each, the user alone when empty
+CREATE TABLE objectives (
+  name TEXT PRIMARY KEY,
+  priority INTEGER NOT NULL DEFAULT 0,
+  ttft_ms INTEGER NOT NULL DEFAULT 0,
+  tpot_ms INTEGER NOT NULL DEFAULT 0,
+  generation INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  served TEXT NOT NULL DEFAULT '',
-  profile TEXT NOT NULL DEFAULT ''
+  owners TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT ''
+);
+
+-- Scheduler configurations pools reference by name, YAML as written
+CREATE TABLE scheduler_configs (
+  name TEXT PRIMARY KEY,
+  yaml TEXT NOT NULL,
+  generation INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT ''
 );
 
 -- Configured places models come from, one row per source, seeded defaults included
@@ -391,18 +453,22 @@ CREATE TABLE bot_activity (
 );
 CREATE INDEX bot_activity_by_bot ON bot_activity (bot_id, seq);
 
--- Local accounts for the web UI. Usernames are stored lowercase.
+-- Local accounts for the web UI. Usernames are stored lowercase, and the role is
+-- admin, operator, or inference.
 CREATE TABLE users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX users_username ON users (username);
 
 -- API tokens users make in the web UI. The subject is the local account id or
--- the single sign-on subject, and the secret is what clients send as a bearer token.
+-- the single sign-on subject. Clients send nebu_ then the prefix then a secret, and
+-- the row keeps the prefix in clear and the hex sha256 of the whole token. Scopes
+-- are comma separated, and the role is the owner's when the token was made.
 CREATE TABLE api_tokens (
   id TEXT PRIMARY KEY,
   provider TEXT NOT NULL,
@@ -410,11 +476,14 @@ CREATE TABLE api_tokens (
   owner TEXT NOT NULL,
   email TEXT NOT NULL,
   name TEXT NOT NULL,
-  secret TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  scopes TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   last_used_at TEXT
 );
-CREATE UNIQUE INDEX api_tokens_secret ON api_tokens (secret);
+CREATE UNIQUE INDEX api_tokens_prefix ON api_tokens (prefix);
 CREATE INDEX api_tokens_owner ON api_tokens (provider, subject);
 
 -- Saved web chat conversations, owned by the account that made them. The turns
@@ -449,7 +518,7 @@ CREATE TABLE chat_files (
 CREATE INDEX chat_files_owner ON chat_files (provider, subject);
 CREATE INDEX chat_files_digest ON chat_files (digest);
 
--- This node's identity in any mesh: a random 128 bit id and an Ed25519 key pair made on first start
+-- This node's random 128 bit id and Ed25519 identity key pair, made on first start
 CREATE TABLE mesh_identity (
   id TEXT PRIMARY KEY,
   public_key BLOB NOT NULL,
@@ -457,17 +526,33 @@ CREATE TABLE mesh_identity (
   created_at TEXT NOT NULL
 );
 
--- The mesh this node belongs to, one row: the shared secret and the certificate authority when it has one
+-- The one mesh this node belongs to with the authority, this node's key and certificate, and the issuer's authority key
 CREATE TABLE mesh (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  secret BLOB NOT NULL,
-  tls INTEGER NOT NULL DEFAULT 0,
   ca_certificate BLOB NOT NULL DEFAULT X'',
   ca_key BLOB NOT NULL DEFAULT X'',
   certificate BLOB NOT NULL DEFAULT X'',
+  key BLOB NOT NULL DEFAULT X'',
+  issuer TEXT NOT NULL DEFAULT '',
+  issuer_epoch INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   joined_at TEXT NOT NULL
+);
+
+-- Certificate serials refused at every handshake until they expire
+CREATE TABLE mesh_revocations (
+  serial TEXT PRIMARY KEY,
+  node_id TEXT NOT NULL DEFAULT '',
+  not_after TEXT NOT NULL,
+  revoked_at TEXT NOT NULL
+);
+
+-- Join grant nonces the issuer took, kept until the grant expires so none is taken twice
+CREATE TABLE mesh_grants (
+  nonce TEXT PRIMARY KEY,
+  expires_at TEXT NOT NULL,
+  used_at TEXT NOT NULL
 );
 
 -- Every other member's record as last synced, the node record kept as JSON beside its sequence
@@ -478,8 +563,7 @@ CREATE TABLE mesh_members (
   record TEXT NOT NULL DEFAULT ''
 );
 
--- Admissions under way: on a member one per node outside asking or invited, on a node outside
--- one per mesh it asked or was invited to, the record kept as JSON beside its keys
+-- Admissions under way kept as JSON beside their keys, with the grant an invitation carried
 CREATE TABLE mesh_admissions (
   id TEXT PRIMARY KEY,
   side TEXT NOT NULL,
@@ -489,11 +573,12 @@ CREATE TABLE mesh_admissions (
   record TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  expires_at TEXT
+  expires_at TEXT,
+  join_grant TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX mesh_admissions_node ON mesh_admissions (node_id);
 
--- Session tokens minted at the handshake: what we accept from a peer and what we send it
+-- Bearer tokens minted on sync for HTTP calls, the one a peer sends here and the one sent to it
 CREATE TABLE mesh_sessions (
   peer_id TEXT PRIMARY KEY,
   accept TEXT NOT NULL,
@@ -590,7 +675,11 @@ CREATE TABLE formations (
   stopped_at TEXT,
   updated_at TEXT NOT NULL,
   rendezvous TEXT NOT NULL DEFAULT '',
-  cache_key TEXT NOT NULL DEFAULT ''
+  cache_key TEXT NOT NULL DEFAULT '',
+  generation INTEGER NOT NULL DEFAULT 0,
+  observed_generation INTEGER NOT NULL DEFAULT 0,
+  conditions TEXT NOT NULL DEFAULT '',
+  relaunches INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX formations_by_created ON formations (created_at);
 
@@ -618,6 +707,8 @@ CREATE TABLE formation_seats (
   memory TEXT NOT NULL DEFAULT '',
   triage TEXT NOT NULL DEFAULT '[]',
   measurements TEXT NOT NULL DEFAULT '[]',
+  conditions TEXT NOT NULL DEFAULT '',
+  ranks TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (formation_id, position)
 );
 
@@ -637,3 +728,19 @@ CREATE TABLE formation_candidates (
   speedup REAL NOT NULL DEFAULT 0,
   PRIMARY KEY (formation_id, position)
 );
+
+-- Gateway request traces per sending subject, the trace minus bodies as protobuf beside its capped bodies
+CREATE TABLE traces (
+  id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  route TEXT NOT NULL,
+  kind INTEGER NOT NULL,
+  started_at TEXT NOT NULL,
+  record BLOB NOT NULL,
+  request TEXT NOT NULL,
+  upstream_request TEXT NOT NULL,
+  response TEXT NOT NULL
+);
+CREATE INDEX traces_by_started ON traces (started_at);
+CREATE INDEX traces_by_owner ON traces (owner, started_at);
+CREATE INDEX traces_by_route ON traces (route, started_at);

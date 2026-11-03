@@ -1,33 +1,24 @@
-// Package instances runs, supervises, records, recovers, and routes models.
+// Package instances runs, supervises, records, recovers, and publishes models
 package instances
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"maps"
-	"net"
-	"net/http"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/calibrate"
 	"github.com/nickheyer/nebu/internal/db"
-	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/installs"
+	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/internal/tasks"
-	"github.com/nickheyer/nebu/pkg/chattemplate"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/events"
@@ -38,10 +29,10 @@ import (
 	"github.com/nickheyer/nebu/pkg/proc"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/runtimes"
+	"github.com/nickheyer/nebu/pkg/snapshot"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
 	"github.com/nickheyer/nebu/pkg/text"
-	"github.com/nickheyer/nebu/pkg/triage"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -99,30 +90,28 @@ type swapKey struct{}
 // Marks a context as a swap, allowed beside an occupant
 func WithSwap(ctx context.Context) context.Context { return context.WithValue(ctx, swapKey{}, true) }
 
-func fromSwap(ctx context.Context) bool { v, _ := ctx.Value(swapKey{}).(bool); return v }
-
 // Whether the context marks a swap, so a replacement may launch beside the occupant it replaces
-func FromSwap(ctx context.Context) bool { return fromSwap(ctx) }
+func FromSwap(ctx context.Context) bool { v, _ := ctx.Value(swapKey{}).(bool); return v }
 
-// Slot manager interface for bound instances.
+// Slot manager interface for bound instances
 type Slots interface {
 	Reservation(ctx context.Context, slotID string) (*Reservation, error)
+	// Whether a slot answers to the name, as its own name or an alias
+	Owns(name string) bool
 	// Called after every state change, outside the instance lock
 	OnInstance(*v1.Instance)
 }
 
-// What a seat's node asks about the formation a seat serves: for a stage adopted after a restart
-// while a head holds it, the conductor's record is the evidence that the head is ready on it
+// The conductor's record a stage adopted while a head holds it relies on as evidence of that head
 type Formations interface {
-	// Waits until a record of the formation's conductor written after since says the head is ready,
-	// and returns why not when the record says otherwise or ctx ends first
+	// Waits for a conductor record newer than since saying the head is ready, or returns why not
 	HeadReady(ctx context.Context, formationID string, since time.Time) error
 }
 
 // An adopted stage a head holds waits this long for the conductor's record
 const adoptConfirmWindow = 2 * time.Minute
 
-// Manages daemon instances.
+// Manages daemon instances
 type Manager struct {
 	DB  *db.DB
 	Dir string
@@ -136,13 +125,26 @@ type Manager struct {
 	Tasks       *tasks.Manager
 	Host        *host.Prober
 	Calibration *calibrate.Table
-	Routes      *gateway.Table
-	Events      *events.Bus
+	// Publishes endpoints and names routes for the gateway
+	Registrar pools.Registrar
+	// Requests the gateway has in flight on an instance, read while draining and idling
+	InFlight func(instanceID string) int
+	// Requests the gateway has sent an instance since the daemon started, read while idling
+	Dispatched func(instanceID string) uint64
+	// Running and queued requests the scrape of an instance reports, read while idling, false when none was scraped
+	Load func(instanceID string) (running, queued int, scraped bool)
+	// Reads the TCP ports a launched process tree listens on, proc.ListeningPorts unless a test reads them another way
+	Listening func(pid int) ([]int, error)
+	// Reads the pids of a launched tree holding an NVIDIA device, the kernel's fd table unless a test names them another way
+	CUDAPIDs func(root int) ([]int, error)
+	// Longest wait for requests in flight before a process stops
+	DrainTimeout time.Duration
+	Events       *events.Bus
 	// Set by the daemon once slots exist, nil until then
 	Slots Slots
 	// Set by the daemon once the conductor exists, nil until then
 	Formations Formations
-	// Set by the daemon once the doctor exists, called as each runtime exits so the host is probed again
+	// Set by the daemon, called as each runtime exits so the host is probed again
 	Probe func()
 	Log   *slog.Logger
 
@@ -150,116 +152,11 @@ type Manager struct {
 	list []*instance
 	// Whether the daemon is stopping every instance on its way out
 	closing bool
+	// Port reservation books by host
+	books map[string]*proc.Reservations
 }
 
-type instance struct {
-	mgr      *Manager
-	mu       sync.Mutex
-	rec      *v1.Instance
-	rt       runtimes.Runtime
-	proc     launch.Handle
-	log      *launch.Log
-	exited   chan struct{}
-	exitOnce sync.Once
-	// The guard listener in front of a seat, nil for a solo instance or an exposed seat
-	guard *forwarder
-}
-
-func (m *Manager) newInstance(rec *v1.Instance, rt runtimes.Runtime) *instance {
-	in := &instance{mgr: m, rec: rec, rt: rt, exited: make(chan struct{})}
-	if Terminal(rec.GetState()) {
-		in.exitOnce.Do(func() { close(in.exited) })
-	}
-	return in
-}
-
-func (in *instance) snapshot() *v1.Instance {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	return proto.Clone(in.rec).(*v1.Instance)
-}
-
-func (in *instance) update(fn func(*v1.Instance)) {
-	in.mu.Lock()
-	before := proto.Clone(in.rec).(*v1.Instance)
-	fn(in.rec)
-	changed := !proto.Equal(before, in.rec)
-	var rec *v1.Instance
-	if changed {
-		if err := in.mgr.DB.PutInstance(context.Background(), in.rec); err != nil {
-			in.mgr.Log.Warn("instance record write failed", "id", in.rec.GetId(), "err", err)
-		}
-		rec = proto.Clone(in.rec).(*v1.Instance)
-		in.mgr.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_UPDATED, rec.GetId(), rec)
-	}
-	terminal := Terminal(in.rec.GetState())
-	var g *forwarder
-	if terminal {
-		g, in.guard = in.guard, nil
-	}
-	in.mu.Unlock()
-	if changed {
-		in.mgr.changed(rec, before.GetState())
-	}
-	if terminal {
-		if g != nil {
-			g.Close()
-		}
-		in.exitOnce.Do(func() { close(in.exited) })
-	}
-}
-
-func (m *Manager) changed(rec *v1.Instance, before v1.InstanceState) {
-	slotted := rec.GetSlotId() != ""
-	switch {
-	case m.Routes == nil:
-	case Terminal(rec.GetState()) && !Terminal(before):
-		m.Routes.RemoveInstance(rec.GetId())
-	case rec.GetSeat() != nil:
-		// The conductor routes formations.
-	case slotted:
-	case rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY:
-		m.Routes.Serve(rec.GetName(), rec, m.Runtimes.API(rec.GetRuntimeId()), "", nil, nil)
-	case rec.GetState() == v1.InstanceState_INSTANCE_STATE_DRAINING && before != v1.InstanceState_INSTANCE_STATE_DRAINING:
-		m.Routes.Drain(rec.GetId())
-	}
-	if m.Slots != nil {
-		m.Slots.OnInstance(rec)
-	}
-}
-
-func (in *instance) grace() time.Duration {
-	if in.rt != nil && in.rt.StopGrace() > 0 {
-		return in.rt.StopGrace()
-	}
-	return runtimes.DefaultStopGrace
-}
-
-func (in *instance) stopRequested() bool {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	return in.rec.GetState() == v1.InstanceState_INSTANCE_STATE_STOPPING || in.rec.GetState() == v1.InstanceState_INSTANCE_STATE_STOPPED
-}
-
-func (in *instance) handle() launch.Handle {
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	return in.proc
-}
-
-func (in *instance) attach(proc launch.Handle) {
-	in.mu.Lock()
-	in.proc, in.log = proc, proc.Log()
-	in.mu.Unlock()
-}
-
-const (
-	defaultPrepareTimeout = time.Hour
-	// Preparation log capacity, matching the launcher ring.
-	logCapacity = 5000
-)
-
-// Resolved launch inputs.
+// Resolved launch inputs
 type prepared struct {
 	req        *v1.RunRequest
 	stored     *v1.StoredModel
@@ -276,16 +173,20 @@ type prepared struct {
 	layered map[string]string
 	// What the plan left uncounted, logged when the run starts
 	warning string
-	// Other stored models available as companion parts.
+	// Other stored models available as companion parts
 	companions []*v1.StoredModel
 	// The seat block and its role, for a seat of a formation
 	seat *v1.SeatSpec
 	role runtimes.Role
+	// Takes and restores the process image once ready, nil when the request asks for no snapshot
+	snapshot *snapshot.Snapshotter
+	// The request generation these inputs were resolved for
+	generation uint64
 }
 
 // Plans a run without launching it
 func (m *Manager) Plan(ctx context.Context, req *v1.RunRequest) (*v1.MemoryPlan, error) {
-	p, err := m.prepare(ctx, req)
+	p, err := m.prepare(ctx, req, "")
 	if err != nil {
 		return nil, err
 	}
@@ -295,31 +196,160 @@ func (m *Manager) Plan(ctx context.Context, req *v1.RunRequest) (*v1.MemoryPlan,
 	return p.plan, nil
 }
 
-// Plans and launches a stored model, returning record and task
+// Plans a stored model, records it as desired, and starts its reconciler, returning the record and the first launch task
 func (m *Manager) Run(ctx context.Context, req *v1.RunRequest) (*v1.Instance, *v1.Task, error) {
-	p, err := m.prepare(ctx, req)
+	p, err := m.prepare(ctx, req, "")
 	if err != nil {
 		return nil, nil, err
 	}
-	if p.res != nil && p.res.InstanceID != "" && !fromSwap(ctx) {
+	if p.res != nil && p.res.InstanceID != "" && !FromSwap(ctx) {
 		if cur, err := m.Get(p.res.InstanceID); err == nil && !Terminal(cur.GetState()) {
 			return nil, nil, fmt.Errorf("%w: slot %s serves %s, swap instead", runtimes.ErrParam, p.res.Name, cur.GetName())
 		}
 	}
-	if p.res != nil && p.res.FormationID != "" && !fromSwap(ctx) {
+	if p.res != nil && p.res.FormationID != "" && !FromSwap(ctx) {
 		return nil, nil, fmt.Errorf("%w: slot %s serves formation %s, swap instead", runtimes.ErrParam, p.res.Name, p.res.FormationName)
 	}
-	return m.launch(ctx, p)
+	if p.req.GetIdleUnloadSeconds() > 0 && p.seat != nil {
+		return nil, nil, fmt.Errorf("%w: a seat follows its formation and never unloads on its own", runtimes.ErrParam)
+	}
+	return m.create(ctx, p)
 }
 
-// Resolves model, runtime, install, reservation, and plan
-func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, error) {
-	if req.GetSeat() != nil {
-		return m.prepareSeat(ctx, req)
+// Records a prepared run, names its route, and starts the reconciler on its first launch
+func (m *Manager) create(ctx context.Context, p *prepared) (*v1.Instance, *v1.Task, error) {
+	p.generation = 1
+	rec := &v1.Instance{
+		Id:             db.NewID(),
+		Name:           p.name,
+		SourceId:       p.req.GetSourceId(),
+		Repo:           p.req.GetRepo(),
+		Group:          p.req.GetGroup(),
+		RuntimeId:      p.rt.ID(),
+		InstallId:      p.install.GetId(),
+		State:          v1.InstanceState_INSTANCE_STATE_STARTING,
+		CreatedAt:      timestamppb.Now(),
+		Plan:           p.plan,
+		Request:        proto.Clone(p.req).(*v1.RunRequest),
+		DesiredRunning: true,
+		SlotId:         p.req.GetSlotId(),
+		Seat:           p.seat,
+		Generation:     1,
 	}
+	if p.stored != nil {
+		rec.SourceId, rec.Repo, rec.Group = p.stored.GetSourceId(), p.stored.GetRepo(), p.stored.GetGroup()
+	}
+	rec.Conditions = SetCondition(rec.Conditions, CondScheduled, true, ReasonPlanned, planDetail(p), 1)
+	rec.Conditions = SetCondition(rec.Conditions, CondLaunched, false, ReasonLaunching, "", 1)
+	rec.Conditions = SetCondition(rec.Conditions, CondReady, false, ReasonStarting, "", 1)
+	in := m.newInstance(rec, p.rt)
+	in.prepared = p
+	m.mu.Lock()
+	if m.conflictLocked(p.name, p.req.GetSlotId(), "") {
+		m.mu.Unlock()
+		return nil, nil, fmt.Errorf("%w: instance %q is already running", runtimes.ErrParam, p.name)
+	}
+	m.list = append(m.list, in)
+	m.pruneLocked()
+	m.mu.Unlock()
+	if err := m.DB.PutInstance(context.Background(), in.snapshot()); err != nil {
+		m.Log.Warn("instance record write failed", "id", rec.GetId(), "err", err)
+	}
+	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_CREATED, rec.GetId(), in.snapshot())
+	if err := m.register(ctx, in, stringParams(p.params)); err != nil {
+		in.update(func(r *v1.Instance) {
+			r.State, r.Error, r.StoppedAt, r.DesiredRunning = v1.InstanceState_INSTANCE_STATE_FAILED, err.Error(), timestamppb.Now(), false
+			r.Conditions = SetCondition(r.Conditions, CondReady, false, ReasonLaunchFailed, err.Error(), r.GetGeneration())
+		})
+		return nil, nil, err
+	}
+	first := in.launchAttempt("run "+p.name, p)
+	in.startLoop(first, false)
+	return in.snapshot(), first.task, nil
+}
+
+// A one line account of the plan a run was scheduled with
+func planDetail(p *prepared) string {
+	if p.plan == nil {
+		return "the runtime has no estimate policy"
+	}
+	return text.Enum(p.plan.GetVerdict()) + ": " + p.plan.GetDetail()
+}
+
+// Replaces an instance's desired request, the reconciler draining the old process and launching the new
+func (m *Manager) Apply(ctx context.Context, id string, req *v1.RunRequest) (*v1.Instance, error) {
+	in, err := m.find(id)
+	if err != nil {
+		return nil, err
+	}
+	rec := in.snapshot()
+	if Terminal(rec.GetState()) {
+		return nil, fmt.Errorf("%w: %s is %s, run it again instead", runtimes.ErrParam, rec.GetName(), text.Enum(rec.GetState()))
+	}
+	if rec.GetSeat() != nil || req.GetSeat() != nil {
+		return nil, fmt.Errorf("%w: a seat's request belongs to its formation", runtimes.ErrParam)
+	}
+	next := proto.Clone(req).(*v1.RunRequest)
+	next.SlotId, next.Name = rec.GetSlotId(), rec.GetName()
+	if next.GetInstallId() == "" && (next.GetRuntimeId() == "" || next.GetRuntimeId() == rec.GetRuntimeId()) {
+		next.InstallId = rec.GetInstallId()
+	}
+	p, err := m.prepare(ctx, next, rec.GetId())
+	if err != nil {
+		return nil, err
+	}
+	var gen uint64
+	in.update(func(r *v1.Instance) {
+		r.Generation++
+		gen = r.Generation
+		r.Request = proto.Clone(p.req).(*v1.RunRequest)
+		r.InstallId, r.RuntimeId, r.Plan = p.install.GetId(), p.rt.ID(), p.plan
+		r.Conditions = SetCondition(r.Conditions, CondScheduled, true, ReasonPlanned, planDetail(p), gen)
+	})
+	p.generation = gen
+	in.mu.Lock()
+	in.next = p
+	in.mu.Unlock()
+	in.kick()
+	return in.snapshot(), nil
+}
+
+// Resolves model, runtime, install, reservation, and plan, the instance named by self excluded from name checks
+func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest, self string) (*prepared, error) {
+	if req.GetSeat() != nil {
+		return m.prepareSeat(ctx, req, self)
+	}
+	p, err := m.prepareInputs(ctx, req, self)
+	if err != nil {
+		return nil, err
+	}
+	rt, params := p.rt, p.params
+	if p.req.GetSnapshot() {
+		if p.snapshot, err = m.snapshotter(p.planned, p.res.placement()); err != nil {
+			return nil, err
+		}
+	}
+	if rt.Policy() != nil {
+		if p.plan, p.warning, err = m.Inspector.Plan(ctx, rt, p.descriptor, p.planned, p.layered, true, p.res.placement(), p.stored.GetRepo(), p.stored, p.companions); err != nil {
+			return nil, err
+		}
+		for k, v := range p.plan.GetParams() {
+			if _, deferred := rt.Policy().Deferred[k]; params.IsAuto(k) && !deferred {
+				params[k] = v
+			}
+		}
+	}
+	return p, nil
+}
+
+// Resolves a solo run's model, runtime, install, reservation and params short of its plan
+func (m *Manager) prepareInputs(ctx context.Context, req *v1.RunRequest, self string) (*prepared, error) {
 	req = proto.Clone(req).(*v1.RunRequest)
 	if err := runtimes.CheckArgs(req.GetArgs()); err != nil {
 		return nil, err
+	}
+	if req.GetIdleUnloadSeconds() > 0 && (m.InFlight == nil || m.Dispatched == nil || m.Load == nil) {
+		return nil, fmt.Errorf("%w: idle unload reads the gateway's in flight and dispatch counters and the scraped load, and this daemon wires none of them", runtimes.ErrParam)
 	}
 	stored, err := m.Store.ReadManifest(req.GetSourceId(), req.GetRepo(), req.GetGroup())
 	if err != nil {
@@ -346,7 +376,12 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if err != nil {
 		return nil, err
 	}
-	// Use the slot's runtime or the first compatible runtime.
+	if res != nil {
+		if err := pinnable(profile, res.DeviceIDs); err != nil {
+			return nil, err
+		}
+	}
+	// Use the slot's runtime or the first compatible runtime
 	var rt runtimes.Runtime
 	if req.GetRuntimeId() == "" {
 		rt, err = m.Inspector.DefaultRuntime(profile, stored.GetFormatId(), descriptor.GetKind())
@@ -357,12 +392,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 		return nil, err
 	}
 	req.RuntimeId = rt.ID()
-	var install *v1.Install
-	if req.GetInstallId() != "" {
-		install, err = m.Installs.Get(ctx, req.GetInstallId())
-	} else {
-		install, err = m.Installs.Default(ctx, rt.ID())
-	}
+	install, err := m.pinInstall(ctx, req, rt)
 	if err != nil {
 		return nil, err
 	}
@@ -370,13 +400,11 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if name == "" {
 		name = path.Base(stored.GetRepo()) + ":" + stored.GetGroup()
 	}
-	if m.conflict(name, req.GetSlotId()) {
+	if m.conflict(name, req.GetSlotId(), self) {
 		return nil, fmt.Errorf("%w: instance %q is already running", runtimes.ErrParam, name)
 	}
-	if req.GetSlotId() == "" && m.Routes != nil {
-		if r, ok := m.Routes.Lookup(name); ok && r.GetSlotId() != "" {
-			return nil, fmt.Errorf("%w: %q is a slot, run with the slot or pick another name", runtimes.ErrParam, name)
-		}
+	if req.GetSlotId() == "" && m.Slots != nil && m.Slots.Owns(name) {
+		return nil, fmt.Errorf("%w: %q is a slot, run with the slot or pick another name", runtimes.ErrParam, name)
 	}
 	planProfile := profile
 	if res != nil {
@@ -390,7 +418,7 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	if err != nil {
 		return nil, err
 	}
-	// Request params override slot defaults. Stored groups named by path params resolve to their files.
+	// Request params override slot defaults, and stored groups named by path params resolve to their files
 	layered, err := runtimes.ResolveStore(rt, runtimes.Merge(slotParams, req.GetParams()), append(append([]*v1.StoredModel{}, companions...), stored))
 	if err != nil {
 		return nil, err
@@ -401,277 +429,62 @@ func (m *Manager) prepare(ctx context.Context, req *v1.RunRequest) (*prepared, e
 	}
 	p := &prepared{req: req, stored: stored, rt: rt, install: install, name: name, descriptor: descriptor, profile: profile, planned: planProfile, res: res, params: params, layered: layered}
 	p.companions = companions
-	if rt.Policy() != nil {
-		if p.plan, p.warning, err = m.Inspector.Plan(ctx, rt, descriptor, planProfile, layered, true, res.placement(), stored.GetRepo(), stored, companions); err != nil {
-			return nil, err
-		}
-		for k, v := range p.plan.GetParams() {
-			if _, deferred := rt.Policy().Deferred[k]; params.IsAuto(k) && !deferred {
-				params[k] = v
-			}
-		}
-	}
 	return p, nil
 }
 
-// Renders and launches a prepared run
-func (m *Manager) launch(ctx context.Context, p *prepared) (*v1.Instance, *v1.Task, error) {
-	if p.seat != nil {
-		return m.launchSeat(ctx, p)
-	}
-	req, stored, rt, install, name, descriptor, params, plan := p.req, p.stored, p.rt, p.install, p.name, p.descriptor, p.params, p.plan
-	port, err := freePort()
-	if err != nil {
-		return nil, nil, err
-	}
-	// Update last-used time only on launch. Hold the model lock until the instance
-	// is registered so eviction can see and protect it.
-	key := store.Key(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
-	unlock := m.Store.Lock(key)
-	defer unlock()
-	touched, err := m.Store.Touch(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
-	if err != nil {
-		return nil, nil, fmt.Errorf("%s %s is no longer stored, pull it again: %w", stored.GetRepo(), stored.GetGroup(), err)
-	}
-	m.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_UPDATED, key, touched)
-	artifacts := m.artifacts(stored, rt)
-	input := runtimes.Launch{
-		Name:          name,
-		Params:        params,
-		Artifacts:     artifacts,
-		Host:          bindHost,
-		Port:          port,
-		Install:       runtimes.Install{Path: install.GetPath(), Dir: install.GetDir(), Version: install.GetVersion()},
-		Devices:       slotDevices(p.planned, p.res),
-		Placement:     p.res.placement(),
-		Descriptor:    descriptor,
-		Plan:          plan,
+// The launch input a prepared run renders and reports its inventory from, before its host, port and files are bound
+func (p *prepared) input() runtimes.Launch {
+	in := runtimes.Launch{
+		Name:          p.name,
+		Params:        p.params,
+		Install:       runtimes.Install{Path: p.install.GetPath(), Dir: p.install.GetDir(), Version: p.install.GetVersion()},
+		Descriptor:    p.descriptor,
+		Plan:          p.plan,
+		Profile:       p.planned,
 		Stored:        p.companions,
-		Model:         stored,
-		InstallRecord: install,
+		Model:         p.stored,
+		InstallRecord: p.install,
 	}
-	var prep *runtimes.Command
-	if rt.Prepares(stored.GetFormatId()) {
-		if artifacts["prepared_dir"] == "" {
-			return nil, nil, fmt.Errorf("%s needs a prepared tree for %s and the store has none", rt.ID(), stored.GetGroup())
-		}
-		if prep, err = rt.Prepare(input); err != nil {
-			return nil, nil, err
-		}
-		launchArtifacts := make(map[string]string, len(artifacts))
-		for k, v := range artifacts {
-			launchArtifacts[k] = v
-		}
-		launchArtifacts["weights_dir"] = artifacts["prepared_dir"]
-		input.Artifacts = launchArtifacts
+	if p.seat != nil {
+		in.Devices = seatDevices(p.profile, p.seat.GetDevices())
+		return in
 	}
-	rendered, err := rt.Launch(input)
-	if err != nil {
-		return nil, nil, err
-	}
-	extra, err := runtimes.RenderArgs(runtimes.JoinArgs(p.res.args(), req.GetArgs()), runtimes.ScopeOf(input, rendered))
-	if err != nil {
-		return nil, nil, err
-	}
-	rendered.Args = append(rendered.Args, extra...)
-	id := db.NewID()
-	in := m.newInstance(&v1.Instance{
-		Id:             id,
-		Name:           name,
-		SourceId:       stored.GetSourceId(),
-		Repo:           stored.GetRepo(),
-		Group:          stored.GetGroup(),
-		RuntimeId:      rt.ID(),
-		InstallId:      install.GetId(),
-		Params:         rendered.Params,
-		Command:        append([]string{rendered.Command}, rendered.Args...),
-		Endpoint:       fmt.Sprintf("http://%s:%d", bindHost, port),
-		State:          v1.InstanceState_INSTANCE_STATE_STARTING,
-		CreatedAt:      timestamppb.Now(),
-		Plan:           plan,
-		Request:        proto.Clone(req).(*v1.RunRequest),
-		DesiredRunning: true,
-		SlotId:         req.GetSlotId(),
-	}, rt)
-	m.mu.Lock()
-	if m.conflictLocked(name, req.GetSlotId()) {
-		m.mu.Unlock()
-		return nil, nil, fmt.Errorf("%w: instance %q is already running", runtimes.ErrParam, name)
-	}
-	m.list = append(m.list, in)
-	m.pruneLocked()
-	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_CREATED, id, in.snapshot())
-	m.mu.Unlock()
-	prepDir := artifacts["prepared_dir"]
-	prepTimeout := rt.PrepareTimeout()
-	task := m.Tasks.Start(kindRun, "run "+name, map[string]string{"instance": id, "name": name}, func(ctx context.Context, h *tasks.Handle) error {
-		if p.warning != "" {
-			h.Logf("plan: %s", p.warning)
-		}
-		if prep != nil {
-			if err := m.runPrepare(ctx, h, in, prep, install.GetDir(), prepDir, prepTimeout); err != nil {
-				return err
-			}
-		}
-		return m.start(ctx, h, in, rendered, p)
-	})
-	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })
-	return in.snapshot(), task, nil
+	in.Devices, in.Placement = slotDevices(p.planned, p.res), p.res.placement()
+	return in
 }
 
-func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance, prep *runtimes.Command, dir, prepDir string, timeout time.Duration) error {
-	marker := filepath.Join(prepDir, ".prepared")
-	if _, err := os.Stat(marker); err == nil {
-		h.Logf("prepared earlier at %s", prepDir)
-		return nil
+// What a recorded launch reports, its inputs resolved as its launch resolved them over its recorded plan and params
+func (m *Manager) recordedInventory(ctx context.Context, rec *v1.Instance) (*v1.RuntimeInventory, error) {
+	var p *prepared
+	var err error
+	if rec.GetSeat() != nil {
+		p, err = m.prepareSeat(ctx, rec.GetRequest(), rec.GetId())
+	} else if p, err = m.prepareInputs(ctx, rec.GetRequest(), rec.GetId()); err == nil {
+		p.plan = rec.GetPlan()
 	}
-	if err := os.RemoveAll(prepDir); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(prepDir, 0o755); err != nil {
-		return err
-	}
-	if timeout <= 0 {
-		timeout = defaultPrepareTimeout
-	}
-	h.Progress(0, 0, "preparing")
-	h.Logf("prepare: %s %s", prep.Command, strings.Join(prep.Args, " "))
-	pctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(pctx, prep.Command, prep.Args...)
-	cmd.Dir = dir
-	cmd.Env = proc.Environ()
-	for k, v := range prep.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
-	logFile, err := os.OpenFile(m.logPath(in.snapshot().GetId()), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer logFile.Close()
-	pr, pw := io.Pipe()
-	cmd.Stdout, cmd.Stderr = pw, pw
-	// Use preparation output as the instance log until the runtime starts.
-	log := launch.NewLog(logCapacity)
-	in.mu.Lock()
-	in.log = log
-	in.mu.Unlock()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		scanner := bufio.NewScanner(pr)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			line := scanner.Text()
-			fmt.Fprintln(logFile, line)
-			log.Write(line)
-			h.Logf("%s", line)
-		}
-	}()
-	// Cancel the entire converter process tree, including workers.
-	err = proc.Run(cmd)
-	pw.Close()
-	<-done
-	log.Close()
-	if err != nil {
-		os.RemoveAll(prepDir)
-		err = fmt.Errorf("prepare: %w", err)
-		for _, hit := range m.fail(in, err) {
-			h.Logf("triage %s: %s", hit.GetId(), hit.GetSummary())
-		}
-		return err
-	}
-	return os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
+	return p.rt.Inventory(p.input(), rec.GetParams())
 }
 
-func (m *Manager) start(ctx context.Context, h *tasks.Handle, in *instance, rendered *runtimes.Command, p *prepared) error {
-	install, d, before := p.install, p.descriptor, p.profile
-	rec := in.snapshot()
-	h.Logf("command: %s", strings.Join(rec.GetCommand(), " "))
-	h.Progress(0, 0, "launching")
-	proc, err := m.Launcher.Launch(ctx, launch.Spec{Command: rendered.Command, Args: rendered.Args, Env: rendered.Env, Dir: install.GetDir(), LogPath: m.logPath(rec.GetId())})
+// Resolves the install a request names, or the runtime's default, and pins its id into the request
+func (m *Manager) pinInstall(ctx context.Context, req *v1.RunRequest, rt runtimes.Runtime) (*v1.Install, error) {
+	var install *v1.Install
+	var err error
+	if req.GetInstallId() != "" {
+		install, err = m.Installs.Get(ctx, req.GetInstallId())
+	} else {
+		install, err = m.Installs.Default(ctx, rt.ID())
+	}
 	if err != nil {
-		in.update(func(r *v1.Instance) {
-			if Terminal(r.State) {
-				return
-			}
-			r.State = v1.InstanceState_INSTANCE_STATE_FAILED
-			r.Error = err.Error()
-			r.StoppedAt = timestamppb.Now()
-		})
-		return err
+		return nil, err
 	}
-	in.attach(proc)
-	var stopping bool
-	in.update(func(r *v1.Instance) {
-		r.Pid = int32(proc.Pid())
-		stopping = r.State == v1.InstanceState_INSTANCE_STATE_STOPPING
-	})
-	go m.supervise(in)
-	if stopping {
-		h.Logf("stop requested before the runtime was ready")
-		proc.Stop(in.grace())
-		return errStopped
+	if install.GetRuntimeId() != rt.ID() {
+		return nil, fmt.Errorf("%w: install %s is a %s install, not %s", runtimes.ErrParam, install.GetId(), install.GetRuntimeId(), rt.ID())
 	}
-	if err := m.waitReady(ctx, h, in, proc); err != nil {
-		return err
-	}
-	proc.Sync()
-	lines := proc.Log().Tail(0)
-	measurements := in.rt.Measure(lines)
-	picked := m.chosen(h.Logf, in, lines)
-	m.replan(ctx, h.Logf, in, p, picked)
-	// The runtime's allocated cache teaches the architecture's cache factor, then the plan is drawn again with it
-	if m.learnCache(ctx, h.Logf, in, d, measurements) {
-		m.replan(ctx, h.Logf, in, p, picked)
-	}
-	if after, perr := m.Host.Profile(ctx, true); perr == nil {
-		used := host.InstanceBytes(after, rec.GetId())
-		if used == 0 {
-			used = uint64(max(deviceFree(before)-deviceFree(after), 0))
-		}
-		if used > 0 {
-			measurements = append(measurements, &v1.Measurement{Key: estimate.DeviceUsedKey, Bytes: used})
-			if plan := in.snapshot().GetPlan(); plan != nil && m.Calibration != nil {
-				base := max(float64(estimate.PlannedDevice(plan))-plan.GetOverheadDelta(), 0)
-				if cerr := m.Calibration.Record(ctx, in.rt.ID(), d.GetArchitecture(), used, uint64(base)); cerr != nil {
-					m.Log.Warn("calibration write failed", "err", cerr)
-				}
-			}
-		}
-	}
-	m.ready(h, in, measurements, m.readTemplate(ctx, h.Logf, in))
-	return nil
-}
-
-// Records the cache the runtime reports against the plan's cache before its factor, true when one was read
-func (m *Manager) learnCache(ctx context.Context, logf func(string, ...any), in *instance, d *v1.Descriptor, measurements []*v1.Measurement) bool {
-	plan := in.snapshot().GetPlan()
-	measured := cacheMeasured(measurements)
-	if m.Calibration == nil || plan == nil || plan.GetCacheBytes() == 0 || measured == 0 {
-		return false
-	}
-	base := float64(plan.GetCacheBytes())
-	if r := plan.GetCacheRatio(); r > 0 {
-		base /= r
-	}
-	if err := m.Calibration.RecordCache(ctx, in.rt.ID(), d.GetArchitecture(), measured, uint64(base)); err != nil {
-		m.Log.Warn("cache calibration write failed", "err", err)
-		return false
-	}
-	logf("cache %s allocated against %s planned, %s plans now scale their cache by %.2f", estimate.Human(measured), estimate.Human(uint64(base)), d.GetArchitecture(), m.Calibration.Ratio(in.rt.ID(), d.GetArchitecture()))
-	return true
-}
-
-// The cache bytes a runtime's log reported on every side
-func cacheMeasured(measurements []*v1.Measurement) uint64 {
-	var total uint64
-	for _, ms := range measurements {
-		if strings.HasSuffix(ms.GetKey(), ".cache") {
-			total += ms.GetBytes()
-		}
-	}
-	return total
+	req.InstallId = install.GetId()
+	return install, nil
 }
 
 // Stamps each process the host lists with the live instance whose process tree holds its pid
@@ -684,8 +497,12 @@ func (m *Manager) Attribute(profile *v1.HostProfile) {
 	m.mu.Lock()
 	for _, in := range m.list {
 		in.mu.Lock()
-		if !Terminal(in.rec.GetState()) && in.rec.GetPid() > 0 {
-			roots[int(in.rec.GetPid())] = owner{in.rec.GetId(), in.rec.GetName()}
+		if !Terminal(in.rec.GetState()) {
+			for _, ref := range rankRefs(in.rec) {
+				if ref.pid > 0 {
+					roots[int(ref.pid)] = owner{in.rec.GetId(), in.rec.GetName()}
+				}
+			}
 		}
 		in.mu.Unlock()
 	}
@@ -702,222 +519,6 @@ func (m *Manager) Attribute(profile *v1.HostProfile) {
 		if root, ok := owners[int(pu.GetPid())]; ok {
 			pu.InstanceId, pu.InstanceName = roots[root].id, roots[root].name
 		}
-	}
-}
-
-// Records the auto params the runtime picked itself, read from its log, as the instance's params
-func (m *Manager) chosen(logf func(string, ...any), in *instance, lines []string) map[string]string {
-	policy := in.rt.Policy()
-	if policy == nil {
-		return nil
-	}
-	rec := in.snapshot()
-	picked := map[string]string{}
-	for name, read := range policy.Deferred {
-		if _, set := rec.GetParams()[name]; set {
-			continue
-		}
-		v, ok := read(lines)
-		if !ok {
-			logf("%s left %s to the runtime and its log names no value for it", rec.GetName(), name)
-			continue
-		}
-		picked[name] = v
-		logf("%s %s, chosen by %s", name, v, rec.GetRuntimeId())
-	}
-	if len(picked) == 0 {
-		return nil
-	}
-	in.update(func(r *v1.Instance) {
-		if r.Params == nil {
-			r.Params = map[string]string{}
-		}
-		maps.Copy(r.Params, picked)
-	})
-	return picked
-}
-
-// Plans the run again at the values the runtime chose, so the record holds the context it runs
-func (m *Manager) replan(ctx context.Context, logf func(string, ...any), in *instance, p *prepared, picked map[string]string) {
-	if p.plan == nil || p.rt.Policy() == nil {
-		return
-	}
-	plan, warning, err := m.Inspector.Plan(ctx, p.rt, p.descriptor, p.planned, runtimes.Merge(p.layered, picked), true, p.res.placement(), p.stored.GetRepo(), p.stored, p.companions)
-	if err != nil {
-		logf("plan at the chosen values failed: %v", err)
-		return
-	}
-	if warning != "" {
-		logf("plan: %s", warning)
-	}
-	in.update(func(r *v1.Instance) { r.Plan = plan })
-}
-
-// Reads the chat template from the model's files, a diffusion runtime's modes read instead
-func (m *Manager) readTemplate(ctx context.Context, logf func(string, ...any), in *instance) *v1.ChatTemplate {
-	rec := in.snapshot()
-	if m.Runtimes.API(rec.GetRuntimeId()) == v1.ApiFlavor_API_FLAVOR_SDCPP {
-		m.probeModes(ctx, logf, in)
-		return nil
-	}
-	var tpl *v1.ChatTemplate
-	if m.Store == nil {
-		tpl = &v1.ChatTemplate{Error: "no store holds the model's files"}
-	} else if stored, err := m.Store.ReadManifest(rec.GetSourceId(), rec.GetRepo(), rec.GetGroup()); err != nil {
-		tpl = &v1.ChatTemplate{Error: "manifest: " + err.Error()}
-	} else {
-		tpl = chattemplate.Inspect(stored)
-	}
-	switch {
-	case tpl.GetError() != "":
-		logf("chat template: %s. Tool definitions pass through as the client sends them", tpl.GetError())
-	case tpl.GetTools() == v1.ToolSupport_TOOL_SUPPORT_NATIVE:
-		logf("chat template %s renders tools", tpl.GetSource())
-	default:
-		logf("chat template %s renders no tools. The gateway writes them into the prompt and parses the calls", tpl.GetSource())
-	}
-	return tpl
-}
-
-// Reads diffusion capabilities for gateway image and video routing.
-func (m *Manager) probeModes(ctx context.Context, logf func(string, ...any), in *instance) {
-	rec := in.snapshot()
-	ctx, cancel := context.WithTimeout(ctx, modesTimeout)
-	defer cancel()
-	modes, err := gateway.Capabilities(ctx, &http.Client{}, rec.GetEndpoint())
-	if err != nil {
-		logf("capabilities probe: %s. Route capabilities are unknown", err)
-		return
-	}
-	logf("generates %s", strings.Join(modes, ", "))
-	if m.Routes != nil {
-		m.Routes.SetModes(rec.GetId(), modes)
-	}
-}
-
-// Polls health for as long as the process lives, warning when it is slow, recording triage once it has exited
-func (m *Manager) waitReady(ctx context.Context, h *tasks.Handle, in *instance, proc launch.Handle) error {
-	health := in.rt.Health()
-	url := in.snapshot().GetEndpoint() + health.Path
-	h.Message("waiting for " + url)
-	err := launch.WaitHealthy(ctx, proc, url, health.Interval, health.SlowAfter, func(waited time.Duration) {
-		h.Logf("%s is not healthy after %s, waiting for as long as the process lives", in.snapshot().GetName(), waited)
-		m.Log.Warn("instance slow to become healthy", "name", in.snapshot().GetName(), "waited", waited, "url", url)
-	})
-	if err == nil {
-		return nil
-	}
-	if in.stopRequested() {
-		h.Logf("stop requested before the runtime was ready")
-		proc.Stop(in.grace())
-		return errStopped
-	}
-	hits := m.fail(in, err)
-	proc.Stop(in.grace())
-	for _, hit := range hits {
-		h.Logf("triage %s: %s. %s", hit.GetId(), hit.GetSummary(), hit.GetHint())
-	}
-	if len(hits) > 0 {
-		return fmt.Errorf("%s: %s", hits[0].GetSummary(), hits[0].GetHint())
-	}
-	return err
-}
-
-// Marks active instances ready and records measurements and the chat template read
-func (m *Manager) ready(h *tasks.Handle, in *instance, measurements []*v1.Measurement, tpl *v1.ChatTemplate) {
-	var rec *v1.Instance
-	in.update(func(r *v1.Instance) {
-		if r.State == v1.InstanceState_INSTANCE_STATE_STARTING {
-			r.State = v1.InstanceState_INSTANCE_STATE_READY
-			r.ReadyAt = timestamppb.Now()
-		}
-		r.Measurements = mergeMeasurements(r.Measurements, measurements)
-		r.Template = tpl
-		rec = proto.Clone(r).(*v1.Instance)
-	})
-	for _, ms := range measurements {
-		h.Logf("%s %s", ms.GetKey(), estimate.Human(ms.GetBytes()))
-	}
-	h.Progress(1, 1, "ready at "+rec.GetEndpoint())
-	h.Logf("ready %s at %s", rec.GetName(), rec.GetEndpoint())
-}
-
-// Merges measurements by key, preserving old-only keys.
-func mergeMeasurements(old, fresh []*v1.Measurement) []*v1.Measurement {
-	if len(fresh) == 0 {
-		return old
-	}
-	seen := map[string]bool{}
-	for _, m := range fresh {
-		seen[m.GetKey()] = true
-	}
-	out := append([]*v1.Measurement(nil), fresh...)
-	for _, m := range old {
-		if !seen[m.GetKey()] {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
-// Marks an instance failed unless terminal, returning triage hits. The log's measurements go on
-// the record with the hits, so what the runtime allocated and failed to allocate before it died
-// is read from the record, on this node and over the mesh
-func (m *Manager) fail(in *instance, err error) []*v1.TriageHit {
-	var hits []*v1.TriageHit
-	var measurements []*v1.Measurement
-	in.mu.Lock()
-	log, proc := in.log, in.proc
-	in.mu.Unlock()
-	if proc != nil {
-		proc.Sync()
-	}
-	if log != nil && in.rt != nil {
-		lines := log.Tail(0)
-		hits = triage.Scan(in.rt.Triage(), lines)
-		measurements = in.rt.Measure(lines)
-	}
-	in.update(func(r *v1.Instance) {
-		if Terminal(r.State) || r.State == v1.InstanceState_INSTANCE_STATE_STOPPING {
-			hits = r.Triage
-			return
-		}
-		r.State = v1.InstanceState_INSTANCE_STATE_FAILED
-		r.Error = err.Error()
-		r.Triage = hits
-		r.Measurements = mergeMeasurements(r.Measurements, measurements)
-		r.StoppedAt = timestamppb.Now()
-	})
-	return hits
-}
-
-func (m *Manager) supervise(in *instance) {
-	proc := in.handle()
-	<-proc.Done()
-	exitErr := proc.Err()
-	in.mu.Lock()
-	state, name := in.rec.State, in.rec.GetName()
-	in.mu.Unlock()
-	switch state {
-	case v1.InstanceState_INSTANCE_STATE_STOPPING, v1.InstanceState_INSTANCE_STATE_DRAINING:
-		in.update(func(r *v1.Instance) {
-			r.State = v1.InstanceState_INSTANCE_STATE_STOPPED
-			r.StoppedAt = timestamppb.Now()
-		})
-	case v1.InstanceState_INSTANCE_STATE_READY, v1.InstanceState_INSTANCE_STATE_STARTING:
-		detail := "exited"
-		if exitErr != nil {
-			detail = "exited: " + exitErr.Error()
-		}
-		hits := m.fail(in, errors.New(detail))
-		m.Log.Warn("instance exited", "name", name, "err", exitErr, "triage", len(hits))
-	}
-	// The runtime's memory is free once it exits, and a daemon on its way out plans nothing more
-	m.mu.Lock()
-	closing := m.closing
-	m.mu.Unlock()
-	if m.Probe != nil && !closing {
-		m.Probe()
 	}
 }
 
@@ -969,33 +570,17 @@ func (m *Manager) find(id string) (*instance, error) {
 	return match, nil
 }
 
-func (m *Manager) live(name string) *instance {
+// Reports a live instance with the name outside the slot, the instance self excluded
+func (m *Manager) conflict(name, slotID, self string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.liveLocked(name)
+	return m.conflictLocked(name, slotID, self)
 }
 
-func (m *Manager) liveLocked(name string) *instance {
+func (m *Manager) conflictLocked(name, slotID, self string) bool {
 	for _, in := range m.list {
 		rec := in.snapshot()
-		if rec.GetName() == name && !Terminal(rec.GetState()) {
-			return in
-		}
-	}
-	return nil
-}
-
-// Reports a live instance with the name outside the slot
-func (m *Manager) conflict(name, slotID string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.conflictLocked(name, slotID)
-}
-
-func (m *Manager) conflictLocked(name, slotID string) bool {
-	for _, in := range m.list {
-		rec := in.snapshot()
-		if rec.GetName() != name || Terminal(rec.GetState()) {
+		if rec.GetName() != name || Terminal(rec.GetState()) || rec.GetId() == self {
 			continue
 		}
 		if slotID == "" || rec.GetSlotId() != slotID {
@@ -1005,7 +590,7 @@ func (m *Manager) conflictLocked(name, slotID string) bool {
 	return false
 }
 
-// Returns the slot reservation or an error if slots are not initialized.
+// Returns the slot reservation or an error if slots are not initialized
 func (m *Manager) reservation(ctx context.Context, slotID string) (*Reservation, error) {
 	if m.Slots == nil {
 		return nil, fmt.Errorf("%w: slots are not available", runtimes.ErrParam)
@@ -1022,11 +607,6 @@ func (m *Manager) Constrain(ctx context.Context, slotID string, profile *v1.Host
 	return &inspect.Constraint{Profile: Constrain(profile, res.DeviceIDs, res.MemoryBytes, res.Placement), RuntimeID: res.RuntimeID, Params: res.Params, Placement: res.Placement}, nil
 }
 
-// Relaunch wanted, nonfailed instances outside slots. Slots manage their own recovery.
-func relaunches(rec *v1.Instance) bool {
-	return rec.GetDesiredRunning() && rec.GetState() != v1.InstanceState_INSTANCE_STATE_FAILED && rec.GetSlotId() == "" && rec.GetSeat() == nil
-}
-
 // Lists live instances bound to a slot, newest first
 func (m *Manager) InSlot(slotID string) []*v1.Instance {
 	var out []*v1.Instance
@@ -1036,60 +616,6 @@ func (m *Manager) InSlot(slotID string) []*v1.Instance {
 		}
 	}
 	return out
-}
-
-// Stops taking new requests and waits for in flight ones
-func (m *Manager) Drain(ctx context.Context, id string, limit time.Duration) (*v1.Instance, error) {
-	in, err := m.find(id)
-	if err != nil {
-		return nil, err
-	}
-	var draining bool
-	in.update(func(r *v1.Instance) {
-		if r.State == v1.InstanceState_INSTANCE_STATE_READY {
-			r.State = v1.InstanceState_INSTANCE_STATE_DRAINING
-			draining = true
-		}
-	})
-	if draining && m.Routes != nil {
-		m.Routes.Drain(id)
-		m.Routes.WaitDrained(ctx, id, limit)
-	}
-	return in.snapshot(), nil
-}
-
-// Stops an instance by request, clearing relaunch intent
-func (m *Manager) Stop(ctx context.Context, id string) (*v1.Instance, error) {
-	in, err := m.find(id)
-	if err != nil {
-		return nil, err
-	}
-	return m.stop(ctx, in, true)
-}
-
-func (m *Manager) stop(ctx context.Context, in *instance, byRequest bool) (*v1.Instance, error) {
-	var wasTerminal bool
-	in.update(func(r *v1.Instance) {
-		if byRequest {
-			r.DesiredRunning = false
-		}
-		wasTerminal = Terminal(r.State)
-		if !wasTerminal {
-			r.State = v1.InstanceState_INSTANCE_STATE_STOPPING
-		}
-	})
-	if wasTerminal {
-		return in.snapshot(), nil
-	}
-	if proc := in.handle(); proc != nil {
-		proc.Stop(in.grace())
-	}
-	select {
-	case <-in.exited:
-	case <-ctx.Done():
-		return in.snapshot(), ctx.Err()
-	}
-	return in.snapshot(), nil
 }
 
 // Streams runtime output, following until exit when asked
@@ -1128,6 +654,13 @@ func (m *Manager) logOf(in *instance) *launch.Log {
 	if err != nil {
 		return nil
 	}
+	for _, path := range m.rankLogs(id) {
+		more, err := launch.ReadTail(path, 0)
+		if err != nil {
+			return nil
+		}
+		lines = append(lines, more...)
+	}
 	saved := launch.NewLog(max(len(lines), 1))
 	for _, line := range lines {
 		saved.Write(line)
@@ -1139,153 +672,6 @@ func (m *Manager) logOf(in *instance) *launch.Log {
 		in.log = saved
 	}
 	return in.log
-}
-
-// Stops every live instance for shutdown, keeping their relaunch intent
-func (m *Manager) Close() {
-	m.mu.Lock()
-	m.closing = true
-	m.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
-	defer cancel()
-	var wg sync.WaitGroup
-	for _, rec := range m.List(true) {
-		in, err := m.find(rec.GetId())
-		if err != nil {
-			continue
-		}
-		wg.Add(1)
-		go func(in *instance) {
-			defer wg.Done()
-			m.stop(ctx, in, false)
-		}(in)
-	}
-	wg.Wait()
-}
-
-// Loads records, adopts live runtimes, marks exited ones, and relaunches wanted instances.
-func (m *Manager) Recover(ctx context.Context) error {
-	loaded, err := m.load(ctx)
-	if err != nil {
-		return err
-	}
-	m.mu.Lock()
-	m.list = loaded
-	m.pruneLocked()
-	m.mu.Unlock()
-	var wg sync.WaitGroup
-	wanted := map[string]*instance{}
-	for _, in := range loaded {
-		rec := in.snapshot()
-		if !Terminal(rec.GetState()) {
-			alive := proc.Running(int(rec.GetPid()), rec.GetCommand())
-			switch {
-			case alive && in.rt != nil && rec.GetDesiredRunning():
-				m.adopt(ctx, in)
-				continue
-			case alive && in.rt == nil:
-				m.Log.Warn("stopping instance whose runtime manifest is gone", "name", rec.GetName(), "runtime", rec.GetRuntimeId(), "pid", rec.GetPid())
-				fallthrough
-			case alive:
-				if in.rt != nil {
-					m.Log.Info("finishing the stop a previous daemon began", "name", rec.GetName(), "pid", rec.GetPid())
-				}
-				wg.Add(1)
-				go func(pid int, grace time.Duration) {
-					defer wg.Done()
-					proc.Terminate(pid, grace)
-				}(int(rec.GetPid()), in.grace())
-			}
-			in.update(func(r *v1.Instance) {
-				r.State = v1.InstanceState_INSTANCE_STATE_STOPPED
-				r.Error = db.RestartNote
-				r.StoppedAt = timestamppb.Now()
-			})
-		}
-		if relaunches(rec) {
-			wanted[rec.GetName()] = in
-		}
-	}
-	wg.Wait()
-	var relaunch []*instance
-	for name, in := range wanted {
-		if m.live(name) == nil {
-			relaunch = append(relaunch, in)
-		}
-	}
-	sort.Slice(relaunch, func(i, j int) bool {
-		return relaunch[i].snapshot().GetCreatedAt().AsTime().Before(relaunch[j].snapshot().GetCreatedAt().AsTime())
-	})
-	if len(relaunch) > 0 {
-		go m.relaunch(ctx, relaunch)
-	}
-	return nil
-}
-
-// Adopts a runtime left running, routing it once healthy
-func (m *Manager) adopt(ctx context.Context, in *instance) {
-	rec := in.snapshot()
-	proc := launch.Adopt(int(rec.GetPid()), m.logPath(rec.GetId()))
-	in.attach(proc)
-	go m.supervise(in)
-	if rec.GetSeat() != nil {
-		m.adoptSeat(ctx, in, proc)
-		return
-	}
-	url := rec.GetEndpoint() + in.rt.Health().Path
-	if rec.GetState() == v1.InstanceState_INSTANCE_STATE_READY && launch.Healthy(&http.Client{Timeout: probeTimeout}, url) {
-		proc.Sync()
-		measurements := in.rt.Measure(proc.Log().Tail(0))
-		in.update(func(r *v1.Instance) { r.Measurements = mergeMeasurements(r.Measurements, measurements) })
-		m.Log.Info("adopted running instance", "name", rec.GetName(), "pid", rec.GetPid(), "endpoint", rec.GetEndpoint())
-		// A template missing or unread before is read again during recovery
-		if rec.GetTemplate() == nil || rec.GetTemplate().GetError() != "" {
-			go func() {
-				tpl := m.readTemplate(ctx, func(format string, args ...any) { m.Log.Info(fmt.Sprintf(format, args...), "name", rec.GetName()) }, in)
-				in.update(func(r *v1.Instance) { r.Template = tpl })
-			}()
-		}
-		return
-	}
-	in.update(func(r *v1.Instance) {
-		r.State = v1.InstanceState_INSTANCE_STATE_STARTING
-		r.ReadyAt = nil
-	})
-	m.Log.Info("adopted instance still starting", "name", rec.GetName(), "pid", rec.GetPid())
-	task := m.Tasks.Start(kindRun, "adopt "+rec.GetName(), map[string]string{"instance": rec.GetId(), "name": rec.GetName()}, func(ctx context.Context, h *tasks.Handle) error {
-		h.Logf("adopted pid %d left running by the previous daemon", rec.GetPid())
-		if err := m.waitReady(ctx, h, in, proc); err != nil {
-			return err
-		}
-		proc.Sync()
-		m.ready(h, in, in.rt.Measure(proc.Log().Tail(0)), m.readTemplate(ctx, h.Logf, in))
-		return nil
-	})
-	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })
-}
-
-// Relaunches serially so each plan accounts for earlier launches.
-func (m *Manager) relaunch(ctx context.Context, list []*instance) {
-	for _, old := range list {
-		if ctx.Err() != nil {
-			return
-		}
-		rec := old.snapshot()
-		req := rec.GetRequest()
-		if req == nil {
-			m.Log.Warn("cannot relaunch, record has no request", "name", rec.GetName())
-			continue
-		}
-		m.Log.Info("relaunching", "name", rec.GetName())
-		_, task, err := m.Run(ctx, req)
-		if err != nil {
-			m.Log.Warn("relaunch failed", "name", rec.GetName(), "err", err)
-			old.update(func(r *v1.Instance) { r.Error = "relaunch failed: " + err.Error() })
-			continue
-		}
-		old.update(func(r *v1.Instance) { r.DesiredRunning = false })
-		m.Tasks.Watch(ctx, task.GetId(), func(*v1.WatchTaskResponse) error { return nil })
-	}
 }
 
 func (m *Manager) load(ctx context.Context) ([]*instance, error) {
@@ -1307,6 +693,9 @@ func (m *Manager) load(ctx context.Context) ([]*instance, error) {
 func (m *Manager) forget(id string) {
 	if err := m.DB.DeleteInstance(context.Background(), id); err != nil {
 		m.Log.Warn("instance record delete failed", "id", id, "err", err)
+	}
+	for _, path := range m.rankLogs(id) {
+		os.Remove(path)
 	}
 	os.Remove(m.logPath(id))
 }
@@ -1331,7 +720,7 @@ func (m *Manager) pruneLocked() {
 	}
 }
 
-// Returns the stored descriptor, rebuilding missing or outdated descriptors from local files.
+// Returns the stored descriptor, rebuilding missing or outdated descriptors from local files
 func (m *Manager) describe(ctx context.Context, stored *v1.StoredModel) (*v1.Descriptor, error) {
 	if d := stored.GetDescriptor_(); d != nil && d.GetKind() != v1.ModelKind_MODEL_KIND_UNSPECIFIED && descriptor.Current(d) {
 		return d, nil
@@ -1339,7 +728,7 @@ func (m *Manager) describe(ctx context.Context, stored *v1.StoredModel) (*v1.Des
 	return m.rebuild(ctx, stored)
 }
 
-// Backfills descriptors and runtime masks in old manifest
+// Backfills descriptors and runtime masks in old manifests
 func (m *Manager) RefreshDescriptors(ctx context.Context) {
 	list, err := m.Store.ListManifests()
 	if err != nil {
@@ -1419,7 +808,7 @@ func (m *Manager) artifacts(stored *v1.StoredModel, rt runtimes.Runtime) map[str
 	return out
 }
 
-// Restricts the profile to slot devices and caps placement memory pools at its budget.
+// Restricts the profile to slot devices and caps placement memory pools at its budget
 func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64, placement v1.Placement) *v1.HostProfile {
 	out := proto.Clone(p).(*v1.HostProfile)
 	if len(deviceIDs) == 0 && budget == 0 {
@@ -1457,7 +846,24 @@ func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64, placement v
 	return out
 }
 
-// Device pins from the slot, or none.
+// Refuses a slot pin this node lacks or whose device holds no memory of its own, ids on other nodes left to the conductor
+func pinnable(profile *v1.HostProfile, ids []string) error {
+	for _, id := range ids {
+		if strings.Contains(id, "/") {
+			continue
+		}
+		d := host.Device(profile, id)
+		if d == nil {
+			return fmt.Errorf("%w: device %q was not probed, see nebu host", runtimes.ErrParam, id)
+		}
+		if !host.OwnMemory(profile, d) {
+			return fmt.Errorf("%w: device %q (%s) has no memory of its own, so a slot cannot pin it", runtimes.ErrParam, id, d.GetName())
+		}
+	}
+	return nil
+}
+
+// Device pins from the slot, or none
 func slotDevices(p *v1.HostProfile, res *Reservation) []*v1.Device {
 	if res == nil || len(res.DeviceIDs) == 0 {
 		return nil
@@ -1481,113 +887,7 @@ func deviceFree(p *v1.HostProfile) int64 {
 	return total
 }
 
-func freePort() (int, error) {
-	ln, err := net.Listen("tcp", bindHost+":0")
-	if err != nil {
-		return 0, err
-	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port, nil
-}
-
 // Reports whether an instance state is final
 func Terminal(s v1.InstanceState) bool {
 	return s == v1.InstanceState_INSTANCE_STATE_STOPPED || s == v1.InstanceState_INSTANCE_STATE_FAILED
-}
-
-// Adopts a seat left running: its guard listener comes back on the port peers know, its readiness
-// is checked by its role's health with evidence, a head's chat template is read again, and only then
-// is it ready
-func (m *Manager) adoptSeat(ctx context.Context, in *instance, proc launch.Handle) {
-	rec := in.snapshot()
-	m.restoreGuard(in)
-	if Terminal(in.snapshot().GetState()) {
-		return
-	}
-	role, err := runtimes.RoleOf(in.rt, rec.GetSeat())
-	if err != nil {
-		m.fail(in, err)
-		proc.Stop(in.grace())
-		return
-	}
-	since := time.Now()
-	in.update(func(r *v1.Instance) {
-		r.State = v1.InstanceState_INSTANCE_STATE_STARTING
-		r.ReadyAt = nil
-	})
-	m.Log.Info("adopted seat, verifying it", "name", rec.GetName(), "pid", rec.GetPid(), "formation", rec.GetSeat().GetFormationId())
-	task := m.Tasks.Start(kindRun, "adopt "+rec.GetName(), map[string]string{"instance": rec.GetId(), "name": rec.GetName(), "formation": rec.GetSeat().GetFormationId(), "role": rec.GetSeat().GetRole()}, func(ctx context.Context, h *tasks.Handle) error {
-		h.Logf("adopted pid %d left running by the previous daemon", rec.GetPid())
-		if err := m.verifyAdopted(ctx, h, in, proc, since); err != nil {
-			return err
-		}
-		proc.Sync()
-		lines := proc.Log().Tail(0)
-		transport := in.rt.Transport(lines)
-		in.update(func(r *v1.Instance) { r.Transport = transport })
-		if transport != "" {
-			h.Logf("transport %s", transport)
-		}
-		var tpl *v1.ChatTemplate
-		if role.Head {
-			tpl = m.readTemplate(ctx, h.Logf, in)
-		}
-		m.ready(h, in, in.rt.Measure(lines), tpl)
-		return nil
-	})
-	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })
-}
-
-// Checks an adopted seat by its role's health: an HTTP path answering, the process alive, a hello
-// from a stage no client holds, or the conductor's record that the head is ready on a stage a
-// head holds, since a stage in use cannot take a hello
-func (m *Manager) verifyAdopted(ctx context.Context, h *tasks.Handle, in *instance, proc launch.Handle, since time.Time) error {
-	rec := in.snapshot()
-	health, err := runtimes.SeatHealth(in.rt, rec.GetSeat())
-	if err != nil {
-		return err
-	}
-	if health.Kind != runtimes.HealthHello {
-		return m.waitSeatReady(ctx, h, in, proc)
-	}
-	seat := rec.GetSeat()
-	g := in.guardOf()
-	if g != nil && g.Active() == 0 {
-		addr := net.JoinHostPort(bindHost, strconv.Itoa(int(seat.GetLocalPort())))
-		h.Message("hello to the idle stage at " + addr)
-		version, err := rpcHello(ctx, addr)
-		if err != nil {
-			return m.adoptFailed(h, in, proc, fmt.Errorf("no hello from the adopted stage at %s: %w", addr, err))
-		}
-		h.Logf("rpc server speaks protocol %s", version)
-		return nil
-	}
-	holder := "its head holds the exposed stage"
-	if g != nil {
-		holder = fmt.Sprintf("%d connections hold the stage through its guard", g.Active())
-	}
-	h.Message("waiting for the conductor's record to confirm the head: " + holder)
-	if m.Formations == nil {
-		return m.adoptFailed(h, in, proc, errors.New(holder+", and this node has no conductor record to confirm the head by"))
-	}
-	cctx, cancel := context.WithTimeout(ctx, adoptConfirmWindow)
-	defer cancel()
-	if err := m.Formations.HeadReady(cctx, seat.GetFormationId(), since); err != nil {
-		return m.adoptFailed(h, in, proc, fmt.Errorf("%s, and the conductor did not confirm the head on it: %w", holder, err))
-	}
-	h.Logf("the conductor's record confirms the head is ready on this stage")
-	return nil
-}
-
-// Fails an adopted seat that did not verify, stopping its process and logging its triage
-func (m *Manager) adoptFailed(h *tasks.Handle, in *instance, proc launch.Handle, err error) error {
-	hits := m.fail(in, err)
-	proc.Stop(in.grace())
-	for _, hit := range hits {
-		h.Logf("triage %s: %s. %s", hit.GetId(), hit.GetSummary(), hit.GetHint())
-	}
-	if len(hits) > 0 {
-		return fmt.Errorf("%s: %s", hits[0].GetSummary(), hits[0].GetHint())
-	}
-	return err
 }

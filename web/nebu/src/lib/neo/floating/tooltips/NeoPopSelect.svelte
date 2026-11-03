@@ -1,0 +1,167 @@
+<script lang="ts">
+  import type { NeoPopSelectProps } from '#lib/neo/floating/tooltips/neo-pop-select.model.js';
+  import type { NeoTooltipContext, NeoTooltipToggle } from '#lib/neo/floating/tooltips/neo-tooltip.model.js';
+  import type { NeoListContext, NeoListItemOrSection, NeoListSelectEvent } from '#lib/neo/list/neo-list.model.js';
+
+  import { watch } from '@dvcol/svelte-utils/watch';
+
+  import NeoTooltip from '#lib/neo/floating/tooltips/NeoTooltip.svelte';
+  import NeoList from '#lib/neo/list/NeoList.svelte';
+  import NeoListSearch from '#lib/neo/list/NeoListSearch.svelte';
+
+  let {
+    // Snippets
+    children: trigger,
+    before,
+
+    // States
+    search = false,
+    items: array = [],
+
+    // Styles
+    rounded = false,
+    width = 'min',
+    height = 'min',
+
+    // List Props
+    listRef = $bindable(),
+    highlight = $bindable(),
+    filter = $bindable(item => !item?.hidden),
+    sort = $bindable(() => 0),
+    selected = $bindable(),
+    focused = $bindable(false),
+
+    // Tooltip Props
+    tooltipRef = $bindable(),
+    triggerRef = $bindable(),
+    open = $bindable(false),
+    position = $bindable(),
+    target,
+    color,
+    filled,
+    tinted,
+    elevation,
+    disabled,
+    openDelay,
+    hoverDelay,
+    openOnFocus,
+    openOnHover,
+    openOnClick,
+    clickOptions,
+
+    // Sizing
+    flex,
+    justify,
+    align,
+    padding = '0',
+
+    // Actions
+    in: inAction,
+    out: outAction,
+    transition,
+    use,
+
+    // Events
+    onChange,
+    onSelect,
+    onClose,
+    onOpen,
+
+    // Other Props
+    tooltipProps,
+    searchProps,
+    ...rest
+  }: NeoPopSelectProps = $props();
+
+  const items = $derived<NeoListItemOrSection[]>(array?.map(i => (typeof i === 'object' ? i : { value: i })));
+
+  const onSelected = (event: NeoListSelectEvent) => {
+    onSelect?.(event);
+    const current = Array.isArray(event.current) ? event.current.map(i => i?.item?.value) : event.current?.item?.value;
+    const previous = Array.isArray(event.previous) ? event.previous.map(i => i?.item?.value) : event.previous?.item?.value;
+    if (JSON.stringify(current) === JSON.stringify(selected)) return;
+    onChange?.(current, previous);
+  };
+
+  let tooltipInstance = $state<ReturnType<typeof NeoTooltip>>();
+
+  watch(
+    () => {
+      tooltipInstance?.update();
+    },
+    () => [items, selected],
+  );
+</script>
+
+{#snippet beforeList(context: NeoListContext)}
+  {#if search}
+    <NeoListSearch
+      bind:focused
+      elevation="0"
+      hover="-1"
+      value={highlight}
+      {context}
+      {...searchProps}
+      inputProps={{ rounded, ...searchProps?.inputProps }}
+    />
+  {/if}
+  {@render before?.(context)}
+{/snippet}
+
+{#snippet tooltip(floating: NeoTooltipContext)}
+  <NeoList
+    bind:ref={listRef}
+    bind:selected
+    bind:highlight
+    bind:filter
+    bind:sort
+    select
+    flip={floating?.placement?.startsWith('top')}
+    before={search ? beforeList : before}
+    {items}
+    onSelect={onSelected}
+    {...rest}
+    buttonProps={{ rounded, glass: !filled, ...rest.buttonProps }}
+    class={['neo-pop-select-list', rest.class]}
+  />
+{/snippet}
+
+<NeoTooltip
+  bind:this={tooltipInstance}
+  bind:ref={tooltipRef}
+  bind:triggerRef
+  bind:position
+  bind:open
+  {tooltip}
+  unmountOnClose={false}
+  {target}
+  {rounded}
+  {flex}
+  {align}
+  {justify}
+  {width}
+  {height}
+  {padding}
+  {color}
+  {filled}
+  {tinted}
+  {elevation}
+  {disabled}
+  {openDelay}
+  {hoverDelay}
+  {openOnFocus}
+  {openOnHover}
+  {openOnClick}
+  {clickOptions}
+  {onClose}
+  {onOpen}
+  {use}
+  {transition}
+  in={inAction}
+  out={outAction}
+  {...tooltipProps}
+>
+  {#snippet children(floating: NeoTooltipContext, toggle: NeoTooltipToggle)}
+    {@render trigger?.(floating, toggle)}
+  {/snippet}
+</NeoTooltip>

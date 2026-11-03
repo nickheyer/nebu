@@ -89,26 +89,37 @@ func TestRPCDeviceNames(t *testing.T) {
 	}
 }
 
-// Device names follow the install's device fact
+// Device names follow the install's device fact and the renumbering the visibility variables cause
 func TestGGMLDevices(t *testing.T) {
 	apple := []*v1.Device{{Id: "gpu0", Vendor: "apple", Kind: v1.DeviceKind_DEVICE_KIND_GPU}, {Id: "cpu", Vendor: "apple", Kind: v1.DeviceKind_DEVICE_KIND_CPU}}
-	nvidia := []*v1.Device{{Id: "gpu1", Vendor: "nvidia", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Facts: map[string]string{"index": "1"}}}
+	nvidia := []*v1.Device{gpu("GPU-1", "1")}
+	pair := []*v1.Device{gpu("GPU-3", "3"), gpu("GPU-1", "1")}
+	amd := []*v1.Device{{Id: "amd-2", Vendor: "amd", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Facts: map[string]string{"index": "2"}}}
 	cases := []struct {
-		facts   string
-		devices []*v1.Device
-		want    string
+		facts  string
+		pinned []*v1.Device
+		named  []*v1.Device
+		want   string
 	}{
-		{"MTL0,BLAS", apple, "MTL0"},
-		{"Metal0,BLAS", apple, "Metal0"},
-		{"", apple, "MTL0"},
-		{"CUDA0,CUDA1", nvidia, "CUDA1"},
-		{"Vulkan0,Vulkan1", nvidia, "Vulkan1"},
+		{"MTL0,BLAS", apple, apple, "MTL0"},
+		{"Metal0,BLAS", apple, apple, "Metal0"},
+		{"", apple, apple, "MTL0"},
+		{"CUDA0,CUDA1", nvidia, nvidia, "CUDA0"},
+		{"Vulkan0,Vulkan1", nvidia, nvidia, "Vulkan0"},
+		{"CUDA0,CUDA1", pair, pair, "CUDA0,CUDA1"},
+		{"CUDA0,CUDA1", pair, pair[1:], "CUDA1"},
+		{"ROCm0", append(append([]*v1.Device{}, nvidia...), amd...), amd, "ROCm0"},
+		{"Vulkan0", append(append([]*v1.Device{}, nvidia...), amd...), amd, "Vulkan1"},
 	}
 	for _, c := range cases {
 		in := &v1.Install{Facts: map[string]string{"devices": c.facts}}
-		if got := strings.Join(ggmlDevices(in, c.devices), ","); got != c.want {
-			t.Errorf("facts %q: %q, want %q", c.facts, got, c.want)
+		names, err := ggmlDevices(in, c.pinned, c.named)
+		if got := strings.Join(names, ","); err != nil || got != c.want {
+			t.Errorf("facts %q: %q %v, want %q", c.facts, got, err, c.want)
 		}
+	}
+	if _, err := ggmlDevices(&v1.Install{}, nvidia, pair[:1]); err == nil || !strings.Contains(err.Error(), "GPU-3 is not among") {
+		t.Fatalf("a device the launch does not pin: %v", err)
 	}
 }
 

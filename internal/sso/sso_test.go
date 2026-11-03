@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -30,7 +31,7 @@ import (
 // What /auth/session answers
 type view struct {
 	SSO  *struct{ Name string }
-	User *struct{ Subject, Email, Name, Provider string }
+	User *struct{ Subject, Email, Name, Provider, Role string }
 }
 
 // A provider under test control: it signs with RSA, checks the exchange, and serves userinfo
@@ -480,6 +481,50 @@ func TestAllowListsAndUserinfo(t *testing.T) {
 	cb.Body.Close()
 	if cb.StatusCode != http.StatusUnauthorized || !strings.Contains(string(body), "different subject") {
 		t.Fatalf("userinfo subject %d %s", cb.StatusCode, body)
+	}
+}
+
+// Admin groups sign in as admins, operator groups as operators, everyone else with the inference role
+func TestGroupsGrantRoles(t *testing.T) {
+	for _, c := range []struct {
+		groups []string
+		role   v1.Role
+	}{
+		{[]string{"staff", "nebu-admin"}, v1.Role_ROLE_ADMIN},
+		{[]string{"nebu-ops", "nebu-admin"}, v1.Role_ROLE_ADMIN},
+		{[]string{"nebu-ops"}, v1.Role_ROLE_OPERATOR},
+		{[]string{"staff"}, v1.Role_ROLE_INFERENCE},
+	} {
+		idp := newIdP(t)
+		idp.claims["email"] = "ann@example.com"
+		idp.claims["groups"] = c.groups
+		svc, srv, client := harness(t, idp, &v1.Oidc{AdminGroups: []string{"nebu-admin"}, OperatorGroups: []string{"nebu-ops"}})
+		if !svc.HasAdmins() {
+			t.Fatal("admin groups are set")
+		}
+		cb, _ := signIn(t, idp, srv, client, "/")
+		cb.Body.Close()
+		if cb.StatusCode != http.StatusSeeOther {
+			t.Fatalf("%v sign-in %d", c.groups, cb.StatusCode)
+		}
+		if st := sessionStatus(t, srv, client); st.User == nil || st.User.Role != auth.RoleName(c.role) {
+			t.Fatalf("%v status %+v", c.groups, st.User)
+		}
+		u, _ := url.Parse(srv.URL)
+		h := http.Header{}
+		for _, ck := range client.Jar.Cookies(u) {
+			h.Add("Cookie", ck.String())
+		}
+		guard := auth.NewGuard("", svc.sessions, nil)
+		id, ok := guard.Identify(h)
+		if !ok || id.Role != c.role || id.Provider != auth.ProviderOIDC || !slices.Equal(id.Scopes, auth.RoleScopes(c.role)) {
+			t.Fatalf("%v identity %+v %v", c.groups, id, ok)
+		}
+	}
+	idp := newIdP(t)
+	idp.claims["email"] = "ann@example.com"
+	if svc, _, _ := harness(t, idp, &v1.Oidc{}); svc.HasAdmins() {
+		t.Fatal("no admin groups are set")
 	}
 }
 

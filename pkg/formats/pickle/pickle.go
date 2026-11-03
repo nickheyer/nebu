@@ -283,9 +283,7 @@ func (d *decoder) step(op byte) (bool, error) {
 			return false, err
 		}
 		if op == 'S' {
-			if s, err := strconv.Unquote(line); err == nil {
-				line = s
-			}
+			line = unquoteText(line)
 		}
 		return false, d.push(line)
 	case 'T', 'X': // BINSTRING, BINUNICODE
@@ -593,6 +591,17 @@ func (d *decoder) step(op byte) (bool, error) {
 		return false, fmt.Errorf("pickle: unsupported opcode %#x", op)
 	}
 	return false, nil
+}
+
+// Strips the quotes a text STRING carries, the single quotes Python writes included, a line without them kept whole
+func unquoteText(line string) string {
+	if len(line) >= 2 && line[0] == '\'' && line[len(line)-1] == '\'' {
+		line = "\"" + strings.ReplaceAll(strings.ReplaceAll(line[1:len(line)-1], "\\'", "'"), "\"", "\\\"") + "\""
+	}
+	if s, err := strconv.Unquote(line); err == nil {
+		return s
+	}
+	return line
 }
 
 // Applies a callable, constructing builtins and recording everything else

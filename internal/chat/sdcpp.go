@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 )
@@ -25,6 +24,8 @@ func (sdcpp) Parse(string, []byte) (*Request, error) { return nil, notChat() }
 
 func (sdcpp) Render(*Request) (string, []byte, error) { return "", nil, notChat() }
 
+func (sdcpp) Native(*Request) (string, []byte, error) { return "", nil, notChat() }
+
 func (sdcpp) ParseResult(*Request, []byte) (*Result, error) { return nil, notChat() }
 
 func (sdcpp) ParseStream(io.Reader, func(Event) error) error { return notChat() }
@@ -35,17 +36,15 @@ func (sdcpp) Answer(w http.ResponseWriter, req *Request, model string) Writer {
 
 func (sdcpp) Error(w http.ResponseWriter, f Failure) { openai{}.Error(w, f) }
 
+func (sdcpp) StreamFailure(at StreamAt, f Failure) ([]byte, error) {
+	return openai{}.StreamFailure(at, f)
+}
+
 func (sdcpp) ErrorMessage(body []byte) string {
 	if m := errorField(body); m != "" {
 		return m
 	}
-	var e struct {
-		Error string `json:"error"`
-	}
-	if json.Unmarshal(body, &e) == nil && e.Error != "" {
-		return e.Error
-	}
-	return ""
+	return ollama{}.ErrorMessage(body)
 }
 
 func (sdcpp) Traits() Traits { return Traits{} }

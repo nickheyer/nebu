@@ -43,6 +43,9 @@ jobs:
           setup_only: true
       - name: Check protobuf generation
         run: ./scripts/check-gen.sh
+      - name: Check protobuf compatibility against main
+        if: github.ref != 'refs/heads/main'
+        run: buf breaking --against ".git#branch=main"
       - name: Check Go and TypeScript
         run: |
           make proto-lint vet staticcheck govulncheck cgo-guard test

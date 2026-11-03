@@ -144,19 +144,8 @@ func firstOr(v, fallback string) string {
 
 // Reads a settings file, YAML or JSON, into a spec
 func readSpec(path string) (*v1.BotSpec, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	js, err := yaml.YAMLToJSON(data)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
 	spec := &v1.BotSpec{}
-	if err := protojson.Unmarshal(js, spec); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	return spec, nil
+	return spec, readMessage(path, spec)
 }
 
 // Flags shared by create and update, applied over a spec
@@ -178,7 +167,7 @@ func (f *botFlags) bind(fs *flag.FlagSet) {
 	fs.StringVar(&f.humanize, "humanize", "", "true or false, whether the default persona types and pauses like a person")
 }
 
-// Loads the spec file, then applies flag overrides.
+// Loads the spec file, then applies flag overrides
 func (f *botFlags) apply(fs *flag.FlagSet, spec *v1.BotSpec) (*v1.BotSpec, error) {
 	if f.spec != "" {
 		loaded, err := readSpec(f.spec)
@@ -263,7 +252,7 @@ func runBotsCreate(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) { botsTable(w, []*v1.Bot{resp.Msg.GetBot()}) })
 }
 
-// Returns a literal token or its named environment variable.
+// Returns a literal token or its named environment variable
 func tokenValue(v string) string {
 	if env := os.Getenv(v); v != "" && env != "" && !strings.Contains(v, ".") {
 		return env

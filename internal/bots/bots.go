@@ -16,6 +16,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/gateway"
+	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
@@ -45,8 +46,10 @@ const (
 type Manager struct {
 	DB      *db.DB
 	Gateway *gateway.Gateway
-	Events  *events.Bus
-	Log     *slog.Logger
+	// The routes the gateway serves, read for the ready models a persona may use
+	Pools  pools.View
+	Events *events.Bus
+	Log    *slog.Logger
 	// ffmpeg path for video sampling. Empty uses PATH.
 	FFmpeg string
 	// Session factory, replaced in tests.
@@ -74,11 +77,11 @@ type entry struct {
 }
 
 // Builds a manager whose runners live under base
-func New(base context.Context, store *db.DB, gw *gateway.Gateway, bus *events.Bus, log *slog.Logger, ffmpeg string) *Manager {
+func New(base context.Context, store *db.DB, gw *gateway.Gateway, view pools.View, bus *events.Bus, log *slog.Logger, ffmpeg string) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Manager{DB: store, Gateway: gw, Events: bus, Log: log, FFmpeg: ffmpeg, dial: dialDiscord, probe: probeToken, bots: map[string]*entry{}, base: base}
+	return &Manager{DB: store, Gateway: gw, Pools: view, Events: bus, Log: log, FFmpeg: ffmpeg, dial: dialDiscord, probe: probeToken, bots: map[string]*entry{}, base: base}
 }
 
 // Loads bots without connecting them.

@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "nebu/v1/model.proto";
 import "nebu/v1/task.proto";
@@ -51,8 +52,8 @@ message StoreStatus {
 
 // Download a weight group and its blueprint dependencies.
 message PullRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string revision = 3;
   string group = 4;
   // Download only this group, excluding blueprint dependencies.
@@ -78,8 +79,8 @@ message ListModelsResponse {
 
 // Fetches one stored model
 message GetModelRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string group = 3;
 }
 
@@ -90,8 +91,8 @@ message GetModelResponse {
 
 // Removes a stored model and optionally collects blobs
 message RemoveModelRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string group = 3;
   bool gc = 4;
 }
@@ -115,8 +116,8 @@ message GcResponse {
 
 // Rehashes stored blobs, optionally for one model
 message VerifyRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string group = 3;
 }
 
@@ -127,10 +128,10 @@ message VerifyResponse {
 
 // Copies a stored model into a mirror layout
 message ExportRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string group = 3;
-  string dir = 4;
+  string dir = 4 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the export task
