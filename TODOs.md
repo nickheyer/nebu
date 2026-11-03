@@ -2,6 +2,8 @@
 
 Gaps between nebu and the current standard for routing to self-hosted inference. Each item is a behavior nebu must have.
 
+> NOTE TO AGENTS: This document is entirely immutable apart from the single character replacement required to "check" the "checkboxes" as you complete an item, ie: "- [ ] " to "- [X] "
+
 ## Endpoint data layer
 
 - [ ] Scrape every running runtime at a fast fixed interval for queued requests, running requests, KV cache utilization, KV block size, total KV blocks, max LoRA, running LoRA adapters, and waiting LoRA adapters
