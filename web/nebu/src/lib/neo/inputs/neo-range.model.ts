@@ -113,7 +113,8 @@ export interface NeoRangeTickContext {
   filled?: boolean;
 }
 
-export type NeoRangeProps = Pick<NeoInputValidationProps, 'valid' | 'validation' | 'error' | 'context' | 'message' | 'messageProps'>
+export type NeoRangeProps = Pick<NeoInputValidationProps, 'valid' | 'validation' | 'error' | 'message' | 'messageProps'>
+  & Partial<Pick<NeoInputValidationProps, 'context'>>
   & NeoValidationState<NeoRangeValue> & {
     // Snippets
     /**

@@ -408,7 +408,15 @@ func (h *Handle) Task() *v1.Task { return h.e.snapshot() }
 func (h *Handle) Progress(done, total uint64, message string) {
 	h.done.Store(done)
 	h.e.update(func(t *v1.Task) {
-		t.Progress.Done, t.Progress.Total, t.Progress.Message = done, total, message
+		t.Progress.Done, t.Progress.Total, t.Progress.Message, t.Progress.Until = done, total, message, nil
+	}, false)
+}
+
+// Reports progress on a step that ends at a known time, so a watcher can show the time left
+func (h *Handle) ProgressUntil(done, total uint64, message string, until time.Time) {
+	h.done.Store(done)
+	h.e.update(func(t *v1.Task) {
+		t.Progress.Done, t.Progress.Total, t.Progress.Message, t.Progress.Until = done, total, message, timestamppb.New(until)
 	}, false)
 }
 

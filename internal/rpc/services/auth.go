@@ -35,7 +35,12 @@ func (s *AuthService) ListUsers(ctx context.Context, req *connect.Request[v1.Lis
 		return nil, errAccountsOff
 	}
 	list, err := s.users.List(ctx)
-	return authReply(&v1.ListUsersResponse{Users: list}, err)
+	if err != nil {
+		return authReply(&v1.ListUsersResponse{}, err)
+	}
+	list = match(list, req.Msg.GetQuery(), func(u *v1.User) []string { return []string{u.GetUsername()} })
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return authReply(&v1.ListUsersResponse{Users: list, NextCursor: next}, err)
 }
 
 func (s *AuthService) CreateUser(ctx context.Context, req *connect.Request[v1.CreateUserRequest]) (*connect.Response[v1.CreateUserResponse], error) {
@@ -66,7 +71,12 @@ func (s *AuthService) ListTokens(ctx context.Context, req *connect.Request[v1.Li
 		return nil, errTokensOff
 	}
 	list, err := s.tokens.List(ctx, s.caller(req.Header()))
-	return authReply(&v1.ListTokensResponse{Tokens: list}, err)
+	if err != nil {
+		return authReply(&v1.ListTokensResponse{}, err)
+	}
+	list = match(list, req.Msg.GetQuery(), func(t *v1.ApiToken) []string { return []string{t.GetName(), t.GetPrefix()} })
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return authReply(&v1.ListTokensResponse{Tokens: list, NextCursor: next}, err)
 }
 
 func (s *AuthService) CreateToken(ctx context.Context, req *connect.Request[v1.CreateTokenRequest]) (*connect.Response[v1.CreateTokenResponse], error) {

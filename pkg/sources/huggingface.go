@@ -1,10 +1,12 @@
 package sources
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"regexp"
 	"slices"
@@ -84,6 +86,7 @@ func (hubAPI) Facets(ctx context.Context, c *Client) ([]*v1.Facet, error) {
 
 type hubItem struct {
 	ID            string          `json:"id"`
+	Sha           string          `json:"sha"`
 	Author        string          `json:"author"`
 	Downloads     uint64          `json:"downloads"`
 	Likes         uint64          `json:"likes"`
@@ -97,6 +100,8 @@ type hubItem struct {
 	TrendingScore float64         `json:"trendingScore"`
 	Safetensors   *struct {
 		Total uint64 `json:"total"`
+		// Parameter counts by tensor dtype, such as BF16
+		Parameters map[string]uint64 `json:"parameters"`
 	} `json:"safetensors"`
 	GGUF *struct {
 		Total         uint64 `json:"total"`
@@ -294,8 +299,17 @@ func hubHit(c *Client, it hubItem) *v1.SearchHit {
 			hit.License = strings.TrimPrefix(t, "license:")
 		}
 	}
-	if it.Safetensors != nil && it.Safetensors.Total > 0 {
-		hit.Parameters = it.Safetensors.Total
+	if it.Safetensors != nil {
+		if it.Safetensors.Total > 0 {
+			hit.Parameters = it.Safetensors.Total
+		}
+		// Dtypes largest share first, as the hub lists tensor types
+		dtypes := slices.SortedFunc(maps.Keys(it.Safetensors.Parameters), func(a, b string) int {
+			return cmp.Or(cmp.Compare(it.Safetensors.Parameters[b], it.Safetensors.Parameters[a]), strings.Compare(a, b))
+		})
+		if len(dtypes) > 0 {
+			hit.Extra["dtypes"] = strings.Join(dtypes, ",")
+		}
 	}
 	if it.GGUF != nil {
 		if it.GGUF.Total > 0 {
@@ -334,22 +348,35 @@ type hubTree struct {
 	} `json:"lfs"`
 }
 
+// How long one hub record answers both the resolve and the card of a page view
+const hubDetailTTL = time.Minute
+
+// The hub's record of a repository at a revision, the default one when omitted, with the commit it names
+func hubGet(ctx context.Context, c *Client, repo, revision string) (hubItem, error) {
+	memo := Cached(c, "hub-model:"+repo+"@"+revision, func() *Memo[hubItem] { return &Memo[hubItem]{TTL: hubDetailTTL} })
+	return memo.Get(ctx, func(ctx context.Context) (hubItem, error) {
+		var it hubItem
+		segments := []string{"api", "models", repo}
+		if revision != "" {
+			segments = append(segments, "revision", revision)
+		}
+		if _, err := c.JSON(ctx, c.URL(segments...), nil, &it); err != nil {
+			return hubItem{}, err
+		}
+		if it.Sha == "" {
+			return hubItem{}, fmt.Errorf("%s: the hub names no commit at %s", repo, firstOr(revision, "its default revision"))
+		}
+		return it, nil
+	})
+}
+
 // Resolves the revision commit, using the Hub default when omitted.
 func hubSha(ctx context.Context, c *Client, repo, revision string) (string, error) {
-	var info struct {
-		Sha string `json:"sha"`
-	}
-	segments := []string{"api", "models", repo}
-	if revision != "" {
-		segments = append(segments, "revision", revision)
-	}
-	if _, err := c.JSON(ctx, c.URL(segments...), nil, &info); err != nil {
+	it, err := hubGet(ctx, c, repo, revision)
+	if err != nil {
 		return "", err
 	}
-	if info.Sha == "" {
-		return "", fmt.Errorf("%s: the hub names no commit at %s", repo, firstOr(revision, "its default revision"))
-	}
-	return info.Sha, nil
+	return it.Sha, nil
 }
 
 // Resolves the Hub default branch, falling back to its commit SHA.
@@ -440,14 +467,23 @@ func (hubAPI) Revisions(ctx context.Context, c *Client, repo string) ([]*v1.Revi
 	return out, nil
 }
 
+// The README at the revision, the default branch when none is named, with the hub's listing of the repository
 func (hubAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v1.ModelCard, error) {
+	it, err := hubGet(ctx, c, repo, revision)
+	if err != nil {
+		return nil, err
+	}
 	if revision == "" {
-		var err error
 		if revision, _, err = hubDefault(ctx, c, repo); err != nil {
 			return nil, err
 		}
 	}
-	return c.CardText(ctx, c.URL(repo, "raw", revision, "README.md"), nil, hubPage(c, repo))
+	card, err := c.CardText(ctx, c.URL(repo, "raw", revision, "README.md"), nil, hubPage(c, repo))
+	if err != nil {
+		return nil, err
+	}
+	card.Hit = hubHit(c, it)
+	return card, nil
 }
 
 // Opens a file for ranged reads over HTTP, or whole through the CLI when on

@@ -11,6 +11,7 @@ import (
 	"github.com/nickheyer/nebu/internal/tools"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
+	"github.com/nickheyer/nebu/pkg/text"
 )
 
 var _ nebuv1connect.ToolServiceHandler = (*ToolService)(nil)
@@ -48,7 +49,12 @@ func (s *ToolService) ListToolServers(ctx context.Context, req *connect.Request[
 			}
 		}
 	}
-	return reply(&v1.ListToolServersResponse{Servers: out}, nil)
+	out = match(out, req.Msg.GetQuery(), func(st *v1.ToolServerStatus) []string {
+		srv := st.GetServer()
+		return []string{srv.GetName(), text.Enum(srv.GetKind()), srv.GetProvider(), srv.GetCommand(), srv.GetUrl(), st.GetNodeId(), st.GetRef()}
+	})
+	out, next, err := page(out, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListToolServersResponse{Servers: out, NextCursor: next}, err)
 }
 
 // Runs one tool by the name the model calls it, here or on a member

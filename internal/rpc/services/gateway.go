@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
+	"strconv"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/auth"
@@ -32,7 +34,20 @@ func (s *GatewayService) GetGatewayStatus(ctx context.Context, req *connect.Requ
 }
 
 func (s *GatewayService) ListRoutes(ctx context.Context, req *connect.Request[v1.ListRoutesRequest]) (*connect.Response[v1.ListRoutesResponse], error) {
-	return reply(&v1.ListRoutesResponse{Routes: s.gateway.Routes()}, nil)
+	list := s.gateway.Routes()
+	if state := req.Msg.GetState(); state != v1.RouteState_ROUTE_STATE_UNSPECIFIED {
+		list = keep(list, func(rt *v1.Route) bool { return rt.GetStatus().GetState() == state })
+	}
+	if modality := req.Msg.GetModality(); modality != "" {
+		list = keep(list, func(rt *v1.Route) bool {
+			return slices.Contains(rt.GetStatus().GetInventory().GetModalities(), modality)
+		})
+	}
+	list = match(list, req.Msg.GetQuery(), func(rt *v1.Route) []string {
+		return append([]string{rt.GetName(), rt.GetOwnerKind(), rt.GetOwnerId(), rt.GetNodeId()}, rt.GetStatus().GetPoolIds()...)
+	})
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListRoutesResponse{Routes: list, NextCursor: next}, err)
 }
 
 func (s *GatewayService) GetRoute(ctx context.Context, req *connect.Request[v1.GetRouteRequest]) (*connect.Response[v1.GetRouteResponse], error) {
@@ -54,7 +69,11 @@ func (s *GatewayService) DeleteRoute(ctx context.Context, req *connect.Request[v
 }
 
 func (s *GatewayService) ListPools(ctx context.Context, req *connect.Request[v1.ListPoolsRequest]) (*connect.Response[v1.ListPoolsResponse], error) {
-	return reply(&v1.ListPoolsResponse{Pools: s.pools.Pools()}, nil)
+	list := match(s.pools.Pools(), req.Msg.GetQuery(), func(p *v1.Pool) []string {
+		return []string{p.GetId(), p.GetSpec().GetModel(), p.GetSpec().GetRuntimeId(), p.GetSpec().GetAccelerator(), p.GetOwnerKind(), p.GetOwnerId()}
+	})
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListPoolsResponse{Pools: list, NextCursor: next}, err)
 }
 
 func (s *GatewayService) GetPool(ctx context.Context, req *connect.Request[v1.GetPoolRequest]) (*connect.Response[v1.GetPoolResponse], error) {
@@ -76,7 +95,9 @@ func (s *GatewayService) DeletePool(ctx context.Context, req *connect.Request[v1
 }
 
 func (s *GatewayService) ListObjectives(ctx context.Context, req *connect.Request[v1.ListObjectivesRequest]) (*connect.Response[v1.ListObjectivesResponse], error) {
-	return reply(&v1.ListObjectivesResponse{Objectives: s.pools.Objectives()}, nil)
+	list := match(s.pools.Objectives(), req.Msg.GetQuery(), func(o *v1.Objective) []string { return []string{o.GetName()} })
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListObjectivesResponse{Objectives: list, NextCursor: next}, err)
 }
 
 func (s *GatewayService) PutObjective(ctx context.Context, req *connect.Request[v1.PutObjectiveRequest]) (*connect.Response[v1.PutObjectiveResponse], error) {
@@ -90,7 +111,9 @@ func (s *GatewayService) DeleteObjective(ctx context.Context, req *connect.Reque
 }
 
 func (s *GatewayService) ListSchedulerConfigs(ctx context.Context, req *connect.Request[v1.ListSchedulerConfigsRequest]) (*connect.Response[v1.ListSchedulerConfigsResponse], error) {
-	return reply(&v1.ListSchedulerConfigsResponse{Configs: s.pools.SchedulerConfigs()}, nil)
+	list := match(s.pools.SchedulerConfigs(), req.Msg.GetQuery(), func(c *v1.SchedulerConfig) []string { return []string{c.GetName()} })
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListSchedulerConfigsResponse{Configs: list, NextCursor: next}, err)
 }
 
 // Stores a configuration, or with validate_only loads it against the gateway's plugins and answers it accepted without storing
@@ -129,8 +152,23 @@ func (s *GatewayService) ListTraces(ctx context.Context, req *connect.Request[v1
 	if err != nil {
 		return nil, err
 	}
-	list, err := s.gateway.Traces().List(ctx, v, req.Msg.GetRoute(), int(req.Msg.GetLimit()))
-	return reply(&v1.ListTracesResponse{Traces: list}, err)
+	start, err := offset(req.Msg.GetCursor())
+	if err != nil {
+		return nil, err
+	}
+	f := gateway.TraceFilter{Route: req.Msg.GetRoute(), Kind: req.Msg.GetKind(), StatusClass: req.Msg.GetStatusClass(), NodeID: req.Msg.GetNodeId(), Objective: req.Msg.GetObjective(), FairnessID: req.Msg.GetFairnessId(), Query: req.Msg.GetQuery()}
+	if req.Msg.GetFrom() != nil {
+		f.From = req.Msg.GetFrom().AsTime()
+	}
+	if req.Msg.GetTo() != nil {
+		f.To = req.Msg.GetTo().AsTime()
+	}
+	list, more, err := s.gateway.Traces().List(ctx, v, f, start, int(req.Msg.GetLimit()))
+	next := ""
+	if more {
+		next = strconv.Itoa(start + len(list))
+	}
+	return reply(&v1.ListTracesResponse{Traces: list, NextCursor: next}, err)
 }
 
 func (s *GatewayService) GetTrace(ctx context.Context, req *connect.Request[v1.GetTraceRequest]) (*connect.Response[v1.GetTraceResponse], error) {

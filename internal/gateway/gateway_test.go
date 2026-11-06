@@ -422,7 +422,7 @@ func TestTracesPersistedAndScoped(t *testing.T) {
 		all, err := h.db.ListTraces(ctx, db.TraceQuery{AllOwners: true})
 		return err == nil && len(all) == 2
 	})
-	list, err := h.g.Traces().List(ctx, alice, "", 10)
+	list, _, err := h.g.Traces().List(ctx, alice, TraceFilter{Route: ""}, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestTracesPersistedAndScoped(t *testing.T) {
 	if err != nil || stored.GetStatus() != http.StatusOK || stored.GetEndpoint() != hostOf(srv) {
 		t.Fatalf("stored trace %v %v", stored, err)
 	}
-	if every, _ := h.g.Traces().List(ctx, Viewer{All: true}, "chat", 10); len(every) != 2 {
+	if every, _, _ := h.g.Traces().List(ctx, Viewer{All: true}, TraceFilter{Route: "chat"}, 0, 10); len(every) != 2 {
 		t.Fatalf("admin lists %d", len(every))
 	}
 }

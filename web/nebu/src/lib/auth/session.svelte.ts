@@ -16,6 +16,8 @@ export type AuthStatus = {
 	user: UserInfo | null;
 };
 
+export type Role = 'admin' | 'operator' | 'inference';
+
 type Credentials = { username: string; password: string };
 
 // Reads the error field of a refused auth answer
@@ -53,12 +55,34 @@ export class Session {
 		return this.status?.user ?? null;
 	}
 
+	// The caller's role, admin when auth is off
+	get role(): Role {
+		if (!this.status?.enabled) return 'admin';
+		const r = this.user?.role;
+		return r === 'operator' || r === 'inference' ? r : 'admin';
+	}
+
 	get admin(): boolean {
-		return !this.status?.enabled || this.user?.role === 'admin';
+		return this.role === 'admin';
+	}
+
+	// Whether the caller may list and read daemon records
+	get reads(): boolean {
+		return this.role !== 'inference';
+	}
+
+	get displayName(): string {
+		return this.user?.name || this.user?.email || this.user?.subject || '';
 	}
 
 	async load(): Promise<void> {
-		const res = await fetch('/auth/session', { headers: { Accept: 'application/json' } });
+		let res: Response;
+		try {
+			res = await fetch('/auth/session', { headers: { Accept: 'application/json' } });
+		} catch (err) {
+			this.error = err instanceof Error ? err.message : String(err);
+			return;
+		}
 		if (!res.ok) {
 			this.error = await refusal(res);
 			return;
@@ -67,12 +91,12 @@ export class Session {
 		this.error = null;
 	}
 
-	async login(c: Credentials): Promise<void> {
-		await this.submit('/auth/local/login', c);
+	async login(c: Credentials): Promise<boolean> {
+		return this.submit('/auth/local/login', c);
 	}
 
-	async setup(c: Credentials): Promise<void> {
-		await this.submit('/auth/local/setup', c);
+	async setup(c: Credentials): Promise<boolean> {
+		return this.submit('/auth/local/setup', c);
 	}
 
 	async logout(): Promise<void> {
@@ -85,16 +109,17 @@ export class Session {
 		}
 	}
 
-	private async submit(path: string, c: Credentials): Promise<void> {
+	private async submit(path: string, c: Credentials): Promise<boolean> {
 		this.busy = true;
 		this.error = null;
 		try {
 			const res = await post(path, c);
 			if (!res.ok) {
 				this.error = await refusal(res);
-				return;
+				return false;
 			}
 			await this.load();
+			return true;
 		} finally {
 			this.busy = false;
 		}

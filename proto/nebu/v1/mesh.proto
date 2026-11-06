@@ -177,6 +177,8 @@ message Throughput {
   uint32 compute_samples = 10;
   // Requests the draft acceptance was learned from
   uint32 acceptance_samples = 11;
+  // Completion tokens per second at the mean time per token of the decode requests learned from
+  double tokens_per_second = 12;
 }
 
 // The shapes one runtime install supports, from its facts
@@ -546,12 +548,18 @@ message GetMeshResponse {
   repeated DeviceProfile profiles = 5;
 }
 
-// Lists members
-message ListNodesRequest {}
+// Lists members, the ones whose name, id, version, or address holds every word of the query
+message ListNodesRequest {
+  string query = 1 [(buf.validate.field).string.max_len = 256];
+  NodeState state = 2 [(buf.validate.field).enum.defined_only = true];
+  string cursor = 3;
+  uint32 limit = 4 [(buf.validate.field).uint32.lte = 1000];
+}
 
 // Returns members, this node first
 message ListNodesResponse {
   repeated Node nodes = 1;
+  string next_cursor = 2;
 }
 
 // Measures links to every member, or one
@@ -609,14 +617,19 @@ message RunFormationResponse {
   Task task = 2;
 }
 
-// Lists formations known to this node
+// Lists formations known to this node, the ones whose name, repository, conductor, or error holds every word of the query
 message ListFormationsRequest {
   bool running_only = 1;
+  string query = 2 [(buf.validate.field).string.max_len = 256];
+  FormationState state = 3 [(buf.validate.field).enum.defined_only = true];
+  string cursor = 4;
+  uint32 limit = 5 [(buf.validate.field).uint32.lte = 1000];
 }
 
 // Returns formations newest first
 message ListFormationsResponse {
   repeated Formation formations = 1;
+  string next_cursor = 2;
 }
 
 // Fetches one formation by id or name
@@ -863,6 +876,8 @@ message PullSeatRequest {
   bool alone = 5;
   // Files of the repository to download on their own, each joining the stored group it belongs to
   repeated string paths = 6;
+  // The blueprint slot the files fill, the stored group then carrying that component's descriptor
+  string slot = 7;
 }
 
 // Returns the member's pull task

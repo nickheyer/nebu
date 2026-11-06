@@ -218,7 +218,7 @@ func (p *Puller) pullFiles(ctx context.Context, req *v1.PullRequest) (*v1.Task, 
 	var fromNet []*landing
 	var fromMesh []*meshLanding
 	for _, g := range order {
-		l := &landing{src: src, model: model, g: g, files: byGroup[g], merge: true}
+		l := &landing{src: src, model: model, g: g, files: byGroup[g], merge: true, slot: req.GetSlot()}
 		if l.descriptor, err = p.Inspector.Describe(ctx, src, model, g); err != nil {
 			notes = append(notes, fmt.Sprintf("%s %s: no readable header, the files land without a descriptor: %v", model.GetRepo(), g.Name, err))
 		}

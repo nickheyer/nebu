@@ -99,6 +99,34 @@ func stringParams(p estimate.Params) map[string]string {
 	return out
 }
 
+// Renders the command a run would launch with as a launch renders it, the port zero until a launch takes one
+func (m *Manager) Preview(ctx context.Context, req *v1.RunRequest) ([]string, map[string]string, error) {
+	p, err := m.prepare(ctx, req, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	if p.seat != nil {
+		return nil, nil, fmt.Errorf("%w: a seat's command is rendered by its conductor at launch", runtimes.ErrParam)
+	}
+	input := p.input()
+	input.Artifacts, input.Host = m.artifacts(p.stored, p.rt), bindHost
+	if p.rt.Prepares(p.stored.GetFormatId()) && input.Artifacts["prepared_dir"] != "" {
+		launchArtifacts := maps.Clone(input.Artifacts)
+		launchArtifacts["weights_dir"] = input.Artifacts["prepared_dir"]
+		input.Artifacts = launchArtifacts
+	}
+	cmds, err := renderRanks(input, p.rt.Ranks(stringParams(p.params)), p.rt.Launch, func(in runtimes.Launch, cmd *runtimes.Command) error {
+		extra, err := runtimes.RenderArgs(runtimes.JoinArgs(p.res.args(), p.req.GetArgs()), runtimes.ScopeOf(in, cmd))
+		cmd.Args = append(cmd.Args, extra...)
+		return err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	rendered := cmds[0]
+	return auth.RedactEnv(append([]string{rendered.Command}, rendered.Args...), rendered.Env), rendered.Params, nil
+}
+
 // Renders a solo run, launches it on an ephemeral or reserved port, waits for health, and relaunches on fresh ports when one was taken
 func (m *Manager) launchSolo(ctx context.Context, h *tasks.Handle, in *instance, p *prepared) error {
 	stored, rt, install := p.stored, p.rt, p.install

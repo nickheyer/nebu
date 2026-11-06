@@ -424,13 +424,24 @@ func (dockerhubAPI) Card(ctx context.Context, c *Client, repo, revision string) 
 	ns, short, _ := strings.Cut(name, "/")
 	page := dhPage(c, name)
 	var body struct {
-		Description     string `json:"description"`
-		FullDescription string `json:"full_description"`
+		Description     string   `json:"description"`
+		FullDescription string   `json:"full_description"`
+		StarCount       uint64   `json:"star_count"`
+		PullCount       uint64   `json:"pull_count"`
+		LastUpdated     string   `json:"last_updated"`
+		DateRegistered  string   `json:"date_registered"`
+		IsPrivate       bool     `json:"is_private"`
+		StorageSize     uint64   `json:"storage_size"`
+		MediaTypes      []string `json:"media_types"`
 	}
 	if _, err := c.JSON(ctx, c.URL("v2", "namespaces", ns, "repositories", short), nil, &body); err != nil {
 		return cardOrEmpty(page, err)
 	}
-	card := &v1.ModelCard{Url: page}
+	item := dhItem{ID: name, Name: short, CreatedAt: body.DateRegistered, UpdatedAt: body.LastUpdated, ShortDescription: body.Description, StarCount: body.StarCount, RawPullCount: body.PullCount, MediaTypes: body.MediaTypes}
+	item.Publisher.Name = ns
+	hit := dhHit(c, item)
+	hit.Private, hit.SizeBytes = body.IsPrivate, body.StorageSize
+	card := &v1.ModelCard{Url: page, Hit: hit}
 	text := strings.TrimSpace(body.FullDescription)
 	if text == "" {
 		text = strings.TrimSpace(body.Description)

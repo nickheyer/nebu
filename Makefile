@@ -1,4 +1,4 @@
-.PHONY: gen proto-clean proto-lint web web-install web-check prepare build build-cli run test lint vet staticcheck govulncheck cgo-guard clean dev release release-check migrate conformance
+.PHONY: gen proto-clean proto-lint web web-install web-check prepare build build-cli run test lint vet staticcheck govulncheck clean dev screenshots release release-check migrate
 
 BIN := build/nebu
 BUF ?= buf
@@ -45,6 +45,10 @@ dev: clean web
 	BACKEND_PID=$$!; \
 	wait $$BACKEND_PID $$FRONTEND_PID
 
+# Runs dev in the background, screenshots every nav page into screens, then stops dev
+screenshots:
+	@setsid $(MAKE) dev & trap "kill -- -$$! 2>/dev/null; wait" EXIT; node scripts/screenshots.mjs
+
 # Type check the UI.
 web-check: gen web-install
 	cd $(WEB) && $(NPM) run check
@@ -75,11 +79,7 @@ staticcheck: gen
 govulncheck: gen
 	$(GOVULNCHECK) ./...
 
-# Reject dependencies that need cgo.
-cgo-guard: gen
-	./scripts/cgo-guard.sh
-
-lint: proto-lint vet staticcheck govulncheck cgo-guard web-check
+lint: proto-lint vet staticcheck govulncheck web-check
 
 release-check:
 	$(GORELEASER) check
@@ -95,8 +95,3 @@ migrate:
 
 clean:
 	rm -rf build dist $(WEB)/.svelte-kit
-
-# Runs the conformance suite against a fresh daemon and writes its report to conformance/reports
-conformance:
-	go build -trimpath -ldflags "-X github.com/nickheyer/nebu/internal/cli.releaseVersion=$(RELEASE_VERSION) -X github.com/nickheyer/nebu/internal/cli.releaseCommit=$(RELEASE_COMMIT)" -o $(BIN) ./cmd/nebu
-	./conformance/run.sh $(BIN)

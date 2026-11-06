@@ -392,6 +392,11 @@ func (csghubAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v
 		return nil, fmt.Errorf("decode %s card: %w", repo, err)
 	}
 	card.Markdown = body.Data
+	m, err := csgData[csgModel](ctx, c, c.URL("api", "v1", "models", repo), nil)
+	if err != nil {
+		return nil, err
+	}
+	card.Hit = csgHit(c, m)
 	return card, nil
 }
 

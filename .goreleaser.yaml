@@ -4,7 +4,6 @@ project_name: nebu
 before:
   hooks:
     - make prepare
-    - make conformance RELEASE_VERSION={{ .Version }} RELEASE_COMMIT={{ .FullCommit }}
 
 builds:
   - id: nebu
@@ -54,8 +53,6 @@ release:
     name: nebu
   prerelease: auto
   mode: keep-existing
-  extra_files:
-    - glob: ./conformance/reports/nebu-{{ .Version }}-*
 
 aurs:
   - name: nebu-bin

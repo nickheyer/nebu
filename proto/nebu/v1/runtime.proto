@@ -183,14 +183,18 @@ message GetRuntimeResponse {
   RuntimeStatus runtime = 1;
 }
 
-// Lists installs, optionally for one runtime
+// Lists installs, optionally for one runtime, the ones whose version, origin, path, or runtime holds every word of the query
 message ListInstallsRequest {
   string runtime_id = 1;
+  string query = 2 [(buf.validate.field).string.max_len = 256];
+  string cursor = 3;
+  uint32 limit = 4 [(buf.validate.field).uint32.lte = 1000];
 }
 
 // Returns installs newest first
 message ListInstallsResponse {
   repeated Install installs = 1;
+  string next_cursor = 2;
 }
 
 // Adopts a binary already on the host

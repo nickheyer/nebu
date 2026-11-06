@@ -41,12 +41,17 @@ message User {
   Role role = 5;
 }
 
-// Asks for every account
-message ListUsersRequest {}
+// Asks for accounts, the ones whose username holds every word of the query
+message ListUsersRequest {
+  string query = 1 [(buf.validate.field).string.max_len = 256];
+  string cursor = 2;
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 1000];
+}
 
 // Accounts by username
 message ListUsersResponse {
   repeated User users = 1;
+  string next_cursor = 2;
 }
 
 // Adds an account. The first account is always an admin and later ones need a role
@@ -98,12 +103,17 @@ message ApiToken {
   repeated Scope scopes = 7;
 }
 
-// Asks for the caller's own tokens
-message ListTokensRequest {}
+// Asks for the caller's own tokens, the ones whose name or prefix holds every word of the query
+message ListTokensRequest {
+  string query = 1 [(buf.validate.field).string.max_len = 256];
+  string cursor = 2;
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 1000];
+}
 
 // The caller's tokens, newest first
 message ListTokensResponse {
   repeated ApiToken tokens = 1;
+  string next_cursor = 2;
 }
 
 // Makes a token for the caller's own account, holding no scope beyond the caller's own

@@ -136,6 +136,9 @@ func bytesIn(s, unit string) (uint64, error) {
 
 // Formats a row count for a probe's detail line
 func rows(n int) string {
+	if n == 1 {
+		return "1 row"
+	}
 	return fmt.Sprintf("%d rows", n)
 }
 

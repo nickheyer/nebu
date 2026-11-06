@@ -3,7 +3,7 @@ import type { Snippet } from 'svelte';
 import type { NeoFloatingStepperProps } from '#lib/neo/floating/common/neo-floating-stepper.model.js';
 import type { NeoDialogContext, NeoDialogProps } from '#lib/neo/floating/dialog/neo-dialog.model.js';
 import type { NeoTooltipProps } from '#lib/neo/floating/tooltips/neo-tooltip.model.js';
-import type { NeoStepperContext } from '#lib/neo/stepper/neo-stepper.model.js';
+import type { NeoStepperContext, NeoStepperProps } from '#lib/neo/stepper/neo-stepper.model.js';
 
 export type NeoDialogStepperProps<Tag extends keyof HTMLElementTagNameMap = keyof HTMLElementTagNameMap> = {
   // Snippet
@@ -52,6 +52,10 @@ export type NeoDialogStepperProps<Tag extends keyof HTMLElementTagNameMap = keyo
    * Optional props to pass to the dialog.
    */
   dialogProps?: Omit<NeoDialogProps<Tag>, 'ref' | 'open' | 'children' | 'header' | 'modal' | 'returnValue'>;
+  /**
+   * Optional step transitions to pass to the stepper, since in, out and transition go to the dialog.
+   */
+  stepperProps?: Pick<NeoStepperProps, 'in' | 'out' | 'transition'>;
 } & Pick<
   NeoDialogProps<Tag>,
   | 'ref'

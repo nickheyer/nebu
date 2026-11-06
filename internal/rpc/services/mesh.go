@@ -96,7 +96,15 @@ func (s *MeshService) GetMesh(ctx context.Context, req *connect.Request[v1.GetMe
 }
 
 func (s *MeshService) ListNodes(ctx context.Context, req *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error) {
-	return reply(&v1.ListNodesResponse{Nodes: s.mesh.Nodes()}, nil)
+	list := s.mesh.Nodes()
+	if state := req.Msg.GetState(); state != v1.NodeState_NODE_STATE_UNSPECIFIED {
+		list = keep(list, func(n *v1.Node) bool { return n.GetState() == state })
+	}
+	list = match(list, req.Msg.GetQuery(), func(n *v1.Node) []string {
+		return append([]string{n.GetName(), n.GetId(), n.GetVersion(), n.GetAddress()}, n.GetAddresses()...)
+	})
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListNodesResponse{Nodes: list, NextCursor: next}, err)
 }
 
 func (s *MeshService) Token(ctx context.Context, req *connect.Request[v1.TokenRequest]) (*connect.Response[v1.TokenResponse], error) {
@@ -162,7 +170,15 @@ func (s *MeshService) RunFormation(ctx context.Context, req *connect.Request[v1.
 }
 
 func (s *MeshService) ListFormations(ctx context.Context, req *connect.Request[v1.ListFormationsRequest]) (*connect.Response[v1.ListFormationsResponse], error) {
-	return reply(&v1.ListFormationsResponse{Formations: s.formations.List(req.Msg.GetRunningOnly())}, nil)
+	list := s.formations.List(req.Msg.GetRunningOnly())
+	if state := req.Msg.GetState(); state != v1.FormationState_FORMATION_STATE_UNSPECIFIED {
+		list = keep(list, func(f *v1.Formation) bool { return f.GetState() == state })
+	}
+	list = match(list, req.Msg.GetQuery(), func(f *v1.Formation) []string {
+		return []string{f.GetName(), f.GetRepo(), f.GetGroup(), f.GetConductorName(), f.GetRuntimeId(), f.GetError()}
+	})
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListFormationsResponse{Formations: list, NextCursor: next}, err)
 }
 
 func (s *MeshService) GetFormation(ctx context.Context, req *connect.Request[v1.GetFormationRequest]) (*connect.Response[v1.GetFormationResponse], error) {
@@ -230,7 +246,7 @@ func (s *MeshService) PullSeat(ctx context.Context, req *connect.Request[v1.Pull
 	if _, err := s.peer(req.Header()); err != nil {
 		return nil, err
 	}
-	task, err := s.puller.Pull(ctx, &v1.PullRequest{SourceId: req.Msg.GetSourceId(), Repo: req.Msg.GetRepo(), Revision: req.Msg.GetRevision(), Group: req.Msg.GetGroup(), Alone: req.Msg.GetAlone(), Paths: req.Msg.GetPaths()})
+	task, err := s.puller.Pull(ctx, &v1.PullRequest{SourceId: req.Msg.GetSourceId(), Repo: req.Msg.GetRepo(), Revision: req.Msg.GetRevision(), Group: req.Msg.GetGroup(), Alone: req.Msg.GetAlone(), Paths: req.Msg.GetPaths(), Slot: req.Msg.GetSlot()})
 	return reply(&v1.PullSeatResponse{Task: task}, err)
 }
 

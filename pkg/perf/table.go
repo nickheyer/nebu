@@ -234,7 +234,11 @@ func (t *Table) Throughputs() []*v1.Throughput {
 	defer t.mu.Unlock()
 	out := make([]*v1.Throughput, 0, len(t.rows))
 	for _, r := range t.rows {
-		out = append(out, proto.Clone(r.Throughput).(*v1.Throughput))
+		th := proto.Clone(r.Throughput).(*v1.Throughput)
+		if r.SumY > 0 {
+			th.TokensPerSecond = float64(r.Points) / r.SumY
+		}
+		out = append(out, th)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].GetDeviceId() < out[j].GetDeviceId() })
 	return out

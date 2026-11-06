@@ -590,7 +590,7 @@ func (m *Manager) weights(ctx context.Context, h *tasks.Handle, f *v1.Formation,
 					}
 					h.Row(row, uint64(j), uint64(len(files)), message)
 				}
-				if err := m.ensure(ctx, h, progress, s.GetNodeId(), n.source, n.repo, n.group, n.revise, nil); err != nil {
+				if err := m.ensure(ctx, h, progress, s.GetNodeId(), n.source, n.repo, n.group, n.revise, nil, ""); err != nil {
 					h.Row(row, uint64(j), uint64(len(files)), name+": "+err.Error())
 					errs[i] = fmt.Errorf("%s on %s: %w", name, m.nodeName(s.GetNodeId()), err)
 					return
@@ -620,7 +620,7 @@ func (m *Manager) nodeName(id string) string {
 }
 
 // Makes sure a node holds a model, pulling it there and reporting the pull's byte progress
-func (m *Manager) ensure(ctx context.Context, h *tasks.Handle, progress func(done, total uint64, message string), node, source, repo, group, revision string, paths []string) error {
+func (m *Manager) ensure(ctx context.Context, h *tasks.Handle, progress func(done, total uint64, message string), node, source, repo, group, revision string, paths []string, slot string) error {
 	if node == m.self() {
 		if _, err := m.Store.ReadManifest(source, repo, group); err == nil && len(paths) == 0 {
 			h.Logf("%s %s already on %s", repo, group, m.nodeName(node))
@@ -663,7 +663,7 @@ func (m *Manager) ensure(ctx context.Context, h *tasks.Handle, progress func(don
 		return err
 	}
 	cctx, cancel := context.WithTimeout(ctx, callTimeout)
-	resp, err := cl.Mesh.PullSeat(cctx, connect.NewRequest(&v1.PullSeatRequest{SourceId: source, Repo: repo, Revision: revision, Group: group, Paths: paths}))
+	resp, err := cl.Mesh.PullSeat(cctx, connect.NewRequest(&v1.PullSeatRequest{SourceId: source, Repo: repo, Revision: revision, Group: group, Paths: paths, Slot: slot}))
 	cancel()
 	if err != nil {
 		return err

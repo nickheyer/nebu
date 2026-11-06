@@ -1,4 +1,4 @@
-// Command nebu-stub serves an emulated LLM inference server for scheduler tests, conformance tests and trace replay
+// Command nebu-stub serves an emulated LLM inference server for scheduler tests
 package main
 
 import (

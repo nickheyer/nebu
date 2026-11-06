@@ -55,8 +55,21 @@ func (s *BotService) StopBot(ctx context.Context, req *connect.Request[v1.StopBo
 }
 
 func (s *BotService) ListBotActivity(ctx context.Context, req *connect.Request[v1.ListBotActivityRequest]) (*connect.Response[v1.ListBotActivityResponse], error) {
-	list, err := s.bots.Activity(req.Msg.GetBotId(), int(req.Msg.GetLimit()))
-	return reply(&v1.ListBotActivityResponse{Activity: list}, err)
+	list, err := s.bots.Activity(req.Msg.GetBotId(), 0)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	if level := req.Msg.GetLevel(); level != "" {
+		list = keep(list, func(a *v1.BotActivity) bool { return a.GetLevel() == level })
+	}
+	if kind := req.Msg.GetKind(); kind != "" {
+		list = keep(list, func(a *v1.BotActivity) bool { return a.GetKind() == kind })
+	}
+	list = match(list, req.Msg.GetQuery(), func(a *v1.BotActivity) []string {
+		return []string{a.GetMessage(), a.GetKind(), a.GetPersona(), a.GetLevel()}
+	})
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListBotActivityResponse{Activity: list, NextCursor: next}, err)
 }
 
 func (s *BotService) ListBotGuilds(ctx context.Context, req *connect.Request[v1.ListBotGuildsRequest]) (*connect.Response[v1.ListBotGuildsResponse], error) {

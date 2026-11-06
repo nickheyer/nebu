@@ -194,12 +194,20 @@ message GetGatewayStatusResponse {
   GatewayStatus status = 1;
 }
 
-// Lists routes
-message ListRoutesRequest {}
+// Lists routes, the ones whose name, pools, owner, or node holds every word of the query
+message ListRoutesRequest {
+  string query = 1 [(buf.validate.field).string.max_len = 256];
+  RouteState state = 2 [(buf.validate.field).enum.defined_only = true];
+  string cursor = 3;
+  uint32 limit = 4 [(buf.validate.field).uint32.lte = 1000];
+  // Only routes whose inventory lists the modality, such as text, image or video
+  string modality = 5 [(buf.validate.field).string.max_len = 32];
+}
 
 // Returns routes by name
 message ListRoutesResponse {
   repeated Route routes = 1;
+  string next_cursor = 2;
 }
 
 // Creates or replaces a route's spec
@@ -223,12 +231,17 @@ message GetRouteResponse {
   Route route = 1;
 }
 
-// Lists pools
-message ListPoolsRequest {}
+// Lists pools, the ones whose id, model, runtime, accelerator, or owner holds every word of the query
+message ListPoolsRequest {
+  string query = 1 [(buf.validate.field).string.max_len = 256];
+  string cursor = 2;
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 1000];
+}
 
 // Returns pools with their endpoints
 message ListPoolsResponse {
   repeated Pool pools = 1;
+  string next_cursor = 2;
 }
 
 // Fetches one pool
@@ -262,12 +275,17 @@ message DeletePoolResponse {
   Pool pool = 1;
 }
 
-// Lists objectives
-message ListObjectivesRequest {}
+// Lists objectives, the ones whose name holds every word of the query
+message ListObjectivesRequest {
+  string query = 1 [(buf.validate.field).string.max_len = 256];
+  string cursor = 2;
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 1000];
+}
 
 // Returns objectives
 message ListObjectivesResponse {
   repeated Objective objectives = 1;
+  string next_cursor = 2;
 }
 
 // Creates or replaces an objective
@@ -290,12 +308,17 @@ message DeleteObjectiveResponse {
   Objective objective = 1;
 }
 
-// Lists scheduler configurations
-message ListSchedulerConfigsRequest {}
+// Lists scheduler configurations, the ones whose name holds every word of the query
+message ListSchedulerConfigsRequest {
+  string query = 1 [(buf.validate.field).string.max_len = 256];
+  string cursor = 2;
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 1000];
+}
 
 // Returns scheduler configurations
 message ListSchedulerConfigsResponse {
   repeated SchedulerConfig configs = 1;
+  string next_cursor = 2;
 }
 
 // Creates or replaces a scheduler configuration, refused when its YAML does not load
@@ -474,16 +497,29 @@ message TraceToolCall {
   uint32 took_ms = 7;
 }
 
-// Lists traces newest first, one route's or every route's
+// Lists traces newest first, one route's or every route's, narrowed by every filter set
 message ListTracesRequest {
   string route = 1;
-  // Maximum results. Zero returns the full buffer.
+  // Traces per page. Zero returns every match.
   uint32 limit = 2 [(buf.validate.field).uint32.lte = 100000];
+  // Words every listed trace holds in its id, request id, route, pool, endpoint, node, objective, or error
+  string query = 3 [(buf.validate.field).string.max_len = 256];
+  TraceKind kind = 4 [(buf.validate.field).enum.defined_only = true];
+  // The first digit of the status, 2 for every 2xx answer, zero for every status
+  uint32 status_class = 5 [(buf.validate.field).uint32.lte = 5];
+  string node_id = 6;
+  string objective = 7;
+  string fairness_id = 8;
+  // Traces started at or after from and before to, either unbounded when unset
+  google.protobuf.Timestamp from = 9;
+  google.protobuf.Timestamp to = 10;
+  string cursor = 11;
 }
 
 // Returns traces without bodies
 message ListTracesResponse {
   repeated Trace traces = 1;
+  string next_cursor = 2;
 }
 
 // Fetches one trace with its bodies

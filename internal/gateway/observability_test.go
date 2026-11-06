@@ -34,7 +34,7 @@ func (h *harness) finishedTrace(route string) *v1.Trace {
 	h.t.Helper()
 	var got *v1.Trace
 	waitFor(h.t, "a finished trace of "+route, func() bool {
-		list, _ := h.g.Traces().List(context.Background(), Viewer{All: true}, route, 1)
+		list, _, _ := h.g.Traces().List(context.Background(), Viewer{All: true}, TraceFilter{Route: route}, 0, 1)
 		if len(list) == 1 && list[0].GetFinishedAt() != nil {
 			got = list[0]
 			return true
@@ -265,7 +265,7 @@ func TestGRPCFirstByteAtBackendHeaders(t *testing.T) {
 	}
 	var streamed *v1.Trace
 	waitFor(t, "the stream trace", func() bool {
-		list, _ := h.g.Traces().List(ctx, Viewer{All: true}, "slow", 2)
+		list, _, _ := h.g.Traces().List(ctx, Viewer{All: true}, TraceFilter{Route: "slow"}, 0, 2)
 		for _, tr := range list {
 			if tr.GetRequestId() == "s1" && tr.GetFinishedAt() != nil {
 				streamed = tr
@@ -322,7 +322,7 @@ func TestTraceCarriesDecisionAndOwner(t *testing.T) {
 	if stored.GetOwner() != keyOwner("alice-key") || len(stored.GetFilters()) != len(tr.GetFilters()) {
 		t.Fatalf("stored %v", stored)
 	}
-	list, _ := h.g.Traces().List(context.Background(), Viewer{All: true}, "chat", 1)
+	list, _, _ := h.g.Traces().List(context.Background(), Viewer{All: true}, TraceFilter{Route: "chat"}, 0, 1)
 	if list[0].GetOwner() != keyOwner("alice-key") {
 		t.Fatalf("listed owner %q", list[0].GetOwner())
 	}

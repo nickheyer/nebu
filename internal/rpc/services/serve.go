@@ -34,8 +34,21 @@ func (s *InstanceService) Run(ctx context.Context, req *connect.Request[v1.RunRe
 	return reply(&v1.RunResponse{Instance: in, Task: task}, err)
 }
 
+func (s *InstanceService) PreviewRun(ctx context.Context, req *connect.Request[v1.PreviewRunRequest]) (*connect.Response[v1.PreviewRunResponse], error) {
+	command, params, err := s.instances.Preview(ctx, req.Msg.GetRun())
+	return reply(&v1.PreviewRunResponse{Command: command, Params: params}, err)
+}
+
 func (s *InstanceService) ListInstances(ctx context.Context, req *connect.Request[v1.ListInstancesRequest]) (*connect.Response[v1.ListInstancesResponse], error) {
-	return reply(&v1.ListInstancesResponse{Instances: s.instances.List(req.Msg.GetRunningOnly())}, nil)
+	list := s.instances.List(req.Msg.GetRunningOnly())
+	if state := req.Msg.GetState(); state != v1.InstanceState_INSTANCE_STATE_UNSPECIFIED {
+		list = keep(list, func(in *v1.Instance) bool { return in.GetState() == state })
+	}
+	list = match(list, req.Msg.GetQuery(), func(in *v1.Instance) []string {
+		return []string{in.GetName(), in.GetRepo(), in.GetGroup(), in.GetRuntimeId(), in.GetError()}
+	})
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListInstancesResponse{Instances: list, NextCursor: next}, err)
 }
 
 func (s *InstanceService) GetInstance(ctx context.Context, req *connect.Request[v1.GetInstanceRequest]) (*connect.Response[v1.GetInstanceResponse], error) {
@@ -92,7 +105,15 @@ func NewSlotService(m *slots.Manager) *SlotService {
 }
 
 func (s *SlotService) ListSlots(ctx context.Context, req *connect.Request[v1.ListSlotsRequest]) (*connect.Response[v1.ListSlotsResponse], error) {
-	return reply(&v1.ListSlotsResponse{Slots: s.slots.List()}, nil)
+	list := s.slots.List()
+	if state := req.Msg.GetState(); state != v1.SlotState_SLOT_STATE_UNSPECIFIED {
+		list = keep(list, func(sl *v1.Slot) bool { return sl.GetState() == state })
+	}
+	list = match(list, req.Msg.GetQuery(), func(sl *v1.Slot) []string {
+		return []string{sl.GetName(), sl.GetDescription(), sl.GetRuntimeId(), sl.GetError()}
+	})
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListSlotsResponse{Slots: list, NextCursor: next}, err)
 }
 
 func (s *SlotService) GetSlot(ctx context.Context, req *connect.Request[v1.GetSlotRequest]) (*connect.Response[v1.GetSlotResponse], error) {
@@ -140,7 +161,16 @@ func NewTaskService(m *tasks.Manager) *TaskService {
 }
 
 func (s *TaskService) ListTasks(ctx context.Context, req *connect.Request[v1.ListTasksRequest]) (*connect.Response[v1.ListTasksResponse], error) {
-	return reply(&v1.ListTasksResponse{Tasks: s.tasks.List(req.Msg.GetActiveOnly())}, nil)
+	list := s.tasks.List(req.Msg.GetActiveOnly())
+	if kind := req.Msg.GetKind(); kind != "" {
+		list = keep(list, func(t *v1.Task) bool { return t.GetKind() == kind })
+	}
+	if state := req.Msg.GetState(); state != v1.TaskState_TASK_STATE_UNSPECIFIED {
+		list = keep(list, func(t *v1.Task) bool { return t.GetState() == state })
+	}
+	list = match(list, req.Msg.GetQuery(), func(t *v1.Task) []string { return []string{t.GetKind(), t.GetTitle(), t.GetError()} })
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListTasksResponse{Tasks: list, NextCursor: next}, err)
 }
 
 func (s *TaskService) GetTask(ctx context.Context, req *connect.Request[v1.GetTaskRequest]) (*connect.Response[v1.GetTaskResponse], error) {

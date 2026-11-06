@@ -22,8 +22,14 @@ type TraceQuery struct {
 	AllOwners bool
 	// One route's traces when set
 	Route string
+	// One kind of trace when set
+	Kind v1.TraceKind
+	// Traces started at or after From and before To, either bound off when zero
+	From, To time.Time
 	// Newest first, every match when zero
 	Limit int
+	// Matches skipped before the first answered
+	Offset int
 }
 
 // Inserts or replaces a trace with its bodies under the subject that sent it
@@ -58,13 +64,25 @@ func (d *DB) ListTraces(ctx context.Context, q TraceQuery) ([]*v1.Trace, error) 
 	if q.Route != "" {
 		where, args = append(where, `route = ?`), append(args, q.Route)
 	}
+	if q.Kind != v1.TraceKind_TRACE_KIND_UNSPECIFIED {
+		where, args = append(where, `kind = ?`), append(args, int32(q.Kind))
+	}
+	if !q.From.IsZero() {
+		where, args = append(where, `started_at >= ?`), append(args, traceTime(q.From))
+	}
+	if !q.To.IsZero() {
+		where, args = append(where, `started_at < ?`), append(args, traceTime(q.To))
+	}
 	query := `SELECT id, record FROM traces`
 	if len(where) > 0 {
 		query += ` WHERE ` + strings.Join(where, ` AND `)
 	}
 	query += ` ORDER BY started_at DESC, id DESC`
-	if q.Limit > 0 {
-		query, args = query+` LIMIT ?`, append(args, q.Limit)
+	switch {
+	case q.Limit > 0:
+		query, args = query+` LIMIT ? OFFSET ?`, append(args, q.Limit, q.Offset)
+	case q.Offset > 0:
+		query, args = query+` LIMIT -1 OFFSET ?`, append(args, q.Offset)
 	}
 	return list(ctx, d, query, func(rows *sql.Rows) (*v1.Trace, error) {
 		var id string

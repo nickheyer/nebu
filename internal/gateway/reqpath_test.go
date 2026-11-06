@@ -365,7 +365,7 @@ func TestGRPCInSGLang(t *testing.T) {
 		t.Fatalf("chunks %v, engine got %s", chunks, f.last.Load().GetJsonBody())
 	}
 	waitFor(t, "SGLang trace", func() bool {
-		list, _ := h.g.Traces().List(ctx, Viewer{All: true}, "chat", 1)
+		list, _, _ := h.g.Traces().List(ctx, Viewer{All: true}, TraceFilter{Route: "chat"}, 0, 1)
 		return len(list) == 1 && list[0].GetFinishedAt() != nil && list[0].GetStatus() == http.StatusOK && list[0].GetEndpoint() == addr && list[0].GetRequestId() == "sg1"
 	})
 	emb, err := client.OpenAIEmbed(ctx, &runtimev1.OpenAIRequest{JsonBody: []byte(`{"model":"chat","input":"hello"}`)})

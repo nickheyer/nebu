@@ -148,10 +148,45 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 		byMount[st.GetPath()] = st
 		profile.Storage = append(profile.Storage, st)
 	}
+	linkPools(profile)
 	if p.Decorate != nil {
 		p.Decorate(profile)
 	}
 	return profile, nil
+}
+
+// Names on every device the pool it draws on, its own device pool, else the unified pool, else the host pool for a CPU, else none
+func linkPools(p *v1.HostProfile) {
+	unified, host := "", ""
+	for _, pl := range p.GetPools() {
+		switch pl.GetKind() {
+		case v1.PoolKind_POOL_KIND_UNIFIED:
+			if unified == "" {
+				unified = pl.GetId()
+			}
+		case v1.PoolKind_POOL_KIND_HOST:
+			if host == "" {
+				host = pl.GetId()
+			}
+		}
+	}
+	for _, d := range p.GetDevices() {
+		d.PoolId = ""
+		for _, pl := range p.GetPools() {
+			if pl.GetKind() == v1.PoolKind_POOL_KIND_DEVICE && (pl.GetDeviceId() == d.GetId() || pl.GetId() == d.GetId()) {
+				d.PoolId = pl.GetId()
+				break
+			}
+		}
+		if d.PoolId != "" {
+			continue
+		}
+		if unified != "" {
+			d.PoolId = unified
+		} else if d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
+			d.PoolId = host
+		}
+	}
 }
 
 // Adds devices by id, one two probes both found keeping the first probe's numbers and

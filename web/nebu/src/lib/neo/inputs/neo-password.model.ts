@@ -18,4 +18,4 @@ export type NeoPasswordProps<T extends boolean = false> = {
    */
   buttonProps?: NeoButtonProps;
 } & NeoInputProps
-& (T extends true ? NeoPinState : Record<string, never>);
+& (T extends true ? NeoPinState : unknown);

@@ -99,7 +99,7 @@ func New(d Deps) *mcp.Server {
 		host:     services.NewHostService(d.Host, d.Doctor, nil),
 		sources:  services.NewSourceService(d.Sources, d.Inspector, d.Formats, d.Runtimes),
 		runtimes: services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Formats),
-		store:    services.NewStoreService(d.Store, d.Puller, d.Events, d.Formations.PullTo),
+		store:    services.NewStoreService(d.Store, d.Puller, d.Events, d.Formations.PullTo, d.Runtimes),
 		instance: services.NewInstanceService(d.Instances),
 		slots:    services.NewSlotService(d.Slots),
 		gateway:  services.NewGatewayService(d.Gateway, d.Pools, d.Guard),

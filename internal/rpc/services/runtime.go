@@ -76,7 +76,14 @@ func (s *RuntimeService) GetRuntime(ctx context.Context, req *connect.Request[v1
 
 func (s *RuntimeService) ListInstalls(ctx context.Context, req *connect.Request[v1.ListInstallsRequest]) (*connect.Response[v1.ListInstallsResponse], error) {
 	list, err := s.installs.List(ctx, req.Msg.GetRuntimeId())
-	return reply(&v1.ListInstallsResponse{Installs: list}, err)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	list = match(list, req.Msg.GetQuery(), func(in *v1.Install) []string {
+		return []string{in.GetRuntimeId(), in.GetVersion(), in.GetOrigin(), in.GetPath()}
+	})
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListInstallsResponse{Installs: list, NextCursor: next}, err)
 }
 
 func (s *RuntimeService) AdoptInstall(ctx context.Context, req *connect.Request[v1.AdoptInstallRequest]) (*connect.Response[v1.AdoptInstallResponse], error) {
@@ -115,7 +122,14 @@ func (s *BuildService) Build(ctx context.Context, req *connect.Request[v1.BuildR
 
 func (s *BuildService) ListBuilds(ctx context.Context, req *connect.Request[v1.ListBuildsRequest]) (*connect.Response[v1.ListBuildsResponse], error) {
 	list, err := s.installs.ListBuilds(ctx, req.Msg.GetRuntimeId())
-	return reply(&v1.ListBuildsResponse{Builds: list}, err)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	list = match(list, req.Msg.GetQuery(), func(b *v1.Build) []string {
+		return []string{b.GetRecipeId(), b.GetRuntimeId(), b.GetVariant(), b.GetRef(), b.GetCommit(), b.GetError()}
+	})
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListBuildsResponse{Builds: list, NextCursor: next}, err)
 }
 
 func (s *BuildService) GetBuild(ctx context.Context, req *connect.Request[v1.GetBuildRequest]) (*connect.Response[v1.GetBuildResponse], error) {

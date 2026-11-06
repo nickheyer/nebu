@@ -152,7 +152,7 @@ func (m *Manager) PullTo(ctx context.Context, nodeID string, req *v1.PullRequest
 		return nil, err
 	}
 	if rec.GetId() == m.self() {
-		req = &v1.PullRequest{SourceId: req.GetSourceId(), Repo: req.GetRepo(), Revision: req.GetRevision(), Group: req.GetGroup(), Alone: req.GetAlone(), Paths: req.GetPaths()}
+		req = &v1.PullRequest{SourceId: req.GetSourceId(), Repo: req.GetRepo(), Revision: req.GetRevision(), Group: req.GetGroup(), Alone: req.GetAlone(), Paths: req.GetPaths(), Slot: req.GetSlot()}
 		return m.Puller.Pull(ctx, req)
 	}
 	if rec.GetState() != v1.NodeState_NODE_STATE_READY {
@@ -168,6 +168,6 @@ func (m *Manager) PullTo(ctx context.Context, nodeID string, req *v1.PullRequest
 		title = fmt.Sprintf("pull %s %d files onto %s", req.GetRepo(), len(paths), rec.GetName())
 	}
 	return m.Tasks.Start(kindPull, title, labels, func(ctx context.Context, h *tasks.Handle) error {
-		return m.ensure(ctx, h, h.Progress, rec.GetId(), req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRevision(), req.GetPaths())
+		return m.ensure(ctx, h, h.Progress, rec.GetId(), req.GetSourceId(), req.GetRepo(), req.GetGroup(), req.GetRevision(), req.GetPaths(), req.GetSlot())
 	}), nil
 }

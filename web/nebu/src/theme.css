@@ -5,6 +5,7 @@
 @import '@fontsource/ibm-plex-mono/500.css';
 
 :root,
+html[neo-theme-root],
 [neo-theme-root] {
 	--neo-font-family: 'IBM Plex Sans', system-ui, sans-serif;
 	--neo-white-soft: #eceef3;
@@ -20,16 +21,46 @@
 	--neo-orange-light: #e6b56f;
 	--neo-red: #b3261e;
 	--neo-red-light: #f28b7d;
+	--neo-border-radius: 8px;
+	--neo-border-radius-md: 12px;
 	--nebu-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
 	--nebu-screen-background: #0f1114;
 	--nebu-screen-border: #23272e;
 	--nebu-screen-text: #9fd39a;
 	--nebu-screen-text-muted: #6f8f6c;
+	--nebu-text-muted: #5b606c;
+	--nebu-border: #cfd3db;
+	--nebu-steel: #4f6378;
+}
+
+[neo-theme-root][neo-theme='dark'] {
+	--nebu-text-muted: #a8adb8;
+	--nebu-border: #2c3038;
+	--nebu-steel: #9fb0c4;
+}
+
+@media (prefers-color-scheme: dark) {
+	[neo-theme-root]:not([neo-theme='light']) {
+		--nebu-text-muted: #a8adb8;
+		--nebu-border: #2c3038;
+		--nebu-steel: #9fb0c4;
+	}
+}
+
+html {
+	font-size: 15px;
+}
+
+html,
+html[neo-theme-root],
+body {
+	font-family: 'IBM Plex Sans', system-ui, sans-serif;
 }
 
 body {
-	font-family: var(--neo-font-family);
+	margin: 0;
 	font-variant-numeric: tabular-nums;
+	-webkit-font-smoothing: antialiased;
 }
 
 code,

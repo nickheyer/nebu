@@ -187,7 +187,7 @@ func TestGRPCIn(t *testing.T) {
 		t.Fatalf("answer %v, engine saw %v", resp, f.last())
 	}
 	waitFor(t, "gRPC trace", func() bool {
-		list, _ := h.g.Traces().List(ctx, Viewer{All: true}, "chat", 1)
+		list, _, _ := h.g.Traces().List(ctx, Viewer{All: true}, TraceFilter{Route: "chat"}, 0, 1)
 		return len(list) == 1 && list[0].GetFinishedAt() != nil && list[0].GetStatus() == http.StatusOK && list[0].GetEndpoint() == addr && list[0].GetKind() == v1.TraceKind_TRACE_KIND_GENERATE
 	})
 	if _, err := vllmpb.NewInferenceClient(conn).Generate(ctx, &vllmpb.GenerateRequest{Model: "nope", Prompt: &vllmpb.GenerateRequest_Text{Text: "hello"}}); err == nil || !strings.Contains(err.Error(), "NotFound") {

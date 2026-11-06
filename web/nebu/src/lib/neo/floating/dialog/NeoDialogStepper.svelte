@@ -81,6 +81,7 @@
     // Other Props
     dialogProps,
     backdropProps,
+    stepperProps,
     ...rest
   }: NeoDialogStepperProps = $props();
 
@@ -146,6 +147,7 @@
     onCancel={onCancelButton}
     onConfirm={onConfirmButton}
     {...rest}
+    {...stepperProps}
   >
     {#snippet children(stepperContext: NeoStepperContext)}
       {#if typeof content === 'function'}

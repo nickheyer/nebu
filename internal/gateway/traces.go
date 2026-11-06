@@ -51,6 +51,64 @@ type Viewer struct {
 // Whether the viewer may read a trace kept under owner
 func (v Viewer) sees(owner string) bool { return v.All || v.Owner == owner }
 
+// What a trace listing narrows by, every field off when zero
+type TraceFilter struct {
+	Route string
+	Kind  v1.TraceKind
+	// The first digit of the status, 2 for every 2xx answer
+	StatusClass uint32
+	NodeID      string
+	Objective   string
+	FairnessID  string
+	// Traces started at or after From and before To
+	From, To time.Time
+	// Words the trace holds in its id, request id, route, pool, endpoint, node, objective, fairness id, or error
+	Query string
+}
+
+// Stored traces per read while a filtered listing walks the store
+const traceChunk = 500
+
+// Whether the trace is one the filter lists
+func (f TraceFilter) admits(t *v1.Trace) bool {
+	if f.Route != "" && t.GetRoute() != f.Route {
+		return false
+	}
+	if f.Kind != v1.TraceKind_TRACE_KIND_UNSPECIFIED && t.GetKind() != f.Kind {
+		return false
+	}
+	if f.StatusClass != 0 && t.GetStatus()/100 != f.StatusClass {
+		return false
+	}
+	if f.NodeID != "" && t.GetNodeId() != f.NodeID && t.GetEntryNode() != f.NodeID {
+		return false
+	}
+	if f.Objective != "" && t.GetObjective() != f.Objective {
+		return false
+	}
+	if f.FairnessID != "" && t.GetFairnessId() != f.FairnessID {
+		return false
+	}
+	started := t.GetStartedAt().AsTime()
+	if !f.From.IsZero() && started.Before(f.From) {
+		return false
+	}
+	if !f.To.IsZero() && !started.Before(f.To) {
+		return false
+	}
+	words := strings.Fields(strings.ToLower(f.Query))
+	if len(words) == 0 {
+		return true
+	}
+	hay := strings.ToLower(strings.Join([]string{t.GetId(), t.GetRequestId(), t.GetRoute(), t.GetPoolId(), t.GetEndpoint(), t.GetNodeId(), t.GetEntryNode(), t.GetObjective(), t.GetFairnessId(), t.GetError()}, "\n"))
+	for _, w := range words {
+		if !strings.Contains(hay, w) {
+			return false
+		}
+	}
+	return true
+}
+
 // One trace as the ring holds it, immutable once stored, with the subject it is kept under
 type record struct {
 	t     *v1.Trace
@@ -194,14 +252,14 @@ func (r *Recorder) finish(t *v1.Trace, owner string, slot uint64) {
 	r.persist(stopped, p)
 }
 
-// The ring's traces the viewer may read, newest first
-func (r *Recorder) recent(v Viewer, route string) []*record {
+// The ring's traces the viewer may read and the filter admits, newest first
+func (r *Recorder) recent(v Viewer, f TraceFilter) []*record {
 	n := r.next.Load()
 	size := uint64(len(r.ring))
 	var out []*record
 	for i := uint64(0); i < min(n, size); i++ {
 		rec := r.ring[(n-1-i)%size].Load()
-		if rec == nil || !v.sees(rec.owner) || route != "" && rec.t.GetRoute() != route {
+		if rec == nil || !v.sees(rec.owner) || !f.admits(rec.t) {
 			continue
 		}
 		out = append(out, rec)
@@ -209,35 +267,48 @@ func (r *Recorder) recent(v Viewer, route string) []*record {
 	return out
 }
 
-// Traces newest first without bodies, the ring alone for limit zero, the store filling a positive limit
-func (r *Recorder) List(ctx context.Context, v Viewer, route string, limit int) ([]*v1.Trace, error) {
+// Traces newest first without bodies from the ring and the store, the page at offset of limit traces,
+// every match when limit is zero, and whether more follow the page
+func (r *Recorder) List(ctx context.Context, v Viewer, f TraceFilter, offset, limit int) ([]*v1.Trace, bool, error) {
 	seen := map[string]bool{}
 	var out []*v1.Trace
-	for _, rec := range r.recent(v, route) {
+	for _, rec := range r.recent(v, f) {
 		seen[rec.t.GetId()] = true
 		out = append(out, summary(rec.t))
 	}
-	if limit > 0 && len(out) < limit {
-		stored, err := r.db.ListTraces(ctx, db.TraceQuery{Owner: v.Owner, AllOwners: v.All, Route: route, Limit: limit + len(out)})
+	need := 0
+	if limit > 0 {
+		need = offset + limit + 1
+	}
+	q := db.TraceQuery{Owner: v.Owner, AllOwners: v.All, Route: f.Route, Kind: f.Kind, From: f.From, To: f.To, Limit: traceChunk}
+	for need == 0 || len(out) < need {
+		stored, err := r.db.ListTraces(ctx, q)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		for _, t := range stored {
-			if !seen[t.GetId()] {
+			if !seen[t.GetId()] && f.admits(t) {
+				seen[t.GetId()] = true
 				out = append(out, t)
 			}
 		}
+		if len(stored) < traceChunk {
+			break
+		}
+		q.Offset += traceChunk
 	}
 	slices.SortStableFunc(out, func(a, b *v1.Trace) int { return b.GetStartedAt().AsTime().Compare(a.GetStartedAt().AsTime()) })
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
+	offset = min(offset, len(out))
+	end := len(out)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
 	}
-	return out, nil
+	return out[offset:end], end < len(out), nil
 }
 
 // One trace with bodies from the ring or the store, false when absent or hidden from the viewer
 func (r *Recorder) Get(ctx context.Context, v Viewer, id string) (*v1.Trace, bool, error) {
-	for _, rec := range r.recent(v, "") {
+	for _, rec := range r.recent(v, TraceFilter{}) {
 		if rec.t.GetId() == id {
 			return proto.Clone(rec.t).(*v1.Trace), true, nil
 		}

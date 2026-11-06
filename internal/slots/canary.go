@@ -138,7 +138,7 @@ func (m *Manager) swapCanary(ctx context.Context, h *tasks.Handle, s *v1.Slot, o
 		}
 		msg := fmt.Sprintf("step %d of %d sends %d%% of traffic to %s for %s", i+1, len(shares), share, fresh.name(), plan.every)
 		m.setPhase(s.GetId(), phase{active: true, reason: CanaryShifting, message: msg})
-		h.Progress(uint64(i+1), total, msg)
+		h.ProgressUntil(uint64(i+1), total, msg, time.Now().Add(plan.every))
 		h.Logf("%s", msg)
 		if err := m.hold(ctx, fresh, plan.every); err != nil {
 			return m.rollBack(ctx, h, s, old, fresh, fmt.Sprintf("step %d: %v", i+1, err))

@@ -455,7 +455,7 @@ func (civitaiAPI) Card(ctx context.Context, c *Client, repo, revision string) (*
 	if err != nil {
 		return nil, err
 	}
-	return &v1.ModelCard{Html: m.Description, Url: civPageURL(c, id)}, nil
+	return &v1.ModelCard{Html: m.Description, Url: civPageURL(c, id), Hit: civHit(c, *m)}, nil
 }
 
 // Where a file of a version downloads from, the address the API names or the download endpoint by id

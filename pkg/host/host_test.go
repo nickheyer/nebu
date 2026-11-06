@@ -167,7 +167,35 @@ func TestConcurrentProfilesShareOneProbe(t *testing.T) {
 	}
 }
 
-// A device holds memory of its own when it reports some, or a device or unified pool of the profile is its, and is found by id
+// A GPU with its own pool names it, the CPU names the host pool, a GPU drawing on host memory names none, and every device names a unified pool
+func TestLinkPoolsNamesOnlyPoolsDevicesOwn(t *testing.T) {
+	gpu := &v1.Device{Id: "gpu", Kind: v1.DeviceKind_DEVICE_KIND_GPU}
+	igpu := &v1.Device{Id: "igpu", Kind: v1.DeviceKind_DEVICE_KIND_GPU}
+	cpu := &v1.Device{Id: "cpu", Kind: v1.DeviceKind_DEVICE_KIND_CPU}
+	profile := &v1.HostProfile{Devices: []*v1.Device{gpu, igpu, cpu}, Pools: []*v1.MemoryPool{
+		{Id: "gpu", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "gpu"},
+		{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST},
+	}}
+	linkPools(profile)
+	if gpu.GetPoolId() != "gpu" || igpu.GetPoolId() != "" || cpu.GetPoolId() != "host" {
+		t.Fatalf("pools %q %q %q", gpu.GetPoolId(), igpu.GetPoolId(), cpu.GetPoolId())
+	}
+	for _, d := range profile.GetDevices() {
+		if (d.GetPoolId() != "") != OwnMemory(profile, d) {
+			t.Fatalf("%s pool %q disagrees with own memory %v", d.GetId(), d.GetPoolId(), OwnMemory(profile, d))
+		}
+	}
+	profile.Pools = append(profile.Pools, &v1.MemoryPool{Id: "unified", Kind: v1.PoolKind_POOL_KIND_UNIFIED})
+	linkPools(profile)
+	if gpu.GetPoolId() != "gpu" || igpu.GetPoolId() != "unified" || cpu.GetPoolId() != "unified" {
+		t.Fatalf("pools with unified %q %q %q", gpu.GetPoolId(), igpu.GetPoolId(), cpu.GetPoolId())
+	}
+	linkPools(&v1.HostProfile{Devices: []*v1.Device{cpu}})
+	if cpu.GetPoolId() != "" {
+		t.Fatalf("pool without pools %q", cpu.GetPoolId())
+	}
+}
+
 func TestOwnMemoryAndDevice(t *testing.T) {
 	gpu := &v1.Device{Id: "gpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Name: "big"}
 	igpu := &v1.Device{Id: "intel-0000:00:02.0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Name: "AlderLake-S GT1", Facts: map[string]string{"memory": "shared"}}
