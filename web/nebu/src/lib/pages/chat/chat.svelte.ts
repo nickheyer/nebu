@@ -197,7 +197,7 @@ export class ChatSession {
 		const turn = create(ChatTurnSchema, { role: 'user', text, startedAt: timestampNow(), dialect: this.settings.dialect });
 		for (const file of attachments) {
 			const url = await dataUrl(file);
-			const stored = await rpc.chat.putChatFile({ file: create(ChatFileSchema, { mediaType: file.type || 'image/png', sizeBytes: BigInt(file.size), name: file.name }), data: bytesOf(url) });
+			const stored = await rpc.chat.putChatFile({ file: create(ChatFileSchema, { id: crypto.randomUUID(), mediaType: file.type || 'image/png', sizeBytes: BigInt(file.size), name: file.name }), data: bytesOf(url) });
 			if (stored.file) {
 				turn.images.push(stored.file);
 				this.files[stored.file.id] = url;
@@ -367,7 +367,7 @@ export class ChatSession {
 			const res = await images({ model: this.model, prompt, size: this.media.imageSize, steps: this.media.imageSteps, count: this.media.imageCount }, abort.signal);
 			assistant.traceId = res.trace;
 			for (const [i, url] of res.urls.entries()) {
-				const stored = await rpc.chat.putChatFile({ file: create(ChatFileSchema, { mediaType: 'image/png', name: `image-${i + 1}.png` }), data: bytesOf(url) });
+				const stored = await rpc.chat.putChatFile({ file: create(ChatFileSchema, { id: crypto.randomUUID(), mediaType: 'image/png', name: `image-${i + 1}.png` }), data: bytesOf(url) });
 				if (stored.file) {
 					assistant.media.push(stored.file);
 					this.files[stored.file.id] = url;
@@ -411,7 +411,7 @@ export class ChatSession {
 			if (job.status === 'failed') throw new Error(job.error?.message ?? 'video failed');
 			const blob = await videoContent(job.id, abort.signal);
 			const url = await dataUrl(blob);
-			const stored = await rpc.chat.putChatFile({ file: create(ChatFileSchema, { mediaType: blob.type || 'video/mp4', name: `${job.id}.${job.output_format ?? 'mp4'}`, sizeBytes: BigInt(blob.size) }), data: bytesOf(url) });
+			const stored = await rpc.chat.putChatFile({ file: create(ChatFileSchema, { id: crypto.randomUUID(), mediaType: blob.type || 'video/mp4', name: `${job.id}.${job.output_format ?? 'mp4'}`, sizeBytes: BigInt(blob.size) }), data: bytesOf(url) });
 			if (stored.file) {
 				assistant.media.push(stored.file);
 				this.files[stored.file.id] = URL.createObjectURL(blob);

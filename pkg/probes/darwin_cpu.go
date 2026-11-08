@@ -35,7 +35,7 @@ func (p darwinCPU) Run(ctx context.Context) host.Result {
 		Name:   brand,
 		Facts:  map[string]string{"cores": kv["hw.physicalcpu"], "threads": kv["hw.logicalcpu"]},
 	}
-	return found([]*v1.Device{device}, nil, nil, rows(1))
+	return found([]*v1.Device{device}, nil, nil, "")
 }
 
 // The vendor a brand string names: Apple silicon, Intel, AMD, else the first word

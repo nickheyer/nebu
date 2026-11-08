@@ -1,9 +1,11 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { daysUntil, thin, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { NodeState, type Mesh, type Node } from '#lib/proto/nebu/v1/mesh_pb.js';
+	import type { HeaderTab } from '#lib/shell/chrome.svelte.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
 	import Confirm from '#lib/ui/Confirm.svelte';
@@ -17,13 +19,13 @@
 	import Tip from '#lib/ui/Tip.svelte';
 	import Duration from '#lib/ui/fields/Duration.svelte';
 	import Picker from '#lib/ui/fields/Picker.svelte';
-	import Cell from '#lib/ui/layout/Cell.svelte';
+	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Row from '#lib/ui/layout/Row.svelte';
-	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { members, tokenTtlMax } from '#lib/pages/mesh/mesh.js';
 
-	let { mesh, self }: { mesh: Mesh; self: Node | undefined } = $props();
+	// The top bar of a joined mesh, its standing after the title and its membership actions, the open tab's own action last
+	let { mesh, self, tabs, active, action }: { mesh: Mesh; self: Node | undefined; tabs: HeaderTab[]; active: string; action?: Snippet } = $props();
 
 	type Danger = 'rotate' | 'handoff' | 'reset';
 	const dangers: Record<Danger, { title: string; confirm: string; message: string }> = {
@@ -95,84 +97,65 @@
 </script>
 
 {#snippet details()}
-	<KeyRows
-		dense
-		rows={[
-			{ label: 'id', value: mesh.id, mono: true, tip: mesh.id },
-			{ label: 'address', value: mesh.address || 'loopback only', mono: true },
-			{ label: 'exposure', value: mesh.exposure || 'unset' },
-			{ label: 'announce', value: mesh.announce ? 'on' : 'off' },
-			{ label: 'CA fingerprint', value: mesh.caFingerprint, mono: true, copy: true, tip: mesh.caFingerprint }
-		]}
-	/>
+	<div class="details">
+		<KeyRows
+			dense
+			rows={[
+				...(viewport.mobile
+					? [
+							{ label: 'you', value: self ? `${self.name}${self.issuer ? ', issuer' : ''}` : '' },
+							{ label: 'certificate', value: certDays === undefined ? '' : `${certDays} days left`, color: certDays !== undefined && certDays < 30 ? ('warning' as const) : undefined, tip: when(mesh.certificateExpiresAt) || undefined }
+						]
+					: []),
+				{ label: 'id', value: mesh.id, mono: true, tip: mesh.id },
+				{ label: 'address', value: mesh.address || 'loopback only', mono: true },
+				{ label: 'exposure', value: mesh.exposure || 'unset' },
+				{ label: 'announce', value: mesh.announce ? 'on' : 'off' },
+				{ label: 'CA fingerprint', value: mesh.caFingerprint, mono: true, copy: true, tip: mesh.caFingerprint }
+			]}
+		/>
+	</div>
 {/snippet}
 
-{#snippet title()}
-	<h1 class="title"><Str value={mesh.name} weight={600} width="100%" /></h1>
-{/snippet}
-
-{#snippet standing()}
-	<Cell grow={false}><span class="secondary nowrap">{members(mesh.members)}</span></Cell>
-	{#if self}
-		<Cell grow={false}>
+<PageHeader {tabs} {active}>
+	{#snippet meta()}
+		<Str value={mesh.name} weight={500} width="20ch" />
+		<span>{members(mesh.members)}</span>
+		{#if self && !viewport.mobile}
 			<Row gap={4} wrap={false}>
-				<Str value={self.name} />
-				<StatePill label="you" />
-				{#if self.issuer}<StatePill label="issuer" lamp="primary" />{/if}
+				<Str value={self.name} width="16ch" />
+				<span>(you)</span>
 			</Row>
-		</Cell>
-	{/if}
-	{#if certDays !== undefined}
-		<Cell grow={false}>
+			{#if self.issuer}<StatePill label="issuer" lamp="primary" />{/if}
+		{/if}
+		{#if certDays !== undefined && !viewport.mobile}
 			<Tip text="certificate expires {when(mesh.certificateExpiresAt)}" tag="span">
-				<span class="secondary nowrap" class:warning-text={certDays < 30}>cert {certDays}{thin}d</span>
+				<span class:warning-text={certDays < 30}>cert {certDays}{thin}d</span>
 			</Tip>
-		</Cell>
-	{/if}
-	<Cell grow={false}><InfoTip click content={details} /></Cell>
-{/snippet}
-
-{#snippet actions()}
-	<Cell grow={false} push>
-		<Row gap={8} wrap={false}>
-			<Pop placement="bottom-end" width="20rem">
-				{#snippet content(close)}
-					<Stack gap={12}>
-						<Duration bind:value={ttl} base="s" max={tokenTtlMax} label="TTL" />
-						<Row gap={12} justify="flex-end">
-							<NeoButton class="primary" elevation={2} loading={copying} disabled={ttl <= 0} onclick={() => copyToken(close)}>Copy</NeoButton>
-						</Row>
-					</Stack>
-				{/snippet}
-				<NeoButton elevation={2}>Token</NeoButton>
-			</Pop>
-			<Confirm label="Leave" question="Leave {mesh.name}" danger small={false} onconfirm={leave} />
-			<Menu
-				items={[
-					{ label: 'Rotate authority', onclick: () => ask('rotate') },
-					{ label: 'Hand off issuer', onclick: () => ask('handoff'), disabled: !self?.issuer, description: self?.issuer ? undefined : 'issuer only' },
-					{ label: 'Reset mesh', onclick: () => ask('reset'), danger: true, divider: true }
-				]}
-			/>
-		</Row>
-	</Cell>
-{/snippet}
-
-{#if viewport.mobile}
-	<Stack gap={8}>
-		<Row gap={12} wrap={false}>
-			<Cell min="6rem" max="24ch">{@render title()}</Cell>
-			{@render actions()}
-		</Row>
-		<Row gap={12}>{@render standing()}</Row>
-	</Stack>
-{:else}
-	<Row gap={12}>
-		<Cell grow={false} max="24ch">{@render title()}</Cell>
-		{@render standing()}
-		{@render actions()}
-	</Row>
-{/if}
+		{/if}
+		<InfoTip click content={details} />
+	{/snippet}
+	{#snippet actions()}
+		<Pop placement="bottom-end" width="20rem">
+			{#snippet content(close)}
+				<Duration bind:value={ttl} base="s" max={tokenTtlMax} label="TTL" />
+				<Row gap={12} justify="flex-end">
+					<NeoButton class="primary" elevation={2} loading={copying} disabled={ttl <= 0} onclick={() => copyToken(close)}>Copy</NeoButton>
+				</Row>
+			{/snippet}
+			<NeoButton elevation={2}>Token</NeoButton>
+		</Pop>
+		<Confirm label="Leave" question="Leave {mesh.name}" danger small={false} onconfirm={leave} />
+		<Menu
+			items={[
+				{ label: 'Rotate authority', onclick: () => ask('rotate') },
+				{ label: 'Hand off issuer', onclick: () => ask('handoff'), disabled: !self?.issuer, description: self?.issuer ? undefined : 'issuer only' },
+				{ label: 'Reset mesh', onclick: () => ask('reset'), danger: true, divider: true }
+			]}
+		/>
+		{@render action?.()}
+	{/snippet}
+</PageHeader>
 
 {#if danger}
 	<NameConfirm bind:open={dangerOpen} title={dangers[danger].title} name={mesh.name} message={dangers[danger].message} confirm={dangers[danger].confirm} enabled={danger !== 'handoff' || handoffTo !== undefined} onconfirm={run}>
@@ -183,8 +166,8 @@
 {/if}
 
 <style>
-	.title {
-		display: flex;
-		min-width: 0;
+	/* Wide enough for the fingerprint on a desktop, inside the screen on a phone */
+	.details {
+		width: min(26rem, calc(100vw - 3rem));
 	}
 </style>

@@ -19,13 +19,13 @@
 	const span = $derived(Math.max(1, to - from));
 	// One lane per known endpoint and per lane a trace ran in, idle once nothing ran in the window's last quarter
 	const lanes = $derived.by(() => {
-		const byLane = new Map<string, Trace[]>(endpoints.map((e) => [e, []]));
+		const byLane = new Map<string, { address: boolean; list: Trace[] }>(endpoints.map((e) => [e, { address: true, list: [] }]));
 		for (const t of traces) {
-			const key = laneOf(t, nodeName);
-			if (!byLane.has(key)) byLane.set(key, []);
-			byLane.get(key)!.push(t);
+			const { name, address } = laneOf(t, nodeName);
+			if (!byLane.has(name)) byLane.set(name, { address, list: [] });
+			byLane.get(name)!.list.push(t);
 		}
-		return [...byLane.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([lane, list]) => ({ lane, list, idle: list.every((t) => finished(t) !== undefined && now - (finished(t) ?? 0) > span / 4) }));
+		return [...byLane.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([lane, { address, list }]) => ({ lane, address, list, idle: list.every((t) => finished(t) !== undefined && now - (finished(t) ?? 0) > span / 4) }));
 	});
 	const height = $derived(lanes.reduce((h, l) => h + (l.idle ? 6 : laneHeight), 0) + 4);
 
@@ -51,7 +51,7 @@
 	<div class="lanes" style:height="{height}px">
 		{#each lanes as lane (lane.lane)}
 			<div class="lane" class:idle={lane.idle} style:height="{lane.idle ? 6 : laneHeight}px">
-				<Tip text={lane.lane} tag="span"><span class="name mono ellipsis">{lane.idle ? '' : lane.lane}</span></Tip>
+				<Tip text={lane.lane} tag="span"><span class="name ellipsis" class:mono={lane.address}>{lane.idle ? '' : lane.lane}</span></Tip>
 				<div class="bars">
 					{#each lane.list as t (t.id)}
 						{@const s = started(t)}
@@ -66,16 +66,13 @@
 				</div>
 			</div>
 		{/each}
-		{#if lanes.length === 0}
-			<span class="secondary">No requests in the window</span>
-		{/if}
 	</div>
 </div>
 
 <style>
+	/* Lanes run edge to edge of the list card at its padding, the list head under them drawing the rule */
 	.timeline {
-		padding: 8px 0;
-		border-bottom: 1px solid var(--nebu-border);
+		padding: var(--nebu-space-1) var(--nebu-card-pad, 0) var(--nebu-space-3);
 	}
 	.lanes {
 		display: flex;
@@ -94,7 +91,7 @@
 		display: inline-block;
 		flex: 0 0 16ch;
 		max-width: 16ch;
-		font-size: 12px;
+		font-size: var(--nebu-text-caption);
 		color: var(--nebu-text-muted);
 	}
 	.bars {

@@ -28,12 +28,17 @@
 	{:else}
 		<div class="list">
 			{#each options as o (String(o.value))}
+				{#snippet line()}
+					<span class="line">
+						<span class="text ellipsis">{o.label}</span>
+						{#if o.description}<span class="aside ellipsis">{o.description}</span>{/if}
+					</span>
+				{/snippet}
 				<Tip text={o.tip} tag="div">
 					<NeoCheckbox
 						checked={value.includes(o.value)}
 						disabled={disabled || o.disabled}
-						label={o.label}
-						message={o.description}
+						label={line}
 						elevation={-1}
 						onchange={(e) => toggle(o.value, (e.currentTarget as HTMLInputElement).checked)}
 					/>
@@ -54,5 +59,22 @@
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
+		min-width: 0;
+	}
+	/* The secondary word sits on the label line, muted, never on a line of its own */
+	.line {
+		display: inline-flex;
+		gap: var(--nebu-space-2);
+		align-items: baseline;
+		min-width: 0;
+		max-width: 100%;
+	}
+	.text {
+		min-width: 0;
+	}
+	.aside {
+		min-width: 0;
+		font-size: var(--nebu-text-secondary);
+		color: var(--nebu-text-muted);
 	}
 </style>

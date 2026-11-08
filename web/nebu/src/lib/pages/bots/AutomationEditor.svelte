@@ -78,7 +78,7 @@
 	<FormSection title="Scope" advanced={scopeAdvanced}>
 		<Select bind:value={() => automation.personaId || undefined, (v) => (automation.personaId = v ?? '')} options={personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" clearable placeholder="First persona" />
 		<FieldRow>
-			<Checklist bind:value={automation.guildIds} options={guildOptions(guilds)} label="Guilds" info="Empty is every guild" empty="Not connected" />
+			<Checklist bind:value={automation.guildIds} options={guildOptions(guilds)} label="Guilds" info="Empty is every guild" empty="Start the bot to list guilds" />
 			<ChannelTree bind:value={automation.channelIds} {guilds} label="Channels" info="Empty is every allowed channel" />
 		</FieldRow>
 	</FormSection>

@@ -117,15 +117,15 @@
 				{:else if !url}
 					<NeoSkeletonText lines={1} width="256px" height="256px" />
 				{:else if f.mediaType.startsWith('video/')}
-					<video class="media" src={url} controls><track kind="captions" /></video>
+					<video class="video" src={url} controls><track kind="captions" /></video>
 				{:else}
-					<img class="media" src={url} alt={f.name} />
+					<img class="made" src={url} alt={f.name} />
 				{/if}
 			{/each}
 		</Row>
 	{/if}
 	{#if turn.toolCalls.length}
-		<Stack gap={0}>
+		<div class="calls">
 			{#each turn.toolCalls as c (c.id)}
 				{@const p = pending.find((x) => x.id === c.id)}
 				{@const state = lampOf(c, p !== undefined)}
@@ -169,7 +169,7 @@
 					below={p && !p.server ? resultBox : undefined}
 				/>
 			{/each}
-		</Stack>
+		</div>
 	{/if}
 	{#if turn.error}
 		<Row gap={8} wrap={false}>
@@ -196,13 +196,28 @@
 		max-width: 160px;
 		max-height: 160px;
 		object-fit: cover;
+		border-radius: var(--neo-border-radius);
 	}
-	.media {
+	/* Made images show at the size of the tiles that stood in for them while they were drawn */
+	.made {
+		max-width: min(100%, 256px);
+		max-height: 256px;
+		border-radius: var(--neo-border-radius);
+	}
+	.video {
 		max-width: min(100%, 512px);
+		border-radius: var(--neo-border-radius);
 	}
 	.lines {
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
+	}
+	/* Call rows run to the card edges, their lamps in line with the text above */
+	.calls {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		margin: 0 calc(-1 * var(--nebu-row-inset, 0px));
 	}
 	.answer {
 		flex: 1 1 auto;

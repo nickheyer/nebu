@@ -12,8 +12,8 @@ export type PoolBar = {
 	label: string;
 	// The device name, several joined when the pool is shared
 	name: string;
-	// The total in a short form such as 80G
-	size: string;
+	// Set on a device with no memory pool of its own, drawn without a bar
+	shared: boolean;
 	total: number;
 	free: number;
 	used: number;
@@ -23,18 +23,6 @@ export type PoolBar = {
 
 function terminal(s: InstanceState): boolean {
 	return s === InstanceState.STOPPED || s === InstanceState.FAILED || s === InstanceState.UNSPECIFIED;
-}
-
-// A byte count as the spec writes device sizes, such as 80G or 512G
-export function shortBytes(n: bigint | number): string {
-	let v = Number(n);
-	const units = ['B', 'K', 'M', 'G', 'T', 'P'];
-	let i = 0;
-	while (v >= 1000 && i < units.length - 1) {
-		v /= 1024;
-		i++;
-	}
-	return `${Math.round(v)}${units[i]}`;
 }
 
 function kindLabel(kind: DeviceKind): string {
@@ -107,8 +95,16 @@ export function poolBars(profile: HostProfile | undefined, instances: Iterable<I
 		const cpu = devices.find((d) => d.kind === DeviceKind.CPU);
 		const label = pool.kind === PoolKind.DEVICE ? (devices[0] ? deviceLabel(profile, devices[0]) : pool.id) : pool.kind === PoolKind.UNIFIED ? 'Unified' : 'CPU';
 		const name = pool.kind === PoolKind.DEVICE ? (devices[0]?.name ?? '') : devices.map((d) => d.name).filter(Boolean).join(', ') || (cpu?.name ?? '');
-		return { id: pool.id, kind: pool.kind, label, name, size: shortBytes(pool.totalBytes), total, free, used, segments, devices };
+		return { id: pool.id, kind: pool.kind, label, name, shared: false, total, free, used, segments, devices };
 	});
+}
+
+// Devices with no memory pool of their own, such as an integrated GPU on system memory
+export function sharedDevices(profile: HostProfile | undefined): PoolBar[] {
+	if (!profile) return [];
+	return profile.devices
+		.filter((d) => !profile.pools.some((p) => p.id === d.poolId))
+		.map((d) => ({ id: d.id, kind: PoolKind.UNSPECIFIED, label: deviceLabel(profile, d), name: d.name || d.id, shared: true, total: 0, free: 0, used: 0, segments: [], devices: [d] }));
 }
 
 export function poolSummary(bar: PoolBar): string {

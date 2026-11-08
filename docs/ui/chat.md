@@ -24,13 +24,13 @@ Route: `/chat`, `/chat/<id>`
 └──────────────┴────────────────────────────────────────┴──────────────┘
 ```
 
-**Conversations.** 240px. New, search (daemon query), rows grouped by day: title (24ch). Overflow menu: Rename, Delete.
+**Conversations.** 280px. New and search (daemon query) on one row, then rows grouped by day: title (24ch). Overflow menu: Rename, Delete. Empty: the line alone, New stays in the row above.
 
-**Messages.** Model picker: a Picker over ready routes, text routes first, each option with context and quantization in its tooltip. Turns: name, text as markdown, images as thumbnails. An `(i)` on each assistant turn opens a popover: TTFT, tokens per second, prompt and completion tokens, stop, trace link. A tool call is one line, name, duration, mark, expanding to arguments and result. A failed turn shows one error line and Retry. Streaming appends. Stop replaces Send while streaming.
+**Messages.** Model picker: a Picker over ready routes, text routes first, each option with context and quantization in its tooltip, disabled and reading No ready route while none is. Turns: name, text as markdown, images as thumbnails. An `(i)` on each assistant turn opens a popover: TTFT, tokens per second, prompt and completion tokens, stop, trace link. A tool call is one line, name, duration, mark, expanding to arguments and result. A failed turn shows one error line and Retry. Streaming appends. Stop replaces Send while streaming.
 
 **Composer.** Textarea to eight lines, enter sends. Attach appears only when the route takes images. Image routes replace the composer with Prompt, Size, Steps, Count. Video routes add Seconds and FPS and show a progress turn until the file arrives.
 
-**Settings.** 280px, collapsible. Sections collapsed except Dialect and System.
+**Settings.** 320px, collapsible. Sections collapsed except Dialect and System.
 
 ## Fields
 

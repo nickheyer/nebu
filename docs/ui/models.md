@@ -16,7 +16,7 @@ Route: `/models`, `/models/<source>/<repo>/<group>` opens the panel.
  ○  black-forest-labs/FLUX.1-dev            bf16     24 GB    [Launch] ···
 ```
 
-**Store bar.** Used over limit, warning colour past it. Tooltip: models, partials, caches with bytes. Collect confirms with a partials switch and toasts the result.
+**Store bar.** Used over limit, warning colour past it, the bytes alone without a limit with the bar against the filesystem holding the store. Tooltip: models, partials, caches with bytes. Collect confirms with a partials switch and toasts the result.
 
 **Filters.** Search and three Selects query the daemon. Sort: last used, pulled, size, name.
 

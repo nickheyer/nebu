@@ -9,6 +9,15 @@ export function isWindow(s: string | null | undefined): s is Window {
 	return s === '1m' || s === '5m' || s === '15m' || s === 'range';
 }
 
+// Seconds before now a range starts when the link names no start
+export const rangeStartDefault = 3600;
+
+// The span the page opens on for a remembered window, a range without a start reaching back an hour
+export function landingMs(w: string): number {
+	if (!isWindow(w)) return windowMs['5m'];
+	return w === 'range' ? rangeStartDefault * 1000 : windowMs[w];
+}
+
 // Bytes of each body a trace keeps before the daemon cuts it
 const bodyCap = 1 << 20;
 
@@ -22,10 +31,6 @@ export function finished(t: Trace): number | undefined {
 
 export function firstToken(t: Trace): number | undefined {
 	return date(t.firstTokenAt)?.getTime();
-}
-
-export function firstByte(t: Trace): number | undefined {
-	return date(t.firstByteAt)?.getTime();
 }
 
 export function ttft(t: Trace): number | undefined {
@@ -78,13 +83,6 @@ export function kindWord(k: TraceKind): string {
 
 export const traceKinds = [TraceKind.CHAT, TraceKind.GENERATE, TraceKind.EMBED, TraceKind.COUNT, TraceKind.IMAGE, TraceKind.VIDEO, TraceKind.OTHER];
 
-// The priority band a trace ran in, as the objectives page names them
-export function band(priority: number): string {
-	if (priority > 0) return 'sheds last';
-	if (priority < 0) return 'sheds first';
-	return 'default';
-}
-
 // Items split into equal buckets across a span, each bucket reduced to one value
 export function buckets<T>(items: T[], at: (item: T) => number, from: number, to: number, count: number, value: (list: T[]) => number): number[] {
 	const size = Math.max(1, (to - from) / count);
@@ -103,16 +101,6 @@ export function capped(text: string, recorded?: bigint): boolean {
 	return n > bodyCap - 4;
 }
 
-export function isJson(text: string): boolean {
-	if (!text.trim()) return true;
-	try {
-		JSON.parse(text);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
 // A moment as a short date and time, the date left out for today
 export function stamp(ms: number, now = Date.now()): string {
 	const d = new Date(ms);
@@ -121,10 +109,10 @@ export function stamp(ms: number, now = Date.now()): string {
 }
 
 // The lane a trace runs in on the timeline, its endpoint, the node it went to, or none
-export function laneOf(t: Trace, nodeName: (id: string) => string): string {
-	if (t.endpoint) return t.endpoint;
-	if (t.nodeId) return `node ${nodeName(t.nodeId)}`;
-	return 'not routed';
+export function laneOf(t: Trace, nodeName: (id: string) => string): { name: string; address: boolean } {
+	if (t.endpoint) return { name: t.endpoint, address: true };
+	if (t.nodeId) return { name: `node ${nodeName(t.nodeId)}`, address: false };
+	return { name: 'not routed', address: false };
 }
 
 export type Mark = { id: 'forwarded' | 'translated' | 'failedOpen' | 'fallbacks'; tip: string; count?: number };

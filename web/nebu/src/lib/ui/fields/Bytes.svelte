@@ -56,10 +56,18 @@
 		gap: 4px;
 		min-width: 0;
 	}
+	/* The number takes the width the unit choice leaves, both on one line */
 	.controls {
 		display: flex;
-		flex-wrap: wrap;
 		gap: 8px;
 		align-items: center;
+		min-width: 0;
+	}
+	.controls > :global(:first-child) {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.controls > :global(:last-child) {
+		flex: 0 0 auto;
 	}
 </style>

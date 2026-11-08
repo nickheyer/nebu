@@ -1,39 +1,66 @@
+/*
+ * Base element styles and the small set of shared utility classes.
+ * Layout belongs in components. This file sets type, links, buttons and text helpers.
+ */
+
 [neo-theme-root] {
 	--neo-btn-margin: 0px;
 	--neo-shadow-margin: 0px;
 }
+
 a:not(.neo-button) {
 	color: var(--neo-color-primary);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 2px;
 }
+
+/* Headings carry hierarchy. One h1 per page, h2 for sections, h3 inside a section. */
 h1,
 h2,
 h3 {
 	margin: 0;
 	font-weight: 600;
-	line-height: 1.3;
+	letter-spacing: -0.01em;
+	line-height: var(--nebu-leading-tight);
 }
 h1 {
-	font-size: 24px;
+	font-size: var(--nebu-text-title);
 }
 h2 {
-	font-size: 17px;
+	font-size: var(--nebu-text-heading);
 }
 h3 {
-	font-size: 15px;
+	font-size: var(--nebu-text-body);
+	font-weight: 500;
 }
 p {
 	margin: 0;
 }
+/* The neo reset caps p and li at 80ch for prose. Layout lists and status lines opt out with .rows or .unmeasured. */
+.rows > li,
+li.unmeasured,
+p.unmeasured {
+	max-width: none;
+}
+
+/* Text helpers */
 .muted {
 	color: var(--nebu-text-muted);
 }
+.faint {
+	color: var(--nebu-text-faint);
+}
 .secondary {
-	font-size: 13px;
+	font-size: var(--nebu-text-secondary);
+	color: var(--nebu-text-muted);
+}
+.caption {
+	font-size: var(--nebu-text-caption);
 	color: var(--nebu-text-muted);
 }
 .mono {
 	font-family: var(--nebu-font-mono);
-	font-size: 13px;
+	font-size: var(--nebu-text-secondary);
 }
 .tabular {
 	font-variant-numeric: tabular-nums;
@@ -50,27 +77,26 @@ p {
 	white-space: nowrap;
 	text-overflow: ellipsis;
 }
-.hairline {
-	border-top: 1px solid var(--nebu-border);
+.nowrap {
+	white-space: nowrap;
 }
 .label {
-	font-size: 13px;
+	font-size: var(--nebu-text-secondary);
 	font-weight: 500;
 	color: var(--nebu-text-muted);
 }
-.screen {
-	color: var(--nebu-screen-text);
-	font-family: var(--nebu-font-mono);
-	font-size: 13px;
-	line-height: 1.5;
-	background: var(--nebu-screen-background);
-	border: 1px solid var(--nebu-screen-border);
-	border-radius: 8px;
-	box-shadow: inset 1px 1px 3px rgb(0 0 0 / 50%);
+.measure {
+	max-width: var(--nebu-measure);
 }
-.screen .dim {
-	color: var(--nebu-screen-text-muted);
+.hairline {
+	border-top: 1px solid var(--nebu-border);
 }
+.fill {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/* Tone */
 .warning-text {
 	color: var(--neo-color-warning);
 }
@@ -80,13 +106,23 @@ p {
 .success-text {
 	color: var(--neo-color-success);
 }
-.fill {
-	flex: 1 1 auto;
-	min-width: 0;
+
+/* Terminal-like surface for logs and command output */
+.screen {
+	color: var(--nebu-screen-text);
+	font-family: var(--nebu-font-mono);
+	font-size: var(--nebu-text-secondary);
+	line-height: 1.5;
+	background: var(--nebu-screen-background);
+	border: 1px solid var(--nebu-screen-border);
+	border-radius: var(--neo-border-radius);
+	box-shadow: inset 1px 1px 3px rgb(0 0 0 / 50%);
 }
-.nowrap {
-	white-space: nowrap;
+.screen .dim {
+	color: var(--nebu-screen-text-muted);
 }
+
+/* Buttons. One primary per view. Everything else is quiet. */
 .neo-button.primary {
 	--neo-btn-bg-color: var(--neo-color-primary);
 	--neo-btn-bg-color-hover: color-mix(in srgb, var(--neo-color-primary), var(--neo-background-color) 12%);
@@ -95,7 +131,86 @@ p {
 	--neo-btn-text-color-active: var(--neo-background-color);
 	font-weight: 500;
 }
+.neo-button.danger {
+	--neo-btn-text-color: var(--neo-color-error);
+	--neo-btn-text-color-hover: var(--neo-color-error);
+	--neo-btn-text-color-active: var(--neo-color-error);
+}
+/* A disabled button keeps its shape and loses its depth, never gaining a border */
+.neo-button:disabled,
+.neo-button[disabled='true'] {
+	--neo-btn-text-color-disabled: var(--nebu-disabled-text);
+	--neo-btn-border-color-disabled: transparent;
+}
 .neo-button.primary:disabled,
 .neo-button.primary[disabled='true'] {
-	--neo-btn-bg-color: color-mix(in srgb, var(--neo-color-primary) 40%, var(--neo-background-color));
+	--neo-btn-bg-color: var(--nebu-disabled-fill);
+	--neo-btn-box-shadow: var(--neo-box-shadow-flat);
+}
+
+/* Steppers: cancel is a quiet exit, never red. The last step's forward button carries the accent. */
+.neo-stepper-controls .neo-stepper-controls-previous {
+	--neo-btn-text-color: var(--nebu-text-muted);
+	--neo-btn-text-color-hover: var(--neo-text-color);
+	--neo-btn-text-color-active: var(--neo-text-color);
+}
+
+/* Inputs */
+.neo-input-group[data-placement='top'] .neo-label-container .neo-label,
+.neo-textarea-group[data-placement='top'] .neo-label-container .neo-label,
+.fieldlabel .neo-label {
+	--neo-label-padding: 0;
+}
+/* A label over its box sits one space step above it on its outer edge, as FieldLabel does */
+.neo-input-group[data-placement='top'] {
+	margin-top: calc(var(--neo-input-margin-top) + var(--nebu-space-1));
+}
+.neo-textarea-group[data-placement='top'] {
+	margin-top: calc(var(--neo-textarea-margin-top) + var(--nebu-space-1));
+}
+.neo-input-group[data-placement='top'] .neo-label-container .neo-label {
+	top: calc(0% - var(--neo-input-margin-top) - var(--nebu-space-1));
+	left: calc(-1 * var(--neo-border-width, 1px));
+}
+.neo-textarea-group[data-placement='top'] .neo-label-container .neo-label {
+	top: calc(0% - var(--neo-textarea-margin-top) - var(--nebu-space-1));
+	left: calc(-1 * var(--neo-border-width, 1px));
+}
+.neo-switch-container {
+	padding-left: 0;
+}
+.neo-input-display-content {
+	width: 100%;
+	min-width: 0;
+}
+/* Items trailing a field's box, centred on the box rather than on the label over it */
+.trail {
+	display: inline-flex;
+	flex: 0 0 auto;
+	gap: var(--nebu-space-2);
+	align-items: center;
+	align-self: flex-end;
+	min-height: var(--nebu-input-height);
+}
+
+/* Number boxes step with their own buttons or a slider, never the native spinner */
+input[type='number'] {
+	appearance: textfield;
+}
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+	margin: 0;
+	appearance: none;
+}
+
+/* A dialog lays its content out as a flex row, the content filling the width the dialog is given */
+.neo-dialog > :not(.neo-handle-group, .neo-handle) {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/* Tabs sit on a baseline rule so they read as one strip */
+.neo-tabs.nebu-tabs {
+	width: 100%;
+	border-bottom: 1px solid var(--nebu-border);
 }

@@ -21,15 +21,19 @@
 
 <div class="field">
 	<NeoPassword bind:value {label} placeholder={set && !value ? '••••••••' : (placeholder ?? '')} {disabled} {required} elevation={-1} buttonProps={{ text: true }} placement={label ? 'top' : 'inside'} floating={false} width="100%" message={error ?? message} {error} {autocomplete} />
-	{#if set && !value}<NeoPill size="small" text tinted label="set" />{/if}
-	{#if info}<InfoTip text={info} />{/if}
+	{#if (set && !value) || info}
+		<span class="trail">
+			{#if set && !value}<NeoPill size="small" text tinted label="set" />{/if}
+			{#if info}<InfoTip text={info} />{/if}
+		</span>
+	{/if}
 </div>
 
 <style>
 	.field {
 		display: flex;
 		gap: 8px;
-		align-items: center;
+		align-items: flex-end;
 		min-width: 0;
 	}
 	.field :global(.neo-input-group) {

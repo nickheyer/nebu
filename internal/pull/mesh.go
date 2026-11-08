@@ -379,7 +379,7 @@ func (p *Puller) runMesh(ctx context.Context, h *tasks.Handle, landings []*meshL
 		return fmt.Errorf("evict: %w", err)
 	}
 	defer p.Store.Hold()()
-	h.Progress(0, total, "fetching")
+	h.ProgressBytes(0, total, "fetching")
 	for _, l := range landings {
 		names := make([]string, 0, len(l.holders))
 		for _, from := range l.holders {
@@ -402,7 +402,7 @@ func (p *Puller) runMesh(ctx context.Context, h *tasks.Handle, landings []*meshL
 			return err
 		}
 	}
-	h.Progress(total, total, "done")
+	h.ProgressBytes(total, total, "done")
 	return nil
 }
 

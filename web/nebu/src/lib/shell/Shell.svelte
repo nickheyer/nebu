@@ -8,7 +8,7 @@
 	let { children }: { children: Snippet } = $props();
 </script>
 
-<div class="shell" class:mobile={viewport.mobile} class:ultrawide={viewport.ultrawide}>
+<div class="shell" class:mobile={viewport.mobile}>
 	{#if !viewport.mobile}
 		<Rail />
 	{/if}
@@ -26,9 +26,20 @@
 </div>
 
 <style>
+	/* The chrome around a page, read by pages that fill the viewport height */
 	.shell {
+		--nebu-gutter: var(--nebu-space-6);
+		--nebu-pad-top: var(--nebu-space-5);
+		--nebu-pad-bottom: var(--nebu-space-6);
+
 		display: flex;
 		min-height: 100dvh;
+	}
+	.shell.mobile {
+		--nebu-card-pad-base: var(--nebu-space-4);
+		--nebu-gutter: var(--nebu-space-4);
+		--nebu-pad-top: var(--nebu-space-4);
+		--nebu-pad-bottom: var(--nebu-space-5);
 	}
 	.body {
 		display: flex;
@@ -40,16 +51,17 @@
 	.content {
 		flex: 1 1 auto;
 		min-height: 0;
-		padding: 24px;
+		padding: var(--nebu-pad-top) var(--nebu-gutter) var(--nebu-pad-bottom);
 	}
+	/* Every page shares the top bar's frame so titles, tabs and content start on one edge */
 	.page {
-		max-width: 1440px;
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-5);
+		max-width: calc(var(--nebu-frame-max) - 2 * var(--nebu-gutter));
 		margin: 0 auto;
 	}
-	.ultrawide .page {
-		max-width: 1920px;
-	}
-	.mobile .content {
-		padding: 16px;
+	.mobile .page {
+		gap: var(--nebu-space-4);
 	}
 </style>

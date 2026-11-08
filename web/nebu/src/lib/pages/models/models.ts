@@ -1,6 +1,6 @@
 import type { Component } from 'svelte';
 import { reason, rpc } from '#lib/api/transport.js';
-import { bytes, enumLabel, num } from '#lib/format.js';
+import { bytes, enumLabel, num, plural } from '#lib/format.js';
 import { ArtifactRole, ModelKind, ModelKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
 import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 import type { StoredModel } from '#lib/proto/nebu/v1/store_pb.js';
@@ -31,6 +31,16 @@ export function launchHref(m: ModelRef, runtimeId?: string, context?: number): s
 	return `/serve/launch?${q}`;
 }
 
+// The width a select needs to show its longest option whole beside its icon and caret
+export function selectWidth(labels: string[]): string {
+	return `${Math.max(6, ...labels.map((l) => l.length)) + 8}ch`;
+}
+
+// The count of a group's weight files by their shard counts, named as shards when they number one checkpoint
+export function weightsLabel(shardCounts: number[]): string {
+	return shardCounts.every((n) => n > 1) ? plural(shardCounts.length, 'weight shard') : plural(shardCounts.length, 'weight file');
+}
+
 export function kindLabel(kind: ModelKind): string {
 	return kind === ModelKind.UNSPECIFIED ? '' : enumLabel(ModelKindSchema, kind);
 }
@@ -43,6 +53,12 @@ export function paramCount(n: bigint | number | undefined): string {
 	if (v >= 1e9) return `${v >= 1e10 ? Math.round(v / 1e9) : (v / 1e9).toFixed(1)}B`;
 	if (v >= 1e6) return `${Math.round(v / 1e6)}M`;
 	return `${Math.round(v / 1e3)}K`;
+}
+
+// A parameter count with its unit, 70B params, telling it from a byte size beside it
+export function paramLabel(n: bigint | number | undefined): string {
+	const count = paramCount(n);
+	return count ? `${count} params` : '';
 }
 
 // A context length in tokens as 8K or 128K when it is a whole number of thousands

@@ -11,7 +11,7 @@ Route: `/gateway/routes`, `/gateway/pools`, `/gateway/objectives`, `/gateway/sch
  Routes 5 │ Pools 4 │ Objectives 2 │ Schedulers 1 │ Imports 1
 ```
 
-Four facts and an `(i)` popover: listeners with shared marks, metrics address, default policy.
+Four facts, the listener with TLS or plain after its port, and an `(i)` popover: listeners with shared marks, metrics address, default policy.
 
 ## Routes
 

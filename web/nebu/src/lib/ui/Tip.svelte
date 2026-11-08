@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { NeoTooltip } from '#lib/neo/floating/tooltips/index.js';
 	import type { NeoTooltipPlacement } from '#lib/neo/floating/common/neo-placement.model.js';
+	import { capitalize } from '#lib/format.js';
 
 	export type Fact = { label: string; value: string };
 
@@ -52,7 +53,7 @@
 				<div class="facts">
 					{#each facts as f (f.label)}
 						<div class="fact">
-							<span class="k">{f.label}</span>
+							<span class="k">{capitalize(f.label)}</span>
 							<span class="v">{f.value}</span>
 						</div>
 					{/each}

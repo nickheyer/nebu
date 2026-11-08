@@ -7,43 +7,37 @@ Route: `/`
 ## Default view
 
 ```
-┌───────────┬───────────┬───────────┬───────────┬───────────┐
-│ Serving   │ Requests  │ Attention │ Tasks     │ Store     │
-│ 3 ready   │ 42 /min   │ 2         │ 1 active  │ 41 %      │
-└───────────┴───────────┴───────────┴───────────┴───────────┘
+ Overview  ● All clear                                                [Launch]
 
-Attention
- ●  qwen-72b failed          CUDA out of memory           [Open]
- ●  cert expires in 6 days   mesh home                    [Open]
-
-Memory
- GPU0  H100 80G   ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░▒▒▒░░   68 / 80 GB
- GPU1  H100 80G   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░   72 / 80 GB
- CPU   512G       ▓░░░░░░░░░░░░░░░░░░░░░    6 / 512 GB
-
-Serving
- ●  llama-70b     Llama-3.3-70B Q4_K_M       3 in flight   [Open]
- ●  embed-sm      nomic-embed-text           0 in flight   [Open]
- ◐  qwen-72b      starting                                 [Open]
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Runtimes        ─▶ Models        ─▶ Instances      ─▶ Routes       ─▶ Traffic │
+│ 2 installed        5 stored         3 running         3 ready         42 /min │
+│ llama.cpp, vLLM    412 GB on disk   1 failed          1 pending       ▁▂▃▅▃▂  │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ Needs attention 2 ─────────────────────────┐ ┌ Memory ───────────────────────┐
+│ ●  qwen-72b      CUDA out of memory        │ │ GPU0  H100   ▓▓▓▓▓▓░░  68 / 80 │
+│ ●  cert          expires in 6 days         │ │ CPU   512G   ▓░░░░░░░   6 / 512│
+└────────────────────────────────────────────┘ └───────────────────────────────┘
+┌ Serving 3 ─────────────────────────────────┐ ┌ Recent tasks ─────────────────┐
+│ ●  llama-70b   Llama-3.3-70B Q4_K_M      3 │ │ ✓ pull  Qwen2.5-72B    2m ago │
+│ ●  embed-sm    nomic-embed-text          0 │ │ ✗ run   qwen-72b       9m ago │
+└────────────────────────────────────────────┘ └───────────────────────────────┘
 ```
 
-** Tiles Amendment ** Tiles are bad and lazy UI/UX, do not do this. Do better, Think of something more innovative on the spot that satisfies the rest of the design constraints and screen widths. inline tiles/cards are generally not good.
-<!-- **Tiles.** Five equal tiles in a Row. Each is a link. Tooltip on each: Serving lists pending and failed counts, Requests gives error rate and TTFT p50, Store gives bytes used and the limit. -->
+**Pipeline.** The path from a runtime to traffic, one stage each for Runtimes, Models, Instances, Routes and Traffic, each a link to its page with its count, a lamp and one detail line. Traffic carries the request sparkline. The line between two stages lights in the accent once the first holds anything. The first empty stage offers its next step as the one accent button, later empty stages as a quiet link, so a fresh host reads as three steps from empty to serving.
 
-**Attention.** Rows: dot, title (name, 24ch), reason (64ch), Open. Sources: false conditions on any resource, failed instances with their first triage hint, pools with no ready endpoint, store over its limit, certificate inside thirty days, failed tool servers, failed or degraded bots, tasks failed in the last hour. Empty: All clear. At most eight rows, then Show all.
+**Attention.** Shown while anything needs a person. Rows: dot, title (name, 24ch), reason (64ch), opening the resource on click. Sources: false conditions on any resource, failed instances with their first triage hint, pools with no ready endpoint, store over its limit, certificate inside thirty days, failed tool servers, failed or degraded bots, tasks failed in the last hour. The header reads All clear while it is empty. At most eight rows, then Show all.
 
 **Memory.** One bar per device. Segment names and bytes in the tooltip. You will need to update a little .go code so that memory is not represented twice, for example we should not show an integrated gpu in cpu with system ram. Do not hardcode or string check anything look at the api, there is a option to do this the right and intended way generically.
 
-**Serving.** Rows: state dot, route name, model (40ch), in flight, Open. Ready first. Eight rows, then Show all.
+**Serving.** Rows: state dot, route name, model (40ch), in flight, opening the route on click. Ready first. Eight rows, then Show all. Empty: Nothing serving with Launch.
 
-## First run
-
-With no install, no model and no instance the page shows three steps in a Stack, each one line with its state and one button: Install a runtime, Pull a model, Launch.
+**Recent tasks.** The six newest tasks: mark, kind pill, title, age, opening the task on click.
 
 ## Widths
 
-Ultrawide: Split, Attention and Serving left, Memory right. Standard: Stack as drawn. Mobile: tiles wrap two per row, rows drop in flight into the expand.
+Wide: the pipeline across, then two columns, Attention and Serving left, Memory and Recent tasks right. Under 1000px one column. The pipeline wraps two stages per row under 860px and one under 520px.
 
 ## Data
 
-Live stream for every kind listed. `GetGatewayStatus` once for the Requests tile baseline.
+Live stream for every kind listed. `ListTraces` over the last five minutes and `ListRuntimes` once on load.

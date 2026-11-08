@@ -12,9 +12,10 @@
 	import { prefs } from '#lib/state/prefs.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
 	import Empty from '#lib/ui/Empty.svelte';
+	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import LoadMore from '#lib/ui/LoadMore.svelte';
-	import Pop from '#lib/ui/Pop.svelte';
+	import RowAction from '#lib/ui/RowAction.svelte';
 	import SearchBox from '#lib/ui/SearchBox.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
@@ -22,18 +23,19 @@
 	import MultiSelect from '#lib/ui/fields/MultiSelect.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
-	import Cell from '#lib/ui/layout/Cell.svelte';
-	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
-	import Row from '#lib/ui/layout/Row.svelte';
-	import Sheet from '#lib/ui/layout/Sheet.svelte';
-	import Stack from '#lib/ui/layout/Stack.svelte';
-	import { kindLabel, paramCount } from '#lib/pages/models/models.js';
-	import { lastSearch, repoPath } from '#lib/pages/discover/discover.js';
+	import Card from '#lib/ui/layout/Card.svelte';
+	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
+	import Toolbar from '#lib/ui/layout/Toolbar.svelte';
+	import { kindLabel, paramLabel, selectWidth } from '#lib/pages/models/models.js';
+	import { modelsTabs } from '#lib/pages/models/tabs.js';
+	import { compact, lastSearch, repoPath } from '#lib/pages/discover/discover.js';
 	import ArrowDownIcon from 'phosphor-svelte/lib/ArrowDownIcon';
 	import ArrowUpIcon from 'phosphor-svelte/lib/ArrowUpIcon';
 	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
 	import FunnelIcon from 'phosphor-svelte/lib/FunnelIcon';
-	import WarningIcon from 'phosphor-svelte/lib/WarningIcon';
+	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
+	import PlugsIcon from 'phosphor-svelte/lib/PlugsIcon';
+	import SortAscendingIcon from 'phosphor-svelte/lib/SortAscendingIcon';
 
 	type Params = { sourceId: string; query: string; sort: string; ascending: boolean; filters: Record<string, string>; author: string };
 
@@ -59,10 +61,15 @@
 
 	const source = $derived(sources.find((s) => s.source?.id === sourceId));
 	const caps = $derived(source?.capabilities);
-	const sourceOptions = $derived(sources.map((s) => ({ value: s.source?.id ?? '', label: s.source?.name || s.source?.id || '' })));
+	// The remembered source stands in as the one option until the list answers, so the select never shows its placeholder
+	const sourceOptions = $derived(sources.length ? sources.map((s) => ({ value: s.source?.id ?? '', label: s.source?.name || s.source?.id || '' })) : sourceId ? [{ value: sourceId, label: prefs.discoverSourceLabel || sourceId }] : []);
 	const sorts = $derived((caps?.sorts ?? []).map((s) => ({ value: s.id, label: s.label })));
+	const sourceWidth = $derived(selectWidth(sourceOptions.map((o) => o.label)));
+	const sortWidth = $derived(selectWidth(sorts.map((o) => o.label)));
 	const reversible = $derived(caps?.sorts.find((s) => s.id === sort)?.reversible ?? false);
 	const facets = $derived(caps?.facets ?? []);
+	// The author field stands down when the source already offers author as a facet
+	const authorFacet = $derived(facets.some((f) => /^author$/i.test(f.id) || /^author$/i.test(f.label)));
 	const activeFilters = $derived(Object.values(filters).filter((v) => v.length).length + (author ? 1 : 0));
 	const stored = $derived(new Set([...live.models.values()].map((m) => `${m.sourceId}\n${m.repo}`)));
 	// The source's own error, a missing token, then the warnings the last search answered with
@@ -99,7 +106,9 @@
 	onMount(loadSources);
 
 	$effect(() => {
-		if (sourceId) prefs.discoverSource = sourceId;
+		if (!sourceId) return;
+		prefs.discoverSource = sourceId;
+		if (source?.source) prefs.discoverSourceLabel = source.source.name || source.source.id;
 	});
 
 	$effect(() => {
@@ -154,117 +163,108 @@
 			.join('\n');
 	}
 
-	// Kind, up to three formats, license
+	// Kind, up to three formats, license, each word once
 	function phrase(h: SearchHit): string {
-		return [kindLabel(h.kind), ...h.formats.slice(0, 3), h.license].filter(Boolean).join(' · ');
+		const seen = new Set<string>();
+		return [kindLabel(h.kind), ...h.formats.slice(0, 3), h.license].filter((w) => w && !seen.has(w.toLowerCase()) && seen.add(w.toLowerCase())).join(' · ');
 	}
 
 	function sizeOf(h: SearchHit): string {
-		return h.sizeBytes ? bytes(h.sizeBytes) : paramCount(h.parameters);
+		return h.sizeBytes ? bytes(h.sizeBytes) : paramLabel(h.parameters);
 	}
 </script>
 
 {#snippet facetFields()}
 	{#each facets as f (f.id)}
 		{#if f.freeform}
-			<Chips bind:value={filters[f.id]} label={f.label} />
+			<Chips bind:value={() => filters[f.id] ?? [], (v) => setFacet(f, v)} label={f.label} />
 		{:else if f.multi}
-			<MultiSelect bind:value={filters[f.id]} options={f.values.map((v) => ({ value: v.id, label: v.label, description: v.group || undefined }))} label={f.label} search={f.values.length > 8} placeholder="Any" />
+			<MultiSelect bind:value={() => filters[f.id] ?? [], (v) => setFacet(f, v)} options={f.values.map((v) => ({ value: v.id, label: v.label, description: v.group || undefined }))} label={f.label} search={f.values.length > 8} placeholder="Any" />
 		{:else}
 			<Select value={filters[f.id]?.[0]} options={f.values.map((v) => ({ value: v.id, label: v.label, description: v.group || undefined }))} label={f.label} search={f.values.length > 8} placeholder="Any" clearable onchange={(v) => setFacet(f, v ? [v] : [])} />
 		{/if}
 	{/each}
-	<Text value={author} label="Author" max={64} onchange={(v) => (author = v.trim())} />
+	{#if !authorFacet}<Text value={author} label="Author" max={64} onchange={(v) => (author = v.trim())} />{/if}
 {/snippet}
 
-{#snippet filtersButton()}
-	<NeoButton elevation={2} onclick={() => (filtersOpen = true)}>
-		{#snippet icon()}<FunnelIcon size={20} />{/snippet}
-		Filters{#if activeFilters}&nbsp;{activeFilters}{/if}
-	</NeoButton>
+{#snippet sortIcon()}<SortAscendingIcon size={16} />{/snippet}
+
+{#snippet toolbar()}
+	<Toolbar>
+		<span class="source" class:grow={viewport.mobile}><Select value={sourceId} options={sourceOptions} placeholder="Source" loading={!sourcesLoaded} onchange={sourceChanged} width={viewport.mobile ? '100%' : sourceWidth} /></span>
+		<span class="grow"><SearchBox bind:value={query} placeholder={caps?.repoExample ? `Search, such as ${caps.repoExample}` : 'Search'} width="100%" /></span>
+		<span class="sort"><Select bind:value={sort} options={sorts} placeholder="Sort" disabled={!sorts.length} icon={sortIcon} width={sortWidth} /></span>
+		{#if reversible}
+			<NeoButton text aria-label={ascending ? 'Ascending' : 'Descending'} onclick={() => (ascending = !ascending)}>
+				{#snippet icon()}{#if ascending}<ArrowUpIcon size={20} />{:else}<ArrowDownIcon size={20} />{/if}{/snippet}
+			</NeoButton>
+		{/if}
+		<NeoButton elevation={2} aria-expanded={filtersOpen} onclick={() => (filtersOpen = !filtersOpen)}>
+			{#snippet icon()}<FunnelIcon size={20} />{/snippet}
+			Filters{#if activeFilters}&nbsp;{activeFilters}{/if}
+		</NeoButton>
+	</Toolbar>
 {/snippet}
 
-<Stack gap={16}>
-	<Row gap={12}>
-		<Cell min="11rem" max="14rem">
-			<Select value={sourceId} options={sourceOptions} placeholder="Source" onchange={sourceChanged} />
-		</Cell>
-		<Cell min={viewport.mobile ? '100%' : '16rem'} max="32rem">
-			<SearchBox bind:value={query} placeholder={caps?.repoExample ? `Search, such as ${caps.repoExample}` : 'Search'} width="100%" />
-		</Cell>
-		{#if sorts.length}
-			<Cell min="9rem" max="12rem" push>
-				<Select bind:value={sort} options={sorts} placeholder="Sort" />
-			</Cell>
-			{#if reversible}
-				<Cell grow={false}>
-					<NeoButton text aria-label={ascending ? 'Ascending' : 'Descending'} onclick={() => (ascending = !ascending)}>
-						{#snippet icon()}{#if ascending}<ArrowUpIcon size={20} />{:else}<ArrowDownIcon size={20} />{/if}{/snippet}
-					</NeoButton>
-				</Cell>
-			{/if}
-		{/if}
-		{#if facets.length}
-			<Cell grow={false} push={!sorts.length}>
-				{#if viewport.mobile}
-					{@render filtersButton()}
-				{:else}
-					<Pop placement="bottom-end" width="22rem">
-						{#snippet content()}{@render facetFields()}{/snippet}
-						<NeoButton elevation={2}>
-							{#snippet icon()}<FunnelIcon size={20} />{/snippet}
-							Filters{#if activeFilters}&nbsp;{activeFilters}{/if}
-						</NeoButton>
-					</Pop>
-				{/if}
-			</Cell>
-		{/if}
-	</Row>
+{#snippet settingsAction()}<RowAction label="Settings" href="/settings/sources" />{/snippet}
+
+<PageHeader tabs={modelsTabs} active="discover" />
+
+<Card flush tools={toolbar}>
+	{#if filtersOpen}
+		<div class="filters">{@render facetFields()}</div>
+	{/if}
 	{#if warning.length}
-		<Row gap={12}>
-			<Cell grow={false}><span class="warning-text warn"><WarningIcon size={20} /></span></Cell>
-			<Cell min="8rem"><Tip text={warning.join('\n')} tag="span"><span class="ellipsis">{warning[0]}</span></Tip></Cell>
-			<Cell grow={false} push><NeoButton text href="/settings/sources">Settings</NeoButton></Cell>
-		</Row>
+		<ListRow lamp="warning" primary={warning[0] ?? ''} primaryKind="message" primaryTip={warning.join('\n')} action={settingsAction} />
 	{/if}
 	{#if sourcesError}
-		<Empty text={sourcesError} action="Retry" onclick={loadSources} />
+		<Empty icon={PlugsIcon} text="Sources failed to list" hint={sourcesError} action="Retry" onclick={loadSources} />
 	{:else if sourcesLoaded && sources.length === 0}
-		<Empty text="No sources" action="Settings" href="/settings/sources" />
+		<Empty icon={PlugsIcon} text="No sources" hint="Add a model source and its repositories show up here to search" action="Sources" href="/settings/sources" primary />
 	{:else if !sourcesLoaded || !list.settled}
-		<Skeleton rows={8} />
+		<Skeleton rows={10} dot={false} primary="40ch" secondary="28ch" facts={2} action={false} menu={false} />
 	{:else if list.error}
-		<Empty text={list.error} action="Retry" onclick={() => list.refresh()} />
+		<Empty icon={MagnifyingGlassIcon} text="Search failed" hint={list.error} action="Retry" onclick={() => list.refresh()} />
+	{:else if list.items.length === 0 && (query || activeFilters)}
+		<Empty icon={MagnifyingGlassIcon} text="No results" hint="Nothing in {source?.source?.name || sourceId} matches this search and these filters" action="Clear filters" onclick={clearFilters} />
 	{:else if list.items.length === 0}
-		{#if query || activeFilters}
-			<Empty text="No results" action="Clear filters" onclick={clearFilters} />
-		{:else}
-			<Empty text="No results" />
-		{/if}
+		<Empty icon={MagnifyingGlassIcon} text="No results" hint="{source?.source?.name || sourceId} answered with no repositories" action="Sources" href="/settings/sources" />
 	{:else}
-		<Stack gap={0}>
+		<List head={{ primary: 'Repository', secondary: 'Details', facts: ['Downloads', 'Size'] }}>
 			{#each list.items as h (`${h.sourceId}\n${h.repo}`)}
 				{@const inStore = stored.has(`${h.sourceId}\n${h.repo}`)}
-				<ListRow primary={h.repo} primaryKind="repo" primaryTip={hitTip(h) ? `${h.repo}\n${hitTip(h)}` : h.repo} secondary={phrase(h)} facts={[{ value: sizeOf(h) }]} href={repoPath(h.sourceId, h.repo)}>
+				<ListRow
+					primary={h.repo}
+					primaryWidth="40ch"
+					primaryTip={hitTip(h) ? `${h.repo}\n${hitTip(h)}` : h.repo}
+					secondary={phrase(h)}
+					secondaryWidth="28ch"
+					facts={[{ value: h.downloads ? compact(h.downloads) : '', tip: h.downloads ? `${num(h.downloads)} downloads` : undefined }, { value: sizeOf(h) }]}
+					onclick={() => goto(repoPath(h.sourceId, h.repo))}
+				>
 					{#snippet badges()}
 						{#if inStore}<Tip text="In the store" tag="span"><span class="stored success-text"><CheckCircleIcon size={16} /></span></Tip>{/if}
 					{/snippet}
-					{#snippet action()}<NeoButton text href={repoPath(h.sourceId, h.repo)}>Open</NeoButton>{/snippet}
 				</ListRow>
 			{/each}
-		</Stack>
+		</List>
 		<LoadMore next={list.next} loading={list.loading} onmore={() => list.more()} />
 	{/if}
-</Stack>
-
-<Sheet bind:open={filtersOpen}>
-	<PanelHeader title="Filters" onclose={() => (filtersOpen = false)} />
-	<Stack gap={12}>{@render facetFields()}</Stack>
-</Sheet>
+</Card>
 
 <style>
-	.warn,
+	.source,
+	.sort {
+		display: inline-flex;
+	}
 	.stored {
 		display: inline-flex;
+	}
+	.filters {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+		gap: var(--nebu-space-3) var(--nebu-space-4);
+		align-items: end;
+		padding: 0 var(--nebu-card-pad) var(--nebu-space-4);
 	}
 </style>

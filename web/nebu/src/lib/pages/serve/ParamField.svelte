@@ -25,6 +25,8 @@
 	const bounded = $derived((p.type === ParamType.INT || p.type === ParamType.FLOAT) && max > min);
 	const current = $derived(values[p.name] ?? '');
 	const info = $derived(p.description || undefined);
+	// An unset param shows the runtime's default as its placeholder, never a number standing in for it
+	const placeholder = $derived(p.default || 'Default');
 
 	// Stored parts whose architecture the param picks, any stored model when it picks a model
 	const picks = $derived.by(() => {
@@ -51,7 +53,7 @@
 	{/if}
 	{#if !automatic}
 		{#if p.choices.length}
-			<Select value={current || undefined} options={p.choices.map((c) => ({ value: c, label: c }))} {label} {info} clearable onchange={set} />
+			<Select value={current || undefined} options={p.choices.map((c) => ({ value: c, label: c }))} {label} {info} {placeholder} clearable onchange={set} />
 		{:else if p.picks}
 			<Select value={current || undefined} options={picks} {label} {info} clearable search placeholder="Stored part" onchange={set} />
 		{:else if p.type === ParamType.BOOL}
@@ -59,9 +61,9 @@
 		{:else if p.type === ParamType.PATH}
 			<Path value={current} {label} {info} filter={p.directory ? 'directories' : 'any'} placeholder={p.default} onchange={set} />
 		{:else if bounded}
-			<Slider value={Number(current || p.default) || min} {min} {max} {step} unit={p.unit || undefined} {label} {info} onchange={set} />
+			<Slider value={Number(current || p.default) || min} {min} {max} {step} unit={p.unit || undefined} {label} {info} blank={current === ''} {placeholder} onchange={set} />
 		{:else if p.type === ParamType.INT || p.type === ParamType.FLOAT}
-			<NumberField value={current === '' ? Number(p.default) || 0 : Number(current)} min={min || undefined} {step} unit={p.unit || undefined} {label} {info} placeholder={p.default} onchange={set} />
+			<NumberField value={current === '' ? 0 : Number(current)} min={min || undefined} {step} unit={p.unit || undefined} {label} {info} emptyZero={current === ''} {placeholder} onchange={set} />
 		{:else}
 			<Text value={current} {label} {info} placeholder={p.default} onchange={set} />
 		{/if}
@@ -72,7 +74,7 @@
 	.param {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
+		gap: var(--nebu-space-2);
 		min-width: 0;
 	}
 </style>

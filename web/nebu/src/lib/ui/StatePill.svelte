@@ -7,7 +7,7 @@
 </script>
 
 <span class="pill" class:muted={lamp === 'muted'}>
-	<NeoPill size="small" text {color} tinted {label} />
+	<NeoPill size="small" elevation={0} borderless={false} tinted {color} {label} />
 </span>
 
 <style>

@@ -10,12 +10,12 @@
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
 	import Empty from '#lib/ui/Empty.svelte';
+	import List from '#lib/ui/List.svelte';
+	import ListRow from '#lib/ui/ListRow.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
-	import Str from '#lib/ui/Str.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
-	import Stack from '#lib/ui/layout/Stack.svelte';
 	import AsteriskIcon from 'phosphor-svelte/lib/AsteriskIcon';
+	import PuzzlePieceIcon from 'phosphor-svelte/lib/PuzzlePieceIcon';
 
 	let { model }: { model: StoredModel } = $props();
 
@@ -88,55 +88,29 @@
 </script>
 
 {#if error}
-	<p class="error-text">{error}</p>
+	<Empty icon={PuzzlePieceIcon} text="Parts failed to list" hint={error} />
 {:else if !parts}
-	<Skeleton rows={2} height={36} />
+	<Skeleton rows={2} primary="16ch" secondary="24ch" facts={1} action={false} menu={false} />
 {:else if parts.length === 0}
-	<Empty text="No parts" />
+	<Empty icon={PuzzlePieceIcon} text="No parts" hint="This group loads on its own, with nothing from other repositories" />
 {:else}
-	<Stack gap={12}>
-		<div class="rows">
-			{#each parts as p (p.slot)}
-				<div class="part">
-					<span class="slot"><Str value={p.label || p.slot} width="100%" weight={500} /></span>
-					<span class="component"><Str value={p.name || p.repo} tip={componentTip(p)} width="100%" color="muted" /></span>
+	<List head={{ primary: 'Slot', secondary: 'Component', facts: ['State'] }}>
+		{#each parts as p (p.slot)}
+			<ListRow lamp={p.stored || p.bundled ? 'success' : p.required ? 'error' : 'muted'} shape={p.stored || p.bundled ? 'filled' : 'hollow'} primary={p.label || p.slot} primaryWidth="16ch" secondary={p.name || p.repo} secondaryTip={componentTip(p)} secondaryWidth="24ch" facts={[{ value: stateOf(p) }]}>
+				{#snippet badges()}
 					{#if p.required}
 						<Tip text="Required" tag="span"><span class="mark" aria-label="Required"><AsteriskIcon size={16} /></span></Tip>
 					{/if}
-					<span class="fill"></span>
-					<StatePill label={stateOf(p)} lamp={p.stored || p.bundled ? 'success' : p.required ? 'error' : 'muted'} />
-				</div>
-			{/each}
-		</div>
-		{#if missing.length}
-			<div class="actions"><NeoButton elevation={2} loading={pulling} onclick={pull}>Pull parts</NeoButton></div>
-		{/if}
-	</Stack>
+				{/snippet}
+			</ListRow>
+		{/each}
+	</List>
+	{#if missing.length}
+		<div class="actions"><NeoButton elevation={2} loading={pulling} onclick={pull}>Pull parts</NeoButton></div>
+	{/if}
 {/if}
 
 <style>
-	.rows {
-		display: flex;
-		flex-direction: column;
-	}
-	.part {
-		display: flex;
-		gap: 12px;
-		align-items: center;
-		min-height: 44px;
-		border-bottom: 1px solid var(--nebu-border);
-	}
-	.slot {
-		display: inline-flex;
-		flex: 0 1 16ch;
-		min-width: 8ch;
-	}
-	.component {
-		display: inline-flex;
-		flex: 0 1 24ch;
-		min-width: 8ch;
-		font-size: 13px;
-	}
 	.mark {
 		display: inline-flex;
 		color: var(--nebu-text-muted);
@@ -144,5 +118,6 @@
 	.actions {
 		display: flex;
 		justify-content: flex-end;
+		padding-top: var(--nebu-space-3);
 	}
 </style>

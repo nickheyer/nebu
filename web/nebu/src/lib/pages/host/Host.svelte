@@ -1,56 +1,71 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { onDestroy, onMount } from 'svelte';
 	import { NeoButton, NeoCloseButton } from '#lib/neo/buttons/index.js';
-	import Collapse from '#lib/ui/Collapse.svelte';
 	import { isCancel, reason, rpc } from '#lib/api/transport.js';
-	import { bytes, bytesIn, byteUnit, enumLabel, num, thin } from '#lib/format.js';
+	import { bytes, bytesIn, byteUnit, enumLabel, num, plural, thin } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
-	import { ProbeStatus, type Device, type ProbeResult, type Storage } from '#lib/proto/nebu/v1/host_pb.js';
+	import type { GatewayStatus } from '#lib/proto/nebu/v1/gateway_pb.js';
+	import { ProbeStatus, ProbeStatusSchema, type Device, type ProbeResult, type Storage } from '#lib/proto/nebu/v1/host_pb.js';
 	import { TaskStateSchema, type Task } from '#lib/proto/nebu/v1/task_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
-	import { viewport } from '#lib/state/viewport.svelte.js';
 	import Bar, { type Segment } from '#lib/ui/Bar.svelte';
+	import Bone from '#lib/ui/Bone.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
-	import InfoTip from '#lib/ui/InfoTip.svelte';
 	import KeyRows from '#lib/ui/KeyRows.svelte';
+	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import LogView from '#lib/ui/LogView.svelte';
-	import MemoryBars from '#lib/ui/MemoryBars.svelte';
-	import Menu from '#lib/ui/Menu.svelte';
-	import PageTabs from '#lib/ui/PageTabs.svelte';
+	import Mark from '#lib/ui/Mark.svelte';
+	import MemoryLegend from '#lib/ui/MemoryLegend.svelte';
+	import RowAction from '#lib/ui/RowAction.svelte';
 	import Screen from '#lib/ui/Screen.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
 	import Str from '#lib/ui/Str.svelte';
 	import Time from '#lib/ui/Time.svelte';
-	import Cell from '#lib/ui/layout/Cell.svelte';
-	import Row from '#lib/ui/layout/Row.svelte';
-	import Section from '#lib/ui/layout/Section.svelte';
-	import Split from '#lib/ui/layout/Split.svelte';
+	import Tip from '#lib/ui/Tip.svelte';
+	import Card from '#lib/ui/layout/Card.svelte';
+	import Columns from '#lib/ui/layout/Columns.svelte';
+	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
-	import { deviceLabel, type PoolBar } from '#lib/ui/memory.js';
+	import { poolBars, sharedDevices, type PoolBar } from '#lib/ui/memory.js';
 	import { taskLamp } from '#lib/ui/status.js';
+	import { hostTabs } from '#lib/pages/host/tabs.js';
 	import { active } from '#lib/pages/tasks/tasks.js';
 
-	let { tab = 'profile' }: { tab?: string } = $props();
+	let { tab = 'overview' }: { tab?: string } = $props();
 
 	const profile = $derived(live.host);
 	let refreshing = $state(false);
 	let doctor = $state<Task | undefined>(undefined);
 	let doctorLines = $state<string[]>([]);
-	let expanded = $state<Set<string>>(new Set());
+	let allProbes = $state(false);
+	let gateway = $state<GatewayStatus | undefined>(undefined);
+	let gatewayError = $state('');
 	const stop = new AbortController();
 	onDestroy(() => stop.abort());
 
-	const probes = $derived([...(profile?.probes ?? [])].sort((a, b) => Number(b.status === ProbeStatus.FAILED) - Number(a.status === ProbeStatus.FAILED)));
-	const shownProbes = $derived(probes.filter((p) => p.status !== ProbeStatus.SKIPPED));
-	const skipped = $derived(probes.filter((p) => p.status === ProbeStatus.SKIPPED));
+	onMount(() => {
+		void rpc.gateway
+			.getGatewayStatus({}, { signal: stop.signal })
+			.then((r) => (gateway = r.status))
+			.catch((err) => {
+				if (!isCancel(err)) gatewayError = reason(err);
+			});
+	});
+
+	const probes = $derived(profile?.probes ?? []);
+	const failedProbes = $derived(probes.filter((p) => p.status === ProbeStatus.FAILED));
+	const passedProbes = $derived(probes.filter((p) => p.status === ProbeStatus.OK));
+	const skippedProbes = $derived(probes.filter((p) => p.status === ProbeStatus.SKIPPED));
 	const facts = $derived(Object.entries(profile?.facts ?? {}).sort(([a], [b]) => a.localeCompare(b)));
-	// Devices without memory of their own, which no bar draws
-	const loose = $derived((profile?.devices ?? []).filter((d) => !profile?.pools.some((p) => p.id === d.poolId)));
 	const doctorRunning = $derived(doctor !== undefined && active(doctor));
+
+	// One row per memory pool, then the devices living on another pool's memory
+	const bars = $derived(poolBars(profile, live.instances.values(), live.slots.values()));
+	const shared = $derived(sharedDevices(profile));
+	const kinds = $derived(bars.flatMap((b) => b.segments.filter((s) => s.bytes > 0).map((s) => s.kind)));
 
 	async function refresh() {
 		refreshing = true;
@@ -63,7 +78,7 @@
 		}
 	}
 
-	// Starts the check task and streams its log under the header until the task ends
+	// Starts the check task and streams its log over the cards until the task ends
 	async function runDoctor() {
 		try {
 			const res = await rpc.host.doctor({});
@@ -84,13 +99,6 @@
 	function closeDoctor() {
 		doctor = undefined;
 		doctorLines = [];
-	}
-
-	function toggle(id: string) {
-		const next = new Set(expanded);
-		if (next.has(id)) next.delete(id);
-		else next.add(id);
-		expanded = next;
 	}
 
 	function hostLogs(tail: number, follow: boolean, signal: AbortSignal) {
@@ -117,187 +125,236 @@
 		];
 	}
 
-	function used(s: Storage): number {
+	// Used over total in the unit of the total, such as 3.1 / 12.0 GB
+	function usedOverTotal(used: number | bigint, total: number | bigint): string {
+		return `${bytesIn(used, total)}${thin}/${thin}${bytesIn(total, total)}${thin}${byteUnit(total)}`;
+	}
+
+	function storageUsed(s: Storage): number {
 		return Number(s.totalBytes - s.freeBytes);
 	}
 
-	// Used over total in the unit of the total, such as 412 / 1024 GB
-	function usedOverTotal(s: Storage): string {
-		return `${bytesIn(used(s), s.totalBytes)} / ${bytesIn(s.totalBytes, s.totalBytes)}${thin}${byteUnit(s.totalBytes)}`;
-	}
-
-	function usesOf(s: Storage): string {
-		return s.uses.map((u) => u.split(/[\\/]/).filter(Boolean).pop() ?? u).join(', ');
-	}
-
-	// The store's own bytes apart from the rest of the filesystem's use on the mount holding it
+	// The store's own bytes in the accent, the rest of the mount's use in grey as the memory bars draw other processes
 	function storageSegments(s: Storage): Segment[] {
-		const total = used(s);
+		const total = storageUsed(s);
 		const store = live.store;
-		const own = store && s.uses.includes(store.path) ? Math.min(total, Number(store.blobBytes + store.partialBytes + store.cacheBytes)) : 0;
-		const segments: Segment[] = own > 0 ? [{ kind: 'used', label: 'store', bytes: own }, { kind: 'other', label: 'other', bytes: total - own }] : [{ kind: 'used', label: 'used', bytes: total }];
+		const own = store && s.uses.includes('store') ? Math.min(total, Number(store.blobBytes + store.partialBytes + store.cacheBytes)) : 0;
+		const segments: Segment[] = own > 0 ? [{ kind: 'used', label: 'store', bytes: own }, { kind: 'other', label: 'other', bytes: total - own }] : [{ kind: 'other', label: 'other', bytes: total }];
 		return [...segments, { kind: 'free', label: 'free', bytes: Number(s.freeBytes) }];
 	}
 
-	function probeLamp(p: ProbeResult) {
-		return p.status === ProbeStatus.OK ? 'success' : p.status === ProbeStatus.FAILED ? 'error' : 'muted';
+	function probeState(p: ProbeResult): 'ok' | 'failed' | 'skipped' {
+		return p.status === ProbeStatus.OK ? 'ok' : p.status === ProbeStatus.FAILED ? 'failed' : 'skipped';
 	}
 </script>
 
-{#snippet header()}
-	{#if !profile}
-		<Skeleton rows={1} height={40} />
-	{:else}
-		<Row gap={12}>
-			<Cell grow={false} max="24ch"><h1 class="title"><Str value={profile.hostname} weight={600} width="100%" /></h1></Cell>
-			<Cell grow={false}><span class="secondary nowrap">{profile.os} {profile.arch}</span></Cell>
-			<Cell grow={false}>
-				<Row gap={4} wrap={false}><span class="secondary">probed</span><span class="secondary"><Time value={profile.probedAt} /></span></Row>
-			</Cell>
-			<Cell grow={false}><InfoTip click facts={[{ label: 'home', value: profile.home }, { label: 'facts', value: num(facts.length) }]} /></Cell>
-			<Cell grow={false} push>
-				<Row gap={8} wrap={false}>
-					<NeoButton elevation={2} loading={refreshing} onclick={refresh}>Refresh</NeoButton>
-					<NeoButton elevation={2} loading={doctorRunning} onclick={runDoctor}>Doctor</NeoButton>
-				</Row>
-			</Cell>
-		</Row>
-	{/if}
-	{#if doctor}
-		<Stack gap={8}>
-			<Row gap={12} wrap={false}>
-				<Cell grow={false}><StatePill label={enumLabel(TaskStateSchema, doctor.state)} lamp={taskLamp(doctor.state)} /></Cell>
-				<Cell min="8rem"><Str value={doctor.error || doctor.progress?.message || doctor.title} kind="message" color={doctor.error ? 'error' : 'muted'} width="100%" /></Cell>
-				{#if !doctorRunning}<Cell grow={false} push><NeoCloseButton text aria-label="Close" onclick={closeDoctor} /></Cell>{/if}
-			</Row>
-			<Screen maxHeight="30vh">
-				{#each doctorLines as line, i (i)}<div class="line">{line}</div>{:else}<span class="dim">probing</span>{/each}
-			</Screen>
-		</Stack>
-	{/if}
-{/snippet}
-
-{#snippet storageBar(s: Storage)}
-	<Bar segments={storageSegments(s)} total={Number(s.totalBytes)} format={(n) => bytes(n)} />
-{/snippet}
-
-{#snippet devices()}
-	<Section title="Devices" count={profile?.devices.length} gap={8}>
-		{#if !profile}
-			<Skeleton rows={2} height={28} />
-		{:else}
-			<MemoryBars {profile} instances={live.instances.values()} slots={live.slots.values()} {expanded}>
-				{#snippet menu(bar)}
-					<Menu items={[{ label: expanded.has(bar.id) ? 'Hide facts' : 'Expand facts', onclick: () => toggle(bar.id) }]} />
-				{/snippet}
-				{#snippet expand(bar)}
-					{@const procs = processesOf(bar)}
-					<Stack gap={12}>
-						{#each bar.devices as d (d.id)}
-							<KeyRows dense rows={deviceRows(d)} />
-						{/each}
-						<Stack gap={0}>
-							<span class="label">Processes</span>
-							{#each procs as p (`${p.deviceId}:${p.pid}`)}
-								<ListRow
-									primary={p.instanceName || p.instanceId || 'other'}
-									href={p.instanceId ? `/serve/${encodeURIComponent(p.instanceId)}` : undefined}
-									facts={[{ value: String(p.pid), tip: 'pid', mono: true }, { value: bytes(p.bytes) }]}
-								/>
-							{:else}
-								<span class="secondary">None holding memory</span>
-							{/each}
-						</Stack>
-					</Stack>
-				{/snippet}
-			</MemoryBars>
-			{#if loose.length}
+{#snippet deviceRow(bar: PoolBar)}
+	<ListRow primary={bar.name || bar.label} primaryWidth="30ch" primaryTip={bar.devices.map((d) => d.name).join('\n') || undefined}>
+		{#snippet leading()}<span class="devlabel">{bar.label}</span>{/snippet}
+		{#snippet instrument()}
+			<div class="gauge">
+				{#if bar.shared}
+					<span class="reading muted">shares system memory</span>
+				{:else}
+					<span class="track"><Bar segments={bar.segments} total={bar.total} format={(n) => bytes(n)} /></span>
+					<Tip text="{bytes(bar.free)} free" tag="span"><span class="reading">{usedOverTotal(bar.used, bar.total)}</span></Tip>
+				{/if}
+			</div>
+		{/snippet}
+		{#snippet expand()}
+			{@const procs = processesOf(bar)}
+			<Stack gap={12}>
+				{#each bar.devices as d (d.id)}
+					<KeyRows dense rows={deviceRows(d)} />
+				{/each}
 				<Stack gap={0}>
-					{#each loose as d (d.id)}
-						<ListRow primary={d.name || d.id} primaryTip={d.id} secondary={deviceLabel(profile, d)} secondaryWidth="6ch" facts={[{ value: d.vendor }, { value: 'shared memory' }]}>
-							{#snippet expand()}<KeyRows dense rows={deviceRows(d)} />{/snippet}
-						</ListRow>
+					<span class="label">Processes</span>
+					{#each procs as p (`${p.deviceId}:${p.pid}`)}
+						<ListRow
+							primary={p.instanceName || p.instanceId || 'other'}
+							href={p.instanceId ? `/serve/${encodeURIComponent(p.instanceId)}` : undefined}
+							facts={[{ value: String(p.pid), tip: 'pid', mono: true }, { value: bytes(p.bytes) }]}
+						/>
+					{:else}
+						<Empty text="None holding memory" row />
 					{/each}
 				</Stack>
-			{/if}
-		{/if}
-	</Section>
+			</Stack>
+		{/snippet}
+	</ListRow>
 {/snippet}
 
-{#snippet storage()}
-	<Section title="Storage" count={profile?.storage.length} gap={0}>
+{#snippet devicesCard()}
+	<Card title="Devices" count={profile?.devices.length} flush>
 		{#if !profile}
-			<Skeleton rows={2} height={36} />
+			<Skeleton rows={2} kind="bars" />
+		{:else if bars.length === 0 && shared.length === 0}
+			<Empty text="No devices probed" action="Refresh" onclick={refresh} loading={refreshing} />
 		{:else}
-			{#each profile.storage as s (s.path)}
-				<ListRow
-					primary={s.path}
-					primaryKind="path"
-					secondary={s.filesystem}
-					secondaryWidth="8ch"
-					facts={[{ value: usedOverTotal(s), tip: `${bytes(s.freeBytes)} free` }, { value: usesOf(s), tip: s.uses.join('\n') }]}
-				>
-					{#snippet instrument()}{@render storageBar(s)}{/snippet}
-				</ListRow>
-			{:else}
-				<Empty text="No storage probed" />
-			{/each}
+			<List head={{ primary: 'Device', instrument: 'Memory' }}>
+				{#each bars as bar (bar.id)}{@render deviceRow(bar)}{/each}
+				{#each shared as bar (bar.id)}{@render deviceRow(bar)}{/each}
+			</List>
+			<div class="legend"><MemoryLegend {kinds} /></div>
 		{/if}
-	</Section>
+	</Card>
+{/snippet}
+
+{#snippet storageCard()}
+	<Card title="Storage" count={profile?.storage.length} flush>
+		{#if !profile}
+			<Skeleton rows={2} dot={false} primary="40ch" secondary="8ch" facts={1} action={false} menu={false} />
+		{:else if profile.storage.length === 0}
+			<Empty text="No storage probed" action="Refresh" onclick={refresh} loading={refreshing} />
+		{:else}
+			<List head={{ primary: 'Mount', secondary: 'Filesystem', instrument: 'Used', facts: ['Holds'] }}>
+				{#each profile.storage as s (s.path)}
+					<ListRow primary={s.path} primaryKind="path" primaryWidth="24ch" secondary={s.filesystem} secondaryWidth="10ch" facts={[{ value: s.uses.join(', '), tip: s.uses.join('\n') }]}>
+						{#snippet instrument()}
+							<div class="gauge">
+								<span class="track"><Bar segments={storageSegments(s)} total={Number(s.totalBytes)} format={(n) => bytes(n)} /></span>
+								<Tip text="{bytes(s.freeBytes)} free" tag="span"><span class="reading">{usedOverTotal(storageUsed(s), s.totalBytes)}</span></Tip>
+							</div>
+						{/snippet}
+					</ListRow>
+				{/each}
+			</List>
+		{/if}
+	</Card>
 {/snippet}
 
 {#snippet probeRow(p: ProbeResult)}
-	<ListRow lamp={probeLamp(p)} shape={p.status === ProbeStatus.SKIPPED ? 'hollow' : 'filled'} primary={p.probeId} primaryWidth="16ch" secondary={p.detail} secondaryKind="message" secondaryWidth="64ch" />
+	<ListRow primary={p.probeId} primaryWidth="18ch" secondary={p.detail} secondaryKind="message" secondaryWidth="40ch" secondaryColor={p.status === ProbeStatus.FAILED ? 'error' : 'muted'}>
+		{#snippet leading()}<Mark state={probeState(p)} label={enumLabel(ProbeStatusSchema, p.status)} />{/snippet}
+	</ListRow>
 {/snippet}
 
-{#snippet probesSection()}
-	<Section title="Probes" count={profile ? shownProbes.length : undefined} gap={0}>
+{#snippet probesCard()}
+	<Card title="Probes" count={profile ? probes.length : undefined} flush>
+		{#snippet tools()}
+			{#if passedProbes.length || skippedProbes.length}
+				<RowAction label={allProbes ? 'Failed only' : 'Show all'} onclick={() => (allProbes = !allProbes)} />
+			{/if}
+		{/snippet}
 		{#if !profile}
-			<Skeleton rows={3} height={36} />
+			<Skeleton rows={3} dot={false} leading="20px" primary="16ch" secondary="40ch" facts={0} action={false} menu={false} />
+		{:else if probes.length === 0}
+			<Empty text="No probes ran" action="Refresh" onclick={refresh} loading={refreshing} />
 		{:else}
-			{#each shownProbes as p (p.probeId)}{@render probeRow(p)}{/each}
-			{#if skipped.length}
-				<Collapse label="Skipped" count={skipped.length}>
-					<Stack gap={0}>
-						{#each skipped as p (p.probeId)}{@render probeRow(p)}{/each}
-					</Stack>
-				</Collapse>
+			<List>
+				{#each failedProbes as p (p.probeId)}{@render probeRow(p)}{/each}
+				{#if allProbes}
+					{#each passedProbes as p (p.probeId)}{@render probeRow(p)}{/each}
+					{#each skippedProbes as p (p.probeId)}{@render probeRow(p)}{/each}
+				{:else}
+					<ListRow primary="{plural(passedProbes.length, 'probe')} passed" primaryKind="text" secondary={skippedProbes.length ? `${num(skippedProbes.length)} skipped` : ''} secondaryWidth="40ch">
+						{#snippet leading()}<Mark state="ok" label="Passed" />{/snippet}
+					</ListRow>
+				{/if}
+			</List>
+		{/if}
+	</Card>
+{/snippet}
+
+{#snippet daemonCard()}
+	<Card title="Daemon">
+		{#if !gateway && !gatewayError}
+			<Skeleton rows={3} kind="facts" />
+		{:else}
+			<KeyRows
+				rows={[
+					{ label: 'version', value: gateway ? `${gateway.implementation} ${gateway.version}`.trim() : '', mono: true },
+					{ label: 'listener', value: gateway?.listeners.map((l) => l.addr).join(', ') ?? '', mono: true, copy: true },
+					{ label: 'home', value: profile?.home ?? '', mono: true, copy: true },
+					...facts.map(([k, v]) => ({ label: k, value: v, mono: true, tip: v }))
+				]}
+			/>
+			{#if gatewayError}<p class="error-text secondary">{gatewayError}</p>{/if}
+		{/if}
+	</Card>
+{/snippet}
+
+{#snippet doctorCard(task: Task)}
+	<Card title="Doctor">
+		{#snippet tools()}
+			<StatePill label={enumLabel(TaskStateSchema, task.state)} lamp={taskLamp(task.state)} />
+			{#if !doctorRunning}<NeoCloseButton text aria-label="Close doctor output" onclick={closeDoctor} />{/if}
+		{/snippet}
+		<Str value={task.error || task.progress?.message || task.title} kind="message" color={task.error ? 'error' : 'muted'} width="100%" />
+		<Screen maxHeight="30vh">
+			{#each doctorLines as line, i (i)}<div class="line">{line}</div>{:else}<span class="dim">probing</span>{/each}
+		</Screen>
+	</Card>
+{/snippet}
+
+<PageHeader tabs={hostTabs} active={tab}>
+	{#snippet meta()}
+		{#if tab === 'overview'}
+			{#if profile}
+				<Str value={profile.hostname} kind="name" weight={500} />
+				<span>{profile.os} {profile.arch}</span>
+				<span>probed <Time value={profile.probedAt} /></span>
+				<StatePill label={failedProbes.length ? `${plural(failedProbes.length, 'probe')} failed` : 'Probes passed'} lamp={failedProbes.length ? 'warning' : 'success'} />
+			{:else}
+				<Bone width="24ch" height="14px" />
 			{/if}
 		{/if}
-	</Section>
-{/snippet}
+	{/snippet}
+	{#snippet actions()}
+		{#if tab === 'overview'}
+			<NeoButton elevation={2} loading={refreshing} onclick={refresh}>Refresh</NeoButton>
+			<NeoButton elevation={2} loading={doctorRunning} onclick={runDoctor}>Doctor</NeoButton>
+		{/if}
+	{/snippet}
+</PageHeader>
 
-<Stack gap={24}>
-	<Stack gap={12}>{@render header()}</Stack>
-	<PageTabs tabs={[{ id: 'profile', label: 'Profile' }, { id: 'logs', label: 'Logs' }]} active={tab} onchange={(id) => goto(id === 'logs' ? '/host/logs' : '/host')} />
-	{#if tab === 'logs'}
-		<LogView source={hostLogs} name={profile?.hostname || 'daemon'} levels height="60vh" />
-	{:else}
-		{#if viewport.ultrawide}
-			<Split ratio="2/5">
-				{#snippet left()}{@render devices()}{/snippet}
-				{#snippet right()}
-					{@render storage()}
-					{@render probesSection()}
-				{/snippet}
-			</Split>
-		{:else}
-			{@render devices()}
-			{@render storage()}
-			{@render probesSection()}
-		{/if}
-		{#if profile && facts.length}
-			<Collapse label="Facts" count={facts.length}>
-				<KeyRows dense rows={facts.map(([k, v]) => ({ label: k, value: v, mono: true, tip: v }))} />
-			</Collapse>
-		{/if}
-	{/if}
-</Stack>
+{#if tab === 'logs'}
+	<Card>
+		<LogView source={hostLogs} name={profile?.hostname || 'daemon'} levels height="calc(100dvh - var(--nebu-top, 61px) - 190px)" />
+	</Card>
+{:else}
+	{#if doctor}{@render doctorCard(doctor)}{/if}
+	<Columns ratio="3/2">
+		{#snippet left()}
+			{@render devicesCard()}
+			{@render storageCard()}
+		{/snippet}
+		{#snippet right()}
+			{@render probesCard()}
+			{@render daemonCard()}
+		{/snippet}
+	</Columns>
+{/if}
 
 <style>
-	.title {
+	.devlabel {
+		display: inline-block;
+		min-width: 5ch;
+		font-size: var(--nebu-text-secondary);
+		font-weight: 500;
+	}
+	.gauge {
 		display: flex;
+		flex: 1 1 auto;
+		gap: var(--nebu-space-3);
+		align-items: center;
 		min-width: 0;
+	}
+	.track {
+		display: flex;
+		flex: 1 1 auto;
+		min-width: 4rem;
+	}
+	.reading {
+		flex: 0 0 auto;
+		min-width: 13ch;
+		font-size: var(--nebu-text-secondary);
+		font-variant-numeric: tabular-nums;
+		text-align: right;
+		white-space: nowrap;
+	}
+	.legend {
+		padding: var(--nebu-space-3) var(--nebu-card-pad) var(--nebu-space-2);
 	}
 	.line {
 		white-space: pre-wrap;

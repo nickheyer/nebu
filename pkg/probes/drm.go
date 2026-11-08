@@ -86,7 +86,7 @@ func (p drmSysfs) Run(ctx context.Context) host.Result {
 			byBus[strings.ToLower(d.GetFacts()["pci_bus_id"])] = d.GetId()
 		}
 	}
-	res := found(devices, pools, nil, rows(len(devices)))
+	res := found(devices, pools, nil, "")
 	res.Processes = drmProcesses(procRoot, byBus)
 	return res
 }

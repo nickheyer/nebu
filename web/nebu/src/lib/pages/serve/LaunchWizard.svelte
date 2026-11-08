@@ -9,7 +9,7 @@
 	import Collapse from '#lib/ui/Collapse.svelte';
 	import NeoDialogStepper from '#lib/neo/floating/dialog/NeoDialogStepper.svelte';
 	import { NeoProgressBar } from '#lib/neo/progress/index.js';
-	import type { NeoStepperStep } from '#lib/neo/stepper/neo-stepper.model.js';
+	import type { NeoStepperContext, NeoStepperStep } from '#lib/neo/stepper/neo-stepper.model.js';
 	import { isCancel, reason, rpc } from '#lib/api/transport.js';
 	import { bytes, enumLabel, num, percent, seconds, tokensPerSecond } from '#lib/format.js';
 	import { live, modelKey } from '#lib/live/events.svelte.js';
@@ -49,6 +49,9 @@
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { deviceLabel } from '#lib/ui/memory.js';
 	import { instanceLamp, type Lamp } from '#lib/ui/status.js';
+	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
+	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
+	import EngineIcon from 'phosphor-svelte/lib/EngineIcon';
 	import ParamsForm from '#lib/pages/serve/ParamsForm.svelte';
 	import PolicyFields from '#lib/pages/serve/PolicyFields.svelte';
 	import { modelPhrase, policyRows, slotUpdate } from '#lib/pages/serve/serve.js';
@@ -76,9 +79,9 @@
 	const last = ids.length - 1;
 	const labels: Record<StepId, string> = { model: 'Model', runtime: 'Runtime', parameters: 'Parameters', placement: 'Placement', route: 'Route', canary: 'Canary', review: 'Review' };
 	const placements: Option<Placement>[] = [
-		{ value: Placement.UNSPECIFIED, label: 'Device first' },
-		{ value: Placement.DEVICE, label: 'Device only' },
-		{ value: Placement.HOST, label: 'Host only' }
+		{ value: Placement.UNSPECIFIED, label: 'Auto', tip: 'Devices first, spilling into host memory' },
+		{ value: Placement.DEVICE, label: 'Device', tip: 'Device memory alone, never spilling' },
+		{ value: Placement.HOST, label: 'Host', tip: 'Host memory alone' }
 	];
 	const profiles: Option<PlanProfile>[] = [
 		{ value: PlanProfile.CHAT, label: 'Chat' },
@@ -215,7 +218,7 @@
 	const hits = $derived(instance?.triage.length ? instance.triage : (formation?.seats.flatMap((s) => s.triage) ?? []));
 	const failure = $derived(instance?.error || task?.error || formation?.error || '');
 	const openHref = $derived(instanceId ? `/serve/${encodeURIComponent(instanceId)}` : formationId ? `/mesh/formations/${encodeURIComponent(formationId)}` : '');
-	const phase = $derived(launched ? (outcome === 'failed' ? 'Failed' : outcome === 'ready' ? 'Ready' : 'Running') : `${labels[stepId]} · ${active + 1} of ${ids.length}`);
+	const phase = $derived(outcome === 'failed' ? 'Failed' : outcome === 'ready' ? 'Ready' : 'Running');
 
 	// Whether a step holds what the request needs from it
 	function complete(id: StepId): boolean {
@@ -240,19 +243,9 @@
 		return j - i;
 	}
 
+	// Chips naming each step, accent up to the current one, the reach of each step gating the chips past it
 	const steps = $derived.by((): NeoStepperStep[] =>
-		ids.map((id, i) => {
-			const step: NeoStepperStep = { id, markProps: { position: (i * 100) / last, label: viewport.mobile ? String(i + 1) : labels[id] } };
-			if (i < last) {
-				step.next = reach(i);
-				return step;
-			}
-			step.next = ids.every(complete) && !running;
-			step.previous = !running;
-			step.cancel = !running;
-			step.nextProps = planOnly ? { label: 'Done', class: 'primary', elevation: 2, onclick: () => leave() } : { label: swap ? 'Swap' : 'Run', class: 'primary', elevation: 2, loading: running, onclick: run };
-			return step;
-		})
+		ids.map((id, i) => ({ id, next: i < last ? reach(i) : false, previous: !running, markProps: { position: (i * 100) / last, color: 'primary', label: viewport.mobile ? String(i + 1) : labels[id] } }))
 	);
 
 	// Slides steps in 200 ms, without motion when the system asks for reduced motion
@@ -569,7 +562,33 @@
 </script>
 
 {#snippet header()}
-	<span class="headline ellipsis">{title} <span class="muted">· {phase}</span></span>
+	<span class="headline ellipsis">{title}{#if launched}<span class="muted"> · {phase}</span>{/if}</span>
+{/snippet}
+
+{#snippet footer(ctx: NeoStepperContext)}
+	<div class="footer">
+		{#if launched}
+			<span class="fill"></span>
+			{#if outcome === 'failed'}
+				<NeoButton class="primary" elevation={2} onclick={back}>Back</NeoButton>
+			{:else}
+				{#if openHref}<NeoButton elevation={2} onclick={() => leave(openHref)}>Open</NeoButton>{/if}
+				{#if outcome === 'ready'}<NeoButton class="primary" elevation={2} onclick={() => leave()}>Done</NeoButton>{/if}
+			{/if}
+		{:else}
+			{#if runError}<span class="status error-text ellipsis">{runError}</span>{/if}
+			<span class="fill"></span>
+			<NeoButton text disabled={running} onclick={() => leave()}>Cancel</NeoButton>
+			{#if active > 0}<NeoButton elevation={2} disabled={running} onclick={() => ctx.goPrevious()}>Back</NeoButton>{/if}
+			{#if active < last}
+				<NeoButton class="primary" elevation={2} disabled={!complete(stepId)} onclick={() => ctx.goNext()}>Next</NeoButton>
+			{:else if planOnly}
+				<NeoButton class="primary" elevation={2} onclick={() => leave()}>Done</NeoButton>
+			{:else}
+				<NeoButton class="primary" elevation={2} loading={running} disabled={!ids.every(complete)} onclick={run}>{swap ? 'Swap' : 'Run'}</NeoButton>
+			{/if}
+		{/if}
+	</div>
 {/snippet}
 
 {#snippet children()}
@@ -596,20 +615,12 @@
 				{#if instance?.command.length}
 					<Collapse label="Command"><Screen><code class="cmd">{instance.command.join(' ')}</code></Screen></Collapse>
 				{/if}
-				<Row gap={8} justify="flex-end">
-					{#if outcome === 'failed'}
-						<NeoButton elevation={2} onclick={back}>Back</NeoButton>
-					{:else}
-						{#if openHref}<NeoButton elevation={2} onclick={() => leave(openHref)}>Open</NeoButton>{/if}
-						{#if outcome === 'ready'}<NeoButton class="primary" elevation={2} onclick={() => leave()}>Done</NeoButton>{/if}
-					{/if}
-				</Row>
 			</Stack>
+		{:else if stepId === 'model' && live.ready && live.models.size === 0 && !model}
+			<Empty icon={CubeIcon} text="No models stored" hint="Pull a model from a source, then launch it here" action="Discover" href="/discover" />
 		{:else if stepId === 'model'}
 			<Stack gap={16}>
-				<FormSection title="Model">
-					<Picker bind:value={modelPick} fetch={fetchModels} label="Model" placeholder="Search stored models" current={model ? modelPhrase(model) : undefined} required />
-				</FormSection>
+				<Picker bind:value={modelPick} fetch={fetchModels} label="Model" placeholder="Search stored models" current={model ? modelPhrase(model) : undefined} required />
 				{#if model}
 					<KeyRows
 						dense
@@ -636,23 +647,23 @@
 			</Stack>
 		{:else if stepId === 'runtime'}
 			{#if runtimes === undefined}
-				<Skeleton rows={2} />
+				<Skeleton rows={2} kind="facts" />
 			{:else if compatible.length === 0}
-				<Empty text="No compatible runtime" action="Runtimes" href="/runtimes" />
+				<Empty icon={EngineIcon} text="No compatible runtime" hint="None of the runtimes this host runs serves this model's format" action="Runtimes" href="/runtimes" />
 			{:else}
 				<Stack gap={16}>
-					<FormSection title="Runtime">
-						<FieldRow>
-							{#if compatible.length <= 4}
-								<Segmented bind:value={runtimeId} options={runtimeOptions} label="Runtime" />
-							{:else}
-								<Select bind:value={runtimeId} options={runtimeOptions} label="Runtime" />
-							{/if}
-							<Select bind:value={installId} options={installOptions} label="Install" placeholder="No install" />
-						</FieldRow>
+					<FormSection>
+						{#if compatible.length <= 4}
+							<Segmented bind:value={runtimeId} options={runtimeOptions} label="Runtime" />
+						{:else}
+							<Select bind:value={runtimeId} options={runtimeOptions} label="Runtime" />
+						{/if}
+						{#if installs.length}
+							<Select bind:value={installId} options={installOptions} label="Install" />
+						{/if}
 					</FormSection>
 					{#if runtime && installs.length === 0}
-						<Empty text="No install of {runtime.runtime?.name ?? runtimeId}" action="Install" href="/runtimes" />
+						<Empty icon={DownloadSimpleIcon} text="{runtime.runtime?.name ?? runtimeId} is not installed" hint="Install it from the runtime catalog, then come back to launch" action="Install" href="/runtimes/{encodeURIComponent(runtimeId)}/install" />
 					{/if}
 				</Stack>
 			{/if}
@@ -719,7 +730,7 @@
 						<Select bind:value={slotChoice} options={slotOptions} label="Slot" />
 					</FieldRow>
 					<FieldRow>
-						<Duration bind:value={idleUnload} base="s" max={86_400} label="Idle unload" info="Seconds without requests before the process unloads, zero keeps it loaded" />
+						<Duration bind:value={idleUnload} base="s" max={86_400} label="Idle unload" info="Time without requests before the process unloads, loaded for good by default" emptyZero placeholder="Default" />
 						{#if live.host?.facts['criu']}
 							<Switch bind:checked={snapshot} label="Snapshot after load" info="Later launches restore the image instead of starting cold" />
 						{/if}
@@ -754,14 +765,13 @@
 					{:else if preview}
 						<Screen><code class="cmd">{preview}</code></Screen>
 					{:else}
-						<Skeleton rows={1} height={28} />
+						<Skeleton rows={1} kind="bars" />
 					{/if}
 				</Collapse>
 				<Collapse label="Request">
 					<Screen><pre class="lines">{toJsonString(RunRequestSchema, request(), { prettySpaces: 2 })}</pre></Screen>
 				</Collapse>
-				{#if runError}<p class="error-text">{runError}</p>{/if}
-			</Stack>
+					</Stack>
 		{/if}
 	</div>
 {/snippet}
@@ -772,21 +782,22 @@
 	{steps}
 	{header}
 	{children}
+	after={footer}
 	headerProps={{ tag: 'h2' }}
 	marks
 	progress={!launched}
-	controls={!launched}
+	controls={false}
+	closable={launched}
 	swipe={false}
 	rounded="md"
 	filled
 	elevation={2}
 	width={viewport.mobile ? undefined : { absolute: '720px', max: 'calc(100vw - 32px)' }}
-	padding="12px"
+	padding="20px"
 	class="launch-wizard"
 	stepperProps={{ in: slide, out: slide }}
 	dialogProps={{ full: viewport.mobile, closeOnClickOutside: false, onclose: () => leave() }}
 	onClose={() => leave()}
-	onCancel={() => leave()}
 />
 
 <style>
@@ -796,7 +807,7 @@
 	}
 	.content {
 		max-height: min(64dvh, 720px);
-		padding: 4px 4px 8px;
+		padding: var(--nebu-space-1) var(--nebu-space-1) var(--nebu-space-2);
 		overflow-x: hidden;
 		overflow-y: auto;
 	}
@@ -821,5 +832,26 @@
 	}
 	:global(.launch-wizard .neo-floating-stepper-title) {
 		min-width: 0;
+		font-size: var(--nebu-text-heading);
+	}
+	/* Cancel, Back and the one accent forward button on the right, as every dialog ends */
+	.footer {
+		display: flex;
+		gap: var(--nebu-space-3);
+		align-items: center;
+		min-width: 0;
+		padding-top: var(--nebu-space-4);
+	}
+	.status {
+		min-width: 0;
+		font-size: var(--nebu-text-secondary);
+	}
+	/* Step marks carry depth alone, never a border */
+	:global(.launch-wizard .neo-stepper-progress .neo-button) {
+		--neo-btn-border-color: transparent;
+		--neo-btn-border-color-hover: transparent;
+		--neo-btn-border-color-disabled: transparent;
+
+		font-size: var(--nebu-text-secondary);
 	}
 </style>

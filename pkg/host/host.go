@@ -43,7 +43,7 @@ type Prober struct {
 	// Called on every fresh profile before it is cached, filling in what only the daemon knows
 	Decorate func(*v1.HostProfile)
 	probes   []Probe
-	paths    []string
+	uses     []Use
 	ttl      time.Duration
 	mu       sync.Mutex
 	cached   *v1.HostProfile
@@ -51,9 +51,15 @@ type Prober struct {
 	flight singleflight.Group
 }
 
-// Keeps the probes that run on this OS and architecture and remembers the storage paths to measure
-func New(probes []Probe, paths []string, ttl time.Duration) *Prober {
-	p := &Prober{paths: paths, ttl: ttl}
+// A directory nebu puts to one role, store, data or cache, measured on the mount holding it
+type Use struct {
+	Role string
+	Path string
+}
+
+// Keeps the probes that run on this OS and architecture and remembers the directories to measure
+func New(probes []Probe, uses []Use, ttl time.Duration) *Prober {
+	p := &Prober{uses: uses, ttl: ttl}
 	for _, pr := range probes {
 		if pr.Runs(runtime.GOOS, runtime.GOARCH) {
 			p.probes = append(p.probes, pr)
@@ -135,16 +141,16 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 		}
 	}
 	byMount := map[string]*v1.Storage{}
-	for _, path := range p.paths {
-		st, err := stat(path)
+	for _, use := range p.uses {
+		st, err := stat(use.Path)
 		if err != nil {
 			continue
 		}
 		if existing, ok := byMount[st.GetPath()]; ok {
-			existing.Uses = append(existing.Uses, path)
+			existing.Uses = append(existing.Uses, use.Role)
 			continue
 		}
-		st.Uses = []string{path}
+		st.Uses = []string{use.Role}
 		byMount[st.GetPath()] = st
 		profile.Storage = append(profile.Storage, st)
 	}

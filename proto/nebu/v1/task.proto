@@ -17,6 +17,13 @@ enum TaskState {
   TASK_STATE_CANCELED = 5;
 }
 
+// What the done and total of a progress count
+enum ProgressUnit {
+  PROGRESS_UNIT_UNSPECIFIED = 0;
+  PROGRESS_UNIT_STEPS = 1;
+  PROGRESS_UNIT_BYTES = 2;
+}
+
 // Progress counters of a task
 message TaskProgress {
   uint64 done = 1;
@@ -28,6 +35,7 @@ message TaskProgress {
   string key = 5;
   // When the step the message describes ends, set while the work waits on a clock
   google.protobuf.Timestamp until = 6;
+  ProgressUnit unit = 7;
 }
 
 // One long running operation

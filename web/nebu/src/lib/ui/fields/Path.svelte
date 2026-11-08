@@ -27,10 +27,12 @@
 
 <div class="field">
 	<NeoInput bind:value {label} {placeholder} {disabled} elevation={-1} placement={label ? 'top' : 'inside'} floating={false} width="100%" message={error ?? message} {error} autocomplete="off" class="mono-input" oninput={() => onchange?.(value)} />
-	<NeoButton text {disabled} onclick={() => (open = true)} aria-label="Browse">
-		{#snippet icon()}<FolderOpenIcon size={20} />{/snippet}
-	</NeoButton>
-	{#if info}<InfoTip text={info} />{/if}
+	<span class="trail">
+		<NeoButton text {disabled} onclick={() => (open = true)} aria-label="Browse">
+			{#snippet icon()}<FolderOpenIcon size={20} />{/snippet}
+		</NeoButton>
+		{#if info}<InfoTip text={info} />{/if}
+	</span>
 </div>
 <DirectoryBrowser bind:open start={value} {filter} onpick={picked} />
 
@@ -38,7 +40,7 @@
 	.field {
 		display: flex;
 		gap: 8px;
-		align-items: center;
+		align-items: flex-end;
 		min-width: 0;
 	}
 	.field :global(.neo-input-group) {

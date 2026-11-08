@@ -4,4 +4,4 @@
 </script>
 
 <svelte:head><title>Host</title></svelte:head>
-<Host tab={page.params.tab === 'logs' ? 'logs' : 'profile'} />
+<Host tab={page.params.tab === 'logs' ? 'logs' : 'overview'} />

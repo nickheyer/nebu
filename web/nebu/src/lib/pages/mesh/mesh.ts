@@ -3,13 +3,21 @@ import { DeviceKind } from '#lib/proto/nebu/v1/host_pb.js';
 import { AdmissionSide, AdmissionState, NodeState, type Admission, type Candidate, type Formation, type Link, type NearbyNode, type Node, type Seat } from '#lib/proto/nebu/v1/mesh_pb.js';
 import type { Live } from '#lib/live/events.svelte.js';
 import { bandwidth, bytes, enumLabel, micros, ms, plural, thin, when } from '#lib/format.js';
+import type { HeaderTab } from '#lib/shell/chrome.svelte.js';
 import type { DotShape, Lamp } from '#lib/ui/status.js';
 
 export const meshTabs = ['nodes', 'links', 'formations', 'nearby', 'federation', 'tuning'] as const;
 export type MeshTab = (typeof meshTabs)[number];
 
+const tabLabels: Record<MeshTab, string> = { nodes: 'Nodes', links: 'Links', formations: 'Formations', nearby: 'Nearby', federation: 'Federation', tuning: 'Tuning' };
+
 export function isMeshTab(s: string): s is MeshTab {
 	return (meshTabs as readonly string[]).includes(s);
+}
+
+// The tabs of a joined mesh as the top bar draws them, each with the count the page holds for it
+export function meshHeaderTabs(counts: Partial<Record<MeshTab, number>>): HeaderTab[] {
+	return meshTabs.map((t) => ({ id: t, label: tabLabels[t], count: counts[t], href: `/mesh/${t}` }));
 }
 
 // Join and export tokens live at most a month

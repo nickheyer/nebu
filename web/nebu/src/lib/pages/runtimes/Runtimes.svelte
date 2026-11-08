@@ -1,26 +1,34 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { enumLabel, plural } from '#lib/format.js';
+	import { enumLabel, num } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { ModelKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
 	import { ApiFlavorSchema, type RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Empty from '#lib/ui/Empty.svelte';
+	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
+	import RowAction from '#lib/ui/RowAction.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
+	import Card from '#lib/ui/layout/Card.svelte';
+	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Sheet from '#lib/ui/layout/Sheet.svelte';
-	import Stack from '#lib/ui/layout/Stack.svelte';
+	import { compactBelow } from '#lib/ui/list.svelte.js';
 	import RuntimePanel from '#lib/pages/runtimes/RuntimePanel.svelte';
+	import { serveTabs } from '#lib/pages/serve/tabs.js';
+	import EngineIcon from 'phosphor-svelte/lib/EngineIcon';
 
 	let { id = '', tab = 'installs' }: { id?: string; tab?: string } = $props();
 
 	let runtimes = $state<RuntimeStatus[]>([]);
 	let loaded = $state(false);
 	let error = $state('');
+	let listWidth = $state(0);
+	// Beside an open runtime the rows keep the lamp and name alone, the panel holding the rest
+	const slim = $derived(id !== '' && listWidth > 0 && listWidth < compactBelow);
 
 	async function load() {
 		try {
@@ -42,16 +50,22 @@
 
 	const sorted = $derived([...runtimes].sort((a, b) => Number(b.compatible) - Number(a.compatible) || (a.runtime?.name ?? '').localeCompare(b.runtime?.name ?? '')));
 	const selected = $derived(runtimes.find((r) => r.runtime?.id === id));
-	const counts = $derived.by(() => {
+	// How many installs this host holds of each runtime
+	const installsBy = $derived.by(() => {
 		const by = new Map<string, number>();
 		for (const i of live.installs.values()) by.set(i.runtimeId, (by.get(i.runtimeId) ?? 0) + 1);
 		return by;
 	});
+	const installedCount = $derived(runtimes.filter((r) => (installsBy.get(r.runtime?.id ?? '') ?? 0) > 0).length);
 
-	function phrase(r: RuntimeStatus): string {
-		if (!r.compatible) return r.unmet[0] ?? 'incompatible';
-		const n = counts.get(r.runtime?.id ?? '') ?? 0;
-		return n === 0 ? 'no install' : plural(n, 'install');
+	function installs(r: RuntimeStatus): number {
+		return installsBy.get(r.runtime?.id ?? '') ?? 0;
+	}
+
+	// Installed, not installed, or what keeps the host from running it
+	function status(r: RuntimeStatus): string {
+		if (!r.compatible) return r.unmet[0] ?? 'Incompatible';
+		return installs(r) > 0 ? 'Installed' : 'Not installed';
 	}
 
 	function about(r: RuntimeStatus): string {
@@ -74,49 +88,62 @@
 </script>
 
 {#snippet list()}
-	{#if !loaded}
-		<Skeleton rows={5} />
-	{:else if error && runtimes.length === 0}
-		<Empty text={error} action="Retry" onclick={() => void load()} />
-	{:else if sorted.length === 0}
-		<Empty text="No runtimes" />
-	{:else}
-		<Stack gap={0}>
-			{#each sorted as r (r.runtime?.id)}
-				{@const installable = r.compatible && r.installs.length > 0}
-				<ListRow
-					lamp={r.compatible ? 'success' : 'muted'}
-					shape={r.compatible ? 'filled' : 'hollow'}
-					primary={r.runtime?.name ?? ''}
-					primaryTip={about(r)}
-					secondary={phrase(r)}
-					secondaryKind="message"
-					secondaryWidth="64ch"
-					selected={r.runtime?.id === id}
-					onclick={() => open(r)}
-					menu={installable ? [{ label: 'Open', onclick: () => open(r) }] : undefined}
-				>
-					{#snippet action()}
-						{#if installable}
-							<NeoButton text onclick={() => open(r, 'install')}>Install</NeoButton>
-						{:else}
-							<NeoButton text onclick={() => open(r)}>Open</NeoButton>
-						{/if}
-					{/snippet}
-				</ListRow>
-			{/each}
-		</Stack>
-	{/if}
+	<div class="catalog" bind:clientWidth={listWidth}>
+		<Card flush>
+			{#if !loaded}
+				<Skeleton rows={5} secondary="16ch" facts={1} menu={false} />
+			{:else if error && runtimes.length === 0}
+				<Empty text="Runtimes failed to list" hint={error} action="Retry" onclick={() => void load()} />
+			{:else if sorted.length === 0}
+				<Empty icon={EngineIcon} text="No runtimes" hint="The daemon lists the runtimes it knows how to install here" />
+			{:else}
+				<List head={{ primary: 'Runtime', secondary: 'Status', facts: ['Installs'] }}>
+					{#each sorted as r (r.runtime?.id)}
+						{@const n = installs(r)}
+						<ListRow
+							lamp={r.compatible ? 'success' : 'muted'}
+							shape={r.compatible && n > 0 ? 'filled' : 'hollow'}
+							primary={r.runtime?.name ?? ''}
+							primaryTip={about(r)}
+							secondary={slim ? undefined : status(r)}
+							secondaryKind="message"
+							secondaryWidth="28ch"
+							secondaryTip={r.compatible ? undefined : r.unmet.join('\n')}
+							facts={slim ? [] : [{ value: n > 0 ? num(n) : '' }]}
+							selected={r.runtime?.id === id}
+							onclick={() => open(r)}
+						>
+							{#snippet action()}
+								{#if r.compatible}<RowAction onclick={() => open(r, 'install')} label="Install" />{/if}
+							{/snippet}
+						</ListRow>
+					{/each}
+				</List>
+			{/if}
+		</Card>
+	</div>
 {/snippet}
 
-<Sheet open={id !== ''} onclose={() => goto('/runtimes')} {list} empty="Select a runtime">
+<PageHeader tabs={serveTabs} active="runtimes">
+	{#snippet meta()}
+		{#if loaded && runtimes.length}<span>{num(installedCount)} of {num(runtimes.length)} installed</span>{/if}
+	{/snippet}
+</PageHeader>
+
+<Sheet open={id !== ''} onclose={() => goto('/runtimes')} {list}>
 	{#if selected}
 		{#key selected.runtime?.id}
 			<RuntimePanel status={selected} {tab} ontab={showTab} onclose={() => goto('/runtimes')} />
 		{/key}
 	{:else if !loaded}
-		<Skeleton rows={4} height={32} />
+		<Skeleton rows={4} kind="facts" />
 	{:else}
 		<Empty text="No such runtime" action="Back" href="/runtimes" />
 	{/if}
 </Sheet>
+
+<style>
+	.catalog {
+		min-width: 0;
+	}
+</style>

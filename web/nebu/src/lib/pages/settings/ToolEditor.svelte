@@ -7,6 +7,7 @@
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Chips from '#lib/ui/fields/Chips.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
+	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import KeyValues from '#lib/ui/fields/KeyValues.svelte';
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Secret from '#lib/ui/fields/Secret.svelte';
@@ -75,44 +76,54 @@
 </script>
 
 <PanelHeader title={draft ? draft.name : 'New tool server'} {onclose} />
-<Stack gap={16}>
-	<FieldRow>
-		<Select bind:value={s.kind} options={kinds} label="Kind" disabled={editing} onchange={pickKind} />
-		<Text bind:value={s.name} label="Name" max={64} info="Routes and personas attach the server by this name" />
-	</FieldRow>
+<Stack gap={24}>
+	<FormSection title="Server">
+		<FieldRow>
+			<Select bind:value={s.kind} options={kinds} label="Kind" disabled={editing} onchange={pickKind} />
+			<Text bind:value={s.name} label="Name" placeholder="web-search" />
+		</FieldRow>
+		{#key generation}
+			<FieldRow>
+				<Switch bind:checked={s.enabled} label="Enabled" />
+				{#if s.kind === ToolServerKind.FETCH}
+					<Switch bind:checked={s.local} label="Local addresses" info="Lets the server read this host's own addresses, which a model could use to reach the daemon's services" />
+				{/if}
+			</FieldRow>
+		{/key}
+	</FormSection>
 	{#key generation}
 		{#if s.kind === ToolServerKind.SEARCH}
-			<FieldRow>
-				<Switch bind:checked={s.enabled} label="Enabled" />
-				<Segmented bind:value={s.provider} options={[{ value: 'searxng', label: 'SearXNG' }, { value: 'brave', label: 'Brave' }]} label="Provider" />
-			</FieldRow>
-			{#if s.provider === 'brave'}
-				<Secret bind:value={s.braveKey} label="Brave key" set={s.secretsSet} />
-			{:else}
-				<Text bind:value={s.searxngUrl} label="SearXNG URL" type="url" info="With the json format enabled" />
-			{/if}
-		{:else if s.kind === ToolServerKind.FETCH}
-			<FieldRow>
-				<Switch bind:checked={s.enabled} label="Enabled" />
-				<Switch bind:checked={s.local} label="Local" info="Lets the server read this host's own addresses, which a model could use to reach the daemon's services" />
-			</FieldRow>
+			<FormSection title="Search">
+				<FieldRow>
+					<Segmented bind:value={s.provider} options={[{ value: 'searxng', label: 'SearXNG' }, { value: 'brave', label: 'Brave' }]} label="Provider" />
+					{#if s.provider === 'brave'}
+						<Secret bind:value={s.braveKey} label="Brave key" set={s.secretsSet} />
+					{:else}
+						<Text bind:value={s.searxngUrl} label="SearXNG URL" type="url" placeholder="https://searx.example.org" info="An instance with the json format enabled" />
+					{/if}
+				</FieldRow>
+			</FormSection>
 		{:else if s.kind === ToolServerKind.STDIO}
-			<FieldRow>
-				<Switch bind:checked={s.enabled} label="Enabled" />
-				<Text bind:value={s.command} label="Command" max={256} mono />
-			</FieldRow>
-			<FieldRow>
-				<Chips bind:value={s.args} label="Arguments" />
+			<FormSection title="Command">
+				<FieldRow>
+					<Text bind:value={s.command} label="Command" mono placeholder="npx" info="Runs on this host and speaks MCP over stdin and stdout" />
+					<Chips bind:value={s.args} label="Arguments" />
+				</FieldRow>
 				<KeyValues bind:value={s.env} label="Environment" secret secretsSet={s.secretsSet} />
-			</FieldRow>
-		{:else}
-			<FieldRow>
-				<Switch bind:checked={s.enabled} label="Enabled" />
-				<Text bind:value={s.url} label="URL" type="url" />
-			</FieldRow>
-			<KeyValues bind:value={s.headers} label="Headers" secret secretsSet={s.secretsSet} />
+			</FormSection>
+		{:else if s.kind === ToolServerKind.HTTP}
+			<FormSection title="Endpoint">
+				<FieldRow>
+					<Text bind:value={s.url} label="URL" type="url" placeholder="https://mcp.example.org/sse" />
+				</FieldRow>
+				<KeyValues bind:value={s.headers} label="Headers" secret secretsSet={s.secretsSet} />
+			</FormSection>
 		{/if}
-		<Chips bind:value={s.allowedTools} label="Allowed tools" info="Every tool when empty" />
+		<FormSection title="Tools">
+			<FieldRow>
+				<Chips bind:value={s.allowedTools} label="Allowed tools" info="Every tool the server offers when empty" />
+			</FieldRow>
+		</FormSection>
 	{/key}
 </Stack>
-<SaveBar {dirty} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!s.name.trim() || (s.kind === ToolServerKind.STDIO && !s.command.trim()) || (s.kind === ToolServerKind.HTTP && !s.url.trim())} onsave={save} ondiscard={discard} />
+<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!s.name.trim() || (s.kind === ToolServerKind.STDIO && !s.command.trim()) || (s.kind === ToolServerKind.HTTP && !s.url.trim())} onsave={save} ondiscard={discard} />

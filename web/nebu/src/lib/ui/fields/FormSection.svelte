@@ -10,7 +10,7 @@
 <section class="form-section">
 	{#if title}
 		<div class="head">
-			<h3>{title}</h3>
+			<h2>{title}</h2>
 			{#if info}<InfoTip text={info} />{/if}
 		</div>
 	{/if}

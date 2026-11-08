@@ -182,6 +182,7 @@ CREATE TABLE tasks (
   progress_done INTEGER NOT NULL DEFAULT 0,
   progress_total INTEGER NOT NULL DEFAULT 0,
   progress_message TEXT NOT NULL DEFAULT '',
+  progress_unit TEXT NOT NULL DEFAULT '',
   error TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   started_at TEXT,

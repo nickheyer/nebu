@@ -119,8 +119,8 @@ func (m *Manager) Put(ctx context.Context, owner db.ChatOwner, c *v1.Conversatio
 		return nil, fmt.Errorf("%w: a conversation needs at least one turn, delete it instead of emptying it", ErrChat)
 	}
 	for i, t := range c.GetTurns() {
-		if t.GetRole() != "user" && t.GetRole() != "assistant" {
-			return nil, fmt.Errorf("%w: turn %d has role %q, want user or assistant", ErrChat, i+1, t.GetRole())
+		if t.GetRole() != "user" && t.GetRole() != "assistant" && t.GetRole() != "tool" {
+			return nil, fmt.Errorf("%w: turn %d has role %q, want user, assistant or tool", ErrChat, i+1, t.GetRole())
 		}
 		for _, f := range append(append([]*v1.ChatFile{}, t.GetImages()...), t.GetMedia()...) {
 			if f.GetId() == "" && f.GetUrl() == "" && f.GetError() == "" {

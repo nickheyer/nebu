@@ -19,9 +19,7 @@
 	import Select from '#lib/ui/fields/Select.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
-	import Cell from '#lib/ui/layout/Cell.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
-	import Row from '#lib/ui/layout/Row.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
@@ -95,14 +93,14 @@
 
 <PanelHeader title={editing ? id : 'New pool'} {onclose}>
 	{#snippet tools()}
-		{#if editing}<Confirm label="Delete" question="Delete {id}" danger onconfirm={remove} />{/if}
+		{#if editing}<Confirm label="Delete" question="Delete {id}?" danger onconfirm={remove} />{/if}
 	{/snippet}
 </PanelHeader>
 <Stack gap={24}>
 	<FormSection title="Pool">
 		<FieldRow>
-			<Text bind:value={id} label="Id" max={64} required readonly={editing} mono />
-			<Text bind:value={spec.model} label="Model" max={128} required />
+			<Text bind:value={id} label="Id" required readonly={editing} max={64} placeholder="llama-70b" />
+			<Text bind:value={spec.model} label="Model" required max={128} placeholder="meta-llama/Llama-3.3-70B-Instruct" />
 		</FieldRow>
 		<FieldRow>
 			<Select value={spec.runtimeId || undefined} options={runtimes} label="Runtime" clearable placeholder="Any" onchange={(v) => (spec.runtimeId = v ?? '')} />
@@ -111,7 +109,7 @@
 		<KeyValues bind:value={spec.selector} label="Selector" info="Labels an endpoint carries to join" />
 		<FieldRow>
 			<Chips bind:value={ports} label="Target ports" numeric max={8} info="Up to eight, 1 to 65535" />
-			<NumberField bind:value={spec.concurrency} min={0} label="Concurrency" emptyZero placeholder="runtime reported" info="Requests one endpoint runs at once when the runtime reports no capacity" />
+			<NumberField bind:value={spec.concurrency} min={0} label="Concurrency" emptyZero placeholder="Default" info="Requests one endpoint runs at once when the runtime reports no capacity" />
 		</FieldRow>
 		<FieldRow>
 			<Segmented bind:value={spec.appProtocol} options={[{ value: AppProtocol.HTTP, label: 'HTTP' }, { value: AppProtocol.H2C, label: 'h2c' }, { value: AppProtocol.GRPC, label: 'gRPC' }]} label="Protocol" />
@@ -121,11 +119,14 @@
 			<Select value={spec.schedulerConfig || undefined} options={configs} label="Scheduler config" clearable placeholder="Built in" onchange={(v) => (spec.schedulerConfig = v ?? '')} />
 			<Switch bind:checked={spec.export} label="Export" info="Offered to every mesh member and federated meshes" />
 		</FieldRow>
-		<Switch bind:checked={spec.tokensInOut} label="Tokens in and out" info="The gateway encodes prompts and sends token ids" />
+		<FieldRow>
+			<Switch bind:checked={spec.tokensInOut} label="Tokens in and out" info="The gateway encodes prompts and sends token ids" />
+			<span></span>
+		</FieldRow>
 		{#snippet advanced()}
 			{#if spec.inventory}
 				<FieldRow>
-					<NumberField bind:value={spec.inventory.contextLength} min={0} label="Context length" unit="tokens" />
+					<NumberField bind:value={spec.inventory.contextLength} min={0} label="Context length" unit="tokens" emptyZero placeholder="Default" />
 					<Text bind:value={spec.inventory.quantization} label="Quantization" max={32} placeholder="Q4_K_M" />
 				</FieldRow>
 				<FieldRow>
@@ -137,7 +138,7 @@
 			{#if spec.metrics}
 				<FieldRow>
 					<Text bind:value={spec.metrics.metricsPath} label="Metrics path" mono placeholder="/metrics" />
-					<NumberField bind:value={spec.metrics.metricsPort} min={0} max={65535} label="Metrics port" emptyZero placeholder="endpoint port" />
+					<NumberField bind:value={spec.metrics.metricsPort} min={0} max={65535} label="Metrics port" emptyZero placeholder="Default" info="The endpoint port when unset" />
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.healthPath} label="Health path" mono placeholder="/health" />
@@ -191,37 +192,64 @@
 			{/if}
 		{/snippet}
 	</FormSection>
-	<FormSection title="Static endpoints" info="Servers the pool reaches that nebu does not manage">
-		{#each spec.staticEndpoints as ep, i (i)}
-			<div class="hairline endpoint">
-				<Row gap={8} align="flex-start" wrap={false}>
-					<Cell min="12rem">
-						<Stack gap={12}>
-							<FieldRow>
-								<Text bind:value={ep.address} label="Address" placeholder="host:port" mono required />
-								<Text bind:value={ep.role} label="Role" max={32} placeholder="any" />
-							</FieldRow>
-							<FieldRow>
-								<NumberField bind:value={ep.rank} min={0} label="Rank" />
-								<NumberField bind:value={ep.kvCapacity} min={0} label="KV capacity" unit="tokens" />
-							</FieldRow>
-						</Stack>
-					</Cell>
-					<Cell grow={false}>
-						<NeoButton text aria-label="Remove endpoint" onclick={() => (spec.staticEndpoints = spec.staticEndpoints.filter((_, j) => j !== i))}>{#snippet icon()}<XIcon size={20} />{/snippet}</NeoButton>
-					</Cell>
-				</Row>
+	<FormSection title="Static endpoints" info="Servers the pool reaches that nebu does not manage, instances nebu launches join on their own">
+		{#if spec.staticEndpoints.length}
+			<div class="endpoints">
+				{#each spec.staticEndpoints as ep, i (i)}
+					<div class="endpoint">
+						<span class="address"><Text bind:value={ep.address} label={i === 0 ? 'Address' : undefined} placeholder="host:port" mono required /></span>
+						<span class="role"><Text bind:value={ep.role} label={i === 0 ? 'Role' : undefined} max={32} placeholder="Any" /></span>
+						<span class="small"><NumberField bind:value={ep.rank} min={0} label={i === 0 ? 'Rank' : undefined} /></span>
+						<span class="small"><NumberField bind:value={ep.kvCapacity} min={0} label={i === 0 ? 'KV tokens' : undefined} emptyZero placeholder="Default" /></span>
+						<span class="trail"><NeoButton text aria-label="Remove endpoint" title="Remove endpoint" onclick={() => (spec.staticEndpoints = spec.staticEndpoints.filter((_, j) => j !== i))}>{#snippet icon()}<XIcon size={18} />{/snippet}</NeoButton></span>
+					</div>
+				{/each}
 			</div>
-		{/each}
-		<Row gap={8}>
-			<Cell grow={false}><NeoButton text onclick={addEndpoint}>{#snippet icon()}<PlusIcon size={20} />{/snippet}Endpoint</NeoButton></Cell>
-		</Row>
+		{/if}
+		<span class="add"><NeoButton elevation={2} onclick={addEndpoint}>{#snippet icon()}<PlusIcon size={18} />{/snippet}Endpoint</NeoButton></span>
 	</FormSection>
 </Stack>
-<SaveBar {dirty} {saving} {error} message={problem} label={editing ? 'Save' : 'Create'} disabled={problem !== undefined} onsave={save} ondiscard={onclose} />
+<SaveBar {dirty} always={!editing} {saving} {error} message={problem} label={editing ? 'Save' : 'Create'} disabled={problem !== undefined} onsave={save} ondiscard={onclose} />
 
 <style>
+	.endpoints {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-2);
+		min-width: 0;
+	}
+	/* Address and role share what the fixed rank, capacity and remove columns leave, wrapping in a narrow drawer */
 	.endpoint {
-		padding-top: 12px;
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--nebu-space-2) var(--nebu-space-3);
+		align-items: flex-end;
+		min-width: 0;
+	}
+	.address {
+		display: flex;
+		flex: 3 1 12rem;
+		min-width: 0;
+	}
+	.role {
+		display: flex;
+		flex: 1 1 7rem;
+		min-width: 0;
+	}
+	.small {
+		display: flex;
+		flex: 0 0 8.5rem;
+		min-width: 0;
+	}
+	.endpoint > span > :global(*) {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.endpoint > .trail {
+		margin-left: auto;
+	}
+	.add {
+		display: inline-flex;
+		align-self: flex-start;
 	}
 </style>

@@ -22,7 +22,7 @@ Route: `/discover?source=&q=&sort=&...`, `/discover/<source>/<repo>`
 
 A warning line under the bar when the selected source reports an error or needs a token, linking to Settings.
 
-**Rows.** Repository (40ch), size or parameter count, Open. Check mark when in the store. Secondary phrase on standard and up: kind, up to three formats, license. Tooltip: downloads, likes, updated, gated, private.
+**Rows.** Repository (40ch), size, or the parameter count with its unit (70B params), Open. Check mark when in the store. Secondary phrase on standard and up: kind, up to three formats, license. Tooltip: downloads, likes, updated, gated, private.
 
 ## Repository page
 
@@ -54,7 +54,7 @@ A warning line under the bar when the selected source reports an error or needs 
 
 ## Widths
 
-Ultrawide: repository page as a Split, card left, tabs right. Standard: tabs as drawn. Mobile: rows drop the secondary phrase into the expand, Filters as a sheet.
+Ultrawide: repository page as a Split, card left, tabs right. Standard: tabs as drawn. Mobile: rows drop the secondary phrase into the expand, Filters as a sheet, the repository header on two rows, back and title then source and revision.
 
 ## Data
 

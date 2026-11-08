@@ -91,6 +91,7 @@ func parseNvidiaSMI(out []byte) host.Result {
 	}
 	var devices []*v1.Device
 	var pools []*v1.MemoryPool
+	var driverVersion string
 	for _, rec := range records {
 		if len(rec) == 1 && strings.TrimSpace(rec[0]) == "" {
 			continue
@@ -102,6 +103,7 @@ func parseNvidiaSMI(out []byte) host.Result {
 			rec[i] = strings.TrimSpace(rec[i])
 		}
 		index, name, uuid, total, free, compute, driver, bus := rec[0], rec[1], rec[2], rec[3], rec[5], rec[6], rec[7], rec[8]
+		driverVersion = driver
 		totalBytes, err := bytesIn(total, "MiB")
 		if err != nil {
 			return failed(err)
@@ -121,5 +123,9 @@ func parseNvidiaSMI(out []byte) host.Result {
 		})
 		pools = append(pools, &v1.MemoryPool{Id: uuid, Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: uuid, TotalBytes: totalBytes, FreeBytes: freeBytes})
 	}
-	return found(devices, pools, nil, rows(len(devices)))
+	detail := ""
+	if driverVersion != "" {
+		detail = "driver " + driverVersion
+	}
+	return found(devices, pools, nil, detail)
 }

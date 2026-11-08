@@ -151,8 +151,6 @@ type Daemon struct {
 	base       context.Context
 	addr       string
 	secure     bool
-	// Ownership of the data directory, let go on close
-	lock *dirLock
 }
 
 // Builds every manager from config in dependency order, nothing started until Serve
@@ -162,19 +160,15 @@ func New(cfg *v1.Config, log *slog.Logger, level *slog.LevelVar, recent *launch.
 			return nil, err
 		}
 	}
-	// One process at a time owns the database and store, named in the lock once it listens
-	lock, err := lockDir(cfg.GetDataDir())
-	if err != nil {
-		return nil, err
-	}
+
 	base, cancel := context.WithCancel(context.Background())
-	d = &Daemon{Config: cfg, Log: log, LogLevel: level, cancel: cancel, base: base, lock: lock, reloads: make(chan struct{}, 1), reloadEvery: reloadInterval}
+	d = &Daemon{Config: cfg, Log: log, LogLevel: level, cancel: cancel, base: base, reloads: make(chan struct{}, 1), reloadEvery: reloadInterval}
 	defer func() {
 		if err != nil {
 			d.abandon()
 		}
 	}()
-	prober := host.New(probes.All(), []string{cfg.GetStoreDir(), cfg.GetDataDir(), cfg.GetCacheDir()}, profileTTL)
+	prober := host.New(probes.All(), []host.Use{{Role: "store", Path: cfg.GetStoreDir()}, {Role: "data", Path: cfg.GetDataDir()}, {Role: "cache", Path: cfg.GetCacheDir()}}, profileTTL)
 	d.Host = prober
 	fmts, err := formatsall.Registry()
 	if err != nil {

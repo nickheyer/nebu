@@ -487,7 +487,7 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt runtimes.Run
 		total += uint64(a.size)
 		h.Logf("release %s asset %s", rel.tag, a.name)
 	}
-	h.Progress(0, total, "downloading")
+	h.ProgressBytes(0, total, "downloading")
 	for _, a := range rel.assets {
 		h.Message("downloading " + a.name)
 		reused, err := m.Fetcher.Land(ctx, a.blob, filepath.Join(dir, a.name), func(d int64) { h.Add(d) })

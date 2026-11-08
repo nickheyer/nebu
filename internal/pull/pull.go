@@ -390,7 +390,7 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, landings []*landing) 
 	}
 	// Block garbage collection until all manifests are written.
 	defer p.Store.Hold()()
-	h.Progress(0, total, "fetching")
+	h.ProgressBytes(0, total, "fetching")
 	for _, l := range landings {
 		if l.slot != "" {
 			h.Logf("%s: pulling %s %s", l.slot, l.model.GetRepo(), l.g.Name)
@@ -402,7 +402,7 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, landings []*landing) 
 			return err
 		}
 	}
-	h.Progress(total, total, "done")
+	h.ProgressBytes(total, total, "done")
 	return nil
 }
 
@@ -615,7 +615,7 @@ func (p *Puller) Verify(ctx context.Context, req *v1.VerifyRequest) (*v1.Task, e
 
 func (p *Puller) verify(ctx context.Context, h *tasks.Handle, models []*v1.StoredModel) error {
 	total := sizeOf(models)
-	h.Progress(0, total, "hashing")
+	h.ProgressBytes(0, total, "hashing")
 	bad := 0
 	for _, m := range models {
 		for _, sa := range m.GetArtifacts() {
@@ -648,7 +648,7 @@ func (p *Puller) verify(ctx context.Context, h *tasks.Handle, models []*v1.Store
 			unlock()
 		}
 	}
-	h.Progress(total, total, "done")
+	h.ProgressBytes(total, total, "done")
 	if bad > 0 {
 		p.AnnounceStore()
 		return fmt.Errorf("%d artifacts failed verification, pull again to repair", bad)

@@ -24,3 +24,14 @@ func TestPlanContextsEndOnTheModelsOwn(t *testing.T) {
 		t.Fatalf("a short model plans at its limit only, got %v", got)
 	}
 }
+
+func TestShardsKeepTheirDigitWidths(t *testing.T) {
+	got := shards("/m/model-00002-of-000003.safetensors")
+	want := []string{"/m/model-00001-of-000003.safetensors", "/m/model-00002-of-000003.safetensors", "/m/model-00003-of-000003.safetensors"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v", got)
+	}
+	if got := shards("/m/model-Q4_K_M.gguf"); !slices.Equal(got, []string{"/m/model-Q4_K_M.gguf"}) {
+		t.Fatalf("a whole file stands alone, got %v", got)
+	}
+}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { watch } from '@dvcol/svelte-utils/watch';
 	import { NeoInput, NeoRange } from '#lib/neo/inputs/index.js';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
@@ -13,10 +14,13 @@
 		info,
 		disabled = false,
 		message,
+		// Whether the setting is unset, the box then empty and showing the placeholder
+		blank = false,
+		placeholder,
 		onchange
-	}: { value?: number; min?: number; max?: number; step?: number; unit?: string; label?: string; info?: string; disabled?: boolean; message?: string; onchange?: (n: number) => void } = $props();
+	}: { value?: number; min?: number; max?: number; step?: number; unit?: string; label?: string; info?: string; disabled?: boolean; message?: string; blank?: boolean; placeholder?: string; onchange?: (n: number) => void } = $props();
 
-	let typed = $state(String(value));
+	let typed = $state(untrack(() => (blank ? '' : String(value))));
 
 	watch(
 		() => {
@@ -27,13 +31,14 @@
 	);
 
 	$effect(() => {
-		typed = String(value);
+		typed = blank ? '' : String(value);
 	});
 
 	function commit() {
+		if (typed === '' && blank) return;
 		const n = Number(typed);
-		if (Number.isNaN(n)) {
-			typed = String(value);
+		if (typed === '' || Number.isNaN(n)) {
+			typed = blank ? '' : String(value);
 			return;
 		}
 		value = Math.min(max, Math.max(min, n));
@@ -45,10 +50,10 @@
 	<FieldLabel {label} {info} />
 	<div class="controls">
 		<div class="range">
-			<NeoRange bind:value {min} {max} {step} {disabled} elevation={-1} tooltips={false} />
+			<NeoRange bind:value {min} {max} {step} {disabled} elevation={-1} tooltips={false} width="100%" />
 		</div>
 		<div class="box">
-			<NeoInput type="number" bind:value={typed} {min} {max} {step} {disabled} elevation={-1} floating={false} onchange={commit} onblur={commit} aria-label={label} />
+			<NeoInput type="text" inputmode="decimal" bind:value={typed} {disabled} {placeholder} elevation={-1} floating={false} width="100%" onchange={commit} onblur={commit} aria-label={label} />
 		</div>
 		{#if unit}<span class="unit secondary">{unit}</span>{/if}
 	</div>
@@ -64,15 +69,28 @@
 	}
 	.controls {
 		display: flex;
-		gap: 12px;
+		gap: var(--nebu-space-3);
 		align-items: center;
+		min-width: 0;
 	}
 	.range {
+		display: flex;
 		flex: 1 1 auto;
 		min-width: 0;
 	}
+	.range :global(.neo-range-container) {
+		min-width: 0;
+	}
 	.box {
+		display: flex;
 		flex: 0 0 9ch;
+		min-width: 0;
+	}
+	.box :global(.neo-input-group) {
+		min-width: 0;
+	}
+	.box :global(input) {
+		text-align: right;
 	}
 	.unit {
 		flex: 0 0 auto;

@@ -4,14 +4,17 @@
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import Collapse from '#lib/ui/Collapse.svelte';
 	import { reason, rpc } from '#lib/api/transport.js';
+	import { bytes, enumLabel } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { Placement } from '#lib/proto/nebu/v1/estimate_pb.js';
 	import { PolicySchema, ProfileSchema } from '#lib/proto/nebu/v1/gateway_pb.js';
+	import { PoolKind } from '#lib/proto/nebu/v1/host_pb.js';
 	import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
-	import { SlotAliasSchema, SlotState, type Slot } from '#lib/proto/nebu/v1/slot_pb.js';
+	import { SlotAliasSchema, SlotStateSchema, type Slot } from '#lib/proto/nebu/v1/slot_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Confirm from '#lib/ui/Confirm.svelte';
 	import NameConfirm from '#lib/ui/NameConfirm.svelte';
+	import StatePill from '#lib/ui/StatePill.svelte';
 	import Bytes from '#lib/ui/fields/Bytes.svelte';
 	import Checklist from '#lib/ui/fields/Checklist.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
@@ -20,13 +23,13 @@
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Segmented from '#lib/ui/fields/Segmented.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
-	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import Cell from '#lib/ui/layout/Cell.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Row from '#lib/ui/layout/Row.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { deviceLabel } from '#lib/ui/memory.js';
+	import { slotLamp } from '#lib/ui/status.js';
 	import ParamsForm from '#lib/pages/serve/ParamsForm.svelte';
 	import PolicyFields from '#lib/pages/serve/PolicyFields.svelte';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
@@ -51,8 +54,7 @@
 	let position = $state(draft?.position ?? 0);
 	let saving = $state(false);
 	let error = $state<string | undefined>(undefined);
-	let force = $state(false);
-	let forceOpen = $state(false);
+	let deleteOpen = $state(false);
 	let runtimes = $state<RuntimeStatus[]>([]);
 
 	// The form as one string, compared with the first render to tell a dirty form
@@ -73,7 +75,7 @@
 		]);
 	}
 	const initial = untrack(snapshot);
-	const dirty = $derived(!editing || snapshot() !== initial);
+	const dirty = $derived(snapshot() !== initial);
 
 	onMount(async () => {
 		try {
@@ -87,18 +89,41 @@
 	const runtimeOptions = $derived(
 		runtimes
 			.filter((r) => r.runtime && (installed.has(r.runtime.id) || r.runtime.id === runtimeId))
-			.map((r) => ({ value: r.runtime!.id, label: r.runtime!.name || r.runtime!.id, description: r.runtime!.description }))
+			.map((r) => ({ value: r.runtime!.id, label: r.runtime!.name || r.runtime!.id, tip: r.runtime!.description || undefined }))
 	);
 	const runtimeParams = $derived(runtimes.find((r) => r.runtime?.id === runtimeId)?.runtime?.params ?? []);
-	const devices = $derived((live.host?.devices ?? []).map((d) => ({ value: d.id, label: `${deviceLabel(live.host, d)} ${d.name}`, description: d.poolId })));
-	const total = $derived.by(() => {
-		const pools = new Set((live.host?.devices ?? []).filter((d) => deviceIds.includes(d.id)).map((d) => d.poolId));
-		return (live.host?.pools ?? []).filter((p) => pools.has(p.id)).reduce((n, p) => n + Number(p.totalBytes), 0);
+	const devices = $derived(
+		(live.host?.devices ?? []).map((d) => ({
+			value: d.id,
+			label: `${deviceLabel(live.host, d)} ${d.name}`,
+			description: memoryOf(d.poolId)
+		}))
+	);
+	// The pools the daemon caps at the slot's memory, devices the slot may use or host memory when host only
+	const capped = $derived.by(() => {
+		const hostOnly = placement === Placement.HOST;
+		return (live.host?.pools ?? []).filter((p) => {
+			const device = p.kind === PoolKind.DEVICE || p.kind === PoolKind.UNIFIED;
+			if (device && deviceIds.length > 0 && !deviceIds.includes(p.deviceId) && !deviceIds.includes(p.id)) return false;
+			return hostOnly ? p.kind === PoolKind.HOST || p.kind === PoolKind.UNIFIED : device;
+		});
 	});
-	const occupied = $derived(slot !== undefined && slot.instanceId !== '' && slot.state !== SlotState.EMPTY);
+	const capTotal = $derived(Math.max(0, ...capped.map((p) => Number(p.totalBytes))));
+	const occupied = $derived(slot !== undefined && slot.instanceId !== '');
+
+	// The memory a device holds, its pool's total, or the note that it borrows system memory
+	function memoryOf(poolId: string): string {
+		const pool = live.host?.pools.find((p) => p.id === poolId);
+		return pool ? bytes(pool.totalBytes) : 'shares system memory';
+	}
 
 	function addAlias() {
 		aliases = [...aliases, create(SlotAliasSchema, { policy: create(PolicySchema), profile: create(ProfileSchema) })];
+	}
+
+	// Zero leaves memory uncapped, which reads as the whole of the largest pool the slot may fill
+	function setMemory(n: number) {
+		memoryBytes = n >= capTotal ? 0 : n;
 	}
 
 	async function save() {
@@ -120,7 +145,7 @@
 	async function remove() {
 		if (!slot) return;
 		try {
-			await rpc.slots.deleteSlot({ id: slot.id, force });
+			await rpc.slots.deleteSlot({ id: slot.id, force: occupied });
 			toast.success(`Deleted ${slot.name}`);
 			onclose();
 		} catch (err) {
@@ -129,32 +154,57 @@
 	}
 </script>
 
-<PanelHeader title={editing ? (slot?.name ?? '') : 'New slot'} {onclose} />
+{#snippet placementField()}
+	<Segmented
+		bind:value={placement}
+		options={[
+			{ value: Placement.UNSPECIFIED, label: 'Auto', tip: 'Devices first, spilling into host memory' },
+			{ value: Placement.DEVICE, label: 'Device', tip: 'Device memory alone, never spilling' },
+			{ value: Placement.HOST, label: 'Host', tip: 'Host memory alone' }
+		]}
+		label="Placement"
+	/>
+{/snippet}
+
+{#snippet memoryField()}
+	{#if capTotal > 0}
+		<Bytes bind:value={() => memoryBytes || capTotal, setMemory} total={capTotal} label="Memory" info="The most the model may hold in each pool it uses" message={memoryBytes === 0 ? 'No cap' : `${bytes(memoryBytes)} of ${bytes(capTotal)}`} />
+	{:else}
+		<Bytes value={0} total={Math.max(0, ...(live.host?.pools ?? []).map((p) => Number(p.totalBytes)))} label="Memory" info="The most the model may hold in each pool it uses" disabled message="Nothing this placement caps" />
+	{/if}
+{/snippet}
+
+<PanelHeader title={editing ? (slot?.name ?? '') : 'New slot'} subtitle={slot?.description || undefined} {onclose}>
+	{#if slot}<StatePill label={enumLabel(SlotStateSchema, slot.state)} lamp={slotLamp(slot.state)} />{/if}
+	{#snippet tools()}
+		{#if slot}
+			{#if occupied}
+				<NeoButton flat color="error" onclick={() => (deleteOpen = true)}>Delete</NeoButton>
+			{:else}
+				<Confirm label="Delete" question="Delete {slot.name}?" danger onconfirm={remove} />
+			{/if}
+		{/if}
+	{/snippet}
+</PanelHeader>
 <Stack gap={24}>
-	<FormSection title="Slot">
+	<FormSection>
 		<FieldRow>
 			<Text bind:value={name} label="Name" max={64} required />
 			<Text bind:value={description} label="Description" max={140} />
 		</FieldRow>
+	</FormSection>
+	<FormSection title="Resources">
+		<Checklist bind:value={deviceIds} options={devices} label="Devices" info="None chosen lets the planner use any" empty="No devices probed" />
 		<FieldRow>
-			<Checklist bind:value={deviceIds} options={devices} label="Devices" empty="No devices probed" />
-			<Bytes bind:value={memoryBytes} total={total > 0 ? total : undefined} label="Memory" info="Reserved on the chosen devices" />
-		</FieldRow>
-		<FieldRow>
-			<Select bind:value={runtimeId} options={runtimeOptions} label="Runtime" clearable placeholder="Any installed runtime" />
-			<Segmented bind:value={placement} options={[{ value: Placement.UNSPECIFIED, label: 'Device first' }, { value: Placement.DEVICE, label: 'Device only' }, { value: Placement.HOST, label: 'Host only' }]} label="Placement" />
+			{@render placementField()}
+			{@render memoryField()}
 		</FieldRow>
 	</FormSection>
-	{#if runtimeParams.length}
-		<FormSection title="Default parameters" info="Request parameters override these at launch">
-			<ParamsForm params={runtimeParams} bind:values={params} bind:auto />
-		</FormSection>
-	{/if}
 	<PolicyFields bind:policy bind:profile />
 	<FormSection title="Aliases" info="Extra public names, each a route serving the slot's model">
 		{#each aliases as alias, i (i)}
 			<Stack gap={8}>
-				<Row gap={8} wrap={false}>
+				<Row gap={8} wrap={false} align="flex-end">
 					<Cell min="12rem"><Text bind:value={alias.name} label="Alias" max={64} /></Cell>
 					<Cell grow={false}>
 						<NeoButton text aria-label="Remove alias" onclick={() => (aliases = aliases.filter((_, j) => j !== i))}>
@@ -170,34 +220,24 @@
 			</Stack>
 		{/each}
 		<Row>
-			<NeoButton elevation={2} onclick={addAlias}>
-				{#snippet icon()}<PlusIcon size={20} />{/snippet}
-				Alias
+			<NeoButton text onclick={addAlias}>
+				{#snippet icon()}<PlusIcon size={16} />{/snippet}
+				Add alias
 			</NeoButton>
 		</Row>
 	</FormSection>
 	<FormSection title="Launch">
 		<FieldRow>
-			<Text bind:value={args} label="Arguments" info="Extra words for the runtime command, split like a shell" max={512} mono />
-			<NumberField bind:value={position} min={0} label="Position" info="Place in the slot list, zero puts it last" placeholder="end" />
+			<Select bind:value={runtimeId} options={runtimeOptions} label="Runtime" info="Its parameters below are the slot's defaults, launch requests override them" clearable placeholder="Any installed" />
+			<NumberField bind:value={position} min={0} label="Position" info="Place in the slot list and relaunch order, the end by default" emptyZero placeholder="Default" />
 		</FieldRow>
+		<Text bind:value={args} label="Arguments" info="Extra words for the runtime command, split like a shell" max={512} mono />
 	</FormSection>
-	{#if editing && slot}
-		<FormSection title="Delete">
-			<Row>
-				{#if occupied}
-					<Cell min="12rem"><Switch bind:checked={force} label="Stop the occupant" /></Cell>
-				{/if}
-				<Cell grow={false} push>
-					{#if force}
-						<NeoButton elevation={2} color="error" onclick={() => (forceOpen = true)}>Delete slot</NeoButton>
-					{:else}
-						<Confirm label="Delete slot" question="Delete {slot.name}?" danger disabled={occupied} small={false} onconfirm={remove} />
-					{/if}
-				</Cell>
-			</Row>
-		</FormSection>
-		<NameConfirm bind:open={forceOpen} title="Delete slot" name={slot.name} message="The occupant stops first" onconfirm={remove} />
+	{#if runtimeParams.length}
+		<ParamsForm params={runtimeParams} bind:values={params} bind:auto />
 	{/if}
 </Stack>
-<SaveBar {dirty} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!name} onsave={save} ondiscard={onclose} />
+<SaveBar always={!editing} {dirty} {saving} {error} message={name.trim() ? undefined : 'Name needed'} label={editing ? 'Save' : 'Create'} disabled={!name.trim()} onsave={save} ondiscard={onclose} />
+{#if slot && occupied}
+	<NameConfirm bind:open={deleteOpen} title="Delete slot" name={slot.name} message="The occupant stops first" onconfirm={remove} />
+{/if}

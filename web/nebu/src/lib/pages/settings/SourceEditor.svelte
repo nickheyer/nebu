@@ -5,7 +5,9 @@
 	import { enumLabel } from '#lib/format.js';
 	import { SourceKind, SourceKindSchema, SourceSchema, type ConfigField, type Provider, type SourceStatus } from '#lib/proto/nebu/v1/source_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
+	import Str from '#lib/ui/Str.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
+	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
@@ -36,6 +38,12 @@
 	});
 
 	const baseline = untrack(() => snapshot());
+
+	// A new source opened before the providers listed takes the first one once they arrive
+	$effect(() => {
+		const first = providers[0];
+		if (!editing && kind === SourceKind.UNSPECIFIED && first) untrack(() => pickProvider(first.kind));
+	});
 	const dirty = $derived(!editing || snapshot() !== baseline);
 
 	// Stored values over each field's default
@@ -90,20 +98,26 @@
 	}
 </script>
 
-<PanelHeader title={draft ? draft.name || draft.id : 'New source'} subtitle={draft ? provider?.name : undefined} {onclose} />
-<Stack gap={16}>
-	<FieldRow>
-		<Select value={kind} options={providerOptions} label="Provider" disabled={editing} onchange={pickProvider} />
-		{#if transports.length > 1}
-			<Select bind:value={transport} options={transports.map((t) => ({ value: t, label: t }))} label="Transport" />
-		{/if}
-	</FieldRow>
-	<FieldRow>
-		<Text bind:value={id} label="Id" max={64} readonly={editing} mono />
-		<Text bind:value={name} label="Name" max={64} placeholder={id} />
-	</FieldRow>
-	<ConfigFields {fields} bind:values={config} secretsSet={editing} />
-	{#if status?.error}<p class="error-text secondary">{status.error}</p>{/if}
+<PanelHeader title={draft ? draft.name || draft.id : 'New source'} subtitle={draft && provider?.name !== (draft.name || draft.id) ? provider?.name : undefined} {onclose} />
+<Stack gap={24}>
+	{#if status?.error}<Str value={status.error} kind="message" color="error" width="100%" />{/if}
+	<FormSection title="Source">
+		<FieldRow>
+			<Select value={kind} options={providerOptions} label="Provider" disabled={editing} onchange={pickProvider} />
+			{#if transports.length > 1}
+				<Select bind:value={transport} options={transports.map((t) => ({ value: t, label: t }))} label="Transport" />
+			{/if}
+		</FieldRow>
+		<FieldRow>
+			<Text bind:value={id} label="Id" readonly={editing} mono placeholder="huggingface" />
+			<Text bind:value={name} label="Name" placeholder="Hugging Face" />
+		</FieldRow>
+	</FormSection>
+	{#if fields.length}
+		<FormSection title="Configuration">
+			<ConfigFields {fields} bind:values={config} secretsSet={editing} />
+		</FormSection>
+	{/if}
 </Stack>
-<SaveBar {dirty} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!id.trim() || kind === SourceKind.UNSPECIFIED} onsave={save} ondiscard={discard} />
+<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!id.trim() || kind === SourceKind.UNSPECIFIED} onsave={save} ondiscard={discard} />
 

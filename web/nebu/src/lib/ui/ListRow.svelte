@@ -1,19 +1,26 @@
+<script lang="ts" module>
+	// Pixels one character of the row's text takes, so widths given in ch become flex bases
+	const chPx = 8.5;
+
+	// A width in ch as the pixels a row column takes, other units unchanged
+	export function toPx(w: string): string {
+		return w.endsWith('ch') ? `${Math.round(Number(w.slice(0, -2)) * chPx)}px` : w;
+	}
+</script>
+
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import Dot from '#lib/ui/Dot.svelte';
+	import ListScope from '#lib/ui/ListScope.svelte';
 	import Menu, { type MenuItem } from '#lib/ui/Menu.svelte';
 	import Str, { type StrKind } from '#lib/ui/Str.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
+	import { compactBelow, useList, weightOf, type ListSlot } from '#lib/ui/list.svelte.js';
 	import type { DotShape, Lamp } from '#lib/ui/status.js';
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 
 	export type Fact = { value: string; tip?: string; mono?: boolean };
-
-	// Pixels one character of the row's text takes, so widths given in ch become flex bases
-	const chPx = 8.5;
-	// The row width under which the secondary phrase and the facts move into the expand
-	const compactBelow = 640;
 
 	let {
 		lamp,
@@ -56,7 +63,7 @@
 		expand?: Snippet;
 		leading?: Snippet;
 		badges?: Snippet;
-		// A bar between the phrase and the facts, spanning its own line under the row on mobile
+		// A bar between the phrase and the facts, spanning its own line under the row when compact
 		instrument?: Snippet;
 		// A line under the row spanning its width
 		below?: Snippet;
@@ -65,101 +72,209 @@
 		selected?: boolean;
 	} = $props();
 
+	const list = useList();
+
 	let open = $state(false);
 	let width = $state(0);
-	const compact = $derived(width > 0 && width < compactBelow);
-	const shownFacts = $derived(facts.filter((f) => f.value !== '').slice(0, 2));
-	const dropped = $derived(compact && (secondary !== undefined || shownFacts.length > 0));
+	const compact = $derived(list ? list.compact : width > 0 && width < compactBelow);
+	const shownFacts = $derived(list ? facts.slice(0, 2) : facts.filter((f) => f.value !== '').slice(0, 2));
+	const dropped = $derived(compact && (secondary !== undefined || facts.some((f) => f.value !== '')));
 	const expandable = $derived(expand !== undefined || dropped);
 	const clickable = $derived(href !== undefined || onclick !== undefined);
-	const primaryBasis = $derived(toPx(primaryWidth ?? (primaryKind === 'repo' || primaryKind === 'path' ? '40ch' : primaryKind === 'message' ? '64ch' : '24ch')));
+	const primaryWidthCh = $derived(primaryWidth ?? (primaryKind === 'repo' || primaryKind === 'path' ? '40ch' : primaryKind === 'message' ? '64ch' : '24ch'));
+	const primaryBasis = $derived(toPx(primaryWidthCh));
+	// A wide row without an instrument lends the name up to three fifths more room before it truncates
+	const primaryMax = $derived(primaryWidthCh.endsWith('ch') ? toPx(`${Math.round(Number(primaryWidthCh.slice(0, -2)) * 1.6)}ch`) : primaryWidthCh);
 	const secondaryBasis = $derived(toPx(secondaryWidth));
 
-	function toPx(w: string): string {
-		return w.endsWith('ch') ? `${Math.round(Number(w.slice(0, -2)) * chPx)}px` : w;
+	// Tells the list which cells this row fills and how wide its strings run
+	$effect(() => {
+		if (!list) return;
+		const slots: ListSlot[] = [];
+		if (leading) slots.push('leading');
+		if (lamp) slots.push('dot');
+		if (secondary !== undefined) slots.push('secondary');
+		if (instrument) slots.push('instrument');
+		if (action) slots.push('action');
+		if (menu?.length) slots.push('menu');
+		if (expandable) slots.push('caret');
+		list.primaryWeight = weightOf(primaryWidthCh, 1);
+		list.secondaryWeight = weightOf(secondaryWidth, 1.4);
+		return list.use(slots, Math.min(2, facts.length));
+	});
+
+	function inControl(target: EventTarget | null): boolean {
+		return (target as HTMLElement | null)?.closest('button, a, input, [role=menu], [role=menuitem]') !== null;
 	}
 
 	function activate(e: MouseEvent) {
-		if ((e.target as HTMLElement).closest('button, a, input, [role=menu]')) return;
+		if (inControl(e.target)) return;
 		onclick?.();
+	}
+
+	function keyActivate(e: KeyboardEvent) {
+		if (inControl(e.target) && e.target !== e.currentTarget) return;
+		if (e.key === 'Enter' || e.key === ' ') {
+			e.preventDefault();
+			onclick?.();
+		}
 	}
 </script>
 
-<div class="rowwrap" class:selected bind:clientWidth={width}>
-	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-	<div class="listrow" class:clickable role={clickable && !href ? 'button' : undefined} tabindex={clickable && !href ? 0 : undefined} onclick={activate} onkeydown={(e) => e.key === 'Enter' && onclick?.()}>
-		{#if leading}<span class="leading">{@render leading()}</span>{/if}
-		{#if lamp}<Dot {lamp} {shape} />{/if}
-		<span class="primary" style:flex-basis={compact ? 'auto' : primaryBasis}>
-			{#if href}
-				<a {href} class="link"><Str value={primary} kind={primaryKind} tip={primaryTip} weight={500} width="100%" /></a>
-			{:else}
-				<Str value={primary} kind={primaryKind} tip={primaryTip} weight={500} width="100%" />
-			{/if}
-			{#if badges}<span class="badges">{@render badges()}</span>{/if}
-		</span>
-		{#if !compact && secondary !== undefined}
-			<span class="secondary-col" style:flex-basis={secondaryBasis}>
-				<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" />
-			</span>
-		{/if}
-		{#if instrument && !compact}
-			<span class="instrument">{@render instrument()}</span>
-		{:else}
-			<span class="fill"></span>
-		{/if}
-		{#if !compact}
-			{#each shownFacts as f, i (i)}
-				<Tip text={f.tip} tag="span">
-					<span class="fact" class:mono={f.mono}>{f.value}</span>
-				</Tip>
-			{/each}
-		{/if}
-		{#if action}<span class="action">{@render action()}</span>{/if}
-		{#if menu?.length}<Menu items={menu} />{/if}
-		{#if expandable}
-			<NeoButton text aria-label={open ? 'Collapse' : 'Expand'} aria-expanded={open} onclick={() => (open = !open)}>
-				{#snippet icon()}<span class="caret" class:open><CaretDownIcon size={16} /></span>{/snippet}
-			</NeoButton>
-		{/if}
-	</div>
-	{#if instrument && compact}<div class="below">{@render instrument()}</div>{/if}
-	{#if below}<div class="below">{@render below()}</div>{/if}
-	{#if open && expandable}
-		<div class="expanded">
-			{#if dropped}
-				<div class="dropped">
-					{#if secondary !== undefined}<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" />{/if}
-					{#each facts.filter((f) => f.value !== '') as f, i (i)}<span class="fact" class:mono={f.mono}>{f.value}</span>{/each}
-				</div>
-			{/if}
-			{@render expand?.()}
-		</div>
+{#snippet name()}
+	{#if href}
+		<a {href} class="link"><Str value={primary} kind={primaryKind} tip={primaryTip} weight={500} width="100%" /></a>
+	{:else}
+		<Str value={primary} kind={primaryKind} tip={primaryTip} weight={500} width="100%" />
 	{/if}
-</div>
+	{#if badges}<span class="badges">{@render badges()}</span>{/if}
+{/snippet}
+
+{#snippet fact(f: Fact | undefined)}
+	{#if f && f.value !== ''}
+		<Tip text={f.tip} tag="span" class="facttip">
+			<span class="fact" class:mono={f.mono}>{f.value}</span>
+		</Tip>
+	{/if}
+{/snippet}
+
+{#snippet caret()}
+	<NeoButton text aria-label={open ? 'Collapse' : 'Expand'} aria-expanded={open} onclick={() => (open = !open)}>
+		{#snippet icon()}<span class="caret" class:open><CaretDownIcon size={16} /></span>{/snippet}
+	</NeoButton>
+{/snippet}
+
+{#snippet more()}
+	<ListScope>
+		{#if instrument && compact}<div class="below">{@render instrument()}</div>{/if}
+		{#if below}<div class="below">{@render below()}</div>{/if}
+		{#if open && expandable}
+			<div class="expanded">
+				{#if dropped}
+					<div class="dropped">
+						{#if secondary !== undefined}<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" />{/if}
+						{#each facts.filter((f) => f.value !== '') as f, i (i)}<span class="fact" class:mono={f.mono}>{f.value}</span>{/each}
+					</div>
+				{/if}
+				{@render expand?.()}
+			</div>
+		{/if}
+	</ListScope>
+{/snippet}
+
+{#if list}
+	<div class="rowwrap grid" class:selected>
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+		<div class="listrow" class:clickable role={clickable && !href ? 'button' : undefined} tabindex={clickable && !href ? 0 : undefined} aria-pressed={clickable && !href && selected ? true : undefined} onclick={activate} onkeydown={clickable && !href ? keyActivate : undefined}>
+			{#if list.has('leading')}<span class="cell">{#if leading}{@render leading()}{/if}</span>{/if}
+			{#if list.has('dot')}<span class="cell">{#if lamp}<Dot {lamp} {shape} />{/if}</span>{/if}
+			<span class="cell primary">{@render name()}</span>
+			{#if list.has('secondary')}
+				<span class="cell secondary-col">{#if secondary !== undefined}<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" />{/if}</span>
+			{/if}
+			{#if list.has('instrument')}<span class="cell instrument">{#if instrument}{@render instrument()}{/if}</span>{/if}
+			{#if !list.compact}
+				{#each { length: list.factCount } as _, i (i)}<span class="cell end">{@render fact(shownFacts[i])}</span>{/each}
+			{/if}
+			{#if list.has('action')}<span class="cell end action">{#if action}{@render action()}{/if}</span>{/if}
+			{#if list.has('menu')}<span class="cell">{#if menu?.length}<Menu items={menu} />{/if}</span>{/if}
+			{#if list.has('caret')}<span class="cell">{#if expandable}{@render caret()}{/if}</span>{/if}
+		</div>
+		{@render more()}
+	</div>
+{:else}
+	<div class="rowwrap" class:selected bind:clientWidth={width}>
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+		<div class="listrow flex" class:clickable role={clickable && !href ? 'button' : undefined} tabindex={clickable && !href ? 0 : undefined} aria-pressed={clickable && !href && selected ? true : undefined} onclick={activate} onkeydown={clickable && !href ? keyActivate : undefined}>
+			{#if leading}<span class="leading">{@render leading()}</span>{/if}
+			{#if lamp}<Dot {lamp} {shape} />{/if}
+			<span class="primary" style:flex-basis={compact ? 'auto' : primaryBasis} style:flex-grow={instrument ? 0 : 1} style:max-width={compact ? '100%' : primaryMax}>
+				{@render name()}
+			</span>
+			{#if !compact && secondary !== undefined}
+				<span class="secondary-col flexsec" style:flex-basis={secondaryBasis}>
+					<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" />
+				</span>
+			{/if}
+			{#if instrument && !compact}
+				<span class="instrument">{@render instrument()}</span>
+			{:else}
+				<span class="fill"></span>
+			{/if}
+			{#if !compact}
+				{#each shownFacts as f, i (i)}{@render fact(f)}{/each}
+			{/if}
+			{#if action}<span class="action">{@render action()}</span>{/if}
+			{#if menu?.length}<Menu items={menu} />{/if}
+			{#if expandable}{@render caret()}{/if}
+		</div>
+		{@render more()}
+	</div>
+{/if}
 
 <style>
 	.rowwrap {
+		position: relative;
 		min-width: 0;
 		border-bottom: 1px solid var(--nebu-border);
 	}
+	.rowwrap:last-child {
+		border-bottom-color: transparent;
+	}
+	/* A row in a list spans its columns, cells lining up with the head and every other row */
+	.rowwrap.grid {
+		display: grid;
+		grid-template-columns: subgrid;
+		grid-column: 1 / -1;
+	}
+	.rowwrap.grid > :global(*) {
+		grid-column: 1 / -1;
+	}
+	.rowwrap.grid > .listrow {
+		display: grid;
+		grid-template-columns: subgrid;
+		align-items: center;
+		padding: var(--nebu-space-1) var(--nebu-row-inset, var(--nebu-space-2));
+	}
 	.rowwrap.selected {
-		background: color-mix(in srgb, var(--neo-color-primary) 8%, transparent);
+		background: color-mix(in srgb, var(--neo-color-primary) 9%, transparent);
+	}
+	.rowwrap.selected::before {
+		position: absolute;
+		top: 6px;
+		bottom: 6px;
+		left: 0;
+		width: 3px;
+		content: '';
+		background: var(--neo-color-primary);
+		border-radius: 0 3px 3px 0;
 	}
 	.listrow {
-		display: flex;
-		gap: 12px;
-		align-items: center;
 		min-height: 44px;
-		padding: 4px 8px;
-		border-radius: 8px;
-		transition: background 150ms ease-out;
+		transition: background var(--nebu-fast) var(--nebu-ease);
+	}
+	.listrow.flex {
+		display: flex;
+		gap: var(--nebu-space-3);
+		align-items: center;
+		padding: var(--nebu-space-1) var(--nebu-row-inset, var(--nebu-space-2));
 	}
 	.listrow.clickable {
 		cursor: pointer;
 	}
-	.listrow:hover {
+	.listrow.clickable:hover {
 		background: var(--neo-background-color-hover);
+	}
+	.listrow.clickable:focus-visible {
+		outline-offset: -2px;
+	}
+	.cell {
+		display: flex;
+		align-items: center;
+		min-width: 0;
+	}
+	.cell.end {
+		justify-content: flex-end;
 	}
 	.leading {
 		display: inline-flex;
@@ -169,11 +284,13 @@
 	}
 	.primary {
 		display: inline-flex;
-		flex: 1 1 auto;
 		gap: 6px;
 		align-items: center;
+		min-width: 0;
+	}
+	.listrow.flex .primary {
+		flex: 1 1 auto;
 		min-width: 12ch;
-		max-width: 100%;
 	}
 	.primary > :global(.tip),
 	.primary > .link {
@@ -187,10 +304,12 @@
 		align-items: center;
 	}
 	.secondary-col {
+		font-size: var(--nebu-text-secondary);
+	}
+	.flexsec {
 		display: inline-flex;
 		flex: 0 2 auto;
 		min-width: 8ch;
-		font-size: 13px;
 	}
 	.link {
 		max-width: 100%;
@@ -205,22 +324,31 @@
 	}
 	.instrument {
 		display: flex;
-		flex: 1 1 0;
 		align-items: center;
-		min-width: 6rem;
+		min-width: 0;
+	}
+	.listrow.flex .instrument {
+		flex: 1 1 0;
+		min-width: 12rem;
 	}
 	.fact {
 		display: inline-block;
-		flex: 0 0 auto;
-		min-width: 8ch;
 		font-variant-numeric: tabular-nums;
-		font-size: 13px;
+		font-size: var(--nebu-text-secondary);
 		color: var(--nebu-text-muted);
 		text-align: right;
 		white-space: nowrap;
 	}
+	.listrow.flex .fact {
+		flex: 0 0 auto;
+		min-width: 8ch;
+	}
 	.fact.mono {
 		font-family: var(--nebu-font-mono);
+	}
+	/* A fact keeps its width, the name and phrase giving way first */
+	:global(.tip.facttip) {
+		flex: 0 0 auto;
 	}
 	.action {
 		display: inline-flex;
@@ -230,7 +358,8 @@
 	}
 	.caret {
 		display: inline-flex;
-		transition: transform 150ms ease-out;
+		color: var(--nebu-text-muted);
+		transition: transform var(--nebu-fast) var(--nebu-ease);
 	}
 	.caret.open {
 		transform: rotate(180deg);
@@ -238,27 +367,21 @@
 	.below {
 		display: flex;
 		min-width: 0;
-		padding: 0 8px 8px;
+		padding: 0 var(--nebu-row-inset, var(--nebu-space-2)) var(--nebu-space-2);
 	}
 	.expanded {
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
-		padding: 4px 8px 12px 28px;
+		gap: var(--nebu-space-2);
+		padding: var(--nebu-space-1) var(--nebu-row-inset, var(--nebu-space-2)) var(--nebu-space-3) calc(var(--nebu-row-inset, var(--nebu-space-2)) + 20px);
 	}
 	.dropped {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 4px 16px;
-		font-size: 13px;
+		gap: var(--nebu-space-1) var(--nebu-space-4);
+		font-size: var(--nebu-text-secondary);
 	}
 	.dropped .fact {
 		text-align: left;
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.caret,
-		.listrow {
-			transition: none;
-		}
 	}
 </style>

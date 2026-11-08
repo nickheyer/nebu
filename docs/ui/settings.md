@@ -6,7 +6,7 @@ Route: `/settings/general`, `/settings/sources`, `/settings/tools`, `/settings/a
 
 ## General
 
-Host label Text 64. Appearance: theme Segmented (light, dark, system), source Select, transitions Switch, reset Switch, remembered in the browser. Daemon rows read only: version, listener, home.
+Host label Text 64. Appearance: theme Segmented (light, dark, system), transitions Switch, reset Switch, remembered in the browser. Daemon rows read only: version, listener, home.
 
 ## Sources
 

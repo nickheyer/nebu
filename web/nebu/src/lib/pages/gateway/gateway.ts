@@ -1,17 +1,10 @@
 import type { Live } from '#lib/live/events.svelte.js';
 import { ago, enumLabel, ms, num, pct } from '#lib/format.js';
-import { RouteBalance, type GatewayStatus, type RewriteRule, type Route } from '#lib/proto/nebu/v1/gateway_pb.js';
+import { RouteState, RouteStateSchema, type GatewayStatus, type RewriteRule, type Route } from '#lib/proto/nebu/v1/gateway_pb.js';
 import { AppProtocolSchema, FailureModeSchema, type Endpoint, type Pool } from '#lib/proto/nebu/v1/pool_pb.js';
 import { ConditionStatus, type Condition } from '#lib/proto/nebu/v1/meta_pb.js';
 import type { Fact } from '#lib/ui/Tip.svelte';
 import type { DotShape, Lamp } from '#lib/ui/status.js';
-
-export const gatewayTabs = ['routes', 'pools', 'objectives', 'schedulers', 'imports'] as const;
-export type GatewayTab = (typeof gatewayTabs)[number];
-
-export function isGatewayTab(s: string): s is GatewayTab {
-	return (gatewayTabs as readonly string[]).includes(s);
-}
 
 // Whether a person authored the record rather than a slot, instance, formation or node deriving it
 export function isUserOwned(ownerKind: string): boolean {
@@ -44,8 +37,8 @@ export function routeTarget(live: Live, r: Route): string {
 	return 'no pool';
 }
 
-// The one action a route's owner allows and where it leads
-export function routeAction(live: Live, r: Route): { label: string; href: string } {
+// Where the slot, instance, formation or node deriving a route lives, nothing for a route a person wrote
+export function ownerLink(live: Live, r: Route): { label: string; href: string } | undefined {
 	switch (r.ownerKind) {
 		case 'slot': {
 			const instanceId = live.slots.get(r.ownerId)?.instanceId;
@@ -58,31 +51,21 @@ export function routeAction(live: Live, r: Route): { label: string; href: string
 		case 'node':
 			return { label: 'Open node', href: `/mesh/nodes/${encodeURIComponent(r.ownerId)}` };
 		default:
-			return { label: 'Edit', href: `/gateway/routes/${encodeURIComponent(r.name)}` };
+			return undefined;
 	}
 }
 
-// Owner and launch inventory of a route, one per line
+// State, owner and launch inventory of a route, one per line
 export function routeTip(r: Route): string {
 	const inv = r.status?.inventory;
 	return [
+		`state ${enumLabel(RouteStateSchema, r.status?.state ?? RouteState.UNSPECIFIED)}`,
 		`owner ${ownerLabel(r.ownerKind, r.ownerId)}`,
 		`context ${inv?.contextLength ? num(inv.contextLength) : 'unknown'}`,
 		`quantization ${inv?.quantization || 'unknown'}`,
 		`accelerator ${inv?.accelerator || 'unknown'}`,
 		`modalities ${inv?.modalities.join(', ') || 'unknown'}`
 	].join('\n');
-}
-
-export function balanceWord(b: RouteBalance | undefined): string {
-	switch (b) {
-		case RouteBalance.READY_ENDPOINTS:
-			return 'ready endpoints';
-		case RouteBalance.FREE_CAPACITY:
-			return 'free capacity';
-		default:
-			return 'weights';
-	}
 }
 
 export function poolLamp(p: Pool | undefined): Lamp {
@@ -154,13 +137,19 @@ export function compact(n: bigint | number | undefined): string {
 	return compactFormat.format(Number(n ?? 0));
 }
 
-// Listeners with their shared marks, the metrics address and the default policy
+// Every listener with its shared mark, one per line
+export function listenersTip(s: GatewayStatus): string {
+	return s.listeners.map((l) => `${l.addr}${l.shared ? ' shared' : ''}`).join('\n');
+}
+
+// The build, metrics address, requests served and the default route policy
 export function statusFacts(s: GatewayStatus): Fact[] {
 	const p = s.policy;
 	return [
-		...s.listeners.map((l, i) => ({ label: s.listeners.length > 1 ? `listener ${i + 1}` : 'listener', value: `${l.addr}${l.shared ? ' shared' : ''}` })),
+		{ label: 'version', value: `${s.implementation} ${s.version}`.trim() },
 		{ label: 'metrics', value: s.metricsAddr || 'off' },
-		{ label: 'in flight', value: p?.maxInFlight ? num(p.maxInFlight) : 'unlimited' },
+		{ label: 'requests', value: `${compact(s.requests)} served` },
+		{ label: 'max in flight', value: p?.maxInFlight ? num(p.maxInFlight) : 'unlimited' },
 		{ label: 'rate', value: p?.requestsPerSecond ? `${p.requestsPerSecond} req/s, burst ${p.burst ? num(p.burst) : 'auto'}` : 'unlimited' },
 		{ label: 'timeouts', value: `request ${p?.requestTimeoutMs ? ms(p.requestTimeoutMs) : 'none'}, upstream ${p?.upstreamTimeoutMs ? ms(p.upstreamTimeoutMs) : 'none'}` }
 	];

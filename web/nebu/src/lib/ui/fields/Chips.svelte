@@ -7,7 +7,7 @@
 		value = $bindable([]),
 		label,
 		info,
-		placeholder = 'Add and press enter',
+		placeholder = 'Add',
 		disabled = false,
 		numeric = false,
 		max,

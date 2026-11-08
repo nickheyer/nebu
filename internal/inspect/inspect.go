@@ -365,13 +365,13 @@ func (i *Inspector) header(ctx context.Context, rt runtimes.Runtime, path string
 func shards(path string) []string {
 	dir, base := filepath.Split(path)
 	ext := filepath.Ext(base)
-	stem, _, count, ok := formats.Shard(strings.TrimSuffix(base, ext))
-	if !ok || count <= 1 {
+	names := formats.Shards(strings.TrimSuffix(base, ext))
+	if len(names) <= 1 {
 		return []string{path}
 	}
-	out := make([]string, 0, count)
-	for n := uint32(1); n <= count; n++ {
-		out = append(out, filepath.Join(dir, fmt.Sprintf("%s-%05d-of-%05d%s", stem, n, count, ext)))
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		out = append(out, filepath.Join(dir, name+ext))
 	}
 	return out
 }

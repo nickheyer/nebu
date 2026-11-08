@@ -1,8 +1,6 @@
 <script lang="ts">
-	import { NeoButton } from '#lib/neo/buttons/index.js';
-	import Collapse from '#lib/ui/Collapse.svelte';
-	import { NeoPopConfirm } from '#lib/neo/floating/tooltips/index.js';
 	import { goto } from '$app/navigation';
+	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { ago, bytes, enumLabel, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
@@ -11,19 +9,22 @@
 	import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import type { StoredArtifact, StoredModel } from '#lib/proto/nebu/v1/store_pb.js';
 	import Bar from '#lib/ui/Bar.svelte';
+	import Collapse from '#lib/ui/Collapse.svelte';
+	import Confirm from '#lib/ui/Confirm.svelte';
 	import KeyRows from '#lib/ui/KeyRows.svelte';
-	import PageTabs from '#lib/ui/PageTabs.svelte';
+	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
-	import Str from '#lib/ui/Str.svelte';
+	import PageTabs from '#lib/ui/PageTabs.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
-	import Row from '#lib/ui/layout/Row.svelte';
+	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import FitTab from '#lib/pages/models/FitTab.svelte';
 	import PartsTab from '#lib/pages/models/PartsTab.svelte';
-	import { kindLabel, launchHref, modelKeyOf, paramCount, removeModel, roleIcon, sameModel, verifyModel } from '#lib/pages/models/models.js';
+	import { kindLabel, launchHref, modelKeyOf, paramCount, removeModel, roleIcon, sameModel, verifyModel, weightsLabel } from '#lib/pages/models/models.js';
 	import { terminal } from '#lib/pages/serve/serve.js';
+	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 	import DownloadIcon from 'phosphor-svelte/lib/DownloadIcon';
 
 	let {
@@ -40,6 +41,8 @@
 	const download: Record<string, string> = { download: '' };
 	const d = $derived(m.descriptor);
 	const running = $derived([...live.instances.values()].some((i) => !terminal(i.state) && sameModel(i, m)));
+	const weightFiles = $derived(m.artifacts.filter((a) => a.artifact?.role === ArtifactRole.WEIGHTS).sort((x, y) => (x.artifact?.shardIndex ?? 0) - (y.artifact?.shardIndex ?? 0) || x.path.localeCompare(y.path)));
+	const otherFiles = $derived(m.artifacts.filter((a) => a.artifact?.role !== ArtifactRole.WEIGHTS));
 	const tabs = [
 		{ id: 'about', label: 'About' },
 		{ id: 'files', label: 'Files' },
@@ -55,7 +58,7 @@
 	});
 
 	let collect = $state(true);
-	let removeOpen = $state(false);
+	let free = $state(false);
 	let inspected = $state<InspectResponse | undefined>(undefined);
 	let inspectError = $state('');
 	let inspectedKey = '';
@@ -92,6 +95,16 @@
 	}
 </script>
 
+{#snippet storedRow(a: StoredArtifact, marked: boolean)}
+	{@const art = a.artifact}
+	{@const Icon = roleIcon(art?.role ?? ArtifactRole.OTHER)}
+	{#snippet fileDownload()}
+		<NeoButton text href={art?.url} {...download} aria-label="Download {a.path}">{#snippet icon()}<DownloadIcon size={20} />{/snippet}</NeoButton>
+	{/snippet}
+	{#snippet roleMark()}<span class="icon"><Icon size={20} /></span>{/snippet}
+	<ListRow primary={art?.path ?? a.path} primaryKind="path" primaryTip={fileFacts(a).map((f) => `${f.label} ${f.value}`).join('\n')} facts={[{ value: bytes(art?.sizeBytes) }]} action={art?.url ? fileDownload : undefined} leading={marked ? roleMark : undefined} />
+{/snippet}
+
 <PanelHeader title={m.repo} kind="repo" subtitle={m.group || undefined} {onclose}>
 	{#snippet tools()}
 		<NeoButton class="primary" elevation={2} href={launchHref(m)}>Launch</NeoButton>
@@ -100,7 +113,7 @@
 <PageTabs {tabs} active={tab} onchange={(id) => (tab = id)} />
 <div class="body">
 	{#if tab === 'about'}
-		<Stack gap={16}>
+		<Stack gap={24}>
 			<KeyRows
 				rows={[
 					{ label: 'architecture', value: d?.architecture ?? '' },
@@ -112,63 +125,65 @@
 				]}
 			/>
 			{#if groups.length}
-				<Stack gap={4}>
-					<span class="label">Tensor groups</span>
+				<Section title="Tensor groups" level={3}>
 					<Bar segments={groups} total={groups.reduce((n, g) => n + g.bytes, 0)} format={(n) => bytes(n)} />
-				</Stack>
+				</Section>
 			{/if}
-			<KeyRows
-				rows={[
-					{ label: 'store path', value: m.path, mono: true, copy: true, tip: m.path },
-					{ label: 'pulled', value: ago(m.pulledAt), tip: when(m.pulledAt) },
-					{ label: 'used', value: m.usedAt ? ago(m.usedAt) : 'never', tip: when(m.usedAt) || undefined },
-					{ label: 'commit', value: m.commit, mono: true, copy: m.commit !== '', tip: m.commit }
-				]}
-			/>
+			<Section title="Store" level={3}>
+				<KeyRows
+					rows={[
+						{ label: 'path', value: m.path, mono: true, copy: true, tip: m.path },
+						{ label: 'pulled', value: ago(m.pulledAt), tip: when(m.pulledAt) },
+						{ label: 'used', value: m.usedAt ? ago(m.usedAt) : 'never', tip: when(m.usedAt) || undefined },
+						{ label: 'commit', value: m.commit, mono: true, copy: m.commit !== '', tip: m.commit }
+					]}
+				/>
+			</Section>
 			{#if d && Object.keys(d.metadata).length}
-				<Collapse label="Metadata">
+				<Collapse label="Metadata" count={Object.keys(d.metadata).length}>
 					<KeyRows dense rows={Object.entries(d.metadata).map(([k, v]) => ({ label: k, value: v, mono: true, tip: v }))} />
 				</Collapse>
 			{/if}
-			<Row gap={12} justify="flex-end">
+			<div class="actions">
 				<NeoButton text onclick={() => verifyModel(m)}>Verify</NeoButton>
 				<NeoButton text onclick={() => onexport(m)}>Export</NeoButton>
 				<Tip text={running ? 'An instance runs this group' : undefined} tag="span">
-					<NeoPopConfirm bind:open={removeOpen} elevation={2} tooltipProps={{ placement: 'bottom-end' }} header="Remove {m.repo}" onConfirm={remove} confirmProps={{ label: 'Remove', color: 'error' }}>
-						{#snippet tooltip()}<div class="confirm"><Switch bind:checked={collect} label="Collect unreferenced blobs" /></div>{/snippet}
-						<NeoButton text color="error" disabled={running} onclick={() => (removeOpen = true)}>Remove</NeoButton>
-					</NeoPopConfirm>
+					<Confirm label="Remove" question="Remove {m.repo}{m.group ? ` ${m.group}` : ''}" danger disabled={running} onconfirm={remove}>
+						{#snippet body()}<Switch bind:checked={collect} label="Collect unreferenced blobs" />{/snippet}
+					</Confirm>
 				</Tip>
-			</Row>
+			</div>
 		</Stack>
 	{:else if tab === 'files'}
-		<Stack gap={12}>
-			<Stack gap={0}>
-				{#each m.artifacts as a (a.path)}
-					{@const art = a.artifact}
-					{@const Icon = roleIcon(art?.role ?? ArtifactRole.OTHER)}
-					<ListRow primary={art?.path ?? a.path} primaryKind="path" primaryTip={fileFacts(a).map((f) => `${f.label} ${f.value}`).join('\n')} facts={[{ value: bytes(art?.sizeBytes) }]}>
-						{#snippet leading()}<span class="icon"><Icon size={20} /></span>{/snippet}
-						{#snippet action()}
-							{#if art?.url}
-								<NeoButton text href={art.url} {...download} aria-label="Download">{#snippet icon()}<DownloadIcon size={20} />{/snippet}</NeoButton>
-							{/if}
-						{/snippet}
-					</ListRow>
-				{/each}
-			</Stack>
-			{#if inspectError}
-				<p class="error-text">{inspectError}</p>
-			{:else if inspected?.model?.warnings.length}
-				<Collapse label="Warnings" count={inspected.model.warnings.length}>
-					<Stack gap={4}>
-						{#each inspected.model.warnings as w (w)}<Str value={w} kind="message" width="100%" />{/each}
-					</Stack>
-				</Collapse>
+		<List head={{ primary: 'File', facts: ['Size'] }}>
+			{#if weightFiles.length > 1}
+				{#snippet shards()}
+					{#each weightFiles as a (a.path)}{@render storedRow(a, false)}{/each}
+				{/snippet}
+				<ListRow primary={weightsLabel(weightFiles.map((a) => a.artifact?.shardCount ?? 0))} primaryKind="text" primaryTip={weightFiles.map((a) => a.path).join('\n')} facts={[{ value: bytes(weightFiles.reduce((n, a) => n + Number(a.artifact?.sizeBytes ?? 0n), 0)) }]} expand={shards}>
+					{#snippet leading()}<span class="icon"><CubeIcon size={20} /></span>{/snippet}
+				</ListRow>
+			{:else}
+				{#each weightFiles as a (a.path)}{@render storedRow(a, true)}{/each}
 			{/if}
-		</Stack>
+			{#each otherFiles as a (a.path)}{@render storedRow(a, true)}{/each}
+		</List>
+		{#if inspectError}
+			<List head={{ primary: 'Warnings' }}>
+				<ListRow lamp="error" primary={inspectError} primaryKind="message" />
+			</List>
+		{:else if inspected?.model?.warnings.length}
+			<List head={{ primary: 'Warnings' }}>
+				{#each inspected.model.warnings as w (w)}
+					<ListRow lamp="warning" primary={w} primaryKind="message" />
+				{/each}
+			</List>
+		{/if}
 	{:else if tab === 'fit'}
-		<FitTab group={m.group} result={inspected} error={inspectError} {runtimes} onlaunch={(runtimeId, context) => goto(launchHref(m, runtimeId, context))} />
+		<Stack gap={12}>
+			<Switch bind:checked={free} label="Against free memory" />
+			<FitTab group={m.group} result={inspected} error={inspectError} {runtimes} {free} onlaunch={(runtimeId, context) => goto(launchHref(m, runtimeId, context))} />
+		</Stack>
 	{:else if tab === 'parts'}
 		<PartsTab model={m} />
 	{/if}
@@ -176,10 +191,16 @@
 
 <style>
 	.body {
-		margin-top: 12px;
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-4);
+		margin-top: var(--nebu-space-4);
 	}
-	.confirm {
-		padding: 4px 4px 8px;
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--nebu-space-3);
+		justify-content: flex-end;
 	}
 	.icon {
 		display: inline-flex;

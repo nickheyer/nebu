@@ -2,7 +2,6 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
-	import { NeoDialog } from '#lib/neo/floating/dialog/index.js';
 	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { bytes, enumOptions } from '#lib/format.js';
@@ -12,10 +11,12 @@
 	import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import { ModelSort, type StoredModel } from '#lib/proto/nebu/v1/store_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
-	import { viewport } from '#lib/state/viewport.svelte.js';
+	import Dialog from '#lib/ui/Dialog.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
+	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import LoadMore from '#lib/ui/LoadMore.svelte';
+	import RowAction from '#lib/ui/RowAction.svelte';
 	import SearchBox from '#lib/ui/SearchBox.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
@@ -24,16 +25,19 @@
 	import Path from '#lib/ui/fields/Path.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
-	import Cell from '#lib/ui/layout/Cell.svelte';
+	import Card from '#lib/ui/layout/Card.svelte';
+	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
-	import Row from '#lib/ui/layout/Row.svelte';
 	import Sheet from '#lib/ui/layout/Sheet.svelte';
-	import Stack from '#lib/ui/layout/Stack.svelte';
 	import ModelPanel from '#lib/pages/models/ModelPanel.svelte';
-	import StoreBar from '#lib/pages/models/StoreBar.svelte';
-	import { exportModel, kindLabel, launchHref, modelKeyOf, modelPath, paramCount, quality, removeModel, runtimeNames, sameModel, verifyModel } from '#lib/pages/models/models.js';
+	import StoreCard from '#lib/pages/models/StoreCard.svelte';
+	import { exportModel, kindLabel, launchHref, modelKeyOf, modelPath, paramCount, quality, removeModel, runtimeNames, sameModel, selectWidth, verifyModel } from '#lib/pages/models/models.js';
+	import { modelsTabs } from '#lib/pages/models/tabs.js';
 	import { terminal } from '#lib/pages/serve/serve.js';
+	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 	import FunnelIcon from 'phosphor-svelte/lib/FunnelIcon';
+	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
+	import SortAscendingIcon from 'phosphor-svelte/lib/SortAscendingIcon';
 
 	let { sourceId = '', repo = '', group = '' }: { sourceId?: string; repo?: string; group?: string } = $props();
 
@@ -53,6 +57,9 @@
 	let exportBusy = $state(false);
 	let fetched = $state<StoredModel | undefined>(undefined);
 	let fetchError = $state('');
+	let cardWidth = $state(0);
+	// The three filters fold behind one button where the card is too narrow to hold them beside the search
+	const folded = $derived(cardWidth > 0 && cardWidth < 1000);
 
 	const list = new ListQuery<StoredModel, { query: string; kind?: ModelKind; runtimeId?: string; formatId?: string; sort: ModelSort }>(
 		async (p, cursor, limit, signal) => {
@@ -97,6 +104,9 @@
 
 	const selected = $derived(panelOpen ? (live.ready ? live.models.get(key) : fetched) : undefined);
 	const activeFilters = $derived([kind, runtimeId, formatId].filter((v) => v !== undefined).length);
+	const filtering = $derived(query !== '' || activeFilters > 0);
+	// Searching an empty store has nothing to narrow, so the controls wait for the first model
+	const searchable = $derived(filtering || !live.ready || live.models.size > 0);
 	const kinds = enumOptions(ModelKindSchema).map((o) => ({ value: o.value as ModelKind, label: o.label }));
 	const runtimeOptions = $derived(runtimes.map((r) => ({ value: r.runtime?.id ?? '', label: r.runtime?.name || r.runtime?.id || '' })));
 	const formatOptions = $derived(formats.map((f) => ({ value: f.id, label: f.id, description: f.description })));
@@ -156,112 +166,140 @@
 	<Switch bind:checked={collect} label="Collect unreferenced blobs" />
 {/snippet}
 
-{#snippet filterFields()}
-	<Select bind:value={kind} options={kinds} label="Kind" placeholder="Any" clearable />
-	<Select bind:value={runtimeId} options={runtimeOptions} label="Runtime" placeholder="Any" clearable search />
-	<Select bind:value={formatId} options={formatOptions} label="Format" placeholder="Any" clearable />
+{#snippet sortIcon()}<SortAscendingIcon size={16} />{/snippet}
+
+{#snippet kindSelect(label?: string)}
+	<Select bind:value={kind} options={kinds} {label} placeholder={label ? 'Any' : 'Kind'} clearable />
 {/snippet}
 
-{#snippet toolbar()}
-	<Row gap={12}>
-		<Cell min={viewport.mobile ? '100%' : '14rem'} max={viewport.mobile ? 'none' : '24rem'}>
-			<SearchBox bind:value={query} placeholder="Search models" width="100%" />
-		</Cell>
-		{#if viewport.mobile}
-			<Cell min="8rem" max="12rem">
-				<NeoButton elevation={2} onclick={() => (filtersOpen = true)}>{#snippet icon()}<FunnelIcon size={20} />{/snippet}Filters{#if activeFilters}&nbsp;{activeFilters}{/if}</NeoButton>
-			</Cell>
-			<Cell min="9rem" max="12rem" push>
-				<Select bind:value={sort} options={sorts} />
-			</Cell>
+{#snippet runtimeSelect(label?: string)}
+	<Select bind:value={runtimeId} options={runtimeOptions} {label} placeholder={label ? 'Any' : 'Runtime'} clearable search />
+{/snippet}
+
+{#snippet formatSelect(label?: string)}
+	<Select bind:value={formatId} options={formatOptions} {label} placeholder={label ? 'Any' : 'Format'} clearable />
+{/snippet}
+
+{#snippet tools()}
+	{#if searchable}
+		<span class="search"><SearchBox bind:value={query} placeholder="Search models" width="100%" /></span>
+		{#if folded}
+			<NeoButton elevation={2} aria-expanded={filtersOpen} onclick={() => (filtersOpen = !filtersOpen)}>{#snippet icon()}<FunnelIcon size={20} />{/snippet}Filters{#if activeFilters}&nbsp;{activeFilters}{/if}</NeoButton>
 		{:else}
-			<Cell min="10rem" max="12rem"><Select bind:value={kind} options={kinds} placeholder="Kind" clearable /></Cell>
-			<Cell min="10rem" max="12rem"><Select bind:value={runtimeId} options={runtimeOptions} placeholder="Runtime" clearable search /></Cell>
-			<Cell min="10rem" max="12rem"><Select bind:value={formatId} options={formatOptions} placeholder="Format" clearable /></Cell>
-			<Cell min="10rem" max="12rem"><Select bind:value={sort} options={sorts} /></Cell>
+			<span class="filter">{@render kindSelect()}</span>
+			<span class="filter">{@render runtimeSelect()}</span>
+			<span class="filter">{@render formatSelect()}</span>
 		{/if}
-	</Row>
+		<span class="sort"><Select bind:value={sort} options={sorts} icon={sortIcon} width={selectWidth(sorts.map((s) => s.label))} /></span>
+	{/if}
+{/snippet}
+
+{#snippet storeHead()}
+	<StoreCard />
 {/snippet}
 
 {#snippet listView()}
-	<Stack gap={16}>
-		<StoreBar />
-		{@render toolbar()}
-		{#if !list.settled}
-			<Skeleton rows={4} />
-		{:else if list.error}
-			<Empty text={list.error} action="Retry" onclick={() => list.refresh()} />
-		{:else if list.items.length === 0}
-			{#if query || activeFilters}
-				<Empty text="No models match" action="Clear filters" onclick={clearFilters} />
-			{:else}
-				<Empty text="No models stored" action="Discover" href="/discover" />
+	<div class="frame" bind:clientWidth={cardWidth}>
+		<Card title="Models" count={live.ready ? live.models.size : undefined} flush tools={searchable ? tools : undefined}>
+			{#if folded && filtersOpen && searchable}
+				<div class="filters">
+					{@render kindSelect('Kind')}
+					{@render runtimeSelect('Runtime')}
+					{@render formatSelect('Format')}
+				</div>
 			{/if}
-		{:else}
-			<Stack gap={0}>
-				{#each list.items as m (modelKeyOf(m))}
-					{@const running = runs(m)}
-					<ListRow
-						lamp={running ? 'success' : 'muted'}
-						shape={running ? 'filled' : 'hollow'}
-						primary={m.repo}
-						primaryKind="repo"
-						primaryTip={m.group ? `${m.repo}\n${m.group}` : m.repo}
-						secondary={phrase(m)}
-						secondaryTip={phrase(m, true)}
-						facts={[{ value: bytes(m.bytes) }]}
-						selected={selected !== undefined && sameModel(selected, m)}
-						onclick={() => open(m)}
-						menu={[
-							{ label: 'Inspect', onclick: () => open(m, 'fit') },
-							{ label: 'Verify', onclick: () => verifyModel(m) },
-							{ label: 'Export', onclick: () => startExport(m) },
-							{ label: 'Remove', onclick: () => remove(m), confirm: `Remove ${m.repo}`, confirmBody: collectSwitch, disabled: running, description: running ? 'instance running' : undefined, danger: true, divider: true }
-						]}
-					>
-						{#snippet badges()}
-							<Tip text={precisionTip(m)} tag="span">
-								<StatePill label={m.descriptor?.precision?.label || m.formatId || 'unknown'} />
-							</Tip>
-						{/snippet}
-						{#snippet action()}
-							<NeoButton text href={launchHref(m)}>Launch</NeoButton>
-						{/snippet}
-					</ListRow>
-				{/each}
-			</Stack>
-			<LoadMore next={list.next} loading={list.loading} onmore={() => list.more()} />
-		{/if}
-	</Stack>
+			{#if !list.settled}
+				<Skeleton rows={4} primary="40ch" secondary="28ch" />
+			{:else if list.error}
+				<Empty icon={CubeIcon} text="Models failed to list" hint={list.error} action="Retry" onclick={() => list.refresh()} />
+			{:else if list.items.length === 0 && filtering}
+				<Empty icon={MagnifyingGlassIcon} text="No models match" hint="Nothing stored matches this search and these filters" action="Clear filters" onclick={clearFilters} />
+			{:else if list.items.length === 0}
+				<Empty icon={CubeIcon} text="No models stored" hint="Pull a model on Discover and it lands here, ready to launch" action="Discover models" href="/discover" primary />
+			{:else}
+				<List head={{ primary: 'Model', secondary: 'Details', facts: ['Size'] }}>
+					{#each list.items as m (modelKeyOf(m))}
+						{@const running = runs(m)}
+						<ListRow
+							lamp={running ? 'success' : 'muted'}
+							shape={running ? 'filled' : 'hollow'}
+							primary={m.repo}
+							primaryWidth="40ch"
+							primaryTip={m.group ? `${m.repo}\n${m.group}` : m.repo}
+							secondary={phrase(m)}
+							secondaryTip={phrase(m, true)}
+							secondaryWidth="28ch"
+							facts={[{ value: bytes(m.bytes) }]}
+							selected={selected !== undefined && sameModel(selected, m)}
+							onclick={() => open(m)}
+							menu={[
+								{ label: 'Inspect', onclick: () => open(m, 'fit') },
+								{ label: 'Verify', onclick: () => verifyModel(m) },
+								{ label: 'Export', onclick: () => startExport(m) },
+								{ label: 'Remove', onclick: () => remove(m), confirm: `Remove ${m.repo}`, confirmBody: collectSwitch, disabled: running, description: running ? 'instance running' : undefined, danger: true, divider: true }
+							]}
+						>
+							{#snippet badges()}
+								<Tip text={precisionTip(m)} tag="span">
+									<StatePill label={m.descriptor?.precision?.label || m.formatId || 'unknown'} />
+								</Tip>
+							{/snippet}
+							{#snippet action()}
+								<RowAction href={launchHref(m)} label="Launch" />
+							{/snippet}
+						</ListRow>
+					{/each}
+				</List>
+				<LoadMore next={list.next} loading={list.loading} onmore={() => list.more()} />
+			{/if}
+		</Card>
+	</div>
 {/snippet}
 
-<Sheet open={panelOpen} onclose={() => goto('/models')} list={listView} empty="Select a model">
+<PageHeader tabs={modelsTabs} active="library" />
+
+<Sheet open={panelOpen} onclose={() => goto('/models')} head={storeHead} list={listView}>
 	{#if selected}
 		{#key key}
 			<ModelPanel model={selected} {runtimes} bind:tab onclose={() => goto('/models')} onexport={startExport} onremoved={() => goto('/models')} />
 		{/key}
-	{:else if fetchError}
-		<Empty text={fetchError} action="Back" href="/models" />
-	{:else if !live.ready}
-		<Skeleton rows={6} height={32} />
 	{:else}
-		<Empty text="No such model" action="Back" href="/models" />
+		<PanelHeader title={repo} kind="repo" subtitle={group || undefined} onclose={() => goto('/models')} />
+		{#if fetchError}
+			<Empty icon={CubeIcon} text="Model failed to load" hint={fetchError} action="Back" href="/models" />
+		{:else if !live.ready}
+			<Skeleton rows={6} kind="facts" />
+		{:else}
+			<Empty icon={CubeIcon} text="No such model" hint="The store holds no group under this name" action="Back" href="/models" />
+		{/if}
 	{/if}
 </Sheet>
 
-<Sheet bind:open={filtersOpen}>
-	<PanelHeader title="Filters" onclose={() => (filtersOpen = false)} />
-	<Stack gap={12}>{@render filterFields()}</Stack>
-</Sheet>
+<Dialog bind:open={exportOpen} title="Export" confirm="Export" busy={exportBusy} disabled={!exportDir} onconfirm={submitExport}>
+	{#if exporting}<Str value={exporting.repo} kind="repo" color="muted" width="100%" />{/if}
+	<Path bind:value={exportDir} label="Directory" filter="directories" />
+</Dialog>
 
-<NeoDialog bind:open={exportOpen} modal rounded="md" filled elevation={2} width="min(32rem, 92vw)" padding="16px">
-	<Stack gap={12}>
-		<h3>Export</h3>
-		{#if exporting}<Str value={exporting.repo} kind="repo" color="muted" />{/if}
-		<Path bind:value={exportDir} label="Directory" filter="directories" />
-		<Row gap={12} justify="flex-end">
-			<NeoButton text onclick={() => (exportOpen = false)}>Cancel</NeoButton>
-			<NeoButton class="primary" elevation={2} loading={exportBusy} disabled={!exportDir} onclick={submitExport}>Export</NeoButton>
-		</Row>
-	</Stack>
-</NeoDialog>
+<style>
+	.frame {
+		min-width: 0;
+	}
+	.search {
+		display: inline-flex;
+		width: 16rem;
+		max-width: 100%;
+	}
+	.filter {
+		display: inline-flex;
+		width: 10rem;
+	}
+	.sort {
+		display: inline-flex;
+	}
+	.filters {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+		gap: var(--nebu-space-3) var(--nebu-space-4);
+		padding: 0 var(--nebu-card-pad) var(--nebu-space-4);
+	}
+</style>

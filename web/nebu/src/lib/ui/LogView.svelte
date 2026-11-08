@@ -98,6 +98,8 @@
 		min-width: 0;
 	}
 	.tools {
+		--neo-input-padding: 0.375rem 0.75rem;
+
 		display: flex;
 		flex-wrap: wrap;
 		gap: 12px;

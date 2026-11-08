@@ -41,5 +41,5 @@ func (p meminfo) Run(context.Context) host.Result {
 	if v, ok := kv["HugePages_Total"]; ok {
 		facts["mem.hugepages_total"] = v
 	}
-	return found(nil, []*v1.MemoryPool{pool}, facts, rows(1))
+	return found(nil, []*v1.MemoryPool{pool}, facts, "")
 }

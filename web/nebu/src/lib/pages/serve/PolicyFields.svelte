@@ -16,6 +16,9 @@
 	let { policy = $bindable(create(PolicySchema)), profile = $bindable(create(ProfileSchema)) }: { policy?: Policy; profile?: Profile } = $props();
 
 	let remote = $state<ToolServerStatus[]>([]);
+	let width = $state(0);
+	// Two durations share a row only once each has room for its number and its units
+	const pairDurations = $derived(width >= 720);
 
 	// Adds the tool servers other mesh members run
 	onMount(async () => {
@@ -38,24 +41,42 @@
 	);
 </script>
 
-<FormSection title="Policy" info="Zero inherits the gateway default">
-	<FieldRow>
-		<NumberField bind:value={policy.maxInFlight} min={0} max={1_000_000} label="Max in flight" placeholder="inherits" />
-		<NumberField bind:value={policy.requestsPerSecond} min={0} step={0.5} label="Requests per second" placeholder="inherits" />
-	</FieldRow>
-	<FieldRow>
-		<Duration bind:value={policy.requestTimeoutMs} base="ms" max={86_400_000} label="Request timeout" info="The whole exchange, first byte in to last byte out" />
-		<Duration bind:value={policy.upstreamTimeoutMs} base="ms" max={86_400_000} label="Upstream timeout" info="How long the runtime may take to start answering" />
-	</FieldRow>
-	{#snippet advanced()}
+{#snippet requestTimeout()}
+	<Duration bind:value={policy.requestTimeoutMs} base="ms" max={86_400_000} label="Request timeout" info="The whole exchange, first byte in to last byte out" emptyZero placeholder="Default" />
+{/snippet}
+
+{#snippet upstreamTimeout()}
+	<Duration bind:value={policy.upstreamTimeoutMs} base="ms" max={86_400_000} label="Upstream timeout" info="How long the runtime may take to start answering" emptyZero placeholder="Default" />
+{/snippet}
+
+<div class="policy" bind:clientWidth={width}>
+	<FormSection title="Policy" info="Empty fields take the gateway default, burst being the requests a quiet route absorbs at once">
 		<FieldRow>
-			<NumberField bind:value={policy.burst} min={0} max={1_000_000} label="Burst" info="Requests a quiet route absorbs at once, zero rounds the rate up" placeholder="inherits" />
+			<NumberField bind:value={policy.maxInFlight} min={0} max={1_000_000} label="Max in flight" emptyZero placeholder="Default" />
+			<NumberField bind:value={policy.requestsPerSecond} min={0} step={0.5} label="Requests per second" emptyZero placeholder="Default" />
+			<NumberField bind:value={policy.burst} min={0} max={1_000_000} label="Burst" emptyZero placeholder="Default" />
 		</FieldRow>
-	{/snippet}
-</FormSection>
-<FormSection title="Tools">
-	<FieldRow>
-		<Checklist bind:value={profile.toolServers} options={servers} label="Tool servers" empty="No tool servers in Settings" />
+		{#if pairDurations}
+			<FieldRow>
+				{@render requestTimeout()}
+				{@render upstreamTimeout()}
+			</FieldRow>
+		{:else}
+			{@render requestTimeout()}
+			{@render upstreamTimeout()}
+		{/if}
+	</FormSection>
+	<FormSection title="Tools">
+		<Checklist bind:value={profile.toolServers} options={servers} label="Tool servers" empty="None set up in Settings" />
 		<Switch bind:checked={profile.mutatingTools} label="Mutating tools" info="Offers tools that change what they touch, read only tools alone otherwise" />
-	</FieldRow>
-</FormSection>
+	</FormSection>
+</div>
+
+<style>
+	.policy {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-5);
+		min-width: 0;
+	}
+</style>

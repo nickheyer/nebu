@@ -1,7 +1,7 @@
 import { isCancel, rpc } from '#lib/api/transport.js';
-import { bytes, pct, percent } from '#lib/format.js';
+import { bytes, num, pct, percent } from '#lib/format.js';
 import type { Task, TaskProgress } from '#lib/proto/nebu/v1/task_pb.js';
-import { TaskState } from '#lib/proto/nebu/v1/task_pb.js';
+import { ProgressUnit, TaskState } from '#lib/proto/nebu/v1/task_pb.js';
 import type { Fact } from '#lib/ui/Tip.svelte';
 
 export const taskKinds = ['pull', 'run', 'swap', 'install', 'build', 'verify', 'export', 'probe', 'formation'];
@@ -30,17 +30,18 @@ export function progressLabel(p: TaskProgress | undefined): string {
 	return v === undefined ? '—' : pct(v);
 }
 
-// Bytes done against the total, or done alone while the total is unknown
-export function progressBytes(p: TaskProgress | undefined): string {
+// Done against the total in the unit the progress counts, done alone while the total is unknown
+export function progressAmount(p: TaskProgress | undefined): string {
 	if (!p || (p.done === 0n && p.total === 0n)) return '';
-	return p.total ? `${bytes(p.done)} of ${bytes(p.total)}` : bytes(p.done);
+	const show = p.unit === ProgressUnit.BYTES ? bytes : num;
+	return p.total ? `${show(p.done)} of ${show(p.total)}` : show(p.done);
 }
 
-// The message and bytes of a progress for its tooltip
+// The message and amount of a progress for its tooltip
 export function progressFacts(p: TaskProgress | undefined): Fact[] {
 	return [
 		{ label: 'message', value: p?.message ?? '' },
-		{ label: 'bytes', value: progressBytes(p) }
+		{ label: p?.unit === ProgressUnit.BYTES ? 'bytes' : 'steps', value: progressAmount(p) }
 	].filter((f) => f.value !== '');
 }
 

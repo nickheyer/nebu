@@ -1,36 +1,32 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { NeoProgressBar } from '#lib/neo/progress/index.js';
 	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { ago, duration, enumLabel, enumOptions, percent, when } from '#lib/format.js';
+	import { ago, date, duration, enumLabel, enumOptions, num, percent, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { TaskState, TaskStateSchema, type Task } from '#lib/proto/nebu/v1/task_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Confirm from '#lib/ui/Confirm.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
+	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import LoadMore from '#lib/ui/LoadMore.svelte';
+	import Mark, { type MarkState } from '#lib/ui/Mark.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
 	import Str from '#lib/ui/Str.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
-	import Cell from '#lib/ui/layout/Cell.svelte';
-	import Row from '#lib/ui/layout/Row.svelte';
-	import Section from '#lib/ui/layout/Section.svelte';
+	import Card from '#lib/ui/layout/Card.svelte';
+	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Sheet from '#lib/ui/layout/Sheet.svelte';
-	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
-	import { taskLamp } from '#lib/ui/status.js';
+	import { hostTabs } from '#lib/pages/host/tabs.js';
 	import TaskPanel from '#lib/pages/tasks/TaskPanel.svelte';
 	import { active, progressFacts, progressLabel, taskKinds } from '#lib/pages/tasks/tasks.js';
-	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
-	import HourglassIcon from 'phosphor-svelte/lib/HourglassIcon';
-	import ProhibitIcon from 'phosphor-svelte/lib/ProhibitIcon';
-	import XIcon from 'phosphor-svelte/lib/XIcon';
+	import ListChecksIcon from 'phosphor-svelte/lib/ListChecksIcon';
 
 	let { id = '' }: { id?: string } = $props();
 
@@ -38,6 +34,8 @@
 	let taskState = $state<TaskState | undefined>(undefined);
 
 	const running = $derived([...live.tasks.values()].filter(active).sort((a, b) => Number(b.createdAt?.seconds ?? 0n) - Number(a.createdAt?.seconds ?? 0n)));
+	const queued = $derived(running.filter((t) => t.state === TaskState.PENDING).length);
+	const failedLastHour = $derived([...live.tasks.values()].filter((t) => t.state === TaskState.FAILED && clockTick.now - (date(t.finishedAt)?.getTime() ?? 0) < 3_600_000).length);
 
 	const history = new ListQuery<Task, { kind?: string; state?: TaskState }>(
 		async (p, cursor, limit, signal) => {
@@ -49,6 +47,17 @@
 
 	$effect(() => {
 		void history.load({ kind, state: taskState });
+	});
+
+	// Runs of the same task back to back fold into one row, the newest standing for the rest
+	const groups = $derived.by(() => {
+		const out: { head: Task; rest: Task[] }[] = [];
+		for (const t of history.items) {
+			const last = out.at(-1);
+			if (last && last.head.kind === t.kind && last.head.title === t.title && last.head.state === t.state) last.rest.push(t);
+			else out.push({ head: t, rest: [] });
+		}
+		return out;
 	});
 
 	async function cancel(t: Task) {
@@ -66,8 +75,19 @@
 	const kindOptions = taskKinds.map((k) => ({ value: k, label: k }));
 	const stateOptions = enumOptions(TaskStateSchema).map((o) => ({ value: o.value as TaskState, label: o.label }));
 
-	function markLabel(t: Task): string {
-		return enumLabel(TaskStateSchema, t.state);
+	// The result mark of a finished task, the hourglass for one still under way
+	function markOf(t: Task): MarkState {
+		if (t.state === TaskState.SUCCEEDED) return 'ok';
+		if (t.state === TaskState.FAILED) return 'failed';
+		if (active(t)) return 'active';
+		return 'skipped';
+	}
+
+	function historyFacts(t: Task) {
+		return [
+			{ value: duration(t.startedAt ?? t.createdAt, t.finishedAt, clockTick.now), tip: 'duration' },
+			{ value: t.finishedAt ? ago(t.finishedAt, clockTick.now) : '', tip: `finished ${when(t.finishedAt)}` }
+		];
 	}
 </script>
 
@@ -79,13 +99,18 @@
 	</Tip>
 {/snippet}
 
-{#snippet activeSection()}
-	<Section title="Active" count={running.length}>
-		{#if !live.ready}
-			<Skeleton rows={2} />
-		{:else if running.length === 0}
-			<Empty text="Nothing running" />
-		{:else}
+{#snippet kindPill(t: Task)}
+	<span class="kindcol"><StatePill label={t.kind} /></span>
+{/snippet}
+
+{#snippet historyLeading(t: Task)}
+	<Mark state={markOf(t)} label={enumLabel(TaskStateSchema, t.state)} tip={t.state === TaskState.FAILED ? t.error || undefined : enumLabel(TaskStateSchema, t.state)} />
+	{@render kindPill(t)}
+{/snippet}
+
+{#snippet activeCard()}
+	<Card title="Running" count={running.length} flush>
+		<List head={{ primary: 'Task', instrument: 'Progress', action: 'Elapsed' }}>
 			{#each running as t (t.id)}
 				{@const rows = t.progress?.rows ?? []}
 				{#snippet instrument()}{@render bar(t)}{/snippet}
@@ -100,76 +125,69 @@
 						</Tip>
 					{/each}
 				{/snippet}
-				<ListRow
-					primary={t.title}
-					primaryKind="text"
-					primaryWidth="40ch"
-					facts={[{ value: duration(t.startedAt ?? t.createdAt, undefined, clockTick.now), tip: `started ${when(t.startedAt ?? t.createdAt)}` }]}
-					selected={t.id === id}
-					onclick={() => open(t)}
-					{instrument}
-					expand={rows.length ? progressRows : undefined}
-				>
-					{#snippet leading()}<StatePill label={t.kind} />{/snippet}
-					{#snippet action()}<Confirm label="Cancel" question="Cancel {t.title}?" danger onconfirm={() => cancel(t)} />{/snippet}
+				<ListRow primary={t.title} primaryKind="text" primaryWidth="32ch" selected={t.id === id} onclick={() => open(t)} {instrument} expand={rows.length ? progressRows : undefined}>
+					{#snippet leading()}{@render kindPill(t)}{/snippet}
+					{#snippet action()}
+						<span class="elapsed num secondary"><Tip text="started {when(t.startedAt ?? t.createdAt)}" tag="span">{t.state === TaskState.PENDING ? 'queued' : duration(t.startedAt ?? t.createdAt, undefined, clockTick.now)}</Tip></span>
+						<Confirm label="Cancel" question="Cancel {t.title}?" danger onconfirm={() => cancel(t)} />
+					{/snippet}
 				</ListRow>
 			{/each}
-		{/if}
-	</Section>
+		</List>
+	</Card>
 {/snippet}
 
-{#snippet historySection()}
-	<Section title="History">
+{#snippet historyCard()}
+	<Card title="History" flush>
 		{#snippet tools()}
-			<Row gap={12} justify="flex-end" wrap={false}>
-				<Cell min="8rem" max="11rem"><Select bind:value={kind} options={kindOptions} placeholder="Kind" clearable /></Cell>
-				<Cell min="8rem" max="11rem"><Select bind:value={taskState} options={stateOptions} placeholder="State" clearable /></Cell>
-			</Row>
+			<span class="filter"><Select bind:value={kind} options={kindOptions} placeholder="Kind" clearable /></span>
+			<span class="filter"><Select bind:value={taskState} options={stateOptions} placeholder="State" clearable /></span>
 		{/snippet}
 		{#if !history.settled}
-			<Skeleton rows={4} />
+			<Skeleton rows={6} dot={false} leading="12ch" primary="32ch" secondary={false} facts={2} action={false} menu={false} />
 		{:else if history.error}
 			<Empty text={history.error} action="Retry" onclick={() => history.refresh()} />
 		{:else if history.items.length === 0}
-			<Empty text="No tasks" />
+			<Empty icon={ListChecksIcon} text={kind || taskState !== undefined ? 'No tasks match' : 'No tasks yet'} hint="Pulls, installs, builds, launches and probes land here with their logs" />
 		{:else}
-			{#each history.items as t (t.id)}
-				{@const failed = t.state === TaskState.FAILED}
-				<ListRow
-					primary={t.title}
-					primaryKind="text"
-					primaryWidth="40ch"
-					facts={[
-						{ value: duration(t.startedAt ?? t.createdAt, t.finishedAt, clockTick.now) },
-						{ value: t.finishedAt ? ago(t.finishedAt, clockTick.now) : '', tip: `finished ${when(t.finishedAt)}` }
-					]}
-					selected={t.id === id}
-					onclick={() => open(t)}
-				>
-					{#snippet leading()}
-						<Tip text={failed ? t.error : undefined} tag="span">
-							<span class="mark {taskLamp(t.state)}" role="img" aria-label={markLabel(t)}>
-								{#if t.state === TaskState.SUCCEEDED}<CheckIcon size={20} />{:else if failed}<XIcon size={20} />{:else if active(t)}<HourglassIcon size={20} />{:else}<ProhibitIcon size={20} />{/if}
-							</span>
-						</Tip>
-						<StatePill label={t.kind} />
+			<List head={{ primary: 'Task', facts: ['Duration', 'Finished'] }}>
+				{#each groups as g (g.head.id)}
+					{#snippet runs()}
+						{#each g.rest as t (t.id)}
+							<ListRow primary={when(t.finishedAt ?? t.createdAt)} primaryKind="text" facts={historyFacts(t)} selected={t.id === id} onclick={() => open(t)}>
+								{#snippet leading()}<Mark state={markOf(t)} label={enumLabel(TaskStateSchema, t.state)} />{/snippet}
+							</ListRow>
+						{/each}
 					{/snippet}
-					{#snippet action()}<NeoButton text href="/tasks/{t.id}">Open</NeoButton>{/snippet}
-				</ListRow>
-			{/each}
+					<ListRow primary={g.head.title} primaryKind="text" primaryWidth="32ch" facts={historyFacts(g.head)} selected={g.head.id === id} onclick={() => open(g.head)} expand={g.rest.length ? runs : undefined}>
+						{#snippet leading()}{@render historyLeading(g.head)}{/snippet}
+						{#snippet badges()}
+							{#if g.rest.length}<span class="repeat" title="{g.rest.length + 1} runs in a row">×{num(g.rest.length + 1)}</span>{/if}
+						{/snippet}
+					</ListRow>
+				{/each}
+			</List>
 			<LoadMore next={history.next} loading={history.loading} onmore={() => history.more()} />
 		{/if}
-	</Section>
+	</Card>
 {/snippet}
 
 {#snippet list()}
-	<Stack gap={24}>
-		{@render activeSection()}
-		{@render historySection()}
-	</Stack>
+	{#if running.length}{@render activeCard()}{/if}
+	{@render historyCard()}
 {/snippet}
 
-<Sheet open={id !== ''} onclose={() => goto('/tasks')} {list} empty="Select a task">
+<PageHeader tabs={hostTabs} active="tasks">
+	{#snippet meta()}
+		{#if live.ready}
+			<span>{running.length - queued ? `${num(running.length - queued)} running` : 'Nothing running'}</span>
+			{#if queued}<span>{num(queued)} queued</span>{/if}
+			{#if failedLastHour}<span class="error-text">{num(failedLastHour)} failed in the last hour</span>{/if}
+		{/if}
+	{/snippet}
+</PageHeader>
+
+<Sheet open={id !== ''} onclose={() => goto('/tasks')} {list}>
 	{#if id}
 		<TaskPanel {id} onclose={() => goto('/tasks')} />
 	{/if}
@@ -179,13 +197,31 @@
 	:global(.taskbar) {
 		display: inline-flex;
 		flex: 1 1 auto;
-		gap: 8px;
+		gap: var(--nebu-space-2);
 		align-items: center;
 		width: 100%;
 	}
 	:global(.taskrow-tip) {
 		display: flex;
 		width: 100%;
+	}
+	/* Kind pills share one width so the titles after them line up */
+	.kindcol {
+		display: inline-flex;
+		flex: 0 0 auto;
+		min-width: 9ch;
+	}
+	.filter {
+		display: inline-flex;
+		width: 10rem;
+	}
+	.repeat {
+		font-size: var(--nebu-text-caption);
+		font-variant-numeric: tabular-nums;
+		color: var(--nebu-text-muted);
+	}
+	.elapsed {
+		min-width: 6ch;
 	}
 	.track {
 		display: flex;
@@ -195,35 +231,20 @@
 	.pct {
 		flex: 0 0 6ch;
 		min-width: 6ch;
-		font-size: 13px;
+		font-size: var(--nebu-text-secondary);
 	}
 	.prow {
 		display: flex;
 		flex: 1 1 auto;
-		gap: 12px;
+		gap: var(--nebu-space-3);
 		align-items: center;
 		min-width: 0;
-		min-height: 24px;
+		min-height: var(--nebu-space-5);
 	}
 	.key {
 		display: flex;
 		flex: 0 0 24ch;
 		min-width: 0;
-		font-size: 13px;
-	}
-	.mark {
-		display: inline-flex;
-	}
-	.mark.success {
-		color: var(--neo-color-success);
-	}
-	.mark.error {
-		color: var(--neo-color-error);
-	}
-	.mark.warning {
-		color: var(--neo-color-warning);
-	}
-	.mark.muted {
-		color: var(--nebu-text-muted);
+		font-size: var(--nebu-text-secondary);
 	}
 </style>

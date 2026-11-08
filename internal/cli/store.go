@@ -248,10 +248,9 @@ func runTasksList(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, t := range resp.Msg.GetTasks() {
-			p := t.GetProgress()
 			progress := "-"
-			if p.GetTotal() > 0 {
-				progress = fmt.Sprintf("%s/%s", estimate.Human(p.GetDone()), estimate.Human(p.GetTotal()))
+			if t.GetProgress().GetTotal() > 0 {
+				progress = progressAmount(t.GetProgress())
 			}
 			rows = append(rows, []string{t.GetId(), t.GetKind(), loud(t.GetState()), progress, t.GetTitle(), t.GetError()})
 		}

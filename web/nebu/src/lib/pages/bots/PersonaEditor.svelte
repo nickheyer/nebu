@@ -56,8 +56,8 @@
 
 {#snippet samplingAdvanced()}
 	<FieldRow>
-		<NumberField value={sampling.topK ?? 0} min={0} label="Top k" placeholder="Runtime default" emptyZero onchange={(n: number) => (sampling.topK = n || undefined)} />
-		<NumberField value={sampling.maxTokens ?? 0} min={0} label="Max tokens" placeholder="Runtime default" emptyZero onchange={(n: number) => (sampling.maxTokens = n || undefined)} />
+		<NumberField value={sampling.topK ?? 0} min={0} label="Top k" placeholder="Default" emptyZero onchange={(n: number) => (sampling.topK = n || undefined)} />
+		<NumberField value={sampling.maxTokens ?? 0} min={0} label="Max tokens" placeholder="Default" emptyZero onchange={(n: number) => (sampling.maxTokens = n || undefined)} />
 	</FieldRow>
 	<FieldRow>
 		<Chips bind:value={sampling.stop} label="Stop" />
@@ -111,8 +111,8 @@
 	</FormSection>
 	<FormSection title="Sampling" advanced={samplingAdvanced}>
 		<FieldRow>
-			<Slider value={sampling.temperature ?? 0} min={0} max={2} step={0.05} label="Temperature" message={sampling.temperature === undefined ? 'Runtime default' : undefined} onchange={(n: number) => (sampling.temperature = n)} />
-			<Slider value={sampling.topP ?? 0} min={0} max={1} step={0.01} label="Top p" message={sampling.topP === undefined ? 'Runtime default' : undefined} onchange={(n: number) => (sampling.topP = n)} />
+			<Slider value={sampling.temperature ?? 0} min={0} max={2} step={0.05} label="Temperature" blank={sampling.temperature === undefined} placeholder="Default" onchange={(n: number) => (sampling.temperature = n)} />
+			<Slider value={sampling.topP ?? 0} min={0} max={1} step={0.01} label="Top p" blank={sampling.topP === undefined} placeholder="Default" onchange={(n: number) => (sampling.topP = n)} />
 		</FieldRow>
 	</FormSection>
 	<FormSection title="Behaviour" advanced={humanize.enabled ? humanizeAdvanced : undefined}>

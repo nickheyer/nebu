@@ -21,6 +21,7 @@ function write(key: string, value: unknown): void {
 class Prefs {
 	railCollapsed = $state(read('rail', false));
 	discoverSource = $state(read('discover.source', ''));
+	discoverSourceLabel = $state(read('discover.sourceLabel', ''));
 	chatSettingsOpen = $state(read('chat.settings', true));
 	trafficWindow = $state(read('traffic.window', '5m'));
 	trafficTimeline = $state(read('traffic.timeline', false));
@@ -30,6 +31,7 @@ class Prefs {
 		$effect.root(() => {
 			$effect(() => write('rail', this.railCollapsed));
 			$effect(() => write('discover.source', this.discoverSource));
+			$effect(() => write('discover.sourceLabel', this.discoverSourceLabel));
 			$effect(() => write('chat.settings', this.chatSettingsOpen));
 			$effect(() => write('traffic.window', this.trafficWindow));
 			$effect(() => write('traffic.timeline', this.trafficTimeline));

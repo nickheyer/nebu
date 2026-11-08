@@ -1,23 +1,30 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { NeoCard } from '#lib/neo/cards/index.js';
 	import { NeoDialog } from '#lib/neo/floating/dialog/index.js';
 	import { NeoDrawer } from '#lib/neo/floating/drawer/index.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
-	import Empty from '#lib/ui/Empty.svelte';
-	import Split from '#lib/ui/layout/Split.svelte';
 
-	// A drawer from the right at standard width, full screen on mobile, the right pane of a split on ultrawide
+	// List fills the page until a record opens beside it, in a drawer when narrow, full screen on phones
 	let {
 		open = $bindable(false),
 		onclose,
+		head,
 		list,
 		children,
-		empty = 'Nothing selected',
-		emptyAction,
-		emptyHref,
-		width = 480
-	}: { open?: boolean; onclose?: () => void; list?: Snippet; children: Snippet; empty?: string; emptyAction?: string; emptyHref?: string; width?: number } = $props();
+		width = 560
+	}: {
+		open?: boolean;
+		onclose?: () => void;
+		// Toolbars and facts spanning the full width over the list and the panel
+		head?: Snippet;
+		list?: Snippet;
+		children: Snippet;
+		// The drawer's width when the page is too narrow to hold the record beside the list
+		width?: number;
+	} = $props();
+
+	let pageWidth = $state(0);
+	const beside = $derived(list !== undefined && !viewport.mobile && pageWidth >= 1080);
 
 	function closed() {
 		open = false;
@@ -25,60 +32,95 @@
 	}
 </script>
 
-{#if list && viewport.ultrawide}
-	<Split ratio="2/5">
-		{#snippet left()}{@render list()}{/snippet}
-		{#snippet right()}
-			<div class="pane">
-				<NeoCard elevation={2} rounded="md" spacing="16px" width="100%">
-					{#if open}
-						<div class="panel">{@render children()}</div>
-					{:else}
-						<Empty text={empty} action={emptyAction} href={emptyHref} />
-					{/if}
-				</NeoCard>
-			</div>
-		{/snippet}
-	</Split>
-{:else}
-	{@render list?.()}
-	{#if viewport.mobile}
-		<NeoDialog bind:open modal full filled placement="center" elevation={2} padding="0" borderless slide={!viewport.reducedMotion} onclose={closed}>
-			<div class="sheet mobile">{@render children()}</div>
-		</NeoDialog>
+<div class="sheetwrap" bind:clientWidth={pageWidth}>
+	{#if head}<div class="head">{@render head()}</div>{/if}
+	{#if beside && open}
+		<div class="split">
+			<div class="list">{@render list?.()}</div>
+			<aside class="pane">
+				<div class="panel">{@render children()}</div>
+			</aside>
+		</div>
 	{:else}
-		<NeoDrawer bind:open filled placement="right" width="{width}px" elevation={2} padding="0" rounded="md" slide={!viewport.reducedMotion} onclose={closed}>
-			<div class="sheet" style:width="{width}px">{@render children()}</div>
-		</NeoDrawer>
+		{#if list}<div class="list">{@render list()}</div>{/if}
+		{#if !beside}
+			{#if viewport.mobile}
+				<NeoDialog bind:open modal full filled placement="center" elevation={2} padding="0" borderless slide={!viewport.reducedMotion} onclose={closed}>
+					<div class="sheet mobile">{@render children()}</div>
+				</NeoDialog>
+			{:else}
+				<NeoDrawer bind:open filled placement="right" width="{width}px" elevation={2} padding="0" rounded="md" slide={!viewport.reducedMotion} onclose={closed}>
+					<div class="sheet" style:width="{width}px">{@render children()}</div>
+				</NeoDrawer>
+			{/if}
+		{/if}
 	{/if}
-{/if}
+</div>
 
 <style>
-	.pane {
-		position: sticky;
-		top: 24px;
+	.sheetwrap {
 		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-5);
 		min-width: 0;
 	}
-	.pane :global(.neo-card) {
-		max-height: calc(100dvh - 96px);
-		overflow: auto;
-	}
-	.panel {
+	.head {
 		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-4);
+		min-width: 0;
+	}
+	.split {
+		display: flex;
+		gap: var(--nebu-space-5);
+		align-items: flex-start;
+		min-width: 0;
+	}
+	.split > .list {
+		flex: 1 1 0;
+	}
+	.list {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-5);
+		min-width: 0;
+	}
+	/* The open record follows the scroll under the top bar, sized to its content up to the viewport */
+	.pane {
+		position: sticky;
+		top: calc(var(--nebu-top, 61px) + var(--nebu-space-4));
+		display: flex;
+		flex: 0 0 clamp(480px, 50%, 900px);
 		flex-direction: column;
 		min-width: 0;
 	}
+	.panel {
+		--nebu-sheet-pad: var(--nebu-space-5);
+
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		max-height: calc(100dvh - var(--nebu-top, 61px) - 2 * var(--nebu-space-4));
+		padding: var(--nebu-sheet-pad);
+		overflow: auto;
+		background: var(--neo-background-color);
+		border-radius: var(--neo-border-radius-md);
+		box-shadow: var(--neo-box-shadow-raised-2);
+	}
 	.sheet {
+		--nebu-sheet-pad: var(--nebu-space-5);
+
 		display: flex;
 		flex-direction: column;
 		height: 100%;
 		min-height: 0;
-		padding: 16px;
+		padding: var(--nebu-sheet-pad);
 		overflow: auto;
 	}
 	.sheet.mobile {
+		--nebu-sheet-pad: var(--nebu-space-4);
+
 		width: 100vw;
-		min-height: 100dvh;
+		height: 100dvh;
 	}
 </style>

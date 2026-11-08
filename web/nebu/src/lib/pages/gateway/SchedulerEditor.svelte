@@ -10,6 +10,8 @@
 	import Conditions from '#lib/ui/Conditions.svelte';
 	import Confirm from '#lib/ui/Confirm.svelte';
 	import Code from '#lib/ui/fields/Code.svelte';
+	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
+	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
@@ -34,7 +36,7 @@
 	const current = $derived(editing ? live.schedulerConfigs.get(name) : undefined);
 	const dirty = $derived(!editing || yaml !== start?.spec?.yaml);
 	// Lines that fill the panel below its header and above the save bar, a line being 19.5px
-	const rows = $derived(Math.max(12, Math.floor((height - (editing ? 260 : 330)) / 19.5)));
+	const rows = $derived(Math.max(12, Math.floor((height - (editing ? 330 : 420)) / 19.5)));
 	const problem = $derived(!name.trim() ? 'Name needed' : !valid ? 'YAML does not parse' : undefined);
 
 	function draft() {
@@ -86,17 +88,24 @@
 	{#snippet tools()}
 		<Row gap={8} wrap={false}>
 			<NeoButton elevation={2} loading={validating} disabled={problem !== undefined} onclick={validate}>Validate</NeoButton>
-			{#if editing && references === 0}<Confirm label="Delete" question="Delete {name}" danger onconfirm={remove} />{/if}
+			{#if editing && references === 0}<Confirm label="Delete" question="Delete {name}?" danger onconfirm={remove} />{/if}
 		</Row>
 	{/snippet}
 </PanelHeader>
-<Stack gap={12}>
-	{#if !editing}<Text bind:value={name} label="Name" max={64} required />{/if}
-	<Code bind:value={yaml} language="yaml" bind:valid bind:error={codeError} {rows} label="Configuration" />
+<Stack gap={24}>
+	<FormSection title="Scheduler">
+		{#if !editing}
+			<FieldRow>
+				<Text bind:value={name} label="Name" required max={64} placeholder="prefix-aware" />
+				<span></span>
+			</FieldRow>
+		{/if}
+		<Code bind:value={yaml} language="yaml" bind:valid bind:error={codeError} {rows} label="Configuration" info="Plugins and scheduling profiles in the inference extension format, Validate loads it on the gateway without saving" />
+	</FormSection>
 	{#if current}
-		<Section title="Conditions">
+		<Section title="Conditions" level={3}>
 			<Conditions conditions={current.status?.conditions} />
 		</Section>
 	{/if}
 </Stack>
-<SaveBar {dirty} {saving} {error} message={problem} label={editing ? 'Save' : 'Create'} disabled={problem !== undefined} onsave={save} ondiscard={onclose} />
+<SaveBar {dirty} always={!editing} {saving} {error} message={problem} label={editing ? 'Save' : 'Create'} disabled={problem !== undefined} onsave={save} ondiscard={onclose} />

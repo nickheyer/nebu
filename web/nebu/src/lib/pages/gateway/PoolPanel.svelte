@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { NeoButton } from '#lib/neo/buttons/index.js';
-	import Collapse from '#lib/ui/Collapse.svelte';
 	import { enumLabel, num, pct } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { AppProtocolSchema, FailureModeSchema, type Pool } from '#lib/proto/nebu/v1/pool_pb.js';
 	import Bar from '#lib/ui/Bar.svelte';
+	import Collapse from '#lib/ui/Collapse.svelte';
 	import Conditions from '#lib/ui/Conditions.svelte';
 	import Dot from '#lib/ui/Dot.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
 	import KeyRows from '#lib/ui/KeyRows.svelte';
+	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
@@ -29,28 +30,27 @@
 	{/snippet}
 </PanelHeader>
 <Stack gap={24}>
-	<Section title="Endpoints" count="{num(pool.status?.readyEndpoints)} / {num(pool.status?.totalEndpoints)}" gap={0}>
-		{#each endpoints as e (e.id)}
-			{@const kv = e.metrics?.kvCacheUtilization ?? 0}
-			<ListRow
-				primary={e.address}
-				primaryKind="address"
-				primaryTip={endpointTip(live, e, clockTick.now)}
-				facts={[{ value: `${num(e.metrics?.queuedRequests)} queued` }, { value: `${num(e.metrics?.runningRequests)} running` }]}
-			>
-				{#snippet leading()}
-					<Tip text={e.ready ? 'Ready' : 'Not ready'} tag="span"><Dot lamp={e.ready ? 'success' : 'muted'} shape={e.ready ? 'filled' : 'hollow'} label="ready" /></Tip>
-					<Tip text={e.healthy ? 'Healthy' : 'Unhealthy'} tag="span"><Dot lamp={e.healthy ? 'success' : 'error'} label="healthy" /></Tip>
-				{/snippet}
-				{#snippet action()}
-					<span class="kv"><Bar segments={[{ kind: kv >= 0.9 ? 'warning' : 'used', label: 'KV cache', bytes: kv * 100 }]} total={100} format={(n) => pct(n)} height={6} /></span>
-				{/snippet}
-			</ListRow>
+	<Section title="Endpoints" count="{num(pool.status?.readyEndpoints)} of {num(pool.status?.totalEndpoints)} ready" level={3}>
+		{#if endpoints.length}
+			<List head={{ primary: 'Address', instrument: 'KV cache', facts: ['Queued', 'Running'] }}>
+				{#each endpoints as e (e.id)}
+					{@const kv = e.metrics?.kvCacheUtilization ?? 0}
+					<ListRow primary={e.address} primaryKind="address" primaryTip={endpointTip(live, e, clockTick.now)} facts={[{ value: num(e.metrics?.queuedRequests) }, { value: num(e.metrics?.runningRequests) }]}>
+						{#snippet leading()}
+							<Tip text={e.ready ? 'Ready' : 'Not ready'} tag="span"><Dot lamp={e.ready ? 'success' : 'muted'} shape={e.ready ? 'filled' : 'hollow'} label={e.ready ? 'ready' : 'not ready'} /></Tip>
+							<Tip text={e.healthy ? 'Healthy' : 'Unhealthy'} tag="span"><Dot lamp={e.healthy ? 'success' : 'error'} label={e.healthy ? 'healthy' : 'unhealthy'} /></Tip>
+						{/snippet}
+						{#snippet instrument()}
+							<span class="kv"><Bar segments={[{ kind: kv >= 0.9 ? 'warning' : 'used', label: 'KV cache', bytes: kv * 100 }]} total={100} format={(n) => pct(n)} height={6} /></span>
+						{/snippet}
+					</ListRow>
+				{/each}
+			</List>
 		{:else}
-			<Empty text="No endpoints" />
-		{/each}
+			<Empty text="No endpoints" row />
+		{/if}
 	</Section>
-	<Section title="Conditions">
+	<Section title="Conditions" level={3}>
 		<Conditions conditions={pool.status?.conditions} />
 	</Section>
 	<Collapse label="Spec">
@@ -80,8 +80,7 @@
 <style>
 	.kv {
 		display: flex;
-		flex: 0 0 6rem;
-		min-width: 6rem;
-		max-width: 6rem;
+		flex: 1 1 auto;
+		min-width: 0;
 	}
 </style>

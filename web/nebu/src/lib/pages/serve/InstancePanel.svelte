@@ -11,6 +11,7 @@
 	import Confirm from '#lib/ui/Confirm.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
 	import KeyRows, { type KeyRow } from '#lib/ui/KeyRows.svelte';
+	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import LogView from '#lib/ui/LogView.svelte';
 	import PageTabs from '#lib/ui/PageTabs.svelte';
@@ -20,14 +21,16 @@
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import Path from '#lib/ui/fields/Path.svelte';
+	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
-	import Row from '#lib/ui/layout/Row.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { deviceLabel } from '#lib/ui/memory.js';
 	import { instanceLamp } from '#lib/ui/status.js';
 	import { modelPhrase, terminal } from '#lib/pages/serve/serve.js';
+	import StackIcon from 'phosphor-svelte/lib/StackIcon';
+	import StethoscopeIcon from 'phosphor-svelte/lib/StethoscopeIcon';
 
 	let { instance, tab, ontab, onclose }: { instance: Instance; tab: string; ontab: (id: string) => void; onclose: () => void } = $props();
 
@@ -106,14 +109,18 @@
 		try {
 			await rpc.instances.loadAdapter({ id: inst.id, name: adapterName, path: adapterPath });
 			toast.success(`Loaded ${adapterName}`);
-			adapterName = '';
-			adapterPath = '';
+			clearAdapter();
 			await listAdapters(id);
 		} catch (err) {
 			toast.error('Adapter load failed', reason(err));
 		} finally {
 			loadingAdapter = false;
 		}
+	}
+
+	function clearAdapter() {
+		adapterName = '';
+		adapterPath = '';
 	}
 
 	async function unloadAdapter(name: string) {
@@ -183,39 +190,37 @@
 		<LogView source={logs} name={inst.name} />
 	{:else if active === 'adapters'}
 		{#if done}
-			<Empty text="Instance stopped" />
+			<Empty icon={StackIcon} text="Instance stopped" hint="Adapters load into a running instance alone" />
 		{:else}
-			<Stack gap={16}>
+			<Stack gap={24}>
 				{#if adapters === undefined}
-					<Skeleton rows={2} />
+					<Skeleton rows={2} dot={false} primary="24ch" secondary="40ch" facts={0} menu={false} />
 				{:else if adapters.length === 0}
-					<Empty text="No adapters loaded" />
+					<Empty text="No adapters loaded" row />
 				{:else}
-					<Stack gap={0}>
+					<List head={{ primary: 'Adapter', secondary: 'Path' }}>
 						{#each adapters as a (a.name)}
 							<ListRow primary={a.name} secondary={a.path} secondaryKind="path">
 								{#snippet action()}<Confirm label="Unload" question="Unload {a.name}?" danger onconfirm={() => unloadAdapter(a.name)} />{/snippet}
 							</ListRow>
 						{/each}
-					</Stack>
+					</List>
 				{/if}
 				<FormSection title="Load adapter">
 					<FieldRow>
-						<Text bind:value={adapterName} label="Name" max={64} />
+						<Text bind:value={adapterName} label="Name" max={64} required />
 						<Path bind:value={adapterPath} label="Path" info="Empty loads one the runtime loaded at launch" />
 					</FieldRow>
-					<Row justify="flex-end">
-						<NeoButton class="primary" elevation={2} loading={loadingAdapter} disabled={!adapterName} onclick={loadAdapter}>Load</NeoButton>
-					</Row>
 				</FormSection>
 			</Stack>
+			<SaveBar dirty={adapterName !== '' || adapterPath !== ''} saving={loadingAdapter} label="Load" disabled={!adapterName} onsave={loadAdapter} ondiscard={clearAdapter} />
 		{/if}
 	{:else if active === 'ranks'}
-		<Stack gap={0}>
+		<List head={{ primary: 'Rank', secondary: 'Endpoint' }}>
 			{#each inst.ranks as r (r.rank)}
 				<ListRow lamp={r.healthy ? 'success' : 'error'} primary="rank {r.rank}" primaryTip="pid {r.pid}{'\n'}port {r.port || 'none'}" primaryWidth="10ch" secondary={r.endpoint} secondaryKind="address" secondaryWidth="24ch" />
 			{/each}
-		</Stack>
+		</List>
 	{:else if active === 'seat' && inst.seat}
 		<Stack gap={16}>
 			<KeyRows
@@ -227,34 +232,39 @@
 					{ label: 'rendezvous', value: inst.seat.rendezvous, mono: true, copy: inst.seat.rendezvous !== '' }
 				]}
 			/>
-			<Stack gap={0}>
-				{#each inst.seat.peers as p (p.nodeId + p.rank)}
-					<ListRow primary={live.nodes.get(p.nodeId)?.name ?? p.nodeId} secondary="{p.role} {p.rank}" secondaryWidth="16ch" facts={[{ value: p.address, mono: true }]} />
-				{/each}
-			</Stack>
+			{#if inst.seat.peers.length}
+				<List head={{ primary: 'Peer', secondary: 'Role', facts: ['Address'] }}>
+					{#each inst.seat.peers as p (p.nodeId + p.rank)}
+						<ListRow primary={live.nodes.get(p.nodeId)?.name ?? p.nodeId} secondary="{p.role} {p.rank}" secondaryWidth="16ch" facts={[{ value: p.address, mono: true }]} />
+					{/each}
+				</List>
+			{/if}
 		</Stack>
 	{:else if active === 'triage'}
 		<Stack gap={12}>
 			{#if inst.error}<p class="error-text failure">{inst.error}</p>{/if}
-			{#if !inst.error && inst.triage.length === 0}<Empty text="No triage hits" />{/if}
-			<Stack gap={0}>
-				{#each inst.triage as t (t.id)}
-					<ListRow lamp="error" primary={t.summary} primaryKind="text" primaryTip={t.line} primaryWidth="32ch" secondary={t.hint} secondaryKind="message" secondaryWidth="64ch" />
-				{/each}
-			</Stack>
+			{#if inst.triage.length}
+				<List head={{ primary: 'Finding', secondary: 'Hint' }}>
+					{#each inst.triage as t (t.id)}
+						<ListRow lamp="error" primary={t.summary} primaryKind="text" primaryTip={t.line} primaryWidth="32ch" secondary={t.hint} secondaryKind="message" secondaryWidth="64ch" />
+					{/each}
+				</List>
+			{:else if !inst.error}
+				<Empty icon={StethoscopeIcon} text="No triage hits" hint="Known failure patterns in the log land here with a fix to try" />
+			{/if}
 		</Stack>
 	{/if}
 </div>
 
 <style>
 	.body {
-		margin-top: 12px;
+		margin-top: var(--nebu-space-3);
 	}
 	.pool {
 		display: flex;
-		gap: 12px;
+		gap: var(--nebu-space-3);
 		align-items: center;
-		min-height: 28px;
+		min-height: var(--nebu-row-dense);
 	}
 	.poolid {
 		flex: 0 0 10ch;

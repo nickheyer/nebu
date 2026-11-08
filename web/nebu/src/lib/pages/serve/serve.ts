@@ -14,6 +14,11 @@ export function modelPhrase(r: { repo: string; group: string } | undefined): str
 	return r.group ? `${r.repo} ${r.group}` : r.repo;
 }
 
+// The Serve panel holding a slot's settings, new for the create form
+export function slotHref(id: string): string {
+	return `/serve?slot=${encodeURIComponent(id)}`;
+}
+
 export function terminal(s: InstanceState): boolean {
 	return s === InstanceState.STOPPED || s === InstanceState.FAILED;
 }
@@ -40,18 +45,40 @@ export function policyRows(p: Policy | undefined): KeyRow[] {
 	if (!p) return [];
 	return [
 		{ label: 'max in flight', value: p.maxInFlight ? num(p.maxInFlight) : '' },
-		{ label: 'requests per second', value: p.requestsPerSecond ? String(p.requestsPerSecond) : '' },
+		{
+			label: 'requests per second',
+			value: p.requestsPerSecond ? String(p.requestsPerSecond) : ''
+		},
 		{ label: 'burst', value: p.burst ? num(p.burst) : '' },
-		{ label: 'request timeout', value: p.requestTimeoutMs ? ms(p.requestTimeoutMs) : '' },
-		{ label: 'upstream timeout', value: p.upstreamTimeoutMs ? ms(p.upstreamTimeoutMs) : '' }
+		{
+			label: 'request timeout',
+			value: p.requestTimeoutMs ? ms(p.requestTimeoutMs) : ''
+		},
+		{
+			label: 'upstream timeout',
+			value: p.upstreamTimeoutMs ? ms(p.upstreamTimeoutMs) : ''
+		}
 	].filter((r) => r.value !== '');
 }
 
 // Splits a model key of source, repository and group, the repository holding one slash of its own
-export function splitKey(key: string): { sourceId: string; repo: string; group: string } {
+export function splitKey(key: string): {
+	sourceId: string;
+	repo: string;
+	group: string;
+} {
 	const parts = key.split('/');
-	if (parts.length < 3) return { sourceId: parts[0] ?? '', repo: parts.slice(1).join('/'), group: '' };
-	return { sourceId: parts[0]!, repo: parts.slice(1, 3).join('/'), group: parts.slice(3).join('/') };
+	if (parts.length < 3)
+		return {
+			sourceId: parts[0] ?? '',
+			repo: parts.slice(1).join('/'),
+			group: ''
+		};
+	return {
+		sourceId: parts[0]!,
+		repo: parts.slice(1, 3).join('/'),
+		group: parts.slice(3).join('/')
+	};
 }
 
 // The whole update a slot takes, since an update replaces every field it carries

@@ -24,7 +24,7 @@ Route: `/serve`, `/serve/<instance>` opens the panel, `/serve/launch` the wizard
    ●  deepseek-v3   lockstep · 3 nodes                      [Open]     ···
 ```
 
-**Slots.** Drag handle, state dot, name (24ch), occupant model or error (40ch), in flight, one action by state, menu: Edit, Evict, Logs, Open instance, Delete. Tooltip on the name: runtime, devices, reserved memory, aliases. Expand: policy fields set, uptime, context. A swapping slot shows a thin canary bar under the row with the new share and time left.
+**Slots.** Slot and Launch stay in the Memory header whatever the list holds. Drag handle, state dot, name (24ch), occupant model or error (40ch), in flight, one action by state, menu: Edit, Evict, Logs, Open instance, Delete. Tooltip on the name: runtime, devices, reserved memory, aliases. Expand: policy fields set, uptime, context. A swapping slot shows a thin canary bar under the row with the new share and time left.
 
 **Instances without a slot.** Same row without the handle. Stopped and failed ones from the last day stay until dismissed from the menu.
 

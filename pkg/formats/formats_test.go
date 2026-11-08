@@ -1,6 +1,7 @@
 package formats_test
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -183,6 +184,54 @@ func TestStemAndShard(t *testing.T) {
 	}
 	if stem, i, n, ok := formats.Shard("model-00002-of-00005"); !ok || stem != "model" || i != 2 || n != 5 {
 		t.Fatalf("shard %q %d %d %v", stem, i, n, ok)
+	}
+	if stem, i, n, ok := formats.Shard("model-00007-of-000096"); !ok || stem != "model" || i != 7 || n != 96 {
+		t.Fatalf("a wider count is still a shard, got %q %d %d %v", stem, i, n, ok)
+	}
+	for _, base := range []string{"model-00006-of-00005", "model-00001-of-00000", "model00001-of-00002", "model-0001-of-00002", "model-00001-of-0002", "model-00001-of-00002x"} {
+		if _, _, _, ok := formats.Shard(base); ok {
+			t.Errorf("%q is not a shard", base)
+		}
+	}
+	if got := formats.Shards("model-00002-of-000003"); !slices.Equal(got, []string{"model-00001-of-000003", "model-00002-of-000003", "model-00003-of-000003"}) {
+		t.Fatalf("siblings keep the digit widths, got %v", got)
+	}
+	if got := formats.Shards("data-00000-of-00002"); !slices.Equal(got, []string{"data-00000-of-00002", "data-00001-of-00002"}) {
+		t.Fatalf("siblings numbered from zero, got %v", got)
+	}
+	if got := formats.Shards("model"); got != nil {
+		t.Fatalf("a whole file has no siblings, got %v", got)
+	}
+}
+
+// A checkpoint whose shard count is padded wider than its index stays one group holding every shard
+func TestSafetensorsWideShardCountIsOneGroup(t *testing.T) {
+	c := registry(t)
+	paths := []string{"config.json", "model.safetensors.index.json", "tokenizer_config.json"}
+	for i := 1; i <= 96; i++ {
+		paths = append(paths, fmt.Sprintf("model-%05d-of-%06d.safetensors", i, 96))
+	}
+	m := model(paths...)
+	c.Classify(m)
+	groups := c.Groups(m)
+	if len(groups) != 1 {
+		names := make([]string, 0, len(groups))
+		for _, g := range groups {
+			names = append(names, g.Name)
+		}
+		t.Fatalf("one group, got %d: %v", len(groups), names)
+	}
+	g := groups[0]
+	if g.FormatID != "safetensors" || g.Name != "default" || len(g.Weights) != 96 {
+		t.Fatalf("got %s/%s with %d weights", g.FormatID, g.Name, len(g.Weights))
+	}
+	for i, a := range g.Weights {
+		if a.GetShardIndex() != uint32(i+1) || a.GetShardCount() != 96 {
+			t.Fatalf("%s: shard %d of %d at %d", a.GetPath(), a.GetShardIndex(), a.GetShardCount(), i)
+		}
+	}
+	if len(g.Files[v1.ArtifactRole_ARTIFACT_ROLE_CONFIG]) != 1 || len(g.Files[v1.ArtifactRole_ARTIFACT_ROLE_INDEX]) != 1 {
+		t.Fatalf("config and index attach to the group: %v", g.Files)
 	}
 }
 

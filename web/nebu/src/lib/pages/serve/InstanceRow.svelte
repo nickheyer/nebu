@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { num } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
@@ -10,7 +11,7 @@
 	import { instanceLamp, instanceShape } from '#lib/ui/status.js';
 	import { instanceInFlight, modelPhrase, terminal } from '#lib/pages/serve/serve.js';
 
-	let { instance, ondismiss }: { instance: Instance; ondismiss?: (id: string) => void } = $props();
+	let { instance, ondismiss, selected = false, slim = false }: { instance: Instance; ondismiss: (id: string) => void; selected?: boolean; slim?: boolean } = $props();
 
 	const inFlight = $derived(instanceInFlight(live, instance));
 	const done = $derived(terminal(instance.state));
@@ -25,8 +26,8 @@
 	}
 
 	const menu = $derived.by((): MenuItem[] => {
-		const items: MenuItem[] = [{ label: 'Logs', href: `/serve/${instance.id}?tab=logs` }, { label: 'Open', href: `/serve/${instance.id}` }];
-		if (done && ondismiss) items.push({ label: 'Dismiss', onclick: () => ondismiss(instance.id), divider: true });
+		const items: MenuItem[] = [{ label: 'Logs', href: `/serve/${encodeURIComponent(instance.id)}?tab=logs` }];
+		if (done) items.push({ label: 'Dismiss', onclick: () => ondismiss(instance.id), divider: true });
 		return items;
 	});
 </script>
@@ -35,12 +36,13 @@
 	lamp={instanceLamp(instance.state)}
 	shape={instanceShape(instance.state)}
 	primary={instance.name}
-	secondary={phrase}
+	secondary={slim ? undefined : phrase}
 	secondaryKind={instance.state === InstanceState.FAILED ? 'message' : 'repo'}
 	secondaryColor={instance.state === InstanceState.FAILED ? 'error' : 'muted'}
-	facts={!done && inFlight !== undefined ? [{ value: `${num(inFlight)} in flight` }] : []}
+	facts={slim ? [] : [{ value: !done && inFlight !== undefined ? num(inFlight) : '', tip: 'in flight' }]}
 	{menu}
-	href="/serve/{instance.id}"
+	{selected}
+	onclick={() => goto(`/serve/${encodeURIComponent(instance.id)}`)}
 >
 	{#snippet action()}
 		{#if !done}

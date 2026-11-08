@@ -60,7 +60,7 @@ Screen, both themes
 
 | Use | Colour |
 | --- | --- |
-| links, focus ring, active tab, primary button, selected row, progress | primary |
+| links, active tab, primary button, selected row, progress | primary |
 | ready, succeeded, connected | success |
 | starting, pending, swapping, warnings | warning |
 | failed, errors, destructive confirm | error |
@@ -69,7 +69,11 @@ Screen, both themes
 | secondary accent, charts needing a second series | steel |
 | log lines, request bodies, YAML, commands | phosphor on screen |
 
-A primary button is a primary fill with background coloured text. Every other button is flat or raised steel with text coloured text. Status never fills a card or a row, it colours a dot, a pill, or a bar.
+A primary button is a primary fill with background coloured text. Every other button is flat or raised steel with text coloured text. No button or card carries an outline. The one action of a row is a text button, raised buttons stand outside rows. Status never fills a card or a row, it colours a dot, a pill, or a bar.
+
+## Disabled
+
+A disabled control keeps its shape and loses its depth: the surface fill, muted text, no shadow, whatever it was when enabled. Text muted on surface measures 4.9 light and 7.0 dark.
 
 ## Contrast
 
@@ -93,7 +97,7 @@ Every text pair is measured, WCAG ratio against its background.
 | Use | Family | Weight | Size |
 | --- | --- | --- | --- |
 | UI | IBM Plex Sans | 400, 500 labels, 600 headings | 15px base, 13px secondary, 12px pills |
-| page title | IBM Plex Sans | 600 | 24px |
+| page title, a record's name | IBM Plex Sans | 600 | 24px |
 | section title | IBM Plex Sans | 600 | 17px |
 | numbers | IBM Plex Sans, tabular figures | 400 | as the text around them |
 | ids, addresses, paths, versions | IBM Plex Mono | 400 | 13px |
@@ -107,8 +111,9 @@ The library is neumorphic. The page is flat background. Three depths are used.
 
 | Depth | Where |
 | --- | --- |
-| flat | page, list rows, tabs, text buttons |
+| flat | page, list rows, tabs, text buttons, rail items |
 | raised, level 2 | cards, tiles, the open panel, dialogs, primary buttons |
+| inset, level 2 | the active rail item, the chosen segment |
 | inset, level 1 | inputs, the memory bar track, the screen |
 
 Light source top left, the library default. Borders are hairlines from the border colour, used only where a shadow would be too heavy: row separators, table lines, the screen edge. Radius 8px on controls and rows, 12px on cards and panels, pills full. The icon's 22% corner is the mark alone.
@@ -150,8 +155,12 @@ Implemented in `web/nebu/src/theme.css`, loaded before the app styles. The libra
 	--nebu-screen-border: #23272e;
 	--nebu-screen-text: #9fd39a;
 	--nebu-screen-text-muted: #6f8f6c;
+	--nebu-disabled-fill: #e0e2e7;
+	--nebu-disabled-text: #5b606c;
 }
 ```
+
+`--nebu-disabled-fill` is the surface and `--nebu-disabled-text` the muted text of the theme, `#212327` and `#a8adb8` in the dark one.
 
 `--neo-white-soft` is the light background and the dark text. `--neo-grey` is the dark background. `--neo-grey-dark` is the light text. The light accents are the plain tokens, the dark accents the `-light` and `-dark` ones, which the library switches by theme.
 

@@ -17,7 +17,7 @@
 </script>
 
 <div class="field" class:mono>
-	<NeoTextarea bind:value {label} {placeholder} {rows} maxlength={max} {disabled} elevation={-1} placement={label ? 'top' : 'inside'} floating={false} width="100%" {message} autoResize={{ min: rows, max: maxRows }} />
+	<NeoTextarea bind:value {label} {placeholder} {rows} maxlength={max} {disabled} elevation={-1} placement={label ? 'top' : 'inside'} floating={false} width="100%" resize="none" {message} autoResize={{ min: rows, max: maxRows }} />
 	{#if info}<InfoTip text={info} />{/if}
 </div>
 

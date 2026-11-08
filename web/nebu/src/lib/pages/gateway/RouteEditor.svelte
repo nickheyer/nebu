@@ -11,6 +11,8 @@
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Conditions from '#lib/ui/Conditions.svelte';
 	import Confirm from '#lib/ui/Confirm.svelte';
+	import Dot from '#lib/ui/Dot.svelte';
+	import Tip from '#lib/ui/Tip.svelte';
 	import Checklist from '#lib/ui/fields/Checklist.svelte';
 	import Duration from '#lib/ui/fields/Duration.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
@@ -24,12 +26,10 @@
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import type { Option } from '#lib/ui/fields/types.js';
-	import Cell from '#lib/ui/layout/Cell.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
-	import Row from '#lib/ui/layout/Row.svelte';
 	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
-	import { isUserOwned, ownerLabel, targetShare } from '#lib/pages/gateway/gateway.js';
+	import { isUserOwned, ownerLabel, ownerLink, poolLamp, poolShape, poolWord, targetShare } from '#lib/pages/gateway/gateway.js';
 	import DotsSixVerticalIcon from 'phosphor-svelte/lib/DotsSixVerticalIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
@@ -41,7 +41,7 @@
 	// A slot, instance or formation owns the rules, a node owns the whole route
 	const owned = start !== undefined && !isUserOwned(start.ownerKind);
 	const locked = start?.ownerKind === 'node';
-	const rulesLocked = owned;
+	const owner = start ? ownerLink(live, start) : undefined;
 	const initial = start?.spec ? clone(RouteSpecSchema, start.spec) : create(RouteSpecSchema, { rules: [newRule()] });
 	initial.policy ??= create(PolicySchema);
 	initial.profile ??= create(ProfileSchema);
@@ -64,6 +64,7 @@
 	const current = $derived(editing ? live.routes.get(name) : undefined);
 	const objectives = $derived([...live.objectives.values()].map((o) => ({ value: o.name, label: o.name, description: `priority ${o.priority}` })));
 	const problem = $derived.by(() => {
+		if (locked) return `Owned by ${start ? ownerLabel(start.ownerKind, start.ownerId) : 'a node'}, read only`;
 		if (!name.trim()) return 'Name needed';
 		if (ordered.length === 0) return 'One rule at least';
 		if (ordered.some((r) => r.targets.length === 0)) return 'Every rule needs a target';
@@ -156,62 +157,59 @@
 	}
 </script>
 
+{#snippet removeButton(label: string, onclick: () => void, disabled = false)}
+	<span class="trail remove"><NeoButton text aria-label={label} title={label} {disabled} {onclick}>{#snippet icon()}<XIcon size={18} />{/snippet}</NeoButton></span>
+{/snippet}
+
 {#snippet ruleBody(k: string, rule: RewriteRule, index: number, handle?: (node: HTMLElement) => () => void)}
-	<Stack gap={12}>
-		<Row gap={8} align="flex-end" wrap={false}>
-			{#if handle}
-				<Cell grow={false}>
-					<span class="grip muted" role="button" tabindex="0" aria-label="Drag to reorder" {@attach handle}><DotsSixVerticalIcon size={20} /></span>
-				</Cell>
-			{/if}
-			<Cell min="10rem">
-				<Text bind:value={rule.match} label="Match {index + 1}" placeholder="every request" max={64} mono disabled={rulesLocked || locked} />
-			</Cell>
-			{#if !rulesLocked}
-				<Cell grow={false}>
-					<NeoButton text aria-label="Remove rule" onclick={() => removeRule(k)}>{#snippet icon()}<XIcon size={20} />{/snippet}</NeoButton>
-				</Cell>
-			{/if}
-		</Row>
-		{#each rule.targets as target, t (t)}
-			<div class="target">
-				<Stack gap={8}>
-					<FieldRow>
-						<Picker bind:value={target.poolId} fetch={fetchPools} label="Pool" current={target.poolId || undefined} required disabled={rulesLocked || locked} />
-						<Text bind:value={target.model} label="Model" max={64} placeholder="pool model" disabled={rulesLocked || locked} />
-					</FieldRow>
-					<Row gap={8} align="flex-end" wrap={false}>
-						<Cell min="10rem">
-							<NumberField bind:value={target.weight} min={1} max={1_000_000} label="Weight" unit={targetShare(rule, target.weight)} disabled={rulesLocked || locked} />
-						</Cell>
-						{#if !rulesLocked}
-							<Cell grow={false}>
-								<NeoButton text aria-label="Remove target" disabled={rule.targets.length === 1} onclick={() => (rule.targets = rule.targets.filter((_, j) => j !== t))}>{#snippet icon()}<XIcon size={20} />{/snippet}</NeoButton>
-							</Cell>
-						{/if}
-					</Row>
-				</Stack>
-			</div>
-		{/each}
-		{#if !rulesLocked}
-			<Row gap={8}>
-				<Cell grow={false}>
-					<NeoButton text onclick={() => (rule.targets = [...rule.targets, create(RewriteTargetSchema, { weight: 1 })])}>{#snippet icon()}<PlusIcon size={20} />{/snippet}Target</NeoButton>
-				</Cell>
-			</Row>
+	<div class="rulehead">
+		{#if handle}
+			<span class="grip muted" role="button" tabindex="0" aria-label="Drag to reorder" title="Drag to reorder" {@attach handle}><DotsSixVerticalIcon size={18} /></span>
 		{/if}
-	</Stack>
+		<span class="label">Rule {index + 1}</span>
+		<span class="fill"></span>
+		{#if !owned}{@render removeButton('Remove rule', () => removeRule(k), ordered.length === 1)}{/if}
+	</div>
+	<div class="rulebody">
+		<Text bind:value={rule.match} label="Match" placeholder="Every request" max={64} disabled={owned || locked} />
+		<div class="targets">
+			{#each rule.targets as target, t (t)}
+				{@const pool = target.poolId ? live.pools.get(target.poolId) : undefined}
+				<div class="target">
+					<span class="pool"><Picker bind:value={target.poolId} fetch={fetchPools} label={t === 0 ? 'Pool' : undefined} placeholder="Pool" current={target.poolId || undefined} required disabled={owned || locked} /></span>
+					<span class="model"><Text bind:value={target.model} label={t === 0 ? 'Model' : undefined} max={64} placeholder="Pool model" disabled={owned || locked} /></span>
+					<span class="weight"><NumberField bind:value={target.weight} min={1} max={1_000_000} label={t === 0 ? 'Weight' : undefined} disabled={owned || locked} /></span>
+					<span class="trail share">
+						{#if target.poolId}
+							<Tip text={poolWord(pool)} tag="span"><Dot lamp={poolLamp(pool)} shape={poolShape(pool)} label={poolWord(pool)} /></Tip>
+						{/if}
+						<Tip text="Share of the rule before balancing" tag="span"><span class="pct">{targetShare(rule, target.weight)}</span></Tip>
+					</span>
+					{#if !owned}{@render removeButton('Remove target', () => (rule.targets = rule.targets.filter((_, j) => j !== t)), rule.targets.length === 1)}{/if}
+				</div>
+			{/each}
+		</div>
+		{#if !owned}
+			<span class="add"><NeoButton text onclick={() => (rule.targets = [...rule.targets, create(RewriteTargetSchema, { weight: 1 })])}>{#snippet icon()}<PlusIcon size={18} />{/snippet}Target</NeoButton></span>
+		{/if}
+	</div>
 {/snippet}
 
 <PanelHeader title={editing ? name : 'New route'} subtitle={owned && start ? ownerLabel(start.ownerKind, start.ownerId) : undefined} {onclose}>
 	{#snippet tools()}
-		{#if editing && !owned}<Confirm label="Delete" question="Delete {name}" danger onconfirm={remove} />{/if}
+		{#if owner}
+			<NeoButton elevation={2} href={owner.href}>{owner.label}</NeoButton>
+		{:else if editing}
+			<Confirm label="Delete" question="Delete {name}?" danger onconfirm={remove} />
+		{/if}
 	{/snippet}
 </PanelHeader>
 <Stack gap={24}>
 	<FormSection title="Route">
-		<Text bind:value={name} label="Name" max={64} required readonly={editing} />
-		<Select value={spec.objective || undefined} options={objectives} label="Objective" clearable placeholder="None" disabled={locked} onchange={(v) => (spec.objective = v ?? '')} />
+		<FieldRow>
+			<Text bind:value={name} label="Name" required readonly={editing} max={64} placeholder="llama-3-70b" />
+			<Select value={spec.objective || undefined} options={objectives} label="Objective" clearable placeholder="None" disabled={locked} onchange={(v) => (spec.objective = v ?? '')} />
+		</FieldRow>
 		<Segmented
 			bind:value={spec.balance}
 			options={[
@@ -224,45 +222,48 @@
 			disabled={locked}
 		/>
 	</FormSection>
-	<FormSection title="Rules" info={rulesLocked ? `Set by ${start ? ownerLabel(start.ownerKind, start.ownerId) : 'the owner'}` : 'In order, the first exact match winning over a catch all'}>
-		{#if rulesLocked}
-			{#each order as item, index (item.id)}
-				{@const rule = rules[String(item.id)]}
-				{#if rule}<div class="rule hairline">{@render ruleBody(String(item.id), rule, index)}</div>{/if}
-			{/each}
-		{:else}
-			<NeoSortableProvider bind:items={order} axis="y">
+	<FormSection title="Rules" info={owned ? `Set by ${start ? ownerLabel(start.ownerKind, start.ownerId) : 'the owner'}` : 'Each matches a model name or glob, the first exact match winning and an empty match taking the rest'}>
+		<div class="rules">
+			{#if owned}
 				{#each order as item, index (item.id)}
-					{@const k = String(item.id)}
-					{@const rule = rules[k]}
-					{#if rule}
-						<NeoSortableItem id={item.id} {index} data={item.data}>
-							{#snippet children({ instance })}
-								<div class="rule hairline" {@attach instance.attach}>{@render ruleBody(k, rule, index, instance.attachHandle)}</div>
-							{/snippet}
-						</NeoSortableItem>
-					{/if}
+					{@const rule = rules[String(item.id)]}
+					{#if rule}<div class="rule">{@render ruleBody(String(item.id), rule, index)}</div>{/if}
 				{/each}
-			</NeoSortableProvider>
-			<Row gap={8}>
-				<Cell grow={false}><NeoButton elevation={2} onclick={addRule}>{#snippet icon()}<PlusIcon size={20} />{/snippet}Rule</NeoButton></Cell>
-			</Row>
+			{:else}
+				<NeoSortableProvider bind:items={order} axis="y">
+					{#each order as item, index (item.id)}
+						{@const k = String(item.id)}
+						{@const rule = rules[k]}
+						{#if rule}
+							<NeoSortableItem id={item.id} {index} data={item.data}>
+								{#snippet children({ instance })}
+									<div class="rule" {@attach instance.attach}>{@render ruleBody(k, rule, index, instance.attachHandle)}</div>
+								{/snippet}
+							</NeoSortableItem>
+						{/if}
+					{/each}
+				</NeoSortableProvider>
+			{/if}
+		</div>
+		{#if !owned}
+			<span class="add"><NeoButton elevation={2} onclick={addRule}>{#snippet icon()}<PlusIcon size={18} />{/snippet}Rule</NeoButton></span>
 		{/if}
 	</FormSection>
 	{#if spec.policy}
-		<FormSection title="Policy" info="Zero inherits the gateway default">
+		<FormSection title="Policy" info="Empty fields inherit the gateway default">
 			<FieldRow>
-				<NumberField bind:value={spec.policy.maxInFlight} min={0} max={1_000_000} label="Max in flight" emptyZero placeholder="inherits" disabled={locked} />
-				<NumberField bind:value={spec.policy.requestsPerSecond} min={0} step={0.5} label="Requests per second" emptyZero placeholder="inherits" disabled={locked} />
+				<NumberField bind:value={spec.policy.maxInFlight} min={0} max={1_000_000} label="Max in flight" emptyZero placeholder="Default" disabled={locked} />
+				<NumberField bind:value={spec.policy.requestsPerSecond} min={0} step={0.5} label="Requests per second" emptyZero placeholder="Default" disabled={locked} />
 			</FieldRow>
 			<FieldRow>
-				<Duration bind:value={spec.policy.requestTimeoutMs} base="ms" max={86_400_000} label="Request timeout" info="First byte in to last byte out" disabled={locked} />
-				<Duration bind:value={spec.policy.upstreamTimeoutMs} base="ms" max={86_400_000} label="Upstream timeout" info="Wait for the runtime to start answering" disabled={locked} />
+				<Duration bind:value={spec.policy.requestTimeoutMs} base="ms" max={86_400_000} label="Request timeout" info="The whole exchange, first byte in to last byte out" emptyZero placeholder="Default" disabled={locked} />
+				<Duration bind:value={spec.policy.upstreamTimeoutMs} base="ms" max={86_400_000} label="Upstream timeout" info="How long the runtime may take to start answering" emptyZero placeholder="Default" disabled={locked} />
 			</FieldRow>
 			{#snippet advanced()}
 				{#if spec.policy}
 					<FieldRow>
-						<NumberField bind:value={spec.policy.burst} min={0} max={1_000_000} label="Burst" info="Requests a quiet route absorbs at once, zero rounds the rate up" emptyZero placeholder="inherits" disabled={locked} />
+						<NumberField bind:value={spec.policy.burst} min={0} max={1_000_000} label="Burst" info="Requests a quiet route absorbs at once" emptyZero placeholder="Default" disabled={locked} />
+						<span></span>
 					</FieldRow>
 				{/if}
 			{/snippet}
@@ -270,35 +271,125 @@
 	{/if}
 	{#if spec.profile}
 		<FormSection title="Tools">
-			{#if toolOptions.length > 8}
-				<MultiSelect bind:value={spec.profile.toolServers} options={toolOptions} label="Tool servers" search disabled={locked} />
-			{:else}
-				<Checklist bind:value={spec.profile.toolServers} options={toolOptions} label="Tool servers" empty="No tool servers" disabled={locked} />
-			{/if}
-			<Switch bind:checked={spec.profile.mutatingTools} label="Mutating tools" info="Tools that change what they touch, read only tools alone when off" disabled={locked} />
+			<FieldRow>
+				{#if toolOptions.length > 8}
+					<MultiSelect bind:value={spec.profile.toolServers} options={toolOptions} label="Tool servers" search disabled={locked} />
+				{:else}
+					<Checklist bind:value={spec.profile.toolServers} options={toolOptions} label="Tool servers" empty="No tool servers" disabled={locked} />
+				{/if}
+				<Switch bind:checked={spec.profile.mutatingTools} label="Mutating tools" info="Offers tools that change what they touch, read only tools alone otherwise" disabled={locked} />
+			</FieldRow>
 		</FormSection>
 	{/if}
-	{#if current}
-		<Section title="Conditions">
-			<Conditions conditions={current.status?.conditions} />
+	{#if current?.status?.conditions.length}
+		<Section title="Conditions" level={3}>
+			<Conditions conditions={current.status.conditions} />
 		</Section>
 	{/if}
 </Stack>
-{#if !locked}
-	<SaveBar {dirty} {saving} {error} message={problem} label={editing ? 'Save' : 'Create'} disabled={problem !== undefined} onsave={save} ondiscard={onclose} />
-{/if}
+<SaveBar dirty={locked ? false : dirty} always={!editing} {saving} {error} message={problem} label={editing ? 'Save' : 'Create'} disabled={problem !== undefined} onsave={save} ondiscard={onclose} />
 
 <style>
-	.rule {
-		padding: 12px 0;
+	.rules {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
 	}
-	.target {
-		padding-left: 32px;
+	/* Each rule is one block between hairlines, its head naming it and its body indented under the grip */
+	.rule {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-3);
+		padding: var(--nebu-space-3) 0 var(--nebu-space-4);
+		border-top: 1px solid var(--nebu-border);
+	}
+	.rule:last-child {
+		border-bottom: 1px solid var(--nebu-border);
+	}
+	.rulehead {
+		display: flex;
+		gap: var(--nebu-space-2);
+		align-items: center;
+		min-height: 32px;
 	}
 	.grip {
 		display: inline-flex;
-		padding-bottom: 8px;
 		cursor: grab;
 		touch-action: none;
+	}
+	.rulebody {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-3);
+		min-width: 0;
+		padding-left: 26px;
+	}
+	.targets {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-2);
+		min-width: 0;
+		container-type: inline-size;
+	}
+	/* Pool and model share what the fixed weight, share and remove columns leave, wrapping in a narrow drawer */
+	.target {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--nebu-space-2) var(--nebu-space-3);
+		align-items: flex-end;
+		min-width: 0;
+	}
+	.pool {
+		display: flex;
+		flex: 3 1 11rem;
+		min-width: 0;
+	}
+	.model {
+		display: flex;
+		flex: 2 1 9rem;
+		min-width: 0;
+	}
+	.pool > :global(*),
+	.model > :global(*) {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.weight {
+		display: flex;
+		flex: 0 0 9rem;
+		min-width: 0;
+	}
+	.weight > :global(*) {
+		flex: 1 1 auto;
+	}
+	.share {
+		justify-content: flex-end;
+		min-width: 9ch;
+		margin-left: auto;
+		font-size: var(--nebu-text-secondary);
+		color: var(--nebu-text-muted);
+	}
+	.pct {
+		display: inline-block;
+		min-width: 5ch;
+		font-variant-numeric: tabular-nums;
+		text-align: right;
+	}
+	.remove {
+		flex: 0 0 auto;
+	}
+	/* Too narrow for one line, pool and model fill the first and the weight leads the second */
+	@container (max-width: 39rem) {
+		.pool,
+		.model {
+			flex: 1 1 calc(50% - var(--nebu-space-3));
+		}
+		.target + .target {
+			margin-top: var(--nebu-space-3);
+		}
+	}
+	.add {
+		display: inline-flex;
+		align-self: flex-start;
 	}
 </style>

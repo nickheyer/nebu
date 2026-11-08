@@ -1,14 +1,11 @@
 <script lang="ts">
 	import { NeoButton } from '#lib/neo/buttons/index.js';
-	import { NeoCard } from '#lib/neo/cards/index.js';
-	import { NeoDivider } from '#lib/neo/divider/index.js';
-	import { NeoLoadingMatrix } from '#lib/neo/loading/index.js';
 	import { reason } from '#lib/api/transport.js';
 	import { session } from '#lib/auth/session.svelte.js';
 	import Brand from '#lib/shell/Brand.svelte';
 	import Secret from '#lib/ui/fields/Secret.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
-	import Stack from '#lib/ui/layout/Stack.svelte';
+	import Card from '#lib/ui/layout/Card.svelte';
 
 	let username = $state('');
 	let password = $state('');
@@ -47,51 +44,33 @@
 	}
 </script>
 
+{#snippet ssoButton(primary: boolean)}
+	<NeoButton href="/auth/oidc/login?next={encodeURIComponent(next)}" elevation={primary ? 2 : 1} class={primary ? 'primary wide' : 'wide'}>Continue with {sso?.name}</NeoButton>
+{/snippet}
+
+{#snippet ssoFooter()}{@render ssoButton(false)}{/snippet}
+
 <main class="login">
-	<Brand />
-	{#if !session.ready}
-		{#if session.error}
-			<Stack gap={12}>
-				<p class="error-text">{session.error}</p>
-				<NeoButton elevation={2} onclick={() => session.load()}>Retry</NeoButton>
-			</Stack>
-		{:else}
-			<NeoLoadingMatrix aria-label="Connecting" width="48px" height="48px" />
-		{/if}
-	{:else if status?.enabled}
-		<div class="card">
-			<NeoCard rounded="md" elevation={2} spacing="24px" width="100%">
-				<Stack gap={16}>
-					{#if setup}<h2 class="title">Create the first account</h2>{/if}
-					{#if local}
-						<form onsubmit={submit}>
-							<Stack gap={16}>
-								<Text bind:value={username} label="Username" min={1} max={64} autocomplete="username" />
-								<Secret bind:value={password} label="Password" autocomplete={setup ? 'new-password' : 'current-password'} />
-								{#if setup}
-									<Secret bind:value={again} label="Password again" autocomplete="new-password" error={mismatch ? 'Passwords differ' : undefined} />
-								{/if}
-								{#if refused}<p class="error-text secondary">{refused}</p>{/if}
-								<div class="actions">
-									<NeoButton type="submit" class="primary" elevation={2} loading={session.busy}>{setup ? 'Create account' : 'Sign in'}</NeoButton>
-								</div>
-							</Stack>
-						</form>
-					{/if}
-					{#if local && sso}
-						<div class="or">
-							<NeoDivider elevation={0} flex="1 1 auto" />
-							<span class="secondary">or</span>
-							<NeoDivider elevation={0} flex="1 1 auto" />
+	{#if status?.enabled}
+		<div class="column">
+			<span class="brand"><Brand /></span>
+			<Card title={setup ? 'Create the first account' : 'Sign in'} info={setup ? 'This account becomes the administrator of the daemon' : undefined} footer={local && sso ? ssoFooter : undefined}>
+				{#if local}
+					<form class="form" onsubmit={submit}>
+						<Text bind:value={username} label="Username" min={1} autocomplete="username" />
+						<Secret bind:value={password} label="Password" autocomplete={setup ? 'new-password' : 'current-password'} />
+						{#if setup}
+							<Secret bind:value={again} label="Password again" autocomplete="new-password" error={mismatch ? 'Passwords differ' : undefined} />
+						{/if}
+						<div class="commit">
+							<p class="error-text secondary refused" aria-live="assertive">{refused}</p>
+							<NeoButton type="submit" class="primary wide" elevation={2} loading={session.busy}>{setup ? 'Create account' : 'Sign in'}</NeoButton>
 						</div>
-					{/if}
-					{#if sso}
-						<div class="actions">
-							<NeoButton href="/auth/oidc/login?next={encodeURIComponent(next)}" elevation={2}>Continue with {sso.name}</NeoButton>
-						</div>
-					{/if}
-				</Stack>
-			</NeoCard>
+					</form>
+				{:else if sso}
+					{@render ssoButton(true)}
+				{/if}
+			</Card>
 		</div>
 	{/if}
 </main>
@@ -99,28 +78,38 @@
 <style>
 	.login {
 		display: flex;
-		flex-direction: column;
-		gap: 24px;
 		align-items: center;
 		justify-content: center;
 		min-height: 100dvh;
-		padding: 16px;
+		padding: var(--nebu-space-4);
 	}
-	.card {
+	.column {
 		display: flex;
-		width: 360px;
-		max-width: 100%;
+		flex-direction: column;
+		gap: var(--nebu-space-5);
+		width: 100%;
+		max-width: 360px;
 	}
-	.title {
-		text-align: center;
-	}
-	.actions {
+	.brand {
 		display: flex;
 		justify-content: center;
 	}
-	.or {
+	.form {
 		display: flex;
-		gap: 12px;
-		align-items: center;
+		flex-direction: column;
+		gap: var(--nebu-space-4);
+	}
+	/* The refusal line stays in the tree so it is announced, taking room only once it holds text */
+	.commit {
+		display: flex;
+		flex-direction: column;
+		padding-top: var(--nebu-space-2);
+	}
+	.refused:not(:empty) {
+		margin-bottom: var(--nebu-space-3);
+	}
+	.login :global(.neo-button.wide) {
+		flex: 1 1 auto;
+		width: 100%;
 	}
 </style>

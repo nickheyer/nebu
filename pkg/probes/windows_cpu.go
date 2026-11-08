@@ -37,5 +37,5 @@ func (p windowsCPU) Run(ctx context.Context) host.Result {
 			Facts:  map[string]string{"cores": kv["NumberOfCores"], "threads": kv["NumberOfLogicalProcessors"]},
 		})
 	}
-	return found(devices, nil, nil, rows(len(blocks)))
+	return found(devices, nil, nil, "")
 }

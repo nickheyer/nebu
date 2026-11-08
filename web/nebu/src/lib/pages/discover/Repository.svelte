@@ -1,48 +1,49 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
-	import Collapse from '#lib/ui/Collapse.svelte';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { bytes, plural } from '#lib/format.js';
+	import { bytes } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import type { InspectResponse, Part, PartsResponse } from '#lib/proto/nebu/v1/estimate_pb.js';
-	import type { Artifact, Model } from '#lib/proto/nebu/v1/model_pb.js';
+	import { ArtifactRole, type Artifact, type Model } from '#lib/proto/nebu/v1/model_pb.js';
 	import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import type { ModelCard, Revision, SourceStatus } from '#lib/proto/nebu/v1/source_pb.js';
 	import { TaskState, type Task } from '#lib/proto/nebu/v1/task_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
-	import { viewport } from '#lib/state/viewport.svelte.js';
 	import Empty from '#lib/ui/Empty.svelte';
+	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import Markdown from '#lib/ui/Markdown.svelte';
-	import PageTabs from '#lib/ui/PageTabs.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import Str from '#lib/ui/Str.svelte';
+	import StatePill from '#lib/ui/StatePill.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 	import type { Resolve } from '#lib/ui/markdown.js';
 	import Checklist from '#lib/ui/fields/Checklist.svelte';
 	import Picker from '#lib/ui/fields/Picker.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
-	import Cell from '#lib/ui/layout/Cell.svelte';
-	import Row from '#lib/ui/layout/Row.svelte';
-	import Split from '#lib/ui/layout/Split.svelte';
-	import Stack from '#lib/ui/layout/Stack.svelte';
+	import Card from '#lib/ui/layout/Card.svelte';
+	import Columns from '#lib/ui/layout/Columns.svelte';
+	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import FitTab from '#lib/pages/models/FitTab.svelte';
-	import { launchHref, roleIcon } from '#lib/pages/models/models.js';
+	import { launchHref, roleIcon, selectWidth, weightsLabel } from '#lib/pages/models/models.js';
 	import { groupFiles, lastSearch, weightGroups } from '#lib/pages/discover/discover.js';
-	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeftIcon';
 	import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon';
+	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 	import DownloadIcon from 'phosphor-svelte/lib/DownloadIcon';
+	import FileTextIcon from 'phosphor-svelte/lib/FileTextIcon';
+	import FilesIcon from 'phosphor-svelte/lib/FilesIcon';
+	import PlugsIcon from 'phosphor-svelte/lib/PlugsIcon';
 
 	let { sourceId, repo }: { sourceId: string; repo: string } = $props();
 
 	const back = lastSearch.href;
 	// Anchor attributes the button passes through to the link it renders
 	const external: Record<string, string> = { target: '_blank', rel: 'noreferrer' };
-	const download: Record<string, string> = { download: '' };
+	const downloadAttrs: Record<string, string> = { download: '' };
 
 	let source = $state<SourceStatus | undefined>(undefined);
 	let runtimes = $state<RuntimeStatus[]>([]);
@@ -57,7 +58,7 @@
 	let cardLoading = $state(true);
 	let cardError = $state('');
 	let groupKey = $state('');
-	let tab = $state('card');
+	let tab = $state(page.url.searchParams.get('tab') || 'card');
 	let inspected = $state<InspectResponse | undefined>(undefined);
 	let inspectError = $state('');
 	let inspectKey = '';
@@ -68,6 +69,8 @@
 	let alone = $state(false);
 	let nodeId = $state<string | undefined>(undefined);
 	let pulling = $state(false);
+	let free = $state(false);
+	let width = $state(0);
 
 	const caps = $derived(source?.capabilities);
 	const webUrl = $derived(card?.url || (caps?.webUrl ? `${caps.webUrl.replace(/\/$/, '')}/${repo}` : ''));
@@ -85,9 +88,18 @@
 	// Every missing part chosen lets the daemon pull them with the group, its own dependency path
 	const allChosen = $derived(missing.every((p) => chosen.includes(p.slot)));
 	const partsBytes = $derived(alone ? 0 : allChosen ? Number(partsRes?.pullBytes ?? 0) : missing.filter((p) => chosen.includes(p.slot)).reduce((n, p) => n + Number(p.sizeBytes), 0));
-	// The card sits beside the tabs on ultrawide, so the tabs row drops it there
-	const tabs = $derived([...(viewport.ultrawide ? [] : [{ id: 'card', label: 'Card' }]), { id: 'files', label: 'Files', count: model ? files.length : undefined }, { id: 'fit', label: 'Fit' }, { id: 'pull', label: 'Pull' }]);
-	const activeTab = $derived(viewport.ultrawide && tab === 'card' ? 'files' : tab);
+	// The card shows while it loads, fails, or has something to say, and hides when the source has none
+	const showCard = $derived((caps?.card ?? false) && (cardLoading || cardError !== '' || (card !== undefined && (card.html !== '' || card.markdown !== ''))));
+	// Pages wide enough for a full file list in half their width hold the card beside the tabs, which drop it
+	const beside = $derived(showCard && width >= 1500);
+	const tabs = $derived([...(showCard && !beside ? [{ id: 'card', label: 'Card' }] : []), { id: 'files', label: 'Files', count: model ? files.length : undefined }, { id: 'fit', label: 'Fit' }, { id: 'pull', label: 'Pull' }]);
+	const activeTab = $derived(tabs.some((t) => t.id === tab) ? tab : 'files');
+	const weights = $derived(files.filter((a) => a.role === ArtifactRole.WEIGHTS));
+	const supporting = $derived(files.filter((a) => a.role !== ArtifactRole.WEIGHTS));
+	const weightsBytes = $derived(weights.reduce((n, a) => n + Number(a.sizeBytes), 0));
+	const storedAny = $derived([...live.models.values()].some((m) => m.sourceId === sourceId && m.repo === repo));
+	const revisionWidth = $derived(selectWidth(revisions.map((r) => r.name)));
+	const groupWidth = $derived(selectWidth(groupOptions.map((o) => o.label)));
 	// Files the card names by path resolve to their download in the repository, anything else against its page
 	const resolver = $derived.by((): Resolve => {
 		const base = webUrl ? `${webUrl.replace(/\/$/, '')}/` : location.href;
@@ -241,10 +253,18 @@
 		}
 	}
 
+	// Opens a tab and keeps it in the URL so a reload or a shared link lands on it
+	function openTab(id: string) {
+		tab = id;
+		const url = new URL(location.href);
+		url.searchParams.set('tab', id);
+		void goto(url, { replace: true, shallow: true });
+	}
+
 	// A fit pill launches a stored group here, else opens the pull tab
 	function fitLaunch(runtimeId: string, context: number) {
 		if (stored) void goto(launchHref(ref, runtimeId, context));
-		else tab = 'pull';
+		else openTab('pull');
 	}
 
 	function fileTip(a: Artifact): string {
@@ -252,105 +272,125 @@
 	}
 </script>
 
-{#snippet header()}
-	<Row gap={12} wrap={false}>
-		<Cell grow={false}>
-			<NeoButton text href={back} aria-label="Back to Discover">{#snippet icon()}<ArrowLeftIcon size={20} />{/snippet}{#if !viewport.mobile}Discover{/if}</NeoButton>
-		</Cell>
-		<Cell min="12rem">
-			<h2 class="title"><Str value={repo} kind="repo" tip={repo} weight={600} width="100%" /></h2>
-		</Cell>
-		{#if webUrl}
-			<Cell grow={false}>
-				<NeoButton text href={webUrl} {...external}>{source?.source?.name || sourceId}{#snippet icon()}<ArrowSquareOutIcon size={20} />{/snippet}</NeoButton>
-			</Cell>
-		{/if}
-		{#if revisions.length}
-			<Cell min="8rem" max="12rem" grow={false}>
-				<Select bind:value={revision} options={revisionOptions} search={revisions.length > 8} />
-			</Cell>
-		{/if}
-	</Row>
+{#snippet download(a: Artifact)}
+	<NeoButton text href={a.url} {...downloadAttrs} aria-label="Download {a.path}">{#snippet icon()}<DownloadIcon size={20} />{/snippet}</NeoButton>
 {/snippet}
 
-{#snippet cardView()}
-	{#if cardError}
-		<p class="error-text">{cardError}</p>
-	{:else if cardLoading}
-		<Skeleton rows={6} height={24} />
-	{:else if card && (card.html || card.markdown)}
-		<Markdown source={card.markdown} html={card.html} resolve={resolver} />
-	{:else}
-		<Empty text="No model card" />
+{#snippet fileRow(a: Artifact)}
+	{@const Icon = roleIcon(a.role)}
+	{#snippet fileAction()}{@render download(a)}{/snippet}
+	<ListRow primary={a.path} primaryKind="path" primaryTip={fileTip(a)} facts={[{ value: bytes(a.sizeBytes) }]} action={a.url ? fileAction : undefined}>
+		{#snippet leading()}<span class="icon"><Icon size={20} /></span>{/snippet}
+	</ListRow>
+{/snippet}
+
+{#snippet groupSelect()}
+	{#if groups.length > 1}
+		<span class="tool"><Select bind:value={groupKey} options={groupOptions} placeholder="Group" search={groups.length > 8} width={groupWidth} /></span>
 	{/if}
 {/snippet}
 
-{#snippet filesView()}
-	{#if resolveError}
-		<Empty text={resolveError} action="Retry" onclick={() => attempt++} />
-	{:else if !model}
-		<Skeleton rows={5} height={36} />
+{#snippet modelCard()}
+	<Card>
+		{#if cardError}
+			<Empty icon={FileTextIcon} text="Model card failed to load" hint={cardError} />
+		{:else if cardLoading || !card}
+			<Skeleton rows={10} kind="text" />
+		{:else}
+			<Markdown source={card.markdown} html={card.html} resolve={resolver} />
+		{/if}
+	</Card>
+{/snippet}
+
+{#snippet resolving(title: string)}
+	<Card {title}>
+		{#if resolveError}
+			<Empty icon={CubeIcon} text="Repository failed to resolve" hint={resolveError} action="Retry" onclick={() => attempt++} />
+		{:else}
+			<Skeleton rows={5} dot={false} leading="20px" primary="40ch" secondary={false} action={false} menu={false} />
+		{/if}
+	</Card>
+{/snippet}
+
+{#snippet filesCard()}
+	{#if !model}
+		{@render resolving('Files')}
 	{:else}
-		<Stack gap={12}>
-			{#if groups.length > 1}
-				<Row gap={12}>
-					<Cell min="12rem" max="20rem"><Select bind:value={groupKey} options={groupOptions} placeholder="Group" /></Cell>
-					<Cell grow={false} push><span class="secondary nowrap">{plural(files.length, 'file')}, {bytes(filesBytes)}</span></Cell>
-				</Row>
+		<Card title="Files" count={files.length} flush>
+			{#snippet tools()}
+				{@render groupSelect()}
+				<span class="total">{bytes(filesBytes)}</span>
+			{/snippet}
+			{#if files.length === 0}
+				<Empty icon={FilesIcon} text="No weights" hint="Nothing in this revision reads as model weights in a format nebu knows" />
 			{:else}
-				<span class="secondary">{plural(files.length, 'file')}, {bytes(filesBytes)}</span>
-			{/if}
-			<Stack gap={0}>
-				{#each files as a (a.path)}
-					{@const Icon = roleIcon(a.role)}
-					<ListRow primary={a.path} primaryKind="path" primaryTip={fileTip(a)} facts={[{ value: bytes(a.sizeBytes) }]}>
-						{#snippet leading()}<span class="icon"><Icon size={20} /></span>{/snippet}
-						{#snippet action()}
-							{#if a.url}<NeoButton text href={a.url} {...download} aria-label="Download">{#snippet icon()}<DownloadIcon size={20} />{/snippet}</NeoButton>{/if}
+				<List head={{ primary: 'File', facts: ['Size'] }}>
+					{#if weights.length > 1}
+						{#snippet shards()}
+							{#each weights as a (a.path)}
+								{#snippet shardAction()}{@render download(a)}{/snippet}
+								<ListRow primary={a.path} primaryKind="path" primaryTip={fileTip(a)} facts={[{ value: bytes(a.sizeBytes) }]} action={a.url ? shardAction : undefined} />
+							{/each}
 						{/snippet}
-					</ListRow>
-				{/each}
-			</Stack>
-			{#if model.warnings.length}
-				<Collapse label="Warnings" count={model.warnings.length}>
-					<Stack gap={4}>
-						{#each model.warnings as w (w)}<Str value={w} kind="message" width="100%" />{/each}
-					</Stack>
-				</Collapse>
+						<ListRow primary={weightsLabel(weights.map((a) => a.shardCount))} primaryKind="text" primaryTip={weights.map((a) => a.path).join('\n')} facts={[{ value: bytes(weightsBytes) }]} expand={shards}>
+							{#snippet leading()}<span class="icon"><CubeIcon size={20} /></span>{/snippet}
+						</ListRow>
+					{:else}
+						{#each weights as a (a.path)}{@render fileRow(a)}{/each}
+					{/if}
+					{#each supporting as a (a.path)}{@render fileRow(a)}{/each}
+				</List>
 			{/if}
-		</Stack>
+		</Card>
+		{#if model.warnings.length}
+			<Card title="Warnings" count={model.warnings.length} flush>
+				<List>
+					{#each model.warnings as w (w)}
+						<ListRow lamp="warning" primary={w} primaryKind="message" />
+					{/each}
+				</List>
+			</Card>
+		{/if}
 	{/if}
 {/snippet}
 
-{#snippet fitView()}
-	{#if resolveError}
-		<Empty text={resolveError} action="Retry" onclick={() => attempt++} />
-	{:else if !model}
-		<Skeleton rows={3} height={36} />
+{#snippet fitCard()}
+	{#if !model}
+		{@render resolving('Fit')}
 	{:else}
-		<Stack gap={12}>
-			{#if groups.length > 1}<Select bind:value={groupKey} options={groupOptions} label="Group" />{/if}
-			<FitTab {group} result={inspected} error={inspectError} {runtimes} launchLabel={stored ? 'Launch here' : 'Pull'} onlaunch={fitLaunch} />
-		</Stack>
+		<Card title="Fit" flush>
+			{#snippet tools()}
+				{@render groupSelect()}
+				<Switch bind:checked={free} label="Against free memory" />
+			{/snippet}
+			<FitTab {group} result={inspected} error={inspectError} {runtimes} {free} launchLabel={stored ? 'Launch here' : 'Pull'} onlaunch={fitLaunch} />
+		</Card>
 	{/if}
 {/snippet}
 
-{#snippet pullView()}
-	{#if resolveError}
-		<Empty text={resolveError} action="Retry" onclick={() => attempt++} />
-	{:else if !model}
-		<Skeleton rows={3} height={36} />
+{#snippet pullCard()}
+	{#if !model}
+		{@render resolving('Pull')}
 	{:else}
-		<Stack gap={16}>
-			{#if groups.length > 1}<Select bind:value={groupKey} options={groupOptions} label="Group" />{/if}
+		<Card title="Pull">
+			{#snippet tools()}{@render groupSelect()}{/snippet}
+			{#snippet footer()}
+				<Tip facts={[{ label: 'group', value: bytes(filesBytes) }, { label: 'parts', value: bytes(partsBytes) }]} tag="span">
+					<span class="sum"><span class="secondary">Total</span><span class="num">{bytes(filesBytes + partsBytes)}</span></span>
+				</Tip>
+				<span class="fill"></span>
+				{#if stored}<NeoButton text href={launchHref(ref)}>Launch</NeoButton>{/if}
+				<NeoButton elevation={2} loading={pulling} onclick={() => pull(false)}>Pull</NeoButton>
+				<NeoButton class="primary" elevation={2} loading={pulling} onclick={() => pull(true)}>Pull and launch</NeoButton>
+			{/snippet}
 			{#if live.inMesh}
 				<Picker bind:value={nodeId} fetch={fetchNodes} label="Node" placeholder="This node" clearable current={nodeId ? live.nodes.get(nodeId)?.name : undefined} />
 			{/if}
 			<Switch bind:checked={alone} label="Alone" info="Downloads this group without the parts its blueprint names" />
 			{#if partsError}
-				<p class="error-text">{partsError}</p>
+				<Empty icon={CubeIcon} text="Parts failed to list" hint={partsError} />
 			{:else if !partsRes}
-				<Skeleton rows={2} height={36} />
+				<Skeleton rows={2} dot={false} leading="16px" primary="24ch" secondary="20ch" facts={0} action={false} menu={false} />
 			{:else if missing.length}
 				<Checklist
 					bind:value={chosen}
@@ -359,71 +399,76 @@
 					disabled={alone}
 				/>
 			{/if}
-			<Row gap={12} wrap={false}>
-				<Cell grow={false}>
-					<Tip text="group {bytes(filesBytes)}\nparts {bytes(partsBytes)}" tag="span">
-						<span class="total"><span class="secondary">total</span><span class="num">{bytes(filesBytes + partsBytes)}</span></span>
-					</Tip>
-				</Cell>
-				<Cell grow={false} push>
-					<Row gap={12} wrap={false}>
-						{#if stored}
-							<NeoButton text href={launchHref(ref)}>Launch</NeoButton>
-						{/if}
-						<NeoButton elevation={2} loading={pulling} onclick={() => pull(false)}>Pull</NeoButton>
-						<NeoButton class="primary" elevation={2} loading={pulling} onclick={() => pull(true)}>Pull and launch</NeoButton>
-					</Row>
-				</Cell>
-			</Row>
-		</Stack>
+		</Card>
 	{/if}
 {/snippet}
 
-{#snippet tabView()}
-	<PageTabs {tabs} active={activeTab} onchange={(id) => (tab = id)} />
-	{#if activeTab === 'card'}
-		{@render cardView()}
-	{:else if activeTab === 'files'}
-		{@render filesView()}
+{#snippet tabCards()}
+	{#if activeTab === 'files'}
+		{@render filesCard()}
 	{:else if activeTab === 'fit'}
-		{@render fitView()}
+		{@render fitCard()}
 	{:else}
-		{@render pullView()}
+		{@render pullCard()}
 	{/if}
 {/snippet}
 
-<Stack gap={16}>
-	{#if headError}
-		<Empty text={headError} action="Retry" onclick={loadHead} />
-	{:else if !headLoaded}
-		<Skeleton rows={6} />
-	{:else if !source}
-		<Empty text="No such source" action="Discover" href={back} />
-	{:else}
-		{@render header()}
-		{#if viewport.ultrawide}
-			<Split ratio="3/5">
-				{#snippet left()}{@render cardView()}{/snippet}
-				{#snippet right()}{@render tabView()}{/snippet}
-			</Split>
-		{:else}
-			{@render tabView()}
+<PageHeader title={repo} back={{ label: 'Discover', href: back }} tabs={source ? tabs : undefined} active={activeTab} ontab={openTab}>
+	{#snippet meta()}
+		{#if storedAny}<StatePill label="Stored" lamp="success" />{/if}
+	{/snippet}
+	{#snippet actions()}
+		{#if webUrl}
+			<NeoButton text href={webUrl} {...external}>{source?.source?.name || sourceId}{#snippet icon()}<ArrowSquareOutIcon size={20} />{/snippet}</NeoButton>
 		{/if}
+		{#if revisions.length}
+			<span class="tool"><Select bind:value={revision} options={revisionOptions} search={revisions.length > 8} width={revisionWidth} /></span>
+		{/if}
+	{/snippet}
+</PageHeader>
+
+<div class="frame" bind:clientWidth={width}>
+	{#if headError}
+		<Card><Empty icon={PlugsIcon} text="Repository failed to load" hint={headError} action="Retry" onclick={loadHead} /></Card>
+	{:else if !headLoaded}
+		<Card><Skeleton rows={8} kind="text" /></Card>
+	{:else if !source}
+		<Card><Empty icon={PlugsIcon} text="No such source" hint="{sourceId} is not a configured source" action="Discover" href={back} /></Card>
+	{:else if beside}
+		<Columns ratio="1/1">
+			{#snippet left()}{@render modelCard()}{/snippet}
+			{#snippet right()}{@render tabCards()}{/snippet}
+		</Columns>
+	{:else if activeTab === 'card'}
+		{@render modelCard()}
+	{:else}
+		{@render tabCards()}
 	{/if}
-</Stack>
+</div>
 
 <style>
-	.title {
+	.frame {
 		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-5);
 		min-width: 0;
+	}
+	.tool {
+		display: inline-flex;
 	}
 	.icon {
 		display: inline-flex;
 		color: var(--nebu-text-muted);
 	}
 	.total {
+		font-size: var(--nebu-text-secondary);
+		font-variant-numeric: tabular-nums;
+		color: var(--nebu-text-muted);
+		white-space: nowrap;
+	}
+	.sum {
 		display: inline-flex;
-		gap: 8px;
+		gap: var(--nebu-space-2);
 		align-items: baseline;
 	}
 </style>

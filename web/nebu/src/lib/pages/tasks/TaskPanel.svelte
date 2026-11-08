@@ -5,11 +5,13 @@
 	import { TaskStateSchema, type Task } from '#lib/proto/nebu/v1/task_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Confirm from '#lib/ui/Confirm.svelte';
+	import Empty from '#lib/ui/Empty.svelte';
 	import KeyRows from '#lib/ui/KeyRows.svelte';
 	import LogView from '#lib/ui/LogView.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
+	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { taskLamp } from '#lib/ui/status.js';
@@ -53,7 +55,7 @@
 			{#if running}<Confirm label="Cancel" question="Cancel {task.title}?" danger onconfirm={cancel} />{/if}
 		{/snippet}
 	</PanelHeader>
-	<Stack gap={16}>
+	<Stack gap={24}>
 		<KeyRows
 			rows={[
 				{ label: 'created', value: when(task.createdAt) },
@@ -65,17 +67,23 @@
 			]}
 		/>
 		{#if task.error}<p class="error-text failure">{task.error}</p>{/if}
-		{#if task.progress}<TaskProgress {task} />{/if}
-		{#key `${id}:${running}`}
-			<LogView source={taskLogs(id, running)} name={task.title} height="40vh" />
-		{/key}
+		{#if task.progress}
+			<Section title="Progress" level={3}>
+				<TaskProgress {task} />
+			</Section>
+		{/if}
+		<Section title="Log" level={3}>
+			{#key `${id}:${running}`}
+				<LogView source={taskLogs(id, running)} name={task.title} height="40vh" />
+			{/key}
+		</Section>
 	</Stack>
 {:else if error}
 	<PanelHeader title="Task" {onclose} />
-	<p class="error-text">{error}</p>
+	<Empty text={error} action="Back" onclick={onclose} />
 {:else}
 	<PanelHeader title="Task" {onclose} />
-	<Skeleton rows={5} height={32} />
+	<Skeleton rows={5} kind="facts" />
 {/if}
 
 <style>

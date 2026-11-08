@@ -9,9 +9,7 @@ Route: `/traffic?route=&window=`, `/traffic/<trace>` opens the panel.
 ```
  [All routes ▾] [Kind ▾] [Status ▾]  [Live 5m ▾]  ⏸         List │ Timeline
 
- ┌─────────────┬─────────────┬─────────────┬─────────────┐
- │ 42 /min     │ 0.4 % err   │ 180 ms ttft │ 24 ms tpot  │
- └─────────────┴─────────────┴─────────────┴─────────────┘
+ Requests 42 /min ▁▂▃▅   Errors 0.4 % ▁▁▂▁   TTFT 180 ms ▃▂▂▃   TPOT 24 ms ▂▂▂▂
 
  12:01:03   chat    llama-70b    200     1.2 s     [Open]
  12:01:02   embed   embed-sm     200     40 ms     [Open]
@@ -20,7 +18,7 @@ Route: `/traffic?route=&window=`, `/traffic/<trace>` opens the panel.
 
 **Filters.** Route Picker, kind Select, status class Select, window Select (live 1m, 5m, 15m, or a range), pause. More filters in a popover: node, objective, fairness id.
 
-**Tiles.** Four equal tiles. Tooltips: p95 values, attainment per band, queue wait p95.
+**Facts.** A flat strip of four facts sharing the row, requests per minute, error rate, TTFT, TPOT, each with a sparkline over the window. Tooltips: p95 values, attainment per band, queue wait p95.
 
 **List.** Rows: time, kind, route (24ch), status, duration or the shed reason, Open. Tooltip on the status: error text. Tooltip on the duration: TTFT, prompt and completion tokens, cached tokens. Small marks after the route for forwarded, translated, failed open, fallbacks. Newest first, pages from the daemon.
 
@@ -37,7 +35,7 @@ Tabs: Summary, Routing, Tools, Bodies.
 
 ## Widths
 
-Ultrawide: Split, list left, panel right, timeline above the list. Standard: drawer, timeline toggle. Mobile: tiles two per row, list only, kind moves into the expand.
+Ultrawide: Split, list left, panel right, timeline above the list. Standard: drawer, timeline toggle. Mobile: facts two per row, list only, kind moves into the expand.
 
 ## Data
 

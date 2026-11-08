@@ -4,6 +4,13 @@ export function repoPath(sourceId: string, repo: string): string {
 	return `/discover/${encodeURIComponent(sourceId)}/${encodeURIComponent(repo)}`;
 }
 
+const short = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+
+// A large count as 1.2M or 48K
+export function compact(n: bigint | number): string {
+	return short.format(Number(n));
+}
+
 // The last search the Discover page showed, so a repository page links back to it
 export const lastSearch = { href: '/discover' };
 

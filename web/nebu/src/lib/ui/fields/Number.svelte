@@ -37,15 +37,19 @@
 
 <div class="field">
 	<NeoNumberStep bind:value={raw} {min} {max} {step} {label} {placeholder} {disabled} elevation={-1} placement={label ? 'top' : 'inside'} floating={false} width="100%" message={error ?? message} {error} oninput={changed} onchange={changed} center={false} />
-	{#if unit}<span class="unit secondary">{unit}</span>{/if}
-	{#if info}<InfoTip text={info} />{/if}
+	{#if unit || info}
+		<span class="trail">
+			{#if unit}<span class="unit secondary">{unit}</span>{/if}
+			{#if info}<InfoTip text={info} />{/if}
+		</span>
+	{/if}
 </div>
 
 <style>
 	.field {
 		display: flex;
 		gap: 8px;
-		align-items: center;
+		align-items: flex-end;
 		min-width: 0;
 	}
 	.field :global(.neo-input-group) {

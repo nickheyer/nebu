@@ -157,9 +157,9 @@ export function plural(n: number, one: string, many = `${one}s`): string {
 	return `${num(n)} ${n === 1 ? one : many}`;
 }
 
-// A rate per minute as the spec draws it, 42 /min
+// A rate per minute as the spec draws it, 42 /min, a full space holding off the slash's overhang
 export function perMinute(n: number): string {
-	return `${n >= 10 || n === 0 ? Math.round(n) : n.toFixed(1)}${thin}/min`;
+	return `${n >= 10 || n === 0 ? Math.round(n) : n.toFixed(1)} /min`;
 }
 
 export function tokensPerSecond(n: number | undefined): string {

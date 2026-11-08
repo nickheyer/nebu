@@ -2,6 +2,7 @@ package probes
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/nickheyer/nebu/pkg/host"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -39,5 +40,9 @@ func parseCPUInfo(data []byte) host.Result {
 		Name:   first["model name"],
 		Facts:  map[string]string{"cores": first["cpu cores"], "siblings": first["siblings"], "threads": itoa(len(blocks)), "flags": first["flags"]},
 	}
-	return found([]*v1.Device{device}, nil, nil, rows(len(blocks)))
+	detail := fmt.Sprintf("%d threads", len(blocks))
+	if cores := first["cpu cores"]; cores != "" {
+		detail = cores + " cores, " + detail
+	}
+	return found([]*v1.Device{device}, nil, nil, detail)
 }

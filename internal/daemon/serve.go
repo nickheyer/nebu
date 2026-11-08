@@ -36,11 +36,7 @@ func (d *Daemon) ListenAndServe(ctx context.Context) error {
 		d.Close()
 		return err
 	}
-	if err := d.lock.name(ln.Addr().String()); err != nil {
-		ln.Close()
-		d.Close()
-		return err
-	}
+
 	d.warnExposure(d.secure)
 	return d.Serve(ctx, ln)
 }
@@ -294,9 +290,6 @@ func (d *Daemon) Close() {
 		if err := d.DB.Close(); err != nil {
 			d.Log.Warn("store close failed", "err", err)
 		}
-		if err := d.lock.release(); err != nil {
-			d.Log.Warn("data directory lock not released", "err", err)
-		}
 		d.Log.Info("stopped")
 	})
 }
@@ -322,7 +315,6 @@ func (d *Daemon) abandon() {
 	if d.DB != nil {
 		d.DB.Close()
 	}
-	d.lock.release()
 }
 
 // The listener certificate, generated in data_dir when tls names none, nil when tls.disabled chooses plaintext

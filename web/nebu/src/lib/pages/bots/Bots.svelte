@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
-	import { NeoDialog } from '#lib/neo/floating/dialog/index.js';
 	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { enumLabel, num } from '#lib/format.js';
@@ -10,19 +9,23 @@
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Confirm from '#lib/ui/Confirm.svelte';
+	import Dialog from '#lib/ui/Dialog.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
 	import KeyRows from '#lib/ui/KeyRows.svelte';
+	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
+	import RowAction from '#lib/ui/RowAction.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import Secret from '#lib/ui/fields/Secret.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
+	import Card from '#lib/ui/layout/Card.svelte';
 	import Cell from '#lib/ui/layout/Cell.svelte';
+	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Row from '#lib/ui/layout/Row.svelte';
-	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { botLamp } from '#lib/ui/status.js';
+	import Avatar from '#lib/pages/bots/Avatar.svelte';
 	import { botTip, running } from '#lib/pages/bots/bots.js';
-	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import RobotIcon from 'phosphor-svelte/lib/RobotIcon';
 
 	const list = new ListQuery<Bot, Record<string, never>>(async (_p, _cursor, _limit, signal) => {
@@ -33,6 +36,7 @@
 
 	// Listed bots with the live stream's copy taking over once it holds them
 	const bots = $derived(list.items.map((b) => live.bots.get(b.id) ?? b).sort((a, b) => a.name.localeCompare(b.name)));
+	const connected = $derived(bots.filter(running).length);
 
 	let open = $state(false);
 	let name = $state('');
@@ -48,10 +52,17 @@
 		probed = undefined;
 	});
 
+	function openNew() {
+		name = '';
+		token = '';
+		enabled = true;
+		open = true;
+	}
+
 	async function probe() {
 		probing = true;
 		try {
-			probed = await rpc.bots.probeBotToken({ token });
+			probed = await rpc.bots.probeBotToken({ token: token.trim() });
 		} catch (err) {
 			probed = undefined;
 			toast.error('Probe failed', reason(err));
@@ -66,9 +77,6 @@
 			const res = await rpc.bots.createBot({ name: name.trim(), token: token.trim(), enabled });
 			toast.success(`Created ${name.trim()}`);
 			open = false;
-			name = '';
-			token = '';
-			enabled = true;
 			if (res.bot) void goto(`/bots/${res.bot.id}/status`);
 		} catch (err) {
 			toast.error('Create failed', reason(err));
@@ -94,28 +102,24 @@
 	}
 </script>
 
-{#snippet avatar(url: string | undefined, size: number)}
-	{#if url}
-		<img class="avatar" src={url} alt="" width={size} height={size} />
-	{:else}
-		<span class="avatar muted"><RobotIcon size={size < 32 ? 20 : 32} /></span>
-	{/if}
-{/snippet}
+<PageHeader>
+	{#snippet meta()}
+		{#if list.settled && bots.length}<span>{num(connected)} of {num(bots.length)} running</span>{/if}
+	{/snippet}
+	{#snippet actions()}
+		<NeoButton class="primary" elevation={2} onclick={openNew}>New bot</NeoButton>
+	{/snippet}
+</PageHeader>
 
-<Stack gap={16}>
-	<Row gap={12}>
-		<Cell grow={false}>
-			<NeoButton class="primary" elevation={2} onclick={() => (open = true)}>{#snippet icon()}<PlusIcon size={20} />{/snippet}New bot</NeoButton>
-		</Cell>
-	</Row>
+<Card title="Bots" count={list.settled ? bots.length : undefined} flush>
 	{#if !list.settled}
-		<Skeleton rows={3} />
+		<Skeleton rows={3} leading="24px" secondary="12ch" menu={false} />
 	{:else if list.error}
 		<Empty text={list.error} action="Retry" onclick={() => list.refresh()} />
 	{:else if bots.length === 0}
-		<Empty text="No bots" action="New bot" onclick={() => (open = true)} />
+		<Empty icon={RobotIcon} text="No bots" hint="A bot answers on Discord through the gateway's routes, with personas, automations and commands" action="New bot" onclick={openNew} />
 	{:else}
-		<Stack gap={0}>
+		<List head={{ primary: 'Bot', secondary: 'State', facts: ['Guilds'] }}>
 			{#each bots as b (b.id)}
 				{@const on = running(b)}
 				<ListRow
@@ -125,62 +129,43 @@
 					primaryTip={botTip(b)}
 					secondary={enumLabel(BotStateSchema, b.state)}
 					secondaryWidth="12ch"
-					facts={on ? [{ value: `${num(b.status?.guilds)} guilds` }] : []}
-					href="/bots/{b.id}/status"
+					facts={[{ value: on ? num(b.status?.guilds) : '' }]}
+					onclick={() => goto(`/bots/${b.id}/status`)}
 				>
-					{#snippet leading()}{@render avatar(b.status?.avatarUrl, 24)}{/snippet}
+					{#snippet leading()}<Avatar url={b.status?.avatarUrl} size={24} />{/snippet}
 					{#snippet action()}
 						{#if on}
-							<Confirm label="Stop" question="Stop {b.name}" onconfirm={() => stop(b)} />
+							<Confirm label="Stop" question="Stop {b.name}" danger onconfirm={() => stop(b)} />
 						{:else}
-							<NeoButton text onclick={() => start(b)}>Start</NeoButton>
+							<RowAction onclick={() => start(b)} label="Start" />
 						{/if}
-						<NeoButton text href="/bots/{b.id}/status">Open</NeoButton>
 					{/snippet}
 				</ListRow>
 			{/each}
-		</Stack>
+		</List>
 	{/if}
-</Stack>
+</Card>
 
-<NeoDialog bind:open modal rounded="md" filled elevation={2} width="min(32rem, 92vw)" padding="16px">
-	<Stack gap={12}>
-		<h3>New bot</h3>
-		<Text bind:value={name} label="Name" max={64} required />
-		<Row gap={12} align="flex-end" wrap={false}>
-			<Cell min="12rem">
-				<Secret bind:value={token} label="Token" required />
-			</Cell>
-			<Cell grow={false}>
-				<NeoButton elevation={2} loading={probing} disabled={!token.trim()} onclick={probe}>Probe</NeoButton>
+<Dialog bind:open title="New bot" confirm="Create" busy={creating} disabled={!name.trim() || !token.trim()} onconfirm={createBot}>
+	<Text bind:value={name} label="Name" max={64} required />
+	<Row gap={8} align="flex-end" wrap={false}>
+		<Cell min="10rem"><Secret bind:value={token} label="Token" required /></Cell>
+		<span class="trail"><NeoButton elevation={2} loading={probing} disabled={!token.trim()} onclick={probe}>Probe</NeoButton></span>
+	</Row>
+	{#if probed}
+		<Row gap={12} align="flex-start" wrap={false}>
+			<Avatar url={probed.avatarUrl} size={40} />
+			<Cell min="10rem">
+				<KeyRows
+					dense
+					rows={[
+						{ label: 'username', value: probed.username },
+						{ label: 'shards', value: `${num(probed.recommendedShards)} recommended` },
+						{ label: 'invite', value: probed.inviteUrl, href: probed.inviteUrl, copy: true, tip: probed.inviteUrl }
+					]}
+				/>
 			</Cell>
 		</Row>
-		{#if probed}
-			<Row gap={12} align="flex-start" wrap={false}>
-				<Cell grow={false}>{@render avatar(probed.avatarUrl, 40)}</Cell>
-				<Cell min="12rem">
-					<KeyRows
-						dense
-						rows={[
-							{ label: 'username', value: probed.username },
-							{ label: 'shards', value: `${num(probed.recommendedShards)} recommended` },
-							{ label: 'invite', value: probed.inviteUrl, href: probed.inviteUrl, copy: true, tip: probed.inviteUrl }
-						]}
-					/>
-				</Cell>
-			</Row>
-		{/if}
-		<Switch bind:checked={enabled} label="Enabled" />
-		<Row gap={12} justify="flex-end">
-			<NeoButton text onclick={() => (open = false)}>Cancel</NeoButton>
-			<NeoButton class="primary" elevation={2} loading={creating} disabled={!name.trim() || !token.trim()} onclick={createBot}>Create</NeoButton>
-		</Row>
-	</Stack>
-</NeoDialog>
-
-<style>
-	.avatar {
-		display: inline-flex;
-		flex: 0 0 auto;
-	}
-</style>
+	{/if}
+	<Switch bind:checked={enabled} label="Enabled" info="Connects the bot as soon as it is created" />
+</Dialog>

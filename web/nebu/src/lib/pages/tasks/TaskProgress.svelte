@@ -4,14 +4,14 @@
 	import type { Task } from '#lib/proto/nebu/v1/task_pb.js';
 	import Str from '#lib/ui/Str.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
-	import { active, progressBytes, progressFacts, progressLabel } from '#lib/pages/tasks/tasks.js';
+	import { active, progressAmount, progressFacts, progressLabel } from '#lib/pages/tasks/tasks.js';
 
 	let { task }: { task: Task } = $props();
 
 	const p = $derived(task.progress);
 	const running = $derived(active(task));
 	const known = $derived(percent(p?.done, p?.total));
-	const line = $derived([p?.message ?? '', progressBytes(p)].filter(Boolean).join('  '));
+	const amount = $derived(progressAmount(p));
 </script>
 
 <div class="progress">
@@ -19,7 +19,12 @@
 		<span class="track"><NeoProgressBar value={known ?? (running ? 0 : 100)} indeterminate={known === undefined && running} elevation={-1} height="8px" width="100%" immediate /></span>
 		<span class="pct num">{progressLabel(p)}</span>
 	</div>
-	{#if line}<Str value={line} kind="message" color="muted" width="100%" />{/if}
+	{#if p?.message || amount}
+		<div class="line">
+			<span class="message"><Str value={p?.message ?? ''} kind="message" color="muted" width="100%" /></span>
+			{#if amount}<span class="amount num">{amount}</span>{/if}
+		</div>
+	{/if}
 	{#each p?.rows ?? [] as row (row.key)}
 		<Tip facts={progressFacts(row)} tag="div" class="taskprogress-row">
 			<div class="row">
@@ -46,7 +51,7 @@
 	.row {
 		display: flex;
 		flex: 1 1 auto;
-		gap: 12px;
+		gap: var(--nebu-space-3);
 		align-items: center;
 		min-width: 0;
 	}
@@ -59,10 +64,27 @@
 		display: flex;
 		flex: 0 0 24ch;
 		min-width: 0;
-		font-size: 13px;
+		font-size: var(--nebu-text-secondary);
 	}
 	.pct {
 		flex: 0 0 8ch;
-		font-size: 13px;
+		font-size: var(--nebu-text-secondary);
+	}
+	/* The message leads and the amount reads at the right end under the percent */
+	.line {
+		display: flex;
+		gap: var(--nebu-space-3);
+		align-items: baseline;
+		min-width: 0;
+	}
+	.message {
+		display: flex;
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.amount {
+		flex: 0 0 auto;
+		font-size: var(--nebu-text-secondary);
+		color: var(--nebu-text-muted);
 	}
 </style>

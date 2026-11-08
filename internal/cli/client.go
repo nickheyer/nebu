@@ -582,19 +582,23 @@ func status(t *v1.Task, rate float64) string {
 	parts := []string{t.GetTitle(), loud(t.GetState())}
 	if p.GetTotal() > 0 {
 		pct := float64(p.GetDone()) * 100 / float64(p.GetTotal())
-		if p.GetTotal() < 1000 {
-			parts = append(parts, fmt.Sprintf("%d/%d", p.GetDone(), p.GetTotal()))
-		} else {
-			parts = append(parts, fmt.Sprintf("%s/%s %.0f%%", estimate.Human(p.GetDone()), estimate.Human(p.GetTotal()), pct))
-		}
+		parts = append(parts, fmt.Sprintf("%s %.0f%%", progressAmount(p), pct))
 	}
-	if rate > 0 && !terminalState(t.GetState()) {
+	if rate > 0 && !terminalState(t.GetState()) && p.GetUnit() == v1.ProgressUnit_PROGRESS_UNIT_BYTES {
 		parts = append(parts, estimate.Human(uint64(rate))+"/s")
 	}
 	if p.GetMessage() != "" {
 		parts = append(parts, p.GetMessage())
 	}
 	return strings.Join(parts, "  ")
+}
+
+// Done over total in the unit the progress counts, bytes humanised and steps as plain numbers
+func progressAmount(p *v1.TaskProgress) string {
+	if p.GetUnit() == v1.ProgressUnit_PROGRESS_UNIT_BYTES {
+		return fmt.Sprintf("%s/%s", estimate.Human(p.GetDone()), estimate.Human(p.GetTotal()))
+	}
+	return fmt.Sprintf("%d/%d", p.GetDone(), p.GetTotal())
 }
 
 func terminalState(s v1.TaskState) bool {

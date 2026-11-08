@@ -404,19 +404,26 @@ func (e *entry) broadcastLocked() {
 // Current task snapshot.
 func (h *Handle) Task() *v1.Task { return h.e.snapshot() }
 
-// Sets done, total, and message at once
+// Sets done, total, and message at once, counting steps
 func (h *Handle) Progress(done, total uint64, message string) {
-	h.done.Store(done)
-	h.e.update(func(t *v1.Task) {
-		t.Progress.Done, t.Progress.Total, t.Progress.Message, t.Progress.Until = done, total, message, nil
-	}, false)
+	h.set(done, total, message, nil, v1.ProgressUnit_PROGRESS_UNIT_STEPS)
+}
+
+// Sets done, total, and message at once, counting bytes
+func (h *Handle) ProgressBytes(done, total uint64, message string) {
+	h.set(done, total, message, nil, v1.ProgressUnit_PROGRESS_UNIT_BYTES)
 }
 
 // Reports progress on a step that ends at a known time, so a watcher can show the time left
 func (h *Handle) ProgressUntil(done, total uint64, message string, until time.Time) {
+	h.set(done, total, message, timestamppb.New(until), v1.ProgressUnit_PROGRESS_UNIT_STEPS)
+}
+
+// Stores one progress reading with the unit its counters are in
+func (h *Handle) set(done, total uint64, message string, until *timestamppb.Timestamp, unit v1.ProgressUnit) {
 	h.done.Store(done)
 	h.e.update(func(t *v1.Task) {
-		t.Progress.Done, t.Progress.Total, t.Progress.Message, t.Progress.Until = done, total, message, timestamppb.New(until)
+		t.Progress.Done, t.Progress.Total, t.Progress.Message, t.Progress.Until, t.Progress.Unit = done, total, message, until, unit
 	}, false)
 }
 
@@ -437,16 +444,17 @@ func (h *Handle) Message(message string) {
 }
 
 // Sets one row of the progress by key, adding the row when it is new: a part of the work that
-// advances on its own, such as one seat's pull
+// advances on its own, such as one seat's pull, counting steps
 func (h *Handle) Row(key string, done, total uint64, message string) {
+	unit := v1.ProgressUnit_PROGRESS_UNIT_STEPS
 	h.e.update(func(t *v1.Task) {
 		for _, r := range t.Progress.Rows {
 			if r.GetKey() == key {
-				r.Done, r.Total, r.Message = done, total, message
+				r.Done, r.Total, r.Message, r.Unit = done, total, message, unit
 				return
 			}
 		}
-		t.Progress.Rows = append(t.Progress.Rows, &v1.TaskProgress{Key: key, Done: done, Total: total, Message: message})
+		t.Progress.Rows = append(t.Progress.Rows, &v1.TaskProgress{Key: key, Done: done, Total: total, Message: message, Unit: unit})
 	}, false)
 }
 

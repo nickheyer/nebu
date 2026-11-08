@@ -2,6 +2,7 @@
 	import { create } from '@bufbuild/protobuf';
 	import { untrack } from 'svelte';
 	import { reason, rpc } from '#lib/api/transport.js';
+	import { capitalize } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { ObjectiveSchema, type Objective } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
@@ -59,22 +60,24 @@
 
 <PanelHeader title={editing ? name : 'New objective'} {onclose}>
 	{#snippet tools()}
-		{#if editing}<Confirm label="Delete" question="Delete {name}" danger onconfirm={remove} />{/if}
+		{#if editing}<Confirm label="Delete" question="Delete {name}?" danger onconfirm={remove} />{/if}
 	{/snippet}
 </PanelHeader>
 <Stack gap={24}>
 	<FormSection title="Objective" info="Chosen by the request header or inherited from the route">
-		<Text bind:value={name} label="Name" max={64} required readonly={editing} />
-		<Slider bind:value={priority} min={-1000} max={1000} label="Priority" info="Higher sheds later under saturation, zero the default band" message={priorityBand(priority)} />
 		<FieldRow>
-			<Duration bind:value={ttft} base="ms" max={3_600_000} label="TTFT" info="Time to first token, zero for none" />
-			<Duration bind:value={tpot} base="ms" max={3_600_000} label="TPOT" info="Time per output token, zero for none" />
+			<Text bind:value={name} label="Name" required readonly={editing} max={64} placeholder="interactive" />
+			<Slider bind:value={priority} min={-1000} max={1000} label="Priority" message={capitalize(priorityBand(priority))} info="Higher sheds later under saturation" />
+		</FieldRow>
+		<FieldRow>
+			<Duration bind:value={ttft} base="ms" max={3_600_000} label="Time to first token" info="The target a request is held to, unset for none" emptyZero placeholder="Default" />
+			<Duration bind:value={tpot} base="ms" max={3_600_000} label="Time per output token" info="The target a request is held to, unset for none" emptyZero placeholder="Default" />
 		</FieldRow>
 	</FormSection>
 	{#if current?.status?.conditions.length}
-		<Section title="Conditions">
+		<Section title="Conditions" level={3}>
 			<Conditions conditions={current.status.conditions} />
 		</Section>
 	{/if}
 </Stack>
-<SaveBar {dirty} {saving} {error} message={name.trim() ? undefined : 'Name needed'} label={editing ? 'Save' : 'Create'} disabled={!name.trim()} onsave={save} ondiscard={onclose} />
+<SaveBar {dirty} always={!editing} {saving} {error} message={name.trim() ? undefined : 'Name needed'} label={editing ? 'Save' : 'Create'} disabled={!name.trim()} onsave={save} ondiscard={onclose} />

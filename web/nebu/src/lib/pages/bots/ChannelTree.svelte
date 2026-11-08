@@ -27,7 +27,7 @@
 <Stack gap={4}>
 	<FieldLabel {label} {info} />
 	{#if guilds.length === 0}
-		<span class="secondary">Not connected</span>
+		<span class="secondary">Start the bot to list channels</span>
 	{:else}
 		{#each guilds as g (g.id)}
 			<div class="guild">

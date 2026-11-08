@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { capitalize } from '#lib/format.js';
 	import CopyButton from '#lib/ui/CopyButton.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 
@@ -11,7 +12,7 @@
 <div class="rows" class:dense>
 	{#each shown as r (r.label)}
 		<div class="kv">
-			<span class="k">{r.label}</span>
+			<span class="k">{capitalize(r.label)}</span>
 			<Tip text={r.tip} tag="span" class="kv-tip">
 				{#if r.href}
 					<a class="v ellipsis" class:mono={r.mono} href={r.href}>{r.value}</a>
