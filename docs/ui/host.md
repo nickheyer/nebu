@@ -7,28 +7,28 @@ Tabs: Overview `/host`, Tasks `/tasks` (see [tasks.md](tasks.md)), Logs `/host/l
 ## Overview
 
 ```
- Host  lab-01  linux amd64  probed 4m ago  [Probes passed]         [Refresh] [Doctor]
+ Host (i)
  Overview │ Tasks │ Logs
 
-┌ Devices 3 ───────────────────────────────────────┐ ┌ Probes 6 ──────── Show all ┐
-│ GPU0  NVIDIA H100 80GB   ▓▓▓▓▓▓▓▓▓▓░░  68 / 80 GB │ │ ✗  criu      not found      │
-│ CPU   AMD EPYC 9654      ▓░░░░░░░░░░░   6 / 512 GB │ │ ✓  5 probes passed          │
-└──────────────────────────────────────────────────┘ └─────────────────────────────┘
-┌ Storage 2 ───────────────────────────────────────┐ ┌ Daemon ─────────────────────┐
-│ /var/lib/nebu  ext4  ▓▓▓▓▓░░░░  412 GB / 1 TB  store │ Version   nebu 0.9.3      │
-└──────────────────────────────────────────────────┘ │ Listener  :8484           │
+┌ Devices (i) ─────────────────────────────────────┐ ┌ Probes ─ Show all [Refresh] [Doctor] ┐
+│ GPU0  NVIDIA H100 80GB   ▓▓▓▓▓▓▓▓▓▓░░  68 / 80 GB │ │ ✗  criu      not found              │
+│ RAM   EPYC 9654          ▓░░░░░░░░░░░   6 / 512 GB │ │ ✓  5 probes passed                  │
+└──────────────────────────────────────────────────┘ └─────────────────────────────────────┘
+┌ Storage ─────────────────────────────────────────┐ ┌ Daemon ─────────────────────┐
+│ /var/lib/nebu  ext4  ▓▓▓▓▓░░░░  412 GB / 1 TB  store │ host      lab-01          │
+└──────────────────────────────────────────────────┘ │ system    linux amd64     │
+                                                     │ probed    4m ago          │
+                                                     │ version   nebu 0.9.3      │
                                                      └─────────────────────────────┘
 ```
 
-**Header.** Hostname, os and arch, probe time, a probes pill. Refresh runs the probe again. Doctor starts the task and opens its log in a card over the others until it ends.
-
-**Devices.** Memory bars, a device on shared memory as a row without a bar. Tooltip: segments by owner with bytes. Menu: expand facts, which lists the device facts and the processes holding memory as rows with pid, owner, bytes.
+**Devices.** One row per memory pool, the device drawing on it named, the CPU on the RAM row. Tooltip: segments by owner with bytes. Expand: each device's facts, its memory as its own or the pool it draws on, and the processes holding memory as rows with pid, owner, bytes. Refresh and Doctor sit in the Probes card. Doctor opens its log in a card over the others until it ends.
 
 **Storage.** Rows: path (40ch), filesystem, bar, used over total, uses.
 
 **Probes.** Rows: mark, id, detail (64ch). Failed first, the passing ones folded into one row until Show all.
 
-**Daemon.** Version, listener and home with copy, then the host facts as rows.
+**Daemon.** Host, system, probe time, version, listener, transport, auth, metrics and home with copy, then the host facts as rows.
 
 ## Logs
 

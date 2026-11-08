@@ -6,10 +6,10 @@ export type ListHead = { primary?: string; secondary?: string; instrument?: stri
 
 const key = Symbol('nebu-list');
 
-// The row width under which the secondary phrase and the facts move into the expand
+// The row width under which phrase and facts move into the expand
 export const compactBelow = 640;
 
-// Tracks which cells the rows of one list use so every row and the head share the same columns
+// Tracks which cells the rows of one list use so all share the same columns
 export class ListLayout {
 	#counts = $state<Record<string, number>>({});
 	#facts = $state<number[]>([]);
@@ -25,7 +25,7 @@ export class ListLayout {
 		return (this.#counts[slot] ?? 0) > 0;
 	}
 
-	// Counts a row's use of its cells, returning the release for when the row leaves or changes
+	// Counts a row's cells and returns the release
 	use(slots: ListSlot[], facts: number): () => void {
 		untrack(() => {
 			for (const s of slots) this.#counts[s] = (this.#counts[s] ?? 0) + 1;
@@ -39,7 +39,7 @@ export class ListLayout {
 			});
 	}
 
-	// The shared column tracks, named cells sized by content and the text columns sharing what is left
+	// The shared column tracks
 	readonly template = $derived.by(() => {
 		const cols: string[] = [];
 		if (this.has('leading')) cols.push('max-content');
@@ -59,7 +59,7 @@ export function provideList(): ListLayout {
 	return setContext(key, new ListLayout());
 }
 
-// Starts a scope without a list, so rows nested in a row's expand lay out on their own
+// Starts a scope without a list for rows nested in an expand
 export function leaveList() {
 	setContext(key, undefined);
 }
@@ -68,7 +68,7 @@ export function useList(): ListLayout | undefined {
 	return getContext<ListLayout | undefined>(key);
 }
 
-// A width in ch as fr weight against a 24ch name, so wider strings claim a wider column
+// A width in ch as fr weight against a 24ch name
 export function weightOf(width: string, fallback: number): number {
 	return width.endsWith('ch') ? Math.max(0.5, Number(width.slice(0, -2)) / 24) : fallback;
 }

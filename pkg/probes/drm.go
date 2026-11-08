@@ -246,7 +246,6 @@ func drmDevice(card, dev, vendor string, names pciNames) (*v1.Device, *v1.Memory
 		d.MemoryFreeBytes = total - used
 	}
 	if total == 0 {
-		facts["memory"] = "shared"
 		return d, nil, nil
 	}
 	return d, &v1.MemoryPool{Id: d.Id, Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: d.Id, TotalBytes: total, FreeBytes: d.MemoryFreeBytes}, nil

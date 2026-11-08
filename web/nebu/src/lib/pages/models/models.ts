@@ -14,7 +14,6 @@ import TranslateIcon from 'phosphor-svelte/lib/TranslateIcon';
 
 export type ModelRef = Pick<StoredModel, 'sourceId' | 'repo' | 'group'>;
 
-// The path a stored model's panel opens at, the repository encoded as one segment
 export function modelPath(m: ModelRef): string {
 	return `/models/${encodeURIComponent(m.sourceId)}/${encodeURIComponent(m.repo)}${m.group ? `/${encodeURIComponent(m.group)}` : ''}`;
 }
@@ -23,7 +22,6 @@ export function modelKeyOf(m: ModelRef): string {
 	return `${m.sourceId}/${m.repo}${m.group ? `/${m.group}` : ''}`;
 }
 
-// The launch wizard opened on a model, with a runtime and context when a fit pill chose them
 export function launchHref(m: ModelRef, runtimeId?: string, context?: number): string {
 	const q = new URLSearchParams({ model: modelKeyOf(m) });
 	if (runtimeId) q.set('runtime', runtimeId);
@@ -31,14 +29,28 @@ export function launchHref(m: ModelRef, runtimeId?: string, context?: number): s
 	return `/serve/launch?${q}`;
 }
 
-// The width a select needs to show its longest option whole beside its icon and caret
 export function selectWidth(labels: string[]): string {
 	return `${Math.max(6, ...labels.map((l) => l.length)) + 8}ch`;
 }
 
-// The count of a group's weight files by their shard counts, named as shards when they number one checkpoint
-export function weightsLabel(shardCounts: number[]): string {
-	return shardCounts.every((n) => n > 1) ? plural(shardCounts.length, 'weight shard') : plural(shardCounts.length, 'weight file');
+// Shard paths folded into one brace pattern such as model-{00001..00096}-of-00096.safetensors
+export function shardPattern(paths: string[]): string {
+	const first = paths[0] ?? '';
+	if (paths.length < 2) return first;
+	let head = 0;
+	while (head < first.length && paths.every((p) => p[head] === first[head])) head++;
+	let tail = 0;
+	while (tail < first.length - head && paths.every((p) => p.length > head + tail && p[p.length - 1 - tail] === first[first.length - 1 - tail])) tail++;
+	const middles = paths.map((p) => p.slice(head, p.length - tail));
+	if (!middles.every((m) => /^\d+$/.test(m))) return plural(paths.length, 'weight file');
+	const sorted = [...middles].sort((a, b) => Number(a) - Number(b));
+	return `${first.slice(0, head)}{${sorted[0]}..${sorted[sorted.length - 1]}}${first.slice(first.length - tail)}`;
+}
+
+// The digits that number a shard inside its path, the index when the path holds none
+export function shardOrdinal(path: string, index: number): string {
+	const m = /(\d+)(?=-of-|\.[^.]+$)/.exec(path);
+	return m?.[1] ?? String(index + 1);
 }
 
 export function kindLabel(kind: ModelKind): string {
@@ -55,13 +67,11 @@ export function paramCount(n: bigint | number | undefined): string {
 	return `${Math.round(v / 1e3)}K`;
 }
 
-// A parameter count with its unit, 70B params, telling it from a byte size beside it
 export function paramLabel(n: bigint | number | undefined): string {
 	const count = paramCount(n);
 	return count ? `${count} params` : '';
 }
 
-// A context length in tokens as 8K or 128K when it is a whole number of thousands
 export function contextLabel(n: number): string {
 	if (n >= 1024 && n % 1024 === 0) return `${n / 1024}K`;
 	return num(n);
@@ -75,7 +85,6 @@ export function quality(level: number): string {
 	return ['unknown', 'lowest', 'low', 'medium', 'high', 'full'][level] ?? '';
 }
 
-// Names of the runtimes whose bits are set in a compatibility mask, in listing order
 export function runtimeNames(mask: number, runtimes: RuntimeStatus[]): string[] {
 	return runtimes.filter((r) => r.runtime && (mask & r.runtime.bit) !== 0).map((r) => r.runtime?.name || r.runtime?.id || '');
 }
@@ -99,7 +108,6 @@ export function roleIcon(role: ArtifactRole): Component<{ size?: number }> {
 	}
 }
 
-// Starts a rehash of the model's blobs and follows its task in a toast
 export async function verifyModel(m: StoredModel): Promise<void> {
 	try {
 		const res = await rpc.store.verify({ sourceId: m.sourceId, repo: m.repo, group: m.group });
@@ -109,7 +117,6 @@ export async function verifyModel(m: StoredModel): Promise<void> {
 	}
 }
 
-// Starts a copy of the model into a mirror layout under dir, answering whether the task started
 export async function exportModel(m: StoredModel, dir: string): Promise<boolean> {
 	try {
 		const res = await rpc.store.export({ sourceId: m.sourceId, repo: m.repo, group: m.group, dir });
@@ -121,7 +128,6 @@ export async function exportModel(m: StoredModel, dir: string): Promise<boolean>
 	}
 }
 
-// Removes the model and toasts what a collection freed, answering whether it was removed
 export async function removeModel(m: StoredModel, gc: boolean): Promise<boolean> {
 	try {
 		const res = await rpc.store.removeModel({ sourceId: m.sourceId, repo: m.repo, group: m.group, gc });

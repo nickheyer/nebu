@@ -1,28 +1,25 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
 	import { chrome, type HeaderTab } from '#lib/shell/chrome.svelte.js';
 
-	// Declares the page's title, tabs and actions for the top bar, rendering nothing in place
+	// Declares the page's title, info line and tabs for the top bar
 	let {
 		title,
 		back,
-		meta,
-		actions,
+		info,
 		tabs,
 		active,
 		ontab
 	}: {
 		title?: string;
 		back?: { label: string; href: string };
-		meta?: Snippet;
-		actions?: Snippet;
+		info?: string;
 		tabs?: HeaderTab[];
 		active?: string;
 		ontab?: (id: string) => void;
 	} = $props();
 
 	$effect(() => {
-		const id = chrome.set({ title, back, meta, actions, tabs, active, ontab });
+		const id = chrome.set({ title, back, info, tabs, active, ontab });
 		return () => chrome.clear(id);
 	});
 </script>

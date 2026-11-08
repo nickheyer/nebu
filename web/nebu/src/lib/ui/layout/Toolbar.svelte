@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 
-	// A row of compact controls over a list, a child with class grow taking the width the others leave
+	// A row of compact controls over a list
 	let { children }: { children: Snippet } = $props();
 </script>
 

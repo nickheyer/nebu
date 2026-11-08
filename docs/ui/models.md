@@ -27,7 +27,7 @@ Route: `/models`, `/models/<source>/<repo>/<group>` opens the panel.
 Tabs: About, Files, Fit, Parts.
 
 - **About.** Architecture, family, parameters, bits per weight, kind, generates. One stacked bar of tensor groups by kind. Store path with copy. Pulled, used, commit. Metadata under a collapse.
-- **Files.** Rows: role icon, path (40ch), size. Tooltip: format, shard, digest. Download icon when a url exists. Warnings under a collapse.
+- **Files.** Rows: role icon, path (40ch), size. Tooltip: format, shard, digest. Download icon when a url exists. Sharded weights fold into one row named by their brace pattern, `model-{00001..00096}-of-00096.safetensors`, expanding to a grid of numbered, sized cells, each a download. Warnings under a collapse.
 - **Fit.** Runtime rows, one pill per configured context: fits, partial, no. Tooltip: weights and cache bytes. Switch: against free memory. Clicking a pill opens the plan popover: pool bars, placements, overhead, detail. Launch here.
 - **Parts.** Rows: slot label, component, required mark, state pill (stored, bundled, missing). Pull parts when any required part is missing.
 

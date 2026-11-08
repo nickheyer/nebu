@@ -14,12 +14,12 @@ a:not(.neo-button) {
 	text-underline-offset: 2px;
 }
 
-/* Headings carry hierarchy. One h1 per page, h2 for sections, h3 inside a section. */
+/* Headings carry hierarchy by size and placement, weight 500 at most. One h1 per page, h2 for sections, h3 inside a section. */
 h1,
 h2,
 h3 {
 	margin: 0;
-	font-weight: 600;
+	font-weight: 500;
 	letter-spacing: -0.01em;
 	line-height: var(--nebu-leading-tight);
 }
@@ -31,7 +31,12 @@ h2 {
 }
 h3 {
 	font-size: var(--nebu-text-body);
-	font-weight: 500;
+}
+/* Large readings are set light, as figures on an instrument face */
+.display {
+	font-weight: 300;
+	font-variant-numeric: tabular-nums;
+	letter-spacing: -0.01em;
 }
 p {
 	margin: 0;
@@ -82,7 +87,6 @@ p.unmeasured {
 }
 .label {
 	font-size: var(--nebu-text-secondary);
-	font-weight: 500;
 	color: var(--nebu-text-muted);
 }
 .measure {
@@ -116,10 +120,65 @@ p.unmeasured {
 	background: var(--nebu-screen-background);
 	border: 1px solid var(--nebu-screen-border);
 	border-radius: var(--neo-border-radius);
-	box-shadow: inset 1px 1px 3px rgb(0 0 0 / 50%);
+	box-shadow: var(--nebu-bezel);
 }
 .screen .dim {
 	color: var(--nebu-screen-text-muted);
+}
+
+/* Motion. Blocks and rows settle into place from a few pixels below, the blur clearing as they land. Off with the appearance toggle. */
+@keyframes nebu-reveal {
+	from {
+		opacity: 0;
+		filter: blur(4px);
+		transform: translateY(6px);
+	}
+	to {
+		opacity: 1;
+		filter: blur(0);
+		transform: translateY(0);
+	}
+}
+@keyframes nebu-grow {
+	from {
+		transform: scaleX(0);
+	}
+	to {
+		transform: scaleX(1);
+	}
+}
+@keyframes nebu-scan {
+	from {
+		background-position: -200% 0;
+	}
+	to {
+		background-position: 200% 0;
+	}
+}
+/* A line landing on a live screen flashes bright and decays to the steady phosphor */
+@keyframes nebu-phosphor {
+	from {
+		filter: brightness(1.6);
+	}
+	to {
+		filter: brightness(1);
+	}
+}
+@keyframes nebu-breathe {
+	0%,
+	100% {
+		box-shadow: 0 0 0 0 color-mix(in srgb, var(--dot) 45%, transparent);
+	}
+	50% {
+		box-shadow: 0 0 0 4px color-mix(in srgb, var(--dot) 0%, transparent);
+	}
+}
+[data-motion='off'] *,
+[data-motion='off'] *::before,
+[data-motion='off'] *::after {
+	animation-duration: 0.01ms !important;
+	animation-delay: 0ms !important;
+	transition-duration: 0.01ms !important;
 }
 
 /* Buttons. One primary per view. Everything else is quiet. */
@@ -129,7 +188,6 @@ p.unmeasured {
 	--neo-btn-text-color: var(--neo-background-color);
 	--neo-btn-text-color-hover: var(--neo-background-color);
 	--neo-btn-text-color-active: var(--neo-background-color);
-	font-weight: 500;
 }
 .neo-button.danger {
 	--neo-btn-text-color: var(--neo-color-error);
@@ -201,6 +259,11 @@ input[type='number']::-webkit-inner-spin-button,
 input[type='number']::-webkit-outer-spin-button {
 	margin: 0;
 	appearance: none;
+}
+
+/* Dialogs and drawers carry the machined edge of every raised surface */
+.neo-dialog {
+	box-shadow: var(--neo-dialog-box-shadow, var(--neo-glass-box-shadow-raised-1)), var(--nebu-machined);
 }
 
 /* A dialog lays its content out as a flex row, the content filling the width the dialog is given */

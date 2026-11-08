@@ -39,7 +39,7 @@
 	secondary={slim ? undefined : phrase}
 	secondaryKind={instance.state === InstanceState.FAILED ? 'message' : 'repo'}
 	secondaryColor={instance.state === InstanceState.FAILED ? 'error' : 'muted'}
-	facts={slim ? [] : [{ value: !done && inFlight !== undefined ? num(inFlight) : '', tip: 'in flight' }]}
+	facts={slim ? [] : [{ value: num(done ? 0 : (inFlight ?? 0)), tip: 'requests in flight' }]}
 	{menu}
 	{selected}
 	onclick={() => goto(`/serve/${encodeURIComponent(instance.id)}`)}

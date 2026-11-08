@@ -3,6 +3,7 @@
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { fly, type FlyParams } from 'svelte/transition';
+	import { motion } from '#lib/ui/motion.svelte.js';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
@@ -33,6 +34,7 @@
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
+	import InfinityIcon from 'phosphor-svelte/lib/InfinityIcon';
 	import Checklist from '#lib/ui/fields/Checklist.svelte';
 	import Duration from '#lib/ui/fields/Duration.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
@@ -63,7 +65,6 @@
 		runtimeId?: string;
 		params?: Record<string, string>;
 		step?: number;
-		// Whether the wizard ends at the placement plan without launching, as Mesh opens it to plan a formation
 		plan?: boolean;
 	};
 
@@ -79,23 +80,22 @@
 	const last = ids.length - 1;
 	const labels: Record<StepId, string> = { model: 'Model', runtime: 'Runtime', parameters: 'Parameters', placement: 'Placement', route: 'Route', canary: 'Canary', review: 'Review' };
 	const placements: Option<Placement>[] = [
-		{ value: Placement.UNSPECIFIED, label: 'Auto', tip: 'Devices first, spilling into host memory' },
-		{ value: Placement.DEVICE, label: 'Device', tip: 'Device memory alone, never spilling' },
-		{ value: Placement.HOST, label: 'Host', tip: 'Host memory alone' }
+		{ value: Placement.UNSPECIFIED, label: 'Device first' },
+		{ value: Placement.DEVICE, label: 'Device' },
+		{ value: Placement.HOST, label: 'Host' }
 	];
+	// An unpressed group leaves the profile to the planner
 	const profiles: Option<PlanProfile>[] = [
 		{ value: PlanProfile.CHAT, label: 'Chat' },
 		{ value: PlanProfile.AGENT, label: 'Agent' },
-		{ value: PlanProfile.BATCH, label: 'Batch' },
-		{ value: PlanProfile.AUTO, label: 'Auto' }
+		{ value: PlanProfile.BATCH, label: 'Batch' }
 	];
-	const shapes: Option<Shape>[] = [Shape.UNSPECIFIED, Shape.SOLO, Shape.CHAIN, Shape.LOCKSTEP, Shape.RELAY, Shape.REPLICAS, Shape.DRAFT, Shape.STAGES].map((s) => ({
+	const shapes: Option<Shape>[] = [Shape.SOLO, Shape.CHAIN, Shape.LOCKSTEP, Shape.RELAY, Shape.REPLICAS, Shape.DRAFT, Shape.STAGES].map((s) => ({
 		value: s,
-		label: s === Shape.UNSPECIFIED ? 'Auto' : enumLabel(ShapeSchema, s),
-		tip: shapeLine(s)
+		label: enumLabel(ShapeSchema, s),
+		description: shapeLine(s)
 	}));
 
-	// Opens on the first step still needing input, a step in the URL only within what is known
 	const known = init.model ? (init.runtimeId ? 2 : 1) : 0;
 	let active = $state(init.step === undefined ? known : Math.min(Math.max(0, init.step), init.model ? last : 0));
 	let open = $state(true);
@@ -112,7 +112,6 @@
 	let runtimeId = $state(init.runtimeId ?? '');
 	let installId = $state('');
 	let params = $state<Record<string, string>>({ ...(init.params ?? {}) });
-	let auto = $state<Record<string, boolean>>({});
 	let args = $state('');
 	let placement = $state<Placement>(Placement.UNSPECIFIED);
 	let free = $state(swap);
@@ -175,7 +174,7 @@
 			const unmet = (i.status?.conditions ?? []).filter((c) => c.status === ConditionStatus.FALSE);
 			return {
 				value: i.id,
-				label: `${i.version || 'unversioned'} ${i.origin || i.path}`.trim(),
+				label: `${i.version || (i.path.split('/').pop() ?? '')} ${i.origin || i.path}`.trim(),
 				description: unmet.length ? unmet.map((c) => `${c.type} ${c.reason}`).join(', ') : installKind(i.kind),
 				tip: unmet[0]?.message
 			};
@@ -200,7 +199,7 @@
 	const slotOptions = $derived.by((): Option<'this' | 'new' | 'none'>[] => [
 		...(slot ? [{ value: 'this' as const, label: slot.name }] : []),
 		{ value: 'new', label: 'New slot' },
-		{ value: 'none', label: 'No slot', disabled: placement !== Placement.UNSPECIFIED, tip: placement !== Placement.UNSPECIFIED ? 'Placement lives on a slot' : undefined }
+		{ value: 'none', label: 'No slot', disabled: placement !== Placement.UNSPECIFIED, tip: placement !== Placement.UNSPECIFIED ? 'Needs a slot' : undefined }
 	]);
 	const chosenDevices = $derived(slot?.deviceIds.length ? slot.deviceIds : undefined);
 	const verdict = $derived(formationPlan?.verdict ?? plan?.verdict);
@@ -243,14 +242,12 @@
 		return j - i;
 	}
 
-	// Chips naming each step, accent up to the current one, the reach of each step gating the chips past it
 	const steps = $derived.by((): NeoStepperStep[] =>
 		ids.map((id, i) => ({ id, next: i < last ? reach(i) : false, previous: !running, markProps: { position: (i * 100) / last, color: 'primary', label: viewport.mobile ? String(i + 1) : labels[id] } }))
 	);
 
-	// Slides steps in 200 ms, without motion when the system asks for reduced motion
 	function slide(node: Element, props: FlyParams) {
-		return viewport.reducedMotion ? { duration: 0 } : fly(node, { ...props, duration: 200, delay: 0 });
+		return motion.enabled ? fly(node, { ...props, duration: 200, delay: 0 }) : { duration: 0 };
 	}
 
 	function installKind(kind: number): string {
@@ -260,21 +257,19 @@
 	function shapeLine(s: Shape): string {
 		switch (s) {
 			case Shape.SOLO:
-				return 'Everything on one node';
+				return 'One node';
 			case Shape.CHAIN:
-				return 'Consecutive layer ranges on stages, the head sampling';
+				return 'Layer ranges per stage';
 			case Shape.LOCKSTEP:
-				return 'Every layer split across every seat';
+				return 'Every layer on every seat';
 			case Shape.RELAY:
-				return 'One seat prefills, another decodes';
+				return 'Prefill and decode apart';
 			case Shape.REPLICAS:
-				return 'The whole model on every seat';
+				return 'Full copy per seat';
 			case Shape.DRAFT:
-				return 'The target on the head, a draft model on another node';
-			case Shape.STAGES:
-				return 'A denoiser on one node, its encoders and decoder on another';
+				return 'Draft model on another node';
 			default:
-				return 'The planner picks the shape';
+				return 'Denoiser apart from encoders';
 		}
 	}
 
@@ -283,7 +278,7 @@
 	}
 
 	function cleanParams(): Record<string, string> {
-		return Object.fromEntries(Object.entries(params).filter(([k, v]) => v !== '' && !(auto[k] ?? runtimeParams.find((p) => p.name === k)?.solved)));
+		return Object.fromEntries(Object.entries(params).filter(([, v]) => v !== ''));
 	}
 
 	function request(): RunRequest {
@@ -386,7 +381,7 @@
 		if (!installs.some((i) => i.id === installId)) installId = installs[0]?.id ?? '';
 	});
 
-	// Names the route after the slot or the repository until the operator types another name
+	// Names the route after the slot or the repository until typed over
 	$effect(() => {
 		const key = modelId;
 		if (!key) return;
@@ -397,7 +392,7 @@
 		});
 	});
 
-	// A placement other than device first lives on a slot, so a launch without one makes one
+	// A placement other than device first needs a slot
 	$effect(() => {
 		if (placement !== Placement.UNSPECIFIED && slotChoice === 'none') slotChoice = 'new';
 	});
@@ -409,7 +404,7 @@
 		untrack(() => void estimate());
 	});
 
-	// Keeps the step, model and runtime in the URL so a reload opens where the operator was
+	// Keeps the step, model and runtime in the URL
 	$effect(() => {
 		const want: [string, string][] = [
 			['step', String(active)],
@@ -426,7 +421,7 @@
 		});
 	});
 
-	// Asks the daemon for the command the review step shows, as a launch would render it
+	// Asks the daemon for the command the review step shows
 	$effect(() => {
 		if (launched || stepId !== 'review' || !modelId || runtime === undefined) return;
 		const run = request();
@@ -533,7 +528,6 @@
 		formationId = '';
 	}
 
-	// Closes the dialog for a page, a toast following the task when it still runs
 	function leave(href = planOnly ? '/mesh/formations' : '/serve') {
 		if (left) return;
 		left = true;
@@ -545,21 +539,24 @@
 	const reviewRows = $derived([
 		{ label: 'model', value: modelPhrase(model) },
 		{ label: 'runtime', value: `${runtime?.runtime?.name ?? runtimeId} ${installs.find((i) => i.id === installId)?.version ?? ''}`.trim() },
-		{ label: 'parameters', value: Object.entries(cleanParams()).map(([k, v]) => `${k}=${v}`).join(' ') || 'planner defaults', mono: true },
+		{ label: 'parameters', value: Object.entries(cleanParams()).map(([k, v]) => `${k}=${v}`).join(' '), mono: true },
 		{ label: 'arguments', value: args, mono: true },
 		{ label: 'placement', value: placements.find((p) => p.value === placement)?.label ?? '' },
-		{ label: 'plan', value: verdict !== undefined ? enumLabel(FitVerdictSchema, verdict) : 'not planned' },
+		{ label: 'plan', value: verdict !== undefined ? enumLabel(FitVerdictSchema, verdict) : '' },
 		{ label: 'span', value: span.map((v) => nodeDevices.find((o) => o.value === v)?.label ?? v).join(', ') },
 		{ label: 'shape', value: span.length ? (shapes.find((s) => s.value === shape)?.label ?? '') : '' },
+		{ label: 'plan profile', value: span.length ? (profiles.find((p) => p.value === profile)?.label ?? '') : '' },
 		{ label: 'name', value: swap ? '' : name },
-		{ label: 'slot', value: swap || slotChoice === 'this' ? (slot?.name ?? '') : slotChoice === 'new' ? 'new slot' : 'none' },
+		{ label: 'slot', value: swap || slotChoice === 'this' ? (slot?.name ?? '') : slotChoice === 'new' ? name : '' },
 		...(swap ? [] : policyRows(policy)),
 		{ label: 'tools', value: swap ? '' : routeProfile.toolServers.join(', ') },
-		{ label: 'idle unload', value: swap ? '' : idleUnload ? seconds(idleUnload) : 'keeps loaded' },
+		{ label: 'idle unload', value: swap || !idleUnload ? '' : seconds(idleUnload) },
 		{ label: 'snapshot', value: snapshot ? 'after load' : '' },
 		{ label: 'swap', value: swap ? (canaryPercent ? `canary ${canaryPercent}%, ${seconds(canarySeconds)} steps, ${canaryStep}% more each` : drainFirst ? 'drain first' : 'blue green') : '' }
 	]);
 </script>
+
+{#snippet keepsLoaded()}<InfinityIcon size={16} aria-label="Stays loaded" />{/snippet}
 
 {#snippet header()}
 	<span class="headline ellipsis">{title}{#if launched}<span class="muted"> · {phase}</span>{/if}</span>
@@ -617,10 +614,10 @@
 				{/if}
 			</Stack>
 		{:else if stepId === 'model' && live.ready && live.models.size === 0 && !model}
-			<Empty icon={CubeIcon} text="No models stored" hint="Pull a model from a source, then launch it here" action="Discover" href="/discover" />
+			<Empty icon={CubeIcon} text="No models stored" action="Discover" href="/discover" />
 		{:else if stepId === 'model'}
 			<Stack gap={16}>
-				<Picker bind:value={modelPick} fetch={fetchModels} label="Model" placeholder="Search stored models" current={model ? modelPhrase(model) : undefined} required />
+				<Picker bind:value={modelPick} fetch={fetchModels} label="Model" current={model ? modelPhrase(model) : undefined} required />
 				{#if model}
 					<KeyRows
 						dense
@@ -649,7 +646,7 @@
 			{#if runtimes === undefined}
 				<Skeleton rows={2} kind="facts" />
 			{:else if compatible.length === 0}
-				<Empty icon={EngineIcon} text="No compatible runtime" hint="None of the runtimes this host runs serves this model's format" action="Runtimes" href="/runtimes" />
+				<Empty icon={EngineIcon} text="No compatible runtime" action="Runtimes" href="/runtimes" />
 			{:else}
 				<Stack gap={16}>
 					<FormSection>
@@ -663,15 +660,15 @@
 						{/if}
 					</FormSection>
 					{#if runtime && installs.length === 0}
-						<Empty icon={DownloadSimpleIcon} text="{runtime.runtime?.name ?? runtimeId} is not installed" hint="Install it from the runtime catalog, then come back to launch" action="Install" href="/runtimes/{encodeURIComponent(runtimeId)}/install" />
+						<Empty icon={DownloadSimpleIcon} text="{runtime.runtime?.name ?? runtimeId} not installed" action="Install" href="/runtimes/{encodeURIComponent(runtimeId)}/install" />
 					{/if}
 				</Stack>
 			{/if}
 		{:else if stepId === 'parameters'}
 			<Stack gap={24}>
-				<ParamsForm params={runtimeParams} bind:values={params} bind:auto states={paramStates} />
+				<ParamsForm params={runtimeParams} bind:values={params} states={paramStates} />
 				<FormSection title="Command">
-					<Text bind:value={args} label="Arguments" info="Extra words for the runtime command, split like a shell" max={512} mono />
+					<Text bind:value={args} label="Arguments" max={512} mono />
 				</FormSection>
 			</Stack>
 		{:else if stepId === 'placement'}
@@ -696,15 +693,15 @@
 				<FormSection title="Placement">
 					<FieldRow>
 						<Segmented bind:value={placement} options={placements} label="Placement" />
-						<Switch bind:checked={free} label="Against free memory" info="Plans against memory free now instead of the total" />
+						<Switch bind:checked={free} label="Against free memory" />
 					</FieldRow>
 				</FormSection>
 				{#if inMesh}
-					<FormSection title="Mesh">
-						<Checklist bind:value={span} options={nodeDevices} label="Span" info="Nodes and devices the run may use, a formation when any is chosen" />
+					<FormSection title="Mesh" info="An empty shape or profile leaves the choice to the planner">
+						<Checklist bind:value={span} options={nodeDevices} label="Span" />
 						<FieldRow>
-							<Select bind:value={shape} options={shapes} label="Shape" />
-							<Segmented bind:value={profile} options={profiles} label="Plan profile" />
+							<Select bind:value={() => (shape === Shape.UNSPECIFIED ? undefined : shape), (v) => (shape = v ?? Shape.UNSPECIFIED)} options={shapes} label="Shape" clearable />
+							<Segmented bind:value={() => (profile === PlanProfile.AUTO ? undefined : profile), (v) => (profile = v ?? PlanProfile.AUTO)} options={profiles} label="Plan profile" clearable />
 						</FieldRow>
 						{#if formationPlan?.candidates.length}
 							<div class="rows">
@@ -730,9 +727,9 @@
 						<Select bind:value={slotChoice} options={slotOptions} label="Slot" />
 					</FieldRow>
 					<FieldRow>
-						<Duration bind:value={idleUnload} base="s" max={86_400} label="Idle unload" info="Time without requests before the process unloads, loaded for good by default" emptyZero placeholder="Default" />
+						<Duration bind:value={idleUnload} base="s" max={86_400} label="Idle unload" emptyZero mark={keepsLoaded} />
 						{#if live.host?.facts['criu']}
-							<Switch bind:checked={snapshot} label="Snapshot after load" info="Later launches restore the image instead of starting cold" />
+							<Switch bind:checked={snapshot} label="Snapshot after load" />
 						{/if}
 					</FieldRow>
 				</FormSection>
@@ -740,19 +737,19 @@
 			</Stack>
 		{:else if stepId === 'canary'}
 			<Stack gap={24}>
-				<FormSection title="Swap">
+				<FormSection title="Swap" info="Draining lets open requests finish before the old occupant stops">
 					<FieldRow>
-						<Switch bind:checked={drainFirst} label="Drain first" info="Finishes the old occupant's requests before the new one takes any" disabled={canaryPercent > 0} />
-						<Percent bind:value={canaryPercent} max={99} label="Canary percent" info="Share of the slot's traffic the new occupant takes first, zero skips the canary" disabled={drainFirst} />
+						<Switch bind:checked={drainFirst} label="Drain first" disabled={canaryPercent > 0} />
+						<Percent bind:value={canaryPercent} max={99} label="Canary share" disabled={drainFirst} />
 					</FieldRow>
 				</FormSection>
-				<FormSection title="Canary">
+				<FormSection title="Canary" info="Traffic moves to the newcomer a step at a time and rolls back past the regression limit">
 					<FieldRow>
-						<Duration bind:value={canarySeconds} base="s" max={86_400} label="Step seconds" info="How long each canary step lasts" disabled={canaryPercent === 0} />
-						<Percent bind:value={canaryStep} max={99} label="Step percent" info="Added to the new occupant's share after each step it passes" disabled={canaryPercent === 0} />
+						<Duration bind:value={canarySeconds} base="s" max={86_400} label="Step length" disabled={canaryPercent === 0} />
+						<Percent bind:value={canaryStep} max={99} label="Step share" disabled={canaryPercent === 0} />
 					</FieldRow>
 					<FieldRow>
-						<Percent bind:value={maxRegression} max={100} label="Max regression" info="How far the new occupant's errors, attainment, TTFT and TPOT may trail the old" disabled={canaryPercent === 0} />
+						<Percent bind:value={maxRegression} max={100} label="Max regression" disabled={canaryPercent === 0} />
 					</FieldRow>
 				</FormSection>
 			</Stack>
@@ -834,7 +831,6 @@
 		min-width: 0;
 		font-size: var(--nebu-text-heading);
 	}
-	/* Cancel, Back and the one accent forward button on the right, as every dialog ends */
 	.footer {
 		display: flex;
 		gap: var(--nebu-space-3);
@@ -846,7 +842,6 @@
 		min-width: 0;
 		font-size: var(--nebu-text-secondary);
 	}
-	/* Step marks carry depth alone, never a border */
 	:global(.launch-wizard .neo-stepper-progress .neo-button) {
 		--neo-btn-border-color: transparent;
 		--neo-btn-border-color-hover: transparent;

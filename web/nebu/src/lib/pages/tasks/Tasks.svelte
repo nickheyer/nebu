@@ -3,7 +3,7 @@
 	import { NeoProgressBar } from '#lib/neo/progress/index.js';
 	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { ago, date, duration, enumLabel, enumOptions, num, percent, when } from '#lib/format.js';
+	import { ago, duration, enumLabel, enumOptions, num, percent, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { TaskState, TaskStateSchema, type Task } from '#lib/proto/nebu/v1/task_pb.js';
@@ -34,8 +34,6 @@
 	let taskState = $state<TaskState | undefined>(undefined);
 
 	const running = $derived([...live.tasks.values()].filter(active).sort((a, b) => Number(b.createdAt?.seconds ?? 0n) - Number(a.createdAt?.seconds ?? 0n)));
-	const queued = $derived(running.filter((t) => t.state === TaskState.PENDING).length);
-	const failedLastHour = $derived([...live.tasks.values()].filter((t) => t.state === TaskState.FAILED && clockTick.now - (date(t.finishedAt)?.getTime() ?? 0) < 3_600_000).length);
 
 	const history = new ListQuery<Task, { kind?: string; state?: TaskState }>(
 		async (p, cursor, limit, signal) => {
@@ -49,7 +47,7 @@
 		void history.load({ kind, state: taskState });
 	});
 
-	// Runs of the same task back to back fold into one row, the newest standing for the rest
+	// Runs of the same task back to back fold into one row
 	const groups = $derived.by(() => {
 		const out: { head: Task; rest: Task[] }[] = [];
 		for (const t of history.items) {
@@ -75,7 +73,6 @@
 	const kindOptions = taskKinds.map((k) => ({ value: k, label: k }));
 	const stateOptions = enumOptions(TaskStateSchema).map((o) => ({ value: o.value as TaskState, label: o.label }));
 
-	// The result mark of a finished task, the hourglass for one still under way
 	function markOf(t: Task): MarkState {
 		if (t.state === TaskState.SUCCEEDED) return 'ok';
 		if (t.state === TaskState.FAILED) return 'failed';
@@ -109,7 +106,7 @@
 {/snippet}
 
 {#snippet activeCard()}
-	<Card title="Running" count={running.length} flush>
+	<Card title="Running" flush>
 		<List head={{ primary: 'Task', instrument: 'Progress', action: 'Elapsed' }}>
 			{#each running as t (t.id)}
 				{@const rows = t.progress?.rows ?? []}
@@ -140,15 +137,15 @@
 {#snippet historyCard()}
 	<Card title="History" flush>
 		{#snippet tools()}
-			<span class="filter"><Select bind:value={kind} options={kindOptions} placeholder="Kind" clearable /></span>
-			<span class="filter"><Select bind:value={taskState} options={stateOptions} placeholder="State" clearable /></span>
+			<span class="filter"><Select bind:value={kind} options={kindOptions} label="Kind" compact clearable /></span>
+			<span class="filter"><Select bind:value={taskState} options={stateOptions} label="State" compact clearable /></span>
 		{/snippet}
 		{#if !history.settled}
 			<Skeleton rows={6} dot={false} leading="12ch" primary="32ch" secondary={false} facts={2} action={false} menu={false} />
 		{:else if history.error}
 			<Empty text={history.error} action="Retry" onclick={() => history.refresh()} />
 		{:else if history.items.length === 0}
-			<Empty icon={ListChecksIcon} text={kind || taskState !== undefined ? 'No tasks match' : 'No tasks yet'} hint="Pulls, installs, builds, launches and probes land here with their logs" />
+			<Empty icon={ListChecksIcon} text={kind || taskState !== undefined ? 'No tasks match' : 'No tasks'} />
 		{:else}
 			<List head={{ primary: 'Task', facts: ['Duration', 'Finished'] }}>
 				{#each groups as g (g.head.id)}
@@ -177,15 +174,7 @@
 	{@render historyCard()}
 {/snippet}
 
-<PageHeader tabs={hostTabs} active="tasks">
-	{#snippet meta()}
-		{#if live.ready}
-			<span>{running.length - queued ? `${num(running.length - queued)} running` : 'Nothing running'}</span>
-			{#if queued}<span>{num(queued)} queued</span>{/if}
-			{#if failedLastHour}<span class="error-text">{num(failedLastHour)} failed in the last hour</span>{/if}
-		{/if}
-	{/snippet}
-</PageHeader>
+<PageHeader tabs={hostTabs} active="tasks" info="Background work the daemon runs, pulls, builds, verifies and probes, live and past" />
 
 <Sheet open={id !== ''} onclose={() => goto('/tasks')} {list}>
 	{#if id}
@@ -205,7 +194,6 @@
 		display: flex;
 		width: 100%;
 	}
-	/* Kind pills share one width so the titles after them line up */
 	.kindcol {
 		display: inline-flex;
 		flex: 0 0 auto;

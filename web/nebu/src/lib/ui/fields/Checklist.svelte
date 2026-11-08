@@ -8,10 +8,9 @@
 		value = $bindable([]),
 		options,
 		label,
-		info,
 		disabled = false,
-		empty = 'Nothing to choose from'
-	}: { value?: V[]; options: Option<V>[]; label?: string; info?: string; disabled?: boolean; empty?: string } = $props();
+		empty = '—'
+	}: { value?: V[]; options: Option<V>[]; label?: string; disabled?: boolean; empty?: string } = $props();
 
 	function toggle(v: V, on: boolean) {
 		const set = new Set(value);
@@ -22,26 +21,28 @@
 </script>
 
 <div class="field">
-	<FieldLabel {label} {info} />
+	<FieldLabel {label} />
 	{#if options.length === 0}
 		<span class="secondary">{empty}</span>
 	{:else}
 		<div class="list">
-			{#each options as o (String(o.value))}
+			{#each options as o, i (String(o.value))}
 				{#snippet line()}
 					<span class="line">
 						<span class="text ellipsis">{o.label}</span>
 						{#if o.description}<span class="aside ellipsis">{o.description}</span>{/if}
 					</span>
 				{/snippet}
-				<Tip text={o.tip} tag="div">
-					<NeoCheckbox
-						checked={value.includes(o.value)}
-						disabled={disabled || o.disabled}
-						label={line}
-						elevation={-1}
-						onchange={(e) => toggle(o.value, (e.currentTarget as HTMLInputElement).checked)}
-					/>
+				<Tip text={o.tip} tag="div" class="checkline">
+					<span class="row" style:--i={i}>
+						<NeoCheckbox
+							checked={value.includes(o.value)}
+							disabled={disabled || o.disabled}
+							label={line}
+							elevation={-1}
+							onchange={(e) => toggle(o.value, (e.currentTarget as HTMLInputElement).checked)}
+						/>
+					</span>
 				</Tip>
 			{/each}
 		</div>
@@ -61,7 +62,17 @@
 		gap: 2px;
 		min-width: 0;
 	}
-	/* The secondary word sits on the label line, muted, never on a line of its own */
+	:global(.checkline) {
+		display: flex;
+		min-width: 0;
+	}
+	.row {
+		display: flex;
+		flex: 1 1 auto;
+		min-width: 0;
+		animation: nebu-reveal 220ms var(--nebu-settle) both;
+		animation-delay: calc(var(--i) * 20ms);
+	}
 	.line {
 		display: inline-flex;
 		gap: var(--nebu-space-2);

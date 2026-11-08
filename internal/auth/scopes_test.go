@@ -87,6 +87,7 @@ var wantClass = map[string]string{
 	nebuv1connect.InstanceServiceListInstancesProcedure:        "read",
 	nebuv1connect.InstanceServiceGetInstanceProcedure:          "read",
 	nebuv1connect.InstanceServiceLogsProcedure:                 "read",
+	nebuv1connect.InstanceServicePreviewRunProcedure:           "read",
 	nebuv1connect.InstanceServiceRunProcedure:                  "operate",
 	nebuv1connect.InstanceServiceStopInstanceProcedure:         "operate",
 	nebuv1connect.InstanceServiceLoadAdapterProcedure:          "operate",
@@ -188,11 +189,11 @@ var wantClass = map[string]string{
 	nebuv1connect.PoolImportServiceWatchPoolImportsProcedure:   "read",
 }
 
-// Every procedure the generated nebu.v1 and nebu.v1 services declare
+// Every procedure the generated nebu.v1 services declare
 func registeredProcedures() []string {
 	var out []string
 	protoregistry.GlobalFiles.RangeFiles(func(f protoreflect.FileDescriptor) bool {
-		if pkg := string(f.Package()); pkg != "nebu.v1" && pkg != "nebu.v1" {
+		if string(f.Package()) != "nebu.v1" {
 			return true
 		}
 		for i := 0; i < f.Services().Len(); i++ {

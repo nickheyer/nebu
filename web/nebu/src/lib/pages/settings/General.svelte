@@ -53,7 +53,6 @@
 		error = undefined;
 	}
 
-	// System follows the browser's scheme and forgets the stored choice
 	function setTheme(v: 'light' | 'dark' | 'system') {
 		if (v === 'system') {
 			theme.update({ remember: false, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? NeoTheme.Dark : NeoTheme.Light });
@@ -63,22 +62,22 @@
 	}
 </script>
 
-<PageHeader {tabs} active="general" />
+<PageHeader {tabs} active="general" info="How this host names itself and how the console looks" />
 
 <Columns ratio="1/1">
 	{#snippet left()}
 		<Card title="Host">
-			<Text bind:value={hostLabel} label="Host label" placeholder={live.host?.hostname} info="Names this host in the top bar and the overview, the hostname when empty" />
+			<Text bind:value={hostLabel} label="Host label" placeholder={live.host?.hostname} />
 			<SaveBar {dirty} {saving} {error} onsave={save} ondiscard={discard} />
 		</Card>
 	{/snippet}
 	{#snippet right()}
-		<Card title="Appearance" info="Applies at once and is remembered in this browser">
+		<Card title="Appearance">
 			<FieldRow>
 				<Segmented value={themeChoice} options={[{ value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }, { value: 'system', label: 'System' }]} label="Theme" onchange={setTheme} />
 				<Stack gap={12}>
-					<Switch checked={theme.transition !== NeoTransition.None} label="Transitions" info="Animates the switch between light and dark" onchange={(on) => theme.update({ transition: on ? NeoTransition.Circle : NeoTransition.None })} />
-					<Switch checked={theme.reset} label="Style reset" info="Normalises browser default styles under the theme" onchange={(on) => theme.update({ reset: on })} />
+					<Switch checked={theme.transition !== NeoTransition.None} label="Transitions" onchange={(on) => theme.update({ transition: on ? NeoTransition.Circle : NeoTransition.None })} />
+					<Switch checked={theme.reset} label="Style reset" onchange={(on) => theme.update({ reset: on })} />
 				</Stack>
 			</FieldRow>
 		</Card>

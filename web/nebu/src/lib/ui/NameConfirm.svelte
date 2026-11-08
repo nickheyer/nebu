@@ -9,7 +9,6 @@
 		name,
 		message,
 		confirm = 'Delete',
-		// Whether the fields the dialog holds are complete, the typed name aside
 		enabled = true,
 		onconfirm,
 		children
@@ -27,7 +26,7 @@
 	<div class="body">
 		{#if message}<p class="secondary">{message}</p>{/if}
 		{@render children?.()}
-		<NeoInput bind:value={typed} label="Type {name} to confirm" autocomplete="off" elevation={-1} placement="top" floating={false} width="100%" />
+		<NeoInput bind:value={typed} label="Name" placeholder={name} autocomplete="off" elevation={-1} placement="top" floating={false} width="100%" />
 	</div>
 </NeoDialogConfirm>
 

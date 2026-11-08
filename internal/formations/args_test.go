@@ -59,13 +59,15 @@ func (emptyView) Objective(string) (*v1.Objective, bool) { return nil, false }
 // A probe answering with a CPU and its host memory
 type argsProbe struct{}
 
-func (argsProbe) ID() string               { return "memory" }
-func (argsProbe) Description() string      { return "a CPU, host memory and an iGPU sharing it" }
+func (argsProbe) ID() string { return "memory" }
+func (argsProbe) Description() string {
+	return "a CPU and host memory beside two GPUs without memory of their own, which the profile drops"
+}
 func (argsProbe) Runs(string, string) bool { return true }
 func (argsProbe) Run(context.Context) host.Result {
 	return host.Result{
 		Status:  v1.ProbeStatus_PROBE_STATUS_OK,
-		Devices: []*v1.Device{{Id: "cpu0", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Name: "cpu"}, {Id: "igpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "shared igpu", Facts: map[string]string{"memory": "shared"}}},
+		Devices: []*v1.Device{{Id: "cpu0", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Name: "cpu"}, {Id: "igpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "shared igpu"}, {Id: "blind0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "other", Name: "unread gpu"}},
 		Pools:   []*v1.MemoryPool{{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 64 << 30, FreeBytes: 32 << 30}},
 	}
 }
@@ -186,14 +188,18 @@ func TestFormationArgs(t *testing.T) {
 	}
 }
 
-// A span pins devices a member holds with memory of their own, and nothing else
+// A span pins devices a member's profile lists, the GPUs without memory of their own dropped from it
 func TestPlanRefusesSpanDevicesWithoutMemory(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := argsConductor(t, ctx)
-	run := &v1.RunRequest{SourceId: "src", Repo: "org/model", Group: "q4", RuntimeId: fake.RuntimeID, Name: "pinned", Span: []string{m.self() + "/igpu0"}}
-	if _, err := m.plan(ctx, run); err == nil || !strings.Contains(err.Error(), `span: device "igpu0" (shared igpu) on `) || !strings.Contains(err.Error(), "has no memory of its own, so a seat cannot pin it") {
-		t.Fatalf("a span on the igpu: %v", err)
+	run := &v1.RunRequest{SourceId: "src", Repo: "org/model", Group: "q4", RuntimeId: fake.RuntimeID, Name: "pinned", Span: []string{m.self() + "/blind0"}}
+	if _, err := m.plan(ctx, run); err == nil || !strings.Contains(err.Error(), `has no device "blind0", see nebu mesh nodes`) {
+		t.Fatalf("a span on a gpu the probes found no memory for: %v", err)
+	}
+	run.Span = []string{m.self() + "/igpu0"}
+	if _, err := m.plan(ctx, run); err == nil || !strings.Contains(err.Error(), `has no device "igpu0", see nebu mesh nodes`) {
+		t.Fatalf("a span on a gpu sharing system memory: %v", err)
 	}
 	run.Span = []string{m.self() + "/gpu9"}
 	if _, err := m.plan(ctx, run); err == nil || !strings.Contains(err.Error(), `has no device "gpu9", see nebu mesh nodes`) {

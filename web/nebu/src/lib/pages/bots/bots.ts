@@ -108,13 +108,15 @@ export function botTip(b: Bot): string {
 	const shards = st?.shards ?? [];
 	const latency = shards.length ? shards.reduce((sum, s) => sum + s.latencyMs, 0) / shards.length : undefined;
 	return [
-		`username ${st?.username || 'none'}`,
-		`shards ${num(shards.length)}, latency ${latency === undefined ? 'none' : ms(latency)}`,
+		st?.username ? `username ${st.username}` : '',
+		`shards ${num(shards.length)}${latency === undefined ? '' : `, latency ${ms(latency)}`}`,
 		`replies ${num(st?.replies)}`,
 		`images ${num(st?.images)}`,
 		`videos ${num(st?.videos)}`,
 		`errors ${num(st?.errors)}`
-	].join('\n');
+	]
+		.filter(Boolean)
+		.join('\n');
 }
 
 // A working copy of a bot's spec for the settings tabs

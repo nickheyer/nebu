@@ -1,12 +1,11 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import type { HTMLInputAttributes } from 'svelte/elements';
 	import { NeoInput } from '#lib/neo/inputs/index.js';
-	import InfoTip from '#lib/ui/InfoTip.svelte';
 
 	let {
 		value = $bindable(''),
 		label,
-		info,
 		placeholder,
 		max,
 		min,
@@ -18,11 +17,12 @@
 		message,
 		error,
 		autocomplete = 'off',
+		before,
+		compact = false,
 		onchange
 	}: {
 		value?: string;
 		label?: string;
-		info?: string;
 		placeholder?: string;
 		max?: number;
 		min?: number;
@@ -34,11 +34,12 @@
 		message?: string;
 		error?: string;
 		autocomplete?: HTMLInputAttributes['autocomplete'];
+		before?: Snippet;
+		compact?: boolean;
 		onchange?: (v: string) => void;
 	} = $props();
 
 	let focused = $state(false);
-	// The length against the bound, shown while the field is in use
 	const counting = $derived(max !== undefined && (focused || value.length > 0));
 </script>
 
@@ -55,19 +56,20 @@
 			{required}
 			{type}
 			elevation={-1}
-			placement={label ? 'top' : 'inside'}
-			floating={false}
+			placement={label && !compact ? 'top' : 'inside'}
+			floating={compact}
 			width="100%"
 			{message}
 			{error}
 			{autocomplete}
+			{before}
+			aria-label={label}
 			onfocus={() => (focused = true)}
 			onblur={() => (focused = false)}
 			onchange={() => onchange?.(value)}
 		/>
 		{#if counting}<span class="counter" aria-hidden="true">{value.length}/{max}</span>{/if}
 	</div>
-	{#if info}<span class="trail"><InfoTip text={info} /></span>{/if}
 </div>
 
 <style>
@@ -86,7 +88,6 @@
 	.box :global(.neo-input-group) {
 		flex: 1 1 auto;
 	}
-	/* The length reads at the right end of the label line, or inside the box when there is no label */
 	.counter {
 		position: absolute;
 		top: 0;

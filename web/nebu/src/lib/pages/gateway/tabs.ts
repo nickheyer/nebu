@@ -8,7 +8,7 @@ export function isGatewayTab(s: string): s is GatewayTab {
 	return (gatewayTabs as readonly string[]).includes(s);
 }
 
-const groupTabs: { id: GroupTab; label: string; href: string }[] = [
+export const gatewayHeaderTabs: (HeaderTab & { id: GroupTab })[] = [
 	{ id: 'traffic', label: 'Traffic', href: '/traffic' },
 	{ id: 'routes', label: 'Routes', href: '/gateway/routes' },
 	{ id: 'pools', label: 'Pools', href: '/gateway/pools' },
@@ -16,8 +16,3 @@ const groupTabs: { id: GroupTab; label: string; href: string }[] = [
 	{ id: 'schedulers', label: 'Schedulers', href: '/gateway/schedulers' },
 	{ id: 'imports', label: 'Imports', href: '/gateway/imports' }
 ];
-
-// The tabs Gateway carries across its own routes and the traffic it took in, every count arriving at once
-export function gatewayHeaderTabs(counts: Record<GroupTab, number> | undefined): HeaderTab[] {
-	return groupTabs.map((t) => ({ ...t, count: counts?.[t.id] }));
-}

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { create } from '@bufbuild/protobuf';
+	import type { Snippet } from 'svelte';
+	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { enumLabel, num, seconds, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
@@ -22,8 +24,11 @@
 	import Sheet from '#lib/ui/layout/Sheet.svelte';
 	import { flopsRate, linkLabel, linkLamp, streamRate } from '#lib/pages/mesh/mesh.js';
 	import GaugeIcon from 'phosphor-svelte/lib/GaugeIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 
-	// The planner's device profiles and the speed ratios learned from formations, profiles edited in the panel
+	let { head }: { head?: Snippet } = $props();
+
+	// The planner's device profiles and the speed ratios learned from formations
 	let profiles = $state<DeviceProfile[]>([]);
 	let ratios = $state<FormationRatio[]>([]);
 	let loaded = $state(false);
@@ -40,7 +45,6 @@
 		}
 	}
 
-	// Loads the tables, again a second after mesh changes settle
 	$effect(() => {
 		void load();
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -64,10 +68,9 @@
 	let saving = $state(false);
 	let saveError = $state<string | undefined>(undefined);
 	const dirty = $derived(editing === undefined || pattern !== start.pattern || streamGb !== start.streamGb || tflops !== start.tflops || fixedSeconds !== start.fixedSeconds);
-	const missing = $derived([!pattern.trim() ? 'pattern' : '', streamGb <= 0 ? 'stream' : '', tflops <= 0 ? 'compute' : ''].filter(Boolean));
+	const complete = $derived(pattern.trim() !== '' && streamGb > 0 && tflops > 0);
 
-	// Opens the editor on a profile, or on a new one
-	export function edit(p?: DeviceProfile) {
+	function edit(p?: DeviceProfile) {
 		editing = p?.pattern;
 		pattern = p?.pattern ?? '';
 		streamGb = p ? p.streamBytesPerSecond / 1e9 : 0;
@@ -105,11 +108,14 @@
 </script>
 
 {#snippet list()}
-	<Card title="Device profiles" count={loaded ? profiles.length : undefined} info="Declared numbers for devices whose name matches the pattern, used before any are learned" flush>
+	<Card title="Device profiles" info="How fast the planner assumes a device streams weights and computes" flush>
+		{#snippet tools()}
+			<NeoButton class="primary" elevation={2} onclick={() => edit()}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Profile</NeoButton>
+		{/snippet}
 		{#if !loaded}
 			<Skeleton rows={4} dot={false} secondary="12ch" facts={2} action={false} />
 		{:else if profiles.length === 0}
-			<Empty icon={GaugeIcon} text="No device profiles" hint="A profile declares a device's streaming and compute rates for the planner" action="New profile" onclick={() => edit()} />
+			<Empty icon={GaugeIcon} text="No device profiles" action="Profile" onclick={() => edit()} />
 		{:else}
 			<List head={{ primary: 'Pattern', secondary: 'Stream', facts: ['Compute', 'Fixed'] }}>
 				{#each profiles as p (p.pattern)}
@@ -130,7 +136,7 @@
 		{/if}
 	</Card>
 	{#if loaded && ratios.length}
-		<Card title="Ratios" count={ratios.length} info="Measured over planned speed of earlier formations, by shape, runtime and link class" flush>
+		<Card title="Ratios" info="Speed ratios learned from formations that ran, by shape, runtime and link" flush>
 			<List head={{ primary: 'Shape', secondary: 'Runtime', facts: ['TTFT and TPT', 'Samples'] }}>
 				{#each ratios as r, i (i)}
 					<ListRow
@@ -140,7 +146,7 @@
 						secondaryWidth="16ch"
 						facts={[{ value: `${r.ttftRatio.toFixed(2)} · ${r.tptRatio.toFixed(2)}`, tip: 'TTFT ratio · TPT ratio' }, { value: num(r.samples) }]}
 					>
-						{#snippet badges()}<StatePill label={linkLabel(r.linkClass)} lamp={linkLamp(r.linkClass)} />{/snippet}
+						{#snippet badges()}{#if r.linkClass}<StatePill label={linkLabel(r.linkClass)} lamp={linkLamp(r.linkClass)} />{/if}{/snippet}
 					</ListRow>
 				{/each}
 			</List>
@@ -148,17 +154,17 @@
 	{/if}
 {/snippet}
 
-<Sheet bind:open={editorOpen} {list}>
+<Sheet bind:open={editorOpen} {head} {list}>
 	<PanelHeader title={editing ?? 'New device profile'} onclose={() => (editorOpen = false)} />
-	<FormSection title="Device profile" info="Declared numbers for devices whose name matches the pattern, used before any are learned">
+	<FormSection info="Stream paces decode, compute paces prefill, the fixed time lands on every forward pass">
 		<FieldRow>
 			<Text bind:value={pattern} label="Pattern" max={64} required readonly={editing !== undefined} />
-			<NumberField bind:value={fixedSeconds} min={0} step={0.001} label="Fixed" unit="s" placeholder="None" emptyZero info="Cost of one forward pass beyond streaming and compute" />
+			<NumberField bind:value={fixedSeconds} min={0} step={0.001} label="Fixed per pass" unit="s" emptyZero />
 		</FieldRow>
 		<FieldRow>
-			<NumberField bind:value={streamGb} min={0} step={10} label="Stream" unit="GB/s" placeholder="Required" emptyZero info="Weight streaming rate during decode" />
-			<NumberField bind:value={tflops} min={0} step={10} label="Compute" unit="TFLOPS" placeholder="Required" emptyZero info="Floating point rate during prefill" />
+			<NumberField bind:value={streamGb} min={0} step={10} label="Stream" unit="GB/s" emptyZero />
+			<NumberField bind:value={tflops} min={0} step={10} label="Compute" unit="TFLOPS" emptyZero />
 		</FieldRow>
 	</FormSection>
-	<SaveBar always={editing === undefined} {dirty} {saving} error={saveError} message={missing.length ? `Needs ${missing.join(', ')}` : undefined} disabled={missing.length > 0} label={editing === undefined ? 'Create' : 'Save'} onsave={save} ondiscard={() => (editorOpen = false)} />
+	<SaveBar always={editing === undefined} {dirty} {saving} error={saveError} disabled={!complete} label={editing === undefined ? 'Create' : 'Save'} onsave={save} ondiscard={() => (editorOpen = false)} />
 </Sheet>

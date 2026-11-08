@@ -7,7 +7,7 @@
 
 	export type MarkState = 'ok' | 'failed' | 'skipped' | 'active';
 
-	// A result mark, check for ok, cross for failed, prohibit for skipped, hourglass while active
+	// A result mark by state
 	let { state, label, tip }: { state: MarkState; label: string; tip?: string } = $props();
 </script>
 

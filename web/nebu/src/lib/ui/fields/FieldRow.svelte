@@ -5,7 +5,7 @@
 	let { children }: { children: Snippet } = $props();
 
 	let width = $state(0);
-	// One field per row on mobile and inside any container too narrow for two
+	// Two fields per row where the container allows, else one
 	const single = $derived(viewport.mobile || (width > 0 && width < 480));
 </script>
 

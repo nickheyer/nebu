@@ -45,13 +45,15 @@ type slotNode struct {
 // A host with one GPU holding plenty of memory, so every plan fits beside another
 type gpuProbe struct{}
 
-func (gpuProbe) ID() string               { return "gpu" }
-func (gpuProbe) Description() string      { return "one roomy GPU beside an iGPU sharing host memory" }
+func (gpuProbe) ID() string { return "gpu" }
+func (gpuProbe) Description() string {
+	return "one roomy GPU beside two GPUs without memory of their own, which the profile drops"
+}
 func (gpuProbe) Runs(string, string) bool { return true }
 func (gpuProbe) Run(context.Context) host.Result {
 	return host.Result{
 		Status:  v1.ProbeStatus_PROBE_STATUS_OK,
-		Devices: []*v1.Device{{Id: "gpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Name: "fake gpu"}, {Id: "igpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "shared igpu", Facts: map[string]string{"memory": "shared"}}, {Id: "cpu0", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Name: "cpu"}},
+		Devices: []*v1.Device{{Id: "gpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Name: "fake gpu"}, {Id: "igpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "shared igpu"}, {Id: "blind0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "other", Name: "unread gpu"}, {Id: "cpu0", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Name: "cpu"}},
 		Pools: []*v1.MemoryPool{
 			{Id: "gpu0", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "gpu0", TotalBytes: 80 << 30, FreeBytes: 80 << 30},
 			{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 64 << 30, FreeBytes: 64 << 30},

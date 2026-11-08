@@ -2,30 +2,24 @@
 	import type { HTMLInputAttributes } from 'svelte/elements';
 	import { NeoPassword } from '#lib/neo/inputs/index.js';
 	import { NeoPill } from '#lib/neo/pill/index.js';
-	import InfoTip from '#lib/ui/InfoTip.svelte';
 
 	let {
 		value = $bindable(''),
 		label,
-		info,
-		placeholder,
-		// Whether a secret is stored already, the field then showing the redaction marker until typed into
+		// Whether a secret is stored already
 		set = false,
 		disabled = false,
 		required = false,
 		autocomplete = 'off',
 		message,
 		error
-	}: { value?: string; label?: string; info?: string; placeholder?: string; set?: boolean; disabled?: boolean; required?: boolean; autocomplete?: HTMLInputAttributes['autocomplete']; message?: string; error?: string } = $props();
+	}: { value?: string; label?: string; set?: boolean; disabled?: boolean; required?: boolean; autocomplete?: HTMLInputAttributes['autocomplete']; message?: string; error?: string } = $props();
 </script>
 
 <div class="field">
-	<NeoPassword bind:value {label} placeholder={set && !value ? '••••••••' : (placeholder ?? '')} {disabled} {required} elevation={-1} buttonProps={{ text: true }} placement={label ? 'top' : 'inside'} floating={false} width="100%" message={error ?? message} {error} {autocomplete} />
-	{#if (set && !value) || info}
-		<span class="trail">
-			{#if set && !value}<NeoPill size="small" text tinted label="set" />{/if}
-			{#if info}<InfoTip text={info} />{/if}
-		</span>
+	<NeoPassword bind:value {label} placeholder={set && !value ? '••••••••' : ''} {disabled} {required} elevation={-1} buttonProps={{ text: true }} placement={label ? 'top' : 'inside'} floating={false} width="100%" message={error ?? message} {error} {autocomplete} aria-label={label} />
+	{#if set && !value}
+		<span class="trail"><NeoPill size="small" text tinted label="set" /></span>
 	{/if}
 </div>
 

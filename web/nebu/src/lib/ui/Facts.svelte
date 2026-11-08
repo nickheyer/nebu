@@ -14,15 +14,13 @@
 		facts?: Fact[];
 		tip?: string;
 		lamp?: Lamp;
-		// Addresses, versions and paths in the mono face
 		mono?: boolean;
-		// A small instrument beside the value, a sparkline, a row of lamps, or a meter filled to a fraction
 		spark?: number[];
 		dots?: Lamp[];
 		fraction?: number;
 	};
 
-	// Live facts sharing a row equally inside a card, each a label over a value with a tooltip
+	// Live readings sharing a row, each a label over a value with a tooltip
 	let { items, size = 'page', after }: { items: FactItem[]; size?: 'page' | 'section'; after?: Snippet } = $props();
 </script>
 
@@ -53,7 +51,6 @@
 </div>
 
 <style>
-	/* A page's vital signs inside a card, label over value, the cells sharing the row between hairlines */
 	.facts {
 		display: flex;
 		flex: 1 1 100%;
@@ -107,24 +104,25 @@
 	.label {
 		grid-column: 1 / -1;
 		font-size: var(--nebu-text-secondary);
-		font-weight: 500;
 		color: var(--nebu-text-muted);
 		white-space: nowrap;
 	}
 	.value {
 		min-width: 0;
 		overflow: hidden;
-		font-size: 18px;
-		font-weight: 600;
+		font-size: 22px;
+		font-weight: 300;
 		font-variant-numeric: tabular-nums;
-		line-height: 1.35;
+		line-height: 1.3;
+		letter-spacing: -0.01em;
 		white-space: nowrap;
 		text-overflow: ellipsis;
+		animation: nebu-reveal 300ms var(--nebu-settle) both;
 	}
 	.value.mono {
 		font-family: var(--nebu-font-mono);
 		font-size: var(--nebu-text-body);
-		font-weight: 500;
+		font-weight: 300;
 	}
 	.after {
 		display: flex;

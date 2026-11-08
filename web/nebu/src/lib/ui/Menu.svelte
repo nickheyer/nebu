@@ -11,9 +11,7 @@
 		href?: string;
 		disabled?: boolean;
 		danger?: boolean;
-		// A question the item asks before it runs, on a confirm anchored to the menu button
 		confirm?: string;
-		// Fields the confirm shows under its question, such as a switch the action reads
 		confirmBody?: Snippet;
 		divider?: boolean;
 		description?: string;

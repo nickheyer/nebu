@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { enumLabel, num } from '#lib/format.js';
+	import { enumLabel, plural } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { ModelKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
@@ -27,7 +27,6 @@
 	let loaded = $state(false);
 	let error = $state('');
 	let listWidth = $state(0);
-	// Beside an open runtime the rows keep the lamp and name alone, the panel holding the rest
 	const slim = $derived(id !== '' && listWidth > 0 && listWidth < compactBelow);
 
 	async function load() {
@@ -56,24 +55,23 @@
 		for (const i of live.installs.values()) by.set(i.runtimeId, (by.get(i.runtimeId) ?? 0) + 1);
 		return by;
 	});
-	const installedCount = $derived(runtimes.filter((r) => (installsBy.get(r.runtime?.id ?? '') ?? 0) > 0).length);
 
 	function installs(r: RuntimeStatus): number {
 		return installsBy.get(r.runtime?.id ?? '') ?? 0;
 	}
 
-	// Installed, not installed, or what keeps the host from running it
+	// The install count, or what keeps the host from running it
 	function status(r: RuntimeStatus): string {
-		if (!r.compatible) return r.unmet[0] ?? 'Incompatible';
-		return installs(r) > 0 ? 'Installed' : 'Not installed';
+		if (!r.compatible) return r.unmet[0] ?? 'incompatible';
+		const n = installs(r);
+		return n > 0 ? plural(n, 'install') : 'no install';
 	}
 
 	function about(r: RuntimeStatus): string {
 		const rt = r.runtime;
-		return [rt?.description ?? '', `formats ${rt?.formats.join(', ') || 'none'}`, `api ${enumLabel(ApiFlavorSchema, rt?.api ?? 0)}`, `model kind ${enumLabel(ModelKindSchema, rt?.kind ?? 0)}`].filter(Boolean).join('\n');
+		return [rt?.description ?? '', rt?.formats.length ? `formats ${rt.formats.join(', ')}` : '', `api ${enumLabel(ApiFlavorSchema, rt?.api ?? 0)}`, `model kind ${enumLabel(ModelKindSchema, rt?.kind ?? 0)}`].filter(Boolean).join('\n');
 	}
 
-	// The panel route, the installs tab being the bare runtime path
 	function href(runtimeId: string, t: string): string {
 		return `/runtimes/${encodeURIComponent(runtimeId)}${t === 'installs' ? '' : `/${t}`}`;
 	}
@@ -95,9 +93,9 @@
 			{:else if error && runtimes.length === 0}
 				<Empty text="Runtimes failed to list" hint={error} action="Retry" onclick={() => void load()} />
 			{:else if sorted.length === 0}
-				<Empty icon={EngineIcon} text="No runtimes" hint="The daemon lists the runtimes it knows how to install here" />
+				<Empty icon={EngineIcon} text="No runtimes" />
 			{:else}
-				<List head={{ primary: 'Runtime', secondary: 'Status', facts: ['Installs'] }}>
+				<List head={{ primary: 'Runtime', secondary: 'Installs' }}>
 					{#each sorted as r (r.runtime?.id)}
 						{@const n = installs(r)}
 						<ListRow
@@ -109,7 +107,6 @@
 							secondaryKind="message"
 							secondaryWidth="28ch"
 							secondaryTip={r.compatible ? undefined : r.unmet.join('\n')}
-							facts={slim ? [] : [{ value: n > 0 ? num(n) : '' }]}
 							selected={r.runtime?.id === id}
 							onclick={() => open(r)}
 						>
@@ -124,11 +121,7 @@
 	</div>
 {/snippet}
 
-<PageHeader tabs={serveTabs} active="runtimes">
-	{#snippet meta()}
-		{#if loaded && runtimes.length}<span>{num(installedCount)} of {num(runtimes.length)} installed</span>{/if}
-	{/snippet}
-</PageHeader>
+<PageHeader tabs={serveTabs} active="runtimes" info="Engines this host can run models with, each holding its installs, builds and parameter defaults" />
 
 <Sheet open={id !== ''} onclose={() => goto('/runtimes')} {list}>
 	{#if selected}

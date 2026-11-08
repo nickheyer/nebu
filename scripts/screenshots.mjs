@@ -1,7 +1,7 @@
 // Drives a headless Chromium over CDP to screenshot every scene at the three spec widths in both themes and report the fonts in use
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,8 @@ const user = process.env.NEBU_USER ?? '';
 const pass = process.env.NEBU_PASS ?? '';
 const prefix = 'screenshots-';
 const sizes = { mobile: [390, 844], standard: [1440, 900], ultrawide: [1920, 1080], wqhd: [2560, 1440] };
+for (const w of widths) if (!(w in sizes)) throw new Error(`no width "${w}", widths are ${Object.keys(sizes).join(', ')}`);
+for (const t of themes) if (t !== 'light' && t !== 'dark') throw new Error(`no theme "${t}", themes are light, dark`);
 
 // Every page and its open panel, drawer, dialog or wizard, reached by route, by pressing the named control, or by clicking the first element a selector finds
 const allScenes = [
@@ -34,10 +36,10 @@ const allScenes = [
     { id: 'runtimes-panel', path: '/runtimes/llamacpp' },
     { id: 'runtimes-install', path: '/runtimes/llamacpp/install' },
     { id: 'runtimes-builds', path: '/runtimes/llamacpp/builds' },
-    { id: 'runtimes-params', path: '/runtimes/llamacpp/params' },
+    { id: 'runtimes-defaults', path: '/runtimes/llamacpp/defaults' },
     { id: 'serve', path: '/serve' },
     { id: 'serve-launch', path: '/serve/launch' },
-    { id: 'serve-slot', path: '/serve', press: 'New slot' },
+    { id: 'serve-slot', path: '/serve', press: 'Slot' },
     { id: 'serve-slot-edit', path: '/serve', click: 'main .listrow.clickable' },
     { id: 'gateway', path: '/gateway' },
     { id: 'gateway-route', path: '/gateway/routes/new' },
@@ -59,7 +61,7 @@ const allScenes = [
     { id: 'mesh-create', path: '/mesh', press: 'Create a mesh' },
     { id: 'mesh-join', path: '/mesh', press: 'Join with a token' },
     { id: 'bots', path: '/bots' },
-    { id: 'bots-new', path: '/bots', press: 'New bot' },
+    { id: 'bots-new', path: '/bots', press: 'Bot' },
     { id: 'bots-page', path: '/bots', click: 'main .listrow.clickable' },
     { id: 'tasks', path: '/tasks' },
     { id: 'tasks-panel', path: '/tasks', click: 'main .listrow.clickable' },
@@ -87,7 +89,20 @@ mkdirSync(out, { recursive: true });
 const port = 9333 + Math.floor(Math.random() * 500);
 const profile = mkdtempSync(join(tmpdir(), 'nebu-shot-'));
 const chrome = spawn('/usr/bin/chromium', [`--remote-debugging-port=${port}`, '--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars', `--user-data-dir=${profile}`, '--no-first-run', 'about:blank'], { stdio: 'ignore' });
-process.on('exit', () => chrome.kill());
+
+// Stops the browser and removes its profile directory, forcing both when it has not left within two seconds
+async function closeChrome() {
+    if (chrome.exitCode === null && chrome.signalCode === null) {
+        chrome.kill();
+        await Promise.race([new Promise((resolve) => chrome.once('exit', resolve)), new Promise((resolve) => setTimeout(resolve, 2000))]);
+        if (chrome.exitCode === null && chrome.signalCode === null) chrome.kill('SIGKILL');
+    }
+    rmSync(profile, { recursive: true, force: true });
+}
+process.on('exit', () => {
+    chrome.kill('SIGKILL');
+    rmSync(profile, { recursive: true, force: true });
+});
 
 // Waits until the dev server answers and proxies the daemon session endpoint
 async function ready() {
@@ -334,7 +349,7 @@ async function main() {
 
 // The first signal removes the account and exits, repeats wait on the same removal
 let stopping;
-for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => (stopping ??= removeAccount().catch((err) => console.error(err)).finally(() => process.exit(1))));
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => (stopping ??= removeAccount().catch((err) => console.error(err)).then(closeChrome).finally(() => process.exit(1))));
 try {
     await main();
 } catch (err) {
@@ -343,4 +358,4 @@ try {
 }
 await removeAccount();
 ws.close();
-chrome.kill();
+await closeChrome();

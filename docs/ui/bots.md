@@ -7,8 +7,7 @@ Route: `/bots`, `/bots/<id>/<tab>`
 ## Default view
 
 ```
- [+ New bot]
-
+ Bots                                              [+ Bot]
  ◉  Nebby     ●  ready      12 guilds     [Stop]   [Open]
  ◉  Muse      ○  stopped                  [Start]  [Open]
 ```
@@ -19,7 +18,7 @@ Rows: avatar, name (24ch), state dot, guild count, Start or Stop, Open. Tooltip:
 
 ## Bot page
 
-Tabs: Status, Personas, Automations, Behaviour, Activity, Send. Settings tabs edit a copy of the spec, a save bar appears when dirty, Save says the bot restarts when running. Danger under Status: change token, Delete by name.
+Tabs: Status, Personas, Automations, Behaviour, Activity, Send. Settings tabs edit a copy of the spec, a save bar appears when dirty, Save says the bot restarts when running. Start, Stop and the menu with Change token and Delete by name sit in the Details card on Status. Persona and Automation buttons sit in their list cards.
 
 **Status.** Rows: username, invite link with copy, started, guilds, counters. Shards rows: id, connected dot, guilds, latency. Tooltip: connected at, error.
 
@@ -40,22 +39,22 @@ Tabs: Status, Personas, Automations, Behaviour, Activity, Send. Settings tabs ed
 | name | Text | 64 |
 | token | Secret | |
 | enabled | Switch | |
-| shard_count | Number | 0 recommended |
+| shard_count | Number | the recommended count as placeholder |
 | shard_ids | Chips | numbers |
 | presence status | Segmented | online, idle, dnd, invisible |
 | activity_type | Select | playing, listening, watching, competing, custom |
 | activities | Chips | |
-| rotate_seconds | Duration | 0 is five minutes |
+| rotate_seconds | Duration | 300 s as placeholder |
 | avatar_url | Text | url, preview |
 | webhook | Switch | |
 | system_prompt | Textarea | |
-| model, image_model, video_model | Picker | `ListRoutes` by modality, empty is the sole ready one |
+| model, image_model, video_model | Picker | `ListRoutes` by modality, empty takes the first ready route of the kind |
 | temperature | Slider | 0 to 2 |
 | top_p | Slider | 0 to 1 |
 | top_k | Number | |
 | max_tokens | Number | |
 | stop | Chips | |
-| seed | Number | |
+| seed | Number | a shuffle mark while unset |
 | humanize enabled | Switch | shows the rest |
 | chars_per_second | Slider | 1 to 100 |
 | delay_min_ms, delay_max_ms, max_typing_ms | Duration | |
@@ -73,7 +72,7 @@ Tabs: Status, Personas, Automations, Behaviour, Activity, Send. Settings tabs ed
 | image_style, negative_prompt | Textarea | |
 | tool_servers | Checklist | `ListToolServers` |
 | mutating_tools | Switch | |
-| max_bot_chain, max_concurrent | Number | 0 default shown as placeholder |
+| max_bot_chain, max_concurrent | Number | 3 and 4 as placeholders |
 | prefix | Text | 1 |
 | cooldown_ms, user_cooldown_ms | Duration | |
 | commands enabled | Switch | |
@@ -95,12 +94,12 @@ Tabs: Status, Personas, Automations, Behaviour, Activity, Send. Settings tabs ed
 | pattern | Text | regex or emoji by kind |
 | command | Text | 32 |
 | action kind | Select | six kinds |
-| template | Textarea | variables listed in `(i)` |
+| template | Textarea | variables in the section's `(i)` |
 | emoji | Text | 8 |
 | reply | Switch | |
 | action model | Picker | `ListRoutes` |
 | persona | Select | the bot's personas |
-| chance | Percent | 0 always |
+| chance | Percent | 0 fires every time |
 | cooldown_ms | Duration | |
 
 ## Widths

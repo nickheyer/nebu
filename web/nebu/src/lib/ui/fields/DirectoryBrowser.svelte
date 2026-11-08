@@ -86,20 +86,20 @@
 				Up
 			</NeoButton>
 		</div>
-		<Text bind:value={typed} mono placeholder="Path" onchange={(v) => go(v)} />
+		<Text bind:value={typed} mono label="Path" onchange={(v) => go(v)} />
 		{#if error}<p class="error-text secondary">{error}</p>{/if}
 		<div class="list" aria-busy={loading}>
 			{#each shown as e (e.name)}
 				<ListRow primary={e.name} primaryKind="path" facts={e.dir ? [] : [{ value: bytes(e.sizeBytes) }]} leading={e.dir ? folder : file} onclick={() => pick(e)} />
 			{/each}
 			{#if shown.length === 0 && !loading}
-				<p class="secondary pad">Nothing here</p>
+				<p class="secondary pad">Empty</p>
 			{/if}
 		</div>
 		<div class="actions">
 			<NeoButton text onclick={() => (open = false)}>Cancel</NeoButton>
 			{#if filter === 'directories' || filter === 'any'}
-				<NeoButton class="primary" elevation={2} onclick={() => choose(path)}>Choose this directory</NeoButton>
+				<NeoButton class="primary" elevation={2} onclick={() => choose(path)}>Choose</NeoButton>
 			{/if}
 		</div>
 	</div>

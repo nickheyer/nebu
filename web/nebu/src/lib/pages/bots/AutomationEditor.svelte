@@ -19,20 +19,19 @@
 
 	const trigger = $derived(automation.trigger!);
 	const action = $derived(automation.action!);
-	// Actions that generate through a model and so take a route
+	// Actions that generate through a model
 	const generates = $derived(action.kind === ActionKind.CHAT || action.kind === ActionKind.IMAGE || action.kind === ActionKind.VIDEO);
 	const routes = routeFetch();
-	const templateInfo = `Go template over ${templateVariables}`;
 </script>
 
 {#snippet triggerAdvanced()}
-	<Percent value={automation.chance * 100} label="Chance" info="0 is always" onchange={(n: number) => (automation.chance = n / 100)} />
+	<Percent value={automation.chance * 100} label="Chance" onchange={(n: number) => (automation.chance = n / 100)} />
 {/snippet}
 
 {#snippet actionAdvanced()}
 	<FieldRow>
-		<Picker bind:value={() => action.model || undefined, (v) => (action.model = v ?? '')} fetch={routes} label="Model" placeholder="The persona's" clearable current={action.model || undefined} />
-		<Switch bind:checked={action.reply} label="Reply" info="Replies to the triggering message" />
+		<Picker bind:value={() => action.model || undefined, (v) => (action.model = v ?? '')} fetch={routes} label="Model" clearable current={action.model || undefined} />
+		<Switch bind:checked={action.reply} label="Reply" />
 	</FieldRow>
 {/snippet}
 
@@ -41,7 +40,7 @@
 {/snippet}
 
 <Stack gap={24}>
-	<FormSection title="Trigger" advanced={triggerAdvanced}>
+	<FormSection title="Trigger" info="A chance above zero fires the automation on only that share of matches" advanced={triggerAdvanced}>
 		<FieldRow>
 			<Text bind:value={automation.name} label="Name" max={64} required />
 			<Switch bind:checked={automation.enabled} label="Enabled" />
@@ -51,35 +50,35 @@
 			{#if trigger.kind === TriggerKind.SCHEDULE}
 				<Cron bind:value={trigger.cron} />
 			{:else if trigger.kind === TriggerKind.KEYWORD}
-				<Text bind:value={trigger.pattern} label="Pattern" info="Regular expression" mono max={256} />
+				<Text bind:value={trigger.pattern} label="Pattern" placeholder="Regex" mono max={256} />
 			{:else if trigger.kind === TriggerKind.REACTION}
 				<Text bind:value={trigger.pattern} label="Emoji" max={8} />
 			{:else if trigger.kind === TriggerKind.COMMAND}
-				<Text bind:value={trigger.command} label="Command" info="Word after the prefix" max={32} />
+				<Text bind:value={trigger.command} label="Command" max={32} />
 			{/if}
 		</FieldRow>
 		{#if trigger.kind === TriggerKind.SCHEDULE}
-			<Duration bind:value={trigger.everySeconds} base="s" max={2_592_000} label="Every" info="Interval without a cron" />
+			<Duration bind:value={trigger.everySeconds} base="s" max={2_592_000} label="Every" emptyZero />
 		{/if}
 	</FormSection>
-	<FormSection title="Action" advanced={generates ? actionAdvanced : undefined}>
+	<FormSection title="Action" info="Templates may use {templateVariables}" advanced={generates ? actionAdvanced : undefined}>
 		<FieldRow>
 			<Select bind:value={action.kind} options={actionKinds} label="Kind" />
 			{#if action.kind === ActionKind.REACT}
 				<Text bind:value={action.emoji} label="Emoji" max={8} />
 			{:else if action.kind === ActionKind.TEXT}
-				<Switch bind:checked={action.reply} label="Reply" info="Replies to the triggering message" />
+				<Switch bind:checked={action.reply} label="Reply" />
 			{/if}
 		</FieldRow>
 		{#if action.kind !== ActionKind.REACT}
-			<Textarea bind:value={action.template} label={generates ? 'Prompt template' : 'Template'} info={templateInfo} rows={3} mono />
+			<Textarea bind:value={action.template} label={generates ? 'Prompt template' : 'Template'} rows={3} mono />
 		{/if}
 	</FormSection>
 	<FormSection title="Scope" advanced={scopeAdvanced}>
-		<Select bind:value={() => automation.personaId || undefined, (v) => (automation.personaId = v ?? '')} options={personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" clearable placeholder="First persona" />
+		<Select bind:value={() => automation.personaId || undefined, (v) => (automation.personaId = v ?? '')} options={personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" clearable placeholder={personas[0]?.name} />
 		<FieldRow>
-			<Checklist bind:value={automation.guildIds} options={guildOptions(guilds)} label="Guilds" info="Empty is every guild" empty="Start the bot to list guilds" />
-			<ChannelTree bind:value={automation.channelIds} {guilds} label="Channels" info="Empty is every allowed channel" />
+			<Checklist bind:value={automation.guildIds} options={guildOptions(guilds)} label="Guilds" empty={guilds.length ? undefined : 'Not connected'} />
+			<ChannelTree bind:value={automation.channelIds} {guilds} label="Channels" />
 		</FieldRow>
 	</FormSection>
 </Stack>

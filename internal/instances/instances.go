@@ -146,7 +146,9 @@ type Manager struct {
 	Formations Formations
 	// Set by the daemon, called as each runtime exits so the host is probed again
 	Probe func()
-	Log   *slog.Logger
+	// Parameter values a runtime's launches start from, under the slot's and the request's own, nil when the daemon keeps none
+	Defaults func(runtimeID string) map[string]string
+	Log      *slog.Logger
 
 	mu   sync.Mutex
 	list []*instance
@@ -154,6 +156,14 @@ type Manager struct {
 	closing bool
 	// Port reservation books by host
 	books map[string]*proc.Reservations
+}
+
+// The parameter values the daemon keeps for a runtime, none without a source of them
+func (m *Manager) defaults(runtimeID string) map[string]string {
+	if m.Defaults == nil {
+		return nil
+	}
+	return m.Defaults(runtimeID)
 }
 
 // Resolved launch inputs
@@ -418,8 +428,8 @@ func (m *Manager) prepareInputs(ctx context.Context, req *v1.RunRequest, self st
 	if err != nil {
 		return nil, err
 	}
-	// Request params override slot defaults, and stored groups named by path params resolve to their files
-	layered, err := runtimes.ResolveStore(rt, runtimes.Merge(slotParams, req.GetParams()), append(append([]*v1.StoredModel{}, companions...), stored))
+	// Request params override slot params over the runtime's defaults, and stored groups named by path params resolve to their files
+	layered, err := runtimes.ResolveStore(rt, runtimes.Merge(m.defaults(rt.ID()), slotParams, req.GetParams()), append(append([]*v1.StoredModel{}, companions...), stored))
 	if err != nil {
 		return nil, err
 	}

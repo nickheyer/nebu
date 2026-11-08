@@ -2,10 +2,9 @@
 	import type { Snippet } from 'svelte';
 	import InfoTip from '#lib/ui/InfoTip.svelte';
 
-	// A raised surface for one block of a page, a title row over a body tables fill edge to edge
+	// A raised block of a page with a title row, quiet tools, a body and an optional footer
 	let {
 		title,
-		count,
 		info,
 		tools,
 		children,
@@ -15,16 +14,11 @@
 		pad = 'normal'
 	}: {
 		title?: string;
-		count?: number | string;
 		info?: string;
-		// Quiet controls for the block, filters, a sort, one secondary button
 		tools?: Snippet;
 		children: Snippet;
-		// A row pinned under the body, a form's commit row
 		footer?: Snippet;
-		// Whether the body runs edge to edge, for lists and screens
 		flush?: boolean;
-		// Whether the card stretches to the height its column leaves
 		grow?: boolean;
 		pad?: 'normal' | 'roomy';
 	} = $props();
@@ -36,7 +30,6 @@
 			{#if title !== undefined}
 				<div class="heading">
 					<h2 class="title">{title}</h2>
-					{#if count !== undefined}<span class="count">{count}</span>{/if}
 					{#if info}<InfoTip text={info} />{/if}
 				</div>
 			{/if}
@@ -59,7 +52,9 @@
 		min-width: 0;
 		background: var(--neo-background-color);
 		border-radius: var(--neo-border-radius-md);
-		box-shadow: var(--neo-box-shadow-raised-2);
+		box-shadow: var(--neo-box-shadow-raised-2), var(--nebu-machined);
+		animation: nebu-reveal 320ms var(--nebu-settle) both;
+		animation-delay: calc(var(--nebu-settle-step, 0ms) + var(--nebu-settle-shift, 0ms) + var(--nebu-settle-rank, 0ms));
 	}
 	.card.roomy {
 		--nebu-card-pad: var(--nebu-space-6);
@@ -67,7 +62,6 @@
 	.card.grow {
 		flex: 1 1 auto;
 	}
-	/* The tools drop under the title when the two no longer share the width */
 	.head {
 		display: flex;
 		flex-wrap: wrap;
@@ -77,7 +71,7 @@
 		min-height: 56px;
 		padding: var(--nebu-space-3) var(--nebu-card-pad);
 	}
-	/* A card without a title gives its whole head to the tools, a search bar running the full width */
+	/* A card without a title gives its whole head to the tools */
 	.head.bare > .tools {
 		flex: 1 1 auto;
 		justify-content: flex-start;
@@ -86,19 +80,13 @@
 		display: flex;
 		flex: 0 1 auto;
 		gap: var(--nebu-space-2);
-		align-items: baseline;
+		align-items: center;
 		min-width: 0;
 	}
 	.title {
 		font-size: var(--nebu-text-heading);
 		white-space: nowrap;
 	}
-	.count {
-		font-size: var(--nebu-text-secondary);
-		font-variant-numeric: tabular-nums;
-		color: var(--nebu-text-muted);
-	}
-	/* Filters and sorts in a card's title row run at control height, not form field height */
 	.tools {
 		--neo-input-padding: 0.375rem 0.75rem;
 

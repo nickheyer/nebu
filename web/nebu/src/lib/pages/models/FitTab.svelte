@@ -27,7 +27,7 @@
 		error,
 		runtimes,
 		free,
-		launchLabel = 'Launch here',
+		launchLabel = 'Launch',
 		onlaunch
 	}: {
 		group: string;
@@ -135,7 +135,7 @@
 {:else if !result}
 	<Skeleton rows={3} primary="16ch" secondary={false} facts={0} action={false} menu={false} />
 {:else if byRuntime.length === 0 && blocked.length === 0}
-	<Empty icon={ScalesIcon} text="No compatible runtime" hint="Install a runtime that reads this format to see what fits" action="Runtimes" href="/runtimes" />
+	<Empty icon={ScalesIcon} text="No compatible runtime" action="Runtimes" href="/runtimes" />
 {:else}
 	<List head={{ primary: 'Runtime', instrument: 'Context' }}>
 		{#each byRuntime as rt (rt.id)}

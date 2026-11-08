@@ -42,7 +42,7 @@
 	});
 
 	const t = $derived(trace);
-	// Started, first byte, first token and finished with the time each took after the one before
+	// Each milestone with the time it took after the one before
 	const strip = $derived.by((): FactItem[] => {
 		if (!t) return [];
 		const s = started(t);
@@ -61,7 +61,7 @@
 	<PanelHeader title={t.route || kindWord(t.kind)} subtitle={when(t.startedAt)} {onclose}>
 		<StatePill label={t.status ? String(t.status) : 'in flight'} lamp={t.status ? statusClassLamp(t.status) : 'warning'} />
 	</PanelHeader>
-	<PageTabs tabs={[{ id: 'summary', label: 'Summary' }, { id: 'routing', label: 'Routing' }, { id: 'tools', label: 'Tools', count: t.toolCalls.length }, { id: 'bodies', label: 'Bodies' }]} active={tab} onchange={(x) => (tab = x)} />
+	<PageTabs tabs={[{ id: 'summary', label: 'Summary' }, { id: 'routing', label: 'Routing' }, { id: 'tools', label: 'Tools' }, { id: 'bodies', label: 'Bodies' }]} active={tab} onchange={(x) => (tab = x)} />
 	<div class="body">
 		{#if tab === 'summary'}
 			<Stack gap={16}>
@@ -101,16 +101,16 @@
 					<KeyRows rows={[{ label: 'profile', value: t.profile }, { label: 'score', value: t.score ? t.score.toFixed(3) : '' }]} />
 				{/if}
 				{#if t.filters.length}
-					<Section title="Filters" count={t.filters.length} level={3}>
+					<Section title="Filters" level={3}>
 						<List head={{ primary: 'Filter', facts: ['Dropped'] }}>
 							{#each t.filters as f (f.name)}
-								<ListRow primary={f.name} primaryTip={f.dropped.join('\n') || 'nothing dropped'} facts={[{ value: num(f.dropped.length) }]} />
+								<ListRow primary={f.name} primaryTip={f.dropped.join('\n') || undefined} facts={[{ value: num(f.dropped.length) }]} />
 							{/each}
 						</List>
 					</Section>
 				{/if}
 				{#if t.candidates.length}
-					<Section title="Candidates" count={t.candidates.length} level={3}>
+					<Section title="Candidates" level={3}>
 						<List head={{ primary: 'Endpoint', facts: ['Score'] }}>
 							{#each t.candidates as c (c.endpoint)}
 								<ListRow primary={c.endpoint} primaryKind="address" primaryTip={Object.entries(c.byScorer).map(([k, v]) => `${k} ${v.toFixed(3)}`).join('\n')} facts={[{ value: c.score.toFixed(3) }]} />
@@ -119,7 +119,7 @@
 					</Section>
 				{/if}
 				{#if t.fallbacks.length}
-					<Section title="Fallbacks" count={t.fallbacks.length} level={3}>
+					<Section title="Fallbacks" level={3}>
 						<List head={{ primary: 'Address', secondary: 'Reason' }}>
 							{#each t.fallbacks as f, i (i)}
 								<ListRow primary={f.address} primaryKind="address" secondary={f.reason} secondaryKind="message">
@@ -130,12 +130,12 @@
 					</Section>
 				{/if}
 				{#if !t.profile && !t.score && !t.filters.length && !t.candidates.length && !t.fallbacks.length}
-					<Empty text="No scheduling recorded" />
+					<Empty text="No scheduling" />
 				{/if}
 			</Stack>
 		{:else if tab === 'tools'}
 			{#if t.toolCalls.length === 0}
-				<Empty text="No tool calls" hint="Tools the gateway ran for this request show here with their arguments and results" />
+				<Empty text="No tool calls" />
 			{:else}
 				<List head={{ primary: 'Tool', secondary: 'Server', facts: ['Took'] }}>
 					{#each t.toolCalls as c (c.id)}

@@ -341,7 +341,7 @@ func mustFind(t *testing.T, m *Manager, id string) *instance {
 	return in
 }
 
-// A slot pin names a device this node holds with memory of its own, the run refused otherwise
+// A slot pin names a device the profile lists, the run refused for one dropped for want of memory
 func TestRunRefusesSlotDevicesWithoutMemory(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -352,18 +352,23 @@ func TestRunRefusesSlotDevicesWithoutMemory(t *testing.T) {
 		Devices: []*v1.Device{
 			{Id: "cpu0", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Name: "cpu"},
 			{Id: "gpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Name: "small gpu"},
-			{Id: "igpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "shared igpu", Facts: map[string]string{"memory": "shared"}},
+			{Id: "igpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "shared igpu"},
+			{Id: "blind0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "other", Name: "unread gpu"},
 		},
 		Pools: []*v1.MemoryPool{
 			{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 64 << 30, FreeBytes: 32 << 30},
 			{Id: "gpu0", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "gpu0", TotalBytes: 12 << 30, FreeBytes: 8 << 30},
 		},
 	}}}, nil, time.Minute)
-	res := &Reservation{SlotID: "s", Name: "main", DeviceIDs: []string{"igpu0"}}
+	res := &Reservation{SlotID: "s", Name: "main", DeviceIDs: []string{"blind0"}}
 	m.Slots = oneSlot{res}
 	run := &v1.RunRequest{SourceId: "src", Repo: "org/model", Group: "q4", RuntimeId: fake.RuntimeID, SlotId: "s"}
-	if _, _, err := m.Run(ctx, run); err == nil || !strings.Contains(err.Error(), `device "igpu0" (shared igpu) has no memory of its own, so a slot cannot pin it`) {
-		t.Fatalf("a slot pinned to the igpu: %v", err)
+	if _, _, err := m.Run(ctx, run); err == nil || !strings.Contains(err.Error(), `device "blind0" was not probed`) {
+		t.Fatalf("a slot pinned to a gpu the probes found no memory for: %v", err)
+	}
+	res.DeviceIDs = []string{"igpu0"}
+	if _, _, err := m.Run(ctx, run); err == nil || !strings.Contains(err.Error(), `device "igpu0" was not probed`) {
+		t.Fatalf("a slot pinned to a gpu on system memory: %v", err)
 	}
 	res.DeviceIDs = []string{"gpu9"}
 	if _, _, err := m.Run(ctx, run); err == nil || !strings.Contains(err.Error(), `device "gpu9" was not probed`) {

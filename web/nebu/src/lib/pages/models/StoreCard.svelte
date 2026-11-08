@@ -18,23 +18,23 @@
 	const disk = $derived(store ? live.host?.storage.find((s) => s.uses.includes('store')) : undefined);
 	const cap = $derived(limit > 0 ? Math.max(limit, used) : disk ? Number(disk.totalBytes) : 0);
 
-	// A count with its bytes, or None when the store holds nothing of the kind
+	// A count with its bytes, the count alone when the store holds nothing of the kind
 	function share(count: bigint, n: bigint): string {
-		return count > 0n ? `${num(count)} · ${bytes(n)}` : 'None';
+		return count > 0n ? `${num(count)} · ${bytes(n)}` : num(count);
 	}
 
 	const items = $derived.by((): FactItem[] => {
 		if (!store) return [];
 		return [
 			{ id: 'used', label: 'Used', value: limit > 0 ? `${bytes(used)} of ${bytes(limit)}` : bytes(used), lamp: over ? 'warning' : undefined, facts: [{ label: 'limit', value: limit > 0 ? bytes(limit) : 'none' }] },
-			{ id: 'models', label: 'Models', value: store.models > 0n ? num(store.models) : 'None' },
-			{ id: 'blobs', label: 'Blobs', value: share(store.blobs, store.blobBytes), tip: 'Stored files, Collect frees the ones no model references' },
-			{ id: 'partials', label: 'Partials', value: share(store.partials, store.partialBytes), tip: 'Downloads that stopped before they finished' },
-			{ id: 'caches', label: 'Caches', value: share(store.caches, store.cacheBytes), tip: 'Tensor caches formation stages keep on disk' },
+			{ id: 'models', label: 'Models', value: num(store.models) },
+			{ id: 'blobs', label: 'Blobs', value: share(store.blobs, store.blobBytes) },
+			{ id: 'partials', label: 'Partials', value: share(store.partials, store.partialBytes), tip: 'Unfinished downloads' },
+			{ id: 'caches', label: 'Caches', value: share(store.caches, store.cacheBytes), tip: 'Formation tensor caches' },
 			{
 				id: 'disk',
 				label: 'Disk free',
-				value: disk ? bytes(disk.freeBytes) : 'Unknown',
+				value: disk ? bytes(disk.freeBytes) : '—',
 				facts: [
 					{ label: 'path', value: store.path },
 					...(disk ? [{ label: 'mount', value: disk.path }, { label: 'size', value: bytes(disk.totalBytes) }] : [])
@@ -69,8 +69,8 @@
 
 <Card title="Store">
 	{#snippet tools()}
-		<Confirm label="Collect" question="Remove blobs no model references" onconfirm={collect}>
-			{#snippet body()}<Switch bind:checked={partials} label="Partial downloads too" />{/snippet}
+		<Confirm label="Collect" question="Collect unreferenced blobs?" onconfirm={collect}>
+			{#snippet body()}<Switch bind:checked={partials} label="Partials" />{/snippet}
 		</Confirm>
 	{/snippet}
 	{#if !store}

@@ -5,10 +5,10 @@
 	import type { ChatTurn } from '#lib/proto/nebu/v1/chat_pb.js';
 	import type { TraceToolCall } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import type { ChatSession, PendingCall } from '#lib/pages/chat/chat.svelte.js';
-	import InfoTip from '#lib/ui/InfoTip.svelte';
 	import KeyRows, { type KeyRow } from '#lib/ui/KeyRows.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import Markdown from '#lib/ui/Markdown.svelte';
+	import Pop from '#lib/ui/Pop.svelte';
 	import Screen from '#lib/ui/Screen.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
 	import Str from '#lib/ui/Str.svelte';
@@ -16,6 +16,7 @@
 	import Row from '#lib/ui/layout/Row.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import type { DotShape, Lamp } from '#lib/ui/status.js';
+	import GaugeIcon from 'phosphor-svelte/lib/GaugeIcon';
 
 	let {
 		turn,
@@ -23,7 +24,6 @@
 		name,
 		pending = [],
 		streaming = false,
-		// Whether the trace opens in Traffic, the id shown with a copy button otherwise
 		traceLinks = false,
 		onretry,
 		onrun,
@@ -62,7 +62,6 @@
 			: { label: 'Trace', value: turn.traceId, mono: true, copy: true }
 	]);
 
-	// The lamp a call shows, waiting for Run, failed, answered, or still running
 	function lampOf(c: TraceToolCall, waiting: boolean): { lamp: Lamp; shape: DotShape; word: string } {
 		if (waiting) return { lamp: 'warning', shape: 'half', word: 'waiting' };
 		if (c.failed) return { lamp: 'error', shape: 'filled', word: 'failed' };
@@ -70,7 +69,6 @@
 		return { lamp: 'muted', shape: 'hollow', word: 'running' };
 	}
 
-	// JSON indented for reading, any other text as it came
 	function pretty(s: string): string {
 		try {
 			return JSON.stringify(JSON.parse(s), null, 2);
@@ -88,7 +86,10 @@
 	<Row gap={8} wrap={false}>
 		<Str value={name} weight={500} />
 		{#if turn.role === 'assistant' && turn.finishedAt}
-			<InfoTip click content={statsView} />
+			<Pop placement="bottom-start" width="20rem">
+				{#snippet content()}{@render statsView()}{/snippet}
+				<NeoButton text aria-label="Timing and tokens">{#snippet icon()}<GaugeIcon size={16} />{/snippet}</NeoButton>
+			</Pop>
 		{/if}
 	</Row>
 	{#if turn.images.length}
@@ -198,7 +199,6 @@
 		object-fit: cover;
 		border-radius: var(--neo-border-radius);
 	}
-	/* Made images show at the size of the tiles that stood in for them while they were drawn */
 	.made {
 		max-width: min(100%, 256px);
 		max-height: 256px;
@@ -212,7 +212,6 @@
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
 	}
-	/* Call rows run to the card edges, their lamps in line with the text above */
 	.calls {
 		display: flex;
 		flex-direction: column;

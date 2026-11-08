@@ -5,10 +5,9 @@
 	import { NeoSortableItem, NeoSortableProvider } from '#lib/neo/sortable/index.js';
 	import type { NeoSortableItem as SortItem } from '#lib/neo/sortable/neo-sortable-context.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { date, enumLabel, num, plural } from '#lib/format.js';
+	import { date, enumLabel, num } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { ShapeSchema } from '#lib/proto/nebu/v1/estimate_pb.js';
-	import { InstanceState } from '#lib/proto/nebu/v1/instance_pb.js';
 	import type { Slot } from '#lib/proto/nebu/v1/slot_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { prefs } from '#lib/state/prefs.svelte.js';
@@ -34,18 +33,18 @@
 	import { slotHref, slotUpdate, splitKey, terminal } from '#lib/pages/serve/serve.js';
 	import { serveTabs } from '#lib/pages/serve/tabs.js';
 	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 
 	let { instanceId }: { instanceId: string } = $props();
 
 	const launching = $derived(instanceId === 'launch');
 	const selected = $derived(launching ? undefined : live.instances.get(instanceId));
-	// The slot the panel edits, new for the create form, read from the query so a reload keeps it
+	// The slot the panel edits, new for the create form
 	const slotParam = $derived(instanceId === '' ? page.url.searchParams.get('slot') : null);
 	const editing = $derived(slotParam && slotParam !== 'new' ? live.slots.get(slotParam) : undefined);
 	const panelOpen = $derived(slotParam !== null || (!launching && instanceId !== ''));
 	const tab = $derived(page.url.searchParams.get('tab') ?? '');
 	let listWidth = $state(0);
-	// Beside an open panel the rows keep the lamp, name and action, the panel holding the rest
 	const slim = $derived(panelOpen && listWidth > 0 && listWidth < compactBelow);
 
 	const slots = $derived([...live.slots.values()].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name)));
@@ -65,8 +64,6 @@
 	);
 	const formations = $derived(live.inMesh ? [...live.formations.values()].sort((a, b) => a.name.localeCompare(b.name)) : []);
 	const nothing = $derived(slots.length === 0 && loose.length === 0 && formations.length === 0);
-	const running = $derived([...live.instances.values()].filter((i) => i.state === InstanceState.READY || i.state === InstanceState.IDLE || i.state === InstanceState.DRAINING).length);
-	const failed = $derived([...live.instances.values()].filter((i) => i.state === InstanceState.FAILED && !dismissed.has(i.id)).length);
 
 	// Forgets dismissed ids the daemon no longer holds
 	$effect(() => {
@@ -77,6 +74,14 @@
 
 	let deleting = $state<Slot | undefined>(undefined);
 	let deleteOpen = $state(false);
+
+	// A slot deleted while its editor is open closes the panel instead of leaving an empty state behind
+	let shownSlot = $state<string | undefined>(undefined);
+	$effect(() => {
+		if (editing) shownSlot = editing.id;
+		else if (slotParam === null) shownSlot = undefined;
+		else if (live.ready && shownSlot === slotParam) close();
+	});
 
 	const wizardStart = $derived.by((): WizardStart => {
 		const q = page.url.searchParams;
@@ -141,8 +146,13 @@
 	}
 </script>
 
+{#snippet launchTools()}
+	<NeoButton text href={slotHref('new')}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Slot</NeoButton>
+	<NeoButton class="primary" elevation={2} href="/serve/launch">{#snippet icon()}<PlayIcon size={16} />{/snippet}Launch</NeoButton>
+{/snippet}
+
 {#snippet slotsCard()}
-	<Card title="Slots" count={slots.length} info="Drag a slot to set the order slots relaunch in" flush>
+	<Card title="Slots" info="A slot keeps a model's place and route on this host while occupants come and go" tools={launchTools} flush>
 		<List head={{ primary: 'Slot', secondary: 'Occupant', facts: ['In flight'] }}>
 			<NeoSortableProvider bind:items={sortItems} axis="y" onDragEnd={() => void reordered()}>
 				{#each sortItems as item, index (item.id)}
@@ -163,7 +173,7 @@
 {/snippet}
 
 {#snippet looseCard()}
-	<Card title="Instances outside a slot" count={loose.length} info="Stopped and failed ones stay a day until dismissed" flush>
+	<Card title="Instances" tools={slots.length ? undefined : launchTools} flush>
 		<List head={{ primary: 'Instance', secondary: 'Model', facts: ['In flight'] }}>
 			{#each loose as inst (inst.id)}
 				<InstanceRow instance={inst} {slim} ondismiss={dismiss} selected={inst.id === instanceId} />
@@ -173,7 +183,7 @@
 {/snippet}
 
 {#snippet formationsCard()}
-	<Card title="Formations" count={formations.length} flush>
+	<Card title="Formations" flush>
 		<List head={{ primary: 'Formation', secondary: 'Shape', facts: ['Nodes'] }}>
 			{#each formations as f (f.id)}
 				<ListRow
@@ -210,7 +220,7 @@
 					</Card>
 				{:else if nothing}
 					<Card>
-						<Empty icon={PlayIcon} text="Nothing serving" hint="Launched models run here, each in a slot keeping its memory, runtime and route settings" action="Launch" href="/serve/launch" />
+						<Empty icon={PlayIcon} text="Nothing serving" action="Launch" href="/serve/launch" />
 					</Card>
 				{:else}
 					{#if slots.length}{@render slotsCard()}{/if}
@@ -225,19 +235,7 @@
 	</div>
 {/snippet}
 
-<PageHeader tabs={serveTabs} active="instances">
-	{#snippet meta()}
-		{#if live.ready}
-			<span>{running ? `${num(running)} running` : 'Nothing running'}</span>
-			{#if slots.length}<span>{plural(slots.length, 'slot')}</span>{/if}
-			{#if failed}<span class="error-text">{num(failed)} failed</span>{/if}
-		{/if}
-	{/snippet}
-	{#snippet actions()}
-		<NeoButton elevation={2} href={slotHref('new')}>New slot</NeoButton>
-		<NeoButton class="primary" elevation={2} href="/serve/launch">Launch</NeoButton>
-	{/snippet}
-</PageHeader>
+<PageHeader tabs={serveTabs} active="slots" info="What this host runs, where each model sits and how much memory it holds" />
 
 <Sheet open={panelOpen} onclose={close} {list}>
 	{#if slotParam === 'new'}
@@ -264,7 +262,7 @@
 </Sheet>
 
 {#if deleting}
-	<NameConfirm bind:open={deleteOpen} title="Delete slot" name={deleting.name} message={deleting.instanceId ? 'The occupant stops first' : undefined} onconfirm={deleteSlot} />
+	<NameConfirm bind:open={deleteOpen} title="Delete slot" name={deleting.name} message={deleting.instanceId ? 'Stops the occupant' : undefined} onconfirm={deleteSlot} />
 {/if}
 
 {#if launching}
@@ -275,7 +273,6 @@
 	.lists {
 		min-width: 0;
 	}
-	/* A drag wrapper passes the list's columns through to its row and keeps the hairline between rows */
 	.sortrow {
 		display: grid;
 		grid-template-columns: subgrid;

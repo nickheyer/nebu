@@ -1,11 +1,9 @@
 <script lang="ts">
 	import { NeoTextarea } from '#lib/neo/inputs/index.js';
-	import InfoTip from '#lib/ui/InfoTip.svelte';
 
 	let {
 		value = $bindable(''),
 		label,
-		info,
 		placeholder,
 		rows = 3,
 		maxRows = 8,
@@ -13,12 +11,11 @@
 		disabled = false,
 		message,
 		mono = false
-	}: { value?: string; label?: string; info?: string; placeholder?: string; rows?: number; maxRows?: number; max?: number; disabled?: boolean; message?: string; mono?: boolean } = $props();
+	}: { value?: string; label?: string; placeholder?: string; rows?: number; maxRows?: number; max?: number; disabled?: boolean; message?: string; mono?: boolean } = $props();
 </script>
 
 <div class="field" class:mono>
-	<NeoTextarea bind:value {label} {placeholder} {rows} maxlength={max} {disabled} elevation={-1} placement={label ? 'top' : 'inside'} floating={false} width="100%" resize="none" {message} autoResize={{ min: rows, max: maxRows }} />
-	{#if info}<InfoTip text={info} />{/if}
+	<NeoTextarea bind:value {label} {placeholder} {rows} maxlength={max} {disabled} elevation={-1} placement={label ? 'top' : 'inside'} floating={false} width="100%" resize="none" {message} autoResize={{ min: rows, max: maxRows }} aria-label={label} />
 </div>
 
 <style>

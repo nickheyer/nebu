@@ -26,12 +26,13 @@
 	import { formationLamp, nodeLamp } from '#lib/ui/status.js';
 	import Federation from '#lib/pages/mesh/Federation.svelte';
 	import FormationPanel from '#lib/pages/mesh/FormationPanel.svelte';
-	import MeshHeader from '#lib/pages/mesh/MeshHeader.svelte';
+	import MeshCard from '#lib/pages/mesh/MeshCard.svelte';
 	import Nearby from '#lib/pages/mesh/Nearby.svelte';
 	import NodePanel from '#lib/pages/mesh/NodePanel.svelte';
 	import Outside from '#lib/pages/mesh/Outside.svelte';
 	import Tuning from '#lib/pages/mesh/Tuning.svelte';
-	import { deviceCount, formationTip, isMeshTab, linkLabel, linkLamp, meshHeaderTabs, nodeShape, nodeTip, peerName, planFormationHref, settled, worstLink, type MeshTab } from '#lib/pages/mesh/mesh.js';
+	import { deviceCount, formationTip, isMeshTab, linkLabel, linkLamp, meshHeaderTabs, nodeShape, nodeTip, peerName, planFormationHref, worstLink, type MeshTab } from '#lib/pages/mesh/mesh.js';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import StackIcon from 'phosphor-svelte/lib/StackIcon';
 
 	let { tab = 'nodes', id = '' }: { tab?: string; id?: string } = $props();
@@ -44,16 +45,15 @@
 	const nodes = $derived([...live.nodes.values()].sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name)));
 	const formations = $derived([...live.formations.values()].sort((a, b) => a.name.localeCompare(b.name)));
 	const federations = $derived(status?.federations ?? []);
-	const tabs = $derived(
-		meshHeaderTabs({
-			nodes: nodes.length,
-			formations: formations.length,
-			nearby: (status?.admissions ?? []).filter((a) => !settled(a)).length || undefined,
-			federation: federations.length || undefined
-		})
-	);
+	const infos: Record<MeshTab, string> = {
+		nodes: 'Every machine in the mesh with what it carries',
+		links: 'How fast each pair of nodes reaches the other, measured on demand',
+		formations: 'Models spread across nodes, each seat holding its share',
+		nearby: 'Nodes and meshes heard on the network and the admissions this mesh decides',
+		federation: 'Other meshes trading pools with this one',
+		tuning: 'The speeds the planner assumes and the ratios it has learned'
+	};
 
-	// The mesh status the daemon answers before the stream's snapshot lands
 	onMount(async () => {
 		try {
 			discovered = (await rpc.mesh.discover({})).status;
@@ -65,10 +65,6 @@
 	function close() {
 		void goto(`/mesh/${active}`);
 	}
-
-	let nearby = $state<Nearby>();
-	let federation = $state<Federation>();
-	let tuning = $state<Tuning>();
 
 	// Nodes
 	const openNode = $derived((active === 'nodes' || active === 'links') && id ? live.nodes.get(id) : undefined);
@@ -159,7 +155,7 @@
 		}
 	}
 
-	// Streams the open formation's seat output, each line prefixed with its node and role
+	// Streams the open formation's seat output, each line prefixed with its seat
 	function formationLogSource(tail: number, follow: boolean, signal: AbortSignal) {
 		const formationId = openFormation?.id ?? id;
 		return (async function* () {
@@ -178,7 +174,7 @@
 {/snippet}
 
 {#snippet nodesList()}
-	<Card title="Members" count={nodes.length} flush>
+	<Card title="Members" flush>
 		<List head={{ primary: 'Node', facts: ['Version', 'Devices'] }}>
 			{#each nodes as n (n.id)}
 				<ListRow
@@ -199,11 +195,11 @@
 {/snippet}
 
 {#snippet linksList()}
-	<Card title="Links" count={nodes.length} flush>
+	<Card title="Links" flush>
 		{#snippet tools()}
 			<Pop placement="bottom-end" width="20rem">
 				{#snippet content(closePop)}
-					<Switch bind:checked={probeForce} label="Force" info="Measures bandwidth even while a formation serves" />
+					<Switch bind:checked={probeForce} label="Force" />
 					<Row gap={12} justify="flex-end">
 						<NeoButton class="primary" elevation={2} loading={probing === ''} onclick={() => probe('', closePop)}>Probe all</NeoButton>
 					</Row>
@@ -223,7 +219,7 @@
 					selected={n.id === id}
 					onclick={() => goto(`/mesh/links/${encodeURIComponent(n.id)}`)}
 				>
-					{#snippet badges()}<StatePill label={worst ? linkLabel(worst.class) : 'unmeasured'} lamp={worst ? linkLamp(worst.class) : 'muted'} />{/snippet}
+					{#snippet badges()}{#if worst}<StatePill label={linkLabel(worst.class)} lamp={linkLamp(worst.class)} />{/if}{/snippet}
 					{#snippet action()}
 						{#if !n.self}<RowAction loading={probing === n.id} onclick={() => probe(n.id)} label="Probe" />{/if}
 					{/snippet}
@@ -234,9 +230,12 @@
 {/snippet}
 
 {#snippet formationsList()}
-	<Card title="Formations" count={formations.length} flush>
+	<Card title="Formations" flush>
+		{#snippet tools()}
+			<NeoButton class="primary" elevation={2} href={planFormationHref()}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Formation</NeoButton>
+		{/snippet}
 		{#if formations.length === 0}
-			<Empty icon={StackIcon} text="No formations" hint="A formation serves one model across several members, placed by their memory and links" action="Plan a formation" href={planFormationHref()} />
+			<Empty icon={StackIcon} text="No formations" action="Plan one" href={planFormationHref()} />
 		{:else}
 			<List head={{ primary: 'Formation', secondary: 'Shape', facts: ['Nodes', 'Speed'] }}>
 				{#each formations as f (f.id)}
@@ -261,21 +260,13 @@
 	</Card>
 {/snippet}
 
-{#snippet missing(title: string, text: string, hint: string)}
+{#snippet missing(title: string, text: string, hint?: string)}
 	<PanelHeader {title} onclose={close} />
 	<Empty {text} {hint} />
 {/snippet}
 
-{#snippet tabAction()}
-	{#if active === 'formations'}
-		<NeoButton class="primary" elevation={2} href={planFormationHref()}>Plan a formation</NeoButton>
-	{:else if active === 'nearby'}
-		<NeoButton class="primary" elevation={2} onclick={() => nearby?.openInvite()}>Invite</NeoButton>
-	{:else if active === 'federation'}
-		<NeoButton class="primary" elevation={2} onclick={() => federation?.openImport()}>Import</NeoButton>
-	{:else if active === 'tuning'}
-		<NeoButton class="primary" elevation={2} onclick={() => tuning?.edit()}>New profile</NeoButton>
-	{/if}
+{#snippet meshCard()}
+	{#if mesh}<MeshCard {mesh} {self} />{/if}
 {/snippet}
 
 {#if !live.ready && !discovered}
@@ -284,19 +275,19 @@
 {:else if !mesh}
 	<Outside {status} />
 {:else}
-	<MeshHeader {mesh} {self} {tabs} {active} action={active === 'formations' || active === 'nearby' || active === 'federation' || active === 'tuning' ? tabAction : undefined} />
+	<PageHeader tabs={meshHeaderTabs} {active} info={infos[active]} />
 	{#if active === 'nodes' || active === 'links'}
-		<Sheet open={id !== ''} onclose={close} list={active === 'nodes' ? nodesList : linksList}>
+		<Sheet open={id !== ''} onclose={close} head={meshCard} list={active === 'nodes' ? nodesList : linksList}>
 			{#if openNode}
 				{#key `${active}/${openNode.id}`}<NodePanel node={openNode} tab={active === 'links' ? 'links' : 'profile'} onclose={close} />{/key}
 			{:else if !live.ready}
 				<Skeleton rows={6} kind="facts" />
 			{:else}
-				{@render missing('Node', 'No such node', 'It left the mesh or was forgotten')}
+				{@render missing('Node', 'No such node')}
 			{/if}
 		</Sheet>
 	{:else if active === 'formations'}
-		<Sheet open={id !== ''} onclose={closeFormation} list={formationsList} width={formationLogs ? 720 : 560}>
+		<Sheet open={id !== ''} onclose={closeFormation} head={meshCard} list={formationsList} width={formationLogs ? 720 : 560}>
 			{#if openFormation}
 				{#key openFormation.id}
 					{#if formationLogs}
@@ -313,14 +304,15 @@
 			{/if}
 		</Sheet>
 	{:else if active === 'nearby'}
-		<Nearby bind:this={nearby} {status} />
+		{@render meshCard()}
+		<Nearby {status} />
 	{:else if active === 'federation'}
-		<Federation bind:this={federation} {federations} {id} />
+		<Federation {federations} {id} head={meshCard} />
 	{:else}
-		<Tuning bind:this={tuning} />
+		<Tuning head={meshCard} />
 	{/if}
 {/if}
 
 {#if forgetting}
-	<NameConfirm bind:open={forgetOpen} title="Forget node" name={forgetting.name} message="Its certificate is revoked on every member" confirm="Forget" onconfirm={forget} />
+	<NameConfirm bind:open={forgetOpen} title="Forget node" name={forgetting.name} message="Revokes its certificate everywhere" confirm="Forget" onconfirm={forget} />
 {/if}

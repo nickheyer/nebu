@@ -5,12 +5,7 @@
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import ParamField from '#lib/pages/serve/ParamField.svelte';
 
-	let {
-		params,
-		values = $bindable({}),
-		auto = $bindable({}),
-		states = []
-	}: { params: Param[]; values?: Record<string, string>; auto?: Record<string, boolean>; states?: ParamState[] } = $props();
+	let { params, values = $bindable({}), states = [] }: { params: Param[]; values?: Record<string, string>; states?: ParamState[] } = $props();
 
 	// One section per group in first seen order, advanced params under each section's collapse
 	const groups = $derived.by(() => {
@@ -31,7 +26,6 @@
 		return states.find((s) => s.name === name);
 	}
 
-	// Pairs fields two per row
 	function pairs(list: Param[]): Param[][] {
 		const out: Param[][] = [];
 		for (let i = 0; i < list.length; i += 2) out.push(list.slice(i, i + 2));
@@ -43,7 +37,7 @@
 	{#each pairs(list) as pair, i (i)}
 		<FieldRow>
 			{#each pair as p (p.name)}
-				<ParamField param={p} bind:values bind:auto state={stateOf(p.name)} />
+				<ParamField param={p} bind:values state={stateOf(p.name)} />
 			{/each}
 		</FieldRow>
 	{/each}

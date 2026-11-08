@@ -541,16 +541,20 @@ func TestClientsFollowTheLaunch(t *testing.T) {
 // A pinned device without memory of its own is refused by every runtime, and the accelerator class counts the devices with memory alone
 func TestDevicesWithoutMemoryAreNeverPinned(t *testing.T) {
 	profile, plan := plannedHost()
-	igpu := &v1.Device{Id: "intel-0000:00:02.0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "AlderLake-S GT1", Facts: map[string]string{"index": "1", "memory": "shared"}}
-	profile.Devices = append(profile.Devices, igpu)
+	igpu := &v1.Device{Id: "intel-0000:00:02.0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "AlderLake-S GT1", Facts: map[string]string{"index": "1"}, PoolId: "host"}
+	blind := &v1.Device{Id: "other-0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "other", Name: "unread gpu", Facts: map[string]string{"index": "2"}}
+	profile.Devices = append(profile.Devices, igpu, blind)
+	if _, err := launchDevices(Launch{Profile: profile, Devices: []*v1.Device{igpu}}); err == nil || !strings.Contains(err.Error(), `device "intel-0000:00:02.0" (AlderLake-S GT1) has no memory of its own, so a launch cannot pin it`) {
+		t.Fatalf("a gpu naming the host pool pins: %v", err)
+	}
 	weights := filepath.Join(t.TempDir(), "w.gguf")
 	for _, rt := range []Runtime{LlamaCpp{}, VLLM{}, SGLang{}, NeMo{}, SDCpp{}} {
 		params, err := Resolve(rt, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		in := Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": weights, "weights_dir": "/w", "prepared_dir": t.TempDir()}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/x", Dir: "/opt"}, Plan: plan, Profile: profile, Devices: []*v1.Device{igpu}, Descriptor: layered(4), InstallRecord: recorded(nil)}
-		if _, err := rt.Launch(in); err == nil || !strings.Contains(err.Error(), `device "intel-0000:00:02.0" (AlderLake-S GT1) has no memory of its own, so a launch cannot pin it`) {
+		in := Launch{Name: "m", Params: params, Artifacts: map[string]string{"weights": weights, "weights_dir": "/w", "prepared_dir": t.TempDir()}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/bin/x", Dir: "/opt"}, Plan: plan, Profile: profile, Devices: []*v1.Device{blind}, Descriptor: layered(4), InstallRecord: recorded(nil)}
+		if _, err := rt.Launch(in); err == nil || !strings.Contains(err.Error(), `device "other-0" (unread gpu) has no memory of its own, so a launch cannot pin it`) {
 			t.Errorf("%s pins a device without memory: %v", rt.ID(), err)
 		}
 		in.Profile = nil

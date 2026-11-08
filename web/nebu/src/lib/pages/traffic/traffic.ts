@@ -121,8 +121,8 @@ export type Mark = { id: 'forwarded' | 'translated' | 'failedOpen' | 'fallbacks'
 export function marks(t: Trace, nodeName: (id: string) => string): Mark[] {
 	const out: Mark[] = [];
 	if (t.forwarded) out.push({ id: 'forwarded', tip: `Forwarded to ${nodeName(t.nodeId)}` });
-	if (t.translated) out.push({ id: 'translated', tip: 'Translated between protocols' });
-	if (t.failedOpen) out.push({ id: 'failedOpen', tip: 'Failed open past the scheduler' });
+	if (t.translated) out.push({ id: 'translated', tip: 'Translated' });
+	if (t.failedOpen) out.push({ id: 'failedOpen', tip: 'Failed open' });
 	if (t.fallbacks.length) out.push({ id: 'fallbacks', tip: `${t.fallbacks.length} ${t.fallbacks.length === 1 ? 'fallback' : 'fallbacks'}`, count: t.fallbacks.length });
 	return out;
 }

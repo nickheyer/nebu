@@ -1,15 +1,13 @@
 <script lang="ts" generics="V extends string | number">
 	import type { Snippet } from 'svelte';
 	import { NeoSelect } from '#lib/neo/inputs/index.js';
-	import type { NeoListItem, NeoListItemContext } from '#lib/neo/list/index.js';
-	import InfoTip from '#lib/ui/InfoTip.svelte';
+	import type { NeoListItem } from '#lib/neo/list/index.js';
 	import type { Option } from '#lib/ui/fields/types.js';
 
 	let {
 		value = $bindable(),
 		options,
 		label,
-		info,
 		placeholder,
 		disabled = false,
 		search = false,
@@ -20,12 +18,13 @@
 		onchange,
 		width,
 		loading = false,
-		icon
+		compact = false,
+		icon,
+		mark
 	}: {
 		value?: V;
 		options: Option<V>[];
 		label?: string;
-		info?: string;
 		placeholder?: string;
 		disabled?: boolean;
 		search?: boolean;
@@ -36,21 +35,17 @@
 		onchange?: (v: V | undefined) => void;
 		width?: string;
 		loading?: boolean;
-		// An icon before the value naming what the select chooses when it has no label
+		compact?: boolean;
 		icon?: Snippet;
+		// A mark after the box for how an empty box resolves
+		mark?: Snippet;
 	} = $props();
 
-	// Each option's tip shows on an info icon at the end of its item
-	const tips = $derived(new Map(options.filter((o) => o.tip).map((o) => [String(o.value), o.tip])));
-	const items = $derived(options.map((o): NeoListItem<V> => ({ id: String(o.value), value: o.value, label: o.label, description: o.description, disabled: o.disabled, after: o.tip ? optionTip : undefined })));
+	const items = $derived(options.map((o): NeoListItem<V> => ({ id: String(o.value), value: o.value, label: o.label, description: o.description, disabled: o.disabled })));
 	const hint = $derived(error ?? message);
 </script>
 
-{#snippet optionTip({ item }: NeoListItemContext<V>)}
-	<InfoTip text={tips.get(String(item.value))} />
-{/snippet}
-
-<div class="field">
+<div class="field" class:compact>
 	<NeoSelect
 		bind:value
 		options={items}
@@ -61,17 +56,18 @@
 		{clearable}
 		{required}
 		elevation={-1}
-		placement={label ? 'top' : 'inside'}
-		floating={false}
+		placement={label && !compact ? 'top' : 'inside'}
+		floating={compact}
 		{loading}
 		message={hint}
 		{error}
 		nullable={clearable}
 		width={width ?? '100%'}
 		before={icon}
+		aria-label={label}
 		onChange={(v) => onchange?.(v as V | undefined)}
 	/>
-	{#if info}<span class="trail"><InfoTip text={info} /></span>{/if}
+	{#if mark}<span class="mark">{@render mark()}</span>{/if}
 </div>
 
 <style>
@@ -85,5 +81,13 @@
 	.field :global(.neo-select) {
 		flex: 1 1 auto;
 		min-width: 0;
+	}
+	/* A compact select keeps control height with its label floating inside */
+	.compact :global(.neo-input-group) {
+		margin-top: 0;
+	}
+	.mark {
+		display: inline-flex;
+		color: var(--nebu-text-muted);
 	}
 </style>

@@ -2,7 +2,7 @@
 	import Bone from '#lib/ui/Bone.svelte';
 	import { toPx } from '#lib/ui/ListRow.svelte';
 
-	// Bones in the layout the loaded data takes, list rows, fact rows, memory bars, a facts strip or text lines
+	// Bones in the layout the loaded data takes
 	let {
 		rows = 3,
 		kind = 'row',
@@ -18,15 +18,12 @@
 		rows?: number;
 		kind?: 'row' | 'facts' | 'bars' | 'strip' | 'text';
 		dot?: boolean;
-		// Width of a mark or pill before the name
 		leading?: string;
 		primary?: string;
-		// Width of the secondary phrase, false when the row has none
 		secondary?: string | false;
 		facts?: number;
 		action?: boolean;
 		menu?: boolean;
-		// A strip at section size rather than page size
 		section?: boolean;
 	} = $props();
 

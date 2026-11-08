@@ -26,6 +26,7 @@
 	import { botLamp } from '#lib/ui/status.js';
 	import Avatar from '#lib/pages/bots/Avatar.svelte';
 	import { botTip, running } from '#lib/pages/bots/bots.js';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import RobotIcon from 'phosphor-svelte/lib/RobotIcon';
 
 	const list = new ListQuery<Bot, Record<string, never>>(async (_p, _cursor, _limit, signal) => {
@@ -34,9 +35,7 @@
 	}, [EventKind.BOT]);
 	void list.load({});
 
-	// Listed bots with the live stream's copy taking over once it holds them
 	const bots = $derived(list.items.map((b) => live.bots.get(b.id) ?? b).sort((a, b) => a.name.localeCompare(b.name)));
-	const connected = $derived(bots.filter(running).length);
 
 	let open = $state(false);
 	let name = $state('');
@@ -46,7 +45,7 @@
 	let probing = $state(false);
 	let creating = $state(false);
 
-	// A probe answers for the token it was given, so a new token clears it
+	// A new token clears the probe of the old one
 	$effect(() => {
 		void token;
 		probed = undefined;
@@ -102,22 +101,18 @@
 	}
 </script>
 
-<PageHeader>
-	{#snippet meta()}
-		{#if list.settled && bots.length}<span>{num(connected)} of {num(bots.length)} running</span>{/if}
-	{/snippet}
-	{#snippet actions()}
-		<NeoButton class="primary" elevation={2} onclick={openNew}>New bot</NeoButton>
-	{/snippet}
-</PageHeader>
+<PageHeader info="Discord bots this host runs, each answering through the gateway with its own personas" />
 
-<Card title="Bots" count={list.settled ? bots.length : undefined} flush>
+<Card title="Bots" flush>
+	{#snippet tools()}
+		<NeoButton class="primary" elevation={2} onclick={openNew}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Bot</NeoButton>
+	{/snippet}
 	{#if !list.settled}
 		<Skeleton rows={3} leading="24px" secondary="12ch" menu={false} />
 	{:else if list.error}
 		<Empty text={list.error} action="Retry" onclick={() => list.refresh()} />
 	{:else if bots.length === 0}
-		<Empty icon={RobotIcon} text="No bots" hint="A bot answers on Discord through the gateway's routes, with personas, automations and commands" action="New bot" onclick={openNew} />
+		<Empty icon={RobotIcon} text="No bots" action="Bot" onclick={openNew} />
 	{:else}
 		<List head={{ primary: 'Bot', secondary: 'State', facts: ['Guilds'] }}>
 			{#each bots as b (b.id)}
@@ -135,7 +130,7 @@
 					{#snippet leading()}<Avatar url={b.status?.avatarUrl} size={24} />{/snippet}
 					{#snippet action()}
 						{#if on}
-							<Confirm label="Stop" question="Stop {b.name}" danger onconfirm={() => stop(b)} />
+							<Confirm label="Stop" question="Stop {b.name}?" danger onconfirm={() => stop(b)} />
 						{:else}
 							<RowAction onclick={() => start(b)} label="Start" />
 						{/if}
@@ -167,5 +162,5 @@
 			</Cell>
 		</Row>
 	{/if}
-	<Switch bind:checked={enabled} label="Enabled" info="Connects the bot as soon as it is created" />
+	<Switch bind:checked={enabled} label="Enabled" />
 </Dialog>

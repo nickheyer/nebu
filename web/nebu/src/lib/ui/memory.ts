@@ -8,12 +8,8 @@ import type { Segment } from '#lib/ui/Bar.svelte';
 export type PoolBar = {
 	id: string;
 	kind: PoolKind;
-	// Short label such as GPU0 or CPU
 	label: string;
-	// The device name, several joined when the pool is shared
 	name: string;
-	// Set on a device with no memory pool of its own, drawn without a bar
-	shared: boolean;
 	total: number;
 	free: number;
 	used: number;
@@ -38,7 +34,12 @@ function kindLabel(kind: DeviceKind): string {
 	}
 }
 
-// A device label from its kind and the index its facts give, else its place among its kind
+// The word a pool kind reads as, system memory as RAM
+export function poolTitle(kind: PoolKind): string {
+	return kind === PoolKind.HOST ? 'RAM' : kind === PoolKind.UNIFIED ? 'Unified' : 'Device';
+}
+
+// A device label from its kind and index
 export function deviceLabel(profile: HostProfile | undefined, d: Device): string {
 	const kind = kindLabel(d.kind);
 	if (d.kind === DeviceKind.CPU) return kind;
@@ -46,13 +47,13 @@ export function deviceLabel(profile: HostProfile | undefined, d: Device): string
 	return `${kind}${index}`;
 }
 
-// One bar per memory pool with its segments, instances measured by process or planned, reservations by slot
+// One bar per memory pool with its instance, reservation, other and free segments
 export function poolBars(profile: HostProfile | undefined, instances: Iterable<Instance>, slots: Iterable<Slot>, plan?: MemoryPlan): PoolBar[] {
 	if (!profile) return [];
 	const live = [...instances].filter((i) => !terminal(i.state));
 	const held = [...slots];
 	return profile.pools.map((pool) => {
-		const devices = profile.devices.filter((d) => d.poolId === pool.id).sort((a, b) => Number(b.kind === DeviceKind.CPU) - Number(a.kind === DeviceKind.CPU));
+		const devices = profile.devices.filter((d) => d.poolId === pool.id).sort((a, b) => Number(a.kind === DeviceKind.CPU) - Number(b.kind === DeviceKind.CPU));
 		const deviceIds = new Set(devices.map((d) => d.id));
 		const total = Number(pool.totalBytes);
 		const free = Number(pool.freeBytes);
@@ -93,18 +94,10 @@ export function poolBars(profile: HostProfile | undefined, instances: Iterable<I
 		}
 		segments.push({ kind: 'free', label: 'free', bytes: Math.max(0, free - reserved) });
 		const cpu = devices.find((d) => d.kind === DeviceKind.CPU);
-		const label = pool.kind === PoolKind.DEVICE ? (devices[0] ? deviceLabel(profile, devices[0]) : pool.id) : pool.kind === PoolKind.UNIFIED ? 'Unified' : 'CPU';
+		const label = pool.kind === PoolKind.DEVICE ? (devices[0] ? deviceLabel(profile, devices[0]) : pool.id) : poolTitle(pool.kind);
 		const name = pool.kind === PoolKind.DEVICE ? (devices[0]?.name ?? '') : devices.map((d) => d.name).filter(Boolean).join(', ') || (cpu?.name ?? '');
-		return { id: pool.id, kind: pool.kind, label, name, shared: false, total, free, used, segments, devices };
+		return { id: pool.id, kind: pool.kind, label, name, total, free, used, segments, devices };
 	});
-}
-
-// Devices with no memory pool of their own, such as an integrated GPU on system memory
-export function sharedDevices(profile: HostProfile | undefined): PoolBar[] {
-	if (!profile) return [];
-	return profile.devices
-		.filter((d) => !profile.pools.some((p) => p.id === d.poolId))
-		.map((d) => ({ id: d.id, kind: PoolKind.UNSPECIFIED, label: deviceLabel(profile, d), name: d.name || d.id, shared: true, total: 0, free: 0, used: 0, segments: [], devices: [d] }));
 }
 
 export function poolSummary(bar: PoolBar): string {

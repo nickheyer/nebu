@@ -7,26 +7,26 @@ Route: `/serve`, `/serve/<instance>` opens the panel, `/serve/launch` the wizard
 ## Default view
 
 ```
- Memory                                                [+ Slot]  [▶ Launch]
- GPU0  H100 80G   ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░▒▒▒░░   68 / 80 GB
- GPU1  H100 80G   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░   72 / 80 GB
- CPU   512G       ▓░░░░░░░░░░░░░░░░░░░░░    6 / 512 GB
+ Slots                                                 [+ Slot]  [▶ Launch]
+ ⋮ ●  llama-70b     Llama-3.3-70B Q4_K_M     3 in flight   ···
+ ⋮ ○  slot-b        empty                    0 in flight   ···
+ ⋮ ●  qwen-72b      CUDA out of memory       0 in flight   ···
 
- Slots
- ⋮ ●  llama-70b     Llama-3.3-70B Q4_K_M     3 in flight   [Swap]     ···
- ⋮ ○  slot-b        empty                                  [Launch]   ···
- ⋮ ●  qwen-72b      CUDA out of memory                     [Relaunch] ···
-
- Instances without a slot
+ Instances
    ●  embed-sm      nomic-embed-text          0 in flight   [Stop]     ···
 
  Formations
    ●  deepseek-v3   lockstep · 3 nodes                      [Open]     ···
+
+ Memory
+ GPU0  H100 80G   ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░▒▒▒░░   68 / 80 GB
+ GPU1  H100 80G   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░   72 / 80 GB
+ RAM   512G       ▓░░░░░░░░░░░░░░░░░░░░░    6 / 512 GB
 ```
 
-**Slots.** Slot and Launch stay in the Memory header whatever the list holds. Drag handle, state dot, name (24ch), occupant model or error (40ch), in flight, one action by state, menu: Edit, Evict, Logs, Open instance, Delete. Tooltip on the name: runtime, devices, reserved memory, aliases. Expand: policy fields set, uptime, context. A swapping slot shows a thin canary bar under the row with the new share and time left.
+**Slots.** The tab is Slots. Slot and Launch sit in the Slots card's tools, or in the Instances card when no slot exists. Drag handle, state dot, name (24ch), occupant model or error (40ch), in flight, zero while nothing serves, menu: Swap while ready or Relaunch after a failure first, then Edit, Logs, Evict, Delete. The card's Launch is the only launch, an empty slot is picked in the wizard. Tooltip on the name: runtime, devices, reserved memory, aliases. Expand: policy fields set, uptime, context. A swapping slot shows a thin canary bar under the row with the new share and time left.
 
-**Instances without a slot.** Same row without the handle. Stopped and failed ones from the last day stay until dismissed from the menu.
+**Instances.** Instances without a slot, the same row without the handle. Stopped and failed ones from the last day stay until dismissed from the menu.
 
 **Formations.** Name, shape and node count, Open to Mesh. Hidden outside a mesh.
 
@@ -36,7 +36,7 @@ Route: `/serve`, `/serve/<instance>` opens the panel, `/serve/launch` the wizard
 
 1. **Model.** Picker over `ListModels`. Diffusion models list their parts with state pills.
 2. **Runtime.** Segmented over compatible runtimes, install Select with the newest first and false conditions marked.
-3. **Parameters.** One section per `Param.group`, advanced under its collapse. Each solved param: Auto Switch with the rule in a tooltip, the control under it when off.
+3. **Parameters.** One section per `Param.group`, advanced under its collapse. A solved param is an empty box with a function mark after it, the rule in the mark's tooltip, a typed value pinning it.
 4. **Placement.** Memory bars with the plan drawn on the chosen devices, verdict pill, warning line. In a mesh: span, shape, profile and a candidates list.
 5. **Route.** Name, policy, tools, idle unload, snapshot, slot.
 6. **Review.** The request as label and value rows, the command under a collapse, Run. The dialog follows the task to READY or FAILED, failure shows triage hints and Back.
@@ -54,28 +54,28 @@ Route: `/serve`, `/serve/<instance>` opens the panel, `/serve/launch` the wizard
 | param PATH | Path, directory mode when `directory` | |
 | param with `picks` | Select | stored parts matching the architecture |
 | args | Text | 512 |
-| placement | Segmented | device first, device only, host only |
+| placement | Segmented | Device first, Device, Host |
 | against free memory | Switch | |
 | span | Checklist | nodes and devices from `ListNodes` |
-| shape | Select | auto plus the seven shapes, one line each in option tooltips |
-| plan profile | Segmented | chat, agent, batch, auto |
+| shape | Select | the seven shapes with a line each, clearable, empty leaves it to the planner |
+| plan profile | Segmented | chat, agent, batch, releasable, empty leaves it to the planner |
 | name | Text | 64, default from the slot or repository |
-| policy max_in_flight, burst | Number | 0 inherits |
-| policy requests_per_second | Number | 0 inherits |
+| policy max_in_flight, burst | Number | empty shows the gateway's value, an infinity when it has none |
+| policy requests_per_second | Number | as above |
 | policy request_timeout, upstream_timeout | Duration | up to one day |
 | tool_servers | Checklist | `ListToolServers` mesh wide |
 | mutating_tools | Switch | |
-| idle_unload_seconds | Duration | 0 keeps loaded |
+| idle_unload_seconds | Duration | empty with an infinity mark keeps the model loaded |
 | snapshot | Switch | shown when the host probe found criu |
 | slot | Select | this slot, new slot, none |
 
 ## Slot editor
 
-A panel with: name Text 64, description Text 140, devices Checklist from the host profile, memory Bytes against the chosen devices' total, runtime Select, default params as in step three, policy as above, placement Segmented, aliases as rows of name Text with policy and tools under a collapse, args Text, position Number. Delete with a force Switch when occupied.
+A panel with: name Text 64, description Text 140, devices as a Devices field, one flat checklist with a checkbox per device, GPUs then the CPU, each with the memory of its pool, memory Bytes against the chosen devices' total, runtime Select, default params as in step three, policy as above, placement Segmented, aliases as rows of name Text with policy and tools under a collapse, args Text, position Number showing where a new slot lands. Delete with a force Switch when occupied.
 
 ## Swap
 
-Steps one to four with the slot fixed, then: drain first Switch, canary percent Percent 0 to 99, step seconds Duration up to one day, step percent Percent 0 to 99, max regression Percent 0 to 100, each with an `(i)`.
+Steps one to four with the slot fixed, then: drain first Switch, canary share Percent 0 to 99, step length Duration up to one day, step share Percent 0 to 99, max regression Percent 0 to 100, one `(i)` on each of the two sections.
 
 ## Instance panel
 

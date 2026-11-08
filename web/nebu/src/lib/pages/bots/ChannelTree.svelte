@@ -4,20 +4,13 @@
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 
-	let {
-		value = $bindable([]),
-		guilds,
-		label,
-		info
-	}: { value?: string[]; guilds: BotGuild[]; label: string; info?: string } = $props();
+	let { value = $bindable([]), guilds, label }: { value?: string[]; guilds: BotGuild[]; label: string } = $props();
 
-	// Picked channel ids that belong to the guild
 	function ofGuild(g: BotGuild): string[] {
 		const ids = new Set(g.channels.map((c) => c.id));
 		return value.filter((id) => ids.has(id));
 	}
 
-	// Replaces the guild's picked channels and keeps every other id
 	function setGuild(g: BotGuild, picked: string[]) {
 		const ids = new Set(g.channels.map((c) => c.id));
 		value = [...value.filter((id) => !ids.has(id)), ...picked];
@@ -25,9 +18,9 @@
 </script>
 
 <Stack gap={4}>
-	<FieldLabel {label} {info} />
+	<FieldLabel {label} />
 	{#if guilds.length === 0}
-		<span class="secondary">Start the bot to list channels</span>
+		<span class="secondary">Not connected</span>
 	{:else}
 		{#each guilds as g (g.id)}
 			<div class="guild">

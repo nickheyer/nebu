@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import Runtimes from '#lib/pages/runtimes/Runtimes.svelte';
 
-	const tabs = ['installs', 'install', 'builds', 'params'];
+	const tabs = ['installs', 'install', 'builds', 'defaults'];
 </script>
 
 <svelte:head><title>Runtimes</title></svelte:head>

@@ -4,7 +4,7 @@
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import RowAction from '#lib/ui/RowAction.svelte';
 
-	// Nothing here, a line with an optional hint and at most one button, centred or as a quiet row
+	// An empty block with a line, an optional hint and at most one button
 	let {
 		text,
 		hint,
@@ -23,7 +23,6 @@
 		href?: string;
 		onclick?: () => unknown;
 		loading?: boolean;
-		// Whether the button is the page's next step, carrying the accent
 		primary?: boolean;
 		row?: boolean;
 	} = $props();
@@ -76,7 +75,7 @@
 		color: var(--nebu-text-faint);
 	}
 	.empty .text {
-		font-weight: 500;
+		color: var(--neo-text-color);
 	}
 	.hint {
 		max-width: 52ch;

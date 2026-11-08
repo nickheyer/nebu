@@ -1,4 +1,4 @@
-// A shared second hand so relative times and uptimes move without a timer per row
+// A shared second hand for relative times
 class ClockTick {
 	now = $state(Date.now());
 	constructor() {

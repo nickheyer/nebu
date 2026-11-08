@@ -2,7 +2,7 @@
 	import { NeoInput } from '#lib/neo/inputs/index.js';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 
-	let { value = $bindable(''), placeholder = 'Search', delay = 250, width = '20rem' }: { value?: string; placeholder?: string; delay?: number; width?: string } = $props();
+	let { value = $bindable(''), label = 'Search', delay = 250, width = '20rem' }: { value?: string; label?: string; delay?: number; width?: string } = $props();
 
 	let typed = $state(value);
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -18,7 +18,7 @@
 </script>
 
 <div class="search" style:width>
-	<NeoInput bind:value={typed} {placeholder} elevation={-1} floating={false} clearable aria-label={placeholder} {oninput} onclear={() => (value = '')}>
+	<NeoInput bind:value={typed} elevation={-1} floating={false} clearable aria-label={label} {oninput} onclear={() => (value = '')}>
 		{#snippet before()}<MagnifyingGlassIcon size={16} />{/snippet}
 	</NeoInput>
 </div>

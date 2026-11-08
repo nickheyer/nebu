@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { untrack } from 'svelte';
 	import { watch } from '@dvcol/svelte-utils/watch';
 	import { NeoInput, NeoRange } from '#lib/neo/inputs/index.js';
@@ -11,16 +12,17 @@
 		step = 1,
 		unit,
 		label,
-		info,
 		disabled = false,
 		message,
-		// Whether the setting is unset, the box then empty and showing the placeholder
 		blank = false,
-		placeholder,
+		fallback,
+		mark,
 		onchange
-	}: { value?: number; min?: number; max?: number; step?: number; unit?: string; label?: string; info?: string; disabled?: boolean; message?: string; blank?: boolean; placeholder?: string; onchange?: (n: number) => void } = $props();
+	}: { value?: number; min?: number; max?: number; step?: number; unit?: string; label?: string; disabled?: boolean; message?: string; blank?: boolean; fallback?: number; mark?: Snippet; onchange?: (n: number) => void } = $props();
 
 	let typed = $state(untrack(() => (blank ? '' : String(value))));
+	// The knob rests on the fallback while the value is unset
+	let knob = $state(untrack(() => (blank && fallback !== undefined ? fallback : value)));
 
 	watch(
 		() => {
@@ -32,7 +34,16 @@
 
 	$effect(() => {
 		typed = blank ? '' : String(value);
+		knob = blank && fallback !== undefined ? fallback : value;
 	});
+
+	watch(
+		() => {
+			if (knob !== (blank && fallback !== undefined ? fallback : value)) value = knob;
+		},
+		() => knob,
+		{ skip: 1 }
+	);
 
 	function commit() {
 		if (typed === '' && blank) return;
@@ -47,15 +58,16 @@
 </script>
 
 <div class="field">
-	<FieldLabel {label} {info} />
-	<div class="controls">
+	<FieldLabel {label} />
+	<div class="controls" class:blank>
 		<div class="range">
-			<NeoRange bind:value {min} {max} {step} {disabled} elevation={-1} tooltips={false} width="100%" />
+			<NeoRange bind:value={knob} {min} {max} {step} {disabled} elevation={-1} tooltips={false} width="100%" />
 		</div>
 		<div class="box">
-			<NeoInput type="text" inputmode="decimal" bind:value={typed} {disabled} {placeholder} elevation={-1} floating={false} width="100%" onchange={commit} onblur={commit} aria-label={label} />
+			<NeoInput type="text" inputmode="decimal" bind:value={typed} {disabled} placeholder={fallback === undefined ? undefined : String(fallback)} elevation={-1} floating={false} width="100%" onchange={commit} onblur={commit} aria-label={label} />
 		</div>
 		{#if unit}<span class="unit secondary">{unit}</span>{/if}
+		{#if mark && blank}<span class="mark">{@render mark()}</span>{/if}
 	</div>
 	{#if message}<span class="secondary">{message}</span>{/if}
 </div>
@@ -77,9 +89,13 @@
 		display: flex;
 		flex: 1 1 auto;
 		min-width: 0;
+		transition: opacity var(--nebu-normal) var(--nebu-ease);
 	}
 	.range :global(.neo-range-container) {
 		min-width: 0;
+	}
+	.blank .range {
+		opacity: 0.55;
 	}
 	.box {
 		display: flex;
@@ -94,5 +110,10 @@
 	}
 	.unit {
 		flex: 0 0 auto;
+	}
+	.mark {
+		display: inline-flex;
+		flex: 0 0 auto;
+		color: var(--nebu-text-muted);
 	}
 </style>

@@ -8,8 +8,8 @@ Route: `/chat`, `/chat/<id>`
 
 ```
 ┌──────────────┬────────────────────────────────────────┬──────────────┐
-│ [+ New]      │ llama-70b ▾                        ⚙   │ Settings     │
-│ ⌕            │                                        │              │
+│ ⌕        [+] │ llama-70b ▾                        ⚙   │ Settings     │
+│              │                                        │              │
 │              │  You                                   │ Dialect      │
 │ Today        │  Summarise the attached log            │ [openai  ▾]  │
 │  Parser      │  [img]                                 │              │
@@ -24,9 +24,9 @@ Route: `/chat`, `/chat/<id>`
 └──────────────┴────────────────────────────────────────┴──────────────┘
 ```
 
-**Conversations.** 280px. New and search (daemon query) on one row, then rows grouped by day: title (24ch). Overflow menu: Rename, Delete. Empty: the line alone, New stays in the row above.
+**Conversations.** 280px. Search (daemon query) and a New button on one row, then rows grouped by day: title (24ch). Overflow menu: Rename, Delete. The open conversation's title is the page title.
 
-**Messages.** Model picker: a Picker over ready routes, text routes first, each option with context and quantization in its tooltip, disabled and reading No ready route while none is. Turns: name, text as markdown, images as thumbnails. An `(i)` on each assistant turn opens a popover: TTFT, tokens per second, prompt and completion tokens, stop, trace link. A tool call is one line, name, duration, mark, expanding to arguments and result. A failed turn shows one error line and Retry. Streaming appends. Stop replaces Send while streaming.
+**Messages.** Model picker: a Picker over ready routes, text routes first, each option with context and quantization in its tooltip, disabled while none is ready. Turns: name, text as markdown, images as thumbnails. A gauge mark on each assistant turn opens a popover: TTFT, tokens per second, prompt and completion tokens, stop, trace link. A tool call is one line, name, duration, mark, expanding to arguments and result. A failed turn shows one error line and Retry. Streaming appends. Stop replaces Send while streaming.
 
 **Composer.** Textarea to eight lines, enter sends. Attach appears only when the route takes images. Image routes replace the composer with Prompt, Size, Steps, Count. Video routes add Seconds and FPS and show a progress turn until the file arrives.
 
@@ -39,16 +39,16 @@ Route: `/chat`, `/chat/<id>`
 | dialect | Segmented | openai, anthropic, ollama |
 | system | Textarea | |
 | stream | Switch | |
-| temperature | Slider | 0 to 2, step 0.05 |
-| top_p | Slider | 0 to 1, step 0.01 |
-| top_k | Number | 0 and up |
-| max_tokens | Slider | 1 to the route's context length |
+| temperature | Slider | 0 to 2, step 0.05, the dialect's default while unset |
+| top_p | Slider | 0 to 1, step 0.01, the dialect's default while unset |
+| top_k | Number | 0 and up, the dialect's default while unset |
+| max_tokens | Slider | 1 to the route's context length, the whole context while unset |
 | stop | Chips | |
-| seed | Number | |
+| seed | Number | a shuffle mark while unset |
 | tool_servers | Checklist | `ListToolServers` mesh wide, failed ones disabled with the error in a tooltip |
 | mutating_tools | Switch | |
-| approve_tools | Switch | `(i)`: calls wait for Run in the chat |
-| tools | Code json | custom client tools |
+| approve_tools | Switch | calls then wait for Run in the chat |
+| tools | Code json | client tools |
 | user_name, assistant_name | Text | 32 |
 | image size | Select | 512x512, 768x768, 1024x1024, 1024x768, 768x1024 |
 | image steps | Slider | 1 to 100 |

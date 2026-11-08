@@ -20,7 +20,7 @@
 	<PageHeader title="Bot" back={{ label: 'Bots', href: '/bots' }} />
 	<Card>
 		{#if live.ready}
-			<Empty icon={RobotIcon} text="No such bot" hint="It was deleted, or the link names a bot this daemon never had" action="Bots" href="/bots" />
+			<Empty icon={RobotIcon} text="No such bot" action="Bots" href="/bots" />
 		{:else}
 			<Skeleton rows={3} kind="facts" />
 		{/if}

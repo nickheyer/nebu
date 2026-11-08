@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 
-	// A form's commit row pinned under its scroller, shown once dirty or always for a create form
+	// A form's commit row, shown once dirty or always for a create form
 	let {
 		dirty,
 		always = false,
@@ -27,7 +27,6 @@
 {/if}
 
 <style>
-	/* Reaches through the scroller's bottom padding so nothing scrolls into view under it */
 	.savebar {
 		position: sticky;
 		bottom: calc(-1 * var(--nebu-sheet-pad, 0px));

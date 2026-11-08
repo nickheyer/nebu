@@ -23,21 +23,20 @@
 	let { node, tab = $bindable('profile'), onclose }: { node: Node; tab?: string; onclose: () => void } = $props();
 
 	const n = $derived(node);
-	const tabs = $derived([
+	const tabs = [
 		{ id: 'profile', label: 'Profile' },
-		{ id: 'installs', label: 'Installs', count: n.installs.length },
-		{ id: 'stored', label: 'Stored', count: n.stored.length },
-		{ id: 'throughput', label: 'Throughput', count: n.throughput.length },
-		{ id: 'links', label: 'Links', count: n.links.length },
-		{ id: 'serving', label: 'Serving', count: n.routes.length + n.pools.length },
-		{ id: 'conditions', label: 'Conditions', count: n.conditions.length }
-	]);
+		{ id: 'installs', label: 'Installs' },
+		{ id: 'stored', label: 'Stored' },
+		{ id: 'throughput', label: 'Throughput' },
+		{ id: 'links', label: 'Links' },
+		{ id: 'serving', label: 'Serving' },
+		{ id: 'conditions', label: 'Conditions' }
+	];
 
 	function deviceName(id: string): string {
 		return n.profile?.devices.find((d) => d.id === id)?.name ?? id;
 	}
 
-	// Used over total in the unit of the total, such as 412 / 1024 GB
 	function usedOverTotal(s: Storage): string {
 		return `${bytesIn(s.totalBytes - s.freeBytes, s.totalBytes)} / ${bytesIn(s.totalBytes, s.totalBytes)}${thin}${byteUnit(s.totalBytes)}`;
 	}
@@ -56,7 +55,7 @@
 	{#if tab === 'profile'}
 		<Stack gap={24}>
 			<MemoryBars profile={n.profile} instances={n.self ? live.instances.values() : []} slots={n.self ? live.slots.values() : []} />
-			<Section title="Devices" count={n.profile?.devices.length ?? 0} level={3}>
+			<Section title="Devices" level={3}>
 				{#if n.profile?.devices.length}
 					<List head={{ primary: 'Device', secondary: 'Pool', facts: ['Vendor', 'Memory'] }}>
 						{#each n.profile.devices as d (d.id)}
@@ -65,7 +64,7 @@
 								primaryTip={[d.id, ...Object.entries(d.facts).map(([k, v]) => `${k} ${v}`)].join('\n')}
 								secondary={deviceLabel(n.profile, d)}
 								secondaryWidth="8ch"
-								facts={[{ value: d.vendor }, { value: d.memoryTotalBytes ? bytes(d.memoryTotalBytes) : 'shared' }]}
+								facts={[{ value: d.vendor }, { value: bytes(d.memoryTotalBytes || (n.profile?.pools.find((p) => p.id === d.poolId)?.totalBytes ?? 0n)) }]}
 							/>
 						{/each}
 					</List>
@@ -73,7 +72,7 @@
 					<Empty text="No devices probed" row />
 				{/if}
 			</Section>
-			<Section title="Storage" count={n.profile?.storage.length ?? 0} level={3}>
+			<Section title="Storage" level={3}>
 				{#if n.profile?.storage.length}
 					<List head={{ primary: 'Mount', secondary: 'Filesystem', facts: ['Used', 'Holds'] }}>
 						{#each n.profile.storage as s (s.path)}
@@ -89,11 +88,11 @@
 		{#if n.installs.length}
 			<List head={{ primary: 'Runtime', secondary: 'Version' }}>
 				{#each n.installs as i (i.id)}
-					<ListRow primary={i.runtimeId} primaryTip={i.path} secondary={i.version || 'unversioned'} secondaryKind="version" secondaryWidth="12ch" />
+					<ListRow primary={i.runtimeId} primaryTip={i.path} secondary={i.version} secondaryKind="version" secondaryWidth="12ch" />
 				{/each}
 			</List>
 		{:else}
-			<Empty text="No installs" hint="Runtimes installed on this node show here" />
+			<Empty text="No installs" />
 		{/if}
 	{:else if tab === 'stored'}
 		{#if n.stored.length}
@@ -103,7 +102,7 @@
 				{/each}
 			</List>
 		{:else}
-			<Empty text="Nothing stored" hint="Models pulled onto this node show here" />
+			<Empty text="Nothing stored" />
 		{/if}
 	{:else if tab === 'throughput'}
 		{#if n.throughput.length}
@@ -112,14 +111,14 @@
 					<ListRow
 						primary={deviceName(t.deviceId)}
 						primaryTip={[`stream ${streamRate(t.streamBytesPerSecond)} from ${num(t.streamSamples)}`, `compute ${flopsRate(t.computeFlops)} from ${num(t.computeSamples)}`, `fixed ${micros(t.fixedSeconds * 1e6)}`, `updated ${when(t.updatedAt)}`].join('\n')}
-						secondary={tokensPerSecond(t.tokensPerSecond) || 'unmeasured'}
+						secondary={tokensPerSecond(t.tokensPerSecond)}
 						secondaryWidth="12ch"
-						facts={[{ value: num(t.samples) }, { value: t.source || 'learned' }]}
+						facts={[{ value: num(t.samples) }, { value: t.source }]}
 					/>
 				{/each}
 			</List>
 		{:else}
-			<Empty text="Nothing learned" hint="Each device's speed is learned from the requests it serves" />
+			<Empty text="Nothing measured" />
 		{/if}
 	{:else if tab === 'links'}
 		{#if n.links.length}
@@ -131,11 +130,11 @@
 				{/each}
 			</List>
 		{:else}
-			<Empty text="No links measured" hint="Probe measures the round trip and bandwidth to every other member" />
+			<Empty text="No links measured" />
 		{/if}
 	{:else if tab === 'serving'}
 		<Stack gap={24}>
-			<Section title="Routes" count={n.routes.length} level={3}>
+			<Section title="Routes" level={3}>
 				{#if n.routes.length}
 					<List head={{ primary: 'Route', secondary: 'Pools', facts: n.self ? ['In flight'] : [] }}>
 						{#each n.routes as r (r.name)}
@@ -144,7 +143,7 @@
 								lamp={routeLamp(state)}
 								shape={routeShape(state)}
 								primary={r.name}
-								secondary={r.status?.poolIds.join(', ') || 'no pool'}
+								secondary={r.status?.poolIds.join(', ') ?? ''}
 								secondaryWidth="24ch"
 								facts={n.self ? [{ value: num(live.routes.get(r.name)?.status?.inFlight ?? r.status?.inFlight) }] : []}
 								onclick={n.self ? () => goto(`/gateway/routes/${encodeURIComponent(r.name)}`) : undefined}
@@ -155,7 +154,7 @@
 					<Empty text="No routes" row />
 				{/if}
 			</Section>
-			<Section title="Pools" count={n.pools.length} level={3}>
+			<Section title="Pools" level={3}>
 				{#if n.pools.length}
 					<List head={{ primary: 'Pool', secondary: 'Model', facts: ['State'] }}>
 						{#each n.pools as p (p.id)}
@@ -170,6 +169,6 @@
 	{:else if n.conditions.length}
 		<Conditions conditions={n.conditions} />
 	{:else}
-		<Empty text="No conditions reported" hint="Reachable, synced and certificate checks land here as this node observes them" />
+		<Empty text="No conditions" />
 	{/if}
 </Stack>

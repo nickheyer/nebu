@@ -92,7 +92,7 @@
 {:else if !parts}
 	<Skeleton rows={2} primary="16ch" secondary="24ch" facts={1} action={false} menu={false} />
 {:else if parts.length === 0}
-	<Empty icon={PuzzlePieceIcon} text="No parts" hint="This group loads on its own, with nothing from other repositories" />
+	<Empty icon={PuzzlePieceIcon} text="No parts" />
 {:else}
 	<List head={{ primary: 'Slot', secondary: 'Component', facts: ['State'] }}>
 		{#each parts as p (p.slot)}

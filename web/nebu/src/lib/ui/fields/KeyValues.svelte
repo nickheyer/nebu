@@ -8,14 +8,13 @@
 	let {
 		value = $bindable({}),
 		label,
-		info,
 		keyLabel = 'Key',
 		valueLabel = 'Value',
 		secret = false,
 		fixedKeys = false,
 		disabled = false,
 		secretsSet = false
-	}: { value?: Record<string, string>; label?: string; info?: string; keyLabel?: string; valueLabel?: string; secret?: boolean; fixedKeys?: boolean; disabled?: boolean; secretsSet?: boolean } = $props();
+	}: { value?: Record<string, string>; label?: string; keyLabel?: string; valueLabel?: string; secret?: boolean; fixedKeys?: boolean; disabled?: boolean; secretsSet?: boolean } = $props();
 
 	let rows = $state<{ k: string; v: string }[]>(Object.entries(value).map(([k, v]) => ({ k, v })));
 
@@ -35,14 +34,21 @@
 </script>
 
 <div class="field">
-	<FieldLabel {label} {info} />
+	<FieldLabel {label} />
+	{#if rows.length}
+		<div class="heads" aria-hidden="true">
+			<span class="head">{keyLabel}</span>
+			<span class="head">{valueLabel}</span>
+			{#if !fixedKeys}<span class="headgap"></span>{/if}
+		</div>
+	{/if}
 	{#each rows as row, i (i)}
 		<div class="pair">
-			<NeoInput bind:value={row.k} placeholder={keyLabel} readonly={fixedKeys} {disabled} elevation={-1} floating={false} aria-label={keyLabel} />
+			<NeoInput bind:value={row.k} readonly={fixedKeys} {disabled} elevation={-1} floating={false} aria-label={keyLabel} />
 			{#if secret}
-				<NeoPassword bind:value={row.v} placeholder={secretsSet && !row.v ? 'set' : valueLabel} {disabled} elevation={-1} floating={false} aria-label={valueLabel} />
+				<NeoPassword bind:value={row.v} placeholder={secretsSet && !row.v ? '••••••••' : ''} {disabled} elevation={-1} floating={false} aria-label={valueLabel} />
 			{:else}
-				<NeoInput bind:value={row.v} placeholder={valueLabel} {disabled} elevation={-1} floating={false} aria-label={valueLabel} />
+				<NeoInput bind:value={row.v} {disabled} elevation={-1} floating={false} aria-label={valueLabel} />
 			{/if}
 			{#if !fixedKeys}
 				<NeoButton text aria-label="Remove" onclick={() => remove(i)} {disabled}>
@@ -53,9 +59,8 @@
 	{/each}
 	{#if !fixedKeys}
 		<div>
-			<NeoButton text onclick={add} {disabled}>
+			<NeoButton text onclick={add} {disabled} aria-label="Add {label ?? 'entry'}">
 				{#snippet icon()}<PlusIcon size={16} />{/snippet}
-				Add
 			</NeoButton>
 		</div>
 	{/if}
@@ -67,6 +72,19 @@
 		flex-direction: column;
 		gap: 4px;
 		min-width: 0;
+	}
+	.heads {
+		display: flex;
+		gap: 8px;
+		font-size: var(--nebu-text-caption);
+		color: var(--nebu-text-muted);
+	}
+	.head {
+		flex: 1 1 0;
+		min-width: 0;
+	}
+	.headgap {
+		flex: 0 0 36px;
 	}
 	.pair {
 		display: flex;

@@ -23,7 +23,7 @@
 	});
 	const refused = $derived(failure || session.error || '');
 
-	// Signs in or creates the first account, clearing the password when the daemon refuses
+	// Signs in or creates the first account
 	async function submit(event: SubmitEvent) {
 		event.preventDefault();
 		mismatch = false;
@@ -53,8 +53,8 @@
 <main class="login">
 	{#if status?.enabled}
 		<div class="column">
-			<span class="brand"><Brand /></span>
-			<Card title={setup ? 'Create the first account' : 'Sign in'} info={setup ? 'This account becomes the administrator of the daemon' : undefined} footer={local && sso ? ssoFooter : undefined}>
+			<span class="brand"><Brand size={40} /></span>
+			<Card title={setup ? 'Create the first account' : undefined} footer={local && sso ? ssoFooter : undefined}>
 				{#if local}
 					<form class="form" onsubmit={submit}>
 						<Text bind:value={username} label="Username" min={1} autocomplete="username" />
@@ -93,13 +93,16 @@
 	.brand {
 		display: flex;
 		justify-content: center;
+		animation: nebu-reveal 320ms var(--nebu-settle) both;
+	}
+	.column > :global(.card) {
+		--nebu-settle-step: 120ms;
 	}
 	.form {
 		display: flex;
 		flex-direction: column;
 		gap: var(--nebu-space-4);
 	}
-	/* The refusal line stays in the tree so it is announced, taking room only once it holds text */
 	.commit {
 		display: flex;
 		flex-direction: column;

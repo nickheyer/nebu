@@ -2,15 +2,14 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { NeoButton, NeoCloseButton } from '#lib/neo/buttons/index.js';
 	import { isCancel, reason, rpc } from '#lib/api/transport.js';
-	import { bytes, bytesIn, byteUnit, enumLabel, num, plural, thin } from '#lib/format.js';
+	import { bytes, bytesIn, byteUnit, enumLabel, num, plural, thin, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import type { GatewayStatus } from '#lib/proto/nebu/v1/gateway_pb.js';
-	import { ProbeStatus, ProbeStatusSchema, type Device, type ProbeResult, type Storage } from '#lib/proto/nebu/v1/host_pb.js';
+	import { PoolKind, ProbeStatus, ProbeStatusSchema, type Device, type ProbeResult, type Storage } from '#lib/proto/nebu/v1/host_pb.js';
 	import { TaskStateSchema, type Task } from '#lib/proto/nebu/v1/task_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
 	import Bar, { type Segment } from '#lib/ui/Bar.svelte';
-	import Bone from '#lib/ui/Bone.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
 	import KeyRows from '#lib/ui/KeyRows.svelte';
 	import List from '#lib/ui/List.svelte';
@@ -23,13 +22,12 @@
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
 	import Str from '#lib/ui/Str.svelte';
-	import Time from '#lib/ui/Time.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import Columns from '#lib/ui/layout/Columns.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
-	import { poolBars, sharedDevices, type PoolBar } from '#lib/ui/memory.js';
+	import { poolBars, poolTitle, type PoolBar } from '#lib/ui/memory.js';
 	import { taskLamp } from '#lib/ui/status.js';
 	import { hostTabs } from '#lib/pages/host/tabs.js';
 	import { active } from '#lib/pages/tasks/tasks.js';
@@ -62,9 +60,7 @@
 	const facts = $derived(Object.entries(profile?.facts ?? {}).sort(([a], [b]) => a.localeCompare(b)));
 	const doctorRunning = $derived(doctor !== undefined && active(doctor));
 
-	// One row per memory pool, then the devices living on another pool's memory
 	const bars = $derived(poolBars(profile, live.instances.values(), live.slots.values()));
-	const shared = $derived(sharedDevices(profile));
 	const kinds = $derived(bars.flatMap((b) => b.segments.filter((s) => s.bytes > 0).map((s) => s.kind)));
 
 	async function refresh() {
@@ -78,7 +74,7 @@
 		}
 	}
 
-	// Starts the check task and streams its log over the cards until the task ends
+	// Streams the check task's log over the cards until it ends
 	async function runDoctor() {
 		try {
 			const res = await rpc.host.doctor({});
@@ -118,11 +114,17 @@
 			{ label: 'id', value: d.id, mono: true, copy: true, tip: d.id },
 			{ label: 'vendor', value: d.vendor },
 			{ label: 'name', value: d.name, tip: d.name },
-			{ label: 'memory', value: d.memoryTotalBytes ? `${bytes(d.memoryTotalBytes - d.memoryFreeBytes)} of ${bytes(d.memoryTotalBytes)}` : 'shared' },
+			{ label: 'memory', value: d.memoryTotalBytes ? `${bytes(d.memoryTotalBytes - d.memoryFreeBytes)} of ${bytes(d.memoryTotalBytes)}` : poolMemory(d.poolId) },
 			...Object.entries(d.facts)
 				.sort(([a], [b]) => a.localeCompare(b))
 				.map(([k, v]) => ({ label: k, value: v, mono: true, tip: v }))
 		];
+	}
+
+	// The pool a device without memory of its own draws on
+	function poolMemory(poolId: string): string {
+		const pool = profile?.pools.find((p) => p.id === poolId);
+		return pool ? `${bytes(pool.totalBytes)} ${poolTitle(pool.kind as PoolKind)}` : '';
 	}
 
 	// Used over total in the unit of the total, such as 3.1 / 12.0 GB
@@ -134,7 +136,7 @@
 		return Number(s.totalBytes - s.freeBytes);
 	}
 
-	// The store's own bytes in the accent, the rest of the mount's use in grey as the memory bars draw other processes
+	// The store's own bytes in the accent, the rest of the mount's use in grey
 	function storageSegments(s: Storage): Segment[] {
 		const total = storageUsed(s);
 		const store = live.store;
@@ -153,12 +155,8 @@
 		{#snippet leading()}<span class="devlabel">{bar.label}</span>{/snippet}
 		{#snippet instrument()}
 			<div class="gauge">
-				{#if bar.shared}
-					<span class="reading muted">shares system memory</span>
-				{:else}
-					<span class="track"><Bar segments={bar.segments} total={bar.total} format={(n) => bytes(n)} /></span>
-					<Tip text="{bytes(bar.free)} free" tag="span"><span class="reading">{usedOverTotal(bar.used, bar.total)}</span></Tip>
-				{/if}
+				<span class="track"><Bar segments={bar.segments} total={bar.total} format={(n) => bytes(n)} /></span>
+				<Tip text="{bytes(bar.free)} free" tag="span"><span class="reading">{usedOverTotal(bar.used, bar.total)}</span></Tip>
 			</div>
 		{/snippet}
 		{#snippet expand()}
@@ -171,12 +169,12 @@
 					<span class="label">Processes</span>
 					{#each procs as p (`${p.deviceId}:${p.pid}`)}
 						<ListRow
-							primary={p.instanceName || p.instanceId || 'other'}
+							primary={p.instanceName || p.instanceId || String(p.pid)}
 							href={p.instanceId ? `/serve/${encodeURIComponent(p.instanceId)}` : undefined}
 							facts={[{ value: String(p.pid), tip: 'pid', mono: true }, { value: bytes(p.bytes) }]}
 						/>
 					{:else}
-						<Empty text="None holding memory" row />
+						<Empty text="No processes" row />
 					{/each}
 				</Stack>
 			</Stack>
@@ -185,15 +183,14 @@
 {/snippet}
 
 {#snippet devicesCard()}
-	<Card title="Devices" count={profile?.devices.length} flush>
+	<Card title="Devices" info="Each pool of memory with the device that draws on it, the CPU on the host's RAM" flush>
 		{#if !profile}
 			<Skeleton rows={2} kind="bars" />
-		{:else if bars.length === 0 && shared.length === 0}
+		{:else if bars.length === 0}
 			<Empty text="No devices probed" action="Refresh" onclick={refresh} loading={refreshing} />
 		{:else}
 			<List head={{ primary: 'Device', instrument: 'Memory' }}>
 				{#each bars as bar (bar.id)}{@render deviceRow(bar)}{/each}
-				{#each shared as bar (bar.id)}{@render deviceRow(bar)}{/each}
 			</List>
 			<div class="legend"><MemoryLegend {kinds} /></div>
 		{/if}
@@ -201,7 +198,7 @@
 {/snippet}
 
 {#snippet storageCard()}
-	<Card title="Storage" count={profile?.storage.length} flush>
+	<Card title="Storage" flush>
 		{#if !profile}
 			<Skeleton rows={2} dot={false} primary="40ch" secondary="8ch" facts={1} action={false} menu={false} />
 		{:else if profile.storage.length === 0}
@@ -230,11 +227,13 @@
 {/snippet}
 
 {#snippet probesCard()}
-	<Card title="Probes" count={profile ? probes.length : undefined} flush>
+	<Card title="Probes" flush>
 		{#snippet tools()}
 			{#if passedProbes.length || skippedProbes.length}
 				<RowAction label={allProbes ? 'Failed only' : 'Show all'} onclick={() => (allProbes = !allProbes)} />
 			{/if}
+			<NeoButton elevation={2} loading={refreshing} onclick={refresh}>Refresh</NeoButton>
+			<NeoButton elevation={2} loading={doctorRunning} onclick={runDoctor}>Doctor</NeoButton>
 		{/snippet}
 		{#if !profile}
 			<Skeleton rows={3} dot={false} leading="20px" primary="16ch" secondary="40ch" facts={0} action={false} menu={false} />
@@ -263,10 +262,16 @@
 		{:else}
 			<KeyRows
 				rows={[
+					{ label: 'host', value: profile?.hostname ?? '' },
+					{ label: 'system', value: profile ? `${profile.os} ${profile.arch}` : '' },
+					{ label: 'probed', value: profile?.probedAt ? when(profile.probedAt) : '' },
 					{ label: 'version', value: gateway ? `${gateway.implementation} ${gateway.version}`.trim() : '', mono: true },
 					{ label: 'listener', value: gateway?.listeners.map((l) => l.addr).join(', ') ?? '', mono: true, copy: true },
+					{ label: 'transport', value: gateway ? (gateway.tls ? 'TLS' : 'plain') : '' },
+					{ label: 'auth', value: gateway ? (gateway.auth ? 'on' : 'off') : '' },
+					{ label: 'metrics', value: gateway?.metricsAddr ?? '', mono: true },
 					{ label: 'home', value: profile?.home ?? '', mono: true, copy: true },
-					...facts.map(([k, v]) => ({ label: k, value: v, mono: true, tip: v }))
+					...facts.map(([k, v]) => ({ label: k.replaceAll(/[._]/g, ' '), value: v, mono: true, tip: v }))
 				]}
 			/>
 			{#if gatewayError}<p class="error-text secondary">{gatewayError}</p>{/if}
@@ -287,26 +292,7 @@
 	</Card>
 {/snippet}
 
-<PageHeader tabs={hostTabs} active={tab}>
-	{#snippet meta()}
-		{#if tab === 'overview'}
-			{#if profile}
-				<Str value={profile.hostname} kind="name" weight={500} />
-				<span>{profile.os} {profile.arch}</span>
-				<span>probed <Time value={profile.probedAt} /></span>
-				<StatePill label={failedProbes.length ? `${plural(failedProbes.length, 'probe')} failed` : 'Probes passed'} lamp={failedProbes.length ? 'warning' : 'success'} />
-			{:else}
-				<Bone width="24ch" height="14px" />
-			{/if}
-		{/if}
-	{/snippet}
-	{#snippet actions()}
-		{#if tab === 'overview'}
-			<NeoButton elevation={2} loading={refreshing} onclick={refresh}>Refresh</NeoButton>
-			<NeoButton elevation={2} loading={doctorRunning} onclick={runDoctor}>Doctor</NeoButton>
-		{/if}
-	{/snippet}
-</PageHeader>
+<PageHeader tabs={hostTabs} active={tab} info={tab === 'logs' ? 'The daemon\'s own log, followed live' : 'What this machine offers, its memory, devices, disks and the probes that found them'} />
 
 {#if tab === 'logs'}
 	<Card>

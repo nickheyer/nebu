@@ -21,6 +21,7 @@
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import ChannelTree from '#lib/pages/bots/ChannelTree.svelte';
 	import { routeFetch, timezones } from '#lib/pages/bots/bots.js';
+	import ShuffleIcon from 'phosphor-svelte/lib/ShuffleIcon';
 
 	let { persona = $bindable(), guilds, servers }: { persona: Persona; guilds: BotGuild[]; servers: ToolServerStatus[] } = $props();
 
@@ -29,7 +30,6 @@
 	let activeFrom = $state(untrack(() => persona.humanize?.activeHours.split('-')[0] ?? ''));
 	let activeTo = $state(untrack(() => persona.humanize?.activeHours.split('-')[1] ?? ''));
 
-	// Writes both ends of the active window, empty unless both are set
 	function setHours(from: string, to: string) {
 		activeFrom = from;
 		activeTo = to;
@@ -47,32 +47,34 @@
 	const videoRoutes = routeFetch('video');
 </script>
 
+{#snippet drawn()}<ShuffleIcon size={16} aria-label="Drawn each request" />{/snippet}
+
 {#snippet identityAdvanced()}
 	<FieldRow>
-		<Switch bind:checked={persona.webhook} label="Webhook" info="Posts under the persona's name and avatar" />
-		<Switch bind:checked={persona.stream} label="Stream" info="Edits the message while generating" />
+		<Switch bind:checked={persona.webhook} label="Webhook" />
+		<Switch bind:checked={persona.stream} label="Stream" />
 	</FieldRow>
 {/snippet}
 
 {#snippet samplingAdvanced()}
 	<FieldRow>
-		<NumberField value={sampling.topK ?? 0} min={0} label="Top k" placeholder="Default" emptyZero onchange={(n: number) => (sampling.topK = n || undefined)} />
-		<NumberField value={sampling.maxTokens ?? 0} min={0} label="Max tokens" placeholder="Default" emptyZero onchange={(n: number) => (sampling.maxTokens = n || undefined)} />
+		<NumberField value={sampling.topK ?? 0} min={0} label="Top k" emptyZero onchange={(n: number) => (sampling.topK = n || undefined)} />
+		<NumberField value={sampling.maxTokens ?? 0} min={0} label="Max tokens" emptyZero onchange={(n: number) => (sampling.maxTokens = n || undefined)} />
 	</FieldRow>
 	<FieldRow>
 		<Chips bind:value={sampling.stop} label="Stop" />
-		<NumberField value={Number(sampling.seed ?? 0n)} label="Seed" placeholder="Random" emptyZero onchange={(n: number) => (sampling.seed = n ? BigInt(Math.round(n)) : undefined)} />
+		<NumberField value={Number(sampling.seed ?? 0n)} label="Seed" emptyZero mark={drawn} onchange={(n: number) => (sampling.seed = n ? BigInt(Math.round(n)) : undefined)} />
 	</FieldRow>
 {/snippet}
 
 {#snippet humanizeAdvanced()}
 	<FieldRow>
 		<Duration bind:value={humanize.maxTypingMs} base="ms" max={600_000} label="Max typing" />
-		<Slider bind:value={humanize.maxChunkChars} min={0} max={2000} step={10} label="Max chunk" unit="chars" info="0 is the Discord limit" />
+		<Slider bind:value={humanize.maxChunkChars} min={0} max={2000} step={10} label="Max chunk" unit="chars" blank={humanize.maxChunkChars === 0} />
 	</FieldRow>
 	<FieldRow>
 		<Percent value={humanize.reactionChance * 100} label="Reaction chance" onchange={(n: number) => (humanize.reactionChance = n / 100)} />
-		<Chips bind:value={humanize.reactions} label="Reactions" placeholder="Add an emoji" />
+		<Chips bind:value={humanize.reactions} label="Reactions" />
 	</FieldRow>
 	<FieldRow>
 		<Percent value={humanize.ambientReplyChance * 100} label="Ambient reply chance" onchange={(n: number) => (humanize.ambientReplyChance = n / 100)} />
@@ -80,18 +82,18 @@
 	</FieldRow>
 	<FieldRow>
 		<Stack gap={4}>
-			<FieldLabel label="Active hours" info="Empty is always" />
+			<FieldLabel label="Active hours" />
 			<Row gap={8} wrap={false}>
 				<Cell min="6rem"><Text value={activeFrom} type="time" placeholder="From" onchange={(v: string) => setHours(v, activeTo)} /></Cell>
 				<Cell min="6rem"><Text value={activeTo} type="time" placeholder="To" onchange={(v: string) => setHours(activeFrom, v)} /></Cell>
 			</Row>
 		</Stack>
-		<Select bind:value={() => humanize.timezone || undefined, (v) => (humanize.timezone = v ?? '')} options={timezones} label="Timezone" search clearable placeholder="Host timezone" />
+		<Select bind:value={() => humanize.timezone || undefined, (v) => (humanize.timezone = v ?? '')} options={timezones} label="Timezone" search clearable />
 	</FieldRow>
 {/snippet}
 
 <Stack gap={24}>
-	<FormSection title="Identity" advanced={identityAdvanced}>
+	<FormSection title="Identity" info="A webhook posts under the persona's own name and avatar instead of the bot's" advanced={identityAdvanced}>
 		<FieldRow>
 			<Text bind:value={persona.name} label="Name" max={64} required />
 			<Text bind:value={persona.avatarUrl} label="Avatar URL" type="url" max={256} />
@@ -99,25 +101,25 @@
 		{#if persona.avatarUrl}<img src={persona.avatarUrl} alt="" width="48" height="48" />{/if}
 		<Textarea bind:value={persona.systemPrompt} label="System prompt" rows={4} maxRows={12} />
 	</FormSection>
-	<FormSection title="Models">
+	<FormSection title="Models" info="An empty model takes the gateway's first ready route of that kind">
 		<FieldRow>
-			<Picker bind:value={() => persona.model || undefined, (v) => (persona.model = v ?? '')} fetch={textRoutes} label="Model" placeholder="Sole ready route" clearable current={persona.model || undefined} />
-			<Switch bind:checked={persona.vision} label="Vision" info="Passes message images to the model" />
+			<Picker bind:value={() => persona.model || undefined, (v) => (persona.model = v ?? '')} fetch={textRoutes} label="Model" clearable current={persona.model || undefined} />
+			<Switch bind:checked={persona.vision} label="Vision" />
 		</FieldRow>
 		<FieldRow>
-			<Picker bind:value={() => persona.imageModel || undefined, (v) => (persona.imageModel = v ?? '')} fetch={imageRoutes} label="Image model" placeholder="Sole ready route" clearable current={persona.imageModel || undefined} />
-			<Picker bind:value={() => persona.videoModel || undefined, (v) => (persona.videoModel = v ?? '')} fetch={videoRoutes} label="Video model" placeholder="Sole ready route" clearable current={persona.videoModel || undefined} />
+			<Picker bind:value={() => persona.imageModel || undefined, (v) => (persona.imageModel = v ?? '')} fetch={imageRoutes} label="Image model" clearable current={persona.imageModel || undefined} />
+			<Picker bind:value={() => persona.videoModel || undefined, (v) => (persona.videoModel = v ?? '')} fetch={videoRoutes} label="Video model" clearable current={persona.videoModel || undefined} />
 		</FieldRow>
 	</FormSection>
 	<FormSection title="Sampling" advanced={samplingAdvanced}>
 		<FieldRow>
-			<Slider value={sampling.temperature ?? 0} min={0} max={2} step={0.05} label="Temperature" blank={sampling.temperature === undefined} placeholder="Default" onchange={(n: number) => (sampling.temperature = n)} />
-			<Slider value={sampling.topP ?? 0} min={0} max={1} step={0.01} label="Top p" blank={sampling.topP === undefined} placeholder="Default" onchange={(n: number) => (sampling.topP = n)} />
+			<Slider value={sampling.temperature ?? 0} min={0} max={2} step={0.05} label="Temperature" blank={sampling.temperature === undefined} onchange={(n: number) => (sampling.temperature = n)} />
+			<Slider value={sampling.topP ?? 0} min={0} max={1} step={0.01} label="Top p" blank={sampling.topP === undefined} onchange={(n: number) => (sampling.topP = n)} />
 		</FieldRow>
 	</FormSection>
-	<FormSection title="Behaviour" advanced={humanize.enabled ? humanizeAdvanced : undefined}>
+	<FormSection title="Behaviour" info="Humanizing types at a human pace, splits long answers and drops the final period when casual" advanced={humanize.enabled ? humanizeAdvanced : undefined}>
 		<FieldRow>
-			<Switch bind:checked={humanize.enabled} label="Humanize" info="Types, pauses and splits like a person" />
+			<Switch bind:checked={humanize.enabled} label="Humanize" />
 			<Chips bind:value={persona.wakeWords} label="Wake words" />
 		</FieldRow>
 		{#if humanize.enabled}
@@ -130,13 +132,13 @@
 				<Duration bind:value={humanize.delayMaxMs} base="ms" max={600_000} label="Delay max" />
 			</FieldRow>
 			<FieldRow>
-				<Switch bind:checked={humanize.casual} label="Casual" info="Lowercase, no final period" />
+				<Switch bind:checked={humanize.casual} label="Casual" />
 				<Switch bind:checked={humanize.quoteReply} label="Quote reply" />
 			</FieldRow>
 		{/if}
 	</FormSection>
 	<FormSection title="Channels">
-		<ChannelTree bind:value={persona.channelIds} {guilds} label="Unprompted replies" info="Empty is every allowed channel" />
+		<ChannelTree bind:value={persona.channelIds} {guilds} label="Unprompted replies" />
 	</FormSection>
 	<FormSection title="Media">
 		<FieldRow>
@@ -146,7 +148,7 @@
 	</FormSection>
 	<FormSection title="Tools">
 		<FieldRow>
-			<Checklist bind:value={persona.toolServers} options={serverOptions} label="Tool servers" empty="No tool servers" />
+			<Checklist bind:value={persona.toolServers} options={serverOptions} label="Tool servers" />
 			<Switch bind:checked={persona.mutatingTools} label="Mutating tools" />
 		</FieldRow>
 	</FormSection>

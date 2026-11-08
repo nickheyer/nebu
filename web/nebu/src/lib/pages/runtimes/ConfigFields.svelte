@@ -21,11 +21,6 @@
 		return f.choices.map((c) => ({ value: c, label: f.choiceLabels[c] ?? c, disabled: c in f.choiceUnmet, description: f.choiceUnmet[c] }));
 	}
 
-	// The field's description behind its info mark
-	function about(f: ConfigField): string | undefined {
-		return f.description.trim() || undefined;
-	}
-
 	function pairs(list: ConfigField[]): ConfigField[][] {
 		const out: ConfigField[][] = [];
 		for (let i = 0; i < list.length; i += 2) out.push(list.slice(i, i + 2));
@@ -37,17 +32,17 @@
 	<FieldRow>
 		{#each pair as f (f.name)}
 			{#if f.choices.length}
-				<Select value={values[f.name] || undefined} options={options(f)} label={f.label || f.name} info={about(f)} required={f.required} {disabled} onchange={(v) => (values[f.name] = v ?? '')} />
+				<Select value={values[f.name] || undefined} options={options(f)} label={f.label || f.name} required={f.required} {disabled} onchange={(v) => (values[f.name] = v ?? '')} />
 			{:else if f.type === ConfigType.BOOL}
-				<Switch checked={values[f.name] === 'true'} label={f.label || f.name} info={about(f)} {disabled} onchange={(on) => (values[f.name] = on ? 'true' : 'false')} />
+				<Switch checked={values[f.name] === 'true'} label={f.label || f.name} {disabled} onchange={(on) => (values[f.name] = on ? 'true' : 'false')} />
 			{:else if f.type === ConfigType.INT}
-				<NumberField value={Number(values[f.name] ?? 0)} label={f.label || f.name} info={about(f)} placeholder={f.placeholder} {disabled} onchange={(n) => (values[f.name] = String(n))} />
+				<NumberField value={Number(values[f.name] ?? 0)} label={f.label || f.name} placeholder={f.placeholder} {disabled} onchange={(n) => (values[f.name] = String(n))} />
 			{:else if f.type === ConfigType.PATH}
-				<Path value={values[f.name] ?? ''} label={f.label || f.name} info={about(f)} placeholder={f.placeholder} {disabled} onchange={(v) => (values[f.name] = v)} />
+				<Path value={values[f.name] ?? ''} label={f.label || f.name} placeholder={f.placeholder} {disabled} onchange={(v) => (values[f.name] = v)} />
 			{:else if f.type === ConfigType.ENV}
-				<Secret bind:value={values[f.name]} label={f.label || f.name} info={about(f)} placeholder={f.placeholder || f.name.toUpperCase()} set={secretsSet} {disabled} />
+				<Secret bind:value={values[f.name]} label={f.label || f.name} set={secretsSet} {disabled} />
 			{:else}
-				<Text value={values[f.name] ?? ''} label={f.label || f.name} info={about(f)} placeholder={f.placeholder} type={f.type === ConfigType.URL ? 'url' : 'text'} required={f.required} {disabled} onchange={(v) => (values[f.name] = v)} />
+				<Text value={values[f.name] ?? ''} label={f.label || f.name} placeholder={f.placeholder} type={f.type === ConfigType.URL ? 'url' : 'text'} required={f.required} {disabled} onchange={(v) => (values[f.name] = v)} />
 			{/if}
 		{/each}
 	</FieldRow>

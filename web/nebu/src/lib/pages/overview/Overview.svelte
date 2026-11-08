@@ -2,9 +2,8 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { timestampFromDate } from '@bufbuild/protobuf/wkt';
-	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { ago, bytes, date, enumLabel, num, pct, perMinute, plural, ms } from '#lib/format.js';
+	import { ago, bytes, date, enumLabel, num, pct, perMinute, ms } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import type { Trace } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import { RouteState } from '#lib/proto/nebu/v1/gateway_pb.js';
@@ -12,7 +11,6 @@
 	import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import { TaskState, TaskStateSchema, type Task } from '#lib/proto/nebu/v1/task_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
-	import Dot from '#lib/ui/Dot.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
@@ -48,7 +46,6 @@
 		else toast.error('Runtimes failed to list', reason(list.reason));
 	});
 
-	// Recent traces by id, the live stream winning over the seed
 	const recent = $derived.by(() => {
 		const now = clockTick.now;
 		const byId = new Map<string, Trace>();
@@ -98,28 +95,28 @@
 		{
 			id: 'runtimes',
 			label: 'Runtimes',
-			value: live.installs.size ? `${num(live.installs.size)} installed` : 'None installed',
-			detail: installed.length ? installed.join(', ') : `${num(compatible)} compatible with this host`,
+			value: `${num(live.installs.size)} installed`,
+			detail: installed.length ? installed.join(', ') : `${num(compatible)} compatible`,
 			href: '/runtimes',
 			done: live.installs.size > 0,
 			lamp: live.installs.size ? 'success' : undefined,
-			action: { label: 'Install a runtime', href: '/runtimes' }
+			action: { label: 'Install', href: '/runtimes' }
 		},
 		{
 			id: 'models',
 			label: 'Models',
-			value: live.models.size ? `${num(live.models.size)} stored` : 'None stored',
-			detail: live.models.size ? `${bytes(storeUsed)} on disk` : 'Pull one from a source',
+			value: `${num(live.models.size)} stored`,
+			detail: live.models.size ? `${bytes(storeUsed)} on disk` : '',
 			href: '/models',
 			done: live.models.size > 0,
 			lamp: live.models.size ? 'success' : undefined,
-			action: { label: 'Discover models', href: '/discover' }
+			action: { label: 'Discover', href: '/discover' }
 		},
 		{
 			id: 'instances',
 			label: 'Instances',
-			value: instances.length ? `${num(runningInstances)} running` : 'None running',
-			detail: [startingInstances ? `${num(startingInstances)} starting` : '', failedInstances ? `${num(failedInstances)} failed` : ''].filter(Boolean).join(' · ') || (instances.length ? 'All healthy' : 'Launch a model on a runtime'),
+			value: `${num(runningInstances)} running`,
+			detail: [startingInstances ? `${num(startingInstances)} starting` : '', failedInstances ? `${num(failedInstances)} failed` : ''].filter(Boolean).join(' · '),
 			href: '/serve',
 			done: instances.length > 0,
 			lamp: failedInstances ? 'error' : startingInstances ? 'warning' : runningInstances ? 'success' : undefined,
@@ -128,8 +125,8 @@
 		{
 			id: 'routes',
 			label: 'Routes',
-			value: routes.length ? `${num(readyRoutes)} ready` : 'None',
-			detail: routes.length ? (pendingRoutes ? `${num(pendingRoutes)} pending` : `${plural(routes.length, 'route')} in the gateway`) : 'Each instance gets one',
+			value: `${num(readyRoutes)} ready`,
+			detail: pendingRoutes ? `${num(pendingRoutes)} pending` : '',
 			href: '/gateway/routes',
 			done: readyRoutes > 0,
 			lamp: pendingRoutes ? 'warning' : readyRoutes ? 'success' : undefined
@@ -138,7 +135,7 @@
 			id: 'traffic',
 			label: 'Traffic',
 			value: perMinute(lastMinute),
-			detail: finished.length ? `${pct(errorRate, 1)} errors${ttftP50 === undefined ? '' : ` · TTFT ${ms(ttftP50)}`}` : 'No requests in five minutes',
+			detail: finished.length ? `${pct(errorRate, 1)} errors${ttftP50 === undefined ? '' : ` · TTFT ${ms(ttftP50)}`}` : '',
 			href: '/traffic',
 			done: recent.length > 0,
 			lamp: errorRate > 5 ? 'error' : errorRate > 0 ? 'warning' : recent.length ? 'success' : undefined,
@@ -163,10 +160,10 @@
 </script>
 
 {#snippet attentionCard()}
-	<Card title="Needs attention" count={attn.length} flush>
+	<Card title="Attention" flush>
 		<List head={{ primary: 'Resource', secondary: 'Reason' }}>
 			{#each allAttention ? attn : attn.slice(0, 8) as a (a.id)}
-				<ListRow lamp={a.lamp} primary={a.title} secondary={a.reason} secondaryKind="message" secondaryWidth="64ch" onclick={() => goto(a.href)} />
+				<ListRow lamp={a.lamp} primary={a.title} secondary={a.reason} secondaryKind="message" secondaryTip={a.detail} secondaryWidth="64ch" onclick={() => goto(a.href)} />
 			{/each}
 		</List>
 		<ShowAll total={attn.length} shown={8} bind:open={allAttention} />
@@ -174,12 +171,12 @@
 {/snippet}
 
 {#snippet servingCard()}
-	<Card title="Serving" count={live.ready ? routes.length : undefined} flush>
+	<Card title="Serving" flush>
 		{#snippet tools()}<RowAction label="Gateway" href="/gateway/routes" />{/snippet}
 		{#if !live.ready}
 			<Skeleton rows={3} secondary="40ch" menu={false} action={false} />
 		{:else if routes.length === 0}
-			<Empty icon={PlayIcon} text="Nothing serving" hint="Launch a model and the gateway answers it under a route" action="Launch" href="/serve/launch" />
+			<Empty icon={PlayIcon} text="Nothing serving" action="Launch" href="/serve/launch" />
 		{:else}
 			<List head={{ primary: 'Route', secondary: 'Model', facts: ['In flight'] }}>
 				{#each allServing ? routes : routes.slice(0, 8) as r (r.name)}
@@ -188,7 +185,7 @@
 						lamp={routeLamp(state)}
 						shape={routeShape(state)}
 						primary={r.name}
-						secondary={state === RouteState.PENDING ? 'starting' : modelOf(r.status?.poolIds ?? [])}
+						secondary={modelOf(r.status?.poolIds ?? [])}
 						secondaryKind="repo"
 						facts={[{ value: state === RouteState.READY ? num(r.status?.inFlight) : '' }]}
 						onclick={() => goto(`/gateway/routes/${encodeURIComponent(r.name)}`)}
@@ -217,7 +214,7 @@
 		{#if !live.ready}
 			<Skeleton rows={4} dot={false} primary="24ch" secondary={false} menu={false} action={false} />
 		{:else if recentTasks.length === 0}
-			<Empty text="No tasks yet" hint="Pulls, installs and launches show their progress here" />
+			<Empty text="No tasks" />
 		{:else}
 			<List>
 				{#each recentTasks as t (t.id)}
@@ -233,20 +230,7 @@
 	</Card>
 {/snippet}
 
-<PageHeader>
-	{#snippet meta()}
-		{#if live.ready}
-			{#if attn.length === 0}
-				<Dot lamp="success" text="All clear" />
-			{:else}
-				<Dot lamp={attn.some((a) => a.lamp === 'error') ? 'error' : 'warning'} text="{plural(attn.length, 'item')} need attention" />
-			{/if}
-		{/if}
-	{/snippet}
-	{#snippet actions()}
-		<NeoButton class="primary" elevation={2} href="/serve/launch">Launch</NeoButton>
-	{/snippet}
-</PageHeader>
+<PageHeader info="The path from an installed runtime to live traffic on this host, and whatever needs a hand" />
 
 <Card>
 	{#if !live.ready}

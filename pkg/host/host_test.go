@@ -27,17 +27,17 @@ func (p fakeProbe) Run(context.Context) Result { return p.res }
 // Two probes seeing one GPU leave one device, the first probe's numbers with the second's facts
 func TestProbesMergeDevicesByID(t *testing.T) {
 	first := fakeProbe{id: "tool", res: Result{Status: v1.ProbeStatus_PROBE_STATUS_OK,
-		Devices: []*v1.Device{{Id: "amd-1", Name: "Radeon", MemoryTotalBytes: 100, MemoryFreeBytes: 90, Facts: map[string]string{"index": "0"}}},
-		Pools:   []*v1.MemoryPool{{Id: "amd-1", DeviceId: "amd-1", TotalBytes: 100, FreeBytes: 90}}}}
+		Devices: []*v1.Device{{Id: "amd-1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Name: "Radeon", MemoryTotalBytes: 100, MemoryFreeBytes: 90, Facts: map[string]string{"index": "0"}}},
+		Pools:   []*v1.MemoryPool{{Id: "amd-1", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "amd-1", TotalBytes: 100, FreeBytes: 90}}}}
 	second := fakeProbe{id: "sysfs", res: Result{Status: v1.ProbeStatus_PROBE_STATUS_OK,
-		Devices: []*v1.Device{{Id: "amd-1", Name: "Navi", MemoryTotalBytes: 100, MemoryFreeBytes: 50, Facts: map[string]string{"index": "7", "driver": "amdgpu"}}, {Id: "intel-1", Name: "Arc"}},
-		Pools:   []*v1.MemoryPool{{Id: "amd-1", DeviceId: "amd-1", TotalBytes: 100, FreeBytes: 50}}}}
+		Devices: []*v1.Device{{Id: "amd-1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Name: "Navi", MemoryTotalBytes: 100, MemoryFreeBytes: 50, Facts: map[string]string{"index": "7", "driver": "amdgpu"}}, {Id: "intel-1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Name: "Arc", MemoryTotalBytes: 16}},
+		Pools:   []*v1.MemoryPool{{Id: "amd-1", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "amd-1", TotalBytes: 100, FreeBytes: 50}, {Id: "intel-1", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "intel-1", TotalBytes: 16, FreeBytes: 16}}}}
 	p := New([]Probe{first, second}, nil, time.Minute)
 	profile, err := p.Profile(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(profile.GetDevices()) != 2 || len(profile.GetPools()) != 1 {
+	if len(profile.GetDevices()) != 2 || len(profile.GetPools()) != 2 {
 		t.Fatalf("devices %v pools %v", profile.GetDevices(), profile.GetPools())
 	}
 	d := profile.GetDevices()[0]
@@ -52,8 +52,8 @@ func TestProbesMergeDevicesByID(t *testing.T) {
 // Processes merge by device and pid, the decorator stamps every fresh profile before callers and the cache see it
 func TestProcessesMergeAndTheDecoratorStampsFreshProfiles(t *testing.T) {
 	first := fakeProbe{id: "smi", res: Result{Status: v1.ProbeStatus_PROBE_STATUS_OK,
-		Devices:   []*v1.Device{{Id: "gpu", MemoryTotalBytes: 100, MemoryFreeBytes: 40}},
-		Pools:     []*v1.MemoryPool{{Id: "gpu", DeviceId: "gpu", TotalBytes: 100, FreeBytes: 40}},
+		Devices:   []*v1.Device{{Id: "gpu", Kind: v1.DeviceKind_DEVICE_KIND_GPU, MemoryTotalBytes: 100, MemoryFreeBytes: 40}},
+		Pools:     []*v1.MemoryPool{{Id: "gpu", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "gpu", TotalBytes: 100, FreeBytes: 40}},
 		Processes: []*v1.ProcessUse{{DeviceId: "gpu", Pid: 7, Bytes: 50}, {DeviceId: "gpu", Pid: 9, Bytes: 10}}}}
 	second := fakeProbe{id: "fdinfo", res: Result{Status: v1.ProbeStatus_PROBE_STATUS_OK,
 		Processes: []*v1.ProcessUse{{DeviceId: "gpu", Pid: 7, Bytes: 1}, {DeviceId: "other", Pid: 7, Bytes: 5}}}}
@@ -100,7 +100,7 @@ func (g gateProbe) Run(context.Context) Result {
 	g.runs.Add(1)
 	g.started <- struct{}{}
 	<-g.release
-	return Result{Status: v1.ProbeStatus_PROBE_STATUS_OK, Devices: []*v1.Device{{Id: "gpu"}}}
+	return Result{Status: v1.ProbeStatus_PROBE_STATUS_OK, Devices: []*v1.Device{{Id: "cpu", Kind: v1.DeviceKind_DEVICE_KIND_CPU}}}
 }
 
 // Concurrent refreshes share one probe, and a cached read never waits behind it
@@ -167,45 +167,59 @@ func TestConcurrentProfilesShareOneProbe(t *testing.T) {
 	}
 }
 
-// A GPU with its own pool names it, the CPU names the host pool, a GPU drawing on host memory names none, and every device names a unified pool
-func TestLinkPoolsNamesOnlyPoolsDevicesOwn(t *testing.T) {
+// Devices name their pools, an accelerator no pool backs leaves with its processes, a unified pool takes every device
+func TestLinkPoolsKeepsOnlyDevicesAPoolBacks(t *testing.T) {
 	gpu := &v1.Device{Id: "gpu", Kind: v1.DeviceKind_DEVICE_KIND_GPU}
 	igpu := &v1.Device{Id: "igpu", Kind: v1.DeviceKind_DEVICE_KIND_GPU}
 	cpu := &v1.Device{Id: "cpu", Kind: v1.DeviceKind_DEVICE_KIND_CPU}
-	profile := &v1.HostProfile{Devices: []*v1.Device{gpu, igpu, cpu}, Pools: []*v1.MemoryPool{
-		{Id: "gpu", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "gpu"},
-		{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST},
-	}}
+	profile := &v1.HostProfile{
+		Devices:   []*v1.Device{gpu, igpu, cpu},
+		Pools:     []*v1.MemoryPool{{Id: "gpu", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "gpu"}, {Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST}},
+		Processes: []*v1.ProcessUse{{DeviceId: "igpu", Pid: 1, Bytes: 1}, {DeviceId: "gpu", Pid: 2, Bytes: 2}},
+	}
 	linkPools(profile)
-	if gpu.GetPoolId() != "gpu" || igpu.GetPoolId() != "" || cpu.GetPoolId() != "host" {
-		t.Fatalf("pools %q %q %q", gpu.GetPoolId(), igpu.GetPoolId(), cpu.GetPoolId())
+	if len(profile.GetDevices()) != 2 || profile.GetDevices()[0] != gpu || profile.GetDevices()[1] != cpu {
+		t.Fatalf("devices %v, want the gpu and the cpu", profile.GetDevices())
+	}
+	if gpu.GetPoolId() != "gpu" || cpu.GetPoolId() != "host" {
+		t.Fatalf("pools %q %q", gpu.GetPoolId(), cpu.GetPoolId())
+	}
+	if len(profile.GetProcesses()) != 1 || profile.GetProcesses()[0].GetDeviceId() != "gpu" {
+		t.Fatalf("processes %v, want the gpu's alone", profile.GetProcesses())
 	}
 	for _, d := range profile.GetDevices() {
-		if (d.GetPoolId() != "") != OwnMemory(profile, d) {
-			t.Fatalf("%s pool %q disagrees with own memory %v", d.GetId(), d.GetPoolId(), OwnMemory(profile, d))
+		if !OwnMemory(profile, d) {
+			t.Fatalf("%s stays in the profile without memory to run on", d.GetId())
 		}
 	}
-	profile.Pools = append(profile.Pools, &v1.MemoryPool{Id: "unified", Kind: v1.PoolKind_POOL_KIND_UNIFIED})
+	profile = &v1.HostProfile{Devices: []*v1.Device{gpu, igpu, cpu}, Pools: []*v1.MemoryPool{
+		{Id: "gpu", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "gpu"},
+		{Id: "unified", Kind: v1.PoolKind_POOL_KIND_UNIFIED},
+	}}
 	linkPools(profile)
-	if gpu.GetPoolId() != "gpu" || igpu.GetPoolId() != "unified" || cpu.GetPoolId() != "unified" {
-		t.Fatalf("pools with unified %q %q %q", gpu.GetPoolId(), igpu.GetPoolId(), cpu.GetPoolId())
+	if len(profile.GetDevices()) != 3 || gpu.GetPoolId() != "gpu" || igpu.GetPoolId() != "unified" || cpu.GetPoolId() != "unified" {
+		t.Fatalf("pools with unified %q %q %q over %d devices", gpu.GetPoolId(), igpu.GetPoolId(), cpu.GetPoolId(), len(profile.GetDevices()))
 	}
-	linkPools(&v1.HostProfile{Devices: []*v1.Device{cpu}})
-	if cpu.GetPoolId() != "" {
-		t.Fatalf("pool without pools %q", cpu.GetPoolId())
+	profile = &v1.HostProfile{Devices: []*v1.Device{cpu, gpu}}
+	linkPools(profile)
+	if len(profile.GetDevices()) != 1 || profile.GetDevices()[0] != cpu || cpu.GetPoolId() != "" {
+		t.Fatalf("without pools %v %q, want the cpu alone naming none", profile.GetDevices(), cpu.GetPoolId())
 	}
 }
 
 func TestOwnMemoryAndDevice(t *testing.T) {
 	gpu := &v1.Device{Id: "gpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Name: "big"}
-	igpu := &v1.Device{Id: "intel-0000:00:02.0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Name: "AlderLake-S GT1", Facts: map[string]string{"memory": "shared"}}
 	reported := &v1.Device{Id: "nv0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, MemoryTotalBytes: 1 << 30}
-	p := &v1.HostProfile{Devices: []*v1.Device{gpu, igpu, reported}, Pools: []*v1.MemoryPool{
+	p := &v1.HostProfile{Devices: []*v1.Device{gpu, reported}, Pools: []*v1.MemoryPool{
 		{Id: "gpu0", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "gpu0", TotalBytes: 1},
 		{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 1},
 	}}
-	if !OwnMemory(p, gpu) || OwnMemory(p, igpu) || !OwnMemory(p, reported) || !OwnMemory(nil, reported) || OwnMemory(nil, gpu) {
-		t.Fatal("a device pool or a reported total is memory of the device's own, a host pool is not")
+	if !OwnMemory(p, gpu) || !OwnMemory(p, reported) || !OwnMemory(nil, reported) || OwnMemory(nil, gpu) {
+		t.Fatal("a device pool or a reported total is memory the device runs on")
+	}
+	blind := &v1.Device{Id: "blind", Kind: v1.DeviceKind_DEVICE_KIND_GPU}
+	if OwnMemory(p, blind) {
+		t.Fatal("a GPU the probes found no memory for has none to run on")
 	}
 	cpu := &v1.Device{Id: "cpu0", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Name: "cpu"}
 	if !OwnMemory(p, cpu) || OwnMemory(nil, cpu) {

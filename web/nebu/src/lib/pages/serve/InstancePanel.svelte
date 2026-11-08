@@ -62,7 +62,7 @@
 		{ label: 'quantization', value: inv?.quantization ?? '' },
 		{ label: 'accelerator', value: inv?.accelerator ?? '' },
 		{ label: 'modalities', value: inv?.modalities.join(', ') ?? '' },
-		{ label: 'template', value: inst.template ? `${inst.template.source || inst.template.error || 'none'}, tools ${enumLabel(ToolSupportSchema, inst.template.tools)}` : '' }
+		{ label: 'template', value: inst.template ? `${inst.template.source || inst.template.error}, tools ${enumLabel(ToolSupportSchema, inst.template.tools)}` : '' }
 	]);
 
 	// Planned and measured bytes per pool the plan touches, measured by the processes the host attributes
@@ -190,13 +190,13 @@
 		<LogView source={logs} name={inst.name} />
 	{:else if active === 'adapters'}
 		{#if done}
-			<Empty icon={StackIcon} text="Instance stopped" hint="Adapters load into a running instance alone" />
+			<Empty icon={StackIcon} text="Instance stopped" />
 		{:else}
 			<Stack gap={24}>
 				{#if adapters === undefined}
 					<Skeleton rows={2} dot={false} primary="24ch" secondary="40ch" facts={0} menu={false} />
 				{:else if adapters.length === 0}
-					<Empty text="No adapters loaded" row />
+					<Empty text="No adapters" row />
 				{:else}
 					<List head={{ primary: 'Adapter', secondary: 'Path' }}>
 						{#each adapters as a (a.name)}
@@ -209,7 +209,7 @@
 				<FormSection title="Load adapter">
 					<FieldRow>
 						<Text bind:value={adapterName} label="Name" max={64} required />
-						<Path bind:value={adapterPath} label="Path" info="Empty loads one the runtime loaded at launch" />
+						<Path bind:value={adapterPath} label="Path" />
 					</FieldRow>
 				</FormSection>
 			</Stack>
@@ -218,7 +218,7 @@
 	{:else if active === 'ranks'}
 		<List head={{ primary: 'Rank', secondary: 'Endpoint' }}>
 			{#each inst.ranks as r (r.rank)}
-				<ListRow lamp={r.healthy ? 'success' : 'error'} primary="rank {r.rank}" primaryTip="pid {r.pid}{'\n'}port {r.port || 'none'}" primaryWidth="10ch" secondary={r.endpoint} secondaryKind="address" secondaryWidth="24ch" />
+				<ListRow lamp={r.healthy ? 'success' : 'error'} primary="rank {r.rank}" primaryTip="pid {r.pid}{r.port ? `\nport ${r.port}` : ''}" primaryWidth="10ch" secondary={r.endpoint} secondaryKind="address" secondaryWidth="24ch" />
 			{/each}
 		</List>
 	{:else if active === 'seat' && inst.seat}
@@ -250,7 +250,7 @@
 					{/each}
 				</List>
 			{:else if !inst.error}
-				<Empty icon={StethoscopeIcon} text="No triage hits" hint="Known failure patterns in the log land here with a fix to try" />
+				<Empty icon={StethoscopeIcon} text="No triage hits" />
 			{/if}
 		</Stack>
 	{/if}

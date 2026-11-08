@@ -105,7 +105,7 @@
 		};
 	});
 
-	// Lists the gateway's routes, keeping the pick while it stays ready and else taking the first ready text route
+	// Lists the gateway's routes, taking the first ready text route when the pick is gone
 	async function loadModels() {
 		try {
 			models = await listModels();
@@ -132,13 +132,11 @@
 		}
 	}
 
-	// Asks the gateway for its routes on every search, answering the ready ones holding the typed words
 	async function fetchModels(q: string, _cursor: string, _limit: number, signal: AbortSignal) {
 		models = await listModels(signal);
 		return { items: modelOptions(models, q), next: '' };
 	}
 
-	// Opens the conversation the route names, a bare route starting a new one
 	$effect(() => {
 		const want = id;
 		untrack(() => {
@@ -156,7 +154,6 @@
 		});
 	});
 
-	// Moves a new conversation to its own route once its first turn is saved
 	$effect(() => {
 		if (!id && session.saved) void goto(`/chat/${session.saved}`, { replace: true });
 	});
@@ -174,7 +171,6 @@
 	const assistantName = $derived(session.settings.assistantName || session.conversation.model || session.model || 'Model');
 	const draftTurn = $derived(create(ChatTurnSchema, { role: 'assistant', text: session.draft, toolCalls: session.draftCalls }));
 	const groups = $derived(byDay(conversations.items));
-	// The picker waits for a route to be ready, naming the lack in its placeholder meanwhile
 	const noRoute = $derived(modelsLoaded && !modelsError && !anyReady);
 	const quiet = $derived(shown.length === 0 && !session.busy);
 	const columns = $derived(viewport.ultrawide);
@@ -182,7 +178,7 @@
 	const sizeOptions = imageSizes.map((s) => ({ value: s, label: s }));
 	const fpsOptions = videoFps.map((f) => ({ value: f, label: String(f) }));
 
-	// Follows the thread as it grows, streamed text and late images included, while the person has not scrolled up
+	// Follows the thread as it grows until the person scrolls up
 	$effect(() => {
 		if (!flow) return;
 		const watcher = new ResizeObserver(() => {
@@ -215,7 +211,6 @@
 		conversations.refresh();
 	}
 
-	// Runs a step of the conversation, its failure raising a toast
 	async function attempt(title: string, step: () => Promise<void>) {
 		pinned = true;
 		try {
@@ -288,7 +283,8 @@
 
 {#snippet search()}
 	<Toolbar>
-		<span class="grow"><SearchBox bind:value={query} placeholder="Search" width="100%" /></span>
+		<span class="grow"><SearchBox bind:value={query} width="100%" /></span>
+		<NeoButton elevation={2} aria-label="New conversation" onclick={newConversation}>{#snippet icon()}<PlusIcon size={20} />{/snippet}</NeoButton>
 	</Toolbar>
 {/snippet}
 
@@ -299,9 +295,9 @@
 		<Empty text={conversations.error} action="Retry" onclick={() => conversations.refresh()} />
 	{:else if conversations.items.length === 0}
 		{#if query}
-			<Empty text="No matches" hint="Search matches titles and models" action="Clear search" onclick={() => (query = '')} />
+			<Empty text="No matches" action="Clear search" onclick={() => (query = '')} />
 		{:else}
-			<Empty text="No conversations" hint="Each saves after its first reply" />
+			<Empty text="No conversations" />
 		{/if}
 	{:else}
 		{#each groups as g (g.label)}
@@ -325,7 +321,7 @@
 
 {#snippet settingsForm()}
 	{#key session.conversation.id}
-		<SettingsPanel bind:settings={() => session.settings, (v) => (session.conversation.settings = v)} {servers} {serversError} contextLength={current?.inventory.context_length ?? 0} />
+		<SettingsPanel bind:settings={() => session.settings, (v) => (session.conversation.settings = v)} {servers} {serversError} contextLength={current?.inventory.context_length ?? 0} assistantFallback={session.conversation.model || session.model} />
 	{/key}
 {/snippet}
 
@@ -335,7 +331,7 @@
 			<NeoButton text aria-label="Conversations" onclick={() => (listOpen = true)}>{#snippet icon()}<ChatsIcon size={20} />{/snippet}</NeoButton>
 		{/if}
 		<span class="model">
-			<Picker bind:value={() => session.model || undefined, (v) => (session.model = v ?? '')} fetch={fetchModels} placeholder={noRoute ? 'No ready route' : 'Model'} disabled={noRoute} current={session.model} />
+			<Picker bind:value={() => session.model || undefined, (v) => (session.model = v ?? '')} fetch={fetchModels} label="Model" compact disabled={noRoute} current={session.model} />
 		</span>
 		<span class="push">
 			<NeoButton text aria-label="Settings" aria-pressed={columns ? settingsColumn : undefined} onclick={toggleSettings}>{#snippet icon()}<GearIcon size={20} />{/snippet}</NeoButton>
@@ -354,12 +350,10 @@
 		<Empty icon={PlayIcon} text="Routes failed to list" hint={modelsError} action="Retry" onclick={loadModels} />
 	{:else if quiet && !anyReady}
 		{#if account.reads}
-			<Empty icon={PlayIcon} text="Nothing serving" hint="Chat answers through a ready route, launch a model to get one" action="Launch" href="/serve/launch" primary />
+			<Empty icon={PlayIcon} text="No ready route" action="Launch" href="/serve/launch" primary />
 		{:else}
-			<Empty icon={PlayIcon} text="Nothing serving" hint="Chat answers through a ready route, an operator launches the models" />
+			<Empty icon={PlayIcon} text="No ready route" />
 		{/if}
-	{:else if quiet}
-		<Empty icon={ChatsCircleIcon} text="No messages yet" hint={media ? `Describe what ${session.model} should make` : 'Enter sends, Shift and Enter starts a new line'} />
 	{/if}
 	{#each shown as turn, i (i)}
 		<Turn
@@ -439,14 +433,7 @@
 	</div>
 {/snippet}
 
-<PageHeader>
-	{#snippet meta()}
-		{#if id && session.conversation.title}<Str value={session.conversation.title} kind="name" />{/if}
-	{/snippet}
-	{#snippet actions()}
-		<NeoButton elevation={2} onclick={newConversation}>{#snippet icon()}<PlusIcon size={20} />{/snippet}New</NeoButton>
-	{/snippet}
-</PageHeader>
+<PageHeader title={id && session.conversation.title ? session.conversation.title : undefined} info="Talk to any ready route through the gateway, with tools, images and video where the model allows" />
 
 <div class="chat" class:mobile={viewport.mobile}>
 	{#if columns}
@@ -458,7 +445,7 @@
 	{/if}
 	<div class="col main">
 		<Card flush grow tools={head} footer={composer}>
-			<div class="scroll thread hairline" class:centred={quiet && !session.opening} bind:this={scroller} {onscroll}>
+			<div class="scroll thread hairline" class:centred={quiet && !session.opening && (!anyReady || !!modelsError || !!openError)} bind:this={scroller} {onscroll}>
 				<div class="flow" bind:this={flow}>{@render messages()}</div>
 			</div>
 		</Card>
@@ -488,7 +475,7 @@
 </div>
 
 <style>
-	/* Fills the viewport under the top bar and its hairline, above the phone tab bar, so only the columns scroll */
+	/* Fills the viewport under the top bar so only the columns scroll */
 	.chat {
 		--chat-below: 0px;
 
@@ -514,7 +501,6 @@
 	.settings {
 		flex: 0 0 320px;
 	}
-	/* Each card body scrolls on its own, sized by the card rather than by its content */
 	.scroll {
 		display: flex;
 		flex: 1 1 auto;
@@ -539,7 +525,6 @@
 	.centred .flow {
 		justify-content: center;
 	}
-	/* Grows to its width from nothing so the buttons beside it never wrap onto a line of their own */
 	.model {
 		display: flex;
 		flex: 1 1 0;
@@ -579,7 +564,6 @@
 		flex: 1 1 auto;
 		min-width: 0;
 	}
-	/* Centred on a one line box, staying at its foot as the box grows */
 	.beside {
 		display: inline-flex;
 		flex: 0 0 auto;

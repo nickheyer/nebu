@@ -3,8 +3,9 @@
 	import { NeoDialog } from '#lib/neo/floating/dialog/index.js';
 	import { NeoDrawer } from '#lib/neo/floating/drawer/index.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
+	import { hatch } from '#lib/ui/motion.svelte.js';
 
-	// List fills the page until a record opens beside it, in a drawer when narrow, full screen on phones
+	// The list and the open record, beside it, in a drawer or full screen by width
 	let {
 		open = $bindable(false),
 		onclose,
@@ -15,11 +16,9 @@
 	}: {
 		open?: boolean;
 		onclose?: () => void;
-		// Toolbars and facts spanning the full width over the list and the panel
 		head?: Snippet;
 		list?: Snippet;
 		children: Snippet;
-		// The drawer's width when the page is too narrow to hold the record beside the list
 		width?: number;
 	} = $props();
 
@@ -38,7 +37,7 @@
 		<div class="split">
 			<div class="list">{@render list?.()}</div>
 			<aside class="pane">
-				<div class="panel">{@render children()}</div>
+				<div class="panel" in:hatch>{@render children()}</div>
 			</aside>
 		</div>
 	{:else}
@@ -85,7 +84,6 @@
 		gap: var(--nebu-space-5);
 		min-width: 0;
 	}
-	/* The open record follows the scroll under the top bar, sized to its content up to the viewport */
 	.pane {
 		position: sticky;
 		top: calc(var(--nebu-top, 61px) + var(--nebu-space-4));
@@ -105,7 +103,7 @@
 		overflow: auto;
 		background: var(--neo-background-color);
 		border-radius: var(--neo-border-radius-md);
-		box-shadow: var(--neo-box-shadow-raised-2);
+		box-shadow: var(--neo-box-shadow-raised-2), var(--nebu-machined);
 	}
 	.sheet {
 		--nebu-sheet-pad: var(--nebu-space-5);

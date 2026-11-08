@@ -4,8 +4,7 @@
 	import { NeoDialog } from '#lib/neo/floating/dialog/index.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
 
-	// A modal form. One title, the fields, and a footer with Cancel and the one primary action.
-	// `confirm` names the action; leaving it out gives a dialog with Close alone.
+	// A modal form with a title, fields and a footer holding Cancel and one primary action
 	let {
 		open = $bindable(false),
 		title,
@@ -31,7 +30,6 @@
 		onconfirm?: () => unknown;
 		onclose?: () => void;
 		children: Snippet;
-		// Content in the footer before the buttons, such as a status line
 		footer?: Snippet;
 	} = $props();
 
@@ -59,7 +57,6 @@
 </NeoDialog>
 
 <style>
-	/* Fills the dialog's width, which lays its child out as a shrinking flex item */
 	.dialog {
 		display: flex;
 		flex: 1 1 auto;

@@ -222,8 +222,13 @@ func TestDRMSysfsReadsAMDAndIntelCards(t *testing.T) {
 		t.Fatalf("arc %+v %+v", arc, res.Pools[1])
 	}
 	igpu := res.Devices[2]
-	if igpu.GetId() != "intel-0000:00:02.0" || igpu.GetName() != "AlderLake-S GT1" || igpu.GetMemoryTotalBytes() != 0 || igpu.GetFacts()["memory"] != "shared" || igpu.GetFacts()["driver"] != "i915" {
+	if igpu.GetId() != "intel-0000:00:02.0" || igpu.GetName() != "AlderLake-S GT1" || igpu.GetMemoryTotalBytes() != 0 || igpu.GetFacts()["driver"] != "i915" {
 		t.Fatalf("integrated %+v", igpu)
+	}
+	for _, p := range res.Pools {
+		if p.GetDeviceId() == igpu.GetId() {
+			t.Fatalf("a card without local memory got a pool %+v", p)
+		}
 	}
 	if res := (drmSysfs{root: filepath.Join(root, "nowhere")}).Run(context.Background()); res.Status != v1.ProbeStatus_PROBE_STATUS_SKIPPED {
 		t.Fatalf("no sysfs is skipped: %+v", res)

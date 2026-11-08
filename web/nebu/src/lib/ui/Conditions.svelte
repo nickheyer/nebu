@@ -3,7 +3,7 @@
 	import { when } from '#lib/format.js';
 	import Dot from '#lib/ui/Dot.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
-	import { conditionLamp } from '#lib/ui/status.js';
+	import { conditionLamp, reasonWords } from '#lib/ui/status.js';
 
 	let { conditions = [] }: { conditions?: Condition[] } = $props();
 
@@ -19,7 +19,7 @@
 				<div class="cond">
 					<Dot lamp={conditionLamp(c.status)} />
 					<span class="type">{c.type}</span>
-					<span class="reason muted ellipsis">{c.reason}</span>
+					<span class="reason muted ellipsis">{reasonWords(c.reason)}</span>
 				</div>
 			</Tip>
 		{/each}

@@ -55,17 +55,14 @@
 		if (auth) void tokens.load({});
 	});
 
-	// Every list the tabs count, settled together so no tab reads a count while another loads
-	const counted = $derived((!admin || (sources.settled && toolServers.settled && (accountsOff || users.settled))) && (!auth || tokens.settled));
 	const tabs = $derived.by((): HeaderTab[] => {
 		if (!admin) return [];
-		const count = (n: number | undefined) => (counted ? n : undefined);
 		return [
 			{ id: 'general', label: 'General', href: '/settings/general' },
-			{ id: 'sources', label: 'Sources', href: '/settings/sources', count: count(sources.items.length) },
-			{ id: 'tools', label: 'Tools', href: '/settings/tools', count: count(toolServers.items.length) },
-			{ id: 'accounts', label: 'Accounts', href: '/settings/accounts', count: count(accountsOff ? undefined : users.items.length) },
-			{ id: 'tokens', label: 'API tokens', href: '/settings/tokens', count: count(auth ? tokens.items.length : undefined) }
+			{ id: 'sources', label: 'Sources', href: '/settings/sources' },
+			{ id: 'tools', label: 'Tools', href: '/settings/tools' },
+			{ id: 'accounts', label: 'Accounts', href: '/settings/accounts' },
+			{ id: 'tokens', label: 'API tokens', href: '/settings/tokens' }
 		];
 	});
 	// Accounts below admin reach their tokens alone

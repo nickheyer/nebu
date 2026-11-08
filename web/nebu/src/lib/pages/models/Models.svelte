@@ -58,7 +58,6 @@
 	let fetched = $state<StoredModel | undefined>(undefined);
 	let fetchError = $state('');
 	let cardWidth = $state(0);
-	// The three filters fold behind one button where the card is too narrow to hold them beside the search
 	const folded = $derived(cardWidth > 0 && cardWidth < 1000);
 
 	const list = new ListQuery<StoredModel, { query: string; kind?: ModelKind; runtimeId?: string; formatId?: string; sort: ModelSort }>(
@@ -86,7 +85,7 @@
 	const panelOpen = $derived(repo !== '');
 	const key = $derived(modelKey({ sourceId, repo, group }));
 
-	// The open model as GetModel answered it, the stream's copy taking over once the snapshot is in
+	// The open model as GetModel answered it until the stream holds it
 	$effect(() => {
 		const ref = { sourceId, repo, group };
 		fetched = undefined;
@@ -105,7 +104,6 @@
 	const selected = $derived(panelOpen ? (live.ready ? live.models.get(key) : fetched) : undefined);
 	const activeFilters = $derived([kind, runtimeId, formatId].filter((v) => v !== undefined).length);
 	const filtering = $derived(query !== '' || activeFilters > 0);
-	// Searching an empty store has nothing to narrow, so the controls wait for the first model
 	const searchable = $derived(filtering || !live.ready || live.models.size > 0);
 	const kinds = enumOptions(ModelKindSchema).map((o) => ({ value: o.value as ModelKind, label: o.label }));
 	const runtimeOptions = $derived(runtimes.map((r) => ({ value: r.runtime?.id ?? '', label: r.runtime?.name || r.runtime?.id || '' })));
@@ -121,7 +119,6 @@
 		return [...live.instances.values()].some((i) => !terminal(i.state) && sameModel(i, m));
 	}
 
-	// Parameter count, kind and up to three compatible runtimes with the rest counted
 	function phrase(m: StoredModel, all = false): string {
 		const names = runtimeNames(m.runtimes, runtimes);
 		const shown = all || names.length <= 3 ? names : [...names.slice(0, 3), `+${names.length - 3}`];
@@ -130,7 +127,7 @@
 
 	function precisionTip(m: StoredModel): string {
 		const p = m.descriptor?.precision;
-		return [`format ${m.formatId || 'none'}`, p ? `quality ${quality(p.level)}` : ''].filter(Boolean).join('\n');
+		return [m.formatId ? `format ${m.formatId}` : '', p ? `quality ${quality(p.level)}` : ''].filter(Boolean).join('\n');
 	}
 
 	function open(m: StoredModel, t = 'about') {
@@ -163,26 +160,26 @@
 </script>
 
 {#snippet collectSwitch()}
-	<Switch bind:checked={collect} label="Collect unreferenced blobs" />
+	<Switch bind:checked={collect} label="Collect blobs" />
 {/snippet}
 
 {#snippet sortIcon()}<SortAscendingIcon size={16} />{/snippet}
 
-{#snippet kindSelect(label?: string)}
-	<Select bind:value={kind} options={kinds} {label} placeholder={label ? 'Any' : 'Kind'} clearable />
+{#snippet kindSelect()}
+	<Select bind:value={kind} options={kinds} label="Kind" compact clearable />
 {/snippet}
 
-{#snippet runtimeSelect(label?: string)}
-	<Select bind:value={runtimeId} options={runtimeOptions} {label} placeholder={label ? 'Any' : 'Runtime'} clearable search />
+{#snippet runtimeSelect()}
+	<Select bind:value={runtimeId} options={runtimeOptions} label="Runtime" compact clearable search />
 {/snippet}
 
-{#snippet formatSelect(label?: string)}
-	<Select bind:value={formatId} options={formatOptions} {label} placeholder={label ? 'Any' : 'Format'} clearable />
+{#snippet formatSelect()}
+	<Select bind:value={formatId} options={formatOptions} label="Format" compact clearable />
 {/snippet}
 
 {#snippet tools()}
 	{#if searchable}
-		<span class="search"><SearchBox bind:value={query} placeholder="Search models" width="100%" /></span>
+		<span class="search"><SearchBox bind:value={query} width="100%" /></span>
 		{#if folded}
 			<NeoButton elevation={2} aria-expanded={filtersOpen} onclick={() => (filtersOpen = !filtersOpen)}>{#snippet icon()}<FunnelIcon size={20} />{/snippet}Filters{#if activeFilters}&nbsp;{activeFilters}{/if}</NeoButton>
 		{:else}
@@ -200,12 +197,12 @@
 
 {#snippet listView()}
 	<div class="frame" bind:clientWidth={cardWidth}>
-		<Card title="Models" count={live.ready ? live.models.size : undefined} flush tools={searchable ? tools : undefined}>
+		<Card title="Models" flush tools={searchable ? tools : undefined}>
 			{#if folded && filtersOpen && searchable}
 				<div class="filters">
-					{@render kindSelect('Kind')}
-					{@render runtimeSelect('Runtime')}
-					{@render formatSelect('Format')}
+					{@render kindSelect()}
+					{@render runtimeSelect()}
+					{@render formatSelect()}
 				</div>
 			{/if}
 			{#if !list.settled}
@@ -213,9 +210,9 @@
 			{:else if list.error}
 				<Empty icon={CubeIcon} text="Models failed to list" hint={list.error} action="Retry" onclick={() => list.refresh()} />
 			{:else if list.items.length === 0 && filtering}
-				<Empty icon={MagnifyingGlassIcon} text="No models match" hint="Nothing stored matches this search and these filters" action="Clear filters" onclick={clearFilters} />
+				<Empty icon={MagnifyingGlassIcon} text="No models match" action="Clear filters" onclick={clearFilters} />
 			{:else if list.items.length === 0}
-				<Empty icon={CubeIcon} text="No models stored" hint="Pull a model on Discover and it lands here, ready to launch" action="Discover models" href="/discover" primary />
+				<Empty icon={CubeIcon} text="No models stored" hint="Pulls land here" action="Discover" href="/discover" primary />
 			{:else}
 				<List head={{ primary: 'Model', secondary: 'Details', facts: ['Size'] }}>
 					{#each list.items as m (modelKeyOf(m))}
@@ -236,13 +233,15 @@
 								{ label: 'Inspect', onclick: () => open(m, 'fit') },
 								{ label: 'Verify', onclick: () => verifyModel(m) },
 								{ label: 'Export', onclick: () => startExport(m) },
-								{ label: 'Remove', onclick: () => remove(m), confirm: `Remove ${m.repo}`, confirmBody: collectSwitch, disabled: running, description: running ? 'instance running' : undefined, danger: true, divider: true }
+								{ label: 'Remove', onclick: () => remove(m), confirm: `Remove ${m.repo}?`, confirmBody: collectSwitch, disabled: running, description: running ? 'running' : undefined, danger: true, divider: true }
 							]}
 						>
 							{#snippet badges()}
-								<Tip text={precisionTip(m)} tag="span">
-									<StatePill label={m.descriptor?.precision?.label || m.formatId || 'unknown'} />
-								</Tip>
+								{#if m.descriptor?.precision?.label || m.formatId}
+									<Tip text={precisionTip(m)} tag="span">
+										<StatePill label={m.descriptor?.precision?.label || m.formatId} />
+									</Tip>
+								{/if}
 							{/snippet}
 							{#snippet action()}
 								<RowAction href={launchHref(m)} label="Launch" />
@@ -256,7 +255,7 @@
 	</div>
 {/snippet}
 
-<PageHeader tabs={modelsTabs} active="library" />
+<PageHeader tabs={modelsTabs} active="library" info="Models pulled onto this host, ready to launch or inspect for fit" />
 
 <Sheet open={panelOpen} onclose={() => goto('/models')} head={storeHead} list={listView}>
 	{#if selected}
@@ -270,7 +269,7 @@
 		{:else if !live.ready}
 			<Skeleton rows={6} kind="facts" />
 		{:else}
-			<Empty icon={CubeIcon} text="No such model" hint="The store holds no group under this name" action="Back" href="/models" />
+			<Empty icon={CubeIcon} text="No such model" action="Back" href="/models" />
 		{/if}
 	{/if}
 </Sheet>

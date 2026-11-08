@@ -26,7 +26,6 @@
 	let { tabs, tokens }: { tabs: HeaderTab[]; tokens: ListQuery<ApiToken, Record<string, never>> } = $props();
 
 	const auth = $derived(session.status?.enabled === true);
-	// Scopes no wider than the caller's own role
 	const roleScopes = $derived(session.role === 'admin' ? [Scope.INFERENCE, Scope.READ, Scope.OPERATE, Scope.ADMIN] : session.role === 'operator' ? [Scope.INFERENCE, Scope.READ, Scope.OPERATE] : [Scope.INFERENCE]);
 
 	let newOpen = $state(false);
@@ -76,21 +75,20 @@
 	}
 </script>
 
-<PageHeader {tabs} active="tokens">
-	{#snippet actions()}
+<PageHeader {tabs} active="tokens" info="Bearer tokens for the API, each no wider than the role that made it" />
+
+<Card title="API tokens" flush>
+	{#snippet tools()}
 		{#if auth}<NeoButton class="primary" elevation={2} onclick={openNew}>New token</NeoButton>{/if}
 	{/snippet}
-</PageHeader>
-
-<Card title="API tokens" count={tabs.length === 0 && tokens.settled ? tokens.items.length : undefined} info="Bearer tokens for clients that call the daemon and the gateway without signing in" flush>
 	{#if !auth}
-		<Empty icon={KeyIcon} text="Authentication is off" hint="Tokens appear here once the daemon runs with authentication on" />
+		<Empty icon={KeyIcon} text="Authentication off" />
 	{:else if !tokens.settled}
 		<Skeleton rows={3} dot={false} secondary="10ch" action={false} />
 	{:else if tokens.error}
 		<Empty text={tokens.error} action="Retry" onclick={() => tokens.refresh()} />
 	{:else if tokens.items.length === 0}
-		<Empty icon={KeyIcon} text="No tokens" hint="A token lets a script or client act as you within the scopes you give it" action="New token" onclick={openNew} />
+		<Empty icon={KeyIcon} text="No tokens" action="New token" onclick={openNew} />
 	{:else}
 		<List head={{ primary: 'Name', secondary: 'Prefix', instrument: 'Scopes', facts: ['Last used'] }}>
 			{#each tokens.items as t (t.id)}
@@ -99,7 +97,7 @@
 					secondary={t.prefix}
 					secondaryKind="id"
 					secondaryWidth="12ch"
-					facts={[t.lastUsedAt ? { value: ago(t.lastUsedAt, clockTick.now), tip: `last used ${when(t.lastUsedAt)}` } : { value: 'never', tip: `created ${when(t.createdAt)}` }]}
+					facts={[t.lastUsedAt ? { value: ago(t.lastUsedAt, clockTick.now), tip: `last used ${when(t.lastUsedAt)}` } : { value: '', tip: `created ${when(t.createdAt)}` }]}
 					menu={[{ label: 'Revoke', danger: true, confirm: `Revoke ${t.name}?`, onclick: () => revoke(t) }]}
 				>
 					{#snippet instrument()}
@@ -115,7 +113,7 @@
 </Card>
 
 <Dialog bind:open={newOpen} title="New token" confirm="Create" {busy} disabled={!name.trim() || scopes.length === 0} onconfirm={create}>
-	<Text bind:value={name} label="Name" min={1} placeholder="CI runner" />
+	<Text bind:value={name} label="Name" min={1} max={64} required />
 	<Checklist bind:value={scopes} options={roleScopes.map((s) => ({ value: s, label: capitalize(scopeLabel(s)) }))} label="Scopes" />
 	{#snippet footer()}
 		{#if error}<span class="error-text">{error}</span>{/if}
@@ -123,7 +121,7 @@
 </Dialog>
 
 <Dialog bind:open={secretOpen} title="Token created" onclose={() => (secret = '')}>
-	<p class="secondary">Copy it now. The secret is shown once and cannot be read again.</p>
+	<p class="secondary">Shown once</p>
 	<div class="secret">
 		<Screen padding={8}><span class="value">{secret}</span></Screen>
 		<CopyButton text={secret} />

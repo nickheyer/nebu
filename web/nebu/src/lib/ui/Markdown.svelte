@@ -7,13 +7,19 @@
 	const rendered = $derived(renderMarkdown({ markdown: source, html }, resolve));
 </script>
 
-<div class="markdown">{@html rendered}</div>
+<article class="markdown">{@html rendered}</article>
 
 <style>
+	/* A reading measure that never widens its column */
 	.markdown {
+		width: 100%;
+		max-width: 76ch;
 		min-width: 0;
-		line-height: 1.6;
+		margin: 0 auto;
+		font-weight: 300;
+		line-height: 1.65;
 		overflow-wrap: anywhere;
+		contain: inline-size;
 	}
 	.markdown :global(h1),
 	.markdown :global(h2),
@@ -21,15 +27,16 @@
 	.markdown :global(h4),
 	.markdown :global(h5),
 	.markdown :global(h6) {
-		margin: 24px 0 8px;
-		font-weight: 600;
+		margin: 28px 0 8px;
+		font-weight: 500;
 		line-height: 1.3;
 	}
 	.markdown :global(h1) {
 		font-size: 24px;
+		font-weight: 400;
 	}
 	.markdown :global(h2) {
-		font-size: 17px;
+		font-size: 18px;
 	}
 	.markdown :global(h3),
 	.markdown :global(h4),
@@ -37,9 +44,7 @@
 	.markdown :global(h6) {
 		font-size: 15px;
 	}
-	.markdown :global(h1:first-child),
-	.markdown :global(h2:first-child),
-	.markdown :global(h3:first-child) {
+	.markdown :global(:is(h1, h2, h3):first-child) {
 		margin-top: 0;
 	}
 	.markdown :global(p),
@@ -48,8 +53,12 @@
 	.markdown :global(blockquote),
 	.markdown :global(pre),
 	.markdown :global(.table),
-	.markdown :global(details) {
-		margin: 0 0 12px;
+	.markdown :global(details),
+	.markdown :global(figure) {
+		margin: 0 0 14px;
+	}
+	.markdown :global(strong) {
+		font-weight: 500;
 	}
 	.markdown :global(ul),
 	.markdown :global(ol) {
@@ -61,18 +70,27 @@
 	.markdown :global(a) {
 		color: var(--neo-color-primary);
 	}
+	.markdown :global([align='center']),
+	.markdown :global(center) {
+		text-align: center;
+	}
+	.markdown :global([align='center'] img),
+	.markdown :global(center img) {
+		display: inline-block;
+	}
 	.markdown :global(pre) {
 		padding: 12px;
-		white-space: pre-wrap;
-		overflow-wrap: anywhere;
+		overflow-x: auto;
 		font-family: var(--nebu-font-mono);
 		font-size: 13px;
+		font-weight: 400;
 		line-height: 1.5;
 		color: var(--nebu-screen-text);
+		white-space: pre;
 		background: var(--nebu-screen-background);
 		border: 1px solid var(--nebu-screen-border);
 		border-radius: 8px;
-		box-shadow: inset 1px 1px 3px rgb(0 0 0 / 50%);
+		box-shadow: var(--nebu-bezel);
 	}
 	.markdown :global(pre code) {
 		padding: 0;
@@ -83,20 +101,23 @@
 		padding: 1px 4px;
 		font-family: var(--nebu-font-mono);
 		font-size: 13px;
+		font-weight: 400;
 		background: var(--neo-background-color-secondary);
 		border-radius: 4px;
 	}
 	.markdown :global(.table) {
 		max-width: 100%;
-		overflow: auto;
+		overflow-x: auto;
 	}
 	.markdown :global(table) {
-		border-collapse: collapse;
+		min-width: max-content;
+		margin: 0 auto;
 		font-size: 13px;
+		border-collapse: collapse;
 	}
 	.markdown :global(td),
 	.markdown :global(th) {
-		padding: 4px 8px;
+		padding: 4px 10px;
 		text-align: left;
 		vertical-align: top;
 		border: 1px solid var(--nebu-border);
@@ -108,7 +129,17 @@
 	.markdown :global(video) {
 		max-width: 100%;
 		height: auto;
-		border-radius: 8px;
+		vertical-align: middle;
+		border-radius: 6px;
+	}
+	.markdown :global(p > img:only-child),
+	.markdown :global(p > a:only-child > img:only-child) {
+		display: block;
+		margin: 0 auto;
+	}
+	.markdown :global(.katex-display) {
+		overflow-x: auto;
+		overflow-y: hidden;
 	}
 	.markdown :global(blockquote) {
 		padding: 0 12px;
@@ -116,7 +147,7 @@
 		border-left: 2px solid var(--nebu-steel);
 	}
 	.markdown :global(hr) {
-		margin: 16px 0;
+		margin: 20px 0;
 		border: 0;
 		border-top: 1px solid var(--nebu-border);
 	}

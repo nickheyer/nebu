@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
@@ -27,8 +28,7 @@
 	import { tokenTtlMax } from '#lib/pages/mesh/mesh.js';
 	import ArrowsLeftRightIcon from 'phosphor-svelte/lib/ArrowsLeftRightIcon';
 
-	// Nodes of other meshes this one exports pools to or imports them from, the open one in the panel
-	let { federations, id = '' }: { federations: Node[]; id?: string } = $props();
+	let { federations, id = '', head }: { federations: Node[]; id?: string; head?: Snippet } = $props();
 
 	const open = $derived(federations.find((n) => n.id === id));
 
@@ -42,8 +42,7 @@
 	let importToken = $state('');
 	let importing = $state(false);
 
-	// Opens the dialog importing another mesh's pools with its export token
-	export function openImport() {
+	function openImport() {
 		importToken = '';
 		importOpen = true;
 	}
@@ -85,7 +84,7 @@
 		}
 	}
 
-	// Pools the federation moves, the exporter's imported here or this node's exported to the importer
+	// Pools the federation moves in either direction
 	function fedPools(n: Node): { pool: Pool; href: string }[] {
 		if (n.federation?.role === FederationRole.EXPORTER) return n.pools.map((p) => ({ pool: p, href: `/gateway/imports/${encodeURIComponent(p.id)}` }));
 		return [...live.pools.values()].filter(exported).map((p) => ({ pool: p, href: `/gateway/pools/${encodeURIComponent(p.id)}` }));
@@ -93,8 +92,9 @@
 </script>
 
 {#snippet list()}
-	<Card title="Federations" count={federations.length} flush>
+	<Card title="Federations" flush>
 		{#snippet tools()}
+			<NeoButton class="primary" elevation={2} onclick={openImport}>Import</NeoButton>
 			<Pop placement="bottom-end" width="20rem">
 				{#snippet content(closePop)}
 					<Duration bind:value={exportTtl} base="s" max={tokenTtlMax} label="TTL" />
@@ -106,14 +106,14 @@
 			</Pop>
 		{/snippet}
 		{#if federations.length === 0}
-			<Empty icon={ArrowsLeftRightIcon} text="No federations" hint="Another mesh imports this one's pools with an export token, or this mesh imports theirs" />
+			<Empty icon={ArrowsLeftRightIcon} text="No federations" />
 		{:else}
 			<List head={{ primary: 'Mesh', secondary: 'Address', facts: ['Since'] }}>
 				{#each federations as n (n.id)}
 					{@const fed = n.federation}
 					<ListRow
 						primary={fed?.meshName || n.name}
-						primaryTip={`fingerprint ${fed?.fingerprint || 'none'}\nhash ${fed?.meshHash || 'none'}`}
+						primaryTip={[fed?.fingerprint ? `fingerprint ${fed.fingerprint}` : '', fed?.meshHash ? `hash ${fed.meshHash}` : ''].filter(Boolean).join('\n') || undefined}
 						secondary={fed?.address || n.address}
 						secondaryKind="address"
 						secondaryWidth="24ch"
@@ -130,7 +130,7 @@
 	</Card>
 {/snippet}
 
-<Sheet open={id !== ''} onclose={close} {list}>
+<Sheet open={id !== ''} onclose={close} {head} {list}>
 	{#if open}
 		{@const fed = open.federation}
 		{@const pools = fedPools(open)}
@@ -145,7 +145,7 @@
 					{ label: 'mesh hash', value: fed?.meshHash ?? '', mono: true, copy: true, tip: fed?.meshHash }
 				]}
 			/>
-			<Section title="Pools" count={pools.length} level={3}>
+			<Section title="Pools" level={3}>
 				{#if pools.length}
 					<List head={{ primary: 'Pool', secondary: 'Model', facts: ['State'] }}>
 						{#each pools as { pool, href } (pool.id)}
@@ -153,13 +153,13 @@
 						{/each}
 					</List>
 				{:else}
-					<Empty text="No pools moving" row />
+					<Empty text="No pools" row />
 				{/if}
 			</Section>
 		</Stack>
 	{:else}
 		<PanelHeader title="Federation" onclose={close} />
-		<Empty text="No such federation" hint="It was dropped, or the other mesh left" />
+		<Empty text="No such federation" />
 	{/if}
 </Sheet>
 

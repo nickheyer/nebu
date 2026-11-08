@@ -3,7 +3,7 @@
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { NeoPopConfirm } from '#lib/neo/floating/tooltips/index.js';
 
-	// A button that asks before it acts. The popover carries the question, a quiet Cancel and the action in its colour.
+	// A button that asks its question in a popover before it acts
 	let {
 		label,
 		question,
@@ -12,7 +12,6 @@
 		small = true,
 		onconfirm,
 		icon,
-		// Fields shown under the question, such as a switch the action reads
 		body
 	}: { label: string; question: string; danger?: boolean; disabled?: boolean; small?: boolean; onconfirm: () => unknown; icon?: Snippet; body?: Snippet } = $props();
 
@@ -58,7 +57,6 @@
 		flex-direction: column;
 		min-width: 0;
 	}
-	/* Cancel is a quiet exit, never red */
 	:global(.neo-button.confirm-cancel) {
 		--neo-btn-text-color: var(--nebu-text-muted);
 		--neo-btn-text-color-hover: var(--neo-text-color);

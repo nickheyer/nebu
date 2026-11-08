@@ -112,7 +112,7 @@ func (l *Log) wakeLocked() {
 	}
 }
 
-// Sends the tail then new lines until close or ctx
+// Sends the tail, empty when there is none, then new lines until close or ctx
 func (l *Log) Follow(ctx context.Context, tail int, send func([]string) error) error {
 	notify := make(chan struct{}, 1)
 	l.mu.Lock()
@@ -128,6 +128,7 @@ func (l *Log) Follow(ctx context.Context, tail int, send func([]string) error) e
 		delete(l.subs, notify)
 		l.mu.Unlock()
 	}()
+	first := true
 	for {
 		l.mu.Lock()
 		from := max(cursor-l.dropped, 0)
@@ -135,11 +136,12 @@ func (l *Log) Follow(ctx context.Context, tail int, send func([]string) error) e
 		cursor = l.dropped + len(l.lines)
 		closed := l.closed
 		l.mu.Unlock()
-		if len(batch) > 0 {
+		if len(batch) > 0 || first {
 			if err := send(batch); err != nil {
 				return err
 			}
 		}
+		first = false
 		if closed {
 			return nil
 		}

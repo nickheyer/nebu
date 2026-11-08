@@ -48,6 +48,7 @@
 	import LightningIcon from 'phosphor-svelte/lib/LightningIcon';
 	import MaskHappyIcon from 'phosphor-svelte/lib/MaskHappyIcon';
 	import PlugsIcon from 'phosphor-svelte/lib/PlugsIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import PulseIcon from 'phosphor-svelte/lib/PulseIcon';
 
 	let { bot, tab = 'status' }: { bot: Bot; tab?: string } = $props();
@@ -57,10 +58,9 @@
 	const st = $derived(bot.status);
 	const headerTabs = $derived(botTabs.map((t) => ({ id: t.id, label: t.label, href: `/bots/${bot.id}/${t.id}` })));
 
-	// The settings tabs edit a copy of the spec, saved as a whole
 	let spec = $state<BotSpec>(untrack(() => withParts(specCopy(bot))));
 	let baseline = $state.raw<BotSpec>(untrack(() => withParts(specCopy(bot))));
-	// Bumped whenever the copy is replaced so editors holding their own state start over
+	// Bumped whenever the copy is replaced so editors start over
 	let revision = $state(0);
 	let saving = $state(false);
 	let saveError = $state<string | undefined>(undefined);
@@ -72,7 +72,7 @@
 		revision++;
 	}
 
-	// A fresh copy whenever the saved spec changes while the form is clean, status updates ignored
+	// A fresh copy whenever the saved spec changes while the form is clean
 	let seen = untrack(() => bot.spec);
 	$effect(() => {
 		const next = bot.spec;
@@ -81,7 +81,6 @@
 		if (untrack(() => !dirty)) untrack(reset);
 	});
 
-	// Guilds and channels of a connected bot, listed again when its guild count moves
 	const connected = $derived(bot.state === BotState.READY || bot.state === BotState.DEGRADED);
 	const guildCount = $derived(st?.guilds ?? 0);
 	let guilds = $state<BotGuild[]>([]);
@@ -112,7 +111,7 @@
 		try {
 			await rpc.bots.updateBot({ id: bot.id, enabled: bot.enabled, spec });
 			baseline = clone(BotSpecSchema, spec);
-			toast.success(`Saved ${bot.name}`, running ? 'The bot restarts' : undefined);
+			toast.success(`Saved ${bot.name}`, running ? 'Restarting' : undefined);
 		} catch (err) {
 			saveError = reason(err);
 		} finally {
@@ -151,7 +150,7 @@
 		tokenBusy = true;
 		try {
 			await rpc.bots.updateBot({ id: bot.id, enabled: bot.enabled, token: newToken.trim(), spec: bot.spec });
-			toast.success('Token changed', running ? 'The bot restarts' : undefined);
+			toast.success('Token changed', running ? 'Restarting' : undefined);
 			tokenOpen = false;
 		} catch (err) {
 			toast.error('Token change failed', reason(err));
@@ -268,7 +267,6 @@
 		}
 	}
 
-	// Counters of the running connection with the shards' mean latency
 	const facts = $derived.by((): FactItem[] => {
 		const shards = st?.shards ?? [];
 		const latency = shards.length ? shards.reduce((sum, s) => sum + s.latencyMs, 0) / shards.length : undefined;
@@ -284,7 +282,7 @@
 </script>
 
 {#snippet saveBar()}
-	<SaveBar {dirty} {saving} error={saveError} message={running ? 'Saving restarts the bot' : undefined} onsave={save} ondiscard={reset} />
+	<SaveBar {dirty} {saving} error={saveError} onsave={save} ondiscard={reset} />
 {/snippet}
 
 {#snippet statusTab()}
@@ -294,7 +292,7 @@
 	<Columns ratio="3/2">
 		{#snippet left()}
 			{#if guilds.length}
-				<Card title="Guilds" count={guilds.length} flush>
+				<Card title="Guilds" flush>
 					<List head={{ primary: 'Guild', facts: ['Members', 'Channels'] }}>
 						{#each guilds as g (g.id)}
 							<ListRow primary={g.name} primaryTip={g.id} facts={[{ value: num(g.members) }, { value: num(g.channels.length) }]} />
@@ -303,14 +301,14 @@
 				</Card>
 			{/if}
 			{#if st?.shards.length}
-				<Card title="Shards" count={st.shards.length} flush>
+				<Card title="Shards" flush>
 					<List head={{ primary: 'Shard', facts: ['Guilds', 'Latency'] }}>
 						{#each st.shards as s (s.id)}
 							<ListRow
 								lamp={s.connected ? 'success' : 'error'}
 								shape={s.connected ? 'filled' : 'hollow'}
 								primary="shard {s.id}"
-								primaryTip={[`connected ${s.connectedAt ? when(s.connectedAt) : 'never'}`, s.error].filter(Boolean).join('\n')}
+								primaryTip={[s.connectedAt ? `connected ${when(s.connectedAt)}` : '', s.error].filter(Boolean).join('\n') || undefined}
 								facts={[{ value: num(s.guilds) }, { value: ms(s.latencyMs) }]}
 							/>
 						{/each}
@@ -318,13 +316,34 @@
 				</Card>
 			{/if}
 			{#if !guilds.length && !st?.shards.length}
-				<Card>
-					<Empty icon={PlugsIcon} text={running ? 'Connecting to Discord' : 'Not connected'} hint="Its guilds and shards show here once the bot is connected to Discord" />
+				<Card title="Connection">
+					{#snippet tools()}
+						{#if running}
+							<Confirm label="Stop" question="Stop {bot.name}?" danger small={false} onconfirm={stop} />
+						{:else}
+							<NeoButton elevation={2} onclick={start}>Start</NeoButton>
+						{/if}
+					{/snippet}
+					<Empty icon={PlugsIcon} text={running ? 'Connecting' : 'Not connected'} />
 				</Card>
 			{/if}
 		{/snippet}
 		{#snippet right()}
 			<Card title="Details">
+				{#snippet tools()}
+					<StatePill label={enumLabel(BotStateSchema, bot.state)} lamp={botLamp(bot.state)} />
+					{#if running}
+						<Confirm label="Stop" question="Stop {bot.name}?" danger small={false} onconfirm={stop} />
+					{:else}
+						<NeoButton elevation={2} onclick={start}>Start</NeoButton>
+					{/if}
+					<Menu
+						items={[
+							{ label: 'Change token', onclick: openToken },
+							{ label: 'Delete bot', danger: true, divider: true, onclick: () => (deleteOpen = true) }
+						]}
+					/>
+				{/snippet}
 				<KeyRows
 					rows={[
 						{ label: 'username', value: st?.username ?? '' },
@@ -343,9 +362,12 @@
 {/snippet}
 
 {#snippet personasList()}
-	<Card title="Personas" count={spec.personas.length} info="The first persona answers unless an automation or wake word picks another" flush>
+	<Card title="Personas" info="The first persona answers by default, the others when named or summoned" flush>
+		{#snippet tools()}
+			<NeoButton class="primary" elevation={2} onclick={addPersona}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Persona</NeoButton>
+		{/snippet}
 		{#if spec.personas.length === 0}
-			<Empty icon={MaskHappyIcon} text="No personas" hint="Saved without one, the bot answers as a persona named after itself" action="New persona" onclick={addPersona} />
+			<Empty icon={MaskHappyIcon} text="No personas" action="Persona" onclick={addPersona} />
 		{:else}
 			<List head={{ primary: 'Persona', secondary: 'Model' }}>
 				<NeoSortableProvider bind:items={personaItems} axis="y" onDragEnd={reorderPersonas}>
@@ -358,7 +380,7 @@
 									<div {@attach instance.attach} class="sortrow">
 										<ListRow
 											primary={p.name}
-											secondary={p.model || 'sole ready route'}
+											secondary={p.model}
 											secondaryWidth="24ch"
 											selected={personaIndex === i}
 											onclick={() => (personaIndex = i)}
@@ -386,9 +408,12 @@
 {/snippet}
 
 {#snippet automationsList()}
-	<Card title="Automations" count={spec.automations.length} flush>
+	<Card title="Automations" info="Scheduled, keyword, reaction and command triggers that act without a prompt" flush>
+		{#snippet tools()}
+			<NeoButton class="primary" elevation={2} onclick={addAutomation}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Automation</NeoButton>
+		{/snippet}
 		{#if spec.automations.length === 0}
-			<Empty icon={LightningIcon} text="No automations" hint="An automation acts on a schedule, a message, a keyword, a reaction or a command" action="New automation" onclick={addAutomation} />
+			<Empty icon={LightningIcon} text="No automations" action="Automation" onclick={addAutomation} />
 		{:else}
 			<List head={{ primary: 'Automation', secondary: 'Trigger', facts: ['Action'] }}>
 				{#each spec.automations as a, i (a.id)}
@@ -432,15 +457,15 @@
 {#snippet activityTab()}
 	<Card title="Activity" flush>
 		{#snippet tools()}
-			<span class="filter"><Select bind:value={level} options={activityLevels} placeholder="Level" clearable /></span>
-			<span class="filter wide"><Select bind:value={kind} options={activityKinds} placeholder="Kind" clearable /></span>
+			<span class="filter"><Select bind:value={level} options={activityLevels} label="Level" compact clearable /></span>
+			<span class="filter wide"><Select bind:value={kind} options={activityKinds} label="Kind" compact clearable /></span>
 		{/snippet}
 		{#if !activity.settled}
 			<Skeleton rows={5} primary="12ch" secondary="64ch" facts={1} menu={false} />
 		{:else if activity.error}
 			<Empty text={activity.error} action="Retry" onclick={() => activity.refresh()} />
 		{:else if activity.items.length === 0}
-			<Empty icon={PulseIcon} text={level || kind ? 'No activity matches' : 'No activity yet'} hint="Replies, images, commands, automations and shard events land here as the bot runs" />
+			<Empty icon={PulseIcon} text={level || kind ? 'No activity matches' : 'No activity'} />
 		{:else}
 			<List head={{ primary: 'Kind', secondary: 'Message', facts: ['When'] }}>
 				{#each activity.items as a, i (i)}
@@ -448,7 +473,7 @@
 						lamp={levelLamp(a.level)}
 						primary={a.kind}
 						primaryWidth="12ch"
-						primaryTip={[`persona ${a.persona || 'none'}`, `guild ${a.guildId ? guildName(a.guildId) : 'none'}`, `channel ${a.channelId ? channelName(a.guildId, a.channelId) : 'none'}`].join('\n')}
+						primaryTip={[a.persona ? `persona ${a.persona}` : '', a.guildId ? `guild ${guildName(a.guildId)}` : '', a.channelId ? `channel ${channelName(a.guildId, a.channelId)}` : ''].filter(Boolean).join('\n') || undefined}
 						secondary={a.message}
 						secondaryKind="message"
 						secondaryWidth="64ch"
@@ -470,47 +495,22 @@
 {#snippet sendTab()}
 	<Card title="New message">
 		<FieldRow>
-			<Select bind:value={sendGuild} options={guilds.map((g) => ({ value: g.id, label: g.name }))} label="Guild" placeholder={connected ? 'Guild' : 'Not connected'} disabled={!connected} />
-			<Select bind:value={sendChannel} options={sendChannels} label="Channel" placeholder="Channel" disabled={!sendGuild} />
+			<Select bind:value={sendGuild} options={guilds.map((g) => ({ value: g.id, label: g.name }))} label="Guild" disabled={!connected} />
+			<Select bind:value={sendChannel} options={sendChannels} label="Channel" disabled={!sendGuild} />
 		</FieldRow>
 		<FieldRow>
-			<Select bind:value={sendPersona} options={spec.personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" clearable placeholder="The first persona" />
+			<Select bind:value={sendPersona} options={spec.personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" clearable placeholder={spec.personas[0]?.name} />
 			<Segmented bind:value={sendKind} options={sendKinds} label="Kind" />
 		</FieldRow>
 		<Textarea bind:value={sendContent} label={sendKind === ActionKind.TEXT ? 'Message' : 'Prompt'} rows={3} />
 		{#snippet footer()}
-			{#if !connected}<span class="secondary">Start the bot to send</span>{/if}
 			<span class="fill"></span>
 			<NeoButton class="primary" elevation={2} loading={sending} disabled={!sendChannel || !sendContent.trim()} onclick={send}>Send</NeoButton>
 		{/snippet}
 	</Card>
 {/snippet}
 
-<PageHeader title={bot.name} back={{ label: 'Bots', href: '/bots' }} tabs={headerTabs} {active}>
-	{#snippet meta()}
-		{#if st?.avatarUrl}<Avatar url={st.avatarUrl} size={20} />{/if}
-		<StatePill label={enumLabel(BotStateSchema, bot.state)} lamp={botLamp(bot.state)} />
-		{#if st?.username}<span>{st.username}</span>{/if}
-	{/snippet}
-	{#snippet actions()}
-		{#if running}
-			<Confirm label="Stop" question="Stop {bot.name}?" danger small={false} onconfirm={stop} />
-		{:else}
-			<NeoButton elevation={2} onclick={start}>Start</NeoButton>
-		{/if}
-		<Menu
-			items={[
-				{ label: 'Change token', onclick: openToken },
-				{ label: 'Delete bot', danger: true, divider: true, onclick: () => (deleteOpen = true) }
-			]}
-		/>
-		{#if active === 'personas'}
-			<NeoButton class="primary" elevation={2} onclick={addPersona}>New persona</NeoButton>
-		{:else if active === 'automations'}
-			<NeoButton class="primary" elevation={2} onclick={addAutomation}>New automation</NeoButton>
-		{/if}
-	{/snippet}
-</PageHeader>
+<PageHeader title={bot.name} back={{ label: 'Bots', href: '/bots' }} tabs={headerTabs} {active} info="One Discord bot, its connection, personas, automations, behaviour and what it has done" />
 
 {#if active === 'status'}
 	{@render statusTab()}
@@ -530,17 +530,15 @@
 {/if}
 
 <Dialog bind:open={tokenOpen} title="Change token" confirm="Change" busy={tokenBusy} disabled={!newToken.trim()} onconfirm={changeToken}>
-	<Secret bind:value={newToken} label="New token" set={bot.tokenSet} required message={running ? 'The bot restarts with the new token' : undefined} />
+	<Secret bind:value={newToken} label="New token" set={bot.tokenSet} required />
 </Dialog>
 
-<NameConfirm bind:open={deleteOpen} title="Delete bot" name={bot.name} message="The bot disconnects first" onconfirm={remove} />
+<NameConfirm bind:open={deleteOpen} title="Delete bot" name={bot.name} message="Disconnects the bot" onconfirm={remove} />
 
 <style>
-	/* Keeps the save bar's buttons in from the edges of a flush card */
 	.commit {
 		padding: 0 var(--nebu-card-pad);
 	}
-	/* A sortable wrapper passes the list's columns through to its row and keeps the hairline between rows */
 	.sortrow {
 		display: grid;
 		grid-template-columns: subgrid;

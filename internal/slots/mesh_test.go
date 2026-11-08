@@ -157,24 +157,27 @@ func (twoNodes) Node(id string) (*v1.Node, error) {
 	return &v1.Node{Id: "other", Name: "other", Profile: &v1.HostProfile{
 		Devices: []*v1.Device{
 			{Id: "gpu1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Name: "far gpu"},
-			{Id: "igpu1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "far igpu", Facts: map[string]string{"memory": "shared"}},
+			{Id: "igpu1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "far igpu"},
 		},
 		Pools: []*v1.MemoryPool{{Id: "gpu1", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "gpu1", TotalBytes: 24 << 30, FreeBytes: 24 << 30}},
 	}}, nil
 }
 
-// A slot pins devices holding memory of their own, here or on a member, and never one sharing host memory
+// A slot pins devices the profiles list, here or on a member, never one without memory of its own
 func TestSlotRefusesDevicesWithoutMemory(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	n := newSlotNode(t, ctx)
 	n.slots.Formations = twoNodes{selfOnly{id: "self"}}
-	refused := `device "igpu0" (shared igpu) has no memory of its own, so a slot cannot pin it`
-	if _, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: "shared", DeviceIds: []string{"igpu0"}}); err == nil || !strings.Contains(err.Error(), refused) {
-		t.Fatalf("a slot on the igpu: %v", err)
+	refused := `device "blind0" was not probed, see nebu host`
+	if _, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: "blind", DeviceIds: []string{"blind0"}}); err == nil || !strings.Contains(err.Error(), refused) {
+		t.Fatalf("a slot on a gpu the probes found no memory for: %v", err)
 	}
-	if _, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: "shared", DeviceIds: []string{"self/igpu0"}}); err == nil || !strings.Contains(err.Error(), `device "self/igpu0" (shared igpu) has no memory of its own`) {
-		t.Fatalf("a slot on the igpu named through this node: %v", err)
+	if _, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: "blind", DeviceIds: []string{"self/blind0"}}); err == nil || !strings.Contains(err.Error(), `device "self/blind0" was not probed`) {
+		t.Fatalf("a slot on that gpu named through this node: %v", err)
+	}
+	if _, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: "shared", DeviceIds: []string{"igpu0"}}); err == nil || !strings.Contains(err.Error(), `device "igpu0" was not probed`) {
+		t.Fatalf("a slot on a gpu sharing system memory: %v", err)
 	}
 	if _, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: "far", DeviceIds: []string{"other/igpu1"}}); err == nil || !strings.Contains(err.Error(), `device "other/igpu1" (far igpu) has no memory of its own, so a slot cannot pin it`) {
 		t.Fatalf("a slot on a member's igpu: %v", err)
@@ -186,8 +189,8 @@ func TestSlotRefusesDevicesWithoutMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := n.slots.Update(ctx, &v1.UpdateSlotRequest{Id: s.GetId(), DeviceIds: []string{"gpu0", "igpu0"}}); err == nil || !strings.Contains(err.Error(), refused) {
-		t.Fatalf("an update pinning the igpu: %v", err)
+	if _, err := n.slots.Update(ctx, &v1.UpdateSlotRequest{Id: s.GetId(), DeviceIds: []string{"gpu0", "blind0"}}); err == nil || !strings.Contains(err.Error(), refused) {
+		t.Fatalf("an update pinning a gpu the probes found no memory for: %v", err)
 	}
 	if _, err := n.slots.Update(ctx, &v1.UpdateSlotRequest{Id: s.GetId(), DeviceIds: []string{"gpu0"}}); err != nil {
 		t.Fatal(err)

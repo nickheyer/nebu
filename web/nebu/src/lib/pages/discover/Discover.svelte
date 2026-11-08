@@ -40,7 +40,7 @@
 	type Params = { sourceId: string; query: string; sort: string; ascending: boolean; filters: Record<string, string>; author: string };
 
 	const initial = page.url.searchParams;
-	// Facet choices ride in the URL as f.<facet id>, comma separated
+	// Facet choices ride in the URL as f.<facet id>
 	const facetPrefix = 'f.';
 
 	let sources = $state<SourceStatus[]>([]);
@@ -61,18 +61,16 @@
 
 	const source = $derived(sources.find((s) => s.source?.id === sourceId));
 	const caps = $derived(source?.capabilities);
-	// The remembered source stands in as the one option until the list answers, so the select never shows its placeholder
+	// The remembered source stands in as the one option until the list answers
 	const sourceOptions = $derived(sources.length ? sources.map((s) => ({ value: s.source?.id ?? '', label: s.source?.name || s.source?.id || '' })) : sourceId ? [{ value: sourceId, label: prefs.discoverSourceLabel || sourceId }] : []);
 	const sorts = $derived((caps?.sorts ?? []).map((s) => ({ value: s.id, label: s.label })));
 	const sourceWidth = $derived(selectWidth(sourceOptions.map((o) => o.label)));
 	const sortWidth = $derived(selectWidth(sorts.map((o) => o.label)));
 	const reversible = $derived(caps?.sorts.find((s) => s.id === sort)?.reversible ?? false);
 	const facets = $derived(caps?.facets ?? []);
-	// The author field stands down when the source already offers author as a facet
 	const authorFacet = $derived(facets.some((f) => /^author$/i.test(f.id) || /^author$/i.test(f.label)));
 	const activeFilters = $derived(Object.values(filters).filter((v) => v.length).length + (author ? 1 : 0));
 	const stored = $derived(new Set([...live.models.values()].map((m) => `${m.sourceId}\n${m.repo}`)));
-	// The source's own error, a missing token, then the warnings the last search answered with
 	const warning = $derived([source?.error ?? '', caps?.authRequired && !caps.tokenPresent ? 'token missing' : '', ...warnings].filter(Boolean));
 
 	const list = new ListQuery<SearchHit, Params>(
@@ -117,7 +115,7 @@
 		void list.load({ sourceId, query, sort: sort ?? '', ascending, filters: picked, author });
 	});
 
-	// The search lives in the URL so it can be shared and a repository page can link back to it
+	// The search lives in the URL
 	$effect(() => {
 		if (!sourcesLoaded || !sourceId) return;
 		const url = new URL(location.pathname, location.origin);
@@ -131,7 +129,6 @@
 		if (url.search !== location.search) void goto(url, { replace: true, shallow: true, reset: false });
 	});
 
-	// A new source has its own sorts and facets, so the old choices are dropped
 	function sourceChanged(id: string | undefined) {
 		if (!id) return;
 		sourceId = id;
@@ -163,7 +160,6 @@
 			.join('\n');
 	}
 
-	// Kind, up to three formats, license, each word once
 	function phrase(h: SearchHit): string {
 		const seen = new Set<string>();
 		return [kindLabel(h.kind), ...h.formats.slice(0, 3), h.license].filter((w) => w && !seen.has(w.toLowerCase()) && seen.add(w.toLowerCase())).join(' · ');
@@ -179,21 +175,21 @@
 		{#if f.freeform}
 			<Chips bind:value={() => filters[f.id] ?? [], (v) => setFacet(f, v)} label={f.label} />
 		{:else if f.multi}
-			<MultiSelect bind:value={() => filters[f.id] ?? [], (v) => setFacet(f, v)} options={f.values.map((v) => ({ value: v.id, label: v.label, description: v.group || undefined }))} label={f.label} search={f.values.length > 8} placeholder="Any" />
+			<MultiSelect bind:value={() => filters[f.id] ?? [], (v) => setFacet(f, v)} options={f.values.map((v) => ({ value: v.id, label: v.label, description: v.group || undefined }))} search={f.values.length > 8} label={f.label} compact />
 		{:else}
-			<Select value={filters[f.id]?.[0]} options={f.values.map((v) => ({ value: v.id, label: v.label, description: v.group || undefined }))} label={f.label} search={f.values.length > 8} placeholder="Any" clearable onchange={(v) => setFacet(f, v ? [v] : [])} />
+			<Select value={filters[f.id]?.[0]} options={f.values.map((v) => ({ value: v.id, label: v.label, description: v.group || undefined }))} search={f.values.length > 8} label={f.label} compact clearable onchange={(v) => setFacet(f, v ? [v] : [])} />
 		{/if}
 	{/each}
-	{#if !authorFacet}<Text value={author} label="Author" max={64} onchange={(v) => (author = v.trim())} />{/if}
+	{#if !authorFacet}<Text value={author} label="Author" compact max={64} onchange={(v) => (author = v.trim())} />{/if}
 {/snippet}
 
 {#snippet sortIcon()}<SortAscendingIcon size={16} />{/snippet}
 
 {#snippet toolbar()}
 	<Toolbar>
-		<span class="source" class:grow={viewport.mobile}><Select value={sourceId} options={sourceOptions} placeholder="Source" loading={!sourcesLoaded} onchange={sourceChanged} width={viewport.mobile ? '100%' : sourceWidth} /></span>
-		<span class="grow"><SearchBox bind:value={query} placeholder={caps?.repoExample ? `Search, such as ${caps.repoExample}` : 'Search'} width="100%" /></span>
-		<span class="sort"><Select bind:value={sort} options={sorts} placeholder="Sort" disabled={!sorts.length} icon={sortIcon} width={sortWidth} /></span>
+		<span class="source" class:grow={viewport.mobile}><Select value={sourceId} options={sourceOptions} loading={!sourcesLoaded} onchange={sourceChanged} width={viewport.mobile ? '100%' : sourceWidth} /></span>
+		<span class="grow"><SearchBox bind:value={query} width="100%" /></span>
+		<span class="sort"><Select bind:value={sort} options={sorts} disabled={!sorts.length} icon={sortIcon} width={sortWidth} /></span>
 		{#if reversible}
 			<NeoButton text aria-label={ascending ? 'Ascending' : 'Descending'} onclick={() => (ascending = !ascending)}>
 				{#snippet icon()}{#if ascending}<ArrowUpIcon size={20} />{:else}<ArrowDownIcon size={20} />{/if}{/snippet}
@@ -208,7 +204,7 @@
 
 {#snippet settingsAction()}<RowAction label="Settings" href="/settings/sources" />{/snippet}
 
-<PageHeader tabs={modelsTabs} active="discover" />
+<PageHeader tabs={modelsTabs} active="discover" info="Search the model sources this host knows and open any repository to pull it" />
 
 <Card flush tools={toolbar}>
 	{#if filtersOpen}
@@ -220,15 +216,15 @@
 	{#if sourcesError}
 		<Empty icon={PlugsIcon} text="Sources failed to list" hint={sourcesError} action="Retry" onclick={loadSources} />
 	{:else if sourcesLoaded && sources.length === 0}
-		<Empty icon={PlugsIcon} text="No sources" hint="Add a model source and its repositories show up here to search" action="Sources" href="/settings/sources" primary />
+		<Empty icon={PlugsIcon} text="No sources" action="Sources" href="/settings/sources" primary />
 	{:else if !sourcesLoaded || !list.settled}
 		<Skeleton rows={10} dot={false} primary="40ch" secondary="28ch" facts={2} action={false} menu={false} />
 	{:else if list.error}
 		<Empty icon={MagnifyingGlassIcon} text="Search failed" hint={list.error} action="Retry" onclick={() => list.refresh()} />
 	{:else if list.items.length === 0 && (query || activeFilters)}
-		<Empty icon={MagnifyingGlassIcon} text="No results" hint="Nothing in {source?.source?.name || sourceId} matches this search and these filters" action="Clear filters" onclick={clearFilters} />
+		<Empty icon={MagnifyingGlassIcon} text="No results" action="Clear filters" onclick={clearFilters} />
 	{:else if list.items.length === 0}
-		<Empty icon={MagnifyingGlassIcon} text="No results" hint="{source?.source?.name || sourceId} answered with no repositories" action="Sources" href="/settings/sources" />
+		<Empty icon={MagnifyingGlassIcon} text="No results" action="Sources" href="/settings/sources" />
 	{:else}
 		<List head={{ primary: 'Repository', secondary: 'Details', facts: ['Downloads', 'Size'] }}>
 			{#each list.items as h (`${h.sourceId}\n${h.repo}`)}
@@ -243,7 +239,7 @@
 					onclick={() => goto(repoPath(h.sourceId, h.repo))}
 				>
 					{#snippet badges()}
-						{#if inStore}<Tip text="In the store" tag="span"><span class="stored success-text"><CheckCircleIcon size={16} /></span></Tip>{/if}
+						{#if inStore}<Tip text="Stored" tag="span"><span class="stored success-text"><CheckCircleIcon size={16} /></span></Tip>{/if}
 					{/snippet}
 				</ListRow>
 			{/each}

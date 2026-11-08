@@ -41,7 +41,7 @@ message Device {
   uint64 memory_total_bytes = 5;
   uint64 memory_free_bytes = 6;
   map<string, string> facts = 7;
-  // The pool the device's memory lives in, its own device pool, else the unified pool, else the host pool for a CPU, else empty for a device without memory of its own
+  // The pool the device draws on, the host pool for the CPU, an accelerator's own or the unified pool
   string pool_id = 8;
 }
 

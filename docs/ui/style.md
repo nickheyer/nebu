@@ -96,14 +96,15 @@ Every text pair is measured, WCAG ratio against its background.
 
 | Use | Family | Weight | Size |
 | --- | --- | --- | --- |
-| UI | IBM Plex Sans | 400, 500 labels, 600 headings | 15px base, 13px secondary, 12px pills |
-| page title, a record's name | IBM Plex Sans | 600 | 24px |
-| section title | IBM Plex Sans | 600 | 17px |
+| UI | IBM Plex Sans | 400, 500 headings and the active tab | 15px base, 13px secondary, 12px pills |
+| page title, a record's name | IBM Plex Sans | 500 | 20px |
+| section title | IBM Plex Sans | 500 | 15px |
+| readings, facts, large figures | IBM Plex Sans | 300 | 22px and up |
 | numbers | IBM Plex Sans, tabular figures | 400 | as the text around them |
 | ids, addresses, paths, versions | IBM Plex Mono | 400 | 13px |
 | screens | IBM Plex Mono | 400 | 13px, line height 1.5 |
 
-Both families ship with the app from `@fontsource`, OFL licensed, weights 400, 500, 600 for Sans and 400, 500 for Mono. No other family. No italics except in markdown the model wrote. Sentence case everywhere. Units follow numbers with a thin space: 42 GB, 180 ms.
+Both families ship with the app from `@fontsource`, OFL licensed, weights 300, 400, 500 for Sans and 300, 400 for Mono. No other family and no weight above 500. No italics except in markdown the model wrote. Sentence case everywhere. Units follow numbers with a thin space: 42 GB, 180 ms.
 
 ## Surfaces
 
@@ -118,17 +119,21 @@ The library is neumorphic. The page is flat background. Three depths are used.
 
 Light source top left, the library default. Borders are hairlines from the border colour, used only where a shadow would be too heavy: row separators, table lines, the screen edge. Radius 8px on controls and rows, 12px on cards and panels, pills full. The icon's 22% corner is the mark alone.
 
+A raised surface catches the light along its top edge, a one pixel line of `--nebu-edge`, the machined edge of a steel plate. A screen is recessed the other way, shaded along its top and left with a one pixel catch light along its bottom, `--nebu-bezel`.
+
 ## Icons
 
 Phosphor Icons, regular weight, 20px in rows and buttons, 16px in pills. One family, never mixed with emoji in the UI.
 
 ## Motion
 
-150 ms ease out for hover, focus and toggles. 200 ms for panels and sheets sliding in. No bounce, no scale, no fade longer than 200 ms. `prefers-reduced-motion` removes the slides.
+150 ms ease out for hover, focus and toggles. Everything that arrives settles: a 320 ms reveal from a few pixels below with a blur that clears, rows staggered 22 ms apart down a list, bars growing from the left, panels swinging in on a slight perspective, skeletons swept by light, half lamps breathing. One easing, `--nebu-settle`. No bounce. The appearance toggle and `prefers-reduced-motion` remove all of it.
+
+Cards settle in page order, 60 ms apart, the right column 40 ms after the left and each card down a column 70 ms after the one above. A line arriving on a live screen lands bright and decays to the steady phosphor over 1.6 s, the way a trace fades on a CRT. An unlit wire of the pipeline is dashed, a lit one solid.
 
 ## Logo
 
-The mark is `static/favicon.svg`: charcoal rounded square, two off white brackets, one cyan stroke. The wordmark is nebu in IBM Plex Sans 600, lowercase, text colour. Mark and wordmark sit 8px apart at 24px mark height in the rail. The mark never changes colour and never sits on the screen surface.
+The mark is `static/favicon.svg`: charcoal rounded square, two off white brackets, one cyan stroke. There is no wordmark, the mark's letter already says it. In the rail the mark sits 8px before the host label in IBM Plex Sans 500, the name of the instance the console opens. The mark never changes colour and never sits on the screen surface.
 
 ## Tokens
 
@@ -157,10 +162,11 @@ Implemented in `web/nebu/src/theme.css`, loaded before the app styles. The libra
 	--nebu-screen-text-muted: #6f8f6c;
 	--nebu-disabled-fill: #e0e2e7;
 	--nebu-disabled-text: #5b606c;
+	--nebu-edge: rgb(255 255 255 / 60%);
 }
 ```
 
-`--nebu-disabled-fill` is the surface and `--nebu-disabled-text` the muted text of the theme, `#212327` and `#a8adb8` in the dark one.
+`--nebu-disabled-fill` is the surface and `--nebu-disabled-text` the muted text of the theme, `#212327` and `#a8adb8` in the dark one. `--nebu-edge` is 6% white in the dark one.
 
 `--neo-white-soft` is the light background and the dark text. `--neo-grey` is the dark background. `--neo-grey-dark` is the light text. The light accents are the plain tokens, the dark accents the `-light` and `-dark` ones, which the library switches by theme.
 

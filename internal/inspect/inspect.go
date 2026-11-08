@@ -67,13 +67,23 @@ type Inspector struct {
 	Constrain Constrainer
 	// Reports installed runtimes. Nil treats all runtimes as installed.
 	Installed func(runtimeID string) bool
-	Log       *slog.Logger
+	// Parameter values a runtime's plans start from, under the slot's and the request's own, nil when the daemon keeps none
+	Defaults func(runtimeID string) map[string]string
+	Log      *slog.Logger
 	// Descriptors read from local files, keyed by path, size, and modification time
 	headers sync.Map
 }
 
 func (i *Inspector) installed(rt runtimes.Runtime) bool {
 	return i.Installed == nil || i.Installed(rt.ID())
+}
+
+// The parameter values the daemon keeps for a runtime, none without a source of them
+func (i *Inspector) defaults(rt runtimes.Runtime) map[string]string {
+	if i.Defaults == nil {
+		return nil
+	}
+	return i.Defaults(rt.ID())
 }
 
 // Requested context lengths capped at the model's limit, with that limit appended.
@@ -495,7 +505,7 @@ func (i *Inspector) Inspect(ctx context.Context, req *v1.InspectRequest) (*v1.In
 				rows = append(rows, 0)
 			}
 			for _, n := range append(rows, planContexts(contexts, d, len(req.GetContexts()) > 0)...) {
-				overrides := withContext(layered, rt.Policy().ContextParam, n)
+				overrides := withContext(runtimes.Merge(i.defaults(rt), layered), rt.Policy().ContextParam, n)
 				// Report fit against both available and total memory.
 				self := i.stored(req.GetSourceId(), req.GetRepo(), d.GetGroup())
 				plan, warning, err := i.Plan(ctx, rt, d, profile, overrides, false, c.Placement, req.GetRepo(), self, companions)
@@ -562,7 +572,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	overrides := runtimes.Merge(c.Params, req.GetParams())
+	overrides := runtimes.Merge(i.defaults(rt), c.Params, req.GetParams())
 	companions, err := i.Companions(req.GetSourceId(), req.GetRepo(), req.GetGroup())
 	if err != nil {
 		return nil, err

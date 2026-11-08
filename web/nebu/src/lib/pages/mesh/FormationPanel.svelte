@@ -27,18 +27,17 @@
 
 	let tab = $state('seats');
 	const f = $derived(formation);
-	const tabs = $derived([
-		{ id: 'seats', label: 'Seats', count: f.seats.length },
-		{ id: 'plan', label: 'Plan', count: f.plan?.candidates.length },
+	const tabs = [
+		{ id: 'seats', label: 'Seats' },
+		{ id: 'plan', label: 'Plan' },
 		{ id: 'memory', label: 'Memory' },
-		{ id: 'conditions', label: 'Conditions', count: f.conditions.length }
-	]);
+		{ id: 'conditions', label: 'Conditions' }
+	];
 
 	function planNodes(p: FormationPlan): string {
 		return p.seats.map((s) => seatName(live, s)).join(', ');
 	}
 
-	// Prefill, decode and the planner's note for the chosen plan, one per line
 	function planTip(p: FormationPlan): string {
 		return [`prefill ${ms(p.prefillSeconds * 1000)}`, `decode ${ms(p.decodeSecondsPerToken * 1000)} per token`, `context ${num(p.context)}`, p.detail].filter(Boolean).join('\n');
 	}
@@ -69,7 +68,7 @@
 				{/each}
 			</List>
 		{:else}
-			<Empty text="No seats" hint="The conductor places a seat on each member the plan names" />
+			<Empty text="No seats" />
 		{/if}
 	{:else if tab === 'plan'}
 		{#if f.plan}
@@ -89,7 +88,7 @@
 						</ListRow>
 					</List>
 				</Section>
-				<Section title="Candidates" count={plan.candidates.length} level={3}>
+				<Section title="Candidates" level={3}>
 					{#if plan.candidates.length}
 						<List head={{ primary: 'Shape', secondary: 'Nodes', facts: ['Speed', 'Gain'] }}>
 							{#each plan.candidates as c, i (i)}
@@ -106,7 +105,7 @@
 							{/each}
 						</List>
 					{:else}
-						<Empty text="No other candidates" row />
+						<Empty text="No candidates" row />
 					{/if}
 				</Section>
 				<Collapse label="Ratios and sources">
@@ -114,8 +113,8 @@
 						dense
 						rows={[
 							{ label: 'link class', value: linkLabel(plan.linkClass) },
-							{ label: 'TTFT ratio', value: plan.ttftRatio ? plan.ttftRatio.toFixed(2) : 'none' },
-							{ label: 'TPT ratio', value: plan.tptRatio ? plan.tptRatio.toFixed(2) : 'none' },
+							{ label: 'TTFT ratio', value: plan.ttftRatio ? plan.ttftRatio.toFixed(2) : '' },
+							{ label: 'TPT ratio', value: plan.tptRatio ? plan.tptRatio.toFixed(2) : '' },
 							{ label: 'samples', value: num(plan.ratioSamples) },
 							...plan.sources.map((s, i) => ({ label: `source ${i + 1}`, value: s, tip: s }))
 						]}
@@ -123,7 +122,7 @@
 				</Collapse>
 			</Stack>
 		{:else}
-			<Empty text="No plan" hint="The plan lands once the conductor has priced the candidates" />
+			<Empty text="No plan" />
 		{/if}
 	{:else if tab === 'memory'}
 		{#if f.seats.length}
@@ -137,7 +136,7 @@
 				<MemoryLegend kinds={['instance', 'planned', 'other', 'free']} />
 			</Stack>
 		{:else}
-			<Empty text="No seats" hint="Each seat's memory plan shows here once placed" />
+			<Empty text="No seats" />
 		{/if}
 	{:else if f.conditions.length || f.error}
 		<Stack gap={8}>
@@ -145,13 +144,13 @@
 			{#if f.error}<p class="error-text">{f.error}</p>{/if}
 		</Stack>
 	{:else}
-		<Empty text="No conditions reported" hint="The conductor reports placement, launch and serving checks here" />
+		<Empty text="No conditions" />
 	{/if}
 	<Collapse label="Request">
 		{#if f.request}
 			<Screen maxHeight="50vh"><pre class="lines">{toJsonString(RunRequestSchema, f.request, { prettySpaces: 2 })}</pre></Screen>
 		{:else}
-			<Empty text="No request recorded" row />
+			<Empty text="No request" row />
 		{/if}
 	</Collapse>
 </Stack>

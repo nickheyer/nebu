@@ -2,7 +2,7 @@
 	import type { Timestamp } from '@bufbuild/protobuf/wkt';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { ago, enumLabel, when } from '#lib/format.js';
+	import { ago, enumLabel, num, when } from '#lib/format.js';
 	import { AdmissionSide, AdmissionState, AdmissionStateSchema, type Admission, type MeshStatus, type NearbyMesh } from '#lib/proto/nebu/v1/mesh_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import CopyButton from '#lib/ui/CopyButton.svelte';
@@ -13,9 +13,9 @@
 	import RowAction from '#lib/ui/RowAction.svelte';
 	import Screen from '#lib/ui/Screen.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
-	import Str from '#lib/ui/Str.svelte';
 	import Time from '#lib/ui/Time.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
+	import Facts from '#lib/ui/Facts.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import Columns from '#lib/ui/layout/Columns.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
@@ -24,7 +24,7 @@
 	import { admissionTip, members, membership, settled } from '#lib/pages/mesh/mesh.js';
 	import ShareNetworkIcon from 'phosphor-svelte/lib/ShareNetworkIcon';
 
-	// This node outside any mesh, with what it hears nearby and the admissions it has under way
+	// This node outside any mesh with what it hears nearby
 	let { status }: { status: MeshStatus | undefined } = $props();
 
 	const meshes = $derived(status?.meshes ?? []);
@@ -34,7 +34,7 @@
 
 	let asking = $state('');
 
-	// Asks a member heard nearby to let this node in, or accepts the invitation an admission carries
+	// Asks a member heard nearby to let this node in
 	async function ask(key: string, meshHash: string, nodeId: string, address: string) {
 		asking = key;
 		try {
@@ -64,7 +64,6 @@
 		return a.state === AdmissionState.PENDING && a.side === AdmissionSide.CANDIDATE && a.invited;
 	}
 
-	// Create a mesh, then show its join token once with its expiry
 	let createOpen = $state(false);
 	let meshName = $state('');
 	let made = $state<{ name: string; token: string; expires: Timestamp | undefined } | undefined>(undefined);
@@ -98,7 +97,6 @@
 		}
 	}
 
-	// Join the mesh a token names
 	let joinOpen = $state(false);
 	let joinToken = $state('');
 	let joining = $state(false);
@@ -123,7 +121,7 @@
 </script>
 
 {#snippet meshesCard()}
-	<Card title="Nearby meshes" count={meshes.length} flush>
+	<Card title="Nearby meshes" flush>
 		<List head={{ primary: 'Mesh', secondary: 'Members' }}>
 			{#each meshes as m (m.hash)}
 				{@const via = m.nodes[0]}
@@ -138,7 +136,7 @@
 {/snippet}
 
 {#snippet nodesCard()}
-	<Card title="Nearby nodes" count={nodes.length} flush>
+	<Card title="Nearby nodes" flush>
 		<List head={{ primary: 'Node', secondary: 'Address', facts: ['Mesh'] }}>
 			{#each nodes as n (n.id)}
 				<ListRow
@@ -155,13 +153,13 @@
 {/snippet}
 
 {#snippet admissionsCard()}
-	<Card title="Admissions" count={admissions.length} flush>
+	<Card title="Admissions" flush>
 		<List head={{ primary: 'Mesh', secondary: 'Through', facts: ['Expires'] }}>
 			{#each admissions as a (a.id)}
 				<ListRow
 					primary={a.meshName}
 					primaryTip={admissionTip(a)}
-					secondary={a.node?.name || a.node?.address || 'unknown'}
+					secondary={a.node?.name || a.node?.address || ''}
 					secondaryWidth="20ch"
 					facts={[a.expiresAt && !settled(a) ? { value: ago(a.expiresAt, clockTick.now), tip: when(a.expiresAt) } : { value: '' }]}
 					menu={invitation(a) ? [{ label: 'Decline', danger: true, confirm: `Decline ${a.meshName}`, onclick: () => decide('decline', a) }] : undefined}
@@ -180,24 +178,19 @@
 	</Card>
 {/snippet}
 
-<PageHeader>
-	{#snippet meta()}
-		<span>No mesh</span>
-		{#if status?.listen}
-			<span>listening <Str value={status.listen} kind="address" /></span>
-		{:else}
-			<span>not listening</span>
-		{/if}
-	{/snippet}
-	{#snippet actions()}
+<PageHeader info="This node stands alone, hearing meshes and nodes nearby until it joins or starts one" />
+
+<Card title="This node">
+	{#snippet tools()}
 		<NeoButton elevation={2} onclick={openJoin}>Join with a token</NeoButton>
 		<NeoButton class="primary" elevation={2} onclick={openCreate}>Create a mesh</NeoButton>
 	{/snippet}
-</PageHeader>
+	<Facts items={[{ id: 'listen', label: 'Listening', value: status?.listen ?? '', mono: true, lamp: status?.listen ? 'success' : 'warning' }, { id: 'heard', label: 'Heard nearby', value: num(meshes.length + nodes.length) }]} />
+</Card>
 
 {#if !heard && admissions.length === 0}
 	<Card>
-		<Empty icon={ShareNetworkIcon} text="Not in a mesh" hint="A mesh joins nebu hosts so they share models and serve one model across machines. Hosts heard nearby show here." />
+		<Empty icon={ShareNetworkIcon} text="Nothing nearby" />
 	</Card>
 {:else if heard && admissions.length}
 	<Columns ratio="3/2">
@@ -216,7 +209,7 @@
 {#snippet madeFooter()}
 	{#if made}
 		<CopyButton text={made.token} label="Copy join token" />
-		<span>Shown once, expires <Time value={made.expires} /></span>
+		<span>Shown once · expires <Time value={made.expires} /></span>
 	{/if}
 {/snippet}
 

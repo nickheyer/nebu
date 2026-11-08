@@ -52,7 +52,7 @@ func TestNodeOfLeavesOutDevicesWithoutMemory(t *testing.T) {
 	rec := &v1.Node{Id: "a", Name: "alpha", Profile: &v1.HostProfile{
 		Devices: []*v1.Device{
 			{Id: "gpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Name: "big"},
-			{Id: "intel-0000:00:02.0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "AlderLake-S GT1", Facts: map[string]string{"memory": "shared"}},
+			{Id: "intel-0000:00:02.0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "AlderLake-S GT1"},
 			{Id: "cpu0", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Name: "cpu"},
 		},
 		Pools: []*v1.MemoryPool{

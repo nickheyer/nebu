@@ -109,8 +109,8 @@
 			{/if}
 		</FieldRow>
 		<FieldRow>
-			<Text bind:value={id} label="Id" readonly={editing} mono placeholder="huggingface" />
-			<Text bind:value={name} label="Name" placeholder="Hugging Face" />
+			<Text bind:value={id} label="Id" readonly={editing} mono required />
+			<Text bind:value={name} label="Name" />
 		</FieldRow>
 	</FormSection>
 	{#if fields.length}

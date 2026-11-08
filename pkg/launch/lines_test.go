@@ -86,8 +86,10 @@ func TestTailFollowsWritesAsTheyHappen(t *testing.T) {
 	updates := make(chan struct{}, 16)
 	follow, stop := context.WithCancel(context.Background())
 	defer stop()
-	go log.Follow(follow, 0, func([]string) error {
-		updates <- struct{}{}
+	go log.Follow(follow, 0, func(lines []string) error {
+		if len(lines) > 0 {
+			updates <- struct{}{}
+		}
 		return nil
 	})
 	for i, write := range []string{"first\n", "progress 1\rprogress 2\r", "second\r\n"} {

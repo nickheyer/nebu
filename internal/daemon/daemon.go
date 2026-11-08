@@ -262,6 +262,7 @@ func New(cfg *v1.Config, log *slog.Logger, level *slog.LevelVar, recent *launch.
 		Cache:       cacheStore,
 		Calibration: calibration,
 		Contexts:    cfg.GetContexts(),
+		Defaults:    d.Settings.Defaults,
 		Log:         log,
 		Stored:      blobStore.ListManifests,
 	}
@@ -317,6 +318,7 @@ func New(cfg *v1.Config, log *slog.Logger, level *slog.LevelVar, recent *launch.
 		Calibration:  calibration,
 		Registrar:    d.Pools,
 		DrainTimeout: drain,
+		Defaults:     d.Settings.Defaults,
 		Events:       bus,
 		Log:          log,
 	}

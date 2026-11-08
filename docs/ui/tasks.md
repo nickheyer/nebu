@@ -7,10 +7,10 @@ The Tasks tab of Host. Route: `/tasks`, `/tasks/<id>` opens the panel.
 ## Default view
 
 ```
- Host  2 running · 1 failed in the last hour
+ Host (i)
  Overview │ Tasks │ Logs
 
-┌ Running 2 ──────────────────────────────────────────────────────────────┐
+┌ Running ──────────────────────────────────────────────────────────────┐
 │ pull   Qwen/Qwen2.5-72B-Instruct   ▮▮▮▮▮▮▮▯▯▯▯  61 %    4m 12s  Cancel │
 └─────────────────────────────────────────────────────────────────────────┘
 ┌ History ─────────────────────────────────────────── [Kind ▾] [State ▾] ┐
@@ -18,8 +18,6 @@ The Tasks tab of Host. Route: `/tasks`, `/tasks/<id>` opens the panel.
 │ ✓ probe   Probe host ×15                        3 s     5h ago        ▾  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
-
-**Header.** Running, queued and failed in the last hour counts.
 
 **Running.** Shown while anything runs. Rows: kind pill, title (40ch), progress bar with percent or indeterminate, elapsed, Cancel. Tooltip on the bar: the message and the amount, in bytes or steps as the progress counts. Expand: one thin bar per progress row with its key.
 

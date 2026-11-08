@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 
-	// One child of a Row with the least and most width it takes, the row wrapping once the minimums no longer fit
+	// One child of a Row with its least and most width
 	let { min = '10rem', max = 'none', grow = true, push = false, children }: { min?: string; max?: string; grow?: boolean; push?: boolean; children: Snippet } = $props();
 </script>
 

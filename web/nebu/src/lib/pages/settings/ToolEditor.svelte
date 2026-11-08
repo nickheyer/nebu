@@ -27,14 +27,13 @@
 	const dirty = $derived(!editing || !equals(ToolServerSchema, s, baseline));
 	let saving = $state(false);
 	let error = $state<string | undefined>(undefined);
-	// Remounts the map and list fields when a discard resets them
 	let generation = $state(0);
 
 	const kinds = [
-		{ value: ToolServerKind.SEARCH, label: 'search', description: 'Web search through SearXNG or Brave' },
-		{ value: ToolServerKind.FETCH, label: 'fetch', description: 'Web pages read as text' },
-		{ value: ToolServerKind.STDIO, label: 'stdio', description: 'A command speaking MCP' },
-		{ value: ToolServerKind.HTTP, label: 'http', description: 'An MCP endpoint over HTTP' }
+		{ value: ToolServerKind.SEARCH, label: 'search', description: 'SearXNG or Brave' },
+		{ value: ToolServerKind.FETCH, label: 'fetch', description: 'Pages as text' },
+		{ value: ToolServerKind.STDIO, label: 'stdio', description: 'MCP over stdio' },
+		{ value: ToolServerKind.HTTP, label: 'http', description: 'MCP over HTTP' }
 	];
 
 	function pickKind(k: ToolServerKind | undefined) {
@@ -50,7 +49,7 @@
 		generation++;
 	}
 
-	// Writes the whole tool server list back with this one replaced in place or appended
+	// Writes the whole tool server list back with this one replaced or appended
 	async function save() {
 		saving = true;
 		error = undefined;
@@ -77,36 +76,36 @@
 
 <PanelHeader title={draft ? draft.name : 'New tool server'} {onclose} />
 <Stack gap={24}>
-	<FormSection title="Server">
+	<FormSection title="Server" info="A fetch server reaching local addresses can read this host's own services">
 		<FieldRow>
 			<Select bind:value={s.kind} options={kinds} label="Kind" disabled={editing} onchange={pickKind} />
-			<Text bind:value={s.name} label="Name" placeholder="web-search" />
+			<Text bind:value={s.name} label="Name" required />
 		</FieldRow>
 		{#key generation}
 			<FieldRow>
 				<Switch bind:checked={s.enabled} label="Enabled" />
 				{#if s.kind === ToolServerKind.FETCH}
-					<Switch bind:checked={s.local} label="Local addresses" info="Lets the server read this host's own addresses, which a model could use to reach the daemon's services" />
+					<Switch bind:checked={s.local} label="Local addresses" />
 				{/if}
 			</FieldRow>
 		{/key}
 	</FormSection>
 	{#key generation}
 		{#if s.kind === ToolServerKind.SEARCH}
-			<FormSection title="Search">
+			<FormSection title="Search" info="SearXNG answers only with its JSON format enabled">
 				<FieldRow>
 					<Segmented bind:value={s.provider} options={[{ value: 'searxng', label: 'SearXNG' }, { value: 'brave', label: 'Brave' }]} label="Provider" />
 					{#if s.provider === 'brave'}
 						<Secret bind:value={s.braveKey} label="Brave key" set={s.secretsSet} />
 					{:else}
-						<Text bind:value={s.searxngUrl} label="SearXNG URL" type="url" placeholder="https://searx.example.org" info="An instance with the json format enabled" />
+						<Text bind:value={s.searxngUrl} label="SearXNG URL" type="url" />
 					{/if}
 				</FieldRow>
 			</FormSection>
 		{:else if s.kind === ToolServerKind.STDIO}
 			<FormSection title="Command">
 				<FieldRow>
-					<Text bind:value={s.command} label="Command" mono placeholder="npx" info="Runs on this host and speaks MCP over stdin and stdout" />
+					<Text bind:value={s.command} label="Command" mono required />
 					<Chips bind:value={s.args} label="Arguments" />
 				</FieldRow>
 				<KeyValues bind:value={s.env} label="Environment" secret secretsSet={s.secretsSet} />
@@ -114,14 +113,14 @@
 		{:else if s.kind === ToolServerKind.HTTP}
 			<FormSection title="Endpoint">
 				<FieldRow>
-					<Text bind:value={s.url} label="URL" type="url" placeholder="https://mcp.example.org/sse" />
+					<Text bind:value={s.url} label="URL" type="url" required />
 				</FieldRow>
 				<KeyValues bind:value={s.headers} label="Headers" secret secretsSet={s.secretsSet} />
 			</FormSection>
 		{/if}
 		<FormSection title="Tools">
 			<FieldRow>
-				<Chips bind:value={s.allowedTools} label="Allowed tools" info="Every tool the server offers when empty" />
+				<Chips bind:value={s.allowedTools} label="Allowed tools" />
 			</FieldRow>
 		</FormSection>
 	{/key}

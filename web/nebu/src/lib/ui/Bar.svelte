@@ -42,7 +42,9 @@
 		display: block;
 		flex: 0 0 auto;
 		height: 100%;
-		transition: width 150ms ease-out;
+		transform-origin: 0 50%;
+		animation: nebu-grow var(--nebu-slow) var(--nebu-settle) both;
+		transition: width var(--nebu-slow) var(--nebu-settle);
 	}
 	.instance,
 	.used {

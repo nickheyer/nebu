@@ -11,8 +11,7 @@ Host label Text 64. Appearance: theme Segmented (light, dark, system), transitio
 ## Sources
 
 ```
- [+ Add source ▾]
-
+ Sources                                        [Add source]
  ●  huggingface    Hugging Face     token set      [Edit]  ···
  ●  ollama         Ollama                          [Edit]  ···
  ✗  civitai        Civitai          token missing  [Edit]  ···
@@ -26,14 +25,13 @@ Rows: status dot, id (24ch), provider, one status word or the endpoint (40ch), E
 ## Tools
 
 ```
- [+ Add tool server ▾]
-
+ Tool servers                                   [Add tool server]
  ●  search    web search    searxng      1 tool     [on ●]  ···
  ✗  fs        stdio         npx          0 tools    [on ●]  ···
- ●  gh        stdio         lab-02       9 tools    read only
+ ●  gh        stdio         lab-02       9 tools    [lock]
 ```
 
-Rows: state dot, name (24ch), kind, one summary word (provider, command name, host, or member), tool count, enabled Switch, menu: Edit, Delete, Try. Tooltip on the dot: the error. Expand: tools as rows with name, read only mark, description (64ch), schema in a tooltip.
+Rows: state dot, name (24ch), kind, one summary word (provider, command name, host, or member), tool count, enabled Switch or a lock for a member's server, menu: Edit, Delete, Try. Tooltip on the dot: the error. Expand: tools as rows with name, read only mark, description (64ch), schema in a tooltip.
 
 **Try.** A dialog: tool Select, arguments Code json seeded from the schema, Run. Result: parts, duration, mark.
 
@@ -66,7 +64,7 @@ Rows: name (24ch), prefix, scopes as pills, last used, menu: Revoke. Create: nam
 | args | Chips | |
 | env, headers | KeyValues | values as Secret |
 | allowed_tools | Chips | |
-| local | Switch | `(i)` on the fetch warning |
+| local | Switch | the Server section's `(i)` names the risk |
 | role | Segmented | admin, operator, inference |
 | scopes | Checklist | inference, read, operate, admin |
 

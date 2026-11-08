@@ -4,14 +4,14 @@ Routes, pools, objectives, scheduler configs, imports.
 
 Route: `/gateway/routes`, `/gateway/pools`, `/gateway/objectives`, `/gateway/schedulers`, `/gateway/imports`. An id after the tab opens its panel.
 
-## Header
+## Strip
 
 ```
- nebu 0.9.3    :8484 TLS    auth on    1.2M requests   (i)
- Routes 5 │ Pools 4 │ Objectives 2 │ Schedulers 1 │ Imports 1
+ Listener  Transport  Auth  Requests  In flight cap  Rate  Timeout  Version
+ :8484     TLS        on    1.2M      ∞              ∞     ∞        nebu 0.9.3
 ```
 
-Four facts, the listener with TLS or plain after its port, and an `(i)` popover: listeners with shared marks, metrics address, default policy.
+A facts card over every tab, the fallback policy read as literal values or an infinity. Tooltips: every listener, burst, upstream timeout, metrics address. The New button of each tab sits in its card's tools.
 
 ## Routes
 
@@ -41,7 +41,7 @@ Rows: dot, id (24ch), ready over total, model (40ch), Open, menu: Edit and Delet
 
 ## Objectives
 
-Rows: name (24ch), priority with a band word (sheds last, default, sheds first), TTFT, TPOT, menu: Edit, Delete. `(i)` in the tab header: chosen by request header or inherited from the route. Editor: name Text 64, priority Slider -1000 to 1000, TTFT Duration, TPOT Duration.
+Rows: name (24ch), priority, TTFT, TPOT, menu: Edit, Delete. Editor: name Text 64, priority Slider -1000 to 1000, TTFT Duration, TPOT Duration, an empty duration setting no target.
 
 ## Schedulers
 

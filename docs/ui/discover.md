@@ -27,16 +27,16 @@ A warning line under the bar when the selected source reports an error or needs 
 ## Repository page
 
 ```
- ← Discover    Qwen/Qwen2.5-72B-Instruct    huggingface ↗    [main ▾]
+ ← Discover    Qwen/Qwen2.5-72B-Instruct (i)
 
  Card │ Files │ Fit │ Pull
 ```
 
-- **Header.** Repository, source with web link, revision Select from `ListRevisions`, default first, size and precision in option tooltips.
+- **Header.** Back link and the repository. The group Select, revision Select from `ListRevisions`, default first with size and precision in option tooltips, and the source's web link sit in the tools of the open tab's card, a Stored pill beside them when any group is in the store.
 - **Card.** The model card html, sanitized.
-- **Files.** Group Select, rows: role icon, path (40ch), size. Tooltip: shard numbering. Warnings under a collapse.
+- **Files.** Rows: role icon, path (40ch), size. Sharded weights as one brace pattern row expanding to a cell grid, as on Models. Warnings under a collapse.
 - **Fit.** As on Models, for the selected group. Incompatible runtimes show the reason in a tooltip.
-- **Pull.** Group Select, Alone Switch with `(i)`, Node Picker when in a mesh, a Checklist of required parts not stored, each with its size, total bytes, Pull, Pull and launch.
+- **Pull.** Weights only Switch, Node Picker when in a mesh showing this node's name while empty, a Checklist of required parts not stored, each with its size, total bytes, Pull, Pull and launch.
 
 ## Fields
 

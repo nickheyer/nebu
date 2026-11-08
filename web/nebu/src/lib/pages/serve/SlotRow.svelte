@@ -1,11 +1,10 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import RowAction from '#lib/ui/RowAction.svelte';
 	import { NeoProgressBar } from '#lib/neo/progress/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { bytes, enumLabel, num, pct } from '#lib/format.js';
+	import { bytes, num, pct } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
-	import { SlotState, SlotStateSchema, type Slot } from '#lib/proto/nebu/v1/slot_pb.js';
+	import { SlotState, type Slot } from '#lib/proto/nebu/v1/slot_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
 	import ListRow from '#lib/ui/ListRow.svelte';
@@ -47,12 +46,14 @@
 	// Runtime, devices, reservation, aliases and the policy fields the slot sets
 	const tip = $derived(
 		[
-			`runtime ${slot.runtimeId || 'any'}`,
-			`devices ${devices.join(', ') || 'any'}`,
-			`memory ${slot.memoryBytes ? bytes(slot.memoryBytes) : 'no cap'}`,
-			`aliases ${slot.aliases.map((a) => a.name).join(', ') || 'none'}`,
+			slot.runtimeId ? `runtime ${slot.runtimeId}` : '',
+			devices.length ? `devices ${devices.join(', ')}` : '',
+			slot.memoryBytes ? `memory ${bytes(slot.memoryBytes)}` : '',
+			slot.aliases.length ? `aliases ${slot.aliases.map((a) => a.name).join(', ')}` : '',
 			...policyRows(slot.policy).map((r) => `${r.label} ${r.value}`)
-		].join('\n')
+		]
+			.filter(Boolean)
+			.join('\n')
 	);
 	const swapping = $derived(slot.state === SlotState.SWAPPING);
 	const swapTask = $derived(swapping ? live.tasks.get(slot.taskId) : undefined);
@@ -83,12 +84,19 @@
 		void goto(occupied ? `/serve/${encodeURIComponent(slot.instanceId)}` : slotHref(slot.id));
 	}
 
-	const menu = $derived.by((): MenuItem[] => [
-		{ label: 'Edit', href: slotHref(slot.id) },
-		{ label: 'Logs', href: `/serve/${encodeURIComponent(slot.instanceId)}?tab=logs`, disabled: !occupied },
-		{ label: 'Evict', confirm: `Evict ${slot.name}?`, onclick: evict, danger: true, disabled: !occupied },
-		{ label: 'Delete', onclick: () => ondelete(slot), danger: true, divider: true }
-	]);
+	// The move the slot's state allows comes first, swap while serving, relaunch after a failure or idle unload
+	const menu = $derived.by((): MenuItem[] => {
+		const items: MenuItem[] = [];
+		if (slot.state === SlotState.READY) items.push({ label: 'Swap', href: `/serve/launch?swap=${slot.id}` });
+		else if (failed || slot.state === SlotState.IDLE) items.push({ label: 'Relaunch', onclick: relaunch });
+		items.push(
+			{ label: 'Edit', href: slotHref(slot.id), divider: items.length > 0 },
+			{ label: 'Logs', href: `/serve/${encodeURIComponent(slot.instanceId)}?tab=logs`, disabled: !occupied },
+			{ label: 'Evict', confirm: `Evict ${slot.name}?`, onclick: evict, danger: true, disabled: !occupied },
+			{ label: 'Delete', onclick: () => ondelete(slot), danger: true, divider: true }
+		);
+		return items;
+	});
 </script>
 
 {#snippet canary()}
@@ -106,7 +114,7 @@
 	secondary={slim ? undefined : occupant}
 	secondaryKind={failed ? 'message' : 'repo'}
 	secondaryColor={failed ? 'error' : 'muted'}
-	facts={slim ? [] : [{ value: inFlight !== undefined && occupied ? num(inFlight) : '', tip: 'in flight' }]}
+	facts={slim ? [] : [{ value: num(inFlight ?? 0), tip: 'requests in flight' }]}
 	{menu}
 	{selected}
 	onclick={open}
@@ -114,17 +122,6 @@
 >
 	{#snippet leading()}
 		<span class="handle" aria-label="Drag to reorder" {@attach handle}><DotsSixVerticalIcon size={20} /></span>
-	{/snippet}
-	{#snippet action()}
-		{#if slot.state === SlotState.READY}
-			<RowAction onclick={() => goto(`/serve/launch?swap=${slot.id}`)} label="Swap" />
-		{:else if slot.state === SlotState.EMPTY}
-			<RowAction onclick={() => goto(`/serve/launch?slot=${slot.id}`)} label="Launch" />
-		{:else if failed || slot.state === SlotState.IDLE}
-			<RowAction onclick={relaunch} label="Relaunch" />
-		{:else}
-			<span class="secondary">{enumLabel(SlotStateSchema, slot.state)}</span>
-		{/if}
 	{/snippet}
 </ListRow>
 

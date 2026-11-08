@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 
-	// The one action of a row. Quiet by default so the list stays calm; `tone="danger"` for stop or remove.
+	// The one quiet action of a row, red for stop or remove
 	let {
 		label,
 		href,
@@ -21,7 +21,6 @@
 		--neo-btn-text-color-active: var(--neo-text-color);
 		min-height: var(--nebu-row-dense);
 		font-size: var(--nebu-text-secondary);
-		font-weight: 500;
 		white-space: nowrap;
 	}
 </style>

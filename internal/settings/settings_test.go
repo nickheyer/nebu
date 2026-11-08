@@ -88,6 +88,38 @@ func TestToolServerSettings(t *testing.T) {
 	}
 }
 
+// Runtime defaults keep trimmed names and values, drop blank ones and empty runtimes, survive a reload, and read back as copies
+func TestRuntimeDefaults(t *testing.T) {
+	m, _ := newManager(t)
+	ctx := context.Background()
+	if m.Defaults("llamacpp") != nil {
+		t.Fatal("nothing kept means no defaults")
+	}
+	got, err := m.Update(ctx, &v1.Settings{RuntimeDefaults: map[string]*v1.RuntimeDefaults{
+		"llamacpp": {Params: map[string]string{" n_ctx ": " 8192 ", "flash_attn": "on", "blank": " ", "": "x"}},
+		"vllm":     {Params: map[string]string{"gpu_memory_utilization": ""}},
+		" ":        {Params: map[string]string{"a": "b"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.GetRuntimeDefaults()) != 1 || got.GetRuntimeDefaults()["llamacpp"].GetParams()["n_ctx"] != "8192" || len(got.GetRuntimeDefaults()["llamacpp"].GetParams()) != 2 {
+		t.Fatalf("stored %v", got.GetRuntimeDefaults())
+	}
+	again := &Manager{DB: m.DB}
+	if err := again.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d := again.Defaults("llamacpp")
+	if d["n_ctx"] != "8192" || d["flash_attn"] != "on" || again.Defaults("vllm") != nil {
+		t.Fatalf("loaded %v", d)
+	}
+	d["n_ctx"] = "1"
+	if again.Defaults("llamacpp")["n_ctx"] == "1" {
+		t.Fatal("a caller's edit must not reach the stored defaults")
+	}
+}
+
 // Reads, update answers, and events carry the marker for every secret, and the marker sent back keeps the stored value
 func TestSecretsRedactedAndKept(t *testing.T) {
 	m, _ := newManager(t)

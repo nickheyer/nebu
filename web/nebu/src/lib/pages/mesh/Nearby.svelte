@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { ago, enumLabel, when } from '#lib/format.js';
 	import { AdmissionSide, AdmissionState, AdmissionStateSchema, type Admission, type MeshStatus } from '#lib/proto/nebu/v1/mesh_pb.js';
@@ -17,7 +18,6 @@
 	import { admissionTip, members, membership, outside, settled, sideWord } from '#lib/pages/mesh/mesh.js';
 	import BroadcastIcon from 'phosphor-svelte/lib/BroadcastIcon';
 
-	// Nodes and meshes heard on the network from inside a mesh, with the admissions this mesh decides
 	let { status }: { status: MeshStatus | undefined } = $props();
 
 	const nodes = $derived(status?.nodes ?? []);
@@ -30,8 +30,7 @@
 	let inviting = $state<string | undefined>(undefined);
 	const inviteValid = $derived(/^[^\s:[\]]+:\d{1,5}$|^\[[0-9a-fA-F:]+\]:\d{1,5}$/.test(inviteAddress.trim()));
 
-	// Opens the dialog inviting a node by its address
-	export function openInvite() {
+	function openInvite() {
 		inviteAddress = '';
 		inviteOpen = true;
 	}
@@ -64,8 +63,12 @@
 	}
 </script>
 
+{#snippet inviteButton()}
+	<NeoButton class="primary" elevation={2} onclick={openInvite}>Invite</NeoButton>
+{/snippet}
+
 {#snippet nodesCard()}
-	<Card title="Nearby nodes" count={nodes.length} flush>
+	<Card title="Nearby nodes" tools={inviteButton} flush>
 		<List head={{ primary: 'Node', secondary: 'Address', facts: ['Version', 'Mesh'] }}>
 			{#each nodes as n (n.id)}
 				<ListRow
@@ -86,7 +89,7 @@
 {/snippet}
 
 {#snippet meshesCard()}
-	<Card title="Nearby meshes" count={meshes.length} flush>
+	<Card title="Nearby meshes" tools={nodes.length ? undefined : inviteButton} flush>
 		<List head={{ primary: 'Mesh', secondary: 'Members' }}>
 			{#each meshes as m (m.hash)}
 				<ListRow primary={m.name} primaryTip="heard {when(m.heardAt)}" secondary={members(m.members)} secondaryWidth="12ch" />
@@ -96,7 +99,7 @@
 {/snippet}
 
 {#snippet admissionsCard()}
-	<Card title="Admissions" count={admissions.length} flush>
+	<Card title="Admissions" tools={heard ? undefined : inviteButton} flush>
 		<List head={{ primary: 'Node', secondary: 'Side', facts: ['Expires'] }}>
 			{#each admissions as a (a.id)}
 				<ListRow
@@ -122,8 +125,8 @@
 {/snippet}
 
 {#if !heard && admissions.length === 0}
-	<Card>
-		<Empty icon={BroadcastIcon} text="Nothing heard nearby" hint="Hosts and meshes announcing on this network show here, and so do the admissions this mesh decides" />
+	<Card title="Nearby" tools={inviteButton}>
+		<Empty icon={BroadcastIcon} text="Nothing nearby" />
 	</Card>
 {:else if heard && admissions.length}
 	<Columns ratio="3/2">

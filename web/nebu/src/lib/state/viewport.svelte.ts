@@ -4,7 +4,7 @@ const narrow = new MediaQuery('(max-width: 720px)');
 const wide = new MediaQuery('(min-width: 1600px)');
 const reduced = new MediaQuery('(prefers-reduced-motion: reduce)');
 
-// The three widths the spec lays every page out for
+// The three widths every page lays out for
 export const viewport = {
 	get mobile(): boolean {
 		return narrow.current;

@@ -1,7 +1,7 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { untrack } from 'svelte';
 	import { NeoNumberStep } from '#lib/neo/inputs/index.js';
-	import InfoTip from '#lib/ui/InfoTip.svelte';
 
 	let {
 		value = $bindable(0),
@@ -9,16 +9,17 @@
 		max,
 		step = 1,
 		label,
-		info,
 		placeholder,
 		unit,
 		disabled = false,
 		message,
 		error,
-		// Whether zero shows as a blank box with the placeholder, clearing the box setting zero
+		// Whether zero shows as a blank box
 		emptyZero = false,
+		// A mark after the box for how an empty box resolves
+		mark,
 		onchange
-	}: { value?: number; min?: number; max?: number; step?: number; label?: string; info?: string; placeholder?: string; unit?: string; disabled?: boolean; message?: string; error?: string; emptyZero?: boolean; onchange?: (n: number) => void } = $props();
+	}: { value?: number; min?: number; max?: number; step?: number; label?: string; placeholder?: string; unit?: string; disabled?: boolean; message?: string; error?: string; emptyZero?: boolean; mark?: Snippet; onchange?: (n: number) => void } = $props();
 
 	let raw = $state<number | string | null | undefined>(untrack(() => (emptyZero && value === 0 ? '' : value)));
 
@@ -36,11 +37,11 @@
 </script>
 
 <div class="field">
-	<NeoNumberStep bind:value={raw} {min} {max} {step} {label} {placeholder} {disabled} elevation={-1} placement={label ? 'top' : 'inside'} floating={false} width="100%" message={error ?? message} {error} oninput={changed} onchange={changed} center={false} />
-	{#if unit || info}
+	<NeoNumberStep bind:value={raw} {min} {max} {step} {label} placeholder={placeholder ?? ''} {disabled} elevation={-1} placement={label ? 'top' : 'inside'} floating={false} width="100%" message={error ?? message} {error} oninput={changed} onchange={changed} center={false} aria-label={label} />
+	{#if unit || mark}
 		<span class="trail">
 			{#if unit}<span class="unit secondary">{unit}</span>{/if}
-			{#if info}<InfoTip text={info} />{/if}
+			{#if mark}<span class="mark">{@render mark()}</span>{/if}
 		</span>
 	{/if}
 </div>
@@ -57,5 +58,9 @@
 	}
 	.unit {
 		white-space: nowrap;
+	}
+	.mark {
+		display: inline-flex;
+		color: var(--nebu-text-muted);
 	}
 </style>

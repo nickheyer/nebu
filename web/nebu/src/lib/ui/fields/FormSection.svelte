@@ -38,6 +38,9 @@
 		gap: 8px;
 		align-items: center;
 	}
+	.head h2 {
+		font-size: var(--nebu-text-body);
+	}
 	.fields {
 		display: flex;
 		flex-direction: column;

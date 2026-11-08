@@ -1,13 +1,14 @@
+@import '@fontsource/ibm-plex-sans/300.css';
 @import '@fontsource/ibm-plex-sans/400.css';
 @import '@fontsource/ibm-plex-sans/500.css';
-@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-mono/300.css';
 @import '@fontsource/ibm-plex-mono/400.css';
-@import '@fontsource/ibm-plex-mono/500.css';
 
 /*
  * Design tokens. Components read these, never raw numbers.
  *
  * Type scale (px)   title 20 / heading 15 / body 15 / secondary 13 / caption 12
+ * Weights           300 display numerals, 400 everything, 500 the one thing on a line that leads
  * Space scale (px)  1=4  2=8  3=12  4=16  5=24  6=32  7=48
  * Row heights (px)  row 40, dense row 32, control 36, input box 47
  */
@@ -62,8 +63,10 @@ html[neo-theme-root],
 
 	/* Motion */
 	--nebu-ease: cubic-bezier(0.2, 0, 0, 1);
+	--nebu-settle: cubic-bezier(0.22, 0.9, 0.24, 1);
 	--nebu-fast: 120ms;
 	--nebu-normal: 180ms;
+	--nebu-slow: 420ms;
 
 	/* Surfaces and lines, light */
 	--nebu-screen-background: #0f1114;
@@ -78,6 +81,9 @@ html[neo-theme-root],
 	--nebu-steel: #4f6378;
 	--nebu-disabled-fill: #e0e2e7;
 	--nebu-disabled-text: #6a6f7a;
+	--nebu-edge: rgb(255 255 255 / 60%);
+	--nebu-machined: inset 0 1px 0 var(--nebu-edge);
+	--nebu-bezel: inset 1px 1px 3px rgb(0 0 0 / 50%), inset 0 -1px 0 rgb(255 255 255 / 4%);
 
 	--neo-text-color-disabled: var(--nebu-disabled-text);
 	--neo-skeleton-color: color-mix(in srgb, var(--nebu-text-muted) 14%, transparent);
@@ -98,6 +104,7 @@ html[neo-theme-root],
 	--nebu-steel: #9fb0c4;
 	--nebu-disabled-fill: #212327;
 	--nebu-disabled-text: #8e939e;
+	--nebu-edge: rgb(255 255 255 / 6%);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -111,6 +118,7 @@ html[neo-theme-root],
 		--nebu-steel: #9fb0c4;
 		--nebu-disabled-fill: #212327;
 		--nebu-disabled-text: #8e939e;
+		--nebu-edge: rgb(255 255 255 / 6%);
 	}
 }
 

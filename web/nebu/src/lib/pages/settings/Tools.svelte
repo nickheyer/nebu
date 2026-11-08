@@ -25,17 +25,16 @@
 	import { toolLamp } from '#lib/ui/status.js';
 	import ToolEditor from '#lib/pages/settings/ToolEditor.svelte';
 	import TryTool from '#lib/pages/settings/TryTool.svelte';
+	import LockIcon from 'phosphor-svelte/lib/LockIcon';
 	import WrenchIcon from 'phosphor-svelte/lib/WrenchIcon';
 
 	let { tabs, servers }: { tabs: HeaderTab[]; servers: ListQuery<ToolServerStatus, Record<string, never>> } = $props();
 
-	// This node's servers as the live stream last reported them, members' as listed
 	const rows = $derived(servers.items.map((st) => (st.nodeId ? st : (live.toolServers.get(st.server?.name ?? '') ?? st))));
 	let open = $state(false);
 	let editing = $state<ToolServer | undefined>(undefined);
 	let trying = $state<ToolServerStatus | undefined>(undefined);
 	let tryOpen = $state(false);
-	// Bumped when a toggle fails so the switch returns to the stored state
 	let toggleFailures = $state(0);
 
 	function edit(t: ToolServer | undefined) {
@@ -94,7 +93,7 @@
 		return lamp === 'success' ? 'ready' : lamp === 'warning' ? 'connecting' : lamp === 'error' ? 'failed' : 'off';
 	}
 
-	// The one word that tells servers of a kind apart, the member, provider, command, host or local reads
+	// The word that tells servers of a kind apart
 	function targetOf(t: ToolServer, st: ToolServerStatus): string {
 		if (st.nodeId) return live.nodes.get(st.nodeId)?.name ?? st.nodeId;
 		switch (t.kind) {
@@ -117,13 +116,16 @@
 </script>
 
 {#snippet list()}
-	<Card title="Tool servers" info="Search, fetch and MCP servers whose tools models call through the gateway" flush>
+	<Card title="Tool servers" flush>
+		{#snippet tools()}
+			<NeoButton class="primary" elevation={2} onclick={() => edit(undefined)}>Add tool server</NeoButton>
+		{/snippet}
 		{#if !servers.settled}
 			<Skeleton rows={3} secondary="8ch" facts={2} />
 		{:else if servers.error}
 			<Empty text={servers.error} action="Retry" onclick={() => servers.refresh()} />
 		{:else if rows.length === 0}
-			<Empty icon={WrenchIcon} text="No tool servers" hint="Web search, page fetch and MCP servers give models tools to call while they answer" action={open ? undefined : 'Add tool server'} onclick={() => edit(undefined)} />
+			<Empty icon={WrenchIcon} text="No tool servers" action={open ? undefined : 'Add tool server'} onclick={() => edit(undefined)} />
 		{:else}
 			<List head={{ primary: 'Server', secondary: 'Kind', facts: ['Target', 'Tools'], action: 'Enabled' }}>
 				{#each rows as st (st.ref || st.server?.name)}
@@ -145,7 +147,7 @@
 							{/snippet}
 							{#snippet action()}
 								{#if st.nodeId}
-									<span class="secondary nowrap">read only</span>
+									<Tip text="Managed by {targetOf(t, st)}" tag="span"><span class="locked"><LockIcon size={16} /></span></Tip>
 								{:else}
 									{#key `${t.enabled}:${toggleFailures}`}<Switch checked={t.enabled} onchange={(on) => toggle(t, on)} />{/key}
 								{/if}
@@ -168,11 +170,7 @@
 	</Card>
 {/snippet}
 
-<PageHeader {tabs} active="tools">
-	{#snippet actions()}
-		<NeoButton class="primary" elevation={2} onclick={() => edit(undefined)}>Add tool server</NeoButton>
-	{/snippet}
-</PageHeader>
+<PageHeader {tabs} active="tools" info="Search, fetch and MCP servers that models may call through the gateway" />
 
 <Sheet {open} onclose={close} {list}>
 	{#if open}
@@ -183,3 +181,10 @@
 </Sheet>
 
 {#if trying}<TryTool bind:open={tryOpen} server={trying} />{/if}
+
+<style>
+	.locked {
+		display: inline-flex;
+		color: var(--nebu-text-muted);
+	}
+</style>

@@ -14,7 +14,7 @@ Nine rail entries. A group page carries its tabs on routes of their own.
 | [Overview](overview.md) | `/` | operator, admin |
 | [Chat](chat.md) | `/chat`, `/chat/<id>` | everyone |
 | Models | [Library](models.md) `/models`, [Discover](discover.md) `/discover`, `/discover/<source>/<repo>` | operator, admin |
-| Serve | [Instances](serve.md) `/serve`, [Runtimes](runtimes.md) `/runtimes` | operator, admin |
+| Serve | [Slots](serve.md) `/serve`, [Runtimes](runtimes.md) `/runtimes` | operator, admin |
 | Gateway | [Traffic](traffic.md) `/traffic`, [Routes, Pools, Objectives, Schedulers, Imports](gateway.md) `/gateway/<tab>` | operator, admin |
 | [Mesh](mesh.md) | `/mesh/<tab>` | operator reads, admin manages |
 | [Bots](bots.md) | `/bots`, `/bots/<id>/<tab>` | operator, admin |
@@ -30,7 +30,9 @@ Nine rail entries. A group page carries its tabs on routes of their own.
 5. Space is balanced. Every block of a page sits in a card, cards fill the frame, and a detail panel exists only while a record is open.
 6. Every page is specified for three widths.
 7. Grid where columns must line up, a list's cells and its head, card columns, the pipeline. Stacks and rows elsewhere.
-8. Standard patterns only: card, list with a column head, master and detail, tabs, stepper, toast, confirm dialog, empty state with one action. Labels, never sentences, in the UI, a hint under an empty state excepted.
+8. Standard patterns only: card, list with a column head, master and detail, tabs, stepper, toast, confirm dialog, empty state with one action. Labels, never sentences, in the UI, a hint under an empty state and the one `(i)` line of a page or block excepted.
+9. No placeholder words. An unset field shows the literal value it resolves to, or a mark where no single value exists, an infinity for no limit, a shuffle for a drawn seed, a function mark for a value the planner solves.
+10. One `(i)` per page, after its title, and at most one per block. Each holds one static line. Nothing else explains the UI in words.
 
 ## Widths
 
@@ -46,7 +48,7 @@ The top bar and the page share one frame, 1760px at most, centred in the space b
 
 ## Layout primitives
 
-- **Card.** The raised surface every block of a page sits in. A title row with a count, an `(i)` and quiet tools, then the body, flush for lists and screens.
+- **Card.** The raised surface every block of a page sits in. A title row with an `(i)` and the block's tools, its own buttons included, then the body, flush for lists and screens.
 - **List.** Rows sharing one set of columns under a head naming them, inside a flush card.
 - **Columns.** Two columns of cards in a fixed ratio, one column under 1000px.
 - **Toolbar.** Compact controls over a list, the search taking the free width.
@@ -73,7 +75,7 @@ In order of weight. A page uses the lightest layer that holds the information.
 
 Leading status dot. Primary text. One secondary phrase. At most two trailing facts. At most one action, a text button naming a verb other than open. An overflow menu with the rest. Clicking the row opens its record, so no row carries Open or Edit. Every row of a list lines up with the head. On mobile the facts and the secondary phrase drop into the row's expand. A list row is 44px over a hairline, a fact row 32px.
 
-**Filters.** A filter Select carries its name as its placeholder, the sort Select a sort icon before its value. No label stands beside a filter.
+**Filters.** A filter Select carries its name as a label floating inside the box, the sort Select a sort icon before its value. A search box carries a magnifier and no words.
 
 ## Strings
 
@@ -113,7 +115,7 @@ Leading status dot. Primary text. One secondary phrase. At most two trailing fac
 | Code | YAML or JSON | CodeMirror with validation |
 | Cron | a five field cron | preset `Select` with a custom `Text` |
 
-**Form layout.** Sections with a title and an optional `(i)`. Two fields per row at standard width and up, one per row on mobile. Advanced fields under one collapse per section, nothing after it. A save bar pinned to the bottom appears when an edit form is dirty and stays from the start on a create form. An unset number reads Default, a seed Random.
+**Form layout.** Sections with a title and an optional `(i)`, the only help a form carries. Two fields per row at standard width and up, one per row on mobile. Advanced fields under one collapse per section, nothing after it. A save bar pinned to the bottom appears when an edit form is dirty and stays from the start on a create form. An unset number shows the value it resolves to as its placeholder, the gateway policy for a route or slot, a runtime default for a param, or a mark after the box.
 
 **Creating.** A record a page lists is created and edited in the same panel that shows it. A create of three fields or fewer is a dialog. A multi step create is a stepper dialog.
 
@@ -144,17 +146,19 @@ Lists refetch their current page, debounced, when the live stream reports a chan
 
 **Conditions.** One row per condition: status dot, type, reason. Message and time in the tooltip. False first.
 
-**Memory bars.** One bar per pool: the label at 5ch, the device name at 24ch with an ellipsis from the right, the track, used over total at 14ch, every track in a section on the same x. A device living on another pool's memory, an integrated GPU on system memory, is one more row in the same anatomy reading shared memory where the track would be, on every page that draws the bars. Segments: instances (solid), reservations (hatched), other processes (grey), free. Labels only in the tooltip. A legend once per page.
-
-**Counts.** A card title or tab label carries the count of rows its list holds, 13px muted after the label. It appears once the list has loaded, zero included, and is absent while loading. The tabs of one page get their counts together.
+**Memory bars.** One bar per pool: the label at 5ch, the device names at 24ch with an ellipsis from the right, the track, used over total at 14ch, every track in a section on the same x. The RAM row names the CPU, a GPU row its GPU. The daemon lists no device without memory of its own, so a GPU sharing system memory appears nowhere. Segments: instances (solid), reservations (hatched), other processes (grey), free. Labels only in the tooltip. A legend once per page.
 
 **Status colours.** Ready green. Starting, pending amber. Draining, stopping blue. Failed red. Idle, stopped grey.
 
 **Empty, loading, error.** Loading draws skeletons in the layout the data takes. An empty card holds one centred block, an icon, a line, a one line hint saying what fills it, and at most one button leading to the nearest action, the accent when it is the page's next step. An optional card with nothing in it is left out. A quiet one line form serves a row's expand. Nothing stands in for a closed panel. Failed calls toast the daemon's message.
 
-**Shell.** Top bar: the page's title, meta, actions and tabs, then the tasks count, live dot and account menu. Rail: the mark, the host label and the mesh name when in one, then the pages. The host label is asked for directly at sign in and kept through navigation, the stream only updating it. Rail items are text buttons, 38px, weight 500, icon then label, the active one in primary text on an inset pad. The rail collapses to 60px of icons with the label in a tooltip and remembers. Mobile bottom bar: Overview, Chat, Serve, Gateway, More, the meta and actions on a line under the title.
+**Shell.** Top bar: the page's title with its `(i)` and tabs on the left, then the command bar, the tasks count and the account menu. Nothing else lives in the bar. Rail: the mark beside the host label, then the pages. The host label is asked for directly at sign in and kept through navigation, the stream only updating it. Rail items are text buttons, 38px, icon then label, the active one in primary text on an inset pad. The rail collapses to 60px of icons with the label in a tooltip and remembers. Mobile bottom bar: Overview, Chat, Serve, Gateway, More.
 
-**Page title.** Every page carries its title in the top bar, the rail entry's name for a page and its tabs. A record page, a bot or a repository, carries the record's name after a back link. Nothing in the page body repeats it.
+**Command bar.** A sunken slot in the top bar, opened by click or Ctrl K, listing pages, tabs, every record the live mirror holds and a few actions, ranked by the typed words. Enter opens the hit, Escape closes.
+
+**Page title.** Every page carries its title in the top bar, the rail entry's name for a page and its tabs. A record page, a bot or a repository, carries the record's name after a back link. Nothing in the page body repeats it. A page's own buttons sit in the tools of the card they act on.
+
+**Motion.** Cards and rows settle into place with a short reveal, cards in page order and rows staggered down a list. Panels swing in on a slight perspective. Skeletons sweep. Half lamps breathe. A line arriving on a live screen lands bright and fades to phosphor. The appearance toggle and `prefers-reduced-motion` switch all of it off.
 
 **Screenshots.** `make screenshots` renders every page at the three widths and 2560px in both themes, the login page signed out, and one open panel, drawer, dialog or wizard per page into `screens/`.
 

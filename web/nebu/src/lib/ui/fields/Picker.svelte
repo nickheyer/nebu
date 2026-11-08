@@ -9,23 +9,21 @@
 		value = $bindable(),
 		fetch,
 		label,
-		info,
-		placeholder = 'Search',
+		placeholder,
 		disabled = false,
 		clearable = false,
 		required = false,
 		message,
 		error,
 		pageSize = 25,
-		// The label of the current value when it is not among the loaded options
 		current,
 		width = '100%',
+		compact = false,
 		onchange
 	}: {
 		value?: V;
 		fetch: PickerFetch<V>;
 		label?: string;
-		info?: string;
 		placeholder?: string;
 		disabled?: boolean;
 		clearable?: boolean;
@@ -35,6 +33,7 @@
 		pageSize?: number;
 		current?: string;
 		width?: string;
+		compact?: boolean;
 		onchange?: (v: V | undefined) => void;
 	} = $props();
 
@@ -109,12 +108,13 @@
 	{required}
 	nullable={clearable}
 	elevation={-1}
-	placement={label ? 'top' : 'inside'}
-	floating={false}
-	message={error ?? (info ? `${message ? `${message}. ` : ''}${info}` : message)}
+	placement={label && !compact ? 'top' : 'inside'}
+	floating={compact}
+	message={error ?? message}
 	{error}
 	{width}
-	listProps={{ after, loading: loading && options.length > 0, searchProps: { placeholder, sort: false } }}
+	aria-label={label}
+	listProps={{ after, loading: loading && options.length > 0, searchProps: { sort: false } }}
 	onChange={(v) => onchange?.(v as V | undefined)}
 />
 

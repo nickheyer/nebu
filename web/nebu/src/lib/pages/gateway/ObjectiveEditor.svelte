@@ -2,7 +2,6 @@
 	import { create } from '@bufbuild/protobuf';
 	import { untrack } from 'svelte';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { capitalize } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { ObjectiveSchema, type Objective } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
@@ -17,7 +16,6 @@
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
-	import { priorityBand } from '#lib/pages/gateway/gateway.js';
 
 	let { objective, onclose }: { objective?: Objective; onclose: () => void } = $props();
 
@@ -64,14 +62,14 @@
 	{/snippet}
 </PanelHeader>
 <Stack gap={24}>
-	<FormSection title="Objective" info="Chosen by the request header or inherited from the route">
+	<FormSection>
 		<FieldRow>
-			<Text bind:value={name} label="Name" required readonly={editing} max={64} placeholder="interactive" />
-			<Slider bind:value={priority} min={-1000} max={1000} label="Priority" message={capitalize(priorityBand(priority))} info="Higher sheds later under saturation" />
+			<Text bind:value={name} label="Name" required readonly={editing} max={64} />
+			<Slider bind:value={priority} min={-1000} max={1000} label="Priority" />
 		</FieldRow>
 		<FieldRow>
-			<Duration bind:value={ttft} base="ms" max={3_600_000} label="Time to first token" info="The target a request is held to, unset for none" emptyZero placeholder="Default" />
-			<Duration bind:value={tpot} base="ms" max={3_600_000} label="Time per output token" info="The target a request is held to, unset for none" emptyZero placeholder="Default" />
+			<Duration bind:value={ttft} base="ms" max={3_600_000} label="Time to first token" emptyZero />
+			<Duration bind:value={tpot} base="ms" max={3_600_000} label="Time per output token" emptyZero />
 		</FieldRow>
 	</FormSection>
 	{#if current?.status?.conditions.length}
@@ -80,4 +78,4 @@
 		</Section>
 	{/if}
 </Stack>
-<SaveBar {dirty} always={!editing} {saving} {error} message={name.trim() ? undefined : 'Name needed'} label={editing ? 'Save' : 'Create'} disabled={!name.trim()} onsave={save} ondiscard={onclose} />
+<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!name.trim()} onsave={save} ondiscard={onclose} />

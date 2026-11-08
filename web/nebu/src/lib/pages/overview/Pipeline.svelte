@@ -8,9 +8,7 @@
 		detail: string;
 		href: string;
 		lamp?: Lamp;
-		// Whether the stage holds anything, lighting the line to the next one
 		done: boolean;
-		// The next step when the stage is empty
 		action?: { label: string; href: string };
 		spark?: number[];
 	};
@@ -22,7 +20,7 @@
 	import Sparkline from '#lib/ui/Sparkline.svelte';
 	import CaretRightIcon from 'phosphor-svelte/lib/CaretRightIcon';
 
-	// The path from an installed runtime to traffic, each stage live, the first empty one offering its next step
+	// Lights each stage that holds something and offers the first empty stage its next step
 	let { stages }: { stages: Stage[] } = $props();
 
 	const firstEmpty = $derived(stages.findIndex((s) => !s.done));
@@ -41,7 +39,7 @@
 				<a class="body" href={s.href}>
 					<span class="label">{#if s.lamp}<Dot lamp={s.lamp} size={8} />{/if}{s.label}</span>
 					<span class="value">{s.value}</span>
-					<span class="detail">{s.detail}</span>
+					{#if s.detail}<span class="detail">{s.detail}</span>{/if}
 				</a>
 				{#if s.spark?.some((v) => v > 0)}
 					<span class="spark"><Sparkline points={s.spark} width={96} height={22} /></span>
@@ -93,7 +91,7 @@
 	.wire {
 		flex: 1 1 auto;
 		height: 2px;
-		background: var(--nebu-border-strong);
+		background: repeating-linear-gradient(90deg, var(--nebu-border-strong) 0 4px, transparent 4px 8px);
 		border-radius: 2px;
 	}
 	.link :global(svg) {
@@ -130,15 +128,16 @@
 		gap: 6px;
 		align-items: center;
 		font-size: var(--nebu-text-secondary);
-		font-weight: 500;
+		font-weight: 400;
 		color: var(--nebu-text-muted);
 	}
 	.value {
 		overflow: hidden;
 		font-size: 24px;
-		font-weight: 600;
+		font-weight: 300;
 		font-variant-numeric: tabular-nums;
 		line-height: 1.25;
+		animation: nebu-reveal var(--nebu-slow) var(--nebu-settle) both;
 		white-space: nowrap;
 		text-overflow: ellipsis;
 		transition: color var(--nebu-fast) var(--nebu-ease);
@@ -177,7 +176,6 @@
 	}
 	.later {
 		font-size: var(--nebu-text-secondary);
-		font-weight: 500;
 		color: var(--nebu-text-muted);
 		text-decoration: none;
 	}

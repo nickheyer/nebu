@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import NumberField from '#lib/ui/fields/Number.svelte';
 	import Segmented from '#lib/ui/fields/Segmented.svelte';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
@@ -8,15 +9,16 @@
 
 	let {
 		value = $bindable(0),
-		// Whether the bound value counts milliseconds or seconds
 		base = 'ms',
 		max,
 		label,
-		info,
-		placeholder,
 		disabled = false,
-		message
-	}: { value?: number; base?: 'ms' | 's'; max?: number; label?: string; info?: string; placeholder?: string; disabled?: boolean; message?: string } = $props();
+		message,
+		emptyZero = false,
+		// The span an empty box resolves to, in the base unit
+		fallback,
+		mark
+	}: { value?: number; base?: 'ms' | 's'; max?: number; label?: string; disabled?: boolean; message?: string; emptyZero?: boolean; fallback?: number; mark?: Snippet } = $props();
 
 	const baseFactor = $derived(base === 'ms' ? 1 : 1000);
 	const units = $derived.by((): Unit[] => {
@@ -27,17 +29,24 @@
 	let unit = $state<Unit>('ms');
 	let shown = $state(0);
 
-	// Picks the largest unit that divides the value and shows it
+	// The largest unit dividing a span evenly
+	function fit(ms: number): Unit {
+		let best: Unit = units[0] ?? base;
+		if (ms === 0) return best;
+		for (const u of units) if (ms % factors[u] === 0) best = u;
+		return best;
+	}
+
+	// Shows the value in the unit that fits it, an empty box taking the fallback's unit
 	$effect(() => {
 		const ms = value * baseFactor;
 		if (ms === 0) {
 			shown = 0;
+			if (emptyZero && fallback) unit = fit(fallback * baseFactor);
 			return;
 		}
-		let best: Unit = units[0] ?? base;
-		for (const u of units) if (ms % factors[u] === 0) best = u;
-		unit = best;
-		shown = ms / factors[best];
+		unit = fit(ms);
+		shown = ms / factors[unit];
 	});
 
 	function changed(n: number) {
@@ -53,12 +62,13 @@
 
 	const unitOptions = $derived(units.map((u) => ({ value: u, label: u })));
 	const unitMax = $derived(max === undefined ? undefined : Math.floor((max * baseFactor) / factors[unit]));
+	const placeholder = $derived(emptyZero && fallback ? String(Math.round(((fallback * baseFactor) / factors[unit]) * 100) / 100) : undefined);
 </script>
 
 <div class="field">
-	<FieldLabel {label} {info} />
+	<FieldLabel {label} />
 	<div class="controls">
-		<NumberField value={shown} min={0} max={unitMax} {placeholder} {disabled} {message} onchange={changed} />
+		<NumberField value={shown} min={0} max={unitMax} {placeholder} {disabled} {message} {emptyZero} mark={emptyZero && !fallback ? mark : undefined} onchange={changed} />
 		<Segmented bind:value={unit} options={unitOptions} {disabled} onchange={unitChanged} />
 	</div>
 </div>
@@ -70,16 +80,16 @@
 		gap: 4px;
 		min-width: 0;
 	}
-	/* The number takes the width the unit choice leaves, both on one line */
 	.controls {
 		display: flex;
+		flex-wrap: wrap;
 		gap: 8px;
 		align-items: center;
 		min-width: 0;
 	}
 	.controls > :global(:first-child) {
-		flex: 1 1 auto;
-		min-width: 0;
+		flex: 1 1 12rem;
+		min-width: 12rem;
 	}
 	.controls > :global(:last-child) {
 		flex: 0 0 auto;

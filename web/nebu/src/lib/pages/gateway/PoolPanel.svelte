@@ -30,7 +30,8 @@
 	{/snippet}
 </PanelHeader>
 <Stack gap={24}>
-	<Section title="Endpoints" count="{num(pool.status?.readyEndpoints)} of {num(pool.status?.totalEndpoints)} ready" level={3}>
+	<Section title="Endpoints" level={3}>
+		{#snippet tools()}<span class="ready">{num(pool.status?.readyEndpoints)} / {num(pool.status?.totalEndpoints)}</span>{/snippet}
 		{#if endpoints.length}
 			<List head={{ primary: 'Address', instrument: 'KV cache', facts: ['Queued', 'Running'] }}>
 				{#each endpoints as e (e.id)}
@@ -58,14 +59,14 @@
 			dense
 			rows={[
 				{ label: 'owner', value: ownerLabel(pool.ownerKind, pool.ownerId) },
-				{ label: 'runtime', value: spec?.runtimeId || 'any' },
-				{ label: 'accelerator', value: spec?.accelerator || 'any', tip: spec?.accelerator || undefined },
+				{ label: 'runtime', value: spec?.runtimeId ?? '' },
+				{ label: 'accelerator', value: spec?.accelerator ?? '', tip: spec?.accelerator || undefined },
 				{ label: 'selector', value: Object.entries(spec?.selector ?? {}).map(([k, v]) => `${k}=${v}`).join(' '), mono: true },
 				{ label: 'target ports', value: spec?.targetPorts.join(', ') ?? '', mono: true },
 				{ label: 'protocol', value: enumLabel(AppProtocolSchema, spec?.appProtocol ?? 0) },
 				{ label: 'failure mode', value: enumLabel(FailureModeSchema, spec?.failureMode ?? 0) },
-				{ label: 'scheduler', value: spec?.schedulerConfig || 'built in', href: spec?.schedulerConfig ? `/gateway/schedulers/${encodeURIComponent(spec.schedulerConfig)}` : undefined },
-				{ label: 'concurrency', value: spec?.concurrency ? num(spec.concurrency) : 'runtime reported' },
+				{ label: 'scheduler', value: spec?.schedulerConfig ?? '', href: spec?.schedulerConfig ? `/gateway/schedulers/${encodeURIComponent(spec.schedulerConfig)}` : undefined },
+				{ label: 'concurrency', value: spec?.concurrency ? num(spec.concurrency) : '' },
 				{ label: 'tokens in and out', value: spec?.tokensInOut ? 'on' : 'off' },
 				{ label: 'export', value: exported(pool) ? 'on' : 'off' },
 				{ label: 'context', value: spec?.inventory?.contextLength ? `${num(spec.inventory.contextLength)} tokens` : '' },
@@ -78,6 +79,11 @@
 </Stack>
 
 <style>
+	.ready {
+		font-size: var(--nebu-text-secondary);
+		font-variant-numeric: tabular-nums;
+		color: var(--nebu-text-muted);
+	}
 	.kv {
 		display: flex;
 		flex: 1 1 auto;

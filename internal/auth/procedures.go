@@ -95,6 +95,7 @@ var procedures = map[string]rule{
 	nebuv1connect.InstanceServiceListInstancesProcedure: needRead,
 	nebuv1connect.InstanceServiceGetInstanceProcedure:   needRead,
 	nebuv1connect.InstanceServiceLogsProcedure:          needRead,
+	nebuv1connect.InstanceServicePreviewRunProcedure:    needRead,
 	nebuv1connect.InstanceServiceRunProcedure:           needOperate,
 	nebuv1connect.InstanceServiceStopInstanceProcedure:  needOperate,
 	nebuv1connect.InstanceServiceLoadAdapterProcedure:   needOperate,

@@ -107,6 +107,41 @@ func (m *Manager) Full() *v1.Settings {
 	return proto.Clone(m.current).(*v1.Settings)
 }
 
+// The parameter values launches and plans of a runtime start from, a copy, none when the settings keep none
+func (m *Manager) Defaults(runtimeID string) map[string]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d := m.current.GetRuntimeDefaults()[runtimeID]
+	if len(d.GetParams()) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(d.GetParams()))
+	for k, v := range d.GetParams() {
+		out[k] = v
+	}
+	return out
+}
+
+// Drops blank parameter names and values and runtimes left without any
+func tidyDefaults(in map[string]*v1.RuntimeDefaults) map[string]*v1.RuntimeDefaults {
+	out := map[string]*v1.RuntimeDefaults{}
+	for id, d := range in {
+		params := map[string]string{}
+		for k, v := range d.GetParams() {
+			if k, v = strings.TrimSpace(k), strings.TrimSpace(v); k != "" && v != "" {
+				params[k] = v
+			}
+		}
+		if id = strings.TrimSpace(id); id != "" && len(params) > 0 {
+			out[id] = &v1.RuntimeDefaults{Params: params}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // Copies settings with each tool server redacted
 func redact(s *v1.Settings) *v1.Settings {
 	out := proto.Clone(s).(*v1.Settings)
@@ -118,6 +153,7 @@ func redact(s *v1.Settings) *v1.Settings {
 func (m *Manager) Update(ctx context.Context, in *v1.Settings) (*v1.Settings, error) {
 	next := proto.Clone(in).(*v1.Settings)
 	next.HostLabel = strings.Join(strings.Fields(next.GetHostLabel()), " ")
+	next.RuntimeDefaults = tidyDefaults(next.GetRuntimeDefaults())
 	if utf8.RuneCountInString(next.GetHostLabel()) > labelMax {
 		return nil, fmt.Errorf("%w: the host label is longer than %d characters", ErrSetting, labelMax)
 	}

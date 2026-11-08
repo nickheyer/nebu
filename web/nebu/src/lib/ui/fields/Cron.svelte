@@ -15,12 +15,12 @@
 		{ value: 'custom', label: 'Custom' }
 	];
 
-	let { value = $bindable(''), label = 'Schedule', info, disabled = false }: { value?: string; label?: string; info?: string; disabled?: boolean } = $props();
+	let { value = $bindable(''), label = 'Schedule', disabled = false }: { value?: string; label?: string; disabled?: boolean } = $props();
 
 	let preset = $state(presets.some((p) => p.value === value) ? value : value ? 'custom' : '');
 	const custom = $derived(preset === 'custom');
 	const fields = $derived(value.trim().split(/\s+/).filter(Boolean).length);
-	const error = $derived(custom && value && fields !== 5 ? 'Five fields, minute hour day month weekday' : undefined);
+	const error = $derived(custom && value && fields !== 5 ? 'Five fields' : undefined);
 
 	function picked(p: string | undefined) {
 		if (!p) {
@@ -32,9 +32,9 @@
 </script>
 
 <div class="cron">
-	<Select bind:value={preset} options={presets} {label} {info} {disabled} onchange={picked} />
+	<Select bind:value={preset} options={presets} {label} {disabled} onchange={picked} />
 	{#if custom}
-		<Text bind:value label="Cron expression" placeholder="*/10 * * * *" mono {disabled} {error} max={64} />
+		<Text bind:value label="Cron expression" mono {disabled} {error} max={64} />
 	{/if}
 </div>
 

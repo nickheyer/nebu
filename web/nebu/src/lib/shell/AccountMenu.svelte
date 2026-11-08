@@ -39,7 +39,7 @@
 		passwordOpen = true;
 	}
 
-	// Changes the signed-in account's password, which ends its sessions and returns the browser to sign in
+	// Changes the password, which ends the session
 	async function changePassword() {
 		busy = true;
 		error = '';

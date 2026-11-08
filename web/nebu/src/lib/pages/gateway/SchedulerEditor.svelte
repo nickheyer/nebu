@@ -37,7 +37,7 @@
 	const dirty = $derived(!editing || yaml !== start?.spec?.yaml);
 	// Lines that fill the panel below its header and above the save bar, a line being 19.5px
 	const rows = $derived(Math.max(12, Math.floor((height - (editing ? 330 : 420)) / 19.5)));
-	const problem = $derived(!name.trim() ? 'Name needed' : !valid ? 'YAML does not parse' : undefined);
+	const complete = $derived(name.trim() !== '' && valid);
 
 	function draft() {
 		return create(SchedulerConfigSchema, { name: name.trim(), spec: create(SchedulerConfigSpecSchema, { yaml }) });
@@ -84,10 +84,10 @@
 
 <svelte:window bind:innerHeight={height} />
 
-<PanelHeader title={editing ? name : 'New scheduler'} subtitle={editing ? `referenced by ${plural(references, 'pool')}` : undefined} {onclose}>
+<PanelHeader title={editing ? name : 'New scheduler'} subtitle={editing ? plural(references, 'pool') : undefined} {onclose}>
 	{#snippet tools()}
 		<Row gap={8} wrap={false}>
-			<NeoButton elevation={2} loading={validating} disabled={problem !== undefined} onclick={validate}>Validate</NeoButton>
+			<NeoButton elevation={2} loading={validating} disabled={!complete} onclick={validate}>Validate</NeoButton>
 			{#if editing && references === 0}<Confirm label="Delete" question="Delete {name}?" danger onconfirm={remove} />{/if}
 		</Row>
 	{/snippet}
@@ -96,11 +96,11 @@
 	<FormSection title="Scheduler">
 		{#if !editing}
 			<FieldRow>
-				<Text bind:value={name} label="Name" required max={64} placeholder="prefix-aware" />
+				<Text bind:value={name} label="Name" required max={64} />
 				<span></span>
 			</FieldRow>
 		{/if}
-		<Code bind:value={yaml} language="yaml" bind:valid bind:error={codeError} {rows} label="Configuration" info="Plugins and scheduling profiles in the inference extension format, Validate loads it on the gateway without saving" />
+		<Code bind:value={yaml} language="yaml" bind:valid bind:error={codeError} {rows} label="Configuration" />
 	</FormSection>
 	{#if current}
 		<Section title="Conditions" level={3}>
@@ -108,4 +108,4 @@
 		</Section>
 	{/if}
 </Stack>
-<SaveBar {dirty} always={!editing} {saving} {error} message={problem} label={editing ? 'Save' : 'Create'} disabled={problem !== undefined} onsave={save} ondiscard={onclose} />
+<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!complete} onsave={save} ondiscard={onclose} />

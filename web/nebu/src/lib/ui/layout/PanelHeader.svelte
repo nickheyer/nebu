@@ -9,14 +9,13 @@
 		onclose,
 		children,
 		tools,
-		// The string kind the title truncates as, such as repo for an ellipsis from the left at 40ch
 		kind = 'name'
 	}: { title: string; subtitle?: string; onclose?: () => void; children?: Snippet; tools?: Snippet; kind?: StrKind } = $props();
 </script>
 
 <div class="head">
 	<div class="titles">
-		<h2 class="title" class:wide={kind === 'repo' || kind === 'path' || kind === 'message'}><Str value={title} {kind} tip={title} weight={600} width="100%" /></h2>
+		<h2 class="title" class:wide={kind === 'repo' || kind === 'path' || kind === 'message'}><Str value={title} {kind} tip={title} weight={500} width="100%" /></h2>
 		{#if subtitle}<span class="secondary ellipsis">{subtitle}</span>{/if}
 	</div>
 	{#if children}{@render children()}{/if}

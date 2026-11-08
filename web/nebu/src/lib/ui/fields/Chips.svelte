@@ -2,17 +2,16 @@
 	import { NeoInput } from '#lib/neo/inputs/index.js';
 	import { NeoPill } from '#lib/neo/pill/index.js';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 
 	let {
 		value = $bindable([]),
 		label,
-		info,
-		placeholder = 'Add',
 		disabled = false,
 		numeric = false,
 		max,
 		onchange
-	}: { value?: string[]; label?: string; info?: string; placeholder?: string; disabled?: boolean; numeric?: boolean; max?: number; onchange?: (v: string[]) => void } = $props();
+	}: { value?: string[]; label?: string; disabled?: boolean; numeric?: boolean; max?: number; onchange?: (v: string[]) => void } = $props();
 
 	let typed = $state('');
 
@@ -45,13 +44,15 @@
 </script>
 
 <div class="field">
-	<FieldLabel {label} {info} />
+	<FieldLabel {label} />
 	<div class="chips">
 		{#each value as v (v)}
 			<NeoPill size="small" close label={v} onClose={() => remove(v)} />
 		{/each}
 	</div>
-	<NeoInput bind:value={typed} {placeholder} {disabled} elevation={-1} floating={false} width="100%" inputmode={numeric ? 'numeric' : undefined} {onkeydown} onblur={add} aria-label={label} />
+	<NeoInput bind:value={typed} {disabled} elevation={-1} floating={false} width="100%" inputmode={numeric ? 'numeric' : undefined} {onkeydown} onblur={add} aria-label={label}>
+		{#snippet before()}<span class="plus"><PlusIcon size={16} /></span>{/snippet}
+	</NeoInput>
 </div>
 
 <style>
@@ -68,5 +69,9 @@
 	}
 	.chips:empty {
 		display: none;
+	}
+	.plus {
+		display: inline-flex;
+		color: var(--nebu-text-faint);
 	}
 </style>

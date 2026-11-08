@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, untrack } from 'svelte';
+	import { untrack } from 'svelte';
 	import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -27,13 +27,12 @@
 	import Select from '#lib/ui/fields/Select.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
+	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Sheet from '#lib/ui/layout/Sheet.svelte';
 	import Toolbar from '#lib/ui/layout/Toolbar.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { statusClassLamp } from '#lib/ui/status.js';
-	import GatewayHeader from '#lib/pages/gateway/GatewayHeader.svelte';
-	import { priorityBand } from '#lib/pages/gateway/gateway.js';
-	import { GatewayGroup } from '#lib/pages/gateway/group.svelte.js';
+	import { gatewayHeaderTabs } from '#lib/pages/gateway/tabs.js';
 	import Timeline from '#lib/pages/traffic/Timeline.svelte';
 	import TracePanel from '#lib/pages/traffic/TracePanel.svelte';
 	import { buckets, failed, finished, isShed, isWindow, kindWord, marks, percentile, rangeStartDefault, stamp, started, tpot, traceKinds, ttft, windowMs, type Window } from '#lib/pages/traffic/traffic.js';
@@ -50,10 +49,6 @@
 
 	let { traceId = '' }: { traceId?: string } = $props();
 
-	const group = new GatewayGroup();
-	onMount(() => group.start(false));
-
-	// Buckets each fact's sparkline splits the window into
 	const sparkBuckets = 24;
 	const initial = untrack(() => page.url.searchParams);
 	const urlFrom = Number(initial.get('from') ?? '');
@@ -79,7 +74,7 @@
 	let statsError = $state('');
 	let toolbarWidth = $state(0);
 
-	// The toolbar folds kind and status, then the route and the range, into the filters popover as its card narrows
+	// Kind and status, then the route and the range, fold into the filters popover as the card narrows
 	const ranged = $derived(windowId === 'range' ? 220 : 0);
 	const fold = $derived<'none' | 'some' | 'all'>(viewport.mobile ? 'all' : toolbarWidth === 0 || toolbarWidth >= 1080 + ranged ? 'none' : toolbarWidth >= 740 + ranged ? 'some' : 'all');
 
@@ -99,7 +94,7 @@
 	const rangeFrom = $derived(anchor - fromAgo * 1000);
 	const rangeTo = $derived(anchor - toAgo * 1000);
 	const bounds = $derived(windowId === 'range' ? { from: rangeFrom, to: rangeTo } : { from: now - windowMs[windowId], to: 0 });
-	// The window edge the daemon is asked for, moved once a minute so the lists are not refetched every second
+	// The window edge asked of the daemon, moved once a minute
 	const queryFrom = $derived(windowId === 'range' ? rangeFrom : Math.floor(bounds.from / 60_000) * 60_000);
 	const queryTo = $derived(windowId === 'range' ? rangeTo : 0);
 
@@ -172,7 +167,7 @@
 		};
 	});
 
-	// The query string the filters keep, so links to a trace and back hold them
+	// The query string the filters keep
 	const search = $derived.by(() => {
 		const q = new URLSearchParams();
 		if (route) q.set('route', route);
@@ -189,7 +184,7 @@
 		if (s !== location.search) void goto(`${location.pathname}${s}`, { replace: true, shallow: true, reset: false });
 	});
 
-	// Copies the stream updated since the lists loaded win over the fetched ones, a paused page keeping the copies it had
+	// Stream copies win over fetched ones, a paused page keeping the copies it had
 	const fresh = $derived(paused ? pinned : new Map(live.traces.map((t) => [t.id, t])));
 	const rows = $derived(list.items.map((t) => fresh.get(t.id) ?? t));
 	const windowed = $derived(stats.map((t) => fresh.get(t.id) ?? t).filter((t) => started(t) >= bounds.from && (bounds.to === 0 || started(t) < bounds.to)));
@@ -201,15 +196,15 @@
 	const waits = $derived(windowed.map((t) => t.queueWaitMs).filter((v) => v > 0));
 	const errorRate = $derived(done.length ? (done.filter(failed).length / done.length) * 100 : 0);
 	const attainment = $derived.by(() => {
-		const bands = new Map<string, { met: number; total: number }>();
+		const byObjective = new Map<string, { met: number; total: number }>();
 		for (const t of done) {
 			if (!t.objective) continue;
-			const b = bands.get(priorityBand(t.priority)) ?? { met: 0, total: 0 };
+			const b = byObjective.get(t.objective) ?? { met: 0, total: 0 };
 			b.total++;
 			if (t.objectiveAttained) b.met++;
-			bands.set(priorityBand(t.priority), b);
+			byObjective.set(t.objective, b);
 		}
-		return [...bands.entries()].map(([name, b]) => ({ label: `${name} attained`, value: pct((b.met / b.total) * 100) }));
+		return [...byObjective.entries()].map(([name, b]) => ({ label: `${name} attained`, value: pct((b.met / b.total) * 100) }));
 	});
 
 	function median(values: number[]): number {
@@ -263,7 +258,6 @@
 	});
 
 	const moreFilters = $derived([nodeId, objective, fairness.trim()].filter(Boolean).length);
-	// The active filters the popover holds, the button carrying their count
 	const popFilters = $derived(moreFilters + (fold !== 'none' ? [kind, statusClass].filter((v) => v !== undefined).length : 0) + (fold === 'all' && route ? 1 : 0));
 	const activeFilters = $derived([route, kind, statusClass].filter((v) => v !== undefined).length + moreFilters);
 	const nodes = $derived([...live.nodes.values()].map((n) => ({ value: n.id, label: n.name || n.id })));
@@ -333,34 +327,36 @@
 	}
 </script>
 
+{#snippet nowMark()}<ClockIcon size={16} aria-label="Now" />{/snippet}
+
 {#snippet rangeFields()}
-	<Duration bind:value={fromAgo} base="s" label="Start" info="Time before now the range starts" message={fromAgo <= toAgo ? 'Start after end' : undefined} />
-	<Duration bind:value={toAgo} base="s" label="End" info="Time before now the range ends, zero for now" />
+	<Duration bind:value={fromAgo} base="s" label="Start ago" message={fromAgo <= toAgo ? 'Start after end' : undefined} />
+	<Duration bind:value={toAgo} base="s" label="End ago" emptyZero mark={nowMark} />
 {/snippet}
 
 {#snippet popover()}
 	{#if fold === 'all'}
-		<Picker bind:value={route} fetch={fetchRoutes} label="Route" placeholder="All routes" clearable current={route} />
+		<Picker bind:value={route} fetch={fetchRoutes} label="Route" compact clearable current={route} />
 	{/if}
 	{#if fold !== 'none'}
-		<Select bind:value={kind} options={kinds} label="Kind" clearable placeholder="Any" />
-		<Select bind:value={statusClass} options={statusOptions} label="Status" clearable placeholder="Any" />
+		<Select bind:value={kind} options={kinds} clearable label="Kind" compact />
+		<Select bind:value={statusClass} options={statusOptions} clearable label="Status" compact />
 	{/if}
 	{#if fold === 'all' && windowId === 'range'}{@render rangeFields()}{/if}
-	<Select bind:value={nodeId} options={nodes} label="Node" clearable placeholder="Any" search={nodes.length > 8} />
-	<Select bind:value={objective} options={objectives} label="Objective" clearable placeholder="Any" search={objectives.length > 8} />
-	<Text bind:value={fairness} label="Fairness id" max={64} mono />
+	<Select bind:value={nodeId} options={nodes} clearable label="Node" compact search={nodes.length > 8} />
+	<Select bind:value={objective} options={objectives} clearable label="Objective" compact search={objectives.length > 8} />
+	<Text bind:value={fairness} label="Fairness id" compact max={64} mono />
 {/snippet}
 
 {#snippet toolbar()}
 	<div class="bar" bind:clientWidth={toolbarWidth}>
 		<Toolbar>
 			{#if fold !== 'all'}
-				<span class="route"><Picker bind:value={route} fetch={fetchRoutes} placeholder="All routes" clearable current={route} /></span>
+				<span class="route"><Picker bind:value={route} fetch={fetchRoutes} label="Route" compact clearable current={route} /></span>
 			{/if}
 			{#if fold === 'none'}
-				<span class="kind"><Select bind:value={kind} options={kinds} placeholder="Kind" clearable /></span>
-				<span class="status"><Select bind:value={statusClass} options={statusOptions} placeholder="Status" clearable /></span>
+				<span class="kind"><Select bind:value={kind} options={kinds} label="Kind" compact clearable /></span>
+				<span class="status"><Select bind:value={statusClass} options={statusOptions} label="Status" compact clearable /></span>
 			{/if}
 			<span class="window"><Select bind:value={windowId} options={windowOptions} onchange={windowChanged} /></span>
 			{#if windowId === 'range' && fold !== 'all'}
@@ -397,13 +393,13 @@
 
 {#snippet emptyList()}
 	{#if activeFilters}
-		<Empty icon={FunnelXIcon} text="No requests match" hint="Nothing in the window passes the filters" action="Clear filters" onclick={clearFilters} />
+		<Empty icon={FunnelXIcon} text="No requests match" action="Clear filters" onclick={clearFilters} />
 	{:else if windowId === 'range'}
-		<Empty icon={PulseIcon} text="No requests in the range" hint="Nothing ran through the gateway from {rangeLabel}" action="Live 5m" onclick={() => (windowId = '5m')} />
+		<Empty icon={PulseIcon} text="No requests in the range" action="Live 5m" onclick={() => (windowId = '5m')} />
 	{:else if live.ready && live.routes.size === 0}
-		<Empty icon={PulseIcon} text="No requests" hint="Launch a model and its requests show here live" action="Launch" href="/serve/launch" primary />
+		<Empty icon={PulseIcon} text="No requests" action="Launch" href="/serve/launch" primary />
 	{:else}
-		<Empty icon={PulseIcon} text="No requests" hint="Requests through the gateway show here live" action="Chat" href="/chat" primary />
+		<Empty icon={PulseIcon} text="No requests" action="Chat" href="/chat" primary />
 	{/if}
 {/snippet}
 
@@ -458,7 +454,7 @@
 	</Card>
 {/snippet}
 
-<GatewayHeader {group} active="traffic" traffic={statsSettled && !statsError ? windowed.length : undefined} />
+<PageHeader tabs={gatewayHeaderTabs} active="traffic" info="Every request the gateway handled in the window, with its latency and the path it took" />
 
 <Sheet open={traceId !== ''} onclose={close} {head} list={listCard}>
 	{#if traceId}
@@ -474,7 +470,6 @@
 		flex: 1 1 auto;
 		min-width: 0;
 	}
-	/* Each filter is as wide as its longest choice so no value is cut */
 	.route {
 		display: flex;
 		flex: 0 1 14rem;

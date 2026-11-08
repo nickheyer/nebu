@@ -1,14 +1,22 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { useNeoThemeContext } from '#lib/neo/providers/neo-theme-provider-context.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
+	import { motion } from '#lib/ui/motion.svelte.js';
 	import BottomBar from '#lib/shell/BottomBar.svelte';
 	import Rail from '#lib/shell/Rail.svelte';
 	import TopBar from '#lib/shell/TopBar.svelte';
 
 	let { children }: { children: Snippet } = $props();
+
+	// The appearance toggle and the motion preference decide whether the deck animates
+	const theme = useNeoThemeContext();
+	$effect(() => {
+		motion.enabled = theme.transition !== 'none' && !viewport.reducedMotion;
+	});
 </script>
 
-<div class="shell" class:mobile={viewport.mobile}>
+<div class="shell" class:mobile={viewport.mobile} data-motion={motion.enabled ? 'on' : 'off'}>
 	{#if !viewport.mobile}
 		<Rail />
 	{/if}
@@ -26,7 +34,6 @@
 </div>
 
 <style>
-	/* The chrome around a page, read by pages that fill the viewport height */
 	.shell {
 		--nebu-gutter: var(--nebu-space-6);
 		--nebu-pad-top: var(--nebu-space-5);
@@ -53,7 +60,6 @@
 		min-height: 0;
 		padding: var(--nebu-pad-top) var(--nebu-gutter) var(--nebu-pad-bottom);
 	}
-	/* Every page shares the top bar's frame so titles, tabs and content start on one edge */
 	.page {
 		display: flex;
 		flex-direction: column;
@@ -63,5 +69,18 @@
 	}
 	.mobile .page {
 		gap: var(--nebu-space-4);
+	}
+	/* Blocks settle in page order, the top one first */
+	.page > :global(:nth-child(2)) {
+		--nebu-settle-step: 60ms;
+	}
+	.page > :global(:nth-child(3)) {
+		--nebu-settle-step: 120ms;
+	}
+	.page > :global(:nth-child(4)) {
+		--nebu-settle-step: 180ms;
+	}
+	.page > :global(:nth-child(n + 5)) {
+		--nebu-settle-step: 240ms;
 	}
 </style>

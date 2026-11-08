@@ -2,7 +2,7 @@ import DOMPurify from 'dompurify';
 import katex from 'katex';
 import { Marked, type Tokens } from 'marked';
 
-// Where the files a document refers to by relative path live, as a download and as a page
+// Where relative paths of a document resolve, as a download and as a page
 export type Resolve = { asset: (path: string) => string; link: (path: string) => string };
 
 const sanitize = {
@@ -16,7 +16,7 @@ function escape(s: string): string {
 	return s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
-// Drops the YAML front matter a hub keeps out of the rendered page
+// Drops YAML front matter
 export function stripFrontMatter(markdown: string): string {
 	const m = /^﻿?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.exec(markdown);
 	return m ? markdown.slice(m[0].length) : markdown;
@@ -77,7 +77,7 @@ function isRelative(url: string): boolean {
 	return !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(url);
 }
 
-// Points relative files at the source, opens outside links in a new tab, boxes tables so they scroll alone
+// Resolves relative files, opens outside links in a new tab and boxes tables
 function groom(root: HTMLElement, resolve?: Resolve): void {
 	for (const el of root.querySelectorAll<HTMLElement>('img[src], video[src], source[src], audio[src], video[poster]')) {
 		for (const attr of ['src', 'poster']) {
@@ -101,7 +101,7 @@ function groom(root: HTMLElement, resolve?: Resolve): void {
 	}
 }
 
-// Renders a document from its markdown or from html a source already rendered, sanitized either way
+// Renders sanitized html from markdown or from html the source rendered
 export function renderMarkdown(doc: { markdown?: string; html?: string }, resolve?: Resolve): string {
 	const html = doc.html || (marked.parse(stripFrontMatter(doc.markdown ?? ''), { async: false }) as string);
 	const root = DOMPurify.sanitize(html, { ...sanitize, RETURN_DOM: true }) as HTMLElement;

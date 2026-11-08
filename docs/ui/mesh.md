@@ -7,9 +7,8 @@ Route: `/mesh/nodes`, `/mesh/links`, `/mesh/formations`, `/mesh/nearby`, `/mesh/
 ## Not in a mesh
 
 ```
- No mesh                                         listening 0.0.0.0:8485
-
- [Create a mesh]        [Join with a token]
+ This node                 [Join with a token] [Create a mesh]
+ Listening 0.0.0.0:8485    Heard nearby 2
 
  Nearby meshes
    home        3 members                          [Ask]
@@ -21,13 +20,15 @@ Route: `/mesh/nodes`, `/mesh/links`, `/mesh/formations`, `/mesh/nearby`, `/mesh/
 
 Create: name Text 64, then the join token shown once with copy and expiry. Join: token Text. An invitation row has Accept and Decline.
 
-## Header in a mesh
+## Mesh card
 
 ```
- home  3 members lab-01 (you) · issuer cert 61 d (i) [Token] [Leave] ···
+ home                                        [Token] [Leave] ···
+ Members  You            Certificate  Address  Exposure  Announce  CA  Id
+ 3        lab-01 issuer  61 d         ...
 ```
 
-Name, members, this node marked you with an issuer badge, certificate days left in warning colour under thirty. `(i)` popover: id, address, exposure, announce, CA fingerprint with copy. Token: a popover with TTL Duration up to a month and Copy. Menu: Rotate authority, Hand off issuer, Reset mesh, each confirmed by name.
+A facts card over every tab, titled with the mesh name. Certificate days in warning colour under thirty. Token: a popover with TTL Duration up to a month and Copy. Menu: Rotate authority, Hand off issuer, Reset mesh, each confirmed by name. Each tab's button, Formation, Invite, Import, Profile, sits in its own card.
 
 ## Nodes
 

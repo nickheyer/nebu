@@ -7,9 +7,9 @@ import { SlotState } from '#lib/proto/nebu/v1/slot_pb.js';
 import { TaskState } from '#lib/proto/nebu/v1/task_pb.js';
 import { ToolServerState } from '#lib/proto/nebu/v1/tools_pb.js';
 import { date, daysUntil } from '#lib/format.js';
-import type { Lamp } from '#lib/ui/status.js';
+import { reasonWords, type Lamp } from '#lib/ui/status.js';
 
-export type Attention = { id: string; lamp: Lamp; title: string; reason: string; href: string };
+export type Attention = { id: string; lamp: Lamp; title: string; reason: string; detail?: string; href: string };
 
 function falseOnes(conditions: Condition[] | undefined): Condition[] {
 	return (conditions ?? []).filter((c) => c.status === ConditionStatus.FALSE);
@@ -19,8 +19,13 @@ function falseOnes(conditions: Condition[] | undefined): Condition[] {
 export function attention(live: Live, now = Date.now()): Attention[] {
 	const out: Attention[] = [];
 	const add = (id: string, lamp: Lamp, title: string, reason: string, href: string) => out.push({ id, lamp, title, reason, href });
+	// One row per resource with a false condition, its first reason in words and every one in the tooltip
 	const conditions = (prefix: string, title: string, list: Condition[] | undefined, href: string) => {
-		for (const c of falseOnes(list)) add(`${prefix}:${c.type}`, 'warning', title, `${c.type} ${c.reason || c.message}`.trim(), href);
+		const off = falseOnes(list);
+		const first = off[0];
+		if (!first) return;
+		const detail = off.map((c) => `${reasonWords(c.type)} ${c.message || reasonWords(c.reason)}`.trim()).join('\n');
+		out.push({ id: `${prefix}:conditions`, lamp: 'warning', title, reason: reasonWords(first.reason) || first.message, detail, href });
 	};
 	for (const i of live.instances.values()) {
 		const href = `/serve/${i.id}`;
@@ -35,7 +40,7 @@ export function attention(live: Live, now = Date.now()): Attention[] {
 	for (const r of live.routes.values()) conditions(`route:${r.name}`, r.name, r.status?.conditions, `/gateway/routes/${encodeURIComponent(r.name)}`);
 	for (const p of live.pools.values()) {
 		const href = `/gateway/pools/${encodeURIComponent(p.id)}`;
-		if ((p.status?.readyEndpoints ?? 0) === 0) add(`pool:${p.id}:ready`, 'warning', p.id, 'no ready endpoint', href);
+		if ((p.status?.readyEndpoints ?? 0) === 0 && falseOnes(p.status?.conditions).length === 0) add(`pool:${p.id}:ready`, 'warning', p.id, 'no ready endpoints', href);
 		conditions(`pool:${p.id}`, p.id, p.status?.conditions, href);
 	}
 	for (const o of live.objectives.values()) conditions(`objective:${o.name}`, o.name, o.status?.conditions, `/gateway/objectives/${encodeURIComponent(o.name)}`);

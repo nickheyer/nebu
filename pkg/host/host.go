@@ -161,7 +161,7 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 	return profile, nil
 }
 
-// Names on every device the pool it draws on, its own device pool, else the unified pool, else the host pool for a CPU, else none
+// Names on each device the pool it draws on and drops an accelerator no pool backs
 func linkPools(p *v1.HostProfile) {
 	unified, host := "", ""
 	for _, pl := range p.GetPools() {
@@ -176,23 +176,41 @@ func linkPools(p *v1.HostProfile) {
 			}
 		}
 	}
+	kept := p.GetDevices()[:0]
+	dropped := map[string]bool{}
 	for _, d := range p.GetDevices() {
-		d.PoolId = ""
-		for _, pl := range p.GetPools() {
-			if pl.GetKind() == v1.PoolKind_POOL_KIND_DEVICE && (pl.GetDeviceId() == d.GetId() || pl.GetId() == d.GetId()) {
-				d.PoolId = pl.GetId()
-				break
-			}
+		d.PoolId = devicePool(p, d)
+		if d.PoolId == "" && unified != "" {
+			d.PoolId = unified
 		}
-		if d.PoolId != "" {
+		if d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
+			if d.PoolId == "" {
+				d.PoolId = host
+			}
+			kept = append(kept, d)
 			continue
 		}
-		if unified != "" {
-			d.PoolId = unified
-		} else if d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
-			d.PoolId = host
+		if d.PoolId == "" {
+			dropped[d.GetId()] = true
+			continue
+		}
+		kept = append(kept, d)
+	}
+	p.Devices = kept
+	p.Processes = slices.DeleteFunc(p.GetProcesses(), func(pu *v1.ProcessUse) bool { return dropped[pu.GetDeviceId()] })
+}
+
+// The device pool holding an accelerator's own memory, empty when the profile lists none
+func devicePool(p *v1.HostProfile, d *v1.Device) string {
+	if d.GetKind() == v1.DeviceKind_DEVICE_KIND_CPU {
+		return ""
+	}
+	for _, pl := range p.GetPools() {
+		if pl.GetKind() == v1.PoolKind_POOL_KIND_DEVICE && (pl.GetDeviceId() == d.GetId() || pl.GetId() == d.GetId()) {
+			return pl.GetId()
 		}
 	}
+	return ""
 }
 
 // Adds devices by id, one two probes both found keeping the first probe's numbers and
@@ -284,7 +302,7 @@ func Kind(p *v1.HostProfile, kind v1.DeviceKind) []*v1.Device {
 	return out
 }
 
-// Whether a device holds memory of its own, reported on the device, a device or unified pool of the profile, or the host pool for a CPU
+// Whether a device has memory to run on, its own, a pool of its kind, or the host pool for a CPU
 func OwnMemory(p *v1.HostProfile, d *v1.Device) bool {
 	if d.GetMemoryTotalBytes() > 0 {
 		return true

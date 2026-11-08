@@ -4,7 +4,7 @@ import { notify, toast } from '#lib/shell/notify.svelte.js';
 import { percent } from '#lib/format.js';
 import { TaskState, type Task } from '#lib/proto/nebu/v1/task_pb.js';
 
-// Raises a toast whose bar follows the task's progress until it ends, failures staying until dismissed
+// Raises a toast following the task until it ends
 export function followTask(task: Task | undefined, title?: string): void {
 	if (!task) return;
 	const item = notify({

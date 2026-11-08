@@ -1,15 +1,9 @@
-import type { Snippet } from 'svelte';
-
-export type HeaderTab = { id: string; label: string; count?: number; href?: string };
+export type HeaderTab = { id: string; label: string; href?: string };
 
 export type HeaderSpec = {
 	title?: string;
-	// A link one level up shown before the title, a record page's way back to its list
 	back?: { label: string; href: string };
-	// Pills and short facts after the title
-	meta?: Snippet;
-	// The page's buttons, the primary one last
-	actions?: Snippet;
+	info?: string;
 	tabs?: HeaderTab[];
 	active?: string;
 	ontab?: (id: string) => void;
@@ -28,7 +22,7 @@ export const chrome = {
 		current = { id, spec };
 		return id;
 	},
-	// Clears only the header this id set, so a leaving page never wipes the next page's header
+	// Clears only the header this id set
 	clear(id: number) {
 		if (current?.id === id) current = undefined;
 	}

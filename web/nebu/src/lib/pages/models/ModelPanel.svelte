@@ -22,7 +22,8 @@
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import FitTab from '#lib/pages/models/FitTab.svelte';
 	import PartsTab from '#lib/pages/models/PartsTab.svelte';
-	import { kindLabel, launchHref, modelKeyOf, paramCount, removeModel, roleIcon, sameModel, verifyModel, weightsLabel } from '#lib/pages/models/models.js';
+	import ShardGrid from '#lib/pages/models/ShardGrid.svelte';
+	import { kindLabel, launchHref, modelKeyOf, paramCount, removeModel, roleIcon, sameModel, shardPattern, verifyModel } from '#lib/pages/models/models.js';
 	import { terminal } from '#lib/pages/serve/serve.js';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 	import DownloadIcon from 'phosphor-svelte/lib/DownloadIcon';
@@ -37,7 +38,6 @@
 	}: { model: StoredModel; runtimes: RuntimeStatus[]; tab?: string; onclose: () => void; onexport: (m: StoredModel) => void; onremoved: () => void } = $props();
 
 	const m = $derived(model);
-	// Anchor attributes the button passes through to the link it renders
 	const download: Record<string, string> = { download: '' };
 	const d = $derived(m.descriptor);
 	const running = $derived([...live.instances.values()].some((i) => !terminal(i.state) && sameModel(i, m)));
@@ -63,7 +63,7 @@
 	let inspectError = $state('');
 	let inspectedKey = '';
 
-	// One Inspect per group and revision feeds the Fit rows and the Files warnings, asked for once either tab opens
+	// One Inspect per group and revision feeds the Fit rows and the Files warnings
 	$effect(() => {
 		const key = `${modelKeyOf(m)}@${m.revision}`;
 		if ((tab !== 'fit' && tab !== 'files') || key === inspectedKey) return;
@@ -88,7 +88,7 @@
 		const art = a.artifact;
 		return [
 			{ label: 'path', value: art?.path ?? a.path },
-			{ label: 'format', value: art?.formatId || 'none' },
+			{ label: 'format', value: art?.formatId ?? '' },
 			...(art?.shardCount ? [{ label: 'shard', value: `${art.shardIndex} of ${art.shardCount}` }] : []),
 			{ label: 'digest', value: a.digest }
 		];
@@ -134,22 +134,22 @@
 					rows={[
 						{ label: 'path', value: m.path, mono: true, copy: true, tip: m.path },
 						{ label: 'pulled', value: ago(m.pulledAt), tip: when(m.pulledAt) },
-						{ label: 'used', value: m.usedAt ? ago(m.usedAt) : 'never', tip: when(m.usedAt) || undefined },
+						{ label: 'used', value: m.usedAt ? ago(m.usedAt) : '', tip: when(m.usedAt) || undefined },
 						{ label: 'commit', value: m.commit, mono: true, copy: m.commit !== '', tip: m.commit }
 					]}
 				/>
 			</Section>
 			{#if d && Object.keys(d.metadata).length}
-				<Collapse label="Metadata" count={Object.keys(d.metadata).length}>
+				<Collapse label="Metadata">
 					<KeyRows dense rows={Object.entries(d.metadata).map(([k, v]) => ({ label: k, value: v, mono: true, tip: v }))} />
 				</Collapse>
 			{/if}
 			<div class="actions">
 				<NeoButton text onclick={() => verifyModel(m)}>Verify</NeoButton>
 				<NeoButton text onclick={() => onexport(m)}>Export</NeoButton>
-				<Tip text={running ? 'An instance runs this group' : undefined} tag="span">
-					<Confirm label="Remove" question="Remove {m.repo}{m.group ? ` ${m.group}` : ''}" danger disabled={running} onconfirm={remove}>
-						{#snippet body()}<Switch bind:checked={collect} label="Collect unreferenced blobs" />{/snippet}
+				<Tip text={running ? 'Running' : undefined} tag="span">
+					<Confirm label="Remove" question="Remove {m.repo}{m.group ? ` ${m.group}` : ''}?" danger disabled={running} onconfirm={remove}>
+						{#snippet body()}<Switch bind:checked={collect} label="Collect blobs" />{/snippet}
 					</Confirm>
 				</Tip>
 			</div>
@@ -158,9 +158,9 @@
 		<List head={{ primary: 'File', facts: ['Size'] }}>
 			{#if weightFiles.length > 1}
 				{#snippet shards()}
-					{#each weightFiles as a (a.path)}{@render storedRow(a, false)}{/each}
+					<ShardGrid shards={weightFiles.map((a) => ({ path: a.artifact?.path ?? a.path, index: a.artifact?.shardIndex ?? 0, bytes: a.artifact?.sizeBytes ?? 0n, url: a.artifact?.url || undefined }))} />
 				{/snippet}
-				<ListRow primary={weightsLabel(weightFiles.map((a) => a.artifact?.shardCount ?? 0))} primaryKind="text" primaryTip={weightFiles.map((a) => a.path).join('\n')} facts={[{ value: bytes(weightFiles.reduce((n, a) => n + Number(a.artifact?.sizeBytes ?? 0n), 0)) }]} expand={shards}>
+				<ListRow primary={shardPattern(weightFiles.map((a) => a.artifact?.path ?? a.path))} primaryKind="path" facts={[{ value: bytes(weightFiles.reduce((n, a) => n + Number(a.artifact?.sizeBytes ?? 0n), 0)) }]} expand={shards}>
 					{#snippet leading()}<span class="icon"><CubeIcon size={20} /></span>{/snippet}
 				</ListRow>
 			{:else}

@@ -1,37 +1,29 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { daysUntil, thin, when } from '#lib/format.js';
+	import { daysUntil, num, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { NodeState, type Mesh, type Node } from '#lib/proto/nebu/v1/mesh_pb.js';
-	import type { HeaderTab } from '#lib/shell/chrome.svelte.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
-	import { viewport } from '#lib/state/viewport.svelte.js';
 	import Confirm from '#lib/ui/Confirm.svelte';
-	import InfoTip from '#lib/ui/InfoTip.svelte';
-	import KeyRows from '#lib/ui/KeyRows.svelte';
+	import Facts, { type FactItem } from '#lib/ui/Facts.svelte';
 	import Menu from '#lib/ui/Menu.svelte';
 	import NameConfirm from '#lib/ui/NameConfirm.svelte';
 	import Pop from '#lib/ui/Pop.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
-	import Str from '#lib/ui/Str.svelte';
-	import Tip from '#lib/ui/Tip.svelte';
 	import Duration from '#lib/ui/fields/Duration.svelte';
 	import Picker from '#lib/ui/fields/Picker.svelte';
-	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
+	import Card from '#lib/ui/layout/Card.svelte';
 	import Row from '#lib/ui/layout/Row.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
-	import { members, tokenTtlMax } from '#lib/pages/mesh/mesh.js';
+	import { tokenTtlMax } from '#lib/pages/mesh/mesh.js';
 
-	// The top bar of a joined mesh, its standing after the title and its membership actions, the open tab's own action last
-	let { mesh, self, tabs, active, action }: { mesh: Mesh; self: Node | undefined; tabs: HeaderTab[]; active: string; action?: Snippet } = $props();
+	let { mesh, self }: { mesh: Mesh; self: Node | undefined } = $props();
 
 	type Danger = 'rotate' | 'handoff' | 'reset';
 	const dangers: Record<Danger, { title: string; confirm: string; message: string }> = {
-		rotate: { title: 'Rotate authority', confirm: 'Rotate', message: 'New certificates for reachable members, the rest join again' },
-		handoff: { title: 'Hand off issuer', confirm: 'Hand off', message: 'Issuer role and authority key move to the chosen member' },
-		reset: { title: 'Reset mesh', confirm: 'Reset', message: 'Leaves and clears the mesh, formations included' }
+		rotate: { title: 'Rotate authority', confirm: 'Rotate', message: 'Reissues every reachable certificate' },
+		handoff: { title: 'Hand off issuer', confirm: 'Hand off', message: 'Moves the authority key' },
+		reset: { title: 'Reset mesh', confirm: 'Reset', message: 'Clears the mesh and its formations' }
 	};
 
 	const certDays = $derived(daysUntil(mesh.certificateExpiresAt, clockTick.now));
@@ -40,6 +32,17 @@
 	let danger = $state<Danger | undefined>(undefined);
 	let dangerOpen = $state(false);
 	let handoffTo = $state<string | undefined>(undefined);
+
+	const items = $derived.by((): FactItem[] => [
+		{ id: 'members', label: 'Members', value: num(mesh.members) },
+		{ id: 'you', label: 'You', value: self?.name ?? '', tip: self?.issuer ? 'issuer' : undefined, lamp: self?.issuer ? 'primary' : undefined },
+		{ id: 'cert', label: 'Certificate', value: certDays === undefined ? '' : `${certDays} d`, tip: when(mesh.certificateExpiresAt) || undefined, lamp: certDays !== undefined && certDays < 30 ? 'warning' : undefined },
+		{ id: 'address', label: 'Address', value: mesh.address, mono: true },
+		{ id: 'exposure', label: 'Exposure', value: mesh.exposure },
+		{ id: 'announce', label: 'Announce', value: mesh.announce ? 'on' : 'off' },
+		{ id: 'ca', label: 'CA', value: mesh.caFingerprint.slice(0, 12), mono: true, tip: mesh.caFingerprint },
+		{ id: 'id', label: 'Id', value: mesh.id.slice(0, 12), mono: true, tip: mesh.id }
+	]);
 
 	// Mints a join token for the chosen lifetime and puts it on the clipboard
 	async function copyToken(close: () => void) {
@@ -71,7 +74,6 @@
 		dangerOpen = true;
 	}
 
-	// Ready members other than this node, searched by the daemon as typed
 	async function fetchNodes(query: string, cursor: string, limit: number, signal: AbortSignal) {
 		const res = await rpc.mesh.listNodes({ query, cursor, limit, state: NodeState.READY }, { signal });
 		return { items: res.nodes.map((n) => ({ value: n.id, label: n.name, description: n.self ? 'this node' : n.address, disabled: n.self })), next: res.nextCursor };
@@ -96,46 +98,8 @@
 	}
 </script>
 
-{#snippet details()}
-	<div class="details">
-		<KeyRows
-			dense
-			rows={[
-				...(viewport.mobile
-					? [
-							{ label: 'you', value: self ? `${self.name}${self.issuer ? ', issuer' : ''}` : '' },
-							{ label: 'certificate', value: certDays === undefined ? '' : `${certDays} days left`, color: certDays !== undefined && certDays < 30 ? ('warning' as const) : undefined, tip: when(mesh.certificateExpiresAt) || undefined }
-						]
-					: []),
-				{ label: 'id', value: mesh.id, mono: true, tip: mesh.id },
-				{ label: 'address', value: mesh.address || 'loopback only', mono: true },
-				{ label: 'exposure', value: mesh.exposure || 'unset' },
-				{ label: 'announce', value: mesh.announce ? 'on' : 'off' },
-				{ label: 'CA fingerprint', value: mesh.caFingerprint, mono: true, copy: true, tip: mesh.caFingerprint }
-			]}
-		/>
-	</div>
-{/snippet}
-
-<PageHeader {tabs} {active}>
-	{#snippet meta()}
-		<Str value={mesh.name} weight={500} width="20ch" />
-		<span>{members(mesh.members)}</span>
-		{#if self && !viewport.mobile}
-			<Row gap={4} wrap={false}>
-				<Str value={self.name} width="16ch" />
-				<span>(you)</span>
-			</Row>
-			{#if self.issuer}<StatePill label="issuer" lamp="primary" />{/if}
-		{/if}
-		{#if certDays !== undefined && !viewport.mobile}
-			<Tip text="certificate expires {when(mesh.certificateExpiresAt)}" tag="span">
-				<span class:warning-text={certDays < 30}>cert {certDays}{thin}d</span>
-			</Tip>
-		{/if}
-		<InfoTip click content={details} />
-	{/snippet}
-	{#snippet actions()}
+<Card title={mesh.name}>
+	{#snippet tools()}
 		<Pop placement="bottom-end" width="20rem">
 			{#snippet content(close)}
 				<Duration bind:value={ttl} base="s" max={tokenTtlMax} label="TTL" />
@@ -153,21 +117,14 @@
 				{ label: 'Reset mesh', onclick: () => ask('reset'), danger: true, divider: true }
 			]}
 		/>
-		{@render action?.()}
 	{/snippet}
-</PageHeader>
+	<Facts {items} />
+</Card>
 
 {#if danger}
 	<NameConfirm bind:open={dangerOpen} title={dangers[danger].title} name={mesh.name} message={dangers[danger].message} confirm={dangers[danger].confirm} enabled={danger !== 'handoff' || handoffTo !== undefined} onconfirm={run}>
 		{#if danger === 'handoff'}
-			<Picker bind:value={handoffTo} fetch={fetchNodes} label="New issuer" placeholder="Search nodes" required current={handoffTo ? live.nodes.get(handoffTo)?.name : undefined} />
+			<Picker bind:value={handoffTo} fetch={fetchNodes} label="New issuer" required current={handoffTo ? live.nodes.get(handoffTo)?.name : undefined} />
 		{/if}
 	</NameConfirm>
 {/if}
-
-<style>
-	/* Wide enough for the fingerprint on a desktop, inside the screen on a phone */
-	.details {
-		width: min(26rem, calc(100vw - 3rem));
-	}
-</style>

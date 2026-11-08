@@ -3,7 +3,7 @@
 
 	type Kind = Segment['kind'];
 
-	// Names the fills the bars actually show. Kinds with no bytes anywhere are left out so the legend never lies.
+	// Names only the fills the bars show
 	let { kinds }: { kinds: Iterable<Kind> } = $props();
 
 	const order: { kind: Kind; label: string }[] = [

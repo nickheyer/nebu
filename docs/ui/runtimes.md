@@ -2,7 +2,7 @@
 
 The runtime catalog, installed copies, builds.
 
-Route: `/runtimes`, `/runtimes/<id>` opens the panel, `/runtimes/<id>/install` on its Install tab.
+Route: `/runtimes`, `/runtimes/<id>` opens the panel, `/runtimes/<id>/install` with its install form open, `/runtimes/<id>/defaults` on Defaults.
 
 ## Default view
 
@@ -17,12 +17,12 @@ Rows: compatibility dot, name, install count or the first unmet reason (64ch), I
 
 ## Panel
 
-Tabs: Installs, Install, Builds, Params.
+Tabs: Installs, Builds, Defaults. An Install button beside the tabs toggles the install form over the installs list.
 
 - **Installs.** Rows: version (12ch), kind pill, origin, Remove. Tooltip: path, directory, created. Expand: facts, conditions, slots and instances using it. Remove is refused with the daemon's message while referenced.
-- **Install.** Method as Segmented. Then one form per method, see Fields. Adopt answers at once. Prebuilt and Build start a task followed inline.
+- **Install form.** Method as Segmented. Then one form per method, see Fields. Adopt answers at once. Prebuilt and Build start a task followed inline.
 - **Builds.** Rows: state dot, variant, ref (12ch), duration, Remove. Tooltip: commit, sandbox, image, directory, binary. Expand: error, vars, facts, patches, task link.
-- **Params.** Read only reference grouped as the launch form renders it: label, type, default, unit, bounds, auto rule.
+- **Defaults.** The runtime's params as the launch form renders them, each box showing the runtime's own default. Values set here are stored in `Settings.runtime_defaults` and merged under every slot and launch on the runtime, which may override any of them.
 
 ## Fields
 
@@ -35,8 +35,8 @@ Tabs: Installs, Install, Builds, Params.
 | vars | per `Var` | Select when choices, else Text with default |
 | sandbox | Segmented | host, oci |
 | image | Text | shown for oci |
-| ref | Text | 64 |
-| force | Switch | |
+| ref | Text | 64, a tag mark for the latest release while empty |
+| rebuild | Switch | |
 
 Absent tools disable Build and list them in a line.
 
@@ -46,4 +46,4 @@ Ultrawide: Split. Standard: drawer. Mobile: the reason phrase moves into the exp
 
 ## Data
 
-`ListRuntimes`, `GetRuntime`, `ListFormats`, `AdoptInstall`, `Install`, `RemoveInstall`, `ListRecipes`, `Build`, `ListBuilds`, `RemoveBuild`, `ListDirectory`. Stream: INSTALL, BUILD, SLOT, INSTANCE.
+`ListRuntimes`, `GetRuntime`, `ListFormats`, `AdoptInstall`, `Install`, `RemoveInstall`, `ListRecipes`, `Build`, `ListBuilds`, `RemoveBuild`, `ListDirectory`, `GetSettings`, `UpdateSettings`. Stream: INSTALL, BUILD, SLOT, INSTANCE, SETTINGS.

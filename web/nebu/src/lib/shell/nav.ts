@@ -17,9 +17,7 @@ export type NavPage = {
 	label: string;
 	icon: Component<IconComponentProps>;
 	roles: Role[];
-	// First path segments the page owns, its tabs living on routes of their own
 	match: string[];
-	// Whether the page sits in the mobile bottom bar
 	bottom?: boolean;
 };
 

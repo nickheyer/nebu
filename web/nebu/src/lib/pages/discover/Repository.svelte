@@ -29,7 +29,8 @@
 	import Columns from '#lib/ui/layout/Columns.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import FitTab from '#lib/pages/models/FitTab.svelte';
-	import { launchHref, roleIcon, selectWidth, weightsLabel } from '#lib/pages/models/models.js';
+	import ShardGrid from '#lib/pages/models/ShardGrid.svelte';
+	import { launchHref, roleIcon, selectWidth, shardPattern } from '#lib/pages/models/models.js';
 	import { groupFiles, lastSearch, weightGroups } from '#lib/pages/discover/discover.js';
 	import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
@@ -41,7 +42,6 @@
 	let { sourceId, repo }: { sourceId: string; repo: string } = $props();
 
 	const back = lastSearch.href;
-	// Anchor attributes the button passes through to the link it renders
 	const external: Record<string, string> = { target: '_blank', rel: 'noreferrer' };
 	const downloadAttrs: Record<string, string> = { download: '' };
 
@@ -85,14 +85,13 @@
 	const ref = $derived({ sourceId, repo, group });
 	const stored = $derived([...live.models.values()].some((m) => m.sourceId === sourceId && m.repo === repo && m.group === group));
 	const missing = $derived((partsRes?.parts ?? []).filter((p) => p.required && !p.stored && !p.bundled));
-	// Every missing part chosen lets the daemon pull them with the group, its own dependency path
 	const allChosen = $derived(missing.every((p) => chosen.includes(p.slot)));
 	const partsBytes = $derived(alone ? 0 : allChosen ? Number(partsRes?.pullBytes ?? 0) : missing.filter((p) => chosen.includes(p.slot)).reduce((n, p) => n + Number(p.sizeBytes), 0));
-	// The card shows while it loads, fails, or has something to say, and hides when the source has none
 	const showCard = $derived((caps?.card ?? false) && (cardLoading || cardError !== '' || (card !== undefined && (card.html !== '' || card.markdown !== ''))));
-	// Pages wide enough for a full file list in half their width hold the card beside the tabs, which drop it
+	// Wide pages hold the card beside the tabs, which then drop it
 	const beside = $derived(showCard && width >= 1500);
-	const tabs = $derived([...(showCard && !beside ? [{ id: 'card', label: 'Card' }] : []), { id: 'files', label: 'Files', count: model ? files.length : undefined }, { id: 'fit', label: 'Fit' }, { id: 'pull', label: 'Pull' }]);
+	const tabs = $derived([...(showCard && !beside ? [{ id: 'card', label: 'Card' }] : []), { id: 'files', label: 'Files' }, { id: 'fit', label: 'Fit' }, { id: 'pull', label: 'Pull' }]);
+	const selfName = $derived([...live.nodes.values()].find((n) => n.self)?.name ?? live.host?.hostname ?? '');
 	const activeTab = $derived(tabs.some((t) => t.id === tab) ? tab : 'files');
 	const weights = $derived(files.filter((a) => a.role === ArtifactRole.WEIGHTS));
 	const supporting = $derived(files.filter((a) => a.role !== ArtifactRole.WEIGHTS));
@@ -100,7 +99,7 @@
 	const storedAny = $derived([...live.models.values()].some((m) => m.sourceId === sourceId && m.repo === repo));
 	const revisionWidth = $derived(selectWidth(revisions.map((r) => r.name)));
 	const groupWidth = $derived(selectWidth(groupOptions.map((o) => o.label)));
-	// Files the card names by path resolve to their download in the repository, anything else against its page
+	// Relative paths resolve to their download in the repository, anything else against its page
 	const resolver = $derived.by((): Resolve => {
 		const base = webUrl ? `${webUrl.replace(/\/$/, '')}/` : location.href;
 		const file = (p: string) => model?.artifacts.find((a) => a.path === p.replace(/^\.?\//, '').split(/[?#]/)[0])?.url;
@@ -135,7 +134,6 @@
 
 	onMount(loadHead);
 
-	// Resolve and the card follow the chosen revision
 	$effect(() => {
 		void attempt;
 		if (!headLoaded || !source) return;
@@ -171,7 +169,6 @@
 		return () => ac.abort();
 	});
 
-	// The fit of the chosen group on this host, planned as soon as the group is known
 	$effect(() => {
 		if (!model || !group) return;
 		const key = `${revision}\n${group}`;
@@ -189,7 +186,7 @@
 			});
 	});
 
-	// The parts the chosen group needs, asked for once the pull tab opens, every missing one chosen
+	// The parts the chosen group needs, asked for once the pull tab opens
 	$effect(() => {
 		if (activeTab !== 'pull' || !model) return;
 		const key = `${revision}\n${group}`;
@@ -214,7 +211,6 @@
 		return { items: res.nodes.map((n) => ({ value: n.id, label: n.name, description: n.self ? 'this node' : n.address })), next: res.nextCursor };
 	}
 
-	// Waits for a task to end, answering whether it succeeded
 	async function succeeded(task: Task): Promise<boolean> {
 		for await (const w of rpc.tasks.watchTask({ id: task.id })) {
 			const s = w.task?.state;
@@ -224,7 +220,7 @@
 		throw new Error(`${task.title}: watch ended early`);
 	}
 
-	// Pulls the group and its chosen parts, each alone when only some are chosen, launching after when asked
+	// Pulls the group and its chosen parts, launching after when asked
 	async function pull(launch: boolean, runtimeId?: string, context?: number) {
 		pulling = true;
 		const node = nodeId ?? '';
@@ -253,7 +249,7 @@
 		}
 	}
 
-	// Opens a tab and keeps it in the URL so a reload or a shared link lands on it
+	// Opens a tab and keeps it in the URL
 	function openTab(id: string) {
 		tab = id;
 		const url = new URL(location.href);
@@ -261,7 +257,6 @@
 		void goto(url, { replace: true, shallow: true });
 	}
 
-	// A fit pill launches a stored group here, else opens the pull tab
 	function fitLaunch(runtimeId: string, context: number) {
 		if (stored) void goto(launchHref(ref, runtimeId, context));
 		else openTab('pull');
@@ -286,7 +281,17 @@
 
 {#snippet groupSelect()}
 	{#if groups.length > 1}
-		<span class="tool"><Select bind:value={groupKey} options={groupOptions} placeholder="Group" search={groups.length > 8} width={groupWidth} /></span>
+		<span class="tool"><Select bind:value={groupKey} options={groupOptions} search={groups.length > 8} width={groupWidth} /></span>
+	{/if}
+{/snippet}
+
+{#snippet repoTools()}
+	{@render groupSelect()}
+	{#if revisions.length}
+		<span class="tool"><Select bind:value={revision} options={revisionOptions} search={revisions.length > 8} width={revisionWidth} /></span>
+	{/if}
+	{#if webUrl}
+		<NeoButton text href={webUrl} {...external} aria-label={source?.source?.name || sourceId}>{#snippet icon()}<ArrowSquareOutIcon size={20} />{/snippet}</NeoButton>
 	{/if}
 {/snippet}
 
@@ -316,23 +321,21 @@
 	{#if !model}
 		{@render resolving('Files')}
 	{:else}
-		<Card title="Files" count={files.length} flush>
+		<Card title="Files" flush>
 			{#snippet tools()}
-				{@render groupSelect()}
+				{#if storedAny}<StatePill label="Stored" lamp="success" />{/if}
 				<span class="total">{bytes(filesBytes)}</span>
+				{@render repoTools()}
 			{/snippet}
 			{#if files.length === 0}
-				<Empty icon={FilesIcon} text="No weights" hint="Nothing in this revision reads as model weights in a format nebu knows" />
+				<Empty icon={FilesIcon} text="No weights" />
 			{:else}
 				<List head={{ primary: 'File', facts: ['Size'] }}>
 					{#if weights.length > 1}
 						{#snippet shards()}
-							{#each weights as a (a.path)}
-								{#snippet shardAction()}{@render download(a)}{/snippet}
-								<ListRow primary={a.path} primaryKind="path" primaryTip={fileTip(a)} facts={[{ value: bytes(a.sizeBytes) }]} action={a.url ? shardAction : undefined} />
-							{/each}
+							<ShardGrid shards={weights.map((a) => ({ path: a.path, index: a.shardIndex, bytes: a.sizeBytes, url: a.url || undefined }))} />
 						{/snippet}
-						<ListRow primary={weightsLabel(weights.map((a) => a.shardCount))} primaryKind="text" primaryTip={weights.map((a) => a.path).join('\n')} facts={[{ value: bytes(weightsBytes) }]} expand={shards}>
+						<ListRow primary={shardPattern(weights.map((a) => a.path))} primaryKind="path" facts={[{ value: bytes(weightsBytes) }]} expand={shards}>
 							{#snippet leading()}<span class="icon"><CubeIcon size={20} /></span>{/snippet}
 						</ListRow>
 					{:else}
@@ -343,7 +346,7 @@
 			{/if}
 		</Card>
 		{#if model.warnings.length}
-			<Card title="Warnings" count={model.warnings.length} flush>
+			<Card title="Warnings" flush>
 				<List>
 					{#each model.warnings as w (w)}
 						<ListRow lamp="warning" primary={w} primaryKind="message" />
@@ -360,10 +363,10 @@
 	{:else}
 		<Card title="Fit" flush>
 			{#snippet tools()}
-				{@render groupSelect()}
 				<Switch bind:checked={free} label="Against free memory" />
+				{@render repoTools()}
 			{/snippet}
-			<FitTab {group} result={inspected} error={inspectError} {runtimes} {free} launchLabel={stored ? 'Launch here' : 'Pull'} onlaunch={fitLaunch} />
+			<FitTab {group} result={inspected} error={inspectError} {runtimes} {free} launchLabel={stored ? 'Launch' : 'Pull'} onlaunch={fitLaunch} />
 		</Card>
 	{/if}
 {/snippet}
@@ -373,7 +376,7 @@
 		{@render resolving('Pull')}
 	{:else}
 		<Card title="Pull">
-			{#snippet tools()}{@render groupSelect()}{/snippet}
+			{#snippet tools()}{@render repoTools()}{/snippet}
 			{#snippet footer()}
 				<Tip facts={[{ label: 'group', value: bytes(filesBytes) }, { label: 'parts', value: bytes(partsBytes) }]} tag="span">
 					<span class="sum"><span class="secondary">Total</span><span class="num">{bytes(filesBytes + partsBytes)}</span></span>
@@ -384,9 +387,9 @@
 				<NeoButton class="primary" elevation={2} loading={pulling} onclick={() => pull(true)}>Pull and launch</NeoButton>
 			{/snippet}
 			{#if live.inMesh}
-				<Picker bind:value={nodeId} fetch={fetchNodes} label="Node" placeholder="This node" clearable current={nodeId ? live.nodes.get(nodeId)?.name : undefined} />
+				<Picker bind:value={nodeId} fetch={fetchNodes} label="Node" placeholder={selfName} clearable current={nodeId ? live.nodes.get(nodeId)?.name : undefined} />
 			{/if}
-			<Switch bind:checked={alone} label="Alone" info="Downloads this group without the parts its blueprint names" />
+			<Switch bind:checked={alone} label="Weights only" />
 			{#if partsError}
 				<Empty icon={CubeIcon} text="Parts failed to list" hint={partsError} />
 			{:else if !partsRes}
@@ -413,19 +416,7 @@
 	{/if}
 {/snippet}
 
-<PageHeader title={repo} back={{ label: 'Discover', href: back }} tabs={source ? tabs : undefined} active={activeTab} ontab={openTab}>
-	{#snippet meta()}
-		{#if storedAny}<StatePill label="Stored" lamp="success" />{/if}
-	{/snippet}
-	{#snippet actions()}
-		{#if webUrl}
-			<NeoButton text href={webUrl} {...external}>{source?.source?.name || sourceId}{#snippet icon()}<ArrowSquareOutIcon size={20} />{/snippet}</NeoButton>
-		{/if}
-		{#if revisions.length}
-			<span class="tool"><Select bind:value={revision} options={revisionOptions} search={revisions.length > 8} width={revisionWidth} /></span>
-		{/if}
-	{/snippet}
-</PageHeader>
+<PageHeader title={repo} back={{ label: 'Discover', href: back }} tabs={source ? tabs : undefined} active={activeTab} ontab={openTab} info="One repository at a source, its card, files, fit on this host and the pull that stores it" />
 
 <div class="frame" bind:clientWidth={width}>
 	{#if headError}
@@ -433,7 +424,7 @@
 	{:else if !headLoaded}
 		<Card><Skeleton rows={8} kind="text" /></Card>
 	{:else if !source}
-		<Card><Empty icon={PlugsIcon} text="No such source" hint="{sourceId} is not a configured source" action="Discover" href={back} /></Card>
+		<Card><Empty icon={PlugsIcon} text="No such source" action="Discover" href={back} /></Card>
 	{:else if beside}
 		<Columns ratio="1/1">
 			{#snippet left()}{@render modelCard()}{/snippet}

@@ -8,10 +8,19 @@ import { SlotState } from '#lib/proto/nebu/v1/slot_pb.js';
 import { TaskState } from '#lib/proto/nebu/v1/task_pb.js';
 import { ToolServerState } from '#lib/proto/nebu/v1/tools_pb.js';
 
-// The lamp a state lights, as the style maps status to colour
+// A condition reason as lowercase words
+export function reasonWords(reason: string): string {
+	return reason
+		.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+		.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+		.replaceAll('_', ' ')
+		.toLowerCase();
+}
+
+// The lamp a state lights
 export type Lamp = 'success' | 'warning' | 'error' | 'primary' | 'muted';
 
-// How a dot is drawn, filled for live states, half for starting ones, hollow for idle ones
+// Filled for live states, half for starting ones, hollow for idle ones
 export type DotShape = 'filled' | 'half' | 'hollow';
 
 export function instanceLamp(s: InstanceState): Lamp {

@@ -7,14 +7,13 @@
 		value = $bindable([]),
 		options,
 		label,
-		info,
-		placeholder,
 		disabled = false,
 		search = false,
-		message
-	}: { value?: V[]; options: Option<V>[]; label?: string; info?: string; placeholder?: string; disabled?: boolean; search?: boolean; message?: string } = $props();
+		message,
+		compact = false
+	}: { value?: V[]; options: Option<V>[]; label?: string; disabled?: boolean; search?: boolean; message?: string; compact?: boolean } = $props();
 
 	const items = $derived(options.map((o): NeoListItem<V> => ({ id: String(o.value), value: o.value, label: o.label, description: o.description, disabled: o.disabled })));
 </script>
 
-<NeoSelect bind:value options={items} multiple {label} {placeholder} {disabled} {search} elevation={-1} placement={label ? 'top' : 'inside'} floating={false} message={info ?? message} clearable nullable width="100%" />
+<NeoSelect bind:value options={items} multiple {label} {disabled} {search} elevation={-1} placement={label && !compact ? 'top' : 'inside'} floating={compact} {message} clearable nullable width="100%" aria-label={label} />

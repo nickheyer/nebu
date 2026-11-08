@@ -36,12 +36,14 @@ web: gen web-install
 	cd $(WEB) && $(NPM) run build
 	touch $(WEB)/dist/.keep
 
+# Runs a built binary rather than go run, which leaves its build directory in the temp dir when killed
 dev: clean web
+	go build -o build/nebu-dev ./cmd/nebu
 	@echo "Starting backend and frontend..."
 	@trap 'echo "Stopping processes..."; kill $$(jobs -p) 2>/dev/null; wait; exit' INT TERM; \
 	cd $(WEB) && npm run dev & \
 	FRONTEND_PID=$$!; \
-	NEBU_TLS_DISABLED=true go run cmd/nebu/main.go serve & \
+	NEBU_TLS_DISABLED=true ./build/nebu-dev serve & \
 	BACKEND_PID=$$!; \
 	wait $$BACKEND_PID $$FRONTEND_PID
 

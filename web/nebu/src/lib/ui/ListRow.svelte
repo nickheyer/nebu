@@ -1,8 +1,7 @@
 <script lang="ts" module>
-	// Pixels one character of the row's text takes, so widths given in ch become flex bases
+	// Pixels one character of row text takes
 	const chPx = 8.5;
 
-	// A width in ch as the pixels a row column takes, other units unchanged
 	export function toPx(w: string): string {
 		return w.endsWith('ch') ? `${Math.round(Number(w.slice(0, -2)) * chPx)}px` : w;
 	}
@@ -63,9 +62,7 @@
 		expand?: Snippet;
 		leading?: Snippet;
 		badges?: Snippet;
-		// A bar between the phrase and the facts, spanning its own line under the row when compact
 		instrument?: Snippet;
-		// A line under the row spanning its width
 		below?: Snippet;
 		href?: string;
 		onclick?: () => void;
@@ -83,11 +80,10 @@
 	const clickable = $derived(href !== undefined || onclick !== undefined);
 	const primaryWidthCh = $derived(primaryWidth ?? (primaryKind === 'repo' || primaryKind === 'path' ? '40ch' : primaryKind === 'message' ? '64ch' : '24ch'));
 	const primaryBasis = $derived(toPx(primaryWidthCh));
-	// A wide row without an instrument lends the name up to three fifths more room before it truncates
+	// A wide row without an instrument lends the name more room
 	const primaryMax = $derived(primaryWidthCh.endsWith('ch') ? toPx(`${Math.round(Number(primaryWidthCh.slice(0, -2)) * 1.6)}ch`) : primaryWidthCh);
 	const secondaryBasis = $derived(toPx(secondaryWidth));
 
-	// Tells the list which cells this row fills and how wide its strings run
 	$effect(() => {
 		if (!list) return;
 		const slots: ListSlot[] = [];
@@ -123,9 +119,9 @@
 
 {#snippet name()}
 	{#if href}
-		<a {href} class="link"><Str value={primary} kind={primaryKind} tip={primaryTip} weight={500} width="100%" /></a>
+		<a {href} class="link"><Str value={primary} kind={primaryKind} tip={primaryTip} weight={400} width="100%" /></a>
 	{:else}
-		<Str value={primary} kind={primaryKind} tip={primaryTip} weight={500} width="100%" />
+		<Str value={primary} kind={primaryKind} tip={primaryTip} weight={400} width="100%" />
 	{/if}
 	{#if badges}<span class="badges">{@render badges()}</span>{/if}
 {/snippet}
@@ -221,7 +217,6 @@
 	.rowwrap:last-child {
 		border-bottom-color: transparent;
 	}
-	/* A row in a list spans its columns, cells lining up with the head and every other row */
 	.rowwrap.grid {
 		display: grid;
 		grid-template-columns: subgrid;
@@ -251,7 +246,7 @@
 	}
 	.listrow {
 		min-height: 44px;
-		transition: background var(--nebu-fast) var(--nebu-ease);
+		transition: background var(--nebu-normal) var(--nebu-ease);
 	}
 	.listrow.flex {
 		display: flex;
@@ -346,7 +341,6 @@
 	.fact.mono {
 		font-family: var(--nebu-font-mono);
 	}
-	/* A fact keeps its width, the name and phrase giving way first */
 	:global(.tip.facttip) {
 		flex: 0 0 auto;
 	}
@@ -359,7 +353,7 @@
 	.caret {
 		display: inline-flex;
 		color: var(--nebu-text-muted);
-		transition: transform var(--nebu-fast) var(--nebu-ease);
+		transition: transform var(--nebu-normal) var(--nebu-settle);
 	}
 	.caret.open {
 		transform: rotate(180deg);
@@ -374,6 +368,7 @@
 		flex-direction: column;
 		gap: var(--nebu-space-2);
 		padding: var(--nebu-space-1) var(--nebu-row-inset, var(--nebu-space-2)) var(--nebu-space-3) calc(var(--nebu-row-inset, var(--nebu-space-2)) + 20px);
+		animation: nebu-reveal 240ms var(--nebu-settle) both;
 	}
 	.dropped {
 		display: flex;

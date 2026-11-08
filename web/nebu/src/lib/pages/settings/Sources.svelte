@@ -23,7 +23,6 @@
 	let { tabs, sources }: { tabs: HeaderTab[]; sources: ListQuery<SourceStatus, Record<string, never>> } = $props();
 
 	let providers = $state<Provider[]>([]);
-	// The open source's id, empty for a new one, undefined while the panel is closed
 	let open = $state<string | undefined>(undefined);
 
 	onMount(() => {
@@ -66,23 +65,25 @@
 		const c = s.capabilities;
 		if (!c) return '';
 		const on = [c.browse && 'browse', c.search && 'search', c.paginate && 'paginate', c.card && 'card', c.revisions && 'revisions'].filter(Boolean);
-		return on.length ? on.join(', ') : 'no capabilities';
+		return on.join(', ');
 	}
 
-	// The endpoint without its scheme, a path as it is
 	function bare(endpoint: string): string {
 		return endpoint.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/$/, '');
 	}
 </script>
 
 {#snippet list()}
-	<Card title="Sources" info="Where Discover looks for models and where pulls come from" flush>
+	<Card title="Sources" flush>
+		{#snippet tools()}
+			<NeoButton class="primary" elevation={2} onclick={() => (open = '')}>Add source</NeoButton>
+		{/snippet}
 		{#if !sources.settled}
 			<Skeleton rows={6} secondary="16ch" facts={2} action={false} />
 		{:else if sources.error}
 			<Empty text={sources.error} action="Retry" onclick={() => sources.refresh()} />
 		{:else if sources.items.length === 0}
-			<Empty icon={DatabaseIcon} text="No sources" hint="A source is a model registry Discover searches and pulls download from" action={open === undefined ? 'Add source' : undefined} onclick={() => (open = '')} />
+			<Empty icon={DatabaseIcon} text="No sources" action={open === undefined ? 'Add source' : undefined} onclick={() => (open = '')} />
 		{:else}
 			<List head={{ primary: 'Source', secondary: 'Provider', facts: ['Endpoint', 'Status'] }}>
 				{#each sources.items as s (s.source?.id)}
@@ -110,11 +111,7 @@
 	</Card>
 {/snippet}
 
-<PageHeader {tabs} active="sources">
-	{#snippet actions()}
-		<NeoButton class="primary" elevation={2} onclick={() => (open = '')}>Add source</NeoButton>
-	{/snippet}
-</PageHeader>
+<PageHeader {tabs} active="sources" info="Where models come from, each with its endpoint and token" />
 
 <Sheet open={open !== undefined} onclose={() => (open = undefined)} {list}>
 	{#if open !== undefined}
