@@ -275,17 +275,18 @@ func TestUpsertRule(t *testing.T) {
 	}
 }
 
-func TestBaseFollowsTLSDisabled(t *testing.T) {
+func TestBaseFollowsTLSEnabled(t *testing.T) {
 	cases := []struct {
 		tls  *v1.Tls
 		addr string
 		want string
 	}{
-		{&v1.Tls{CertFile: "/d/tls.crt", KeyFile: "/d/tls.key"}, "127.0.0.1:8484", "https://127.0.0.1:8484"},
-		{&v1.Tls{}, "127.0.0.1:8484", "https://127.0.0.1:8484"},
-		{&v1.Tls{Disabled: true}, "127.0.0.1:8484", "http://127.0.0.1:8484"},
-		{&v1.Tls{Disabled: true, CertFile: "/d/tls.crt"}, "host:1", "http://host:1"},
-		{&v1.Tls{Disabled: true}, "https://host:1", "https://host:1"},
+		{&v1.Tls{Enabled: true, CertFile: "/d/tls.crt", KeyFile: "/d/tls.key"}, "127.0.0.1:8484", "https://127.0.0.1:8484"},
+		{&v1.Tls{Enabled: true}, "127.0.0.1:8484", "https://127.0.0.1:8484"},
+		{&v1.Tls{}, "127.0.0.1:8484", "http://127.0.0.1:8484"},
+		{&v1.Tls{CertFile: "/d/tls.crt"}, "host:1", "http://host:1"},
+		{&v1.Tls{}, "https://host:1", "https://host:1"},
+		{&v1.Tls{Enabled: true}, "http://host:1", "http://host:1"},
 	}
 	for _, c := range cases {
 		e := &env{cfg: &v1.Config{Tls: c.tls}}

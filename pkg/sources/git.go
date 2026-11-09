@@ -76,8 +76,8 @@ type Git struct {
 func newGitTransport(cfg map[string]string, env transportEnv) (Transport, error) {
 	g := &Git{
 		endpoint: cfg["endpoint"],
-		username: envValue(cfg, "username_env"),
-		token:    envValue(cfg, "token_env"),
+		username: cfg["username"],
+		token:    cfg["token"],
 		dir:      filepath.Join(env.cacheDir, TransportGit),
 		locks:    map[string]*sync.Mutex{},
 		trees:    map[string]map[string]*gitEntry{},
@@ -649,7 +649,7 @@ var gitrepo = &Catalog{
 	ID:            "git",
 	Kind:          v1.SourceKind_SOURCE_KIND_GIT,
 	Name:          "Git host",
-	Transports:    []Use{{Kind: TransportGit, Fields: map[string]string{"endpoint": "", "token_env": "", "username_env": ""}, Required: []string{"endpoint"}}},
+	Transports:    []Use{{Kind: TransportGit, Fields: map[string]string{"endpoint": "", "token": "", "username": ""}, Required: []string{"endpoint"}}},
 	Configured:    true,
 	NoBrowse:      true,
 	NoSearch:      true,

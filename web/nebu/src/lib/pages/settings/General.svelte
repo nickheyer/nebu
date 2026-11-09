@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { clone } from '@bufbuild/protobuf';
 	import { useNeoThemeContext } from '#lib/neo/providers/neo-theme-provider-context.svelte.js';
-	import { NeoTheme, NeoTransition } from '#lib/neo/providers/neo-theme-provider.model.js';
+	import { NeoTheme } from '#lib/neo/providers/neo-theme-provider.model.js';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { SettingsSchema } from '#lib/proto/nebu/v1/settings_pb.js';
@@ -15,7 +15,6 @@
 	import Card from '#lib/ui/layout/Card.svelte';
 	import Columns from '#lib/ui/layout/Columns.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
-	import Stack from '#lib/ui/layout/Stack.svelte';
 
 	let { tabs }: { tabs: HeaderTab[] } = $props();
 
@@ -75,10 +74,7 @@
 		<Card title="Appearance">
 			<FieldRow>
 				<Segmented value={themeChoice} options={[{ value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }, { value: 'system', label: 'System' }]} label="Theme" info="Light, dark or whatever the system is set to" onchange={setTheme} />
-				<Stack gap={12}>
-					<Switch checked={theme.transition !== NeoTransition.None} label="Transitions" info="Animated theme switches and settling blocks" onchange={(on) => theme.update({ transition: on ? NeoTransition.Circle : NeoTransition.None })} />
-					<Switch checked={theme.reset} label="Style reset" info="The component library's CSS reset over browser defaults" onchange={(on) => theme.update({ reset: on })} />
-				</Stack>
+				<Switch checked={theme.reset} label="Style reset" info="The component library's CSS reset over browser defaults" onchange={(on) => theme.update({ reset: on })} />
 			</FieldRow>
 		</Card>
 	{/snippet}

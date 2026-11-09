@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -39,8 +38,9 @@ type Transport interface {
 // Provider transport and exposed settings. Primary settings have bare names. Named transports
 // prefix fields, such as registry_endpoint. Inherit reuses selected primary settings.
 type Use struct {
-	Kind     string
-	Name     string
+	Kind string
+	Name string
+	// Each offered setting with its default, or for a secret the environment variable seeding it
 	Fields   map[string]string
 	Required []string
 	Inherit  []string
@@ -71,20 +71,20 @@ type fieldDef struct {
 var transportFields = map[string][]fieldDef{
 	TransportHTTP: {
 		{"endpoint", "Endpoint", "API host the source talks to", v1.ConfigType_CONFIG_TYPE_URL},
-		{"token_env", "Token variable", "Environment variable holding the API token, sent as a bearer", v1.ConfigType_CONFIG_TYPE_ENV},
-		{"username_env", "Username variable", "Environment variable holding the user name sent with the token as basic auth", v1.ConfigType_CONFIG_TYPE_ENV},
+		{"token", "Token", "", v1.ConfigType_CONFIG_TYPE_SECRET},
+		{"username", "Username", "", v1.ConfigType_CONFIG_TYPE_SECRET},
 	},
 	TransportDistribution: {
 		{"endpoint", "Registry", "OCI distribution registry layers are pulled from", v1.ConfigType_CONFIG_TYPE_URL},
-		{"token_env", "Registry credential variable", "Environment variable holding user:secret for the registry's token service", v1.ConfigType_CONFIG_TYPE_ENV},
+		{"token", "Registry credential", "user:secret for the registry's token service", v1.ConfigType_CONFIG_TYPE_SECRET},
 	},
 	TransportFile: {
 		{"path", "Directory", "Directory on this host", v1.ConfigType_CONFIG_TYPE_PATH},
 	},
 	TransportGit: {
 		{"endpoint", "Git host", "Base URL repositories are cloned under", v1.ConfigType_CONFIG_TYPE_URL},
-		{"token_env", "Token variable", "Environment variable holding the token git and LFS send as basic auth", v1.ConfigType_CONFIG_TYPE_ENV},
-		{"username_env", "Username variable", "Environment variable holding the user name sent with the token", v1.ConfigType_CONFIG_TYPE_ENV},
+		{"token", "Token", "", v1.ConfigType_CONFIG_TYPE_SECRET},
+		{"username", "Username", "", v1.ConfigType_CONFIG_TYPE_SECRET},
 	},
 	TransportHFCLI: {
 		{"command", "CLI command", "hf, huggingface-cli, or an executable path. Empty uses HTTP", v1.ConfigType_CONFIG_TYPE_STRING},
@@ -113,20 +113,23 @@ func (u Use) fields() []*v1.ConfigField {
 		if !offered {
 			continue
 		}
-		out = append(out, &v1.ConfigField{
+		f := &v1.ConfigField{
 			Name:        u.prefix() + def.name,
 			Label:       def.label,
 			Type:        def.typ,
 			Required:    slices.Contains(u.Required, def.name),
-			Default:     value,
 			Description: def.description,
 			Transport:   u.key(),
-		})
+		}
+		if def.typ == v1.ConfigType_CONFIG_TYPE_SECRET {
+			f.Env = value
+		} else {
+			f.Default = value
+		}
+		out = append(out, f)
 	}
 	return out
 }
-
-var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Checks one value against its field, returning it trimmed
 func checkField(f *v1.ConfigField, value string) (string, error) {
@@ -147,10 +150,6 @@ func checkField(f *v1.ConfigField, value string) (string, error) {
 			return "", fmt.Errorf("%s: %q is not a URL with a scheme and host", f.GetName(), value)
 		}
 		value = strings.TrimRight(value, "/")
-	case v1.ConfigType_CONFIG_TYPE_ENV:
-		if !envNameRe.MatchString(value) {
-			return "", fmt.Errorf("%s: %q is not an environment variable name", f.GetName(), value)
-		}
 	case v1.ConfigType_CONFIG_TYPE_BOOL:
 		if _, err := strconv.ParseBool(value); err != nil {
 			return "", fmt.Errorf("%s: %q is not true or false", f.GetName(), value)
@@ -172,7 +171,7 @@ func checkField(f *v1.ConfigField, value string) (string, error) {
 	return value, nil
 }
 
-// Applies source overrides to provider defaults and validates fields.
+// Applies source overrides to provider defaults, seeds empty secrets from their variables, and validates fields
 func resolveConfig(fields []*v1.ConfigField, values map[string]string) (map[string]string, error) {
 	known := map[string]*v1.ConfigField{}
 	out := make(map[string]string, len(fields))
@@ -194,6 +193,9 @@ func resolveConfig(fields []*v1.ConfigField, values map[string]string) (map[stri
 		}
 	}
 	for _, f := range fields {
+		if out[f.GetName()] == "" && f.GetEnv() != "" {
+			out[f.GetName()] = os.Getenv(f.GetEnv())
+		}
 		v, err := checkField(f, out[f.GetName()])
 		if err != nil {
 			return nil, err
@@ -209,12 +211,4 @@ func fieldNames(fields []*v1.ConfigField) []string {
 		out = append(out, f.GetName())
 	}
 	return out
-}
-
-// Reads the configured environment variable, or returns empty.
-func envValue(cfg map[string]string, name string) string {
-	if v := cfg[name]; v != "" {
-		return os.Getenv(v)
-	}
-	return ""
 }

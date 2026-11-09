@@ -23,7 +23,7 @@ var dockerhub = &Catalog{
 	// The hub API browses and searches, a bare registry resolves and pulls by name
 	Transports: []Use{
 		{Kind: TransportHTTP, Fields: map[string]string{"endpoint": ""}},
-		{Kind: TransportDistribution, Name: "registry", Fields: map[string]string{"endpoint": "https://registry-1.docker.io", "token_env": "DOCKER_TOKEN"}},
+		{Kind: TransportDistribution, Name: "registry", Fields: map[string]string{"endpoint": "https://registry-1.docker.io", "token": "DOCKER_TOKEN"}},
 	},
 	SeedConfig:    map[string]string{"endpoint": "https://hub.docker.com"},
 	Description:   "Docker Hub, model artifacts under its ai/ namespace, or any registry speaking the OCI distribution API",

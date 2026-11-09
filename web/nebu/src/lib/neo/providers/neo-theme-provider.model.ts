@@ -154,5 +154,4 @@ export const getReset = () => getBoolean(getSavedReset(), true);
 export const getSavedRemember = () => localStorage?.getItem(NeoThemeStorageKey.Remember);
 export const getRemember = () => getBoolean(getSavedRemember(), true);
 
-export const getSavedTransition = () => localStorage?.getItem(NeoThemeStorageKey.Transition) as NeoTransitions | null;
-export const getTransition = () => getSavedTransition() || NeoTransition.None;
+export const getTransition = (): NeoTransitions => NeoTransition.Circle;

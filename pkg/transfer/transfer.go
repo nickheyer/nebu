@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
@@ -41,7 +42,9 @@ type Fetcher struct {
 	Retries int
 	// Bytes per second by time of week, nil for no limit
 	Schedule *Schedule
-	Log      *slog.Logger
+	// How long a range stream may wait on the network before its pace is judged, five seconds when zero
+	Window time.Duration
+	Log    *slog.Logger
 
 	mu      sync.Mutex
 	limiter *rate.Limiter
@@ -149,10 +152,14 @@ func (f *Fetcher) Fetch(ctx context.Context, blob sources.Blob, partial, expecte
 	}
 	eg, gctx := errgroup.WithContext(ctx)
 	eg.SetLimit(f.Workers)
+	held := &pace{window: f.Window}
+	if held.window <= 0 {
+		held.window = paceWindow
+	}
 	for _, i := range pending {
 		eg.Go(func() error {
 			off := int64(i) * f.Chunk
-			if err := f.fetchChunk(gctx, blob, file, off, f.chunkLen(size, i), progress); err != nil {
+			if err := f.fetchChunk(gctx, blob, file, off, f.chunkLen(size, i), progress, held); err != nil {
 				return err
 			}
 			mu.Lock()
@@ -228,7 +235,7 @@ func (f *Fetcher) FetchURL(ctx context.Context, client *sources.HTTP, rawURL, pa
 	if progress == nil {
 		progress = func(int64) {}
 	}
-	err := f.retry(ctx, progress, func() (int64, error) {
+	err := f.retry(ctx, "download", progress, func() (int64, error) {
 		if err := f.wait(ctx, 0); err != nil {
 			return 0, err
 		}
@@ -253,58 +260,86 @@ func (f *Fetcher) FetchURL(ctx context.Context, client *sources.HTTP, rawURL, pa
 	return HashFile(partial, nil)
 }
 
-// Retries with backoff and reverses failed progress increments.
-func (f *Fetcher) retry(ctx context.Context, progress Progress, try func() (int64, error)) error {
+// Retries with backoff and reverses the progress a failed try names, pauses and restarts free of both
+func (f *Fetcher) retry(ctx context.Context, what string, progress Progress, try func() (int64, error)) error {
+	tries := max(f.Retries, 1)
 	var last error
-	for attempt := 0; attempt < max(f.Retries, 1); attempt++ {
-		if attempt > 0 {
-			f.Log.Debug("retrying", "attempt", attempt, "err", last)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(min(baseBackoff<<(attempt-1), maxBackoff)):
-			}
-		}
-		written, err := try()
+	for failed := 0; failed < tries; {
+		reverse, err := try()
 		if err == nil {
 			return nil
 		}
-		progress(-written)
+		if reverse != 0 {
+			progress(-reverse)
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// Resume paused chunks after the window without counting a failure.
-		if errors.Is(err, errPaused) {
-			attempt--
+		if errors.Is(err, errPaused) || errors.Is(err, errRestart) {
 			continue
 		}
+		failed++
 		last = err
+		if failed == tries {
+			break
+		}
+		delay := min(baseBackoff<<(failed-1), maxBackoff)
+		f.note(ctx, "%s failed, try %d of %d in %s: %v", what, failed+1, tries, delay, err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
 	}
 	return last
 }
 
-func (f *Fetcher) fetchChunk(ctx context.Context, blob sources.Blob, file *os.File, off, length int64, progress Progress) error {
-	return f.retry(ctx, progress, func() (int64, error) {
-		written, err := f.copyChunk(ctx, blob, file, off, length, progress)
-		if err == nil && written != length {
-			err = fmt.Errorf("short chunk at %d: %d of %d bytes", off, written, length)
+// Lands one chunk, each try asking only for the bytes the tries before it left unwritten
+func (f *Fetcher) fetchChunk(ctx context.Context, blob sources.Blob, file *os.File, off, length int64, progress Progress, held *pace) error {
+	what := "range at " + estimate.Human(uint64(off))
+	var have int64
+	return f.retry(ctx, what, progress, func() (int64, error) {
+		written, counted, err := f.copyChunk(ctx, blob, file, off+have, length-have, progress, held)
+		have += written
+		var slow *slowError
+		lagged := errors.Is(err, errStalled) || errors.As(err, &slow)
+		switch {
+		case lagged && written > 0:
+			f.note(ctx, "%s: %v, restarted with %s left", what, err, estimate.Human(uint64(length-have)))
+			err = fmt.Errorf("%w: %w", errRestart, err)
+		case err == nil && have != length:
+			err = fmt.Errorf("short chunk at %d: %d of %d bytes", off, have, length)
 		}
-		return written, err
+		return counted - written, err
 	})
 }
 
-func (f *Fetcher) copyChunk(ctx context.Context, blob sources.Blob, file *os.File, off, length int64, progress Progress) (int64, error) {
+// Copies one range into the file, ending a stream that stalls or falls far behind the pace of its fetch
+func (f *Fetcher) copyChunk(ctx context.Context, blob sources.Blob, file *os.File, off, length int64, progress Progress, held *pace) (written, counted int64, err error) {
 	// Wait through pauses before opening the connection.
 	if err := f.wait(ctx, 0); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	rc, err := sources.RangeOf(ctx, blob, off, length)
+	sctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	rc, err := sources.RangeOf(sctx, blob, off, length)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	defer rc.Close()
-	reader := &meter{ctx: ctx, r: io.LimitReader(rc, length), fetcher: f, progress: progress}
-	return io.Copy(io.NewOffsetWriter(file, off), reader)
+	s := &stream{ctx: sctx, r: rc}
+	if _, ok := blob.(ranged); ok {
+		go held.watch(sctx, s, cancel)
+	}
+	reader := &meter{ctx: sctx, r: io.LimitReader(s, length), fetcher: f, progress: func(d int64) {
+		counted += d
+		progress(d)
+	}}
+	written, err = io.Copy(io.NewOffsetWriter(file, off), reader)
+	if cause := context.Cause(sctx); err != nil && cause != nil && ctx.Err() == nil {
+		err = cause
+	}
+	return written, counted, err
 }
 
 // Signals that a paused window began while bytes were flowing

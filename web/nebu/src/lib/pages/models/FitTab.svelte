@@ -17,7 +17,7 @@
 	import Tip from '#lib/ui/Tip.svelte';
 	import { poolBars } from '#lib/ui/memory.js';
 	import type { Lamp } from '#lib/ui/status.js';
-	import { contextLabel, placementLabel, verdictLabel, verdictLamp } from '#lib/pages/models/models.js';
+	import { contextLabel, placementLabel, placementPool, verdictLabel, verdictLamp } from '#lib/pages/models/models.js';
 	import ScalesIcon from 'phosphor-svelte/lib/ScalesIcon';
 
 	// Runtime rows of fit pills for one group, planned against free memory when free is set
@@ -106,7 +106,7 @@
 						<KeyRows
 							dense
 							rows={[
-								...plan.placements.map((p) => ({ label: placementLabel(p), value: `${bytes(p.bytes)} in ${p.poolId ? (poolLabels.get(p.poolId) ?? p.poolId) : 'disk'}` })),
+								...plan.placements.map((p) => ({ label: placementLabel(p), value: `${bytes(p.bytes)} in ${placementPool(p, plan, poolLabels)}` })),
 								{ label: 'overhead', value: bytes(plan.overheadBytes) },
 								{ label: 'detail', value: plan.detail, tip: plan.detail }
 							]}

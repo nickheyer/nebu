@@ -2,6 +2,7 @@ package flowcontrol
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -33,12 +34,14 @@ func newMeter(cfg Config) (*meter, error) {
 	if err := checkQuota("default", cfg.Quota); err != nil {
 		return nil, err
 	}
+	per := make(map[string]Quota, len(cfg.Quotas))
 	for id, q := range cfg.Quotas {
 		if err := checkQuota(id, q); err != nil {
 			return nil, err
 		}
+		per[strings.ToLower(id)] = q
 	}
-	return &meter{def: cfg.Quota, per: cfg.Quotas, ids: map[string]*usageWindow{}}, nil
+	return &meter{def: cfg.Quota, per: per, ids: map[string]*usageWindow{}}, nil
 }
 
 func checkQuota(id string, q Quota) error {
@@ -53,7 +56,7 @@ func checkQuota(id string, q Quota) error {
 
 // The quota of a fairness id, its own or the default
 func (m *meter) quota(id string) Quota {
-	if q, ok := m.per[id]; ok {
+	if q, ok := m.per[strings.ToLower(id)]; ok {
 		return q
 	}
 	return m.def

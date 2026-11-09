@@ -8,7 +8,7 @@
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 
-	let { fields, values = $bindable({}), secretsSet = false, disabled = false }: { fields: ConfigField[]; values?: Record<string, string>; secretsSet?: boolean; disabled?: boolean } = $props();
+	let { fields, values = $bindable({}), disabled = false }: { fields: ConfigField[]; values?: Record<string, string>; disabled?: boolean } = $props();
 
 	$effect(() => {
 		for (const f of fields) {
@@ -39,8 +39,8 @@
 				<NumberField value={Number(values[f.name] ?? 0)} label={f.label || f.name} info={f.description || undefined} placeholder={f.placeholder} {disabled} onchange={(n) => (values[f.name] = String(n))} />
 			{:else if f.type === ConfigType.PATH}
 				<Path value={values[f.name] ?? ''} label={f.label || f.name} info={f.description || undefined} placeholder={f.placeholder} {disabled} onchange={(v) => (values[f.name] = v)} />
-			{:else if f.type === ConfigType.ENV}
-				<Secret bind:value={values[f.name]} label={f.label || f.name} info={f.description || undefined} set={secretsSet} {disabled} />
+			{:else if f.type === ConfigType.SECRET}
+				<Secret bind:value={values[f.name]} label={f.label || f.name} info={f.description || undefined} {disabled} />
 			{:else}
 				<Text value={values[f.name] ?? ''} label={f.label || f.name} info={f.description || undefined} placeholder={f.placeholder} type={f.type === ConfigType.URL ? 'url' : 'text'} required={f.required} {disabled} onchange={(v) => (values[f.name] = v)} />
 			{/if}

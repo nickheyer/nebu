@@ -2,8 +2,9 @@
 	import type { Snippet } from 'svelte';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { NeoPopConfirm } from '#lib/neo/floating/tooltips/index.js';
+	import RowAction from '#lib/ui/RowAction.svelte';
 
-	// A button that asks its question in a popover before it acts
+	// A button that asks its question in a popover before it acts, a row chip when small
 	let {
 		label,
 		question,
@@ -11,9 +12,8 @@
 		disabled = false,
 		small = true,
 		onconfirm,
-		icon,
 		body
-	}: { label: string; question: string; danger?: boolean; disabled?: boolean; small?: boolean; onconfirm: () => unknown; icon?: Snippet; body?: Snippet } = $props();
+	}: { label: string; question: string; danger?: boolean; disabled?: boolean; small?: boolean; onconfirm: () => unknown; body?: Snippet } = $props();
 
 	let open = $state(false);
 
@@ -37,7 +37,11 @@
 			{#if body}<div class="body">{@render body()}</div>{/if}
 		</div>
 	{/snippet}
-	<NeoButton flat={small} elevation={small ? undefined : 2} {disabled} color={danger ? 'error' : undefined} {icon} onclick={() => (open = true)}>{label}</NeoButton>
+	{#if small}
+		<RowAction {label} {disabled} tone={danger ? 'danger' : 'default'} onclick={() => (open = true)} />
+	{:else}
+		<NeoButton elevation={2} {disabled} color={danger ? 'error' : undefined} onclick={() => (open = true)}>{label}</NeoButton>
+	{/if}
 </NeoPopConfirm>
 
 <style>

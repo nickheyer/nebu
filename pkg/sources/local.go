@@ -39,7 +39,7 @@ var mirror = &Catalog{
 	Kind: v1.SourceKind_SOURCE_KIND_MIRROR,
 	Name: "Mirror",
 	Transports: []Use{
-		{Kind: TransportHTTP, Fields: map[string]string{"endpoint": "", "token_env": ""}},
+		{Kind: TransportHTTP, Fields: map[string]string{"endpoint": "", "token": ""}},
 		{Kind: TransportFile, Fields: map[string]string{"path": ""}},
 	},
 	Configured:    true,

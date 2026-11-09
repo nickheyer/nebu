@@ -225,6 +225,9 @@ func runSourcesProviders(ctx context.Context, e *env, args []string) error {
 				if f.GetDefault() != "" {
 					s += "=" + f.GetDefault()
 				}
+				if f.GetEnv() != "" {
+					s += "=$" + f.GetEnv()
+				}
 				settings = append(settings, s)
 			}
 			seeded := "seeded"

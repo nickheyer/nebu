@@ -81,8 +81,8 @@
 
 {#if ownPassword}
 	<Dialog bind:open={passwordOpen} title="Change password" confirm="Change" {busy} disabled={!current || !fresh} onconfirm={changePassword}>
-		<Secret bind:value={current} label="Current password" info="Confirms it is you" autocomplete="current-password" />
-		<Secret bind:value={fresh} label="New password" info="Replaces the current password" autocomplete="new-password" />
+		<Secret bind:value={current} label="Current password" autocomplete="current-password" />
+		<Secret bind:value={fresh} label="New password" autocomplete="new-password" />
 		{#snippet footer()}
 			{#if error}<span class="error-text">{error}</span>{/if}
 		{/snippet}

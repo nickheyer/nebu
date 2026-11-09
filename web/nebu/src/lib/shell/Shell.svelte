@@ -1,6 +1,5 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { useNeoThemeContext } from '#lib/neo/providers/neo-theme-provider-context.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
 	import { motion } from '#lib/ui/motion.svelte.js';
 	import BottomBar from '#lib/shell/BottomBar.svelte';
@@ -8,12 +7,6 @@
 	import TopBar from '#lib/shell/TopBar.svelte';
 
 	let { children }: { children: Snippet } = $props();
-
-	// The appearance toggle and the motion preference decide whether the deck animates
-	const theme = useNeoThemeContext();
-	$effect(() => {
-		motion.enabled = theme.transition !== 'none' && !viewport.reducedMotion;
-	});
 </script>
 
 <div class="shell" class:mobile={viewport.mobile} data-motion={motion.enabled ? 'on' : 'off'}>

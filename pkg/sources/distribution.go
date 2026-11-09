@@ -85,7 +85,7 @@ func newDistributionTransport(cfg map[string]string, _ transportEnv) (Transport,
 	if cfg["endpoint"] == "" {
 		return nil, nil
 	}
-	return NewDistribution(cfg["endpoint"], envValue(cfg, "token_env"))
+	return NewDistribution(cfg["endpoint"], cfg["token"])
 }
 
 // Returns the endpoint without a trailing slash

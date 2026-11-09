@@ -17,7 +17,7 @@ var kaggle = &Catalog{
 	ID:            "kaggle",
 	Kind:          v1.SourceKind_SOURCE_KIND_KAGGLE,
 	Name:          "Kaggle",
-	Transports:    []Use{{Kind: TransportHTTP, Fields: map[string]string{"endpoint": "https://www.kaggle.com", "token_env": "KAGGLE_KEY", "username_env": "KAGGLE_USERNAME"}}},
+	Transports:    []Use{{Kind: TransportHTTP, Fields: map[string]string{"endpoint": "https://www.kaggle.com", "token": "KAGGLE_KEY", "username": "KAGGLE_USERNAME"}}},
 	WebPath:       "/models",
 	AuthRequired:  true,
 	Description:   "Kaggle Models, one instance per framework and variant",

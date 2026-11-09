@@ -1,12 +1,13 @@
 import { cubicOut } from 'svelte/easing';
 import type { TransitionConfig } from 'svelte/transition';
+import { viewport } from '#lib/state/viewport.svelte.js';
 
-// Whether the deck animates, off by the appearance toggle or a reduced motion preference
-class Motion {
-	enabled = $state(true);
-}
-
-export const motion = new Motion();
+// Whether the deck animates, off only under the system reduced motion preference
+export const motion = {
+	get enabled(): boolean {
+		return !viewport.reducedMotion;
+	}
+};
 
 // The settle curve every reveal shares
 export const settle = 'cubic-bezier(0.22, 0.9, 0.24, 1)';

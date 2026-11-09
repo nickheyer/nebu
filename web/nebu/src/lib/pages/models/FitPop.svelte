@@ -10,7 +10,7 @@
 	import Tip from '#lib/ui/Tip.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import { poolBars } from '#lib/ui/memory.js';
-	import { contextLabel, placementLabel, verdictLabel, verdictLamp } from '#lib/pages/models/models.js';
+	import { contextLabel, placementLabel, placementPool, verdictLabel, verdictLamp } from '#lib/pages/models/models.js';
 
 	// A weight group's plan per context, the context chosen among them and the memory it is measured against
 	let { name, rows, free = $bindable(false) }: { name: string; rows: FitRow[]; free?: boolean } = $props();
@@ -66,7 +66,7 @@
 		<KeyRows
 			dense
 			rows={[
-				...plan.placements.map((p) => ({ label: placementLabel(p), value: `${bytes(p.bytes)} in ${p.poolId ? (poolLabels.get(p.poolId) ?? p.poolId) : 'disk'}` })),
+				...plan.placements.map((p) => ({ label: placementLabel(p), value: `${bytes(p.bytes)} in ${placementPool(p, plan, poolLabels)}` })),
 				{ label: 'overhead', value: bytes(plan.overheadBytes) },
 				{ label: 'detail', value: plan.detail, tip: plan.detail }
 			]}

@@ -64,7 +64,7 @@
 	function status(r: RuntimeStatus): string {
 		if (!r.compatible) return r.unmet[0] ?? 'incompatible';
 		const n = installs(r);
-		return n > 0 ? plural(n, 'install') : 'no install';
+		return n > 0 ? plural(n, 'install') : '-';
 	}
 
 	function about(r: RuntimeStatus): string {

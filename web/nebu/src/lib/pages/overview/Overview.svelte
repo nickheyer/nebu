@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { ago, bytes, date, enumLabel, num, pct, perMinute, ms } from '#lib/format.js';
+	import { ago, bytes, date, enumLabel, num, pct, rate, ms } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import type { Trace } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import { RouteState } from '#lib/proto/nebu/v1/gateway_pb.js';
@@ -95,7 +95,8 @@
 		{
 			id: 'runtimes',
 			label: 'Runtimes',
-			value: `${num(live.installs.size)} installed`,
+			value: num(live.installs.size),
+			unit: 'installed',
 			detail: installed.length ? installed.join(', ') : `${num(compatible)} compatible`,
 			href: '/runtimes',
 			done: live.installs.size > 0,
@@ -105,7 +106,8 @@
 		{
 			id: 'models',
 			label: 'Models',
-			value: `${num(live.models.size)} stored`,
+			value: num(live.models.size),
+			unit: 'stored',
 			detail: live.models.size ? `${bytes(storeUsed)} on disk` : '',
 			href: '/models',
 			done: live.models.size > 0,
@@ -115,7 +117,8 @@
 		{
 			id: 'instances',
 			label: 'Instances',
-			value: `${num(runningInstances)} running`,
+			value: num(runningInstances),
+			unit: 'running',
 			detail: [startingInstances ? `${num(startingInstances)} starting` : '', failedInstances ? `${num(failedInstances)} failed` : ''].filter(Boolean).join(' · '),
 			href: '/serve',
 			done: instances.length > 0,
@@ -125,7 +128,8 @@
 		{
 			id: 'routes',
 			label: 'Routes',
-			value: `${num(readyRoutes)} ready`,
+			value: num(readyRoutes),
+			unit: 'ready',
 			detail: pendingRoutes ? `${num(pendingRoutes)} pending` : '',
 			href: '/gateway/routes',
 			done: readyRoutes > 0,
@@ -134,7 +138,8 @@
 		{
 			id: 'traffic',
 			label: 'Traffic',
-			value: perMinute(lastMinute),
+			value: rate(lastMinute),
+			unit: '/min',
 			detail: finished.length ? `${pct(errorRate, 1)} errors${ttftP50 === undefined ? '' : ` · TTFT ${ms(ttftP50)}`}` : '',
 			href: '/traffic',
 			done: recent.length > 0,

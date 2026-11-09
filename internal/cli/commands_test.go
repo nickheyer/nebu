@@ -358,7 +358,7 @@ func runCLI(t *testing.T, dataDir, configText, addr string, args ...string) (str
 // Runs the CLI over plaintext against the fake daemon and fails the test on a nonzero exit
 func (d *fakeDaemon) run(t *testing.T, args ...string) string {
 	t.Helper()
-	out, errOut, code := runCLI(t, t.TempDir(), "tls:\n  disabled: true\n", d.url, args...)
+	out, errOut, code := runCLI(t, t.TempDir(), "", d.url, args...)
 	if code != 0 {
 		t.Fatalf("nebu %s exited %d: %s", strings.Join(args, " "), code, errOut)
 	}
@@ -459,7 +459,7 @@ func TestRoutesPutRefusesBadFlags(t *testing.T) {
 		{"routes", "put", "chat", "--target", "p", "--mutating-tools"},
 		{"routes", "put", "chat", "--target", "p", "--timeout", "-1s"},
 	} {
-		if _, _, code := runCLI(t, t.TempDir(), "tls:\n  disabled: true\n", d.url, args...); code == 0 {
+		if _, _, code := runCLI(t, t.TempDir(), "", d.url, args...); code == 0 {
 			t.Fatalf("nebu %s succeeded", strings.Join(args, " "))
 		}
 	}
@@ -496,15 +496,15 @@ func TestSchedulersValidateAndPut(t *testing.T) {
 	d.gateway.set(func(f *fakeGateway) {
 		f.accepted = &v1.Condition{Type: "Accepted", Status: v1.ConditionStatus_CONDITION_STATUS_FALSE, Reason: "InvalidSchedulerConfig", Message: "unknown plugin"}
 	})
-	_, errOut, code := runCLI(t, t.TempDir(), "tls:\n  disabled: true\n", d.url, "schedulers", "validate", "fast", "--file", file)
+	_, errOut, code := runCLI(t, t.TempDir(), "", d.url, "schedulers", "validate", "fast", "--file", file)
 	if code == 0 || !strings.Contains(errOut, "unknown plugin") {
 		t.Fatalf("a refused configuration exited %d: %s", code, errOut)
 	}
 	d.gateway.set(func(f *fakeGateway) { f.accepted = nil })
-	if _, _, code := runCLI(t, t.TempDir(), "tls:\n  disabled: true\n", d.url, "schedulers", "validate", "fast", "--file", file); code == 0 {
+	if _, _, code := runCLI(t, t.TempDir(), "", d.url, "schedulers", "validate", "fast", "--file", file); code == 0 {
 		t.Fatal("an answer without an Accepted condition passed validation")
 	}
-	if _, _, code := runCLI(t, t.TempDir(), "tls:\n  disabled: true\n", d.url, "schedulers", "validate", "fast"); code == 0 {
+	if _, _, code := runCLI(t, t.TempDir(), "", d.url, "schedulers", "validate", "fast"); code == 0 {
 		t.Fatal("validate without --file succeeded")
 	}
 }
@@ -560,7 +560,7 @@ func TestMeshCommands(t *testing.T) {
 	out = d.run(t, "mesh", "join", "nebu-join-first")
 	contains(t, out, "joined lab m1 through alpha node1-012345 at 10.0.0.5:8485, 3 members")
 	d.run(t, "mesh", "forget", "gamma")
-	if _, _, code := runCLI(t, t.TempDir(), "tls:\n  disabled: true\n", d.url, "mesh", "token", "--ttl", "90ms"); code == 0 {
+	if _, _, code := runCLI(t, t.TempDir(), "", d.url, "mesh", "token", "--ttl", "90ms"); code == 0 {
 		t.Fatal("a token lifetime under a second was taken")
 	}
 	d.mesh.mu.Lock()
@@ -588,11 +588,11 @@ func TestTokensCreateSignsInAsTheAccount(t *testing.T) {
 	}
 	d.auth.mu.Unlock()
 
-	_, errOut, code := runCLI(t, t.TempDir(), "tls:\n  disabled: true\n", d.url, "tokens", "create", "ci", "--scopes", "inference", "--user", "alice", "--password", "wrong")
+	_, errOut, code := runCLI(t, t.TempDir(), "", d.url, "tokens", "create", "ci", "--scopes", "inference", "--user", "alice", "--password", "wrong")
 	if code == 0 || !strings.Contains(errOut, "wrong username or password") {
 		t.Fatalf("a wrong password exited %d: %s", code, errOut)
 	}
-	if _, _, code := runCLI(t, t.TempDir(), "tls:\n  disabled: true\n", d.url, "tokens", "create", "ci", "--scopes", "write", "--user", "alice", "--password", "s3cret"); code == 0 {
+	if _, _, code := runCLI(t, t.TempDir(), "", d.url, "tokens", "create", "ci", "--scopes", "write", "--user", "alice", "--password", "s3cret"); code == 0 {
 		t.Fatal("an unknown scope was sent")
 	}
 	out = d.run(t, "tokens", "list")
@@ -609,15 +609,15 @@ func TestTLSTrustsTheDaemonCertificate(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "tls.crt"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: d.srv.Certificate().Raw}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, errOut, code := runCLI(t, dir, "", u.Host, "objectives", "put", "fast", "--priority", "1")
+	out, errOut, code := runCLI(t, dir, "tls:\n  enabled: true\n", u.Host, "objectives", "put", "fast", "--priority", "1")
 	if code != 0 {
 		t.Fatalf("the generated certificate was not trusted, exit %d: %s", code, errOut)
 	}
 	contains(t, out, "fast")
-	if _, errOut, code := runCLI(t, t.TempDir(), "", u.Host, "objectives", "put", "fast"); code == 0 || !strings.Contains(errOut, "certificate") {
+	if _, errOut, code := runCLI(t, t.TempDir(), "tls:\n  enabled: true\n", u.Host, "objectives", "put", "fast"); code == 0 || !strings.Contains(errOut, "certificate") {
 		t.Fatalf("an unknown certificate was trusted, exit %d: %s", code, errOut)
 	}
-	if _, _, code := runCLI(t, t.TempDir(), "tls:\n  disabled: true\n", u.Host, "objectives", "put", "fast"); code == 0 {
+	if _, _, code := runCLI(t, t.TempDir(), "", u.Host, "objectives", "put", "fast"); code == 0 {
 		t.Fatal("plaintext reached a TLS listener")
 	}
 }
@@ -647,7 +647,7 @@ func TestSwapSendsTheCanary(t *testing.T) {
 	d.run(t, "swap", "main", "org/qwen", "--source", "hf", "--group", "q4", "--canary-percent", "5", "--canary-seconds", "60")
 	for _, shape := range [][]string{{"--canary-seconds", "600"}, {"--canary-step-percent", "10"}, {"--canary-max-regression-percent", "5"}} {
 		args := append([]string{"swap", "main", "org/qwen", "--source", "hf", "--group", "q4"}, shape...)
-		if _, errOut, code := runCLI(t, t.TempDir(), "tls:\n  disabled: true\n", d.url, args...); code == 0 || !strings.Contains(errOut, "--canary-percent") {
+		if _, errOut, code := runCLI(t, t.TempDir(), "", d.url, args...); code == 0 || !strings.Contains(errOut, "--canary-percent") {
 			t.Fatalf("canary %v without a share exited %d: %s", shape, code, errOut)
 		}
 	}
@@ -670,7 +670,7 @@ func TestAdapterCommands(t *testing.T) {
 	contains(t, d.run(t, "adapters", "load", "llama", "sql", "--path", "/adapters/sql"), "sql loaded on llama")
 	contains(t, d.run(t, "adapters", "list", "llama"), "NAME", "sql", "/adapters/sql")
 	contains(t, d.run(t, "adapters", "unload", "llama", "sql"), "sql unloaded from llama")
-	if _, _, code := runCLI(t, t.TempDir(), "tls:\n  disabled: true\n", d.url, "adapters", "unload", "llama", "sql"); code == 0 {
+	if _, _, code := runCLI(t, t.TempDir(), "", d.url, "adapters", "unload", "llama", "sql"); code == 0 {
 		t.Fatal("unloading an adapter that is not loaded fails")
 	}
 	d.runs.mu.Lock()

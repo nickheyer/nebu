@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -191,15 +190,18 @@ func (cat *Catalog) Provider() *v1.Provider {
 	return &v1.Provider{Kind: cat.Kind, Name: cat.Name, Description: cat.Description, Fields: cat.Fields(), Transports: cat.transportNames(), Configured: cat.Configured}
 }
 
-// Builds a primary HTTP use with an endpoint and its token variable, empty for none
+// Builds a primary HTTP use with an endpoint and the variable seeding its token, empty for none
 func httpUse(endpoint, tokenEnv string) Use {
-	return Use{Kind: TransportHTTP, Fields: map[string]string{"endpoint": endpoint, "token_env": tokenEnv}}
+	return Use{Kind: TransportHTTP, Fields: map[string]string{"endpoint": endpoint, "token": tokenEnv}}
 }
 
 // Source client combining provider metadata, transports, and shared behavior.
 type Client struct {
-	cat        *Catalog
-	spec       *v1.Source
+	cat *Catalog
+	// The source as reads and events carry it, its secrets redacted
+	spec *v1.Source
+	// The stored row with its secrets, which a reload compares against
+	raw        *v1.Source
 	cfg        map[string]string
 	transports map[string]Transport
 	facets     Memo[[]*v1.Facet]
@@ -221,13 +223,13 @@ func newClient(cat *Catalog, spec *v1.Source, cacheDir string) (*Client, error) 
 	if err != nil {
 		return nil, err
 	}
-	// The variables holding this source's secrets stay out of every child process
+	// The variables seeding this source's secrets stay out of every child process
 	for _, f := range cat.Fields() {
-		if f.GetType() == v1.ConfigType_CONFIG_TYPE_ENV && cfg[f.GetName()] != "" {
-			proc.Hide(cfg[f.GetName()])
+		if f.GetEnv() != "" {
+			proc.Hide(f.GetEnv())
 		}
 	}
-	c := &Client{cat: cat, spec: spec, cfg: cfg, transports: map[string]Transport{}, facets: Memo[[]*v1.Facet]{TTL: facetTTL}}
+	c := &Client{cat: cat, spec: redact(spec), raw: spec, cfg: cfg, transports: map[string]Transport{}, facets: Memo[[]*v1.Facet]{TTL: facetTTL}}
 	for _, u := range cat.Transports {
 		values := make(map[string]string, len(u.Fields))
 		for name := range u.Fields {
@@ -290,23 +292,18 @@ func (c *Client) Git() *Git { return transportOf[*Git](c, TransportGit) }
 // The Hugging Face CLI, nil unless the source turned it on
 func (c *Client) CLI() *HFCLI { return transportOf[*HFCLI](c, TransportHFCLI) }
 
-// The API key from the variable the primary transport names, empty when none is set
-func (c *Client) Token() string {
-	if v := c.cfg[c.tokenSetting()]; v != "" {
-		return os.Getenv(v)
-	}
-	return ""
-}
+// The API key the source stores or its variable seeds, empty when neither holds one
+func (c *Client) Token() string { return c.cfg[c.tokenField().GetName()] }
 
-// Returns the primary token variable setting, falling back to transport settings.
-func (c *Client) tokenSetting() string {
-	first := ""
+// The primary token setting, else the first token a named transport offers, nil when the provider has none
+func (c *Client) tokenField() *v1.ConfigField {
+	var first *v1.ConfigField
 	for _, f := range c.cat.Fields() {
-		if f.GetName() == "token_env" {
-			return f.GetName()
+		if f.GetName() == "token" {
+			return f
 		}
-		if first == "" && f.GetType() == v1.ConfigType_CONFIG_TYPE_ENV && strings.HasSuffix(f.GetName(), "token_env") {
-			first = f.GetName()
+		if first == nil && f.GetType() == v1.ConfigType_CONFIG_TYPE_SECRET && strings.HasSuffix(f.GetName(), "token") {
+			first = f
 		}
 	}
 	return first
@@ -449,7 +446,7 @@ func (c *Client) Capabilities(ctx context.Context) *v1.SourceCapabilities {
 		Revisions:     revisions,
 		AuthRequired:  c.cat.AuthRequired,
 		TokenPresent:  c.HasToken(),
-		TokenEnv:      c.cfg[c.tokenSetting()],
+		TokenEnv:      c.tokenField().GetEnv(),
 		Endpoint:      c.cfg["endpoint"],
 		Sorts:         c.sorts(),
 		DefaultSort:   c.cat.Sorts[0],

@@ -13,6 +13,7 @@ import (
 
 	"github.com/nickheyer/nebu/pkg/archive"
 	"github.com/nickheyer/nebu/pkg/sources"
+	"github.com/nickheyer/nebu/pkg/transfer"
 )
 
 // Returns the source's default release revision.
@@ -86,7 +87,8 @@ func (e *Engine) download(ctx context.Context, rawURL, dest string, out io.Write
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
-	if _, err := e.Fetcher.FetchURL(ctx, client, rawURL, dest+".partial", nil); err != nil {
+	noted := transfer.WithNotes(ctx, func(line string) { fmt.Fprintf(out, "%s: %s\n", filepath.Base(dest), line) })
+	if _, err := e.Fetcher.FetchURL(noted, client, rawURL, dest+".partial", nil); err != nil {
 		return err
 	}
 	return os.Rename(dest+".partial", dest)

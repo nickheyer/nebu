@@ -115,7 +115,7 @@
 	</FormSection>
 	{#if fields.length}
 		<FormSection title="Configuration" info="What the provider needs to reach the source">
-			<ConfigFields {fields} bind:values={config} secretsSet={editing} />
+			<ConfigFields {fields} bind:values={config} />
 		</FormSection>
 	{/if}
 </Stack>

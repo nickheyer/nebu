@@ -23,10 +23,10 @@ func tlsDaemon(dir string, t *v1.Tls) *Daemon {
 	return &Daemon{Config: cfg, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 }
 
-// The first start generates a pair in data_dir naming the listen host, later starts serve the same one
+// The first start with tls.enabled generates a pair in data_dir naming the listen host, later starts serve the same one
 func TestListenerCertificateGeneratedAndReused(t *testing.T) {
 	dir := t.TempDir()
-	first, err := tlsDaemon(dir, &v1.Tls{}).tlsConfig()
+	first, err := tlsDaemon(dir, &v1.Tls{Enabled: true}).tlsConfig()
 	if err != nil || first == nil || len(first.Certificates) != 1 {
 		t.Fatalf("first start %v %v", first, err)
 	}
@@ -41,28 +41,34 @@ func TestListenerCertificateGeneratedAndReused(t *testing.T) {
 			t.Fatalf("%s not written %v", name, err)
 		}
 	}
-	second, err := tlsDaemon(dir, &v1.Tls{}).tlsConfig()
+	second, err := tlsDaemon(dir, &v1.Tls{Enabled: true}).tlsConfig()
 	if err != nil || auth.Fingerprint(second.Certificates[0]) != auth.Fingerprint(first.Certificates[0]) {
 		t.Fatalf("restart made another certificate %v", err)
 	}
 	// A configured pair is served as it is
-	own, err := tlsDaemon(t.TempDir(), &v1.Tls{CertFile: filepath.Join(dir, config.CertFile), KeyFile: filepath.Join(dir, config.KeyFile)}).tlsConfig()
+	own, err := tlsDaemon(t.TempDir(), &v1.Tls{Enabled: true, CertFile: filepath.Join(dir, config.CertFile), KeyFile: filepath.Join(dir, config.KeyFile)}).tlsConfig()
 	if err != nil || auth.Fingerprint(own.Certificates[0]) != auth.Fingerprint(first.Certificates[0]) {
 		t.Fatalf("configured pair %v", err)
 	}
-	if _, err := tlsDaemon(t.TempDir(), &v1.Tls{CertFile: "/nonexistent/c.pem", KeyFile: "/nonexistent/k.pem"}).tlsConfig(); err == nil {
+	if _, err := tlsDaemon(t.TempDir(), &v1.Tls{Enabled: true, CertFile: "/nonexistent/c.pem", KeyFile: "/nonexistent/k.pem"}).tlsConfig(); err == nil {
 		t.Fatal("a missing configured pair should fail rather than be generated")
 	}
 }
 
-// tls.disabled serves plaintext, and refuses a certificate named beside it
-func TestPlaintextIsExplicit(t *testing.T) {
-	off, err := tlsDaemon(t.TempDir(), &v1.Tls{Disabled: true}).tlsConfig()
+// A daemon with no tls settings serves plaintext and writes no pair, and a certificate named without tls.enabled is refused
+func TestPlaintextIsDefault(t *testing.T) {
+	dir := t.TempDir()
+	off, err := tlsDaemon(dir, &v1.Tls{}).tlsConfig()
 	if err != nil || off != (*tls.Config)(nil) {
-		t.Fatalf("disabled %v %v", off, err)
+		t.Fatalf("default %v %v", off, err)
 	}
-	if _, err := tlsDaemon(t.TempDir(), &v1.Tls{Disabled: true, CertFile: "c.pem"}).tlsConfig(); err == nil {
-		t.Fatal("disabled beside a certificate should fail")
+	for _, name := range []string{config.CertFile, config.KeyFile} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			t.Fatalf("%s written without tls.enabled", name)
+		}
+	}
+	if _, err := tlsDaemon(t.TempDir(), &v1.Tls{CertFile: "c.pem"}).tlsConfig(); err == nil {
+		t.Fatal("a certificate named without tls.enabled should fail")
 	}
 }
 
@@ -80,8 +86,8 @@ type noEndpoints struct{}
 
 func (noEndpoints) Endpoint(datalayer.EndpointID) (datalayer.Endpoint, bool) { return nil, false }
 
-// The scheduler listener serves the remote handler under the generated certificate, which a client pinning the file trusts, plaintext only when tls.disabled chooses it
-func TestSchedulerListenerServesTLSByDefault(t *testing.T) {
+// The scheduler listener serves the remote handler in plaintext, and with tls.enabled under the generated certificate a client pinning the file trusts
+func TestSchedulerListenerFollowsTLS(t *testing.T) {
 	serveOn := func(t *testing.T, tlsCfg *v1.Tls) (*Daemon, string) {
 		t.Helper()
 		d := tlsDaemon(t.TempDir(), tlsCfg)
@@ -98,7 +104,7 @@ func TestSchedulerListenerServesTLSByDefault(t *testing.T) {
 		t.Cleanup(func() { srv.Close() })
 		return d, ln.Addr().String()
 	}
-	d, addr := serveOn(t, &v1.Tls{})
+	d, addr := serveOn(t, &v1.Tls{Enabled: true})
 	pinned, err := remote.PinnedTransport(d.Config.GetTls().GetCertFile())
 	if err != nil {
 		t.Fatal(err)
@@ -122,16 +128,16 @@ func TestSchedulerListenerServesTLSByDefault(t *testing.T) {
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("the scheduler listener answered plaintext with %d without tls.disabled", resp.StatusCode)
+		t.Fatalf("the scheduler listener answered plaintext with %d under tls.enabled", resp.StatusCode)
 	}
 	unpinned, _ := remote.PinnedTransport("")
 	if _, err := (&http.Client{Transport: unpinned}).Get("https://" + addr + remote.HealthPath); err == nil {
 		t.Fatal("a client without the pin trusted the generated certificate")
 	}
-	_, plain := serveOn(t, &v1.Tls{Disabled: true})
+	_, plain := serveOn(t, &v1.Tls{})
 	resp, err = http.Get("http://" + plain + remote.HealthPath)
 	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("tls.disabled serves plaintext: %v %v", resp, err)
+		t.Fatalf("the default serves plaintext: %v %v", resp, err)
 	}
 	resp.Body.Close()
 }

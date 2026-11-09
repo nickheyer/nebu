@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nickheyer/nebu/internal/auth"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -78,7 +79,7 @@ func TestBuildKeepsOrderAndSeedsEveryCatalog(t *testing.T) {
 	for _, ok := range []*v1.Source{
 		{Id: "hf-mirror", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Config: map[string]string{"endpoint": "https://hf-mirror.com"}},
 		{Id: "ghcr", Kind: v1.SourceKind_SOURCE_KIND_OCI, Config: map[string]string{"registry_endpoint": "https://ghcr.io"}},
-		{Id: "hf", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Config: map[string]string{"token_env": "OTHER_HF_TOKEN", "cli_command": os.Args[0]}},
+		{Id: "hf", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Config: map[string]string{"token": "hf_typed", "cli_command": os.Args[0]}},
 		{Id: "m", Kind: v1.SourceKind_SOURCE_KIND_MIRROR, Config: map[string]string{"endpoint": "https://mirror.example/models"}},
 		{Id: "lab", Kind: v1.SourceKind_SOURCE_KIND_GIT, Config: map[string]string{"endpoint": "https://gitlab.com"}},
 	} {
@@ -92,7 +93,7 @@ func TestBuildKeepsOrderAndSeedsEveryCatalog(t *testing.T) {
 		{Id: "u", Kind: v1.SourceKind_SOURCE_KIND_UNSPECIFIED},
 		{Id: "g", Kind: v1.SourceKind_SOURCE_KIND_GIT},
 		{Id: "hf", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Config: map[string]string{"endpoint": "not a url"}},
-		{Id: "hf", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Config: map[string]string{"token_env": "no-dashes"}},
+		{Id: "hf", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Config: map[string]string{"token_env": "HF_TOKEN"}},
 		{Id: "hf", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Config: map[string]string{"namespace": "ai"}},
 		{Id: "hf", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Config: map[string]string{"cli_command": "no-such-hf-cli"}},
 	} {
@@ -136,13 +137,13 @@ func TestProvidersDeclareFieldsPerTransport(t *testing.T) {
 		t.Fatalf("providers %d", len(byKind))
 	}
 	names := func(p *v1.Provider) string { return strings.Join(fieldNames(p.GetFields()), ",") }
-	if got := names(byKind[v1.SourceKind_SOURCE_KIND_OCI]); got != "endpoint,registry_endpoint,registry_token_env" {
+	if got := names(byKind[v1.SourceKind_SOURCE_KIND_OCI]); got != "endpoint,registry_endpoint,registry_token" {
 		t.Fatalf("oci fields %s", got)
 	}
-	if got := names(byKind[v1.SourceKind_SOURCE_KIND_HUGGINGFACE]); got != "endpoint,token_env,cli_command" {
+	if got := names(byKind[v1.SourceKind_SOURCE_KIND_HUGGINGFACE]); got != "endpoint,token,cli_command" {
 		t.Fatalf("hub fields %s", got)
 	}
-	if got := names(byKind[v1.SourceKind_SOURCE_KIND_NGC]); got != "endpoint,token_env,auth_endpoint" {
+	if got := names(byKind[v1.SourceKind_SOURCE_KIND_NGC]); got != "endpoint,token,auth_endpoint" {
 		t.Fatalf("ngc fields %s", got)
 	}
 	local := byKind[v1.SourceKind_SOURCE_KIND_LOCAL]
@@ -150,7 +151,7 @@ func TestProvidersDeclareFieldsPerTransport(t *testing.T) {
 		t.Fatalf("local fields %v", local.GetFields())
 	}
 	kaggle := byKind[v1.SourceKind_SOURCE_KIND_KAGGLE]
-	if kaggle.GetFields()[2].GetName() != "username_env" || kaggle.GetFields()[2].GetDefault() != "KAGGLE_USERNAME" || kaggle.GetName() != "Kaggle" {
+	if f := kaggle.GetFields()[2]; f.GetName() != "username" || f.GetEnv() != "KAGGLE_USERNAME" || f.GetDefault() != "" || f.GetType() != v1.ConfigType_CONFIG_TYPE_SECRET || kaggle.GetName() != "Kaggle" {
 		t.Fatalf("kaggle fields %v", kaggle.GetFields())
 	}
 	if got := strings.Join(byKind[v1.SourceKind_SOURCE_KIND_GITHUB].GetTransports(), ","); got != "http,git" {
@@ -192,6 +193,7 @@ func ids(list []*v1.Source) string {
 }
 
 func TestManagerSeedsBootstrapsAndEdits(t *testing.T) {
+	t.Setenv("HF_TOKEN", "")
 	ctx := context.Background()
 	store := &memStore{rows: map[string]*v1.Source{}}
 	root := t.TempDir()
@@ -223,7 +225,7 @@ func TestManagerSeedsBootstrapsAndEdits(t *testing.T) {
 		t.Fatalf("invalid config entry should fail the load: %v", err)
 	}
 
-	mirror, err := m.Create(ctx, &v1.Source{Id: "hf-mirror", Name: "Mirror of the Hub", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Config: map[string]string{"endpoint": "https://hf-mirror.com/", "token_env": " "}})
+	mirror, err := m.Create(ctx, &v1.Source{Id: "hf-mirror", Name: "Mirror of the Hub", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Config: map[string]string{"endpoint": "https://hf-mirror.com/", "token": " "}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,15 +253,15 @@ func TestManagerSeedsBootstrapsAndEdits(t *testing.T) {
 		t.Fatalf("failed creates must not write, have %d rows", len(store.rows))
 	}
 
-	hf, err := m.Update(ctx, &v1.Source{Id: "huggingface", Name: "The Hub", Config: map[string]string{"token_env": "MY_HF_TOKEN"}})
+	hf, err := m.Update(ctx, &v1.Source{Id: "huggingface", Name: "The Hub", Config: map[string]string{"token": "hf_stored"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hf.GetSeeded() || hf.GetName() != "The Hub" || hf.GetConfig()["token_env"] != "MY_HF_TOKEN" || hf.GetKind() != v1.SourceKind_SOURCE_KIND_HUGGINGFACE || !hf.GetUpdatedAt().AsTime().After(hf.GetCreatedAt().AsTime()) {
+	if !hf.GetSeeded() || hf.GetName() != "The Hub" || hf.GetConfig()["token"] != auth.Redacted || hf.GetKind() != v1.SourceKind_SOURCE_KIND_HUGGINGFACE || !hf.GetUpdatedAt().AsTime().After(hf.GetCreatedAt().AsTime()) {
 		t.Fatalf("update %+v", hf)
 	}
-	if src, _ := m.Registry.Get("huggingface"); src.Capabilities(ctx).GetTokenEnv() != "MY_HF_TOKEN" || src.Capabilities(ctx).GetEndpoint() != "https://huggingface.co" {
-		t.Fatal("registry should see the new token env over the default endpoint")
+	if src, _ := m.Registry.Get("huggingface"); src.(*Client).Token() != "hf_stored" || !src.Capabilities(ctx).GetTokenPresent() || src.Capabilities(ctx).GetEndpoint() != "https://huggingface.co" {
+		t.Fatal("registry should see the stored token over the default endpoint")
 	}
 	if _, err := m.Update(ctx, &v1.Source{Id: "huggingface", Kind: v1.SourceKind_SOURCE_KIND_LOCAL, Config: map[string]string{"path": root}}); err == nil || !strings.Contains(err.Error(), "fixed") {
 		t.Fatalf("kind change %v", err)
@@ -292,8 +294,121 @@ func TestManagerSeedsBootstrapsAndEdits(t *testing.T) {
 	if got := ids(again.List()); got != "disk,"+seeds {
 		t.Fatalf("reloaded order %s", got)
 	}
-	if hf, _ := again.Get("huggingface"); hf.GetConfig()["token_env"] != "MY_HF_TOKEN" || !hf.GetSeeded() {
+	if hf, _ := again.Get("huggingface"); hf.GetConfig()["token"] != auth.Redacted || !hf.GetSeeded() {
 		t.Fatalf("reloaded %+v", hf)
+	}
+	if src, _ := again.Registry.Get("huggingface"); src.(*Client).Token() != "hf_stored" {
+		t.Fatal("the stored token should survive a restart")
+	}
+}
+
+// The token every read, status, and stored row carries for the seeded hub
+func hubToken(t *testing.T, m *Manager, store *memStore) (read, spec, status, stored, live string) {
+	t.Helper()
+	row, err := m.Get("huggingface")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := m.Registry.Get("huggingface")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := m.Registry.Status(context.Background(), "huggingface")
+	if err != nil || st.GetError() != "" {
+		t.Fatalf("status %v %v", st, err)
+	}
+	return row.GetConfig()["token"], src.Spec().GetConfig()["token"], st.GetSource().GetConfig()["token"], store.rows["huggingface"].GetConfig()["token"], src.(*Client).Token()
+}
+
+func TestSecretsSeedFromEnvAndUpdatesOverride(t *testing.T) {
+	t.Setenv("HF_TOKEN", "hf_from_env")
+	ctx := context.Background()
+	store := &memStore{rows: map[string]*v1.Source{}}
+	m := NewManager(store, nil, nil, t.TempDir())
+	if err := m.Load(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if read, spec, status, stored, live := hubToken(t, m, store); read != auth.Redacted || spec != auth.Redacted || status != auth.Redacted || stored != "" || live != "hf_from_env" {
+		t.Fatalf("seeded by the variable: read=%q spec=%q status=%q stored=%q live=%q", read, spec, status, stored, live)
+	}
+	if src, _ := m.Registry.Get("huggingface"); src.Capabilities(ctx).GetTokenEnv() != "HF_TOKEN" || !src.Capabilities(ctx).GetTokenPresent() {
+		t.Fatalf("capabilities %+v", src.Capabilities(ctx))
+	}
+	// The marker sent back over a seeded token stores nothing
+	if _, err := m.Update(ctx, &v1.Source{Id: "huggingface", Config: map[string]string{"token": auth.Redacted}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, stored, live := hubToken(t, m, store); stored != "" || live != "hf_from_env" {
+		t.Fatalf("marker over a seeded token: stored=%q live=%q", stored, live)
+	}
+	if _, err := m.Update(ctx, &v1.Source{Id: "huggingface", Config: map[string]string{"token": "hf_typed"}}); err != nil {
+		t.Fatal(err)
+	}
+	if read, spec, status, stored, live := hubToken(t, m, store); read != auth.Redacted || spec != auth.Redacted || status != auth.Redacted || stored != "hf_typed" || live != "hf_typed" {
+		t.Fatalf("typed over the variable: read=%q spec=%q status=%q stored=%q live=%q", read, spec, status, stored, live)
+	}
+	// The marker sent back keeps the stored token while other settings change
+	if _, err := m.Update(ctx, &v1.Source{Id: "huggingface", Name: "Hub", Config: map[string]string{"token": auth.Redacted, "endpoint": "https://hf-mirror.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, stored, live := hubToken(t, m, store); stored != "hf_typed" || live != "hf_typed" || store.rows["huggingface"].GetConfig()["endpoint"] != "https://hf-mirror.com" {
+		t.Fatalf("marker over a stored token: stored=%q live=%q", stored, live)
+	}
+	for _, row := range m.List() {
+		for k, v := range row.GetConfig() {
+			if v == "hf_typed" || v == "hf_from_env" {
+				t.Fatalf("%s lists %s in the clear", row.GetId(), k)
+			}
+		}
+	}
+	// A cleared token falls back to the variable
+	if _, err := m.Update(ctx, &v1.Source{Id: "huggingface"}); err != nil {
+		t.Fatal(err)
+	}
+	if read, _, _, stored, live := hubToken(t, m, store); read != auth.Redacted || stored != "" || live != "hf_from_env" {
+		t.Fatalf("cleared back to the variable: read=%q stored=%q live=%q", read, stored, live)
+	}
+	t.Setenv("HF_TOKEN", "")
+	if got := redact(store.rows["huggingface"]).GetConfig()["token"]; got != "" {
+		t.Fatalf("a source with no token reads %q", got)
+	}
+	if got := redact(&v1.Source{Id: "x", Kind: v1.SourceKind(99), Config: map[string]string{"anything": "secret"}}).GetConfig()["anything"]; got != auth.Redacted {
+		t.Fatalf("a source of an unknown kind reads %q", got)
+	}
+	created, err := m.Create(ctx, &v1.Source{Id: "lab", Kind: v1.SourceKind_SOURCE_KIND_GIT, Config: map[string]string{"endpoint": "https://gitlab.com", "token": auth.Redacted, "username": "me"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, has := store.rows["lab"].GetConfig()["token"]; has || store.rows["lab"].GetConfig()["username"] != "me" || created.GetConfig()["username"] != auth.Redacted {
+		t.Fatalf("created %v stored %v", created, store.rows["lab"])
+	}
+}
+
+func TestLoadDropsSettingsNamingVariables(t *testing.T) {
+	t.Setenv("HF_TOKEN", "hf_from_env")
+	t.Setenv("MY_HF_TOKEN", "hf_other")
+	ctx := context.Background()
+	store := &memStore{rows: map[string]*v1.Source{
+		"huggingface": {Id: "huggingface", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Seeded: true, Config: map[string]string{"endpoint": "https://hf-mirror.com", "token_env": "MY_HF_TOKEN"}},
+		"dockerhub":   {Id: "dockerhub", Kind: v1.SourceKind_SOURCE_KIND_OCI, Seeded: true, Config: map[string]string{"endpoint": "https://hub.docker.com", "registry_token_env": "MY_DOCKER"}},
+		"kaggle":      {Id: "kaggle", Kind: v1.SourceKind_SOURCE_KIND_KAGGLE, Seeded: true, Config: map[string]string{"username_env": "ME"}},
+	}}
+	m := NewManager(store, nil, nil, t.TempDir())
+	if err := m.Load(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]int{"huggingface": 1, "dockerhub": 1, "kaggle": 0} {
+		if got := store.rows[id].GetConfig(); len(got) != want {
+			t.Fatalf("%s keeps %v", id, got)
+		}
+	}
+	for _, st := range m.Registry.Statuses(ctx) {
+		if st.GetError() != "" {
+			t.Fatalf("%s: %s", st.GetSource().GetId(), st.GetError())
+		}
+	}
+	if src, _ := m.Registry.Get("huggingface"); src.(*Client).Token() != "hf_from_env" || src.Capabilities(ctx).GetEndpoint() != "https://hf-mirror.com" {
+		t.Fatal("the hub should read its own variable and keep its endpoint")
 	}
 }
 

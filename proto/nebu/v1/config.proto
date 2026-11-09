@@ -132,13 +132,11 @@ message Notify {
   repeated string webhooks = 1;
 }
 
-// Certificate for the API, gateway and metrics listeners, generated when unset and plain HTTP when disabled
+// TLS for the API, gateway and metrics listeners when enabled, the pair generated in data_dir when unset
 message Tls {
-  // A self-signed pair generated in data_dir when both are empty and disabled is false
   string cert_file = 1;
   string key_file = 2;
-  // Serves the API, gateway and metrics listeners in plaintext
-  bool disabled = 3;
+  bool enabled = 3;
 }
 
 // Single sign-on through an OpenID Connect provider. Any provider with a

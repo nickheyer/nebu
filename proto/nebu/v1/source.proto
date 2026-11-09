@@ -31,7 +31,7 @@ enum ConfigType {
   CONFIG_TYPE_STRING = 1;
   CONFIG_TYPE_URL = 2;
   CONFIG_TYPE_PATH = 3;
-  CONFIG_TYPE_ENV = 4;
+  CONFIG_TYPE_SECRET = 4;
   CONFIG_TYPE_BOOL = 5;
   CONFIG_TYPE_INT = 6;
 }
@@ -56,6 +56,8 @@ message ConfigField {
   // available, otherwise the default branch. Clients show it as the placeholder.
   string revision_source = 12;
   string revision_repo = 13;
+  // Environment variable the value comes from while the source stores none.
+  string env = 14;
 }
 
 // Source provider and supported transport settings.

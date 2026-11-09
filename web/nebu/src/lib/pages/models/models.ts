@@ -1,7 +1,8 @@
 import type { Component } from 'svelte';
 import { reason, rpc } from '#lib/api/transport.js';
 import { bytes, enumLabel, num } from '#lib/format.js';
-import { FitVerdict, type GroupPlacement } from '#lib/proto/nebu/v1/estimate_pb.js';
+import { FitVerdict, type GroupPlacement, type MemoryPlan } from '#lib/proto/nebu/v1/estimate_pb.js';
+import { PoolKindSchema } from '#lib/proto/nebu/v1/host_pb.js';
 import { ArtifactRole, ModelKind, ModelKindSchema, TensorGroupKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
 import type { Lamp } from '#lib/ui/status.js';
 import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
@@ -51,8 +52,9 @@ export function paramLabel(n: bigint | number | undefined): string {
 }
 
 export function contextLabel(n: number): string {
-	if (n >= 1024 && n % 1024 === 0) return `${n / 1024}K`;
-	return num(n);
+	if (n < 1024) return num(n);
+	const k = n / 1024;
+	return `${Number.isInteger(k) ? k : k.toFixed(1)}K`;
 }
 
 // A fit verdict in words, what fits, what spills to the host and what will not load
@@ -77,6 +79,13 @@ export function verdictLamp(v: FitVerdict | undefined): Lamp {
 export function placementLabel(p: GroupPlacement): string {
 	const word = enumLabel(TensorGroupKindSchema, p.kind);
 	return p.count > 1 ? `${num(p.count)} ${word.endsWith('s') ? word : `${word}s`}` : word;
+}
+
+// Where a placement sits, the plan's pools of its side by their bar labels, disk when it names no side
+export function placementPool(p: GroupPlacement, plan: MemoryPlan, labels: Map<string, string>): string {
+	if (!p.poolId) return 'disk';
+	const side = plan.pools.filter((u) => enumLabel(PoolKindSchema, u.kind) === p.poolId);
+	return side.map((u) => labels.get(u.poolId) ?? u.poolId).join(', ');
 }
 
 export function sameModel(a: ModelRef, b: ModelRef): boolean {

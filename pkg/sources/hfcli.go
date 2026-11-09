@@ -36,7 +36,7 @@ func newHFCLITransport(cfg map[string]string, env transportEnv) (Transport, erro
 	if _, err := exec.LookPath(cfg["command"]); err != nil {
 		return nil, err
 	}
-	return &HFCLI{command: cfg["command"], endpoint: cfg["endpoint"], token: envValue(cfg, "token_env"), dir: filepath.Join(env.cacheDir, TransportHFCLI)}, nil
+	return &HFCLI{command: cfg["command"], endpoint: cfg["endpoint"], token: cfg["token"], dir: filepath.Join(env.cacheDir, TransportHFCLI)}, nil
 }
 
 // Cannot list, the Hub API does that

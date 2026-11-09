@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
@@ -55,6 +57,12 @@ func (m *Manager) Load(ctx context.Context, bootstrap []*v1.Source) error {
 	have := map[string]bool{}
 	for _, r := range rows {
 		have[r.GetId()] = true
+		if names := dropRetired(r); len(names) > 0 {
+			if err := m.Store.PutSource(ctx, r); err != nil {
+				return err
+			}
+			m.Log.Info("source settings naming environment variables dropped", "id", r.GetId(), "settings", strings.Join(names, ","))
+		}
 	}
 	for _, cfg := range bootstrap {
 		if have[strings.TrimSpace(cfg.GetId())] {
@@ -100,23 +108,23 @@ func (m *Manager) rebuildLocked() error {
 	return m.Registry.Reload(cfgs)
 }
 
-// Lists every source in fallback order
+// Lists every source in fallback order, secrets redacted
 func (m *Manager) List() []*v1.Source {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]*v1.Source, 0, len(m.rows))
 	for _, r := range m.rows {
-		out = append(out, clone(r))
+		out = append(out, redact(r))
 	}
 	return out
 }
 
-// Returns one source by id
+// Returns one source by id, secrets redacted
 func (m *Manager) Get(id string) (*v1.Source, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if i := m.indexLocked(id); i >= 0 {
-		return clone(m.rows[i]), nil
+		return redact(m.rows[i]), nil
 	}
 	return nil, unknownSource(id)
 }
@@ -149,10 +157,10 @@ func (m *Manager) Create(ctx context.Context, in *v1.Source) (*v1.Source, error)
 		return nil, err
 	}
 	m.publish(v1.EventAction_EVENT_ACTION_CREATED, row)
-	return clone(row), nil
+	return redact(row), nil
 }
 
-// Updates source name and settings, preserving ID, kind, and origin.
+// Updates source name and settings, preserving ID, kind, origin, and every secret sent back as the marker
 func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -167,6 +175,7 @@ func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error)
 	next := clone(row)
 	next.Name = strings.TrimSpace(in.GetName())
 	next.Config = trimConfig(in.GetConfig())
+	restore(next.Config, row.GetConfig())
 	next.UpdatedAt = timestamppb.Now()
 	if err := m.Registry.Check(next); err != nil {
 		return nil, err
@@ -179,7 +188,7 @@ func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error)
 		return nil, err
 	}
 	m.publish(v1.EventAction_EVENT_ACTION_UPDATED, next)
-	return clone(next), nil
+	return redact(next), nil
 }
 
 // Removes a source unless it is a seeded default.
@@ -202,12 +211,13 @@ func (m *Manager) Delete(ctx context.Context, id string) (*v1.Source, error) {
 		return nil, err
 	}
 	m.publish(v1.EventAction_EVENT_ACTION_DELETED, row)
-	return clone(row), nil
+	return redact(row), nil
 }
 
+// Publishes a source change with its secrets redacted
 func (m *Manager) publish(action v1.EventAction, s *v1.Source) {
 	if m.Events != nil {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_SOURCE, action, s.GetId(), s)
+		m.Events.Publish(v1.EventKind_EVENT_KIND_SOURCE, action, s.GetId(), redact(s))
 	}
 }
 
@@ -221,6 +231,7 @@ func (m *Manager) prepare(in *v1.Source, build bool) (*v1.Source, error) {
 	row.Id = id
 	row.Name = strings.TrimSpace(in.GetName())
 	row.Config = trimConfig(in.GetConfig())
+	restore(row.Config, nil)
 	row.Seeded = false
 	now := timestamppb.Now()
 	row.CreatedAt, row.UpdatedAt = now, now
@@ -267,3 +278,55 @@ func sortRows(rows []*v1.Source) {
 }
 
 func clone(s *v1.Source) *v1.Source { return proto.Clone(s).(*v1.Source) }
+
+// Copies a source with every secret in effect, stored or seeded by its variable, standing as the marker
+func redact(s *v1.Source) *v1.Source {
+	out := clone(s)
+	cat, ok := catalogs[s.GetKind()]
+	if !ok {
+		for k := range out.GetConfig() {
+			out.Config[k] = auth.Redacted
+		}
+		return out
+	}
+	for _, f := range cat.Fields() {
+		if f.GetType() != v1.ConfigType_CONFIG_TYPE_SECRET {
+			continue
+		}
+		if out.GetConfig()[f.GetName()] == "" && (f.GetEnv() == "" || os.Getenv(f.GetEnv()) == "") {
+			continue
+		}
+		if out.Config == nil {
+			out.Config = map[string]string{}
+		}
+		out.Config[f.GetName()] = auth.Redacted
+	}
+	return out
+}
+
+// Puts stored secrets back wherever settings carry the marker, dropping a marker with nothing stored behind it
+func restore(cfg, stored map[string]string) {
+	for k, v := range cfg {
+		if v != auth.Redacted {
+			continue
+		}
+		if kept, ok := stored[k]; ok {
+			cfg[k] = kept
+		} else {
+			delete(cfg, k)
+		}
+	}
+}
+
+// Removes the settings that once named environment variables from a stored row, returning their names
+func dropRetired(row *v1.Source) []string {
+	var names []string
+	for k := range row.GetConfig() {
+		if strings.HasSuffix(k, "token_env") || strings.HasSuffix(k, "username_env") {
+			delete(row.Config, k)
+			names = append(names, k)
+		}
+	}
+	sort.Strings(names)
+	return names
+}

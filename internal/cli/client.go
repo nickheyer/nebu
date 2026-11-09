@@ -259,15 +259,15 @@ func (e *env) resolveAddr() string {
 	return addr
 }
 
-// Prefixes a bare address with the scheme the daemon serves, https unless tls.disabled is set
+// Prefixes a bare address with the scheme the daemon serves, https when tls.enabled is set
 func (e *env) base(addr string) string {
 	if strings.Contains(addr, "://") {
 		return addr
 	}
-	if e.cfg.GetTls().GetDisabled() {
-		return "http://" + addr
+	if e.cfg.GetTls().GetEnabled() {
+		return "https://" + addr
 	}
-	return "https://" + addr
+	return "http://" + addr
 }
 
 // Swaps an unspecified host for one this machine can dial

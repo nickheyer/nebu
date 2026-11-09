@@ -24,7 +24,7 @@
 	let error = $state('');
 	const task = $derived(live.tasks.get(id) ?? fetched);
 	const link = $derived(task ? madeLink(task) : undefined);
-	const labels = $derived(task ? Object.entries(task.labels).map(([k, v]) => `${k}=${v}`).join(' ') : '');
+	const labels = $derived(task ? Object.entries(task.labels).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join(' ') : '');
 
 	// Fetches a task the live mirror does not hold
 	$effect(() => {

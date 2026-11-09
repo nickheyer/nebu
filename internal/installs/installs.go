@@ -490,7 +490,8 @@ func (m *Manager) download(ctx context.Context, h *tasks.Handle, rt runtimes.Run
 	h.ProgressBytes(0, total, "downloading")
 	for _, a := range rel.assets {
 		h.Message("downloading " + a.name)
-		reused, err := m.Fetcher.Land(ctx, a.blob, filepath.Join(dir, a.name), func(d int64) { h.Add(d) })
+		noted := transfer.WithNotes(ctx, func(line string) { h.Logf("%s: %s", a.name, line) })
+		reused, err := m.Fetcher.Land(noted, a.blob, filepath.Join(dir, a.name), func(d int64) { h.Add(d) })
 		if err != nil {
 			return err
 		}

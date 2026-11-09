@@ -45,7 +45,7 @@ func serveConfigured(t *testing.T, extra string, before func(*Daemon)) *served {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	body := fmt.Sprintf("listen: 127.0.0.1:0\ndata_dir: %s\ncache_dir: %s\nmin_free_bytes: 0\ntls:\n  disabled: true\nweb:\n  disabled: true\n%s", filepath.Join(dir, "data"), filepath.Join(dir, "cache"), extra)
+	body := fmt.Sprintf("listen: 127.0.0.1:0\ndata_dir: %s\ncache_dir: %s\nmin_free_bytes: 0\nweb:\n  disabled: true\n%s", filepath.Join(dir, "data"), filepath.Join(dir, "cache"), extra)
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

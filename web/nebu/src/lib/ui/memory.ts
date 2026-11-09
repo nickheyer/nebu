@@ -13,6 +13,7 @@ export type PoolBar = {
 	total: number;
 	free: number;
 	used: number;
+	planned: number;
 	segments: Segment[];
 	devices: Device[];
 };
@@ -89,22 +90,23 @@ export function poolBars(profile: HostProfile | undefined, instances: Iterable<I
 			segments.push({ kind: 'reservation', label: `reserved ${slot.name}`, bytes: n });
 		}
 		// A plan past the room left shows the part that fits hatched and the excess as over
+		let want = 0;
 		if (plan) {
 			const planned = plan.pools.find((p) => p.poolId === pool.id);
 			if (planned && planned.usedBytes > 0n) {
-				const want = Number(planned.usedBytes);
+				want = Number(planned.usedBytes);
 				const room = Math.max(0, total - used - reserved);
 				const over = Math.max(0, want - room);
 				if (want - over > 0) segments.push({ kind: 'planned', label: 'planned', bytes: want - over });
 				if (over > 0) segments.push({ kind: 'warning', label: 'over', bytes: over });
 			}
 		}
-		segments.push({ kind: 'free', label: 'free', bytes: Math.max(0, free - reserved) });
+		segments.push({ kind: 'free', label: 'free', bytes: Math.max(0, free - reserved - want) });
 		const cpu = devices.find((d) => d.kind === DeviceKind.CPU);
 		// The bar wears its device's label, GPU0 or CPU, a unified pool its own word
 		const label = pool.kind === PoolKind.UNIFIED ? poolTitle(pool.kind) : devices[0] ? deviceLabel(profile, devices[0]) : pool.kind === PoolKind.DEVICE ? pool.id : poolTitle(pool.kind);
 		const name = pool.kind === PoolKind.DEVICE ? (devices[0]?.name ?? '') : devices.map((d) => d.name).filter(Boolean).join(', ') || (cpu?.name ?? '');
-		return { id: pool.id, kind: pool.kind, label, name, total, free, used, segments, devices };
+		return { id: pool.id, kind: pool.kind, label, name, total, free, used, planned: want, segments, devices };
 	});
 }
 

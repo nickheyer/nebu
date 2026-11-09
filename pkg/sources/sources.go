@@ -246,12 +246,12 @@ func (r *Registry) Reload(cfgs []*v1.Source) error {
 		}
 		var src Source
 		// Reuse unchanged clients and retry broken ones.
-		if old, ok := previous[cfg.GetId()].(*Client); ok && proto.Equal(old.Spec(), cfg) {
+		if old, ok := previous[cfg.GetId()].(*Client); ok && proto.Equal(old.raw, cfg) {
 			src = old
 		} else if cat, ok := catalogs[cfg.GetKind()]; !ok {
-			src = &broken{spec: cfg, err: fmt.Errorf("source %s: unsupported kind %s", cfg.GetId(), cfg.GetKind())}
+			src = &broken{spec: redact(cfg), err: fmt.Errorf("source %s: unsupported kind %s", cfg.GetId(), cfg.GetKind())}
 		} else if c, err := newClient(cat, cfg, r.CacheDir); err != nil {
-			src = &broken{spec: cfg, err: fmt.Errorf("source %s: %w", cfg.GetId(), err)}
+			src = &broken{spec: redact(cfg), err: fmt.Errorf("source %s: %w", cfg.GetId(), err)}
 		} else {
 			src = c
 		}

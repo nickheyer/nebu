@@ -5,6 +5,7 @@
 		id: string;
 		label: string;
 		value: string;
+		unit: string;
 		detail: string;
 		href: string;
 		lamp?: Lamp;
@@ -38,7 +39,7 @@
 			<li class="stage" class:empty={!s.done} class:next={i === firstEmpty}>
 				<a class="body" href={s.href}>
 					<span class="label">{#if s.lamp}<Dot lamp={s.lamp} size={8} />{/if}{s.label}</span>
-					<span class="value">{s.value}</span>
+					<span class="value">{s.value}<span class="unit">{s.unit}</span></span>
 					{#if s.detail}<span class="detail">{s.detail}</span>{/if}
 				</a>
 				{#if s.spark?.some((v) => v > 0)}
@@ -72,7 +73,7 @@
 	}
 	@container (min-width: 860px) {
 		.pipe {
-			grid-template-columns: minmax(0, 1fr) 40px minmax(0, 1fr) 40px minmax(0, 1fr) 40px minmax(0, 1fr) 40px minmax(0, 1fr);
+			grid-template-columns: repeat(4, minmax(0, max-content) minmax(40px, 1fr)) minmax(0, max-content);
 			gap: 0;
 		}
 	}
@@ -84,12 +85,13 @@
 			display: flex;
 			align-items: center;
 			align-self: start;
+			justify-content: center;
 			height: 72px;
 			color: var(--nebu-border-strong);
 		}
 	}
 	.wire {
-		flex: 1 1 auto;
+		flex: 0 0 26px;
 		height: 2px;
 		background: repeating-linear-gradient(90deg, var(--nebu-border-strong) 0 4px, transparent 4px 8px);
 		border-radius: 2px;
@@ -142,7 +144,14 @@
 		text-overflow: ellipsis;
 		transition: color var(--nebu-fast) var(--nebu-ease);
 	}
-	.empty .value {
+	.unit {
+		margin-left: 6px;
+		font-size: var(--nebu-text-secondary);
+		font-weight: 400;
+		color: var(--nebu-text-muted);
+	}
+	.empty .value,
+	.empty .unit {
 		color: var(--nebu-text-faint);
 	}
 	.next .value {

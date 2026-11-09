@@ -104,7 +104,7 @@ func TestSlotsRoutesRoundTrip(t *testing.T) {
 func TestSourcesRoundTrip(t *testing.T) {
 	d, _ := open(t)
 	ctx := context.Background()
-	s := &v1.Source{Id: "hf-mirror", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Name: "Mirror", Config: map[string]string{"endpoint": "https://hf-mirror.com", "token_env": "HF_TOKEN"}, Seeded: false, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0))}
+	s := &v1.Source{Id: "hf-mirror", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Name: "Mirror", Config: map[string]string{"endpoint": "https://hf-mirror.com", "token": "hf_stored"}, Seeded: false, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0))}
 	seed := &v1.Source{Id: "huggingface", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Name: "Hugging Face", Seeded: true, CreatedAt: timestamppb.New(time.Unix(3, 0)), UpdatedAt: timestamppb.New(time.Unix(3, 0))}
 	for _, in := range []*v1.Source{s, seed} {
 		if err := d.PutSource(ctx, in); err != nil {

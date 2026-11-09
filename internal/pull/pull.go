@@ -575,7 +575,8 @@ func (p *Puller) fetch(ctx context.Context, h *tasks.Handle, src sources.Source,
 		return store.Digest(a.GetSha256()), nil
 	}
 	h.Message("downloading " + a.GetPath())
-	hexDigest, err := p.Fetcher.Fetch(ctx, blob, p.Store.PartialPath(key), a.GetSha256(), func(d int64) { h.Add(d) })
+	noted := transfer.WithNotes(ctx, func(line string) { h.Logf("%s: %s", a.GetPath(), line) })
+	hexDigest, err := p.Fetcher.Fetch(noted, blob, p.Store.PartialPath(key), a.GetSha256(), func(d int64) { h.Add(d) })
 	if err != nil {
 		return "", err
 	}

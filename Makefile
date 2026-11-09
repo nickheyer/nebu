@@ -43,7 +43,7 @@ dev: clean web
 	@trap 'echo "Stopping processes..."; kill $$(jobs -p) 2>/dev/null; wait; exit' INT TERM; \
 	cd $(WEB) && npm run dev & \
 	FRONTEND_PID=$$!; \
-	NEBU_TLS_DISABLED=true ./build/nebu-dev serve & \
+	./build/nebu-dev serve & \
 	BACKEND_PID=$$!; \
 	wait $$BACKEND_PID $$FRONTEND_PID
 

@@ -29,7 +29,12 @@ const ReasonPoolNotPublished = "PoolNotPublished"
 // The routing mode an imported pool is configured with, its own over the mesh default over endpoint
 func (m *Manager) routingMode(poolID string) string {
 	cfg := m.Config
-	mode := strings.ToLower(strings.TrimSpace(cfg.GetImportRouting()[poolID]))
+	mode := ""
+	for id, routing := range cfg.GetImportRouting() {
+		if strings.EqualFold(id, poolID) {
+			mode = strings.ToLower(strings.TrimSpace(routing))
+		}
+	}
 	if mode == "" {
 		mode = strings.ToLower(strings.TrimSpace(cfg.GetRoutingMode()))
 	}

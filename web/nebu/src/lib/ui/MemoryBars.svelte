@@ -10,7 +10,7 @@
 	import Str from '#lib/ui/Str.svelte';
 	import { poolBars, type PoolBar } from '#lib/ui/memory.js';
 
-	// One row per memory pool with its label, devices, bar and used over total
+	// One row per memory pool with its label, devices, bar and used plus planned over total
 	let {
 		profile,
 		instances = [],
@@ -53,7 +53,7 @@
 				<div class="track">
 					<Bar segments={bar.segments} total={bar.total} format={(n) => bytes(n)} />
 				</div>
-				<span class="used">{bytesIn(bar.used, bar.total)}<span class="of">{thin}/{thin}{bytesIn(bar.total, bar.total)}{thin}{byteUnit(bar.total)}</span></span>
+				<span class="used">{bytesIn(bar.used + bar.planned, bar.total)}<span class="of">{thin}/{thin}{bytesIn(bar.total, bar.total)}{thin}{byteUnit(bar.total)}</span></span>
 			</div>
 		</div>
 		{#if expand && expanded.has(bar.id)}

@@ -10,7 +10,7 @@
 </script>
 
 <div class="rows" class:dense>
-	{#each shown as r (r.label)}
+	{#each shown as r, i (i)}
 		<div class="kv">
 			<span class="k">{capitalize(r.label)}</span>
 			<span class="vcell">

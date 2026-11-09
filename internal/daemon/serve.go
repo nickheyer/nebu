@@ -28,7 +28,7 @@ const (
 // Returns the API handler for in process or network use
 func (d *Daemon) Handler() http.Handler { return d.handler }
 
-// Binds the API listener, then recovers and serves every listener until ctx ends, over TLS unless tls.disabled is set
+// Binds the API listener, then recovers and serves every listener until ctx ends, over TLS when tls.enabled is set
 func (d *Daemon) ListenAndServe(ctx context.Context) error {
 	d.secure = d.tls != nil
 	ln, err := d.listen(d.Config.GetListen())
@@ -41,7 +41,7 @@ func (d *Daemon) ListenAndServe(ctx context.Context) error {
 	return d.Serve(ctx, ln)
 }
 
-// Binds an address under the listener certificate, plaintext when tls.disabled is set
+// Binds an address under the listener certificate, plaintext unless tls.enabled is set
 func (d *Daemon) listen(addr string) (net.Listener, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil || d.tls == nil {
@@ -317,15 +317,14 @@ func (d *Daemon) abandon() {
 	}
 }
 
-// The listener certificate, generated in data_dir when tls names none, nil when tls.disabled chooses plaintext
+// The listener certificate when tls.enabled is set, generated in data_dir when tls names none, nil for plaintext
 func (d *Daemon) tlsConfig() (*tls.Config, error) {
 	config.DeriveTLS(d.Config)
 	t := d.Config.GetTls()
-	if t.GetDisabled() {
+	if !t.GetEnabled() {
 		if t.GetCertFile() != "" || t.GetKeyFile() != "" {
-			return nil, errors.New("tls.disabled is set beside tls.cert_file or tls.key_file, keep one")
+			return nil, errors.New("tls.cert_file or tls.key_file is set without tls.enabled, set it or remove them")
 		}
-		d.Log.Warn("tls.disabled is set, the API, gateway and metrics listeners serve plaintext")
 		return nil, nil
 	}
 	generatedCert, generatedKey := filepath.Join(d.Config.GetDataDir(), config.CertFile), filepath.Join(d.Config.GetDataDir(), config.KeyFile)
@@ -361,7 +360,7 @@ func (d *Daemon) warnExposure(secure bool) {
 			d.Log.Warn("the scheduler listener answers schedule calls from any caller beyond loopback, keep it on a network only gateways reach", "addr", addr)
 		}
 		if !secure {
-			d.Log.Warn("plaintext listener beyond loopback, tls.disabled is set, remove it or put a TLS reverse proxy in front", "addr", addr)
+			d.Log.Warn("plaintext listener beyond loopback, set tls.enabled or put a TLS reverse proxy in front", "addr", addr)
 		}
 		if addr == api && d.Sessions == nil {
 			d.Log.Warn("public API listener with auth.disabled. Anyone with network access can control the daemon", "addr", addr)

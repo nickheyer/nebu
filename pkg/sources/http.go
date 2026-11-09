@@ -79,11 +79,11 @@ func newHTTPTransport(cfg map[string]string, _ transportEnv) (Transport, error) 
 	if cfg["endpoint"] == "" {
 		return nil, nil
 	}
-	h, err := NewHTTP(cfg["endpoint"], envValue(cfg, "token_env"))
+	h, err := NewHTTP(cfg["endpoint"], cfg["token"])
 	if err != nil {
 		return nil, err
 	}
-	if user := envValue(cfg, "username_env"); user != "" && h.token != "" {
+	if user := cfg["username"]; user != "" && h.token != "" {
 		h.UseBasic(user)
 	}
 	return h, nil

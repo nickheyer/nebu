@@ -126,7 +126,7 @@ p.unmeasured {
 	color: var(--nebu-screen-text-muted);
 }
 
-/* Motion. Blocks and rows settle into place from a few pixels below, the blur clearing as they land. Off with the appearance toggle. */
+/* Motion. Blocks and rows settle into place from a few pixels below, the blur clearing as they land. */
 @keyframes nebu-reveal {
 	from {
 		opacity: 0;

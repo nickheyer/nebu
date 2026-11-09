@@ -16,7 +16,7 @@
 	}
 </script>
 
-<NeoTooltip bind:open {placement} elevation={2} filled portal flipOptions={{ fallbackAxisSideDirection: 'none' }} openOnHover={false} openOnFocus={false} openOnClick padding="12px" {width} triggerProps={{ tag: 'span', class: 'tip' }}>
+<NeoTooltip bind:open {placement} elevation={2} filled portal flipOptions={{ fallbackAxisSideDirection: 'none' }} openOnHover={false} openOnFocus={false} openOnClick padding="12px" {width} height="available" style="overflow: hidden auto" triggerProps={{ tag: 'span', class: 'tip' }}>
 	{#snippet tooltip()}
 		<div class="pop">{@render content(close)}</div>
 	{/snippet}

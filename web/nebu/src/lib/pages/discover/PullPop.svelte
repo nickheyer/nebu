@@ -83,7 +83,7 @@
 	}
 </script>
 
-<Pop bind:open placement="bottom-end" width="22rem">
+<Pop bind:open placement="bottom-end" width="26rem">
 	{#snippet content()}
 		{#if partsError}
 			<Empty icon={PuzzlePieceIcon} text="Parts failed to list" hint={partsError} />
@@ -96,8 +96,6 @@
 				label="Parts"
 				info="Components these weights need that the node lacks, each pulled alongside, none when all are unticked"
 			/>
-		{:else}
-			<span class="secondary">Every part these weights need is stored</span>
 		{/if}
 		<div class="foot">
 			<Tip facts={[{ label: 'weights', value: bytes(groupBytes) }, { label: 'parts', value: bytes(partsBytes) }]} tag="span">
@@ -108,15 +106,16 @@
 			<NeoButton class="primary" elevation={2} loading={pulling} disabled={!partsRes} onclick={() => pull(true)}>Pull and launch</NeoButton>
 		</div>
 	{/snippet}
-	<RowAction label="Pull" loading={pulling} onclick={() => (open = !open)} />
+	<RowAction label="Pull" loading={pulling} />
 </Pop>
 
 <style>
 	.foot {
 		display: flex;
-		flex-wrap: wrap;
 		gap: var(--nebu-space-3);
 		align-items: center;
+	}
+	.foot:not(:first-child) {
 		padding-top: var(--nebu-space-2);
 		border-top: 1px solid var(--nebu-border);
 	}

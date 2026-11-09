@@ -21,7 +21,7 @@ var github = &Catalog{
 	Name: "GitHub",
 	Transports: []Use{
 		httpUse("https://api.github.com", "GITHUB_TOKEN"),
-		{Kind: TransportGit, Name: "git", Fields: map[string]string{"endpoint": "https://github.com", "token_env": "GITHUB_TOKEN"}},
+		{Kind: TransportGit, Name: "git", Fields: map[string]string{"endpoint": "https://github.com", "token": "GITHUB_TOKEN"}},
 	},
 	Web:           "https://github.com",
 	Description:   "GitHub, release assets and repositories with LFS weights",
@@ -104,18 +104,18 @@ type githubAPI struct{}
 type ghItem struct {
 	FullName      string   `json:"full_name"`
 	DefaultBranch string   `json:"default_branch"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	HTMLURL     string   `json:"html_url"`
-	Stars       uint64   `json:"stargazers_count"`
-	Forks       uint64   `json:"forks_count"`
-	Language    string   `json:"language"`
-	Topics      []string `json:"topics"`
-	PushedAt    string   `json:"pushed_at"`
-	CreatedAt   string   `json:"created_at"`
-	Private     bool     `json:"private"`
-	Archived    bool     `json:"archived"`
-	Owner       struct {
+	Name          string   `json:"name"`
+	Description   string   `json:"description"`
+	HTMLURL       string   `json:"html_url"`
+	Stars         uint64   `json:"stargazers_count"`
+	Forks         uint64   `json:"forks_count"`
+	Language      string   `json:"language"`
+	Topics        []string `json:"topics"`
+	PushedAt      string   `json:"pushed_at"`
+	CreatedAt     string   `json:"created_at"`
+	Private       bool     `json:"private"`
+	Archived      bool     `json:"archived"`
+	Owner         struct {
 		Login string `json:"login"`
 	} `json:"owner"`
 	License *struct {

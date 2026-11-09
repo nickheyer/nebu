@@ -26,7 +26,7 @@ var huggingface = &Catalog{
 	Name: "Hugging Face",
 	Transports: []Use{
 		httpUse("https://huggingface.co", "HF_TOKEN"),
-		{Kind: TransportHFCLI, Name: "cli", Fields: map[string]string{"command": ""}, Inherit: []string{"endpoint", "token_env"}},
+		{Kind: TransportHFCLI, Name: "cli", Fields: map[string]string{"command": ""}, Inherit: []string{"endpoint", "token"}},
 	},
 	Description:   "Hugging Face Hub, and any hub that speaks its API",
 	RepoExample:   "org/model",
