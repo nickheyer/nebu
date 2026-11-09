@@ -200,9 +200,11 @@ p.unmeasured {
 	--neo-btn-text-color-disabled: var(--nebu-disabled-text);
 	--neo-btn-border-color-disabled: transparent;
 }
+/* A disabled primary keeps its accent at a fraction so it still reads as the one way forward */
 .neo-button.primary:disabled,
 .neo-button.primary[disabled='true'] {
-	--neo-btn-bg-color: var(--nebu-disabled-fill);
+	--neo-btn-bg-color: color-mix(in srgb, var(--neo-color-primary) 28%, var(--neo-background-color));
+	--neo-btn-text-color-disabled: color-mix(in srgb, var(--neo-background-color) 55%, var(--neo-color-primary));
 	--neo-btn-box-shadow: var(--neo-box-shadow-flat);
 }
 
@@ -251,6 +253,18 @@ p.unmeasured {
 	min-height: var(--nebu-input-height);
 }
 
+/* A placeholder sits a step under typed text, so a standing default never reads as a value */
+.neo-input::placeholder {
+	color: var(--nebu-text-faint);
+	opacity: 1;
+}
+/* A select's box is read only, so it shows a pointer and no caret */
+.neo-input-group.neo-readonly .neo-input,
+.neo-input-group.neo-pointer .neo-input {
+	caret-color: transparent;
+	cursor: pointer;
+}
+
 /* Number boxes step with their own buttons or a slider, never the native spinner */
 input[type='number'] {
 	appearance: textfield;
@@ -261,9 +275,19 @@ input[type='number']::-webkit-outer-spin-button {
 	appearance: none;
 }
 
-/* Dialogs and drawers carry the machined edge of every raised surface */
+/* Tooltips, popovers and option lists mount at the document root, so they stack over dialogs and never clip inside a card */
+.neo-tooltip {
+	--neo-tooltip-z-index: calc(var(--neo-z-index-layer-top) + 10);
+}
+
+/* A field's message slides out from under its box, so the pair forms its own stacking context and the message stays over the surface behind */
+.neo-validation-group-wrapper {
+	isolation: isolate;
+}
+
+/* A dialog floats on its shadow alone, its border the one edge it shows */
 .neo-dialog {
-	box-shadow: var(--neo-dialog-box-shadow, var(--neo-glass-box-shadow-raised-1)), var(--nebu-machined);
+	box-shadow: var(--neo-dialog-box-shadow, var(--neo-glass-box-shadow-raised-1));
 }
 
 /* A dialog lays its content out as a flex row, the content filling the width the dialog is given */

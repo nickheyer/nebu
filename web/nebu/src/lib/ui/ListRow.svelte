@@ -75,13 +75,11 @@
 	let width = $state(0);
 	const compact = $derived(list ? list.compact : width > 0 && width < compactBelow);
 	const shownFacts = $derived(list ? facts.slice(0, 2) : facts.filter((f) => f.value !== '').slice(0, 2));
-	const dropped = $derived(compact && (secondary !== undefined || facts.some((f) => f.value !== '')));
+	const dropped = $derived(compact && (secondary !== undefined || facts.slice(1).some((f) => f.value !== '')));
 	const expandable = $derived(expand !== undefined || dropped);
 	const clickable = $derived(href !== undefined || onclick !== undefined);
 	const primaryWidthCh = $derived(primaryWidth ?? (primaryKind === 'repo' || primaryKind === 'path' ? '40ch' : primaryKind === 'message' ? '64ch' : '24ch'));
 	const primaryBasis = $derived(toPx(primaryWidthCh));
-	// A wide row without an instrument lends the name more room
-	const primaryMax = $derived(primaryWidthCh.endsWith('ch') ? toPx(`${Math.round(Number(primaryWidthCh.slice(0, -2)) * 1.6)}ch`) : primaryWidthCh);
 	const secondaryBasis = $derived(toPx(secondaryWidth));
 
 	$effect(() => {
@@ -149,7 +147,7 @@
 				{#if dropped}
 					<div class="dropped">
 						{#if secondary !== undefined}<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" />{/if}
-						{#each facts.filter((f) => f.value !== '') as f, i (i)}<span class="fact" class:mono={f.mono}>{f.value}</span>{/each}
+						{#each facts.slice(1).filter((f) => f.value !== '') as f, i (i)}<span class="fact" class:mono={f.mono}>{f.value}</span>{/each}
 					</div>
 				{/if}
 				{@render expand?.()}
@@ -169,9 +167,7 @@
 				<span class="cell secondary-col">{#if secondary !== undefined}<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" />{/if}</span>
 			{/if}
 			{#if list.has('instrument')}<span class="cell instrument">{#if instrument}{@render instrument()}{/if}</span>{/if}
-			{#if !list.compact}
-				{#each { length: list.factCount } as _, i (i)}<span class="cell end">{@render fact(shownFacts[i])}</span>{/each}
-			{/if}
+			{#each { length: list.shownFacts } as _, i (i)}<span class="cell end">{@render fact(shownFacts[i])}</span>{/each}
 			{#if list.has('action')}<span class="cell end action">{#if action}{@render action()}{/if}</span>{/if}
 			{#if list.has('menu')}<span class="cell">{#if menu?.length}<Menu items={menu} />{/if}</span>{/if}
 			{#if list.has('caret')}<span class="cell">{#if expandable}{@render caret()}{/if}</span>{/if}
@@ -184,7 +180,7 @@
 		<div class="listrow flex" class:clickable role={clickable && !href ? 'button' : undefined} tabindex={clickable && !href ? 0 : undefined} aria-pressed={clickable && !href && selected ? true : undefined} onclick={activate} onkeydown={clickable && !href ? keyActivate : undefined}>
 			{#if leading}<span class="leading">{@render leading()}</span>{/if}
 			{#if lamp}<Dot {lamp} {shape} />{/if}
-			<span class="primary" style:flex-basis={compact ? 'auto' : primaryBasis} style:flex-grow={instrument ? 0 : 1} style:max-width={compact ? '100%' : primaryMax}>
+			<span class="primary" style:flex-basis={compact ? 'auto' : primaryBasis} style:flex-grow={instrument ? 0 : 1}>
 				{@render name()}
 			</span>
 			{#if !compact && secondary !== undefined}
@@ -197,9 +193,7 @@
 			{:else}
 				<span class="fill"></span>
 			{/if}
-			{#if !compact}
-				{#each shownFacts as f, i (i)}{@render fact(f)}{/each}
-			{/if}
+			{#each compact ? shownFacts.slice(0, 1) : shownFacts as f, i (i)}{@render fact(f)}{/each}
 			{#if action}<span class="action">{@render action()}</span>{/if}
 			{#if menu?.length}<Menu items={menu} />{/if}
 			{#if expandable}{@render caret()}{/if}
@@ -368,7 +362,7 @@
 		flex-direction: column;
 		gap: var(--nebu-space-2);
 		padding: var(--nebu-space-1) var(--nebu-row-inset, var(--nebu-space-2)) var(--nebu-space-3) calc(var(--nebu-row-inset, var(--nebu-space-2)) + 20px);
-		animation: nebu-reveal 240ms var(--nebu-settle) both;
+		animation: nebu-reveal 240ms var(--nebu-settle) backwards;
 	}
 	.dropped {
 		display: flex;

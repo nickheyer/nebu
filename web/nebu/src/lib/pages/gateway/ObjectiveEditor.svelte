@@ -64,12 +64,12 @@
 <Stack gap={24}>
 	<FormSection>
 		<FieldRow>
-			<Text bind:value={name} label="Name" required readonly={editing} max={64} />
-			<Slider bind:value={priority} min={-1000} max={1000} label="Priority" />
+			<Text bind:value={name} label="Name" info="How routes refer to the objective, fixed once created" required readonly={editing} max={64} />
+			<Slider bind:value={priority} min={-1000} max={1000} label="Priority" info="Higher sheds later under saturation, zero the default band" />
 		</FieldRow>
-		<FieldRow>
-			<Duration bind:value={ttft} base="ms" max={3_600_000} label="Time to first token" emptyZero />
-			<Duration bind:value={tpot} base="ms" max={3_600_000} label="Time per output token" emptyZero />
+		<FieldRow wide>
+			<Duration bind:value={ttft} base="ms" max={3_600_000} label="Time to first token" info="Target latency to the first token" emptyZero />
+			<Duration bind:value={tpot} base="ms" max={3_600_000} label="Time per output token" info="Target latency per generated token" emptyZero />
 		</FieldRow>
 	</FormSection>
 	{#if current?.status?.conditions.length}

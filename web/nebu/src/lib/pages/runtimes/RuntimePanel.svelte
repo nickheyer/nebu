@@ -5,7 +5,7 @@
 	import { NeoProgressBar } from '#lib/neo/progress/index.js';
 	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { isCancel, reason, rpc } from '#lib/api/transport.js';
-	import { capitalize, duration, enumLabel, percent, shortId, when } from '#lib/format.js';
+	import { capitalize, duration, enumLabel, factLabel, percent, shortId, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { SandboxKind, SandboxKindSchema, type Build, type RecipeStatus, type Var } from '#lib/proto/nebu/v1/recipe_pb.js';
@@ -104,10 +104,21 @@
 	const recipe = $derived(option?.recipe ?? recipes.find((r) => r.recipe?.runtimeId === id));
 	const variants = $derived((recipe?.recipe?.variants ?? []).map((v) => ({ value: v.id, label: v.id, description: unsupported(v) ? v.requires : v.description, disabled: unsupported(v) })));
 	const absent = $derived(recipe?.absentTools ?? []);
+	const chosen = $derived(recipe?.recipe?.variants.find((v) => v.id === variant));
+	// Tools the chosen variant needs that this host lacks, none inside a container which brings its own
+	const missing = $derived(sandbox === SandboxKind.HOST ? [...(recipe?.recipe?.tools ?? []), ...(chosen?.tools ?? [])].filter((t) => absent.includes(t)) : []);
+	// What an empty ref builds, the latest release of a GitHub source or the default branch of a repository
+	const refHint = $derived(recipe?.recipe?.source.startsWith('github.com/') ? 'Latest release' : 'Default branch');
 
 	// A variant with requirements this host lacks
 	function unsupported(v: { vars: Record<string, string>; requires: string }): boolean {
 		return Object.keys(v.vars).length === 0 && v.requires !== '';
+	}
+
+	// Names the lacking tools in a sentence, such as hipcc and cmake
+	function missingText(tools: string[]): string {
+		const list = tools.length > 1 ? `${tools.slice(0, -1).join(', ')} and ${tools[tools.length - 1]}` : tools[0];
+		return `Needs ${list}, which this host lacks`;
 	}
 
 	type BuildField = { kind: 'variant' | 'sandbox' | 'image' | 'ref' | 'force' } | { kind: 'var'; v: Var };
@@ -299,21 +310,21 @@
 
 {#snippet buildField(f: BuildField)}
 	{#if f.kind === 'variant'}
-		<Select bind:value={variant} options={variants} label="Variant" />
+		<Select bind:value={variant} options={variants} label="Variant" info="The build flavour for this host" />
 	{:else if f.kind === 'sandbox'}
-		<Segmented bind:value={sandbox} options={[{ value: SandboxKind.HOST, label: 'Host' }, { value: SandboxKind.OCI, label: 'OCI' }]} label="Sandbox" />
+		<Segmented bind:value={sandbox} options={[{ value: SandboxKind.HOST, label: 'Host' }, { value: SandboxKind.OCI, label: 'OCI' }]} label="Sandbox" info="Build on the host or inside a container" />
 	{:else if f.kind === 'image'}
-		<Text bind:value={image} label="Image" placeholder={recipe?.sandboxCli || undefined} mono />
+		<Text bind:value={image} label="Image" info="Container image the build runs in" placeholder={recipe?.sandboxCli || undefined} mono />
 	{:else if f.kind === 'ref'}
-		<Text bind:value={ref} label="Ref" max={64} mono>{#snippet before()}<TagIcon size={16} aria-label="Latest release" />{/snippet}</Text>
+		<Text bind:value={ref} label="Ref" info="Branch, tag or commit to build" placeholder={refHint} max={64} mono>{#snippet before()}<TagIcon size={16} aria-label={refHint} />{/snippet}</Text>
 	{:else if f.kind === 'force'}
-		<Switch bind:checked={force} label="Rebuild" />
+		<Switch bind:checked={force} label="Rebuild" info="Builds again even when this ref is built already" top />
 	{:else if f.kind === 'var'}
 		{@const v = f.v}
 		{#if v.choices.length}
-			<Select value={vars[v.name] || v.default} options={v.choices.map((c) => ({ value: c, label: c }))} label={v.label || v.name} onchange={(x) => (vars[v.name] = x ?? '')} />
+			<Select value={vars[v.name] || v.default} options={v.choices.map((c) => ({ value: c, label: c }))} label={v.label || v.name} info={v.description || undefined} onchange={(x) => (vars[v.name] = x ?? '')} />
 		{:else}
-			<Text value={vars[v.name] ?? ''} label={v.label || v.name} placeholder={v.default} onchange={(x) => (vars[v.name] = x)} />
+			<Text value={vars[v.name] ?? ''} label={v.label || v.name} info={v.description || undefined} placeholder={v.default || v.description} onchange={(x) => (vars[v.name] = x)} />
 		{/if}
 	{/if}
 {/snippet}
@@ -342,9 +353,9 @@
 		<Stack gap={24}>
 			<FormSection>
 				{#if methods.length > 4}
-					<Select bind:value={method} options={methods} label="Method" />
+					<Select bind:value={method} options={methods} label="Method" info="How the runtime is installed" />
 				{:else}
-					<Segmented bind:value={method} options={methods} label="Method" />
+					<Segmented bind:value={method} options={methods} label="Method" info="How the runtime is installed" />
 				{/if}
 				{#if option?.unmet.length}
 					<div class="unmet secondary"><Dot lamp="warning" label="unmet" /><Str value={option.unmet.join(', ')} kind="message" color="muted" tip={option.unmet.join('\n')} width="100%" /></div>
@@ -352,7 +363,7 @@
 			</FormSection>
 			{#if option?.method?.kind === InstallKind.ADOPTED}
 				<FormSection>
-					<Path bind:value={adoptPath} label="Binary" placeholder={option.method.binaries.join(', ')} filter="executables" />
+					<Path bind:value={adoptPath} label="Binary" info="An installed executable to adopt" placeholder={option.method.binaries.join(', ')} filter="executables" />
 				</FormSection>
 			{:else if option?.method?.kind === InstallKind.PREBUILT}
 				{#if option.fields.length}
@@ -367,22 +378,22 @@
 							{#each pair as f (f.kind === 'var' ? `var:${f.v.name}` : f.kind)}{@render buildField(f)}{/each}
 						</FieldRow>
 					{/each}
-					{#if absent.length}
-						<Str value="Missing tools {absent.join(', ')}" kind="message" color="error" tip={absent.join('\n')} width="100%" />
+					{#if missing.length}
+						<Str value={missingText(missing)} kind="message" color="error" tip={missing.join('\n')} width="100%" />
 					{/if}
 				</FormSection>
 			{/if}
 			{#if followedTask}{@render followedBlock(followedTask)}{/if}
 		</Stack>
-		<SaveBar always dirty saving={busy} label={verb} disabled={option?.method?.kind === InstallKind.BUILT && (absent.length > 0 || !variant)} onsave={commit} ondiscard={() => ontab('installs')} />
+		<SaveBar always dirty saving={busy} label={verb} disabled={option?.method?.kind === InstallKind.BUILT && (missing.length > 0 || !variant)} onsave={commit} ondiscard={() => ontab('installs')} />
 	</div>
 {/snippet}
 
 <PanelHeader title={rt?.name ?? id} subtitle={rt?.description || undefined} {onclose} />
 <div class="tabrow">
 	<PageTabs {tabs} active={shown} onchange={ontab} />
-	{#if status.installs.length}
-		<NeoButton elevation={installing ? -1 : 2} toggle checked={installing} aria-pressed={installing} onclick={() => ontab(installing ? 'installs' : 'install')}>
+	{#if status.installs.length && !installing}
+		<NeoButton elevation={2} onclick={() => ontab('install')}>
 			{#snippet icon()}<DownloadSimpleIcon size={16} />{/snippet}
 			Install
 		</NeoButton>
@@ -414,7 +425,7 @@
 							<Confirm label="Remove" question="Remove {i.version || i.path}?" danger onconfirm={() => removeInstall(i)} />
 						{/snippet}
 						{#snippet expand()}
-							<KeyRows dense rows={Object.entries(i.facts).map(([k, v]) => ({ label: k, value: v, mono: true, tip: v }))} />
+							<KeyRows dense rows={Object.entries(i.facts).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true, tip: v }))} />
 							<Conditions conditions={i.status?.conditions} />
 							{#if used}
 								<KeyRows
@@ -454,8 +465,8 @@
 							<KeyRows
 								dense
 								rows={[
-									...Object.entries(b.vars).map(([k, v]) => ({ label: k, value: v, mono: true, tip: v })),
-									...Object.entries(b.facts).map(([k, v]) => ({ label: k, value: v, mono: true, tip: v })),
+									...Object.entries(b.vars).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true, tip: v })),
+									...Object.entries(b.facts).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true, tip: v })),
 									{ label: 'patches', value: b.patches.join(', '), tip: b.patches.join('\n') },
 									{ label: 'task', value: shortId(b.taskId), href: b.taskId ? `/tasks/${b.taskId}` : undefined, mono: true }
 								]}
@@ -501,6 +512,10 @@
 		gap: var(--nebu-space-4);
 		padding-bottom: var(--nebu-space-4);
 		border-bottom: 1px solid var(--nebu-border);
+	}
+	.form:last-child {
+		padding-bottom: 0;
+		border-bottom: 0;
 	}
 	.failure {
 		overflow-wrap: anywhere;

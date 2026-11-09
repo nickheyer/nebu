@@ -142,17 +142,17 @@
 </Card>
 
 <Dialog bind:open={addOpen} title="New account" confirm="Create" busy={addBusy} disabled={!username.trim() || !password} onconfirm={add}>
-	<Text bind:value={username} label="Username" max={64} required autocomplete="off" />
-	<Secret bind:value={password} label="Password" required autocomplete="new-password" />
-	<Segmented bind:value={role} options={roles} label="Role" />
+	<Text bind:value={username} label="Username" info="The sign in name" max={64} required autocomplete="off" />
+	<Secret bind:value={password} label="Password" info="The sign in password" required autocomplete="new-password" />
+	<Segmented bind:value={role} options={roles} label="Role" info="Admin does everything, operator runs and edits, inference only sends requests" />
 	{#snippet footer()}
 		{#if addError}<span class="error-text">{addError}</span>{/if}
 	{/snippet}
 </Dialog>
 
 <Dialog bind:open={passwordOpen} title="Set password" confirm="Set" busy={passwordBusy} disabled={!fresh} onconfirm={setPassword}>
-	{#if target}<Text value={target.username} label="Username" readonly />{/if}
-	<Secret bind:value={fresh} label="New password" required autocomplete="new-password" />
+	{#if target}<Text value={target.username} label="Username" info="The account getting a new password" readonly />{/if}
+	<Secret bind:value={fresh} label="New password" info="Replaces the current password" required autocomplete="new-password" />
 	{#snippet footer()}
 		{#if passwordError}<span class="error-text">{passwordError}</span>{/if}
 	{/snippet}

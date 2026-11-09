@@ -236,6 +236,8 @@
 	let sendContent = $state('');
 	let sending = $state(false);
 	const sendChannels = $derived(guilds.find((g) => g.id === sendGuild)?.channels.map((c) => ({ value: c.id, label: `#${c.name}`, description: c.kind })) ?? []);
+	// Why Send is held back, shown beside the button until nothing holds it
+	const sendBlocker = $derived(!connected ? 'Connect the bot to send' : !sendChannel ? 'Choose a channel' : !sendContent.trim() ? (sendKind === ActionKind.TEXT ? 'Write the message' : 'Write the prompt') : undefined);
 	async function send() {
 		if (!sendChannel) return;
 		sending = true;
@@ -440,13 +442,13 @@
 		{#if active === 'personas' && personaIndex !== undefined && spec.personas[personaIndex]}
 			{@const i = personaIndex}
 			{#key spec.personas[i]?.id}
-				<PanelHeader title={spec.personas[i]?.name ?? ''} subtitle={i === 0 ? 'default persona' : 'persona'} onclose={closeEditor} />
+				<PanelHeader title={spec.personas[i]?.name ?? ''} subtitle={i === 0 ? 'Answers by default' : undefined} onclose={closeEditor} />
 				<PersonaEditor bind:persona={() => spec.personas[i] as Persona, (v) => (spec.personas[i] = v)} {guilds} {servers} />
 			{/key}
 		{:else if active === 'automations' && automationIndex !== undefined && spec.automations[automationIndex]}
 			{@const i = automationIndex}
 			{#key spec.automations[i]?.id}
-				<PanelHeader title={spec.automations[i]?.name ?? ''} subtitle="automation" onclose={closeEditor} />
+				<PanelHeader title={spec.automations[i]?.name ?? ''} subtitle="{triggerWord(spec.automations[i]?.trigger?.kind ?? 0)} trigger, {actionWord(spec.automations[i]?.action?.kind ?? 0)} action" onclose={closeEditor} />
 				<AutomationEditor bind:automation={() => spec.automations[i] as Automation, (v) => (spec.automations[i] = v)} personas={spec.personas} {guilds} />
 			{/key}
 		{/if}
@@ -495,17 +497,18 @@
 {#snippet sendTab()}
 	<Card title="New message">
 		<FieldRow>
-			<Select bind:value={sendGuild} options={guilds.map((g) => ({ value: g.id, label: g.name }))} label="Guild" disabled={!connected} />
-			<Select bind:value={sendChannel} options={sendChannels} label="Channel" disabled={!sendGuild} />
+			<Select bind:value={sendGuild} options={guilds.map((g) => ({ value: g.id, label: g.name }))} label="Guild" info="The server the message goes to" placeholder={connected ? 'Choose a server' : 'Bot not connected'} disabled={!connected} />
+			<Select bind:value={sendChannel} options={sendChannels} label="Channel" info="The channel in that server" placeholder={sendGuild ? 'Choose a channel' : 'Choose a server first'} disabled={!sendGuild} />
 		</FieldRow>
 		<FieldRow>
-			<Select bind:value={sendPersona} options={spec.personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" clearable placeholder={spec.personas[0]?.name} />
-			<Segmented bind:value={sendKind} options={sendKinds} label="Kind" />
+			<Select bind:value={sendPersona} options={spec.personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" info="Who speaks, the default persona when empty" clearable placeholder={spec.personas[0] ? `Default (${spec.personas[0].name})` : 'No personas'} />
+			<Segmented bind:value={sendKind} options={sendKinds} label="Kind" info="A message posted as written or a prompt the persona answers" />
 		</FieldRow>
-		<Textarea bind:value={sendContent} label={sendKind === ActionKind.TEXT ? 'Message' : 'Prompt'} rows={3} />
+		<Textarea bind:value={sendContent} label={sendKind === ActionKind.TEXT ? 'Message' : 'Prompt'} info={sendKind === ActionKind.TEXT ? 'Posted as written' : 'What the persona is asked to answer'} rows={3} />
 		{#snippet footer()}
+			{#if sendBlocker}<span class="secondary">{sendBlocker}</span>{/if}
 			<span class="fill"></span>
-			<NeoButton class="primary" elevation={2} loading={sending} disabled={!sendChannel || !sendContent.trim()} onclick={send}>Send</NeoButton>
+			<NeoButton class="primary" elevation={2} loading={sending} disabled={sendBlocker !== undefined} onclick={send}>Send</NeoButton>
 		{/snippet}
 	</Card>
 {/snippet}
@@ -530,7 +533,7 @@
 {/if}
 
 <Dialog bind:open={tokenOpen} title="Change token" confirm="Change" busy={tokenBusy} disabled={!newToken.trim()} onconfirm={changeToken}>
-	<Secret bind:value={newToken} label="New token" set={bot.tokenSet} required />
+	<Secret bind:value={newToken} label="New token" info="The Discord bot token, stored on the daemon and never shown again" set={bot.tokenSet} required />
 </Dialog>
 
 <NameConfirm bind:open={deleteOpen} title="Delete bot" name={bot.name} message="Disconnects the bot" onconfirm={remove} />

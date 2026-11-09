@@ -4,7 +4,7 @@
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 
-	let { value = $bindable([]), guilds, label }: { value?: string[]; guilds: BotGuild[]; label: string } = $props();
+	let { value = $bindable([]), guilds, label, info }: { value?: string[]; guilds: BotGuild[]; label: string; info?: string } = $props();
 
 	function ofGuild(g: BotGuild): string[] {
 		const ids = new Set(g.channels.map((c) => c.id));
@@ -18,7 +18,7 @@
 </script>
 
 <Stack gap={4}>
-	<FieldLabel {label} />
+	<FieldLabel {label} {info} />
 	{#if guilds.length === 0}
 		<span class="secondary">Not connected</span>
 	{:else}

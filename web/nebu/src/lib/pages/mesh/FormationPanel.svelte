@@ -3,7 +3,7 @@
 	import Collapse from '#lib/ui/Collapse.svelte';
 	import { bytes, enumLabel, ms, num, plural, tokensPerSecond } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
-	import { FitVerdictSchema, ShapeSchema } from '#lib/proto/nebu/v1/estimate_pb.js';
+	import { ShapeSchema } from '#lib/proto/nebu/v1/estimate_pb.js';
 	import { RunRequestSchema } from '#lib/proto/nebu/v1/instance_pb.js';
 	import { FormationStateSchema, type Formation, type FormationPlan } from '#lib/proto/nebu/v1/mesh_pb.js';
 	import Conditions from '#lib/ui/Conditions.svelte';
@@ -22,6 +22,7 @@
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { formationLamp, instanceLamp, instanceShape } from '#lib/ui/status.js';
 	import { candidateTip, linkLabel, peerName, seatKey, seatLayers, seatName, seatTip, speedup, verdictLamp } from '#lib/pages/mesh/mesh.js';
+	import { verdictLabel } from '#lib/pages/models/models.js';
 
 	let { formation, onclose }: { formation: Formation; onclose: () => void } = $props();
 
@@ -84,7 +85,7 @@
 							secondaryWidth="24ch"
 							facts={[{ value: tokensPerSecond(plan.tokensPerSecond) }, { value: speedup(plan.speedup) }]}
 						>
-							{#snippet badges()}<StatePill label={enumLabel(FitVerdictSchema, plan.verdict)} lamp={verdictLamp(plan.verdict)} />{/snippet}
+							{#snippet badges()}<StatePill label={verdictLabel(plan.verdict)} lamp={verdictLamp(plan.verdict)} />{/snippet}
 						</ListRow>
 					</List>
 				</Section>
@@ -100,7 +101,7 @@
 									secondaryWidth="24ch"
 									facts={[{ value: tokensPerSecond(c.tokensPerSecond) }, { value: speedup(c.speedup) }]}
 								>
-									{#snippet badges()}<StatePill label={enumLabel(FitVerdictSchema, c.verdict)} lamp={verdictLamp(c.verdict)} />{/snippet}
+									{#snippet badges()}<StatePill label={verdictLabel(c.verdict)} lamp={verdictLamp(c.verdict)} />{/snippet}
 								</ListRow>
 							{/each}
 						</List>

@@ -150,7 +150,7 @@
 					{#if p}
 						<div class="answer">
 							<Stack gap={8}>
-								<Textarea bind:value={() => results[c.id] ?? '', (v) => (results[c.id] = v)} label="Result" rows={2} mono />
+								<Textarea bind:value={() => results[c.id] ?? '', (v) => (results[c.id] = v)} label="Result" info="What the tool returned, sent back to the model" rows={2} mono />
 								<Row gap={8} justify="flex-end">
 									<NeoButton text onclick={() => onskip?.(p)}>Skip</NeoButton>
 									<NeoButton elevation={2} onclick={() => onresult?.(p, results[c.id] ?? '')}>Send</NeoButton>

@@ -235,7 +235,7 @@
 		padding: 0 var(--nebu-space-3);
 		cursor: pointer;
 		border-radius: var(--neo-border-radius);
-		animation: nebu-reveal 220ms var(--nebu-settle) both;
+		animation: nebu-reveal 220ms var(--nebu-settle) backwards;
 	}
 	.entry.active {
 		color: var(--neo-color-primary);

@@ -61,6 +61,7 @@ message ProcessUse {
   uint64 bytes = 3;
   string instance_id = 4;
   string instance_name = 5;
+  string command = 6;
 }
 
 // Filesystem holding nebu data, one entry per mount

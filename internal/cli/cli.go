@@ -61,7 +61,7 @@ func commands() []command {
 		{name: "revisions", summary: "list revisions, tags, or versions of a repository", run: runRevisions, local: true},
 		{name: "card", summary: "print a model card", run: runCard, local: true},
 		{name: "inspect", summary: "estimate memory use for each weight group", run: runInspect, local: true},
-		{name: "pull", summary: "download a weight group and its blueprint parts", run: runPull, local: true},
+		{name: "pull", summary: "download a weight group with its blueprint parts, or files of a repository", run: runPull, local: true},
 		{name: "parts", summary: "list a weight group's parts", run: runParts, local: true},
 		{name: "list", summary: "list stored models", run: runList, local: true},
 		{name: "remove", summary: "remove a stored model", run: runRemove, local: true},
@@ -662,7 +662,7 @@ func runServe(ctx context.Context, e *env, args []string) error {
 // Set by release builds
 var releaseVersion, releaseCommit string
 
-// Reads the release version or module version and commit from build info
+// Reads the release or module version from build info, adding the commit unless the version already names it
 func buildVersion() string {
 	version, revision := "devel", ""
 	if bi, ok := debug.ReadBuildInfo(); ok {
@@ -684,5 +684,8 @@ func buildVersion() string {
 			revision = revision[:7]
 		}
 	}
-	return strings.TrimSpace(version + " " + revision)
+	if revision != "" && !strings.Contains(version, revision) {
+		version += " " + revision
+	}
+	return version
 }

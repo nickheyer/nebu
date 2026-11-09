@@ -15,11 +15,11 @@
 {#if sorted.length}
 	<div class="conditions">
 		{#each sorted as c (c.type)}
-			<Tip facts={[{ label: 'message', value: c.message || c.reason }, { label: 'since', value: when(c.lastTransitionTime) }]} tag="div">
+			<Tip facts={[{ label: 'message', value: c.message || c.reason }, { label: 'since', value: when(c.lastTransitionTime) }]} tag="div" class="condtip">
 				<div class="cond">
 					<Dot lamp={conditionLamp(c.status)} />
 					<span class="type">{c.type}</span>
-					<span class="reason muted ellipsis">{reasonWords(c.reason)}</span>
+					<span class="reason muted">{reasonWords(c.reason)}</span>
 				</div>
 			</Tip>
 		{/each}
@@ -29,22 +29,33 @@
 {/if}
 
 <style>
+	/* Types share one column as wide as the longest, reasons wrap in the rest */
 	.conditions {
-		display: flex;
-		flex-direction: column;
+		display: grid;
+		grid-template-columns: max-content max-content minmax(0, 1fr);
+		column-gap: 8px;
+		min-width: 0;
+	}
+	:global(.condtip) {
+		display: grid;
+		grid-template-columns: subgrid;
+		grid-column: 1 / -1;
+		min-width: 0;
 	}
 	.cond {
-		display: flex;
-		gap: 8px;
-		align-items: center;
+		display: grid;
+		grid-template-columns: subgrid;
+		grid-column: 1 / -1;
+		align-items: baseline;
 		min-height: 28px;
+		padding: 4px 0;
 		font-size: 13px;
 	}
 	.type {
-		flex: 0 0 16ch;
 		font-weight: 500;
 	}
 	.reason {
 		min-width: 0;
+		overflow-wrap: anywhere;
 	}
 </style>

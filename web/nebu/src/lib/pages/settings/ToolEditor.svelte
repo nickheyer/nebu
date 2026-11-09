@@ -78,14 +78,14 @@
 <Stack gap={24}>
 	<FormSection title="Server" info="A fetch server reaching local addresses can read this host's own services">
 		<FieldRow>
-			<Select bind:value={s.kind} options={kinds} label="Kind" disabled={editing} onchange={pickKind} />
-			<Text bind:value={s.name} label="Name" required />
+			<Select bind:value={s.kind} options={kinds} label="Kind" info="Search, page fetch, or an MCP server over stdio or HTTP" disabled={editing} onchange={pickKind} />
+			<Text bind:value={s.name} label="Name" info="How routes and personas attach the server, MCP tools offered as name__tool" required />
 		</FieldRow>
 		{#key generation}
 			<FieldRow>
-				<Switch bind:checked={s.enabled} label="Enabled" />
+				<Switch bind:checked={s.enabled} label="Enabled" info="Whether the daemon starts the server" />
 				{#if s.kind === ToolServerKind.FETCH}
-					<Switch bind:checked={s.local} label="Local addresses" />
+					<Switch bind:checked={s.local} label="Local addresses" info="Lets fetches reach this host's own addresses, loopback and link local included" />
 				{/if}
 			</FieldRow>
 		{/key}
@@ -94,33 +94,33 @@
 		{#if s.kind === ToolServerKind.SEARCH}
 			<FormSection title="Search" info="SearXNG answers only with its JSON format enabled">
 				<FieldRow>
-					<Segmented bind:value={s.provider} options={[{ value: 'searxng', label: 'SearXNG' }, { value: 'brave', label: 'Brave' }]} label="Provider" />
+					<Segmented bind:value={s.provider} options={[{ value: 'searxng', label: 'SearXNG' }, { value: 'brave', label: 'Brave' }]} label="Provider" info="SearXNG or Brave Search" />
 					{#if s.provider === 'brave'}
-						<Secret bind:value={s.braveKey} label="Brave key" set={s.secretsSet} />
+						<Secret bind:value={s.braveKey} label="Brave key" info="Brave Search API subscription token" set={s.secretsSet} />
 					{:else}
-						<Text bind:value={s.searxngUrl} label="SearXNG URL" type="url" />
+						<Text bind:value={s.searxngUrl} label="SearXNG URL" info="Base URL of a SearXNG instance with the json format enabled" type="url" />
 					{/if}
 				</FieldRow>
 			</FormSection>
 		{:else if s.kind === ToolServerKind.STDIO}
-			<FormSection title="Command">
+			<FormSection title="Command" info="The process the daemon starts and speaks MCP with over its pipes">
 				<FieldRow>
-					<Text bind:value={s.command} label="Command" mono required />
-					<Chips bind:value={s.args} label="Arguments" />
+					<Text bind:value={s.command} label="Command" info="The executable that speaks MCP over stdio" mono required />
+					<Chips bind:value={s.args} label="Arguments" info="Words after the command" />
 				</FieldRow>
-				<KeyValues bind:value={s.env} label="Environment" secret secretsSet={s.secretsSet} />
+				<KeyValues bind:value={s.env} label="Environment" info="Variables the command runs with" secret secretsSet={s.secretsSet} />
 			</FormSection>
 		{:else if s.kind === ToolServerKind.HTTP}
-			<FormSection title="Endpoint">
+			<FormSection title="Endpoint" info="The HTTP address the daemon speaks MCP with">
 				<FieldRow>
-					<Text bind:value={s.url} label="URL" type="url" required />
+					<Text bind:value={s.url} label="URL" info="The MCP endpoint" type="url" required />
 				</FieldRow>
-				<KeyValues bind:value={s.headers} label="Headers" secret secretsSet={s.secretsSet} />
+				<KeyValues bind:value={s.headers} label="Headers" info="Sent with every request to the endpoint" secret secretsSet={s.secretsSet} />
 			</FormSection>
 		{/if}
-		<FormSection title="Tools">
+		<FormSection title="Tools" info="Which of the server's tools reach chats and routes">
 			<FieldRow>
-				<Chips bind:value={s.allowedTools} label="Allowed tools" />
+				<Chips bind:value={s.allowedTools} label="Allowed tools" info="Tools the server may offer, every tool when empty" />
 			</FieldRow>
 		</FormSection>
 	{/key}

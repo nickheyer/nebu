@@ -199,7 +199,7 @@
 		{#snippet tools()}
 			<Pop placement="bottom-end" width="20rem">
 				{#snippet content(closePop)}
-					<Switch bind:checked={probeForce} label="Force" />
+					<Switch bind:checked={probeForce} label="Force" info="Measures bandwidth even while a formation is serving" />
 					<Row gap={12} justify="flex-end">
 						<NeoButton class="primary" elevation={2} loading={probing === ''} onclick={() => probe('', closePop)}>Probe all</NeoButton>
 					</Row>

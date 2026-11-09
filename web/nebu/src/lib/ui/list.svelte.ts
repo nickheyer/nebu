@@ -16,9 +16,12 @@ export class ListLayout {
 	primaryWeight = $state(1);
 	secondaryWeight = $state(1.4);
 	width = $state(0);
+	threshold = $state(compactBelow);
 
-	readonly compact = $derived(this.width > 0 && this.width < compactBelow);
+	readonly compact = $derived(this.width > 0 && this.width < this.threshold);
 	readonly factCount = $derived(this.#facts.reduce((m, n) => Math.max(m, n), 0));
+	// Fact columns laid out, the first one alone on a compact row
+	readonly shownFacts = $derived(this.compact ? Math.min(1, this.factCount) : this.factCount);
 
 	has(slot: ListSlot): boolean {
 		if (this.compact && (slot === 'secondary' || slot === 'instrument')) return false;
@@ -44,10 +47,10 @@ export class ListLayout {
 		const cols: string[] = [];
 		if (this.has('leading')) cols.push('max-content');
 		if (this.has('dot')) cols.push('max-content');
-		cols.push(`minmax(10ch, ${this.primaryWeight}fr)`);
+		cols.push(`minmax(min-content, ${this.primaryWeight}fr)`);
 		if (this.has('secondary')) cols.push(`minmax(0, ${this.secondaryWeight}fr)`);
 		if (this.has('instrument')) cols.push('minmax(8rem, 1.6fr)');
-		if (!this.compact) for (let i = 0; i < this.factCount; i++) cols.push('max-content');
+		for (let i = 0; i < this.shownFacts; i++) cols.push('max-content');
 		if (this.has('action')) cols.push('max-content');
 		if (this.has('menu')) cols.push('max-content');
 		if (this.has('caret')) cols.push('max-content');
@@ -55,8 +58,10 @@ export class ListLayout {
 	});
 }
 
-export function provideList(): ListLayout {
-	return setContext(key, new ListLayout());
+export function provideList(threshold = compactBelow): ListLayout {
+	const layout = new ListLayout();
+	layout.threshold = threshold;
+	return setContext(key, layout);
 }
 
 // Starts a scope without a list for rows nested in an expand

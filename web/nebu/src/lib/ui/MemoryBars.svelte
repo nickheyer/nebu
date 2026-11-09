@@ -81,7 +81,7 @@
 		gap: var(--nebu-space-3);
 		align-items: center;
 		min-height: 28px;
-		animation: nebu-reveal 260ms var(--nebu-settle) both;
+		animation: nebu-reveal 260ms var(--nebu-settle) backwards;
 		animation-delay: calc(var(--i) * 40ms);
 	}
 	.ident {

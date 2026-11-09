@@ -5,12 +5,14 @@
 	import { ago, bytes, enumLabel, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import type { InspectResponse } from '#lib/proto/nebu/v1/estimate_pb.js';
-	import { ArtifactRole, TensorGroupKind, TensorGroupKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
+	import { TensorGroupKind, TensorGroupKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
 	import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
-	import type { StoredArtifact, StoredModel } from '#lib/proto/nebu/v1/store_pb.js';
+	import type { StoredModel } from '#lib/proto/nebu/v1/store_pb.js';
 	import Bar from '#lib/ui/Bar.svelte';
 	import Collapse from '#lib/ui/Collapse.svelte';
 	import Confirm from '#lib/ui/Confirm.svelte';
+	import CopyButton from '#lib/ui/CopyButton.svelte';
+	import FileTree, { type TreeItem } from '#lib/ui/FileTree.svelte';
 	import KeyRows from '#lib/ui/KeyRows.svelte';
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
@@ -22,11 +24,8 @@
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import FitTab from '#lib/pages/models/FitTab.svelte';
 	import PartsTab from '#lib/pages/models/PartsTab.svelte';
-	import ShardGrid from '#lib/pages/models/ShardGrid.svelte';
-	import { kindLabel, launchHref, modelKeyOf, paramCount, removeModel, roleIcon, sameModel, shardPattern, verifyModel } from '#lib/pages/models/models.js';
+	import { kindLabel, launchHref, modelKeyOf, paramCount, removeModel, sameModel, verifyModel } from '#lib/pages/models/models.js';
 	import { terminal } from '#lib/pages/serve/serve.js';
-	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
-	import DownloadIcon from 'phosphor-svelte/lib/DownloadIcon';
 
 	let {
 		model,
@@ -38,11 +37,11 @@
 	}: { model: StoredModel; runtimes: RuntimeStatus[]; tab?: string; onclose: () => void; onexport: (m: StoredModel) => void; onremoved: () => void } = $props();
 
 	const m = $derived(model);
-	const download: Record<string, string> = { download: '' };
 	const d = $derived(m.descriptor);
 	const running = $derived([...live.instances.values()].some((i) => !terminal(i.state) && sameModel(i, m)));
-	const weightFiles = $derived(m.artifacts.filter((a) => a.artifact?.role === ArtifactRole.WEIGHTS).sort((x, y) => (x.artifact?.shardIndex ?? 0) - (y.artifact?.shardIndex ?? 0) || x.path.localeCompare(y.path)));
-	const otherFiles = $derived(m.artifacts.filter((a) => a.artifact?.role !== ArtifactRole.WEIGHTS));
+	const files = $derived(m.artifacts.map((a) => a.artifact).filter((a) => a !== undefined));
+	// Where each file's link sits on this host's disk, by its path in the repository
+	const onDisk = $derived(new Map(m.artifacts.map((a) => [a.artifact?.path ?? '', a.path])));
 	const tabs = [
 		{ id: 'about', label: 'About' },
 		{ id: 'files', label: 'Files' },
@@ -83,26 +82,10 @@
 	async function remove() {
 		if (await removeModel(m, collect)) onremoved();
 	}
-
-	function fileFacts(a: StoredArtifact) {
-		const art = a.artifact;
-		return [
-			{ label: 'path', value: art?.path ?? a.path },
-			{ label: 'format', value: art?.formatId ?? '' },
-			...(art?.shardCount ? [{ label: 'shard', value: `${art.shardIndex} of ${art.shardCount}` }] : []),
-			{ label: 'digest', value: a.digest }
-		];
-	}
 </script>
 
-{#snippet storedRow(a: StoredArtifact, marked: boolean)}
-	{@const art = a.artifact}
-	{@const Icon = roleIcon(art?.role ?? ArtifactRole.OTHER)}
-	{#snippet fileDownload()}
-		<NeoButton text href={art?.url} {...download} aria-label="Download {a.path}">{#snippet icon()}<DownloadIcon size={20} />{/snippet}</NeoButton>
-	{/snippet}
-	{#snippet roleMark()}<span class="icon"><Icon size={20} /></span>{/snippet}
-	<ListRow primary={art?.path ?? a.path} primaryKind="path" primaryTip={fileFacts(a).map((f) => `${f.label} ${f.value}`).join('\n')} facts={[{ value: bytes(art?.sizeBytes) }]} action={art?.url ? fileDownload : undefined} leading={marked ? roleMark : undefined} />
+{#snippet copyPath(item: TreeItem)}
+	<CopyButton text={item.dir ? `${m.path}/${item.path}` : (onDisk.get(item.path) ?? `${m.path}/${item.path}`)} label="Copy path" />
 {/snippet}
 
 <PanelHeader title={m.repo} kind="repo" subtitle={m.group || undefined} {onclose}>
@@ -149,25 +132,13 @@
 				<NeoButton text onclick={() => onexport(m)}>Export</NeoButton>
 				<Tip text={running ? 'Running' : undefined} tag="span">
 					<Confirm label="Remove" question="Remove {m.repo}{m.group ? ` ${m.group}` : ''}?" danger disabled={running} onconfirm={remove}>
-						{#snippet body()}<Switch bind:checked={collect} label="Collect blobs" />{/snippet}
+						{#snippet body()}<Switch bind:checked={collect} label="Collect blobs" info="Deletes the blobs no other model shares" />{/snippet}
 					</Confirm>
 				</Tip>
 			</div>
 		</Stack>
 	{:else if tab === 'files'}
-		<List head={{ primary: 'File', facts: ['Size'] }}>
-			{#if weightFiles.length > 1}
-				{#snippet shards()}
-					<ShardGrid shards={weightFiles.map((a) => ({ path: a.artifact?.path ?? a.path, index: a.artifact?.shardIndex ?? 0, bytes: a.artifact?.sizeBytes ?? 0n, url: a.artifact?.url || undefined }))} />
-				{/snippet}
-				<ListRow primary={shardPattern(weightFiles.map((a) => a.artifact?.path ?? a.path))} primaryKind="path" facts={[{ value: bytes(weightFiles.reduce((n, a) => n + Number(a.artifact?.sizeBytes ?? 0n), 0)) }]} expand={shards}>
-					{#snippet leading()}<span class="icon"><CubeIcon size={20} /></span>{/snippet}
-				</ListRow>
-			{:else}
-				{#each weightFiles as a (a.path)}{@render storedRow(a, true)}{/each}
-			{/if}
-			{#each otherFiles as a (a.path)}{@render storedRow(a, true)}{/each}
-		</List>
+		<FileTree artifacts={files} action={copyPath} />
 		{#if inspectError}
 			<List head={{ primary: 'Warnings' }}>
 				<ListRow lamp="error" primary={inspectError} primaryKind="message" />
@@ -181,7 +152,7 @@
 		{/if}
 	{:else if tab === 'fit'}
 		<Stack gap={12}>
-			<Switch bind:checked={free} label="Against free memory" />
+			<Switch bind:checked={free} label="Against free memory" info="Plans against the memory left beside what runs now instead of each pool's total" />
 			<FitTab group={m.group} result={inspected} error={inspectError} {runtimes} {free} onlaunch={(runtimeId, context) => goto(launchHref(m, runtimeId, context))} />
 		</Stack>
 	{:else if tab === 'parts'}
@@ -201,10 +172,5 @@
 		flex-wrap: wrap;
 		gap: var(--nebu-space-3);
 		justify-content: flex-end;
-	}
-	.icon {
-		display: inline-flex;
-		flex: 0 0 auto;
-		color: var(--nebu-text-muted);
 	}
 </style>

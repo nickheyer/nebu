@@ -1,11 +1,12 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { untrack } from 'svelte';
 	import { provideList, type ListHead } from '#lib/ui/list.svelte.js';
 
-	// Rows sharing one set of columns under an optional head
-	let { head, label, children }: { head?: ListHead; label?: string; children: Snippet } = $props();
+	// Rows sharing one set of columns under an optional head, folding to compact rows under the given width
+	let { head, label, compactBelow, children }: { head?: ListHead; label?: string; compactBelow?: number; children: Snippet } = $props();
 
-	const layout = provideList();
+	const layout = provideList(untrack(() => compactBelow));
 </script>
 
 <div class="list" role="group" aria-label={label} style:grid-template-columns={layout.template} bind:clientWidth={layout.width}>
@@ -16,9 +17,7 @@
 			<span>{head.primary ?? ''}</span>
 			{#if layout.has('secondary')}<span>{head.secondary ?? ''}</span>{/if}
 			{#if layout.has('instrument')}<span>{head.instrument ?? ''}</span>{/if}
-			{#if !layout.compact}
-				{#each { length: layout.factCount } as _, i (i)}<span class="end">{head.facts?.[i] ?? ''}</span>{/each}
-			{/if}
+			{#each { length: layout.shownFacts } as _, i (i)}<span class="end">{head.facts?.[i] ?? ''}</span>{/each}
 			{#if layout.has('action')}<span class="end">{head.action ?? ''}</span>{/if}
 			{#if layout.has('menu')}<span></span>{/if}
 			{#if layout.has('caret')}<span></span>{/if}
@@ -40,7 +39,7 @@
 	/* Rows settle in one after another */
 	.list > :global(.rowwrap),
 	.list > :global(.sortrow) {
-		animation: nebu-reveal 260ms var(--nebu-settle) both;
+		animation: nebu-reveal 260ms var(--nebu-settle) backwards;
 	}
 	.list > :global(:nth-child(2)) { animation-delay: 22ms; }
 	.list > :global(:nth-child(3)) { animation-delay: 44ms; }

@@ -18,7 +18,7 @@
 </script>
 
 <div class="search" style:width>
-	<NeoInput bind:value={typed} elevation={-1} floating={false} clearable aria-label={label} {oninput} onclear={() => (value = '')}>
+	<NeoInput bind:value={typed} elevation={-1} floating={false} clearable placeholder={label} aria-label={label} {oninput} onclear={() => (value = '')}>
 		{#snippet before()}<MagnifyingGlassIcon size={16} />{/snippet}
 	</NeoInput>
 </div>

@@ -137,7 +137,7 @@
 		font-weight: 300;
 		font-variant-numeric: tabular-nums;
 		line-height: 1.25;
-		animation: nebu-reveal var(--nebu-slow) var(--nebu-settle) both;
+		animation: nebu-reveal var(--nebu-slow) var(--nebu-settle) backwards;
 		white-space: nowrap;
 		text-overflow: ellipsis;
 		transition: color var(--nebu-fast) var(--nebu-ease);

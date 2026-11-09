@@ -26,7 +26,7 @@
 	import Card from '#lib/ui/layout/Card.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Toolbar from '#lib/ui/layout/Toolbar.svelte';
-	import { kindLabel, paramLabel, selectWidth } from '#lib/pages/models/models.js';
+	import { kindLabel, paramLabel } from '#lib/pages/models/models.js';
 	import { modelsTabs } from '#lib/pages/models/tabs.js';
 	import { compact, lastSearch, repoPath } from '#lib/pages/discover/discover.js';
 	import ArrowDownIcon from 'phosphor-svelte/lib/ArrowDownIcon';
@@ -64,8 +64,6 @@
 	// The remembered source stands in as the one option until the list answers
 	const sourceOptions = $derived(sources.length ? sources.map((s) => ({ value: s.source?.id ?? '', label: s.source?.name || s.source?.id || '' })) : sourceId ? [{ value: sourceId, label: prefs.discoverSourceLabel || sourceId }] : []);
 	const sorts = $derived((caps?.sorts ?? []).map((s) => ({ value: s.id, label: s.label })));
-	const sourceWidth = $derived(selectWidth(sourceOptions.map((o) => o.label)));
-	const sortWidth = $derived(selectWidth(sorts.map((o) => o.label)));
 	const reversible = $derived(caps?.sorts.find((s) => s.id === sort)?.reversible ?? false);
 	const facets = $derived(caps?.facets ?? []);
 	const authorFacet = $derived(facets.some((f) => /^author$/i.test(f.id) || /^author$/i.test(f.label)));
@@ -173,7 +171,7 @@
 {#snippet facetFields()}
 	{#each facets as f (f.id)}
 		{#if f.freeform}
-			<Chips bind:value={() => filters[f.id] ?? [], (v) => setFacet(f, v)} label={f.label} />
+			<Chips bind:value={() => filters[f.id] ?? [], (v) => setFacet(f, v)} label={f.label} compact />
 		{:else if f.multi}
 			<MultiSelect bind:value={() => filters[f.id] ?? [], (v) => setFacet(f, v)} options={f.values.map((v) => ({ value: v.id, label: v.label, description: v.group || undefined }))} search={f.values.length > 8} label={f.label} compact />
 		{:else}
@@ -187,9 +185,9 @@
 
 {#snippet toolbar()}
 	<Toolbar>
-		<span class="source" class:grow={viewport.mobile}><Select value={sourceId} options={sourceOptions} loading={!sourcesLoaded} onchange={sourceChanged} width={viewport.mobile ? '100%' : sourceWidth} /></span>
+		<span class="source" class:grow={viewport.mobile}><Select value={sourceId} options={sourceOptions} loading={!sourcesLoaded} onchange={sourceChanged} fit={!viewport.mobile} /></span>
 		<span class="grow"><SearchBox bind:value={query} width="100%" /></span>
-		<span class="sort"><Select bind:value={sort} options={sorts} disabled={!sorts.length} icon={sortIcon} width={sortWidth} /></span>
+		<span class="sort"><Select bind:value={sort} options={sorts} disabled={!sorts.length} icon={sortIcon} fit /></span>
 		{#if reversible}
 			<NeoButton text aria-label={ascending ? 'Ascending' : 'Descending'} onclick={() => (ascending = !ascending)}>
 				{#snippet icon()}{#if ascending}<ArrowUpIcon size={20} />{:else}<ArrowDownIcon size={20} />{/if}{/snippet}

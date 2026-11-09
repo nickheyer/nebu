@@ -57,10 +57,10 @@
 			<Card title={setup ? 'Create the first account' : undefined} footer={local && sso ? ssoFooter : undefined}>
 				{#if local}
 					<form class="form" onsubmit={submit}>
-						<Text bind:value={username} label="Username" min={1} autocomplete="username" />
-						<Secret bind:value={password} label="Password" autocomplete={setup ? 'new-password' : 'current-password'} />
+						<Text bind:value={username} label="Username" info="Your account name" min={1} autocomplete="username" />
+						<Secret bind:value={password} label="Password" info={setup ? 'Password for the first account' : 'Your password'} autocomplete={setup ? 'new-password' : 'current-password'} />
 						{#if setup}
-							<Secret bind:value={again} label="Password again" autocomplete="new-password" error={mismatch ? 'Passwords differ' : undefined} />
+							<Secret bind:value={again} label="Password again" info="Typed again to catch typos" autocomplete="new-password" error={mismatch ? 'Passwords differ' : undefined} />
 						{/if}
 						<div class="commit">
 							<p class="error-text secondary refused" aria-live="assertive">{refused}</p>
@@ -93,7 +93,7 @@
 	.brand {
 		display: flex;
 		justify-content: center;
-		animation: nebu-reveal 320ms var(--nebu-settle) both;
+		animation: nebu-reveal 320ms var(--nebu-settle) backwards;
 	}
 	.column > :global(.card) {
 		--nebu-settle-step: 120ms;

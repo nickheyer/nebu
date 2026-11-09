@@ -9,7 +9,9 @@ const sanitize = {
 	USE_PROFILES: { html: true, mathMl: true },
 	ADD_TAGS: ['video', 'source', 'audio', 'details', 'summary', 'picture', 'figure', 'figcaption', 'kbd'],
 	ADD_ATTR: ['target', 'align', 'width', 'height', 'controls', 'autoplay', 'loop', 'muted', 'playsinline', 'poster', 'preload', 'open', 'start'],
-	FORBID_TAGS: ['style', 'form', 'input', 'button', 'select', 'textarea']
+	FORBID_TAGS: ['style', 'form', 'input', 'button', 'select', 'textarea'],
+	// Foreign colours and inline layout drop so a card reads in the app's own palette
+	FORBID_ATTR: ['style', 'bgcolor', 'color', 'background']
 };
 
 function escape(s: string): string {

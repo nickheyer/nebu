@@ -8,13 +8,14 @@
 	let {
 		value = $bindable({}),
 		label,
+		info,
 		keyLabel = 'Key',
 		valueLabel = 'Value',
 		secret = false,
 		fixedKeys = false,
 		disabled = false,
 		secretsSet = false
-	}: { value?: Record<string, string>; label?: string; keyLabel?: string; valueLabel?: string; secret?: boolean; fixedKeys?: boolean; disabled?: boolean; secretsSet?: boolean } = $props();
+	}: { value?: Record<string, string>; label?: string; info?: string; keyLabel?: string; valueLabel?: string; secret?: boolean; fixedKeys?: boolean; disabled?: boolean; secretsSet?: boolean } = $props();
 
 	let rows = $state<{ k: string; v: string }[]>(Object.entries(value).map(([k, v]) => ({ k, v })));
 
@@ -33,8 +34,16 @@
 	}
 </script>
 
+{#snippet addButton()}
+	{#if !fixedKeys}
+		<NeoButton text onclick={add} {disabled} aria-label="Add {label ?? 'entry'}" title="Add">
+			{#snippet icon()}<PlusIcon size={16} />{/snippet}
+		</NeoButton>
+	{/if}
+{/snippet}
+
 <div class="field">
-	<FieldLabel {label} />
+	<FieldLabel {label} {info} end={addButton} />
 	{#if rows.length}
 		<div class="heads" aria-hidden="true">
 			<span class="head">{keyLabel}</span>
@@ -44,25 +53,25 @@
 	{/if}
 	{#each rows as row, i (i)}
 		<div class="pair">
-			<NeoInput bind:value={row.k} readonly={fixedKeys} {disabled} elevation={-1} floating={false} aria-label={keyLabel} />
+			{#if fixedKeys}
+				<span class="key">{row.k}</span>
+			{:else}
+				<NeoInput bind:value={row.k} {disabled} elevation={-1} floating={false} aria-label={keyLabel} />
+			{/if}
 			{#if secret}
 				<NeoPassword bind:value={row.v} placeholder={secretsSet && !row.v ? '••••••••' : ''} {disabled} elevation={-1} floating={false} aria-label={valueLabel} />
 			{:else}
 				<NeoInput bind:value={row.v} {disabled} elevation={-1} floating={false} aria-label={valueLabel} />
 			{/if}
 			{#if !fixedKeys}
-				<NeoButton text aria-label="Remove" onclick={() => remove(i)} {disabled}>
+				<NeoButton text aria-label="Remove" title="Remove" onclick={() => remove(i)} {disabled}>
 					{#snippet icon()}<XIcon size={16} />{/snippet}
 				</NeoButton>
 			{/if}
 		</div>
 	{/each}
-	{#if !fixedKeys}
-		<div>
-			<NeoButton text onclick={add} {disabled} aria-label="Add {label ?? 'entry'}">
-				{#snippet icon()}<PlusIcon size={16} />{/snippet}
-			</NeoButton>
-		</div>
+	{#if rows.length === 0}
+		<span class="secondary">None</span>
 	{/if}
 </div>
 
@@ -94,5 +103,14 @@
 	.pair :global(.neo-input-group) {
 		flex: 1 1 0;
 		min-width: 0;
+	}
+	/* A fixed key is a label, read but never typed in */
+	.key {
+		flex: 1 1 0;
+		min-width: 0;
+		padding-left: var(--nebu-space-1);
+		font-size: var(--nebu-text-secondary);
+		color: var(--nebu-text-muted);
+		overflow-wrap: anywhere;
 	}
 </style>

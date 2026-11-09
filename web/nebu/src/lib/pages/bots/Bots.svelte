@@ -142,9 +142,9 @@
 </Card>
 
 <Dialog bind:open title="New bot" confirm="Create" busy={creating} disabled={!name.trim() || !token.trim()} onconfirm={createBot}>
-	<Text bind:value={name} label="Name" max={64} required />
+	<Text bind:value={name} label="Name" info="Shown in the bots list" max={64} required />
 	<Row gap={8} align="flex-end" wrap={false}>
-		<Cell min="10rem"><Secret bind:value={token} label="Token" required /></Cell>
+		<Cell min="10rem"><Secret bind:value={token} label="Token" info="The Discord bot token, stored on the daemon and never shown again" required /></Cell>
 		<span class="trail"><NeoButton elevation={2} loading={probing} disabled={!token.trim()} onclick={probe}>Probe</NeoButton></span>
 	</Row>
 	{#if probed}
@@ -162,5 +162,5 @@
 			</Cell>
 		</Row>
 	{/if}
-	<Switch bind:checked={enabled} label="Enabled" />
+	<Switch bind:checked={enabled} label="Enabled" info="Whether the daemon keeps the bot connected" />
 </Dialog>

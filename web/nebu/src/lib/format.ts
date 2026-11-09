@@ -153,6 +153,14 @@ export function capitalize(s: string): string {
 	return s ? s[0]!.toUpperCase() + s.slice(1) : s;
 }
 
+const acronyms = new Set(['id', 'pci', 'os', 'cpu', 'gpu', 'ram', 'api', 'url', 'uuid', 'pnp', 'vram', 'oci', 'tls', 'numa']);
+
+// A fact key as a label, pci_bus_id reading PCI bus ID
+export function factLabel(key: string): string {
+	const words = key.split(/[._]+/).filter(Boolean);
+	return words.map((w, i) => (acronyms.has(w) ? w.toUpperCase() : i === 0 ? capitalize(w) : w)).join(' ');
+}
+
 export function plural(n: number, one: string, many = `${one}s`): string {
 	return `${num(n)} ${n === 1 ? one : many}`;
 }

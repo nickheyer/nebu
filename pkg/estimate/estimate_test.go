@@ -368,7 +368,7 @@ func TestParamStatesAndRefusal(t *testing.T) {
 }
 
 func TestHuman(t *testing.T) {
-	if estimate.Human(1536*mib) != "1.5 GiB" || estimate.Human(10) != "10 B" {
+	if estimate.Human(1536*mib) != "1.5 GB" || estimate.Human(10) != "10 B" {
 		t.Fatal(estimate.Human(1536*mib), estimate.Human(10))
 	}
 }

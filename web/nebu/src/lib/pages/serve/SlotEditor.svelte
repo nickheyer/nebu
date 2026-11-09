@@ -150,11 +150,12 @@
 			{ value: Placement.HOST, label: 'Host' }
 		]}
 		label="Placement"
+		info="Device memory first, device only, or host memory only"
 	/>
 {/snippet}
 
 {#snippet memoryField()}
-	<Bytes bind:value={() => memoryBytes || capTotal, setMemory} total={capTotal} label="Memory" blank={memoryBytes === 0} fallback={capTotal} />
+	<Bytes bind:value={() => memoryBytes || capTotal, setMemory} total={capTotal} label="Memory" info="Device memory the occupant may take, every byte when empty" blank={memoryBytes === 0} fallback={capTotal} />
 {/snippet}
 
 <PanelHeader title={editing ? (slot?.name ?? '') : 'New slot'} subtitle={slot?.description || undefined} {onclose}>
@@ -172,23 +173,21 @@
 <Stack gap={24}>
 	<FormSection>
 		<FieldRow>
-			<Text bind:value={name} label="Name" max={64} required />
-			<Text bind:value={description} label="Description" max={140} />
+			<Text bind:value={name} label="Name" info="The slot's route name" max={64} required />
+			<Text bind:value={description} label="Description" info="A line under the name" max={140} />
 		</FieldRow>
 	</FormSection>
 	<FormSection title="Resources" info="No device chosen leaves every device open to the occupant">
-		<Devices bind:value={deviceIds} profile={live.host} label="Devices" />
-		<FieldRow>
-			{@render placementField()}
-			{#if capTotal > 0}{@render memoryField()}{/if}
-		</FieldRow>
+		<Devices bind:value={deviceIds} profile={live.host} label="Devices" info="Devices the occupant may use, every device when none is chosen" />
+		{@render placementField()}
+		{#if capTotal > 0}{@render memoryField()}{/if}
 	</FormSection>
 	<PolicyFields bind:policy bind:profile />
-	<FormSection title="Aliases">
+	<FormSection title="Aliases" info="Other route names that serve the slot's model, each with its own policy and tools">
 		{#each aliases as alias, i (i)}
 			<Stack gap={8}>
 				<Row gap={8} wrap={false} align="flex-end">
-					<Cell min="12rem"><Text bind:value={alias.name} label="Alias" max={64} /></Cell>
+					<Cell min="12rem"><Text bind:value={alias.name} label="Alias" info="Another route name serving the slot's model" max={64} /></Cell>
 					<Cell grow={false}>
 						<NeoButton text aria-label="Remove alias" onclick={() => (aliases = aliases.filter((_, j) => j !== i))}>
 							{#snippet icon()}<XIcon size={20} />{/snippet}
@@ -209,12 +208,12 @@
 			</NeoButton>
 		</Row>
 	</FormSection>
-	<FormSection title="Launch">
+	<FormSection title="Launch" info="What a launch into the slot starts with">
 		<FieldRow>
-			<Select bind:value={runtimeId} options={runtimeOptions} label="Runtime" clearable />
-			<NumberField bind:value={position} min={0} label="Position" emptyZero placeholder={positionFallback} />
+			<Select bind:value={runtimeId} options={runtimeOptions} label="Runtime" info="The runtime launches default to" placeholder="Chosen at launch" clearable />
+			<NumberField bind:value={position} min={0} label="Position" info="Place in the list and relaunch order, last when empty" emptyZero placeholder={positionFallback} />
 		</FieldRow>
-		<Text bind:value={args} label="Arguments" max={512} mono />
+		<Text bind:value={args} label="Arguments" info="Extra words for the server command, templates over the launch" max={512} mono />
 	</FormSection>
 	{#if runtimeParams.length}
 		<ParamsForm params={runtimeParams} bind:values={params} />

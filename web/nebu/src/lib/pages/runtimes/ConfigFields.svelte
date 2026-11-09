@@ -32,17 +32,17 @@
 	<FieldRow>
 		{#each pair as f (f.name)}
 			{#if f.choices.length}
-				<Select value={values[f.name] || undefined} options={options(f)} label={f.label || f.name} required={f.required} {disabled} onchange={(v) => (values[f.name] = v ?? '')} />
+				<Select value={values[f.name] || undefined} options={options(f)} label={f.label || f.name} info={f.description || undefined} required={f.required} {disabled} onchange={(v) => (values[f.name] = v ?? '')} />
 			{:else if f.type === ConfigType.BOOL}
-				<Switch checked={values[f.name] === 'true'} label={f.label || f.name} {disabled} onchange={(on) => (values[f.name] = on ? 'true' : 'false')} />
+				<Switch checked={values[f.name] === 'true'} label={f.label || f.name} info={f.description || undefined} {disabled} top onchange={(on) => (values[f.name] = on ? 'true' : 'false')} />
 			{:else if f.type === ConfigType.INT}
-				<NumberField value={Number(values[f.name] ?? 0)} label={f.label || f.name} placeholder={f.placeholder} {disabled} onchange={(n) => (values[f.name] = String(n))} />
+				<NumberField value={Number(values[f.name] ?? 0)} label={f.label || f.name} info={f.description || undefined} placeholder={f.placeholder} {disabled} onchange={(n) => (values[f.name] = String(n))} />
 			{:else if f.type === ConfigType.PATH}
-				<Path value={values[f.name] ?? ''} label={f.label || f.name} placeholder={f.placeholder} {disabled} onchange={(v) => (values[f.name] = v)} />
+				<Path value={values[f.name] ?? ''} label={f.label || f.name} info={f.description || undefined} placeholder={f.placeholder} {disabled} onchange={(v) => (values[f.name] = v)} />
 			{:else if f.type === ConfigType.ENV}
-				<Secret bind:value={values[f.name]} label={f.label || f.name} set={secretsSet} {disabled} />
+				<Secret bind:value={values[f.name]} label={f.label || f.name} info={f.description || undefined} set={secretsSet} {disabled} />
 			{:else}
-				<Text value={values[f.name] ?? ''} label={f.label || f.name} placeholder={f.placeholder} type={f.type === ConfigType.URL ? 'url' : 'text'} required={f.required} {disabled} onchange={(v) => (values[f.name] = v)} />
+				<Text value={values[f.name] ?? ''} label={f.label || f.name} info={f.description || undefined} placeholder={f.placeholder} type={f.type === ConfigType.URL ? 'url' : 'text'} required={f.required} {disabled} onchange={(v) => (values[f.name] = v)} />
 			{/if}
 		{/each}
 	</FieldRow>

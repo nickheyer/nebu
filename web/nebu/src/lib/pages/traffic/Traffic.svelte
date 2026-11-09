@@ -327,11 +327,9 @@
 	}
 </script>
 
-{#snippet nowMark()}<ClockIcon size={16} aria-label="Now" />{/snippet}
-
 {#snippet rangeFields()}
-	<Duration bind:value={fromAgo} base="s" label="Start ago" message={fromAgo <= toAgo ? 'Start after end' : undefined} />
-	<Duration bind:value={toAgo} base="s" label="End ago" emptyZero mark={nowMark} />
+	<Duration bind:value={fromAgo} base="s" label="Start ago" info="How far back the window starts" message={fromAgo <= toAgo ? 'Start after end' : undefined} />
+	<Duration bind:value={toAgo} base="s" label="End ago" info="How far back the window ends, now when empty" emptyZero off={{ label: 'Now' }} />
 {/snippet}
 
 {#snippet popover()}

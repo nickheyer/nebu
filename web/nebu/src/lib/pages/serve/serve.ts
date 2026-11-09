@@ -7,6 +7,17 @@ import type { Task } from '#lib/proto/nebu/v1/task_pb.js';
 import { date, elapsed, ms, num } from '#lib/format.js';
 import type { Live } from '#lib/live/events.svelte.js';
 import type { KeyRow } from '#lib/ui/KeyRows.svelte';
+import type { Off } from '#lib/ui/fields/types.js';
+
+// A gateway value as a policy field's placeholder, nothing when the gateway sets none
+export function literal(n: number | undefined): string | undefined {
+	return n ? String(n) : undefined;
+}
+
+// The toggle emptying a policy field, a reset arrow while a gateway value stands in and the unbounded mark otherwise
+export function gatewayDefault(value: number | undefined, unbounded: string): Off {
+	return value ? { label: 'Gateway default' } : { label: unbounded };
+}
 
 // The model phrase a run request names, repository and group
 export function modelPhrase(r: { repo: string; group: string } | undefined): string {

@@ -532,7 +532,7 @@ func TestWalkthroughStages(t *testing.T) {
 	if got := plan.GetPrefillSeconds(); math.Abs(got-want) > want*1e-6 {
 		t.Fatalf("request priced at %.1f s, the cost lines give %.1f s: %s", got, want, reason)
 	}
-	if !strings.Contains(reason, "20.0 MiB embedding across in 168 ms") {
+	if !strings.Contains(reason, "20.0 MB embedding across in 168 ms") {
 		t.Fatalf("the embedding crosses once at 1 Gb/s: %s", reason)
 	}
 	if plan.GetRequestsPerSecond() <= 0 || plan.GetDecodeSecondsPerToken() != 0 {

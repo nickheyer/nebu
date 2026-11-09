@@ -1,7 +1,8 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
 	import { untrack } from 'svelte';
-	import { NeoNumberStep } from '#lib/neo/inputs/index.js';
+	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
+	import Stepper from '#lib/ui/fields/Stepper.svelte';
+	import { fieldId, type Off } from '#lib/ui/fields/types.js';
 
 	let {
 		value = $bindable(0),
@@ -9,58 +10,51 @@
 		max,
 		step = 1,
 		label,
+		info,
 		placeholder,
 		unit,
 		disabled = false,
 		message,
 		error,
-		// Whether zero shows as a blank box
+		// Whether zero shows as an empty box
 		emptyZero = false,
-		// A mark after the box for how an empty box resolves
-		mark,
+		// The toggle emptying the box, zero then meaning what its label says
+		off,
 		onchange
-	}: { value?: number; min?: number; max?: number; step?: number; label?: string; placeholder?: string; unit?: string; disabled?: boolean; message?: string; error?: string; emptyZero?: boolean; mark?: Snippet; onchange?: (n: number) => void } = $props();
+	}: { value?: number; min?: number; max?: number; step?: number; label?: string; info?: string; placeholder?: string; unit?: string; disabled?: boolean; message?: string; error?: string; emptyZero?: boolean; off?: Off; onchange?: (n: number) => void } = $props();
 
-	let raw = $state<number | string | null | undefined>(untrack(() => (emptyZero && value === 0 ? '' : value)));
+	const id = fieldId();
+	let focused = $state(false);
+	let raw = $state<number | string | null>(untrack(() => (emptyZero && value === 0 ? '' : String(value))));
+	const isOff = $derived(emptyZero && value === 0);
 
+	// The box follows the value except while being typed in
 	$effect(() => {
-		raw = emptyZero && value === 0 ? '' : value;
+		const next = emptyZero && value === 0 ? '' : String(value);
+		if (!focused) raw = next;
 	});
 
+	// Takes a number the bounds allow, leaving text that is none or past them to the box's own error
 	function changed() {
 		const blank = raw === '' || raw === null || raw === undefined;
 		const n = blank ? 0 : globalThis.Number(raw);
-		if ((blank && !emptyZero) || globalThis.Number.isNaN(n)) return;
+		if ((blank && !emptyZero) || !globalThis.Number.isFinite(n)) return;
+		if (!blank && ((min !== undefined && n < min) || (max !== undefined && n > max))) return;
 		value = n;
 		onchange?.(n);
 	}
 </script>
 
 <div class="field">
-	<NeoNumberStep bind:value={raw} {min} {max} {step} {label} placeholder={placeholder ?? ''} {disabled} elevation={-1} placement={label ? 'top' : 'inside'} floating={false} width="100%" message={error ?? message} {error} oninput={changed} onchange={changed} center={false} aria-label={label} />
-	{#if unit || mark}
-		<span class="trail">
-			{#if unit}<span class="unit secondary">{unit}</span>{/if}
-			{#if mark}<span class="mark">{@render mark()}</span>{/if}
-		</span>
-	{/if}
+	<FieldLabel {label} {info} forId={id} />
+	<Stepper {id} bind:raw bind:focused {min} {max} {step} placeholder={placeholder ?? (isOff && off ? off.label : '')} {disabled} {message} {error} {unit} off={emptyZero ? off : undefined} {isOff} ariaLabel={label} onchange={changed} />
 </div>
 
 <style>
 	.field {
 		display: flex;
-		gap: 8px;
-		align-items: flex-end;
+		flex-direction: column;
+		gap: 4px;
 		min-width: 0;
-	}
-	.field :global(.neo-input-group) {
-		flex: 1 1 auto;
-	}
-	.unit {
-		white-space: nowrap;
-	}
-	.mark {
-		display: inline-flex;
-		color: var(--nebu-text-muted);
 	}
 </style>

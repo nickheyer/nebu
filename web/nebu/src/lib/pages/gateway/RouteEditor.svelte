@@ -31,8 +31,8 @@
 	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { isUserOwned, ownerLabel, ownerLink, poolLamp, poolShape, poolWord, targetShare } from '#lib/pages/gateway/gateway.js';
+	import { gatewayDefault, literal } from '#lib/pages/serve/serve.js';
 	import DotsSixVerticalIcon from 'phosphor-svelte/lib/DotsSixVerticalIcon';
-	import InfinityIcon from 'phosphor-svelte/lib/InfinityIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 
@@ -102,10 +102,6 @@
 		}
 	});
 
-	function literal(n: number | undefined): string | undefined {
-		return n ? String(n) : undefined;
-	}
-
 	function nextKey(): string {
 		return `rule-${seq++}`;
 	}
@@ -155,8 +151,6 @@
 	}
 </script>
 
-{#snippet unbounded()}<InfinityIcon size={16} aria-label="No limit" />{/snippet}
-
 {#snippet removeButton(label: string, onclick: () => void, disabled = false)}
 	<span class="trail remove"><NeoButton text aria-label={label} title={label} {disabled} {onclick}>{#snippet icon()}<XIcon size={18} />{/snippet}</NeoButton></span>
 {/snippet}
@@ -171,20 +165,17 @@
 		{#if !owned}{@render removeButton('Remove rule', () => removeRule(k), ordered.length === 1)}{/if}
 	</div>
 	<div class="rulebody">
-		<Text bind:value={rule.match} label="Match" placeholder="*" max={64} mono disabled={owned || locked} />
+		<Text bind:value={rule.match} label="Match" info="Exact client model name, every request when empty" placeholder="*" max={64} mono disabled={owned || locked} />
 		<div class="targets">
 			{#each rule.targets as target, t (t)}
 				{@const pool = target.poolId ? live.pools.get(target.poolId) : undefined}
 				<div class="target">
-					<span class="pool"><Picker bind:value={target.poolId} fetch={fetchPools} label={t === 0 ? 'Pool' : undefined} current={target.poolId || undefined} required disabled={owned || locked} /></span>
-					<span class="model"><Text bind:value={target.model} label={t === 0 ? 'Model' : undefined} max={64} placeholder={pool?.spec?.model || undefined} disabled={owned || locked} /></span>
-					<span class="weight"><NumberField bind:value={target.weight} min={1} max={1_000_000} label={t === 0 ? 'Weight' : undefined} disabled={owned || locked} /></span>
-					<span class="trail share">
-						{#if target.poolId}
-							<Tip text={poolWord(pool)} tag="span"><Dot lamp={poolLamp(pool)} shape={poolShape(pool)} label={poolWord(pool)} /></Tip>
-						{/if}
-						<Tip text="Share" tag="span"><span class="pct">{targetShare(rule, target.weight)}</span></Tip>
-					</span>
+					<span class="pool"><Picker bind:value={target.poolId} fetch={fetchPools} label={t === 0 ? 'Pool' : undefined} info={t === 0 ? 'The pool the request goes to' : undefined} placeholder="Choose a pool" current={target.poolId || undefined} required disabled={owned || locked} /></span>
+					<span class="model"><Text bind:value={target.model} label={t === 0 ? 'Model' : undefined} info={t === 0 ? 'Model name written into the request, the pool model when empty' : undefined} max={64} placeholder={pool?.spec?.model || undefined} disabled={owned || locked} /></span>
+					<span class="weight"><NumberField bind:value={target.weight} min={1} max={1_000_000} label={t === 0 ? 'Weight' : undefined} info={t === 0 ? 'Share of the rule traffic against the other targets' : undefined} unit={targetShare(rule, target.weight)} disabled={owned || locked} /></span>
+					{#if target.poolId}
+						<span class="trail share"><Tip text={poolWord(pool)} tag="span"><Dot lamp={poolLamp(pool)} shape={poolShape(pool)} label={poolWord(pool)} /></Tip></span>
+					{/if}
 					{#if !owned}{@render removeButton('Remove target', () => (rule.targets = rule.targets.filter((_, j) => j !== t)), rule.targets.length === 1)}{/if}
 				</div>
 			{/each}
@@ -205,10 +196,10 @@
 	{/snippet}
 </PanelHeader>
 <Stack gap={24}>
-	<FormSection title="Route">
+	<FormSection title="Route" info="What clients call the route and how its traffic balances across targets">
 		<FieldRow>
-			<Text bind:value={name} label="Name" required readonly={editing} max={64} />
-			<Select value={spec.objective || undefined} options={objectives} label="Objective" clearable disabled={locked} onchange={(v) => (spec.objective = v ?? '')} />
+			<Text bind:value={name} label="Name" info="What clients and other routes call it, fixed once created" required readonly={editing} max={64} />
+			<Select value={spec.objective || undefined} options={objectives} label="Objective" info="Carried by every request unless it names its own" placeholder="None" clearable disabled={locked} onchange={(v) => (spec.objective = v ?? '')} />
 		</FieldRow>
 		<Segmented
 			bind:value={spec.balance}
@@ -217,7 +208,7 @@
 				{ value: RouteBalance.READY_ENDPOINTS, label: 'Ready endpoints' },
 				{ value: RouteBalance.FREE_CAPACITY, label: 'Free capacity' }
 			]}
-			label="Balance"
+			label="Balance" info="Static weights alone, or each weight scaled by ready endpoints or their free capacity"
 			disabled={locked}
 		/>
 	</FormSection>
@@ -251,17 +242,17 @@
 	{#if spec.policy}
 		<FormSection title="Policy" info="Empty fields take the gateway's values">
 			<FieldRow>
-				<NumberField bind:value={spec.policy.maxInFlight} min={0} max={1_000_000} label="Max in flight" emptyZero placeholder={literal(d?.maxInFlight)} mark={d && !d.maxInFlight ? unbounded : undefined} disabled={locked} />
-				<NumberField bind:value={spec.policy.requestsPerSecond} min={0} step={0.5} label="Requests per second" emptyZero placeholder={literal(d?.requestsPerSecond)} mark={d && !d.requestsPerSecond ? unbounded : undefined} disabled={locked} />
+				<NumberField bind:value={spec.policy.maxInFlight} min={0} max={1_000_000} label="Max in flight" info="Requests in flight at once" emptyZero placeholder={literal(d?.maxInFlight)} off={gatewayDefault(d?.maxInFlight, 'No limit')} disabled={locked} />
+				<NumberField bind:value={spec.policy.requestsPerSecond} min={0} step={0.5} label="Requests per second" info="Sustained request rate" emptyZero placeholder={literal(d?.requestsPerSecond)} off={gatewayDefault(d?.requestsPerSecond, 'No limit')} disabled={locked} />
 			</FieldRow>
-			<FieldRow>
-				<Duration bind:value={spec.policy.requestTimeoutMs} base="ms" max={86_400_000} label="Request timeout" emptyZero fallback={d?.requestTimeoutMs || undefined} mark={d && !d.requestTimeoutMs ? unbounded : undefined} disabled={locked} />
-				<Duration bind:value={spec.policy.upstreamTimeoutMs} base="ms" max={86_400_000} label="Upstream timeout" emptyZero fallback={d?.upstreamTimeoutMs || undefined} mark={d && !d.upstreamTimeoutMs ? unbounded : undefined} disabled={locked} />
+			<FieldRow wide>
+				<Duration bind:value={spec.policy.requestTimeoutMs} base="ms" max={86_400_000} label="Request timeout" info="The whole exchange, first byte in to last byte out" emptyZero fallback={d?.requestTimeoutMs || undefined} off={gatewayDefault(d?.requestTimeoutMs, 'No timeout')} disabled={locked} />
+				<Duration bind:value={spec.policy.upstreamTimeoutMs} base="ms" max={86_400_000} label="Upstream timeout" info="Longest wait for the runtime's response" emptyZero fallback={d?.upstreamTimeoutMs || undefined} off={gatewayDefault(d?.upstreamTimeoutMs, 'No timeout')} disabled={locked} />
 			</FieldRow>
 			{#snippet advanced()}
 				{#if spec.policy}
 					<FieldRow>
-						<NumberField bind:value={spec.policy.burst} min={0} max={1_000_000} label="Burst" emptyZero placeholder={literal(d?.burst)} mark={d && !d.burst ? unbounded : undefined} disabled={locked} />
+						<NumberField bind:value={spec.policy.burst} min={0} max={1_000_000} label="Burst" info="Requests allowed above the rate at once, the rate rounded up when empty" emptyZero placeholder={literal(d?.burst)} off={gatewayDefault(d?.burst, 'No limit')} disabled={locked} />
 						<span></span>
 					</FieldRow>
 				{/if}
@@ -269,14 +260,14 @@
 		</FormSection>
 	{/if}
 	{#if spec.profile}
-		<FormSection title="Tools">
+		<FormSection title="Tools" info="Tool servers every request on the route may call">
 			<FieldRow>
 				{#if toolOptions.length > 8}
-					<MultiSelect bind:value={spec.profile.toolServers} options={toolOptions} label="Tool servers" search disabled={locked} />
+					<MultiSelect bind:value={spec.profile.toolServers} options={toolOptions} label="Tool servers" info="Servers whose tools every request on the route gets" placeholder="None" search disabled={locked} />
 				{:else}
-					<Checklist bind:value={spec.profile.toolServers} options={toolOptions} label="Tool servers" disabled={locked} />
+					<Checklist bind:value={spec.profile.toolServers} options={toolOptions} label="Tool servers" info="Servers whose tools every request on the route gets" disabled={locked} />
 				{/if}
-				<Switch bind:checked={spec.profile.mutatingTools} label="Mutating tools" disabled={locked} />
+				<Switch bind:checked={spec.profile.mutatingTools} label="Mutating tools" info="Offers tools that change what they touch, read only tools alone otherwise" disabled={locked} top />
 			</FieldRow>
 		</FormSection>
 	{/if}
@@ -353,24 +344,14 @@
 	}
 	.weight {
 		display: flex;
-		flex: 0 0 9rem;
+		flex: 0 0 11rem;
 		min-width: 0;
 	}
 	.weight > :global(*) {
 		flex: 1 1 auto;
 	}
 	.share {
-		justify-content: flex-end;
-		min-width: 9ch;
 		margin-left: auto;
-		font-size: var(--nebu-text-secondary);
-		color: var(--nebu-text-muted);
-	}
-	.pct {
-		display: inline-block;
-		min-width: 5ch;
-		font-variant-numeric: tabular-nums;
-		text-align: right;
 	}
 	.remove {
 		flex: 0 0 auto;

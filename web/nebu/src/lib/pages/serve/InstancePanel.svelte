@@ -206,10 +206,10 @@
 						{/each}
 					</List>
 				{/if}
-				<FormSection title="Load adapter">
+				<FormSection title="Load adapter" info="Attaches a LoRA adapter the runtime switches to when a request names it">
 					<FieldRow>
-						<Text bind:value={adapterName} label="Name" max={64} required />
-						<Path bind:value={adapterPath} label="Path" />
+						<Text bind:value={adapterName} label="Name" info="What requests call the adapter" max={64} required />
+						<Path bind:value={adapterPath} label="Path" info="The adapter file on this host" />
 					</FieldRow>
 				</FormSection>
 			</Stack>

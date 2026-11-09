@@ -90,110 +90,110 @@
 	{/snippet}
 </PanelHeader>
 <Stack gap={24}>
-	<FormSection title="Pool">
+	<FormSection title="Pool" info="What the endpoints serve and how the gateway reaches them">
 		<FieldRow>
-			<Text bind:value={id} label="Id" required readonly={editing} max={64} />
-			<Text bind:value={spec.model} label="Model" required max={128} />
+			<Text bind:value={id} label="Id" info="How routes name the pool, fixed once created" required readonly={editing} max={64} />
+			<Text bind:value={spec.model} label="Model" info="The base model every endpoint serves" required max={128} />
 		</FieldRow>
 		<FieldRow>
-			<Select value={spec.runtimeId || undefined} options={runtimes} label="Runtime" clearable onchange={(v) => (spec.runtimeId = v ?? '')} />
-			<Text bind:value={spec.accelerator} label="Accelerator" max={64} />
+			<Select value={spec.runtimeId || undefined} options={runtimes} label="Runtime" info="The runtime the endpoints run, unknown when empty" placeholder="Unknown" clearable onchange={(v) => (spec.runtimeId = v ?? '')} />
+			<Text bind:value={spec.accelerator} label="Accelerator" info="The accelerator class every endpoint runs on, such as cpu" max={64} />
 		</FieldRow>
-		<KeyValues bind:value={spec.selector} label="Selector" />
+		<KeyValues bind:value={spec.selector} label="Selector" info="Labels an endpoint must carry to join" />
 		<FieldRow>
-			<Chips bind:value={ports} label="Target ports" numeric max={8} />
-			<NumberField bind:value={spec.concurrency} min={0} label="Concurrency" emptyZero />
-		</FieldRow>
-		<FieldRow>
-			<Segmented bind:value={spec.appProtocol} options={[{ value: AppProtocol.HTTP, label: 'HTTP' }, { value: AppProtocol.H2C, label: 'h2c' }, { value: AppProtocol.GRPC, label: 'gRPC' }]} label="Protocol" />
-			<Segmented bind:value={spec.failureMode} options={[{ value: FailureMode.FAIL_CLOSE, label: 'Close' }, { value: FailureMode.FAIL_OPEN, label: 'Open' }]} label="Failure mode" />
+			<Chips bind:value={ports} label="Target ports" info="Ports the endpoints serve on" numeric max={8} />
+			<NumberField bind:value={spec.concurrency} min={0} label="Concurrency" info="Requests one endpoint runs at once when it reports no capacity" emptyZero />
 		</FieldRow>
 		<FieldRow>
-			<Select value={spec.schedulerConfig || undefined} options={configs} label="Scheduler" clearable onchange={(v) => (spec.schedulerConfig = v ?? '')} />
-			<Switch bind:checked={spec.export} label="Export" />
+			<Segmented bind:value={spec.appProtocol} options={[{ value: AppProtocol.HTTP, label: 'HTTP' }, { value: AppProtocol.H2C, label: 'h2c' }, { value: AppProtocol.GRPC, label: 'gRPC' }]} label="Protocol" info="How the gateway speaks to endpoints" />
+			<Segmented bind:value={spec.failureMode} options={[{ value: FailureMode.FAIL_CLOSE, label: 'Close' }, { value: FailureMode.FAIL_OPEN, label: 'Open' }]} label="Failure mode" info="Whether requests fail or pass through when the scheduler cannot answer" />
 		</FieldRow>
 		<FieldRow>
-			<Switch bind:checked={spec.tokensInOut} label="Tokens in and out" />
+			<Select value={spec.schedulerConfig || undefined} options={configs} label="Scheduler" info="The scheduler configuration requests run through, the gateway's default when empty" placeholder="Default" clearable onchange={(v) => (spec.schedulerConfig = v ?? '')} />
+			<Switch bind:checked={spec.export} label="Export" info="Offers the pool to every mesh member" top />
+		</FieldRow>
+		<FieldRow>
+			<Switch bind:checked={spec.tokensInOut} label="Tokens in and out" info="The gateway tokenizes prompts and sends ids, decoding answers where the protocol returns ids" />
 			<span></span>
 		</FieldRow>
 		{#snippet advanced()}
 			{#if spec.inventory}
 				<FieldRow>
-					<NumberField bind:value={spec.inventory.contextLength} min={0} label="Context length" unit="tokens" emptyZero />
-					<Text bind:value={spec.inventory.quantization} label="Quantization" max={32} />
+					<NumberField bind:value={spec.inventory.contextLength} min={0} label="Context length" info="Tokens of context the launch reports" unit="tokens" emptyZero />
+					<Text bind:value={spec.inventory.quantization} label="Quantization" info="Precision label the launch reports" max={32} />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.inventory.accelerator} label="Launch accelerator" max={64} />
-					<Segmented bind:value={() => spec.inventory?.throughputClass || undefined, (v) => (spec.inventory!.throughputClass = v ?? '')} options={[{ value: 'device', label: 'Device' }, { value: 'offload', label: 'Offload' }, { value: 'host', label: 'Host' }]} label="Throughput class" clearable />
+					<Text bind:value={spec.inventory.accelerator} label="Launch accelerator" info="Accelerator the launch reports" max={64} />
+					<Segmented bind:value={() => spec.inventory?.throughputClass || undefined, (v) => (spec.inventory!.throughputClass = v ?? '')} options={[{ value: 'device', label: 'Device' }, { value: 'offload', label: 'Offload' }, { value: 'host', label: 'Host' }]} label="Throughput class" info="Whether the model runs on device, offloaded or on the host" clearable />
 				</FieldRow>
-				<MultiSelect bind:value={spec.inventory.modalities} options={modalities} label="Modalities" />
+				<MultiSelect bind:value={spec.inventory.modalities} options={modalities} label="Modalities" info="What the endpoints take in and give back, read from the launch when empty" placeholder="Reported by the launch" />
 			{/if}
 			{#if spec.metrics}
 				<FieldRow>
-					<Text bind:value={spec.metrics.metricsPath} label="Metrics path" mono placeholder="/metrics" />
-					<NumberField bind:value={spec.metrics.metricsPort} min={0} max={65535} label="Metrics port" emptyZero placeholder={portNumbers[0] ? String(portNumbers[0]) : undefined} />
+					<Text bind:value={spec.metrics.metricsPath} label="Metrics path" info="Where the runtime serves Prometheus metrics" mono placeholder="/metrics" />
+					<NumberField bind:value={spec.metrics.metricsPort} min={0} max={65535} label="Metrics port" info="Port for the metrics path when apart from the endpoint port" emptyZero placeholder={portNumbers[0] ? String(portNumbers[0]) : undefined} />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.healthPath} label="Health path" mono placeholder="/health" />
-					<Text bind:value={spec.metrics.slotsPath} label="Slots path" mono />
+					<Text bind:value={spec.metrics.healthPath} label="Health path" info="Readiness endpoint" mono placeholder="/health" />
+					<Text bind:value={spec.metrics.slotsPath} label="Slots path" info="JSON slot listing KV use is summed from when there is no KV gauge" mono />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.queuedRequests} label="Queued requests gauge" mono />
-					<KeyValues bind:value={spec.metrics.queuedRequestsMatch} label="Queued requests labels" />
+					<Text bind:value={spec.metrics.queuedRequests} label="Queued requests gauge" info="Gauge counting waiting requests" mono />
+					<KeyValues bind:value={spec.metrics.queuedRequestsMatch} label="Queued requests labels" info="Labels a series must match to count" />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.runningRequests} label="Running requests gauge" mono />
-					<KeyValues bind:value={spec.metrics.runningRequestsMatch} label="Running requests labels" />
+					<Text bind:value={spec.metrics.runningRequests} label="Running requests gauge" info="Gauge counting running requests" mono />
+					<KeyValues bind:value={spec.metrics.runningRequestsMatch} label="Running requests labels" info="Labels a series must match to count" />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.kvCacheUtilization} label="KV utilization gauge" mono />
-					<KeyValues bind:value={spec.metrics.kvCacheUtilizationMatch} label="KV utilization labels" />
+					<Text bind:value={spec.metrics.kvCacheUtilization} label="KV utilization gauge" info="Gauge of KV cache in use" mono />
+					<KeyValues bind:value={spec.metrics.kvCacheUtilizationMatch} label="KV utilization labels" info="Labels a series must match to count" />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.cacheConfigInfo} label="Cache config gauge" mono />
-					<Text bind:value={spec.metrics.replicaLabel} label="Replica label" mono />
+					<Text bind:value={spec.metrics.cacheConfigInfo} label="Cache config gauge" info="Info gauge carrying block size and block count" mono />
+					<Text bind:value={spec.metrics.replicaLabel} label="Replica label" info="Label naming the scheduler replica, series sharing a value counted once" mono />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.blockSizeLabel} label="Block size label" mono />
-					<Text bind:value={spec.metrics.numBlocksLabel} label="Block count label" mono />
+					<Text bind:value={spec.metrics.blockSizeLabel} label="Block size label" info="Label on the cache config gauge holding block size" mono />
+					<Text bind:value={spec.metrics.numBlocksLabel} label="Block count label" info="Label on the cache config gauge holding total blocks" mono />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.blockSize} label="Block size gauge" mono />
-					<KeyValues bind:value={spec.metrics.blockSizeMatch} label="Block size labels" />
+					<Text bind:value={spec.metrics.blockSize} label="Block size gauge" info="Gauge holding block size when there is no cache config gauge" mono />
+					<KeyValues bind:value={spec.metrics.blockSizeMatch} label="Block size labels" info="Labels a series must match to count" />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.numBlocks} label="Block count gauge" mono />
-					<KeyValues bind:value={spec.metrics.numBlocksMatch} label="Block count labels" />
+					<Text bind:value={spec.metrics.numBlocks} label="Block count gauge" info="Gauge holding total blocks when there is no cache config gauge" mono />
+					<KeyValues bind:value={spec.metrics.numBlocksMatch} label="Block count labels" info="Labels a series must match to count" />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.loraInfo} label="LoRA info gauge" mono />
-					<Text bind:value={spec.metrics.maxLoraLabel} label="Max LoRA label" mono />
+					<Text bind:value={spec.metrics.loraInfo} label="LoRA info gauge" info="Info gauge listing loaded adapters" mono />
+					<Text bind:value={spec.metrics.maxLoraLabel} label="Max LoRA label" info="Label on the LoRA info gauge holding adapters per batch" mono />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.runningAdaptersLabel} label="Running adapters label" mono />
-					<Text bind:value={spec.metrics.waitingAdaptersLabel} label="Waiting adapters label" mono />
+					<Text bind:value={spec.metrics.runningAdaptersLabel} label="Running adapters label" info="Label on the LoRA info gauge listing running adapters" mono />
+					<Text bind:value={spec.metrics.waitingAdaptersLabel} label="Waiting adapters label" info="Label on the LoRA info gauge listing waiting adapters" mono />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.adaptersPath} label="Adapters path" mono />
-					<Segmented bind:value={() => spec.metrics?.adaptersFormat || undefined, (v) => (spec.metrics!.adaptersFormat = v ?? '')} options={[{ value: 'llamacpp', label: 'llama.cpp' }, { value: 'openai', label: 'OpenAI' }]} label="Adapters format" clearable />
+					<Text bind:value={spec.metrics.adaptersPath} label="Adapters path" info="JSON listing of loaded adapters when there is no LoRA info gauge" mono />
+					<Segmented bind:value={() => spec.metrics?.adaptersFormat || undefined, (v) => (spec.metrics!.adaptersFormat = v ?? '')} options={[{ value: 'llamacpp', label: 'llama.cpp' }, { value: 'openai', label: 'OpenAI' }]} label="Adapters format" info="Layout of the adapters listing" clearable />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.maxLoraPath} label="Max LoRA path" mono />
-					<Text bind:value={spec.metrics.maxLoraField} label="Max LoRA field" mono />
+					<Text bind:value={spec.metrics.maxLoraPath} label="Max LoRA path" info="JSON document holding adapters per batch" mono />
+					<Text bind:value={spec.metrics.maxLoraField} label="Max LoRA field" info="Field in that document" mono />
 				</FieldRow>
-				<Switch bind:checked={spec.metrics.staticCache} label="Static cache" />
+				<Switch bind:checked={spec.metrics.staticCache} label="Static cache" info="Every running request holds a full length cache" />
 			{/if}
 		{/snippet}
 	</FormSection>
-	<FormSection title="Static endpoints">
+	<FormSection title="Static endpoints" info="Servers nebu does not run itself, joined by address">
 		{#if spec.staticEndpoints.length}
 			<div class="endpoints">
 				{#each spec.staticEndpoints as ep, i (i)}
 					<div class="endpoint">
-						<span class="address"><Text bind:value={ep.address} label={i === 0 ? 'Address' : undefined} placeholder="host:port" mono required /></span>
-						<span class="role"><Text bind:value={ep.role} label={i === 0 ? 'Role' : undefined} max={32} /></span>
-						<span class="small"><NumberField bind:value={ep.rank} min={0} label={i === 0 ? 'Rank' : undefined} /></span>
-						<span class="small"><NumberField bind:value={ep.kvCapacity} min={0} label={i === 0 ? 'KV tokens' : undefined} emptyZero /></span>
+						<span class="address"><Text bind:value={ep.address} label={i === 0 ? 'Address' : undefined} info={i === 0 ? 'host:port of a server nebu does not manage' : undefined} placeholder="host:port" mono required /></span>
+						<span class="role"><Text bind:value={ep.role} label={i === 0 ? 'Role' : undefined} info={i === 0 ? 'The endpoint part, such as prefill or decode' : undefined} max={32} /></span>
+						<span class="small"><NumberField bind:value={ep.rank} min={0} label={i === 0 ? 'Rank' : undefined} info={i === 0 ? 'Order among endpoints sharing a role' : undefined} /></span>
+						<span class="small"><NumberField bind:value={ep.kvCapacity} min={0} label={i === 0 ? 'KV tokens' : undefined} info={i === 0 ? 'KV cache tokens the whole server holds' : undefined} emptyZero /></span>
 						<span class="trail"><NeoButton text aria-label="Remove endpoint" title="Remove endpoint" onclick={() => (spec.staticEndpoints = spec.staticEndpoints.filter((_, j) => j !== i))}>{#snippet icon()}<XIcon size={18} />{/snippet}</NeoButton></span>
 					</div>
 				{/each}

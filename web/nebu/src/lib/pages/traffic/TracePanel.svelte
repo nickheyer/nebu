@@ -141,8 +141,8 @@
 					{#each t.toolCalls as c (c.id)}
 						<ListRow lamp={c.failed ? 'error' : 'success'} primary={c.name} secondary={c.server || 'client'} secondaryWidth="24ch" facts={[{ value: ms(c.tookMs) }]}>
 							{#snippet expand()}
-								<Code value={c.arguments} language="json" readonly rows={4} label="Arguments" />
-								<Code value={c.result} language="json" readonly rows={6} label="Result" />
+								<Code value={c.arguments} language="json" readonly rows={4} label="Arguments" info="What the model passed to the tool" />
+								<Code value={c.result} language="json" readonly rows={6} label="Result" info="What the tool returned" />
 							{/snippet}
 						</ListRow>
 					{/each}
@@ -150,9 +150,9 @@
 			{/if}
 		{:else}
 			<Stack gap={16}>
-				<Code value={t.request} language="json" readonly rows={8} label="Request" capped={capped(t.request, t.requestBytes)} />
-				{#if t.upstreamRequest}<Code value={t.upstreamRequest} language="json" readonly rows={8} label="Upstream request" capped={capped(t.upstreamRequest)} />{/if}
-				<Code value={t.response} language="json" readonly rows={8} label="Response" capped={capped(t.response, t.responseBytes)} />
+				<Code value={t.request} language="json" readonly rows={8} label="Request" info="The request as the client sent it" capped={capped(t.request, t.requestBytes)} />
+				{#if t.upstreamRequest}<Code value={t.upstreamRequest} language="json" readonly rows={8} label="Upstream request" info="The request as the gateway sent it on" capped={capped(t.upstreamRequest)} />{/if}
+				<Code value={t.response} language="json" readonly rows={8} label="Response" info="The response the client received" capped={capped(t.response, t.responseBytes)} />
 			</Stack>
 		{/if}
 	</div>

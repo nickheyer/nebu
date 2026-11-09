@@ -31,7 +31,7 @@
 	import Sheet from '#lib/ui/layout/Sheet.svelte';
 	import ModelPanel from '#lib/pages/models/ModelPanel.svelte';
 	import StoreCard from '#lib/pages/models/StoreCard.svelte';
-	import { exportModel, kindLabel, launchHref, modelKeyOf, modelPath, paramCount, quality, removeModel, runtimeNames, sameModel, selectWidth, verifyModel } from '#lib/pages/models/models.js';
+	import { exportModel, kindLabel, launchHref, modelKeyOf, modelPath, paramCount, quality, removeModel, runtimeNames, sameModel, verifyModel } from '#lib/pages/models/models.js';
 	import { modelsTabs } from '#lib/pages/models/tabs.js';
 	import { terminal } from '#lib/pages/serve/serve.js';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
@@ -160,7 +160,7 @@
 </script>
 
 {#snippet collectSwitch()}
-	<Switch bind:checked={collect} label="Collect blobs" />
+	<Switch bind:checked={collect} label="Collect blobs" info="Deletes the blobs no other model shares" />
 {/snippet}
 
 {#snippet sortIcon()}<SortAscendingIcon size={16} />{/snippet}
@@ -187,7 +187,7 @@
 			<span class="filter">{@render runtimeSelect()}</span>
 			<span class="filter">{@render formatSelect()}</span>
 		{/if}
-		<span class="sort"><Select bind:value={sort} options={sorts} icon={sortIcon} width={selectWidth(sorts.map((s) => s.label))} /></span>
+		<span class="sort"><Select bind:value={sort} options={sorts} icon={sortIcon} fit /></span>
 	{/if}
 {/snippet}
 
@@ -244,7 +244,7 @@
 								{/if}
 							{/snippet}
 							{#snippet action()}
-								<RowAction href={launchHref(m)} label="Launch" />
+								{#if m.runtimes}<RowAction href={launchHref(m)} label="Launch" />{/if}
 							{/snippet}
 						</ListRow>
 					{/each}
@@ -276,7 +276,7 @@
 
 <Dialog bind:open={exportOpen} title="Export" confirm="Export" busy={exportBusy} disabled={!exportDir} onconfirm={submitExport}>
 	{#if exporting}<Str value={exporting.repo} kind="repo" color="muted" width="100%" />{/if}
-	<Path bind:value={exportDir} label="Directory" filter="directories" />
+	<Path bind:value={exportDir} label="Directory" info="Where the model's files are copied on this host" filter="directories" />
 </Dialog>
 
 <style>
@@ -288,9 +288,15 @@
 		width: 16rem;
 		max-width: 100%;
 	}
+	/* Each filter keeps to its lane, the box inside shrinking rather than spilling into the next gap */
 	.filter {
 		display: inline-flex;
 		width: 10rem;
+		min-width: 0;
+	}
+	.filter > :global(.field) {
+		flex: 1 1 auto;
+		min-width: 0;
 	}
 	.sort {
 		display: inline-flex;

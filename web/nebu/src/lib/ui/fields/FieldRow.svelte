@@ -2,11 +2,12 @@
 	import type { Snippet } from 'svelte';
 	import { viewport } from '#lib/state/viewport.svelte.js';
 
-	let { children }: { children: Snippet } = $props();
+	// Wide rows hold controls such as durations with their unit buttons, so they fold sooner
+	let { children, wide = false }: { children: Snippet; wide?: boolean } = $props();
 
 	let width = $state(0);
 	// Two fields per row where the container allows, else one
-	const single = $derived(viewport.mobile || (width > 0 && width < 480));
+	const single = $derived(viewport.mobile || (width > 0 && width < (wide ? 880 : 480)));
 </script>
 
 <div class="fieldrow" class:single bind:clientWidth={width}>

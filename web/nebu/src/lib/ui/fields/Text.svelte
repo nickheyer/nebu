@@ -2,10 +2,13 @@
 	import type { Snippet } from 'svelte';
 	import type { HTMLInputAttributes } from 'svelte/elements';
 	import { NeoInput } from '#lib/neo/inputs/index.js';
+	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
+	import { fieldId } from '#lib/ui/fields/types.js';
 
 	let {
 		value = $bindable(''),
 		label,
+		info,
 		placeholder,
 		max,
 		min,
@@ -18,11 +21,13 @@
 		error,
 		autocomplete = 'off',
 		before,
+		// A toolbar field, its label standing as the placeholder
 		compact = false,
 		onchange
 	}: {
 		value?: string;
 		label?: string;
+		info?: string;
 		placeholder?: string;
 		max?: number;
 		min?: number;
@@ -39,16 +44,22 @@
 		onchange?: (v: string) => void;
 	} = $props();
 
+	const id = fieldId();
 	let focused = $state(false);
 	const counting = $derived(max !== undefined && (focused || value.length > 0));
 </script>
 
-<div class="field" class:mono>
-	<div class="box" class:bare={!label}>
+{#snippet counter()}
+	{#if counting}<span class="counter" aria-hidden="true">{value.length}/{max}</span>{/if}
+{/snippet}
+
+<div class="field" class:monofield={mono} class:compact>
+	{#if !compact}<FieldLabel {label} {info} forId={id} {required} end={counter} />{/if}
+	<div class="box">
 		<NeoInput
 			bind:value
-			{label}
-			{placeholder}
+			{id}
+			placeholder={placeholder ?? (compact ? label : undefined)}
 			maxlength={max}
 			minlength={min}
 			{disabled}
@@ -56,8 +67,8 @@
 			{required}
 			{type}
 			elevation={-1}
-			placement={label && !compact ? 'top' : 'inside'}
-			floating={compact}
+			placement="inside"
+			floating={false}
 			width="100%"
 			{message}
 			{error}
@@ -68,45 +79,43 @@
 			onblur={() => (focused = false)}
 			onchange={() => onchange?.(value)}
 		/>
-		{#if counting}<span class="counter" aria-hidden="true">{value.length}/{max}</span>{/if}
+		{#if compact}{@render counter()}{/if}
 	</div>
 </div>
 
 <style>
 	.field {
 		display: flex;
-		gap: 8px;
-		align-items: flex-end;
+		flex-direction: column;
+		gap: 4px;
 		min-width: 0;
 	}
 	.box {
 		position: relative;
 		display: flex;
-		flex: 1 1 auto;
 		min-width: 0;
 	}
 	.box :global(.neo-input-group) {
 		flex: 1 1 auto;
+		min-width: 0;
 	}
 	.counter {
-		position: absolute;
-		top: 0;
-		right: var(--nebu-space-1);
-		display: flex;
-		align-items: center;
-		height: var(--neo-input-label-height, var(--neo-line-height, 1.5rem));
 		font-size: var(--nebu-text-caption);
 		font-variant-numeric: tabular-nums;
 		color: var(--nebu-text-muted);
-		pointer-events: none;
+		white-space: nowrap;
 	}
-	.bare .counter {
+	.box > .counter {
+		position: absolute;
 		top: 50%;
 		right: var(--nebu-space-3);
-		height: auto;
 		transform: translateY(-50%);
+		pointer-events: none;
 	}
-	.mono :global(input) {
+	.compact :global(.neo-input-group) {
+		margin-top: 0;
+	}
+	.monofield :global(input) {
 		font-family: var(--nebu-font-mono);
 		font-size: 13px;
 	}

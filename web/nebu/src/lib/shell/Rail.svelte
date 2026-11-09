@@ -114,7 +114,7 @@
 	}
 	.item {
 		display: flex;
-		animation: nebu-reveal 260ms var(--nebu-settle) both;
+		animation: nebu-reveal 260ms var(--nebu-settle) backwards;
 		animation-delay: calc(var(--i) * 24ms);
 	}
 	.items :global(.railtip) {

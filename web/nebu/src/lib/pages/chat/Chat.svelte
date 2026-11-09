@@ -404,13 +404,13 @@
 	<div class="composer">
 		{#if media}
 			<FieldRow>
-				<Select value={session.media.imageSize} options={sizeOptions} label="Size" onchange={(v) => v && (session.media.imageSize = v)} />
-				<Slider bind:value={session.media.imageSteps} min={1} max={100} label="Steps" />
+				<Select value={session.media.imageSize} options={sizeOptions} label="Size" info="Width x height" onchange={(v) => v && (session.media.imageSize = v)} />
+				<Slider bind:value={session.media.imageSteps} min={1} max={100} label="Steps" info="Denoising steps" />
 				{#if mode === 'image'}
-					<Slider bind:value={session.media.imageCount} min={1} max={4} label="Count" />
+					<Slider bind:value={session.media.imageCount} min={1} max={4} label="Count" info="Images per request" />
 				{:else}
-					<Slider bind:value={session.media.videoSeconds} min={1} max={30} unit="s" label="Seconds" />
-					<Select value={session.media.videoFps} options={fpsOptions} label="FPS" onchange={(v) => v && (session.media.videoFps = v)} />
+					<Slider bind:value={session.media.videoSeconds} min={1} max={30} unit="s" label="Seconds" info="Clip length" />
+					<Select value={session.media.videoFps} options={fpsOptions} label="FPS" info="Frames per second" onchange={(v) => v && (session.media.videoFps = v)} />
 				{/if}
 			</FieldRow>
 		{:else if attach && attachments.length}
@@ -461,7 +461,7 @@
 			</Sheet>
 		{/if}
 		<Dialog bind:open={renameOpen} title="Rename conversation" confirm="Rename" busy={renameBusy} disabled={!renameTitle.trim()} onconfirm={rename}>
-			<Text bind:value={renameTitle} label="Title" max={64} />
+			<Text bind:value={renameTitle} label="Title" info="The conversation's name in the list" max={64} />
 		</Dialog>
 	</div>
 	{#if settingsColumn}

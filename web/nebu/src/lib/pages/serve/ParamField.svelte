@@ -2,28 +2,33 @@
 	import { ParamType, type Param } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import type { ParamState } from '#lib/proto/nebu/v1/estimate_pb.js';
 	import { live } from '#lib/live/events.svelte.js';
-	import Tip from '#lib/ui/Tip.svelte';
 	import NumberField from '#lib/ui/fields/Number.svelte';
 	import Path from '#lib/ui/fields/Path.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
 	import Slider from '#lib/ui/fields/Slider.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
-	import FunctionIcon from 'phosphor-svelte/lib/FunctionIcon';
+	import type { Off } from '#lib/ui/fields/types.js';
 
 	let { param, values = $bindable({}), state }: { param: Param; values?: Record<string, string>; state?: ParamState } = $props();
 
 	const p = $derived(param);
 	const label = $derived(p.label || p.name);
+	// The description, then the rule the planner follows, as the label's tooltip
+	const info = $derived([p.description, p.solved && p.rule ? `Planner's pick, ${p.rule}` : ''].filter(Boolean).join('. ') || undefined);
 	const min = $derived(state?.min ?? p.min);
 	const max = $derived(state?.max ?? p.max);
 	const step = $derived(state?.step || p.step || (p.type === ParamType.FLOAT ? 0.01 : 1));
-	const bounded = $derived((p.type === ParamType.INT || p.type === ParamType.FLOAT) && max > min);
+	const numeric = $derived(p.type === ParamType.INT || p.type === ParamType.FLOAT);
+	// A zero max leaves a number unbounded, so only a positive max draws a slider
+	const bounded = $derived(numeric && max > 0 && max > min);
 	const current = $derived(values[p.name] ?? '');
-	// A solved param resolves to no single value, so its empty box carries the planner's mark and no words
-	const placeholder = $derived(p.solved ? undefined : p.default || undefined);
-	const fallback = $derived(p.solved || !p.default ? undefined : Number(p.default));
-	const planned = $derived(p.solved && current === '');
+	// A negative default is the runtime's own automatic choice, read as auto
+	const auto = $derived(numeric && p.default !== '' && Number(p.default) < 0);
+	const placeholder = $derived(p.solved ? "Planner's pick" : auto ? 'Auto' : p.default || undefined);
+	const fallback = $derived(p.solved || auto || !p.default ? undefined : Number(p.default));
+	// The toggle handing a solved param back to the planner, or an automatic one back to the runtime
+	const planner = $derived<Off | undefined>(p.solved ? { label: "Planner's pick" } : auto ? { label: 'Auto' } : undefined);
 
 	// Stored parts whose architecture the param picks, any stored model when it picks a model
 	const picks = $derived.by(() => {
@@ -39,25 +44,21 @@
 	}
 </script>
 
-{#snippet planner()}
-	<Tip text={p.rule || 'planner'} tag="span"><span class="solved"><FunctionIcon size={16} /></span></Tip>
-{/snippet}
-
 <div class="param">
 	{#if p.choices.length}
-		<Select value={current || undefined} options={p.choices.map((c) => ({ value: c, label: c }))} {label} {placeholder} clearable mark={planned ? planner : undefined} onchange={set} />
+		<Select value={current || undefined} options={p.choices.map((c) => ({ value: c, label: c }))} {label} {info} {placeholder} clearable onchange={set} />
 	{:else if p.picks}
-		<Select value={current || undefined} options={picks} {label} clearable search mark={planned ? planner : undefined} onchange={set} />
+		<Select value={current || undefined} options={picks} {label} {info} {placeholder} clearable search onchange={set} />
 	{:else if p.type === ParamType.BOOL}
-		<Switch checked={(current || p.default) === 'true'} {label} onchange={(on) => set(on ? 'true' : 'false')} />
+		<Switch checked={(current || p.default) === 'true'} {label} {info} top onchange={(on) => set(on ? 'true' : 'false')} />
 	{:else if p.type === ParamType.PATH}
-		<Path value={current} {label} filter={p.directory ? 'directories' : 'any'} {placeholder} mark={planned ? planner : undefined} onchange={set} />
+		<Path value={current} {label} {info} filter={p.directory ? 'directories' : 'any'} {placeholder} onchange={set} />
 	{:else if bounded}
-		<Slider value={Number(current) || fallback || min} {min} {max} {step} unit={p.unit || undefined} {label} blank={current === ''} {fallback} mark={p.solved ? planner : undefined} onchange={set} />
+		<Slider value={Number(current) || fallback || Math.max(min, 0)} min={Math.max(min, 0)} {max} {step} unit={p.unit || undefined} {label} {info} blank={current === ''} {fallback} {placeholder} off={planner} onchange={set} onclear={() => set('')} />
 	{:else if p.type === ParamType.INT || p.type === ParamType.FLOAT}
-		<NumberField value={current === '' ? 0 : Number(current)} min={min || undefined} {step} unit={p.unit || undefined} {label} emptyZero={current === ''} {placeholder} mark={planned ? planner : undefined} onchange={set} />
+		<NumberField value={current === '' ? 0 : Number(current)} min={Math.max(min, 0) || undefined} {step} unit={p.unit || undefined} {label} {info} emptyZero={current === ''} {placeholder} off={planner} onchange={set} />
 	{:else}
-		<Text value={current} {label} {placeholder} onchange={set} />
+		<Text value={current} {label} {info} {placeholder} onchange={set} />
 	{/if}
 </div>
 
@@ -67,9 +68,5 @@
 		flex-direction: column;
 		gap: var(--nebu-space-2);
 		min-width: 0;
-	}
-	.solved {
-		display: inline-flex;
-		color: var(--neo-color-primary);
 	}
 </style>

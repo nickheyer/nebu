@@ -97,7 +97,7 @@
 			<NeoButton class="primary" elevation={2} onclick={openImport}>Import</NeoButton>
 			<Pop placement="bottom-end" width="20rem">
 				{#snippet content(closePop)}
-					<Duration bind:value={exportTtl} base="s" max={tokenTtlMax} label="TTL" />
+					<Duration bind:value={exportTtl} base="s" max={tokenTtlMax} label="TTL" info="How long the export token stays valid" />
 					<Row gap={12} justify="flex-end">
 						<NeoButton class="primary" elevation={2} loading={exporting} disabled={exportTtl <= 0} onclick={() => copyExport(closePop)}>Copy</NeoButton>
 					</Row>
@@ -164,5 +164,5 @@
 </Sheet>
 
 <Dialog bind:open={importOpen} title="Import a mesh" confirm="Import" busy={importing} disabled={!importToken.trim()} onconfirm={importMesh}>
-	<Text bind:value={importToken} label="Export token" mono required />
+	<Text bind:value={importToken} label="Export token" info="A token another mesh exported" mono required />
 </Dialog>

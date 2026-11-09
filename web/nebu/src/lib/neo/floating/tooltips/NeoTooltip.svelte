@@ -143,8 +143,12 @@
       open = _open;
     },
     get middleware() {
-      const middleware = [
-        offset((isOffsetFunction(spacing) ? spacing(position ?? placement) : spacing) ?? 6),
+      const middleware = [offset((isOffsetFunction(spacing) ? spacing(position ?? placement) : spacing) ?? 6)];
+      if (placement === 'auto') middleware.push(autoPlacement(autoPlacementOptions));
+      else middleware.push(flip({ fallbackAxisSideDirection: 'end', ...flipOptions }));
+      middleware.push(shift({ padding: 8, ...shiftOptions }));
+      // Size runs last so the available space it reports belongs to the placement flip settled on
+      middleware.push(
         size({
           ...sizeOptions,
           apply(args) {
@@ -153,10 +157,7 @@
             sizeOptions?.apply?.(args);
           },
         }),
-      ];
-      if (placement === 'auto') middleware.push(autoPlacement(autoPlacementOptions));
-      else middleware.push(flip({ fallbackAxisSideDirection: 'end', ...flipOptions }));
-      middleware.push(shift({ padding: 8, ...shiftOptions }));
+      );
       return middleware;
     },
     get placement() {

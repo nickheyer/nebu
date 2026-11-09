@@ -126,9 +126,13 @@ func drmProcesses(procRoot string, byBus map[string]string) []*v1.ProcessUse {
 			seen[bus+"/"+client] = true
 			bytesOn[bus] += n
 		}
+		if len(bytesOn) == 0 {
+			continue
+		}
+		name := comm(dir)
 		for bus, n := range bytesOn {
 			if id, ok := byBus[bus]; ok && n > 0 {
-				out = append(out, &v1.ProcessUse{DeviceId: id, Pid: int32(pid), Bytes: n})
+				out = append(out, &v1.ProcessUse{DeviceId: id, Pid: int32(pid), Bytes: n, Command: name})
 			}
 		}
 	}
@@ -136,6 +140,15 @@ func drmProcesses(procRoot string, byBus map[string]string) []*v1.ProcessUse {
 		return out[i].GetPid() < out[j].GetPid() || (out[i].GetPid() == out[j].GetPid() && out[i].GetDeviceId() < out[j].GetDeviceId())
 	})
 	return out
+}
+
+// The command name the kernel keeps for a process, read from its comm file
+func comm(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "comm"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // The PCI address, client id, and dedicated memory one fdinfo reports, resident counts preferred over the legacy totals

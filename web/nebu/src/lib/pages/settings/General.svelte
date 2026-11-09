@@ -67,17 +67,17 @@
 <Columns ratio="1/1">
 	{#snippet left()}
 		<Card title="Host">
-			<Text bind:value={hostLabel} label="Host label" placeholder={live.host?.hostname} />
+			<Text bind:value={hostLabel} label="Host label" info="The name this host shows in the mesh and the console, its hostname when empty" placeholder={live.host?.hostname} />
 			<SaveBar {dirty} {saving} {error} onsave={save} ondiscard={discard} />
 		</Card>
 	{/snippet}
 	{#snippet right()}
 		<Card title="Appearance">
 			<FieldRow>
-				<Segmented value={themeChoice} options={[{ value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }, { value: 'system', label: 'System' }]} label="Theme" onchange={setTheme} />
+				<Segmented value={themeChoice} options={[{ value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }, { value: 'system', label: 'System' }]} label="Theme" info="Light, dark or whatever the system is set to" onchange={setTheme} />
 				<Stack gap={12}>
-					<Switch checked={theme.transition !== NeoTransition.None} label="Transitions" onchange={(on) => theme.update({ transition: on ? NeoTransition.Circle : NeoTransition.None })} />
-					<Switch checked={theme.reset} label="Style reset" onchange={(on) => theme.update({ reset: on })} />
+					<Switch checked={theme.transition !== NeoTransition.None} label="Transitions" info="Animated theme switches and settling blocks" onchange={(on) => theme.update({ transition: on ? NeoTransition.Circle : NeoTransition.None })} />
+					<Switch checked={theme.reset} label="Style reset" info="The component library's CSS reset over browser defaults" onchange={(on) => theme.update({ reset: on })} />
 				</Stack>
 			</FieldRow>
 		</Card>

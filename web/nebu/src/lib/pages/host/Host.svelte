@@ -2,10 +2,10 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { NeoButton, NeoCloseButton } from '#lib/neo/buttons/index.js';
 	import { isCancel, reason, rpc } from '#lib/api/transport.js';
-	import { bytes, bytesIn, byteUnit, enumLabel, num, plural, thin, when } from '#lib/format.js';
+	import { bytes, bytesIn, byteUnit, enumLabel, factLabel, num, plural, thin, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import type { GatewayStatus } from '#lib/proto/nebu/v1/gateway_pb.js';
-	import { PoolKind, ProbeStatus, ProbeStatusSchema, type Device, type ProbeResult, type Storage } from '#lib/proto/nebu/v1/host_pb.js';
+	import { DeviceKind, PoolKind, ProbeStatus, ProbeStatusSchema, type Device, type ProbeResult, type ProcessUse, type Storage } from '#lib/proto/nebu/v1/host_pb.js';
 	import { TaskStateSchema, type Task } from '#lib/proto/nebu/v1/task_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
@@ -13,7 +13,7 @@
 	import Empty from '#lib/ui/Empty.svelte';
 	import KeyRows from '#lib/ui/KeyRows.svelte';
 	import List from '#lib/ui/List.svelte';
-	import ListRow from '#lib/ui/ListRow.svelte';
+	import ListRow, { type Fact } from '#lib/ui/ListRow.svelte';
 	import LogView from '#lib/ui/LogView.svelte';
 	import Mark from '#lib/ui/Mark.svelte';
 	import MemoryLegend from '#lib/ui/MemoryLegend.svelte';
@@ -57,7 +57,12 @@
 	const failedProbes = $derived(probes.filter((p) => p.status === ProbeStatus.FAILED));
 	const passedProbes = $derived(probes.filter((p) => p.status === ProbeStatus.OK));
 	const skippedProbes = $derived(probes.filter((p) => p.status === ProbeStatus.SKIPPED));
-	const facts = $derived(Object.entries(profile?.facts ?? {}).sort(([a], [b]) => a.localeCompare(b)));
+	// Host facts beyond the os and arch the system row already reads
+	const facts = $derived(
+		Object.entries(profile?.facts ?? {})
+			.filter(([k]) => k !== 'os' && k !== 'arch')
+			.sort(([a], [b]) => a.localeCompare(b))
+	);
 	const doctorRunning = $derived(doctor !== undefined && active(doctor));
 
 	const bars = $derived(poolBars(profile, live.instances.values(), live.slots.values()));
@@ -109,15 +114,30 @@
 		return (profile?.processes ?? []).filter((p) => ids.has(p.deviceId)).sort((a, b) => Number(b.bytes - a.bytes));
 	}
 
+	// Memory is accounted per process on accelerators only, never on the host's RAM
+	function accelerated(bar: PoolBar): boolean {
+		return bar.devices.some((d) => d.kind !== DeviceKind.CPU);
+	}
+
+	function processName(p: ProcessUse): string {
+		return p.instanceName || p.command || String(p.pid);
+	}
+
+	// The pid stands beside a named process and is left out when it is the name
+	function processFacts(p: ProcessUse): Fact[] {
+		const named = p.instanceName !== '' || p.command !== '';
+		return [...(named ? [{ value: String(p.pid), tip: 'pid', mono: true }] : []), { value: bytes(p.bytes) }];
+	}
+
 	function deviceRows(d: Device) {
 		return [
-			{ label: 'id', value: d.id, mono: true, copy: true, tip: d.id },
+			{ label: 'ID', value: d.id, mono: true, copy: true, tip: d.id },
 			{ label: 'vendor', value: d.vendor },
 			{ label: 'name', value: d.name, tip: d.name },
 			{ label: 'memory', value: d.memoryTotalBytes ? `${bytes(d.memoryTotalBytes - d.memoryFreeBytes)} of ${bytes(d.memoryTotalBytes)}` : poolMemory(d.poolId) },
 			...Object.entries(d.facts)
 				.sort(([a], [b]) => a.localeCompare(b))
-				.map(([k, v]) => ({ label: k, value: v, mono: true, tip: v }))
+				.map(([k, v]) => ({ label: factLabel(k), value: v, mono: true, tip: v }))
 		];
 	}
 
@@ -160,23 +180,21 @@
 			</div>
 		{/snippet}
 		{#snippet expand()}
-			{@const procs = processesOf(bar)}
 			<Stack gap={12}>
 				{#each bar.devices as d (d.id)}
 					<KeyRows dense rows={deviceRows(d)} />
 				{/each}
-				<Stack gap={0}>
-					<span class="label">Processes</span>
-					{#each procs as p (`${p.deviceId}:${p.pid}`)}
-						<ListRow
-							primary={p.instanceName || p.instanceId || String(p.pid)}
-							href={p.instanceId ? `/serve/${encodeURIComponent(p.instanceId)}` : undefined}
-							facts={[{ value: String(p.pid), tip: 'pid', mono: true }, { value: bytes(p.bytes) }]}
-						/>
-					{:else}
-						<Empty text="No processes" row />
-					{/each}
-				</Stack>
+				{#if accelerated(bar)}
+					{@const procs = processesOf(bar)}
+					<Stack gap={0}>
+						<span class="label">Processes</span>
+						{#each procs as p (`${p.deviceId}:${p.pid}`)}
+							<ListRow primary={processName(p)} primaryKind={p.instanceName ? 'name' : 'text'} href={p.instanceId ? `/serve/${encodeURIComponent(p.instanceId)}` : undefined} facts={processFacts(p)} />
+						{:else}
+							<Empty text="No processes" row />
+						{/each}
+					</Stack>
+				{/if}
 			</Stack>
 		{/snippet}
 	</ListRow>
@@ -271,7 +289,7 @@
 					{ label: 'auth', value: gateway ? (gateway.auth ? 'on' : 'off') : '' },
 					{ label: 'metrics', value: gateway?.metricsAddr ?? '', mono: true },
 					{ label: 'home', value: profile?.home ?? '', mono: true, copy: true },
-					...facts.map(([k, v]) => ({ label: k.replaceAll(/[._]/g, ' '), value: v, mono: true, tip: v }))
+					...facts.map(([k, v]) => ({ label: factLabel(k), value: v, mono: true, tip: v }))
 				]}
 			/>
 			{#if gatewayError}<p class="error-text secondary">{gatewayError}</p>{/if}

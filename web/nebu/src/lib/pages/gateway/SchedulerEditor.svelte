@@ -93,14 +93,14 @@
 	{/snippet}
 </PanelHeader>
 <Stack gap={24}>
-	<FormSection title="Scheduler">
+	<FormSection title="Scheduler" info="A named configuration pools pick to run their requests through">
 		{#if !editing}
 			<FieldRow>
-				<Text bind:value={name} label="Name" required max={64} />
+				<Text bind:value={name} label="Name" info="How pools refer to the configuration" required max={64} />
 				<span></span>
 			</FieldRow>
 		{/if}
-		<Code bind:value={yaml} language="yaml" bind:valid bind:error={codeError} {rows} label="Configuration" />
+		<Code bind:value={yaml} language="yaml" bind:valid bind:error={codeError} {rows} label="Configuration" info="Plugins, profiles and the profile handler in YAML" />
 	</FormSection>
 	{#if current}
 		<Section title="Conditions" level={3}>

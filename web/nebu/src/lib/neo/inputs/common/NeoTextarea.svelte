@@ -292,12 +292,15 @@
     const hasMin = typeof autoResize !== 'boolean' && autoResize.min;
     if (!isScrolled && !hasMin) return;
 
+    // The rows attribute sets the floor, so short content never shrinks the box under its minimum
+    ref.style.height = '';
+    const floor = hasMin ? ref.offsetHeight : 0;
     ref.style.height = '1px';
     const { scrollHeight } = ref;
 
     if (!scrollHeight) ref.style.height = '';
-    else if (max) ref.style.height = `${Math.min(max, scrollHeight)}px`;
-    else ref.style.height = `${scrollHeight}px`;
+    else if (max) ref.style.height = `${Math.max(floor, Math.min(max, scrollHeight))}px`;
+    else ref.style.height = `${Math.max(floor, scrollHeight)}px`;
   }
 
   watch(

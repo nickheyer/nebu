@@ -8,10 +8,11 @@
 		value = $bindable(),
 		options,
 		label,
+		info,
 		disabled = false,
 		clearable = false,
 		onchange
-	}: { value?: V; options: Option<V>[]; label?: string; disabled?: boolean; clearable?: boolean; onchange?: (v: V) => void } = $props();
+	}: { value?: V; options: Option<V>[]; label?: string; info?: string; disabled?: boolean; clearable?: boolean; onchange?: (v: V) => void } = $props();
 
 	// Pressing the chosen option again releases it when the group may stand empty
 	function pick(v: V) {
@@ -26,7 +27,7 @@
 </script>
 
 <div class="field">
-	<FieldLabel {label} />
+	<FieldLabel {label} {info} />
 	<NeoButtonGroup elevation={-1} role="radiogroup" aria-label={label}>
 		{#each options as o (String(o.value))}
 			<Tip text={o.tip} tag="span">

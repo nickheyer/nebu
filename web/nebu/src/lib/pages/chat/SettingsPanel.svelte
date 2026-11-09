@@ -14,7 +14,6 @@
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import Textarea from '#lib/ui/fields/Textarea.svelte';
-	import ShuffleIcon from 'phosphor-svelte/lib/ShuffleIcon';
 
 	let {
 		settings = $bindable(),
@@ -76,24 +75,23 @@
 	);
 </script>
 
-{#snippet drawn()}<ShuffleIcon size={16} aria-label="Drawn each request" />{/snippet}
 
 <div class="sections">
-	<Segmented bind:value={settings.dialect} options={dialects} label="Dialect" />
-	<Textarea bind:value={settings.system} label="System" rows={3} maxRows={12} />
+	<Segmented bind:value={settings.dialect} options={dialects} label="Dialect" info="Wire format of the requests, OpenAI, Anthropic or Ollama" />
+	<Textarea bind:value={settings.system} label="System" info="Instructions the conversation starts with" rows={3} maxRows={12} />
 	<Collapse label="Sampling">
 		<div class="fields">
-			<Switch bind:checked={settings.stream} label="Stream" />
-			<Slider bind:value={() => read('temperature', d.temperature), (n) => write('temperature', n, d.temperature)} min={0} max={2} step={0.05} label="Temperature" blank={settings.temperature === ''} fallback={d.temperature} />
-			<Slider bind:value={() => read('topP', d.topP ?? 1), (n) => write('topP', n, d.topP ?? 1)} min={0} max={1} step={0.01} label="Top p" blank={settings.topP === ''} fallback={d.topP} />
+			<Switch bind:checked={settings.stream} label="Stream" info="Shows tokens as they arrive" />
+			<Slider bind:value={() => read('temperature', d.temperature), (n) => write('temperature', n, d.temperature)} min={0} max={2} step={0.05} label="Temperature" info="Sampling randomness, the dialect's default when empty" blank={settings.temperature === ''} fallback={d.temperature} />
+			<Slider bind:value={() => read('topP', d.topP ?? 1), (n) => write('topP', n, d.topP ?? 1)} min={0} max={1} step={0.01} label="Top p" info="Nucleus sampling share, the dialect's default when empty" blank={settings.topP === ''} fallback={d.topP} />
 			{#if contextLength > 0}
-				<Slider bind:value={() => read('maxTokens', contextLength), (n) => write('maxTokens', n, contextLength)} min={1} max={contextLength} label="Max tokens" blank={settings.maxTokens === ''} fallback={contextLength} />
+				<Slider bind:value={() => read('maxTokens', contextLength), (n) => write('maxTokens', n, contextLength)} min={1} max={contextLength} label="Max tokens" info="Longest answer, the context length when empty" blank={settings.maxTokens === ''} fallback={contextLength} />
 			{:else}
-				<NumberField value={read('maxTokens')} min={0} label="Max tokens" emptyZero onchange={(n) => writeOptional('maxTokens', n)} />
+				<NumberField value={read('maxTokens')} min={0} label="Max tokens" info="Longest answer, the model's default when empty" emptyZero onchange={(n) => writeOptional('maxTokens', n)} />
 			{/if}
-			<NumberField value={read('topK')} min={0} label="Top k" placeholder={d.topK ? String(d.topK) : undefined} emptyZero onchange={(n) => writeOptional('topK', n)} />
-			<NumberField value={read('seed')} label="Seed" emptyZero mark={drawn} onchange={(n) => writeOptional('seed', n)} />
-			<Chips bind:value={() => (settings.stop ? settings.stop.split('\n').filter(Boolean) : []), (v) => (settings.stop = v.join('\n'))} label="Stop" />
+			<NumberField value={read('topK')} min={0} label="Top k" info="Sampling pool size, the dialect's default when empty" placeholder={d.topK ? String(d.topK) : undefined} emptyZero onchange={(n) => writeOptional('topK', n)} />
+			<NumberField value={read('seed')} label="Seed" info="Fixed sampling seed" emptyZero off={{ label: 'Drawn each request' }} onchange={(n) => writeOptional('seed', n)} />
+			<Chips bind:value={() => (settings.stop ? settings.stop.split('\n').filter(Boolean) : []), (v) => (settings.stop = v.join('\n'))} label="Stop" info="Sequences that end the answer" />
 			<div class="reset">
 				<NeoButton text disabled={!sampled} onclick={resetSampling}>Reset</NeoButton>
 			</div>
@@ -101,16 +99,16 @@
 	</Collapse>
 	<Collapse label="Tools">
 		<div class="fields">
-			<Checklist bind:value={settings.toolServers} options={serverOptions} label="Tool servers" empty={serversError || undefined} />
-			<Switch bind:checked={settings.mutatingTools} label="Mutating tools" />
-			<Switch bind:checked={settings.approveTools} label="Approve tools" />
-			<Code bind:value={settings.tools} language="json" rows={6} label="Client tools" />
+			<Checklist bind:value={settings.toolServers} options={serverOptions} label="Tool servers" info="Servers whose tools the model may call" empty={serversError || undefined} />
+			<Switch bind:checked={settings.mutatingTools} label="Mutating tools" info="Offers tools that change what they touch, read only tools alone otherwise" />
+			<Switch bind:checked={settings.approveTools} label="Approve tools" info="Gateway tools wait for your approval before they run" />
+			<Code bind:value={settings.tools} language="json" rows={6} label="Client tools" info="Tool definitions as a JSON array, each call answered here by hand" />
 		</div>
 	</Collapse>
 	<Collapse label="Names">
 		<div class="fields">
-			<Text bind:value={settings.userName} label="User name" max={32} placeholder="You" />
-			<Text bind:value={settings.assistantName} label="Assistant name" max={32} placeholder={assistantFallback} />
+			<Text bind:value={settings.userName} label="User name" info="Shown over your turns" max={32} placeholder="You" />
+			<Text bind:value={settings.assistantName} label="Assistant name" info="Shown over the model's turns, the model name when empty" max={32} placeholder={assistantFallback} />
 		</div>
 	</Collapse>
 </div>

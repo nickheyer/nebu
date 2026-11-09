@@ -85,7 +85,8 @@ export const commandRoles = ['ask', 'imagine', 'video', 'persona', 'models', 're
 export const imageSizes = ['512x512', '768x768', '1024x1024', '1024x768', '768x1024'];
 export const videoSizes = ['512x512', '768x432', '432x768', '640x360', '1024x576'];
 export const fpsOptions = [8, 12, 16, 24, 30];
-export const templateVariables = '.Content .Author .Channel .Guild .Now .Persona .Bot';
+// The placeholders a template may hold, written as they are typed
+export const templateHelp = ['Content', 'Author', 'Channel', 'Guild', 'Now', 'Persona', 'Bot'].map((v) => `{{.${v}}}`).join('  ');
 
 // Lowercase word naming a trigger kind in a row
 export function triggerWord(kind: TriggerKind): string {

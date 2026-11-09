@@ -1,19 +1,18 @@
 <script lang="ts">
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { daysUntil, num, when } from '#lib/format.js';
+	import { daysUntil, num, thin, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { NodeState, type Mesh, type Node } from '#lib/proto/nebu/v1/mesh_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Confirm from '#lib/ui/Confirm.svelte';
+	import Dialog from '#lib/ui/Dialog.svelte';
 	import Facts, { type FactItem } from '#lib/ui/Facts.svelte';
 	import Menu from '#lib/ui/Menu.svelte';
 	import NameConfirm from '#lib/ui/NameConfirm.svelte';
-	import Pop from '#lib/ui/Pop.svelte';
 	import Duration from '#lib/ui/fields/Duration.svelte';
 	import Picker from '#lib/ui/fields/Picker.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
-	import Row from '#lib/ui/layout/Row.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { tokenTtlMax } from '#lib/pages/mesh/mesh.js';
 
@@ -28,6 +27,7 @@
 
 	const certDays = $derived(daysUntil(mesh.certificateExpiresAt, clockTick.now));
 	let ttl = $state(3600);
+	let tokenOpen = $state(false);
 	let copying = $state(false);
 	let danger = $state<Danger | undefined>(undefined);
 	let dangerOpen = $state(false);
@@ -36,8 +36,8 @@
 	const items = $derived.by((): FactItem[] => [
 		{ id: 'members', label: 'Members', value: num(mesh.members) },
 		{ id: 'you', label: 'You', value: self?.name ?? '', tip: self?.issuer ? 'issuer' : undefined, lamp: self?.issuer ? 'primary' : undefined },
-		{ id: 'cert', label: 'Certificate', value: certDays === undefined ? '' : `${certDays} d`, tip: when(mesh.certificateExpiresAt) || undefined, lamp: certDays !== undefined && certDays < 30 ? 'warning' : undefined },
-		{ id: 'address', label: 'Address', value: mesh.address, mono: true },
+		{ id: 'cert', label: 'Certificate', value: certDays === undefined ? '' : `${certDays}${thin}d`, tip: when(mesh.certificateExpiresAt) || undefined, lamp: certDays !== undefined && certDays < 30 ? 'warning' : undefined },
+		{ id: 'address', label: 'Address', value: mesh.address, mono: true, tip: mesh.address },
 		{ id: 'exposure', label: 'Exposure', value: mesh.exposure },
 		{ id: 'announce', label: 'Announce', value: mesh.announce ? 'on' : 'off' },
 		{ id: 'ca', label: 'CA', value: mesh.caFingerprint.slice(0, 12), mono: true, tip: mesh.caFingerprint },
@@ -45,13 +45,13 @@
 	]);
 
 	// Mints a join token for the chosen lifetime and puts it on the clipboard
-	async function copyToken(close: () => void) {
+	async function copyToken() {
 		copying = true;
 		try {
 			const res = await rpc.mesh.token({ ttlSeconds: ttl });
 			await navigator.clipboard.writeText(res.token);
 			toast.success('Join token copied', `expires ${when(res.expiresAt)}`);
-			close();
+			tokenOpen = false;
 		} catch (err) {
 			toast.error('Join token failed', reason(err));
 		} finally {
@@ -100,15 +100,7 @@
 
 <Card title={mesh.name}>
 	{#snippet tools()}
-		<Pop placement="bottom-end" width="20rem">
-			{#snippet content(close)}
-				<Duration bind:value={ttl} base="s" max={tokenTtlMax} label="TTL" />
-				<Row gap={12} justify="flex-end">
-					<NeoButton class="primary" elevation={2} loading={copying} disabled={ttl <= 0} onclick={() => copyToken(close)}>Copy</NeoButton>
-				</Row>
-			{/snippet}
-			<NeoButton elevation={2}>Token</NeoButton>
-		</Pop>
+		<NeoButton elevation={2} onclick={() => (tokenOpen = true)}>Token</NeoButton>
 		<Confirm label="Leave" question="Leave {mesh.name}" danger small={false} onconfirm={leave} />
 		<Menu
 			items={[
@@ -121,10 +113,14 @@
 	<Facts {items} />
 </Card>
 
+<Dialog bind:open={tokenOpen} title="Join token" confirm="Copy" busy={copying} disabled={ttl <= 0} onconfirm={copyToken}>
+	<Duration bind:value={ttl} base="s" max={tokenTtlMax} label="TTL" info="How long the join token stays valid" />
+</Dialog>
+
 {#if danger}
 	<NameConfirm bind:open={dangerOpen} title={dangers[danger].title} name={mesh.name} message={dangers[danger].message} confirm={dangers[danger].confirm} enabled={danger !== 'handoff' || handoffTo !== undefined} onconfirm={run}>
 		{#if danger === 'handoff'}
-			<Picker bind:value={handoffTo} fetch={fetchNodes} label="New issuer" required current={handoffTo ? live.nodes.get(handoffTo)?.name : undefined} />
+			<Picker bind:value={handoffTo} fetch={fetchNodes} label="New issuer" info="The member that signs admissions from now on" placeholder="Choose a member" required current={handoffTo ? live.nodes.get(handoffTo)?.name : undefined} />
 		{/if}
 	</NameConfirm>
 {/if}

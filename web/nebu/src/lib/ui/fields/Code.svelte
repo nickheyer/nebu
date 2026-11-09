@@ -15,13 +15,14 @@
 		value = $bindable(''),
 		language = 'json',
 		label,
+		info,
 		readonly = false,
 		rows = 10,
 		capped = false,
 		valid = $bindable(true),
 		error = $bindable<string | undefined>(undefined),
 		copy = true
-	}: { value?: string; language?: 'json' | 'yaml'; label?: string; readonly?: boolean; rows?: number; capped?: boolean; valid?: boolean; error?: string | undefined; copy?: boolean } = $props();
+	}: { value?: string; language?: 'json' | 'yaml'; label?: string; info?: string; readonly?: boolean; rows?: number; capped?: boolean; valid?: boolean; error?: string | undefined; copy?: boolean } = $props();
 
 	let host = $state<HTMLDivElement>();
 	let view: EditorView | undefined;
@@ -109,7 +110,7 @@
 
 <div class="code">
 	<div class="head">
-		<FieldLabel {label} />
+		<FieldLabel {label} {info} />
 		<span class="fill"></span>
 		{#if capped}<NeoPill size="small" text tinted color="warning" label="capped" />{/if}
 		{#if copy}<CopyButton text={value} />{/if}

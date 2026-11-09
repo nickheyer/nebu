@@ -101,20 +101,20 @@
 <PanelHeader title={draft ? draft.name || draft.id : 'New source'} subtitle={draft && provider?.name !== (draft.name || draft.id) ? provider?.name : undefined} {onclose} />
 <Stack gap={24}>
 	{#if status?.error}<Str value={status.error} kind="message" color="error" width="100%" />{/if}
-	<FormSection title="Source">
+	<FormSection title="Source" info="A place models are found, named by a short id">
 		<FieldRow>
-			<Select value={kind} options={providerOptions} label="Provider" disabled={editing} onchange={pickProvider} />
+			<Select value={kind} options={providerOptions} label="Provider" info="The kind of model source" disabled={editing} onchange={pickProvider} />
 			{#if transports.length > 1}
-				<Select bind:value={transport} options={transports.map((t) => ({ value: t, label: t }))} label="Transport" />
+				<Select bind:value={transport} options={transports.map((t) => ({ value: t, label: t }))} label="Transport" info="How the source is reached" />
 			{/if}
 		</FieldRow>
 		<FieldRow>
-			<Text bind:value={id} label="Id" readonly={editing} mono required />
-			<Text bind:value={name} label="Name" />
+			<Text bind:value={id} label="Id" info="A short id in URLs and pulls, fixed once created" readonly={editing} mono required />
+			<Text bind:value={name} label="Name" info="Shown in lists, the id when empty" />
 		</FieldRow>
 	</FormSection>
 	{#if fields.length}
-		<FormSection title="Configuration">
+		<FormSection title="Configuration" info="What the provider needs to reach the source">
 			<ConfigFields {fields} bind:values={config} secretsSet={editing} />
 		</FormSection>
 	{/if}

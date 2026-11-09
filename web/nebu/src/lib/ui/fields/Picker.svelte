@@ -1,14 +1,16 @@
 <script lang="ts" generics="V extends string">
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { NeoSelect } from '#lib/neo/inputs/index.js';
-	import type { NeoListItem, NeoListContext } from '#lib/neo/list/index.js';
+	import type { NeoListItem, NeoListContext, NeoListSelectedItem } from '#lib/neo/list/index.js';
 	import { isCancel, reason } from '#lib/api/transport.js';
-	import type { Option, PickerFetch } from '#lib/ui/fields/types.js';
+	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
+	import { fieldId, listPopover, selectToggle, type Option, type PickerFetch } from '#lib/ui/fields/types.js';
 
 	let {
 		value = $bindable(),
 		fetch,
 		label,
+		info,
 		placeholder,
 		disabled = false,
 		clearable = false,
@@ -17,13 +19,14 @@
 		error,
 		pageSize = 25,
 		current,
-		width = '100%',
+		// A toolbar picker, its label standing as the placeholder and prefixed to the chosen option
 		compact = false,
 		onchange
 	}: {
 		value?: V;
 		fetch: PickerFetch<V>;
 		label?: string;
+		info?: string;
 		placeholder?: string;
 		disabled?: boolean;
 		clearable?: boolean;
@@ -32,11 +35,11 @@
 		error?: string;
 		pageSize?: number;
 		current?: string;
-		width?: string;
 		compact?: boolean;
 		onchange?: (v: V | undefined) => void;
 	} = $props();
 
+	const id = fieldId();
 	let highlight = $state<string | undefined>('');
 	let options = $state<Option<V>[]>([]);
 	let next = $state('');
@@ -51,6 +54,14 @@
 		if (value !== undefined && !list.some((i) => i.value === value)) list.unshift({ id: value, value, label: current ?? value });
 		return list;
 	});
+
+	// The chosen option behind its label in a toolbar, alone in a form
+	function prefixed(selection?: NeoListSelectedItem<V> | NeoListSelectedItem<V>[]): string | undefined {
+		const one = Array.isArray(selection) ? selection[0] : selection;
+		const text = one?.item?.label ?? one?.item?.value?.toString();
+		if (text === undefined) return undefined;
+		return compact && label ? `${label}: ${text}` : text;
+	}
 
 	async function run(query: string, cursor: string, append: boolean) {
 		abort?.abort();
@@ -93,32 +104,54 @@
 	{/if}
 {/snippet}
 
-<NeoSelect
-	bind:value
-	bind:open
-	bind:highlight
-	options={items}
-	filter={() => true}
-	sort={() => 0}
-	search
-	{label}
-	{placeholder}
-	{disabled}
-	{clearable}
-	{required}
-	nullable={clearable}
-	elevation={-1}
-	placement={label && !compact ? 'top' : 'inside'}
-	floating={compact}
-	message={error ?? message}
-	{error}
-	{width}
-	aria-label={label}
-	listProps={{ after, loading: loading && options.length > 0, searchProps: { sort: false } }}
-	onChange={(v) => onchange?.(v as V | undefined)}
-/>
+<div class="field" class:compact>
+	{#if !compact}<FieldLabel {label} {info} forId={id} {required} />{/if}
+	<NeoSelect
+		bind:value
+		bind:open
+		bind:highlight
+		options={items}
+		{id}
+		filter={() => true}
+		sort={() => 0}
+		search
+		placeholder={placeholder ?? (compact ? label : 'Select')}
+		display={prefixed}
+		{disabled}
+		{clearable}
+		{required}
+		nullable={clearable}
+		elevation={-1}
+		placement="inside"
+		floating={false}
+		message={error ?? message}
+		{error}
+		width="100%"
+		aria-label={label}
+		listProps={{ ...listPopover, after, loading: loading && options.length > 0, searchProps: { sort: false } }}
+		buttonProps={selectToggle}
+		onChange={(v) => onchange?.(v as V | undefined)}
+	/>
+</div>
 
 <style>
+	.field {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		min-width: 0;
+	}
+	.field :global(.neo-input-group) {
+		min-width: 0;
+	}
+	.compact :global(.neo-input-group) {
+		margin-top: 0;
+	}
+	.compact :global(.neo-input-display-content) {
+		overflow: hidden;
+		white-space: nowrap;
+		text-overflow: ellipsis;
+	}
 	.note {
 		display: flex;
 		justify-content: center;

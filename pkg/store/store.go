@@ -92,6 +92,15 @@ func (s *Store) BlobPath(digest string) string {
 	return filepath.Join(s.root, blobsDir, blobPrefix+Hex(digest))
 }
 
+// Size on disk of a complete blob
+func (s *Store) BlobSize(digest string) (uint64, error) {
+	fi, err := os.Stat(s.BlobPath(digest))
+	if err != nil {
+		return 0, err
+	}
+	return uint64(fi.Size()), nil
+}
+
 // Path of a partial download keyed by name
 func (s *Store) PartialPath(key string) string {
 	return filepath.Join(s.root, blobsDir, key+partialSuffix)

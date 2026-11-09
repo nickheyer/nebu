@@ -83,8 +83,8 @@
 
 <div class="logview">
 	<div class="tools">
-		<Switch bind:checked={follow} label="Follow" />
-		<Select bind:value={tail} options={[{ value: 200, label: '200 lines' }, { value: 1000, label: '1000 lines' }, { value: 5000, label: '5000 lines' }]} width="12rem" />
+		<Switch bind:checked={follow} label="Follow" info="Keeps the newest line in view" />
+		<Select bind:value={tail} options={[{ value: 200, label: '200 lines' }, { value: 1000, label: '1000 lines' }, { value: 5000, label: '5000 lines' }]} fit />
 		<span class="filter"><Text bind:value={filter}>{#snippet before()}<FunnelIcon size={16} />{/snippet}</Text></span>
 		<span class="fill"></span>
 		<CopyButton text={shown.map((l) => l.text).join('\n')} />

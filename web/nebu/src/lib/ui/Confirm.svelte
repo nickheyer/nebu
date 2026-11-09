@@ -26,7 +26,7 @@
 	bind:open
 	elevation={2}
 	closable={false}
-	tooltipProps={{ placement: 'bottom-end' }}
+	tooltipProps={{ placement: 'bottom-end', portal: true, openOnHover: false, openOnFocus: false }}
 	onConfirm={run}
 	cancelProps={{ label: 'Cancel', color: undefined, text: true, class: 'confirm-cancel' }}
 	confirmProps={{ label, color: danger ? 'error' : 'primary', text: true }}

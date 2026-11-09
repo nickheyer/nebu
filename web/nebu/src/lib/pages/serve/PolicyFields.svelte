@@ -13,7 +13,7 @@
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import NumberField from '#lib/ui/fields/Number.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
-	import InfinityIcon from 'phosphor-svelte/lib/InfinityIcon';
+	import { gatewayDefault, literal } from '#lib/pages/serve/serve.js';
 
 	let { policy = $bindable(create(PolicySchema)), profile = $bindable(create(ProfileSchema)) }: { policy?: Policy; profile?: Profile } = $props();
 
@@ -42,28 +42,22 @@
 			tip: t.state === ToolServerState.FAILED ? t.error : undefined
 		}))
 	);
-
-	function literal(n: number | undefined): string | undefined {
-		return n ? String(n) : undefined;
-	}
 </script>
 
-{#snippet unbounded()}<InfinityIcon size={16} aria-label="No limit" />{/snippet}
-
 {#snippet requestTimeout()}
-	<Duration bind:value={policy.requestTimeoutMs} base="ms" max={86_400_000} label="Request timeout" emptyZero fallback={d?.requestTimeoutMs || undefined} mark={d && !d.requestTimeoutMs ? unbounded : undefined} />
+	<Duration bind:value={policy.requestTimeoutMs} base="ms" max={86_400_000} label="Request timeout" info="The whole exchange, first byte in to last byte out" emptyZero fallback={d?.requestTimeoutMs || undefined} off={gatewayDefault(d?.requestTimeoutMs, 'No timeout')} />
 {/snippet}
 
 {#snippet upstreamTimeout()}
-	<Duration bind:value={policy.upstreamTimeoutMs} base="ms" max={86_400_000} label="Upstream timeout" emptyZero fallback={d?.upstreamTimeoutMs || undefined} mark={d && !d.upstreamTimeoutMs ? unbounded : undefined} />
+	<Duration bind:value={policy.upstreamTimeoutMs} base="ms" max={86_400_000} label="Upstream timeout" info="Longest wait for the runtime's response" emptyZero fallback={d?.upstreamTimeoutMs || undefined} off={gatewayDefault(d?.upstreamTimeoutMs, 'No timeout')} />
 {/snippet}
 
 <div class="policy" bind:clientWidth={width}>
 	<FormSection title="Policy" info="Empty fields take the gateway's values">
-		<FieldRow>
-			<NumberField bind:value={policy.maxInFlight} min={0} max={1_000_000} label="Max in flight" emptyZero placeholder={literal(d?.maxInFlight)} mark={d && !d.maxInFlight ? unbounded : undefined} />
-			<NumberField bind:value={policy.requestsPerSecond} min={0} step={0.5} label="Requests per second" emptyZero placeholder={literal(d?.requestsPerSecond)} mark={d && !d.requestsPerSecond ? unbounded : undefined} />
-			<NumberField bind:value={policy.burst} min={0} max={1_000_000} label="Burst" emptyZero placeholder={literal(d?.burst)} mark={d && !d.burst ? unbounded : undefined} />
+		<FieldRow wide>
+			<NumberField bind:value={policy.maxInFlight} min={0} max={1_000_000} label="Max in flight" info="Requests in flight at once" emptyZero placeholder={literal(d?.maxInFlight)} off={gatewayDefault(d?.maxInFlight, 'No limit')} />
+			<NumberField bind:value={policy.requestsPerSecond} min={0} step={0.5} label="Requests per second" info="Sustained request rate" emptyZero placeholder={literal(d?.requestsPerSecond)} off={gatewayDefault(d?.requestsPerSecond, 'No limit')} />
+			<NumberField bind:value={policy.burst} min={0} max={1_000_000} label="Burst" info="Requests allowed above the rate at once, the rate rounded up when empty" emptyZero placeholder={literal(d?.burst)} off={gatewayDefault(d?.burst, 'No limit')} />
 		</FieldRow>
 		{#if pairDurations}
 			<FieldRow>
@@ -75,9 +69,9 @@
 			{@render upstreamTimeout()}
 		{/if}
 	</FormSection>
-	<FormSection title="Tools">
-		<Checklist bind:value={profile.toolServers} options={servers} label="Tool servers" />
-		<Switch bind:checked={profile.mutatingTools} label="Mutating tools" />
+	<FormSection title="Tools" info="Tool servers every request on the route may call">
+		<Checklist bind:value={profile.toolServers} options={servers} label="Tool servers" info="Servers whose tools every request on the route gets" />
+		<Switch bind:checked={profile.mutatingTools} label="Mutating tools" info="Offers tools that change what they touch, read only tools alone otherwise" />
 	</FormSection>
 </div>
 

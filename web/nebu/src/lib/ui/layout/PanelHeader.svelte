@@ -15,10 +15,12 @@
 
 <div class="head">
 	<div class="titles">
-		<h2 class="title" class:wide={kind === 'repo' || kind === 'path' || kind === 'message'}><Str value={title} {kind} tip={title} weight={500} width="100%" /></h2>
-		{#if subtitle}<span class="secondary ellipsis">{subtitle}</span>{/if}
+		<div class="line">
+			<h2 class="title"><Str value={title} {kind} tip={title} weight={500} width="100%" /></h2>
+			{#if children}{@render children()}{/if}
+		</div>
+		{#if subtitle}<span class="secondary subtitle">{subtitle}</span>{/if}
 	</div>
-	{#if children}{@render children()}{/if}
 	<span class="fill"></span>
 	{#if tools}{@render tools()}{/if}
 	{#if onclose}
@@ -39,12 +41,19 @@
 		flex-direction: column;
 		min-width: 0;
 	}
+	/* Pills and marks sit beside the title itself, not the title block */
+	.line {
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		min-width: 0;
+	}
 	.title {
 		display: flex;
 		min-width: 0;
-		max-width: 24ch;
 	}
-	.title.wide {
-		max-width: 40ch;
+	.subtitle {
+		min-width: 0;
+		overflow-wrap: anywhere;
 	}
 </style>

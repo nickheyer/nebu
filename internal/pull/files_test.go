@@ -9,7 +9,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/store"
 )
 
-// A lone file lands as a component, later files join it, and the full set makes a model
+// A lone file lands as a component, later files join it, the full set makes a model and files outside the group join it
 func TestFilePullsJoinTheGroup(t *testing.T) {
 	ctx := context.Background()
 	first, second := "tiny-Q4_K_M-00001-of-00002.gguf", "tiny-Q4_K_M-00002-of-00002.gguf"
@@ -54,16 +54,57 @@ func TestFilePullsJoinTheGroup(t *testing.T) {
 			t.Fatalf("%s stays linked: %v", sa.GetArtifact().GetPath(), sa)
 		}
 	}
-	for path, want := range map[string]string{
-		"README.md":   "README.md is not part of any weight group of org/model",
-		"missing.bin": "org/model has no file missing.bin",
-	} {
-		if _, err := p.Pull(ctx, &v1.PullRequest{SourceId: "mirror", Repo: "org/model", Paths: []string{path}}); err == nil || !strings.Contains(err.Error(), want) {
-			t.Fatalf("%s: %v, want %s", path, err, want)
-		}
+	task, err = p.Pull(ctx, &v1.PullRequest{SourceId: "mirror", Repo: "org/model", Paths: []string{"README.md"}})
+	done, logs = finish(t, ctx, p, task, err)
+	if done.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
+		t.Fatalf("%s\n%s", done.GetError(), strings.Join(logs, "\n"))
+	}
+	if done.GetLabels()["group"] != "Q4_K_M" {
+		t.Fatalf("a file no group holds joins the stored one: %v", done.GetLabels())
+	}
+	m, err = p.Store.ReadManifest("mirror", "org/model", "Q4_K_M")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.GetArtifacts()) != 3 || m.GetBytes() != 87 || m.GetDescriptor_() != nil || m.GetRuntimes() != 0 || !p.Store.HasBlob(digestOf(files["README.md"])) {
+		t.Fatalf("the file joins the complete group without demoting it: %v", m)
+	}
+	if _, err := p.Pull(ctx, &v1.PullRequest{SourceId: "mirror", Repo: "org/model", Paths: []string{"missing.bin"}}); err == nil || !strings.Contains(err.Error(), "org/model has no file missing.bin") {
+		t.Fatalf("a file the repo lacks is refused: %v", err)
 	}
 	if _, err := p.Pull(ctx, &v1.PullRequest{SourceId: "mirror", Repo: "org/model", Group: "Q8_0", Paths: []string{first}}); err == nil || !strings.Contains(err.Error(), "Q8_0") {
 		t.Fatalf("a group the repo lacks is refused: %v", err)
+	}
+}
+
+// Files of a repository without weight groups land together under the default group as a component
+func TestFilePullsLandWithoutWeightGroups(t *testing.T) {
+	ctx := context.Background()
+	files := map[string][]byte{"README.md": []byte("# tiny"), "LICENSE": []byte("MIT")}
+	site := newMirror(t, "org/docs", files)
+	p := testPuller(t, ctx, []*v1.Source{{Id: "mirror", Kind: v1.SourceKind_SOURCE_KIND_MIRROR, Config: map[string]string{"endpoint": site.srv.URL}}})
+	task, err := p.Pull(ctx, &v1.PullRequest{SourceId: "mirror", Repo: "org/docs", Paths: []string{"LICENSE", "README.md"}})
+	done, logs := finish(t, ctx, p, task, err)
+	if done.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED {
+		t.Fatalf("%s\n%s", done.GetError(), strings.Join(logs, "\n"))
+	}
+	if done.GetTitle() != "pull org/docs 2 files" || done.GetLabels()["group"] != "default" || done.GetLabels()["files"] != "2" {
+		t.Fatalf("task %s %v", done.GetTitle(), done.GetLabels())
+	}
+	if !hasLine(logs, "org/docs has no weight group, its files are kept under default") {
+		t.Fatalf("the landing is noted:\n%s", strings.Join(logs, "\n"))
+	}
+	m, err := p.Store.ReadManifest("mirror", "org/docs", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.GetArtifacts()) != 2 || m.GetBytes() != 9 || m.GetDescriptor_().GetKind() != v1.ModelKind_MODEL_KIND_COMPONENT || m.GetRuntimes() != 0 {
+		t.Fatalf("two files as a component: %v", m)
+	}
+	for _, sa := range m.GetArtifacts() {
+		if !p.Store.HasBlob(sa.GetDigest()) || !strings.HasPrefix(sa.GetPath(), m.GetPath()) {
+			t.Fatalf("%s is linked: %v", sa.GetArtifact().GetPath(), sa)
+		}
 	}
 }
 

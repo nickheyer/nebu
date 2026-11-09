@@ -143,5 +143,5 @@
 {/if}
 
 <Dialog bind:open={inviteOpen} title="Invite by address" confirm="Invite" busy={inviting === inviteAddress.trim()} disabled={!inviteValid} onconfirm={() => invite('', inviteAddress.trim())}>
-	<Text bind:value={inviteAddress} label="Address" placeholder="host:port" mono required error={inviteAddress.trim() && !inviteValid ? 'Host and port' : undefined} />
+	<Text bind:value={inviteAddress} label="Address" info="host:port of the node to invite" placeholder="host:port" mono required error={inviteAddress.trim() && !inviteValid ? 'Host and port' : undefined} />
 </Dialog>

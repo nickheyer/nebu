@@ -86,11 +86,13 @@
 		flex: 0 0 auto;
 		min-width: 0;
 	}
+	/* Rows pack at the top so every label sits on one line across the cells whatever its value's size */
 	.fact {
 		display: grid;
 		flex: 1 1 auto;
 		grid-template-columns: minmax(0, 1fr) auto;
 		column-gap: var(--nebu-space-3);
+		align-content: start;
 		align-items: end;
 		min-width: 0;
 		color: inherit;
@@ -113,15 +115,16 @@
 		font-size: 22px;
 		font-weight: 300;
 		font-variant-numeric: tabular-nums;
-		line-height: 1.3;
+		line-height: 28px;
 		letter-spacing: -0.01em;
 		white-space: nowrap;
 		text-overflow: ellipsis;
-		animation: nebu-reveal 300ms var(--nebu-settle) both;
+		animation: nebu-reveal 300ms var(--nebu-settle) backwards;
 	}
+	/* Mono values share the line box of the large figures so their baselines meet */
 	.value.mono {
 		font-family: var(--nebu-font-mono);
-		font-size: var(--nebu-text-body);
+		font-size: 17px;
 		font-weight: 300;
 	}
 	.after {

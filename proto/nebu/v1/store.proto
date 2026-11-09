@@ -60,7 +60,7 @@ message PullRequest {
   bool alone = 5;
   // Pull onto another mesh member, this node when empty
   string node_id = 6;
-  // Files of the repository to download on their own, each joining the stored group it belongs to
+  // Files of the repository to download on their own, each joining the group it belongs to, else the one stored for the repository
   repeated string paths = 7;
   // The blueprint slot the files fill, the stored group then carrying that component's descriptor
   string slot = 8;

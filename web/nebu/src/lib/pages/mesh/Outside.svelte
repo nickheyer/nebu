@@ -225,12 +225,12 @@
 	{#if made}
 		<Screen><span class="token">{made.token}</span></Screen>
 	{:else}
-		<Text bind:value={meshName} label="Name" max={64} required />
+		<Text bind:value={meshName} label="Name" info="What the new mesh is called" max={64} required />
 	{/if}
 </Dialog>
 
 <Dialog bind:open={joinOpen} title="Join with a token" confirm="Join" busy={joining} disabled={!joinToken.trim()} onconfirm={join}>
-	<Text bind:value={joinToken} label="Token" mono required />
+	<Text bind:value={joinToken} label="Token" info="A join token another member issued" mono required />
 </Dialog>
 
 <style>

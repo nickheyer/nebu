@@ -11,6 +11,8 @@
 		footer,
 		flush = false,
 		grow = false,
+		// Whether the body scrolls inside a bounded card
+		scroll = false,
 		pad = 'normal'
 	}: {
 		title?: string;
@@ -20,11 +22,12 @@
 		footer?: Snippet;
 		flush?: boolean;
 		grow?: boolean;
+		scroll?: boolean;
 		pad?: 'normal' | 'roomy';
 	} = $props();
 </script>
 
-<section class="card" class:grow class:roomy={pad === 'roomy'} aria-label={title}>
+<section class="card" class:grow class:scroll class:roomy={pad === 'roomy'} aria-label={title}>
 	{#if title !== undefined || tools}
 		<header class="head" class:bare={title === undefined}>
 			{#if title !== undefined}
@@ -36,7 +39,7 @@
 			{#if tools}<div class="tools">{@render tools()}</div>{/if}
 		</header>
 	{/if}
-	<div class="body" class:flush class:headed={title !== undefined || tools !== undefined}>
+	<div class="body" class:flush class:scroll class:headed={title !== undefined || tools !== undefined}>
 		{@render children()}
 	</div>
 	{#if footer}<footer class="foot">{@render footer()}</footer>{/if}
@@ -53,7 +56,7 @@
 		background: var(--neo-background-color);
 		border-radius: var(--neo-border-radius-md);
 		box-shadow: var(--neo-box-shadow-raised-2), var(--nebu-machined);
-		animation: nebu-reveal 320ms var(--nebu-settle) both;
+		animation: nebu-reveal 320ms var(--nebu-settle) backwards;
 		animation-delay: calc(var(--nebu-settle-step, 0ms) + var(--nebu-settle-shift, 0ms) + var(--nebu-settle-rank, 0ms));
 	}
 	.card.roomy {
@@ -61,6 +64,19 @@
 	}
 	.card.grow {
 		flex: 1 1 auto;
+	}
+	.card.scroll {
+		min-height: 0;
+	}
+	.body.scroll {
+		min-height: 0;
+		overflow: auto;
+		overscroll-behavior: contain;
+	}
+	.body.scroll :global(.listhead) {
+		position: sticky;
+		top: 0;
+		z-index: 1;
 	}
 	.head {
 		display: flex;

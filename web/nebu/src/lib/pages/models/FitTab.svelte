@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { NeoPill } from '#lib/neo/pill/index.js';
-	import { bytes, enumLabel } from '#lib/format.js';
+	import { bytes } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
-	import { FitVerdict, FitVerdictSchema, type FitRow, type InspectResponse, type MemoryPlan } from '#lib/proto/nebu/v1/estimate_pb.js';
-	import { ModelKind, TensorGroupKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
+	import { FitVerdict, type FitRow, type InspectResponse, type MemoryPlan } from '#lib/proto/nebu/v1/estimate_pb.js';
+	import { ModelKind } from '#lib/proto/nebu/v1/model_pb.js';
 	import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import Empty from '#lib/ui/Empty.svelte';
 	import KeyRows from '#lib/ui/KeyRows.svelte';
@@ -17,7 +17,7 @@
 	import Tip from '#lib/ui/Tip.svelte';
 	import { poolBars } from '#lib/ui/memory.js';
 	import type { Lamp } from '#lib/ui/status.js';
-	import { contextLabel } from '#lib/pages/models/models.js';
+	import { contextLabel, placementLabel, verdictLabel, verdictLamp } from '#lib/pages/models/models.js';
 	import ScalesIcon from 'phosphor-svelte/lib/ScalesIcon';
 
 	// Runtime rows of fit pills for one group, planned against free memory when free is set
@@ -66,10 +66,6 @@
 		return free ? row.free : row.plan;
 	}
 
-	function lampOf(v: FitVerdict | undefined): Lamp {
-		return v === FitVerdict.FITS ? 'success' : v === FitVerdict.PARTIAL ? 'warning' : v === FitVerdict.NO ? 'error' : 'muted';
-	}
-
 	// The best verdict a runtime reaches at any context, lighting its row
 	function bestLamp(list: FitRow[]): Lamp {
 		const verdicts = list.map((r) => planOf(r)?.verdict);
@@ -104,13 +100,13 @@
 					{#if plan}
 						<div class="planhead">
 							<span class="plantitle">{name}, {pillLabel(row)}</span>
-							<StatePill label={enumLabel(FitVerdictSchema, plan.verdict)} lamp={lampOf(plan.verdict)} />
+							<StatePill label={verdictLabel(plan.verdict)} lamp={verdictLamp(plan.verdict)} />
 						</div>
 						<MemoryBars profile={live.host} instances={live.instances.values()} slots={live.slots.values()} {plan} only={plan.pools.map((p) => p.poolId)} />
 						<KeyRows
 							dense
 							rows={[
-								...plan.placements.map((p) => ({ label: `${enumLabel(TensorGroupKindSchema, p.kind)}${p.count > 1 ? ` ${p.count}` : ''}`, value: `${bytes(p.bytes)} in ${p.poolId ? (poolLabels.get(p.poolId) ?? p.poolId) : 'disk'}` })),
+								...plan.placements.map((p) => ({ label: placementLabel(p), value: `${bytes(p.bytes)} in ${p.poolId ? (poolLabels.get(p.poolId) ?? p.poolId) : 'disk'}` })),
 								{ label: 'overhead', value: bytes(plan.overheadBytes) },
 								{ label: 'detail', value: plan.detail, tip: plan.detail }
 							]}
@@ -123,7 +119,7 @@
 					{/if}
 				{/snippet}
 				<Tip facts={plan ? [{ label: 'weights', value: bytes(plan.weightsBytes) }, { label: 'cache', value: bytes(plan.cacheBytes) }] : undefined} tag="span">
-					<NeoPill size="small" tinted color={lampOf(plan?.verdict) === 'muted' ? undefined : lampOf(plan?.verdict)} label={pillLabel(row)} aria-label="{pillLabel(row)} {plan ? enumLabel(FitVerdictSchema, plan.verdict) : ''}" />
+					<NeoPill size="small" tinted color={verdictLamp(plan?.verdict) === 'muted' ? undefined : verdictLamp(plan?.verdict)} label={pillLabel(row)} aria-label="{pillLabel(row)} {verdictLabel(plan?.verdict)}" />
 				</Tip>
 			</Pop>
 		{/each}
@@ -137,7 +133,7 @@
 {:else if byRuntime.length === 0 && blocked.length === 0}
 	<Empty icon={ScalesIcon} text="No compatible runtime" action="Runtimes" href="/runtimes" />
 {:else}
-	<List head={{ primary: 'Runtime', instrument: 'Context' }}>
+	<List head={{ primary: 'Runtime', instrument: 'Context' }} compactBelow={440}>
 		{#each byRuntime as rt (rt.id)}
 			{#snippet instrument()}{@render pills(rt.name, rt.id, rt.list)}{/snippet}
 			<ListRow lamp={bestLamp(rt.list)} primary={rt.name} primaryWidth="16ch" {instrument} />

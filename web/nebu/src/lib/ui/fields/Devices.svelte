@@ -6,7 +6,7 @@
 	import { deviceLabel } from '#lib/ui/memory.js';
 
 	// One checkbox per device a slot may use, accelerators then the CPU, each with the memory of its pool
-	let { value = $bindable([]), profile, label, disabled = false }: { value?: string[]; profile: HostProfile | undefined; label?: string; disabled?: boolean } = $props();
+	let { value = $bindable([]), profile, label, info, disabled = false }: { value?: string[]; profile: HostProfile | undefined; label?: string; info?: string; disabled?: boolean } = $props();
 
 	const devices = $derived.by((): Device[] => {
 		if (!profile) return [];
@@ -27,16 +27,16 @@
 </script>
 
 <div class="field">
-	<FieldLabel {label} />
+	<FieldLabel {label} {info} />
 	{#if devices.length === 0}
-		<span class="secondary">—</span>
+		<span class="secondary">None</span>
 	{:else}
 		<div class="devices">
 			{#each devices as d, i (d.id)}
 				{#snippet line()}
 					<span class="line">
 						<span class="devlabel">{deviceLabel(profile, d)}</span>
-						<span class="name ellipsis">{d.name || d.id}</span>
+						<span class="name">{d.name || d.id}</span>
 						<span class="size">{bytes(poolBytes(d))}</span>
 					</span>
 				{/snippet}
@@ -64,27 +64,37 @@
 	.device {
 		display: flex;
 		min-width: 0;
-		animation: nebu-reveal 240ms var(--nebu-settle) both;
+		animation: nebu-reveal 240ms var(--nebu-settle) backwards;
 		animation-delay: calc(var(--i) * 40ms);
 	}
-	.line {
-		display: inline-flex;
-		gap: var(--nebu-space-2);
-		align-items: baseline;
+	/* The checkbox row fills the field so the size can sit at the far end of every line */
+	.device :global(.neo-checkbox-container),
+	.device :global(.neo-checkbox-container .neo-label-container),
+	.device :global(.neo-checkbox-container .neo-label) {
+		flex: 1 1 auto;
+		width: auto;
 		min-width: 0;
-		max-width: 100%;
+		max-width: none;
+	}
+	.line {
+		display: grid;
+		grid-template-columns: 5ch minmax(0, 1fr) auto;
+		gap: 0 var(--nebu-space-2);
+		align-items: baseline;
+		width: 100%;
+		min-width: 0;
 	}
 	.devlabel {
-		flex: 0 0 5ch;
 		font-size: var(--nebu-text-secondary);
 	}
 	.name {
 		min-width: 0;
+		overflow-wrap: anywhere;
 	}
 	.size {
-		flex: 0 0 auto;
 		font-size: var(--nebu-text-secondary);
 		font-variant-numeric: tabular-nums;
 		color: var(--nebu-text-muted);
+		white-space: nowrap;
 	}
 </style>

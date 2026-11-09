@@ -83,9 +83,9 @@ func runHost(ctx context.Context, e *env, args []string) error {
 			section(w, "processes")
 			rows = nil
 			for _, pu := range p.GetProcesses() {
-				rows = append(rows, []string{strconv.Itoa(int(pu.GetPid())), pu.GetDeviceId(), estimate.Human(pu.GetBytes()), pu.GetInstanceName()})
+				rows = append(rows, []string{strconv.Itoa(int(pu.GetPid())), pu.GetCommand(), pu.GetDeviceId(), estimate.Human(pu.GetBytes()), pu.GetInstanceName()})
 			}
-			table(w, []string{"PID", "DEVICE", "MEMORY", "INSTANCE"}, rows)
+			table(w, []string{"PID", "COMMAND", "DEVICE", "MEMORY", "INSTANCE"}, rows)
 		}
 		section(w, "probes")
 		rows = nil

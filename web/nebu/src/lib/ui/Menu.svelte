@@ -63,7 +63,7 @@
 	</NeoMenu>
 </span>
 {#if pending}
-	<NeoPopConfirm bind:open={confirmOpen} target={trigger} elevation={2} tooltipProps={{ placement: 'bottom-end' }} onConfirm={confirmed} onCancel={() => (pending = undefined)} confirmProps={{ label: pending.label, color: pending.danger ? 'error' : 'success' }}>
+	<NeoPopConfirm bind:open={confirmOpen} target={trigger} elevation={2} tooltipProps={{ placement: 'bottom-end', portal: true, openOnHover: false, openOnFocus: false }} onConfirm={confirmed} onCancel={() => (pending = undefined)} confirmProps={{ label: pending.label, color: pending.danger ? 'error' : 'success' }}>
 		{#snippet tooltip()}
 			<span class="question">{pending?.confirm}</span>
 			{#if pending?.confirmBody}<div class="body">{@render pending.confirmBody()}</div>{/if}

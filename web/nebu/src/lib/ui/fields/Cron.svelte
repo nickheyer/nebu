@@ -15,7 +15,7 @@
 		{ value: 'custom', label: 'Custom' }
 	];
 
-	let { value = $bindable(''), label = 'Schedule', disabled = false }: { value?: string; label?: string; disabled?: boolean } = $props();
+	let { value = $bindable(''), label = 'Schedule', info, disabled = false }: { value?: string; label?: string; info?: string; disabled?: boolean } = $props();
 
 	let preset = $state(presets.some((p) => p.value === value) ? value : value ? 'custom' : '');
 	const custom = $derived(preset === 'custom');
@@ -32,9 +32,9 @@
 </script>
 
 <div class="cron">
-	<Select bind:value={preset} options={presets} {label} {disabled} onchange={picked} />
+	<Select bind:value={preset} options={presets} {label} {info} {disabled} placeholder="Choose a schedule" onchange={picked} />
 	{#if custom}
-		<Text bind:value label="Cron expression" mono {disabled} {error} max={64} />
+		<Text bind:value label="Cron expression" info="Minute, hour, day of month, month, day of week" mono {disabled} {error} max={64} />
 	{/if}
 </div>
 

@@ -158,12 +158,12 @@
 	<PanelHeader title={editing ?? 'New device profile'} onclose={() => (editorOpen = false)} />
 	<FormSection info="Stream paces decode, compute paces prefill, the fixed time lands on every forward pass">
 		<FieldRow>
-			<Text bind:value={pattern} label="Pattern" max={64} required readonly={editing !== undefined} />
-			<NumberField bind:value={fixedSeconds} min={0} step={0.001} label="Fixed per pass" unit="s" emptyZero />
+			<Text bind:value={pattern} label="Pattern" info="Device name glob the profile applies to" max={64} required readonly={editing !== undefined} />
+			<NumberField bind:value={fixedSeconds} min={0} step={0.001} label="Fixed per pass" info="Seconds every forward pass costs regardless of size" unit="s" emptyZero />
 		</FieldRow>
 		<FieldRow>
-			<NumberField bind:value={streamGb} min={0} step={10} label="Stream" unit="GB/s" emptyZero />
-			<NumberField bind:value={tflops} min={0} step={10} label="Compute" unit="TFLOPS" emptyZero />
+			<NumberField bind:value={streamGb} min={0} step={10} label="Stream" info="Memory bandwidth the device streams weights at" unit="GB/s" emptyZero />
+			<NumberField bind:value={tflops} min={0} step={10} label="Compute" info="Peak compute at the model's precision" unit="TFLOPS" emptyZero />
 		</FieldRow>
 	</FormSection>
 	<SaveBar always={editing === undefined} {dirty} {saving} error={saveError} disabled={!complete} label={editing === undefined ? 'Create' : 'Save'} onsave={save} ondiscard={() => (editorOpen = false)} />

@@ -38,6 +38,8 @@
 		{placement}
 		elevation={2}
 		filled
+		portal
+		flipOptions={{ fallbackAxisSideDirection: 'none' }}
 		openDelay={100}
 		hoverDelay={click ? 0 : 300}
 		openOnHover={!click}

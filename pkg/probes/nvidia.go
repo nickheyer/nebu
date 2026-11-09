@@ -30,7 +30,7 @@ func (p nvidiaSMI) Run(ctx context.Context) host.Result {
 	if result.Status != v1.ProbeStatus_PROBE_STATUS_OK {
 		return result
 	}
-	apps, res, ok := command(ctx, 0, "nvidia-smi", "--query-compute-apps=pid,used_memory,gpu_uuid", "--format=csv,noheader,nounits")
+	apps, res, ok := command(ctx, 0, "nvidia-smi", "--query-compute-apps=pid,process_name,used_memory,gpu_uuid", "--format=csv,noheader,nounits")
 	if !ok {
 		result.Detail += ", processes unlisted: " + res.Detail
 		return result
@@ -43,11 +43,12 @@ func (p nvidiaSMI) Run(ctx context.Context) host.Result {
 	return result
 }
 
-// One process per CSV row on a probed device, rows whose pid or memory the driver withholds left out
+// One process per CSV row on a probed device, named by its executable, unreadable pid or memory rows left out
 func parseNvidiaApps(out []byte, devices []*v1.Device) ([]*v1.ProcessUse, error) {
 	r := csv.NewReader(bytes.NewReader(out))
 	r.TrimLeadingSpace = true
 	r.FieldsPerRecord = -1
+	r.LazyQuotes = true
 	records, err := r.ReadAll()
 	if err != nil {
 		return nil, err
@@ -61,23 +62,36 @@ func parseNvidiaApps(out []byte, devices []*v1.Device) ([]*v1.ProcessUse, error)
 		if len(rec) == 1 && strings.TrimSpace(rec[0]) == "" {
 			continue
 		}
-		if len(rec) < 3 {
-			return nil, fmt.Errorf("nvidia-smi printed %d columns of process use, wanted 3: %q", len(rec), rec)
+		if len(rec) < 4 {
+			return nil, fmt.Errorf("nvidia-smi printed %d columns of process use, wanted 4: %q", len(rec), rec)
 		}
 		for i := range rec {
 			rec[i] = strings.TrimSpace(rec[i])
 		}
+		last := len(rec) - 1
 		pid, err := strconv.Atoi(rec[0])
-		if err != nil || !known[rec[2]] {
+		if err != nil || !known[rec[last]] {
 			continue
 		}
-		used, err := bytesIn(rec[1], "MiB")
+		used, err := bytesIn(rec[last-1], "MiB")
 		if err != nil {
 			continue
 		}
-		procs = append(procs, &v1.ProcessUse{DeviceId: rec[2], Pid: int32(pid), Bytes: used})
+		procs = append(procs, &v1.ProcessUse{DeviceId: rec[last], Pid: int32(pid), Bytes: used, Command: processName(strings.Join(rec[1:last-1], ","))})
 	}
 	return procs, nil
+}
+
+// Base name of the executable, the first word of a Linux command line, blank for nvidia-smi's bracketed placeholders
+func processName(cmdline string) string {
+	if cmdline == "" || strings.HasPrefix(cmdline, "[") {
+		return ""
+	}
+	path := cmdline
+	if !strings.Contains(path, `\`) {
+		path, _, _ = strings.Cut(path, " ")
+	}
+	return path[strings.LastIndexAny(path, `/\`)+1:]
 }
 
 // One device and one pool per CSV row, the driver version and compute capability facts of the device

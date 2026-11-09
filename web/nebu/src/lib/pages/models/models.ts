@@ -1,7 +1,9 @@
 import type { Component } from 'svelte';
 import { reason, rpc } from '#lib/api/transport.js';
-import { bytes, enumLabel, num, plural } from '#lib/format.js';
-import { ArtifactRole, ModelKind, ModelKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
+import { bytes, enumLabel, num } from '#lib/format.js';
+import { FitVerdict, type GroupPlacement } from '#lib/proto/nebu/v1/estimate_pb.js';
+import { ArtifactRole, ModelKind, ModelKindSchema, TensorGroupKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
+import type { Lamp } from '#lib/ui/status.js';
 import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 import type { StoredModel } from '#lib/proto/nebu/v1/store_pb.js';
 import { toast } from '#lib/shell/notify.svelte.js';
@@ -29,30 +31,6 @@ export function launchHref(m: ModelRef, runtimeId?: string, context?: number): s
 	return `/serve/launch?${q}`;
 }
 
-export function selectWidth(labels: string[]): string {
-	return `${Math.max(6, ...labels.map((l) => l.length)) + 8}ch`;
-}
-
-// Shard paths folded into one brace pattern such as model-{00001..00096}-of-00096.safetensors
-export function shardPattern(paths: string[]): string {
-	const first = paths[0] ?? '';
-	if (paths.length < 2) return first;
-	let head = 0;
-	while (head < first.length && paths.every((p) => p[head] === first[head])) head++;
-	let tail = 0;
-	while (tail < first.length - head && paths.every((p) => p.length > head + tail && p[p.length - 1 - tail] === first[first.length - 1 - tail])) tail++;
-	const middles = paths.map((p) => p.slice(head, p.length - tail));
-	if (!middles.every((m) => /^\d+$/.test(m))) return plural(paths.length, 'weight file');
-	const sorted = [...middles].sort((a, b) => Number(a) - Number(b));
-	return `${first.slice(0, head)}{${sorted[0]}..${sorted[sorted.length - 1]}}${first.slice(first.length - tail)}`;
-}
-
-// The digits that number a shard inside its path, the index when the path holds none
-export function shardOrdinal(path: string, index: number): string {
-	const m = /(\d+)(?=-of-|\.[^.]+$)/.exec(path);
-	return m?.[1] ?? String(index + 1);
-}
-
 export function kindLabel(kind: ModelKind): string {
 	return kind === ModelKind.UNSPECIFIED ? '' : enumLabel(ModelKindSchema, kind);
 }
@@ -75,6 +53,30 @@ export function paramLabel(n: bigint | number | undefined): string {
 export function contextLabel(n: number): string {
 	if (n >= 1024 && n % 1024 === 0) return `${n / 1024}K`;
 	return num(n);
+}
+
+// A fit verdict in words, what fits, what spills to the host and what will not load
+export function verdictLabel(v: FitVerdict | undefined): string {
+	switch (v) {
+		case FitVerdict.FITS:
+			return 'Fits';
+		case FitVerdict.PARTIAL:
+			return 'Partly offloaded';
+		case FitVerdict.NO:
+			return 'Does not fit';
+		default:
+			return 'Not planned';
+	}
+}
+
+export function verdictLamp(v: FitVerdict | undefined): Lamp {
+	return v === FitVerdict.FITS ? 'success' : v === FitVerdict.PARTIAL ? 'warning' : v === FitVerdict.NO ? 'error' : 'muted';
+}
+
+// A placement's tensor groups counted in words, 20 layers rather than layer 20, a word already plural left as it is
+export function placementLabel(p: GroupPlacement): string {
+	const word = enumLabel(TensorGroupKindSchema, p.kind);
+	return p.count > 1 ? `${num(p.count)} ${word.endsWith('s') ? word : `${word}s`}` : word;
 }
 
 export function sameModel(a: ModelRef, b: ModelRef): boolean {

@@ -124,7 +124,7 @@
 		min-width: 0;
 		font-size: var(--nebu-text-title);
 		font-weight: 500;
-		animation: nebu-reveal 240ms var(--nebu-settle) both;
+		animation: nebu-reveal 240ms var(--nebu-settle) backwards;
 	}
 	.info {
 		display: inline-flex;
@@ -173,7 +173,7 @@
 		white-space: nowrap;
 		text-decoration: none;
 		border-bottom: 2px solid transparent;
-		animation: nebu-reveal 220ms var(--nebu-settle) both;
+		animation: nebu-reveal 220ms var(--nebu-settle) backwards;
 		animation-delay: calc(var(--i) * 30ms);
 		transition:
 			color var(--nebu-fast) var(--nebu-ease),
