@@ -48,7 +48,7 @@ func (p *Puller) export(ctx context.Context, h *tasks.Handle, models []*v1.Store
 	// Nothing is collected or evicted while blobs are being copied out
 	defer p.Store.Hold()()
 	total := sizeOf(models)
-	h.Progress(0, total, "copying")
+	h.ProgressBytes(0, total, "copying")
 	for _, m := range models {
 		repoDir := filepath.Join(dir, filepath.FromSlash(m.GetRepo()))
 		if rel, err := filepath.Rel(dir, repoDir); err != nil || strings.HasPrefix(rel, "..") {
@@ -86,7 +86,7 @@ func (p *Puller) export(ctx context.Context, h *tasks.Handle, models []*v1.Store
 	if err := writeRootIndex(dir); err != nil {
 		return err
 	}
-	h.Progress(total, total, "done")
+	h.ProgressBytes(total, total, "done")
 	return nil
 }
 

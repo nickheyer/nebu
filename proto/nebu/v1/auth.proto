@@ -2,9 +2,34 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// What an account may do. Each role grants the scopes listed beside it
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  // inference, read, operate, and admin
+  ROLE_ADMIN = 1;
+  // inference, read, and operate
+  ROLE_OPERATOR = 2;
+  // inference alone
+  ROLE_INFERENCE = 3;
+}
+
+// A class of calls a credential opens. Admin opens every call and operate opens read calls as well
+enum Scope {
+  SCOPE_UNSPECIFIED = 0;
+  // Gateway requests, web chat, tool calls, and the caller's own password and tokens
+  SCOPE_INFERENCE = 1;
+  // List, Get, Watch, and Logs calls
+  SCOPE_READ = 2;
+  // Calls that run, stop, swap, put, or delete
+  SCOPE_OPERATE = 3;
+  // Accounts, settings, sources, and mesh membership
+  SCOPE_ADMIN = 4;
+}
 
 // A local account that signs in to the web UI
 message User {
@@ -13,20 +38,27 @@ message User {
   google.protobuf.Timestamp created_at = 3;
   // Last password change
   google.protobuf.Timestamp updated_at = 4;
+  Role role = 5;
 }
 
-// Asks for every account
-message ListUsersRequest {}
+// Asks for accounts, the ones whose username holds every word of the query
+message ListUsersRequest {
+  string query = 1 [(buf.validate.field).string.max_len = 256];
+  string cursor = 2;
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 1000];
+}
 
 // Accounts by username
 message ListUsersResponse {
   repeated User users = 1;
+  string next_cursor = 2;
 }
 
-// Adds an account
+// Adds an account. The first account is always an admin and later ones need a role
 message CreateUserRequest {
-  string username = 1;
-  string password = 2;
+  string username = 1 [(buf.validate.field).string.min_len = 1];
+  string password = 2 [(buf.validate.field).string.min_len = 1];
+  Role role = 3 [(buf.validate.field).enum.defined_only = true];
 }
 
 // The new account
@@ -36,17 +68,17 @@ message CreateUserResponse {
 
 // Removes an account and ends its sessions
 message DeleteUserRequest {
-  string username = 1;
+  string username = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Confirms the removal
 message DeleteUserResponse {}
 
-// Changes an account's password and ends its sessions. Callers signed in with a
-// browser session give their own current password. The API token needs none.
+// Changes an account's password and ends its sessions. An account changes its own password
+// and an admin changes any. Local accounts give their own current password, the daemon token none
 message SetPasswordRequest {
   string username = 1;
-  string password = 2;
+  string password = 2 [(buf.validate.field).string.min_len = 1];
   string current_password = 3;
 }
 
@@ -56,28 +88,43 @@ message SetPasswordResponse {
 }
 
 // An API token a signed-in user made. API and gateway clients send it as a
-// bearer token and act as that user.
+// bearer token and act as that user within its scopes.
 message ApiToken {
   string id = 1;
   // Label the owner gave it
   string name = 2;
+  // The whole token, nebu_ then the prefix then the secret, set once in the answer that creates it
   string secret = 3;
   google.protobuf.Timestamp created_at = 4;
   // Last request that sent it, unset until the first
   google.protobuf.Timestamp last_used_at = 5;
+  // The twelve characters after nebu_ that name the token without revealing it
+  string prefix = 6;
+  repeated Scope scopes = 7;
 }
 
-// Asks for the caller's own tokens
-message ListTokensRequest {}
+// Asks for the caller's own tokens, the ones whose name or prefix holds every word of the query
+message ListTokensRequest {
+  string query = 1 [(buf.validate.field).string.max_len = 256];
+  string cursor = 2;
+  uint32 limit = 3 [(buf.validate.field).uint32.lte = 1000];
+}
 
 // The caller's tokens, newest first
 message ListTokensResponse {
   repeated ApiToken tokens = 1;
+  string next_cursor = 2;
 }
 
-// Makes a token for the caller's own account
+// Makes a token for the caller's own account, holding no scope beyond the caller's own
 message CreateTokenRequest {
-  string name = 1;
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+  repeated Scope scopes = 2 [(buf.validate.field).repeated = {
+    min_items: 1
+    items: {
+      enum: {defined_only: true}
+    }
+  }];
 }
 
 // The new token with its secret
@@ -87,15 +134,15 @@ message CreateTokenResponse {
 
 // Revokes one of the caller's own tokens
 message DeleteTokenRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Confirms the revocation
 message DeleteTokenResponse {}
 
 // Local accounts and API tokens. Account calls are unavailable when auth.oidc
-// is set or auth.disabled is true. Token calls need a signed-in account, local
-// or single sign-on, and are unavailable when auth.disabled is true.
+// is set or auth.disabled is true and need an admin, password changes apart. Token calls
+// need a signed-in account, local or single sign-on, and are unavailable when auth.disabled is true.
 service AuthService {
   // Lists accounts
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
@@ -105,7 +152,7 @@ service AuthService {
   rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
   // Changes a password and ends the account's sessions
   rpc SetPassword(SetPasswordRequest) returns (SetPasswordResponse);
-  // Lists the caller's API tokens with their secrets
+  // Lists the caller's API tokens by prefix, never with their secrets
   rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
   // Makes an API token for the caller
   rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);

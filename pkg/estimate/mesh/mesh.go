@@ -33,8 +33,8 @@ const (
 	fabricReduction = 45e-6
 	// Prompt lengths a relay's break even is searched up to
 	relayMaxPrompt = 131072
-	// Seconds a replicas route keeps a conversation on the seat whose cache holds its prefix
-	AffinityWindowSeconds = 600
+	// The scheduler configuration a replicas plan names, prefix cache aware across its seats
+	ReplicasSchedulerConfig = "replicas"
 	// The param group speculative settings live in on every runtime
 	speculativeGroup = "Speculative decoding"
 )
@@ -66,7 +66,9 @@ type Node struct {
 	ID, Name string
 	Profile  *v1.HostProfile
 	Install  *v1.Install
-	Shapes   []v1.Shape
+	// Why the node cannot host the plan at all, the pinned install it lacks
+	Refused string
+	Shapes  []v1.Shape
 	// Accelerators with device or unified pools, fastest first
 	Devices []*Device
 	// The CPU with the host pool, nil when no host pool was probed
@@ -144,7 +146,7 @@ func (m *Mesh) Node(id string) *Node {
 }
 
 // Builds a node from a member's record: its devices with pools and numbers, the runtime's install
-// and shapes, and the CPU with the host pool
+// and shapes, and the CPU with the host pool, a pinned install the node lacks refusing it
 func NodeOf(rec *v1.Node, runtimeID, installID string, capabilities map[string][]v1.Shape, numbers func(*v1.Device) perf.Numbers) *Node {
 	profile := rec.GetProfile()
 	n := &Node{ID: rec.GetId(), Name: rec.GetName(), Profile: profile}
@@ -156,9 +158,12 @@ func NodeOf(rec *v1.Node, runtimeID, installID string, capabilities map[string][
 			n.Install = in
 			break
 		}
-		if n.Install == nil || in.GetCreatedAt().AsTime().After(n.Install.GetCreatedAt().AsTime()) {
+		if installID == "" && (n.Install == nil || in.GetCreatedAt().AsTime().After(n.Install.GetCreatedAt().AsTime())) {
 			n.Install = in
 		}
+	}
+	if installID != "" && n.Install == nil {
+		n.Refused = fmt.Sprintf("%s has no install %s of %s, which the run pins", n.label(), installID, runtimeID)
 	}
 	if n.Install != nil {
 		n.Shapes = capabilities[n.Install.GetId()]

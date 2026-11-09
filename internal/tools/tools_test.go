@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -111,6 +112,49 @@ func TestRegistryMCP(t *testing.T) {
 	r.Apply(ctx, nil)
 	if _, err := r.Server(ctx, "fake"); !errors.Is(err, ErrUnknownServer) {
 		t.Fatalf("removed: %v", err)
+	}
+}
+
+// Statuses and events carry the marker for the Brave key, env values, and header values, and the server runs with the real ones
+func TestStatusRedactsSecrets(t *testing.T) {
+	srv := fakeMCP(t)
+	bus := events.New()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub := bus.Subscribe(ctx, []v1.EventKind{v1.EventKind_EVENT_KIND_TOOL_SERVER})
+	r := New(slog.Default(), bus)
+	t.Cleanup(r.Close)
+	r.Apply(ctx, []*v1.ToolServer{
+		{Name: "brave", Enabled: true, Kind: v1.ToolServerKind_TOOL_SERVER_KIND_SEARCH, Provider: "brave", BraveKey: "brave-secret"},
+		{Name: "fake", Enabled: true, Kind: v1.ToolServerKind_TOOL_SERVER_KIND_HTTP, Url: srv.URL, Headers: map[string]string{"Authorization": "Bearer header-secret"}},
+		{Name: "fs", Kind: v1.ToolServerKind_TOOL_SERVER_KIND_STDIO, Command: "srv", Env: map[string]string{"API_KEY": "env-secret"}},
+	})
+	ready(t, r, "fake")
+	if !strings.Contains(fmt.Sprint(r.byName["brave"].spec), "brave-secret") {
+		t.Fatal("the registry runs with the real key")
+	}
+	check := func(where string, st *v1.ToolServerStatus) {
+		t.Helper()
+		if strings.Contains(st.String(), "-secret") || !st.GetServer().GetSecretsSet() {
+			t.Fatalf("%s carries a secret or hides that one is set %v", where, st)
+		}
+	}
+	for _, st := range r.Status() {
+		check("status", st)
+	}
+	deadline := time.After(5 * time.Second)
+	for seen := 0; seen < 3; {
+		select {
+		case ev := <-sub.Events():
+			check("event", ev.GetToolServer())
+			seen++
+		case <-deadline:
+			t.Fatalf("saw %d tool server events", seen)
+		}
+	}
+	plain := Redact(&v1.ToolServer{Name: "fetch", Kind: v1.ToolServerKind_TOOL_SERVER_KIND_FETCH, SecretsSet: true})
+	if plain.GetSecretsSet() {
+		t.Fatal("a server without secrets reports none")
 	}
 }
 

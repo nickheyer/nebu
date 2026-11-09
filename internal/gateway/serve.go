@@ -1,436 +1,760 @@
 package gateway
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
-	"net/http/httputil"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/chat"
-	"github.com/nickheyer/nebu/pkg/interceptors"
+	"github.com/nickheyer/nebu/internal/db"
+	"github.com/nickheyer/nebu/pkg/bodyparse"
+	"github.com/nickheyer/nebu/pkg/datalayer"
+	"github.com/nickheyer/nebu/pkg/metrics"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/requestcontrol"
+	"github.com/nickheyer/nebu/pkg/scheduling/framework"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Rounds of tool calls one request may make before the model has to answer
-const maxToolRounds = 32
+// Token count paths llama.cpp and vLLM serve, proxied to the runtime as they are
+const (
+	tokenizePath   = "/tokenize"
+	detokenizePath = "/detokenize"
+)
 
-// Everything one request to a language model works with on its way to an answer
-type exchange struct {
-	g      *Gateway
-	w      *traceWriter
-	r      *http.Request
-	in     *inbound
-	name   string
-	api    v1.ApiFlavor
-	client chat.Client
-	route  *v1.Route
-	policy *v1.Policy
-	// The seats the request may go to and the count that follows it between them
-	targets []target
-	hold    *seatHold
-	open    opener
-	runtime chat.Runtime
-	plan    *toolPlan
-	// Whether the route is a relay, whose requests are always rendered
-	relay bool
-	// What the interceptors read and change, from the inbound stage on
-	ix *interceptors.Exchange
+// A fresh random request id
+func newRequestID() string {
+	var b [16]byte
+	rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
-// Answers an error in the client's protocol and records it on the trace
-func (x *exchange) refuse(f chat.Failure) {
-	x.g.refuse(x.w, x.client, f.Status, f.Message, f.Code)
+// The trace kind of a request kind, count for token paths and other for paths proxied unparsed
+func traceKind(kind chat.Kind, path string) v1.TraceKind {
+	switch kind {
+	case chat.Chat:
+		return v1.TraceKind_TRACE_KIND_CHAT
+	case chat.Generate:
+		return v1.TraceKind_TRACE_KIND_GENERATE
+	case chat.Embed:
+		return v1.TraceKind_TRACE_KIND_EMBED
+	case chat.Count:
+		return v1.TraceKind_TRACE_KIND_COUNT
+	case chat.Image:
+		return v1.TraceKind_TRACE_KIND_IMAGE
+	case chat.Video:
+		return v1.TraceKind_TRACE_KIND_VIDEO
+	}
+	if path == tokenizePath || path == detokenizePath {
+		return v1.TraceKind_TRACE_KIND_COUNT
+	}
+	return v1.TraceKind_TRACE_KIND_OTHER
 }
 
-// Serves the request as the client sent it unless the runtime needs it rendered, answering the seat index used
-func (x *exchange) serve() int {
-	t, in, route := x.w.t, x.in, x.route
-	same := x.api == route.GetApi()
-	if in.req == nil {
-		// A Responses API body no runtime reads is refused here rather than passed to one
-		if !same || x.relay || x.r.URL.Path == chat.OpenAIResponses {
-			x.refuse(chat.FailureOf(in.err))
-			return -1
-		}
-		return x.passthrough()
+// A fresh trace for an exchange, its kind read from the request kind and path
+func newTrace(x *exchange) *v1.Trace {
+	return &v1.Trace{Id: db.NewID(), ClientApi: x.api, Path: x.r.URL.Path, Kind: traceKind(x.kind, x.r.URL.Path), StartedAt: timestamppb.New(x.start), Remote: x.r.RemoteAddr, RequestId: x.id}
+}
+
+// Starts an exchange for a request with its trace, not yet recorded
+func (g *Gateway) newExchange(w http.ResponseWriter, r *http.Request) *exchange {
+	api := chat.Detect(r)
+	client := chat.ClientOf(api)
+	now := g.clock.Now()
+	id := strings.TrimSpace(r.Header.Get(requestcontrol.HeaderRequestID))
+	if id == "" {
+		id = newRequestID()
 	}
-	req := in.req
-	x.runtime = chat.RuntimeOf(route.GetApi())
-	x.plan = emptyPlan(x.g)
-	if req.Kind == chat.Chat {
-		plan, err := x.g.plan(x.r.Context(), req, route, x.r.Header, x.ix.Bare)
-		if err != nil {
-			x.refuse(chat.FailureOf(err))
-			return -1
+	x := &exchange{g: g, w: &writer{ResponseWriter: w, clock: g.clock}, r: r, id: id, start: now, api: api, client: client, kind: client.Endpoint(r.URL.Path), who: identityOf(r), policy: effectivePolicy(nil, g.policy())}
+	x.t = newTrace(x)
+	x.sink = &traceSink{t: x.t, clock: g.clock}
+	return x
+}
+
+// Answers every inference, media and runtime path in the client's protocol, refusals on headers sent before the body arrives
+func (g *Gateway) serve(w http.ResponseWriter, r *http.Request) {
+	_ = http.NewResponseController(w).EnableFullDuplex()
+	x := g.newExchange(w, r)
+	defer func() {
+		if !x.detached {
+			x.finish()
 		}
-		x.plan = plan
-	}
-	defer x.plan.close()
-	x.ix.Req = req
-	changed, err := interceptors.Default.Run(interceptors.Request, x.ix)
+	}()
+	x.run(r.Context())
+}
+
+// Decides on the headers alone when they name the model, reading the body after, and serves the request by kind
+func (x *exchange) run(ctx context.Context) {
+	g := x.g
+	var err error
+	x.modes, err = parseModes(x.r.Header)
+	x.record()
 	if err != nil {
-		x.refuse(chat.FailureOf(err))
-		return -1
+		x.fail(err)
+		return
 	}
-	// An answer echoed without the tool rounds the gateway ran for it gets them back
-	if req.Kind == chat.Chat && !x.ix.Bare {
-		if msgs, spliced := x.g.rounds.splice(route.GetName(), req.Messages); spliced {
-			req.Messages, changed = msgs, true
+	x.model = strings.TrimSpace(x.r.Header.Get(requestcontrol.HeaderModelName))
+	byHeader := x.model != ""
+	if !byHeader {
+		if err := x.readRequest(); err != nil {
+			x.fail(err)
+			return
+		}
+		x.model = x.bodyModel()
+	}
+	x.t.Route = x.model
+	if x.model != "" {
+		if rt, ok := g.pools.RouteView(x.model); ok {
+			x.route = rt
 		}
 	}
-	emulate := x.g.table.ToolSupport(route) == v1.ToolSupport_TOOL_SUPPORT_EMULATED && len(req.Tools) > 0
-	if same && !changed && !x.plan.active() && !emulate && req.Kind != chat.Count && !x.relay && !req.Responses {
-		return x.passthrough()
-	}
-	t.Translated = !same
-	if served := route.GetServed(); served != "" {
-		req.Model = served
-	}
-	if x.runtime.Traits().Strict && !same {
-		chat.DropExtras(req)
-	}
-	if req.Kind == chat.Count {
-		return x.count()
-	}
-	if x.runtime.Traits().InlineImages {
-		if err := x.g.inlineImages(x.r.Context(), req, x.policy); err != nil {
-			x.refuse(failure(http.StatusBadRequest, err.Error(), chat.CodeInvalidRequest))
-			return -1
-		}
-	}
-	if emulate {
-		x.runtime = chat.Emulate(x.runtime)
-	}
-	return x.rounds()
-}
-
-// Proxies the body as the client sent it, the model renamed to what the runtime serves
-func (x *exchange) passthrough() int {
-	g, t, r, in := x.g, x.w.t, x.r, x.in
-	body := in.body
-	if served := x.route.GetServed(); served != "" && served != x.name {
-		var err error
-		if body, err = renameModel(body, served); err != nil {
-			x.refuse(failure(http.StatusBadRequest, err.Error(), chat.CodeInvalidRequest))
-			return -1
-		}
-		t.UpstreamRequest = string(body)
-	}
-	// The answer is parsed into the trace as it passes, an unparsed one kept whole
-	if in.req != nil {
-		reader := readPassthrough(t, chat.RuntimeOf(x.route.GetApi()), in.req)
-		x.w.tee = reader.pw
-		defer reader.close()
-	} else {
-		raw := &rawCapture{}
-		x.w.tee = raw
-		defer func() { t.Response = raw.buf.String() }()
-	}
-	ctx := r.Context()
+	x.policy = effectivePolicy(x.route.GetSpec().GetPolicy(), g.policy())
 	if d := x.policy.GetRequestTimeoutMs(); d > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(d)*time.Millisecond)
 		defer cancel()
 	}
-	first := x.targets[0].url
-	hops := &failover{targets: x.targets, hold: x.hold, next: &sameHostRedirects{next: g.transport(x.policy), body: body}, log: g.log}
-	rp := &httputil.ReverseProxy{
-		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(first)
-			pr.Out.URL.Path = r.URL.Path
-			pr.Out.URL.RawPath = r.URL.RawPath
-			pr.Out.Host = first.Host
-			dropClientOnly(pr.Out.Header)
-		},
-		Transport:     hops,
-		FlushInterval: -1,
-		ErrorHandler:  func(w http.ResponseWriter, _ *http.Request, err error) { g.upstreamError(w, t, x.client, x.name, err) },
+	ctx = withExchange(ctx, x)
+	if x.forwarding() {
+		if byHeader {
+			if err := x.readRequest(); err != nil {
+				x.fail(err)
+				return
+			}
+		}
+		x.forward(ctx, x.inbound())
+		return
 	}
-	r = r.WithContext(ctx)
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	r.ContentLength = int64(len(body))
-	rp.ServeHTTP(x.w, r)
-	return hops.used
-}
-
-// Counts the prompt's tokens with the runtime's tokenizer, estimating when it has none
-func (x *exchange) count() int {
-	req := x.in.req
-	res := &chat.Result{Model: x.name}
-	n, used, err := x.countUpstream()
+	x.in = x.inbound()
+	x.dir = g.current()
+	dec, err := x.dir.Decide(ctx, x.in)
 	if err != nil {
-		x.g.log.Debug("gateway count estimated", "model", x.name, "err", err)
-		n = chat.EstimateTokens(req)
-	} else if !x.runtime.Traits().CountsImages {
-		n += chat.ImageTokens(req)
+		x.hold.release()
+		x.fail(err)
+		return
 	}
-	res.Usage.In = n
-	x.w.t.PromptTokens = uint32(n)
-	out := x.client.Answer(x.w, req, x.name)
-	defer out.Close()
-	if err := out.Write(chat.Event{Kind: chat.Stopped, Res: res}); err != nil {
-		x.refuse(failure(http.StatusInternalServerError, err.Error(), chat.CodeServer))
-	}
-	return used
-}
-
-// Asks the runtime's tokenizer, answering the count and the seat that gave it
-func (x *exchange) countUpstream() (int, int, error) {
-	req := x.in.req
-	path, out, err := x.runtime.Render(req)
-	if err != nil {
-		return 0, -1, err
-	}
-	x.w.t.UpstreamRequest = string(out)
-	resp, cancel, used, err := x.open(x.r.Context(), req, path, out)
-	if err != nil {
-		return 0, used, err
-	}
-	defer cancel()
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-	if err != nil {
-		return 0, used, err
-	}
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		return 0, used, fmt.Errorf("tokenizer answered %d", resp.StatusCode)
-	}
-	res, err := x.runtime.ParseResult(req, raw)
-	if err != nil {
-		return 0, used, err
-	}
-	return res.Usage.In, used, nil
-}
-
-// Asks the model round by round, running the tools it calls, until it answers or calls one of the client's
-func (x *exchange) rounds() int {
-	g, t, r, req, plan := x.g, x.w.t, x.r, x.in.req, x.plan
-	sink := &traceSink{t: t}
-	defer sink.close()
-	var out chat.Writer
-	fail := func(f chat.Failure) {
-		t.Error = f.Message
-		if out == nil {
-			x.client.Error(x.w, f)
+	x.dec = dec
+	defer func() {
+		if !x.detached {
+			x.complete(ctx)
+		}
+	}()
+	if byHeader {
+		if err := x.readRequest(); err != nil {
+			x.resp.Err = err
+			x.fail(err)
 			return
 		}
-		out.Write(chat.Event{Kind: chat.Failed, Failure: &f})
+		if x.doc != nil {
+			if err := x.dir.AttachBody(ctx, dec, x.doc); err != nil {
+				x.resp.Err = err
+				x.fail(err)
+				return
+			}
+		}
 	}
-	total := &chat.Result{Model: x.name}
-	used := -1
-	// The client's turns end here, the turns the gateway adds by running tools following
-	clientTurns := len(req.Messages)
-	var prev *chat.Message
-	if clientTurns > 0 {
-		last := req.Messages[clientTurns-1]
-		prev = &last
+	x.upstream = g.runtimes.API(dec.Pool.Runtime)
+	x.t.UpstreamApi, x.t.FailedOpen, x.t.Profile = x.upstream, dec.FailedOpen, dec.Result.PrimaryProfile
+	if dec.Permit != nil {
+		x.t.QueueWaitMs = uint32(dec.Permit.Waited().Milliseconds())
 	}
-	var allSaid strings.Builder
-	for round := 0; ; round++ {
-		path, body, err := x.runtime.Render(req)
-		if err != nil {
-			fail(chat.FailureOf(err))
-			break
+	switch x.kind {
+	case chat.Image, chat.Video:
+		x.media(ctx)
+	case chat.Chat, chat.Generate, chat.Embed, chat.Count:
+		x.chat(ctx)
+	default:
+		x.passthrough(ctx, nil)
+	}
+}
+
+// Reads the bounded body chunk by chunk and parses what routes on it once, the JSON object or the multipart form
+func (x *exchange) readRequest() error {
+	body, err := readBody(x.w, x.r)
+	if err != nil {
+		return err
+	}
+	x.body = body
+	x.t.RequestBytes = uint64(len(body))
+	if doc, err := parseDoc(x.r.URL.Path, body); err == nil {
+		x.doc = doc
+	}
+	if x.doc == nil && x.kind == chat.Image {
+		if f, err := parseForm(x.r, body); err == nil {
+			x.form = f
 		}
-		t.UpstreamRequest = string(body)
-		resp, cancel, i, err := x.open(r.Context(), req, path, body)
-		if err != nil {
-			g.log.Warn("gateway round", "model", x.name, "err", err)
-			if errors.Is(err, errSlotsBusy) {
-				x.w.Header().Set("Retry-After", retryAfter)
-			}
-			fail(upstreamFailure(x.name, err))
-			break
+	}
+	return nil
+}
+
+// The model the request names below its headers, by the JSON model field, the query, then the form
+func (x *exchange) bodyModel() string {
+	if x.doc != nil {
+		if m, err := x.doc.Model(); err == nil {
+			return m
 		}
-		used = i
-		if out == nil {
-			if after := resp.Header.Get("Retry-After"); after != "" {
-				x.w.Header().Set("Retry-After", after)
-			}
+	}
+	if m := x.r.URL.Query().Get("model"); m != "" {
+		return m
+	}
+	if x.form != nil {
+		return x.form.value("model")
+	}
+	return ""
+}
+
+// The request as the director reads it, credentials dropped and a named objective taken out for the resolver
+func (x *exchange) inbound() *requestcontrol.Inbound {
+	h := x.r.Header.Clone()
+	for _, k := range []string{"Authorization", "X-Api-Key", "Cookie"} {
+		h.Del(k)
+	}
+	if v := strings.TrimSpace(h.Get(requestcontrol.HeaderObjective)); v != "" {
+		if _, err := strconv.Atoi(v); err != nil {
+			x.objective = v
+			h.Del(requestcontrol.HeaderObjective)
+		} else {
+			x.priorityByHeader = true
 		}
-		if out == nil && resp.StatusCode < http.StatusMultipleChoices {
-			t.FirstByteAt = timestamppb.Now()
-			out = x.client.Answer(x.w, req, x.name)
+	}
+	if x.model != "" && h.Get(requestcontrol.HeaderModelName) == "" && (x.doc == nil || !x.docNames(x.model)) {
+		h.Set(requestcontrol.HeaderModelName, x.model)
+	}
+	var body bodyparse.Document
+	if x.doc != nil {
+		body = x.doc
+	}
+	return &requestcontrol.Inbound{ID: x.id, Method: x.r.Method, Path: x.r.URL.Path, Headers: h, Identity: x.who.fairness, Body: body, ReceivedAt: x.start, Route: x.routeName(), MaxInFlight: int(x.policy.GetMaxInFlight())}
+}
+
+// Whether the parsed body names a model
+func (x *exchange) docNames(model string) bool {
+	m, err := x.doc.Model()
+	return err == nil && m == model
+}
+
+// Records the trace's start unless the request asked to leave none, which then keeps no body either
+func (x *exchange) record() {
+	if !x.modes.ghost {
+		x.slot = x.g.traces.start(x.t, x.who.owner)
+		x.traced = true
+	}
+	x.sink.keep = x.traced
+}
+
+// Answers a refusal in the client's protocol and records it on the trace
+func (x *exchange) fail(err error) {
+	f := x.g.refusal(err, x.model, x.route, x.pool.ID)
+	x.refuse(f)
+}
+
+// Writes a failure in the client's protocol unless the answer already started
+func (x *exchange) refuse(f chat.Failure) {
+	if x.t.Error == "" {
+		x.t.Error = f.Message
+	}
+	if x.w.wrote {
+		return
+	}
+	x.w.Header().Set(requestcontrol.HeaderRequestID, x.requestID())
+	if x.traced {
+		x.w.Header().Set(TraceHeader, x.t.GetId())
+	}
+	x.client.Error(x.w, f)
+}
+
+// Hands the director what the serving endpoint answered, releasing the decision's permit and load
+func (x *exchange) complete(ctx context.Context) {
+	if x.resp.FinishedAt.IsZero() {
+		x.resp.FinishedAt = x.g.clock.Now()
+	}
+	if x.resp.Endpoint == nil {
+		x.resp.Endpoint = x.served
+	}
+	if x.resp.Status == 0 {
+		x.resp.Status = x.w.status
+	}
+	x.dir.ResponseComplete(context.WithoutCancel(ctx), x.dec, &x.resp)
+}
+
+// Ends the trace, counts the request and feeds its latencies to metrics
+func (x *exchange) finish() {
+	g := x.g
+	x.uncount()
+	x.plan.close()
+	g.total.Add(1)
+	if x.w.status == 0 && x.w.wrote {
+		x.w.status = http.StatusOK
+	}
+	now := g.clock.Now()
+	x.t.Status, x.t.ResponseBytes, x.t.FinishedAt = uint32(x.w.status), x.w.bytes, timestamppb.New(now)
+	if !x.resp.FirstByteAt.IsZero() {
+		x.t.FirstByteAt = timestamppb.New(x.resp.FirstByteAt)
+	}
+	q := metrics.Request{Model: x.model, Pool: x.pool.ID, Priority: int(x.t.GetPriority()), FairnessID: x.t.GetFairnessId(), Status: x.w.status, Duration: now.Sub(x.start), PromptTokens: int(x.t.GetPromptTokens()), OutputTokens: int(x.t.GetCompletionTokens())}
+	if x.dec != nil {
+		q.Model = x.dec.TargetModel
+		if x.resp.Endpoint != nil {
+			q.Endpoint = x.resp.Endpoint.ID()
 		}
-		var said strings.Builder
-		res, err := x.round(resp, func(ev chat.Event) error {
-			if ev.Kind == chat.Said {
-				said.WriteString(ev.Text)
-			}
-			sink.event(ev)
-			return out.Write(ev)
-		})
-		cancel()
-		allSaid.WriteString(said.String())
-		if err != nil {
-			switch {
-			case r.Context().Err() != nil:
-				t.Stop, t.Error = "cancelled", "client went away"
-				g.log.Info("gateway round", "model", x.name, "err", t.Error)
-			case errors.Is(err, context.DeadlineExceeded) || isTimeout(err):
-				fail(failure(http.StatusGatewayTimeout, fmt.Sprintf("model %s did not answer within its timeout", x.name), chat.CodeTimeout))
-			default:
-				g.log.Warn("gateway round", "model", x.name, "err", err)
-				if refusal, ok := errors.AsType[*chat.Failure](err); ok {
-					fail(*refusal)
-					t.Error = "upstream: " + refusal.Message
-				} else {
-					fail(failure(http.StatusBadGateway, "upstream: "+err.Error(), chat.CodeServer))
-				}
-			}
-			break
+		q.TTFT, q.TPOT = x.resp.TTFT(), x.resp.TPOT()
+		if x.dec.Permit != nil {
+			q.Admitted, q.QueueWait = true, x.dec.Permit.Waited()
 		}
-		if total.ID == "" {
-			total.ID = res.ID
+		g.metrics.ObserveObjectives(x.pool.ID, x.dec.Request.Objective, &x.resp)
+		obj := x.dec.Request.Objective
+		if obj.TTFT > 0 || obj.TPOT > 0 {
+			x.t.ObjectiveAttained = attained(obj.TTFT, obj.TPOT, &x.resp)
 		}
-		total.Usage.In, total.Usage.Out, total.Stop, total.Extra = total.Usage.In+res.Usage.In, total.Usage.Out+res.Usage.Out, res.Stop, mergeExtra(total.Extra, res.Extra)
-		total.Usage.Cached += res.Usage.Cached
-		total.Usage.DraftOffered, total.Usage.DraftAccepted = total.Usage.DraftOffered+res.Usage.DraftOffered, total.Usage.DraftAccepted+res.Usage.DraftAccepted
-		total.Usage.Rounds = append(total.Usage.Rounds, res.Usage.RoundsOrSelf()...)
-		if len(res.ToolCalls) > 0 {
-			sink.first()
+	}
+	g.metrics.ObserveRequest(x.r.Context(), q)
+	if x.traced {
+		x.t.Request = capped(x.body)
+		if !sameBytes(x.sent, x.body) {
+			x.t.UpstreamRequest = capped(x.sent)
 		}
-		var runs []*chat.Run
-		var held []chat.ToolCall
-		for _, c := range res.ToolCalls {
-			pl, mine := plan.tools[c.Name]
-			if !mine || plan.handsBack(pl) {
-				held = append(held, c)
+		g.traces.finish(x.t, x.who.owner, x.slot)
+	}
+}
+
+// Whether two slices are one, the same length over the same first byte, or both empty
+func sameBytes(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return len(a) == 0 || &a[0] == &b[0]
+}
+
+// Notes the endpoint that answered and runs the director's response header hooks onto the client's headers
+func (x *exchange) received(ctx context.Context, resp *http.Response, ep datalayer.Endpoint) error {
+	x.served = ep
+	x.resp.Endpoint, x.resp.Status = ep, resp.StatusCode
+	x.resp.Headers = make(map[string]string, len(resp.Header))
+	for k, v := range resp.Header {
+		x.resp.Headers[k] = strings.Join(v, ", ")
+	}
+	return x.dir.ResponseReceived(ctx, x.dec, &x.resp, x.w.Header())
+}
+
+// The upstream protocol's codec, without native Responses or a tokenizer endpoint when the pool speaks gRPC
+func (x *exchange) runtimeCodec() chat.Runtime {
+	rt := chat.RuntimeOf(x.upstream)
+	if x.pool.AppProtocol == datalayer.AppProtocolGRPC {
+		return grpcCodec{rt}
+	}
+	return rt
+}
+
+// An OpenAI codec for pools reached over gRPC, whose transcoders serve chat, completions and embeddings alone
+type grpcCodec struct{ chat.Runtime }
+
+func (c grpcCodec) Traits() chat.Traits {
+	t := c.Runtime.Traits()
+	t.Responses, t.TokenizePath = false, ""
+	return t
+}
+
+// Serves a chat, prompt, embedding or count as sent when the runtime reads it, translated otherwise
+func (x *exchange) chat(ctx context.Context) {
+	rt := x.runtimeCodec()
+	traits := rt.Traits()
+	same := x.api == x.upstream
+	relay := x.prefill() != nil && (x.kind == chat.Chat || x.kind == chat.Generate)
+	tokens := x.tokensMode()
+	creq, err := x.chatRequest()
+	native := same && !relay && !tokens && (x.r.URL.Path != chat.OpenAIResponses || traits.Responses)
+	if err != nil {
+		if !native {
+			x.fail(err)
+			return
+		}
+		x.passthrough(ctx, nil)
+		return
+	}
+	x.t.Stream = creq.Stream
+	x.runtime = rt
+	if tokens {
+		if x.runtime, err = x.tokensRuntime(rt); err != nil {
+			x.fail(err)
+			return
+		}
+	}
+	if native && !x.changed && !x.plan.active() && !x.emulate && creq.Kind != chat.Count {
+		x.passthrough(ctx, creq)
+		return
+	}
+	x.t.Translated = !same
+	if traits.Strict && !same {
+		chat.DropExtras(creq)
+	}
+	if creq.Kind == chat.Count {
+		x.count(ctx, creq)
+		return
+	}
+	if traits.InlineImages {
+		if err := x.inlineImages(ctx, creq); err != nil {
+			x.refuse(chat.Failure{Status: http.StatusBadRequest, Code: chat.CodeInvalidRequest, Message: err.Error()})
+			return
+		}
+	}
+	if x.emulate {
+		x.runtime = chat.Emulate(x.runtime)
+	}
+	x.rounds(ctx, creq)
+}
+
+// Fetches image URLs into bytes over the pooled outbound guard, for runtimes that take images inline
+func (x *exchange) inlineImages(ctx context.Context, req *chat.Request) error {
+	for mi := range req.Messages {
+		for pi, p := range req.Messages[mi].Parts {
+			if p.Type != "image" || p.Data != "" || p.URL == "" {
 				continue
 			}
-			run := plan.run(r.Context(), c, round >= maxToolRounds)
-			runs = append(runs, run)
-			total.Runs = append(total.Runs, run)
-			t.ToolCalls = append(t.ToolCalls, traceRun(run))
-			if err := out.Write(chat.Event{Kind: chat.Ran, Run: run}); err != nil {
-				return used
+			part := &req.Messages[mi].Parts[pi]
+			if mt, raw, ok := chat.DataURL(p.URL); ok {
+				part.MediaType, part.Data = mt, raw
+				continue
 			}
-		}
-		var parts []chat.Part
-		if res.Thinking != "" {
-			parts = append(parts, chat.Part{Type: "thinking", Text: res.Thinking})
-		}
-		if said.Len() > 0 {
-			parts = append(parts, chat.Part{Type: "text", Text: said.String()})
-		}
-		if len(runs) == 0 || len(held) > 0 {
-			for i, c := range held {
-				if err := out.Write(chat.Event{Kind: chat.Called, Index: i, Tool: &chat.ToolCall{ID: c.ID, Name: c.Name, Args: c.Args}}); err != nil {
-					return used
-				}
+			fctx, cancel := context.WithTimeout(ctx, imageFetchTimeout(x.policy))
+			raw, mt, err := x.g.fetchImage(fctx, p.URL)
+			cancel()
+			if err != nil {
+				return fmt.Errorf("image %s: %w", p.URL, err)
 			}
-			total.ToolCalls = held
-			if len(req.Messages) > clientTurns || len(runs) > 0 {
-				x.keepRounds(clientTurns, prev, allSaid.String(), parts, runs, held)
+			part.Data, part.MediaType = base64.StdEncoding.EncodeToString(raw), chat.MediaTypeOf(raw, mt)
+		}
+	}
+	return nil
+}
+
+// The bound on one image fetch, the policy's upstream timeout or a minute
+func imageFetchTimeout(p *v1.Policy) time.Duration {
+	if ms := p.GetUpstreamTimeoutMs(); ms > 0 {
+		return time.Duration(ms) * time.Millisecond
+	}
+	return time.Minute
+}
+
+// Reads one image over the shared outbound client
+func (g *Gateway) fetchImage(ctx context.Context, url string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	resp, err := g.images.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, "", fmt.Errorf("answered %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	return raw, resp.Header.Get("Content-Type"), err
+}
+
+// Proxies the body as the stages left it, the target model written in, parsing the answer for the trace
+func (x *exchange) passthrough(ctx context.Context, creq *chat.Request) {
+	body, doc := x.body, x.document()
+	if doc != nil {
+		body = doc.Bytes()
+	}
+	x.sent = body
+	stream := doc != nil && doc.Stream()
+	x.t.Stream = stream
+	out := &upstream{method: x.r.Method, path: x.r.URL.Path, query: x.r.URL.RawQuery, body: body, doc: doc, stream: stream, header: x.runtimeHeaders()}
+	if ct := x.r.Header.Get("Content-Type"); ct != "" {
+		out.header.Set("Content-Type", ct)
+	}
+	if len(body) == 0 && x.r.Method == http.MethodGet {
+		out.body = nil
+	}
+	resp, ep, err := x.attempt(ctx, out, x.dec.Endpoints)
+	if err != nil {
+		x.refuse(upstreamFailure(x.model, err))
+		x.resp.Err = err
+		return
+	}
+	if err := x.received(ctx, resp, ep); err != nil {
+		resp.Body.Close()
+		x.refuse(chat.Failure{Status: http.StatusInternalServerError, Code: chat.CodeServer, Message: err.Error()})
+		return
+	}
+	if resp.StatusCode >= http.StatusInternalServerError {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+		resp.Body.Close()
+		x.resp.Err = fmt.Errorf("upstream answered %d", resp.StatusCode)
+		x.refuse(upstreamFailure(x.model, chat.Refusal(x.runtimeCodec(), resp.StatusCode, resp.Header, raw)))
+		return
+	}
+	var rt chat.Runtime
+	if creq != nil {
+		rt = x.runtimeCodec()
+	}
+	x.relayAnswer(ctx, resp, rt, creq)
+}
+
+// Copies an answer to the client chunk by chunk through the director, flushing streams with keepalives
+func (x *exchange) relayAnswer(ctx context.Context, resp *http.Response, rt chat.Runtime, creq *chat.Request) {
+	defer resp.Body.Close()
+	var parse *tap
+	switch {
+	case resp.StatusCode < http.StatusMultipleChoices && creq != nil:
+		parse = newTap(x.sink, rt, creq)
+	case x.traced:
+		parse = newTap(x.sink, nil, nil)
+	}
+	beat := x.pulse(resp.Header, creq)
+	held := x.holdsStatus(resp.Header)
+	commit := func() {
+		copyAnswerHeaders(x.w.Header(), resp.Header)
+		x.w.WriteHeader(resp.StatusCode)
+		held = false
+	}
+	if !held {
+		commit()
+	}
+	var failure, stop string
+	// First hook or upstream failure, answered as the status when held or the stream's last event, refused when a hook's
+	var cause, refused error
+	seq := newSequence(x.r.URL.Path == chat.OpenAIResponses)
+	write := func(b []byte) bool {
+		if held && len(b) == 0 {
+			return true
+		}
+		if held {
+			commit()
+		}
+		if err := beat.write(b); err != nil {
+			stop = "cancelled"
+			if failure == "" {
+				x.resp.Err, failure = err, "client went away"
 			}
-			if err := out.Write(chat.Event{Kind: chat.Stopped, Res: total}); err != nil {
-				if _, ok := errors.AsType[*chat.ToolArgsError](err); ok {
-					fail(failure(http.StatusBadGateway, "upstream: "+err.Error(), chat.CodeUpstream))
-				}
+			return false
+		}
+		seq.see(b)
+		parse.feed(b)
+		return true
+	}
+	open := true
+	buf := make([]byte, 32<<10)
+	for open {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			chunk, err := x.chunk(ctx, cloned(buf[:n]), false)
+			if err != nil {
+				x.resp.Err, failure, cause, refused, open = err, err.Error(), err, err, false
+				break
+			}
+			open = write(chunk)
+		}
+		if rerr != nil {
+			if open && !errors.Is(rerr, io.EOF) {
+				x.resp.Err, failure, cause = rerr, "upstream: "+rerr.Error(), rerr
+				open = !held
 			}
 			break
 		}
-		req.Messages = append(append(req.Messages, chat.Message{Role: "assistant", Parts: parts, ToolCalls: res.ToolCalls}), toolTurns(runs)...)
-		// A forced first call has been made, the rest of the turn is the model's
-		if req.ToolChoice != "" && req.ToolChoice != "auto" && req.ToolChoice != "none" {
-			req.ToolChoice = "auto"
+	}
+	// The hooks see the end and the bytes they held back reach a client the relay still serves
+	tail, err := x.chunk(ctx, nil, true)
+	switch {
+	case err != nil && failure == "":
+		x.resp.Err, failure, cause, refused = err, err.Error(), err, err
+	case err == nil && open && len(tail) > 0:
+		write(tail)
+	}
+	switch {
+	case held && cause != nil:
+		x.fail(cause)
+	case held:
+		commit()
+	case cause != nil && stop == "" && x.r.Context().Err() == nil:
+		if _, relayed := errors.AsType[*relayedFailure](cause); relayed {
+			break
 		}
-		if round >= maxToolRounds {
-			plan.withdraw(req)
+		f := upstreamFailure(x.model, cause)
+		if refused != nil {
+			f = x.g.refusal(refused, x.model, x.route, x.pool.ID)
+		}
+		event, err := x.client.StreamFailure(chat.StreamAt{Path: x.r.URL.Path, Model: x.model, Seq: seq.next}, f)
+		switch {
+		case err != nil:
+			failure += ", the stream failure event not encoded: " + err.Error()
+		case beat.end(event) != nil:
+			stop = "cancelled"
 		}
 	}
-	sink.result(total)
-	if out != nil {
-		out.Close()
+	beat.stop()
+	parse.close()
+	if failure != "" {
+		x.t.Error = failure
 	}
-	return used
+	if stop != "" {
+		x.t.Stop = stop
+	}
+	x.resp.FinishedAt = x.g.clock.Now()
+	x.settle(resp.StatusCode)
 }
 
-// Keeps the answer's tool rounds, the final turn carrying the calls it ran before those handed back
-func (x *exchange) keepRounds(clientTurns int, prev *chat.Message, text string, parts []chat.Part, runs []*chat.Run, held []chat.ToolCall) {
-	before := append([]chat.Message(nil), x.in.req.Messages[clientTurns:]...)
-	final := chat.Message{Role: "assistant", Parts: parts}
-	for _, run := range runs {
-		final.ToolCalls = append(final.ToolCalls, run.Call)
+// Whether a decided answer's client status waits for what the hooks pass, unless a requested stream came back
+func (x *exchange) holdsStatus(h http.Header) bool {
+	if x.dec == nil {
+		return false
 	}
-	heldFrom := len(final.ToolCalls)
-	final.ToolCalls = append(final.ToolCalls, held...)
-	x.g.rounds.put(roundKey(x.route.GetName(), prev, text, held), before, final, toolTurns(runs), heldFrom)
+	sse, ndjson := streamed(h.Get("Content-Type"))
+	return x.dec.Request == nil || !x.dec.Request.Streaming || !sse && !ndjson
 }
 
-// Adds from's fields to into, later values winning
-func mergeExtra(into, from map[string]json.RawMessage) map[string]json.RawMessage {
-	if len(from) == 0 {
-		return into
+// Hands a chunk to the director's response hooks, a forwarded request having no decision to hand it to
+func (x *exchange) chunk(ctx context.Context, b []byte, end bool) ([]byte, error) {
+	if x.dec == nil {
+		return b, nil
 	}
-	if into == nil {
-		into = map[string]json.RawMessage{}
-	}
-	for k, v := range from {
-		into[k] = v
-	}
-	return into
+	return x.dir.ResponseChunk(ctx, x.dec, &x.resp, b, end)
 }
 
-// Reads one answer, thinking and text as they arrive, calls and usage whole, the thinking kept on the result
-func (x *exchange) round(resp *http.Response, emit func(chat.Event) error) (*chat.Result, error) {
+// A copy of a read buffer the caller reuses
+func cloned(b []byte) []byte { return append([]byte(nil), b...) }
+
+// Moves the parsed answer's first token time and token counts onto the director's response
+func (x *exchange) settle(status int) {
+	if !x.sink.first.IsZero() {
+		x.resp.FirstTokenAt = x.sink.first
+	}
+	if res := x.sink.res; res != nil {
+		x.resp.PromptTokens, x.resp.OutputTokens, x.resp.CachedTokens = res.Usage.In, res.Usage.Out, res.Usage.Cached
+	}
+	if status >= http.StatusBadRequest && x.resp.Err == nil {
+		x.resp.Err = fmt.Errorf("upstream answered %d", status)
+	}
+}
+
+// Whether a content type names a stream the gateway flushes event by event
+func streamed(contentType string) (bool, bool) {
+	mt, _, _ := mime.ParseMediaType(contentType)
+	return mt == "text/event-stream", mt == "application/x-ndjson"
+}
+
+// Whether a request asked for images
+func hasImages(req *chat.Request) bool {
+	for _, m := range req.Messages {
+		if slices.ContainsFunc(m.Parts, func(p chat.Part) bool { return p.Type == "image" }) {
+			return true
+		}
+	}
+	return false
+}
+
+// Counts the prompt's tokens with the runtime's tokenizer, or with a one token generation when it has none
+func (x *exchange) count(ctx context.Context, creq *chat.Request) {
+	n, err := x.countTokens(ctx, creq)
+	if err != nil {
+		x.resp.Err = err
+		x.refuse(upstreamFailure(x.model, err))
+		return
+	}
+	x.t.PromptTokens = uint32(n)
+	x.resp.PromptTokens = n
+	out := x.client.Answer(x.w, creq, x.model)
+	defer out.Close()
+	if err := out.Write(chat.Event{Kind: chat.Stopped, Res: &chat.Result{Model: x.model, Usage: chat.Usage{In: n}}}); err != nil {
+		x.t.Error = err.Error()
+	}
+}
+
+// The prompt token count the runtime reports, by tokenizer when it counts everything sent and by generation otherwise
+func (x *exchange) countTokens(ctx context.Context, creq *chat.Request) (int, error) {
+	traits := x.runtime.Traits()
+	if traits.TokenizePath != "" && (traits.CountsImages || !hasImages(creq)) {
+		n, status, err := x.countWith(ctx, creq)
+		if err == nil || status != http.StatusNotFound && status != http.StatusMethodNotAllowed && status != http.StatusNotImplemented {
+			return n, err
+		}
+	}
+	gen := *creq
+	gen.Kind, gen.MaxTokens, gen.Stream, gen.N = chat.Chat, 1, false, 0
+	return x.countGenerated(ctx, &gen)
+}
+
+// Asks the runtime's tokenizer, answering the count or the status it refused with
+func (x *exchange) countWith(ctx context.Context, creq *chat.Request) (int, int, error) {
+	path, body, err := x.runtime.Render(creq)
+	if err != nil {
+		return 0, 0, err
+	}
+	x.sent = body
+	res, status, err := x.call(ctx, creq, path, body)
+	if err != nil {
+		return 0, status, err
+	}
+	return res.Usage.In, status, nil
+}
+
+// Generates one token and answers the prompt tokens the runtime reports for it
+func (x *exchange) countGenerated(ctx context.Context, gen *chat.Request) (int, error) {
+	path, body, err := x.runtime.Render(gen)
+	if err != nil {
+		return 0, err
+	}
+	x.sent = body
+	res, _, err := x.call(ctx, gen, path, body)
+	if err != nil {
+		return 0, err
+	}
+	return res.Usage.In, nil
+}
+
+// Sends one whole request through the decision's endpoints and parses the answer
+func (x *exchange) call(ctx context.Context, req *chat.Request, path string, body []byte) (*chat.Result, int, error) {
+	out := &upstream{method: http.MethodPost, path: path, body: body, header: x.runtimeHeaders()}
+	resp, ep, err := x.attempt(ctx, out, x.endpoints())
+	if err != nil {
+		return nil, 0, err
+	}
 	defer resp.Body.Close()
-	req := x.in.req
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-		return nil, chat.Refusal(x.runtime, resp.StatusCode, raw)
-	}
-	if req.Stream {
-		var final *chat.Result
-		var thinking strings.Builder
-		err := x.runtime.ParseStream(resp.Body, func(ev chat.Event) error {
-			switch ev.Kind {
-			case chat.Started, chat.Said:
-				return emit(ev)
-			case chat.Thought:
-				thinking.WriteString(ev.Text)
-				return emit(ev)
-			case chat.Stopped:
-				final = ev.Res
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
+	if x.served == nil {
+		if err := x.received(ctx, resp, ep); err != nil {
+			return nil, resp.StatusCode, err
 		}
-		if final == nil {
-			return nil, errors.New("the stream ended without a stop")
-		}
-		final.Thinking = thinking.String()
-		return final, nil
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
-		return nil, err
+		return nil, resp.StatusCode, err
+	}
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, resp.StatusCode, chat.Refusal(x.runtime, resp.StatusCode, resp.Header, raw)
 	}
 	res, err := x.runtime.ParseResult(req, raw)
-	if err != nil {
-		if refusal, ok := errors.AsType[*chat.Failure](err); ok && refusal.Code == "" {
-			refusal.Code = chat.CodeOf(refusal.Status, raw)
-		}
-		return nil, err
+	return res, resp.StatusCode, err
+}
+
+// The endpoints a send may try, the decision's until one served and that one alone after
+func (x *exchange) endpoints() []datalayer.Endpoint {
+	if x.served != nil {
+		return []datalayer.Endpoint{x.served}
 	}
-	if res.Thinking != "" {
-		if err := emit(chat.Event{Kind: chat.Thought, Text: res.Thinking}); err != nil {
-			return nil, err
-		}
+	return x.dec.Endpoints
+}
+
+// Whether a decision's latencies met both objectives it carries, a failed request missing them
+func attained(ttft, tpot time.Duration, resp *framework.Response) bool {
+	ok := resp.Err == nil
+	if ttft > 0 {
+		ok = ok && resp.TTFT() > 0 && resp.TTFT() <= ttft
 	}
-	if res.Text != "" {
-		if err := emit(chat.Event{Kind: chat.Said, Text: res.Text}); err != nil {
-			return nil, err
-		}
+	if tpot > 0 {
+		ok = ok && resp.TPOT() > 0 && resp.TPOT() <= tpot
 	}
-	return res, nil
+	return ok
 }

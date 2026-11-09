@@ -1,0 +1,275 @@
+<script lang="ts">
+  import type { FormEventHandler, KeyboardEventHandler } from 'svelte/elements';
+
+  import type { NeoButtonProps } from '#lib/neo/buttons/neo-button.model.js';
+  import type { NeoTooltipElevation } from '#lib/neo/floating/tooltips/neo-tooltip.model.js';
+  import type { NeoSelectProps } from '#lib/neo/inputs/neo-select.model.js';
+  import type { NeoListItemOrSection } from '#lib/neo/list/neo-list.model.js';
+
+  import { getFocusableElement } from '@dvcol/common-utils/common/element';
+  import { clamp } from '@dvcol/common-utils/common/math';
+  import { watch } from '@dvcol/svelte-utils/watch';
+  import { tick } from 'svelte';
+
+  import NeoButton from '#lib/neo/buttons/NeoButton.svelte';
+  import NeoPopSelect from '#lib/neo/floating/tooltips/NeoPopSelect.svelte';
+  import NeoIconDoubleChevron from '#lib/neo/icons/NeoIconDoubleChevron.svelte';
+  import NeoInput from '#lib/neo/inputs/common/NeoInput.svelte';
+  import { displayValue, transformValue } from '#lib/neo/inputs/neo-select.model.js';
+  import { findByValuesInList } from '#lib/neo/list/neo-list.model.js';
+  import NeoImage from '#lib/neo/media/NeoImage.svelte';
+  import { coerce, computeButtonTemplate, getDefaultElevation, getDefaultHoverElevation, MaxShadowElevation } from '#lib/neo/utils/shadow.utils.js';
+
+  let {
+    // Snippets
+    children,
+    content: customDisplay,
+    icon: customIcon,
+
+    // State
+    options = [],
+    display = displayValue,
+    transform = transformValue,
+
+    // Input Props
+    ref = $bindable(),
+    value = $bindable(),
+    valid = $bindable(),
+    dirty = $bindable(false),
+    touched = $bindable(false),
+    hovered = $bindable(false),
+    focused = $bindable(false),
+    focusin = $bindable(false),
+    multiple,
+    floating,
+    rounded,
+    readonly,
+    clearable,
+    color,
+    tinted,
+    autocomplete,
+
+    // Pop Select Props
+    listRef = $bindable(),
+    highlight = $bindable(),
+    filter = $bindable(item => !item?.hidden),
+    sort = $bindable(() => 0),
+    selected = $bindable(),
+    search,
+    nullable,
+
+    // Tooltip Props
+    tooltipRef = $bindable(),
+    triggerRef = $bindable(),
+    open = $bindable(false),
+    position = $bindable(),
+    openDelay,
+    hoverDelay = 300,
+    openOnHover = false,
+    openOnFocus = false,
+    openOnClick = true,
+
+    // Events
+    onChange,
+    onSelect,
+    onClose,
+    onOpen,
+
+    // Other props
+    containerRef = $bindable(),
+    validationRef = $bindable(),
+    labelRef = $bindable(),
+    listProps,
+    buttonProps,
+    affixProps,
+    ...rest
+  }: NeoSelectProps = $props();
+
+  let inputInstance = $state<ReturnType<typeof NeoInput>>();
+
+  const items = $derived<NeoListItemOrSection[]>(options?.map(i => (typeof i === 'object' ? i : { value: i })));
+
+  const tooltipDisabled = $derived(!!rest?.disabled || !!readonly);
+
+  const elevation = $derived(coerce(rest?.elevation ?? getDefaultElevation(rest?.pressed)));
+  const template = $derived(computeButtonTemplate(elevation, rest?.pressed, rest?.glass));
+
+  const hover = $derived(coerce(rest?.hover ?? getDefaultHoverElevation(rest?.pressed)));
+  const tooltipElevation = $derived(
+    clamp(rest?.pressed ? Math.abs(elevation + hover) : elevation + hover, 1, MaxShadowElevation) as NeoTooltipElevation,
+  );
+
+  const afterProps = $derived<NeoButtonProps>({
+    'aria-label': 'Toggle select dropdown',
+    'title': 'Toggle select dropdown',
+    'skeleton': rest.skeleton,
+    'disabled': rest.disabled,
+    'start': rest.start,
+    rounded,
+    ...template,
+    ...buttonProps,
+    'class': ['neo-select-toggle', buttonProps?.class],
+  });
+
+  const space = $derived(open ? 8 : 6);
+  const transformed = $derived((transform ? transform(selected) : selected) ?? rest?.defaultValue);
+  watch(
+    () => {
+      value = transformed;
+      touched = true;
+    },
+    () => selected,
+    {
+      skip: 1,
+      next: () => inputInstance?.validate?.(),
+    },
+  );
+
+  /**
+   * Reflects change in input value to selected value
+   */
+  const reflectValue = () => {
+    selected = findByValuesInList(value, items);
+    if (selected === undefined) value = undefined;
+  };
+
+  watch(() => {
+    if (!value || transformed === value) return;
+    if (Array.isArray(value) && Array.isArray(transformed) && value.every(v => transformed.includes(v))) return;
+    reflectValue();
+  }, () => value);
+
+  const hasValue = $derived(!!(Array.isArray(selected) ? selected.length : selected));
+  const close = $derived(clearable && (focusin || focused || hovered || open) && hasValue);
+  const onClear: FormEventHandler<HTMLElement> = (e) => {
+    selected = multiple ? [] : undefined;
+    e.stopPropagation();
+    e.preventDefault();
+  };
+
+  const selectItem = async () => {
+    await tick();
+    getFocusableElement(listRef)?.focus();
+  };
+
+  const onkeydown: KeyboardEventHandler<HTMLElement> = (e) => {
+    if (rest?.disabled || readonly) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!open) open = true;
+      e.preventDefault();
+      e.stopPropagation();
+      selectItem();
+    }
+  };
+</script>
+
+{#snippet after()}
+  <NeoButton {...afterProps}>
+    {#snippet icon(ctx)}
+      {#if typeof customIcon === 'function'}
+        {@render customIcon(ctx)}
+      {:else if typeof customIcon === 'string'}
+        <NeoImage src={customIcon} ratio="1/1" {...afterProps?.imageProps} />
+      {:else}
+        <NeoIconDoubleChevron {space} />
+      {/if}
+    {/snippet}
+  </NeoButton>
+{/snippet}
+
+<NeoInput
+  bind:this={inputInstance}
+  bind:ref
+  bind:containerRef
+  bind:validationRef
+  bind:labelRef
+  bind:dirty
+  bind:valid
+  bind:touched
+  bind:hovered
+  bind:focused
+  bind:focusin
+  bind:value
+  display={customDisplay ?? (display ? display(selected) : undefined)}
+  {rounded}
+  {floating}
+  {clearable}
+  {elevation}
+  {hover}
+  {color}
+  {tinted}
+  {after}
+  {children}
+  {multiple}
+  {nullable}
+  {autocomplete}
+  {...rest}
+  clickable
+  readonly
+  affixProps={{
+    close,
+    readonly,
+    ...affixProps,
+    closeProps: { onclick: onClear, ...affixProps?.closeProps },
+  }}
+  containerProps={{
+    onkeydown,
+    ...rest.containerProps,
+  }}
+/>
+
+{#if autocomplete}
+  <input aria-hidden="true" type="text" class="neo-select-autocomplete-hidden" {autocomplete} bind:value onchange={reflectValue} />
+{/if}
+
+<NeoPopSelect
+  target={containerRef}
+  bind:listRef
+  bind:highlight
+  bind:filter
+  bind:sort
+  bind:selected
+  bind:tooltipRef
+  bind:triggerRef
+  bind:open
+  bind:position
+  {readonly}
+  {items}
+  multiple={!!multiple}
+  {nullable}
+  {rounded}
+  {search}
+  {color}
+  {tinted}
+  {openDelay}
+  {hoverDelay}
+  {openOnFocus}
+  {openOnHover}
+  {openOnClick}
+  disabled={tooltipDisabled}
+  filled={!rest?.glass}
+  elevation={tooltipElevation}
+  {onClose}
+  {onOpen}
+  {onSelect}
+  {onChange}
+  {...listProps}
+/>
+
+<style lang="scss">
+  @use '../styles/layers' as layers;
+
+  @include layers.neo-components {
+    .neo-select-autocomplete-hidden {
+      width: 0;
+      height: 0;
+      margin: 0;
+      padding: 0;
+      white-space: nowrap;
+      background: none;
+      border: none;
+      inset: 0;
+    }
+
+  }
+</style>

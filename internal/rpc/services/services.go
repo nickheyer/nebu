@@ -15,6 +15,7 @@ import (
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/mesh"
+	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/internal/settings"
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
@@ -40,8 +41,15 @@ func wrap(err error) error {
 		errors.Is(err, installs.ErrUnknownInstall), errors.Is(err, instances.ErrUnknownInstance),
 		errors.Is(err, installs.ErrUnknownBuild), errors.Is(err, build.ErrUnknownRecipe),
 		errors.Is(err, slots.ErrUnknownSlot), errors.Is(err, bots.ErrUnknownBot), errors.Is(err, auth.ErrUnknownUser), errors.Is(err, auth.ErrUnknownToken),
-		errors.Is(err, chats.ErrUnknownConversation), errors.Is(err, mesh.ErrUnknownNode), errors.Is(err, formations.ErrUnknownFormation):
+		errors.Is(err, chats.ErrUnknownConversation), errors.Is(err, mesh.ErrUnknownNode), errors.Is(err, formations.ErrUnknownFormation),
+		errors.Is(err, pools.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
+	case errors.Is(err, pools.ErrConflict):
+		return connect.NewError(connect.CodeAlreadyExists, err)
+	case errors.Is(err, pools.ErrManaged), errors.Is(err, pools.ErrInUse), errors.Is(err, installs.ErrInUse):
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	case errors.Is(err, pools.ErrInvalid):
+		return connect.NewError(connect.CodeInvalidArgument, err)
 	case errors.Is(err, bots.ErrNotRunning), errors.Is(err, auth.ErrLastUser), errors.Is(err, mesh.ErrNoMesh):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, mesh.ErrMesh), errors.Is(err, formations.ErrFormation):

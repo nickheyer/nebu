@@ -7,7 +7,7 @@ COPY buf.yaml buf.gen.yaml ./
 COPY proto ./proto
 RUN buf generate
 
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS web
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS web
 WORKDIR /src/web/nebu
 COPY web/nebu/package.json web/nebu/package-lock.json ./
 RUN npm ci --no-audit --no-fund

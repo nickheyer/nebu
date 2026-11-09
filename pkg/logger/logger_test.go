@@ -12,7 +12,7 @@ import (
 
 func TestNewKeepsRecentLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nebu.log")
-	log, recent, closer, err := New(&v1.Logging{File: path, Level: "debug"})
+	log, recent, _, closer, err := New(&v1.Logging{File: path, Level: "debug"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,14 +33,17 @@ func TestNewKeepsRecentLines(t *testing.T) {
 }
 
 func TestNewKeepsOnlyEnabledLevels(t *testing.T) {
-	log, recent, closer, err := New(&v1.Logging{File: filepath.Join(t.TempDir(), "nebu.log"), Level: "warn"})
+	log, recent, level, closer, err := New(&v1.Logging{File: filepath.Join(t.TempDir(), "nebu.log"), Level: "warn"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	log.Info("quiet")
 	log.Warn("loud")
+	// The handle a reload sets takes effect on the next line
+	level.Set(ParseLevel("debug"))
+	log.Debug("fine")
 	closer.Close()
-	if lines := recent.Tail(0); len(lines) != 1 || !strings.Contains(lines[0], "msg=loud") {
+	if lines := recent.Tail(0); len(lines) != 2 || !strings.Contains(lines[0], "msg=loud") || !strings.Contains(lines[1], "msg=fine") {
 		t.Fatalf("%q", lines)
 	}
 }

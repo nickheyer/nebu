@@ -2,23 +2,35 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/db"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
 	maxTokenName = 64
-	// Bytes of entropy in a token a user makes
-	userTokenBytes = 32
+	// What every token a user makes starts with
+	tokenMark = "nebu_"
+	// Characters of the prefix a token is looked up by
+	prefixLen = 12
+	// Random bytes behind a token's secret
+	secretBytes = 32
+	// Base62 characters 32 bytes take, since 62 to the 43rd exceeds 2 to the 256th
+	secretLen = 43
 	// Tokens one account may hold
 	maxTokens = 100
 	// Gap between last-used stamps written for one token
@@ -29,6 +41,7 @@ const (
 	cacheTTL = 30 * time.Second
 	// Prune the lookup cache of expired entries once it holds this many
 	cacheKeys = 1000
+	base62    = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
 
 var (
@@ -36,10 +49,13 @@ var (
 	ErrToken = errors.New("token")
 	// No such token among the caller's
 	ErrUnknownToken = errors.New("unknown token")
+	// The daemon token and auth.disabled name no account to hold tokens
+	ErrNoAccount = errors.New("sign in with an account to manage its API tokens, the daemon token has none")
+	// The caller's role or scopes do not open the change
+	ErrForbidden = errors.New("permission denied")
 )
 
-// API tokens users make in the web UI. Each acts as the account that made it
-// until that account revokes it or, for local accounts, is removed.
+// API tokens users make, each acting as its account within its scopes until revoked or the account is removed
 type Tokens struct {
 	db  *db.DB
 	log *slog.Logger
@@ -47,7 +63,7 @@ type Tokens struct {
 
 	mu      sync.Mutex
 	touched map[string]time.Time
-	// Rows found in the store by the hash of their secret, each answering until it expires
+	// Rows found in the store by the hash of the whole token, each answering until it expires
 	cache map[[sha256.Size]byte]cachedToken
 }
 
@@ -61,27 +77,42 @@ func NewTokens(store *db.DB, log *slog.Logger) *Tokens {
 	return &Tokens{db: store, log: log, now: time.Now, touched: map[string]time.Time{}, cache: map[[sha256.Size]byte]cachedToken{}}
 }
 
-// The account behind a bearer token, recording the use. Lookups that fail refuse the token.
-func (t *Tokens) Identify(ctx context.Context, secret string) (*Session, bool) {
-	if secret == "" {
-		return nil, false
+// The prefix a token is stored under, the twelve characters after nebu_ or an older token's first twelve
+func tokenPrefix(token string) (string, bool) {
+	if len(token) == len(tokenMark)+prefixLen+secretLen && strings.HasPrefix(token, tokenMark) {
+		return token[len(tokenMark) : len(tokenMark)+prefixLen], true
 	}
-	key := sha256.Sum256([]byte(secret))
+	if len(token) < prefixLen {
+		return "", false
+	}
+	return token[:prefixLen], true
+}
+
+// The identity behind a bearer token, found by prefix and matched by hash in constant time, recording the use
+func (t *Tokens) Identify(ctx context.Context, token string) (Identity, bool) {
+	prefix, ok := tokenPrefix(token)
+	if !ok {
+		return Identity{}, false
+	}
+	key := sha256.Sum256([]byte(token))
 	now := t.now()
 	t.mu.Lock()
 	c, cached := t.cache[key]
 	t.mu.Unlock()
 	if !cached || !now.Before(c.expires) {
-		row, err := t.db.FindToken(ctx, secret)
+		row, err := t.db.FindToken(ctx, prefix)
 		if db.IsNotFound(err) {
 			if cached {
 				t.forget(func(r db.TokenRow) bool { return r.Token.GetId() == c.row.Token.GetId() })
 			}
-			return nil, false
+			return Identity{}, false
 		}
 		if err != nil {
 			t.log.Error("token lookup failed", "err", err)
-			return nil, false
+			return Identity{}, false
+		}
+		if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(key[:])), []byte(row.Hash)) != 1 {
+			return Identity{}, false
 		}
 		c = cachedToken{row: row, expires: now.Add(cacheTTL)}
 		t.mu.Lock()
@@ -95,9 +126,13 @@ func (t *Tokens) Identify(ctx context.Context, secret string) (*Session, bool) {
 		t.cache[key] = c
 		t.mu.Unlock()
 	}
-	row := c.row
-	t.touch(ctx, row.Token.GetId())
-	return &Session{Subject: row.Subject, Name: row.Owner, Email: row.Email, Provider: row.Provider, Issued: row.Token.GetCreatedAt().AsTime()}, true
+	t.touch(ctx, c.row.Token.GetId())
+	return identityOf(c.row), true
+}
+
+// The identity a token row acts as, its scopes capped by the role it was made under
+func identityOf(r db.TokenRow) Identity {
+	return Identity{Subject: r.Subject, Provider: r.Provider, Name: r.Owner, Email: r.Email, Role: r.Role, Scopes: capScopes(r.Token.GetScopes(), r.Role), TokenPrefix: r.Token.GetPrefix()}
 }
 
 // Drops cached rows the predicate names, so a revoked token stops answering at once
@@ -141,8 +176,11 @@ func (t *Tokens) touch(ctx context.Context, id string) {
 	}
 }
 
-// The account's tokens, newest first
-func (t *Tokens) List(ctx context.Context, who *Session) ([]*v1.ApiToken, error) {
+// The account's tokens newest first, by prefix and never with a secret
+func (t *Tokens) List(ctx context.Context, who Identity) ([]*v1.ApiToken, error) {
+	if who.Subject == "" {
+		return nil, ErrNoAccount
+	}
 	rows, err := t.db.ListTokens(ctx, who.Provider, who.Subject)
 	if err != nil {
 		return nil, err
@@ -154,14 +192,28 @@ func (t *Tokens) List(ctx context.Context, who *Session) ([]*v1.ApiToken, error)
 	return out, nil
 }
 
-// Makes a token for the account
-func (t *Tokens) Create(ctx context.Context, who *Session, name string) (*v1.ApiToken, error) {
+// Makes a token for the account holding scopes the caller's own credential opens, returning the whole token once
+func (t *Tokens) Create(ctx context.Context, who Identity, name string, scopes []v1.Scope) (*v1.ApiToken, error) {
+	if who.Subject == "" {
+		return nil, ErrNoAccount
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrToken)
 	}
 	if len(name) > maxTokenName {
 		return nil, fmt.Errorf("%w: name is longer than %d characters", ErrToken, maxTokenName)
+	}
+	if len(scopes) == 0 {
+		return nil, fmt.Errorf("%w: choose at least one scope of inference, read, operate, or admin", ErrToken)
+	}
+	for _, s := range scopes {
+		if _, known := v1.Scope_name[int32(s)]; !known || s == v1.Scope_SCOPE_UNSPECIFIED {
+			return nil, fmt.Errorf("%w: scope %d is not inference, read, operate, or admin", ErrToken, s)
+		}
+		if !who.Allows(s) {
+			return nil, fmt.Errorf("%w: the %s role cannot grant the %s scope", ErrForbidden, RoleName(who.Role), ScopeName(s))
+		}
 	}
 	existing, err := t.db.ListTokens(ctx, who.Provider, who.Subject)
 	if err != nil {
@@ -170,7 +222,11 @@ func (t *Tokens) Create(ctx context.Context, who *Session, name string) (*v1.Api
 	if len(existing) >= maxTokens {
 		return nil, fmt.Errorf("%w: %s holds %d tokens already, revoke one first", ErrToken, who.Name, len(existing))
 	}
-	secret, err := RandomString(userTokenBytes)
+	prefix, err := randomBase62(prefixLen)
+	if err != nil {
+		return nil, err
+	}
+	secret, err := secretBase62()
 	if err != nil {
 		return nil, err
 	}
@@ -178,16 +234,24 @@ func (t *Tokens) Create(ctx context.Context, who *Session, name string) (*v1.Api
 	if err != nil {
 		return nil, err
 	}
-	tok := &v1.ApiToken{Id: id, Name: name, Secret: secret, CreatedAt: timestamppb.New(t.now().UTC())}
-	if err := t.db.PutToken(ctx, db.TokenRow{Token: tok, Provider: who.Provider, Subject: who.Subject, Owner: who.Name, Email: who.Email}); err != nil {
+	whole := tokenMark + prefix + secret
+	granted := slices.Sorted(slices.Values(scopes))
+	tok := &v1.ApiToken{Id: id, Name: name, Prefix: prefix, Scopes: slices.Compact(granted), CreatedAt: timestamppb.New(t.now().UTC())}
+	row := db.TokenRow{Token: tok, Hash: db.TokenHash(whole), Role: who.Role, Provider: who.Provider, Subject: who.Subject, Owner: who.Name, Email: who.Email}
+	if err := t.db.PutToken(ctx, row); err != nil {
 		return nil, err
 	}
-	t.log.Info("api token created", "owner", who.Name, "provider", who.Provider, "name", name, "id", id)
-	return tok, nil
+	t.log.Info("api token created", "owner", who.Name, "provider", who.Provider, "name", name, "prefix", prefix)
+	out := proto.Clone(tok).(*v1.ApiToken)
+	out.Secret = whole
+	return out, nil
 }
 
 // Revokes one of the account's tokens
-func (t *Tokens) Delete(ctx context.Context, who *Session, id string) error {
+func (t *Tokens) Delete(ctx context.Context, who Identity, id string) error {
+	if who.Subject == "" {
+		return ErrNoAccount
+	}
 	ok, err := t.db.DeleteToken(ctx, who.Provider, who.Subject, id)
 	if err != nil {
 		return err
@@ -201,4 +265,37 @@ func (t *Tokens) Delete(ctx context.Context, who *Session, id string) error {
 	t.forget(func(r db.TokenRow) bool { return r.Token.GetId() == id })
 	t.log.Info("api token revoked", "owner", who.Name, "provider", who.Provider, "id", id)
 	return nil
+}
+
+// Uniform random base62 characters, rejecting bytes past the largest multiple of 62
+func randomBase62(n int) (string, error) {
+	out := make([]byte, 0, n)
+	buf := make([]byte, 2*n)
+	for len(out) < n {
+		if _, err := rand.Read(buf); err != nil {
+			return "", err
+		}
+		for _, b := range buf {
+			if b < 248 && len(out) < n {
+				out = append(out, base62[b%62])
+			}
+		}
+	}
+	return string(out), nil
+}
+
+// 32 random bytes as base62, left padded to a fixed 43 characters
+func secretBase62() (string, error) {
+	raw := make([]byte, secretBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	n := new(big.Int).SetBytes(raw)
+	base, rem := big.NewInt(62), new(big.Int)
+	out := make([]byte, secretLen)
+	for i := secretLen - 1; i >= 0; i-- {
+		n.DivMod(n, base, rem)
+		out[i] = base62[rem.Int64()]
+	}
+	return string(out), nil
 }

@@ -8,6 +8,8 @@ import (
 	"mime"
 	"net/http"
 	"time"
+
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 const (
@@ -19,7 +21,7 @@ const (
 	maxBody = 16 << 10
 )
 
-// What the handler serves with. Nil Sessions means authentication is off.
+// What the handler serves with, nil Sessions meaning authentication is off
 type Options struct {
 	Sessions *Sessions
 	// Local accounts, nil when single sign-on replaces them or authentication is off
@@ -52,7 +54,13 @@ type userInfo struct {
 	Email    string    `json:"email"`
 	Name     string    `json:"name"`
 	Provider string    `json:"provider"`
+	Role     string    `json:"role"`
 	Expires  time.Time `json:"expires"`
+}
+
+// The signed-in user as the UI shows it
+func infoOf(sess *Session) userInfo {
+	return userInfo{Subject: sess.Subject, Email: sess.Email, Name: sess.Name, Provider: sess.Provider, Role: RoleName(sess.Role), Expires: sess.Expires}
 }
 
 // A sign-in or setup request
@@ -61,7 +69,7 @@ type credentials struct {
 	Password string `json:"password"`
 }
 
-// Serves session lookup, sign-out, local sign-in and setup, and single sign-on under /auth/
+// Serves session lookup, sign-out, local sign-in and setup, and single sign-on under /auth/, for the API surface alone
 func Handler(o Options) http.Handler {
 	h := &handler{Options: o}
 	mux := http.NewServeMux()
@@ -93,7 +101,8 @@ func (h *handler) status(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.Sessions != nil {
 		if sess, ok := h.Sessions.Session(r.Header); ok {
-			out.User = &userInfo{Subject: sess.Subject, Email: sess.Email, Name: sess.Name, Provider: sess.Provider, Expires: sess.Expires}
+			info := infoOf(sess)
+			out.User = &info
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -130,31 +139,39 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, http.StatusInternalServerError, errors.New("sign-in failed, see the daemon log"))
 		return
 	}
-	sess, err := h.Sessions.Issue(w, r, Session{Subject: user.GetId(), Name: user.GetUsername(), Provider: ProviderLocal})
+	h.signIn(w, r, user)
+}
+
+// Issues the account's session and answers with who signed in
+func (h *handler) signIn(w http.ResponseWriter, r *http.Request, user *v1.User) {
+	sess, err := h.Sessions.Issue(w, r, Session{Subject: user.GetId(), Name: user.GetUsername(), Provider: ProviderLocal, Role: user.GetRole()})
 	if err != nil {
 		h.Log.Error("session failed", "err", err)
 		h.refuse(w, http.StatusInternalServerError, errors.New("could not start the session"))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": userInfo{Subject: sess.Subject, Name: sess.Name, Provider: sess.Provider, Expires: sess.Expires}})
+	writeJSON(w, http.StatusOK, map[string]any{"user": infoOf(sess)})
 }
 
-// Creates the first account and signs it in
+// Creates the first account as an admin inside one transaction and signs it in
 func (h *handler) setup(w http.ResponseWriter, r *http.Request) {
 	if h.Users == nil {
 		h.refuse(w, http.StatusNotFound, errors.New("local accounts are off"))
 		return
 	}
 	if h.Users.Count() > 0 {
-		h.refuse(w, http.StatusConflict, errors.New("an account already exists, sign in instead"))
+		h.refuse(w, http.StatusConflict, ErrSetupDone)
 		return
 	}
 	c, ok := h.readCredentials(w, r)
 	if !ok {
 		return
 	}
-	user, err := h.Users.Create(r.Context(), c.Username, c.Password)
+	user, err := h.Users.Setup(r.Context(), c.Username, c.Password)
 	switch {
+	case errors.Is(err, ErrSetupDone):
+		h.refuse(w, http.StatusConflict, err)
+		return
 	case errors.Is(err, ErrUser):
 		h.refuse(w, http.StatusBadRequest, err)
 		return
@@ -163,17 +180,11 @@ func (h *handler) setup(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, http.StatusInternalServerError, errors.New("setup failed, see the daemon log"))
 		return
 	}
-	sess, err := h.Sessions.Issue(w, r, Session{Subject: user.GetId(), Name: user.GetUsername(), Provider: ProviderLocal})
-	if err != nil {
-		h.Log.Error("session failed", "err", err)
-		h.refuse(w, http.StatusInternalServerError, errors.New("could not start the session"))
-		return
-	}
-	h.Log.Info("first account created", "username", user.GetUsername(), "client", h.clientAddr(r))
-	writeJSON(w, http.StatusOK, map[string]any{"user": userInfo{Subject: sess.Subject, Name: sess.Name, Provider: sess.Provider, Expires: sess.Expires}})
+	h.Log.Info("first account set up", "username", user.GetUsername(), "client", h.clientAddr(r))
+	h.signIn(w, r, user)
 }
 
-// Reads a JSON body. The content type requirement keeps HTML forms on other sites from posting here.
+// Reads a JSON body, the content type requirement keeping forms on other sites from posting here
 func (h *handler) readCredentials(w http.ResponseWriter, r *http.Request) (credentials, bool) {
 	kind, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if kind != "application/json" {

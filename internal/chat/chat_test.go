@@ -45,8 +45,7 @@ func TestAnthropicProvidedTools(t *testing.T) {
 	}
 }
 
-// The call parser splits text from calls as pieces arrive, takes fences and the parameters
-// spelling, and leaves a block that holds no call as text
+// The call parser splits text from calls as they arrive, takes fences and parameters, and keeps bad blocks as text
 func TestCallParser(t *testing.T) {
 	run := func(pieces ...string) (string, []ToolCall) {
 		var text strings.Builder

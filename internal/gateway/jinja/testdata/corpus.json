@@ -1,0 +1,440 @@
+[
+ {
+  "name": "llama31",
+  "repo": "unsloth/Meta-Llama-3.1-8B-Instruct",
+  "url": "https://huggingface.co/unsloth/Meta-Llama-3.1-8B-Instruct/resolve/main/tokenizer_config.json",
+  "template": "llama31.jinja"
+ },
+ {
+  "name": "llama32",
+  "repo": "unsloth/Llama-3.2-1B-Instruct",
+  "url": "https://huggingface.co/unsloth/Llama-3.2-1B-Instruct/resolve/main/chat_template.jinja",
+  "template": "llama32.jinja"
+ },
+ {
+  "name": "llama4",
+  "repo": "unsloth/Llama-4-Scout-17B-16E-Instruct",
+  "url": "https://huggingface.co/unsloth/Llama-4-Scout-17B-16E-Instruct/resolve/main/chat_template.jinja",
+  "template": "llama4.jinja"
+ },
+ {
+  "name": "qwen25",
+  "repo": "Qwen/Qwen2.5-7B-Instruct",
+  "url": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/resolve/main/tokenizer_config.json",
+  "template": "qwen25.jinja"
+ },
+ {
+  "name": "qwen3",
+  "repo": "Qwen/Qwen3-8B",
+  "url": "https://huggingface.co/Qwen/Qwen3-8B/resolve/main/tokenizer_config.json",
+  "template": "qwen3.jinja"
+ },
+ {
+  "name": "qwen3coder",
+  "repo": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+  "url": "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct/resolve/main/chat_template.jinja",
+  "template": "qwen3coder.jinja"
+ },
+ {
+  "name": "qwq",
+  "repo": "Qwen/QwQ-32B",
+  "url": "https://huggingface.co/Qwen/QwQ-32B/resolve/main/tokenizer_config.json",
+  "template": "qwq.jinja"
+ },
+ {
+  "name": "mistral03",
+  "repo": "mistralai/Mistral-7B-Instruct-v0.3",
+  "url": "https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3/resolve/main/tokenizer_config.json",
+  "template": "mistral03.jinja"
+ },
+ {
+  "name": "mistralnemo",
+  "repo": "unsloth/Mistral-Nemo-Instruct-2407",
+  "url": "https://huggingface.co/unsloth/Mistral-Nemo-Instruct-2407/resolve/main/tokenizer_config.json",
+  "template": "mistralnemo.jinja"
+ },
+ {
+  "name": "mistralsmall31",
+  "repo": "unsloth/Mistral-Small-3.1-24B-Instruct-2503",
+  "url": "https://huggingface.co/unsloth/Mistral-Small-3.1-24B-Instruct-2503/resolve/main/chat_template.jinja",
+  "template": "mistralsmall31.jinja"
+ },
+ {
+  "name": "phi35",
+  "repo": "microsoft/Phi-3.5-mini-instruct",
+  "url": "https://huggingface.co/microsoft/Phi-3.5-mini-instruct/resolve/main/tokenizer_config.json",
+  "template": "phi35.jinja"
+ },
+ {
+  "name": "phi3",
+  "repo": "microsoft/Phi-3-mini-4k-instruct",
+  "url": "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/resolve/main/tokenizer_config.json",
+  "template": "phi3.jinja"
+ },
+ {
+  "name": "phi4mini",
+  "repo": "microsoft/Phi-4-mini-instruct",
+  "url": "https://huggingface.co/microsoft/Phi-4-mini-instruct/resolve/main/tokenizer_config.json",
+  "template": "phi4mini.jinja"
+ },
+ {
+  "name": "gemma2",
+  "repo": "unsloth/gemma-2-9b-it",
+  "url": "https://huggingface.co/unsloth/gemma-2-9b-it/resolve/main/tokenizer_config.json",
+  "template": "gemma2.jinja"
+ },
+ {
+  "name": "gemma3",
+  "repo": "unsloth/gemma-3-4b-it",
+  "url": "https://huggingface.co/unsloth/gemma-3-4b-it/resolve/main/chat_template.jinja",
+  "template": "gemma3.jinja"
+ },
+ {
+  "name": "deepseek_r1",
+  "repo": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+  "url": "https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B/resolve/main/tokenizer_config.json",
+  "template": "deepseek_r1.jinja"
+ },
+ {
+  "name": "deepseek_v3",
+  "repo": "deepseek-ai/DeepSeek-V3",
+  "url": "https://huggingface.co/deepseek-ai/DeepSeek-V3/resolve/main/tokenizer_config.json",
+  "template": "deepseek_v3.jinja"
+ },
+ {
+  "name": "deepseek_v31",
+  "repo": "deepseek-ai/DeepSeek-V3.1",
+  "url": "https://huggingface.co/deepseek-ai/DeepSeek-V3.1/resolve/main/tokenizer_config.json",
+  "template": "deepseek_v31.jinja"
+ },
+ {
+  "name": "commandr_plus",
+  "repo": "alpindale/c4ai-command-r-plus-GPTQ",
+  "url": "https://huggingface.co/alpindale/c4ai-command-r-plus-GPTQ/resolve/main/tokenizer_config.json",
+  "template": "commandr_plus.jinja",
+  "tool_use": "commandr_plus.tool_use.jinja",
+  "rag": "commandr_plus.rag.jinja"
+ },
+ {
+  "name": "commandr_0824",
+  "repo": "unsloth/c4ai-command-r-08-2024-bnb-4bit",
+  "url": "https://huggingface.co/unsloth/c4ai-command-r-08-2024-bnb-4bit/resolve/main/tokenizer_config.json",
+  "template": "commandr_0824.jinja",
+  "tool_use": "commandr_0824.tool_use.jinja",
+  "rag": "commandr_0824.rag.jinja"
+ },
+ {
+  "name": "commandr_v01",
+  "repo": "mlx-community/c4ai-command-r-v01-4bit",
+  "url": "https://huggingface.co/mlx-community/c4ai-command-r-v01-4bit/resolve/main/tokenizer_config.json",
+  "template": "commandr_v01.jinja"
+ },
+ {
+  "name": "smollm2",
+  "repo": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+  "url": "https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct/resolve/main/tokenizer_config.json",
+  "template": "smollm2.jinja"
+ },
+ {
+  "name": "smollm3",
+  "repo": "HuggingFaceTB/SmolLM3-3B",
+  "url": "https://huggingface.co/HuggingFaceTB/SmolLM3-3B/resolve/main/chat_template.jinja",
+  "template": "smollm3.jinja"
+ },
+ {
+  "name": "hermes2pro",
+  "repo": "NousResearch/Hermes-2-Pro-Llama-3-8B",
+  "url": "https://huggingface.co/NousResearch/Hermes-2-Pro-Llama-3-8B/resolve/main/tokenizer_config.json",
+  "template": "hermes2pro.jinja",
+  "tool_use": "hermes2pro.tool_use.jinja"
+ },
+ {
+  "name": "hermes3",
+  "repo": "NousResearch/Hermes-3-Llama-3.1-8B",
+  "url": "https://huggingface.co/NousResearch/Hermes-3-Llama-3.1-8B/resolve/main/tokenizer_config.json",
+  "template": "hermes3.jinja",
+  "tool_use": "hermes3.tool_use.jinja"
+ },
+ {
+  "name": "openhermes25",
+  "repo": "teknium/OpenHermes-2.5-Mistral-7B",
+  "url": "https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B/resolve/main/tokenizer_config.json",
+  "template": "openhermes25.jinja"
+ },
+ {
+  "name": "gptoss",
+  "repo": "openai/gpt-oss-20b",
+  "url": "https://huggingface.co/openai/gpt-oss-20b/resolve/main/chat_template.jinja",
+  "template": "gptoss.jinja"
+ },
+ {
+  "name": "glm45",
+  "repo": "zai-org/GLM-4.5",
+  "url": "https://huggingface.co/zai-org/GLM-4.5/resolve/main/chat_template.jinja",
+  "template": "glm45.jinja"
+ },
+ {
+  "name": "kimik2",
+  "repo": "moonshotai/Kimi-K2-Instruct",
+  "url": "https://huggingface.co/moonshotai/Kimi-K2-Instruct/resolve/main/chat_template.jinja",
+  "template": "kimik2.jinja"
+ },
+ {
+  "name": "seedoss",
+  "repo": "ByteDance-Seed/Seed-OSS-36B-Instruct",
+  "url": "https://huggingface.co/ByteDance-Seed/Seed-OSS-36B-Instruct/resolve/main/chat_template.jinja",
+  "template": "seedoss.jinja"
+ },
+ {
+  "name": "minimaxm2",
+  "repo": "MiniMaxAI/MiniMax-M2",
+  "url": "https://huggingface.co/MiniMaxAI/MiniMax-M2/resolve/main/chat_template.jinja",
+  "template": "minimaxm2.jinja"
+ },
+ {
+  "name": "nemotronnano2",
+  "repo": "nvidia/NVIDIA-Nemotron-Nano-9B-v2",
+  "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-9B-v2/resolve/main/tokenizer_config.json",
+  "template": "nemotronnano2.jinja"
+ },
+ {
+  "name": "lfm2",
+  "repo": "LiquidAI/LFM2-1.2B",
+  "url": "https://huggingface.co/LiquidAI/LFM2-1.2B/resolve/main/chat_template.jinja",
+  "template": "lfm2.jinja"
+ },
+ {
+  "name": "olmo2",
+  "repo": "allenai/OLMo-2-1124-7B-Instruct",
+  "url": "https://huggingface.co/allenai/OLMo-2-1124-7B-Instruct/resolve/main/tokenizer_config.json",
+  "template": "olmo2.jinja"
+ },
+ {
+  "name": "falcon3",
+  "repo": "tiiuae/Falcon3-7B-Instruct",
+  "url": "https://huggingface.co/tiiuae/Falcon3-7B-Instruct/resolve/main/tokenizer_config.json",
+  "template": "falcon3.jinja"
+ },
+ {
+  "name": "granite33",
+  "repo": "ibm-granite/granite-3.3-8b-instruct",
+  "url": "https://huggingface.co/ibm-granite/granite-3.3-8b-instruct/resolve/main/tokenizer_config.json",
+  "template": "granite33.jinja"
+ },
+ {
+  "name": "llava15",
+  "repo": "llava-hf/llava-1.5-7b-hf",
+  "url": "https://huggingface.co/llava-hf/llava-1.5-7b-hf/resolve/main/chat_template.json",
+  "template": "llava15.jinja"
+ },
+ {
+  "name": "llavaonevision",
+  "repo": "llava-hf/llava-onevision-qwen2-7b-ov-hf",
+  "url": "https://huggingface.co/llava-hf/llava-onevision-qwen2-7b-ov-hf/resolve/main/chat_template.json",
+  "template": "llavaonevision.jinja"
+ },
+ {
+  "name": "pixtral",
+  "repo": "mistral-community/pixtral-12b",
+  "url": "https://huggingface.co/mistral-community/pixtral-12b/resolve/main/chat_template.json",
+  "template": "pixtral.jinja"
+ },
+ {
+  "name": "functionary32",
+  "repo": "meetkai/functionary-small-v3.2",
+  "url": "https://huggingface.co/meetkai/functionary-small-v3.2/resolve/main/tokenizer_config.json",
+  "template": "functionary32.jinja"
+ },
+ {
+  "name": "minicpm3",
+  "repo": "openbmb/MiniCPM3-4B",
+  "url": "https://huggingface.co/openbmb/MiniCPM3-4B/resolve/main/tokenizer_config.json",
+  "template": "minicpm3.jinja"
+ },
+ {
+  "name": "kimik2thinking",
+  "repo": "moonshotai/Kimi-K2-Thinking",
+  "url": "https://huggingface.co/moonshotai/Kimi-K2-Thinking/resolve/main/chat_template.jinja",
+  "template": "kimik2thinking.jinja"
+ },
+ {
+  "name": "commanda",
+  "repo": "unsloth/c4ai-command-a-03-2025",
+  "url": "https://huggingface.co/unsloth/c4ai-command-a-03-2025/resolve/main/tokenizer_config.json",
+  "template": "commanda.jinja"
+ },
+ {
+  "name": "exaone4",
+  "repo": "LGAI-EXAONE/EXAONE-4.0-32B",
+  "url": "https://huggingface.co/LGAI-EXAONE/EXAONE-4.0-32B/resolve/main/chat_template.jinja",
+  "template": "exaone4.jinja"
+ },
+ {
+  "name": "exaone35",
+  "repo": "LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct",
+  "url": "https://huggingface.co/LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct/resolve/main/tokenizer_config.json",
+  "template": "exaone35.jinja"
+ },
+ {
+  "name": "apertus",
+  "repo": "swiss-ai/Apertus-8B-Instruct-2509",
+  "url": "https://huggingface.co/swiss-ai/Apertus-8B-Instruct-2509/resolve/main/chat_template.jinja",
+  "template": "apertus.jinja"
+ },
+ {
+  "name": "mistralsmall32",
+  "repo": "unsloth/Mistral-Small-3.2-24B-Instruct-2506",
+  "url": "https://huggingface.co/unsloth/Mistral-Small-3.2-24B-Instruct-2506/resolve/main/chat_template.jinja",
+  "template": "mistralsmall32.jinja"
+ },
+ {
+  "name": "magistral",
+  "repo": "unsloth/Magistral-Small-2506",
+  "url": "https://huggingface.co/unsloth/Magistral-Small-2506/resolve/main/chat_template.jinja",
+  "template": "magistral.jinja"
+ },
+ {
+  "name": "mixtral",
+  "repo": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+  "url": "https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1/resolve/main/tokenizer_config.json",
+  "template": "mixtral.jinja"
+ },
+ {
+  "name": "intellect3",
+  "repo": "PrimeIntellect/INTELLECT-3",
+  "url": "https://huggingface.co/PrimeIntellect/INTELLECT-3/resolve/main/chat_template.jinja",
+  "template": "intellect3.jinja"
+ },
+ {
+  "name": "step3",
+  "repo": "stepfun-ai/step3",
+  "url": "https://huggingface.co/stepfun-ai/step3/resolve/main/tokenizer_config.json",
+  "template": "step3.jinja"
+ },
+ {
+  "name": "xlam2",
+  "repo": "Salesforce/Llama-xLAM-2-8b-fc-r",
+  "url": "https://huggingface.co/Salesforce/Llama-xLAM-2-8b-fc-r/resolve/main/tokenizer_config.json",
+  "template": "xlam2.jinja"
+ },
+ {
+  "name": "ling15",
+  "repo": "inclusionAI/Ling-lite-1.5",
+  "url": "https://huggingface.co/inclusionAI/Ling-lite-1.5/resolve/main/tokenizer_config.json",
+  "template": "ling15.jinja"
+ },
+ {
+  "name": "qwen25vl",
+  "repo": "Qwen/Qwen2.5-VL-7B-Instruct",
+  "url": "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/main/tokenizer_config.json",
+  "template": "qwen25vl.jinja"
+ },
+ {
+  "name": "qwen3vl",
+  "repo": "Qwen/Qwen3-VL-8B-Instruct",
+  "url": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct/resolve/main/tokenizer_config.json",
+  "template": "qwen3vl.jinja"
+ },
+ {
+  "name": "qwen3next",
+  "repo": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+  "url": "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct/resolve/main/tokenizer_config.json",
+  "template": "qwen3next.jinja"
+ },
+ {
+  "name": "deepseek_r1_full",
+  "repo": "deepseek-ai/DeepSeek-R1",
+  "url": "https://huggingface.co/deepseek-ai/DeepSeek-R1/resolve/main/tokenizer_config.json",
+  "template": "deepseek_r1_full.jinja"
+ },
+ {
+  "name": "granite40",
+  "repo": "ibm-granite/granite-4.0-h-small",
+  "url": "https://huggingface.co/ibm-granite/granite-4.0-h-small/resolve/main/chat_template.jinja",
+  "template": "granite40.jinja"
+ },
+ {
+  "name": "phi4",
+  "repo": "microsoft/phi-4",
+  "url": "https://huggingface.co/microsoft/phi-4/resolve/main/tokenizer_config.json",
+  "template": "phi4.jinja"
+ },
+ {
+  "name": "phi4reasoning",
+  "repo": "unsloth/Phi-4-reasoning-plus",
+  "url": "https://huggingface.co/unsloth/Phi-4-reasoning-plus/resolve/main/chat_template.jinja",
+  "template": "phi4reasoning.jinja"
+ },
+ {
+  "name": "hermes4",
+  "repo": "NousResearch/Hermes-4-14B",
+  "url": "https://huggingface.co/NousResearch/Hermes-4-14B/resolve/main/chat_template.jinja",
+  "template": "hermes4.jinja"
+ },
+ {
+  "name": "gemma3n",
+  "repo": "unsloth/gemma-3n-E4B-it",
+  "url": "https://huggingface.co/unsloth/gemma-3n-E4B-it/resolve/main/chat_template.jinja",
+  "template": "gemma3n.jinja"
+ },
+ {
+  "name": "ernie45",
+  "repo": "baidu/ERNIE-4.5-21B-A3B-PT",
+  "url": "https://huggingface.co/baidu/ERNIE-4.5-21B-A3B-PT/resolve/main/chat_template.jinja",
+  "template": "ernie45.jinja"
+ },
+ {
+  "name": "glm4_0414",
+  "repo": "THUDM/GLM-4-9B-0414",
+  "url": "https://huggingface.co/THUDM/GLM-4-9B-0414/resolve/main/chat_template.jinja",
+  "template": "glm4_0414.jinja"
+ },
+ {
+  "name": "nemotron_nano_8b",
+  "repo": "nvidia/Llama-3.1-Nemotron-Nano-8B-v1",
+  "url": "https://huggingface.co/nvidia/Llama-3.1-Nemotron-Nano-8B-v1/resolve/main/tokenizer_config.json",
+  "template": "nemotron_nano_8b.jinja"
+ },
+ {
+  "name": "hunyuan7b",
+  "repo": "tencent/Hunyuan-7B-Instruct",
+  "url": "https://huggingface.co/tencent/Hunyuan-7B-Instruct/resolve/main/tokenizer_config.json",
+  "template": "hunyuan7b.jinja"
+ },
+ {
+  "name": "internlm3",
+  "repo": "internlm/internlm3-8b-instruct",
+  "url": "https://huggingface.co/internlm/internlm3-8b-instruct/resolve/main/tokenizer_config.json",
+  "template": "internlm3.jinja"
+ },
+ {
+  "name": "yi15",
+  "repo": "01-ai/Yi-1.5-9B-Chat",
+  "url": "https://huggingface.co/01-ai/Yi-1.5-9B-Chat/resolve/main/tokenizer_config.json",
+  "template": "yi15.jinja"
+ },
+ {
+  "name": "smolvlm",
+  "repo": "HuggingFaceTB/SmolVLM-Instruct",
+  "url": "https://huggingface.co/HuggingFaceTB/SmolVLM-Instruct/resolve/main/tokenizer_config.json",
+  "template": "smolvlm.jinja"
+ },
+ {
+  "name": "afm45",
+  "repo": "arcee-ai/AFM-4.5B",
+  "url": "https://huggingface.co/arcee-ai/AFM-4.5B/resolve/main/tokenizer_config.json",
+  "template": "afm45.jinja"
+ },
+ {
+  "name": "motif26",
+  "repo": "Motif-Technologies/Motif-2.6B",
+  "url": "https://huggingface.co/Motif-Technologies/Motif-2.6B/resolve/main/tokenizer_config.json",
+  "template": "motif26.jinja"
+ },
+ {
+  "name": "solarpro",
+  "repo": "upstage/solar-pro-preview-instruct",
+  "url": "https://huggingface.co/upstage/solar-pro-preview-instruct/resolve/main/tokenizer_config.json",
+  "template": "solarpro.jinja"
+ }
+]

@@ -1,0 +1,61 @@
+import type { SvelteMap } from 'svelte/reactivity';
+
+import type { NeoNotificationPlacement } from '#lib/neo/floating/common/neo-placement.model.js';
+import type { NeoNotification, NeoNotificationQueued, NeoNotificationStackDirections } from '#lib/neo/floating/notification/neo-notification.model.js';
+import type { NeoPortalProps } from '#lib/neo/floating/portal/neo-portal.model.js';
+
+export interface NeoNotificationStackProps<Tag extends keyof HTMLElementTagNameMap = 'ol'>
+  extends Pick<NeoNotification, 'duration' | 'restartOnTouch' | 'pauseOnHover' | 'progressProps' | 'actionProps'
+    | 'closeProps' | 'containerProps' | 'close' | 'loading' | 'progress'
+    | 'elevation' | 'blur' | 'color' | 'rounded' | 'tinted' | 'filled' | 'borderless'
+    | 'before' | 'after'> {
+  // Snippets
+  children?: NeoNotification['render'];
+
+  /**
+   * Unique identifier for the notification stack.
+   */
+  id?: string;
+  ref?: HTMLElementTagNameMap[Tag];
+  tag?: Tag;
+
+  queue?: SvelteMap<NonNullable<NeoNotificationQueued['id']>, NeoNotificationQueued>;
+  paused?: boolean;
+  hovered?: boolean;
+  focused?: boolean;
+  expand?: boolean;
+  delay?: number;
+  max?: number;
+
+  // Item Props
+  /**
+   * If true, notifications can be dragged to dismiss them.
+   * @default true
+   */
+  draggable?: boolean;
+  /**
+   * If true, notifications can be swiped to dismiss them.
+   * @default true
+   */
+  swipeable?: boolean;
+  /**
+   * The fraction of the notification stack height/width that must be scrolled before the notification is considered dismissed.
+   * @default 3 (1/3 of the stack height/width)
+   */
+  threshold?: number | { x: number; y: number };
+  /**
+   * The offset in pixels to apply when stacking notifications.
+   * @see expand
+   * @default 16
+   */
+  stagger?: number;
+
+  // Styles
+
+  // Placement
+  placement?: NeoNotificationPlacement;
+  direction?: NeoNotificationStackDirections;
+  portal?: boolean;
+
+  portalProps?: NeoPortalProps;
+}

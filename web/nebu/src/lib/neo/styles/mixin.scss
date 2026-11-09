@@ -1,0 +1,752 @@
+@use './animation' as animation;
+
+%after-before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: var(--neo-z-index-behind, -1);
+  display: flex;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  opacity: 0;
+  content: '';
+}
+
+@mixin pulse(
+  $box-shadow: var(--neo-pulse-box-shadow, var(--neo-box-shadow-raised-3)),
+  $box-shadow-reverse: var(--neo-pulse-box-shadow-reverse, var(--neo-box-shadow-inset-2)),
+  $duration: var(--neo-pulse-duration, 6s),
+  $delay: var(--neo-pulse-delay, 1s),
+  $interval: var(--neo-pulse-interval, 3s),
+  $iteration: infinite,
+  $scaleX: var(--neo-pulse-scale-x, 2),
+  $scaleY: var(--neo-pulse-scale-y, 2),
+  $opacity-start: 1,
+  $opacity-end: 0,
+  $reverse: false
+) {
+  position: relative;
+
+  &::after,
+  &::before {
+    @extend %after-before;
+
+    box-shadow: $box-shadow;
+    will-change: transform, opacity;
+  }
+
+  &::before {
+    animation: pulse $duration linear $delay $iteration;
+  }
+
+  &::after {
+    animation: pulse $duration linear calc(#{$delay} + #{$interval}) $iteration;
+  }
+
+  @if $reverse {
+    &.neo-pressed,
+    &:active {
+      &::after,
+      &::before {
+        box-shadow: $box-shadow-reverse;
+        animation-name: coalesce;
+        animation-timing-function: ease-out;
+      }
+    }
+
+    @include animation.coalesce($scaleX, $scaleY, $opacity-start, $opacity-end);
+  }
+
+  @include animation.pulse($scaleX, $scaleY, $opacity-start, $opacity-end);
+}
+
+@mixin coalesce(
+  $box-shadow: var(--neo-box-shadow-raised-3),
+  $box-shadow-reverse: var(--neo-box-shadow-inset-2),
+  $duration: var(--neo-coalesce-duration, 6s),
+  $delay: var(--neo-coalesce-delay, 1s),
+  $interval: var(--neo-coalesce-interval, 3s),
+  $iteration: infinite,
+  $scaleX: var(--neo-coalesce-scale-x, 2),
+  $scaleY: var(--neo-coalesce-scale-y, 2),
+  $opacity-start: 1,
+  $opacity-end: 0,
+  $reverse: false
+) {
+  position: relative;
+
+  &::after,
+  &::before {
+    @extend %after-before;
+
+    box-shadow: var(--neo-coalesce-box-shadow, #{$box-shadow});
+    will-change: transform, opacity;
+  }
+
+  &::before {
+    animation: coalesce $duration ease-out $delay $iteration;
+  }
+
+  &::after {
+    animation: coalesce $duration ease-out calc(#{$delay} + #{$interval}) $iteration;
+  }
+
+  @if $reverse {
+    &.neo-pressed,
+    &:active {
+      &::after,
+      &::before {
+        box-shadow: var(--neo-coalesce-box-shadow-reverse, #{$box-shadow-reverse});
+        animation-name: pulse;
+        animation-timing-function: linear;
+      }
+    }
+
+    @include animation.pulse($scaleX, $scaleY, $opacity-start, $opacity-end);
+  }
+
+  @include animation.coalesce($scaleX, $scaleY, $opacity-start, $opacity-end);
+}
+
+@mixin border-rotate(
+  $source-color: var(--neo-rotate-source-color, transparent),
+  $target-color: var(--neo-rotate-target-color, var(--neo-color-primary-50)),
+  $border-width: var(--neo-border-width, 1px),
+  $speed: var(--neo-rotate-speed, 4s),
+  $easing: var(--neo-rotate-easing, linear)
+) {
+  position: relative;
+  border: $border-width solid transparent;
+  border-radius: 2rem;
+
+  &::before {
+    position: absolute;
+    inset: 0;
+    padding: $border-width;
+    background: conic-gradient(from var(--neo-angle), #{$source-color} 20%, #{$target-color} 80%);
+    border-radius: inherit;
+    animation: $speed rotate $easing infinite;
+    content: '';
+    mask:
+      conic-gradient(black 0 0) content-box exclude,
+      conic-gradient(black 0 0);
+    pointer-events: none;
+  }
+
+  &.neo-filled {
+    --neo-source-color: var(--neo-target-color);
+  }
+
+  &.neo-empty {
+    --neo-target-color: transparent;
+  }
+
+  @include animation.rotate;
+}
+
+@mixin border-progress(
+  $border-color: var(--neo-progress-border-color, var(--neo-color-primary-50)),
+  $border-width: 1px,
+  $transition: --neo-progress,
+  $speed: var(--neo-rotate-speed, 4s),
+  $easing: var(--neo-rotate-easing, linear)
+) {
+  position: relative;
+  border: $border-width solid transparent;
+  border-radius: 2rem;
+
+  &::before {
+    position: absolute;
+    inset: 0;
+    padding: $border-width;
+    background: conic-gradient($border-color, $border-color var(--neo-progress), transparent var(--neo-progress));
+    border-radius: inherit;
+    transition: $transition $speed $easing;
+    content: '';
+    mask:
+      conic-gradient(black 0 0) content-box exclude,
+      conic-gradient(black 0 0);
+    pointer-events: none;
+  }
+}
+
+@mixin skeleton(
+  $start: 1,
+  $step: var(--neo-skeleton-step, -0.3),
+  $color: var(--neo-skeleton-color),
+  $text: var(--neo-skeleton-color),
+  $timing: 3s,
+  $easing: var(--neo-transition-skeleton),
+  $delay: 1s,
+  $content: true
+) {
+  --neo-skeleton-start: #{$start};
+  --neo-skeleton-end: calc(#{$start} + #{$step});
+
+  color: $text;
+  background-color: $color;
+  background-clip: padding-box;
+  border-color: $color;
+  opacity: $start;
+  transition:
+    border-radius calc($delay / 3) ease,
+    background-color $delay ease,
+    color calc($delay / 3) ease,
+    border-color $delay ease,
+    opacity $delay ease;
+  animation: skeleton $timing $easing infinite;
+  animation-delay: $delay;
+
+  @if $content {
+    &::before,
+    &::after,
+    :global(> *::before),
+    :global(> *::after),
+    :global(> *) {
+      visibility: hidden;
+      pointer-events: none;
+    }
+  }
+
+  @include animation.skeleton;
+}
+
+@mixin scrollbar(
+  $overflow: var(--neo-scrollbar-overflow, auto),
+  $gutter: stable both-edges,
+  $width: var(--neo-scrollbar-width, 0.375rem),
+  $thumb-color: var(--neo-scrollbar-color),
+  $thumb-border-radius: var(--neo-border-radius),
+  $button-height: var(--neo-scrollbar-button-height, 0.125rem),
+  $timing: 0.3s,
+  $delay: 0.1s,
+  $padding: calc($width * 2),
+  $transition: false
+) {
+  scrollbar-gutter: $gutter;
+  overflow: $overflow;
+
+  @if $transition {
+    transition:
+      $transition,
+      --neo-thumb-color calc($timing * 1.5) ease $delay;
+  } @else {
+    transition: --neo-thumb-color calc($timing * 1.5) ease $delay;
+  }
+
+  &:focus-within,
+  &:focus,
+  &:hover {
+    --neo-thumb-color: #{$thumb-color};
+
+    @if $transition {
+      transition:
+        $transition,
+        --neo-thumb-color calc($timing * 1.5) ease 0s;
+    } @else {
+      transition: --neo-thumb-color calc($timing * 1.5) ease 0s;
+    }
+  }
+
+  &::-webkit-scrollbar {
+    width: $width;
+    background-color: transparent;
+    border: none;
+    cursor: pointer;
+  }
+
+  &::-webkit-scrollbar:vertical {
+    width: $width;
+  }
+
+  &::-webkit-scrollbar:horizontal {
+    height: $width;
+  }
+
+  &::-webkit-scrollbar-button {
+    display: block;
+
+    &:hover {
+      background-color: var(--neo-thumb-color, transparent);
+    }
+  }
+
+  &::-webkit-scrollbar-button:vertical {
+    height: $button-height;
+  }
+
+  &::-webkit-scrollbar-button:horizontal {
+    width: $button-height;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: var(--neo-thumb-color, transparent);
+    border: none;
+    border-radius: $thumb-border-radius;
+    cursor: pointer;
+  }
+
+  &::-webkit-scrollbar-corner {
+    background-color: transparent;
+    background-clip: border-box;
+    border: none;
+    outline: none;
+  }
+
+  &::-webkit-resizer {
+    background: url('../assets/neo-icon-resizer-bottom-right.svg') no-repeat bottom;
+    background-clip: border-box;
+  }
+
+  // TODO: remove when Firefox supports scrollbar customization
+  @supports not selector(::-webkit-scrollbar) {
+    scrollbar-width: thin;
+    scrollbar-color: $thumb-color;
+
+    @if $padding != none {
+      padding-inline: $padding;
+    }
+  }
+
+  // TODO: remove when Safari  implement scrollbar-gutter correctly
+  @if $padding != none {
+    @supports (hanging-punctuation: first) and (font: -apple-system-body) and (-webkit-appearance: none) {
+      padding-inline: $padding;
+    }
+  }
+}
+
+@mixin fade-scroll($fade-height: 1rem, $direction: top) {
+  mask-image: linear-gradient(
+    to var(--neo-scroll-direction, #{$direction}),
+    black,
+    black,
+    transparent 0,
+    black var(--neo-scroll-shadow-size, #{$fade-height}),
+    black calc(100% - var(--neo-scroll-shadow-size, #{$fade-height})),
+    transparent
+  );
+}
+
+@mixin glass() {
+  /** Box Shadows raised */
+  --neo-box-shadow-raised-5: var(--neo-glass-box-shadow-raised-5);
+  --neo-box-shadow-raised-4: var(--neo-glass-box-shadow-raised-4);
+  --neo-box-shadow-raised-3: var(--neo-glass-box-shadow-raised-3);
+  --neo-box-shadow-raised-2: var(--neo-glass-box-shadow-raised-2);
+  --neo-box-shadow-raised-1: var(--neo-glass-box-shadow-raised-1);
+
+  /** Box Shadows inset */
+  --neo-box-shadow-inset-1: var(--neo-glass-box-shadow-inset-1);
+  --neo-box-shadow-inset-2: var(--neo-glass-box-shadow-inset-2);
+  --neo-box-shadow-inset-3: var(--neo-glass-box-shadow-inset-3);
+  --neo-box-shadow-inset-4: var(--neo-glass-box-shadow-inset-4);
+  --neo-box-shadow-inset-5: var(--neo-glass-box-shadow-inset-5);
+
+  /** Box Shadows pressed */
+  --neo-box-shadow-pressed-1: var(--neo-glass-box-shadow-pressed-1);
+  --neo-box-shadow-pressed-2: var(--neo-glass-box-shadow-pressed-2);
+  --neo-box-shadow-pressed-3: var(--neo-glass-box-shadow-pressed-3);
+  --neo-box-shadow-pressed-4: var(--neo-glass-box-shadow-pressed-4);
+  --neo-box-shadow-pressed-5: var(--neo-glass-box-shadow-pressed-5);
+
+  /** Box Shadows convex */
+  --neo-box-shadow-convex-1: var(--neo-glass-box-shadow-convex-1);
+  --neo-box-shadow-convex-2: var(--neo-glass-box-shadow-convex-2);
+  --neo-box-shadow-convex-3: var(--neo-glass-box-shadow-convex-3);
+  --neo-box-shadow-convex-4: var(--neo-glass-box-shadow-convex-4);
+  --neo-box-shadow-convex-5: var(--neo-glass-box-shadow-convex-5);
+
+  /** Skeleton color */
+  --neo-skeleton-color: var(--neo-glass-skeleton-color);
+}
+
+@mixin ellipsis($line: var(--neo-ellipsis-lines, 1), $word-break: break-word) {
+  display: -webkit-box;
+  -webkit-line-clamp: $line;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: $word-break;
+  overflow-wrap: anywhere;
+}
+
+@mixin transition-container($area: transition, $width: 100%) {
+  display: grid;
+  flex-grow: 1;
+  grid-template-areas: '#{$area}';
+  width: $width;
+
+  :global(> *) {
+    grid-area: $area;
+  }
+}
+
+@mixin floating(
+  $padding: --neo-floating-padding,
+  $color: --neo-floating-color,
+  $background-color: --neo-floating-bg-color,
+  $border-color: --neo-floating-border-color,
+  $border-radius: --neo-floating-border-radius,
+  $border-radius-rounded: --neo-floating-border-radius-rounded,
+  $box-shadow: --neo-floating-box-shadow,
+  $default-box-shadow: --neo-glass-box-shadow-raised-1,
+  $backdrop-filter: --neo-floating-backdrop-filter,
+  $default-filter: --neo-blur-3,
+  $z-index: --neo-floating-z-index,
+  $base-z-index: --neo-z-index-layer-ui,
+  $elevation: --neo-floating-elevation,
+  $transition: true,
+  $borderless: false,
+  $tinted: false,
+  $filled: false
+) {
+  color: var($color, inherit);
+  background-color: var($background-color, var(--neo-glass-background-color));
+  border: var(--neo-border-width, 1px) solid var($border-color, var(--neo-glass-background-color));
+  border-color: var(
+    $border-color,
+    var(--neo-glass-top-border-color) var(--neo-glass-right-border-color) var(--neo-glass-bottom-border-color) var(--neo-glass-left-border-color)
+  );
+  border-radius: var($border-radius, var(--neo-border-radius));
+  outline: none;
+  box-shadow: var($box-shadow, var($default-box-shadow));
+  backdrop-filter: var($backdrop-filter, var($default-filter));
+
+  @if $transition {
+    transition:
+      box-shadow 0.3s ease-out,
+      backdrop-filter 0.3s ease,
+      border-radius 0.3s ease,
+      border-color 0.3s ease,
+      padding 0.3s ease;
+  }
+
+  @if $z-index {
+    z-index: var($z-index, calc(var($base-z-index, 1000) + var($elevation, 1)));
+  }
+
+  @if $padding {
+    padding: var($padding, var(--neo-gap-3xs) var(--neo-gap-xs));
+  }
+
+  @if $tinted {
+    &.neo-tinted {
+      background-color: var($background-color, var(--neo-glass-background-color-tinted));
+    }
+  }
+
+  @if $filled {
+    &.neo-filled {
+      background-color: var($background-color, var(--neo-background-color));
+      border-color: var(
+        $border-color,
+        var(--neo-filled-top-border-color)
+          var(--neo-filled-right-border-color)
+          var(--neo-filled-bottom-border-color)
+          var(--neo-filled-left-border-color)
+      );
+    }
+  }
+
+  &.neo-flat {
+    border-color: var($border-color, var(--neo-glass-border-color-flat));
+  }
+
+  @if $borderless {
+    &.neo-borderless {
+      border-color: transparent;
+    }
+  }
+
+  &.neo-rounded {
+    @if $padding {
+      padding: var($padding, var(--neo-gap-xs) var(--neo-gap));
+    }
+
+    border-radius: var($border-radius, var($border-radius-rounded, var(--neo-border-radius-xxl)));
+  }
+}
+
+@mixin fixed(
+  $margin: --neo-floating-margin,
+  $margin-top: --neo-floating-margin-top,
+  $margin-bottom: --neo-floating-margin-bottom,
+  $margin-left: --neo-floating-margin-left,
+  $margin-right: --neo-floating-margin-right,
+  $margin-default: var(--neo-gap),
+  $align-items: false
+) {
+  position: fixed;
+  margin: var($margin, $margin-default);
+
+  @if $align-items {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &[data-placement='center'] {
+    inset: 0;
+    margin: var($margin, auto);
+  }
+
+  &[data-placement^='top'],
+  &[data-placement='right-start'],
+  &[data-placement='left-start'] {
+    top: 0;
+    bottom: auto;
+  }
+
+  &[data-placement^='bottom'],
+  &[data-placement='right-end'],
+  &[data-placement='left-end'] {
+    top: auto;
+    bottom: 0;
+  }
+
+  &[data-placement^='left'],
+  &[data-placement='bottom-start'],
+  &[data-placement='top-start'] {
+    right: auto;
+    left: 0;
+
+    @if $align-items {
+      align-items: start;
+    }
+  }
+
+  &[data-placement^='right'],
+  &[data-placement='bottom-end'],
+  &[data-placement='top-end'] {
+    right: 0;
+    left: auto;
+
+    @if $align-items {
+      align-items: end;
+    }
+  }
+
+  &[data-placement='right'],
+  &[data-placement='left'] {
+    top: 0;
+    bottom: 0;
+    margin-top: var($margin-top, auto);
+    margin-bottom: var($margin-bottom, auto);
+  }
+
+  &[data-placement='top'],
+  &[data-placement='bottom'] {
+    right: 0;
+    left: 0;
+    margin-right: var($margin-right, auto);
+    margin-left: var($margin-left, auto);
+  }
+
+  @if $align-items {
+    &[data-placement='top'],
+    &[data-placement='bottom'],
+    &[data-placement='center'] {
+      align-items: center;
+    }
+  }
+}
+
+@mixin fade-backdrop(
+  $toggle: [open],
+  // Opacity
+  $opacity-start: --neo-fade-opacity-start,
+  $opacity-end: --neo-fade-opacity-end,
+  // Duration
+  $enter-duration: --neo-fade-enter-duration,
+  $exit-duration: --neo-fade-exit-duration,
+  // Timing
+  $enter-timing: --neo-fade-enter-timing,
+  $exit-timing: --neo-fade-exit-timing,
+  // color
+  $color-start: --neo-fade-backdrop-color-start,
+  $color-end: --neo-fade-backdrop-color-end,
+  // filter
+  $filter-start: --neo-fade-backdrop-filter-start,
+  $filter-end: --neo-fade-backdrop-filter-end,
+  // Property
+  $transition-property: --neo-fade-backdrop-transition-property
+) {
+  &::backdrop {
+    background: var($color-start, transparent);
+    opacity: var($opacity-start, 0);
+    backdrop-filter: var($filter-start, blur(0));
+    transition-timing-function: var($exit-timing, ease-out);
+    transition-duration: var($exit-duration, 0.2s);
+    transition-property: var($transition-property, backdrop-filter, display, overlay, opacity);
+    transition-behavior: allow-discrete;
+  }
+
+  &#{$toggle} {
+    &::backdrop {
+      background: var($color-end, var(--neo-background-color-backdrop));
+      opacity: var($opacity-end, 1);
+      backdrop-filter: var($filter-end, var(--neo-blur-1));
+      transition-timing-function: var($enter-timing, ease);
+      transition-duration: var($enter-duration, 0.3s);
+    }
+  }
+
+  @starting-style {
+    &#{$toggle} {
+      &::backdrop {
+        background: $color-start;
+        opacity: var($opacity-start, 0);
+        backdrop-filter: $filter-start;
+      }
+    }
+  }
+}
+
+@mixin fade-in(
+  $toggle: [open],
+  // Opacity
+  $opacity-start: --neo-fade-opacity-start,
+  $opacity-end: --neo-fade-opacity-end,
+  // Scale
+  $scale-start: --neo-fade-scale-start,
+  $scale-end: --neo-fade-scale-end,
+  // Duration
+  $enter-duration: --neo-fade-enter-duration,
+  $exit-duration: --neo-fade-exit-duration,
+  // Timing
+  $enter-timing: --neo-fade-enter-timing,
+  $exit-timing: --neo-fade-exit-timing,
+  // Property
+  $transition-property: --neo-fade-transition-property
+) {
+  opacity: var($opacity-start, 0);
+  transition-timing-function: var($exit-timing, ease-out);
+  transition-duration: var($exit-duration, 0.2s);
+  transition-property: var($transition-property, opacity, scale, display, overlay, box-shadow, backdrop-filter, border-radius, border-color, padding);
+  transition-behavior: allow-discrete;
+  scale: var($scale-start, 0.95);
+
+  &#{$toggle} {
+    display: block;
+    opacity: var($opacity-end, 1);
+    transition-timing-function: var($enter-timing, ease);
+    transition-duration: var($enter-duration, 0.3s);
+    scale: var($scale-end, 1);
+  }
+
+  @starting-style {
+    &#{$toggle} {
+      opacity: var($opacity-start, 0);
+      scale: var($scale-start, 0.95);
+    }
+  }
+}
+
+@mixin slide-in(
+  $toggle: [open],
+  $placement: data-placement,
+  // Opacity
+  $opacity-start: --neo-slide-opacity-start,
+  $opacity-end: --neo-slide-opacity-end,
+  // Translate
+  $translate-start: --neo-slide-translate-start,
+  $translate-end: --neo-slide-translate-end,
+  // Duration
+  $enter-duration: --neo-slide-enter-duration,
+  $exit-duration: --neo-slide-exit-duration,
+  // Timing
+  $enter-timing: --neo-slide-enter-timing,
+  $exit-timing: --neo-slide-exit-timing,
+  // Property
+  $transition-property: --neo-slide-transition-property
+) {
+  opacity: var($opacity-start, 0);
+  transition-timing-function: var($exit-timing, ease-out);
+  transition-duration: var($exit-duration, 0.4s);
+  transition-property: var(
+    $transition-property,
+    opacity,
+    transform,
+    display,
+    overlay,
+    box-shadow,
+    backdrop-filter,
+    border-radius,
+    border-color,
+    padding
+  );
+  transition-behavior: allow-discrete;
+
+  &[#{$placement}^='right'] {
+    transform: translate(var($translate-start, 100%));
+
+    @starting-style {
+      &#{$toggle} {
+        transform: translate(var($translate-start, 100%));
+      }
+    }
+  }
+
+  &[#{$placement}^='left'] {
+    transform: translate(calc(0% - var($translate-start, 100%)));
+
+    @starting-style {
+      &#{$toggle} {
+        transform: translate(calc(0% - var($translate-start, 100%)));
+      }
+    }
+  }
+
+  &[#{$placement}^='top'] {
+    transform: translate(0, calc(0% - var($translate-start, 100%)));
+
+    @starting-style {
+      &#{$toggle} {
+        transform: translate(0, calc(0% - var($translate-start, 100%)));
+      }
+    }
+  }
+
+  &[#{$placement}^='bottom'] {
+    transform: translate(0, var($translate-start, 100%));
+
+    @starting-style {
+      &#{$toggle} {
+        transform: translate(0, var($translate-start, 100%));
+      }
+    }
+  }
+
+  &#{$toggle} {
+    display: block;
+    transform: translate(var($translate-end, 0));
+    opacity: var($opacity-end, 1);
+    transition-timing-function: var($enter-timing, ease);
+    transition-duration: var($enter-duration, 0.5s);
+  }
+
+  @starting-style {
+    &#{$toggle} {
+      opacity: var($opacity-start, 0);
+    }
+  }
+}
+
+/// Shared autofill styles for input/textarea elements.
+/// @param {string} $color-var - CSS variable for the text color (e.g. --neo-input-text-color).
+/// @param {bool} $stroke - Whether to include -webkit-text-stroke-color.
+@mixin autofill($color-var: --neo-input-text-color, $stroke: false) {
+  color: var(#{$color-var}, var(--neo-text-color, inherit)) !important;
+  text-decoration: none;
+  background-clip: text;
+  box-shadow: none;
+  appearance: none;
+  text-decoration-color: inherit;
+  caret-color: var(#{$color-var}, var(--neo-text-color, inherit));
+  -webkit-text-fill-color: var(#{$color-var}, var(--neo-text-color, inherit));
+
+  @if $stroke {
+    -webkit-text-stroke-color: var(#{$color-var}, var(--neo-text-color, inherit));
+  }
+}

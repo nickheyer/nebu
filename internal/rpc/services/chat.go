@@ -26,13 +26,18 @@ func NewChatService(m *chats.Manager, guard *auth.Guard) *ChatService {
 
 // The store behind the request's credential
 func (s *ChatService) owner(h http.Header) db.ChatOwner {
-	sess, _ := s.guard.Identify(h)
-	return chats.OwnerOf(sess)
+	id, _ := s.guard.Identify(h)
+	return chats.OwnerOf(id)
 }
 
 func (s *ChatService) ListConversations(ctx context.Context, req *connect.Request[v1.ListConversationsRequest]) (*connect.Response[v1.ListConversationsResponse], error) {
 	list, err := s.chats.List(ctx, s.owner(req.Header()))
-	return reply(&v1.ListConversationsResponse{Conversations: list}, err)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	list = match(list, req.Msg.GetQuery(), func(c *v1.Conversation) []string { return []string{c.GetTitle(), c.GetModel()} })
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListConversationsResponse{Conversations: list, NextCursor: next}, err)
 }
 
 func (s *ChatService) GetConversation(ctx context.Context, req *connect.Request[v1.GetConversationRequest]) (*connect.Response[v1.GetConversationResponse], error) {

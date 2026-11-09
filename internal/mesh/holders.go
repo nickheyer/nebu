@@ -31,9 +31,7 @@ func classRank(c v1.LinkClass) int {
 	return 4
 }
 
-// Members holding a model, best link first: measured links by class then round trip, members
-// whose link is not measured yet after them, ties by name. An empty group takes any group of the
-// repo, an empty source any source.
+// Members holding a model, measured links first by class and round trip, then unmeasured by name
 func (m *Manager) Holders(ctx context.Context, sourceID, repo, group string) []Holder {
 	type pick struct {
 		rec      *v1.Node
@@ -89,8 +87,7 @@ func (m *Manager) Holders(ctx context.Context, sourceID, repo, group string) []H
 	return out
 }
 
-// The puller's view of the mesh: members holding a model, best link first, with the connections
-// their blobs are read over, and the manifest each keeps for it
+// The puller's view of members holding a model, best link first, with connections and manifests
 type Source struct {
 	Mesh *Manager
 }

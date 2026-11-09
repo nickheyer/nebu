@@ -27,7 +27,8 @@ func TestLlamaCppStageCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	cores := strconv.Itoa(runtime.NumCPU())
-	if cmd.Command != "/bin/rpc-server" || strings.Join(cmd.Args, " ") != "-H 127.0.0.1 -p 5005 -c -d CUDA1 -t "+cores {
+	// The one pinned device is the first CUDA renumbers, whatever its host index
+	if cmd.Command != "/bin/rpc-server" || strings.Join(cmd.Args, " ") != "-H 127.0.0.1 -p 5005 -c -d CUDA0 -t "+cores {
 		t.Fatalf("stage %s %v", cmd.Command, cmd.Args)
 	}
 	if cmd.Env["LLAMA_CACHE"] != cache || cmd.Env["CUDA_VISIBLE_DEVICES"] != "GPU-1" || cmd.Env["GGML_CUDA_DISABLE_GRAPHS"] != "" || cmd.Params["threads"] != cores || cmd.Params["port"] != "5005" {
@@ -43,7 +44,7 @@ func TestLlamaCppStageCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if line := strings.Join(cmd.Args, " "); line != "-H 10.0.0.2 -p 50052 -c -d CUDA1 -t 6" || cmd.Env["GGML_CUDA_DISABLE_GRAPHS"] != "1" {
+	if line := strings.Join(cmd.Args, " "); line != "-H 10.0.0.2 -p 50052 -c -d CUDA0 -t 6" || cmd.Env["GGML_CUDA_DISABLE_GRAPHS"] != "1" {
 		t.Fatalf("exposed stage %s %v", line, cmd.Env)
 	}
 	// A CPU only stage serves the CPU backend.
@@ -116,12 +117,12 @@ func TestLlamaCppChainHead(t *testing.T) {
 		t.Fatalf("no fit flag %v %v", cmd, err)
 	}
 	in.InstallRecord = recorded(facts)
-	// The head's own devices follow the plan's order, not the profile's.
+	// The head's own devices follow the plan's order, each named by its place in the visible list the seat pins.
 	in.Devices = []*v1.Device{gpu("GPU-h1", "1"), gpu("GPU-h0", "0")}
 	seat.Devices = []string{"a/GPU-a0", "a/GPU-a1", "b/GPU-b0", "GPU-h0", "GPU-h1"}
 	seat.DeviceBytes = []uint64{1, 2, 3, 4, 5}
 	seat.DeviceLayers = []uint32{10, 20, 30, 8, 12}
-	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--device RPC0,RPC1,RPC2,CUDA0,CUDA1 ") || !strings.Contains(strings.Join(cmd.Args, " "), "--tensor-split 10,20,30,8,13 ") {
+	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--device RPC0,RPC1,RPC2,CUDA1,CUDA0 ") || !strings.Contains(strings.Join(cmd.Args, " "), "--tensor-split 10,20,30,8,13 ") || cmd.Env["CUDA_VISIBLE_DEVICES"] != "GPU-h1,GPU-h0" {
 		t.Fatalf("own device order %v %v", cmd, err)
 	}
 	// A head without an accelerator lists the stages' devices alone, and the output lands on the
@@ -268,7 +269,7 @@ func TestLlamaCppSpeculative(t *testing.T) {
 				}
 				return
 			}
-			if !strings.HasSuffix(line, c.want) {
+			if !strings.HasSuffix(strings.TrimSuffix(line, " --cache-prompt"), c.want) {
 				t.Fatalf("want %q at the end of %s", c.want, line)
 			}
 			if c.overrides["draft_max"] != "" && cmd.Params["draft_max"] != c.overrides["draft_max"] {
@@ -324,7 +325,7 @@ func TestLlamaCppRelayAndReplicaSeats(t *testing.T) {
 		t.Fatal(err)
 	}
 	line := strings.Join(cmd.Args, " ")
-	if !strings.HasPrefix(line, "--model /w.gguf --host 127.0.0.1 --port 9") || !strings.HasSuffix(line, "--slot-save-path "+slots+" --slots") || cmd.Params["slot_save_path"] != slots {
+	if !strings.HasPrefix(line, "--model /w.gguf --host 127.0.0.1 --port 9") || !strings.HasSuffix(line, "--slot-save-path "+slots) || !strings.Contains(line, " --slots ") || cmd.Params["slot_save_path"] != slots || cmd.Params["slots"] != "on" {
 		t.Fatalf("relay %s %v", line, cmd.Params)
 	}
 	if info, err := os.Stat(slots); err != nil || !info.IsDir() {

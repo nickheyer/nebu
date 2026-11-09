@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/text"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -32,13 +34,24 @@ func runRun(ctx context.Context, e *env, args []string) error {
 	profile := fs.String("profile", "", "what the planner weighs: chat, agent, batch, or auto")
 	var params multi
 	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the slot defaults")
-	positional, err := e.parse(fs, args, 1, 1, "run <repo> [flags]")
+	snapshot := fs.Bool("snapshot", false, "snapshot the process with CRIU once ready, later launches restoring it instead of starting cold")
+	readRoute := runRouteFlags(fs)
+	positional, err := e.parse(fs, args, 1, 1, "run <repo> [flags] [--snapshot] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF]... [--mutating-tools] [--idle-unload D]")
 	if err != nil {
 		return err
 	}
 	paramMap, err := pairs(params, "param")
 	if err != nil {
 		return err
+	}
+	own := &v1.RunRequest{}
+	if err := readRoute(own); err != nil {
+		return err
+	}
+	// Copies the limits, profile, and idle window of the instance's own route onto a run
+	route := func(req *v1.RunRequest) *v1.RunRequest {
+		req.Policy, req.RouteProfile, req.IdleUnloadSeconds = own.GetPolicy(), own.GetRouteProfile(), own.GetIdleUnloadSeconds()
+		return req
 	}
 	shapeValue, err := parseShape(*shape)
 	if err != nil {
@@ -53,13 +66,13 @@ func runRun(ctx context.Context, e *env, args []string) error {
 		if err != nil {
 			return err
 		}
-		return e.runFormation(ctx, &v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Name: *name, Params: paramMap, SlotId: *slot, Span: parseSpan(*span), Shape: shapeValue, Profile: profileValue})
+		return e.runFormation(ctx, route(&v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Name: *name, Params: paramMap, SlotId: *slot, Span: parseSpan(*span), Shape: shapeValue, Profile: profileValue}))
 	}
 	sourceID, groupName, err := e.storedModel(ctx, *source, positional[0], *group)
 	if err != nil {
 		return err
 	}
-	req := &v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Name: *name, Params: paramMap, SlotId: *slot}
+	req := route(&v1.RunRequest{SourceId: sourceID, Repo: positional[0], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Name: *name, Params: paramMap, SlotId: *slot, Snapshot: *snapshot})
 	resp, err := e.cl.instances.Run(ctx, connect.NewRequest(req))
 	if err != nil {
 		return err
@@ -103,10 +116,31 @@ func runPs(ctx context.Context, e *env, args []string) error {
 			if len(in.GetTriage()) > 0 {
 				detail = in.GetTriage()[0].GetSummary()
 			}
-			rows = append(rows, []string{in.GetId(), in.GetName(), loud(in.GetState()), in.GetRuntimeId(), strconv.Itoa(int(in.GetPid())), in.GetEndpoint(), measured(in, profile.Msg.GetProfile()), detail})
+			rows = append(rows, []string{in.GetId(), in.GetName(), loud(in.GetState()), in.GetRuntimeId(), strconv.Itoa(int(in.GetPid())), endpointText(in), measured(in, profile.Msg.GetProfile()), detail})
 		}
 		table(w, []string{"ID", "NAME", "STATE", "RUNTIME", "PID", "ENDPOINT", "DEVICE", "DETAIL"}, rows)
 	})
+}
+
+// Prints every data parallel rank with its endpoint, mesh port, pid and health
+func rankTable(w io.Writer, ranks []*v1.InstanceRank) {
+	var rows [][]string
+	for _, r := range ranks {
+		port := "-"
+		if r.GetPort() > 0 {
+			port = strconv.Itoa(int(r.GetPort()))
+		}
+		rows = append(rows, []string{strconv.Itoa(int(r.GetRank())), r.GetEndpoint(), port, strconv.Itoa(int(r.GetPid())), yes(r.GetHealthy())})
+	}
+	table(w, []string{"RANK", "ENDPOINT", "MESH PORT", "PID", "HEALTHY"}, rows)
+}
+
+// The instance endpoint, with the count of data parallel ranks when it runs several
+func endpointText(in *v1.Instance) string {
+	if n := len(in.GetRanks()); n > 0 {
+		return fmt.Sprintf("%s +%d ranks", in.GetEndpoint(), n-1)
+	}
+	return in.GetEndpoint()
 }
 
 // Device memory the host holds for the instance now, else what it measured at ready, else a dash
@@ -188,10 +222,17 @@ func renderInstance(w io.Writer, in *v1.Instance, profile *v1.HostProfile) {
 		{"task", in.GetTaskId()},
 		{"chat template", templateText(in.GetTemplate())},
 	}
+	if inv := in.GetInventory(); inv != nil {
+		rows = append(rows, []string{"serves", inventoryText(inv)})
+	}
 	if in.GetError() != "" {
 		rows = append(rows, []string{"error", in.GetError()})
 	}
 	table(w, nil, rows)
+	if len(in.GetRanks()) > 0 {
+		section(w, "ranks")
+		rankTable(w, in.GetRanks())
+	}
 	if plan := in.GetPlan(); plan != nil {
 		section(w, "plan")
 		fmt.Fprintln(w, planLine(plan))
@@ -217,6 +258,75 @@ func renderInstance(w io.Writer, in *v1.Instance, profile *v1.HostProfile) {
 	fmt.Fprintln(w, strings.Join(in.GetCommand(), " "))
 }
 
+// One line of what a launch serves: context, quantization, accelerator, modalities and throughput class
+func inventoryText(inv *v1.RuntimeInventory) string {
+	parts := []string{}
+	if inv.GetContextLength() > 0 {
+		parts = append(parts, fmt.Sprintf("context %d", inv.GetContextLength()))
+	}
+	if inv.GetQuantization() != "" {
+		parts = append(parts, inv.GetQuantization())
+	}
+	if inv.GetAccelerator() != "" {
+		parts = append(parts, "on "+inv.GetAccelerator())
+	}
+	if len(inv.GetModalities()) > 0 {
+		parts = append(parts, strings.Join(inv.GetModalities(), "+"))
+	}
+	if inv.GetThroughputClass() != "" {
+		parts = append(parts, inv.GetThroughputClass())
+	}
+	return strings.Join(parts, ", ")
+}
+
+func runAdaptersList(ctx context.Context, e *env, args []string) error {
+	positional, err := e.parse(e.flags("adapters list"), args, 1, 1, "adapters list <instance>")
+	if err != nil {
+		return err
+	}
+	resp, err := e.cl.instances.ListAdapters(ctx, connect.NewRequest(&v1.ListAdaptersRequest{Id: positional[0]}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		var rows [][]string
+		for _, a := range resp.Msg.GetAdapters() {
+			rows = append(rows, []string{a.GetName(), a.GetPath()})
+		}
+		table(w, []string{"NAME", "PATH"}, rows)
+	})
+}
+
+func runAdaptersLoad(ctx context.Context, e *env, args []string) error {
+	fs := e.flags("adapters load")
+	path := fs.String("path", "", "the adapter's file or directory on the daemon's host, empty for one loaded at launch")
+	positional, err := e.parse(fs, args, 2, 2, "adapters load <instance> <name> [--path P]")
+	if err != nil {
+		return err
+	}
+	resp, err := e.cl.instances.LoadAdapter(ctx, connect.NewRequest(&v1.LoadAdapterRequest{Id: positional[0], Name: positional[1], Path: *path}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		fmt.Fprintf(w, "%s loaded on %s\n", positional[1], resp.Msg.GetInstance().GetName())
+	})
+}
+
+func runAdaptersUnload(ctx context.Context, e *env, args []string) error {
+	positional, err := e.parse(e.flags("adapters unload"), args, 2, 2, "adapters unload <instance> <name>")
+	if err != nil {
+		return err
+	}
+	resp, err := e.cl.instances.UnloadAdapter(ctx, connect.NewRequest(&v1.UnloadAdapterRequest{Id: positional[0], Name: positional[1]}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		fmt.Fprintf(w, "%s unloaded from %s\n", positional[1], resp.Msg.GetInstance().GetName())
+	})
+}
+
 func runSwap(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("swap")
 	source := fs.String("source", "", "source id (default: first configured)")
@@ -224,9 +334,14 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	runtimeID := fs.String("runtime", "", "runtime id, the slot default or the first that accepts the format when empty")
 	installID := fs.String("install", "", "install id, newest for the runtime when empty")
 	drainFirst := fs.Bool("drain-first", false, "stop the old instance before starting the new one even when both fit")
+	var canaryPercent, canarySeconds, canaryStep, canaryRegression u32
+	fs.Var(&canaryPercent, "canary-percent", "`percent` of the slot's traffic, 1 to 99, the new model takes in the first canary step, no canary when 0")
+	fs.Var(&canarySeconds, "canary-seconds", "`seconds` each canary step lasts before the share grows, the swap completes, or it rolls back")
+	fs.Var(&canaryStep, "canary-step-percent", "`percent` added to the new model's share after each step it holds up through, one step when 0")
+	fs.Var(&canaryRegression, "canary-max-regression-percent", "`points` of error rate and objective attainment, and percent of mean TTFT and TPOT, the new model may trail by (default 10)")
 	var params multi
 	fs.Var(&params, "param", "runtime param as name=value, repeatable, over the slot defaults")
-	positional, err := e.parse(fs, args, 2, 2, "swap <slot> <repo> [flags]")
+	positional, err := e.parse(fs, args, 2, 2, "swap <slot> <repo> [flags] [--canary-percent N --canary-seconds N [--canary-step-percent N] [--canary-max-regression-percent N]]")
 	if err != nil {
 		return err
 	}
@@ -234,12 +349,24 @@ func runSwap(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
+	var bound *uint32
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "canary-max-regression-percent" {
+			bound = proto.Uint32(uint32(canaryRegression))
+		}
+	})
+	if canaryPercent == 0 && (canarySeconds > 0 || canaryStep > 0 || bound != nil) {
+		return errors.New("--canary-seconds, --canary-step-percent and --canary-max-regression-percent shape the canary --canary-percent opens, pass --canary-percent too")
+	}
 	sourceID, groupName, err := e.storedModel(ctx, *source, positional[1], *group)
 	if err != nil {
 		return err
 	}
 	run := &v1.RunRequest{SourceId: sourceID, Repo: positional[1], Group: groupName, RuntimeId: *runtimeID, InstallId: *installID, Params: paramMap}
-	resp, err := e.cl.slots.Swap(ctx, connect.NewRequest(&v1.SwapRequest{SlotId: positional[0], Run: run, DrainFirst: *drainFirst}))
+	resp, err := e.cl.slots.Swap(ctx, connect.NewRequest(&v1.SwapRequest{
+		SlotId: positional[0], Run: run, DrainFirst: *drainFirst,
+		CanaryPercent: uint32(canaryPercent), CanarySeconds: uint32(canarySeconds), CanaryStepPercent: uint32(canaryStep), CanaryMaxRegressionPercent: bound,
+	}))
 	if err != nil {
 		return err
 	}
@@ -327,7 +454,7 @@ func modelText(req *v1.RunRequest) string {
 	return req.GetRepo() + ":" + req.GetGroup()
 }
 
-// Defines slot flags and returns a function to read parsed values.
+// Defines slot flags and returns a function to read parsed values
 func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 	req := &v1.UpdateSlotRequest{}
 	var devices, params, aliases multi
@@ -405,7 +532,7 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	// Updates replace all fields. Merge flag changes into the current slot.
+	// Updates replace all fields. Merge flag changes into the current slot
 	cur := current.Msg.GetSlot()
 	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Aliases: cur.GetAliases(), Placement: cur.GetPlacement(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams(), Args: cur.GetArgs(), Policy: cur.GetPolicy(), Profile: cur.GetProfile()}
 	if req.Policy == nil {
@@ -414,26 +541,15 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	if req.Profile == nil {
 		req.Profile = &v1.Profile{}
 	}
+	set := given(fs)
+	mergePolicy(set, req.Policy, settings.Policy)
+	mergeProfile(set, req.Profile, settings.Profile)
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "max-in-flight":
-			req.Policy.MaxInFlight = settings.Policy.MaxInFlight
-		case "rps":
-			req.Policy.RequestsPerSecond = settings.Policy.RequestsPerSecond
-		case "burst":
-			req.Policy.Burst = settings.Policy.Burst
-		case "timeout":
-			req.Policy.RequestTimeoutMs = settings.Policy.RequestTimeoutMs
-		case "upstream-timeout":
-			req.Policy.UpstreamTimeoutMs = settings.Policy.UpstreamTimeoutMs
-		case "tool-server":
-			req.Profile.ToolServers = settings.Profile.ToolServers
-		case "mutating-tools":
-			req.Profile.MutatingTools = settings.Profile.MutatingTools
 		case "device":
 			req.DeviceIds = settings.DeviceIds
 		case "alias":
-			// Names kept from the current list keep their limits and profile.
+			// Names kept from the current list keep their limits and profile
 			req.Aliases = nil
 			for _, a := range settings.Aliases {
 				kept := a
@@ -467,16 +583,47 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) { slotsTable(w, []*v1.Slot{resp.Msg.GetSlot()}) })
 }
 
-// Defines limit flags and returns a function to populate the policy.
+// Defines an instance's own route limit, profile, and idle unload flags and returns a function setting them on a run
+func runRouteFlags(fs *flag.FlagSet) func(*v1.RunRequest) error {
+	policy, readPolicy := policyFlags(fs)
+	profile, readProfile := profileFlags(fs)
+	idle := fs.String("idle-unload", "", "unload the model after this long without requests, such as 30m, loading it again on the next, kept loaded when empty")
+	return func(req *v1.RunRequest) error {
+		if err := readPolicy(); err != nil {
+			return err
+		}
+		if err := readProfile(); err != nil {
+			return err
+		}
+		if err := gateway.CheckProfile(profile); err != nil {
+			return err
+		}
+		seconds, err := parseSeconds(*idle)
+		if err != nil {
+			return fmt.Errorf("idle-unload: %w", err)
+		}
+		req.Policy, req.RouteProfile, req.IdleUnloadSeconds = nil, nil, seconds
+		if proto.Size(policy) > 0 {
+			req.Policy = policy
+		}
+		if gateway.ProfileSet(profile) {
+			req.RouteProfile = profile
+		}
+		return nil
+	}
+}
+
+// Defines limit flags and returns a function to populate the policy
 func policyFlags(fs *flag.FlagSet) (*v1.Policy, func() error) {
 	p := &v1.Policy{}
-	inFlight := fs.Uint("max-in-flight", 0, "requests in flight at once on the slot's route, 0 inherits the gateway default")
+	var inFlight, burst u32
+	fs.Var(&inFlight, "max-in-flight", "`count` of requests in flight at once on the route, 0 inherits the gateway default")
 	rps := fs.Float64("rps", 0, "sustained requests per second, 0 inherits")
-	burst := fs.Uint("burst", 0, "requests a quiet route absorbs at once, the rate rounded up when 0")
+	fs.Var(&burst, "burst", "`count` of requests a quiet route absorbs at once, the rate rounded up when 0")
 	timeout := fs.String("timeout", "", "whole request timeout such as 60s or 5m, 0 inherits")
 	upstream := fs.String("upstream-timeout", "", "how long the runtime may take to start answering, such as 10m")
 	return p, func() error {
-		p.MaxInFlight, p.RequestsPerSecond, p.Burst = uint32(*inFlight), *rps, uint32(*burst)
+		p.MaxInFlight, p.RequestsPerSecond, p.Burst = uint32(inFlight), *rps, uint32(burst)
 		var err error
 		if p.RequestTimeoutMs, err = parseMillis(*timeout); err != nil {
 			return fmt.Errorf("timeout: %w", err)
@@ -488,7 +635,7 @@ func policyFlags(fs *flag.FlagSet) (*v1.Policy, func() error) {
 	}
 }
 
-// Defines profile flags and returns a function to populate the profile.
+// Defines profile flags and returns a function to populate the profile
 func profileFlags(fs *flag.FlagSet) (*v1.Profile, func() error) {
 	p := &v1.Profile{}
 	var servers multi
@@ -506,7 +653,7 @@ func profileFlags(fs *flag.FlagSet) (*v1.Profile, func() error) {
 	}
 }
 
-// Summarizes a profile, or returns a dash when it inherits instance settings.
+// Summarizes a profile, or returns a dash when it inherits instance settings
 func profileText(p *v1.Profile) string {
 	var parts []string
 	if len(p.GetToolServers()) > 0 {
@@ -534,18 +681,7 @@ func templateText(tp *v1.ChatTemplate) string {
 	return tp.GetSource() + ", renders no tools, so the gateway writes them into the prompt"
 }
 
-func parseMillis(s string) (uint32, error) {
-	if strings.TrimSpace(s) == "" || s == "0" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, err
-	}
-	return uint32(d / time.Millisecond), nil
-}
-
-// Summarizes a policy, or returns a dash when all settings are inherited.
+// Summarizes a policy, or returns a dash when all settings are inherited
 func policyText(p *v1.Policy) string {
 	var parts []string
 	if p.GetMaxInFlight() > 0 {
@@ -670,76 +806,6 @@ func runSlotsRemove(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) { fmt.Fprintf(w, "removed %s\n", resp.Msg.GetSlot().GetName()) })
 }
 
-func runRoutesList(ctx context.Context, e *env, args []string) error {
-	if _, err := e.parse(e.flags("routes list"), args, 0, 0, "routes list"); err != nil {
-		return err
-	}
-	resp, err := e.cl.gateway.ListRoutes(ctx, connect.NewRequest(&v1.ListRoutesRequest{}))
-	if err != nil {
-		return err
-	}
-	defaults := e.gatewayStatus(ctx).GetPolicy()
-	return e.print(resp.Msg, func(w io.Writer) { routesTable(w, resp.Msg.GetRoutes(), defaults) })
-}
-
-// Prints routes with their effective limits.
-func routesTable(w io.Writer, list []*v1.Route, defaults *v1.Policy) {
-	var rows [][]string
-	for _, r := range list {
-		rows = append(rows, []string{r.GetName(), loud(r.GetState()), r.GetModel(), r.GetInstanceId(), r.GetSlotId(), r.GetEndpoint(), strconv.FormatUint(r.GetRequests(), 10), strconv.Itoa(int(r.GetInFlight())), policyText(gateway.Effective(r.GetPolicy(), defaults)), profileText(r.GetProfile())})
-	}
-	table(w, []string{"NAME", "STATE", "MODEL", "INSTANCE", "SLOT", "ENDPOINT", "REQUESTS", "IN FLIGHT", "LIMITS", "PROFILE"}, rows)
-}
-
-func runRoutesAdd(ctx context.Context, e *env, args []string) error {
-	fs := e.flags("routes add")
-	policy, limits := policyFlags(fs)
-	profile, readProfile := profileFlags(fs)
-	positional, err := e.parse(fs, args, 2, 2, "routes add <name> <slot|instance> [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF] [--mutating-tools]")
-	if err != nil {
-		return err
-	}
-	if err := limits(); err != nil {
-		return err
-	}
-	if err := readProfile(); err != nil {
-		return err
-	}
-	req := &v1.SetRouteRequest{Name: positional[0], Policy: policy, Profile: profile}
-	slot, err := e.cl.slots.GetSlot(ctx, connect.NewRequest(&v1.GetSlotRequest{Id: positional[1]}))
-	switch {
-	case err == nil:
-		req.SlotId = slot.Msg.GetSlot().GetId()
-	case connect.CodeOf(err) != connect.CodeNotFound:
-		return err
-	default:
-		in, err := e.cl.instances.GetInstance(ctx, connect.NewRequest(&v1.GetInstanceRequest{Id: positional[1]}))
-		if err != nil {
-			return fmt.Errorf("no slot or instance %q: %w", positional[1], err)
-		}
-		req.InstanceId = in.Msg.GetInstance().GetId()
-	}
-	resp, err := e.cl.gateway.SetRoute(ctx, connect.NewRequest(req))
-	if err != nil {
-		return err
-	}
-	return e.print(resp.Msg, func(w io.Writer) {
-		routesTable(w, []*v1.Route{resp.Msg.GetRoute()}, e.gatewayStatus(ctx).GetPolicy())
-	})
-}
-
-func runRoutesRemove(ctx context.Context, e *env, args []string) error {
-	positional, err := e.parse(e.flags("routes remove"), args, 1, 1, "routes remove <name>")
-	if err != nil {
-		return err
-	}
-	resp, err := e.cl.gateway.DeleteRoute(ctx, connect.NewRequest(&v1.DeleteRouteRequest{Name: positional[0]}))
-	if err != nil {
-		return err
-	}
-	return e.print(resp.Msg, func(w io.Writer) { fmt.Fprintf(w, "removed %s\n", resp.Msg.GetRoute().GetName()) })
-}
-
 func runGateway(ctx context.Context, e *env, args []string) error {
 	if _, err := e.parse(e.flags("gateway"), args, 0, 0, "gateway"); err != nil {
 		return err
@@ -762,6 +828,9 @@ func runGateway(ctx context.Context, e *env, args []string) error {
 			fmt.Fprintf(w, "listening %s://%s/v1 and /api%s\n", scheme, l.GetAddr(), shared)
 		}
 		fmt.Fprintf(w, "auth %t tls %t requests %d default limits %s\n", st.GetAuth(), st.GetTls(), st.GetRequests(), policyText(st.GetPolicy()))
+		fmt.Fprintf(w, "metrics %s\n", orDash(st.GetMetricsAddr()))
+		section(w, "pools")
+		poolsTable(w, st.GetPools())
 		section(w, "routes")
 		routesTable(w, st.GetRoutes(), st.GetPolicy())
 	})
@@ -781,9 +850,9 @@ func runGatewayTraces(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, t := range resp.Msg.GetTraces() {
-			rows = append(rows, []string{t.GetId(), when(t.GetStartedAt(), time.RFC3339), t.GetRoute(), text.Enum(t.GetKind()), traceFormat(t), strconv.Itoa(int(t.GetStatus())), traceQueued(t), traceMillis(t.GetStartedAt(), t.GetFirstTokenAt()), traceMillis(t.GetStartedAt(), t.GetFinishedAt()), strconv.Itoa(int(t.GetPromptTokens())), strconv.Itoa(int(t.GetCompletionTokens())), t.GetStop(), t.GetError()})
+			rows = append(rows, []string{t.GetId(), when(t.GetStartedAt(), time.RFC3339), t.GetRoute(), orDash(t.GetPoolId()), orDash(t.GetEndpoint()), text.Enum(t.GetKind()), traceFormat(t), strconv.Itoa(int(t.GetStatus())), millisText(t.GetQueueWaitMs()), traceQueued(t), traceMillis(t.GetStartedAt(), t.GetFirstTokenAt()), traceMillis(t.GetStartedAt(), t.GetFinishedAt()), strconv.Itoa(int(t.GetPromptTokens())), strconv.Itoa(int(t.GetCompletionTokens())), t.GetStop(), t.GetError()})
 		}
-		table(w, []string{"ID", "STARTED", "ROUTE", "KIND", "FORMAT", "STATUS", "QUEUED", "FIRST TOKEN", "TOTAL", "IN", "OUT", "STOP", "ERROR"}, rows)
+		table(w, []string{"ID", "STARTED", "ROUTE", "POOL", "ENDPOINT", "KIND", "FORMAT", "STATUS", "WAIT", "QUEUED", "FIRST TOKEN", "TOTAL", "IN", "OUT", "STOP", "ERROR"}, rows)
 	})
 }
 
@@ -795,7 +864,7 @@ func traceQueued(t *v1.Trace) string {
 	return "behind " + strconv.Itoa(int(t.GetQueuedBehind()))
 }
 
-// Formats trace protocols, combining identical client and runtime protocols.
+// Formats trace protocols, combining identical client and runtime protocols
 func traceFormat(t *v1.Trace) string {
 	client := text.Enum(t.GetClientApi())
 	if !t.GetTranslated() {
@@ -804,7 +873,7 @@ func traceFormat(t *v1.Trace) string {
 	return client + ">" + text.Enum(t.GetUpstreamApi())
 }
 
-// Elapsed milliseconds, or a dash if either timestamp is missing.
+// Elapsed milliseconds, or a dash if either timestamp is missing
 func traceMillis(from, to *timestamppb.Timestamp) string {
 	if from == nil || to == nil {
 		return "-"
@@ -828,6 +897,17 @@ func runGatewayTrace(ctx context.Context, e *env, args []string) error {
 			{"route", t.GetRoute()},
 			{"instance", t.GetInstanceId()},
 			{"slot", t.GetSlotId()},
+			{"pool", orDash(t.GetPoolId())},
+			{"endpoint", orDash(t.GetEndpoint())},
+			{"profile", traceProfile(t)},
+			{"fallbacks", orDash(traceFallbacks(t))},
+			{"failed open", yes(t.GetFailedOpen())},
+			{"queue wait", strconv.Itoa(int(t.GetQueueWaitMs())) + "ms"},
+			{"priority", strconv.Itoa(int(t.GetPriority()))},
+			{"objective", traceObjective(t)},
+			{"fairness id", orDash(t.GetFairnessId())},
+			{"request id", orDash(t.GetRequestId())},
+			{"entry node", orDash(t.GetEntryNode())},
 			{"kind", text.Enum(t.GetKind())},
 			{"format", traceFormat(t)},
 			{"path", t.GetPath()},
@@ -914,10 +994,39 @@ func runEvents(ctx context.Context, e *env, args []string) error {
 	return nil
 }
 
+// The scheduler profile whose pick served the request and the score it gave the endpoint
+func traceProfile(t *v1.Trace) string {
+	if t.GetProfile() == "" {
+		return "-"
+	}
+	return fmt.Sprintf("%s, score %g", t.GetProfile(), t.GetScore())
+}
+
+// The objective the request carried and whether its targets were met
+func traceObjective(t *v1.Trace) string {
+	if t.GetObjective() == "" {
+		return "-"
+	}
+	return fmt.Sprintf("%s, attained %s", t.GetObjective(), yes(t.GetObjectiveAttained()))
+}
+
 func traceTokens(t *v1.Trace) string {
 	out := fmt.Sprintf("%d in, %d out", t.GetPromptTokens(), t.GetCompletionTokens())
 	if t.GetCachedTokens() > 0 {
 		out += fmt.Sprintf(", %d cached", t.GetCachedTokens())
 	}
 	return out
+}
+
+// Each endpoint a request left with why and whether its request had been written, comma separated
+func traceFallbacks(t *v1.Trace) string {
+	var parts []string
+	for _, f := range t.GetFallbacks() {
+		written := "before the request was written"
+		if f.GetRequestWritten() {
+			written = "after the request was written"
+		}
+		parts = append(parts, fmt.Sprintf("%s (%s, %s, %d bytes to client)", f.GetAddress(), f.GetReason(), written, f.GetBytesToClient()))
+	}
+	return strings.Join(parts, ", ")
 }

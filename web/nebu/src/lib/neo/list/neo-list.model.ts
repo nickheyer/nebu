@@ -1,0 +1,750 @@
+import type { Snippet } from 'svelte';
+
+import type { NeoButtonProps } from '#lib/neo/buttons/neo-button.model.js';
+import type { NeoDividerProps } from '#lib/neo/divider/neo-divider.model.js';
+import type { NeoListBaseItemProps } from '#lib/neo/list/neo-list-base-item.model.js';
+import type { NeoListBaseLoaderProps } from '#lib/neo/list/neo-list-base-loader.model.js';
+import type { NeoListBaseSectionProps } from '#lib/neo/list/neo-list-base-section.model.js';
+import type { NeoVirtualItemHeight, NeoVirtualKey, NeoVirtualListProps } from '#lib/neo/list/neo-virtual-list.model.js';
+import type { NeoImageProps } from '#lib/neo/media/neo-image.model.js';
+import type { NeoMediaProps, NeoMediaType, NeoMediaTypes } from '#lib/neo/media/neo-media.model.js';
+import type { NeoPillProps } from '#lib/neo/pill/neo-pill.model.js';
+import type { HTMAnimationProps, HTMLTransitionProps } from '#lib/neo/utils/action.utils.js';
+import type { BorderRadiusInput } from '#lib/neo/utils/border.utils.js';
+import type { Color } from '#lib/neo/utils/colors.utils.js';
+import type { HTMLNeoBaseElement, HTMLRefProps, HTMLTagProps, SvelteEvent } from '#lib/neo/utils/html-element.utils.js';
+import type { SizeInput } from '#lib/neo/utils/style.utils.js';
+
+export interface NeoListDividerOption {
+  top?: boolean;
+  bottom?: boolean;
+}
+export function showDivider(divider?: boolean | NeoListDividerOption, position: keyof NeoListDividerOption = 'top') {
+  if (typeof divider !== 'boolean') return divider?.[position];
+  return divider;
+}
+
+export interface NeoListItemCommon<Tag extends keyof HTMLElementTagNameMap = 'li'> {
+  /**
+   * Unique identifier for the list item.
+   * Used for keying the list item.
+   * If not provided, the index will be used.
+   * Note: Required for entering/leaving transitions.
+   */
+  id?: string | number | symbol;
+  /**
+   * The HTML tag to use for the item.
+   * @default 'li'
+   */
+  tag?: Tag;
+  /**
+   * Optional label to display in the list item.
+   * If not provided, the value will be used.
+   *
+   * @note Recommended in section for accessibility.
+   */
+  label?: string;
+  /**
+   * If true, the list item will be disabled.
+   */
+  disabled?: boolean;
+  /**
+   * If true, the item will not trigger selection, but will not be styled as disabled.
+   */
+  readonly?: boolean;
+  /**
+   * Text color to use for the item.
+   */
+  color?: Color | CSSStyleDeclaration['color'];
+  /**
+   * If true, the list section will display a divider above the title.
+   */
+  divider?: boolean | NeoListDividerOption;
+  /**
+   * If true, the item will not be displayed.
+   */
+  hidden?: boolean;
+  /**
+   * Reverse the direction of the item.
+   *
+   * @default false
+   */
+  reverse?: boolean;
+  /**
+   * Optional props to pass to the divider.
+   */
+  dividerProps?: NeoDividerProps;
+  /**
+   Optional props to pass to the container.
+   */
+  containerProps?: HTMLNeoBaseElement<HTMLElementTagNameMap[Tag]>;
+}
+
+export interface NeoListItemContext<Value = unknown, Tag extends keyof HTMLElementTagNameMap = 'li', Context = NeoListContext> {
+  item: NeoListItem<Value, Tag>;
+  index: number;
+  checked?: boolean;
+  context: Context;
+}
+
+export type NeoListItemRender<Value = unknown, Tag extends keyof HTMLElementTagNameMap = 'li', Context = NeoListContext> = Snippet<
+  [NeoListItemContext<Value, Tag, Context>]
+>;
+
+/**
+ * TODO: Add support for video and audio
+ */
+export type NeoBaseListItemMedia<Type extends NeoMediaTypes = typeof NeoMediaType.Image> = NeoMediaProps
+  & (Type extends typeof NeoMediaType.Image
+    ? {
+        type?: typeof NeoMediaType.Image;
+        image?: NeoImageProps;
+      } : Record<string, never>);
+
+export type NeoBaseListItemTag = string | NeoButtonProps | NeoPillProps;
+
+export function isButtonTag(tag: NeoBaseListItemTag): tag is NeoButtonProps {
+  if (typeof tag === 'string') return false;
+  if ('tag' in tag && (tag.tag === 'button' || tag.tag === 'a')) return true;
+  return 'href' in tag || 'onclick' in tag;
+}
+
+export type NeoBaseListItem<Value = unknown, Tag extends keyof HTMLElementTagNameMap = 'li', Context = any> = {
+  /**
+   * An arbitrary value to associate with the list item.
+   */
+  value: Value;
+  /**
+   * Optional description to display in the list item.
+   */
+  description?: string;
+  /**
+   * Optional tags to display between label and description.
+   */
+  tags?: NeoBaseListItemTag[];
+  /**
+   * Optional media to display in the list item.
+   */
+  media?: NeoBaseListItemMedia;
+  /**
+   * Optional snippet to display in place of the list item.
+   */
+  render?: NeoListItemRender<Value, Tag, Context>;
+  /**
+   * Snippet to display before the list item.
+   * e.g. an icon or avatar.
+   */
+  before?: NeoListItemRender<Value, Tag, Context>;
+  /**
+   * Snippet to display after the list item.
+   * e.g. a badge or action button.
+   */
+  after?: NeoListItemRender<Value, Tag>;
+  /**
+   * The url to navigate to when the anchor is clicked.
+   */
+  href?: NeoButtonProps['href'];
+  /**
+   * Callback function to be called when the button is clicked.
+   */
+  onclick?: NeoButtonProps['onclick'];
+  /**
+   * Optional props to pass to the button.
+   */
+  buttonProps?: NeoButtonProps;
+} & NeoListItemCommon<Tag>;
+
+export type NeoListItem<Value = unknown, Tag extends keyof HTMLElementTagNameMap = 'li', Context = NeoListContext> = NeoBaseListItem<
+  Value,
+  Tag,
+  Context
+>;
+
+export interface NeoListRenderContext<Value = unknown, Item = NeoListItemOrSection<Value>> {
+  items: Item[];
+  /**
+   * The index of the section in the list.
+   */
+  index?: number;
+  section?: NeoListSection<Value>;
+  context?: NeoListContext;
+}
+export type NeoListRender<Value = unknown> = Snippet<[NeoListRenderContext<Value>]>;
+
+export type NeoListSectionRender<Value = unknown> = Snippet<[NeoListRender<Value>, NeoListRenderContext<Value>]>;
+/**
+ * Section semantics in virtual mode (`NeoList` with `virtual: true`):
+ * - Sectioned input is flattened with `disabled`/`readonly` cascaded onto
+ *   children; `sectionIndex`/`section` are stamped on each child so
+ *   selection events still match the non-virtual sectioned payload shape.
+ * - Section-only props are dropped: `sticky`, `render`, `empty`,
+ *   `sectionProps`. A one-time warning calls this out at runtime.
+ * - The section's own `divider` is propagated as `{ top: true }` onto the
+ *   first flattened child of every section after the first; child's own
+ *   `divider` wins. The first section is skipped to mirror the
+ *   non-virtual path.
+ */
+export type NeoListSection<Value = unknown, Tag extends keyof HTMLElementTagNameMap = 'ul'> = {
+  /**
+   * Array of child list items to display.
+   */
+  items: NeoListItem<Value>[];
+  /**
+   * Whether the section is sticky (stays on top while scrolling the content).
+   *
+   * @note Ignored under `virtual` (the section header is dropped entirely).
+   */
+  sticky?: boolean;
+  /**
+   * Optional snippet to display in place of the list section.
+   * @param list - The list snippet that render items.
+   * @param context - The list section context.
+   *
+   * @note Ignored under `virtual` (the section header is dropped entirely).
+   */
+  render?: NeoListSectionRender<Value>;
+  /**
+   * Optional snippet to display when the section is empty.
+   *
+   * @note Ignored under `virtual` (the section header is dropped entirely).
+   */
+  empty?: Snippet<[NeoListContext]>;
+  /**
+   * Optional props to pass to the section container.
+   *
+   * @note Ignored under `virtual` (the section header is dropped entirely).
+   */
+  sectionProps?: HTMLNeoBaseElement<HTMLElementTagNameMap[Tag]>;
+} & NeoListItemCommon<Tag>;
+
+export const isSection = <Value = unknown>(item: NeoListItem<Value> | NeoListSection<Value>): item is NeoListSection<Value> => 'items' in item;
+
+export const hasSections = <Value = unknown>(items: NeoListItemOrSection<Value>[] = []): boolean => items.some(isSection);
+
+export const isFlatItems = <Value = unknown>(items: NeoListItemOrSection<Value>[]): items is NeoListItem<Value>[] => !items.some(isSection);
+
+/**
+ * A flattened virtual item. Carries the original `NeoListItem` payload plus
+ * the source `section` / `sectionIndex` it came from (when flattened from a
+ * sectioned input) so selection events in virtual mode can match the shape
+ * of non-virtual sectioned mode.
+ *
+ * The metadata fields are optional: a flat input passes through unchanged.
+ */
+export interface NeoListVirtualItem<Value = unknown, Tag extends keyof HTMLElementTagNameMap = 'li'> extends NeoListItem<Value, Tag> {
+  /**
+   * The index of the source section in the original `items` array.
+   * Only set when this item was flattened from a section.
+   */
+  sectionIndex?: number;
+  /**
+   * The source section this item was flattened from.
+   * Only set when this item was flattened from a section.
+   */
+  section?: NeoListSection<Value>;
+}
+
+/**
+ * Flatten sectioned items for virtual mode. `disabled`/`readonly` cascade from
+ * section to children (truthy-only, matching the `||` semantics used downstream).
+ * Section-only props (`sticky`, `render`, `empty`, `sectionProps`) are dropped —
+ * the warning emitted when virtual + sections collide calls them out explicitly.
+ * `sectionIndex` and `section` are stamped on each flattened child so virtual
+ * selection events still carry section provenance.
+ *
+ * The section's `divider` prop is propagated onto the first flattened child
+ * of every section after the first, normalized to `{ top: true }` so only a
+ * top separator is drawn (a raw `divider: true` would also trigger the
+ * bottom check in `renderFlatDivider` and put a divider below the first
+ * item of the section). The first section is skipped to match the
+ * non-virtual path, which never renders a divider above its own first
+ * element. Children that already declare their own `divider` win.
+ */
+export function flattenSectionsWithCascade<Value = unknown>(items: NeoListItemOrSection<Value>[] = []): NeoListVirtualItem<Value>[] {
+  return items.flatMap<NeoListVirtualItem<Value>>((entry, sectionIndex) => {
+    if (!isSection(entry)) return [entry];
+    const inheritTop = sectionIndex > 0 && showDivider(entry.divider, 'top');
+    return entry.items.map((child, i) => ({
+      ...child,
+      disabled: child.disabled || entry.disabled,
+      readonly: child.readonly || entry.readonly,
+      divider: child.divider ?? (i === 0 && inheritTop ? { top: true } : undefined),
+      sectionIndex,
+      section: entry,
+    }));
+  });
+}
+
+export interface NeoListSelectedItem<Value = unknown, Tag extends keyof HTMLElementTagNameMap = 'li'> {
+  index: number;
+  item: NeoListItem<Value, Tag>;
+  sectionIndex?: number;
+  section?: NeoListSection<Value>;
+}
+
+export interface NeoListSelectEvent<Selected = NeoListSelectedItem | NeoListSelectedItem[]> {
+  type: 'select' | 'clear' | 're-select';
+
+  previous?: Selected;
+  current?: Selected;
+
+  removed?: Selected;
+  added?: Selected;
+}
+
+export interface NeoListSelectMethods<Value = unknown> {
+  /**
+   * Select an item in the list.
+   *
+   * @returns The selection event if the item was selected, undefined otherwise.
+   */
+  selectItem: (...selection: NeoListSelectedItem<Value>[]) => NeoListSelectEvent | undefined;
+  /**
+   * Clear the selected item(s).
+   * If no index is provided, all items will be cleared.
+   *
+   * @returns The selection event if the list or item was cleared, undefined otherwise.
+   */
+  clearItem: (...selection: NeoListSelectedItem<Value>[]) => NeoListSelectEvent | undefined;
+  /**
+   * Clear all items in the list then re-select the previously selected item(s) only if they still exist in the list.
+   *
+   * @note Requires the `id` property to be set and unique for each item.
+   * @returns The selection event if the list or item was cleared, undefined otherwise.
+   */
+  reSelect: () => NeoListSelectEvent | undefined;
+}
+
+export interface NeoListMethods {
+  /**
+   * Scroll the list to the top.
+   */
+  scrollToTop: (options?: ScrollToOptions) => HTMLElement | false;
+  /**
+   * Scroll the list to the bottom.
+   */
+  scrollToBottom: (options?: ScrollToOptions) => HTMLElement | false;
+  /**
+   * Scroll the list so that the item at the given index is visible.
+   *
+   * @note Only available in virtual mode; otherwise returns `false`.
+   */
+  scrollToIndex: (index: number, options?: ScrollToOptions & { align?: 'start' | 'center' | 'end' }) => HTMLElement | false;
+  /**
+   * Force a re-measure of all currently rendered rows and recompute the offset map.
+   *
+   * @note Only meaningful in virtual mode with dynamic measurement; otherwise a no-op.
+   */
+  refresh: () => void;
+}
+
+export type NeoListItemOrSection<Value = unknown> = NeoListItem<Value> | NeoListSection<Value>;
+
+/**
+ * Context passed to the high-level `row` snippet.
+ *
+ * It includes the regular item context fields, parent section metadata, and
+ * a pre-bound renderer for configured content.
+ */
+export interface NeoListRowContext<Value = unknown, Context = NeoListContext> {
+  item: NeoListItemOrSection<Value>;
+  index: number;
+  checked?: boolean;
+  context: Context;
+  section?: NeoListSection<Value>;
+  sectionIndex?: number;
+  content: Snippet;
+}
+
+export type NeoListRowRender<Value = unknown, Context = NeoListContext> = Snippet<[NeoListRowContext<Value, Context>]>;
+
+export interface NeoListSelectState<Selected = NeoListSelectedItem | NeoListSelectedItem[]> {
+  /**
+   * The currently selected item(s).
+   */
+  selected?: Selected;
+  /**
+   * Whether to allow selecting items in the list.
+   */
+  select?: boolean;
+  /**
+   * Whether to allow multiple items in the selection.
+   */
+  multiple?: boolean;
+  /**
+   * Whether to allow deselecting items if it will result in an empty selection.
+   */
+  nullable?: boolean;
+}
+
+export interface NeoListBaseProps {
+  // Styles
+
+  /**
+   * Whether to dim the opacity of inactive tabs on hover.
+   */
+  dim?: boolean;
+  /**
+   * Whether to display a shadow when scrolling content.
+   *
+   * @default true
+   */
+  shadow?: boolean;
+  /**
+   * Overrides the default scrollbars.
+   */
+  scrollbar?: boolean;
+  /**
+   * Whether to round the corners of the list items.
+   */
+  rounded?: BorderRadiusInput;
+}
+
+export interface NeoListState<Item = NeoListItemOrSection> {
+  // States
+  /**
+   * List items to display.
+   */
+  items?: Item[];
+  /**
+   * Optional filter to highlight text.
+   */
+  highlight?: string;
+  /**
+   * A filter function to apply to each item in the list.
+   * @param item
+   */
+  filter?: (item: Item) => boolean;
+  /**
+   * A sort function to apply to the list items.
+   * @param a
+   * @param b
+   */
+  sort?: (a: Item, b: Item) => number;
+
+  /**
+   * Inverts the flow of the list (flex-direction: column-reverse).
+   *
+   * @note Ignored under `virtual` (column-reverse layout, edge events,
+   * scroll direction, and keyboard direction all fall back to non-flipped).
+   * A one-time warning is emitted when both are set.
+   *
+   * @default false
+   */
+  flip?: boolean;
+  /**
+   * If the list is currently loading additional items.
+   */
+  loading?: boolean;
+  /**
+   * If the list is currently being scrolled.
+   *
+   * @note Bindable. Driven in both modes — virtual mode delegates to
+   * `NeoVirtualList`; non-virtual mode runs the same idle-window logic
+   * directly (150ms, 300ms on touch).
+   */
+  scrolling?: boolean;
+  /**
+   * Disable all items in the list.
+   */
+  disabled?: boolean;
+  /**
+   * Disable selection for all items in the list.
+   */
+  readonly?: boolean;
+  /**
+   * Reverse the direction of the item.
+   *
+   * @default false
+   */
+  reverse?: boolean;
+  /**
+   * Whether to display a divider above items in the list.
+   * If an item divider option is set, it will take precedence over the list divider.
+   *
+   * @default false
+   */
+  divider?: boolean;
+  /**
+   * Whether the virtual rendering path is enabled. Reflects the `virtual`
+   * prop on the parent `NeoList`. Read this (not raw props) from custom
+   * items / sections that need to branch on virtual vs non-virtual.
+   *
+   * @default false
+   */
+  virtual?: boolean;
+}
+
+export type NeoListContext<Selected = NeoListSelectedItem | NeoListSelectedItem[], Value = unknown> = NeoListState & NeoListSelectState<Selected> & NeoListMethods & NeoListSelectMethods<Value>;
+
+export type NeoListProps<Value = unknown, Tag extends keyof HTMLElementTagNameMap = 'ul', Selected = NeoListSelectedItem | NeoListSelectedItem[], Context = NeoListContext<Selected>> = {
+  // Snippets
+  /**
+   * Optional snippet to display in place of each list item.
+   */
+  item?: NeoListItemRender<Value, 'li', Context>;
+  /**
+   * Optional high-level row renderer. It composes with `item` and `section`:
+   * call `content()` to render whichever content NeoList would normally use.
+   * The keyed outer row remains owned by NeoList.
+   *
+   * @note Non-virtual only.
+   */
+  row?: NeoListRowRender<Value, Context>;
+  /**
+   * Optional snippet to display in place of each list section.
+   */
+  section?: NeoListSectionRender<Value>;
+  /**
+   * Optional snippet to display when the list is empty.
+   */
+  empty?: Snippet<[Context]>;
+  /**
+   * Optional snippet to display in place of the loading indicator.
+   */
+  loader?: Snippet<[Context]>;
+  /**
+   * Optional snippet to display after the list.
+   */
+  after?: Snippet<[Context]>;
+  /**
+   * Optional snippet to display before the list.
+   */
+  before?: Snippet<[Context]>;
+  /**
+   * Optional snippet to display inside the list.
+   */
+  children?: Snippet<[Context]>;
+
+  // Animation
+  /**
+   * Transition function to apply when removing items from the list.
+   * Note: unique `id` is required for entering/leaving transitions.
+   *
+   * @note Non-virtual only — virtual rows do not run FLIP animations
+   * (cursor mounts/unmounts rows on scroll, FLIP would reflow per scroll).
+   */
+  animate?: HTMAnimationProps['animate'];
+  /**
+   * Transition function to apply when adding items to the list.
+   * Note: unique `id` is required for entering/leaving transitions.
+   *
+   * @note Virtual mode gates intros per-key against two snapshots of
+   * `flatItems` keys: the directive only fires when the row's key was
+   * absent before the mutation. This suppresses first-paint intros and
+   * cursor remount intros (rows scrolling back into the window) while
+   * still firing on genuine additions.
+   */
+  in?: HTMLTransitionProps['in'];
+  /**
+   * Transition function to apply when removing items from the list.
+   * Note: unique `id` is required for entering/leaving transitions.
+   *
+   * @note Virtual mode gates outros per-key against two snapshots of
+   * `flatItems` keys: the directive only fires when the row's key is
+   * absent after the mutation. This suppresses cursor evict outros (rows
+   * scrolling out of the window) while still firing on genuine removals.
+   */
+  out?: HTMLTransitionProps['out'];
+
+  // Styles
+  /**
+   * Whether to scroll to the bottom when loading additional items.
+   *
+   * @default false
+   */
+  scrollToLoader?: boolean;
+  /**
+   * Scroll tolerance when determining if the list is scrolled to the top or bottom (in pixels).
+   *
+   * @default 1
+   */
+  scrollTolerance?: number;
+  /**
+   * Optional flex strategy for the container
+   */
+  flex?: CSSStyleDeclaration['flex'];
+  /**
+   * Optional list width constraints.
+   */
+  width?: SizeInput<'width'>;
+  /**
+   * Optional list height constraints.
+   */
+  height?: SizeInput<'height'>;
+
+  // States
+  /**
+   * The HTML tag to use for the list.
+   * @default 'ul'
+   */
+  tag?: Tag | keyof HTMLElementTagNameMap;
+
+  // Events
+  /**
+   * Event listener that fires when an item is selected/deselected.
+   * @param event
+   */
+  onSelect?: (event: NeoListSelectEvent<Selected>) => void;
+  /**
+   * Event listener that fires when the list is scrolled to the top.
+   * @param event
+   */
+  onScrollTop?: (event?: SvelteEvent) => void;
+  /**
+   * Event listener that fires when the list is scrolled to the bottom.
+   * @param event
+   */
+  onScrollBottom?: (event?: SvelteEvent) => void;
+
+  // Virtualization
+  /**
+   * Opt into virtual scrolling.
+   *
+   * Virtual mode is authoritative when both modes' inputs collide:
+   * - `flip` is ignored and a one-time warning is emitted.
+   * - Sectioned input is flattened with `disabled`/`readonly` cascade;
+   *   section-only props (`sticky`, `render`, `empty`, `sectionProps`)
+   *   are dropped with a one-time warning. See `NeoListSection`.
+   * - Numeric `itemHeight` is ignored when `divider` is also set
+   *   (dividers vary row height); falls back to dynamic measurement
+   *   with a one-time warning.
+   *
+   * @default false
+   */
+  virtual?: boolean;
+  /**
+   * Item height in pixels.
+   *
+   * Provide a number for fixed-size rows (fastest path), a function for caller-known
+   * per-item heights, or omit to measure dynamically.
+   *
+   * @note Only used when `virtual` is true. Numeric values are ignored
+   * (with a warning) when `divider` is also set, since dividers vary row
+   * height — measurement falls back to dynamic.
+   */
+  itemHeight?: NeoVirtualItemHeight<NeoListItemOrSection<Value>>;
+  /**
+   * Initial estimate (px) used for unmeasured rows in dynamic measurement mode.
+   * Refines automatically as rows are measured.
+   *
+   * @note Only used when `virtual` is true.
+   *
+   * @default 40
+   */
+  estimatedItemHeight?: number;
+  /**
+   * Number of rows to render outside the visible window (above and below).
+   * Larger values trade memory for fewer mount/unmount events on fast
+   * scroll; smaller values keep the DOM tighter at the cost of more
+   * cursor churn.
+   *
+   * @note Only used when `virtual` is true.
+   *
+   * @default 10
+   */
+  buffer?: number;
+  /**
+   * Stable key function. Heights are cached by this key so reorders preserve
+   * measurements; the per-key transition gate also reads from this.
+   *
+   * @note Only used when `virtual` is true.
+   *
+   * @default (item, i) => item.id ?? i
+   */
+  key?: NeoVirtualKey<NeoListItemOrSection<Value>>;
+  /**
+   * Optional props to forward to the inner `NeoVirtualList` (advanced).
+   *
+   * @note Only used when `virtual` is true.
+   */
+  virtualProps?: Partial<Omit<NeoVirtualListProps<NeoListItemOrSection<Value>>, 'items' | 'children' | 'before' | 'after' | 'itemHeight' | 'buffer' | 'estimatedItemHeight' | 'key'>>;
+
+  // Other Props
+  /**
+   * The props to pass to the list container.
+   */
+  containerProps?: HTMLNeoBaseElement & HTMLTagProps;
+  /**
+   * The props to pass to the loader.
+   */
+  loaderProps?: Partial<NeoListBaseLoaderProps>;
+  /**
+   * Optional props to pass to the button.
+   */
+  buttonProps?: NeoButtonProps;
+  /**
+   * Optional props to pass to the divider.
+   */
+  dividerProps?: NeoDividerProps;
+  /**
+   * Optional props to pass to the list item.
+   */
+  itemProps?: Partial<Omit<NeoListBaseItemProps<Value, Context>, 'buttonProps'>>;
+  /**
+   * Optional props to pass to the list section.
+   */
+  sectionProps?: NeoListBaseSectionProps<Value, Tag>;
+} & NeoListBaseProps & HTMLRefProps
+& HTMLNeoBaseElement<HTMLElementTagNameMap[Tag]>
+& NeoListState & NeoListSelectState<Selected>;
+
+export function findByIdInList<Value = unknown>(selection: NeoListSelectedItem<Value>, array: NeoListItemOrSection<Value>[]): NeoListSelectedItem<Value> | undefined {
+  const result: NeoListSelectedItem<Value> = { index: -1 } as NeoListSelectedItem<Value>;
+  const search = array?.some((item, index) => {
+    if (isSection(item)) {
+      // if section differs, skip
+      if (selection?.section?.id !== item.id) return false;
+      const sectionIndex = item?.items?.findIndex(sub => Object.is(sub, selection?.item) || sub.id === selection?.item?.id);
+      if (sectionIndex < 0) return false;
+      const sub = item.items[sectionIndex];
+      if (!sub) return false;
+      result.index = sectionIndex;
+      result.item = sub;
+      result.section = item;
+      result.sectionIndex = index;
+      return true;
+    }
+    if (item.id !== selection?.item?.id) return false;
+    if (item?.id === undefined && !Object.is(item, selection?.item)) return false;
+    result.index = index;
+    result.item = item;
+    return true;
+  });
+  return search ? result : undefined;
+}
+
+export function findByValueInList<Value = unknown>(value: Value, array: NeoListItemOrSection<Value>[]): NeoListSelectedItem<Value> | undefined {
+  const result: NeoListSelectedItem<Value> = { index: -1 } as NeoListSelectedItem<Value>;
+  const search = array.some((item, index) => {
+    if (isSection(item)) {
+      const sectionIndex = item.items?.findIndex(si => si.value === value);
+      if (sectionIndex < 0) return false;
+      const sub = item.items[sectionIndex];
+      if (!sub) return false;
+      result.index = sectionIndex;
+      result.item = sub;
+      result.section = item;
+      result.sectionIndex = index;
+      return true;
+    }
+    if (item.value !== value) return false;
+    result.index = index;
+    result.item = item;
+    return true;
+  });
+  return search ? result : undefined;
+}
+
+export function findByValuesInList<Value = unknown>(
+  values: Value | Value[],
+  array: NeoListItemOrSection<Value>[],
+): undefined | NeoListSelectedItem<Value> | NeoListSelectedItem<Value>[] {
+  if (!Array.isArray(values)) return findByValueInList(values, array);
+  const result: NeoListSelectedItem<Value>[] = [];
+  values.forEach((value) => {
+    const item = findByValueInList(value, array);
+    if (item) result.push(item);
+  });
+  return result;
+}

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("{% set s = 'x' * 2 ** 20 %}{{ [s] * 2048 }}")

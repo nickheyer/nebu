@@ -1,0 +1,160 @@
+@import '@fontsource/ibm-plex-sans/300.css';
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-mono/300.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+
+/*
+ * Design tokens. Components read these, never raw numbers.
+ *
+ * Type scale (px)   title 20 / heading 15 / body 15 / secondary 13 / caption 12
+ * Weights           300 display numerals, 400 everything, 500 the one thing on a line that leads
+ * Space scale (px)  1=4  2=8  3=12  4=16  5=24  6=32  7=48
+ * Row heights (px)  row 40, dense row 32, control 36, input box 47
+ */
+:root,
+html[neo-theme-root],
+[neo-theme-root] {
+	--neo-font-family: 'IBM Plex Sans', system-ui, sans-serif;
+	--neo-white-soft: #eceef3;
+	--neo-grey: #15171c;
+	--neo-grey-dark: #1f2229;
+	--neo-blue: #0b6f78;
+	--neo-blue-dark: #7fd9df;
+	--neo-purple: #4f6378;
+	--neo-purple-light: #9fb0c4;
+	--neo-green: #27703a;
+	--neo-green-light: #8ed48a;
+	--neo-orange: #8f5412;
+	--neo-orange-light: #e6b56f;
+	--neo-red: #b3261e;
+	--neo-red-light: #f28b7d;
+	--neo-border-radius: 8px;
+	--neo-border-radius-md: 12px;
+
+	/* Type */
+	--nebu-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+	--nebu-text-title: 20px;
+	--nebu-text-heading: 15px;
+	--nebu-text-body: 15px;
+	--nebu-text-secondary: 13px;
+	--nebu-text-caption: 12px;
+	--nebu-leading: 1.45;
+	--nebu-leading-tight: 1.25;
+
+	/* Space */
+	--nebu-space-1: 4px;
+	--nebu-space-2: 8px;
+	--nebu-space-3: 12px;
+	--nebu-space-4: 16px;
+	--nebu-space-5: 24px;
+	--nebu-space-6: 32px;
+	--nebu-space-7: 48px;
+
+	/* Sizes */
+	--nebu-row: 40px;
+	--nebu-row-dense: 32px;
+	--nebu-control: 36px;
+	--nebu-input-height: 47px;
+	--nebu-measure: 64ch;
+	--nebu-frame-max: 1760px;
+	--nebu-panel-max: 760px;
+	--nebu-rail: transparent;
+
+	/* Motion */
+	--nebu-ease: cubic-bezier(0.2, 0, 0, 1);
+	--nebu-settle: cubic-bezier(0.22, 0.9, 0.24, 1);
+	--nebu-fast: 120ms;
+	--nebu-normal: 180ms;
+	--nebu-slow: 420ms;
+
+	/* Surfaces and lines, light */
+	--nebu-screen-background: #0f1114;
+	--nebu-screen-border: #23272e;
+	--nebu-screen-text: #9fd39a;
+	--nebu-screen-text-muted: #6f8f6c;
+	--nebu-text-muted: #5b606c;
+	--nebu-text-faint: #8a8f9a;
+	--nebu-border: #d7dae0;
+	--nebu-border-strong: #b9bec8;
+	--nebu-surface-sunken: #f3f4f7;
+	--nebu-steel: #4f6378;
+	--nebu-disabled-fill: #e0e2e7;
+	--nebu-disabled-text: #6a6f7a;
+	--nebu-edge: rgb(255 255 255 / 60%);
+	--nebu-machined: inset 0 1px 0 var(--nebu-edge);
+	--nebu-bezel: inset 1px 1px 3px rgb(0 0 0 / 50%), inset 0 -1px 0 rgb(255 255 255 / 4%);
+
+	--neo-text-color-disabled: var(--nebu-disabled-text);
+	--neo-skeleton-color: color-mix(in srgb, var(--nebu-text-muted) 14%, transparent);
+	--neo-skeleton-step: -0.4;
+	--neo-switch-checked-background: var(--neo-color-primary);
+	--neo-border-color-focused: transparent;
+
+	color-scheme: light;
+}
+
+[neo-theme-root][neo-theme='dark'] {
+	color-scheme: dark;
+	--nebu-text-muted: #a3a8b3;
+	--nebu-text-faint: #7b808b;
+	--nebu-border: #2a2e36;
+	--nebu-border-strong: #3a3f49;
+	--nebu-surface-sunken: #191c22;
+	--nebu-steel: #9fb0c4;
+	--nebu-disabled-fill: #212327;
+	--nebu-disabled-text: #8e939e;
+	--nebu-edge: rgb(255 255 255 / 6%);
+}
+
+@media (prefers-color-scheme: dark) {
+	[neo-theme-root]:not([neo-theme='light']) {
+		color-scheme: dark;
+		--nebu-text-muted: #a3a8b3;
+		--nebu-text-faint: #7b808b;
+		--nebu-border: #2a2e36;
+		--nebu-border-strong: #3a3f49;
+		--nebu-surface-sunken: #191c22;
+		--nebu-steel: #9fb0c4;
+		--nebu-disabled-fill: #212327;
+		--nebu-disabled-text: #8e939e;
+		--nebu-edge: rgb(255 255 255 / 6%);
+	}
+}
+
+html {
+	font-size: 15px;
+	line-height: var(--nebu-leading);
+	text-size-adjust: 100%;
+}
+
+html,
+html[neo-theme-root],
+body {
+	font-family: 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+body {
+	margin: 0;
+	font-variant-numeric: tabular-nums;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+code,
+kbd,
+pre,
+samp {
+	font-family: var(--nebu-font-mono);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		transition-duration: 0.01ms !important;
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		scroll-behavior: auto !important;
+	}
+}

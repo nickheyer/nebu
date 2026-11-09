@@ -90,3 +90,18 @@ func TestDeletingAConversationReleasesItsImages(t *testing.T) {
 		t.Fatalf("rows left: %v", digests)
 	}
 }
+
+func TestToolTurnsSaveAndOtherRolesAreRefused(t *testing.T) {
+	m := manager(t)
+	ctx := context.Background()
+	owner := db.ChatOwner{Provider: "local", Subject: "ann"}
+	c := &v1.Conversation{Id: "c1", Turns: []*v1.ChatTurn{{Role: "user", Text: "search"}, {Role: "assistant"}, {Role: "tool", Text: "result", ToolCallId: "call1"}, {Role: "assistant", Text: "found it"}}}
+	saved, err := m.Put(ctx, owner, c)
+	if err != nil || len(saved.GetTurns()) != 4 || saved.GetTurns()[2].GetRole() != "tool" {
+		t.Fatalf("a tool turn saves with the rest: %v %v", saved, err)
+	}
+	c.Turns = append(c.Turns, &v1.ChatTurn{Role: "system", Text: "be brief"})
+	if _, err := m.Put(ctx, owner, c); err == nil {
+		t.Fatal("a system turn is refused")
+	}
+}

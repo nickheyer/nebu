@@ -68,21 +68,24 @@ func TestNvidiaSMIRowsBecomeDevicesAndPools(t *testing.T) {
 	}
 }
 
-// Process rows name a probed device by uuid with memory in MiB, withheld or unknown device rows dropped
+// Process rows name a probed device by uuid, executable and memory in MiB, withheld or unknown rows dropped
 func TestNvidiaSMIProcessRowsBecomeProcessUse(t *testing.T) {
 	devices := []*v1.Device{{Id: "GPU-aaaa"}, {Id: "GPU-bbbb"}}
-	out := "1234, 6442, GPU-aaaa\n1234, 100, GPU-bbbb\n[N/A], 50, GPU-aaaa\n77, [Insufficient Permissions], GPU-aaaa\n99, 10, GPU-zzzz\n\n"
+	out := "1234, /usr/bin/python3 train.py --epochs 3, 6442, GPU-aaaa\n1234, [Insufficient Permissions], 100, GPU-bbbb\n[N/A], /x, 50, GPU-aaaa\n77, /y, [Insufficient Permissions], GPU-aaaa\n99, /z, 10, GPU-zzzz\n4321, C:\\Program Files\\a,b\\llama-server.exe, 7, GPU-bbbb\n\n"
 	procs, err := parseNvidiaApps([]byte(out), devices)
-	if err != nil || len(procs) != 2 {
+	if err != nil || len(procs) != 3 {
 		t.Fatalf("procs %v %v", procs, err)
 	}
-	if p := procs[0]; p.GetPid() != 1234 || p.GetDeviceId() != "GPU-aaaa" || p.GetBytes() != 6442<<20 {
+	if p := procs[0]; p.GetPid() != 1234 || p.GetDeviceId() != "GPU-aaaa" || p.GetBytes() != 6442<<20 || p.GetCommand() != "python3" {
 		t.Fatalf("first %+v", p)
 	}
-	if p := procs[1]; p.GetPid() != 1234 || p.GetDeviceId() != "GPU-bbbb" || p.GetBytes() != 100<<20 {
+	if p := procs[1]; p.GetPid() != 1234 || p.GetDeviceId() != "GPU-bbbb" || p.GetBytes() != 100<<20 || p.GetCommand() != "" {
 		t.Fatalf("second %+v", p)
 	}
-	if _, err := parseNvidiaApps([]byte("1234, 6442\n"), devices); err == nil {
+	if p := procs[2]; p.GetPid() != 4321 || p.GetBytes() != 7<<20 || p.GetCommand() != "llama-server.exe" {
+		t.Fatalf("third %+v", p)
+	}
+	if _, err := parseNvidiaApps([]byte("1234, 6442, GPU-aaaa\n"), devices); err == nil {
 		t.Fatal("short rows fail")
 	}
 }
@@ -113,6 +116,9 @@ func TestDRMFdinfoNamesEachProcessMemoryOnTheCards(t *testing.T) {
 	open(500, "9", "drm-driver:\tamdgpu\ndrm-client-id:\t5\ndrm-pdev:\t0000:03:00.0\ndrm-memory-vram:\t3 MiB\n")
 	open(600, "3", "drm-driver:\txe\ndrm-client-id:\t9\ndrm-pdev:\t0000:05:00.0\ndrm-total-vram0:\t900 KiB\ndrm-resident-vram0:\t700 KiB\ndrm-resident-system:\t100 KiB\n")
 	open(700, "3", "drm-driver:\ti915\ndrm-pdev:\t0000:00:02.0\ndrm-memory-local0:\t64 KiB\n")
+	if err := os.WriteFile(filepath.Join(proc, "500", "comm"), []byte("llama-server\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(proc, "self", "fd"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -120,10 +126,10 @@ func TestDRMFdinfoNamesEachProcessMemoryOnTheCards(t *testing.T) {
 	if res.Status != v1.ProbeStatus_PROBE_STATUS_OK || len(res.Processes) != 2 {
 		t.Fatalf("result %+v", res)
 	}
-	if p := res.Processes[0]; p.GetPid() != 500 || p.GetDeviceId() != "amd-1f9ebf1b8f9e4d8a" || p.GetBytes() != 1024<<10+3<<20 {
+	if p := res.Processes[0]; p.GetPid() != 500 || p.GetDeviceId() != "amd-1f9ebf1b8f9e4d8a" || p.GetBytes() != 1024<<10+3<<20 || p.GetCommand() != "llama-server" {
 		t.Fatalf("amd process %+v", p)
 	}
-	if p := res.Processes[1]; p.GetPid() != 600 || p.GetDeviceId() != "intel-0000:05:00.0" || p.GetBytes() != 700<<10 {
+	if p := res.Processes[1]; p.GetPid() != 600 || p.GetDeviceId() != "intel-0000:05:00.0" || p.GetBytes() != 700<<10 || p.GetCommand() != "" {
 		t.Fatalf("xe process %+v", p)
 	}
 }
@@ -222,8 +228,13 @@ func TestDRMSysfsReadsAMDAndIntelCards(t *testing.T) {
 		t.Fatalf("arc %+v %+v", arc, res.Pools[1])
 	}
 	igpu := res.Devices[2]
-	if igpu.GetId() != "intel-0000:00:02.0" || igpu.GetName() != "AlderLake-S GT1" || igpu.GetMemoryTotalBytes() != 0 || igpu.GetFacts()["memory"] != "shared" || igpu.GetFacts()["driver"] != "i915" {
+	if igpu.GetId() != "intel-0000:00:02.0" || igpu.GetName() != "AlderLake-S GT1" || igpu.GetMemoryTotalBytes() != 0 || igpu.GetFacts()["driver"] != "i915" {
 		t.Fatalf("integrated %+v", igpu)
+	}
+	for _, p := range res.Pools {
+		if p.GetDeviceId() == igpu.GetId() {
+			t.Fatalf("a card without local memory got a pool %+v", p)
+		}
 	}
 	if res := (drmSysfs{root: filepath.Join(root, "nowhere")}).Run(context.Background()); res.Status != v1.ProbeStatus_PROBE_STATUS_SKIPPED {
 		t.Fatalf("no sysfs is skipped: %+v", res)

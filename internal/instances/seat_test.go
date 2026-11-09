@@ -19,8 +19,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/runtimes"
 )
 
-// A ggml rpc server takes the hello command with its 24 capability bytes and answers its
-// protocol version with its own capabilities behind it
+// A ggml rpc server answers the hello and its 24 capability bytes with its protocol version
 func TestRPCHello(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -55,8 +54,7 @@ func TestRPCHello(t *testing.T) {
 	}
 }
 
-// The guard admits the addresses the role names, one connection when the role says so, and
-// counts what it forwards
+// The guard admits the role's addresses, one connection when the role says so, and counts what it forwards
 func TestGuardForwarder(t *testing.T) {
 	upstream, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -98,8 +96,7 @@ func TestGuardForwarder(t *testing.T) {
 	if g.Received() != uint64(len(payload)) {
 		t.Fatalf("received %d", g.Received())
 	}
-	// A second connection from the same address is admitted and counted while the first is open,
-	// as ggml's rpc client reconnects for each device query
+	// A second connection from the same address is admitted while the first is open, as ggml reconnects
 	second, err := net.Dial("tcp", v4)
 	if err != nil {
 		t.Fatal(err)
@@ -150,8 +147,7 @@ func TestGuardForwarder(t *testing.T) {
 	}
 }
 
-// A seat pins the plan's bare device ids on this node and leaves the ids qualified by another
-// node to the runtime's rendering
+// A seat pins the plan's bare device ids and leaves ids qualified by another node to the runtime
 func TestSeatDevicesPinLocalOnly(t *testing.T) {
 	profile := &v1.HostProfile{Devices: []*v1.Device{{Id: "cuda0"}, {Id: "cuda1"}}}
 	pinned := seatDevices(profile, []string{"node-b/cuda0", "cuda1"})
@@ -171,8 +167,7 @@ func (memoryProbe) Description() string               { return "devices and pool
 func (memoryProbe) Runs(string, string) bool          { return true }
 func (p memoryProbe) Run(context.Context) host.Result { return p.res }
 
-// A seat launches when the devices and host pools its plan names exist on this node, whatever
-// room they have left, the runtime judging the memory
+// A seat launches when its planned devices and host pools exist here, the runtime judging the memory
 func TestSeatPlanNamesThisNode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -213,8 +208,7 @@ func TestSeatPlanNamesThisNode(t *testing.T) {
 	}
 }
 
-// A seat whose process dies keeps what its log measured beside its triage, so the conductor reads
-// the allocations it made and failed to make from its record
+// A seat whose process dies keeps its measurements beside its triage for the conductor to read
 func TestFailedSeatKeepsMeasurements(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -241,8 +235,7 @@ func TestFailedSeatKeepsMeasurements(t *testing.T) {
 	}
 }
 
-// A runtime drained and stopped as an eviction retires it probes the host once it has exited, one
-// that starts or serves probes nothing, and runtimes the daemon stops on its way out probe nothing
+// A retired runtime probes the host once after it exits, a running or shutdown one never
 func TestRuntimeExitProbesHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -257,9 +250,6 @@ func TestRuntimeExitProbesHost(t *testing.T) {
 	waitState(t, m, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
 	if got := probes.Load(); got != 0 {
 		t.Fatalf("a runtime that started probed the host %d times", got)
-	}
-	if _, err := m.Drain(ctx, in.GetId(), time.Second); err != nil {
-		t.Fatal(err)
 	}
 	if _, err := m.Stop(ctx, in.GetId()); err != nil {
 		t.Fatal(err)
@@ -284,8 +274,7 @@ func TestRuntimeExitProbesHost(t *testing.T) {
 	}
 }
 
-// Refreshing a seat writes and publishes its record only when the guard counter or the transport
-// moved, so a conductor polling every second is quiet until the head streams
+// Refreshing a seat writes and announces its record only when the guard counter or transport moved
 func TestRefreshPublishesOnlyChanges(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -350,4 +339,45 @@ func mustFind(t *testing.T, m *Manager, id string) *instance {
 		t.Fatal(err)
 	}
 	return in
+}
+
+// A slot pin names a device the profile lists, the run refused for one dropped for want of memory
+func TestRunRefusesSlotDevicesWithoutMemory(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := newSeatNode(t, ctx)
+	m := n.manager(t, ctx, nil)
+	m.Host = host.New([]host.Probe{memoryProbe{host.Result{
+		Status: v1.ProbeStatus_PROBE_STATUS_OK,
+		Devices: []*v1.Device{
+			{Id: "cpu0", Kind: v1.DeviceKind_DEVICE_KIND_CPU, Name: "cpu"},
+			{Id: "gpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Name: "small gpu"},
+			{Id: "igpu0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "intel", Name: "shared igpu"},
+			{Id: "blind0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "other", Name: "unread gpu"},
+		},
+		Pools: []*v1.MemoryPool{
+			{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 64 << 30, FreeBytes: 32 << 30},
+			{Id: "gpu0", Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: "gpu0", TotalBytes: 12 << 30, FreeBytes: 8 << 30},
+		},
+	}}}, nil, time.Minute)
+	res := &Reservation{SlotID: "s", Name: "main", DeviceIDs: []string{"blind0"}}
+	m.Slots = oneSlot{res}
+	run := &v1.RunRequest{SourceId: "src", Repo: "org/model", Group: "q4", RuntimeId: fake.RuntimeID, SlotId: "s"}
+	if _, _, err := m.Run(ctx, run); err == nil || !strings.Contains(err.Error(), `device "blind0" was not probed`) {
+		t.Fatalf("a slot pinned to a gpu the probes found no memory for: %v", err)
+	}
+	res.DeviceIDs = []string{"igpu0"}
+	if _, _, err := m.Run(ctx, run); err == nil || !strings.Contains(err.Error(), `device "igpu0" was not probed`) {
+		t.Fatalf("a slot pinned to a gpu on system memory: %v", err)
+	}
+	res.DeviceIDs = []string{"gpu9"}
+	if _, _, err := m.Run(ctx, run); err == nil || !strings.Contains(err.Error(), `device "gpu9" was not probed`) {
+		t.Fatalf("a slot pinned to a device the node lacks: %v", err)
+	}
+	res.DeviceIDs = []string{"gpu0", "other/igpu1"}
+	in, _, err := m.Run(ctx, run)
+	if err != nil {
+		t.Fatalf("a slot pinned to the gpu, a member's device left to the conductor: %v", err)
+	}
+	waitState(t, m, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
 }

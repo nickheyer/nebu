@@ -83,6 +83,8 @@ type ghRef struct {
 type ghRepoState struct {
 	owner, name   string
 	defaultBranch string
+	// The repository as the API lists it
+	item ghItem
 	// Lists recent releases, the latest stable release, branches, and tags without releases.
 	releases []ghRelease
 	mu       sync.Mutex
@@ -100,7 +102,8 @@ type ghRepoState struct {
 type githubAPI struct{}
 
 type ghItem struct {
-	FullName    string   `json:"full_name"`
+	FullName      string   `json:"full_name"`
+	DefaultBranch string   `json:"default_branch"`
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	HTMLURL     string   `json:"html_url"`
@@ -203,13 +206,10 @@ func ghState(ctx context.Context, c *Client, repo string) (*ghRepoState, error) 
 	memo := Cached(c, "github:"+owner+"/"+name, func() *Memo[*ghRepoState] { return &Memo[*ghRepoState]{TTL: ghReleaseTTL} })
 	return memo.Get(ctx, func(ctx context.Context) (*ghRepoState, error) {
 		st := &ghRepoState{owner: owner, name: name, byTag: map[string]*ghRelease{}, pages: map[string][]ghRef{}}
-		var info struct {
-			DefaultBranch string `json:"default_branch"`
-		}
-		if _, err := c.JSON(ctx, c.URL("repos", owner, name), nil, &info); err != nil {
+		if _, err := c.JSON(ctx, c.URL("repos", owner, name), nil, &st.item); err != nil {
 			return nil, err
 		}
-		st.defaultBranch = info.DefaultBranch
+		st.defaultBranch = st.item.DefaultBranch
 		// One page: a repository that releases every commit has thousands, and an older one resolves by its tag
 		if _, err := c.JSON(ctx, ghListURL(c, owner, name, "releases"), nil, &st.releases); err != nil {
 			return nil, err
@@ -432,11 +432,20 @@ func (githubAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v
 	if revision != "" {
 		q = url.Values{"ref": {revision}}
 	}
+	st, err := ghState(ctx, c, repo)
+	if err != nil {
+		return nil, err
+	}
 	text, err := c.HTTP().TextWith(ctx, c.URL("repos", owner, name, "readme"), q, http.Header{"Accept": {ghRawMedia}}, cardMax)
 	if err != nil {
-		return cardOrEmpty(page, err)
+		card, err := cardOrEmpty(page, err)
+		if err != nil {
+			return nil, err
+		}
+		card.Hit = ghHit(st.item)
+		return card, nil
 	}
-	return &v1.ModelCard{Markdown: text, Url: page}, nil
+	return &v1.ModelCard{Markdown: text, Url: page, Hit: ghHit(st.item)}, nil
 }
 
 // A release asset downloads from its link, a tree file comes through git

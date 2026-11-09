@@ -1,8 +1,10 @@
 package runtimes
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nickheyer/nebu/pkg/archs"
@@ -114,15 +116,54 @@ func (r NeMo) Launch(in Launch) (*Command, error) {
 	if p.Str("served_model_name") == "" {
 		p["served_model_name"] = in.Name
 	}
+	devices, err := launchDevices(in)
+	if err != nil {
+		return nil, err
+	}
 	if p.Str("cuda_visible_devices") == "" {
-		p["cuda_visible_devices"] = visible(in.Devices, "nvidia", true)
+		p["cuda_visible_devices"] = visible(devices, "nvidia", true)
 	}
 	for _, f := range nemoConverterFlags {
 		delete(p, f.param)
 	}
-	args := []string{in.Install.Path, "--megatron_checkpoint", dir, "--host", in.Host, "--port", strconv.Itoa(in.Port)}
+	metrics := in.Port + 1
+	ray, err := nemoRayInit(p, metrics)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"-c", nemoBootstrap, ray, in.Install.Path, "--megatron_checkpoint", dir, "--host", in.Host, "--port", strconv.Itoa(in.Port)}
 	flags, env, emitted := Flags(r.Params(), p)
-	return &Command{Command: in.Install.Dir + "/venv/bin/python", Args: append(args, flags...), Env: env, Params: emitted}, nil
+	emitted["metrics_port"] = strconv.Itoa(metrics)
+	pinEnv(env, devices)
+	return &Command{Command: in.Install.Dir + "/venv/bin/python", Args: append(args, flags...), Env: env, Params: emitted, Devices: devices}, nil
+}
+
+// Starts a Ray cluster of the launch's own with its metrics on a fixed port, then runs the deploy script, whose own init joins it
+const nemoBootstrap = `import json, runpy, sys
+import ray
+ray.init(**json.loads(sys.argv[1]))
+sys.argv = sys.argv[2:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+`
+
+// The init arguments the deploy script would give Ray, a cluster of the launch's own, and the metrics export port
+func nemoRayInit(p estimate.Params, metrics int) (string, error) {
+	options := map[string]any{"address": "local", "_metrics_export_port": metrics, "include_dashboard": p.Bool("include_dashboard")}
+	if n := p.Int("num_gpus"); n > 0 {
+		options["num_gpus"] = n
+	}
+	if n := p.Int("num_cpus"); n > 0 {
+		options["num_cpus"] = n
+	}
+	if env := strings.TrimSpace(p.Str("runtime_env")); env != "" {
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(env), &parsed); err != nil {
+			return "", fmt.Errorf("%w: runtime_env is not a JSON object: %v", ErrParam, err)
+		}
+		options["runtime_env"] = parsed
+	}
+	data, err := json.Marshal(options)
+	return string(data), err
 }
 
 // Convert packed .nemo archives to NeMo 2 before first launch.

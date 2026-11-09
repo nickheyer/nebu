@@ -24,7 +24,7 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
-// Sends a prompt or starts an interactive chat through the gateway.
+// Sends a prompt or starts an interactive chat through the gateway
 func runChat(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("chat")
 	system := fs.String("system", "", "system prompt")
@@ -67,7 +67,7 @@ func runChat(ctx context.Context, e *env, args []string) error {
 			lines <- sc.Text()
 		}
 	}()
-	// Interrupts cancel the current answer or exit an idle session.
+	// Interrupts cancel the current answer or exit an idle session
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt)
 	defer signal.Stop(sigs)
@@ -116,7 +116,7 @@ func runChat(ctx context.Context, e *env, args []string) error {
 	}
 }
 
-// Requires a ready route before opening a session.
+// Requires a ready route before opening a session
 func (e *env) routeReady(ctx context.Context, name string) error {
 	resp, err := e.cl.gateway.ListRoutes(ctx, connect.NewRequest(&v1.ListRoutesRequest{}))
 	if err != nil {
@@ -124,13 +124,14 @@ func (e *env) routeReady(ctx context.Context, name string) error {
 	}
 	var names []string
 	for _, r := range resp.Msg.GetRoutes() {
+		state := r.GetStatus().GetState()
 		if r.GetName() == name {
-			if r.GetState() == v1.RouteState_ROUTE_STATE_READY {
+			if state == v1.RouteState_ROUTE_STATE_READY {
 				return nil
 			}
-			return fmt.Errorf("route %s is %s, wait for it or pick another", name, text.Enum(r.GetState()))
+			return fmt.Errorf("route %s is %s, wait for it or pick another", name, text.Enum(state))
 		}
-		if r.GetState() == v1.RouteState_ROUTE_STATE_READY {
+		if state == v1.RouteState_ROUTE_STATE_READY {
 			names = append(names, r.GetName())
 		}
 	}
@@ -151,7 +152,7 @@ type chatSession struct {
 	history     []chatMessage
 }
 
-// Clears chat history, keeping the system prompt.
+// Clears chat history, keeping the system prompt
 func (s *chatSession) reset() {
 	if len(s.history) > 0 && s.history[0].Role == "system" {
 		s.history = s.history[:1]
@@ -160,7 +161,7 @@ func (s *chatSession) reset() {
 	s.history = nil
 }
 
-// Replaces the system prompt without clearing history.
+// Replaces the system prompt without clearing history
 func (s *chatSession) setSystem(text string) {
 	if len(s.history) > 0 && s.history[0].Role == "system" {
 		s.history[0].Content = text
@@ -169,7 +170,7 @@ func (s *chatSession) setSystem(text string) {
 	s.history = append([]chatMessage{{Role: "system", Content: text}}, s.history...)
 }
 
-// Appends a user turn and streams the answer.
+// Appends a user turn and streams the answer
 func (s *chatSession) ask(ctx context.Context, text string) error {
 	s.history = append(s.history, chatMessage{Role: "user", Content: text})
 	body := map[string]any{"model": s.model, "messages": s.history, "stream": true, "stream_options": map[string]any{"include_usage": true}}
@@ -212,7 +213,7 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64<<10), 16<<20)
 	for sc.Scan() && failed == nil {
-		// Check error fields and lines for interrupted answers.
+		// Check error fields and lines for interrupted answers
 		field, payload, ok := strings.Cut(sc.Text(), ":")
 		if !ok || field != "data" && field != "error" {
 			continue
@@ -263,7 +264,7 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 	if elapsed > 0 && answer.Len() > 0 {
 		fmt.Fprintf(s.out, "[%d tokens in %.1fs, %.1f tok/s]\n", tokens, elapsed, float64(tokens)/elapsed)
 	}
-	// Keep partial answers. Remove unanswered turns.
+	// Keep partial answers. Remove unanswered turns
 	if answer.Len() > 0 {
 		s.history = append(s.history, chatMessage{Role: "assistant", Content: answer.String()})
 	} else {
@@ -272,7 +273,7 @@ func (s *chatSession) ask(ctx context.Context, text string) error {
 	return err
 }
 
-// Extracts an OpenAI error message, or returns empty.
+// Extracts an OpenAI error message, or returns empty
 func errorMessage(raw []byte) string {
 	var e struct {
 		Error struct {

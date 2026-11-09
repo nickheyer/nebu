@@ -2,12 +2,14 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "nebu/v1/bot.proto";
 import "nebu/v1/gateway.proto";
 import "nebu/v1/host.proto";
 import "nebu/v1/instance.proto";
 import "nebu/v1/mesh.proto";
+import "nebu/v1/pool.proto";
 import "nebu/v1/recipe.proto";
 import "nebu/v1/runtime.proto";
 import "nebu/v1/settings.proto";
@@ -21,6 +23,7 @@ option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
 
 // Changed resource kind.
 enum EventKind {
+  reserved 9, 10, 12, 13;
   EVENT_KIND_UNSPECIFIED = 0;
   EVENT_KIND_HOST = 1;
   EVENT_KIND_TASK = 2;
@@ -49,6 +52,10 @@ enum EventKind {
   EVENT_KIND_MESH = 21;
   // A tool server connected, changed its tools, or failed
   EVENT_KIND_TOOL_SERVER = 22;
+  // A pool or one of its endpoints changed
+  EVENT_KIND_POOL = 23;
+  EVENT_KIND_OBJECTIVE = 24;
+  EVENT_KIND_SCHEDULER_CONFIG = 25;
 }
 
 // How it changed
@@ -66,6 +73,7 @@ message Event {
   EventAction action = 3;
   string id = 4;
   google.protobuf.Timestamp at = 5;
+  reserved 6 to 9, 18, 19, 21, 22;
   // The record after the change
   oneof payload {
     HostProfile host = 10;
@@ -86,12 +94,15 @@ message Event {
     Formation formation = 29;
     MeshStatus mesh_status = 30;
     ToolServerStatus tool_server = 31;
+    Pool pool = 32;
+    Objective objective = 33;
+    SchedulerConfig scheduler_config = 34;
   }
 }
 
 // Subscribes to changes, all kinds when empty
 message WatchEventsRequest {
-  repeated EventKind kinds = 1;
+  repeated EventKind kinds = 1 [(buf.validate.field).repeated.items.enum.defined_only = true];
   bool snapshot = 2;
 }
 

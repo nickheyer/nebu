@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"io"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/mesh"
+	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc"
 	"github.com/nickheyer/nebu/internal/rpc/services"
@@ -84,6 +86,15 @@ func newNode(t *testing.T, ctx context.Context, name string) *node {
 		t.Fatal(err)
 	}
 	guard := auth.NewGuard("", nil, nil)
+	self, err := mesh.NodeID(ctx, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm, err := pools.New(ctx, pools.Options{DB: database, Events: bus, NodeID: self, Log: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pm.Close() })
 	m := &mesh.Manager{
 		DB:        database,
 		Config:    &v1.MeshConfig{Listen: "127.0.0.1:0", Advertise: "127.0.0.1", Announce: proto.Bool(false)},
@@ -92,12 +103,15 @@ func newNode(t *testing.T, ctx context.Context, name string) *node {
 		Runtimes:  rts,
 		Store:     blobs,
 		Perf:      table,
-		Settings:  set,
-		Events:    bus,
-		Guard:     guard,
-		Log:       log,
-		Version:   "test",
-		APIListen: "127.0.0.1:0",
+		Pools:     pm,
+		Registrar: pm,
+		// These nodes run no gateway, so no request is ever in flight on an instance
+		InFlight: func(string) int { return 0 },
+		Settings: set,
+		Events:   bus,
+		Guard:    guard,
+		Log:      log,
+		Version:  "test",
 	}
 	if err := m.Open(ctx); err != nil {
 		t.Fatal(err)
@@ -206,14 +220,14 @@ func (n *node) sees(other *node, repo, group string) bool {
 // Makes a mesh on a and joins b to it
 func join(t *testing.T, ctx context.Context, a, b *node) {
 	t.Helper()
-	if _, _, err := a.mesh.Init(ctx, "test", false); err != nil {
+	if _, _, err := a.mesh.Init(ctx, "test"); err != nil {
 		t.Fatal(err)
 	}
-	token, err := a.mesh.Token()
+	token, _, err := a.mesh.Token(ctx, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := b.mesh.Join(ctx, token); err != nil {
+	if _, _, err := b.mesh.Join(ctx, token); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -284,14 +298,11 @@ func TestPullLandsFromAMemberOverTheMesh(t *testing.T) {
 	if done.GetState() != v1.TaskState_TASK_STATE_SUCCEEDED || !b.store.HasBlob(lost) || !hasLine(logs, "verified "+lost+" from alpha") {
 		t.Fatalf("repair: %s %s\n%s", done.GetState(), done.GetError(), strings.Join(logs, "\n"))
 	}
-	// A node outside the session cannot read the blob channel
-	resp, err := http.Get("http://" + a.mesh.Status().GetListen() + "/blobs/" + lost)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("blobs without a member session: %d", resp.StatusCode)
+	// A client holding no certificate from the mesh authority is refused before it reaches the blob channel
+	outsider := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13}}}
+	if resp, err := outsider.Get("https://" + a.mesh.Status().GetListen() + "/blobs/" + lost); err == nil {
+		resp.Body.Close()
+		t.Fatalf("blobs without a member certificate answered %d", resp.StatusCode)
 	}
 }
 

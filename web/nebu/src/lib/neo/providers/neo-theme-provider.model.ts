@@ -1,0 +1,158 @@
+import type { Snippet } from 'svelte';
+
+import type { HTMLNeoBaseElement } from '#lib/neo/utils/html-element.utils.js';
+
+/**
+ * The active theme (`dark` or `light`)
+ */
+export const NeoTheme = {
+  Light: 'light',
+  Dark: 'dark',
+} as const;
+
+export type NeoThemes = (typeof NeoTheme)[keyof typeof NeoTheme];
+
+/**
+ * The light source to simulate shadows
+ */
+export const NeoSource = {
+  TopLeft: 'top-left',
+  TopRight: 'top-right',
+  BottomRight: 'bottom-right',
+  BottomLeft: 'bottom-left',
+} as const;
+
+export const NeoTransition = {
+  None: 'none',
+  Spin: 'neo-spin',
+  Wave: 'neo-wave',
+  Circle: 'neo-circle',
+} as const;
+
+export type NeoTransitions = (typeof NeoTransition)[keyof typeof NeoTransition];
+
+export type NeoSources = (typeof NeoSource)[keyof typeof NeoSource];
+
+export interface INeoThemeProviderContext {
+  /**
+   * If styles have finished loading.
+   */
+  readonly ready?: boolean;
+  /**
+   * If a style reset is applied.
+   */
+  readonly reset?: boolean;
+  /**
+   * The active theme (`dark` or `light`)
+   */
+  readonly theme: NeoThemes;
+  /**
+   * The active light source to simulate shadows
+   */
+  readonly source: NeoSources;
+  /**
+   * If the reset, theme and source are stored in local-storage
+   */
+  readonly remember: boolean;
+  /**
+   * The theme transition to apply when changing theme.
+   */
+  readonly transition: NeoTransitions;
+  /**
+   * The target to which scope the theme variables
+   */
+  readonly root?: HTMLElement | ShadowRoot;
+  /**
+   * The element used for attribute/style mutations.
+   *
+   * Resolves to `root.host` when `root` is a `ShadowRoot`, otherwise the
+   * `HTMLElement` itself. Use this when reading/writing attributes or
+   * inline styles intended to scope theme tokens.
+   */
+  readonly host?: HTMLElement | null;
+}
+
+export interface NeoThemeProviderProps<Tag extends keyof HTMLElementTagNameMap = 'div'> extends Omit<HTMLNeoBaseElement<HTMLElementTagNameMap[Tag]>, 'children'> {
+  // Snippets
+
+  /**
+   * Child element to wrap in the theme context.
+   */
+  children?: Snippet<[INeoThemeProviderContext]>;
+
+  // States
+
+  /**
+   * The HTML reference to the inner element when target is `self`.
+   * @see target
+   */
+  ref?: HTMLElement;
+  /**
+   * The HTML tag to use for the container.
+   * @default 'div'
+   */
+  tag?: Tag;
+  /**
+   * If `true`, injects a css reset for common styling.
+   */
+  reset?: boolean;
+  /**
+   * Enforce `dark` or `light` theme.
+   *
+   * @default prefers-color-scheme
+   */
+  theme?: NeoThemes;
+  /**
+   * The light source to simulate shadows
+   *
+   * @default top-left
+   */
+  source?: NeoSources;
+  /**
+   * To store the last used reset & theme & source in local storage (if available)
+   *
+   * @default true
+   */
+  remember?: boolean;
+  /**
+   * The target to which scope the theme variables
+   *
+   * @default document.documentElement
+   */
+  target?: 'self' | HTMLElement | ShadowRoot | (() => HTMLElement | ShadowRoot);
+}
+
+export const NeoThemeRoot = 'neo-theme-root';
+
+export const NeoThemeStorageKey = {
+  Reset: 'neo-reset',
+  Theme: 'neo-theme',
+  Source: 'neo-source',
+  Remember: 'neo-remember',
+  Transition: 'neo-transition',
+  InFlight: 'neo-in-flight',
+} as const satisfies Record<string, `neo-${keyof INeoThemeProviderContext | 'in-flight'}`>;
+
+export type NeoThemeStorageKeys = (typeof NeoThemeStorageKey)[keyof typeof NeoThemeStorageKey];
+
+export const getSavedTheme = () => localStorage?.getItem(NeoThemeStorageKey.Theme) as NeoThemes | null;
+export const getPreferTheme = (): NeoThemes => (window.matchMedia('(prefers-color-scheme: dark)').matches ? NeoTheme.Dark : NeoTheme.Light);
+export const getTheme = () => getSavedTheme() ?? getPreferTheme();
+
+export const getSavedSource = () => localStorage?.getItem(NeoThemeStorageKey.Source) as NeoSources | null;
+export const getSource = () => getSavedSource() ?? NeoSource.TopLeft;
+
+function getBoolean(str?: string | null, fallback: boolean = false): boolean {
+  // If saved reset is always truthy as it is a string
+  if (!str) return fallback;
+  return str === 'true';
+}
+
+export const getSavedReset = () => localStorage?.getItem(NeoThemeStorageKey.Reset);
+export const getReset = () => getBoolean(getSavedReset(), true);
+
+export const getSavedRemember = () => localStorage?.getItem(NeoThemeStorageKey.Remember);
+export const getRemember = () => getBoolean(getSavedRemember(), true);
+
+export const getSavedTransition = () => localStorage?.getItem(NeoThemeStorageKey.Transition) as NeoTransitions | null;
+export const getTransition = () => getSavedTransition() || NeoTransition.None;

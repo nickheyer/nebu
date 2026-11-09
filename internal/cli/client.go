@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/daemon"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/logger"
@@ -53,6 +55,9 @@ type clients struct {
 	bots      nebuv1connect.BotServiceClient
 	auth      nebuv1connect.AuthServiceClient
 	mesh      nebuv1connect.MeshServiceClient
+	// Daemon base URL and the transport beneath the bearer token, for signing in as an account
+	base      string
+	transport http.RoundTripper
 }
 
 // Adds the bearer token to every request
@@ -67,6 +72,54 @@ func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.Header.Set("Authorization", "Bearer "+t.token)
 	}
 	return t.base.RoundTrip(req)
+}
+
+// Sends a signed-in session in place of the bearer token
+type sessionTransport struct {
+	base    http.RoundTripper
+	cookies []*http.Cookie
+}
+
+func (t sessionTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Del("Authorization")
+	for _, c := range t.cookies {
+		req.AddCookie(c)
+	}
+	return t.base.RoundTrip(req)
+}
+
+// Signs in as a local account so later account calls carry its session in place of the token
+func (e *env) signIn(ctx context.Context, username, password string) error {
+	body, err := json.Marshal(map[string]string{"username": username, "password": password})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.cl.base+auth.BasePath+"local/login", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Transport: e.cl.transport}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		var refusal struct {
+			Error string `json:"error"`
+		}
+		if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&refusal) != nil || refusal.Error == "" {
+			refusal.Error = resp.Status
+		}
+		return fmt.Errorf("signing in as %s: %s", username, refusal.Error)
+	}
+	cookies := resp.Cookies()
+	if len(cookies) == 0 {
+		return fmt.Errorf("signing in as %s: the daemon answered without a session", username)
+	}
+	e.cl.auth = nebuv1connect.NewAuthServiceClient(&http.Client{Transport: sessionTransport{base: e.cl.transport, cookies: cookies}}, e.cl.base)
+	return nil
 }
 
 // Serves requests through an in process handler
@@ -138,20 +191,23 @@ func (e *env) clients() (*clients, error) {
 		base = e.base(addr)
 		httpClient.Transport = e.transport(base)
 	} else {
-		log, recent, closer, err := logger.New(quiet(e.cfg.GetLogging()))
+		log, recent, level, closer, err := logger.New(quiet(e.cfg.GetLogging()))
 		if err != nil {
 			return nil, err
 		}
 		e.closers = append(e.closers, closer)
-		d, err := daemon.New(e.cfg, log, recent)
+		d, err := daemon.New(e.cfg, log, level, recent)
 		if err != nil {
 			return nil, err
 		}
 		e.daemon = d
 		httpClient.Transport = handlerTransport{handler: d.Handler()}
 	}
-	httpClient.Transport = authTransport{base: httpClient.Transport, token: e.token()}
+	plain := httpClient.Transport
+	httpClient.Transport = authTransport{base: plain, token: e.token()}
 	e.cl = &clients{
+		base:      base,
+		transport: plain,
 		host:      nebuv1connect.NewHostServiceClient(httpClient, base),
 		settings:  nebuv1connect.NewSettingsServiceClient(httpClient, base),
 		sources:   nebuv1connect.NewSourceServiceClient(httpClient, base),
@@ -188,7 +244,7 @@ func (e *env) requireDaemon() error {
 	return nil
 }
 
-// Returns the configured or discovered daemon address, or empty for local use.
+// Returns the configured or discovered daemon address, or empty for local use
 func (e *env) resolveAddr() string {
 	if e.resolved {
 		return e.addr
@@ -203,15 +259,15 @@ func (e *env) resolveAddr() string {
 	return addr
 }
 
-// Prefixes a bare address with the scheme the daemon serves
+// Prefixes a bare address with the scheme the daemon serves, https unless tls.disabled is set
 func (e *env) base(addr string) string {
 	if strings.Contains(addr, "://") {
 		return addr
 	}
-	if e.cfg.GetTls().GetCertFile() != "" {
-		return "https://" + addr
+	if e.cfg.GetTls().GetDisabled() {
+		return "http://" + addr
 	}
-	return "http://" + addr
+	return "https://" + addr
 }
 
 // Swaps an unspecified host for one this machine can dial
@@ -242,12 +298,12 @@ func reachable(addr string) bool {
 	return true
 }
 
-// Creates a transport that trusts the configured daemon certificate.
+// Creates a transport that trusts the configured daemon certificate
 func (e *env) transport(base string) http.RoundTripper {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.ForceAttemptHTTP2 = true
 	own := e.ownCert()
-	// IP connections have no server name. Check the dialed address instead.
+	// IP connections have no server name. Check the dialed address instead
 	dialed := ""
 	if u, err := url.Parse(base); err == nil {
 		dialed = u.Hostname()
@@ -255,7 +311,7 @@ func (e *env) transport(base string) http.RoundTripper {
 	t.TLSClientConfig = &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: true,
-		// Trust the configured certificate directly. Validate other certificates normally.
+		// Trust the configured certificate directly. Validate other certificates normally
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 {
 				return errors.New("tls: the server presented no certificate")
@@ -297,7 +353,7 @@ func (e *env) ownCert() *x509.Certificate {
 	return cert
 }
 
-// Returns the gateway's address, using its listener or the API listener.
+// Returns the gateway's address, using its listener or the API listener
 func (e *env) gatewayBase(ctx context.Context) string {
 	api := e.resolveAddr()
 	if api == "" {
@@ -322,7 +378,7 @@ func (e *env) gatewayBase(ctx context.Context) string {
 	return e.base(api)
 }
 
-// Returns gateway status, or nil if unavailable.
+// Returns gateway status, or nil if unavailable
 func (e *env) gatewayStatus(ctx context.Context) *v1.GatewayStatus {
 	resp, err := e.cl.gateway.GetGatewayStatus(ctx, connect.NewRequest(&v1.GetGatewayStatusRequest{}))
 	if err != nil {
@@ -415,7 +471,7 @@ func (e *env) meshModel(ctx context.Context, source, repo, group string) (string
 	return "", "", fmt.Errorf("%s has groups %s on the mesh, pass --group", repo, strings.Join(names, ", "))
 }
 
-// Resolves a stored repository and group.
+// Resolves a stored repository and group
 func (e *env) storedModel(ctx context.Context, source, repo, group string) (string, string, error) {
 	sourceID, err := e.defaultSource(ctx, source)
 	if err != nil {
@@ -425,7 +481,7 @@ func (e *env) storedModel(ctx context.Context, source, repo, group string) (stri
 	return sourceID, groupName, err
 }
 
-// Follows task progress and logs. JSON output contains only the final snapshot.
+// Follows task progress and logs. JSON output contains only the final snapshot
 func (e *env) follow(ctx context.Context, id string) (*v1.Task, error) {
 	stream, err := e.cl.tasks.WatchTask(ctx, connect.NewRequest(&v1.WatchTaskRequest{Id: id}))
 	if err != nil {
@@ -526,19 +582,23 @@ func status(t *v1.Task, rate float64) string {
 	parts := []string{t.GetTitle(), loud(t.GetState())}
 	if p.GetTotal() > 0 {
 		pct := float64(p.GetDone()) * 100 / float64(p.GetTotal())
-		if p.GetTotal() < 1000 {
-			parts = append(parts, fmt.Sprintf("%d/%d", p.GetDone(), p.GetTotal()))
-		} else {
-			parts = append(parts, fmt.Sprintf("%s/%s %.0f%%", estimate.Human(p.GetDone()), estimate.Human(p.GetTotal()), pct))
-		}
+		parts = append(parts, fmt.Sprintf("%s %.0f%%", progressAmount(p), pct))
 	}
-	if rate > 0 && !terminalState(t.GetState()) {
+	if rate > 0 && !terminalState(t.GetState()) && p.GetUnit() == v1.ProgressUnit_PROGRESS_UNIT_BYTES {
 		parts = append(parts, estimate.Human(uint64(rate))+"/s")
 	}
 	if p.GetMessage() != "" {
 		parts = append(parts, p.GetMessage())
 	}
 	return strings.Join(parts, "  ")
+}
+
+// Done over total in the unit the progress counts, bytes humanised and steps as plain numbers
+func progressAmount(p *v1.TaskProgress) string {
+	if p.GetUnit() == v1.ProgressUnit_PROGRESS_UNIT_BYTES {
+		return fmt.Sprintf("%s/%s", estimate.Human(p.GetDone()), estimate.Human(p.GetTotal()))
+	}
+	return fmt.Sprintf("%d/%d", p.GetDone(), p.GetTotal())
 }
 
 func terminalState(s v1.TaskState) bool {
@@ -558,5 +618,5 @@ func isTerminal(w io.Writer) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-// Uppercase enum name for tables.
+// Uppercase enum name for tables
 func loud(e protoreflect.Enum) string { return strings.ToUpper(text.Enum(e)) }

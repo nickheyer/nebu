@@ -366,19 +366,56 @@ func Stem(p string) string {
 	return base
 }
 
-// Reads a -00001-of-00003 shard suffix off a name without its extension
+// Reads a -00001-of-00003 shard suffix off a name without its extension, each number padded to five digits or more
 func Shard(base string) (stem string, index, count uint32, ok bool) {
+	stem, idx, cnt, ok := shardDigits(base)
+	if !ok {
+		return base, 0, 0, false
+	}
+	n, err := strconv.ParseUint(idx, 10, 32)
+	if err != nil {
+		return base, 0, 0, false
+	}
+	c, err := strconv.ParseUint(cnt, 10, 32)
+	if err != nil || c == 0 || n > c {
+		return base, 0, 0, false
+	}
+	return stem, uint32(n), uint32(c), true
+}
+
+// Splits a shard name into its stem and the index and count digits as written
+func shardDigits(base string) (stem, idx, cnt string, ok bool) {
 	i := strings.LastIndex(base, "-of-")
-	if i < 6 || len(base) < i+9 {
-		return base, 0, 0, false
+	if i < 0 {
+		return "", "", "", false
 	}
-	idx, cnt := base[i-5:i], base[i+4:]
-	if base[i-6] != '-' || len(cnt) != 5 || !digits(idx) || !digits(cnt) {
-		return base, 0, 0, false
+	start := i
+	for start > 0 && base[start-1] >= '0' && base[start-1] <= '9' {
+		start--
 	}
-	n, _ := strconv.ParseUint(idx, 10, 32)
-	c, _ := strconv.ParseUint(cnt, 10, 32)
-	return base[:i-6], uint32(n), uint32(c), true
+	idx, cnt = base[start:i], base[i+4:]
+	if start == 0 || base[start-1] != '-' || len(idx) < 5 || len(cnt) < 5 || !digits(cnt) {
+		return "", "", "", false
+	}
+	return base[:start-1], idx, cnt, true
+}
+
+// Names every shard of the split file a shard name belongs to, keeping its digit widths and first index
+func Shards(base string) []string {
+	stem, index, count, ok := Shard(base)
+	if !ok {
+		return nil
+	}
+	_, idx, cnt, _ := shardDigits(base)
+	first := uint32(1)
+	if index == 0 {
+		first = 0
+	}
+	out := make([]string, 0, count)
+	for n := first; n < first+count; n++ {
+		out = append(out, fmt.Sprintf("%s-%0*d-of-%s", stem, len(idx), n, cnt))
+	}
+	return out
 }
 
 func digits(s string) bool {

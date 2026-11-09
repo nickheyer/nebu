@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
@@ -364,7 +365,7 @@ message ListBotsResponse {
 
 // Fetches one bot by id or name
 message GetBotRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns one bot
@@ -374,7 +375,7 @@ message GetBotResponse {
 
 // Creates a bot
 message CreateBotRequest {
-  string name = 1;
+  string name = 1 [(buf.validate.field).string.min_len = 1];
   string token = 2;
   bool enabled = 3;
   BotSpec spec = 4;
@@ -387,7 +388,7 @@ message CreateBotResponse {
 
 // Replace bot settings and restart it if running.
 message UpdateBotRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
   // Name. Empty keeps the current name.
   string name = 2;
   // Token. Empty keeps the stored token.
@@ -403,7 +404,7 @@ message UpdateBotResponse {
 
 // Deletes a bot, disconnecting it first
 message DeleteBotRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the deleted bot
@@ -413,7 +414,7 @@ message DeleteBotResponse {
 
 // Connects a bot and marks it enabled
 message StartBotRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the bot as it connects
@@ -423,7 +424,7 @@ message StartBotResponse {
 
 // Disconnects a bot and marks it disabled
 message StopBotRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the bot once disconnected
@@ -431,21 +432,28 @@ message StopBotResponse {
   Bot bot = 1;
 }
 
-// List recent activity, newest first.
+// Lists recent activity newest first, the entries whose message, kind, or persona holds every word of the query
 message ListBotActivityRequest {
   string bot_id = 1;
-  // Maximum results. Zero returns all retained activity.
-  uint32 limit = 2;
+  // Entries per page. Zero returns every retained entry.
+  uint32 limit = 2 [(buf.validate.field).uint32.lte = 10000];
+  string query = 3 [(buf.validate.field).string.max_len = 256];
+  // info, warn, or error
+  string level = 4;
+  // reply, image, video, command, automation, reaction, shard, or presence
+  string kind = 5;
+  string cursor = 6;
 }
 
 // Returns activity newest first
 message ListBotActivityResponse {
   repeated BotActivity activity = 1;
+  string next_cursor = 2;
 }
 
 // Lists the guilds and channels a running bot can see
 message ListBotGuildsRequest {
-  string bot_id = 1;
+  string bot_id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns guilds with their channels
@@ -455,6 +463,11 @@ message ListBotGuildsResponse {
 
 // Validate a token with Discord before saving.
 message ProbeBotTokenRequest {
+  option (buf.validate.message).cel = {
+    id: "token_or_bot"
+    message: "a token or a bot id is required"
+    expression: "this.token != '' || this.bot_id != ''"
+  };
   string token = 1;
   // Use this bot's saved token when no token is supplied.
   string bot_id = 2;
@@ -472,8 +485,8 @@ message ProbeBotTokenResponse {
 
 // Post to a channel using a running bot persona.
 message SendBotMessageRequest {
-  string bot_id = 1;
-  string channel_id = 2;
+  string bot_id = 1 [(buf.validate.field).string.min_len = 1];
+  string channel_id = 2 [(buf.validate.field).string.min_len = 1];
   // Persona ID. Empty selects the first persona.
   string persona_id = 3;
   // text, chat, image, or video

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("{% set q = 5000 %}{{ 'ab'|center(10 ** q) }}")

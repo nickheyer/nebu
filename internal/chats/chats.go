@@ -68,13 +68,13 @@ func Upgrade(blobs *store.Store) db.Upgrade {
 	}
 }
 
-// The store a request reaches: the account behind its session or API token,
-// or the daemon's shared store for the daemon token and auth.disabled.
-func OwnerOf(sess *auth.Session) db.ChatOwner {
-	if sess == nil {
+// The store a request reaches, the account behind its session or API token, or the
+// daemon's shared store for the daemon token and auth.disabled, which name no subject
+func OwnerOf(id auth.Identity) db.ChatOwner {
+	if id.Subject == "" {
 		return db.ChatOwner{Provider: daemonProvider}
 	}
-	return db.ChatOwner{Provider: sess.Provider, Subject: sess.Subject}
+	return db.ChatOwner{Provider: id.Provider, Subject: id.Subject}
 }
 
 func (m *Manager) now() time.Time {
@@ -119,8 +119,8 @@ func (m *Manager) Put(ctx context.Context, owner db.ChatOwner, c *v1.Conversatio
 		return nil, fmt.Errorf("%w: a conversation needs at least one turn, delete it instead of emptying it", ErrChat)
 	}
 	for i, t := range c.GetTurns() {
-		if t.GetRole() != "user" && t.GetRole() != "assistant" {
-			return nil, fmt.Errorf("%w: turn %d has role %q, want user or assistant", ErrChat, i+1, t.GetRole())
+		if t.GetRole() != "user" && t.GetRole() != "assistant" && t.GetRole() != "tool" {
+			return nil, fmt.Errorf("%w: turn %d has role %q, want user, assistant or tool", ErrChat, i+1, t.GetRole())
 		}
 		for _, f := range append(append([]*v1.ChatFile{}, t.GetImages()...), t.GetMedia()...) {
 			if f.GetId() == "" && f.GetUrl() == "" && f.GetError() == "" {

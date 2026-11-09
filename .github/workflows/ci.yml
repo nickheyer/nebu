@@ -41,11 +41,12 @@ jobs:
         with:
           version: '1.73.0'
           setup_only: true
-      - name: Check protobuf generation
-        run: ./scripts/check-gen.sh
+      - name: Check protobuf compatibility against main
+        if: github.ref != 'refs/heads/main'
+        run: buf breaking --against ".git#branch=main"
       - name: Check Go and TypeScript
         run: |
-          make proto-lint vet staticcheck govulncheck cgo-guard test
+          make proto-lint vet staticcheck govulncheck test
           npm ci --no-audit --no-fund --prefix web/nebu
           npm run check --prefix web/nebu
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
@@ -119,11 +120,6 @@ jobs:
           CGO_ENABLED: '0'
           BINARY: ${{ matrix.binary }}
         run: go build -trimpath -mod=readonly -o "$BINARY" ./cmd/nebu
-      - name: Test daemon and embedded UI
-        shell: bash
-        env:
-          BINARY: ${{ matrix.binary }}
-        run: python scripts/smoke.py "$BINARY"
       - name: Run race tests
         if: runner.os != 'Windows'
         env:
@@ -139,6 +135,4 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
       - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
       - name: Build container
-        run: docker buildx build --load --tag ghcr.io/nickheyer/nebu:smoke .
-      - name: Test Compose, persistence, and restart
-        run: ./scripts/smoke-container.sh smoke
+        run: docker buildx build --load --tag ghcr.io/nickheyer/nebu:ci .

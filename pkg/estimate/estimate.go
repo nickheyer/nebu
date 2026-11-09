@@ -170,6 +170,10 @@ type Policy struct {
 	GroupCache func(s *Scope, g *v1.TensorGroup) (uint64, error)
 	// Device count parameter. Limits capacity to the largest selected pools. Empty uses all devices.
 	DevicesParam string
+	// Data parallel rank count parameter, each rank taking DevicesParam devices of its own, one rank when empty
+	RanksParam string
+	// Whether the ranks split a group between them instead of each rank holding it whole
+	RankSplit func(s *Scope, g *v1.TensorGroup) bool
 	// Context and batch dimensions for cache sizing.
 	Shape func(p Params) archs.Run
 	// Resolves auto parameters before context sizing. May extend the descriptor with companion groups.
@@ -495,8 +499,80 @@ func (p *Policy) rule(kind v1.TensorGroupKind) (GroupRule, bool) {
 	return GroupRule{}, false
 }
 
-// Plans resolved parameters. Skips cache sizing when the policy has no cache.
+// Plans one rank on the weakest rank's devices, then repeats its device and host use for every rank
 func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
+	primary, host := pools(in.Host)
+	ranks := p.rankCount(s.Params)
+	groups := p.rankGroups(primary, s.Params, ranks)
+	plan, err := p.planRank(in, s, groups[len(groups)-1], host, ranks)
+	if err != nil || ranks == 1 {
+		return plan, err
+	}
+	spread(plan, groups, host, ranks, in.Free)
+	if len(groups) < ranks {
+		per := len(groups[0])
+		plan.Verdict = v1.FitVerdict_FIT_VERDICT_NO
+		plan.Detail = fmt.Sprintf("%d data parallel ranks of %d devices each need %d devices, the host holds %d", ranks, per, ranks*per, len(primary))
+	}
+	return plan, nil
+}
+
+// Data parallel ranks the params run, at least one
+func (p *Policy) rankCount(params Params) int {
+	if p.RanksParam == "" {
+		return 1
+	}
+	return int(max(params.Int(p.RanksParam), 1))
+}
+
+// Pools of each rank in turn from the largest, every rank taking the device count parameter's pools,
+// only whole groups when there are several ranks and the one partial group when no whole group fits
+func (p *Policy) rankGroups(primary []*v1.MemoryPool, params Params, ranks int) [][]*v1.MemoryPool {
+	per := len(primary)
+	if p.DevicesParam != "" {
+		per = int(max(params.Int(p.DevicesParam), 1))
+	}
+	var out [][]*v1.MemoryPool
+	for r := 0; r < ranks && per > 0 && (r+1)*per <= len(primary); r++ {
+		out = append(out, primary[r*per:(r+1)*per])
+	}
+	if len(out) == 0 {
+		out = append(out, primary[:min(per, len(primary))])
+	}
+	return out
+}
+
+// Repeats a rank plan's device use on every rank's pools and its host use per rank, totals counting all
+func spread(plan *v1.MemoryPlan, groups [][]*v1.MemoryPool, host []*v1.MemoryPool, ranks int, free bool) {
+	planned := map[string]bool{}
+	for _, pl := range groups[len(groups)-1] {
+		planned[pl.GetId()] = true
+	}
+	var device, hosted uint64
+	for _, pu := range plan.GetPools() {
+		if planned[pu.GetPoolId()] {
+			device += pu.GetUsedBytes()
+		} else {
+			hosted += pu.GetUsedBytes()
+		}
+	}
+	n := uint64(ranks)
+	var out []*v1.PoolUsage
+	for _, g := range groups {
+		out = append(out, distribute(device, g, free)...)
+	}
+	plan.Pools = append(out, distribute(hosted*n, host, free)...)
+	plan.WeightsBytes *= n
+	plan.CacheBytes *= n
+	plan.OverheadBytes *= n
+	plan.OverheadDelta *= float64(ranks)
+	for _, pl := range plan.GetPlacements() {
+		pl.Bytes *= n
+	}
+}
+
+// Plans one rank on its pools with a rank's share of host pools, cache sized only when the policy has one
+func (p *Policy) planRank(in Input, s *Scope, primary, host []*v1.MemoryPool, ranks int) (*v1.MemoryPlan, error) {
 	if p.CacheBytes != nil {
 		if err := p.perToken(in, s); err != nil {
 			return nil, err
@@ -516,8 +592,6 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 		rule, known := p.rule(g.GetKind())
 		return !known || rule.Loaded == nil || rule.Loaded(s, g)
 	}
-	primary, host := pools(in.Host)
-	primary = p.spanned(primary, s.Params)
 	// A host with no device memory holds everything in host memory
 	placement := in.Placement
 	if placement == v1.Placement_PLACEMENT_UNSPECIFIED && len(primary) == 0 {
@@ -534,6 +608,7 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 	for _, pl := range host {
 		sv.hostCap += uint64(float64(capacity(pl, in.Free)) * margin)
 	}
+	sv.hostCap /= uint64(ranks)
 	sv.beside(overhead)
 	layers := 0
 	for _, g := range s.Descriptor.GetGroups() {
@@ -569,8 +644,12 @@ func (p *Policy) plan(in Input, s *Scope) (*v1.MemoryPlan, error) {
 			skipped.add(g.GetKind(), v1.PoolKind_POOL_KIND_UNSPECIFIED, g.GetBytes(), 1)
 			continue
 		}
-		weights += g.GetBytes()
-		it := item{kind: g.GetKind(), layer: g.GetLayer(), weights: g.GetBytes()}
+		bytes := g.GetBytes()
+		if ranks > 1 && p.RankSplit != nil && p.RankSplit(s, g) {
+			bytes = (bytes + uint64(ranks) - 1) / uint64(ranks)
+		}
+		weights += bytes
+		it := item{kind: g.GetKind(), layer: g.GetLayer(), weights: bytes}
 		switch {
 		case g.GetKind() == v1.TensorGroupKind_TENSOR_GROUP_KIND_LAYER:
 			it.cache = cacheOf(g)
@@ -694,21 +773,6 @@ func (s *solver) contradiction() string {
 		}
 	}
 	return ""
-}
-
-// Selects the largest pools allowed by the device count parameter.
-func (p *Policy) spanned(primary []*v1.MemoryPool, params Params) []*v1.MemoryPool {
-	if p.DevicesParam == "" {
-		return primary
-	}
-	n := params.Int(p.DevicesParam)
-	if n < 1 {
-		n = 1
-	}
-	if int(n) < len(primary) {
-		return primary[:int(n)]
-	}
-	return primary
 }
 
 func (b *bucket) prepare(params Params) {
@@ -1110,5 +1174,5 @@ func Human(b uint64) string {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }

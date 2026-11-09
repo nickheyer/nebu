@@ -18,7 +18,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-//go:embed migrations/*.sql migrations/atlas.sum
+//go:embed migrations/*.sql migrations/atlas.sum migrations/down/*.sql
 var migrationFiles embed.FS
 
 // Target schema for Atlas migrations and drift checks.
@@ -30,6 +30,10 @@ const (
 	operator = "nebu"
 	// Connections reads share beside the one writer, each on its own WAL snapshot
 	readConns = 4
+	// The table the migration runner before atlas recorded its versions in
+	legacyTable = "schema_migrations"
+	// Where the reverse of each migration lives, by the migration's file name
+	downDir = "migrations/down"
 )
 
 // Returned when a record is not in the store
@@ -45,8 +49,8 @@ type DB struct {
 	// The readers, a pool that never waits behind the writer
 	reads *sql.DB
 	path  string
-	// Backup path for a pre-Atlas database, or empty.
-	SetAside string
+	// How a database from the migration runner before atlas was brought onto the chain in place, or empty
+	Upgraded string
 	// Differences between the live schema and schema.sql.
 	Drift []string
 	// Recovery details for revisions missing from the migration directory, or empty.
@@ -58,10 +62,6 @@ type Upgrade func(ctx context.Context, d *DB) error
 
 // Opens the database, applies embedded migrations, and runs the upgrades over the migrated rows
 func Open(path string, upgrades ...Upgrade) (*DB, error) {
-	aside, err := setAsideLegacy(path)
-	if err != nil {
-		return nil, err
-	}
 	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
 	sqldb, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -75,7 +75,7 @@ func Open(path string, upgrades ...Upgrade) (*DB, error) {
 	}
 	reads.SetMaxOpenConns(readConns)
 	reads.SetMaxIdleConns(readConns)
-	d := &DB{sql: sqldb, reads: reads, path: path, SetAside: aside}
+	d := &DB{sql: sqldb, reads: reads, path: path}
 	if err := d.migrate(context.Background(), upgrades); err != nil {
 		d.Close()
 		return nil, err
@@ -86,37 +86,7 @@ func Open(path string, upgrades ...Upgrade) (*DB, error) {
 // Closes the readers and the writer
 func (d *DB) Close() error { return errors.Join(d.reads.Close(), d.sql.Close()) }
 
-// Backs up databases from the old migration runner and returns the backup path.
-// Those migrations are unavailable, so startup creates a new database.
-func setAsideLegacy(path string) (string, error) {
-	if _, err := os.Stat(path); err != nil {
-		return "", nil
-	}
-	probe, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)")
-	if err != nil {
-		return "", err
-	}
-	var legacy int
-	err = probe.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&legacy)
-	if err == nil && legacy > 0 {
-		// Checkpoint the WAL before copying the database.
-		probe.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
-	}
-	probe.Close()
-	if err != nil || legacy == 0 {
-		return "", err
-	}
-	aside := fmt.Sprintf("%s.pre-atlas.%s", path, time.Now().UTC().Format("20060102T150405"))
-	if err := os.Rename(path, aside); err != nil {
-		return "", err
-	}
-	for _, suffix := range []string{"-wal", "-shm"} {
-		os.Remove(path + suffix)
-	}
-	return aside, nil
-}
-
-// Applies pending migrations, runs the upgrades over the migrated rows, and notes the drift left
+// Applies pending migrations, runs the store's own upgrades then the caller's, and notes the drift left
 func (d *DB) migrate(ctx context.Context, upgrades []Upgrade) error {
 	dir, err := migrationDir()
 	if err != nil {
@@ -129,7 +99,7 @@ func (d *DB) migrate(ctx context.Context, upgrades []Upgrade) error {
 		return err
 	}
 	// The writer is free again here, so upgrades may write through the store's own methods
-	for _, up := range upgrades {
+	for _, up := range append([]Upgrade{hashLegacyTokens, adminLegacyUsers}, upgrades...) {
 		if err := up(ctx, d); err != nil {
 			return fmt.Errorf("upgrade: %w", err)
 		}
@@ -152,6 +122,9 @@ func (d *DB) apply(ctx context.Context, dir migrate.Dir) error {
 		}
 		revs := revisionStore{conn}
 		var err error
+		if d.Upgraded, err = adoptLegacy(ctx, drv, conn, d.path, dir, revs); err != nil {
+			return err
+		}
 		if d.Baselined, err = baseline(ctx, drv, conn, d.path, dir, revs); err != nil {
 			return err
 		}
@@ -166,6 +139,54 @@ func (d *DB) apply(ctx context.Context, dir migrate.Dir) error {
 	})
 }
 
+// Reverts every applied migration newer than version, newest first, each through its down file, all when version is empty
+func (d *DB) MigrateDown(ctx context.Context, version string) error {
+	dir, err := migrationDir()
+	if err != nil {
+		return err
+	}
+	files, err := dir.Files()
+	if err != nil {
+		return err
+	}
+	if version != "" && migrate.FilesLastIndex(files, func(f migrate.File) bool { return f.Version() == version }) < 0 {
+		return fmt.Errorf("migrate down: no migration has version %s", version)
+	}
+	return d.withDriver(ctx, func(drv migrate.Driver, conn *sql.Conn) error {
+		revs := revisionStore{conn}
+		applied, err := revs.ReadRevisions(ctx)
+		if err != nil {
+			return err
+		}
+		for i := len(applied) - 1; i >= 0 && applied[i].Version > version; i-- {
+			stmts, err := downStatements(files, applied[i].Version)
+			if err != nil {
+				return err
+			}
+			if err := execStatements(ctx, conn, stmts); err != nil {
+				return fmt.Errorf("migrate down %s: %w", applied[i].Version, err)
+			}
+			if err := revs.DeleteRevision(ctx, applied[i].Version); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// The statements reversing one migration, read from its down file
+func downStatements(files []migrate.File, version string) ([]string, error) {
+	i := migrate.FilesLastIndex(files, func(f migrate.File) bool { return f.Version() == version })
+	if i < 0 {
+		return nil, fmt.Errorf("migrate down: revision %s is not in the migration directory", version)
+	}
+	data, err := fs.ReadFile(migrationFiles, downDir+"/"+files[i].Name())
+	if err != nil {
+		return nil, fmt.Errorf("migrate down: %s has no down file: %w", files[i].Name(), err)
+	}
+	return migrate.NewLocalFile(files[i].Name(), data).Stmts()
+}
+
 // Runs fn with an atlas driver over the writer connection, held for fn alone
 func (d *DB) withDriver(ctx context.Context, fn func(drv migrate.Driver, conn *sql.Conn) error) error {
 	conn, err := d.sql.Conn(ctx)
@@ -178,6 +199,59 @@ func (d *DB) withDriver(ctx context.Context, fn func(drv migrate.Driver, conn *s
 		return err
 	}
 	return fn(drv, conn)
+}
+
+// Brings a database from the runner before atlas onto the chain in place, backed up first, then run through every migration
+func adoptLegacy(ctx context.Context, drv migrate.Driver, conn *sql.Conn, path string, dir migrate.Dir, store revisionStore) (string, error) {
+	var legacy int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, legacyTable).Scan(&legacy); err != nil {
+		return "", err
+	}
+	if legacy == 0 {
+		return "", nil
+	}
+	all, err := dir.Files()
+	if err != nil {
+		return "", err
+	}
+	files := migrate.SkipCheckpointFiles(all)
+	if len(files) == 0 {
+		return "", errors.New("legacy upgrade: the migration directory is empty")
+	}
+	backup, err := copyAside(ctx, conn, path, "pre-atlas")
+	if err != nil {
+		return "", err
+	}
+	if _, err := conn.ExecContext(ctx, `DROP TABLE "`+legacyTable+`"`); err != nil {
+		return "", err
+	}
+	first := files[0]
+	stmts, err := first.Stmts()
+	if err != nil {
+		return "", err
+	}
+	changes, err := changesTo(ctx, drv, stmts)
+	if err != nil {
+		return "", err
+	}
+	if len(changes) > 0 {
+		if err := applyChanges(ctx, drv, conn, changes); err != nil {
+			return "", fmt.Errorf("legacy upgrade to %s: %w", first.Version(), err)
+		}
+	}
+	sums, err := dir.Checksum()
+	if err != nil {
+		return "", err
+	}
+	sum, err := sums.SumByName(first.Name())
+	if err != nil {
+		return "", err
+	}
+	rev := &migrate.Revision{Version: first.Version(), Description: first.Desc(), Type: migrate.RevisionTypeBaseline, ExecutedAt: time.Now(), Hash: sum, OperatorVersion: operator}
+	if err := store.WriteRevision(ctx, rev); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("the %s table named the runner before atlas, so the schema was brought to %s in place with %d changes and every later migration runs, the copy before at %s", legacyTable, first.Version(), len(changes), backup), nil
 }
 
 // Reconciles databases whose recorded revisions are absent from the directory.
@@ -228,7 +302,10 @@ func baseline(ctx context.Context, drv migrate.Driver, conn *sql.Conn, path stri
 		return "", err
 	}
 	if len(changes) > 0 {
-		if err := applyChanges(ctx, drv, conn, path, changes); err != nil {
+		if _, err := copyAside(ctx, conn, path, "pre-baseline"); err != nil {
+			return "", err
+		}
+		if err := applyChanges(ctx, drv, conn, changes); err != nil {
 			return "", fmt.Errorf("baseline: %w", err)
 		}
 	}
@@ -249,25 +326,30 @@ func baseline(ctx context.Context, drv migrate.Driver, conn *sql.Conn, path stri
 	return fmt.Sprintf("%s, so the schema was brought to %s in place with %d changes", why, head.Version(), len(changes)), nil
 }
 
-// Backs up the database and applies schema changes in one transaction.
-// Keep Atlas foreign-key pragmas outside the transaction so they take effect.
-func applyChanges(ctx context.Context, drv migrate.Driver, conn *sql.Conn, path string, changes []schema.Change) error {
+// Plans schema changes with atlas and runs them as one transaction between their pragmas
+func applyChanges(ctx context.Context, drv migrate.Driver, conn *sql.Conn, changes []schema.Change) error {
 	plan, err := drv.PlanChanges(ctx, "baseline", changes)
 	if err != nil {
 		return err
 	}
-	if _, err := copyAside(ctx, conn, path, "pre-baseline"); err != nil {
-		return err
-	}
-	var before, body, after []string
+	stmts := make([]string, 0, len(plan.Changes))
 	for _, c := range plan.Changes {
+		stmts = append(stmts, c.Cmd)
+	}
+	return execStatements(ctx, conn, stmts)
+}
+
+// Runs the statements as one transaction, pragmas before and after it kept outside so they take effect
+func execStatements(ctx context.Context, conn *sql.Conn, stmts []string) error {
+	var before, body, after []string
+	for _, stmt := range stmts {
 		switch {
-		case !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(c.Cmd)), "PRAGMA"):
-			body = append(body, c.Cmd)
+		case !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(stmt)), "PRAGMA"):
+			body = append(body, stmt)
 		case len(body) == 0:
-			before = append(before, c.Cmd)
+			before = append(before, stmt)
 		default:
-			after = append(after, c.Cmd)
+			after = append(after, stmt)
 		}
 	}
 	run := func(stmts []string) error {
@@ -286,8 +368,7 @@ func applyChanges(ctx context.Context, drv migrate.Driver, conn *sql.Conn, path 
 	}
 	if err := run(body); err != nil {
 		conn.ExecContext(ctx, "ROLLBACK")
-		run(after)
-		return err
+		return errors.Join(err, run(after))
 	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return err
@@ -310,7 +391,7 @@ func copyAside(ctx context.Context, conn *sql.Conn, path, why string) (string, e
 	return aside, os.Chmod(aside, 0o600)
 }
 
-// Copies the embedded migration files into an atlas memory dir
+// Copies the embedded migration files into an atlas memory dir, the down directory left out of its checksum
 func migrationDir() (*migrate.MemDir, error) {
 	dir := &migrate.MemDir{}
 	entries, err := fs.ReadDir(migrationFiles, "migrations")
@@ -318,6 +399,9 @@ func migrationDir() (*migrate.MemDir, error) {
 		return nil, err
 	}
 	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
 		data, err := fs.ReadFile(migrationFiles, "migrations/"+entry.Name())
 		if err != nil {
 			return nil, err
@@ -335,6 +419,11 @@ func schemaChanges(ctx context.Context, live migrate.Driver) ([]schema.Change, e
 	if err != nil {
 		return nil, fmt.Errorf("parse schema.sql: %w", err)
 	}
+	return changesTo(ctx, live, stmts)
+}
+
+// Schema changes bringing the live database to what the statements build in a fresh one
+func changesTo(ctx context.Context, live migrate.Driver, stmts []string) ([]schema.Change, error) {
 	mem, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return nil, err
@@ -343,7 +432,7 @@ func schemaChanges(ctx context.Context, live migrate.Driver) ([]schema.Change, e
 	mem.SetMaxOpenConns(1)
 	for _, stmt := range stmts {
 		if _, err := mem.ExecContext(ctx, stmt); err != nil {
-			return nil, fmt.Errorf("replay schema.sql %q: %w", stmt, err)
+			return nil, fmt.Errorf("replay %q: %w", stmt, err)
 		}
 	}
 	wantDrv, err := sqlite.Open(mem)

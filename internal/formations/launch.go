@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,10 +21,9 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/db"
-	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/mesh"
-	"github.com/nickheyer/nebu/internal/slots"
+	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/internal/tasks"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/runtimes"
@@ -43,12 +43,13 @@ const (
 	transportRDMA = "rdma"
 	// The relay trace mark the gateway writes when both seats answered
 	relayBoth = "prefill+decode"
+	// Words the canary prompt runs past the relay break even, and the room it keeps under the context
+	canaryMargin = 32
 )
 
 // Plans and launches a formation across the span
 func (m *Manager) Run(ctx context.Context, run *v1.RunRequest) (*v1.Formation, *v1.Task, error) {
-	// A seat's request names the seat and carries its block; run again, it would conduct a
-	// formation named for the seat, whose seats take a second suffix
+	// A seat request carries its block and would conduct a formation named for the seat, so it is refused
 	if seat := run.GetSeat(); seat != nil {
 		return nil, nil, fmt.Errorf("%w: %s is a %s seat of the formation %s, not a formation of its own; run %s", ErrFormation, run.GetName(), seat.GetRole(), seat.GetName(), seat.GetName())
 	}
@@ -77,9 +78,7 @@ func (m *Manager) plans(ctx context.Context, run *v1.RunRequest) (*planned, erro
 	return m.plan(ctx, run)
 }
 
-// Launches a formation again after a failure or a restart: members that left the mesh drop out
-// of the span, the planner runs on the mesh as it is, and ranks that rendezvous meet at the
-// address and ports they met at before when the same nodes play the same roles
+// Launches a formation again over the mesh as it is, dropping departed members and reusing matching seats' rendezvous
 func (m *Manager) relaunch(ctx context.Context, prev *v1.Formation) (*v1.Formation, *v1.Task, error) {
 	run := proto.Clone(prev.GetRequest()).(*v1.RunRequest)
 	var kept, dropped []string
@@ -93,7 +92,7 @@ func (m *Manager) relaunch(ctx context.Context, prev *v1.Formation) (*v1.Formati
 		kept = append(kept, entry)
 	}
 	run.Span = kept
-	p, err := m.plans(ctx, run)
+	p, err := m.planPinned(ctx, run, seatPins(prev))
 	if err != nil {
 		if len(dropped) > 0 {
 			return nil, nil, fmt.Errorf("%w (%s left the mesh and dropped out of the span)", err, strings.Join(dropped, ", "))
@@ -106,6 +105,17 @@ func (m *Manager) relaunch(ctx context.Context, prev *v1.Formation) (*v1.Formati
 	return m.start(ctx, run, p, prev)
 }
 
+// The install each node's seats ran on, what a relaunch holds every node to
+func seatPins(prev *v1.Formation) map[string]string {
+	pins := map[string]string{}
+	for _, s := range prev.GetSeats() {
+		if s.GetInstallId() != "" {
+			pins[s.GetNodeId()] = s.GetInstallId()
+		}
+	}
+	return pins
+}
+
 // Records a planned formation and starts its launch task
 func (m *Manager) start(ctx context.Context, run *v1.RunRequest, p *planned, prev *v1.Formation) (*v1.Formation, *v1.Task, error) {
 	plan := p.plan
@@ -115,7 +125,7 @@ func (m *Manager) start(ctx context.Context, run *v1.RunRequest, p *planned, pre
 	if !instances.FromSwap(ctx) && (m.nameTaken(p.name) || m.liveInstance(p.name)) {
 		return nil, nil, fmt.Errorf("%w: %q is already running", ErrFormation, p.name)
 	}
-	if r, ok := m.Routes.Lookup(p.name); ok && r.GetFormationId() == "" && r.GetSlotId() != "" && run.GetSlotId() == "" {
+	if run.GetSlotId() == "" && m.SlotView != nil && m.SlotView.Owns(p.name) {
 		return nil, nil, fmt.Errorf("%w: %q is a slot, run with the slot or pick another name", ErrFormation, p.name)
 	}
 	self := m.self()
@@ -140,7 +150,12 @@ func (m *Manager) start(ctx context.Context, run *v1.RunRequest, p *planned, pre
 		Group:          p.stored.GetGroup(),
 		CacheKey:       cacheKeyOf(p.stored),
 		Sequence:       1,
+		Generation:     1,
 	}
+	f.Conditions = instances.SetCondition(f.Conditions, CondPlanned, true, ReasonPlanned, plan.GetDetail(), 1)
+	f.Conditions = instances.SetCondition(f.Conditions, CondLaunched, false, ReasonLaunching, "", 1)
+	f.Conditions = instances.SetCondition(f.Conditions, CondReady, false, ReasonLaunching, "", 1)
+	f.Conditions = instances.SetCondition(f.Conditions, CondDegraded, false, ReasonLaunching, "", 1)
 	f.Request.Name = p.name
 	f.Request.RuntimeId = p.rt.ID()
 	f.Request.SourceId = p.stored.GetSourceId()
@@ -172,9 +187,7 @@ func (m *Manager) start(ctx context.Context, run *v1.RunRequest, p *planned, pre
 	return out, task, nil
 }
 
-// The key stages keep a model's tensor cache under: the model's store key and the digests of its
-// files, the same on every relaunch, so the next start sends hashes first and skips what the
-// stage has
+// A model's tensor cache key from its store key and file digests, stable across relaunches so stages skip held tensors
 func cacheKeyOf(s *v1.StoredModel) string {
 	h := sha256.New()
 	h.Write([]byte(store.Key(s.GetSourceId(), s.GetRepo(), s.GetGroup())))
@@ -194,8 +207,7 @@ func cacheKeyOf(s *v1.StoredModel) string {
 	return "model-" + hex.EncodeToString(h.Sum(nil))[:24]
 }
 
-// Carries the rendezvous address and ranks of a formation being relaunched onto the new seats
-// when the same nodes play the same roles, so the collectives meet where they met before
+// Carries the rendezvous address and ranks onto relaunched seats when the same nodes play the same roles
 func carryRendezvous(prev *v1.Formation, seats []*v1.Seat) string {
 	if prev.GetRendezvous() == "" || len(prev.GetSeats()) != len(seats) {
 		return ""
@@ -257,9 +269,7 @@ func (l *launched) get(s *v1.Seat) (*v1.Instance, bool) {
 	return in, ok
 }
 
-// Pulls weights to the seats that lack them, launches seats by phase, one progress step per
-// seat, proves a relay pair with a canary, and routes the head. A canceled launch stops every
-// seat it started.
+// Pulls weights, launches seats by phase, proves a relay pair, and publishes the head, a cancel stopping every seat started
 func (m *Manager) launch(ctx context.Context, h *tasks.Handle, id string, p *planned) error {
 	f, err := m.Get(id)
 	if err != nil {
@@ -280,18 +290,21 @@ func (m *Manager) launch(ctx context.Context, h *tasks.Handle, id string, p *pla
 			return err
 		}
 		h.Logf("formation failed: %v", err)
-		m.Routes.RemoveFormation(id)
 		cleanup, cancel := context.WithTimeout(m.base, stopTimeout)
 		defer cancel()
 		m.gatherSeatLogs(cleanup, h, id, p)
 		if current, err := m.Get(id); err == nil {
+			m.drain(cleanup, current)
 			m.stopSeats(cleanup, current, h)
 		}
+		m.withdraw(cleanup, id)
 		m.update(id, func(r *v1.Formation) {
 			if r.State != v1.FormationState_FORMATION_STATE_STOPPING && r.State != v1.FormationState_FORMATION_STATE_STOPPED {
 				r.State = v1.FormationState_FORMATION_STATE_FAILED
 				r.Error = err.Error()
 				r.StoppedAt = timestamppb.Now()
+				r.Conditions = instances.SetCondition(r.Conditions, CondLaunched, false, ReasonLaunchFailed, r.Error, r.GetGeneration())
+				r.Conditions = instances.SetCondition(r.Conditions, CondReady, false, ReasonLaunchFailed, r.Error, r.GetGeneration())
 			}
 		})
 		m.Mesh.Bump()
@@ -368,6 +381,12 @@ func (m *Manager) launch(ctx context.Context, h *tasks.Handle, id string, p *pla
 			return fail(ctx.Err())
 		}
 	}
+	m.update(id, func(r *v1.Formation) {
+		r.Conditions = instances.SetCondition(r.Conditions, CondLaunched, true, ReasonSeatsReady, fmt.Sprintf("%d seats ready", total), r.GetGeneration())
+	})
+	if err := m.publishSeats(ctx, id, nil); err != nil {
+		return fail(err)
+	}
 	if m.needsCanary(p.rt, f) {
 		if err := m.canary(ctx, h, id); err != nil {
 			return fail(err)
@@ -379,20 +398,18 @@ func (m *Manager) launch(ctx context.Context, h *tasks.Handle, id string, p *pla
 	moved := m.bytesMoved(ctx, h, id, p)
 	f = m.update(id, func(r *v1.Formation) {
 		if r.State == v1.FormationState_FORMATION_STATE_STARTING {
-			r.State = v1.FormationState_FORMATION_STATE_READY
-			r.ReadyAt = timestamppb.Now()
-			r.Error = ""
+			markReady(r)
 		}
 		r.BytesMoved = moved
 	})
+	m.servedWhole(id)
 	m.Mesh.Bump()
 	h.Progress(uint64(total), uint64(total), "ready at "+f.GetEndpoint())
 	h.Logf("ready %s as %s across %d seats", f.GetName(), shapeWord(f.GetShape()), total)
 	return nil
 }
 
-// The seat whose node allocates the rendezvous address for a phase of ranks: the head among
-// them, rank 0, nil for a phase that does not rendezvous
+// The seat whose node allocates a phase's rendezvous address, the head among ranks or rank 0, nil when none
 func (m *Manager) rendezvousHead(rt runtimes.Runtime, f *v1.Formation, seats []*v1.Seat) *v1.Seat {
 	var head, first *v1.Seat
 	for _, s := range seats {
@@ -423,34 +440,29 @@ func (m *Manager) needsCanary(rt runtimes.Runtime, f *v1.Formation) bool {
 	return err == nil && role.Health.Kind == runtimes.HealthCanary
 }
 
-// Sends one short completion through the relay pair by a route of its own before the formation
-// is ready, and takes the answer as proof only when the gateway's trace says both seats served
+// Sends one completion past the relay break even through a canary route, passing when the trace shows both seats served
 func (m *Manager) canary(ctx context.Context, h *tasks.Handle, id string) error {
 	if m.Gateway == nil {
 		return fmt.Errorf("%w: this node has no gateway to send the canary through", ErrFormation)
-	}
-	if m.Traces == nil {
-		return fmt.Errorf("%w: this node records no traces, so the canary cannot be proven", ErrFormation)
 	}
 	f, err := m.Get(id)
 	if err != nil {
 		return err
 	}
-	in, err := m.headInstance(ctx, f)
-	if err != nil {
-		return err
+	breakEven, window := f.GetPlan().GetRelayBreakEvenPrompt(), f.GetPlan().GetContext()
+	words := breakEven + canaryMargin
+	if window > 0 && words+canaryMargin >= window {
+		return fmt.Errorf("%w: the plan's relay break even of %d tokens leaves no room under its %d token context, so no request takes the pair", ErrFormation, breakEven, window)
 	}
-	probe := proto.Clone(f).(*v1.Formation)
-	if probe.Plan == nil {
-		probe.Plan = &v1.FormationPlan{}
-	}
-	// Every prompt takes the pair on the canary route, whatever the plan's break even.
-	probe.Plan.RelayBreakEvenPrompt = 1
+	owner := ownerOf(id)
 	name := f.GetName() + ".canary"
-	m.Routes.ServeFormationAs(name, probe, in, m.Runtimes.API(f.GetRuntimeId()), routeSeats(f), nil, nil)
-	defer m.Routes.Delete(name)
+	if _, err := m.Registrar.NameRoute(ctx, owner, name, pools.RouteSpec{Shape: f.GetShape(), Seats: pools.SeatIDs(f)}); err != nil {
+		return fmt.Errorf("canary route %s: %w", name, err)
+	}
+	defer m.Registrar.DropRoute(context.WithoutCancel(ctx), owner, name)
 	h.Message("canary through the relay pair")
-	body, err := json.Marshal(map[string]any{"model": name, "messages": []map[string]string{{"role": "user", "content": "Say ok."}}, "max_tokens": 1, "stream": false})
+	prompt := strings.TrimSpace(strings.Repeat("ok ", int(words))) + " Say ok."
+	body, err := json.Marshal(map[string]any{"model": name, "messages": []map[string]string{{"role": "user", "content": prompt}}, "max_tokens": 1, "stream": false})
 	if err != nil {
 		return err
 	}
@@ -471,10 +483,9 @@ func (m *Manager) canary(ctx context.Context, h *tasks.Handle, id string) error 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("canary through the relay pair answered %s: %s", resp.Status, strings.TrimSpace(string(raw)))
 	}
-	traceID := resp.Header.Get(gateway.TraceHeader)
-	t, ok := m.Traces.Get(traceID)
+	t, ok := m.Gateway.Trace(resp)
 	if !ok {
-		return fmt.Errorf("canary answered but the gateway kept no trace %q of it", traceID)
+		return fmt.Errorf("canary answered but the gateway kept no trace of it")
 	}
 	if t.GetRelay() != relayBoth {
 		return fmt.Errorf("canary answered by the decode seat alone (%s), the relay handoff did not happen", t.GetRelay())
@@ -483,7 +494,7 @@ func (m *Manager) canary(ctx context.Context, h *tasks.Handle, id string) error 
 	return nil
 }
 
-// A store reference in a run parameter, as store://source/repo#group
+// A store reference in a run parameter, the store scheme then source, repo and group
 func parseStoreRef(ref string) (source, repo, group string, ok bool) {
 	rest, isRef := strings.CutPrefix(strings.TrimSpace(ref), runtimes.StoreScheme)
 	if !isRef {
@@ -497,10 +508,7 @@ func parseStoreRef(ref string) (source, repo, group string, ok bool) {
 	return source, repo, group, true
 }
 
-// Pulls onto every seat's node the files its role reads: the model and the draft model for a
-// head holding weights, and for a head holding parts every part the slot's and request's parameters name
-// and every stored component the blueprint fills its slots from. Seats pull at once, one
-// progress row each, a seat's files in order.
+// Pulls onto each seat's node the files its role reads, model, draft, parts and components, seats in parallel
 func (m *Manager) weights(ctx context.Context, h *tasks.Handle, f *v1.Formation, p *planned) error {
 	type need struct {
 		source, repo  string
@@ -582,7 +590,7 @@ func (m *Manager) weights(ctx context.Context, h *tasks.Handle, f *v1.Formation,
 					}
 					h.Row(row, uint64(j), uint64(len(files)), message)
 				}
-				if err := m.ensure(ctx, h, progress, s.GetNodeId(), n.source, n.repo, n.group, n.revise, nil); err != nil {
+				if err := m.ensure(ctx, h, progress, s.GetNodeId(), n.source, n.repo, n.group, n.revise, nil, ""); err != nil {
 					h.Row(row, uint64(j), uint64(len(files)), name+": "+err.Error())
 					errs[i] = fmt.Errorf("%s on %s: %w", name, m.nodeName(s.GetNodeId()), err)
 					return
@@ -611,9 +619,8 @@ func (m *Manager) nodeName(id string) string {
 	return id
 }
 
-// Makes sure a node holds a model, pulling it there when it does not, the pull's byte progress
-// reported through progress
-func (m *Manager) ensure(ctx context.Context, h *tasks.Handle, progress func(done, total uint64, message string), node, source, repo, group, revision string, paths []string) error {
+// Makes sure a node holds a model, pulling it there and reporting the pull's byte progress
+func (m *Manager) ensure(ctx context.Context, h *tasks.Handle, progress func(done, total uint64, message string), node, source, repo, group, revision string, paths []string, slot string) error {
 	if node == m.self() {
 		if _, err := m.Store.ReadManifest(source, repo, group); err == nil && len(paths) == 0 {
 			h.Logf("%s %s already on %s", repo, group, m.nodeName(node))
@@ -656,7 +663,7 @@ func (m *Manager) ensure(ctx context.Context, h *tasks.Handle, progress func(don
 		return err
 	}
 	cctx, cancel := context.WithTimeout(ctx, callTimeout)
-	resp, err := cl.Mesh.PullSeat(cctx, connect.NewRequest(&v1.PullSeatRequest{SourceId: source, Repo: repo, Revision: revision, Group: group, Paths: paths}))
+	resp, err := cl.Mesh.PullSeat(cctx, connect.NewRequest(&v1.PullSeatRequest{SourceId: source, Repo: repo, Revision: revision, Group: group, Paths: paths, Slot: slot}))
 	cancel()
 	if err != nil {
 		return err
@@ -690,8 +697,7 @@ func (m *Manager) ensure(ctx context.Context, h *tasks.Handle, progress func(don
 	return nil
 }
 
-// Launches one seat on its node and records its instance on the seat, so peers launched after it
-// learn its address
+// Launches one seat on its node and records its instance, so peers launched later learn its address
 func (m *Manager) startSeat(ctx context.Context, h *tasks.Handle, f *v1.Formation, p *planned, s *v1.Seat, rendezvous string, started *launched) (*v1.Instance, error) {
 	run := m.seatRequest(f, p, s, rendezvous, started)
 	var in *v1.Instance
@@ -727,7 +733,7 @@ func (m *Manager) startSeat(ctx context.Context, h *tasks.Handle, f *v1.Formatio
 	m.update(f.GetId(), func(r *v1.Formation) {
 		for _, rs := range r.GetSeats() {
 			if sameSeat(rs, s) {
-				rs.InstanceId, rs.State = in.GetId(), in.GetState()
+				rs.InstanceId, rs.State, rs.Conditions = in.GetId(), in.GetState(), seatConditions(in.GetConditions())
 				rs.Endpoint = seatEndpoint(in, remote)
 				rs.Address, rs.AuxPort = in.GetSeat().GetAddress(), in.GetSeat().GetAuxPort()
 			}
@@ -736,8 +742,7 @@ func (m *Manager) startSeat(ctx context.Context, h *tasks.Handle, f *v1.Formatio
 	return in, nil
 }
 
-// Waits for a launched seat to be ready and records what its node reports: its endpoint,
-// transport, exposure, and measurements, or its error and triage
+// Waits for a launched seat to be ready, recording its endpoint, transport, exposure and measurements, or its error and triage
 func (m *Manager) awaitSeat(ctx context.Context, h *tasks.Handle, f *v1.Formation, p *planned, s *v1.Seat, in *v1.Instance) (*v1.Instance, error) {
 	remote := s.GetNodeId() != m.self()
 	health, err := runtimes.SeatHealth(p.rt, in.GetSeat())
@@ -757,7 +762,7 @@ func (m *Manager) awaitSeat(ctx context.Context, h *tasks.Handle, f *v1.Formatio
 				if sameSeat(rs, s) {
 					rs.State, rs.Error = v1.InstanceState_INSTANCE_STATE_FAILED, err.Error()
 					if ready != nil {
-						rs.State = ready.GetState()
+						rs.State, rs.Conditions = ready.GetState(), seatConditions(ready.GetConditions())
 						rs.Triage = ready.GetTriage()
 						rs.Measurements = ready.GetMeasurements()
 						if ready.GetError() != "" {
@@ -773,6 +778,7 @@ func (m *Manager) awaitSeat(ctx context.Context, h *tasks.Handle, f *v1.Formatio
 		for _, rs := range r.GetSeats() {
 			if sameSeat(rs, s) {
 				rs.InstanceId, rs.State, rs.Error, rs.Triage = ready.GetId(), ready.GetState(), "", nil
+				rs.Conditions = seatConditions(ready.GetConditions())
 				rs.Endpoint = seatEndpoint(ready, remote)
 				rs.Transport = ready.GetTransport()
 				rs.Measurements = ready.GetMeasurements()
@@ -785,12 +791,43 @@ func (m *Manager) awaitSeat(ctx context.Context, h *tasks.Handle, f *v1.Formatio
 	return ready, nil
 }
 
+// A copy of the conditions a seat's node reports for its instance
+func seatConditions(list []*v1.Condition) []*v1.Condition {
+	out := make([]*v1.Condition, 0, len(list))
+	for _, c := range list {
+		out = append(out, proto.Clone(c).(*v1.Condition))
+	}
+	return out
+}
+
+// Copies of a seat's rank records
+func seatRanks(list []*v1.InstanceRank) []*v1.InstanceRank {
+	out := make([]*v1.InstanceRank, 0, len(list))
+	for _, r := range list {
+		out = append(out, proto.Clone(r).(*v1.InstanceRank))
+	}
+	return out
+}
+
+// Marks each seat rank ready while the seat is ready and the rank healthy, one rank by its condition
+func (m *Manager) seatReadiness(ctx context.Context, shape v1.Shape, seatRank uint32, instanceID string, state v1.InstanceState, conditions []*v1.Condition, ranks []*v1.InstanceRank) {
+	ready := state == v1.InstanceState_INSTANCE_STATE_READY
+	if len(ranks) == 0 {
+		healthy := instances.ConditionOf(conditions, instances.CondHealthy)
+		m.Registrar.SetReady(ctx, instanceID, ready && (healthy == nil || healthy.GetStatus() != v1.ConditionStatus_CONDITION_STATUS_FALSE))
+		return
+	}
+	spec := &v1.SeatSpec{Shape: shape, Rank: seatRank}
+	for _, r := range ranks {
+		m.Registrar.SetRankReady(ctx, instanceID, instances.PublishedRank(spec, len(ranks), int(r.GetRank())), ready && r.GetHealthy())
+	}
+}
+
 func sameSeat(a, b *v1.Seat) bool {
 	return a.GetNodeId() == b.GetNodeId() && a.GetRole() == b.GetRole() && a.GetRank() == b.GetRank()
 }
 
-// Where the conductor reaches a seat: its loopback endpoint on this node, its guard or exposed
-// port on another
+// Where the conductor reaches a seat, its loopback endpoint here or its guard or exposed port on another node
 func seatEndpoint(in *v1.Instance, remote bool) string {
 	seat := in.GetSeat()
 	if !remote {
@@ -860,8 +897,7 @@ func seatParams(f *v1.Formation, p *planned) map[string]string {
 	return params
 }
 
-// The detail of a seat that ended: its first triage hit's summary and hint, else its error,
-// else its state
+// Why a seat ended, its first triage hit's summary and hint, else its error, else its state
 func seatDetail(in *v1.Instance) string {
 	if len(in.GetTriage()) > 0 {
 		return in.GetTriage()[0].GetSummary() + ". " + in.GetTriage()[0].GetHint()
@@ -872,7 +908,7 @@ func seatDetail(in *v1.Instance) string {
 	return instanceWord(in.GetState())
 }
 
-// Waits for a seat's instance to be ready, reading it from this node or its node and warning each slowAfter it is not
+// Waits for a seat's instance to be ready from its node, warning after each slowAfter it is not
 func (m *Manager) waitSeat(ctx context.Context, s *v1.Seat, instanceID string, slowAfter time.Duration, slow func(time.Duration)) (*v1.Instance, error) {
 	start := time.Now()
 	warn := time.NewTicker(slowAfter)
@@ -942,68 +978,24 @@ func (m *Manager) stopSeat(ctx context.Context, s *v1.Seat) error {
 	return err
 }
 
-// The seats of a formation as the gateway sends to them
-func routeSeats(f *v1.Formation) []*v1.RouteSeat {
-	var seats []*v1.RouteSeat
-	for _, s := range f.GetSeats() {
-		seats = append(seats, &v1.RouteSeat{NodeId: s.GetNodeId(), InstanceId: s.GetInstanceId(), Endpoint: s.GetEndpoint(), Role: s.GetRole(), Rank: s.GetRank(), State: s.GetState(), Address: s.GetAddress(), AuxPort: s.GetAuxPort()})
-	}
-	return seats
-}
-
-// The head's instance as the gateway serves it: the record on this node when the head runs
-// here, else the head's node's record with the endpoint this node reaches the head at
-func (m *Manager) headInstance(ctx context.Context, f *v1.Formation) (*v1.Instance, error) {
-	head := m.headSeat(f)
-	if head == nil || head.GetInstanceId() == "" {
-		return nil, fmt.Errorf("%w: %s has no head seat", ErrFormation, f.GetName())
-	}
-	if head.GetNodeId() == m.self() {
-		in, err := m.Instances.Get(head.GetInstanceId())
-		if err != nil {
-			return nil, fmt.Errorf("head of %s: %w", f.GetName(), err)
-		}
-		return in, nil
-	}
-	in, err := m.remoteSeat(ctx, head.GetNodeId(), head.GetInstanceId())
-	if err != nil {
-		return nil, fmt.Errorf("head of %s on %s: %w", f.GetName(), head.GetNodeName(), err)
-	}
-	in = proto.Clone(in).(*v1.Instance)
-	in.Endpoint = seatEndpoint(in, true)
-	return in, nil
-}
-
-// Puts the formation's route on this node's gateway: the head answers it, and the seats the
-// gateway sends to are listed with the endpoints this node reaches them at
+// Names the formation's route for a formation outside a slot and records the gateway base members reach it at
 func (m *Manager) route(ctx context.Context, id string) error {
 	f, err := m.Get(id)
 	if err != nil {
 		return err
 	}
-	in, err := m.headInstance(ctx, f)
-	if err != nil {
-		return err
-	}
-	api := m.Runtimes.API(f.GetRuntimeId())
-	names := []slots.RouteName{{Name: f.GetName()}}
-	if f.GetSlotId() != "" && m.SlotView != nil {
-		if list := m.SlotView.Names(f.GetSlotId()); len(list) > 0 {
-			names = list
+	if f.GetSlotId() == "" {
+		if _, err := m.Registrar.NameRoute(ctx, ownerOf(id), f.GetName(), routeSpec(f)); err != nil {
+			return fmt.Errorf("route %s: %w", f.GetName(), err)
 		}
-	}
-	var route *v1.Route
-	for _, n := range names {
-		route = m.Routes.ServeFormationAs(n.Name, f, in, api, routeSeats(f), n.Policy, n.Profile)
 	}
 	endpoint := m.Mesh.GatewayBase()
 	m.update(id, func(r *v1.Formation) { r.Endpoint = endpoint })
-	m.Log.Info("formation routed", "formation", f.GetName(), "route", route.GetName(), "shape", shapeWord(f.GetShape()), "endpoint", endpoint)
+	m.Log.Info("formation routed", "formation", f.GetName(), "slot", f.GetSlotId(), "shape", shapeWord(f.GetShape()), "endpoint", endpoint)
 	return nil
 }
 
-// Follows seats: an instance on this node leaving ready, or a member's record reporting a seat
-// gone, degrades the formation it serves
+// Follows seats, degrading a formation when a local instance leaves ready or a member's record reports its seat gone
 func (m *Manager) watch(ctx context.Context) {
 	sub := m.Events.Subscribe(ctx, []v1.EventKind{v1.EventKind_EVENT_KIND_INSTANCE, v1.EventKind_EVENT_KIND_NODE})
 	for {
@@ -1012,11 +1004,11 @@ func (m *Manager) watch(ctx context.Context) {
 			return
 		case ev := <-sub.Events():
 			if in := ev.GetInstance(); in != nil && in.GetSeat() != nil {
-				m.seatChanged(in.GetSeat().GetFormationId(), in.GetId(), in.GetState(), in.GetTransport(), in.GetError(), in.GetTriage(), in.GetMeasurements())
+				m.seatChanged(in.GetSeat().GetFormationId(), in.GetId(), in.GetState(), in.GetTransport(), in.GetError(), in.GetTriage(), in.GetMeasurements(), in.GetConditions(), in.GetRanks())
 			}
 			if node := ev.GetNode(); node != nil && node.GetId() != m.self() && ev.GetAction() != v1.EventAction_EVENT_ACTION_DELETED {
 				for _, ref := range node.GetSeats() {
-					m.seatChanged(ref.GetFormationId(), ref.GetInstanceId(), ref.GetState(), ref.GetTransport(), ref.GetError(), ref.GetTriage(), nil)
+					m.seatChanged(ref.GetFormationId(), ref.GetInstanceId(), ref.GetState(), ref.GetTransport(), ref.GetError(), ref.GetTriage(), nil, ref.GetConditions(), ref.GetRanks())
 				}
 				m.seatsMissing(node)
 			}
@@ -1024,9 +1016,8 @@ func (m *Manager) watch(ctx context.Context) {
 	}
 }
 
-// Takes a seat's new state, transport, error, triage, and measurements into its formation's
-// record, degrading a serving formation whose seat left ready
-func (m *Manager) seatChanged(formationID, instanceID string, state v1.InstanceState, transport, errText string, triage []*v1.TriageHit, measurements []*v1.Measurement) {
+// Takes a seat's state, transport, error, triage, measurements and conditions into its record, degrading a serving formation it left
+func (m *Manager) seatChanged(formationID, instanceID string, state v1.InstanceState, transport, errText string, triage []*v1.TriageHit, measurements []*v1.Measurement, conditions []*v1.Condition, ranks []*v1.InstanceRank) {
 	m.mu.Lock()
 	f, ok := m.list[formationID]
 	if !ok || f.GetConductor() != m.self() {
@@ -1039,7 +1030,9 @@ func (m *Manager) seatChanged(formationID, instanceID string, state v1.InstanceS
 			seat = s
 		}
 	}
-	if seat == nil || seat.GetState() == state && seat.GetTransport() == transport && len(triage) == len(seat.GetTriage()) && len(measurements) == len(seat.GetMeasurements()) {
+	sameConditions := slices.EqualFunc(conditions, seat.GetConditions(), func(a, b *v1.Condition) bool { return proto.Equal(a, b) })
+	sameRanks := slices.EqualFunc(ranks, seat.GetRanks(), func(a, b *v1.InstanceRank) bool { return proto.Equal(a, b) })
+	if seat == nil || seat.GetState() == state && seat.GetTransport() == transport && len(triage) == len(seat.GetTriage()) && len(measurements) == len(seat.GetMeasurements()) && sameConditions && sameRanks {
 		m.mu.Unlock()
 		return
 	}
@@ -1053,7 +1046,7 @@ func (m *Manager) seatChanged(formationID, instanceID string, state v1.InstanceS
 	m.update(formationID, func(r *v1.Formation) {
 		for _, s := range r.GetSeats() {
 			if s.GetInstanceId() == instanceID {
-				s.State, s.Transport = state, transport
+				s.State, s.Transport, s.Conditions, s.Ranks = state, transport, seatConditions(conditions), seatRanks(ranks)
 				if errText != "" {
 					s.Error = errText
 				}
@@ -1069,9 +1062,13 @@ func (m *Manager) seatChanged(formationID, instanceID string, state v1.InstanceS
 			}
 		}
 	})
-	m.Routes.SetSeatState(formationID, instanceID, state)
-	if fState == v1.FormationState_FORMATION_STATE_READY && instances.Terminal(state) && !m.isStopping(formationID) {
-		go m.degrade(formationID, fmt.Sprintf("%s on %s left ready: %s", seat.GetRole(), seat.GetNodeName(), strings.TrimSpace(errText+" "+instanceWord(state))))
+	ctx, cancel := context.WithTimeout(m.base, callTimeout)
+	m.seatReadiness(ctx, f.GetShape(), seat.GetRank(), instanceID, state, conditions, ranks)
+	cancel()
+	if serving(fState) && instances.Terminal(state) && !m.isStopping(formationID) {
+		if f, err := m.Get(formationID); err == nil {
+			m.seatLeft(f, seat, fmt.Sprintf("%s on %s left ready: %s", seat.GetRole(), seat.GetNodeName(), strings.TrimSpace(errText+" "+instanceWord(state))))
+		}
 	}
 }
 
@@ -1084,33 +1081,36 @@ func (m *Manager) seatsMissing(node *v1.Node) {
 	for _, ref := range node.GetSeats() {
 		listed[ref.GetInstanceId()] = true
 	}
+	type left struct {
+		f    *v1.Formation
+		seat *v1.Seat
+	}
 	m.mu.Lock()
-	var gone []*v1.Formation
+	var gone []left
 	for _, f := range m.list {
-		if f.GetConductor() != m.self() || f.GetState() != v1.FormationState_FORMATION_STATE_READY {
+		if f.GetConductor() != m.self() || !serving(f.GetState()) {
 			continue
 		}
 		for _, s := range f.GetSeats() {
 			if s.GetNodeId() == node.GetId() && s.GetInstanceId() != "" && !listed[s.GetInstanceId()] {
-				gone = append(gone, f)
-				break
+				gone = append(gone, left{proto.Clone(f).(*v1.Formation), proto.Clone(s).(*v1.Seat)})
 			}
 		}
 	}
 	m.mu.Unlock()
-	for _, f := range gone {
-		if !m.isStopping(f.GetId()) {
-			go m.degrade(f.GetId(), fmt.Sprintf("%s no longer hosts its seat", node.GetName()))
+	for _, g := range gone {
+		if !m.isStopping(g.f.GetId()) {
+			m.seatLeft(g.f, g.seat, fmt.Sprintf("%s no longer hosts its seat", node.GetName()))
 		}
 	}
 }
 
-// Takes a serving formation down when a seat leaves: the route drains, the rest of the seats
-// stop, and the formation launches again when it is wanted
+// Takes a serving formation down when a seat leaves, draining and stopping every seat, then launches it again when wanted
 func (m *Manager) degrade(id, why string) {
+	m.cancelReseats(id)
 	m.mu.Lock()
 	f, ok := m.list[id]
-	if !ok || f.GetState() != v1.FormationState_FORMATION_STATE_READY || m.busy[id] {
+	if !ok || !serving(f.GetState()) || m.busy[id] {
 		m.mu.Unlock()
 		return
 	}
@@ -1127,19 +1127,22 @@ func (m *Manager) degrade(id, why string) {
 	m.update(id, func(r *v1.Formation) {
 		r.State = v1.FormationState_FORMATION_STATE_DEGRADED
 		r.Error = why
+		r.Conditions = instances.SetCondition(r.Conditions, CondDegraded, true, ReasonFormationDown, why, r.GetGeneration())
+		r.Conditions = instances.SetCondition(r.Conditions, CondReady, false, ReasonFormationDown, why, r.GetGeneration())
 	})
-	m.Routes.DrainFormation(id)
 	current, err := m.Get(id)
 	if err != nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(m.base, stopTimeout)
+	m.drain(ctx, current)
 	m.stopSeats(ctx, current, nil)
+	m.withdraw(ctx, id)
 	cancel()
-	m.Routes.RemoveFormation(id)
 	f = m.update(id, func(r *v1.Formation) {
 		r.State = v1.FormationState_FORMATION_STATE_FAILED
 		r.StoppedAt = timestamppb.Now()
+		r.Conditions = instances.SetCondition(r.Conditions, CondLaunched, false, ReasonFormationDown, why, r.GetGeneration())
 	})
 	m.Mesh.Bump()
 	if !f.GetDesiredRunning() {
@@ -1166,8 +1169,7 @@ func (m *Manager) degrade(id, why string) {
 	}
 }
 
-// The relaunch count a formation launched after prev carries: one more than prev's when prev
-// never reached ready or degraded within relaunchStable of it, one when prev served a stretch
+// The relaunch count after prev, one more when prev never served a stretch, one when it did
 func nextRelaunches(prev *v1.Formation) uint32 {
 	if prev == nil {
 		return 0
@@ -1186,8 +1188,7 @@ func hostOf(address string) string {
 	return strings.Trim(address, "[]")
 }
 
-// A free port on a host: the first free one in the mesh's port range when one is set, any
-// free one otherwise
+// A free port on a host, the first in the mesh port range when one is set, else any
 func (m *Manager) freePortOn(host string) (int, error) {
 	if from, to, ok := m.Mesh.Ports(); ok {
 		for port := to; port >= from; port-- {
@@ -1208,9 +1209,7 @@ func (m *Manager) freePortOn(host string) (int, error) {
 	return ln.Addr().(*net.TCPAddr).Port, nil
 }
 
-// Bytes the head streamed to the seats that hold no files of their own: what each seat's guard
-// listener counted, or for a seat exposed on the mesh address, what the head's log says it placed
-// on that seat. A seat neither counts is named in the task log.
+// Bytes the head streamed to fileless seats, from their guard counters or the head's log, naming any seat neither counts
 func (m *Manager) bytesMoved(ctx context.Context, h *tasks.Handle, id string, p *planned) uint64 {
 	f, err := m.Get(id)
 	if err != nil {
@@ -1225,23 +1224,35 @@ func (m *Manager) bytesMoved(ctx context.Context, h *tasks.Handle, id string, p 
 		}
 		headLines = lines
 	}
+	var fileless []*v1.Seat
 	for _, s := range f.GetSeats() {
 		role, err := runtimes.RoleOf(p.rt, &v1.SeatSpec{Shape: f.GetShape(), Role: s.GetRole()})
-		if err != nil || role.Files != runtimes.FilesNone || s.GetInstanceId() == "" {
-			continue
+		if err == nil && role.Files == runtimes.FilesNone && s.GetInstanceId() != "" {
+			fileless = append(fileless, s)
 		}
-		var in *v1.Instance
-		if s.GetNodeId() == m.self() {
-			in, err = m.Instances.Refresh(s.GetInstanceId())
-		} else {
-			in, err = m.remoteSeat(ctx, s.GetNodeId(), s.GetInstanceId())
-		}
-		if err != nil {
-			h.Logf("bytes moved to %s on %s not read: %v", s.GetRole(), s.GetNodeName(), err)
+	}
+	records := make([]*v1.Instance, len(fileless))
+	errs := make([]error, len(fileless))
+	var wg sync.WaitGroup
+	for i, s := range fileless {
+		wg.Add(1)
+		go func(i int, s *v1.Seat) {
+			defer wg.Done()
+			if s.GetNodeId() == m.self() {
+				records[i], errs[i] = m.Instances.Refresh(s.GetInstanceId())
+				return
+			}
+			records[i], errs[i] = m.remoteSeat(ctx, s.GetNodeId(), s.GetInstanceId())
+		}(i, s)
+	}
+	wg.Wait()
+	for i, s := range fileless {
+		if errs[i] != nil {
+			h.Logf("bytes moved to %s on %s not read: %v", s.GetRole(), s.GetNodeName(), errs[i])
 			continue
 		}
 		counted := false
-		for _, ms := range in.GetMeasurements() {
+		for _, ms := range records[i].GetMeasurements() {
 			if ms.GetKey() == instances.GuardReceivedKey {
 				total += ms.GetBytes()
 				counted = true
@@ -1289,10 +1300,7 @@ func (m *Manager) seatLines(ctx context.Context, s *v1.Seat) ([]string, error) {
 	return out, stream.Err()
 }
 
-// Reads every launched seat's log when a formation fails and puts what the runtime measures in
-// it on the seat's record: the buffers each seat allocated and the allocations that failed, on
-// the head's node or a stage's, so the formation record says where memory ran out. Every failed
-// allocation is named in the task log
+// Reads each launched seat's log on failure, recording its allocations and logging each failed allocation on the task
 func (m *Manager) gatherSeatLogs(ctx context.Context, h *tasks.Handle, id string, p *planned) {
 	f, err := m.Get(id)
 	if err != nil {
@@ -1344,8 +1352,7 @@ func mergeMeasurements(old, fresh []*v1.Measurement) []*v1.Measurement {
 	return out
 }
 
-// Bytes the head's log says it placed on an rpc backend at an address, summed over the model
-// buffer lines naming it
+// Bytes the head's log says it placed on an rpc backend at an address, summed over its buffer lines
 func headStreamed(lines []string, address string) (uint64, bool) {
 	const phrase = " model buffer size = "
 	var total uint64
@@ -1369,9 +1376,7 @@ func headStreamed(lines []string, address string) (uint64, bool) {
 	return total, found
 }
 
-// Whether a ggml buffer name is an rpc buffer at an address. ggml names them RPC<n>[<address>],
-// n the device's index on that server, and builds before servers exposed several devices left
-// the index out
+// Whether a ggml buffer name is an rpc buffer at an address, with or without a device index
 func rpcBufferAt(name, address string) bool {
 	index, ok := strings.CutPrefix(name, "RPC")
 	if !ok {
@@ -1389,7 +1394,7 @@ func rpcBufferAt(name, address string) bool {
 	return true
 }
 
-// A byte count as a runtime logs it: a number and a unit
+// A byte count as a runtime logs it, a number and a unit
 func parseBytes(s string) (uint64, bool) {
 	fields := strings.Fields(s)
 	if len(fields) == 0 {

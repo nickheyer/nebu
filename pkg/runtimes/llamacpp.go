@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -249,13 +250,14 @@ func (LlamaCpp) Params() []*v1.Param {
 		{Name: "cache_ram", Label: "Prompt cache in RAM", Type: v1.ParamType_PARAM_TYPE_INT, Unit: "MiB", Min: -1, Step: 1024, Group: groupCache, Flag: "--cache-ram",
 			Description: "host memory for the states of conversations evicted from a slot, empty keeps llama.cpp's 8192, -1 unlimited, 0 off"},
 		switchParam("cache_idle_slots", "Save idle slots", groupCache, "copy every idle slot's state into the RAM cache when a request starts, empty keeps llama.cpp's on"),
-		switchParam("cache_prompt", "Prompt caching", groupCache, "reuse a slot's cache for a request sharing its prefix, empty keeps llama.cpp's on"),
+		{Name: "cache_prompt", Label: "Prompt caching", Type: v1.ParamType_PARAM_TYPE_STRING, Default: "on", Choices: switchChoices, Group: groupCache, Advanced: true,
+			Description: "reuse a slot's cache for a request sharing its prefix, which prefix aware routing counts on, empty keeps llama.cpp's on"},
 		{Name: "ctx_checkpoints", Label: "Context checkpoints", Type: v1.ParamType_PARAM_TYPE_INT, Unit: "per slot", Min: 0, Max: 256, Step: 1, Group: groupCache, Advanced: true, Flag: "--ctx-checkpoints",
 			Description: "state snapshots a slot keeps so a turn that rewrites earlier tokens re-prefills from the nearest one, empty keeps llama.cpp's 32, 0 off"},
 		{Name: "checkpoint_min_step", Label: "Checkpoint spacing", Type: v1.ParamType_PARAM_TYPE_INT, Unit: "tokens", Min: 0, Step: 256, Group: groupCache, Advanced: true, Flag: "--checkpoint-min-step",
 			Description: "fewest tokens between checkpoints, empty keeps llama.cpp's 8192, a smaller step costs memory and re-prefills less"},
-		{Name: "cache_reuse", Label: "Cache reuse chunk", Type: v1.ParamType_PARAM_TYPE_INT, Unit: "tokens", Min: 0, Step: 32, Group: groupCache, Advanced: true, Flag: "--cache-reuse",
-			Description: "smallest chunk reused by shifting the KV cache, empty keeps llama.cpp's off, no effect on hybrid and recurrent models"},
+		{Name: "cache_reuse", Label: "Cache reuse chunk", Type: v1.ParamType_PARAM_TYPE_INT, Default: "256", Unit: "tokens", Min: 0, Step: 32, Group: groupCache, Advanced: true, Flag: "--cache-reuse",
+			Description: "smallest chunk reused by shifting the KV cache, 0 off, empty keeps llama.cpp's off, no effect on hybrid and recurrent models"},
 		{Name: "n_batch", Label: "Batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "2048", Unit: "tokens", Min: 32, Step: 32, Group: groupBatching, Advanced: true, Flag: "--batch-size"},
 		{Name: "n_ubatch", Label: "Micro-batch size", Type: v1.ParamType_PARAM_TYPE_INT, Default: "512", Unit: "tokens", Min: 32, Step: 32, Group: groupBatching, Advanced: true, Flag: "--ubatch-size",
 			Description: "tokens per forward pass, the chunk of one slot's prefill that every other slot's decoding waits behind"},
@@ -281,7 +283,7 @@ func (LlamaCpp) Params() []*v1.Param {
 		boolParam("embedding", "Embeddings only", groupEmbeddings, "--embedding", "serve embeddings alone, for embedding models"),
 		boolParam("reranking", "Reranking", groupEmbeddings, "--reranking", "serve the rerank endpoint, for reranker models"),
 		strParam("pooling", "Pooling", groupEmbeddings, "--pooling", "", "how token states pool into one embedding, empty keeps the model's", []string{"", "none", "mean", "cls", "last", "rank"}, true),
-		strParam("lora", "LoRA adapters", groupAdapters, "--lora", "", "adapter files, comma separated", nil, true),
+		strParam("lora", "LoRA adapters", groupAdapters, "--lora", "", "adapter files, comma separated, empty loads every LoRA file beside the model unapplied so requests switch them on", nil, true),
 		strParam("lora_scaled", "Scaled LoRA adapters", groupAdapters, "--lora-scaled", "", "file:scale pairs, comma separated", nil, true),
 		boolParam("lora_init_without_apply", "Load adapters unapplied", groupAdapters, "--lora-init-without-apply", "load adapters and apply them later through the API"),
 		strParam("control_vector", "Control vectors", groupAdapters, "--control-vector", "", "control vector files, comma separated", nil, true),
@@ -335,7 +337,8 @@ func (LlamaCpp) Params() []*v1.Param {
 		intParam("timeout", "Request timeout", groupServer, "--timeout", "", "seconds", "read and write timeout of the server, empty keeps llama.cpp's 600", 0, 0, 30, true),
 		intParam("threads_http", "HTTP threads", groupServer, "--threads-http", "", "threads", "empty keeps llama.cpp's -1 for the core count", -1, 0, 1, true),
 		intParam("sleep_idle_seconds", "Sleep when idle", groupServer, "--sleep-idle-seconds", "", "seconds", "idle time after which the server frees the model until the next request, empty keeps llama.cpp's -1 for never", -1, 0, 60, true),
-		boolParam("metrics", "Prometheus metrics", groupServer, "--metrics", "serve the metrics endpoint"),
+		{Name: "metrics", Label: "Prometheus metrics", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "true", Group: groupServer, Flag: "--metrics", Advanced: true,
+			Description: "serve the metrics endpoint the router reads queue depth from"},
 		boolParam("props", "Writable properties", groupServer, "--props", "allow changing global properties through the props endpoint"),
 		strParam("media_path", "Media directory", groupServer, "--media-path", "", "directory requests may load local media from by relative file URL", nil, true),
 		{Name: "log_verbosity", Label: "Log level", Type: v1.ParamType_PARAM_TYPE_INT, Default: "4", Min: 0, Max: 5, Step: 1, Group: groupDiagnostics, Advanced: true, Flag: "--log-verbosity",
@@ -380,6 +383,16 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(p.Str("lora")) == "" && strings.TrimSpace(p.Str("lora_scaled")) == "" {
+		found, err := llamaAdaptersBeside(weights)
+		if err != nil {
+			return nil, err
+		}
+		if len(found) > 0 {
+			p["lora"] = strings.Join(found, ",")
+			p["lora_init_without_apply"] = true
+		}
+	}
 	flags, env, emitted := Flags(r.Params(), p)
 	flags = append(flags, spec...)
 	flags = append(flags, switches...)
@@ -387,18 +400,54 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 	maps.Copy(emitted, specEmitted)
 	maps.Copy(emitted, switchEmitted)
 	maps.Copy(emitted, layersEmitted)
+	// A slot count llama.cpp picks itself is read back from its log, its pool unified as llama.cpp unifies it
+	if p.Int("n_parallel") < 0 {
+		delete(emitted, "n_parallel")
+		if _, set := emitted["kv_unified"]; !set {
+			emitted["kv_unified"] = "on"
+		}
+	}
 	if mode := p.Str("load_mode"); mode != "" {
 		flags = append(flags, loadModeArgs(in.InstallRecord, mode)...)
 	}
+	// The slot listing the router sums KV use from, on builds that serve it only when asked
+	if has(in.InstallRecord, factSlotsFlag) {
+		flags = append(flags, in.InstallRecord.GetFacts()[factSlotsFlag])
+		emitted["slots"] = "on"
+	}
+	cmd := &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}
 	if hostOnly {
 		hideDevices(env)
-	} else {
-		// Restrict devices only when a slot assigns them.
-		setEnv(env, "CUDA_VISIBLE_DEVICES", visible(in.Devices, "nvidia", false))
-		setEnv(env, "ROCR_VISIBLE_DEVICES", visible(in.Devices, "amd", true))
-		setEnv(env, "GGML_VK_VISIBLE_DEVICES", visible(in.Devices, "", true))
+		return cmd, nil
 	}
-	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}, nil
+	if err := pinDevices(cmd, in); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
+// LoRA adapter files in the model's directory, told apart by the general and adapter type of each GGUF header
+func llamaAdaptersBeside(weights string) ([]string, error) {
+	dir := filepath.Dir(weights)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("%w: reading the model's directory for adapters: %v", ErrParam, err)
+	}
+	var out []string
+	for _, e := range entries {
+		path := filepath.Join(dir, e.Name())
+		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".gguf") || path == filepath.Clean(weights) {
+			continue
+		}
+		meta, err := ggufMetadata(path)
+		if err != nil {
+			return nil, fmt.Errorf("%w: adapter candidate %v", ErrParam, err)
+		}
+		if meta["general.type"] == "adapter" && meta["adapter.type"] == "lora" {
+			out = append(out, path)
+		}
+	}
+	return out, nil
 }
 
 // The control vector layer range as its two arguments, start and end, from the one param
@@ -757,7 +806,7 @@ func (LlamaCpp) Policy() *estimate.Policy {
 		ContextMax:   func(s *estimate.Scope) int64 { return int64(s.Model.ContextTrain) },
 		// Parallel sequences each get the trained length, as llama.cpp splits an unset context over them, one shared pool when unified
 		ContextScale: llamaSequences,
-		Deferred:     map[string]func([]string) (string, bool){"n_ctx": llamaContext},
+		Deferred:     map[string]func([]string) (string, bool){"n_ctx": llamaContext, "n_parallel": llamaSlots},
 		Shape: func(p estimate.Params) archs.Run {
 			return archs.Run{Context: float64(p.Int("n_ctx")), UBatch: float64(p.Int("n_ubatch"))}
 		},
@@ -843,6 +892,23 @@ func llamaWarning(s *estimate.Scope) string {
 		}
 	}
 	return ""
+}
+
+// Slot count llama.cpp logs as it initializes its slots
+func llamaSlots(lines []string) (string, bool) {
+	const phrase = "initializing slots, n_slots ="
+	for _, line := range lines {
+		i := strings.Index(line, phrase)
+		if i < 0 {
+			continue
+		}
+		if f := strings.Fields(line[i+len(phrase):]); len(f) > 0 {
+			if n, err := strconv.ParseUint(f[0], 10, 32); err == nil && n > 0 {
+				return strconv.FormatUint(n, 10), true
+			}
+		}
+	}
+	return "", false
 }
 
 // Context size llama.cpp logs for the target, the first context it builds past the fit's debug level trials

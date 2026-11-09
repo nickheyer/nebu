@@ -9,9 +9,9 @@ import (
 func profile() *v1.HostProfile {
 	return &v1.HostProfile{
 		Devices: []*v1.Device{
-			{Id: "cpu", Kind: v1.DeviceKind_DEVICE_KIND_CPU},
-			{Id: "g0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Facts: map[string]string{"index": "0"}},
-			{Id: "g1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Facts: map[string]string{"index": "1"}},
+			{Id: "cpu", Kind: v1.DeviceKind_DEVICE_KIND_CPU, PoolId: "host"},
+			{Id: "g0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Facts: map[string]string{"index": "0"}, PoolId: "g0"},
+			{Id: "g1", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Facts: map[string]string{"index": "1"}, PoolId: "g1"},
 		},
 		Pools: []*v1.MemoryPool{
 			{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 100, FreeBytes: 90},
@@ -48,5 +48,21 @@ func TestConstrain(t *testing.T) {
 	}
 	if slotDevices(p, nil) != nil || slotDevices(p, &Reservation{}) != nil {
 		t.Fatal("no slot devices means no views")
+	}
+}
+
+// Pinning a GPU caps its own pool and leaves the host pool whole, pinning the CPU alone caps nothing
+func TestConstrainCapsPinnedDevicePoolsAlone(t *testing.T) {
+	p := profile()
+	c := Constrain(p, []string{"g0"}, 40, v1.Placement_PLACEMENT_UNSPECIFIED)
+	if len(c.GetPools()) != 2 || c.GetPools()[0].GetId() != "host" || c.GetPools()[0].GetTotalBytes() != 100 || c.GetPools()[1].GetId() != "g0" || c.GetPools()[1].GetTotalBytes() != 40 || c.GetPools()[1].GetFreeBytes() != 40 {
+		t.Fatalf("pools %v", c.GetPools())
+	}
+	if len(c.GetDevices()) != 2 || c.GetDevices()[0].GetId() != "cpu" || c.GetDevices()[1].GetId() != "g0" {
+		t.Fatalf("devices %v", c.GetDevices())
+	}
+	cpu := Constrain(p, []string{"cpu"}, 40, v1.Placement_PLACEMENT_UNSPECIFIED)
+	if cpu.GetPools()[0].GetTotalBytes() != 100 {
+		t.Fatalf("the CPU pin alone leaves the host pool whole %v", cpu.GetPools())
 	}
 }

@@ -43,28 +43,29 @@ func TestClassify(t *testing.T) {
 
 // A stream server for the download measurement
 type streamer struct {
-	nebuv1connect.UnimplementedMeshServiceHandler
+	nebuv1connect.UnimplementedMeshPeerServiceHandler
 }
 
 func (streamer) Stream(ctx context.Context, req *connect.Request[v1.StreamRequest], stream *connect.ServerStream[v1.StreamResponse]) error {
 	return links.Stream(ctx, req.Msg.GetBytes(), stream.Send)
 }
 
-// A measurement over loopback pings, uploads, downloads, and reads the interface the route leaves through
-func TestMeasureOverLoopback(t *testing.T) {
+// A measurement over a loopback TLS listener pings, uploads, downloads, and reads the interface the route leaves through
+func TestMeasureOverTLS(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.Handle(nebuv1connect.NewMeshServiceHandler(streamer{}))
+	mux.Handle(nebuv1connect.NewMeshPeerServiceHandler(streamer{}))
 	mux.HandleFunc(links.SinkPath, links.Sink)
 	srv := httptest.NewUnstartedServer(mux)
 	srv.Config.Protocols = links.Protocols()
-	srv.Start()
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
 	defer srv.Close()
 	p := &links.Prober{}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	// A last run under 100 Mb/s picks the smaller bandwidth run.
-	last := &v1.Link{StreamBytesPerSecond: 1}
-	link, err := p.Measure(ctx, "a", links.Target{ID: "b", Address: srv.Listener.Addr().String(), Header: http.Header{}}, last, false)
+	target := links.Target{ID: "b", Address: srv.Listener.Addr().String(), TLS: &tls.Config{InsecureSkipVerify: true}, Header: http.Header{}}
+	// A last run under 100 Mb/s picks the smaller bandwidth run
+	link, err := p.Measure(ctx, "a", target, &v1.Link{StreamBytesPerSecond: 1}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,34 +78,11 @@ func TestMeasureOverLoopback(t *testing.T) {
 	if link.GetClass() == v1.LinkClass_LINK_CLASS_UNSPECIFIED || link.GetDetail() == "" {
 		t.Fatalf("class %v detail %q", link.GetClass(), link.GetDetail())
 	}
-	held, err := p.Measure(ctx, "a", links.Target{ID: "b", Address: srv.Listener.Addr().String(), Header: http.Header{}}, link, true)
+	held, err := p.Measure(ctx, "a", target, link, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !held.GetBandwidthHeld() || held.GetStreamBytesPerSecond() != link.GetStreamBytesPerSecond() {
 		t.Fatalf("a held run keeps the last bandwidth: %v", held)
-	}
-}
-
-// A TLS listener is pinged and measured over h2 the same way
-func TestMeasureOverTLS(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.Handle(nebuv1connect.NewMeshServiceHandler(streamer{}))
-	mux.HandleFunc(links.SinkPath, links.Sink)
-	srv := httptest.NewUnstartedServer(mux)
-	srv.Config.Protocols = links.Protocols()
-	srv.EnableHTTP2 = true
-	srv.StartTLS()
-	defer srv.Close()
-	p := &links.Prober{}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	target := links.Target{ID: "b", Address: srv.Listener.Addr().String(), TLS: &tls.Config{InsecureSkipVerify: true}, Header: http.Header{}}
-	link, err := p.Measure(ctx, "a", target, &v1.Link{StreamBytesPerSecond: 1}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if link.GetRttUs() == 0 || link.GetStreamBytesPerSecond() == 0 {
-		t.Fatalf("link %v", link)
 	}
 }

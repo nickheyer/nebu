@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -88,24 +89,62 @@ func TestResponsesInputBecomesTurns(t *testing.T) {
 	}
 }
 
+// Bodies no server can answer fail to parse, and what only a native runtime can do fails only when translated
 func TestResponsesRefusals(t *testing.T) {
-	cases := map[string]string{
-		`{"model":"m","input":"hi","previous_response_id":"resp_1"}`: "previous_response_id",
-		`{"model":"m","input":"hi","conversation":{"id":"conv_1"}}`:  "conversation",
-		`{"model":"m","input":"hi","background":true}`:               "background",
+	invalid := map[string]string{
 		`{"model":"m"}`: "input is required",
-		`{"model":"m","input":[{"type":"item_reference","id":"msg_1"}]}`:            "stored item",
-		`{"model":"m","input":[{"role":"robot","content":"x"}]}`:                    "role",
-		`{"model":"m","input":[{"role":"user","content":[{"type":"input_file"}]}]}`: "input_file parts",
-		`{"model":"m","input":"hi","tools":[{"type":"file_search"}]}`:               "tool type",
-		`{"model":"m","input":"hi","tool_choice":"maybe"}`:                          "tool_choice",
-		`{"model":"m","input":"hi","text":{"format":{"type":"json_schema"}}}`:       "needs a schema",
+		`{"model":"m","input":[{"role":"robot","content":"x"}]}`:                     "role",
+		`{"model":"m","input":"hi","tool_choice":"maybe"}`:                           "tool_choice",
+		`{"model":"m","input":"hi","text":{"format":{"type":"json_schema"}}}`:        "needs a schema",
+		`{"model":"m","input":{"role":"user"}}`:                                      "input must be a string or a list of items",
+		`{"model":"m","input":[{"role":"user","content":[{"type":"input_image"}]}]}`: "needs image_url or file_id",
 	}
-	for body, want := range cases {
+	for body, want := range invalid {
 		_, err := (openai{}).Parse(OpenAIResponses, []byte(body))
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: want %q, got %v", body, want, err)
 		}
+	}
+	native := map[string]string{
+		`{"model":"m","input":"hi","previous_response_id":"resp_1"}`:                                                         "previous_response_id",
+		`{"model":"m","input":"hi","conversation":{"id":"conv_1"}}`:                                                          "conversation",
+		`{"model":"m","input":"hi","background":true}`:                                                                       "background",
+		`{"model":"m","input":"hi","store":true}`:                                                                            "store",
+		`{"model":"m","prompt":{"id":"pmpt_1"}}`:                                                                             "prompt",
+		`{"model":"m","input":[{"type":"item_reference","id":"msg_1"}]}`:                                                     "stored item",
+		`{"model":"m","input":[{"role":"user","content":[{"type":"input_file"}]}]}`:                                          "input_file parts",
+		`{"model":"m","input":"hi","tools":[{"type":"file_search"}]}`:                                                        "tool type",
+		`{"model":"m","input":[{"role":"user","content":[{"type":"input_image","file_id":"f"}]}]}`:                           "file_id",
+		`{"model":"m","input":"hi","include":["message.output_text.logprobs"]}`:                                              "logprobs",
+		`{"model":"m","input":"hi","truncation":"auto"}`:                                                                     "truncation",
+		`{"model":"m","input":"hi","max_tool_calls":2,"tools":[{"type":"mcp","server_label":"l","server_url":"https://m"}]}`: "max_tool_calls",
+	}
+	for body, want := range native {
+		req, err := (openai{}).Parse(OpenAIResponses, []byte(body))
+		if err != nil {
+			t.Fatalf("%s parses for a native runtime: %v", body, err)
+		}
+		for _, rt := range []Runtime{openai{}, anthropic{}, ollama{}} {
+			_, _, err := rt.Render(req)
+			if f, ok := err.(*Failure); !ok || f.Status != http.StatusBadRequest || !strings.Contains(f.Message, want) {
+				t.Errorf("%s translated by %T: want a 400 naming %q, got %v", body, rt, want, err)
+			}
+		}
+		path, out, err := (openai{}).Native(req)
+		if err != nil || path != OpenAIResponses || string(out) != body {
+			t.Errorf("%s passes through unchanged: %s %s %v", body, path, out, err)
+		}
+	}
+	if req, err := (openai{}).Parse(OpenAIResponses, []byte(`{"model":"m","input":"hi","store":false,"background":false,"truncation":"disabled"}`)); err != nil || req.Origin.Untranslatable != nil {
+		t.Fatalf("store, background, and truncation off translate: %v %v", err, req.Origin.Untranslatable)
+	}
+	capped, err := (openai{}).Parse(OpenAIResponses, []byte(`{"model":"m","input":"hi","max_tool_calls":3,"tools":[{"type":"web_search"},{"type":"function","name":"f"}]}`))
+	if err != nil || capped.Origin.Untranslatable != nil || capped.Tools[0].Provided.MaxUses != 3 || len(capped.Tools) != 2 {
+		t.Fatalf("max_tool_calls caps the search the gateway runs: %+v %v", capped, err)
+	}
+	none, err := (openai{}).Parse(OpenAIResponses, []byte(`{"model":"m","input":"hi","max_tool_calls":0,"tools":[{"type":"web_search"},{"type":"mcp","server_label":"l","server_url":"https://m"},{"type":"function","name":"f"}]}`))
+	if err != nil || len(none.Tools) != 1 || none.Tools[0].Name != "f" || len(none.Sources) != 0 {
+		t.Fatalf("max_tool_calls of zero leaves the gateway's tools out: %+v %v", none, err)
 	}
 }
 
@@ -250,8 +289,32 @@ func TestResponsesStream(t *testing.T) {
 	}
 }
 
+// The chunks of a chat stream as raw data, read back by the runtime side reader
+func streamChunks(t *testing.T, body string) ([]string, []oaiAnswer) {
+	t.Helper()
+	var raws []string
+	var got []oaiAnswer
+	var done bool
+	ReadSSE(strings.NewReader(body), func(_ string, data []byte) error {
+		if string(data) == "[DONE]" {
+			done = true
+			return nil
+		}
+		var c oaiAnswer
+		if err := decode(data, c.read); err != nil {
+			t.Fatalf("%v: %s", err, data)
+		}
+		raws, got = append(raws, string(data)), append(got, c)
+		return nil
+	})
+	if !done {
+		t.Fatal("stream did not end with [DONE]")
+	}
+	return raws, got
+}
+
 func TestChatCompletionsUsageChunkTrailsWhenAsked(t *testing.T) {
-	chunks := func(body string) []oaiResponse {
+	chunks := func(body string) ([]string, []oaiAnswer) {
 		req, err := (openai{}).Parse(OpenAIChat, []byte(body))
 		if err != nil {
 			t.Fatal(err)
@@ -261,38 +324,20 @@ func TestChatCompletionsUsageChunkTrailsWhenAsked(t *testing.T) {
 		out.Write(Event{Kind: Said, Text: "hi"})
 		out.Write(Event{Kind: Stopped, Res: &Result{Usage: Usage{In: 3, Out: 1}}})
 		out.Close()
-		var got []oaiResponse
-		var done bool
-		ReadSSE(strings.NewReader(w.Body.String()), func(_ string, data []byte) error {
-			if string(data) == "[DONE]" {
-				done = true
-				return nil
-			}
-			var c oaiResponse
-			if err := json.Unmarshal(data, &c); err != nil {
-				t.Fatalf("%v: %s", err, data)
-			}
-			got = append(got, c)
-			return nil
-		})
-		if !done {
-			t.Fatal("stream did not end with [DONE]")
-		}
-		return got
+		return streamChunks(t, w.Body.String())
 	}
-	got := chunks(`{"model":"m","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"x"}]}`)
+	raws, got := chunks(`{"model":"m","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"x"}]}`)
 	if len(got) != 3 || got[1].Usage != nil || *got[1].Choices[0].FinishReason != "stop" {
-		t.Fatalf("finish chunk carries no usage: %+v", got)
+		t.Fatalf("finish chunk carries no usage: %v", raws)
 	}
-	if last := got[2]; last.Usage == nil || last.Usage.PromptTokens != 3 || last.Usage.TotalTokens != 4 || last.Choices == nil || len(last.Choices) != 0 {
-		t.Fatalf("usage chunk %+v", last)
+	if last := got[2]; last.Usage == nil || last.Usage.In != 3 || !strings.Contains(raws[2], `"total_tokens":4`) || last.Choices == nil || len(last.Choices) != 0 {
+		t.Fatalf("usage chunk %s", raws[2])
 	}
-	raw, _ := json.Marshal(got[2])
-	if !strings.Contains(string(raw), `"choices":[]`) {
-		t.Fatalf("choices must be an empty list: %s", raw)
+	if !strings.Contains(raws[2], `"choices":[]`) {
+		t.Fatalf("choices must be an empty list: %s", raws[2])
 	}
-	got = chunks(`{"model":"m","stream":true,"messages":[{"role":"user","content":"x"}]}`)
+	raws, got = chunks(`{"model":"m","stream":true,"messages":[{"role":"user","content":"x"}]}`)
 	if len(got) != 2 || got[1].Usage != nil {
-		t.Fatalf("no usage unless asked: %+v", got)
+		t.Fatalf("no usage unless asked: %v", raws)
 	}
 }

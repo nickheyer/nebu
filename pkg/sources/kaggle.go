@@ -375,7 +375,7 @@ func (kaggleAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v
 	if err != nil {
 		return cardOrEmpty(kgPageURL(c, it), err)
 	}
-	card := &v1.ModelCard{Markdown: it.Description, Url: kgPageURL(c, it)}
+	card := &v1.ModelCard{Markdown: it.Description, Url: kgPageURL(c, it), Hit: kgHit(c, it)}
 	if !l.hasInstance() {
 		return card, nil
 	}

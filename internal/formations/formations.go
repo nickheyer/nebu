@@ -1,6 +1,4 @@
-// Package formations conducts models across mesh nodes: plans a formation over the mesh profile,
-// pulls weights to the seats that need them, launches seats by phase, routes the head, watches
-// every seat, and keeps every member's copy of the record current.
+// Package formations conducts models across mesh nodes, planning them, pulling weights, launching seats by phase, and watching every seat
 package formations
 
 import (
@@ -15,13 +13,12 @@ import (
 
 	"github.com/nickheyer/nebu/internal/calibrate"
 	"github.com/nickheyer/nebu/internal/db"
-	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/internal/inspect"
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/mesh"
+	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/internal/pull"
-	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/perf"
@@ -40,6 +37,8 @@ const (
 	adoptWindow = time.Minute
 	// Seats of a formation being taken down get this long to stop
 	stopTimeout = 2 * time.Minute
+	// A draining formation reads its seats' requests in flight this often
+	drainPoll = 100 * time.Millisecond
 	// Requests in flight get this long before the head stops, when config names no drain timeout
 	defaultDrainTimeout = 30 * time.Second
 	// A seat is polled this often while the conductor verifies it
@@ -54,21 +53,19 @@ var (
 	ErrFormation = errors.New("formation")
 	// A formation whose seat died while serving launches again after this long
 	relaunchDelay = 10 * time.Second
-	// A formation ready for this long before it degraded served a stretch, and its relaunch starts
-	// the count over
+	// A formation ready this long before it degraded served a stretch, and its relaunch restarts the count
 	relaunchStable = 5 * time.Minute
 	// Relaunches in a row without a stretch served before a degraded formation stays failed
 	maxRelaunches uint32 = 3
 )
 
-// Slots on this node: their refs for the node record, the names a slot's formation answers to,
-// and where the slot follows its formation's state
+// Slots on this node, their refs for the node record, the names they answer to, and their formation hook
 type SlotView interface {
 	Refs() []*v1.SlotRef
-	Names(slotID string) []slots.RouteName
+	// Whether a slot answers to the name, as its own name or an alias
+	Owns(name string) bool
 	OnFormation(f *v1.Formation)
-	// Binds a run to its slot: the slot shapes the request, and an occupied slot refuses unless
-	// a swap is under way
+	// Binds a run to its slot, the slot shaping the request and an occupied slot refusing outside a swap
 	Claim(ctx context.Context, slotID string, run *v1.RunRequest) (*v1.RunRequest, error)
 	// The slot a run is bound to, for its placement, device pins, and memory budget
 	Get(id string) (*v1.Slot, *v1.Instance, error)
@@ -78,14 +75,19 @@ type SlotView interface {
 type LocalGateway interface {
 	Client(origin string) *http.Client
 	LocalBase() string
+	// The trace the gateway recorded for the request a response answers
+	Trace(resp *http.Response) (*v1.Trace, bool)
 }
 
 // Conducts formations and copies the ones other members conduct
 type Manager struct {
-	DB          *db.DB
-	Mesh        *mesh.Manager
-	Instances   *instances.Manager
-	Routes      *gateway.Table
+	DB        *db.DB
+	Mesh      *mesh.Manager
+	Instances *instances.Manager
+	// Publishes the seats of formations conducted here and names their routes
+	Registrar pools.Registrar
+	// Requests the gateway has in flight on a seat's instance, read while a formation drains
+	InFlight    func(instanceID string) int
 	Tasks       *tasks.Manager
 	Inspector   *inspect.Inspector
 	Runtimes    *runtimes.Registry
@@ -100,8 +102,6 @@ type Manager struct {
 	CacheDir string
 	// Set by the daemon once slots exist
 	SlotView SlotView
-	// The gateway's request recorder, what route profiles are learned from and what proves a canary
-	Traces *gateway.Recorder
 	// This node's gateway, for the canary a relay formation answers before it is ready
 	Gateway LocalGateway
 	// How long requests in flight get before the head stops
@@ -117,12 +117,16 @@ type Manager struct {
 	stopping map[string]bool
 	// When each copy of another conductor's formation last arrived over the sync
 	merged map[string]time.Time
-	base   context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	// Seat relaunches of replicas formations under way, cancelled by a stop, by formation and seat
+	reseats map[string]map[string]*reseat
+	// The next seat relaunch delay of each replicas formation and since when it has served whole
+	backoffs map[string]*seatBackoff
+	base     context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
 }
 
-// Loads every formation record: the ones conducted here and the copies of others'
+// Loads every formation record, those conducted here and the copies of other conductors'
 func (m *Manager) Open(ctx context.Context) error {
 	if m.Log == nil {
 		m.Log = slog.Default()
@@ -131,6 +135,8 @@ func (m *Manager) Open(ctx context.Context) error {
 	m.busy = map[string]bool{}
 	m.stopping = map[string]bool{}
 	m.merged = map[string]time.Time{}
+	m.reseats = map[string]map[string]*reseat{}
+	m.backoffs = map[string]*seatBackoff{}
 	m.base, m.cancel = context.WithCancel(context.Background())
 	records, err := m.DB.ListFormations(ctx)
 	if err != nil {
@@ -181,8 +187,7 @@ func (m *Manager) Conducted() []*v1.Formation {
 	return out
 }
 
-// Seats hosted on this node as the node record advertises them: every live seat, and a finished
-// seat with its error and triage until the conductor's record has taken the failure
+// Seats this node hosts as its record advertises them, finished ones kept with triage until the conductor takes them
 func (m *Manager) Seats() []*v1.SeatRef {
 	refs := m.Instances.SeatRefs()
 	m.mu.Lock()
@@ -223,7 +228,7 @@ func (m *Manager) Serving(nodeID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, f := range m.list {
-		if f.GetState() != v1.FormationState_FORMATION_STATE_READY && f.GetState() != v1.FormationState_FORMATION_STATE_STARTING {
+		if !serving(f.GetState()) && f.GetState() != v1.FormationState_FORMATION_STATE_STARTING {
 			continue
 		}
 		for _, s := range f.GetSeats() {
@@ -309,8 +314,7 @@ func (m *Manager) nameTaken(name string) bool {
 	return false
 }
 
-// Applies a change to a conducted formation, sums its seats' measurements by node, stores it,
-// and publishes it
+// Applies a change to a conducted formation, sums seat measurements by node, stores it and publishes it
 func (m *Manager) update(id string, fn func(*v1.Formation)) *v1.Formation {
 	m.mu.Lock()
 	f, ok := m.list[id]
@@ -333,8 +337,7 @@ func (m *Manager) update(id string, fn func(*v1.Formation)) *v1.Formation {
 	return out
 }
 
-// Sums every seat's measurements by node and key, seats in record order, the first line of a
-// key kept as its example
+// Sums seat measurements by node and key in record order, keeping the first line of each key
 func nodeSums(seats []*v1.Seat) []*v1.NodeMeasurements {
 	var out []*v1.NodeMeasurements
 	byNode := map[string]*v1.NodeMeasurements{}
@@ -365,8 +368,7 @@ func nodeSums(seats []*v1.Seat) []*v1.NodeMeasurements {
 	return out
 }
 
-// Whether a directory under the cache is still wanted: a model's tensor cache while any formation
-// of the model is known here, a formation's own directory while the formation has not ended
+// Whether a cache directory is wanted, a model cache while any formation uses it, a formation's until it ends
 func (m *Manager) Live(name string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -419,11 +421,7 @@ func (m *Manager) pruneLocked() {
 	}
 }
 
-// Takes the formations a member conducts, as its sync carried them: a copy with a higher sequence
-// replaces ours, and one at the same sequence replaces a copy this node marked unreachable, since
-// that mark is not the conductor's write. Ready ones are routed through the conductor's gateway
-// and seats hosted here of ended ones are reaped. A copy the conductor no longer lists was
-// deleted there, and goes here too
+// Takes a member's conducted formations from its sync, newer copies replacing ours, reaping ended seats and dropping unlisted copies
 func (m *Manager) Merge(conductor string, list []*v1.Formation) {
 	if !m.Mesh.Joined() {
 		return
@@ -459,7 +457,6 @@ func (m *Manager) Merge(conductor string, list []*v1.Formation) {
 			action = v1.EventAction_EVENT_ACTION_CREATED
 		}
 		m.Events.Publish(v1.EventKind_EVENT_KIND_FORMATION, action, f.GetId(), copyOf)
-		m.routeCopy(copyOf)
 		if terminal(copyOf.GetState()) {
 			go m.reapSeats(m.Instances.SeatsOf(copyOf.GetId()), fmt.Sprintf("%s reports %s %s", copyOf.GetConductorName(), copyOf.GetName(), formationWord(copyOf.GetState())))
 		}
@@ -527,14 +524,18 @@ func (m *Manager) Forget(nodeID string) {
 	}
 }
 
-// Drops a formation record with its routes and seats here
+// Drops a formation record with its endpoints, routes, seat relaunches and seats here
 func (m *Manager) remove(f *v1.Formation, why string) {
+	m.cancelReseats(f.GetId())
 	m.mu.Lock()
 	delete(m.list, f.GetId())
 	delete(m.merged, f.GetId())
 	delete(m.stopping, f.GetId())
+	delete(m.backoffs, f.GetId())
 	m.mu.Unlock()
-	m.Routes.RemoveFormation(f.GetId())
+	if f.GetConductor() == m.self() {
+		m.withdraw(context.Background(), f.GetId())
+	}
 	if _, err := m.DB.DeleteFormation(context.Background(), f.GetId()); err != nil {
 		m.Log.Warn("formation record delete failed", "id", f.GetId(), "err", err)
 	}
@@ -544,37 +545,7 @@ func (m *Manager) remove(f *v1.Formation, why string) {
 	}
 }
 
-// Keeps this node's route for a formation another member conducts in step with its state. A
-// route this gateway cannot serve, for a name already taken here, leaves the copy unreachable
-// from this node with the reason on it.
-func (m *Manager) routeCopy(f *v1.Formation) {
-	switch f.GetState() {
-	case v1.FormationState_FORMATION_STATE_READY, v1.FormationState_FORMATION_STATE_STARTING, v1.FormationState_FORMATION_STATE_DEGRADED:
-		if f.GetEndpoint() == "" {
-			return
-		}
-		if _, err := m.Routes.Forward(f, m.Runtimes.API(f.GetRuntimeId())); err != nil {
-			m.Log.Warn("formation not routed through this gateway", "formation", f.GetName(), "conductor", f.GetConductorName(), "err", err)
-			m.mu.Lock()
-			copyOf, ok := m.list[f.GetId()]
-			if ok {
-				copyOf.State = v1.FormationState_FORMATION_STATE_UNREACHABLE
-				copyOf.Error = "not routed through this node's gateway: " + err.Error()
-				f = proto.Clone(copyOf).(*v1.Formation)
-			}
-			m.mu.Unlock()
-			if ok {
-				m.persist(f)
-				m.Events.Publish(v1.EventKind_EVENT_KIND_FORMATION, v1.EventAction_EVENT_ACTION_UPDATED, f.GetId(), f)
-			}
-		}
-	default:
-		m.Routes.RemoveFormation(f.GetId())
-	}
-}
-
-// Stops seats hosted here whose formation has ended or whose conductor is gone, so no process
-// outlives the formation it served
+// Stops seats hosted here whose formation ended or whose conductor is gone, so no process outlives its formation
 func (m *Manager) reapSeats(seats []*v1.Instance, why string) {
 	for _, in := range seats {
 		m.Log.Info("reaping a seat", "seat", in.GetName(), "why", why)
@@ -586,9 +557,7 @@ func (m *Manager) reapSeats(seats []*v1.Instance, why string) {
 	}
 }
 
-// Follows a member's state: a conductor gone quiet takes its formations off every gateway, one
-// gone for good takes its seats hosted here down, and a seat's node gone quiet degrades the
-// formation it serves
+// Follows a member's state, unreachable conductors marking copies, gone ones reaping seats here, lost seat nodes degrading formations
 func (m *Manager) MemberState(nodeID string, state v1.NodeState) {
 	m.mu.Lock()
 	var copies, conducted []*v1.Formation
@@ -599,7 +568,7 @@ func (m *Manager) MemberState(nodeID string, state v1.NodeState) {
 		case f.GetConductor() == m.self():
 			for _, s := range f.GetSeats() {
 				if s.GetNodeId() == nodeID {
-					conducted = append(conducted, f)
+					conducted = append(conducted, proto.Clone(f).(*v1.Formation))
 					break
 				}
 			}
@@ -616,7 +585,6 @@ func (m *Manager) MemberState(nodeID string, state v1.NodeState) {
 				m.mu.Unlock()
 				m.persist(out)
 				m.Events.Publish(v1.EventKind_EVENT_KIND_FORMATION, v1.EventAction_EVENT_ACTION_UPDATED, f.GetId(), out)
-				m.Routes.RemoveFormation(f.GetId())
 			}
 		}
 	}
@@ -627,8 +595,11 @@ func (m *Manager) MemberState(nodeID string, state v1.NodeState) {
 	}
 	if state == v1.NodeState_NODE_STATE_UNREACHABLE || state == v1.NodeState_NODE_STATE_GONE {
 		for _, f := range conducted {
-			if f.GetState() == v1.FormationState_FORMATION_STATE_READY {
-				go m.degrade(f.GetId(), fmt.Sprintf("%s, which hosts a seat, is %s", m.nodeName(nodeID), stateWord(state)))
+			why := fmt.Sprintf("%s, which hosts a seat, is %s", m.nodeName(nodeID), stateWord(state))
+			for _, s := range f.GetSeats() {
+				if s.GetNodeId() == nodeID {
+					m.seatLeft(f, s, why)
+				}
 			}
 		}
 	}
@@ -666,9 +637,7 @@ func formationWord(s v1.FormationState) string {
 	return "unknown"
 }
 
-// Takes up conducted formations after a restart: ones being stopped or not wanted have their
-// seats stopped and end, and wanted ones adopt their seats, verifying each before serving again.
-// Copies of other conductors' formations wait for their conductor's next sync.
+// Takes up conducted formations after a restart, stopping unwanted ones and adopting wanted ones seat by seat
 func (m *Manager) Recover(ctx context.Context) error {
 	var adopt, stop []*v1.Formation
 	var copies []string
@@ -693,8 +662,8 @@ func (m *Manager) Recover(ctx context.Context) error {
 		}
 	}
 	m.mu.Unlock()
-	for _, id := range copies {
-		m.Routes.RemoveFormation(id)
+	if len(copies) > 0 {
+		m.Log.Info("copies of other conductors' formations wait for their next sync", "formations", len(copies))
 	}
 	for _, f := range adopt {
 		m.update(f.GetId(), func(r *v1.Formation) {
@@ -713,8 +682,9 @@ func (m *Manager) Recover(ctx context.Context) error {
 				return
 			}
 			m.Log.Info("finishing the stop a previous daemon began", "formation", f.GetName())
-			m.Routes.RemoveFormation(f.GetId())
+			m.drain(m.base, f)
 			m.stopSeats(m.base, f, nil)
+			m.withdraw(m.base, f.GetId())
 			m.update(f.GetId(), func(r *v1.Formation) {
 				r.State = v1.FormationState_FORMATION_STATE_STOPPED
 				if r.Error == "" {
@@ -734,9 +704,7 @@ func (m *Manager) Recover(ctx context.Context) error {
 	return nil
 }
 
-// Adopts a formation after a restart: the head is verified first, from its instance on this node,
-// then every other seat over the sync, each recorded as it verifies, and the route returns only
-// when all of them did. A seat that does not verify ends the formation and launches it again.
+// Adopts a formation after a restart, verifying the head then every seat, relaunching it when any seat fails to verify
 func (m *Manager) adopt(ctx context.Context, f *v1.Formation) {
 	m.mu.Lock()
 	m.busy[f.GetId()] = true
@@ -751,13 +719,16 @@ func (m *Manager) adopt(ctx context.Context, f *v1.Formation) {
 			return
 		}
 		m.Log.Info("relaunching formation after the restart", "formation", f.GetName(), "why", why)
+		m.drain(ctx, f)
+		m.stopSeats(ctx, f, nil)
+		m.withdraw(ctx, f.GetId())
 		ended := m.update(f.GetId(), func(r *v1.Formation) {
 			r.State = v1.FormationState_FORMATION_STATE_STOPPED
 			r.Error = db.RestartNote + ": " + why
 			r.StoppedAt = timestamppb.Now()
+			r.Conditions = instances.SetCondition(r.Conditions, CondLaunched, false, ReasonStopped, r.Error, r.GetGeneration())
+			r.Conditions = instances.SetCondition(r.Conditions, CondReady, false, ReasonStopped, r.Error, r.GetGeneration())
 		})
-		m.Routes.RemoveFormation(f.GetId())
-		m.stopSeats(ctx, f, nil)
 		if ctx.Err() != nil || !ended.GetDesiredRunning() {
 			return
 		}
@@ -805,6 +776,10 @@ func (m *Manager) adopt(ctx context.Context, f *v1.Formation) {
 			return
 		}
 	}
+	if err := m.publishSeats(ctx, f.GetId(), nil); err != nil {
+		relaunch("publish: " + err.Error())
+		return
+	}
 	if err := m.route(ctx, f.GetId()); err != nil {
 		relaunch("route: " + err.Error())
 		return
@@ -812,10 +787,10 @@ func (m *Manager) adopt(ctx context.Context, f *v1.Formation) {
 	m.Log.Info("adopted formation, every seat verified", "formation", f.GetName())
 	m.update(f.GetId(), func(r *v1.Formation) {
 		if r.State == v1.FormationState_FORMATION_STATE_STARTING {
-			r.State = v1.FormationState_FORMATION_STATE_READY
-			r.Error = ""
+			markReady(r)
 		}
 	})
+	m.servedWhole(f.GetId())
 	m.Mesh.Bump()
 }
 
@@ -825,6 +800,7 @@ func (m *Manager) recordVerified(id string, s *v1.Seat, in *v1.Instance) {
 		for _, rs := range r.GetSeats() {
 			if sameSeat(rs, s) {
 				rs.State, rs.Error, rs.Triage = in.GetState(), "", nil
+				rs.Conditions = seatConditions(in.GetConditions())
 				rs.Transport = in.GetTransport()
 				rs.Measurements = in.GetMeasurements()
 				rs.Exposed = in.GetSeat().GetExposed() || in.GetTransport() == transportRDMA
@@ -833,8 +809,7 @@ func (m *Manager) recordVerified(id string, s *v1.Seat, in *v1.Instance) {
 	})
 }
 
-// Waits for a seat's instance to report ready from its node, this node's instances for a seat
-// here and the seat's node otherwise, within the adoption window
+// Waits within the adoption window for a seat's instance to report ready from this node or the seat's node
 func (m *Manager) verifySeat(ctx context.Context, s *v1.Seat) (*v1.Instance, error) {
 	if s.GetInstanceId() == "" {
 		return nil, errors.New("the record names no instance")
@@ -870,9 +845,7 @@ func (m *Manager) verifySeat(ctx context.Context, s *v1.Seat) (*v1.Instance, err
 	}
 }
 
-// Waits until a record of the formation's conductor written after since says its head is ready,
-// for a stage adopted on this node while a head holds it. The formation conducted here answers
-// from the head's instance; another conductor's answers from the copy its sync brought.
+// Waits for a conductor record newer than since that says the head is ready, for a stage a head holds
 func (m *Manager) HeadReady(ctx context.Context, formationID string, since time.Time) error {
 	for {
 		m.mu.Lock()
@@ -918,7 +891,7 @@ func (m *Manager) HeadReady(ctx context.Context, formationID string, since time.
 	}
 }
 
-// The seat answering the route: the role the runtime marks head
+// The seat answering the route, the role the runtime marks head
 func (m *Manager) headSeat(f *v1.Formation) *v1.Seat {
 	rt, err := m.Runtimes.Get(f.GetRuntimeId())
 	if err == nil {
@@ -949,9 +922,7 @@ func (m *Manager) headSeat(f *v1.Formation) *v1.Seat {
 	return nil
 }
 
-// Stops a formation: a launch under way is canceled and stops what it started, the route drains
-// and requests in flight finish, then the head stops first, so no stage sees a connection drop
-// mid request, then the stages together
+// Cancels any launch, drains requests, then stops the head before the stages so no stage sees a drop mid request
 func (m *Manager) Stop(ctx context.Context, id string) (*v1.Formation, error) {
 	f, err := m.Get(id)
 	if err != nil {
@@ -967,9 +938,11 @@ func (m *Manager) Stop(ctx context.Context, id string) (*v1.Formation, error) {
 	m.stopping[f.GetId()] = true
 	launching := m.busy[f.GetId()]
 	m.mu.Unlock()
+	m.cancelReseats(f.GetId())
 	m.update(f.GetId(), func(r *v1.Formation) {
 		r.DesiredRunning = false
 		r.State = v1.FormationState_FORMATION_STATE_STOPPING
+		r.Conditions = instances.SetCondition(r.Conditions, CondReady, false, ReasonStopping, "", r.GetGeneration())
 	})
 	if launching && f.GetTaskId() != "" {
 		if _, err := m.Tasks.Cancel(f.GetTaskId()); err == nil {
@@ -978,17 +951,19 @@ func (m *Manager) Stop(ctx context.Context, id string) (*v1.Formation, error) {
 			}
 		}
 	}
-	m.Routes.DrainFormation(f.GetId())
 	current, err := m.Get(f.GetId())
 	if err != nil {
 		return nil, err
 	}
-	m.waitDrained(ctx, current)
+	m.drain(ctx, current)
 	m.stopSeats(ctx, current, nil)
-	m.Routes.RemoveFormation(f.GetId())
+	m.withdraw(ctx, f.GetId())
 	out := m.update(f.GetId(), func(r *v1.Formation) {
 		r.State = v1.FormationState_FORMATION_STATE_STOPPED
 		r.StoppedAt = timestamppb.Now()
+		r.Conditions = instances.SetCondition(r.Conditions, CondLaunched, false, ReasonStopped, "", r.GetGeneration())
+		r.Conditions = instances.SetCondition(r.Conditions, CondReady, false, ReasonStopped, "", r.GetGeneration())
+		r.Conditions = instances.SetCondition(r.Conditions, CondDegraded, false, ReasonStopped, "", r.GetGeneration())
 	})
 	m.mu.Lock()
 	delete(m.stopping, f.GetId())
@@ -997,29 +972,39 @@ func (m *Manager) Stop(ctx context.Context, id string) (*v1.Formation, error) {
 	return out, nil
 }
 
-// Waits for the requests in flight on every seat to finish, up to the drain timeout
-func (m *Manager) waitDrained(ctx context.Context, f *v1.Formation) {
+// Takes the formation's endpoints out of traffic and waits for every seat's requests in flight, up to the drain timeout
+func (m *Manager) drain(ctx context.Context, f *v1.Formation) {
+	m.Registrar.Drain(ctx, ownerOf(f.GetId()))
 	limit := m.DrainTimeout
 	if limit <= 0 {
 		limit = defaultDrainTimeout
 	}
-	deadline := time.Now().Add(limit)
-	for _, s := range f.GetSeats() {
-		if s.GetInstanceId() == "" {
-			continue
+	deadline := time.NewTimer(limit)
+	defer deadline.Stop()
+	tick := time.NewTicker(drainPoll)
+	defer tick.Stop()
+	for {
+		left := 0
+		for _, s := range f.GetSeats() {
+			if s.GetInstanceId() != "" {
+				left += m.InFlight(s.GetInstanceId())
+			}
 		}
-		left := time.Until(deadline)
-		if left <= 0 {
+		if left == 0 {
 			return
 		}
-		if !m.Routes.WaitDrained(ctx, s.GetInstanceId(), left) {
-			m.Log.Warn("requests still in flight when the seat stops", "formation", f.GetName(), "seat", s.GetRole(), "node", s.GetNodeName(), "in_flight", m.Routes.InFlight(s.GetInstanceId()))
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			m.Log.Warn("requests still in flight when the formation's seats stop", "formation", f.GetName(), "in_flight", left)
+			return
+		case <-tick.C:
 		}
 	}
 }
 
-// Stops every seat of a formation, the head first, then the rest together. Seats whose stop
-// fails keep the error on their record.
+// Stops every seat with the head first and the rest together, a failed stop leaving its error on the seat
 func (m *Manager) stopSeats(ctx context.Context, f *v1.Formation, h *tasks.Handle) {
 	head := m.headSeat(f)
 	logf := func(format string, args ...any) {

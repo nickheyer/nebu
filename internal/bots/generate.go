@@ -55,22 +55,14 @@ func (r *runner) route(p *v1.Persona, kind string) (string, error) {
 	if named != "" {
 		return named, nil
 	}
+	ready, err := r.readyModels()
+	if err != nil {
+		return "", err
+	}
 	var fits []string
-	for _, rt := range r.m.Gateway.Table().Ready() {
-		diffusion := rt.GetApi() == v1.ApiFlavor_API_FLAVOR_SDCPP
-		switch kind {
-		case "chat":
-			if !diffusion {
-				fits = append(fits, rt.GetName())
-			}
-		case "image":
-			if diffusion && hasMode(rt, "img_gen") {
-				fits = append(fits, rt.GetName())
-			}
-		case "video":
-			if diffusion && hasMode(rt, "vid_gen") {
-				fits = append(fits, rt.GetName())
-			}
+	for _, m := range ready {
+		if m.serves(kind) {
+			fits = append(fits, m.name)
 		}
 	}
 	sort.Strings(fits)
@@ -88,15 +80,6 @@ func kindWord(kind string) string {
 		return "language"
 	}
 	return kind
-}
-
-func hasMode(rt *v1.Route, mode string) bool {
-	for _, m := range rt.GetModes() {
-		if m == mode {
-			return true
-		}
-	}
-	return false
 }
 
 // Sends chat through the gateway and calls onDelta for streamed fragments.

@@ -1,0 +1,21 @@
+{% macro render_content(content) %} {% if content is string %}{{- content }}{% elif content is mapping %}{{- content['value'] if 'value' in content else content['text'] }}{% elif content is iterable %}{% for item in content %}{% if item.type == 'text' %}{{- item['value'] if 'value' in item else item['text'] }}{% elif item.type == 'image' %}<im_patch>{% endif %}{% endfor %}{% endif %} {% endmacro %}{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{{ bos_token }}{% for message in messages %}{% if message.role == 'system' %}{{ render_content(message['content']) }}{% endif %}{% endfor %}{% if tools is defined and tools %}{% set ns = namespace(data='') %}{% for tool in tools %}{% set ns.data = ns.data + (tool | tojson(ensure_ascii=False)) + '
+' %}{% endfor %}{% set tool_schemas_var = ns.data %}# Tools 
+You may call one or more tools to assist with the user query. You are provided with tool schemas within <tools></tools> XML tags: <tools>{{ tool_schemas_var }}</tools> When making tool calls, use XML format to invoke tools and pass parameters: <｜tool_calls_begin｜>
+<｜tool_call_begin｜>
+function<｜tool_sep｜><steptml:invoke name="tool_name0"><steptml:parameter name="parameter_name0">[parameter value]</steptml:parameter>...</steptml:invoke><｜tool_call_end｜>
+<｜tool_call_begin｜>
+function<｜tool_sep｜><steptml:invoke name="tool_name1"><steptml:parameter name="parameter_name1">[parameter value]</steptml:parameter>...</steptml:invoke><｜tool_call_end｜>
+<｜tool_calls_end｜>
+Note: * You can invoke one or more tools in parallel. * Each tool call must be complete and self-contained within a single <steptml:toolcall></steptml:toolcall> block. {% endif %}{% for message in messages %}{% if message.role == 'tool_description' %}{{ render_content(message['content']) }}{% elif message.role == 'user' %}{{- '<|BOT|>' + message.role + '\n' + render_content(message['content']) }}{{- '<|EOT|>' }}{% elif message.role == 'tool_response' or message.role == 'tools'%}<｜tool_outputs_begin｜>
+{% if message['content'] is string %}{{- '<｜tool_output_begin｜>
+' + message['content'] + '<｜tool_output_end｜>'}}{% else %}{% for tool_output in message['content'] %}<｜tool_output_begin｜>
+{{ render_content(tool_output) }}<｜tool_output_end｜>{% endfor %}{% endif %}
+<｜tool_outputs_end｜>
+{% elif message.role != 'system' %}{{- '<|BOT|>' + message.role + '
+' }}{% if message['content'] is defined %}{{- render_content(message['content']) }}{% endif %}{% if message.tool_calls is defined %}<｜tool_calls_begin｜>
+{% for tool in message.tool_calls %}<｜tool_call_begin>｜>
+{{ tool['type'] }}<｜tool_sep｜>{{- '<steptml:invoke name="' + tool['function']['name'] + '">' }}{% for name, param in tool['function']['arguments'].items() %} {{- '<steptml:parameter name="' + name + '">' + param | string + '</steptml:parameter>' }}{% endfor %}</steptml:invoke><｜tool_call_end｜>
+{% endfor %}<｜tool_calls_end｜>
+{% endif %}<|EOT|>{% endif %}{% endfor %}{% if add_generation_prompt %}{{- '<|BOT|>assistant
+<think>
+' }}{% endif %}

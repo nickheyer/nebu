@@ -489,22 +489,24 @@ func (r *runner) helpText() string {
 }
 
 func (r *runner) modelsText() string {
+	ready, err := r.readyModels()
+	if err != nil {
+		return "Could not list models: " + err.Error()
+	}
 	var lines []string
-	for _, rt := range r.m.Gateway.Table().Ready() {
+	for _, m := range ready {
 		kind := "chat"
-		if rt.GetApi() == v1.ApiFlavor_API_FLAVOR_SDCPP {
+		if !m.serves("chat") {
 			var modes []string
-			for _, m := range rt.GetModes() {
-				switch m {
-				case "img_gen":
-					modes = append(modes, "images")
-				case "vid_gen":
-					modes = append(modes, "video")
-				}
+			if m.serves("image") {
+				modes = append(modes, "images")
+			}
+			if m.serves("video") {
+				modes = append(modes, "video")
 			}
 			kind = strings.Join(modes, ", ")
 		}
-		lines = append(lines, fmt.Sprintf("• `%s` %s", rt.GetName(), kind))
+		lines = append(lines, fmt.Sprintf("• `%s` %s", m.name, kind))
 	}
 	if len(lines) == 0 {
 		return "No model is running. Start one with `nebu run` or from the nebu UI."

@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,9 +9,8 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"net/http"
-	"reflect"
+	"slices"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -24,8 +22,7 @@ func jsonArgs(s string) (json.RawMessage, bool) {
 	if s == "" || s == "null" {
 		return json.RawMessage("{}"), true
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal([]byte(s), &fields) != nil {
+	if !isObject([]byte(s)) {
 		return nil, false
 	}
 	return json.RawMessage(s), true
@@ -82,6 +79,69 @@ func (t *toolGather) list() []ToolCall {
 	return out
 }
 
+// The text, thinking, calls and token ids of one choice as they arrive
+type choiceGather struct {
+	said   textGather
+	tools  toolGather
+	tokens []int
+}
+
+// Gathers every choice of an answer apart, by index
+type answerGather map[int]*choiceGather
+
+func (a answerGather) of(choice int) *choiceGather {
+	g, ok := a[choice]
+	if !ok {
+		g = &choiceGather{}
+		a[choice] = g
+	}
+	return g
+}
+
+func (a answerGather) add(ev Event) {
+	switch ev.Kind {
+	case Said, Thought:
+		g := a.of(ev.Choice)
+		g.said.add(ev)
+		g.tokens = append(g.tokens, ev.TokenIDs...)
+	case Called:
+		a.of(ev.Choice).tools.add(ev)
+	}
+}
+
+// The whole answer, each choice's gathered text and calls on its own entry, answer fields on the first
+func (a answerGather) result(res *Result, model string) *Result {
+	if res == nil {
+		res = &Result{}
+	}
+	byIndex := map[int]*Result{}
+	for _, r := range res.All() {
+		c := *r
+		c.More = nil
+		byIndex[c.Choice] = &c
+	}
+	for choice := range a {
+		if _, ok := byIndex[choice]; !ok {
+			byIndex[choice] = &Result{Choice: choice}
+		}
+	}
+	for choice, r := range byIndex {
+		g := a.of(choice)
+		r.Model, r.Text, r.Thinking, r.ToolCalls = model, g.said.text.String(), g.said.thinking.String(), g.tools.list()
+		if len(g.tokens) > 0 {
+			r.TokenIDs = g.tokens
+		}
+		r.Stop = StopOf(r.Stop, len(r.ToolCalls))
+	}
+	top := byIndex[res.Choice]
+	first := choices(byIndex)
+	if first != top {
+		first.ID, first.Usage, first.Extra, first.Vectors, first.PromptTokenIDs = top.ID, top.Usage, top.Extra, top.Vectors, top.PromptTokenIDs
+		top.ID, top.Usage, top.Extra, top.Vectors, top.PromptTokenIDs = "", Usage{}, nil, nil, nil
+	}
+	return first
+}
+
 // Joins the text parts of a message
 func TextOf(parts []Part) string {
 	var b strings.Builder
@@ -107,6 +167,11 @@ func thinkingOf(parts []Part) string {
 	return b.String()
 }
 
+// Whether any part holds token ids rather than text
+func hasTokens(parts []Part) bool {
+	return slices.ContainsFunc(parts, func(p Part) bool { return p.Type == "tokens" })
+}
+
 // The id an answer carries, a fresh one under the prefix when the runtime gave none
 func resultID(r *Result, prefix string) string {
 	if r.ID != "" {
@@ -117,59 +182,6 @@ func resultID(r *Result, prefix string) string {
 
 func newID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
-}
-
-// The json names each wire struct maps, read from its tags once
-var knownFields sync.Map
-
-func fieldNames(known any) map[string]bool {
-	t := reflect.TypeOf(known)
-	if names, ok := knownFields.Load(t); ok {
-		return names.(map[string]bool)
-	}
-	names := map[string]bool{}
-	for i := 0; i < t.NumField(); i++ {
-		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
-		if name == "" {
-			name = t.Field(i).Name
-		}
-		names[name] = true
-	}
-	knownFields.Store(t, names)
-	return names
-}
-
-// Fields of a JSON object that a wire struct has no tag for
-func extraFields(raw []byte, known any) map[string]json.RawMessage {
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil {
-		return nil
-	}
-	for name := range fieldNames(known) {
-		delete(fields, name)
-	}
-	if len(fields) == 0 {
-		return nil
-	}
-	return fields
-}
-
-// Marshals v and adds the extra fields v does not set itself
-func withExtra(v any, extra map[string]json.RawMessage) ([]byte, error) {
-	data, err := json.Marshal(v)
-	if err != nil || len(extra) == 0 {
-		return data, err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return nil, err
-	}
-	for k, raw := range extra {
-		if _, taken := fields[k]; !taken {
-			fields[k] = raw
-		}
-	}
-	return json.Marshal(fields)
 }
 
 // Adds from's fields to into, later values winning
@@ -184,23 +196,6 @@ func mergeExtra(into, from map[string]json.RawMessage) map[string]json.RawMessag
 		into[k] = v
 	}
 	return into
-}
-
-// Reads a string or a list of strings
-func strs(raw json.RawMessage) []string {
-	if len(raw) == 0 {
-		return nil
-	}
-	var one string
-	if json.Unmarshal(raw, &one) == nil {
-		if one == "" {
-			return nil
-		}
-		return []string{one}
-	}
-	var many []string
-	json.Unmarshal(raw, &many)
-	return many
 }
 
 // Splits a data URL into media type and base64 payload
@@ -239,7 +234,7 @@ func mediaTypeOfBase64(data string) string {
 	return MediaTypeOf(raw, "")
 }
 
-// Tools and turns flattened into text for token counting
+// Tools and turns flattened into text for a tokenizer
 func promptText(req *Request) string {
 	var b strings.Builder
 	for _, t := range req.Tools {
@@ -263,24 +258,53 @@ func promptText(req *Request) string {
 		b.WriteString("\n")
 	}
 	for _, in := range req.Inputs {
-		b.WriteString(in)
+		b.WriteString(in.Text)
 		b.WriteString("\n")
 	}
 	return b.String()
 }
 
-const imageTokensMax = 1600
+const (
+	imageTokensMax = 1600
+	// Tokens a chat template spends on each turn around its content
+	turnTokens = 4
+)
 
-// Estimates tokens at four bytes each
+// Estimates tokens at four bytes each, rounded up
 func TextTokens(s string) int { return (len(s) + 3) / 4 }
 
-// Estimates tokens at four bytes each, plus turn overhead and image area
-func EstimateTokens(req *Request) int {
-	n := TextTokens(promptText(req))
-	for range req.Messages {
-		n += 3
+// Estimates the tokens of one part, text at four bytes each, token ids as they are, images by area
+func partTokens(p Part) int {
+	switch p.Type {
+	case "text", "thinking":
+		return TextTokens(p.Text)
+	case "tokens":
+		return len(p.Tokens)
+	case "image":
+		return imageTokens(p)
 	}
-	return n + ImageTokens(req)
+	return 0
+}
+
+// Estimates prompt tokens at four bytes a token per text part, four per turn, and images by area
+func EstimateTokens(req *Request) int {
+	n := 0
+	for _, t := range req.Tools {
+		n += TextTokens(t.Name) + TextTokens(t.Description) + TextTokens(string(t.Schema))
+	}
+	for _, m := range req.Messages {
+		n += turnTokens
+		for _, p := range m.Parts {
+			n += partTokens(p)
+		}
+		for _, c := range m.ToolCalls {
+			n += TextTokens(c.Name) + TextTokens(c.Args)
+		}
+	}
+	for _, in := range req.Inputs {
+		n += partTokens(in)
+	}
+	return n
 }
 
 // Estimates image tokens by area across every turn
@@ -296,13 +320,12 @@ func ImageTokens(req *Request) int {
 	return n
 }
 
-// Estimates one image's tokens as area over 750, the cap for one that cannot be decoded
+// Estimates one image's tokens as area over 750, reading only the header, the cap for one that cannot be decoded
 func imageTokens(p Part) int {
-	raw, err := base64.StdEncoding.DecodeString(p.Data)
-	if err != nil {
+	if p.Data == "" {
 		return imageTokensMax
 	}
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	cfg, _, err := image.DecodeConfig(base64.NewDecoder(base64.StdEncoding, strings.NewReader(p.Data)))
 	if err != nil {
 		return imageTokensMax
 	}

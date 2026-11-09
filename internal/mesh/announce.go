@@ -3,7 +3,6 @@ package mesh
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"net"
 	"runtime"
@@ -31,12 +30,11 @@ const (
 	ifaceRefresh = time.Minute
 )
 
-// What a beacon carries: who the node is, where it listens, and the mesh it belongs to
+// What a beacon carries, who the node is, where it listens, its identity fingerprint and its mesh
 type beacon struct {
 	Node        string `json:"node"`
 	Name        string `json:"name"`
 	Address     string `json:"address,omitempty"`
-	TLS         bool   `json:"tls,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
 	Version     string `json:"version,omitempty"`
 	OS          string `json:"os,omitempty"`
@@ -45,7 +43,6 @@ type beacon struct {
 	Mesh     string `json:"mesh,omitempty"`
 	MeshName string `json:"mesh_name,omitempty"`
 	Members  uint32 `json:"members,omitempty"`
-	MeshTLS  bool   `json:"mesh_tls,omitempty"`
 }
 
 // A node heard on the network
@@ -54,9 +51,7 @@ type heard struct {
 	at  time.Time
 }
 
-// Sends a beacon every interval on every multicast interface and hears the others, whether or not
-// this node belongs to a mesh: members find each other, and the Mesh page lists the nodes and
-// meshes nearby so admission runs from it
+// Sends a beacon every interval on each multicast interface and hears the others, in a mesh or not
 func (m *Manager) announceLoop(ctx context.Context) {
 	if !m.announceOn() {
 		return
@@ -134,8 +129,7 @@ func (m *Manager) announceLoop(ctx context.Context) {
 	}
 }
 
-// The interfaces beacons go out on, each joined to the group for receiving: up, multicast capable,
-// not loopback, and holding an IPv4 address
+// Up multicast interfaces with an IPv4 address and no loopback, each joined to the group for receiving
 func (m *Manager) multicastInterfaces(receiver *ipv4.PacketConn, group *net.UDPAddr) []net.Interface {
 	list, err := net.Interfaces()
 	if err != nil {
@@ -161,45 +155,34 @@ func (m *Manager) multicastInterfaces(receiver *ipv4.PacketConn, group *net.UDPA
 		if !v4 {
 			continue
 		}
-		// Joining twice on the same interface is refused by the kernel and changes nothing.
+		// Joining twice on the same interface is refused by the kernel and changes nothing
 		receiver.JoinGroup(&ifc, &net.UDPAddr{IP: group.IP})
 		out = append(out, ifc)
 	}
 	return out
 }
 
-// The beacon this node sends: its identity and listener, and its mesh when it belongs to one
+// The beacon this node sends with its identity, listener and mesh
 func (m *Manager) beacon() []byte {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	fingerprint, hasTLS := m.servedCertLocked()
 	b := beacon{
 		Node:        m.identity.ID,
 		Name:        m.name(),
 		Address:     m.advertiseLocked(),
-		TLS:         hasTLS,
-		Fingerprint: fingerprint,
+		Fingerprint: m.identityFingerprint(),
 		Version:     m.Version,
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
 	}
 	if m.mesh != nil {
-		b.Mesh, b.MeshName, b.Members, b.MeshTLS = meshHex(m.mesh.ID), m.mesh.Name, uint32(len(m.members)+1), m.mesh.TLS
+		b.Mesh, b.MeshName, b.Members = meshHex(m.mesh.ID), m.mesh.Name, uint32(len(m.members)+1)
 	}
 	body, _ := json.Marshal(b)
 	return append([]byte(beaconMagic), body...)
 }
 
-// The hash of a mesh id as beacons and admissions carry it
-func meshHex(id string) string {
-	return hex.EncodeToString(meshHash(id))
-}
-
-// The hash of a mesh id as beacons and admissions carry it, for callers outside the package
-func HashOf(id string) string { return meshHex(id) }
-
-// Takes a beacon: records the node as nearby and, when it names this node's mesh and this node has
-// not met it, contacts it
+// Records a beacon's node as nearby and contacts it when it names this mesh and is not met yet
 func (m *Manager) heard(ctx context.Context, payload []byte, source string, tried *sync.Map) {
 	if !bytes.HasPrefix(payload, []byte(beaconMagic)) {
 		return
@@ -215,7 +198,6 @@ func (m *Manager) heard(ctx context.Context, payload []byte, source string, trie
 		Id:             b.Node,
 		Name:           b.Name,
 		Address:        b.Address,
-		Tls:            b.TLS,
 		TlsFingerprint: b.Fingerprint,
 		Version:        b.Version,
 		Os:             b.OS,
@@ -223,7 +205,6 @@ func (m *Manager) heard(ctx context.Context, payload []byte, source string, trie
 		MeshHash:       b.Mesh,
 		MeshName:       b.MeshName,
 		MeshMembers:    b.Members,
-		MeshTls:        b.MeshTLS,
 		HeardAt:        timestamppb.Now(),
 		From:           source,
 	}
@@ -253,39 +234,46 @@ func (m *Manager) heard(ctx context.Context, payload []byte, source string, trie
 		return
 	}
 	tried.Store(b.Node, time.Now())
-	m.spawn(func() {
-		// The contact holds the node's dialing lock like a client handshake does, and a client
-		// handshake that met the node meanwhile leaves nothing to do
-		dial := m.dialLock(b.Node)
-		dial.Lock()
-		defer dial.Unlock()
+	m.spawn(func() { m.contact(ctx, b.Node, b.Name, b.Address) })
+}
+
+// Syncs with a node a beacon names as a member, keeping it once its certificate proves membership
+func (m *Manager) contact(ctx context.Context, id, name, address string) {
+	m.mu.Lock()
+	mb, known := m.members[id]
+	previous := mb.GetAddress()
+	if !known {
+		mb = &member{rec: &v1.Node{Id: id, Name: name, Address: address}, sketch: true, seenAt: time.Now()}
+		m.members[id] = mb
+	}
+	mb.rec.Address = address
+	m.mu.Unlock()
+	if err := m.syncWith(ctx, id); err != nil {
 		m.mu.Lock()
-		mb, known := m.members[b.Node]
-		s := m.sessions[b.Node]
-		metNow := known && !mb.sketch && mb.rec.GetAddress() == b.Address || s != nil && s.send != ""
+		if now := m.members[id]; now == mb && mb.rec.GetAddress() == address {
+			if known {
+				mb.rec.Address = previous
+			} else if mb.sketch {
+				delete(m.members, id)
+			}
+		}
 		m.mu.Unlock()
-		if metNow {
-			return
-		}
-		resp, err := m.handshake(ctx, b.Address, b.TLS, b.Fingerprint, nil, nil)
-		if err != nil {
-			m.Log.Debug("mesh beacon contact failed", "node", b.Node, "address", b.Address, "err", err)
-			return
-		}
-		m.absorb(resp.GetNode(), resp.GetMembers(), true)
-		m.Log.Info("mesh member found by beacon", "node", b.Node, "address", b.Address)
-		select {
-		case m.wake <- struct{}{}:
-		default:
-		}
-	})
+		m.Log.Debug("mesh beacon contact failed", "node", id, "address", address, "err", err)
+		return
+	}
+	if rec, ok := m.Member(id); ok && !known {
+		m.Events.Publish(v1.EventKind_EVENT_KIND_NODE, v1.EventAction_EVENT_ACTION_CREATED, id, rec)
+		m.markJoined(id)
+		m.publishStatus()
+		m.Log.Info("mesh member found by beacon", "node", id, "address", address)
+	}
 }
 
 // Whether two beacons say the same about a node, the time heard aside
 func sameNearby(a, b *v1.NearbyNode) bool {
-	return a.GetName() == b.GetName() && a.GetAddress() == b.GetAddress() && a.GetTls() == b.GetTls() && a.GetTlsFingerprint() == b.GetTlsFingerprint() &&
+	return a.GetName() == b.GetName() && a.GetAddress() == b.GetAddress() && a.GetTlsFingerprint() == b.GetTlsFingerprint() &&
 		a.GetVersion() == b.GetVersion() && a.GetMeshHash() == b.GetMeshHash() && a.GetMeshName() == b.GetMeshName() && a.GetMeshMembers() == b.GetMeshMembers() &&
-		a.GetMeshTls() == b.GetMeshTls() && a.GetMember() == b.GetMember() && a.GetFrom() == b.GetFrom()
+		a.GetMember() == b.GetMember() && a.GetFrom() == b.GetFrom()
 }
 
 // Drops nodes unheard past the TTL
@@ -343,7 +331,7 @@ func (m *Manager) meshesNearbyLocked() []*v1.NearbyMesh {
 		}
 		nm, ok := byHash[hash]
 		if !ok {
-			nm = &v1.NearbyMesh{Hash: hash, Name: h.rec.GetMeshName(), Members: h.rec.GetMeshMembers(), Tls: h.rec.GetMeshTls()}
+			nm = &v1.NearbyMesh{Hash: hash, Name: h.rec.GetMeshName(), Members: h.rec.GetMeshMembers()}
 			byHash[hash] = nm
 		}
 		if nm.GetMembers() < h.rec.GetMeshMembers() {

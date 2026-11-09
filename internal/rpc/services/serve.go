@@ -3,24 +3,19 @@ package services
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
 
 	"connectrpc.com/connect"
-	"github.com/nickheyer/nebu/internal/gateway"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/slots"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
-	"github.com/nickheyer/nebu/pkg/runtimes"
 )
 
 var (
 	_ nebuv1connect.InstanceServiceHandler = (*InstanceService)(nil)
 	_ nebuv1connect.SlotServiceHandler     = (*SlotService)(nil)
-	_ nebuv1connect.GatewayServiceHandler  = (*GatewayService)(nil)
 	_ nebuv1connect.TaskServiceHandler     = (*TaskService)(nil)
 	_ nebuv1connect.EventServiceHandler    = (*EventService)(nil)
 )
@@ -39,8 +34,21 @@ func (s *InstanceService) Run(ctx context.Context, req *connect.Request[v1.RunRe
 	return reply(&v1.RunResponse{Instance: in, Task: task}, err)
 }
 
+func (s *InstanceService) PreviewRun(ctx context.Context, req *connect.Request[v1.PreviewRunRequest]) (*connect.Response[v1.PreviewRunResponse], error) {
+	command, params, err := s.instances.Preview(ctx, req.Msg.GetRun())
+	return reply(&v1.PreviewRunResponse{Command: command, Params: params}, err)
+}
+
 func (s *InstanceService) ListInstances(ctx context.Context, req *connect.Request[v1.ListInstancesRequest]) (*connect.Response[v1.ListInstancesResponse], error) {
-	return reply(&v1.ListInstancesResponse{Instances: s.instances.List(req.Msg.GetRunningOnly())}, nil)
+	list := s.instances.List(req.Msg.GetRunningOnly())
+	if state := req.Msg.GetState(); state != v1.InstanceState_INSTANCE_STATE_UNSPECIFIED {
+		list = keep(list, func(in *v1.Instance) bool { return in.GetState() == state })
+	}
+	list = match(list, req.Msg.GetQuery(), func(in *v1.Instance) []string {
+		return []string{in.GetName(), in.GetRepo(), in.GetGroup(), in.GetRuntimeId(), in.GetError()}
+	})
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListInstancesResponse{Instances: list, NextCursor: next}, err)
 }
 
 func (s *InstanceService) GetInstance(ctx context.Context, req *connect.Request[v1.GetInstanceRequest]) (*connect.Response[v1.GetInstanceResponse], error) {
@@ -59,6 +67,34 @@ func (s *InstanceService) Logs(ctx context.Context, req *connect.Request[v1.Logs
 	}))
 }
 
+func (s *InstanceService) LoadAdapter(ctx context.Context, req *connect.Request[v1.LoadAdapterRequest]) (*connect.Response[v1.LoadAdapterResponse], error) {
+	if err := s.instances.LoadAdapter(ctx, req.Msg.GetId(), req.Msg.GetName(), req.Msg.GetPath()); err != nil {
+		return nil, wrap(err)
+	}
+	in, err := s.instances.Get(req.Msg.GetId())
+	return reply(&v1.LoadAdapterResponse{Instance: in}, err)
+}
+
+func (s *InstanceService) UnloadAdapter(ctx context.Context, req *connect.Request[v1.UnloadAdapterRequest]) (*connect.Response[v1.UnloadAdapterResponse], error) {
+	if err := s.instances.UnloadAdapter(ctx, req.Msg.GetId(), req.Msg.GetName()); err != nil {
+		return nil, wrap(err)
+	}
+	in, err := s.instances.Get(req.Msg.GetId())
+	return reply(&v1.UnloadAdapterResponse{Instance: in}, err)
+}
+
+func (s *InstanceService) ListAdapters(ctx context.Context, req *connect.Request[v1.ListAdaptersRequest]) (*connect.Response[v1.ListAdaptersResponse], error) {
+	list, err := s.instances.ListAdapters(ctx, req.Msg.GetId())
+	if err != nil {
+		return nil, wrap(err)
+	}
+	resp := &v1.ListAdaptersResponse{}
+	for _, a := range list {
+		resp.Adapters = append(resp.Adapters, &v1.LoadedAdapter{Name: a.Name, Path: a.Path})
+	}
+	return reply(resp, nil)
+}
+
 // Serves slots and swaps
 type SlotService struct {
 	slots *slots.Manager
@@ -69,7 +105,15 @@ func NewSlotService(m *slots.Manager) *SlotService {
 }
 
 func (s *SlotService) ListSlots(ctx context.Context, req *connect.Request[v1.ListSlotsRequest]) (*connect.Response[v1.ListSlotsResponse], error) {
-	return reply(&v1.ListSlotsResponse{Slots: s.slots.List()}, nil)
+	list := s.slots.List()
+	if state := req.Msg.GetState(); state != v1.SlotState_SLOT_STATE_UNSPECIFIED {
+		list = keep(list, func(sl *v1.Slot) bool { return sl.GetState() == state })
+	}
+	list = match(list, req.Msg.GetQuery(), func(sl *v1.Slot) []string {
+		return []string{sl.GetName(), sl.GetDescription(), sl.GetRuntimeId(), sl.GetError()}
+	})
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListSlotsResponse{Slots: list, NextCursor: next}, err)
 }
 
 func (s *SlotService) GetSlot(ctx context.Context, req *connect.Request[v1.GetSlotRequest]) (*connect.Response[v1.GetSlotResponse], error) {
@@ -107,87 +151,6 @@ func (s *SlotService) RelaunchSlot(ctx context.Context, req *connect.Request[v1.
 	return reply(&v1.RelaunchSlotResponse{Slot: slot, Instance: in, Task: task}, err)
 }
 
-// Serves routes and gateway status
-type GatewayService struct {
-	gateway   *gateway.Gateway
-	instances *instances.Manager
-	slots     *slots.Manager
-}
-
-func NewGatewayService(g *gateway.Gateway, m *instances.Manager, s *slots.Manager) *GatewayService {
-	return &GatewayService{gateway: g, instances: m, slots: s}
-}
-
-func (s *GatewayService) GetGatewayStatus(ctx context.Context, req *connect.Request[v1.GetGatewayStatusRequest]) (*connect.Response[v1.GetGatewayStatusResponse], error) {
-	return reply(&v1.GetGatewayStatusResponse{Status: s.gateway.Status()}, nil)
-}
-
-func (s *GatewayService) ListRoutes(ctx context.Context, req *connect.Request[v1.ListRoutesRequest]) (*connect.Response[v1.ListRoutesResponse], error) {
-	return reply(&v1.ListRoutesResponse{Routes: s.gateway.Table().List()}, nil)
-}
-
-// Adds an alias. Slots, named directly or through the instance serving them,
-// keep the alias with their settings. Instances outside slots must be ready.
-func (s *GatewayService) SetRoute(ctx context.Context, req *connect.Request[v1.SetRouteRequest]) (*connect.Response[v1.SetRouteResponse], error) {
-	name := strings.TrimSpace(req.Msg.GetName())
-	alias := &v1.SlotAlias{Name: name, Policy: req.Msg.GetPolicy(), Profile: req.Msg.GetProfile()}
-	if req.Msg.GetSlotId() != "" {
-		_, route, err := s.slots.AddAlias(ctx, req.Msg.GetSlotId(), alias)
-		return reply(&v1.SetRouteResponse{Route: route}, err)
-	}
-	if req.Msg.GetInstanceId() == "" {
-		return nil, wrap(fmt.Errorf("%w: an alias needs a slot or an instance", runtimes.ErrParam))
-	}
-	in, err := s.instances.Get(req.Msg.GetInstanceId())
-	if err != nil {
-		return nil, wrap(err)
-	}
-	if in.GetSlotId() != "" {
-		_, route, err := s.slots.AddAlias(ctx, in.GetSlotId(), alias)
-		return reply(&v1.SetRouteResponse{Route: route}, err)
-	}
-	if in.GetState() != v1.InstanceState_INSTANCE_STATE_READY {
-		return nil, wrap(fmt.Errorf("%w: instance %s is not ready", runtimes.ErrParam, in.GetName()))
-	}
-	if name == "" || strings.ContainsAny(name, " \t\n/") {
-		return nil, wrap(fmt.Errorf("%w: an alias is a name without spaces or slashes", runtimes.ErrParam))
-	}
-	if err := gateway.CheckProfile(req.Msg.GetProfile()); err != nil {
-		return nil, wrap(fmt.Errorf("%w: %v", runtimes.ErrParam, err))
-	}
-	if r, ok := s.gateway.Table().Lookup(name); ok && r.GetSlotId() != "" {
-		return nil, wrap(fmt.Errorf("%w: %s belongs to a slot", runtimes.ErrParam, name))
-	}
-	route := s.gateway.Table().Serve(name, in, s.instances.Runtimes.API(in.GetRuntimeId()), "", req.Msg.GetPolicy(), req.Msg.GetProfile())
-	return reply(&v1.SetRouteResponse{Route: route}, nil)
-}
-
-func (s *GatewayService) ListTraces(ctx context.Context, req *connect.Request[v1.ListTracesRequest]) (*connect.Response[v1.ListTracesResponse], error) {
-	return reply(&v1.ListTracesResponse{Traces: s.gateway.Traces().List(req.Msg.GetRoute(), int(req.Msg.GetLimit()))}, nil)
-}
-
-func (s *GatewayService) GetTrace(ctx context.Context, req *connect.Request[v1.GetTraceRequest]) (*connect.Response[v1.GetTraceResponse], error) {
-	t, ok := s.gateway.Traces().Get(req.Msg.GetId())
-	if !ok {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no trace %q", req.Msg.GetId()))
-	}
-	return reply(&v1.GetTraceResponse{Trace: t}, nil)
-}
-
-// Removes an alias, from its slot when a slot owns it. A slot's own name is refused.
-func (s *GatewayService) DeleteRoute(ctx context.Context, req *connect.Request[v1.DeleteRouteRequest]) (*connect.Response[v1.DeleteRouteResponse], error) {
-	name := req.Msg.GetName()
-	if r, ok := s.gateway.Table().Lookup(name); ok && r.GetSlotId() != "" {
-		_, route, err := s.slots.RemoveAlias(ctx, r.GetSlotId(), name)
-		return reply(&v1.DeleteRouteResponse{Route: route}, err)
-	}
-	route, ok := s.gateway.Table().Delete(name)
-	if !ok {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no route %q", name))
-	}
-	return reply(&v1.DeleteRouteResponse{Route: route}, nil)
-}
-
 // Serves task listing and watching
 type TaskService struct {
 	tasks *tasks.Manager
@@ -198,7 +161,16 @@ func NewTaskService(m *tasks.Manager) *TaskService {
 }
 
 func (s *TaskService) ListTasks(ctx context.Context, req *connect.Request[v1.ListTasksRequest]) (*connect.Response[v1.ListTasksResponse], error) {
-	return reply(&v1.ListTasksResponse{Tasks: s.tasks.List(req.Msg.GetActiveOnly())}, nil)
+	list := s.tasks.List(req.Msg.GetActiveOnly())
+	if kind := req.Msg.GetKind(); kind != "" {
+		list = keep(list, func(t *v1.Task) bool { return t.GetKind() == kind })
+	}
+	if state := req.Msg.GetState(); state != v1.TaskState_TASK_STATE_UNSPECIFIED {
+		list = keep(list, func(t *v1.Task) bool { return t.GetState() == state })
+	}
+	list = match(list, req.Msg.GetQuery(), func(t *v1.Task) []string { return []string{t.GetKind(), t.GetTitle(), t.GetError()} })
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListTasksResponse{Tasks: list, NextCursor: next}, err)
 }
 
 func (s *TaskService) GetTask(ctx context.Context, req *connect.Request[v1.GetTaskRequest]) (*connect.Response[v1.GetTaskResponse], error) {
@@ -216,7 +188,7 @@ func (s *TaskService) CancelTask(ctx context.Context, req *connect.Request[v1.Ca
 }
 
 // Produces the current state as events for a fresh subscriber
-type Snapshotter func(ctx context.Context, kinds []v1.EventKind) []*v1.Event
+type Snapshotter func(ctx context.Context, kinds []v1.EventKind) ([]*v1.Event, error)
 
 // Streams live updates
 type EventService struct {
@@ -231,7 +203,11 @@ func NewEventService(bus *events.Bus, snapshot Snapshotter) *EventService {
 func (s *EventService) WatchEvents(ctx context.Context, req *connect.Request[v1.WatchEventsRequest], stream *connect.ServerStream[v1.WatchEventsResponse]) error {
 	sub := s.bus.Subscribe(ctx, req.Msg.GetKinds())
 	if req.Msg.GetSnapshot() && s.snapshot != nil {
-		for _, ev := range s.snapshot(ctx, req.Msg.GetKinds()) {
+		list, err := s.snapshot(ctx, req.Msg.GetKinds())
+		if err != nil {
+			return wrap(err)
+		}
+		for _, ev := range list {
 			if err := stream.Send(&v1.WatchEventsResponse{Event: ev}); err != nil {
 				return err
 			}

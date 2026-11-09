@@ -57,7 +57,7 @@ func TestChoicesProbe(t *testing.T) {
 
 // vLLM and SGLang launch with their tool call parser, and llama.cpp with the jinja flag its build lists
 func TestLaunchToolFlags(t *testing.T) {
-	gpu := &v1.Device{Id: "GPU-0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", Facts: map[string]string{"index": "0"}}
+	gpu := &v1.Device{Id: "GPU-0", Kind: v1.DeviceKind_DEVICE_KIND_GPU, Vendor: "nvidia", MemoryTotalBytes: 80 << 30, Facts: map[string]string{"index": "0"}}
 	in := Launch{Name: "m", Params: map[string]any{}, Artifacts: map[string]string{"weights_dir": "/w", "weights": "/w.gguf"}, Host: "127.0.0.1", Port: 9, Install: Install{Path: "/venv/bin/vllm"}, Devices: []*v1.Device{gpu}, Descriptor: &v1.Descriptor{Architecture: "LlamaForCausalLM"}, Model: &v1.StoredModel{Repo: "meta-llama/Llama-3.1-8B"}, InstallRecord: &v1.Install{Facts: map[string]string{}}}
 	cmd, err := VLLM{}.Launch(in)
 	if err != nil {

@@ -65,8 +65,7 @@ func (f *files) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "the download link expired or names another file, ask for a new one", http.StatusUnauthorized)
 			return
 		}
-	} else if !f.auth.Authenticated(r.Header) {
-		http.Error(w, f.auth.Err().Error(), http.StatusUnauthorized)
+	} else if !f.allowed(w, r) {
 		return
 	}
 	source, repo, revision, file := q.Get("source"), q.Get("repo"), q.Get("revision"), q.Get("path")
@@ -105,6 +104,19 @@ func (f *files) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, name, time.Time{}, io.NewSectionReader(blob, 0, blob.Size()))
 }
 
+// Whether the request carries a credential opening the read scope, refusing it otherwise
+func (f *files) allowed(w http.ResponseWriter, r *http.Request) bool {
+	if f.auth.Scoped(r.Header, v1.Scope_SCOPE_READ) {
+		return true
+	}
+	if _, ok := f.auth.Identify(r.Header); ok {
+		http.Error(w, "files need the read scope, which this credential does not hold", http.StatusForbidden)
+		return false
+	}
+	http.Error(w, f.auth.Err().Error(), http.StatusUnauthorized)
+	return false
+}
+
 // The file a link is good for
 func grantKey(q url.Values) string {
 	return q.Get("source") + "\x00" + q.Get("repo") + "\x00" + q.Get("revision") + "\x00" + q.Get("path")
@@ -112,8 +124,7 @@ func grantKey(q url.Values) string {
 
 // Makes a download link for one file on behalf of the credentials the request carries
 func (f *files) issue(w http.ResponseWriter, r *http.Request) {
-	if !f.auth.Authenticated(r.Header) {
-		http.Error(w, f.auth.Err().Error(), http.StatusUnauthorized)
+	if !f.allowed(w, r) {
 		return
 	}
 	var in struct {

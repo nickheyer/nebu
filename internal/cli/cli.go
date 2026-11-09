@@ -1,31 +1,39 @@
-// Package cli implements the nebu command line.
+// Package cli implements the nebu command line
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"maps"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/nickheyer/nebu/internal/daemon"
 	"github.com/nickheyer/nebu/pkg/config"
 	"github.com/nickheyer/nebu/pkg/launch"
 	"github.com/nickheyer/nebu/pkg/logger"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/text"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"sigs.k8s.io/yaml"
 )
 
 type command struct {
@@ -33,7 +41,7 @@ type command struct {
 	summary string
 	run     func(ctx context.Context, e *env, args []string) error
 	sub     []command
-	// Can use an in-process daemon when no daemon is listening.
+	// Can use an in-process daemon when no daemon is listening
 	local bool
 }
 
@@ -53,7 +61,7 @@ func commands() []command {
 		{name: "revisions", summary: "list revisions, tags, or versions of a repository", run: runRevisions, local: true},
 		{name: "card", summary: "print a model card", run: runCard, local: true},
 		{name: "inspect", summary: "estimate memory use for each weight group", run: runInspect, local: true},
-		{name: "pull", summary: "download a weight group and its blueprint parts", run: runPull, local: true},
+		{name: "pull", summary: "download a weight group with its blueprint parts, or files of a repository", run: runPull, local: true},
 		{name: "parts", summary: "list a weight group's parts", run: runParts, local: true},
 		{name: "list", summary: "list stored models", run: runList, local: true},
 		{name: "remove", summary: "remove a stored model", run: runRemove, local: true},
@@ -94,13 +102,12 @@ func commands() []command {
 			{name: "relaunch", summary: "run the slot's model again after a failure", run: runSlotsRelaunch},
 			{name: "remove", summary: "delete a slot", run: runSlotsRemove},
 		}},
-		{name: "routes", summary: "gateway model names", run: runRoutesList, sub: []command{
-			{name: "list", summary: "list routes", run: runRoutesList},
-			{name: "add", summary: "add an alias for a slot or a running instance", run: runRoutesAdd},
-			{name: "remove", summary: "remove an alias", run: runRoutesRemove},
-		}},
-		{name: "gateway", summary: "gateway listeners, routes, counters, and recent requests", run: runGateway, sub: []command{
-			{name: "status", summary: "show listeners, routes, and counters", run: runGateway},
+		poolCommands(),
+		routeCommands(),
+		objectiveCommands(),
+		schedulerCommands(),
+		{name: "gateway", summary: "gateway listeners, pools, routes, counters, and recent requests", run: runGateway, sub: []command{
+			{name: "status", summary: "show listeners, pools, routes, counters, and the metrics address", run: runGateway},
 			{name: "traces", summary: "list recent requests through the gateway", run: runGatewayTraces},
 			{name: "trace", summary: "show one request with its bodies", run: runGatewayTrace},
 		}},
@@ -109,8 +116,14 @@ func commands() []command {
 		formationCommands(),
 		botCommands(),
 		userCommands(),
+		tokenCommands(),
 		{name: "events", summary: "stream daemon events as JSON lines", run: runEvents},
 		{name: "ps", summary: "list running instances", run: runPs},
+		{name: "adapters", summary: "adapters a running instance applies", run: runAdaptersList, sub: []command{
+			{name: "list", summary: "list the adapters an instance applies", run: runAdaptersList},
+			{name: "load", summary: "load an adapter into a running instance", run: runAdaptersLoad},
+			{name: "unload", summary: "unload an adapter from a running instance", run: runAdaptersUnload},
+		}},
 		{name: "show", summary: "show instance info", run: runShow},
 		{name: "stop", summary: "stop an instance", run: runStop},
 		{name: "logs", summary: "show or follow instance output", run: runLogs},
@@ -140,13 +153,16 @@ type env struct {
 	cmd *command
 	cfg *v1.Config
 	log *slog.Logger
-	// Recent log lines streamed to the Host page.
+	// The log level handle a config reload sets and the config file the daemon reloads
+	level      *slog.LevelVar
+	configPath string
+	// Recent log lines streamed to the Host page
 	recent *launch.Log
 	out    io.Writer
 	errw   io.Writer
 	in     io.Reader
 	json   bool
-	// Resolved daemon address, or empty for an in-process daemon.
+	// Resolved daemon address, or empty for an in-process daemon
 	addr     string
 	resolved bool
 	cl       *clients
@@ -209,13 +225,13 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	if *addr != "" {
 		cfg.Addr = *addr
 	}
-	log, recent, closer, err := logger.New(cfg.GetLogging())
+	log, recent, level, closer, err := logger.New(cfg.GetLogging())
 	if err != nil {
 		fmt.Fprintln(stderr, "nebu:", err)
 		return 1
 	}
 	defer closer.Close()
-	e := &env{cmd: cmd, cfg: cfg, log: log, recent: recent, out: stdout, errw: stderr, in: os.Stdin, json: *jsonOut}
+	e := &env{cmd: cmd, cfg: cfg, log: log, level: level, configPath: *configPath, recent: recent, out: stdout, errw: stderr, in: os.Stdin, json: *jsonOut}
 	defer e.close()
 	if err := cmd.run(ctx, e, cmdArgs); err != nil {
 		fmt.Fprintln(stderr, "nebu:", err)
@@ -245,8 +261,8 @@ func (e *env) flags(name string) *flag.FlagSet {
 	return fs
 }
 
-// Parses flags and positional args, validates usage, and creates clients.
-// Non-local commands require a running daemon. Negative max allows any arg count.
+// Parses flags and positional args, validates usage, and creates clients
+// Non-local commands require a running daemon. Negative max allows any arg count
 func (e *env) parse(fs *flag.FlagSet, args []string, min, max int, usage string) ([]string, error) {
 	positional, err := splitFlags(fs, args)
 	if err != nil {
@@ -290,6 +306,203 @@ func (m *multi) Set(v string) error {
 	return nil
 }
 
+// Unsigned 32 bit flag value
+type u32 uint32
+
+func (v *u32) String() string { return strconv.FormatUint(uint64(*v), 10) }
+
+func (v *u32) Set(s string) error {
+	n, err := strconv.ParseUint(strings.TrimSpace(s), 10, 32)
+	if err != nil {
+		return fmt.Errorf("%q is not a whole number from 0 to %d", s, uint32(math.MaxUint32))
+	}
+	*v = u32(n)
+	return nil
+}
+
+// Signed 32 bit flag value
+type i32 int32
+
+func (v *i32) String() string { return strconv.FormatInt(int64(*v), 10) }
+
+func (v *i32) Set(s string) error {
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 32)
+	if err != nil {
+		return fmt.Errorf("%q is not a whole number from %d to %d", s, math.MinInt32, math.MaxInt32)
+	}
+	*v = i32(n)
+	return nil
+}
+
+// Names of the flags given on the command line
+func given(fs *flag.FlagSet) map[string]bool {
+	out := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { out[f.Name] = true })
+	return out
+}
+
+// A duration such as 90s as a count of whole units, zero when empty, refusing negatives, fractions, and overflow
+func wholeUnits(s string, unit time.Duration) (uint32, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, err
+	}
+	switch {
+	case d < 0:
+		return 0, fmt.Errorf("%s is negative", s)
+	case d%unit != 0:
+		return 0, fmt.Errorf("%s is not a whole number of %s", s, unitName(unit))
+	case d/unit > math.MaxUint32:
+		return 0, fmt.Errorf("%s is longer than %d %s", s, uint32(math.MaxUint32), unitName(unit))
+	}
+	return uint32(d / unit), nil
+}
+
+// Plural name of a duration unit for errors
+func unitName(unit time.Duration) string {
+	if unit == time.Second {
+		return "seconds"
+	}
+	return "milliseconds"
+}
+
+// A duration such as 30m in whole seconds, zero when empty
+func parseSeconds(s string) (uint32, error) { return wholeUnits(s, time.Second) }
+
+// A duration such as 1500ms in whole milliseconds, zero when empty
+func parseMillis(s string) (uint32, error) { return wholeUnits(s, time.Millisecond) }
+
+// An enum value by its short name such as fail-open or its full name, refusing the unspecified value
+func enumNamed(ed protoreflect.EnumDescriptor, name, what string) (protoreflect.EnumNumber, error) {
+	prefix := strings.TrimSuffix(string(ed.Values().ByNumber(0).Name()), "UNSPECIFIED")
+	want := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(name), "-", "_"))
+	var names []string
+	values := ed.Values()
+	for i := range values.Len() {
+		v := values.Get(i)
+		if v.Number() == 0 {
+			continue
+		}
+		full := string(v.Name())
+		if want != "" && (full == want || full == prefix+want) {
+			return v.Number(), nil
+		}
+		names = append(names, strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(full, prefix)), "_", "-"))
+	}
+	return 0, fmt.Errorf("%s %q is not %s", what, name, orList(names))
+}
+
+// Joins names as a, b, or c
+func orList(names []string) string {
+	switch len(names) {
+	case 0:
+		return "anything"
+	case 1:
+		return names[0]
+	case 2:
+		return names[0] + " or " + names[1]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + ", or " + names[len(names)-1]
+}
+
+// Lowercase short name of an enum value with dashes, a dash for the unspecified value
+func enumShort(e protoreflect.Enum) string {
+	if e.Number() == 0 {
+		return "-"
+	}
+	return strings.ReplaceAll(text.Enum(e), "_", "-")
+}
+
+// Reads a YAML or JSON file into the message, enum values taking short names such as fail-open
+func readMessage(path string, msg proto.Message) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	js, err := yaml.YAMLToJSON(data)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(js))
+	dec.UseNumber()
+	var tree map[string]any
+	if err := dec.Decode(&tree); err != nil {
+		return fmt.Errorf("%s: the file must hold a mapping of fields to values", path)
+	}
+	if err := expandEnums(msg.ProtoReflect().Descriptor(), tree); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	if js, err = json.Marshal(tree); err != nil {
+		return err
+	}
+	if err := protojson.Unmarshal(js, msg); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
+}
+
+// Rewrites short enum names in a decoded message tree to the full names protojson reads
+func expandEnums(md protoreflect.MessageDescriptor, tree map[string]any) error {
+	for key, value := range tree {
+		fd := md.Fields().ByName(protoreflect.Name(key))
+		if fd == nil {
+			fd = md.Fields().ByJSONName(key)
+		}
+		if fd == nil {
+			continue
+		}
+		var err error
+		switch {
+		case fd.IsMap():
+			if m, ok := value.(map[string]any); ok {
+				for k, item := range m {
+					if m[k], err = expandEnum(fd.MapValue(), item); err != nil {
+						return err
+					}
+				}
+			}
+		case fd.IsList():
+			if items, ok := value.([]any); ok {
+				for i, item := range items {
+					if items[i], err = expandEnum(fd, item); err != nil {
+						return err
+					}
+				}
+			}
+		default:
+			if tree[key], err = expandEnum(fd, value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// One field value with a short enum name made full and nested messages expanded
+func expandEnum(fd protoreflect.FieldDescriptor, value any) (any, error) {
+	switch fd.Kind() {
+	case protoreflect.EnumKind:
+		name, ok := value.(string)
+		if !ok || fd.Enum().Values().ByName(protoreflect.Name(name)) != nil {
+			return value, nil
+		}
+		n, err := enumNamed(fd.Enum(), name, string(fd.Name()))
+		if err != nil {
+			return nil, err
+		}
+		return string(fd.Enum().Values().ByNumber(n).Name()), nil
+	case protoreflect.MessageKind:
+		if m, ok := value.(map[string]any); ok {
+			return value, expandEnums(fd.Message(), m)
+		}
+	}
+	return value, nil
+}
+
 // Reads name=value pairs into a map
 func pairs(items []string, what string) (map[string]string, error) {
 	out := map[string]string{}
@@ -327,7 +540,7 @@ func (e *env) print(msg proto.Message, render func(w io.Writer)) error {
 	return nil
 }
 
-// Prints a successful response or returns its error.
+// Prints a successful response or returns its error
 func (e *env) done(msg proto.Message, err error) error {
 	if err != nil {
 		return err
@@ -368,13 +581,18 @@ func rowsOf(m map[string]string) [][]string {
 	return rows
 }
 
-// Sorted key=value pairs, truncated to the facts column width.
-func compact(m map[string]string) string {
+// Sorted key=value pairs separated by spaces
+func joinPairs(m map[string]string) string {
 	var parts []string
 	for _, r := range rowsOf(m) {
 		parts = append(parts, r[0]+"="+r[1])
 	}
-	return truncate(strings.Join(parts, " "), factsWidth)
+	return strings.Join(parts, " ")
+}
+
+// Sorted key=value pairs, truncated to the facts column width
+func compact(m map[string]string) string {
+	return truncate(joinPairs(m), factsWidth)
 }
 
 func truncate(s string, n int) string {
@@ -433,17 +651,18 @@ func runServe(ctx context.Context, e *env, args []string) error {
 	if _, err := splitFlags(e.flags("serve"), args); err != nil {
 		return err
 	}
-	d, err := daemon.New(e.cfg, e.log, e.recent)
+	d, err := daemon.New(e.cfg, e.log, e.level, e.recent)
 	if err != nil {
 		return err
 	}
+	d.ConfigPath = e.configPath
 	return d.ListenAndServe(ctx)
 }
 
-// Set by release builds.
+// Set by release builds
 var releaseVersion, releaseCommit string
 
-// Reads the release version or module version and commit from build info.
+// Reads the release or module version from build info, adding the commit unless the version already names it
 func buildVersion() string {
 	version, revision := "devel", ""
 	if bi, ok := debug.ReadBuildInfo(); ok {
@@ -465,5 +684,8 @@ func buildVersion() string {
 			revision = revision[:7]
 		}
 	}
-	return strings.TrimSpace(version + " " + revision)
+	if revision != "" && !strings.Contains(version, revision) {
+		version += " " + revision
+	}
+	return version
 }

@@ -34,7 +34,7 @@ func runHost(ctx context.Context, e *env, args []string) error {
 	if _, err := e.parse(fs, args, 0, 0, "host [--refresh] [--label NAME]"); err != nil {
 		return err
 	}
-	// An explicit flag sets the label, including an empty value.
+	// An explicit flag sets the label, including an empty value
 	labelSet := false
 	fs.Visit(func(f *flag.Flag) { labelSet = labelSet || f.Name == "label" })
 	current, err := e.cl.settings.GetSettings(ctx, connect.NewRequest(&v1.GetSettingsRequest{}))
@@ -83,9 +83,9 @@ func runHost(ctx context.Context, e *env, args []string) error {
 			section(w, "processes")
 			rows = nil
 			for _, pu := range p.GetProcesses() {
-				rows = append(rows, []string{strconv.Itoa(int(pu.GetPid())), pu.GetDeviceId(), estimate.Human(pu.GetBytes()), pu.GetInstanceName()})
+				rows = append(rows, []string{strconv.Itoa(int(pu.GetPid())), pu.GetCommand(), pu.GetDeviceId(), estimate.Human(pu.GetBytes()), pu.GetInstanceName()})
 			}
-			table(w, []string{"PID", "DEVICE", "MEMORY", "INSTANCE"}, rows)
+			table(w, []string{"PID", "COMMAND", "DEVICE", "MEMORY", "INSTANCE"}, rows)
 		}
 		section(w, "probes")
 		rows = nil
@@ -285,7 +285,7 @@ func runSourcesUpdate(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	// Updates replace all settings. Merge flag changes into the current settings.
+	// Updates replace all settings. Merge flag changes into the current settings
 	src := current.GetSource()
 	if src.Config == nil {
 		src.Config = map[string]string{}
@@ -396,7 +396,7 @@ func runSearch(ctx context.Context, e *env, args []string) error {
 	})
 }
 
-// Short model kind, or empty if unknown.
+// Short model kind, or empty if unknown
 func kindWord(k v1.ModelKind) string {
 	if k == v1.ModelKind_MODEL_KIND_UNSPECIFIED {
 		return "-"
@@ -404,7 +404,7 @@ func kindWord(k v1.ModelKind) string {
 	return text.Enum(k)
 }
 
-// Runtime bitmask positions, cached from the daemon.
+// Runtime bitmask positions, cached from the daemon
 type runtimeNames map[uint32]string
 
 func (e *env) runtimeNames(ctx context.Context) (runtimeNames, error) {
@@ -419,7 +419,7 @@ func (e *env) runtimeNames(ctx context.Context) (runtimeNames, error) {
 	return out, nil
 }
 
-// Comma-separated runtime names, or a dash for none.
+// Comma-separated runtime names, or a dash for none
 func (n runtimeNames) of(mask uint32) string {
 	var out []string
 	for bit := uint32(1); bit != 0 && bit <= mask; bit <<= 1 {
@@ -559,7 +559,7 @@ func runInspect(ctx context.Context, e *env, args []string) error {
 	})
 }
 
-// Formats context length, marking rows solved by the planner.
+// Formats context length, marking rows solved by the planner
 func fitContext(r *v1.FitRow) string {
 	if r.GetContext() != 0 {
 		return strconv.FormatUint(uint64(r.GetContext()), 10)
@@ -620,7 +620,7 @@ func placements(plan *v1.MemoryPlan) string {
 	return strings.Join(parts, " ")
 }
 
-// Summarizes a plan.
+// Summarizes a plan
 func planLine(plan *v1.MemoryPlan) string {
 	return fmt.Sprintf("%s device %s host %s cache %s %s %s", loud(plan.GetVerdict()), poolUsage(plan, v1.PoolKind_POOL_KIND_DEVICE), poolUsage(plan, v1.PoolKind_POOL_KIND_HOST), estimate.Human(plan.GetCacheBytes()), placements(plan), plan.GetDetail())
 }

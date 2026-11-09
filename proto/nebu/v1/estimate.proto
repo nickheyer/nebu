@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "nebu/v1/host.proto";
 import "nebu/v1/model.proto";
@@ -130,11 +131,11 @@ message CalibrationTable {
 // Plan a weight group on a runtime. Use currently free memory when free is set.
 // Request parameters override slot defaults, as they do at launch.
 message EstimateRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string revision = 3;
   string group = 4;
-  string runtime_id = 5;
+  string runtime_id = 5 [(buf.validate.field).string.min_len = 1];
   map<string, string> params = 6;
   string slot_id = 7;
   bool free = 8;
@@ -188,8 +189,8 @@ message EstimateResponse {
 
 // Resolve a weight group's dependencies.
 message PartsRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string revision = 3;
   string group = 4;
 }
@@ -209,8 +210,8 @@ message PartsResponse {
 // Use runtime_ids when specified, otherwise the slot runtime if a slot is given,
 // otherwise all compatible runtimes.
 message InspectRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string revision = 3;
   repeated string groups = 4;
   repeated string runtime_ids = 5;

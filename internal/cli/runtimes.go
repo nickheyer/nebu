@@ -30,7 +30,7 @@ func runRuntimes(ctx context.Context, e *env, args []string) error {
 	})
 }
 
-// Prints runtime install methods and supported params.
+// Prints runtime install methods and supported params
 func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 	positional, err := e.parse(e.flags("runtimes show"), args, 1, 1, "runtimes show <runtime>")
 	if err != nil {
@@ -74,7 +74,7 @@ func runRuntimesShow(ctx context.Context, e *env, args []string) error {
 	})
 }
 
-// Summarizes an install method.
+// Summarizes an install method
 func methodText(im *v1.InstallMethod) string {
 	switch im.GetKind() {
 	case v1.InstallKind_INSTALL_KIND_ADOPTED:

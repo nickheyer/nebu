@@ -1,4 +1,4 @@
-// Package launch starts runtime processes and finds them again.
+// Package launch starts runtime processes and finds them again
 package launch
 
 import (
@@ -13,22 +13,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nickheyer/nebu/pkg/proc"
 )
 
 const (
-	logCapacity  = 5000
-	maxLine      = 1 << 20
-	tailInterval = 100 * time.Millisecond
-	tailChunk    = 64 << 10
+	logCapacity = 5000
+	tailChunk   = 64 << 10
 )
 
 // Output file size cap before truncation, small in tests
 var LogFileMax int64 = 64 << 20
 
-// Exit error of a process this daemon never waited on
+// Exit of an adopted process nobody here asked to stop, its status unreadable since it is no child
 var ErrUnknownExit = errors.New("exit status unknown")
 
 // What to start and where its output goes
@@ -47,7 +46,7 @@ type Handle interface {
 	Err() error
 	Log() *Log
 	Sync()
-	Stop(grace time.Duration) error
+	Stop(ctx context.Context, grace time.Duration) error
 }
 
 // Starts processes
@@ -72,7 +71,7 @@ type Process struct {
 	err    error
 }
 
-// Starts the process writing the log file, then follows it
+// Starts the process writing the log file, then follows it through file notifications
 func (l *ProcessLauncher) Launch(ctx context.Context, spec Spec) (Handle, error) {
 	if spec.LogPath == "" {
 		return nil, errors.New("launch: log path required")
@@ -82,6 +81,12 @@ func (l *ProcessLauncher) Launch(ctx context.Context, spec Spec) (Handle, error)
 	}
 	f, err := os.OpenFile(spec.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_TRUNC, 0o644)
 	if err != nil {
+		return nil, err
+	}
+	log := NewLog(logCapacity)
+	tail, err := newTailer(spec.LogPath, log)
+	if err != nil {
+		f.Close()
 		return nil, err
 	}
 	cmd := exec.Command(spec.Command, spec.Args...)
@@ -94,14 +99,14 @@ func (l *ProcessLauncher) Launch(ctx context.Context, spec Spec) (Handle, error)
 	cmd.Stdout, cmd.Stderr = f, f
 	if err := cmd.Start(); err != nil {
 		f.Close()
+		tail.close()
 		return nil, err
 	}
 	f.Close()
-	p := &Process{cmd: cmd, tree: proc.Adopt(cmd), log: NewLog(logCapacity), exited: make(chan struct{}), done: make(chan struct{})}
-	p.tail = newTailer(spec.LogPath, p.log)
+	p := &Process{cmd: cmd, tree: proc.Adopt(cmd), log: log, tail: tail, exited: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		p.err = cmd.Wait()
-		// Clean up remaining child processes.
+		// Kills what the root left running in its group
 		p.tree.Kill()
 		p.tree.Close()
 		close(p.exited)
@@ -133,17 +138,20 @@ func (p *Process) Log() *Log { return p.log }
 // Reads everything written so far into the log
 func (p *Process) Sync() { p.tail.drain() }
 
-// Terminates gracefully, then forcefully after grace, and waits for output
-func (p *Process) Stop(grace time.Duration) error {
+// Interrupts the tree, kills it once grace or ctx ends, and waits for output until ctx ends
+func (p *Process) Stop(ctx context.Context, grace time.Duration) error {
 	select {
 	case <-p.done:
 		return nil
 	default:
 	}
-	// Watch exit through done instead of binding the process to a context.
-	p.once.Do(func() { p.tree.Terminate(grace, p.done) })
-	<-p.done
-	return nil
+	p.once.Do(func() { go p.tree.Terminate(ctx, grace, p.done) })
+	select {
+	case <-p.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // A process found alive after a restart, supervised by pid
@@ -154,19 +162,53 @@ type Adopted struct {
 	exited chan struct{}
 	done   chan struct{}
 	once   sync.Once
+	// Whether this daemon asked the process to stop, its exit then expected
+	stopping atomic.Bool
+	err      error
 }
 
-// Follows a live process this daemon did not start
-func Adopt(pid int, logPath string) Handle {
-	a := &Adopted{pid: pid, log: NewLog(logCapacity), exited: make(chan struct{}), done: make(chan struct{})}
+// Follows a live process this daemon did not start, killing its recorded workers once it is gone
+func Adopt(pid int, logPath string) (Handle, error) {
+	log := NewLog(logCapacity)
+	tail, err := newTailer(logPath, log)
+	if err != nil {
+		return nil, err
+	}
+	if err := tail.drain(); err != nil {
+		tail.close()
+		return nil, err
+	}
+	family, err := proc.Snapshot(pid)
+	if err != nil {
+		tail.close()
+		return nil, err
+	}
+	exit, err := proc.Watch(pid)
+	if err != nil {
+		tail.close()
+		return nil, err
+	}
+	a := &Adopted{pid: pid, log: log, tail: tail, exited: make(chan struct{}), done: make(chan struct{})}
 	go func() {
-		proc.WaitGone(pid, 0)
-		close(a.exited)
+		defer close(a.exited)
+		if err := exit.Wait(context.Background()); err != nil {
+			a.err = errors.Join(ErrUnknownExit, fmt.Errorf("watching pid %d: %w", pid, err))
+			return
+		}
+		if !a.stopping.Load() {
+			a.err = ErrUnknownExit
+		}
+		killed, err := family.KillSurvivors()
+		if len(killed) > 0 {
+			a.log.Write(fmt.Sprintf("killed workers %v left behind by pid %d", killed, pid))
+		}
+		if err != nil {
+			a.log.Write(fmt.Sprintf("workers left behind by pid %d: %v", pid, err))
+			a.err = errors.Join(a.err, err)
+		}
 	}()
-	a.tail = newTailer(logPath, a.log)
-	a.tail.drain()
 	go a.tail.follow(a.exited, a.done)
-	return a
+	return a, nil
 }
 
 // Returns the process id
@@ -175,11 +217,11 @@ func (a *Adopted) Pid() int { return a.pid }
 // Closes once the process is gone and output is read
 func (a *Adopted) Done() <-chan struct{} { return a.done }
 
-// Reports an unknown exit since non children cannot be waited
+// Nil once done after a stop asked here, else an unknown exit since non children cannot be waited, joined with any cleanup failure
 func (a *Adopted) Err() error {
 	select {
 	case <-a.done:
-		return ErrUnknownExit
+		return a.err
 	default:
 		return nil
 	}
@@ -191,60 +233,59 @@ func (a *Adopted) Log() *Log { return a.log }
 // Reads everything written so far into the log
 func (a *Adopted) Sync() { a.tail.drain() }
 
-// Signals the group, escalates after grace, then drains output
-func (a *Adopted) Stop(grace time.Duration) error {
+// Signals the group, kills it once grace or ctx ends, and waits for output until ctx ends
+func (a *Adopted) Stop(ctx context.Context, grace time.Duration) error {
 	select {
 	case <-a.done:
 		return nil
 	default:
 	}
-	a.once.Do(func() { proc.Terminate(a.pid, grace) })
-	<-a.done
-	return nil
+	a.stopping.Store(true)
+	a.once.Do(func() { go proc.Terminate(ctx, a.pid, grace) })
+	select {
+	case <-a.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
-// Follows one output file into a log ring
+// Follows one output file into a log ring, woken by notifications of the file changing
 type tailer struct {
-	mu      sync.Mutex
-	path    string
-	log     *Log
-	f       *os.File
-	offset  int64
-	partial []byte
-	buf     []byte
+	mu       sync.Mutex
+	path     string
+	log      *Log
+	f        *os.File
+	offset   int64
+	lines    *lineStream
+	buf      []byte
+	watch    *watcher
+	rotation error
 }
 
-func newTailer(path string, log *Log) *tailer {
-	t := &tailer{path: path, log: log, buf: make([]byte, tailChunk)}
-	t.f, _ = os.Open(path)
-	return t
+// Opens the file and its change watch before anything is written to it
+func newTailer(path string, log *Log) (*tailer, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	w, err := watchFile(path)
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("watch %s: %w", path, err)
+	}
+	return &tailer{path: path, log: log, f: f, lines: newLineStream(), buf: make([]byte, tailChunk), watch: w}, nil
 }
 
 // Reads everything appended since the last call into the log
 func (t *tailer) drain() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.f == nil {
-		return nil
-	}
 	for {
 		n, err := t.f.Read(t.buf)
 		if n > 0 {
 			t.offset += int64(n)
-			data := append(t.partial, t.buf[:n]...)
-			for {
-				i := bytes.IndexByte(data, '\n')
-				if i < 0 {
-					break
-				}
-				t.log.Write(string(bytes.TrimRight(data[:i], "\r")))
-				data = data[i+1:]
-			}
-			if len(data) > maxLine {
-				t.log.Write(string(data))
-				data = nil
-			}
-			t.partial = append([]byte(nil), data...)
+			t.lines.feed(t.buf[:n], t.log.Write)
 			continue
 		}
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -254,45 +295,77 @@ func (t *tailer) drain() error {
 	}
 }
 
-// Drains until the process is gone, truncating past the cap
+// Drains on every notification until the process is gone, then drains once more and ends the log
 func (t *tailer) follow(exited <-chan struct{}, done chan struct{}) {
 	defer close(done)
 	defer t.log.Close()
-	if t.f == nil {
-		<-exited
-		return
+	defer t.close()
+	changed, failed := t.watch.changed, t.watch.failed
+	stop := func(err error) {
+		t.log.Write("log follow stopped: " + err.Error())
+		changed, failed = nil, nil
 	}
-	defer t.f.Close()
+	if err := t.step(); err != nil {
+		stop(err)
+	}
 	for {
-		if err := t.drain(); err != nil {
-			return
-		}
 		select {
 		case <-exited:
-			t.drain()
-			t.mu.Lock()
-			if len(t.partial) > 0 {
-				t.log.Write(string(t.partial))
+			if err := t.drain(); err != nil {
+				t.log.Write("log read failed: " + err.Error())
 			}
+			t.mu.Lock()
+			t.lines.flush(t.log.Write)
 			t.mu.Unlock()
 			return
-		default:
+		case <-changed:
+			if err := t.step(); err != nil {
+				stop(err)
+			}
+		case err := <-failed:
+			stop(err)
 		}
-		t.rotate()
-		time.Sleep(tailInterval)
 	}
 }
 
-// Truncates the file past the cap, the ring stays current
+// Reads what was appended, then truncates the file past the cap
+func (t *tailer) step() error {
+	if err := t.drain(); err != nil {
+		return err
+	}
+	t.rotate()
+	return nil
+}
+
+// Truncates the file past the cap once it holds nothing unread, the ring staying current
 func (t *tailer) rotate() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.offset > LogFileMax {
-		if err := os.Truncate(t.path, 0); err == nil {
-			t.f.Seek(0, io.SeekStart)
-			t.offset = 0
-		}
+	if t.offset <= LogFileMax || t.rotation != nil {
+		return
 	}
+	info, err := t.f.Stat()
+	if err == nil && info.Size() != t.offset {
+		return
+	}
+	if err == nil {
+		err = os.Truncate(t.path, 0)
+	}
+	if err == nil {
+		_, err = t.f.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		t.rotation = err
+		t.log.Write("log rotation stopped: " + err.Error())
+		return
+	}
+	t.offset = 0
+}
+
+// Releases the file and its watch
+func (t *tailer) close() {
+	t.watch.close()
+	t.f.Close()
 }
 
 // Returns the last lines of a file, all when zero
@@ -316,26 +389,22 @@ func ReadTail(path string, n int) ([]string, error) {
 		return nil, err
 	}
 	if start > 0 {
-		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
 			data = data[i+1:]
 		}
 	}
-	data = bytes.TrimRight(data, "\n")
-	if len(data) == 0 {
-		return nil, nil
-	}
-	lines := bytes.Split(data, []byte("\n"))
-	if n > 0 && len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		out[i] = Clean(string(bytes.TrimRight(l, "\r")))
+	var out []string
+	lines := newLineStream()
+	collect := func(line string) { out = append(out, Clean(line)) }
+	lines.feed(data, collect)
+	lines.flush(collect)
+	if n > 0 && len(out) > n {
+		out = out[len(out)-n:]
 	}
 	return out, nil
 }
 
-// Polls a URL until 200 or exit, reporting each slowAfter that passes without one and never giving up on a live process
+// Polls a URL until 200 or exit, reporting each slowAfter waited and never giving up on a live process
 func WaitHealthy(ctx context.Context, h Handle, url string, interval, slowAfter time.Duration, slow func(waited time.Duration)) error {
 	if interval <= 0 {
 		interval = time.Second

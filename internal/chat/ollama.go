@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -26,106 +27,6 @@ const (
 // The Ollama protocol
 type ollama struct{}
 
-type olMessage struct {
-	Role      string                     `json:"role"`
-	Content   string                     `json:"content"`
-	Thinking  string                     `json:"thinking,omitempty"`
-	Images    []string                   `json:"images,omitempty"`
-	ToolCalls []olToolCall               `json:"tool_calls,omitempty"`
-	Extra     map[string]json.RawMessage `json:"-"`
-}
-
-func (m *olMessage) UnmarshalJSON(data []byte) error {
-	type plain olMessage
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*m = olMessage(p)
-	m.Extra = extraFields(data, plain{})
-	return nil
-}
-
-func (m olMessage) MarshalJSON() ([]byte, error) {
-	type plain olMessage
-	return withExtra(plain(m), m.Extra)
-}
-
-type olToolCall struct {
-	Function struct {
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments"`
-	} `json:"function"`
-}
-
-type olOptions struct {
-	Temperature *float64        `json:"temperature,omitempty"`
-	TopP        *float64        `json:"top_p,omitempty"`
-	TopK        *int            `json:"top_k,omitempty"`
-	NumPredict  int             `json:"num_predict,omitempty"`
-	Stop        json.RawMessage `json:"stop,omitempty"`
-}
-
-type olRequest struct {
-	Model    string                     `json:"model"`
-	Messages []olMessage                `json:"messages,omitempty"`
-	Prompt   string                     `json:"prompt,omitempty"`
-	System   string                     `json:"system,omitempty"`
-	Images   []string                   `json:"images,omitempty"`
-	Input    json.RawMessage            `json:"input,omitempty"`
-	Stream   *bool                      `json:"stream,omitempty"`
-	Options  *olOptions                 `json:"options,omitempty"`
-	Tools    []oaiTool                  `json:"tools,omitempty"`
-	Extra    map[string]json.RawMessage `json:"-"`
-}
-
-func (r *olRequest) UnmarshalJSON(data []byte) error {
-	type plain olRequest
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*r = olRequest(p)
-	r.Extra = extraFields(data, plain{})
-	return nil
-}
-
-func (r olRequest) MarshalJSON() ([]byte, error) {
-	type plain olRequest
-	return withExtra(plain(r), r.Extra)
-}
-
-type olResponse struct {
-	Model           string                     `json:"model"`
-	CreatedAt       string                     `json:"created_at"`
-	Message         *olMessage                 `json:"message,omitempty"`
-	Response        *string                    `json:"response,omitempty"`
-	Done            bool                       `json:"done"`
-	DoneReason      string                     `json:"done_reason,omitempty"`
-	PromptEvalCount int                        `json:"prompt_eval_count,omitempty"`
-	EvalCount       int                        `json:"eval_count,omitempty"`
-	Embeddings      [][]float64                `json:"embeddings,omitempty"`
-	Embedding       []float64                  `json:"embedding,omitempty"`
-	Error           string                     `json:"error,omitempty"`
-	Extra           map[string]json.RawMessage `json:"-"`
-}
-
-func (r *olResponse) UnmarshalJSON(data []byte) error {
-	type plain olResponse
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*r = olResponse(p)
-	r.Extra = extraFields(data, plain{})
-	return nil
-}
-
-func (r olResponse) MarshalJSON() ([]byte, error) {
-	type plain olResponse
-	return withExtra(plain(r), r.Extra)
-}
-
 func (ollama) Endpoint(path string) Kind {
 	switch path {
 	case OllamaChat:
@@ -138,34 +39,35 @@ func (ollama) Endpoint(path string) Kind {
 	return None
 }
 
+// Image parts from base64 payloads or data URLs, typed by their leading bytes
+func olImages(data []string) []Part {
+	var out []Part
+	for _, d := range data {
+		part := Part{Type: "image", Data: d}
+		if mt, raw, ok := DataURL(d); ok {
+			part.MediaType, part.Data = mt, raw
+		} else {
+			part.MediaType = mediaTypeOfBase64(d)
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
 func (ollama) Parse(path string, body []byte) (*Request, error) {
 	var req olRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := decodeRequest(body, req.read); err != nil {
 		return nil, bad("%v", err)
 	}
-	c := &Request{Kind: Chat, Model: req.Model, Stream: req.Stream == nil || *req.Stream, Extra: req.Extra}
+	c := &Request{Kind: Chat, Model: req.Model, Stream: req.Stream == nil || *req.Stream, Raw: req.Raw, Extra: req.Extra, Origin: originOf(path, body, req.model, req.Model)}
 	if o := req.Options; o != nil {
-		c.Temperature, c.TopP, c.TopK, c.MaxTokens, c.Stop = o.Temperature, o.TopP, o.TopK, o.NumPredict, strs(o.Stop)
-	}
-	images := func(data []string) []Part {
-		var out []Part
-		for _, d := range data {
-			part := Part{Type: "image", Data: d}
-			if mt, raw, ok := DataURL(d); ok {
-				part.MediaType, part.Data = mt, raw
-			} else {
-				part.MediaType = mediaTypeOfBase64(d)
-			}
-			out = append(out, part)
-		}
-		return out
+		c.Temperature, c.TopP, c.TopK, c.MaxTokens, c.Stop = o.Temperature, o.TopP, o.TopK, o.NumPredict, o.Stop
 	}
 	switch path {
 	case OllamaEmbed, OllamaEmbeddings:
-		c.Kind, c.Stream = Embed, false
-		c.Inputs = strs(req.Input)
+		c.Kind, c.Stream, c.Inputs = Embed, false, req.Input
 		if len(c.Inputs) == 0 && req.Prompt != "" {
-			c.Inputs = []string{req.Prompt}
+			c.Inputs = []Part{{Type: "text", Text: req.Prompt}}
 		}
 		return c, nil
 	case OllamaGenerate:
@@ -173,7 +75,7 @@ func (ollama) Parse(path string, body []byte) (*Request, error) {
 		if req.System != "" {
 			c.Messages = append(c.Messages, Message{Role: "system", Parts: []Part{{Type: "text", Text: req.System}}})
 		}
-		c.Messages = append(c.Messages, Message{Role: "user", Parts: append([]Part{{Type: "text", Text: req.Prompt}}, images(req.Images)...)})
+		c.Messages = append(c.Messages, Message{Role: "user", Parts: append([]Part{{Type: "text", Text: req.Prompt}}, olImages(req.Images)...)})
 		return c, nil
 	case OllamaChat:
 	default:
@@ -192,14 +94,14 @@ func (ollama) Parse(path string, body []byte) (*Request, error) {
 		if m.Content != "" {
 			msg.Parts = append(msg.Parts, Part{Type: "text", Text: m.Content})
 		}
-		msg.Parts = append(msg.Parts, images(m.Images)...)
+		msg.Parts = append(msg.Parts, olImages(m.Images)...)
 		if len(m.ToolCalls) > 0 {
 			pending = pending[:0]
 		}
 		for i, t := range m.ToolCalls {
 			id := newID("call") + "-" + string(rune('a'+i))
 			pending = append(pending, id)
-			msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: id, Name: t.Function.Name, Args: string(t.Function.Arguments)})
+			msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: id, Name: t.Name, Args: string(t.Arguments)})
 		}
 		if m.Role == "tool" && len(pending) > 0 {
 			msg.ToolID, pending = pending[0], pending[1:]
@@ -210,32 +112,58 @@ func (ollama) Parse(path string, body []byte) (*Request, error) {
 	return c, nil
 }
 
+// The images of parts as base64 payloads
+func olImagesOf(parts []Part) []string {
+	var out []string
+	for _, p := range parts {
+		if p.Type == "image" && p.Data != "" {
+			out = append(out, p.Data)
+		}
+	}
+	return out
+}
+
 func (ollama) Render(c *Request) (string, []byte, error) {
+	if err := translatable(c); err != nil {
+		return "", nil, err
+	}
 	if c.Kind == Count {
 		return "", nil, bad("the ollama protocol has no token count endpoint")
 	}
+	if err := choicesFit(ollama{}, c, "ollama"); err != nil {
+		return "", nil, err
+	}
 	req := olRequest{Model: c.Model, Stream: ptr(c.Stream), Extra: c.Extra}
 	if c.Temperature != nil || c.TopP != nil || c.TopK != nil || c.MaxTokens > 0 || len(c.Stop) > 0 {
-		req.Options = &olOptions{Temperature: c.Temperature, TopP: c.TopP, TopK: c.TopK, NumPredict: c.MaxTokens}
-		if len(c.Stop) > 0 {
-			req.Options.Stop, _ = json.Marshal(c.Stop)
+		req.Options = &olOptions{Temperature: c.Temperature, TopP: c.TopP, TopK: c.TopK, NumPredict: c.MaxTokens, Stop: c.Stop}
+	}
+	b := renderBuffer(c)
+	switch c.Kind {
+	case Embed:
+		if hasTokens(c.Inputs) {
+			return "", nil, bad("the ollama protocol embeds text, not token ids")
 		}
+		req.Stream, req.Input = nil, c.Inputs
+		if req.Input == nil {
+			req.Input = []Part{}
+		}
+		req.appendTo(&b)
+		return OllamaEmbed, b, nil
+	case Generate:
+		if err := olGenerate(c, &req); err != nil {
+			return "", nil, err
+		}
+		req.appendTo(&b)
+		return OllamaGenerate, b, nil
 	}
-	if c.Kind == Embed {
-		req.Stream = nil
-		req.Input, _ = json.Marshal(c.Inputs)
-		data, err := json.Marshal(req)
-		return OllamaEmbed, data, err
-	}
+	req.Messages = make([]olMessage, 0, len(c.Messages))
 	for _, m := range c.Messages {
-		msg := olMessage{Role: m.Role, Content: TextOf(m.Parts), Extra: m.Extra}
+		if hasTokens(m.Parts) {
+			return "", nil, bad("the ollama protocol takes turns as text, not token ids")
+		}
+		msg := olMessage{Role: m.Role, Content: TextOf(m.Parts), Images: olImagesOf(m.Parts), Extra: m.Extra}
 		if m.Role == "assistant" {
 			msg.Thinking = thinkingOf(m.Parts)
-		}
-		for _, p := range m.Parts {
-			if p.Type == "image" && p.Data != "" {
-				msg.Images = append(msg.Images, p.Data)
-			}
 		}
 		calls, broken := olToolCalls(m.ToolCalls)
 		if broken != "" {
@@ -249,8 +177,35 @@ func (ollama) Render(c *Request) (string, []byte, error) {
 		return "", nil, err
 	}
 	req.Tools = tools
-	data, err := json.Marshal(req)
-	return OllamaChat, data, err
+	req.appendTo(&b)
+	return OllamaChat, b, nil
+}
+
+// Fills a generate request from system turns and the one prompt, raw when the client asked for no template
+func olGenerate(c *Request, req *olRequest) error {
+	if len(c.Tools) > 0 {
+		return bad("the ollama generate endpoint takes no tools")
+	}
+	var system []string
+	prompts := 0
+	for _, m := range c.Messages {
+		switch m.Role {
+		case "system":
+			system = append(system, TextOf(m.Parts))
+		case "user":
+			if prompts++; prompts > 1 {
+				return bad("the ollama protocol takes one prompt a request, so each prompt takes a call of its own")
+			}
+			if hasTokens(m.Parts) {
+				return bad("the ollama protocol takes prompts as text, not token ids")
+			}
+			req.Prompt, req.Images = TextOf(m.Parts), olImagesOf(m.Parts)
+		default:
+			return bad("a generate request holds system turns and a prompt, not %s turns", m.Role)
+		}
+	}
+	req.System, req.Raw = strings.Join(system, "\n\n"), c.Raw
+	return nil
 }
 
 func olStop(reason string) string {
@@ -270,20 +225,20 @@ func olReason(stop string) string {
 func olCalls(calls []olToolCall) []ToolCall {
 	var out []ToolCall
 	for _, t := range calls {
-		out = append(out, ToolCall{ID: newID("call"), Name: t.Function.Name, Args: string(t.Function.Arguments)})
+		out = append(out, ToolCall{ID: newID("call"), Name: t.Name, Args: string(t.Arguments)})
 	}
 	return out
 }
 
 func (ollama) ParseResult(c *Request, body []byte) (*Result, error) {
 	var resp olResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, err
+	if err := decode(body, resp.read); err != nil {
+		return nil, malformed(err)
 	}
 	if resp.Error != "" {
 		return nil, &Failure{Status: http.StatusBadGateway, Message: resp.Error}
 	}
-	r := &Result{Model: resp.Model, Usage: Usage{In: resp.PromptEvalCount, Out: resp.EvalCount}, Vectors: resp.Embeddings, Stop: olStop(resp.DoneReason), Extra: resp.Extra}
+	r := &Result{Model: resp.Model, Usage: Usage{In: resp.PromptEvalCount, Out: resp.EvalCount, Cached: resp.PromptEvalCachedCount}, Vectors: resp.Embeddings, Stop: olStop(resp.DoneReason), Extra: resp.Extra}
 	if len(resp.Embedding) > 0 {
 		r.Vectors = [][]float64{resp.Embedding}
 	}
@@ -307,23 +262,35 @@ func olToolCalls(calls []ToolCall) ([]olToolCall, string) {
 		if !ok {
 			return nil, t.Name
 		}
-		tc := olToolCall{}
-		tc.Function.Name, tc.Function.Arguments = t.Name, args
-		out = append(out, tc)
+		out = append(out, olToolCall{Name: t.Name, Arguments: args})
 	}
 	return out, ""
 }
 
 // A whole answer in the Ollama shape
 func (ollama) renderResult(c *Request, r *Result) ([]byte, error) {
+	b := make([]byte, 0, 256+len(r.Text))
 	if c.Kind == Embed {
-		resp := olResponse{Model: r.Model, Embeddings: r.Vectors, PromptEvalCount: r.Usage.In, Extra: r.Extra}
-		if len(r.Vectors) > 0 {
-			resp.Embedding = r.Vectors[0]
+		o := begin(&b)
+		o.str("model", r.Model)
+		o.key("embeddings")
+		b = append(b, '[')
+		for i, v := range r.Vectors {
+			if i > 0 {
+				b = append(b, ',')
+			}
+			appendVector(&b, v)
 		}
-		return json.Marshal(resp)
+		b = append(b, ']')
+		if len(r.Vectors) > 0 {
+			o.key("embedding")
+			appendVector(&b, r.Vectors[0])
+		}
+		o.numIf("prompt_eval_count", r.Usage.In)
+		o.close(r.Extra)
+		return b, nil
 	}
-	resp := olResponse{Model: r.Model, CreatedAt: olNow(), Done: true, DoneReason: olReason(r.Stop), PromptEvalCount: r.Usage.In, EvalCount: r.Usage.Out, Extra: r.Extra}
+	resp := olResponse{Model: r.Model, CreatedAt: olNow(), Done: true, DoneReason: olReason(r.Stop), PromptEvalCount: r.Usage.In, PromptEvalCachedCount: r.Usage.Cached, EvalCount: r.Usage.Out, Extra: r.Extra}
 	if c.Kind == Generate {
 		resp.Response = ptr(r.Text)
 	} else {
@@ -333,7 +300,8 @@ func (ollama) renderResult(c *Request, r *Result) ([]byte, error) {
 		}
 		resp.Message = &olMessage{Role: "assistant", Content: r.Text, Thinking: r.Thinking, ToolCalls: calls}
 	}
-	return json.Marshal(resp)
+	resp.appendTo(&b)
+	return b, nil
 }
 
 func (ollama) ParseStream(rd io.Reader, emit func(Event) error) error {
@@ -348,8 +316,8 @@ func (ollama) ParseStream(rd io.Reader, emit func(Event) error) error {
 			continue
 		}
 		var chunk olResponse
-		if err := json.Unmarshal(line, &chunk); err != nil {
-			return err
+		if err := decode(line, chunk.read); err != nil {
+			return malformed(err)
 		}
 		if chunk.Error != "" {
 			return errors.New(chunk.Error)
@@ -387,7 +355,7 @@ func (ollama) ParseStream(rd io.Reader, emit func(Event) error) error {
 			}
 		}
 		if chunk.Done {
-			final.Usage.In, final.Usage.Out, final.Stop = chunk.PromptEvalCount, chunk.EvalCount, olStop(chunk.DoneReason)
+			final.Usage.In, final.Usage.Out, final.Usage.Cached, final.Stop = chunk.PromptEvalCount, chunk.EvalCount, chunk.PromptEvalCachedCount, olStop(chunk.DoneReason)
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -398,7 +366,7 @@ func (ollama) ParseStream(rd io.Reader, emit func(Event) error) error {
 }
 
 type olStream struct {
-	w     http.ResponseWriter
+	live  *liveWriter
 	req   *Request
 	model string
 	tools toolGather
@@ -406,25 +374,45 @@ type olStream struct {
 	open *int
 }
 
+// Streams NDJSON, an empty chunk that is not done going out after silence so clients and proxies hold on
 func (o ollama) Answer(w http.ResponseWriter, req *Request, model string) Writer {
 	if !req.Stream {
 		return &whole{w: w, req: req, model: model, client: o, render: o.renderResult}
 	}
 	streamHeaders(w, "application/x-ndjson")
-	return &olStream{w: w, req: req, model: model}
+	s := &olStream{req: req, model: model}
+	s.live = newLiveWriter(w, s.keepalive)
+	return s
+}
+
+// A chunk with empty content and done false, which every Ollama client reads as nothing said yet
+func (s *olStream) keepalive(w http.ResponseWriter) error {
+	return writeLine(w, s.empty())
+}
+
+func (s *olStream) empty() []byte {
+	resp := olResponse{Model: s.model, CreatedAt: olNow()}
+	if s.req.Kind == Generate {
+		resp.Response = ptr("")
+	} else {
+		resp.Message = &olMessage{Role: "assistant"}
+	}
+	return resp.json()
+}
+
+// Writes one NDJSON line and flushes it
+func writeLine(w http.ResponseWriter, data []byte) error {
+	if _, err := w.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	flush(w)
+	return nil
 }
 
 func (s *olStream) line(resp olResponse) error {
 	resp.Model, resp.CreatedAt = s.model, olNow()
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return err
-	}
-	if _, err := s.w.Write(append(data, '\n')); err != nil {
-		return err
-	}
-	flush(s.w)
-	return nil
+	data := resp.json()
+	return s.live.write(func(w http.ResponseWriter) error { return writeLine(w, data) })
 }
 
 // Writes the call gathered so far as one line
@@ -442,6 +430,9 @@ func (s *olStream) flushTool() error {
 }
 
 func (s *olStream) Write(ev Event) error {
+	if err := oneChoice(ev, "ollama"); err != nil {
+		return err
+	}
 	switch ev.Kind {
 	case Said:
 		if err := s.flushTool(); err != nil {
@@ -475,7 +466,7 @@ func (s *olStream) Write(ev Event) error {
 		if res == nil {
 			res = &Result{}
 		}
-		resp := olResponse{Done: true, DoneReason: olReason(res.Stop), PromptEvalCount: res.Usage.In, EvalCount: res.Usage.Out, Extra: res.Extra}
+		resp := olResponse{Done: true, DoneReason: olReason(res.Stop), PromptEvalCount: res.Usage.In, PromptEvalCachedCount: res.Usage.Cached, EvalCount: res.Usage.Out, Extra: res.Extra}
 		if s.req.Kind == Generate {
 			resp.Response = ptr("")
 		} else {
@@ -483,30 +474,55 @@ func (s *olStream) Write(ev Event) error {
 		}
 		return s.line(resp)
 	case Failed:
-		data, err := json.Marshal(map[string]any{"error": ev.Failure.Message, "model": s.model, "created_at": olNow(), "done": true})
+		data, err := olStreamFailure(s.model, *ev.Failure)
 		if err != nil {
 			return err
 		}
-		_, err = s.w.Write(append(data, '\n'))
-		flush(s.w)
-		return err
+		return s.live.write(func(w http.ResponseWriter) error { return writeLine(w, data) })
 	}
 	return nil
 }
 
-func (s *olStream) Close() error { return nil }
+// The done line carrying the error that ends a chat or generate stream
+func olStreamFailure(model string, f Failure) ([]byte, error) {
+	return json.Marshal(map[string]any{"error": f.Message, "model": model, "created_at": olNow(), "done": true})
+}
 
-// Ollama takes image bytes and has no count endpoint
+// Ends a chat or generate stream with its error line
+func (ollama) StreamFailure(at StreamAt, f Failure) ([]byte, error) {
+	data, err := olStreamFailure(at.Model, f)
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+func (s *olStream) Close() error {
+	s.live.close()
+	return nil
+}
+
+// Ollama takes image bytes and has no tokenizer endpoint
 func (ollama) Traits() Traits { return Traits{InlineImages: true} }
 
+func (o ollama) Native(req *Request) (string, []byte, error) { return native(o, req) }
+
 func (ollama) ErrorMessage(body []byte) string {
-	var e struct {
-		Error string `json:"error"`
-	}
-	json.Unmarshal(body, &e)
-	return e.Error
+	message := ""
+	decode(body, func(s *scan) error {
+		return s.object(func(k []byte) error {
+			if string(k) != "error" || s.peek() != '"' {
+				return s.skip()
+			}
+			var err error
+			message, err = s.str()
+			return err
+		})
+	})
+	return message
 }
 
 func (ollama) Error(w http.ResponseWriter, f Failure) {
+	retryHeader(w, f)
 	WriteJSON(w, f.Status, map[string]any{"error": f.Message})
 }

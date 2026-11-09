@@ -284,9 +284,53 @@ func ngcHit(c *Client, r ngcResource) *v1.SearchHit {
 }
 
 type ngcModelInfo struct {
-	Description        string `json:"description"`
-	ShortDescription   string `json:"shortDescription"`
-	LatestVersionIDStr string `json:"latestVersionIdStr"`
+	Description        string   `json:"description"`
+	ShortDescription   string   `json:"shortDescription"`
+	LatestVersionIDStr string   `json:"latestVersionIdStr"`
+	Name               string   `json:"name"`
+	DisplayName        string   `json:"displayName"`
+	OrgName            string   `json:"orgName"`
+	TeamName           string   `json:"teamName"`
+	Publisher          string   `json:"publisher"`
+	Application        string   `json:"application"`
+	Framework          string   `json:"framework"`
+	ModelFormat        string   `json:"modelFormat"`
+	Precision          string   `json:"precision"`
+	Labels             []string `json:"labels"`
+	CreatedDate        string   `json:"createdDate"`
+	UpdatedDate        string   `json:"updatedDate"`
+	CanGuestDownload   bool     `json:"canGuestDownload"`
+	LatestVersionSize  uint64   `json:"latestVersionSizeInBytes"`
+}
+
+// The model detail as a listing hit, carrying the same facts the search answers with
+func ngcInfoHit(c *Client, repo string, info *ngcModelInfo) *v1.SearchHit {
+	name := info.DisplayName
+	if name == "" {
+		name = info.Name
+	}
+	author := info.OrgName
+	if info.Publisher != "" {
+		author = info.Publisher
+	}
+	hit := newHit(repo, name, author)
+	hit.Description, hit.Task, hit.Gated = Summary(info.ShortDescription), info.Application, !info.CanGuestDownload
+	hit.Url = ngcPageURL(c, info.OrgName, info.TeamName, info.Name)
+	hit.CreatedAt, hit.UpdatedAt, hit.SizeBytes = Stamp(info.CreatedDate), Stamp(info.UpdatedDate), info.LatestVersionSize
+	if strings.EqualFold(hit.Task, "other") {
+		hit.Task = ""
+	}
+	for _, v := range info.Labels {
+		if !ngcPlaceholder(v) && !slices.Contains(hit.Tags, v) {
+			hit.Tags = append(hit.Tags, v)
+		}
+	}
+	for k, v := range map[string]string{"format": info.ModelFormat, "version": info.LatestVersionIDStr, "framework": info.Framework, "precision": info.Precision} {
+		if v != "" {
+			hit.Extra[k] = v
+		}
+	}
+	return hit
 }
 
 type ngcPagination struct {
@@ -437,6 +481,7 @@ func (ngcAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v1.M
 	if card.Markdown == "" {
 		card.Markdown = info.ShortDescription
 	}
+	card.Hit = ngcInfoHit(c, repo, info)
 	return card, nil
 }
 

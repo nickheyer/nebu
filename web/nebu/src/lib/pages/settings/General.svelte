@@ -1,0 +1,85 @@
+<script lang="ts">
+	import { clone } from '@bufbuild/protobuf';
+	import { useNeoThemeContext } from '#lib/neo/providers/neo-theme-provider-context.svelte.js';
+	import { NeoTheme, NeoTransition } from '#lib/neo/providers/neo-theme-provider.model.js';
+	import { reason, rpc } from '#lib/api/transport.js';
+	import { live } from '#lib/live/events.svelte.js';
+	import { SettingsSchema } from '#lib/proto/nebu/v1/settings_pb.js';
+	import type { HeaderTab } from '#lib/shell/chrome.svelte.js';
+	import { toast } from '#lib/shell/notify.svelte.js';
+	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
+	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
+	import Segmented from '#lib/ui/fields/Segmented.svelte';
+	import Switch from '#lib/ui/fields/Switch.svelte';
+	import Text from '#lib/ui/fields/Text.svelte';
+	import Card from '#lib/ui/layout/Card.svelte';
+	import Columns from '#lib/ui/layout/Columns.svelte';
+	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
+	import Stack from '#lib/ui/layout/Stack.svelte';
+
+	let { tabs }: { tabs: HeaderTab[] } = $props();
+
+	const theme = useNeoThemeContext();
+	const stored = $derived(live.settings?.hostLabel ?? '');
+	let hostLabel = $state('');
+	let saving = $state(false);
+	let error = $state<string | undefined>(undefined);
+	const dirty = $derived(hostLabel.trim() !== stored);
+	const themeChoice = $derived<'light' | 'dark' | 'system'>(theme.remember ? theme.theme : 'system');
+
+	$effect(() => {
+		hostLabel = stored;
+	});
+
+	async function save() {
+		saving = true;
+		error = undefined;
+		try {
+			const base = live.settings ?? (await rpc.settings.getSettings({})).settings;
+			if (!base) throw new Error('the daemon answered without settings');
+			const settings = clone(SettingsSchema, base);
+			settings.hostLabel = hostLabel.trim();
+			await rpc.settings.updateSettings({ settings });
+			toast.success('Host label saved');
+		} catch (err) {
+			error = reason(err);
+		} finally {
+			saving = false;
+		}
+	}
+
+	function discard() {
+		hostLabel = stored;
+		error = undefined;
+	}
+
+	function setTheme(v: 'light' | 'dark' | 'system') {
+		if (v === 'system') {
+			theme.update({ remember: false, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? NeoTheme.Dark : NeoTheme.Light });
+			return;
+		}
+		theme.update({ remember: true, theme: v });
+	}
+</script>
+
+<PageHeader {tabs} active="general" info="How this host names itself and how the console looks" />
+
+<Columns ratio="1/1">
+	{#snippet left()}
+		<Card title="Host">
+			<Text bind:value={hostLabel} label="Host label" info="The name this host shows in the mesh and the console, its hostname when empty" placeholder={live.host?.hostname} />
+			<SaveBar {dirty} {saving} {error} onsave={save} ondiscard={discard} />
+		</Card>
+	{/snippet}
+	{#snippet right()}
+		<Card title="Appearance">
+			<FieldRow>
+				<Segmented value={themeChoice} options={[{ value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }, { value: 'system', label: 'System' }]} label="Theme" info="Light, dark or whatever the system is set to" onchange={setTheme} />
+				<Stack gap={12}>
+					<Switch checked={theme.transition !== NeoTransition.None} label="Transitions" info="Animated theme switches and settling blocks" onchange={(on) => theme.update({ transition: on ? NeoTransition.Circle : NeoTransition.None })} />
+					<Switch checked={theme.reset} label="Style reset" info="The component library's CSS reset over browser defaults" onchange={(on) => theme.update({ reset: on })} />
+				</Stack>
+			</FieldRow>
+		</Card>
+	{/snippet}
+</Columns>

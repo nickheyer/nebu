@@ -1,0 +1,484 @@
+<script lang="ts">
+  import type { NeoNotificationItemProps } from '#lib/neo/floating/notification/neo-notification-item.model.js';
+
+  import { debounce } from '@dvcol/common-utils/common/debounce';
+  import { flyFrom } from '@dvcol/svelte-utils';
+  import { useFocusin } from '@dvcol/svelte-utils/focusin';
+  import { useHovering } from '@dvcol/svelte-utils/hovering';
+  import { onDestroy, onMount } from 'svelte';
+
+  import { NeoNotificationPlacements } from '#lib/neo/floating/common/neo-placement.model.js';
+  import { NeoNotificationEvent, NeoNotificationStatus, NeoNotificationType } from '#lib/neo/floating/notification/neo-notification.model.js';
+  import NeoSimpleNotification from '#lib/neo/floating/notification/NeoSimpleNotification.svelte';
+  import { computeBorderRadius } from '#lib/neo/utils/border.utils.js';
+  import { getColorVariable } from '#lib/neo/utils/colors.utils.js';
+  import { coerce, computeGlassFilter, computeShadowElevation, PositiveMinMaxElevation } from '#lib/neo/utils/shadow.utils.js';
+
+  let {
+    // Snippets
+    children,
+    before,
+    after,
+
+    // State
+    ref = $bindable(),
+    hovered = $bindable(false),
+    focused = $bindable(false),
+
+    tag = 'li',
+
+    index,
+    item,
+    posinset,
+    setsize,
+    visible = 0,
+
+    // Style
+    elevation: _elevation = 1,
+    blur: _blur,
+    color: _color,
+    filled,
+    tinted,
+    rounded: _rounded,
+    borderless,
+
+    // Behavior
+    expand,
+    reverse,
+    draggable,
+    swipeable,
+    placement = NeoNotificationPlacements.BottomEnd,
+    threshold = { x: 3, y: 2 },
+    stagger = 16,
+    swiped,
+    restartOnTouch,
+
+    progress,
+    loading,
+    close = true,
+
+    // Events
+
+    onChange: onStateChange,
+    onDrag,
+    onCancel,
+
+    // Other Props
+
+    containerProps: _containerProps,
+    progressProps,
+    actionProps,
+    closeProps,
+    ...rest
+  }: NeoNotificationItemProps = $props();
+
+  const { tag: containerTag, ...containerProps } = $derived(_containerProps ?? {});
+  const { id, tag: itemTag, ...itemProps } = $derived(item?.containerProps ?? {});
+
+  const elevation = $derived(coerce(item.elevation ?? _elevation!, PositiveMinMaxElevation));
+  const blur = $derived(coerce(item.blur ?? _blur ?? _elevation!, PositiveMinMaxElevation));
+
+  const filter = $derived(computeGlassFilter(blur, true));
+  const shadow = $derived(computeShadowElevation(elevation, { glass: true }, PositiveMinMaxElevation));
+
+  const color = $derived.by(() => {
+    if (item.color) return getColorVariable(item.color);
+    if (_color) return getColorVariable(_color);
+    if (item.type === NeoNotificationType.Info) return getColorVariable('primary');
+    return getColorVariable(item.type);
+  });
+
+  const rounded = $derived.by(() => {
+    const isRounded = item.rounded ?? _rounded;
+    if (isRounded === true) return 'xl';
+    return isRounded;
+  });
+
+  const first = $derived(index === visible - 1);
+  const last = $derived(index === 0);
+
+  function getNotifications() {
+    const parent = ref?.parentElement;
+    const array = parent?.querySelectorAll<HTMLElement>('.neo-notification-stack-item:not([inert])');
+    return { parent, array };
+  }
+
+  function getTotalHeight(el?: HTMLElement): number {
+    if (!el) return 0;
+    const styles = getComputedStyle(el);
+    return el.offsetHeight + (Number.parseFloat(styles.marginTop) || 0) + (Number.parseFloat(styles.marginBottom) || 0);
+  }
+
+  const translate = $derived.by(() => {
+    if ((posinset === setsize) && reverse) return;
+    if (!expand) return `0 ${(reverse ? 0 : -getTotalHeight(ref)) + stagger * (visible - 1 - index) * (reverse ? 1 : -1)}px`;
+
+    const { parent, array } = getNotifications();
+    if (!array?.length) return;
+    const heights = Array.from(array).map(getTotalHeight);
+    if (!heights?.length) return;
+    const bottom = reverse ? index + 1 : index;
+    const offset = heights.slice(bottom, heights.length).reduce((acc, h) => acc + h, 0);
+    const position = heights.length - 1 - index;
+    const gap = parent ? Number.parseFloat(getComputedStyle(parent).gap) || 0 : 0;
+    return `0 ${reverse ? '' : '-'}${offset + gap * position}px`;
+  });
+
+  const scale = $derived.by(() => {
+    if (expand) return;
+    return 1 - (visible - 1 - index) * 0.05;
+  });
+
+  let initial: Record<'x' | 'y', number> | false = $state(false);
+  let offset: Record<'x' | 'y', number> = $state({ x: 0, y: 0 });
+
+  const transform = $derived.by(() => {
+    if (!draggable || !initial) return;
+    return `translate(${offset.x}px, ${offset.y}px)`;
+  });
+
+  function onDragMove(event: PointerEvent) {
+    if (!draggable || !initial) return;
+    offset = { x: event.movementX + offset.x, y: event.movementY + offset.y };
+    onDrag?.({ item, index, event, offset, initial });
+  };
+
+  function cancelDrag({
+    top = placement?.startsWith('top'),
+    bottom = placement?.startsWith('bottom'),
+    start = placement?.endsWith('start'),
+    end = placement?.endsWith('end'),
+    fraction = threshold,
+  } = {}) {
+    if (!ref) return false;
+    const { x, y } = typeof fraction === 'number' ? { x: fraction, y: fraction } : fraction;
+    if (top && (offset.y < -ref.clientHeight / y)) return true;
+    if (bottom && (offset.y > ref.clientHeight / y)) return true;
+    if (end && (offset.x > ref.clientWidth / x)) return true;
+    return start && (offset.x < -ref.clientWidth / x);
+  }
+
+  function resetState() {
+    initial = false;
+    setTimeout(() => {
+      offset = { x: 0, y: 0 };
+    });
+  }
+
+  let cancelled = $state(false);
+  function cancelItem(event: PointerEvent | WheelEvent | MouseEvent, status = NeoNotificationStatus.Dismissed) {
+    if (cancelled || !cancelDrag()) return cancelled;
+    cancelled = true;
+    item.cancel(status);
+    onCancel?.({ item, index, event });
+    return cancelled;
+  }
+
+  function onDragEnd(event: PointerEvent) {
+    cancelItem(event);
+    window.removeEventListener('pointermove', onDragMove);
+    window.removeEventListener('pointerup', onDragEnd);
+    window.removeEventListener('pointercancel', onDragEnd);
+    window.removeEventListener('pointerleave', onDragEnd);
+    resetState();
+    onDrag?.({ item, index, event, offset, initial });
+  }
+
+  function onDragStart(event: PointerEvent) {
+    if (!draggable) return;
+    if (event.button !== 0) return; // Only left click
+    initial = { x: event.clientX, y: event.clientY };
+    event.preventDefault();
+    window.addEventListener('pointermove', onDragMove);
+    window.addEventListener('pointerup', onDragEnd);
+    window.addEventListener('pointercancel', onDragEnd);
+    window.addEventListener('pointerleave', onDragEnd);
+    onDrag?.({ item, index, event, offset, initial });
+  }
+
+  const debounceReset = debounce(resetState, 100);
+
+  function onWheel(event: WheelEvent) {
+    if (!swipeable) return;
+    event.preventDefault();
+    if (swiped) return;
+    const axis = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? 'x' : 'y';
+    const off = axis === 'x' ? 'y' : 'x';
+    if (['top', 'bottom'].includes(placement) && axis === 'x') return;
+    if (placement?.endsWith('start') && axis === 'x' && (event.deltaX < 0)) return;
+    if (placement?.endsWith('end') && axis === 'x' && (event.deltaX > 0)) return;
+    if (placement?.startsWith('top') && axis === 'y' && (event.deltaY < 0)) return;
+    if (placement?.startsWith('bottom') && axis === 'y' && (event.deltaY > 0)) return;
+    debounceReset.cancel();
+    const delta = axis === 'x' ? event.deltaX : event.deltaY;
+    if (!initial) initial = ({ [axis]: delta, [off]: 0 } as Record<'x' | 'y', number>);
+    offset[axis] -= delta;
+    onDrag?.({ item, index, event, offset, initial });
+    if (cancelItem(event)) {
+      removeWheel();
+      return resetState();
+    }
+    debounceReset();
+  }
+
+  function removeWheel() {
+    window?.removeEventListener('wheel', onWheel);
+    ref?.removeEventListener('pointerleave', onLeave);
+  }
+
+  const debounceLeave = debounce(removeWheel, 300);
+
+  function onLeave() {
+    if (!cancelled) return debounceLeave();
+    removeWheel();
+  }
+
+  function onEnter() {
+    if (!swipeable || !ref) return;
+    debounceLeave.cancel();
+    window.addEventListener('wheel', onWheel, { passive: false });
+    ref.addEventListener('pointerleave', onLeave);
+  }
+
+  const inParams = $derived({
+    y: last && !first ? 0 : `${reverse ? '-' : ''}150%`,
+    duration: 600,
+    scale: 1,
+    delay: last && !first ? 300 : 10,
+    opacity: last && !first ? 0 : 1,
+  });
+
+  const outParams = $derived.by(() => {
+    let x: string | number = 0;
+    let y: string | number = last && !first && !expand ? 0 : `${reverse ? '-' : ''}50%`;
+
+    // If moving left/right
+    if (Math.abs(offset.y) < Math.abs(offset.x)) {
+      if (placement?.endsWith('start')) {
+        x = '-50%';
+        y = 0;
+      } else if (placement?.endsWith('end')) {
+        x = '50%';
+        y = 0;
+      }
+    }
+
+    return {
+      x,
+      y,
+      duration: 600,
+      scale: 0.95,
+      opacity: 0,
+    };
+  });
+
+  const onChange = debounce((_, event: PointerEvent | FocusEvent) => {
+    if (Math.abs(offset.x) > 16 || Math.abs(offset.y) > 16) return;
+    onStateChange?.({ item, index, hovered, focused, event });
+  }, 100);
+
+  $effect(() => {
+    if (!ref) return;
+    ref.addEventListener('pointerdown', onDragStart);
+    ref.addEventListener('pointerenter', onEnter);
+    return () => {
+      if (!ref) return;
+      ref.removeEventListener('pointerdown', onDragStart);
+      ref.removeEventListener('pointerenter', onEnter);
+    };
+  });
+
+  onMount(() => {
+    item.visible = Date.now();
+    item.onChange?.(NeoNotificationEvent.Visible, item);
+  });
+
+  onDestroy(() => {
+    item.hidden = Date.now();
+    item.onChange?.(NeoNotificationEvent.Hidden, item);
+  });
+
+  const focusinAttach = useFocusin({
+    get focusin() {
+      return focused;
+    },
+    set focusin(_value) {
+      focused = _value;
+    },
+    onChange,
+  });
+
+  const hoveringAttach = useHovering({
+    get hovered() {
+      return hovered;
+    },
+    set hovered(_value) {
+      hovered = _value;
+    },
+    onChange,
+  });
+</script>
+
+<svelte:element
+  {...rest}
+  {...containerProps}
+  {...itemProps}
+  bind:this={ref}
+  this={itemTag ?? containerTag ?? tag}
+  data-id={id}
+  data-index={index}
+  data-first={first}
+  data-last={last}
+  data-visible={visible}
+  aria-setsize={setsize}
+  aria-posinset={posinset}
+  class:neo-notification-stack-item={true}
+  class:neo-draggable={draggable}
+  class:neo-dragging={transform}
+  class:neo-rounded={rounded}
+  class:neo-tinted={item.tinted ?? tinted}
+  class:neo-filled={item.filled ?? filled}
+  class:neo-flat={!elevation}
+  class:neo-borderless={item.borderless ?? borderless}
+  style:--neo-notification-border-radius={computeBorderRadius(item.rounded ?? rounded)}
+  style:--neo-notification-color={color}
+  style:--neo-notification-box-shadow={shadow}
+  style:--neo-notification-filter={filter}
+  style:--neo-notification-elevation={index}
+  style:scale
+  style:translate
+  style:transform
+  {@attach focusinAttach}
+  {@attach hoveringAttach}
+  in:flyFrom={inParams}
+  out:flyFrom={outParams}
+>
+  {#if item.render}
+    {@render item.render?.(item)}
+  {:else if children}
+    {@render children?.(item)}
+  {:else}
+    <NeoSimpleNotification
+      {before}
+      {after}
+
+      {item}
+      {index}
+
+      {restartOnTouch}
+      {progress}
+      {loading}
+      {close}
+
+      {rounded}
+
+      {progressProps}
+      {actionProps}
+      {closeProps}
+
+      {onCancel}
+    />
+  {/if}
+</svelte:element>
+
+<style lang="scss">
+  @use '../../styles/mixin' as mixin;
+  @use '../../styles/layers' as layers;
+
+  @include layers.neo-components {
+    .neo-notification-stack-item {
+      @include mixin.floating(
+        $padding: false,
+        $color: --neo-notification-color,
+        $background-color: --neo-notification-bg-color,
+        $border-color: --neo-notification-border-color,
+        $border-radius: --neo-notification-border-radius,
+        $border-radius-rounded: --neo-notification-border-radius-rounded,
+        $box-shadow: --neo-notification-box-shadow,
+        $backdrop-filter: --neo-notification-content-filter,
+        $z-index: --neo-notification-z-index,
+        $base-z-index: --neo-z-index-layer-top,
+        $elevation: --neo-notification-elevation,
+        $transition: false,
+        $borderless: true,
+        $tinted: true,
+        $filled: true
+      );
+
+      position: absolute;
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      box-sizing: border-box;
+      margin: var(--neo-notification-margin, var(--neo-gap-4xs));
+      transition:
+        transform 0.6s ease,
+        translate 0.6s ease,
+        width 0.3s ease,
+        height 0.3s ease,
+        scale 0.3s ease,
+        box-shadow 0.3s ease-out,
+        backdrop-filter 0.3s ease,
+        border-radius 0.3s ease,
+        border-color 0.3s ease;
+      pointer-events: auto;
+      will-change: transform, opacity, scale, translate, backdrop-filter;
+
+      &[inert] {
+        z-index: var(--neo-z-index-layer-top, 2000000000);
+      }
+
+      &.neo-draggable {
+        cursor: grab;
+        touch-action: none;
+      }
+
+      &.neo-dragging {
+        transition: none;
+      }
+    }
+
+    .neo-notification {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      height: 100%;
+
+      :global(.neo-notification-close-button) {
+        opacity: 0.5;
+        transition: opacity 0.3s ease;
+      }
+
+      &:hover,
+      &:active,
+      &:focus,
+      &:focus-within,
+      &:focus-visible {
+        :global(.neo-notification-close-button) {
+          opacity: 1;
+        }
+      }
+
+      &-content {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        width: max-content;
+        min-width: min(10rem, 80vw);
+        max-width: calc(100vw - 2rem);
+        padding: var(--neo-notification-padding, 0.5rem 1rem);
+      }
+
+      &-actions {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-around;
+        height: stretch;
+        height: -webkit-fill-available;     /* Chrome/Safari */
+        height: -moz-available;            /* Firefox */
+      }
+    }
+
+  }
+</style>

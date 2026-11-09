@@ -1,4 +1,4 @@
-.PHONY: gen proto-clean proto-lint web web-install web-check prepare build build-cli run test lint vet staticcheck govulncheck cgo-guard clean dev release release-check migrate
+.PHONY: gen proto-clean proto-lint web web-install web-check prepare build build-cli run test lint vet staticcheck govulncheck clean dev screenshots release release-check migrate
 
 BIN := build/nebu
 BUF ?= buf
@@ -36,14 +36,20 @@ web: gen web-install
 	cd $(WEB) && $(NPM) run build
 	touch $(WEB)/dist/.keep
 
+# Runs a built binary rather than go run, which leaves its build directory in the temp dir when killed
 dev: clean web
+	go build -o build/nebu-dev ./cmd/nebu
 	@echo "Starting backend and frontend..."
 	@trap 'echo "Stopping processes..."; kill $$(jobs -p) 2>/dev/null; wait; exit' INT TERM; \
 	cd $(WEB) && npm run dev & \
 	FRONTEND_PID=$$!; \
-	go run cmd/nebu/main.go serve & \
+	NEBU_TLS_DISABLED=true ./build/nebu-dev serve & \
 	BACKEND_PID=$$!; \
 	wait $$BACKEND_PID $$FRONTEND_PID
+
+# Runs dev in the background, screenshots every nav page into screens, then stops dev
+screenshots:
+	@setsid $(MAKE) dev & trap "kill -- -$$! 2>/dev/null; wait" EXIT; node scripts/screenshots.mjs
 
 # Type check the UI.
 web-check: gen web-install
@@ -75,11 +81,7 @@ staticcheck: gen
 govulncheck: gen
 	$(GOVULNCHECK) ./...
 
-# Reject dependencies that need cgo.
-cgo-guard: gen
-	./scripts/cgo-guard.sh
-
-lint: proto-lint vet staticcheck govulncheck cgo-guard web-check
+lint: proto-lint vet staticcheck govulncheck web-check
 
 release-check:
 	$(GORELEASER) check

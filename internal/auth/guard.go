@@ -4,9 +4,14 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
+
+	"connectrpc.com/connect"
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
 )
 
 // Answers whether a bearer token is a mesh session another member holds, and which member
@@ -14,9 +19,7 @@ type Peers interface {
 	Peer(token string) (nodeID string, ok bool)
 }
 
-// Checks the credentials API and gateway requests carry: the daemon token from
-// auth.token, an API token a user made, or the browser session cookie. Mesh members carry a
-// session token instead, which opens node to node calls and nothing else.
+// Checks the daemon token, user API tokens, and session cookies requests carry, member sessions opening node calls alone
 type Guard struct {
 	token    string
 	sessions *Sessions
@@ -27,7 +30,7 @@ type Guard struct {
 	peers Peers
 }
 
-// Builds the guard. An empty token with nil sessions is auth.disabled, where every request passes.
+// Builds the guard, an empty token with nil sessions being auth.disabled where every request passes
 func NewGuard(token string, sessions *Sessions, tokens *Tokens) *Guard {
 	g := &Guard{token: token, sessions: sessions, tokens: tokens}
 	switch {
@@ -54,31 +57,117 @@ func (g *Guard) Enabled() bool { return g.token != "" || g.sessions != nil }
 // The error refused requests are answered with
 func (g *Guard) Err() error { return g.err }
 
-// Whether the headers carry a valid credential. Everything passes when auth is off.
-func (g *Guard) Authenticated(h http.Header) bool {
+// Whether the headers carry a credential opening the scope, everything passing when auth is off
+func (g *Guard) Scoped(h http.Header, scope v1.Scope) bool {
 	if !g.Enabled() {
 		return true
 	}
-	_, ok := g.Identify(h)
-	return ok
+	id, ok := g.Identify(h)
+	return ok && id.Allows(scope)
 }
 
-// Who sent the request: the account behind a session cookie or an API token,
-// or nil and true for the daemon token. False when nothing valid was sent.
-func (g *Guard) Identify(h http.Header) (*Session, bool) {
+// Who sent the request and what the credential opens, false when nothing valid was sent or auth is off
+func (g *Guard) Identify(h http.Header) (Identity, bool) {
 	bearer := Bearer(h)
 	if g.token != "" && bearer != "" && subtle.ConstantTimeCompare([]byte(bearer), []byte(g.token)) == 1 {
-		return nil, true
+		return Identity{Provider: ProviderDaemon, Role: v1.Role_ROLE_ADMIN, Scopes: RoleScopes(v1.Role_ROLE_ADMIN)}, true
 	}
 	if g.tokens != nil && bearer != "" {
-		if sess, ok := g.tokens.Identify(context.Background(), bearer); ok {
-			return sess, true
+		if id, ok := g.tokens.Identify(context.Background(), bearer); ok {
+			return id, true
 		}
 	}
 	if g.sessions != nil {
-		return g.sessions.Session(h)
+		if sess, ok := g.sessions.Session(h); ok {
+			return Identity{Subject: sess.Subject, Provider: sess.Provider, Name: sess.Name, Email: sess.Email, Role: sess.Role, Scopes: RoleScopes(sess.Role)}, true
+		}
 	}
-	return nil, false
+	return Identity{}, false
+}
+
+// Refuses a call the procedure's rule does not open, unauthenticated without a credential and denied without the scope
+func (g *Guard) Check(procedure string, h http.Header) error {
+	rule, ok := procedures[procedure]
+	if !ok {
+		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%s has no access rule", procedure))
+	}
+	if rule.open || !g.Enabled() {
+		return nil
+	}
+	if rule.peer {
+		if _, ok := g.PeerOf(h); ok {
+			return nil
+		}
+	}
+	id, ok := g.Identify(h)
+	if !ok {
+		return connect.NewError(connect.CodeUnauthenticated, g.err)
+	}
+	if !id.Allows(rule.scope) {
+		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%s needs the %s scope, which this credential does not hold", procedure, ScopeName(rule.scope)))
+	}
+	return nil
+}
+
+// Applies Check to every unary and streaming call a handler serves
+func (g *Guard) Interceptor() connect.Interceptor { return interceptor{g} }
+
+type interceptor struct{ g *Guard }
+
+func (i interceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		if err := i.g.Check(req.Spec().Procedure, req.Header()); err != nil {
+			return nil, err
+		}
+		return next(ctx, req)
+	}
+}
+
+func (i interceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+	return next
+}
+
+func (i interceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
+		if err := i.g.Check(conn.Spec().Procedure, conn.RequestHeader()); err != nil {
+			return err
+		}
+		if conn.Spec().Procedure == nebuv1connect.EventServiceWatchEventsProcedure {
+			conn = eventFilter{StreamingHandlerConn: conn, guard: i.g, header: conn.RequestHeader()}
+		}
+		return next(ctx, conn)
+	}
+}
+
+// Event kinds a subscriber needs more than the read scope to receive, matching the calls that read the same records
+var eventScopes = map[v1.EventKind]v1.Scope{
+	v1.EventKind_EVENT_KIND_SETTINGS: v1.Scope_SCOPE_ADMIN,
+}
+
+// Drops events whose kind needs a scope the subscriber lacks and other accounts' traces from non admins
+type eventFilter struct {
+	connect.StreamingHandlerConn
+	guard  *Guard
+	header http.Header
+}
+
+func (f eventFilter) Send(msg any) error {
+	if r, ok := msg.(*v1.WatchEventsResponse); ok && !f.guard.receives(f.header, r.GetEvent()) {
+		return nil
+	}
+	return f.StreamingHandlerConn.Send(msg)
+}
+
+// Whether the credential receives an event, a trace reaching its owner and admins alone while auth is on
+func (g *Guard) receives(h http.Header, ev *v1.Event) bool {
+	if need, gated := eventScopes[ev.GetKind()]; gated && !g.Scoped(h, need) {
+		return false
+	}
+	if ev.GetKind() != v1.EventKind_EVENT_KIND_TRACE || !g.Enabled() {
+		return true
+	}
+	id, ok := g.Identify(h)
+	return ok && (id.Admin() || id.Owner() == ev.GetTrace().GetOwner())
 }
 
 // The host the browser addressed, X-Forwarded-Host behind a proxy the sessions trust

@@ -1,0 +1,73 @@
+@mixin typography {
+  /* Default font stack */
+  --neo-font-family: -apple-system, ui-sans-serif, system-ui, 'Segoe UI', ui-rounded, sans-serif;
+
+  /* font sizes */
+  --neo-font-size-xxs: 0.625rem;
+  --neo-font-size-xs: 0.75rem;
+  --neo-font-size-sm: 0.875rem;
+  --neo-font-size: 1rem;
+  --neo-font-size-md: 1.125rem;
+  --neo-font-size-lg: 1.25rem;
+  --neo-font-size-xl: 1.5rem;
+  --neo-font-size-xxl: 1.875rem;
+  --neo-font-size-3xl: 2.125rem;
+
+  /* font weight */
+  --neo-font-weight-xxs: 100;
+  --neo-font-weight-xs: 200;
+  --neo-font-weight-sm: 300;
+  --neo-font-weight: normal;
+  --neo-font-weight-md: 500;
+  --neo-font-weight-lg: 600;
+  --neo-font-weight-xl: 700;
+  --neo-font-weight-xxl: 800;
+
+  /* Line height */
+  --neo-line-height-xxs: 0.75rem;
+  --neo-line-height-xs: 1rem;
+  --neo-line-height-sm: 1.25rem;
+  --neo-line-height: 1.5rem;
+}
+
+@mixin heading {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    margin-bottom: 1rem;
+    font-weight: bold;
+  }
+
+  h1 {
+    font-size: var(--neo-h1-font-size, var(--neo-font-size-3xl));
+    line-height: var(--neo-h1-line-height, 1);
+  }
+
+  h2 {
+    font-size: var(--neo-h2-font-size, var(--neo-font-size-xxl));
+    line-height: var(--neo-h2-line-height, 1.067);
+  }
+
+  h3 {
+    font-size: var(--neo-h3-font-size, var(--neo-font-size-xl));
+    line-height: var(--neo-h3-line-height, 1.083);
+  }
+
+  h4 {
+    font-size: var(--neo-h4-font-size, var(--neo-font-size-lg));
+    line-height: var(--neo-h4-line-height, 1.1);
+  }
+
+  h5 {
+    font-size: var(--neo-h5-font-size, var(--neo-font-size-md));
+    line-height: var(--neo-h5-line-height, 1.111);
+  }
+
+  h6 {
+    font-size: var(--neo-h6-font-size, var(--neo-font-size));
+    line-height: var(--neo-h6-line-height, 1.125);
+  }
+}

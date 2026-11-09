@@ -9,9 +9,7 @@ import (
 	"time"
 )
 
-// The ggml rpc protocol's hello command: a one byte command, an eight byte input size naming the
-// capability block that follows, 24 bytes, all zero when the client offers no RDMA, answered
-// with an eight byte size and the server's protocol version in the first three bytes
+// The ggml rpc hello command, its 24 byte capability block, and the protocol version answer it expects
 const (
 	rpcCmdHello     = 14
 	rpcHelloCaps    = 24

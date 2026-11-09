@@ -86,6 +86,8 @@ var (
 	olPullsRe    = regexp.MustCompile(`(?s)<span[^>]*>\s*([^<]*?)\s*</span>\s*<span[^>]*>(?:\s|&nbsp;)*Pulls`)
 	olTagsRe     = regexp.MustCompile(`(?s)<span[^>]*>\s*([^<]*?)\s*</span>\s*<span[^>]*>(?:\s|&nbsp;)*Tags`)
 	olUpdatedRe  = regexp.MustCompile(`title="([^"]* UTC)"`)
+	// The model page counts downloads where the listing counts pulls
+	olDownloadsRe = regexp.MustCompile(`(?s)<span[^>]*>\s*([^<]*?)\s*</span>\s*<span[^>]*>(?:\s|&nbsp;)*Downloads`)
 )
 
 // Searches the library. Every entry is a GGUF language model, so a request for another format or
@@ -162,6 +164,40 @@ func olHit(c *Client, block string) *v1.SearchHit {
 		hit.Extra["tags"] = strings.TrimSpace(t[1])
 	}
 	if u := olUpdatedRe.FindStringSubmatch(block); u != nil {
+		if ts, err := time.Parse(olUpdatedLayout, u[1]); err == nil {
+			hit.UpdatedAt = timestamppb.New(ts)
+		}
+	}
+	return hit
+}
+
+// Reads a model page into a hit, the same facts its library listing shows
+func olPageHit(c *Client, name, page string) *v1.SearchHit {
+	hit := newHit(name, name, olAuthor(name))
+	hit.Url = c.URL(namespaced(name, olNamespace))
+	hit.Formats = []string{"gguf"}
+	hit.Description = Summary(olDescription(page))
+	for _, chip := range olChipRe.FindAllStringSubmatch(page, -1) {
+		if t := StripTags(chip[1]); t != "" && !slices.Contains(hit.Tags, t) {
+			hit.Tags = append(hit.Tags, t)
+		}
+	}
+	if len(hit.Tags) > 0 {
+		hit.Task = hit.Tags[0]
+	}
+	var sizes []string
+	for _, chip := range olSizeChipRe.FindAllStringSubmatch(page, -1) {
+		if t := StripTags(chip[1]); t != "" && !slices.Contains(sizes, t) {
+			sizes = append(sizes, t)
+		}
+	}
+	if len(sizes) > 0 {
+		hit.Extra["sizes"] = strings.Join(sizes, ",")
+	}
+	if m := olDownloadsRe.FindStringSubmatch(page); m != nil {
+		hit.Downloads = ParseCount(m[1])
+	}
+	if u := olUpdatedRe.FindStringSubmatch(page); u != nil {
 		if ts, err := time.Parse(olUpdatedLayout, u[1]); err == nil {
 			hit.UpdatedAt = timestamppb.New(ts)
 		}
@@ -418,7 +454,7 @@ func (ollamaAPI) Card(ctx context.Context, c *Client, repo, revision string) (*v
 	if err != nil {
 		return cardOrEmpty(page, err)
 	}
-	card := &v1.ModelCard{Url: page}
+	card := &v1.ModelCard{Url: page, Hit: olPageHit(c, name, text)}
 	if m := olReadmeRe.FindStringSubmatch(text); m != nil {
 		body := m[1]
 		if i := strings.Index(body, "</main>"); i >= 0 {

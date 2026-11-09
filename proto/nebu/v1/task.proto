@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
@@ -16,6 +17,13 @@ enum TaskState {
   TASK_STATE_CANCELED = 5;
 }
 
+// What the done and total of a progress count
+enum ProgressUnit {
+  PROGRESS_UNIT_UNSPECIFIED = 0;
+  PROGRESS_UNIT_STEPS = 1;
+  PROGRESS_UNIT_BYTES = 2;
+}
+
 // Progress counters of a task
 message TaskProgress {
   uint64 done = 1;
@@ -25,6 +33,9 @@ message TaskProgress {
   repeated TaskProgress rows = 4;
   // What a row tracks, the same across its updates
   string key = 5;
+  // When the step the message describes ends, set while the work waits on a clock
+  google.protobuf.Timestamp until = 6;
+  ProgressUnit unit = 7;
 }
 
 // One long running operation
@@ -42,19 +53,26 @@ message Task {
 }
 
 
-// Lists tasks
+// Lists tasks, the ones whose kind, title, or error holds every word of the query
 message ListTasksRequest {
   bool active_only = 1;
+  string query = 2 [(buf.validate.field).string.max_len = 256];
+  // One kind of task, such as pull or run
+  string kind = 3;
+  TaskState state = 4 [(buf.validate.field).enum.defined_only = true];
+  string cursor = 5;
+  uint32 limit = 6 [(buf.validate.field).uint32.lte = 1000];
 }
 
 // Returns tasks newest first
 message ListTasksResponse {
   repeated Task tasks = 1;
+  string next_cursor = 2;
 }
 
 // Fetches one task
 message GetTaskRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns one task with its log tail
@@ -65,7 +83,7 @@ message GetTaskResponse {
 
 // Streams one task until it ends
 message WatchTaskRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Snapshot plus new log lines on a watch stream
@@ -76,7 +94,7 @@ message WatchTaskResponse {
 
 // Cancels one task
 message CancelTaskRequest {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the task after cancel

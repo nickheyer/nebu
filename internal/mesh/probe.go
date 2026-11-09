@@ -13,15 +13,15 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Measures links to members whose measurement is older than the interval
+// Measures links to ready members whose last measurement is older than the probe interval, checking every round
 func (m *Manager) probeLoop(ctx context.Context) {
-	// Sessions come first, so the first sync round settles before the first probe.
+	// The first gossip rounds settle before the first probe
 	select {
 	case <-ctx.Done():
 		return
-	case <-time.After(2 * SyncInterval):
+	case <-time.After(2 * m.interval):
 	}
-	ticker := time.NewTicker(SyncInterval)
+	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
 	for {
 		m.mu.Lock()
@@ -49,8 +49,7 @@ func (m *Manager) probeLoop(ctx context.Context) {
 	}
 }
 
-// Measures the link to one member, or to every member when the id is empty. Force runs the
-// bandwidth measurements even while a formation is serving.
+// Measures the link to one member or every member, force running bandwidth while a formation serves
 func (m *Manager) Probe(ctx context.Context, nodeID string, force bool) ([]*v1.Link, error) {
 	if !m.Joined() {
 		return nil, ErrNoMesh

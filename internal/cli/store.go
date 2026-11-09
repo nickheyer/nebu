@@ -23,7 +23,7 @@ func runPull(ctx context.Context, e *env, args []string) error {
 	detach := fs.Bool("detach", false, "start the task and return its id")
 	to := fs.String("to", "", "pull onto another mesh member, by name or id")
 	var files multi
-	fs.Var(&files, "file", "download one file of the repository into the stored group it belongs to, repeatable")
+	fs.Var(&files, "file", "download one file of the repository, repeatable")
 	positional, err := e.parse(fs, args, 1, 1, "pull <repo>[@revision] [--file PATH]... [flags]")
 	if err != nil {
 		return err
@@ -45,7 +45,7 @@ func runPull(ctx context.Context, e *env, args []string) error {
 	return e.done(e.follow(ctx, task.GetId()))
 }
 
-// Lists a group's parts and their sources.
+// Lists a group's parts and their sources
 func runParts(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("parts")
 	source := fs.String("source", "", "source id (default: first configured)")
@@ -123,7 +123,7 @@ func runList(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, m := range resp.Msg.GetModels() {
-			// Eviction uses last run time, or pull time for models never run.
+			// Eviction uses last run time, or pull time for models never run
 			rows = append(rows, []string{m.GetSourceId(), m.GetRepo(), m.GetGroup(), m.GetFormatId(), m.GetDescriptor_().GetArchitecture(), kindWord(m.GetDescriptor_().GetKind()), names.of(m.GetRuntimes()), estimate.Human(m.GetBytes()), when(m.GetPulledAt(), time.DateTime), when(cmp.Or(m.GetUsedAt(), m.GetPulledAt()), time.DateTime), m.GetPath()})
 		}
 		table(w, []string{"SOURCE", "REPO", "GROUP", "FORMAT", "ARCH", "KIND", "RUNS ON", "SIZE", "PULLED", "USED", "PATH"}, rows)
@@ -248,10 +248,9 @@ func runTasksList(ctx context.Context, e *env, args []string) error {
 	return e.print(resp.Msg, func(w io.Writer) {
 		var rows [][]string
 		for _, t := range resp.Msg.GetTasks() {
-			p := t.GetProgress()
 			progress := "-"
-			if p.GetTotal() > 0 {
-				progress = fmt.Sprintf("%s/%s", estimate.Human(p.GetDone()), estimate.Human(p.GetTotal()))
+			if t.GetProgress().GetTotal() > 0 {
+				progress = progressAmount(t.GetProgress())
 			}
 			rows = append(rows, []string{t.GetId(), t.GetKind(), loud(t.GetState()), progress, t.GetTitle(), t.GetError()})
 		}

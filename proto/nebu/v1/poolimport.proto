@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package nebu.v1;
+
+import "buf/validate/validate.proto";
+import "nebu/v1/meta.proto";
+import "nebu/v1/pool.proto";
+
+option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
+
+// A node or mesh that exported the pool behind an import
+message ExportingSource {
+  // The mesh the pool was exported from
+  string mesh_hash = 1;
+  string node_id = 2;
+}
+
+// One controller's bookkeeping on an import
+message ImportController {
+  // Domain slash path naming the controller
+  string name = 1;
+  repeated ExportingSource exporting_sources = 2;
+  repeated nebu.v1.ParentStatus parents = 3;
+  repeated nebu.v1.Condition conditions = 4;
+}
+
+// What an import observes, there is no user authored spec
+message PoolImportStatus {
+  repeated ImportController controllers = 1;
+  // The endpoints the import currently routes to, each the remote gateway or a remote endpoint
+  repeated nebu.v1.Endpoint endpoints = 2;
+  // Endpoint mode routes to remote endpoints, parent mode through the remote gateway
+  string routing_mode = 3;
+}
+
+// What the importing node configured for the import
+message PoolImportSpec {
+  // endpoint, routing straight to exported endpoints the exporter's scheduler picks, or parent, through the exporter's gateway
+  string routing_mode = 1 [(buf.validate.field).string = {in: ["endpoint", "parent"]}];
+}
+
+// A pool exported from elsewhere, managed by the import controller alone
+message PoolImport {
+  // The exported pool's id, the same on every importing node
+  string id = 1;
+  nebu.v1.ObjectMeta meta = 2;
+  PoolImportStatus status = 3;
+  PoolImportSpec spec = 4;
+}
+
+// Lists imports
+message ListPoolImportsRequest {}
+
+// Returns imports
+message ListPoolImportsResponse {
+  repeated PoolImport imports = 1;
+}
+
+// Fetches one import
+message GetPoolImportRequest {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// Returns one import
+message GetPoolImportResponse {
+  PoolImport import = 1;
+}
+
+// Watches imports as they change
+message WatchPoolImportsRequest {}
+
+// One changed import
+message WatchPoolImportsResponse {
+  PoolImport import = 1;
+  // Whether the import was removed
+  bool deleted = 2;
+}
+
+// Pools imported from other meshes and nodes
+service PoolImportService {
+  rpc ListPoolImports(ListPoolImportsRequest) returns (ListPoolImportsResponse);
+  rpc GetPoolImport(GetPoolImportRequest) returns (GetPoolImportResponse);
+  rpc WatchPoolImports(WatchPoolImportsRequest) returns (stream WatchPoolImportsResponse);
+}

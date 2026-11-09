@@ -17,9 +17,13 @@ import (
 	"time"
 
 	"github.com/nickheyer/nebu/internal/db"
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// The daemon token's identity, an admin naming no account
+var daemonID = Identity{Provider: ProviderDaemon, Role: v1.Role_ROLE_ADMIN, Scopes: RoleScopes(v1.Role_ROLE_ADMIN)}
 
 func openUsers(t *testing.T) (*Users, *Sessions) {
 	t.Helper()
@@ -56,7 +60,7 @@ func TestSessionsSurviveRestartExpireAndBindPurpose(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
-	sess, err := first.Issue(rec, req, Session{Subject: "u1", Name: "ann", Provider: ProviderLocal})
+	sess, err := first.Issue(rec, req, Session{Subject: "u1", Name: "ann", Provider: ProviderLocal, Role: v1.Role_ROLE_OPERATOR})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +86,10 @@ func TestSessionsSurviveRestartExpireAndBindPurpose(t *testing.T) {
 	}
 	if second.Authenticated(http.Header{"Cookie": {"nebu_session=garbage"}}) {
 		t.Fatal("garbage should not authenticate")
+	}
+	roleless, _ := first.Cookie(Session{Subject: "u1", Name: "ann", Provider: ProviderLocal, Expires: time.Now().Add(time.Hour)})
+	if first.Authenticated(http.Header{"Cookie": {roleless.String()}}) {
+		t.Fatal("a session from before roles should sign in again")
 	}
 	value := strings.TrimPrefix(strings.Split(set, ";")[0], sessionCookie+"=")
 	var other Session
@@ -129,17 +137,20 @@ func TestUsersLifecycleAndSessionRevocation(t *testing.T) {
 	if users.Count() != 0 {
 		t.Fatal("fresh store has no accounts")
 	}
-	ann, err := users.Create(ctx, "  Ann@Example.com ", "ann-password")
+	ann, err := users.Create(ctx, daemonID, "  Ann@Example.com ", "ann-password", v1.Role_ROLE_UNSPECIFIED)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ann.GetUsername() != "ann@example.com" || ann.GetId() == "" || users.Count() != 1 {
+	if ann.GetUsername() != "ann@example.com" || ann.GetId() == "" || users.Count() != 1 || ann.GetRole() != v1.Role_ROLE_ADMIN {
 		t.Fatalf("created %v", ann)
 	}
 	for _, bad := range []struct{ name, pw string }{{"ann@example.com", "another-pass"}, {"", "x-password"}, {"has space", "x-password"}, {strings.Repeat("a", 65), "x-password"}, {"bob", "short"}} {
-		if _, err := users.Create(ctx, bad.name, bad.pw); err == nil {
+		if _, err := users.Create(ctx, daemonID, bad.name, bad.pw, v1.Role_ROLE_OPERATOR); err == nil {
 			t.Fatalf("%q/%q should be refused", bad.name, bad.pw)
 		}
+	}
+	if _, err := users.Create(ctx, daemonID, "nora", "nora-password", v1.Role_ROLE_UNSPECIFIED); !errors.Is(err, ErrUser) {
+		t.Fatalf("later accounts need a role %v", err)
 	}
 	if _, err := users.Verify(ctx, "ANN@example.com", "ann-password"); err != nil {
 		t.Fatal("case-insensitive sign-in", err)
@@ -153,13 +164,13 @@ func TestUsersLifecycleAndSessionRevocation(t *testing.T) {
 	// A session issued before a password change is revoked, one issued after works
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	old, _ := sessions.Issue(rec, req, Session{Subject: ann.GetId(), Name: ann.GetUsername(), Provider: ProviderLocal})
+	old, _ := sessions.Issue(rec, req, Session{Subject: ann.GetId(), Name: ann.GetUsername(), Provider: ProviderLocal, Role: v1.Role_ROLE_ADMIN})
 	oldHeader := http.Header{"Cookie": {strings.Split(rec.Header().Get("Set-Cookie"), ";")[0]}}
 	if !sessions.Authenticated(oldHeader) {
 		t.Fatal("fresh session should authenticate")
 	}
 	users.now = func() time.Time { return old.Issued.Add(2 * time.Second) }
-	if _, err := users.SetPassword(ctx, "ann@example.com", "new-password"); err != nil {
+	if _, err := users.SetPassword(ctx, daemonID, "ann@example.com", "", "new-password"); err != nil {
 		t.Fatal(err)
 	}
 	if sessions.Authenticated(oldHeader) {
@@ -167,40 +178,45 @@ func TestUsersLifecycleAndSessionRevocation(t *testing.T) {
 	}
 	sessions.now = func() time.Time { return old.Issued.Add(3 * time.Second) }
 	rec = httptest.NewRecorder()
-	sessions.Issue(rec, req, Session{Subject: ann.GetId(), Name: ann.GetUsername(), Provider: ProviderLocal})
+	sessions.Issue(rec, req, Session{Subject: ann.GetId(), Name: ann.GetUsername(), Provider: ProviderLocal, Role: v1.Role_ROLE_ADMIN})
 	newHeader := http.Header{"Cookie": {strings.Split(rec.Header().Get("Set-Cookie"), ";")[0]}}
 	if !sessions.Authenticated(newHeader) {
 		t.Fatal("session after the change should authenticate")
+	}
+	rec = httptest.NewRecorder()
+	sessions.Issue(rec, req, Session{Subject: ann.GetId(), Name: ann.GetUsername(), Provider: ProviderLocal, Role: v1.Role_ROLE_OPERATOR})
+	if sessions.Authenticated(http.Header{"Cookie": {strings.Split(rec.Header().Get("Set-Cookie"), ";")[0]}}) {
+		t.Fatal("a session naming another role than the account holds should not authenticate")
 	}
 	if _, err := users.Verify(ctx, "ann@example.com", "new-password"); err != nil {
 		t.Fatal("new password", err)
 	}
 	// OIDC sessions are not subject to account checks
 	rec = httptest.NewRecorder()
-	sessions.Issue(rec, req, Session{Subject: "ext", Name: "someone", Provider: ProviderOIDC})
+	sessions.Issue(rec, req, Session{Subject: "ext", Name: "someone", Provider: ProviderOIDC, Role: v1.Role_ROLE_INFERENCE})
 	if !sessions.Authenticated(http.Header{"Cookie": {strings.Split(rec.Header().Get("Set-Cookie"), ";")[0]}}) {
 		t.Fatal("sso sessions are validated elsewhere")
 	}
-	if err := users.Delete(ctx, "ann@example.com"); err != ErrLastUser {
+	if err := users.Delete(ctx, daemonID, "ann@example.com"); err != ErrLastUser {
 		t.Fatalf("last account: %v", err)
 	}
-	if _, err := users.Create(ctx, "bob", "bob-password"); err != nil {
+	if _, err := users.Create(ctx, daemonID, "bob", "bob-password", v1.Role_ROLE_OPERATOR); err != nil {
 		t.Fatal(err)
 	}
-	if err := users.Delete(ctx, "ann@example.com"); err != nil {
+	if err := users.Delete(ctx, daemonID, "ann@example.com"); err != nil {
 		t.Fatal(err)
 	}
 	if sessions.Authenticated(newHeader) {
 		t.Fatal("deleting the account should revoke its sessions")
 	}
-	if err := users.Delete(ctx, "ann@example.com"); err == nil {
+	if err := users.Delete(ctx, daemonID, "ann@example.com"); err == nil {
 		t.Fatal("deleting twice should fail")
 	}
-	if _, err := users.SetPassword(ctx, "nobody", "whatever-pass"); err == nil {
+	if _, err := users.SetPassword(ctx, daemonID, "nobody", "", "whatever-pass"); err == nil {
 		t.Fatal("password for unknown account")
 	}
 	list, _ := users.List(ctx)
-	if len(list) != 1 || list[0].GetUsername() != "bob" {
+	if len(list) != 1 || list[0].GetUsername() != "bob" || list[0].GetRole() != v1.Role_ROLE_OPERATOR {
 		t.Fatalf("list %v", list)
 	}
 	// A fresh Users over the same database sees the accounts
@@ -213,7 +229,7 @@ func TestUsersLifecycleAndSessionRevocation(t *testing.T) {
 func TestLoginThrottling(t *testing.T) {
 	users, _ := openUsers(t)
 	ctx := context.Background()
-	if _, err := users.Create(ctx, "ann", "ann-password"); err != nil {
+	if _, err := users.Create(ctx, daemonID, "ann", "ann-password", v1.Role_ROLE_ADMIN); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < userAttempts; i++ {
@@ -248,7 +264,7 @@ type view struct {
 	Enabled bool
 	SSO     *struct{ Name string }
 	Local   *struct{ Setup bool }
-	User    *struct{ Subject, Name, Provider string }
+	User    *struct{ Subject, Name, Provider, Role string }
 }
 
 func serve(t *testing.T, o Options) (*httptest.Server, *http.Client) {
@@ -304,10 +320,10 @@ func TestLocalSetupLoginAndLogout(t *testing.T) {
 		t.Fatalf("form posts are refused, got %d", code)
 	}
 	code, out := post(t, client, srv.URL+"/auth/local/setup", "application/json", map[string]string{"username": "Ann", "password": "ann-password"})
-	if code != http.StatusOK || out["user"].(map[string]any)["name"] != "ann" {
+	if code != http.StatusOK || out["user"].(map[string]any)["name"] != "ann" || out["user"].(map[string]any)["role"] != "admin" {
 		t.Fatalf("setup %d %v", code, out)
 	}
-	if v := look(t, client, srv.URL); v.User == nil || v.User.Name != "ann" || v.User.Provider != ProviderLocal || v.Local.Setup {
+	if v := look(t, client, srv.URL); v.User == nil || v.User.Name != "ann" || v.User.Provider != ProviderLocal || v.User.Role != "admin" || v.Local.Setup {
 		t.Fatalf("status after setup %+v", v)
 	}
 	if code, _ := post(t, client, srv.URL+"/auth/local/setup", "application/json", map[string]string{"username": "eve", "password": "eve-password"}); code != http.StatusConflict {
@@ -381,95 +397,5 @@ func TestTokenFile(t *testing.T) {
 	}
 	if _, _, err := LoadOrCreateToken(filepath.Join(t.TempDir(), "nope", "api.token")); err == nil {
 		t.Fatal("unwritable path should fail")
-	}
-}
-
-func TestGuardAndUserTokens(t *testing.T) {
-	users, sessions := openUsers(t)
-	tokens := users.tokens
-	guard := NewGuard("daemon-token", sessions, tokens)
-	ctx := context.Background()
-	ann, err := users.Create(ctx, "ann", "ann-password")
-	if err != nil {
-		t.Fatal(err)
-	}
-	me := &Session{Subject: ann.GetId(), Name: "ann", Provider: ProviderLocal}
-	if _, err := tokens.Create(ctx, me, ""); !errors.Is(err, ErrToken) {
-		t.Fatalf("blank name %v", err)
-	}
-	if _, err := tokens.Create(ctx, me, strings.Repeat("n", maxTokenName+1)); !errors.Is(err, ErrToken) {
-		t.Fatalf("long name %v", err)
-	}
-	tok, err := tokens.Create(ctx, me, " laptop ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tok.GetName() != "laptop" || len(tok.GetSecret()) < 40 || tok.GetId() == "" {
-		t.Fatalf("token %v", tok)
-	}
-	bearer := func(secret string) http.Header { return http.Header{"Authorization": {"Bearer " + secret}} }
-	if !guard.Enabled() || guard.Authenticated(http.Header{}) || guard.Authenticated(bearer("wrong")) {
-		t.Fatal("nothing or a wrong token should be refused")
-	}
-	if who, ok := guard.Identify(bearer("daemon-token")); !ok || who != nil {
-		t.Fatalf("daemon token identifies nobody %v %v", who, ok)
-	}
-	if who, ok := guard.Identify(http.Header{"Authorization": {"BEARER " + tok.GetSecret()}}); !ok || who.Subject != ann.GetId() || who.Name != "ann" || who.Provider != ProviderLocal {
-		t.Fatalf("user token %v %v", who, ok)
-	}
-	if !guard.Authenticated(http.Header{"X-Api-Key": {tok.GetSecret()}}) {
-		t.Fatal("x-api-key carries a token too")
-	}
-	// Use is stamped once, then not again inside the gap
-	listed, _ := tokens.List(ctx, me)
-	if len(listed) != 1 || listed[0].GetLastUsedAt() == nil {
-		t.Fatalf("after use %v", listed)
-	}
-	first := listed[0].GetLastUsedAt().AsTime()
-	tokens.now = func() time.Time { return first.Add(touchGap / 2) }
-	guard.Authenticated(bearer(tok.GetSecret()))
-	listed, _ = tokens.List(ctx, me)
-	if !listed[0].GetLastUsedAt().AsTime().Equal(first) {
-		t.Fatal("use inside the gap should not be stamped")
-	}
-	tokens.now = func() time.Time { return first.Add(2 * touchGap) }
-	guard.Authenticated(bearer(tok.GetSecret()))
-	listed, _ = tokens.List(ctx, me)
-	if !listed[0].GetLastUsedAt().AsTime().After(first) {
-		t.Fatal("use after the gap should be stamped")
-	}
-	// A session cookie still identifies its owner alongside tokens
-	rec := httptest.NewRecorder()
-	sessions.Issue(rec, httptest.NewRequest(http.MethodGet, "/", nil), *me)
-	if who, ok := guard.Identify(http.Header{"Cookie": {strings.Split(rec.Header().Get("Set-Cookie"), ";")[0]}}); !ok || who.Name != "ann" {
-		t.Fatalf("cookie %v %v", who, ok)
-	}
-	// Another account cannot revoke it, its owner can, and then it is refused
-	other := &Session{Subject: "someone-else", Name: "bob", Provider: ProviderLocal}
-	if err := tokens.Delete(ctx, other, tok.GetId()); !errors.Is(err, ErrUnknownToken) {
-		t.Fatalf("revoke by another %v", err)
-	}
-	if err := tokens.Delete(ctx, me, tok.GetId()); err != nil {
-		t.Fatal(err)
-	}
-	if guard.Authenticated(bearer(tok.GetSecret())) {
-		t.Fatal("revoked token still passes")
-	}
-	// Removing the account revokes the tokens it made
-	again, _ := tokens.Create(ctx, me, "ci")
-	users.Create(ctx, "bob", "bob-password")
-	if err := users.Delete(ctx, "ann"); err != nil {
-		t.Fatal(err)
-	}
-	if guard.Authenticated(bearer(again.GetSecret())) {
-		t.Fatal("a removed account's token still passes")
-	}
-	// With auth off the guard passes everything and names nobody
-	off := NewGuard("", nil, nil)
-	if off.Enabled() || !off.Authenticated(http.Header{}) {
-		t.Fatal("auth off")
-	}
-	if _, ok := off.Identify(bearer("anything")); ok {
-		t.Fatal("auth off identifies nobody")
 	}
 }

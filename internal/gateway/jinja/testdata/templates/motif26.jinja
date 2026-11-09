@@ -1,0 +1,14 @@
+{{ bos_token }}{% for message in messages %}{% set content = message['content'] %}{% if message['role'] == 'assistant' and '</think>' in content %}{% set reasoning_content = content.split('</think>')[0].rstrip('
+').split('<think>')[-1].lstrip('
+') %}{% set content = content.split('</think>')[-1].lstrip('
+') %}{{ '<|startofturn|><|assistant|>
+
+<think>
+' + reasoning_content + '
+</think>
+
+' + content + '<|endofturn|>' }}{% else %}{{ '<|startofturn|><|' + message['role'] + '|>
+
+' + content + '<|endofturn|>' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|startofturn|><|assistant|>
+
+' }}{% endif %}

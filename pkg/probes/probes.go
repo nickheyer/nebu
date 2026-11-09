@@ -34,6 +34,7 @@ func All() []host.Probe {
 		windowsCPU{},
 		windowsGPU{},
 		windowsMemory{},
+		checkpointTools{},
 	}
 }
 
@@ -55,12 +56,50 @@ func failed(err error) host.Result {
 	return host.Result{Status: v1.ProbeStatus_PROBE_STATUS_FAILED, Detail: err.Error()}
 }
 
-// Records a successful probe.
+// Records a successful probe, naming what it found when the probe gives no detail of its own
 func found(devices []*v1.Device, pools []*v1.MemoryPool, facts map[string]string, detail string) host.Result {
 	if facts == nil {
 		facts = map[string]string{}
 	}
+	if detail == "" {
+		detail = summary(devices, pools, facts)
+	}
 	return host.Result{Devices: devices, Pools: pools, Facts: facts, Status: v1.ProbeStatus_PROBE_STATUS_OK, Detail: detail}
+}
+
+// Device names, else pool sizes, else the fact count
+func summary(devices []*v1.Device, pools []*v1.MemoryPool, facts map[string]string) string {
+	var parts []string
+	for _, d := range devices {
+		if d.GetName() != "" {
+			parts = append(parts, d.GetName())
+		}
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, ", ")
+	}
+	for _, p := range pools {
+		parts = append(parts, human(p.GetTotalBytes()))
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, ", ")
+	}
+	return fmt.Sprintf("%d facts", len(facts))
+}
+
+// A byte count in binary units with one decimal, such as 62.6 GB
+func human(n uint64) string {
+	units := []string{"B", "KB", "MB", "GB", "TB", "PB"}
+	v := float64(n)
+	i := 0
+	for v >= 1024 && i < len(units)-1 {
+		v /= 1024
+		i++
+	}
+	if i == 0 {
+		return fmt.Sprintf("%d B", n)
+	}
+	return fmt.Sprintf("%.1f %s", v, units[i])
 }
 
 // Runs a tool from PATH with a timeout, telling a missing tool apart from a failing one
@@ -131,11 +170,6 @@ func bytesIn(s, unit string) (uint64, error) {
 		return 0, nil
 	}
 	return text.Bytes(s, unit)
-}
-
-// Formats a row count for a probe's detail line
-func rows(n int) string {
-	return fmt.Sprintf("%d rows", n)
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }

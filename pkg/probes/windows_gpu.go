@@ -78,7 +78,7 @@ func (p windowsGPU) Run(ctx context.Context) host.Result {
 			pools = append(pools, &v1.MemoryPool{Id: id, Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: id, TotalBytes: total, FreeBytes: free})
 		}
 	}
-	return found(devices, pools, nil, rows(len(devices)))
+	return found(devices, pools, nil, "")
 }
 
 // Resolves PCI vendor codes, falling back to the driver provider.

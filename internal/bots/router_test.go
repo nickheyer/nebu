@@ -471,7 +471,7 @@ func TestLoadRecoversEnabledBots(t *testing.T) {
 	h := newHarness(t)
 	bot := h.ready(t, quickSpec())
 	h.m.Close()
-	again := New(context.Background(), h.m.DB, h.m.Gateway, h.m.Events, h.m.Log, "")
+	again := New(context.Background(), h.m.DB, h.m.Gateway, h.m.Pools, h.m.Events, h.m.Log, "")
 	again.dial, again.probe = h.m.dial, h.m.probe
 	if err := again.Load(context.Background()); err != nil {
 		t.Fatal(err)
@@ -499,7 +499,7 @@ func TestActivityIsKeptAcrossManagers(t *testing.T) {
 	if kinds := h.kinds(bot.GetId()); kinds != "reply,command,shard" {
 		t.Fatalf("activity before reload %q", kinds)
 	}
-	again := New(context.Background(), h.m.DB, h.m.Gateway, h.m.Events, h.m.Log, "")
+	again := New(context.Background(), h.m.DB, h.m.Gateway, h.m.Pools, h.m.Events, h.m.Log, "")
 	if err := again.Load(context.Background()); err != nil {
 		t.Fatal(err)
 	}

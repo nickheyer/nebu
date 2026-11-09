@@ -10,8 +10,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// A relaunch counts on from a predecessor that never served a stretch, and starts over after one
-// that was ready long enough; the count decides when a degraded formation stays failed
+// A relaunch counts on after a predecessor that never served a stretch and starts over after one that did
 func TestNextRelaunches(t *testing.T) {
 	now := time.Now()
 	at := func(d time.Duration) *timestamppb.Timestamp { return timestamppb.New(now.Add(d)) }
@@ -35,8 +34,7 @@ func TestNextRelaunches(t *testing.T) {
 	}
 }
 
-// A seat's request is refused as a formation request: its name is the seat's, and its block names
-// the formation to run instead
+// A seat request is refused as a formation request, its block naming the formation to run instead
 func TestRunRefusesASeatRequest(t *testing.T) {
 	m := &Manager{}
 	run := &v1.RunRequest{Name: "qwen:Q5/stage1", Seat: &v1.SeatSpec{Role: "stage", Name: "qwen:Q5", FormationId: "f1"}}

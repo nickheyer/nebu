@@ -1,0 +1,35 @@
+-- Disable the enforcement of foreign-keys constraints
+PRAGMA foreign_keys = off;
+DROP TABLE `source_config`;
+DROP TABLE `sources`;
+DROP TABLE `settings`;
+DROP TABLE `routes`;
+DROP TABLE `slot_request_params`;
+DROP TABLE `slot_requests`;
+DROP TABLE `slot_params`;
+DROP TABLE `slot_devices`;
+DROP TABLE `slots`;
+DROP TABLE `build_patches`;
+DROP TABLE `build_facts`;
+DROP TABLE `build_vars`;
+DROP TABLE `builds`;
+DROP TABLE `task_logs`;
+DROP TABLE `task_labels`;
+DROP TABLE `tasks`;
+DROP TABLE `instance_triage_fixes`;
+DROP TABLE `instance_triage`;
+DROP TABLE `instance_measurements`;
+DROP TABLE `instance_plan_params`;
+DROP TABLE `instance_plan_placements`;
+DROP TABLE `instance_plan_pools`;
+DROP TABLE `instance_plans`;
+DROP TABLE `instance_request_params`;
+DROP TABLE `instance_requests`;
+DROP TABLE `instance_command`;
+DROP TABLE `instance_params`;
+DROP TABLE `instances`;
+DROP TABLE `calibrations`;
+DROP TABLE `install_facts`;
+DROP TABLE `installs`;
+-- Enable back the enforcement of foreign-keys constraints
+PRAGMA foreign_keys = on;

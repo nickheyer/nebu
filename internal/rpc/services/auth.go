@@ -16,10 +16,9 @@ var _ nebuv1connect.AuthServiceHandler = (*AuthService)(nil)
 var (
 	errAccountsOff = connect.NewError(connect.CodeUnimplemented, errors.New("local accounts are off, auth.oidc or auth.disabled is set"))
 	errTokensOff   = connect.NewError(connect.CodeUnimplemented, errors.New("API tokens are off, auth.disabled is set"))
-	errNoAccount   = connect.NewError(connect.CodeFailedPrecondition, errors.New("sign in with an account to manage its API tokens, the daemon token has none"))
 )
 
-// Manages local accounts and the API tokens signed-in users make
+// Manages local accounts and the API tokens signed-in users make, the auth package deciding who may do what
 type AuthService struct {
 	users  *auth.Users
 	tokens *auth.Tokens
@@ -36,96 +35,78 @@ func (s *AuthService) ListUsers(ctx context.Context, req *connect.Request[v1.Lis
 		return nil, errAccountsOff
 	}
 	list, err := s.users.List(ctx)
-	return reply(&v1.ListUsersResponse{Users: list}, err)
+	if err != nil {
+		return authReply(&v1.ListUsersResponse{}, err)
+	}
+	list = match(list, req.Msg.GetQuery(), func(u *v1.User) []string { return []string{u.GetUsername()} })
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return authReply(&v1.ListUsersResponse{Users: list, NextCursor: next}, err)
 }
 
 func (s *AuthService) CreateUser(ctx context.Context, req *connect.Request[v1.CreateUserRequest]) (*connect.Response[v1.CreateUserResponse], error) {
 	if s.users == nil {
 		return nil, errAccountsOff
 	}
-	u, err := s.users.Create(ctx, req.Msg.GetUsername(), req.Msg.GetPassword())
-	return reply(&v1.CreateUserResponse{User: u}, err)
+	u, err := s.users.Create(ctx, s.caller(req.Header()), req.Msg.GetUsername(), req.Msg.GetPassword(), req.Msg.GetRole())
+	return authReply(&v1.CreateUserResponse{User: u}, err)
 }
 
-// Refuses the caller's own account, so a session or token cannot strand itself
 func (s *AuthService) DeleteUser(ctx context.Context, req *connect.Request[v1.DeleteUserRequest]) (*connect.Response[v1.DeleteUserResponse], error) {
 	if s.users == nil {
 		return nil, errAccountsOff
 	}
-	if me := s.account(req.Header()); me != nil && auth.SameUser(me.Name, req.Msg.GetUsername()) {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("sign in as another account to remove this one"))
-	}
-	return reply(&v1.DeleteUserResponse{}, s.users.Delete(ctx, req.Msg.GetUsername()))
+	return authReply(&v1.DeleteUserResponse{}, s.users.Delete(ctx, s.caller(req.Header()), req.Msg.GetUsername()))
 }
 
-// Local accounts prove their own current password first. The daemon token needs none.
 func (s *AuthService) SetPassword(ctx context.Context, req *connect.Request[v1.SetPasswordRequest]) (*connect.Response[v1.SetPasswordResponse], error) {
 	if s.users == nil {
 		return nil, errAccountsOff
 	}
-	if me := s.account(req.Header()); me != nil {
-		if _, err := s.users.Verify(ctx, me.Name, req.Msg.GetCurrentPassword()); err != nil {
-			if errors.Is(err, auth.ErrCredentials) {
-				return nil, connect.NewError(connect.CodePermissionDenied, errors.New("current_password must be your own current password"))
-			}
-			return nil, wrap(err)
-		}
-	}
-	u, err := s.users.SetPassword(ctx, req.Msg.GetUsername(), req.Msg.GetPassword())
-	return reply(&v1.SetPasswordResponse{User: u}, err)
+	u, err := s.users.SetPassword(ctx, s.caller(req.Header()), req.Msg.GetUsername(), req.Msg.GetCurrentPassword(), req.Msg.GetPassword())
+	return authReply(&v1.SetPasswordResponse{User: u}, err)
 }
 
 func (s *AuthService) ListTokens(ctx context.Context, req *connect.Request[v1.ListTokensRequest]) (*connect.Response[v1.ListTokensResponse], error) {
-	who, err := s.owner(req.Header())
-	if err != nil {
-		return nil, err
-	}
-	list, err := s.tokens.List(ctx, who)
-	return reply(&v1.ListTokensResponse{Tokens: list}, err)
-}
-
-func (s *AuthService) CreateToken(ctx context.Context, req *connect.Request[v1.CreateTokenRequest]) (*connect.Response[v1.CreateTokenResponse], error) {
-	who, err := s.owner(req.Header())
-	if err != nil {
-		return nil, err
-	}
-	tok, err := s.tokens.Create(ctx, who, req.Msg.GetName())
-	return reply(&v1.CreateTokenResponse{Token: tok}, err)
-}
-
-func (s *AuthService) DeleteToken(ctx context.Context, req *connect.Request[v1.DeleteTokenRequest]) (*connect.Response[v1.DeleteTokenResponse], error) {
-	who, err := s.owner(req.Header())
-	if err != nil {
-		return nil, err
-	}
-	return reply(&v1.DeleteTokenResponse{}, s.tokens.Delete(ctx, who, req.Msg.GetId()))
-}
-
-// The account tokens are managed for: whoever the session cookie or API token names
-func (s *AuthService) owner(h http.Header) (*auth.Session, error) {
 	if s.tokens == nil {
 		return nil, errTokensOff
 	}
-	who := s.caller(h)
-	if who == nil {
-		return nil, errNoAccount
+	list, err := s.tokens.List(ctx, s.caller(req.Header()))
+	if err != nil {
+		return authReply(&v1.ListTokensResponse{}, err)
 	}
-	return who, nil
+	list = match(list, req.Msg.GetQuery(), func(t *v1.ApiToken) []string { return []string{t.GetName(), t.GetPrefix()} })
+	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return authReply(&v1.ListTokensResponse{Tokens: list, NextCursor: next}, err)
 }
 
-// Who is behind the request, nil for the daemon token or with auth off
-func (s *AuthService) caller(h http.Header) *auth.Session {
-	if s.guard == nil {
-		return nil
+func (s *AuthService) CreateToken(ctx context.Context, req *connect.Request[v1.CreateTokenRequest]) (*connect.Response[v1.CreateTokenResponse], error) {
+	if s.tokens == nil {
+		return nil, errTokensOff
 	}
-	sess, _ := s.guard.Identify(h)
-	return sess
+	tok, err := s.tokens.Create(ctx, s.caller(req.Header()), req.Msg.GetName(), req.Msg.GetScopes())
+	return authReply(&v1.CreateTokenResponse{Token: tok}, err)
 }
 
-// The local account behind the request, nil for the daemon token or single sign-on
-func (s *AuthService) account(h http.Header) *auth.Session {
-	if sess := s.caller(h); sess != nil && sess.Provider == auth.ProviderLocal {
-		return sess
+func (s *AuthService) DeleteToken(ctx context.Context, req *connect.Request[v1.DeleteTokenRequest]) (*connect.Response[v1.DeleteTokenResponse], error) {
+	if s.tokens == nil {
+		return nil, errTokensOff
 	}
-	return nil
+	return authReply(&v1.DeleteTokenResponse{}, s.tokens.Delete(ctx, s.caller(req.Header()), req.Msg.GetId()))
+}
+
+// Who is behind the request, the zero identity when nothing valid was sent
+func (s *AuthService) caller(h http.Header) auth.Identity {
+	id, _ := s.guard.Identify(h)
+	return id
+}
+
+// Maps the auth package's refusals onto their codes, everything else as reply does
+func authReply[R any](msg *R, err error) (*connect.Response[R], error) {
+	switch {
+	case errors.Is(err, auth.ErrForbidden):
+		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	case errors.Is(err, auth.ErrNoAccount), errors.Is(err, auth.ErrOwnAccount):
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	return reply(msg, err)
 }

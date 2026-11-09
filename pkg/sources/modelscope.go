@@ -214,24 +214,38 @@ type msFile struct {
 	Revision string `json:"Revision"`
 }
 
+// How long one repository detail answers both the resolve and the card of a page view
+const msDetailTTL = time.Minute
+
+// The repository detail, which lists the same facts the search does beside its default revision
+func msDetail(ctx context.Context, c *Client, repo string) (map[string]any, error) {
+	memo := Cached(c, "modelscope-model:"+repo, func() *Memo[map[string]any] { return &Memo[map[string]any]{TTL: msDetailTTL} })
+	return memo.Get(ctx, func(ctx context.Context) (map[string]any, error) {
+		var resp struct {
+			msEnvelope
+			Data map[string]any `json:"Data"`
+		}
+		if _, err := c.JSON(ctx, c.URL("api", "v1", "models", repo), nil, &resp); err != nil {
+			return nil, err
+		}
+		if err := resp.err(repo); err != nil {
+			return nil, err
+		}
+		return resp.Data, nil
+	})
+}
+
 // The revision the hub serves when none is named, as the repository detail reports it
 func msDefault(ctx context.Context, c *Client, repo string) (string, error) {
-	var resp struct {
-		msEnvelope
-		Data struct {
-			Revision string `json:"Revision"`
-		} `json:"Data"`
-	}
-	if _, err := c.JSON(ctx, c.URL("api", "v1", "models", repo), nil, &resp); err != nil {
+	data, err := msDetail(ctx, c, repo)
+	if err != nil {
 		return "", err
 	}
-	if err := resp.err(repo); err != nil {
-		return "", err
-	}
-	if resp.Data.Revision == "" {
+	revision, _ := data["Revision"].(string)
+	if revision == "" {
 		return "", fmt.Errorf("%s: modelscope names no default revision", repo)
 	}
-	return resp.Data.Revision, nil
+	return revision, nil
 }
 
 // Where a browser fetches one file of a repo at a revision
@@ -342,6 +356,11 @@ func (modelscopeAPI) Card(ctx context.Context, c *Client, repo, revision string)
 	if strings.HasPrefix(strings.TrimSpace(card.Markdown), "{") {
 		card.Markdown = ""
 	}
+	data, err := msDetail(ctx, c, repo)
+	if err != nil {
+		return nil, err
+	}
+	card.Hit = msHit(c, data)
 	return card, nil
 }
 

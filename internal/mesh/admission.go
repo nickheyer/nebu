@@ -3,6 +3,7 @@ package mesh
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/db"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -24,7 +26,7 @@ const (
 	settledTTL = 10 * time.Minute
 	// Admissions held at once, so a flood of knocks cannot fill memory
 	maxAdmissions = 128
-	// The token delivery waits this long, the candidate's join inside it
+	// The grant delivery waits this long, the candidate's join inside it
 	welcomeTimeout = 30 * time.Second
 	// Expiry runs this often
 	admissionSweep = 30 * time.Second
@@ -41,22 +43,25 @@ func settled(s v1.AdmissionState) bool {
 
 // This node as a beacon or an admission names it
 func (m *Manager) selfNearbyLocked() *v1.NearbyNode {
-	fingerprint, hasTLS := m.servedCertLocked()
 	n := &v1.NearbyNode{
 		Id:             m.identity.ID,
 		Name:           m.name(),
 		Address:        m.advertiseLocked(),
-		Tls:            hasTLS,
-		TlsFingerprint: fingerprint,
+		TlsFingerprint: m.identityFingerprint(),
 		Version:        m.Version,
 		Os:             runtime.GOOS,
 		Arch:           runtime.GOARCH,
 		HeardAt:        timestamppb.Now(),
 	}
 	if m.mesh != nil {
-		n.MeshHash, n.MeshName, n.MeshMembers, n.MeshTls = meshHex(m.mesh.ID), m.mesh.Name, uint32(len(m.members)+1), m.mesh.TLS
+		n.MeshHash, n.MeshName, n.MeshMembers = meshHex(m.mesh.ID), m.mesh.Name, uint32(len(m.members)+1)
 	}
 	return n
+}
+
+// The fingerprint of the identity certificate admissions run on
+func (m *Manager) identityFingerprint() string {
+	return fingerprintOf(m.ident.Certificate[0])
 }
 
 // A member's admission for a node outside, nil when none
@@ -111,8 +116,7 @@ func (m *Manager) admissionByMemberLocked(member *v1.NearbyNode) *v1.Admission {
 	return nil
 }
 
-// An admission by id, or by the id or name of the node across. Lookups hand out copies: the
-// map's records change under the lock alone.
+// A copy of the admission named by id or by the id or name of the node across
 func (m *Manager) admissionLocked(ref string) *v1.Admission {
 	if a, ok := m.admissions[ref]; ok {
 		return proto.Clone(a).(*v1.Admission)
@@ -125,7 +129,7 @@ func (m *Manager) admissionLocked(ref string) *v1.Admission {
 	return nil
 }
 
-// Admissions the page shows: pending first, then the latest change first
+// Admissions the page shows, pending first and then the latest change first
 func (m *Manager) admissionListLocked() []*v1.Admission {
 	out := make([]*v1.Admission, 0, len(m.admissions))
 	for _, a := range m.admissions {
@@ -194,6 +198,7 @@ func (m *Manager) dropAdmission(id string) {
 	m.rows.Lock()
 	m.mu.Lock()
 	delete(m.admissions, id)
+	delete(m.grants, id)
 	m.mu.Unlock()
 	if err := m.DB.DeleteAdmission(context.Background(), id); err != nil {
 		m.Log.Warn("admission delete failed", "id", id, "err", err)
@@ -213,8 +218,7 @@ func (m *Manager) reachedLocked(nodeID, address string) bool {
 	return ok && address != "" && h.rec.GetAddress() == address
 }
 
-// Marks a member's admission reached when the node's beacon arrives from the address on record;
-// true when that changed something
+// Marks a member's admission reached when the beacon comes from the address on record, true when that changed
 func (m *Manager) noteReachedLocked(nodeID, address string) bool {
 	a := m.admissionByNodeLocked(nodeID)
 	if a == nil || a.GetReached() || address == "" || a.GetNode().GetAddress() != address {
@@ -225,40 +229,37 @@ func (m *Manager) noteReachedLocked(nodeID, address string) bool {
 	return true
 }
 
-// What a node at an address serves: TLS with its certificate's fingerprint, or plain
-func probeTLS(ctx context.Context, address string) (bool, string) {
-	d := tls.Dialer{NetDialer: &net.Dialer{Timeout: dialTimeout}, Config: &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"h2"}, MinVersion: tls.VersionTLS12}}
+// The identity a node at an address answers admissions with, learned on first contact
+func (m *Manager) probeIdentity(ctx context.Context, address string) (identitySeen, error) {
+	var seen identitySeen
+	d := tls.Dialer{NetDialer: &net.Dialer{Timeout: dialTimeout}, Config: m.admissionDialConfig("", "", &seen)}
 	conn, err := d.DialContext(ctx, "tcp", address)
 	if err != nil {
-		return false, ""
+		return identitySeen{}, err
 	}
-	defer conn.Close()
-	state := conn.(*tls.Conn).ConnectionState()
-	if len(state.PeerCertificates) == 0 {
-		return false, ""
-	}
-	return true, fingerprintOf(state.PeerCertificates[0].Raw)
+	conn.Close()
+	return seen, nil
 }
 
-// A client for the admission calls, which carry no credential, to a node at an address: over the
-// TLS it advertises when that is known, else over whatever a first contact finds it serves
-func (m *Manager) reach(ctx context.Context, address string, useTLS bool, fingerprint string, known bool) (*Client, bool, string, error) {
+// The admission client to a node and its identity fingerprint, the identity learned on first contact when not known
+func (m *Manager) reach(ctx context.Context, address, nodeID, fingerprint string) (nebuv1connect.MeshPeerServiceClient, string, error) {
 	if address == "" {
-		return nil, false, "", fmt.Errorf("%w: the node has no address to reach it at, it listens on loopback alone", ErrMesh)
+		return nil, "", fmt.Errorf("%w: the node has no address to reach it at, it listens on loopback alone", ErrMesh)
 	}
-	if !known {
-		useTLS, fingerprint = probeTLS(ctx, address)
+	if fingerprint == "" {
+		seen, err := m.probeIdentity(ctx, address)
+		if err != nil {
+			return nil, "", err
+		}
+		if nodeID != "" && seen.id != nodeID {
+			return nil, "", fmt.Errorf("%s answered as %s, not %s", address, seen.id, nodeID)
+		}
+		nodeID, fingerprint = seen.id, seen.fingerprint
 	}
-	var cfg *tls.Config
-	if useTLS {
-		m.mu.Lock()
-		cfg = m.dialTLSLocked(fingerprint)
-		m.mu.Unlock()
-	}
-	return m.anonymous(address, cfg, fingerprint), useTLS, fingerprint, nil
+	return m.admissionClient(address, nodeID, fingerprint), fingerprint, nil
 }
 
-// A node to reach for admission: one heard by beacon, by id or name, or one at an address
+// A node to reach for admission, heard by beacon by id or name or named by address
 func (m *Manager) targetLocked(nodeID, address string) (*v1.NearbyNode, error) {
 	if nodeID != "" {
 		if n := m.nearbyLocked(nodeID); n != nil {
@@ -286,8 +287,7 @@ func defaultPort() string {
 	return port
 }
 
-// Invites a node outside the mesh: one heard by beacon, or one at an address. The node's page
-// shows the invitation, and its acceptance admits it without anyone copying a token.
+// Invites a node heard by beacon or named by address, handing it a grant its page accepts with
 func (m *Manager) Invite(ctx context.Context, nodeID, address string) (*v1.Admission, error) {
 	m.mu.Lock()
 	if m.mesh == nil {
@@ -303,12 +303,6 @@ func (m *Manager) Invite(ctx context.Context, nodeID, address string) (*v1.Admis
 		m.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s is a member already", ErrMesh, target.GetName())
 	}
-	// An invite lets a forgotten node back
-	if target.GetId() != "" && m.forgottenLocked(target.GetId()) {
-		m.mu.Unlock()
-		m.readmit(target.GetId())
-		m.mu.Lock()
-	}
 	own := meshHex(m.mesh.ID)
 	if target.GetMeshHash() != "" && target.GetMeshHash() != own {
 		m.mu.Unlock()
@@ -318,12 +312,12 @@ func (m *Manager) Invite(ctx context.Context, nodeID, address string) (*v1.Admis
 	if a == nil {
 		a = m.admissionByAddressLocked(target.GetAddress())
 	}
-	req := &v1.OfferRequest{Member: m.selfNearbyLocked(), MeshHash: own, MeshName: m.mesh.Name, MeshMembers: uint32(len(m.members) + 1), MeshTls: m.mesh.TLS}
+	req := &v1.OfferRequest{Member: m.selfNearbyLocked(), MeshHash: own, MeshName: m.mesh.Name, MeshMembers: uint32(len(m.members) + 1)}
 	by := req.GetMember().GetName()
 	m.mu.Unlock()
 	if a == nil {
 		a = newAdmission(v1.AdmissionSide_ADMISSION_SIDE_MEMBER)
-		a.MeshHash, a.MeshName, a.MeshMembers, a.MeshTls = own, req.GetMeshName(), req.GetMeshMembers(), req.GetMeshTls()
+		a.MeshHash, a.MeshName, a.MeshMembers = own, req.GetMeshName(), req.GetMeshMembers()
 	}
 	a.Node, a.By = target, by
 	fail := func(err error) (*v1.Admission, error) {
@@ -331,13 +325,18 @@ func (m *Manager) Invite(ctx context.Context, nodeID, address string) (*v1.Admis
 		m.saveAdmission(a)
 		return nil, fmt.Errorf("%w: %s", ErrMesh, a.GetDetail())
 	}
-	cctx, cancel := context.WithTimeout(ctx, callTimeout)
-	defer cancel()
-	cl, useTLS, fingerprint, err := m.reach(cctx, target.GetAddress(), target.GetTls(), target.GetTlsFingerprint(), target.GetId() != "")
+	grant, _, err := m.Token(ctx, AdmissionTTL)
 	if err != nil {
 		return fail(err)
 	}
-	resp, err := cl.Mesh.Offer(cctx, connect.NewRequest(req))
+	req.Grant = grant
+	cctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	cl, fingerprint, err := m.reach(cctx, target.GetAddress(), target.GetId(), target.GetTlsFingerprint())
+	if err != nil {
+		return fail(err)
+	}
+	resp, err := cl.Offer(cctx, connect.NewRequest(req))
 	if err != nil {
 		return fail(err)
 	}
@@ -358,12 +357,12 @@ func (m *Manager) Invite(ctx context.Context, nodeID, address string) (*v1.Admis
 		}
 		return nil, fmt.Errorf("%w: %s is a member already", ErrMesh, node.GetName())
 	}
-	// A record for the node may exist under another id when it was reached by address.
+	// A record for the node may exist under another id when it was reached by address
 	if have := m.admissionByNodeLocked(node.GetId()); have != nil && have.GetId() != a.GetId() {
 		delete(m.admissions, a.GetId())
 		a = have
 	}
-	node.Tls, node.TlsFingerprint = useTLS, fingerprint
+	node.TlsFingerprint = fingerprint
 	if node.GetAddress() == "" {
 		node.Address = target.GetAddress()
 	}
@@ -392,12 +391,17 @@ func describe(n *v1.NearbyNode) string {
 	return n.GetAddress()
 }
 
-// Takes an invitation from a member of a mesh nearby. The page shows it; accepting it asks the
-// mesh, and the member that invited admits without a further decision.
-func (m *Manager) Offer(ctx context.Context, req *v1.OfferRequest) (*v1.OfferResponse, error) {
+// Takes an invitation and its grant from a member nearby, which the page accepts by joining
+func (m *Manager) offer(ctx context.Context, c caller, req *v1.OfferRequest) (*v1.OfferResponse, error) {
 	member := req.GetMember()
-	if member.GetId() == "" || req.GetMeshHash() == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%w: an invitation names the member and its mesh", ErrMesh))
+	if member.GetId() == "" || req.GetMeshHash() == "" || req.GetGrant() == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%w: an invitation names the member, its mesh and a grant", ErrMesh))
+	}
+	if member.GetId() != c.id {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: the invitation names %s but came from %s", ErrMesh, member.GetId(), c.id))
+	}
+	if g, err := decodeGrant(req.GetGrant()); err != nil || g.MeshHash != req.GetMeshHash() {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%w: the invitation's grant is not for the mesh it names", ErrMesh))
 	}
 	if member.GetId() == m.identity.ID {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%w: a node cannot invite itself", ErrMesh))
@@ -426,17 +430,20 @@ func (m *Manager) Offer(ctx context.Context, req *v1.OfferRequest) (*v1.OfferRes
 	if a == nil {
 		a = newAdmission(v1.AdmissionSide_ADMISSION_SIDE_CANDIDATE)
 	}
-	member.Member = false
-	a.Node, a.MeshHash, a.MeshName, a.MeshMembers, a.MeshTls = member, req.GetMeshHash(), req.GetMeshName(), req.GetMeshMembers(), req.GetMeshTls()
+	member.Member, member.TlsFingerprint = false, fingerprintOf(c.cert.Raw)
+	a.Node, a.MeshHash, a.MeshName, a.MeshMembers = member, req.GetMeshHash(), req.GetMeshName(), req.GetMeshMembers()
 	a.Invited, a.By, a.Detail, a.Reached = true, member.GetName(), "", reached
 	a.ExpiresAt = timestamppb.New(time.Now().Add(AdmissionTTL))
 	if settled(a.GetState()) {
 		a.State = v1.AdmissionState_ADMISSION_STATE_PENDING
 	}
 	out := m.saveAdmission(a)
+	if err := m.holdGrant(out.GetId(), req.GetGrant()); err != nil {
+		return nil, err
+	}
 	m.Log.Info("mesh invitation received", "mesh", req.GetMeshName(), "from", member.GetName(), "address", member.GetAddress())
 	if out.GetAsked() && out.GetState() == v1.AdmissionState_ADMISSION_STATE_PENDING {
-		// The admin here asked before the invitation came: answer it now.
+		// The admin here asked before the invitation came, so it is answered now
 		if !m.spawn(func() {
 			if _, err := m.Ask(m.base, out.GetMeshHash(), "", ""); err != nil {
 				m.Log.Warn("mesh invitation could not be answered", "mesh", req.GetMeshName(), "err", err)
@@ -449,11 +456,11 @@ func (m *Manager) Offer(ctx context.Context, req *v1.OfferRequest) (*v1.OfferRes
 	return &v1.OfferResponse{State: out.GetState(), Node: self}, nil
 }
 
-// Asks to join a mesh nearby, or accepts its invitation: through the member that invited, a member
-// named by id or name, or the member heard most recently; or through a member at an address on a
-// network that passes no beacons. A member's page shows the request; its admission delivers the
-// token here and this node joins.
+// Accepts an invitation by joining with its grant, or asks a member to join and waits for its admission, the listener bound for the grant to arrive on
 func (m *Manager) Ask(ctx context.Context, meshHash, nodeID, address string) (*v1.Admission, error) {
+	if err := m.listen(); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	if m.mesh != nil {
 		name := m.mesh.Name
@@ -506,14 +513,17 @@ func (m *Manager) Ask(ctx context.Context, meshHash, nodeID, address string) (*v
 	if a == nil {
 		a = newAdmission(v1.AdmissionSide_ADMISSION_SIDE_CANDIDATE)
 	}
-	// The record says asked before the knock goes out, so the token that answers it is taken.
+	// The record says asked before the knock goes out, so the grant that answers it is taken
 	a.Node, a.Asked, a.Detail = target, true, ""
-	a.MeshHash, a.MeshName, a.MeshMembers, a.MeshTls = target.GetMeshHash(), target.GetMeshName(), target.GetMeshMembers(), target.GetMeshTls()
+	a.MeshHash, a.MeshName, a.MeshMembers = target.GetMeshHash(), target.GetMeshName(), target.GetMeshMembers()
 	a.ExpiresAt = timestamppb.New(time.Now().Add(AdmissionTTL))
 	if settled(a.GetState()) {
 		a.State = v1.AdmissionState_ADMISSION_STATE_PENDING
 	}
 	m.saveAdmission(a)
+	if grant := m.heldGrant(a.GetId()); grant != "" {
+		return m.acceptWith(ctx, a, grant)
+	}
 	fail := func(err error) (*v1.Admission, error) {
 		a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_FAILED, fmt.Sprintf("the request did not reach %s: %v", describe(target), err)
 		m.saveAdmission(a)
@@ -521,11 +531,11 @@ func (m *Manager) Ask(ctx context.Context, meshHash, nodeID, address string) (*v
 	}
 	cctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
-	cl, useTLS, fingerprint, err := m.reach(cctx, target.GetAddress(), target.GetTls(), target.GetTlsFingerprint(), target.GetId() != "")
+	cl, fingerprint, err := m.reach(cctx, target.GetAddress(), target.GetId(), target.GetTlsFingerprint())
 	if err != nil {
 		return fail(err)
 	}
-	resp, err := cl.Mesh.Knock(cctx, connect.NewRequest(&v1.KnockRequest{Node: self, MeshHash: target.GetMeshHash(), Invited: a.GetInvited()}))
+	resp, err := cl.Knock(cctx, connect.NewRequest(&v1.KnockRequest{Node: self, MeshHash: target.GetMeshHash()}))
 	if err != nil {
 		return fail(err)
 	}
@@ -545,16 +555,16 @@ func (m *Manager) Ask(ctx context.Context, meshHash, nodeID, address string) (*v
 		have.Asked = true
 		a = have
 	}
-	member.Tls, member.TlsFingerprint, member.Member = useTLS, fingerprint, false
+	member.TlsFingerprint, member.Member = fingerprint, false
 	if member.GetAddress() == "" {
 		member.Address = target.GetAddress()
 	}
 	m.mu.Unlock()
 	a.Node, a.Reached = member, true
-	a.MeshHash, a.MeshName, a.MeshMembers, a.MeshTls = member.GetMeshHash(), member.GetMeshName(), member.GetMeshMembers(), member.GetMeshTls()
+	a.MeshHash, a.MeshName, a.MeshMembers = member.GetMeshHash(), member.GetMeshName(), member.GetMeshMembers()
 	switch resp.Msg.GetState() {
 	case v1.AdmissionState_ADMISSION_STATE_ADMITTED, v1.AdmissionState_ADMISSION_STATE_JOINED:
-		// The token follows on its own call; the record keeps waiting for it unless it came already.
+		// The grant follows on its own call, the record waiting for it unless it came already
 		if a.GetState() != v1.AdmissionState_ADMISSION_STATE_JOINED {
 			a.State = v1.AdmissionState_ADMISSION_STATE_ADMITTED
 		}
@@ -567,12 +577,14 @@ func (m *Manager) Ask(ctx context.Context, meshHash, nodeID, address string) (*v
 	return m.saveAdmission(a), nil
 }
 
-// Takes a knock from a node outside: a request to join, an answer to an invitation, or a refusal
-// of one. An invited node is admitted at once; any other waits for a member's decision.
-func (m *Manager) Knock(ctx context.Context, req *v1.KnockRequest) (*v1.KnockResponse, error) {
+// Takes a request to join or a declined invitation from a node outside, admitting an invited one at once
+func (m *Manager) knock(ctx context.Context, c caller, req *v1.KnockRequest) (*v1.KnockResponse, error) {
 	node := req.GetNode()
 	if node.GetId() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%w: a knock names the node knocking", ErrMesh))
+	}
+	if node.GetId() != c.id {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: the knock names %s but came from %s", ErrMesh, node.GetId(), c.id))
 	}
 	if node.GetId() == m.identity.ID {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%w: a node cannot knock on itself", ErrMesh))
@@ -609,28 +621,28 @@ func (m *Manager) Knock(ctx context.Context, req *v1.KnockRequest) (*v1.KnockRes
 	if h, ok := m.nearby[node.GetId()]; ok {
 		node.From = h.rec.GetFrom()
 	}
-	meshName, members, meshTLS := m.mesh.Name, uint32(len(m.members)+1), m.mesh.TLS
+	meshName, members := m.mesh.Name, uint32(len(m.members)+1)
 	m.mu.Unlock()
 	if a == nil {
 		a = newAdmission(v1.AdmissionSide_ADMISSION_SIDE_MEMBER)
 	}
-	node.Member = false
+	node.Member, node.TlsFingerprint = false, fingerprintOf(c.cert.Raw)
 	a.Node, a.Asked, a.Detail, a.Reached = node, true, "", reached
-	a.MeshHash, a.MeshName, a.MeshMembers, a.MeshTls = own, meshName, members, meshTLS
+	a.MeshHash, a.MeshName, a.MeshMembers = own, meshName, members
 	a.ExpiresAt = timestamppb.New(time.Now().Add(AdmissionTTL))
 	if settled(a.GetState()) {
 		a.State = v1.AdmissionState_ADMISSION_STATE_PENDING
 	}
 	if a.GetInvited() && a.GetState() == v1.AdmissionState_ADMISSION_STATE_PENDING {
-		// The invitation stands as the decision.
+		// The invitation stands as the decision
 		a.State = v1.AdmissionState_ADMISSION_STATE_ADMITTED
 		out := m.saveAdmission(a)
 		if !m.spawn(func() {
 			if err := m.deliver(m.base, a); err != nil {
-				m.Log.Warn("mesh token delivery failed", "node", node.GetName(), "err", err)
+				m.Log.Warn("mesh grant delivery failed", "node", node.GetName(), "err", err)
 			}
 		}) {
-			a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_FAILED, "this node shut down before the token went out"
+			a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_FAILED, "this node shut down before the grant went out"
 			m.saveAdmission(a)
 			return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("%w: %s", ErrMesh, a.GetDetail()))
 		}
@@ -642,7 +654,7 @@ func (m *Manager) Knock(ctx context.Context, req *v1.KnockRequest) (*v1.KnockRes
 	return &v1.KnockResponse{State: out.GetState(), Member: self}, nil
 }
 
-// Admits a node that asked: the join token goes to it and it joins
+// Admits a node that asked, a join grant going to it so it joins
 func (m *Manager) Admit(ctx context.Context, ref string) (*v1.Admission, error) {
 	m.mu.Lock()
 	if m.mesh == nil {
@@ -664,8 +676,6 @@ func (m *Manager) Admit(ctx context.Context, ref string) (*v1.Admission, error) 
 	}
 	a.State, a.By, a.Detail = v1.AdmissionState_ADMISSION_STATE_ADMITTED, by, ""
 	m.saveAdmission(a)
-	// Admitting a node that asked lets a forgotten one back
-	m.readmit(a.GetNode().GetId())
 	if err := m.deliver(ctx, a); err != nil {
 		return nil, err
 	}
@@ -675,15 +685,15 @@ func (m *Manager) Admit(ctx context.Context, ref string) (*v1.Admission, error) 
 	return out, nil
 }
 
-// Hands an admitted node the join token and records what came of it
+// Hands an admitted node a join grant and confirms the join by the certificate it answers with
 func (m *Manager) deliver(ctx context.Context, a *v1.Admission) error {
 	node := a.GetNode()
 	fail := func(err error) error {
-		a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_FAILED, fmt.Sprintf("the token did not reach %s: %v", describe(node), err)
+		a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_FAILED, fmt.Sprintf("the grant did not reach %s: %v", describe(node), err)
 		m.saveAdmission(a)
 		return fmt.Errorf("%w: %s", ErrMesh, a.GetDetail())
 	}
-	token, err := m.Token()
+	grant, _, err := m.Token(ctx, welcomeTimeout+time.Minute)
 	if err != nil {
 		return fail(err)
 	}
@@ -692,39 +702,67 @@ func (m *Manager) deliver(ctx context.Context, a *v1.Admission) error {
 	m.mu.Unlock()
 	cctx, cancel := context.WithTimeout(ctx, welcomeTimeout)
 	defer cancel()
-	cl, _, _, err := m.reach(cctx, node.GetAddress(), node.GetTls(), node.GetTlsFingerprint(), true)
+	cl, _, err := m.reach(cctx, node.GetAddress(), node.GetId(), node.GetTlsFingerprint())
 	if err != nil {
 		return fail(err)
 	}
-	resp, err := cl.Mesh.Welcome(cctx, connect.NewRequest(&v1.WelcomeRequest{Member: self, MeshHash: a.GetMeshHash(), Token: token}))
+	resp, err := cl.Welcome(cctx, connect.NewRequest(&v1.WelcomeRequest{Member: self, MeshHash: a.GetMeshHash(), Grant: grant}))
 	if err != nil {
 		return fail(err)
 	}
-	if resp.Msg.GetNodeId() != "" && resp.Msg.GetNodeId() != node.GetId() {
+	if resp.Msg.GetNodeId() != node.GetId() {
 		return fail(fmt.Errorf("%s answered as another node", node.GetAddress()))
 	}
 	a.Reached = true
-	if resp.Msg.GetJoined() {
-		a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_JOINED, ""
-		m.Log.Info("mesh member admitted from the page", "node", node.GetId(), "name", node.GetName())
-	} else {
+	if !resp.Msg.GetJoined() {
 		a.State = v1.AdmissionState_ADMISSION_STATE_ADMITTED
+		m.saveAdmission(a)
+		return nil
 	}
+	if err := m.confirmJoined(resp.Msg.GetCertificate(), node.GetId()); err != nil {
+		return fail(err)
+	}
+	a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_JOINED, ""
+	m.Log.Info("mesh member admitted from the page", "node", node.GetId(), "name", node.GetName())
 	m.saveAdmission(a)
 	return nil
 }
 
-// Takes the join token from a member that admitted this node, or its refusal, and joins
-func (m *Manager) Welcome(ctx context.Context, req *v1.WelcomeRequest) (*v1.WelcomeResponse, error) {
+// Proves a node joined by the certificate it holds, signed by this mesh's authority and naming the node
+func (m *Manager) confirmJoined(der []byte, nodeID string) error {
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return fmt.Errorf("it answered joined without a readable certificate: %v", err)
+	}
+	creds := m.currentCreds()
+	if creds == nil {
+		return ErrNoMesh
+	}
+	id, err := verifyChain([]*x509.Certificate{cert}, creds.pool, x509.ExtKeyUsageClientAuth, time.Now())
+	if err != nil {
+		return err
+	}
+	if id != nodeID {
+		return fmt.Errorf("its certificate names %s", id)
+	}
+	return nil
+}
+
+// Joins with the grant an admitting member hands over, answering with the signed certificate, or takes its refusal
+func (m *Manager) welcome(ctx context.Context, c caller, req *v1.WelcomeRequest) (*v1.WelcomeResponse, error) {
 	member := req.GetMember()
 	if member.GetId() == "" || req.GetMeshHash() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("%w: a welcome names the member and its mesh", ErrMesh))
 	}
+	if member.GetId() != c.id {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: the welcome names %s but came from %s", ErrMesh, member.GetId(), c.id))
+	}
 	m.mu.Lock()
 	if m.mesh != nil {
 		if meshHex(m.mesh.ID) == req.GetMeshHash() {
+			der := m.creds.leaf.Raw
 			m.mu.Unlock()
-			return &v1.WelcomeResponse{Joined: true, NodeId: m.identity.ID}, nil
+			return &v1.WelcomeResponse{Joined: true, NodeId: m.identity.ID, Certificate: der}, nil
 		}
 		name := m.mesh.Name
 		m.mu.Unlock()
@@ -752,25 +790,52 @@ func (m *Manager) Welcome(ctx context.Context, req *v1.WelcomeRequest) (*v1.Welc
 		m.Log.Info("mesh join denied", "mesh", member.GetMeshName(), "by", member.GetName())
 		return &v1.WelcomeResponse{NodeId: m.identity.ID}, nil
 	}
-	t, err := decodeToken(req.GetToken())
+	g, err := decodeGrant(req.GetGrant())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	if meshHex(t.ID) != req.GetMeshHash() || a.GetMeshHash() != "" && a.GetMeshHash() != req.GetMeshHash() {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: the token names another mesh than the one this node asked to join", ErrMesh))
+	if g.MeshHash != req.GetMeshHash() || a.GetMeshHash() != "" && a.GetMeshHash() != req.GetMeshHash() {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("%w: the grant names another mesh than the one this node asked to join", ErrMesh))
 	}
-	a.MeshHash, a.MeshName, a.By = req.GetMeshHash(), t.Name, member.GetName()
+	a.MeshHash, a.By = req.GetMeshHash(), member.GetName()
 	a.State = v1.AdmissionState_ADMISSION_STATE_ADMITTED
 	m.saveAdmission(a)
-	_, _, warnings, err := m.Join(ctx, req.GetToken())
+	if _, err := m.acceptWith(ctx, a, req.GetGrant()); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	der := m.creds.leaf.Raw
+	m.mu.Unlock()
+	return &v1.WelcomeResponse{Joined: true, NodeId: m.identity.ID, Certificate: der}, nil
+}
+
+// Joins with a grant an admission holds, recording the join or why it failed
+func (m *Manager) acceptWith(ctx context.Context, a *v1.Admission, grant string) (*v1.Admission, error) {
+	mesh, _, err := m.Join(ctx, grant)
 	if err != nil {
-		a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_FAILED, fmt.Sprintf("the join through %s failed: %v", member.GetName(), err)
+		a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_FAILED, fmt.Sprintf("the join through %s failed: %v", describe(a.GetNode()), err)
 		m.saveAdmission(a)
 		return nil, err
 	}
-	a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_JOINED, strings.Join(warnings, ". ")
-	m.saveAdmission(a)
-	return &v1.WelcomeResponse{Joined: true, NodeId: m.identity.ID}, nil
+	a.State, a.Detail, a.MeshName = v1.AdmissionState_ADMISSION_STATE_JOINED, "", mesh.GetName()
+	return m.saveAdmission(a), nil
+}
+
+// Keeps the grant an invitation carried with its admission
+func (m *Manager) holdGrant(id, grant string) error {
+	m.rows.Lock()
+	defer m.rows.Unlock()
+	m.mu.Lock()
+	m.grants[id] = grant
+	m.mu.Unlock()
+	return m.DB.SetAdmissionGrant(context.Background(), id, grant)
+}
+
+// The grant an admission holds, empty when none
+func (m *Manager) heldGrant(id string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.grants[id]
 }
 
 // Denies a node that asked, or declines an invitation, and tells the other side
@@ -791,17 +856,17 @@ func (m *Manager) Refuse(ctx context.Context, ref string) (*v1.Admission, error)
 	case v1.AdmissionSide_ADMISSION_SIDE_MEMBER:
 		a.State, a.By, a.Detail = v1.AdmissionState_ADMISSION_STATE_DENIED, self.GetName(), "denied by "+self.GetName()
 		m.saveAdmission(a)
-		cl, _, _, err := m.reach(cctx, node.GetAddress(), node.GetTls(), node.GetTlsFingerprint(), true)
+		cl, _, err := m.reach(cctx, node.GetAddress(), node.GetId(), node.GetTlsFingerprint())
 		if err == nil {
-			_, err = cl.Mesh.Welcome(cctx, connect.NewRequest(&v1.WelcomeRequest{Member: self, MeshHash: a.GetMeshHash(), Denied: true, Detail: a.GetDetail()}))
+			_, err = cl.Welcome(cctx, connect.NewRequest(&v1.WelcomeRequest{Member: self, MeshHash: a.GetMeshHash(), Denied: true, Detail: a.GetDetail()}))
 		}
 		told = err
 	default:
 		a.State, a.Detail = v1.AdmissionState_ADMISSION_STATE_DECLINED, "declined here"
 		m.saveAdmission(a)
-		cl, _, _, err := m.reach(cctx, node.GetAddress(), node.GetTls(), node.GetTlsFingerprint(), true)
+		cl, _, err := m.reach(cctx, node.GetAddress(), node.GetId(), node.GetTlsFingerprint())
 		if err == nil {
-			_, err = cl.Mesh.Knock(cctx, connect.NewRequest(&v1.KnockRequest{Node: self, MeshHash: a.GetMeshHash(), Declined: true}))
+			_, err = cl.Knock(cctx, connect.NewRequest(&v1.KnockRequest{Node: self, MeshHash: a.GetMeshHash(), Declined: true}))
 		}
 		told = err
 	}
@@ -811,8 +876,7 @@ func (m *Manager) Refuse(ctx context.Context, ref string) (*v1.Admission, error)
 	return m.saveAdmission(a), nil
 }
 
-// Clears a settled admission from the page. A member's copy is kept as dismissed so the other
-// members clear theirs on the next sync; a candidate's is dropped.
+// Clears a settled admission, a member's copy kept as dismissed so others clear theirs and a candidate's dropped
 func (m *Manager) Dismiss(ctx context.Context, ref string) error {
 	m.mu.Lock()
 	a := m.admissionLocked(ref)
@@ -843,9 +907,7 @@ func (m *Manager) admissionsForSyncLocked() []*v1.Admission {
 	return out
 }
 
-// Takes the admissions another member holds. One record per node: the copy changed last wins,
-// and the invited and asked flags hold once set anywhere, so any member's page shows every
-// request and any member may decide it.
+// Takes another member's admissions, one record per node, the latest copy winning and set flags holding
 func (m *Manager) mergeAdmissions(list []*v1.Admission) {
 	if len(list) == 0 {
 		return
@@ -875,7 +937,7 @@ func (m *Manager) mergeAdmissions(list []*v1.Admission) {
 			m.admissions[rec.GetId()] = rec
 			changed = append(changed, proto.Clone(rec).(*v1.Admission))
 		case have.GetId() != in.GetId() && in.GetCreatedAt().AsTime().Before(have.GetCreatedAt().AsTime()):
-			// Two members opened a record for the same node before syncing: the older id stays.
+			// Two members opened a record for the same node before syncing, so the older id stays
 			rec := proto.Clone(in).(*v1.Admission)
 			rec.Invited, rec.Asked = rec.GetInvited() || have.GetInvited(), rec.GetAsked() || have.GetAsked()
 			if have.GetUpdatedAt().AsTime().After(rec.GetUpdatedAt().AsTime()) {
@@ -929,8 +991,7 @@ func (m *Manager) markJoined(nodeID string) {
 	m.saveAdmission(a)
 }
 
-// Settles the candidate's records once this node joined a mesh: the one for that mesh is joined,
-// the rest are moot
+// Marks the candidate record for the joined mesh joined and drops the records for every other mesh
 func (m *Manager) settleAfterJoin(meshID string) {
 	hash := meshHex(meshID)
 	m.mu.Lock()
@@ -961,6 +1022,7 @@ func (m *Manager) clearAdmissions() {
 	m.rows.Lock()
 	m.mu.Lock()
 	m.admissions = map[string]*v1.Admission{}
+	m.grants = map[string]string{}
 	m.mu.Unlock()
 	if err := m.DB.DeleteAdmissions(context.Background()); err != nil {
 		m.Log.Warn("admissions delete failed", "err", err)

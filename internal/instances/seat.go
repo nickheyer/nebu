@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/nickheyer/nebu/internal/db"
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/launch"
@@ -17,7 +18,6 @@ import (
 	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/store"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -28,10 +28,8 @@ const (
 	processSettle = 3 * time.Second
 )
 
-// Resolves a seat launch: the runtime the conductor named, its install, the role, the files the
-// role reads, the parameters, and the devices the plan gave the seat. The conductor planned the
-// seat's memory, so no plan is made here.
-func (m *Manager) prepareSeat(ctx context.Context, req *v1.RunRequest) (*prepared, error) {
+// Resolves a seat launch from the runtime the conductor named, its install, role, files, params and planned devices
+func (m *Manager) prepareSeat(ctx context.Context, req *v1.RunRequest, self string) (*prepared, error) {
 	req = proto.Clone(req).(*v1.RunRequest)
 	seat := req.GetSeat()
 	if req.GetRuntimeId() == "" {
@@ -39,6 +37,9 @@ func (m *Manager) prepareSeat(ctx context.Context, req *v1.RunRequest) (*prepare
 	}
 	if seat.GetFormationId() == "" || seat.GetRole() == "" {
 		return nil, fmt.Errorf("%w: a seat block names its formation and role", runtimes.ErrParam)
+	}
+	if req.GetSnapshot() {
+		return nil, fmt.Errorf("%w: a seat follows its formation, snapshots are taken of solo runs", runtimes.ErrParam)
 	}
 	rt, err := m.Runtimes.Get(req.GetRuntimeId())
 	if err != nil {
@@ -48,12 +49,7 @@ func (m *Manager) prepareSeat(ctx context.Context, req *v1.RunRequest) (*prepare
 	if err != nil {
 		return nil, err
 	}
-	var install *v1.Install
-	if req.GetInstallId() != "" {
-		install, err = m.Installs.Get(ctx, req.GetInstallId())
-	} else {
-		install, err = m.Installs.Default(ctx, rt.ID())
-	}
+	install, err := m.pinInstall(ctx, req, rt)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +58,7 @@ func (m *Manager) prepareSeat(ctx context.Context, req *v1.RunRequest) (*prepare
 		name = fmt.Sprintf("%s/%s%d", seat.GetName(), role.Name, seat.GetRank())
 		req.Name = name
 	}
-	if m.conflict(name, "") {
+	if m.conflict(name, "", self) {
 		return nil, fmt.Errorf("%w: instance %q is already running", runtimes.ErrParam, name)
 	}
 	profile, err := m.Host.Profile(ctx, true)
@@ -150,9 +146,7 @@ func poolByID(profile *v1.HostProfile, id string) *v1.MemoryPool {
 	return nil
 }
 
-// The devices a seat pins on this node: the bare ids the plan lists, since an id qualified by a
-// node names a device on another node, which the runtime renders from the seat block as a whole.
-// Every device when the plan lists none
+// The bare devices the plan lists on this node, ids qualified by another node left to the runtime
 func seatDevices(profile *v1.HostProfile, ids []string) []*v1.Device {
 	if len(ids) == 0 {
 		return nil
@@ -181,30 +175,6 @@ func hostOf(address string) string {
 	return strings.Trim(address, "[]")
 }
 
-// A free port on the given host: the lowest free one in the mesh port range when one is set,
-// any free one otherwise
-func (m *Manager) freePortOn(host string) (int, error) {
-	if m.MeshPorts != nil {
-		if from, to, ok := m.MeshPorts(); ok {
-			for port := from; port <= to; port++ {
-				ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
-				if err != nil {
-					continue
-				}
-				ln.Close()
-				return port, nil
-			}
-			return 0, fmt.Errorf("no free port on %s in the mesh port range %d-%d", host, from, to)
-		}
-	}
-	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
-	if err != nil {
-		return 0, err
-	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port, nil
-}
-
 // The draft model's weights on this node, from the store key the seat block names
 func (m *Manager) draftPath(key string) (string, error) {
 	if key == "" {
@@ -226,207 +196,204 @@ func (m *Manager) draftPath(key string) (string, error) {
 	return stored.GetPath(), nil
 }
 
-// Renders and launches a seat: the process on loopback, a guard listener on the mesh address in
-// front of it when other seats connect, or the process on the mesh address itself when exposed
-func (m *Manager) launchSeat(ctx context.Context, p *prepared) (*v1.Instance, *v1.Task, error) {
+// Binds one guard listener per rank on reserved mesh ports when other seats connect through one
+func (m *Manager) seatGuards(in *instance, p *prepared, seat *v1.SeatSpec, ranks int) error {
+	if !(p.role.Listens || p.role.Rendezvous) || seat.GetExposed() {
+		return nil
+	}
+	if seat.GetAddress() == "" {
+		return fmt.Errorf("%w: a seat other seats connect to needs the mesh address for its guard listener", runtimes.ErrParam)
+	}
+	guardHost := hostOf(seat.GetAddress())
+	var guards []*forwarder
+	fail := func(err error) error {
+		for _, g := range guards {
+			g.Close()
+		}
+		return err
+	}
+	for rank := range ranks {
+		guardPort, err := m.reserve(in, guardHost, 1)
+		if err != nil {
+			return fail(err)
+		}
+		name := p.name
+		if ranks > 1 {
+			name = fmt.Sprintf("%s rank %d", p.name, rank)
+		}
+		m.yield(in)
+		guard, err := newForwarder(net.JoinHostPort(guardHost, strconv.Itoa(guardPort)), "", seat.GetAdmit(), p.role.Single, name, m.Log)
+		m.confirm(in)
+		if err != nil {
+			return fail(err)
+		}
+		guards = append(guards, guard)
+	}
+	seat.Port = uint32(guards[0].Port())
+	in.mu.Lock()
+	in.guards = guards
+	in.mu.Unlock()
+	return nil
+}
+
+// Renders and launches a seat on reserved ports behind a guard, or on the mesh address when exposed
+func (m *Manager) launchSeat(ctx context.Context, h *tasks.Handle, in *instance, p *prepared) error {
 	seat := proto.Clone(p.seat).(*v1.SeatSpec)
 	rt, install, name := p.rt, p.install, p.name
 	host := bindHost
-	var err error
-	var localPort int
 	if seat.GetExposed() {
 		if seat.GetAddress() == "" {
-			return nil, nil, fmt.Errorf("%w: an exposed seat needs the mesh address to bind", runtimes.ErrParam)
+			return fmt.Errorf("%w: an exposed seat needs the mesh address to bind", runtimes.ErrParam)
 		}
 		host = hostOf(seat.GetAddress())
-		if localPort, err = m.freePortOn(host); err != nil {
-			return nil, nil, err
-		}
-		seat.Port = uint32(localPort)
-	} else {
-		if localPort, err = freePort(); err != nil {
-			return nil, nil, err
-		}
-		seat.Port = uint32(localPort)
 	}
-	seat.LocalPort = uint32(localPort)
-	var guard *forwarder
-	if (p.role.Listens || p.role.Rendezvous) && !seat.GetExposed() {
-		if seat.GetAddress() == "" {
-			return nil, nil, fmt.Errorf("%w: a seat other seats connect to needs the mesh address for its guard listener", runtimes.ErrParam)
-		}
-		guardPort, err := m.freePortOn(hostOf(seat.GetAddress()))
-		if err != nil {
-			return nil, nil, err
-		}
-		guard, err = newForwarder(net.JoinHostPort(hostOf(seat.GetAddress()), strconv.Itoa(guardPort)), net.JoinHostPort(bindHost, strconv.Itoa(localPort)), seat.GetAdmit(), p.role.Single, name, m.Log)
-		if err != nil {
-			return nil, nil, err
-		}
-		seat.Port = uint32(guard.Port())
+	ranks := rt.Ranks(stringParams(p.params))
+	if err := ranksServeHTTP(rt, seat, ranks); err != nil {
+		return err
 	}
-	fail := func(err error) (*v1.Instance, *v1.Task, error) {
-		if guard != nil {
-			guard.Close()
-		}
-		return nil, nil, err
+	if err := m.seatGuards(in, p, seat, ranks); err != nil {
+		return err
 	}
 	draft, err := m.draftPath(seat.GetDraft())
 	if err != nil {
-		return fail(err)
+		return err
 	}
 	artifacts := map[string]string{}
-	var unlock func()
 	if p.stored != nil {
 		key := store.Key(p.stored.GetSourceId(), p.stored.GetRepo(), p.stored.GetGroup())
-		unlock = m.Store.Lock(key)
+		unlock := m.Store.Lock(key)
 		touched, err := m.Store.Touch(p.stored.GetSourceId(), p.stored.GetRepo(), p.stored.GetGroup())
+		unlock()
 		if err != nil {
-			unlock()
-			return fail(fmt.Errorf("%s %s is no longer stored, pull it again: %w", p.stored.GetRepo(), p.stored.GetGroup(), err))
+			return fmt.Errorf("%s %s is no longer stored, pull it again: %w", p.stored.GetRepo(), p.stored.GetGroup(), err)
 		}
 		m.Events.Publish(v1.EventKind_EVENT_KIND_MODEL, v1.EventAction_EVENT_ACTION_UPDATED, key, touched)
 		artifacts = m.artifacts(p.stored, rt)
 	}
-	if unlock != nil {
-		defer unlock()
+	// Every seat answers to the formation's name, so one route model reaches each of them
+	served := name
+	if seat.GetName() != "" {
+		served = seat.GetName()
 	}
-	input := runtimes.Launch{
-		Name:          name,
-		Params:        p.params,
-		Artifacts:     artifacts,
-		Host:          host,
-		Port:          localPort,
-		Install:       runtimes.Install{Path: install.GetPath(), Dir: install.GetDir(), Version: install.GetVersion()},
-		Devices:       seatDevices(p.profile, seat.GetDevices()),
-		Descriptor:    p.descriptor,
-		Plan:          p.plan,
-		Stored:        p.companions,
-		Model:         p.stored,
-		Seat:          seat,
-		InstallRecord: install,
-		Draft:         draft,
-	}
-	var prep *runtimes.Command
+	input := p.input()
+	input.Name, input.Artifacts, input.Host, input.Draft = served, artifacts, host, draft
 	if p.stored != nil && rt.Prepares(p.stored.GetFormatId()) {
 		if artifacts["prepared_dir"] == "" {
-			return fail(fmt.Errorf("%s needs a prepared tree for %s and the store has none", rt.ID(), p.stored.GetGroup()))
+			return fmt.Errorf("%s needs a prepared tree for %s and the store has none", rt.ID(), p.stored.GetGroup())
 		}
-		if prep, err = rt.Prepare(input); err != nil {
-			return fail(err)
+		input.Seat = seat
+		prep, err := rt.Prepare(input)
+		if err != nil {
+			return err
 		}
-		launchArtifacts := make(map[string]string, len(artifacts))
-		for k, v := range artifacts {
-			launchArtifacts[k] = v
+		if err := m.runPrepare(ctx, h, in, prep, install.GetDir(), artifacts["prepared_dir"], rt.PrepareTimeout()); err != nil {
+			return err
 		}
+		launchArtifacts := maps.Clone(artifacts)
 		launchArtifacts["weights_dir"] = artifacts["prepared_dir"]
 		input.Artifacts = launchArtifacts
 	}
-	rendered, err := rt.LaunchSeat(input)
-	if err != nil {
-		return fail(err)
-	}
-	// A helper seat such as an rpc server runs its own program, which the extra words are not for
-	if !p.role.Helper {
-		extra, err := runtimes.RenderArgs(seat.GetArgs(), runtimes.ScopeOf(input, rendered))
-		if err != nil {
-			return fail(err)
-		}
-		rendered.Args = append(rendered.Args, extra...)
-	}
 	health, err := runtimes.SeatHealth(rt, seat)
 	if err != nil {
-		return fail(err)
+		return err
 	}
-	endpoint := fmt.Sprintf("http://%s:%d", host, localPort)
-	if health.Kind != runtimes.HealthHTTP {
-		endpoint = fmt.Sprintf("tcp://%s", net.JoinHostPort(hostOf(seat.GetAddress()), strconv.Itoa(int(seat.GetPort()))))
-	}
-	rec := &v1.Instance{
-		Id:             db.NewID(),
-		Name:           name,
-		SourceId:       p.req.GetSourceId(),
-		Repo:           p.req.GetRepo(),
-		Group:          p.req.GetGroup(),
-		RuntimeId:      rt.ID(),
-		InstallId:      install.GetId(),
-		Params:         rendered.Params,
-		Command:        append([]string{rendered.Command}, rendered.Args...),
-		Endpoint:       endpoint,
-		State:          v1.InstanceState_INSTANCE_STATE_STARTING,
-		CreatedAt:      timestamppb.Now(),
-		Plan:           p.plan,
-		Request:        proto.Clone(p.req).(*v1.RunRequest),
-		DesiredRunning: true,
-		Seat:           seat,
-	}
-	rec.Request.Seat = seat
-	in := m.newInstance(rec, rt)
-	in.guard = guard
-	m.mu.Lock()
-	if m.conflictLocked(name, "") {
-		m.mu.Unlock()
-		return fail(fmt.Errorf("%w: instance %q is already running", runtimes.ErrParam, name))
-	}
-	m.list = append(m.list, in)
-	m.pruneLocked()
-	m.Events.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_CREATED, rec.GetId(), in.snapshot())
-	m.mu.Unlock()
-	prepDir := artifacts["prepared_dir"]
-	prepTimeout := rt.PrepareTimeout()
-	labels := map[string]string{"instance": rec.GetId(), "name": name, "formation": seat.GetFormationId(), "role": seat.GetRole()}
-	task := m.Tasks.Start(kindRun, "seat "+name, labels, func(ctx context.Context, h *tasks.Handle) error {
-		if prep != nil {
-			if err := m.runPrepare(ctx, h, in, prep, install.GetDir(), prepDir, prepTimeout); err != nil {
-				return err
+	in.setHealth(health)
+	span := rt.PortSpan(input)
+	var handle launch.Handle
+	for try := 1; ; try++ {
+		localPort, err := m.reserve(in, host, span)
+		if err != nil {
+			return err
+		}
+		seat.LocalPort = uint32(localPort)
+		guards := in.guardsOf()
+		if len(guards) == 0 {
+			seat.Port = uint32(localPort)
+		}
+		input.Port, input.Seat = localPort, seat
+		cmds, err := renderRanks(input, ranks, rt.LaunchSeat, func(in runtimes.Launch, cmd *runtimes.Command) error {
+			// A helper seat such as an rpc server runs its own program, which the extra words are not for
+			if p.role.Helper {
+				return nil
+			}
+			extra, err := runtimes.RenderArgs(seat.GetArgs(), runtimes.ScopeOf(in, cmd))
+			cmd.Args = append(cmd.Args, extra...)
+			return err
+		})
+		if err != nil {
+			m.release(in)
+			return err
+		}
+		mesh := make([]uint32, len(cmds))
+		for i, cmd := range cmds {
+			mesh[i] = uint32(cmd.Port)
+			if i < len(guards) {
+				guards[i].Retarget(net.JoinHostPort(bindHost, strconv.Itoa(cmd.Port)))
+				mesh[i] = uint32(guards[i].Port())
 			}
 		}
-		return m.startSeat(ctx, h, in, rendered, install)
-	})
-	in.update(func(r *v1.Instance) { r.TaskId = task.GetId() })
-	return in.snapshot(), task, nil
-}
-
-// Launches the seat's process and waits by the role's health
-func (m *Manager) startSeat(ctx context.Context, h *tasks.Handle, in *instance, rendered *runtimes.Command, install *v1.Install) error {
-	rec := in.snapshot()
-	h.Logf("command: %s", strings.Join(rec.GetCommand(), " "))
-	if g := in.guardOf(); g != nil {
-		h.Logf("guard listener %s forwards to %s:%d, admitting %s", g.Addr(), bindHost, rec.GetSeat().GetLocalPort(), strings.Join(rec.GetSeat().GetAdmit(), ", "))
-	} else if rec.GetSeat().GetExposed() {
-		h.Logf("seat exposed on %s:%d", rec.GetSeat().GetAddress(), rec.GetSeat().GetPort())
-	}
-	h.Progress(0, 0, "launching")
-	proc, err := m.Launcher.Launch(ctx, launch.Spec{Command: rendered.Command, Args: rendered.Args, Env: rendered.Env, Dir: install.GetDir(), LogPath: m.logPath(rec.GetId())})
-	if err != nil {
+		rendered := cmds[0]
+		endpoint := fmt.Sprintf("http://%s", hostPort(host, localPort))
+		if health.Kind != runtimes.HealthHTTP {
+			endpoint = fmt.Sprintf("tcp://%s", net.JoinHostPort(hostOf(seat.GetAddress()), strconv.Itoa(int(seat.GetPort()))))
+		}
+		inventory, err := rt.Inventory(input, rendered.Params)
+		if err != nil {
+			m.release(in)
+			return err
+		}
+		recorded := proto.Clone(seat).(*v1.SeatSpec)
 		in.update(func(r *v1.Instance) {
-			if Terminal(r.State) {
-				return
+			r.Params = rendered.Params
+			r.Command = auth.RedactEnv(append([]string{rendered.Command}, rendered.Args...), rendered.Env)
+			r.Endpoint, r.InstallId, r.Seat, r.Inventory = endpoint, install.GetId(), recorded, inventory
+			r.Ranks = rankRecords(cmds, host, mesh)
+			if r.Request != nil {
+				r.Request.Seat = proto.Clone(recorded).(*v1.SeatSpec)
 			}
-			r.State = v1.InstanceState_INSTANCE_STATE_FAILED
-			r.Error = err.Error()
-			r.StoppedAt = timestamppb.Now()
 		})
+		for i, g := range guards {
+			h.Logf("guard listener %s forwards to %s:%d, admitting %s", g.Addr(), bindHost, cmds[i].Port, strings.Join(seat.GetAdmit(), ", "))
+		}
+		if len(guards) == 0 && seat.GetExposed() {
+			for _, cmd := range cmds {
+				h.Logf("seat exposed on %s:%d", seat.GetAddress(), cmd.Port)
+			}
+		}
+		m.yield(in)
+		if handle, err = m.startRanks(ctx, h, in, cmds, install.GetDir()); err != nil {
+			m.release(in)
+			return err
+		}
+		err = m.waitSeatReady(ctx, h, in, handle)
+		if err == nil {
+			break
+		}
+		if cancelled(ctx, err) {
+			return errStopped
+		}
+		if exitedNow(handle) && runtimes.PortTaken(rt, span, localPort, linesOf(handle)) {
+			m.release(in)
+			if try < maxPortTries {
+				h.Logf("a port from %d was taken before %s bound it, launching again on another reservation, try %d of %d", localPort, rt.ID(), try+1, maxPortTries)
+				continue
+			}
+			return fmt.Errorf("%s on %d reservations in a row: %w", rt.PortRule().Summary, maxPortTries, err)
+		}
+		m.release(in)
+		err = m.launchError(in, err)
+		logHits(h, in)
 		return err
 	}
-	in.attach(proc)
-	var stopping bool
-	in.update(func(r *v1.Instance) {
-		r.Pid = int32(proc.Pid())
-		stopping = r.State == v1.InstanceState_INSTANCE_STATE_STOPPING
-	})
-	go m.supervise(in)
-	if stopping {
-		h.Logf("stop requested before the seat was ready")
-		proc.Stop(in.grace())
-		return errStopped
-	}
-	if err := m.waitSeatReady(ctx, h, in, proc); err != nil {
-		return err
-	}
-	proc.Sync()
-	lines := proc.Log().Tail(0)
+	m.confirm(in)
+	handle.Sync()
+	lines := handle.Log().Tail(0)
 	measurements := in.rt.Measure(lines)
+	if picked := m.chosen(h.Logf, in, lines); len(picked) > 0 {
+		if err := m.reinventory(in, p); err != nil {
+			return m.abandon(h, in, handle, err)
+		}
+	}
 	transport := in.rt.Transport(lines)
 	in.update(func(r *v1.Instance) { r.Transport = transport })
 	if transport != "" {
@@ -435,24 +402,21 @@ func (m *Manager) startSeat(ctx context.Context, h *tasks.Handle, in *instance, 
 		go m.watchTransport(in)
 	}
 	var tpl *v1.ChatTemplate
-	if role, err := runtimes.RoleOf(in.rt, rec.GetSeat()); err == nil && role.Head {
-		tpl = m.readTemplate(ctx, h.Logf, in)
+	if p.role.Head {
+		if tpl, err = m.readTemplate(ctx, h.Logf, in); err != nil {
+			return m.abandon(h, in, handle, err)
+		}
 	}
-	m.ready(h, in, measurements, tpl)
+	m.ready(h, in, p.generation, measurements, tpl)
 	return nil
 }
 
-// Waits for a seat by its role's health: an HTTP path, a hello exchange, or the process alone
+// Waits for a seat by its role's health, an HTTP path, a hello, or its process, stopping it otherwise
 func (m *Manager) waitSeatReady(ctx context.Context, h *tasks.Handle, in *instance, proc launch.Handle) error {
 	rec := in.snapshot()
-	health, err := runtimes.SeatHealth(in.rt, rec.GetSeat())
-	if err != nil {
-		return err
-	}
+	health := in.healthOf()
+	var err error
 	interval, slowAfter := health.Interval, health.SlowAfter
-	if interval <= 0 {
-		interval = time.Second
-	}
 	if slowAfter <= 0 {
 		slowAfter = 5 * time.Minute
 	}
@@ -464,9 +428,13 @@ func (m *Manager) waitSeatReady(ctx context.Context, h *tasks.Handle, in *instan
 	}
 	switch health.Kind {
 	case runtimes.HealthHTTP:
-		url := rec.GetEndpoint() + health.Path
-		h.Message("waiting for " + url)
-		err = launch.WaitHealthy(ctx, proc, url, interval, slowAfter, slow("answered "+url))
+		for _, ref := range rankRefs(rec) {
+			url := ref.endpoint + health.Path
+			h.Message("waiting for " + url)
+			if err = launch.WaitHealthy(ctx, proc, url, interval, slowAfter, slow("answered "+url)); err != nil {
+				break
+			}
+		}
 	case runtimes.HealthHello:
 		addr := net.JoinHostPort(bindHost, strconv.Itoa(int(rec.GetSeat().GetLocalPort())))
 		if rec.GetSeat().GetExposed() {
@@ -478,21 +446,14 @@ func (m *Manager) waitSeatReady(ctx context.Context, h *tasks.Handle, in *instan
 		h.Message("waiting for the process to settle")
 		err = waitProcess(ctx, proc, processSettle)
 	}
-	if err == nil {
-		return nil
-	}
-	if in.stopRequested() {
+	if err != nil && ctx.Err() != nil {
 		h.Logf("stop requested before the seat was ready")
-		proc.Stop(in.grace())
+		in.stopProcess(proc, watchExit(proc), ReasonStopRequested)
 		return errStopped
 	}
-	hits := m.fail(in, err)
-	proc.Stop(in.grace())
-	for _, hit := range hits {
-		h.Logf("triage %s: %s. %s", hit.GetId(), hit.GetSummary(), hit.GetHint())
-	}
-	if len(hits) > 0 {
-		return fmt.Errorf("%s: %s", hits[0].GetSummary(), hits[0].GetHint())
+	if err != nil && !exitedNow(proc) {
+		in.stopProcess(proc, watchExit(proc), ReasonLaunchFailed)
+		in.recordDrainCrash()
 	}
 	return err
 }
@@ -542,8 +503,11 @@ func waitProcess(ctx context.Context, proc launch.Handle, settle time.Duration) 
 func (m *Manager) watchTransport(in *instance) {
 	deadline := time.Now().Add(transportWindow)
 	for time.Now().Before(deadline) {
+		in.mu.Lock()
+		exited := in.exited
+		in.mu.Unlock()
 		select {
-		case <-in.exited:
+		case <-exited:
 			return
 		case <-time.After(transportPoll):
 		}
@@ -572,53 +536,154 @@ func (in *instance) readTransport() string {
 	return in.snapshot().GetTransport()
 }
 
-func (in *instance) guardOf() *forwarder {
+// The guard listeners of every rank, rank 0 first
+func (in *instance) guardsOf() []*forwarder {
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	return in.guard
+	return append([]*forwarder(nil), in.guards...)
 }
 
-// Binds the guard listener again for a seat adopted after a restart, on the port peers know
-func (m *Manager) restoreGuard(in *instance) {
+// Rank 0's guard listener, nil for a seat reached without one
+func (in *instance) guardOf() *forwarder {
+	if guards := in.guardsOf(); len(guards) > 0 {
+		return guards[0]
+	}
+	return nil
+}
+
+// Rebinds an adopted seat's guards on the ports its peers know, one per rank, failing when a port is gone
+func (m *Manager) restoreGuard(in *instance) error {
 	rec := in.snapshot()
 	seat := rec.GetSeat()
 	role, err := runtimes.RoleOf(in.rt, seat)
-	if err != nil || !role.Listens || seat.GetExposed() {
-		return
-	}
-	g, err := newForwarder(net.JoinHostPort(hostOf(seat.GetAddress()), strconv.Itoa(int(seat.GetPort()))), net.JoinHostPort(bindHost, strconv.Itoa(int(seat.GetLocalPort()))), seat.GetAdmit(), role.Single, rec.GetName(), m.Log)
 	if err != nil {
-		m.Log.Warn("guard listener not restored, the conductor will relaunch the seat", "name", rec.GetName(), "err", err)
-		m.fail(in, fmt.Errorf("guard listener lost across the restart: %w", err))
-		if proc := in.handle(); proc != nil {
-			proc.Stop(in.grace())
+		return err
+	}
+	if !role.Listens || seat.GetExposed() {
+		return nil
+	}
+	refs := rankRefs(rec)
+	var guards []*forwarder
+	for _, ref := range refs {
+		local := int(seat.GetLocalPort())
+		name := rec.GetName()
+		if len(refs) > 1 {
+			if local, err = endpointPort(ref.endpoint); err != nil {
+				err = fmt.Errorf("rank %d endpoint %s: %w", ref.rank, ref.endpoint, err)
+			}
+			name = fmt.Sprintf("%s rank %d", rec.GetName(), ref.rank)
 		}
-		return
+		var g *forwarder
+		if err == nil {
+			g, err = newForwarder(net.JoinHostPort(hostOf(seat.GetAddress()), strconv.Itoa(int(ref.port))), net.JoinHostPort(bindHost, strconv.Itoa(local)), seat.GetAdmit(), role.Single, name, m.Log)
+		}
+		if err != nil {
+			for _, g := range guards {
+				g.Close()
+			}
+			return fmt.Errorf("guard listener lost across the restart: %w", err)
+		}
+		guards = append(guards, g)
 	}
 	in.mu.Lock()
-	if Terminal(in.rec.GetState()) {
-		in.mu.Unlock()
-		g.Close()
-		return
-	}
-	in.guard = g
+	in.guards = guards
 	in.mu.Unlock()
+	return nil
+}
+
+// Adopts a live seat whose guard returns on its known port, then verifies it in a task by role health
+func (m *Manager) adoptSeat(ctx context.Context, in *instance, proc launch.Handle) {
+	rec := in.snapshot()
+	since := time.Now()
+	in.update(func(r *v1.Instance) {
+		r.State, r.ReadyAt = v1.InstanceState_INSTANCE_STATE_STARTING, nil
+	})
+	m.Log.Info("adopted seat, verifying it", "name", rec.GetName(), "pid", rec.GetPid(), "formation", rec.GetSeat().GetFormationId())
+	first := in.startAttempt("adopt "+rec.GetName(), func(ctx context.Context, h *tasks.Handle) error {
+		h.Logf("adopted pid %d left running by the previous daemon", rec.GetPid())
+		if err := m.restoreGuard(in); err != nil {
+			return m.abandon(h, in, proc, err)
+		}
+		role, err := runtimes.RoleOf(in.rt, rec.GetSeat())
+		if err != nil {
+			return m.abandon(h, in, proc, err)
+		}
+		if err := m.verifyAdopted(ctx, h, in, proc, since); err != nil {
+			return err
+		}
+		proc.Sync()
+		lines := proc.Log().Tail(0)
+		transport := in.rt.Transport(lines)
+		in.update(func(r *v1.Instance) { r.Transport = transport })
+		if transport != "" {
+			h.Logf("transport %s", transport)
+		}
+		var tpl *v1.ChatTemplate
+		if role.Head {
+			if tpl, err = m.readTemplate(ctx, h.Logf, in); err != nil {
+				return m.abandon(h, in, proc, err)
+			}
+		}
+		m.ready(h, in, rec.GetGeneration(), in.rt.Measure(lines), tpl)
+		return nil
+	})
+	in.startLoop(first, false)
+}
+
+// Verifies an adopted seat by its role's health, a hello to an idle stage, or the conductor's head record
+func (m *Manager) verifyAdopted(ctx context.Context, h *tasks.Handle, in *instance, proc launch.Handle, since time.Time) error {
+	rec := in.snapshot()
+	health, err := runtimes.SeatHealth(in.rt, rec.GetSeat())
+	if err != nil {
+		return m.abandon(h, in, proc, err)
+	}
+	in.setHealth(health)
+	if health.Kind != runtimes.HealthHello {
+		return m.waitSeatReady(ctx, h, in, proc)
+	}
+	seat := rec.GetSeat()
+	g := in.guardOf()
+	if g != nil && g.Active() == 0 {
+		addr := net.JoinHostPort(bindHost, strconv.Itoa(int(seat.GetLocalPort())))
+		h.Message("hello to the idle stage at " + addr)
+		version, err := rpcHello(ctx, addr)
+		if err != nil {
+			return m.abandon(h, in, proc, fmt.Errorf("no hello from the adopted stage at %s: %w", addr, err))
+		}
+		h.Logf("rpc server speaks protocol %s", version)
+		return nil
+	}
+	holder := "its head holds the exposed stage"
+	if g != nil {
+		holder = fmt.Sprintf("%d connections hold the stage through its guard", g.Active())
+	}
+	h.Message("waiting for the conductor's record to confirm the head: " + holder)
+	if m.Formations == nil {
+		return m.abandon(h, in, proc, errors.New(holder+", and this node has no conductor record to confirm the head by"))
+	}
+	cctx, cancel := context.WithTimeout(ctx, adoptConfirmWindow)
+	defer cancel()
+	if err := m.Formations.HeadReady(cctx, seat.GetFormationId(), since); err != nil {
+		return m.abandon(h, in, proc, fmt.Errorf("%s, and the conductor did not confirm the head on it: %w", holder, err))
+	}
+	h.Logf("the conductor's record confirms the head is ready on this stage")
+	return nil
 }
 
 // The measurement key of bytes a seat's guard listener forwarded to it
 const GuardReceivedKey = "guard.received"
 
-// Reads a seat's guard counter and its log's transport line into its record and returns the
-// record. The record is written and its change published only when either moved, so a conductor
-// polling the seat every second while it waits costs nothing on this node's disk, bus, or mesh
-// when nothing has changed
+// Reads a seat's guard counter and transport line into its record, writing only when either moved, and returns the record
 func (m *Manager) Refresh(id string) (*v1.Instance, error) {
 	in, err := m.find(id)
 	if err != nil {
 		return nil, err
 	}
-	if g := in.guardOf(); g != nil {
-		received := g.Received()
+	if guards := in.guardsOf(); len(guards) > 0 {
+		var received uint64
+		for _, g := range guards {
+			received += g.Received()
+		}
 		in.update(func(r *v1.Instance) {
 			if measured(r, GuardReceivedKey) != received {
 				r.Measurements = mergeMeasurements(r.Measurements, []*v1.Measurement{{Key: GuardReceivedKey, Bytes: received, Line: "bytes the head streamed through the guard listener"}})
@@ -661,8 +726,7 @@ func (m *Manager) SeatsConductedBy(nodeID string) []*v1.Instance {
 	return out
 }
 
-// Every seat this node hosts or hosted as its record advertises it, a finished one with its error
-// and triage, so a failure reaches the conductor over the sync
+// Every seat this node hosts or hosted with its error and triage, for the conductor over the sync
 func (m *Manager) SeatRefs() []*v1.SeatRef {
 	var out []*v1.SeatRef
 	for _, rec := range m.List(false) {
@@ -670,7 +734,7 @@ func (m *Manager) SeatRefs() []*v1.SeatRef {
 		if s == nil {
 			continue
 		}
-		out = append(out, &v1.SeatRef{FormationId: s.GetFormationId(), InstanceId: rec.GetId(), Role: s.GetRole(), Rank: s.GetRank(), State: rec.GetState(), Transport: rec.GetTransport(), Error: rec.GetError(), Triage: rec.GetTriage()})
+		out = append(out, &v1.SeatRef{FormationId: s.GetFormationId(), InstanceId: rec.GetId(), Role: s.GetRole(), Rank: s.GetRank(), State: rec.GetState(), Transport: rec.GetTransport(), Error: rec.GetError(), Triage: rec.GetTriage(), Conditions: rec.GetConditions(), Ranks: rec.GetRanks()})
 	}
 	return out
 }

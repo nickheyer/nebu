@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "nebu/v1/model.proto";
 import "nebu/v1/task.proto";
@@ -51,16 +52,18 @@ message StoreStatus {
 
 // Download a weight group and its blueprint dependencies.
 message PullRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string revision = 3;
   string group = 4;
   // Download only this group, excluding blueprint dependencies.
   bool alone = 5;
   // Pull onto another mesh member, this node when empty
   string node_id = 6;
-  // Files of the repository to download on their own, each joining the stored group it belongs to
+  // Files of the repository to download on their own, each joining the group it belongs to, else the one stored for the repository
   repeated string paths = 7;
+  // The blueprint slot the files fill, the stored group then carrying that component's descriptor
+  string slot = 8;
 }
 
 // Returns the pull task
@@ -68,18 +71,45 @@ message PullResponse {
   Task task = 1;
 }
 
-// Lists stored models
-message ListModelsRequest {}
+// How a model listing is ordered
+enum ModelSort {
+  // Repository then group, ascending
+  MODEL_SORT_UNSPECIFIED = 0;
+  // Most recently launched first
+  MODEL_SORT_LAST_USED = 1;
+  // Most recently pulled first
+  MODEL_SORT_PULLED = 2;
+  // Largest first
+  MODEL_SORT_SIZE = 3;
+  // Repository then group, ascending
+  MODEL_SORT_NAME = 4;
+}
+
+// Lists stored models, the ones whose repository, group, format, or architecture holds every word of the query
+message ListModelsRequest {
+  string query = 1 [(buf.validate.field).string.max_len = 256];
+  ModelKind kind = 2 [(buf.validate.field).enum.defined_only = true];
+  // A runtime id, keeping the models compatible with it
+  string runtime_id = 3;
+  string format_id = 4;
+  ModelSort sort = 5 [(buf.validate.field).enum.defined_only = true];
+  // The cursor the previous page answered with, the first page when empty
+  string cursor = 6;
+  // Models per page, every remaining model when zero
+  uint32 limit = 7 [(buf.validate.field).uint32.lte = 1000];
+}
 
 // Returns stored models
 message ListModelsResponse {
   repeated StoredModel models = 1;
+  // The cursor of the page after, empty on the last
+  string next_cursor = 2;
 }
 
 // Fetches one stored model
 message GetModelRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string group = 3;
 }
 
@@ -90,8 +120,8 @@ message GetModelResponse {
 
 // Removes a stored model and optionally collects blobs
 message RemoveModelRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string group = 3;
   bool gc = 4;
 }
@@ -115,8 +145,8 @@ message GcResponse {
 
 // Rehashes stored blobs, optionally for one model
 message VerifyRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string group = 3;
 }
 
@@ -127,10 +157,10 @@ message VerifyResponse {
 
 // Copies a stored model into a mirror layout
 message ExportRequest {
-  string source_id = 1;
-  string repo = 2;
+  string source_id = 1 [(buf.validate.field).string.min_len = 1];
+  string repo = 2 [(buf.validate.field).string.min_len = 1];
   string group = 3;
-  string dir = 4;
+  string dir = 4 [(buf.validate.field).string.min_len = 1];
 }
 
 // Returns the export task

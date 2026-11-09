@@ -36,6 +36,10 @@ var (
 	ErrThrottled = errors.New("too many failed sign-ins, wait a few minutes")
 	// Refuses to remove the only account
 	ErrLastUser = errors.New("the last account cannot be removed, set auth.disabled to turn accounts off")
+	// Refuses removing the caller's own account
+	ErrOwnAccount = errors.New("sign in as another account to remove this one")
+	// Refuses setup once any account exists
+	ErrSetupDone = errors.New("an account already exists, sign in instead")
 	// Usernames may hold letters, digits, and ._@+-
 	usernameExtra = "._@+-"
 )
@@ -57,6 +61,13 @@ type attempts struct {
 	since time.Time
 }
 
+// What session checks need of one account
+type account struct {
+	// Sessions issued before the last password change are revoked
+	changed time.Time
+	role    v1.Role
+}
+
 // Local accounts, with sign-in throttling and session revocation
 type Users struct {
 	db  *db.DB
@@ -65,18 +76,17 @@ type Users struct {
 	// Where the accounts' API tokens are cached, told when an account is removed
 	tokens *Tokens
 
-	mu sync.Mutex
-	// Password change times by username. Sessions issued earlier are revoked.
-	accounts map[string]time.Time
+	mu       sync.Mutex
+	accounts map[string]account
 	failures map[string]*attempts
 }
 
 // Accounts over the store, their API tokens cached in the table given
 func NewUsers(store *db.DB, log *slog.Logger, tokens *Tokens) *Users {
-	return &Users{db: store, log: log, now: time.Now, tokens: tokens, accounts: map[string]time.Time{}, failures: map[string]*attempts{}}
+	return &Users{db: store, log: log, now: time.Now, tokens: tokens, accounts: map[string]account{}, failures: map[string]*attempts{}}
 }
 
-// Reads every account's password change time for session checks
+// Reads every account's password change time and role for session checks
 func (u *Users) Load(ctx context.Context) error {
 	rows, err := u.db.ListUsers(ctx)
 	if err != nil {
@@ -84,22 +94,22 @@ func (u *Users) Load(ctx context.Context) error {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.accounts = make(map[string]time.Time, len(rows))
+	u.accounts = make(map[string]account, len(rows))
 	for _, r := range rows {
-		u.accounts[r.User.GetUsername()] = r.User.GetUpdatedAt().AsTime()
+		u.accounts[r.User.GetUsername()] = account{changed: r.User.GetUpdatedAt().AsTime(), role: r.User.GetRole()}
 	}
 	return nil
 }
 
-// Whether a local session belongs to an account that still exists with the same password
+// Whether a local session belongs to an account that still exists with the same password and role
 func (u *Users) Valid(sess *Session) bool {
 	if sess.Provider != ProviderLocal {
 		return true
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	changed, ok := u.accounts[sess.Name]
-	return ok && !sess.Issued.Before(changed)
+	a, ok := u.accounts[sess.Name]
+	return ok && !sess.Issued.Before(a.changed) && sess.Role == a.role
 }
 
 // Number of accounts
@@ -121,42 +131,92 @@ func (u *Users) List(ctx context.Context) ([]*v1.User, error) {
 	return out, nil
 }
 
-// Adds an account
-func (u *Users) Create(ctx context.Context, username, password string) (*v1.User, error) {
-	name, err := normalize(username)
+// Creates the first account as an admin in one transaction, refusing once any account exists
+func (u *Users) Setup(ctx context.Context, username, password string) (*v1.User, error) {
+	user, hash, err := u.newUser(username, password, v1.Role_ROLE_ADMIN)
 	if err != nil {
 		return nil, err
 	}
-	hash, err := HashPassword(password)
+	if err := u.db.CreateFirstUser(ctx, user, hash); errors.Is(err, db.ErrAccountsExist) {
+		return nil, ErrSetupDone
+	} else if err != nil {
+		return nil, err
+	}
+	u.remember(user)
+	u.log.Info("first account created", "username", user.GetUsername(), "role", RoleName(user.GetRole()))
+	return user, nil
+}
+
+// Adds an account for an admin, the first always an admin and later ones in the role named
+func (u *Users) Create(ctx context.Context, caller Identity, username, password string, role v1.Role) (*v1.User, error) {
+	if !caller.Admin() {
+		return nil, fmt.Errorf("%w: only an admin adds accounts", ErrForbidden)
+	}
+	if u.Count() == 0 {
+		if role != v1.Role_ROLE_UNSPECIFIED && role != v1.Role_ROLE_ADMIN {
+			return nil, fmt.Errorf("%w: the first account is an admin, leave the role unset or choose admin", ErrUser)
+		}
+		user, err := u.Setup(ctx, username, password)
+		if !errors.Is(err, ErrSetupDone) {
+			return user, err
+		}
+	}
+	if _, known := v1.Role_name[int32(role)]; !known || role == v1.Role_ROLE_UNSPECIFIED {
+		return nil, fmt.Errorf("%w: role is required, admin, operator, or inference", ErrUser)
+	}
+	user, hash, err := u.newUser(username, password, role)
 	if err != nil {
 		return nil, err
 	}
-	id, err := RandomString(12)
-	if err != nil {
-		return nil, err
-	}
-	now := u.now().UTC()
-	user := &v1.User{Id: id, Username: name, CreatedAt: timestamppb.New(now), UpdatedAt: timestamppb.New(now)}
-	if _, err := u.db.GetUser(ctx, name); err == nil {
-		return nil, fmt.Errorf("%w: %s already exists", ErrUser, name)
+	if _, err := u.db.GetUser(ctx, user.GetUsername()); err == nil {
+		return nil, fmt.Errorf("%w: %s already exists", ErrUser, user.GetUsername())
 	} else if !db.IsNotFound(err) {
 		return nil, err
 	}
 	if err := u.db.PutUser(ctx, user, hash); err != nil {
 		return nil, err
 	}
-	u.mu.Lock()
-	u.accounts[name] = now
-	u.mu.Unlock()
-	u.log.Info("account created", "username", name)
+	u.remember(user)
+	u.log.Info("account created", "username", user.GetUsername(), "role", RoleName(role))
 	return user, nil
 }
 
-// Removes an account, revoking its sessions and the API tokens it made
-func (u *Users) Delete(ctx context.Context, username string) error {
+// Checks the name and password and builds the account row with its hash
+func (u *Users) newUser(username, password string, role v1.Role) (*v1.User, string, error) {
+	name, err := normalize(username)
+	if err != nil {
+		return nil, "", err
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return nil, "", err
+	}
+	id, err := RandomString(12)
+	if err != nil {
+		return nil, "", err
+	}
+	now := u.now().UTC()
+	return &v1.User{Id: id, Username: name, Role: role, CreatedAt: timestamppb.New(now), UpdatedAt: timestamppb.New(now)}, hash, nil
+}
+
+// Records a new account for session checks
+func (u *Users) remember(user *v1.User) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.accounts[user.GetUsername()] = account{changed: user.GetUpdatedAt().AsTime(), role: user.GetRole()}
+}
+
+// Removes an account for an admin, revoking its sessions and the API tokens it made
+func (u *Users) Delete(ctx context.Context, caller Identity, username string) error {
+	if !caller.Admin() {
+		return fmt.Errorf("%w: only an admin removes accounts", ErrForbidden)
+	}
 	name, err := normalize(username)
 	if err != nil {
 		return err
+	}
+	if caller.Provider == ProviderLocal && SameUser(caller.Name, name) {
+		return ErrOwnAccount
 	}
 	u.mu.Lock()
 	_, exists := u.accounts[name]
@@ -183,11 +243,22 @@ func (u *Users) Delete(ctx context.Context, username string) error {
 	return nil
 }
 
-// Replaces a password and revokes sessions issued before the change
-func (u *Users) SetPassword(ctx context.Context, username, password string) (*v1.User, error) {
+// Replaces a password for its owner or an admin, local callers proving their own current one, and revokes older sessions
+func (u *Users) SetPassword(ctx context.Context, caller Identity, username, current, password string) (*v1.User, error) {
 	name, err := normalize(username)
 	if err != nil {
 		return nil, err
+	}
+	own := caller.Provider == ProviderLocal && SameUser(caller.Name, name)
+	if !own && !caller.Admin() {
+		return nil, fmt.Errorf("%w: only an admin changes another account's password", ErrForbidden)
+	}
+	if caller.Provider == ProviderLocal {
+		if _, err := u.Verify(ctx, caller.Name, current); errors.Is(err, ErrCredentials) {
+			return nil, fmt.Errorf("%w: current_password must be your own current password", ErrCredentials)
+		} else if err != nil {
+			return nil, err
+		}
 	}
 	hash, err := HashPassword(password)
 	if err != nil {
@@ -202,13 +273,15 @@ func (u *Users) SetPassword(ctx context.Context, username, password string) (*v1
 		return nil, fmt.Errorf("%w: %s", ErrUnknownUser, name)
 	}
 	u.mu.Lock()
-	u.accounts[name] = now
+	a := u.accounts[name]
+	a.changed = now
+	u.accounts[name] = a
 	u.mu.Unlock()
 	row, err := u.db.GetUser(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	u.log.Info("password changed", "username", name)
+	u.log.Info("password changed", "username", name, "by", caller.Name)
 	return row.User, nil
 }
 

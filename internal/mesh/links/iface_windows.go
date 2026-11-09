@@ -24,6 +24,5 @@ func speedOf(name string) uint64 {
 	return n
 }
 
-// The RDMA transports nebu drives bind through the Linux class tree, so a link from a Windows
-// node is sockets and the class reflects that
+// No RDMA device binds on Windows since the transports nebu drives use the Linux class tree
 func rdmaOf(string) string { return "" }

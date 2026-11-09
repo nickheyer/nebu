@@ -1,0 +1,48 @@
+{{- bos_token }}
+
+{%- if messages[0]['role'] == 'system' %}
+    {%- if messages[0]['content'] is string %}
+        {%- set system_message = messages[0]['content'] %}
+    {%- else %}
+        {%- set system_message = messages[0]['content'][0]['text'] %}
+    {%- endif %}
+    {%- set loop_messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = "A user will ask you to solve a task. You should first draft your thinking process (inner monologue) until you have derived the final answer. Afterwards, write a self-contained summary of your thoughts (i.e. your summary should be succinct but contain all the critical steps you needed to reach the conclusion). You should use Markdown and Latex to format your response. Write both your thoughts and summary in the same language as the task posed by the user.\n\nYour thinking process must follow the template below:\n<think>\nYour thoughts or/and draft, like working through an exercise on scratch paper. Be as casual and as long as you want until you are confident to generate a correct answer.\n</think>\n\nHere, provide a concise summary that reflects your reasoning and presents a clear final answer to the user.\n\nProblem:" %}
+    {%- set loop_messages = messages %}
+{%- endif %}
+{{- '[SYSTEM_PROMPT]' + system_message + '[/SYSTEM_PROMPT]' }}
+{#- Edits made by Unsloth #}
+{%- for message in loop_messages %}
+    {%- if message['role'] == 'user' %}
+        {%- if message['content'] is string %}
+            {{- '[INST]' + message['content'] + '[/INST]' }}
+        {%- else %}
+            {{- '[INST]' }}
+            {%- for block in message['content'] %}
+                {%- if block['type'] == 'text' %}
+                    {{- block['text'] }}
+                {%- elif block['type'] in ['image', 'image_url'] %}
+                    {{- '[IMG]' }}
+                {%- else %}
+                    {{- raise_exception('Only text and image blocks are supported in message content!') }}
+                {%- endif %}
+            {%- endfor %}
+            {{- '[/INST]' }}
+        {%- endif %}
+    {%- elif message['role'] == 'system' %}
+        {%- if message['content'] is string %}
+            {{- '[SYSTEM_PROMPT]' + message['content'] + '[/SYSTEM_PROMPT]' }}
+        {%- else %}
+            {{- '[SYSTEM_PROMPT]' + message['content'][0]['text'] + '[/SYSTEM_PROMPT]' }}
+        {%- endif %}
+    {%- elif message['role'] == 'assistant' %}
+        {%- if message['content'] is string %}
+            {{- message['content'] + eos_token }}
+        {%- else %}
+            {{- message['content'][0]['text'] + eos_token }}
+        {%- endif %}
+    {%- else %}
+        {{- raise_exception('Only user, system and assistant roles are supported!') }}
+    {%- endif %}
+{%- endfor %}

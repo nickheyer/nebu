@@ -295,8 +295,9 @@ func (r *Registry) Status() []*v1.ToolServerStatus {
 	return out
 }
 
+// The server's state with its secrets redacted, as statuses and events carry it
 func (r *Registry) statusLocked(e *entry) *v1.ToolServerStatus {
-	st := &v1.ToolServerStatus{Server: proto.Clone(e.spec).(*v1.ToolServer), State: e.state, Error: e.err, Ref: e.spec.GetName()}
+	st := &v1.ToolServerStatus{Server: Redact(e.spec), State: e.state, Error: e.err, Ref: e.spec.GetName()}
 	if e.server != nil && e.state == v1.ToolServerState_TOOL_SERVER_STATE_READY {
 		st.Tools = Infos(e.server.Tools())
 	}

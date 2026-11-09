@@ -10,6 +10,7 @@ plugins:
       - paths=source_relative
   - remote: buf.build/bufbuild/es:v2.14.1
     out: web/nebu/src/lib/proto
+    include_imports: true
     opt:
       - target=ts
   - remote: buf.build/community/sudorandom-connect-openapi:v0.27.2

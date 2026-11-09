@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,13 +17,23 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/gateway"
+	"github.com/nickheyer/nebu/internal/pools"
+	"github.com/nickheyer/nebu/internal/tools"
+	"github.com/nickheyer/nebu/pkg/chattemplate"
+	"github.com/nickheyer/nebu/pkg/datalayer"
 	"github.com/nickheyer/nebu/pkg/events"
+	"github.com/nickheyer/nebu/pkg/flowcontrol"
+	"github.com/nickheyer/nebu/pkg/health"
+	"github.com/nickheyer/nebu/pkg/metrics"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/telemetry"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Fake Discord session with recorded calls and injected events.
+// Fake Discord session with recorded calls and injected events
 type fakeSession struct {
 	mu        sync.Mutex
 	h         handlers
@@ -223,7 +234,7 @@ func (f *fakeSession) setHistory(channelID string, msgs []*discordgo.Message) {
 	f.mu.Unlock()
 }
 
-// Fake runtime with OpenAI chat and stable-diffusion.cpp media APIs.
+// Fake runtime with OpenAI chat and stable-diffusion.cpp media APIs
 type fakeUpstream struct {
 	mu       sync.Mutex
 	requests []map[string]any
@@ -361,7 +372,90 @@ func (f *fakeUpstream) lastJob() map[string]any {
 	return newest
 }
 
-// Test manager with a temporary store and language and diffusion routes.
+// Wire protocols of the runtimes the harness publishes
+type fakeRuntimes map[string]v1.ApiFlavor
+
+func (r fakeRuntimes) API(id string) v1.ApiFlavor { return r[id] }
+func (r fakeRuntimes) Handoff(string) string      { return "" }
+
+// Media modes per instance, tool support and templates left unset
+type fakeInstances map[string][]string
+
+func (f fakeInstances) ToolSupport(string) v1.ToolSupport {
+	return v1.ToolSupport_TOOL_SUPPORT_UNSPECIFIED
+}
+func (f fakeInstances) Modes(id string) []string { return f[id] }
+func (fakeInstances) LoadAdapter(context.Context, string, string, string) error {
+	return errors.New("no adapter loads in this test")
+}
+func (fakeInstances) TokenizerFile(string) (string, error) {
+	return "", errors.New("no tokenizer files in this test")
+}
+func (f fakeInstances) Template(string) (*chattemplate.Template, error) {
+	return nil, errors.New("the harness serves no chat templates")
+}
+
+// A gateway over a real pools manager with a language route llm and a diffusion route sd, both served by upstream
+func testGateway(t *testing.T, ctx context.Context, store *db.DB, bus *events.Bus, log *slog.Logger, upstream string) (*gateway.Gateway, pools.View) {
+	t.Helper()
+	mgr, err := pools.New(ctx, pools.Options{DB: store, Events: bus, NodeID: "n1", Log: log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { mgr.Close() })
+	addr, err := datalayer.ParseAddress(strings.TrimPrefix(upstream, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []struct{ route, instance, runtime string }{{"llm", "inst-llm", "llamacpp"}, {"sd", "inst-sd", "sdcpp"}} {
+		owner := pools.OwnerRef{Kind: pools.OwnerInstance, ID: r.instance}
+		mem := pools.Membership{Model: pools.ModelKey{SourceID: "repo", Repo: r.route, Group: "q4"}, Runtime: r.runtime, Protocol: datalayer.AppProtocolHTTP, Concurrency: 8, Metrics: &v1.MetricNames{HealthPath: "/health"}}
+		if err := mgr.Publish(ctx, owner, mem, []pools.Published{{InstanceID: r.instance, NodeID: "n1", Address: addr, Ready: true}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := mgr.NameRoute(ctx, owner, r.route, pools.RouteSpec{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mgr.Store().MarkSynced()
+	tp, shutdown, err := telemetry.Setup(ctx, telemetry.Config{ServiceName: "bots-test", SampleRatio: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdown(context.Background()) })
+	mreg, err := metrics.New(prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw, err := gateway.New(gateway.Deps{
+		Pools: mgr, Resolver: mgr, Manager: mgr, Store: mgr.Store(), DB: store, Events: bus, Guard: auth.NewGuard("", nil, nil),
+		Tools: tools.New(log, bus), Runtimes: fakeRuntimes{"llamacpp": v1.ApiFlavor_API_FLAVOR_OPENAI, "sdcpp": v1.ApiFlavor_API_FLAVOR_SDCPP},
+		Instances: fakeInstances{"inst-sd": {"img_gen", "vid_gen"}}, Metrics: mreg, Telemetry: tp, Health: health.NewRegistry(), Logger: log,
+		Config: gateway.Config{
+			Policy: &v1.Policy{}, OutputTokens: 64,
+			Flow:       flowcontrol.Config{QueueCapacity: 64, QueueTimeout: 5 * time.Second, SheddableBelow: -1, Tick: 10 * time.Millisecond},
+			Saturation: flowcontrol.Thresholds{QueueDepth: 8, KVUtilization: 0.9}, Staleness: 2 * time.Second,
+			Retry: gateway.Retry{Shed: time.Second, Unavailable: time.Second}, TraceRetention: time.Hour, TraceRing: 64,
+			Version: "test", Interval: 50 * time.Millisecond,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	runCtx, stop := context.WithCancel(ctx)
+	go func() {
+		defer close(done)
+		gw.Run(runCtx)
+	}()
+	t.Cleanup(func() {
+		stop()
+		<-done
+	})
+	return gw, mgr
+}
+
+// Test manager with a temporary store and language and diffusion routes
 type harness struct {
 	m        *Manager
 	upstream *fakeUpstream
@@ -383,18 +477,11 @@ func newHarness(t *testing.T) *harness {
 	up := newFakeUpstream()
 	srv := httptest.NewServer(up.handler())
 	t.Cleanup(srv.Close)
-	table, err := gateway.OpenTable(ctx, nil, bus, log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	table.Set("llm", "inst-llm", "", srv.URL, "repo:llm", "", v1.ApiFlavor_API_FLAVOR_OPENAI, nil, nil)
-	table.SetModes("inst-sd", []string{"img_gen", "vid_gen"})
-	table.Set("sd", "inst-sd", "", srv.URL, "repo:sd", "", v1.ApiFlavor_API_FLAVOR_SDCPP, nil, nil)
-	gw := gateway.New(table, nil, nil, nil, bus, log)
-	// Shorten delays for tests.
+	gw, view := testGateway(t, ctx, store, bus, log, srv.URL)
+	// Shorten delays for tests
 	scheduleTick, videoPoll, streamEdit = 200*time.Millisecond, 50*time.Millisecond, 10*time.Millisecond
 	h := &harness{upstream: up}
-	h.m = New(ctx, store, gw, bus, log, "")
+	h.m = New(ctx, store, gw, view, bus, log, "")
 	h.m.dial = func(token string, shard, count int, intents discordgo.Intent, hs handlers) (session, error) {
 		s := newFakeSession()
 		s.h, s.shard = hs, shard
@@ -484,7 +571,7 @@ func plain(id, content string) *discordgo.Message {
 	return &discordgo.Message{ID: id, ChannelID: "c1", GuildID: "g1", Content: content, Author: &discordgo.User{ID: "u1", Username: "nick"}, Timestamp: time.Now()}
 }
 
-// Single-persona spec with short reply delays.
+// Single-persona spec with short reply delays
 func quickSpec() *v1.BotSpec {
 	return &v1.BotSpec{
 		ShardCount: 1,

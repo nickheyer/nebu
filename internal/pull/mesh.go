@@ -189,10 +189,13 @@ func (p *Puller) pullFromMesh(ctx context.Context, req *v1.PullRequest, holders 
 		case rerr == nil && d != nil:
 			plan, err := p.Inspector.Parts(ctx, src, model, g, d)
 			if err != nil {
-				return nil, err
+				notes = append(notes, fmt.Sprintf("%s %s: parts could not be planned, the group lands on its own: %v", own.stored.GetRepo(), own.stored.GetGroup(), err))
+				break
 			}
-			if err := plan.Unfilled(); err != nil {
-				return nil, err
+			for _, pick := range plan.Picks {
+				if pick.Err != nil && pick.Fill.Required {
+					notes = append(notes, fmt.Sprintf("%s (%s, required): not found, pull it separately: %v", pick.Fill.Slot, pick.Fill.Name, pick.Err))
+				}
 			}
 			for _, pick := range plan.Pulls() {
 				net := &landing{src: pick.Source, model: pick.Model, g: pick.Group, files: pick.Files, descriptor: pick.Descriptor, slot: pick.Fill.Slot}
@@ -379,7 +382,7 @@ func (p *Puller) runMesh(ctx context.Context, h *tasks.Handle, landings []*meshL
 		return fmt.Errorf("evict: %w", err)
 	}
 	defer p.Store.Hold()()
-	h.Progress(0, total, "fetching")
+	h.ProgressBytes(0, total, "fetching")
 	for _, l := range landings {
 		names := make([]string, 0, len(l.holders))
 		for _, from := range l.holders {
@@ -402,7 +405,7 @@ func (p *Puller) runMesh(ctx context.Context, h *tasks.Handle, landings []*meshL
 			return err
 		}
 	}
-	h.Progress(total, total, "done")
+	h.ProgressBytes(total, total, "done")
 	return nil
 }
 
@@ -433,7 +436,11 @@ func (p *Puller) landMesh(ctx context.Context, h *tasks.Handle, l *meshLanding) 
 			return err
 		}
 		out.Artifacts = append(out.Artifacts, &v1.StoredArtifact{Artifact: a, Digest: digest, Path: linked})
-		out.Bytes += a.GetSizeBytes()
+		n, err := p.Store.BlobSize(digest)
+		if err != nil {
+			return fmt.Errorf("%s: %w", a.GetPath(), err)
+		}
+		out.Bytes += n
 	}
 	local, _ := p.Store.ReadManifest(stored.GetSourceId(), stored.GetRepo(), stored.GetGroup())
 	switch {

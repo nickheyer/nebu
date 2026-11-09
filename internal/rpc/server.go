@@ -1,12 +1,11 @@
-// Package rpc mounts Connect handlers on an HTTP handler.
+// Package rpc mounts Connect handlers on an HTTP handler
 package rpc
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"connectrpc.com/connect"
 	"connectrpc.com/grpcreflect"
@@ -20,6 +19,7 @@ import (
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/mesh"
+	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/internal/pull"
 	"github.com/nickheyer/nebu/internal/rpc/services"
 	"github.com/nickheyer/nebu/internal/settings"
@@ -32,8 +32,10 @@ import (
 	"github.com/nickheyer/nebu/pkg/host"
 	"github.com/nickheyer/nebu/pkg/launch"
 	"github.com/nickheyer/nebu/pkg/perf"
+	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/proto/nebu/v1/nebuv1connect"
 	"github.com/nickheyer/nebu/pkg/runtimes"
+	"github.com/nickheyer/nebu/pkg/scheduling/remote"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
 )
@@ -44,7 +46,7 @@ type Deps struct {
 	Doctor   *doctor.Doctor
 	Settings *settings.Manager
 	Sources  *sources.Manager
-	// Formats in priority order for search labels and UI display.
+	// Formats in priority order for search labels and UI display
 	Formats   *formats.Registry
 	Runtimes  *runtimes.Registry
 	Inspector *inspect.Inspector
@@ -54,16 +56,20 @@ type Deps struct {
 	Installs  *installs.Manager
 	Instances *instances.Manager
 	Slots     *slots.Manager
-	Gateway   *gateway.Gateway
-	Bots      *bots.Manager
+	// Pools, routes, objectives and scheduler configurations the gateway routes over
+	Pools   *pools.Manager
+	Gateway *gateway.Gateway
+	Bots    *bots.Manager
 	// Saved web chat conversations, one store per account
 	Chats *chats.Manager
-	// Mounts /v1/ when the gateway shares the API listener.
+	// Mounts /v1/ when the gateway shares the API listener
 	GatewayShared bool
-	Events        *events.Bus
-	Snapshot      services.Snapshotter
-	Web           http.Handler
-	// Checks every call's credential: the daemon token, a user's API token, or a browser session
+	// Builds the mesh listener's handler, holding the services and paths members call each other through and nothing else
+	MeshSurface bool
+	Events      *events.Bus
+	Snapshot    services.Snapshotter
+	Web         http.Handler
+	// Checks every call's credential, the daemon token, a user's API token, or a browser session
 	Guard *auth.Guard
 	// Browser sessions, nil when auth.disabled is set
 	Sessions *auth.Sessions
@@ -73,7 +79,7 @@ type Deps struct {
 	Tokens *auth.Tokens
 	// Single sign-on, nil when auth.oidc is unset
 	SSO *sso.Service
-	// Recent daemon logs streamed to the Host page.
+	// Recent daemon logs streamed to the Host page
 	Recent *launch.Log
 	Log    *slog.Logger
 	// The mesh, the conductor, and the learned tables
@@ -88,27 +94,40 @@ type Deps struct {
 	MCP http.Handler
 }
 
-// Builds the h2c handler serving every service
-func NewHandler(d Deps) http.Handler {
-	opts := connect.WithInterceptors(logging(d.Log), &guard{d.Guard})
+// Builds the h2c handler serving every service, or on the mesh surface only what members call each other through
+func NewHandler(d Deps) (http.Handler, error) {
+	valid, err := newValidating()
+	if err != nil {
+		return nil, err
+	}
+	opts := connect.WithInterceptors(logging{log: d.Log}, d.Guard.Interceptor(), valid)
 	mux := http.NewServeMux()
+	mux.Handle(nebuv1connect.NewMeshServiceHandler(services.NewMeshService(d.Mesh, d.Formations, d.Puller, d.Tasks, d.Store, d.Perf, d.Instances, d.Guard), opts))
+	mux.Handle(nebuv1connect.NewToolServiceHandler(services.NewToolService(d.Tools, d.Mesh), opts))
+	mountMesh(mux, d.Guard, d.Store, d.CacheDir)
+	if d.MeshSurface {
+		if d.Gateway != nil {
+			d.Gateway.Mount(mux)
+			mux.Handle(remote.SchedulePath, d.Gateway.ScheduleHandler())
+		}
+		return mux, nil
+	}
 	mux.Handle(nebuv1connect.NewHostServiceHandler(services.NewHostService(d.Host, d.Doctor, d.Recent), opts))
 	mux.Handle(nebuv1connect.NewSettingsServiceHandler(services.NewSettingsService(d.Settings), opts))
 	mux.Handle(nebuv1connect.NewSourceServiceHandler(services.NewSourceService(d.Sources, d.Inspector, d.Formats, d.Runtimes), opts))
 	mux.Handle(nebuv1connect.NewRuntimeServiceHandler(services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Formats), opts))
 	mux.Handle(nebuv1connect.NewInstanceServiceHandler(services.NewInstanceService(d.Instances), opts))
 	mux.Handle(nebuv1connect.NewEstimateServiceHandler(services.NewEstimateService(d.Inspector), opts))
-	mux.Handle(nebuv1connect.NewStoreServiceHandler(services.NewStoreService(d.Store, d.Puller, d.Events, d.Formations.PullTo), opts))
+	mux.Handle(nebuv1connect.NewStoreServiceHandler(services.NewStoreService(d.Store, d.Puller, d.Events, d.Formations.PullTo, d.Runtimes), opts))
 	mux.Handle(nebuv1connect.NewTaskServiceHandler(services.NewTaskService(d.Tasks), opts))
 	mux.Handle(nebuv1connect.NewBuildServiceHandler(services.NewBuildService(d.Installs), opts))
 	mux.Handle(nebuv1connect.NewSlotServiceHandler(services.NewSlotService(d.Slots), opts))
-	mux.Handle(nebuv1connect.NewGatewayServiceHandler(services.NewGatewayService(d.Gateway, d.Instances, d.Slots), opts))
+	mux.Handle(nebuv1connect.NewGatewayServiceHandler(services.NewGatewayService(d.Gateway, d.Pools, d.Guard), opts))
+	mux.Handle(nebuv1connect.NewPoolImportServiceHandler(services.NewPoolImportService(d.Mesh, d.Events), opts))
 	mux.Handle(nebuv1connect.NewEventServiceHandler(services.NewEventService(d.Events, d.Snapshot), opts))
 	mux.Handle(nebuv1connect.NewBotServiceHandler(services.NewBotService(d.Bots), opts))
 	mux.Handle(nebuv1connect.NewAuthServiceHandler(services.NewAuthService(d.Users, d.Tokens, d.Guard), opts))
 	mux.Handle(nebuv1connect.NewChatServiceHandler(services.NewChatService(d.Chats, d.Guard), opts))
-	mux.Handle(nebuv1connect.NewMeshServiceHandler(services.NewMeshService(d.Mesh, d.Formations, d.Puller, d.Tasks, d.Store, d.Perf, d.Instances, d.Guard), opts))
-	mux.Handle(nebuv1connect.NewToolServiceHandler(services.NewToolService(d.Tools, d.Mesh), opts))
 	reflector := grpcreflect.NewStaticReflector(
 		nebuv1connect.HostServiceName,
 		nebuv1connect.SettingsServiceName,
@@ -127,23 +146,29 @@ func NewHandler(d Deps) http.Handler {
 		nebuv1connect.ChatServiceName,
 		nebuv1connect.MeshServiceName,
 		nebuv1connect.ToolServiceName,
+		nebuv1connect.PoolImportServiceName,
 	)
-	mux.Handle(grpcreflect.NewHandlerV1(reflector))
-	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))
+	reflectV1, reflectV1Handler := grpcreflect.NewHandlerV1(reflector)
+	mux.Handle(reflectV1, &credentialed{guard: d.Guard, scope: v1.Scope_SCOPE_READ, next: reflectV1Handler})
+	reflectAlpha, reflectAlphaHandler := grpcreflect.NewHandlerV1Alpha(reflector)
+	mux.Handle(reflectAlpha, &credentialed{guard: d.Guard, scope: v1.Scope_SCOPE_READ, next: reflectAlphaHandler})
 	mux.Handle(filesPath, &files{inspector: d.Inspector, auth: d.Guard, log: d.Log})
-	mountMesh(mux, d.Guard, d.Store, d.CacheDir)
 	entry := auth.Options{Sessions: d.Sessions, Users: d.Users, Log: d.Log}
 	if d.SSO != nil {
 		entry.SSO, entry.SSOHandler = d.SSO.Name(), sso.Handler(d.SSO)
 	}
 	mux.Handle(auth.BasePath, auth.Handler(entry))
 	if d.MCP != nil {
-		mux.Handle(mcpPath, &credentialed{guard: d.Guard, next: d.MCP})
+		mux.Handle(mcpPath, &credentialed{guard: d.Guard, scope: v1.Scope_SCOPE_OPERATE, next: d.MCP})
 	}
-	if d.Gateway != nil && d.GatewayShared {
+	switch {
+	case d.Gateway != nil && d.GatewayShared:
 		d.Gateway.Mount(mux)
-	} else {
-		// Prevent gateway paths from reaching the SPA fallback.
+	case d.Gateway != nil:
+		d.Gateway.MountHealth(mux)
+		fallthrough
+	default:
+		// Prevent gateway paths from reaching the SPA fallback
 		for _, path := range []string{"/v1/", "/api/", "/health"} {
 			mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "the gateway listens on its own address, see nebu gateway", http.StatusNotFound)
@@ -153,116 +178,30 @@ func NewHandler(d Deps) http.Handler {
 	if d.Web != nil {
 		mux.Handle("/", d.Web)
 	}
-	return mux
+	return mux, nil
 }
 
 // Where MCP clients reach nebu's own tool server
 const mcpPath = "/mcp"
 
-// Serves requests carrying a daemon credential and refuses the rest in JSON
+// Serves requests carrying a credential that opens the scope and refuses the rest in JSON
 type credentialed struct {
 	guard *auth.Guard
+	scope v1.Scope
 	next  http.Handler
 }
 
 func (c *credentialed) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !c.guard.Authenticated(r.Header) {
+	if !c.guard.Scoped(r.Header, c.scope) {
+		code, err := http.StatusUnauthorized, c.guard.Err()
+		if _, ok := c.guard.Identify(r.Header); ok {
+			code, err = http.StatusForbidden, fmt.Errorf("%s needs the %s scope, which this credential does not hold", r.URL.Path, auth.ScopeName(c.scope))
+		}
 		w.Header().Set("WWW-Authenticate", `Bearer realm="nebu"`)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]any{"error": c.guard.Err().Error()})
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 		return
 	}
 	c.next.ServeHTTP(w, r)
-}
-
-// Logs every call with duration and outcome
-func logging(log *slog.Logger) connect.UnaryInterceptorFunc {
-	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-			start := time.Now()
-			resp, err := next(ctx, req)
-			attrs := []any{"procedure", req.Spec().Procedure, "ms", time.Since(start).Milliseconds()}
-			if err != nil {
-				log.Warn("rpc", append(attrs, "err", err)...)
-			} else {
-				log.Debug("rpc", attrs...)
-			}
-			return resp, err
-		}
-	}
-}
-
-// Refuses calls whose headers the guard does not accept. The handshake and the admission calls
-// admit themselves, since a node outside holds no session; a member's session token opens the
-// node to node procedures alone; every other procedure takes a daemon credential.
-type guard struct {
-	*auth.Guard
-}
-
-// Procedures a node outside any mesh may call without a credential: the handshake proves the
-// secret, and admission is decided by the manager and the person at the page
-var openProcedures = map[string]bool{
-	nebuv1connect.MeshServiceHelloProcedure:   true,
-	nebuv1connect.MeshServiceKnockProcedure:   true,
-	nebuv1connect.MeshServiceOfferProcedure:   true,
-	nebuv1connect.MeshServiceWelcomeProcedure: true,
-}
-
-// Procedures a member's session token opens: the calls members make to each other, and none of
-// the ones that decide what this node does
-var peerProcedures = map[string]bool{
-	nebuv1connect.MeshServiceSyncProcedure:            true,
-	nebuv1connect.MeshServiceStreamProcedure:          true,
-	nebuv1connect.MeshServiceRunSeatProcedure:         true,
-	nebuv1connect.MeshServiceStopSeatProcedure:        true,
-	nebuv1connect.MeshServiceMoveSlotProcedure:        true,
-	nebuv1connect.MeshServiceDropSlotProcedure:        true,
-	nebuv1connect.MeshServiceGetSeatProcedure:         true,
-	nebuv1connect.MeshServicePullSeatProcedure:        true,
-	nebuv1connect.MeshServiceWatchPullProcedure:       true,
-	nebuv1connect.MeshServiceSeatLogsProcedure:        true,
-	nebuv1connect.MeshServiceGetStoredProcedure:       true,
-	nebuv1connect.MeshServiceRekeyProcedure:           true,
-	nebuv1connect.MeshServiceByeProcedure:             true,
-	nebuv1connect.MeshServiceForgetNodeProcedure:      true,
-	nebuv1connect.ToolServiceListToolServersProcedure: true,
-	nebuv1connect.ToolServiceCallToolProcedure:        true,
-}
-
-// Whether a call may proceed
-func (a *guard) allows(procedure string, h http.Header) bool {
-	if openProcedures[procedure] {
-		return true
-	}
-	if a.Authenticated(h) {
-		return true
-	}
-	if peerProcedures[procedure] {
-		_, ok := a.PeerOf(h)
-		return ok
-	}
-	return false
-}
-
-func (a *guard) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		if !a.allows(req.Spec().Procedure, req.Header()) {
-			return nil, connect.NewError(connect.CodeUnauthenticated, a.Err())
-		}
-		return next(ctx, req)
-	}
-}
-
-func (a *guard) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
-	return next
-}
-
-func (a *guard) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
-		if !a.allows(conn.Spec().Procedure, conn.RequestHeader()) {
-			return connect.NewError(connect.CodeUnauthenticated, a.Err())
-		}
-		return next(ctx, conn)
-	}
 }

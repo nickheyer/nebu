@@ -2,14 +2,24 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
+
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
 
 // Stored host preferences.
 message Settings {
+  reserved 2, 3;
   // Display name, defaulting to the hostname.
   string host_label = 1;
   // Sources of tools the gateway runs for models, in the order they were added
   repeated ToolServer tool_servers = 4;
+  // Parameter values every launch of a runtime starts from, keyed by runtime id, under the slot's and the request's own
+  map<string, RuntimeDefaults> runtime_defaults = 5;
+}
+
+// Parameter values a runtime's launches and plans start from
+message RuntimeDefaults {
+  map<string, string> params = 1;
 }
 
 // Where a tool server's tools come from
@@ -50,6 +60,8 @@ message ToolServer {
   // Whether a fetch server may read this host's own addresses, loopback and link local included,
   // which it refuses otherwise so a model cannot reach the daemon's own services through it
   bool local = 14;
+  // Whether a Brave key, env value, or header value is stored, each read back as the redaction marker
+  bool secrets_set = 15;
 }
 
 // Asks for the settings
@@ -62,7 +74,7 @@ message GetSettingsResponse {
 
 // Replaces the settings
 message UpdateSettingsRequest {
-  Settings settings = 1;
+  Settings settings = 1 [(buf.validate.field).required = true];
 }
 
 // Returns the settings after the change

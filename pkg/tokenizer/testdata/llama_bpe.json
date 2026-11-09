@@ -1,0 +1,6565 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [
+    {
+      "id": 0,
+      "content": "<unk>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 1,
+      "content": "<s>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 2,
+      "content": "</s>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 3,
+      "content": "<0x00>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 4,
+      "content": "<0x01>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 5,
+      "content": "<0x02>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 6,
+      "content": "<0x03>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 7,
+      "content": "<0x04>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 8,
+      "content": "<0x05>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 9,
+      "content": "<0x06>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 10,
+      "content": "<0x07>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 11,
+      "content": "<0x08>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 12,
+      "content": "<0x09>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 13,
+      "content": "<0x0A>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 14,
+      "content": "<0x0B>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 15,
+      "content": "<0x0C>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 16,
+      "content": "<0x0D>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 17,
+      "content": "<0x0E>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 18,
+      "content": "<0x0F>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 19,
+      "content": "<0x10>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 20,
+      "content": "<0x11>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 21,
+      "content": "<0x12>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 22,
+      "content": "<0x13>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 23,
+      "content": "<0x14>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 24,
+      "content": "<0x15>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 25,
+      "content": "<0x16>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 26,
+      "content": "<0x17>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 27,
+      "content": "<0x18>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 28,
+      "content": "<0x19>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 29,
+      "content": "<0x1A>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 30,
+      "content": "<0x1B>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 31,
+      "content": "<0x1C>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 32,
+      "content": "<0x1D>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 33,
+      "content": "<0x1E>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 34,
+      "content": "<0x1F>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 35,
+      "content": "<0x20>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 36,
+      "content": "<0x21>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 37,
+      "content": "<0x22>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 38,
+      "content": "<0x23>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 39,
+      "content": "<0x24>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 40,
+      "content": "<0x25>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 41,
+      "content": "<0x26>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 42,
+      "content": "<0x27>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 43,
+      "content": "<0x28>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 44,
+      "content": "<0x29>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 45,
+      "content": "<0x2A>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 46,
+      "content": "<0x2B>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 47,
+      "content": "<0x2C>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 48,
+      "content": "<0x2D>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 49,
+      "content": "<0x2E>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 50,
+      "content": "<0x2F>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 51,
+      "content": "<0x30>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 52,
+      "content": "<0x31>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 53,
+      "content": "<0x32>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 54,
+      "content": "<0x33>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 55,
+      "content": "<0x34>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 56,
+      "content": "<0x35>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 57,
+      "content": "<0x36>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 58,
+      "content": "<0x37>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 59,
+      "content": "<0x38>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 60,
+      "content": "<0x39>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 61,
+      "content": "<0x3A>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 62,
+      "content": "<0x3B>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 63,
+      "content": "<0x3C>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 64,
+      "content": "<0x3D>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 65,
+      "content": "<0x3E>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 66,
+      "content": "<0x3F>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 67,
+      "content": "<0x40>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 68,
+      "content": "<0x41>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 69,
+      "content": "<0x42>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 70,
+      "content": "<0x43>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 71,
+      "content": "<0x44>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 72,
+      "content": "<0x45>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 73,
+      "content": "<0x46>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 74,
+      "content": "<0x47>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 75,
+      "content": "<0x48>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 76,
+      "content": "<0x49>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 77,
+      "content": "<0x4A>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 78,
+      "content": "<0x4B>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 79,
+      "content": "<0x4C>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 80,
+      "content": "<0x4D>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 81,
+      "content": "<0x4E>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 82,
+      "content": "<0x4F>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 83,
+      "content": "<0x50>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 84,
+      "content": "<0x51>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 85,
+      "content": "<0x52>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 86,
+      "content": "<0x53>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 87,
+      "content": "<0x54>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 88,
+      "content": "<0x55>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 89,
+      "content": "<0x56>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 90,
+      "content": "<0x57>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 91,
+      "content": "<0x58>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 92,
+      "content": "<0x59>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 93,
+      "content": "<0x5A>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 94,
+      "content": "<0x5B>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 95,
+      "content": "<0x5C>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 96,
+      "content": "<0x5D>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 97,
+      "content": "<0x5E>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 98,
+      "content": "<0x5F>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 99,
+      "content": "<0x60>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 100,
+      "content": "<0x61>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 101,
+      "content": "<0x62>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 102,
+      "content": "<0x63>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 103,
+      "content": "<0x64>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 104,
+      "content": "<0x65>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 105,
+      "content": "<0x66>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 106,
+      "content": "<0x67>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 107,
+      "content": "<0x68>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 108,
+      "content": "<0x69>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 109,
+      "content": "<0x6A>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 110,
+      "content": "<0x6B>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 111,
+      "content": "<0x6C>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 112,
+      "content": "<0x6D>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 113,
+      "content": "<0x6E>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 114,
+      "content": "<0x6F>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 115,
+      "content": "<0x70>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 116,
+      "content": "<0x71>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 117,
+      "content": "<0x72>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 118,
+      "content": "<0x73>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 119,
+      "content": "<0x74>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 120,
+      "content": "<0x75>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 121,
+      "content": "<0x76>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 122,
+      "content": "<0x77>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 123,
+      "content": "<0x78>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 124,
+      "content": "<0x79>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 125,
+      "content": "<0x7A>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 126,
+      "content": "<0x7B>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 127,
+      "content": "<0x7C>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 128,
+      "content": "<0x7D>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 129,
+      "content": "<0x7E>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 130,
+      "content": "<0x7F>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 131,
+      "content": "<0x80>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 132,
+      "content": "<0x81>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 133,
+      "content": "<0x82>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 134,
+      "content": "<0x83>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 135,
+      "content": "<0x84>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 136,
+      "content": "<0x85>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 137,
+      "content": "<0x86>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 138,
+      "content": "<0x87>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 139,
+      "content": "<0x88>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 140,
+      "content": "<0x89>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 141,
+      "content": "<0x8A>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 142,
+      "content": "<0x8B>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 143,
+      "content": "<0x8C>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 144,
+      "content": "<0x8D>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 145,
+      "content": "<0x8E>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 146,
+      "content": "<0x8F>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 147,
+      "content": "<0x90>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 148,
+      "content": "<0x91>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 149,
+      "content": "<0x92>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 150,
+      "content": "<0x93>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 151,
+      "content": "<0x94>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 152,
+      "content": "<0x95>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 153,
+      "content": "<0x96>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 154,
+      "content": "<0x97>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 155,
+      "content": "<0x98>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 156,
+      "content": "<0x99>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 157,
+      "content": "<0x9A>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 158,
+      "content": "<0x9B>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 159,
+      "content": "<0x9C>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 160,
+      "content": "<0x9D>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 161,
+      "content": "<0x9E>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 162,
+      "content": "<0x9F>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 163,
+      "content": "<0xA0>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 164,
+      "content": "<0xA1>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 165,
+      "content": "<0xA2>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 166,
+      "content": "<0xA3>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 167,
+      "content": "<0xA4>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 168,
+      "content": "<0xA5>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 169,
+      "content": "<0xA6>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 170,
+      "content": "<0xA7>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 171,
+      "content": "<0xA8>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 172,
+      "content": "<0xA9>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 173,
+      "content": "<0xAA>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 174,
+      "content": "<0xAB>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 175,
+      "content": "<0xAC>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 176,
+      "content": "<0xAD>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 177,
+      "content": "<0xAE>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 178,
+      "content": "<0xAF>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 179,
+      "content": "<0xB0>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 180,
+      "content": "<0xB1>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 181,
+      "content": "<0xB2>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 182,
+      "content": "<0xB3>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 183,
+      "content": "<0xB4>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 184,
+      "content": "<0xB5>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 185,
+      "content": "<0xB6>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 186,
+      "content": "<0xB7>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 187,
+      "content": "<0xB8>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 188,
+      "content": "<0xB9>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 189,
+      "content": "<0xBA>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 190,
+      "content": "<0xBB>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 191,
+      "content": "<0xBC>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 192,
+      "content": "<0xBD>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 193,
+      "content": "<0xBE>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 194,
+      "content": "<0xBF>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 195,
+      "content": "<0xC0>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 196,
+      "content": "<0xC1>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 197,
+      "content": "<0xC2>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 198,
+      "content": "<0xC3>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 199,
+      "content": "<0xC4>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 200,
+      "content": "<0xC5>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 201,
+      "content": "<0xC6>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 202,
+      "content": "<0xC7>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 203,
+      "content": "<0xC8>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 204,
+      "content": "<0xC9>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 205,
+      "content": "<0xCA>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 206,
+      "content": "<0xCB>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 207,
+      "content": "<0xCC>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 208,
+      "content": "<0xCD>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 209,
+      "content": "<0xCE>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 210,
+      "content": "<0xCF>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 211,
+      "content": "<0xD0>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 212,
+      "content": "<0xD1>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 213,
+      "content": "<0xD2>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 214,
+      "content": "<0xD3>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 215,
+      "content": "<0xD4>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 216,
+      "content": "<0xD5>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 217,
+      "content": "<0xD6>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 218,
+      "content": "<0xD7>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 219,
+      "content": "<0xD8>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 220,
+      "content": "<0xD9>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 221,
+      "content": "<0xDA>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 222,
+      "content": "<0xDB>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 223,
+      "content": "<0xDC>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 224,
+      "content": "<0xDD>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 225,
+      "content": "<0xDE>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 226,
+      "content": "<0xDF>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 227,
+      "content": "<0xE0>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 228,
+      "content": "<0xE1>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 229,
+      "content": "<0xE2>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 230,
+      "content": "<0xE3>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 231,
+      "content": "<0xE4>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 232,
+      "content": "<0xE5>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 233,
+      "content": "<0xE6>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 234,
+      "content": "<0xE7>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 235,
+      "content": "<0xE8>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 236,
+      "content": "<0xE9>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 237,
+      "content": "<0xEA>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 238,
+      "content": "<0xEB>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 239,
+      "content": "<0xEC>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 240,
+      "content": "<0xED>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 241,
+      "content": "<0xEE>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 242,
+      "content": "<0xEF>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 243,
+      "content": "<0xF0>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 244,
+      "content": "<0xF1>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 245,
+      "content": "<0xF2>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 246,
+      "content": "<0xF3>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 247,
+      "content": "<0xF4>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 248,
+      "content": "<0xF5>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 249,
+      "content": "<0xF6>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 250,
+      "content": "<0xF7>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 251,
+      "content": "<0xF8>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 252,
+      "content": "<0xF9>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 253,
+      "content": "<0xFA>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 254,
+      "content": "<0xFB>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 255,
+      "content": "<0xFC>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 256,
+      "content": "<0xFD>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 257,
+      "content": "<0xFE>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 258,
+      "content": "<0xFF>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 644,
+      "content": "<tool_call>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 966,
+      "content": "</tool_call>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    }
+  ],
+  "normalizer": {
+    "type": "Sequence",
+    "normalizers": [
+      {
+        "type": "Prepend",
+        "prepend": "▁"
+      },
+      {
+        "type": "Replace",
+        "pattern": {
+          "String": " "
+        },
+        "content": "▁"
+      }
+    ]
+  },
+  "pre_tokenizer": null,
+  "post_processor": {
+    "type": "TemplateProcessing",
+    "single": [
+      {
+        "SpecialToken": {
+          "id": "<s>",
+          "type_id": 0
+        }
+      },
+      {
+        "Sequence": {
+          "id": "A",
+          "type_id": 0
+        }
+      }
+    ],
+    "pair": [
+      {
+        "SpecialToken": {
+          "id": "<s>",
+          "type_id": 0
+        }
+      },
+      {
+        "Sequence": {
+          "id": "A",
+          "type_id": 0
+        }
+      },
+      {
+        "SpecialToken": {
+          "id": "<s>",
+          "type_id": 0
+        }
+      },
+      {
+        "Sequence": {
+          "id": "B",
+          "type_id": 0
+        }
+      }
+    ],
+    "special_tokens": {
+      "<s>": {
+        "id": "<s>",
+        "ids": [
+          1
+        ],
+        "tokens": [
+          "<s>"
+        ]
+      }
+    }
+  },
+  "decoder": {
+    "type": "Sequence",
+    "decoders": [
+      {
+        "type": "Replace",
+        "pattern": {
+          "String": "▁"
+        },
+        "content": " "
+      },
+      {
+        "type": "ByteFallback"
+      },
+      {
+        "type": "Fuse"
+      },
+      {
+        "type": "Strip",
+        "content": " ",
+        "start": 1,
+        "stop": 0
+      }
+    ]
+  },
+  "model": {
+    "type": "BPE",
+    "dropout": null,
+    "unk_token": "<unk>",
+    "continuing_subword_prefix": null,
+    "end_of_word_suffix": null,
+    "fuse_unk": true,
+    "byte_fallback": true,
+    "ignore_merges": false,
+    "vocab": {
+      "<unk>": 0,
+      "<s>": 1,
+      "</s>": 2,
+      "<0x00>": 3,
+      "<0x01>": 4,
+      "<0x02>": 5,
+      "<0x03>": 6,
+      "<0x04>": 7,
+      "<0x05>": 8,
+      "<0x06>": 9,
+      "<0x07>": 10,
+      "<0x08>": 11,
+      "<0x09>": 12,
+      "<0x0A>": 13,
+      "<0x0B>": 14,
+      "<0x0C>": 15,
+      "<0x0D>": 16,
+      "<0x0E>": 17,
+      "<0x0F>": 18,
+      "<0x10>": 19,
+      "<0x11>": 20,
+      "<0x12>": 21,
+      "<0x13>": 22,
+      "<0x14>": 23,
+      "<0x15>": 24,
+      "<0x16>": 25,
+      "<0x17>": 26,
+      "<0x18>": 27,
+      "<0x19>": 28,
+      "<0x1A>": 29,
+      "<0x1B>": 30,
+      "<0x1C>": 31,
+      "<0x1D>": 32,
+      "<0x1E>": 33,
+      "<0x1F>": 34,
+      "<0x20>": 35,
+      "<0x21>": 36,
+      "<0x22>": 37,
+      "<0x23>": 38,
+      "<0x24>": 39,
+      "<0x25>": 40,
+      "<0x26>": 41,
+      "<0x27>": 42,
+      "<0x28>": 43,
+      "<0x29>": 44,
+      "<0x2A>": 45,
+      "<0x2B>": 46,
+      "<0x2C>": 47,
+      "<0x2D>": 48,
+      "<0x2E>": 49,
+      "<0x2F>": 50,
+      "<0x30>": 51,
+      "<0x31>": 52,
+      "<0x32>": 53,
+      "<0x33>": 54,
+      "<0x34>": 55,
+      "<0x35>": 56,
+      "<0x36>": 57,
+      "<0x37>": 58,
+      "<0x38>": 59,
+      "<0x39>": 60,
+      "<0x3A>": 61,
+      "<0x3B>": 62,
+      "<0x3C>": 63,
+      "<0x3D>": 64,
+      "<0x3E>": 65,
+      "<0x3F>": 66,
+      "<0x40>": 67,
+      "<0x41>": 68,
+      "<0x42>": 69,
+      "<0x43>": 70,
+      "<0x44>": 71,
+      "<0x45>": 72,
+      "<0x46>": 73,
+      "<0x47>": 74,
+      "<0x48>": 75,
+      "<0x49>": 76,
+      "<0x4A>": 77,
+      "<0x4B>": 78,
+      "<0x4C>": 79,
+      "<0x4D>": 80,
+      "<0x4E>": 81,
+      "<0x4F>": 82,
+      "<0x50>": 83,
+      "<0x51>": 84,
+      "<0x52>": 85,
+      "<0x53>": 86,
+      "<0x54>": 87,
+      "<0x55>": 88,
+      "<0x56>": 89,
+      "<0x57>": 90,
+      "<0x58>": 91,
+      "<0x59>": 92,
+      "<0x5A>": 93,
+      "<0x5B>": 94,
+      "<0x5C>": 95,
+      "<0x5D>": 96,
+      "<0x5E>": 97,
+      "<0x5F>": 98,
+      "<0x60>": 99,
+      "<0x61>": 100,
+      "<0x62>": 101,
+      "<0x63>": 102,
+      "<0x64>": 103,
+      "<0x65>": 104,
+      "<0x66>": 105,
+      "<0x67>": 106,
+      "<0x68>": 107,
+      "<0x69>": 108,
+      "<0x6A>": 109,
+      "<0x6B>": 110,
+      "<0x6C>": 111,
+      "<0x6D>": 112,
+      "<0x6E>": 113,
+      "<0x6F>": 114,
+      "<0x70>": 115,
+      "<0x71>": 116,
+      "<0x72>": 117,
+      "<0x73>": 118,
+      "<0x74>": 119,
+      "<0x75>": 120,
+      "<0x76>": 121,
+      "<0x77>": 122,
+      "<0x78>": 123,
+      "<0x79>": 124,
+      "<0x7A>": 125,
+      "<0x7B>": 126,
+      "<0x7C>": 127,
+      "<0x7D>": 128,
+      "<0x7E>": 129,
+      "<0x7F>": 130,
+      "<0x80>": 131,
+      "<0x81>": 132,
+      "<0x82>": 133,
+      "<0x83>": 134,
+      "<0x84>": 135,
+      "<0x85>": 136,
+      "<0x86>": 137,
+      "<0x87>": 138,
+      "<0x88>": 139,
+      "<0x89>": 140,
+      "<0x8A>": 141,
+      "<0x8B>": 142,
+      "<0x8C>": 143,
+      "<0x8D>": 144,
+      "<0x8E>": 145,
+      "<0x8F>": 146,
+      "<0x90>": 147,
+      "<0x91>": 148,
+      "<0x92>": 149,
+      "<0x93>": 150,
+      "<0x94>": 151,
+      "<0x95>": 152,
+      "<0x96>": 153,
+      "<0x97>": 154,
+      "<0x98>": 155,
+      "<0x99>": 156,
+      "<0x9A>": 157,
+      "<0x9B>": 158,
+      "<0x9C>": 159,
+      "<0x9D>": 160,
+      "<0x9E>": 161,
+      "<0x9F>": 162,
+      "<0xA0>": 163,
+      "<0xA1>": 164,
+      "<0xA2>": 165,
+      "<0xA3>": 166,
+      "<0xA4>": 167,
+      "<0xA5>": 168,
+      "<0xA6>": 169,
+      "<0xA7>": 170,
+      "<0xA8>": 171,
+      "<0xA9>": 172,
+      "<0xAA>": 173,
+      "<0xAB>": 174,
+      "<0xAC>": 175,
+      "<0xAD>": 176,
+      "<0xAE>": 177,
+      "<0xAF>": 178,
+      "<0xB0>": 179,
+      "<0xB1>": 180,
+      "<0xB2>": 181,
+      "<0xB3>": 182,
+      "<0xB4>": 183,
+      "<0xB5>": 184,
+      "<0xB6>": 185,
+      "<0xB7>": 186,
+      "<0xB8>": 187,
+      "<0xB9>": 188,
+      "<0xBA>": 189,
+      "<0xBB>": 190,
+      "<0xBC>": 191,
+      "<0xBD>": 192,
+      "<0xBE>": 193,
+      "<0xBF>": 194,
+      "<0xC0>": 195,
+      "<0xC1>": 196,
+      "<0xC2>": 197,
+      "<0xC3>": 198,
+      "<0xC4>": 199,
+      "<0xC5>": 200,
+      "<0xC6>": 201,
+      "<0xC7>": 202,
+      "<0xC8>": 203,
+      "<0xC9>": 204,
+      "<0xCA>": 205,
+      "<0xCB>": 206,
+      "<0xCC>": 207,
+      "<0xCD>": 208,
+      "<0xCE>": 209,
+      "<0xCF>": 210,
+      "<0xD0>": 211,
+      "<0xD1>": 212,
+      "<0xD2>": 213,
+      "<0xD3>": 214,
+      "<0xD4>": 215,
+      "<0xD5>": 216,
+      "<0xD6>": 217,
+      "<0xD7>": 218,
+      "<0xD8>": 219,
+      "<0xD9>": 220,
+      "<0xDA>": 221,
+      "<0xDB>": 222,
+      "<0xDC>": 223,
+      "<0xDD>": 224,
+      "<0xDE>": 225,
+      "<0xDF>": 226,
+      "<0xE0>": 227,
+      "<0xE1>": 228,
+      "<0xE2>": 229,
+      "<0xE3>": 230,
+      "<0xE4>": 231,
+      "<0xE5>": 232,
+      "<0xE6>": 233,
+      "<0xE7>": 234,
+      "<0xE8>": 235,
+      "<0xE9>": 236,
+      "<0xEA>": 237,
+      "<0xEB>": 238,
+      "<0xEC>": 239,
+      "<0xED>": 240,
+      "<0xEE>": 241,
+      "<0xEF>": 242,
+      "<0xF0>": 243,
+      "<0xF1>": 244,
+      "<0xF2>": 245,
+      "<0xF3>": 246,
+      "<0xF4>": 247,
+      "<0xF5>": 248,
+      "<0xF6>": 249,
+      "<0xF7>": 250,
+      "<0xF8>": 251,
+      "<0xF9>": 252,
+      "<0xFA>": 253,
+      "<0xFB>": 254,
+      "<0xFC>": 255,
+      "<0xFD>": 256,
+      "<0xFE>": 257,
+      "<0xFF>": 258,
+      "\t": 259,
+      "\n": 260,
+      "\r": 261,
+      "!": 262,
+      "\"": 263,
+      "%": 264,
+      "'": 265,
+      "(": 266,
+      ")": 267,
+      ",": 268,
+      "-": 269,
+      ".": 270,
+      "/": 271,
+      "0": 272,
+      "1": 273,
+      "2": 274,
+      "3": 275,
+      "4": 276,
+      "5": 277,
+      "6": 278,
+      "7": 279,
+      "8": 280,
+      "9": 281,
+      ":": 282,
+      ";": 283,
+      "<": 284,
+      ">": 285,
+      "?": 286,
+      "D": 287,
+      "E": 288,
+      "F": 289,
+      "H": 290,
+      "I": 291,
+      "L": 292,
+      "M": 293,
+      "N": 294,
+      "S": 295,
+      "T": 296,
+      "W": 297,
+      "Y": 298,
+      "[": 299,
+      "]": 300,
+      "_": 301,
+      "a": 302,
+      "b": 303,
+      "c": 304,
+      "d": 305,
+      "e": 306,
+      "f": 307,
+      "g": 308,
+      "h": 309,
+      "i": 310,
+      "j": 311,
+      "k": 312,
+      "l": 313,
+      "m": 314,
+      "n": 315,
+      "o": 316,
+      "p": 317,
+      "q": 318,
+      "r": 319,
+      "s": 320,
+      "t": 321,
+      "u": 322,
+      "v": 323,
+      "w": 324,
+      "x": 325,
+      "y": 326,
+      "z": 327,
+      "{": 328,
+      "}": 329,
+      "©": 330,
+      "®": 331,
+      "À": 332,
+      "É": 333,
+      "Î": 334,
+      "Õ": 335,
+      "Ü": 336,
+      "ß": 337,
+      "à": 338,
+      "á": 339,
+      "è": 340,
+      "é": 341,
+      "î": 342,
+      "ï": 343,
+      "ó": 344,
+      "õ": 345,
+      "ö": 346,
+      "ü": 347,
+      "Κ": 348,
+      "ά": 349,
+      "έ": 350,
+      "ή": 351,
+      "α": 352,
+      "ε": 353,
+      "η": 354,
+      "ι": 355,
+      "κ": 356,
+      "λ": 357,
+      "μ": 358,
+      "ν": 359,
+      "ρ": 360,
+      "ς": 361,
+      "σ": 362,
+      "τ": 363,
+      "ό": 364,
+      "В": 365,
+      "К": 366,
+      "П": 367,
+      "а": 368,
+      "в": 369,
+      "д": 370,
+      "е": 371,
+      "и": 372,
+      "к": 373,
+      "л": 374,
+      "м": 375,
+      "о": 376,
+      "р": 377,
+      "с": 378,
+      "т": 379,
+      "х": 380,
+      "ш": 381,
+      "ё": 382,
+      "،": 383,
+      "؟": 384,
+      "ا": 385,
+      "ب": 386,
+      "ح": 387,
+      "ر": 388,
+      "ع": 389,
+      "ف": 390,
+      "ك": 391,
+      "ل": 392,
+      "م": 393,
+      "و": 394,
+      "ي": 395,
+      "™": 396,
+      "∑": 397,
+      "√": 398,
+      "∫": 399,
+      "▁": 400,
+      "、": 401,
+      "。": 402,
+      "い": 403,
+      "が": 404,
+      "し": 405,
+      "す": 406,
+      "た": 407,
+      "で": 408,
+      "と": 409,
+      "な": 410,
+      "ね": 411,
+      "の": 412,
+      "は": 413,
+      "ひ": 414,
+      "べ": 415,
+      "ま": 416,
+      "ら": 417,
+      "を": 418,
+      "カ": 419,
+      "ス": 420,
+      "タ": 421,
+      "テ": 422,
+      "ト": 423,
+      "ド": 424,
+      "ナ": 425,
+      "ハ": 426,
+      "ル": 427,
+      "ロ": 428,
+      "ワ": 429,
+      "ー": 430,
+      "一": 431,
+      "中": 432,
+      "之": 433,
+      "京": 434,
+      "今": 435,
+      "任": 436,
+      "分": 437,
+      "务": 438,
+      "司": 439,
+      "基": 440,
+      "处": 441,
+      "天": 442,
+      "寿": 443,
+      "文": 444,
+      "日": 445,
+      "是": 446,
+      "本": 447,
+      "東": 448,
+      "気": 449,
+      "然": 450,
+      "理": 451,
+      "的": 452,
+      "础": 453,
+      "章": 454,
+      "自": 455,
+      "言": 456,
+      "語": 457,
+      "词": 458,
+      "语": 459,
+      "食": 460,
+      "국": 461,
+      "니": 462,
+      "다": 463,
+      "스": 464,
+      "어": 465,
+      "입": 466,
+      "큰": 467,
+      "테": 468,
+      "텍": 469,
+      "토": 470,
+      "트": 471,
+      "한": 472,
+      "화": 473,
+      "🎉": 474,
+      "😀": 475,
+      "🚀": 476,
+      "e▁": 477,
+      "an": 478,
+      "er": 479,
+      "s▁": 480,
+      "en": 481,
+      "d▁": 482,
+      "in": 483,
+      "▁s": 484,
+      "he▁": 485,
+      "t▁": 486,
+      "and▁": 487,
+      "▁d": 488,
+      "▁t": 489,
+      "ca": 490,
+      "el": 491,
+      "on": 492,
+      "▁T": 493,
+      "▁f": 494,
+      "▁▁": 495,
+      "▁and▁": 496,
+      "ai": 497,
+      "ar": 498,
+      "at": 499,
+      "e.": 500,
+      "es▁": 501,
+      "od": 502,
+      "or": 503,
+      "o▁": 504,
+      "s>": 505,
+      "te": 506,
+      "ال": 507,
+      ",▁": 508,
+      ":▁": 509,
+      "</": 510,
+      "br": 511,
+      "es": 512,
+      "ed▁": 513,
+      "it": 514,
+      "l▁": 515,
+      "le▁": 516,
+      "ol": 517,
+      "per": 518,
+      "qu": 519,
+      "re": 520,
+      "to": 521,
+      "um": 522,
+      "▁H": 523,
+      "enc": 524,
+      "ing": 525,
+      "▁sp": 526,
+      "tex": 527,
+      "'t": 528,
+      "(tex": 529,
+      "23": 530,
+      "56": 531,
+      "9▁and▁": 532,
+      ";▁": 533,
+      "?▁": 534,
+      "_ca": 535,
+      "as": 536,
+      "au": 537,
+      "at▁": 538,
+      "ber": 539,
+      "ch": 540,
+      "d.": 541,
+      "d:▁": 542,
+      "f▁": 543,
+      "her": 544,
+      "im": 545,
+      "is": 546,
+      "ix": 547,
+      "ken": 548,
+      "l>": 549,
+      "lt": 550,
+      "lit": 551,
+      "ll>": 552,
+      "na": 553,
+      "n▁": 554,
+      "ou": 555,
+      "ow": 556,
+      "oken": 557,
+      "pai": 558,
+      "r▁": 559,
+      "ran": 560,
+      "ro▁": 561,
+      "s.": 562,
+      "sy": 563,
+      "ser": 564,
+      "sai": 565,
+      "t)": 566,
+      "ts▁": 567,
+      "user": 568,
+      "ve▁": 569,
+      "we": 570,
+      "é▁": 571,
+      "με": 572,
+      "ρα": 573,
+      "▁E": 574,
+      "▁κ": 575,
+      "▁ar": 576,
+      "스트": 577,
+      "ent▁": 578,
+      "he▁sai": 579,
+      "t▁in": 580,
+      "▁do": 581,
+      "▁the▁": 582,
+      "on't": 583,
+      "▁The▁": 584,
+      "▁for": 585,
+      "ol_ca": 586,
+      "requ": 587,
+      "tool_ca": 588,
+      "encod": 589,
+      "▁split": 590,
+      "(text)": 591,
+      "234": 592,
+      "567": 593,
+      "▁are▁": 594,
+      "he▁said:▁": 595,
+      "tool_call>": 596,
+      "<s>sy": 597,
+      "<s>user": 598,
+      "</s><s>user": 599,
+      "\tand▁": 600,
+      "\n\n": 601,
+      "\nW": 602,
+      "\nY": 603,
+      "\nm": 604,
+      "\n▁▁": 605,
+      "\r\nm": 606,
+      "!▁": 607,
+      "!▁H": 608,
+      "\"d": 609,
+      "\"g": 610,
+      "\"}": 611,
+      "\",▁": 612,
+      "\":▁": 613,
+      "\"na": 614,
+      "%▁": 615,
+      "'.": 616,
+      "'m": 617,
+      "'r": 618,
+      "'w": 619,
+      "'ve▁": 620,
+      ",▁t": 621,
+      ",234": 622,
+      ",567": 623,
+      "-4": 624,
+      "-m": 625,
+      ".1": 626,
+      ".9": 627,
+      ".</s><s>user": 628,
+      "0.": 629,
+      "01": 630,
+      "02": 631,
+      "15": 632,
+      "1e": 633,
+      "1,234": 634,
+      "10.": 635,
+      "2▁and▁": 636,
+      "202": 637,
+      "3.1": 638,
+      "4▁the▁": 639,
+      "415": 640,
+      "89▁and▁": 641,
+      "99": 642,
+      ":\n▁▁": 643,
+      "<tool_call>": 644,
+      "?</s>": 645,
+      "Der": 646,
+      "En": 647,
+      "Fu": 648,
+      "Fran": 649,
+      "In▁": 650,
+      "I'm": 651,
+      "Les▁": 652,
+      "Mix": 653,
+      "Num": 654,
+      "St": 655,
+      "She▁said:▁": 656,
+      "[t": 657,
+      "[v": 658,
+      "]\n": 659,
+      "]▁for": 660,
+      "_we": 661,
+      "a.": 662,
+      "ab": 663,
+      "ac": 664,
+      "ay": 665,
+      "az": 666,
+      "aß": 667,
+      "a▁": 668,
+      "a▁s": 669,
+      "al▁": 670,
+      "alt": 671,
+      "by": 672,
+      "bol": 673,
+      "b[t": 674,
+      "ce": 675,
+      "ck": 676,
+      "co": 677,
+      "dan": 678,
+      "din": 679,
+      "des▁": 680,
+      "do▁": 681,
+      "d!▁H": 682,
+      "d-m": 683,
+      "et": 684,
+      "eu": 685,
+      "ew": 686,
+      "ey": 687,
+      "ez": 688,
+      "e;▁": 689,
+      "ed.": 690,
+      "ef▁": 691,
+      "e(text)": 692,
+      "e\":▁": 693,
+      "e,▁t": 694,
+      "fu": 695,
+      "fan": 696,
+      "fé▁": 697,
+      "frequ": 698,
+      "g.": 699,
+      "gl": 700,
+      "gon": 701,
+      "ges▁": 702,
+      "gran": 703,
+      "gent▁": 704,
+      "h▁": 705,
+      "han": 706,
+      "hel": 707,
+      "hat▁": 708,
+      "hey": 709,
+      "ip": 710,
+      "iz": 711,
+      "is▁": 712,
+      "i▁t": 713,
+      "ion": 714,
+      "ick": 715,
+      "ido▁": 716,
+      "jar": 717,
+      "jum": 718,
+      "ji▁t": 719,
+      "ked▁": 720,
+      "ks.": 721,
+      "len": 722,
+      "lin": 723,
+      "lo▁": 724,
+      "laz": 725,
+      "ld!▁H": 726,
+      "leu": 727,
+      "mm": 728,
+      "mo": 729,
+      "mu": 730,
+      "man": 731,
+      "mer": 732,
+      "mar": 733,
+      "mod": 734,
+      "m\nY": 735,
+      "mbol": 736,
+      "me\":▁": 737,
+      "ne▁": 738,
+      "n▁s": 739,
+      "nel": 740,
+      "n▁f": 741,
+      "nd.": 742,
+      "new": 743,
+      "o.": 744,
+      "os": 745,
+      "ov": 746,
+      "ox": 747,
+      "oca": 748,
+      "obr": 749,
+      "of▁": 750,
+      "omm": 751,
+      "pr": 752,
+      "pt": 753,
+      "ps▁": 754,
+      "pit": 755,
+      "pfu": 756,
+      "pido▁": 757,
+      "pomm": 758,
+      "rá": 759,
+      "ré": 760,
+      "ró": 761,
+      "re.": 762,
+      "rn▁": 763,
+      "rs.": 764,
+      "raß": 765,
+      "ste": 766,
+      "sum": 767,
+      "s;▁": 768,
+      "sis": 769,
+      "s\tand▁": 770,
+      "spr": 771,
+      "tu": 772,
+      "te▁": 773,
+      "tan": 774,
+      "the▁": 775,
+      "tenc": 776,
+      "t.</s><s>user": 777,
+      "und.": 778,
+      "upt": 779,
+      "ved▁": 780,
+      "wor": 781,
+      "you": 782,
+      "y▁do": 783,
+      "zor": 784,
+      "{\"na": 785,
+      "©▁": 786,
+      "®▁": 787,
+      "ÀÉ": 788,
+      "ÎÕ": 789,
+      "Ü▁": 790,
+      "àé": 791,
+      "ère.": 792,
+      "îõ": 793,
+      "ïve▁": 794,
+      "öper": 795,
+      "über": 796,
+      "Κα": 797,
+      "άν": 798,
+      "έρα": 799,
+      "ήμε": 800,
+      "ει": 801,
+      "ημ": 802,
+      "ι▁κ": 803,
+      "λημ": 804,
+      "ς▁": 805,
+      "σμε": 806,
+      "σήμε": 807,
+      "τι▁κ": 808,
+      "όσμε": 809,
+      "Вс": 810,
+      "Ка": 811,
+      "Пр": 812,
+      "а?▁": 813,
+      "ве": 814,
+      "де": 815,
+      "ир": 816,
+      "иве": 817,
+      "к▁": 818,
+      "ла?▁": 819,
+      "мир": 820,
+      "о.": 821,
+      "ор": 822,
+      "ош": 823,
+      "т,▁": 824,
+      "хор": 825,
+      "ё▁": 826,
+      "،▁": 827,
+      "ا▁": 828,
+      "بال": 829,
+      "با▁": 830,
+      "حال": 831,
+      "حبا▁": 832,
+      "رحبا▁": 833,
+      "عال": 834,
+      "ف▁": 835,
+      "كي": 836,
+      "ك▁": 837,
+      "م؟": 838,
+      "م،▁": 839,
+      "مرحبا▁": 840,
+      "وم؟": 841,
+      "يوم؟": 842,
+      "™▁": 843,
+      "∑▁": 844,
+      "√.": 845,
+      "∫▁": 846,
+      "▁ハ": 847,
+      "▁中": 848,
+      "▁今": 849,
+      "▁테": 850,
+      "▁텍": 851,
+      "▁토": 852,
+      "▁한": 853,
+      "▁on": 854,
+      "▁br": 855,
+      "▁per": 856,
+      "▁as": 857,
+      "▁na": 858,
+      "▁t▁in": 859,
+      "▁requ": 860,
+      "▁<s>sy": 861,
+      "▁Der": 862,
+      "▁In▁": 863,
+      "▁Les▁": 864,
+      "▁Mix": 865,
+      "▁Num": 866,
+      "▁She▁said:▁": 867,
+      "▁jum": 868,
+      "▁mer": 869,
+      "▁Κα": 870,
+      "▁Пр": 871,
+      "▁مرحبا▁": 872,
+      "、カ": 873,
+      "。東": 874,
+      "いい": 875,
+      "がな": 876,
+      "した": 877,
+      "すね": 878,
+      "で寿": 879,
+      "ですね": 880,
+      "とひ": 881,
+      "のテ": 882,
+      "はいい": 883,
+      "べま": 884,
+      "らがな": 885,
+      "を食": 886,
+      "カナ": 887,
+      "スト": 888,
+      "タカナ": 889,
+      "ド、カ": 890,
+      "ルド、カ": 891,
+      "ロー": 892,
+      "ワー": 893,
+      "一。": 894,
+      "之一。": 895,
+      "京で寿": 896,
+      "任务": 897,
+      "分词": 898,
+      "司を食": 899,
+      "基础": 900,
+      "处理": 901,
+      "天気": 902,
+      "文章": 903,
+      "文分词": 904,
+      "日本": 905,
+      "日はいい": 906,
+      "是自": 907,
+      "然语": 908,
+      "的基础": 909,
+      "言处理": 910,
+      "語▁and▁": 911,
+      "국어": 912,
+      "니다": 913,
+      "입니다": 914,
+      "큰화": 915,
+      "🎉🚀": 916,
+      "😀🎉🚀": 917,
+      "e▁el": 918,
+      "e▁her": 919,
+      "e▁St": 920,
+      "e▁leu": 921,
+      "e▁ÀÉ": 922,
+      "e▁文章": 923,
+      "e▁😀🎉🚀": 924,
+      "er▁the▁": 925,
+      "erved▁": 926,
+      "s▁le▁": 927,
+      "s▁tex": 928,
+      "s▁01": 929,
+      "s▁spr": 930,
+      "s▁©▁": 931,
+      "en▁f": 932,
+      "enfan": 933,
+      "entenc": 934,
+      "ine,▁t": 935,
+      "in▁on": 936,
+      "▁sch": 937,
+      "▁served▁": 938,
+      "▁sentenc": 939,
+      "t▁über": 940,
+      "and▁new": 941,
+      "▁dat": 942,
+      "▁def▁": 943,
+      "▁de▁leu": 944,
+      "▁den▁f": 945,
+      "▁tod": 946,
+      "▁token": 947,
+      "café▁": 948,
+      "capit": 949,
+      "ello▁": 950,
+      "el▁served▁": 951,
+      "▁Token": 952,
+      "▁Tab": 953,
+      "▁They": 954,
+      "▁fine,▁t": 955,
+      "▁▁re": 956,
+      "▁▁▁sp": 957,
+      "▁▁mu": 958,
+      "▁and▁sy": 959,
+      "ather": 960,
+      "ation": 961,
+      "ate▁St": 962,
+      "es▁dan": 963,
+      "اليوم؟": 964,
+      ",▁τι▁κ": 965,
+      "</tool_call>": 966,
+      "brau": 967,
+      "ests▁": 968,
+      "es\n\n": 969,
+      "es\r\nm": 970,
+      "ed▁日本": 971,
+      "l▁as": 972,
+      "l▁rá": 973,
+      "le▁▁▁▁sp": 974,
+      "le▁brau": 975,
+      "perez": 976,
+      "quick": 977,
+      "to▁token": 978,
+      "▁Hund.": 979,
+      "▁Hello▁": 980,
+      "ing▁mer": 981,
+      "ingt▁über": 982,
+      "ing▁tod": 983,
+      "9▁and▁-4": 984,
+      "?▁I'm": 985,
+      "aulen": 986,
+      "at▁99": 987,
+      "bers▁01": 988,
+      "chs▁spr": 989,
+      "ime.": 990,
+      "ime▁😀🎉🚀": 991,
+      "ish▁": 992,
+      "ixed.": 993,
+      "ltip": 994,
+      "ou▁are▁": 995,
+      "ow▁are▁": 996,
+      "own▁f": 997,
+      "pair▁": 998,
+      "pairs.": 999,
+      "r▁gran": 1000,
+      "ro▁mar": 1001,
+      "ro▁perez": 1002,
+      "ts▁man": 1003,
+      "user▁as": 1004,
+      "we've▁": 1005,
+      "é▁co": 1006,
+      "ρα;": 1007,
+      "▁Emo": 1008,
+      "▁El▁rá": 1009,
+      "▁κόσμε": 1010,
+      "스트▁토": 1011,
+      "스트입니다": 1012,
+      "ent▁pairs.": 1013,
+      "t▁into▁token": 1014,
+      "▁doing▁tod": 1015,
+      "on't\",▁": 1016,
+      "on't'.": 1017,
+      "▁The▁quick": 1018,
+      "▁The▁user▁as": 1019,
+      "▁for▁dat": 1020,
+      "encode(text)": 1021,
+      "encoding▁mer": 1022,
+      "▁split(text)": 1023,
+      "▁splits▁tex": 1024,
+      "234567": 1025,
+      "he▁said:▁'w": 1026,
+      "\nWhat▁": 1027,
+      "!▁Ка": 1028,
+      "\"don't\",▁": 1029,
+      "\"get": 1030,
+      "\"}</tool_call>": 1031,
+      "%▁upt": 1032,
+      "'re▁her": 1033,
+      ",567▁requ": 1034,
+      ".9%▁upt": 1035,
+      "1e10.": 1036,
+      "1,234,567▁requ": 1037,
+      "2▁and▁1e10.": 1038,
+      "2024▁the▁": 1039,
+      "3.1415": 1040,
+      "89▁and▁3.1415": 1041,
+      ":\n▁▁▁▁re": 1042,
+      "<tool_call>{\"na": 1043,
+      "Engl": 1044,
+      "Fuchs▁spr": 1045,
+      "France": 1046,
+      "[voca": 1047,
+      "]▁for▁t▁in": 1048,
+      "_weather": 1049,
+      "aces\n\n": 1050,
+      "ay?▁I'm": 1051,
+      "a▁hel": 1052,
+      "a▁sobr": 1053,
+      "al▁of▁": 1054,
+      "alta▁sobr": 1055,
+      "byte▁": 1056,
+      "b[t]▁for▁t▁in": 1057,
+      "din▁de▁leu": 1058,
+      "des▁pomm": 1059,
+      "d-mère.": 1060,
+      "e;▁we've▁": 1061,
+      "frequent▁pairs.": 1062,
+      "gone.": 1063,
+      "ges▁frequent▁pairs.": 1064,
+      "gent▁des▁pomm": 1065,
+      "hanks.": 1066,
+      "ization": 1067,
+      "is▁the▁": 1068,
+      "jardin▁de▁leu": 1069,
+      "ji▁time▁😀🎉🚀": 1070,
+      "ked▁<tool_call>{\"na": 1071,
+      "lines\r\nm": 1072,
+      "lazy▁do": 1073,
+      "ld!▁How▁are▁": 1074,
+      "model▁served▁": 1075,
+      "m\nYou▁are▁": 1076,
+      "mbols▁©▁": 1077,
+      "me\":▁\"get": 1078,
+      "ne▁Fuchs▁spr": 1079,
+      "n▁salta▁sobr": 1080,
+      "nelle▁brau": 1081,
+      "oso.": 1082,
+      "over▁the▁": 1083,
+      "ox▁jum": 1084,
+      "ps▁over▁the▁": 1085,
+      "pful▁as": 1086,
+      "pido▁zor": 1087,
+      "résum": 1088,
+      "rón▁salta▁sobr": 1089,
+      "rn▁[voca": 1090,
+      "raße▁ÀÉ": 1091,
+      "stem\nYou▁are▁": 1092,
+      "s;▁byte▁": 1093,
+      "sistan": 1094,
+      "s\tand▁▁▁mu": 1095,
+      "turn▁[voca": 1096,
+      "t.</s><s>user\nWhat▁": 1097,
+      "world!▁How▁are▁": 1098,
+      "you▁doing▁tod": 1099,
+      "®▁™▁": 1100,
+      "ÎÕÜ▁": 1101,
+      "àéîõ": 1102,
+      "ïve▁café▁": 1103,
+      "öperate▁St": 1104,
+      "άνει": 1105,
+      "έρα▁κόσμε": 1106,
+      "λημέρα▁κόσμε": 1107,
+      "ς▁σήμε": 1108,
+      "Всё▁": 1109,
+      "дела?▁": 1110,
+      "ивет,▁": 1111,
+      "к▁дела?▁": 1112,
+      "мир!▁Ка": 1113,
+      "ошо.": 1114,
+      "хорошо.": 1115,
+      "بالعال": 1116,
+      "حالك▁": 1117,
+      "ف▁حالك▁": 1118,
+      "كيف▁حالك▁": 1119,
+      "م،▁كيف▁حالك▁": 1120,
+      "∑▁∫▁": 1121,
+      "▁ハロー": 1122,
+      "▁中文分词": 1123,
+      "▁今日はいい": 1124,
+      "▁테스트입니다": 1125,
+      "▁텍스트▁토": 1126,
+      "▁한국어": 1127,
+      "▁brown▁f": 1128,
+      "▁perro▁perez": 1129,
+      "▁naïve▁café▁": 1130,
+      "▁<s>system\nYou▁are▁": 1131,
+      "▁Der▁sch": 1132,
+      "▁In▁2024▁the▁": 1133,
+      "▁Les▁enfan": 1134,
+      "▁Mixed▁日本": 1135,
+      "▁Numbers▁01": 1136,
+      "▁She▁said:▁\"don't\",▁": 1137,
+      "▁Καλημέρα▁κόσμε": 1138,
+      "▁Привет,▁": 1139,
+      "▁مرحبا▁بالعال": 1140,
+      "。東京で寿": 1141,
+      "した。": 1142,
+      "ですね。東京で寿": 1143,
+      "とひらがな": 1144,
+      "のテスト": 1145,
+      "べました。": 1146,
+      "タカナとひらがな": 1147,
+      "ルド、カタカナとひらがな": 1148,
+      "ワールド、カタカナとひらがな": 1149,
+      "任务之一。": 1150,
+      "司を食べました。": 1151,
+      "天気ですね。東京で寿": 1152,
+      "是自然语": 1153,
+      "的基础任务之一。": 1154,
+      "言处理的基础任务之一。": 1155,
+      "語▁and▁Engl": 1156,
+      "큰화▁테스트입니다": 1157,
+      "e▁el▁perro▁perez": 1158,
+      "e▁文章▁sentenc": 1159,
+      "s▁le▁jardin▁de▁leu": 1160,
+      "in▁one▁文章▁sentenc": 1161,
+      "and▁newlines\r\nm": 1162,
+      "▁def▁encode(text)": 1163,
+      "▁den▁faulen": 1164,
+      "capital▁of▁": 1165,
+      "▁Tokenization": 1166,
+      "▁Tabs\tand▁▁▁mu": 1167,
+      "▁They're▁her": 1168,
+      "▁fine,▁thanks.": 1169,
+      "▁and▁symbols▁©▁": 1170,
+      "es▁dans▁le▁jardin▁de▁leu": 1171,
+      ",▁τι▁κάνει": 1172,
+      "ests▁at▁99": 1173,
+      "le▁▁▁▁spaces\n\n": 1174,
+      "▁Hello▁world!▁How▁are▁": 1175,
+      "ingt▁über▁den▁faulen": 1176,
+      "9▁and▁-42▁and▁1e10.": 1177,
+      "ish▁in▁one▁文章▁sentenc": 1178,
+      "ltiple▁▁▁▁spaces\n\n": 1179,
+      "pair▁encoding▁mer": 1180,
+      "r▁grand-mère.": 1181,
+      "ro▁marrón▁salta▁sobr": 1182,
+      "ts▁mangent▁des▁pomm": 1183,
+      "é▁coöperate▁St": 1184,
+      "▁Emoji▁time▁😀🎉🚀": 1185,
+      "▁El▁rápido▁zor": 1186,
+      "t▁into▁tokens;▁byte▁": 1187,
+      "on't'.▁They're▁her": 1188,
+      "▁The▁quick▁brown▁f": 1189,
+      "▁The▁user▁asked▁<tool_call>{\"na": 1190,
+      "▁for▁data.": 1191,
+      "▁split(text)]\n": 1192,
+      "▁splits▁text▁into▁tokens;▁byte▁": 1193,
+      "23456789▁and▁3.1415": 1194,
+      "he▁said:▁'won't'.▁They're▁her": 1195,
+      "\"}</tool_call>▁for▁data.": 1196,
+      ".9%▁uptime.": 1197,
+      "1,234,567▁requests▁at▁99": 1198,
+      ":\n▁▁▁▁return▁[voca": 1199
+    },
+    "merges": [
+      [
+        "e",
+        "▁"
+      ],
+      [
+        "a",
+        "n"
+      ],
+      [
+        "e",
+        "r"
+      ],
+      [
+        "s",
+        "▁"
+      ],
+      [
+        "e",
+        "n"
+      ],
+      [
+        "d",
+        "▁"
+      ],
+      [
+        "i",
+        "n"
+      ],
+      [
+        "▁",
+        "s"
+      ],
+      [
+        "h",
+        "e▁"
+      ],
+      [
+        "t",
+        "▁"
+      ],
+      [
+        "an",
+        "d▁"
+      ],
+      [
+        "▁",
+        "d"
+      ],
+      [
+        "▁",
+        "t"
+      ],
+      [
+        "c",
+        "a"
+      ],
+      [
+        "e",
+        "l"
+      ],
+      [
+        "o",
+        "n"
+      ],
+      [
+        "▁",
+        "T"
+      ],
+      [
+        "▁",
+        "f"
+      ],
+      [
+        "▁",
+        "▁"
+      ],
+      [
+        "▁",
+        "and▁"
+      ],
+      [
+        "a",
+        "i"
+      ],
+      [
+        "a",
+        "r"
+      ],
+      [
+        "a",
+        "t"
+      ],
+      [
+        "e",
+        "."
+      ],
+      [
+        "e",
+        "s▁"
+      ],
+      [
+        "o",
+        "d"
+      ],
+      [
+        "o",
+        "r"
+      ],
+      [
+        "o",
+        "▁"
+      ],
+      [
+        "s",
+        ">"
+      ],
+      [
+        "t",
+        "e"
+      ],
+      [
+        "ا",
+        "ل"
+      ],
+      [
+        ",",
+        "▁"
+      ],
+      [
+        ":",
+        "▁"
+      ],
+      [
+        "<",
+        "/"
+      ],
+      [
+        "b",
+        "r"
+      ],
+      [
+        "e",
+        "s"
+      ],
+      [
+        "e",
+        "d▁"
+      ],
+      [
+        "i",
+        "t"
+      ],
+      [
+        "l",
+        "▁"
+      ],
+      [
+        "l",
+        "e▁"
+      ],
+      [
+        "o",
+        "l"
+      ],
+      [
+        "p",
+        "er"
+      ],
+      [
+        "q",
+        "u"
+      ],
+      [
+        "r",
+        "e"
+      ],
+      [
+        "t",
+        "o"
+      ],
+      [
+        "u",
+        "m"
+      ],
+      [
+        "▁",
+        "H"
+      ],
+      [
+        "en",
+        "c"
+      ],
+      [
+        "in",
+        "g"
+      ],
+      [
+        "▁s",
+        "p"
+      ],
+      [
+        "te",
+        "x"
+      ],
+      [
+        "'",
+        "t"
+      ],
+      [
+        "(",
+        "tex"
+      ],
+      [
+        "2",
+        "3"
+      ],
+      [
+        "5",
+        "6"
+      ],
+      [
+        "9",
+        "▁and▁"
+      ],
+      [
+        ";",
+        "▁"
+      ],
+      [
+        "<",
+        "s>"
+      ],
+      [
+        "?",
+        "▁"
+      ],
+      [
+        "_",
+        "ca"
+      ],
+      [
+        "a",
+        "s"
+      ],
+      [
+        "a",
+        "u"
+      ],
+      [
+        "a",
+        "t▁"
+      ],
+      [
+        "b",
+        "er"
+      ],
+      [
+        "c",
+        "h"
+      ],
+      [
+        "d",
+        "."
+      ],
+      [
+        "d",
+        ":▁"
+      ],
+      [
+        "f",
+        "▁"
+      ],
+      [
+        "h",
+        "er"
+      ],
+      [
+        "i",
+        "m"
+      ],
+      [
+        "i",
+        "s"
+      ],
+      [
+        "i",
+        "x"
+      ],
+      [
+        "k",
+        "en"
+      ],
+      [
+        "l",
+        ">"
+      ],
+      [
+        "l",
+        "t"
+      ],
+      [
+        "l",
+        "it"
+      ],
+      [
+        "l",
+        "l>"
+      ],
+      [
+        "n",
+        "a"
+      ],
+      [
+        "n",
+        "▁"
+      ],
+      [
+        "o",
+        "u"
+      ],
+      [
+        "o",
+        "w"
+      ],
+      [
+        "o",
+        "ken"
+      ],
+      [
+        "p",
+        "ai"
+      ],
+      [
+        "r",
+        "▁"
+      ],
+      [
+        "r",
+        "an"
+      ],
+      [
+        "r",
+        "o▁"
+      ],
+      [
+        "s",
+        "."
+      ],
+      [
+        "s",
+        "y"
+      ],
+      [
+        "s",
+        "er"
+      ],
+      [
+        "s",
+        "ai"
+      ],
+      [
+        "t",
+        ")"
+      ],
+      [
+        "t",
+        "s▁"
+      ],
+      [
+        "u",
+        "ser"
+      ],
+      [
+        "v",
+        "e▁"
+      ],
+      [
+        "w",
+        "e"
+      ],
+      [
+        "é",
+        "▁"
+      ],
+      [
+        "μ",
+        "ε"
+      ],
+      [
+        "ρ",
+        "α"
+      ],
+      [
+        "▁",
+        "E"
+      ],
+      [
+        "▁",
+        "κ"
+      ],
+      [
+        "▁",
+        "ar"
+      ],
+      [
+        "스",
+        "트"
+      ],
+      [
+        "en",
+        "t▁"
+      ],
+      [
+        "he▁",
+        "sai"
+      ],
+      [
+        "t▁",
+        "in"
+      ],
+      [
+        "▁d",
+        "o"
+      ],
+      [
+        "▁t",
+        "he▁"
+      ],
+      [
+        "on",
+        "'t"
+      ],
+      [
+        "▁T",
+        "he▁"
+      ],
+      [
+        "▁f",
+        "or"
+      ],
+      [
+        "</",
+        "s>"
+      ],
+      [
+        "ol",
+        "_ca"
+      ],
+      [
+        "re",
+        "qu"
+      ],
+      [
+        "to",
+        "ol_ca"
+      ],
+      [
+        "enc",
+        "od"
+      ],
+      [
+        "▁sp",
+        "lit"
+      ],
+      [
+        "(tex",
+        "t)"
+      ],
+      [
+        "23",
+        "4"
+      ],
+      [
+        "56",
+        "7"
+      ],
+      [
+        "▁ar",
+        "e▁"
+      ],
+      [
+        "he▁sai",
+        "d:▁"
+      ],
+      [
+        "tool_ca",
+        "ll>"
+      ],
+      [
+        "<s>",
+        "sy"
+      ],
+      [
+        "<s>",
+        "user"
+      ],
+      [
+        "</s>",
+        "<s>user"
+      ],
+      [
+        "\t",
+        "and▁"
+      ],
+      [
+        "\n",
+        "\n"
+      ],
+      [
+        "\n",
+        "W"
+      ],
+      [
+        "\n",
+        "Y"
+      ],
+      [
+        "\n",
+        "m"
+      ],
+      [
+        "\n",
+        "▁▁"
+      ],
+      [
+        "\r",
+        "\nm"
+      ],
+      [
+        "!",
+        "▁"
+      ],
+      [
+        "!",
+        "▁H"
+      ],
+      [
+        "\"",
+        "d"
+      ],
+      [
+        "\"",
+        "g"
+      ],
+      [
+        "\"",
+        "}"
+      ],
+      [
+        "\"",
+        ",▁"
+      ],
+      [
+        "\"",
+        ":▁"
+      ],
+      [
+        "\"",
+        "na"
+      ],
+      [
+        "%",
+        "▁"
+      ],
+      [
+        "'",
+        "."
+      ],
+      [
+        "'",
+        "m"
+      ],
+      [
+        "'",
+        "r"
+      ],
+      [
+        "'",
+        "w"
+      ],
+      [
+        "'",
+        "ve▁"
+      ],
+      [
+        ",",
+        "▁t"
+      ],
+      [
+        ",",
+        "234"
+      ],
+      [
+        ",",
+        "567"
+      ],
+      [
+        "-",
+        "4"
+      ],
+      [
+        "-",
+        "m"
+      ],
+      [
+        ".",
+        "1"
+      ],
+      [
+        ".",
+        "9"
+      ],
+      [
+        ".",
+        "</s><s>user"
+      ],
+      [
+        "0",
+        "."
+      ],
+      [
+        "0",
+        "1"
+      ],
+      [
+        "0",
+        "2"
+      ],
+      [
+        "1",
+        "5"
+      ],
+      [
+        "1",
+        "e"
+      ],
+      [
+        "1",
+        ",234"
+      ],
+      [
+        "1",
+        "0."
+      ],
+      [
+        "2",
+        "▁and▁"
+      ],
+      [
+        "2",
+        "02"
+      ],
+      [
+        "3",
+        ".1"
+      ],
+      [
+        "4",
+        "▁the▁"
+      ],
+      [
+        "4",
+        "15"
+      ],
+      [
+        "8",
+        "9▁and▁"
+      ],
+      [
+        "9",
+        "9"
+      ],
+      [
+        ":",
+        "\n▁▁"
+      ],
+      [
+        "<",
+        "tool_call>"
+      ],
+      [
+        "?",
+        "</s>"
+      ],
+      [
+        "D",
+        "er"
+      ],
+      [
+        "E",
+        "n"
+      ],
+      [
+        "F",
+        "u"
+      ],
+      [
+        "F",
+        "ran"
+      ],
+      [
+        "I",
+        "n▁"
+      ],
+      [
+        "I",
+        "'m"
+      ],
+      [
+        "L",
+        "es▁"
+      ],
+      [
+        "M",
+        "ix"
+      ],
+      [
+        "N",
+        "um"
+      ],
+      [
+        "S",
+        "t"
+      ],
+      [
+        "S",
+        "he▁said:▁"
+      ],
+      [
+        "[",
+        "t"
+      ],
+      [
+        "[",
+        "v"
+      ],
+      [
+        "]",
+        "\n"
+      ],
+      [
+        "]",
+        "▁for"
+      ],
+      [
+        "_",
+        "we"
+      ],
+      [
+        "a",
+        "."
+      ],
+      [
+        "a",
+        "b"
+      ],
+      [
+        "a",
+        "c"
+      ],
+      [
+        "a",
+        "y"
+      ],
+      [
+        "a",
+        "z"
+      ],
+      [
+        "a",
+        "ß"
+      ],
+      [
+        "a",
+        "▁"
+      ],
+      [
+        "a",
+        "▁s"
+      ],
+      [
+        "a",
+        "l▁"
+      ],
+      [
+        "a",
+        "lt"
+      ],
+      [
+        "b",
+        "y"
+      ],
+      [
+        "b",
+        "ol"
+      ],
+      [
+        "b",
+        "[t"
+      ],
+      [
+        "c",
+        "e"
+      ],
+      [
+        "c",
+        "k"
+      ],
+      [
+        "c",
+        "o"
+      ],
+      [
+        "d",
+        "an"
+      ],
+      [
+        "d",
+        "in"
+      ],
+      [
+        "d",
+        "es▁"
+      ],
+      [
+        "d",
+        "o▁"
+      ],
+      [
+        "d",
+        "!▁H"
+      ],
+      [
+        "d",
+        "-m"
+      ],
+      [
+        "e",
+        "t"
+      ],
+      [
+        "e",
+        "u"
+      ],
+      [
+        "e",
+        "w"
+      ],
+      [
+        "e",
+        "y"
+      ],
+      [
+        "e",
+        "z"
+      ],
+      [
+        "e",
+        ";▁"
+      ],
+      [
+        "e",
+        "d."
+      ],
+      [
+        "e",
+        "f▁"
+      ],
+      [
+        "e",
+        "(text)"
+      ],
+      [
+        "e",
+        "\":▁"
+      ],
+      [
+        "e",
+        ",▁t"
+      ],
+      [
+        "f",
+        "u"
+      ],
+      [
+        "f",
+        "an"
+      ],
+      [
+        "f",
+        "é▁"
+      ],
+      [
+        "f",
+        "requ"
+      ],
+      [
+        "g",
+        "."
+      ],
+      [
+        "g",
+        "l"
+      ],
+      [
+        "g",
+        "on"
+      ],
+      [
+        "g",
+        "es▁"
+      ],
+      [
+        "g",
+        "ran"
+      ],
+      [
+        "g",
+        "ent▁"
+      ],
+      [
+        "h",
+        "▁"
+      ],
+      [
+        "h",
+        "an"
+      ],
+      [
+        "h",
+        "el"
+      ],
+      [
+        "h",
+        "at▁"
+      ],
+      [
+        "h",
+        "ey"
+      ],
+      [
+        "i",
+        "p"
+      ],
+      [
+        "i",
+        "z"
+      ],
+      [
+        "i",
+        "s▁"
+      ],
+      [
+        "i",
+        "▁t"
+      ],
+      [
+        "i",
+        "on"
+      ],
+      [
+        "i",
+        "ck"
+      ],
+      [
+        "i",
+        "do▁"
+      ],
+      [
+        "j",
+        "ar"
+      ],
+      [
+        "j",
+        "um"
+      ],
+      [
+        "j",
+        "i▁t"
+      ],
+      [
+        "k",
+        "ed▁"
+      ],
+      [
+        "k",
+        "s."
+      ],
+      [
+        "l",
+        "en"
+      ],
+      [
+        "l",
+        "in"
+      ],
+      [
+        "l",
+        "o▁"
+      ],
+      [
+        "l",
+        "az"
+      ],
+      [
+        "l",
+        "d!▁H"
+      ],
+      [
+        "l",
+        "eu"
+      ],
+      [
+        "m",
+        "m"
+      ],
+      [
+        "m",
+        "o"
+      ],
+      [
+        "m",
+        "u"
+      ],
+      [
+        "m",
+        "an"
+      ],
+      [
+        "m",
+        "er"
+      ],
+      [
+        "m",
+        "ar"
+      ],
+      [
+        "m",
+        "od"
+      ],
+      [
+        "m",
+        "\nY"
+      ],
+      [
+        "m",
+        "bol"
+      ],
+      [
+        "m",
+        "e\":▁"
+      ],
+      [
+        "n",
+        "e▁"
+      ],
+      [
+        "n",
+        "▁s"
+      ],
+      [
+        "n",
+        "el"
+      ],
+      [
+        "n",
+        "▁f"
+      ],
+      [
+        "n",
+        "d."
+      ],
+      [
+        "n",
+        "ew"
+      ],
+      [
+        "o",
+        "."
+      ],
+      [
+        "o",
+        "s"
+      ],
+      [
+        "o",
+        "v"
+      ],
+      [
+        "o",
+        "x"
+      ],
+      [
+        "o",
+        "ca"
+      ],
+      [
+        "o",
+        "br"
+      ],
+      [
+        "o",
+        "f▁"
+      ],
+      [
+        "o",
+        "mm"
+      ],
+      [
+        "p",
+        "r"
+      ],
+      [
+        "p",
+        "t"
+      ],
+      [
+        "p",
+        "s▁"
+      ],
+      [
+        "p",
+        "it"
+      ],
+      [
+        "p",
+        "fu"
+      ],
+      [
+        "p",
+        "ido▁"
+      ],
+      [
+        "p",
+        "omm"
+      ],
+      [
+        "r",
+        "á"
+      ],
+      [
+        "r",
+        "é"
+      ],
+      [
+        "r",
+        "ó"
+      ],
+      [
+        "r",
+        "e."
+      ],
+      [
+        "r",
+        "n▁"
+      ],
+      [
+        "r",
+        "s."
+      ],
+      [
+        "r",
+        "aß"
+      ],
+      [
+        "s",
+        "te"
+      ],
+      [
+        "s",
+        "um"
+      ],
+      [
+        "s",
+        ";▁"
+      ],
+      [
+        "s",
+        "is"
+      ],
+      [
+        "s",
+        "\tand▁"
+      ],
+      [
+        "s",
+        "pr"
+      ],
+      [
+        "t",
+        "u"
+      ],
+      [
+        "t",
+        "e▁"
+      ],
+      [
+        "t",
+        "an"
+      ],
+      [
+        "t",
+        "he▁"
+      ],
+      [
+        "t",
+        "enc"
+      ],
+      [
+        "t",
+        ".</s><s>user"
+      ],
+      [
+        "u",
+        "nd."
+      ],
+      [
+        "u",
+        "pt"
+      ],
+      [
+        "v",
+        "ed▁"
+      ],
+      [
+        "w",
+        "or"
+      ],
+      [
+        "y",
+        "ou"
+      ],
+      [
+        "y",
+        "▁do"
+      ],
+      [
+        "z",
+        "or"
+      ],
+      [
+        "{",
+        "\"na"
+      ],
+      [
+        "©",
+        "▁"
+      ],
+      [
+        "®",
+        "▁"
+      ],
+      [
+        "À",
+        "É"
+      ],
+      [
+        "Î",
+        "Õ"
+      ],
+      [
+        "Ü",
+        "▁"
+      ],
+      [
+        "à",
+        "é"
+      ],
+      [
+        "è",
+        "re."
+      ],
+      [
+        "î",
+        "õ"
+      ],
+      [
+        "ï",
+        "ve▁"
+      ],
+      [
+        "ö",
+        "per"
+      ],
+      [
+        "ü",
+        "ber"
+      ],
+      [
+        "Κ",
+        "α"
+      ],
+      [
+        "ά",
+        "ν"
+      ],
+      [
+        "έ",
+        "ρα"
+      ],
+      [
+        "ή",
+        "με"
+      ],
+      [
+        "ε",
+        "ι"
+      ],
+      [
+        "η",
+        "μ"
+      ],
+      [
+        "ι",
+        "▁κ"
+      ],
+      [
+        "λ",
+        "ημ"
+      ],
+      [
+        "ς",
+        "▁"
+      ],
+      [
+        "σ",
+        "με"
+      ],
+      [
+        "σ",
+        "ήμε"
+      ],
+      [
+        "τ",
+        "ι▁κ"
+      ],
+      [
+        "ό",
+        "σμε"
+      ],
+      [
+        "В",
+        "с"
+      ],
+      [
+        "К",
+        "а"
+      ],
+      [
+        "П",
+        "р"
+      ],
+      [
+        "а",
+        "?▁"
+      ],
+      [
+        "в",
+        "е"
+      ],
+      [
+        "д",
+        "е"
+      ],
+      [
+        "и",
+        "р"
+      ],
+      [
+        "и",
+        "ве"
+      ],
+      [
+        "к",
+        "▁"
+      ],
+      [
+        "л",
+        "а?▁"
+      ],
+      [
+        "м",
+        "ир"
+      ],
+      [
+        "о",
+        "."
+      ],
+      [
+        "о",
+        "р"
+      ],
+      [
+        "о",
+        "ш"
+      ],
+      [
+        "т",
+        ",▁"
+      ],
+      [
+        "х",
+        "ор"
+      ],
+      [
+        "ё",
+        "▁"
+      ],
+      [
+        "،",
+        "▁"
+      ],
+      [
+        "ا",
+        "▁"
+      ],
+      [
+        "ب",
+        "ال"
+      ],
+      [
+        "ب",
+        "ا▁"
+      ],
+      [
+        "ح",
+        "ال"
+      ],
+      [
+        "ح",
+        "با▁"
+      ],
+      [
+        "ر",
+        "حبا▁"
+      ],
+      [
+        "ع",
+        "ال"
+      ],
+      [
+        "ف",
+        "▁"
+      ],
+      [
+        "ك",
+        "ي"
+      ],
+      [
+        "ك",
+        "▁"
+      ],
+      [
+        "م",
+        "؟"
+      ],
+      [
+        "م",
+        "،▁"
+      ],
+      [
+        "م",
+        "رحبا▁"
+      ],
+      [
+        "و",
+        "م؟"
+      ],
+      [
+        "ي",
+        "وم؟"
+      ],
+      [
+        "™",
+        "▁"
+      ],
+      [
+        "∑",
+        "▁"
+      ],
+      [
+        "√",
+        "."
+      ],
+      [
+        "∫",
+        "▁"
+      ],
+      [
+        "▁",
+        "ハ"
+      ],
+      [
+        "▁",
+        "中"
+      ],
+      [
+        "▁",
+        "今"
+      ],
+      [
+        "▁",
+        "테"
+      ],
+      [
+        "▁",
+        "텍"
+      ],
+      [
+        "▁",
+        "토"
+      ],
+      [
+        "▁",
+        "한"
+      ],
+      [
+        "▁",
+        "on"
+      ],
+      [
+        "▁",
+        "br"
+      ],
+      [
+        "▁",
+        "per"
+      ],
+      [
+        "▁",
+        "as"
+      ],
+      [
+        "▁",
+        "na"
+      ],
+      [
+        "▁",
+        "t▁in"
+      ],
+      [
+        "▁",
+        "requ"
+      ],
+      [
+        "▁",
+        "<s>sy"
+      ],
+      [
+        "▁",
+        "Der"
+      ],
+      [
+        "▁",
+        "In▁"
+      ],
+      [
+        "▁",
+        "Les▁"
+      ],
+      [
+        "▁",
+        "Mix"
+      ],
+      [
+        "▁",
+        "Num"
+      ],
+      [
+        "▁",
+        "She▁said:▁"
+      ],
+      [
+        "▁",
+        "jum"
+      ],
+      [
+        "▁",
+        "mer"
+      ],
+      [
+        "▁",
+        "Κα"
+      ],
+      [
+        "▁",
+        "Пр"
+      ],
+      [
+        "▁",
+        "مرحبا▁"
+      ],
+      [
+        "、",
+        "カ"
+      ],
+      [
+        "。",
+        "東"
+      ],
+      [
+        "い",
+        "い"
+      ],
+      [
+        "が",
+        "な"
+      ],
+      [
+        "し",
+        "た"
+      ],
+      [
+        "す",
+        "ね"
+      ],
+      [
+        "で",
+        "寿"
+      ],
+      [
+        "で",
+        "すね"
+      ],
+      [
+        "と",
+        "ひ"
+      ],
+      [
+        "の",
+        "テ"
+      ],
+      [
+        "は",
+        "いい"
+      ],
+      [
+        "べ",
+        "ま"
+      ],
+      [
+        "ら",
+        "がな"
+      ],
+      [
+        "を",
+        "食"
+      ],
+      [
+        "カ",
+        "ナ"
+      ],
+      [
+        "ス",
+        "ト"
+      ],
+      [
+        "タ",
+        "カナ"
+      ],
+      [
+        "ド",
+        "、カ"
+      ],
+      [
+        "ル",
+        "ド、カ"
+      ],
+      [
+        "ロ",
+        "ー"
+      ],
+      [
+        "ワ",
+        "ー"
+      ],
+      [
+        "一",
+        "。"
+      ],
+      [
+        "之",
+        "一。"
+      ],
+      [
+        "京",
+        "で寿"
+      ],
+      [
+        "任",
+        "务"
+      ],
+      [
+        "分",
+        "词"
+      ],
+      [
+        "司",
+        "を食"
+      ],
+      [
+        "基",
+        "础"
+      ],
+      [
+        "处",
+        "理"
+      ],
+      [
+        "天",
+        "気"
+      ],
+      [
+        "文",
+        "章"
+      ],
+      [
+        "文",
+        "分词"
+      ],
+      [
+        "日",
+        "本"
+      ],
+      [
+        "日",
+        "はいい"
+      ],
+      [
+        "是",
+        "自"
+      ],
+      [
+        "然",
+        "语"
+      ],
+      [
+        "的",
+        "基础"
+      ],
+      [
+        "言",
+        "处理"
+      ],
+      [
+        "語",
+        "▁and▁"
+      ],
+      [
+        "국",
+        "어"
+      ],
+      [
+        "니",
+        "다"
+      ],
+      [
+        "입",
+        "니다"
+      ],
+      [
+        "큰",
+        "화"
+      ],
+      [
+        "🎉",
+        "🚀"
+      ],
+      [
+        "😀",
+        "🎉🚀"
+      ],
+      [
+        "e▁",
+        "el"
+      ],
+      [
+        "e▁",
+        "her"
+      ],
+      [
+        "e▁",
+        "St"
+      ],
+      [
+        "e▁",
+        "leu"
+      ],
+      [
+        "e▁",
+        "ÀÉ"
+      ],
+      [
+        "e▁",
+        "文章"
+      ],
+      [
+        "e▁",
+        "😀🎉🚀"
+      ],
+      [
+        "er",
+        "▁the▁"
+      ],
+      [
+        "er",
+        "ved▁"
+      ],
+      [
+        "s▁",
+        "le▁"
+      ],
+      [
+        "s▁",
+        "tex"
+      ],
+      [
+        "s▁",
+        "01"
+      ],
+      [
+        "s▁",
+        "spr"
+      ],
+      [
+        "s▁",
+        "©▁"
+      ],
+      [
+        "en",
+        "▁f"
+      ],
+      [
+        "en",
+        "fan"
+      ],
+      [
+        "en",
+        "tenc"
+      ],
+      [
+        "in",
+        "e,▁t"
+      ],
+      [
+        "in",
+        "▁on"
+      ],
+      [
+        "▁s",
+        "ch"
+      ],
+      [
+        "▁s",
+        "erved▁"
+      ],
+      [
+        "▁s",
+        "entenc"
+      ],
+      [
+        "t▁",
+        "über"
+      ],
+      [
+        "and▁",
+        "new"
+      ],
+      [
+        "▁d",
+        "at"
+      ],
+      [
+        "▁d",
+        "ef▁"
+      ],
+      [
+        "▁d",
+        "e▁leu"
+      ],
+      [
+        "▁d",
+        "en▁f"
+      ],
+      [
+        "▁t",
+        "od"
+      ],
+      [
+        "▁t",
+        "oken"
+      ],
+      [
+        "ca",
+        "fé▁"
+      ],
+      [
+        "ca",
+        "pit"
+      ],
+      [
+        "el",
+        "lo▁"
+      ],
+      [
+        "el",
+        "▁served▁"
+      ],
+      [
+        "▁T",
+        "oken"
+      ],
+      [
+        "▁T",
+        "ab"
+      ],
+      [
+        "▁T",
+        "hey"
+      ],
+      [
+        "▁f",
+        "ine,▁t"
+      ],
+      [
+        "▁▁",
+        "re"
+      ],
+      [
+        "▁▁",
+        "▁sp"
+      ],
+      [
+        "▁▁",
+        "mu"
+      ],
+      [
+        "▁and▁",
+        "sy"
+      ],
+      [
+        "at",
+        "her"
+      ],
+      [
+        "at",
+        "ion"
+      ],
+      [
+        "at",
+        "e▁St"
+      ],
+      [
+        "es▁",
+        "dan"
+      ],
+      [
+        "ال",
+        "يوم؟"
+      ],
+      [
+        ",▁",
+        "τι▁κ"
+      ],
+      [
+        "</",
+        "tool_call>"
+      ],
+      [
+        "br",
+        "au"
+      ],
+      [
+        "es",
+        "ts▁"
+      ],
+      [
+        "es",
+        "\n\n"
+      ],
+      [
+        "es",
+        "\r\nm"
+      ],
+      [
+        "ed▁",
+        "日本"
+      ],
+      [
+        "l▁",
+        "as"
+      ],
+      [
+        "l▁",
+        "rá"
+      ],
+      [
+        "le▁",
+        "▁▁▁sp"
+      ],
+      [
+        "le▁",
+        "brau"
+      ],
+      [
+        "per",
+        "ez"
+      ],
+      [
+        "qu",
+        "ick"
+      ],
+      [
+        "to",
+        "▁token"
+      ],
+      [
+        "▁H",
+        "und."
+      ],
+      [
+        "▁H",
+        "ello▁"
+      ],
+      [
+        "ing",
+        "▁mer"
+      ],
+      [
+        "ing",
+        "t▁über"
+      ],
+      [
+        "ing",
+        "▁tod"
+      ],
+      [
+        "9▁and▁",
+        "-4"
+      ],
+      [
+        "?▁",
+        "I'm"
+      ],
+      [
+        "au",
+        "len"
+      ],
+      [
+        "at▁",
+        "99"
+      ],
+      [
+        "ber",
+        "s▁01"
+      ],
+      [
+        "ch",
+        "s▁spr"
+      ],
+      [
+        "im",
+        "e."
+      ],
+      [
+        "im",
+        "e▁😀🎉🚀"
+      ],
+      [
+        "is",
+        "h▁"
+      ],
+      [
+        "ix",
+        "ed."
+      ],
+      [
+        "lt",
+        "ip"
+      ],
+      [
+        "ou",
+        "▁are▁"
+      ],
+      [
+        "ow",
+        "▁are▁"
+      ],
+      [
+        "ow",
+        "n▁f"
+      ],
+      [
+        "pai",
+        "r▁"
+      ],
+      [
+        "pai",
+        "rs."
+      ],
+      [
+        "r▁",
+        "gran"
+      ],
+      [
+        "ro▁",
+        "mar"
+      ],
+      [
+        "ro▁",
+        "perez"
+      ],
+      [
+        "ts▁",
+        "man"
+      ],
+      [
+        "user",
+        "▁as"
+      ],
+      [
+        "we",
+        "'ve▁"
+      ],
+      [
+        "é▁",
+        "co"
+      ],
+      [
+        "ρα",
+        ";"
+      ],
+      [
+        "▁E",
+        "mo"
+      ],
+      [
+        "▁E",
+        "l▁rá"
+      ],
+      [
+        "▁κ",
+        "όσμε"
+      ],
+      [
+        "스트",
+        "▁토"
+      ],
+      [
+        "스트",
+        "입니다"
+      ],
+      [
+        "ent▁",
+        "pairs."
+      ],
+      [
+        "t▁in",
+        "to▁token"
+      ],
+      [
+        "▁do",
+        "ing▁tod"
+      ],
+      [
+        "on't",
+        "\",▁"
+      ],
+      [
+        "on't",
+        "'."
+      ],
+      [
+        "▁The▁",
+        "quick"
+      ],
+      [
+        "▁The▁",
+        "user▁as"
+      ],
+      [
+        "▁for",
+        "▁dat"
+      ],
+      [
+        "encod",
+        "e(text)"
+      ],
+      [
+        "encod",
+        "ing▁mer"
+      ],
+      [
+        "▁split",
+        "(text)"
+      ],
+      [
+        "▁split",
+        "s▁tex"
+      ],
+      [
+        "234",
+        "567"
+      ],
+      [
+        "he▁said:▁",
+        "'w"
+      ],
+      [
+        "\nW",
+        "hat▁"
+      ],
+      [
+        "!▁",
+        "Ка"
+      ],
+      [
+        "\"d",
+        "on't\",▁"
+      ],
+      [
+        "\"g",
+        "et"
+      ],
+      [
+        "\"}",
+        "</tool_call>"
+      ],
+      [
+        "%▁",
+        "upt"
+      ],
+      [
+        "'r",
+        "e▁her"
+      ],
+      [
+        ",567",
+        "▁requ"
+      ],
+      [
+        ".9",
+        "%▁upt"
+      ],
+      [
+        "1e",
+        "10."
+      ],
+      [
+        "1,234",
+        ",567▁requ"
+      ],
+      [
+        "2▁and▁",
+        "1e10."
+      ],
+      [
+        "202",
+        "4▁the▁"
+      ],
+      [
+        "3.1",
+        "415"
+      ],
+      [
+        "89▁and▁",
+        "3.1415"
+      ],
+      [
+        ":\n▁▁",
+        "▁▁re"
+      ],
+      [
+        "<tool_call>",
+        "{\"na"
+      ],
+      [
+        "En",
+        "gl"
+      ],
+      [
+        "Fu",
+        "chs▁spr"
+      ],
+      [
+        "Fran",
+        "ce"
+      ],
+      [
+        "[v",
+        "oca"
+      ],
+      [
+        "]▁for",
+        "▁t▁in"
+      ],
+      [
+        "_we",
+        "ather"
+      ],
+      [
+        "ac",
+        "es\n\n"
+      ],
+      [
+        "ay",
+        "?▁I'm"
+      ],
+      [
+        "a▁",
+        "hel"
+      ],
+      [
+        "a▁s",
+        "obr"
+      ],
+      [
+        "al▁",
+        "of▁"
+      ],
+      [
+        "alt",
+        "a▁sobr"
+      ],
+      [
+        "by",
+        "te▁"
+      ],
+      [
+        "b[t",
+        "]▁for▁t▁in"
+      ],
+      [
+        "din",
+        "▁de▁leu"
+      ],
+      [
+        "des▁",
+        "pomm"
+      ],
+      [
+        "d-m",
+        "ère."
+      ],
+      [
+        "e;▁",
+        "we've▁"
+      ],
+      [
+        "frequ",
+        "ent▁pairs."
+      ],
+      [
+        "gon",
+        "e."
+      ],
+      [
+        "ges▁",
+        "frequent▁pairs."
+      ],
+      [
+        "gent▁",
+        "des▁pomm"
+      ],
+      [
+        "han",
+        "ks."
+      ],
+      [
+        "iz",
+        "ation"
+      ],
+      [
+        "is▁",
+        "the▁"
+      ],
+      [
+        "jar",
+        "din▁de▁leu"
+      ],
+      [
+        "ji▁t",
+        "ime▁😀🎉🚀"
+      ],
+      [
+        "ked▁",
+        "<tool_call>{\"na"
+      ],
+      [
+        "lin",
+        "es\r\nm"
+      ],
+      [
+        "laz",
+        "y▁do"
+      ],
+      [
+        "ld!▁H",
+        "ow▁are▁"
+      ],
+      [
+        "mod",
+        "el▁served▁"
+      ],
+      [
+        "m\nY",
+        "ou▁are▁"
+      ],
+      [
+        "mbol",
+        "s▁©▁"
+      ],
+      [
+        "me\":▁",
+        "\"get"
+      ],
+      [
+        "ne▁",
+        "Fuchs▁spr"
+      ],
+      [
+        "n▁s",
+        "alta▁sobr"
+      ],
+      [
+        "nel",
+        "le▁brau"
+      ],
+      [
+        "os",
+        "o."
+      ],
+      [
+        "ov",
+        "er▁the▁"
+      ],
+      [
+        "ox",
+        "▁jum"
+      ],
+      [
+        "ps▁",
+        "over▁the▁"
+      ],
+      [
+        "pfu",
+        "l▁as"
+      ],
+      [
+        "pido▁",
+        "zor"
+      ],
+      [
+        "ré",
+        "sum"
+      ],
+      [
+        "ró",
+        "n▁salta▁sobr"
+      ],
+      [
+        "rn▁",
+        "[voca"
+      ],
+      [
+        "raß",
+        "e▁ÀÉ"
+      ],
+      [
+        "ste",
+        "m\nYou▁are▁"
+      ],
+      [
+        "s;▁",
+        "byte▁"
+      ],
+      [
+        "sis",
+        "tan"
+      ],
+      [
+        "s\tand▁",
+        "▁▁mu"
+      ],
+      [
+        "tu",
+        "rn▁[voca"
+      ],
+      [
+        "t.</s><s>user",
+        "\nWhat▁"
+      ],
+      [
+        "wor",
+        "ld!▁How▁are▁"
+      ],
+      [
+        "you",
+        "▁doing▁tod"
+      ],
+      [
+        "®▁",
+        "™▁"
+      ],
+      [
+        "ÎÕ",
+        "Ü▁"
+      ],
+      [
+        "àé",
+        "îõ"
+      ],
+      [
+        "ïve▁",
+        "café▁"
+      ],
+      [
+        "öper",
+        "ate▁St"
+      ],
+      [
+        "άν",
+        "ει"
+      ],
+      [
+        "έρα",
+        "▁κόσμε"
+      ],
+      [
+        "λημ",
+        "έρα▁κόσμε"
+      ],
+      [
+        "ς▁",
+        "σήμε"
+      ],
+      [
+        "Вс",
+        "ё▁"
+      ],
+      [
+        "де",
+        "ла?▁"
+      ],
+      [
+        "иве",
+        "т,▁"
+      ],
+      [
+        "к▁",
+        "дела?▁"
+      ],
+      [
+        "мир",
+        "!▁Ка"
+      ],
+      [
+        "ош",
+        "о."
+      ],
+      [
+        "хор",
+        "ошо."
+      ],
+      [
+        "بال",
+        "عال"
+      ],
+      [
+        "حال",
+        "ك▁"
+      ],
+      [
+        "ف▁",
+        "حالك▁"
+      ],
+      [
+        "كي",
+        "ف▁حالك▁"
+      ],
+      [
+        "م،▁",
+        "كيف▁حالك▁"
+      ],
+      [
+        "∑▁",
+        "∫▁"
+      ],
+      [
+        "▁ハ",
+        "ロー"
+      ],
+      [
+        "▁中",
+        "文分词"
+      ],
+      [
+        "▁今",
+        "日はいい"
+      ],
+      [
+        "▁테",
+        "스트입니다"
+      ],
+      [
+        "▁텍",
+        "스트▁토"
+      ],
+      [
+        "▁한",
+        "국어"
+      ],
+      [
+        "▁br",
+        "own▁f"
+      ],
+      [
+        "▁per",
+        "ro▁perez"
+      ],
+      [
+        "▁na",
+        "ïve▁café▁"
+      ],
+      [
+        "▁<s>sy",
+        "stem\nYou▁are▁"
+      ],
+      [
+        "▁Der",
+        "▁sch"
+      ],
+      [
+        "▁In▁",
+        "2024▁the▁"
+      ],
+      [
+        "▁Les▁",
+        "enfan"
+      ],
+      [
+        "▁Mix",
+        "ed▁日本"
+      ],
+      [
+        "▁Num",
+        "bers▁01"
+      ],
+      [
+        "▁She▁said:▁",
+        "\"don't\",▁"
+      ],
+      [
+        "▁Κα",
+        "λημέρα▁κόσμε"
+      ],
+      [
+        "▁Пр",
+        "ивет,▁"
+      ],
+      [
+        "▁مرحبا▁",
+        "بالعال"
+      ],
+      [
+        "。東",
+        "京で寿"
+      ],
+      [
+        "した",
+        "。"
+      ],
+      [
+        "ですね",
+        "。東京で寿"
+      ],
+      [
+        "とひ",
+        "らがな"
+      ],
+      [
+        "のテ",
+        "スト"
+      ],
+      [
+        "べま",
+        "した。"
+      ],
+      [
+        "タカナ",
+        "とひらがな"
+      ],
+      [
+        "ルド、カ",
+        "タカナとひらがな"
+      ],
+      [
+        "ワー",
+        "ルド、カタカナとひらがな"
+      ],
+      [
+        "任务",
+        "之一。"
+      ],
+      [
+        "司を食",
+        "べました。"
+      ],
+      [
+        "天気",
+        "ですね。東京で寿"
+      ],
+      [
+        "是自",
+        "然语"
+      ],
+      [
+        "的基础",
+        "任务之一。"
+      ],
+      [
+        "言处理",
+        "的基础任务之一。"
+      ],
+      [
+        "語▁and▁",
+        "Engl"
+      ],
+      [
+        "큰화",
+        "▁테스트입니다"
+      ],
+      [
+        "e▁el",
+        "▁perro▁perez"
+      ],
+      [
+        "e▁文章",
+        "▁sentenc"
+      ],
+      [
+        "s▁le▁",
+        "jardin▁de▁leu"
+      ],
+      [
+        "in▁on",
+        "e▁文章▁sentenc"
+      ],
+      [
+        "and▁new",
+        "lines\r\nm"
+      ],
+      [
+        "▁def▁",
+        "encode(text)"
+      ],
+      [
+        "▁den▁f",
+        "aulen"
+      ],
+      [
+        "capit",
+        "al▁of▁"
+      ],
+      [
+        "▁Token",
+        "ization"
+      ],
+      [
+        "▁Tab",
+        "s\tand▁▁▁mu"
+      ],
+      [
+        "▁They",
+        "'re▁her"
+      ],
+      [
+        "▁fine,▁t",
+        "hanks."
+      ],
+      [
+        "▁and▁sy",
+        "mbols▁©▁"
+      ],
+      [
+        "es▁dan",
+        "s▁le▁jardin▁de▁leu"
+      ],
+      [
+        ",▁τι▁κ",
+        "άνει"
+      ],
+      [
+        "ests▁",
+        "at▁99"
+      ],
+      [
+        "le▁▁▁▁sp",
+        "aces\n\n"
+      ],
+      [
+        "▁Hello▁",
+        "world!▁How▁are▁"
+      ],
+      [
+        "ingt▁über",
+        "▁den▁faulen"
+      ],
+      [
+        "9▁and▁-4",
+        "2▁and▁1e10."
+      ],
+      [
+        "ish▁",
+        "in▁one▁文章▁sentenc"
+      ],
+      [
+        "ltip",
+        "le▁▁▁▁spaces\n\n"
+      ],
+      [
+        "pair▁",
+        "encoding▁mer"
+      ],
+      [
+        "r▁gran",
+        "d-mère."
+      ],
+      [
+        "ro▁mar",
+        "rón▁salta▁sobr"
+      ],
+      [
+        "ts▁man",
+        "gent▁des▁pomm"
+      ],
+      [
+        "é▁co",
+        "öperate▁St"
+      ],
+      [
+        "▁Emo",
+        "ji▁time▁😀🎉🚀"
+      ],
+      [
+        "▁El▁rá",
+        "pido▁zor"
+      ],
+      [
+        "t▁into▁token",
+        "s;▁byte▁"
+      ],
+      [
+        "on't'.",
+        "▁They're▁her"
+      ],
+      [
+        "▁The▁quick",
+        "▁brown▁f"
+      ],
+      [
+        "▁The▁user▁as",
+        "ked▁<tool_call>{\"na"
+      ],
+      [
+        "▁for▁dat",
+        "a."
+      ],
+      [
+        "▁split(text)",
+        "]\n"
+      ],
+      [
+        "▁splits▁tex",
+        "t▁into▁tokens;▁byte▁"
+      ],
+      [
+        "234567",
+        "89▁and▁3.1415"
+      ],
+      [
+        "he▁said:▁'w",
+        "on't'.▁They're▁her"
+      ],
+      [
+        "\"}</tool_call>",
+        "▁for▁data."
+      ],
+      [
+        ".9%▁upt",
+        "ime."
+      ],
+      [
+        "1,234,567▁requ",
+        "ests▁at▁99"
+      ],
+      [
+        ":\n▁▁▁▁re",
+        "turn▁[voca"
+      ]
+    ]
+  }
+}

@@ -23,7 +23,7 @@ func (p darwinMemory) Run(ctx context.Context) host.Result {
 		return res
 	}
 	pool := &v1.MemoryPool{Id: "host", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: total, FreeBytes: free}
-	return found(nil, []*v1.MemoryPool{pool}, nil, rows(1))
+	return found(nil, []*v1.MemoryPool{pool}, nil, "")
 }
 
 // Counts free and reclaimable speculative, purgeable, and file-backed pages as available memory.

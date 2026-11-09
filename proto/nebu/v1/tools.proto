@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "nebu/v1/settings.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
@@ -41,19 +42,23 @@ message ToolServerStatus {
   string ref = 6;
 }
 
-// Lists tool servers, this node's and every member's when mesh is set
+// Lists tool servers, this node's and every member's when mesh is set, the ones whose name, kind, or summary holds every word of the query
 message ListToolServersRequest {
   bool mesh = 1;
+  string query = 2 [(buf.validate.field).string.max_len = 256];
+  string cursor = 3;
+  uint32 limit = 4 [(buf.validate.field).uint32.lte = 1000];
 }
 
 // Returns tool servers with their states and tools
 message ListToolServersResponse {
   repeated ToolServerStatus servers = 1;
+  string next_cursor = 2;
 }
 
 // Runs one tool by the name the model calls it, with JSON arguments
 message CallToolRequest {
-  string name = 1;
+  string name = 1 [(buf.validate.field).string.min_len = 1];
   string arguments = 2;
   // The mesh member whose server runs it, this node when empty
   string node_id = 3;

@@ -145,6 +145,8 @@ func Plan(req Request, m *Mesh) (*v1.FormationPlan, error) {
 			continue
 		}
 		switch {
+		case n.Refused != "":
+			pl.excluded[n.ID] = n.Refused
 		case n.Install == nil:
 			pl.excluded[n.ID] = fmt.Sprintf("%s has no %s install", n.label(), req.Runtime.ID())
 		case len(n.Devices) == 0 && n.CPU == nil:
@@ -216,13 +218,6 @@ func (pl *planner) contexts(scope *estimate.Scope) []int64 {
 		out = append(out, c/step*step)
 	}
 	return append(out, lo)
-}
-
-// The affinity policy a replicas route's gateway applies: a conversation stays on the seat that
-// answered its opening messages within the window, the hash covering the system message and
-// the first user message
-func affinity() *v1.AffinityPolicy {
-	return &v1.AffinityPolicy{WindowSeconds: AffinityWindowSeconds, SystemMessage: true, FirstUserMessage: true}
 }
 
 // Builds the plan record from the ordered candidates
@@ -303,7 +298,7 @@ func (pl *planner) result(list []*candidate, context int64) *v1.FormationPlan {
 		plan.Head = chosen.head.node.ID
 	}
 	if chosen.shape == v1.Shape_SHAPE_REPLICAS {
-		plan.Affinity = affinity()
+		plan.SchedulerConfig = ReplicasSchedulerConfig
 	}
 	plan.TtftRatio, plan.TptRatio = 1, 1
 	if pl.req.Table != nil && chosen.shape != v1.Shape_SHAPE_SOLO {

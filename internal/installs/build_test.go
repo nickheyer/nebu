@@ -28,19 +28,21 @@ func timestampNow() *timestamppb.Timestamp { return timestamppb.Now() }
 // Test recipe building a binary that prints its version and configured greeting.
 type fakeRuntime struct{}
 
-func (fakeRuntime) ID() string                                            { return "fake" }
-func (fakeRuntime) Name() string                                          { return "Fake" }
-func (fakeRuntime) Description() string                                   { return "A runtime for tests" }
-func (fakeRuntime) Formats() []string                                     { return []string{"gguf"} }
-func (fakeRuntime) API() v1.ApiFlavor                                     { return v1.ApiFlavor_API_FLAVOR_OPENAI }
-func (fakeRuntime) Kind() v1.ModelKind                                    { return v1.ModelKind_MODEL_KIND_LANGUAGE }
-func (fakeRuntime) Requirements() []string                                { return nil }
-func (fakeRuntime) Unmet(*v1.HostProfile) []string                        { return nil }
-func (fakeRuntime) Params() []*v1.Param                                   { return nil }
-func (fakeRuntime) Prepares(string) bool                                  { return false }
-func (fakeRuntime) Prepare(runtimes.Launch) (*runtimes.Command, error)    { return nil, nil }
-func (fakeRuntime) PrepareTimeout() time.Duration                         { return 0 }
-func (fakeRuntime) Health() runtimes.Health                               { return runtimes.Health{Path: "/health"} }
+func (fakeRuntime) ID() string                                         { return "fake" }
+func (fakeRuntime) Name() string                                       { return "Fake" }
+func (fakeRuntime) Description() string                                { return "A runtime for tests" }
+func (fakeRuntime) Formats() []string                                  { return []string{"gguf"} }
+func (fakeRuntime) API() v1.ApiFlavor                                  { return v1.ApiFlavor_API_FLAVOR_OPENAI }
+func (fakeRuntime) Kind() v1.ModelKind                                 { return v1.ModelKind_MODEL_KIND_LANGUAGE }
+func (fakeRuntime) Requirements() []string                             { return nil }
+func (fakeRuntime) Unmet(*v1.HostProfile) []string                     { return nil }
+func (fakeRuntime) Params() []*v1.Param                                { return nil }
+func (fakeRuntime) Prepares(string) bool                               { return false }
+func (fakeRuntime) Prepare(runtimes.Launch) (*runtimes.Command, error) { return nil, nil }
+func (fakeRuntime) PrepareTimeout() time.Duration                      { return 0 }
+func (fakeRuntime) Health() runtimes.Health {
+	return runtimes.Health{Path: "/health", Interval: time.Second}
+}
 func (fakeRuntime) StopGrace() time.Duration                              { return time.Second }
 func (fakeRuntime) Policy() *estimate.Policy                              { return nil }
 func (fakeRuntime) Measure([]string) []*v1.Measurement                    { return nil }
@@ -49,6 +51,29 @@ func (fakeRuntime) Shapes(*v1.Install) []v1.Shape                         { retu
 func (fakeRuntime) Roles(v1.Shape) []runtimes.Role                        { return nil }
 func (fakeRuntime) LaunchSeat(runtimes.Launch) (*runtimes.Command, error) { return nil, nil }
 func (fakeRuntime) Transport([]string) string                             { return "" }
+func (fakeRuntime) Metrics() *v1.MetricNames                              { return nil }
+func (fakeRuntime) MetricsPort(_ map[string]string, port int) int         { return port }
+func (fakeRuntime) AppProtocol(map[string]string) v1.AppProtocol {
+	return v1.AppProtocol_APP_PROTOCOL_HTTP
+}
+func (fakeRuntime) GRPCPort(map[string]string, int) int                 { return 0 }
+func (fakeRuntime) PortSpan(runtimes.Launch) int                        { return 1 }
+func (fakeRuntime) Ranks(map[string]string) int                         { return 1 }
+func (fakeRuntime) ExpertParallel(map[string]string) int                { return 1 }
+func (fakeRuntime) Capacity(map[string]string) uint32                   { return 1 }
+func (fakeRuntime) KVCapacity(map[string]string, *v1.MemoryPlan) uint32 { return 0 }
+func (fakeRuntime) Adapters(string, map[string]string) runtimes.AdapterClient {
+	return nil
+}
+func (fakeRuntime) Sleeper(string, map[string]string) runtimes.SleepClient { return nil }
+func (fakeRuntime) Inventory(runtimes.Launch, map[string]string) (*v1.RuntimeInventory, error) {
+	return &v1.RuntimeInventory{Accelerator: "cpu", Modalities: []string{"text"}, ThroughputClass: "host"}, nil
+}
+func (fakeRuntime) PortRule() triage.Rule {
+	return triage.Rule{ID: "port-in-use", Summary: "port taken", Hint: "reserve another port", Match: func(line string) (map[string]string, bool) {
+		return nil, strings.Contains(line, "address already in use")
+	}}
+}
 
 func (fakeRuntime) Methods() []runtimes.Method {
 	return []runtimes.Method{{ID: "source", Description: "Build from source", Kind: v1.InstallKind_INSTALL_KIND_BUILT, RecipeID: "fake"}}

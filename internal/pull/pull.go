@@ -27,6 +27,8 @@ import (
 const (
 	kindPull   = "pull"
 	kindVerify = "verify"
+	// Group the files of a repository without weight groups land in
+	looseGroup = "default"
 )
 
 // Resolves and downloads groups into the store.
@@ -104,9 +106,8 @@ func (p *Puller) roomBytes(need uint64) error {
 	return fmt.Errorf("%w: needs %s, %s free on %s", store.ErrNoRoom, estimate.Human(need), estimate.Human(st.GetFreeBytes()), st.GetPath())
 }
 
-// Pull downloads a group and its missing blueprint parts. Unreadable headers or
-// unresolved required parts fail before the task starts. Alone skips those checks
-// and downloads only the requested group.
+// Pull downloads a group with the blueprint parts its header names, the group alone when the
+// header is unreadable, a part cannot be placed or alone is set
 func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error) {
 	if len(req.GetPaths()) > 0 {
 		return p.pullFiles(ctx, req)
@@ -132,20 +133,17 @@ func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error
 	}
 	own := &landing{src: src, model: model, g: g}
 	landings := []*landing{own}
-	var unread error
+	var notes []string
 	var plan *inspect.Plan
 	if own.descriptor, err = p.Inspector.Describe(ctx, src, model, g); err != nil {
-		if !req.GetAlone() {
-			return nil, fmt.Errorf("%s %s: cannot plan parts without readable headers. Use --alone to download only this group: %w", model.GetRepo(), g.Name, err)
-		}
-		unread = err
+		notes = append(notes, fmt.Sprintf("%s %s: no readable header, the group lands without a descriptor and without parts: %v", model.GetRepo(), g.Name, err))
 	} else if !req.GetAlone() {
 		if plan, err = p.Inspector.Parts(ctx, src, model, g, own.descriptor); err != nil {
-			return nil, err
+			plan = nil
+			notes = append(notes, fmt.Sprintf("%s %s: parts could not be planned, the group lands on its own: %v", model.GetRepo(), g.Name, err))
 		}
-		if err := plan.Unfilled(); err != nil {
-			return nil, err
-		}
+	}
+	if plan != nil {
 		for _, pick := range plan.Pulls() {
 			landings = append(landings, &landing{src: pick.Source, model: pick.Model, g: pick.Group, files: pick.Files, descriptor: pick.Descriptor, slot: pick.Fill.Slot})
 		}
@@ -161,8 +159,8 @@ func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error
 		title += fmt.Sprintf(" and %d parts", n)
 	}
 	return p.Tasks.Start(kindPull, title, labels, func(ctx context.Context, h *tasks.Handle) error {
-		if unread != nil {
-			h.Logf("%s: unreadable header, downloading with --alone: %v", g.Name, unread)
+		for _, n := range notes {
+			h.Logf("%s", n)
 		}
 		if plan != nil {
 			for _, pick := range plan.Picks {
@@ -171,6 +169,8 @@ func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error
 					h.Logf("%s (%s): %s %s already stored", pick.Fill.Slot, pick.Fill.Name, pick.Stored.GetRepo(), pick.Stored.GetGroup())
 				case pick.Bundled:
 					h.Logf("%s (%s): bundled", pick.Fill.Slot, pick.Fill.Name)
+				case pick.Err != nil && pick.Fill.Required:
+					h.Logf("%s (%s, required): not found, pull it separately: %v", pick.Fill.Slot, pick.Fill.Name, pick.Err)
 				case pick.Err != nil:
 					h.Logf("%s (%s, not required): %v", pick.Fill.Slot, pick.Fill.Name, pick.Err)
 				}
@@ -180,7 +180,7 @@ func (p *Puller) Pull(ctx context.Context, req *v1.PullRequest) (*v1.Task, error
 	}), nil
 }
 
-// Pulls named files of a repository into the groups they belong to, members serving them before the source
+// Pulls named files of a repository into the stored model they belong to, members serving them before the source
 func (p *Puller) pullFiles(ctx context.Context, req *v1.PullRequest) (*v1.Task, error) {
 	src, model, err := p.Inspector.Resolve(ctx, req.GetSourceId(), req.GetRepo(), req.GetRevision())
 	if err != nil {
@@ -196,6 +196,7 @@ func (p *Puller) pullFiles(ctx context.Context, req *v1.PullRequest) (*v1.Task, 
 	byGroup := map[*formats.Group][]*v1.Artifact{}
 	var order []*formats.Group
 	var paths []string
+	var loose *formats.Group
 	for _, path := range req.GetPaths() {
 		if slices.Contains(paths, path) {
 			continue
@@ -204,9 +205,12 @@ func (p *Puller) pullFiles(ctx context.Context, req *v1.PullRequest) (*v1.Task, 
 		if a == nil {
 			return nil, fmt.Errorf("%s has no file %s at %s", model.GetRepo(), path, model.GetRevision())
 		}
-		g, err := p.groupOf(groups, named, model, a)
-		if err != nil {
-			return nil, err
+		g := p.groupOf(groups, named, model, a)
+		if g == nil {
+			if loose == nil {
+				loose = &formats.Group{Name: looseGroup, Files: map[v1.ArtifactRole][]*v1.Artifact{}}
+			}
+			g = loose
 		}
 		if _, seen := byGroup[g]; !seen {
 			order = append(order, g)
@@ -218,8 +222,10 @@ func (p *Puller) pullFiles(ctx context.Context, req *v1.PullRequest) (*v1.Task, 
 	var fromNet []*landing
 	var fromMesh []*meshLanding
 	for _, g := range order {
-		l := &landing{src: src, model: model, g: g, files: byGroup[g], merge: true}
-		if l.descriptor, err = p.Inspector.Describe(ctx, src, model, g); err != nil {
+		l := &landing{src: src, model: model, g: g, files: byGroup[g], merge: true, slot: req.GetSlot()}
+		if g == loose {
+			notes = append(notes, fmt.Sprintf("%s has no weight group, its files are kept under %s", model.GetRepo(), looseGroup))
+		} else if l.descriptor, err = p.Inspector.Describe(ctx, src, model, g); err != nil {
 			notes = append(notes, fmt.Sprintf("%s %s: no readable header, the files land without a descriptor: %v", model.GetRepo(), g.Name, err))
 		}
 		if p.Mesh != nil {
@@ -258,13 +264,18 @@ func (p *Puller) pullFiles(ctx context.Context, req *v1.PullRequest) (*v1.Task, 
 	}), nil
 }
 
-// The group a file lands in, the named one, else a stored group holding it, else the first
-func (p *Puller) groupOf(groups []*formats.Group, named *formats.Group, model *v1.Model, a *v1.Artifact) (*formats.Group, error) {
+// Named group, else a stored one holding the file, else any holding it, else a stored one, else the first
+func (p *Puller) groupOf(groups []*formats.Group, named *formats.Group, model *v1.Model, a *v1.Artifact) *formats.Group {
 	if named != nil {
-		if holdsPath(named, a.GetPath()) {
-			return named, nil
+		return named
+	}
+	stored := func(list []*formats.Group) *formats.Group {
+		for _, g := range list {
+			if _, err := p.Store.ReadManifest(model.GetSourceId(), model.GetRepo(), g.Name); err == nil {
+				return g
+			}
 		}
-		return nil, fmt.Errorf("%s is not a file of %s %s", a.GetPath(), model.GetRepo(), named.Name)
+		return nil
 	}
 	var holding []*formats.Group
 	for _, g := range groups {
@@ -272,15 +283,19 @@ func (p *Puller) groupOf(groups []*formats.Group, named *formats.Group, model *v
 			holding = append(holding, g)
 		}
 	}
-	if len(holding) == 0 {
-		return nil, fmt.Errorf("%s is not part of any weight group of %s, so the store has no group to keep it in", a.GetPath(), model.GetRepo())
+	if g := stored(holding); g != nil {
+		return g
 	}
-	for _, g := range holding {
-		if _, err := p.Store.ReadManifest(model.GetSourceId(), model.GetRepo(), g.Name); err == nil {
-			return g, nil
-		}
+	if len(holding) > 0 {
+		return holding[0]
 	}
-	return holding[0], nil
+	if g := stored(groups); g != nil {
+		return g
+	}
+	if len(groups) > 0 {
+		return groups[0]
+	}
+	return nil
 }
 
 // The repository's artifact at a path, nil when it lists none there
@@ -329,20 +344,24 @@ func joinStored(stored, have *v1.StoredModel) {
 	stored.UsedAt = have.GetUsedAt()
 }
 
-// Marks a manifest a model once it holds every file of its group and a component until then, answering which
-func (p *Puller) settle(stored *v1.StoredModel, d *v1.Descriptor, all []*v1.Artifact) bool {
+// How many of a group's files a manifest holds
+func heldOf(stored *v1.StoredModel, all []*v1.Artifact) int {
 	held := map[string]bool{}
 	for _, sa := range stored.GetArtifacts() {
 		held[sa.GetArtifact().GetPath()] = true
 	}
-	complete := all != nil
+	n := 0
 	for _, a := range all {
-		if !held[a.GetPath()] {
-			complete = false
-			break
+		if held[a.GetPath()] {
+			n++
 		}
 	}
-	if !complete {
+	return n
+}
+
+// Marks a manifest a model once it holds every file of its group and a component until then, answering which
+func (p *Puller) settle(stored *v1.StoredModel, d *v1.Descriptor, all []*v1.Artifact) bool {
+	if all == nil || heldOf(stored, all) < len(all) {
 		arch := d.GetArchitecture()
 		if arch == "" {
 			arch = stored.GetDescriptor_().GetArchitecture()
@@ -390,7 +409,7 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, landings []*landing) 
 	}
 	// Block garbage collection until all manifests are written.
 	defer p.Store.Hold()()
-	h.Progress(0, total, "fetching")
+	h.ProgressBytes(0, total, "fetching")
 	for _, l := range landings {
 		if l.slot != "" {
 			h.Logf("%s: pulling %s %s", l.slot, l.model.GetRepo(), l.g.Name)
@@ -402,7 +421,7 @@ func (p *Puller) run(ctx context.Context, h *tasks.Handle, landings []*landing) 
 			return err
 		}
 	}
-	h.Progress(total, total, "done")
+	h.ProgressBytes(total, total, "done")
 	return nil
 }
 
@@ -458,14 +477,19 @@ func (p *Puller) land(ctx context.Context, h *tasks.Handle, l *landing) error {
 			return err
 		}
 		stored.Artifacts = append(stored.Artifacts, &v1.StoredArtifact{Artifact: a, Digest: digest, Path: linked})
-		stored.Bytes += a.GetSizeBytes()
+		// The blob's own size, since a source may list its files without their sizes
+		n, err := p.Store.BlobSize(digest)
+		if err != nil {
+			return fmt.Errorf("%s: %w", a.GetPath(), err)
+		}
+		stored.Bytes += n
 	}
 	if l.merge {
 		if have, err := p.Store.ReadManifest(model.GetSourceId(), model.GetRepo(), g.Name); err == nil {
 			joinStored(stored, have)
 		}
-		if all := inspect.GroupArtifacts(g); !p.settle(stored, l.descriptor, all) {
-			h.Logf("%s %s holds %d of %d files, kept as a component until the rest land", model.GetRepo(), g.Name, len(stored.GetArtifacts()), len(all))
+		if all := inspect.GroupArtifacts(g); !p.settle(stored, l.descriptor, all) && len(all) > 0 {
+			h.Logf("%s %s holds %d of %d files, kept as a component until the rest land", model.GetRepo(), g.Name, heldOf(stored, all), len(all))
 		}
 	}
 	dir, err := p.Store.GroupDir(model.GetSourceId(), model.GetRepo(), g.Name)
@@ -615,7 +639,7 @@ func (p *Puller) Verify(ctx context.Context, req *v1.VerifyRequest) (*v1.Task, e
 
 func (p *Puller) verify(ctx context.Context, h *tasks.Handle, models []*v1.StoredModel) error {
 	total := sizeOf(models)
-	h.Progress(0, total, "hashing")
+	h.ProgressBytes(0, total, "hashing")
 	bad := 0
 	for _, m := range models {
 		for _, sa := range m.GetArtifacts() {
@@ -648,7 +672,7 @@ func (p *Puller) verify(ctx context.Context, h *tasks.Handle, models []*v1.Store
 			unlock()
 		}
 	}
-	h.Progress(total, total, "done")
+	h.ProgressBytes(total, total, "done")
 	if bad > 0 {
 		p.AnnounceStore()
 		return fmt.Errorf("%d artifacts failed verification, pull again to repair", bad)

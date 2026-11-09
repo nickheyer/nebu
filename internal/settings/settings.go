@@ -95,19 +95,70 @@ func (m *Manager) legacySearch(ctx context.Context, s *v1.Settings) (*v1.ToolSer
 	return &v1.ToolServer{Name: name, Enabled: true, Kind: v1.ToolServerKind_TOOL_SERVER_KIND_SEARCH, Provider: w.Provider, SearxngUrl: w.SearxngURL, BraveKey: w.BraveKey}, nil
 }
 
-// Returns a copy of the settings
+// A copy of the settings with tool server secrets replaced by the redaction marker, what reads and events carry
 func (m *Manager) Get() *v1.Settings {
+	return redact(m.Full())
+}
+
+// A copy of the settings with every secret, for the daemon's own use and never for a client
+func (m *Manager) Full() *v1.Settings {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return proto.Clone(m.current).(*v1.Settings)
 }
 
-// Replaces the settings after checking them, keeping a tool server something still attaches
+// The parameter values launches and plans of a runtime start from, a copy, none when the settings keep none
+func (m *Manager) Defaults(runtimeID string) map[string]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d := m.current.GetRuntimeDefaults()[runtimeID]
+	if len(d.GetParams()) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(d.GetParams()))
+	for k, v := range d.GetParams() {
+		out[k] = v
+	}
+	return out
+}
+
+// Drops blank parameter names and values and runtimes left without any
+func tidyDefaults(in map[string]*v1.RuntimeDefaults) map[string]*v1.RuntimeDefaults {
+	out := map[string]*v1.RuntimeDefaults{}
+	for id, d := range in {
+		params := map[string]string{}
+		for k, v := range d.GetParams() {
+			if k, v = strings.TrimSpace(k), strings.TrimSpace(v); k != "" && v != "" {
+				params[k] = v
+			}
+		}
+		if id = strings.TrimSpace(id); id != "" && len(params) > 0 {
+			out[id] = &v1.RuntimeDefaults{Params: params}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// Copies settings with each tool server redacted
+func redact(s *v1.Settings) *v1.Settings {
+	out := proto.Clone(s).(*v1.Settings)
+	out.ToolServers = tools.RedactAll(out.GetToolServers())
+	return out
+}
+
+// Replaces the settings after checking them, keeping stored secrets sent back as the marker and a tool server something attaches
 func (m *Manager) Update(ctx context.Context, in *v1.Settings) (*v1.Settings, error) {
 	next := proto.Clone(in).(*v1.Settings)
 	next.HostLabel = strings.Join(strings.Fields(next.GetHostLabel()), " ")
+	next.RuntimeDefaults = tidyDefaults(next.GetRuntimeDefaults())
 	if utf8.RuneCountInString(next.GetHostLabel()) > labelMax {
 		return nil, fmt.Errorf("%w: the host label is longer than %d characters", ErrSetting, labelMax)
+	}
+	if err := tools.Restore(next.ToolServers, m.Full().GetToolServers()); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSetting, err)
 	}
 	if err := tools.Check(next.ToolServers); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSetting, err)
@@ -124,10 +175,11 @@ func (m *Manager) Update(ctx context.Context, in *v1.Settings) (*v1.Settings, er
 	if m.OnUpdate != nil {
 		m.OnUpdate(ctx, proto.Clone(next).(*v1.Settings))
 	}
+	shown := redact(next)
 	if m.Events != nil {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_SETTINGS, v1.EventAction_EVENT_ACTION_UPDATED, ID, next)
+		m.Events.Publish(v1.EventKind_EVENT_KIND_SETTINGS, v1.EventAction_EVENT_ACTION_UPDATED, ID, shown)
 	}
-	return proto.Clone(next).(*v1.Settings), nil
+	return shown, nil
 }
 
 // Refuses dropping a tool server something still attaches
@@ -139,7 +191,7 @@ func (m *Manager) removable(next *v1.Settings) error {
 	for _, t := range next.GetToolServers() {
 		keep[t.GetName()] = true
 	}
-	for _, t := range m.Get().GetToolServers() {
+	for _, t := range m.Full().GetToolServers() {
 		if keep[t.GetName()] {
 			continue
 		}

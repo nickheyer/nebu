@@ -424,14 +424,15 @@ func (r SDCpp) Launch(in Launch) (*Command, error) {
 	} else {
 		emitted["offload"] = "off"
 	}
+	cmd := &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}
 	if hostOnly {
 		hideDevices(env)
-	} else {
-		setEnv(env, "CUDA_VISIBLE_DEVICES", visible(in.Devices, "nvidia", false))
-		setEnv(env, "ROCR_VISIBLE_DEVICES", visible(in.Devices, "amd", true))
-		setEnv(env, "GGML_VK_VISIBLE_DEVICES", visible(in.Devices, "", true))
+		return cmd, nil
 	}
-	return &Command{Command: in.Install.Path, Args: append(args, flags...), Env: env, Params: emitted}, nil
+	if err := pinDevices(cmd, in); err != nil {
+		return nil, err
+	}
+	return cmd, nil
 }
 
 // A module assignment flag as this build spells it, the flag with its value on a build whose help

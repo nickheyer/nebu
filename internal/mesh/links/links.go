@@ -1,7 +1,4 @@
-// Package links measures the connection between two mesh nodes: round trip by HTTP/2 ping frames,
-// bandwidth by streaming bytes over one and over several connections, and the facts of the local
-// interface the route leaves through. Measurements sort a link into the class the planner and the
-// Mesh page read.
+// Package links measures round trip, bandwidth and interface facts between mesh nodes and classes each link
 package links
 
 import (
@@ -35,7 +32,7 @@ const (
 	smallBelow       = 100e6 / 8
 	// Connections the aggregate run opens at once
 	ParallelConns = 4
-	// The path members post bytes to for an upload measurement, under the session credential
+	// The path members post bytes to for an upload measurement, under mutual TLS
 	SinkPath = "/mesh/sink"
 	// Bytes one Stream chunk carries
 	ChunkBytes  = 256 << 10
@@ -56,9 +53,9 @@ const (
 type Target struct {
 	ID      string
 	Address string
-	// The TLS configuration to dial with, nil for a plain listener
+	// The mutual TLS configuration to dial with
 	TLS *tls.Config
-	// The session credential every request carries
+	// The session bearer every request carries
 	Header http.Header
 	// The RDMA device the peer reports bound on its end, from its own link record, empty when none
 	PeerRDMA string
@@ -69,8 +66,7 @@ type Prober struct {
 	Log *slog.Logger
 }
 
-// Measures the link to one member. The last measurement sizes the bandwidth run and stands in
-// for it when hold is set, because a formation is serving on one of the two nodes.
+// Measures the link to one member, the last run sizing bandwidth and standing in while hold is set
 func (p *Prober) Measure(ctx context.Context, from string, t Target, last *v1.Link, hold bool) (*v1.Link, error) {
 	link := &v1.Link{From: from, To: t.ID, MeasuredAt: timestamppb.Now()}
 	if err := p.interfaceFacts(t.Address, link); err != nil {
@@ -228,7 +224,7 @@ func (p *Prober) download(ctx context.Context, t Target, n int64) (float64, erro
 	defer cancel()
 	client := httpClient(t)
 	defer client.CloseIdleConnections()
-	mesh := nebuv1connect.NewMeshServiceClient(client, base(t))
+	mesh := nebuv1connect.NewMeshPeerServiceClient(client, base(t))
 	req := connect.NewRequest(&v1.StreamRequest{Bytes: uint64(n)})
 	for k, v := range t.Header {
 		req.Header()[k] = v
@@ -294,8 +290,7 @@ func Classify(l *v1.Link, peerRDMA string) (v1.LinkClass, string) {
 	return v1.LinkClass_LINK_CLASS_SLOW, "slow: " + facts + why
 }
 
-// One HTTP/2 connection to the target that carries ping frames alone, opened with the
-// preface and settings exchange the protocol starts with
+// One HTTP/2 connection to the target carrying ping frames alone
 type pinger struct {
 	conn net.Conn
 	fr   *http2.Framer
@@ -303,7 +298,7 @@ type pinger struct {
 	seq uint64
 }
 
-// Opens one HTTP/2 connection to the target, plain prior knowledge or TLS
+// Opens one HTTP/2 connection to the target over TLS
 func dialH2(ctx context.Context, t Target) (*pinger, error) {
 	dctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
@@ -384,21 +379,11 @@ func (pg *pinger) ping(ctx context.Context) error {
 
 func (pg *pinger) Close() error { return pg.conn.Close() }
 
-// Dials the target over TCP, wrapping TLS when the target has it
+// Dials the target over TLS, speaking HTTP/2
 func dial(ctx context.Context, t Target) (net.Conn, error) {
-	d := &net.Dialer{Timeout: dialTimeout}
-	if t.TLS == nil {
-		return d.DialContext(ctx, "tcp", t.Address)
-	}
 	cfg := t.TLS.Clone()
-	if cfg.ServerName == "" {
-		host, _, _ := net.SplitHostPort(t.Address)
-		cfg.ServerName = host
-	}
-	if len(cfg.NextProtos) == 0 {
-		cfg.NextProtos = []string{"h2"}
-	}
-	return (&tls.Dialer{NetDialer: d, Config: cfg}).DialContext(ctx, "tcp", t.Address)
+	cfg.NextProtos = []string{"h2"}
+	return (&tls.Dialer{NetDialer: &net.Dialer{Timeout: dialTimeout}, Config: cfg}).DialContext(ctx, "tcp", t.Address)
 }
 
 // An HTTP/2 client that holds one connection to the target
@@ -407,11 +392,9 @@ func httpClient(t Target) *http.Client {
 	return &http.Client{Transport: &http.Transport{Protocols: ClientProtocols(), DialContext: through, DialTLSContext: through}}
 }
 
+// The target's URL base
 func base(t Target) string {
-	if t.TLS != nil {
-		return "https://" + t.Address
-	}
-	return "http://" + t.Address
+	return "https://" + t.Address
 }
 
 // A reader of endless zero bytes
@@ -424,7 +407,7 @@ func (zeros) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Serves the sink: reads a body and answers with the bytes it took
+// Reads a posted body and answers with the bytes it took
 func Sink(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "the sink takes POST", http.StatusMethodNotAllowed)
@@ -492,10 +475,9 @@ func Protocols() *http.Protocols {
 	return p
 }
 
-// HTTP/2 alone for clients, over TLS or by prior knowledge on a plain listener
+// HTTP/2 over TLS alone for clients
 func ClientProtocols() *http.Protocols {
 	p := new(http.Protocols)
 	p.SetHTTP2(true)
-	p.SetUnencryptedHTTP2(true)
 	return p
 }

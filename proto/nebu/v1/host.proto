@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package nebu.v1;
 
+import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 import "nebu/v1/task.proto";
 
@@ -40,6 +41,8 @@ message Device {
   uint64 memory_total_bytes = 5;
   uint64 memory_free_bytes = 6;
   map<string, string> facts = 7;
+  // The pool the device draws on, the host pool for the CPU, an accelerator's own or the unified pool
+  string pool_id = 8;
 }
 
 // Memory pool available to runtimes.
@@ -58,6 +61,7 @@ message ProcessUse {
   uint64 bytes = 3;
   string instance_id = 4;
   string instance_name = 5;
+  string command = 6;
 }
 
 // Filesystem holding nebu data, one entry per mount
@@ -114,7 +118,7 @@ message DoctorResponse {
 // Read the last tail log lines and optionally follow new output.
 message HostServiceLogsRequest {
   bool follow = 1;
-  uint32 tail = 2;
+  uint32 tail = 2 [(buf.validate.field).uint32.lte = 100000];
 }
 
 // Batch of daemon log lines
@@ -133,7 +137,7 @@ message DirEntry {
 
 // List a host directory. Empty uses the daemon's home. A file path lists its parent directory.
 message ListDirectoryRequest {
-  string path = 1;
+  string path = 1 [(buf.validate.field).string.max_len = 4096];
 }
 
 // Resolved directory, parent path, and entries sorted by name with directories first.

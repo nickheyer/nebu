@@ -1,0 +1,117 @@
+<script lang="ts">
+  import type { NeoSkeletonContainerProps } from '#lib/neo/skeletons/neo-skeleton-container.model.js';
+
+  import { debounce } from '@dvcol/common-utils/common/debounce';
+  import { useResize } from '@dvcol/svelte-utils/resize';
+  import { toTransition, toTransitionProps } from '@dvcol/svelte-utils/transition';
+  import { untrack } from 'svelte';
+  import { fade } from 'svelte/transition';
+
+  import NeoTransitionContainer from '#lib/neo/containers/NeoTransitionContainer.svelte';
+  import { quickScaleDelayProps, quickScaleProps } from '#lib/neo/utils/transition.utils.js';
+
+  let {
+    // Snippets
+    content,
+    children: skeleton,
+
+    // State
+    tag = 'div',
+    ref = $bindable(),
+    loading = true,
+    disabled = false,
+
+    // Styles
+    flex,
+    ratio,
+    width,
+    height,
+    reverse,
+
+    // Content
+    context = $bindable({}),
+
+    // Transition
+    in: inAction = { use: fade, props: quickScaleProps },
+    out: outAction = { use: fade, props: quickScaleDelayProps },
+
+    // Other props
+    containerProps,
+    ...rest
+  }: NeoSkeletonContainerProps = $props();
+
+  const inFn = $derived(toTransition(inAction));
+  const inProps = $derived(toTransitionProps(inAction));
+  const outFn = $derived(toTransition(outAction));
+  const outProps = $derived(toTransitionProps(outAction));
+
+  const updateSize = $derived(
+    debounce(
+      () =>
+        untrack(() => {
+          if (!ref) return;
+          const rect = ref.getBoundingClientRect();
+          if (!width && rect?.width) context.width = `${rect.width}px`;
+          if (!height && rect?.height) context.height = `${rect.height}px`;
+        }),
+      inProps?.delay,
+    ),
+  );
+
+  const resize = useResize();
+  $effect.pre(() => {
+    if (!ref || loading) return;
+    if (resize.current === undefined) return;
+    updateSize();
+  });
+</script>
+
+{#if disabled}
+  {@render content?.()}
+{:else if content}
+  <NeoTransitionContainer {width} {height} {reverse} {ratio} {...containerProps}>
+    {#if loading}
+      <svelte:element
+        this={tag}
+        class:neo-skeleton-container={true}
+        style:flex
+        style:--neo-skeleton-content-width={context?.width}
+        style:--neo-skeleton-content-height={context?.height}
+        {...rest}
+      >
+        {@render skeleton?.(context)}
+      </svelte:element>
+    {:else}
+      <svelte:element
+        this={tag}
+        class:neo-skeleton-content-container={true}
+        bind:this={ref}
+        in:inFn={inProps}
+        out:outFn={outProps}
+        {@attach resize.observe}
+        {...rest}
+      >
+        {@render content?.()}
+      </svelte:element>
+    {/if}
+  </NeoTransitionContainer>
+{:else if loading}
+  {@render skeleton?.(context)}
+{/if}
+
+<style lang="scss">
+  @use '../styles/layers' as layers;
+
+  @include layers.neo-components {
+    .neo-skeleton-container {
+      display: flex;
+      width: var(--neo-skeleton-content-width);
+      min-height: var(--neo-skeleton-content-height);
+    }
+
+    .neo-skeleton-content-container {
+      width: fit-content;
+      height: fit-content;
+    }
+  }
+</style>

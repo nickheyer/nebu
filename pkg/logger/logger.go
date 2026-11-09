@@ -16,27 +16,29 @@ import (
 // Host page log capacity.
 const recentLines = 5000
 
-// Builds a logger with optional file output and a ring buffer for the Host page.
-func New(cfg *v1.Logging) (*slog.Logger, *launch.Log, io.Closer, error) {
+// Builds a logger with optional file output, a ring buffer for the Host page, and the level handle a reload sets
+func New(cfg *v1.Logging) (*slog.Logger, *launch.Log, *slog.LevelVar, io.Closer, error) {
 	var w io.Writer = os.Stderr
 	var closer io.Closer = io.NopCloser(nil)
 	if cfg.GetFile() != "" {
 		f, err := os.OpenFile(cfg.GetFile(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		w, closer = f, f
 	}
 	recent := launch.NewLog(recentLines)
 	w = io.MultiWriter(w, &lineWriter{ring: recent})
-	opts := &slog.HandlerOptions{Level: level(cfg.GetLevel())}
+	level := new(slog.LevelVar)
+	level.Set(ParseLevel(cfg.GetLevel()))
+	opts := &slog.HandlerOptions{Level: level}
 	var h slog.Handler
 	if strings.EqualFold(cfg.GetFormat(), "json") {
 		h = slog.NewJSONHandler(w, opts)
 	} else {
 		h = slog.NewTextHandler(w, opts)
 	}
-	return slog.New(h), recent, closer, nil
+	return slog.New(h), recent, level, closer, nil
 }
 
 // Buffers partial writes and adds complete lines to the ring.
@@ -64,7 +66,8 @@ func (l *lineWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func level(s string) slog.Level {
+// The level a config names, info for anything unknown
+func ParseLevel(s string) slog.Level {
 	switch strings.ToLower(s) {
 	case "debug":
 		return slog.LevelDebug

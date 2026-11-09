@@ -86,7 +86,7 @@ func (p drmSysfs) Run(ctx context.Context) host.Result {
 			byBus[strings.ToLower(d.GetFacts()["pci_bus_id"])] = d.GetId()
 		}
 	}
-	res := found(devices, pools, nil, rows(len(devices)))
+	res := found(devices, pools, nil, "")
 	res.Processes = drmProcesses(procRoot, byBus)
 	return res
 }
@@ -126,9 +126,13 @@ func drmProcesses(procRoot string, byBus map[string]string) []*v1.ProcessUse {
 			seen[bus+"/"+client] = true
 			bytesOn[bus] += n
 		}
+		if len(bytesOn) == 0 {
+			continue
+		}
+		name := comm(dir)
 		for bus, n := range bytesOn {
 			if id, ok := byBus[bus]; ok && n > 0 {
-				out = append(out, &v1.ProcessUse{DeviceId: id, Pid: int32(pid), Bytes: n})
+				out = append(out, &v1.ProcessUse{DeviceId: id, Pid: int32(pid), Bytes: n, Command: name})
 			}
 		}
 	}
@@ -136,6 +140,15 @@ func drmProcesses(procRoot string, byBus map[string]string) []*v1.ProcessUse {
 		return out[i].GetPid() < out[j].GetPid() || (out[i].GetPid() == out[j].GetPid() && out[i].GetDeviceId() < out[j].GetDeviceId())
 	})
 	return out
+}
+
+// The command name the kernel keeps for a process, read from its comm file
+func comm(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "comm"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // The PCI address, client id, and dedicated memory one fdinfo reports, resident counts preferred over the legacy totals
@@ -246,7 +259,6 @@ func drmDevice(card, dev, vendor string, names pciNames) (*v1.Device, *v1.Memory
 		d.MemoryFreeBytes = total - used
 	}
 	if total == 0 {
-		facts["memory"] = "shared"
 		return d, nil, nil
 	}
 	return d, &v1.MemoryPool{Id: d.Id, Kind: v1.PoolKind_POOL_KIND_DEVICE, DeviceId: d.Id, TotalBytes: total, FreeBytes: d.MemoryFreeBytes}, nil

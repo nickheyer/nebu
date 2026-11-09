@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -11,179 +12,75 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// The OpenAI Responses API, answered over the same model exchange as chat completions
+// The OpenAI Responses API, passed to a runtime serving it or answered over the same exchange as chat completions
 const OpenAIResponses = "/v1/responses"
-
-// Request fields with no counterpart in chat completions, kept from reaching a runtime
-var responsesOnly = map[string]bool{"include": true, "truncation": true, "max_tool_calls": true, "background": true, "conversation": true, "previous_response_id": true, "prompt": true, "store": true}
-
-// A Responses API request as the client wrote it
-type respRequest struct {
-	Model              string          `json:"model"`
-	Input              json.RawMessage `json:"input"`
-	Instructions       string          `json:"instructions,omitempty"`
-	MaxOutputTokens    int             `json:"max_output_tokens,omitempty"`
-	Temperature        *float64        `json:"temperature,omitempty"`
-	TopP               *float64        `json:"top_p,omitempty"`
-	Stream             bool            `json:"stream,omitempty"`
-	Tools              []respTool      `json:"tools,omitempty"`
-	ToolChoice         json.RawMessage `json:"tool_choice,omitempty"`
-	PreviousResponseID string          `json:"previous_response_id,omitempty"`
-	Conversation       json.RawMessage `json:"conversation,omitempty"`
-	Prompt             json.RawMessage `json:"prompt,omitempty"`
-	Background         bool            `json:"background,omitempty"`
-	Reasoning          *struct {
-		Effort string `json:"effort"`
-	} `json:"reasoning,omitempty"`
-	Text *struct {
-		Format    json.RawMessage `json:"format"`
-		Verbosity string          `json:"verbosity"`
-	} `json:"text,omitempty"`
-	Extra map[string]json.RawMessage `json:"-"`
-}
-
-func (r *respRequest) UnmarshalJSON(data []byte) error {
-	type plain respRequest
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*r = respRequest(p)
-	r.Extra = extraFields(data, plain{})
-	for name := range responsesOnly {
-		delete(r.Extra, name)
-	}
-	return nil
-}
-
-// A tool as the Responses API lists it, functions flat rather than under a function key
-type respTool struct {
-	Type        string            `json:"type"`
-	Name        string            `json:"name,omitempty"`
-	Description string            `json:"description,omitempty"`
-	Parameters  json.RawMessage   `json:"parameters,omitempty"`
-	Strict      *bool             `json:"strict,omitempty"`
-	ServerLabel string            `json:"server_label,omitempty"`
-	ServerURL   string            `json:"server_url,omitempty"`
-	Auth        string            `json:"authorization,omitempty"`
-	Headers     map[string]string `json:"headers,omitempty"`
-	Allowed     json.RawMessage   `json:"allowed_tools,omitempty"`
-	Filters     *struct {
-		Allowed []string `json:"allowed_domains"`
-	} `json:"filters,omitempty"`
-	Location *struct {
-		Country string `json:"country"`
-	} `json:"user_location,omitempty"`
-	Extra map[string]json.RawMessage `json:"-"`
-}
-
-func (t *respTool) UnmarshalJSON(data []byte) error {
-	type plain respTool
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*t = respTool(p)
-	t.Extra = extraFields(data, plain{})
-	return nil
-}
-
-// One item of the input list
-type respItem struct {
-	Type      string                     `json:"type"`
-	Role      string                     `json:"role"`
-	Content   json.RawMessage            `json:"content"`
-	CallID    string                     `json:"call_id"`
-	Name      string                     `json:"name"`
-	Arguments string                     `json:"arguments"`
-	Output    json.RawMessage            `json:"output"`
-	Summary   []respSummary              `json:"summary"`
-	Extra     map[string]json.RawMessage `json:"-"`
-}
-
-func (i *respItem) UnmarshalJSON(data []byte) error {
-	type plain respItem
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*i = respItem(p)
-	i.Extra = extraFields(data, plain{})
-	delete(i.Extra, "id")
-	delete(i.Extra, "status")
-	delete(i.Extra, "encrypted_content")
-	return nil
-}
-
-// One part of a message's content
-type respPart struct {
-	Type     string                     `json:"type"`
-	Text     string                     `json:"text,omitempty"`
-	ImageURL string                     `json:"image_url,omitempty"`
-	FileID   string                     `json:"file_id,omitempty"`
-	Refusal  string                     `json:"refusal,omitempty"`
-	Extra    map[string]json.RawMessage `json:"-"`
-}
-
-func (p *respPart) UnmarshalJSON(data []byte) error {
-	type plain respPart
-	var v plain
-	if err := json.Unmarshal(data, &v); err != nil {
-		return err
-	}
-	*p = respPart(v)
-	p.Extra = extraFields(data, plain{})
-	delete(p.Extra, "detail")
-	delete(p.Extra, "annotations")
-	delete(p.Extra, "logprobs")
-	return nil
-}
-
-type respSummary struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
 
 // Reads a Responses API request into the neutral form, instructions leading as a system turn
 func parseResponses(body []byte) (*Request, error) {
 	var req respRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+	if err := decodeRequest(body, req.read); err != nil {
 		return nil, bad("%v", err)
 	}
-	switch {
-	case req.PreviousResponseID != "":
-		return nil, bad("previous_response_id names a stored response, and the gateway stores none, so send the whole input")
-	case len(req.Conversation) > 0 && string(req.Conversation) != "null":
-		return nil, bad("conversation names stored state, and the gateway stores none, so send the whole input")
-	case len(req.Prompt) > 0 && string(req.Prompt) != "null":
-		return nil, bad("prompt names a stored prompt template, and the gateway stores none")
-	case req.Background:
-		return nil, bad("background responses need stored state, and the gateway stores none")
-	}
-	c := &Request{Kind: Chat, Responses: true, Model: req.Model, MaxTokens: req.MaxOutputTokens, Temperature: req.Temperature, TopP: req.TopP, Stream: req.Stream, Extra: req.Extra}
-	if req.Reasoning != nil && req.Reasoning.Effort != "" {
-		c.Extra = mergeExtra(c.Extra, map[string]json.RawMessage{"reasoning_effort": json.RawMessage(fmt.Sprintf("%q", req.Reasoning.Effort))})
-	}
-	if req.Text != nil {
-		if format, err := responseFormat(req.Text.Format); err != nil {
-			return nil, err
-		} else if format != nil {
-			c.Extra = mergeExtra(c.Extra, map[string]json.RawMessage{"response_format": format})
+	c := &Request{Kind: Chat, Responses: true, Model: req.Model, MaxTokens: req.MaxOutputTokens, Temperature: req.Temperature, TopP: req.TopP, Stream: req.Stream, Extra: req.Extra, Origin: originOf(OpenAIResponses, body, req.model, req.Model)}
+	refuse := func(err error) {
+		if c.Origin.Untranslatable == nil {
+			c.Origin.Untranslatable = err
 		}
-		if req.Text.Verbosity != "" {
-			c.Extra = mergeExtra(c.Extra, map[string]json.RawMessage{"verbosity": json.RawMessage(fmt.Sprintf("%q", req.Text.Verbosity))})
+	}
+	stored := req.PreviousResponseID != "" || present(req.Conversation) || present(req.Prompt)
+	if req.PreviousResponseID != "" {
+		refuse(bad("previous_response_id names a stored response, which only a runtime serving the Responses API keeps, so send the whole input"))
+	}
+	if present(req.Conversation) {
+		refuse(bad("conversation names stored state, which only a runtime serving the Responses API keeps, so send the whole input"))
+	}
+	if present(req.Prompt) {
+		refuse(bad("prompt names a stored prompt template, which only a runtime serving the Responses API keeps"))
+	}
+	if req.Background {
+		refuse(bad("background responses need stored state, which only a runtime serving the Responses API keeps"))
+	}
+	if req.Store != nil && *req.Store {
+		refuse(bad("store asks for the response to be kept, which only a runtime serving the Responses API does"))
+	}
+	if !req.HasInput {
+		if !stored {
+			return nil, bad("input is required")
 		}
+		refuse(bad("input is required when the request is translated"))
+	}
+	if req.Effort != "" {
+		c.Extra = mergeExtra(c.Extra, map[string]json.RawMessage{"reasoning_effort": appendStr(nil, req.Effort)})
+	}
+	format, err := responseFormat(req.Format)
+	if err != nil {
+		return nil, err
+	}
+	if format != nil {
+		c.Extra = mergeExtra(c.Extra, map[string]json.RawMessage{"response_format": format})
+	}
+	if req.Verbosity != "" {
+		c.Extra = mergeExtra(c.Extra, map[string]json.RawMessage{"verbosity": appendStr(nil, req.Verbosity)})
 	}
 	if req.Instructions != "" {
 		c.Messages = append(c.Messages, Message{Role: "system", Parts: []Part{{Type: "text", Text: req.Instructions}}})
 	}
-	messages, err := respMessages(req.Input)
+	messages, err := respMessages(&req, refuse)
 	if err != nil {
 		return nil, err
 	}
 	c.Messages = append(c.Messages, messages...)
-	if c.Tools, c.Sources, err = respTools(req.Tools); err != nil {
+	if c.Tools, c.Sources, err = respTools(req.Tools, refuse); err != nil {
 		return nil, err
+	}
+	if slices.Contains(req.Include, "message.output_text.logprobs") {
+		refuse(bad("include asks for logprobs, which only a runtime serving the Responses API returns"))
+	}
+	if req.Truncation == "auto" {
+		refuse(bad("truncation auto drops input to fit the context, which only a runtime serving the Responses API does"))
+	}
+	if cap := req.MaxToolCalls; cap != nil {
+		capToolCalls(c, *cap, refuse)
 	}
 	if c.ToolChoice, err = respToolChoice(req.ToolChoice); err != nil {
 		return nil, err
@@ -192,18 +89,9 @@ func parseResponses(body []byte) (*Request, error) {
 }
 
 // The chat completions response_format a text format asks for, nil for plain text
-func responseFormat(raw json.RawMessage) (json.RawMessage, error) {
-	if len(raw) == 0 || string(raw) == "null" {
+func responseFormat(format *respFormat) (json.RawMessage, error) {
+	if format == nil {
 		return nil, nil
-	}
-	var format struct {
-		Type   string          `json:"type"`
-		Name   string          `json:"name"`
-		Schema json.RawMessage `json:"schema"`
-		Strict *bool           `json:"strict"`
-	}
-	if err := json.Unmarshal(raw, &format); err != nil {
-		return nil, bad("text.format: %v", err)
 	}
 	switch format.Type {
 	case "", "text":
@@ -214,33 +102,27 @@ func responseFormat(raw json.RawMessage) (json.RawMessage, error) {
 		if len(format.Schema) == 0 {
 			return nil, bad("text.format of type json_schema needs a schema")
 		}
-		schema := map[string]any{"name": format.Name, "schema": format.Schema}
+		b := []byte(`{"type":"json_schema","json_schema":`)
+		o := begin(&b)
+		o.str("name", format.Name)
+		o.raw("schema", format.Schema)
 		if format.Strict != nil {
-			schema["strict"] = *format.Strict
+			o.boolean("strict", *format.Strict)
 		}
-		out, err := json.Marshal(map[string]any{"type": "json_schema", "json_schema": schema})
-		return out, err
+		o.close(nil)
+		return append(b, '}'), nil
 	}
 	return nil, bad("text.format type %q is not text, json_object, or json_schema", format.Type)
 }
 
-// Turns, from a string or a list of message, function call, function call output, and reasoning items
-func respMessages(raw json.RawMessage) ([]Message, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil, bad("input is required")
-	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return []Message{{Role: "user", Parts: []Part{{Type: "text", Text: text}}}}, nil
-	}
-	var items []respItem
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, bad("input must be a string or a list of items")
+// Turns from a string or items, tools the gateway ran left out and items only a native runtime takes refused
+func respMessages(req *respRequest, refuse func(error)) ([]Message, error) {
+	if req.InputText != nil {
+		return []Message{{Role: "user", Parts: []Part{{Type: "text", Text: *req.InputText}}}}, nil
 	}
 	var out []Message
-	// Reasoning the model wrote before its next item, which that item's turn carries as thinking
 	var thinking []Part
-	// Adds parts to the open assistant turn, or opens one, the pending reasoning leading
+	// Adds parts to the open assistant turn, or opens one led by the reasoning written before it
 	assistant := func(parts []Part, calls []ToolCall, extra map[string]json.RawMessage) {
 		if n := len(out); n > 0 && out[n-1].Role == "assistant" {
 			out[n-1].Parts = append(out[n-1].Parts, parts...)
@@ -251,7 +133,7 @@ func respMessages(raw json.RawMessage) ([]Message, error) {
 		out = append(out, Message{Role: "assistant", Parts: append(thinking, parts...), ToolCalls: calls, Extra: extra})
 		thinking = nil
 	}
-	for i, item := range items {
+	for i, item := range req.Input {
 		kind := item.Type
 		if kind == "" && item.Role != "" {
 			kind = "message"
@@ -266,7 +148,7 @@ func respMessages(raw json.RawMessage) ([]Message, error) {
 			default:
 				return nil, bad("input item %d has role %q, want user, assistant, system, or developer", i+1, item.Role)
 			}
-			parts, err := respParts(item.Content, i)
+			parts, err := respParts(item.Content, i, refuse)
 			if err != nil {
 				return nil, err
 			}
@@ -294,29 +176,21 @@ func respMessages(raw json.RawMessage) ([]Message, error) {
 			if len(thinking) > 0 {
 				assistant(nil, nil, nil)
 			}
-			parts, err := respOutput(item.Output, i)
+			parts, err := respOutput(item.Output, i, refuse)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, Message{Role: "tool", ToolID: item.CallID, Parts: parts, Extra: item.Extra})
 		case "reasoning":
-			var b strings.Builder
-			for _, s := range item.Summary {
-				if b.Len() > 0 {
-					b.WriteString("\n\n")
-				}
-				b.WriteString(s.Text)
-			}
-			if b.Len() > 0 {
-				thinking = append(thinking, Part{Type: "thinking", Text: b.String()})
+			if text := strings.Join(item.Summary, "\n\n"); text != "" {
+				thinking = append(thinking, Part{Type: "thinking", Text: text})
 			}
 		case "web_search_call", "mcp_call":
-			// A tool the gateway ran, whose turns it keeps and puts back behind the answer they led to
 			continue
 		case "item_reference":
-			return nil, bad("input item %d refers to a stored item, and the gateway stores none, so send the item itself", i+1)
+			refuse(bad("input item %d refers to a stored item, which only a runtime serving the Responses API keeps, so send the item itself", i+1))
 		default:
-			return nil, bad("input item %d has type %q, which the gateway cannot pass to a model", i+1, item.Type)
+			refuse(bad("input item %d has type %q, which only a runtime serving the Responses API takes", i+1, item.Type))
 		}
 	}
 	if len(thinking) > 0 {
@@ -326,61 +200,53 @@ func respMessages(raw json.RawMessage) ([]Message, error) {
 }
 
 // A message's content as parts, a string or a list of text and image parts
-func respParts(raw json.RawMessage, i int) ([]Part, error) {
-	if len(raw) == 0 || string(raw) == "null" {
+func respParts(content *respContent, i int, refuse func(error)) ([]Part, error) {
+	if content == nil {
 		return nil, nil
 	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		if text == "" {
+	if !content.List {
+		if content.Text == "" {
 			return nil, nil
 		}
-		return []Part{{Type: "text", Text: text}}, nil
-	}
-	var list []respPart
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, bad("input item %d: content must be a string or a list of parts", i+1)
+		return []Part{{Type: "text", Text: content.Text}}, nil
 	}
 	var out []Part
-	for _, p := range list {
+	for _, p := range content.Parts {
 		switch p.Type {
 		case "input_text", "output_text":
 			out = append(out, Part{Type: "text", Text: p.Text, Extra: p.Extra})
 		case "refusal":
 			out = append(out, Part{Type: "text", Text: p.Refusal, Extra: p.Extra})
 		case "input_image":
-			if p.FileID != "" {
-				return nil, bad("input item %d: an image by file_id names a stored file, and the gateway stores none, so send image_url", i+1)
+			switch {
+			case p.ImageURL != "":
+				part := Part{Type: "image", URL: p.ImageURL, Detail: p.Detail, Extra: p.Extra}
+				if mt, data, ok := DataURL(part.URL); ok {
+					part.MediaType, part.Data, part.URL = mt, data, ""
+				}
+				out = append(out, part)
+			case p.FileID != "":
+				refuse(bad("input item %d: an image by file_id names a stored file, which only a runtime serving the Responses API keeps, so send image_url", i+1))
+			default:
+				return nil, bad("input item %d: an input_image part needs image_url or file_id", i+1)
 			}
-			if p.ImageURL == "" {
-				return nil, bad("input item %d: an input_image part needs image_url", i+1)
-			}
-			part := Part{Type: "image", URL: p.ImageURL, Extra: p.Extra}
-			if mt, data, ok := DataURL(part.URL); ok {
-				part.MediaType, part.Data, part.URL = mt, data, ""
-			}
-			out = append(out, part)
 		default:
-			return nil, bad("input item %d: %s parts are not content the gateway can pass to a model", i+1, p.Type)
+			refuse(bad("input item %d: %s parts are content only a runtime serving the Responses API takes", i+1, p.Type))
 		}
 	}
 	return out, nil
 }
 
 // A function call's output as parts, a string or a list of parts
-func respOutput(raw json.RawMessage, i int) ([]Part, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
+func respOutput(output *respContent, i int, refuse func(error)) ([]Part, error) {
+	if output != nil && !output.List {
+		return []Part{{Type: "text", Text: output.Text}}, nil
 	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return []Part{{Type: "text", Text: text}}, nil
-	}
-	return respParts(raw, i)
+	return respParts(output, i, refuse)
 }
 
 // Tools by schema, web search as a tool the gateway runs, and mcp servers as sources to connect
-func respTools(list []respTool) ([]Tool, []Source, error) {
+func respTools(list []respTool, refuse func(error)) ([]Tool, []Source, error) {
 	var out []Tool
 	var sources []Source
 	searched := false
@@ -396,34 +262,15 @@ func respTools(list []respTool) ([]Tool, []Source, error) {
 				return nil, nil, bad("a request takes one web search tool")
 			}
 			searched = true
-			limits := &Provided{Kind: v1.ToolServerKind_TOOL_SERVER_KIND_SEARCH, MaxUses: ProvidedUses}
-			if t.Filters != nil {
-				limits.Allowed = t.Filters.Allowed
-			}
-			if t.Location != nil {
-				limits.Country = t.Location.Country
-			}
+			limits := &Provided{Kind: v1.ToolServerKind_TOOL_SERVER_KIND_SEARCH, MaxUses: ProvidedUses, Allowed: t.Domains, Country: t.Country}
 			out = append(out, Tool{Type: t.Type, Name: tools.SearchTool, Provided: limits, Extra: t.Extra})
 		case t.Type == "mcp":
 			if t.ServerLabel == "" || t.ServerURL == "" {
 				return nil, nil, bad("an mcp tool needs server_label and server_url")
 			}
-			src := Source{Name: t.ServerLabel, URL: t.ServerURL, Token: t.Auth}
+			src := Source{Name: t.ServerLabel, URL: t.ServerURL, Token: t.Auth, Allowed: t.Allowed}
 			if src.Token == "" {
 				src.Token = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(t.Headers["Authorization"], "Bearer "), "bearer "))
-			}
-			if len(t.Allowed) > 0 && string(t.Allowed) != "null" {
-				var names []string
-				var picked struct {
-					Names []string `json:"tool_names"`
-				}
-				if json.Unmarshal(t.Allowed, &names) == nil {
-					src.Allowed = names
-				} else if json.Unmarshal(t.Allowed, &picked) == nil {
-					src.Allowed = picked.Names
-				} else {
-					return nil, nil, bad("mcp tool %s: allowed_tools must be a list of names or an object with tool_names", t.ServerLabel)
-				}
 			}
 			sources = append(sources, src)
 		case t.Type == "custom":
@@ -432,41 +279,49 @@ func respTools(list []respTool) ([]Tool, []Source, error) {
 			}
 			out = append(out, Tool{Type: "custom", Name: t.Name, Description: t.Description, Extra: t.Extra})
 		default:
-			return nil, nil, bad("tool type %q is not one the gateway provides: function, web_search, mcp, or custom", t.Type)
+			refuse(bad("tool type %q is one only a runtime serving the Responses API provides, the gateway providing function, web_search, mcp, and custom", t.Type))
 		}
 	}
 	return out, sources, nil
 }
 
+// Holds the tools the gateway runs to max_tool_calls, none at zero, refusing a cap across mcp calls it cannot count
+func capToolCalls(c *Request, limit int, refuse func(error)) {
+	if limit <= 0 {
+		c.Sources = nil
+		c.Tools = slices.DeleteFunc(c.Tools, func(t Tool) bool { return t.Provided != nil })
+		return
+	}
+	if len(c.Sources) > 0 {
+		refuse(bad("max_tool_calls caps mcp calls, which only a runtime serving the Responses API counts"))
+	}
+	for _, t := range c.Tools {
+		if t.Provided != nil {
+			t.Provided.MaxUses = min(t.Provided.MaxUses, limit)
+		}
+	}
+}
+
 // The neutral tool choice, a named function or a mode
-func respToolChoice(raw json.RawMessage) (string, error) {
-	if len(raw) == 0 || string(raw) == "null" {
+func respToolChoice(tc *toolChoiceWire) (string, error) {
+	if tc == nil {
 		return "", nil
 	}
-	var mode string
-	if json.Unmarshal(raw, &mode) == nil {
-		switch mode {
+	if !tc.object {
+		switch tc.mode {
 		case "auto", "none", "required":
-			return mode, nil
+			return tc.mode, nil
 		}
-		return "", bad("tool_choice %q is not auto, none, or required", mode)
+		return "", bad("tool_choice %q is not auto, none, or required", tc.mode)
 	}
-	var choice struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
-		Mode string `json:"mode"`
-	}
-	if err := json.Unmarshal(raw, &choice); err != nil {
-		return "", bad("tool_choice: %v", err)
-	}
-	switch choice.Type {
+	switch tc.kind {
 	case "function", "custom":
-		if choice.Name == "" {
-			return "", bad("tool_choice of type %s needs a name", choice.Type)
+		if tc.name == "" {
+			return "", bad("tool_choice of type %s needs a name", tc.kind)
 		}
-		return choice.Name, nil
+		return tc.name, nil
 	case "allowed_tools":
-		if choice.Mode == "required" {
+		if tc.allowed == "required" {
 			return "required", nil
 		}
 		return "auto", nil
@@ -597,7 +452,10 @@ func (openai) renderResponses(c *Request, r *Result) ([]byte, error) {
 
 // The response id, the upstream's under the API's prefix or a fresh one
 func respID(r *Result) string {
-	if r.ID != "" {
+	switch {
+	case strings.HasPrefix(r.ID, "resp_"):
+		return r.ID
+	case r.ID != "":
 		return "resp_" + strings.TrimPrefix(r.ID, "chatcmpl-")
 	}
 	return "resp_" + randomID()
@@ -717,6 +575,9 @@ func (s *respStream) close() error {
 }
 
 func (s *respStream) Write(ev Event) error {
+	if err := oneChoice(ev, "Responses"); err != nil {
+		return err
+	}
 	switch ev.Kind {
 	case Said:
 		if s.kind != "message" {
@@ -803,18 +664,24 @@ func (s *respStream) Write(ev Event) error {
 		}
 		return s.event(kind, map[string]any{"response": s.response(status, incomplete, res.Usage, res.Extra)})
 	case Failed:
-		code := ev.Failure.Code
-		if code == "" {
-			code = CodeUpstream
-		}
+		fields := respFailure(*ev.Failure)
 		resp := s.response("failed", nil, Usage{}, nil)
-		resp["error"] = map[string]any{"code": code, "message": ev.Failure.Message}
+		resp["error"] = map[string]any{"code": fields["code"], "message": fields["message"]}
 		if err := s.event("response.failed", map[string]any{"response": resp}); err != nil {
 			return err
 		}
-		return s.event("error", map[string]any{"code": code, "message": ev.Failure.Message, "param": nil})
+		return s.event("error", fields)
 	}
 	return nil
+}
+
+// The fields of the error event a Responses stream ends with, its type and sequence number left to the writer
+func respFailure(f Failure) map[string]any {
+	code := f.Code
+	if code == "" {
+		code = CodeUpstream
+	}
+	return map[string]any{"code": code, "message": f.Message, "param": nil}
 }
 
 func (s *respStream) Close() error {

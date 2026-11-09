@@ -1,0 +1,209 @@
+<script lang="ts">
+  import type { NeoButtonProps } from '#lib/neo/buttons/neo-button.model.js';
+  import type { NeoNumberStepProps } from '#lib/neo/inputs/neo-number-step.model.js';
+
+  import { toTransition, toTransitionProps } from '@dvcol/svelte-utils/transition';
+  import { watch } from '@dvcol/svelte-utils/watch';
+
+  import NeoButton from '#lib/neo/buttons/NeoButton.svelte';
+  import NeoIconAdd from '#lib/neo/icons/NeoIconAdd.svelte';
+  import NeoIconMinus from '#lib/neo/icons/NeoIconMinus.svelte';
+  import NeoInput from '#lib/neo/inputs/common/NeoInput.svelte';
+  import NeoImage from '#lib/neo/media/NeoImage.svelte';
+  import { coerce, computeButtonTemplate, DefaultShadowElevation } from '#lib/neo/utils/shadow.utils.js';
+
+  let {
+    // Snippets
+    label,
+    iconPlus,
+    iconMinus,
+
+    // State
+    defaultValue = 0,
+    ref = $bindable(),
+    value = $bindable(defaultValue),
+    valid = $bindable(),
+    dirty = $bindable(false),
+    touched = $bindable(false),
+    hovered = $bindable(false),
+    focused = $bindable(false),
+    focusin = $bindable(false),
+    type = 'number',
+    placeholder = '0',
+    center = !label,
+
+    // Transition
+    in: inAction,
+    out: outAction,
+    transition: transitionAction,
+
+    // Events
+    onStepUp,
+    onStepDown,
+
+    // Other props
+    validationRef = $bindable(),
+    labelRef = $bindable(),
+    buttonProps,
+    groupProps,
+    containerRef = $bindable(),
+    containerProps,
+    ...rest
+  }: NeoNumberStepProps = $props();
+
+  let inputInstance = $state<ReturnType<typeof NeoInput>>();
+
+  const { tag: containerTag = 'div', ...containerRest } = $derived(containerProps ?? {});
+
+  const increment = (e: MouseEvent) => {
+    if (!ref || ref?.disabled) return;
+    ref.stepUp();
+    ref.dispatchEvent(
+      new InputEvent('input', {
+        bubbles: true,
+        cancelable: false,
+        data: ref?.valueAsNumber?.toString(),
+        inputType: 'stepUp',
+      }),
+    );
+    onStepUp?.(e, ref.valueAsNumber, ref.step);
+  };
+
+  const decrement = (e: MouseEvent) => {
+    if (!ref || ref?.disabled) return;
+    ref.stepDown();
+    ref.dispatchEvent(
+      new InputEvent('input', {
+        bubbles: true,
+        cancelable: false,
+        data: ref?.valueAsNumber?.toString(),
+        inputType: 'stepDown',
+      }),
+    );
+    onStepDown?.(e, ref.valueAsNumber, ref.step);
+  };
+
+  const elevation = $derived(coerce(rest?.elevation ?? DefaultShadowElevation));
+  const template = $derived(computeButtonTemplate(elevation, rest?.pressed, rest?.glass));
+  const buttonsProps = $derived<NeoButtonProps>({
+    skeleton: rest.skeleton,
+    disabled: rest.disabled,
+    rounded: rest.rounded,
+    start: rest.start,
+    ...template,
+    ...buttonProps,
+  });
+
+  watch(
+    () => {
+      if (focusin) return;
+      inputInstance?.validate?.();
+    },
+    () => focusin,
+    { skip: 1 },
+  );
+  const affix = $derived(rest.clearable || rest.loading !== undefined || rest.validation);
+
+  const inFn = $derived(toTransition(inAction ?? transitionAction));
+  const inProps = $derived(toTransitionProps(inAction ?? transitionAction));
+  const outFn = $derived(toTransition(outAction ?? transitionAction));
+  const outProps = $derived(toTransitionProps(outAction ?? transitionAction));
+</script>
+
+{#snippet before()}
+  <NeoButton aria-label="Decrement number" title="Decrement number" onclick={decrement} {...buttonsProps}>
+    {#snippet icon(ctx)}
+      {#if typeof iconMinus === 'function'}
+        {@render iconMinus(ctx)}
+      {:else if typeof iconMinus === 'string'}
+        <NeoImage src={iconMinus} ratio="1/1" {...buttonsProps?.imageProps} />
+      {:else}
+        <NeoIconMinus size="1.25rem" />
+      {/if}
+    {/snippet}
+  </NeoButton>
+{/snippet}
+
+{#snippet after()}
+  <NeoButton aria-label="Increment number" title="Increment number" onclick={increment} {...buttonsProps}>
+    {#snippet icon(ctx)}
+      {#if typeof iconPlus === 'function'}
+        {@render iconPlus(ctx)}
+      {:else if typeof iconPlus === 'string'}
+        <NeoImage src={iconPlus} ratio="1/1" {...buttonsProps?.imageProps} />
+      {:else}
+        <NeoIconAdd size="1.25rem" />
+      {/if}
+    {/snippet}
+  </NeoButton>
+{/snippet}
+
+<svelte:element
+  this={containerTag}
+  class:neo-number-step={true}
+  class:neo-label={label}
+  class:neo-center={center}
+  class:neo-affix={affix}
+  out:outFn={outProps}
+  in:inFn={inProps}
+  {...containerRest}
+>
+  <NeoInput
+    bind:this={inputInstance}
+    bind:ref
+    bind:containerRef
+    bind:validationRef
+    bind:labelRef
+    bind:value
+    bind:valid
+    bind:dirty
+    bind:touched
+    bind:hovered
+    bind:focused
+    bind:focusin
+    {type}
+    {placeholder}
+    {before}
+    {after}
+    {label}
+    {defaultValue}
+    containerProps={groupProps}
+    {...rest}
+    class={['neo-input-number-step', rest.class]}
+  />
+</svelte:element>
+
+<style lang="scss">
+  @use '../styles/layers' as layers;
+
+  @include layers.neo-components {
+    .neo-number-step {
+      display: contents;
+
+      :global(.neo-input-number-step.neo-input[type='number']) {
+        /* Hide arrows -Firefox */
+        appearance: textfield;
+
+        /* Hide arrows - Chrome, Safari, Edge, Opera */
+        &::-webkit-outer-spin-button,
+        &::-webkit-inner-spin-button {
+          margin: 0;
+          appearance: none;
+        }
+      }
+
+      &.neo-center {
+        :global(.neo-input-number-step.neo-input) {
+          text-align: center;
+        }
+
+        &.neo-affix {
+          :global(.neo-input-before) {
+            margin-right: 1.75rem;
+          }
+        }
+      }
+    }
+
+  }
+</style>

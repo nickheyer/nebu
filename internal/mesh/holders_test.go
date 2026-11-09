@@ -2,7 +2,6 @@ package mesh
 
 import (
 	"context"
-	"log/slog"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,7 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// A manager with members set straight into its tables, sessions held so no handshake is dialed
+// A manager with members set straight into its tables, sessions held so no sync is dialed
 func holdersManager(t *testing.T) *Manager {
 	t.Helper()
 	database, err := db.Open(filepath.Join(t.TempDir(), "nebu.db"))
@@ -21,7 +20,8 @@ func holdersManager(t *testing.T) *Manager {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { database.Close() })
-	m := &Manager{DB: database, Config: &v1.MeshConfig{}, Host: host.New(nil, nil, time.Minute), Log: slog.Default()}
+	fake := newFakePools()
+	m := &Manager{DB: database, Config: &v1.MeshConfig{}, Host: host.New(nil, nil, time.Minute), Log: quietLog(), Pools: fake, Registrar: fake}
 	if err := m.Open(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -61,9 +61,7 @@ func same(a, b []string) bool {
 	return true
 }
 
-// Holders come in link order: fabric, fast, lan, slow by round trip, members whose link is not
-// measured yet after them by name; a member not ready or holding another group is left out; and
-// a mesh with no link measured at all still answers, by name
+// Holders come in link order then by name, leaving out members not ready or holding another group
 func TestHoldersOrderByLinkThenName(t *testing.T) {
 	ctx := context.Background()
 	m := holdersManager(t)

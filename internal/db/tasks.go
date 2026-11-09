@@ -12,9 +12,9 @@ import (
 func (d *DB) PutTask(ctx context.Context, t *v1.Task) error {
 	return d.tx(ctx, func(exec execFn) error {
 		p := t.GetProgress()
-		if err := exec(`INSERT INTO tasks (id, kind, title, state, progress_done, progress_total, progress_message, error, created_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, title = excluded.title, state = excluded.state, progress_done = excluded.progress_done, progress_total = excluded.progress_total, progress_message = excluded.progress_message, error = excluded.error, created_at = excluded.created_at, started_at = excluded.started_at, finished_at = excluded.finished_at`,
-			t.GetId(), t.GetKind(), t.GetTitle(), enumCol(t.GetState()), int64(p.GetDone()), int64(p.GetTotal()), p.GetMessage(), t.GetError(), stamp(t.GetCreatedAt().AsTime()), timeCol(t.GetStartedAt()), timeCol(t.GetFinishedAt())); err != nil {
+		if err := exec(`INSERT INTO tasks (id, kind, title, state, progress_done, progress_total, progress_message, progress_unit, error, created_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, title = excluded.title, state = excluded.state, progress_done = excluded.progress_done, progress_total = excluded.progress_total, progress_message = excluded.progress_message, progress_unit = excluded.progress_unit, error = excluded.error, created_at = excluded.created_at, started_at = excluded.started_at, finished_at = excluded.finished_at`,
+			t.GetId(), t.GetKind(), t.GetTitle(), enumCol(t.GetState()), int64(p.GetDone()), int64(p.GetTotal()), p.GetMessage(), enumCol(p.GetUnit()), t.GetError(), stamp(t.GetCreatedAt().AsTime()), timeCol(t.GetStartedAt()), timeCol(t.GetFinishedAt())); err != nil {
 			return err
 		}
 		if err := clearChildren(exec, "task_id", t.GetId(), "task_labels"); err != nil {
@@ -73,9 +73,9 @@ func (d *DB) PruneTasks(ctx context.Context, keep int) error {
 }
 
 func (d *DB) tasks(ctx context.Context, where string, limit int, args ...any) ([]*v1.Task, error) {
-	out, err := list(ctx, d, `SELECT id, kind, title, state, progress_done, progress_total, progress_message, error, created_at, started_at, finished_at FROM tasks `+where+` ORDER BY created_at DESC, id DESC LIMIT ?`, func(rows *sql.Rows) (*v1.Task, error) {
+	out, err := list(ctx, d, `SELECT id, kind, title, state, progress_done, progress_total, progress_message, progress_unit, error, created_at, started_at, finished_at FROM tasks `+where+` ORDER BY created_at DESC, id DESC LIMIT ?`, func(rows *sql.Rows) (*v1.Task, error) {
 		t := &v1.Task{Progress: &v1.TaskProgress{}}
-		return t, rows.Scan(&t.Id, &t.Kind, &t.Title, enumAt[v1.TaskState]{&t.State}, &t.Progress.Done, &t.Progress.Total, &t.Progress.Message, &t.Error, at{&t.CreatedAt}, at{&t.StartedAt}, at{&t.FinishedAt})
+		return t, rows.Scan(&t.Id, &t.Kind, &t.Title, enumAt[v1.TaskState]{&t.State}, &t.Progress.Done, &t.Progress.Total, &t.Progress.Message, enumAt[v1.ProgressUnit]{&t.Progress.Unit}, &t.Error, at{&t.CreatedAt}, at{&t.StartedAt}, at{&t.FinishedAt})
 	}, append(args, limit)...)
 	if err != nil {
 		return nil, err

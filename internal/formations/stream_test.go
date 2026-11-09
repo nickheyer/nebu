@@ -6,8 +6,7 @@ import (
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// The head's log names the buffer it placed on a stage RPC<n>[<address>], n the device's index on
-// that server, and the bytes placed there sum over its model buffer lines
+// The head's log names buffers placed on stages by rpc address, summed over its model buffer lines
 func TestHeadStreamed(t *testing.T) {
 	lines := []string{
 		"load_tensors: offloaded 49/49 layers to GPU",

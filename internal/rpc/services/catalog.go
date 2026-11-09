@@ -24,7 +24,9 @@ import (
 	"github.com/nickheyer/nebu/pkg/runtimes"
 	"github.com/nickheyer/nebu/pkg/sources"
 	"github.com/nickheyer/nebu/pkg/store"
+	"github.com/nickheyer/nebu/pkg/text"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
@@ -196,7 +198,11 @@ func (s *SourceService) ListSources(ctx context.Context, req *connect.Request[v1
 			st.Capabilities.Facets = append(s.sharedFacets(), st.Capabilities.Facets...)
 		}
 	}
-	return reply(&v1.ListSourcesResponse{Sources: statuses}, nil)
+	statuses = match(statuses, req.Msg.GetQuery(), func(st *v1.SourceStatus) []string {
+		return []string{st.GetSource().GetId(), st.GetSource().GetName(), text.Enum(st.GetSource().GetKind()), st.GetCapabilities().GetName()}
+	})
+	statuses, next, err := page(statuses, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListSourcesResponse{Sources: statuses, NextCursor: next}, err)
 }
 
 func (s *SourceService) ListProviders(ctx context.Context, req *connect.Request[v1.ListProvidersRequest]) (*connect.Response[v1.ListProvidersResponse], error) {
@@ -395,6 +401,9 @@ func (s *SourceService) GetModelCard(ctx context.Context, req *connect.Request[v
 		return nil, wrap(err)
 	}
 	card, err := src.Card(ctx, req.Msg.GetRepo(), req.Msg.GetRevision())
+	if err == nil && card.GetHit() != nil {
+		s.stamp(card.Hit)
+	}
 	return reply(&v1.GetModelCardResponse{Card: card}, err)
 }
 
@@ -426,17 +435,19 @@ func (s *EstimateService) Parts(ctx context.Context, req *connect.Request[v1.Par
 
 // Serves the model store
 type StoreService struct {
-	pullTo PullTo
-	store  *store.Store
-	puller *pull.Puller
-	events *events.Bus
+	pullTo   PullTo
+	store    *store.Store
+	puller   *pull.Puller
+	events   *events.Bus
+	runtimes *runtimes.Registry
 }
 
 // Pulls a model onto another member, following that member's pull in one task here
 type PullTo func(ctx context.Context, nodeID string, req *v1.PullRequest) (*v1.Task, error)
 
-func NewStoreService(st *store.Store, p *pull.Puller, bus *events.Bus, to PullTo) *StoreService {
-	return &StoreService{pullTo: to, store: st, puller: p, events: bus}
+// Builds the store service, the runtime registry naming the compatibility bit a runtime filter reads
+func NewStoreService(st *store.Store, p *pull.Puller, bus *events.Bus, to PullTo, reg *runtimes.Registry) *StoreService {
+	return &StoreService{pullTo: to, store: st, puller: p, events: bus, runtimes: reg}
 }
 
 func (s *StoreService) Pull(ctx context.Context, req *connect.Request[v1.PullRequest]) (*connect.Response[v1.PullResponse], error) {
@@ -448,9 +459,49 @@ func (s *StoreService) Pull(ctx context.Context, req *connect.Request[v1.PullReq
 	return reply(&v1.PullResponse{Task: task}, err)
 }
 
+// Lists stored models narrowed by kind, runtime, format and query, in the order asked for, one page at a time
 func (s *StoreService) ListModels(ctx context.Context, req *connect.Request[v1.ListModelsRequest]) (*connect.Response[v1.ListModelsResponse], error) {
 	models, err := s.store.ListManifests()
-	return reply(&v1.ListModelsResponse{Models: models}, err)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	if kind := req.Msg.GetKind(); kind != v1.ModelKind_MODEL_KIND_UNSPECIFIED {
+		models = keep(models, func(m *v1.StoredModel) bool { return m.GetDescriptor_().GetKind() == kind })
+	}
+	if id := req.Msg.GetRuntimeId(); id != "" {
+		if _, err := s.runtimes.Get(id); err != nil {
+			return nil, wrap(err)
+		}
+		bit := s.runtimes.Bit(id)
+		models = keep(models, func(m *v1.StoredModel) bool { return m.GetRuntimes()&bit != 0 })
+	}
+	if format := req.Msg.GetFormatId(); format != "" {
+		models = keep(models, func(m *v1.StoredModel) bool { return m.GetFormatId() == format })
+	}
+	models = match(models, req.Msg.GetQuery(), func(m *v1.StoredModel) []string {
+		return []string{m.GetRepo(), m.GetGroup(), m.GetFormatId(), m.GetDescriptor_().GetArchitecture(), m.GetDescriptor_().GetPrecision().GetLabel()}
+	})
+	sortModels(models, req.Msg.GetSort())
+	models, next, err := page(models, req.Msg.GetCursor(), req.Msg.GetLimit())
+	return reply(&v1.ListModelsResponse{Models: models, NextCursor: next}, err)
+}
+
+// Orders models as a listing asks, unset times last, the store's own key order otherwise
+func sortModels(models []*v1.StoredModel, by v1.ModelSort) {
+	stamp := func(ts *timestamppb.Timestamp) int64 {
+		if ts == nil {
+			return -1
+		}
+		return ts.AsTime().UnixNano()
+	}
+	switch by {
+	case v1.ModelSort_MODEL_SORT_LAST_USED:
+		sort.SliceStable(models, func(i, j int) bool { return stamp(models[i].GetUsedAt()) > stamp(models[j].GetUsedAt()) })
+	case v1.ModelSort_MODEL_SORT_PULLED:
+		sort.SliceStable(models, func(i, j int) bool { return stamp(models[i].GetPulledAt()) > stamp(models[j].GetPulledAt()) })
+	case v1.ModelSort_MODEL_SORT_SIZE:
+		sort.SliceStable(models, func(i, j int) bool { return models[i].GetBytes() > models[j].GetBytes() })
+	}
 }
 
 func (s *StoreService) GetModel(ctx context.Context, req *connect.Request[v1.GetModelRequest]) (*connect.Response[v1.GetModelResponse], error) {
