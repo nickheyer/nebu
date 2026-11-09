@@ -394,9 +394,10 @@ func (r *lifecycleRouter) ResponseComplete(ctx context.Context, req *framework.R
 	}
 }
 
-// Rebuilds scheduler configurations whenever the pools manager publishes one, rebuilding the director when names change
+// Subscribes before the catch up reload so no configuration stored in between is missed, then rebuilds on every publish
 func (g *Gateway) followConfigs(ctx context.Context) {
 	sub := g.events.Subscribe(ctx, []v1.EventKind{v1.EventKind_EVENT_KIND_SCHEDULER_CONFIG})
+	g.reloadSchedulers(nil)
 	for {
 		select {
 		case <-ctx.Done():

@@ -338,7 +338,6 @@ const (
 // Keeps schedulers, the prefix index, metrics, health and traces current until ctx ends, then stops flow control
 func (g *Gateway) Run(ctx context.Context) {
 	g.manager.SetSchedulerDeps(ctx, g)
-	g.reloadSchedulers(nil)
 	defer g.index.Close()
 	defer g.flow.Close()
 	defer g.conns.close()

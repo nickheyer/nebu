@@ -41,7 +41,7 @@ func bad(format string, args ...any) error {
 }
 
 // Reads a bounded body as chunks of at most bodyparse.ChunkBytes, an oversized one failing with bodyparse.ErrTooLarge
-func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+func readBody(_ http.ResponseWriter, r *http.Request) ([]byte, error) {
 	if r.Body == nil || r.Body == http.NoBody {
 		return nil, nil
 	}
