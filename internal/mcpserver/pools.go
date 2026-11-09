@@ -8,7 +8,6 @@ import (
 	"buf.build/go/protovalidate"
 	"connectrpc.com/connect"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	nebuv1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -204,7 +203,7 @@ func (n *nebu) addPoolTools(s *mcp.Server, ro *mcp.ToolAnnotations) {
 		return answer(r, err)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "list_pool_imports", Description: "Lists the pools other mesh members export to this node with their exporters, endpoints and conditions", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
-		r, err := n.imports.ListPoolImports(ctx, connect.NewRequest(&nebuv1.ListPoolImportsRequest{}))
+		r, err := n.imports.ListPoolImports(ctx, connect.NewRequest(&v1.ListPoolImportsRequest{}))
 		return answer(r, err)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "list_objectives", Description: "Lists the named latency objectives and priority bands requests reference by header", Annotations: ro}, func(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, any, error) {
@@ -253,7 +252,7 @@ func (n *nebu) addPoolResources(s *mcp.Server, read func(uri, name, description 
 		return msgOf(n.gateway.ListSchedulerConfigs(ctx, connect.NewRequest(&v1.ListSchedulerConfigsRequest{})))
 	})
 	read("nebu://pool-imports", "pool imports", "The pools other mesh members export to this node", func(ctx context.Context) (proto.Message, error) {
-		return msgOf(n.imports.ListPoolImports(ctx, connect.NewRequest(&nebuv1.ListPoolImportsRequest{})))
+		return msgOf(n.imports.ListPoolImports(ctx, connect.NewRequest(&v1.ListPoolImportsRequest{})))
 	})
 	n.template(s, "nebu://pools/{id}", "pool", "One pool with its spec, endpoints and conditions", func(ctx context.Context, _ *mcp.ReadResourceRequest, id string) (proto.Message, error) {
 		return msgOf(n.gateway.GetPool(ctx, connect.NewRequest(&v1.GetPoolRequest{Id: id})))

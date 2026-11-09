@@ -105,7 +105,7 @@ aur_sources:
     conflicts: [nebu-bin]
     depends: [ca-certificates]
     optdepends: *runtime_dependencies
-    makedepends: ['go>=1.27', 'nodejs>=22', npm, buf, make]
+    makedepends: ['go>=1.27', 'nodejs>=24', npm, buf, make]
     backup: [etc/nebu/config.yaml]
     prepare: |
       export GOTOOLCHAIN=local

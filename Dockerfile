@@ -3,7 +3,7 @@ ARG BASE_IMAGE=ubuntu:24.04
 
 FROM --platform=$BUILDPLATFORM bufbuild/buf:1.73.0 AS proto
 WORKDIR /src
-COPY buf.yaml buf.gen.yaml ./
+COPY buf.yaml buf.gen.yaml buf.lock ./
 COPY proto ./proto
 RUN buf generate
 

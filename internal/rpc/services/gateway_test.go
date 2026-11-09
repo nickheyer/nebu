@@ -24,7 +24,6 @@ import (
 	"github.com/nickheyer/nebu/pkg/flowcontrol"
 	"github.com/nickheyer/nebu/pkg/health"
 	"github.com/nickheyer/nebu/pkg/metrics"
-	nebuv1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"github.com/nickheyer/nebu/pkg/scheduling/config"
 	"github.com/nickheyer/nebu/pkg/stub"
@@ -288,16 +287,16 @@ func TestGatewayServiceTraces(t *testing.T) {
 // Imports the mesh tracks, changed in place by a test
 type fakeImports struct {
 	mu   sync.Mutex
-	list []*nebuv1.PoolImport
+	list []*v1.PoolImport
 }
 
-func (f *fakeImports) Imports() []*nebuv1.PoolImport {
+func (f *fakeImports) Imports() []*v1.PoolImport {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]*nebuv1.PoolImport(nil), f.list...)
+	return append([]*v1.PoolImport(nil), f.list...)
 }
 
-func (f *fakeImports) Import(id string) (*nebuv1.PoolImport, bool) {
+func (f *fakeImports) Import(id string) (*v1.PoolImport, bool) {
 	for _, imp := range f.Imports() {
 		if imp.GetId() == id {
 			return imp, true
@@ -306,7 +305,7 @@ func (f *fakeImports) Import(id string) (*nebuv1.PoolImport, bool) {
 	return nil, false
 }
 
-func (f *fakeImports) set(list ...*nebuv1.PoolImport) {
+func (f *fakeImports) set(list ...*v1.PoolImport) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.list = list
