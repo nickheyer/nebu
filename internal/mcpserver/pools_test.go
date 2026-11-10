@@ -71,7 +71,7 @@ func poolSession(t *testing.T) *mcp.ClientSession {
 	}
 	guard := auth.NewGuard("", nil, nil)
 	gw, err := gateway.New(gateway.Deps{
-		Pools: mgr, Resolver: mgr, Manager: mgr, Store: mgr.Store(), DB: store, Events: bus, Guard: guard,
+		Pools: mgr, Resolver: mgr, Manager: mgr, Store: mgr.Store(), Sampler: mgr.Sampler(), DB: store, Events: bus, Guard: guard,
 		Tools: tools.New(log, bus), Runtimes: openAI{}, Instances: noInstances{},
 		Metrics: mreg, Telemetry: tp, Health: health.NewRegistry(), Logger: log,
 		Config: gateway.Config{

@@ -22,6 +22,7 @@ import (
 	"github.com/nickheyer/nebu/internal/tools"
 	"github.com/nickheyer/nebu/pkg/chattemplate"
 	"github.com/nickheyer/nebu/pkg/datalayer"
+	"github.com/nickheyer/nebu/pkg/datalayer/scrape"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/flowcontrol"
 	"github.com/nickheyer/nebu/pkg/health"
@@ -130,6 +131,8 @@ type setup struct {
 	unsynced bool
 	// Runs the manager's scrape, probe and catalog sources
 	scrape bool
+	// The pace metrics are scraped at, every twenty milliseconds whatever the demand when zero
+	pace scrape.Pace
 	// The request chain document, the built in one when empty
 	chain []byte
 	// Stored adapters a request may name, none when nil
@@ -147,6 +150,9 @@ func newHarness(t *testing.T, opts ...func(*setup)) *harness {
 	for _, o := range opts {
 		o(&s)
 	}
+	if s.pace == (scrape.Pace{}) {
+		s.pace = scrape.Pace{Deciding: 20 * time.Millisecond, Working: 20 * time.Millisecond, Idle: 20 * time.Millisecond}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	d, err := db.Open(filepath.Join(t.TempDir(), "nebu.db"))
 	if err != nil {
@@ -154,7 +160,7 @@ func newHarness(t *testing.T, opts ...func(*setup)) *harness {
 	}
 	bus := events.New()
 	log := slog.New(slog.DiscardHandler)
-	mgr, err := pools.New(ctx, pools.Options{DB: d, Events: bus, NodeID: testNode, Log: log, ScrapeInterval: 20 * time.Millisecond, ProbeInterval: 20 * time.Millisecond, CatalogInterval: 20 * time.Millisecond})
+	mgr, err := pools.New(ctx, pools.Options{DB: d, Events: bus, NodeID: testNode, Log: log, Scrape: s.pace, ProbeInterval: 20 * time.Millisecond, CatalogInterval: 20 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +184,7 @@ func newHarness(t *testing.T, opts ...func(*setup)) *harness {
 	inst := &fakeInstances{support: map[string]v1.ToolSupport{}, modes: map[string][]string{}, templates: map[string]*chattemplate.Template{}, files: map[string]string{}}
 	hreg := health.NewRegistry()
 	g, err := New(Deps{
-		Pools: mgr, Resolver: mgr, Manager: mgr, Store: mgr.Store(), DB: d, Events: bus, Guard: s.guard,
+		Pools: mgr, Resolver: mgr, Manager: mgr, Store: mgr.Store(), Sampler: mgr.Sampler(), DB: d, Events: bus, Guard: s.guard,
 		Tools: tools.New(log, bus), Peers: s.peers, Runtimes: s.runtimes, Instances: inst, Adapters: s.adapters,
 		Metrics: mreg, Telemetry: tp, Health: hreg, Logger: log,
 		Config: Config{

@@ -7,10 +7,8 @@
 	import { SettingsSchema } from '#lib/proto/nebu/v1/settings_pb.js';
 	import type { HeaderTab } from '#lib/shell/chrome.svelte.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
-	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Segmented from '#lib/ui/fields/Segmented.svelte';
-	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import Columns from '#lib/ui/layout/Columns.svelte';
@@ -61,21 +59,18 @@
 	}
 </script>
 
-<PageHeader {tabs} active="general" info="How this host names itself and how the console looks" />
+<PageHeader {tabs} active="general" />
 
 <Columns ratio="1/1">
 	{#snippet left()}
 		<Card title="Host">
-			<Text bind:value={hostLabel} label="Host label" info="The name this host shows in the mesh and the console, its hostname when empty" placeholder={live.host?.hostname} />
+			<Text bind:value={hostLabel} label="Host label" info="Shown in the mesh and here" placeholder={live.host?.hostname} />
 			<SaveBar {dirty} {saving} {error} onsave={save} ondiscard={discard} />
 		</Card>
 	{/snippet}
 	{#snippet right()}
 		<Card title="Appearance">
-			<FieldRow>
-				<Segmented value={themeChoice} options={[{ value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }, { value: 'system', label: 'System' }]} label="Theme" info="Light, dark or whatever the system is set to" onchange={setTheme} />
-				<Switch checked={theme.reset} label="Style reset" info="The component library's CSS reset over browser defaults" onchange={(on) => theme.update({ reset: on })} />
-			</FieldRow>
+			<Segmented value={themeChoice} options={[{ value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }, { value: 'system', label: 'System' }]} label="Theme" onchange={setTheme} />
 		</Card>
 	{/snippet}
 </Columns>

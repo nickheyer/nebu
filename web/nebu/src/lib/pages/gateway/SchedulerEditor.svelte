@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { create } from '@bufbuild/protobuf';
 	import { untrack } from 'svelte';
-	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { plural } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
@@ -15,7 +14,6 @@
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
-	import Row from '#lib/ui/layout/Row.svelte';
 	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { schedulerSkeleton } from '#lib/pages/gateway/gateway.js';
@@ -28,7 +26,6 @@
 	let yaml = $state(start?.spec?.yaml ?? schedulerSkeleton);
 	let valid = $state(true);
 	let codeError = $state<string | undefined>(undefined);
-	let validating = $state(false);
 	let saving = $state(false);
 	let error = $state<string | undefined>(undefined);
 	let height = $state(800);
@@ -41,20 +38,6 @@
 
 	function draft() {
 		return create(SchedulerConfigSchema, { name: name.trim(), spec: create(SchedulerConfigSpecSchema, { yaml }) });
-	}
-
-	async function validate() {
-		validating = true;
-		try {
-			const res = await rpc.gateway.putSchedulerConfig({ config: draft(), validateOnly: true });
-			codeError = undefined;
-			toast.success('Configuration loads', res.config?.status?.conditions[0]?.message);
-		} catch (err) {
-			codeError = reason(err);
-			toast.error('Configuration does not load', codeError);
-		} finally {
-			validating = false;
-		}
 	}
 
 	async function save() {
@@ -84,28 +67,25 @@
 
 <svelte:window bind:innerHeight={height} />
 
-<PanelHeader title={editing ? name : 'New scheduler'} subtitle={editing ? plural(references, 'pool') : undefined} {onclose}>
-	{#snippet tools()}
-		<Row gap={8} wrap={false}>
-			<NeoButton elevation={2} loading={validating} disabled={!complete} onclick={validate}>Validate</NeoButton>
-			{#if editing && references === 0}<Confirm label="Delete" question="Delete {name}?" danger onconfirm={remove} />{/if}
-		</Row>
-	{/snippet}
-</PanelHeader>
+<PanelHeader title={editing ? name : 'New scheduler'} subtitle={editing ? plural(references, 'pool') : undefined} {onclose} />
 <Stack gap={24}>
-	<FormSection title="Scheduler" info="A named configuration pools pick to run their requests through">
+	<FormSection>
 		{#if !editing}
 			<FieldRow>
-				<Text bind:value={name} label="Name" info="How pools refer to the configuration" required max={64} />
+				<Text bind:value={name} label="Name" required max={64} />
 				<span></span>
 			</FieldRow>
 		{/if}
-		<Code bind:value={yaml} language="yaml" bind:valid bind:error={codeError} {rows} label="Configuration" info="Plugins, profiles and the profile handler in YAML" />
+		<Code bind:value={yaml} language="yaml" bind:valid bind:error={codeError} {rows} label="Configuration" />
 	</FormSection>
-	{#if current}
-		<Section title="Conditions" level={3}>
+	{#if current?.status?.conditions.length}
+		<Section title="Status" level={3}>
 			<Conditions conditions={current.status?.conditions} />
 		</Section>
 	{/if}
 </Stack>
-<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!complete} onsave={save} ondiscard={onclose} />
+{#snippet deleteButton()}
+	<Confirm label="Delete" question="Delete {name}?" danger placement="top-start" onconfirm={remove} />
+{/snippet}
+
+<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!complete} leading={editing && references === 0 ? deleteButton : undefined} onsave={save} ondiscard={onclose} />

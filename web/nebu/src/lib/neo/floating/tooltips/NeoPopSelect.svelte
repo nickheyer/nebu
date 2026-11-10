@@ -16,6 +16,7 @@
 
     // States
     search = false,
+    closeOnSelect = false,
     items: array = [],
 
     // Styles
@@ -77,6 +78,7 @@
 
   const onSelected = (event: NeoListSelectEvent) => {
     onSelect?.(event);
+    if (closeOnSelect) open = false;
     const current = Array.isArray(event.current) ? event.current.map(i => i?.item?.value) : event.current?.item?.value;
     const previous = Array.isArray(event.previous) ? event.previous.map(i => i?.item?.value) : event.previous?.item?.value;
     if (JSON.stringify(current) === JSON.stringify(selected)) return;

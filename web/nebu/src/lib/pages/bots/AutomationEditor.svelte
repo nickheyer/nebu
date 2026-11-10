@@ -22,63 +22,67 @@
 	// Actions that generate through a model
 	const generates = $derived(action.kind === ActionKind.CHAT || action.kind === ActionKind.IMAGE || action.kind === ActionKind.VIDEO);
 	const routes = routeFetch();
+	// The persona that acts, the first one when none is named
+	const acting = $derived(personas.find((p) => p.id === automation.personaId) ?? personas[0]);
 </script>
-
-{#snippet triggerAdvanced()}
-	<Percent value={automation.chance * 100} label="Chance" info="Share of matches that fire, every match at zero" onchange={(n: number) => (automation.chance = n / 100)} />
-{/snippet}
 
 {#snippet actionAdvanced()}
 	<FieldRow>
-		<Picker bind:value={() => action.model || undefined, (v) => (action.model = v ?? '')} fetch={routes} label="Model" info="Route the action answers through, the persona's own when empty" placeholder="Persona's model" clearable current={action.model || undefined} />
-		<Switch bind:checked={action.reply} label="Reply" info="Posts as a reply to the triggering message" top />
+		<Picker bind:value={() => action.model || undefined, (v) => (action.model = v ?? '')} fetch={routes} label="Model" placeholder={acting?.model || undefined} clearable current={action.model || undefined} />
+		<Switch bind:checked={action.reply} label="Reply to the message" top />
 	</FieldRow>
 {/snippet}
 
-{#snippet scopeAdvanced()}
-	<Duration bind:value={automation.cooldownMs} base="ms" max={86_400_000} label="Cooldown" info="Least time between two firings" />
-{/snippet}
-
 <Stack gap={24}>
-	<FormSection title="Trigger" info="A chance above zero fires the automation on only that share of matches" advanced={triggerAdvanced}>
+	<FormSection>
 		<FieldRow>
-			<Text bind:value={automation.name} label="Name" info="Shown in the automations list" max={64} required />
-			<Switch bind:checked={automation.enabled} label="Enabled" info="Whether the trigger is armed" top />
+			<Text bind:value={automation.name} label="Name" max={64} required />
+			<Switch bind:checked={automation.enabled} label="Enabled" top />
 		</FieldRow>
+	</FormSection>
+	<FormSection title="When">
 		<FieldRow>
-			<Select bind:value={trigger.kind} options={triggerKinds} label="Kind" info="Schedule, keyword, reaction or command" />
+			<Select bind:value={trigger.kind} options={triggerKinds} label="Trigger" />
 			{#if trigger.kind === TriggerKind.SCHEDULE}
-				<Cron bind:value={trigger.cron} info="When the automation runs" />
+				<Cron bind:value={trigger.cron} />
 			{:else if trigger.kind === TriggerKind.KEYWORD}
-				<Text bind:value={trigger.pattern} label="Pattern" info="A regular expression the message must match" placeholder="Regex" mono max={256} />
+				<Text bind:value={trigger.pattern} label="Pattern" info="Regular expression" mono max={256} />
 			{:else if trigger.kind === TriggerKind.REACTION}
-				<Text bind:value={trigger.pattern} label="Emoji" info="The reaction that fires it" max={8} />
+				<Text bind:value={trigger.pattern} label="Emoji" max={8} />
 			{:else if trigger.kind === TriggerKind.COMMAND}
 				<Text bind:value={trigger.command} label="Command" info="The word after the prefix" max={32} />
 			{/if}
 		</FieldRow>
-		{#if trigger.kind === TriggerKind.SCHEDULE}
-			<Duration bind:value={trigger.everySeconds} base="s" max={2_592_000} label="Every" info="Time between runs when there is no cron" placeholder="Cron alone" emptyZero />
+		{#if trigger.kind === TriggerKind.SCHEDULE && !trigger.cron}
+			<Duration bind:value={trigger.everySeconds} base="s" max={2_592_000} label="Every" emptyZero />
 		{/if}
+		<FieldRow wide>
+			<Percent value={(automation.chance || 1) * 100} max={100} label="Chance" info="Share of matches that fire" onchange={(n: number) => (automation.chance = n >= 100 ? 0 : n / 100)} />
+			<Duration bind:value={automation.cooldownMs} base="ms" max={86_400_000} label="Pause between runs" emptyZero />
+		</FieldRow>
 	</FormSection>
-	<FormSection title="Action" info="What the bot does when the trigger fires" advanced={generates ? actionAdvanced : undefined}>
+	<FormSection title="Do" advanced={generates ? actionAdvanced : undefined}>
 		<FieldRow>
-			<Select bind:value={action.kind} options={actionKinds} label="Kind" info="Text posted as written, a generated answer or a reaction" />
+			<Select bind:value={action.kind} options={actionKinds} label="Action" />
 			{#if action.kind === ActionKind.REACT}
-				<Text bind:value={action.emoji} label="Emoji" info="The reaction to add" max={8} />
+				<Text bind:value={action.emoji} label="Emoji" max={8} />
 			{:else if action.kind === ActionKind.TEXT}
-				<Switch bind:checked={action.reply} label="Reply" info="Posts as a reply to the triggering message" top />
+				<Switch bind:checked={action.reply} label="Reply to the message" top />
 			{/if}
 		</FieldRow>
 		{#if action.kind !== ActionKind.REACT}
-			<Textarea bind:value={action.template} label={generates ? 'Prompt template' : 'Template'} info={generates ? 'What the model is asked, with the placeholders below filled in from the triggering message' : 'What gets posted, with the placeholders below filled in from the triggering message'} message={templateHelp} rows={3} mono />
+			<Textarea bind:value={action.template} label={generates ? 'Prompt' : 'Message'} message={templateHelp} rows={3} mono />
 		{/if}
 	</FormSection>
-	<FormSection title="Scope" info="Who acts and where the automation listens" advanced={scopeAdvanced}>
-		<Select bind:value={() => automation.personaId || undefined, (v) => (automation.personaId = v ?? '')} options={personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" info="Who acts, the first persona when empty" clearable placeholder={personas[0] ? `Default (${personas[0].name})` : 'No personas'} />
-		<FieldRow>
-			<Checklist bind:value={automation.guildIds} options={guildOptions(guilds)} label="Guilds" info="Servers the automation acts in, every allowed one when empty" empty={guilds.length ? undefined : 'Not connected'} />
-			<ChannelTree bind:value={automation.channelIds} {guilds} label="Channels" info="Channels for scheduled posts and message triggers, every allowed one when empty" />
-		</FieldRow>
+	<FormSection title="Where">
+		{#if personas.length > 1}
+			<Select bind:value={() => automation.personaId || undefined, (v) => (automation.personaId = v ?? '')} options={personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" clearable placeholder={personas[0]?.name} />
+		{/if}
+		{#if guilds.length}
+			<FieldRow>
+				<Checklist bind:value={automation.guildIds} options={guildOptions(guilds)} label="Servers" info="Every server when none is checked" />
+				<ChannelTree bind:value={automation.channelIds} {guilds} label="Channels" info="Every channel when none is checked" />
+			</FieldRow>
+		{/if}
 	</FormSection>
 </Stack>

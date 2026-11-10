@@ -13,73 +13,68 @@
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import NumberField from '#lib/ui/fields/Number.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
-	import { gatewayDefault, literal } from '#lib/pages/serve/serve.js';
+	import type { Option } from '#lib/ui/fields/types.js';
+	import { burstFallback } from '#lib/pages/serve/serve.js';
 
-	let { policy = $bindable(create(PolicySchema)), profile = $bindable(create(ProfileSchema)) }: { policy?: Policy; profile?: Profile } = $props();
+	// A route's limits and tools, every empty limit showing the gateway's own value
+	let { policy = $bindable(create(PolicySchema)), profile = $bindable(create(ProfileSchema)), disabled = false }: { policy?: Policy; profile?: Profile; disabled?: boolean } = $props();
 
-	let remote = $state<ToolServerStatus[]>([]);
-	let width = $state(0);
-	const pairDurations = $derived(width >= 720);
+	let listed = $state<ToolServerStatus[]>([]);
 	const d = $derived(defaults.policy);
 
-	// Adds the tool servers other mesh members run
+	// Reads every tool server this node and the mesh members run, page by page
 	onMount(async () => {
 		defaults.load();
-		if (!live.inMesh) return;
 		try {
-			remote = (await rpc.tools.listToolServers({ mesh: true })).servers.filter((s) => s.nodeId !== '');
+			const all: ToolServerStatus[] = [];
+			let cursor = '';
+			do {
+				const res = await rpc.tools.listToolServers({ mesh: live.inMesh, cursor, limit: 200 });
+				all.push(...res.servers);
+				cursor = res.nextCursor;
+			} while (cursor);
+			listed = all;
 		} catch (err) {
-			toast.error('Mesh tool servers failed to list', reason(err));
+			toast.error('Tool servers failed to list', reason(err));
 		}
 	});
 
-	const servers = $derived(
-		[...live.toolServers.values(), ...remote].map((t) => ({
-			value: t.ref || t.server?.name || '',
-			label: t.ref || t.server?.name || '',
-			description: t.nodeId ? `on ${live.nodes.get(t.nodeId)?.name ?? t.nodeId}` : undefined,
-			disabled: t.state === ToolServerState.FAILED,
-			tip: t.state === ToolServerState.FAILED ? t.error : undefined
-		}))
-	);
+	// Tool servers by ref, live local state winning, a named one nobody runs kept so it can be unchecked
+	const servers = $derived.by((): Option<string>[] => {
+		const byRef = new Map<string, ToolServerStatus>();
+		for (const s of listed) byRef.set(s.ref || s.server?.name || '', s);
+		for (const s of live.toolServers.values()) byRef.set(s.ref || s.server?.name || '', s);
+		const options = [...byRef.entries()]
+			.filter(([ref]) => ref !== '')
+			.sort(([a], [b]) => a.localeCompare(b))
+			.map(([ref, s]): Option<string> => ({
+				value: ref,
+				label: ref,
+				description: s.nodeId ? (live.nodes.get(s.nodeId)?.name ?? s.nodeId) : undefined,
+				disabled: disabled || (s.state === ToolServerState.FAILED && !profile.toolServers.includes(ref)),
+				tip: s.state === ToolServerState.FAILED ? s.error : undefined
+			}));
+		for (const ref of profile.toolServers) if (!byRef.has(ref)) options.push({ value: ref, label: ref, description: 'missing', disabled });
+		return options;
+	});
 </script>
 
-{#snippet requestTimeout()}
-	<Duration bind:value={policy.requestTimeoutMs} base="ms" max={86_400_000} label="Request timeout" info="The whole exchange, first byte in to last byte out" emptyZero fallback={d?.requestTimeoutMs || undefined} off={gatewayDefault(d?.requestTimeoutMs, 'No timeout')} />
-{/snippet}
-
-{#snippet upstreamTimeout()}
-	<Duration bind:value={policy.upstreamTimeoutMs} base="ms" max={86_400_000} label="Upstream timeout" info="Longest wait for the runtime's response" emptyZero fallback={d?.upstreamTimeoutMs || undefined} off={gatewayDefault(d?.upstreamTimeoutMs, 'No timeout')} />
-{/snippet}
-
-<div class="policy" bind:clientWidth={width}>
-	<FormSection title="Policy" info="Empty fields take the gateway's values">
-		<FieldRow wide>
-			<NumberField bind:value={policy.maxInFlight} min={0} max={1_000_000} label="Max in flight" info="Requests in flight at once" emptyZero placeholder={literal(d?.maxInFlight)} off={gatewayDefault(d?.maxInFlight, 'No limit')} />
-			<NumberField bind:value={policy.requestsPerSecond} min={0} step={0.5} label="Requests per second" info="Sustained request rate" emptyZero placeholder={literal(d?.requestsPerSecond)} off={gatewayDefault(d?.requestsPerSecond, 'No limit')} />
-			<NumberField bind:value={policy.burst} min={0} max={1_000_000} label="Burst" info="Requests allowed above the rate at once, the rate rounded up when empty" emptyZero placeholder={literal(d?.burst)} off={gatewayDefault(d?.burst, 'No limit')} />
-		</FieldRow>
-		{#if pairDurations}
-			<FieldRow>
-				{@render requestTimeout()}
-				{@render upstreamTimeout()}
-			</FieldRow>
-		{:else}
-			{@render requestTimeout()}
-			{@render upstreamTimeout()}
+<FormSection title="Limits">
+	<FieldRow>
+		<NumberField bind:value={policy.maxInFlight} min={0} max={1_000_000} label="Concurrent requests" emptyZero fallback={d?.maxInFlight || undefined} {disabled} />
+		<NumberField bind:value={policy.requestsPerSecond} min={0} step={0.5} label="Requests per second" emptyZero fallback={d?.requestsPerSecond || undefined} {disabled} />
+		<NumberField bind:value={policy.burst} min={0} max={1_000_000} label="Burst" info="Requests let through at once above the rate" emptyZero fallback={burstFallback(policy, d)} {disabled} />
+	</FieldRow>
+	<FieldRow wide>
+		<Duration bind:value={policy.requestTimeoutMs} base="ms" max={86_400_000} label="Request timeout" emptyZero fallback={d?.requestTimeoutMs || undefined} {disabled} />
+		<Duration bind:value={policy.upstreamTimeoutMs} base="ms" max={86_400_000} label="Runtime timeout" info="Longest wait for the runtime to answer" emptyZero fallback={d?.upstreamTimeoutMs || undefined} {disabled} />
+	</FieldRow>
+</FormSection>
+{#if servers.length}
+	<FormSection title="Tools">
+		<Checklist bind:value={profile.toolServers} options={servers} />
+		{#if profile.toolServers.length}
+			<Switch bind:checked={profile.mutatingTools} label="Let tools make changes" {disabled} />
 		{/if}
 	</FormSection>
-	<FormSection title="Tools" info="Tool servers every request on the route may call">
-		<Checklist bind:value={profile.toolServers} options={servers} label="Tool servers" info="Servers whose tools every request on the route gets" />
-		<Switch bind:checked={profile.mutatingTools} label="Mutating tools" info="Offers tools that change what they touch, read only tools alone otherwise" />
-	</FormSection>
-</div>
-
-<style>
-	.policy {
-		display: flex;
-		flex-direction: column;
-		gap: var(--nebu-space-5);
-		min-width: 0;
-	}
-</style>
+{/if}

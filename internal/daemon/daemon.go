@@ -38,6 +38,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/archs"
 	"github.com/nickheyer/nebu/pkg/build"
 	"github.com/nickheyer/nebu/pkg/cache"
+	"github.com/nickheyer/nebu/pkg/datalayer/scrape"
 	"github.com/nickheyer/nebu/pkg/descriptor"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/flowcontrol"
@@ -76,8 +77,10 @@ const (
 	sessionKeyFile = "session.key"
 	// The service name spans are exported under
 	serviceName = "nebu"
-	// How often queued gateway requests are reconsidered when no release wakes them
+	// How often queued gateway requests are reconsidered when no release wakes them, and their pool's endpoints sampled meanwhile
 	flowTick = 50 * time.Millisecond
+	// Samples of an endpoint with requests on it per staleness window, so three failures in a row leave it stale
+	workingSamples = 4
 	// Waits refused clients are told to take, shed by policy and with no ready endpoint
 	retryShed        = time.Second
 	retryUnavailable = 5 * time.Second
@@ -290,7 +293,7 @@ func New(cfg *v1.Config, log *slog.Logger, level *slog.LevelVar, recent *launch.
 	}
 	// Tool servers follow Settings, and a server a route or persona attaches stays until they let go
 	d.Tools = tools.New(log, bus)
-	d.Tools.Apply(base, d.Settings.Full().GetToolServers())
+	d.Tools.Apply(base, d.Settings.Get().GetToolServers())
 	d.Settings.OnUpdate = func(ctx context.Context, s *v1.Settings) { d.Tools.Apply(base, s.GetToolServers()) }
 	nodeID, err := mesh.NodeID(context.Background(), d.DB)
 	if err != nil {
@@ -301,7 +304,9 @@ func New(cfg *v1.Config, log *slog.Logger, level *slog.LevelVar, recent *launch.
 	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return d.Mesh.DialEndpoint(ctx, network, addr)
 	}
-	if d.Pools, err = pools.New(context.Background(), pools.Options{DB: d.DB, Events: bus, NodeID: nodeID, Log: log, Scrapes: d.Metrics, Dial: dial}); err != nil {
+	staleness := time.Duration(cfg.GetGateway().GetFlowControl().GetMetricsStalenessMs()) * time.Millisecond
+	pace := scrape.Pace{Deciding: flowTick, Working: max(staleness/workingSamples, flowTick)}
+	if d.Pools, err = pools.New(context.Background(), pools.Options{DB: d.DB, Events: bus, NodeID: nodeID, Log: log, Scrape: pace, Scrapes: d.Metrics, Dial: dial}); err != nil {
 		return nil, err
 	}
 	drain := time.Duration(cfg.GetGateway().GetDrainTimeoutMs()) * time.Millisecond
@@ -482,6 +487,7 @@ func (d *Daemon) openGateway(rts *runtimes.Registry, bus *events.Bus) error {
 		Resolver:  d.Pools,
 		Manager:   d.Pools,
 		Store:     d.Pools.Store(),
+		Sampler:   d.Pools.Sampler(),
 		DB:        d.DB,
 		Events:    bus,
 		Guard:     d.Guard,
@@ -523,7 +529,7 @@ func (d *Daemon) openGateway(rts *runtimes.Registry, bus *events.Bus) error {
 		return fmt.Errorf("gateway: %w", err)
 	}
 	d.Instances.InFlight, d.Instances.Dispatched = d.Gateway.InFlight, d.Gateway.Dispatched
-	d.Instances.Load = instances.ScrapedLoad(d.Pools.Store(), time.Duration(fc.GetMetricsStalenessMs())*time.Millisecond)
+	d.Instances.Load = instances.ScrapedLoad(d.Pools.Store(), d.Pools.Sampler(), time.Duration(fc.GetMetricsStalenessMs())*time.Millisecond)
 	d.Slots.Outcomes = d.Gateway
 	d.Formations.InFlight, d.Formations.Gateway = d.Gateway.InFlight, d.Gateway
 	d.Mesh.InFlight = d.Gateway.InFlight

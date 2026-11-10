@@ -87,16 +87,22 @@ enum ModelSort {
 
 // Lists stored models, the ones whose repository, group, format, or architecture holds every word of the query
 message ListModelsRequest {
+  reserved 2, 3, 4;
+  reserved "kind", "runtime_id", "format_id";
   string query = 1 [(buf.validate.field).string.max_len = 256];
-  ModelKind kind = 2 [(buf.validate.field).enum.defined_only = true];
-  // A runtime id, keeping the models compatible with it
-  string runtime_id = 3;
-  string format_id = 4;
+  // Kinds to keep, every kind when empty
+  repeated ModelKind kinds = 8 [(buf.validate.field).repeated.items.enum.defined_only = true];
+  // Runtime ids, keeping the models compatible with any of them
+  repeated string runtime_ids = 9;
+  // Formats to keep, every format when empty
+  repeated string format_ids = 10;
   ModelSort sort = 5 [(buf.validate.field).enum.defined_only = true];
   // The cursor the previous page answered with, the first page when empty
   string cursor = 6;
   // Models per page, every remaining model when zero
   uint32 limit = 7 [(buf.validate.field).uint32.lte = 1000];
+  // Keeps the models of one repository side by side, repositories in the order of their first model
+  bool by_repo = 11;
 }
 
 // Returns stored models

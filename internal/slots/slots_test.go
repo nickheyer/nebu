@@ -388,7 +388,15 @@ func TestSlotNamesFollowRoutes(t *testing.T) {
 	if _, err := n.registrar.NameRoute(ctx, other, "taken", pools.RouteSpec{}); err != nil {
 		t.Fatal(err)
 	}
-	next, route, err := n.slots.AddAlias(ctx, s.GetId(), &v1.SlotAlias{Name: " code ", Policy: &v1.Policy{MaxInFlight: 3}})
+	for _, limits := range []struct {
+		name string
+		max  uint32
+	}{{"three", 3}, {"five", 5}} {
+		if _, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: limits.name, Policy: &v1.Policy{MaxInFlight: limits.max}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next, route, err := n.slots.AddAlias(ctx, s.GetId(), &v1.SlotAlias{Name: " code ", InheritSlotId: "three"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +407,7 @@ func TestSlotNamesFollowRoutes(t *testing.T) {
 	if rt, _ := n.registrar.Named("code"); rt.Spec.Policy.GetMaxInFlight() != 3 {
 		t.Fatalf("alias policy %v", rt.Spec.Policy)
 	}
-	next, _, err = n.slots.AddAlias(ctx, s.GetId(), &v1.SlotAlias{Name: "code", Policy: &v1.Policy{MaxInFlight: 5}})
+	next, _, err = n.slots.AddAlias(ctx, s.GetId(), &v1.SlotAlias{Name: "code", InheritSlotId: "five"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,6 +425,14 @@ func TestSlotNamesFollowRoutes(t *testing.T) {
 	}{
 		{"alias of its own name", func() error { _, _, err := n.slots.AddAlias(ctx, s.GetId(), &v1.SlotAlias{Name: "main"}); return err }},
 		{"alias another owner routes", func() error { _, _, err := n.slots.AddAlias(ctx, s.GetId(), &v1.SlotAlias{Name: "taken"}); return err }},
+		{"alias inheriting its own slot", func() error {
+			_, _, err := n.slots.AddAlias(ctx, s.GetId(), &v1.SlotAlias{Name: "self", InheritSlotId: "main"})
+			return err
+		}},
+		{"alias inheriting a slot that is not there", func() error {
+			_, _, err := n.slots.AddAlias(ctx, s.GetId(), &v1.SlotAlias{Name: "lost", InheritSlotId: "nope"})
+			return err
+		}},
 		{"removing its own name", func() error { _, _, err := n.slots.RemoveAlias(ctx, s.GetId(), "main"); return err }},
 		{"removing an alias it lacks", func() error { _, _, err := n.slots.RemoveAlias(ctx, s.GetId(), "nope"); return err }},
 		{"renaming onto another owner's route", func() error {
@@ -460,7 +476,12 @@ func TestSlotNamesFollowRoutes(t *testing.T) {
 	}
 	n.wantRoutes(t, s, served, "main", "primary")
 	saved, err := n.db.ListSlots(ctx)
-	if err != nil || len(saved) != 1 || saved[0].GetName() != "primary" || !slices.Equal(aliasNames(saved[0].GetAliases()), []string{"main"}) {
+	if err != nil || len(saved) != 3 {
 		t.Fatalf("saved %v %v", saved, err)
+	}
+	for _, sl := range saved {
+		if sl.GetId() == s.GetId() && (sl.GetName() != "primary" || !slices.Equal(aliasNames(sl.GetAliases()), []string{"main"})) {
+			t.Fatalf("saved %v", sl)
+		}
 	}
 }

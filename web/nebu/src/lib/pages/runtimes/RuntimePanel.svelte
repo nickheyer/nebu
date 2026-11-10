@@ -2,16 +2,14 @@
 	import { clone, create } from '@bufbuild/protobuf';
 	import { untrack } from 'svelte';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
-	import { NeoProgressBar } from '#lib/neo/progress/index.js';
 	import { ListQuery } from '#lib/api/list.svelte.js';
-	import { isCancel, reason, rpc } from '#lib/api/transport.js';
-	import { capitalize, duration, enumLabel, factLabel, percent, shortId, when } from '#lib/format.js';
+	import { reason, rpc } from '#lib/api/transport.js';
+	import { capitalize, duration, enumLabel, factLabel, shortId, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { SandboxKind, SandboxKindSchema, type Build, type RecipeStatus, type Var } from '#lib/proto/nebu/v1/recipe_pb.js';
 	import { InstallKind, InstallKindSchema, type Install, type InstallOption, type RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import { RuntimeDefaultsSchema, SettingsSchema } from '#lib/proto/nebu/v1/settings_pb.js';
-	import { TaskState, TaskStateSchema, type Task } from '#lib/proto/nebu/v1/task_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
 	import Conditions from '#lib/ui/Conditions.svelte';
@@ -22,9 +20,7 @@
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import LoadMore from '#lib/ui/LoadMore.svelte';
-	import LogView from '#lib/ui/LogView.svelte';
 	import PageTabs from '#lib/ui/PageTabs.svelte';
-	import RowAction from '#lib/ui/RowAction.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
 	import Str from '#lib/ui/Str.svelte';
@@ -41,13 +37,12 @@
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { reveal } from '#lib/ui/motion.svelte.js';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
-	import { buildLamp, taskLamp } from '#lib/ui/status.js';
+	import { buildLamp } from '#lib/ui/status.js';
 	import ConfigFields from '#lib/pages/runtimes/ConfigFields.svelte';
 	import ParamsForm from '#lib/pages/serve/ParamsForm.svelte';
 	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
 	import HammerIcon from 'phosphor-svelte/lib/HammerIcon';
 	import SlidersHorizontalIcon from 'phosphor-svelte/lib/SlidersHorizontalIcon';
-	import TagIcon from 'phosphor-svelte/lib/TagIcon';
 
 	let { status, tab = 'installs', ontab, onclose }: { status: RuntimeStatus; tab?: string; ontab: (id: string) => void; onclose: () => void } = $props();
 
@@ -98,8 +93,6 @@
 	let ref = $state('');
 	let force = $state(false);
 	let busy = $state(false);
-	let followed = $state<Task | undefined>(undefined);
-	const followedTask = $derived(followed ? (live.tasks.get(followed.id) ?? followed) : undefined);
 
 	const recipe = $derived(option?.recipe ?? recipes.find((r) => r.recipe?.runtimeId === id));
 	const variants = $derived((recipe?.recipe?.variants ?? []).map((v) => ({ value: v.id, label: v.id, description: unsupported(v) ? v.requires : v.description, disabled: unsupported(v) })));
@@ -107,8 +100,6 @@
 	const chosen = $derived(recipe?.recipe?.variants.find((v) => v.id === variant));
 	// Tools the chosen variant needs that this host lacks, none inside a container which brings its own
 	const missing = $derived(sandbox === SandboxKind.HOST ? [...(recipe?.recipe?.tools ?? []), ...(chosen?.tools ?? [])].filter((t) => absent.includes(t)) : []);
-	// What an empty ref builds, the latest release of a GitHub source or the default branch of a repository
-	const refHint = $derived(recipe?.recipe?.source.startsWith('github.com/') ? 'Latest release' : 'Default branch');
 
 	// A variant with requirements this host lacks
 	function unsupported(v: { vars: Record<string, string>; requires: string }): boolean {
@@ -151,12 +142,12 @@
 
 	function methodLabel(o: InstallOption): string {
 		const k = o.method?.kind;
-		const word = k === InstallKind.ADOPTED ? 'Adopt' : k === InstallKind.BUILT ? 'Build' : 'Prebuilt';
+		const word = k === InstallKind.ADOPTED ? 'Use existing' : k === InstallKind.BUILT ? 'Build' : 'Download';
 		const shared = status.installs.filter((x) => x.method?.kind === k).length > 1;
 		return shared ? capitalize(o.method?.id ?? word) : word;
 	}
 	const methods = $derived(status.installs.map((o) => ({ value: o.method?.id ?? '', label: methodLabel(o), tip: o.method?.description || undefined })));
-	const verb = $derived(option?.method?.kind === InstallKind.ADOPTED ? 'Adopt' : option?.method?.kind === InstallKind.BUILT ? 'Build' : 'Install');
+	const verb = $derived(option?.method?.kind === InstallKind.ADOPTED ? 'Add' : option?.method?.kind === InstallKind.BUILT ? 'Build' : 'Install');
 
 	function pairs<T>(list: T[]): T[][] {
 		const out: T[][] = [];
@@ -175,11 +166,11 @@
 		busy = true;
 		try {
 			await rpc.runtimes.adoptInstall({ runtimeId: id, path: adoptPath });
-			toast.success(`Adopted ${adoptPath || rt?.name}`);
+			toast.success(`Added ${adoptPath || rt?.name}`);
 			adoptPath = '';
 			ontab('installs');
 		} catch (err) {
-			toast.error('Adopt failed', reason(err));
+			toast.error('Add failed', reason(err));
 		} finally {
 			busy = false;
 		}
@@ -191,7 +182,7 @@
 			const res = await rpc.runtimes.install({ runtimeId: id, method, settings });
 			if (!res.task) throw new Error('the daemon answered without a task');
 			followTask(res.task, `Install ${rt?.name}`);
-			followed = res.task;
+			ontab('installs');
 		} catch (err) {
 			toast.error('Install failed', reason(err));
 		} finally {
@@ -205,7 +196,7 @@
 			const res = await rpc.build.build({ runtimeId: id, recipeId: recipe?.recipe?.id ?? '', variant, vars, sandbox, image, force, ref });
 			if (!res.task) throw new Error('the daemon answered without a task');
 			followTask(res.task, `Build ${rt?.name}`);
-			followed = res.task;
+			ontab('installs');
 		} catch (err) {
 			toast.error('Build failed', reason(err));
 		} finally {
@@ -251,27 +242,6 @@
 		return [b.commit ? `commit ${b.commit}` : '', `sandbox ${enumLabel(SandboxKindSchema, b.sandbox)}`, b.image ? `image ${b.image}` : '', b.dir ? `directory ${b.dir}` : '', b.binary ? `binary ${b.binary}` : ''].filter(Boolean).join('\n');
 	}
 
-	function taskActive(t: Task): boolean {
-		return t.state === TaskState.PENDING || t.state === TaskState.RUNNING;
-	}
-
-	// Follows the task while it runs and reads its stored tail once it ended
-	function taskLogs(taskId: string, running: boolean) {
-		return (tail: number, follow: boolean, signal: AbortSignal): AsyncIterable<string[]> =>
-			(async function* () {
-				if (running && follow) {
-					try {
-						for await (const res of rpc.tasks.watchTask({ id: taskId }, { signal })) if (res.logs.length) yield res.logs;
-					} catch (err) {
-						if (!isCancel(err)) throw err;
-					}
-					return;
-				}
-				const res = await rpc.tasks.getTask({ id: taskId }, { signal });
-				yield res.logs.slice(-tail);
-			})();
-	}
-
 	// The stored defaults for this runtime, merged under every slot and launch
 	const stored = $derived(live.settings?.runtimeDefaults[id]?.params ?? {});
 	let draft = $state<Record<string, string>>({});
@@ -310,60 +280,37 @@
 
 {#snippet buildField(f: BuildField)}
 	{#if f.kind === 'variant'}
-		<Select bind:value={variant} options={variants} label="Variant" info="The build flavour for this host" />
+		<Select bind:value={variant} options={variants} label="Variant" />
 	{:else if f.kind === 'sandbox'}
-		<Segmented bind:value={sandbox} options={[{ value: SandboxKind.HOST, label: 'Host' }, { value: SandboxKind.OCI, label: 'OCI' }]} label="Sandbox" info="Build on the host or inside a container" />
+		<Segmented bind:value={sandbox} options={[{ value: SandboxKind.HOST, label: 'Host' }, { value: SandboxKind.OCI, label: 'Container' }]} label="Build in" />
 	{:else if f.kind === 'image'}
-		<Text bind:value={image} label="Image" info="Container image the build runs in" placeholder={recipe?.sandboxCli || undefined} mono />
+		<Text bind:value={image} label="Container image" mono />
 	{:else if f.kind === 'ref'}
-		<Text bind:value={ref} label="Ref" info="Branch, tag or commit to build" placeholder={refHint} max={64} mono>{#snippet before()}<TagIcon size={16} aria-label={refHint} />{/snippet}</Text>
+		<Text bind:value={ref} label="Version" info="Branch, tag or commit, the newest when empty" max={64} mono />
 	{:else if f.kind === 'force'}
-		<Switch bind:checked={force} label="Rebuild" info="Builds again even when this ref is built already" top />
+		<Switch bind:checked={force} label="Build again" info="Even when this version is built already" top />
 	{:else if f.kind === 'var'}
 		{@const v = f.v}
 		{#if v.choices.length}
 			<Select value={vars[v.name] || v.default} options={v.choices.map((c) => ({ value: c, label: c }))} label={v.label || v.name} info={v.description || undefined} onchange={(x) => (vars[v.name] = x ?? '')} />
 		{:else}
-			<Text value={vars[v.name] ?? ''} label={v.label || v.name} info={v.description || undefined} placeholder={v.default || v.description} onchange={(x) => (vars[v.name] = x)} />
+			<Text value={vars[v.name] ?? ''} label={v.label || v.name} info={v.description || undefined} placeholder={v.default || undefined} onchange={(x) => (vars[v.name] = x)} />
 		{/if}
 	{/if}
-{/snippet}
-
-{#snippet followedBlock(t: Task)}
-	{@const running = taskActive(t)}
-	{@const done = percent(t.progress?.done, t.progress?.total)}
-	<Section title="Task" level={3}>
-		{#snippet tools()}
-			<StatePill label={enumLabel(TaskStateSchema, t.state)} lamp={taskLamp(t.state)} />
-			<RowAction href="/tasks/{t.id}" label="Open" />
-		{/snippet}
-		<Stack gap={12}>
-			<NeoProgressBar value={running ? (done ?? 0) : 100} indeterminate={running && done === undefined} elevation={-1} height="6px" width="100%" color={t.state === TaskState.FAILED ? 'error' : 'primary'} immediate />
-			{#if t.progress?.message}<Str value={t.progress.message} kind="message" color="muted" width="100%" />{/if}
-			{#if t.error}<p class="error-text failure">{t.error}</p>{/if}
-			{#key `${t.id}:${running}`}
-				<LogView source={taskLogs(t.id, running)} name={t.title} height="30vh" />
-			{/key}
-		</Stack>
-	</Section>
 {/snippet}
 
 {#snippet installForm()}
 	<div class="form" in:reveal>
 		<Stack gap={24}>
 			<FormSection>
-				{#if methods.length > 4}
-					<Select bind:value={method} options={methods} label="Method" info="How the runtime is installed" />
-				{:else}
-					<Segmented bind:value={method} options={methods} label="Method" info="How the runtime is installed" />
-				{/if}
+				<Select bind:value={method} options={methods} label="Method" />
 				{#if option?.unmet.length}
 					<div class="unmet secondary"><Dot lamp="warning" label="unmet" /><Str value={option.unmet.join(', ')} kind="message" color="muted" tip={option.unmet.join('\n')} width="100%" /></div>
 				{/if}
 			</FormSection>
 			{#if option?.method?.kind === InstallKind.ADOPTED}
 				<FormSection>
-					<Path bind:value={adoptPath} label="Binary" info="An installed executable to adopt" placeholder={option.method.binaries.join(', ')} filter="executables" />
+					<Path bind:value={adoptPath} label="Binary" filter="executables" />
 				</FormSection>
 			{:else if option?.method?.kind === InstallKind.PREBUILT}
 				{#if option.fields.length}
@@ -383,7 +330,6 @@
 					{/if}
 				</FormSection>
 			{/if}
-			{#if followedTask}{@render followedBlock(followedTask)}{/if}
 		</Stack>
 		<SaveBar always dirty saving={busy} label={verb} disabled={option?.method?.kind === InstallKind.BUILT && (missing.length > 0 || !variant)} onsave={commit} ondiscard={() => ontab('installs')} />
 	</div>
@@ -426,7 +372,7 @@
 						{/snippet}
 						{#snippet expand()}
 							<KeyRows dense rows={Object.entries(i.facts).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true, tip: v }))} />
-							<Conditions conditions={i.status?.conditions} />
+							{#if i.status?.conditions.length}<Conditions conditions={i.status.conditions} />{/if}
 							{#if used}
 								<KeyRows
 									dense
@@ -454,7 +400,7 @@
 				<Empty icon={HammerIcon} text="No builds" />
 			{/if}
 		{:else}
-			<List head={{ primary: 'Variant', secondary: 'Ref', facts: ['Took'] }}>
+			<List head={{ primary: 'Variant', secondary: 'Ref', facts: ['Duration'] }}>
 				{#each builds as b (b.id)}
 					<ListRow lamp={buildLamp(b.state)} primary={b.variant || b.recipeId} primaryTip={buildTip(b)} secondary={b.ref} secondaryKind="version" secondaryWidth="12ch" facts={[{ value: duration(b.createdAt, b.finishedAt, clockTick.now) }]}>
 						{#snippet action()}
@@ -481,7 +427,7 @@
 		{#if !rt?.params.length}
 			<Empty icon={SlidersHorizontalIcon} text="No parameters" />
 		{:else}
-			<Section title="Defaults" info="Every slot and launch on this runtime starts from these values and may override any of them" level={3}>
+			<Section title="Defaults" info="What every launch on this runtime starts from" level={3}>
 				<Stack gap={24}>
 					<ParamsForm params={rt.params} bind:values={draft} />
 				</Stack>

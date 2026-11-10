@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -133,5 +134,43 @@ func TestSummaryKeepsBodiesOut(t *testing.T) {
 	}
 	if full.GetToolCalls()[0].GetArguments() == "" || full.GetRequest() == "" {
 		t.Fatal("summary changed the full trace")
+	}
+}
+
+// Each filter admits a trace matching any value it lists, an empty one admits all, and the filters narrow together
+func TestTraceFilterTakesSeveralValues(t *testing.T) {
+	chat, embed := v1.TraceKind_TRACE_KIND_CHAT, v1.TraceKind_TRACE_KIND_EMBED
+	traces := map[string]*v1.Trace{
+		"ok chat":      {Kind: chat, Status: 200, NodeId: "n1", Objective: "fast"},
+		"shed chat":    {Kind: chat, Status: 429, NodeId: "n2", EntryNode: "n1"},
+		"failed embed": {Kind: embed, Status: 502, NodeId: "n3", Objective: "bulk"},
+	}
+	cases := []struct {
+		name string
+		f    TraceFilter
+		want []string
+	}{
+		{"no filter", TraceFilter{}, []string{"failed embed", "ok chat", "shed chat"}},
+		{"one kind", TraceFilter{Kinds: []v1.TraceKind{embed}}, []string{"failed embed"}},
+		{"two kinds", TraceFilter{Kinds: []v1.TraceKind{chat, embed}}, []string{"failed embed", "ok chat", "shed chat"}},
+		{"two status classes", TraceFilter{StatusClasses: []uint32{4, 5}}, []string{"failed embed", "shed chat"}},
+		{"a node by answer or entry", TraceFilter{NodeIDs: []string{"n1"}}, []string{"ok chat", "shed chat"}},
+		{"two nodes", TraceFilter{NodeIDs: []string{"n2", "n3"}}, []string{"failed embed", "shed chat"}},
+		{"two objectives", TraceFilter{Objectives: []string{"fast", "bulk"}}, []string{"failed embed", "ok chat"}},
+		{"every filter at once", TraceFilter{Kinds: []v1.TraceKind{chat}, StatusClasses: []uint32{2, 4}, NodeIDs: []string{"n2"}}, []string{"shed chat"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got []string
+			for name, tr := range traces {
+				if c.f.admits(tr) {
+					got = append(got, name)
+				}
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, c.want) {
+				t.Fatalf("admitted %v, want %v", got, c.want)
+			}
+		})
 	}
 }

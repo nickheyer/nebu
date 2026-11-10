@@ -53,16 +53,18 @@ var (
 	errStopped         = errors.New("stopped before ready")
 )
 
-// Narrows a run to a slot's devices, budget, and defaults
+// Narrows a run to a slot's devices, budget, pool caps, and defaults
 type Reservation struct {
 	SlotID      string
 	Name        string
 	DeviceIDs   []string
 	MemoryBytes uint64
-	Placement   v1.Placement
-	RuntimeID   string
-	Params      map[string]string
-	InstanceID  string
+	// Bytes the slot may take from each of this node's memory pools, by pool id
+	PoolBytes  map[string]uint64
+	Placement  v1.Placement
+	RuntimeID  string
+	Params     map[string]string
+	InstanceID string
 	// The formation serving the slot, when one does
 	FormationID   string
 	FormationName string
@@ -131,8 +133,8 @@ type Manager struct {
 	InFlight func(instanceID string) int
 	// Requests the gateway has sent an instance since the daemon started, read while idling
 	Dispatched func(instanceID string) uint64
-	// Running and queued requests the scrape of an instance reports, read while idling, false when none was scraped
-	Load func(instanceID string) (running, queued int, scraped bool)
+	// Samples an instance's runtime for when it last showed work, asked as its idle window ends, an error when unanswered
+	Load func(ctx context.Context, instanceID string) (active time.Time, err error)
 	// Reads the TCP ports a launched process tree listens on, proc.ListeningPorts unless a test reads them another way
 	Listening func(pid int) ([]int, error)
 	// Reads the pids of a launched tree holding an NVIDIA device, the kernel's fd table unless a test names them another way
@@ -418,7 +420,7 @@ func (m *Manager) prepareInputs(ctx context.Context, req *v1.RunRequest, self st
 	}
 	planProfile := profile
 	if res != nil {
-		planProfile = Constrain(profile, res.DeviceIDs, res.MemoryBytes, res.Placement)
+		planProfile = Constrain(profile, res.DeviceIDs, res.MemoryBytes, res.Placement, res.PoolBytes)
 	}
 	var slotParams map[string]string
 	if res != nil {
@@ -614,7 +616,7 @@ func (m *Manager) Constrain(ctx context.Context, slotID string, profile *v1.Host
 	if err != nil {
 		return nil, err
 	}
-	return &inspect.Constraint{Profile: Constrain(profile, res.DeviceIDs, res.MemoryBytes, res.Placement), RuntimeID: res.RuntimeID, Params: res.Params, Placement: res.Placement}, nil
+	return &inspect.Constraint{Profile: Constrain(profile, res.DeviceIDs, res.MemoryBytes, res.Placement, res.PoolBytes), RuntimeID: res.RuntimeID, Params: res.Params, Placement: res.Placement}, nil
 }
 
 // Lists live instances bound to a slot, newest first
@@ -818,10 +820,10 @@ func (m *Manager) artifacts(stored *v1.StoredModel, rt runtimes.Runtime) map[str
 	return out
 }
 
-// Restricts the profile to slot devices and caps placement memory pools at its budget
-func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64, placement v1.Placement) *v1.HostProfile {
+// Restricts the profile to slot devices, caps placement memory pools at its budget, then each pool at its own cap
+func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64, placement v1.Placement, poolBytes map[string]uint64) *v1.HostProfile {
 	out := proto.Clone(p).(*v1.HostProfile)
-	if len(deviceIDs) == 0 && budget == 0 {
+	if len(deviceIDs) == 0 && budget == 0 && len(poolBytes) == 0 {
 		return out
 	}
 	hostOnly := placement == v1.Placement_PLACEMENT_HOST
@@ -849,6 +851,10 @@ func Constrain(p *v1.HostProfile, deviceIDs []string, budget uint64, placement v
 		if capped && budget > 0 {
 			pl.TotalBytes = min(pl.GetTotalBytes(), budget)
 			pl.FreeBytes = min(pl.GetFreeBytes(), budget)
+		}
+		if limit, ok := poolBytes[pl.GetId()]; ok {
+			pl.TotalBytes = min(pl.GetTotalBytes(), limit)
+			pl.FreeBytes = min(pl.GetFreeBytes(), limit)
 		}
 		pools = append(pools, pl)
 	}

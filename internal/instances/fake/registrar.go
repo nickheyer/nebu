@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/nickheyer/nebu/internal/pools"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -283,11 +284,13 @@ type Traffic struct {
 	dispatched map[string]uint64
 	// Running and queued requests the scrape of each instance reports
 	running, queued map[string]int
+	// When a sample of each instance last showed requests
+	active map[string]time.Time
 }
 
 // Traffic with nothing in flight
 func NewTraffic() *Traffic {
-	return &Traffic{inFlight: map[string]int{}, dispatched: map[string]uint64{}, running: map[string]int{}, queued: map[string]int{}}
+	return &Traffic{inFlight: map[string]int{}, dispatched: map[string]uint64{}, running: map[string]int{}, queued: map[string]int{}, active: map[string]time.Time{}}
 }
 
 // Sets the requests in flight on an instance
@@ -323,10 +326,12 @@ func (t *Traffic) Dispatched(id string) uint64 {
 	return t.dispatched[id]
 }
 
-// The scraped running and queued requests of an instance, false when it was never scraped
-func (t *Traffic) Load(id string) (running, queued int, scraped bool) {
+// The last time a sample of the instance held requests, now while it does, zero when none has
+func (t *Traffic) Load(_ context.Context, id string) (time.Time, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	running, scraped = t.running[id]
-	return running, t.queued[id], scraped
+	if t.running[id]+t.queued[id] > 0 {
+		t.active[id] = time.Now()
+	}
+	return t.active[id], nil
 }

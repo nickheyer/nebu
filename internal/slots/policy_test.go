@@ -2,38 +2,90 @@ package slots
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/nickheyer/nebu/internal/pools"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
 )
 
-// Every unset alias policy field, a zero or a negative rate included, inherits the slot's
-func TestMergePolicyInheritsUnsetFields(t *testing.T) {
-	slot := &v1.Policy{MaxInFlight: 8, RequestsPerSecond: 5, Burst: 2, RequestTimeoutMs: 300, UpstreamTimeoutMs: 600}
-	cases := []struct {
-		name  string
-		alias *v1.Policy
-		want  *v1.Policy
-	}{
-		{"nil alias", nil, slot},
-		{"empty alias", &v1.Policy{}, slot},
-		{"negative alias rate inherits", &v1.Policy{RequestsPerSecond: -1}, slot},
-		{"alias rate wins", &v1.Policy{RequestsPerSecond: 2}, &v1.Policy{MaxInFlight: 8, RequestsPerSecond: 2, Burst: 2, RequestTimeoutMs: 300, UpstreamTimeoutMs: 600}},
-		{"every alias field wins", &v1.Policy{MaxInFlight: 1, RequestsPerSecond: 1, Burst: 1, RequestTimeoutMs: 1, UpstreamTimeoutMs: 1}, &v1.Policy{MaxInFlight: 1, RequestsPerSecond: 1, Burst: 1, RequestTimeoutMs: 1, UpstreamTimeoutMs: 1}},
-		{"some alias fields win", &v1.Policy{Burst: 9, UpstreamTimeoutMs: 7}, &v1.Policy{MaxInFlight: 8, RequestsPerSecond: 5, Burst: 9, RequestTimeoutMs: 300, UpstreamTimeoutMs: 7}},
+// An alias takes the current limits and tools of the slot it inherits from and loses them with it
+func TestAliasInheritsAnotherSlot(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := newSlotNode(t, ctx)
+	base, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: "base", Policy: &v1.Policy{MaxInFlight: 2, Burst: 4}, Profile: &v1.Profile{ToolServers: []string{"web"}}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := mergePolicy(c.alias, slot); !proto.Equal(got, c.want) {
-				t.Fatalf("mergePolicy = %v, want %v", got, c.want)
-			}
-		})
+	s := n.filled(t, ctx)
+	own := &v1.Policy{MaxInFlight: 9}
+	next, err := n.slots.Update(ctx, &v1.UpdateSlotRequest{Id: s.GetId(), Policy: own, Aliases: []*v1.SlotAlias{{Name: "chat", InheritSlotId: " base "}, {Name: "plain"}}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := mergePolicy(&v1.Policy{RequestsPerSecond: -1}, &v1.Policy{RequestsPerSecond: -4}); got.GetRequestsPerSecond() != -4 {
-		t.Fatalf("a negative alias rate over a negative slot rate gave %g, want the slot's for the gateway to treat as unset", got.GetRequestsPerSecond())
+	if a := next.GetAliases(); len(a) != 2 || a[0].GetInheritSlotId() != base.GetId() || a[1].GetInheritSlotId() != "" {
+		t.Fatalf("an inherit is stored by the slot's id %v", a)
 	}
+	wantSettings := func(name string, policy *v1.Policy, profile *v1.Profile) {
+		t.Helper()
+		rt, ok := n.registrar.Named(name)
+		if !ok || !proto.Equal(rt.Spec.Policy, policy) || !proto.Equal(rt.Spec.Profile, profile) {
+			t.Fatalf("route %s policy %v profile %v, want %v %v", name, rt.Spec.Policy, rt.Spec.Profile, policy, profile)
+		}
+	}
+	wantSettings("chat", base.GetPolicy(), base.GetProfile())
+	wantSettings("plain", own, nil)
+	wantSettings("main", own, nil)
+
+	changed := &v1.Policy{MaxInFlight: 3}
+	tools := &v1.Profile{ToolServers: []string{"fs"}}
+	if _, err := n.slots.Update(ctx, &v1.UpdateSlotRequest{Id: base.GetId(), Policy: changed, Profile: tools}); err != nil {
+		t.Fatal(err)
+	}
+	wantSettings("chat", changed, tools)
+	wantSettings("main", own, nil)
+
+	refusals := map[string]*v1.SlotAlias{
+		"its own slot by name": {Name: "loop", InheritSlotId: "main"},
+		"its own slot by id":   {Name: "loop", InheritSlotId: s.GetId()},
+		"a slot not there":     {Name: "lost", InheritSlotId: "nope"},
+	}
+	for what, alias := range refusals {
+		if _, err := n.slots.Update(ctx, &v1.UpdateSlotRequest{Id: s.GetId(), Policy: own, Aliases: []*v1.SlotAlias{alias}}); !errors.Is(err, ErrSlot) {
+			t.Fatalf("an alias inheriting %s: %v", what, err)
+		}
+	}
+	if _, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: "fresh", Aliases: []*v1.SlotAlias{{Name: "again", InheritSlotId: "fresh"}}}); !errors.Is(err, ErrSlot) {
+		t.Fatalf("a new slot's alias inheriting the slot itself: %v", err)
+	}
+
+	gen := n.slot(t, s.GetId()).GetMeta().GetGeneration()
+	sub := n.slots.Events.Subscribe(ctx, []v1.EventKind{v1.EventKind_EVENT_KIND_SLOT})
+	if _, err := n.slots.Delete(ctx, base.GetId(), false); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(10 * time.Second)
+	for published := false; !published; {
+		select {
+		case ev := <-sub.Events():
+			a := ev.GetSlot().GetAliases()
+			published = ev.GetId() == s.GetId() && ev.GetAction() == v1.EventAction_EVENT_ACTION_UPDATED && len(a) == 2 && a[0].GetInheritSlotId() == "" && ev.GetSlot().GetMeta().GetGeneration() == gen+1
+		case <-deadline:
+			t.Fatal("no slot event carried the cleared inherit")
+		}
+	}
+	cur := n.slot(t, s.GetId())
+	if cur.GetAliases()[0].GetInheritSlotId() != "" || cur.GetMeta().GetGeneration() != gen+1 {
+		t.Fatalf("after the delete aliases %v generation %d, want %d", cur.GetAliases(), cur.GetMeta().GetGeneration(), gen+1)
+	}
+	saved, err := n.db.ListSlots(ctx)
+	if err != nil || len(saved) != 1 || saved[0].GetAliases()[0].GetInheritSlotId() != "" || saved[0].GetMeta().GetGeneration() != gen+1 {
+		t.Fatalf("saved after the delete %v %v", saved, err)
+	}
+	wantSettings("chat", own, nil)
 }
 
 // A user policy over a slot alias route outlives a restart through the real pool manager, adopted or relaunched
@@ -93,5 +145,30 @@ func TestRecoverKeepsAliasRoutePolicy(t *testing.T) {
 				t.Fatalf("the slot's own route took the alias override %v", r.GetSpec())
 			}
 		})
+	}
+}
+
+// Loading a slot whose alias inherits from a slot no longer stored clears and saves that inherit
+func TestLoadClearsInheritOfGoneSlot(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := newSlotNode(t, ctx)
+	s, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: "main", Aliases: []*v1.SlotAlias{{Name: "chat"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := proto.Clone(s).(*v1.Slot)
+	stale.Aliases[0].InheritSlotId = "gone"
+	if err := n.db.PutSlot(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	n.instances.Close()
+	n.start(t, ctx)
+	cur := n.slot(t, s.GetId())
+	if cur.GetAliases()[0].GetInheritSlotId() != "" || cur.GetMeta().GetGeneration() != s.GetMeta().GetGeneration()+1 {
+		t.Fatalf("loaded aliases %v generation %d", cur.GetAliases(), cur.GetMeta().GetGeneration())
+	}
+	if saved, err := n.db.ListSlots(ctx); err != nil || len(saved) != 1 || saved[0].GetAliases()[0].GetInheritSlotId() != "" {
+		t.Fatalf("saved %v %v", saved, err)
 	}
 }

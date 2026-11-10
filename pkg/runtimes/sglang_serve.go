@@ -24,6 +24,7 @@ func (SGLang) Metrics() *v1.MetricNames {
 		AdaptersFormat:       "openai",
 		MaxLoraPath:          "/server_info",
 		MaxLoraField:         "max_loras_per_batch",
+		WorkCounter:          "sglang:num_requests_total",
 		MetricsPath:          "/metrics",
 		HealthPath:           "/health",
 	}

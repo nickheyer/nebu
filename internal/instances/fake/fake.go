@@ -76,7 +76,7 @@ const (
 	// What the model's architecture resolves to as vLLM resolves it, a generative model when empty
 	ParamArchitecture = "architecture_kind"
 	BoomLine          = "boom: the fake process failed"
-	// The secret a solo run carries in its env and its command, which records redact
+	// The secret a solo run carries in its env and its command
 	Token       = "fake-secret-token"
 	FailHandoff = "handoff"
 )
@@ -949,6 +949,7 @@ func (p *Proc) serveHTTP(addr string, prefill, slow bool) error {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		fmt.Fprintf(w, "# TYPE vllm:num_requests_waiting gauge\nvllm:num_requests_waiting{model_name=%q} 0\n", p.Served)
 		fmt.Fprintf(w, "# TYPE vllm:num_requests_running gauge\nvllm:num_requests_running{model_name=%q} %d\n", p.Served, n)
+		fmt.Fprintf(w, "# TYPE vllm:prompt_tokens_total counter\nvllm:prompt_tokens_total{model_name=%q} %d\n", p.Served, 3*p.Chats.Load())
 		fmt.Fprintf(w, "# TYPE vllm:kv_cache_usage_perc gauge\nvllm:kv_cache_usage_perc{model_name=%q} %g\n", p.Served, float64(n)/16)
 		fmt.Fprintf(w, "# TYPE vllm:cache_config_info gauge\nvllm:cache_config_info{block_size=\"16\",num_gpu_blocks=\"1024\"} 1\n")
 		fmt.Fprintf(w, "# TYPE vllm:lora_requests_info gauge\nvllm:lora_requests_info{max_lora=\"4\",running_lora_adapters=%q,waiting_lora_adapters=\"\"} 1\n", strings.Join(running, ","))

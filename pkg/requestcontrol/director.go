@@ -59,6 +59,8 @@ func (noTopology) Batches(Stage) [][]framework.Plugin { return nil }
 type Deps struct {
 	Store    datalayer.Store
 	Resolver Resolver
+	// Asked for endpoint samples while a decision is pending and while a request is in flight
+	Sampler datalayer.Sampler
 	// The scheduler for pools naming no scheduler config
 	Scheduler framework.Scheduler
 	// Schedulers by the config name a pool's SchedulerConfig selects
@@ -89,10 +91,12 @@ type lifecycle struct {
 	counted datalayer.EndpointID
 }
 
-// Requests this director has in flight per endpoint
+// Requests this director has in flight per endpoint, each endpoint sampled at the working pace while it has any
 type inflight struct {
-	mu sync.Mutex
-	n  map[datalayer.EndpointID]int
+	mu      sync.Mutex
+	n       map[datalayer.EndpointID]int
+	sampler datalayer.Sampler
+	serving map[datalayer.EndpointID]func()
 }
 
 func (f *inflight) add(id datalayer.EndpointID, delta int) {
@@ -100,8 +104,15 @@ func (f *inflight) add(id datalayer.EndpointID, delta int) {
 	defer f.mu.Unlock()
 	if v := f.n[id] + delta; v > 0 {
 		f.n[id] = v
+		if f.serving[id] == nil {
+			f.serving[id] = f.sampler.Serving(id)
+		}
 	} else {
 		delete(f.n, id)
+		if release := f.serving[id]; release != nil {
+			delete(f.serving, id)
+			release()
+		}
 	}
 }
 
@@ -126,6 +137,7 @@ type director struct {
 	clock          Clock
 	observer       Observer
 	defaultOutput  int
+	sampler        datalayer.Sampler
 	loads          inflight
 }
 
@@ -138,6 +150,8 @@ func NewDirector(deps Deps) (Director, error) {
 		return nil, errors.New("a director needs a resolver")
 	case deps.Flow == nil:
 		return nil, errors.New("a director needs a flow controller")
+	case deps.Sampler == nil:
+		return nil, errors.New("a director needs a sampler")
 	case deps.Scheduler == nil && len(deps.Schedulers) == 0:
 		return nil, errors.New("a director needs a scheduler")
 	case deps.DefaultOutputTokens <= 0:
@@ -154,7 +168,8 @@ func NewDirector(deps Deps) (Director, error) {
 		clock:         deps.Clock,
 		observer:      deps.Observer,
 		defaultOutput: deps.DefaultOutputTokens,
-		loads:         inflight{n: map[datalayer.EndpointID]int{}},
+		sampler:       deps.Sampler,
+		loads:         inflight{n: map[datalayer.EndpointID]int{}, sampler: deps.Sampler, serving: map[datalayer.EndpointID]func(){}},
 	}
 	if d.topology == nil {
 		d.topology = noTopology{}
@@ -221,7 +236,9 @@ func (d *director) Decide(ctx context.Context, in *Inbound) (dec *Decision, err 
 	if !d.anyReady(pool.ID) {
 		return nil, fmt.Errorf("%w: pool %s has no ready endpoint", ErrNoReadyEndpoints, pool.ID)
 	}
+	sampled := d.sampler.Deciding(ctx, d.readyIDs(pool.ID))
 	permit, result, failedOpen, err := d.dispatch(ctx, in, pool, req)
+	sampled()
 	if err != nil {
 		return nil, err
 	}
@@ -337,6 +354,16 @@ func (d *director) adapterOf(ctx context.Context, pool datalayer.Pool, target st
 // Whether any endpoint of the pool is ready and healthy, a pool without one refused before admission
 func (d *director) anyReady(pool datalayer.PoolID) bool {
 	return len(d.store.Endpoints(pool, datalayer.ReadyAndHealthy)) > 0
+}
+
+// The ready and healthy endpoints of the pool, the ones a pending decision keeps sampled
+func (d *director) readyIDs(pool datalayer.PoolID) []datalayer.EndpointID {
+	eps := d.store.Endpoints(pool, datalayer.ReadyAndHealthy)
+	ids := make([]datalayer.EndpointID, len(eps))
+	for i, ep := range eps {
+		ids[i] = ep.ID()
+	}
+	return ids
 }
 
 // How often a held request looks at its pool between store changes

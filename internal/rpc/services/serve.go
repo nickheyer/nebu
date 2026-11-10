@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/instances"
@@ -162,11 +163,11 @@ func NewTaskService(m *tasks.Manager) *TaskService {
 
 func (s *TaskService) ListTasks(ctx context.Context, req *connect.Request[v1.ListTasksRequest]) (*connect.Response[v1.ListTasksResponse], error) {
 	list := s.tasks.List(req.Msg.GetActiveOnly())
-	if kind := req.Msg.GetKind(); kind != "" {
-		list = keep(list, func(t *v1.Task) bool { return t.GetKind() == kind })
+	if kinds := req.Msg.GetKinds(); len(kinds) > 0 {
+		list = keep(list, func(t *v1.Task) bool { return slices.Contains(kinds, t.GetKind()) })
 	}
-	if state := req.Msg.GetState(); state != v1.TaskState_TASK_STATE_UNSPECIFIED {
-		list = keep(list, func(t *v1.Task) bool { return t.GetState() == state })
+	if states := req.Msg.GetStates(); len(states) > 0 {
+		list = keep(list, func(t *v1.Task) bool { return slices.Contains(states, t.GetState()) })
 	}
 	list = match(list, req.Msg.GetQuery(), func(t *v1.Task) []string { return []string{t.GetKind(), t.GetTitle(), t.GetError()} })
 	list, next, err := page(list, req.Msg.GetCursor(), req.Msg.GetLimit())

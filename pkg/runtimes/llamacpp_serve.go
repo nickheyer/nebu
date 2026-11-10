@@ -16,6 +16,7 @@ func (LlamaCpp) Metrics() *v1.MetricNames {
 		SlotsPath:       "/slots",
 		AdaptersPath:    "/lora-adapters",
 		AdaptersFormat:  "llamacpp",
+		WorkCounter:     "llamacpp:n_decode_total",
 		MetricsPath:     "/metrics",
 		HealthPath:      "/health",
 	}

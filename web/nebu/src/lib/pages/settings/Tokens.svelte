@@ -75,7 +75,7 @@
 	}
 </script>
 
-<PageHeader {tabs} active="tokens" info="Bearer tokens for the API, each no wider than the role that made it" />
+<PageHeader {tabs} active="tokens" />
 
 <Card title="API tokens" flush>
 	{#snippet tools()}
@@ -113,8 +113,8 @@
 </Card>
 
 <Dialog bind:open={newOpen} title="New token" confirm="Create" {busy} disabled={!name.trim() || scopes.length === 0} onconfirm={create}>
-	<Text bind:value={name} label="Name" info="What the token is for, shown in this list" min={1} max={64} required />
-	<Checklist bind:value={scopes} options={roleScopes.map((s) => ({ value: s, label: capitalize(scopeLabel(s)) }))} label="Scopes" info="What the token may call, never more than your own role grants" />
+	<Text bind:value={name} label="Name" min={1} max={64} required />
+	<Checklist bind:value={scopes} options={roleScopes.map((s) => ({ value: s, label: capitalize(scopeLabel(s)) }))} label="Scopes" info="Never more than your own role" />
 	{#snippet footer()}
 		{#if error}<span class="error-text">{error}</span>{/if}
 	{/snippet}

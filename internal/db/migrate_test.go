@@ -274,3 +274,46 @@ func TestRouteUpgradeCarriesOwner(t *testing.T) {
 		t.Fatalf("routes after the down %v %v", owners, err)
 	}
 }
+
+// Aliases keep names and order without own limits, slots gain no caps, and the down restores the columns
+func TestAliasInheritMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "nebu.db")
+	old := openBefore(t, path, "20261109120000_slot_alias_inherit_pool_bytes")
+	for _, stmt := range []string{
+		`INSERT INTO slots (id, name, state, created_at, updated_at, max_in_flight) VALUES ('s1', 'main', 'ready', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z', 2)`,
+		`INSERT INTO slot_aliases (slot_id, position, name, max_in_flight, burst, profile) VALUES ('s1', 0, 'fast', 8, 4, '{"allowAll":true}')`,
+		`INSERT INTO slot_aliases (slot_id, position, name) VALUES ('s1', 1, 'plain')`,
+	} {
+		if _, err := old.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	old.Close()
+	d, err := Open(path, func(ctx context.Context, d *DB) error { return d.DropLegacyChatFiles(ctx) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if len(d.Drift) != 0 {
+		t.Fatalf("drift after migrating: %v", d.Drift)
+	}
+	slots, err := d.ListSlots(ctx)
+	if err != nil || len(slots) != 1 {
+		t.Fatalf("slots %v %v", slots, err)
+	}
+	s := slots[0]
+	if a := s.GetAliases(); len(a) != 2 || a[0].GetName() != "fast" || a[1].GetName() != "plain" || a[0].GetInheritSlotId() != "" || a[1].GetInheritSlotId() != "" {
+		t.Fatalf("aliases after migrating %v", a)
+	}
+	if s.GetPoolBytes() != nil || s.GetPolicy().GetMaxInFlight() != 2 {
+		t.Fatalf("slot after migrating caps %v policy %v", s.GetPoolBytes(), s.GetPolicy())
+	}
+	if err := d.MigrateDown(ctx, "20261107030000"); err != nil {
+		t.Fatal(err)
+	}
+	limits, err := d.stringMap(ctx, `SELECT name, max_in_flight || '/' || burst || '/' || profile FROM slot_aliases`)
+	if err != nil || len(limits) != 2 || limits["fast"] != "0/0/" || limits["plain"] != "0/0/" {
+		t.Fatalf("aliases after the down %v %v", limits, err)
+	}
+}

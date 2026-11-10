@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -20,10 +21,14 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 		if err != nil {
 			return err
 		}
-		if err := exec(`INSERT OR REPLACE INTO slots (id, name, position, placement, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, formation_id, profile, args, description, desired_running, conditions, meta, observed_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		caps, err := poolBytesCol(s.GetPoolBytes())
+		if err != nil {
+			return err
+		}
+		if err := exec(`INSERT OR REPLACE INTO slots (id, name, position, placement, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, formation_id, profile, args, description, desired_running, conditions, meta, observed_generation, pool_bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, s.GetName(), s.GetPosition(), enumCol(s.GetPlacement()), s.GetRuntimeId(), int64(s.GetMemoryBytes()), s.GetInstanceId(), enumCol(s.GetState()), s.GetError(), s.GetTaskId(), stamp(s.GetCreatedAt().AsTime()), stamp(s.GetUpdatedAt().AsTime()),
 			p.GetMaxInFlight(), p.GetRequestsPerSecond(), p.GetBurst(), p.GetRequestTimeoutMs(), p.GetUpstreamTimeoutMs(), s.GetFormationId(), profileCol(s.GetProfile()), s.GetArgs(),
-			s.GetDescription(), boolCol(s.GetDesiredRunning()), conditions, metaCol(s.GetMeta()), int64(s.GetObservedGeneration())); err != nil {
+			s.GetDescription(), boolCol(s.GetDesiredRunning()), conditions, metaCol(s.GetMeta()), int64(s.GetObservedGeneration()), caps); err != nil {
 			return err
 		}
 		if err := clearChildren(exec, "slot_id", id, "slot_devices", "slot_aliases", "slot_params", "slot_requests", "slot_request_params"); err != nil {
@@ -35,9 +40,7 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 			}
 		}
 		for i, a := range s.GetAliases() {
-			ap := a.GetPolicy()
-			if err := exec(`INSERT INTO slot_aliases (slot_id, position, name, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, profile) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				id, i, a.GetName(), ap.GetMaxInFlight(), ap.GetRequestsPerSecond(), ap.GetBurst(), ap.GetRequestTimeoutMs(), ap.GetUpstreamTimeoutMs(), profileCol(a.GetProfile())); err != nil {
+			if err := exec(`INSERT INTO slot_aliases (slot_id, position, name, inherit_slot_id) VALUES (?, ?, ?, ?)`, id, i, a.GetName(), a.GetInheritSlotId()); err != nil {
 				return err
 			}
 		}
@@ -59,14 +62,14 @@ func (d *DB) PutSlot(ctx context.Context, s *v1.Slot) error {
 
 // Lists every slot by position, then name
 func (d *DB) ListSlots(ctx context.Context) ([]*v1.Slot, error) {
-	out, err := list(ctx, d, `SELECT id, name, position, placement, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, formation_id, profile, args, description, desired_running, conditions, meta, observed_generation FROM slots ORDER BY position, name`, func(rows *sql.Rows) (*v1.Slot, error) {
+	out, err := list(ctx, d, `SELECT id, name, position, placement, runtime_id, memory_bytes, instance_id, state, error, task_id, created_at, updated_at, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, formation_id, profile, args, description, desired_running, conditions, meta, observed_generation, pool_bytes FROM slots ORDER BY position, name`, func(rows *sql.Rows) (*v1.Slot, error) {
 		s := &v1.Slot{}
 		p := &v1.Policy{}
 		var profile profileAt
 		var conditions, meta string
 		var observed int64
 		if err := rows.Scan(&s.Id, &s.Name, &s.Position, enumAt[v1.Placement]{&s.Placement}, &s.RuntimeId, &s.MemoryBytes, &s.InstanceId, enumAt[v1.SlotState]{&s.State}, &s.Error, &s.TaskId, at{&s.CreatedAt}, at{&s.UpdatedAt}, &p.MaxInFlight, &p.RequestsPerSecond, &p.Burst, &p.RequestTimeoutMs, &p.UpstreamTimeoutMs, &s.FormationId, &profile, &s.Args,
-			&s.Description, (*flag)(&s.DesiredRunning), &conditions, &meta, &observed); err != nil {
+			&s.Description, (*flag)(&s.DesiredRunning), &conditions, &meta, &observed, poolBytesAt{&s.PoolBytes}); err != nil {
 			return nil, err
 		}
 		// A slot that inherits everything carries no policy, as it was written
@@ -94,7 +97,10 @@ func (d *DB) ListSlots(ctx context.Context) ([]*v1.Slot, error) {
 		if s.DeviceIds, err = d.strings(ctx, `SELECT device_id FROM slot_devices WHERE slot_id = ? ORDER BY position`, s.GetId()); err != nil {
 			return nil, err
 		}
-		if s.Aliases, err = list(ctx, d, `SELECT name, max_in_flight, requests_per_second, burst, request_timeout_ms, upstream_timeout_ms, profile FROM slot_aliases WHERE slot_id = ? ORDER BY position`, scanAlias, s.GetId()); err != nil {
+		if s.Aliases, err = list(ctx, d, `SELECT name, inherit_slot_id FROM slot_aliases WHERE slot_id = ? ORDER BY position`, func(rows *sql.Rows) (*v1.SlotAlias, error) {
+			a := &v1.SlotAlias{}
+			return a, rows.Scan(&a.Name, &a.InheritSlotId)
+		}, s.GetId()); err != nil {
 			return nil, err
 		}
 		if s.Params, err = d.stringMap(ctx, `SELECT name, value FROM slot_params WHERE slot_id = ? ORDER BY name`, s.GetId()); err != nil {
@@ -120,21 +126,6 @@ func (d *DB) ListSlots(ctx context.Context) ([]*v1.Slot, error) {
 		}
 	}
 	return out, nil
-}
-
-// Scans an alias with its limits, no policy when every field inherits, as it was written
-func scanAlias(rows *sql.Rows) (*v1.SlotAlias, error) {
-	a := &v1.SlotAlias{}
-	p := &v1.Policy{}
-	var profile profileAt
-	if err := rows.Scan(&a.Name, &p.MaxInFlight, &p.RequestsPerSecond, &p.Burst, &p.RequestTimeoutMs, &p.UpstreamTimeoutMs, &profile); err != nil {
-		return nil, err
-	}
-	if p.GetMaxInFlight()+p.GetBurst()+p.GetRequestTimeoutMs()+p.GetUpstreamTimeoutMs() > 0 || p.GetRequestsPerSecond() > 0 {
-		a.Policy = p
-	}
-	a.Profile = profile.p
-	return a, nil
 }
 
 // Removes a slot with its child rows, reporting existence
@@ -201,6 +192,27 @@ func (a *profileAt) Scan(v any) error {
 	}
 	a.p = &v1.Profile{}
 	return protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal([]byte(s), a.p)
+}
+
+// Stores pool caps as a JSON object of pool id to bytes, empty text when there are none
+func poolBytesCol(caps map[string]uint64) (string, error) {
+	if len(caps) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(caps)
+	return string(data), err
+}
+
+// Scans pool caps from their JSON object, none when the column is empty
+type poolBytesAt struct{ p *map[string]uint64 }
+
+func (a poolBytesAt) Scan(v any) error {
+	s, _ := v.(string)
+	*a.p = nil
+	if s == "" {
+		return nil
+	}
+	return json.Unmarshal([]byte(s), a.p)
 }
 
 // Stores a message as protobuf JSON, empty text for an unset or empty message

@@ -14,6 +14,7 @@ func (NeMo) Metrics() *v1.MetricNames {
 		QueuedRequests:  "ray_serve_deployment_queued_queries",
 		RunningRequests: "ray_serve_replica_processing_queries",
 		StaticCache:     true,
+		WorkCounter:     "ray_serve_deployment_request_counter_total",
 		MetricsPath:     "/metrics",
 		HealthPath:      "/v1/health",
 	}

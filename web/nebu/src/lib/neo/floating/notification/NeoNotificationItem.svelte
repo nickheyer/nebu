@@ -425,7 +425,7 @@
       will-change: transform, opacity, scale, translate, backdrop-filter;
 
       &[inert] {
-        z-index: var(--neo-z-index-layer-top, 2000000000);
+        z-index: var(--neo-z-index-layer-top, 1000000);
       }
 
       &.neo-draggable {

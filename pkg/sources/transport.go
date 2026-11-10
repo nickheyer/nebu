@@ -54,6 +54,14 @@ func (u Use) prefix() string {
 	return u.Name + "_"
 }
 
+// A field label led by the transport's name unless it is primary or the label already carries the name
+func (u Use) label(label string) string {
+	if u.Name == "" || strings.Contains(strings.ToLower(label), strings.ToLower(u.Name)) {
+		return label
+	}
+	return strings.ToUpper(u.Name[:1]) + u.Name[1:] + " " + strings.ToLower(label[:1]) + label[1:]
+}
+
 // Lookup key, using the kind for the primary transport.
 func (u Use) key() string {
 	if u.Name == "" {
@@ -115,7 +123,7 @@ func (u Use) fields() []*v1.ConfigField {
 		}
 		f := &v1.ConfigField{
 			Name:        u.prefix() + def.name,
-			Label:       def.label,
+			Label:       u.label(def.label),
 			Type:        def.typ,
 			Required:    slices.Contains(u.Required, def.name),
 			Description: def.description,
@@ -171,7 +179,7 @@ func checkField(f *v1.ConfigField, value string) (string, error) {
 	return value, nil
 }
 
-// Applies source overrides to provider defaults, seeds empty secrets from their variables, and validates fields
+// Applies source overrides to provider defaults and validates fields
 func resolveConfig(fields []*v1.ConfigField, values map[string]string) (map[string]string, error) {
 	known := map[string]*v1.ConfigField{}
 	out := make(map[string]string, len(fields))
@@ -193,9 +201,6 @@ func resolveConfig(fields []*v1.ConfigField, values map[string]string) (map[stri
 		}
 	}
 	for _, f := range fields {
-		if out[f.GetName()] == "" && f.GetEnv() != "" {
-			out[f.GetName()] = os.Getenv(f.GetEnv())
-		}
 		v, err := checkField(f, out[f.GetName()])
 		if err != nil {
 			return nil, err

@@ -65,8 +65,8 @@
 </script>
 
 <Dialog bind:open title="Try {server.server?.name ?? ''}" confirm="Run" cancel="Close" {busy} disabled={!tool || !valid} onconfirm={run} width="full">
-	<Select bind:value={tool} options={server.tools.map((t) => ({ value: t.name, label: t.name, description: t.description }))} label="Tool" info="One tool the server offers" placeholder="Choose a tool" />
-	<Code bind:value={args} bind:valid language="json" rows={6} label="Arguments" info="The call's arguments as JSON" />
+	<Select bind:value={tool} options={server.tools.map((t) => ({ value: t.name, label: t.name, description: t.description }))} label="Tool" />
+	<Code bind:value={args} bind:valid language="json" rows={6} label="Arguments" />
 	{#if result}
 		<div class="result">
 			<Mark state={result.failed ? 'failed' : 'ok'} label={result.failed ? 'Failed' : 'Succeeded'} />

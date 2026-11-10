@@ -1,5 +1,7 @@
 import { TraceKind, type Trace } from '#lib/proto/nebu/v1/gateway_pb.js';
-import { date } from '#lib/format.js';
+import { date, ms, num, pct, perMinute } from '#lib/format.js';
+import type { FactItem } from '#lib/ui/Facts.svelte';
+import type { Fact } from '#lib/ui/Tip.svelte';
 
 export type Window = '1m' | '5m' | '15m' | 'range';
 
@@ -92,6 +94,64 @@ export function buckets<T>(items: T[], at: (item: T) => number, from: number, to
 		if (i >= 0 && i < count) groups[i]!.push(it);
 	}
 	return groups.map(value);
+}
+
+// Points each reading's spark holds across its window
+export const sparkBuckets = 24;
+
+// Request rate, error share, first token and per token times of the traces in a span, each with its spark
+export function windowFacts(traces: Trace[], from: number, end: number, extra: Fact[] = []): FactItem[] {
+	const done = traces.filter((t) => finished(t) !== undefined);
+	const minutes = Math.max(1 / 60, (end - from) / 60_000);
+	const defined = (v: number | undefined): v is number => v !== undefined;
+	const ttfts = traces.map(ttft).filter(defined);
+	const tpots = traces.map(tpot).filter(defined);
+	const waits = traces.map((t) => t.queueWaitMs).filter((v) => v > 0);
+	const errorRate = done.length ? (done.filter(failed).length / done.length) * 100 : 0;
+	const median = (values: number[]) => percentile(values, 0.5) ?? 0;
+	const split = (value: (l: Trace[]) => number) => buckets(traces, started, from, end, sparkBuckets, value);
+	const errors = split((l) => l.filter(failed).length);
+	return [
+		{
+			id: 'rate',
+			label: 'Requests',
+			value: perMinute(traces.length / minutes),
+			spark: split((l) => l.length),
+			facts: [{ label: 'in window', value: num(traces.length) }, { label: 'rejected', value: num(traces.filter(isShed).length) }, ...extra]
+		},
+		{
+			id: 'errors',
+			label: 'Errors',
+			value: pct(errorRate, 1),
+			lamp: errorRate >= 5 ? 'error' : errorRate > 0 ? 'warning' : undefined,
+			spark: errors,
+			facts: [
+				{ label: '4xx', value: num(done.filter((t) => t.status >= 400 && t.status < 500).length) },
+				{ label: '5xx', value: num(done.filter((t) => t.status >= 500).length) }
+			]
+		},
+		{
+			id: 'ttft',
+			label: 'First token',
+			value: ttfts.length ? ms(median(ttfts)) : '—',
+			spark: split((l) => median(l.map(ttft).filter(defined))),
+			facts: [
+				{ label: 'p50', value: ttfts.length ? ms(median(ttfts)) : '—' },
+				{ label: 'p95', value: ttfts.length ? ms(percentile(ttfts, 0.95)) : '—' },
+				{ label: 'queue wait p95', value: waits.length ? ms(percentile(waits, 0.95)) : '—' }
+			]
+		},
+		{
+			id: 'tpot',
+			label: 'Per token',
+			value: tpots.length ? ms(median(tpots)) : '—',
+			spark: split((l) => median(l.map(tpot).filter(defined))),
+			facts: [
+				{ label: 'p50', value: tpots.length ? ms(median(tpots)) : '—' },
+				{ label: 'p95', value: tpots.length ? ms(percentile(tpots, 0.95)) : '—' }
+			]
+		}
+	];
 }
 
 // Whether a kept body lost its tail to the cap, against the byte count the trace recorded when it has one

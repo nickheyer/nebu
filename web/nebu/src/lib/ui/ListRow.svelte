@@ -271,9 +271,11 @@
 		gap: 8px;
 		align-items: center;
 	}
+	/* The name and its badges share a line while they fit and stack when the row is tight */
 	.primary {
 		display: inline-flex;
-		gap: 6px;
+		flex-wrap: wrap;
+		gap: 2px 6px;
 		align-items: center;
 		min-width: 0;
 	}
@@ -288,9 +290,11 @@
 	}
 	.badges {
 		display: inline-flex;
-		flex: 0 0 auto;
+		flex: 0 1 auto;
+		flex-wrap: wrap;
 		gap: 4px;
 		align-items: center;
+		min-width: 0;
 	}
 	.secondary-col {
 		font-size: var(--nebu-text-secondary);

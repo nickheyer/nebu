@@ -94,6 +94,7 @@ type instance struct {
 }
 
 func (m *Manager) newInstance(rec *v1.Instance, rt runtimes.Runtime) *instance {
+	rec.Adapters = switchesAdapters(rt, rec)
 	in := &instance{mgr: m, rec: rec, rt: rt, exited: make(chan struct{}), exitOnce: &sync.Once{}, poke: make(chan struct{}, 1), backoff: backoffMin}
 	if Terminal(rec.GetState()) {
 		in.exitOnce.Do(func() { close(in.exited) })
@@ -135,6 +136,7 @@ func (in *instance) apply(fn func(*v1.Instance)) (rec *v1.Instance, terminal boo
 	defer in.mu.Unlock()
 	before := proto.Clone(in.rec).(*v1.Instance)
 	fn(in.rec)
+	in.rec.Adapters = switchesAdapters(in.rt, in.rec)
 	if !proto.Equal(before, in.rec) {
 		if err := m.DB.PutInstance(context.Background(), in.rec); err != nil {
 			m.Log.Warn("instance record write failed", "id", in.rec.GetId(), "err", err)
@@ -567,8 +569,18 @@ func (in *instance) serve() bool {
 			if n, c := m.InFlight(id), m.Dispatched(id); n > 0 || c != count {
 				active, count = time.Now(), c
 			}
-			if running, queued, scraped := m.Load(id); scraped && running+queued > 0 {
+			if time.Since(active) < window {
+				continue
+			}
+			// The gateway sent nothing for a whole window, so the runtime says whether anything else did
+			at, err := m.Load(context.Background(), id)
+			if err != nil {
+				m.Log.Warn("instance kept loaded, its runtime could not be asked whether it is idle", "id", id, "err", err)
 				active = time.Now()
+				continue
+			}
+			if at.After(active) {
+				active = at
 			}
 			if time.Since(active) < window {
 				continue

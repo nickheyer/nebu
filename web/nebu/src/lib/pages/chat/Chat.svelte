@@ -56,7 +56,6 @@
 	let modelsLoaded = $state(false);
 	let modelsError = $state('');
 	let servers = $state<ToolServerStatus[]>([]);
-	let serversError = $state('');
 	let query = $state('');
 	let text = $state('');
 	let attachments = $state<File[]>([]);
@@ -125,10 +124,8 @@
 	async function loadServers() {
 		try {
 			servers = (await rpc.tools.listToolServers({ mesh: true })).servers;
-			serversError = '';
 		} catch (err) {
-			serversError = reason(err);
-			toast.error('Tool servers failed to list', serversError);
+			toast.error('Tool servers failed to list', reason(err));
 		}
 	}
 
@@ -167,8 +164,10 @@
 	const shown = $derived(session.turns.filter((t) => t.role !== 'tool'));
 	const last = $derived(session.turns[session.turns.length - 1]);
 	const lastAssistant = $derived(session.turns.findLast((t) => t.role === 'assistant'));
-	const userName = $derived(session.settings.userName || 'You');
-	const assistantName = $derived(session.settings.assistantName || session.conversation.model || session.model || 'Model');
+	const userFallback = $derived(account.displayName || 'You');
+	const assistantFallback = $derived(session.conversation.model || session.model || 'Model');
+	const userName = $derived(session.settings.userName || userFallback);
+	const assistantName = $derived(session.settings.assistantName || assistantFallback);
 	const draftTurn = $derived(create(ChatTurnSchema, { role: 'assistant', text: session.draft, toolCalls: session.draftCalls }));
 	const groups = $derived(byDay(conversations.items));
 	const noRoute = $derived(modelsLoaded && !modelsError && !anyReady);
@@ -321,7 +320,7 @@
 
 {#snippet settingsForm()}
 	{#key session.conversation.id}
-		<SettingsPanel bind:settings={() => session.settings, (v) => (session.conversation.settings = v)} {servers} {serversError} contextLength={current?.inventory.context_length ?? 0} assistantFallback={session.conversation.model || session.model} />
+		<SettingsPanel bind:settings={() => session.settings, (v) => (session.conversation.settings = v)} {servers} contextLength={current?.inventory.context_length ?? 0} userFallback={userFallback} assistantFallback={assistantFallback} />
 	{/key}
 {/snippet}
 
@@ -365,7 +364,6 @@
 			onretry={turn === last && !session.busy && (turn.error || turn.stop === 'cancelled') ? () => attempt('Retry failed', () => session.retry(servers, mode)) : undefined}
 			onrun={(c: PendingCall) => attempt('Tool call failed', () => session.runCall(c, servers))}
 			onskip={(c: PendingCall) => attempt('Tool call failed', () => session.skipCall(c, servers))}
-			onresult={(c: PendingCall, result: string) => attempt('Tool call failed', () => session.settle(c, result, false, servers))}
 		/>
 	{/each}
 	{#if session.busy}
@@ -404,13 +402,13 @@
 	<div class="composer">
 		{#if media}
 			<FieldRow>
-				<Select value={session.media.imageSize} options={sizeOptions} label="Size" info="Width x height" onchange={(v) => v && (session.media.imageSize = v)} />
-				<Slider bind:value={session.media.imageSteps} min={1} max={100} label="Steps" info="Denoising steps" />
+				<Select value={session.media.imageSize} options={sizeOptions} label="Size" onchange={(v) => v && (session.media.imageSize = v)} />
+				<Slider bind:value={() => session.media.imageSteps, (n) => (session.media.imageSteps = n ?? 1)} min={1} max={100} label="Steps" />
 				{#if mode === 'image'}
-					<Slider bind:value={session.media.imageCount} min={1} max={4} label="Count" info="Images per request" />
+					<Slider bind:value={() => session.media.imageCount, (n) => (session.media.imageCount = n ?? 1)} min={1} max={4} label="Images" />
 				{:else}
-					<Slider bind:value={session.media.videoSeconds} min={1} max={30} unit="s" label="Seconds" info="Clip length" />
-					<Select value={session.media.videoFps} options={fpsOptions} label="FPS" info="Frames per second" onchange={(v) => v && (session.media.videoFps = v)} />
+					<Slider bind:value={() => session.media.videoSeconds, (n) => (session.media.videoSeconds = n ?? 1)} min={1} max={30} unit="s" label="Length" />
+					<Select value={session.media.videoFps} options={fpsOptions} label="FPS" onchange={(v) => v && (session.media.videoFps = v)} />
 				{/if}
 			</FieldRow>
 		{:else if attach && attachments.length}
@@ -433,7 +431,7 @@
 	</div>
 {/snippet}
 
-<PageHeader title={id && session.conversation.title ? session.conversation.title : undefined} info="Talk to any ready route through the gateway, with tools, images and video where the model allows" />
+<PageHeader title={id && session.conversation.title ? session.conversation.title : undefined} />
 
 <div class="chat" class:mobile={viewport.mobile}>
 	{#if columns}
@@ -461,7 +459,7 @@
 			</Sheet>
 		{/if}
 		<Dialog bind:open={renameOpen} title="Rename conversation" confirm="Rename" busy={renameBusy} disabled={!renameTitle.trim()} onconfirm={rename}>
-			<Text bind:value={renameTitle} label="Title" info="The conversation's name in the list" max={64} />
+			<Text bind:value={renameTitle} label="Title" max={64} />
 		</Dialog>
 	</div>
 	{#if settingsColumn}
@@ -499,7 +497,7 @@
 		flex: 1 1 auto;
 	}
 	.settings {
-		flex: 0 0 320px;
+		flex: 0 0 344px;
 	}
 	.scroll {
 		display: flex;
@@ -514,7 +512,9 @@
 		padding: 0 var(--nebu-card-pad);
 	}
 	.form {
+		padding-right: calc(var(--nebu-card-pad) + var(--nebu-scroll-pad));
 		padding-bottom: var(--nebu-space-3);
+		scrollbar-gutter: stable;
 	}
 	.flow {
 		display: flex;
@@ -539,7 +539,7 @@
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
-		margin: var(--nebu-space-3) calc(-1 * var(--nebu-sheet-pad)) 0;
+		margin: var(--nebu-space-3) calc(-1 * (var(--nebu-sheet-pad) + var(--nebu-scroll-pad))) 0 calc(-1 * var(--nebu-sheet-pad));
 		--nebu-row-inset: var(--nebu-sheet-pad);
 	}
 	.composer {

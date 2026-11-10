@@ -129,6 +129,7 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool, p
 	}
 	params := run.GetParams()
 	var budget uint64
+	var poolBytes map[string]uint64
 	var slotArgs string
 	placement := v1.Placement_PLACEMENT_UNSPECIFIED
 	if run.GetSlotId() != "" {
@@ -140,7 +141,7 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool, p
 			return nil, fmt.Errorf("%w: slot %s: %v", ErrFormation, run.GetSlotId(), err)
 		}
 		params = runtimes.Merge(slot.GetParams(), run.GetParams())
-		budget, placement, slotArgs = slot.GetMemoryBytes(), slot.GetPlacement(), slot.GetArgs()
+		budget, placement, slotArgs, poolBytes = slot.GetMemoryBytes(), slot.GetPlacement(), slot.GetArgs(), slot.GetPoolBytes()
 	}
 	req := planner.Request{
 		Descriptor: descriptor,
@@ -193,10 +194,11 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool, p
 		}
 		sort.Strings(pins)
 		numbers := m.numbersFor(rec)
-		// A slot's budget, placement and device pins bound every seat as they bound a solo run
-		if len(pins) > 0 || budget > 0 {
+		limits := poolCapsFor(poolBytes, rec.GetId(), rec.GetId() == m.self())
+		// A slot's budget, pool caps, placement and device pins bound every seat as they bound a solo run
+		if len(pins) > 0 || budget > 0 || len(limits) > 0 {
 			rec = proto.Clone(rec).(*v1.Node)
-			rec.Profile = instances.Constrain(rec.GetProfile(), pins, budget, placement)
+			rec.Profile = instances.Constrain(rec.GetProfile(), pins, budget, placement, limits)
 		}
 		installID := run.GetInstallId()
 		if held, ok := pinned[rec.GetId()]; ok {
@@ -216,6 +218,21 @@ func (m *Manager) planWith(ctx context.Context, run *v1.RunRequest, free bool, p
 	}
 	out.plan = plan
 	return out, nil
+}
+
+// A slot's pool caps on one node keyed by pool id, bare keys naming this node's pools
+func poolCapsFor(caps map[string]uint64, nodeID string, self bool) map[string]uint64 {
+	out := map[string]uint64{}
+	for key, bytes := range caps {
+		node, pool, named := strings.Cut(key, "/")
+		switch {
+		case !named && self:
+			out[key] = bytes
+		case named && node == nodeID:
+			out[pool] = bytes
+		}
+	}
+	return out
 }
 
 func nodeName(rec *v1.Node) string {

@@ -115,7 +115,7 @@
 		filter={() => true}
 		sort={() => 0}
 		search
-		placeholder={placeholder ?? (compact ? label : 'Select')}
+		placeholder={placeholder ?? (compact ? label : undefined)}
 		display={prefixed}
 		{disabled}
 		{clearable}

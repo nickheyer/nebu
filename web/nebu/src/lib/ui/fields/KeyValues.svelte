@@ -13,9 +13,8 @@
 		valueLabel = 'Value',
 		secret = false,
 		fixedKeys = false,
-		disabled = false,
-		secretsSet = false
-	}: { value?: Record<string, string>; label?: string; info?: string; keyLabel?: string; valueLabel?: string; secret?: boolean; fixedKeys?: boolean; disabled?: boolean; secretsSet?: boolean } = $props();
+		disabled = false
+	}: { value?: Record<string, string>; label?: string; info?: string; keyLabel?: string; valueLabel?: string; secret?: boolean; fixedKeys?: boolean; disabled?: boolean } = $props();
 
 	let rows = $state<{ k: string; v: string }[]>(Object.entries(value).map(([k, v]) => ({ k, v })));
 
@@ -59,7 +58,7 @@
 				<NeoInput bind:value={row.k} {disabled} elevation={-1} floating={false} aria-label={keyLabel} />
 			{/if}
 			{#if secret}
-				<NeoPassword bind:value={row.v} placeholder={secretsSet && !row.v ? '••••••••' : ''} {disabled} elevation={-1} floating={false} aria-label={valueLabel} />
+				<NeoPassword bind:value={row.v} {disabled} elevation={-1} floating={false} aria-label={valueLabel} />
 			{:else}
 				<NeoInput bind:value={row.v} {disabled} elevation={-1} floating={false} aria-label={valueLabel} />
 			{/if}
@@ -70,9 +69,6 @@
 			{/if}
 		</div>
 	{/each}
-	{#if rows.length === 0}
-		<span class="secondary">None</span>
-	{/if}
 </div>
 
 <style>

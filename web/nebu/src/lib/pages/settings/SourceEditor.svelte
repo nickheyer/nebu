@@ -26,11 +26,8 @@
 	let error = $state<string | undefined>(undefined);
 
 	const provider = $derived(providers.find((p) => p.kind === kind));
-	const allFields = $derived(status?.capabilities?.fields.length ? status.capabilities.fields : (provider?.fields ?? []));
-	const transports = $derived(status?.capabilities?.transports.length ? status.capabilities.transports : (provider?.transports ?? []));
-	let config = $state<Record<string, string>>(untrack(() => withDefaults(allFields, draft?.config ?? {})));
-	let transport = $state(untrack(() => draft?.config['transport'] ?? (transports.length > 1 ? (transports[0] ?? '') : '')));
-	const fields = $derived(allFields.filter((f) => !f.transport || !transport || f.transport === transport));
+	const fields = $derived(status?.capabilities?.fields.length ? status.capabilities.fields : (provider?.fields ?? []));
+	let config = $state<Record<string, string>>(untrack(() => withDefaults(fields, draft?.config ?? {})));
 	const providerOptions = $derived.by(() => {
 		const list = providers.map((p) => ({ value: p.kind, label: p.name, description: p.description }));
 		if (!list.some((o) => o.value === kind)) list.push({ value: kind, label: status?.capabilities?.name || enumLabel(SourceKindSchema, kind), description: '' });
@@ -58,7 +55,7 @@
 		const set = Object.entries(config)
 			.filter(([, v]) => v !== '' && v !== undefined)
 			.sort(([a], [b]) => a.localeCompare(b));
-		return JSON.stringify([kind, id.trim(), name.trim(), transport, set]);
+		return JSON.stringify([kind, id.trim(), name.trim(), set]);
 	}
 
 	function pickProvider(k: SourceKind | undefined) {
@@ -66,7 +63,6 @@
 		if (!p) return;
 		kind = p.kind;
 		config = withDefaults(p.fields, {});
-		transport = p.transports.length > 1 ? (p.transports[0] ?? '') : '';
 	}
 
 	function discard() {
@@ -77,15 +73,14 @@
 		kind = draft.kind;
 		id = draft.id;
 		name = draft.name;
-		config = withDefaults(allFields, draft.config);
-		transport = draft.config['transport'] ?? '';
+		config = withDefaults(fields, draft.config);
 	}
 
 	async function save() {
 		saving = true;
 		error = undefined;
 		try {
-			const source = create(SourceSchema, { id: id.trim(), kind, name: name.trim() || id.trim(), config: { ...config, ...(transport ? { transport } : {}) } });
+			const source = create(SourceSchema, { id: id.trim(), kind, name: name.trim() || id.trim(), config: { ...config } });
 			if (editing) await rpc.sources.updateSource({ source });
 			else await rpc.sources.createSource({ source });
 			toast.success(`Saved ${source.id}`);
@@ -101,20 +96,17 @@
 <PanelHeader title={draft ? draft.name || draft.id : 'New source'} subtitle={draft && provider?.name !== (draft.name || draft.id) ? provider?.name : undefined} {onclose} />
 <Stack gap={24}>
 	{#if status?.error}<Str value={status.error} kind="message" color="error" width="100%" />{/if}
-	<FormSection title="Source" info="A place models are found, named by a short id">
+	<FormSection title="Source">
 		<FieldRow>
-			<Select value={kind} options={providerOptions} label="Provider" info="The kind of model source" disabled={editing} onchange={pickProvider} />
-			{#if transports.length > 1}
-				<Select bind:value={transport} options={transports.map((t) => ({ value: t, label: t }))} label="Transport" info="How the source is reached" />
-			{/if}
+			<Select value={kind} options={providerOptions} label="Provider" disabled={editing} onchange={pickProvider} />
 		</FieldRow>
 		<FieldRow>
-			<Text bind:value={id} label="Id" info="A short id in URLs and pulls, fixed once created" readonly={editing} mono required />
-			<Text bind:value={name} label="Name" info="Shown in lists, the id when empty" />
+			<Text bind:value={id} label="Id" info="Used in URLs, fixed once created" readonly={editing} mono required />
+			<Text bind:value={name} label="Name" placeholder={id} />
 		</FieldRow>
 	</FormSection>
 	{#if fields.length}
-		<FormSection title="Configuration" info="What the provider needs to reach the source">
+		<FormSection title="Configuration">
 			<ConfigFields {fields} bind:values={config} />
 		</FormSection>
 	{/if}

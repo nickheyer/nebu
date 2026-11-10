@@ -63,7 +63,6 @@
 			.sort((a, b) => Number(terminal(a.state)) - Number(terminal(b.state)) || a.name.localeCompare(b.name))
 	);
 	const formations = $derived(live.inMesh ? [...live.formations.values()].sort((a, b) => a.name.localeCompare(b.name)) : []);
-	const nothing = $derived(slots.length === 0 && loose.length === 0 && formations.length === 0);
 
 	// Forgets dismissed ids the daemon no longer holds
 	$effect(() => {
@@ -147,13 +146,15 @@
 </script>
 
 {#snippet launchTools()}
+	<span class="fill"></span>
 	<NeoButton text href={slotHref('new')}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Slot</NeoButton>
 	<NeoButton class="primary" elevation={2} href="/serve/launch">{#snippet icon()}<PlayIcon size={16} />{/snippet}Launch</NeoButton>
 {/snippet}
 
-{#snippet slotsCard()}
-	<Card title="Slots" info="A slot keeps a model's place and route on this host while occupants come and go" tools={launchTools} flush>
-		<List head={{ primary: 'Slot', secondary: 'Occupant', facts: ['In flight'] }}>
+<!-- Slots, empty or holding a model, then the models running outside any slot, in one table -->
+{#snippet servingCard()}
+	<Card tools={launchTools} flush>
+		<List head={{ primary: 'Name', secondary: 'Model' }}>
 			<NeoSortableProvider bind:items={sortItems} axis="y" onDragEnd={() => void reordered()}>
 				{#each sortItems as item, index (item.id)}
 					{@const slot = slotById.get(String(item.id))}
@@ -168,13 +169,6 @@
 					{/if}
 				{/each}
 			</NeoSortableProvider>
-		</List>
-	</Card>
-{/snippet}
-
-{#snippet looseCard()}
-	<Card title="Instances" tools={slots.length ? undefined : launchTools} flush>
-		<List head={{ primary: 'Instance', secondary: 'Model', facts: ['In flight'] }}>
 			{#each loose as inst (inst.id)}
 				<InstanceRow instance={inst} {slim} ondismiss={dismiss} selected={inst.id === instanceId} />
 			{/each}
@@ -201,7 +195,7 @@
 
 {#snippet memoryCard()}
 	<Card title="Memory">
-		{#snippet tools()}<RowAction label="Host" href="/host" />{/snippet}
+		{#snippet tools()}<RowAction label="Host" href="/" />{/snippet}
 		{#if !live.ready}
 			<Skeleton rows={2} kind="bars" />
 		{:else}
@@ -215,18 +209,17 @@
 		<Columns ratio="3/2">
 			{#snippet left()}
 				{#if !live.ready}
-					<Card title="Slots" flush>
+					<Card flush>
 						<Skeleton rows={3} leading="20px" secondary="40ch" />
 					</Card>
-				{:else if nothing}
-					<Card>
-						<Empty icon={PlayIcon} text="Nothing serving" action="Launch" href="/serve/launch" />
+				{:else if slots.length === 0 && loose.length === 0}
+					<Card tools={launchTools}>
+						<Empty icon={PlayIcon} text="Nothing serving" />
 					</Card>
 				{:else}
-					{#if slots.length}{@render slotsCard()}{/if}
-					{#if loose.length}{@render looseCard()}{/if}
-					{#if formations.length}{@render formationsCard()}{/if}
+					{@render servingCard()}
 				{/if}
+				{#if formations.length}{@render formationsCard()}{/if}
 			{/snippet}
 			{#snippet right()}
 				{@render memoryCard()}
@@ -235,7 +228,7 @@
 	</div>
 {/snippet}
 
-<PageHeader tabs={serveTabs} active="slots" info="What this host runs, where each model sits and how much memory it holds" />
+<PageHeader tabs={serveTabs} active="instances" />
 
 <Sheet open={panelOpen} onclose={close} {list}>
 	{#if slotParam === 'new'}
@@ -262,7 +255,7 @@
 </Sheet>
 
 {#if deleting}
-	<NameConfirm bind:open={deleteOpen} title="Delete slot" name={deleting.name} message={deleting.instanceId ? 'Stops the occupant' : undefined} onconfirm={deleteSlot} />
+	<NameConfirm bind:open={deleteOpen} title="Delete slot" name={deleting.name} message={deleting.instanceId ? 'Stops the model running in it' : undefined} onconfirm={deleteSlot} />
 {/if}
 
 {#if launching}
@@ -278,7 +271,10 @@
 		grid-template-columns: subgrid;
 		grid-column: 1 / -1;
 	}
-	.sortrow + .sortrow {
-		border-top: 1px solid var(--nebu-border);
+	.sortrow {
+		border-bottom: 1px solid var(--nebu-border);
+	}
+	.sortrow:last-child {
+		border-bottom-color: transparent;
 	}
 </style>

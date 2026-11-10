@@ -6,14 +6,14 @@
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { isCancel, reason, rpc } from '#lib/api/transport.js';
-	import { clock, ms, num, pct, perMinute, when } from '#lib/format.js';
+	import { clock, ms, num, pct, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { TraceKind, type Trace } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import { prefs } from '#lib/state/prefs.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
 	import Empty from '#lib/ui/Empty.svelte';
-	import Facts, { type FactItem } from '#lib/ui/Facts.svelte';
+	import Facts from '#lib/ui/Facts.svelte';
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import LoadMore from '#lib/ui/LoadMore.svelte';
@@ -22,6 +22,7 @@
 	import Str from '#lib/ui/Str.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 	import Duration from '#lib/ui/fields/Duration.svelte';
+	import MultiSelect from '#lib/ui/fields/MultiSelect.svelte';
 	import Picker from '#lib/ui/fields/Picker.svelte';
 	import Segmented from '#lib/ui/fields/Segmented.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
@@ -35,7 +36,7 @@
 	import { gatewayHeaderTabs } from '#lib/pages/gateway/tabs.js';
 	import Timeline from '#lib/pages/traffic/Timeline.svelte';
 	import TracePanel from '#lib/pages/traffic/TracePanel.svelte';
-	import { buckets, failed, finished, isShed, isWindow, kindWord, marks, percentile, rangeStartDefault, stamp, started, tpot, traceKinds, ttft, windowMs, type Window } from '#lib/pages/traffic/traffic.js';
+	import { finished, isShed, isWindow, kindWord, marks, rangeStartDefault, stamp, started, traceKinds, ttft, windowFacts, windowMs, type Window } from '#lib/pages/traffic/traffic.js';
 	import ArrowBendUpRightIcon from 'phosphor-svelte/lib/ArrowBendUpRightIcon';
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
 	import ClockIcon from 'phosphor-svelte/lib/ClockIcon';
@@ -49,15 +50,14 @@
 
 	let { traceId = '' }: { traceId?: string } = $props();
 
-	const sparkBuckets = 24;
 	const initial = untrack(() => page.url.searchParams);
 	const urlFrom = Number(initial.get('from') ?? '');
 	const urlTo = Number(initial.get('to') ?? '');
 	const opened = Date.now();
 
 	let route = $state<string | undefined>(initial.get('route') || undefined);
-	let kind = $state<TraceKind | undefined>(undefined);
-	let statusClass = $state<number | undefined>(undefined);
+	let kinds = $state<TraceKind[]>([]);
+	let statusClasses = $state<number[]>([]);
 	let windowId = $state<Window>(isWindow(initial.get('window')) ? (initial.get('window') as Window) : isWindow(prefs.trafficWindow) ? (prefs.trafficWindow as Window) : '5m');
 	let fromAgo = $state(urlFrom > 0 ? Math.max(1, Math.round((opened - urlFrom) / 1000)) : rangeStartDefault);
 	let toAgo = $state(urlTo > 0 ? Math.max(0, Math.round((opened - urlTo) / 1000)) : 0);
@@ -65,8 +65,8 @@
 	let paused = $state(false);
 	let frozen = $state(0);
 	let pinned = $state.raw(new Map<string, Trace>());
-	let nodeId = $state<string | undefined>(undefined);
-	let objective = $state<string | undefined>(undefined);
+	let nodeIds = $state<string[]>([]);
+	let objectiveNames = $state<string[]>([]);
 	let fairness = $state('');
 	let view = $state<'list' | 'timeline'>(prefs.trafficTimeline ? 'timeline' : 'list');
 	let stats = $state<Trace[]>([]);
@@ -98,16 +98,16 @@
 	const queryFrom = $derived(windowId === 'range' ? rangeFrom : Math.floor(bounds.from / 60_000) * 60_000);
 	const queryTo = $derived(windowId === 'range' ? rangeTo : 0);
 
-	type Params = { route: string; kind: TraceKind; statusClass: number; from: number; to: number; nodeId: string; objective: string; fairness: string };
-	const params = $derived<Params>({ route: route ?? '', kind: kind ?? TraceKind.UNSPECIFIED, statusClass: statusClass ?? 0, from: queryFrom, to: queryTo, nodeId: nodeId ?? '', objective: objective ?? '', fairness: fairness.trim() });
+	type Params = { route: string; kinds: TraceKind[]; statusClasses: number[]; from: number; to: number; nodeIds: string[]; objectives: string[]; fairness: string };
+	const params = $derived<Params>({ route: route ?? '', kinds, statusClasses, from: queryFrom, to: queryTo, nodeIds, objectives: objectiveNames, fairness: fairness.trim() });
 
 	function request(p: Params) {
 		return {
 			route: p.route,
-			kind: p.kind,
-			statusClass: p.statusClass,
-			nodeId: p.nodeId,
-			objective: p.objective,
+			kinds: p.kinds,
+			statusClasses: p.statusClasses,
+			nodeIds: p.nodeIds,
+			objectives: p.objectives,
 			fairnessId: p.fairness,
 			from: p.from ? timestampFromDate(new Date(p.from)) : undefined,
 			to: p.to ? timestampFromDate(new Date(p.to)) : undefined
@@ -190,11 +190,6 @@
 	const windowed = $derived(stats.map((t) => fresh.get(t.id) ?? t).filter((t) => started(t) >= bounds.from && (bounds.to === 0 || started(t) < bounds.to)));
 	const done = $derived(windowed.filter((t) => finished(t) !== undefined));
 	const end = $derived(bounds.to || now);
-	const spanMinutes = $derived(Math.max(1 / 60, (end - bounds.from) / 60_000));
-	const ttfts = $derived(windowed.map(ttft).filter((v): v is number => v !== undefined));
-	const tpots = $derived(windowed.map(tpot).filter((v): v is number => v !== undefined));
-	const waits = $derived(windowed.map((t) => t.queueWaitMs).filter((v) => v > 0));
-	const errorRate = $derived(done.length ? (done.filter(failed).length / done.length) * 100 : 0);
 	const attainment = $derived.by(() => {
 		const byObjective = new Map<string, { met: number; total: number }>();
 		for (const t of done) {
@@ -204,65 +199,14 @@
 			if (t.objectiveAttained) b.met++;
 			byObjective.set(t.objective, b);
 		}
-		return [...byObjective.entries()].map(([name, b]) => ({ label: `${name} attained`, value: pct((b.met / b.total) * 100) }));
+		return [...byObjective.entries()].map(([name, b]) => ({ label: `${name} met`, value: pct((b.met / b.total) * 100) }));
 	});
+	const facts = $derived(windowFacts(windowed, bounds.from, end, attainment));
 
-	function median(values: number[]): number {
-		return percentile(values, 0.5) ?? 0;
-	}
-
-	const facts = $derived.by((): FactItem[] => {
-		const split = (value: (l: Trace[]) => number) => buckets(windowed, started, bounds.from, end, sparkBuckets, value);
-		return [
-			{
-				id: 'rate',
-				label: 'Requests',
-				value: perMinute(windowed.length / spanMinutes),
-				spark: split((l) => l.length),
-				facts: [{ label: 'in window', value: num(windowed.length) }, { label: 'shed', value: num(windowed.filter(isShed).length) }, ...attainment]
-			},
-			{
-				id: 'errors',
-				label: 'Errors',
-				value: pct(errorRate, 1),
-				lamp: errorRate >= 5 ? 'error' : errorRate > 0 ? 'warning' : undefined,
-				spark: split((l) => l.filter(failed).length),
-				facts: [
-					{ label: '4xx', value: num(done.filter((t) => t.status >= 400 && t.status < 500).length) },
-					{ label: '5xx', value: num(done.filter((t) => t.status >= 500).length) },
-					{ label: 'p95 errors per bucket', value: num(percentile(split((l) => l.filter(failed).length), 0.95)) }
-				]
-			},
-			{
-				id: 'ttft',
-				label: 'TTFT',
-				value: ttfts.length ? ms(median(ttfts)) : '—',
-				spark: split((l) => median(l.map(ttft).filter((v): v is number => v !== undefined))),
-				facts: [
-					{ label: 'p50', value: ttfts.length ? ms(median(ttfts)) : '—' },
-					{ label: 'p95', value: ttfts.length ? ms(percentile(ttfts, 0.95)) : '—' },
-					{ label: 'queue wait p95', value: waits.length ? ms(percentile(waits, 0.95)) : '—' }
-				]
-			},
-			{
-				id: 'tpot',
-				label: 'TPOT',
-				value: tpots.length ? ms(median(tpots)) : '—',
-				spark: split((l) => median(l.map(tpot).filter((v): v is number => v !== undefined))),
-				facts: [
-					{ label: 'p50', value: tpots.length ? ms(median(tpots)) : '—' },
-					{ label: 'p95', value: tpots.length ? ms(percentile(tpots, 0.95)) : '—' }
-				]
-			}
-		];
-	});
-
-	const moreFilters = $derived([nodeId, objective, fairness.trim()].filter(Boolean).length);
-	const popFilters = $derived(moreFilters + (fold !== 'none' ? [kind, statusClass].filter((v) => v !== undefined).length : 0) + (fold === 'all' && route ? 1 : 0));
-	const activeFilters = $derived([route, kind, statusClass].filter((v) => v !== undefined).length + moreFilters);
+	const activeFilters = $derived(route !== undefined || kinds.length + statusClasses.length + nodeIds.length + objectiveNames.length > 0 || fairness.trim() !== '');
 	const nodes = $derived([...live.nodes.values()].map((n) => ({ value: n.id, label: n.name || n.id })));
 	const objectives = $derived([...live.objectives.values()].map((o) => ({ value: o.name, label: o.name })));
-	const kinds = traceKinds.map((k) => ({ value: k, label: kindWord(k) }));
+	const kindOptions = traceKinds.map((k) => ({ value: k, label: kindWord(k) }));
 	const statusOptions = [2, 3, 4, 5].map((c) => ({ value: c, label: `${c}xx` }));
 	const windowOptions: { value: Window; label: string }[] = [
 		{ value: '1m', label: 'Live 1m' },
@@ -299,17 +243,17 @@
 
 	function clearFilters() {
 		route = undefined;
-		kind = undefined;
-		statusClass = undefined;
-		nodeId = undefined;
-		objective = undefined;
+		kinds = [];
+		statusClasses = [];
+		nodeIds = [];
+		objectiveNames = [];
 		fairness = '';
 	}
 
 	function durationOf(t: Trace): string {
-		if (isShed(t)) return 'shed';
+		if (isShed(t)) return 'rejected';
 		const f = finished(t);
-		return f === undefined ? 'in flight' : ms(f - started(t));
+		return f === undefined ? 'running' : ms(f - started(t));
 	}
 
 	function durationTip(t: Trace): string {
@@ -328,8 +272,8 @@
 </script>
 
 {#snippet rangeFields()}
-	<Duration bind:value={fromAgo} base="s" label="Start ago" info="How far back the window starts" message={fromAgo <= toAgo ? 'Start after end' : undefined} />
-	<Duration bind:value={toAgo} base="s" label="End ago" info="How far back the window ends, now when empty" emptyZero off={{ label: 'Now' }} />
+	<Duration bind:value={fromAgo} base="s" label="From, ago" message={fromAgo <= toAgo ? 'Starts after it ends' : undefined} />
+	<Duration bind:value={toAgo} base="s" label="To, ago" info="Now when empty" emptyZero />
 {/snippet}
 
 {#snippet popover()}
@@ -337,13 +281,16 @@
 		<Picker bind:value={route} fetch={fetchRoutes} label="Route" compact clearable current={route} />
 	{/if}
 	{#if fold !== 'none'}
-		<Select bind:value={kind} options={kinds} clearable label="Kind" compact />
-		<Select bind:value={statusClass} options={statusOptions} clearable label="Status" compact />
+		<MultiSelect bind:value={kinds} options={kindOptions} label="Kind" compact />
+		<MultiSelect bind:value={statusClasses} options={statusOptions} label="Status" compact />
 	{/if}
 	{#if fold === 'all' && windowId === 'range'}{@render rangeFields()}{/if}
-	<Select bind:value={nodeId} options={nodes} clearable label="Node" compact search={nodes.length > 8} />
-	<Select bind:value={objective} options={objectives} clearable label="Objective" compact search={objectives.length > 8} />
+	{#if nodes.length > 1}<MultiSelect bind:value={nodeIds} options={nodes} label="Node" compact search={nodes.length > 8} />{/if}
+	{#if objectives.length}<MultiSelect bind:value={objectiveNames} options={objectives} label="Objective" compact search={objectives.length > 8} />{/if}
 	<Text bind:value={fairness} label="Fairness id" compact max={64} mono />
+	{#if activeFilters}
+		<div class="clear"><NeoButton text onclick={clearFilters}>Clear active</NeoButton></div>
+	{/if}
 {/snippet}
 
 {#snippet toolbar()}
@@ -353,8 +300,8 @@
 				<span class="route"><Picker bind:value={route} fetch={fetchRoutes} label="Route" compact clearable current={route} /></span>
 			{/if}
 			{#if fold === 'none'}
-				<span class="kind"><Select bind:value={kind} options={kinds} label="Kind" compact clearable /></span>
-				<span class="status"><Select bind:value={statusClass} options={statusOptions} label="Status" compact clearable /></span>
+				<span class="kind"><MultiSelect bind:value={kinds} options={kindOptions} label="Kind" compact /></span>
+				<span class="status"><MultiSelect bind:value={statusClasses} options={statusOptions} label="Status" compact /></span>
 			{/if}
 			<span class="window"><Select bind:value={windowId} options={windowOptions} onchange={windowChanged} /></span>
 			{#if windowId === 'range' && fold !== 'all'}
@@ -368,7 +315,7 @@
 			</NeoButton>
 			<Pop placement="bottom-start" width="20rem">
 				{#snippet content()}{@render popover()}{/snippet}
-				<NeoButton elevation={2}>{#snippet icon()}<FunnelIcon size={18} />{/snippet}Filters{#if popFilters}<span class="count">{popFilters}</span>{/if}</NeoButton>
+				<NeoButton elevation={2}>{#snippet icon()}<FunnelIcon size={18} />{/snippet}Filters</NeoButton>
 			</Pop>
 			{#if !viewport.mobile}
 				<span class="push"><Segmented bind:value={view} options={[{ value: 'list', label: 'List' }, { value: 'timeline', label: 'Timeline' }]} /></span>
@@ -426,7 +373,7 @@
 						secondary={kindWord(t.kind)}
 						secondaryWidth="8ch"
 						facts={[
-							{ value: t.status ? String(t.status) : 'open', tip: t.error || undefined },
+							{ value: t.status ? String(t.status) : 'running', tip: t.error || undefined },
 							{ value: durationOf(t), tip: durationTip(t) }
 						]}
 						selected={t.id === traceId}
@@ -452,7 +399,7 @@
 	</Card>
 {/snippet}
 
-<PageHeader tabs={gatewayHeaderTabs} active="traffic" info="Every request the gateway handled in the window, with its latency and the path it took" />
+<PageHeader tabs={gatewayHeaderTabs} active="traffic" />
 
 <Sheet open={traceId !== ''} onclose={close} {head} list={listCard}>
 	{#if traceId}
@@ -492,11 +439,9 @@
 		flex: 1 1 auto;
 		min-width: 0;
 	}
-	.count {
-		margin-left: var(--nebu-space-2);
-		font-size: var(--nebu-text-caption);
-		font-variant-numeric: tabular-nums;
-		color: var(--nebu-text-muted);
+	.clear {
+		display: flex;
+		justify-content: flex-end;
 	}
 	.routecell {
 		display: flex;

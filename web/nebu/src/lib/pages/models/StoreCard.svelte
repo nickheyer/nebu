@@ -29,9 +29,9 @@
 		return [
 			{ id: 'used', label: 'Used', value: limit > 0 ? `${bytes(used)} of ${bytes(limit)}` : bytes(used), lamp: over ? 'warning' : undefined, facts: [{ label: 'limit', value: limit > 0 ? bytes(limit) : 'none' }] },
 			{ id: 'models', label: 'Models', value: num(store.models) },
-			{ id: 'blobs', label: 'Blobs', value: num(store.blobs), facts: [{ label: 'size', value: bytes(store.blobBytes) }] },
-			{ id: 'partials', label: 'Partials', value: share(store.partials, store.partialBytes), tip: 'Unfinished downloads' },
-			{ id: 'caches', label: 'Caches', value: share(store.caches, store.cacheBytes), tip: 'Formation tensor caches' },
+			{ id: 'blobs', label: 'Files', value: num(store.blobs), facts: [{ label: 'size', value: bytes(store.blobBytes) }] },
+			{ id: 'partials', label: 'Unfinished downloads', value: share(store.partials, store.partialBytes) },
+			{ id: 'caches', label: 'Caches', value: share(store.caches, store.cacheBytes), tip: 'Kept by formations' },
 			{
 				id: 'disk',
 				label: 'Disk free',
@@ -49,8 +49,8 @@
 		over
 			? [{ kind: 'warning', label: 'used', bytes: used }]
 			: [
-					{ kind: 'used', label: 'blobs', bytes: Number(store?.blobBytes ?? 0) },
-					{ kind: 'reservation', label: 'partials', bytes: Number(store?.partialBytes ?? 0) },
+					{ kind: 'used', label: 'files', bytes: Number(store?.blobBytes ?? 0) },
+					{ kind: 'reservation', label: 'unfinished downloads', bytes: Number(store?.partialBytes ?? 0) },
 					{ kind: 'other', label: 'caches', bytes: Number(store?.cacheBytes ?? 0) },
 					{ kind: 'free', label: 'free', bytes: Math.max(0, cap - used) }
 				]
@@ -61,17 +61,17 @@
 	async function collect() {
 		try {
 			const res = await rpc.store.gc({ partials });
-			toast.success('Collected', `${plural(Number(res.removed), 'blob')}, ${bytes(res.freedBytes)} freed`);
+			toast.success('Cleaned up', `${plural(Number(res.removed), 'file')}, ${bytes(res.freedBytes)} freed`);
 		} catch (err) {
-			toast.error('Collect failed', reason(err));
+			toast.error('Clean up failed', reason(err));
 		}
 	}
 </script>
 
 <Card title="Store">
 	{#snippet tools()}
-		<Confirm label="Collect" question="Collect unreferenced blobs?" onconfirm={collect}>
-			{#snippet body()}<Switch bind:checked={partials} label="Partials" info="Removes unfinished downloads too" />{/snippet}
+		<Confirm label="Clean up" question="Delete the files no model uses?" onconfirm={collect}>
+			{#snippet body()}<Switch bind:checked={partials} label="Unfinished downloads too" />{/snippet}
 		</Confirm>
 	{/snippet}
 	{#if !store}

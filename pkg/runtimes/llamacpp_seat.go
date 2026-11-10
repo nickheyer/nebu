@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/formats"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
@@ -238,6 +239,7 @@ func (r LlamaCpp) LaunchSeat(in Launch) (*Command, error) {
 		if len(stages) == 0 {
 			return nil, fmt.Errorf("%w: the head of a %s formation has no stage peers", ErrParam, shapeWord(seat.GetShape()))
 		}
+		in.Params = rpcLogged(in.Params)
 		if seat.GetShape() == v1.Shape_SHAPE_DRAFT {
 			return r.draftHead(in, stages, facts)
 		}
@@ -260,6 +262,19 @@ func (r LlamaCpp) LaunchSeat(in Launch) (*Command, error) {
 		return r.Launch(exposedLaunch(in))
 	}
 	return nil, fmt.Errorf("%w: llama.cpp renders no command for role %s", ErrParam, role.Name)
+}
+
+// The log level at which llama.cpp prints the buffers it allocates on rpc devices
+const llamaBufferLevel = 4
+
+// Params logging at least the rpc buffers a head's transport is read from
+func rpcLogged(p estimate.Params) estimate.Params {
+	if p.Int("log_verbosity") >= llamaBufferLevel {
+		return p
+	}
+	p = p.Clone()
+	p["log_verbosity"] = int64(llamaBufferLevel)
+	return p
 }
 
 // A launch bound to the mesh address when the seat is exposed

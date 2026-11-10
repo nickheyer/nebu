@@ -93,11 +93,21 @@ func TestLlamaCppChainHead(t *testing.T) {
 		"--rpc 10.0.0.2:50052,10.0.0.3:50052",
 		"--tensor-split 10,20,30,21",
 		"--fit off",
+		"--log-verbosity 4",
 	} {
 		if !strings.Contains(line, want) {
 			t.Errorf("missing %s in %s", want, line)
 		}
 	}
+	louder, err := Resolve(rt, map[string]string{"n_ctx": "8192", "log_verbosity": "5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Params = louder
+	if cmd, err := rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--log-verbosity 5") {
+		t.Fatalf("a head set above the buffer level keeps its level: %v %v", cmd, err)
+	}
+	in.Params = params
 	if strings.Contains(line, "10737418240") {
 		t.Fatalf("the split carries layer counts, not bytes: %s", line)
 	}
@@ -184,8 +194,8 @@ func TestLlamaCppDraftHead(t *testing.T) {
 	if !strings.HasSuffix(line, "--rpc 10.0.0.2:50052") || !strings.Contains(line, "--spec-draft-model /d.gguf") || !strings.Contains(line, "--spec-draft-device RPC0") || !strings.Contains(line, "--spec-draft-n-max 4") || strings.Contains(line, "--draft-max") || strings.Contains(line, "--tensor-split") || cmd.Env["LLAMA_ARG_FIT"] != "off" {
 		t.Fatalf("draft head %s", line)
 	}
-	if cmd.Params["draft_device"] != "RPC0" || cmd.Params["draft_model"] != "/d.gguf" || cmd.Params["rpc"] != "10.0.0.2:50052" {
-		t.Fatalf("params %v", cmd.Params)
+	if cmd.Params["draft_device"] != "RPC0" || cmd.Params["draft_model"] != "/d.gguf" || cmd.Params["rpc"] != "10.0.0.2:50052" || !strings.Contains(line, "--log-verbosity 4") {
+		t.Fatalf("params %v in %s", cmd.Params, line)
 	}
 	// An unset method drafts plainly, and a set one is passed as set
 	if cmd, err = rt.LaunchSeat(in); err != nil || !strings.Contains(strings.Join(cmd.Args, " "), "--spec-type draft-simple") || cmd.Params["spec_type"] != "draft-simple" {
@@ -307,6 +317,30 @@ func TestLlamaCppContextLeftToTheRuntime(t *testing.T) {
 	}
 	if v, ok := read([]string{"llama_new_context_with_model: n_ctx      = 8192"}); !ok || v != "8192" {
 		t.Fatalf("older builds %q %v", v, ok)
+	}
+	capping := "0.00.227.075 W srv    load_model: the slot context (256) exceeds the training context of the model (128) - capping"
+	for _, c := range []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{"a shared pool", []string{"0.00.227.866 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 8192, kv_unified = 'true'"}, "8192"},
+		{"a shared pool capped per slot", []string{capping, "0.00.227.866 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 128, kv_unified = 'true'"}, "256"},
+		{"split slots", []string{"0.00.227.866 I srv    load_model: initializing, n_slots = 2, n_ctx_slot = 4096, kv_unified = 'false'"}, "8192"},
+		{"split slots capped", []string{capping, "0.00.227.866 I srv    load_model: initializing, n_slots = 3, n_ctx_slot = 128, kv_unified = 'false'"}, "768"},
+	} {
+		if v, ok := read(c.lines); !ok || v != c.want {
+			t.Fatalf("%s at the info level read %q %v, want %s", c.name, v, ok, c.want)
+		}
+	}
+	for _, lines := range [][]string{
+		{"srv          init: initializing slots, n_slots = 4"},
+		{"I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 128"},
+		{"I srv    load_model: initializing, n_slots = 0, n_ctx_slot = 128, kv_unified = 'true'"},
+	} {
+		if v, ok := read(lines); ok {
+			t.Fatalf("a slot line without its slots, their context and whether they share a pool read %q", v)
+		}
 	}
 	if _, ok := read([]string{"llama_context: n_ctx_train = 4096", "n_ctx = 12"}); ok {
 		t.Fatal("only the context line counts")

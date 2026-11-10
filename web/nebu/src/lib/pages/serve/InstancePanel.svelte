@@ -1,15 +1,13 @@
 <script lang="ts">
-	import { NeoButton } from '#lib/neo/buttons/index.js';
-	import Collapse from '#lib/ui/Collapse.svelte';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { bytes, enumLabel, num, uptime, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
-	import { InstanceState, InstanceStateSchema, ToolSupportSchema, type Instance, type LoadedAdapter } from '#lib/proto/nebu/v1/instance_pb.js';
+	import { InstanceStateSchema, ToolSupportSchema, type Instance, type LoadedAdapter } from '#lib/proto/nebu/v1/instance_pb.js';
+	import { ParamType, type Param } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Bar from '#lib/ui/Bar.svelte';
 	import Conditions from '#lib/ui/Conditions.svelte';
 	import Confirm from '#lib/ui/Confirm.svelte';
-	import Empty from '#lib/ui/Empty.svelte';
 	import KeyRows, { type KeyRow } from '#lib/ui/KeyRows.svelte';
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
@@ -24,30 +22,28 @@
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
+	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { deviceLabel } from '#lib/ui/memory.js';
 	import { instanceLamp } from '#lib/ui/status.js';
 	import { modelPhrase, terminal } from '#lib/pages/serve/serve.js';
-	import StackIcon from 'phosphor-svelte/lib/StackIcon';
-	import StethoscopeIcon from 'phosphor-svelte/lib/StethoscopeIcon';
 
 	let { instance, tab, ontab, onclose }: { instance: Instance; tab: string; ontab: (id: string) => void; onclose: () => void } = $props();
 
 	const inst = $derived(instance);
 	const id = $derived(inst.id);
 	const done = $derived(terminal(inst.state));
-	const failed = $derived(inst.state === InstanceState.FAILED);
 	const install = $derived(live.installs.get(inst.installId));
 	const inv = $derived(inst.inventory);
 
-	// Triage leads when the instance failed, ranks show with several, the seat with one
+	// Errors lead when any, then adapters for a running launch that switches them, processes and the formation
 	const tabs = $derived.by(() => {
-		const list = [{ id: 'overview', label: 'Overview' }, { id: 'logs', label: 'Logs' }, { id: 'adapters', label: 'Adapters' }];
-		if (inst.ranks.length > 1) list.push({ id: 'ranks', label: 'Ranks' });
-		if (inst.seat) list.push({ id: 'seat', label: 'Seat' });
-		const triage = { id: 'triage', label: 'Triage' };
-		return failed ? [triage, ...list] : [...list, triage];
+		const list = [{ id: 'overview', label: 'Overview' }, { id: 'logs', label: 'Logs' }];
+		if (!done && inst.adapters) list.push({ id: 'adapters', label: 'Adapters' });
+		if (inst.ranks.length > 1) list.push({ id: 'ranks', label: 'Processes' });
+		if (inst.seat) list.push({ id: 'seat', label: 'Formation' });
+		return inst.error || inst.triage.length ? [{ id: 'triage', label: 'Errors' }, ...list] : list;
 	});
 	const active = $derived(tabs.some((t) => t.id === tab) ? tab : (tabs[0]?.id ?? 'overview'));
 
@@ -57,7 +53,7 @@
 		{ label: 'endpoint', value: inst.endpoint, mono: true, copy: inst.endpoint !== '' },
 		{ label: 'pid', value: inst.pid ? String(inst.pid) : '', mono: true },
 		{ label: 'restarts', value: num(inst.restarts) },
-		{ label: 'health', value: inst.lastHealthAt ? `${inst.healthy ? 'healthy' : 'unhealthy'}, probed ${when(inst.lastHealthAt)}` : '' },
+		{ label: 'health', value: inst.lastHealthAt ? `${inst.healthy ? 'healthy' : 'unhealthy'}, checked ${when(inst.lastHealthAt)}` : '' },
 		{ label: 'context', value: inv?.contextLength ? `${num(inv.contextLength)} tokens` : '' },
 		{ label: 'quantization', value: inv?.quantization ?? '' },
 		{ label: 'accelerator', value: inv?.accelerator ?? '' },
@@ -82,6 +78,31 @@
 				capacity: Number(pu.capacityBytes)
 			};
 		});
+	});
+
+	// What the runtime declares of each parameter, read once for the labels and defaults
+	let declared = $state<Param[] | undefined>(undefined);
+	let declaredError = $state('');
+	const runtimeOf = $derived(inst.runtimeId);
+	$effect(() => {
+		const runtimeId = runtimeOf;
+		declared = undefined;
+		declaredError = '';
+		rpc.runtimes
+			.listRuntimes({})
+			.then((res) => (declared = res.runtimes.find((r) => r.runtime?.id === runtimeId)?.runtime?.params ?? []))
+			.catch((err) => (declaredError = reason(err)));
+	});
+
+	// The parameters the launch set away from the runtime's defaults, under the names the runtime gives them
+	const paramRows = $derived.by((): KeyRow[] => {
+		const byName = new Map((declared ?? []).map((p) => [p.name, p]));
+		return Object.entries(inst.params)
+			.filter(([name, value]) => {
+				const p = byName.get(name);
+				return !p || value !== (p.default || (p.type === ParamType.BOOL ? 'false' : ''));
+			})
+			.map(([name, value]) => ({ label: byName.get(name)?.label || name, value: [value, byName.get(name)?.unit].filter(Boolean).join(' '), mono: true, tip: name }));
 	});
 
 	let adapters = $state<LoadedAdapter[] | undefined>(undefined);
@@ -152,12 +173,12 @@
 	});
 </script>
 
+{#snippet stopButton()}
+	<Confirm label="Stop" question="Stop {inst.name}?" danger placement="top-start" onconfirm={stop} />
+{/snippet}
+
 <PanelHeader title={inst.name} subtitle={inst.readyAt && !done ? `up ${uptime(inst.readyAt, clockTick.now)}` : when(inst.stoppedAt ?? inst.createdAt)} {onclose}>
 	<StatePill label={enumLabel(InstanceStateSchema, inst.state)} lamp={instanceLamp(inst.state)} />
-	{#snippet tools()}
-		{#if !done}<Confirm label="Stop" question="Stop {inst.name}?" danger onconfirm={stop} />{/if}
-		<NeoButton text onclick={() => ontab('logs')}>Logs</NeoButton>
-	{/snippet}
 </PanelHeader>
 <PageTabs {tabs} {active} onchange={ontab} />
 <div class="body">
@@ -165,39 +186,41 @@
 		<Stack gap={16}>
 			<KeyRows {rows} />
 			{#if poolBars.length}
-				<Stack gap={8}>
-					<span class="label">Planned against measured</span>
-					{#each poolBars as b (b.id)}
-						<div class="pool">
-							<span class="poolid">{b.label}</span>
-							<span class="track">
-								<Bar segments={[{ kind: 'used', label: 'measured', bytes: b.measured }, { kind: 'planned', label: 'planned', bytes: b.planned }]} total={Math.max(b.capacity, b.planned, b.measured)} format={(n) => bytes(n)} />
-							</span>
-							<span class="secondary nowrap"><span class="num">{bytes(b.measured)}</span> / <span class="num">{bytes(b.planned)}</span></span>
-						</div>
-					{/each}
-				</Stack>
+				<Section title="Memory" level={3}>
+					<Stack gap={8}>
+						{#each poolBars as b (b.id)}
+							<div class="pool">
+								<span class="poolid">{b.label}</span>
+								<span class="track">
+									<Bar segments={[{ kind: 'used', label: 'used', bytes: b.measured }, { kind: 'planned', label: 'planned and not used', bytes: Math.max(0, b.planned - b.measured) }]} total={Math.max(b.capacity, b.planned, b.measured)} format={(n) => bytes(n)} />
+								</span>
+								<span class="secondary nowrap">{bytes(b.measured)} used of {bytes(b.planned)} planned</span>
+							</div>
+						{/each}
+					</Stack>
+				</Section>
 			{/if}
 			<Conditions conditions={inst.conditions} />
-			<Collapse label="Parameters">
-				<KeyRows dense rows={Object.entries(inst.params).map(([k, v]) => ({ label: k, value: v, mono: true, tip: v }))} />
-			</Collapse>
-			<Collapse label="Command">
-				<Screen><code class="cmd">{inst.command.join(' ')}</code></Screen>
-			</Collapse>
+			{#if declaredError}
+				<p class="error-text failure">{declaredError}</p>
+			{:else if declared && paramRows.length}
+				<Section title="Parameters" level={3}>
+					<KeyRows dense rows={paramRows} />
+				</Section>
+			{/if}
+			{#if inst.command.length}
+				<Section title="Command" level={3}>
+					<Screen><code class="cmd">{inst.command.join(' ')}</code></Screen>
+				</Section>
+			{/if}
 		</Stack>
 	{:else if active === 'logs'}
 		<LogView source={logs} name={inst.name} />
 	{:else if active === 'adapters'}
-		{#if done}
-			<Empty icon={StackIcon} text="Instance stopped" />
-		{:else}
 			<Stack gap={24}>
 				{#if adapters === undefined}
 					<Skeleton rows={2} dot={false} primary="24ch" secondary="40ch" facts={0} menu={false} />
-				{:else if adapters.length === 0}
-					<Empty text="No adapters" row />
-				{:else}
+				{:else if adapters.length}
 					<List head={{ primary: 'Adapter', secondary: 'Path' }}>
 						{#each adapters as a (a.name)}
 							<ListRow primary={a.name} secondary={a.path} secondaryKind="path">
@@ -206,17 +229,16 @@
 						{/each}
 					</List>
 				{/if}
-				<FormSection title="Load adapter" info="Attaches a LoRA adapter the runtime switches to when a request names it">
+				<FormSection title="Load adapter" info="A LoRA, picked per request by its name">
 					<FieldRow>
-						<Text bind:value={adapterName} label="Name" info="What requests call the adapter" max={64} required />
-						<Path bind:value={adapterPath} label="Path" info="The adapter file on this host" />
+						<Text bind:value={adapterName} label="Name" max={64} required />
+						<Path bind:value={adapterPath} label="File" />
 					</FieldRow>
 				</FormSection>
 			</Stack>
-			<SaveBar dirty={adapterName !== '' || adapterPath !== ''} saving={loadingAdapter} label="Load" disabled={!adapterName} onsave={loadAdapter} ondiscard={clearAdapter} />
-		{/if}
+			<SaveBar dirty={adapterName !== '' || adapterPath !== ''} saving={loadingAdapter} label="Load" disabled={!adapterName} leading={stopButton} onsave={loadAdapter} ondiscard={clearAdapter} />
 	{:else if active === 'ranks'}
-		<List head={{ primary: 'Rank', secondary: 'Endpoint' }}>
+		<List head={{ primary: 'Process', secondary: 'Endpoint' }}>
 			{#each inst.ranks as r (r.rank)}
 				<ListRow lamp={r.healthy ? 'success' : 'error'} primary="rank {r.rank}" primaryTip="pid {r.pid}{r.port ? `\nport ${r.port}` : ''}" primaryWidth="10ch" secondary={r.endpoint} secondaryKind="address" secondaryWidth="24ch" />
 			{/each}
@@ -244,21 +266,29 @@
 		<Stack gap={12}>
 			{#if inst.error}<p class="error-text failure">{inst.error}</p>{/if}
 			{#if inst.triage.length}
-				<List head={{ primary: 'Finding', secondary: 'Hint' }}>
+				<List head={{ primary: 'Error', secondary: 'Fix' }}>
 					{#each inst.triage as t (t.id)}
 						<ListRow lamp="error" primary={t.summary} primaryKind="text" primaryTip={t.line} primaryWidth="32ch" secondary={t.hint} secondaryKind="message" secondaryWidth="64ch" />
 					{/each}
 				</List>
-			{:else if !inst.error}
-				<Empty icon={StethoscopeIcon} text="No triage hits" />
 			{/if}
 		</Stack>
+	{/if}
+	{#if !done && active !== 'adapters'}
+		<div class="actions">{@render stopButton()}</div>
 	{/if}
 </div>
 
 <style>
 	.body {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-4);
 		margin-top: var(--nebu-space-3);
+	}
+	.actions {
+		display: flex;
+		justify-content: flex-start;
 	}
 	.pool {
 		display: flex;

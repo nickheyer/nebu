@@ -272,7 +272,8 @@ CREATE TABLE slots (
   desired_running INTEGER NOT NULL DEFAULT 0,
   conditions TEXT NOT NULL DEFAULT '',
   meta TEXT NOT NULL DEFAULT '',
-  observed_generation INTEGER NOT NULL DEFAULT 0
+  observed_generation INTEGER NOT NULL DEFAULT 0,
+  pool_bytes TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE slot_devices (
@@ -289,17 +290,12 @@ CREATE TABLE slot_params (
   PRIMARY KEY (slot_id, name)
 );
 
--- Extra public names a slot answers to, in list order, each with limits and shaping that override the slot's when set
+-- Extra public names a slot answers to, in list order, each taking limits and shaping from the slot it inherits
 CREATE TABLE slot_aliases (
   slot_id TEXT NOT NULL REFERENCES slots (id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
   name TEXT NOT NULL,
-  max_in_flight INTEGER NOT NULL DEFAULT 0,
-  requests_per_second REAL NOT NULL DEFAULT 0,
-  burst INTEGER NOT NULL DEFAULT 0,
-  request_timeout_ms INTEGER NOT NULL DEFAULT 0,
-  upstream_timeout_ms INTEGER NOT NULL DEFAULT 0,
-  profile TEXT NOT NULL DEFAULT '',
+  inherit_slot_id TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (slot_id, position)
 );
 CREATE UNIQUE INDEX slot_aliases_name ON slot_aliases (name);

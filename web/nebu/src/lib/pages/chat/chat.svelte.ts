@@ -1,6 +1,6 @@
 import { create, clone } from '@bufbuild/protobuf';
 import { timestampNow } from '@bufbuild/protobuf/wkt';
-import { chat, images, pollVideo, startVideo, videoContent, type ChatMessage, type ChatParams, type Dialect, type ModelEntry, type ToolDef } from '#lib/api/gateway.js';
+import { chat, images, pollVideo, startVideo, videoContent, type ChatMessage, type ChatParams, type Dialect, type ModelEntry } from '#lib/api/gateway.js';
 import { date, num } from '#lib/format.js';
 import { isCancel, reason, rpc } from '#lib/api/transport.js';
 import { ChatFileSchema, ChatSettingsSchema, ChatTurnSchema, ConversationSchema, type ChatFile, type ChatSettings, type ChatTurn, type Conversation } from '#lib/proto/nebu/v1/chat_pb.js';
@@ -165,14 +165,9 @@ export class ChatSession {
 		});
 	}
 
-	// The request settings, failing when the custom tools are not a JSON array
+	// The request settings, the chosen servers' tools sent as the request's own when each call waits for approval
 	#params(servers: ToolServerStatus[]): ChatParams {
 		const s = this.settings;
-		const parsed: unknown = s.tools.trim() ? JSON.parse(s.tools) : [];
-		if (!Array.isArray(parsed)) throw new Error('Custom tools must be a JSON array');
-		const custom: ToolDef[] = (parsed as { name?: string; description?: string; parameters?: unknown; function?: { name: string; description?: string; parameters?: unknown } }[])
-			.map((t) => ({ name: t.function?.name ?? t.name ?? '', description: t.function?.description ?? t.description ?? '', schema: JSON.stringify(t.function?.parameters ?? t.parameters ?? {}) }))
-			.filter((t) => t.name);
 		const approved = s.approveTools ? servers.filter((x) => s.toolServers.includes(x.ref || x.server?.name || '')).flatMap((x) => x.tools.filter((t) => s.mutatingTools || t.readOnly).map((t) => ({ name: t.name, description: t.description, schema: t.schema }))) : [];
 		return {
 			model: this.model,
@@ -185,7 +180,7 @@ export class ChatSession {
 			maxTokens: numOr(s.maxTokens),
 			stop: s.stop ? s.stop.split('\n').filter(Boolean) : [],
 			seed: numOr(s.seed),
-			tools: [...custom, ...approved],
+			tools: approved,
 			toolServers: s.approveTools ? [] : s.toolServers,
 			mutatingTools: s.mutatingTools
 		};
@@ -193,7 +188,6 @@ export class ChatSession {
 
 	// Appends a user turn with its images and asks the model for the answer
 	async send(text: string, attachments: File[], servers: ToolServerStatus[]): Promise<void> {
-		this.#params(servers);
 		const turn = create(ChatTurnSchema, { role: 'user', text, startedAt: timestampNow(), dialect: this.settings.dialect });
 		for (const file of attachments) {
 			const url = await dataUrl(file);

@@ -13,15 +13,12 @@
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import LogView from '#lib/ui/LogView.svelte';
 	import NameConfirm from '#lib/ui/NameConfirm.svelte';
-	import Pop from '#lib/ui/Pop.svelte';
 	import RowAction from '#lib/ui/RowAction.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
-	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
-	import Row from '#lib/ui/layout/Row.svelte';
 	import Sheet from '#lib/ui/layout/Sheet.svelte';
 	import { formationLamp, nodeLamp } from '#lib/ui/status.js';
 	import Federation from '#lib/pages/mesh/Federation.svelte';
@@ -32,6 +29,7 @@
 	import Outside from '#lib/pages/mesh/Outside.svelte';
 	import Tuning from '#lib/pages/mesh/Tuning.svelte';
 	import { deviceCount, formationTip, isMeshTab, linkLabel, linkLamp, meshHeaderTabs, nodeShape, nodeTip, peerName, planFormationHref, worstLink, type MeshTab } from '#lib/pages/mesh/mesh.js';
+	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import StackIcon from 'phosphor-svelte/lib/StackIcon';
 
@@ -45,14 +43,6 @@
 	const nodes = $derived([...live.nodes.values()].sort((a, b) => Number(b.self) - Number(a.self) || a.name.localeCompare(b.name)));
 	const formations = $derived([...live.formations.values()].sort((a, b) => a.name.localeCompare(b.name)));
 	const federations = $derived(status?.federations ?? []);
-	const infos: Record<MeshTab, string> = {
-		nodes: 'Every machine in the mesh with what it carries',
-		links: 'How fast each pair of nodes reaches the other, measured on demand',
-		formations: 'Models spread across nodes, each seat holding its share',
-		nearby: 'Nodes and meshes heard on the network and the admissions this mesh decides',
-		federation: 'Other meshes trading pools with this one',
-		tuning: 'The speeds the planner assumes and the ratios it has learned'
-	};
 
 	onMount(async () => {
 		try {
@@ -88,18 +78,16 @@
 	}
 
 	// Links
-	let probeForce = $state(false);
 	let probing = $state<string | undefined>(undefined);
 
 	// Measures links to one member, or every member when the id is empty
-	async function probe(nodeId: string, done?: () => void) {
+	async function probe(nodeId: string) {
 		probing = nodeId;
 		try {
-			const res = await rpc.mesh.probe({ nodeId, force: probeForce });
-			toast.success('Probed', plural(res.links.length, 'link'));
-			done?.();
+			const res = await rpc.mesh.probe({ nodeId });
+			toast.success('Measured', plural(res.links.length, 'link'));
 		} catch (err) {
-			toast.error('Probe failed', reason(err));
+			toast.error('Measuring failed', reason(err));
 		} finally {
 			probing = undefined;
 		}
@@ -197,17 +185,9 @@
 {#snippet linksList()}
 	<Card title="Links" flush>
 		{#snippet tools()}
-			<Pop placement="bottom-end" width="20rem">
-				{#snippet content(closePop)}
-					<Switch bind:checked={probeForce} label="Force" info="Measures bandwidth even while a formation is serving" />
-					<Row gap={12} justify="flex-end">
-						<NeoButton class="primary" elevation={2} loading={probing === ''} onclick={() => probe('', closePop)}>Probe all</NeoButton>
-					</Row>
-				{/snippet}
-				<NeoButton elevation={2}>Probe all</NeoButton>
-			</Pop>
+			<NeoButton text aria-label="Refresh" loading={probing === ''} onclick={() => probe('')}>{#snippet icon()}<ArrowsClockwiseIcon size={20} />{/snippet}</NeoButton>
 		{/snippet}
-		<List head={{ primary: 'Node', facts: ['Measured', 'Slowest RTT'] }}>
+		<List head={{ primary: 'Node', facts: ['Links', 'Slowest'] }}>
 			{#each nodes as n (n.id)}
 				{@const worst = worstLink(n)}
 				<ListRow
@@ -221,7 +201,7 @@
 				>
 					{#snippet badges()}{#if worst}<StatePill label={linkLabel(worst.class)} lamp={linkLamp(worst.class)} />{/if}{/snippet}
 					{#snippet action()}
-						{#if !n.self}<RowAction loading={probing === n.id} onclick={() => probe(n.id)} label="Probe" />{/if}
+						{#if !n.self}<RowAction loading={probing === n.id} onclick={() => probe(n.id)} label="Measure" />{/if}
 					{/snippet}
 				</ListRow>
 			{/each}
@@ -275,7 +255,7 @@
 {:else if !mesh}
 	<Outside {status} />
 {:else}
-	<PageHeader tabs={meshHeaderTabs} {active} info={infos[active]} />
+	<PageHeader tabs={meshHeaderTabs} {active} />
 	{#if active === 'nodes' || active === 'links'}
 		<Sheet open={id !== ''} onclose={close} head={meshCard} list={active === 'nodes' ? nodesList : linksList}>
 			{#if openNode}

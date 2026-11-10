@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
 
@@ -100,7 +101,35 @@ func (Collector) Extract(ep datalayer.Endpoint, sample any) (any, error) {
 			return nil, fmt.Errorf("%s: %w", c.AdaptersPath, err)
 		}
 	}
+	if c.WorkCounter != "" {
+		vs, err := series(s.Families, c.WorkCounter, nil, "")
+		if err != nil {
+			return nil, err
+		}
+		m.Work = sum(vs)
+	}
+	m.ActiveAt = activeAt(ep, m)
 	return m, nil
+}
+
+// This sample's time when it holds requests or its work counter moved since the stored sample, else that sample's
+func activeAt(ep datalayer.Endpoint, m *datalayer.ServerMetrics) time.Time {
+	prev, ok := datalayer.Attribute[*datalayer.ServerMetrics](ep, datalayer.CollectorMetrics)
+	switch {
+	case m.QueuedRequests+m.RunningRequests > 0, ok && prev.Work != m.Work:
+		return m.UpdatedAt
+	case ok:
+		return prev.ActiveAt
+	}
+	return time.Time{}
+}
+
+// Whether the scrape holds a request queued, running or in a slot
+func (s *Sample) working() bool {
+	c := s.Capabilities
+	queued, _ := series(s.Families, c.QueuedRequests, c.QueuedRequestsMatch, c.ReplicaLabel)
+	running, _ := series(s.Families, c.RunningRequests, c.RunningRequestsMatch, c.ReplicaLabel)
+	return sum(queued)+sum(running) > 0 || slices.ContainsFunc(s.Slots, func(sl Slot) bool { return sl.IsProcessing })
 }
 
 // Values of a gauge needing at least one matching series, one per replica when a replica label is named

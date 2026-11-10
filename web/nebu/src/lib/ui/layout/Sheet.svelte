@@ -139,7 +139,9 @@
 		flex-direction: column;
 		min-height: 0;
 		padding: var(--nebu-sheet-pad);
+		padding-right: calc(var(--nebu-sheet-pad) + var(--nebu-scroll-pad));
 		overflow: auto;
+		scrollbar-gutter: stable;
 	}
 	.foot {
 		flex: 0 0 auto;

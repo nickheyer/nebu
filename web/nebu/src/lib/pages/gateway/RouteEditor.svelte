@@ -1,37 +1,30 @@
 <script lang="ts">
 	import { clone, create, toJsonString } from '@bufbuild/protobuf';
-	import { onMount, untrack } from 'svelte';
+	import { untrack } from 'svelte';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import type { NeoSortableItem as SortItem } from '#lib/neo/sortable/neo-sortable-context.svelte.js';
 	import { NeoSortableItem, NeoSortableProvider } from '#lib/neo/sortable/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { PolicySchema, ProfileSchema, RewriteRuleSchema, RewriteTargetSchema, RouteBalance, RouteSpecSchema, type RewriteRule, type Route, type RouteSpec } from '#lib/proto/nebu/v1/gateway_pb.js';
-	import { ToolServerState, type ToolServerStatus } from '#lib/proto/nebu/v1/tools_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
-	import { defaults } from '#lib/state/defaults.svelte.js';
 	import Conditions from '#lib/ui/Conditions.svelte';
 	import Confirm from '#lib/ui/Confirm.svelte';
 	import Dot from '#lib/ui/Dot.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
-	import Checklist from '#lib/ui/fields/Checklist.svelte';
-	import Duration from '#lib/ui/fields/Duration.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
-	import MultiSelect from '#lib/ui/fields/MultiSelect.svelte';
 	import NumberField from '#lib/ui/fields/Number.svelte';
 	import Picker from '#lib/ui/fields/Picker.svelte';
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Segmented from '#lib/ui/fields/Segmented.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
-	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
-	import type { Option } from '#lib/ui/fields/types.js';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { isUserOwned, ownerLabel, ownerLink, poolLamp, poolShape, poolWord, targetShare } from '#lib/pages/gateway/gateway.js';
-	import { gatewayDefault, literal } from '#lib/pages/serve/serve.js';
+	import PolicyFields from '#lib/pages/serve/PolicyFields.svelte';
 	import DotsSixVerticalIcon from 'phosphor-svelte/lib/DotsSixVerticalIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
@@ -54,7 +47,6 @@
 	let spec = $state(initial);
 	let rules = $state<Record<string, RewriteRule>>(Object.fromEntries(firstKeys.map((k, i) => [k, initial.rules[i]!])));
 	let order = $state<SortItem<{ id: string }>[]>(firstKeys.map((k) => ({ id: k, data: { id: k } })));
-	let servers = $state<ToolServerStatus[]>([]);
 	let saving = $state(false);
 	let error = $state<string | undefined>(undefined);
 
@@ -62,45 +54,8 @@
 	const draft = $derived<RouteSpec>(create(RouteSpecSchema, { policy: spec.policy, profile: spec.profile, objective: spec.objective, balance: spec.balance, rules: ordered }));
 	const dirty = $derived(!editing || toJsonString(RouteSpecSchema, draft) !== baseline);
 	const current = $derived(editing ? live.routes.get(name) : undefined);
-	const d = $derived(defaults.policy);
 	const objectives = $derived([...live.objectives.values()].map((o) => ({ value: o.name, label: o.name, description: `priority ${o.priority}` })));
 	const complete = $derived(!locked && name.trim() !== '' && ordered.length > 0 && ordered.every((r) => r.targets.length > 0 && r.targets.every((t) => t.poolId && t.weight >= 1)));
-
-	// Tool servers by ref, the live state of local ones winning
-	const toolOptions = $derived.by((): Option<string>[] => {
-		const byRef = new Map<string, ToolServerStatus>();
-		for (const s of servers) byRef.set(s.ref || s.server?.name || '', s);
-		for (const s of live.toolServers.values()) byRef.set(s.ref || s.server?.name || '', s);
-		const options = [...byRef.entries()]
-			.filter(([ref]) => ref !== '')
-			.sort(([a], [b]) => a.localeCompare(b))
-			.map(([ref, s]) => ({
-				value: ref,
-				label: ref,
-				description: s.nodeId ? `on ${live.nodes.get(s.nodeId)?.name ?? s.nodeId}` : undefined,
-				disabled: s.state === ToolServerState.FAILED && !spec.profile?.toolServers.includes(ref),
-				tip: s.state === ToolServerState.FAILED ? s.error : undefined
-			}));
-		for (const ref of spec.profile?.toolServers ?? []) if (!byRef.has(ref)) options.push({ value: ref, label: ref, description: 'missing', disabled: false, tip: undefined });
-		return options;
-	});
-
-	// Reads every tool server this node and the mesh members run, page by page
-	onMount(async () => {
-		defaults.load();
-		try {
-			const all: ToolServerStatus[] = [];
-			let cursor = '';
-			do {
-				const res = await rpc.tools.listToolServers({ mesh: live.inMesh, cursor, limit: 200 });
-				all.push(...res.servers);
-				cursor = res.nextCursor;
-			} while (cursor);
-			servers = all;
-		} catch (err) {
-			toast.error('Tool servers failed to list', reason(err));
-		}
-	});
 
 	function nextKey(): string {
 		return `rule-${seq++}`;
@@ -165,14 +120,14 @@
 		{#if !owned}{@render removeButton('Remove rule', () => removeRule(k), ordered.length === 1)}{/if}
 	</div>
 	<div class="rulebody">
-		<Text bind:value={rule.match} label="Match" info="Exact client model name, every request when empty" placeholder="*" max={64} mono disabled={owned || locked} />
+		<Text bind:value={rule.match} label="Match" info="Exact model name, every request when empty" max={64} mono disabled={owned || locked} />
 		<div class="targets">
 			{#each rule.targets as target, t (t)}
 				{@const pool = target.poolId ? live.pools.get(target.poolId) : undefined}
 				<div class="target">
-					<span class="pool"><Picker bind:value={target.poolId} fetch={fetchPools} label={t === 0 ? 'Pool' : undefined} info={t === 0 ? 'The pool the request goes to' : undefined} placeholder="Choose a pool" current={target.poolId || undefined} required disabled={owned || locked} /></span>
-					<span class="model"><Text bind:value={target.model} label={t === 0 ? 'Model' : undefined} info={t === 0 ? 'Model name written into the request, the pool model when empty' : undefined} max={64} placeholder={pool?.spec?.model || undefined} disabled={owned || locked} /></span>
-					<span class="weight"><NumberField bind:value={target.weight} min={1} max={1_000_000} label={t === 0 ? 'Weight' : undefined} info={t === 0 ? 'Share of the rule traffic against the other targets' : undefined} unit={targetShare(rule, target.weight)} disabled={owned || locked} /></span>
+					<span class="pool"><Picker bind:value={target.poolId} fetch={fetchPools} label={t === 0 ? 'Pool' : undefined} current={target.poolId || undefined} required disabled={owned || locked} /></span>
+					<span class="model"><Text bind:value={target.model} label={t === 0 ? 'Model' : undefined} info={t === 0 ? 'Sent to the pool in place of the name asked for' : undefined} max={64} placeholder={pool?.spec?.model || undefined} disabled={owned || locked} /></span>
+					<span class="weight"><NumberField bind:value={target.weight} min={1} max={1_000_000} label={t === 0 ? 'Weight' : undefined} unit={targetShare(rule, target.weight)} disabled={owned || locked} /></span>
 					{#if target.poolId}
 						<span class="trail share"><Tip text={poolWord(pool)} tag="span"><Dot lamp={poolLamp(pool)} shape={poolShape(pool)} label={poolWord(pool)} /></Tip></span>
 					{/if}
@@ -190,16 +145,14 @@
 	{#snippet tools()}
 		{#if owner}
 			<NeoButton elevation={2} href={owner.href}>{owner.label}</NeoButton>
-		{:else if editing}
-			<Confirm label="Delete" question="Delete {name}?" danger onconfirm={remove} />
 		{/if}
 	{/snippet}
 </PanelHeader>
 <Stack gap={24}>
-	<FormSection title="Route" info="What clients call the route and how its traffic balances across targets">
+	<FormSection title="Route">
 		<FieldRow>
-			<Text bind:value={name} label="Name" info="What clients and other routes call it, fixed once created" required readonly={editing} max={64} />
-			<Select value={spec.objective || undefined} options={objectives} label="Objective" info="Carried by every request unless it names its own" placeholder="None" clearable disabled={locked} onchange={(v) => (spec.objective = v ?? '')} />
+			<Text bind:value={name} label="Name" info="Fixed once created" required readonly={editing} max={64} />
+			<Select value={spec.objective || undefined} options={objectives} label="Objective" info="Requests may name their own" clearable disabled={locked} onchange={(v) => (spec.objective = v ?? '')} />
 		</FieldRow>
 		<Segmented
 			bind:value={spec.balance}
@@ -208,11 +161,11 @@
 				{ value: RouteBalance.READY_ENDPOINTS, label: 'Ready endpoints' },
 				{ value: RouteBalance.FREE_CAPACITY, label: 'Free capacity' }
 			]}
-			label="Balance" info="Static weights alone, or each weight scaled by ready endpoints or their free capacity"
+			label="Balance" info="What target weights are scaled by"
 			disabled={locked}
 		/>
 	</FormSection>
-	<FormSection title="Rules" info="Rules match in order, the first matching model name picks its targets by weight">
+	<FormSection title="Rules" info="The first rule that matches wins">
 		<div class="rules">
 			{#if owned}
 				{#each order as item, index (item.id)}
@@ -239,45 +192,20 @@
 			<span class="add"><NeoButton elevation={2} onclick={addRule}>{#snippet icon()}<PlusIcon size={18} />{/snippet}Rule</NeoButton></span>
 		{/if}
 	</FormSection>
-	{#if spec.policy}
-		<FormSection title="Policy" info="Empty fields take the gateway's values">
-			<FieldRow>
-				<NumberField bind:value={spec.policy.maxInFlight} min={0} max={1_000_000} label="Max in flight" info="Requests in flight at once" emptyZero placeholder={literal(d?.maxInFlight)} off={gatewayDefault(d?.maxInFlight, 'No limit')} disabled={locked} />
-				<NumberField bind:value={spec.policy.requestsPerSecond} min={0} step={0.5} label="Requests per second" info="Sustained request rate" emptyZero placeholder={literal(d?.requestsPerSecond)} off={gatewayDefault(d?.requestsPerSecond, 'No limit')} disabled={locked} />
-			</FieldRow>
-			<FieldRow wide>
-				<Duration bind:value={spec.policy.requestTimeoutMs} base="ms" max={86_400_000} label="Request timeout" info="The whole exchange, first byte in to last byte out" emptyZero fallback={d?.requestTimeoutMs || undefined} off={gatewayDefault(d?.requestTimeoutMs, 'No timeout')} disabled={locked} />
-				<Duration bind:value={spec.policy.upstreamTimeoutMs} base="ms" max={86_400_000} label="Upstream timeout" info="Longest wait for the runtime's response" emptyZero fallback={d?.upstreamTimeoutMs || undefined} off={gatewayDefault(d?.upstreamTimeoutMs, 'No timeout')} disabled={locked} />
-			</FieldRow>
-			{#snippet advanced()}
-				{#if spec.policy}
-					<FieldRow>
-						<NumberField bind:value={spec.policy.burst} min={0} max={1_000_000} label="Burst" info="Requests allowed above the rate at once, the rate rounded up when empty" emptyZero placeholder={literal(d?.burst)} off={gatewayDefault(d?.burst, 'No limit')} disabled={locked} />
-						<span></span>
-					</FieldRow>
-				{/if}
-			{/snippet}
-		</FormSection>
-	{/if}
-	{#if spec.profile}
-		<FormSection title="Tools" info="Tool servers every request on the route may call">
-			<FieldRow>
-				{#if toolOptions.length > 8}
-					<MultiSelect bind:value={spec.profile.toolServers} options={toolOptions} label="Tool servers" info="Servers whose tools every request on the route gets" placeholder="None" search disabled={locked} />
-				{:else}
-					<Checklist bind:value={spec.profile.toolServers} options={toolOptions} label="Tool servers" info="Servers whose tools every request on the route gets" disabled={locked} />
-				{/if}
-				<Switch bind:checked={spec.profile.mutatingTools} label="Mutating tools" info="Offers tools that change what they touch, read only tools alone otherwise" disabled={locked} top />
-			</FieldRow>
-		</FormSection>
+	{#if spec.policy && spec.profile}
+		<PolicyFields bind:policy={spec.policy} bind:profile={spec.profile} disabled={locked} />
 	{/if}
 	{#if current?.status?.conditions.length}
-		<Section title="Conditions" level={3}>
+		<Section title="Status" level={3}>
 			<Conditions conditions={current.status.conditions} />
 		</Section>
 	{/if}
 </Stack>
-<SaveBar dirty={locked ? false : dirty} always={!editing} {saving} {error} message={locked ? 'Read only' : undefined} label={editing ? 'Save' : 'Create'} disabled={!complete} onsave={save} ondiscard={onclose} />
+{#snippet deleteButton()}
+	<Confirm label="Delete" question="Delete {name}?" danger placement="top-start" onconfirm={remove} />
+{/snippet}
+
+<SaveBar dirty={locked ? false : dirty} always={!editing} {saving} {error} message={locked ? 'Read only' : undefined} label={editing ? 'Save' : 'Create'} disabled={!complete} leading={editing && !owner ? deleteButton : undefined} onsave={save} ondiscard={onclose} />
 
 <style>
 	.rules {

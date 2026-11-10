@@ -170,7 +170,7 @@
 	</Card>
 {/snippet}
 
-<PageHeader {tabs} active="tools" info="Search, fetch and MCP servers that models may call through the gateway" />
+<PageHeader {tabs} active="tools" />
 
 <Sheet {open} onclose={close} {list}>
 	{#if open}

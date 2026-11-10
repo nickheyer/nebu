@@ -60,7 +60,8 @@ func TestBuildsRoundTrip(t *testing.T) {
 func TestSlotsRoutesRoundTrip(t *testing.T) {
 	d, _ := open(t)
 	ctx := context.Background()
-	s := &v1.Slot{Id: "s1", Name: "main", Position: 2, Placement: v1.Placement_PLACEMENT_HOST, DeviceIds: []string{"g1", "g0"}, MemoryBytes: 1 << 33, RuntimeId: "rt", Params: map[string]string{"n_ctx": "1"}, Args: `--alias {{.Name}} "quoted words"`, InstanceId: "i", State: v1.SlotState_SLOT_STATE_READY, Error: "", TaskId: "t", Request: &v1.RunRequest{SourceId: "src", Repo: "r", Group: "g", RuntimeId: "rt", Name: "main", SlotId: "s1", Params: map[string]string{"k": "v"}, Args: "--cache-reuse 256", Snapshot: true}, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0)), Profile: &v1.Profile{ToolServers: []string{"web"}}}
+	s := &v1.Slot{Id: "s1", Name: "main", Position: 2, Placement: v1.Placement_PLACEMENT_HOST, DeviceIds: []string{"g1", "g0"}, MemoryBytes: 1 << 33, RuntimeId: "rt", Params: map[string]string{"n_ctx": "1"}, Args: `--alias {{.Name}} "quoted words"`, InstanceId: "i", State: v1.SlotState_SLOT_STATE_READY, Error: "", TaskId: "t", Request: &v1.RunRequest{SourceId: "src", Repo: "r", Group: "g", RuntimeId: "rt", Name: "main", SlotId: "s1", Params: map[string]string{"k": "v"}, Args: "--cache-reuse 256", Snapshot: true}, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0)), Profile: &v1.Profile{ToolServers: []string{"web"}},
+		Aliases: []*v1.SlotAlias{{Name: "alt", InheritSlotId: "s0"}, {Name: "own"}}, PoolBytes: map[string]uint64{"vram0": 1 << 32, "peer/ram": ^uint64(0) - 1}}
 	if err := d.PutSlot(ctx, s); err != nil {
 		t.Fatal(err)
 	}
@@ -73,10 +74,14 @@ func TestSlotsRoutesRoundTrip(t *testing.T) {
 	}
 	s.Request = nil
 	s.State = v1.SlotState_SLOT_STATE_EMPTY
+	s.PoolBytes = nil
 	d.PutSlot(ctx, s)
 	list, _ = d.ListSlots(ctx)
-	if list[0].GetRequest() != nil || list[0].GetState() != v1.SlotState_SLOT_STATE_EMPTY {
-		t.Fatal("replace should drop the request")
+	if list[0].GetRequest() != nil || list[0].GetState() != v1.SlotState_SLOT_STATE_EMPTY || list[0].GetPoolBytes() != nil {
+		t.Fatal("replace should drop the request and the pool caps")
+	}
+	if caps, err := d.strings(ctx, `SELECT pool_bytes FROM slots`); err != nil || len(caps) != 1 || caps[0] != "" {
+		t.Fatalf("no caps store empty text %q %v", caps, err)
 	}
 	if ok, _ := d.DeleteSlot(ctx, "s1"); !ok {
 		t.Fatal("delete slot")

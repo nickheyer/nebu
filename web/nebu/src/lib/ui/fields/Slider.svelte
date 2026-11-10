@@ -1,14 +1,12 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { watch } from '@dvcol/svelte-utils/watch';
-	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { NeoInput, NeoRange } from '#lib/neo/inputs/index.js';
-	import Tip from '#lib/ui/Tip.svelte';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
-	import { fieldId, OffIcon, type Off } from '#lib/ui/fields/types.js';
+	import { fieldId } from '#lib/ui/fields/types.js';
 
+	// A bounded number as a rail and a box, an unset value resting on the number it resolves to
 	let {
-		value = $bindable(0),
+		value = $bindable(),
 		min = 0,
 		max = 100,
 		step = 1,
@@ -17,72 +15,74 @@
 		info,
 		disabled = false,
 		message,
-		blank = false,
 		fallback,
-		// The words an empty box shows when no fallback number stands in
-		placeholder,
-		// The toggle emptying the field, blank then meaning what its label says
-		off,
-		onchange,
-		onclear
-	}: { value?: number; min?: number; max?: number; step?: number; unit?: string; label?: string; info?: string; disabled?: boolean; message?: string; blank?: boolean; fallback?: number; placeholder?: string; off?: Off; onchange?: (n: number) => void; onclear?: () => void } = $props();
+		optional = false,
+		onchange
+	}: {
+		value?: number;
+		min?: number;
+		max?: number;
+		step?: number;
+		unit?: string;
+		label?: string;
+		info?: string;
+		disabled?: boolean;
+		message?: string;
+		fallback?: number;
+		optional?: boolean;
+		onchange?: (n: number | undefined) => void;
+	} = $props();
 
 	const id = fieldId();
-	let typed = $state(untrack(() => (blank ? '' : String(value))));
-	// The knob rests on the fallback while the value is unset
-	let knob = $state(untrack(() => (blank && fallback !== undefined ? fallback : value)));
-	// An empty field without a number to rest on shows its rail alone, the knob gone until a value lands
+	const rest = $derived(value ?? fallback ?? min);
+	const shown = $derived(value === undefined ? '' : String(value));
+	let typed = $state(untrack(() => shown));
+	let knob = $state(untrack(() => rest));
+	const blank = $derived(value === undefined);
 	const unset = $derived(blank && fallback === undefined);
 
-	watch(
-		() => {
-			onchange?.(value);
-		},
-		() => value,
-		{ skip: 1 }
-	);
-
+	// The box and the knob follow the value
 	$effect(() => {
-		typed = blank ? '' : String(value);
-		knob = blank && fallback !== undefined ? fallback : value;
+		typed = shown;
+		knob = rest;
 	});
 
-	watch(
-		() => {
-			if (knob !== (blank && fallback !== undefined ? fallback : value)) value = knob;
-		},
-		() => knob,
-		{ skip: 1 }
-	);
+	// A dragged knob becomes the value
+	$effect(() => {
+		const k = knob;
+		untrack(() => {
+			if (k === rest) return;
+			value = k;
+			onchange?.(k);
+		});
+	});
 
+	// Takes the typed number inside the bounds, an emptied box unsetting an optional value
 	function commit() {
-		if (typed === '' && blank) return;
-		const n = Number(typed);
-		if (typed === '' || Number.isNaN(n)) {
-			typed = blank ? '' : String(value);
+		if (typed === shown) return;
+		if (typed.trim() === '') {
+			if (!optional) {
+				typed = shown;
+				return;
+			}
+			value = undefined;
+			onchange?.(undefined);
 			return;
 		}
-		value = Math.min(max, Math.max(min, n));
-		typed = String(value);
-	}
-
-	// Clears the field, or sets an empty one to its fallback
-	function toggle() {
-		if (disabled) return;
-		if (blank) value = fallback ?? min;
-		else onclear?.();
+		const n = Number(typed);
+		if (Number.isNaN(n)) {
+			typed = shown;
+			return;
+		}
+		const next = Math.min(max, Math.max(min, n));
+		typed = String(next);
+		value = next;
+		onchange?.(next);
 	}
 </script>
 
 {#snippet after()}
-	<span class="controls">
-		{#if unit && (!blank || fallback !== undefined)}<span class="unit">{unit}</span>{/if}
-		{#if off}
-			<Tip text={off.label} tag="span">
-				<NeoButton text toggle checked={blank} color={blank ? 'primary' : undefined} aria-label={off.label} aria-pressed={blank} {disabled} onclick={toggle}>{#snippet icon()}<OffIcon size={16} />{/snippet}</NeoButton>
-			</Tip>
-		{/if}
-	</span>
+	<span class="unit">{unit}</span>
 {/snippet}
 
 <div class="field">
@@ -91,8 +91,8 @@
 		<div class="range">
 			<NeoRange bind:value={knob} {min} {max} {step} {disabled} elevation={-1} tooltips={false} width="100%" />
 		</div>
-		<div class="box" class:toggled={off !== undefined}>
-			<NeoInput type="text" inputmode="decimal" {id} bind:value={typed} {disabled} placeholder={fallback !== undefined ? String(fallback) : blank ? (placeholder ?? off?.label ?? 'Default') : undefined} elevation={-1} floating={false} width="100%" after={unit || off ? after : undefined} afterProps={{ class: 'stepper-after' }} onchange={commit} onblur={commit} aria-label={label} />
+		<div class="box" style:flex-basis={unit ? `calc(7rem + ${unit.length}ch)` : '5rem'}>
+			<NeoInput type="text" inputmode="decimal" {id} bind:value={typed} {disabled} placeholder={fallback === undefined ? undefined : String(fallback)} elevation={-1} floating={false} width="100%" after={unit ? after : undefined} onchange={commit} onblur={commit} aria-label={label} />
 		</div>
 	</div>
 	{#if message}<span class="secondary">{message}</span>{/if}
@@ -129,14 +129,11 @@
 	.unset .range :global(.neo-range-handle-before) {
 		background-color: transparent;
 	}
-	/* One box width for every slider, so the sliders of a column end on one line, wider when a toggle shares the box */
+	/* The box is as wide as a few digits and its unit need, the rail taking the rest */
 	.box {
 		display: flex;
-		flex: 0 0 9rem;
+		flex: 0 0 5rem;
 		min-width: 0;
-	}
-	.box.toggled {
-		flex-basis: 11rem;
 	}
 	.box :global(.neo-input-group) {
 		flex: 1 1 auto;
@@ -144,15 +141,6 @@
 	}
 	.box :global(input) {
 		text-align: right;
-	}
-	span.controls {
-		display: inline-flex;
-		gap: 2px;
-	}
-	span.controls :global(.neo-button) {
-		--neo-btn-min-width: 2rem;
-		--neo-btn-padding: 0.375rem 0.5rem;
-		--neo-btn-padding-empty: 0.375rem;
 	}
 	.unit {
 		padding: 0 8px 0 4px;

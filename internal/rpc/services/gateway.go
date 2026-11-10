@@ -156,7 +156,7 @@ func (s *GatewayService) ListTraces(ctx context.Context, req *connect.Request[v1
 	if err != nil {
 		return nil, err
 	}
-	f := gateway.TraceFilter{Route: req.Msg.GetRoute(), Kind: req.Msg.GetKind(), StatusClass: req.Msg.GetStatusClass(), NodeID: req.Msg.GetNodeId(), Objective: req.Msg.GetObjective(), FairnessID: req.Msg.GetFairnessId(), Query: req.Msg.GetQuery()}
+	f := gateway.TraceFilter{Route: req.Msg.GetRoute(), Kinds: req.Msg.GetKinds(), StatusClasses: req.Msg.GetStatusClasses(), NodeIDs: req.Msg.GetNodeIds(), Objectives: req.Msg.GetObjectives(), FairnessID: req.Msg.GetFairnessId(), Query: req.Msg.GetQuery()}
 	if req.Msg.GetFrom() != nil {
 		f.From = req.Msg.GetFrom().AsTime()
 	}

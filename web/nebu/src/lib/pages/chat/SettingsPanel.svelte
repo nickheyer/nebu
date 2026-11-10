@@ -1,116 +1,110 @@
 <script lang="ts">
-	import { NeoButton } from '#lib/neo/buttons/index.js';
-	import Collapse from '#lib/ui/Collapse.svelte';
+	import { untrack } from 'svelte';
 	import { shortId } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import type { ChatSettings } from '#lib/proto/nebu/v1/chat_pb.js';
 	import { ToolServerState, type ToolServerStatus } from '#lib/proto/nebu/v1/tools_pb.js';
 	import Checklist from '#lib/ui/fields/Checklist.svelte';
 	import Chips from '#lib/ui/fields/Chips.svelte';
-	import Code from '#lib/ui/fields/Code.svelte';
+	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
+	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import NumberField from '#lib/ui/fields/Number.svelte';
 	import Segmented from '#lib/ui/fields/Segmented.svelte';
 	import Slider from '#lib/ui/fields/Slider.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import Textarea from '#lib/ui/fields/Textarea.svelte';
+	import type { Option } from '#lib/ui/fields/types.js';
 
+	// The request settings of one conversation, every empty field showing the value the request resolves to
 	let {
 		settings = $bindable(),
 		servers,
-		serversError,
 		contextLength,
+		userFallback,
 		assistantFallback
-	}: { settings: ChatSettings; servers: ToolServerStatus[]; serversError: string; contextLength: number; assistantFallback: string } = $props();
+	}: { settings: ChatSettings; servers: ToolServerStatus[]; contextLength: number; userFallback: string; assistantFallback: string } = $props();
 
 	type NumKey = 'temperature' | 'topP' | 'topK' | 'maxTokens' | 'seed';
 
-	// The sampling each dialect's server applies while a setting stays unset
-	const dialectDefaults: Record<string, { temperature: number; topP?: number; topK?: number }> = {
+	// The sampling each API's server applies while a setting stays unset
+	const apiDefaults: Record<string, { temperature: number; topP?: number; topK?: number }> = {
 		openai: { temperature: 1, topP: 1 },
 		anthropic: { temperature: 1 },
 		ollama: { temperature: 0.8, topP: 0.9, topK: 40 }
 	};
-	const d = $derived(dialectDefaults[settings.dialect] ?? dialectDefaults.openai!);
+	const d = $derived(apiDefaults[settings.dialect] ?? apiDefaults.openai!);
 
-	const dialects = [
+	const apis = [
 		{ value: 'openai', label: 'OpenAI' },
 		{ value: 'anthropic', label: 'Anthropic' },
 		{ value: 'ollama', label: 'Ollama' }
 	];
 
-	function read(key: NumKey, idle = 0): number {
+	function read(key: NumKey): number | undefined {
 		const v = settings[key] === '' ? NaN : globalThis.Number(settings[key]);
-		return globalThis.Number.isNaN(v) ? idle : v;
+		return globalThis.Number.isNaN(v) ? undefined : v;
 	}
 
-	// Stores a number, the idle value written while unset keeping it unset
-	function write(key: NumKey, n: number, idle = 0) {
-		if (settings[key] === '' && n === idle) return;
-		settings[key] = String(n);
+	function write(key: NumKey, n: number | undefined) {
+		settings[key] = n === undefined ? '' : String(n);
 	}
 
-	function writeOptional(key: NumKey, n: number) {
-		settings[key] = n ? String(n) : '';
+	let userName = $state(untrack(() => settings.userName || userFallback));
+	let assistantName = $state(untrack(() => settings.assistantName || assistantFallback));
+
+	// Each name box holds the name in use, its own or the one it resolves to
+	$effect(() => {
+		userName = settings.userName || userFallback;
+		assistantName = settings.assistantName || assistantFallback;
+	});
+
+	// Keeps a name typed over the resolved one, an emptied box returning to the resolved name
+	function rename() {
+		settings.userName = userName.trim() === userFallback ? '' : userName.trim();
+		settings.assistantName = assistantName.trim() === assistantFallback ? '' : assistantName.trim();
+		userName = settings.userName || userFallback;
+		assistantName = settings.assistantName || assistantFallback;
 	}
 
-	function resetSampling() {
-		settings.temperature = '';
-		settings.topP = '';
-		settings.topK = '';
-		settings.maxTokens = '';
-		settings.seed = '';
-		settings.stop = '';
-	}
-
-	const sampled = $derived(settings.temperature !== '' || settings.topP !== '' || settings.topK !== '' || settings.maxTokens !== '' || settings.seed !== '' || settings.stop !== '');
-
-	const serverOptions = $derived(
-		servers.map((s) => {
+	// Every tool server on offer, one the conversation names and nobody runs kept so it can be unchecked
+	const serverOptions = $derived.by((): Option<string>[] => {
+		const options = servers.map((s): Option<string> => {
 			const value = s.ref || s.server?.name || '';
 			const node = s.nodeId ? live.nodes.get(s.nodeId)?.name || shortId(s.nodeId) : undefined;
 			const failed = s.state === ToolServerState.FAILED;
-			return { value, label: s.server?.name || value, description: node, disabled: failed, tip: failed ? s.error : undefined };
-		})
-	);
+			return { value, label: s.server?.name || value, description: node, disabled: failed && !settings.toolServers.includes(value), tip: failed ? s.error : undefined };
+		});
+		for (const ref of settings.toolServers) if (!options.some((o) => o.value === ref)) options.push({ value: ref, label: ref, description: 'missing' });
+		return options;
+	});
 </script>
 
-
 <div class="sections">
-	<Segmented bind:value={settings.dialect} options={dialects} label="Dialect" info="Wire format of the requests, OpenAI, Anthropic or Ollama" />
-	<Textarea bind:value={settings.system} label="System" info="Instructions the conversation starts with" rows={3} maxRows={12} />
-	<Collapse label="Sampling">
-		<div class="fields">
-			<Switch bind:checked={settings.stream} label="Stream" info="Shows tokens as they arrive" />
-			<Slider bind:value={() => read('temperature', d.temperature), (n) => write('temperature', n, d.temperature)} min={0} max={2} step={0.05} label="Temperature" info="Sampling randomness, the dialect's default when empty" blank={settings.temperature === ''} fallback={d.temperature} />
-			<Slider bind:value={() => read('topP', d.topP ?? 1), (n) => write('topP', n, d.topP ?? 1)} min={0} max={1} step={0.01} label="Top p" info="Nucleus sampling share, the dialect's default when empty" blank={settings.topP === ''} fallback={d.topP} />
-			{#if contextLength > 0}
-				<Slider bind:value={() => read('maxTokens', contextLength), (n) => write('maxTokens', n, contextLength)} min={1} max={contextLength} label="Max tokens" info="Longest answer, the context length when empty" blank={settings.maxTokens === ''} fallback={contextLength} />
-			{:else}
-				<NumberField value={read('maxTokens')} min={0} label="Max tokens" info="Longest answer, the model's default when empty" emptyZero onchange={(n) => writeOptional('maxTokens', n)} />
+	<Segmented bind:value={settings.dialect} options={apis} label="API" />
+	<Switch bind:checked={settings.stream} label="Stream the answer" />
+	<Textarea bind:value={settings.system} label="System prompt" rows={3} maxRows={12} />
+	<FieldRow>
+		<Text bind:value={userName} label="User's name" max={32} onchange={rename} />
+		<Text bind:value={assistantName} label="Assistant's name" max={32} onchange={rename} />
+	</FieldRow>
+	<FormSection title="Sampling">
+		<Slider bind:value={() => read('temperature'), (n) => write('temperature', n)} min={0} max={2} step={0.05} label="Temperature" fallback={d.temperature} optional />
+		<Slider bind:value={() => read('topP'), (n) => write('topP', n)} min={0} max={1} step={0.01} label="Top p" fallback={d.topP} optional />
+		<NumberField bind:value={() => read('topK'), (n) => write('topK', n)} min={1} label="Top k" fallback={d.topK} optional />
+		<NumberField bind:value={() => read('maxTokens'), (n) => write('maxTokens', n)} min={1} max={contextLength || undefined} label="Max tokens" fallback={contextLength || undefined} optional />
+		<NumberField bind:value={() => read('seed'), (n) => write('seed', n)} min={0} label="Seed" optional />
+		<Chips bind:value={() => (settings.stop ? settings.stop.split('\n').filter(Boolean) : []), (v) => (settings.stop = v.join('\n'))} label="Stop sequences" />
+	</FormSection>
+	{#if serverOptions.length}
+		<FormSection title="Tools">
+			<Checklist bind:value={settings.toolServers} options={serverOptions} />
+			{#if settings.toolServers.length}
+				<Switch bind:checked={settings.mutatingTools} label="Let tools make changes" />
+				<Switch bind:checked={settings.approveTools} label="Ask before running a tool" />
 			{/if}
-			<NumberField value={read('topK')} min={0} label="Top k" info="Sampling pool size, the dialect's default when empty" placeholder={d.topK ? String(d.topK) : undefined} emptyZero onchange={(n) => writeOptional('topK', n)} />
-			<NumberField value={read('seed')} label="Seed" info="Fixed sampling seed" emptyZero off={{ label: 'Drawn each request' }} onchange={(n) => writeOptional('seed', n)} />
-			<Chips bind:value={() => (settings.stop ? settings.stop.split('\n').filter(Boolean) : []), (v) => (settings.stop = v.join('\n'))} label="Stop" info="Sequences that end the answer" />
-			<div class="reset">
-				<NeoButton text disabled={!sampled} onclick={resetSampling}>Reset</NeoButton>
-			</div>
-		</div>
-	</Collapse>
-	<Collapse label="Tools">
-		<div class="fields">
-			<Checklist bind:value={settings.toolServers} options={serverOptions} label="Tool servers" info="Servers whose tools the model may call" empty={serversError || undefined} />
-			<Switch bind:checked={settings.mutatingTools} label="Mutating tools" info="Offers tools that change what they touch, read only tools alone otherwise" />
-			<Switch bind:checked={settings.approveTools} label="Approve tools" info="Gateway tools wait for your approval before they run" />
-			<Code bind:value={settings.tools} language="json" rows={6} label="Client tools" info="Tool definitions as a JSON array, each call answered here by hand" />
-		</div>
-	</Collapse>
-	<Collapse label="Names">
-		<div class="fields">
-			<Text bind:value={settings.userName} label="User name" info="Shown over your turns" max={32} placeholder="You" />
-			<Text bind:value={settings.assistantName} label="Assistant name" info="Shown over the model's turns, the model name when empty" max={32} placeholder={assistantFallback} />
-		</div>
-	</Collapse>
+		</FormSection>
+	{/if}
 </div>
 
 <style>
@@ -119,15 +113,5 @@
 		flex-direction: column;
 		gap: var(--nebu-space-4);
 		min-width: 0;
-	}
-	.fields {
-		display: flex;
-		flex-direction: column;
-		gap: var(--nebu-space-4);
-		min-width: 0;
-	}
-	.reset {
-		display: flex;
-		justify-content: flex-end;
 	}
 </style>

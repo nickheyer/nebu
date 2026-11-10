@@ -1,10 +1,8 @@
 <script lang="ts">
-	import { toJsonString } from '@bufbuild/protobuf';
 	import Collapse from '#lib/ui/Collapse.svelte';
 	import { bytes, enumLabel, ms, num, plural, tokensPerSecond } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { ShapeSchema } from '#lib/proto/nebu/v1/estimate_pb.js';
-	import { RunRequestSchema } from '#lib/proto/nebu/v1/instance_pb.js';
 	import { FormationStateSchema, type Formation, type FormationPlan } from '#lib/proto/nebu/v1/mesh_pb.js';
 	import Conditions from '#lib/ui/Conditions.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
@@ -14,7 +12,6 @@
 	import MemoryBars from '#lib/ui/MemoryBars.svelte';
 	import MemoryLegend from '#lib/ui/MemoryLegend.svelte';
 	import PageTabs from '#lib/ui/PageTabs.svelte';
-	import Screen from '#lib/ui/Screen.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
 	import Str from '#lib/ui/Str.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
@@ -28,12 +25,7 @@
 
 	let tab = $state('seats');
 	const f = $derived(formation);
-	const tabs = [
-		{ id: 'seats', label: 'Seats' },
-		{ id: 'plan', label: 'Plan' },
-		{ id: 'memory', label: 'Memory' },
-		{ id: 'conditions', label: 'Conditions' }
-	];
+	const tabs = $derived([{ id: 'seats', label: 'Nodes' }, { id: 'plan', label: 'Plan' }, { id: 'memory', label: 'Memory' }, ...(f.conditions.length || f.error ? [{ id: 'conditions', label: 'Status' }] : [])]);
 
 	function planNodes(p: FormationPlan): string {
 		return p.seats.map((s) => seatName(live, s)).join(', ');
@@ -61,22 +53,20 @@
 							{/each}
 							{#if s.measurements.length}
 								<KeyRows dense rows={s.measurements.map((m) => ({ label: m.key, value: bytes(m.bytes), tip: m.line || undefined }))} />
-							{:else if !s.error && !s.triage.length}
-								<Empty text="Nothing measured" row />
 							{/if}
 						{/snippet}
 					</ListRow>
 				{/each}
 			</List>
 		{:else}
-			<Empty text="No seats" />
+			<Empty text="No nodes" />
 		{/if}
 	{:else if tab === 'plan'}
 		{#if f.plan}
 			{@const plan = f.plan}
 			<Stack gap={24}>
 				<Section title="Chosen" level={3}>
-					<List head={{ primary: 'Shape', secondary: 'Nodes', facts: ['Speed', 'Gain'] }}>
+					<List head={{ primary: 'Shape', secondary: 'Nodes', facts: ['Speed', 'Speedup'] }}>
 						<ListRow
 							lamp={verdictLamp(plan.verdict)}
 							primary={enumLabel(ShapeSchema, plan.shape)}
@@ -91,7 +81,7 @@
 				</Section>
 				<Section title="Candidates" level={3}>
 					{#if plan.candidates.length}
-						<List head={{ primary: 'Shape', secondary: 'Nodes', facts: ['Speed', 'Gain'] }}>
+						<List head={{ primary: 'Shape', secondary: 'Nodes', facts: ['Speed', 'Speedup'] }}>
 							{#each plan.candidates as c, i (i)}
 								<ListRow
 									lamp={verdictLamp(c.verdict)}
@@ -139,27 +129,11 @@
 		{:else}
 			<Empty text="No seats" />
 		{/if}
-	{:else if f.conditions.length || f.error}
+	{:else}
 		<Stack gap={8}>
-			{#if f.conditions.length}<Conditions conditions={f.conditions} />{/if}
+			<Conditions conditions={f.conditions} />
 			{#if f.error}<p class="error-text">{f.error}</p>{/if}
 		</Stack>
-	{:else}
-		<Empty text="No conditions" />
 	{/if}
-	<Collapse label="Request">
-		{#if f.request}
-			<Screen maxHeight="50vh"><pre class="lines">{toJsonString(RunRequestSchema, f.request, { prettySpaces: 2 })}</pre></Screen>
-		{:else}
-			<Empty text="No request" row />
-		{/if}
-	</Collapse>
 </Stack>
 
-<style>
-	.lines {
-		margin: 0;
-		white-space: pre-wrap;
-		overflow-wrap: anywhere;
-	}
-</style>

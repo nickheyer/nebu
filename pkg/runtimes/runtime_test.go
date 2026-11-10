@@ -100,7 +100,7 @@ func TestResolveAndFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if params.Int("n_ctx") != 4096 || params.Str("flash_attn") != "on" || !params.IsAuto("n_gpu_layers") || params.Int("n_batch") != 64 || params.Int("log_verbosity") != 4 {
+	if params.Int("n_ctx") != 4096 || params.Str("flash_attn") != "on" || !params.IsAuto("n_gpu_layers") || params.Int("n_batch") != 64 || params.Int("log_verbosity") != 3 {
 		t.Fatalf("params %v", params)
 	}
 	for _, bad := range []map[string]string{{"nope": "1"}, {"n_ctx": "many"}, {"cpu_moe": "maybe"}} {

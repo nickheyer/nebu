@@ -2,8 +2,10 @@ package slots
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -194,5 +196,81 @@ func TestSlotRefusesDevicesWithoutMemory(t *testing.T) {
 	}
 	if _, err := n.slots.Update(ctx, &v1.UpdateSlotRequest{Id: s.GetId(), DeviceIds: []string{"gpu0"}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A conductor on a two node mesh whose other member n2, named far, holds a host pool
+type farNode struct{ selfOnly }
+
+func (farNode) Node(ref string) (*v1.Node, error) {
+	if ref != "n2" && ref != "far" {
+		return nil, fmt.Errorf("no node %s", ref)
+	}
+	return &v1.Node{Id: "n2", Name: "far", Profile: &v1.HostProfile{Pools: []*v1.MemoryPool{{Id: "ram", Kind: v1.PoolKind_POOL_KIND_HOST, TotalBytes: 32 << 30, FreeBytes: 32 << 30}}}}, nil
+}
+
+// Pool caps name probed pools once each above zero, and a run here plans under this node's alone
+func TestSlotPoolCaps(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := newSlotNode(t, ctx)
+	if _, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: "lone", PoolBytes: map[string]uint64{"far/ram": 1}}); !errors.Is(err, ErrSlot) || !strings.Contains(err.Error(), "in no mesh") {
+		t.Fatalf("a member's pool without a mesh: %v", err)
+	}
+	n.slots.Formations = farNode{selfOnly{id: "self"}}
+	refusals := []struct {
+		what string
+		caps map[string]uint64
+		says string
+	}{
+		{"a pool not probed", map[string]uint64{"nope": 1}, `pool "nope" was not probed`},
+		{"a zero cap", map[string]uint64{"gpu0": 0}, "cap above zero"},
+		{"a pool a member lacks", map[string]uint64{"far/gpu9": 1}, `pool "far/gpu9" was not probed`},
+		{"a node the mesh lacks", map[string]uint64{"gone/ram": 1}, "names a node this mesh does not have"},
+		{"one pool here twice", map[string]uint64{"gpu0": 1, "self/gpu0": 2}, "cap the same pool"},
+		{"one member pool twice", map[string]uint64{"far/ram": 1, "n2/ram": 2}, "cap the same pool"},
+	}
+	for _, r := range refusals {
+		if _, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: "capped", PoolBytes: r.caps}); !errors.Is(err, ErrSlot) || !strings.Contains(err.Error(), r.says) {
+			t.Fatalf("%s: %v", r.what, err)
+		}
+	}
+	s, err := n.slots.Create(ctx, &v1.CreateSlotRequest{Name: "capped", PoolBytes: map[string]uint64{"gpu0": 8 << 30, "self/host": 4 << 30, "far/ram": 2 << 30}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]uint64{"gpu0": 8 << 30, "self/host": 4 << 30, "n2/ram": 2 << 30}
+	if !maps.Equal(s.GetPoolBytes(), want) {
+		t.Fatalf("caps %v, want a member named by its id %v", s.GetPoolBytes(), want)
+	}
+	if saved, err := n.db.ListSlots(ctx); err != nil || len(saved) != 1 || !maps.Equal(saved[0].GetPoolBytes(), want) {
+		t.Fatalf("saved %v %v", saved, err)
+	}
+	res, err := n.slots.Reservation(ctx, s.GetId())
+	if err != nil || !maps.Equal(res.PoolBytes, map[string]uint64{"gpu0": 8 << 30, "host": 4 << 30}) {
+		t.Fatalf("reservation caps %v %v", res.PoolBytes, err)
+	}
+	profile, err := n.slots.Host.Profile(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := n.instances.Constrain(ctx, s.GetId(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pl := range c.Profile.GetPools() {
+		if limit := res.PoolBytes[pl.GetId()]; pl.GetTotalBytes() != limit || pl.GetFreeBytes() != limit {
+			t.Fatalf("planned pool %s holds %d of %d, want %d", pl.GetId(), pl.GetFreeBytes(), pl.GetTotalBytes(), limit)
+		}
+	}
+	if _, err := n.slots.Update(ctx, &v1.UpdateSlotRequest{Id: s.GetId(), PoolBytes: map[string]uint64{"nope": 1}}); !errors.Is(err, ErrSlot) {
+		t.Fatalf("an update capping a pool not probed: %v", err)
+	}
+	next, err := n.slots.Update(ctx, &v1.UpdateSlotRequest{Id: s.GetId(), PoolBytes: map[string]uint64{"host": 1 << 30}})
+	if err != nil || !maps.Equal(next.GetPoolBytes(), map[string]uint64{"host": 1 << 30}) {
+		t.Fatalf("an update replaces the caps %v %v", next.GetPoolBytes(), err)
+	}
+	if next, err = n.slots.Update(ctx, &v1.UpdateSlotRequest{Id: s.GetId()}); err != nil || len(next.GetPoolBytes()) != 0 {
+		t.Fatalf("an update without caps clears them %v %v", next.GetPoolBytes(), err)
 	}
 }

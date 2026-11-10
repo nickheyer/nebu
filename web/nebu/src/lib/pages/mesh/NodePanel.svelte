@@ -5,7 +5,6 @@
 	import { RouteState } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import { NodeStateSchema, type Node } from '#lib/proto/nebu/v1/mesh_pb.js';
 	import type { Storage } from '#lib/proto/nebu/v1/host_pb.js';
-	import Conditions from '#lib/ui/Conditions.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
@@ -29,8 +28,7 @@
 		{ id: 'stored', label: 'Stored' },
 		{ id: 'throughput', label: 'Throughput' },
 		{ id: 'links', label: 'Links' },
-		{ id: 'serving', label: 'Serving' },
-		{ id: 'conditions', label: 'Conditions' }
+		{ id: 'serving', label: 'Serving' }
 	];
 
 	function deviceName(id: string): string {
@@ -69,18 +67,18 @@
 						{/each}
 					</List>
 				{:else}
-					<Empty text="No devices probed" row />
+					<Empty text="No devices" row />
 				{/if}
 			</Section>
 			<Section title="Storage" level={3}>
 				{#if n.profile?.storage.length}
-					<List head={{ primary: 'Mount', secondary: 'Filesystem', facts: ['Used', 'Holds'] }}>
+					<List head={{ primary: 'Mount', secondary: 'Filesystem', facts: ['Used', 'Used for'] }}>
 						{#each n.profile.storage as s (s.path)}
 							<ListRow primary={s.path} primaryKind="path" secondary={s.filesystem} secondaryWidth="8ch" facts={[{ value: usedOverTotal(s), tip: `${bytes(s.freeBytes)} free` }, { value: usesOf(s), tip: s.uses.join('\n') }]} />
 						{/each}
 					</List>
 				{:else}
-					<Empty text="No storage probed" row />
+					<Empty text="No storage" row />
 				{/if}
 			</Section>
 		</Stack>
@@ -122,7 +120,7 @@
 		{/if}
 	{:else if tab === 'links'}
 		{#if n.links.length}
-			<List head={{ primary: 'To', facts: ['RTT', 'Stream'] }}>
+			<List head={{ primary: 'To', facts: ['Latency', 'Bandwidth'] }}>
 				{#each n.links as l (l.to)}
 					<ListRow primary={peerName(live, l.to)} primaryTip={linkTip(l)} facts={[{ value: micros(l.rttUs) }, { value: bandwidth(l.streamBytesPerSecond) }]}>
 						{#snippet badges()}<StatePill label={linkLabel(l.class)} lamp={linkLamp(l.class)} />{/snippet}
@@ -132,43 +130,30 @@
 		{:else}
 			<Empty text="No links measured" />
 		{/if}
-	{:else if tab === 'serving'}
+	{:else}
+		{#if n.routes.length === 0 && n.pools.length === 0}
+			<Empty text="Nothing serving" />
+		{/if}
 		<Stack gap={24}>
-			<Section title="Routes" level={3}>
-				{#if n.routes.length}
-					<List head={{ primary: 'Route', secondary: 'Pools', facts: n.self ? ['In flight'] : [] }}>
+			{#if n.routes.length}
+				<Section title="Routes" level={3}>
+					<List head={{ primary: 'Route', secondary: 'Pools' }}>
 						{#each n.routes as r (r.name)}
 							{@const state = r.status?.state ?? RouteState.UNSPECIFIED}
-							<ListRow
-								lamp={routeLamp(state)}
-								shape={routeShape(state)}
-								primary={r.name}
-								secondary={r.status?.poolIds.join(', ') ?? ''}
-								secondaryWidth="24ch"
-								facts={n.self ? [{ value: num(live.routes.get(r.name)?.status?.inFlight ?? r.status?.inFlight) }] : []}
-								onclick={n.self ? () => goto(`/gateway/routes/${encodeURIComponent(r.name)}`) : undefined}
-							/>
+							<ListRow lamp={routeLamp(state)} shape={routeShape(state)} primary={r.name} secondary={r.status?.poolIds.join(', ') ?? ''} secondaryWidth="24ch" onclick={n.self ? () => goto(`/gateway/routes/${encodeURIComponent(r.name)}`) : undefined} />
 						{/each}
 					</List>
-				{:else}
-					<Empty text="No routes" row />
-				{/if}
-			</Section>
-			<Section title="Pools" level={3}>
-				{#if n.pools.length}
+				</Section>
+			{/if}
+			{#if n.pools.length}
+				<Section title="Pools" level={3}>
 					<List head={{ primary: 'Pool', secondary: 'Model', facts: ['State'] }}>
 						{#each n.pools as p (p.id)}
 							<ListRow lamp={poolLamp(p)} shape={poolShape(p)} primary={p.id} secondary={p.spec?.model ?? ''} secondaryKind="repo" facts={[{ value: poolWord(p) }]} />
 						{/each}
 					</List>
-				{:else}
-					<Empty text="No pools" row />
-				{/if}
-			</Section>
+				</Section>
+			{/if}
 		</Stack>
-	{:else if n.conditions.length}
-		<Conditions conditions={n.conditions} />
-	{:else}
-		<Empty text="No conditions" />
 	{/if}
 </Stack>

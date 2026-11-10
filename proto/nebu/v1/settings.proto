@@ -38,30 +38,19 @@ enum ToolServerKind {
 // A source of tools the gateway runs on a model's behalf
 message ToolServer {
   string id = 1;
-  // The name routes, personas, and requests attach the server by. MCP tools are offered as name__tool
   string name = 2;
   bool enabled = 3;
   ToolServerKind kind = 4;
-  // The search provider, searxng or brave
   string provider = 5;
-  // Base URL of a SearXNG instance with the json format enabled
   string searxng_url = 6;
-  // Brave Search API subscription token
   string brave_key = 7;
-  // The command of a stdio server, with its arguments and environment
   string command = 8;
   repeated string args = 9;
   map<string, string> env = 10;
-  // The endpoint of an HTTP server, with the headers every request carries
   string url = 11;
   map<string, string> headers = 12;
-  // Tools the server may offer, every tool when empty
   repeated string allowed_tools = 13;
-  // Whether a fetch server may read this host's own addresses, loopback and link local included,
-  // which it refuses otherwise so a model cannot reach the daemon's own services through it
   bool local = 14;
-  // Whether a Brave key, env value, or header value is stored, each read back as the redaction marker
-  bool secrets_set = 15;
 }
 
 // Asks for the settings

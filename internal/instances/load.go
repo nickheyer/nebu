@@ -1,24 +1,44 @@
 package instances
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/nickheyer/nebu/pkg/datalayer"
 )
 
-// Sums the running and queued requests fresh scrapes report over an instance's endpoints, false when none is fresh
-func ScrapedLoad(store datalayer.Store, staleness time.Duration) func(instanceID string) (running, queued int, scraped bool) {
-	return func(instanceID string) (running, queued int, scraped bool) {
-		now := time.Now()
-		seen := map[datalayer.Address]bool{}
+// A scraped endpoint of the instance gave no sample within the staleness
+var ErrUnanswered = errors.New("runtime did not answer its metrics")
+
+// Samples an instance's scraped endpoints for when they last showed work, ErrUnanswered when one gave no fresh sample
+func ScrapedLoad(store datalayer.Store, sampler datalayer.Sampler, staleness time.Duration) func(ctx context.Context, instanceID string) (time.Time, error) {
+	return func(ctx context.Context, instanceID string) (time.Time, error) {
+		var ids []datalayer.EndpointID
 		for _, ep := range store.Endpoints("", func(ep datalayer.Endpoint) bool { return ep.Labels()[datalayer.LabelInstance] == instanceID }) {
-			m, ok := datalayer.Attribute[*datalayer.ServerMetrics](ep, datalayer.CollectorMetrics)
-			if !ok || m.Stale(now, staleness) || seen[ep.Address()] {
+			if p, ok := store.Pool(ep.Pool()); ok && p.Metrics.Scraped() {
+				ids = append(ids, ep.ID())
+			}
+		}
+		wait, cancel := context.WithTimeout(ctx, staleness)
+		sampler.Sample(wait, ids)
+		cancel()
+		var active time.Time
+		now := time.Now()
+		for _, id := range ids {
+			ep, ok := store.Endpoint(id)
+			if !ok {
 				continue
 			}
-			seen[ep.Address()] = true
-			running, queued, scraped = running+m.RunningRequests, queued+m.QueuedRequests, true
+			m, ok := datalayer.Attribute[*datalayer.ServerMetrics](ep, datalayer.CollectorMetrics)
+			if !ok || m.Stale(now, staleness) {
+				return time.Time{}, fmt.Errorf("%w: endpoint %s", ErrUnanswered, id)
+			}
+			if m.ActiveAt.After(active) {
+				active = m.ActiveAt
+			}
 		}
-		return running, queued, scraped
+		return active, nil
 	}
 }

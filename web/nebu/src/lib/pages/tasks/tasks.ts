@@ -19,8 +19,8 @@ export function madeLink(t: Task): { label: string; href: string } | undefined {
 	if (l['build'] && l['runtime']) return { label: 'Build', href: `/runtimes/${encodeURIComponent(l['runtime'])}/builds` };
 	if (l['runtime']) return { label: 'Runtime', href: `/runtimes/${encodeURIComponent(l['runtime'])}` };
 	if (l['repo']) return { label: 'Model', href: `/models?query=${encodeURIComponent(l['repo'])}` };
-	if (l['dir']) return { label: 'Directory', href: '/host' };
-	if (t.kind === 'probe') return { label: 'Host', href: '/host' };
+	if (l['dir']) return { label: 'Directory', href: '/' };
+	if (t.kind === 'probe') return { label: 'Host', href: '/' };
 	return undefined;
 }
 

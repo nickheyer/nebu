@@ -54,12 +54,15 @@ func (v Viewer) sees(owner string) bool { return v.All || v.Owner == owner }
 // What a trace listing narrows by, every field off when zero
 type TraceFilter struct {
 	Route string
-	Kind  v1.TraceKind
-	// The first digit of the status, 2 for every 2xx answer
-	StatusClass uint32
-	NodeID      string
-	Objective   string
-	FairnessID  string
+	// Kinds listed, every kind when empty
+	Kinds []v1.TraceKind
+	// First digits of the statuses listed, 2 for every 2xx answer, every status when empty
+	StatusClasses []uint32
+	// Nodes listed by the answering or the entry node, every node when empty
+	NodeIDs []string
+	// Objectives listed, every trace when empty
+	Objectives []string
+	FairnessID string
 	// Traces started at or after From and before To
 	From, To time.Time
 	// Words the trace holds in its id, request id, route, pool, endpoint, node, objective, fairness id, or error
@@ -74,16 +77,16 @@ func (f TraceFilter) admits(t *v1.Trace) bool {
 	if f.Route != "" && t.GetRoute() != f.Route {
 		return false
 	}
-	if f.Kind != v1.TraceKind_TRACE_KIND_UNSPECIFIED && t.GetKind() != f.Kind {
+	if len(f.Kinds) > 0 && !slices.Contains(f.Kinds, t.GetKind()) {
 		return false
 	}
-	if f.StatusClass != 0 && t.GetStatus()/100 != f.StatusClass {
+	if len(f.StatusClasses) > 0 && !slices.Contains(f.StatusClasses, t.GetStatus()/100) {
 		return false
 	}
-	if f.NodeID != "" && t.GetNodeId() != f.NodeID && t.GetEntryNode() != f.NodeID {
+	if len(f.NodeIDs) > 0 && !slices.Contains(f.NodeIDs, t.GetNodeId()) && !slices.Contains(f.NodeIDs, t.GetEntryNode()) {
 		return false
 	}
-	if f.Objective != "" && t.GetObjective() != f.Objective {
+	if len(f.Objectives) > 0 && !slices.Contains(f.Objectives, t.GetObjective()) {
 		return false
 	}
 	if f.FairnessID != "" && t.GetFairnessId() != f.FairnessID {
@@ -280,7 +283,7 @@ func (r *Recorder) List(ctx context.Context, v Viewer, f TraceFilter, offset, li
 	if limit > 0 {
 		need = offset + limit + 1
 	}
-	q := db.TraceQuery{Owner: v.Owner, AllOwners: v.All, Route: f.Route, Kind: f.Kind, From: f.From, To: f.To, Limit: traceChunk}
+	q := db.TraceQuery{Owner: v.Owner, AllOwners: v.All, Route: f.Route, Kinds: f.Kinds, From: f.From, To: f.To, Limit: traceChunk}
 	for need == 0 || len(out) < need {
 		stored, err := r.db.ListTraces(ctx, q)
 		if err != nil {

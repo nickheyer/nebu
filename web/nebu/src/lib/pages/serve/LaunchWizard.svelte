@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { create, toJsonString } from '@bufbuild/protobuf';
+	import { create } from '@bufbuild/protobuf';
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { fly, type FlyParams } from 'svelte/transition';
@@ -7,22 +7,20 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
-	import Collapse from '#lib/ui/Collapse.svelte';
 	import NeoDialogStepper from '#lib/neo/floating/dialog/NeoDialogStepper.svelte';
-	import { NeoProgressBar } from '#lib/neo/progress/index.js';
 	import type { NeoStepperContext, NeoStepperStep } from '#lib/neo/stepper/neo-stepper.model.js';
 	import { isCancel, reason, rpc } from '#lib/api/transport.js';
-	import { bytes, enumLabel, num, percent, seconds, tokensPerSecond } from '#lib/format.js';
+	import { bytes, enumLabel, num, seconds, tokensPerSecond } from '#lib/format.js';
 	import { live, modelKey } from '#lib/live/events.svelte.js';
 	import { ConditionStatus } from '#lib/proto/nebu/v1/meta_pb.js';
-	import { Placement, PlanProfile, Shape, ShapeSchema, type MemoryPlan, type ParamState, type Part } from '#lib/proto/nebu/v1/estimate_pb.js';
+	import { PlanProfile, Shape, ShapeSchema, type MemoryPlan, type ParamState, type Part } from '#lib/proto/nebu/v1/estimate_pb.js';
+	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { PolicySchema, ProfileSchema } from '#lib/proto/nebu/v1/gateway_pb.js';
-	import { InstanceState, InstanceStateSchema, RunRequestSchema, type RunRequest } from '#lib/proto/nebu/v1/instance_pb.js';
-	import { FormationState, type FormationPlan } from '#lib/proto/nebu/v1/mesh_pb.js';
+	import { RunRequestSchema, type RunRequest } from '#lib/proto/nebu/v1/instance_pb.js';
+	import { type FormationPlan } from '#lib/proto/nebu/v1/mesh_pb.js';
 	import { ModelKind } from '#lib/proto/nebu/v1/model_pb.js';
 	import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import { ModelSort, type StoredModel } from '#lib/proto/nebu/v1/store_pb.js';
-	import { TaskState, type Task } from '#lib/proto/nebu/v1/task_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
 	import { viewport } from '#lib/state/viewport.svelte.js';
@@ -30,6 +28,7 @@
 	import KeyRows from '#lib/ui/KeyRows.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import MemoryBars from '#lib/ui/MemoryBars.svelte';
+	import RowAction from '#lib/ui/RowAction.svelte';
 	import Screen from '#lib/ui/Screen.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
@@ -49,14 +48,14 @@
 	import Row from '#lib/ui/layout/Row.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { deviceLabel } from '#lib/ui/memory.js';
-	import { instanceLamp } from '#lib/ui/status.js';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
 	import EngineIcon from 'phosphor-svelte/lib/EngineIcon';
 	import ParamsForm from '#lib/pages/serve/ParamsForm.svelte';
 	import PolicyFields from '#lib/pages/serve/PolicyFields.svelte';
 	import { verdictLabel, verdictLamp } from '#lib/pages/models/models.js';
-	import { modelPhrase, policyRows, slotUpdate } from '#lib/pages/serve/serve.js';
+	import { installLabel, modelPhrase, policyRows } from '#lib/pages/serve/serve.js';
+	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
 
 	export type WizardStart = {
 		slotId?: string;
@@ -68,22 +67,16 @@
 		plan?: boolean;
 	};
 
-	type StepId = 'model' | 'runtime' | 'parameters' | 'placement' | 'route' | 'canary' | 'review';
-	type Outcome = 'running' | 'ready' | 'failed';
+	type StepId = 'model' | 'runtime' | 'parameters' | 'memory' | 'route' | 'canary' | 'review';
 
 	let { start = {} }: { start?: WizardStart } = $props();
 
 	const init = untrack(() => start);
 	const swap = init.swap === true;
 	const planOnly = init.plan === true && !swap;
-	const ids: StepId[] = planOnly ? ['model', 'runtime', 'parameters', 'placement'] : swap ? ['model', 'runtime', 'parameters', 'placement', 'canary', 'review'] : ['model', 'runtime', 'parameters', 'placement', 'route', 'review'];
+	const ids: StepId[] = planOnly ? ['model', 'runtime', 'parameters', 'memory'] : swap ? ['model', 'runtime', 'parameters', 'memory', 'canary', 'review'] : ['model', 'runtime', 'parameters', 'memory', 'route', 'review'];
 	const last = ids.length - 1;
-	const labels: Record<StepId, string> = { model: 'Model', runtime: 'Runtime', parameters: 'Parameters', placement: 'Placement', route: 'Route', canary: 'Canary', review: 'Review' };
-	const placements: Option<Placement>[] = [
-		{ value: Placement.UNSPECIFIED, label: 'Device first' },
-		{ value: Placement.DEVICE, label: 'Device' },
-		{ value: Placement.HOST, label: 'Host' }
-	];
+	const labels: Record<StepId, string> = { model: 'Model', runtime: 'Runtime', parameters: 'Parameters', memory: 'Memory', route: 'Route', canary: 'Canary', review: 'Review' };
 	// An unpressed group leaves the profile to the planner
 	const profiles: Option<PlanProfile>[] = [
 		{ value: PlanProfile.CHAT, label: 'Chat' },
@@ -113,7 +106,6 @@
 	let installId = $state('');
 	let params = $state<Record<string, string>>({ ...(init.params ?? {}) });
 	let args = $state('');
-	let placement = $state<Placement>(Placement.UNSPECIFIED);
 	let free = $state(swap);
 	let span = $state<string[]>([]);
 	let shape = $state<Shape>(Shape.UNSPECIFIED);
@@ -140,13 +132,7 @@
 	let runError = $state('');
 	let preview = $state('');
 	let previewError = $state('');
-	let task = $state<Task | undefined>(undefined);
-	let logLines = $state<string[]>([]);
-	let instanceId = $state('');
-	let formationId = $state('');
-	let launched = $state(false);
 	let planAbort: AbortController | undefined;
-	let followAbort: AbortController | undefined;
 	let seeded = false;
 
 	const stepId = $derived(ids[active] ?? 'model');
@@ -172,12 +158,7 @@
 	const installOptions = $derived.by((): Option<string>[] =>
 		installs.map((i) => {
 			const unmet = (i.status?.conditions ?? []).filter((c) => c.status === ConditionStatus.FALSE);
-			return {
-				value: i.id,
-				label: `${i.version || (i.path.split('/').pop() ?? '')} ${i.origin || i.path}`.trim(),
-				description: unmet.length ? unmet.map((c) => `${c.type} ${c.reason}`).join(', ') : installKind(i.kind),
-				tip: unmet[0]?.message
-			};
+			return { value: i.id, label: installLabel(i), description: unmet.length ? unmet.map((c) => c.message || c.reason).join(', ') : undefined };
 		})
 	);
 	// A formation plan spans every node until the operator narrows it
@@ -196,29 +177,9 @@
 		}
 		return out;
 	});
-	const slotOptions = $derived.by((): Option<'this' | 'new' | 'none'>[] => [
-		...(slot ? [{ value: 'this' as const, label: slot.name }] : []),
-		{ value: 'new', label: 'New slot' },
-		{ value: 'none', label: 'No slot', disabled: placement !== Placement.UNSPECIFIED, tip: placement !== Placement.UNSPECIFIED ? 'Needs a slot' : undefined }
-	]);
+	const slotOptions = $derived.by((): Option<'this' | 'new' | 'none'>[] => [...(slot ? [{ value: 'this' as const, label: slot.name }] : []), { value: 'new', label: 'New slot' }, { value: 'none', label: 'No slot' }]);
 	const chosenDevices = $derived(slot?.deviceIds.length ? slot.deviceIds : undefined);
 	const verdict = $derived(formationPlan?.verdict ?? plan?.verdict);
-	const instance = $derived(live.instances.get(instanceId));
-	const formation = $derived(live.formations.get(formationId));
-	const ended = $derived(task?.state === TaskState.SUCCEEDED || task?.state === TaskState.FAILED || task?.state === TaskState.CANCELED);
-	const outcome = $derived.by((): Outcome => {
-		if (task?.state === TaskState.FAILED || task?.state === TaskState.CANCELED) return 'failed';
-		if (instance?.state === InstanceState.FAILED || formation?.state === FormationState.FAILED) return 'failed';
-		if (task?.state === TaskState.SUCCEEDED) return 'ready';
-		if (!swap && (instance?.state === InstanceState.READY || formation?.state === FormationState.READY)) return 'ready';
-		return 'running';
-	});
-	const progress = $derived(percent(task?.progress?.done, task?.progress?.total));
-	const hits = $derived(instance?.triage.length ? instance.triage : (formation?.seats.flatMap((s) => s.triage) ?? []));
-	const failure = $derived(instance?.error || task?.error || formation?.error || '');
-	const openHref = $derived(instanceId ? `/serve/${encodeURIComponent(instanceId)}` : formationId ? `/mesh/formations/${encodeURIComponent(formationId)}` : '');
-	const phase = $derived(outcome === 'failed' ? 'Failed' : outcome === 'ready' ? 'Ready' : 'Running');
-
 	// Whether a step holds what the request needs from it
 	function complete(id: StepId): boolean {
 		switch (id) {
@@ -259,10 +220,6 @@
 
 	function slide(node: Element, props: FlyParams) {
 		return motion.enabled ? fly(node, { ...props, duration: 200, delay: 0 }) : { duration: 0 };
-	}
-
-	function installKind(kind: number): string {
-		return ['', 'adopted', 'prebuilt', 'built'][kind] ?? '';
 	}
 
 	function shapeLine(s: Shape): string {
@@ -343,10 +300,7 @@
 		}
 	});
 
-	onDestroy(() => {
-		planAbort?.abort();
-		followAbort?.abort();
-	});
+	onDestroy(() => planAbort?.abort());
 
 	// Takes the slot's defaults once it arrives from the live stream
 	$effect(() => {
@@ -357,12 +311,12 @@
 			runtimeId ||= s.runtimeId;
 			params = { ...s.params, ...params };
 			args ||= s.args;
-			placement = s.placement;
 			slotChoice = 'this';
 			if (!init.model && s.request?.repo) void loadModel(s.request);
 		});
 	});
 
+	// The files the model needs that this host lacks, read again whenever the store changes
 	$effect(() => {
 		const key = modelId;
 		parts = [];
@@ -370,14 +324,29 @@
 		const m = untrack(() => model);
 		if (!m) return;
 		const abort = new AbortController();
-		rpc.estimate
-			.parts({ sourceId: m.sourceId, repo: m.repo, group: m.group }, { signal: abort.signal })
-			.then((r) => (parts = r.parts))
-			.catch((err) => {
-				if (!isCancel(err)) toast.error('Parts failed to resolve', reason(err));
-			});
-		return () => abort.abort();
+		const load = () =>
+			rpc.estimate
+				.parts({ sourceId: m.sourceId, repo: m.repo, group: m.group }, { signal: abort.signal })
+				.then((r) => (parts = r.parts.filter((p) => p.required && !p.stored && !p.bundled)))
+				.catch((err) => {
+					if (!isCancel(err)) toast.error('Needed files failed to resolve', reason(err));
+				});
+		void load();
+		const off = live.on(EventKind.MODEL, () => void load());
+		return () => {
+			off();
+			abort.abort();
+		};
 	});
+
+	async function pullPart(p: Part) {
+		try {
+			const res = await rpc.store.pull({ sourceId: p.sourceId, repo: p.repo, revision: p.revision, group: p.group, alone: true, paths: p.paths, slot: p.paths.length ? p.slot : '' });
+			followTask(res.task, `Pull ${p.name || p.label || p.slot}`);
+		} catch (err) {
+			toast.error('Pull failed', reason(err));
+		}
+	}
 
 	$effect(() => {
 		if (runtimes === undefined || compatible.some((r) => r.runtime?.id === runtimeId)) return;
@@ -399,14 +368,9 @@
 		});
 	});
 
-	// A placement other than device first needs a slot
+	// Plans again on entering the parameters or memory step and whenever the plan inputs change
 	$effect(() => {
-		if (placement !== Placement.UNSPECIFIED && slotChoice === 'none') slotChoice = 'new';
-	});
-
-	// Plans again on entering the parameters or placement step and whenever the plan inputs change
-	$effect(() => {
-		if (launched || (stepId !== 'parameters' && stepId !== 'placement') || !modelId || runtime === undefined) return;
+		if ((stepId !== 'parameters' && stepId !== 'memory') || !modelId || runtime === undefined) return;
 		void [free, span, shape, profile, installId];
 		untrack(() => void estimate());
 	});
@@ -430,7 +394,7 @@
 
 	// Asks the daemon for the command the review step shows
 	$effect(() => {
-		if (launched || stepId !== 'review' || !modelId || runtime === undefined) return;
+		if (stepId !== 'review' || !modelId || runtime === undefined) return;
 		const run = request();
 		preview = '';
 		previewError = '';
@@ -468,14 +432,13 @@
 		}
 	}
 
+	// Starts the launch or swap as a task and leaves for the page that shows what it made
 	async function run() {
 		if (!model || !runtime || running) return;
 		running = true;
 		runError = '';
 		try {
 			const req = request();
-			const target = swap || slotChoice === 'this' ? slot : undefined;
-			if (target && placement !== target.placement) await rpc.slots.updateSlot(slotUpdate(target, { placement }));
 			if (swap && slot) {
 				const canary = canaryPercent > 0;
 				const res = await rpc.slots.swap({
@@ -487,23 +450,21 @@
 					canaryStepPercent: canary ? canaryStep : 0,
 					canaryMaxRegressionPercent: canary ? maxRegression : undefined
 				});
-				instanceId = res.instance?.id ?? '';
-				task = res.task;
+				followTask(res.task);
+				leave(res.instance ? `/serve/${encodeURIComponent(res.instance.id)}` : '/serve');
 			} else if (inMesh && span.length) {
 				const res = await rpc.mesh.runFormation({ run: req });
-				formationId = res.formation?.id ?? '';
-				task = res.task;
+				followTask(res.task);
+				leave(res.formation ? `/mesh/formations/${encodeURIComponent(res.formation.id)}` : '/mesh/formations');
 			} else {
 				if (slotChoice === 'new') {
-					const made = await rpc.slots.createSlot({ name: req.name, runtimeId, params: cleanParams(), policy, profile: routeProfile, placement, args });
+					const made = await rpc.slots.createSlot({ name: req.name, runtimeId, params: cleanParams(), policy, profile: routeProfile, args });
 					req.slotId = made.slot?.id ?? '';
 				}
 				const res = await rpc.instances.run(req);
-				instanceId = res.instance?.id ?? '';
-				task = res.task;
+				followTask(res.task);
+				leave(res.instance ? `/serve/${encodeURIComponent(res.instance.id)}` : '/serve');
 			}
-			launched = true;
-			if (task) void follow(task.id);
 		} catch (err) {
 			runError = reason(err);
 		} finally {
@@ -511,34 +472,9 @@
 		}
 	}
 
-	async function follow(id: string) {
-		followAbort?.abort();
-		const abort = new AbortController();
-		followAbort = abort;
-		try {
-			for await (const res of rpc.tasks.watchTask({ id }, { signal: abort.signal })) {
-				if (res.task) task = res.task;
-				if (res.logs.length) logLines = [...logLines, ...res.logs].slice(-200);
-			}
-		} catch (err) {
-			if (!isCancel(err)) toast.error('Task watch failed', reason(err));
-		}
-	}
-
-	// Returns to the review step with the request as it was
-	function back() {
-		followAbort?.abort();
-		launched = false;
-		task = undefined;
-		logLines = [];
-		instanceId = '';
-		formationId = '';
-	}
-
 	function leave(href = planOnly ? '/mesh/formations' : '/serve') {
 		if (left) return;
 		left = true;
-		if (task && !ended) followTask(task);
 		open = false;
 		void goto(href, { replace: true });
 	}
@@ -548,11 +484,10 @@
 		{ label: 'runtime', value: `${runtime?.runtime?.name ?? runtimeId} ${installs.find((i) => i.id === installId)?.version ?? ''}`.trim() },
 		{ label: 'parameters', value: Object.entries(cleanParams()).map(([k, v]) => `${k}=${v}`).join(' '), mono: true },
 		{ label: 'arguments', value: args, mono: true },
-		{ label: 'placement', value: placements.find((p) => p.value === placement)?.label ?? '' },
-		{ label: 'plan', value: verdict !== undefined ? verdictLabel(verdict) : '' },
+		{ label: 'memory', value: verdict !== undefined ? verdictLabel(verdict) : '' },
 		{ label: 'span', value: span.map((v) => nodeDevices.find((o) => o.value === v)?.label ?? v).join(', ') },
 		{ label: 'shape', value: span.length ? (shapes.find((s) => s.value === shape)?.label ?? '') : '' },
-		{ label: 'plan profile', value: span.length ? (profiles.find((p) => p.value === profile)?.label ?? '') : '' },
+		{ label: 'traffic', value: span.length ? (profiles.find((p) => p.value === profile)?.label ?? '') : '' },
 		{ label: 'name', value: swap ? '' : name },
 		{ label: 'slot', value: swap || slotChoice === 'this' ? (slot?.name ?? '') : slotChoice === 'new' ? name : '' },
 		...(swap ? [] : policyRows(policy)),
@@ -564,65 +499,32 @@
 </script>
 
 {#snippet header()}
-	<span class="headline ellipsis">{title}{#if launched}<span class="muted"> · {phase}</span>{/if}</span>
+	<span class="headline ellipsis">{title}</span>
 {/snippet}
 
 {#snippet footer(ctx: NeoStepperContext)}
 	<div class="footer">
-		{#if launched}
-			<span class="fill"></span>
-			{#if outcome === 'failed'}
-				<NeoButton class="primary" elevation={2} onclick={back}>Back</NeoButton>
-			{:else}
-				{#if openHref}<NeoButton elevation={2} onclick={() => leave(openHref)}>Open</NeoButton>{/if}
-				{#if outcome === 'ready'}<NeoButton class="primary" elevation={2} onclick={() => leave()}>Done</NeoButton>{/if}
-			{/if}
+		{#if runError}<span class="status error-text">{runError}</span>{/if}
+		<span class="fill"></span>
+		<NeoButton text disabled={running} onclick={() => leave()}>Cancel</NeoButton>
+		{#if active > 0}<NeoButton elevation={2} disabled={running} onclick={() => ctx.goPrevious()}>Back</NeoButton>{/if}
+		{#if active < last}
+			<NeoButton class="primary" elevation={2} disabled={!complete(stepId)} onclick={() => ctx.goNext()}>Next</NeoButton>
+		{:else if planOnly}
+			<NeoButton class="primary" elevation={2} onclick={() => leave()}>Done</NeoButton>
 		{:else}
-			{#if runError}<span class="status error-text">{runError}</span>{/if}
-			<span class="fill"></span>
-			<NeoButton text disabled={running} onclick={() => leave()}>Cancel</NeoButton>
-			{#if active > 0}<NeoButton elevation={2} disabled={running} onclick={() => ctx.goPrevious()}>Back</NeoButton>{/if}
-			{#if active < last}
-				<NeoButton class="primary" elevation={2} disabled={!complete(stepId)} onclick={() => ctx.goNext()}>Next</NeoButton>
-			{:else if planOnly}
-				<NeoButton class="primary" elevation={2} onclick={() => leave()}>Done</NeoButton>
-			{:else}
-				<NeoButton class="primary" elevation={2} loading={running} disabled={!ids.every(complete)} onclick={run}>{swap ? 'Swap' : 'Run'}</NeoButton>
-			{/if}
+			<NeoButton class="primary" elevation={2} loading={running} disabled={!ids.every(complete)} onclick={run}>{swap ? 'Swap' : 'Launch'}</NeoButton>
 		{/if}
 	</div>
 {/snippet}
 
 {#snippet children()}
 	<div class="content" class:mobile={viewport.mobile}>
-		{#if launched}
-			<Stack gap={16}>
-				<ListRow lamp={outcome === 'failed' ? 'error' : outcome === 'ready' ? 'success' : 'warning'} shape={outcome === 'running' ? 'half' : 'filled'} primary={name || task?.title || title} secondary={task?.progress?.message || task?.title || ''} secondaryKind="message">
-					{#snippet badges()}
-						{#if instance}<StatePill label={enumLabel(InstanceStateSchema, instance.state)} lamp={instanceLamp(instance.state)} />{/if}
-					{/snippet}
-				</ListRow>
-				<NeoProgressBar value={outcome === 'running' ? (progress ?? 0) : 100} indeterminate={outcome === 'running' && progress === undefined} elevation={-1} height="6px" width="100%" immediate />
-				{#if logLines.length}
-					<Screen maxHeight="30vh"><pre class="lines">{logLines.join('\n')}</pre></Screen>
-				{/if}
-				{#if outcome === 'failed'}
-					{#if failure}<p class="error-text">{failure}</p>{/if}
-					<div class="rows">
-						{#each hits as t (t.id)}
-							<ListRow lamp="error" primary={t.summary} primaryKind="text" primaryTip={t.line} primaryWidth="32ch" secondary={t.hint} secondaryKind="message" secondaryWidth="64ch" />
-						{/each}
-					</div>
-				{/if}
-				{#if instance?.command.length}
-					<Collapse label="Command"><Screen><code class="cmd">{instance.command.join(' ')}</code></Screen></Collapse>
-				{/if}
-			</Stack>
-		{:else if stepId === 'model' && live.ready && live.models.size === 0 && !model}
+		{#if stepId === 'model' && live.ready && live.models.size === 0 && !model}
 			<Empty icon={CubeIcon} text="No models stored" action="Discover" href="/discover" />
 		{:else if stepId === 'model'}
 			<Stack gap={16}>
-				<Picker bind:value={modelPick} fetch={fetchModels} label="Model" info="A stored model to launch" placeholder="Choose a model" current={model ? modelPhrase(model) : undefined} required />
+				<Picker bind:value={modelPick} fetch={fetchModels} label="Model" current={model ? modelPhrase(model) : undefined} required />
 				{#if model}
 					<KeyRows
 						dense
@@ -638,9 +540,9 @@
 				{#if parts.length}
 					<div class="rows">
 						{#each parts as p (p.slot)}
-							<ListRow primary={p.label || p.slot} secondary={p.name || p.repo} secondaryKind="repo" facts={p.required ? [{ value: 'required' }] : []}>
-								{#snippet badges()}
-									<StatePill label={p.stored ? 'stored' : p.bundled ? 'bundled' : 'missing'} lamp={p.stored || p.bundled ? 'success' : 'error'} />
+							<ListRow lamp="error" primary={p.name || p.label || p.slot} secondary={p.error || [p.repo, p.group].filter(Boolean).join(' ')} secondaryKind={p.error ? 'message' : 'repo'} secondaryColor={p.error ? 'error' : 'muted'} facts={[{ value: p.sizeBytes ? bytes(p.sizeBytes) : '' }]}>
+								{#snippet action()}
+									{#if !p.error}<RowAction label="Pull" onclick={() => pullPart(p)} />{/if}
 								{/snippet}
 							</ListRow>
 						{/each}
@@ -655,13 +557,9 @@
 			{:else}
 				<Stack gap={16}>
 					<FormSection>
-						{#if compatible.length <= 4}
-							<Segmented bind:value={runtimeId} options={runtimeOptions} label="Runtime" info="The runtime that serves it" />
-						{:else}
-							<Select bind:value={runtimeId} options={runtimeOptions} label="Runtime" info="The runtime that serves it" />
-						{/if}
+						<Select bind:value={runtimeId} options={runtimeOptions} label="Runtime" />
 						{#if installs.length}
-							<Select bind:value={installId} options={installOptions} label="Install" info="Which installed copy runs" />
+							<Select bind:value={installId} options={installOptions} label="Version" />
 						{/if}
 					</FormSection>
 					{#if runtime && installs.length === 0}
@@ -671,12 +569,12 @@
 			{/if}
 		{:else if stepId === 'parameters'}
 			<Stack gap={24}>
-				<ParamsForm params={runtimeParams} bind:values={params} states={paramStates} />
-				<FormSection title="Command" info="Words added to the server command the runtime builds">
-					<Text bind:value={args} label="Arguments" info="Extra words for the server command" max={512} mono />
+				<ParamsForm params={runtimeParams} bind:values={params} states={paramStates} resolved={plan?.params} />
+				<FormSection>
+					<Text bind:value={args} label="Arguments" info="Added to the runtime's command" max={512} mono />
 				</FormSection>
 			</Stack>
-		{:else if stepId === 'placement'}
+		{:else if stepId === 'memory'}
 			<Stack gap={16}>
 				<MemoryBars profile={live.host} instances={live.instances.values()} slots={live.slots.values()} {plan} only={chosenDevices} />
 				<Row>
@@ -685,28 +583,21 @@
 							<Tip facts={plan ? [{ label: 'weights', value: bytes(plan.weightsBytes) }, { label: 'cache', value: bytes(plan.cacheBytes) }, { label: 'overhead', value: bytes(plan.overheadBytes) }] : undefined}>
 								<StatePill label={verdictLabel(verdict)} lamp={verdictLamp(verdict)} />
 							</Tip>
-						{:else}
-							<span class="secondary">{planning ? 'Planning' : 'Not planned'}</span>
 						{/if}
 					</Cell>
 					<Cell grow={false} push>
-						<NeoButton text loading={planning} onclick={() => estimate()}>Plan again</NeoButton>
+						<NeoButton text aria-label="Refresh" loading={planning} onclick={() => estimate()}>{#snippet icon()}<ArrowsClockwiseIcon size={20} />{/snippet}</NeoButton>
 					</Cell>
 				</Row>
 				{#if planWarning}<p class="warning-text">{planWarning}</p>{/if}
 				{#if planError}<p class="error-text">{planError}</p>{/if}
-				<FormSection title="Placement" info="Which memory the model loads into and what the plan is measured against">
-					<FieldRow>
-						<Segmented bind:value={placement} options={placements} label="Placement" info="Device memory first, device only, or host memory only" />
-						<Switch bind:checked={free} label="Against free memory" info="Plans against the memory left beside what runs now instead of each pool's total" top />
-					</FieldRow>
-				</FormSection>
+				<Switch bind:checked={free} label="Count only free memory" />
 				{#if inMesh}
-					<FormSection title="Mesh" info="An empty shape or profile leaves the choice to the planner">
-						<Checklist bind:value={span} options={nodeDevices} label="Span" info="Mesh devices the formation may use" />
+					<FormSection title="Mesh">
+						<Checklist bind:value={span} options={nodeDevices} label="Nodes and devices" />
 						<FieldRow>
-							<Select bind:value={() => (shape === Shape.UNSPECIFIED ? undefined : shape), (v) => (shape = v ?? Shape.UNSPECIFIED)} options={shapes} label="Shape" info="How the model splits across the span, the planner's pick when empty" placeholder="Planner's pick" clearable />
-							<Segmented bind:value={() => (profile === PlanProfile.AUTO ? undefined : profile), (v) => (profile = v ?? PlanProfile.AUTO)} options={profiles} label="Plan profile" info="Traffic the plan is tuned for, learned from traces when empty" clearable />
+							<Select bind:value={() => (shape === Shape.UNSPECIFIED ? undefined : shape), (v) => (shape = v ?? Shape.UNSPECIFIED)} options={shapes} label="Shape" info="How the model splits across the nodes, chosen for you when empty" placeholder={formationPlan?.shape ? enumLabel(ShapeSchema, formationPlan.shape) : undefined} clearable />
+							<Segmented bind:value={() => (profile === PlanProfile.AUTO ? undefined : profile), (v) => (profile = v ?? PlanProfile.AUTO)} options={profiles} label="Traffic" info="What the split is tuned for, learned from past requests when none is picked" clearable />
 						</FieldRow>
 						{#if formationPlan?.candidates.length}
 							<div class="rows">
@@ -726,15 +617,15 @@
 			</Stack>
 		{:else if stepId === 'route'}
 			<Stack gap={24}>
-				<FormSection title="Route" info="The name clients call and where the model keeps its place">
+				<FormSection>
 					<FieldRow>
-						<Text bind:value={name} label="Name" info="The route name clients call" max={64} required />
-						<Select bind:value={slotChoice} options={slotOptions} label="Slot" info="Keep the model's place in this slot, a new one, or none" />
+						<Text bind:value={name} label="Name" max={64} required />
+						<Select bind:value={slotChoice} options={slotOptions} label="Slot" />
 					</FieldRow>
 					<FieldRow wide>
-						<Duration bind:value={idleUnload} base="s" max={86_400} label="Idle unload" info="Time without requests before the process unloads" emptyZero off={{ label: 'Stays loaded' }} />
+						<Duration bind:value={idleUnload} base="s" max={86_400} label="Unload when idle for" emptyZero />
 						{#if live.host?.facts['criu']}
-							<Switch bind:checked={snapshot} label="Snapshot after load" info="CRIU snapshot once ready, later launches restoring it instead of starting cold" top />
+							<Switch bind:checked={snapshot} label="Snapshot after load" info="Later launches restore it instead of loading again" top />
 						{/if}
 					</FieldRow>
 				</FormSection>
@@ -742,38 +633,35 @@
 			</Stack>
 		{:else if stepId === 'canary'}
 			<Stack gap={24}>
-				<FormSection title="Swap" info="Draining lets open requests finish before the old occupant stops">
+				<FormSection>
 					<FieldRow>
-						<Switch bind:checked={drainFirst} label="Drain first" info="Open requests finish before the old occupant stops" disabled={canaryPercent > 0} top />
-						<Percent bind:value={canaryPercent} max={99} label="Canary share" info="Traffic the newcomer starts with" disabled={drainFirst} />
+						<Switch bind:checked={drainFirst} label="Let open requests finish first" disabled={canaryPercent > 0} top />
+						<Percent bind:value={canaryPercent} max={99} label="Starting share of traffic" disabled={drainFirst} />
 					</FieldRow>
 				</FormSection>
-				<FormSection title="Canary" info="Traffic moves to the newcomer a step at a time and rolls back past the regression limit">
-					<FieldRow wide>
-						<Duration bind:value={canarySeconds} base="s" max={86_400} label="Step length" info="Time between canary steps" disabled={canaryPercent === 0} />
-						<Percent bind:value={canaryStep} max={99} label="Step share" info="Traffic moved each step" disabled={canaryPercent === 0} />
-					</FieldRow>
-					<FieldRow>
-						<Percent bind:value={maxRegression} max={100} label="Max regression" info="Latency growth that rolls the canary back" disabled={canaryPercent === 0} />
-					</FieldRow>
-				</FormSection>
+				{#if canaryPercent > 0}
+					<FormSection title="Canary">
+						<FieldRow wide>
+							<Duration bind:value={canarySeconds} base="s" max={86_400} label="Time between steps" />
+							<Percent bind:value={canaryStep} max={99} label="Traffic moved each step" />
+						</FieldRow>
+						<FieldRow>
+							<Percent bind:value={maxRegression} max={100} label="Roll back when slower by" />
+						</FieldRow>
+					</FormSection>
+				{/if}
 			</Stack>
 		{:else if stepId === 'review'}
 			<Stack gap={16}>
 				<KeyRows rows={reviewRows} />
-				<Collapse label="Command">
-					{#if previewError}
-						<p class="error-text">{previewError}</p>
-					{:else if preview}
-						<Screen><code class="cmd">{preview}</code></Screen>
-					{:else}
-						<Skeleton rows={1} kind="bars" />
-					{/if}
-				</Collapse>
-				<Collapse label="Request">
-					<Screen><pre class="lines">{toJsonString(RunRequestSchema, request(), { prettySpaces: 2 })}</pre></Screen>
-				</Collapse>
-					</Stack>
+				{#if previewError}
+					<p class="error-text">{previewError}</p>
+				{:else if preview}
+					<Screen><code class="cmd">{preview}</code></Screen>
+				{:else}
+					<Skeleton rows={1} kind="bars" />
+				{/if}
+			</Stack>
 		{/if}
 	</div>
 {/snippet}
@@ -787,9 +675,9 @@
 	after={footer}
 	headerProps={{ tag: 'h2' }}
 	marks
-	progress={!launched}
+	progress
 	controls={false}
-	closable={launched}
+	closable={false}
 	swipe={false}
 	rounded="md"
 	filled
@@ -819,11 +707,6 @@
 	.rows {
 		display: flex;
 		flex-direction: column;
-	}
-	.lines {
-		margin: 0;
-		white-space: pre-wrap;
-		overflow-wrap: anywhere;
 	}
 	.cmd {
 		white-space: pre-wrap;

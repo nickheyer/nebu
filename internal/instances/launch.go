@@ -10,14 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/chattemplate"
@@ -124,7 +122,7 @@ func (m *Manager) Preview(ctx context.Context, req *v1.RunRequest) ([]string, ma
 		return nil, nil, err
 	}
 	rendered := cmds[0]
-	return auth.RedactEnv(append([]string{rendered.Command}, rendered.Args...), rendered.Env), rendered.Params, nil
+	return append([]string{rendered.Command}, rendered.Args...), rendered.Params, nil
 }
 
 // Renders a solo run, launches it on an ephemeral or reserved port, waits for health, and relaunches on fresh ports when one was taken
@@ -197,7 +195,7 @@ func (m *Manager) launchSolo(ctx context.Context, h *tasks.Handle, in *instance,
 		}
 		in.update(func(r *v1.Instance) {
 			r.Params = rendered.Params
-			r.Command = auth.RedactEnv(append([]string{rendered.Command}, rendered.Args...), rendered.Env)
+			r.Command = append([]string{rendered.Command}, rendered.Args...)
 			r.Endpoint = fmt.Sprintf("http://%s", hostPort(bindHost, rendered.Port))
 			r.Ranks = rankRecords(cmds, bindHost, nil)
 			r.InstallId = install.GetId()
@@ -412,7 +410,7 @@ func (m *Manager) runPrepare(ctx context.Context, h *tasks.Handle, in *instance,
 		timeout = defaultPrepareTimeout
 	}
 	h.Progress(0, 0, "preparing")
-	h.Logf("prepare: %s %s", prep.Command, strings.Join(auth.RedactEnv(prep.Args, prep.Env), " "))
+	h.Logf("prepare: %s %s", prep.Command, strings.Join(prep.Args, " "))
 	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(pctx, prep.Command, prep.Args...)
@@ -641,21 +639,13 @@ func mergeMeasurements(old, fresh []*v1.Measurement) []*v1.Measurement {
 	return out
 }
 
-// Whether pid runs the recorded command, a redacted word matching whatever the secret was
+// Whether pid runs the recorded command
 func running(pid int, command []string) bool {
 	if len(command) == 0 {
 		return false
 	}
 	joined := strings.ReplaceAll(strings.Join(command, " "), `"`, "")
-	pieces := strings.Split(joined, auth.Redacted)
-	for i, piece := range pieces {
-		pieces[i] = regexp.QuoteMeta(piece)
-	}
-	pattern, err := regexp.Compile("(?s)" + strings.Join(pieces, ".*?") + "$")
-	if err != nil {
-		return false
-	}
-	return proc.RunningMatch(pid, pattern.MatchString)
+	return proc.RunningMatch(pid, func(line string) bool { return strings.HasSuffix(line, joined) })
 }
 
 // Whether every rank of a record runs its recorded command, and the pids of the ranks that do

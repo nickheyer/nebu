@@ -102,11 +102,11 @@ func TestProfileMigration(t *testing.T) {
 		t.Fatalf("plain slot gained a profile %v", byName["plain"].GetProfile())
 	}
 	aliases := byName["shaped"].GetAliases()
-	if len(aliases) != 1 || aliases[0].GetProfile() != nil {
-		t.Fatalf("alias profile %v", aliases)
+	if len(aliases) != 1 || aliases[0].GetName() != "alias" || aliases[0].GetInheritSlotId() != "" {
+		t.Fatalf("alias after migrating %v", aliases)
 	}
 	var raw []string
-	for _, q := range []string{`SELECT profile FROM slots ORDER BY name`, `SELECT profile FROM slot_aliases`} {
+	for _, q := range []string{`SELECT profile FROM slots ORDER BY name`} {
 		rows, err := d.sql.Query(q)
 		if err != nil {
 			t.Fatal(err)
@@ -122,7 +122,7 @@ func TestProfileMigration(t *testing.T) {
 
 		rows.Close()
 	}
-	if got := strings.Join(raw, "|"); strings.Contains(got, "systemMessages") || got != `|{"allowAll":true}|` {
+	if got := strings.Join(raw, "|"); strings.Contains(got, "systemMessages") || got != `|{"allowAll":true}` {
 		t.Fatalf("stored profiles %q", got)
 	}
 	routes, err := d.ListRoutes(context.Background())
@@ -142,7 +142,7 @@ func TestProfileRoundTrip(t *testing.T) {
 	d, _ := open(t)
 	ctx := context.Background()
 	profile := &v1.Profile{ToolServers: []string{"web", "node/fetch"}, MutatingTools: true}
-	s := &v1.Slot{Id: "s1", Name: "main", State: v1.SlotState_SLOT_STATE_EMPTY, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0)), Profile: profile, Aliases: []*v1.SlotAlias{{Name: "alt", Profile: &v1.Profile{ToolServers: []string{"fs"}}}}}
+	s := &v1.Slot{Id: "s1", Name: "main", State: v1.SlotState_SLOT_STATE_EMPTY, CreatedAt: timestamppb.New(time.Unix(1, 0)), UpdatedAt: timestamppb.New(time.Unix(2, 0)), Profile: profile, Aliases: []*v1.SlotAlias{{Name: "alt", InheritSlotId: "s2"}}}
 	if err := d.PutSlot(ctx, s); err != nil {
 		t.Fatal(err)
 	}

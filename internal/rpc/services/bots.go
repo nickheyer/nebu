@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"slices"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/nebu/internal/bots"
@@ -59,11 +60,11 @@ func (s *BotService) ListBotActivity(ctx context.Context, req *connect.Request[v
 	if err != nil {
 		return nil, wrap(err)
 	}
-	if level := req.Msg.GetLevel(); level != "" {
-		list = keep(list, func(a *v1.BotActivity) bool { return a.GetLevel() == level })
+	if levels := req.Msg.GetLevels(); len(levels) > 0 {
+		list = keep(list, func(a *v1.BotActivity) bool { return slices.Contains(levels, a.GetLevel()) })
 	}
-	if kind := req.Msg.GetKind(); kind != "" {
-		list = keep(list, func(a *v1.BotActivity) bool { return a.GetKind() == kind })
+	if kinds := req.Msg.GetKinds(); len(kinds) > 0 {
+		list = keep(list, func(a *v1.BotActivity) bool { return slices.Contains(kinds, a.GetKind()) })
 	}
 	list = match(list, req.Msg.GetQuery(), func(a *v1.BotActivity) []string {
 		return []string{a.GetMessage(), a.GetKind(), a.GetPersona(), a.GetLevel()}

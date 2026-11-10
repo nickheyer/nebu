@@ -341,8 +341,8 @@ func (LlamaCpp) Params() []*v1.Param {
 			Description: "serve the metrics endpoint the router reads queue depth from"},
 		boolParam("props", "Writable properties", groupServer, "--props", "allow changing global properties through the props endpoint"),
 		strParam("media_path", "Media directory", groupServer, "--media-path", "", "directory requests may load local media from by relative file URL", nil, true),
-		{Name: "log_verbosity", Label: "Log level", Type: v1.ParamType_PARAM_TYPE_INT, Default: "4", Min: 0, Max: 5, Step: 1, Group: groupDiagnostics, Advanced: true, Flag: "--log-verbosity",
-			Description: "0 generic, 1 errors, 2 warnings, 3 info, 4 trace, 5 debug, llama.cpp's own is 3 and 4 logs the memory breakdown nebu measures"},
+		{Name: "log_verbosity", Label: "Log level", Type: v1.ParamType_PARAM_TYPE_INT, Default: "3", Min: 0, Max: 5, Step: 1, Group: groupDiagnostics, Advanced: true, Flag: "--log-verbosity",
+			Description: "0 generic, 1 errors, 2 warnings, 3 info, 4 trace, 5 debug, 4 and up log the buffers the memory breakdown and cache calibration read"},
 		strParam("log_colors", "Log colors", groupDiagnostics, "--log-colors", "", "empty keeps llama.cpp's auto", []string{"", "auto", "on", "off"}, true),
 		switchParam("log_prefix", "Log prefix", groupDiagnostics, "prefix every log line with its level, empty keeps llama.cpp's off"),
 		switchParam("log_timestamps", "Log timestamps", groupDiagnostics, "timestamp every log line, empty keeps llama.cpp's off"),
@@ -896,22 +896,63 @@ func llamaWarning(s *estimate.Scope) string {
 
 // Slot count llama.cpp logs as it initializes its slots
 func llamaSlots(lines []string) (string, bool) {
-	const phrase = "initializing slots, n_slots ="
 	for _, line := range lines {
-		i := strings.Index(line, phrase)
-		if i < 0 {
+		if !strings.Contains(line, "initializing") {
 			continue
 		}
-		if f := strings.Fields(line[i+len(phrase):]); len(f) > 0 {
-			if n, err := strconv.ParseUint(f[0], 10, 32); err == nil && n > 0 {
-				return strconv.FormatUint(n, 10), true
-			}
+		if n, ok := llamaLogged(line, "n_slots"); ok && n > 0 {
+			return strconv.FormatUint(n, 10), true
 		}
 	}
 	return "", false
 }
 
-// Context size llama.cpp logs for the target, the first context it builds past the fit's debug level trials
+// The whole number a log line gives a name, written name = number
+func llamaLogged(line, name string) (uint64, bool) {
+	i := strings.Index(line, name+" =")
+	if i < 0 {
+		return 0, false
+	}
+	f := strings.Fields(line[i+len(name)+2:])
+	if len(f) == 0 {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(strings.TrimRight(f[0], ","), 10, 64)
+	return n, err == nil
+}
+
+// The context the slot line implies, a slot's uncapped context times the slots unless they share one pool
+func llamaSlotPool(lines []string) (string, bool) {
+	const capped = "the slot context ("
+	var uncapped uint64
+	for _, line := range lines {
+		if i := strings.Index(line, capped); i >= 0 {
+			if digits, _, ok := strings.Cut(line[i+len(capped):], ")"); ok {
+				uncapped, _ = strconv.ParseUint(digits, 10, 64)
+			}
+			continue
+		}
+		unified, split := strings.Contains(line, "kv_unified = 'true'"), strings.Contains(line, "kv_unified = 'false'")
+		if !strings.Contains(line, "initializing") || unified == split {
+			continue
+		}
+		slots, counted := llamaLogged(line, "n_slots")
+		per, sized := llamaLogged(line, "n_ctx_slot")
+		if !counted || !sized || slots == 0 || per == 0 {
+			continue
+		}
+		if uncapped > 0 {
+			per = uncapped
+		}
+		if split {
+			per *= slots
+		}
+		return strconv.FormatUint(per, 10), true
+	}
+	return "", false
+}
+
+// Context size llama.cpp built, from its context line past the fit's debug trials or else its slot line
 func llamaContext(lines []string) (string, bool) {
 	for _, line := range lines {
 		for _, prefix := range []string{"llama_context:", "llama_new_context_with_model:"} {
@@ -928,5 +969,5 @@ func llamaContext(lines []string) (string, bool) {
 			}
 		}
 	}
-	return "", false
+	return llamaSlotPool(lines)
 }

@@ -459,29 +459,35 @@ func (s *StoreService) Pull(ctx context.Context, req *connect.Request[v1.PullReq
 	return reply(&v1.PullResponse{Task: task}, err)
 }
 
-// Lists stored models narrowed by kind, runtime, format and query, in the order asked for, one page at a time
+// Lists stored models matching every filter and the query, in the order asked, a page at a time
 func (s *StoreService) ListModels(ctx context.Context, req *connect.Request[v1.ListModelsRequest]) (*connect.Response[v1.ListModelsResponse], error) {
 	models, err := s.store.ListManifests()
 	if err != nil {
 		return nil, wrap(err)
 	}
-	if kind := req.Msg.GetKind(); kind != v1.ModelKind_MODEL_KIND_UNSPECIFIED {
-		models = keep(models, func(m *v1.StoredModel) bool { return m.GetDescriptor_().GetKind() == kind })
+	if kinds := req.Msg.GetKinds(); len(kinds) > 0 {
+		models = keep(models, func(m *v1.StoredModel) bool { return slices.Contains(kinds, m.GetDescriptor_().GetKind()) })
 	}
-	if id := req.Msg.GetRuntimeId(); id != "" {
-		if _, err := s.runtimes.Get(id); err != nil {
-			return nil, wrap(err)
+	if ids := req.Msg.GetRuntimeIds(); len(ids) > 0 {
+		var mask uint32
+		for _, id := range ids {
+			if _, err := s.runtimes.Get(id); err != nil {
+				return nil, wrap(err)
+			}
+			mask |= s.runtimes.Bit(id)
 		}
-		bit := s.runtimes.Bit(id)
-		models = keep(models, func(m *v1.StoredModel) bool { return m.GetRuntimes()&bit != 0 })
+		models = keep(models, func(m *v1.StoredModel) bool { return m.GetRuntimes()&mask != 0 })
 	}
-	if format := req.Msg.GetFormatId(); format != "" {
-		models = keep(models, func(m *v1.StoredModel) bool { return m.GetFormatId() == format })
+	if formats := req.Msg.GetFormatIds(); len(formats) > 0 {
+		models = keep(models, func(m *v1.StoredModel) bool { return slices.Contains(formats, m.GetFormatId()) })
 	}
 	models = match(models, req.Msg.GetQuery(), func(m *v1.StoredModel) []string {
 		return []string{m.GetRepo(), m.GetGroup(), m.GetFormatId(), m.GetDescriptor_().GetArchitecture(), m.GetDescriptor_().GetPrecision().GetLabel()}
 	})
 	sortModels(models, req.Msg.GetSort())
+	if req.Msg.GetByRepo() {
+		gatherRepos(models)
+	}
 	models, next, err := page(models, req.Msg.GetCursor(), req.Msg.GetLimit())
 	return reply(&v1.ListModelsResponse{Models: models, NextCursor: next}, err)
 }
@@ -502,6 +508,20 @@ func sortModels(models []*v1.StoredModel, by v1.ModelSort) {
 	case v1.ModelSort_MODEL_SORT_SIZE:
 		sort.SliceStable(models, func(i, j int) bool { return models[i].GetBytes() > models[j].GetBytes() })
 	}
+}
+
+// Moves every model up beside the first of its repository, keeping the order inside each repository
+func gatherRepos(models []*v1.StoredModel) {
+	first := map[[2]string]int{}
+	for i, m := range models {
+		key := [2]string{m.GetSourceId(), m.GetRepo()}
+		if _, seen := first[key]; !seen {
+			first[key] = i
+		}
+	}
+	sort.SliceStable(models, func(i, j int) bool {
+		return first[[2]string{models[i].GetSourceId(), models[i].GetRepo()}] < first[[2]string{models[j].GetSourceId(), models[j].GetRepo()}]
+	})
 }
 
 func (s *StoreService) GetModel(ctx context.Context, req *connect.Request[v1.GetModelRequest]) (*connect.Response[v1.GetModelResponse], error) {

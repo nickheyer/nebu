@@ -19,16 +19,14 @@
 
 	const id = fieldId();
 	const items = $derived(options.map((o): NeoListItem<V> => ({ id: String(o.value), value: o.value, label: o.label, description: o.description, disabled: o.disabled })));
-	// A compact select names itself in the empty box, every other empty select names the act of choosing
-	const empty = $derived(placeholder ?? (compact ? label : 'Select'));
+	const empty = $derived(placeholder ?? (compact ? label : undefined));
 
-	// The chosen options behind their label, so a toolbar reads Format: GGUF, Safetensors at one control height
+	// The chosen options by name behind their label, so a toolbar filter keeps one control height
 	function prefixed(selection?: NeoListSelectedItem<V> | NeoListSelectedItem<V>[]): string | undefined {
 		const picked = Array.isArray(selection) ? selection : selection ? [selection] : [];
 		const names = picked.map((s) => s.item?.label ?? s.item?.value?.toString()).filter((n): n is string => !!n);
 		if (!names.length) return undefined;
-		const text = names.length > 2 ? `${names.length} selected` : names.join(', ');
-		return compact && label ? `${label}: ${text}` : text;
+		return compact && label ? `${label}: ${names.join(', ')}` : names.join(', ');
 	}
 </script>
 

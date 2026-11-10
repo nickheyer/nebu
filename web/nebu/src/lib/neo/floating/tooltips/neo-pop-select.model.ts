@@ -15,6 +15,12 @@ export type NeoPopSelectProps<Value = unknown> = {
    * Whether to show the search input.
    */
   search?: boolean;
+  /**
+   * Whether the dropdown closes once an item is picked
+   *
+   * @default false
+   */
+  closeOnSelect?: boolean;
 
   // List props
   /**

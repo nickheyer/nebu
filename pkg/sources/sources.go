@@ -10,11 +10,14 @@ import (
 	"fmt"
 	"google.golang.org/protobuf/proto"
 	"io"
+	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"golang.org/x/sync/errgroup"
 )
 
 // Returned when a source id is not configured
@@ -246,12 +249,12 @@ func (r *Registry) Reload(cfgs []*v1.Source) error {
 		}
 		var src Source
 		// Reuse unchanged clients and retry broken ones.
-		if old, ok := previous[cfg.GetId()].(*Client); ok && proto.Equal(old.raw, cfg) {
+		if old, ok := previous[cfg.GetId()].(*Client); ok && proto.Equal(old.spec, cfg) {
 			src = old
 		} else if cat, ok := catalogs[cfg.GetKind()]; !ok {
-			src = &broken{spec: redact(cfg), err: fmt.Errorf("source %s: unsupported kind %s", cfg.GetId(), cfg.GetKind())}
+			src = &broken{spec: cfg, err: fmt.Errorf("source %s: unsupported kind %s", cfg.GetId(), cfg.GetKind())}
 		} else if c, err := newClient(cat, cfg, r.CacheDir); err != nil {
-			src = &broken{spec: redact(cfg), err: fmt.Errorf("source %s: %w", cfg.GetId(), err)}
+			src = &broken{spec: cfg, err: fmt.Errorf("source %s: %w", cfg.GetId(), err)}
 		} else {
 			src = c
 		}
@@ -472,9 +475,9 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 	}
 	cursors := map[string]string{}
 	if req.GetCursor() != "" {
-		data, err := base64.RawURLEncoding.DecodeString(req.GetCursor())
-		if err != nil || json.Unmarshal(data, &cursors) != nil {
-			return nil, fmt.Errorf("%w: cursor %q is not one this search issued", ErrSource, req.GetCursor())
+		var err error
+		if cursors, err = decodeCursors(req.GetCursor()); err != nil {
+			return nil, err
 		}
 	} else {
 		for _, src := range srcs {
@@ -511,6 +514,7 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 	wg.Wait()
 	out := &v1.SearchResponse{}
 	next := map[string]string{}
+	var hits [][]*v1.SearchHit
 	var failed []string
 	for _, p := range pages {
 		if p.err != nil {
@@ -520,6 +524,7 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 		}
 		out.Total += p.resp.GetTotal()
 		out.Warnings = append(out.Warnings, p.resp.GetWarnings()...)
+		hits = append(hits, p.resp.GetHits())
 		if p.resp.GetNextCursor() != "" {
 			next[p.id] = p.resp.GetNextCursor()
 		}
@@ -527,28 +532,58 @@ func (r *Registry) Search(ctx context.Context, req *v1.SearchRequest) (*v1.Searc
 	if len(failed) == len(pages) {
 		return nil, fmt.Errorf("%s", strings.Join(failed, ". "))
 	}
+	out.Hits = interleave(hits)
+	// Merges pages with a stable sort since relevance and trending share no sort key
+	SortHits(out.Hits, req.GetSort(), req.GetAscending())
+	var err error
+	if out.NextCursor, err = encodeCursors(next); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Takes one hit from each page in turn until every page is spent
+func interleave(pages [][]*v1.SearchHit) []*v1.SearchHit {
+	var out []*v1.SearchHit
 	for i := 0; ; i++ {
 		added := false
-		for _, p := range pages {
-			if p.err == nil && i < len(p.resp.GetHits()) {
-				out.Hits = append(out.Hits, p.resp.GetHits()[i])
+		for _, hits := range pages {
+			if i < len(hits) {
+				out = append(out, hits[i])
 				added = true
 			}
 		}
 		if !added {
-			break
+			return out
 		}
 	}
-	// Merge pages with a stable sort. Relevance and trending have no shared sort key.
-	SortHits(out.Hits, req.GetSort(), req.GetAscending())
-	if len(next) > 0 {
-		data, err := json.Marshal(next)
-		if err != nil {
-			return nil, err
-		}
-		out.NextCursor = base64.RawURLEncoding.EncodeToString(data)
+}
+
+// The error for a cursor no search here handed out
+func foreignCursor(cursor string) error {
+	return fmt.Errorf("%w: cursor %q is not one this search issued", ErrSource, cursor)
+}
+
+// Reads a cursor mapping each merged stream to its own upstream cursor
+func decodeCursors(cursor string) (map[string]string, error) {
+	cursors := map[string]string{}
+	data, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil || json.Unmarshal(data, &cursors) != nil {
+		return nil, foreignCursor(cursor)
 	}
-	return out, nil
+	return cursors, nil
+}
+
+// Writes the upstream cursor of every stream with a further page, empty when none has one
+func encodeCursors(next map[string]string) (string, error) {
+	if len(next) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(next)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(data), nil
 }
 
 // Checks whether the source supports the requested sort direction.
@@ -573,16 +608,152 @@ func answers(ctx context.Context, src Source, req *v1.SearchRequest) bool {
 	return caps.GetBrowse()
 }
 
-// Searches one source, stamping its id on every hit
+// Searches one source once per combination of values its single valued facets name, stamping its id on hits
 func (r *Registry) searchOne(ctx context.Context, src Source, req *v1.SearchRequest) (*v1.SearchResponse, error) {
-	resp, err := src.Search(ctx, req)
-	if err != nil {
-		return nil, err
+	combos := combinations(ctx, src, req)
+	if combos == nil {
+		resp, err := src.Search(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		stampSource(src, resp.GetHits())
+		return resp, nil
 	}
-	for _, h := range resp.GetHits() {
+	return fanOut(ctx, src, req, combos)
+}
+
+// Puts the source's id on every hit that names no source
+func stampSource(src Source, hits []*v1.SearchHit) {
+	for _, h := range hits {
 		if h.SourceId == "" {
 			h.SourceId = src.Spec().GetId()
 		}
 	}
-	return resp, nil
+}
+
+// Sub requests of one fanned out search sent upstream at once
+const fanWorkers = 4
+
+// One single valued request of a fanned out search, keyed by the facet values it fixes
+type combination struct {
+	key string
+	req *v1.SearchRequest
+}
+
+// Splits the request into the cross product of values its single valued facets name, nil when none names several
+func combinations(ctx context.Context, src Source, req *v1.SearchRequest) []combination {
+	several := false
+	for id := range req.GetFilters() {
+		several = several || len(Filter(req, id)) > 1
+	}
+	if !several {
+		return nil
+	}
+	subs := []*v1.SearchRequest{req}
+	var fanned []string
+	for _, f := range src.Capabilities(ctx).GetFacets() {
+		values := distinct(Filter(req, f.GetId()))
+		if f.GetMulti() || f.GetFreeform() || len(values) < 2 {
+			continue
+		}
+		fanned = append(fanned, f.GetId())
+		grown := make([]*v1.SearchRequest, 0, len(subs)*len(values))
+		for _, s := range subs {
+			for _, v := range values {
+				sub := proto.Clone(s).(*v1.SearchRequest)
+				sub.Filters[f.GetId()] = v
+				grown = append(grown, sub)
+			}
+		}
+		subs = grown
+	}
+	if len(fanned) == 0 {
+		return nil
+	}
+	out := make([]combination, len(subs))
+	for i, sub := range subs {
+		key := url.Values{}
+		for _, id := range fanned {
+			key.Set(id, sub.GetFilters()[id])
+		}
+		out[i] = combination{key: key.Encode(), req: sub}
+	}
+	return out
+}
+
+// Drops repeated values, keeping the first of each in order
+func distinct(values []string) []string {
+	var out []string
+	for _, v := range values {
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// Merges a page per combination round robin without repeated repositories, the cursor carrying each combination's upstream cursor
+func fanOut(ctx context.Context, src Source, req *v1.SearchRequest, combos []combination) (*v1.SearchResponse, error) {
+	cursors := map[string]string{}
+	if req.GetCursor() != "" {
+		var err error
+		if cursors, err = decodeCursors(req.GetCursor()); err != nil {
+			return nil, err
+		}
+	} else {
+		for _, c := range combos {
+			cursors[c.key] = ""
+		}
+	}
+	var live []combination
+	for _, c := range combos {
+		if cursor, ok := cursors[c.key]; ok {
+			c.req.Cursor = cursor
+			live = append(live, c)
+		}
+	}
+	if len(live) == 0 || len(live) != len(cursors) {
+		return nil, foreignCursor(req.GetCursor())
+	}
+	pages := make([]*v1.SearchResponse, len(live))
+	eg, gctx := errgroup.WithContext(ctx)
+	eg.SetLimit(fanWorkers)
+	for i, c := range live {
+		eg.Go(func() error {
+			resp, err := src.Search(gctx, c.req)
+			if err != nil {
+				return fmt.Errorf("%s: %w", c.key, err)
+			}
+			pages[i] = resp
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return nil, err
+	}
+	out := &v1.SearchResponse{}
+	next := map[string]string{}
+	hits := make([][]*v1.SearchHit, len(pages))
+	for i, p := range pages {
+		stampSource(src, p.GetHits())
+		out.Total += p.GetTotal()
+		out.Warnings = append(out.Warnings, p.GetWarnings()...)
+		hits[i] = p.GetHits()
+		if p.GetNextCursor() != "" {
+			next[live[i].key] = p.GetNextCursor()
+		}
+	}
+	seen := map[[2]string]bool{}
+	for _, h := range interleave(hits) {
+		if k := [2]string{h.GetSourceId(), h.GetRepo()}; !seen[k] {
+			seen[k] = true
+			out.Hits = append(out.Hits, h)
+		}
+	}
+	SortHits(out.Hits, req.GetSort(), req.GetAscending())
+	var err error
+	if out.NextCursor, err = encodeCursors(next); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/estimate"
 	"github.com/nickheyer/nebu/pkg/launch"
@@ -345,7 +344,7 @@ func (m *Manager) launchSeat(ctx context.Context, h *tasks.Handle, in *instance,
 		recorded := proto.Clone(seat).(*v1.SeatSpec)
 		in.update(func(r *v1.Instance) {
 			r.Params = rendered.Params
-			r.Command = auth.RedactEnv(append([]string{rendered.Command}, rendered.Args...), rendered.Env)
+			r.Command = append([]string{rendered.Command}, rendered.Args...)
 			r.Endpoint, r.InstallId, r.Seat, r.Inventory = endpoint, install.GetId(), recorded, inventory
 			r.Ranks = rankRecords(cmds, host, mesh)
 			if r.Request != nil {

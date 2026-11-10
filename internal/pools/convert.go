@@ -40,6 +40,7 @@ func capabilitiesOf(names *v1.MetricNames, runtime string) datalayer.MetricCapab
 		MaxLoRAField:            names.GetMaxLoraField(),
 		SlotsPath:               names.GetSlotsPath(),
 		StaticCache:             names.GetStaticCache(),
+		WorkCounter:             names.GetWorkCounter(),
 		Path:                    names.GetMetricsPath(),
 		MetricsPort:             int(names.GetMetricsPort()),
 		HealthPath:              names.GetHealthPath(),
@@ -84,6 +85,7 @@ func namesOf(c datalayer.MetricCapabilities) *v1.MetricNames {
 		HealthPath:              c.HealthPath,
 		SlotsPath:               c.SlotsPath,
 		StaticCache:             c.StaticCache,
+		WorkCounter:             c.WorkCounter,
 	}
 	if proto.Size(n) == 0 {
 		return nil

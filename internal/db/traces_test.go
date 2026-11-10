@@ -177,6 +177,15 @@ func TestTraces(t *testing.T) {
 			sameTraces(t, listTraces(t, d, TraceQuery{AllOwners: true, Route: "mistral"}))
 			sameTraces(t, listTraces(t, d, TraceQuery{AllOwners: true}), none, l2, q1, l1)
 		}},
+		{"kinds filter keeps traces of any listed kind", func(t *testing.T, d *DB) {
+			chat, embed, image := bareTrace("c1", "r", 0), bareTrace("e1", "r", time.Second), bareTrace("i1", "r", 2*time.Second)
+			chat.Kind, embed.Kind, image.Kind = v1.TraceKind_TRACE_KIND_CHAT, v1.TraceKind_TRACE_KIND_EMBED, v1.TraceKind_TRACE_KIND_IMAGE
+			putTraces(t, d, "alice", chat, embed, image)
+			sameTraces(t, listTraces(t, d, TraceQuery{Owner: "alice", Kinds: []v1.TraceKind{v1.TraceKind_TRACE_KIND_EMBED}}), embed)
+			sameTraces(t, listTraces(t, d, TraceQuery{Owner: "alice", Kinds: []v1.TraceKind{v1.TraceKind_TRACE_KIND_CHAT, v1.TraceKind_TRACE_KIND_IMAGE}}), image, chat)
+			sameTraces(t, listTraces(t, d, TraceQuery{Owner: "alice", Kinds: []v1.TraceKind{v1.TraceKind_TRACE_KIND_VIDEO}}))
+			sameTraces(t, listTraces(t, d, TraceQuery{Owner: "alice"}), image, embed, chat)
+		}},
 		{"limit keeps the newest matches", func(t *testing.T, d *DB) {
 			var all []*v1.Trace
 			for i := range 5 {

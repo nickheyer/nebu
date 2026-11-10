@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/pkg/datalayer"
@@ -181,13 +182,18 @@ func TestTraffic(t *testing.T) {
 	tr.SetInFlight("i1", 3)
 	tr.Dispatch("i1", 2)
 	tr.Dispatch("i1", 5)
+	began := time.Now()
 	tr.SetLoad("i1", 1, 2)
 	tr.SetLoad("i1", 4, 0)
-	running, queued, scraped := tr.Load("i1")
-	if tr.InFlight("i1") != 3 || tr.Dispatched("i1") != 7 || running != 4 || queued != 0 || !scraped {
-		t.Fatalf("in flight %d dispatched %d load %d/%d scraped %v", tr.InFlight("i1"), tr.Dispatched("i1"), running, queued, scraped)
+	working, err := tr.Load(context.Background(), "i1")
+	if tr.InFlight("i1") != 3 || tr.Dispatched("i1") != 7 || working.Before(began) || err != nil {
+		t.Fatalf("in flight %d dispatched %d active %v err %v", tr.InFlight("i1"), tr.Dispatched("i1"), working, err)
 	}
-	if running, queued, scraped := tr.Load("i2"); tr.InFlight("i2") != 0 || tr.Dispatched("i2") != 0 || running != 0 || queued != 0 || scraped {
-		t.Fatal("an unknown instance counts nothing and was never scraped")
+	tr.SetLoad("i1", 0, 0)
+	if at, err := tr.Load(context.Background(), "i1"); !at.Equal(working) || err != nil {
+		t.Fatalf("an instance without requests moved its last work from %v to %v, err %v", working, at, err)
+	}
+	if at, err := tr.Load(context.Background(), "i2"); tr.InFlight("i2") != 0 || tr.Dispatched("i2") != 0 || !at.IsZero() || err != nil {
+		t.Fatal("an unknown instance counts nothing and showed no work")
 	}
 }

@@ -1,4 +1,4 @@
-// Package scrape samples each endpoint's Prometheus metrics on a fixed interval and maps them to server metrics
+// Package scrape samples each endpoint's Prometheus metrics while something reads them and maps them to server metrics
 package scrape
 
 import (
@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"path"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -22,8 +23,13 @@ import (
 )
 
 const (
-	Type            = "metrics"
-	DefaultInterval = 50 * time.Millisecond
+	Type = "metrics"
+	// Time between samples of an endpoint a routing decision waits on
+	DefaultDeciding = 50 * time.Millisecond
+	// Time between samples of an endpoint with requests in flight or work in its last sample
+	DefaultWorking = 500 * time.Millisecond
+	// Time between samples of an endpoint nothing asks for
+	DefaultIdle = 30 * time.Second
 	// Scrapes in a row that must fail before the failure is set on the endpoint
 	FailureThreshold = 3
 	// Largest metrics or slot document read from one endpoint
@@ -44,9 +50,12 @@ type Observer interface {
 	OnScrape(pool datalayer.PoolID, endpoint datalayer.EndpointID, duration time.Duration, err error)
 }
 
+// Time between two samples of one endpoint for each demand on it
+type Pace = poll.Pace
+
 type Options struct {
-	// Time between scrapes of one endpoint and the timeout of each, DefaultInterval when zero
-	Interval time.Duration
+	// The pace of each demand, a zero field taking its default, the working pace also bounding one scrape
+	Pace Pace
 	// Told about every scrape when set
 	Observer Observer
 	// Opens the scrape connections, the plain dialer when nil
@@ -76,17 +85,25 @@ type Adapter struct {
 	Applied bool
 }
 
-// Scrapes every tracked endpoint from its own goroutine
+// Scrapes every tracked endpoint from its own goroutine at the pace its demand sets
 type Source struct {
 	store    datalayer.Store
 	resolve  Resolver
-	interval time.Duration
+	timeout  time.Duration
 	observer Observer
 	client   *http.Client
 	cols     poll.Collectors
-	group    *poll.Group
+	group    *poll.Paced
 	mu       sync.Mutex
 	fails    map[datalayer.EndpointID]*failures
+	targets  map[datalayer.EndpointID]target
+}
+
+// What one endpoint's scrape reads and whether its process is ready, as of the last update of the tracked set
+type target struct {
+	caps  datalayer.MetricCapabilities
+	addr  datalayer.Address
+	ready bool
 }
 
 // Failed scrapes in a row of one endpoint, the first one's time and the latest error
@@ -98,18 +115,26 @@ type failures struct {
 
 // Builds a source that stores collector output in store
 func New(store datalayer.Store, resolve Resolver, opts Options) *Source {
-	if opts.Interval <= 0 {
-		opts.Interval = DefaultInterval
+	pace := opts.Pace
+	if pace.Deciding <= 0 {
+		pace.Deciding = DefaultDeciding
+	}
+	if pace.Working <= 0 {
+		pace.Working = DefaultWorking
+	}
+	if pace.Idle <= 0 {
+		pace.Idle = DefaultIdle
 	}
 	s := &Source{
 		store:    store,
 		resolve:  resolve,
-		interval: opts.Interval,
+		timeout:  pace.Working,
 		observer: opts.Observer,
 		client:   newClient(opts.Dial),
 		fails:    map[datalayer.EndpointID]*failures{},
+		targets:  map[datalayer.EndpointID]target{},
 	}
-	s.group = poll.NewGroup(opts.Interval, s.scrape, s.untrack)
+	s.group = poll.NewPaced(pace, s.scrape, s.untrack)
 	return s
 }
 
@@ -122,8 +147,8 @@ func (s *Source) untrack(id datalayer.EndpointID) {
 	s.store.SetAttribute(id, datalayer.CollectorScrapeFailure, nil)
 }
 
-// Counts failures in a row, setting the failure on the endpoint once it repeats or changes and clearing it on success
-func (s *Source) record(id datalayer.EndpointID, err error, at time.Time) {
+// Counts failures in a row, setting a repeated or changed one and clearing it on success, true below the threshold
+func (s *Source) record(id datalayer.EndpointID, err error, at time.Time) bool {
 	s.mu.Lock()
 	f := s.fails[id]
 	if err == nil {
@@ -132,7 +157,7 @@ func (s *Source) record(id datalayer.EndpointID, err error, at time.Time) {
 		if f != nil && f.count >= FailureThreshold {
 			s.store.SetAttribute(id, datalayer.CollectorScrapeFailure, nil)
 		}
-		return
+		return false
 	}
 	if f == nil {
 		f = &failures{since: at}
@@ -142,42 +167,77 @@ func (s *Source) record(id datalayer.EndpointID, err error, at time.Time) {
 	f.count, f.err = f.count+1, err.Error()
 	set := f.count == FailureThreshold || (f.count > FailureThreshold && changed)
 	failure := &datalayer.ScrapeFailure{Err: f.err, Since: f.since}
+	unconfirmed := f.count < FailureThreshold
 	s.mu.Unlock()
 	if set {
 		s.store.SetAttribute(id, datalayer.CollectorScrapeFailure, failure)
 	}
+	return unconfirmed
 }
 
-func (s *Source) Type() string                                     { return Type }
-func (s *Source) Start(ctx context.Context) error                  { return s.group.Start(ctx) }
-func (s *Source) Stop() error                                      { return s.group.Stop() }
-func (s *Source) Subscribe(c datalayer.Collector) error            { return s.cols.Subscribe(c) }
-func (s *Source) UpdateEndpoints(ids []datalayer.EndpointID) error { return s.group.Update(ids) }
+func (s *Source) Type() string                          { return Type }
+func (s *Source) Start(ctx context.Context) error       { return s.group.Start(ctx) }
+func (s *Source) Stop() error                           { return s.group.Stop() }
+func (s *Source) Subscribe(c datalayer.Collector) error { return s.cols.Subscribe(c) }
+
+// Replaces the tracked set and samples again every kept endpoint whose address, readiness or metric names changed
+func (s *Source) UpdateEndpoints(ids []datalayer.EndpointID) error {
+	next := make(map[datalayer.EndpointID]target, len(ids))
+	var changed []datalayer.EndpointID
+	s.mu.Lock()
+	for _, id := range ids {
+		var t target
+		t.caps, t.addr, _ = s.resolve(id)
+		if ep, ok := s.store.Endpoint(id); ok {
+			t.ready = ep.Ready()
+		}
+		if prev, kept := s.targets[id]; kept && !reflect.DeepEqual(prev, t) {
+			changed = append(changed, id)
+		}
+		next[id] = t
+	}
+	s.targets = next
+	s.mu.Unlock()
+	if err := s.group.Update(ids); err != nil {
+		return err
+	}
+	s.group.Ask(changed)
+	return nil
+}
+
+func (s *Source) Serving(id datalayer.EndpointID) func()                 { return s.group.Serving(id) }
+func (s *Source) Sample(ctx context.Context, ids []datalayer.EndpointID) { s.group.Sample(ctx, ids) }
+func (s *Source) Deciding(ctx context.Context, ids []datalayer.EndpointID) func() {
+	return s.group.Deciding(ctx, ids)
+}
 
 // Keeps pools that declare complete metric names and a metrics path
-func (s *Source) Tracks(p datalayer.Pool) bool { return p.Metrics.Complete() && p.Metrics.Path != "" }
+func (s *Source) Tracks(p datalayer.Pool) bool { return p.Metrics.Scraped() }
 
-// Scrapes one endpoint, hands the sample to every collector and reports the outcome
-func (s *Source) scrape(ctx context.Context, id datalayer.EndpointID) {
+// Scrapes one endpoint into every collector, true when it shows work or fails below the threshold
+func (s *Source) scrape(ctx context.Context, id datalayer.EndpointID) bool {
 	start := time.Now()
 	caps, addr, ok := s.resolve(id)
 	var err error
+	working := false
 	if !ok {
 		err = fmt.Errorf("%w: %s", ErrUnresolved, id)
 	} else {
 		var sample *Sample
 		sample, err = s.fetch(ctx, caps, addr)
 		if ctx.Err() != nil {
-			return
+			return false
 		}
 		if err == nil {
+			working = sample.working()
 			err = s.cols.Deliver(s.store, id, sample)
 		}
 	}
-	s.record(id, err, start)
+	unconfirmed := s.record(id, err, start)
 	if s.observer != nil {
 		s.observer.OnScrape(s.poolOf(id), id, time.Since(start), err)
 	}
+	return working || unconfirmed
 }
 
 // The pool an endpoint belongs to, empty for one the store no longer holds
@@ -190,7 +250,7 @@ func (s *Source) poolOf(id datalayer.EndpointID) datalayer.PoolID {
 
 // Reads the metrics document and every JSON listing the pool declares beside it
 func (s *Source) fetch(ctx context.Context, caps datalayer.MetricCapabilities, addr datalayer.Address) (*Sample, error) {
-	ctx, cancel := context.WithTimeout(ctx, s.interval)
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	base := "http://" + addr.String()
 	sample := &Sample{Capabilities: caps}
@@ -361,7 +421,7 @@ func StoreResolver(store datalayer.Store) Resolver {
 			return datalayer.MetricCapabilities{}, datalayer.Address{}, false
 		}
 		p, ok := store.Pool(ep.Pool())
-		if !ok || !p.Metrics.Complete() || p.Metrics.Path == "" {
+		if !ok || !p.Metrics.Scraped() {
 			return datalayer.MetricCapabilities{}, datalayer.Address{}, false
 		}
 		addr := ep.Address()

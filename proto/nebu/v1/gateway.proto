@@ -499,16 +499,21 @@ message TraceToolCall {
 
 // Lists traces newest first, one route's or every route's, narrowed by every filter set
 message ListTracesRequest {
+  reserved 4, 5, 6, 7;
+  reserved "kind", "status_class", "node_id", "objective";
   string route = 1;
   // Traces per page. Zero returns every match.
   uint32 limit = 2 [(buf.validate.field).uint32.lte = 100000];
   // Words every listed trace holds in its id, request id, route, pool, endpoint, node, objective, or error
   string query = 3 [(buf.validate.field).string.max_len = 256];
-  TraceKind kind = 4 [(buf.validate.field).enum.defined_only = true];
-  // The first digit of the status, 2 for every 2xx answer, zero for every status
-  uint32 status_class = 5 [(buf.validate.field).uint32.lte = 5];
-  string node_id = 6;
-  string objective = 7;
+  // Kinds to keep, every kind when empty
+  repeated TraceKind kinds = 12 [(buf.validate.field).repeated.items.enum.defined_only = true];
+  // First digits of the statuses to keep, 2 for every 2xx answer, every status when empty
+  repeated uint32 status_classes = 13 [(buf.validate.field).repeated.items.uint32 = {gte: 1, lte: 5}];
+  // Nodes whose traces to keep, the node that answered or the one the request entered at, every node when empty
+  repeated string node_ids = 14;
+  // Objectives to keep, every trace when empty
+  repeated string objectives = 15;
   string fairness_id = 8;
   // Traces started at or after from and before to, either unbounded when unset
   google.protobuf.Timestamp from = 9;

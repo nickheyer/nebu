@@ -12,6 +12,7 @@ import (
 
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/pkg/datalayer"
+	"github.com/nickheyer/nebu/pkg/datalayer/scrape"
 	"github.com/nickheyer/nebu/pkg/events"
 	"github.com/nickheyer/nebu/pkg/prefixcache"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -41,7 +42,7 @@ func openManager(t *testing.T, d *db.DB, bus *events.Bus) *Manager {
 		DB:              d,
 		Events:          bus,
 		NodeID:          node,
-		ScrapeInterval:  20 * time.Millisecond,
+		Scrape:          scrape.Pace{Deciding: 20 * time.Millisecond, Working: 20 * time.Millisecond, Idle: 20 * time.Millisecond},
 		ProbeInterval:   20 * time.Millisecond,
 		CatalogInterval: 20 * time.Millisecond,
 	})

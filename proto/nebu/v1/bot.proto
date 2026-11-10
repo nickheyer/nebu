@@ -434,14 +434,16 @@ message StopBotResponse {
 
 // Lists recent activity newest first, the entries whose message, kind, or persona holds every word of the query
 message ListBotActivityRequest {
+  reserved 4, 5;
+  reserved "level", "kind";
   string bot_id = 1;
   // Entries per page. Zero returns every retained entry.
   uint32 limit = 2 [(buf.validate.field).uint32.lte = 10000];
   string query = 3 [(buf.validate.field).string.max_len = 256];
-  // info, warn, or error
-  string level = 4;
-  // reply, image, video, command, automation, reaction, shard, or presence
-  string kind = 5;
+  // Levels to keep among info, warn and error, every level when empty
+  repeated string levels = 7;
+  // Kinds to keep among reply, image, video, command, automation, reaction, shard and presence, every kind when empty
+  repeated string kinds = 8;
   string cursor = 6;
 }
 

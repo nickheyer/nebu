@@ -35,6 +35,8 @@ export type Entry = {
 };
 
 const tabs: { page: string; label: string; href: string }[] = [
+	{ page: 'host', label: 'Tasks', href: '/tasks' },
+	{ page: 'host', label: 'Logs', href: '/logs' },
 	{ page: 'models', label: 'Discover', href: '/discover' },
 	{ page: 'serve', label: 'Runtimes', href: '/runtimes' },
 	{ page: 'gateway', label: 'Traffic', href: '/traffic' },
@@ -49,8 +51,6 @@ const tabs: { page: string; label: string; href: string }[] = [
 	{ page: 'mesh', label: 'Nearby', href: '/mesh/nearby' },
 	{ page: 'mesh', label: 'Federation', href: '/mesh/federation' },
 	{ page: 'mesh', label: 'Tuning', href: '/mesh/tuning' },
-	{ page: 'host', label: 'Tasks', href: '/tasks' },
-	{ page: 'host', label: 'Logs', href: '/host/logs' },
 	{ page: 'settings', label: 'Sources', href: '/settings/sources' },
 	{ page: 'settings', label: 'Tools', href: '/settings/tools' },
 	{ page: 'settings', label: 'Accounts', href: '/settings/accounts' },
@@ -71,7 +71,7 @@ function pageEntries(role: Role): Entry[] {
 // Every record the live mirror holds with the page that opens it
 function recordEntries(live: Live): Entry[] {
 	const out: Entry[] = [];
-	for (const s of live.slots.values()) out.push({ id: `slot:${s.id}`, group: 'Slots', label: s.name, detail: enumLabel(SlotStateSchema, s.state), icon: PlayIcon, href: s.instanceId ? `/serve/${encodeURIComponent(s.instanceId)}` : `/serve?slot=${encodeURIComponent(s.id)}` });
+	for (const s of live.slots.values()) out.push({ id: `slot:${s.id}`, group: 'Instances', label: s.name, detail: enumLabel(SlotStateSchema, s.state), icon: PlayIcon, href: s.instanceId ? `/serve/${encodeURIComponent(s.instanceId)}` : `/serve?slot=${encodeURIComponent(s.id)}` });
 	for (const i of live.instances.values()) if (i.slotId === '') out.push({ id: `instance:${i.id}`, group: 'Instances', label: i.name, detail: enumLabel(InstanceStateSchema, i.state), icon: PlayIcon, href: `/serve/${encodeURIComponent(i.id)}` });
 	for (const r of live.routes.values()) out.push({ id: `route:${r.name}`, group: 'Routes', label: r.name, detail: enumLabel(RouteStateSchema, r.status?.state ?? 0), icon: SignpostIcon, href: `/gateway/routes/${encodeURIComponent(r.name)}` });
 	for (const p of live.pools.values()) out.push({ id: `pool:${p.id}`, group: 'Pools', label: p.id, detail: p.spec?.model, icon: StackIcon, href: `/gateway/pools/${encodeURIComponent(p.id)}` });

@@ -39,7 +39,7 @@
 		const e = finished(t);
 		return [
 			{ label: 'route', value: t.route },
-			{ label: 'status', value: t.status ? String(t.status) : 'in flight' },
+			{ label: 'status', value: t.status ? String(t.status) : 'running' },
 			{ label: 'tokens', value: `${num(t.promptTokens)} in, ${num(t.completionTokens)} out` },
 			{ label: 'TTFT', value: f === undefined ? '' : ms(f - s) },
 			{ label: 'took', value: e === undefined ? '' : ms(e - s) }

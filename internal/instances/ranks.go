@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/tasks"
 	"github.com/nickheyer/nebu/pkg/launch"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -100,7 +99,7 @@ func rankRecords(cmds []*runtimes.Command, host string, mesh []uint32) []*v1.Ins
 		out[i] = &v1.InstanceRank{
 			Rank:     uint32(i),
 			Endpoint: fmt.Sprintf("http://%s", hostPort(host, cmd.Port)),
-			Command:  auth.RedactEnv(append([]string{cmd.Command}, cmd.Args...), cmd.Env),
+			Command:  append([]string{cmd.Command}, cmd.Args...),
 		}
 		if i < len(mesh) {
 			out[i].Port = mesh[i]
@@ -226,6 +225,11 @@ func (a rankAdapters) Unload(ctx context.Context, name string) error {
 }
 
 // The adapter client of every rank as one, nil when the launch switches no adapters
+// Whether the launch switches adapters, never for a record whose runtime is gone
+func switchesAdapters(rt runtimes.Runtime, rec *v1.Instance) bool {
+	return rt != nil && adaptersOf(rt, rec) != nil
+}
+
 func adaptersOf(rt runtimes.Runtime, rec *v1.Instance) runtimes.AdapterClient {
 	refs := rankRefs(rec)
 	if len(refs) == 1 {

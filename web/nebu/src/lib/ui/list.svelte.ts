@@ -42,12 +42,12 @@ export class ListLayout {
 			});
 	}
 
-	// The shared column tracks
+	// The shared column tracks, the name taking every spare pixel when no other column stretches
 	readonly template = $derived.by(() => {
 		const cols: string[] = [];
 		if (this.has('leading')) cols.push('max-content');
 		if (this.has('dot')) cols.push('max-content');
-		cols.push(`minmax(min-content, ${this.primaryWeight}fr)`);
+		cols.push(`minmax(min-content, ${this.has('secondary') || this.has('instrument') ? this.primaryWeight : 1}fr)`);
 		if (this.has('secondary')) cols.push(`minmax(0, ${this.secondaryWeight}fr)`);
 		if (this.has('instrument')) cols.push('minmax(8rem, 1.6fr)');
 		for (let i = 0; i < this.shownFacts; i++) cols.push('max-content');

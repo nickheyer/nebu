@@ -42,6 +42,12 @@
 	});
 
 	const t = $derived(trace);
+
+	// The tabs a trace has something for, routing and tools only when it went through either
+	function tabsOf(tr: Trace) {
+		const routed = tr.profile !== '' || tr.score !== 0 || tr.filters.length + tr.candidates.length + tr.fallbacks.length > 0;
+		return [{ id: 'summary', label: 'Summary' }, ...(routed ? [{ id: 'routing', label: 'Routing' }] : []), ...(tr.toolCalls.length ? [{ id: 'tools', label: 'Tools' }] : []), { id: 'bodies', label: 'Bodies' }];
+	}
 	// Each milestone with the time it took after the one before
 	const strip = $derived.by((): FactItem[] => {
 		if (!t) return [];
@@ -59,37 +65,35 @@
 
 {#if t}
 	<PanelHeader title={t.route || kindWord(t.kind)} subtitle={when(t.startedAt)} {onclose}>
-		<StatePill label={t.status ? String(t.status) : 'in flight'} lamp={t.status ? statusClassLamp(t.status) : 'warning'} />
+		<StatePill label={t.status ? String(t.status) : 'running'} lamp={t.status ? statusClassLamp(t.status) : 'warning'} />
 	</PanelHeader>
-	<PageTabs tabs={[{ id: 'summary', label: 'Summary' }, { id: 'routing', label: 'Routing' }, { id: 'tools', label: 'Tools' }, { id: 'bodies', label: 'Bodies' }]} active={tab} onchange={(x) => (tab = x)} />
+	<PageTabs tabs={tabsOf(t)} active={tabsOf(t).some((x) => x.id === tab) ? tab : 'summary'} onchange={(x) => (tab = x)} />
 	<div class="body">
-		{#if tab === 'summary'}
+		{#if !tabsOf(t).some((x) => x.id === tab) || tab === 'summary'}
 			<Stack gap={16}>
 				<Facts items={strip} size="section" />
 				{#if t.error}<p class="error-text failure">{t.error}</p>{/if}
 				<KeyRows
 					rows={[
 						{ label: 'request id', value: t.requestId || t.id, mono: true, copy: true },
-						{ label: 'route', value: t.route },
 						{ label: 'pool', value: t.poolId },
 						{ label: 'endpoint', value: t.endpoint, mono: true },
 						{ label: 'kind', value: kindWord(t.kind) },
 						{ label: 'client api', value: enumLabel(ApiFlavorSchema, t.clientApi) },
 						{ label: 'upstream api', value: enumLabel(ApiFlavorSchema, t.upstreamApi) },
 						{ label: 'stream', value: t.stream ? 'yes' : 'no' },
-						{ label: 'status', value: t.status ? String(t.status) : '' },
-						{ label: 'stop', value: t.stop },
+						{ label: 'finish reason', value: t.stop },
 						{ label: 'tokens', value: `${num(t.promptTokens)} in, ${num(t.completionTokens)} out` },
 						{ label: 'cached', value: t.cachedTokens ? num(t.cachedTokens) : '' },
 						{ label: 'queued behind', value: t.queuedBehind ? num(t.queuedBehind) : '' },
 						{ label: 'queue wait', value: t.queueWaitMs ? ms(t.queueWaitMs) : '' },
-						{ label: 'objective', value: t.objective ? `${t.objective}, ${t.objectiveAttained ? 'attained' : 'missed'}` : '' },
+						{ label: 'objective', value: t.objective ? `${t.objective}, ${t.objectiveAttained ? 'met' : 'missed'}` : '' },
 						{ label: 'priority', value: t.objective ? String(t.priority) : '' },
 						{ label: 'owner', value: t.owner },
 						{ label: 'remote', value: t.remote, mono: true },
 						{ label: 'node', value: live.nodes.get(t.nodeId)?.name ?? t.nodeId },
 						{ label: 'entry node', value: live.nodes.get(t.entryNode)?.name ?? t.entryNode },
-						{ label: 'seats', value: t.seats.map((s) => live.instances.get(s)?.name ?? s).join(', ') },
+						{ label: 'instances', value: t.seats.map((s) => live.instances.get(s)?.name ?? s).join(', ') },
 						{ label: 'relay', value: t.relay },
 						{ label: 'draft', value: t.draftOffered ? `${t.draftAccepted} of ${t.draftOffered} accepted` : '' }
 					]}
@@ -123,36 +127,29 @@
 						<List head={{ primary: 'Address', secondary: 'Reason' }}>
 							{#each t.fallbacks as f, i (i)}
 								<ListRow primary={f.address} primaryKind="address" secondary={f.reason} secondaryKind="message">
-									{#snippet badges()}{#if f.requestWritten}<StatePill label="written" lamp="warning" />{/if}{/snippet}
+									{#snippet badges()}{#if f.requestWritten}<StatePill label="sent" lamp="warning" />{/if}{/snippet}
 								</ListRow>
 							{/each}
 						</List>
 					</Section>
 				{/if}
-				{#if !t.profile && !t.score && !t.filters.length && !t.candidates.length && !t.fallbacks.length}
-					<Empty text="No scheduling" />
-				{/if}
 			</Stack>
 		{:else if tab === 'tools'}
-			{#if t.toolCalls.length === 0}
-				<Empty text="No tool calls" />
-			{:else}
-				<List head={{ primary: 'Tool', secondary: 'Server', facts: ['Took'] }}>
-					{#each t.toolCalls as c (c.id)}
-						<ListRow lamp={c.failed ? 'error' : 'success'} primary={c.name} secondary={c.server || 'client'} secondaryWidth="24ch" facts={[{ value: ms(c.tookMs) }]}>
-							{#snippet expand()}
-								<Code value={c.arguments} language="json" readonly rows={4} label="Arguments" info="What the model passed to the tool" />
-								<Code value={c.result} language="json" readonly rows={6} label="Result" info="What the tool returned" />
-							{/snippet}
-						</ListRow>
-					{/each}
-				</List>
-			{/if}
+			<List head={{ primary: 'Tool', secondary: 'Server', facts: ['Duration'] }}>
+				{#each t.toolCalls as c (c.id)}
+					<ListRow lamp={c.failed ? 'error' : 'success'} primary={c.name} secondary={c.server} secondaryWidth="24ch" facts={[{ value: ms(c.tookMs) }]}>
+						{#snippet expand()}
+							<Code value={c.arguments} language="json" readonly rows={4} label="Arguments" />
+							<Code value={c.result} language="json" readonly rows={6} label="Result" />
+						{/snippet}
+					</ListRow>
+				{/each}
+			</List>
 		{:else}
 			<Stack gap={16}>
-				<Code value={t.request} language="json" readonly rows={8} label="Request" info="The request as the client sent it" capped={capped(t.request, t.requestBytes)} />
-				{#if t.upstreamRequest}<Code value={t.upstreamRequest} language="json" readonly rows={8} label="Upstream request" info="The request as the gateway sent it on" capped={capped(t.upstreamRequest)} />{/if}
-				<Code value={t.response} language="json" readonly rows={8} label="Response" info="The response the client received" capped={capped(t.response, t.responseBytes)} />
+				<Code value={t.request} language="json" readonly rows={8} label="Request" capped={capped(t.request, t.requestBytes)} />
+				{#if t.upstreamRequest}<Code value={t.upstreamRequest} language="json" readonly rows={8} label="Request sent to the runtime" capped={capped(t.upstreamRequest)} />{/if}
+				<Code value={t.response} language="json" readonly rows={8} label="Response" capped={capped(t.response, t.responseBytes)} />
 			</Stack>
 		{/if}
 	</div>

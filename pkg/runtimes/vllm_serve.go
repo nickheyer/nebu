@@ -26,6 +26,7 @@ func (VLLM) Metrics() *v1.MetricNames {
 		MaxLoraLabel:         "max_lora",
 		RunningAdaptersLabel: "running_lora_adapters",
 		WaitingAdaptersLabel: "waiting_lora_adapters",
+		WorkCounter:          "vllm:prompt_tokens_total",
 		MetricsPath:          "/metrics",
 		HealthPath:           "/health",
 	}

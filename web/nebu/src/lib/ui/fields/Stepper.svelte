@@ -2,12 +2,10 @@
 	import type { Snippet } from 'svelte';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { NeoInput } from '#lib/neo/inputs/index.js';
-	import Tip from '#lib/ui/Tip.svelte';
-	import { OffIcon, type Off } from '#lib/ui/fields/types.js';
 	import MinusIcon from 'phosphor-svelte/lib/MinusIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 
-	// The box of every number field, digits only, the step buttons, the off toggle and any unit buttons in one group
+	// The box of every number field with its step buttons and any unit buttons in one group
 	let {
 		id,
 		raw = $bindable(''),
@@ -15,13 +13,11 @@
 		min,
 		max,
 		step = 1,
-		placeholder = '',
+		fallback,
 		disabled = false,
 		message,
 		error,
 		unit,
-		off,
-		isOff = false,
 		ariaLabel,
 		tail,
 		onchange
@@ -32,19 +28,16 @@
 		min?: number;
 		max?: number;
 		step?: number;
-		placeholder?: string;
+		fallback?: number;
 		disabled?: boolean;
 		message?: string;
 		error?: string;
 		unit?: string;
-		off?: Off;
-		isOff?: boolean;
 		ariaLabel?: string;
 		tail?: Snippet;
 		onchange?: () => void;
 	} = $props();
 
-	let ref = $state<HTMLInputElement>();
 	const decimals = $derived(Math.max(0, (String(step).split('.')[1] ?? '').length));
 	const negative = $derived(min === undefined || min < 0);
 	const text = $derived(raw === null || raw === undefined ? '' : String(raw));
@@ -99,23 +92,11 @@
 		onchange?.();
 	}
 
+	// Steps from the typed number, an empty box starting at the number it resolves to
 	function bump(up: boolean) {
 		if (disabled) return;
-		const base = parsed !== undefined && Number.isFinite(parsed) ? parsed : Number(placeholder) || min || 0;
+		const base = parsed !== undefined && Number.isFinite(parsed) ? parsed : (fallback ?? min ?? 0);
 		raw = String(clamp(base + (up ? step : -step)));
-		onchange?.();
-	}
-
-	// Empties the box, or fills an empty one with the placeholder number or the first step
-	function toggle() {
-		if (disabled) return;
-		if (isOff) {
-			const hinted = Number(placeholder);
-			raw = String(Number.isFinite(hinted) && hinted > 0 ? hinted : Math.max(min ?? 0, step) || 1);
-			ref?.focus();
-		} else {
-			raw = '';
-		}
 		onchange?.();
 	}
 </script>
@@ -125,23 +106,17 @@
 		{#if unit}<span class="unit">{unit}</span>{/if}
 		<NeoButton text aria-label="Decrease" title="Decrease" {disabled} onclick={() => bump(false)}>{#snippet icon()}<MinusIcon size={16} />{/snippet}</NeoButton>
 		<NeoButton text aria-label="Increase" title="Increase" {disabled} onclick={() => bump(true)}>{#snippet icon()}<PlusIcon size={16} />{/snippet}</NeoButton>
-		{#if off}
-			<Tip text={off.label} tag="span">
-				<NeoButton text toggle checked={isOff} color={isOff ? 'primary' : undefined} aria-label={off.label} aria-pressed={isOff} {disabled} onclick={toggle}>{#snippet icon()}<OffIcon size={16} />{/snippet}</NeoButton>
-			</Tip>
-		{/if}
 		{#if tail}<span class="tail">{@render tail()}</span>{/if}
 	</span>
 {/snippet}
 
 <NeoInput
-	bind:ref
 	bind:value={raw}
 	bind:focused
 	type="text"
 	inputmode={decimals > 0 ? 'decimal' : 'numeric'}
 	{id}
-	{placeholder}
+	placeholder={fallback === undefined ? '' : String(fallback)}
 	{disabled}
 	{message}
 	error={shownError}

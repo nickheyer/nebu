@@ -177,6 +177,8 @@ message Instance {
   repeated InstanceRank ranks = 33;
   // Context length, quantization, accelerator, modalities and throughput class the runtime reports for the launch
   RuntimeInventory inventory = 34;
+  // Whether the launch switches adapters, so they can be listed, loaded and unloaded
+  bool adapters = 35;
 }
 
 // One data parallel rank of an instance, a process of its own on a port of its own
@@ -235,7 +237,7 @@ message PreviewRunRequest {
   RunRequest run = 1;
 }
 
-// The rendered command with its secrets redacted and the parameters it resolved
+// The rendered command and the parameters it resolved
 message PreviewRunResponse {
   repeated string command = 1;
   map<string, string> params = 2;

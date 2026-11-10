@@ -4,14 +4,8 @@
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
 	import type { Option } from '#lib/ui/fields/types.js';
 
-	let {
-		value = $bindable([]),
-		options,
-		label,
-		info,
-		disabled = false,
-		empty = 'None'
-	}: { value?: V[]; options: Option<V>[]; label?: string; info?: string; disabled?: boolean; empty?: string } = $props();
+	// One checkbox per option, nothing at all while there are no options
+	let { value = $bindable([]), options, label, info, disabled = false }: { value?: V[]; options: Option<V>[]; label?: string; info?: string; disabled?: boolean } = $props();
 
 	function toggle(v: V, on: boolean) {
 		const set = new Set(value);
@@ -21,11 +15,9 @@
 	}
 </script>
 
-<div class="field">
-	<FieldLabel {label} {info} />
-	{#if options.length === 0}
-		<span class="secondary">{empty}</span>
-	{:else}
+{#if options.length}
+	<div class="field">
+		<FieldLabel {label} {info} />
 		<div class="list">
 			{#each options as o, i (String(o.value))}
 				{#snippet line()}
@@ -47,8 +39,8 @@
 				</Tip>
 			{/each}
 		</div>
-	{/if}
-</div>
+	</div>
+{/if}
 
 <style>
 	.field {

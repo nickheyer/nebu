@@ -428,7 +428,7 @@ func testGateway(t *testing.T, ctx context.Context, store *db.DB, bus *events.Bu
 		t.Fatal(err)
 	}
 	gw, err := gateway.New(gateway.Deps{
-		Pools: mgr, Resolver: mgr, Manager: mgr, Store: mgr.Store(), DB: store, Events: bus, Guard: auth.NewGuard("", nil, nil),
+		Pools: mgr, Resolver: mgr, Manager: mgr, Store: mgr.Store(), Sampler: mgr.Sampler(), DB: store, Events: bus, Guard: auth.NewGuard("", nil, nil),
 		Tools: tools.New(log, bus), Runtimes: fakeRuntimes{"llamacpp": v1.ApiFlavor_API_FLAVOR_OPENAI, "sdcpp": v1.ApiFlavor_API_FLAVOR_SDCPP},
 		Instances: fakeInstances{"inst-sd": {"img_gen", "vid_gen"}}, Metrics: mreg, Telemetry: tp, Health: health.NewRegistry(), Logger: log,
 		Config: gateway.Config{

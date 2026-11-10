@@ -61,6 +61,8 @@ message MetricNames {
   bool static_cache = 26;
   // Label naming the scheduler replica a series reports, series sharing its value counting once at their largest
   string replica_label = 27;
+  // Counter that only grows as the runtime serves requests, read to see work done between two samples
+  string work_counter = 28;
 }
 
 // An externally managed server joined to a pool by address

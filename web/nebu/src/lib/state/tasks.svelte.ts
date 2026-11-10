@@ -4,7 +4,7 @@ import { notify, toast } from '#lib/shell/notify.svelte.js';
 import { percent } from '#lib/format.js';
 import { TaskState, type Task } from '#lib/proto/nebu/v1/task_pb.js';
 
-// Raises a toast following the task until it ends
+// Raises a toast following the task until it ends or the toast is closed
 export function followTask(task: Task | undefined, title?: string): void {
 	if (!task) return;
 	const item = notify({
@@ -25,10 +25,17 @@ export function followTask(task: Task | undefined, title?: string): void {
 			}
 		}
 	});
+	const watch = new AbortController();
+	let closed = false;
+	void item.promise.then(() => {
+		closed = true;
+		watch.abort();
+	});
 	void (async () => {
 		try {
-			for await (const res of rpc.tasks.watchTask({ id: task.id })) {
+			for await (const res of rpc.tasks.watchTask({ id: task.id }, { signal: watch.signal })) {
 				const t = res.task;
+				if (closed) return;
 				if (!t) continue;
 				const done = t.state === TaskState.SUCCEEDED || t.state === TaskState.FAILED || t.state === TaskState.CANCELED;
 				item.update({
@@ -44,7 +51,7 @@ export function followTask(task: Task | undefined, title?: string): void {
 				if (done) return;
 			}
 		} catch (err) {
-			if (!isCancel(err)) toast.error('Task watch failed', reason(err));
+			if (!closed && !isCancel(err)) toast.error('Task watch failed', reason(err));
 		}
 	})();
 }

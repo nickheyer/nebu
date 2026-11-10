@@ -2,7 +2,6 @@ import type { Component } from 'svelte';
 import type { IconComponentProps } from 'phosphor-svelte';
 import ChatsCircleIcon from 'phosphor-svelte/lib/ChatsCircleIcon';
 import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
-import GaugeIcon from 'phosphor-svelte/lib/GaugeIcon';
 import GearIcon from 'phosphor-svelte/lib/GearIcon';
 import HardDrivesIcon from 'phosphor-svelte/lib/HardDrivesIcon';
 import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
@@ -25,14 +24,13 @@ const operators: Role[] = ['operator', 'admin'];
 const everyone: Role[] = ['inference', 'operator', 'admin'];
 
 export const pages: NavPage[] = [
-	{ id: 'overview', path: '/', label: 'Overview', icon: GaugeIcon, roles: operators, match: ['/'], bottom: true },
+	{ id: 'host', path: '/', label: 'Host', icon: HardDrivesIcon, roles: operators, match: ['/', '/logs', '/tasks'], bottom: true },
 	{ id: 'chat', path: '/chat', label: 'Chat', icon: ChatsCircleIcon, roles: everyone, match: ['/chat'], bottom: true },
 	{ id: 'models', path: '/models', label: 'Models', icon: CubeIcon, roles: operators, match: ['/models', '/discover'] },
 	{ id: 'serve', path: '/serve', label: 'Serve', icon: PlayIcon, roles: operators, match: ['/serve', '/runtimes'], bottom: true },
 	{ id: 'gateway', path: '/traffic', label: 'Gateway', icon: TreeStructureIcon, roles: operators, match: ['/gateway', '/traffic'], bottom: true },
 	{ id: 'mesh', path: '/mesh', label: 'Mesh', icon: ShareNetworkIcon, roles: operators, match: ['/mesh'] },
 	{ id: 'bots', path: '/bots', label: 'Bots', icon: RobotIcon, roles: operators, match: ['/bots'] },
-	{ id: 'host', path: '/host', label: 'Host', icon: HardDrivesIcon, roles: operators, match: ['/host', '/tasks'] },
 	{ id: 'settings', path: '/settings', label: 'Settings', icon: GearIcon, roles: everyone, match: ['/settings'] }
 ];
 

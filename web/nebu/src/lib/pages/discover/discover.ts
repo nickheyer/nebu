@@ -14,16 +14,15 @@ export function compact(n: bigint | number): string {
 // The last search the Discover page showed, so a repository page links back to it
 export const lastSearch = { href: '/discover' };
 
-export type WeightGroup = { name: string; formatId: string; bytes: number; files: number };
+export type WeightGroup = { name: string; formatId: string; bytes: number };
 
 // Weight groups of a resolved repository in the daemon's order, format then name
 export function weightGroups(model: Model | undefined): WeightGroup[] {
 	const byName = new Map<string, WeightGroup>();
 	for (const a of model?.artifacts ?? []) {
 		if (a.role !== ArtifactRole.WEIGHTS) continue;
-		const g = byName.get(a.group) ?? { name: a.group, formatId: a.formatId, bytes: 0, files: 0 };
+		const g = byName.get(a.group) ?? { name: a.group, formatId: a.formatId, bytes: 0 };
 		g.bytes += Number(a.sizeBytes);
-		g.files += 1;
 		byName.set(a.group, g);
 	}
 	return [...byName.values()].sort((x, y) => x.formatId.localeCompare(y.formatId) || x.name.localeCompare(y.name));

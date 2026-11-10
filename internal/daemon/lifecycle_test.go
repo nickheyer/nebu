@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/instances"
 	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/pkg/config"
 	"github.com/nickheyer/nebu/pkg/datalayer"
@@ -179,7 +180,7 @@ func TestGatewayListenerBindsAfterReadiness(t *testing.T) {
 	})
 }
 
-// The daemon reads an instance's scraped running and queued requests from the pool store, ignoring samples past the staleness
+// The daemon samples an instance's runtime for when it last showed work, a runtime that stops answering reading as unanswered
 func TestScrapedLoadWiredToInstances(t *testing.T) {
 	var running, queued atomic.Int32
 	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -209,20 +210,24 @@ func TestScrapedLoadWiredToInstances(t *testing.T) {
 	}
 	running.Store(2)
 	queued.Store(3)
-	eventually(t, "the scraped load read through the instances manager", func() bool {
-		r, q, scraped := s.d.Instances.Load("ext")
-		return scraped && r == 2 && q == 3
+	began := time.Now()
+	eventually(t, "the sampled work read through the instances manager", func() bool {
+		at, err := s.d.Instances.Load(context.Background(), "ext")
+		return err == nil && !at.Before(began)
 	})
 	running.Store(0)
 	queued.Store(0)
-	eventually(t, "an idle scrape", func() bool {
-		r, q, scraped := s.d.Instances.Load("ext")
-		return scraped && r == 0 && q == 0
+	var last time.Time
+	eventually(t, "two samples in a row holding no work", func() bool {
+		at, err := s.d.Instances.Load(context.Background(), "ext")
+		settled := err == nil && !at.IsZero() && at.Equal(last)
+		last = at
+		return settled
 	})
 	metrics.Close()
 	eventually(t, "the last sample going stale", func() bool {
-		_, _, scraped := s.d.Instances.Load("ext")
-		return !scraped
+		_, err := s.d.Instances.Load(context.Background(), "ext")
+		return errors.Is(err, instances.ErrUnanswered)
 	})
 }
 

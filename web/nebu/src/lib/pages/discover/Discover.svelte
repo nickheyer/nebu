@@ -140,10 +140,14 @@
 		filters = { ...filters, [f.id]: values };
 	}
 
-	function clearFilters() {
-		query = '';
+	function clearFacets() {
 		filters = {};
 		author = '';
+	}
+
+	function clearFilters() {
+		query = '';
+		clearFacets();
 	}
 
 	function hitTip(h: SearchHit): string {
@@ -172,10 +176,8 @@
 	{#each facets as f (f.id)}
 		{#if f.freeform}
 			<Chips bind:value={() => filters[f.id] ?? [], (v) => setFacet(f, v)} label={f.label} compact />
-		{:else if f.multi}
-			<MultiSelect bind:value={() => filters[f.id] ?? [], (v) => setFacet(f, v)} options={f.values.map((v) => ({ value: v.id, label: v.label, description: v.group || undefined }))} search={f.values.length > 8} label={f.label} compact />
 		{:else}
-			<Select value={filters[f.id]?.[0]} options={f.values.map((v) => ({ value: v.id, label: v.label, description: v.group || undefined }))} search={f.values.length > 8} label={f.label} compact clearable onchange={(v) => setFacet(f, v ? [v] : [])} />
+			<MultiSelect bind:value={() => filters[f.id] ?? [], (v) => setFacet(f, v)} options={f.values.map((v) => ({ value: v.id, label: v.label, description: v.group || undefined }))} search={f.values.length > 8} label={f.label} compact />
 		{/if}
 	{/each}
 	{#if !authorFacet}<Text value={author} label="Author" compact max={64} onchange={(v) => (author = v.trim())} />{/if}
@@ -195,18 +197,21 @@
 		{/if}
 		<NeoButton elevation={2} aria-expanded={filtersOpen} onclick={() => (filtersOpen = !filtersOpen)}>
 			{#snippet icon()}<FunnelIcon size={20} />{/snippet}
-			Filters{#if activeFilters}&nbsp;{activeFilters}{/if}
+			Filters
 		</NeoButton>
 	</Toolbar>
 {/snippet}
 
 {#snippet settingsAction()}<RowAction label="Settings" href="/settings/sources" />{/snippet}
 
-<PageHeader tabs={modelsTabs} active="discover" info="Search the model sources this host knows and open any repository to pull it" />
+<PageHeader tabs={modelsTabs} active="discover" />
 
 <Card flush tools={toolbar}>
 	{#if filtersOpen}
 		<div class="filters">{@render facetFields()}</div>
+		{#if activeFilters}
+			<div class="clear"><NeoButton text onclick={clearFacets}>Clear active</NeoButton></div>
+		{/if}
 	{/if}
 	{#if warning.length}
 		<ListRow lamp="warning" primary={warning[0] ?? ''} primaryKind="message" primaryTip={warning.join('\n')} action={settingsAction} />
@@ -259,6 +264,11 @@
 		grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
 		gap: var(--nebu-space-3) var(--nebu-space-4);
 		align-items: end;
-		padding: 0 var(--nebu-card-pad) var(--nebu-space-4);
+		padding: 0 var(--nebu-card-pad) var(--nebu-space-3);
+	}
+	.clear {
+		display: flex;
+		justify-content: flex-end;
+		padding: 0 var(--nebu-card-pad) var(--nebu-space-2);
 	}
 </style>

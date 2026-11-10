@@ -8,14 +8,13 @@
 	import Slider from '#lib/ui/fields/Slider.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
-	import type { Off } from '#lib/ui/fields/types.js';
 
-	let { param, values = $bindable({}), state }: { param: Param; values?: Record<string, string>; state?: ParamState } = $props();
+	// One runtime parameter as the control its type asks for, empty ones showing the value they resolve to
+	let { param, values = $bindable({}), state, resolved }: { param: Param; values?: Record<string, string>; state?: ParamState; resolved?: string } = $props();
 
 	const p = $derived(param);
 	const label = $derived(p.label || p.name);
-	// The description, then the rule the planner follows, as the label's tooltip
-	const info = $derived([p.description, p.solved && p.rule ? `Planner's pick, ${p.rule}` : ''].filter(Boolean).join('. ') || undefined);
+	const info = $derived(p.description || undefined);
 	const min = $derived(state?.min ?? p.min);
 	const max = $derived(state?.max ?? p.max);
 	const step = $derived(state?.step || p.step || (p.type === ParamType.FLOAT ? 0.01 : 1));
@@ -23,12 +22,9 @@
 	// A zero max leaves a number unbounded, so only a positive max draws a slider
 	const bounded = $derived(numeric && max > 0 && max > min);
 	const current = $derived(values[p.name] ?? '');
-	// A negative default is the runtime's own automatic choice, read as auto
-	const auto = $derived(numeric && p.default !== '' && Number(p.default) < 0);
-	const placeholder = $derived(p.solved ? "Planner's pick" : auto ? 'Auto' : p.default || undefined);
-	const fallback = $derived(p.solved || auto || !p.default ? undefined : Number(p.default));
-	// The toggle handing a solved param back to the planner, or an automatic one back to the runtime
-	const planner = $derived<Off | undefined>(p.solved ? { label: "Planner's pick" } : auto ? { label: 'Auto' } : undefined);
+	// The planner's value when it has one, else the default, a negative default standing for no value
+	const standing = $derived(resolved || (numeric && Number(p.default) < 0 ? '' : p.default) || undefined);
+	const fallback = $derived(standing !== undefined && Number.isFinite(Number(standing)) ? Number(standing) : undefined);
 
 	// Stored parts whose architecture the param picks, any stored model when it picks a model
 	const picks = $derived.by(() => {
@@ -46,19 +42,19 @@
 
 <div class="param">
 	{#if p.choices.length}
-		<Select value={current || undefined} options={p.choices.map((c) => ({ value: c, label: c }))} {label} {info} {placeholder} clearable onchange={set} />
+		<Select value={current || undefined} options={p.choices.map((c) => ({ value: c, label: c }))} {label} {info} placeholder={standing} clearable onchange={set} />
 	{:else if p.picks}
-		<Select value={current || undefined} options={picks} {label} {info} {placeholder} clearable search onchange={set} />
+		<Select value={current || undefined} options={picks} {label} {info} placeholder={picks.find((o) => o.value === standing)?.label} clearable search onchange={set} />
 	{:else if p.type === ParamType.BOOL}
-		<Switch checked={(current || p.default) === 'true'} {label} {info} top onchange={(on) => set(on ? 'true' : 'false')} />
+		<Switch checked={(current || standing) === 'true'} {label} {info} top onchange={(on) => set(on ? 'true' : 'false')} />
 	{:else if p.type === ParamType.PATH}
-		<Path value={current} {label} {info} filter={p.directory ? 'directories' : 'any'} {placeholder} onchange={set} />
+		<Path value={current} {label} {info} filter={p.directory ? 'directories' : 'any'} placeholder={standing} onchange={set} />
 	{:else if bounded}
-		<Slider value={Number(current) || fallback || Math.max(min, 0)} min={Math.max(min, 0)} {max} {step} unit={p.unit || undefined} {label} {info} blank={current === ''} {fallback} {placeholder} off={planner} onchange={set} onclear={() => set('')} />
-	{:else if p.type === ParamType.INT || p.type === ParamType.FLOAT}
-		<NumberField value={current === '' ? 0 : Number(current)} min={Math.max(min, 0) || undefined} {step} unit={p.unit || undefined} {label} {info} emptyZero={current === ''} {placeholder} off={planner} onchange={set} />
+		<Slider value={current === '' ? undefined : Number(current)} min={Math.max(min, 0)} {max} {step} unit={p.unit || undefined} {label} {info} {fallback} optional onchange={set} />
+	{:else if numeric}
+		<NumberField value={current === '' ? undefined : Number(current)} min={Math.max(min, 0) || undefined} {step} unit={p.unit || undefined} {label} {info} {fallback} optional onchange={set} onclear={() => set(undefined)} />
 	{:else}
-		<Text value={current} {label} {info} {placeholder} onchange={set} />
+		<Text value={current} {label} {info} placeholder={standing} onchange={set} />
 	{/if}
 </div>
 

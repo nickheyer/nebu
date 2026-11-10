@@ -60,13 +60,6 @@
 	const objective = $derived(active === 'objectives' && !creating ? live.objectives.get(id) : undefined);
 	const config = $derived(active === 'schedulers' && !creating ? live.schedulerConfigs.get(id) : undefined);
 	const adds: Record<Exclude<GatewayTab, 'imports'>, string> = { routes: 'Route', pools: 'Pool', objectives: 'Objective', schedulers: 'Scheduler' };
-	const infos: Record<GatewayTab, string> = {
-		routes: 'Names clients ask for and the pools each one forwards to',
-		pools: 'Sets of endpoints serving one model, scored and picked per request',
-		objectives: 'Latency targets and shedding order a route or request header names',
-		schedulers: 'Plugin chains that score a pool\'s endpoints for each request',
-		imports: 'Pools other mesh members export here'
-	};
 
 	function close() {
 		void goto(`/gateway/${active}`);
@@ -132,7 +125,6 @@
 		primaryTip={routeTip(r)}
 		secondary={routeTarget(live, r)}
 		secondaryWidth="24ch"
-		facts={[{ value: state === RouteState.READY ? num(r.status?.inFlight) : '' }]}
 		selected={r.name === id}
 		onclick={() => goto(hrefOf('routes', r.name))}
 		menu={routeMenu(r)}
@@ -229,7 +221,7 @@
 			{:else if routes.length === 0}
 				<Empty icon={SignpostIcon} text="No routes" action="Launch" href="/serve/launch" />
 			{:else}
-				<List head={{ primary: 'Route', secondary: 'Target', facts: ['In flight'] }}>
+				<List head={{ primary: 'Route', secondary: 'Target' }}>
 					{#each routes as r (r.name)}{@render routeRow(r)}{/each}
 				</List>
 			{/if}
@@ -286,7 +278,7 @@
 	<GatewayStrip status={group.status} />
 {/snippet}
 
-<PageHeader tabs={gatewayHeaderTabs} {active} info={infos[active]} />
+<PageHeader tabs={gatewayHeaderTabs} {active} />
 
 {#if active === 'imports'}
 	{@render strip()}

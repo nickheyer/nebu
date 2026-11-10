@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -101,8 +102,16 @@ func setup(t *testing.T, runtime string, st *stub, labels map[string]string) dat
 	return store
 }
 
+// One pace for every demand, so a test's endpoint is scraped on a fixed interval
+func every(d time.Duration) Pace { return Pace{Deciding: d, Working: d, Idle: d} }
+
 func start(t *testing.T, store datalayer.Store, obs Observer) *Source {
-	src := New(store, StoreResolver(store), Options{Interval: 10 * time.Millisecond, Observer: obs})
+	return startAt(t, store, every(10*time.Millisecond), obs)
+}
+
+// Starts a source tracking the endpoint e at a pace, stopped with the test
+func startAt(t *testing.T, store datalayer.Store, pace Pace, obs Observer) *Source {
+	src := New(store, StoreResolver(store), Options{Pace: pace, Observer: obs})
 	if err := src.Subscribe(Collector{}); err != nil {
 		t.Fatal(err)
 	}
@@ -313,8 +322,8 @@ func TestCappedReader(t *testing.T) {
 func TestStartTwice(t *testing.T) {
 	store := datalayer.NewStore()
 	src := New(store, StoreResolver(store), Options{})
-	if src.interval != DefaultInterval {
-		t.Fatalf("default interval = %v", src.interval)
+	if src.timeout != DefaultWorking {
+		t.Fatalf("default scrape timeout = %v", src.timeout)
 	}
 	if err := src.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -411,7 +420,7 @@ func TestSGLangServerScrape(t *testing.T) {
 			store.PutPool(datalayer.Pool{ID: "p", Runtime: RuntimeSGLang, Metrics: caps(t, RuntimeSGLang)})
 			store.UpsertEndpoint(datalayer.EndpointSpec{ID: "e", Pool: "p", Address: addr, Ready: true})
 			rec := &recorder{}
-			src := New(store, StoreResolver(store), Options{Interval: 250 * time.Millisecond, Observer: rec})
+			src := New(store, StoreResolver(store), Options{Pace: every(250 * time.Millisecond), Observer: rec})
 			if err := src.Subscribe(Collector{}); err != nil {
 				t.Fatal(err)
 			}
@@ -488,5 +497,118 @@ func TestScrapeFailureRecorded(t *testing.T) {
 	}
 	if scrapeFailureOf(store) != nil {
 		t.Fatal("untracking left the failure")
+	}
+}
+
+// A llama.cpp metrics document with a decode count and a count of running requests
+func llamaBody(decodes, running int) string {
+	return fmt.Sprintf("# TYPE llamacpp:n_decode_total counter\nllamacpp:n_decode_total %d\n# TYPE llamacpp:requests_processing gauge\nllamacpp:requests_processing %d\n# TYPE llamacpp:requests_deferred gauge\nllamacpp:requests_deferred 0\n", decodes, running)
+}
+
+// Fails when the stub's metrics are read during the window
+func unscraped(t *testing.T, st *stub, window time.Duration, what string) {
+	t.Helper()
+	before := st.hits.Load()
+	time.Sleep(window)
+	if got := st.hits.Load() - before; got != 0 {
+		t.Fatalf("%s: scraped %d times in %s", what, got, window)
+	}
+}
+
+// An idle endpoint is scraped once, then only while a decision, a request in flight or work it shows asks for it
+func TestScrapeFollowsDemand(t *testing.T) {
+	pace := Pace{Deciding: 10 * time.Millisecond, Working: 80 * time.Millisecond, Idle: time.Hour}
+	st := newStub(t, llamaBody(0, 0), []Slot{{NCtx: 4096}})
+	store := setup(t, RuntimeLlamaCpp, st, map[string]string{datalayer.LabelKVCapacity: "4096"})
+	src := startAt(t, store, pace, nil)
+	ids := []datalayer.EndpointID{"e"}
+	eventually(t, "the first sample", func() bool { return metricsOf(store) != nil })
+	if st.hits.Load() != 1 || !metricsOf(store).ActiveAt.IsZero() {
+		t.Fatalf("%d scrapes of a new idle endpoint, last work %v", st.hits.Load(), metricsOf(store).ActiveAt)
+	}
+	unscraped(t, st, 3*pace.Working, "an endpoint nothing asks for")
+
+	release := src.Deciding(context.Background(), ids)
+	if st.hits.Load() != 2 {
+		t.Fatalf("a decision began on %d scrapes, want the one it waited for", st.hits.Load())
+	}
+	eventually(t, "scrapes at the deciding pace", func() bool { return st.hits.Load() >= 6 })
+	release()
+	time.Sleep(3 * pace.Working)
+	unscraped(t, st, 3*pace.Working, "an endpoint whose decision ended")
+
+	serving := src.Serving("e")
+	held := st.hits.Load()
+	eventually(t, "scrapes at the working pace", func() bool { return st.hits.Load() >= held+3 })
+	serving()
+	time.Sleep(3 * pace.Working)
+	unscraped(t, st, 3*pace.Working, "an endpoint whose request ended")
+
+	st.body.Store(llamaBody(8, 1))
+	began := time.Now()
+	src.Sample(context.Background(), ids)
+	if m := metricsOf(store); m.RunningRequests != 1 || m.Work != 8 || m.ActiveAt.Before(began) {
+		t.Fatalf("a sample of a running runtime stored %+v", m)
+	}
+	held = st.hits.Load()
+	eventually(t, "scrapes while the runtime shows work", func() bool { return st.hits.Load() >= held+3 })
+	st.body.Store(llamaBody(16, 0))
+	eventually(t, "the sample that sees the work end", func() bool { return metricsOf(store).RunningRequests == 0 })
+	ended := metricsOf(store)
+	if ended.Work != 16 || !ended.ActiveAt.Equal(ended.UpdatedAt) {
+		t.Fatalf("the sample after the work stored %+v", ended)
+	}
+	unscraped(t, st, 3*pace.Working, "an endpoint whose work ended")
+	if !metricsOf(store).ActiveAt.Equal(ended.ActiveAt) {
+		t.Fatal("an idle endpoint moved its last work time")
+	}
+}
+
+// A failing endpoint is scraped at the working pace until the failure is set, then only when asked
+func TestFailingScrapeRetriesToTheThresholdThenWaits(t *testing.T) {
+	pace := Pace{Deciding: 10 * time.Millisecond, Working: 30 * time.Millisecond, Idle: time.Hour}
+	st := newStub(t, llamaBody(0, 0), []Slot{{NCtx: 4096}})
+	st.status.Store(http.StatusInternalServerError)
+	store := setup(t, RuntimeLlamaCpp, st, map[string]string{datalayer.LabelKVCapacity: "4096"})
+	rec := &recorder{}
+	src := startAt(t, store, pace, rec)
+	eventually(t, "the failure set", func() bool { return scrapeFailureOf(store) != nil })
+	if fails, _ := rec.failuresAfter(0); fails != FailureThreshold {
+		t.Fatalf("the failure was set after %d scrapes, want %d", fails, FailureThreshold)
+	}
+	unscraped(t, st, 5*pace.Working, "an endpoint whose failure is set")
+	st.status.Store(http.StatusOK)
+	src.Sample(context.Background(), []datalayer.EndpointID{"e"})
+	if scrapeFailureOf(store) != nil || metricsOf(store) == nil {
+		t.Fatal("an asked sample of the recovered endpoint left the failure or stored nothing")
+	}
+}
+
+// An update of the tracked set samples again the endpoint whose readiness changed and leaves the others alone
+func TestUpdateSamplesChangedEndpointsOnly(t *testing.T) {
+	pace := Pace{Deciding: 10 * time.Millisecond, Working: 40 * time.Millisecond, Idle: time.Hour}
+	st, other := newStub(t, llamaBody(0, 0), []Slot{{NCtx: 4096}}), newStub(t, llamaBody(0, 0), []Slot{{NCtx: 4096}})
+	labels := map[string]string{datalayer.LabelKVCapacity: "4096"}
+	store := setup(t, RuntimeLlamaCpp, st, labels)
+	store.UpsertEndpoint(datalayer.EndpointSpec{ID: "f", Pool: "p", Address: other.addr(t), Labels: labels, Ready: true})
+	src := startAt(t, store, pace, nil)
+	ids := []datalayer.EndpointID{"e", "f"}
+	if err := src.UpdateEndpoints(ids); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the first sample of both", func() bool { return st.hits.Load() == 1 && other.hits.Load() == 1 })
+	time.Sleep(2 * pace.Deciding)
+	if err := src.UpdateEndpoints(ids); err != nil {
+		t.Fatal(err)
+	}
+	unscraped(t, st, 3*pace.Working, "an endpoint an update left unchanged")
+	store.UpsertEndpoint(datalayer.EndpointSpec{ID: "e", Pool: "p", Address: st.addr(t), Labels: labels, Ready: false})
+	if err := src.UpdateEndpoints(ids); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "a sample of the endpoint whose readiness changed", func() bool { return st.hits.Load() == 2 })
+	unscraped(t, st, 3*pace.Working, "the changed endpoint after its sample")
+	if other.hits.Load() != 1 {
+		t.Fatalf("the unchanged endpoint was scraped %d times", other.hits.Load())
 	}
 }

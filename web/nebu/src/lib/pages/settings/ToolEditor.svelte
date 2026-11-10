@@ -76,51 +76,51 @@
 
 <PanelHeader title={draft ? draft.name : 'New tool server'} {onclose} />
 <Stack gap={24}>
-	<FormSection title="Server" info="A fetch server reaching local addresses can read this host's own services">
+	<FormSection title="Server">
 		<FieldRow>
-			<Select bind:value={s.kind} options={kinds} label="Kind" info="Search, page fetch, or an MCP server over stdio or HTTP" disabled={editing} onchange={pickKind} />
-			<Text bind:value={s.name} label="Name" info="How routes and personas attach the server, MCP tools offered as name__tool" required />
+			<Select bind:value={s.kind} options={kinds} label="Kind" disabled={editing} onchange={pickKind} />
+			<Text bind:value={s.name} label="Name" required />
 		</FieldRow>
 		{#key generation}
 			<FieldRow>
-				<Switch bind:checked={s.enabled} label="Enabled" info="Whether the daemon starts the server" />
+				<Switch bind:checked={s.enabled} label="Enabled" />
 				{#if s.kind === ToolServerKind.FETCH}
-					<Switch bind:checked={s.local} label="Local addresses" info="Lets fetches reach this host's own addresses, loopback and link local included" />
+					<Switch bind:checked={s.local} label="Local addresses" info="Lets fetches reach this host and its network" />
 				{/if}
 			</FieldRow>
 		{/key}
 	</FormSection>
 	{#key generation}
 		{#if s.kind === ToolServerKind.SEARCH}
-			<FormSection title="Search" info="SearXNG answers only with its JSON format enabled">
+			<FormSection title="Search">
 				<FieldRow>
-					<Segmented bind:value={s.provider} options={[{ value: 'searxng', label: 'SearXNG' }, { value: 'brave', label: 'Brave' }]} label="Provider" info="SearXNG or Brave Search" />
+					<Segmented bind:value={s.provider} options={[{ value: 'searxng', label: 'SearXNG' }, { value: 'brave', label: 'Brave' }]} label="Provider" />
 					{#if s.provider === 'brave'}
-						<Secret bind:value={s.braveKey} label="Brave key" info="Brave Search API subscription token" set={s.secretsSet} />
+						<Secret bind:value={s.braveKey} label="Brave key" />
 					{:else}
-						<Text bind:value={s.searxngUrl} label="SearXNG URL" info="Base URL of a SearXNG instance with the json format enabled" type="url" />
+						<Text bind:value={s.searxngUrl} label="SearXNG URL" info="Needs its JSON format turned on" type="url" />
 					{/if}
 				</FieldRow>
 			</FormSection>
 		{:else if s.kind === ToolServerKind.STDIO}
-			<FormSection title="Command" info="The process the daemon starts and speaks MCP with over its pipes">
+			<FormSection title="Command">
 				<FieldRow>
-					<Text bind:value={s.command} label="Command" info="The executable that speaks MCP over stdio" mono required />
-					<Chips bind:value={s.args} label="Arguments" info="Words after the command" />
+					<Text bind:value={s.command} label="Command" mono required />
+					<Chips bind:value={s.args} label="Arguments" />
 				</FieldRow>
-				<KeyValues bind:value={s.env} label="Environment" info="Variables the command runs with" secret secretsSet={s.secretsSet} />
+				<KeyValues bind:value={s.env} label="Environment" secret />
 			</FormSection>
 		{:else if s.kind === ToolServerKind.HTTP}
-			<FormSection title="Endpoint" info="The HTTP address the daemon speaks MCP with">
+			<FormSection title="Endpoint">
 				<FieldRow>
-					<Text bind:value={s.url} label="URL" info="The MCP endpoint" type="url" required />
+					<Text bind:value={s.url} label="URL" type="url" required />
 				</FieldRow>
-				<KeyValues bind:value={s.headers} label="Headers" info="Sent with every request to the endpoint" secret secretsSet={s.secretsSet} />
+				<KeyValues bind:value={s.headers} label="Headers" secret />
 			</FormSection>
 		{/if}
-		<FormSection title="Tools" info="Which of the server's tools reach chats and routes">
+		<FormSection title="Tools">
 			<FieldRow>
-				<Chips bind:value={s.allowedTools} label="Allowed tools" info="Tools the server may offer, every tool when empty" />
+				<Chips bind:value={s.allowedTools} label="Allowed tools" info="Every tool when empty" />
 			</FieldRow>
 		</FormSection>
 	{/key}

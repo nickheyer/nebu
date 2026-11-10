@@ -183,12 +183,26 @@ func (g *Gateway) ScheduleHandler() http.Handler {
 	return remote.NewHandler(&poolScheduler{g: g}, g.store)
 }
 
-// Schedules with the configuration the candidates' pool names, the generic default when it names none
+// Schedules freshly sampled candidates with the configuration their pool names, the generic default when it names none
 type poolScheduler struct{ g *Gateway }
 
 func (p *poolScheduler) Schedule(ctx context.Context, req *framework.Request, candidates []datalayer.Endpoint) (*framework.Result, error) {
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("%w: no candidate", framework.ErrNoEndpoints)
+	}
+	ids := make([]datalayer.EndpointID, len(candidates))
+	for i, ep := range candidates {
+		ids[i] = ep.ID()
+	}
+	defer p.g.sampler.Deciding(ctx, ids)()
+	sampled := make([]datalayer.Endpoint, 0, len(candidates))
+	for _, id := range ids {
+		if ep, ok := p.g.store.Endpoint(id); ok {
+			sampled = append(sampled, ep)
+		}
+	}
+	if candidates = sampled; len(candidates) == 0 {
+		return nil, fmt.Errorf("%w: every candidate left while it was sampled", framework.ErrNoEndpoints)
 	}
 	name := ""
 	if pool, ok := p.g.store.Pool(candidates[0].Pool()); ok {

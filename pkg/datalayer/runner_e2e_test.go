@@ -67,7 +67,7 @@ func TestRunnerDrivesRealSources(t *testing.T) {
 	caps, _ := scrape.Capabilities(scrape.RuntimeVLLM)
 	store.PutPool(datalayer.Pool{ID: "p", Model: "m", Runtime: scrape.RuntimeVLLM, Metrics: caps})
 
-	metrics := scrape.New(store, scrape.StoreResolver(store), scrape.Options{Interval: interval})
+	metrics := scrape.New(store, scrape.StoreResolver(store), scrape.Options{Pace: scrape.Pace{Deciding: interval, Working: interval, Idle: interval}})
 	health := probe.New(store, probe.StoreResolver(store), probe.Options{Interval: interval})
 	models := catalog.New(store, catalog.StoreResolver(store), catalog.Options{Interval: interval})
 	sources := datalayer.Sources{}

@@ -11,7 +11,7 @@
 	import Command from '#lib/shell/Command.svelte';
 	import { chrome, type HeaderTab } from '#lib/shell/chrome.svelte.js';
 	import { pageOf } from '#lib/shell/nav.js';
-	import InfoTip from '#lib/ui/InfoTip.svelte';
+	import OriginLink from '#lib/ui/OriginLink.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
 	import CaretLeftIcon from 'phosphor-svelte/lib/CaretLeftIcon';
 	import ListChecksIcon from 'phosphor-svelte/lib/ListChecksIcon';
@@ -48,9 +48,12 @@
 				<span class="slash" aria-hidden="true">/</span>
 			{/if}
 			{#key title}
-				<h1 class="title ellipsis">{title}</h1>
+				{#if head?.origin}
+					<OriginLink href={head.origin.href} from={head.origin.label} external><h1 class="title">{title}</h1></OriginLink>
+				{:else}
+					<h1 class="title ellipsis">{title}</h1>
+				{/if}
 			{/key}
-			{#if head?.info}<span class="info"><InfoTip text={head.info} /></span>{/if}
 			<span class="fill"></span>
 			<Command />
 			<div class="global">
@@ -125,11 +128,6 @@
 		font-size: var(--nebu-text-title);
 		font-weight: 500;
 		animation: nebu-reveal 240ms var(--nebu-settle) backwards;
-	}
-	.info {
-		display: inline-flex;
-		flex: 0 0 auto;
-		margin-left: -4px;
 	}
 	.back {
 		display: inline-flex;

@@ -68,7 +68,7 @@ func TestStubScrape(t *testing.T) {
 			store.PutPool(datalayer.Pool{ID: "p", Runtime: runtime, Metrics: caps(t, runtime)})
 			store.UpsertEndpoint(datalayer.EndpointSpec{ID: "e", Pool: "p", Address: addr, Labels: tc.labels, Ready: true})
 			rec := &recorder{}
-			src := New(store, StoreResolver(store), Options{Interval: 250 * time.Millisecond, Observer: rec})
+			src := New(store, StoreResolver(store), Options{Pace: every(250 * time.Millisecond), Observer: rec})
 			if err := src.Subscribe(Collector{}); err != nil {
 				t.Fatal(err)
 			}
@@ -96,7 +96,10 @@ func TestStubScrape(t *testing.T) {
 			if got.UpdatedAt.IsZero() {
 				t.Fatal("sample carries no scrape time")
 			}
-			got.UpdatedAt = time.Time{}
+			if working := tc.load > 0; got.ActiveAt.IsZero() == working {
+				t.Fatalf("last work at %v with %d requests held", got.ActiveAt, tc.load)
+			}
+			got.UpdatedAt, got.ActiveAt = time.Time{}, time.Time{}
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("scraped %+v\nwant    %+v", got, tc.want)
 			}

@@ -114,13 +114,13 @@
 </Card>
 
 <Dialog bind:open={tokenOpen} title="Join token" confirm="Copy" busy={copying} disabled={ttl <= 0} onconfirm={copyToken}>
-	<Duration bind:value={ttl} base="s" max={tokenTtlMax} label="TTL" info="How long the join token stays valid" />
+	<Duration bind:value={ttl} base="s" max={tokenTtlMax} label="Valid for" />
 </Dialog>
 
 {#if danger}
 	<NameConfirm bind:open={dangerOpen} title={dangers[danger].title} name={mesh.name} message={dangers[danger].message} confirm={dangers[danger].confirm} enabled={danger !== 'handoff' || handoffTo !== undefined} onconfirm={run}>
 		{#if danger === 'handoff'}
-			<Picker bind:value={handoffTo} fetch={fetchNodes} label="New issuer" info="The member that signs admissions from now on" placeholder="Choose a member" required current={handoffTo ? live.nodes.get(handoffTo)?.name : undefined} />
+			<Picker bind:value={handoffTo} fetch={fetchNodes} label="New issuer" info="Signs new members from now on" required current={handoffTo ? live.nodes.get(handoffTo)?.name : undefined} />
 		{/if}
 	</NameConfirm>
 {/if}

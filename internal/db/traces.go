@@ -22,8 +22,8 @@ type TraceQuery struct {
 	AllOwners bool
 	// One route's traces when set
 	Route string
-	// One kind of trace when set
-	Kind v1.TraceKind
+	// The kinds of trace listed, every kind when empty
+	Kinds []v1.TraceKind
 	// Traces started at or after From and before To, either bound off when zero
 	From, To time.Time
 	// Newest first, every match when zero
@@ -64,8 +64,11 @@ func (d *DB) ListTraces(ctx context.Context, q TraceQuery) ([]*v1.Trace, error) 
 	if q.Route != "" {
 		where, args = append(where, `route = ?`), append(args, q.Route)
 	}
-	if q.Kind != v1.TraceKind_TRACE_KIND_UNSPECIFIED {
-		where, args = append(where, `kind = ?`), append(args, int32(q.Kind))
+	if len(q.Kinds) > 0 {
+		where = append(where, `kind IN (?`+strings.Repeat(`, ?`, len(q.Kinds)-1)+`)`)
+		for _, k := range q.Kinds {
+			args = append(args, int32(k))
+		}
 	}
 	if !q.From.IsZero() {
 		where, args = append(where, `started_at >= ?`), append(args, traceTime(q.From))

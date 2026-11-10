@@ -64,7 +64,7 @@
 			probed = await rpc.bots.probeBotToken({ token: token.trim() });
 		} catch (err) {
 			probed = undefined;
-			toast.error('Probe failed', reason(err));
+			toast.error('Token check failed', reason(err));
 		} finally {
 			probing = false;
 		}
@@ -101,7 +101,7 @@
 	}
 </script>
 
-<PageHeader info="Discord bots this host runs, each answering through the gateway with its own personas" />
+<PageHeader />
 
 <Card title="Bots" flush>
 	{#snippet tools()}
@@ -114,7 +114,7 @@
 	{:else if bots.length === 0}
 		<Empty icon={RobotIcon} text="No bots" action="Bot" onclick={openNew} />
 	{:else}
-		<List head={{ primary: 'Bot', secondary: 'State', facts: ['Guilds'] }}>
+		<List head={{ primary: 'Bot', secondary: 'State', facts: ['Servers'] }}>
 			{#each bots as b (b.id)}
 				{@const on = running(b)}
 				<ListRow
@@ -142,10 +142,10 @@
 </Card>
 
 <Dialog bind:open title="New bot" confirm="Create" busy={creating} disabled={!name.trim() || !token.trim()} onconfirm={createBot}>
-	<Text bind:value={name} label="Name" info="Shown in the bots list" max={64} required />
+	<Text bind:value={name} label="Name" max={64} required />
 	<Row gap={8} align="flex-end" wrap={false}>
-		<Cell min="10rem"><Secret bind:value={token} label="Token" info="The Discord bot token, stored on the daemon and never shown again" required /></Cell>
-		<span class="trail"><NeoButton elevation={2} loading={probing} disabled={!token.trim()} onclick={probe}>Probe</NeoButton></span>
+		<Cell min="10rem"><Secret bind:value={token} label="Discord bot token" required /></Cell>
+		<span class="trail"><NeoButton elevation={2} loading={probing} disabled={!token.trim()} onclick={probe}>Check</NeoButton></span>
 	</Row>
 	{#if probed}
 		<Row gap={12} align="flex-start" wrap={false}>
@@ -155,12 +155,11 @@
 					dense
 					rows={[
 						{ label: 'username', value: probed.username },
-						{ label: 'shards', value: `${num(probed.recommendedShards)} recommended` },
 						{ label: 'invite', value: probed.inviteUrl, href: probed.inviteUrl, copy: true, tip: probed.inviteUrl }
 					]}
 				/>
 			</Cell>
 		</Row>
 	{/if}
-	<Switch bind:checked={enabled} label="Enabled" info="Whether the daemon keeps the bot connected" />
+	<Switch bind:checked={enabled} label="Start it now" />
 </Dialog>

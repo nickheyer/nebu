@@ -1,6 +1,6 @@
 <script lang="ts">
-	import Overview from '#lib/pages/overview/Overview.svelte';
+	import Host from '#lib/pages/host/Host.svelte';
 </script>
 
-<svelte:head><title>Overview</title></svelte:head>
-<Overview />
+<svelte:head><title>Host</title></svelte:head>
+<Host tab="overview" />

@@ -2,6 +2,7 @@ package scrape
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -57,6 +58,9 @@ sglang:page_size{engine_type="unified",model_name="m",moe_ep_rank="0",pp_rank="0
 # HELP sglang:num_pages Number of KV cache pages.
 # TYPE sglang:num_pages gauge
 sglang:num_pages{engine_type="unified",model_name="m",moe_ep_rank="0",pp_rank="0",tp_rank="0"} 500000.0
+# HELP sglang:num_requests_total Number of requests processed.
+# TYPE sglang:num_requests_total counter
+sglang:num_requests_total{model_name="m"} 12.0
 `
 
 const tritonText = `# HELP nv_trt_llm_request_metrics TRT LLM request metrics
@@ -73,6 +77,10 @@ nv_trt_llm_kv_cache_block_metrics{kv_cache_block_type="tokens_per",model="tensor
 nv_trt_llm_kv_cache_block_metrics{kv_cache_block_type="used",model="tensorrt_llm",version="1"} 3000
 nv_trt_llm_kv_cache_block_metrics{kv_cache_block_type="free",model="tensorrt_llm",version="1"} 3000
 nv_trt_llm_kv_cache_block_metrics{kv_cache_block_type="max",model="tensorrt_llm",version="1"} 6000
+# HELP nv_inference_count Number of inferences performed
+# TYPE nv_inference_count counter
+nv_inference_count{model="tensorrt_llm",version="1"} 40
+nv_inference_count{model="ensemble",version="1"} 40
 `
 
 const trtllmServeText = `# HELP trtllm_num_requests_waiting Number of queued requests
@@ -93,11 +101,17 @@ trtllm_kv_cache_tokens_per_block{dp_rank="1",engine_type="pytorch",model_name="m
 # TYPE trtllm_kv_cache_max_blocks gauge
 trtllm_kv_cache_max_blocks{dp_rank="0",engine_type="pytorch",model_name="m"} 1000.0
 trtllm_kv_cache_max_blocks{dp_rank="1",engine_type="pytorch",model_name="m"} 1000.0
+# HELP trtllm_request_success_total Count of successfully processed requests
+# TYPE trtllm_request_success_total counter
+trtllm_request_success_total{engine_type="pytorch",finished_reason="stop",model_name="m"} 9.0
 `
 
 const llamaText = `# HELP llamacpp:prompt_tokens_total Number of prompt tokens processed, excluding cached tokens
 # TYPE llamacpp:prompt_tokens_total counter
 llamacpp:prompt_tokens_total 400
+# HELP llamacpp:n_decode_total Total number of llama_decode() calls
+# TYPE llamacpp:n_decode_total counter
+llamacpp:n_decode_total 77
 # HELP llamacpp:requests_processing Number of requests processing
 # TYPE llamacpp:requests_processing gauge
 llamacpp:requests_processing 2
@@ -122,6 +136,10 @@ ray_serve_deployment_queued_queries{application="app",deployment="d"} 3
 # TYPE ray_serve_replica_processing_queries gauge
 ray_serve_replica_processing_queries{deployment="d",replica="r1"} 2
 ray_serve_replica_processing_queries{deployment="d",replica="r2"} 4
+# HELP ray_serve_deployment_request_counter_total requests processed by the replica
+# TYPE ray_serve_deployment_request_counter_total counter
+ray_serve_deployment_request_counter_total{deployment="d",replica="r1"} 20
+ray_serve_deployment_request_counter_total{deployment="d",replica="r2"} 22
 `
 
 // A test endpoint carrying labels and a capacity attribute
@@ -193,28 +211,28 @@ func TestExtractPerRuntime(t *testing.T) {
 	}{
 		{"vllm", RuntimeVLLM, vllmText, nil, nil, nil, labeled{}, datalayer.ServerMetrics{
 			QueuedRequests: 5, RunningRequests: 3, KVCacheUtilization: 0.42, BlockSize: 16, NumGPUBlocks: 27000,
-			MaxLoRA: 4, RunningAdapters: set("sql-lora", "chat-lora"), WaitingAdapters: set("tool-lora"),
+			MaxLoRA: 4, RunningAdapters: set("sql-lora", "chat-lora"), WaitingAdapters: set("tool-lora"), Work: 100,
 		}},
 		{"sglang", RuntimeSGLang, sglangText, nil, []Adapter{{Name: "sql", Applied: true}}, &eight, labeled{}, datalayer.ServerMetrics{
 			QueuedRequests: 7, RunningRequests: 2, KVCacheUtilization: 0.25, BlockSize: 1, NumGPUBlocks: 500000,
-			MaxLoRA: 8, RunningAdapters: set("sql"), WaitingAdapters: set(),
+			MaxLoRA: 8, RunningAdapters: set("sql"), WaitingAdapters: set(), Work: 12,
 		}},
 		{"triton", RuntimeTritonTRTLLM, tritonText, nil, nil, nil, labeled{}, datalayer.ServerMetrics{
-			QueuedRequests: 9, RunningRequests: 6, KVCacheUtilization: 0.5, BlockSize: 64, NumGPUBlocks: 6000,
+			QueuedRequests: 9, RunningRequests: 6, KVCacheUtilization: 0.5, BlockSize: 64, NumGPUBlocks: 6000, Work: 80,
 		}},
 		{"trtllm-serve", RuntimeTRTLLMServe, trtllmServeText, nil, nil, nil, labeled{}, datalayer.ServerMetrics{
-			QueuedRequests: 4, RunningRequests: 8, KVCacheUtilization: 0.3, BlockSize: 32, NumGPUBlocks: 2000,
+			QueuedRequests: 4, RunningRequests: 8, KVCacheUtilization: 0.3, BlockSize: 32, NumGPUBlocks: 2000, Work: 9,
 		}},
 		{"llamacpp split slots", RuntimeLlamaCpp, llamaText, llamaSlots, llamaAdapters, nil, labeled{datalayer.LabelKVCapacity: "16384"}, datalayer.ServerMetrics{
 			QueuedRequests: 1, RunningRequests: 2, KVCacheUtilization: 0.125, BlockSize: 1, NumGPUBlocks: 16384,
-			MaxLoRA: 2, RunningAdapters: set("sql"), WaitingAdapters: set(),
+			MaxLoRA: 2, RunningAdapters: set("sql"), WaitingAdapters: set(), Work: 77,
 		}},
 		{"llamacpp shared pool", RuntimeLlamaCpp, llamaText, llamaSlots, llamaAdapters, nil, labeled{datalayer.LabelKVCapacity: "4096"}, datalayer.ServerMetrics{
 			QueuedRequests: 1, RunningRequests: 2, KVCacheUtilization: 0.5, BlockSize: 1, NumGPUBlocks: 4096,
-			MaxLoRA: 2, RunningAdapters: set("sql"), WaitingAdapters: set(),
+			MaxLoRA: 2, RunningAdapters: set("sql"), WaitingAdapters: set(), Work: 77,
 		}},
 		{"nemo static caches", RuntimeNeMo, nemoText, nil, nil, nil, withCapacity{labels: labeled{datalayer.LabelKVCapacity: "131072"}, capacity: 16}, datalayer.ServerMetrics{
-			QueuedRequests: 3, RunningRequests: 6, KVCacheUtilization: 0.375, BlockSize: 8192, NumGPUBlocks: 16,
+			QueuedRequests: 3, RunningRequests: 6, KVCacheUtilization: 0.375, BlockSize: 8192, NumGPUBlocks: 16, Work: 42,
 		}},
 	}
 	for _, tc := range tests {
@@ -225,7 +243,10 @@ func TestExtractPerRuntime(t *testing.T) {
 				t.Fatal(err)
 			}
 			m := got.(*datalayer.ServerMetrics)
-			tc.want.UpdatedAt = at
+			tc.want.UpdatedAt, tc.want.ActiveAt = at, at
+			if !s.working() {
+				t.Fatal("a scrape holding requests reads as showing no work")
+			}
 			if math.Abs(m.KVCacheUtilization-tc.want.KVCacheUtilization) > 1e-9 {
 				t.Fatalf("utilization = %v, want %v", m.KVCacheUtilization, tc.want.KVCacheUtilization)
 			}
@@ -234,6 +255,80 @@ func TestExtractPerRuntime(t *testing.T) {
 				t.Fatalf("got  %+v\nwant %+v", *m, tc.want)
 			}
 		})
+	}
+}
+
+// An endpoint holding the metrics an earlier sample stored
+type sampled struct {
+	labeled
+	prev *datalayer.ServerMetrics
+}
+
+func (s sampled) Attribute(collector string) (any, bool) {
+	return s.prev, collector == datalayer.CollectorMetrics && s.prev != nil
+}
+
+// The last work time moves to a sample that holds requests or a moved work counter and stays put otherwise
+func TestActiveAtFollowsRequestsAndTheWorkCounter(t *testing.T) {
+	const idle = `# TYPE llamacpp:n_decode_total counter
+llamacpp:n_decode_total %d
+# TYPE llamacpp:requests_processing gauge
+llamacpp:requests_processing %d
+# TYPE llamacpp:requests_deferred gauge
+llamacpp:requests_deferred 0
+`
+	before, at := time.Unix(1700000000, 0), time.Unix(1700000030, 0)
+	tests := []struct {
+		name     string
+		prev     *datalayer.ServerMetrics
+		decodes  int
+		running  int
+		want     time.Time
+		wantWork bool
+	}{
+		{"first sample of an idle runtime", nil, 500, 0, time.Time{}, false},
+		{"first sample of a running runtime", nil, 500, 1, at, true},
+		{"nothing since the last sample", &datalayer.ServerMetrics{Work: 500, ActiveAt: before}, 500, 0, before, false},
+		{"a request came and went between samples", &datalayer.ServerMetrics{Work: 500, ActiveAt: before}, 512, 0, at, false},
+		{"the counter restarted with the runtime", &datalayer.ServerMetrics{Work: 500, ActiveAt: before}, 0, 0, at, false},
+		{"a request runs", &datalayer.ServerMetrics{Work: 500, ActiveAt: before}, 500, 1, at, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Sample{Families: parse(t, fmt.Sprintf(idle, tc.decodes, tc.running)), Slots: []Slot{{NCtx: 4096}}, Capabilities: caps(t, RuntimeLlamaCpp), ScrapedAt: at}
+			got, err := Collector{}.Extract(sampled{labeled{datalayer.LabelKVCapacity: "4096"}, tc.prev}, s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m := got.(*datalayer.ServerMetrics); !m.ActiveAt.Equal(tc.want) || m.Work != float64(tc.decodes) {
+				t.Fatalf("active at %v work %v, want %v and %d", m.ActiveAt, m.Work, tc.want, tc.decodes)
+			}
+			if s.working() != tc.wantWork {
+				t.Fatalf("working = %v, want %v", s.working(), tc.wantWork)
+			}
+		})
+	}
+}
+
+// A pool that declares no work counter reads zero work and a held slot alone counts as work
+func TestWorkWithoutACounter(t *testing.T) {
+	c := caps(t, RuntimeLlamaCpp)
+	c.WorkCounter = ""
+	s := &Sample{Families: parse(t, llamaText), Slots: []Slot{{NCtx: 4096}}, Capabilities: c, ScrapedAt: time.Unix(1700000000, 0)}
+	got, err := Collector{}.Extract(labeled{datalayer.LabelKVCapacity: "4096"}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := got.(*datalayer.ServerMetrics); m.Work != 0 {
+		t.Fatalf("work %v from a pool naming no counter", m.Work)
+	}
+	quiet := &Sample{Families: parse(t, strings.ReplaceAll(strings.ReplaceAll(llamaText, "requests_processing 2", "requests_processing 0"), "requests_deferred 1", "requests_deferred 0")), Capabilities: c}
+	if quiet.working() {
+		t.Fatal("a scrape without requests or held slots reads as working")
+	}
+	quiet.Slots = []Slot{{IsProcessing: true, NCtx: 4096}}
+	if !quiet.working() {
+		t.Fatal("a held slot reads as no work")
 	}
 }
 

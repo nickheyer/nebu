@@ -157,6 +157,8 @@ type Deps struct {
 	Clock     Clock
 	// Opens upstream connections, imported endpoints reached through the mesh when set
 	Dial Dialer
+	// The metrics source, asked for samples while a decision is pending or a request is in flight
+	Sampler datalayer.Sampler
 }
 
 // Listener addresses and whether they speak TLS
@@ -172,6 +174,7 @@ type Gateway struct {
 	resolver  *resolver
 	manager   Manager
 	store     datalayer.Store
+	sampler   datalayer.Sampler
 	events    *events.Bus
 	guard     *auth.Guard
 	tools     *tools.Registry
@@ -233,8 +236,8 @@ func (g *Gateway) Index() (prefixcache.Indexer, prefixcache.Config) { return g.i
 // Builds the gateway, its schedulers, flow controller and director, refusing missing dependencies
 func New(deps Deps) (*Gateway, error) {
 	switch {
-	case deps.Pools == nil, deps.Resolver == nil, deps.Manager == nil, deps.Store == nil:
-		return nil, errors.New("gateway needs the pools view, resolver, manager and store")
+	case deps.Pools == nil, deps.Resolver == nil, deps.Manager == nil, deps.Store == nil, deps.Sampler == nil:
+		return nil, errors.New("gateway needs the pools view, resolver, manager, store and sampler")
 	case deps.DB == nil, deps.Events == nil, deps.Guard == nil, deps.Tools == nil:
 		return nil, errors.New("gateway needs the database, event bus, guard and tools registry")
 	case deps.Runtimes == nil, deps.Instances == nil:
@@ -259,6 +262,7 @@ func New(deps Deps) (*Gateway, error) {
 		pools:      deps.Pools,
 		manager:    deps.Manager,
 		store:      deps.Store,
+		sampler:    deps.Sampler,
 		events:     deps.Events,
 		guard:      deps.Guard,
 		tools:      deps.Tools,
@@ -363,6 +367,7 @@ func (g *Gateway) rebuildDirector() error {
 	d, err := requestcontrol.NewDirector(requestcontrol.Deps{
 		Store:               g.store,
 		Resolver:            g.resolver,
+		Sampler:             g.sampler,
 		Scheduler:           g.hosting.selector,
 		Schedulers:          g.hosting.byName(),
 		Flow:                g.flow,

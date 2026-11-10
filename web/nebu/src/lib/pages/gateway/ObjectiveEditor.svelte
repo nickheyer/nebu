@@ -11,7 +11,7 @@
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
-	import Slider from '#lib/ui/fields/Slider.svelte';
+	import NumberField from '#lib/ui/fields/Number.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Section from '#lib/ui/layout/Section.svelte';
@@ -56,26 +56,26 @@
 	}
 </script>
 
-<PanelHeader title={editing ? name : 'New objective'} {onclose}>
-	{#snippet tools()}
-		{#if editing}<Confirm label="Delete" question="Delete {name}?" danger onconfirm={remove} />{/if}
-	{/snippet}
-</PanelHeader>
+<PanelHeader title={editing ? name : 'New objective'} {onclose} />
 <Stack gap={24}>
 	<FormSection>
 		<FieldRow>
-			<Text bind:value={name} label="Name" info="How routes refer to the objective, fixed once created" required readonly={editing} max={64} />
-			<Slider bind:value={priority} min={-1000} max={1000} label="Priority" info="Higher sheds later under saturation, zero the default band" />
+			<Text bind:value={name} label="Name" info="Fixed once created" required readonly={editing} max={64} />
+			<NumberField bind:value={priority} min={-1000} max={1000} label="Priority" info="Higher is turned away last under load" />
 		</FieldRow>
 		<FieldRow wide>
-			<Duration bind:value={ttft} base="ms" max={3_600_000} label="Time to first token" info="Target latency to the first token" emptyZero />
-			<Duration bind:value={tpot} base="ms" max={3_600_000} label="Time per output token" info="Target latency per generated token" emptyZero />
+			<Duration bind:value={ttft} base="ms" max={3_600_000} label="Time to first token" emptyZero />
+			<Duration bind:value={tpot} base="ms" max={3_600_000} label="Time per output token" emptyZero />
 		</FieldRow>
 	</FormSection>
 	{#if current?.status?.conditions.length}
-		<Section title="Conditions" level={3}>
+		<Section title="Status" level={3}>
 			<Conditions conditions={current.status.conditions} />
 		</Section>
 	{/if}
 </Stack>
-<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!name.trim()} onsave={save} ondiscard={onclose} />
+{#snippet deleteButton()}
+	<Confirm label="Delete" question="Delete {name}?" danger placement="top-start" onconfirm={remove} />
+{/snippet}
+
+<SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!name.trim()} leading={editing ? deleteButton : undefined} onsave={save} ondiscard={onclose} />

@@ -3,7 +3,8 @@ export type HeaderTab = { id: string; label: string; href?: string };
 export type HeaderSpec = {
 	title?: string;
 	back?: { label: string; href: string };
-	info?: string;
+	// Where the titled thing comes from, the title then linking out to it
+	origin?: { label: string; href: string };
 	tabs?: HeaderTab[];
 	active?: string;
 	ontab?: (id: string) => void;

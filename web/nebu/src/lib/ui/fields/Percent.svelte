@@ -13,4 +13,4 @@
 	}: { value?: number; max?: number; label?: string; info?: string; disabled?: boolean; message?: string; step?: number; onchange?: (n: number) => void } = $props();
 </script>
 
-<Slider bind:value min={0} {max} {step} unit="%" {label} {info} {disabled} {message} {onchange} />
+<Slider bind:value={() => value, (n) => (value = n ?? 0)} min={0} {max} {step} unit="%" {label} {info} {disabled} {message} onchange={(n) => onchange?.(n ?? 0)} />

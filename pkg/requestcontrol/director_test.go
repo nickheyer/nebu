@@ -759,7 +759,7 @@ func TestObserver(t *testing.T) {
 func TestNewDirectorValidation(t *testing.T) {
 	store := newFakeStore()
 	full := func() Deps {
-		return Deps{Store: store, Resolver: NewRuleTable(store), Scheduler: &fakeScheduler{}, Flow: &fakeFlow{}, DefaultOutputTokens: 1}
+		return Deps{Store: store, Resolver: NewRuleTable(store), Sampler: idleSampler{}, Scheduler: &fakeScheduler{}, Flow: &fakeFlow{}, DefaultOutputTokens: 1}
 	}
 	cases := []struct {
 		name string
@@ -774,6 +774,7 @@ func TestNewDirectorValidation(t *testing.T) {
 		{"no store", func(d *Deps) { d.Store = nil }, false},
 		{"no resolver", func(d *Deps) { d.Resolver = nil }, false},
 		{"no flow", func(d *Deps) { d.Flow = nil }, false},
+		{"no sampler", func(d *Deps) { d.Sampler = nil }, false},
 		{"no scheduler", func(d *Deps) { d.Scheduler = nil }, false},
 		{"no default output", func(d *Deps) { d.DefaultOutputTokens = 0 }, false},
 		{"hookless lifecycle plugin", func(d *Deps) { d.Lifecycle = []framework.Plugin{&bothPlugin{name: "x"}} }, false},

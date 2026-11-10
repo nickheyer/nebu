@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { NeoProgressBar } from '#lib/neo/progress/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { bytes, num, pct } from '#lib/format.js';
+	import { bytes, pct } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { SlotState, type Slot } from '#lib/proto/nebu/v1/slot_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
@@ -13,7 +13,7 @@
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { deviceLabel } from '#lib/ui/memory.js';
 	import { slotLamp, slotShape } from '#lib/ui/status.js';
-	import { canaryShare, canaryTimeLeft, modelPhrase, policyRows, slotHref, slotInFlight } from '#lib/pages/serve/serve.js';
+	import { canaryShare, canaryTimeLeft, modelPhrase, policyRows, slotHref } from '#lib/pages/serve/serve.js';
 	import DotsSixVerticalIcon from 'phosphor-svelte/lib/DotsSixVerticalIcon';
 
 	let {
@@ -35,20 +35,20 @@
 	const inst = $derived(live.instances.get(slot.instanceId));
 	const failed = $derived(slot.state === SlotState.FAILED);
 	const occupied = $derived(slot.instanceId !== '');
-	const inFlight = $derived(slotInFlight(live, slot));
-	const occupant = $derived(failed && slot.error ? slot.error : slot.state === SlotState.EMPTY ? 'empty' : modelPhrase(inst ?? slot.request));
+	const occupant = $derived(failed && slot.error ? slot.error : slot.state === SlotState.EMPTY ? '' : modelPhrase(inst ?? slot.request));
 	const devices = $derived(
 		slot.deviceIds.map((id) => {
 			const d = live.host?.devices.find((x) => x.id === id);
 			return d ? deviceLabel(live.host, d) : id;
 		})
 	);
-	// Runtime, devices, reservation, aliases and the policy fields the slot sets
+	// Runtime, devices, memory, aliases and the limits the slot sets
 	const tip = $derived(
 		[
 			slot.runtimeId ? `runtime ${slot.runtimeId}` : '',
 			devices.length ? `devices ${devices.join(', ')}` : '',
 			slot.memoryBytes ? `memory ${bytes(slot.memoryBytes)}` : '',
+			...Object.entries(slot.poolBytes).map(([pool, n]) => `${pool} ${bytes(n)}`),
 			slot.aliases.length ? `aliases ${slot.aliases.map((a) => a.name).join(', ')}` : '',
 			...policyRows(slot.policy).map((r) => `${r.label} ${r.value}`)
 		]
@@ -114,7 +114,6 @@
 	secondary={slim ? undefined : occupant}
 	secondaryKind={failed ? 'message' : 'repo'}
 	secondaryColor={failed ? 'error' : 'muted'}
-	facts={slim ? [] : [{ value: num(inFlight ?? 0), tip: 'requests in flight' }]}
 	{menu}
 	{selected}
 	onclick={open}

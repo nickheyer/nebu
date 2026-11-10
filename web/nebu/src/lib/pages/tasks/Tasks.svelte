@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { NeoProgressBar } from '#lib/neo/progress/index.js';
 	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
@@ -18,7 +19,7 @@
 	import StatePill from '#lib/ui/StatePill.svelte';
 	import Str from '#lib/ui/Str.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
-	import Select from '#lib/ui/fields/Select.svelte';
+	import MultiSelect from '#lib/ui/fields/MultiSelect.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Sheet from '#lib/ui/layout/Sheet.svelte';
@@ -30,21 +31,21 @@
 
 	let { id = '' }: { id?: string } = $props();
 
-	let kind = $state<string | undefined>(undefined);
-	let taskState = $state<TaskState | undefined>(undefined);
+	let kinds = $state<string[]>([]);
+	let states = $state<TaskState[]>([]);
 
 	const running = $derived([...live.tasks.values()].filter(active).sort((a, b) => Number(b.createdAt?.seconds ?? 0n) - Number(a.createdAt?.seconds ?? 0n)));
 
-	const history = new ListQuery<Task, { kind?: string; state?: TaskState }>(
+	const history = new ListQuery<Task, { kinds: string[]; states: TaskState[] }>(
 		async (p, cursor, limit, signal) => {
-			const res = await rpc.tasks.listTasks({ kind: p.kind ?? '', state: p.state ?? TaskState.UNSPECIFIED, cursor, limit }, { signal });
+			const res = await rpc.tasks.listTasks({ kinds: p.kinds, states: p.states, cursor, limit }, { signal });
 			return { items: res.tasks, next: res.nextCursor };
 		},
 		[EventKind.TASK]
 	);
 
 	$effect(() => {
-		void history.load({ kind, state: taskState });
+		void history.load({ kinds, states });
 	});
 
 	// Runs of the same task back to back fold into one row
@@ -62,7 +63,7 @@
 		try {
 			await rpc.tasks.cancelTask({ id: t.id });
 		} catch (err) {
-			toast.error('Cancel failed', reason(err));
+			toast.error('Stop failed', reason(err));
 		}
 	}
 
@@ -126,7 +127,7 @@
 					{#snippet leading()}{@render kindPill(t)}{/snippet}
 					{#snippet action()}
 						<span class="elapsed num secondary"><Tip text="started {when(t.startedAt ?? t.createdAt)}" tag="span">{t.state === TaskState.PENDING ? 'queued' : duration(t.startedAt ?? t.createdAt, undefined, clockTick.now)}</Tip></span>
-						<Confirm label="Cancel" question="Cancel {t.title}?" danger onconfirm={() => cancel(t)} />
+						<Confirm label="Stop" question="Stop {t.title}?" danger onconfirm={() => cancel(t)} />
 					{/snippet}
 				</ListRow>
 			{/each}
@@ -137,15 +138,18 @@
 {#snippet historyCard()}
 	<Card title="History" flush>
 		{#snippet tools()}
-			<span class="filter"><Select bind:value={kind} options={kindOptions} label="Kind" compact clearable /></span>
-			<span class="filter"><Select bind:value={taskState} options={stateOptions} label="State" compact clearable /></span>
+			<span class="filter"><MultiSelect bind:value={kinds} options={kindOptions} label="Kind" compact /></span>
+			<span class="filter"><MultiSelect bind:value={states} options={stateOptions} label="State" compact /></span>
 		{/snippet}
+		{#if kinds.length || states.length}
+			<div class="clear"><NeoButton text onclick={() => ((kinds = []), (states = []))}>Clear active</NeoButton></div>
+		{/if}
 		{#if !history.settled}
 			<Skeleton rows={6} dot={false} leading="12ch" primary="32ch" secondary={false} facts={2} action={false} menu={false} />
 		{:else if history.error}
 			<Empty text={history.error} action="Retry" onclick={() => history.refresh()} />
 		{:else if history.items.length === 0}
-			<Empty icon={ListChecksIcon} text={kind || taskState !== undefined ? 'No tasks match' : 'No tasks'} />
+			<Empty icon={ListChecksIcon} text={kinds.length || states.length ? 'No tasks match' : 'No tasks'} />
 		{:else}
 			<List head={{ primary: 'Task', facts: ['Duration', 'Finished'] }}>
 				{#each groups as g (g.head.id)}
@@ -174,7 +178,7 @@
 	{@render historyCard()}
 {/snippet}
 
-<PageHeader tabs={hostTabs} active="tasks" info="Background work the daemon runs, pulls, builds, verifies and probes, live and past" />
+<PageHeader tabs={hostTabs} active="tasks" />
 
 <Sheet open={id !== ''} onclose={() => goto('/tasks')} {list}>
 	{#if id}
@@ -202,6 +206,11 @@
 	.filter {
 		display: inline-flex;
 		width: 10rem;
+	}
+	.clear {
+		display: flex;
+		justify-content: flex-end;
+		padding: 0 var(--nebu-card-pad) var(--nebu-space-2);
 	}
 	.repeat {
 		font-size: var(--nebu-text-caption);

@@ -55,11 +55,14 @@ message Task {
 
 // Lists tasks, the ones whose kind, title, or error holds every word of the query
 message ListTasksRequest {
+  reserved 3, 4;
+  reserved "kind", "state";
   bool active_only = 1;
   string query = 2 [(buf.validate.field).string.max_len = 256];
-  // One kind of task, such as pull or run
-  string kind = 3;
-  TaskState state = 4 [(buf.validate.field).enum.defined_only = true];
+  // Kinds of task to keep, such as pull or run, every kind when empty
+  repeated string kinds = 7;
+  // States to keep, every state when empty
+  repeated TaskState states = 8 [(buf.validate.field).repeated.items.enum.defined_only = true];
   string cursor = 5;
   uint32 limit = 6 [(buf.validate.field).uint32.lte = 1000];
 }

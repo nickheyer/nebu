@@ -108,7 +108,7 @@
 	}
 </script>
 
-<PageHeader {tabs} active="accounts" info="Local sign ins and the role each one holds" />
+<PageHeader {tabs} active="accounts" />
 
 <Card title="Accounts" flush>
 	{#snippet tools()}

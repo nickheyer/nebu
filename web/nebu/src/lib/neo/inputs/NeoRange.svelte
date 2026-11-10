@@ -165,14 +165,22 @@
     return value;
   };
 
+  const decimalsOf = (n: number) => (String(n).split('.')[1] ?? '').length;
+  const decimals = $derived(Math.max(decimalsOf(step ?? 1), decimalsOf(min)));
+  // Lands a raw position on the nearest step counted from min, whole numbers when no step is given
+  const snap = (v: number) => {
+    const size = step || 1;
+    return Number((min + Math.round((v - min) / size) * size).toFixed(decimals));
+  };
+
   let holding = 1;
   export function stepUp(index = 0) {
     if (disabled || readonly) return value;
-    return setValue((index ? (upper ?? 0) : lower) - (step || 1) * round(holding), index);
+    return setValue(snap((index ? (upper ?? 0) : lower) - (step || 1) * round(holding)), index);
   }
   export function stepDown(index = 0) {
     if (disabled || readonly) return value;
-    return setValue((index ? (upper ?? 0) : lower) + (step || 1) * round(holding), index);
+    return setValue(snap((index ? (upper ?? 0) : lower) + (step || 1) * round(holding)), index);
   }
 
   const validity = $derived<NeoRangeValidationState>({
@@ -203,12 +211,7 @@
     const { width, left } = rail.getBoundingClientRect();
     const diff = event.clientX - left;
     const ratio = clamp(diff / width, 0, 1);
-    const val = Math.round(min + ratio * (max - min));
-
-    if (step) {
-      const stepped = Math.round(val / step) * step;
-      setValue(stepped, index);
-    } else setValue(val, index);
+    setValue(snap(min + ratio * (max - min)), index);
 
     updateState();
     lastIndex = index;

@@ -115,8 +115,8 @@ func TestRegistryMCP(t *testing.T) {
 	}
 }
 
-// Statuses and events carry the marker for the Brave key, env values, and header values, and the server runs with the real ones
-func TestStatusRedactsSecrets(t *testing.T) {
+// Statuses and events carry the Brave key, env values, and header values as stored
+func TestStatusCarriesSecrets(t *testing.T) {
 	srv := fakeMCP(t)
 	bus := events.New()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -133,10 +133,12 @@ func TestStatusRedactsSecrets(t *testing.T) {
 	if !strings.Contains(fmt.Sprint(r.byName["brave"].spec), "brave-secret") {
 		t.Fatal("the registry runs with the real key")
 	}
+	stored := map[string]string{"brave": "brave-secret", "fake": "Bearer header-secret", "fs": "env-secret"}
 	check := func(where string, st *v1.ToolServerStatus) {
 		t.Helper()
-		if strings.Contains(st.String(), "-secret") || !st.GetServer().GetSecretsSet() {
-			t.Fatalf("%s carries a secret or hides that one is set %v", where, st)
+		s := st.GetServer()
+		if got := s.GetBraveKey() + s.GetHeaders()["Authorization"] + s.GetEnv()["API_KEY"]; got != stored[s.GetName()] {
+			t.Fatalf("%s carries %q for %s, want %q", where, got, s.GetName(), stored[s.GetName()])
 		}
 	}
 	for _, st := range r.Status() {
@@ -152,9 +154,9 @@ func TestStatusRedactsSecrets(t *testing.T) {
 			t.Fatalf("saw %d tool server events", seen)
 		}
 	}
-	plain := Redact(&v1.ToolServer{Name: "fetch", Kind: v1.ToolServerKind_TOOL_SERVER_KIND_FETCH, SecretsSet: true})
-	if plain.GetSecretsSet() {
-		t.Fatal("a server without secrets reports none")
+	r.Status()[0].GetServer().BraveKey = "edited"
+	if r.byName["brave"].spec.GetBraveKey() != "brave-secret" {
+		t.Fatal("a caller's edit of a status must not reach the registry")
 	}
 }
 

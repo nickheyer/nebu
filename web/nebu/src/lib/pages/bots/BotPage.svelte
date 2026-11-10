@@ -28,6 +28,7 @@
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Secret from '#lib/ui/fields/Secret.svelte';
 	import Segmented from '#lib/ui/fields/Segmented.svelte';
+	import MultiSelect from '#lib/ui/fields/MultiSelect.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Textarea from '#lib/ui/fields/Textarea.svelte';
@@ -93,7 +94,7 @@
 		rpc.bots
 			.listBotGuilds({ botId: bot.id })
 			.then((r) => (guilds = r.guilds))
-			.catch((err) => toast.error('Guilds failed to load', reason(err)));
+			.catch((err) => toast.error('Servers failed to load', reason(err)));
 	});
 
 	let servers = $state<ToolServerStatus[]>([]);
@@ -208,17 +209,17 @@
 	}
 
 	// Activity, filtered by the daemon
-	let level = $state<string | undefined>(undefined);
-	let kind = $state<string | undefined>(undefined);
-	const activity = new ListQuery<BotActivity, { level?: string; kind?: string }>(
+	let levels = $state<string[]>([]);
+	let kinds = $state<string[]>([]);
+	const activity = new ListQuery<BotActivity, { levels: string[]; kinds: string[] }>(
 		async (p, cursor, limit, signal) => {
-			const res = await rpc.bots.listBotActivity({ botId: bot.id, level: p.level ?? '', kind: p.kind ?? '', cursor, limit }, { signal });
+			const res = await rpc.bots.listBotActivity({ botId: bot.id, levels: p.levels, kinds: p.kinds, cursor, limit }, { signal });
 			return { items: res.activity, next: res.nextCursor };
 		},
 		[EventKind.BOT_ACTIVITY]
 	);
 	$effect(() => {
-		if (active === 'activity') void activity.load({ level, kind });
+		if (active === 'activity') void activity.load({ levels, kinds });
 	});
 	function guildName(id: string): string {
 		return guilds.find((g) => g.id === id)?.name ?? id;
@@ -273,7 +274,7 @@
 		const shards = st?.shards ?? [];
 		const latency = shards.length ? shards.reduce((sum, s) => sum + s.latencyMs, 0) / shards.length : undefined;
 		return [
-			{ id: 'guilds', label: 'Guilds', value: num(st?.guilds) },
+			{ id: 'guilds', label: 'Servers', value: num(st?.guilds) },
 			{ id: 'shards', label: 'Shards', value: num(shards.length), tip: latency === undefined ? undefined : `mean latency ${ms(latency)}` },
 			{ id: 'replies', label: 'Replies', value: num(st?.replies) },
 			{ id: 'images', label: 'Images', value: num(st?.images) },
@@ -294,8 +295,8 @@
 	<Columns ratio="3/2">
 		{#snippet left()}
 			{#if guilds.length}
-				<Card title="Guilds" flush>
-					<List head={{ primary: 'Guild', facts: ['Members', 'Channels'] }}>
+				<Card title="Servers" flush>
+					<List head={{ primary: 'Server', facts: ['Members', 'Channels'] }}>
 						{#each guilds as g (g.id)}
 							<ListRow primary={g.name} primaryTip={g.id} facts={[{ value: num(g.members) }, { value: num(g.channels.length) }]} />
 						{/each}
@@ -304,7 +305,7 @@
 			{/if}
 			{#if st?.shards.length}
 				<Card title="Shards" flush>
-					<List head={{ primary: 'Shard', facts: ['Guilds', 'Latency'] }}>
+					<List head={{ primary: 'Shard', facts: ['Servers', 'Latency'] }}>
 						{#each st.shards as s (s.id)}
 							<ListRow
 								lamp={s.connected ? 'success' : 'error'}
@@ -351,10 +352,8 @@
 						{ label: 'username', value: st?.username ?? '' },
 						{ label: 'invite', value: st?.inviteUrl ?? '', href: st?.inviteUrl, copy: true, tip: st?.inviteUrl },
 						{ label: 'started', value: st?.startedAt ? ago(st.startedAt, clockTick.now) : '', tip: when(st?.startedAt) || undefined },
-						{ label: 'id', value: bot.id, mono: true, copy: true },
 						{ label: 'created', value: when(bot.createdAt) },
 						{ label: 'updated', value: when(bot.updatedAt) },
-						{ label: 'enabled', value: bot.enabled ? 'yes' : 'no' },
 						{ label: 'error', value: bot.error, color: 'error', tip: bot.error }
 					]}
 				/>
@@ -364,7 +363,7 @@
 {/snippet}
 
 {#snippet personasList()}
-	<Card title="Personas" info="The first persona answers by default, the others when named or summoned" flush>
+	<Card title="Personas" info="The first one answers unless another is named" flush>
 		{#snippet tools()}
 			<NeoButton class="primary" elevation={2} onclick={addPersona}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Persona</NeoButton>
 		{/snippet}
@@ -410,7 +409,7 @@
 {/snippet}
 
 {#snippet automationsList()}
-	<Card title="Automations" info="Scheduled, keyword, reaction and command triggers that act without a prompt" flush>
+	<Card title="Automations" flush>
 		{#snippet tools()}
 			<NeoButton class="primary" elevation={2} onclick={addAutomation}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Automation</NeoButton>
 		{/snippet}
@@ -448,7 +447,7 @@
 		{:else if active === 'automations' && automationIndex !== undefined && spec.automations[automationIndex]}
 			{@const i = automationIndex}
 			{#key spec.automations[i]?.id}
-				<PanelHeader title={spec.automations[i]?.name ?? ''} subtitle="{triggerWord(spec.automations[i]?.trigger?.kind ?? 0)} trigger, {actionWord(spec.automations[i]?.action?.kind ?? 0)} action" onclose={closeEditor} />
+				<PanelHeader title={spec.automations[i]?.name ?? ''} onclose={closeEditor} />
 				<AutomationEditor bind:automation={() => spec.automations[i] as Automation, (v) => (spec.automations[i] = v)} personas={spec.personas} {guilds} />
 			{/key}
 		{/if}
@@ -459,15 +458,18 @@
 {#snippet activityTab()}
 	<Card title="Activity" flush>
 		{#snippet tools()}
-			<span class="filter"><Select bind:value={level} options={activityLevels} label="Level" compact clearable /></span>
-			<span class="filter wide"><Select bind:value={kind} options={activityKinds} label="Kind" compact clearable /></span>
+			<span class="filter"><MultiSelect bind:value={levels} options={activityLevels} label="Level" compact /></span>
+			<span class="filter wide"><MultiSelect bind:value={kinds} options={activityKinds} label="Kind" compact /></span>
 		{/snippet}
+		{#if levels.length || kinds.length}
+			<div class="clear"><NeoButton text onclick={() => ((levels = []), (kinds = []))}>Clear active</NeoButton></div>
+		{/if}
 		{#if !activity.settled}
 			<Skeleton rows={5} primary="12ch" secondary="64ch" facts={1} menu={false} />
 		{:else if activity.error}
 			<Empty text={activity.error} action="Retry" onclick={() => activity.refresh()} />
 		{:else if activity.items.length === 0}
-			<Empty icon={PulseIcon} text={level || kind ? 'No activity matches' : 'No activity'} />
+			<Empty icon={PulseIcon} text={levels.length || kinds.length ? 'No activity matches' : 'No activity'} />
 		{:else}
 			<List head={{ primary: 'Kind', secondary: 'Message', facts: ['When'] }}>
 				{#each activity.items as a, i (i)}
@@ -475,7 +477,7 @@
 						lamp={levelLamp(a.level)}
 						primary={a.kind}
 						primaryWidth="12ch"
-						primaryTip={[a.persona ? `persona ${a.persona}` : '', a.guildId ? `guild ${guildName(a.guildId)}` : '', a.channelId ? `channel ${channelName(a.guildId, a.channelId)}` : ''].filter(Boolean).join('\n') || undefined}
+						primaryTip={[a.persona ? `persona ${a.persona}` : '', a.guildId ? `server ${guildName(a.guildId)}` : '', a.channelId ? `channel ${channelName(a.guildId, a.channelId)}` : ''].filter(Boolean).join('\n') || undefined}
 						secondary={a.message}
 						secondaryKind="message"
 						secondaryWidth="64ch"
@@ -497,14 +499,14 @@
 {#snippet sendTab()}
 	<Card title="New message">
 		<FieldRow>
-			<Select bind:value={sendGuild} options={guilds.map((g) => ({ value: g.id, label: g.name }))} label="Guild" info="The server the message goes to" placeholder={connected ? 'Choose a server' : 'Bot not connected'} disabled={!connected} />
-			<Select bind:value={sendChannel} options={sendChannels} label="Channel" info="The channel in that server" placeholder={sendGuild ? 'Choose a channel' : 'Choose a server first'} disabled={!sendGuild} />
+			<Select bind:value={sendGuild} options={guilds.map((g) => ({ value: g.id, label: g.name }))} label="Server" disabled={!connected} />
+			<Select bind:value={sendChannel} options={sendChannels} label="Channel" disabled={!sendGuild} />
 		</FieldRow>
 		<FieldRow>
-			<Select bind:value={sendPersona} options={spec.personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" info="Who speaks, the default persona when empty" clearable placeholder={spec.personas[0] ? `Default (${spec.personas[0].name})` : 'No personas'} />
-			<Segmented bind:value={sendKind} options={sendKinds} label="Kind" info="A message posted as written or a prompt the persona answers" />
+			<Select bind:value={sendPersona} options={spec.personas.map((p) => ({ value: p.id, label: p.name }))} label="Persona" clearable placeholder={spec.personas[0]?.name} />
+			<Segmented bind:value={sendKind} options={sendKinds} label="Kind" info="Text posts as written, the others ask the persona" />
 		</FieldRow>
-		<Textarea bind:value={sendContent} label={sendKind === ActionKind.TEXT ? 'Message' : 'Prompt'} info={sendKind === ActionKind.TEXT ? 'Posted as written' : 'What the persona is asked to answer'} rows={3} />
+		<Textarea bind:value={sendContent} label={sendKind === ActionKind.TEXT ? 'Message' : 'Prompt'} rows={3} />
 		{#snippet footer()}
 			{#if sendBlocker}<span class="secondary">{sendBlocker}</span>{/if}
 			<span class="fill"></span>
@@ -513,7 +515,7 @@
 	</Card>
 {/snippet}
 
-<PageHeader title={bot.name} back={{ label: 'Bots', href: '/bots' }} tabs={headerTabs} {active} info="One Discord bot, its connection, personas, automations, behaviour and what it has done" />
+<PageHeader title={bot.name} back={{ label: 'Bots', href: '/bots' }} tabs={headerTabs} {active} />
 
 {#if active === 'status'}
 	{@render statusTab()}
@@ -533,7 +535,7 @@
 {/if}
 
 <Dialog bind:open={tokenOpen} title="Change token" confirm="Change" busy={tokenBusy} disabled={!newToken.trim()} onconfirm={changeToken}>
-	<Secret bind:value={newToken} label="New token" info="The Discord bot token, stored on the daemon and never shown again" set={bot.tokenSet} required />
+	<Secret bind:value={newToken} label="Discord bot token" set={bot.tokenSet} required />
 </Dialog>
 
 <NameConfirm bind:open={deleteOpen} title="Delete bot" name={bot.name} message="Disconnects the bot" onconfirm={remove} />
@@ -562,6 +564,11 @@
 	.filter {
 		display: inline-flex;
 		width: 9rem;
+	}
+	.clear {
+		display: flex;
+		justify-content: flex-end;
+		padding: 0 var(--nebu-card-pad) var(--nebu-space-2);
 	}
 	.filter.wide {
 		width: 11rem;

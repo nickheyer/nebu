@@ -61,7 +61,7 @@
 		{/if}
 	{/each}
 	{#if bars.length === 0}
-		<p class="secondary">No memory pools probed</p>
+		<p class="secondary">No memory found</p>
 	{/if}
 	{#if legend && bars.length}
 		<MemoryLegend {kinds} />

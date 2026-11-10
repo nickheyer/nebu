@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -238,6 +239,10 @@ type fakeRuns struct {
 	// Adapters by name loaded on the one instance, with every load and unload in order
 	adapters map[string]string
 	loads    []string
+	// The slots the daemon holds, the first answering every slot lookup, with each create and update in order
+	slots   []*v1.Slot
+	creates []*v1.CreateSlotRequest
+	updates []*v1.UpdateSlotRequest
 }
 
 func (f *fakeRuns) LoadAdapter(_ context.Context, req *connect.Request[v1.LoadAdapterRequest]) (*connect.Response[v1.LoadAdapterResponse], error) {
@@ -291,7 +296,29 @@ func (f *fakeRuns) Swap(_ context.Context, req *connect.Request[v1.SwapRequest])
 }
 
 func (f *fakeRuns) GetSlot(context.Context, *connect.Request[v1.GetSlotRequest]) (*connect.Response[v1.GetSlotResponse], error) {
-	return connect.NewResponse(&v1.GetSlotResponse{Slot: &v1.Slot{Id: "s1", Name: "main", State: v1.SlotState_SLOT_STATE_READY, Request: &v1.RunRequest{Repo: "org/qwen", Group: "q4"}}}), nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return connect.NewResponse(&v1.GetSlotResponse{Slot: proto.Clone(f.slots[0]).(*v1.Slot)}), nil
+}
+
+func (f *fakeRuns) ListSlots(context.Context, *connect.Request[v1.ListSlotsRequest]) (*connect.Response[v1.ListSlotsResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return connect.NewResponse(&v1.ListSlotsResponse{Slots: f.slots}), nil
+}
+
+func (f *fakeRuns) CreateSlot(_ context.Context, req *connect.Request[v1.CreateSlotRequest]) (*connect.Response[v1.CreateSlotResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.creates = append(f.creates, proto.Clone(req.Msg).(*v1.CreateSlotRequest))
+	return connect.NewResponse(&v1.CreateSlotResponse{Slot: &v1.Slot{Id: "s9", Name: req.Msg.GetName(), Aliases: req.Msg.GetAliases(), PoolBytes: req.Msg.GetPoolBytes()}}), nil
+}
+
+func (f *fakeRuns) UpdateSlot(_ context.Context, req *connect.Request[v1.UpdateSlotRequest]) (*connect.Response[v1.UpdateSlotResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updates = append(f.updates, proto.Clone(req.Msg).(*v1.UpdateSlotRequest))
+	return connect.NewResponse(&v1.UpdateSlotResponse{Slot: &v1.Slot{Id: req.Msg.GetId(), Name: f.slots[0].GetName(), Aliases: req.Msg.GetAliases(), PoolBytes: req.Msg.GetPoolBytes()}}), nil
 }
 
 func (f *fakeRuns) WatchTask(_ context.Context, req *connect.Request[v1.WatchTaskRequest], stream *connect.ServerStream[v1.WatchTaskResponse]) error {
@@ -315,7 +342,7 @@ func startDaemon(t *testing.T, secure bool) *fakeDaemon {
 		gateway: &fakeGateway{pools: map[string]*v1.Pool{}, routes: map[string]*v1.Route{}, status: &v1.GatewayStatus{}},
 		mesh:    &fakeMesh{},
 		auth:    &fakeAuth{},
-		runs:    &fakeRuns{},
+		runs:    &fakeRuns{slots: []*v1.Slot{{Id: "s1", Name: "main", State: v1.SlotState_SLOT_STATE_READY, Request: &v1.RunRequest{Repo: "org/qwen", Group: "q4"}}}},
 	}
 	mux := http.NewServeMux()
 	mux.Handle(nebuv1connect.NewGatewayServiceHandler(d.gateway))
@@ -735,5 +762,69 @@ func TestMeshFederationCommands(t *testing.T) {
 	}
 	for i := range want {
 		sameMessage(t, "mesh request", d.mesh.sent[i], want[i])
+	}
+}
+
+// Create sends each alias with the slot it inherits from and every pool cap, refusing bad caps
+func TestSlotsCreateSendsInheritsAndPoolCaps(t *testing.T) {
+	d := startDaemon(t, false)
+	out := d.run(t, "slots", "create", "big", "--alias", "chat", "--alias", "fast=base", "--pool-memory", "gpu0=8GiB,host=4GiB", "--pool-memory", "far/ram=2GiB")
+	contains(t, out, "POOL CAPS", "chat,fast=base", "far/ram=2.0 GB,gpu0=8.0 GB,host=4.0 GB")
+	for _, bad := range [][]string{{"--pool-memory", "gpu0"}, {"--pool-memory", "gpu0=0"}, {"--pool-memory", "gpu0=1GiB,gpu0=2GiB"}, {"--pool-memory", "=1GiB"}, {"--pool-memory", "gpu0=lots"}} {
+		args := append([]string{"slots", "create", "big"}, bad...)
+		if _, errOut, code := runCLI(t, t.TempDir(), "", d.url, args...); code == 0 || !strings.Contains(errOut, "pool-memory") {
+			t.Fatalf("%v exited %d: %s", bad, code, errOut)
+		}
+	}
+	d.runs.mu.Lock()
+	defer d.runs.mu.Unlock()
+	if len(d.runs.creates) != 1 {
+		t.Fatalf("creates %v", d.runs.creates)
+	}
+	got := d.runs.creates[0]
+	if len(got.GetAliases()) != 2 || !proto.Equal(got.GetAliases()[0], &v1.SlotAlias{Name: "chat"}) || !proto.Equal(got.GetAliases()[1], &v1.SlotAlias{Name: "fast", InheritSlotId: "base"}) {
+		t.Fatalf("aliases %v", got.GetAliases())
+	}
+	if want := map[string]uint64{"gpu0": 8 << 30, "host": 4 << 30, "far/ram": 2 << 30}; !maps.Equal(got.GetPoolBytes(), want) {
+		t.Fatalf("pool caps %v, want %v", got.GetPoolBytes(), want)
+	}
+}
+
+// Update keeps a bare alias's inherit, sets or clears one given with =, and replaces caps only when given
+func TestSlotsUpdateMergesInheritsAndPoolCaps(t *testing.T) {
+	d := startDaemon(t, false)
+	d.runs.slots = []*v1.Slot{
+		{Id: "s1", Name: "main", Aliases: []*v1.SlotAlias{{Name: "fast", InheritSlotId: "b1"}, {Name: "plain", InheritSlotId: "b1"}}, PoolBytes: map[string]uint64{"gpu0": 8 << 30}},
+		{Id: "b1", Name: "base"},
+	}
+	contains(t, d.run(t, "slots", "list"), "fast=base,plain=base", "gpu0=8.0 GB")
+	out := d.run(t, "slots", "update", "main", "--alias", "fast", "--alias", "chat=other", "--alias", "plain=", "--pool-memory", "host=1GiB")
+	contains(t, out, "fast=base,chat=other,plain", "host=1.0 GB")
+	d.run(t, "slots", "update", "main", "--runtime", "vllm")
+	d.run(t, "slots", "update", "main", "--pool-memory", "")
+	d.runs.mu.Lock()
+	defer d.runs.mu.Unlock()
+	if len(d.runs.updates) != 3 {
+		t.Fatalf("updates %v", d.runs.updates)
+	}
+	merged := d.runs.updates[0]
+	want := []*v1.SlotAlias{{Name: "fast", InheritSlotId: "b1"}, {Name: "chat", InheritSlotId: "other"}, {Name: "plain"}}
+	if len(merged.GetAliases()) != len(want) {
+		t.Fatalf("aliases %v", merged.GetAliases())
+	}
+	for i, a := range want {
+		if !proto.Equal(merged.GetAliases()[i], a) {
+			t.Fatalf("alias %d %v, want %v", i, merged.GetAliases()[i], a)
+		}
+	}
+	if !maps.Equal(merged.GetPoolBytes(), map[string]uint64{"host": 1 << 30}) {
+		t.Fatalf("given caps %v", merged.GetPoolBytes())
+	}
+	kept := d.runs.updates[1]
+	if len(kept.GetAliases()) != 2 || kept.GetAliases()[0].GetInheritSlotId() != "b1" || !maps.Equal(kept.GetPoolBytes(), map[string]uint64{"gpu0": 8 << 30}) {
+		t.Fatalf("an update without those flags keeps aliases %v caps %v", kept.GetAliases(), kept.GetPoolBytes())
+	}
+	if cleared := d.runs.updates[2]; len(cleared.GetPoolBytes()) != 0 {
+		t.Fatalf("an empty cap list clears the caps %v", cleared.GetPoolBytes())
 	}
 }

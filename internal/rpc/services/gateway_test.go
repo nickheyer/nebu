@@ -77,7 +77,7 @@ func gatewayHarness(t *testing.T) (*GatewayService, *pools.Manager, *gateway.Gat
 	}
 	guard := auth.NewGuard("daemon-token", nil, nil)
 	gw, err := gateway.New(gateway.Deps{
-		Pools: mgr, Resolver: mgr, Manager: mgr, Store: mgr.Store(), DB: store, Events: bus, Guard: guard,
+		Pools: mgr, Resolver: mgr, Manager: mgr, Store: mgr.Store(), Sampler: mgr.Sampler(), DB: store, Events: bus, Guard: guard,
 		Tools: tools.New(log, bus), Runtimes: openAIRuntimes{}, Instances: plainInstances{},
 		Metrics: mreg, Telemetry: tp, Health: health.NewRegistry(), Logger: log,
 		Config: gateway.Config{

@@ -60,7 +60,7 @@
 		<FieldLabel {label} {info} forId={id} />
 		<div class="chips">{@render pills()}</div>
 	{/if}
-	<NeoInput bind:value={typed} {id} {disabled} placeholder={placeholder ?? (compact ? label : 'Type and press Enter')} elevation={-1} floating={false} width="100%" inputmode={numeric ? 'numeric' : undefined} {onkeydown} onblur={add} aria-label={label}>
+	<NeoInput bind:value={typed} {id} {disabled} placeholder={placeholder ?? (compact ? label : undefined)} elevation={-1} floating={false} width="100%" inputmode={numeric ? 'numeric' : undefined} {onkeydown} onblur={add} aria-label={label}>
 		{#snippet before()}
 			{#if compact && value.length}<span class="chips inline">{@render pills()}</span>{:else}<span class="plus"><PlusIcon size={16} /></span>{/if}
 		{/snippet}

@@ -1,4 +1,3 @@
-import type { Instance } from '#lib/proto/nebu/v1/instance_pb.js';
 import { InstanceState } from '#lib/proto/nebu/v1/instance_pb.js';
 import type { Slot } from '#lib/proto/nebu/v1/slot_pb.js';
 import type { Placement } from '#lib/proto/nebu/v1/estimate_pb.js';
@@ -7,16 +6,16 @@ import type { Task } from '#lib/proto/nebu/v1/task_pb.js';
 import { date, elapsed, ms, num } from '#lib/format.js';
 import type { Live } from '#lib/live/events.svelte.js';
 import type { KeyRow } from '#lib/ui/KeyRows.svelte';
-import type { Off } from '#lib/ui/fields/types.js';
+import type { Install } from '#lib/proto/nebu/v1/runtime_pb.js';
 
-// A gateway value as a policy field's placeholder, nothing when the gateway sets none
-export function literal(n: number | undefined): string | undefined {
-	return n ? String(n) : undefined;
+// The burst an empty box resolves to, the gateway's own or the rate in effect rounded up
+export function burstFallback(policy: Policy | undefined, gateway: Policy | undefined): number | undefined {
+	return gateway?.burst || Math.ceil(policy?.requestsPerSecond || gateway?.requestsPerSecond || 0) || undefined;
 }
 
-// The toggle emptying a policy field, a reset arrow while a gateway value stands in and the unbounded mark otherwise
-export function gatewayDefault(value: number | undefined, unbounded: string): Off {
-	return value ? { label: 'Gateway default' } : { label: unbounded };
+// An install by its version, the name of its binary when it reports none
+export function installLabel(i: Install): string {
+	return i.version || (i.path.split('/').pop() ?? i.id);
 }
 
 // The model phrase a run request names, repository and group
@@ -34,15 +33,6 @@ export function terminal(s: InstanceState): boolean {
 	return s === InstanceState.STOPPED || s === InstanceState.FAILED;
 }
 
-// The in flight count of the route a slot answers on
-export function slotInFlight(live: Live, slot: Slot): number | undefined {
-	return live.routes.get(slot.name)?.status?.inFlight;
-}
-
-export function instanceInFlight(live: Live, inst: Instance): number | undefined {
-	return live.routes.get(inst.name)?.status?.inFlight;
-}
-
 // Percent of the slot's traffic the incoming occupant takes, the last target of a split route
 export function canaryShare(live: Live, slot: Slot): number | undefined {
 	const targets = live.routes.get(slot.name)?.spec?.rules[0]?.targets ?? [];
@@ -55,7 +45,7 @@ export function canaryShare(live: Live, slot: Slot): number | undefined {
 export function policyRows(p: Policy | undefined): KeyRow[] {
 	if (!p) return [];
 	return [
-		{ label: 'max in flight', value: p.maxInFlight ? num(p.maxInFlight) : '' },
+		{ label: 'concurrent requests', value: p.maxInFlight ? num(p.maxInFlight) : '' },
 		{
 			label: 'requests per second',
 			value: p.requestsPerSecond ? String(p.requestsPerSecond) : ''
@@ -100,6 +90,7 @@ export function slotUpdate(s: Slot, patch: { position?: number; placement?: Plac
 		description: s.description,
 		deviceIds: s.deviceIds,
 		memoryBytes: s.memoryBytes,
+		poolBytes: s.poolBytes,
 		runtimeId: s.runtimeId,
 		params: s.params,
 		policy: s.policy,

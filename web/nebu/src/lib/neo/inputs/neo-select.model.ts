@@ -88,6 +88,12 @@ export type NeoSelectProps<Value = any> = {
    * Whether to show the search input.
    */
   search?: NeoPopSelectProps<Value>['search'];
+  /**
+   * Whether the dropdown closes once an item is picked
+   *
+   * @default true for a single select, false for a multiple one
+   */
+  closeOnSelect?: NeoPopSelectProps<Value>['closeOnSelect'];
 
   // Tooltip Props
   /**

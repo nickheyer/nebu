@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/instances/fake"
 	"github.com/nickheyer/nebu/internal/pools"
@@ -65,7 +64,7 @@ func portOf(t *testing.T, endpoint string) int {
 	return addr.Port
 }
 
-// A ready instance is scheduled, launched, healthy, published, routed and redacted, and a crash restarts it on the pinned install
+// A ready instance is scheduled, launched, healthy, published, routed and recorded, and a crash restarts it on the pinned install
 func TestCrashRestartsOnPinnedInstall(t *testing.T) {
 	quickBackoff(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -91,8 +90,8 @@ func TestCrashRestartsOnPinnedInstall(t *testing.T) {
 	if ready.GetRequest().GetInstallId() != n.install.GetId() {
 		t.Fatalf("the request pins install %q, want %q", ready.GetRequest().GetInstallId(), n.install.GetId())
 	}
-	if line := strings.Join(ready.GetCommand(), " "); strings.Contains(line, fake.Token) || !strings.Contains(line, auth.Redacted) {
-		t.Fatalf("the recorded command leaks or misses its redaction: %s", line)
+	if line := strings.Join(ready.GetCommand(), " "); !strings.Contains(line, fake.Token) {
+		t.Fatalf("the recorded command is not the command launched: %s", line)
 	}
 	owner := ownerOf(in.GetId())
 	eps := n.registrar.Endpoints(owner)
@@ -439,6 +438,9 @@ func TestAdapterLoadRepublishes(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, m, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
+	if rec, err := m.Get(in.GetId()); err != nil || !rec.GetAdapters() {
+		t.Fatalf("a launch with adapters on says it switches them %v %v", rec.GetAdapters(), err)
+	}
 	if err := m.LoadAdapter(ctx, in.GetId(), "sql", "/adapters/sql"); err != nil {
 		t.Fatal(err)
 	}
@@ -469,6 +471,9 @@ func TestAdapterLoadRepublishes(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, m, plain.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
+	if rec, err := m.Get(plain.GetId()); err != nil || rec.GetAdapters() {
+		t.Fatalf("a launch without adapters says it switches none %v %v", rec.GetAdapters(), err)
+	}
 	if err := m.LoadAdapter(ctx, plain.GetId(), "sql", "/adapters/sql"); err == nil {
 		t.Fatal("a launch without adapter support refuses a load")
 	}
@@ -540,8 +545,8 @@ func TestCloseThenRecoverRelaunchesInPlace(t *testing.T) {
 	second.Stop(ctx, in.GetId())
 }
 
-// A running process left by a previous daemon is adopted through its redacted command and keeps serving
-func TestAdoptMatchesRedactedCommand(t *testing.T) {
+// A running process left by a previous daemon is adopted through its recorded command and keeps serving
+func TestAdoptMatchesRecordedCommand(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	n := newSeatNode(t, ctx)
@@ -552,7 +557,7 @@ func TestAdoptMatchesRedactedCommand(t *testing.T) {
 	}
 	ready := waitState(t, first, in.GetId(), v1.InstanceState_INSTANCE_STATE_READY)
 	if !running(int(ready.GetPid()), ready.GetCommand()) {
-		t.Fatal("the redacted command matches its own process")
+		t.Fatal("the recorded command matches its own process")
 	}
 	second := n.manager(t, ctx, nil)
 	if err := second.Recover(ctx); err != nil {

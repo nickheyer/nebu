@@ -50,6 +50,8 @@ html[neo-theme-root],
 	--nebu-space-5: 24px;
 	--nebu-space-6: 32px;
 	--nebu-space-7: 48px;
+	/* Extra room a narrow scrolling column of fields keeps on its scrollbar side */
+	--nebu-scroll-pad: 8px;
 
 	/* Sizes */
 	--nebu-row: 40px;

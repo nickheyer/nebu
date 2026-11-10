@@ -302,7 +302,7 @@
 
   @include layers.neo-components {
     .neo-notification-stack {
-      z-index: var(--neo-z-index-layer-top, 2000000000);
+      z-index: var(--neo-z-index-layer-top, 1000000);
       width: 0;
       height: 0;
       list-style: none;

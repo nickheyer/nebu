@@ -54,9 +54,15 @@
 	import FilesIcon from 'phosphor-svelte/lib/FilesIcon';
 	import FolderIcon from 'phosphor-svelte/lib/FolderIcon';
 	import FolderOpenIcon from 'phosphor-svelte/lib/FolderOpenIcon';
+	import LinkSimpleIcon from 'phosphor-svelte/lib/LinkSimpleIcon';
 
-	// Every file as a tree with its size, a check on stored files and one action per row
-	let { artifacts, stored = new Set<string>(), action }: { artifacts: Artifact[]; stored?: Set<string>; action?: Snippet<[TreeItem]> } = $props();
+	// Every file as a tree with its size, marks for stored and shared files, and one action per row
+	let {
+		artifacts,
+		stored = new Set<string>(),
+		shared = new Map<string, string[]>(),
+		action
+	}: { artifacts: Artifact[]; stored?: Set<string>; shared?: Map<string, string[]>; action?: Snippet<[TreeItem]> } = $props();
 
 	const root = $derived(fileTree(artifacts));
 	const open = new SvelteSet<string>();
@@ -102,6 +108,7 @@
 			<span class="icon"><Icon size={18} /></span>
 			<span class="name mono">{baseName(f.path)}</span>
 			{#if stored.has(f.path)}<Tip text="Stored" tag="span"><span class="stored"><CheckCircleIcon size={16} weight="fill" /></span></Tip>{/if}
+			{#if shared.has(f.path)}<Tip text={`Also used by\n${shared.get(f.path)?.join('\n')}`} tag="span"><span class="shared" role="img" aria-label="Shared"><LinkSimpleIcon size={16} /></span></Tip>{/if}
 			<span class="size">{bytes(f.sizeBytes)}</span>
 			{#if action}<span class="act">{@render action({ path: f.path, name: baseName(f.path), files: [f], dir: false })}</span>{/if}
 		</div>
@@ -204,6 +211,11 @@
 		display: inline-flex;
 		flex: 0 0 auto;
 		color: var(--neo-color-success);
+	}
+	.shared {
+		display: inline-flex;
+		flex: 0 0 auto;
+		color: var(--nebu-text-muted);
 	}
 	.meta {
 		flex: 0 0 auto;

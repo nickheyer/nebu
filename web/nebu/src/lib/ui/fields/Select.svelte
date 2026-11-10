@@ -1,10 +1,11 @@
 <script lang="ts" generics="V extends string | number">
 	import type { Snippet } from 'svelte';
-	import { NeoSelect } from '#lib/neo/inputs/index.js';
+	import { NeoInput, NeoSelect } from '#lib/neo/inputs/index.js';
 	import type { NeoListItem } from '#lib/neo/list/index.js';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
 	import { fieldId, listPopover, selectToggle, type Option } from '#lib/ui/fields/types.js';
 
+	// One choice from a list, plain text in the same box once a single option is all there is
 	let {
 		value = $bindable(),
 		options,
@@ -46,11 +47,12 @@
 	const id = fieldId();
 	const items = $derived(options.map((o): NeoListItem<V> => ({ id: String(o.value), value: o.value, label: o.label, description: o.description, disabled: o.disabled })));
 	const hint = $derived(error ?? message);
-	// A compact select names itself in the empty box, every other empty select names the act of choosing
-	const empty = $derived(placeholder ?? (compact ? label : 'Select'));
+	const empty = $derived(placeholder ?? (compact ? label : undefined));
+	// The one option there is, once chosen, which leaves nothing to pick
+	const only = $derived(options.length === 1 && !clearable && !loading && options[0]!.value === value ? options[0] : undefined);
 </script>
 
-<div class="field" class:compact class:fit>
+<div class="field" class:compact class:fit class:only={only !== undefined}>
 	{#if !compact}<FieldLabel {label} {info} forId={id} {required} />{/if}
 	<div class="box">
 		{#if fit}
@@ -59,6 +61,9 @@
 				{#if empty}<span>{empty}</span>{/if}
 			</span>
 		{/if}
+		{#if only}
+			<NeoInput value={only.label} {id} readonly {disabled} elevation={-1} placement="inside" floating={false} message={hint} {error} width="100%" before={icon} aria-label={label} />
+		{:else}
 		<NeoSelect
 			bind:value
 			options={items}
@@ -82,6 +87,7 @@
 			buttonProps={selectToggle}
 			onChange={(v) => onchange?.(v as V | undefined)}
 		/>
+		{/if}
 	</div>
 </div>
 
@@ -119,6 +125,10 @@
 	}
 	.sizer.iconed {
 		padding-left: 3.75rem;
+	}
+	/* The one option there is reads as plain text in the box a dropdown would take */
+	.only :global(.neo-input-group .neo-input) {
+		cursor: default;
 	}
 	.fit .box :global(.neo-input-group) {
 		min-width: 0;

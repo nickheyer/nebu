@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
+	import type { NeoTooltipPlacement } from '#lib/neo/floating/common/neo-placement.model.js';
 	import { NeoPopConfirm } from '#lib/neo/floating/tooltips/index.js';
 	import RowAction from '#lib/ui/RowAction.svelte';
 
@@ -11,9 +12,10 @@
 		danger = false,
 		disabled = false,
 		small = true,
+		placement = 'bottom-end',
 		onconfirm,
 		body
-	}: { label: string; question: string; danger?: boolean; disabled?: boolean; small?: boolean; onconfirm: () => unknown; body?: Snippet } = $props();
+	}: { label: string; question: string; danger?: boolean; disabled?: boolean; small?: boolean; placement?: NeoTooltipPlacement; onconfirm: () => unknown; body?: Snippet } = $props();
 
 	let open = $state(false);
 
@@ -26,7 +28,7 @@
 	bind:open
 	elevation={2}
 	closable={false}
-	tooltipProps={{ placement: 'bottom-end', portal: true, openOnHover: false, openOnFocus: false }}
+	tooltipProps={{ placement, portal: true, openOnHover: false, openOnFocus: false }}
 	onConfirm={run}
 	cancelProps={{ label: 'Cancel', color: undefined, text: true, class: 'confirm-cancel' }}
 	confirmProps={{ label, color: danger ? 'error' : 'primary', text: true }}

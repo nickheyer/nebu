@@ -149,6 +149,8 @@ type MetricCapabilities struct {
 	SlotsPath string
 	// Whether every running request holds a full length cache, KV use then being running over capacity
 	StaticCache bool
+	// Counter that only grows as the runtime serves requests, read to see work done between two samples
+	WorkCounter string
 	// Path of the metrics endpoint
 	Path string
 	// Port serving the metrics path when the runtime serves it apart from the endpoint port
@@ -161,6 +163,9 @@ type MetricCapabilities struct {
 func (m MetricCapabilities) Complete() bool {
 	return m.QueuedRequests != "" && m.RunningRequests != "" && (m.KVCacheUtilization != "" || m.SlotsPath != "" || m.StaticCache)
 }
+
+// Whether endpoints of a pool with these names are scraped, the names complete and a metrics path set
+func (m MetricCapabilities) Scraped() bool { return m.Complete() && m.Path != "" }
 
 // A deep copy sharing no label matcher map with the original
 func (m MetricCapabilities) Clone() MetricCapabilities {
@@ -232,7 +237,11 @@ type ServerMetrics struct {
 	MaxLoRA            int
 	RunningAdapters    map[string]struct{}
 	WaitingAdapters    map[string]struct{}
-	UpdatedAt          time.Time
+	// The work counter's value, zero for a pool that declares none
+	Work float64
+	// When a sample last held requests or a work counter that moved since the sample before it
+	ActiveAt  time.Time
+	UpdatedAt time.Time
 }
 
 // Whether the sample is older than the staleness threshold
@@ -340,6 +349,16 @@ type DataSource interface {
 // A source that samples only the endpoints of pools it declares support for
 type PoolScoped interface {
 	Tracks(p Pool) bool
+}
+
+// Samples endpoints when something reads them instead of on a fixed timer
+type Sampler interface {
+	// Samples the endpoints at the deciding pace until released, first waiting a tick for any unsampled within the working pace
+	Deciding(ctx context.Context, ids []EndpointID) (release func())
+	// Samples the endpoint at the working pace until the release
+	Serving(id EndpointID) (release func())
+	// Samples the endpoints now, returning once each has finished a sample or ctx ends
+	Sample(ctx context.Context, ids []EndpointID)
 }
 
 // Every registered source by type

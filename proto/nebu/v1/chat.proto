@@ -50,6 +50,8 @@ message ChatTurn {
 
 // Request settings a conversation was made with
 message ChatSettings {
+  reserved 10;
+  reserved "tools";
   string system = 1;
   string dialect = 2;
   bool stream = 3;
@@ -59,8 +61,6 @@ message ChatSettings {
   string max_tokens = 7;
   string stop = 8;
   string seed = 9;
-  // Tool definitions as a JSON array.
-  string tools = 10;
   // Tool servers attached to every request
   repeated string tool_servers = 11;
   bool mutating_tools = 12;

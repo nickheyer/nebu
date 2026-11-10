@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
@@ -47,8 +46,7 @@ func NewManager(store Store, bus *events.Bus, log *slog.Logger, cacheDir string)
 // IDs must be valid store path segments.
 var validID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
-// Loads persisted sources and inserts missing bootstrap entries, then seeded defaults. Existing IDs
-// are preserved. Builds the registry from the resulting rows.
+// Loads persisted sources, fills empty secrets from their variables, adds missing bootstrap and seeded entries, and builds the registry
 func (m *Manager) Load(ctx context.Context, bootstrap []*v1.Source) error {
 	rows, err := m.Store.ListSources(ctx)
 	if err != nil {
@@ -57,11 +55,18 @@ func (m *Manager) Load(ctx context.Context, bootstrap []*v1.Source) error {
 	have := map[string]bool{}
 	for _, r := range rows {
 		have[r.GetId()] = true
-		if names := dropRetired(r); len(names) > 0 {
-			if err := m.Store.PutSource(ctx, r); err != nil {
-				return err
-			}
-			m.Log.Info("source settings naming environment variables dropped", "id", r.GetId(), "settings", strings.Join(names, ","))
+		dropped, seeded := dropRetired(r), seedSecrets(r)
+		if len(dropped) == 0 && len(seeded) == 0 {
+			continue
+		}
+		if err := m.Store.PutSource(ctx, r); err != nil {
+			return err
+		}
+		if len(dropped) > 0 {
+			m.Log.Info("source settings naming environment variables dropped", "id", r.GetId(), "settings", strings.Join(dropped, ","))
+		}
+		if len(seeded) > 0 {
+			m.Log.Info("source secrets stored from the environment", "id", r.GetId(), "settings", strings.Join(seeded, ","))
 		}
 	}
 	for _, cfg := range bootstrap {
@@ -86,6 +91,7 @@ func (m *Manager) Load(ctx context.Context, bootstrap []*v1.Source) error {
 		}
 		now := timestamppb.Now()
 		seed.CreatedAt, seed.UpdatedAt = now, now
+		seedSecrets(seed)
 		if err := m.Store.PutSource(ctx, seed); err != nil {
 			return err
 		}
@@ -108,23 +114,23 @@ func (m *Manager) rebuildLocked() error {
 	return m.Registry.Reload(cfgs)
 }
 
-// Lists every source in fallback order, secrets redacted
+// Lists every source in fallback order
 func (m *Manager) List() []*v1.Source {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]*v1.Source, 0, len(m.rows))
 	for _, r := range m.rows {
-		out = append(out, redact(r))
+		out = append(out, clone(r))
 	}
 	return out
 }
 
-// Returns one source by id, secrets redacted
+// Returns one source by id
 func (m *Manager) Get(id string) (*v1.Source, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if i := m.indexLocked(id); i >= 0 {
-		return redact(m.rows[i]), nil
+		return clone(m.rows[i]), nil
 	}
 	return nil, unknownSource(id)
 }
@@ -157,10 +163,10 @@ func (m *Manager) Create(ctx context.Context, in *v1.Source) (*v1.Source, error)
 		return nil, err
 	}
 	m.publish(v1.EventAction_EVENT_ACTION_CREATED, row)
-	return redact(row), nil
+	return clone(row), nil
 }
 
-// Updates source name and settings, preserving ID, kind, origin, and every secret sent back as the marker
+// Updates source name and settings, preserving ID, kind, and origin
 func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -175,7 +181,7 @@ func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error)
 	next := clone(row)
 	next.Name = strings.TrimSpace(in.GetName())
 	next.Config = trimConfig(in.GetConfig())
-	restore(next.Config, row.GetConfig())
+	seedSecrets(next)
 	next.UpdatedAt = timestamppb.Now()
 	if err := m.Registry.Check(next); err != nil {
 		return nil, err
@@ -188,7 +194,7 @@ func (m *Manager) Update(ctx context.Context, in *v1.Source) (*v1.Source, error)
 		return nil, err
 	}
 	m.publish(v1.EventAction_EVENT_ACTION_UPDATED, next)
-	return redact(next), nil
+	return clone(next), nil
 }
 
 // Removes a source unless it is a seeded default.
@@ -211,13 +217,13 @@ func (m *Manager) Delete(ctx context.Context, id string) (*v1.Source, error) {
 		return nil, err
 	}
 	m.publish(v1.EventAction_EVENT_ACTION_DELETED, row)
-	return redact(row), nil
+	return clone(row), nil
 }
 
-// Publishes a source change with its secrets redacted
+// Publishes a source change
 func (m *Manager) publish(action v1.EventAction, s *v1.Source) {
 	if m.Events != nil {
-		m.Events.Publish(v1.EventKind_EVENT_KIND_SOURCE, action, s.GetId(), redact(s))
+		m.Events.Publish(v1.EventKind_EVENT_KIND_SOURCE, action, s.GetId(), clone(s))
 	}
 }
 
@@ -231,7 +237,7 @@ func (m *Manager) prepare(in *v1.Source, build bool) (*v1.Source, error) {
 	row.Id = id
 	row.Name = strings.TrimSpace(in.GetName())
 	row.Config = trimConfig(in.GetConfig())
-	restore(row.Config, nil)
+	seedSecrets(row)
 	row.Seeded = false
 	now := timestamppb.Now()
 	row.CreatedAt, row.UpdatedAt = now, now
@@ -279,43 +285,26 @@ func sortRows(rows []*v1.Source) {
 
 func clone(s *v1.Source) *v1.Source { return proto.Clone(s).(*v1.Source) }
 
-// Copies a source with every secret in effect, stored or seeded by its variable, standing as the marker
-func redact(s *v1.Source) *v1.Source {
-	out := clone(s)
-	cat, ok := catalogs[s.GetKind()]
+// Stores the value its variable holds for every secret the row leaves empty, returning the names stored
+func seedSecrets(row *v1.Source) []string {
+	cat, ok := catalogs[row.GetKind()]
 	if !ok {
-		for k := range out.GetConfig() {
-			out.Config[k] = auth.Redacted
-		}
-		return out
+		return nil
 	}
+	var names []string
 	for _, f := range cat.Fields() {
-		if f.GetType() != v1.ConfigType_CONFIG_TYPE_SECRET {
+		if f.GetEnv() == "" || row.GetConfig()[f.GetName()] != "" {
 			continue
 		}
-		if out.GetConfig()[f.GetName()] == "" && (f.GetEnv() == "" || os.Getenv(f.GetEnv()) == "") {
-			continue
-		}
-		if out.Config == nil {
-			out.Config = map[string]string{}
-		}
-		out.Config[f.GetName()] = auth.Redacted
-	}
-	return out
-}
-
-// Puts stored secrets back wherever settings carry the marker, dropping a marker with nothing stored behind it
-func restore(cfg, stored map[string]string) {
-	for k, v := range cfg {
-		if v != auth.Redacted {
-			continue
-		}
-		if kept, ok := stored[k]; ok {
-			cfg[k] = kept
-		} else {
-			delete(cfg, k)
+		if v := strings.TrimSpace(os.Getenv(f.GetEnv())); v != "" {
+			if row.Config == nil {
+				row.Config = map[string]string{}
+			}
+			row.Config[f.GetName()] = v
+			names = append(names, f.GetName())
 		}
 	}
+	return names
 }
 
 // Removes the settings that once named environment variables from a stored row, returning their names

@@ -111,7 +111,7 @@
 	</Card>
 {/snippet}
 
-<PageHeader {tabs} active="sources" info="Where models come from, each with its endpoint and token" />
+<PageHeader {tabs} active="sources" />
 
 <Sheet open={open !== undefined} onclose={() => (open = undefined)} {list}>
 	{#if open !== undefined}

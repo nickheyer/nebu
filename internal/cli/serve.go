@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -395,10 +397,28 @@ func runSlotsList(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	return e.print(resp.Msg, func(w io.Writer) { slotsTable(w, resp.Msg.GetSlots()) })
+	return e.print(resp.Msg, func(w io.Writer) { slotsTable(w, resp.Msg.GetSlots(), slotNames(resp.Msg.GetSlots())) })
 }
 
-func slotsTable(w io.Writer, list []*v1.Slot) {
+// Prints slots as a table, naming the slot each alias inherits from out of every slot the daemon holds
+func (e *env) printSlots(ctx context.Context, msg proto.Message, list ...*v1.Slot) error {
+	all, err := e.cl.slots.ListSlots(ctx, connect.NewRequest(&v1.ListSlotsRequest{}))
+	if err != nil {
+		return err
+	}
+	return e.print(msg, func(w io.Writer) { slotsTable(w, list, slotNames(all.Msg.GetSlots())) })
+}
+
+// Every slot's name by its id
+func slotNames(list []*v1.Slot) map[string]string {
+	out := make(map[string]string, len(list))
+	for _, s := range list {
+		out[s.GetId()] = s.GetName()
+	}
+	return out
+}
+
+func slotsTable(w io.Writer, list []*v1.Slot, names map[string]string) {
 	var rows [][]string
 	for _, s := range list {
 		budget, devices := "-", "all"
@@ -408,21 +428,75 @@ func slotsTable(w io.Writer, list []*v1.Slot) {
 		if len(s.GetDeviceIds()) > 0 {
 			devices = strings.Join(s.GetDeviceIds(), ",")
 		}
-		rows = append(rows, []string{s.GetId(), s.GetName(), aliasText(s), loud(s.GetState()), modelText(s.GetRequest()), s.GetInstanceId(), placementText(s.GetPlacement()), devices, budget, policyText(s.GetPolicy()), profileText(s.GetProfile()), s.GetError()})
+		rows = append(rows, []string{s.GetId(), s.GetName(), aliasText(s, names), loud(s.GetState()), modelText(s.GetRequest()), s.GetInstanceId(), placementText(s.GetPlacement()), devices, budget, poolMemoryText(s.GetPoolBytes()), policyText(s.GetPolicy()), profileText(s.GetProfile()), s.GetError()})
 	}
-	table(w, []string{"ID", "NAME", "ALIASES", "STATE", "MODEL", "INSTANCE", "PLACEMENT", "DEVICES", "BUDGET", "LIMITS", "PROFILE", "ERROR"}, rows)
+	table(w, []string{"ID", "NAME", "ALIASES", "STATE", "MODEL", "INSTANCE", "PLACEMENT", "DEVICES", "BUDGET", "POOL CAPS", "LIMITS", "PROFILE", "ERROR"}, rows)
 }
 
-// The slots aliases
-func aliasText(s *v1.Slot) string {
+// The slot's aliases, one inheriting as name=slot, the slot by name when the daemon holds it
+func aliasText(s *v1.Slot, names map[string]string) string {
 	if len(s.GetAliases()) == 0 {
 		return "-"
 	}
-	names := make([]string, 0, len(s.GetAliases()))
+	out := make([]string, 0, len(s.GetAliases()))
 	for _, a := range s.GetAliases() {
-		names = append(names, a.GetName())
+		from := a.GetInheritSlotId()
+		if from == "" {
+			out = append(out, a.GetName())
+			continue
+		}
+		if name, ok := names[from]; ok {
+			from = name
+		}
+		out = append(out, a.GetName()+"="+from)
 	}
-	return strings.Join(names, ",")
+	return strings.Join(out, ",")
+}
+
+// Pool caps as pool=size in pool order, a dash for none
+func poolMemoryText(caps map[string]uint64) string {
+	if len(caps) == 0 {
+		return "-"
+	}
+	out := make([]string, 0, len(caps))
+	for _, pool := range slices.Sorted(maps.Keys(caps)) {
+		out = append(out, pool+"="+estimate.Human(caps[pool]))
+	}
+	return strings.Join(out, ",")
+}
+
+// Reads pool=size caps, each flag value one or more comma separated, an empty value giving none
+func parsePoolMemory(items []string) (map[string]uint64, error) {
+	out := map[string]uint64{}
+	for _, item := range items {
+		for _, pair := range strings.Split(item, ",") {
+			if strings.TrimSpace(pair) == "" {
+				continue
+			}
+			pool, size, ok := strings.Cut(strings.TrimSpace(pair), "=")
+			if !ok || pool == "" {
+				return nil, fmt.Errorf("pool-memory %q: expected pool=size", pair)
+			}
+			if _, twice := out[pool]; twice {
+				return nil, fmt.Errorf("pool-memory: pool %q is given twice", pool)
+			}
+			n, err := parseMemory(size)
+			if err != nil {
+				return nil, fmt.Errorf("pool-memory %s: %w", pool, err)
+			}
+			if n == 0 {
+				return nil, fmt.Errorf("pool-memory %q: a cap is above zero, leave the pool out to lift its cap", pair)
+			}
+			out[pool] = n
+		}
+	}
+	return out, nil
+}
+
+// Reads an alias flag value, name or name=slot, reporting whether it named the slot to inherit from
+func parseAlias(v string) (*v1.SlotAlias, bool) {
+	name, from, inherits := strings.Cut(v, "=")
+	return &v1.SlotAlias{Name: strings.TrimSpace(name), InheritSlotId: strings.TrimSpace(from)}, inherits
 }
 
 func parsePlacement(s string) (v1.Placement, error) {
@@ -457,11 +531,12 @@ func modelText(req *v1.RunRequest) string {
 // Defines slot flags and returns a function to read parsed values
 func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 	req := &v1.UpdateSlotRequest{}
-	var devices, params, aliases multi
+	var devices, params, aliases, poolMemory multi
 	var position uint
 	fs.Var(&devices, "device", "device id from nebu host, or node/device for one on another member, repeatable, all devices here when none")
-	fs.Var(&aliases, "alias", "extra names for a slot")
+	fs.Var(&aliases, "alias", "extra name for the slot as name, or name=slot to take that slot's limits and tools, repeatable")
 	memory := fs.String("memory", "", "the most memory a run takes per pool, such as 8GiB, whole pools when empty")
+	fs.Var(&poolMemory, "pool-memory", "the most memory a run takes from one pool as pool=size, node/pool=size for one on another member, repeatable or comma separated")
 	placement := fs.String("placement", "", "placement: device, host, or auto (device first, then host)")
 	fs.StringVar(&req.RuntimeId, "runtime", "", "default runtime for models run in the slot")
 	fs.UintVar(&position, "position", 0, "place in the slot list, one based, last when 0")
@@ -483,6 +558,9 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 		if req.MemoryBytes, err = parseMemory(*memory); err != nil {
 			return err
 		}
+		if req.PoolBytes, err = parsePoolMemory(poolMemory); err != nil {
+			return err
+		}
 		if req.Params, err = pairs(params, "param"); err != nil {
 			return err
 		}
@@ -492,8 +570,8 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 			}
 		}
 		for _, a := range aliases {
-			if a != "" {
-				req.Aliases = append(req.Aliases, &v1.SlotAlias{Name: a})
+			if alias, _ := parseAlias(a); alias.GetName() != "" {
+				req.Aliases = append(req.Aliases, alias)
 			}
 		}
 		return limits()
@@ -503,25 +581,25 @@ func slotFlags(fs *flag.FlagSet) (*v1.UpdateSlotRequest, func() error) {
 func runSlotsCreate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots create")
 	settings, read := slotFlags(fs)
-	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--runtime R] [--param k=v] [--args \"--flag {{.Name}}\"] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF] [--mutating-tools]")
+	positional, err := e.parse(fs, args, 1, 1, "slots create <name> [--alias NAME[=SLOT]] [--position N] [--placement device|host] [--device ID] [--memory 8GiB] [--pool-memory POOL=8GiB] [--runtime R] [--param k=v] [--args \"--flag {{.Name}}\"] [--max-in-flight N] [--rps R] [--burst N] [--timeout D] [--upstream-timeout D] [--tool-server REF] [--mutating-tools]")
 	if err != nil {
 		return err
 	}
 	if err := read(); err != nil {
 		return err
 	}
-	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Aliases: settings.Aliases, Placement: settings.Placement, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, RuntimeId: settings.RuntimeId, Params: settings.Params, Args: settings.Args, Policy: settings.Policy, Profile: settings.Profile, Position: settings.Position}))
+	resp, err := e.cl.slots.CreateSlot(ctx, connect.NewRequest(&v1.CreateSlotRequest{Name: positional[0], Aliases: settings.Aliases, Placement: settings.Placement, DeviceIds: settings.DeviceIds, MemoryBytes: settings.MemoryBytes, PoolBytes: settings.PoolBytes, RuntimeId: settings.RuntimeId, Params: settings.Params, Args: settings.Args, Policy: settings.Policy, Profile: settings.Profile, Position: settings.Position}))
 	if err != nil {
 		return err
 	}
-	return e.print(resp.Msg, func(w io.Writer) { slotsTable(w, []*v1.Slot{resp.Msg.GetSlot()}) })
+	return e.printSlots(ctx, resp.Msg, resp.Msg.GetSlot())
 }
 
 func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	fs := e.flags("slots update")
 	settings, read := slotFlags(fs)
 	rename := fs.String("name", "", "a new public name, the route following it")
-	positional, err := e.parse(fs, args, 1, 1, "slots update <name|id> [--name NEW] [--alias NAME] [--position N] [flags]")
+	positional, err := e.parse(fs, args, 1, 1, "slots update <name|id> [--name NEW] [--alias NAME[=SLOT]] [--pool-memory POOL=8GiB] [--position N] [flags]")
 	if err != nil {
 		return err
 	}
@@ -534,7 +612,7 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	}
 	// Updates replace all fields. Merge flag changes into the current slot
 	cur := current.Msg.GetSlot()
-	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Aliases: cur.GetAliases(), Placement: cur.GetPlacement(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams(), Args: cur.GetArgs(), Policy: cur.GetPolicy(), Profile: cur.GetProfile()}
+	req := &v1.UpdateSlotRequest{Id: cur.GetId(), Aliases: cur.GetAliases(), Placement: cur.GetPlacement(), DeviceIds: cur.GetDeviceIds(), MemoryBytes: cur.GetMemoryBytes(), PoolBytes: cur.GetPoolBytes(), RuntimeId: cur.GetRuntimeId(), Params: cur.GetParams(), Args: cur.GetArgs(), Policy: cur.GetPolicy(), Profile: cur.GetProfile()}
 	if req.Policy == nil {
 		req.Policy = &v1.Policy{}
 	}
@@ -549,19 +627,24 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 		case "device":
 			req.DeviceIds = settings.DeviceIds
 		case "alias":
-			// Names kept from the current list keep their limits and profile
+			// A name given bare keeps the slot its current alias inherits from
 			req.Aliases = nil
-			for _, a := range settings.Aliases {
-				kept := a
+			for _, v := range *f.Value.(*multi) {
+				alias, inherits := parseAlias(v)
+				if alias.GetName() == "" {
+					continue
+				}
 				for _, have := range cur.GetAliases() {
-					if have.GetName() == a.GetName() {
-						kept = have
+					if have.GetName() == alias.GetName() && !inherits {
+						alias = have
 					}
 				}
-				req.Aliases = append(req.Aliases, kept)
+				req.Aliases = append(req.Aliases, alias)
 			}
 		case "memory":
 			req.MemoryBytes = settings.MemoryBytes
+		case "pool-memory":
+			req.PoolBytes = settings.PoolBytes
 		case "placement":
 			req.Placement = settings.Placement
 		case "runtime":
@@ -580,7 +663,7 @@ func runSlotsUpdate(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	return e.print(resp.Msg, func(w io.Writer) { slotsTable(w, []*v1.Slot{resp.Msg.GetSlot()}) })
+	return e.printSlots(ctx, resp.Msg, resp.Msg.GetSlot())
 }
 
 // Defines an instance's own route limit, profile, and idle unload flags and returns a function setting them on a run
@@ -730,14 +813,19 @@ func runSlotsShow(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
+	all, err := e.cl.slots.ListSlots(ctx, connect.NewRequest(&v1.ListSlotsRequest{}))
+	if err != nil {
+		return err
+	}
 	return e.print(resp.Msg, func(w io.Writer) {
 		s := resp.Msg.GetSlot()
 		fmt.Fprintf(w, "%s %s %s\n", s.GetId(), s.GetName(), loud(s.GetState()))
 		rows := [][]string{
-			{"aliases", aliasText(s)},
+			{"aliases", aliasText(s, slotNames(all.Msg.GetSlots()))},
 			{"placement", placementText(s.GetPlacement())},
 			{"devices", strings.Join(s.GetDeviceIds(), ", ")},
 			{"budget", estimate.Human(s.GetMemoryBytes())},
+			{"pool caps", poolMemoryText(s.GetPoolBytes())},
 			{"runtime", s.GetRuntimeId()},
 			{"params", compact(s.GetParams())},
 			{"args", s.GetArgs()},
@@ -769,7 +857,7 @@ func runSlotsEvict(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	return e.print(resp.Msg, func(w io.Writer) { slotsTable(w, []*v1.Slot{resp.Msg.GetSlot()}) })
+	return e.printSlots(ctx, resp.Msg, resp.Msg.GetSlot())
 }
 
 func runSlotsRelaunch(ctx context.Context, e *env, args []string) error {
@@ -789,7 +877,7 @@ func runSlotsRelaunch(ctx context.Context, e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	return e.print(final.Msg, func(w io.Writer) { slotsTable(w, []*v1.Slot{final.Msg.GetSlot()}) })
+	return e.printSlots(ctx, final.Msg, final.Msg.GetSlot())
 }
 
 func runSlotsRemove(ctx context.Context, e *env, args []string) error {

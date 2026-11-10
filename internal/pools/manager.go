@@ -57,8 +57,9 @@ type Options struct {
 	// This node's id, the gateway every pool status reports against
 	NodeID string
 	Log    *slog.Logger
+	// Time between metric samples for each demand on an endpoint, a zero field taking the scrape default
+	Scrape scrape.Pace
 	// Time between samples of each source, the source default when zero
-	ScrapeInterval  time.Duration
 	ProbeInterval   time.Duration
 	CatalogInterval time.Duration
 	// Opens the sources' connections, imported endpoints reached through the mesh when set
@@ -79,6 +80,8 @@ type Manager struct {
 	runner *datalayer.Runner
 	// Subscribes to each local endpoint's KV cache events for the index set before Start
 	kv *kvevents.Source
+	// Scrapes endpoint metrics while a decision, a request in flight or an idle check reads them
+	metrics *scrape.Source
 
 	// Serializes every mutation and guards everything below it
 	mu      sync.Mutex
@@ -243,11 +246,12 @@ func (m *Manager) sources(opts Options) (datalayer.Sources, error) {
 	if err := srcs.Register(m.kv); err != nil {
 		return nil, err
 	}
+	m.metrics = scrape.New(m.store, m.metricsTarget, scrape.Options{Pace: opts.Scrape, Observer: opts.Scrapes, Dial: opts.Dial})
 	for _, reg := range []struct {
 		src datalayer.DataSource
 		col datalayer.Collector
 	}{
-		{scrape.New(m.store, m.metricsTarget, scrape.Options{Interval: opts.ScrapeInterval, Observer: opts.Scrapes, Dial: opts.Dial}), scrape.Collector{}},
+		{m.metrics, scrape.Collector{}},
 		{probe.New(m.store, m.healthURL, probe.Options{Interval: opts.ProbeInterval, Dial: opts.Dial}), probe.NewCollector(probe.DefaultThreshold)},
 		{catalog.New(m.store, catalog.StoreResolver(m.store), catalog.Options{Interval: opts.CatalogInterval, Dial: opts.Dial}), catalog.Collector{}},
 	} {
@@ -260,6 +264,9 @@ func (m *Manager) sources(opts Options) (datalayer.Sources, error) {
 	}
 	return srcs, nil
 }
+
+// The metrics source, asked for samples by whatever is about to read them
+func (m *Manager) Sampler() datalayer.Sampler { return m.metrics }
 
 // Sets the prefix index KV cache events are reported to, sized by the index's chunking, before Start
 func (m *Manager) SetIndexer(ix prefixcache.Indexer, cfg prefixcache.Config) {

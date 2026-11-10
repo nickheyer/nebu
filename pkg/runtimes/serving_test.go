@@ -211,6 +211,9 @@ func TestDeferredCounts(t *testing.T) {
 	if v, ok := slots([]string{"srv    load_model: loading model", "srv          init: initializing slots, n_slots = 4"}); !ok || v != "4" {
 		t.Fatalf("llama.cpp slots %q %v", v, ok)
 	}
+	if v, ok := slots([]string{"0.00.227.866 I srv    load_model: initializing, n_slots = 3, n_ctx_slot = 128, kv_unified = 'true'"}); !ok || v != "3" {
+		t.Fatalf("llama.cpp slots from the line its info level logs %q %v", v, ok)
+	}
 	if _, ok := slots([]string{"n_slots = x"}); ok {
 		t.Fatal("no slot line")
 	}

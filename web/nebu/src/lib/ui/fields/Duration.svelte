@@ -2,28 +2,24 @@
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
 	import Stepper from '#lib/ui/fields/Stepper.svelte';
-	import { fieldId, type Off } from '#lib/ui/fields/types.js';
+	import { fieldId } from '#lib/ui/fields/types.js';
 
 	type Unit = 'ms' | 's' | 'min' | 'h' | 'd';
 	const factors: Record<Unit, number> = { ms: 1, s: 1000, min: 60_000, h: 3_600_000, d: 86_400_000 };
 
+	// A span as a number and a unit, zero empty under emptyZero, the empty box showing its resolved span
 	let {
 		value = $bindable(0),
 		base = 'ms',
-		// The smallest unit offered, the base unit unless a coarser one reads better
 		smallest = base,
 		max,
 		label,
 		info,
-		// What an empty box means when nothing else says
-		placeholder,
 		disabled = false,
 		message,
 		emptyZero = false,
-		// The span an empty box resolves to, in the base unit
-		fallback,
-		off
-	}: { value?: number; base?: 'ms' | 's'; smallest?: Unit; max?: number; label?: string; info?: string; placeholder?: string; disabled?: boolean; message?: string; emptyZero?: boolean; fallback?: number; off?: Off } = $props();
+		fallback
+	}: { value?: number; base?: 'ms' | 's'; smallest?: Unit; max?: number; label?: string; info?: string; disabled?: boolean; message?: string; emptyZero?: boolean; fallback?: number } = $props();
 
 	const id = fieldId();
 	const baseFactor = $derived(base === 'ms' ? 1 : 1000);
@@ -38,7 +34,6 @@
 	let raw = $state<number | string | null>('');
 	let focused = $state(false);
 	let emitted: number | undefined;
-	const isOff = $derived(emptyZero && value === 0);
 
 	// The largest unit dividing a span evenly
 	function fit(ms: number): Unit {
@@ -47,13 +42,13 @@
 		return best;
 	}
 
-	// A value set from outside takes the unit fitting it, an empty box the fallback's unit or none
+	// A value set from outside takes the unit fitting it, an empty box the unit of its resolved span
 	$effect(() => {
 		const ms = value * baseFactor;
 		if (focused || value === emitted) return;
 		if (ms === 0) {
 			raw = emptyZero ? '' : 0;
-			unit = fallback ? fit(fallback * baseFactor) : emptyZero ? undefined : defaultUnit;
+			unit = fallback ? fit(fallback * baseFactor) : defaultUnit;
 			return;
 		}
 		unit = fit(ms);
@@ -77,11 +72,7 @@
 	}
 
 	const unitMax = $derived(max === undefined ? undefined : Math.floor((max * baseFactor) / factors[unit ?? defaultUnit]));
-	const hint = $derived.by(() => {
-		if (!isOff) return '';
-		if (fallback) return String(Math.round(((fallback * baseFactor) / factors[unit ?? fit(fallback * baseFactor)]) * 100) / 100);
-		return off?.label ?? placeholder ?? '';
-	});
+	const resolved = $derived(fallback ? Math.round(((fallback * baseFactor) / factors[unit ?? fit(fallback * baseFactor)]) * 100) / 100 : undefined);
 </script>
 
 {#snippet unitButtons()}
@@ -92,7 +83,7 @@
 
 <div class="field">
 	<FieldLabel {label} {info} forId={id} />
-	<Stepper {id} bind:raw bind:focused min={0} max={unitMax} placeholder={hint} {disabled} {message} off={emptyZero ? off : undefined} {isOff} ariaLabel={label} tail={unitButtons} onchange={changed} />
+	<Stepper {id} bind:raw bind:focused min={0} max={unitMax} fallback={emptyZero ? resolved : undefined} {disabled} {message} ariaLabel={label} tail={unitButtons} onchange={changed} />
 </div>
 
 <style>

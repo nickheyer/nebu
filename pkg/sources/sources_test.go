@@ -13,7 +13,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nickheyer/nebu/internal/auth"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
@@ -146,6 +145,34 @@ func TestProvidersDeclareFieldsPerTransport(t *testing.T) {
 	if got := names(byKind[v1.SourceKind_SOURCE_KIND_NGC]); got != "endpoint,token,auth_endpoint" {
 		t.Fatalf("ngc fields %s", got)
 	}
+	// Every setting of a provider shows at once, so each label names one setting alone
+	labels := func(p *v1.Provider) string {
+		out := make([]string, 0, len(p.GetFields()))
+		for _, f := range p.GetFields() {
+			out = append(out, f.GetLabel())
+		}
+		return strings.Join(out, ",")
+	}
+	for kind, want := range map[v1.SourceKind]string{
+		v1.SourceKind_SOURCE_KIND_HUGGINGFACE: "Endpoint,Token,CLI command",
+		v1.SourceKind_SOURCE_KIND_GITHUB:      "Endpoint,Token,Git host,Git token",
+		v1.SourceKind_SOURCE_KIND_NGC:         "Endpoint,Token,Auth endpoint",
+		v1.SourceKind_SOURCE_KIND_OCI:         "Endpoint,Registry,Registry credential",
+		v1.SourceKind_SOURCE_KIND_OLLAMA:      "Endpoint,Token,Registry",
+	} {
+		if got := labels(byKind[kind]); got != want {
+			t.Fatalf("%s labels %s, want %s", kind, got, want)
+		}
+	}
+	for _, p := range byKind {
+		seen := map[string]bool{}
+		for _, f := range p.GetFields() {
+			if seen[f.GetLabel()] {
+				t.Fatalf("%s labels two settings %s", p.GetName(), f.GetLabel())
+			}
+			seen[f.GetLabel()] = true
+		}
+	}
 	local := byKind[v1.SourceKind_SOURCE_KIND_LOCAL]
 	if !local.GetConfigured() || len(local.GetFields()) != 1 || !local.GetFields()[0].GetRequired() || local.GetFields()[0].GetType() != v1.ConfigType_CONFIG_TYPE_PATH || local.GetFields()[0].GetTransport() != TransportFile {
 		t.Fatalf("local fields %v", local.GetFields())
@@ -257,7 +284,7 @@ func TestManagerSeedsBootstrapsAndEdits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hf.GetSeeded() || hf.GetName() != "The Hub" || hf.GetConfig()["token"] != auth.Redacted || hf.GetKind() != v1.SourceKind_SOURCE_KIND_HUGGINGFACE || !hf.GetUpdatedAt().AsTime().After(hf.GetCreatedAt().AsTime()) {
+	if !hf.GetSeeded() || hf.GetName() != "The Hub" || hf.GetConfig()["token"] != "hf_stored" || hf.GetKind() != v1.SourceKind_SOURCE_KIND_HUGGINGFACE || !hf.GetUpdatedAt().AsTime().After(hf.GetCreatedAt().AsTime()) {
 		t.Fatalf("update %+v", hf)
 	}
 	if src, _ := m.Registry.Get("huggingface"); src.(*Client).Token() != "hf_stored" || !src.Capabilities(ctx).GetTokenPresent() || src.Capabilities(ctx).GetEndpoint() != "https://huggingface.co" {
@@ -294,7 +321,7 @@ func TestManagerSeedsBootstrapsAndEdits(t *testing.T) {
 	if got := ids(again.List()); got != "disk,"+seeds {
 		t.Fatalf("reloaded order %s", got)
 	}
-	if hf, _ := again.Get("huggingface"); hf.GetConfig()["token"] != auth.Redacted || !hf.GetSeeded() {
+	if hf, _ := again.Get("huggingface"); hf.GetConfig()["token"] != "hf_stored" || !hf.GetSeeded() {
 		t.Fatalf("reloaded %+v", hf)
 	}
 	if src, _ := again.Registry.Get("huggingface"); src.(*Client).Token() != "hf_stored" {
@@ -328,58 +355,51 @@ func TestSecretsSeedFromEnvAndUpdatesOverride(t *testing.T) {
 	if err := m.Load(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
-	if read, spec, status, stored, live := hubToken(t, m, store); read != auth.Redacted || spec != auth.Redacted || status != auth.Redacted || stored != "" || live != "hf_from_env" {
-		t.Fatalf("seeded by the variable: read=%q spec=%q status=%q stored=%q live=%q", read, spec, status, stored, live)
+	if read, spec, status, stored, live := hubToken(t, m, store); read != "hf_from_env" || spec != "hf_from_env" || status != "hf_from_env" || stored != "hf_from_env" || live != "hf_from_env" {
+		t.Fatalf("stored from the variable at load: read=%q spec=%q status=%q stored=%q live=%q", read, spec, status, stored, live)
 	}
 	if src, _ := m.Registry.Get("huggingface"); src.Capabilities(ctx).GetTokenEnv() != "HF_TOKEN" || !src.Capabilities(ctx).GetTokenPresent() {
 		t.Fatalf("capabilities %+v", src.Capabilities(ctx))
 	}
-	// The marker sent back over a seeded token stores nothing
-	if _, err := m.Update(ctx, &v1.Source{Id: "huggingface", Config: map[string]string{"token": auth.Redacted}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, stored, live := hubToken(t, m, store); stored != "" || live != "hf_from_env" {
-		t.Fatalf("marker over a seeded token: stored=%q live=%q", stored, live)
-	}
 	if _, err := m.Update(ctx, &v1.Source{Id: "huggingface", Config: map[string]string{"token": "hf_typed"}}); err != nil {
 		t.Fatal(err)
 	}
-	if read, spec, status, stored, live := hubToken(t, m, store); read != auth.Redacted || spec != auth.Redacted || status != auth.Redacted || stored != "hf_typed" || live != "hf_typed" {
+	if read, spec, status, stored, live := hubToken(t, m, store); read != "hf_typed" || spec != "hf_typed" || status != "hf_typed" || stored != "hf_typed" || live != "hf_typed" {
 		t.Fatalf("typed over the variable: read=%q spec=%q status=%q stored=%q live=%q", read, spec, status, stored, live)
 	}
-	// The marker sent back keeps the stored token while other settings change
-	if _, err := m.Update(ctx, &v1.Source{Id: "huggingface", Name: "Hub", Config: map[string]string{"token": auth.Redacted, "endpoint": "https://hf-mirror.com"}}); err != nil {
+	// The token read back and sent again stays while other settings change
+	read, _ := m.Get("huggingface")
+	if _, err := m.Update(ctx, &v1.Source{Id: "huggingface", Name: "Hub", Config: map[string]string{"token": read.GetConfig()["token"], "endpoint": "https://hf-mirror.com"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, stored, live := hubToken(t, m, store); stored != "hf_typed" || live != "hf_typed" || store.rows["huggingface"].GetConfig()["endpoint"] != "https://hf-mirror.com" {
-		t.Fatalf("marker over a stored token: stored=%q live=%q", stored, live)
+	if read, _, _, stored, live := hubToken(t, m, store); read != "hf_typed" || stored != "hf_typed" || live != "hf_typed" || store.rows["huggingface"].GetConfig()["endpoint"] != "https://hf-mirror.com" {
+		t.Fatalf("token sent back as read: read=%q stored=%q live=%q", read, stored, live)
 	}
-	for _, row := range m.List() {
-		for k, v := range row.GetConfig() {
-			if v == "hf_typed" || v == "hf_from_env" {
-				t.Fatalf("%s lists %s in the clear", row.GetId(), k)
-			}
-		}
+	listed, _ := m.Get("huggingface")
+	listed.Config["token"] = "edited"
+	if _, _, _, stored, live := hubToken(t, m, store); stored != "hf_typed" || live != "hf_typed" {
+		t.Fatalf("a caller's edit of a read reached the row: stored=%q live=%q", stored, live)
 	}
-	// A cleared token falls back to the variable
+	// A stored token outlasts a restart under a variable that says otherwise
+	again := NewManager(store, nil, nil, t.TempDir())
+	if err := again.Load(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if read, _, _, stored, live := hubToken(t, again, store); read != "hf_typed" || stored != "hf_typed" || live != "hf_typed" {
+		t.Fatalf("restart over a stored token: read=%q stored=%q live=%q", read, stored, live)
+	}
+	// A cleared token is stored from the variable again
 	if _, err := m.Update(ctx, &v1.Source{Id: "huggingface"}); err != nil {
 		t.Fatal(err)
 	}
-	if read, _, _, stored, live := hubToken(t, m, store); read != auth.Redacted || stored != "" || live != "hf_from_env" {
+	if read, _, _, stored, live := hubToken(t, m, store); read != "hf_from_env" || stored != "hf_from_env" || live != "hf_from_env" {
 		t.Fatalf("cleared back to the variable: read=%q stored=%q live=%q", read, stored, live)
 	}
-	t.Setenv("HF_TOKEN", "")
-	if got := redact(store.rows["huggingface"]).GetConfig()["token"]; got != "" {
-		t.Fatalf("a source with no token reads %q", got)
-	}
-	if got := redact(&v1.Source{Id: "x", Kind: v1.SourceKind(99), Config: map[string]string{"anything": "secret"}}).GetConfig()["anything"]; got != auth.Redacted {
-		t.Fatalf("a source of an unknown kind reads %q", got)
-	}
-	created, err := m.Create(ctx, &v1.Source{Id: "lab", Kind: v1.SourceKind_SOURCE_KIND_GIT, Config: map[string]string{"endpoint": "https://gitlab.com", "token": auth.Redacted, "username": "me"}})
+	created, err := m.Create(ctx, &v1.Source{Id: "lab", Kind: v1.SourceKind_SOURCE_KIND_GIT, Config: map[string]string{"endpoint": "https://gitlab.com", "token": "glpat_typed", "username": "me"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, has := store.rows["lab"].GetConfig()["token"]; has || store.rows["lab"].GetConfig()["username"] != "me" || created.GetConfig()["username"] != auth.Redacted {
+	if store.rows["lab"].GetConfig()["token"] != "glpat_typed" || store.rows["lab"].GetConfig()["username"] != "me" || created.GetConfig()["token"] != "glpat_typed" || created.GetConfig()["username"] != "me" {
 		t.Fatalf("created %v stored %v", created, store.rows["lab"])
 	}
 }
@@ -387,6 +407,9 @@ func TestSecretsSeedFromEnvAndUpdatesOverride(t *testing.T) {
 func TestLoadDropsSettingsNamingVariables(t *testing.T) {
 	t.Setenv("HF_TOKEN", "hf_from_env")
 	t.Setenv("MY_HF_TOKEN", "hf_other")
+	for _, name := range []string{"DOCKER_TOKEN", "KAGGLE_USERNAME", "KAGGLE_KEY"} {
+		t.Setenv(name, "")
+	}
 	ctx := context.Background()
 	store := &memStore{rows: map[string]*v1.Source{
 		"huggingface": {Id: "huggingface", Kind: v1.SourceKind_SOURCE_KIND_HUGGINGFACE, Seeded: true, Config: map[string]string{"endpoint": "https://hf-mirror.com", "token_env": "MY_HF_TOKEN"}},
@@ -397,7 +420,10 @@ func TestLoadDropsSettingsNamingVariables(t *testing.T) {
 	if err := m.Load(ctx, nil); err != nil {
 		t.Fatal(err)
 	}
-	for id, want := range map[string]int{"huggingface": 1, "dockerhub": 1, "kaggle": 0} {
+	if got := store.rows["huggingface"].GetConfig()["token"]; got != "hf_from_env" {
+		t.Fatalf("the hub stores %q from its own variable", got)
+	}
+	for id, want := range map[string]int{"huggingface": 2, "dockerhub": 1, "kaggle": 0} {
 		if got := store.rows[id].GetConfig(); len(got) != want {
 			t.Fatalf("%s keeps %v", id, got)
 		}

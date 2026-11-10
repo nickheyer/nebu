@@ -1,9 +1,10 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { useSheetFoot } from '#lib/ui/layout/sheet.svelte.js';
 
-	// A form's commit row, shown once dirty or always for a create form
+	// A form's commit row, shown once dirty, always when creating, and whenever it holds a delete on its left
 	let {
 		dirty,
 		always = false,
@@ -13,8 +14,9 @@
 		label = 'Save',
 		disabled = false,
 		onsave,
-		ondiscard
-	}: { dirty: boolean; always?: boolean; saving?: boolean; message?: string; error?: string; label?: string; disabled?: boolean; onsave: () => unknown; ondiscard: () => void } = $props();
+		ondiscard,
+		leading
+	}: { dirty: boolean; always?: boolean; saving?: boolean; message?: string; error?: string; label?: string; disabled?: boolean; onsave: () => unknown; ondiscard: () => void; leading?: Snippet } = $props();
 
 	const status = $derived(error ?? message);
 	const foot = useSheetFoot();
@@ -26,8 +28,9 @@
 	};
 </script>
 
-{#if always || dirty || error !== undefined}
+{#if always || dirty || error !== undefined || leading}
 	<div class="savebar" {@attach dock}>
+		{#if leading}{@render leading()}{/if}
 		{#if status}<span class="msg" class:error-text={error !== undefined} aria-live="polite">{status}</span>{/if}
 		<span class="fill"></span>
 		<NeoButton text onclick={ondiscard} disabled={saving || (!dirty && !always)}>{always ? 'Cancel' : 'Discard'}</NeoButton>

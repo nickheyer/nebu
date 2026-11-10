@@ -35,7 +35,7 @@ func (m *Manager) Resolve(ctx context.Context, clientModel string) (datalayer.Po
 	case len(r.targets) == 0:
 		return datalayer.Pool{}, "", fmt.Errorf("%w: route %s has no targets", requestcontrol.ErrNoReadyEndpoints, r.route)
 	}
-	t := m.draw(r)
+	t := m.draw(ctx, r)
 	pool, ok := m.store.Pool(t.pool)
 	if !ok {
 		return datalayer.Pool{}, "", fmt.Errorf("%w: route %s sends to pool %s which does not exist", requestcontrol.ErrNoReadyEndpoints, r.route, t.pool)
@@ -51,7 +51,16 @@ func (m *Manager) Resolve(ctx context.Context, clientModel string) (datalayer.Po
 }
 
 // Draws a target among those with a ready healthy endpoint, or among all when none has one, by the rule's balance
-func (m *Manager) draw(r *rule) target {
+func (m *Manager) draw(ctx context.Context, r *rule) target {
+	if r.balance == v1.RouteBalance_ROUTE_BALANCE_FREE_CAPACITY {
+		var ids []datalayer.EndpointID
+		for _, t := range r.targets {
+			for _, ep := range m.store.Endpoints(t.pool, datalayer.ReadyAndHealthy) {
+				ids = append(ids, ep.ID())
+			}
+		}
+		defer m.metrics.Deciding(ctx, ids)()
+	}
 	weights := make([]int, len(r.targets))
 	anyReady := false
 	for i, t := range r.targets {

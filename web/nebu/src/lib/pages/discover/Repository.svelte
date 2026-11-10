@@ -2,9 +2,8 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { bytes, plural } from '#lib/format.js';
+	import { bytes } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import type { Model } from '#lib/proto/nebu/v1/model_pb.js';
 	import type { ModelCard, Revision, SourceStatus } from '#lib/proto/nebu/v1/source_pb.js';
@@ -20,11 +19,10 @@
 	import Select from '#lib/ui/fields/Select.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
-	import FileTree, { fileTree, type TreeItem } from '#lib/ui/FileTree.svelte';
+	import FileTree, { type TreeItem } from '#lib/ui/FileTree.svelte';
 	import PullButton from '#lib/pages/discover/PullButton.svelte';
 	import WeightsTable from '#lib/pages/discover/WeightsTable.svelte';
 	import { lastSearch } from '#lib/pages/discover/discover.js';
-	import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 	import FileTextIcon from 'phosphor-svelte/lib/FileTextIcon';
 	import PlugsIcon from 'phosphor-svelte/lib/PlugsIcon';
@@ -32,7 +30,6 @@
 	let { sourceId, repo }: { sourceId: string; repo: string } = $props();
 
 	const back = lastSearch.href;
-	const external: Record<string, string> = { target: '_blank', rel: 'noreferrer' };
 
 	let source = $state<SourceStatus | undefined>(undefined);
 	let revisions = $state<Revision[]>([]);
@@ -47,7 +44,6 @@
 	let cardError = $state('');
 	let tab = $state(page.url.searchParams.get('tab') || 'weights');
 	let nodeId = $state<string | undefined>(undefined);
-	let free = $state(false);
 	let width = $state(0);
 
 	const caps = $derived(source?.capabilities);
@@ -61,7 +57,6 @@
 	// This node is the picker's resting value, so pulls name no node until another is chosen
 	const selfId = $derived([...live.nodes.values()].find((n) => n.self)?.id);
 	const pickedNode = $derived(nodeId ?? selfId);
-	const tree = $derived(fileTree(model?.artifacts ?? []));
 	const storedPaths = $derived(new Set([...live.models.values()].filter((m) => m.sourceId === sourceId && m.repo === repo).flatMap((m) => m.artifacts.map((a) => a.artifact?.path ?? ''))));
 	// Relative paths resolve to their download in the repository, anything else against its page
 	const resolver = $derived.by((): Resolve => {
@@ -154,21 +149,6 @@
 	</Card>
 {/snippet}
 
-<!-- The card's own tools, the revision and node the table reads from and the way out to the source -->
-{#snippet cardTools()}
-	{#if activeTab === 'files' && model}
-		<span class="count">{plural(tree.count, 'file')} · {bytes(tree.bytes)}</span>
-	{/if}
-	{#if live.inMesh}
-		<Picker bind:value={() => pickedNode, (v) => (nodeId = v === selfId ? undefined : v)} fetch={fetchNodes} label="Node" compact current={pickedNode ? live.nodes.get(pickedNode)?.name : undefined} />
-	{/if}
-	{#if revisions.length}
-		<Select bind:value={revision} options={revisionOptions} label="Revision" compact fit />
-	{/if}
-	{#if webUrl && source}
-		<NeoButton text href={webUrl} {...external} aria-label="Open at {source.source?.name || sourceId}" title="Open at {source.source?.name || sourceId}">{#snippet icon()}<ArrowSquareOutIcon size={20} />{/snippet}</NeoButton>
-	{/if}
-{/snippet}
 
 {#snippet filePull(item: TreeItem)}
 	<PullButton {sourceId} {repo} {revision} paths={item.files.map((f) => f.path)} name={item.name} nodeId={nodeId ?? ''} />
@@ -184,7 +164,7 @@
 	{/if}
 {/snippet}
 
-<PageHeader title={repo} back={{ label: 'Discover', href: back }} info="One repository at a source, its weights with their fit on this host, every file it holds and its card" />
+<PageHeader title={repo} back={{ label: 'Discover', href: back }} origin={webUrl && source ? { label: source.source?.name || sourceId, href: webUrl } : undefined} />
 
 <div class="frame" bind:clientWidth={width}>
 	{#if headError}
@@ -196,19 +176,26 @@
 	{:else}
 		<div class="layout" class:beside>
 			<aside class="operator" aria-label="Repository">
+				<!-- The tabs, then the node the pulls land on and the revision the tables read from -->
 				<div class="opbar">
-					<PageTabs {tabs} active={activeTab} onchange={openTab} />
+					<div class="tabs"><PageTabs {tabs} active={activeTab} onchange={openTab} /></div>
+					{#if live.inMesh}
+						<span class="node"><Picker bind:value={() => pickedNode, (v) => (nodeId = v === selfId ? undefined : v)} fetch={fetchNodes} label="Node" compact current={pickedNode ? live.nodes.get(pickedNode)?.name : undefined} /></span>
+					{/if}
+					{#if revisions.length}
+						<Select bind:value={revision} options={revisionOptions} label="Revision" compact fit />
+					{/if}
 				</div>
 				{#if activeTab === 'card'}
 					{@render modelCard()}
 				{:else}
-				<Card flush scroll={beside} tools={cardTools}>
+				<Card flush scroll={beside}>
 					{#if resolveError}
 						<Empty icon={CubeIcon} text="Repository failed to resolve" hint={resolveError} action="Retry" onclick={() => attempt++} />
 					{:else if !model}
 						<Skeleton rows={6} dot={false} leading="20px" primary="24ch" secondary="10ch" facts={1} action={false} menu={false} />
 					{:else if activeTab === 'weights'}
-						<WeightsTable {sourceId} {repo} {revision} {model} bind:free nodeId={nodeId ?? ''} />
+						<WeightsTable {sourceId} {repo} {revision} {model} nodeId={nodeId ?? ''} />
 						{@render warnings()}
 					{:else}
 						<FileTree artifacts={model.artifacts} stored={storedPaths} action={filePull} />
@@ -259,19 +246,21 @@
 	}
 	.opbar {
 		display: flex;
+		gap: var(--nebu-space-2);
+		align-items: center;
 		min-width: 0;
 	}
-	/* The node picker takes a set width so the card's tools hold their line on a half width panel */
-	.operator :global(.card .tools > .field:not(.fit)) {
+	.tabs {
+		display: flex;
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.node {
+		display: inline-flex;
 		width: 10rem;
+		min-width: 0;
 	}
 	.reading {
 		min-width: 0;
-	}
-	.count {
-		font-size: var(--nebu-text-secondary);
-		font-variant-numeric: tabular-nums;
-		color: var(--nebu-text-muted);
-		white-space: nowrap;
 	}
 </style>

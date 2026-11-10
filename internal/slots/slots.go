@@ -126,7 +126,7 @@ func (m *Manager) isBusy(id string) bool {
 	return m.busy[id]
 }
 
-// Loads every slot from the store, giving a slot saved before desire was recorded the intent its request implied
+// Loads every slot from the store, giving older slots the desire their request implied and clearing inherits of gone slots
 func (m *Manager) Load(ctx context.Context) error {
 	list, err := m.DB.ListSlots(ctx)
 	if err != nil {
@@ -141,7 +141,14 @@ func (m *Manager) Load(ctx context.Context) error {
 		}
 		m.slots[s.GetId()] = s
 	}
+	var heirs []*v1.Slot
+	for _, s := range m.slots {
+		if m.unheritLocked(s) {
+			heirs = append(heirs, m.bumpLocked(s))
+		}
+	}
 	m.mu.Unlock()
+	m.persist(heirs)
 	m.renumber()
 	return nil
 }
@@ -420,6 +427,14 @@ func (m *Manager) apply(id string, fn func(*v1.Slot)) *v1.Slot {
 	return proto.Clone(s).(*v1.Slot)
 }
 
+// Bumps the held slot's generation and derives its status as update does, returning a copy, the caller holding the lock
+func (m *Manager) bumpLocked(s *v1.Slot) *v1.Slot {
+	bump(s)
+	m.statusLocked(s)
+	s.UpdatedAt = timestamppb.Now()
+	return proto.Clone(s).(*v1.Slot)
+}
+
 // Bumps the spec generation the slot's status is measured against
 func bump(s *v1.Slot) {
 	if s.Meta == nil {
@@ -494,6 +509,7 @@ func (m *Manager) Reservation(ctx context.Context, id string) (*instances.Reserv
 		Name:        s.GetName(),
 		DeviceIDs:   m.localDevices(s.GetDeviceIds()),
 		MemoryBytes: s.GetMemoryBytes(),
+		PoolBytes:   m.localPools(s.GetPoolBytes()),
 		Placement:   s.GetPlacement(),
 		RuntimeID:   s.GetRuntimeId(),
 		Params:      s.GetParams(),
@@ -516,6 +532,18 @@ func (m *Manager) localDevices(ids []string) []string {
 			continue
 		}
 		out = append(out, id)
+	}
+	return out
+}
+
+// The slot's pool caps this node holds keyed by pool id alone, caps on other nodes left out
+func (m *Manager) localPools(caps map[string]uint64) map[string]uint64 {
+	out := make(map[string]uint64, len(caps))
+	for key, bytes := range caps {
+		node, pool := m.splitDevice(key)
+		if node == "" || m.Formations != nil && node == m.Formations.Self() {
+			out[pool] = bytes
+		}
 	}
 	return out
 }
@@ -562,17 +590,7 @@ func checkProfile(p *v1.Profile) error {
 	return nil
 }
 
-// Whether a profile sets anything, an empty one inheriting everything
-func profileSet(p *v1.Profile) bool {
-	return len(p.GetToolServers()) > 0 || p.GetMutatingTools()
-}
-
-// Whether a policy sets any limit, an empty one inheriting every limit
-func policySet(p *v1.Policy) bool {
-	return p.GetMaxInFlight()+p.GetBurst()+p.GetRequestTimeoutMs()+p.GetUpstreamTimeoutMs() > 0 || p.GetRequestsPerSecond() > 0
-}
-
-// Trims and checks a slot's alias list against its own name
+// Trims and checks a slot's alias list against its own name, each inherit naming another slot stored by id
 func (m *Manager) checkAliases(list []*v1.SlotAlias, self, primary string) ([]*v1.SlotAlias, error) {
 	out := make([]*v1.SlotAlias, 0, len(list))
 	seen := map[string]bool{}
@@ -589,14 +607,15 @@ func (m *Manager) checkAliases(list []*v1.SlotAlias, self, primary string) ([]*v
 		}
 		seen[name] = true
 		clean := &v1.SlotAlias{Name: name}
-		if policySet(a.GetPolicy()) {
-			clean.Policy = proto.Clone(a.GetPolicy()).(*v1.Policy)
-		}
-		if err := checkProfile(a.GetProfile()); err != nil {
-			return nil, fmt.Errorf("%w: alias %q: %v", ErrSlot, name, err)
-		}
-		if profileSet(a.GetProfile()) {
-			clean.Profile = proto.Clone(a.GetProfile()).(*v1.Profile)
+		if ref := strings.TrimSpace(a.GetInheritSlotId()); ref != "" {
+			from, err := m.find(ref)
+			switch {
+			case ref == primary || err == nil && from.GetId() == self:
+				return nil, fmt.Errorf("%w: alias %q cannot inherit from its own slot, leave the inherit empty for that", ErrSlot, name)
+			case err != nil:
+				return nil, fmt.Errorf("%w: alias %q inherits from an %v", ErrSlot, name, err)
+			}
+			clean.InheritSlotId = from.GetId()
 		}
 		out = append(out, clean)
 	}
@@ -621,48 +640,60 @@ func names(s *v1.Slot) []string {
 	return out
 }
 
-// Merges an alias policy over its slot's, every limit the alias sets winning and a zero or negative one inheriting
-func mergePolicy(alias, slot *v1.Policy) *v1.Policy {
-	pick := func(a, b uint32) uint32 {
-		if a != 0 {
-			return a
+// Limits and profile for one of the slot's names, an alias taking those of the slot it inherits
+func (m *Manager) settingsFor(s *v1.Slot, name string) (*v1.Policy, *v1.Profile, error) {
+	for _, a := range s.GetAliases() {
+		if a.GetName() != name || a.GetInheritSlotId() == "" {
+			continue
 		}
-		return b
+		m.mu.Lock()
+		from, held := m.slots[a.GetInheritSlotId()]
+		if held {
+			from = proto.Clone(from).(*v1.Slot)
+		}
+		m.mu.Unlock()
+		if !held {
+			return nil, nil, fmt.Errorf("alias %s inherits from slot %s, which is gone", name, a.GetInheritSlotId())
+		}
+		return from.GetPolicy(), from.GetProfile(), nil
 	}
-	out := &v1.Policy{
-		MaxInFlight:       pick(alias.GetMaxInFlight(), slot.GetMaxInFlight()),
-		RequestsPerSecond: alias.GetRequestsPerSecond(),
-		Burst:             pick(alias.GetBurst(), slot.GetBurst()),
-		RequestTimeoutMs:  pick(alias.GetRequestTimeoutMs(), slot.GetRequestTimeoutMs()),
-		UpstreamTimeoutMs: pick(alias.GetUpstreamTimeoutMs(), slot.GetUpstreamTimeoutMs()),
-	}
-	if out.RequestsPerSecond <= 0 {
-		out.RequestsPerSecond = slot.GetRequestsPerSecond()
+	return s.GetPolicy(), s.GetProfile(), nil
+}
+
+// The other slots with an alias inheriting from the slot
+func (m *Manager) heirsOf(id string) []*v1.Slot {
+	var out []*v1.Slot
+	for _, s := range m.List() {
+		if s.GetId() != id && slices.ContainsFunc(s.GetAliases(), func(a *v1.SlotAlias) bool { return a.GetInheritSlotId() == id }) {
+			out = append(out, s)
+		}
 	}
 	return out
 }
 
-// Merges an alias profile over its slot's, every alias field that is set winning
-func mergeProfile(alias, slot *v1.Profile) *v1.Profile {
-	if !profileSet(alias) {
-		return slot
+// Clears the inherit of every alias naming a slot no longer held, reporting a change, the caller holding the lock
+func (m *Manager) unheritLocked(s *v1.Slot) bool {
+	changed := false
+	for _, a := range s.GetAliases() {
+		if _, held := m.slots[a.GetInheritSlotId()]; a.GetInheritSlotId() != "" && !held {
+			a.InheritSlotId = ""
+			changed = true
+		}
 	}
-	return &v1.Profile{ToolServers: append([]string(nil), alias.GetToolServers()...), MutatingTools: alias.GetMutatingTools()}
+	return changed
 }
 
-// Limits and profile for one of the slot's names, alias fields overriding the slot's
-func settingsFor(s *v1.Slot, name string) (*v1.Policy, *v1.Profile) {
-	for _, a := range s.GetAliases() {
-		if a.GetName() != name {
-			continue
+// Names the routes of every occupied slot in the list again, so its aliases take what they inherit now
+func (m *Manager) reclaimAll(ctx context.Context, list []*v1.Slot) error {
+	var errs []error
+	for _, s := range list {
+		if occ, ok := m.occupantOf(s); ok {
+			if err := m.claimRoutes(ctx, s, occ); err != nil {
+				errs = append(errs, fmt.Errorf("slot %s: %w", s.GetName(), err))
+			}
 		}
-		policy := s.GetPolicy()
-		if a.GetPolicy() != nil {
-			policy = mergePolicy(a.GetPolicy(), s.GetPolicy())
-		}
-		return policy, mergeProfile(a.GetProfile(), s.GetProfile())
 	}
-	return s.GetPolicy(), s.GetProfile()
+	return errors.Join(errs...)
 }
 
 // Slot device pins
@@ -673,7 +704,7 @@ func devicesFor(placement v1.Placement, ids []string) []string {
 	return ids
 }
 
-// Creates a slot, checking that its devices exist
+// Creates a slot, checking that its devices, its capped pools and the slots its aliases inherit from exist
 func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Slot, error) {
 	name := strings.TrimSpace(req.GetName())
 	if err := m.checkName(name, ""); err != nil {
@@ -694,6 +725,10 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 	if err := m.checkDevices(ctx, devices); err != nil {
 		return nil, err
 	}
+	caps, err := m.checkPoolBytes(ctx, req.GetPoolBytes())
+	if err != nil {
+		return nil, err
+	}
 	now := timestamppb.Now()
 	s := &v1.Slot{
 		Id:          db.NewID(),
@@ -703,6 +738,7 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 		Placement:   req.GetPlacement(),
 		DeviceIds:   devices,
 		MemoryBytes: req.GetMemoryBytes(),
+		PoolBytes:   caps,
 		RuntimeId:   req.GetRuntimeId(),
 		Params:      req.GetParams(),
 		Args:        args,
@@ -718,6 +754,7 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 		m.slots = map[string]*v1.Slot{}
 	}
 	s.Position = uint32(len(m.slots) + 1)
+	m.unheritLocked(s)
 	m.statusLocked(s)
 	m.slots[s.GetId()] = s
 	snapshot := proto.Clone(s).(*v1.Slot)
@@ -733,6 +770,58 @@ func (m *Manager) Create(ctx context.Context, req *v1.CreateSlotRequest) (*v1.Sl
 		m.place(s.GetId(), req.GetPosition())
 	}
 	return m.find(s.GetId())
+}
+
+// Checks every cap is above zero and names a pool its node holds, keying named nodes by id
+func (m *Manager) checkPoolBytes(ctx context.Context, caps map[string]uint64) (map[string]uint64, error) {
+	if len(caps) == 0 {
+		return nil, nil
+	}
+	local, err := m.Host.Profile(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]uint64, len(caps))
+	// The pools capped so far, a pool on this node counted once however its key names it
+	held := map[string]string{}
+	for key, bytes := range caps {
+		if bytes == 0 {
+			return nil, fmt.Errorf("%w: pool %q needs a cap above zero, leave it out to lift its cap", ErrSlot, key)
+		}
+		profile, node, pool := local, "", key
+		if ref, rest, named := strings.Cut(key, "/"); named {
+			if m.Formations == nil {
+				return nil, fmt.Errorf("%w: pool %q names node %q, but this daemon is in no mesh", ErrSlot, key, ref)
+			}
+			node, pool = ref, rest
+			if ref != m.Formations.Self() {
+				rec, err := m.Formations.Node(ref)
+				if err != nil {
+					return nil, fmt.Errorf("%w: pool %q names a node this mesh does not have: %v", ErrSlot, key, err)
+				}
+				node = rec.GetId()
+				if node != m.Formations.Self() {
+					profile = rec.GetProfile()
+				}
+			}
+		}
+		if !slices.ContainsFunc(profile.GetPools(), func(p *v1.MemoryPool) bool { return p.GetId() == pool }) {
+			return nil, fmt.Errorf("%w: pool %q was not probed on its node, see nebu host or nebu mesh nodes", ErrSlot, key)
+		}
+		at, stored := pool, pool
+		if node != "" {
+			stored = node + "/" + pool
+			if node != m.Formations.Self() {
+				at = stored
+			}
+		}
+		if first, twice := held[at]; twice {
+			return nil, fmt.Errorf("%w: pools %q and %q cap the same pool", ErrSlot, first, key)
+		}
+		held[at] = key
+		out[stored] = bytes
+	}
+	return out, nil
 }
 
 func (m *Manager) checkDevices(ctx context.Context, ids []string) error {
@@ -765,7 +854,7 @@ func (m *Manager) checkDevices(ctx context.Context, ids []string) error {
 	return nil
 }
 
-// Updates name, aliases, description and route limits at once, other settings applying on the next run
+// Updates names, description and route limits at once, aliases inheriting them too, other settings applying on the next run
 func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Slot, error) {
 	s, err := m.find(req.GetId())
 	if err != nil {
@@ -773,6 +862,10 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 	}
 	devices := devicesFor(req.GetPlacement(), req.GetDeviceIds())
 	if err := m.checkDevices(ctx, devices); err != nil {
+		return nil, err
+	}
+	caps, err := m.checkPoolBytes(ctx, req.GetPoolBytes())
+	if err != nil {
 		return nil, err
 	}
 	if err := checkProfile(req.GetProfile()); err != nil {
@@ -802,9 +895,11 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 		sl.Name = name
 		sl.Description = strings.TrimSpace(req.GetDescription())
 		sl.Aliases = aliases
+		m.unheritLocked(sl)
 		sl.Placement = req.GetPlacement()
 		sl.DeviceIds = devices
 		sl.MemoryBytes = req.GetMemoryBytes()
+		sl.PoolBytes = caps
 		sl.RuntimeId = req.GetRuntimeId()
 		sl.Params = req.GetParams()
 		sl.Args = args
@@ -820,10 +915,17 @@ func (m *Manager) Update(ctx context.Context, req *v1.UpdateSlotRequest) (*v1.Sl
 		next = m.mustFind(next.GetId())
 	}
 	m.dropNames(ctx, s, names(next))
+	var errs []error
 	if occ, ok := m.occupantOf(next); ok {
 		if err := m.claimRoutes(ctx, next, occ); err != nil {
-			return next, fmt.Errorf("%w: %v", ErrSlot, err)
+			errs = append(errs, err)
 		}
+	}
+	if !proto.Equal(s.GetPolicy(), next.GetPolicy()) || !proto.Equal(s.GetProfile(), next.GetProfile()) {
+		errs = append(errs, m.reclaimAll(ctx, m.heirsOf(next.GetId())))
+	}
+	if err := errors.Join(errs...); err != nil {
+		return next, fmt.Errorf("%w: %v", ErrSlot, err)
 	}
 	return next, nil
 }
@@ -845,7 +947,7 @@ func (m *Manager) dropNames(ctx context.Context, before *v1.Slot, keep []string)
 	}
 }
 
-// Adds an alias to a slot, or updates its limits and profile, and returns its route once an occupant serves
+// Adds an alias to a slot or updates the slot it inherits, returning its route once an occupant serves
 func (m *Manager) AddAlias(ctx context.Context, id string, alias *v1.SlotAlias) (*v1.Slot, *v1.Route, error) {
 	s, err := m.find(id)
 	if err != nil {
@@ -858,13 +960,12 @@ func (m *Manager) AddAlias(ctx context.Context, id string, alias *v1.SlotAlias) 
 	clean := checked[0]
 	next := m.update(s.GetId(), func(sl *v1.Slot) {
 		bump(sl)
-		for i, a := range sl.Aliases {
-			if a.GetName() == clean.GetName() {
-				sl.Aliases[i] = clean
-				return
-			}
+		if i := slices.IndexFunc(sl.Aliases, func(a *v1.SlotAlias) bool { return a.GetName() == clean.GetName() }); i >= 0 {
+			sl.Aliases[i] = clean
+		} else {
+			sl.Aliases = append(sl.Aliases, clean)
 		}
-		sl.Aliases = append(sl.Aliases, clean)
+		m.unheritLocked(sl)
 	})
 	occ, ok := m.occupantOf(next)
 	if !ok {
@@ -901,7 +1002,7 @@ func (m *Manager) RemoveAlias(ctx context.Context, id, name string) (*v1.Slot, *
 	return next, route, nil
 }
 
-// Deletes a slot, stopping its occupant when forced
+// Deletes a slot, stopping its occupant when forced, and clears every alias inheriting from it
 func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Slot, error) {
 	s, err := m.find(id)
 	if err != nil {
@@ -928,10 +1029,21 @@ func (m *Manager) Delete(ctx context.Context, id string, force bool) (*v1.Slot, 
 	delete(m.slots, s.GetId())
 	delete(m.modes, s.GetId())
 	delete(m.phases, s.GetId())
+	var heirs []*v1.Slot
+	for _, sl := range m.slots {
+		if m.unheritLocked(sl) {
+			heirs = append(heirs, m.bumpLocked(sl))
+		}
+	}
 	m.mu.Unlock()
+	sortSlots(heirs)
+	m.persist(heirs)
 	m.dropRoutes(ctx, s)
 	m.Events.Publish(v1.EventKind_EVENT_KIND_SLOT, v1.EventAction_EVENT_ACTION_DELETED, s.GetId(), s)
 	m.renumber()
+	if err := m.reclaimAll(ctx, heirs); err != nil {
+		return s, fmt.Errorf("%w: slot %s is deleted, and routes of slots that inherited from it were not named again: %v", ErrSlot, s.GetName(), err)
+	}
 	return s, nil
 }
 
@@ -1090,7 +1202,10 @@ func (m *Manager) claimRoutes(ctx context.Context, s *v1.Slot, o occupant) error
 		return fmt.Errorf("pool of slot %s: %w", s.GetName(), err)
 	}
 	for _, name := range names(s) {
-		policy, profile := settingsFor(s, name)
+		policy, profile, err := m.settingsFor(s, name)
+		if err != nil {
+			return fmt.Errorf("route %s: %w", name, err)
+		}
 		if _, err := m.Registrar.NameRoute(ctx, owner, name, pools.RouteSpec{Policy: policy, Profile: profile, ServedName: o.served(), Shape: o.f.GetShape(), Seats: pools.SeatIDs(o.f)}); err != nil {
 			return fmt.Errorf("route %s: %w", name, err)
 		}

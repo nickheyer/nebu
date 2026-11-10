@@ -57,6 +57,7 @@
     selected = $bindable(),
     search,
     nullable,
+    closeOnSelect = !multiple,
 
     // Tooltip Props
     tooltipRef = $bindable(),
@@ -239,6 +240,7 @@
   {nullable}
   {rounded}
   {search}
+  {closeOnSelect}
   {color}
   {tinted}
   {openDelay}

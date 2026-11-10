@@ -24,7 +24,6 @@
 	let error = $state('');
 	const task = $derived(live.tasks.get(id) ?? fetched);
 	const link = $derived(task ? madeLink(task) : undefined);
-	const labels = $derived(task ? Object.entries(task.labels).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join(' ') : '');
 
 	// Fetches a task the live mirror does not hold
 	$effect(() => {
@@ -42,7 +41,7 @@
 		try {
 			await rpc.tasks.cancelTask({ id });
 		} catch (err) {
-			toast.error('Cancel failed', reason(err));
+			toast.error('Stop failed', reason(err));
 		}
 	}
 </script>
@@ -51,9 +50,6 @@
 	{@const running = active(task)}
 	<PanelHeader title={task.title} subtitle={task.kind} {onclose}>
 		<StatePill label={enumLabel(TaskStateSchema, task.state)} lamp={taskLamp(task.state)} />
-		{#snippet tools()}
-			{#if running}<Confirm label="Cancel" question="Cancel {task.title}?" danger onconfirm={cancel} />{/if}
-		{/snippet}
 	</PanelHeader>
 	<Stack gap={24}>
 		<KeyRows
@@ -62,12 +58,11 @@
 				{ label: 'started', value: when(task.startedAt) },
 				{ label: 'finished', value: when(task.finishedAt) },
 				{ label: 'duration', value: duration(task.startedAt ?? task.createdAt, task.finishedAt, clockTick.now) },
-				{ label: 'labels', value: labels, mono: true, tip: labels },
-				{ label: 'made', value: link?.label ?? '', href: link?.href }
+				{ label: 'result', value: link?.label ?? '', href: link?.href }
 			]}
 		/>
 		{#if task.error}<p class="error-text failure">{task.error}</p>{/if}
-		{#if task.progress}
+		{#if task.progress && running}
 			<Section title="Progress" level={3}>
 				<TaskProgress {task} />
 			</Section>
@@ -77,6 +72,9 @@
 				<LogView source={taskLogs(id, running)} name={task.title} height="40vh" />
 			{/key}
 		</Section>
+		{#if running}
+			<div class="actions"><Confirm label="Stop" question="Stop {task.title}?" danger placement="top-start" onconfirm={cancel} /></div>
+		{/if}
 	</Stack>
 {:else if error}
 	<PanelHeader title="Task" {onclose} />
@@ -87,6 +85,10 @@
 {/if}
 
 <style>
+	.actions {
+		display: flex;
+		justify-content: flex-start;
+	}
 	.failure {
 		overflow-wrap: anywhere;
 		white-space: pre-wrap;

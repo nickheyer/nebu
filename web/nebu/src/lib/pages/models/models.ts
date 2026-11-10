@@ -1,12 +1,12 @@
 import type { Component } from 'svelte';
 import { reason, rpc } from '#lib/api/transport.js';
 import { bytes, enumLabel, num } from '#lib/format.js';
-import { FitVerdict, type GroupPlacement, type MemoryPlan } from '#lib/proto/nebu/v1/estimate_pb.js';
-import { PoolKindSchema } from '#lib/proto/nebu/v1/host_pb.js';
-import { ArtifactRole, ModelKind, ModelKindSchema, TensorGroupKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
+import { FitVerdict } from '#lib/proto/nebu/v1/estimate_pb.js';
+import { ArtifactRole, ModelKind, ModelKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
 import type { Lamp } from '#lib/ui/status.js';
 import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 import type { StoredModel } from '#lib/proto/nebu/v1/store_pb.js';
+import { live } from '#lib/live/events.svelte.js';
 import { toast } from '#lib/shell/notify.svelte.js';
 import { followTask } from '#lib/state/tasks.svelte.js';
 import CodeIcon from 'phosphor-svelte/lib/CodeIcon';
@@ -30,6 +30,11 @@ export function launchHref(m: ModelRef, runtimeId?: string, context?: number): s
 	if (runtimeId) q.set('runtime', runtimeId);
 	if (context) q.set('context', String(context));
 	return `/serve/launch?${q}`;
+}
+
+// The name a source goes by, its id until the stream has it
+export function sourceName(id: string): string {
+	return live.sources.get(id)?.name || id;
 }
 
 export function kindLabel(kind: ModelKind): string {
@@ -75,25 +80,8 @@ export function verdictLamp(v: FitVerdict | undefined): Lamp {
 	return v === FitVerdict.FITS ? 'success' : v === FitVerdict.PARTIAL ? 'warning' : v === FitVerdict.NO ? 'error' : 'muted';
 }
 
-// A placement's tensor groups counted in words, 20 layers rather than layer 20, a word already plural left as it is
-export function placementLabel(p: GroupPlacement): string {
-	const word = enumLabel(TensorGroupKindSchema, p.kind);
-	return p.count > 1 ? `${num(p.count)} ${word.endsWith('s') ? word : `${word}s`}` : word;
-}
-
-// Where a placement sits, the plan's pools of its side by their bar labels, disk when it names no side
-export function placementPool(p: GroupPlacement, plan: MemoryPlan, labels: Map<string, string>): string {
-	if (!p.poolId) return 'disk';
-	const side = plan.pools.filter((u) => enumLabel(PoolKindSchema, u.kind) === p.poolId);
-	return side.map((u) => labels.get(u.poolId) ?? u.poolId).join(', ');
-}
-
 export function sameModel(a: ModelRef, b: ModelRef): boolean {
 	return a.sourceId === b.sourceId && a.repo === b.repo && a.group === b.group;
-}
-
-export function quality(level: number): string {
-	return ['unknown', 'lowest', 'low', 'medium', 'high', 'full'][level] ?? '';
 }
 
 export function runtimeNames(mask: number, runtimes: RuntimeStatus[]): string[] {
@@ -142,7 +130,7 @@ export async function exportModel(m: StoredModel, dir: string): Promise<boolean>
 export async function removeModel(m: StoredModel, gc: boolean): Promise<boolean> {
 	try {
 		const res = await rpc.store.removeModel({ sourceId: m.sourceId, repo: m.repo, group: m.group, gc });
-		toast.success(`Removed ${m.repo}`, res.gc ? `${num(res.gc.removed)} blobs, ${bytes(res.gc.freedBytes)} freed` : undefined);
+		toast.success(`Removed ${m.repo}`, res.gc ? `${num(res.gc.removed)} files, ${bytes(res.gc.freedBytes)} freed` : undefined);
 		return true;
 	} catch (err) {
 		toast.error('Remove failed', reason(err));

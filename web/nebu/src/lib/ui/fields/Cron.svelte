@@ -32,7 +32,7 @@
 </script>
 
 <div class="cron">
-	<Select bind:value={preset} options={presets} {label} {info} {disabled} placeholder="Choose a schedule" onchange={picked} />
+	<Select bind:value={preset} options={presets} {label} {info} {disabled} onchange={picked} />
 	{#if custom}
 		<Text bind:value label="Cron expression" info="Minute, hour, day of month, month, day of week" mono {disabled} {error} max={64} />
 	{/if}

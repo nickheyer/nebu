@@ -12,7 +12,6 @@
 	import Screen from '#lib/ui/Screen.svelte';
 	import StatePill from '#lib/ui/StatePill.svelte';
 	import Str from '#lib/ui/Str.svelte';
-	import Textarea from '#lib/ui/fields/Textarea.svelte';
 	import Row from '#lib/ui/layout/Row.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import type { DotShape, Lamp } from '#lib/ui/status.js';
@@ -27,8 +26,7 @@
 		traceLinks = false,
 		onretry,
 		onrun,
-		onskip,
-		onresult
+		onskip
 	}: {
 		turn: ChatTurn;
 		session: ChatSession;
@@ -39,10 +37,7 @@
 		onretry?: () => void;
 		onrun?: (c: PendingCall) => void;
 		onskip?: (c: PendingCall) => void;
-		onresult?: (c: PendingCall, text: string) => void;
 	} = $props();
-
-	let results = $state<Record<string, string>>({});
 
 	const at = (ts: ChatTurn['startedAt']) => date(ts)?.getTime() ?? 0;
 	const ttft = $derived(turn.firstTokenAt && turn.startedAt ? at(turn.firstTokenAt) - at(turn.startedAt) : undefined);
@@ -146,28 +141,14 @@
 						<NeoButton text onclick={() => onrun?.(p)}>Run</NeoButton>
 					{/if}
 				{/snippet}
-				{#snippet resultBox()}
-					{#if p}
-						<div class="answer">
-							<Stack gap={8}>
-								<Textarea bind:value={() => results[c.id] ?? '', (v) => (results[c.id] = v)} label="Result" info="What the tool returned, sent back to the model" rows={2} mono />
-								<Row gap={8} justify="flex-end">
-									<NeoButton text onclick={() => onskip?.(p)}>Skip</NeoButton>
-									<NeoButton elevation={2} onclick={() => onresult?.(p, results[c.id] ?? '')}>Send</NeoButton>
-								</Row>
-							</Stack>
-						</div>
-					{/if}
-				{/snippet}
 				<ListRow
 					lamp={state.lamp}
 					shape={state.shape}
 					primary={c.name}
-					primaryTip={[c.name, c.server ? `server ${c.server}` : 'client tool', state.word].join('\n')}
+					primaryTip={[c.name, c.server, state.word].filter(Boolean).join('\n')}
 					facts={[{ value: c.tookMs ? ms(c.tookMs) : '' }]}
 					expand={callBody}
-					action={p?.server ? runSkip : undefined}
-					below={p && !p.server ? resultBox : undefined}
+					action={p ? runSkip : undefined}
 				/>
 			{/each}
 		</div>
@@ -217,10 +198,5 @@
 		flex-direction: column;
 		min-width: 0;
 		margin: 0 calc(-1 * var(--nebu-row-inset, 0px));
-	}
-	.answer {
-		flex: 1 1 auto;
-		min-width: 0;
-		padding: 4px 0 8px 20px;
 	}
 </style>

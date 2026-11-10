@@ -5,7 +5,8 @@
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import ParamField from '#lib/pages/serve/ParamField.svelte';
 
-	let { params, values = $bindable({}), states = [] }: { params: Param[]; values?: Record<string, string>; states?: ParamState[] } = $props();
+	// Every parameter of a runtime by group, the values the planner settled on standing in the fields left empty
+	let { params, values = $bindable({}), states = [], resolved = {} }: { params: Param[]; values?: Record<string, string>; states?: ParamState[]; resolved?: Record<string, string> } = $props();
 
 	// One section per group in first seen order, advanced params under each section's collapse
 	const groups = $derived.by(() => {
@@ -37,7 +38,7 @@
 	{#each pairs(list) as pair, i (i)}
 		<FieldRow>
 			{#each pair as p (p.name)}
-				<ParamField param={p} bind:values state={stateOf(p.name)} />
+				<ParamField param={p} bind:values state={stateOf(p.name)} resolved={resolved[p.name]} />
 			{/each}
 		</FieldRow>
 	{/each}

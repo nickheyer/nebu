@@ -350,6 +350,13 @@ func (p *bothPlugin) TypedName() framework.TypedName {
 func (p *bothPlugin) PreRequest(context.Context, *Inbound, *framework.Request) error { return nil }
 func (p *bothPlugin) PostDecision(context.Context, *Inbound, *Decision) error        { return nil }
 
+// A sampler over a store nothing scrapes
+type idleSampler struct{}
+
+func (idleSampler) Deciding(context.Context, []datalayer.EndpointID) func() { return func() {} }
+func (idleSampler) Serving(datalayer.EndpointID) func()                     { return func() {} }
+func (idleSampler) Sample(context.Context, []datalayer.EndpointID)          {}
+
 type countingObserver struct {
 	decided, refused, completed atomic.Int64
 }
@@ -391,6 +398,7 @@ func newEnv(t testing.TB, edit ...func(*Deps)) *env {
 	deps := Deps{
 		Store:               e.store,
 		Resolver:            e.table,
+		Sampler:             idleSampler{},
 		Scheduler:           e.sched,
 		Flow:                e.flow,
 		Observer:            e.observer,

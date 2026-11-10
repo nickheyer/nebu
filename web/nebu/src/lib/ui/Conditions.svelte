@@ -24,8 +24,6 @@
 			</Tip>
 		{/each}
 	</div>
-{:else}
-	<span class="secondary">No conditions</span>
 {/if}
 
 <style>

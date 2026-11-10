@@ -1,77 +1,116 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
-	import { NeoButton, NeoCloseButton } from '#lib/neo/buttons/index.js';
+	import { timestampFromDate } from '@bufbuild/protobuf/wkt';
+	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { isCancel, reason, rpc } from '#lib/api/transport.js';
-	import { bytes, bytesIn, byteUnit, enumLabel, factLabel, num, plural, thin, when } from '#lib/format.js';
+	import { bytes, bytesIn, byteUnit, enumLabel, factLabel, perMinute, thin, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
-	import type { GatewayStatus } from '#lib/proto/nebu/v1/gateway_pb.js';
+	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
+	import type { GatewayStatus, Trace } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import { DeviceKind, PoolKind, ProbeStatus, ProbeStatusSchema, type Device, type ProbeResult, type ProcessUse, type Storage } from '#lib/proto/nebu/v1/host_pb.js';
-	import { TaskStateSchema, type Task } from '#lib/proto/nebu/v1/task_pb.js';
+	import type { Instance } from '#lib/proto/nebu/v1/instance_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
 	import Bar, { type Segment } from '#lib/ui/Bar.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
+	import Facts from '#lib/ui/Facts.svelte';
 	import KeyRows from '#lib/ui/KeyRows.svelte';
 	import List from '#lib/ui/List.svelte';
 	import ListRow, { type Fact } from '#lib/ui/ListRow.svelte';
 	import LogView from '#lib/ui/LogView.svelte';
 	import Mark from '#lib/ui/Mark.svelte';
 	import MemoryLegend from '#lib/ui/MemoryLegend.svelte';
-	import RowAction from '#lib/ui/RowAction.svelte';
-	import Screen from '#lib/ui/Screen.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
-	import Str from '#lib/ui/Str.svelte';
+	import Sparkline from '#lib/ui/Sparkline.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import Columns from '#lib/ui/layout/Columns.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
+	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { poolBars, poolTitle, type PoolBar } from '#lib/ui/memory.js';
-	import { taskLamp } from '#lib/ui/status.js';
+	import { instanceLamp, instanceShape } from '#lib/ui/status.js';
 	import { hostTabs } from '#lib/pages/host/tabs.js';
-	import { active } from '#lib/pages/tasks/tasks.js';
+	import { modelPhrase, terminal } from '#lib/pages/serve/serve.js';
+	import { buckets, sparkBuckets, started, windowFacts } from '#lib/pages/traffic/traffic.js';
+	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
+	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
 
 	let { tab = 'overview' }: { tab?: string } = $props();
 
+	// Minutes of traffic the overview reads
+	const trafficMinutes = 15;
+
 	const profile = $derived(live.host);
 	let refreshing = $state(false);
-	let doctor = $state<Task | undefined>(undefined);
-	let doctorLines = $state<string[]>([]);
-	let allProbes = $state(false);
 	let gateway = $state<GatewayStatus | undefined>(undefined);
 	let gatewayError = $state('');
+	let traces = $state<Trace[]>([]);
+	let tracesSettled = $state(false);
+	let tracesError = $state('');
 	const stop = new AbortController();
 	onDestroy(() => stop.abort());
 
+	// Every trace of the window, without bodies
+	async function loadTraces() {
+		try {
+			const from = timestampFromDate(new Date(Date.now() - trafficMinutes * 60_000));
+			traces = (await rpc.gateway.listTraces({ from, limit: 0 }, { signal: stop.signal })).traces;
+			tracesError = '';
+		} catch (err) {
+			if (isCancel(err)) return;
+			tracesError = reason(err);
+		} finally {
+			tracesSettled = true;
+		}
+	}
+
+	// The overview reads the daemon's listeners once and the traffic as it arrives, the log tab neither
 	onMount(() => {
+		if (tab !== 'overview') return;
 		void rpc.gateway
 			.getGatewayStatus({}, { signal: stop.signal })
 			.then((r) => (gateway = r.status))
 			.catch((err) => {
 				if (!isCancel(err)) gatewayError = reason(err);
 			});
+		void loadTraces();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const off = live.on(EventKind.TRACE, () => {
+			timer ??= setTimeout(() => {
+				timer = undefined;
+				void loadTraces();
+			}, 1000);
+		});
+		return () => {
+			clearTimeout(timer);
+			off();
+		};
 	});
 
-	const probes = $derived(profile?.probes ?? []);
-	const failedProbes = $derived(probes.filter((p) => p.status === ProbeStatus.FAILED));
-	const passedProbes = $derived(probes.filter((p) => p.status === ProbeStatus.OK));
-	const skippedProbes = $derived(probes.filter((p) => p.status === ProbeStatus.SKIPPED));
+	const windowFrom = $derived(clockTick.now - trafficMinutes * 60_000);
+	const windowed = $derived(traces.filter((t) => started(t) >= windowFrom));
+	const trafficFacts = $derived(windowFacts(windowed, windowFrom, clockTick.now));
+	const serving = $derived([...live.instances.values()].filter((i) => !terminal(i.state)).sort((a, b) => a.name.localeCompare(b.name)));
+
+	// Failed checks first, then the ones that passed, then the skipped
+	const order = [ProbeStatus.FAILED, ProbeStatus.OK, ProbeStatus.SKIPPED];
+	const probes = $derived([...(profile?.probes ?? [])].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status)));
 	// Host facts beyond the os and arch the system row already reads
 	const facts = $derived(
 		Object.entries(profile?.facts ?? {})
 			.filter(([k]) => k !== 'os' && k !== 'arch')
 			.sort(([a], [b]) => a.localeCompare(b))
 	);
-	const doctorRunning = $derived(doctor !== undefined && active(doctor));
 
 	const bars = $derived(poolBars(profile, live.instances.values(), live.slots.values()));
 	const kinds = $derived(bars.flatMap((b) => b.segments.filter((s) => s.bytes > 0).map((s) => s.kind)));
 
+	// Probes the host again and checks its dependencies as one task
 	async function refresh() {
 		refreshing = true;
 		try {
-			await rpc.host.getProfile({ refresh: true });
+			followTask((await rpc.host.doctor({})).task);
 		} catch (err) {
 			toast.error('Probe failed', reason(err));
 		} finally {
@@ -79,27 +118,8 @@
 		}
 	}
 
-	// Streams the check task's log over the cards until it ends
-	async function runDoctor() {
-		try {
-			const res = await rpc.host.doctor({});
-			if (!res.task) throw new Error('the daemon answered without a task');
-			followTask(res.task, 'Doctor');
-			doctor = res.task;
-			doctorLines = [];
-			for await (const w of rpc.tasks.watchTask({ id: res.task.id }, { signal: stop.signal })) {
-				if (w.task) doctor = w.task;
-				if (w.logs.length) doctorLines = [...doctorLines, ...w.logs];
-				if (w.task && !active(w.task)) break;
-			}
-		} catch (err) {
-			if (!isCancel(err)) toast.error('Doctor failed', reason(err));
-		}
-	}
-
-	function closeDoctor() {
-		doctor = undefined;
-		doctorLines = [];
+	function tracesOf(inst: Instance): Trace[] {
+		return windowed.filter((t) => t.instanceId === inst.id || t.seats.includes(inst.id));
 	}
 
 	function hostLogs(tail: number, follow: boolean, signal: AbortSignal) {
@@ -201,11 +221,11 @@
 {/snippet}
 
 {#snippet devicesCard()}
-	<Card title="Devices" info="Each pool of memory with the device that draws on it, the CPU on the host's RAM" flush>
+	<Card title="Devices" flush>
 		{#if !profile}
 			<Skeleton rows={2} kind="bars" />
 		{:else if bars.length === 0}
-			<Empty text="No devices probed" action="Refresh" onclick={refresh} loading={refreshing} />
+			<Empty text="No devices probed" />
 		{:else}
 			<List head={{ primary: 'Device', instrument: 'Memory' }}>
 				{#each bars as bar (bar.id)}{@render deviceRow(bar)}{/each}
@@ -220,7 +240,7 @@
 		{#if !profile}
 			<Skeleton rows={2} dot={false} primary="40ch" secondary="8ch" facts={1} action={false} menu={false} />
 		{:else if profile.storage.length === 0}
-			<Empty text="No storage probed" action="Refresh" onclick={refresh} loading={refreshing} />
+			<Empty text="No storage probed" />
 		{:else}
 			<List head={{ primary: 'Mount', secondary: 'Filesystem', instrument: 'Used', facts: ['Holds'] }}>
 				{#each profile.storage as s (s.path)}
@@ -244,31 +264,54 @@
 	</ListRow>
 {/snippet}
 
-{#snippet probesCard()}
-	<Card title="Probes" flush>
+{#snippet systemCard()}
+	<Card title="System" flush>
 		{#snippet tools()}
-			{#if passedProbes.length || skippedProbes.length}
-				<RowAction label={allProbes ? 'Failed only' : 'Show all'} onclick={() => (allProbes = !allProbes)} />
-			{/if}
-			<NeoButton elevation={2} loading={refreshing} onclick={refresh}>Refresh</NeoButton>
-			<NeoButton elevation={2} loading={doctorRunning} onclick={runDoctor}>Doctor</NeoButton>
+			<NeoButton text aria-label="Refresh" loading={refreshing} onclick={refresh}>{#snippet icon()}<ArrowsClockwiseIcon size={20} />{/snippet}</NeoButton>
 		{/snippet}
 		{#if !profile}
 			<Skeleton rows={3} dot={false} leading="20px" primary="16ch" secondary="40ch" facts={0} action={false} menu={false} />
 		{:else if probes.length === 0}
-			<Empty text="No probes ran" action="Refresh" onclick={refresh} loading={refreshing} />
+			<Empty text="Nothing probed" />
 		{:else}
 			<List>
-				{#each failedProbes as p (p.probeId)}{@render probeRow(p)}{/each}
-				{#if allProbes}
-					{#each passedProbes as p (p.probeId)}{@render probeRow(p)}{/each}
-					{#each skippedProbes as p (p.probeId)}{@render probeRow(p)}{/each}
-				{:else}
-					<ListRow primary="{plural(passedProbes.length, 'probe')} passed" primaryKind="text" secondary={skippedProbes.length ? `${num(skippedProbes.length)} skipped` : ''} secondaryWidth="40ch">
-						{#snippet leading()}<Mark state="ok" label="Passed" />{/snippet}
-					</ListRow>
-				{/if}
+				{#each probes as p (p.probeId)}{@render probeRow(p)}{/each}
 			</List>
+		{/if}
+	</Card>
+{/snippet}
+
+{#snippet servingRow(inst: Instance)}
+	{@const own = tracesOf(inst)}
+	<ListRow lamp={instanceLamp(inst.state)} shape={instanceShape(inst.state)} primary={inst.name} primaryWidth="24ch" secondary={modelPhrase(inst)} secondaryKind="repo" secondaryWidth="36ch" href="/serve/{encodeURIComponent(inst.id)}" facts={[{ value: perMinute(own.length / trafficMinutes), tip: `Requests over ${trafficMinutes} minutes` }]}>
+		{#snippet action()}
+			{#if own.length}<Sparkline points={buckets(own, started, windowFrom, clockTick.now, sparkBuckets, (l) => l.length)} width={96} height={20} />{/if}
+		{/snippet}
+	</ListRow>
+{/snippet}
+
+{#snippet servingCard()}
+	<Card title="Serving" flush>
+		{#if !live.ready}
+			<Skeleton rows={2} primary="24ch" secondary="36ch" facts={1} menu={false} />
+		{:else if serving.length === 0}
+			<Empty icon={PlayIcon} text="Nothing serving" action="Launch" href="/serve/launch" />
+		{:else}
+			<List head={{ primary: 'Name', secondary: 'Model', facts: ['Requests'] }}>
+				{#each serving as inst (inst.id)}{@render servingRow(inst)}{/each}
+			</List>
+		{/if}
+	</Card>
+{/snippet}
+
+{#snippet trafficCard()}
+	<Card title="Traffic">
+		{#if !tracesSettled}
+			<Skeleton rows={1} kind="strip" />
+		{:else if tracesError}
+			<Empty text="Traffic failed to load" hint={tracesError} action="Retry" onclick={loadTraces} />
+		{:else}
+			<Facts items={trafficFacts.map((f) => ({ ...f, href: '/traffic?window=15m' }))} />
 		{/if}
 	</Card>
 {/snippet}
@@ -297,34 +340,22 @@
 	</Card>
 {/snippet}
 
-{#snippet doctorCard(task: Task)}
-	<Card title="Doctor">
-		{#snippet tools()}
-			<StatePill label={enumLabel(TaskStateSchema, task.state)} lamp={taskLamp(task.state)} />
-			{#if !doctorRunning}<NeoCloseButton text aria-label="Close doctor output" onclick={closeDoctor} />{/if}
-		{/snippet}
-		<Str value={task.error || task.progress?.message || task.title} kind="message" color={task.error ? 'error' : 'muted'} width="100%" />
-		<Screen maxHeight="30vh">
-			{#each doctorLines as line, i (i)}<div class="line">{line}</div>{:else}<span class="dim">probing</span>{/each}
-		</Screen>
-	</Card>
-{/snippet}
-
-<PageHeader tabs={hostTabs} active={tab} info={tab === 'logs' ? 'The daemon\'s own log, followed live' : 'What this machine offers, its memory, devices, disks and the probes that found them'} />
+<PageHeader tabs={hostTabs} active={tab} />
 
 {#if tab === 'logs'}
 	<Card>
 		<LogView source={hostLogs} name={profile?.hostname || 'daemon'} levels height="calc(100dvh - var(--nebu-top, 61px) - 190px)" />
 	</Card>
 {:else}
-	{#if doctor}{@render doctorCard(doctor)}{/if}
+	{@render trafficCard()}
 	<Columns ratio="3/2">
 		{#snippet left()}
+			{@render servingCard()}
 			{@render devicesCard()}
 			{@render storageCard()}
 		{/snippet}
 		{#snippet right()}
-			{@render probesCard()}
+			{@render systemCard()}
 			{@render daemonCard()}
 		{/snippet}
 	</Columns>
@@ -359,9 +390,5 @@
 	}
 	.legend {
 		padding: var(--nebu-space-3) var(--nebu-card-pad) var(--nebu-space-2);
-	}
-	.line {
-		white-space: pre-wrap;
-		overflow-wrap: anywhere;
 	}
 </style>

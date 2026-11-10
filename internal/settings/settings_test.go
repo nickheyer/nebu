@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/tools"
 	"github.com/nickheyer/nebu/pkg/events"
@@ -83,7 +82,7 @@ func TestToolServerSettings(t *testing.T) {
 	if len(again.Get().GetToolServers()) != 3 || again.Get().GetToolServers()[0].GetId() != web.GetId() || again.Get().GetHostLabel() != "box" {
 		t.Fatalf("loaded %v", again.Get())
 	}
-	if got, err := m.Update(ctx, &v1.Settings{ToolServers: []*v1.ToolServer{{Name: "b", Enabled: true, Kind: v1.ToolServerKind_TOOL_SERVER_KIND_SEARCH, Provider: "brave", BraveKey: " tok "}}}); err != nil || m.Full().GetToolServers()[0].GetBraveKey() != "tok" {
+	if got, err := m.Update(ctx, &v1.Settings{ToolServers: []*v1.ToolServer{{Name: "b", Enabled: true, Kind: v1.ToolServerKind_TOOL_SERVER_KIND_SEARCH, Provider: "brave", BraveKey: " tok "}}}); err != nil || m.Get().GetToolServers()[0].GetBraveKey() != "tok" {
 		t.Fatalf("brave: %v %v", got, err)
 	}
 }
@@ -120,8 +119,8 @@ func TestRuntimeDefaults(t *testing.T) {
 	}
 }
 
-// Reads, update answers, and events carry the marker for every secret, and the marker sent back keeps the stored value
-func TestSecretsRedactedAndKept(t *testing.T) {
+// Reads, answers, and events carry every secret as stored, and what is read back and sent again stays
+func TestSecretsReadBack(t *testing.T) {
 	m, _ := newManager(t)
 	bus := events.New()
 	m.Events = bus
@@ -151,26 +150,17 @@ func TestSecretsRedactedAndKept(t *testing.T) {
 		if len(servers) != 4 {
 			t.Fatalf("%s %v", name, s)
 		}
-		if b := servers[0]; b.GetBraveKey() != auth.Redacted || !b.GetSecretsSet() {
+		if b := servers[0]; b.GetBraveKey() != "brave-secret" {
 			t.Fatalf("%s brave %v", name, b)
 		}
-		if f := servers[1]; f.GetEnv()["API_KEY"] != auth.Redacted || f.GetEnv()["MODE"] != auth.Redacted || !f.GetSecretsSet() {
+		if f := servers[1]; f.GetEnv()["API_KEY"] != "env-secret" || f.GetEnv()["MODE"] != "fast" {
 			t.Fatalf("%s env %v", name, f)
 		}
-		if a := servers[2]; a.GetHeaders()["Authorization"] != auth.Redacted || !a.GetSecretsSet() {
+		if a := servers[2]; a.GetHeaders()["Authorization"] != "Bearer header-secret" {
 			t.Fatalf("%s headers %v", name, a)
 		}
-		if f := servers[3]; f.GetSecretsSet() {
-			t.Fatalf("%s fetch holds no secret %v", name, f)
-		}
-		if strings.Contains(s.String(), "-secret") {
-			t.Fatalf("%s carries a secret %v", name, s)
-		}
 	}
-	full := m.Full().GetToolServers()
-	if full[0].GetBraveKey() != "brave-secret" || full[1].GetEnv()["API_KEY"] != "env-secret" || full[2].GetHeaders()["Authorization"] != "Bearer header-secret" || full[0].GetSecretsSet() {
-		t.Fatalf("stored %v", full)
-	}
+	full := m.Get().GetToolServers()
 	if applied.GetToolServers()[0].GetBraveKey() != "brave-secret" {
 		t.Fatalf("the tool registry is handed the real key %v", applied)
 	}
@@ -181,27 +171,14 @@ func TestSecretsRedactedAndKept(t *testing.T) {
 	if _, err := m.Update(ctx, back); err != nil {
 		t.Fatal(err)
 	}
-	full = m.Full().GetToolServers()
+	full = m.Get().GetToolServers()
 	if full[0].GetBraveKey() != "brave-secret" || full[1].GetEnv()["API_KEY"] != "env-secret" || full[1].GetEnv()["MODE"] != "slow" ||
 		full[2].GetHeaders()["Authorization"] != "Bearer header-secret" || full[2].GetHeaders()["X-Extra"] != "plain" {
 		t.Fatalf("kept %v", full)
 	}
 	again := &Manager{DB: m.DB}
-	if err := again.Load(ctx); err != nil || again.Full().GetToolServers()[1].GetEnv()["API_KEY"] != "env-secret" {
-		t.Fatalf("persisted %v %v", again.Full(), err)
-	}
-	// A marker with no stored value behind it is refused rather than stored
-	for _, bad := range []*v1.ToolServer{
-		{Name: "new", Kind: v1.ToolServerKind_TOOL_SERVER_KIND_SEARCH, Provider: "brave", BraveKey: auth.Redacted},
-		{Id: full[1].GetId(), Name: "fs", Kind: v1.ToolServerKind_TOOL_SERVER_KIND_STDIO, Command: "srv", Env: map[string]string{"OTHER": auth.Redacted}},
-		{Id: full[2].GetId(), Name: "api", Kind: v1.ToolServerKind_TOOL_SERVER_KIND_HTTP, Url: "https://mcp.example", Headers: map[string]string{"Cookie": auth.Redacted}},
-	} {
-		if _, err := m.Update(ctx, &v1.Settings{ToolServers: []*v1.ToolServer{bad}}); !errors.Is(err, ErrSetting) {
-			t.Fatalf("%v gave %v", bad, err)
-		}
-	}
-	if m.Full().GetToolServers()[0].GetBraveKey() != "brave-secret" {
-		t.Fatal("a refused update changed the store")
+	if err := again.Load(ctx); err != nil || again.Get().GetToolServers()[1].GetEnv()["API_KEY"] != "env-secret" {
+		t.Fatalf("persisted %v %v", again.Get(), err)
 	}
 }
 
@@ -243,7 +220,7 @@ func TestLegacyWebSearch(t *testing.T) {
 	if err := again.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
-	servers := again.Full().GetToolServers()
+	servers := again.Get().GetToolServers()
 	if len(servers) != 1 || servers[0].GetName() != "web" || servers[0].GetKind() != v1.ToolServerKind_TOOL_SERVER_KIND_SEARCH || servers[0].GetProvider() != "brave" || servers[0].GetBraveKey() != "tok" || !servers[0].GetEnabled() {
 		t.Fatalf("migrated %v", servers)
 	}

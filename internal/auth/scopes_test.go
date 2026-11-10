@@ -766,19 +766,3 @@ func TestCertGenerationAndReuse(t *testing.T) {
 		t.Fatal("an unreadable pair should fail")
 	}
 }
-
-func TestRedactEnv(t *testing.T) {
-	env := map[string]string{"HF_TOKEN": "hf_abc123", "LONGER": "hf_abc123456", "DEV": "0", "EMPTY": ""}
-	words := []string{"vllm", "--port", "8080", "--token=hf_abc123", "Bearer hf_abc123456", "--devices", "0", "cuda:0,1", "https://u:hf_abc123@host/x"}
-	want := []string{"vllm", "--port", "8080", "--token=" + Redacted, "Bearer " + Redacted, "--devices", Redacted, "cuda:" + Redacted + ",1", "https://u:" + Redacted + "@host/x"}
-	got := RedactEnv(words, env)
-	if !slices.Equal(got, want) {
-		t.Fatalf("got %q\nwant %q", got, want)
-	}
-	if words[3] != "--token=hf_abc123" {
-		t.Fatal("the input was changed")
-	}
-	if got := RedactEnv([]string{"a", "b"}, nil); !slices.Equal(got, []string{"a", "b"}) {
-		t.Fatalf("no env %q", got)
-	}
-}

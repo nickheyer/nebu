@@ -136,12 +136,15 @@ func register(cat *Catalog) {
 		}
 		seen[u.key()] = true
 	}
-	names := map[string]bool{}
+	names, labels := map[string]bool{}, map[string]bool{}
 	for _, f := range cat.Fields() {
 		if names[f.GetName()] {
 			panic(fmt.Sprintf("catalog %s: setting %s declared twice", cat.ID, f.GetName()))
 		}
-		names[f.GetName()] = true
+		if labels[f.GetLabel()] {
+			panic(fmt.Sprintf("catalog %s: two settings are labelled %s", cat.ID, f.GetLabel()))
+		}
+		names[f.GetName()], labels[f.GetLabel()] = true, true
 	}
 	if cat.Name == "" {
 		cat.Name = cat.ID
@@ -198,10 +201,8 @@ func httpUse(endpoint, tokenEnv string) Use {
 // Source client combining provider metadata, transports, and shared behavior.
 type Client struct {
 	cat *Catalog
-	// The source as reads and events carry it, its secrets redacted
-	spec *v1.Source
-	// The stored row with its secrets, which a reload compares against
-	raw        *v1.Source
+	// The stored row, which reads carry and a reload compares against
+	spec       *v1.Source
 	cfg        map[string]string
 	transports map[string]Transport
 	facets     Memo[[]*v1.Facet]
@@ -229,7 +230,7 @@ func newClient(cat *Catalog, spec *v1.Source, cacheDir string) (*Client, error) 
 			proc.Hide(f.GetEnv())
 		}
 	}
-	c := &Client{cat: cat, spec: redact(spec), raw: spec, cfg: cfg, transports: map[string]Transport{}, facets: Memo[[]*v1.Facet]{TTL: facetTTL}}
+	c := &Client{cat: cat, spec: spec, cfg: cfg, transports: map[string]Transport{}, facets: Memo[[]*v1.Facet]{TTL: facetTTL}}
 	for _, u := range cat.Transports {
 		values := make(map[string]string, len(u.Fields))
 		for name := range u.Fields {

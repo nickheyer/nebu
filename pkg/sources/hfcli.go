@@ -91,7 +91,7 @@ func (h *HFCLI) download(ctx context.Context, repo, ref, rel string, progress fu
 		args = append(args, "--revision", ref)
 	}
 	cmd := exec.CommandContext(ctx, h.command, args...)
-	cmd.Env = append(proc.Environ(), "HF_HUB_DISABLE_PROGRESS_BARS=1", "HF_HUB_DISABLE_TELEMETRY=1", "HF_HUB_ENABLE_HF_TRANSFER=0")
+	cmd.Env = append(proc.Environ(), "HF_HUB_DISABLE_PROGRESS_BARS=1", "HF_HUB_DISABLE_TELEMETRY=1", "HF_HUB_DISABLE_UPDATE_CHECK=1")
 	if h.endpoint != "" {
 		cmd.Env = append(cmd.Env, "HF_ENDPOINT="+h.endpoint)
 	}

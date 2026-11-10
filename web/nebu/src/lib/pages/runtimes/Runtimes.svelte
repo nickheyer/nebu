@@ -121,7 +121,7 @@
 	</div>
 {/snippet}
 
-<PageHeader tabs={serveTabs} active="runtimes" info="Engines this host can run models with, each holding its installs, builds and parameter defaults" />
+<PageHeader tabs={serveTabs} active="runtimes" />
 
 <Sheet open={id !== ''} onclose={() => goto('/runtimes')} {list}>
 	{#if selected}
