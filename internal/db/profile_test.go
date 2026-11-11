@@ -79,7 +79,7 @@ func TestProfileMigration(t *testing.T) {
 	}
 	old.Close()
 	// The daemon's chat image upgrade drops the table the newest migration leaves for it
-	d, err := Open(path, func(ctx context.Context, d *DB) error { return d.DropLegacyChatFiles(ctx) })
+	d, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,52 +157,6 @@ func TestProfileRoundTrip(t *testing.T) {
 	routes, err := d.ListRoutes(ctx)
 	if err != nil || len(routes) != 1 || !proto.Equal(routes[0].GetSpec(), r.GetSpec()) || !proto.Equal(routes[0].GetStatus(), r.GetStatus()) {
 		t.Fatalf("route round trip %v: %v", routes, err)
-	}
-}
-
-// Image bytes from before the content store move stay readable until an upgrade has placed them
-func TestChatFilesMigrationKeepsBytesForTheUpgrade(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nebu.db")
-	old := openBefore(t, path, "20261022000000_bot_activity_chat_blobs")
-	if _, err := old.Exec(`INSERT INTO chat_files (id, provider, subject, media_type, name, width, height, data, created_at) VALUES ('img1', 'local', 'u1', 'image/png', 'a.png', 2, 3, X'0102030405', '2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatal(err)
-	}
-	old.Close()
-	ctx := context.Background()
-	moved := 0
-	d, err := Open(path, func(ctx context.Context, d *DB) error {
-		files, err := d.LegacyChatFiles(ctx)
-		if err != nil {
-			return err
-		}
-		for _, f := range files {
-			if f.ID != "img1" || string(f.Data) != "\x01\x02\x03\x04\x05" {
-				t.Fatalf("legacy row %+v", f)
-			}
-			moved++
-			if err := d.SetChatFileDigest(ctx, f.ID, "sha256:abc"); err != nil {
-				return err
-			}
-		}
-		return d.DropLegacyChatFiles(ctx)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
-	if moved != 1 || len(d.Drift) != 0 {
-		t.Fatalf("moved %d drift %v", moved, d.Drift)
-	}
-	owner := ChatOwner{Provider: "local", Subject: "u1"}
-	f, digest, err := d.GetChatFile(ctx, owner, "img1")
-	if err != nil || digest != "sha256:abc" || f.GetSizeBytes() != 5 || f.GetWidth() != 2 || f.GetName() != "a.png" {
-		t.Fatalf("migrated file %v %q %v", f, digest, err)
-	}
-	if files, err := d.LegacyChatFiles(ctx); err != nil || files != nil {
-		t.Fatalf("legacy table should be gone: %v %v", files, err)
-	}
-	if digests, err := d.ChatFileDigests(ctx); err != nil || len(digests) != 1 || digests[0] != "sha256:abc" {
-		t.Fatalf("digests %v %v", digests, err)
 	}
 }
 

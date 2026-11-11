@@ -3,7 +3,7 @@
 	import { bytes, enumLabel, num, uptime, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { InstanceStateSchema, ToolSupportSchema, type Instance, type LoadedAdapter } from '#lib/proto/nebu/v1/instance_pb.js';
-	import { ParamType, type Param } from '#lib/proto/nebu/v1/runtime_pb.js';
+	import { ParamType, type Runtime } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Bar from '#lib/ui/Bar.svelte';
 	import Conditions from '#lib/ui/Conditions.svelte';
@@ -15,7 +15,6 @@
 	import PageTabs from '#lib/ui/PageTabs.svelte';
 	import Screen from '#lib/ui/Screen.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import Path from '#lib/ui/fields/Path.svelte';
@@ -26,8 +25,8 @@
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { deviceLabel } from '#lib/ui/memory.js';
-	import { instanceLamp } from '#lib/ui/status.js';
-	import { modelPhrase, terminal } from '#lib/pages/serve/serve.js';
+	import { instanceLamp, instanceShape } from '#lib/ui/status.js';
+	import { installLabel, modelPhrase, terminal } from '#lib/pages/serve/serve.js';
 
 	let { instance, tab, ontab, onclose }: { instance: Instance; tab: string; ontab: (id: string) => void; onclose: () => void } = $props();
 
@@ -49,11 +48,10 @@
 
 	const rows = $derived.by((): KeyRow[] => [
 		{ label: 'model', value: modelPhrase(inst) },
-		{ label: 'runtime', value: `${inst.runtimeId}${install ? ` ${install.version || install.origin}` : ''}` },
+		{ label: 'runtime', value: [runtime?.name || inst.runtimeId, install ? installLabel(install) : ''].filter(Boolean).join(' ') },
 		{ label: 'endpoint', value: inst.endpoint, mono: true, copy: inst.endpoint !== '' },
 		{ label: 'pid', value: inst.pid ? String(inst.pid) : '', mono: true },
 		{ label: 'restarts', value: num(inst.restarts) },
-		{ label: 'health', value: inst.lastHealthAt ? `${inst.healthy ? 'healthy' : 'unhealthy'}, checked ${when(inst.lastHealthAt)}` : '' },
 		{ label: 'context', value: inv?.contextLength ? `${num(inv.contextLength)} tokens` : '' },
 		{ label: 'quantization', value: inv?.quantization ?? '' },
 		{ label: 'accelerator', value: inv?.accelerator ?? '' },
@@ -80,23 +78,23 @@
 		});
 	});
 
-	// What the runtime declares of each parameter, read once for the labels and defaults
-	let declared = $state<Param[] | undefined>(undefined);
-	let declaredError = $state('');
+	// The runtime the launch runs on, read once for its name and what it declares of each parameter
+	let runtime = $state<Runtime | undefined>(undefined);
+	let runtimeError = $state('');
 	const runtimeOf = $derived(inst.runtimeId);
 	$effect(() => {
 		const runtimeId = runtimeOf;
-		declared = undefined;
-		declaredError = '';
+		runtime = undefined;
+		runtimeError = '';
 		rpc.runtimes
 			.listRuntimes({})
-			.then((res) => (declared = res.runtimes.find((r) => r.runtime?.id === runtimeId)?.runtime?.params ?? []))
-			.catch((err) => (declaredError = reason(err)));
+			.then((res) => (runtime = res.runtimes.find((r) => r.runtime?.id === runtimeId)?.runtime))
+			.catch((err) => (runtimeError = reason(err)));
 	});
 
 	// The parameters the launch set away from the runtime's defaults, under the names the runtime gives them
 	const paramRows = $derived.by((): KeyRow[] => {
-		const byName = new Map((declared ?? []).map((p) => [p.name, p]));
+		const byName = new Map((runtime?.params ?? []).map((p) => [p.name, p]));
 		return Object.entries(inst.params)
 			.filter(([name, value]) => {
 				const p = byName.get(name);
@@ -177,9 +175,7 @@
 	<Confirm label="Stop" question="Stop {inst.name}?" danger placement="top-start" onconfirm={stop} />
 {/snippet}
 
-<PanelHeader title={inst.name} subtitle={inst.readyAt && !done ? `up ${uptime(inst.readyAt, clockTick.now)}` : when(inst.stoppedAt ?? inst.createdAt)} {onclose}>
-	<StatePill label={enumLabel(InstanceStateSchema, inst.state)} lamp={instanceLamp(inst.state)} />
-</PanelHeader>
+<PanelHeader title={inst.name} lamp={instanceLamp(inst.state)} shape={instanceShape(inst.state)} state={enumLabel(InstanceStateSchema, inst.state)} subtitle={inst.readyAt && !done ? `up ${uptime(inst.readyAt, clockTick.now)}` : when(inst.stoppedAt ?? inst.createdAt)} {onclose} />
 <PageTabs {tabs} {active} onchange={ontab} />
 <div class="body">
 	{#if active === 'overview'}
@@ -201,9 +197,9 @@
 				</Section>
 			{/if}
 			<Conditions conditions={inst.conditions} />
-			{#if declaredError}
-				<p class="error-text failure">{declaredError}</p>
-			{:else if declared && paramRows.length}
+			{#if runtimeError}
+				<p class="error-text failure">{runtimeError}</p>
+			{:else if runtime && paramRows.length}
 				<Section title="Parameters" level={3}>
 					<KeyRows dense rows={paramRows} />
 				</Section>

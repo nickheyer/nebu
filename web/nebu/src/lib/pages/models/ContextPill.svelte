@@ -1,12 +1,11 @@
 <script lang="ts">
 	import { NeoPill } from '#lib/neo/pill/index.js';
 	import Bone from '#lib/ui/Bone.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 	import type { ContextRef, Contexts } from '#lib/pages/models/context.svelte.js';
 	import WarningIcon from 'phosphor-svelte/lib/WarningIcon';
 
-	// The largest context one weight group reaches on this host, coloured by the memory it takes
+	// The largest context one weight group reaches here, coloured by the memory it takes, nothing when no runtime loads it
 	let { contexts, of }: { contexts: Contexts; of: ContextRef } = $props();
 
 	$effect(() => contexts.want(of));
@@ -22,8 +21,6 @@
 	<Tip text={state.fit.tip} tag="span">
 		<NeoPill size="small" tinted color={state.fit.lamp} label={state.fit.label} aria-label={state.fit.tip} />
 	</Tip>
-{:else}
-	<StatePill label="no runtime" />
 {/if}
 
 <style>

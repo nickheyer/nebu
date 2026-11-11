@@ -48,26 +48,6 @@ type Manager struct {
 	Now func() time.Time
 }
 
-// Moves image bytes a database from before this release still holds into the content store
-func Upgrade(blobs *store.Store) db.Upgrade {
-	return func(ctx context.Context, d *db.DB) error {
-		files, err := d.LegacyChatFiles(ctx)
-		if err != nil {
-			return err
-		}
-		for _, f := range files {
-			digest, err := blobs.PutBlob(f.Data)
-			if err != nil {
-				return fmt.Errorf("chat image %s: %w", f.ID, err)
-			}
-			if err := d.SetChatFileDigest(ctx, f.ID, digest); err != nil {
-				return err
-			}
-		}
-		return d.DropLegacyChatFiles(ctx)
-	}
-}
-
 // The store a request reaches, the account behind its session or API token, or the
 // daemon's shared store for the daemon token and auth.disabled, which name no subject
 func OwnerOf(id auth.Identity) db.ChatOwner {

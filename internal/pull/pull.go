@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nickheyer/nebu/internal/inspect"
@@ -41,7 +42,7 @@ type Puller struct {
 	// Models protected from eviction.
 	Keep func(*v1.StoredModel) bool
 	// Bytes the store's filesystem keeps free after a pull
-	MinFree uint64
+	MinFree atomic.Uint64
 	// Members holding models, looked at before the internet. Nil outside a mesh.
 	Mesh Mesh
 }
@@ -100,7 +101,7 @@ func (p *Puller) roomBytes(need uint64) error {
 		return fmt.Errorf("room in %s: %w", p.Store.Root(), err)
 	}
 	free := st.GetFreeBytes() + freeable
-	if need+p.MinFree <= free {
+	if need+p.MinFree.Load() <= free {
 		return nil
 	}
 	return fmt.Errorf("%w: needs %s, %s free on %s", store.ErrNoRoom, estimate.Human(need), estimate.Human(st.GetFreeBytes()), st.GetPath())
@@ -518,7 +519,7 @@ func (p *Puller) fetch(ctx context.Context, h *tasks.Handle, src sources.Source,
 	}
 	defer blob.Close()
 	// Use ranged downloads when rate limits or pauses apply.
-	if r, ok := blob.(sources.Ranged); ok && p.Fetcher.Schedule.Limits() {
+	if r, ok := blob.(sources.Ranged); ok && p.Fetcher.Limited() {
 		blob = r.Ranged()
 	}
 	if whole, ok := blob.(sources.Materializer); ok {

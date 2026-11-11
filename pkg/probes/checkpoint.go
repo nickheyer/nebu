@@ -41,7 +41,7 @@ func (checkpointTools) Run(ctx context.Context) host.Result {
 		facts[snapshot.FactCUDACheckpoint] = path
 	}
 	if len(facts) == 0 {
-		return skipped("neither criu nor cuda-checkpoint is on PATH")
+		return skipped("criu/cuda-checkpoint not found")
 	}
 	return found(nil, nil, facts, "found "+strings.Join(slices.Sorted(maps.Keys(facts)), ", "))
 }

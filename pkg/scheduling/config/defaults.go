@@ -1,8 +1,7 @@
 package config
 
 // The profile set for a pool whose runtime exports queue, KV cache and LoRA metrics
-const DefaultConfig = `
-plugins:
+const DefaultConfig = `plugins:
 - type: ready-filter
   name: ready
 - type: fresh-metrics-filter
@@ -77,8 +76,7 @@ profileHandler:
 `
 
 // The profile set for a pool whose runtime exports no scheduling metrics
-const DefaultNoMetricsConfig = `
-plugins:
+const DefaultNoMetricsConfig = `plugins:
 - type: ready-filter
   name: ready
 - type: subset-filter
@@ -128,8 +126,7 @@ profileHandler:
 `
 
 // The profile set for a disaggregated pool, prefill joining decode once a prompt reaches 256 tokens
-const DefaultPDConfig = `
-plugins:
+const DefaultPDConfig = `plugins:
 - type: ready-filter
   name: ready
 - type: fresh-metrics-filter
@@ -240,8 +237,7 @@ profileHandler:
 `
 
 // The profile set for replicas of one model across nodes, prefix cache affinity weighted highest
-const DefaultReplicasConfig = `
-plugins:
+const DefaultReplicasConfig = `plugins:
 - type: ready-filter
   name: ready
 - type: fresh-metrics-filter

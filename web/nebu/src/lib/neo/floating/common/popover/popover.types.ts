@@ -158,6 +158,8 @@ export interface ClickOptions {
 export interface DismissOptions {
   /** Whether the hook is enabled. @default true */
   enabled?: boolean;
+  /** A hover hint that leaves Escape and outside presses to the surface beneath as well @default false */
+  transient?: boolean;
 }
 
 export type AriaRole

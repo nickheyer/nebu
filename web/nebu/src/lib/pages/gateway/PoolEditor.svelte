@@ -88,12 +88,12 @@
 <Stack gap={24}>
 	<FormSection title="Pool">
 		<FieldRow>
-			<Text bind:value={id} label="Name" info="Fixed once created" required readonly={editing} max={64} />
+			<Text bind:value={id} label="Name" required readonly={editing} max={64} />
 			<Text bind:value={spec.model} label="Model" required max={128} />
 		</FieldRow>
 		<FieldRow>
 			<Select value={spec.runtimeId || undefined} options={runtimes} label="Runtime" clearable onchange={(v) => (spec.runtimeId = v ?? '')} />
-			<Text bind:value={spec.accelerator} label="Accelerator" info="Such as cpu" max={64} />
+			<Text bind:value={spec.accelerator} label="Accelerator" max={64} />
 		</FieldRow>
 		<KeyValues bind:value={spec.selector} label="Selector" info="Labels an endpoint must carry to join" />
 		<FieldRow>
@@ -102,11 +102,11 @@
 		</FieldRow>
 		<FieldRow>
 			<Segmented bind:value={spec.appProtocol} options={[{ value: AppProtocol.HTTP, label: 'HTTP' }, { value: AppProtocol.H2C, label: 'h2c' }, { value: AppProtocol.GRPC, label: 'gRPC' }]} label="Protocol" />
-			<Segmented bind:value={spec.failureMode} options={[{ value: FailureMode.FAIL_CLOSE, label: 'Reject' }, { value: FailureMode.FAIL_OPEN, label: 'Let through' }]} label="If the scheduler fails" info="What happens to a request when the scheduler cannot answer" />
+			<Segmented bind:value={spec.failureMode} options={[{ value: FailureMode.FAIL_CLOSE, label: 'Reject' }, { value: FailureMode.FAIL_OPEN, label: 'Let through' }]} label="If the scheduler fails" />
 		</FieldRow>
 		<FieldRow>
 			<Select value={spec.schedulerConfig || undefined} options={configs} label="Scheduler" clearable onchange={(v) => (spec.schedulerConfig = v ?? '')} />
-			<Switch bind:checked={spec.export} label="Export" info="Offers the pool to every mesh member" top />
+			<Switch bind:checked={spec.export} label="Export" info="Offers the pool to every mesh member" />
 		</FieldRow>
 		<FieldRow>
 			<Switch bind:checked={spec.tokensInOut} label="Send token ids" info="The gateway turns prompts into token ids before sending them" />
@@ -126,24 +126,24 @@
 			{/if}
 			{#if spec.metrics}
 				<FieldRow>
-					<Text bind:value={spec.metrics.metricsPath} label="Metrics path" info="Where the runtime serves Prometheus metrics" mono />
+					<Text bind:value={spec.metrics.metricsPath} label="Metrics path" mono />
 					<NumberField bind:value={spec.metrics.metricsPort} min={0} max={65535} label="Metrics port" info="Port for the metrics path when apart from the endpoint port" emptyZero fallback={portNumbers[0]} />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.healthPath} label="Health path" info="Readiness endpoint" mono />
+					<Text bind:value={spec.metrics.healthPath} label="Health path" mono />
 					<Text bind:value={spec.metrics.slotsPath} label="Slots path" info="JSON slot listing KV use is summed from when there is no KV gauge" mono />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.queuedRequests} label="Queued requests gauge" info="Gauge counting waiting requests" mono />
-					<KeyValues bind:value={spec.metrics.queuedRequestsMatch} label="Queued requests labels" info="Labels a series must match to count" />
+					<Text bind:value={spec.metrics.queuedRequests} label="Queued requests gauge" mono />
+					<KeyValues bind:value={spec.metrics.queuedRequestsMatch} label="Queued requests labels" />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.runningRequests} label="Running requests gauge" info="Gauge counting running requests" mono />
-					<KeyValues bind:value={spec.metrics.runningRequestsMatch} label="Running requests labels" info="Labels a series must match to count" />
+					<Text bind:value={spec.metrics.runningRequests} label="Running requests gauge" mono />
+					<KeyValues bind:value={spec.metrics.runningRequestsMatch} label="Running requests labels" />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.kvCacheUtilization} label="KV utilization gauge" info="Gauge of KV cache in use" mono />
-					<KeyValues bind:value={spec.metrics.kvCacheUtilizationMatch} label="KV utilization labels" info="Labels a series must match to count" />
+					<Text bind:value={spec.metrics.kvCacheUtilization} label="KV utilization gauge" mono />
+					<KeyValues bind:value={spec.metrics.kvCacheUtilizationMatch} label="KV utilization labels" />
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.cacheConfigInfo} label="Cache config gauge" info="Info gauge carrying block size and block count" mono />
@@ -155,14 +155,14 @@
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.blockSize} label="Block size gauge" info="Gauge holding block size when there is no cache config gauge" mono />
-					<KeyValues bind:value={spec.metrics.blockSizeMatch} label="Block size labels" info="Labels a series must match to count" />
+					<KeyValues bind:value={spec.metrics.blockSizeMatch} label="Block size labels" />
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.numBlocks} label="Block count gauge" info="Gauge holding total blocks when there is no cache config gauge" mono />
-					<KeyValues bind:value={spec.metrics.numBlocksMatch} label="Block count labels" info="Labels a series must match to count" />
+					<KeyValues bind:value={spec.metrics.numBlocksMatch} label="Block count labels" />
 				</FieldRow>
 				<FieldRow>
-					<Text bind:value={spec.metrics.loraInfo} label="LoRA info gauge" info="Info gauge listing loaded adapters" mono />
+					<Text bind:value={spec.metrics.loraInfo} label="LoRA info gauge" mono />
 					<Text bind:value={spec.metrics.maxLoraLabel} label="Max LoRA label" info="Label on the LoRA info gauge holding adapters per batch" mono />
 				</FieldRow>
 				<FieldRow>
@@ -171,11 +171,11 @@
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.adaptersPath} label="Adapters path" info="JSON listing of loaded adapters when there is no LoRA info gauge" mono />
-					<Segmented bind:value={() => spec.metrics?.adaptersFormat || undefined, (v) => (spec.metrics!.adaptersFormat = v ?? '')} options={[{ value: 'llamacpp', label: 'llama.cpp' }, { value: 'openai', label: 'OpenAI' }]} label="Adapters format" info="Layout of the adapters listing" clearable />
+					<Segmented bind:value={() => spec.metrics?.adaptersFormat || undefined, (v) => (spec.metrics!.adaptersFormat = v ?? '')} options={[{ value: 'llamacpp', label: 'llama.cpp' }, { value: 'openai', label: 'OpenAI' }]} label="Adapters format" clearable />
 				</FieldRow>
 				<FieldRow>
 					<Text bind:value={spec.metrics.maxLoraPath} label="Max LoRA path" info="JSON document holding adapters per batch" mono />
-					<Text bind:value={spec.metrics.maxLoraField} label="Max LoRA field" info="Field in that document" mono />
+					<Text bind:value={spec.metrics.maxLoraField} label="Max LoRA field" mono />
 				</FieldRow>
 				<Text bind:value={spec.metrics.workCounter} label="Work counter" info="Counter that only grows as requests are served" mono />
 				<Switch bind:checked={spec.metrics.staticCache} label="Static cache" info="Every running request holds a full length cache" />

@@ -132,7 +132,7 @@ func (VLLM) Params() []*v1.Param {
 		strParam("reasoning_parser", "Reasoning parser", groupChat, "--reasoning-parser", "", "parser that splits reasoning from the answer, such as deepseek_r1 or qwen3, empty leaves reasoning in the content", nil, true),
 		strParam("tool_call_parser", "Tool call parser", groupChat, "", "", "parser for tool calls, empty picks one for the model family", nil, true),
 		boolParam("enable_lora", "LoRA adapters", groupAdapters, "--enable-lora", "accept LoRA adapters named by requests and loaded at runtime"),
-		strParam("lora_modules", "Adapters at launch", groupAdapters, "", "", "name=path pairs, comma separated, served from the start and turning LoRA on", nil, true),
+		fileList(strParam("lora_modules", "Adapters at launch", groupAdapters, "", "", "name=path pairs, comma separated, served from the start and turning LoRA on", nil, true), v1.ParamList_PARAM_LIST_NAMED),
 		intParam("max_loras", "Max adapters per batch", groupAdapters, "--max-loras", "", "adapters", "empty keeps vLLM's 1, or 4 when adapters are listed at launch", 1, 0, 1, true),
 		intParam("max_lora_rank", "Max adapter rank", groupAdapters, "--max-lora-rank", "", "", "empty keeps vLLM's 16", 1, 0, 8, true),
 		intParam("max_cpu_loras", "Adapters held in host memory", groupAdapters, "--max-cpu-loras", "", "adapters", "empty keeps vLLM's same as max_loras", 1, 0, 1, true),

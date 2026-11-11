@@ -13,7 +13,7 @@ import (
 
 // Ranks of an instance and of a formation seat come back from the store unchanged, none for one rank
 func TestRanksRoundTrip(t *testing.T) {
-	d, err := Open(filepath.Join(t.TempDir(), "nebu.db"), func(ctx context.Context, d *DB) error { return d.DropLegacyChatFiles(ctx) })
+	d, err := Open(filepath.Join(t.TempDir(), "nebu.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

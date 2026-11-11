@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack, type Snippet } from 'svelte';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { NeoSkeletonText } from '#lib/neo/skeletons/index.js';
 	import { date, ms, plural, shortId, tokensPerSecond } from '#lib/format.js';
@@ -10,7 +11,6 @@
 	import Markdown from '#lib/ui/Markdown.svelte';
 	import Pop from '#lib/ui/Pop.svelte';
 	import Screen from '#lib/ui/Screen.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
 	import Str from '#lib/ui/Str.svelte';
 	import Row from '#lib/ui/layout/Row.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
@@ -26,7 +26,8 @@
 		traceLinks = false,
 		onretry,
 		onrun,
-		onskip
+		onskip,
+		children
 	}: {
 		turn: ChatTurn;
 		session: ChatSession;
@@ -37,9 +38,13 @@
 		onretry?: () => void;
 		onrun?: (c: PendingCall) => void;
 		onskip?: (c: PendingCall) => void;
+		children?: Snippet;
 	} = $props();
 
 	const at = (ts: ChatTurn['startedAt']) => date(ts)?.getTime() ?? 0;
+	const user = $derived(turn.role === 'user');
+	// An answer that ended within the last moments dims its rail from lit instead of appearing dim
+	const fresh = untrack(() => turn.role === 'assistant' && !streaming && Date.now() - at(turn.finishedAt) < 2000);
 	const ttft = $derived(turn.firstTokenAt && turn.startedAt ? at(turn.firstTokenAt) - at(turn.startedAt) : undefined);
 	const tps = $derived.by(() => {
 		if (!turn.firstTokenAt || !turn.finishedAt || turn.completionTokens < 2) return undefined;
@@ -77,18 +82,18 @@
 	<KeyRows dense rows={stats} />
 {/snippet}
 
-<div class="turn">
-	<Row gap={8} wrap={false}>
-		<Str value={name} weight={500} />
+<div class="turn" class:user class:streaming class:fresh class:failed={turn.error !== ''}>
+	<div class="meta">
+		<Str value={name} color="muted" />
 		{#if turn.role === 'assistant' && turn.finishedAt}
 			<Pop placement="bottom-start" width="20rem">
 				{#snippet content()}{@render statsView()}{/snippet}
 				<NeoButton text aria-label="Timing and tokens">{#snippet icon()}<GaugeIcon size={16} />{/snippet}</NeoButton>
 			</Pop>
 		{/if}
-	</Row>
+	</div>
 	{#if turn.images.length}
-		<Row gap={8}>
+		<Row gap={8} justify={user ? 'flex-end' : 'flex-start'}>
 			{#each turn.images as f, i (i)}
 				{@const url = session.fileUrl(f)}
 				{#if url}
@@ -99,80 +104,166 @@
 			{/each}
 		</Row>
 	{/if}
-	{#if turn.text}
-		<Markdown source={turn.text} />
-	{:else if streaming && turn.toolCalls.length === 0}
-		<NeoSkeletonText lines={2} width="40ch" />
-	{/if}
-	{#if turn.media.length}
-		<Row gap={8}>
-			{#each turn.media as f, i (i)}
-				{@const url = session.fileUrl(f)}
-				{#if f.error}
-					<Str value={f.error} kind="message" color="error" />
-				{:else if !url}
-					<NeoSkeletonText lines={1} width="256px" height="256px" />
-				{:else if f.mediaType.startsWith('video/')}
-					<video class="video" src={url} controls><track kind="captions" /></video>
-				{:else}
-					<img class="made" src={url} alt={f.name} />
-				{/if}
-			{/each}
-		</Row>
-	{/if}
-	{#if turn.toolCalls.length}
-		<div class="calls">
-			{#each turn.toolCalls as c (c.id)}
-				{@const p = pending.find((x) => x.id === c.id)}
-				{@const state = lampOf(c, p !== undefined)}
-				{#snippet callBody()}
-					<Stack gap={4}>
-						<span class="label">Arguments</span>
-						<Screen padding={8} maxHeight="16rem"><div class="lines">{pretty(c.arguments)}</div></Screen>
-						{#if c.result}
-							<span class="label">Result</span>
-							<Screen padding={8} maxHeight="16rem"><div class="lines">{pretty(c.result)}</div></Screen>
-						{/if}
-					</Stack>
-				{/snippet}
-				{#snippet runSkip()}
-					{#if p}
-						<NeoButton text onclick={() => onskip?.(p)}>Skip</NeoButton>
-						<NeoButton text onclick={() => onrun?.(p)}>Run</NeoButton>
+	<div class="body">
+		{#if children}
+			{@render children()}
+		{:else if turn.text}
+			<Markdown source={turn.text} />
+		{/if}
+		{#if turn.media.length}
+			<Row gap={8}>
+				{#each turn.media as f, i (i)}
+					{@const url = session.fileUrl(f)}
+					{#if f.error}
+						<Str value={f.error} kind="message" color="error" />
+					{:else if !url}
+						<NeoSkeletonText lines={1} width="256px" height="256px" />
+					{:else if f.mediaType.startsWith('video/')}
+						<video class="video" src={url} controls><track kind="captions" /></video>
+					{:else}
+						<img class="made" src={url} alt={f.name} />
 					{/if}
-				{/snippet}
-				<ListRow
-					lamp={state.lamp}
-					shape={state.shape}
-					primary={c.name}
-					primaryTip={[c.name, c.server, state.word].filter(Boolean).join('\n')}
-					facts={[{ value: c.tookMs ? ms(c.tookMs) : '' }]}
-					expand={callBody}
-					action={p ? runSkip : undefined}
-				/>
-			{/each}
-		</div>
-	{/if}
-	{#if turn.error}
-		<Row gap={8} wrap={false}>
-			<Str value={turn.error} kind="message" color="error" />
-			{#if onretry}<NeoButton text onclick={onretry}>Retry</NeoButton>{/if}
-		</Row>
-	{:else if turn.stop === 'cancelled'}
-		<Row gap={8} wrap={false}>
-			<StatePill label="stopped" />
-			{#if onretry}<NeoButton text onclick={onretry}>Retry</NeoButton>{/if}
-		</Row>
-	{/if}
+				{/each}
+			</Row>
+		{/if}
+		{#if turn.toolCalls.length}
+			<div class="calls">
+				{#each turn.toolCalls as c (c.id)}
+					{@const p = pending.find((x) => x.id === c.id)}
+					{@const state = lampOf(c, p !== undefined)}
+					{#snippet callBody()}
+						<Stack gap={4}>
+							<span class="label">Arguments</span>
+							<Screen padding={8} maxHeight="16rem"><div class="lines">{pretty(c.arguments)}</div></Screen>
+							{#if c.result}
+								<span class="label">Result</span>
+								<Screen padding={8} maxHeight="16rem"><div class="lines">{pretty(c.result)}</div></Screen>
+							{/if}
+						</Stack>
+					{/snippet}
+					{#snippet runSkip()}
+						{#if p}
+							<NeoButton text onclick={() => onskip?.(p)}>Skip</NeoButton>
+							<NeoButton text onclick={() => onrun?.(p)}>Run</NeoButton>
+						{/if}
+					{/snippet}
+					<ListRow
+						lamp={state.lamp}
+						shape={state.shape}
+						primary={c.name}
+						primaryTip={[c.name, c.server, state.word].filter(Boolean).join('\n')}
+						facts={[{ value: c.tookMs ? ms(c.tookMs) : '' }]}
+						expand={callBody}
+						action={p ? runSkip : undefined}
+					/>
+				{/each}
+			</div>
+		{/if}
+		{#if turn.error}
+			<Row gap={8} wrap={false}>
+				<Str value={turn.error} kind="message" color="error" />
+				{#if onretry}<NeoButton text onclick={onretry}>Retry</NeoButton>{/if}
+			</Row>
+		{:else if turn.stop === 'cancelled'}
+			<Row gap={8} wrap={false}>
+				<span class="secondary">Stopped</span>
+				{#if onretry}<NeoButton text onclick={onretry}>Retry</NeoButton>{/if}
+			</Row>
+		{/if}
+	</div>
 </div>
 
 <style>
 	.turn {
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
+		gap: var(--nebu-space-1);
 		min-width: 0;
-		padding: 12px 0;
+	}
+	/* A question opens an exchange, so it stands further from the answer before it than from its own */
+	.turn.user:not(:first-child) {
+		margin-top: var(--nebu-space-3);
+	}
+	.meta {
+		display: flex;
+		gap: var(--nebu-space-1);
+		align-items: center;
+		min-width: 0;
+		height: 24px;
+		font-size: var(--nebu-text-caption);
+	}
+	.user {
+		align-items: flex-end;
+	}
+	.body {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-2);
+		min-width: 0;
+	}
+	/* What was typed stays in a well like the box it was typed in */
+	.user .body {
+		width: fit-content;
+		max-width: min(100%, 34rem);
+		padding: 10px 14px;
+		border-radius: var(--neo-border-radius-md);
+		box-shadow: var(--neo-box-shadow-inset-2);
+	}
+	.user :global(.markdown) {
+		width: auto;
+		font-weight: 400;
+		contain: none;
+	}
+	/* An answer hangs off a rail, a lit cursor that stretches while the words arrive and dims into a groove once they end */
+	.turn:not(.user) .body {
+		position: relative;
+		min-height: 24px;
+		padding-left: var(--nebu-space-4);
+	}
+	.turn:not(.user) .body::before {
+		position: absolute;
+		top: 3px;
+		bottom: 3px;
+		left: 0;
+		width: 2px;
+		content: '';
+		background: var(--neo-shadow-color-dark);
+		border-radius: 1px;
+		box-shadow: 1px 1px 0 var(--neo-shadow-color-light);
+	}
+	.turn.streaming:not(.user) .body::before {
+		background: var(--neo-color-primary);
+		box-shadow: 0 0 8px color-mix(in srgb, var(--neo-color-primary) 60%, transparent);
+		animation: rail-live 1.4s ease-in-out infinite;
+	}
+	.turn.fresh:not(.user) .body::before {
+		animation: rail-settle 900ms var(--nebu-ease) backwards;
+	}
+	.turn.failed:not(.user) .body::before {
+		background: var(--neo-color-error);
+		box-shadow: none;
+	}
+	@keyframes rail-live {
+		50% {
+			opacity: 0.45;
+		}
+	}
+	@keyframes rail-settle {
+		from {
+			background: var(--neo-color-primary);
+			box-shadow: 0 0 8px color-mix(in srgb, var(--neo-color-primary) 60%, transparent);
+		}
+	}
+	/* A turn's words fill its column from the left, tables included, with no gap under the last block */
+	.turn :global(.markdown) {
+		max-width: none;
+		margin: 0;
+	}
+	.turn :global(.markdown > :last-child) {
+		margin-bottom: 0;
+	}
+	.turn :global(.markdown table) {
+		margin: 0;
 	}
 	.thumb {
 		max-width: 160px;
@@ -194,9 +285,13 @@
 		overflow-wrap: anywhere;
 	}
 	.calls {
+		--nebu-row-inset: var(--nebu-space-3);
+
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
-		margin: 0 calc(-1 * var(--nebu-row-inset, 0px));
+		overflow: hidden;
+		border: 1px solid var(--nebu-border);
+		border-radius: var(--neo-border-radius);
 	}
 </style>

@@ -13,7 +13,7 @@
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
+	import StateWord from '#lib/ui/StateWord.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import NumberField from '#lib/ui/fields/Number.svelte';
@@ -129,7 +129,7 @@
 						onclick={() => edit(p)}
 						menu={p.builtin ? undefined : [{ label: 'Delete', danger: true, confirm: `Delete ${p.pattern}`, onclick: () => remove(p) }]}
 					>
-						{#snippet badges()}<StatePill label={p.builtin ? 'builtin' : 'custom'} lamp={p.builtin ? 'muted' : 'primary'} />{/snippet}
+						{#snippet badges()}<StateWord label={p.builtin ? 'builtin' : 'custom'} lamp={p.builtin ? 'muted' : 'primary'} />{/snippet}
 					</ListRow>
 				{/each}
 			</List>
@@ -146,7 +146,7 @@
 						secondaryWidth="16ch"
 						facts={[{ value: `${r.ttftRatio.toFixed(2)} · ${r.tptRatio.toFixed(2)}`, tip: 'TTFT ratio · TPT ratio' }, { value: num(r.samples) }]}
 					>
-						{#snippet badges()}{#if r.linkClass}<StatePill label={linkLabel(r.linkClass)} lamp={linkLamp(r.linkClass)} />{/if}{/snippet}
+						{#snippet badges()}{#if r.linkClass}<StateWord label={linkLabel(r.linkClass)} lamp={linkLamp(r.linkClass)} />{/if}{/snippet}
 					</ListRow>
 				{/each}
 			</List>

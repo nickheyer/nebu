@@ -87,6 +87,17 @@ message SetPasswordResponse {
   User user = 1;
 }
 
+// Gives an account another role, ending its sessions and moving its API tokens to the role
+message SetRoleRequest {
+  string username = 1 [(buf.validate.field).string.min_len = 1];
+  Role role = 2 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];
+}
+
+// The account after the change
+message SetRoleResponse {
+  User user = 1;
+}
+
 // An API token a signed-in user made. API and gateway clients send it as a
 // bearer token and act as that user within its scopes.
 message ApiToken {
@@ -152,6 +163,8 @@ service AuthService {
   rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
   // Changes a password and ends the account's sessions
   rpc SetPassword(SetPasswordRequest) returns (SetPasswordResponse);
+  // Change an account's role. Needs an admin, and the last admin keeps the role.
+  rpc SetRole(SetRoleRequest) returns (SetRoleResponse);
   // Lists the caller's API tokens by prefix, never with their secrets
   rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
   // Makes an API token for the caller

@@ -3,22 +3,20 @@
 	import { when } from '#lib/format.js';
 	import Dot from '#lib/ui/Dot.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
-	import { conditionLamp, reasonWords } from '#lib/ui/status.js';
+	import { reasonWords } from '#lib/ui/status.js';
 
+	// Each condition with its reason, a filled mark while it holds and a hollow one while it does not
 	let { conditions = [] }: { conditions?: Condition[] } = $props();
-
-	const sorted = $derived(
-		[...conditions].sort((a, b) => Number(b.status === ConditionStatus.FALSE) - Number(a.status === ConditionStatus.FALSE))
-	);
 </script>
 
-{#if sorted.length}
+{#if conditions.length}
 	<div class="conditions">
-		{#each sorted as c (c.type)}
-			<Tip facts={[{ label: 'message', value: c.message || c.reason }, { label: 'since', value: when(c.lastTransitionTime) }]} tag="div" class="condtip">
+		{#each conditions as c (c.type)}
+			{@const holds = c.status === ConditionStatus.TRUE}
+			<Tip facts={[{ label: 'message', value: c.message }, { label: 'since', value: when(c.lastTransitionTime) }].filter((f) => f.value !== '')} tag="div" class="condtip">
 				<div class="cond">
-					<Dot lamp={conditionLamp(c.status)} />
-					<span class="type">{c.type}</span>
+					<Dot lamp={holds ? 'primary' : 'muted'} shape={holds ? 'filled' : 'hollow'} label={holds ? 'holds' : 'does not hold'} />
+					<span class="type">{reasonWords(c.type)}</span>
 					<span class="reason muted">{reasonWords(c.reason)}</span>
 				</div>
 			</Tip>
@@ -49,8 +47,8 @@
 		padding: 4px 0;
 		font-size: 13px;
 	}
-	.type {
-		font-weight: 500;
+	.type::first-letter {
+		text-transform: uppercase;
 	}
 	.reason {
 		min-width: 0;

@@ -104,7 +104,7 @@ func (SGLang) Params() []*v1.Param {
 		boolParam("enable_torch_compile", "torch.compile", groupModel, "--enable-torch-compile", "compile the model with torch, slower starts and faster steps"),
 		intParam("torch_compile_max_bs", "Compiled batch", groupModel, "--torch-compile-max-bs", "", "requests", "largest batch torch compiles, empty keeps SGLang's 32", 1, 0, 1, true),
 		boolParam("enable_lora", "LoRA adapters", groupAdapters, "--enable-lora", "accept LoRA adapters named by requests and loaded at runtime"),
-		strParam("lora_paths", "Adapters at launch", groupAdapters, "", "", "name=path pairs, comma separated, served from the start and turning LoRA on", nil, true),
+		fileList(strParam("lora_paths", "Adapters at launch", groupAdapters, "", "", "name=path pairs, comma separated, served from the start and turning LoRA on", nil, true), v1.ParamList_PARAM_LIST_NAMED),
 		intParam("max_loras_per_batch", "Adapters per batch", groupAdapters, "--max-loras-per-batch", "", "adapters", "distinct adapters one batch runs, base requests counting as one, empty keeps SGLang's 8", 1, 0, 1, true),
 		intParam("max_loaded_loras", "Adapters in host memory", groupAdapters, "--max-loaded-loras", "", "adapters", "adapters held in host memory at once, at least the per batch count, empty keeps SGLang's no limit", 1, 0, 1, true),
 		intParam("max_lora_rank", "Max adapter rank", groupAdapters, "--max-lora-rank", "", "", "largest rank an adapter loaded at runtime may have, empty infers it from the launch adapters", 1, 0, 8, true),

@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -259,9 +258,9 @@ func TestDraftSizedFromItsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	overrides := map[string]string{"n_ctx": "4096", "spec_type": "draft-simple", "draft_model": path}
-	in, warning, err := i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil)
-	if err != nil || warning != "" {
-		t.Fatal(err, warning)
+	in, err := i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if in.Draft == nil || in.Draft.GetArchitecture() != "llama" || in.DraftFamily == nil || in.Draft.GetParams()["n_layer"] != 2 {
 		t.Fatalf("draft read from its header: %v %v", in.Draft, in.DraftFamily)
@@ -284,15 +283,15 @@ func TestDraftSizedFromItsFile(t *testing.T) {
 	// A stored draft uses its descriptor, the model itself included
 	stored := &v1.StoredModel{SourceId: "disk", Repo: "org/small", Group: "Q4_K_M", FormatId: "gguf", Descriptor_: target, Artifacts: []*v1.StoredArtifact{{Path: "/store/small.gguf", Artifact: &v1.Artifact{Path: "small.gguf", Role: v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS}}}}
 	overrides["draft_model"] = "/store/small.gguf"
-	if in, _, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, []*v1.StoredModel{stored}); err != nil || in.Draft != target {
+	if in, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, []*v1.StoredModel{stored}); err != nil || in.Draft != target {
 		t.Fatalf("stored draft: %v %v", in.Draft, err)
 	}
-	if in, _, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", stored, nil); err != nil || in.Draft != target {
+	if in, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", stored, nil); err != nil || in.Draft != target {
 		t.Fatalf("the model as its own draft: %v %v", in.Draft, err)
 	}
-	// A draft file no header reads plans uncounted, and the plan says so
+	// A draft file no header reads plans uncounted
 	overrides["draft_model"] = filepath.Join(dir, "gone.gguf")
-	if in, warning, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil); err != nil || in.Draft != nil || !strings.Contains(warning, "gone.gguf") || !strings.Contains(warning, "not counted") {
-		t.Fatalf("a missing draft: %v %q %v", in.Draft, warning, err)
+	if in, err = i.input(context.Background(), rt, target, profile, overrides, false, v1.Placement_PLACEMENT_UNSPECIFIED, "org/model", nil, nil); err != nil || in.Draft != nil {
+		t.Fatalf("a missing draft: %v %v", in.Draft, err)
 	}
 }

@@ -61,6 +61,14 @@ type fakeInstances struct {
 	files map[string]string
 	// Runs an adapter load, refusing every load when unset
 	load func(ctx context.Context, instanceID, name, path string) error
+	// Instances whose launch keeps Claude Code's billing header
+	keepBilling map[string]bool
+}
+
+func (f *fakeInstances) StripsBillingHeader(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.keepBilling[id]
 }
 
 func (f *fakeInstances) TokenizerFile(id string) (string, error) {

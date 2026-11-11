@@ -41,17 +41,17 @@ func (d *DB) PutTrace(ctx context.Context, owner string, t *v1.Trace) error {
 		return fmt.Errorf("trace %s start time: %w", t.GetId(), err)
 	}
 	bare := proto.Clone(t).(*v1.Trace)
-	bare.Request, bare.UpstreamRequest, bare.Response = "", "", ""
+	bare.Request, bare.UpstreamRequest, bare.Response, bare.Reasoning = "", "", "", ""
 	record, err := proto.Marshal(bare)
 	if err != nil {
 		return err
 	}
-	_, err = d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO traces (id, owner, route, kind, started_at, record, request, upstream_request, response) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.GetId(), owner, t.GetRoute(), int32(t.GetKind()), traceTime(t.GetStartedAt().AsTime()), record, t.GetRequest(), t.GetUpstreamRequest(), t.GetResponse())
+	_, err = d.sql.ExecContext(ctx, `INSERT OR REPLACE INTO traces (id, owner, route, kind, started_at, record, request, upstream_request, response, reasoning) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.GetId(), owner, t.GetRoute(), int32(t.GetKind()), traceTime(t.GetStartedAt().AsTime()), record, t.GetRequest(), t.GetUpstreamRequest(), t.GetResponse(), t.GetReasoning())
 	return err
 }
 
-// Traces newest first by started_at without request, upstream_request and response bodies
+// Traces newest first by started_at without request, upstream_request, response and reasoning bodies
 func (d *DB) ListTraces(ctx context.Context, q TraceQuery) ([]*v1.Trace, error) {
 	if q.Limit < 0 {
 		return nil, fmt.Errorf("trace limit %d is negative", q.Limit)
@@ -99,21 +99,21 @@ func (d *DB) ListTraces(ctx context.Context, q TraceQuery) ([]*v1.Trace, error) 
 
 // One trace with its bodies, ErrNotFound when absent or when another subject owns it and anyOwner is false
 func (d *DB) GetTrace(ctx context.Context, owner string, anyOwner bool, id string) (*v1.Trace, error) {
-	query, args := `SELECT record, request, upstream_request, response FROM traces WHERE id = ?`, []any{id}
+	query, args := `SELECT record, request, upstream_request, response, reasoning FROM traces WHERE id = ?`, []any{id}
 	if !anyOwner {
 		query, args = query+` AND owner = ?`, append(args, owner)
 	}
 	items, err := list(ctx, d, query, func(rows *sql.Rows) (*v1.Trace, error) {
 		var record []byte
-		var request, upstream, response string
-		if err := rows.Scan(&record, &request, &upstream, &response); err != nil {
+		var request, upstream, response, reasoning string
+		if err := rows.Scan(&record, &request, &upstream, &response, &reasoning); err != nil {
 			return nil, err
 		}
 		t, err := unmarshalTrace(id, record)
 		if err != nil {
 			return nil, err
 		}
-		t.Request, t.UpstreamRequest, t.Response = request, upstream, response
+		t.Request, t.UpstreamRequest, t.Response, t.Reasoning = request, upstream, response, reasoning
 		return t, nil
 	}, args...)
 	return one(items, err, "trace", id)

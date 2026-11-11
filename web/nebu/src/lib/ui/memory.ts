@@ -1,6 +1,5 @@
-import { bytes } from '#lib/format.js';
 import type { MemoryPlan } from '#lib/proto/nebu/v1/estimate_pb.js';
-import { DeviceKind, PoolKind, type Device, type HostProfile, type MemoryPool } from '#lib/proto/nebu/v1/host_pb.js';
+import { DeviceKind, PoolKind, type Device, type HostProfile } from '#lib/proto/nebu/v1/host_pb.js';
 import { InstanceState, type Instance } from '#lib/proto/nebu/v1/instance_pb.js';
 import { SlotState, type Slot } from '#lib/proto/nebu/v1/slot_pb.js';
 import type { Segment } from '#lib/ui/Bar.svelte';
@@ -110,10 +109,3 @@ export function poolBars(profile: HostProfile | undefined, instances: Iterable<I
 	});
 }
 
-export function poolSummary(bar: PoolBar): string {
-	return `${bytes(bar.used)} of ${bytes(bar.total)}`;
-}
-
-export function poolOf(profile: HostProfile | undefined, id: string): MemoryPool | undefined {
-	return profile?.pools.find((p) => p.id === id);
-}

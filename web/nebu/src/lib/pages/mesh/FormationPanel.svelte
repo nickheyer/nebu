@@ -12,7 +12,7 @@
 	import MemoryBars from '#lib/ui/MemoryBars.svelte';
 	import MemoryLegend from '#lib/ui/MemoryLegend.svelte';
 	import PageTabs from '#lib/ui/PageTabs.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
+	import StateWord from '#lib/ui/StateWord.svelte';
 	import Str from '#lib/ui/Str.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Section from '#lib/ui/layout/Section.svelte';
@@ -36,9 +36,7 @@
 	}
 </script>
 
-<PanelHeader title={f.name} subtitle="{enumLabel(ShapeSchema, f.shape)} · {plural(f.seats.length, 'node')}" {onclose}>
-	<StatePill label={enumLabel(FormationStateSchema, f.state)} lamp={formationLamp(f.state)} />
-</PanelHeader>
+<PanelHeader title={f.name} lamp={formationLamp(f.state)} state={enumLabel(FormationStateSchema, f.state)} subtitle="{enumLabel(ShapeSchema, f.shape)} · {plural(f.seats.length, 'node')}" {onclose} />
 <Stack gap={16}>
 	<PageTabs {tabs} active={tab} onchange={(x) => (tab = x)} />
 	{#if tab === 'seats'}
@@ -75,7 +73,7 @@
 							secondaryWidth="24ch"
 							facts={[{ value: tokensPerSecond(plan.tokensPerSecond) }, { value: speedup(plan.speedup) }]}
 						>
-							{#snippet badges()}<StatePill label={verdictLabel(plan.verdict)} lamp={verdictLamp(plan.verdict)} />{/snippet}
+							{#snippet badges()}<StateWord label={verdictLabel(plan.verdict)} lamp={verdictLamp(plan.verdict)} />{/snippet}
 						</ListRow>
 					</List>
 				</Section>
@@ -91,7 +89,7 @@
 									secondaryWidth="24ch"
 									facts={[{ value: tokensPerSecond(c.tokensPerSecond) }, { value: speedup(c.speedup) }]}
 								>
-									{#snippet badges()}<StatePill label={verdictLabel(c.verdict)} lamp={verdictLamp(c.verdict)} />{/snippet}
+									{#snippet badges()}<StateWord label={verdictLabel(c.verdict)} lamp={verdictLamp(c.verdict)} />{/snippet}
 								</ListRow>
 							{/each}
 						</List>
@@ -107,7 +105,7 @@
 							{ label: 'TTFT ratio', value: plan.ttftRatio ? plan.ttftRatio.toFixed(2) : '' },
 							{ label: 'TPT ratio', value: plan.tptRatio ? plan.tptRatio.toFixed(2) : '' },
 							{ label: 'samples', value: num(plan.ratioSamples) },
-							...plan.sources.map((s, i) => ({ label: `source ${i + 1}`, value: s, tip: s }))
+							...plan.sources.map((s, i) => ({ label: `source ${i + 1}`, value: s }))
 						]}
 					/>
 				</Collapse>

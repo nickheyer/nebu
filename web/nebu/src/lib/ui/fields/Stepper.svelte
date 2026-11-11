@@ -5,7 +5,7 @@
 	import MinusIcon from 'phosphor-svelte/lib/MinusIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 
-	// The box of every number field with its step buttons and any unit buttons in one group
+	// The box of every number field, stepped by the arrow keys and by its buttons when it shows them
 	let {
 		id,
 		raw = $bindable(''),
@@ -20,6 +20,7 @@
 		unit,
 		ariaLabel,
 		tail,
+		buttons = true,
 		onchange
 	}: {
 		id?: string;
@@ -35,6 +36,7 @@
 		unit?: string;
 		ariaLabel?: string;
 		tail?: Snippet;
+		buttons?: boolean;
 		onchange?: () => void;
 	} = $props();
 
@@ -99,13 +101,21 @@
 		raw = String(clamp(base + (up ? step : -step)));
 		onchange?.();
 	}
+
+	function onkeydown(e: KeyboardEvent) {
+		if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+		e.preventDefault();
+		bump(e.key === 'ArrowUp');
+	}
 </script>
 
 {#snippet after()}
 	<span class="controls">
 		{#if unit}<span class="unit">{unit}</span>{/if}
-		<NeoButton text aria-label="Decrease" title="Decrease" {disabled} onclick={() => bump(false)}>{#snippet icon()}<MinusIcon size={16} />{/snippet}</NeoButton>
-		<NeoButton text aria-label="Increase" title="Increase" {disabled} onclick={() => bump(true)}>{#snippet icon()}<PlusIcon size={16} />{/snippet}</NeoButton>
+		{#if buttons}
+			<NeoButton text aria-label="Decrease" title="Decrease" {disabled} onclick={() => bump(false)}>{#snippet icon()}<MinusIcon size={16} />{/snippet}</NeoButton>
+			<NeoButton text aria-label="Increase" title="Increase" {disabled} onclick={() => bump(true)}>{#snippet icon()}<PlusIcon size={16} />{/snippet}</NeoButton>
+		{/if}
 		{#if tail}<span class="tail">{@render tail()}</span>{/if}
 	</span>
 {/snippet}
@@ -120,7 +130,7 @@
 	{disabled}
 	{message}
 	error={shownError}
-	{after}
+	after={buttons || unit || tail ? after : undefined}
 	elevation={-1}
 	floating={false}
 	width="100%"
@@ -130,6 +140,7 @@
 	class="stepper-input"
 	oninput={typed}
 	onblur={settle}
+	{onkeydown}
 />
 
 <style>

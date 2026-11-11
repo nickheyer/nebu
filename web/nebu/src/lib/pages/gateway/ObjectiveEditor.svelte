@@ -60,7 +60,7 @@
 <Stack gap={24}>
 	<FormSection>
 		<FieldRow>
-			<Text bind:value={name} label="Name" info="Fixed once created" required readonly={editing} max={64} />
+			<Text bind:value={name} label="Name" required readonly={editing} max={64} />
 			<NumberField bind:value={priority} min={-1000} max={1000} label="Priority" info="Higher is turned away last under load" />
 		</FieldRow>
 		<FieldRow wide>

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
@@ -54,7 +55,7 @@ type Store struct {
 	// Reserved bytes for active pulls, counted against the cap.
 	reserved uint64
 	// Blob capacity target, zero for unlimited.
-	MaxBytes uint64
+	MaxBytes atomic.Uint64
 	// Where formation stages keep the tensors their heads stream to them, one directory per
 	// formation. They count toward the limit and are collected with the blobs.
 	CacheDir string
@@ -251,6 +252,9 @@ func (s *Store) manifestPath(source, repo, group string) (string, error) {
 	return filepath.Join(s.root, manifestsDir, rel), nil
 }
 
+// Directory holding the links of every stored model
+func (s *Store) ModelsDir() string { return filepath.Join(s.root, modelsDir) }
+
 // Directory holding the links of one stored model
 func (s *Store) GroupDir(source, repo, group string) (string, error) {
 	rel, err := safeJoin(source, repo, group)
@@ -365,7 +369,7 @@ func (s *Store) Touch(source, repo, group string) (*v1.StoredModel, error) {
 // eviction. Oversized pulls may exceed the target after all eligible models are removed.
 func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.StoredModel, func(), error) {
 	release := func() {}
-	if s.MaxBytes == 0 {
+	if s.MaxBytes.Load() == 0 {
 		return nil, release, nil
 	}
 	// Reserve capacity so concurrent pulls cannot claim the same space.
@@ -378,13 +382,13 @@ func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.Store
 		s.mu.Unlock()
 	}
 	used, err := s.committed()
-	if err != nil || used <= s.MaxBytes {
+	if err != nil || used <= s.MaxBytes.Load() {
 		return nil, release, err
 	}
 	// Include reservations for active pulls.
 	s.sweep.Lock()
 	defer s.sweep.Unlock()
-	if used, err = s.committed(); err != nil || used <= s.MaxBytes {
+	if used, err = s.committed(); err != nil || used <= s.MaxBytes.Load() {
 		return nil, release, err
 	}
 	manifests, err := s.ListManifests()
@@ -401,7 +405,7 @@ func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.Store
 	sort.SliceStable(manifests, func(i, j int) bool { return LastUse(manifests[i]).Before(LastUse(manifests[j])) })
 	var removed []*v1.StoredModel
 	for _, m := range manifests {
-		if used <= s.MaxBytes {
+		if used <= s.MaxBytes.Load() {
 			break
 		}
 		// Wait for starting runs before checking whether the model is protected.
@@ -428,14 +432,14 @@ func (s *Store) Evict(need uint64, keep func(*v1.StoredModel) bool) ([]*v1.Store
 // Bytes eviction would free for a pull of the requested size: the models not kept and the tensor
 // caches of formations that ended, up to what the pull needs under the cap
 func (s *Store) Evictable(need uint64, keep func(*v1.StoredModel) bool) (uint64, error) {
-	if s.MaxBytes == 0 {
+	if s.MaxBytes.Load() == 0 {
 		return 0, nil
 	}
 	used, err := s.committed()
 	if err != nil {
 		return 0, err
 	}
-	if used+need <= s.MaxBytes {
+	if used+need <= s.MaxBytes.Load() {
 		return 0, nil
 	}
 	manifests, err := s.ListManifests()
@@ -457,7 +461,7 @@ func (s *Store) Evictable(need uint64, keep func(*v1.StoredModel) bool) (uint64,
 			idle += c.bytes
 		}
 	}
-	return min(idle, used+need-s.MaxBytes), nil
+	return min(idle, used+need-s.MaxBytes.Load()), nil
 }
 
 // Blob bytes on disk, the tensor caches stages keep, plus what pulls in flight have reserved
@@ -758,7 +762,7 @@ func (s *Store) Status() (*v1.StoreStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	st := &v1.StoreStatus{Path: s.root, Models: uint64(models), MaxBytes: s.MaxBytes}
+	st := &v1.StoreStatus{Path: s.root, Models: uint64(models), MaxBytes: s.MaxBytes.Load()}
 	entries, err := os.ReadDir(filepath.Join(s.root, blobsDir))
 	if err != nil {
 		return nil, err

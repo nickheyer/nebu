@@ -154,7 +154,7 @@ func TestLegacyTokensHashedInPlace(t *testing.T) {
 		}
 	}
 	old.Close()
-	d, err := Open(path, func(ctx context.Context, d *DB) error { return d.DropLegacyChatFiles(ctx) })
+	d, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

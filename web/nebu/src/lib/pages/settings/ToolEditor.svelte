@@ -74,21 +74,20 @@
 	}
 </script>
 
-<PanelHeader title={draft ? draft.name : 'New tool server'} {onclose} />
+{#snippet enabled()}
+	{#key generation}<Switch bind:checked={s.enabled} label="Enabled" compact />{/key}
+{/snippet}
+
+<PanelHeader title={draft ? draft.name : 'New tool server'} tools={enabled} {onclose} />
 <Stack gap={24}>
 	<FormSection title="Server">
 		<FieldRow>
 			<Select bind:value={s.kind} options={kinds} label="Kind" disabled={editing} onchange={pickKind} />
 			<Text bind:value={s.name} label="Name" required />
 		</FieldRow>
-		{#key generation}
-			<FieldRow>
-				<Switch bind:checked={s.enabled} label="Enabled" />
-				{#if s.kind === ToolServerKind.FETCH}
-					<Switch bind:checked={s.local} label="Local addresses" info="Lets fetches reach this host and its network" />
-				{/if}
-			</FieldRow>
-		{/key}
+		{#if s.kind === ToolServerKind.FETCH}
+			{#key generation}<Switch bind:checked={s.local} label="Local addresses" info="Lets fetches reach this host and its network" compact />{/key}
+		{/if}
 	</FormSection>
 	{#key generation}
 		{#if s.kind === ToolServerKind.SEARCH}

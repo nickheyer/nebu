@@ -216,6 +216,9 @@
         get enabled() {
           return dismissOptions?.enabled ?? closeOnDismiss;
         },
+        get transient() {
+          return dismissOptions?.transient ?? !(clickOptions?.enabled ?? openOnClick);
+        },
       }),
     ],
     get target() {

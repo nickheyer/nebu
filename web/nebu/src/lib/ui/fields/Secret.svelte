@@ -1,7 +1,6 @@
 <script lang="ts">
 	import type { HTMLInputAttributes } from 'svelte/elements';
 	import { NeoPassword } from '#lib/neo/inputs/index.js';
-	import { NeoPill } from '#lib/neo/pill/index.js';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
 	import { fieldId } from '#lib/ui/fields/types.js';
 
@@ -9,7 +8,7 @@
 		value = $bindable(''),
 		label,
 		info,
-		// Whether a secret is stored already
+		// Whether a secret is stored already, which the empty box then shows as dots
 		set = false,
 		disabled = false,
 		required = false,
@@ -21,12 +20,8 @@
 	const id = fieldId();
 </script>
 
-{#snippet stored()}
-	{#if set && !value}<NeoPill size="small" text tinted label="set" />{/if}
-{/snippet}
-
 <div class="field">
-	<FieldLabel {label} {info} forId={id} {required} end={stored} />
+	<FieldLabel {label} {info} forId={id} {required} />
 	<NeoPassword bind:value {id} placeholder={set && !value ? '••••••••' : ''} {disabled} {required} elevation={-1} buttonProps={{ text: true }} placement="inside" floating={false} width="100%" message={error ?? message} {error} {autocomplete} aria-label={label} />
 </div>
 

@@ -24,7 +24,7 @@ func TestNormalizeFillsDefaults(t *testing.T) {
 	if s.Memory.Messages != 20 || s.Memory.MaxChars != 8000 || !s.Memory.IncludeNames {
 		t.Fatalf("memory %v", s.Memory)
 	}
-	if s.Media.ImageSize != "1024x1024" || s.Media.MaxUploadBytes != 10_000_000 || s.Media.ImageCount != 1 {
+	if s.Media.ImageSize != "1024x1024" || s.Media.MaxUploadBytes != 10<<20 || s.Media.ImageCount != 1 {
 		t.Fatalf("media %v", s.Media)
 	}
 	if s.Presence.Status != "online" || s.Presence.ActivityType != "playing" || s.Presence.RotateSeconds != 300 {

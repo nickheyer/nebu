@@ -31,7 +31,7 @@ export const pages: NavPage[] = [
 	{ id: 'gateway', path: '/traffic', label: 'Gateway', icon: TreeStructureIcon, roles: operators, match: ['/gateway', '/traffic'], bottom: true },
 	{ id: 'mesh', path: '/mesh', label: 'Mesh', icon: ShareNetworkIcon, roles: operators, match: ['/mesh'] },
 	{ id: 'bots', path: '/bots', label: 'Bots', icon: RobotIcon, roles: operators, match: ['/bots'] },
-	{ id: 'settings', path: '/settings', label: 'Settings', icon: GearIcon, roles: everyone, match: ['/settings'] }
+	{ id: 'settings', path: '/settings', label: 'Settings', icon: GearIcon, roles: ['admin'], match: ['/settings'] }
 ];
 
 // The page a path belongs to, by its first segment

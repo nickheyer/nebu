@@ -84,6 +84,23 @@ func (d *DB) SetUserPassword(ctx context.Context, username, hash string, changed
 	return n > 0, err
 }
 
+// Gives an account and the API tokens it made a role, returning the account id, empty when there was none
+func (d *DB) SetUserRole(ctx context.Context, provider, username string, role v1.Role) (string, error) {
+	row, err := d.GetUser(ctx, username)
+	if errors.Is(err, ErrNotFound) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	id := row.User.GetId()
+	return id, d.tx(ctx, func(exec execFn) error {
+		if err := exec(`UPDATE users SET role = ? WHERE id = ?`, enumCol(role), id); err != nil {
+			return err
+		}
+		return exec(`UPDATE api_tokens SET role = ? WHERE provider = ? AND subject = ?`, enumCol(role), provider, id)
+	})
+}
+
 // Removes an account and the API tokens it made, returning the account id, empty when there was none
 func (d *DB) DeleteUser(ctx context.Context, username string) (string, error) {
 	tx, err := d.sql.BeginTx(ctx, nil)

@@ -8,7 +8,8 @@
 	import { date, enumLabel, num } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { ShapeSchema } from '#lib/proto/nebu/v1/estimate_pb.js';
-	import type { Slot } from '#lib/proto/nebu/v1/slot_pb.js';
+	import { InstanceState, type Instance } from '#lib/proto/nebu/v1/instance_pb.js';
+	import { SlotState, type Slot } from '#lib/proto/nebu/v1/slot_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { prefs } from '#lib/state/prefs.svelte.js';
 	import Empty from '#lib/ui/Empty.svelte';
@@ -16,18 +17,16 @@
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import MemoryBars from '#lib/ui/MemoryBars.svelte';
 	import NameConfirm from '#lib/ui/NameConfirm.svelte';
-	import RowAction from '#lib/ui/RowAction.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
+	import MultiSelect from '#lib/ui/fields/MultiSelect.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
-	import Columns from '#lib/ui/layout/Columns.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Sheet from '#lib/ui/layout/Sheet.svelte';
-	import { compactBelow } from '#lib/ui/list.svelte.js';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { formationLamp } from '#lib/ui/status.js';
 	import InstancePanel from '#lib/pages/serve/InstancePanel.svelte';
 	import InstanceRow from '#lib/pages/serve/InstanceRow.svelte';
-	import LaunchWizard, { type WizardStart } from '#lib/pages/serve/LaunchWizard.svelte';
+	import Launch, { type LaunchStart } from '#lib/pages/serve/Launch.svelte';
 	import SlotEditor from '#lib/pages/serve/SlotEditor.svelte';
 	import SlotRow from '#lib/pages/serve/SlotRow.svelte';
 	import { slotHref, slotUpdate, splitKey, terminal } from '#lib/pages/serve/serve.js';
@@ -44,8 +43,8 @@
 	const editing = $derived(slotParam && slotParam !== 'new' ? live.slots.get(slotParam) : undefined);
 	const panelOpen = $derived(slotParam !== null || (!launching && instanceId !== ''));
 	const tab = $derived(page.url.searchParams.get('tab') ?? '');
-	let listWidth = $state(0);
-	const slim = $derived(panelOpen && listWidth > 0 && listWidth < compactBelow);
+	// Beside an open panel the rows keep to the lamp, the name and the action
+	const slim = $derived(panelOpen);
 
 	const slots = $derived([...live.slots.values()].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name)));
 	let sortItems = $state<SortItem<{ id: string }>[]>([]);
@@ -63,6 +62,40 @@
 			.sort((a, b) => Number(terminal(a.state)) - Number(terminal(b.state)) || a.name.localeCompare(b.name))
 	);
 	const formations = $derived(live.inMesh ? [...live.formations.values()].sort((a, b) => a.name.localeCompare(b.name)) : []);
+
+	type Phase = 'running' | 'failed' | 'pending';
+	type Kind = 'slot' | 'standalone';
+	type Filter = Phase | Kind;
+	const filterOptions: { value: Filter; label: string }[] = [
+		{ value: 'running', label: 'Running' },
+		{ value: 'failed', label: 'Failed' },
+		{ value: 'pending', label: 'Pending' },
+		{ value: 'slot', label: 'Slot' },
+		{ value: 'standalone', label: 'Standalone' }
+	];
+	let filters = $state<Filter[]>([]);
+
+	function slotPhase(s: Slot): Phase | undefined {
+		if (s.state === SlotState.READY || s.state === SlotState.SWAPPING || s.state === SlotState.DRAINING) return 'running';
+		if (s.state === SlotState.STARTING) return 'pending';
+		return s.state === SlotState.FAILED ? 'failed' : undefined;
+	}
+
+	function instancePhase(i: Instance): Phase | undefined {
+		if (i.state === InstanceState.STARTING) return 'pending';
+		if (i.state === InstanceState.FAILED) return 'failed';
+		return i.state === InstanceState.STOPPED ? undefined : 'running';
+	}
+
+	// Whether a row passes the chosen states and the chosen kinds, either left open when none of its words is chosen
+	function passes(kind: Kind, phase: Phase | undefined): boolean {
+		const kinds = filters.filter((f) => f === 'slot' || f === 'standalone');
+		const phases = filters.filter((f) => f !== 'slot' && f !== 'standalone');
+		return (kinds.length === 0 || kinds.includes(kind)) && (phases.length === 0 || (phase !== undefined && phases.includes(phase)));
+	}
+
+	const shownSlots = $derived(new Set(slots.filter((s) => passes('slot', slotPhase(s))).map((s) => s.id)));
+	const shownLoose = $derived(loose.filter((i) => passes('standalone', instancePhase(i))));
 
 	// Forgets dismissed ids the daemon no longer holds
 	$effect(() => {
@@ -82,11 +115,10 @@
 		else if (live.ready && shownSlot === slotParam) close();
 	});
 
-	const wizardStart = $derived.by((): WizardStart => {
+	const launchStart = $derived.by((): LaunchStart => {
 		const q = page.url.searchParams;
 		const swap = q.get('swap');
 		const model = q.get('model');
-		const step = q.get('step');
 		const context = q.get('context');
 		return {
 			slotId: swap ?? q.get('slot') ?? undefined,
@@ -94,7 +126,6 @@
 			model: model ? splitKey(model) : undefined,
 			runtimeId: q.get('runtime') ?? undefined,
 			params: context ? { n_ctx: context } : undefined,
-			step: step === null ? undefined : Number(step) || 0,
 			plan: q.get('plan') !== null
 		};
 	});
@@ -146,6 +177,9 @@
 </script>
 
 {#snippet launchTools()}
+	{#if slots.length + loose.length > 0}
+		<span class="filter"><MultiSelect bind:value={filters} options={filterOptions} label="Filter" compact /></span>
+	{/if}
 	<span class="fill"></span>
 	<NeoButton text href={slotHref('new')}>{#snippet icon()}<PlusIcon size={16} />{/snippet}Slot</NeoButton>
 	<NeoButton class="primary" elevation={2} href="/serve/launch">{#snippet icon()}<PlayIcon size={16} />{/snippet}Launch</NeoButton>
@@ -158,7 +192,7 @@
 			<NeoSortableProvider bind:items={sortItems} axis="y" onDragEnd={() => void reordered()}>
 				{#each sortItems as item, index (item.id)}
 					{@const slot = slotById.get(String(item.id))}
-					{#if slot}
+					{#if slot && shownSlots.has(slot.id)}
 						<NeoSortableItem id={item.id} {index} data={item.data}>
 							{#snippet children({ instance })}
 								<div class="sortrow" {@attach instance.attach}>
@@ -169,10 +203,13 @@
 					{/if}
 				{/each}
 			</NeoSortableProvider>
-			{#each loose as inst (inst.id)}
+			{#each shownLoose as inst (inst.id)}
 				<InstanceRow instance={inst} {slim} ondismiss={dismiss} selected={inst.id === instanceId} />
 			{/each}
 		</List>
+		{#if shownSlots.size + shownLoose.length === 0}
+			<Empty text="No instances match" action="Clear filter" onclick={() => (filters = [])} />
+		{/if}
 	</Card>
 {/snippet}
 
@@ -195,7 +232,6 @@
 
 {#snippet memoryCard()}
 	<Card title="Memory">
-		{#snippet tools()}<RowAction label="Host" href="/" />{/snippet}
 		{#if !live.ready}
 			<Skeleton rows={2} kind="bars" />
 		{:else}
@@ -205,27 +241,19 @@
 {/snippet}
 
 {#snippet list()}
-	<div class="lists" bind:clientWidth={listWidth}>
-		<Columns ratio="3/2">
-			{#snippet left()}
-				{#if !live.ready}
-					<Card flush>
-						<Skeleton rows={3} leading="20px" secondary="40ch" />
-					</Card>
-				{:else if slots.length === 0 && loose.length === 0}
-					<Card tools={launchTools}>
-						<Empty icon={PlayIcon} text="Nothing serving" />
-					</Card>
-				{:else}
-					{@render servingCard()}
-				{/if}
-				{#if formations.length}{@render formationsCard()}{/if}
-			{/snippet}
-			{#snippet right()}
-				{@render memoryCard()}
-			{/snippet}
-		</Columns>
-	</div>
+	{@render memoryCard()}
+	{#if !live.ready}
+		<Card flush>
+			<Skeleton rows={3} leading="20px" secondary="40ch" />
+		</Card>
+	{:else if slots.length === 0 && loose.length === 0}
+		<Card tools={launchTools}>
+			<Empty icon={PlayIcon} text="Nothing serving" />
+		</Card>
+	{:else}
+		{@render servingCard()}
+	{/if}
+	{#if formations.length}{@render formationsCard()}{/if}
 {/snippet}
 
 <PageHeader tabs={serveTabs} active="instances" />
@@ -259,12 +287,14 @@
 {/if}
 
 {#if launching}
-	<LaunchWizard start={wizardStart} />
+	<Launch start={launchStart} />
 {/if}
 
 <style>
-	.lists {
-		min-width: 0;
+	.filter {
+		display: inline-flex;
+		width: 14rem;
+		max-width: 100%;
 	}
 	.sortrow {
 		display: grid;

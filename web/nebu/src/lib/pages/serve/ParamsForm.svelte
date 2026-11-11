@@ -44,18 +44,16 @@
 	{/each}
 {/snippet}
 
-<!-- A group of only advanced params folds whole under its title instead of standing empty over a disclosure -->
+<!-- A group of only advanced params folds whole under its title, one with none shows no disclosure -->
 {#each groups as g (g.title)}
 	{#if g.plain.length === 0 && g.advanced.length}
 		<FormSection title={g.title} collapsible>
 			{@render fields(g.advanced)}
 		</FormSection>
 	{:else if g.plain.length}
-		<FormSection title={g.title}>
+		{#snippet more()}{@render fields(g.advanced)}{/snippet}
+		<FormSection title={g.title} advanced={g.advanced.length ? more : undefined}>
 			{@render fields(g.plain)}
-			{#snippet advanced()}
-				{#if g.advanced.length}{@render fields(g.advanced)}{/if}
-			{/snippet}
 		</FormSection>
 	{/if}
 {/each}

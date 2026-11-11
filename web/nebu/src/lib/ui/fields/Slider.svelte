@@ -17,6 +17,8 @@
 		message,
 		fallback,
 		optional = false,
+		// The label beside a short box at the row's end and the rail under both, for a narrow column
+		inline = false,
 		onchange
 	}: {
 		value?: number;
@@ -30,16 +32,24 @@
 		message?: string;
 		fallback?: number;
 		optional?: boolean;
+		inline?: boolean;
 		onchange?: (n: number | undefined) => void;
 	} = $props();
 
 	const id = fieldId();
-	const rest = $derived(value ?? fallback ?? min);
+	// Where the knob sits, the value or what it resolves to, held inside the rail
+	const rest = $derived(Math.min(max, Math.max(min, value ?? fallback ?? min)));
 	const shown = $derived(value === undefined ? '' : String(value));
 	let typed = $state(untrack(() => shown));
 	let knob = $state(untrack(() => rest));
+	// Whether a pointer or a key is on the rail
+	let held = $state(false);
 	const blank = $derived(value === undefined);
-	const unset = $derived(blank && fallback === undefined);
+	// Characters of the longest number the box shows, a bound, the value it rests on, or the maximum at the step's decimals
+	const decimals = $derived((String(step).split('.')[1] ?? '').length);
+	const chars = $derived(Math.max(...[min, max, value, fallback].filter((n) => n !== undefined).map((n) => String(n).length), String(Math.trunc(max)).length + (decimals ? decimals + 1 : 0)));
+	const fit = $derived(`calc(${unit ? 3.25 : 2.5}rem + ${chars + (unit?.length ?? 0)}ch)`);
+	const boxWidth = $derived(`max(${inline ? 'var(--nebu-inline-box, 6.5rem)' : unit ? `calc(5.5rem + ${unit.length}ch)` : '5rem'}, ${fit})`);
 
 	// The box and the knob follow the value
 	$effect(() => {
@@ -47,11 +57,15 @@
 		knob = rest;
 	});
 
-	// A dragged knob becomes the value
+	// A knob the user moved becomes the value, one the rail moved for itself goes back to rest
 	$effect(() => {
 		const k = knob;
 		untrack(() => {
 			if (k === rest) return;
+			if (!held) {
+				knob = rest;
+				return;
+			}
 			value = k;
 			onchange?.(k);
 		});
@@ -85,55 +99,80 @@
 	<span class="unit">{unit}</span>
 {/snippet}
 
-<div class="field">
-	<FieldLabel {label} {info} forId={id} />
-	<div class="controls" class:blank class:unset>
-		<div class="range">
-			<NeoRange bind:value={knob} {min} {max} {step} {disabled} elevation={-1} tooltips={false} width="100%" />
-		</div>
-		<div class="box" style:flex-basis={unit ? `calc(7rem + ${unit.length}ch)` : '5rem'}>
-			<NeoInput type="text" inputmode="decimal" {id} bind:value={typed} {disabled} placeholder={fallback === undefined ? undefined : String(fallback)} elevation={-1} floating={false} width="100%" after={unit ? after : undefined} onchange={commit} onblur={commit} aria-label={label} />
-		</div>
+<div class="field" class:inline class:dense={inline} class:blank style:--box={boxWidth}>
+	{#if label}<span class="head"><FieldLabel {label} {info} forId={id} /></span>{/if}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="range" onpointerdowncapture={() => (held = true)} onkeydowncapture={() => (held = true)} onfocusout={() => (held = false)} onpointerleave={(e) => { if (e.buttons === 0) held = false; }}>
+		<NeoRange bind:value={knob} {min} {max} {step} {disabled} elevation={-1} tooltips={false} width="100%" />
 	</div>
-	{#if message}<span class="secondary">{message}</span>{/if}
+	<div class="box">
+		<NeoInput type="text" inputmode="decimal" {id} bind:value={typed} {disabled} placeholder={fallback === undefined ? undefined : String(fallback)} elevation={-1} floating={false} width="100%" after={unit ? after : undefined} onchange={commit} onblur={commit} aria-label={label} />
+	</div>
+	{#if message}<span class="secondary message">{message}</span>{/if}
 </div>
 
 <style>
+	/* The label over the rail and the box, or beside the box with the rail under both */
 	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		min-width: 0;
-	}
-	.controls {
-		display: flex;
-		gap: var(--nebu-space-3);
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-areas:
+			'label label'
+			'range box'
+			'message message';
+		column-gap: var(--nebu-space-3);
 		align-items: center;
 		min-width: 0;
 	}
+	.field.inline {
+		grid-template-columns: minmax(0, 1fr) var(--box);
+		grid-template-areas:
+			'label box'
+			'range range'
+			'message message';
+	}
+	.head {
+		grid-area: label;
+		min-width: 0;
+		margin-bottom: 4px;
+	}
+	.inline .head {
+		margin-bottom: 0;
+	}
+	/* The kit insets its rail by half a knob, so the rail is pulled back out to the field's edges */
 	.range {
 		display: flex;
-		flex: 1 1 auto;
+		grid-area: range;
 		min-width: 0;
+		margin-left: -9px;
 		transition: opacity var(--nebu-normal) var(--nebu-ease);
+	}
+	.inline .range {
+		margin-right: -9px;
 	}
 	.range :global(.neo-range-container) {
 		min-width: 0;
 	}
-	.blank .range {
-		opacity: 0.55;
-	}
-	.unset .range :global(.neo-range-handle) {
+	/* An unset rail is empty, its knob showing only under the pointer or the keyboard */
+	.blank .range :global(.neo-range-handle) {
 		opacity: 0;
 	}
-	.unset .range :global(.neo-range-handle-before) {
+	.blank .range:hover :global(.neo-range-handle),
+	.blank .range:focus-within :global(.neo-range-handle) {
+		opacity: 0.55;
+	}
+	.blank .range :global(.neo-range-handle-before) {
 		background-color: transparent;
 	}
-	/* The box is as wide as a few digits and its unit need, the rail taking the rest */
+	/* The box is as wide as its longest number and its unit need, the rail taking the rest */
 	.box {
 		display: flex;
-		flex: 0 0 5rem;
+		grid-area: box;
+		width: var(--box);
 		min-width: 0;
+	}
+	.inline .box {
+		width: auto;
 	}
 	.box :global(.neo-input-group) {
 		flex: 1 1 auto;
@@ -141,6 +180,10 @@
 	}
 	.box :global(input) {
 		text-align: right;
+	}
+	.message {
+		grid-area: message;
+		margin-top: 4px;
 	}
 	.unit {
 		padding: 0 8px 0 4px;

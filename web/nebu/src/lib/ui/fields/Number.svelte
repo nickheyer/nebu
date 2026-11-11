@@ -19,6 +19,8 @@
 		error,
 		emptyZero = false,
 		optional = false,
+		// The label beside a short box at the row's end, for a narrow column of settings
+		inline = false,
 		onchange,
 		onclear
 	}: {
@@ -35,6 +37,7 @@
 		error?: string;
 		emptyZero?: boolean;
 		optional?: boolean;
+		inline?: boolean;
 		onchange?: (n: number) => void;
 		onclear?: () => void;
 	} = $props();
@@ -69,9 +72,11 @@
 	}
 </script>
 
-<div class="field">
+<div class="field" class:inline class:dense={inline}>
 	<FieldLabel {label} {info} forId={id} />
-	<Stepper {id} bind:raw bind:focused {min} {max} {step} {fallback} {disabled} {message} {error} {unit} ariaLabel={label} onchange={changed} />
+	<div class="box">
+		<Stepper {id} bind:raw bind:focused {min} {max} {step} {fallback} {disabled} {message} {error} {unit} buttons={!inline} ariaLabel={label} onchange={changed} />
+	</div>
 </div>
 
 <style>
@@ -80,5 +85,21 @@
 		flex-direction: column;
 		gap: 4px;
 		min-width: 0;
+	}
+	.box {
+		display: flex;
+		min-width: 0;
+	}
+	.inline {
+		flex-direction: row;
+		gap: var(--nebu-space-3);
+		align-items: center;
+		justify-content: space-between;
+	}
+	.inline .box {
+		flex: 0 0 var(--nebu-inline-box, 6.5rem);
+	}
+	.inline :global(input) {
+		text-align: right;
 	}
 </style>

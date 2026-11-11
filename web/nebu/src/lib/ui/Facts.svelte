@@ -20,17 +20,26 @@
 		fraction?: number;
 	};
 
-	// Live readings sharing a row, each a label over a value with a tooltip
+	// Live readings sharing a row, each a label over a value with a tooltip, one without a value left out
 	let { items, size = 'page', after }: { items: FactItem[]; size?: 'page' | 'section'; after?: Snippet } = $props();
+
+	const shown = $derived(items.filter((it) => it.value !== ''));
+
+	// A figure and the unit after it, the whole value as the figure when it carries no unit
+	function parts(it: FactItem): { figure: string; unit: string } {
+		const m = it.mono ? null : /^([+-]?[\d.,]+)[\s  ]+([^\d\s][^\d]*)$/.exec(it.value);
+		return m ? { figure: m[1]!, unit: m[2]! } : { figure: it.value, unit: '' };
+	}
 </script>
 
 <div class="facts" class:section={size === 'section'} role="list">
-	{#each items as it (it.id)}
+	{#each shown as it (it.id)}
+		{@const p = parts(it)}
 		<div class="cell">
-			<Tip facts={it.facts} text={it.tip} tag="div" class="factcell">
+			<Tip facts={it.facts} text={it.tip === it.value ? undefined : it.tip} tag="div" class="factcell">
 			<svelte:element this={it.href ? 'a' : 'div'} href={it.href} class="fact" role="listitem">
 				<span class="label">{it.label}</span>
-				<span class="value" class:mono={it.mono} class:warning-text={it.lamp === 'warning'} class:error-text={it.lamp === 'error'} class:success-text={it.lamp === 'success'}>{it.value}</span>
+				<span class="value" class:mono={it.mono} class:warning-text={it.lamp === 'warning'} class:error-text={it.lamp === 'error'} class:success-text={it.lamp === 'success'}>{p.figure}{#if p.unit}<span class="unit">{p.unit}</span>{/if}</span>
 				{#if it.spark?.some((v) => v > 0)}
 					<Sparkline points={it.spark} width={64} height={16} />
 				{:else if it.dots?.length}
@@ -121,11 +130,21 @@
 		text-overflow: ellipsis;
 		animation: nebu-reveal 300ms var(--nebu-settle) backwards;
 	}
-	/* Mono values share the line box of the large figures so their baselines meet */
+	.unit {
+		margin-left: 4px;
+		font-size: var(--nebu-text-secondary);
+		font-weight: 400;
+		letter-spacing: 0;
+		color: var(--nebu-text-muted);
+	}
+	/* Mono values keep the size of the figures beside them */
 	.value.mono {
 		font-family: var(--nebu-font-mono);
-		font-size: 17px;
+		font-size: 22px;
 		font-weight: 300;
+	}
+	.section .value.mono {
+		font-size: var(--nebu-text-body);
 	}
 	.after {
 		display: flex;

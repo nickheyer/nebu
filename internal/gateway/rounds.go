@@ -220,6 +220,7 @@ func (x *exchange) round(resp *http.Response, req *chat.Request, emit func(chat.
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+		x.sink.refused(raw)
 		return nil, chat.Refusal(x.runtime, resp.StatusCode, resp.Header, raw)
 	}
 	if req.Stream {

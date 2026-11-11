@@ -11,7 +11,7 @@
 		format = (n: number) => String(n)
 	}: { segments: Segment[]; total: number; height?: 6 | 8 | 10 | 12; facts?: boolean; format?: (n: number) => string } = $props();
 
-	const shown = $derived(segments.filter((s) => s.kind !== 'free'));
+	const shown = $derived(segments.filter((s) => s.kind !== 'free' && s.bytes > 0));
 	const widths = $derived(shown.map((s) => (total > 0 ? Math.min(100, (s.bytes / total) * 100) : 0)));
 	const tips = $derived(segments.filter((s) => s.bytes > 0).map((s) => ({ label: s.label, value: format(s.bytes) })));
 </script>
@@ -41,6 +41,7 @@
 	.seg {
 		display: block;
 		flex: 0 0 auto;
+		min-width: 2px;
 		height: 100%;
 		transform-origin: 0 50%;
 		animation: nebu-grow var(--nebu-slow) var(--nebu-settle) both;

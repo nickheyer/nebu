@@ -38,12 +38,12 @@
 <nav class="rail" class:collapsed aria-label="Pages">
 	<div class="brand">
 		{#if collapsed}
-			<Brand />
+			<Brand size={32} />
 		{:else if !hostLabel && !asked}
-			<Brand />
+			<Brand size={32} />
 			<Bone width="9ch" height="14px" />
 		{:else}
-			<Brand name={hostLabel} />
+			<Brand name={hostLabel} size={32} />
 		{/if}
 	</div>
 	<div class="items">
@@ -53,12 +53,12 @@
 				{#if collapsed}
 					<NeoTooltip tooltip={item.label} placement="right" elevation={2} filled triggerProps={{ tag: 'span', class: 'railtip' }}>
 						<NeoButton text toggle checked={active} href={item.path} aria-label={item.label} aria-current={active ? 'page' : undefined} color={active ? 'primary' : undefined} class="railitem">
-							{#snippet icon()}<item.icon size={20} />{/snippet}
+							{#snippet icon()}<item.icon size={22} />{/snippet}
 						</NeoButton>
 					</NeoTooltip>
 				{:else}
 					<NeoButton text toggle checked={active} href={item.path} aria-current={active ? 'page' : undefined} color={active ? 'primary' : undefined} justify="flex-start" class="railitem wide">
-						{#snippet icon()}<item.icon size={20} />{/snippet}
+						{#snippet icon()}<item.icon size={22} />{/snippet}
 						{item.label}
 					</NeoButton>
 				{/if}
@@ -77,12 +77,12 @@
 		position: sticky;
 		top: 0;
 		display: flex;
-		flex: 0 0 216px;
+		flex: 0 0 232px;
 		flex-direction: column;
 		align-self: flex-start;
-		width: 216px;
+		width: 232px;
 		height: 100dvh;
-		padding: 0 10px 12px;
+		padding: 0 12px 12px;
 		overflow-y: auto;
 		background: var(--nebu-rail);
 		border-right: 1px solid var(--nebu-border);
@@ -91,15 +91,15 @@
 			flex-basis 180ms var(--nebu-settle);
 	}
 	.rail.collapsed {
-		flex-basis: 60px;
-		width: 60px;
+		flex-basis: 68px;
+		width: 68px;
 	}
 	.brand {
 		display: flex;
 		gap: 10px;
 		align-items: center;
 		height: 61px;
-		margin: 0 -10px 12px;
+		margin: 0 -12px 16px;
 		padding: 0 18px;
 	}
 	.collapsed .brand {
@@ -110,7 +110,7 @@
 		display: flex;
 		flex: 1 1 auto;
 		flex-direction: column;
-		gap: 2px;
+		gap: 4px;
 	}
 	.item {
 		display: flex;
@@ -124,8 +124,15 @@
 	.items :global(.neo-button.railitem) {
 		justify-content: center;
 		width: 100%;
-		min-height: 38px;
+		min-height: 46px;
+		font-size: 16px;
 		font-weight: 400;
+	}
+	.items :global(.neo-button.railitem.wide) {
+		--neo-btn-padding: 0.5rem 0.875rem;
+	}
+	.items :global(.neo-button.railitem.wide .neo-content) {
+		gap: 0.75rem;
 	}
 	.items :global(.neo-button.railitem.wide .neo-content) {
 		justify-content: flex-start;

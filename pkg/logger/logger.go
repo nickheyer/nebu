@@ -67,6 +67,19 @@ func (l *lineWriter) Write(p []byte) (int, error) {
 }
 
 // The level a config names, info for anything unknown
+// The name a level is configured by, debug, info, warn or error
+func LevelName(l slog.Level) string {
+	switch {
+	case l <= slog.LevelDebug:
+		return "debug"
+	case l >= slog.LevelError:
+		return "error"
+	case l >= slog.LevelWarn:
+		return "warn"
+	}
+	return "info"
+}
+
 func ParseLevel(s string) slog.Level {
 	switch strings.ToLower(s) {
 	case "debug":

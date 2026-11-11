@@ -37,7 +37,7 @@
 		{ id: 'members', label: 'Members', value: num(mesh.members) },
 		{ id: 'you', label: 'You', value: self?.name ?? '', tip: self?.issuer ? 'issuer' : undefined, lamp: self?.issuer ? 'primary' : undefined },
 		{ id: 'cert', label: 'Certificate', value: certDays === undefined ? '' : `${certDays}${thin}d`, tip: when(mesh.certificateExpiresAt) || undefined, lamp: certDays !== undefined && certDays < 30 ? 'warning' : undefined },
-		{ id: 'address', label: 'Address', value: mesh.address, mono: true, tip: mesh.address },
+		{ id: 'address', label: 'Address', value: mesh.address, mono: true },
 		{ id: 'exposure', label: 'Exposure', value: mesh.exposure },
 		{ id: 'announce', label: 'Announce', value: mesh.announce ? 'on' : 'off' },
 		{ id: 'ca', label: 'CA', value: mesh.caFingerprint.slice(0, 12), mono: true, tip: mesh.caFingerprint },

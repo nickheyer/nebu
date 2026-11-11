@@ -38,6 +38,8 @@ var (
 	ErrLastUser = errors.New("the last account cannot be removed, set auth.disabled to turn accounts off")
 	// Refuses removing the caller's own account
 	ErrOwnAccount = errors.New("sign in as another account to remove this one")
+	// Refuses taking the admin role from the only admin
+	ErrLastAdmin = errors.New("the last admin keeps the admin role")
 	// Refuses setup once any account exists
 	ErrSetupDone = errors.New("an account already exists, sign in instead")
 	// Usernames may hold letters, digits, and ._@+-
@@ -241,6 +243,51 @@ func (u *Users) Delete(ctx context.Context, caller Identity, username string) er
 	u.tokens.ForgetAccount(ProviderLocal, id)
 	u.log.Info("account removed", "username", name)
 	return nil
+}
+
+// Gives an account another role for an admin, ending its sessions and moving its API tokens to the role
+func (u *Users) SetRole(ctx context.Context, caller Identity, username string, role v1.Role) (*v1.User, error) {
+	if !caller.Admin() {
+		return nil, fmt.Errorf("%w: only an admin changes roles", ErrForbidden)
+	}
+	name, err := normalize(username)
+	if err != nil {
+		return nil, err
+	}
+	u.mu.Lock()
+	target, exists := u.accounts[name]
+	admins := 0
+	for _, a := range u.accounts {
+		if a.role == v1.Role_ROLE_ADMIN {
+			admins++
+		}
+	}
+	u.mu.Unlock()
+	if !exists {
+		return nil, fmt.Errorf("%w: %s", ErrUnknownUser, name)
+	}
+	if target.role == v1.Role_ROLE_ADMIN && role != v1.Role_ROLE_ADMIN && admins == 1 {
+		return nil, ErrLastAdmin
+	}
+	id, err := u.db.SetUserRole(ctx, ProviderLocal, name, role)
+	if err != nil {
+		return nil, err
+	}
+	if id == "" {
+		return nil, fmt.Errorf("%w: %s", ErrUnknownUser, name)
+	}
+	u.mu.Lock()
+	target = u.accounts[name]
+	target.role = role
+	u.accounts[name] = target
+	u.mu.Unlock()
+	u.tokens.ForgetAccount(ProviderLocal, id)
+	row, err := u.db.GetUser(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	u.log.Info("role changed", "username", name, "role", role, "by", caller.Name)
+	return row.User, nil
 }
 
 // Replaces a password for its owner or an admin, local callers proving their own current one, and revokes older sessions

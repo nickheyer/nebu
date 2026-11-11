@@ -180,5 +180,8 @@ func (s *GatewayService) GetTrace(ctx context.Context, req *connect.Request[v1.G
 	if err == nil && !ok {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no trace %q", req.Msg.GetId()))
 	}
-	return reply(&v1.GetTraceResponse{Trace: t}, err)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return reply(&v1.GetTraceResponse{Trace: t, Conversation: gateway.Conversation(t)}, nil)
 }

@@ -1,6 +1,7 @@
 package runtimes
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -76,6 +77,19 @@ func TestLlamaCppSequencesSplitTheContext(t *testing.T) {
 	} {
 		if got := llamaSequences(&estimate.Scope{Params: c.params}); got != c.want {
 			t.Errorf("%v: %d sequences, want %d", c.params, got, c.want)
+		}
+	}
+}
+
+// Zero parallel sequences is refused before llama.cpp can exit on it, -1 and counts pass
+func TestLlamaParallelRefusesZero(t *testing.T) {
+	for raw, ok := range map[string]bool{"0": false, "-1": true, "1": true, "8": true} {
+		_, err := Resolve(LlamaCpp{}, map[string]string{"n_parallel": raw})
+		if ok && err != nil {
+			t.Errorf("n_parallel %s: %v", raw, err)
+		}
+		if !ok && !errors.Is(err, ErrParam) {
+			t.Errorf("n_parallel %s: err = %v, want ErrParam", raw, err)
 		}
 	}
 }

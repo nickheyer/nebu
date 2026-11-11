@@ -8,7 +8,7 @@
 	import { live } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { SandboxKind, SandboxKindSchema, type Build, type RecipeStatus, type Var } from '#lib/proto/nebu/v1/recipe_pb.js';
-	import { InstallKind, InstallKindSchema, type Install, type InstallOption, type RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
+	import { InstallKind, type Install, type InstallOption, type RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import { RuntimeDefaultsSchema, SettingsSchema } from '#lib/proto/nebu/v1/settings_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import { followTask } from '#lib/state/tasks.svelte.js';
@@ -22,7 +22,6 @@
 	import LoadMore from '#lib/ui/LoadMore.svelte';
 	import PageTabs from '#lib/ui/PageTabs.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
 	import Str from '#lib/ui/Str.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
@@ -33,13 +32,13 @@
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
-	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { reveal } from '#lib/ui/motion.svelte.js';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import { buildLamp } from '#lib/ui/status.js';
 	import ConfigFields from '#lib/pages/runtimes/ConfigFields.svelte';
 	import ParamsForm from '#lib/pages/serve/ParamsForm.svelte';
+	import { installLabel } from '#lib/pages/serve/serve.js';
 	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
 	import HammerIcon from 'phosphor-svelte/lib/HammerIcon';
 	import SlidersHorizontalIcon from 'phosphor-svelte/lib/SlidersHorizontalIcon';
@@ -213,7 +212,7 @@
 	async function removeInstall(i: Install) {
 		try {
 			await rpc.runtimes.removeInstall({ id: i.id });
-			toast.success(`Removed ${i.version || i.path}`);
+			toast.success(`Removed ${installLabel(i)}`);
 		} catch (err) {
 			toast.error('Remove refused', reason(err));
 		}
@@ -234,8 +233,19 @@
 		return { slots, instances };
 	}
 
-	function installTip(i: Install): string {
-		return [`path ${i.path}`, i.dir ? `directory ${i.dir}` : '', `created ${when(i.createdAt)}`].filter(Boolean).join('\n');
+	// How an install came to be, in the words of the method that makes one
+	function installWord(i: Install): string {
+		return i.kind === InstallKind.ADOPTED ? 'existing' : i.kind === InstallKind.BUILT ? 'built' : 'downloaded';
+	}
+
+	function installRows(i: Install) {
+		return [
+			{ label: 'origin', value: i.origin, mono: true },
+			{ label: 'path', value: i.path, mono: true, copy: true },
+			{ label: 'directory', value: i.dir, mono: true },
+			{ label: 'created', value: when(i.createdAt) },
+			...Object.entries(i.facts).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true }))
+		];
 	}
 
 	function buildTip(b: Build): string {
@@ -286,9 +296,9 @@
 	{:else if f.kind === 'image'}
 		<Text bind:value={image} label="Container image" mono />
 	{:else if f.kind === 'ref'}
-		<Text bind:value={ref} label="Version" info="Branch, tag or commit, the newest when empty" max={64} mono />
+		<Text bind:value={ref} label="Branch, tag or commit" max={64} mono />
 	{:else if f.kind === 'force'}
-		<Switch bind:checked={force} label="Build again" info="Even when this version is built already" top />
+		<Switch bind:checked={force} label="Rebuild when already built" />
 	{:else if f.kind === 'var'}
 		{@const v = f.v}
 		{#if v.choices.length}
@@ -305,7 +315,7 @@
 			<FormSection>
 				<Select bind:value={method} options={methods} label="Method" />
 				{#if option?.unmet.length}
-					<div class="unmet secondary"><Dot lamp="warning" label="unmet" /><Str value={option.unmet.join(', ')} kind="message" color="muted" tip={option.unmet.join('\n')} width="100%" /></div>
+					<div class="unmet secondary"><Dot lamp="warning" label="unmet" /><Str value={option.unmet.join(', ')} kind="message" color="muted" width="100%" /></div>
 				{/if}
 			</FormSection>
 			{#if option?.method?.kind === InstallKind.ADOPTED}
@@ -326,7 +336,7 @@
 						</FieldRow>
 					{/each}
 					{#if missing.length}
-						<Str value={missingText(missing)} kind="message" color="error" tip={missing.join('\n')} width="100%" />
+						<Str value={missingText(missing)} kind="message" color="error" width="100%" />
 					{/if}
 				</FormSection>
 			{/if}
@@ -338,10 +348,15 @@
 <PanelHeader title={rt?.name ?? id} subtitle={rt?.description || undefined} {onclose} />
 <div class="tabrow">
 	<PageTabs {tabs} active={shown} onchange={ontab} />
-	{#if status.installs.length && !installing}
+	{#if shown === 'installs' && status.installs.length && !installing}
 		<NeoButton elevation={2} onclick={() => ontab('install')}>
 			{#snippet icon()}<DownloadSimpleIcon size={16} />{/snippet}
 			Install
+		</NeoButton>
+	{:else if shown === 'builds' && buildMethod}
+		<NeoButton elevation={2} onclick={startBuild}>
+			{#snippet icon()}<HammerIcon size={16} />{/snippet}
+			Build
 		</NeoButton>
 	{/if}
 </div>
@@ -361,17 +376,16 @@
 				{/if}
 			{/if}
 		{:else}
-			<List head={{ primary: 'Version', secondary: 'Origin' }}>
+			<List>
 				{#each installs as i (i.id)}
 					{@const using = users(i.id)}
 					{@const used = using.slots.length + using.instances.length > 0}
-					<ListRow lamp={used ? 'success' : 'muted'} shape={used ? 'filled' : 'hollow'} primary={i.version || (i.path.split('/').pop() ?? '')} primaryKind="version" primaryWidth="12ch" primaryTip={installTip(i)} secondary={i.origin || i.path} secondaryKind="text" secondaryWidth="32ch">
-						{#snippet badges()}<StatePill label={enumLabel(InstallKindSchema, i.kind)} />{/snippet}
+					<ListRow lamp={used ? 'success' : 'muted'} shape={used ? 'filled' : 'hollow'} primary={installLabel(i)} primaryKind="version" primaryWidth="12ch" secondary={installWord(i)} secondaryWidth="12ch">
 						{#snippet action()}
-							<Confirm label="Remove" question="Remove {i.version || i.path}?" danger onconfirm={() => removeInstall(i)} />
+							<Confirm label="Remove" question="Remove {installLabel(i)}?" danger onconfirm={() => removeInstall(i)} />
 						{/snippet}
 						{#snippet expand()}
-							<KeyRows dense rows={Object.entries(i.facts).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true, tip: v }))} />
+							<KeyRows dense rows={installRows(i)} />
 							{#if i.status?.conditions.length}<Conditions conditions={i.status.conditions} />{/if}
 							{#if used}
 								<KeyRows
@@ -411,8 +425,8 @@
 							<KeyRows
 								dense
 								rows={[
-									...Object.entries(b.vars).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true, tip: v })),
-									...Object.entries(b.facts).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true, tip: v })),
+									...Object.entries(b.vars).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true })),
+									...Object.entries(b.facts).map(([k, v]) => ({ label: factLabel(k), value: v, mono: true })),
 									{ label: 'patches', value: b.patches.join(', '), tip: b.patches.join('\n') },
 									{ label: 'task', value: shortId(b.taskId), href: b.taskId ? `/tasks/${b.taskId}` : undefined, mono: true }
 								]}
@@ -427,11 +441,9 @@
 		{#if !rt?.params.length}
 			<Empty icon={SlidersHorizontalIcon} text="No parameters" />
 		{:else}
-			<Section title="Defaults" info="What every launch on this runtime starts from" level={3}>
-				<Stack gap={24}>
-					<ParamsForm params={rt.params} bind:values={draft} />
-				</Stack>
-			</Section>
+			<Stack gap={24}>
+				<ParamsForm params={rt.params} bind:values={draft} />
+			</Stack>
 			<SaveBar dirty={draftDirty} saving={savingDefaults} error={defaultsError} onsave={saveDefaults} ondiscard={() => (draft = { ...stored })} />
 		{/if}
 	{/if}

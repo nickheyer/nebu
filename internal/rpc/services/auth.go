@@ -66,6 +66,14 @@ func (s *AuthService) SetPassword(ctx context.Context, req *connect.Request[v1.S
 	return authReply(&v1.SetPasswordResponse{User: u}, err)
 }
 
+func (s *AuthService) SetRole(ctx context.Context, req *connect.Request[v1.SetRoleRequest]) (*connect.Response[v1.SetRoleResponse], error) {
+	if s.users == nil {
+		return nil, errAccountsOff
+	}
+	u, err := s.users.SetRole(ctx, s.caller(req.Header()), req.Msg.GetUsername(), req.Msg.GetRole())
+	return authReply(&v1.SetRoleResponse{User: u}, err)
+}
+
 func (s *AuthService) ListTokens(ctx context.Context, req *connect.Request[v1.ListTokensRequest]) (*connect.Response[v1.ListTokensResponse], error) {
 	if s.tokens == nil {
 		return nil, errTokensOff
@@ -105,7 +113,7 @@ func authReply[R any](msg *R, err error) (*connect.Response[R], error) {
 	switch {
 	case errors.Is(err, auth.ErrForbidden):
 		return nil, connect.NewError(connect.CodePermissionDenied, err)
-	case errors.Is(err, auth.ErrNoAccount), errors.Is(err, auth.ErrOwnAccount):
+	case errors.Is(err, auth.ErrNoAccount), errors.Is(err, auth.ErrOwnAccount), errors.Is(err, auth.ErrLastAdmin):
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
 	return reply(msg, err)

@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { enumLabel, plural } from '#lib/format.js';
+	import { enumLabel, num } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { ModelKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
@@ -11,7 +11,7 @@
 	import Empty from '#lib/ui/Empty.svelte';
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
-	import RowAction from '#lib/ui/RowAction.svelte';
+
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
@@ -60,12 +60,7 @@
 		return installsBy.get(r.runtime?.id ?? '') ?? 0;
 	}
 
-	// The install count, or what keeps the host from running it
-	function status(r: RuntimeStatus): string {
-		if (!r.compatible) return r.unmet[0] ?? 'incompatible';
-		const n = installs(r);
-		return n > 0 ? plural(n, 'install') : '-';
-	}
+
 
 	function about(r: RuntimeStatus): string {
 		const rt = r.runtime;
@@ -76,8 +71,8 @@
 		return `/runtimes/${encodeURIComponent(runtimeId)}${t === 'installs' ? '' : `/${t}`}`;
 	}
 
-	function open(r: RuntimeStatus, t = 'installs') {
-		void goto(href(r.runtime?.id ?? '', t));
+	function open(r: RuntimeStatus) {
+		void goto(href(r.runtime?.id ?? '', 'installs'));
 	}
 
 	function showTab(t: string) {
@@ -89,13 +84,13 @@
 	<div class="catalog" bind:clientWidth={listWidth}>
 		<Card flush>
 			{#if !loaded}
-				<Skeleton rows={5} secondary="16ch" facts={1} menu={false} />
+				<Skeleton rows={5} secondary={false} facts={1} action={false} menu={false} />
 			{:else if error && runtimes.length === 0}
 				<Empty text="Runtimes failed to list" hint={error} action="Retry" onclick={() => void load()} />
 			{:else if sorted.length === 0}
 				<Empty icon={EngineIcon} text="No runtimes" />
 			{:else}
-				<List head={{ primary: 'Runtime', secondary: 'Installs' }}>
+				<List head={{ primary: 'Runtime', facts: ['Installs'] }}>
 					{#each sorted as r (r.runtime?.id)}
 						{@const n = installs(r)}
 						<ListRow
@@ -103,17 +98,14 @@
 							shape={r.compatible && n > 0 ? 'filled' : 'hollow'}
 							primary={r.runtime?.name ?? ''}
 							primaryTip={about(r)}
-							secondary={slim ? undefined : status(r)}
+							secondary={slim || r.compatible ? undefined : (r.unmet[0] ?? 'incompatible')}
 							secondaryKind="message"
 							secondaryWidth="28ch"
-							secondaryTip={r.compatible ? undefined : r.unmet.join('\n')}
+							secondaryTip={r.unmet.length > 1 ? r.unmet.join('\n') : undefined}
+							facts={[{ value: n > 0 ? num(n) : '' }]}
 							selected={r.runtime?.id === id}
 							onclick={() => open(r)}
-						>
-							{#snippet action()}
-								{#if r.compatible}<RowAction onclick={() => open(r, 'install')} label="Install" />{/if}
-							{/snippet}
-						</ListRow>
+						/>
 					{/each}
 				</List>
 			{/if}

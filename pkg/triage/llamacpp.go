@@ -134,12 +134,12 @@ func (LlamaCpp) Rules() []Rule {
 			Match: func(line string) (map[string]string, bool) {
 				names := map[string]string{
 					"flag": "a launch argument",
-					"hint": "Check the argument and its value against this runtime's supported options.",
+					"hint": "check the argument and its value against the options this build lists",
 				}
 				if flag, ok := quotedAfter(line, `error while handling argument "`, `"`); ok {
 					names["flag"] = flag
 					if replacement, ok := tailAfter(line, "the argument has been removed. use "); ok && replacement != "" {
-						names["hint"] = "Use " + strings.TrimSuffix(replacement, ".") + "."
+						names["hint"] = "use " + strings.TrimSuffix(replacement, ".")
 					}
 					return names, true
 				}

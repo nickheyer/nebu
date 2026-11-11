@@ -76,11 +76,16 @@
 
   const items = $derived<NeoListItemOrSection[]>(array?.map(i => (typeof i === 'object' ? i : { value: i })));
 
+  // A re-select matches the held choice to fresh items, so it closes nothing and reports only a changed value
   const onSelected = (event: NeoListSelectEvent) => {
     onSelect?.(event);
-    if (closeOnSelect) open = false;
     const current = Array.isArray(event.current) ? event.current.map(i => i?.item?.value) : event.current?.item?.value;
     const previous = Array.isArray(event.previous) ? event.previous.map(i => i?.item?.value) : event.previous?.item?.value;
+    if (event.type === 're-select') {
+      if (JSON.stringify(current) !== JSON.stringify(previous)) onChange?.(current, previous);
+      return;
+    }
+    if (closeOnSelect) open = false;
     if (JSON.stringify(current) === JSON.stringify(selected)) return;
     onChange?.(current, previous);
   };

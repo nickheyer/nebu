@@ -20,7 +20,7 @@ const (
 	defaultHistory        = 20
 	maxHistory            = 100
 	defaultHistoryChars   = 8000
-	defaultUploadBytes    = 10_000_000
+	defaultUploadBytes    = 10 << 20
 	defaultImageSize      = "1024x1024"
 	defaultBotChain       = 3
 	defaultConcurrent     = 4

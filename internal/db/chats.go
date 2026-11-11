@@ -159,33 +159,3 @@ func (d *DB) DeleteChatFiles(ctx context.Context, owner ChatOwner, ids []string)
 func (d *DB) ChatFileDigests(ctx context.Context) ([]string, error) {
 	return d.strings(ctx, `SELECT DISTINCT digest FROM chat_files WHERE digest != '' ORDER BY digest`)
 }
-
-// One image whose bytes a database from before the content store move still holds
-type LegacyChatFile struct {
-	ID   string
-	Data []byte
-}
-
-// The images still held as bytes in the database, none once the table from before the move is gone
-func (d *DB) LegacyChatFiles(ctx context.Context) ([]LegacyChatFile, error) {
-	tables, err := d.strings(ctx, `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chat_files_legacy'`)
-	if err != nil || len(tables) == 0 {
-		return nil, err
-	}
-	return list(ctx, d, `SELECT id, data FROM chat_files_legacy ORDER BY id`, func(rows *sql.Rows) (LegacyChatFile, error) {
-		var f LegacyChatFile
-		return f, rows.Scan(&f.ID, &f.Data)
-	})
-}
-
-// Records where an image's bytes went in the content store
-func (d *DB) SetChatFileDigest(ctx context.Context, id, digest string) error {
-	_, err := d.sql.ExecContext(ctx, `UPDATE chat_files SET digest = ? WHERE id = ?`, digest, id)
-	return err
-}
-
-// Drops the bytes kept from before the content store move, once every image is there
-func (d *DB) DropLegacyChatFiles(ctx context.Context) error {
-	_, err := d.sql.ExecContext(ctx, `DROP TABLE IF EXISTS chat_files_legacy`)
-	return err
-}

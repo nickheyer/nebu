@@ -26,7 +26,6 @@ const allScenes = [
     { id: 'chat-settings', path: '/chat', press: 'Settings', widths: ['mobile', 'standard'] },
     { id: 'chat-conversations', path: '/chat', press: 'Conversations', widths: ['mobile', 'standard'] },
     { id: 'models', path: '/models' },
-    { id: 'models-cleanup', path: '/models', press: 'Clean up' },
     { id: 'models-panel', path: '/models', click: 'main .listrow.clickable' },
     { id: 'models-missing', path: '/models/huggingface/moonshotai%2FKimi-K3.1-Pro/default' },
     { id: 'discover', path: '/discover' },
@@ -67,14 +66,16 @@ const allScenes = [
     { id: 'settings-sources', path: '/settings/sources' },
     { id: 'settings-source', path: '/settings/sources', click: 'main .listrow.clickable' },
     { id: 'settings-tools', path: '/settings/tools' },
+    { id: 'settings-notifications', path: '/settings/notifications' },
+    { id: 'settings-webhook-new', path: '/settings/notifications', press: 'Add webhook' },
     { id: 'settings-accounts', path: '/settings/accounts' },
-    { id: 'settings-tokens', path: '/settings/tokens' },
     { id: 'settings-source-new', path: '/settings/sources', press: 'Add source' },
     { id: 'settings-tool-new', path: '/settings/tools', press: 'Add tool server' },
     { id: 'settings-account-new', path: '/settings/accounts', press: 'Add account' },
-    { id: 'settings-token-new', path: '/settings/tokens', press: 'New token' },
     { id: 'settings-account-password', path: '/settings/accounts', press: 'More', click: '[role=menuitem][aria-posinset="1"] button' },
-    { id: 'settings-password', path: '/settings/general', press: 'Account', click: '[role=menuitem][aria-posinset="4"] button' },
+    { id: 'profile', path: '/profile' },
+    { id: 'profile-token-new', path: '/profile', press: 'New token' },
+    { id: 'account-menu', path: '/profile', press: 'Account' },
     { id: 'login', path: '/login', signedOut: true }
 ];
 const chosen = process.env.SCENES ? process.env.SCENES.split(',') : allScenes.map((s) => s.id);

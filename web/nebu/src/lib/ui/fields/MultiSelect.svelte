@@ -13,7 +13,7 @@
 		disabled = false,
 		search = false,
 		message,
-		// A toolbar select, its label standing as the placeholder and prefixed to the chosen options
+		// A toolbar select, its label standing as the placeholder
 		compact = false
 	}: { value?: V[]; options: Option<V>[]; label?: string; info?: string; placeholder?: string; disabled?: boolean; search?: boolean; message?: string; compact?: boolean } = $props();
 
@@ -21,12 +21,11 @@
 	const items = $derived(options.map((o): NeoListItem<V> => ({ id: String(o.value), value: o.value, label: o.label, description: o.description, disabled: o.disabled })));
 	const empty = $derived(placeholder ?? (compact ? label : undefined));
 
-	// The chosen options by name behind their label, so a toolbar filter keeps one control height
-	function prefixed(selection?: NeoListSelectedItem<V> | NeoListSelectedItem<V>[]): string | undefined {
+	// The chosen options by name on one line
+	function named(selection?: NeoListSelectedItem<V> | NeoListSelectedItem<V>[]): string | undefined {
 		const picked = Array.isArray(selection) ? selection : selection ? [selection] : [];
 		const names = picked.map((s) => s.item?.label ?? s.item?.value?.toString()).filter((n): n is string => !!n);
-		if (!names.length) return undefined;
-		return compact && label ? `${label}: ${names.join(', ')}` : names.join(', ');
+		return names.length ? names.join(', ') : undefined;
 	}
 </script>
 
@@ -38,7 +37,7 @@
 		{id}
 		multiple
 		placeholder={empty}
-		display={prefixed}
+		display={named}
 		{disabled}
 		{search}
 		elevation={-1}
@@ -64,7 +63,7 @@
 	.field :global(.neo-input-group) {
 		min-width: 0;
 	}
-	/* A compact select keeps control height, the chosen options shown behind their label */
+	/* A compact select keeps control height, the chosen options cut off at its edge */
 	.compact :global(.neo-input-group) {
 		margin-top: 0;
 	}

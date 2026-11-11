@@ -16,7 +16,7 @@
 	import LoadMore from '#lib/ui/LoadMore.svelte';
 	import type { MenuItem } from '#lib/ui/Menu.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
+	import StateWord from '#lib/ui/StateWord.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
@@ -155,7 +155,7 @@
 							{#snippet expand()}
 								{#each st.tools as tool (tool.name)}
 									<ListRow primary={tool.name} primaryTip={tool.schema || undefined} secondary={tool.description} secondaryKind="message" secondaryWidth="64ch">
-										{#snippet badges()}{#if tool.readOnly}<StatePill label="read only" />{/if}{/snippet}
+										{#snippet badges()}{#if tool.readOnly}<StateWord label="read only" />{/if}{/snippet}
 									</ListRow>
 								{:else}
 									<Empty text="No tools" row />

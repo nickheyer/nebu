@@ -30,7 +30,7 @@ func fullTrace(id, route string, started time.Time) *v1.Trace {
 		FinishedAt:   timestamppb.New(started.Add(2*time.Second + 3)),
 		Status:       502, Error: "upstream reset", PromptTokens: 120, CompletionTokens: 48, Stop: "tool",
 		RequestBytes: 2048, ResponseBytes: 4096,
-		Request: `{"messages":[{"role":"user","content":"hi"}]}`, UpstreamRequest: `{"model":"m","messages":[]}`, Response: "hello there",
+		Request: `{"messages":[{"role":"user","content":"hi"}]}`, UpstreamRequest: `{"model":"m","messages":[]}`, Response: "hello there", Reasoning: "a greeting wants one back",
 		Translated: true, Remote: "10.0.0.7:5122",
 		ToolCalls: []*v1.TraceToolCall{
 			{Id: "call-1", Name: "read_file", Arguments: `{"path":"a"}`, Server: "fs", Result: "contents", Failed: true, TookMs: 31},
@@ -52,7 +52,7 @@ func bareTrace(id, route string, offset time.Duration) *v1.Trace {
 // The trace as a listing returns it, bodies cleared
 func listed(t *v1.Trace) *v1.Trace {
 	c := proto.Clone(t).(*v1.Trace)
-	c.Request, c.UpstreamRequest, c.Response = "", "", ""
+	c.Request, c.UpstreamRequest, c.Response, c.Reasoning = "", "", "", ""
 	return c
 }
 
@@ -297,7 +297,6 @@ func TestTraces(t *testing.T) {
 
 // A fresh store and one upgraded from the release before traces both match schema.sql and keep traces
 func TestTracesMigration(t *testing.T) {
-	dropLegacy := func(ctx context.Context, d *DB) error { return d.DropLegacyChatFiles(ctx) }
 	cases := []struct {
 		name    string
 		prepare func(t *testing.T, path string)
@@ -309,7 +308,7 @@ func TestTracesMigration(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "nebu.db")
 			tc.prepare(t, path)
-			d, err := Open(path, dropLegacy)
+			d, err := Open(path)
 			if err != nil {
 				t.Fatal(err)
 			}

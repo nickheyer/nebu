@@ -456,6 +456,54 @@ message Trace {
   repeated TraceScore candidates = 51;
   // Every retry decision, the endpoint left and what had reached it and the client by then
   repeated TraceFallback fallbacks = 52;
+  // The reasoning the model wrote before its answer, capped. Returned by GetTrace, not events.
+  string reasoning = 53;
+}
+
+// One piece of a traced turn
+message TracePart {
+  // text, thinking, image, or tokens
+  string type = 1;
+  string text = 2;
+  string media_type = 3;
+  // Where an image is fetched from, empty for one sent inline
+  string url = 4;
+  // Bytes of an inline image or ids of a token prompt, neither repeated here
+  uint64 size = 5;
+}
+
+// One call an assistant turn of a traced request made
+message TraceCall {
+  string id = 1;
+  string name = 2;
+  // JSON arguments
+  string arguments = 3;
+}
+
+// One turn of a traced request as its protocol reads it
+message TraceTurn {
+  // system, user, assistant, or tool
+  string role = 1;
+  repeated TracePart parts = 2;
+  repeated TraceCall calls = 3;
+  // The call a tool turn answers
+  string tool_call_id = 4;
+}
+
+// A tool a traced request offered the model
+message TraceTool {
+  string name = 1;
+  string description = 2;
+  // JSON schema of the arguments, empty for a tool the API itself provides
+  string schema = 3;
+  // The API's own type of a tool it provides, empty for one defined by schema
+  string type = 4;
+}
+
+// The request body of a trace read as turns and tools by the client's protocol
+message TraceConversation {
+  repeated TraceTurn turns = 1;
+  repeated TraceTool tools = 2;
 }
 
 // One endpoint the request left for the next, with the state the retry decision was made in
@@ -535,6 +583,8 @@ message GetTraceRequest {
 // Returns one trace
 message GetTraceResponse {
   Trace trace = 1;
+  // The request as turns and tools, unset for a request that carries no turns, such as an image or a body its protocol refuses
+  TraceConversation conversation = 2;
 }
 
 // Routes, pools, objectives and traces of the inference gateway

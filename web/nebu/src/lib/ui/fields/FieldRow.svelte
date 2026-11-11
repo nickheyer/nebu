@@ -7,7 +7,7 @@
 
 	let width = $state(0);
 	// Two fields per row where the container allows, else one
-	const single = $derived(viewport.mobile || (width > 0 && width < (wide ? 880 : 480)));
+	const single = $derived(viewport.mobile || (width > 0 && width < (wide ? 720 : 480)));
 </script>
 
 <div class="fieldrow" class:single bind:clientWidth={width}>

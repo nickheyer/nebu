@@ -1,11 +1,10 @@
 <script lang="ts">
 	import { NeoButton } from '#lib/neo/buttons/index.js';
-	import type { ListQuery } from '#lib/api/list.svelte.js';
+	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
 	import { session } from '#lib/auth/session.svelte.js';
 	import { ago, capitalize, enumLabel, when } from '#lib/format.js';
 	import { Scope, ScopeSchema, type ApiToken } from '#lib/proto/nebu/v1/auth_pb.js';
-	import type { HeaderTab } from '#lib/shell/chrome.svelte.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import CopyButton from '#lib/ui/CopyButton.svelte';
 	import Dialog from '#lib/ui/Dialog.svelte';
@@ -15,17 +14,23 @@
 	import LoadMore from '#lib/ui/LoadMore.svelte';
 	import Screen from '#lib/ui/Screen.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
 	import Checklist from '#lib/ui/fields/Checklist.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
-	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import { clockTick } from '#lib/ui/clock.svelte.js';
 	import KeyIcon from 'phosphor-svelte/lib/KeyIcon';
 
-	let { tabs, tokens }: { tabs: HeaderTab[]; tokens: ListQuery<ApiToken, Record<string, never>> } = $props();
+	// The signed in account's own API tokens
+	const tokens = new ListQuery<ApiToken, Record<string, never>>(async (_p, cursor, limit, signal) => {
+		const res = await rpc.auth.listTokens({ cursor, limit }, { signal });
+		return { items: res.tokens, next: res.nextCursor };
+	}, []);
 
 	const auth = $derived(session.status?.enabled === true);
+
+	$effect(() => {
+		if (auth) void tokens.load({});
+	});
 	const roleScopes = $derived(session.role === 'admin' ? [Scope.INFERENCE, Scope.READ, Scope.OPERATE, Scope.ADMIN] : session.role === 'operator' ? [Scope.INFERENCE, Scope.READ, Scope.OPERATE] : [Scope.INFERENCE]);
 
 	let newOpen = $state(false);
@@ -75,8 +80,6 @@
 	}
 </script>
 
-<PageHeader {tabs} active="tokens" />
-
 <Card title="API tokens" flush>
 	{#snippet tools()}
 		{#if auth}<NeoButton class="primary" elevation={2} onclick={openNew}>New token</NeoButton>{/if}
@@ -100,11 +103,7 @@
 					facts={[t.lastUsedAt ? { value: ago(t.lastUsedAt, clockTick.now), tip: `last used ${when(t.lastUsedAt)}` } : { value: '', tip: `created ${when(t.createdAt)}` }]}
 					menu={[{ label: 'Revoke', danger: true, confirm: `Revoke ${t.name}?`, onclick: () => revoke(t) }]}
 				>
-					{#snippet instrument()}
-						<span class="scopes">
-							{#each t.scopes as s (s)}<StatePill label={scopeLabel(s)} lamp={s === Scope.ADMIN ? 'primary' : 'muted'} />{/each}
-						</span>
-					{/snippet}
+					{#snippet instrument()}<span class="secondary">{t.scopes.map(scopeLabel).join(', ')}</span>{/snippet}
 				</ListRow>
 			{/each}
 		</List>
@@ -129,12 +128,6 @@
 </Dialog>
 
 <style>
-	.scopes {
-		display: inline-flex;
-		flex-wrap: wrap;
-		gap: var(--nebu-space-1);
-		align-items: center;
-	}
 	.secret {
 		display: flex;
 		gap: var(--nebu-space-2);

@@ -32,6 +32,7 @@ var procedures = map[string]rule{
 	nebuv1connect.AuthServiceCreateUserProcedure:  needAdmin,
 	nebuv1connect.AuthServiceDeleteUserProcedure:  needAdmin,
 	nebuv1connect.AuthServiceSetPasswordProcedure: needInference,
+	nebuv1connect.AuthServiceSetRoleProcedure:     needAdmin,
 	nebuv1connect.AuthServiceListTokensProcedure:  needInference,
 	nebuv1connect.AuthServiceCreateTokenProcedure: needInference,
 	nebuv1connect.AuthServiceDeleteTokenProcedure: needInference,
@@ -165,6 +166,7 @@ var procedures = map[string]rule{
 
 	nebuv1connect.SettingsServiceGetSettingsProcedure:    needAdmin,
 	nebuv1connect.SettingsServiceUpdateSettingsProcedure: needAdmin,
+	nebuv1connect.SettingsServiceTestWebhookProcedure:    needAdmin,
 
 	nebuv1connect.SlotServiceListSlotsProcedure:    needRead,
 	nebuv1connect.SlotServiceGetSlotProcedure:      needRead,

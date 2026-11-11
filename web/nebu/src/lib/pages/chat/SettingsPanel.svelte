@@ -6,17 +6,17 @@
 	import { ToolServerState, type ToolServerStatus } from '#lib/proto/nebu/v1/tools_pb.js';
 	import Checklist from '#lib/ui/fields/Checklist.svelte';
 	import Chips from '#lib/ui/fields/Chips.svelte';
-	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
+	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import NumberField from '#lib/ui/fields/Number.svelte';
-	import Segmented from '#lib/ui/fields/Segmented.svelte';
+	import Select from '#lib/ui/fields/Select.svelte';
 	import Slider from '#lib/ui/fields/Slider.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import Textarea from '#lib/ui/fields/Textarea.svelte';
 	import type { Option } from '#lib/ui/fields/types.js';
 
-	// The request settings of one conversation, every empty field showing the value the request resolves to
+	// The request settings of one conversation, an empty sampling field leaving that setting to the runtime
 	let {
 		settings = $bindable(),
 		servers,
@@ -26,14 +26,6 @@
 	}: { settings: ChatSettings; servers: ToolServerStatus[]; contextLength: number; userFallback: string; assistantFallback: string } = $props();
 
 	type NumKey = 'temperature' | 'topP' | 'topK' | 'maxTokens' | 'seed';
-
-	// The sampling each API's server applies while a setting stays unset
-	const apiDefaults: Record<string, { temperature: number; topP?: number; topK?: number }> = {
-		openai: { temperature: 1, topP: 1 },
-		anthropic: { temperature: 1 },
-		ollama: { temperature: 0.8, topP: 0.9, topK: 40 }
-	};
-	const d = $derived(apiDefaults[settings.dialect] ?? apiDefaults.openai!);
 
 	const apis = [
 		{ value: 'openai', label: 'OpenAI' },
@@ -80,38 +72,68 @@
 	});
 </script>
 
-<div class="sections">
-	<Segmented bind:value={settings.dialect} options={apis} label="API" />
-	<Switch bind:checked={settings.stream} label="Stream the answer" />
-	<Textarea bind:value={settings.system} label="System prompt" rows={3} maxRows={12} />
-	<FieldRow>
-		<Text bind:value={userName} label="User's name" max={32} onchange={rename} />
-		<Text bind:value={assistantName} label="Assistant's name" max={32} onchange={rename} />
-	</FieldRow>
+<div class="sections dense">
+	<div class="fields">
+		<Textarea bind:value={settings.system} label="System prompt" rows={3} maxRows={12} />
+		<div class="names">
+			<Text bind:value={userName} label="User" max={32} onchange={rename} />
+			<Text bind:value={assistantName} label="Assistant" max={32} onchange={rename} />
+		</div>
+	</div>
 	<FormSection title="Sampling">
-		<Slider bind:value={() => read('temperature'), (n) => write('temperature', n)} min={0} max={2} step={0.05} label="Temperature" fallback={d.temperature} optional />
-		<Slider bind:value={() => read('topP'), (n) => write('topP', n)} min={0} max={1} step={0.01} label="Top p" fallback={d.topP} optional />
-		<NumberField bind:value={() => read('topK'), (n) => write('topK', n)} min={1} label="Top k" fallback={d.topK} optional />
-		<NumberField bind:value={() => read('maxTokens'), (n) => write('maxTokens', n)} min={1} max={contextLength || undefined} label="Max tokens" fallback={contextLength || undefined} optional />
-		<NumberField bind:value={() => read('seed'), (n) => write('seed', n)} min={0} label="Seed" optional />
+		<Slider bind:value={() => read('temperature'), (n) => write('temperature', n)} min={0} max={2} step={0.05} label="Temperature" optional inline />
+		<Slider bind:value={() => read('topP'), (n) => write('topP', n)} min={0} max={1} step={0.01} label="Top p" optional inline />
+		<NumberField bind:value={() => read('topK'), (n) => write('topK', n)} min={1} label="Top k" optional inline />
+		<NumberField bind:value={() => read('maxTokens'), (n) => write('maxTokens', n)} min={1} max={contextLength || undefined} label="Max tokens" optional inline />
+		<NumberField bind:value={() => read('seed'), (n) => write('seed', n)} min={0} label="Seed" optional inline />
 		<Chips bind:value={() => (settings.stop ? settings.stop.split('\n').filter(Boolean) : []), (v) => (settings.stop = v.join('\n'))} label="Stop sequences" />
 	</FormSection>
 	{#if serverOptions.length}
 		<FormSection title="Tools">
 			<Checklist bind:value={settings.toolServers} options={serverOptions} />
 			{#if settings.toolServers.length}
-				<Switch bind:checked={settings.mutatingTools} label="Let tools make changes" />
 				<Switch bind:checked={settings.approveTools} label="Ask before running a tool" />
+				<Switch bind:checked={settings.mutatingTools} label="Let tools make changes" />
 			{/if}
 		</FormSection>
 	{/if}
+	<FormSection title="Request">
+		<div class="pair">
+			<FieldLabel label="API" />
+			<Select bind:value={settings.dialect} options={apis} compact />
+		</div>
+		<Switch bind:checked={settings.stream} label="Stream" />
+	</FormSection>
 </div>
 
 <style>
+	/* Every boxed control starts on the second of two equal columns, where the assistant's name does */
 	.sections {
+		--nebu-inline-box: calc(50% - var(--nebu-space-3) / 2);
+
 		display: flex;
 		flex-direction: column;
-		gap: var(--nebu-space-4);
+		gap: var(--nebu-space-5);
 		min-width: 0;
+	}
+	.fields {
+		display: flex;
+		flex-direction: column;
+		gap: var(--nebu-space-3);
+		min-width: 0;
+	}
+	.names,
+	.pair {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: var(--nebu-space-3);
+		min-width: 0;
+	}
+	.pair {
+		align-items: center;
+	}
+	/* The API names need the room the box keeps for a clear button it never shows */
+	.pair :global(.neo-affix-container) {
+		display: none;
 	}
 </style>

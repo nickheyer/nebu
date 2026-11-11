@@ -14,12 +14,6 @@ export function isWindow(s: string | null | undefined): s is Window {
 // Seconds before now a range starts when the link names no start
 export const rangeStartDefault = 3600;
 
-// The span the page opens on for a remembered window, a range without a start reaching back an hour
-export function landingMs(w: string): number {
-	if (!isWindow(w)) return windowMs['5m'];
-	return w === 'range' ? rangeStartDefault * 1000 : windowMs[w];
-}
-
 // Bytes of each body a trace keeps before the daemon cuts it
 const bodyCap = 1 << 20;
 

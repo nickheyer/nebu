@@ -394,6 +394,12 @@ func (x *exchange) chat(ctx context.Context) {
 		return
 	}
 	x.t.Translated = !same
+	if !same {
+		if x.api == v1.ApiFlavor_API_FLAVOR_ANTHROPIC && x.stripsBillingHeader() {
+			chat.StripBillingHeader(creq)
+		}
+		chat.Cross(creq, x.api)
+	}
 	if traits.Strict && !same {
 		chat.DropExtras(creq)
 	}
@@ -493,6 +499,7 @@ func (x *exchange) passthrough(ctx context.Context, creq *chat.Request) {
 	if resp.StatusCode >= http.StatusInternalServerError {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 		resp.Body.Close()
+		x.sink.refused(raw)
 		x.resp.Err = fmt.Errorf("upstream answered %d", resp.StatusCode)
 		x.refuse(upstreamFailure(x.model, chat.Refusal(x.runtimeCodec(), resp.StatusCode, resp.Header, raw)))
 		return
@@ -757,4 +764,12 @@ func attained(ttft, tpot time.Duration, resp *framework.Response) bool {
 		ok = ok && resp.TPOT() > 0 && resp.TPOT() <= tpot
 	}
 	return ok
+}
+
+// Whether the scheduled instance has Claude Code's billing header dropped, true before an endpoint is picked
+func (x *exchange) stripsBillingHeader() bool {
+	if x.dec == nil || len(x.dec.Endpoints) == 0 {
+		return true
+	}
+	return x.g.instances.StripsBillingHeader(x.dec.Endpoints[0].Labels()[datalayer.LabelInstance])
 }

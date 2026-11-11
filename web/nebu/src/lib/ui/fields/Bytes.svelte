@@ -6,17 +6,19 @@
 
 	type Unit = 'MB' | 'GB' | 'TB';
 	const units: Unit[] = ['MB', 'GB', 'TB'];
-	const factors: Record<Unit, number> = { MB: 1e6, GB: 1e9, TB: 1e12 };
+	// Binary steps under the labels every byte count in the app reads in
+	const factors: Record<Unit, number> = { MB: 2 ** 20, GB: 2 ** 30, TB: 2 ** 40 };
 
-	// A byte count as a number and a decimal unit, the empty box showing the count it resolves to
+	// A byte count as a number and a unit, zero empty under emptyZero, the empty box showing the count it resolves to
 	let {
 		value = $bindable(0),
 		label,
 		info,
 		disabled = false,
 		message,
-		fallback
-	}: { value?: number; label?: string; info?: string; disabled?: boolean; message?: string; fallback?: number } = $props();
+		fallback,
+		emptyZero = false
+	}: { value?: number; label?: string; info?: string; disabled?: boolean; message?: string; fallback?: number; emptyZero?: boolean } = $props();
 
 	const id = fieldId();
 	let unit = $state<Unit>('GB');
@@ -35,13 +37,18 @@
 		let best: Unit = 'MB';
 		if (value >= factors.TB) best = 'TB';
 		else if (value >= factors.GB) best = 'GB';
+		if (value === 0 && emptyZero) {
+			raw = '';
+			return;
+		}
 		unit = best;
 		raw = inUnit(value, best);
 	});
 
 	function changed() {
-		const n = Number(raw);
-		if (raw === '' || raw === null || Number.isNaN(n)) return;
+		const blank = raw === '' || raw === null;
+		const n = blank ? 0 : Number(raw);
+		if ((blank && !emptyZero) || Number.isNaN(n)) return;
 		emitted = Math.round(n * factors[unit]);
 		value = emitted;
 	}

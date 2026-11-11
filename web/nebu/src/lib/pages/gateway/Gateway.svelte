@@ -17,7 +17,7 @@
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import type { MenuItem } from '#lib/ui/Menu.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
+	import StateWord from '#lib/ui/StateWord.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
@@ -54,6 +54,8 @@
 	const configs = $derived([...live.schedulerConfigs.values()].sort((a, b) => a.name.localeCompare(b.name)));
 
 	const creating = $derived(id === 'new');
+	// Beside an open panel the rows keep to the lamp, the name and the count
+	const slim = $derived(id !== '');
 	const editing = $derived(page.url.searchParams.get('edit') === '1');
 	const route = $derived(active === 'routes' && !creating ? live.routes.get(id) : undefined);
 	const pool = $derived(active === 'pools' && !creating ? live.pools.get(id) : undefined);
@@ -123,7 +125,7 @@
 		shape={routeShape(state)}
 		primary={r.name}
 		primaryTip={routeTip(r)}
-		secondary={routeTarget(live, r)}
+		secondary={slim ? undefined : routeTarget(live, r)}
 		secondaryWidth="24ch"
 		selected={r.name === id}
 		onclick={() => goto(hrefOf('routes', r.name))}
@@ -137,7 +139,7 @@
 		shape={poolShape(p)}
 		primary={p.id}
 		primaryTip={poolTip(p)}
-		secondary={p.spec?.model ?? ''}
+		secondary={slim ? undefined : (p.spec?.model ?? '')}
 		secondaryKind="repo"
 		secondaryWidth="40ch"
 		facts={[{ value: `${num(p.status?.readyEndpoints)} / ${num(p.status?.totalEndpoints)}`, tip: 'Ready of total' }]}
@@ -166,7 +168,7 @@
 	<ListRow
 		lamp={conditionsLamp(c.status?.conditions)}
 		primary={c.name}
-		secondary={schedulerWord(c)}
+		secondary={slim ? undefined : schedulerWord(c)}
 		secondaryWidth="14ch"
 		facts={[{ value: plural(refs, 'pool') }]}
 		selected={c.name === id}
@@ -178,7 +180,7 @@
 {#snippet importRow(imp: PoolImport)}
 	{@const eps = imp.status?.endpoints ?? []}
 	<ListRow primary={imp.id} facts={[{ value: `${num(eps.filter((e) => e.ready).length)} / ${num(eps.length)}`, tip: 'Ready of total' }]}>
-		{#snippet badges()}<StatePill label={imp.status?.routingMode || imp.spec?.routingMode || 'endpoint'} lamp="primary" />{/snippet}
+		{#snippet badges()}<StateWord label={imp.status?.routingMode || imp.spec?.routingMode || 'endpoint'} lamp="primary" />{/snippet}
 		{#snippet expand()}
 			<Stack gap={16}>
 				<Section title="Controllers" level={3}>

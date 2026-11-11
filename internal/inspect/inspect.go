@@ -272,10 +272,10 @@ func (i *Inspector) Describe(ctx context.Context, src sources.Source, model *v1.
 	return i.Builder.Build(raw)
 }
 
-// Builds planning input from resolved overrides, memory, and calibration, with what the plan leaves uncounted
-func (i *Inspector) input(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (estimate.Input, string, error) {
+// Builds planning input from resolved overrides, memory, and calibration
+func (i *Inspector) input(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (estimate.Input, error) {
 	if rt.Policy() == nil {
-		return estimate.Input{}, "", fmt.Errorf("runtime %s has no estimate policy", rt.ID())
+		return estimate.Input{}, fmt.Errorf("runtime %s has no estimate policy", rt.ID())
 	}
 	models := companions
 	if self != nil {
@@ -283,13 +283,13 @@ func (i *Inspector) input(ctx context.Context, rt runtimes.Runtime, d *v1.Descri
 	}
 	overrides, err := runtimes.ResolveStore(rt, overrides, models)
 	if err != nil {
-		return estimate.Input{}, "", err
+		return estimate.Input{}, err
 	}
 	params, err := runtimes.Resolve(rt, overrides)
 	if err != nil {
-		return estimate.Input{}, "", err
+		return estimate.Input{}, err
 	}
-	draft, warning := i.draftOf(ctx, rt, params, models)
+	draft := i.draftOf(ctx, rt, params, models)
 	in := estimate.Input{
 		Descriptor:    d,
 		Family:        i.Builder.Family(d),
@@ -305,11 +305,11 @@ func (i *Inspector) input(ctx context.Context, rt runtimes.Runtime, d *v1.Descri
 	if draft != nil {
 		in.Draft, in.DraftFamily = draft, i.Builder.Family(draft)
 	}
-	return in, warning, nil
+	return in, nil
 }
 
-// The named draft model from its stored descriptor or its header, with why it is uncounted when neither reads
-func (i *Inspector) draftOf(ctx context.Context, rt runtimes.Runtime, params estimate.Params, models []*v1.StoredModel) (*v1.Descriptor, string) {
+// The named draft model from its stored descriptor or its header, nil when neither reads
+func (i *Inspector) draftOf(ctx context.Context, rt runtimes.Runtime, params estimate.Params, models []*v1.StoredModel) *v1.Descriptor {
 	var path string
 	for _, p := range rt.Params() {
 		if p.GetPicks() == "draft" {
@@ -317,21 +317,21 @@ func (i *Inspector) draftOf(ctx context.Context, rt runtimes.Runtime, params est
 		}
 	}
 	if path == "" || strings.EqualFold(path, runtimes.None) {
-		return nil, ""
+		return nil
 	}
 	for _, m := range models {
 		for _, sa := range m.GetArtifacts() {
 			role := sa.GetArtifact().GetRole()
 			if filepath.Clean(sa.GetPath()) == filepath.Clean(path) && (role == v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS || role == v1.ArtifactRole_ARTIFACT_ROLE_INDEX) && m.GetDescriptor_() != nil {
-				return m.GetDescriptor_(), ""
+				return m.GetDescriptor_()
 			}
 		}
 	}
 	d, err := i.header(ctx, rt, path)
 	if err != nil {
-		return nil, fmt.Sprintf("draft model %s is not counted, %v", path, err)
+		return nil
 	}
-	return d, ""
+	return d
 }
 
 // Describes a local file and its sibling shards from their headers, in a format the runtime serves
@@ -388,7 +388,7 @@ func shards(path string) []string {
 
 // Plans memory use, with what the plan leaves uncounted
 func (i *Inspector) Plan(ctx context.Context, rt runtimes.Runtime, d *v1.Descriptor, profile *v1.HostProfile, overrides map[string]string, free bool, placement v1.Placement, repo string, self *v1.StoredModel, companions []*v1.StoredModel) (*v1.MemoryPlan, string, error) {
-	in, warning, err := i.input(ctx, rt, d, profile, overrides, free, placement, repo, self, companions)
+	in, err := i.input(ctx, rt, d, profile, overrides, free, placement, repo, self, companions)
 	if err != nil {
 		return nil, "", err
 	}
@@ -397,18 +397,7 @@ func (i *Inspector) Plan(ctx context.Context, rt runtimes.Runtime, d *v1.Descrip
 		return nil, "", err
 	}
 	_, planWarning := rt.Policy().ParamStates(in, plan)
-	return plan, joinWarnings(warning, planWarning), nil
-}
-
-// Warnings joined as sentences, the empty ones left out
-func joinWarnings(parts ...string) string {
-	var out []string
-	for _, p := range parts {
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return strings.Join(out, ". ")
+	return plan, planWarning, nil
 }
 
 // Builds the full fit table for a model
@@ -577,7 +566,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	in, warning, err := i.input(ctx, rt, d, profile, overrides, req.GetFree(), c.Placement, req.GetRepo(), i.stored(req.GetSourceId(), req.GetRepo(), req.GetGroup()), companions)
+	in, err := i.input(ctx, rt, d, profile, overrides, req.GetFree(), c.Placement, req.GetRepo(), i.stored(req.GetSourceId(), req.GetRepo(), req.GetGroup()), companions)
 	if err != nil {
 		return nil, err
 	}
@@ -590,7 +579,7 @@ func (i *Inspector) Estimate(ctx context.Context, req *v1.EstimateRequest) (*v1.
 	if err != nil {
 		return nil, err
 	}
-	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Params: states, Warning: joinWarnings(warning, planWarning), Missing: missing}, nil
+	return &v1.EstimateResponse{Plan: plan, Descriptor_: d, Params: states, Warning: planWarning, Missing: missing}, nil
 }
 
 // Resolves missing slots and associates each part with its runtime param.

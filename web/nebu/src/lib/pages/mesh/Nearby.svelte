@@ -9,7 +9,7 @@
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import RowAction from '#lib/ui/RowAction.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
+	import StateWord from '#lib/ui/StateWord.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import Columns from '#lib/ui/layout/Columns.svelte';
@@ -110,7 +110,7 @@
 					facts={[a.expiresAt && !settled(a) ? { value: ago(a.expiresAt, clockTick.now), tip: when(a.expiresAt) } : { value: '' }]}
 					menu={deciding(a) ? [{ label: 'Refuse', danger: true, confirm: `Refuse ${a.node?.name || 'this node'}`, onclick: () => decide('refuse', a) }] : undefined}
 				>
-					{#snippet badges()}<StatePill label={enumLabel(AdmissionStateSchema, a.state)} lamp={admissionLamp(a.state)} />{/snippet}
+					{#snippet badges()}<StateWord label={enumLabel(AdmissionStateSchema, a.state)} lamp={admissionLamp(a.state)} />{/snippet}
 					{#snippet action()}
 						{#if deciding(a) && a.asked}
 							<RowAction onclick={() => decide('admit', a)} label="Admit" />

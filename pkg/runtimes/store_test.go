@@ -213,3 +213,32 @@ func TestUnsetNumbersCarryNoFlag(t *testing.T) {
 		t.Fatalf("a set number %v %v", params, err)
 	}
 }
+
+// A language model group as the store holds it, one weights artifact per file and a projector when named
+func languageGroup(repo, group, format, projector string, weights ...string) *v1.StoredModel {
+	m := &v1.StoredModel{SourceId: "hf", Repo: repo, Group: group, FormatId: format, Path: "/store/" + repo + "/" + group, Descriptor_: &v1.Descriptor{Architecture: "qwen4exp", Kind: v1.ModelKind_MODEL_KIND_LANGUAGE}}
+	for _, w := range weights {
+		m.Artifacts = append(m.Artifacts, &v1.StoredArtifact{Artifact: &v1.Artifact{Path: w, Role: v1.ArtifactRole_ARTIFACT_ROLE_WEIGHTS}, Path: m.Path + "/" + w})
+	}
+	if projector != "" {
+		m.Artifacts = append(m.Artifacts, &v1.StoredArtifact{Artifact: &v1.Artifact{Path: projector, Role: v1.ArtifactRole_ARTIFACT_ROLE_PROJECTOR}, Path: m.Path + "/" + projector})
+	}
+	return m
+}
+
+// A reference to a stored group resolves to the file its param hands the runtime, the first shard of a split draft model
+func TestResolveStoreDraftAndProjector(t *testing.T) {
+	main := languageGroup("orcarouter/Flash-GGUF", "Q5_K_S", "gguf", "mmproj-Flash-F16.gguf", "Flash-Q5_K_S-00002-of-00003.gguf", "Flash-Q5_K_S-00001-of-00003.gguf", "Flash-Q5_K_S-00003-of-00003.gguf")
+	heads := languageGroup("orcarouter/Flash-GGUF", "default", "gguf", "", "Flash-MTP-draft.gguf")
+	all := []*v1.StoredModel{main, heads}
+	out, err := ResolveStore(LlamaCpp{}, map[string]string{"draft_model": StoreRef(heads), "mmproj": StoreRef(main)}, all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["draft_model"] != "/store/orcarouter/Flash-GGUF/default/Flash-MTP-draft.gguf" || out["mmproj"] != "/store/orcarouter/Flash-GGUF/Q5_K_S/mmproj-Flash-F16.gguf" {
+		t.Errorf("resolved %v", out)
+	}
+	if out, err = ResolveStore(LlamaCpp{}, map[string]string{"draft_model": StoreRef(main)}, all); err != nil || out["draft_model"] != "/store/orcarouter/Flash-GGUF/Q5_K_S/Flash-Q5_K_S-00001-of-00003.gguf" {
+		t.Errorf("a split draft model resolved to %q: %v", out["draft_model"], err)
+	}
+}

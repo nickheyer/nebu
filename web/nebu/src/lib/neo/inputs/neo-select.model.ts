@@ -43,6 +43,10 @@ export type NeoSelectProps<Value = any> = {
    * Custom content to display in the input.
    */
   content?: NeoInputProps['display'];
+  /**
+   * Content drawn inside the input after the picker toggle.
+   */
+  trailing?: Snippet;
 
   // States
   /**

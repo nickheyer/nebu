@@ -1,13 +1,20 @@
 <script lang="ts">
-	import { ParamType, type Param } from '#lib/proto/nebu/v1/runtime_pb.js';
+	import { rpc } from '#lib/api/transport.js';
+	import { bytes } from '#lib/format.js';
+	import { ParamList, ParamType, type Param } from '#lib/proto/nebu/v1/runtime_pb.js';
 	import type { ParamState } from '#lib/proto/nebu/v1/estimate_pb.js';
-	import { live } from '#lib/live/events.svelte.js';
+	import { ModelSort } from '#lib/proto/nebu/v1/store_pb.js';
+	import FileList, { type FileListShape } from '#lib/ui/fields/FileList.svelte';
 	import NumberField from '#lib/ui/fields/Number.svelte';
+	import Part from '#lib/ui/fields/Part.svelte';
 	import Path from '#lib/ui/fields/Path.svelte';
+	import Picker from '#lib/ui/fields/Picker.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
 	import Slider from '#lib/ui/fields/Slider.svelte';
 	import Switch from '#lib/ui/fields/Switch.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
+	import type { PickerPage } from '#lib/ui/fields/types.js';
+	import { modelPhrase, partLabel, storeRef } from '#lib/pages/serve/serve.js';
 
 	// One runtime parameter as the control its type asks for, empty ones showing the value they resolve to
 	let { param, values = $bindable({}), state, resolved }: { param: Param; values?: Record<string, string>; state?: ParamState; resolved?: string } = $props();
@@ -26,13 +33,23 @@
 	const standing = $derived(resolved || (numeric && Number(p.default) < 0 ? '' : p.default) || undefined);
 	const fallback = $derived(standing !== undefined && Number.isFinite(Number(standing)) ? Number(standing) : undefined);
 
-	// Stored parts whose architecture the param picks, any stored model when it picks a model
-	const picks = $derived.by(() => {
-		if (!p.picks) return [];
-		return [...live.models.values()]
-			.filter((m) => p.picks === 'model' || p.picks === 'checkpoint' || m.descriptor?.architecture === p.picks)
-			.map((m) => ({ value: m.path, label: `${m.repo}${m.group ? ` ${m.group}` : ''}`, description: m.formatId }));
-	});
+	const shapes: Partial<Record<ParamList, FileListShape>> = { [ParamList.FILES]: 'files', [ParamList.SCALED]: 'scaled', [ParamList.NAMED]: 'named' };
+	// A file the planner settled on for an empty box, the words auto and none naming no file
+	const settled = $derived(resolved && resolved !== 'auto' && resolved !== 'none' ? partLabel(resolved) : undefined);
+
+	// Every stored group, each as the reference a launch resolves to the file the param loads
+	async function fetchParts(query: string, cursor: string, limit: number, signal: AbortSignal): Promise<PickerPage<string>> {
+		const res = await rpc.store.listModels({ query, cursor, limit, sort: ModelSort.LAST_USED }, { signal });
+		return { items: res.models.map((m) => ({ value: storeRef(m), label: modelPhrase(m), description: bytes(m.bytes) })), next: res.nextCursor };
+	}
+
+	// The param's own choices holding the typed words, then every stored group by its group name
+	async function fetchNamed(query: string, cursor: string, limit: number, signal: AbortSignal): Promise<PickerPage<string>> {
+		const res = await rpc.store.listModels({ query, cursor, limit, sort: ModelSort.LAST_USED }, { signal });
+		const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+		const own = cursor ? [] : p.choices.filter((c) => c !== '' && words.every((w) => c.toLowerCase().includes(w))).map((c) => ({ value: c, label: c }));
+		return { items: [...own, ...res.models.map((m) => ({ value: m.group, label: m.group, description: m.repo }))], next: res.nextCursor };
+	}
 
 	function set(v: string | number | undefined) {
 		if (v === undefined || v === '') delete values[p.name];
@@ -41,18 +58,22 @@
 </script>
 
 <div class="param">
-	{#if p.choices.length}
-		<Select value={current || undefined} options={p.choices.map((c) => ({ value: c, label: c }))} {label} {info} placeholder={standing} clearable onchange={set} />
+	{#if p.picks && p.type === ParamType.PATH}
+		<Part value={current} fetch={fetchParts} {label} {info} placeholder={settled} current={current ? partLabel(current) : undefined} filter={p.directory ? 'directories' : 'any'} onchange={set} />
 	{:else if p.picks}
-		<Select value={current || undefined} options={picks} {label} {info} placeholder={picks.find((o) => o.value === standing)?.label} clearable search onchange={set} />
+		<Picker value={current || undefined} fetch={fetchNamed} {label} {info} placeholder={standing} current={current || undefined} clearable onchange={set} />
+	{:else if shapes[p.list]}
+		<FileList value={current} shape={shapes[p.list]} {label} {info} onchange={set} />
+	{:else if p.choices.length}
+		<Select value={current || undefined} options={p.choices.map((c) => ({ value: c, label: c }))} {label} {info} placeholder={standing} clearable onchange={set} />
 	{:else if p.type === ParamType.BOOL}
-		<Switch checked={(current || standing) === 'true'} {label} {info} top onchange={(on) => set(on ? 'true' : 'false')} />
+		<Switch checked={(current || standing) === 'true'} {label} {info} onchange={(on) => set(on ? 'true' : 'false')} />
 	{:else if p.type === ParamType.PATH}
 		<Path value={current} {label} {info} filter={p.directory ? 'directories' : 'any'} placeholder={standing} onchange={set} />
 	{:else if bounded}
-		<Slider value={current === '' ? undefined : Number(current)} min={Math.max(min, 0)} {max} {step} unit={p.unit || undefined} {label} {info} {fallback} optional onchange={set} />
+		<Slider value={current === '' ? undefined : Number(current)} {min} {max} {step} unit={p.unit || undefined} {label} {info} {fallback} optional onchange={set} />
 	{:else if numeric}
-		<NumberField value={current === '' ? undefined : Number(current)} min={Math.max(min, 0) || undefined} {step} unit={p.unit || undefined} {label} {info} {fallback} optional onchange={set} onclear={() => set(undefined)} />
+		<NumberField value={current === '' ? undefined : Number(current)} min={min || undefined} {step} unit={p.unit || undefined} {label} {info} {fallback} optional onchange={set} onclear={() => set(undefined)} />
 	{:else}
 		<Text value={current} {label} {info} placeholder={standing} onchange={set} />
 	{/if}

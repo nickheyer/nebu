@@ -37,15 +37,16 @@ var (
 	_ nebuv1connect.StoreServiceHandler    = (*StoreService)(nil)
 )
 
-// Serves host profile, doctor, and the daemon's own log
+// Serves host profile, doctor, the daemon's own log and host directories
 type HostService struct {
 	prober *host.Prober
 	doctor *doctor.Doctor
 	recent *launch.Log
+	store  *store.Store
 }
 
-func NewHostService(prober *host.Prober, doc *doctor.Doctor, recent *launch.Log) *HostService {
-	return &HostService{prober: prober, doctor: doc, recent: recent}
+func NewHostService(prober *host.Prober, doc *doctor.Doctor, recent *launch.Log, st *store.Store) *HostService {
+	return &HostService{prober: prober, doctor: doc, recent: recent, store: st}
 }
 
 func (s *HostService) GetProfile(ctx context.Context, req *connect.Request[v1.GetProfileRequest]) (*connect.Response[v1.GetProfileResponse], error) {
@@ -71,46 +72,43 @@ func (s *HostService) Logs(ctx context.Context, req *connect.Request[v1.HostServ
 	return wrap(s.recent.Follow(ctx, int(req.Msg.GetTail()), send))
 }
 
-// Lists host files, sorting directories first and then by name. Defaults to
-// the daemon's home directory. File paths select their parent directory.
+// Lists a host directory with directories first, the steps down to it and the places a browser jumps to
 func (s *HostService) ListDirectory(ctx context.Context, req *connect.Request[v1.ListDirectoryRequest]) (*connect.Response[v1.ListDirectoryResponse], error) {
-	return reply(listDirectory(req.Msg.GetPath()))
+	return reply(s.listDirectory(req.Msg))
 }
 
-func listDirectory(path string) (*v1.ListDirectoryResponse, error) {
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			home = string(filepath.Separator)
-		}
-		path = home
+func (s *HostService) listDirectory(req *v1.ListDirectoryRequest) (*v1.ListDirectoryResponse, error) {
+	path, err := s.browsePath(req.GetPath(), req.GetStart())
+	if err != nil && req.GetNearest() {
+		path, err = s.startPath(req.GetStart()), nil
 	}
-	path, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
+	dir, entries, err := readAround(path)
+	// A path that cannot be listed gives way to each directory above it, then to the start place
+	for err != nil && req.GetNearest() && filepath.Dir(path) != path {
 		path = filepath.Dir(path)
+		dir, entries, err = readAround(path)
 	}
-	entries, err := os.ReadDir(path)
+	if err != nil && req.GetNearest() {
+		dir, entries, err = readAround(s.startPath(req.GetStart()))
+	}
 	if err != nil {
 		return nil, err
 	}
-	out := &v1.ListDirectoryResponse{Path: path}
-	if parent := filepath.Dir(path); parent != path {
+	out := &v1.ListDirectoryResponse{Path: dir, Trail: trail(dir), Places: s.places()}
+	if parent := filepath.Dir(dir); parent != dir {
 		out.Parent = parent
 	}
 	for _, e := range entries {
 		// Follow symlinks when identifying directories and executables.
-		info, err := os.Stat(filepath.Join(path, e.Name()))
+		full := filepath.Join(dir, e.Name())
+		info, err := os.Stat(full)
 		if err != nil {
 			continue
 		}
-		out.Entries = append(out.Entries, &v1.DirEntry{Name: e.Name(), Dir: info.IsDir(), Executable: !info.IsDir() && executable(info, e.Name()), SizeBytes: uint64(info.Size())})
+		out.Entries = append(out.Entries, &v1.DirEntry{Name: e.Name(), Path: full, Dir: info.IsDir(), Executable: !info.IsDir() && executable(info, e.Name()), SizeBytes: uint64(info.Size())})
 	}
 	sort.SliceStable(out.Entries, func(i, j int) bool {
 		a, b := out.Entries[i], out.Entries[j]
@@ -120,6 +118,98 @@ func listDirectory(path string) (*v1.ListDirectoryResponse, error) {
 		return strings.ToLower(a.Name) < strings.ToLower(b.Name)
 	})
 	return out, nil
+}
+
+// The absolute path a request names, a store reference as its group's directory and no path as the start place
+func (s *HostService) browsePath(path string, start v1.DirPlaceKind) (string, error) {
+	if path == "" {
+		return s.startPath(start), nil
+	}
+	if !strings.HasPrefix(path, runtimes.StoreScheme) {
+		return filepath.Abs(path)
+	}
+	source, repo, group, err := runtimes.ParseStoreRef(path)
+	if err != nil {
+		return "", err
+	}
+	dir, err := s.store.GroupDir(source, repo, group)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", runtimes.ErrParam, err)
+	}
+	return dir, nil
+}
+
+// The directory a browse with no path opens on, the store's models when asked for and home otherwise
+func (s *HostService) startPath(start v1.DirPlaceKind) string {
+	if start == v1.DirPlaceKind_DIR_PLACE_KIND_STORE {
+		return s.store.ModelsDir()
+	}
+	return homeDir()
+}
+
+// The store's models, home and every volume root, in the order a browser shows them
+func (s *HostService) places() []*v1.DirPlace {
+	out := []*v1.DirPlace{
+		{Kind: v1.DirPlaceKind_DIR_PLACE_KIND_STORE, Path: s.store.ModelsDir()},
+		{Kind: v1.DirPlaceKind_DIR_PLACE_KIND_HOME, Path: homeDir()},
+	}
+	for _, root := range volumes() {
+		out = append(out, &v1.DirPlace{Kind: v1.DirPlaceKind_DIR_PLACE_KIND_VOLUME, Path: root})
+	}
+	return out
+}
+
+// The daemon's home directory, the filesystem root when the host names none
+func homeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return string(filepath.Separator)
+	}
+	return home
+}
+
+// Every drive root on Windows, the one filesystem root elsewhere
+func volumes() []string {
+	if runtime.GOOS != "windows" {
+		return []string{string(filepath.Separator)}
+	}
+	var out []string
+	for letter := 'A'; letter <= 'Z'; letter++ {
+		root := string(letter) + `:\`
+		if _, err := os.Stat(root); err == nil {
+			out = append(out, root)
+		}
+	}
+	return out
+}
+
+// The directory a path names or sits in, with its entries
+func readAround(path string) (string, []os.DirEntry, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", nil, err
+	}
+	if !info.IsDir() {
+		path = filepath.Dir(path)
+	}
+	entries, err := os.ReadDir(path)
+	return path, entries, err
+}
+
+// Every directory from the volume root down to dir, each named by its last element
+func trail(dir string) []*v1.DirStep {
+	var out []*v1.DirStep
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			out = append(out, &v1.DirStep{Name: dir, Path: dir})
+			break
+		}
+		out = append(out, &v1.DirStep{Name: filepath.Base(dir), Path: dir})
+		dir = parent
+	}
+	slices.Reverse(out)
+	return out
 }
 
 // Detect executables by extension on Windows and file mode elsewhere.
@@ -137,14 +227,32 @@ func executable(info os.FileInfo, name string) bool {
 // Serves host preferences.
 type SettingsService struct {
 	settings *settings.Manager
+	webhooks WebhookTester
 }
 
-func NewSettingsService(m *settings.Manager) *SettingsService {
-	return &SettingsService{settings: m}
+// Posts a sample notification to a webhook and answers the status it got
+type WebhookTester interface {
+	Test(ctx context.Context, hook *v1.Webhook) (int, error)
+}
+
+func NewSettingsService(m *settings.Manager, webhooks WebhookTester) *SettingsService {
+	return &SettingsService{settings: m, webhooks: webhooks}
+}
+
+func (s *SettingsService) TestWebhook(ctx context.Context, req *connect.Request[v1.TestWebhookRequest]) (*connect.Response[v1.TestWebhookResponse], error) {
+	hook := proto.Clone(req.Msg.GetWebhook()).(*v1.Webhook)
+	if err := settings.CheckWebhookTarget(hook); err != nil {
+		return reply(&v1.TestWebhookResponse{}, err)
+	}
+	status, err := s.webhooks.Test(ctx, hook)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnavailable, err)
+	}
+	return reply(&v1.TestWebhookResponse{Status: uint32(status)}, nil)
 }
 
 func (s *SettingsService) GetSettings(ctx context.Context, req *connect.Request[v1.GetSettingsRequest]) (*connect.Response[v1.GetSettingsResponse], error) {
-	return reply(&v1.GetSettingsResponse{Settings: s.settings.Get()}, nil)
+	return reply(&v1.GetSettingsResponse{Settings: s.settings.Get(), Defaults: s.settings.Base()}, nil)
 }
 
 func (s *SettingsService) UpdateSettings(ctx context.Context, req *connect.Request[v1.UpdateSettingsRequest]) (*connect.Response[v1.UpdateSettingsResponse], error) {
@@ -233,18 +341,16 @@ func (s *SourceService) DeleteSource(ctx context.Context, req *connect.Request[v
 	return reply(&v1.DeleteSourceResponse{Source: row}, err)
 }
 
-// What a search asks for beyond what providers filter: the runtime's compatibility bit, the
-// formats, and the model kinds.
+// The compatibility bits, formats and model kinds a search asks for beyond what providers filter
 type wanted struct {
 	mask    uint32
 	formats []string
 	kinds   []v1.ModelKind
-	// Set when the runtime serves none of the formats or kinds asked for.
+	// Set when the runtimes serve none of the formats or kinds asked for
 	nothing bool
 }
 
-// Reads the shared filters and turns a runtime into the formats and kind it serves, so providers
-// filter by those through their own APIs. The runtime facet itself stays with the daemon.
+// Turns the runtime facet into the formats and kinds its runtimes serve, for providers to filter by
 func (s *SourceService) wanted(in *v1.SearchRequest) (wanted, error) {
 	var w wanted
 	w.formats = sources.Filter(in, sources.FacetFormat)
@@ -258,30 +364,45 @@ func (s *SourceService) wanted(in *v1.SearchRequest) (wanted, error) {
 		return w, err
 	}
 	w.kinds = kinds
-	id := strings.TrimSpace(in.GetFilters()[sources.FacetRuntime])
-	if id == "" {
+	ids := sources.Filter(in, sources.FacetRuntime)
+	if len(ids) == 0 {
 		return w, nil
 	}
-	rt, err := s.runtimes.Get(id)
-	if err != nil {
-		return w, err
+	var served []string
+	var serves []v1.ModelKind
+	for _, id := range ids {
+		rt, err := s.runtimes.Get(id)
+		if err != nil {
+			return w, err
+		}
+		w.mask |= s.runtimes.Bit(id)
+		for _, f := range rt.Formats() {
+			if !slices.Contains(served, f) {
+				served = append(served, f)
+			}
+		}
+		if !slices.Contains(serves, rt.Kind()) {
+			serves = append(serves, rt.Kind())
+		}
 	}
-	w.mask = s.runtimes.Bit(id)
 	if len(w.formats) == 0 {
-		w.formats = rt.Formats()
+		w.formats = served
 	} else {
-		w.formats = slices.DeleteFunc(slices.Clone(w.formats), func(f string) bool { return !slices.Contains(rt.Formats(), f) })
+		w.formats = slices.DeleteFunc(slices.Clone(w.formats), func(f string) bool { return !slices.Contains(served, f) })
 	}
-	if len(w.kinds) > 0 && !slices.Contains(w.kinds, rt.Kind()) {
-		w.nothing = true
+	if len(w.kinds) == 0 {
+		w.kinds = serves
+	} else {
+		w.kinds = slices.DeleteFunc(slices.Clone(w.kinds), func(k v1.ModelKind) bool { return !slices.Contains(serves, k) })
 	}
-	w.kinds = []v1.ModelKind{rt.Kind()}
-	if len(w.formats) == 0 {
-		w.nothing = true
+	w.nothing = len(w.formats) == 0 || len(w.kinds) == 0
+	names := make([]string, len(w.kinds))
+	for i, k := range w.kinds {
+		names[i] = sources.KindName(k)
 	}
 	delete(in.Filters, sources.FacetRuntime)
 	in.Filters[sources.FacetFormat] = strings.Join(w.formats, ",")
-	in.Filters[sources.FacetKind] = sources.KindName(rt.Kind())
+	in.Filters[sources.FacetKind] = strings.Join(names, ",")
 	return w, nil
 }
 

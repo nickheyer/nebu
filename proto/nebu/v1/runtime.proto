@@ -70,6 +70,19 @@ message Param {
   repeated string slots = 18;
   // The parameter names a directory of stored parts rather than one file.
   bool directory = 19;
+  // How a STRING parameter of comma separated files writes each one, a single value when unset
+  ParamList list = 20;
+}
+
+// What rides with each file of a parameter listing several
+enum ParamList {
+  PARAM_LIST_UNSPECIFIED = 0;
+  // Files alone
+  PARAM_LIST_FILES = 1;
+  // file:scale pairs
+  PARAM_LIST_SCALED = 2;
+  // name=file pairs
+  PARAM_LIST_NAMED = 3;
 }
 
 // Runtime installation method.

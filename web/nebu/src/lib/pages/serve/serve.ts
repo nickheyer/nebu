@@ -24,6 +24,17 @@ export function modelPhrase(r: { repo: string; group: string } | undefined): str
 	return r.group ? `${r.repo} ${r.group}` : r.repo;
 }
 
+// The reference a path param names a stored group by, which a launch resolves to the file the param loads
+export function storeRef(m: { sourceId: string; repo: string; group: string }): string {
+	return `store://${m.sourceId}/${m.repo}#${m.group}`;
+}
+
+// A path param's value as a form shows it, a stored group by its repository and group and a file by its path
+export function partLabel(value: string): string {
+	const ref = /^store:\/\/[^/]+\/(.+)#(.*)$/.exec(value);
+	return ref ? modelPhrase({ repo: ref[1]!, group: ref[2]! }) : value;
+}
+
 // The Serve panel holding a slot's settings, new for the create form
 export function slotHref(id: string): string {
 	return `/serve?slot=${encodeURIComponent(id)}`;

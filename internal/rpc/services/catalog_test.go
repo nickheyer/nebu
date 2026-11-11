@@ -129,6 +129,18 @@ func TestSearchFillsPagesForRuntime(t *testing.T) {
 	if repos(page) != "a/sd,a/sdxl" || src.seen[0].GetFilters()[sources.FacetFormat] != "diffusers,gguf" || src.seen[0].GetFilters()[sources.FacetKind] != "diffusion" {
 		t.Fatalf("sdcpp page %s filters %v", repos(page), src.seen[0].GetFilters())
 	}
+	// Several runtimes ask for what any one of them serves
+	src.seen = nil
+	page = search(map[string]string{sources.FacetRuntime: "llamacpp,sdcpp"}, 7, "")
+	if repos(page) != "a/one,a/sd,a/two,a/sdxl,a/three" {
+		t.Fatalf("two runtimes page %s", repos(page))
+	}
+	if got := src.seen[0].GetFilters(); got[sources.FacetKind] != "language,diffusion" || got[sources.FacetRuntime] != "" || !strings.Contains(got[sources.FacetFormat], "diffusers") || !strings.Contains(got[sources.FacetFormat], "gguf") {
+		t.Fatalf("providers see two runtimes as the formats and kinds of both, got %v", got)
+	}
+	if page := search(map[string]string{sources.FacetRuntime: "llamacpp,vllm", sources.FacetKind: "diffusion"}, 2, ""); len(page.GetHits()) != 0 {
+		t.Fatalf("runtimes serving none of the kinds asked for fetch nothing, got %s", repos(page))
+	}
 	// Unfiltered listings keep the provider's count.
 	if page := search(nil, 3, ""); len(page.GetHits()) != 3 || page.GetTotal() != 7 || page.GetNextCursor() != "3" {
 		t.Fatalf("plain page %v", page)

@@ -1,69 +1,60 @@
 <script lang="ts">
 	import { NeoSwitch } from '#lib/neo/inputs/index.js';
-	import Tip from '#lib/ui/Tip.svelte';
 	import FieldLabel from '#lib/ui/fields/FieldLabel.svelte';
 	import { fieldId } from '#lib/ui/fields/types.js';
 
+	// A toggle after its label on one line, on a form's control column or hugging its label when compact
 	let {
 		checked = $bindable(false),
 		label,
 		info,
-		top = false,
+		compact = false,
 		disabled = false,
 		message,
 		onchange
-	}: { checked?: boolean; label?: string; info?: string; top?: boolean; disabled?: boolean; message?: string; onchange?: (on: boolean) => void } = $props();
+	}: { checked?: boolean; label?: string; info?: string; compact?: boolean; disabled?: boolean; message?: string; onchange?: (on: boolean) => void } = $props();
 
 	const id = fieldId();
 </script>
 
-{#if top}
-	<div class="field">
-		<FieldLabel {label} {info} forId={id} />
-		<div class="switch control">
-			<NeoSwitch {id} bind:checked {disabled} {message} elevation={-1} aria-label={label} onchange={(e) => onchange?.((e.currentTarget as HTMLInputElement).checked)} />
-		</div>
-	</div>
-{:else}
-	<div class="switch">
-		<NeoSwitch {id} bind:checked {disabled} {message} elevation={-1} aria-label={label} onchange={(e) => onchange?.((e.currentTarget as HTMLInputElement).checked)} />
-		{#if label}
-			<Tip text={info} tag="span"><label class="text" class:disabled class:informed={info !== undefined} for={id}>{label}</label></Tip>
-		{/if}
-	</div>
-{/if}
+<div class="switchline" class:compact={compact || !label} class:disabled>
+	{#if label}<span class="words"><FieldLabel {label} {info} forId={id} /></span>{/if}
+	<NeoSwitch {id} bind:checked {disabled} {message} elevation={-1} aria-label={label} onchange={(e) => onchange?.((e.currentTarget as HTMLInputElement).checked)} />
+</div>
 
 <style>
-	.switch {
-		display: inline-flex;
-		gap: 6px;
+	.switchline {
+		display: flex;
+		gap: var(--nebu-space-3);
 		align-items: center;
 		min-width: 0;
-		min-height: var(--nebu-control);
+		min-height: var(--nebu-input-height);
 	}
-	.text {
-		margin-left: 4px;
-		cursor: pointer;
-	}
-	.text.informed {
-		text-decoration: underline dotted var(--nebu-text-faint);
-		text-decoration-thickness: 1px;
-		text-underline-offset: 3px;
-	}
-	.text.disabled {
-		color: var(--nebu-disabled-text);
-		cursor: default;
-	}
-	/* Stretches to the row so the toggle centres on a neighbouring input box under its own label */
-	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		align-self: stretch;
+	/* The label column ends where the second column of a two column form starts */
+	.words {
+		flex: 0 0 min(16rem, calc(50% - var(--nebu-space-3) / 2));
 		min-width: 0;
 	}
-	.control {
-		flex: 1 1 auto;
-		min-height: var(--nebu-input-height);
+	.compact {
+		display: inline-flex;
+		gap: var(--nebu-space-2);
+		min-height: var(--nebu-control);
+	}
+	.compact .words {
+		flex: 0 1 auto;
+	}
+	.switchline :global(.neo-switch-container) {
+		--neo-label-margin: 0;
+
+		padding-right: 0;
+		padding-left: 0;
+	}
+	.disabled .words {
+		color: var(--nebu-disabled-text);
+	}
+	/* Beside a labelled box the toggle drops to the line of the box */
+	:global(.fieldrow:not(.single):has(> :not(.switchline):not(:has(> .switchline))) > .switchline:not(.compact)),
+	:global(.fieldrow:not(.single):has(> :not(.switchline):not(:has(> .switchline))) > * > .switchline:not(.compact)) {
+		margin-top: 28px;
 	}
 </style>

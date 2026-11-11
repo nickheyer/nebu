@@ -1,4 +1,3 @@
-import { ConditionStatus } from '#lib/proto/nebu/v1/meta_pb.js';
 import { BotState } from '#lib/proto/nebu/v1/bot_pb.js';
 import { RouteState } from '#lib/proto/nebu/v1/gateway_pb.js';
 import { InstanceState } from '#lib/proto/nebu/v1/instance_pb.js';
@@ -178,17 +177,6 @@ export function admissionLamp(s: AdmissionState): Lamp {
 		case AdmissionState.DENIED:
 		case AdmissionState.DECLINED:
 		case AdmissionState.FAILED:
-			return 'error';
-		default:
-			return 'muted';
-	}
-}
-
-export function conditionLamp(s: ConditionStatus): Lamp {
-	switch (s) {
-		case ConditionStatus.TRUE:
-			return 'success';
-		case ConditionStatus.FALSE:
 			return 'error';
 		default:
 			return 'muted';

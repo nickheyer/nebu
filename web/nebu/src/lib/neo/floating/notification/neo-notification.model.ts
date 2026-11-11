@@ -1,4 +1,4 @@
-import type { Snippet } from 'svelte';
+import type { Component, Snippet } from 'svelte';
 
 import type { NeoButtonProps } from '#lib/neo/buttons/neo-button.model.js';
 import type { NeoCloseButtonProps } from '#lib/neo/buttons/neo-close-button.model.js';
@@ -132,6 +132,10 @@ export interface NeoNotification {
    * The content of the notification.
    */
   content?: string;
+  /**
+   * A link under the text, with an optional icon after its words, which dismisses the notification when followed.
+   */
+  link?: { label: string; href: string; icon?: Component<{ size?: number | string }> };
   /**
    * Whether the notification is currently loading.
    *

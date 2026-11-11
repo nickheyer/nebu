@@ -96,7 +96,7 @@ func streamable(server *mcp.Server, log *slog.Logger) http.Handler {
 func New(d Deps) *mcp.Server {
 	n := &nebu{
 		d:        d,
-		host:     services.NewHostService(d.Host, d.Doctor, nil),
+		host:     services.NewHostService(d.Host, d.Doctor, nil, d.Store),
 		sources:  services.NewSourceService(d.Sources, d.Inspector, d.Formats, d.Runtimes),
 		runtimes: services.NewRuntimeService(d.Runtimes, d.Host, d.Installs, d.Formats),
 		store:    services.NewStoreService(d.Store, d.Puller, d.Events, d.Formations.PullTo, d.Runtimes),

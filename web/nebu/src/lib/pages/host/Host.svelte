@@ -22,6 +22,7 @@
 	import MemoryLegend from '#lib/ui/MemoryLegend.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
 	import Sparkline from '#lib/ui/Sparkline.svelte';
+	import Swatch from '#lib/ui/Swatch.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import Columns from '#lib/ui/layout/Columns.svelte';
@@ -34,7 +35,6 @@
 	import { modelPhrase, terminal } from '#lib/pages/serve/serve.js';
 	import { buckets, sparkBuckets, started, windowFacts } from '#lib/pages/traffic/traffic.js';
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
-	import PlayIcon from 'phosphor-svelte/lib/PlayIcon';
 
 	let { tab = 'overview' }: { tab?: string } = $props();
 
@@ -96,7 +96,7 @@
 	// Failed checks first, then the ones that passed, then the skipped
 	const order = [ProbeStatus.FAILED, ProbeStatus.OK, ProbeStatus.SKIPPED];
 	const probes = $derived([...(profile?.probes ?? [])].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status)));
-	// Host facts beyond the os and arch the system row already reads
+	// Host facts beyond the os and arch the platform row already reads
 	const facts = $derived(
 		Object.entries(profile?.facts ?? {})
 			.filter(([k]) => k !== 'os' && k !== 'arch')
@@ -151,13 +151,13 @@
 
 	function deviceRows(d: Device) {
 		return [
-			{ label: 'ID', value: d.id, mono: true, copy: true, tip: d.id },
+			{ label: 'ID', value: d.id, mono: true, copy: true },
 			{ label: 'vendor', value: d.vendor },
-			{ label: 'name', value: d.name, tip: d.name },
+			{ label: 'name', value: d.name },
 			{ label: 'memory', value: d.memoryTotalBytes ? `${bytes(d.memoryTotalBytes - d.memoryFreeBytes)} of ${bytes(d.memoryTotalBytes)}` : poolMemory(d.poolId) },
 			...Object.entries(d.facts)
 				.sort(([a], [b]) => a.localeCompare(b))
-				.map(([k, v]) => ({ label: factLabel(k), value: v, mono: true, tip: v }))
+				.map(([k, v]) => ({ label: factLabel(k), value: v, mono: true }))
 		];
 	}
 
@@ -176,13 +176,21 @@
 		return Number(s.totalBytes - s.freeBytes);
 	}
 
-	// The store's own bytes in the accent, the rest of the mount's use in grey
+	const holdFills: Segment['kind'][] = ['used', 'reservation', 'planned'];
+
+	// What each use holds on a mount, in the order the mount lists its uses, each in its own fill
+	function storageHolds(s: Storage): Segment[] {
+		const at = (key: string) => s.uses.indexOf(key.split(', ')[0]!);
+		return Object.entries(s.useBytes)
+			.sort(([a], [b]) => at(a) - at(b))
+			.map(([label, n], i) => ({ kind: holdFills[i % holdFills.length]!, label, bytes: Number(n) }));
+	}
+
+	// Each use's bytes in its fill, the rest of the mount's use in grey
 	function storageSegments(s: Storage): Segment[] {
-		const total = storageUsed(s);
-		const store = live.store;
-		const own = store && s.uses.includes('store') ? Math.min(total, Number(store.blobBytes + store.partialBytes + store.cacheBytes)) : 0;
-		const segments: Segment[] = own > 0 ? [{ kind: 'used', label: 'store', bytes: own }, { kind: 'other', label: 'other', bytes: total - own }] : [{ kind: 'other', label: 'other', bytes: total }];
-		return [...segments, { kind: 'free', label: 'free', bytes: Number(s.freeBytes) }];
+		const holds = storageHolds(s);
+		const other = Math.max(0, storageUsed(s) - holds.reduce((sum, h) => sum + h.bytes, 0));
+		return [...holds, { kind: 'other', label: 'other', bytes: other }, { kind: 'free', label: 'free', bytes: Number(s.freeBytes) }];
 	}
 
 	function probeState(p: ProbeResult): 'ok' | 'failed' | 'skipped' {
@@ -191,7 +199,7 @@
 </script>
 
 {#snippet deviceRow(bar: PoolBar)}
-	<ListRow primary={bar.name || bar.label} primaryWidth="30ch" primaryTip={bar.devices.map((d) => d.name).join('\n') || undefined}>
+	<ListRow primary={bar.name || bar.label} primaryWidth="30ch">
 		{#snippet leading()}<span class="devlabel">{bar.label}</span>{/snippet}
 		{#snippet instrument()}
 			<div class="gauge">
@@ -242,14 +250,21 @@
 		{:else if profile.storage.length === 0}
 			<Empty text="No storage probed" />
 		{:else}
-			<List head={{ primary: 'Mount', secondary: 'Filesystem', instrument: 'Used', facts: ['Holds'] }}>
+			<List head={{ primary: 'Mount', secondary: 'Filesystem', instrument: 'Used', action: 'Holds' }}>
 				{#each profile.storage as s (s.path)}
-					<ListRow primary={s.path} primaryKind="path" primaryWidth="24ch" secondary={s.filesystem} secondaryWidth="10ch" facts={[{ value: s.uses.join(', '), tip: s.uses.join('\n') }]}>
+					<ListRow primary={s.path} primaryKind="path" primaryWidth="24ch" secondary={s.filesystem} secondaryWidth="10ch">
 						{#snippet instrument()}
 							<div class="gauge">
 								<span class="track"><Bar segments={storageSegments(s)} total={Number(s.totalBytes)} format={(n) => bytes(n)} /></span>
 								<Tip text="{bytes(s.freeBytes)} free" tag="span"><span class="reading">{usedOverTotal(storageUsed(s), s.totalBytes)}</span></Tip>
 							</div>
+						{/snippet}
+						{#snippet action()}
+							<span class="holds">
+								{#each storageHolds(s) as h (h.label)}
+									<span class="hold"><Swatch kind={h.kind} />{h.label}<span class="held">{bytes(h.bytes)}</span></span>
+								{/each}
+							</span>
 						{/snippet}
 					</ListRow>
 				{/each}
@@ -283,7 +298,7 @@
 
 {#snippet servingRow(inst: Instance)}
 	{@const own = tracesOf(inst)}
-	<ListRow lamp={instanceLamp(inst.state)} shape={instanceShape(inst.state)} primary={inst.name} primaryWidth="24ch" secondary={modelPhrase(inst)} secondaryKind="repo" secondaryWidth="36ch" href="/serve/{encodeURIComponent(inst.id)}" facts={[{ value: perMinute(own.length / trafficMinutes), tip: `Requests over ${trafficMinutes} minutes` }]}>
+	<ListRow lamp={instanceLamp(inst.state)} shape={instanceShape(inst.state)} primary={inst.name} primaryTip={modelPhrase(inst)} href="/serve/{encodeURIComponent(inst.id)}" facts={[{ value: perMinute(own.length / trafficMinutes), tip: `Requests over ${trafficMinutes} minutes` }]}>
 		{#snippet action()}
 			{#if own.length}<Sparkline points={buckets(own, started, windowFrom, clockTick.now, sparkBuckets, (l) => l.length)} width={96} height={20} />{/if}
 		{/snippet}
@@ -293,11 +308,11 @@
 {#snippet servingCard()}
 	<Card title="Serving" flush>
 		{#if !live.ready}
-			<Skeleton rows={2} primary="24ch" secondary="36ch" facts={1} menu={false} />
+			<Skeleton rows={2} primary="24ch" secondary={false} facts={1} menu={false} />
 		{:else if serving.length === 0}
-			<Empty icon={PlayIcon} text="Nothing serving" action="Launch" href="/serve/launch" />
+			<Empty text="Nothing serving" action="Launch" href="/serve/launch" row />
 		{:else}
-			<List head={{ primary: 'Name', secondary: 'Model', facts: ['Requests'] }}>
+			<List>
 				{#each serving as inst (inst.id)}{@render servingRow(inst)}{/each}
 			</List>
 		{/if}
@@ -324,7 +339,7 @@
 			<KeyRows
 				rows={[
 					{ label: 'host', value: profile?.hostname ?? '' },
-					{ label: 'system', value: profile ? `${profile.os} ${profile.arch}` : '' },
+					{ label: 'platform', value: profile ? `${profile.os} ${profile.arch}` : '' },
 					{ label: 'probed', value: profile?.probedAt ? when(profile.probedAt) : '' },
 					{ label: 'version', value: gateway ? `${gateway.implementation} ${gateway.version}`.trim() : '', mono: true },
 					{ label: 'listener', value: gateway?.listeners.map((l) => l.addr).join(', ') ?? '', mono: true, copy: true },
@@ -332,7 +347,7 @@
 					{ label: 'auth', value: gateway ? (gateway.auth ? 'on' : 'off') : '' },
 					{ label: 'metrics', value: gateway?.metricsAddr ?? '', mono: true },
 					{ label: 'home', value: profile?.home ?? '', mono: true, copy: true },
-					...facts.map(([k, v]) => ({ label: factLabel(k), value: v, mono: true, tip: v }))
+					...facts.map(([k, v]) => ({ label: factLabel(k), value: v, mono: true }))
 				]}
 			/>
 			{#if gatewayError}<p class="error-text secondary">{gatewayError}</p>{/if}
@@ -387,6 +402,24 @@
 		font-variant-numeric: tabular-nums;
 		text-align: right;
 		white-space: nowrap;
+	}
+	.holds {
+		display: inline-flex;
+		flex-wrap: wrap;
+		gap: var(--nebu-space-1) var(--nebu-space-4);
+		justify-content: flex-end;
+		font-size: var(--nebu-text-secondary);
+		color: var(--nebu-text-muted);
+	}
+	.hold {
+		display: inline-flex;
+		gap: 6px;
+		align-items: center;
+		white-space: nowrap;
+	}
+	.held {
+		font-variant-numeric: tabular-nums;
+		color: var(--neo-text-color);
 	}
 	.legend {
 		padding: var(--nebu-space-3) var(--nebu-card-pad) var(--nebu-space-2);

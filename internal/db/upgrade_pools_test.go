@@ -20,7 +20,7 @@ func TestUpgradedRouteNamedAgainByItsSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	old.Close()
-	d, err := db.Open(path, func(ctx context.Context, d *db.DB) error { return d.DropLegacyChatFiles(ctx) })
+	d, err := db.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

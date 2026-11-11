@@ -68,6 +68,8 @@ type Runtimes interface {
 type Instances interface {
 	// How the instance's chat template offers tools
 	ToolSupport(instanceID string) v1.ToolSupport
+	// Whether prompts to the instance lose Claude Code's billing header, true for one this node does not run
+	StripsBillingHeader(instanceID string) bool
 	// The generation modes a media instance serves, img_gen and vid_gen
 	Modes(instanceID string) []string
 	// The chat template the instance's model carries, rendered for prompts sent over gRPC

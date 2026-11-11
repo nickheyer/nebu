@@ -41,7 +41,8 @@ type plainInstances struct{}
 func (plainInstances) ToolSupport(string) v1.ToolSupport {
 	return v1.ToolSupport_TOOL_SUPPORT_UNSPECIFIED
 }
-func (plainInstances) Modes(string) []string { return nil }
+func (plainInstances) StripsBillingHeader(string) bool { return true }
+func (plainInstances) Modes(string) []string           { return nil }
 func (plainInstances) LoadAdapter(context.Context, string, string, string) error {
 	return errors.New("no adapter loads in this test")
 }

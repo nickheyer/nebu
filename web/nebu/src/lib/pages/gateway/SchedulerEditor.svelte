@@ -10,12 +10,10 @@
 	import Confirm from '#lib/ui/Confirm.svelte';
 	import Code from '#lib/ui/fields/Code.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
-	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Section from '#lib/ui/layout/Section.svelte';
-	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { schedulerSkeleton } from '#lib/pages/gateway/gateway.js';
 
 	let { config, references, onclose }: { config?: SchedulerConfig; references: number; onclose: () => void } = $props();
@@ -28,12 +26,9 @@
 	let codeError = $state<string | undefined>(undefined);
 	let saving = $state(false);
 	let error = $state<string | undefined>(undefined);
-	let height = $state(800);
 
 	const current = $derived(editing ? live.schedulerConfigs.get(name) : undefined);
 	const dirty = $derived(!editing || yaml !== start?.spec?.yaml);
-	// Lines that fill the panel below its header and above the save bar, a line being 19.5px
-	const rows = $derived(Math.max(12, Math.floor((height - (editing ? 330 : 420)) / 19.5)));
 	const complete = $derived(name.trim() !== '' && valid);
 
 	function draft() {
@@ -65,27 +60,48 @@
 	}
 </script>
 
-<svelte:window bind:innerHeight={height} />
-
-<PanelHeader title={editing ? name : 'New scheduler'} subtitle={editing ? plural(references, 'pool') : undefined} {onclose} />
-<Stack gap={24}>
-	<FormSection>
+<div class="top">
+	<PanelHeader title={editing ? name : 'New scheduler'} subtitle={editing ? plural(references, 'pool') : undefined} {onclose} />
+</div>
+<div class="body">
+	<div class="form">
 		{#if !editing}
 			<FieldRow>
 				<Text bind:value={name} label="Name" required max={64} />
 				<span></span>
 			</FieldRow>
 		{/if}
-		<Code bind:value={yaml} language="yaml" bind:valid bind:error={codeError} {rows} label="Configuration" />
-	</FormSection>
+		<Code bind:value={yaml} language="yaml" bind:valid bind:error={codeError} fill rows={12} label="Configuration" />
+	</div>
 	{#if current?.status?.conditions.length}
 		<Section title="Status" level={3}>
 			<Conditions conditions={current.status?.conditions} />
 		</Section>
 	{/if}
-</Stack>
+</div>
 {#snippet deleteButton()}
 	<Confirm label="Delete" question="Delete {name}?" danger placement="top-start" onconfirm={remove} />
 {/snippet}
 
 <SaveBar {dirty} always={!editing} {saving} {error} label={editing ? 'Save' : 'Create'} disabled={!complete} leading={editing && references === 0 ? deleteButton : undefined} onsave={save} ondiscard={onclose} />
+
+<style>
+	.top {
+		flex: none;
+	}
+	/* The editor takes the height the sheet has under the header, so both columns pass it down */
+	.body,
+	.form {
+		display: flex;
+		flex: 1 1 auto;
+		flex-direction: column;
+		min-width: 0;
+		min-height: 0;
+	}
+	.body {
+		gap: 24px;
+	}
+	.form {
+		gap: 12px;
+	}
+</style>

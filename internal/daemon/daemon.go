@@ -209,14 +209,14 @@ func New(cfg *v1.Config, log *slog.Logger, level *slog.LevelVar, recent *launch.
 	if err != nil {
 		return nil, err
 	}
-	blobStore.MaxBytes = cfg.GetStore().GetMaxBytes()
+	blobStore.MaxBytes.Store(cfg.GetStore().GetMaxBytes())
 	d.Store = blobStore
 	tr := cfg.GetTransfer()
 	fetcher := transfer.New(int(tr.GetWorkers()), int64(tr.GetChunkBytes()), int(tr.GetRetries()), log)
 	if fetcher.Schedule, err = transfer.NewSchedule(tr.GetMaxBytesPerSecond(), tr.GetWindows()); err != nil {
 		return nil, fmt.Errorf("transfer windows: %w", err)
 	}
-	if d.DB, err = db.Open(filepath.Join(cfg.GetDataDir(), "nebu.db"), chats.Upgrade(blobStore)); err != nil {
+	if d.DB, err = db.Open(filepath.Join(cfg.GetDataDir(), "nebu.db")); err != nil {
 		return nil, err
 	}
 	blobStore.Refs = func() ([]string, error) { return d.DB.ChatFileDigests(context.Background()) }
@@ -269,7 +269,8 @@ func New(cfg *v1.Config, log *slog.Logger, level *slog.LevelVar, recent *launch.
 		Log:         log,
 		Stored:      blobStore.ListManifests,
 	}
-	d.Puller = &pull.Puller{Inspector: d.Inspector, Store: blobStore, Fetcher: fetcher, Tasks: d.Tasks, Events: bus, MinFree: cfg.GetMinFreeBytes()}
+	d.Puller = &pull.Puller{Inspector: d.Inspector, Store: blobStore, Fetcher: fetcher, Tasks: d.Tasks, Events: bus}
+	d.Puller.MinFree.Store(cfg.GetMinFreeBytes())
 	d.Installs = &installs.Manager{
 		DB:          d.DB,
 		RuntimesDir: filepath.Join(cfg.GetDataDir(), "runtimes"),
@@ -336,7 +337,7 @@ func New(cfg *v1.Config, log *slog.Logger, level *slog.LevelVar, recent *launch.
 	d.Pools.SetWaker(d.Slots)
 	// Protect running models and slot relaunch targets from eviction
 	d.Puller.Keep = d.keeps
-	d.Notifier = &notify.Notifier{Webhooks: cfg.GetNotify().GetWebhooks(), Events: bus, Log: log}
+	d.Notifier = &notify.Notifier{Events: bus, Log: log, Host: d.hostLabel}
 	if err = d.openMesh(context.Background(), rts, calibration, bus); err != nil {
 		return nil, err
 	}
@@ -352,11 +353,21 @@ func New(cfg *v1.Config, log *slog.Logger, level *slog.LevelVar, recent *launch.
 	}
 	d.Settings.Referenced = d.toolServerUsers
 	d.Chats = &chats.Manager{DB: d.DB, Blobs: blobStore, Log: log}
-	d.Doctor = &doctor.Doctor{Host: prober, Runtimes: rts, Sources: srcs, Store: blobStore, Installs: d.Installs, Tasks: d.Tasks, MinFree: cfg.GetMinFreeBytes()}
+	d.Doctor = &doctor.Doctor{Host: prober, Runtimes: rts, Sources: srcs, Store: blobStore, Installs: d.Installs, Tasks: d.Tasks}
+	d.Doctor.MinFree.Store(cfg.GetMinFreeBytes())
 	d.Instances.Probe = reprobe(prober, log)
 	prober.Decorate = d.Instances.Attribute
 	if err = d.openHandlers(fmts, rts, recent, bus); err != nil {
 		return nil, err
+	}
+	// Settings saved in the web UI stand over the config file from the first request on
+	settingsFloor, err := settingsBase(cfg)
+	if err != nil {
+		return nil, err
+	}
+	d.Settings.Check, d.Settings.Apply = d.checkSettings, d.applySettings
+	if err = d.Settings.Rebase(settingsFloor); err != nil {
+		return nil, fmt.Errorf("settings: %w", err)
 	}
 	return d, nil
 }
@@ -546,6 +557,7 @@ func (d *Daemon) openHandlers(fmts *formats.Registry, rts *runtimes.Registry, re
 		Host:      d.Host,
 		Doctor:    d.Doctor,
 		Settings:  d.Settings,
+		Notifier:  d.Notifier,
 		Sources:   d.Sources,
 		Formats:   fmts,
 		Runtimes:  rts,

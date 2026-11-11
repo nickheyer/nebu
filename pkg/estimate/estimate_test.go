@@ -679,14 +679,11 @@ func TestLlamaCppLoadsWhatTheParamsName(t *testing.T) {
 	if err != nil || plan.GetWeightsBytes() != trunk+3*mib {
 		t.Fatalf("named projector: %+v %v", plan, err)
 	}
-	// A projector the plan cannot size plans uncounted, and the plan says so
+	// A projector the plan cannot size plans uncounted
 	gone := input(d, host(24*gib, 64*gib), defaults(params, map[string]any{"mmproj": projector + ".gone"}))
 	plan, err = p.Plan(gone)
 	if err != nil || plan.GetWeightsBytes() != trunk {
 		t.Fatalf("a missing projector is not counted: %+v %v", plan, err)
-	}
-	if _, warning := p.ParamStates(gone, plan); !strings.Contains(warning, "projector") || !strings.Contains(warning, "not counted") {
-		t.Fatalf("the plan names the projector it left out: %q", warning)
 	}
 	// draft-mtp on a model without heads plans, llama.cpp judging it
 	if plan, err := p.Plan(input(descriptor(4, 100*mib, 0), host(24*gib, 64*gib), defaults(params, map[string]any{"spec_type": "draft-mtp"}))); err != nil || plan.GetParams()["spec_type"] != "draft-mtp" {

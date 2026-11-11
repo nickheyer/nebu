@@ -83,7 +83,18 @@ func OpenSessions(keyFile string, ttl time.Duration) (*Sessions, error) {
 }
 
 // How long a new session lasts
-func (s *Sessions) TTL() time.Duration { return s.ttl }
+func (s *Sessions) TTL() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ttl
+}
+
+// Changes how long sessions issued from now on last
+func (s *Sessions) SetTTL(ttl time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ttl = ttl
+}
 
 // Adds a check every session must pass, such as its account still existing
 func (s *Sessions) Validate(fn func(*Session) bool) {
@@ -109,7 +120,7 @@ func (s *Sessions) Proxies() Proxies {
 // Starts a session for the browser, stamping its lifetime
 func (s *Sessions) Issue(w http.ResponseWriter, r *http.Request, sess Session) (*Session, error) {
 	sess.Issued = s.now()
-	sess.Expires = sess.Issued.Add(s.ttl)
+	sess.Expires = sess.Issued.Add(s.TTL())
 	c, err := s.Cookie(sess)
 	if err != nil {
 		return nil, err

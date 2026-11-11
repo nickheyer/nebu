@@ -19,6 +19,7 @@ class Defaults {
 				toast.error('Gateway defaults failed to load', reason(err));
 			});
 	}
+
 }
 
 export const defaults = new Defaults();

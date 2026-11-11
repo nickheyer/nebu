@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/internal/tasks"
@@ -48,7 +49,7 @@ type Doctor struct {
 	Store    *store.Store
 	Installs *installs.Manager
 	Tasks    *tasks.Manager
-	MinFree  uint64
+	MinFree  atomic.Uint64
 
 	mu      sync.Mutex
 	running *v1.Task
@@ -153,8 +154,8 @@ func (d *Doctor) run(ctx context.Context, h *tasks.Handle) error {
 	}
 	for _, st := range profile.GetStorage() {
 		summary := fmt.Sprintf("%s free of %s for %s", estimate.Human(st.GetFreeBytes()), estimate.Human(st.GetTotalBytes()), strings.Join(st.GetUses(), ", "))
-		if st.GetFreeBytes() < d.MinFree {
-			add("storage."+st.GetPath(), warn, summary, fmt.Sprintf("below %s, models will not fit", estimate.Human(d.MinFree)))
+		if floor := d.MinFree.Load(); st.GetFreeBytes() < floor {
+			add("storage."+st.GetPath(), warn, summary, fmt.Sprintf("below %s, models will not fit", estimate.Human(floor)))
 		} else {
 			add("storage."+st.GetPath(), ok, summary, "")
 		}

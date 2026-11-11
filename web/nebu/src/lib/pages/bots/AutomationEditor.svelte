@@ -29,7 +29,7 @@
 {#snippet actionAdvanced()}
 	<FieldRow>
 		<Picker bind:value={() => action.model || undefined, (v) => (action.model = v ?? '')} fetch={routes} label="Model" placeholder={acting?.model || undefined} clearable current={action.model || undefined} />
-		<Switch bind:checked={action.reply} label="Reply to the message" top />
+		<Switch bind:checked={action.reply} label="Reply to the message" />
 	</FieldRow>
 {/snippet}
 
@@ -37,7 +37,7 @@
 	<FormSection>
 		<FieldRow>
 			<Text bind:value={automation.name} label="Name" max={64} required />
-			<Switch bind:checked={automation.enabled} label="Enabled" top />
+			<Switch bind:checked={automation.enabled} label="Enabled" />
 		</FieldRow>
 	</FormSection>
 	<FormSection title="When">
@@ -67,7 +67,7 @@
 			{#if action.kind === ActionKind.REACT}
 				<Text bind:value={action.emoji} label="Emoji" max={8} />
 			{:else if action.kind === ActionKind.TEXT}
-				<Switch bind:checked={action.reply} label="Reply to the message" top />
+				<Switch bind:checked={action.reply} label="Reply to the message" />
 			{/if}
 		</FieldRow>
 		{#if action.kind !== ActionKind.REACT}

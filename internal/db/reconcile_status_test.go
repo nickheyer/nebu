@@ -31,7 +31,7 @@ func statusRequest(slotID string) *v1.RunRequest {
 
 // Status, desired state and request fields written by the reconcilers come back from the store unchanged
 func TestReconcileStatusRoundTrip(t *testing.T) {
-	d, err := Open(filepath.Join(t.TempDir(), "nebu.db"), func(ctx context.Context, d *DB) error { return d.DropLegacyChatFiles(ctx) })
+	d, err := Open(filepath.Join(t.TempDir(), "nebu.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,7 +14,7 @@
 	import List from '#lib/ui/List.svelte';
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import Pop from '#lib/ui/Pop.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
+	import StateWord from '#lib/ui/StateWord.svelte';
 	import Duration from '#lib/ui/fields/Duration.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
@@ -122,7 +122,7 @@
 						onclick={() => goto(`/mesh/federation/${encodeURIComponent(n.id)}`)}
 						menu={[{ label: 'Drop', danger: true, confirm: `Drop ${fed?.meshName || n.name}`, onclick: () => drop(n) }]}
 					>
-						{#snippet badges()}<StatePill label={enumLabel(FederationRoleSchema, fed?.role ?? FederationRole.UNSPECIFIED)} lamp="primary" />{/snippet}
+						{#snippet badges()}<StateWord label={enumLabel(FederationRoleSchema, fed?.role ?? FederationRole.UNSPECIFIED)} lamp="primary" />{/snippet}
 					</ListRow>
 				{/each}
 			</List>

@@ -5,8 +5,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -119,6 +121,12 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 	}
 	results := make([]Result, len(p.probes))
 	var wg sync.WaitGroup
+	held := make([]uint64, len(p.uses))
+	for i, use := range p.uses {
+		if first(p.uses, i) == i {
+			wg.Go(func() { held[i] = usage(filepath.Clean(use.Path), nested(p.uses, i)) })
+		}
+	}
 	for i, pr := range p.probes {
 		wg.Add(1)
 		go func(i int, pr Probe) {
@@ -141,24 +149,59 @@ func (p *Prober) probe(ctx context.Context) (*v1.HostProfile, error) {
 		}
 	}
 	byMount := map[string]*v1.Storage{}
-	for _, use := range p.uses {
+	keys := make([]string, len(p.uses))
+	for i, use := range p.uses {
 		st, err := stat(use.Path)
 		if err != nil {
 			continue
 		}
 		if existing, ok := byMount[st.GetPath()]; ok {
-			existing.Uses = append(existing.Uses, use.Role)
-			continue
+			st = existing
+		} else {
+			st.UseBytes = map[string]uint64{}
+			byMount[st.GetPath()] = st
+			profile.Storage = append(profile.Storage, st)
 		}
-		st.Uses = []string{use.Role}
-		byMount[st.GetPath()] = st
-		profile.Storage = append(profile.Storage, st)
+		st.Uses = append(st.Uses, use.Role)
+		// Uses naming one directory share one measure under their joined names
+		if f := first(p.uses, i); f != i {
+			joined := keys[f] + ", " + use.Role
+			delete(st.UseBytes, keys[f])
+			keys[f] = joined
+			st.UseBytes[joined] = held[f]
+		} else {
+			keys[i] = use.Role
+			st.UseBytes[use.Role] = held[i]
+		}
 	}
 	linkPools(profile)
 	if p.Decorate != nil {
 		p.Decorate(profile)
 	}
 	return profile, nil
+}
+
+// Directories of the other uses lying inside the directory of use i, which its own measure leaves out
+func nested(uses []Use, i int) []string {
+	root := filepath.Clean(uses[i].Path)
+	var out []string
+	for j, other := range uses {
+		path := filepath.Clean(other.Path)
+		if j != i && strings.HasPrefix(path, root+string(filepath.Separator)) {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+// Index of the first use naming the directory use i names
+func first(uses []Use, i int) int {
+	for j, other := range uses[:i] {
+		if filepath.Clean(other.Path) == filepath.Clean(uses[i].Path) {
+			return j
+		}
+	}
+	return i
 }
 
 // Names on each device the pool it draws on and drops an accelerator no pool backs

@@ -32,6 +32,7 @@ var wantClass = map[string]string{
 	nebuv1connect.AuthServiceCreateUserProcedure:               "admin",
 	nebuv1connect.AuthServiceDeleteUserProcedure:               "admin",
 	nebuv1connect.AuthServiceSetPasswordProcedure:              "inference",
+	nebuv1connect.AuthServiceSetRoleProcedure:                  "admin",
 	nebuv1connect.AuthServiceListTokensProcedure:               "inference",
 	nebuv1connect.AuthServiceCreateTokenProcedure:              "inference",
 	nebuv1connect.AuthServiceDeleteTokenProcedure:              "inference",
@@ -153,6 +154,7 @@ var wantClass = map[string]string{
 	nebuv1connect.RuntimeServiceRemoveInstallProcedure:         "operate",
 	nebuv1connect.SettingsServiceGetSettingsProcedure:          "admin",
 	nebuv1connect.SettingsServiceUpdateSettingsProcedure:       "admin",
+	nebuv1connect.SettingsServiceTestWebhookProcedure:          "admin",
 	nebuv1connect.SlotServiceListSlotsProcedure:                "read",
 	nebuv1connect.SlotServiceGetSlotProcedure:                  "read",
 	nebuv1connect.SlotServiceCreateSlotProcedure:               "operate",
@@ -765,4 +767,50 @@ func TestCertGenerationAndReuse(t *testing.T) {
 	if _, _, err := LoadOrCreateCert(certFile, keyFile, hosts, now); err == nil {
 		t.Fatal("an unreadable pair should fail")
 	}
+}
+
+// A role change ends the account's sessions, caps its tokens to the new role, and never takes the last admin
+func TestSetRole(t *testing.T) {
+	users, _ := openUsers(t)
+	ctx := context.Background()
+	ann, _ := users.Setup(ctx, "ann", "ann-password")
+	admin := Identity{Subject: ann.GetId(), Provider: ProviderLocal, Name: "ann", Role: v1.Role_ROLE_ADMIN, Scopes: RoleScopes(v1.Role_ROLE_ADMIN)}
+	bob, err := users.Create(ctx, admin, "bob", "bob-password", v1.Role_ROLE_ADMIN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobID := Identity{Subject: bob.GetId(), Provider: ProviderLocal, Name: "bob", Role: v1.Role_ROLE_ADMIN, Scopes: RoleScopes(v1.Role_ROLE_ADMIN)}
+	tok, err := users.tokens.Create(ctx, bobID, "all", []v1.Scope{v1.Scope_SCOPE_ADMIN})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &Session{Provider: ProviderLocal, Name: "bob", Role: v1.Role_ROLE_ADMIN, Issued: time.Now().Add(time.Minute)}
+	if !users.Valid(session) {
+		t.Fatal("bob's admin session is refused before the change")
+	}
+	if _, err := users.SetRole(ctx, bobID.withRole(v1.Role_ROLE_OPERATOR), "ann", v1.Role_ROLE_INFERENCE); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("an operator changing a role %v", err)
+	}
+	changed, err := users.SetRole(ctx, admin, "bob", v1.Role_ROLE_INFERENCE)
+	if err != nil || changed.GetRole() != v1.Role_ROLE_INFERENCE {
+		t.Fatalf("role change %v %v", changed, err)
+	}
+	if users.Valid(session) {
+		t.Fatal("bob's admin session outlived the role change")
+	}
+	if id, ok := users.tokens.Identify(ctx, tok.GetSecret()); !ok || slices.Contains(id.Scopes, v1.Scope_SCOPE_ADMIN) {
+		t.Fatalf("bob's token keeps the admin scope after the change: %+v %v", id, ok)
+	}
+	if _, err := users.SetRole(ctx, admin, "ann", v1.Role_ROLE_OPERATOR); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("demoting the last admin %v", err)
+	}
+	if _, err := users.SetRole(ctx, admin, "nobody", v1.Role_ROLE_OPERATOR); !errors.Is(err, ErrUnknownUser) {
+		t.Fatalf("changing an unknown account %v", err)
+	}
+}
+
+// The identity acting under another role
+func (i Identity) withRole(r v1.Role) Identity {
+	i.Role, i.Scopes = r, RoleScopes(r)
+	return i
 }

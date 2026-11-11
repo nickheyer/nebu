@@ -22,7 +22,26 @@ func userCommands() command {
 		{name: "add", summary: "add an account", run: runUsersAdd, local: true},
 		{name: "remove", summary: "remove an account", run: runUsersRemove, local: true},
 		{name: "passwd", summary: "change an account's password", run: runUsersPasswd, local: true},
+		{name: "role", summary: "change an account's role", run: runUsersRole, local: true},
 	}}
+}
+
+func runUsersRole(ctx context.Context, e *env, args []string) error {
+	positional, err := e.parse(e.flags("users role"), args, 2, 2, "users role <username> <admin|operator|inference>")
+	if err != nil {
+		return err
+	}
+	role, err := parseRole(positional[1])
+	if err != nil {
+		return err
+	}
+	resp, err := e.cl.auth.SetRole(ctx, connect.NewRequest(&v1.SetRoleRequest{Username: positional[0], Role: role}))
+	if err != nil {
+		return err
+	}
+	return e.print(resp.Msg, func(w io.Writer) {
+		fmt.Fprintf(w, "%s is now %s\n", resp.Msg.GetUser().GetUsername(), auth.RoleName(resp.Msg.GetUser().GetRole()))
+	})
 }
 
 func runUsersList(ctx context.Context, e *env, args []string) error {

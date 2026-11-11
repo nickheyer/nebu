@@ -736,7 +736,8 @@ CREATE TABLE traces (
   record BLOB NOT NULL,
   request TEXT NOT NULL,
   upstream_request TEXT NOT NULL,
-  response TEXT NOT NULL
+  response TEXT NOT NULL,
+  reasoning TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX traces_by_started ON traces (started_at);
 CREATE INDEX traces_by_owner ON traces (owner, started_at);

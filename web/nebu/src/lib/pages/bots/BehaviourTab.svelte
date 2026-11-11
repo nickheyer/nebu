@@ -69,7 +69,7 @@
 		</FormSection>
 		<FormSection title="Commands">
 			<FieldRow>
-				<Switch bind:checked={commands.enabled} label="Slash commands" top />
+				<Switch bind:checked={commands.enabled} label="Slash commands" />
 				<Text bind:value={engagement.prefix} label="Text prefix" info="Starts a text command, such as !" max={1} />
 			</FieldRow>
 			{#if guilds.length}
@@ -85,7 +85,7 @@
 			</FieldRow>
 			<FieldRow wide>
 				<Duration bind:value={() => memory.windowMinutes * 60, (s) => (memory.windowMinutes = Math.round(s / 60))} base="s" max={604_800} label="No older than" emptyZero />
-				<Switch bind:checked={memory.includeNames} label="Author names" top />
+				<Switch bind:checked={memory.includeNames} label="Author names" />
 			</FieldRow>
 		</FormSection>
 		<FormSection title="Media">

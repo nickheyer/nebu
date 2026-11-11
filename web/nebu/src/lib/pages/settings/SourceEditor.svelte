@@ -101,7 +101,7 @@
 			<Select value={kind} options={providerOptions} label="Provider" disabled={editing} onchange={pickProvider} />
 		</FieldRow>
 		<FieldRow>
-			<Text bind:value={id} label="Id" info="Used in URLs, fixed once created" readonly={editing} mono required />
+			<Text bind:value={id} label="Id" readonly={editing} mono required />
 			<Text bind:value={name} label="Name" placeholder={id} />
 		</FieldRow>
 	</FormSection>

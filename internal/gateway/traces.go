@@ -329,7 +329,7 @@ func (r *Recorder) Get(ctx context.Context, v Viewer, id string) (*v1.Trace, boo
 // Trace metadata for lists and events, the request, response and tool call bodies left out
 func summary(t *v1.Trace) *v1.Trace {
 	out := proto.Clone(t).(*v1.Trace)
-	out.Request, out.UpstreamRequest, out.Response = "", "", ""
+	out.Request, out.UpstreamRequest, out.Response, out.Reasoning = "", "", "", ""
 	for _, c := range out.ToolCalls {
 		c.Arguments, c.Result = "", ""
 	}
@@ -359,6 +359,8 @@ type traceSink struct {
 	// Whether the answer's text is kept for the trace, off for a ghost request that leaves none
 	keep bool
 	text strings.Builder
+	// The reasoning before the answer, kept beside its text
+	thought strings.Builder
 	// When the first text, thinking or call arrived, zero until one did
 	first time.Time
 	res   *chat.Result
@@ -380,7 +382,12 @@ func (s *traceSink) event(ev chat.Event) {
 		if s.keep && s.text.Len() < traceBodyCap {
 			s.text.WriteString(ev.Text)
 		}
-	case chat.Thought, chat.Called:
+	case chat.Thought:
+		s.mark()
+		if s.keep && s.thought.Len() < traceBodyCap {
+			s.thought.WriteString(ev.Text)
+		}
+	case chat.Called:
 		s.mark()
 	case chat.Stopped:
 		if ev.Res != nil {
@@ -415,6 +422,9 @@ func (s *traceSink) result(res *chat.Result) {
 	if s.keep && res.Text != "" && s.text.Len() == 0 {
 		s.text.WriteString(res.Text)
 	}
+	if s.keep && res.Thinking != "" && s.thought.Len() == 0 {
+		s.thought.WriteString(res.Thinking)
+	}
 	s.t.ToolCalls = nil
 	for _, run := range res.Runs {
 		s.t.ToolCalls = append(s.t.ToolCalls, traceRun(run))
@@ -424,10 +434,20 @@ func (s *traceSink) result(res *chat.Result) {
 	}
 }
 
-// Keeps the answer's text on the trace, capped
+// Keeps the answer's text and reasoning on the trace, capped
 func (s *traceSink) close() {
 	if s.text.Len() > 0 {
 		s.t.Response = cappedString(s.text.String())
+	}
+	if s.thought.Len() > 0 {
+		s.t.Reasoning = cappedString(s.thought.String())
+	}
+}
+
+// Keeps the body a runtime refused the request with as the trace's response, capped
+func (s *traceSink) refused(body []byte) {
+	if s.keep && s.text.Len() == 0 && len(body) > 0 {
+		s.t.Response = capped(body)
 	}
 }
 

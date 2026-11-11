@@ -526,6 +526,9 @@ func Resolve(rt Runtime, overrides map[string]string) (estimate.Params, error) {
 	for name, raw := range overrides {
 		p, ok := byName[name]
 		if !ok {
+			if r, retires := rt.(Retirer); retires && slices.Contains(r.Retired(), name) {
+				continue
+			}
 			return nil, fmt.Errorf("%w: unknown param %q for runtime %s", ErrParam, name, rt.ID())
 		}
 		v, err := convert(p, raw)
@@ -534,7 +537,31 @@ func Resolve(rt Runtime, overrides map[string]string) (estimate.Params, error) {
 		}
 		out[name] = v
 	}
+	if c, ok := rt.(Checker); ok {
+		if err := c.Check(out); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrParam, err)
+		}
+	}
 	return out, nil
+}
+
+// The param a launch sets to false to keep Claude Code's billing header in the prompts the gateway rewrites for it
+const ParamStripBillingHeader = "strip_billing_header"
+
+// A runtime naming params it took once and now sets itself, which a stored launch may still carry
+type Retirer interface {
+	Retired() []string
+}
+
+// A runtime that refuses resolved values its params' types and bounds cannot rule out
+type Checker interface {
+	Check(estimate.Params) error
+}
+
+// Marks a string parameter as a comma separated list of files, each written the way the list says
+func fileList(p *v1.Param, list v1.ParamList) *v1.Param {
+	p.List = list
+	return p
 }
 
 // Merges parameter maps, with later values taking precedence.

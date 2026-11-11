@@ -14,7 +14,7 @@
 		<div class="kv">
 			<span class="k">{capitalize(r.label)}</span>
 			<span class="vcell">
-				<Tip text={r.tip} tag="span" class="kv-tip">
+				<Tip text={r.tip === r.value ? undefined : r.tip} tag="span" class="kv-tip">
 					{#if r.href}
 						<a class="v" class:mono={r.mono} href={r.href}>{r.value}</a>
 					{:else}
@@ -67,6 +67,10 @@
 		max-width: 100%;
 		font-variant-numeric: tabular-nums;
 		overflow-wrap: anywhere;
+	}
+	/* Mono values keep the size of the values around them */
+	.v.mono {
+		font-size: inherit;
 	}
 	a.v {
 		color: var(--neo-color-primary);

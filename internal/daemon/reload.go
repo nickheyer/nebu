@@ -7,15 +7,21 @@ import (
 	"syscall"
 
 	"github.com/nickheyer/nebu/pkg/config"
-	"github.com/nickheyer/nebu/pkg/logger"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 )
 
-// Swaps the gateway keys, the default policy and the log level to what a loaded config names
+// Swaps the gateway keys and default policy to what a loaded config names, and every setting the web UI leaves unset to the config's
 func (d *Daemon) Reload(cfg *v1.Config) {
+	base, err := settingsBase(cfg)
+	if err == nil {
+		err = d.Settings.Rebase(base)
+	}
+	if err != nil {
+		d.Log.Error("config reload refused, the running settings stay", "err", err)
+		return
+	}
 	gw := cfg.GetGateway()
 	d.Gateway.Reload(gw.GetApiKeys(), gw.GetPolicy())
-	d.LogLevel.Set(logger.ParseLevel(cfg.GetLogging().GetLevel()))
 	d.Log.Info("config reloaded", "keys", len(gw.GetApiKeys()), "level", d.LogLevel.Level())
 }
 

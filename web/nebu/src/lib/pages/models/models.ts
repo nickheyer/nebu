@@ -1,12 +1,10 @@
 import type { Component } from 'svelte';
 import { reason, rpc } from '#lib/api/transport.js';
-import { bytes, enumLabel, num } from '#lib/format.js';
+import { bytes, num } from '#lib/format.js';
 import { FitVerdict } from '#lib/proto/nebu/v1/estimate_pb.js';
-import { ArtifactRole, ModelKind, ModelKindSchema } from '#lib/proto/nebu/v1/model_pb.js';
+import { ArtifactRole } from '#lib/proto/nebu/v1/model_pb.js';
 import type { Lamp } from '#lib/ui/status.js';
-import type { RuntimeStatus } from '#lib/proto/nebu/v1/runtime_pb.js';
 import type { StoredModel } from '#lib/proto/nebu/v1/store_pb.js';
-import { live } from '#lib/live/events.svelte.js';
 import { toast } from '#lib/shell/notify.svelte.js';
 import { followTask } from '#lib/state/tasks.svelte.js';
 import CodeIcon from 'phosphor-svelte/lib/CodeIcon';
@@ -32,14 +30,6 @@ export function launchHref(m: ModelRef, runtimeId?: string, context?: number): s
 	return `/serve/launch?${q}`;
 }
 
-// The name a source goes by, its id until the stream has it
-export function sourceName(id: string): string {
-	return live.sources.get(id)?.name || id;
-}
-
-export function kindLabel(kind: ModelKind): string {
-	return kind === ModelKind.UNSPECIFIED ? '' : enumLabel(ModelKindSchema, kind);
-}
 
 // A parameter count as 70B or 7.2B
 export function paramCount(n: bigint | number | undefined): string {
@@ -82,10 +72,6 @@ export function verdictLamp(v: FitVerdict | undefined): Lamp {
 
 export function sameModel(a: ModelRef, b: ModelRef): boolean {
 	return a.sourceId === b.sourceId && a.repo === b.repo && a.group === b.group;
-}
-
-export function runtimeNames(mask: number, runtimes: RuntimeStatus[]): string[] {
-	return runtimes.filter((r) => r.runtime && (mask & r.runtime.bit) !== 0).map((r) => r.runtime?.name || r.runtime?.id || '');
 }
 
 export function roleIcon(role: ArtifactRole): Component<{ size?: number }> {

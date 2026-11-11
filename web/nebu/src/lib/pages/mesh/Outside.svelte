@@ -12,7 +12,7 @@
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import RowAction from '#lib/ui/RowAction.svelte';
 	import Screen from '#lib/ui/Screen.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
+	import StateWord from '#lib/ui/StateWord.svelte';
 	import Time from '#lib/ui/Time.svelte';
 	import Text from '#lib/ui/fields/Text.svelte';
 	import Facts from '#lib/ui/Facts.svelte';
@@ -164,7 +164,7 @@
 					facts={[a.expiresAt && !settled(a) ? { value: ago(a.expiresAt, clockTick.now), tip: when(a.expiresAt) } : { value: '' }]}
 					menu={invitation(a) ? [{ label: 'Decline', danger: true, confirm: `Decline ${a.meshName}`, onclick: () => decide('decline', a) }] : undefined}
 				>
-					{#snippet badges()}<StatePill label={enumLabel(AdmissionStateSchema, a.state)} lamp={admissionLamp(a.state)} />{/snippet}
+					{#snippet badges()}<StateWord label={enumLabel(AdmissionStateSchema, a.state)} lamp={admissionLamp(a.state)} />{/snippet}
 					{#snippet action()}
 						{#if invitation(a)}
 							<RowAction loading={asking === a.id} onclick={() => ask(a.id, a.meshHash, a.node?.id ?? '', a.node?.address ?? '')} label="Accept" />

@@ -25,7 +25,6 @@
 	import LoadMore from '#lib/ui/LoadMore.svelte';
 	import SearchBox from '#lib/ui/SearchBox.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import Str from '#lib/ui/Str.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import Picker from '#lib/ui/fields/Picker.svelte';
 	import Select from '#lib/ui/fields/Select.svelte';
@@ -60,6 +59,7 @@
 	let text = $state('');
 	let attachments = $state<File[]>([]);
 	let scroller = $state<HTMLDivElement>();
+	let box = $state<HTMLDivElement>();
 	let flow = $state<HTMLDivElement>();
 	let pinned = true;
 	let listOpen = $state(false);
@@ -151,8 +151,9 @@
 		});
 	});
 
+	// A new conversation takes its address on its first save, the router leaving focus and scroll where they are
 	$effect(() => {
-		if (!id && session.saved) void goto(`/chat/${session.saved}`, { replace: true });
+		if (!id && session.saved) void goto(`/chat/${session.saved}`, { replace: true, reset: false });
 	});
 
 	const current = $derived(models.find((m) => m.id === session.model));
@@ -165,7 +166,7 @@
 	const last = $derived(session.turns[session.turns.length - 1]);
 	const lastAssistant = $derived(session.turns.findLast((t) => t.role === 'assistant'));
 	const userFallback = $derived(account.displayName || 'You');
-	const assistantFallback = $derived(session.conversation.model || session.model || 'Model');
+	const assistantFallback = $derived(session.conversation.model || session.model);
 	const userName = $derived(session.settings.userName || userFallback);
 	const assistantName = $derived(session.settings.assistantName || assistantFallback);
 	const draftTurn = $derived(create(ChatTurnSchema, { role: 'assistant', text: session.draft, toolCalls: session.draftCalls }));
@@ -191,6 +192,16 @@
 		if (scroller) pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 64;
 	}
 
+	// Puts the caret back in the message box after a press of Send or Stop took it
+	function focusBox() {
+		box?.querySelector('textarea')?.focus();
+	}
+
+	function stop() {
+		session.stop();
+		focusBox();
+	}
+
 	async function send() {
 		if (!canSend) return;
 		const prompt = text.trim();
@@ -198,6 +209,7 @@
 		text = '';
 		attachments = [];
 		pinned = true;
+		focusBox();
 		try {
 			if (mode === 'image') await session.makeImages(prompt);
 			else if (mode === 'video') await session.makeVideo(prompt);
@@ -282,7 +294,7 @@
 
 {#snippet search()}
 	<Toolbar>
-		<span class="grow"><SearchBox bind:value={query} width="100%" /></span>
+		<span class="find"><SearchBox bind:value={query} width="100%" /></span>
 		<NeoButton elevation={2} aria-label="New conversation" onclick={newConversation}>{#snippet icon()}<PlusIcon size={20} />{/snippet}</NeoButton>
 	</Toolbar>
 {/snippet}
@@ -368,22 +380,20 @@
 	{/each}
 	{#if session.busy}
 		{#if mode === 'video'}
-			<div class="progress">
-				<Str value={assistantName} weight={500} />
+			<Turn turn={draftTurn} {session} name={assistantName} streaming>
 				<div class="track">
 					<span class="bar"><NeoProgressBar value={session.videoProgress ?? 0} elevation={-1} height="8px" width="100%" color="primary" /></span>
 					<span class="num secondary">{session.videoProgress === null ? 'Queued' : pct(session.videoProgress)}</span>
 				</div>
-			</div>
+			</Turn>
 		{:else if mode === 'image'}
-			<div class="progress">
-				<Str value={assistantName} weight={500} />
+			<Turn turn={draftTurn} {session} name={assistantName} streaming>
 				<div class="tiles">
 					{#each { length: session.media.imageCount } as _, i (i)}
 						<NeoSkeletonText lines={1} width="256px" height="256px" />
 					{/each}
 				</div>
-			</div>
+			</Turn>
 		{:else}
 			<Turn turn={draftTurn} {session} name={assistantName} streaming />
 		{/if}
@@ -392,7 +402,7 @@
 
 {#snippet sendButton()}
 	{#if session.busy}
-		<NeoButton elevation={2} onclick={() => session.stop()}>{#snippet icon()}<StopIcon size={20} />{/snippet}Stop</NeoButton>
+		<NeoButton elevation={2} onclick={stop}>{#snippet icon()}<StopIcon size={20} />{/snippet}Stop</NeoButton>
 	{:else}
 		<NeoButton class="primary" elevation={2} disabled={!canSend} onclick={send}>{#snippet icon()}<PaperPlaneRightIcon size={20} />{/snippet}Send</NeoButton>
 	{/if}
@@ -423,7 +433,7 @@
 				<span class="beside"><NeoButton text aria-label="Attach" onclick={attachImages}>{#snippet icon()}<PaperclipIcon size={20} />{/snippet}</NeoButton></span>
 			{/if}
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<div class="box" {onkeydown}>
+			<div class="box" bind:this={box} {onkeydown}>
 				<Textarea bind:value={text} placeholder={media ? 'Prompt' : 'Message'} rows={1} maxRows={8} disabled={session.model === ''} />
 			</div>
 			<span class="beside">{@render sendButton()}</span>
@@ -476,6 +486,7 @@
 	/* Fills the viewport under the top bar so only the columns scroll */
 	.chat {
 		--chat-below: 0px;
+		--chat-measure: 46rem;
 
 		display: flex;
 		gap: var(--nebu-space-5);
@@ -497,7 +508,7 @@
 		flex: 1 1 auto;
 	}
 	.settings {
-		flex: 0 0 344px;
+		flex: 0 0 352px;
 	}
 	.scroll {
 		display: flex;
@@ -511,16 +522,25 @@
 	.form {
 		padding: 0 var(--nebu-card-pad);
 	}
+	.thread {
+		scrollbar-gutter: stable both-edges;
+	}
 	.form {
 		padding-right: calc(var(--nebu-card-pad) + var(--nebu-scroll-pad));
 		padding-bottom: var(--nebu-space-3);
 		scrollbar-gutter: stable;
 	}
+	/* The thread and the box under it share one reading column in the middle of the card */
 	.flow {
 		display: flex;
 		flex: 1 0 auto;
 		flex-direction: column;
+		gap: var(--nebu-space-5);
+		width: 100%;
+		max-width: var(--chat-measure);
 		min-width: 0;
+		margin: 0 auto;
+		padding: var(--nebu-space-5) 0;
 	}
 	.centred .flow {
 		justify-content: center;
@@ -529,7 +549,11 @@
 		display: flex;
 		flex: 1 1 0;
 		min-width: 0;
-		max-width: 20rem;
+		max-width: 32rem;
+	}
+	.model > :global(*) {
+		flex: 1 1 auto;
+		min-width: 0;
 	}
 	.sheetsearch {
 		display: flex;
@@ -547,6 +571,13 @@
 		flex: 1 1 auto;
 		flex-direction: column;
 		gap: var(--nebu-space-3);
+		max-width: var(--chat-measure);
+		min-width: 0;
+		margin: 0 auto;
+	}
+	.find {
+		display: flex;
+		flex: 1 1 0;
 		min-width: 0;
 	}
 	.pills {
@@ -569,12 +600,6 @@
 		flex: 0 0 auto;
 		align-items: center;
 		min-height: var(--nebu-input-height);
-	}
-	.progress {
-		display: flex;
-		flex-direction: column;
-		gap: var(--nebu-space-2);
-		padding: var(--nebu-space-3) 0;
 	}
 	.track {
 		display: flex;

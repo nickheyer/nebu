@@ -231,3 +231,91 @@ func TestLegacyWebSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A stored section stands over the config file's, one equal to the file's is dropped so the file is followed again
+func TestSettingsLayerOverTheConfigFile(t *testing.T) {
+	m, _ := newManager(t)
+	ctx := context.Background()
+	base := &v1.Settings{
+		LogLevel:      "info",
+		Downloads:     &v1.Downloads{Connections: 4, Retries: 5},
+		Storage:       &v1.DiskLimits{MinFreeBytes: 1 << 30},
+		Notifications: &v1.Notifications{},
+	}
+	var applied *v1.Settings
+	m.Apply = func(s *v1.Settings) error { applied = s; return nil }
+	m.Check = func(s *v1.Settings) error {
+		if s.GetSignIn() != nil {
+			return errors.New("authentication is off")
+		}
+		return nil
+	}
+	if err := m.Rebase(base); err != nil {
+		t.Fatal(err)
+	}
+	if applied.GetDownloads().GetConnections() != 4 || applied.GetLogLevel() != "info" {
+		t.Fatalf("the config file's values are not in force: %v", applied)
+	}
+	in := m.Get()
+	in.LogLevel = "debug"
+	in.Downloads = &v1.Downloads{Connections: 8, Retries: 5}
+	in.Storage = &v1.DiskLimits{MinFreeBytes: 1 << 30}
+	in.Notifications = &v1.Notifications{Webhooks: []*v1.Webhook{{Name: " ops  chat ", Url: " https://hooks.example/a ", Enabled: true, Events: []v1.NotifyEvent{v1.NotifyEvent_NOTIFY_EVENT_TASK_FAILED, v1.NotifyEvent_NOTIFY_EVENT_MODEL_FAILED, v1.NotifyEvent_NOTIFY_EVENT_TASK_FAILED}}}}
+	got, err := m.Update(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetStorage() != nil {
+		t.Errorf("a storage section equal to the config file's was stored: %v", got.GetStorage())
+	}
+	if applied.GetDownloads().GetConnections() != 8 || applied.GetLogLevel() != "debug" || applied.GetStorage().GetMinFreeBytes() != 1<<30 {
+		t.Errorf("in force after the save: %v", applied)
+	}
+	hooks := applied.GetNotifications().GetWebhooks()
+	if len(hooks) != 1 || hooks[0].GetUrl() != "https://hooks.example/a" || hooks[0].GetName() != "ops chat" || hooks[0].GetId() == "" || hooks[0].GetFormat() != v1.WebhookFormat_WEBHOOK_FORMAT_EVENT || len(hooks[0].GetEvents()) != 2 {
+		t.Errorf("webhooks in force: %v", hooks)
+	}
+	base.Downloads.Connections, base.Storage.MinFreeBytes = 2, 5<<30
+	if err := m.Rebase(base); err != nil {
+		t.Fatal(err)
+	}
+	if applied.GetDownloads().GetConnections() != 8 || applied.GetStorage().GetMinFreeBytes() != 5<<30 {
+		t.Errorf("after a config reload the stored downloads or the file's storage are not in force: %v", applied)
+	}
+	in = m.Get()
+	in.Downloads = &v1.Downloads{Connections: 2, Retries: 5}
+	in.LogLevel = "info"
+	if got, err = m.Update(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if got.GetDownloads() != nil || got.GetLogLevel() != "" {
+		t.Errorf("values set back to the config file's stayed stored: %v", got)
+	}
+	for name, bad := range map[string]*v1.Settings{
+		"webhook url":   {Notifications: &v1.Notifications{Webhooks: []*v1.Webhook{{Name: "a", Url: "hooks.example", Events: []v1.NotifyEvent{v1.NotifyEvent_NOTIFY_EVENT_TASK_FAILED}}}}},
+		"webhook event": {Notifications: &v1.Notifications{Webhooks: []*v1.Webhook{{Name: "a", Url: "https://hooks.example"}}}},
+		"webhook name":  {Notifications: &v1.Notifications{Webhooks: []*v1.Webhook{{Url: "https://hooks.example", Events: []v1.NotifyEvent{v1.NotifyEvent_NOTIFY_EVENT_TASK_FAILED}}}}},
+		"webhook twice": {Notifications: &v1.Notifications{Webhooks: []*v1.Webhook{{Name: "a", Url: "https://hooks.example", Events: []v1.NotifyEvent{v1.NotifyEvent_NOTIFY_EVENT_TASK_FAILED}}, {Name: "a", Url: "https://other.example", Events: []v1.NotifyEvent{v1.NotifyEvent_NOTIFY_EVENT_TASK_FAILED}}}}},
+		"sign in":       {SignIn: &v1.SignIn{SessionSeconds: 3600}},
+	} {
+		if _, err := m.Update(ctx, bad); !errors.Is(err, ErrSetting) {
+			t.Errorf("%s: err = %v, want ErrSetting", name, err)
+		}
+	}
+	if stored, err := m.DB.GetSettings(ctx); err != nil || stored.GetNotifications().GetWebhooks()[0].GetUrl() != "https://hooks.example/a" || stored.GetSignIn() != nil {
+		t.Errorf("stored after the refusals: %v %v", stored, err)
+	}
+}
+
+// A sample needs a URL alone, trimmed and http or https with a host, the format defaulting to the event document
+func TestWebhookTarget(t *testing.T) {
+	w := &v1.Webhook{Url: " https://hooks.example/a "}
+	if err := CheckWebhookTarget(w); err != nil || w.GetUrl() != "https://hooks.example/a" || w.GetFormat() != v1.WebhookFormat_WEBHOOK_FORMAT_EVENT {
+		t.Errorf("a webhook holding a URL alone: %v err %v", w, err)
+	}
+	for _, bad := range []string{"", "hooks.example", "ftp://hooks.example", "https://"} {
+		if err := CheckWebhookTarget(&v1.Webhook{Name: "a", Url: bad, Events: []v1.NotifyEvent{v1.NotifyEvent_NOTIFY_EVENT_TASK_FAILED}}); !errors.Is(err, ErrSetting) {
+			t.Errorf("%q: err = %v, want ErrSetting", bad, err)
+		}
+	}
+}

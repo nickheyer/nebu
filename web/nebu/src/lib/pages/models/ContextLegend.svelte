@@ -13,7 +13,6 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: var(--nebu-space-1) var(--nebu-space-4);
-		padding: var(--nebu-space-3) var(--nebu-row-inset, var(--nebu-space-2)) var(--nebu-space-1);
 		font-size: var(--nebu-text-caption);
 		color: var(--nebu-text-muted);
 	}

@@ -112,7 +112,9 @@ type member struct {
 	// The mesh state digest the member last sent
 	digest    []byte
 	lastTried time.Time
-	probedAt  time.Time
+	// When the member's link was last probed and how many probes in a row failed since one measured it
+	probedAt    time.Time
+	probeMisses int
 }
 
 // The sequence of the member's record held whole, zero for a sketch

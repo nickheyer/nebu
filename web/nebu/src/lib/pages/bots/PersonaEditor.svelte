@@ -93,13 +93,13 @@
 		<Textarea bind:value={persona.systemPrompt} label="System prompt" rows={4} maxRows={12} />
 		<FieldRow>
 			<Switch bind:checked={persona.webhook} label="Post through a webhook" info="Shows the persona's own name and avatar" />
-			<Switch bind:checked={persona.stream} label="Stream the answer" />
+			<Switch bind:checked={persona.stream} label="Stream" />
 		</FieldRow>
 	</FormSection>
 	<FormSection title="Models">
 		<FieldRow>
 			<Picker bind:value={() => persona.model || undefined, (v) => (persona.model = v ?? '')} fetch={textRoutes} label="Chat" clearable current={persona.model || undefined} />
-			<Switch bind:checked={persona.vision} label="Send images to the model" top />
+			<Switch bind:checked={persona.vision} label="Send images to the model" />
 		</FieldRow>
 		<FieldRow>
 			<Picker bind:value={() => persona.imageModel || undefined, (v) => (persona.imageModel = v ?? '')} fetch={imageRoutes} label="Images" clearable current={persona.imageModel || undefined} />
@@ -114,13 +114,13 @@
 	</FormSection>
 	<FormSection title="Behaviour" advanced={humanize.enabled ? humanizeAdvanced : undefined}>
 		<FieldRow>
-			<Switch bind:checked={humanize.enabled} label="Type like a person" info="Pauses, typing speed, split messages and reactions" top />
+			<Switch bind:checked={humanize.enabled} label="Type like a person" info="Pauses, typing speed, split messages and reactions" />
 			<Chips bind:value={persona.wakeWords} label="Wake words" info="Words that call the persona" />
 		</FieldRow>
 		{#if humanize.enabled}
 			<FieldRow>
 				<NumberField bind:value={humanize.charsPerSecond} min={1} max={100} label="Typing speed" unit="chars/s" />
-				<Switch bind:checked={humanize.splitMessages} label="Split long answers" top />
+				<Switch bind:checked={humanize.splitMessages} label="Split long answers" />
 			</FieldRow>
 			<FieldRow wide>
 				<Duration bind:value={humanize.delayMinMs} base="ms" max={600_000} label="Shortest pause" />

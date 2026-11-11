@@ -3,6 +3,7 @@ syntax = "proto3";
 package nebu.v1;
 
 import "buf/validate/validate.proto";
+import "nebu/v1/config.proto";
 
 option go_package = "github.com/nickheyer/nebu/pkg/proto/nebu/v1;nebuv1";
 
@@ -15,6 +16,84 @@ message Settings {
   repeated ToolServer tool_servers = 4;
   // Parameter values every launch of a runtime starts from, keyed by runtime id, under the slot's and the request's own
   map<string, RuntimeDefaults> runtime_defaults = 5;
+  // Level the daemon logs at, debug, info, warn or error, the config file's when empty
+  string log_level = 6 [(buf.validate.field).string = {in: ["", "debug", "info", "warn", "error"]}];
+  // Download pacing, the config file's when unset
+  Downloads downloads = 7;
+  // Disk limits, the config file's when unset
+  DiskLimits storage = 8;
+  // Who is told when models and tasks fail or finish, the config file's webhooks when unset
+  Notifications notifications = 9;
+  // Browser sessions and the proxies in front of them, the config file's when unset
+  SignIn sign_in = 10;
+}
+
+// What a webhook is told about
+enum NotifyEvent {
+  NOTIFY_EVENT_UNSPECIFIED = 0;
+  // A model that was starting or serving failed
+  NOTIFY_EVENT_MODEL_FAILED = 1;
+  // A pull, build, launch or other task failed
+  NOTIFY_EVENT_TASK_FAILED = 2;
+  // A task finished
+  NOTIFY_EVENT_TASK_SUCCEEDED = 3;
+}
+
+// The body a webhook is sent
+enum WebhookFormat {
+  WEBHOOK_FORMAT_UNSPECIFIED = 0;
+  // The event as the event stream carries it, in proto JSON
+  WEBHOOK_FORMAT_EVENT = 1;
+  // One line of text in the content field Discord reads
+  WEBHOOK_FORMAT_DISCORD = 2;
+  // One line of text in the text field Slack, Mattermost and Rocket.Chat read
+  WEBHOOK_FORMAT_SLACK = 3;
+}
+
+// A URL told about the events it names
+message Webhook {
+  string id = 1;
+  string name = 2;
+  string url = 3;
+  bool enabled = 4;
+  WebhookFormat format = 5 [(buf.validate.field).enum.defined_only = true];
+  repeated NotifyEvent events = 6 [(buf.validate.field).repeated.items.enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+// Every webhook, in the order they were added
+message Notifications {
+  repeated Webhook webhooks = 1;
+}
+
+// How downloads are paced
+message Downloads {
+  // Connections one file downloads over
+  uint32 connections = 1 [(buf.validate.field).uint32 = {gte: 1, lte: 64}];
+  // Tries one chunk gets before its file fails
+  uint32 retries = 2 [(buf.validate.field).uint32 = {gte: 1, lte: 100}];
+  // Bytes per second outside every window, 0 for no limit
+  uint64 max_bytes_per_second = 3;
+  // The first window holding the current time sets the pace
+  repeated TransferWindow windows = 4;
+}
+
+// Disk the store may take and the disk downloads leave free
+message DiskLimits {
+  // Most bytes the store holds, unused models leaving first, 0 for no limit
+  uint64 max_bytes = 1;
+  // Free bytes a download must leave on the store's disk
+  uint64 min_free_bytes = 2;
+}
+
+// Browser sessions and the proxies their requests arrive through
+message SignIn {
+  // Seconds a browser session lasts
+  uint32 session_seconds = 1 [(buf.validate.field).uint32 = {gte: 60, lte: 31536000}];
+  // Proxy addresses as CIDRs whose forwarded headers are believed
+  repeated string trusted_proxies = 2;
 }
 
 // Parameter values a runtime's launches and plans start from
@@ -59,6 +138,8 @@ message GetSettingsRequest {}
 // Returns the settings
 message GetSettingsResponse {
   Settings settings = 1;
+  // What the config file gives every setting the settings leave empty or unset
+  Settings defaults = 2;
 }
 
 // Replaces the settings
@@ -71,10 +152,22 @@ message UpdateSettingsResponse {
   Settings settings = 1;
 }
 
+// Sends a webhook one sample notification
+message TestWebhookRequest {
+  Webhook webhook = 1 [(buf.validate.field).required = true];
+}
+
+// The HTTP status the webhook answered the sample with
+message TestWebhookResponse {
+  uint32 status = 1;
+}
+
 // Host preferences.
 service SettingsService {
   // Returns the settings
   rpc GetSettings(GetSettingsRequest) returns (GetSettingsResponse);
   // Replace settings and publish the change on the event stream.
   rpc UpdateSettings(UpdateSettingsRequest) returns (UpdateSettingsResponse);
+  // Post one sample notification to a webhook as given, stored or not.
+  rpc TestWebhook(TestWebhookRequest) returns (TestWebhookResponse);
 }

@@ -1,6 +1,7 @@
 package runtimes
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -201,8 +202,8 @@ func (LlamaCpp) Params() []*v1.Param {
 	switchParam := func(name, label, group, description string) *v1.Param {
 		return &v1.Param{Name: name, Label: label, Type: v1.ParamType_PARAM_TYPE_STRING, Choices: switchChoices, Group: group, Advanced: true, Description: description}
 	}
-	ngram := func(name, flag, description string) *v1.Param {
-		return intParam(name, strings.ReplaceAll(strings.TrimPrefix(name, "ngram_"), "_", " "), groupSpeculative, flag, "", "", description, 1, 1024, 1, true)
+	ngram := func(name, label, flag, description string) *v1.Param {
+		return intParam(name, label, groupSpeculative, flag, "", "", description, 1, 1024, 1, true)
 	}
 	return []*v1.Param{
 		{Name: "n_ctx", Label: "Context length", Type: v1.ParamType_PARAM_TYPE_INT, Default: Auto, Solved: true, Unit: "tokens", Min: 256, Step: 256, Group: groupContext, Flag: "--ctx-size",
@@ -211,7 +212,7 @@ func (LlamaCpp) Params() []*v1.Param {
 		intParam("n_parallel", "Parallel sequences", groupContext, "--parallel", "1", "sequences", "server slots, a request past them waits for one to free, -1 lets llama.cpp choose the count and unifies the pool", -1, 256, 1, false),
 		switchParam("kv_unified", "Unified cache pool", groupContext, "every sequence draws from one pool, so a sequence may use up to the whole n_ctx, empty keeps llama.cpp's off, on when n_parallel is -1"),
 		intParam("kv_unified_per_slot", "Context per slot", groupContext, "--kv-unified-per-slot", "", "tokens", "limit for each parallel slot, the shared pool sized to n_parallel times it when n_ctx is unset, empty keeps llama.cpp's none", 0, 0, 256, true),
-		{Name: "slot_prompt_similarity", Label: "Slot reuse similarity", Type: v1.ParamType_PARAM_TYPE_FLOAT, Unit: "share", Min: 0, Max: 1, Step: 0.05, Group: groupContext, Flag: "--slot-prompt-similarity",
+		{Name: "slot_prompt_similarity", Label: "Slot reuse similarity", Type: v1.ParamType_PARAM_TYPE_FLOAT, Min: 0, Max: 1, Step: 0.05, Group: groupContext, Flag: "--slot-prompt-similarity",
 			Description: "prefix share a request must have with an idle slot's cache to take that slot over an empty one, empty keeps llama.cpp's 0.10, 0 always takes the empty or least recently used slot"},
 		intParam("n_predict", "Generation limit", groupContext, "--n-predict", "", "tokens", "most tokens a request generates unless it asks for fewer, empty keeps llama.cpp's -1 for no limit", -1, 0, 1, true),
 		switchParam("context_shift", "Context shift", groupContext, "drop the oldest tokens when a generation fills the context instead of stopping, empty keeps llama.cpp's off"),
@@ -267,7 +268,7 @@ func (LlamaCpp) Params() []*v1.Param {
 			Description: "image and audio input"},
 		switchParam("mmproj_auto", "Projector lookup", groupIdentity, "load a projector found beside the model, empty keeps llama.cpp's on"),
 		switchParam("mmproj_offload", "Projector on device", groupIdentity, "run the projector on the device, empty keeps llama.cpp's on"),
-		strParam("mmproj_device", "Projector device", groupIdentity, "--mmproj-device", "", "device for the projector, none keeps it on the host, empty follows device", nil, true),
+		strParam("mmproj_device", "Projector GPU", groupIdentity, "--mmproj-device", "", "the GPU that runs the projector, the part of the model that reads images and audio, named as llama.cpp lists devices such as CUDA0, none for the CPU, empty for the model's own GPU", nil, true),
 		switchParam("jinja", "Jinja templates", groupChat, "render chat templates with the jinja engine that tools need, empty passes --jinja on builds that list it"),
 		strParam("chat_template", "Chat template", groupChat, "--chat-template", "", "a built in template name or jinja text, empty keeps the model's", nil, true),
 		{Name: "chat_template_file", Label: "Chat template file", Type: v1.ParamType_PARAM_TYPE_PATH, Group: groupChat, Advanced: true, Flag: "--chat-template-file"},
@@ -280,14 +281,16 @@ func (LlamaCpp) Params() []*v1.Param {
 		switchParam("reasoning_preserve", "Preserve reasoning", groupChat, "keep every turn's reasoning in the history on templates that support it, empty keeps llama.cpp's on"),
 		switchParam("skip_chat_parsing", "Skip chat parsing", groupChat, "leave reasoning and tool calls unparsed in the content, empty keeps llama.cpp's off"),
 		switchParam("prefill_assistant", "Prefill assistant", groupChat, "continue a trailing assistant message instead of answering it, empty keeps llama.cpp's on"),
+		{Name: ParamStripBillingHeader, Label: "Strip Claude Code billing header", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "true", Group: groupChat, Advanced: true,
+			Description: "drop the x-anthropic-billing-header line Claude Code leads its system prompt with, whose stamp changes on every request and ends the prompt cache at its first tokens"},
 		boolParam("embedding", "Embeddings only", groupEmbeddings, "--embedding", "serve embeddings alone, for embedding models"),
 		boolParam("reranking", "Reranking", groupEmbeddings, "--reranking", "serve the rerank endpoint, for reranker models"),
 		strParam("pooling", "Pooling", groupEmbeddings, "--pooling", "", "how token states pool into one embedding, empty keeps the model's", []string{"", "none", "mean", "cls", "last", "rank"}, true),
-		strParam("lora", "LoRA adapters", groupAdapters, "--lora", "", "adapter files, comma separated, empty loads every LoRA file beside the model unapplied so requests switch them on", nil, true),
-		strParam("lora_scaled", "Scaled LoRA adapters", groupAdapters, "--lora-scaled", "", "file:scale pairs, comma separated", nil, true),
+		fileList(strParam("lora", "LoRA adapters", groupAdapters, "--lora", "", "adapter files, comma separated, empty loads every LoRA file beside the model unapplied so requests switch them on", nil, true), v1.ParamList_PARAM_LIST_FILES),
+		fileList(strParam("lora_scaled", "Scaled LoRA adapters", groupAdapters, "--lora-scaled", "", "file:scale pairs, comma separated", nil, true), v1.ParamList_PARAM_LIST_SCALED),
 		boolParam("lora_init_without_apply", "Load adapters unapplied", groupAdapters, "--lora-init-without-apply", "load adapters and apply them later through the API"),
-		strParam("control_vector", "Control vectors", groupAdapters, "--control-vector", "", "control vector files, comma separated", nil, true),
-		strParam("control_vector_scaled", "Scaled control vectors", groupAdapters, "--control-vector-scaled", "", "file:scale pairs, comma separated", nil, true),
+		fileList(strParam("control_vector", "Control vectors", groupAdapters, "--control-vector", "", "control vector files, comma separated", nil, true), v1.ParamList_PARAM_LIST_FILES),
+		fileList(strParam("control_vector_scaled", "Scaled control vectors", groupAdapters, "--control-vector-scaled", "", "file:scale pairs, comma separated", nil, true), v1.ParamList_PARAM_LIST_SCALED),
 		strParam("control_vector_layer_range", "Control vector layers", groupAdapters, "", "", "first and last layer the control vectors apply to, as start,end", nil, true),
 		strParam("rope_scaling", "RoPE scaling", groupRope, "--rope-scaling", "", "empty keeps the model's, linear unless it says", []string{"", "none", "linear", "yarn"}, true),
 		floatParam("rope_scale", "RoPE scale", groupRope, "--rope-scale", "context scaling factor, the inverse of the frequency scale", 0, 0, 0.5),
@@ -320,32 +323,31 @@ func (LlamaCpp) Params() []*v1.Param {
 		boolParam("draft_cpu_moe", "Draft experts on CPU", groupSpeculative, "", "keep every expert weight of the draft model in system memory"),
 		intParam("draft_n_cpu_moe", "Draft expert layers on CPU", groupSpeculative, "", "", "layers", "keep the expert weights of the draft model's first N layers in system memory", 0, 0, 1, true),
 		strParam("draft_override_tensor", "Draft tensor overrides", groupSpeculative, "", "", "pattern=buffer type pairs for the draft model, comma separated", nil, true),
-		ngram("ngram_mod_n_min", "--spec-ngram-mod-n-min", "fewest tokens ngram-mod drafts, empty keeps llama.cpp's 48"),
-		ngram("ngram_mod_n_max", "--spec-ngram-mod-n-max", "most tokens ngram-mod drafts, empty keeps llama.cpp's 64"),
-		ngram("ngram_mod_n_match", "--spec-ngram-mod-n-match", "lookup length of ngram-mod, empty keeps llama.cpp's"),
-		ngram("ngram_simple_size_n", "--spec-ngram-simple-size-n", "lookup n-gram length of ngram-simple, empty keeps llama.cpp's"),
-		ngram("ngram_simple_size_m", "--spec-ngram-simple-size-m", "draft m-gram length of ngram-simple, empty keeps llama.cpp's"),
-		ngram("ngram_simple_min_hits", "--spec-ngram-simple-min-hits", "fewest hits before ngram-simple drafts, empty keeps llama.cpp's"),
-		ngram("ngram_map_k_size_n", "--spec-ngram-map-k-size-n", "lookup n-gram length of ngram-map-k, empty keeps llama.cpp's"),
-		ngram("ngram_map_k_size_m", "--spec-ngram-map-k-size-m", "draft m-gram length of ngram-map-k, empty keeps llama.cpp's 48"),
-		ngram("ngram_map_k_min_hits", "--spec-ngram-map-k-min-hits", "fewest hits before ngram-map-k drafts, empty keeps llama.cpp's"),
-		ngram("ngram_map_k4v_size_n", "--spec-ngram-map-k4v-size-n", "lookup n-gram length of ngram-map-k4v, empty keeps llama.cpp's"),
-		ngram("ngram_map_k4v_size_m", "--spec-ngram-map-k4v-size-m", "draft m-gram length of ngram-map-k4v, empty keeps llama.cpp's 48"),
-		ngram("ngram_map_k4v_min_hits", "--spec-ngram-map-k4v-min-hits", "fewest hits before ngram-map-k4v drafts, empty keeps llama.cpp's"),
+		ngram("ngram_mod_n_min", "N-gram mod fewest tokens", "--spec-ngram-mod-n-min", "fewest tokens ngram-mod drafts, empty keeps llama.cpp's 48"),
+		ngram("ngram_mod_n_max", "N-gram mod most tokens", "--spec-ngram-mod-n-max", "most tokens ngram-mod drafts, empty keeps llama.cpp's 64"),
+		ngram("ngram_mod_n_match", "N-gram mod lookup length", "--spec-ngram-mod-n-match", "lookup length of ngram-mod, empty keeps llama.cpp's"),
+		ngram("ngram_simple_size_n", "N-gram simple lookup length", "--spec-ngram-simple-size-n", "lookup n-gram length of ngram-simple, empty keeps llama.cpp's"),
+		ngram("ngram_simple_size_m", "N-gram simple draft length", "--spec-ngram-simple-size-m", "draft m-gram length of ngram-simple, empty keeps llama.cpp's"),
+		ngram("ngram_simple_min_hits", "N-gram simple fewest hits", "--spec-ngram-simple-min-hits", "fewest hits before ngram-simple drafts, empty keeps llama.cpp's"),
+		ngram("ngram_map_k_size_n", "N-gram map-k lookup length", "--spec-ngram-map-k-size-n", "lookup n-gram length of ngram-map-k, empty keeps llama.cpp's"),
+		ngram("ngram_map_k_size_m", "N-gram map-k draft length", "--spec-ngram-map-k-size-m", "draft m-gram length of ngram-map-k, empty keeps llama.cpp's 48"),
+		ngram("ngram_map_k_min_hits", "N-gram map-k fewest hits", "--spec-ngram-map-k-min-hits", "fewest hits before ngram-map-k drafts, empty keeps llama.cpp's"),
+		ngram("ngram_map_k4v_size_n", "N-gram map-k4v lookup length", "--spec-ngram-map-k4v-size-n", "lookup n-gram length of ngram-map-k4v, empty keeps llama.cpp's"),
+		ngram("ngram_map_k4v_size_m", "N-gram map-k4v draft length", "--spec-ngram-map-k4v-size-m", "draft m-gram length of ngram-map-k4v, empty keeps llama.cpp's 48"),
+		ngram("ngram_map_k4v_min_hits", "N-gram map-k4v fewest hits", "--spec-ngram-map-k4v-min-hits", "fewest hits before ngram-map-k4v drafts, empty keeps llama.cpp's"),
 		{Name: "lookup_cache_static", Label: "Static lookup cache", Type: v1.ParamType_PARAM_TYPE_PATH, Group: groupSpeculative, Advanced: true, Flag: "--lookup-cache-static", Description: "n-gram cache file ngram-cache reads and never updates"},
 		{Name: "lookup_cache_dynamic", Label: "Dynamic lookup cache", Type: v1.ParamType_PARAM_TYPE_PATH, Group: groupSpeculative, Advanced: true, Flag: "--lookup-cache-dynamic", Description: "n-gram cache file ngram-cache reads and updates as it generates"},
 		intParam("timeout", "Request timeout", groupServer, "--timeout", "", "seconds", "read and write timeout of the server, empty keeps llama.cpp's 600", 0, 0, 30, true),
 		intParam("threads_http", "HTTP threads", groupServer, "--threads-http", "", "threads", "empty keeps llama.cpp's -1 for the core count", -1, 0, 1, true),
 		intParam("sleep_idle_seconds", "Sleep when idle", groupServer, "--sleep-idle-seconds", "", "seconds", "idle time after which the server frees the model until the next request, empty keeps llama.cpp's -1 for never", -1, 0, 60, true),
-		{Name: "metrics", Label: "Prometheus metrics", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "true", Group: groupServer, Flag: "--metrics", Advanced: true,
-			Description: "serve the metrics endpoint the router reads queue depth from"},
-		boolParam("props", "Writable properties", groupServer, "--props", "allow changing global properties through the props endpoint"),
-		strParam("media_path", "Media directory", groupServer, "--media-path", "", "directory requests may load local media from by relative file URL", nil, true),
+		boolParam("props", "Settings changes over the API", groupServer, "--props", "let any client change server wide settings, such as the chat template and sampling defaults, by posting to /props"),
+		{Name: "media_path", Label: "Media directory", Type: v1.ParamType_PARAM_TYPE_PATH, Group: groupServer, Advanced: true, Flag: "--media-path", Directory: true,
+			Description: "directory requests may load local media from by relative file URL"},
 		{Name: "log_verbosity", Label: "Log level", Type: v1.ParamType_PARAM_TYPE_INT, Default: "3", Min: 0, Max: 5, Step: 1, Group: groupDiagnostics, Advanced: true, Flag: "--log-verbosity",
 			Description: "0 generic, 1 errors, 2 warnings, 3 info, 4 trace, 5 debug, 4 and up log the buffers the memory breakdown and cache calibration read"},
 		strParam("log_colors", "Log colors", groupDiagnostics, "--log-colors", "", "empty keeps llama.cpp's auto", []string{"", "auto", "on", "off"}, true),
-		switchParam("log_prefix", "Log prefix", groupDiagnostics, "prefix every log line with its level, empty keeps llama.cpp's off"),
-		switchParam("log_timestamps", "Log timestamps", groupDiagnostics, "timestamp every log line, empty keeps llama.cpp's off"),
+		switchParam("log_prefix", "Log prefix", groupDiagnostics, "prefix every log line with its level, empty keeps llama.cpp's on"),
+		switchParam("log_timestamps", "Log timestamps", groupDiagnostics, "timestamp every log line, empty keeps llama.cpp's on"),
 		boolParam("verbose_prompt", "Log prompts", groupDiagnostics, "--verbose-prompt", "print every prompt and its tokens"),
 		boolParam("no_warmup", "Skip warmup", groupDiagnostics, "--no-warmup", "skip the empty run that warms the model up at start"),
 		boolParam("no_perf", "Skip timings", groupDiagnostics, "--no-perf", "leave performance timings out of the log"),
@@ -356,6 +358,17 @@ func (LlamaCpp) Params() []*v1.Param {
 		{Name: "cuda_disable_graphs", Label: "Disable CUDA graphs", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: groupDiagnostics, Advanced: true, Env: "GGML_CUDA_DISABLE_GRAPHS",
 			Description: "runs every batch without ggml's CUDA graphs, slower decoding, only for a driver that fails cudaGraphLaunch under the rpc server"},
 	}
+}
+
+// Params llama.cpp took once and the launch now sets itself
+func (LlamaCpp) Retired() []string { return []string{"metrics"} }
+
+// Refuses zero parallel sequences, which llama.cpp exits on, -1 leaving the count to it
+func (LlamaCpp) Check(p estimate.Params) error {
+	if n, set := p["n_parallel"].(int64); set && n == 0 {
+		return errors.New("param n_parallel: 0 is neither -1 nor at least 1")
+	}
+	return nil
 }
 
 func (r LlamaCpp) Launch(in Launch) (*Command, error) {
@@ -394,6 +407,9 @@ func (r LlamaCpp) Launch(in Launch) (*Command, error) {
 		}
 	}
 	flags, env, emitted := Flags(r.Params(), p)
+	// The metrics endpoint the gateway reads queued and running requests from
+	flags = append(flags, "--metrics")
+	emitted["metrics"] = "true"
 	flags = append(flags, spec...)
 	flags = append(flags, switches...)
 	flags = append(flags, layers...)
@@ -853,7 +869,7 @@ func (LlamaCpp) Policy() *estimate.Policy {
 				bounds("draft_threads", -1, threads, 1),
 				bounds("draft_threads_batch", -1, threads, 1),
 			}
-			return states, llamaWarning(s)
+			return states, ""
 		},
 	}
 }
@@ -882,16 +898,6 @@ func llamaSequences(s *estimate.Scope) int64 {
 // Whether a vision or audio group is the projector file the param names
 func llamaProjectorLoads(_ *estimate.Scope, g *v1.TensorGroup) bool {
 	return g.GetId() == llamaProjectorGroup
-}
-
-// What the plan left uncounted, a projector file it could not size
-func llamaWarning(s *estimate.Scope) string {
-	if path := llamaFile(s.Params, "mmproj"); path != "" && !s.Part {
-		if info, err := os.Stat(path); err != nil || info.IsDir() {
-			return "projector " + path + " is not a file the plan can size, so it is not counted"
-		}
-	}
-	return ""
 }
 
 // Slot count llama.cpp logs as it initializes its slots

@@ -65,6 +65,8 @@
 	}: { artifacts: Artifact[]; stored?: Set<string>; shared?: Map<string, string[]>; action?: Snippet<[TreeItem]> } = $props();
 
 	const root = $derived(fileTree(artifacts));
+	// A tree holding directories keeps a caret column, a flat list of files starts at its icons
+	const nested = $derived(root.dirs.length > 0);
 	const open = new SvelteSet<string>();
 
 	function allDirs(node: FileNode): string[] {
@@ -104,7 +106,7 @@
 	{#each node.files as f (f.path)}
 		{@const Icon = roleIcon(f.role)}
 		<div class="row" style:--depth={depth}>
-			<span class="twist"></span>
+			{#if nested}<span class="twist"></span>{/if}
 			<span class="icon"><Icon size={18} /></span>
 			<span class="name mono">{baseName(f.path)}</span>
 			{#if stored.has(f.path)}<Tip text="Stored" tag="span"><span class="stored"><CheckCircleIcon size={16} weight="fill" /></span></Tip>{/if}

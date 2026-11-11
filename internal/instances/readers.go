@@ -6,6 +6,7 @@ import (
 	"github.com/nickheyer/nebu/internal/installs"
 	"github.com/nickheyer/nebu/pkg/chattemplate"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
+	"github.com/nickheyer/nebu/pkg/runtimes"
 )
 
 // How the instance's chat template offers tools, unspecified for an instance this node does not run
@@ -15,6 +16,15 @@ func (m *Manager) ToolSupport(id string) v1.ToolSupport {
 		return v1.ToolSupport_TOOL_SUPPORT_UNSPECIFIED
 	}
 	return in.snapshot().GetTemplate().GetTools()
+}
+
+// Whether the instance's launch leaves Claude Code's billing header out of prompts, true for an instance this node does not run
+func (m *Manager) StripsBillingHeader(id string) bool {
+	in, err := m.find(id)
+	if err != nil {
+		return true
+	}
+	return in.snapshot().GetParams()[runtimes.ParamStripBillingHeader] != "false"
 }
 
 // The generation modes a diffusion instance reported at ready, none for any other or an unknown one

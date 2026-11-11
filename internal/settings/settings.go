@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -15,6 +17,7 @@ import (
 	"github.com/nickheyer/nebu/pkg/events"
 	v1 "github.com/nickheyer/nebu/pkg/proto/nebu/v1"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // Returned when a setting is malformed
@@ -36,9 +39,82 @@ type Manager struct {
 	Referenced func(name string) []string
 	// Runs after settings change, before the change is published
 	OnUpdate func(context.Context, *v1.Settings)
+	// Refuses settings the daemon cannot run with, given what they come to over the config file
+	Check func(effective *v1.Settings) error
+	// Puts what the settings come to over the config file into force
+	Apply func(effective *v1.Settings) error
 
 	mu      sync.Mutex
 	current *v1.Settings
+	// What the config file gives every setting the stored ones leave unset
+	base *v1.Settings
+}
+
+// The sections a stored setting replaces whole when set
+var sections = []string{"downloads", "storage", "notifications", "sign_in"}
+
+// The stored settings with the config file's value in every section and level left unset
+func merge(stored, base *v1.Settings) *v1.Settings {
+	out := proto.Clone(stored).(*v1.Settings)
+	if out.GetLogLevel() == "" {
+		out.LogLevel = base.GetLogLevel()
+	}
+	o, b := out.ProtoReflect(), base.ProtoReflect()
+	for _, name := range sections {
+		fd := o.Descriptor().Fields().ByName(protoreflect.Name(name))
+		if !o.Has(fd) && b.Has(fd) {
+			o.Set(fd, protoreflect.ValueOfMessage(proto.Clone(b.Get(fd).Message().Interface()).ProtoReflect()))
+		}
+	}
+	return out
+}
+
+// Unsets every section and level that only repeats the config file, so the file is followed again
+func follow(next, base *v1.Settings) {
+	if next.GetLogLevel() == base.GetLogLevel() {
+		next.LogLevel = ""
+	}
+	n, b := next.ProtoReflect(), base.ProtoReflect()
+	for _, name := range sections {
+		fd := n.Descriptor().Fields().ByName(protoreflect.Name(name))
+		if n.Has(fd) && b.Has(fd) && proto.Equal(n.Get(fd).Message().Interface(), b.Get(fd).Message().Interface()) {
+			n.Clear(fd)
+		}
+	}
+}
+
+// What the config file gives every setting left unset, a copy
+func (m *Manager) Base() *v1.Settings {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return proto.Clone(m.base).(*v1.Settings)
+}
+
+// The settings in force, the stored ones over the config file's
+func (m *Manager) Effective() *v1.Settings {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return merge(m.current, m.base)
+}
+
+// Takes what a loaded config file gives the unset settings, puts the result into force and tells the UI
+func (m *Manager) Rebase(base *v1.Settings) error {
+	m.mu.Lock()
+	effective := merge(m.current, base)
+	m.mu.Unlock()
+	if m.Apply != nil {
+		if err := m.Apply(effective); err != nil {
+			return err
+		}
+	}
+	m.mu.Lock()
+	m.base = proto.Clone(base).(*v1.Settings)
+	shown := proto.Clone(m.current).(*v1.Settings)
+	m.mu.Unlock()
+	if m.Events != nil {
+		m.Events.Publish(v1.EventKind_EVENT_KIND_SETTINGS, v1.EventAction_EVENT_ACTION_UPDATED, ID, shown)
+	}
+	return nil
 }
 
 // Loads settings and serves later reads from memory, carrying an older web search provider over
@@ -151,8 +227,24 @@ func (m *Manager) Update(ctx context.Context, in *v1.Settings) (*v1.Settings, er
 	if err := m.removable(next); err != nil {
 		return nil, err
 	}
+	if err := tidySections(next); err != nil {
+		return nil, err
+	}
+	base := m.Base()
+	follow(next, base)
+	effective := merge(next, base)
+	if m.Check != nil {
+		if err := m.Check(effective); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrSetting, err)
+		}
+	}
 	if err := m.DB.PutSettings(ctx, next); err != nil {
 		return nil, err
+	}
+	if m.Apply != nil {
+		if err := m.Apply(effective); err != nil {
+			return nil, err
+		}
 	}
 	m.mu.Lock()
 	m.current = next
@@ -165,6 +257,76 @@ func (m *Manager) Update(ctx context.Context, in *v1.Settings) (*v1.Settings, er
 		m.Events.Publish(v1.EventKind_EVENT_KIND_SETTINGS, v1.EventAction_EVENT_ACTION_UPDATED, ID, shown)
 	}
 	return shown, nil
+}
+
+// Trims a webhook and refuses one without a name, an http or https URL with a host, or an event, the format defaulting to the event document
+func CheckWebhook(w *v1.Webhook) error {
+	w.Name = strings.Join(strings.Fields(w.GetName()), " ")
+	if w.GetName() == "" || utf8.RuneCountInString(w.GetName()) > labelMax {
+		return fmt.Errorf("%w: a webhook needs a name of at most %d characters", ErrSetting, labelMax)
+	}
+	if !webhookTarget(w) {
+		return fmt.Errorf("%w: %s: the URL must start with http:// or https:// and name a host", ErrSetting, w.GetName())
+	}
+	slices.Sort(w.Events)
+	w.Events = slices.Compact(w.Events)
+	if len(w.GetEvents()) == 0 {
+		return fmt.Errorf("%w: %s: a webhook needs at least one event", ErrSetting, w.GetName())
+	}
+	return nil
+}
+
+// Trims a webhook down to what a sample needs and refuses one without an http or https URL with a host
+func CheckWebhookTarget(w *v1.Webhook) error {
+	if !webhookTarget(w) {
+		return fmt.Errorf("%w: the URL must start with http:// or https:// and name a host", ErrSetting)
+	}
+	return nil
+}
+
+// Trims the URL and defaults the format to the event document, answering whether the URL is http or https with a host
+func webhookTarget(w *v1.Webhook) bool {
+	w.Url = strings.TrimSpace(w.GetUrl())
+	if w.GetFormat() == v1.WebhookFormat_WEBHOOK_FORMAT_UNSPECIFIED {
+		w.Format = v1.WebhookFormat_WEBHOOK_FORMAT_EVENT
+	}
+	u, err := url.Parse(w.GetUrl())
+	return err == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https")
+}
+
+// Trims the lists of the sections, gives new webhooks their ids, and refuses a bad webhook or two sharing a name or id
+func tidySections(next *v1.Settings) error {
+	names, ids := map[string]bool{}, map[string]bool{}
+	for _, w := range next.GetNotifications().GetWebhooks() {
+		if err := CheckWebhook(w); err != nil {
+			return err
+		}
+		if w.GetId() == "" {
+			w.Id = db.NewID()
+		}
+		if names[w.GetName()] || ids[w.GetId()] {
+			return fmt.Errorf("%w: two webhooks share the name or id of %s", ErrSetting, w.GetName())
+		}
+		names[w.GetName()], ids[w.GetId()] = true, true
+	}
+	if s := next.GetSignIn(); s != nil {
+		s.TrustedProxies = trimmed(s.GetTrustedProxies())
+	}
+	for _, w := range next.GetDownloads().GetWindows() {
+		w.Days, w.From, w.To = strings.TrimSpace(w.GetDays()), strings.TrimSpace(w.GetFrom()), strings.TrimSpace(w.GetTo())
+	}
+	return nil
+}
+
+// The values without blanks or repeats, in their order
+func trimmed(in []string) []string {
+	var out []string
+	for _, v := range in {
+		if v = strings.TrimSpace(v); v != "" && !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // Refuses dropping a tool server something still attaches

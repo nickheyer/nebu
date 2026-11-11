@@ -26,7 +26,7 @@
 	import Card from '#lib/ui/layout/Card.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import Toolbar from '#lib/ui/layout/Toolbar.svelte';
-	import { kindLabel, paramLabel } from '#lib/pages/models/models.js';
+	import { paramLabel } from '#lib/pages/models/models.js';
 	import { modelsTabs } from '#lib/pages/models/tabs.js';
 	import { compact, lastSearch, repoPath } from '#lib/pages/discover/discover.js';
 	import ArrowDownIcon from 'phosphor-svelte/lib/ArrowDownIcon';
@@ -57,7 +57,8 @@
 		)
 	);
 	let warnings = $state<string[]>([]);
-	let filtersOpen = $state(false);
+	// Filters a link carries in start out in view
+	let filtersOpen = $state([...initial.entries()].some(([k, v]) => v !== '' && (k === 'author' || k.startsWith(facetPrefix))));
 
 	const source = $derived(sources.find((s) => s.source?.id === sourceId));
 	const caps = $derived(source?.capabilities);
@@ -164,7 +165,7 @@
 
 	function phrase(h: SearchHit): string {
 		const seen = new Set<string>();
-		return [kindLabel(h.kind), ...h.formats.slice(0, 3), h.license].filter((w) => w && !seen.has(w.toLowerCase()) && seen.add(w.toLowerCase())).join(' · ');
+		return [...h.formats.slice(0, 3), h.license].filter((w) => w && !seen.has(w.toLowerCase()) && seen.add(w.toLowerCase())).join(' · ');
 	}
 
 	function sizeOf(h: SearchHit): string {
@@ -207,11 +208,11 @@
 <PageHeader tabs={modelsTabs} active="discover" />
 
 <Card flush tools={toolbar}>
-	{#if filtersOpen}
-		<div class="filters">{@render facetFields()}</div>
-		{#if activeFilters}
-			<div class="clear"><NeoButton text onclick={clearFacets}>Clear active</NeoButton></div>
-		{/if}
+	{#if filtersOpen || activeFilters}
+		<div class="filterbar dense">
+			{#if filtersOpen}<div class="filters">{@render facetFields()}</div>{/if}
+			{#if activeFilters}<span class="clear"><NeoButton text onclick={clearFacets}>Clear active</NeoButton></span>{/if}
+		</div>
 	{/if}
 	{#if warning.length}
 		<ListRow lamp="warning" primary={warning[0] ?? ''} primaryKind="message" primaryTip={warning.join('\n')} action={settingsAction} />
@@ -259,16 +260,25 @@
 	.stored {
 		display: inline-flex;
 	}
-	.filters {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
-		gap: var(--nebu-space-3) var(--nebu-space-4);
-		align-items: end;
+	/* The filters fill the row and the clear button ends it, under the button that opens them */
+	.filterbar {
+		display: flex;
+		gap: var(--nebu-space-2);
+		align-items: flex-start;
 		padding: 0 var(--nebu-card-pad) var(--nebu-space-3);
 	}
+	.filters {
+		display: grid;
+		flex: 1 1 auto;
+		grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+		gap: var(--nebu-space-2);
+		min-width: 0;
+	}
 	.clear {
-		display: flex;
-		justify-content: flex-end;
-		padding: 0 var(--nebu-card-pad) var(--nebu-space-2);
+		display: inline-flex;
+		flex: 0 0 auto;
+		align-items: center;
+		min-height: var(--nebu-control);
+		margin-left: auto;
 	}
 </style>

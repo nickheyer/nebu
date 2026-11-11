@@ -155,7 +155,7 @@
 					dense
 					rows={[
 						{ label: 'username', value: probed.username },
-						{ label: 'invite', value: probed.inviteUrl, href: probed.inviteUrl, copy: true, tip: probed.inviteUrl }
+						{ label: 'invite', value: probed.inviteUrl, href: probed.inviteUrl, copy: true }
 					]}
 				/>
 			</Cell>

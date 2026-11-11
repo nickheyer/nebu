@@ -1,15 +1,15 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { NeoCollapse } from '#lib/neo/collapse/index.js';
-	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
+	import CaretRightIcon from 'phosphor-svelte/lib/CaretRightIcon';
 
-	// A short section under one trigger, its body set in from the caret unless told to line up with it
+	// A short section under one trigger, its body set in on both sides unless told to line up with the caret
 	let { label, open = $bindable(false), heading = false, indent = true, children }: { label: string; open?: boolean; heading?: boolean; indent?: boolean; children: Snippet } = $props();
 </script>
 
 {#snippet trigger()}
 	<span class="trigger" class:heading>
-		<span class="caret" class:open><CaretDownIcon size={16} /></span>
+		<span class="caret" class:open><CaretRightIcon size={16} /></span>
 		<span class="text">{label}</span>
 	</span>
 {/snippet}
@@ -36,12 +36,12 @@
 		transition: transform var(--nebu-normal) var(--nebu-settle);
 	}
 	.caret.open {
-		transform: rotate(180deg);
+		transform: rotate(90deg);
 	}
 	.body {
 		padding: 4px 0 8px;
 	}
 	.body.indent {
-		padding-left: 22px;
+		padding-inline: 22px;
 	}
 </style>

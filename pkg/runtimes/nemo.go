@@ -92,9 +92,9 @@ func (NeMo) Params() []*v1.Param {
 		{Name: "model_id", Label: "Base model id", Type: v1.ParamType_PARAM_TYPE_STRING, Group: groupConversion, Advanced: true,
 			Description: "Hugging Face id the converter builds the NeMo 2 config from"},
 		{Name: "legacy_ckpt", Label: "Legacy checkpoint", Type: v1.ParamType_PARAM_TYPE_BOOL, Default: "false", Group: groupConversion, Advanced: true, Flag: "--legacy_ckpt"},
-		strParam("tokenizer_path", "Converter tokenizer", groupConversion, "", "tokenizer file for a packed checkpoint, empty takes the checkpoint's or the base model's"),
+		{Name: "tokenizer_path", Label: "Converter tokenizer", Type: v1.ParamType_PARAM_TYPE_PATH, Group: groupConversion, Advanced: true, Description: "tokenizer file for a packed checkpoint, empty takes the checkpoint's or the base model's"},
 		strParam("tokenizer_library", "Converter tokenizer library", groupConversion, "", "sentencepiece, megatron, or huggingface, empty keeps the converter's sentencepiece"),
-		strParam("tokenizer_vocab_file", "Converter vocab file", groupConversion, "", "vocabulary file for a megatron tokenizer"),
+		{Name: "tokenizer_vocab_file", Label: "Converter vocab file", Type: v1.ParamType_PARAM_TYPE_PATH, Group: groupConversion, Advanced: true, Description: "vocabulary file for a megatron tokenizer"},
 		strParam("tokenizer_model_name", "Converter tokenizer model", groupConversion, "", "tokenizer model name, empty keeps the converter's TiktokenTokenizer"),
 	}
 }

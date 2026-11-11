@@ -384,7 +384,8 @@ type fakeInstances map[string][]string
 func (f fakeInstances) ToolSupport(string) v1.ToolSupport {
 	return v1.ToolSupport_TOOL_SUPPORT_UNSPECIFIED
 }
-func (f fakeInstances) Modes(id string) []string { return f[id] }
+func (fakeInstances) StripsBillingHeader(string) bool { return true }
+func (f fakeInstances) Modes(id string) []string      { return f[id] }
 func (fakeInstances) LoadAdapter(context.Context, string, string, string) error {
 	return errors.New("no adapter loads in this test")
 }

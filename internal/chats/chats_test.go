@@ -20,13 +20,13 @@ func manager(t *testing.T) *Manager {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := db.Open(filepath.Join(t.TempDir(), "nebu.db"), Upgrade(blobs))
+	d, err := db.Open(filepath.Join(t.TempDir(), "nebu.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.Close() })
 	if len(d.Drift) != 0 {
-		t.Fatalf("drift after the upgrade: %v", d.Drift)
+		t.Fatalf("drift after the migrations: %v", d.Drift)
 	}
 	return &Manager{DB: d, Blobs: blobs, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 }

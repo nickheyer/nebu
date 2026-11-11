@@ -23,7 +23,7 @@
 	import Menu from '#lib/ui/Menu.svelte';
 	import NameConfirm from '#lib/ui/NameConfirm.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
+	import StateWord from '#lib/ui/StateWord.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import SaveBar from '#lib/ui/fields/SaveBar.svelte';
 	import Secret from '#lib/ui/fields/Secret.svelte';
@@ -320,13 +320,6 @@
 			{/if}
 			{#if !guilds.length && !st?.shards.length}
 				<Card title="Connection">
-					{#snippet tools()}
-						{#if running}
-							<Confirm label="Stop" question="Stop {bot.name}?" danger small={false} onconfirm={stop} />
-						{:else}
-							<NeoButton elevation={2} onclick={start}>Start</NeoButton>
-						{/if}
-					{/snippet}
 					<Empty icon={PlugsIcon} text={running ? 'Connecting' : 'Not connected'} />
 				</Card>
 			{/if}
@@ -334,7 +327,7 @@
 		{#snippet right()}
 			<Card title="Details">
 				{#snippet tools()}
-					<StatePill label={enumLabel(BotStateSchema, bot.state)} lamp={botLamp(bot.state)} />
+					<StateWord label={enumLabel(BotStateSchema, bot.state)} lamp={botLamp(bot.state)} />
 					{#if running}
 						<Confirm label="Stop" question="Stop {bot.name}?" danger small={false} onconfirm={stop} />
 					{:else}
@@ -354,7 +347,7 @@
 						{ label: 'started', value: st?.startedAt ? ago(st.startedAt, clockTick.now) : '', tip: when(st?.startedAt) || undefined },
 						{ label: 'created', value: when(bot.createdAt) },
 						{ label: 'updated', value: when(bot.updatedAt) },
-						{ label: 'error', value: bot.error, color: 'error', tip: bot.error }
+						{ label: 'error', value: bot.error, color: 'error' }
 					]}
 				/>
 			</Card>
@@ -394,7 +387,7 @@
 												<button type="button" class="grip" aria-label="Drag to reorder" {@attach instance.attachHandle}><DotsSixVerticalIcon size={18} /></button>
 												<Avatar url={p.avatarUrl} size={24} />
 											{/snippet}
-											{#snippet badges()}{#if i === 0}<StatePill label="default" lamp="primary" />{/if}{/snippet}
+											{#snippet badges()}{#if i === 0}<StateWord label="default" lamp="primary" />{/if}{/snippet}
 										</ListRow>
 									</div>
 								{/snippet}

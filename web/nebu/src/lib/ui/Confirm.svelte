@@ -63,9 +63,4 @@
 		flex-direction: column;
 		min-width: 0;
 	}
-	:global(.neo-button.confirm-cancel) {
-		--neo-btn-text-color: var(--nebu-text-muted);
-		--neo-btn-text-color-hover: var(--neo-text-color);
-		--neo-btn-text-color-active: var(--neo-text-color);
-	}
 </style>

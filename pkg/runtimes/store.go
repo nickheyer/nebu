@@ -19,13 +19,22 @@ func StoreRef(m *v1.StoredModel) string {
 	return StoreScheme + m.GetSourceId() + "/" + m.GetRepo() + "#" + m.GetGroup()
 }
 
-// Finds the stored group a reference names.
-func storeRef(models []*v1.StoredModel, ref string) (*v1.StoredModel, error) {
+// Splits a store reference into its source, repository and group
+func ParseStoreRef(ref string) (source, repo, group string, err error) {
 	rest, isRef := strings.CutPrefix(ref, StoreScheme)
 	repoPath, group, hasGroup := strings.Cut(rest, "#")
 	source, repo, hasRepo := strings.Cut(repoPath, "/")
 	if !isRef || !hasGroup || !hasRepo || source == "" || repo == "" || group == "" {
-		return nil, fmt.Errorf("%w: %q is not a store reference of the form store://source/repo#group", ErrParam, ref)
+		return "", "", "", fmt.Errorf("%w: %q is not a store reference of the form store://source/repo#group", ErrParam, ref)
+	}
+	return source, repo, group, nil
+}
+
+// Finds the stored group a reference names.
+func storeRef(models []*v1.StoredModel, ref string) (*v1.StoredModel, error) {
+	source, repo, group, err := ParseStoreRef(ref)
+	if err != nil {
+		return nil, err
 	}
 	for _, m := range models {
 		if m.GetSourceId() == source && m.GetRepo() == repo && m.GetGroup() == group {
@@ -97,6 +106,10 @@ func PartFile(m *v1.StoredModel, p *v1.Param) (string, error) {
 		if files := roleFiles(m, v1.ArtifactRole_ARTIFACT_ROLE_DRAFT); len(files) > 0 {
 			return files[0], nil
 		}
+		if weights, _ := storedWeights(m); len(weights) > 0 {
+			return weights[0], nil
+		}
+		return "", fmt.Errorf("%w: %s holds no weights", ErrParam, name)
 	case "checkpoint":
 		if m.GetPath() != "" {
 			return m.GetPath(), nil

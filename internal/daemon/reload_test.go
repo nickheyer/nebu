@@ -13,6 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nickheyer/nebu/internal/doctor"
+	"github.com/nickheyer/nebu/internal/notify"
+	"github.com/nickheyer/nebu/internal/pull"
+	"github.com/nickheyer/nebu/internal/settings"
+	blobstore "github.com/nickheyer/nebu/pkg/store"
+	"github.com/nickheyer/nebu/pkg/transfer"
+
 	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/gateway"
@@ -39,7 +46,8 @@ type plainInstances struct{}
 func (plainInstances) ToolSupport(string) v1.ToolSupport {
 	return v1.ToolSupport_TOOL_SUPPORT_UNSPECIFIED
 }
-func (plainInstances) Modes(string) []string { return nil }
+func (plainInstances) StripsBillingHeader(string) bool { return true }
+func (plainInstances) Modes(string) []string           { return nil }
 func (plainInstances) LoadAdapter(context.Context, string, string, string) error {
 	return errors.New("no adapter loads in this test")
 }
@@ -119,9 +127,82 @@ func reloadDaemon(t *testing.T, path string) (*Daemon, *logSink) {
 		shutdown(context.Background())
 		store.Close()
 	})
+	blobs, err := blobstore.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	d := &Daemon{Config: cfg, Gateway: g, Log: log, LogLevel: level, ConfigPath: path, reloads: make(chan struct{}, 1), reloadEvery: 20 * time.Millisecond}
+	d.Store = blobs
+	d.Puller = &pull.Puller{Fetcher: transfer.New(1, 1<<16, 1, log)}
+	d.Doctor = &doctor.Doctor{}
+	d.Notifier = &notify.Notifier{Events: bus, Log: log}
+	if !cfg.GetAuth().GetDisabled() {
+		if d.Sessions, err = auth.OpenSessions(filepath.Join(t.TempDir(), "session.key"), time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d.Settings = &settings.Manager{DB: store, Events: bus, Check: d.checkSettings, Apply: d.applySettings}
+	if err := d.Settings.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
 	d.Reload(cfg)
 	return d, sink
+}
+
+// A limit saved in the web UI outlives a config reload, and one set back to the file's follows the file again
+func TestSavedSettingsStandOverConfigReloads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("auth:\n  disabled: true\ngateway:\n  policy:\n    max_in_flight: 3\nmin_free_bytes: 1000\nnotify:\n  webhooks: [\"https://hooks.example/file\"]\n")
+	d, _ := reloadDaemon(t, path)
+	ctx := context.Background()
+	in := d.Settings.Get()
+	in.Storage = &v1.DiskLimits{MaxBytes: 5000, MinFreeBytes: 2000}
+	in.LogLevel = "error"
+	if _, err := d.Settings.Update(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if d.Store.MaxBytes.Load() != 5000 || d.Puller.MinFree.Load() != 2000 || d.Doctor.MinFree.Load() != 2000 || d.LogLevel.Level() != slog.LevelError {
+		t.Fatalf("store %d, pull floor %d, doctor floor %d, level %v after the save", d.Store.MaxBytes.Load(), d.Puller.MinFree.Load(), d.Doctor.MinFree.Load(), d.LogLevel.Level())
+	}
+	if hooks := d.Notifier.Webhooks(); len(hooks) != 1 || hooks[0].GetUrl() != "https://hooks.example/file" || hooks[0].GetName() != "hooks.example" || !hooks[0].GetEnabled() {
+		t.Fatalf("webhooks in force: %v", hooks)
+	}
+	write("auth:\n  disabled: true\ngateway:\n  policy:\n    max_in_flight: 4\nmin_free_bytes: 1000\nnotify:\n  webhooks: [\"https://hooks.example/next\"]\n")
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Reload(cfg)
+	if got := d.Gateway.Status().GetPolicy().GetMaxInFlight(); got != 4 {
+		t.Fatalf("the reloaded file's policy is not in force: %d", got)
+	}
+	if d.Store.MaxBytes.Load() != 5000 || d.LogLevel.Level() != slog.LevelError {
+		t.Fatalf("the saved storage or level gave way to the reloaded file: %d %v", d.Store.MaxBytes.Load(), d.LogLevel.Level())
+	}
+	if hooks := d.Notifier.Webhooks(); len(hooks) != 1 || hooks[0].GetUrl() != "https://hooks.example/next" {
+		t.Fatalf("the unset webhooks did not follow the reloaded file: %v", hooks)
+	}
+	in = d.Settings.Get()
+	in.Storage = d.Settings.Base().GetStorage()
+	if got, err := d.Settings.Update(ctx, in); err != nil || got.GetStorage() != nil {
+		t.Fatalf("storage set back to the file's stayed stored: %v %v", got.GetStorage(), err)
+	}
+	in = d.Settings.Get()
+	in.SignIn = &v1.SignIn{SessionSeconds: 600}
+	if _, err := d.Settings.Update(ctx, in); !errors.Is(err, settings.ErrSetting) {
+		t.Fatalf("a sign in setting with authentication off: %v", err)
+	}
+	in = d.Settings.Get()
+	in.Downloads = &v1.Downloads{Connections: 2, Retries: 2, Windows: []*v1.TransferWindow{{Days: "someday"}}}
+	if _, err := d.Settings.Update(ctx, in); !errors.Is(err, settings.ErrSetting) {
+		t.Fatalf("a download window on no day of the week: %v", err)
+	}
 }
 
 // The status a request with the bearer gets from the gateway listing
@@ -214,5 +295,29 @@ func TestConfigReloadSwapsKeysPolicyAndLevel(t *testing.T) {
 	eventually(t, "the refusal", func() bool { return bytes.Contains([]byte(sink.String()), []byte("config reload refused")) })
 	if bearerStatus(t, d, "second") == http.StatusUnauthorized || d.Gateway.Status().GetPolicy().GetMaxInFlight() != 7 || d.LogLevel.Level() != slog.LevelWarn {
 		t.Fatal("a refused reload must leave the running settings alone")
+	}
+}
+
+// A session lifetime and trusted proxies saved in the web UI take hold in the sessions at once
+func TestSignInSettingsReachTheSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("auth:\n  session_ttl: 2h\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := reloadDaemon(t, path)
+	if d.Sessions.TTL() != 2*time.Hour {
+		t.Fatalf("session lifetime from the file: %v", d.Sessions.TTL())
+	}
+	in := d.Settings.Get()
+	in.SignIn = &v1.SignIn{SessionSeconds: 600, TrustedProxies: []string{"10.0.0.0/8"}}
+	if _, err := d.Settings.Update(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if d.Sessions.TTL() != 10*time.Minute {
+		t.Fatalf("session lifetime after the save: %v", d.Sessions.TTL())
+	}
+	in.SignIn = &v1.SignIn{SessionSeconds: 600, TrustedProxies: []string{"not-a-network"}}
+	if _, err := d.Settings.Update(context.Background(), in); !errors.Is(err, settings.ErrSetting) {
+		t.Fatalf("a proxy that is no CIDR: %v", err)
 	}
 }

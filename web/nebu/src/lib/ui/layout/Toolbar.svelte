@@ -5,12 +5,10 @@
 	let { children }: { children: Snippet } = $props();
 </script>
 
-<div class="toolbar">{@render children()}</div>
+<div class="toolbar dense">{@render children()}</div>
 
 <style>
 	.toolbar {
-		--neo-input-padding: 0.375rem 0.75rem;
-
 		display: flex;
 		flex: 1 1 auto;
 		flex-wrap: wrap;

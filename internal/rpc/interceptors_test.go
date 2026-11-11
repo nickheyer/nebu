@@ -138,6 +138,12 @@ func TestRequestsBreakingTheirRulesAreRefused(t *testing.T) {
 			_, err := hostClient.ListDirectory(ctx, r)
 			return err
 		}},
+		{"host.proto start place", func() error {
+			r := connect.NewRequest(&v1.ListDirectoryRequest{Start: v1.DirPlaceKind_DIR_PLACE_KIND_VOLUME})
+			bearer(r)
+			_, err := hostClient.ListDirectory(ctx, r)
+			return err
+		}},
 		{"instance.proto", func() error {
 			r := connect.NewRequest(&v1.GetInstanceRequest{})
 			bearer(r)

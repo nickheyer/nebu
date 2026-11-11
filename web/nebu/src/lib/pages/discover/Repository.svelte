@@ -22,7 +22,8 @@
 	import FileTree, { type TreeItem } from '#lib/ui/FileTree.svelte';
 	import PullButton from '#lib/pages/discover/PullButton.svelte';
 	import WeightsTable from '#lib/pages/discover/WeightsTable.svelte';
-	import { lastSearch } from '#lib/pages/discover/discover.js';
+	import { lastSearch, weightGroups } from '#lib/pages/discover/discover.js';
+	import ContextLegend from '#lib/pages/models/ContextLegend.svelte';
 	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 	import FileTextIcon from 'phosphor-svelte/lib/FileTextIcon';
 	import PlugsIcon from 'phosphor-svelte/lib/PlugsIcon';
@@ -54,6 +55,7 @@
 	const beside = $derived(showCard && width >= 1180);
 	const tabs = $derived([{ id: 'weights', label: 'Weights' }, { id: 'files', label: 'Files' }, ...(showCard && !beside ? [{ id: 'card', label: 'Card' }] : [])]);
 	const activeTab = $derived(tabs.some((t) => t.id === tab) ? tab : 'weights');
+	const hasWeights = $derived(weightGroups(model).length > 0);
 	// This node is the picker's resting value, so pulls name no node until another is chosen
 	const selfId = $derived([...live.nodes.values()].find((n) => n.self)?.id);
 	const pickedNode = $derived(nodeId ?? selfId);
@@ -154,6 +156,8 @@
 	<PullButton {sourceId} {repo} {revision} paths={item.files.map((f) => f.path)} name={item.name} nodeId={nodeId ?? ''} />
 {/snippet}
 
+{#snippet legend()}<ContextLegend />{/snippet}
+
 {#snippet warnings()}
 	{#if model?.warnings.length}
 		<List head={{ primary: 'Warnings' }}>
@@ -177,7 +181,7 @@
 		<div class="layout" class:beside>
 			<aside class="operator" aria-label="Repository">
 				<!-- The tabs, then the node the pulls land on and the revision the tables read from -->
-				<div class="opbar">
+				<div class="opbar dense">
 					<div class="tabs"><PageTabs {tabs} active={activeTab} onchange={openTab} /></div>
 					{#if live.inMesh}
 						<span class="node"><Picker bind:value={() => pickedNode, (v) => (nodeId = v === selfId ? undefined : v)} fetch={fetchNodes} label="Node" compact current={pickedNode ? live.nodes.get(pickedNode)?.name : undefined} /></span>
@@ -189,7 +193,7 @@
 				{#if activeTab === 'card'}
 					{@render modelCard()}
 				{:else}
-				<Card flush scroll={beside}>
+				<Card flush scroll={beside} footer={activeTab === 'weights' && hasWeights ? legend : undefined}>
 					{#if resolveError}
 						<Empty icon={CubeIcon} text="Repository failed to resolve" hint={resolveError} action="Retry" onclick={() => attempt++} />
 					{:else if !model}

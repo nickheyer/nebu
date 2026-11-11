@@ -23,7 +23,7 @@ func TestTensorCachesCountAndCollect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.MaxBytes = 10
+	s.MaxBytes.Store(10)
 	s.CacheDir = t.TempDir()
 	s.KeepCache = func(id string) bool { return id == "live" }
 	writeCache(t, s.CacheDir, "live", "a", 5)
@@ -66,7 +66,7 @@ func TestTensorCacheReadErrorsAreReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.MaxBytes = 1
+	s.MaxBytes.Store(1)
 	s.CacheDir = t.TempDir()
 	writeCache(t, s.CacheDir, "sealed", "a", 3)
 	sealed := filepath.Join(s.CacheDir, "sealed")

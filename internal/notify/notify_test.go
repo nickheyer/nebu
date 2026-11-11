@@ -3,12 +3,12 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,7 +72,8 @@ func run(t *testing.T, bus *events.Bus, hooks ...*hook) {
 		t.Cleanup(srv.Close)
 		urls = append(urls, srv.URL)
 	}
-	n := &Notifier{Webhooks: urls, Events: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	n := &Notifier{Events: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	n.Set(failureHooks(urls...))
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -84,6 +85,15 @@ func run(t *testing.T, bus *events.Bus, hooks ...*hook) {
 	})
 	// The subscription is in place once an unrelated event flows through
 	time.Sleep(20 * time.Millisecond)
+}
+
+// Webhooks told of failed models in the event document
+func failureHooks(urls ...string) []*v1.Webhook {
+	var out []*v1.Webhook
+	for i, u := range urls {
+		out = append(out, &v1.Webhook{Id: fmt.Sprint(i), Name: fmt.Sprint("hook ", i), Url: u, Enabled: true, Format: v1.WebhookFormat_WEBHOOK_FORMAT_EVENT, Events: []v1.NotifyEvent{v1.NotifyEvent_NOTIFY_EVENT_MODEL_FAILED}})
+	}
+	return out
 }
 
 func instance(id string, state v1.InstanceState) *v1.Instance {
@@ -140,43 +150,124 @@ func TestPostRetriesServerErrors(t *testing.T) {
 	}
 }
 
-// Without webhooks the notifier returns at once and never subscribes
-func TestRunWithoutWebhooks(t *testing.T) {
+// Webhooks set while the notifier runs get the failures from then on, none set getting nothing
+func TestWebhooksSetWhileRunning(t *testing.T) {
 	bus := events.New()
-	var subscribed atomic.Bool
+	h := &hook{}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
 	n := &Notifier{Events: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		n.Run(context.Background())
-		subscribed.Store(false)
+		n.Run(ctx)
 	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Run without webhooks did not return")
+	defer func() {
+		cancel()
+		<-done
+	}()
+	fail := func(id string) {
+		bus.Publish(v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_UPDATED, id, &v1.Instance{Id: id, State: v1.InstanceState_INSTANCE_STATE_FAILED})
+	}
+	for i := range 5 {
+		fail(fmt.Sprintf("before-%d", i))
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := h.posts(); len(got) > 0 {
+		t.Fatalf("failures were posted with no webhook set: %v", got)
+	}
+	n.Set(failureHooks(srv.URL))
+	deadline := time.Now().Add(5 * time.Second)
+	for i := 0; len(h.posts()) == 0 && time.Now().Before(deadline); i++ {
+		fail(fmt.Sprintf("after-%d", i))
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(h.posts()) == 0 {
+		t.Fatal("no failure reached the webhook set while running")
 	}
 }
 
-// Failure transitions are detected per instance, the deletion of one clearing what was seen
-func TestMatters(t *testing.T) {
-	seen := map[string]v1.InstanceState{}
-	kind, updated := v1.EventKind_EVENT_KIND_INSTANCE, v1.EventAction_EVENT_ACTION_UPDATED
-	for i, tc := range []struct {
-		ev   *v1.Event
-		want bool
-	}{
-		{events.Event(kind, updated, "i1", instance("i1", v1.InstanceState_INSTANCE_STATE_READY)), false},
-		{events.Event(kind, updated, "i1", instance("i1", v1.InstanceState_INSTANCE_STATE_FAILED)), true},
-		{events.Event(kind, updated, "i1", instance("i1", v1.InstanceState_INSTANCE_STATE_FAILED)), false},
-		{events.Event(kind, updated, "i1", instance("i1", v1.InstanceState_INSTANCE_STATE_STOPPED)), false},
-		{events.Event(kind, updated, "i1", instance("i1", v1.InstanceState_INSTANCE_STATE_FAILED)), true},
-		{events.Event(kind, v1.EventAction_EVENT_ACTION_DELETED, "i1", instance("i1", v1.InstanceState_INSTANCE_STATE_FAILED)), false},
-		{events.Event(kind, updated, "i1", instance("i1", v1.InstanceState_INSTANCE_STATE_FAILED)), true},
-		{events.Event(v1.EventKind_EVENT_KIND_TASK, updated, "t1", &v1.Task{Id: "t1"}), false},
-	} {
-		if got := matters(tc.ev, seen); got != tc.want {
-			t.Fatalf("event %d matters %v, want %v", i, got, tc.want)
-		}
+// Each webhook gets only the events it names, in its own format, a disabled one nothing, a finished task once
+func TestWebhooksTakeTheirEventsInTheirFormat(t *testing.T) {
+	bus := events.New()
+	discord, slack, tasks, off := &hook{}, &hook{}, &hook{}, &hook{}
+	var hooks []*v1.Webhook
+	for i, h := range []*hook{discord, slack, tasks, off} {
+		srv := httptest.NewServer(h)
+		t.Cleanup(srv.Close)
+		hooks = append(hooks, &v1.Webhook{Id: fmt.Sprint(i), Name: fmt.Sprint("hook ", i), Url: srv.URL, Enabled: true})
+	}
+	hooks[0].Format, hooks[0].Events = v1.WebhookFormat_WEBHOOK_FORMAT_DISCORD, []v1.NotifyEvent{v1.NotifyEvent_NOTIFY_EVENT_MODEL_FAILED, v1.NotifyEvent_NOTIFY_EVENT_TASK_FAILED}
+	hooks[1].Format, hooks[1].Events = v1.WebhookFormat_WEBHOOK_FORMAT_SLACK, []v1.NotifyEvent{v1.NotifyEvent_NOTIFY_EVENT_TASK_SUCCEEDED}
+	hooks[2].Format, hooks[2].Events = v1.WebhookFormat_WEBHOOK_FORMAT_EVENT, []v1.NotifyEvent{v1.NotifyEvent_NOTIFY_EVENT_TASK_FAILED, v1.NotifyEvent_NOTIFY_EVENT_TASK_SUCCEEDED}
+	hooks[3].Format, hooks[3].Events, hooks[3].Enabled = v1.WebhookFormat_WEBHOOK_FORMAT_EVENT, []v1.NotifyEvent{v1.NotifyEvent_NOTIFY_EVENT_MODEL_FAILED, v1.NotifyEvent_NOTIFY_EVENT_TASK_FAILED, v1.NotifyEvent_NOTIFY_EVENT_TASK_SUCCEEDED}, false
+	n := &Notifier{Events: bus, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Host: func() string { return "disco" }}
+	n.Set(hooks)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		n.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	time.Sleep(20 * time.Millisecond)
+	updated := v1.EventAction_EVENT_ACTION_UPDATED
+	task := func(id string, state v1.TaskState, err string) {
+		bus.Publish(v1.EventKind_EVENT_KIND_TASK, updated, id, &v1.Task{Id: id, Kind: "pull", Title: "Pull " + id, State: state, Error: err})
+	}
+	task("t1", v1.TaskState_TASK_STATE_RUNNING, "")
+	task("t1", v1.TaskState_TASK_STATE_FAILED, "no room")
+	task("t1", v1.TaskState_TASK_STATE_FAILED, "no room")
+	task("t2", v1.TaskState_TASK_STATE_SUCCEEDED, "")
+	task("t3", v1.TaskState_TASK_STATE_CANCELED, "")
+	failed := instance("i1", v1.InstanceState_INSTANCE_STATE_FAILED)
+	failed.Error = "out of memory"
+	bus.Publish(v1.EventKind_EVENT_KIND_INSTANCE, updated, "i1", failed)
+	got := discord.await(t, 2, 3*time.Second)
+	if got[0]["content"] != "disco: Pull t1 failed: no room" || got[1]["content"] != "disco: model-i1 failed: out of memory" {
+		t.Errorf("discord posts %v", got)
+	}
+	if got := slack.await(t, 1, 3*time.Second); got[0]["text"] != "disco: Pull t2 finished" {
+		t.Errorf("slack posts %v", got)
+	}
+	if got := tasks.await(t, 2, 3*time.Second); got[0]["id"] != "t1" || got[1]["id"] != "t2" || got[0]["kind"] != "EVENT_KIND_TASK" {
+		t.Errorf("event posts %v", got)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if len(discord.posts()) != 2 || len(slack.posts()) != 1 || len(tasks.posts()) != 2 || len(off.posts()) != 0 {
+		t.Errorf("posts beyond what each webhook names: discord %d, slack %d, tasks %d, off %d", len(discord.posts()), len(slack.posts()), len(tasks.posts()), len(off.posts()))
+	}
+}
+
+// A test posts one sample of the first event the webhook names and answers the status it got
+func TestWebhookTest(t *testing.T) {
+	h := &hook{status: []int{http.StatusNoContent, http.StatusForbidden}}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	n := &Notifier{Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	hook := &v1.Webhook{Name: "chat", Url: srv.URL, Format: v1.WebhookFormat_WEBHOOK_FORMAT_SLACK, Events: []v1.NotifyEvent{v1.NotifyEvent_NOTIFY_EVENT_TASK_FAILED}}
+	if status, err := n.Test(context.Background(), hook); err != nil || status != http.StatusNoContent {
+		t.Fatalf("status %d err %v", status, err)
+	}
+	if got := h.posts(); len(got) != 1 || got[0]["text"] != "Test notification failed" {
+		t.Fatalf("sample %v", got)
+	}
+	if status, err := n.Test(context.Background(), hook); err != nil || status != http.StatusForbidden {
+		t.Fatalf("a refusing webhook: status %d err %v", status, err)
+	}
+	bare := &v1.Webhook{Url: srv.URL, Format: v1.WebhookFormat_WEBHOOK_FORMAT_DISCORD}
+	if status, err := n.Test(context.Background(), bare); err != nil || status != http.StatusOK {
+		t.Fatalf("a webhook holding a URL alone: status %d err %v", status, err)
+	}
+	if got := h.posts(); len(got) != 3 || got[2]["content"] != "Test notification finished" {
+		t.Fatalf("sample of a webhook naming no event %v", got)
+	}
+	hook.Url = "http://127.0.0.1:1/nowhere"
+	if _, err := n.Test(context.Background(), hook); err == nil {
+		t.Fatal("a webhook nobody listens on answered")
 	}
 }

@@ -141,7 +141,7 @@ func TestDownMigrationsReverseEachUp(t *testing.T) {
 		})
 	}
 	// Down to nothing then up again lands at head with no drift
-	again, err := Open(down, func(ctx context.Context, d *DB) error { return d.DropLegacyChatFiles(ctx) })
+	again, err := Open(down)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestLegacyDatabaseUpgradesInPlace(t *testing.T) {
 		}
 	}
 	raw.Close()
-	d, err := Open(path, func(ctx context.Context, d *DB) error { return d.DropLegacyChatFiles(ctx) })
+	d, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestRouteUpgradeCarriesOwner(t *testing.T) {
 		}
 	}
 	old.Close()
-	d, err := Open(path, func(ctx context.Context, d *DB) error { return d.DropLegacyChatFiles(ctx) })
+	d, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestAliasInheritMigration(t *testing.T) {
 		}
 	}
 	old.Close()
-	d, err := Open(path, func(ctx context.Context, d *DB) error { return d.DropLegacyChatFiles(ctx) })
+	d, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

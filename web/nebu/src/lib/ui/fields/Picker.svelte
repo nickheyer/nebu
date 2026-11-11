@@ -1,4 +1,5 @@
 <script lang="ts" generics="V extends string">
+	import type { Snippet } from 'svelte';
 	import { NeoButton } from '#lib/neo/buttons/index.js';
 	import { NeoSelect } from '#lib/neo/inputs/index.js';
 	import type { NeoListItem, NeoListContext, NeoListSelectedItem } from '#lib/neo/list/index.js';
@@ -19,8 +20,9 @@
 		error,
 		pageSize = 25,
 		current,
-		// A toolbar picker, its label standing as the placeholder and prefixed to the chosen option
+		// A toolbar picker, its label standing as the placeholder
 		compact = false,
+		trailing,
 		onchange
 	}: {
 		value?: V;
@@ -36,6 +38,8 @@
 		pageSize?: number;
 		current?: string;
 		compact?: boolean;
+		// Drawn inside the box after the toggle
+		trailing?: Snippet;
 		onchange?: (v: V | undefined) => void;
 	} = $props();
 
@@ -48,6 +52,7 @@
 	let open = $state(false);
 	let abort: AbortController | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	let asked = false;
 
 	const items = $derived.by((): NeoListItem<V>[] => {
 		const list = options.map((o): NeoListItem<V> => ({ id: o.value, value: o.value, label: o.label, description: o.description, disabled: o.disabled }));
@@ -55,12 +60,10 @@
 		return list;
 	});
 
-	// The chosen option behind its label in a toolbar, alone in a form
-	function prefixed(selection?: NeoListSelectedItem<V> | NeoListSelectedItem<V>[]): string | undefined {
+	// The chosen option by its label
+	function named(selection?: NeoListSelectedItem<V> | NeoListSelectedItem<V>[]): string | undefined {
 		const one = Array.isArray(selection) ? selection[0] : selection;
-		const text = one?.item?.label ?? one?.item?.value?.toString();
-		if (text === undefined) return undefined;
-		return compact && label ? `${label}: ${text}` : text;
+		return one?.item?.label ?? one?.item?.value?.toString();
 	}
 
 	async function run(query: string, cursor: string, append: boolean) {
@@ -82,11 +85,16 @@
 		}
 	}
 
+	// Asks at once as the list opens, then a moment after the last typed key
 	$effect(() => {
 		const q = highlight ?? '';
-		if (!open) return;
+		if (!open) {
+			asked = false;
+			return;
+		}
 		clearTimeout(timer);
-		timer = setTimeout(() => void run(q, '', false), 250);
+		timer = setTimeout(() => void run(q, '', false), asked ? 250 : 0);
+		asked = true;
 	});
 
 	function more() {
@@ -116,7 +124,7 @@
 		sort={() => 0}
 		search
 		placeholder={placeholder ?? (compact ? label : undefined)}
-		display={prefixed}
+		display={named}
 		{disabled}
 		{clearable}
 		{required}
@@ -128,8 +136,9 @@
 		{error}
 		width="100%"
 		aria-label={label}
-		listProps={{ ...listPopover, after, loading: loading && options.length > 0, searchProps: { sort: false } }}
+		listProps={{ ...listPopover, after, loading: loading && options.length > 0, searchProps: { ...listPopover.searchProps, sort: false } }}
 		buttonProps={selectToggle}
+		{trailing}
 		onChange={(v) => onchange?.(v as V | undefined)}
 	/>
 </div>

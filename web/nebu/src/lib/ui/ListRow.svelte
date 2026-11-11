@@ -17,7 +17,7 @@
 	import Tip from '#lib/ui/Tip.svelte';
 	import { compactBelow, useList, weightOf, type ListSlot } from '#lib/ui/list.svelte.js';
 	import type { DotShape, Lamp } from '#lib/ui/status.js';
-	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
+	import CaretRightIcon from 'phosphor-svelte/lib/CaretRightIcon';
 
 	export type Fact = { value: string; tip?: string; mono?: boolean };
 
@@ -126,7 +126,7 @@
 
 {#snippet fact(f: Fact | undefined)}
 	{#if f && f.value !== ''}
-		<Tip text={f.tip} tag="span" class="facttip">
+		<Tip text={f.tip === f.value ? undefined : f.tip} tag="span" class="facttip">
 			<span class="fact" class:mono={f.mono}>{f.value}</span>
 		</Tip>
 	{/if}
@@ -134,7 +134,7 @@
 
 {#snippet caret()}
 	<NeoButton text aria-label={open ? 'Collapse' : 'Expand'} aria-expanded={open} onclick={() => (open = !open)}>
-		{#snippet icon()}<span class="caret" class:open><CaretDownIcon size={16} /></span>{/snippet}
+		{#snippet icon()}<span class="caret" class:open><CaretRightIcon size={16} /></span>{/snippet}
 	</NeoButton>
 {/snippet}
 
@@ -164,7 +164,7 @@
 			{#if list.has('dot')}<span class="cell">{#if lamp}<Dot {lamp} {shape} />{/if}</span>{/if}
 			<span class="cell primary">{@render name()}</span>
 			{#if list.has('secondary')}
-				<span class="cell secondary-col">{#if secondary !== undefined}<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" />{/if}</span>
+				<span class="cell secondary-col">{#if secondary !== undefined}<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" clip />{/if}</span>
 			{/if}
 			{#if list.has('instrument')}<span class="cell instrument">{#if instrument}{@render instrument()}{/if}</span>{/if}
 			{#each { length: list.shownFacts } as _, i (i)}<span class="cell end">{@render fact(shownFacts[i])}</span>{/each}
@@ -185,7 +185,7 @@
 			</span>
 			{#if !compact && secondary !== undefined}
 				<span class="secondary-col flexsec" style:flex-basis={secondaryBasis}>
-					<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" />
+					<Str value={secondary} kind={secondaryKind} tip={secondaryTip} color={secondaryColor ?? 'muted'} width="100%" clip />
 				</span>
 			{/if}
 			{#if instrument && !compact}
@@ -264,6 +264,12 @@
 	}
 	.cell.end {
 		justify-content: flex-end;
+	}
+	/* A glyph ending the row sits on the row's inset, where the card's own tools end, its button box reaching past it */
+	.listrow > .cell:last-child:has(:global(.neo-button.neo-empty)),
+	.listrow.flex > :global(:last-child:has(.neo-button.neo-empty)),
+	.listrow.flex > :global(.neo-button.neo-empty:last-child) {
+		margin-right: -7.5px;
 	}
 	.leading {
 		display: inline-flex;
@@ -354,7 +360,7 @@
 		transition: transform var(--nebu-normal) var(--nebu-settle);
 	}
 	.caret.open {
-		transform: rotate(180deg);
+		transform: rotate(90deg);
 	}
 	.below {
 		display: flex;

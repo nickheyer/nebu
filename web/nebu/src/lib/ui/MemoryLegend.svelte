@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Segment } from '#lib/ui/Bar.svelte';
+	import Swatch from '#lib/ui/Swatch.svelte';
 
 	type Kind = Segment['kind'];
 
@@ -24,7 +25,7 @@
 {#if items.length > 1}
 	<div class="legend" aria-label="Legend">
 		{#each items as item (item.kind)}
-			<span class="item"><span class="swatch {item.kind}" aria-hidden="true"></span>{item.label}</span>
+			<span class="item"><Swatch kind={item.kind} />{item.label}</span>
 		{/each}
 	</div>
 {/if}
@@ -41,31 +42,5 @@
 		display: inline-flex;
 		gap: 6px;
 		align-items: center;
-	}
-	.swatch {
-		display: inline-block;
-		width: 14px;
-		height: 8px;
-		border-radius: 2px;
-	}
-	.instance,
-	.used {
-		background: var(--neo-color-primary);
-	}
-	.reservation {
-		background: repeating-linear-gradient(135deg, var(--neo-color-primary) 0 3px, transparent 3px 6px);
-	}
-	.planned {
-		background: repeating-linear-gradient(135deg, var(--nebu-steel) 0 3px, transparent 3px 6px);
-	}
-	.other {
-		background: var(--nebu-text-muted);
-	}
-	.warning {
-		background: var(--neo-color-warning);
-	}
-	.free {
-		background: var(--neo-background-color-secondary);
-		box-shadow: var(--neo-box-shadow-inset-1);
 	}
 </style>

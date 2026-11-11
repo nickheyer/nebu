@@ -13,7 +13,6 @@
 	import { toast } from '#lib/shell/notify.svelte.js';
 	import Confirm from '#lib/ui/Confirm.svelte';
 	import NameConfirm from '#lib/ui/NameConfirm.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
 	import FieldRow from '#lib/ui/fields/FieldRow.svelte';
 	import FormSection from '#lib/ui/fields/FormSection.svelte';
 	import PoolMemory from '#lib/ui/fields/PoolMemory.svelte';
@@ -24,7 +23,7 @@
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Row from '#lib/ui/layout/Row.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
-	import { slotLamp } from '#lib/ui/status.js';
+	import { slotLamp, slotShape } from '#lib/ui/status.js';
 	import ParamsForm from '#lib/pages/serve/ParamsForm.svelte';
 	import PolicyFields from '#lib/pages/serve/PolicyFields.svelte';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
@@ -182,9 +181,7 @@
 	{/if}
 {/snippet}
 
-<PanelHeader title={editing ? (slot?.name ?? '') : 'New slot'} subtitle={slot?.description || undefined} {onclose}>
-	{#if slot}<StatePill label={enumLabel(SlotStateSchema, slot.state)} lamp={slotLamp(slot.state)} />{/if}
-</PanelHeader>
+<PanelHeader title={editing ? (slot?.name ?? '') : 'New slot'} lamp={slot ? slotLamp(slot.state) : undefined} shape={slot ? slotShape(slot.state) : undefined} state={slot ? enumLabel(SlotStateSchema, slot.state) : undefined} subtitle={slot?.description || undefined} {onclose} />
 <Stack gap={24}>
 	<FormSection>
 		<FieldRow>
@@ -193,19 +190,19 @@
 		</FieldRow>
 	</FormSection>
 	{#if limits}
-		<FormSection title="Memory" info="How much of each a model in the slot may use">
+		<FormSection title="Memory">
 			<PoolMemory bind:value={limits} profile={live.host} />
-			{#if closed}<p class="error-text secondary">Leave memory open in at least one</p>{/if}
+			{#if closed}<p class="error-text secondary">A slot needs memory on at least one device</p>{/if}
 		</FormSection>
 	{/if}
 	<PolicyFields bind:policy bind:profile />
-	<FormSection title="Aliases" info="Other names clients can call the slot by">
+	<FormSection title="Aliases">
 		{#each aliases as alias, i (i)}
 			<Row gap={8} wrap={false} align="flex-end">
-				<Cell min="10rem"><Text bind:value={alias.name} label={i === 0 ? 'Name' : undefined} max={64} /></Cell>
+				<Cell min="10rem"><Text bind:value={alias.name} label={i === 0 ? 'Alias' : undefined} max={64} /></Cell>
 				{#if others.length}
 					<Cell min="10rem">
-						<Select bind:value={() => alias.inheritSlotId || undefined, (v) => (alias.inheritSlotId = v ?? '')} options={others} label={i === 0 ? 'Limits and tools of' : undefined} placeholder={name} clearable />
+						<Select bind:value={() => alias.inheritSlotId || undefined, (v) => (alias.inheritSlotId = v ?? '')} options={others} label={i === 0 ? 'Inherits from' : undefined} placeholder={name} clearable />
 					</Cell>
 				{/if}
 				<Cell grow={false}>
@@ -227,7 +224,7 @@
 	<FormSection title="Launch">
 		<FieldRow>
 			<Select bind:value={runtimeId} options={runtimeOptions} label="Runtime" clearable />
-			<Text bind:value={args} label="Arguments" info="Added to the runtime's command" max={512} mono />
+			<Text bind:value={args} label="Extra arguments" max={512} mono />
 		</FieldRow>
 	</FormSection>
 	{#if runtimeParams.length}

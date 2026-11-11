@@ -13,7 +13,25 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Measures links to ready members whose last measurement is older than the probe interval, checking every round
+// Wait before a member's next probe, the probe interval once measured, else one round doubled per failure in a row
+func (m *Manager) probeWait(misses int) time.Duration {
+	if misses == 0 {
+		return ProbeInterval
+	}
+	return min(m.interval<<min(misses-1, 16), ProbeInterval)
+}
+
+// Counts a failed probe of a member, so the next comes due after the wait its failures in a row set
+func (m *Manager) probeMissed(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mb := m.members[id]; mb != nil {
+		mb.probeMisses++
+		mb.probedAt = time.Now()
+	}
+}
+
+// Measures links to ready members whose probe is due, a failed one again within rounds, checking every round
 func (m *Manager) probeLoop(ctx context.Context) {
 	// The first gossip rounds settle before the first probe
 	select {
@@ -30,7 +48,7 @@ func (m *Manager) probeLoop(ctx context.Context) {
 			if mb.rec.GetState() != v1.NodeState_NODE_STATE_READY || mb.rec.GetAddress() == "" {
 				continue
 			}
-			if time.Since(mb.probedAt) >= ProbeInterval {
+			if time.Since(mb.probedAt) >= m.probeWait(mb.probeMisses) {
 				mb.probedAt = time.Now()
 				due = append(due, id)
 			}
@@ -101,10 +119,11 @@ func (m *Manager) Probe(ctx context.Context, nodeID string, force bool) ([]*v1.L
 	return out, nil
 }
 
-// Measures one link and records it
+// Measures one link and records it, a failure leaving the member due again within rounds
 func (m *Manager) probeOne(ctx context.Context, id string, force bool) (*v1.Link, error) {
 	cl, err := m.Client(ctx, id)
 	if err != nil {
+		m.probeMissed(id)
 		return nil, err
 	}
 	m.mu.Lock()
@@ -126,14 +145,17 @@ func (m *Manager) probeOne(ctx context.Context, id string, force bool) (*v1.Link
 	}
 	link, err := m.prober.Measure(ctx, m.identity.ID, links.Target{ID: id, Address: cl.Address, TLS: cl.TLS, Header: cl.Header, PeerRDMA: peerRDMA}, last, hold)
 	if err != nil {
+		m.probeMissed(id)
 		return nil, err
 	}
 	m.mu.Lock()
-	if m.members[id] == nil {
+	mb = m.members[id]
+	if mb == nil {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("%w %q", ErrUnknownNode, id)
 	}
 	m.links[id] = link
+	mb.probeMisses = 0
 	m.mu.Unlock()
 	m.persistLink(id)
 	m.Log.Info("link measured", "to", id, "class", links.ClassName(link.GetClass()), "rtt_us", link.GetRttUs(), "stream_bps", link.GetStreamBytesPerSecond(), "aggregate_bps", link.GetAggregateBytesPerSecond(), "interface", link.GetInterface(), "rdma", link.GetRdmaDevice())

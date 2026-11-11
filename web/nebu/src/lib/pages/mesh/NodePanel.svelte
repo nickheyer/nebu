@@ -10,7 +10,7 @@
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import MemoryBars from '#lib/ui/MemoryBars.svelte';
 	import PageTabs from '#lib/ui/PageTabs.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
+	import StateWord from '#lib/ui/StateWord.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
@@ -44,10 +44,7 @@
 	}
 </script>
 
-<PanelHeader title={n.name} subtitle={n.self ? 'this node' : n.address} {onclose}>
-	<StatePill label={enumLabel(NodeStateSchema, n.state)} lamp={nodeLamp(n.state)} />
-	{#if n.issuer}<StatePill label="issuer" lamp="primary" />{/if}
-</PanelHeader>
+<PanelHeader title={n.name} lamp={nodeLamp(n.state)} state={enumLabel(NodeStateSchema, n.state)} subtitle={[n.self ? 'this node' : n.address, n.issuer ? 'issuer' : ''].filter(Boolean).join(' · ')} {onclose} />
 <Stack gap={16}>
 	<PageTabs {tabs} active={tab} onchange={(x) => (tab = x)} />
 	{#if tab === 'profile'}
@@ -123,7 +120,7 @@
 			<List head={{ primary: 'To', facts: ['Latency', 'Bandwidth'] }}>
 				{#each n.links as l (l.to)}
 					<ListRow primary={peerName(live, l.to)} primaryTip={linkTip(l)} facts={[{ value: micros(l.rttUs) }, { value: bandwidth(l.streamBytesPerSecond) }]}>
-						{#snippet badges()}<StatePill label={linkLabel(l.class)} lamp={linkLamp(l.class)} />{/snippet}
+						{#snippet badges()}<StateWord label={linkLabel(l.class)} lamp={linkLamp(l.class)} />{/snippet}
 					</ListRow>
 				{/each}
 			</List>

@@ -1,5 +1,4 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
 	import type { MemoryPlan } from '#lib/proto/nebu/v1/estimate_pb.js';
 	import type { HostProfile } from '#lib/proto/nebu/v1/host_pb.js';
 	import type { Instance } from '#lib/proto/nebu/v1/instance_pb.js';
@@ -17,10 +16,7 @@
 		slots = [],
 		plan,
 		legend = true,
-		only,
-		menu,
-		expand,
-		expanded = new Set<string>()
+		only
 	}: {
 		profile: HostProfile | undefined;
 		instances?: Iterable<Instance>;
@@ -28,9 +24,6 @@
 		plan?: MemoryPlan;
 		legend?: boolean;
 		only?: string[];
-		menu?: Snippet<[PoolBar]>;
-		expand?: Snippet<[PoolBar]>;
-		expanded?: Set<string>;
 	} = $props();
 
 	function chosen(b: PoolBar): boolean {
@@ -41,25 +34,17 @@
 	const kinds = $derived(bars.flatMap((b) => b.segments.filter((s) => s.bytes > 0).map((s) => s.kind)));
 </script>
 
-<div class="bars">
-	{#each bars as bar, i (bar.id)}
-		<div class="pool" style:--i={i}>
-			<div class="ident">
-				<span class="label">{bar.label}</span>
+<div class="frame">
+	<div class="bars">
+		{#each bars as bar, i (bar.id)}
+			<div class="pool" style:--i={i}>
+				<span class="tag">{bar.label}</span>
 				<span class="name"><Str value={bar.name} kind="name" tip={bar.devices.map((d) => d.name).join('\n')} width="100%" /></span>
-				{#if menu}<span class="menu">{@render menu(bar)}</span>{/if}
-			</div>
-			<div class="gauge">
-				<div class="track">
-					<Bar segments={bar.segments} total={bar.total} format={(n) => bytes(n)} />
-				</div>
+				<span class="track"><Bar segments={bar.segments} total={bar.total} format={(n) => bytes(n)} /></span>
 				<span class="used">{bytesIn(bar.used + bar.planned, bar.total)}<span class="of">{thin}/{thin}{bytesIn(bar.total, bar.total)}{thin}{byteUnit(bar.total)}</span></span>
 			</div>
-		</div>
-		{#if expand && expanded.has(bar.id)}
-			<div class="expanded">{@render expand(bar)}</div>
-		{/if}
-	{/each}
+		{/each}
+	</div>
 	{#if bars.length === 0}
 		<p class="secondary">No memory found</p>
 	{/if}
@@ -69,61 +54,46 @@
 </div>
 
 <style>
-	.bars {
+	.frame {
 		display: flex;
 		flex-direction: column;
 		gap: var(--nebu-space-2);
 		min-width: 0;
 		container-type: inline-size;
 	}
+	/* Labels, names, bars and readings each share a column, the names as wide as the longest up to a cap */
+	.bars {
+		display: grid;
+		grid-template-columns: max-content fit-content(20rem) minmax(6rem, 1fr) max-content;
+		gap: var(--nebu-space-2) var(--nebu-space-3);
+		min-width: 0;
+	}
 	.pool {
-		display: flex;
-		gap: var(--nebu-space-3);
+		display: grid;
+		grid-template-columns: subgrid;
+		grid-column: 1 / -1;
 		align-items: center;
 		min-height: 28px;
 		animation: nebu-reveal 260ms var(--nebu-settle) backwards;
 		animation-delay: calc(var(--i) * 40ms);
 	}
-	.ident {
-		display: flex;
-		flex: 0 0 30ch;
-		gap: var(--nebu-space-3);
-		align-items: center;
-		min-width: 0;
-	}
-	.label {
-		flex: 0 0 5ch;
+	.tag {
 		font-size: var(--nebu-text-secondary);
 		font-weight: 500;
 		letter-spacing: 0.02em;
 	}
 	.name {
 		display: inline-flex;
-		flex: 1 1 auto;
 		min-width: 0;
 		font-size: var(--nebu-text-secondary);
 		color: var(--nebu-text-muted);
 	}
-	.menu {
-		display: inline-flex;
-		flex: 0 0 auto;
-	}
-	.gauge {
+	.track {
 		display: flex;
-		flex: 1 1 auto;
-		gap: var(--nebu-space-3);
 		align-items: center;
 		min-width: 0;
 	}
-	.track {
-		display: flex;
-		flex: 1 1 auto;
-		align-items: center;
-		min-width: 4rem;
-	}
 	.used {
-		flex: 0 0 auto;
-		min-width: 14ch;
 		font-size: var(--nebu-text-secondary);
 		font-variant-numeric: tabular-nums;
 		text-align: right;
@@ -132,28 +102,18 @@
 	.of {
 		color: var(--nebu-text-muted);
 	}
-	.secondary {
-		font-size: var(--nebu-text-secondary);
-		color: var(--nebu-text-muted);
-	}
-	.expanded {
-		padding: 0 0 var(--nebu-space-2) 5ch;
-	}
-	@container (max-width: 639px) {
-		.pool {
-			flex-direction: column;
-			gap: var(--nebu-space-1);
-			align-items: stretch;
-			padding-bottom: var(--nebu-space-1);
+	/* A narrow frame gives each bar its own line under the label, the name and the reading */
+	@container (max-width: 479px) {
+		.bars {
+			grid-template-columns: max-content minmax(0, 1fr) max-content;
 		}
-		.ident {
-			flex: 0 0 auto;
-		}
-		.menu {
-			margin-left: auto;
+		.track {
+			grid-row: 2;
+			grid-column: 1 / -1;
 		}
 		.used {
-			min-width: 0;
+			grid-row: 1;
+			grid-column: 3;
 		}
 	}
 </style>

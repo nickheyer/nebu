@@ -36,7 +36,7 @@
 					{#if info}<InfoTip text={info} />{/if}
 				</div>
 			{/if}
-			{#if tools}<div class="tools">{@render tools()}</div>{/if}
+			{#if tools}<div class="tools dense">{@render tools()}</div>{/if}
 		</header>
 	{/if}
 	<div class="body" class:flush class:scroll class:headed={title !== undefined || tools !== undefined}>
@@ -104,8 +104,6 @@
 		white-space: nowrap;
 	}
 	.tools {
-		--neo-input-padding: 0.375rem 0.75rem;
-
 		display: flex;
 		flex: 0 1 auto;
 		flex-wrap: wrap;
@@ -113,6 +111,10 @@
 		align-items: center;
 		justify-content: flex-end;
 		min-width: 0;
+	}
+	/* A lone glyph ending the tools sits on the card's edge, its button box reaching past it */
+	.tools > :global(.neo-button.neo-empty:last-child) {
+		margin-right: -7.5px;
 	}
 	.body {
 		display: flex;

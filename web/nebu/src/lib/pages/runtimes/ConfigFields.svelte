@@ -34,7 +34,7 @@
 			{#if f.choices.length}
 				<Select value={values[f.name] || undefined} options={options(f)} label={f.label || f.name} info={f.description || undefined} required={f.required} {disabled} onchange={(v) => (values[f.name] = v ?? '')} />
 			{:else if f.type === ConfigType.BOOL}
-				<Switch checked={values[f.name] === 'true'} label={f.label || f.name} info={f.description || undefined} {disabled} top onchange={(on) => (values[f.name] = on ? 'true' : 'false')} />
+				<Switch checked={values[f.name] === 'true'} label={f.label || f.name} info={f.description || undefined} {disabled} onchange={(on) => (values[f.name] = on ? 'true' : 'false')} />
 			{:else if f.type === ConfigType.INT}
 				<NumberField value={Number(values[f.name] ?? 0)} label={f.label || f.name} info={f.description || undefined} {disabled} onchange={(n) => (values[f.name] = String(n))} />
 			{:else if f.type === ConfigType.PATH}

@@ -7,7 +7,7 @@ import { InstanceStateSchema } from '#lib/proto/nebu/v1/instance_pb.js';
 import { SlotStateSchema } from '#lib/proto/nebu/v1/slot_pb.js';
 import { RouteStateSchema } from '#lib/proto/nebu/v1/gateway_pb.js';
 import { TaskStateSchema } from '#lib/proto/nebu/v1/task_pb.js';
-import { allowed, pages, type NavPage } from '#lib/shell/nav.js';
+import { allowed, type NavPage } from '#lib/shell/nav.js';
 import { modelPath } from '#lib/pages/models/models.js';
 import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
 import EngineIcon from 'phosphor-svelte/lib/EngineIcon';
@@ -21,6 +21,7 @@ import ShareNetworkIcon from 'phosphor-svelte/lib/ShareNetworkIcon';
 import SignpostIcon from 'phosphor-svelte/lib/SignpostIcon';
 import SquaresFourIcon from 'phosphor-svelte/lib/SquaresFourIcon';
 import StackIcon from 'phosphor-svelte/lib/StackIcon';
+import UserIcon from 'phosphor-svelte/lib/UserIcon';
 import TargetIcon from 'phosphor-svelte/lib/TargetIcon';
 import WrenchIcon from 'phosphor-svelte/lib/WrenchIcon';
 
@@ -53,8 +54,8 @@ const tabs: { page: string; label: string; href: string }[] = [
 	{ page: 'mesh', label: 'Tuning', href: '/mesh/tuning' },
 	{ page: 'settings', label: 'Sources', href: '/settings/sources' },
 	{ page: 'settings', label: 'Tools', href: '/settings/tools' },
-	{ page: 'settings', label: 'Accounts', href: '/settings/accounts' },
-	{ page: 'settings', label: 'API tokens', href: '/settings/tokens' }
+	{ page: 'settings', label: 'Notifications', href: '/settings/notifications' },
+	{ page: 'settings', label: 'Accounts', href: '/settings/accounts' }
 ];
 
 function pageEntries(role: Role): Entry[] {
@@ -65,6 +66,7 @@ function pageEntries(role: Role): Entry[] {
 		const p = byId.get(t.page);
 		if (p) out.push({ id: `tab:${t.href}`, group: 'Pages', label: t.label, detail: p.label, icon: p.icon, href: t.href });
 	}
+	out.push({ id: 'page:profile', group: 'Pages', label: 'Profile', icon: UserIcon, href: '/profile' });
 	return out;
 }
 
@@ -132,4 +134,3 @@ export function rank(list: Entry[], query: string, limit = 40): Entry[] {
 		.map((x) => x.e);
 }
 
-export const navPages = pages;

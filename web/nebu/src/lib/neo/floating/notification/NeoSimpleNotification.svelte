@@ -81,6 +81,11 @@
     onCancel?.({ item, index, event });
   };
 
+  const onLink = (event: SvelteEvent<MouseEvent>) => {
+    item.cancel(NeoNotificationStatus.Dismissed);
+    onCancel?.({ item, index, event });
+  };
+
   const defaultProgress = $derived.by(() => {
     const duration = item.duration ? (item.duration - (Date.now() - item.added)) : undefined;
     const step = duration ? (100 / (duration / 1000)) : undefined;
@@ -133,6 +138,12 @@
         <div class="neo-notification-content" transition:scaleHeight={quickDurationProps}>
           {item.content}
         </div>
+      {/if}
+      {#if item.link}
+        {@const LinkIcon = item.link.icon}
+        <a class="neo-notification-link" href={item.link.href} onclick={onLink} transition:scaleHeight={quickDurationProps}>
+          {item.link.label}{#if LinkIcon}<LinkIcon size={14} />{/if}
+        </a>
       {/if}
       {#if children}
         {@render children(item)}
@@ -256,6 +267,22 @@
         font-size: var(--neo-font-size-sm, 0.875rem);
         line-height: var(--neo-line-height-sm, 1.25rem);
         white-space: pre-line;
+      }
+
+      &-link {
+        display: inline-flex;
+        gap: 0.375rem;
+        align-items: center;
+        width: fit-content;
+        color: var(--neo-color-primary);
+        font-size: var(--neo-font-size-sm, 0.875rem);
+        line-height: var(--neo-line-height-sm, 1.25rem);
+        text-decoration: none;
+
+        &:hover {
+          text-decoration: underline;
+          text-underline-offset: 3px;
+        }
       }
 
       &-title,

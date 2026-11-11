@@ -15,6 +15,7 @@ import (
 	"github.com/nickheyer/nebu/internal/auth"
 	"github.com/nickheyer/nebu/internal/db"
 	"github.com/nickheyer/nebu/internal/installs"
+	"github.com/nickheyer/nebu/internal/mesh/links"
 	"github.com/nickheyer/nebu/internal/pools"
 	"github.com/nickheyer/nebu/pkg/datalayer"
 	"github.com/nickheyer/nebu/pkg/events"
@@ -439,25 +440,44 @@ func allMet(nodes ...*testNode) bool {
 	return true
 }
 
-// Waits until no node's record sequence has moved for a second, so probes and pushes are done
+// Waits until every link is measured and two rebuilds in a row leave every record unmoved and held by all
 func settle(t *testing.T, nodes ...*testNode) {
 	t.Helper()
-	seqs := func() []uint64 {
-		var out []uint64
-		for _, n := range nodes {
-			out = append(out, n.Record().GetSequence())
-		}
-		return out
+	var last []uint64
+	eventually(t, "every record settles", 60*time.Second, func() bool {
+		seqs := rebuilt(nodes...)
+		quiet := seqs != nil && slices.Equal(seqs, last)
+		last = seqs
+		return quiet
+	})
+}
+
+// Rebuilds every record and returns the sequences, nil unless every link is measured and classed and every copy is whole
+func rebuilt(nodes ...*testNode) []uint64 {
+	seqs := make([]uint64, len(nodes))
+	for i, n := range nodes {
+		n.refresh()
+		n.mu.Lock()
+		seqs[i] = n.seq
+		n.mu.Unlock()
 	}
-	last, quiet := seqs(), time.Now()
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Since(quiet) < time.Second {
-		if time.Now().After(deadline) {
-			t.Fatal("the records never settled")
+	for _, a := range nodes {
+		a.mu.Lock()
+		for i, b := range nodes {
+			if a == b {
+				continue
+			}
+			mb, link := a.members[b.identity.ID], a.links[b.identity.ID]
+			if mb == nil || link == nil || mb.held() != seqs[i] {
+				a.mu.Unlock()
+				return nil
+			}
+			if class, _ := links.Classify(link, peerRDMALocked(mb.rec, a.identity.ID)); class != link.GetClass() {
+				a.mu.Unlock()
+				return nil
+			}
 		}
-		time.Sleep(50 * time.Millisecond)
-		if now := seqs(); !slices.Equal(now, last) {
-			last, quiet = now, time.Now()
-		}
+		a.mu.Unlock()
 	}
+	return seqs
 }

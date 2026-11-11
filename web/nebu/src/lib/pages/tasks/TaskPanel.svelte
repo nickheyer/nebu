@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { duration, enumLabel, when } from '#lib/format.js';
+	import { capitalize, duration, enumLabel, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { TaskStateSchema, type Task } from '#lib/proto/nebu/v1/task_pb.js';
 	import { toast } from '#lib/shell/notify.svelte.js';
@@ -9,7 +9,6 @@
 	import KeyRows from '#lib/ui/KeyRows.svelte';
 	import LogView from '#lib/ui/LogView.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
@@ -48,9 +47,7 @@
 
 {#if task}
 	{@const running = active(task)}
-	<PanelHeader title={task.title} subtitle={task.kind} {onclose}>
-		<StatePill label={enumLabel(TaskStateSchema, task.state)} lamp={taskLamp(task.state)} />
-	</PanelHeader>
+	<PanelHeader title={capitalize(task.title)} lamp={taskLamp(task.state)} state={enumLabel(TaskStateSchema, task.state)} {onclose} />
 	<Stack gap={24}>
 		<KeyRows
 			rows={[

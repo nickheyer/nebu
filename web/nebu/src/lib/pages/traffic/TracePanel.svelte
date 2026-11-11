@@ -3,7 +3,7 @@
 	import { clock, date, enumLabel, ms, num, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { ApiFlavorSchema } from '#lib/proto/nebu/v1/runtime_pb.js';
-	import type { Trace } from '#lib/proto/nebu/v1/gateway_pb.js';
+	import type { Trace, TraceConversation } from '#lib/proto/nebu/v1/gateway_pb.js';
 	import Facts, { type FactItem } from '#lib/ui/Facts.svelte';
 	import Empty from '#lib/ui/Empty.svelte';
 	import KeyRows from '#lib/ui/KeyRows.svelte';
@@ -11,34 +11,47 @@
 	import ListRow from '#lib/ui/ListRow.svelte';
 	import PageTabs from '#lib/ui/PageTabs.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
-	import Code from '#lib/ui/fields/Code.svelte';
+	import StateWord from '#lib/ui/StateWord.svelte';
+	import Body from '#lib/ui/Body.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
 	import Section from '#lib/ui/layout/Section.svelte';
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { statusClassLamp } from '#lib/ui/status.js';
-	import { capped, finished, firstToken, kindWord, started } from '#lib/pages/traffic/traffic.js';
+	import Bodies from '#lib/pages/traffic/Bodies.svelte';
+	import { finished, firstToken, kindWord, started } from '#lib/pages/traffic/traffic.js';
 
 	let { id, onclose }: { id: string; onclose: () => void } = $props();
 
 	let trace = $state<Trace | undefined>(undefined);
+	let conversation = $state<TraceConversation | undefined>(undefined);
 	let error = $state('');
 	let tab = $state('summary');
+
+	function load(want: string) {
+		void rpc.gateway
+			.getTrace({ id: want })
+			.then((r) => {
+				if (want !== id) return;
+				trace = r.trace;
+				conversation = r.conversation;
+			})
+			.catch((err) => (error = reason(err)));
+	}
 
 	$effect(() => {
 		const want = id;
 		trace = undefined;
+		conversation = undefined;
 		error = '';
-		void rpc.gateway
-			.getTrace({ id: want })
-			.then((r) => (trace = r.trace))
-			.catch((err) => (error = reason(err)));
+		load(want);
 	});
 
-	// The stream's copy keeps the summary fresh while the request runs
+	// The stream's copy keeps a running request fresh, and its finish fetches the bodies the stream leaves out
 	$effect(() => {
 		const fresh = live.traces.find((t) => t.id === id);
-		if (fresh && trace && !trace.finishedAt) trace = { ...trace, ...fresh, request: trace.request, upstreamRequest: trace.upstreamRequest, response: trace.response };
+		if (!fresh || !trace || trace.finishedAt) return;
+		if (fresh.finishedAt) load(id);
+		else trace = { ...trace, ...fresh, request: trace.request, upstreamRequest: trace.upstreamRequest, response: trace.response, reasoning: trace.reasoning, toolCalls: trace.toolCalls };
 	});
 
 	const t = $derived(trace);
@@ -64,9 +77,7 @@
 </script>
 
 {#if t}
-	<PanelHeader title={t.route || kindWord(t.kind)} subtitle={when(t.startedAt)} {onclose}>
-		<StatePill label={t.status ? String(t.status) : 'running'} lamp={t.status ? statusClassLamp(t.status) : 'warning'} />
-	</PanelHeader>
+	<PanelHeader title={t.route || kindWord(t.kind)} lamp={t.status ? statusClassLamp(t.status) : 'warning'} shape={t.status ? 'filled' : 'half'} state={t.status ? String(t.status) : 'running'} subtitle={when(t.startedAt)} {onclose} />
 	<PageTabs tabs={tabsOf(t)} active={tabsOf(t).some((x) => x.id === tab) ? tab : 'summary'} onchange={(x) => (tab = x)} />
 	<div class="body">
 		{#if !tabsOf(t).some((x) => x.id === tab) || tab === 'summary'}
@@ -127,7 +138,7 @@
 						<List head={{ primary: 'Address', secondary: 'Reason' }}>
 							{#each t.fallbacks as f, i (i)}
 								<ListRow primary={f.address} primaryKind="address" secondary={f.reason} secondaryKind="message">
-									{#snippet badges()}{#if f.requestWritten}<StatePill label="sent" lamp="warning" />{/if}{/snippet}
+									{#snippet badges()}{#if f.requestWritten}<StateWord label="sent" lamp="warning" />{/if}{/snippet}
 								</ListRow>
 							{/each}
 						</List>
@@ -139,18 +150,18 @@
 				{#each t.toolCalls as c (c.id)}
 					<ListRow lamp={c.failed ? 'error' : 'success'} primary={c.name} secondary={c.server} secondaryWidth="24ch" facts={[{ value: ms(c.tookMs) }]}>
 						{#snippet expand()}
-							<Code value={c.arguments} language="json" readonly rows={4} label="Arguments" />
-							<Code value={c.result} language="json" readonly rows={6} label="Result" />
+							<span class="label">Arguments</span>
+							<Body text={c.arguments} maxHeight="16rem" />
+							{#if c.result}
+								<span class="label">Result</span>
+								<Body text={c.result} maxHeight="24rem" />
+							{/if}
 						{/snippet}
 					</ListRow>
 				{/each}
 			</List>
 		{:else}
-			<Stack gap={16}>
-				<Code value={t.request} language="json" readonly rows={8} label="Request" capped={capped(t.request, t.requestBytes)} />
-				{#if t.upstreamRequest}<Code value={t.upstreamRequest} language="json" readonly rows={8} label="Request sent to the runtime" capped={capped(t.upstreamRequest)} />{/if}
-				<Code value={t.response} language="json" readonly rows={8} label="Response" capped={capped(t.response, t.responseBytes)} />
-			</Stack>
+			<Bodies trace={t} {conversation} />
 		{/if}
 	</div>
 {:else if error}

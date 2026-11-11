@@ -22,8 +22,7 @@
 			{ id: 'requests', label: 'Requests', value: compact(s.requests), tip: num(s.requests) },
 			{ id: 'inflight', label: 'Concurrent requests', value: p?.maxInFlight ? num(p.maxInFlight) : infinity },
 			{ id: 'rate', label: 'Rate', value: p?.requestsPerSecond ? `${p.requestsPerSecond}/s` : infinity, tip: p?.burst ? `burst ${num(p.burst)}` : undefined },
-			{ id: 'timeout', label: 'Timeout', value: p?.requestTimeoutMs ? ms(p.requestTimeoutMs) : infinity, tip: p?.upstreamTimeoutMs ? `upstream ${ms(p.upstreamTimeoutMs)}` : undefined },
-			{ id: 'version', label: 'Version', value: `${s.implementation} ${s.version}`.trim(), mono: true, tip: s.metricsAddr ? `metrics ${s.metricsAddr}` : undefined }
+			{ id: 'timeout', label: 'Timeout', value: p?.requestTimeoutMs ? ms(p.requestTimeoutMs) : infinity, tip: p?.upstreamTimeoutMs ? `upstream ${ms(p.upstreamTimeoutMs)}` : undefined }
 		];
 	});
 </script>

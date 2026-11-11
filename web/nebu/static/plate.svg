@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 160">
+  <title>nebu</title>
+  <defs>
+    <radialGradient id="glow"><stop offset="0" stop-color="#7fd9df" stop-opacity="0.14"/><stop offset="1" stop-color="#7fd9df" stop-opacity="0"/></radialGradient>
+    <linearGradient id="across"><stop offset="0" stop-color="#eceef3" stop-opacity="0"/><stop offset="0.5" stop-color="#eceef3"/><stop offset="1" stop-color="#eceef3" stop-opacity="0"/></linearGradient>
+    <linearGradient id="down" x2="0" y2="1"><stop offset="0" stop-color="#eceef3" stop-opacity="0"/><stop offset="0.4" stop-color="#eceef3"/><stop offset="1" stop-color="#eceef3" stop-opacity="0"/></linearGradient>
+    <linearGradient id="slash" gradientUnits="userSpaceOnUse" x2="0" y2="112"><stop offset="0" stop-color="#7fd9df" stop-opacity="0"/><stop offset="0.14" stop-color="#7fd9df"/><stop offset="0.9" stop-color="#7fd9df"/><stop offset="1" stop-color="#7fd9df" stop-opacity="0"/></linearGradient>
+  </defs>
+  <rect x="0.25" y="0.25" width="319.5" height="159.5" rx="6" fill="#0f1114" stroke="#23272e" stroke-width="0.5"/>
+  <ellipse cx="160" cy="58" rx="110" ry="70" fill="url(#glow)"/>
+  <g opacity="0.22">
+    <rect y="15.85" width="320" height="0.3" fill="url(#across)"/>
+    <rect y="99.85" width="320" height="0.3" fill="url(#across)"/>
+    <rect x="117.85" width="0.3" height="160" fill="url(#down)"/>
+    <rect x="201.85" width="0.3" height="160" fill="url(#down)"/>
+  </g>
+  <g stroke="url(#slash)" stroke-width="0.3" opacity="0.5">
+    <line x1="123.92" x2="169.43" y2="112"/>
+    <line x1="148.95" x2="194.44" y2="112"/>
+  </g>
+  <g transform="translate(118 16) scale(3.5)">
+    <path d="M0 0H6V4H4V20H6V24H0Z" fill="#eceef3"/>
+    <path d="M24 0H18V4H20V20H18V24H24Z" fill="#eceef3"/>
+    <path d="M5.5 0H10.7L18.5 19.2V24H13.3L5.5 4.8Z" fill="#7fd9df"/>
+  </g>
+  <g transform="translate(118 114) scale(0.6885)" fill="#eceef3">
+    <path d="M0 0H6V4H4V20H6V24H0ZM24 0H18V4H20V20H18V24H24ZM5.5 0H10.7L18.5 19.2V24H13.3L5.5 4.8Z"/>
+    <path d="M40 0H54V4H44V10H51V14H44V20H54V24H40Z"/>
+    <path fill-rule="evenodd" d="M70 0H82L86 4V10L84 12L86 14V20L82 24H70ZM74 4V10H81L82 9V5L81 4ZM74 14V20H81L82 19V15L81 14Z"/>
+    <path d="M102 0H108V4H106V20H118V4H116V0H122V24H102Z"/>
+  </g>
+</svg>

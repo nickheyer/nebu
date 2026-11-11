@@ -20,7 +20,7 @@
 	import Stack from '#lib/ui/layout/Stack.svelte';
 	import { repoPath } from '#lib/pages/discover/discover.js';
 	import type { Contexts } from '#lib/pages/models/context.svelte.js';
-	import { kindLabel, launchHref, paramCount, removeModel, sameModel, sourceName, verifyModel } from '#lib/pages/models/models.js';
+	import { launchHref, paramCount, removeModel, sameModel, verifyModel } from '#lib/pages/models/models.js';
 	import { modelPhrase, terminal } from '#lib/pages/serve/serve.js';
 
 	// One stored model, what its weights are made of and every file it holds
@@ -82,7 +82,7 @@
 	<CopyButton text={item.dir ? `${m.path}/${item.path}` : (onDisk.get(item.path) ?? `${m.path}/${item.path}`)} label="Copy path" />
 {/snippet}
 
-<PanelHeader title={m.repo} kind="repo" subtitle={m.group || undefined} origin={{ label: sourceName(m.sourceId), href: repoPath(m.sourceId, m.repo) }} {onclose}>
+<PanelHeader title={m.repo} kind="repo" subtitle={m.group || undefined} href={repoPath(m.sourceId, m.repo)} {onclose}>
 	{#snippet tools()}
 		{#if m.runtimes}<NeoButton class="primary" elevation={2} href={launchHref(m)}>Launch</NeoButton>{/if}
 	{/snippet}
@@ -91,13 +91,6 @@
 <div class="body">
 	{#if tab === 'files'}
 		<FileTree artifacts={files} {shared} action={copyPath} />
-		{#if warnings.length}
-			<List head={{ primary: 'Warnings' }}>
-				{#each warnings as w (w)}
-					<ListRow lamp={planned?.error ? 'error' : 'warning'} primary={w} primaryKind="message" />
-				{/each}
-			</List>
-		{/if}
 	{:else}
 		<Stack gap={24}>
 			<KeyRows
@@ -105,15 +98,20 @@
 					{ label: 'architecture', value: d?.architecture ?? '' },
 					{ label: 'parameters', value: paramCount(d?.parameterCount) },
 					{ label: 'bits per weight', value: d?.bitsPerWeight ? d.bitsPerWeight.toFixed(2) : '' },
-					{ label: 'kind', value: kindLabel(d?.kind ?? 0) },
-					{ label: 'generates', value: d?.generates.join(', ') ?? '' },
 					{ label: 'size', value: bytes(m.bytes) },
-					{ label: 'path', value: m.path, mono: true, copy: true, tip: m.path },
+					{ label: 'path', value: m.path, mono: true, copy: true },
 					{ label: 'pulled', value: ago(m.pulledAt), tip: when(m.pulledAt) },
 					{ label: 'used', value: m.usedAt ? ago(m.usedAt) : '', tip: when(m.usedAt) || undefined },
-					{ label: 'commit', value: m.commit, mono: true, copy: m.commit !== '', tip: m.commit }
+					{ label: 'commit', value: m.commit, mono: true, copy: m.commit !== '' }
 				]}
 			/>
+			{#if warnings.length}
+				<List>
+					{#each warnings as w (w)}
+						<ListRow lamp={planned?.error ? 'error' : 'warning'} primary={w} primaryKind="message" />
+					{/each}
+				</List>
+			{/if}
 			{#if shares.length > 1}
 				<Section title="Weights" level={3}>
 					<SplitBar {shares} format={(n) => bytes(n)} />
@@ -121,13 +119,13 @@
 			{/if}
 			{#if d && Object.keys(d.metadata).length}
 				<Collapse label="Header">
-					<KeyRows dense rows={Object.entries(d.metadata).map(([k, v]) => ({ label: k, value: v, mono: true, tip: v }))} />
+					<KeyRows dense rows={Object.entries(d.metadata).map(([k, v]) => ({ label: k, value: v, mono: true }))} />
 				</Collapse>
 			{/if}
 			<div class="actions">
 				<Tip text={running ? 'Running' : undefined} tag="span">
 					<Confirm label="Remove" question="Remove {m.repo}{m.group ? ` ${m.group}` : ''}?" danger disabled={running} placement="top-start" onconfirm={remove}>
-						{#snippet body()}<Switch bind:checked={collect} label="Delete its files" info="Files another model uses stay" />{/snippet}
+						{#snippet body()}<Switch bind:checked={collect} label="Delete its files" info="Files another model uses stay" compact />{/snippet}
 					</Confirm>
 				</Tip>
 				<span class="fill"></span>

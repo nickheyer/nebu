@@ -81,13 +81,34 @@ func (f *Fetcher) Land(ctx context.Context, blob sources.Blob, dest string, prog
 // Waits for an active transfer window before an unmetered download.
 func (f *Fetcher) Hold(ctx context.Context) error { return f.wait(ctx, 0) }
 
+// Changes how many connections a file takes, the tries a chunk gets, and the rate schedule, for downloads from now on
+func (f *Fetcher) Tune(workers, retries int, schedule *Schedule) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Workers, f.Retries, f.Schedule = max(workers, 1), max(retries, 1), schedule
+}
+
+// The connections, tries and schedule in force now
+func (f *Fetcher) tuning() (int, int, *Schedule) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.Workers, f.Retries, f.Schedule
+}
+
+// Whether a rate or a window ever limits downloads now
+func (f *Fetcher) Limited() bool {
+	_, _, schedule := f.tuning()
+	return schedule.Limits()
+}
+
 // Rate-limits a read of n bytes and waits through paused windows.
 func (f *Fetcher) wait(ctx context.Context, n int) error {
 	if ctx.Value(unscheduledKey{}) != nil {
 		return nil
 	}
 	for {
-		bps, pause := f.Schedule.At(time.Now())
+		_, _, schedule := f.tuning()
+		bps, pause := schedule.At(time.Now())
 		if pause && n > 0 {
 			// Close active connections when a paused window begins.
 			return errPaused
@@ -151,7 +172,8 @@ func (f *Fetcher) Fetch(ctx context.Context, blob sources.Blob, partial, expecte
 		}
 	}
 	eg, gctx := errgroup.WithContext(ctx)
-	eg.SetLimit(f.Workers)
+	workers, _, _ := f.tuning()
+	eg.SetLimit(workers)
 	held := &pace{window: f.Window}
 	if held.window <= 0 {
 		held.window = paceWindow
@@ -262,7 +284,8 @@ func (f *Fetcher) FetchURL(ctx context.Context, client *sources.HTTP, rawURL, pa
 
 // Retries with backoff and reverses the progress a failed try names, pauses and restarts free of both
 func (f *Fetcher) retry(ctx context.Context, what string, progress Progress, try func() (int64, error)) error {
-	tries := max(f.Retries, 1)
+	_, retries, _ := f.tuning()
+	tries := max(retries, 1)
 	var last error
 	for failed := 0; failed < tries; {
 		reverse, err := try()

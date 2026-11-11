@@ -4,7 +4,7 @@
 	import { NeoProgressBar } from '#lib/neo/progress/index.js';
 	import { ListQuery } from '#lib/api/list.svelte.js';
 	import { reason, rpc } from '#lib/api/transport.js';
-	import { ago, duration, enumLabel, enumOptions, num, percent, when } from '#lib/format.js';
+	import { ago, capitalize, duration, enumLabel, enumOptions, num, percent, when } from '#lib/format.js';
 	import { live } from '#lib/live/events.svelte.js';
 	import { EventKind } from '#lib/proto/nebu/v1/event_pb.js';
 	import { TaskState, TaskStateSchema, type Task } from '#lib/proto/nebu/v1/task_pb.js';
@@ -16,7 +16,6 @@
 	import LoadMore from '#lib/ui/LoadMore.svelte';
 	import Mark, { type MarkState } from '#lib/ui/Mark.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
 	import Str from '#lib/ui/Str.svelte';
 	import Tip from '#lib/ui/Tip.svelte';
 	import MultiSelect from '#lib/ui/fields/MultiSelect.svelte';
@@ -97,13 +96,8 @@
 	</Tip>
 {/snippet}
 
-{#snippet kindPill(t: Task)}
-	<span class="kindcol"><StatePill label={t.kind} /></span>
-{/snippet}
-
 {#snippet historyLeading(t: Task)}
 	<Mark state={markOf(t)} label={enumLabel(TaskStateSchema, t.state)} tip={t.state === TaskState.FAILED ? t.error || undefined : enumLabel(TaskStateSchema, t.state)} />
-	{@render kindPill(t)}
 {/snippet}
 
 {#snippet activeCard()}
@@ -123,8 +117,7 @@
 						</Tip>
 					{/each}
 				{/snippet}
-				<ListRow primary={t.title} primaryKind="text" primaryWidth="32ch" selected={t.id === id} onclick={() => open(t)} {instrument} expand={rows.length ? progressRows : undefined}>
-					{#snippet leading()}{@render kindPill(t)}{/snippet}
+				<ListRow primary={capitalize(t.title)} primaryKind="text" primaryWidth="32ch" selected={t.id === id} onclick={() => open(t)} {instrument} expand={rows.length ? progressRows : undefined}>
 					{#snippet action()}
 						<span class="elapsed num secondary"><Tip text="started {when(t.startedAt ?? t.createdAt)}" tag="span">{t.state === TaskState.PENDING ? 'queued' : duration(t.startedAt ?? t.createdAt, undefined, clockTick.now)}</Tip></span>
 						<Confirm label="Stop" question="Stop {t.title}?" danger onconfirm={() => cancel(t)} />
@@ -138,14 +131,12 @@
 {#snippet historyCard()}
 	<Card title="History" flush>
 		{#snippet tools()}
+			{#if kinds.length || states.length}<NeoButton text onclick={() => ((kinds = []), (states = []))}>Clear active</NeoButton>{/if}
 			<span class="filter"><MultiSelect bind:value={kinds} options={kindOptions} label="Kind" compact /></span>
 			<span class="filter"><MultiSelect bind:value={states} options={stateOptions} label="State" compact /></span>
 		{/snippet}
-		{#if kinds.length || states.length}
-			<div class="clear"><NeoButton text onclick={() => ((kinds = []), (states = []))}>Clear active</NeoButton></div>
-		{/if}
 		{#if !history.settled}
-			<Skeleton rows={6} dot={false} leading="12ch" primary="32ch" secondary={false} facts={2} action={false} menu={false} />
+			<Skeleton rows={6} dot={false} leading="20px" primary="32ch" secondary={false} facts={2} action={false} menu={false} />
 		{:else if history.error}
 			<Empty text={history.error} action="Retry" onclick={() => history.refresh()} />
 		{:else if history.items.length === 0}
@@ -160,7 +151,7 @@
 							</ListRow>
 						{/each}
 					{/snippet}
-					<ListRow primary={g.head.title} primaryKind="text" primaryWidth="32ch" facts={historyFacts(g.head)} selected={g.head.id === id} onclick={() => open(g.head)} expand={g.rest.length ? runs : undefined}>
+					<ListRow primary={capitalize(g.head.title)} primaryKind="text" primaryWidth="32ch" facts={historyFacts(g.head)} selected={g.head.id === id} onclick={() => open(g.head)} expand={g.rest.length ? runs : undefined}>
 						{#snippet leading()}{@render historyLeading(g.head)}{/snippet}
 						{#snippet badges()}
 							{#if g.rest.length}<span class="repeat" title="{g.rest.length + 1} runs in a row">×{num(g.rest.length + 1)}</span>{/if}
@@ -198,19 +189,9 @@
 		display: flex;
 		width: 100%;
 	}
-	.kindcol {
-		display: inline-flex;
-		flex: 0 0 auto;
-		min-width: 9ch;
-	}
 	.filter {
 		display: inline-flex;
 		width: 10rem;
-	}
-	.clear {
-		display: flex;
-		justify-content: flex-end;
-		padding: 0 var(--nebu-card-pad) var(--nebu-space-2);
 	}
 	.repeat {
 		font-size: var(--nebu-text-caption);

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 
-	// A name with where it comes from in small text on its baseline, the pair one link
-	let { href, from, external = false, children }: { href: string; from: string; external?: boolean; children: Snippet } = $props();
+	// A name that links to where it comes from, the source named in small text on its baseline when given
+	let { href, from, external = false, children }: { href: string; from?: string; external?: boolean; children: Snippet } = $props();
 </script>
 
 <a class="origin" {href} target={external ? '_blank' : undefined} rel={external ? 'noreferrer' : undefined}>

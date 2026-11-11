@@ -151,7 +151,7 @@
 <Stack gap={24}>
 	<FormSection title="Route">
 		<FieldRow>
-			<Text bind:value={name} label="Name" info="Fixed once created" required readonly={editing} max={64} />
+			<Text bind:value={name} label="Name" required readonly={editing} max={64} />
 			<Select value={spec.objective || undefined} options={objectives} label="Objective" info="Requests may name their own" clearable disabled={locked} onchange={(v) => (spec.objective = v ?? '')} />
 		</FieldRow>
 		<Segmented

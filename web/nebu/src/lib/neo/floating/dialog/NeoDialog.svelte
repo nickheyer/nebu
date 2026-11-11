@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { NeoLayer } from '#lib/neo/floating/common/layers.js';
   import type { NeoHandlePlacements } from '#lib/neo/floating/common/neo-handle.model.js';
   import type { NeoDialogContext, NeoDialogProps } from '#lib/neo/floating/dialog/neo-dialog.model.js';
   import type { NeoMovable, NeoMovableHandlers, NeoMovableResetOptions } from '#lib/neo/floating/dialog/use-movable.svelte.js';
@@ -12,6 +13,7 @@
   import { toTransition, toTransitionProps } from '@dvcol/svelte-utils/transition';
   import { fade as fadeFn, fly, scale as scaleFn } from 'svelte/transition';
 
+  import { inLayerAbove, openLayer, ownsDismiss } from '#lib/neo/floating/common/layers.js';
   import { NeoHandlePlacement } from '#lib/neo/floating/common/neo-handle.model.js';
   import { NeoDialogPlacements } from '#lib/neo/floating/common/neo-placement.model.js';
   import NeoHandle from '#lib/neo/floating/common/NeoHandle.svelte';
@@ -148,16 +150,25 @@
     return onclick?.(e);
   };
 
+  const layer: NeoLayer = { contains: target => !!ref?.contains(target) };
+
+  // Stands above every surface already open for as long as it is open
+  $effect(() => {
+    if (open) return openLayer(layer);
+  });
+
   const onWindowClick = async (e: SvelteEvent<PointerEvent>) => {
     if (!closeOnClickOutside || !open) return;
     if (!(e.target instanceof HTMLElement)) return;
     if (e.target?.closest(`#${id}`)) return;
+    if (!ownsDismiss(layer, e) || inLayerAbove(layer, e.target, e)) return;
     onCancel(e);
   };
 
   const onWindowKeydown = async (e: SvelteEvent<KeyboardEvent>) => {
     if (isNative || e.key !== 'Escape') return;
     if (closedby === 'none') return;
+    if (!ownsDismiss(layer, e)) return;
     onCancel(e);
   };
 
@@ -274,12 +285,12 @@
 
   const focusElement = debounce(() => {
     if (!open || !ref) return;
-    getFocusableElement(ref)?.focus();
+    getFocusableElement(ref)?.focus({ preventScroll: true });
   }, 100);
 
   const trapFocus = (e: SvelteEvent<FocusEvent>) => {
     if (!open || !modal || !(e.target instanceof HTMLElement)) return;
-    if (ref?.contains(e.target) || e.target.closest('[data-modal="true"]')) return;
+    if (ref?.contains(e.target) || inLayerAbove(layer, e.target)) return;
     e.preventDefault();
     focusElement();
   };

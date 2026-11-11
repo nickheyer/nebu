@@ -82,11 +82,11 @@
 </script>
 
 <div class="logview">
-	<div class="tools">
-		<Switch bind:checked={follow} label="Follow" info="Keeps the newest line in view" />
+	<div class="tools dense">
 		<Select bind:value={tail} options={[{ value: 200, label: '200 lines' }, { value: 1000, label: '1000 lines' }, { value: 5000, label: '5000 lines' }]} fit />
 		<span class="filter"><Text bind:value={filter}>{#snippet before()}<FunnelIcon size={16} />{/snippet}</Text></span>
 		<span class="fill"></span>
+		<Switch bind:checked={follow} label="Follow" compact />
 		<CopyButton text={shown.map((l) => l.text).join('\n')} />
 		<NeoButton text aria-label="Download" onclick={download}>
 			{#snippet icon()}<DownloadIcon size={20} />{/snippet}
@@ -105,8 +105,6 @@
 		min-width: 0;
 	}
 	.tools {
-		--neo-input-padding: 0.375rem 0.75rem;
-
 		display: flex;
 		flex-wrap: wrap;
 		gap: 12px;

@@ -15,7 +15,7 @@
 	import NameConfirm from '#lib/ui/NameConfirm.svelte';
 	import RowAction from '#lib/ui/RowAction.svelte';
 	import Skeleton from '#lib/ui/Skeleton.svelte';
-	import StatePill from '#lib/ui/StatePill.svelte';
+	import StateWord from '#lib/ui/StateWord.svelte';
 	import Card from '#lib/ui/layout/Card.svelte';
 	import PageHeader from '#lib/ui/layout/PageHeader.svelte';
 	import PanelHeader from '#lib/ui/layout/PanelHeader.svelte';
@@ -156,9 +156,9 @@
 </script>
 
 {#snippet nodeBadges(n: Node)}
-	{#if n.self}<StatePill label="you" />{/if}
-	{#if n.issuer}<StatePill label="issuer" lamp="primary" />{/if}
-	{#if n.state !== NodeState.READY}<StatePill label={enumLabel(NodeStateSchema, n.state)} lamp={nodeLamp(n.state)} />{/if}
+	{#if n.self}<StateWord label="you" />{/if}
+	{#if n.issuer}<StateWord label="issuer" lamp="primary" />{/if}
+	{#if n.state !== NodeState.READY}<StateWord label={enumLabel(NodeStateSchema, n.state)} lamp={nodeLamp(n.state)} />{/if}
 {/snippet}
 
 {#snippet nodesList()}
@@ -199,7 +199,7 @@
 					selected={n.id === id}
 					onclick={() => goto(`/mesh/links/${encodeURIComponent(n.id)}`)}
 				>
-					{#snippet badges()}{#if worst}<StatePill label={linkLabel(worst.class)} lamp={linkLamp(worst.class)} />{/if}{/snippet}
+					{#snippet badges()}{#if worst}<StateWord label={linkLabel(worst.class)} lamp={linkLamp(worst.class)} />{/if}{/snippet}
 					{#snippet action()}
 						{#if !n.self}<RowAction loading={probing === n.id} onclick={() => probe(n.id)} label="Measure" />{/if}
 					{/snippet}

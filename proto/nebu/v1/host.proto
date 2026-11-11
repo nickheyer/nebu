@@ -71,6 +71,8 @@ message Storage {
   uint64 total_bytes = 3;
   uint64 free_bytes = 4;
   repeated string uses = 5;
+  // Bytes each use holds on this mount, keyed by use
+  map<string, uint64> use_bytes = 6;
 }
 
 // Result of one probe
@@ -126,6 +128,17 @@ message HostServiceLogsResponse {
   repeated string lines = 1;
 }
 
+// Names a directory a file browser jumps to
+enum DirPlaceKind {
+  DIR_PLACE_KIND_UNSPECIFIED = 0;
+  // The daemon's home directory
+  DIR_PLACE_KIND_HOME = 1;
+  // The directory holding the files of every stored model
+  DIR_PLACE_KIND_STORE = 2;
+  // The root of a filesystem or drive
+  DIR_PLACE_KIND_VOLUME = 3;
+}
+
 // One entry of a directory on the host
 message DirEntry {
   string name = 1;
@@ -133,19 +146,47 @@ message DirEntry {
   // Whether the file can be run
   bool executable = 3;
   uint64 size_bytes = 4;
+  // Absolute path of the entry
+  string path = 5;
 }
 
-// List a host directory. Empty uses the daemon's home. A file path lists its parent directory.
+// One directory on the way from a volume root down to a listed directory
+message DirStep {
+  string name = 1;
+  string path = 2;
+}
+
+// A directory a file browser jumps to
+message DirPlace {
+  DirPlaceKind kind = 1;
+  string path = 2;
+}
+
+// Lists a host directory, a file path as the directory holding it and a store reference as the directory of its group
 message ListDirectoryRequest {
   string path = 1 [(buf.validate.field).string.max_len = 4096];
+  // The place an empty path lists, home when unset
+  DirPlaceKind start = 2 [(buf.validate.field).enum = {
+    in: [
+      0,
+      1,
+      2
+    ]
+  }];
+  // Lists the nearest directory above a path that cannot be listed, the start place when none can
+  bool nearest = 3;
 }
 
-// Resolved directory, parent path, and entries sorted by name with directories first.
+// Resolved directory with its entries sorted by name, directories first
 message ListDirectoryResponse {
   string path = 1;
   // Empty at the root
   string parent = 2;
   repeated DirEntry entries = 3;
+  // Every directory from the volume root down to path
+  repeated DirStep trail = 4;
+  // The store, home and every volume root
+  repeated DirPlace places = 5;
 }
 
 // Host probing and diagnostics

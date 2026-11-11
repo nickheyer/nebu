@@ -25,6 +25,7 @@
     children,
     content: customDisplay,
     icon: customIcon,
+    trailing,
 
     // State
     options = [],
@@ -143,7 +144,9 @@
   const hasValue = $derived(!!(Array.isArray(selected) ? selected.length : selected));
   const close = $derived(clearable && (focusin || focused || hovered || open) && hasValue);
   const onClear: FormEventHandler<HTMLElement> = (e) => {
+    const previous = value;
     selected = multiple ? [] : undefined;
+    onChange?.(multiple ? [] : undefined, previous);
     e.stopPropagation();
     e.preventDefault();
   };
@@ -176,6 +179,7 @@
       {/if}
     {/snippet}
   </NeoButton>
+  {#if trailing}{@render trailing()}{/if}
 {/snippet}
 
 <NeoInput
